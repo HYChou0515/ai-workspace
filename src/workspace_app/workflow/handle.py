@@ -105,6 +105,12 @@ def _abs(path: str) -> str:
     return path if path.startswith("/") else "/" + path
 
 
+def journal_dir_of(workflow_id: str) -> str:
+    """Where a workflow's journal lives in the workspace (#136) — the one rule the
+    handle and the run route both read."""
+    return f"/.workflow/{workflow_id or '_default'}"
+
+
 class WorkflowHandle:
     def __init__(
         self,
@@ -239,7 +245,7 @@ class WorkflowHandle:
         every ``step_<name>/<key>`` artifact lives under, so the journal stops
         cluttering the workspace root. Legacy singular workflows (``workflow_id=""``)
         fall back to ``/.workflow/_default``."""
-        return f"/.workflow/{self._workflow_id or '_default'}"
+        return journal_dir_of(self._workflow_id)
 
     def sub_handle(self, subkey: str) -> WorkflowHandle:
         """A per-element child handle (#429 P5) sharing this run's workspace, journal, and

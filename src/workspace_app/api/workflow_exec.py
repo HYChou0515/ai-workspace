@@ -265,6 +265,7 @@ class WorkflowExecutor:
             for m in (prompt_msg, *turn):
                 m.run_id = run_id or None
                 m.step = step_id
+                m.phase = (ref.phase or None) if ref else None
             # Background step → attribute the persisted turn to the captured
             # user (§15, the job-pod acting-user pattern).
             with self._conv_rm.using(user=captured_user):

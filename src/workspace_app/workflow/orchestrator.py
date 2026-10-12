@@ -58,7 +58,7 @@ from .gate import record_decision
 from .handle import WorkflowHandle
 from .inputs import resolve_inputs
 from .manifest import WorkflowManifest
-from .run import PhaseState, RunStatus, StepState, WorkflowRun
+from .run import PhaseState, RunStatus, SteerPlan, StepState, WorkflowRun
 from .run_identity import RunIdentities
 from .steer import SteerProposalFailed, apply_steer, propose_steer
 
@@ -108,6 +108,18 @@ class WorkflowUnavailable(Exception):
 
 class NotAwaitingSteer(Exception):
     """A steer confirm was posted to a run with no steer plan pending (#288, §10)."""
+
+
+class NotRetryable(Exception):
+    """Continue / Re-run was asked of a run that has not failed or been stopped
+    (plan-workflow-out-of-chat D9): a live one is still going, a paused one waits
+    for its gate, a finished one has nothing left to do."""
+
+
+class UnknownStep(ValueError):
+    """Re-run named a step that is not on the run's board. The name reaches a
+    journal glob, so a typo, a wildcard or a path is refused before anything is
+    deleted."""
 
 
 class StepBudgetExceeded(Exception):
@@ -946,6 +958,86 @@ class WorkflowOrchestrator:
         RunIdentities(self.spec).forget(run_id)
         self._patch(run_id, status=RunStatus.RUNNING, pending_steer=None, pending_decision=None)
         logger.info("confirm_steer: run %s steer approved, resuming", run_id)
+        self._spawn(
+            run_id,
+            slug,
+            item_id,
+            profile,
+            data.captured_user,
+            manifest,
+            data.workflow_id,
+            data.chat_id,
+        )
+
+    # ── Continue from here / Re-run this step (plan-workflow-out-of-chat D9) ──
+    async def retry(
+        self,
+        *,
+        slug: str,
+        item_id: str,
+        profile: str,
+        run_id: str,
+        rerun: str = "",
+        decided_by: str = "",
+    ) -> None:
+        """Drive a failed or stopped run again, as the same run. What already passed
+        skips (§9: its journal artifact is still valid), so the run picks up where it
+        broke. ``rerun`` names one step to do over: its artifacts are dropped first
+        (``apply_steer``'s invalidation, which also leaves the audit receipt), and the
+        steps after it re-run as far as their inputs changed.
+
+        Refuses before anything is written: a run that is not ``error`` /
+        ``cancelled`` (:class:`NotRetryable`), a ``rerun`` that is not a named step
+        on the run's board (:class:`UnknownStep`), another live run on the item
+        (:class:`ActiveRunExists` — every run of a workflow on an item shares one
+        journal), a workflow that no longer loads (:class:`WorkflowUnavailable`).
+
+        The person whose private values the run uses is kept, as a gate decision
+        keeps them: the plan is the one they pressed, run again."""
+        data = self._get_in(run_id, item_id)
+        if data.status not in (RunStatus.ERROR, RunStatus.CANCELLED):
+            raise NotRetryable(
+                f"execution {run_id} is {data.status.value}: only a failed or stopped one"
+                " can continue"
+            )
+        if rerun and rerun not in {s.name for s in data.steps if not s.key}:
+            raise UnknownStep(rerun)
+        other = self.active_run(item_id)
+        if other is not None:
+            raise ActiveRunExists(item_id, other)
+        manifest = await self._resolve_manifest(slug, profile, data.workflow_id, item_id)
+        if manifest is None:
+            raise WorkflowUnavailable(run_id, data.workflow_id)
+        # A terminal status flips inside the driver, which then still tears down —
+        # the same wait `steer` makes, so that teardown cannot reach the new drive.
+        prior = self._tasks.get(run_id)
+        if prior is not None and not prior.done():
+            with contextlib.suppress(BaseException):
+                await prior
+        if rerun:
+            wf = self._build_handle(
+                run_id,
+                item_id,
+                data.captured_user,
+                manifest,
+                data.chat_id or item_id,
+                data.workflow_id,
+                self.load_upload_dir(slug, profile),
+            )
+            plan = SteerPlan(instruction=f"Re-run step {rerun}", invalidate=[rerun])
+            await apply_steer(wf, plan, decided_by=decided_by)
+        # The board and its counters describe THIS attempt: a skipped step counts
+        # done again on the way back, so keeping the old ones double-counts it.
+        self._patch(
+            run_id,
+            status=RunStatus.RUNNING,
+            phases=[PhaseState(phase=p.id) for p in manifest.phases],
+            steps=[],
+            current_phase="",
+            ended=None,
+            result=None,
+        )
+        logger.info("retry: run %s re-driven (rerun=%r)", run_id, rerun)
         self._spawn(
             run_id,
             slug,

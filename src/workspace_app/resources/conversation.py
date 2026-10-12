@@ -221,7 +221,12 @@ class Message(Struct):
 
     step: str | None = None
     """Which step of `run_id` produced it: the step's journal id, its name, or
-    `name/key` for one element of a loop. The execution page's rows are these."""
+    `name/key` for one element of a loop."""
+
+    phase: str | None = None
+    """The diagram phase `step` ran in. The execution page's rows are phases
+    ("Step 2 of 3"), and a loop element leaves the run's step board once it
+    ends, so the message carries its phase itself."""
 
     created_at: int | None = None
     """Epoch milliseconds when the message was produced. Persisted so the agent

@@ -22,6 +22,8 @@ from workspace_app.workflow.orchestrator import (
     ActiveRunExists,
     NotAwaitingDecision,
     NotAwaitingSteer,
+    NotRetryable,
+    UnknownStep,
     WorkflowOrchestrator,
     WorkflowUnavailable,
 )
@@ -1561,3 +1563,131 @@ async def test_an_approved_steer_drops_whose_values_the_run_uses(spec_instance: 
     )
 
     assert RunIdentities(spec_instance).env_user(run_id) == ""
+
+
+# ── Continue from here / Re-run this step (plan-workflow-out-of-chat D9) ──
+
+
+def _flaky(calls: list, name: str, fail_times: int):
+    """An execute that fails its first ``fail_times`` attempts, then passes."""
+
+    async def execute(_fb):
+        calls.append(name)
+        if calls.count(name) <= fail_times:
+            raise RuntimeError(f"{name} broke")
+        return {name: True}
+
+    return execute
+
+
+def _two_step_run(calls: list, fail_second: int = 1):
+    async def run(wf, inputs):
+        await run_step(wf, name="first", phase="think", args={"a": 1}, execute=_rec(calls, "first"))
+        await run_step(
+            wf,
+            name="second",
+            phase="review",
+            args={"b": 1},
+            execute=_flaky(calls, "second", fail_second),
+        )
+        return {"ok": True}
+
+    return run
+
+
+async def test_continuing_a_failed_run_skips_what_passed_and_reruns_the_rest(
+    spec_instance: SpecStar,
+):
+    calls: list[str] = []
+    orch, _ = _orch(spec_instance, _two_step_run(calls))
+    run_id = await orch.start(slug="rca", item_id="iR", profile="echo", captured_user="u")
+    failed = await _ran(orch, run_id, spec_instance)
+    assert failed.status is RunStatus.ERROR
+
+    await orch.retry(slug="rca", item_id="iR", profile="echo", run_id=run_id)
+    # Until the new drive ends, the page must not read the old ending as this one's.
+    going = orch._get(run_id)
+    assert (going.status, going.ended, going.result) == (RunStatus.RUNNING, None, None)
+    got = await _ran(orch, run_id, spec_instance)
+
+    assert got.status is RunStatus.DONE
+    assert got.result == {"ok": True}
+    assert got.ended is not None
+    assert calls == ["first", "second", "second"]  # first skipped on the way back
+    # The counters describe THIS attempt, not the sum of both: Step N of M reads them.
+    assert [(p.phase, p.done, p.failed) for p in got.phases] == [
+        ("think", 1, 0),
+        ("review", 1, 0),
+    ]
+
+
+async def test_rerunning_a_step_runs_it_again_even_though_it_passed(spec_instance: SpecStar):
+    calls: list[str] = []
+    orch, _ = _orch(spec_instance, _two_step_run(calls))
+    run_id = await orch.start(slug="rca", item_id="iR2", profile="echo", captured_user="u")
+    await _ran(orch, run_id, spec_instance)
+
+    await orch.retry(slug="rca", item_id="iR2", profile="echo", run_id=run_id, rerun="first")
+    got = await _ran(orch, run_id, spec_instance)
+
+    assert got.status is RunStatus.DONE
+    assert calls == ["first", "second", "first", "second"]
+
+
+async def test_a_stopped_run_can_be_continued(spec_instance: SpecStar):
+    calls: list[str] = []
+    orch, _ = _orch(spec_instance, _two_step_run(calls, fail_second=0))
+    run_id = _insert_run(orch, item_id="iR3", status=RunStatus.CANCELLED)
+
+    await orch.retry(slug="rca", item_id="iR3", profile="echo", run_id=run_id)
+
+    assert (await _ran(orch, run_id, spec_instance)).status is RunStatus.DONE
+
+
+@pytest.mark.parametrize(
+    "status", [RunStatus.RUNNING, RunStatus.PENDING, RunStatus.AWAITING_HUMAN, RunStatus.DONE]
+)
+async def test_only_a_failed_or_stopped_run_is_continued(spec_instance: SpecStar, status):
+    orch, _ = _orch(spec_instance, _two_step_run([]))
+    run_id = _insert_run(orch, item_id="iR4", status=status)
+
+    with pytest.raises(NotRetryable):
+        await orch.retry(slug="rca", item_id="iR4", profile="echo", run_id=run_id)
+    assert orch._get(run_id).status is status
+
+
+async def test_continuing_waits_its_turn_behind_another_live_execution(spec_instance: SpecStar):
+    """Every execution of a workflow on an item shares one journal, so two at once
+    would race on the same step files — the same rule `start` keeps."""
+    orch, _ = _orch(spec_instance, _two_step_run([]))
+    old = _insert_run(orch, item_id="iR5", status=RunStatus.ERROR)
+    _insert_run(orch, item_id="iR5", status=RunStatus.RUNNING)
+
+    with pytest.raises(ActiveRunExists):
+        await orch.retry(slug="rca", item_id="iR5", profile="echo", run_id=old)
+    assert orch._get(old).status is RunStatus.ERROR
+
+
+async def test_rerun_names_a_step_of_this_execution(spec_instance: SpecStar):
+    """The name reaches a journal glob; one that is not a step on the run's board
+    (a typo, `*`, a path) is refused before anything is deleted."""
+    calls: list[str] = []
+    orch, _ = _orch(spec_instance, _two_step_run(calls))
+    run_id = await orch.start(slug="rca", item_id="iR6", profile="echo", captured_user="u")
+    await _ran(orch, run_id, spec_instance)
+
+    for bad in ("*", "../first", "nope"):
+        with pytest.raises(UnknownStep):
+            await orch.retry(slug="rca", item_id="iR6", profile="echo", run_id=run_id, rerun=bad)
+    assert orch._get(run_id).status is RunStatus.ERROR
+    assert calls == ["first", "second"]
+
+
+async def test_continuing_is_only_answered_through_its_own_item(spec_instance: SpecStar):
+    from specstar.types import ResourceIDNotFoundError
+
+    orch, _ = _orch(spec_instance, _two_step_run([]))
+    rid = _insert_run(orch, item_id="iA", status=RunStatus.ERROR)
+    with pytest.raises(ResourceIDNotFoundError):
+        await orch.retry(slug="rca", item_id="iB", profile="echo", run_id=rid)
+    assert orch._get(rid).status is RunStatus.ERROR

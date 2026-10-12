@@ -106,7 +106,7 @@ async def test_a_step_persists_its_prompt_before_its_answer_both_marked(
         "classify the files",
         None,
         run_id="run-1",
-        step=StepRef("classify", "a"),
+        step=StepRef("classify", "a", "sort"),
     )
 
     msgs = stack["conv_rm"].get(rid).data.messages
@@ -114,7 +114,7 @@ async def test_a_step_persists_its_prompt_before_its_answer_both_marked(
         ("user", "classify the files"),
         ("assistant", "ok"),
     ]
-    assert {(m.run_id, m.step) for m in msgs} == {("run-1", "classify/a")}
+    assert {(m.run_id, m.step, m.phase) for m in msgs} == {("run-1", "classify/a", "sort")}
     # persisted as role="user", but no person said it: off-hours autonomy asks
     # "has my owner said anything recently?" and must not hear a workflow
     from workspace_app.api.goal_offhours import last_human_message_ms

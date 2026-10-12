@@ -63,7 +63,7 @@ async def test_a_gated_agent_step_runs_its_turn_as_itself() -> None:
     wf = _wf(seen)
 
     async def drive_turn(prompt: str, tools: list[str] | None) -> str:
-        assert CURRENT_STEP.get() == StepRef("classify")
+        assert CURRENT_STEP.get() == StepRef("classify", "", "classify")
         seen.append("classify")
         await wf.write("out.md", "x")
         return "done"
@@ -72,3 +72,21 @@ async def test_a_gated_agent_step_runs_its_turn_as_itself() -> None:
     await agent_step(wf, prompt="p", phase="classify", check=file_nonempty("out.md"))
 
     assert seen == ["classify"]
+
+
+async def test_a_step_knows_the_phase_it_runs_in() -> None:
+    """The execution page's rows are phases ("Step 2 of 3"); a loop element is
+    gone from the run's board once it ends, so its messages say their phase
+    themselves rather than leaving the page to look it up."""
+    phases: list[str] = []
+    wf = _wf([])
+
+    async def drive_turn(prompt: str, tools: list[str] | None) -> str:
+        ref = CURRENT_STEP.get()
+        phases.append(ref.phase if ref else "")
+        return "a note"
+
+    wf.drive_turn = drive_turn
+    await agent_write_step(wf, prompt="p", phase="digest", name="summarise", key="a", out="a.md")
+
+    assert phases == ["digest"]

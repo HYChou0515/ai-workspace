@@ -25,14 +25,17 @@ from starlette.datastructures import UploadFile
 from ..files import WorkspaceFiles, rel_path
 from ..perm.model import Verb
 from ..tooling.registry import PackageInfo
+from ..workflow.engine import journal_stem, transcript_path
 from ..workflow.event_backfill import backfill_trigger_lag, find_trigger_lag
 from ..workflow.event_dispatch import EventTriggerDispatcher
-from ..workflow.handle import WorkflowHandle
+from ..workflow.handle import WorkflowHandle, journal_dir_of
 from ..workflow.inputs import resolve_inputs
 from ..workflow.orchestrator import (
     ActiveRunExists,
     NotAwaitingDecision,
     NotAwaitingSteer,
+    NotRetryable,
+    UnknownStep,
     WorkflowOrchestrator,
     WorkflowUnavailable,
 )
@@ -48,6 +51,8 @@ from .schemas import (
     _PhaseOut,
     _PreflightCheckOut,
     _PreflightPreviewOut,
+    _RetryBody,
+    _RetryOut,
     _SteerAck,
     _SteerBody,
     _SteerConfirmBody,
@@ -639,15 +644,36 @@ def register_workflow_routes(
 
     @app.get("/a/{slug}/items/{item_id}/runs/{run_id}")
     async def get_workflow_run(slug: str, item_id: str, run_id: str) -> dict:
-        """#100 (manual §14): poll a run — status + result + per-phase progress."""
-        locator.require_access(slug, item_id, "read_chat")
-        rm = spec.get_resource_manager(WorkflowRun)
+        """#100 (manual §14): poll a run — status + result + per-phase progress.
+
+        `step_files` names, per step on the board, where its result and transcript
+        are in the journal (the execution tab links them), from the journal's own
+        layout. A run of another item is not found here."""
+        investigation_id = locator.require_access(slug, item_id, "read_chat")
+        data = _run_of(run_id, investigation_id)
+        journal = journal_dir_of(data.workflow_id)
+        step_files = {
+            s.name: {
+                "result": journal_stem(journal, s.name, "") + ".json",
+                "transcript": transcript_path(journal, s.name, ""),
+            }
+            for s in data.steps
+            if not s.key
+        }
+        return {"run_id": run_id, **msgspec.to_builtins(data), "step_files": step_files}
+
+    def _run_of(run_id: str, item_id: str) -> WorkflowRun:
+        """The run, read only through its own item: the route takes the item from
+        the URL and the run from its id, so a run of item A must not answer under
+        item B's URL (read access to B is not read access to A)."""
         try:
-            data = rm.get(run_id).data
+            data = spec.get_resource_manager(WorkflowRun).get(run_id).data
         except ResourceIDNotFoundError as exc:
             raise HTTPException(status_code=404, detail=f"unknown run: {run_id!r}") from exc
         assert isinstance(data, WorkflowRun)
-        return {"run_id": run_id, **msgspec.to_builtins(data)}
+        if data.item_id != item_id:
+            raise HTTPException(status_code=404, detail=f"unknown run: {run_id!r}")
+        return data
 
     @app.get("/a/{slug}/items/{item_id}/runs/{run_id}/stream")
     async def stream_workflow_run(slug: str, item_id: str, run_id: str) -> StreamingResponse:
@@ -658,10 +684,13 @@ def register_workflow_routes(
         key = investigation_id
         try:
             run = spec.get_resource_manager(WorkflowRun).get(run_id).data
-            if isinstance(run, WorkflowRun) and run.chat_id:
-                key = run.chat_id
         except ResourceIDNotFoundError:
-            pass
+            run = None
+        if isinstance(run, WorkflowRun):
+            if run.item_id != investigation_id:  # never another item's live stream
+                raise HTTPException(status_code=404, detail=f"unknown run: {run_id!r}")
+            if run.chat_id:
+                key = run.chat_id
         return StreamingResponse(turn_engine.subscribe_sse(key), media_type="text/event-stream")
 
     @app.post(
@@ -789,6 +818,43 @@ def register_workflow_routes(
             "workflow_routes: steer confirmed for run %s (approve=%s)", run_id, body.approve
         )
         return _SteerConfirmOut(run_id=run_id, applied=body.approve)
+
+    @app.post(
+        "/a/{slug}/items/{item_id}/runs/{run_id}/retry",
+        status_code=status.HTTP_202_ACCEPTED,
+    )
+    async def retry_workflow_run(
+        slug: str, item_id: str, run_id: str, body: _RetryBody
+    ) -> _RetryOut:
+        """plan-workflow-out-of-chat D9: a failed or stopped execution's Continue from
+        here (`rerun` empty — what passed skips) or Re-run this step (`rerun` names
+        it — its artifacts are dropped first). Same run, same id; the FE refetches it.
+        409 when the run is not failed / stopped, another run of the item is live, or
+        its workflow no longer loads; 400 for a step not on the run's board."""
+        investigation_id = locator.require_access(slug, item_id, "converse")
+        profile = locator.profile_of(investigation_id)
+        try:
+            await workflow_orchestrator.retry(
+                slug=slug,
+                item_id=investigation_id,
+                profile=profile,
+                run_id=run_id,
+                rerun=body.rerun,
+                decided_by=get_user_id(),
+            )
+        except ResourceIDNotFoundError as exc:
+            logger.warning("workflow_routes: retry for unknown run %s: %s", run_id, exc)
+            raise HTTPException(status_code=404, detail=f"unknown run: {run_id!r}") from exc
+        except UnknownStep as exc:
+            logger.warning("workflow_routes: retry for run %s names no step: %s", run_id, exc)
+            raise HTTPException(
+                status_code=400, detail=f"this execution has no step named {body.rerun!r}"
+            ) from exc
+        except (NotRetryable, ActiveRunExists, WorkflowUnavailable) as exc:
+            logger.warning("workflow_routes: retry for run %s refused: %r", run_id, exc)
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        logger.info("workflow_routes: run %s re-driven (rerun=%r)", run_id, body.rerun)
+        return _RetryOut(run_id=run_id, rerun=body.rerun)
 
     @app.get("/a/{slug}/items/{item_id}/event-triggers/lag")
     async def event_trigger_lag(slug: str, item_id: str) -> list[dict]:

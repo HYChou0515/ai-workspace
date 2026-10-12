@@ -3,23 +3,13 @@ import { useState } from "react";
 
 import type { FileService } from "../api/fileService";
 import { qk } from "../api/queryKeys";
-import { phaseView, stepOf, workflowApi, type RunStatus, type WorkflowRunDTO } from "../api/workflows";
+import { phaseView, stepOf, workflowApi, type WorkflowRunDTO } from "../api/workflows";
 import { useLaunchableWorkflows } from "../hooks/useLaunchableWorkflows";
 import { useItemRuns } from "../hooks/useWorkflow";
-import { executionPath } from "../lib/executionTab";
+import { executionPath, statusText } from "../lib/executionTab";
 import { pxToRem } from "../lib/pxToRem";
 import { WorkflowLaunchDialog } from "./WorkflowLaunchDialog";
 import { WorkflowsModal } from "./WorkflowsModal";
-
-/** What an execution's status reads as, in words a person uses. */
-const STATUS_TEXT: Record<RunStatus, string> = {
-  pending: "Starting",
-  running: "Running",
-  awaiting_human: "Waiting for you",
-  done: "Done",
-  error: "Failed",
-  cancelled: "Stopped",
-};
 
 function startedText(ms: number | null): string {
   return ms == null ? "" : new Date(ms).toLocaleString();
@@ -154,7 +144,7 @@ export function WorkflowsSidebar({
             >
               <span style={{ display: "block", fontWeight: 600 }}>{titleOf(r)}</span>
               <span style={{ display: "flex", flexWrap: "wrap", gap: 6, color: "var(--text-paper-d)" }}>
-                <span>{STATUS_TEXT[r.status]}</span>
+                <span>{statusText(r.status)}</span>
                 {of > 0 && <span>{`Step ${at} of ${of}`}</span>}
                 {r.schedule_key && <span>Scheduled</span>}
                 <span>{startedText(r.started)}</span>

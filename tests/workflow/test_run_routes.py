@@ -859,3 +859,157 @@ def test_decision_and_confirm_on_an_unknown_run_are_404_like_steer():
         d = client.post(f"{_base(item_id)}/runs/nope/decisions", json={"choice": "approve"})
         c = client.post(f"{_base(item_id)}/runs/nope/steer/confirm", json={"approve": True})
     assert (d.status_code, c.status_code) == (404, 404)
+
+
+# ── plan-workflow-out-of-chat D9: Continue from here / Re-run this step ──
+
+
+def _mark(app: FastAPI, spec: SpecStar, run_id: str, status: str) -> None:
+    """Turn a finished run into a failed / stopped one — what the step that broke
+    would have left — without scripting a failure into the echo workflow.
+
+    `done` is written inside the driver, whose teardown (`_post_run`) then still
+    reads the run and writes it back with its phases greened; a mark landing
+    between that read and write would be lost. So wait for the task first."""
+    import msgspec
+
+    from workspace_app.workflow.run import RunStatus, WorkflowRun
+
+    tasks = app.state.workflow_orchestrator._tasks
+    for _ in range(200):
+        task = tasks.get(run_id)
+        if task is None or task.done():
+            break
+        time.sleep(0.02)
+    else:
+        raise AssertionError(f"run {run_id} never finished tearing down")
+    rm = spec.get_resource_manager(WorkflowRun)
+    rm.update(run_id, msgspec.structs.replace(rm.get(run_id).data, status=RunStatus(status)))
+
+
+def test_continuing_a_failed_execution_drives_it_to_done():
+    app, spec, item_id = _app()
+    with TestClient(app) as client:
+        _put_input(client, item_id, '{"n": 7}')
+        run_id = client.post(f"{_base(item_id)}/run").json()["run_id"]
+        _poll(client, item_id, run_id, "done")
+        _mark(app, spec, run_id, "error")
+
+        r = client.post(f"{_base(item_id)}/runs/{run_id}/retry", json={})
+        assert r.status_code == 202
+        assert r.json() == {"run_id": run_id, "rerun": ""}
+        assert _poll(client, item_id, run_id, "done")["result"]["n"] == 7
+
+
+def test_rerunning_a_step_over_http_redoes_it_with_the_input_as_it_is_now():
+    """The step re-reads the workspace: an input changed since it passed reaches
+    the result only because the step was done over, not skipped."""
+    app, spec, item_id = _app()
+    with TestClient(app) as client:
+        _put_input(client, item_id, '{"n": 7}')
+        run_id = client.post(f"{_base(item_id)}/run").json()["run_id"]
+        done = _poll(client, item_id, run_id, "done")
+        assert done["result"]["n"] == 7
+        assert "think" in {s["name"] for s in done["steps"] if not s["key"]}
+        _mark(app, spec, run_id, "cancelled")
+        _put_input(client, item_id, '{"n": 42}')
+
+        r = client.post(f"{_base(item_id)}/runs/{run_id}/retry", json={"rerun": "think"})
+        assert r.status_code == 202
+        assert r.json()["rerun"] == "think"
+        assert _poll(client, item_id, run_id, "done")["result"]["n"] == 42
+
+
+def test_continuing_a_finished_execution_is_409():
+    app, _spec, item_id = _app()
+    with TestClient(app) as client:
+        _put_input(client, item_id, '{"n": 1}')
+        run_id = client.post(f"{_base(item_id)}/run").json()["run_id"]
+        _poll(client, item_id, run_id, "done")
+        r = client.post(f"{_base(item_id)}/runs/{run_id}/retry", json={})
+    assert r.status_code == 409
+
+
+def test_rerunning_a_step_the_execution_does_not_have_is_400():
+    app, spec, item_id = _app()
+    with TestClient(app) as client:
+        _put_input(client, item_id, '{"n": 1}')
+        run_id = client.post(f"{_base(item_id)}/run").json()["run_id"]
+        _poll(client, item_id, run_id, "done")
+        _mark(app, spec, run_id, "error")
+        r = client.post(f"{_base(item_id)}/runs/{run_id}/retry", json={"rerun": "*"})
+    assert r.status_code == 400
+
+
+def test_continuing_an_unknown_execution_is_404():
+    app, _spec, item_id = _app()
+    with TestClient(app) as client:
+        r = client.post(f"{_base(item_id)}/runs/nope/retry", json={})
+    assert r.status_code == 404
+
+
+# ── the execution tab's reads (plan-workflow-out-of-chat P8) ──
+
+
+def test_a_run_says_where_each_steps_files_are_and_they_are_there():
+    """The tab links a step's result and transcript. The paths come from the
+    server's own journal layout, and the result it names is a file the run
+    actually wrote (the workspace is the oracle, not a second copy of the rule)."""
+    app, _spec, item_id = _app()
+    with TestClient(app) as client:
+        _put_input(client, item_id, '{"n": 7}')
+        run_id = client.post(f"{_base(item_id)}/run").json()["run_id"]
+        done = _poll(client, item_id, run_id, "done")
+        named = [s["name"] for s in done["steps"] if not s["key"]]
+        assert named
+        assert set(done["step_files"]) == set(named)
+        for name in named:
+            files = done["step_files"][name]
+            assert files["transcript"] == files["result"].removesuffix(".json") + ".transcript.md"
+            r = client.get(f"{_base(item_id)}/files/{files['result'].lstrip('/')}")
+            assert r.status_code == 200, files["result"]
+
+
+def _second_item(spec: SpecStar) -> str:
+    return (
+        spec.get_resource_manager(PlaygroundItem)
+        .create(PlaygroundItem(title="other", owner="u", profile="echo"))
+        .resource_id
+    )
+
+
+def test_a_run_is_not_read_through_another_items_url():
+    """The run route took the item from the URL and the run from its id and
+    never checked they belong together: read access to one item read every
+    other item's runs."""
+    app, spec, item_id = _app()
+    other = _second_item(spec)
+    with TestClient(app) as client:
+        _put_input(client, item_id, '{"n": 1}')
+        run_id = client.post(f"{_base(item_id)}/run").json()["run_id"]
+        _poll(client, item_id, run_id, "done")
+        assert client.get(f"{_base(other)}/runs/{run_id}").status_code == 404
+
+
+async def test_a_runs_stream_is_not_followed_through_another_items_url():
+    """Called as a handler: its body is a never-ending event stream the
+    in-process transport would buffer forever (see the stream test above)."""
+    import pytest
+    from fastapi import HTTPException
+
+    from workspace_app.workflow.run import RunStatus, WorkflowRun
+
+    app, spec, item_id = _app()
+    other = _second_item(spec)
+    run_id = (
+        spec.get_resource_manager(WorkflowRun)
+        .create(WorkflowRun(item_id=item_id, captured_user="u", status=RunStatus.DONE))
+        .resource_id
+    )
+    stream = _route(app, "/a/{slug}/items/{item_id}/runs/{run_id}/stream")
+
+    own = await stream(slug="playground", item_id=item_id, run_id=run_id)
+    assert isinstance(own, StreamingResponse)  # its own item still follows it
+    with pytest.raises(HTTPException) as exc:
+        await stream(slug="playground", item_id=other, run_id=run_id)
+    assert exc.value.status_code == 404

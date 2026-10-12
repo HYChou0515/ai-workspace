@@ -374,6 +374,18 @@ class _SteerConfirmOut(BaseModel):
     applied: bool
 
 
+class _RetryBody(BaseModel):
+    # plan-workflow-out-of-chat D9: drive a failed / stopped run again. "" =
+    # Continue from here (what passed skips); a step name = Re-run this step
+    # (its artifacts are dropped first, the steps after it follow their inputs).
+    rerun: str = ""
+
+
+class _RetryOut(BaseModel):
+    run_id: str
+    rerun: str
+
+
 class _IngestBody(BaseModel):
     # #100: a deterministic node's ingest capability call (manual §8).
     collection: str

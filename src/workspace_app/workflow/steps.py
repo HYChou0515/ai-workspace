@@ -64,10 +64,13 @@ def _parse_fields(text: str) -> Any:
 
 
 class StepRef(NamedTuple):
-    """A step as the journal knows it: ``name`` plus ``key``, the loop element."""
+    """A step as the journal knows it: ``name`` plus ``key``, the loop element.
+    ``phase`` is the diagram phase it runs in — what the execution page groups
+    its rows by; not part of the journal identity (``id``)."""
 
     name: str
     key: str = ""
+    phase: str = ""
 
     @property
     def id(self) -> str:
@@ -85,10 +88,10 @@ CURRENT_STEP: ContextVar[StepRef | None] = ContextVar("workflow_current_step", d
 
 
 @contextmanager
-def _as_step(name: str, key: str) -> Iterator[None]:
+def _as_step(name: str, key: str, phase: str) -> Iterator[None]:
     # Set before the turn's coroutine is created: `asyncio.wait_for` runs it as
     # a task that copies the context at that moment.
-    token = CURRENT_STEP.set(StepRef(name, key))
+    token = CURRENT_STEP.set(StepRef(name, key, phase))
     try:
         yield
     finally:
@@ -126,7 +129,7 @@ async def agent_step(
     drive_turn = wf.drive_turn
 
     async def execute(feedback: str | None) -> Any:
-        with _as_step(name or phase, key):
+        with _as_step(name or phase, key, phase):
             return await _turn(feedback)
 
     async def _turn(feedback: str | None) -> Any:
@@ -196,7 +199,7 @@ async def agent_write_step(
     drive_turn = wf.drive_turn
 
     async def execute(feedback: str | None) -> Any:
-        with _as_step(name or phase, key):
+        with _as_step(name or phase, key, phase):
             return await _write(feedback)
 
     async def _write(feedback: str | None) -> Any:

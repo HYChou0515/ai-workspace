@@ -104,6 +104,19 @@ export function useDecide(slug: string, itemId: string, runId: string) {
   });
 }
 
+/** plan-workflow-out-of-chat D9: Continue from here (`rerun` "") or Re-run this
+ * step (`rerun` = its name) on a failed / stopped execution. */
+export function useRetryRun(slug: string, itemId: string, runId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (rerun: string) => workflowApi.retry(slug, itemId, runId, rerun),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: qk.workflowRun(slug, itemId, runId) });
+      qc.invalidateQueries({ queryKey: qk.workflowRuns(slug, itemId) });
+    },
+  });
+}
+
 /** #288: steer a run in words. The proposed plan arrives on the run record
  * (`pending_steer`), so invalidate the run query to pick it up. */
 export function useSteerRun(slug: string, itemId: string, runId: string) {

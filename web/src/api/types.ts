@@ -85,6 +85,12 @@ export type Message = {
    * differs from the cleaned `content`. The card renders this when present so
    * an error that streamed live doesn't vanish on reload; absent ⇒ `content`. */
   tool_display?: string | null;
+  /** plan-workflow-out-of-chat: the workflow execution this message belongs
+   * to, the step that produced it (`name` or `name/key`) and that step's
+   * phase — what the execution tab groups its rows by. Absent on a chat's own. */
+  run_id?: string | null;
+  step?: string | null;
+  phase?: string | null;
   /** Epoch ms the message was produced; restores the agent log's timestamps
    * after a reload. Absent for messages saved before this existed. */
   created_at?: number | null;

@@ -9,7 +9,7 @@
  * a pure function, unit-tested without the network.
  */
 
-import { apiFetch } from "./http";
+import { apiFetch, httpErrorFrom } from "./http";
 
 export type PhaseDef = { id: string; title?: string };
 
@@ -116,6 +116,10 @@ export type WorkflowRunDTO = {
   /** The schedule that fired it (its window-ledger key), "" or absent for any other
    * launch — what the Workflows sidebar marks "Scheduled" by. */
   schedule_key?: string;
+  /** The conversation its steps' turns are persisted in (one per execution;
+   * a schedule's executions share one) — what the execution tab reads its
+   * rows' messages from, selected by `run_id`. */
+  chat_id?: string;
 };
 
 /** One pre-flight checklist line in the launch dialog (#283). `severity` is
@@ -441,5 +445,17 @@ export const workflowApi = {
       },
     );
     if (!r.ok) throw new Error(`steer confirm failed: ${r.status}`);
+  },
+
+  /** plan-workflow-out-of-chat D9: drive a failed or stopped execution again.
+   * No `rerun` = Continue from here (what passed skips); a step name = Re-run
+   * this step (its results are dropped first). Throws with the server's reason. */
+  async retry(slug: string, itemId: string, runId: string, rerun = ""): Promise<void> {
+    const r = await apiFetch(`${base(slug, itemId)}/runs/${encodeURIComponent(runId)}/retry`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ rerun }),
+    });
+    if (!r.ok) throw await httpErrorFrom(r, `continue failed: ${r.status}`);
   },
 };
