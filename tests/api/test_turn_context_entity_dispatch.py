@@ -147,9 +147,9 @@ async def test_wire_handle_threads_the_runs_origin_into_the_agent_turn(monkeypat
     seen: dict[str, object] = {}
     real_enqueue = executor._turn_engine.enqueue
 
-    def spy_enqueue(key, content, ctx, *, on_complete):
+    def spy_enqueue(key, content, ctx, *, on_complete, **kw):
         seen["ctx"] = ctx
-        return real_enqueue(key, content, ctx, on_complete=on_complete)
+        return real_enqueue(key, content, ctx, on_complete=on_complete, **kw)
 
     monkeypatch.setattr(executor._turn_engine, "enqueue", spy_enqueue)
 

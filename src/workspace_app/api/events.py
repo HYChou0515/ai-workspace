@@ -162,6 +162,22 @@ class FileChanged:
 
 
 @dataclass(frozen=True)
+class TurnEnded:
+    """A turn in one of the item's chats has ended (done, failed or stopped).
+
+    Published on the ITEM's key whichever chat ran the turn: a viewer's file tree
+    listens on the item's stream, and a turn in any chat but the default one
+    streams on its own key, so without this the tree never heard that a second
+    chat's or a workflow's turn wrote anything. An app chat publishes it after
+    its turn-end flush (announced even when that flush fails); a workflow turn
+    has no per-turn flush. Broadcast-only, like `FileChanged`; never folded into
+    a transcript."""
+
+    chat_id: str
+    type: Literal["turn_ended"] = "turn_ended"
+
+
+@dataclass(frozen=True)
 class AgentMetrics:
     """Live token telemetry for the current turn. `phase` is:
       - "up":    the prompt is being sent (Claude-Code's ↑),
@@ -386,6 +402,7 @@ AgentEvent = (
     | GoalUpdated  # #613 P3: the chat's goal was set / cleared / advanced
     | UserMessage  # #43: broadcast-only (a human's message on the shared stream)
     | FileChanged  # #43: broadcast-only (a workspace file changed)
+    | TurnEnded  # broadcast-only, on the ITEM's key: a turn in any of its chats ended
     | Presence  # #455: broadcast-only (live viewer roster on the item stream)
     | PhaseEntered  # #100: workflow phase/step observability (manual §12)
     | StepStarted
