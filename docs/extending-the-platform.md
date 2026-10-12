@@ -378,8 +378,8 @@ server:
 上面的 `env_vars` 是 **shared** 層:一個 item 一份,能打開 item 的人都讀得到。另外有一層
 **private**:只有本人讀得到(連 superuser 也不行——路由只認「我的」,沒有指定別人的參數)。
 它有兩種範圍:**這個 item 的**(每個人、每個 item 一份),以及**所有 item 通用的**「我的環境變數」
-(每個人一份,`/my-env`,[plan-personal-env](plan-personal-env.md))。後者只給把那個變數設成
-Private first／Private only 的 item;同名時這個 item 的值優先。Env 面板一層一個分頁:「Shared」「Private」(這個
+(每個人一份,`/my-env`,[plan-personal-env](plan-personal-env.md))。每一種提供方式退到個人值時兩者都讀
+(Shared 只在共用值沒填時才退到個人值);同名時這個 item 的值優先。Env 面板一層一個分頁:「Shared」「Private」(這個
 item 的)「Private(跨workspace)」(和 `/my-env` 同一份),在哪個分頁手 key 或按登入就寫進哪一層。這個 item
 的值來源有三個:本人在「Private」分頁手 key、本人在那個分頁按登入(`IEnvProvider`)、以及部署的 `IRequestEnv.env_for` 自動寫入——**只在**本人於這個 item 聊天送出
 或頁面 `callTool` 時問它(其他請求不問)。後者存在**另一列**、值變了就**整份取代**:它沒再回的名字

@@ -35,7 +35,7 @@
 | # | 決定 | 來源 |
 |---|---|---|
 | D1 | 用語照上表 | 〔user〕「你建議吧」 |
-| D2 | 由提供方式決定，不做 per-item 的授權。**2026-10-12 更正**：個人值＝項目個人值或通用個人值（D1），所以每一種提供方式退到個人值時兩個都讀——Shared（含沒設）在共用值沒填時也會用到通用個人值。原本寫的「Shared 或沒設的 item 拿不到，即使共用值裡沒有那個名稱」不是 user 的話，和 D1 衝突，已刪 | 〔user〕「就是 policy 定義即可，不是授權」；更正〔user〕「我們不是有合約是 private 值就是 item env 或 my env」 |
+| D2 | 由提供方式決定，不做 per-item 的授權。**2026-10-12 更正**：個人值＝項目個人值或通用個人值（D1），所以每一種提供方式退到個人值時兩個都讀——Shared（含沒設）在共用值沒填時也會用到通用個人值。原本寫的「Shared 或沒設的 item 拿不到，即使共用值裡沒有那個名稱」不在這一列引用的原話裡（原話只說「policy 定義即可，不是授權」），和 D1 衝突，已刪 | 〔user〕「就是 policy 定義即可，不是授權」；更正〔user〕「我們不是有合約是 private 值就是 item env 或 my env」 |
 | D3 | 系統登入一律寫進通用個人值，不再寫進項目個人值。**被 A20 取代**：在哪個分頁登入就寫進哪一層 | 〔user〕 |
 | D4 | 同名時項目個人值贏過通用個人值 | 〔user〕 |
 | D5 | **不清**：手打或系統登入都不會動到任何 item 裡的值 | 〔user〕「不清，登入也不要清吧」（推翻了我原本「登入時清掉同名項目個人值」的提議） |
@@ -150,7 +150,7 @@ PersonalEnv（新，一個人一列；registered 在 spec.apply 之後，沒有 
   被項目個人值蓋掉了。〔預設〕**被 A22 取代**：寫分頁名，「使用中：Private」「使用中：Private(跨workspace)」。
 - **提供方式選單**：三個選項的文字換成 Shared／Private first／Private only（D9），中英文都用這三個字。
 - **`/w/` 平台列**：登入按鈕寫進「我的環境變數」（**被 A20 取代**，見上）；「需要登入」的判斷把通用個人值算進去（依 D2：只算提供
-  方式是 Private 的名稱）。
+  方式是 Private 的名稱）。**2026-10-12 被 D2 更正取代**：照 `layerInUse`，只要 tool 真的會拿到就算，Shared 也算。
 
 ## 每個窗口誰擋
 
@@ -177,7 +177,7 @@ PersonalEnv（新，一個人一列；registered 在 spec.apply 之後，沒有 
 |---|---|---|
 | P1 | 這份 plan + design-history 一行 | `tests/docs/test_docs_index.py` 綠 |
 | P2 | `PersonalEnv` model + store + `/me/env` 路由 | 只能讀寫自己的；整份取代不留 revision；`updated` 每個名稱各自記；名稱順序保留 |
-| P3 | `resolve_env` 加 `personal`、服務帳號拆成獨立參數；所有入口（上表）帶入「替誰跑」的通用個人值；WUI build 為空 | 三種提供方式各自的順序（Shared 不含通用個人值）；每個入口用對的人（parity：一個共用的組法函式，入口只給「誰」）；無人在場時 `store.may` 失敗 → 不給；digest 對不上 → 不給 |
+| P3 | `resolve_env` 加 `personal`、服務帳號拆成獨立參數；所有入口（上表）帶入「替誰跑」的通用個人值；WUI build 為空 | 三種提供方式各自的順序（Shared 不含通用個人值；**2026-10-12 被 D2 更正取代**：含，排在項目個人值後面）；每個入口用對的人（parity：一個共用的組法函式，入口只給「誰」）；無人在場時 `store.may` 失敗 → 不給；digest 對不上 → 不給 |
 | P4 | 系統登入寫進通用個人值：`/me/env-providers` 路由；item 裡的登入按鈕改寫 `/me/env` | 登入後 item 的項目個人值沒有被寫；另一個 Private item 下一次執行拿到新值（A20 之後：這只對 Private(跨workspace) 分頁與 `/my-env` 頁的登入成立） |
 | P5 | 通知（D11） | 代理人收到、擁有者收到、同一人只一封、同天去重 |
 | P6 | 前端：「我的環境變數」頁、Env 面板的來源標示、提供方式選項文字、`/w/` 平台列 | 各頁的 FE 測試；真瀏覽器量 390px 與桌面寬度 |
@@ -193,21 +193,21 @@ PersonalEnv（新，一個人一列；registered 在 spec.apply 之後，沒有 
 | A1 | 清理腳本自己載入部署設定、走過每一列 `PrivateEnv` | 工作在 API 裡做：superuser 才能打的 `POST /api/admin/env/clear-item-sign-ins`；腳本 `scripts/clear_item_sign_ins.py` 只透過 HTTP 呼叫它（和 `scripts/run_migrate.py` 同一個做法）。腳本名字也從 `clear_item_signin_values.py` 改成這個 | 獨立腳本要自己重組 API 的 model registry 與 backend，對 Postgres 不保證對；在 API 裡做，用的就是線上那份 store，名單就是 API **實際載入**的 `server.env_providers`（`app.state.env_providers`），比讀設定檔更貼近線上 |
 | A2 | 系統登入的值「由前端寫進 `/me/env`」 | 「我的環境變數」頁、以及 Env 面板「Private(跨workspace)」分頁的登入都是**按下就存**，不等儲存鈕；「Shared」「Private」分頁的登入照舊是填表單（A20） | token 是要給下一次執行用的；登入本身就是刻意的動作，再要一個儲存鈕只會讓「登入了但沒存」的狀態出現。共用值那邊的登入填的是擁有者的共用 token，不屬於 D3 |
 | A3 | `resolve_env` 多一個 `personal` 參數 | 個人那一側用 `PersonEnv(own, personal, service)` 一路帶到 `resolve_env`；服務帳號（`env_without_request`）從個人值 dict 裡拆出來成為獨立的 `service` | D7 要求通用個人值排在服務帳號之上；服務帳號原本合在個人值 dict 的最底下，不拆出來就排不進去。parity 測試以舊的合併方式為 oracle，證明個人值為空時結果不變 |
-| A4 | （未寫）D2 擋在哪裡 | 只擋在 `resolve_env` 的順序表：Shared 的順序裡沒有通用個人值 | 第一版同時用名稱過濾和順序表擋，突變任一個都被另一個蓋住；留一處，突變才會紅 |
+| A4 | （未寫）D2 擋在哪裡 | 只擋在 `resolve_env` 的順序表：Shared 的順序裡沒有通用個人值。**2026-10-12 被 D2 更正取代**：不再擋，Shared 的順序含通用個人值 | 第一版同時用名稱過濾和順序表擋，突變任一個都被另一個蓋住；留一處，突變才會紅 |
 | A5 | `notify_failure(run)` | `notify_failure(run, run_id)`；orchestrator 兩條把 run 結束成 error 的路都傳 run id | `WorkflowRun` 本身不帶 id，而代理人記在以 run id 為鍵的 `RunIdentity` |
 | A6 | 「需要登入」的判斷只寫了 `/w/` 平台列 | 聊天的 Env 按鈕（`useEnvMissing`）也算進通用個人值 | 同一個判斷有兩個入口；只改一個，聊天裡會繼續叫已經在「我的環境變數」登入的人去登入 |
 | A7 | 入口在「我的資源」的下一個 | 同上，圖示用 Env 鈕的 `tag` | 和 item 裡 Env 鈕同一個圖示，看得出是同一件事 |
 | A8 | D3、D6：item 裡的登入一律寫進「我的環境變數」 | **被 A20 取代。** 原本：寫到「這個 item 會讀的地方」：「只有我」分頁裡，這個 item 把那個變數設成 Private first／Private only → 存進「我的環境變數」；設成 Shared（沒設）→ 和以前一樣填進這個 item 的表單、按儲存才存。「我的環境變數」頁的登入不變。 | 第一輪 review（F1）：D2 規定 Shared 的 item 不讀「我的環境變數」，照 D3 寫過去，在 Shared item 登入後 tool 拿不到，畫面卻顯示已登入。要「登入一處、全部更新」，擁有者要把變數設成 Private first／Private only——這寫在 runbook |
-| A9 | 清理腳本清掉所有 item 裡的登入產物名稱 | 只清「那個名稱設成 Private first／Private only 的 item」**而且**「那個人在我的環境變數也有同名值」的 | Shared item 裡留著的值就是它在用的，清掉會讓它壞掉；只有 Private 的 item 裡，舊值才會蓋過「我的環境變數」——而且只在那裡真的有一個新值可蓋時（第二輪 review F1：那個人還沒重新登入的話，item 裡的值是他唯一的值） |
+| A9 | 清理腳本清掉所有 item 裡的登入產物名稱 | 只清「那個名稱設成 Private first／Private only 的 item」**而且**「那個人在我的環境變數也有同名值」的。**2026-10-12 被 D2 更正取代**：「設成 Private」改成「會讀個人值」——Private first／Private only，或 Shared 而共用值沒填；Shared 而共用值有填的照舊不清 | Shared item 裡留著的值就是它在用的，清掉會讓它壞掉；只有 Private 的 item 裡，舊值才會蓋過「我的環境變數」——而且只在那裡真的有一個新值可蓋時（第二輪 review F1：那個人還沒重新登入的話，item 裡的值是他唯一的值） |
 | A10 | 「有人在場的失敗不另外通知」 | workflow 面板按 Run 的失敗也通知代理人 | 按下 Run 之後 run 在背景跑，按的人可能已經離開畫面；和排程、頁面按鈕是同一條路（orchestrator 結束成 error），分不出來也不該分 |
 | A11 | 給代理人的那一封另外發 | 代理人就是擁有者時不另外發，擁有者原本那一封內文帶上「登入過期就到『我的環境變數』重新登入」；代理人已被移出這個 item（`store.may` 不過）就不發 | 同一人收兩封是噪音；被移出的人收到的連結點進去也看不到 item。去重的「同一天」是 UTC 日 |
 | A12 | P8 寫到 `configuration.md` | 沒改 | 這次沒有新設定鍵；`server.env_providers` 沒變 |
 | A13 | 腳本只有 `--base-url` | 加 `--header "Name: value"`（可重複） | 前面有 SSO 閘道時，superuser 的身分要靠閘道讀的 header 或 cookie；不帶就只能以 `server.default_user` 執行 |
-| A14 | 鍵的順序（`SANDBOX_USER_ENV_KEYS`）照所有個人值 | 只算這個 item 要的那些名稱（Private first／Private only） | 第一輪 review（N1）：Shared 的 item 從鍵的排列看得出我在「我的環境變數」有哪些名稱 |
+| A14 | 鍵的順序（`SANDBOX_USER_ENV_KEYS`）照所有個人值 | 只算這個 item 要的那些名稱（Private first／Private only）。**2026-10-12 被 D2 更正取代**：每個名稱都算，但和這個 item 的共用值或項目個人值同名的，位置由 item 決定（`mine_only`），不由通用個人值決定 | 第一輪 review（N1）：Shared 的 item 從鍵的排列看得出我在「我的環境變數」有哪些名稱 |
 | A15 | （未寫）同時兩個寫入 | 「我的環境變數」的每個寫入（頁面上的新增／移除／登入、Env 面板的登入）在同一個瀏覽器分頁內排同一條隊，一個做完才做下一個；兩個分頁同時改不同名稱仍可能後寫的蓋掉先寫的（每次寫前重讀已把這個窗口縮到一次往返） | 每個寫入都是「讀整列、寫整列」；同時兩個會讀到同一列，後寫的把先寫的蓋掉（第二輪 review F2） |
 | A16 | （未寫）登入時 policy 還沒存 | 依面板上「看到的」policy 分流，包括還沒存的修改。**A20 之後不再分流，這一列不再適用** | 第二輪 review F3：依已存的分流，token 落點和分頁上顯示的「使用中」不一致 |
 | A17 | （未寫）讀不到「我的環境變數」 | 頁面顯示讀取失敗，不顯示「還沒有值」 | 第二輪 review F4 |
-| A18 | （未寫）`/w/` 平台列與聊天 Env 鈕 | 只有在 item 有 Private first／Private only 的名稱時才去讀「我的環境變數」 | 第二輪 review R1：每一頁的平台列都多等一個請求，而 Shared 的頁面根本用不到 |
+| A18 | （未寫）`/w/` 平台列與聊天 Env 鈕 | 只有在 item 有 Private first／Private only 的名稱時才去讀「我的環境變數」。**2026-10-12 被 D2 更正取代**：每一頁都讀（Shared 也會用到）；平台列是否出現的條件不變 | 第二輪 review R1：每一頁的平台列都多等一個請求，而 Shared 的頁面根本用不到 |
 | A19 | （未寫）已知不修。**A20 之後不會再發生**：登入落在哪一層由分頁決定，不看 policy | 先在共用值分頁改了某名稱的 policy（還沒存）、再到「只有我」登入、最後放棄 policy 的修改：token 照「看到的」policy 落地，可能留在和最後存下的 policy 不一致的地方（例如 Private first 的 item 裡留一份 item 值） | 第三輪 review F2：要「改 policy、登入、放棄」三步都發生才會遇到；離開時的未存提醒會先問一次。遇到時在那個 item 按「清除我在這個 item 的值」，或跑清理腳本 |
 | A20 | D3、D6：item 裡的登入一律寫進「我的環境變數」；介面文字「所有參與者」「只有我（這個 item）」 | Env 面板一層一個分頁，名字用 user 定的：**Shared**（共用值）、**Private**（項目個人值，預設打開）、**Private(跨workspace)**（通用個人值，和「我的環境變數」頁同一份）。**在哪個分頁登入或填值，就寫進哪一層**，不看 policy：Shared、Private 填表單、按儲存才存；Private(跨workspace) 登入立刻存，手打的按這個分頁的儲存才存，只寫改過的名稱。Private(跨workspace) 列出這個 item 的工具要的名稱、以及這個 item 設成 Private first／Private only 的名稱，每列寫這個 item 用不用它（設成 Shared 的不用），附連到 `/my-env` 的連結。英文介面的分頁名是 Shared／Private／Private (all workspaces)〔預設，可推翻〕 | 〔user〕「只有我」登入卻改到所有 item，和分頁的範圍不一致；分頁名稱也沒照說好的用語。一層一個分頁，範圍就是看到的範圍。代價：在 Private 分頁替一個設成 Private first／Private only 的名稱登入，會在這個 item 留一份值，依 D4 蓋過 Private(跨workspace) 的值——那一列的「使用中」會寫出來，「清除我在這個 item 的值」可以拿掉。這種值也是清理腳本會清的（那個人在「我的環境變數」也有同名值時），所以 runbook 要營運方先看 dry run |
 | A21 | （未寫）已知不修 | (1) 任一分頁按儲存時，若登入框裡打了帳密還沒送出，面板直接關、不先問（master 上本來就這樣，不是這次造成的）。(2) `/my-env` 頁登入後值存不進去時，登入框裡說一次、app 的寫入失敗通知又說一次——那頁的儲存和新增／移除共用一個 mutation，關掉全域通知會連那些一起關。Env 面板的 Private(跨workspace) 分頁已只說一次 | A20 第二輪 review F3、F1：都要先打了東西又走特定路徑才遇到，修法要動共用的關閉判斷或拆 mutation，比問題本身大 |
