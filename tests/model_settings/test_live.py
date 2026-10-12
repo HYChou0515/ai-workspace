@@ -155,6 +155,7 @@ def test_polling_keeps_the_database_off_the_request_path(store, config, monkeypa
     boot = load(config_path=config, env={})
     live = LiveSettings(store, config_path=config, env={}, boot=boot)
     stop = live.start(interval_s=0.01)
+    reads.clear()  # `start` reads once at boot (final review 12); a USE never does
     try:
         store.publish(MINI, by="root")
         deadline = time.monotonic() + 5
@@ -203,3 +204,19 @@ def test_a_key_changed_but_not_applied_reaches_no_process(store, config):
     store.publish(MINI, by="root")
     applied = LiveSettings(store, config_path=config, env={}, boot=boot)
     assert applied.settings().agents.presets["openai-mini"].llm.api_key != "sk-old"
+
+
+def test_a_process_starts_on_what_is_published_not_on_the_defaults(store, config):
+    # final review 12: the poll's first read came a second after start, and a
+    # worker consuming a backlog ran that second on the deploy defaults —
+    # without the published model or the applied keys.
+    store.publish(MINI, by="root")
+    boot = load(config_path=config, env={})
+    live = LiveSettings(None, config_path=config, env={}, boot=boot)
+    live.attach(store)
+
+    stop = live.start(interval_s=60)
+    try:
+        assert live.settings().agents.presets["openai-mini"].model == "openai/gpt-4.1-mini"
+    finally:
+        stop()

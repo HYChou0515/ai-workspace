@@ -164,3 +164,49 @@ def test_a_real_setting_the_page_does_not_edit_is_sent_to_config_yaml():
     assert "config.yaml" in (key_path_problem("config.server.host") or "")
     port = key_path_problem("config.server.port") or ""
     assert port and "llm.api_key" in port, port
+
+
+def test_a_short_key_does_not_mangle_or_reveal_itself_in_a_test_error(settings, monkeypatch):
+    # final review 12: every copy of a key was replaced at any length — a key
+    # "e" turned the error into "lit*** set ***llm…" and showed which letters
+    # it held. `redact` has had a length floor since review r3.
+    from dataclasses import replace
+
+    from workspace_app.kb.llm import LitellmLlm
+
+    def fail(self, prompt):
+        raise RuntimeError("Connection error.")
+
+    monkeypatch.setattr(LitellmLlm, "stream", fail)
+    preset = settings.agents.presets["openai-mini"]
+    short = replace(preset, llm=replace(preset.llm, api_key="e"))
+    keyed = replace(
+        settings,
+        agents=replace(settings.agents, presets={**settings.agents.presets, "openai-mini": short}),
+    )
+
+    result = try_connection(keyed, "openai-mini", config_dir=None)
+
+    assert result.ok is False and "Connection error." in result.error, result.error
+
+
+@pytest.mark.parametrize("key", ["ollama", "x1"])
+def test_a_short_key_quoted_by_the_provider_is_still_masked(settings, monkeypatch, key):
+    from dataclasses import replace
+
+    from workspace_app.kb.llm import LitellmLlm
+
+    def refuse(self, prompt):
+        raise RuntimeError(f"401: Incorrect API key provided: {self._api_key}. ollama_chat ok")
+
+    monkeypatch.setattr(LitellmLlm, "stream", refuse)
+    preset = settings.agents.presets["openai-mini"]
+    presets = {
+        **settings.agents.presets,
+        "openai-mini": replace(preset, llm=replace(preset.llm, api_key=key)),
+    }
+    keyed = replace(settings, agents=replace(settings.agents, presets=presets))
+
+    error = try_connection(keyed, "openai-mini", config_dir=None).error
+
+    assert f"provided: {key}." not in error and "ollama_chat ok" in error, error

@@ -137,7 +137,12 @@ class LiveSettings:
         """Read the version every `interval_s` on a thread of its own, so no
         request waits on the database (P10: one read measured ~17 ms on
         Postgres, and the request that crossed the window paid it on the event
-        loop). Returns the function that stops it."""
+        loop). Returns the function that stops it.
+
+        It reads once before returning: the poll's first read is `interval_s`
+        away, and a worker consuming a backlog ran that second on the deploy
+        defaults — without the published model or keys (final review 12)."""
+        self.refresh()
         stop = threading.Event()
 
         def poll() -> None:

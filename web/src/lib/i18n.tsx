@@ -2811,6 +2811,10 @@ export const messages = {
     "zh-TW": "設定值和前一版相同（只換了金鑰，或回復到相同的值）",
     en: "Same values as the version before (keys changed, or a rollback to the same values)",
   },
+  "modelSettings.versionChangesNoneFirst": {
+    "zh-TW": "設定值和部署預設相同（只套用了金鑰）",
+    en: "Same values as the deploy defaults (only keys were applied)",
+  },
   "modelSettings.versionChangesUnknown": {
     "zh-TW": "前一版不在這份清單裡，無法比較",
     en: "The version before is not in this list, so it cannot be compared",

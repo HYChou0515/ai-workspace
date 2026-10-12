@@ -1091,6 +1091,32 @@ describe("ModelSettingsPage", () => {
     expect(running.parentElement).not.toBe(button.parentElement);
   });
 
+  it("says a failed rollback in words, not as an Error object", async () => {
+    const client = fakeClient({ version: "v2v2v2v2v2v2v2v2", published: KB_2 });
+    client.history.mockResolvedValue([applied("v2v2v2v2v2v2v2v2", KB_2, 2), applied("v1v1v1v1v1v1v1v1", {}, 1)]);
+    client.rollback.mockRejectedValue(new HttpError(404, "rollback failed: 404"));
+    renderWithQuery(<ModelSettingsPage client={client} />);
+    fireEvent.click(await screen.findByRole("tab", { name: "版本紀錄" }));
+
+    fireEvent.click(await screen.findByTestId("model-settings-rollback-1"));
+    fireEvent.click(await screen.findByRole("button", { name: "回復" }));
+
+    const said = await screen.findByText("rollback failed: 404");
+    expect(said.textContent).not.toContain("Error:");
+  });
+
+  it("compares the first version with the deploy defaults, and says so", async () => {
+    // final review 12: "same values as the version before" — there is none.
+    const client = fakeClient({ version: "v1v1v1v1v1v1v1v1" });
+    client.history.mockResolvedValue([applied("v1v1v1v1v1v1v1v1", {}, 1)]);
+    renderWithQuery(<ModelSettingsPage client={client} />);
+    fireEvent.click(await screen.findByRole("tab", { name: "版本紀錄" }));
+
+    const changes = await screen.findByTestId("model-settings-version-changes-0");
+    expect(changes).toHaveTextContent("預設");
+    expect(changes).not.toHaveTextContent("前一版");
+  });
+
   it("draws a refused key as an error at its field", async () => {
     // final review 5: plain black text, away from the field, no aria-invalid.
     const client = fakeClient();

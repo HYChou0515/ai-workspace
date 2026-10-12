@@ -69,7 +69,7 @@ what they shaped; the ellipsis is cited only here.
 - "Apply…" with an ellipsis because it asks for confirmation — Microsoft,
   "Command Buttons" (https://learn.microsoft.com/en-us/windows/win32/uxguide/ctrl-command-buttons).
 - A test call that can take tens of seconds says it is running and for how
-  long, beside a button that keeps its label — NN/g, "Progress Indicators Make
+  long, under a button that keeps its label — NN/g, "Progress Indicators Make
   a Slow System Less Insufferable" (https://www.nngroup.com/articles/progress-indicators/).
 - A visible label on the key path field, not a placeholder — NN/g,
   "Placeholders in Form Fields Are Harmful"

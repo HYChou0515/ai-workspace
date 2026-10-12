@@ -764,7 +764,7 @@ function TestConnection({ client, defaults, draft }: { client: Client; defaults:
   const test = useMutation({ meta: { silentError: true }, mutationFn: (p: string) => client.testConnection(p) });
   const chosen = preset || presets[0] || "";
   // A call can take tens of seconds on a slow model: say it is running and
-  // for how long, beside a button that keeps its label (final review 7; NN/g
+  // for how long, under a button that keeps its label (final review 7; NN/g
   // "Progress Indicators Make a Slow System Less Insufferable").
   const [waited, setWaited] = useState(0);
   useEffect(() => {
@@ -874,7 +874,7 @@ function HistoryTab({
       draft.clearNotice();
       void queryClient.invalidateQueries({ queryKey: qk.modelSettings });
     },
-    onError: (e) => setRefused(problemsOf(e).length ? problemsOf(e) : [String(e)]),
+    onError: (e) => setRefused(problemsOf(e).length ? problemsOf(e) : [messageOf(e)]),
   });
 
   const askToRollBack = async (entry: Applied) => {
@@ -1035,7 +1035,9 @@ function VersionChanges({
   if (changes.length === 0)
     return (
       <span data-testid={testId} style={MUTED}>
-        {t("modelSettings.versionChangesNone")}
+        {/* The first version has no version before it: it is compared with the
+            deploy defaults, and says so (final review 12). */}
+        {t(entry.previous === null ? "modelSettings.versionChangesNoneFirst" : "modelSettings.versionChangesNone")}
       </span>
     );
   return <ChangeList changes={changes} testId={testId} />;

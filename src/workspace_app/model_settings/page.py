@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import dataclasses
+import re
 import time
 import types
 import typing
@@ -171,6 +172,16 @@ class Connection(Struct, frozen=True):
 PING = "Reply with the single word OK."
 
 
+def _scrub(text: str, key: str | None) -> str:
+    """`text` with the key masked wherever it stands as a whole token — any
+    length, since a provider error quotes the key it was sent (a short one
+    too). Not inside a longer word: replacing a key "e" everywhere mangled the
+    error and showed which letters the key held (final review 12)."""
+    if not key:
+        return text
+    return re.sub(rf"(?<![\w-]){re.escape(key)}(?![\w-])", SET, text)
+
+
 def try_connection(
     settings: Settings,
     preset: str,
@@ -206,9 +217,7 @@ def try_connection(
             head.model, base_url=head.base_url, api_key=head.api_key, timeout=timeout_s
         ).collect(PING)
     except Exception as exc:  # any provider failure is the answer this button gives
-        error = str(exc)
-        if head.api_key:
-            error = error.replace(head.api_key, SET)
+        error = _scrub(str(exc), head.api_key)
         return Connection(ok=False, model=head.model, error=error[:500])
     return Connection(
         ok=True,
