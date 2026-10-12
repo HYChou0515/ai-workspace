@@ -2083,6 +2083,28 @@ agent 步驟裡 AI 的呼叫、WUI 的工具呼叫、view plugin、圖表重畫�
 - **Firefox 114 以前的版本畫不出圓點，值會以明碼顯示**（Chrome、Edge、Safari 都支援）。使用者若還在用舊版 Firefox，
   請他們升級。
 
+### 2026-10-12 · #912 WUI 多頁在真的 gateway 後面能載入：內容路由以通行證的主人身分讀檔 {#pr-912}
+
+**設定** — 沒有新 key，沒有要做的事。**修 #904 的 bug，沒有開關**：
+
+- #904 之後，`/api/wui-content/` 在 gateway 放行（不驗 cookie）的部署上**每個請求都回 500**：路由驗過通行證之後，
+  裡面讀通行證那一列、檢查權限、讀 workspace 檔案的 specstar 呼叫，仍去問部署接在 `get_spec(settings,
+  get_user_id=…)` 的 cookie 讀取器，而 iframe 的請求沒有 cookie。現在內容路由在驗過通行證後，整個請求以
+  **發通行證的人**的身分執行；讀取器不用改（`make_spec` 會先看路由宣告的身分，沒宣告才問讀取器）。
+- 其他路由照舊只認 cookie；身分只在那一個內容請求裡有效。
+
+**資料** — 沒有。
+
+**k8s · CI 側** — 沒有新的 manifest、env、probe 或 JobType。#904 要求的 gateway 放行照舊需要
+（`/api/wui-content/` 前綴不驗 SSO cookie）；放行了而頁面仍是單頁（`about:srcdoc`）、或 `…/__wui/ping` 回 500，
+就是還沒部署這一版。
+
+**確認做完**（`rollout 後`）：
+
+- 不帶 cookie：`curl -s -o /dev/null -w '%{http_code}' '<網址>/api/wui-content/<通行證>/__wui/ping'` 回 200
+  （通行證從開發者工具 Network 裡任一個 `…/api/wui-content/…` 請求複製；回 404 是通行證過期，重開 WUI 再拿）。
+- 打開一個多頁 WUI（例如 mkdocs 文件站）：iframe 網址是 `…/api/wui-content/…`，側欄能換頁。
+
 ## 附錄 A：資料回填的機制（specstar 為什麼不會自己補）
 
 有些升版會改變「資料在資料庫裡的儲存形狀」，但 **specstar 只在寫入當下**把一列的 `indexed_data`
