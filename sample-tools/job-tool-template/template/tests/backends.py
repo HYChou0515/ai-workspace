@@ -123,6 +123,28 @@ class SteadyOverride(Minimal):
     )
 
 
+class _PairOrder(Idempotency):
+    """Two strings in a set: only two orders, so few seeds can all agree."""
+
+    def identity(self, spec):
+        return list({spec["image"], spec["command"]})
+
+
+class PairDrift(Minimal):
+    # The example review found: five seeds all put these two in one order.
+    contract = Contract(
+        spec_schema=SPEC,
+        idempotency=_PairOrder(fields=("image", "command")),
+        example_spec={"image": "img23", "command": "train.py"},
+    )
+
+
+class Holder:
+    """A backend reached by a dotted path, as an entry point may name it."""
+
+    Inner = SteadyOverride
+
+
 class HashDrift(Minimal):
     contract = Contract(
         spec_schema=SPEC,

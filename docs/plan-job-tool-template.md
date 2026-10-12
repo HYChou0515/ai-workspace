@@ -61,7 +61,7 @@ Source of each: **user** = chosen by the user in the 2026-10-11/12 grill;
 | # | Decision | Why |
 |---|---|---|
 | D20 | `budget.submit + budget.find_by_key ≤ 55`, refused at declaration | A submit that runs out of time is followed by `find_by_key` in the same call; two budgets of 55 each would overrun the platform's 60 s before the shell could say anything |
-| D21 | Building the backend runs inside the submit budget (until D41 it was `caller_id`); a submit stuck there is "most likely not sent — sending the same spec again is safe", exit 2 | The key is not known yet, so `submit` was not called. Not airtight: `caller_id` may return in the instant before the process ends and the thread call `submit`; the same key makes a resend harmless either way |
+| D21 | Building the backend runs inside the submit budget (until D41 it was `caller_id`); a submit stuck there is "most likely not sent — sending the same spec again is safe", exit 2 | The key is not known yet, so `submit` was not called. Not airtight: building the backend may finish in the instant before the process ends and the thread call `submit`; the same key makes a resend harmless either way |
 | D22 | After a submit timeout, `find_by_key` returning None is exit 2 "sending the same spec again is safe"; failing to answer is exit 1 "call list first" (D16), or 3 when it raised `NeedsAction` | None is the backend saying it has nothing; the same spec carries the same key, so a late arrival is returned, not doubled |
 | D23 | Arguments are validated against the schema the model was shown (`jsonschema`, a new template dependency) before the backend is called; failures are exit 2 naming the field | Arguments are held to the schema the backend declared — which admits undeclared fields unless that schema says `additionalProperties: false` (the README tells authors) |
 | D24 | `fetch` refuses a `dest` that is empty, absolute, through `..`, or resolves outside the working directory (a symlink), exit 2, before the backend is called | The working directory is the user's workspace |
@@ -225,7 +225,7 @@ below, each fixed test-first and its pin mutation-checked.
 | # | Decision | Why |
 |---|---|---|
 | D52 | "The same job" is per item **and per credential**, and the model and the author are told so | Not a new rule — D41 with D43: a backend finds only jobs its token sees, so two people in one item with their own Private tokens get two jobs. The text said "this item" alone |
-| D53 | The shape tests also run `identity(example_spec)` in five processes with different `PYTHONHASHSEED`s and demand one answer | Twice in one process cannot see an identity built on a set's order, `hash()` or `id()`: steady in-process, different on every tool call (each is a new process) — every resubmit a new job |
+| D53 | The shape tests also run `identity(example_spec)` in twenty processes with different `PYTHONHASHSEED`s and demand one answer (five until review round 2, which found a two-element set five seeds all ordered alike) | Twice in one process cannot see an identity built on a set's order, `hash()` or `id()`: steady in-process, different on every tool call (each is a new process) — every resubmit a new job |
 | D54 | `window_seconds` must be finite; `Submitted.created` must be a bool | NaN switched sameness off silently (two identical submits, two jobs) and told the model "nan seconds"; `created=None` collided with the shell's own "cannot say", a truthy string announced a new job |
 | D55 | With no item, the "already submitted" message does not say "this item"; the result of the lookup after a slow submit carries the job with `from_this_item`, like every other job | D47 has no item; P11 said every answer carries the mark |
 | D56 | `tool-authoring.md` says the item id comes with what the platform *dispatches*: not with the agent's own `exec` nor a workflow `run:` step (which get neither it nor the credential), and the MCP runner leaves whatever the engineer's shell holds | The first wording claimed every run on the platform |
@@ -233,6 +233,18 @@ below, each fixed test-first and its pin mutation-checked.
 Known, not fixed: the agent's own `exec` can run a tool's launcher with no item
 id (and no credential, so it fails at the backend) — the platform only speaks
 for what it dispatches.
+
+### Second pass, review round 2 (on `749831f2`; mine)
+
+Regression found nothing; defect and veracity/conformance found the items
+below. Each is a change inside the existing mechanisms — no mechanism replaced.
+
+| # | Decision | Why |
+|---|---|---|
+| D57 | Twenty hash seeds, not five (D53) | A two-element set has two orders: five fixed seeds put `img23`/`train.py` in one order every time, so the check passed an identity that is new on half the calls |
+| D58 | The cross-process probe marks its answer and reads only that line; a probe that fails or times out is a named problem carrying the probe's last stderr lines; a backend may be named `module:Outer.Inner` | A backend printing a timestamp at import read as drift; a missing variable at import surfaced as a bare `exit status 1`; entry points allow dotted names |
+| D59 | The "already submitted" message substitutes its whole opening clause; the test asserts the sentence | "The same work was already submitted the same work…" passed a keyword test |
+| D60 | The `submit` description says "the same item, where there is one, under the same credential" | The description is fixed at build, before any item exists, and the MCP runner has none |
 
 ## The interface (target shape)
 

@@ -149,8 +149,8 @@ _SUBMITTED = (
     "Tell the user to ask again later, and call get with this job_id then."
 )
 _ALREADY = (
-    "{who} already submitted the same work within the last {window}: this is that job, "
-    "not a new one, and it may have finished. Call get to see where it is."
+    "{what} within the last {window}: this is that job, not a new one, and it may have "
+    "finished. Call get to see where it is."
 )
 _LANDED = (
     "The submit was slow to answer, but the job is there. It runs on its own; call get "
@@ -222,7 +222,11 @@ def _submit(backend: type[JobBackend], spec: dict[str, Any]) -> Outcome:
         if result.created
         else _ALREADY.format(
             # D47: with no item there is no "this item" to speak of.
-            who="This item" if item_id is not None else "The same work was",
+            what=(
+                "This item already submitted the same work"
+                if item_id is not None
+                else "The same work was already submitted"
+            ),
             window=describe_window(contract.idempotency.window_seconds),
         )
     )

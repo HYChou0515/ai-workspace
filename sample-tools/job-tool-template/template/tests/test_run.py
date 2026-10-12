@@ -170,7 +170,12 @@ def test_with_no_item_the_job_already_there_is_not_called_this_items(capsys, mon
     _, out, _ = _run(capsys, "submit", SPEC_IN)
 
     advice = json.loads(out)["next"]
-    assert "already" in advice and "this item" not in advice.lower()
+    assert "this item" not in advice.lower()
+    # The whole sentence: a keyword check passed "was already submitted the same work".
+    assert advice.startswith(
+        "The same work was already submitted within the last 24 hours: this is that job, "
+        "not a new one"
+    )
 
 
 def test_a_submit_that_started_a_job_says_it_is_new(capsys):

@@ -51,6 +51,32 @@ def test_a_sameness_that_changes_from_one_process_to_the_next_is_caught():
     assert any("process" in p for p in problems)
 
 
+def test_a_two_element_set_is_caught_too():
+    # Two strings have two orders; five fixed seeds put img23/train.py in the
+    # same one every time, so the check passed what production would break.
+    problems = identity_drift_across_processes("backends:PairDrift", extra_path=[TESTS])
+    assert any("process" in p for p in problems)
+
+
+def test_what_the_backend_prints_on_import_is_not_mistaken_for_its_answer():
+    # A timestamped banner differs in every process; the identity does not.
+    assert identity_drift_across_processes("probe_backends:Noisy", extra_path=[TESTS]) == []
+
+
+def test_a_probe_that_cannot_load_the_backend_says_why(monkeypatch):
+    import probe_backends  # noqa: F401 - loaded here first, so only the probes are refused
+
+    monkeypatch.setenv("PROBE_BREAK_IMPORT", "1")
+
+    problems = identity_drift_across_processes("probe_backends:Noisy", extra_path=[TESTS])
+
+    assert any("ACME_TOKEN" in p for p in problems)
+
+
+def test_a_backend_named_by_a_dotted_path_is_found():
+    assert identity_drift_across_processes("backends:Holder.Inner", extra_path=[TESTS]) == []
+
+
 def test_a_steady_sameness_is_the_same_in_every_process():
     # An override, so the processes really are started and compared.
     assert identity_drift_across_processes("backends:SteadyOverride", extra_path=[TESTS]) == []

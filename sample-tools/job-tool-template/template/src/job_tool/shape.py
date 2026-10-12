@@ -3,12 +3,14 @@ backend's service (D4)."""
 
 from __future__ import annotations
 
+import functools
 import importlib
 import json
 import os
 import subprocess
 import sys
 from collections.abc import Sequence
+from typing import Any
 
 from job_contract import Contract
 from jsonschema import Draft202012Validator
@@ -41,16 +43,44 @@ def identity_problems(contract: Contract) -> list[str]:
     return []
 
 
-#: Different string-hash seeds for the processes compared. Five: two could
-#: agree by chance on how a small set is ordered; five practically cannot.
-_SEEDS = ("1", "2", "3", "4", "5")
+#: Different string-hash seeds for the processes compared. A set of two
+#: strings has only two orders, so n seeds all agree by chance with odds of
+#: 2^-(n-1): five let a real case through in review (1 in 16); twenty make it
+#: about one in half a million, for about a second of CI.
+_SEEDS = tuple(str(seed) for seed in range(1, 21))
 
-_PROBE = """
-import importlib, json, sys
+#: Marks the probe's answer, so a backend that prints when it is imported (a
+#: library banner, a timestamp) is not mistaken for part of it.
+_MARK = "job_tool.identity="
+
+_PROBE = f"""
+import functools, importlib, json, sys
 module, _, name = sys.argv[1].partition(":")
-contract = getattr(importlib.import_module(module), name).contract
-print(json.dumps(contract.idempotency.identity(contract.example_spec), sort_keys=True))
+backend = functools.reduce(getattr, name.split("."), importlib.import_module(module))
+contract = backend.contract
+answer = contract.idempotency.identity(contract.example_spec)
+print({_MARK!r} + json.dumps(answer, sort_keys=True))
 """
+
+
+def _backend(backend_ref: str) -> Any:
+    """`module:Class` or `module:Outer.Inner`, resolved as an entry point is."""
+    module, _, name = backend_ref.partition(":")
+    return functools.reduce(getattr, name.split("."), importlib.import_module(module))
+
+
+def _probe(backend_ref: str, seed: str, path: str) -> str:
+    """The identity's answer in a fresh process with this hash seed."""
+    done = subprocess.run(
+        [sys.executable, "-c", _PROBE, backend_ref],
+        env={**os.environ, "PYTHONHASHSEED": seed, "PYTHONPATH": path},
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=60,
+    )
+    marked = [line for line in done.stdout.splitlines() if line.startswith(_MARK)]
+    return marked[-1].removeprefix(_MARK)
 
 
 def identity_drift_across_processes(backend_ref: str, extra_path: Sequence[str] = ()) -> list[str]:
@@ -61,22 +91,17 @@ def identity_drift_across_processes(backend_ref: str, extra_path: Sequence[str] 
     on every call (where it matters). `backend_ref` is the backend's
     "module:Class", as its entry point names it. Empty when the default
     sameness is kept."""
-    module, _, name = backend_ref.partition(":")
-    contract = getattr(importlib.import_module(module), name).contract
+    contract = _backend(backend_ref).contract
     if not contract.idempotency.overrides_identity():
         return []
     path = os.pathsep.join([*extra_path, os.environ.get("PYTHONPATH", "")])
-    answers = {
-        subprocess.run(
-            [sys.executable, "-c", _PROBE, backend_ref],
-            env={**os.environ, "PYTHONHASHSEED": seed, "PYTHONPATH": path},
-            capture_output=True,
-            text=True,
-            check=True,
-            timeout=60,
-        ).stdout.strip()
-        for seed in _SEEDS
-    }
+    try:
+        answers = {_probe(backend_ref, seed, path) for seed in _SEEDS}
+    except subprocess.CalledProcessError as exc:
+        reason = (exc.stderr or "").strip().splitlines()[-3:]
+        return [f"could not run identity() in a separate process: {' / '.join(reason)}"]
+    except subprocess.TimeoutExpired:
+        return ["identity() did not answer within 60s in a separate process"]
     if len(answers) > 1:
         return [
             "identity() gives a different answer in each process (a set's order, hash() or "

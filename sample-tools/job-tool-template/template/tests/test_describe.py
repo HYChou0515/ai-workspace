@@ -66,7 +66,7 @@ def test_how_long_sameness_lasts_is_said_from_the_contract():
 def test_sameness_is_described_per_item_and_the_queue_as_the_whole_queue():
     # D41/D42, said where the model decides: the same work from this item is
     # one job; list shows every job the credential can see, marked by origin.
-    assert "this item" in describe("submit", Described)
+    assert "same item" in describe("submit", Described)
     listing = describe("list", Minimal)
     assert "from_this_item" in listing and "not only" in listing
 

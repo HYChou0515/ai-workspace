@@ -19,8 +19,8 @@ def _submit(backend: type[JobBackend]) -> str:
     return (
         "Submit a job. Returns at once with its job_id; the job then runs on its own and "
         "nothing announces when it ends, so tell the user to ask about it later. "
-        f"If the same {', '.join(rule.fields)} was already submitted from here — this item, "
-        "under the same credential — within the last "
+        f"If the same {', '.join(rule.fields)} was already submitted from here — the same "
+        "item, where there is one, under the same credential — within the last "
         f"{describe_window(rule.window_seconds)}, this returns that job instead of starting "
         "another; after that, the same work starts a new job."
     )
