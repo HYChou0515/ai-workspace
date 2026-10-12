@@ -429,3 +429,14 @@ async def test_a_transient_failure_backs_off_before_each_resend() -> None:
     assert _visible(events) == [_Ev(DELTA, "hi")]
     assert notes.slept == [0.5, 1.0]
     assert notes.retries == [(1, "provider_error"), (2, "provider_error")]
+
+
+@pytest.mark.asyncio
+async def test_the_backoff_doubles_up_to_eight_seconds() -> None:
+    notes = _Notes()
+    attempts: list[tuple[list[Any], Exception | None]] = [([], _unavailable()) for _ in range(6)]
+    inner = _Scripted([*attempts, ([_Ev(DELTA, "hi")], None)])
+
+    await _drain(_model(inner, notes, max_retries=6))
+
+    assert notes.slept == [0.5, 1.0, 2.0, 4.0, 8.0, 8.0]

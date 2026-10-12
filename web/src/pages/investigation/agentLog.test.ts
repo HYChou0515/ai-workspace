@@ -1867,6 +1867,29 @@ describe("a turn's failure is shown once (found recording the #915 demo)", () =>
     expect(both.error).toBeNull();
   });
 
+  it("counts only what the screen showed after its own last question", () => {
+    // Q1 failed and is on screen as an entry; Q2 is asked and fails the same
+    // way. Counting the whole screen would weigh Q1's entry against Q2's tail
+    // and keep Q2's live notice beside its stored one.
+    const q1Stored = [
+      { role: "user", content: "q1" },
+      { role: "error", content: RAW, error_kind: "rate_limited" },
+    ] as Message[];
+    let log = reconcileSnapshot(EMPTY_LOG, { messages: q1Stored });
+    log = reduceAgent(log, { type: "user_message", content: "q2" } as AgentEvent);
+    log = reduceAgent(log, { type: "error", message: RAW, kind: "rate_limited" } as AgentEvent);
+
+    const both = reconcileSnapshot(log, {
+      messages: [
+        ...q1Stored,
+        { role: "user", content: "q2" },
+        { role: "error", content: RAW, error_kind: "rate_limited" },
+      ] as Message[],
+    });
+    expect(notices(both)).toBe(2);
+    expect(both.error).toBeNull();
+  });
+
   it("leaves a send failure alone even when the thread ends in the same words", () => {
     // A send failure is never the turn's persisted ending — the turn did not
     // run — so a matching entry is some other failure.

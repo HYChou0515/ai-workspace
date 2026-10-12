@@ -216,7 +216,9 @@ Review round 3 on that fix found three things. Reading the settings only where
 (`HeaderModel`, `CallRetryModel`) now go through one function,
 `agent/settings_arg.py`, and the runner test runs both shapes. Turning the
 client's retries off also turned off its backoff, so a transient re-send now
-waits 0.5 s, doubling, at most 8 s, the client's own schedule. And a 409, which
+waits 0.5 s, doubling, at most 8 s — the client's base and cap, without its
+jitter, and a 5xx's `Retry-After` is not read (the client honoured it up to
+60 s; recorded in the runbook). And a 409, which
 the client used to re-send, is a request error now (recorded in the runbook).
 
 The same recording showed a turn's failure **twice**, two identical boxes one
@@ -232,6 +234,17 @@ two queued turns failing the same way would otherwise lose the second notice
 while its turn was not yet stored. A send failure (never a turn's persisted
 ending) is left alone. The KB test that guards "the error survives `done`" again
 reads a store that is behind; the dedupe has its own test.
+
+**Known, not fixed — one failure can still show twice after a reconnect**
+(final review). The reconnect path reads the thread before the stream replays
+what it missed, so the stored failure is already on screen as an entry when the
+replayed `error` raises the live notice; at the next re-read the counts tie and
+the live notice stays, until the next question clears it. Telling "that entry
+IS this failure" apart from "that entry is the queued turn before it" needs to
+know which turn produced a persisted message, which nothing on it says today
+(the same prerequisite CLAUDE.md names for re-pairing queued answers). Of the
+two errors this rule can make, it is chosen to show a failure twice rather than
+hide one; before this fix every failure showed twice once the thread was re-read.
 
 ## Risks
 

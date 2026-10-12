@@ -2151,7 +2151,8 @@ agent 步驟裡 AI 的呼叫、WUI 的工具呼叫、view plugin、圖表重畫�
   - **provider client 自己的重試關掉了**：agent 回合的每次模型呼叫都帶 `max_retries=0`、`num_retries=0`。以 OpenAI
     相容端點（`openai/…`）為例，litellm 建 client 時預設 `max_retries=2`，那個 client 會自己照 `Retry-After` 等完再重送——
     短的 429 與 5xx 因此在畫面上只是「等候模型回應」，不顯示等待、不計次數、也不算進等待池。現在由上面那一層接手：
-    429 照等待池等，逾時／連線／5xx 重送前退避（0.5 秒起、每次加倍、最多 8 秒，和 OpenAI client 原本的節奏相同）。
+    429 照等待池等，逾時／連線／5xx 重送前退避（0.5 秒起、每次加倍、最多 8 秒，起點與上限和 OpenAI client 相同）。
+    **5xx 帶的 `Retry-After` 不再照做**：client 以前會照它等（60 秒內），現在照上面的退避重送；會長時間回 503 的閘道，重送用完就結束這一輪並說明原因。
     設了 failover chain 的部署，chain 自己的快速重試與限流等待（`num_retries`、`rate_limit_budget_s`）照舊在這一層底下。
     **409 不再重試**：OpenAI client 以前會重送 409，現在 409 算請求錯誤，第一次就結束這一輪並說明原因。
 - 錯誤一律以「發生了什麼／可以怎麼做／技術細節（預設收合，可複製）」顯示，**所有使用者都看得到技術細節**（D1）。

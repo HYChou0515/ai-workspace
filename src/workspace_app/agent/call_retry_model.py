@@ -39,7 +39,8 @@ _TRANSIENT = frozenset({"timeout", "connection", "provider_error", "all_busy"})
 
 def _backoff_s(retry: int) -> float:
     """The wait before re-send number ``retry`` (1-based): 0.5 s, doubling, at
-    most 8 s — the OpenAI client's own schedule, which this layer replaces
+    most 8 s — the OpenAI client's base and cap (without its jitter, and a
+    5xx's Retry-After is not read), which this layer replaces
     since the client's retries are off (review round 3)."""
     return min(0.5 * 2 ** (retry - 1), 8.0)
 
