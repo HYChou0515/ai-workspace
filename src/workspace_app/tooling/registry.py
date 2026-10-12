@@ -550,7 +550,7 @@ async def _exec_tool(
     inherit and no file to open.
     """
     assert actx.sandbox is not None  # a provisioned tool implies a sandbox
-    env = _tool_env(actx.user_env)
+    env = _tool_env(actx.user_env, item_id=actx.investigation_id)
     argv = [f"{pkg.install_dir}/launch", cmd_name, args_json or "{}"]
     try:
         return await actx.sandbox.exec(handle, argv, on_output=actx.on_exec_output, env=env or None)
@@ -572,8 +572,18 @@ async def _exec_tool(
         return await actx.sandbox.exec(fresh, argv, on_output=actx.on_exec_output, env=env or None)
 
 
-def _tool_env(user_env: dict[str, str]) -> dict[str, str]:
-    """This turn's variables, plus the list of which names they are.
+#: The item a third-party command runs for, set by the platform on every
+#: dispatch (docs/tool-authoring.md). A tool that keys its work by item — the job
+#: template's sameness (docs/plan-job-tool-template.md D44) — reads it here.
+#: Absent where no item is in play, and from anything the platform does not
+#: dispatch (the agent's own `exec`, a workflow `run:` step); the MCP runner
+#: sets none, so there a tool sees whatever the engineer's shell holds.
+ITEM_ID_ENV = "WORKSPACE_ITEM_ID"
+
+
+def _tool_env(user_env: dict[str, str], *, item_id: str | None = None) -> dict[str, str]:
+    """This turn's variables, plus the list of which names they are, plus which
+    item this is.
 
     "This turn's", not "the item's": since #714 the set can also carry values
     composed from the request behind the send, and the launcher has to restore
@@ -585,10 +595,16 @@ def _tool_env(user_env: dict[str, str]) -> dict[str, str]:
     set would be overwritten, which is "stored, listed, no effect". The list
     lets the launcher snapshot exactly these on entry and put them back as the
     last thing before exec, keeping the decision that the user wins.
+
+    The item id is the one name the user does NOT win: it is the platform's to
+    say, so a person's variable of that name is dropped — from the values and
+    from the list, or the launcher would restore it over the platform's last.
     """
-    if not user_env:
-        return {}
-    return {**user_env, "SANDBOX_USER_ENV_KEYS": " ".join(user_env)}
+    own = {name: value for name, value in user_env.items() if name != ITEM_ID_ENV}
+    env = {**own, "SANDBOX_USER_ENV_KEYS": " ".join(own)} if own else {}
+    if item_id:
+        env[ITEM_ID_ENV] = item_id
+    return env
 
 
 async def _review_chart(

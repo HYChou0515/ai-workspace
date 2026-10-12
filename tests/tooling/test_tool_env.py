@@ -51,11 +51,56 @@ async def test_a_dispatched_tool_receives_the_items_variables():
 
 
 @pytest.mark.asyncio
-async def test_an_item_with_none_set_adds_nothing():
+async def test_an_item_with_none_set_adds_none_of_its_own():
     """Absent and empty must look the same to the backend — an empty mapping is
-    not a request to clear the command's environment."""
+    not a request to clear the command's environment. What remains is only the
+    platform's own: which item this is."""
     sandbox = await _dispatch({})
-    assert sandbox.exec_envs[-1] == {}
+    assert sandbox.exec_envs[-1] == {"WORKSPACE_ITEM_ID": "inv"}
+
+
+@pytest.mark.asyncio
+async def test_a_dispatched_tool_is_told_which_item_it_runs_for():
+    """docs/plan-job-tool-template.md D44: a tool that keys its work by item
+    (the job template's sameness) learns the item from the platform, the one
+    party that knows it — not from a value a person typed."""
+    sandbox = await _dispatch({"API_KEY": "sk-1"})
+    assert sandbox.exec_envs[-1]["WORKSPACE_ITEM_ID"] == "inv"
+
+
+@pytest.mark.asyncio
+async def test_the_chart_re_render_is_told_the_item_too():
+    from workspace_app.tooling import registry
+
+    sandbox = MockSandbox()
+    handle = await sandbox.create(SandboxSpec())
+    actx = AgentToolContext(investigation_id="inv", sandbox=sandbox, handle=handle)
+    await registry._exec_tool(actx, handle, _PKG, "chart", "{}")
+    assert sandbox.exec_envs[-1] == {"WORKSPACE_ITEM_ID": "inv"}
+
+
+@pytest.mark.asyncio
+async def test_a_person_cannot_set_the_item_a_tool_is_told():
+    """A variable of the same name in the item's or a person's env loses to the
+    platform's, and is not among the names the launcher restores last — or it
+    would come back over the platform's value after all."""
+    sandbox = await _dispatch({"WORKSPACE_ITEM_ID": "someone-elses", "API_KEY": "sk-1"})
+    sent = sandbox.exec_envs[-1]
+    assert sent["WORKSPACE_ITEM_ID"] == "inv"
+    assert sent["SANDBOX_USER_ENV_KEYS"].split() == ["API_KEY"]
+
+
+@pytest.mark.asyncio
+async def test_a_context_with_no_item_tells_no_item():
+    sandbox = MockSandbox()
+    handle = await sandbox.create(SandboxSpec())
+    actx = AgentToolContext(sandbox=sandbox, handle=handle)
+    tool = _to_function_tool(_PKG, _CMD)
+    tctx: ToolContext[Any] = ToolContext(
+        context=actx, tool_name="do", tool_call_id="id", tool_arguments="{}", usage=Usage()
+    )
+    await tool.on_invoke_tool(tctx, "{}")
+    assert "WORKSPACE_ITEM_ID" not in (sandbox.exec_envs[-1] or {})
 
 
 @pytest.mark.asyncio

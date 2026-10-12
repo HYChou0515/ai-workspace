@@ -1,0 +1,34 @@
+# Copy this into your tool repository as `.gitlab-ci.yml`.
+#
+# Two steps in one job, in this order: the shape tests, then the build. A
+# backend that declares what cannot hold, or leaves out a required call, fails
+# the first step and never becomes an artifact. What its calls DO (the same
+# key returning the same job, say) no test here can see — that is yours to keep.
+# You own this file — you may remove the test step; do it on purpose.
+#
+# See docs/tool-authoring.md for the platform's side of the contract.
+
+build-tool:
+  # Build inside the image the platform's sandboxes actually run, or the
+  # bundle's native wheels will not load there.
+  image: registry.example/ai-workspace/tool-builder:2026.07
+
+  script:
+    # The shape tests (tests/test_shape.py) and the shell's own tests. They
+    # never call your backend's real service: no credentials needed here.
+    - uv run --frozen pytest
+    # Builds the bundle AND smoke-tests it; a tool that does not start leaves
+    # no artifact behind.
+    - build-tool "$CI_PROJECT_DIR" dist
+
+  artifacts:
+    paths:
+      - dist/
+    # REQUIRED. GitLab expires artifacts after ~30 days by default; once the
+    # URL 404s, every NEW machine gets nothing while old ones limp along.
+    expire_in: never
+
+  rules:
+    # Publish from the default branch only: the URL the platform holds points
+    # at "the latest artifact of this ref".
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH

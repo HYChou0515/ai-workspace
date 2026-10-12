@@ -1,0 +1,32 @@
+[project]
+name = "example-jobs"
+version = "0.1.0"
+description = "A DEMO backend for the job tool template: jobs are files in the workspace that finish after a few seconds."
+requires-python = ">=3.12"
+dependencies = ["job-contract"]
+
+# How the tool finds this backend: exactly one package registers here.
+[project.entry-points."job_tool.backend"]
+demo = "example_jobs.backend:DemoBackend"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/example_jobs"]
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+# In this sample the contract lives next door. Your backend points at a git
+# URL or an index instead.
+[tool.uv.sources]
+job-contract = { path = "../contract", editable = true }
+
+# Self-contained rootdir so `pytest` doesn't walk up into the parent repo's config.
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
