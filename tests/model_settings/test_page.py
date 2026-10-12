@@ -112,3 +112,23 @@ def test_a_failed_connection_says_why_without_the_key(settings, monkeypatch):
 
 def test_an_unknown_preset_is_named(settings):
     assert "nope" in try_connection(settings, "nope").error
+
+
+def test_a_connection_test_does_not_send_a_deploy_key_to_a_new_endpoint(settings, monkeypatch):
+    # final review: the test call sent the deploy's key to the draft's base_url.
+    from dataclasses import replace
+
+    from workspace_app.kb.llm import LitellmLlm
+
+    calls = []
+    monkeypatch.setattr(LitellmLlm, "stream", lambda self, prompt: calls.append(1) or iter([]))
+    preset = settings.agents.presets["openai-mini"]
+    moved = replace(preset, llm=replace(preset.llm, base_url="http://mine.example"))
+    drafted = replace(
+        settings,
+        agents=replace(settings.agents, presets={**settings.agents.presets, "openai-mini": moved}),
+    )
+
+    result = try_connection(drafted, "openai-mini", deploy=settings, page_keys=set())
+
+    assert not result.ok and "key" in result.error and calls == []

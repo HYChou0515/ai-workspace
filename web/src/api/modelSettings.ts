@@ -74,10 +74,15 @@ export const modelSettingsApi = {
     return ((await r.json()) as { problems: string[] }).problems;
   },
 
-  /** Publish the stored draft — `seen`, the draft the confirmation listed, or
-   * refused (409) when another superuser saved since. */
-  async apply(seen?: Patch): Promise<Applied> {
-    const r = await send("/apply", "POST", seen === undefined ? undefined : { draft: seen });
+  /** Publish the stored draft and the pending keys — exactly `seen` and
+   * `pendingKeys`, what the confirmation listed, or refused (409) when another
+   * superuser saved or set others since. */
+  async apply(seen?: Patch, pendingKeys?: string[]): Promise<Applied> {
+    const r = await send(
+      "/apply",
+      "POST",
+      seen === undefined ? undefined : { draft: seen, pending_keys: pendingKeys ?? null },
+    );
     if (!r.ok) throw await httpErrorFrom(r, `apply failed: ${r.status}`);
     return (await r.json()) as Applied;
   },

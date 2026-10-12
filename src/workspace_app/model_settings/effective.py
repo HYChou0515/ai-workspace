@@ -21,7 +21,12 @@ from typing import Any
 
 import msgspec
 
-from ..apps.catalog import _subset_or_raise, discover_app_slugs, validate_function_coherence
+from ..apps.catalog import (
+    _subset_or_raise,
+    app_file_path,
+    discover_app_slugs,
+    validate_function_coherence,
+)
 from ..apps.manifest import AppManifest, patched_app
 from ..apps.profiles import ProfileManifest, list_profiles, patched_profile
 from ..config.dump import is_secret
@@ -118,6 +123,54 @@ ROLES: dict[str, Callable[[Settings], Any]] = {
     "health.judge_llm": lambda s: s.health.judge_llm,
     "goal.checker": lambda s: s.goal.checker or s.kb.retrieval_llm,
 }
+
+
+def _endpoints(
+    settings: Settings, presets: list[str] | None = None
+) -> list[tuple[str, str | None, str | None]]:
+    """(where, base_url, api_key) of every endpoint a call can go to: each
+    preset's failover chain, and each role's (a role reference may carry its
+    own `llm`). `presets` narrows it to those presets' chains."""
+    from ..config.schema import RetrievalLlmRef
+    from ..factories import resolve_llm_chain
+
+    out: list[tuple[str, str | None, str | None]] = []
+    names = list(settings.agents.presets) if presets is None else presets
+    for name in names:
+        if name in settings.agents.presets:
+            for e in resolve_llm_chain(settings, RetrievalLlmRef(preset=name)):
+                out.append((f"agents.presets.{name}", e.base_url, e.api_key))
+    if presets is None:
+        for role, ref_of in ROLES.items():
+            ref = ref_of(settings)
+            if ref is not None:
+                for e in resolve_llm_chain(settings, ref):
+                    out.append((role, e.base_url, e.api_key))
+    return out
+
+
+def key_destination_problems(
+    settings: Settings,
+    deploy: Settings,
+    page_keys: set[str],
+    presets: list[str] | None = None,
+) -> list[str]:
+    """A deploy key — one config.yaml sets, which no one can read — goes only
+    to an endpoint config.yaml itself sends it to. Without this, changing a
+    preset's `base_url` sent that key to any server the page named, on every
+    call after Apply and on a test call (final review). A key set on the page
+    may go anywhere: its setter knows it."""
+    paired = {(base, key) for _, base, key in _endpoints(deploy)}
+    found: list[str] = []
+    for where, base, key in _endpoints(settings, presets):
+        if key and key not in page_keys and (base, key) not in paired:
+            problem = (
+                f"config.{where}: the deploy's key would go to {base or 'the provider default'!r}, "
+                "where config.yaml never sends it — set a key for this endpoint on the API keys tab"
+            )
+            if problem not in found:
+                found.append(problem)
+    return found
 
 
 def _roles_switched(settings: Settings, default: Settings) -> list[str]:
@@ -364,7 +417,9 @@ def _problems(
     from ..factories import get_infer_modules_run_config
 
     default = effective_settings({}, config_path=config_path, env=env)
-    switched = _roles_switched(settings, default)
+    switched = _roles_switched(settings, default) + key_destination_problems(
+        settings, default, {str(v) for v in (keys or {}).values()}
+    )
     if switched:
         return switched
     if get_infer_modules_run_config(settings) != get_infer_modules_run_config(default):
@@ -389,6 +444,10 @@ def _problems(
         except (msgspec.ValidationError, ValueError) as exc:
             found.append(f"apps.{slug}: {exc}")
             continue
+        try:
+            app_file_path(slug, app.agent.prompt_file)
+        except ValueError as exc:
+            found.append(f"apps.{slug}.agent.prompt_file: {exc}")
         picker = [entry.preset for entry in app.agent.picker]
         found += [
             f"apps.{slug}.agent.picker: preset {name!r} is not in agents.presets"

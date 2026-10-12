@@ -2172,7 +2172,7 @@ agent 步驟裡 AI 的呼叫、WUI 的工具呼叫、view plugin、圖表重畫�
   為什麼：頁面只存跟預設不同的部分（JSON Merge Patch），預設仍是部署帶的檔案。
 - 套用後，API 與每個 worker 在**一秒內**改用新設定，不用重啟：每個行程每秒最多讀一次「目前版本」（一筆小資料），
   版本變了才重建；讀不到資料庫或新版本建不起來，就繼續用上一個好的版本並記 log
-  （`model settings: could not read the version` / `does not build`）。生效的單位是**一次模型呼叫**：已經送出的呼叫用舊設定跑完，之後的每次呼叫都用新的——一個正在跑的 job（wiki、card-gen）下一步就換，所以同一個 job 可能前後用到兩版。
+  （`model settings: could not read the version` / `does not build`）。已經開始的一次模型呼叫或一個 agent 回合（聊天、wiki 維護的一輪）用舊設定跑完；之後開始的都用新的——一個正在跑的 job 下一次呼叫或下一輪就換，所以同一個 job 可能前後用到兩版。
 - 頁面**不收**只在開機時讀的值：其他 config key、角色的開／關（例如把 `health.judge_llm` 從 null 改成某個 preset）、
   `infer_modules` 的 `enhancements` / `reasoning_effort` / `parallelism` / `collection`、App 的 `resources` / `slug`
   —— 套用時直接拒絕並說「去改 config.yaml」，不存一個重啟前不生效的值。同樣拒絕：沒有出貨的 App 或 profile

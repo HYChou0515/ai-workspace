@@ -365,3 +365,75 @@ def test_the_overlay_is_taken_literally(config):
     settings = effective_settings(document, config_path=config, env={"SECRET_VAR": "sk-REAL"})
 
     assert settings.agents.presets["openai-mini"].model == "m-${SECRET_VAR}"
+
+
+@pytest.mark.parametrize(
+    ("document", "named"),
+    [
+        # final review (High): `prompt_file` joined to the App's folder with no
+        # check — `../../proc/self/environ` made the server's environment the
+        # system prompt of every turn.
+        (
+            {"apps": {"playground": {"agent": {"prompt_file": "../../../../proc/self/environ"}}}},
+            "prompt_file",
+        ),
+        ({"apps": {"playground": {"agent": {"prompt_file": "/etc/passwd"}}}}, "prompt_file"),
+        # a workflow id is a path too (`workflows/<id>/run.py`): a `../` id could
+        # load a run.py from anywhere — the API would import and run it
+        (
+            {
+                "profiles": {
+                    "playground": {
+                        "multi": {"workflows": [{"id": "../../../../tmp/x", "title": "X"}]}
+                    }
+                }
+            },
+            "must be a plain name",
+        ),
+    ],
+)
+def test_a_path_that_leaves_the_app_is_refused(config, document, named):
+    found = problems(document, config_path=config, env={})
+
+    assert any(named in p for p in found), found
+
+
+@pytest.fixture
+def keyed_config(tmp_path: Path) -> Path:
+    path = tmp_path / "keyed.yaml"
+    path.write_text(
+        "agents:\n"
+        "  presets:\n"
+        "    openai-mini:\n"
+        "      llm:\n"
+        "        base_url: https://api.provider.example/v1\n"
+        "        api_key: sk-deploy-0000-0000-0001\n",
+        encoding="utf-8",
+    )
+    return path
+
+
+MOVED = {
+    "config": {"agents": {"presets": {"openai-mini": {"llm": {"base_url": "http://mine.example"}}}}}
+}
+
+
+def test_a_deploy_key_is_not_sent_to_an_endpoint_the_deploy_never_pairs_it_with(keyed_config):
+    # final review: change only a preset's base_url and the deploy's key (from
+    # config.yaml, readable by no one) went to that server — on every turn after
+    # Apply, and on a test call without one.
+    found = problems(MOVED, config_path=keyed_config, env={})
+
+    assert any("openai-mini" in p and "key" in p for p in found), found
+
+
+def test_a_key_set_on_the_page_may_go_to_the_new_endpoint(keyed_config):
+    keys = {"config.agents.presets.openai-mini.llm.api_key": "sk-mine-0000-0000-0002"}
+
+    assert problems(MOVED, config_path=keyed_config, env={}, keys=keys) == []
+
+
+def test_a_new_model_on_the_same_endpoint_keeps_the_deploy_key(keyed_config):
+    same = {"config": {"agents": {"presets": {"openai-mini": {"model": "openai/gpt-4.1-mini"}}}}}
+
+    assert problems(same, config_path=keyed_config, env={}) == []

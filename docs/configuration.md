@@ -30,7 +30,7 @@
 **蓋在上面三層之上**，只限模型相關的值：`llm`、`agents` 底下全部（preset、`kb_chat` 等用途清單、
 `subagent_models`）、各角色的模型（`kb.retrieval_llm`、`kb.vlm_llm`、`kb.vlm_format_llm`、`kb.deck_vlm`、
 `kb.card_drafter`、`kb.quality_judge`、`kb.wiki.llm`、`health.judge_llm`、`goal.checker`），外加每個 App 的
-`app.json` 與 profile。兩件事要知道：
+`app.json` 與 profile。三件事要知道：
 
 - **頁面改過的值，`config.yaml` 再改不會生效**——頁面贏。要讓 `config.yaml` 回來，到頁面上「重設」那個值再套用。
   「改了沒生效」先看頁面有沒有改過它。

@@ -56,6 +56,8 @@ const STATUS = { fontSize: pxToRem(13), color: "var(--text-paper)", margin: 0 } 
 const H2 = { margin: 0 } as const;
 const LABEL = { fontSize: pxToRem(12), color: "var(--text-paper)" } as const;
 /** The "in force" tag on a history row — the tokens the skill hub's badge uses. */
+/** A bullet item, not a row: overrides the site-wide `.page ul > li` row style. */
+const BULLET = { display: "list-item", borderTop: "none", padding: 0 } as const;
 const BADGE = {
   display: "inline-block",
   padding: "1px var(--space-8)",
@@ -134,7 +136,7 @@ function ChangeList({ changes, testId = "model-settings-diff" }: { changes: Chan
   return (
     <ul data-testid={testId} style={{ ...MONO, margin: 0, paddingLeft: 18 }}>
       {changes.map((c) => (
-        <li key={c.path}>
+        <li key={c.path} style={BULLET}>
           <strong>{t(KIND[c.kind])}</strong> {c.path}
           {c.kind === "changed" && `: ${shown(c.before)} → ${shown(c.after)}`}
           {c.kind === "added" && `: ${shown(c.after)}`}
@@ -160,7 +162,7 @@ function KeyChangeList({ pending, keys }: { pending: string[]; keys: Record<stri
   return (
     <ul data-testid="model-settings-key-diff" style={{ ...MONO, margin: 0, paddingLeft: 18 }}>
       {pending.map((path) => (
-        <li key={path}>
+        <li key={path} style={BULLET}>
           <strong>{t(path in keys ? "modelSettings.keyChangeSet" : "modelSettings.keyChangeCleared")}</strong>{" "}
           {path}
           {path in keys && ` (${keys[path] || t("modelSettings.keyIsSet")})`}
@@ -231,8 +233,10 @@ function useDraft(client: Client, data: PageData) {
   });
   const apply = useMutation({
     meta: { silentError: true },
-    // The draft the dialog listed goes with it: the server refuses another.
-    mutationFn: () => client.apply(draft),
+    // What the dialog LISTED goes with it — captured when it opened, not read
+    // from a later render (final review) — and the server refuses anything else.
+    mutationFn: (seen: { draft: Patch; pendingKeys: string[] }) =>
+      client.apply(seen.draft, seen.pendingKeys),
     onSuccess: (applied: Applied) => {
       setRefused([]);
       setNotice(t("modelSettings.applied", { version: short(applied.version) }));
@@ -269,6 +273,7 @@ function useDraft(client: Client, data: PageData) {
             : "";
 
   const askToApply = async () => {
+    const seen = { draft, pendingKeys };
     const choice = await dialog.confirm({
       title: t("modelSettings.applyTitle"),
       body: (
@@ -283,7 +288,7 @@ function useDraft(client: Client, data: PageData) {
         { id: "apply", label: t("modelSettings.applyConfirm"), variant: "primary" },
       ],
     });
-    if (choice === "apply") apply.mutate();
+    if (choice === "apply") apply.mutate(seen);
   };
 
   const edit = (v: string) => {
@@ -499,7 +504,9 @@ function EditTab({
                 {t("modelSettings.problems")}
                 <ul style={{ ...MONO, margin: "4px 0 0", paddingLeft: 18 }}>
                   {draft.problems.map((p) => (
-                    <li key={p}>{p}</li>
+                    <li key={p} style={BULLET}>
+                      {p}
+                    </li>
                   ))}
                 </ul>
               </div>
@@ -566,7 +573,11 @@ function EditTab({
         <h2 id="model-settings-changes" style={H2}>
           {t("modelSettings.changes")}
         </h2>
-        {changed.length === 0 ? (
+        {!parsed.ok ? (
+          // An unparsable text is not an empty patch (final review): say what is
+          // known instead of claiming everything is the deploy default.
+          <p style={{ ...MUTED, margin: 0 }}>{t("modelSettings.changesUnknown")}</p>
+        ) : changed.length === 0 ? (
           <p style={{ ...MUTED, margin: 0 }}>{t("modelSettings.changesNone")}</p>
         ) : (
           <ul
@@ -761,7 +772,9 @@ function HistoryTab({
           <div className="ev-banner__body">
             <ul style={{ ...MONO, margin: 0, paddingLeft: 18 }}>
               {refused.map((p) => (
-                <li key={p}>{p}</li>
+                <li key={p} style={BULLET}>
+                  {p}
+                </li>
               ))}
             </ul>
           </div>

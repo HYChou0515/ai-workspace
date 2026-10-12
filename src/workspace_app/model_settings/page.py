@@ -24,7 +24,7 @@ from ..apps.manifest import read_app_manifest_raw
 from ..apps.profiles import list_profiles, read_profile_raw
 from ..config.dump import is_secret
 from ..config.schema import Settings
-from .effective import LIVE_CONFIG, SET, UNSET, key_segments
+from .effective import LIVE_CONFIG, SET, UNSET, key_destination_problems, key_segments
 
 
 def config_tree(settings: Settings) -> dict[str, Any]:
@@ -158,7 +158,14 @@ class Connection(Struct, frozen=True):
 PING = "Reply with the single word OK."
 
 
-def try_connection(settings: Settings, preset: str, *, timeout_s: float = 30.0) -> Connection:
+def try_connection(
+    settings: Settings,
+    preset: str,
+    *,
+    deploy: Settings | None = None,
+    page_keys: set[str] | frozenset[str] = frozenset(),
+    timeout_s: float = 30.0,
+) -> Connection:
     """Call `preset`'s first endpoint once with `settings` (the draft, keys
     included). Never part of Apply (M8): a provider that is down must not stop
     a rollback."""
@@ -168,6 +175,11 @@ def try_connection(settings: Settings, preset: str, *, timeout_s: float = 30.0) 
 
     if preset not in settings.agents.presets:
         return Connection(ok=False, error=f"no preset named {preset!r}")
+    if deploy is not None:
+        # The deploy's key goes only where config.yaml sends it (final review).
+        leaks = key_destination_problems(settings, deploy, set(page_keys), presets=[preset])
+        if leaks:
+            return Connection(ok=False, error=leaks[0])
     chain = resolve_llm_chain(settings, RetrievalLlmRef(preset=preset))
     if not chain:
         return Connection(ok=False, error=f"preset {preset!r} resolves to no endpoint")

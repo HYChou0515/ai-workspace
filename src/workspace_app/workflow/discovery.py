@@ -129,6 +129,9 @@ def _check_phase_ids(manifest: WorkflowManifest, label: str) -> None:
             )
 
 
+_PLAIN_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*")
+
+
 def _check_workflow_ids(workflows: list[WorkflowManifest], label: str) -> None:
     """Every workflow in the list form needs a non-empty, unique ``id`` — it is how a
     workflow is addressed (run.py path + the new-chat picker, manual §4)."""
@@ -138,6 +141,13 @@ def _check_workflow_ids(workflows: list[WorkflowManifest], label: str) -> None:
             raise ValueError(
                 f"{label}: a workflow in 'workflows' is missing its 'id' "
                 f"(manual §4 — each workflow is addressed by a stable id)"
+            )
+        if not _PLAIN_ID.fullmatch(wf.id):
+            # An id is a path (`workflows/<id>/run.py`) — a `../` one could load
+            # and run a run.py from anywhere; the settings page can change ids.
+            raise ValueError(
+                f"{label}: workflow id {wf.id!r} must be a plain name "
+                "(letters, digits, '-' and '_')"
             )
         if wf.id in seen:
             raise ValueError(f"{label}: duplicate workflow id {wf.id!r} (manual §4)")

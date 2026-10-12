@@ -74,6 +74,8 @@ class _Apply(BaseModel):
     #: The draft the confirmation listed. When given, Apply refuses (409) if the
     #: stored draft is another — someone saved since the dialog opened.
     draft: dict[str, Any] | None = None
+    #: The key changes it listed — refused (409) when others are pending now.
+    pending_keys: list[str] | None = None
 
 
 class _Rollback(BaseModel):
@@ -177,13 +179,19 @@ def register_model_settings_routes(
 
         def publish() -> Applied:
             draft = store.draft()
-            if body is not None and body.draft is not None and body.draft != draft:
+            changed_draft = body is not None and body.draft is not None and body.draft != draft
+            changed_keys = (
+                body is not None
+                and body.pending_keys is not None
+                and sorted(body.pending_keys) != store.pending_keys()
+            )
+            if changed_draft or changed_keys:
                 raise HTTPException(
                     status_code=409,
                     detail={
                         "problems": [
-                            "the draft changed since this page read it — someone saved "
-                            "another; reload to see it before applying"
+                            "the draft or the key changes moved since this page read "
+                            "them — someone saved others; reload to see them before applying"
                         ]
                     },
                 )
@@ -268,7 +276,12 @@ def register_model_settings_routes(
                     ok=False,
                     error=redact(f"the draft does not load: {exc}", store.key_values()),
                 )
-            result = try_connection(settings, body.preset)
+            result = try_connection(
+                settings,
+                body.preset,
+                deploy=effective_settings({}, config_path=config_path, env=env),
+                page_keys=set(store.key_values().values()),
+            )
             return _ConnectionOut(
                 ok=result.ok,
                 model=result.model,

@@ -74,7 +74,7 @@ function fakeClient(page: Partial<PageData> = {}) {
       return [];
     }),
     check: vi.fn(async (_patch: Record<string, unknown>) => [] as string[]),
-    apply: vi.fn(async (_seen?: Record<string, unknown>) => {
+    apply: vi.fn(async (_seen?: Record<string, unknown>, _pending?: string[]) => {
       data = { ...data, published: data.draft, version: "abcdef1234567890" };
       return applied("abcdef1234567890", data.draft);
     }),
@@ -162,7 +162,7 @@ describe("ModelSettingsPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "套用" }));
 
     // the draft the dialog listed goes with it, so the server can refuse another
-    await waitFor(() => expect(client.apply).toHaveBeenCalledWith(KB_2));
+    await waitFor(() => expect(client.apply).toHaveBeenCalledWith(KB_2, []));
     expect(await screen.findByTestId("model-settings-notice")).toHaveTextContent("abcdef12");
   });
 
@@ -572,6 +572,53 @@ describe("ModelSettingsPage", () => {
     const field = screen.getByLabelText("設定路徑");
     expect(field).not.toHaveAttribute("placeholder");
     expect(field).toHaveAccessibleDescription(/config\.agents\.presets\.openai-mini\.llm\.api_key/);
+  });
+
+  it("applies what its confirmation listed, even if the page re-reads meanwhile", async () => {
+    // final review: the dialog listed the draft of the moment it opened, but the
+    // Apply read the draft of the latest render — a refetch in between sent another.
+    const client = fakeClient({ draft: KB_2 });
+    const { client: queryClient } = renderWithQuery(<ModelSettingsPage client={client} />);
+    await waitFor(() => expect(screen.getByTestId("model-settings-apply")).toBeEnabled());
+    fireEvent.click(screen.getByTestId("model-settings-apply"));
+    await screen.findByTestId("model-settings-diff");
+
+    const other = { config: { agents: { presets: { "kb-default": { model: "openai/OTHER" } } } } };
+    await act(async () => {
+      await client.saveDraft(other);
+      await queryClient.invalidateQueries();
+    });
+    // the page has re-read: the editor now shows the other superuser's draft
+    await waitFor(() => expect(JSON.parse(editor().value)).toEqual(other));
+    fireEvent.click(screen.getByRole("button", { name: "套用" }));
+
+    await waitFor(() => expect(client.apply).toHaveBeenCalledWith(KB_2, []));
+  });
+
+  it("does not say the draft changes nothing while its text does not parse", async () => {
+    // final review (ux): an unparsable text was read as an empty patch, so the
+    // section claimed "everything is the deploy default".
+    renderWithQuery(<ModelSettingsPage client={fakeClient({ draft: KB_2 })} />);
+    await waitFor(() => expect(JSON.parse(editor().value)).toEqual(KB_2));
+
+    type('{"config": ');
+
+    const section = screen.getByRole("region", { name: "這頁改過的值" });
+    expect(section).not.toHaveTextContent("全部是部署預設");
+    expect(section).toHaveTextContent("JSON");
+  });
+
+  it("names hiding a preset as removing it, not as going back to the default", async () => {
+    // final review: kind "removed" read 「回到預設」 — the opposite of a hide.
+    const hide = { config: { agents: { presets: { "openai-mini": null } } } };
+    renderWithQuery(<ModelSettingsPage client={fakeClient({ draft: hide })} />);
+    await waitFor(() => expect(screen.getByTestId("model-settings-apply")).toBeEnabled());
+
+    fireEvent.click(screen.getByTestId("model-settings-apply"));
+
+    const diff = await screen.findByTestId("model-settings-diff");
+    expect(diff).toHaveTextContent("移除");
+    expect(diff).not.toHaveTextContent("回到預設");
   });
 
   it("lists a refused Apply's reasons", async () => {

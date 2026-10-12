@@ -19,6 +19,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from importlib import resources
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from msgspec import UNSET, structs
@@ -215,8 +216,19 @@ def validate_all_apps() -> None:
         validate_workflow_profiles(slug)
 
 
+def app_file_path(app_slug: str, rel: str) -> Path:
+    """`rel` inside the App's folder — refused when it resolves outside it.
+    The settings page can change an App's `prompt_file`; a `../` path made a
+    server file (`/proc/self/environ`) the system prompt (final review)."""
+    base = Path(str(resources.files(_APPS_PKG) / app_slug)).resolve()
+    path = (base / rel).resolve()
+    if not path.is_relative_to(base):
+        raise ValueError(f"{app_slug}: {rel!r} is outside the App's folder")
+    return path
+
+
 def _read_app_text(app_slug: str, rel: str) -> str:
-    return (resources.files(_APPS_PKG) / app_slug / rel).read_text("utf-8")
+    return app_file_path(app_slug, rel).read_text("utf-8")
 
 
 def _read_base_preamble() -> str:

@@ -2823,16 +2823,20 @@ export const messages = {
   },
   "modelSettings.applyTitle": { "zh-TW": "套用這份草稿？", en: "Apply this draft?" },
   "modelSettings.applyBody": {
-    "zh-TW": "所有服務在一秒內改用新設定。已經送出的模型呼叫用舊設定跑完；之後的每次呼叫都用新的——包括正在跑的工作的下一步。",
-    en: "Every service uses the new settings within a second. A model call already under way finishes on the old settings; every call after it uses the new ones — including the next step of work already running.",
+    "zh-TW": "所有服務在一秒內改用新設定。已經開始的一次模型呼叫或一個聊天回合，用舊設定跑完；之後開始的都用新的。",
+    en: "Every service uses the new settings within a second. A model call or a chat turn already under way finishes on the old settings; everything started after uses the new ones.",
   },
   "modelSettings.applyConfirm": { "zh-TW": "套用", en: "Apply" },
   "modelSettings.cancel": { "zh-TW": "取消", en: "Cancel" },
   "modelSettings.applied": { "zh-TW": "已套用：版本 {version}", en: "Applied: version {version}" },
   "modelSettings.added": { "zh-TW": "新增", en: "Added" },
-  "modelSettings.removed": { "zh-TW": "回到預設", en: "Back to default" },
+  "modelSettings.removed": { "zh-TW": "移除", en: "Removed" },
   "modelSettings.changed": { "zh-TW": "改變", en: "Changed" },
   "modelSettings.changes": { "zh-TW": "這頁改過的值", en: "Values changed here" },
+  "modelSettings.changesUnknown": {
+    "zh-TW": "先修正 JSON，才看得到這份草稿改了哪些值",
+    en: "Fix the JSON to see which values this draft changes",
+  },
   "modelSettings.changesNone": {
     "zh-TW": "草稿沒有改任何值：全部是部署預設。",
     en: "The draft changes nothing: everything is the deploy default.",

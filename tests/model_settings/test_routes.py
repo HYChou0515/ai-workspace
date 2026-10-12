@@ -298,3 +298,16 @@ def test_apply_refuses_a_draft_other_than_the_one_its_confirmation_listed(page):
     assert response.status_code == 409
     assert page.client.get(BASE).json()["version"] is None
     assert page.client.post(f"{BASE}/apply", json={"draft": theirs}).status_code == 200
+
+
+def test_apply_refuses_key_changes_other_than_the_ones_its_confirmation_listed(page):
+    # final review: the draft was guarded, the pending keys were not — a key set
+    # after the dialog opened went into force unlisted.
+    page.client.put(f"{BASE}/draft", json={"patch": KB_2})
+    page.client.put(f"{BASE}/keys", json={"path": API_KEY, "value": "sk-later-0000-0000"})
+
+    response = page.client.post(f"{BASE}/apply", json={"draft": KB_2, "pending_keys": []})
+
+    assert response.status_code == 409
+    ok = page.client.post(f"{BASE}/apply", json={"draft": KB_2, "pending_keys": [API_KEY]})
+    assert ok.status_code == 200
