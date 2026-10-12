@@ -48,6 +48,7 @@ import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 
 import { api as defaultApi } from "../api";
 import { API_BASE } from "../api/http";
+import { blockMaskedCopy } from "../lib/maskedSecret";
 import { PERSONAL_ENV_WRITES, personalEnvApi, type PersonalEnvClient } from "../api/personalEnv";
 import { privateEnvApi, type PrivateEnvClient } from "../api/privateEnv";
 import { qk } from "../api/queryKeys";
@@ -1252,6 +1253,10 @@ function MineRow({
             onChange={(e) => setMine(name, e.target.value)}
             autoComplete="off"
             spellCheck={false}
+            autoCapitalize="off"
+            autoCorrect="off"
+            onCopy={blockMaskedCopy}
+            onCut={blockMaskedCopy}
             // `.input` (fills what is left), not `.input--block` (width 100%,
             // never shrinks): beside the reveal button that pushed the button out of
             // the panel and gave it a sideways scroll — on master too.
@@ -1425,6 +1430,10 @@ function PersonalRow({
           onChange={(e) => onEdit(name, e.target.value)}
           autoComplete="off"
           spellCheck={false}
+          autoCapitalize="off"
+          autoCorrect="off"
+          onCopy={blockMaskedCopy}
+          onCut={blockMaskedCopy}
           // `.input` (fills what is left), not `.input--block` (width 100%,
           // never shrinks): beside the reveal button that pushed the button out of
           // the panel and gave it a sideways scroll — on master too.

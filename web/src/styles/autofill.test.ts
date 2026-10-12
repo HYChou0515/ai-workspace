@@ -7,10 +7,15 @@
  * anywhere else is the bug. `autoComplete="off"` does not stop it — Chrome
  * ignores it on a password field — so the rule is about the field's TYPE:
  *
- *   - `type="password"` exists only on a login's secret, which says so with
- *     `autoComplete="current-password"` (its user name says `"username"`).
- *     Every other secret is a text field masked by `data-masked` (`.input
- *     [data-masked="true"]` in base.css), which no password manager reads.
+ *   - a `type` that can be `"password"` sits only on a login's secret, which
+ *     says so with `autoComplete="current-password"` (its user name says
+ *     `"username"`). Every other secret is a text field masked by
+ *     `data-masked` (`.input[data-masked="true"]` in base.css) — to the
+ *     browser, not a password field.
+ *   - a masked field turns off by hand what a password field turned off for
+ *     free: spellcheck (Chrome's enhanced spellcheck sends the text away),
+ *     mobile autocapitalize / autocorrect (a changed token nobody can see
+ *     through the dots), and copy / cut while masked (`blockMaskedCopy`).
  *   - every text `<input>` names its `autoComplete` as a string literal, so
  *     what the browser may do there is decided where the field is written,
  *     not left to its guess.
@@ -18,6 +23,12 @@
  * Read through the TypeScript parser like the `.input` guard beside it; a
  * spread on an `<input>` is refused, since an attribute it hides is one the
  * guard cannot check.
+ *
+ * Not seen, said here: a `type` held in a name (`type={kind}`) — the guard
+ * reads only a `"password"` literal inside the expression; a Mantine
+ * `<TextInput>` (web/src/autocrud) or any field made without JSX `<input>`;
+ * pages a user publishes under /w/, which are not this source; and password
+ * manager EXTENSIONS, which choose fields by their own heuristics.
  */
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
@@ -55,7 +66,25 @@ const NON_TEXT = new Set(["checkbox", "radio", "file", "range", "color", "hidden
 /** What a field may tell the browser: nothing to offer, or one half of a login. */
 const ALLOWED = new Set(["off", "username", "current-password"]);
 
-type Field = { where: string; type: string | null; mayBePassword: boolean; autoComplete: string | "computed" | null; spread: boolean };
+type Field = {
+  where: string;
+  type: string | null;
+  mayBePassword: boolean;
+  autoComplete: string | "computed" | null;
+  spread: boolean;
+  /** For a field carrying `data-masked`: what a password field gave for free that it lacks. */
+  maskGaps: string[] | null;
+};
+
+/** What a masked field must say for itself, as `name → the source text it must read`. */
+const MASKED_NEEDS: [string, (el: ts.JsxOpeningLikeElement, sf: ts.SourceFile) => boolean][] = [
+  ['className with "input"', (el) => { const c = literal(attr(el, "className")); return typeof c === "string" && c !== "computed" && c.split(/\s+/).includes("input"); }],
+  ["spellCheck={false}", (el, sf) => attr(el, "spellCheck")?.initializer?.getText(sf) === "{false}"],
+  ['autoCapitalize="off"', (el) => literal(attr(el, "autoCapitalize")) === "off"],
+  ['autoCorrect="off"', (el) => literal(attr(el, "autoCorrect")) === "off"],
+  ["onCopy={blockMaskedCopy}", (el, sf) => attr(el, "onCopy")?.initializer?.getText(sf) === "{blockMaskedCopy}"],
+  ["onCut={blockMaskedCopy}", (el, sf) => attr(el, "onCut")?.initializer?.getText(sf) === "{blockMaskedCopy}"],
+];
 
 function attr(el: ts.JsxOpeningLikeElement, name: string): ts.JsxAttribute | undefined {
   for (const a of el.attributes.properties) if (ts.isJsxAttribute(a) && a.name.getText() === name) return a;
@@ -97,6 +126,7 @@ function fieldsOf(file: string): Field[] {
           mayBePassword: mentionsPassword(typeAttr),
           autoComplete: literal(attr(node, "autoComplete")),
           spread: node.attributes.properties.some((a) => ts.isJsxSpreadAttribute(a)),
+          maskGaps: attr(node, "data-masked") ? MASKED_NEEDS.filter(([, ok]) => !ok(node, sf)).map(([name]) => name) : null,
         });
       }
     }
@@ -128,6 +158,14 @@ describe("what the browser may fill", () => {
     const wrong = FIELDS.filter((f) => f.spread || typeof f.autoComplete !== "string" || f.autoComplete === "computed" || !ALLOWED.has(f.autoComplete)).map(
       (f) => `${f.where} autoComplete=${f.spread ? "{...spread}" : String(f.autoComplete)}`,
     );
+    expect(wrong).toEqual([]);
+  });
+
+  it("gives a masked field back what a password field gave for free", () => {
+    const masked = FIELDS.filter((f) => f.maskGaps !== null);
+    // The five secrets of 2026-10-12; a guard over none of them guards nothing.
+    expect(masked.length).toBeGreaterThanOrEqual(5);
+    const wrong = masked.filter((f) => f.maskGaps!.length > 0).map((f) => `${f.where} lacks ${f.maskGaps!.join(", ")}`);
     expect(wrong).toEqual([]);
   });
 

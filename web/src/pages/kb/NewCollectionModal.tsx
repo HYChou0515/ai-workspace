@@ -18,6 +18,7 @@ import { Icon } from "../../components/Icon";
 import { ModalShell } from "../../components/ModalShell";
 import { useDirtyClose } from "../../hooks/useDirtyClose";
 import { useT } from "../../lib/i18n";
+import { blockMaskedCopy } from "../../lib/maskedSecret";
 import { RetrievalToggles } from "./RetrievalToggles";
 
 export type NewCollectionMode = "documents" | "code";
@@ -265,6 +266,11 @@ export function NewCollectionModal({
                       data-masked
                       placeholder="for a private repo"
                       autoComplete="off"
+                      spellCheck={false}
+                      autoCapitalize="off"
+                      autoCorrect="off"
+                      onCopy={blockMaskedCopy}
+                      onCut={blockMaskedCopy}
                       value={gitToken}
                       onChange={(e) => setGitToken(e.target.value)}
                     />

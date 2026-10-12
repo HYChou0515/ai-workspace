@@ -13,6 +13,7 @@ import { useState } from "react";
 import { type KbApi, type KbCollection } from "../../api/kb";
 import { qk } from "../../api/queryKeys";
 import { Icon } from "../../components/Icon";
+import { blockMaskedCopy } from "../../lib/maskedSecret";
 
 export function CodeConnectionEditor({
   collection,
@@ -81,6 +82,11 @@ export function CodeConnectionEditor({
           // Masked by the stylesheet, not `type="password"` (src/styles/autofill.test.ts).
           data-masked
           autoComplete="off"
+          spellCheck={false}
+          autoCapitalize="off"
+          autoCorrect="off"
+          onCopy={blockMaskedCopy}
+          onCut={blockMaskedCopy}
           placeholder="leave blank to keep the current token"
           value={token}
           onChange={(e) => setToken(e.target.value)}
