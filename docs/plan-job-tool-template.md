@@ -242,9 +242,20 @@ below. Each is a change inside the existing mechanisms — no mechanism replaced
 | # | Decision | Why |
 |---|---|---|
 | D57 | Twenty hash seeds, not five (D53) | A two-element set has two orders: five fixed seeds put `img23`/`train.py` in one order every time, so the check passed an identity that is new on half the calls |
-| D58 | The cross-process probe marks its answer and reads only that line; a probe that fails or times out is a named problem carrying the probe's last stderr lines; a backend may be named `module:Outer.Inner` | A backend printing a timestamp at import read as drift; a missing variable at import surfaced as a bare `exit status 1`; entry points allow dotted names |
+| D58 | The cross-process probe marks its answer and reads only that line; a probe that fails is a named problem carrying the start of its last stderr lines, one that times out is named with its limit; a backend may be named `module:Outer.Inner` | A backend printing a timestamp at import read as drift; a missing variable at import surfaced as a bare `exit status 1`; entry points allow dotted names |
 | D59 | The "already submitted" message substitutes its whole opening clause; the test asserts the sentence | "The same work was already submitted the same work…" passed a keyword test |
 | D60 | The `submit` description says "the same item, where there is one, under the same credential" | The description is fixed at build, before any item exists, and the MCP runner has none |
+
+### Second pass, review round 3 (on `507e2b5b`; mine)
+
+Regression clean; defect and veracity/conformance found only low items, each
+fixed by a line or two with a test that reddens without it — no mechanism
+changed, so no further round.
+
+| # | Decision | Why |
+|---|---|---|
+| D61 | A probe that ends with success and no marked answer (a backend that exits at import) is a named problem; the mark starts its own line; a failing probe's reason is cut to its first 400 characters | Each surfaced as a bare `IndexError` or a wall of text — the one failure D58 was meant to name |
+| D62 | The probe's time limit is `shape.PROBE_TIMEOUT` (60 s), pinned by a test that shortens it | The timeout branch had no test |
 
 ## The interface (target shape)
 
