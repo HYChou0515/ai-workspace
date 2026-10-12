@@ -38,7 +38,9 @@ import { presenceOf } from "./fileTree";
 import { useDialog } from "../../components/Dialog";
 import { useDirtyClose } from "../../hooks/useDirtyClose";
 import { useT } from "../../lib/i18n";
-import { FileServiceProvider, investigationFileService } from "../../api/fileService";
+import { FileServiceProvider, investigationFileService, useFileService } from "../../api/fileService";
+import { WorkflowsSidebar } from "../../components/WorkflowsSidebar";
+import { useItemRuns } from "../../hooks/useWorkflow";
 import { WorkspaceSlugProvider, useWorkspaceSlug } from "../../hooks/useWorkspaceSlug";
 import { EditModeProvider, useEditMode } from "../../hooks/editMode";
 import {
@@ -94,7 +96,7 @@ import { pxToRem } from "../../lib/pxToRem";
 
 type OpenFileFn = (path: string, opts?: { preview?: boolean }) => void;
 
-export type ActivityMode = "evidence" | "search" | "history" | "members" | "activity";
+export type ActivityMode = "evidence" | "search" | "history" | "members" | "activity" | "workflows";
 
 /** Close a tab through the dirty-aware path (save-on-close prompt). Provided
  * by ShellBody so the deep tab strip can request closes without prop drilling. */
@@ -771,6 +773,8 @@ function ShellBody({
           <ActivityBar
             mode={activityMode}
             membersLabel={manifest.labels?.members ?? "Members"}
+            slug={manifest.slug}
+            itemId={item.resource_id}
             onMode={setActivityMode}
             onPanel={dispatchSidebar}
             railRef={railRef}
@@ -1670,6 +1674,8 @@ function ActivityBar({
   onPanel,
   railRef,
   membersLabel,
+  slug,
+  itemId,
 }: {
   mode: ActivityMode;
   onMode: (m: ActivityMode) => void;
@@ -1681,17 +1687,29 @@ function ActivityBar({
    * popover use, so the icon's tooltip can't say "Reviewers" while the panel it
    * opens says "Members". */
   membersLabel: string;
+  slug: string;
+  itemId: string;
 }) {
+  // plan-workflow-out-of-chat D7: how many of this item's executions wait for a
+  // person at a gate — the Workflows entry's badge. The same read the sidebar
+  // lists from, polled while any execution is still going.
+  const waiting = (useItemRuns(slug, itemId).data ?? []).filter(
+    (r) => r.status === "awaiting_human",
+  ).length;
   // Which pane was on show when the current gesture began — the first click of
   // a double click has already switched `mode`, so "did you double-click the
   // icon you were already looking at?" cannot be asked of the live value.
   const gestureFrom = useRef(mode);
-  const items: { name: IconName; label: string; to: ActivityMode }[] = [
+  // `shown`: the one entry whose name is printed under its icon (NN/g "Icon
+  // Usability": an icon needs a visible label). The older entries keep their
+  // tooltip-only names; "Workflows" is new and has no icon people already know.
+  const items: { name: IconName; label: string; to: ActivityMode; shown?: boolean }[] = [
     { name: "folder", label: "Files", to: "evidence" },
     { name: "search", label: "Search files", to: "search" },
     { name: "clock", label: "History", to: "history" },
     { name: "users", label: membersLabel, to: "members" },
     { name: "bell", label: "Activity", to: "activity" },
+    { name: "workflow", label: "Workflows", to: "workflows", shown: true },
   ];
   return (
     <div
@@ -1709,11 +1727,13 @@ function ActivityBar({
     >
       {items.map((it) => {
         const active = mode === it.to;
+        const badge = it.to === "workflows" ? waiting : 0;
         return (
           <button
             key={it.label}
             type="button"
             title={it.label}
+            aria-label={badge > 0 ? `${it.label}, ${badge} waiting for you` : it.label}
             onClick={(e) => {
               if (e.detail <= 1) gestureFrom.current = mode;
               onMode(it.to);
@@ -1724,8 +1744,11 @@ function ActivityBar({
             }
             style={{
               width: 50,
-              height: 44,
+              height: it.shown ? 52 : 44,
+              position: "relative",
               display: "inline-flex",
+              flexDirection: "column",
+              gap: 2,
               alignItems: "center",
               justifyContent: "center",
               color: active ? "var(--accent)" : "var(--text-paper-d)",
@@ -1734,6 +1757,34 @@ function ActivityBar({
             }}
           >
             <Icon name={it.name} size={18} />
+            {it.shown && (
+              <span aria-hidden style={{ fontSize: pxToRem(9), lineHeight: 1 }}>
+                {it.label}
+              </span>
+            )}
+            {badge > 0 && (
+              <span
+                data-testid="workflows-waiting"
+                aria-hidden
+                style={{
+                  position: "absolute",
+                  top: 4,
+                  right: 7,
+                  minWidth: 15,
+                  height: 15,
+                  padding: "0 4px",
+                  borderRadius: 8,
+                  background: "var(--accent)",
+                  color: "var(--paper)",
+                  fontSize: pxToRem(9),
+                  fontWeight: 700,
+                  lineHeight: "15px",
+                  textAlign: "center",
+                }}
+              >
+                {badge}
+              </span>
+            )}
           </button>
         );
       })}
@@ -1779,7 +1830,37 @@ function ActivitySidebar(props: {
       return <MembersSidebar manifest={props.manifest} item={props.item} />;
     case "activity":
       return <ActivityFeed slug={props.manifest.slug} itemId={props.item.resource_id} onOpenFile={props.onOpenFile} />;
+    case "workflows":
+      return <WorkflowsPane {...props} />;
   }
+}
+
+/** The Workflows sidebar in the shell's frame — the header every pane has, over
+ * the item's workflows and executions (plan-workflow-out-of-chat D7). */
+function WorkflowsPane({
+  item,
+  manifest,
+  onOpenFile,
+}: {
+  item: AppItem;
+  manifest: AppManifest;
+  onOpenFile: OpenFileFn;
+}) {
+  const fileService = useFileService();
+  return (
+    <aside style={sidebarStyle}>
+      <div style={sidebarHeader}>
+        <span className="caps">Workflows</span>
+      </div>
+      <WorkflowsSidebar
+        slug={manifest.slug}
+        itemId={item.resource_id}
+        profile={String(item.profile ?? manifest.default_profile)}
+        fileService={fileService}
+        onOpenFile={(path) => onOpenFile(path)}
+      />
+    </aside>
+  );
 }
 
 /* ----------------------------- Evidence sidebar ----------------------------- */

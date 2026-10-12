@@ -416,6 +416,7 @@ class WorkflowOrchestrator:
         trigger_depth: int = 0,
         payload: dict[str, Any] | None = None,
         by_hand: bool = False,
+        schedule_key: str = "",
     ) -> str:
         """Create a ``WorkflowRun`` (capturing the user, §15) and kick the run off as
         a background task. ``workflow_id`` selects which of the profile's workflows to
@@ -465,6 +466,7 @@ class WorkflowOrchestrator:
                     origin_trigger=origin_trigger,
                     trigger_depth=trigger_depth,
                     by_hand=by_hand,
+                    schedule_key=schedule_key,
                     # Opaque, and stored rather than interpreted: what the
                     # declaration asked for travels with the run so a resume
                     # after a restart still knows it.

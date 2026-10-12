@@ -42,11 +42,19 @@ export function usePreviewRun(
   });
 }
 
+/** How often to re-read an item's executions: while any is still going, so the
+ * Workflows sidebar's progress and the waiting-for-you badge follow it (a gate is
+ * reached between reads); never once they have all ended. */
+export function runsPollMs(runs: WorkflowRunDTO[] | undefined): number | false {
+  return runs?.some((r) => !isRunTerminal(r.status)) ? 2000 : false;
+}
+
 export function useItemRuns(slug: string | undefined, itemId: string | undefined) {
   return useQuery({
     queryKey: qk.workflowRuns(slug ?? "", itemId ?? ""),
     queryFn: () => workflowApi.listRuns(slug!, itemId!),
     enabled: !!slug && !!itemId,
+    refetchInterval: (q) => runsPollMs(q.state.data),
   });
 }
 

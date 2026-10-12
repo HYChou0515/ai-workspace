@@ -89,6 +89,17 @@ async def test_the_run_carries_the_binder_as_whose_private_values_it_uses() -> N
     assert orch.starts[0]["env_digest"] == "d-consented"
 
 
+async def test_the_run_carries_the_schedule_that_fired_it() -> None:
+    """plan-workflow-out-of-chat P7: the Workflows sidebar marks an execution a
+    schedule started. The run carries the schedule's key — the same one its
+    shared conversation is keyed on (`chat_for_schedule`)."""
+    orch = _Orchestrator()
+
+    await _fire(_Locator(), orch)
+
+    assert orch.starts[0]["schedule_key"] == "wui:i1:abcd"
+
+
 async def test_a_started_run_is_never_reported_as_not_started() -> None:
     """PAST THE POINT OF NO RETURN.
 

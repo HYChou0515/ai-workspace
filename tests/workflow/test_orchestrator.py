@@ -453,6 +453,19 @@ async def test_start_refuses_an_empty_captured_user(spec_instance: SpecStar):
         await orch.start(slug="rca", item_id="iE", profile="echo", captured_user="")
 
 
+async def test_a_run_records_the_schedule_that_started_it(spec_instance: SpecStar):
+    """plan-workflow-out-of-chat P7: the Workflows sidebar marks a scheduled
+    execution by the key it was started with; any other launch has none."""
+    orch, _ = _orch(spec_instance, _run_noop)
+    scheduled = await orch.start(
+        slug="rca", item_id="iS", profile="echo", captured_user="u", schedule_key="wui:iS:k"
+    )
+    by_person = await orch.start(slug="rca", item_id="iT", profile="echo", captured_user="u")
+
+    assert orch._get(scheduled).schedule_key == "wui:iS:k"
+    assert orch._get(by_person).schedule_key == ""
+
+
 async def _run_noop(wf, inputs):
     return {}
 

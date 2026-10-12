@@ -47,9 +47,9 @@ export function WorkflowsModal({
   itemId: string;
   fileService: FileService;
   onClose: () => void;
-  /** Called with the new run's chat id after a successful launch, so the parent can
-   * focus the run's chat. */
-  onRun?: (chatId: string) => void;
+  /** Called with the new run's id after a successful launch, so the parent can open
+   * its execution tab (plan-workflow-out-of-chat D7). */
+  onRun?: (runId: string) => void;
 }) {
   const t = useT();
   const clock = useViewerClock();
@@ -101,7 +101,7 @@ export function WorkflowsModal({
     setBusy(true);
     try {
       const res = await workflowApi.startRun(slug, itemId, id);
-      onRun?.(res.chat_id);
+      onRun?.(res.run_id);
       onClose();
     } finally {
       setBusy(false);

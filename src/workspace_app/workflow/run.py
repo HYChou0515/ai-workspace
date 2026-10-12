@@ -163,6 +163,11 @@ class WorkflowRun(Struct):
     """Started by a schedule's "run now", not by its time — what the schedules
     overview tags "手動" (`docs/plan-schedule-overview-polish.md`). Additive: a
     run written before this reads False, as a scheduled one."""
+    schedule_key: str = ""
+    """The schedule that fired this run (its window-ledger key, the one its shared
+    conversation is keyed on), or "" for any other launch. What the Workflows
+    sidebar marks an execution a schedule started by (plan-workflow-out-of-chat
+    P7). Additive: a run written before this reads "", as unscheduled."""
     result: dict[str, Any] | None = None
     """The ``run()`` return value (a summary), persisted on terminal."""
     pending_decision: PendingDecision | None = None

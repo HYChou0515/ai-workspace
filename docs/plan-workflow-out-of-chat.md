@@ -217,6 +217,31 @@ so a schedule's shared conversation shows one execution at a time.
 - A labelled activity-bar entry, with a badge of executions awaiting a gate.
 - The sidebar lists the workflows to start, then executions newest first
   (name · time, status, Step N of M, schedule mark).
+- **Built:**
+  - `WorkflowsSidebar` (`web/src/components/`) lists what `useLaunchableWorkflows`
+    returns: the profile's workflows plus the workspace's own, with the same-id
+    shadowing and broken-file skip the New picker used. Start goes through the
+    pre-flight dialog. A failed start says why (`role="alert"`). "Manage
+    workflows…" opens the Workflows panel, whose Run now opens the tab too
+    (`onRun`).
+  - Executions are sorted by `started`. Each row shows its status in words
+    (Starting / Running / Waiting for you / Done / Failed / Stopped) and
+    `stepOf(phaseView(...))` as "Step N of M". It is marked "Scheduled" when
+    the run carries `schedule_key`, a new `WorkflowRun` field. That field is
+    set only by `start_page_schedule`, so runs started before this version are
+    never marked.
+  - `useItemRuns` polls every 2 s while any execution is not terminal
+    (`runsPollMs`), so progress and the badge move on their own.
+  - The rail entry is the only one with its name printed under the icon. The
+    older five keep tooltip-only names: a 50 px rail cannot print "Search
+    files", and changing them was not asked for. Its badge counts
+    `awaiting_human` executions, and its accessible name says "Workflows, N
+    waiting for you".
+  - A row opens `workflow-run:<run_id>` (`lib/executionTab.ts`) as a tab. The
+    tab renders from P8.
+  - Mutation probes, each reddening its test: the waiting filter, the profile
+    fallback, the printed label, the sort order, the schedule mark, and the
+    failure text.
 
 **P8 — the execution tab.**
 - Step rows per D6 / D7, with Expand all / Collapse all.

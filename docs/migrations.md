@@ -2126,10 +2126,14 @@ agent 步驟裡 AI 的呼叫、WUI 的工具呼叫、view plugin、圖表重畫�
   run 那段時間內沒有標記的訊息也一併排除。
 - **用文字修改執行（steer）時，steer 回的 JSON 不再出現在對話裡**：以前那段 JSON 會被當成 agent 的回覆存進執行的對話、
   也會即時串流出來（解析失敗重試時最多三次），而使用者自己寫的要求反而看不到。現在只顯示確認卡片，卡片上寫著那句要求。
+- **workflow 改在 workspace 左側的「Workflows」**（活動列上唯一印出名字的圖示）啟動與追蹤：上半列出能啟動的 workflow，
+  下半列出這個 item 的執行（新的在上，狀態、「Step N of M」、排程啟動的標「Scheduled」）；有執行在等人決定時，
+  圖示上有數字。chat-only 的 App 沒有這個入口，和以前一樣。
 - 每個 agent step 會在 journal 裡、產物旁邊多寫一份 `step_<名稱>/<key 或 main>.transcript.md`（每次嘗試的
   prompt、思考、tool 呼叫與回覆），供「問 AI 為什麼失敗」讀取。它和產物一起被 steer 作廢、被 map 清理。
 
-**資料** — 不用 migrate，沒有 `Schema` 升版。`Message` 多了兩個有預設值的欄位（`run_id`、`step`），舊資料照樣讀得出來。
+**資料** — 不用 migrate，沒有 `Schema` 升版。`Message` 多了兩個有預設值的欄位（`run_id`、`step`），`WorkflowRun` 多了 `schedule_key`（預設 `""`），
+舊資料照樣讀得出來。升版前由排程啟動的執行沒有這個欄位，所以側欄不會標「Scheduled」——這是預期的，不用補。
 
 **k8s · CI 側** — 沒有新的 manifest、env、probe 或 JobType；照常重 build、照常部署。
 

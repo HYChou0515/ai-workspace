@@ -113,6 +113,9 @@ export type WorkflowRunDTO = {
   /** #288: a steer plan awaiting confirm (the FE renders the steer card vs. the gate
    * card by which pending field is set). Absent on runs written before #288. */
   pending_steer?: SteerPlan | null;
+  /** The schedule that fired it (its window-ledger key), "" or absent for any other
+   * launch — what the Workflows sidebar marks "Scheduled" by. */
+  schedule_key?: string;
 };
 
 /** One pre-flight checklist line in the launch dialog (#283). `severity` is
@@ -188,6 +191,20 @@ export function phaseView(
   for (const d of declared) push(d.id, d.title ?? d.id);
   for (const p of run?.phases ?? []) if (!seen.has(p.phase)) push(p.phase, p.phase);
   return nodes;
+}
+
+/** How far along an execution is, as "Step `at` of `of`" (plan-workflow-out-of-chat
+ * D7, after NN/g "Progress Indicators": say how far, not just "Running…"). The step
+ * being worked on, or waiting for a person, is the one it is on; past the last
+ * passed one otherwise; 0 before anything started. Pure, over `phaseView`. */
+export function stepOf(nodes: PhaseNode[]): { at: number; of: number } {
+  const working = nodes.findIndex((n) => n.status === "running" || n.status === "awaiting_human");
+  if (working >= 0) return { at: working + 1, of: nodes.length };
+  let passed = 0;
+  nodes.forEach((n, i) => {
+    if (n.status === "passed" || n.status === "skipped" || n.status === "failed") passed = i + 1;
+  });
+  return { at: passed, of: nodes.length };
 }
 
 /** A phase plus the steps the board shows under it (#178). */
