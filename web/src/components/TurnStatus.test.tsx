@@ -176,6 +176,17 @@ describe("TurnStatus", () => {
     expect(screen.getByTestId("turn-retrying")).toHaveTextContent("模型服務本身出錯。正在重試（第 2 次）…");
   });
 
+  it.each([
+    ["connection", "連不上模型服務。正在重試（第 1 次）…"],
+    ["timeout", "模型太久沒有回應。正在重試（第 1 次）…"],
+  ])("says the sentence itself for %s, not only that it matches the red box", (kind, text) => {
+    // The test below takes its expected text from the same function the line
+    // uses, so a sentence wrong in both would pass it (review, P8).
+    const log = fold([{ type: "model_retrying", attempt: 1, kind }]);
+    render(<TurnStatus log={{ ...log, streaming: true }} />);
+    expect(screen.getByTestId("turn-retrying")).toHaveTextContent(text);
+  });
+
   it.each(["timeout", "connection", "provider_error", "all_busy"])(
     "names what failed with the sentence the red box would use — %s (D14)",
     (kind) => {

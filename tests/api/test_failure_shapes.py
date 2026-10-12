@@ -210,6 +210,22 @@ GIVEN_UP = [
         "bad_request",
         1,
     ),
+    (
+        # A one-message turn has no earlier history to give up, so the trim
+        # cannot make it smaller and the first rejection is the answer.
+        "400 context too long",
+        [
+            _status(
+                400,
+                "This model's maximum context length is 8192 tokens. However, your messages "
+                "resulted in 9000 tokens.",
+                "invalid_request_error",
+                code="context_length_exceeded",
+            )
+        ],
+        "context_overflow",
+        1,
+    ),
     ("drop mid-answer every time", [_drop_after("half an ")], "connection", 3),
     ("stall mid-answer every time", [_stall_after("half an ")], "timeout", 3),
     ("silent every time", [_silent()], "timeout", 3),

@@ -141,3 +141,107 @@ def test_the_technical_details_show_the_links_a_traceback_shows(mode):
     ]
 
     assert [link.split(":", 1)[0] for link in raw_error_text(exc).split("\n← ")][::-1] == shown
+
+
+def _over(outer: BaseException, cause: BaseException) -> BaseException:
+    try:
+        raise outer from cause
+    except BaseException as exc:  # noqa: BLE001 — the test wants the chained exception
+        return exc
+
+
+_REQ = httpx.Request("POST", "http://llm.test/v1")
+
+
+@pytest.mark.parametrize(
+    ("exc", "kind"),
+    [
+        # The chains litellm raises (plan P8, measured): its own 5xx over the
+        # network stack's error. The network's word wins.
+        (
+            _over(
+                litellm.ServiceUnavailableError("mid-stream", "openai", "m", response=_resp(503)),
+                httpx.RemoteProtocolError("peer closed connection", request=_REQ),
+            ),
+            "connection",
+        ),
+        (
+            _over(
+                litellm.InternalServerError(
+                    "Connection refused", "openai", "m", response=_resp(500)
+                ),
+                httpx.ConnectError("All connection attempts failed", request=_REQ),
+            ),
+            "connection",
+        ),
+        (
+            _over(
+                litellm.InternalServerError("mid-stream", "openai", "m", response=_resp(500)),
+                httpx.ReadTimeout("timed out", request=_REQ),
+            ),
+            "timeout",
+        ),
+        # Control: a 503 the server really sent ends in HTTPStatusError, which is
+        # not a transport error — still the provider's failure.
+        (
+            _over(
+                litellm.ServiceUnavailableError("busy", "openai", "m", response=_resp(503)),
+                httpx.HTTPStatusError("503", request=_REQ, response=_resp(503)),
+            ),
+            "provider_error",
+        ),
+    ],
+    ids=["drop-under-503", "refused-under-500", "read-timeout-under-500", "real-503"],
+)
+def test_the_networks_own_error_beats_a_status_the_client_invented(exc, kind):
+    assert classify_error(exc) == kind
+
+
+@pytest.mark.parametrize(
+    ("exc", "kind"),
+    [
+        # A rate limit and every-provider-busy are read BEFORE the network's
+        # word: a chain whose endpoints all refused is the chain's verdict, and a
+        # 429 that also carries a transport link is still a 429.
+        (
+            _over(
+                AllProvidersFailed("every endpoint failed"),
+                httpx.ConnectError("refused", request=_REQ),
+            ),
+            "all_busy",
+        ),
+        (
+            _over(
+                litellm.RateLimitError("slow down", "openai", "m", response=_resp(429)),
+                httpx.RemoteProtocolError("peer closed connection", request=_REQ),
+            ),
+            "rate_limited",
+        ),
+        # A request this side cannot even send is a setting, not the network:
+        # `api_base` without a scheme, or an API key with a trailing newline
+        # (an illegal header). Re-sending cannot cure either (review, P8).
+        (
+            _over(
+                litellm.InternalServerError(
+                    "Connection error.", "openai", "m", response=_resp(500)
+                ),
+                httpx.UnsupportedProtocol(
+                    "Request URL is missing an 'http://' or 'https://' protocol."
+                ),
+            ),
+            "bad_request",
+        ),
+        (
+            _over(
+                litellm.InternalServerError(
+                    "Connection error.", "openai", "m", response=_resp(500)
+                ),
+                httpx.LocalProtocolError("Illegal header value b'Bearer sk-x\\n'"),
+            ),
+            "bad_request",
+        ),
+    ],
+    ids=["all-busy-over-refused", "429-over-drop", "no-scheme", "bad-header"],
+)
+def test_what_outranks_the_network_and_what_the_network_does_not_explain(exc, kind):
+    assert classify_error(exc) == kind

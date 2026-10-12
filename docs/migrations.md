@@ -2147,6 +2147,8 @@ agent 步驟裡 AI 的呼叫、WUI 的工具呼叫、view plugin、圖表重畫�
     （`ITokenService`）丟出的例外——以前在還沒有輸出時會整輪重跑最多 `max_retries` 次（context 超限與帶
     `invalid_request_error` 的 400 以前就不重試），現在第一次就結束這一輪並說明原因。自訂 `ITokenService` 的部署：每個 key 每輪只解析一次、不重試（子 agent 與壓縮摘要另算），
     見 [configuration 的契約 3](configuration.md)。
+    送不出去的請求也算設定錯誤、不重試：`api_base` 少了 `http://`／`https://`，或 API key 帶了換行
+    （k8s secret 常見）——技術細節裡是 `UnsupportedProtocol`／`LocalProtocolError`，畫面說明是請求錯誤。
   - 小模型送出非物件、或多個黏在一起的 tool 參數：工具回覆錯誤、模型下一次呼叫自己改正；以前是整輪重跑。
   - **provider client 自己的重試關掉了**：agent 回合的每次模型呼叫都帶 `max_retries=0`、`num_retries=0`。以 OpenAI
     相容端點（`openai/…`）為例，litellm 建 client 時預設 `max_retries=2`，那個 client 會自己照 `Retry-After` 等完再重送——
@@ -2160,11 +2162,12 @@ agent 步驟裡 AI 的呼叫、WUI 的工具呼叫、view plugin、圖表重畫�
     （`litellm.disable_aiohttp_transport = True`，寫死在 runner，不是設定），斷線變成錯誤、照上面的規則重送。
     其他 litellm 呼叫（KB、embedding、wiki、圖片、健康檢查）本來就是同步的 httpx，不受影響；proxy 環境變數、
     CA 憑證（`SSL_CERT_FILE`/`SSL_VERIFY`）、連線與讀取逾時的處理兩種方式相同（`docs/plan-friendly-errors.md` P8）。
-    **連線池**：httpx 對同一個模型端點最多同時 100 條連線（aiohttp 是 1000），閒置 5 秒就關（aiohttp 120 秒）。
-    一個 pod 對同一端點同時超過 100 個模型呼叫時，多出來的會排隊——症狀是負載上來時回答的 p95 延遲變長；
-    **在那之前先加 pod**，litellm 沒有調連線池上限的設定。
-  - 連不上模型、回答講到一半斷線，錯誤說明改成「連不上模型服務」（以前寫「模型服務本身出錯」）；重送時的狀態列
-    改成說出是哪種錯誤，例如「模型服務本身出錯。正在重試（第 1 次）…」（以前一律「連線不穩，正在重試」）。
+    **連線池**：httpx 一個 client 最多同時 100 條連線（aiohttp 每個 host 500 條），其中只保留 20 條閒置連線、
+    閒置 5 秒就關（aiohttp 120 秒）。`openai/…` 每個端點一個 client；`ollama_chat/…`（k8s 預設）是**整個 pod
+    共用一個**，不分端點。所以一個 pod 同時超過 100 個模型呼叫時，多出來的會排隊——症狀是負載上來時回答的
+    p95 延遲變長；**在那之前先加 pod**，litellm 沒有調連線池上限的設定。同時超過 20 個時，多出來的連線用完就關，
+    下一個呼叫要重新建立連線（走 TLS 的端點會多一次握手）。
+  - 重送時的狀態列說出是哪種錯誤，例如「連不上模型服務。正在重試（第 1 次）…」「模型太久沒有回應。正在重試…」。
 - 錯誤一律以「發生了什麼／可以怎麼做／技術細節（預設收合，可複製）」顯示，**所有使用者都看得到技術細節**（D1）。
   技術細節是 provider 的原文，可能包含端點網址或模型名稱。
 - 子 agent（`ask_knowledge_base`、`run_agent`、skill hub 審查）被限流或重試時，**父輪**的狀態列會顯示；
@@ -2190,8 +2193,10 @@ agent 步驟裡 AI 的呼叫、WUI 的工具呼叫、view plugin、圖表重畫�
 
 **確認做完**（`rollout 後`）：
 
-- 讓 agent 回答一段長文時，把模型端點那段網路切斷一次（或重啟端點前面的 proxy）：狀態列出現「連不上模型服務。正在重試…」，
-  講到一半的那段被收回、接著出現完整回答。**沒部署到這一版的症狀**：回答停在半句、沒有任何錯誤或提示。
+- 讓 agent 回答一段長文時，把模型端點前面的 proxy **程序直接停掉再起來**（連線被關閉，不是封包被丟掉）：
+  狀態列出現「連不上模型服務。正在重試…」，講到一半的那段被收回、接著出現完整回答。**沒部署到這一版的症狀**：
+  回答停在半句、沒有任何錯誤或提示。只把封包丟掉（連線沒被關）時，要等 `failover.idle_timeout_s` 才會出現
+  「模型太久沒有回應。正在重試…」——那條路由逾時保護處理，不受這次連線方式切換影響，不是這一項要驗的。
 
 - 在 app 聊天讓 agent 呼叫一次工具，而端點正在限流（或用一把額度很低的 key）：狀態列出現「請求過於頻繁,N 秒後自動重試…」，
   等完之後回答接著出來。**沒部署到這一版的症狀**：回答到一半出現 `RateLimitError: litellm.RateLimitError: …` 原文，這一輪結束。

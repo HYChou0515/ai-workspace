@@ -54,7 +54,7 @@ Source of each: **user** = decided by the user in the 2026-10-12 /grill-me;
 | D6 | Backend classifies (`failover.classify.classify_error(exc) → kind`). `RunError.message` / the persisted error `content` IS the raw text (every link of the cause chain, `raw_error_text`) and is what technical details show; the FE words the failure from `kind` via i18n. The numbers the copy needs ride `RunError.params` → `error_params`. Every failure carries a kind; one the emitter could not name is `unknown`. (Amended in P1: a separate `raw` field would have duplicated `content`, which errors never replay to the model anyway.) | proposed, accepted with the plan |
 | D7 | Error rows persisted before this have no `kind`: shown as `unknown`, their old text under technical details. | proposed |
 | D8 | One FE component, `ErrorNotice`, for every surface: chat error box, persisted banner, KB chat, sub-agent tool card, workflow, document index status, our own API's non-2xx. | proposed |
-| D9 | A retry in progress is an ephemeral event (status line "連線不穩，正在重試（第 N 次）…"), never persisted — which also fixes recovered retries persisting as errors and sub-agents reported as failed. | proposed |
+| D9 | A retry in progress is an ephemeral event (status line "連線不穩，正在重試（第 N 次）…" — **wording amended by D14**), never persisted — which also fixes recovered retries persisting as errors and sub-agents reported as failed. | proposed |
 | D10 | Sub-agent holds / retries are forwarded to the parent stream. The tool card shows the worded error; the tool RESULT given to the LLM keeps the raw text (a model decides its next step better from it). | proposed |
 
 ### D5 copy
@@ -295,7 +295,7 @@ Two defects, in two layers:
    (`litellm/llms/custom_httpx/aiohttp_transport.py:90-114`) and the stream
    wrapper then reports `finish_reason="stop"`. The OpenAI SDK alone raises
    `RemoteProtocolError` on the same drop; so does litellm on httpx
-   (`MidStreamFallbackError ← APIConnectionError`). Pre-existing on master; it
+   (`MidStreamFallbackError ← httpx.RemoteProtocolError`). Pre-existing on master; it
    defeats D3 for real network drops.
 2. **Our classifier reads the status code before the evidence.** litellm wraps a
    connection error in `MidStreamFallbackError` (a `ServiceUnavailableError`) or
@@ -325,7 +325,7 @@ lock file and a once-committed LLM call log).
 | Client certificate (`SSL_CERTIFICATE`) | sent only on httpx (the aiohttp path drops it); not configured anywhere in this repo |
 | Connect / read timeouts; long streams | same; neither path has a total cap that cuts a long stream (measured) |
 | Mid-stream drop | aiohttp: graceful EOF (the defect); httpx: raises |
-| Connection pool | aiohttp 1000 total / 500 per host / 120 s keep-alive; httpx 100 / 20 kept alive / 5 s idle expiry |
+| Connection pool | aiohttp 1000 total / 500 per host / 120 s keep-alive; httpx 100 / 20 kept alive / 5 s idle expiry, per client — one client per endpoint for `openai/`, ONE per pod for `ollama_chat/` (`http_handler.py:1351` keys it by provider) |
 | Error message text | same types, different strings in technical details |
 
 Concurrency, measured locally (N concurrent streamed completions through real
@@ -338,10 +338,11 @@ litellm against the stand-in, p95 latency; N=200 was run twice, the others once)
 | 100 | 1.88 s | 1.96 s |
 | 200 | 2.38–2.44 s | 4.04–4.05 s |
 
-Up to 100 concurrent streams per pod per endpoint the two are within 0.1 s;
+Up to 100 concurrent streams per client the two are within 0.1 s;
 beyond that httpx queues on its 100-connection pool. **Confirmed by the user
-(2026-10-12): no single pod runs more than 100 model calls to one endpoint at
-once — pods are scaled out before that.** If that stops holding, the symptom is p95 latency rising with load.
+(2026-10-12): no single pod runs more than 100 model calls at once — pods are
+scaled out before that.** Per pod, not per endpoint, which also covers
+`ollama_chat/`'s one shared client. If that stops holding, the symptom is p95 latency rising with load.
 litellm exposes no pool setting (no `httpx.Limits` / `max_connections` in
 `http_handler.py`, `openai/common_utils.py` or `constants.py`); raising it means
 supplying our own client, and `litellm.aclient_session` reaches only the
@@ -352,19 +353,22 @@ supplying our own client, and `litellm.aclient_session` reaches only the
 | # | Decision | Source |
 |---|---|---|
 | D11 | Agent turns use litellm's httpx transport: `litellm.disable_aiohttp_transport = True`, set where `LitellmAgentRunner` is built — the only async litellm caller. Not a config knob: the default must not truncate answers. | user (2026-10-12), on the ≤100 condition above |
-| D12 | `classify_error` looks for the network stack's own error anywhere in the chain — `httpx.TransportError` (which covers `RemoteProtocolError`, `ConnectError`, `ReadTimeout`; litellm's aiohttp path maps to the same types) or Python's `TimeoutError` / `ConnectionError` — BEFORE reading a status code: a timeout among them is `timeout`, otherwise `connection`. litellm's own `APIConnectionError` is NOT evidence (it also wraps real 429s). A response the server did send ends in `httpx.HTTPStatusError`, which is not a transport error, so a real 429 / 503 is unaffected. Evidence, the chains on the httpx transport: drop `MidStreamFallbackError(500) ← httpx.RemoteProtocolError`; refused `InternalServerError(500) ← … ← httpx.ConnectError ← ConnectionRefusedError`; 429 `RateLimitError(429) ← … ← httpx.HTTPStatusError`; 503 `ServiceUnavailableError(503) ← … ← httpx.HTTPStatusError`. | proposed |
-| D13 | The failure-shape matrix becomes a test: an in-process HTTP stand-in on a free port, real `litellm.acompletion` through the same `CallRetryModel` path a turn takes, one case per row above, asserting the kind AND whether the call was re-sent. It is the gate this feature was missing; a litellm upgrade or transport change that alters a shape reddens it. | proposed |
+| D12 | `classify_error`, after rate_limited and all_busy, reads the network stack's own error anywhere in the chain BEFORE a status code: an `httpx.TransportError` (litellm's aiohttp path maps to the same types) is `timeout` when it is an `httpx.TimeoutException`, otherwise `connection`. Two of them never left this process — `httpx.UnsupportedProtocol` (an `api_base` with no scheme) and `httpx.LocalProtocolError` (an illegal header, e.g. an API key with a trailing newline) — and are `bad_request`, so they are not re-sent (review, P8). litellm's own `APIConnectionError` is NOT evidence (it also wraps real 429s); Python's bare `TimeoutError` / `ConnectionError` are not listed (the deadlines' `StreamStalled` / `TtftTimeout` already read `timeout`). A response the server did send ends in `httpx.HTTPStatusError`, not a transport error, so a real 429 / 503 is unaffected. Measured chains (httpx transport): drop `MidStreamFallbackError(500) ← httpx.RemoteProtocolError`; refused `InternalServerError(500) ← … ← httpx.ConnectError ← ConnectionRefusedError`; 429 `RateLimitError(429) ← … ← httpx.HTTPStatusError`; 503 `ServiceUnavailableError(503) ← … ← httpx.HTTPStatusError`. | built |
+| D13 | The failure-shape matrix becomes a test: an in-process HTTP stand-in on a free port, real `litellm.acompletion` through the same `CallRetryModel` path a turn takes, one case per row above, asserting the kind AND whether the call was re-sent. It is the gate this feature was missing; a litellm upgrade or transport change that alters a shape reddens it. | built |
 | D14 | Amends **D9** (proposed): the retry status names the failure instead of always saying 「連線不穩」 — it reuses the D5 "what happened" sentence of that kind, then 「正在重試（第 N 次）…」 (e.g. 「模型服務本身出錯。正在重試（第 1 次）…」). NN/g: an error message must precisely describe the exact problem; a generic one gives no context ([Error-Message Guidelines](https://www.nngroup.com/articles/error-message-guidelines/), [Scoring Rubric](https://www.nngroup.com/articles/error-messages-scoring-rubric/)). Material 3 governs the indicator, not the words ([Progress indicators](https://m3.material.io/components/progress-indicators/overview)). One sentence per kind, shared with the failure copy, so the two cannot drift. | user (2026-10-12) |
 
 ### Work
 
-1. RED first, through the real path: the D13 matrix test (it reddens on the
-   aiohttp drop and the three misnamed kinds today).
+1. RED first, through the real path: the D13 matrix test. Measured red before
+   the fix on three rows — drop then answer (kept `'half an'`), drop every time
+   (no error at all), nothing listening (`provider_error`); both stall rows
+   passed (`DeadlineModel`).
 2. D11: the transport switch, pinned by the matrix's drop case (mutation: remove
    the line, the drop case reddens).
-3. D12: the classifier, pinned by the stall / drop / refused cases plus the
-   existing `test_classify.py` (a 5xx with no connection evidence stays
-   `provider_error`).
+3. D12: the classifier, pinned by unit cases in `test_classify.py` (drop /
+   refused / read timeout under an invented 5xx; a real 503 stays
+   `provider_error`; all_busy and rate_limited outrank the network; no-scheme
+   and bad-header are `bad_request`) and by the drop / refused matrix rows.
 4. D14: `turn.retrying` takes the kind; FE test per kind; a
    parity test that the status sentence IS the failure sentence.
 5. Live: the drop scenario in the real app — the half sentence withdrawn, the
@@ -373,6 +377,28 @@ supplying our own client, and `litellm.aclient_session` reaches only the
    connections per pod per endpoint with a 5 s idle expiry; the ≤100 assumption
    and its symptom.
 7. One review round (D11 and D12 replace mechanisms), then CI on the final sha.
+
+### P8 review round (2026-10-12)
+
+Two lenses on `9279019e..7864924f`. Fixed:
+
+- **Settings named as the network.** `httpx.UnsupportedProtocol` (no scheme in
+  `api_base`) and `httpx.LocalProtocolError` (an API key with a trailing
+  newline) are transport errors to httpx, so D12 read them `connection` and the
+  call was re-sent for nothing. Now `bad_request`, not re-sent.
+- **Unpinned lines.** D12's order (after rate_limited / all_busy) and its two
+  stdlib members were guarded by nothing; the order is now pinned by unit cases,
+  the stdlib members are gone (redundant). One D14 test took its expected text
+  from the function under test; two literal sentences now pin the copy.
+- **Docs that said more than the evidence:** the pool's unit (per client;
+  `ollama_chat/` shares ONE per pod, and the user's ≤100 is per pod, which
+  covers it), aiohttp's per-host figure (500), the keep-alive cost above 20
+  concurrent calls, a runbook check that would have shown a different sentence
+  (only an abrupt close reads `connection`; dropped packets are a stall), the
+  runbook comparing against copy that never reached master, the drop chain, the
+  Work list's red rows, D9 without its D14 pointer, the `classify_error`
+  docstring, and D13's "one case per row" (the context-overflow row is now a
+  case).
 
 ## Risks
 

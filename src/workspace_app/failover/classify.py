@@ -63,13 +63,12 @@ def _link_kind(exc: BaseException) -> str:
 
 
 def _is_transport(link: BaseException) -> bool:
-    """A failure of the connection itself, raised by the network stack — not a
-    wrapper's reading of one."""
-    return isinstance(link, (httpx.TransportError, TimeoutError, ConnectionError))
-
-
-def _is_timeout(link: BaseException) -> bool:
-    return isinstance(link, (httpx.TimeoutException, TimeoutError))
+    """A failure of the connection itself, raised by httpx — not a wrapper's
+    reading of one. litellm's aiohttp path maps its errors to the same httpx
+    types. Python's own `TimeoutError` / `ConnectionError` are not listed: the
+    deadlines' `StreamStalled` / `TtftTimeout` already read as `timeout` below,
+    and no chain this app raises carries a bare one under an invented 5xx."""
+    return isinstance(link, httpx.TransportError)
 
 
 def classify_error(exc: BaseException) -> str:
@@ -77,9 +76,10 @@ def classify_error(exc: BaseException) -> str:
 
     The CAUSE decides, not the wrapper: litellm and the agents SDK re-raise the
     real failure inside an ``APIConnectionError``, so the outermost link alone
-    would send a reader to the network for a rate limit. ``connection`` is
-    therefore the weakest reading — taken only when no link says anything more
-    specific."""
+    would send a reader to the network for a rate limit. A wrapper's NAME is
+    therefore the weakest reading — but the network stack's own error (an httpx
+    transport error) is the strongest: it is what happened, and a status code
+    over it was invented by the client (plan P8, D12)."""
     if is_rate_limited(exc):
         return "rate_limited"
     links = list(_chain(exc))
@@ -91,9 +91,17 @@ def classify_error(exc: BaseException) -> str:
     # (`MidStreamFallbackError`), and read outermost-first that said "the
     # provider failed" for a model nobody reached. A response the server DID
     # send ends in `httpx.HTTPStatusError`, which is not a transport error.
+    # …except the two that never left this process: a URL with no scheme, a
+    # header httpx refuses to send (an API key with a trailing newline). They
+    # are settings, and a re-send cannot cure them.
+    if any(
+        isinstance(link, (httpx.UnsupportedProtocol, httpx.LocalProtocolError)) for link in links
+    ):
+        return "bad_request"
     transport = [link for link in links if _is_transport(link)]
     if transport:
-        return "timeout" if any(_is_timeout(link) for link in transport) else "connection"
+        timed_out = any(isinstance(link, httpx.TimeoutException) for link in transport)
+        return "timeout" if timed_out else "connection"
     kinds = [_link_kind(link) for link in links]
     for kind in kinds:
         if kind not in ("connection", "unknown"):
