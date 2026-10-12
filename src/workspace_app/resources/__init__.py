@@ -20,6 +20,7 @@ from specstar import BackendConfig, Schema, SpecStar
 from specstar.crud.route_templates.migrate import MigrateRouteTemplate
 from specstar.types import IndexableField
 
+from ..acting_user import honouring
 from ..kb.chat_permission import kbchat_permission_event_handler
 from ..perm import Permission
 from ..perm.checker import (
@@ -225,7 +226,10 @@ def make_spec(
     that's an implementation detail of this function."""
     spec = SpecStar()
     cfg: dict[str, Any] = {
-        "default_user": default_user,
+        # A per-request reader (a deploy's cookie reader) also answers with the
+        # user a route declared it acts as — the WUI content route's pass holder
+        # (`acting_user`). A fixed id needs no override: there is one user.
+        "default_user": default_user if isinstance(default_user, str) else honouring(default_user),
         "default_now": default_now or (lambda: datetime.now(UTC)),
     }
     if backend is not None:
