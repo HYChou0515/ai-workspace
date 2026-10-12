@@ -1841,6 +1841,49 @@ describe("a turn's failure is shown once (found recording the #915 demo)", () =>
     expect(rehydrated.error?.raw).toBe(RAW);
   });
 
+  it("keeps a queued turn's identical failure until it is persisted too", () => {
+    // Review round 4: queued questions persist as Q1, Q2, A1, A2, so ONE tail
+    // holds both turns' endings. Q1's failure being in the store says nothing
+    // about Q2's, which ended the same way and has not landed yet.
+    let log = reduceAgent(EMPTY_LOG, { type: "user_message", content: "q1" } as AgentEvent);
+    log = reduceAgent(log, { type: "user_message", content: "q2" } as AgentEvent);
+    log = reduceAgent(log, { type: "error", message: RAW, kind: "rate_limited" } as AgentEvent);
+    const q1Stored = [
+      { role: "user", content: "q1" },
+      { role: "user", content: "q2" },
+      { role: "error", content: RAW, error_kind: "rate_limited" },
+    ] as Message[];
+    log = reconcileSnapshot(log, { messages: q1Stored });
+    expect(notices(log)).toBe(1);
+
+    log = reduceAgent(log, { type: "error", message: RAW, kind: "rate_limited" } as AgentEvent);
+    const behind = reconcileSnapshot(log, { messages: q1Stored });
+    expect(notices(behind)).toBe(2);
+
+    const both = reconcileSnapshot(behind, {
+      messages: [...q1Stored, { role: "error", content: RAW, error_kind: "rate_limited" }] as Message[],
+    });
+    expect(notices(both)).toBe(2);
+    expect(both.error).toBeNull();
+  });
+
+  it("leaves a send failure alone even when the thread ends in the same words", () => {
+    // A send failure is never the turn's persisted ending — the turn did not
+    // run — so a matching entry is some other failure.
+    const sendFailed: AgentLog = {
+      ...reduceAgent(EMPTY_LOG, { type: "user_message", content: "go" } as AgentEvent),
+      error: { kind: "rate_limited", raw: RAW },
+      errorFromTurn: false,
+    };
+    const rehydrated = reconcileSnapshot(sendFailed, {
+      messages: [
+        { role: "user", content: "go" },
+        { role: "error", content: RAW, error_kind: "rate_limited" },
+      ] as Message[],
+    });
+    expect(rehydrated.error?.raw).toBe(RAW);
+  });
+
   it("keeps it when only an EARLIER turn failed the same way", () => {
     const earlier = reduceAgent(
       reduceAgent(

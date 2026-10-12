@@ -530,6 +530,18 @@ const countUserMessages = (entries: readonly AgentEntry[]) =>
  * Use {@link logFromMessages} directly only where a smaller thread is the POINT
  * (initial hydration, undo).
  */
+/** The entries after the last question — what the thread has said since. */
+function tailOf(entries: readonly AgentEntry[]): readonly AgentEntry[] {
+  return entries.slice(
+    entries.map((e) => e.kind === "message" && e.message.role === "user").lastIndexOf(true) + 1,
+  );
+}
+
+/** How many failure entries in ``entries`` carry exactly ``raw``. */
+function failuresLike(raw: string, entries: readonly AgentEntry[]): number {
+  return entries.filter((e) => e.kind === "banner" && e.failure?.raw === raw).length;
+}
+
 export function reconcileSnapshot(
   prev: AgentLog,
   thread: { messages: readonly Message[] },
@@ -582,9 +594,7 @@ export function reconcileSnapshot(
   // identically worded one from an earlier turn. Since a stop now reads the same
   // live as it does once persisted, a thread with two cancelled turns had the
   // second one — the press the user is watching for — swallowed by the first.
-  const snapTail = snap.entries.slice(
-    snap.entries.map((s) => s.kind === "message" && s.message.role === "user").lastIndexOf(true) + 1,
-  );
+  const snapTail = tailOf(snap.entries);
   const carried = prev.entries.filter((e, i) => {
     if (e.kind !== "banner") return false;
     const rest = prev.entries.slice(i + 1);
@@ -602,14 +612,21 @@ export function reconcileSnapshot(
     );
   });
   // A turn's failure is persisted too, and the snapshot words it as a transcript
-  // entry: once THIS turn's tail holds it, that entry is the notice. Keeping the
-  // live one as well put the same failure on screen twice, one box under the
-  // other (found recording the #915 demo) — and a reload shows only the entry.
+  // entry: once it lands, that entry is the notice. Keeping the live one as well
+  // put the same failure on screen twice, one box under the other (found
+  // recording the #915 demo) — and a reload shows only the entry.
+  //
+  // "It landed" is the store holding MORE failures worded like it than the
+  // screen already did, counted after the last question on each side. Mere
+  // presence is not enough: queued questions persist as Q1, Q2, A1, A2, so one
+  // tail holds both turns' endings, and Q1's identical failure being stored says
+  // nothing about Q2's (review round 4). A send failure is never a turn's
+  // persisted ending, so it is left alone.
   const live = prev.error;
   const persisted =
     live !== null &&
     prev.errorFromTurn &&
-    snapTail.some((s) => s.kind === "banner" && s.failure?.raw === live.raw);
+    failuresLike(live.raw, tailOf(snap.entries)) > failuresLike(live.raw, tailOf(prev.entries));
   const error = persisted ? null : (live ?? snap.error);
   return {
     ...snap,

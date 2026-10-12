@@ -223,11 +223,15 @@ The same recording showed a turn's failure **twice**, two identical boxes one
 under the other. The thread held it once (one `role="error"` message); the
 screen kept the live notice from the `error` event AND the transcript entry the
 re-hydrate after the turn builds from that message — `reconcileSnapshot` kept
-`prev.error` unconditionally. Now, once the re-read thread's latest turn holds a
-failure with the same raw text as the live one, the live notice goes and the
-transcript entry is the notice: the same screen a reload shows. A send failure
-(never persisted as a turn's message) and an identical failure from an EARLIER
-turn leave the live notice alone.
+`prev.error` unconditionally. Now, once the re-read thread holds MORE failures
+with the live one's raw text after its last question than the screen already
+showed there, the live notice goes and the transcript entry is the notice: the
+same screen a reload shows. Counting, not presence (review round 4): queued
+questions persist as Q1, Q2, A1, A2, so one tail holds both turns' endings, and
+two queued turns failing the same way would otherwise lose the second notice
+while its turn was not yet stored. A send failure (never a turn's persisted
+ending) is left alone. The KB test that guards "the error survives `done`" again
+reads a store that is behind; the dedupe has its own test.
 
 ## Risks
 
