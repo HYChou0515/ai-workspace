@@ -16,7 +16,7 @@ consumer can build from the published one with the same code (M13).
 from __future__ import annotations
 
 import copy
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -25,8 +25,10 @@ import msgspec
 from ..apps.catalog import _subset_or_raise, discover_app_slugs, validate_function_coherence
 from ..apps.manifest import AppManifest, patched_app
 from ..apps.profiles import ProfileManifest, list_profiles, patched_profile
+from ..config.dump import is_secret
 from ..config.loader import load_with_provenance
 from ..config.schema import Settings
+from ..workflow.discovery import validate_workflow_profiles
 
 
 def with_keys(document: dict[str, Any], keys: Mapping[str, str]) -> dict[str, Any]:
@@ -61,8 +63,104 @@ def effective_profile(slug: str, name: str, document: dict[str, Any]) -> Profile
     return patched_profile(slug, name, document)
 
 
+#: The config values a running process reads again after an Apply (P5/P6):
+#: the model choices of M3. Anything else in config.yaml is read once at boot,
+#: so the page refuses it rather than store a value that does nothing until a
+#: restart.
+LIVE_CONFIG: tuple[str, ...] = (
+    "llm",
+    # presets, subagent_models and every usage list (`kb_chat`, `infer_modules`, …
+    # — `agents.<purpose>` in config.yaml, `sub_agents` once loaded)
+    "agents",
+    "kb.retrieval_llm",
+    "kb.vlm_llm",
+    "kb.vlm_format_llm",
+    "kb.deck_vlm",
+    "kb.card_drafter",
+    "kb.quality_judge",
+    "kb.wiki.llm",
+    "health.judge_llm",
+    "goal.checker",
+)
+
+
+#: app.json keys read once at boot and held: `resources` becomes the quota
+#: ceilings (`quota/limits.py:resolve_discovered_apps`), keyed by `slug`.
+BOOT_ONLY_APP_KEYS: tuple[str, ...] = ("resources", "slug")
+
+#: The roles whose being on or off decided, at boot, which features exist —
+#: the factories return None for an off role and the feature is not wired.
+ROLES: dict[str, Callable[[Settings], Any]] = {
+    "kb.retrieval_llm": lambda s: s.kb.retrieval_llm,
+    "kb.vlm_llm": lambda s: s.kb.vlm_llm,
+    "kb.vlm_format_llm": lambda s: s.kb.vlm_format_llm or s.kb.retrieval_llm,
+    "kb.deck_vlm": lambda s: s.kb.deck_vlm or s.kb.vlm_llm,
+    "kb.card_drafter": lambda s: s.kb.card_drafter,
+    "kb.quality_judge": lambda s: s.kb.quality_judge or s.kb.retrieval_llm,
+    "kb.wiki.llm": lambda s: s.kb.wiki.llm,
+    "health.judge_llm": lambda s: s.health.judge_llm,
+    "goal.checker": lambda s: s.goal.checker or s.kb.retrieval_llm,
+}
+
+
+def _roles_switched(settings: Settings, default: Settings) -> list[str]:
+    from ..factories import resolve_llm_chain
+
+    return [
+        f"config.{role}: turning a role on or off changes which features the "
+        "server wires when it starts — change it in config.yaml (here you can "
+        "change which model it uses)"
+        for role, ref_of in ROLES.items()
+        if bool(resolve_llm_chain(settings, ref_of(settings)))
+        != bool(resolve_llm_chain(default, ref_of(default)))
+    ]
+
+
+def _secrets_written(patch: Any, path: str = "") -> list[str]:
+    """A secret typed into the text would be stored in the patch — shown in
+    the diff, kept in history (M6). It is set as a key instead."""
+    if isinstance(patch, dict):
+        return [
+            problem
+            for key, value in patch.items()
+            for problem in _secrets_written(value, f"{path}.{key}" if path else str(key))
+        ]
+    if patch is not None and path and is_secret(path):
+        return [f"config.{path}: a secret is set as a key on this page, not in the text"]
+    return []
+
+
+def _outside_live(patch: Any, path: str = "") -> list[str]:
+    """Every path in a config patch that is not live, or that is `null`
+    somewhere other than a preset."""
+    found: list[str] = []
+    for key, value in patch.items() if isinstance(patch, dict) else ():
+        here = f"{path}.{key}" if path else key
+        if value is None:
+            hides_a_preset = here.startswith("agents.presets.") and here.count(".") == 2
+            if not hides_a_preset:
+                found.append(
+                    f"config.{here}: null only hides a preset; to return it to its "
+                    "config.yaml value, remove it from the patch"
+                )
+        elif any(here == live or here.startswith(live + ".") for live in LIVE_CONFIG):
+            continue
+        elif isinstance(value, dict) and any(live.startswith(here + ".") for live in LIVE_CONFIG):
+            found += _outside_live(value, here)
+        else:
+            found.append(
+                f"config.{here}: read only when the server starts, so it is not "
+                "changed here — change it in config.yaml"
+            )
+    return found
+
+
 def problems(
-    document: dict[str, Any], *, config_path: Path | None, env: Mapping[str, str]
+    document: dict[str, Any],
+    *,
+    config_path: Path | None,
+    env: Mapping[str, str],
+    keys: Mapping[str, str] | None = None,
 ) -> list[str]:
     """What stops `document` from running — empty when it can. Apply refuses
     on any (M8). Structure only: a model name that exists nowhere passes, which
@@ -71,14 +169,41 @@ def problems(
     The checks are the platform's own — the loader's, `validate_function_coherence`,
     the profile ⊂ picker subset check — plus one boot never ran: every preset a
     picker or profile names exists, which today is found only when a turn
-    resolves it."""
+    resolves it.
+
+    `keys` are checked with the document as `LiveSettings` builds it, but only
+    the document's own text is checked for a secret typed into it."""
+    written = _secrets_written(document.get("config") or {})
+    document = with_keys(document, keys or {})
+    outside = written + _outside_live(document.get("config") or {})
+    if outside:
+        return outside
     try:
         settings = effective_settings(document, config_path=config_path, env=env)
-    except (ValueError, TypeError) as exc:
+    except (ValueError, TypeError, KeyError, AttributeError) as exc:
         return [f"config: {exc}"]
+    from ..factories import get_infer_modules_run_config
+
+    default = effective_settings({}, config_path=config_path, env=env)
+    switched = _roles_switched(settings, default)
+    if switched:
+        return switched
+    if get_infer_modules_run_config(settings) != get_infer_modules_run_config(default):
+        return [
+            "config.agents.infer_modules: enhancements / reasoning_effort / "
+            "parallelism / collection are read only when the server starts — change "
+            "them in config.yaml"
+        ]
     presets = set(settings.agents.presets)
     found: list[str] = []
     for slug in discover_app_slugs():
+        app_patch = (document.get("apps") or {}).get(slug) or {}
+        found += [
+            f"apps.{slug}.{key}: read only when the server starts — change it in "
+            f"apps/{slug}/app.json"
+            for key in BOOT_ONLY_APP_KEYS
+            if key in app_patch
+        ]
         try:
             app = effective_app(slug, document)
             validate_function_coherence(app)
@@ -91,6 +216,14 @@ def problems(
             for name in picker
             if name not in presets
         ]
+        try:
+            validate_workflow_profiles(
+                slug,
+                profile_of=lambda s, n: effective_profile(s, n, document),
+                profiles=_profiles(slug, document),
+            )
+        except Exception as exc:  # whatever boot would refuse with, named
+            found.append(f"profiles.{slug}: {exc}")
         for profile in _profiles(slug, document):
             where = f"profiles.{slug}.{profile}"
             try:

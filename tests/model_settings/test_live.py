@@ -122,3 +122,33 @@ def test_a_published_version_that_cannot_build_keeps_the_last_good(store, config
     clock.now += 2
 
     assert live.settings() is good
+
+
+def test_without_a_store_it_runs_with_the_boot_settings_until_one_is_attached(store, config):
+    # The store's models are registered after `spec.apply`, inside create_app —
+    # later than the composition that hands `live` to every consumer.
+    clock = Clock()
+    boot = load(config_path=config, env={})
+    live = LiveSettings(None, config_path=config, env={}, boot=boot, clock=clock)
+    store.publish(MINI, by="root")
+    assert live.settings() is boot
+
+    live.attach(store)
+    assert live.settings().agents.presets["openai-mini"].model == "openai/gpt-4.1-mini"
+
+
+def test_a_derived_value_is_built_once_per_version(store, config):
+    clock, made = Clock(), []
+    live = _live(store, config, clock)
+
+    def make(settings):
+        made.append(settings.agents.presets["openai-mini"].model)
+        return object()
+
+    first = live.derive("x", make)
+    assert live.derive("x", make) is first
+    store.publish(MINI, by="root")
+    clock.now += 2
+    assert live.derive("x", make) is not first
+    assert made[-1] == "openai/gpt-4.1-mini"
+    assert len(made) == 2

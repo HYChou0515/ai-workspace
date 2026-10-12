@@ -91,3 +91,104 @@ def test_what_cannot_run_is_named(config, document, named):
     found = problems(document, config_path=config, env={})
 
     assert any(named in problem for problem in found), found
+
+
+@pytest.mark.parametrize(
+    "document",
+    [
+        # a value nothing re-reads after boot: it would be stored, shown as in
+        # force, and do nothing until a restart — refused, pointing at config.yaml
+        {"config": {"server": {"port": 1}}},
+        {"config": {"kb": {"retrieval": {"context_chars": 9}}}},
+        # a whole live parent replaced is the same as touching every key under it
+        {"config": {"kb": "x"}},
+        # null hides a preset (M12) and means nothing else: anywhere else it would
+        # delete a key the loader needs — a value goes back to its default by
+        # leaving the patch
+        {"config": {"kb": {"wiki": {"llm": None}}}},
+        # the infer_modules run knobs ride on a live list but are read at boot
+        {
+            "config": {
+                "agents": {"infer_modules": [{"preset": "infer-modules-default", "parallelism": 2}]}
+            }
+        },
+    ],
+)
+def test_a_value_read_only_at_boot_is_refused(config, document):
+    found = problems(document, config_path=config, env={})
+
+    assert any("config.yaml" in problem for problem in found), found
+
+
+def test_every_model_choice_can_be_changed_here(config):
+    document = {
+        "config": {
+            "llm": {"base_url": "http://gw:4000"},
+            "agents": {
+                "presets": {"openai-mini": {"model": "openai/gpt-4.1-mini"}},
+                "subagent_models": [],
+                "kb_chat": [{"preset": "openai-mini", "name": "KB · Mini"}],
+            },
+            "kb": {
+                "retrieval_llm": {"preset": "openai-mini"},
+                "card_drafter": {"preset": "openai-mini"},
+            },
+        }
+    }
+
+    assert problems(document, config_path=config, env={}) == []
+
+
+def test_turning_a_role_on_is_refused(config):
+    # Whether a role is on decided which features were wired at boot (M17): the
+    # page changes which model a role uses, never whether it exists. (Turning
+    # one off needs `null`, refused already — M19.)
+    found = problems(
+        {"config": {"health": {"judge_llm": {"preset": "openai-mini"}}}},
+        config_path=config,
+        env={},
+    )
+
+    assert any("health.judge_llm" in p and "config.yaml" in p for p in found), found
+
+
+@pytest.mark.parametrize(
+    ("document", "named"),
+    [
+        # resolved once at boot into the quota ceilings (quota/limits.py) and held
+        ({"apps": {"playground": {"resources": {"cpu": "8"}}}}, "apps.playground.resources"),
+        # the key that boot dict, and the directory, are found under
+        ({"apps": {"playground": {"slug": "other"}}}, "apps.playground.slug"),
+        # what boot refuses (validate_workflow_profiles): a workflow with no run.py
+        (
+            {
+                "profiles": {
+                    "playground": {
+                        "multi": {"workflows": [{"id": "no-such-workflow", "title": "X"}]}
+                    }
+                }
+            },
+            "no-such-workflow",
+        ),
+    ],
+)
+def test_what_an_app_reads_only_at_boot_is_refused(config, document, named):
+    found = problems(document, config_path=config, env={})
+
+    assert any(named in problem for problem in found), found
+
+
+SECRET_TEXT = {"config": {"agents": {"presets": {"kb-default": {"llm": {"api_key": "sk-typed"}}}}}}
+
+
+def test_a_secret_typed_into_the_text_is_refused(config):
+    # It would sit in the patch — in the diff, in history (M6).
+    found = problems(SECRET_TEXT, config_path=config, env={})
+
+    assert any("api_key" in p and "key" in p for p in found), found
+
+
+def test_the_same_secret_set_as_a_key_is_fine(config):
+    keys = {"config.agents.presets.kb-default.llm.api_key": "sk-key"}
+
+    assert problems({}, config_path=config, env={}, keys=keys) == []

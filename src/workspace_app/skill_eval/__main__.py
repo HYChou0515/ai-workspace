@@ -124,10 +124,21 @@ def _resolve_agent(app_slug: str, profile: str, preset: str | None, config_path:
     ``## Available skills`` index, without which ``read_skill`` triggering cannot
     be measured at all.
     """
-    from ..config.loader import load
-    from ..factories import get_app_catalog
+    import os
 
-    settings = load(config_path=config_path)
+    from ..config.loader import load
+    from ..factories import get_app_catalog, get_spec
+    from ..model_settings.consumers import published_settings
+
+    boot = load(config_path=config_path)
+    # plan-model-settings P6: what the settings page published is part of the
+    # turn production runs, so it is part of the turn measured here.
+    settings = published_settings(
+        boot,
+        config_path=config_path,
+        env=os.environ,
+        spec=get_spec(boot, get_user_id=lambda: boot.server.default_user),
+    )
     known = ", ".join(sorted(settings.agents.presets))
     if preset is not None and preset not in settings.agents.presets:
         raise SystemExit(f"unknown preset {preset!r}. config knows: {known}")

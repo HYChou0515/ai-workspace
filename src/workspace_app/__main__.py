@@ -62,6 +62,8 @@ from workspace_app.factories import (
     get_wiki_endpoint,
     resolve_subagent_models,
 )
+from workspace_app.model_settings.consumers import live_agent_config_catalog
+from workspace_app.model_settings.live import LiveSettings
 from workspace_app.monitor import SpecstarMonitor
 from workspace_app.observability.boot import boot_step
 from workspace_app.observability.setup import install_llm_logging
@@ -98,7 +100,9 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return p.parse_args(argv)
 
 
-def build_app(settings: Settings, *, config_dir: Path | None) -> FastAPI:
+def build_app(
+    settings: Settings, *, config_dir: Path | None, live: LiveSettings | None = None
+) -> FastAPI:
     """The API's composition root: every model registered, every service
     wired, nothing served. ``main`` serves what this returns; the ``blob-gc``
     worker (`workspace_app.worker`) consumes from it WITHOUT serving, because
@@ -211,13 +215,13 @@ def build_app(settings: Settings, *, config_dir: Path | None) -> FastAPI:
     with boot_step("init embedder"):
         embedder = get_embedder(settings)
     with boot_step("init KB LLM"):
-        kb_llm = get_kb_llm(settings)
+        kb_llm = get_kb_llm(settings, live=live)
     with boot_step("init card-drafter LLM"):
-        card_drafter_llm = get_card_drafter_llm(settings)
+        card_drafter_llm = get_card_drafter_llm(settings, live=live)
     with boot_step("init KB quality judge LLM"):
-        quality_judge_llm = get_kb_quality_judge_llm(settings)
+        quality_judge_llm = get_kb_quality_judge_llm(settings, live=live)
     with boot_step("init sanity judge LLM"):
-        sanity_judge_llm = get_sanity_judge_llm(settings)
+        sanity_judge_llm = get_sanity_judge_llm(settings, live=live)
     # #56: the wiki agents' model/endpoint resolve from kb.wiki.llm (the
     # preset-reference pattern), not the old flat runner.wiki_*. Empty
     # ⇒ create_app's wiki configs keep their in-code default model.
@@ -305,11 +309,21 @@ def build_app(settings: Settings, *, config_dir: Path | None) -> FastAPI:
                 if settings.server.turn_reclaim_interval_sec > 0
                 else None
             ),
-            runner=get_runner(settings),
-            agent_config_catalog=get_agent_config_catalog(settings, config_dir=config_dir),
+            runner=get_runner(settings, live=live),
+            # plan-model-settings P5: with `live`, the catalog follows the
+            # published settings (KB chat list, sub-agent defaults, presets).
+            agent_config_catalog=(
+                get_agent_config_catalog(settings, config_dir=config_dir)
+                if live is None
+                else live_agent_config_catalog(live, config_dir)
+            ),
             # plan-subagent-model-choice: the curated engines a run_agent call
             # may pick; empty (unset knob) ⇒ the tool grows no `model` argument.
-            subagent_models=resolve_subagent_models(settings),
+            subagent_models=(
+                resolve_subagent_models(settings)
+                if live is None
+                else lambda: live.derive("subagent-models", resolve_subagent_models)
+            ),
             kb_embedder=embedder,
             # P3.0: code-specialised embedder; None ⇒ code collections fall
             # back to the default embedder.
@@ -320,7 +334,7 @@ def build_app(settings: Settings, *, config_dir: Path | None) -> FastAPI:
             kb_pipeline=get_doc_pipeline(settings, embedder),
             # Issue #39: custom parsers (kb.parsers) + VLM-backed bundled
             # parsers (kb.vlm_llm), minus kb.parsers_disabled.
-            kb_parser_registry=get_parser_registry(settings),
+            kb_parser_registry=get_parser_registry(settings, live=live),
             kb_image_fetcher=get_image_fetcher(settings),
             # Issue #51: LLM sanity checks — fast set blocks boot, full
             # capability round runs async; FE re-runs via /health/checks.
@@ -331,8 +345,12 @@ def build_app(settings: Settings, *, config_dir: Path | None) -> FastAPI:
             # Model-sanity battery (Diagnostics matrix): a live behavioural probe
             # per configured chat model × reasoning level, on the same ILlm seam
             # kb_search uses.
-            sanity_llm_factory=get_sanity_llm_factory(settings),
-            sanity_models=get_sanity_models(settings),
+            sanity_llm_factory=get_sanity_llm_factory(settings, live=live),
+            sanity_models=(
+                get_sanity_models(settings)
+                if live is None
+                else lambda: live.derive("sanity-models", get_sanity_models)
+            ),
             sanity_judge_llm=sanity_judge_llm,
             # P2: chat → knowledge insight extraction (None when no KB llm wired).
             kb_chat_pipeline=get_chat_pipeline(settings, embedder, kb_llm),
@@ -341,8 +359,8 @@ def build_app(settings: Settings, *, config_dir: Path | None) -> FastAPI:
             quality_judge_llm=quality_judge_llm,
             # #112: the VLM describer the read_image agent tool uses (shared with
             # the VLM-backed ingestion parsers); None when kb.vlm_llm is unset.
-            vlm_describer=get_kb_describer(settings),
-            deck_vlm=get_designed_pptx_vlm(settings),
+            vlm_describer=get_kb_describer(settings, live=live),
+            deck_vlm=get_designed_pptx_vlm(settings, live=live),
             kb_retrieval_enhancements=settings.kb.retrieval.enhancements,
             kb_quality_weight=settings.kb.retrieval.quality_weight,
             kb_quality_floor=settings.kb.retrieval.quality_floor,
@@ -356,7 +374,7 @@ def build_app(settings: Settings, *, config_dir: Path | None) -> FastAPI:
             # #334: ceiling for the composer's per-message kb_search-count pick.
             kb_max_searches_ceiling=settings.kb.max_searches_ceiling,
             # #613 P3: the turn-end goal checker + the hard auto-continue budget.
-            goal_checker_llm=get_goal_checker_llm(settings),
+            goal_checker_llm=get_goal_checker_llm(settings, live=live),
             goal_max_rounds=settings.goal.max_rounds,
             goal_offhours=settings.goal.offhours,  # #615
             # #506: reconcile / cluster-sweeper thresholds (dedup dup proposals + Qs).
@@ -379,6 +397,9 @@ def build_app(settings: Settings, *, config_dir: Path | None) -> FastAPI:
             wiki_model=wiki_model or "",
             wiki_llm_base_url=wiki_llm_base_url or "",
             wiki_llm_api_key=wiki_llm_api_key or "",
+            wiki_endpoint=(
+                None if live is None else lambda: live.derive("wiki", get_wiki_endpoint)
+            ),
             message_queue_factory=build_message_queue_factory(settings),
             # #312: all-in-one by default; a pod-split deploy sets
             # server.run_consumers: false on the API so it's a pure producer and
@@ -436,6 +457,7 @@ def build_app(settings: Settings, *, config_dir: Path | None) -> FastAPI:
                 if settings.server.workflow_step_timeout_sec > 0
                 else None
             ),
+            live=live,
         )
     if packages:
         names = ", ".join(f"{p.name}({','.join(c.name for c in p.commands)})" for p in packages)
@@ -480,7 +502,10 @@ def main() -> None:
         )
     else:
         print("  llm log: off (set WORKSPACE_LLM_LOG=1 or observability.llm_log.enabled: true)")
-    app = build_app(settings, config_dir=config_dir)
+    # plan-model-settings P4: this process's view of what the settings page
+    # publishes — read from the same config file and environment as above.
+    live = LiveSettings(None, config_path=args.config, env=os.environ, boot=settings)
+    app = build_app(settings, config_dir=config_dir, live=live)
     with boot_step("start HTTP server (uvicorn)"):
         serve(
             app,

@@ -17,7 +17,7 @@ import threading
 import time
 from collections.abc import Callable, Mapping
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 
 from msgspec import Struct
 
@@ -26,6 +26,8 @@ from .effective import effective_settings, with_keys
 from .store import SettingsStore
 
 logger = logging.getLogger(__name__)
+
+T = TypeVar("T")
 
 #: How long a process trusts the version string it last read.
 VERSION_TTL_S = 1.0
@@ -59,8 +61,35 @@ class LiveSettings:
         self._clock = clock
         self._on_build = on_build
         self._lock = threading.Lock()
+        self._boot = boot
         self._snapshot = Snapshot(version=None, document={}, settings=boot)
         self._checked_at: float | None = None
+        self._derived: dict[str, tuple[Snapshot, Any]] = {}
+        self._derive_lock = threading.Lock()
+
+    def attach(self, store: SettingsStore) -> None:
+        """Where the published versions are read from. The store's models are
+        registered after `spec.apply`, later than the composition that hands
+        this object to every consumer — until then they run on `boot`."""
+        with self._lock:
+            self._store = store
+            self._checked_at = None
+
+    @property
+    def config_path(self) -> Path | None:
+        """The config file the settings are built over — what the page checks a
+        draft against, so a check and a build cannot disagree."""
+        return self._config_path
+
+    @property
+    def env(self) -> Mapping[str, str]:
+        return self._env
+
+    @property
+    def boot(self) -> Settings:
+        """The deploy defaults: config.yaml over the bundled settings, before
+        anything published — what the page shows as "default"."""
+        return self._boot
 
     def settings(self) -> Settings:
         return self.snapshot().settings
@@ -72,6 +101,20 @@ class LiveSettings:
 
     def version(self) -> str | None:
         return self.snapshot().version
+
+    def derive(self, key: str, make: Callable[[Settings], T]) -> T:
+        """`make(settings)`, built once per published version: what a consumer
+        builds from the settings (a catalog, failover chains) is rebuilt when an
+        Apply lands and handed back unchanged otherwise."""
+        snapshot = self.snapshot()
+        with self._derive_lock:
+            held = self._derived.get(key)
+            if held is not None and held[0] is snapshot:
+                return held[1]
+        value = make(snapshot.settings)
+        with self._derive_lock:
+            self._derived[key] = (snapshot, value)
+        return value
 
     def snapshot(self) -> Snapshot:
         with self._lock:

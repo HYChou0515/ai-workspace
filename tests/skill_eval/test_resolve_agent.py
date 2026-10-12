@@ -25,6 +25,10 @@ PRESETS = {
 def _wire(monkeypatch, resolved: AgentConfig) -> None:
     settings = SimpleNamespace(agents=SimpleNamespace(presets=PRESETS))
     monkeypatch.setattr("workspace_app.config.loader.load", lambda config_path=None: settings)
+    monkeypatch.setattr("workspace_app.factories.get_spec", lambda s, **kw: None)
+    monkeypatch.setattr(
+        "workspace_app.model_settings.consumers.published_settings", lambda s, **kw: s
+    )
     catalog = SimpleNamespace(resolve=lambda **kw: resolved)
     monkeypatch.setattr("workspace_app.factories.get_app_catalog", lambda s: catalog)
 

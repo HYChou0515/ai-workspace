@@ -1,0 +1,198 @@
+"""docs/plan-model-settings.md P7 — the page's routes, through the app."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+from fastapi.testclient import TestClient
+
+from workspace_app.api import ScriptedAgentRunner, create_app
+from workspace_app.apps import overlay
+from workspace_app.config.loader import load
+from workspace_app.filestore.memory import MemoryFileStore
+from workspace_app.kb.chunker import FixedTokenChunker
+from workspace_app.kb.embedder import HashEmbedder
+from workspace_app.model_settings.consumers import live_agent_config_catalog
+from workspace_app.model_settings.live import LiveSettings
+from workspace_app.resources import make_spec
+from workspace_app.resources.kb import EMBED_DIM
+from workspace_app.sandbox.mock import MockSandbox
+
+ROOT, ALICE = "root", "alice"
+BASE = "/api/admin/model-settings"
+KB_2 = {"config": {"agents": {"presets": {"kb-default": {"model": "openai/kb-2"}}}}}
+API_KEY = "config.agents.presets.kb-default.llm.api_key"
+
+
+class Clock:
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
+class Page:
+    def __init__(self, tmp_path: Path) -> None:
+        config = tmp_path / "config.yaml"
+        config.write_text("server:\n  port: 9090\n", encoding="utf-8")
+        self.clock = Clock()
+        self.live = LiveSettings(
+            None,
+            config_path=config,
+            env={},
+            boot=load(config_path=config, env={}),
+            clock=self.clock,
+        )
+        self.user = ROOT
+        app = create_app(
+            spec=make_spec(),
+            get_user_id=lambda: self.user,
+            superusers=frozenset({ROOT}),
+            sandbox=MockSandbox(),
+            filestore=MemoryFileStore(),
+            runner=ScriptedAgentRunner([]),
+            kb_embedder=HashEmbedder(dim=EMBED_DIM),
+            kb_chunker=FixedTokenChunker(max_tokens=3, overlap_tokens=1),
+            agent_config_catalog=live_agent_config_catalog(self.live),
+            live=self.live,
+        )
+        self.client = TestClient(app)
+
+    def kb_model(self) -> str:
+        self.clock.now += 2
+        return self.client.get("/api/kb/agent").json()[0]["model"]
+
+
+@pytest.fixture
+def page(tmp_path: Path):
+    yield Page(tmp_path)
+    overlay.set_source(None)
+
+
+def test_the_page_is_not_there_for_anyone_else(page):
+    page.user = ALICE
+
+    assert page.client.get(BASE).status_code == 404
+    assert page.client.put(f"{BASE}/draft", json={"patch": KB_2}).status_code == 404
+    assert page.client.post(f"{BASE}/apply").status_code == 404
+    assert page.client.put(f"{BASE}/keys", json={"path": API_KEY, "value": "x"}).status_code == 404
+
+
+def test_the_page_shows_the_defaults_and_nothing_published(page):
+    body = page.client.get(BASE).json()
+
+    assert body["version"] is None and body["draft"] == {} and body["published"] == {}
+    assert "kb-default" in body["defaults"]["config"]["agents"]["presets"]
+    assert "playground" in body["defaults"]["apps"]
+
+
+def test_a_saved_draft_changes_nothing_running(page):
+    before = page.kb_model()
+
+    assert page.client.put(f"{BASE}/draft", json={"patch": KB_2}).json() == {"problems": []}
+
+    assert page.client.get(BASE).json()["draft"] == KB_2
+    assert page.kb_model() == before
+
+
+def test_apply_puts_the_draft_in_force(page):
+    page.client.put(f"{BASE}/draft", json={"patch": KB_2})
+
+    applied = page.client.post(f"{BASE}/apply").json()
+
+    assert applied["by"] == ROOT and applied["version"]
+    assert page.client.get(BASE).json()["version"] == applied["version"]
+    assert page.kb_model() == "openai/kb-2"
+
+
+def test_a_draft_that_cannot_run_is_refused_and_nothing_changes(page):
+    bad = {"config": {"agents": {"presets": {"kb-default": {"fallbacks": ["x9"]}}}}}
+    page.client.put(f"{BASE}/draft", json={"patch": bad})
+
+    response = page.client.post(f"{BASE}/apply")
+
+    assert response.status_code == 422
+    assert any("x9" in p for p in response.json()["detail"]["problems"])
+    assert page.client.get(BASE).json()["version"] is None
+
+
+def test_check_names_the_problem_as_you_type(page):
+    found = page.client.post(f"{BASE}/check", json={"patch": {"config": {"server": {}}}}).json()
+
+    assert any("config.server" in p for p in found["problems"])
+
+
+def test_history_and_rollback(page):
+    page.client.put(f"{BASE}/draft", json={"patch": KB_2})
+    first = page.client.post(f"{BASE}/apply").json()
+    later = {"config": {"agents": {"presets": {"kb-default": {"model": "openai/kb-3"}}}}}
+    page.client.put(f"{BASE}/draft", json={"patch": later})
+    page.client.post(f"{BASE}/apply")
+    assert page.kb_model() == "openai/kb-3"
+
+    rolled = page.client.post(f"{BASE}/rollback", json={"version": first["version"]}).json()
+
+    assert rolled["version"] == first["version"]
+    assert page.kb_model() == "openai/kb-2"
+    # the draft follows, or the next Apply would re-publish what was rolled back
+    assert page.client.get(BASE).json()["draft"] == KB_2
+    history = page.client.get(f"{BASE}/history").json()
+    assert [h["patch"] for h in history] == [KB_2, later, KB_2]
+
+
+def test_rollback_to_a_version_that_never_was_is_404(page):
+    assert page.client.post(f"{BASE}/rollback", json={"version": "nope"}).status_code == 404
+
+
+def test_a_key_is_written_never_read_and_in_force_after_apply(page):
+    assert (
+        page.client.put(f"{BASE}/keys", json={"path": API_KEY, "value": "sk-live-9876"}).status_code
+        == 204
+    )
+    body = page.client.get(BASE).json()
+    assert body["keys"] == {API_KEY: "…9876"}
+    assert "sk-live-9876" not in page.client.get(BASE).text
+    page.clock.now += 2
+    assert page.live.settings().agents.presets["kb-default"].llm.api_key != "sk-live-9876"
+
+    applied = page.client.post(f"{BASE}/apply").json()
+
+    assert applied["keys_changed"] == [API_KEY]
+    assert "sk-live-9876" not in page.client.get(f"{BASE}/history").text
+    page.clock.now += 2
+    assert page.live.settings().agents.presets["kb-default"].llm.api_key == "sk-live-9876"
+
+
+def test_a_key_where_no_key_belongs_is_refused(page):
+    response = page.client.put(
+        f"{BASE}/keys", json={"path": "config.agents.presets.kb-default.model", "value": "x"}
+    )
+
+    assert response.status_code == 422
+
+
+def test_a_cleared_key_is_gone(page):
+    page.client.put(f"{BASE}/keys", json={"path": API_KEY, "value": "sk-live-9876"})
+
+    assert page.client.delete(f"{BASE}/keys", params={"path": API_KEY}).status_code == 204
+
+    assert page.client.get(BASE).json()["keys"] == {}
+
+
+def test_test_connection_calls_the_draft_not_what_is_in_force(page, monkeypatch):
+    from workspace_app.kb.llm import LitellmLlm
+
+    monkeypatch.setattr(LitellmLlm, "stream", lambda self, prompt: iter([(self._model, False)]))
+    page.client.put(f"{BASE}/draft", json={"patch": KB_2})
+
+    result = page.client.post(f"{BASE}/test-connection", json={"preset": "kb-default"}).json()
+
+    assert result == {
+        "ok": True,
+        "model": "openai/kb-2",
+        "ms": result["ms"],
+        "reply": "openai/kb-2",
+        "error": "",
+    }

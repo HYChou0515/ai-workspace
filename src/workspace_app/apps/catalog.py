@@ -17,7 +17,7 @@ via ``factories.get_app_catalog`` and ``validate_all_apps`` runs at startup
 
 from __future__ import annotations
 
-from collections.abc import Collection, Iterable, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from importlib import resources
 from typing import TYPE_CHECKING
 
@@ -309,8 +309,20 @@ def _compose_prompt(
 
 
 class AppCatalog:
-    def __init__(self, *, presets: Mapping[str, Preset]) -> None:
-        self._presets = dict(presets)
+    def __init__(
+        self, *, presets: Mapping[str, Preset] | Callable[[], Mapping[str, Preset]]
+    ) -> None:
+        # plan-model-settings P5: a function is asked on each resolve, so a
+        # preset published from the settings page is there on the next turn.
+        if isinstance(presets, Mapping):
+            fixed = dict(presets)
+            self._presets_of: Callable[[], Mapping[str, Preset]] = lambda: fixed
+        else:
+            self._presets_of = presets
+
+    @property
+    def _presets(self) -> Mapping[str, Preset]:
+        return self._presets_of()
 
     def resolve(
         self,
@@ -354,12 +366,13 @@ class AppCatalog:
             if attached_preset in allowed
             else (prof.default_preset or (allowed[0] if allowed else ""))
         )
-        if not chosen or chosen not in self._presets:
+        presets = self._presets  # once: one resolve, one published version
+        if not chosen or chosen not in presets:
             raise ValueError(
                 f"app {app_slug!r} profile {profile!r}: chosen preset {chosen!r} is "
-                f"not declared in agents.presets {sorted(self._presets)}"
+                f"not declared in agents.presets {sorted(presets)}"
             )
-        preset = self._presets[chosen]
+        preset = presets[chosen]
 
         # skills — single source: `effective_item_skills` computes each available
         # skill's default_on (the profile's `skills` gates the declared shared set)

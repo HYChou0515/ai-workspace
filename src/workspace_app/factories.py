@@ -22,6 +22,7 @@ import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from specstar import BackendBinding, BackendConfig, ConnectionProfile, SpecStar
@@ -29,8 +30,11 @@ from specstar import BackendBinding, BackendConfig, ConnectionProfile, SpecStar
 from workspace_app.resources import make_spec
 
 from .agent.config_catalog import AgentConfigCatalog
+
+if TYPE_CHECKING:
+    from .model_settings.live import LiveSettings
 from .api.env_provider import IEnvProvider
-from .api.litellm_runner import LitellmAgentRunner
+from .api.litellm_runner import LitellmAgentRunner, RunnerEndpoints
 from .api.notification_delivery import INotificationChannel
 from .api.request_env import IRequestEnv
 from .api.runner import AgentRunner
@@ -437,20 +441,38 @@ def get_sandbox_filestore(
             raise ValueError(f"unknown sandbox.durable.kind: {other!r}")
 
 
-def get_runner(settings: Settings) -> AgentRunner:
-    """Production agent runner. Reads top-level `runner` / `llm`
-    settings for the runner-wide defaults; per-preset endpoint overrides
-    (set via `agents.presets.<name>.llm.*`) ride on each AgentConfig and
-    win per turn (see `LitellmAgentRunner._build_agent`)."""
-    # #196 busy-aware failover for the agent / sub-agent chat path: build the
-    # per-config chains from every preset that declares `fallbacks`, keyed by the
-    # primary endpoint (model, base_url) so a turn's config finds its chain
-    # without touching the persisted AgentConfig.
+def _fallback_chains(settings: Settings) -> dict[tuple[str, str | None], list[LlmEndpoint]]:
+    """#196 busy-aware failover for the agent / sub-agent chat path: the
+    per-config chains from every preset that declares `fallbacks`, keyed by the
+    primary endpoint (model, base_url) so a turn's config finds its chain
+    without touching the persisted AgentConfig."""
     chains: dict[tuple[str, str | None], list[LlmEndpoint]] = {}
     for name in settings.agents.presets:
         chain = resolve_llm_chain(settings, RetrievalLlmRef(preset=name))
         if len(chain) >= 2:
             chains[(chain[0].model, chain[0].base_url)] = chain
+    return chains
+
+
+def _runner_endpoints(settings: Settings) -> RunnerEndpoints:
+    return RunnerEndpoints(
+        settings.llm.base_url or None,
+        settings.llm.api_key or None,
+        _fallback_chains(settings) or None,
+    )
+
+
+def get_runner(settings: Settings, *, live: LiveSettings | None = None) -> AgentRunner:
+    """Production agent runner. Reads top-level `runner` / `llm`
+    settings for the runner-wide defaults; per-preset endpoint overrides
+    (set via `agents.presets.<name>.llm.*`) ride on each AgentConfig and
+    win per turn (see `LitellmAgentRunner._build_agent`).
+
+    With `live` (plan-model-settings P5) the default endpoint and the failover
+    chains are read from the published settings on each use, rebuilt once per
+    version; the rest (retries, deadlines) stays as booted."""
+    static = _runner_endpoints(settings)
+    endpoints = None if live is None else (lambda: live.derive("runner", _runner_endpoints))
     # Per-user token seam (behaviour-preserving v1): each turn's per-endpoint key
     # is resolved through a token service on the acting user's behalf. V1
     # PassthroughTokenService returns every endpoint's own key unchanged (there is
@@ -460,10 +482,15 @@ def get_runner(settings: Settings) -> AgentRunner:
     return LitellmAgentRunner(
         max_retries=settings.runner.max_retries,
         max_turns=settings.runner.max_turns,
-        base_url=settings.llm.base_url or None,
-        api_key=settings.llm.api_key or None,
-        fallback_chains=chains or None,
-        cooldown_registry=get_cooldown_registry() if chains else None,
+        base_url=static.base_url,
+        api_key=static.api_key,
+        fallback_chains=static.fallback_chains,
+        # Live settings can add a chain after boot, so the registry is always
+        # there when they are wired; the process-wide singleton costs nothing.
+        cooldown_registry=(
+            get_cooldown_registry() if static.fallback_chains or live is not None else None
+        ),
+        endpoints=endpoints,
         # #493: bounds used to exist ONLY inside a >=2-endpoint FallbackModel, so
         # the default single-endpoint deploy had none and a silent provider hung
         # the turn indefinitely. The first-event bound is `total_deadline_s` (the
@@ -611,7 +638,9 @@ def get_chat_pipeline(
     return build_chat_pipeline(llm=llm, embedder=embedder)
 
 
-def get_parser_registry(settings: Settings):  # -> ParserRegistry
+def get_parser_registry(
+    settings: Settings, *, live: LiveSettings | None = None
+):  # -> ParserRegistry
     """Build the ``ParserRegistry`` the Ingestor uses to route uploads
     to parsers (issue #39).
 
@@ -674,7 +703,7 @@ def get_parser_registry(settings: Settings):  # -> ParserRegistry
     # Vision wiring: one shared VlmDescriber (or None when kb.vlm_llm
     # is disabled — VlmImageParser then never matches; PdfParser /
     # PptxParser degrade to text-layer-only pages).
-    describer = get_kb_describer(settings)
+    describer = get_kb_describer(settings, live=live)
     # Bundled parsers — fixed order, most-specific extensions first.
     # `kb.parsers_disabled` (class names) skips bundled entries: with
     # all-matching dispatch (Q8b) a custom parser runs ALONGSIDE a
@@ -688,7 +717,7 @@ def get_parser_registry(settings: Settings):  # -> ParserRegistry
         # ChatExportParser before JsonParser purely for readability —
         # all_matching runs every match; JsonParser itself declines
         # `.chat.json` so a conversation never shreds into key-path lines.
-        ChatExportParser(get_kb_llm(settings)),
+        ChatExportParser(get_kb_llm(settings, live=live)),
         JsonParser(),
         CsvParser(),
         ExcelParser(),
@@ -758,7 +787,41 @@ def _llm_from_chain(chain: list[LlmEndpoint]) -> ILlm | None:
     )
 
 
-def get_kb_llm(settings: Settings) -> ILlm | None:
+def _role_llm(
+    settings: Settings,
+    ref_of: Callable[[Settings], RetrievalLlmRef | None],
+    *,
+    live: LiveSettings | None,
+    role: str,
+) -> ILlm | None:
+    """A role's ILlm. With `live` (plan-model-settings P5) its endpoints are
+    read from the published settings on each call; a role off at boot stays
+    off, because that decided which features were wired."""
+    chain = resolve_llm_chain(settings, ref_of(settings))
+    if live is None or not chain:
+        return _llm_from_chain(chain)
+    from .model_settings.consumers import live_llm
+
+    return live_llm(live, role, lambda s: resolve_llm_chain(s, ref_of(s)), _llm_from_chain)
+
+
+def _role_vlm(
+    settings: Settings,
+    ref_of: Callable[[Settings], RetrievalLlmRef | None],
+    *,
+    live: LiveSettings | None,
+    role: str,
+):  # -> IVlm | None
+    """`_role_llm` for a vision role."""
+    chain = resolve_llm_chain(settings, ref_of(settings))
+    if live is None or not chain:
+        return _vlm_from_chain(chain)
+    from .model_settings.consumers import live_vlm
+
+    return live_vlm(live, role, lambda s: resolve_llm_chain(s, ref_of(s)), _vlm_from_chain)
+
+
+def get_kb_llm(settings: Settings, *, live: LiveSettings | None = None) -> ILlm | None:
     """KB retrieval LLM (multi-query / HyDE / rerank).
 
     `kb.retrieval_llm` is a usage-entry reference to a named preset
@@ -773,20 +836,22 @@ def get_kb_llm(settings: Settings) -> ILlm | None:
     different provider from the agent chat by editing the referenced
     preset (or pointing the ref at a new one) — no parallel flat config
     block to keep in sync."""
-    return _llm_from_chain(resolve_llm_chain(settings, settings.kb.retrieval_llm))
+    return _role_llm(settings, lambda s: s.kb.retrieval_llm, live=live, role="kb.retrieval_llm")
 
 
-def get_card_drafter_llm(settings: Settings) -> ILlm | None:
+def get_card_drafter_llm(settings: Settings, *, live: LiveSettings | None = None) -> ILlm | None:
     """The LLM that drafts context cards from documents (#175 自動 context card).
 
     `kb.card_drafter` is a usage-entry reference to a named preset (default
     `card-drafter`), resolved through the same cascade + failover chain as every
     other role. `None` ⇒ card drafting disabled (the generation feature stays
     mounted but the drafter proposes nothing)."""
-    return _llm_from_chain(resolve_llm_chain(settings, settings.kb.card_drafter))
+    return _role_llm(settings, lambda s: s.kb.card_drafter, live=live, role="kb.card_drafter")
 
 
-def get_kb_quality_judge_llm(settings: Settings) -> ILlm | None:
+def get_kb_quality_judge_llm(
+    settings: Settings, *, live: LiveSettings | None = None
+) -> ILlm | None:
     """The LLM-as-judge that scores a document's quality as a knowledge source at
     index time (#105). Resolution: `kb.quality_judge` if set, else reuse
     `kb.retrieval_llm` (a deploy that already wired retrieval gets doc scoring for
@@ -795,11 +860,15 @@ def get_kb_quality_judge_llm(settings: Settings) -> ILlm | None:
     stay un-scored = neutral, search ranking unaffected). Mirrors
     `get_kb_vlm_formatter`'s fallback; inherits the referenced preset's failover
     chain like every other role."""
-    ref = settings.kb.quality_judge or settings.kb.retrieval_llm
-    return _llm_from_chain(resolve_llm_chain(settings, ref))
+    return _role_llm(
+        settings,
+        lambda s: s.kb.quality_judge or s.kb.retrieval_llm,
+        live=live,
+        role="kb.quality_judge",
+    )
 
 
-def get_goal_checker_llm(settings: Settings) -> ILlm | None:
+def get_goal_checker_llm(settings: Settings, *, live: LiveSettings | None = None) -> ILlm | None:
     """#613 P3: the cheap LLM that judges "does the chat's goal condition hold?"
     after each turn. Resolution: `goal.checker` if set, else reuse
     `kb.retrieval_llm` (a deploy with a cheap retrieval model gets goal checking
@@ -807,11 +876,12 @@ def get_goal_checker_llm(settings: Settings) -> ILlm | None:
     unset ⇒ `None` = auto-continue off — and the /goal routes DISCLOSE that on
     the wire (`checker_enabled`) so a set goal is never a silently dead knob.
     Inherits the referenced preset's failover chain like every other role."""
-    ref = settings.goal.checker or settings.kb.retrieval_llm
-    return _llm_from_chain(resolve_llm_chain(settings, ref))
+    return _role_llm(
+        settings, lambda s: s.goal.checker or s.kb.retrieval_llm, live=live, role="goal.checker"
+    )
 
 
-def get_sanity_judge_llm(settings: Settings) -> ILlm | None:
+def get_sanity_judge_llm(settings: Settings, *, live: LiveSettings | None = None) -> ILlm | None:
     """The LLM-as-judge for the Diagnostics sanity matrix (#231): scores each cell
     pass/fail (ai_grade/ai_note) and writes the per-model fitness verdict.
 
@@ -819,10 +889,10 @@ def get_sanity_judge_llm(settings: Settings) -> ILlm | None:
     + failover chain as every other role; a preset with `fallbacks` becomes a
     busy-aware `FallbackLlm` (#196). `None` ⇒ AI scoring off (the ai columns stay
     empty, no verdict). Should be a capable model distinct from those under test."""
-    return _llm_from_chain(resolve_llm_chain(settings, settings.health.judge_llm))
+    return _role_llm(settings, lambda s: s.health.judge_llm, live=live, role="health.judge_llm")
 
 
-def get_kb_vlm_formatter(settings: Settings) -> ILlm | None:
+def get_kb_vlm_formatter(settings: Settings, *, live: LiveSettings | None = None) -> ILlm | None:
     """Stage-2 formatter for vision parsers (issue #115): the text LLM that
     re-emits the VLM's output as clean Markdown so the chunker splits it on
     structure instead of truncating it.
@@ -831,8 +901,12 @@ def get_kb_vlm_formatter(settings: Settings) -> ILlm | None:
     small reformat job — sharing the retrieval model is fine), else `None`
     (stage 2 skipped; the raw VLM text is used as-is). Inherits the referenced
     preset's failover chain like every other role."""
-    ref = settings.kb.vlm_format_llm or settings.kb.retrieval_llm
-    return _llm_from_chain(resolve_llm_chain(settings, ref))
+    return _role_llm(
+        settings,
+        lambda s: s.kb.vlm_format_llm or s.kb.retrieval_llm,
+        live=live,
+        role="kb.vlm_format_llm",
+    )
 
 
 def _resolve_llm_ref(
@@ -1046,21 +1120,24 @@ def get_sanity_models(settings: Settings) -> list[str]:
     return sorted(_sanity_endpoints(settings))
 
 
-def get_sanity_llm_factory(settings: Settings):  # -> Callable[[str, str], ILlm]
+def get_sanity_llm_factory(
+    settings: Settings, *, live: LiveSettings | None = None
+):  # -> Callable[[str, str], ILlm]
     """A ``(model, reasoning_level) -> ILlm`` factory for the sanity matrix. It
     returns the SAME ``LitellmLlm`` kb_search runs on — per model endpoint +
     ``reasoning_effort=level`` — so the battery exercises the real LLM seam, not
     a parallel runner. An unknown model falls back to litellm's provider env."""
-    endpoints = _sanity_endpoints(settings)
+    boot = _sanity_endpoints(settings)
 
     def make(model: str, level: str) -> ILlm:
+        endpoints = boot if live is None else live.derive("sanity", _sanity_endpoints)
         base_url, api_key = endpoints.get(model, (None, None))
         return LitellmLlm(model, base_url=base_url, api_key=api_key, reasoning_effort=level)
 
     return make
 
 
-def get_kb_vlm(settings: Settings):  # -> IVlm | None
+def get_kb_vlm(settings: Settings, *, live: LiveSettings | None = None):  # -> IVlm | None
     """KB vision LLM for the vision-backed parsers (issue #39: image /
     PDF visual pages / slides). Same preset-reference resolution
     cascade as `get_kb_llm`:
@@ -1071,7 +1148,7 @@ def get_kb_vlm(settings: Settings):  # -> IVlm | None
     image-only uploads store with zero chunks until an operator wires
     a VLM and reindexes). When the vlm preset declares `fallbacks`, the chain
     becomes a busy-aware `FallbackVlm` (#131 / #196)."""
-    return _vlm_from_chain(resolve_llm_chain(settings, settings.kb.vlm_llm))
+    return _role_vlm(settings, lambda s: s.kb.vlm_llm, live=live, role="kb.vlm_llm")
 
 
 def _vlm_from_chain(chain: list[LlmEndpoint]):  # -> IVlm | None
@@ -1088,28 +1165,33 @@ def _vlm_from_chain(chain: list[LlmEndpoint]):  # -> IVlm | None
     return FallbackVlm(chain, make_vlm=_litellm_vlm_for, on_switch=make_switch_logger("vlm"))
 
 
-def get_designed_pptx_vlm(settings: Settings):  # -> IVlm | None
+def get_designed_pptx_vlm(
+    settings: Settings, *, live: LiveSettings | None = None
+):  # -> IVlm | None
     """The multimodal model that drives the `make_deck` build loop (#284) — it
     both *sees* rendered slides and *writes* the pptxgenjs fix, so it must be a
     multimodal (vision) model. Resolved like every other role: `kb.deck_vlm`
     when set, otherwise it reuses `kb.vlm_llm` (the read_image / ingest VLM) so a
     deploy that already wired a vision model gets `make_deck` for free. `None`
     (both unset) ⇒ the tool reports no model configured (fail-loud)."""
-    ref = settings.kb.deck_vlm or settings.kb.vlm_llm
-    return _vlm_from_chain(resolve_llm_chain(settings, ref))
+    return _role_vlm(
+        settings, lambda s: s.kb.deck_vlm or s.kb.vlm_llm, live=live, role="kb.deck_vlm"
+    )
 
 
-def get_kb_describer(settings: Settings):  # -> VlmDescriber | None
+def get_kb_describer(
+    settings: Settings, *, live: LiveSettings | None = None
+):  # -> VlmDescriber | None
     """The shared `VlmDescriber` over `kb.vlm_llm` (+ the `kb.vlm_format_llm`
     formatter), or None when no VLM is configured. Used both by the
     VLM-backed ingestion parsers and the interactive `read_image` agent tool
     (#112), so a deployment wires its vision model once."""
     from .kb.vlm import VlmDescriber
 
-    vlm = get_kb_vlm(settings)
+    vlm = get_kb_vlm(settings, live=live)
     if vlm is None:
         return None
-    return VlmDescriber(vlm, formatter=get_kb_vlm_formatter(settings))
+    return VlmDescriber(vlm, formatter=get_kb_vlm_formatter(settings, live=live))
 
 
 def get_wiki_endpoint(settings: Settings) -> tuple[str | None, str | None, str | None]:
