@@ -17,4 +17,13 @@ class Noisy(SteadyOverride):
 
 
 if os.environ.get("PROBE_BREAK_IMPORT"):
-    raise RuntimeError("set ACME_TOKEN before importing the backend")
+    raise RuntimeError("set ACME_TOKEN before importing the backend " + "x" * 5000)
+
+if os.environ.get("PROBE_SILENT_EXIT"):
+    os._exit(0)  # leaves without a word — and with success
+
+if os.environ.get("PROBE_BANNER_NO_NEWLINE"):
+    print("loading acme-sdk…", end="")  # leaves the cursor mid-line
+
+if os.environ.get("PROBE_SLOW_IMPORT"):
+    time.sleep(30)

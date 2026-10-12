@@ -71,6 +71,34 @@ def test_a_probe_that_cannot_load_the_backend_says_why(monkeypatch):
     problems = identity_drift_across_processes("probe_backends:Noisy", extra_path=[TESTS])
 
     assert any("ACME_TOKEN" in p for p in problems)
+    # The reason, not a 5000-character wall of it.
+    assert all(len(p) < 600 for p in problems)
+
+
+def test_a_banner_left_without_a_newline_does_not_swallow_the_answer(monkeypatch):
+    monkeypatch.setenv("PROBE_BANNER_NO_NEWLINE", "1")
+    assert identity_drift_across_processes("probe_backends:Noisy", extra_path=[TESTS]) == []
+
+
+def test_a_probe_that_takes_too_long_is_a_named_problem(monkeypatch):
+    import probe_backends  # noqa: F401 - loaded here first, so only the probes are slow
+
+    monkeypatch.setenv("PROBE_SLOW_IMPORT", "1")
+    monkeypatch.setattr("job_tool.shape.PROBE_TIMEOUT", 0.5)
+
+    problems = identity_drift_across_processes("probe_backends:Noisy", extra_path=[TESTS])
+
+    assert any("did not answer within 0.5s" in p for p in problems)
+
+
+def test_a_probe_that_exits_without_answering_is_a_named_problem(monkeypatch):
+    import probe_backends  # noqa: F401 - loaded here first, so only the probes leave
+
+    monkeypatch.setenv("PROBE_SILENT_EXIT", "1")
+
+    problems = identity_drift_across_processes("probe_backends:Noisy", extra_path=[TESTS])
+
+    assert any("no answer" in p for p in problems)
 
 
 def test_a_backend_named_by_a_dotted_path_is_found():

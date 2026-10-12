@@ -59,7 +59,7 @@ module, _, name = sys.argv[1].partition(":")
 backend = functools.reduce(getattr, name.split("."), importlib.import_module(module))
 contract = backend.contract
 answer = contract.idempotency.identity(contract.example_spec)
-print({_MARK!r} + json.dumps(answer, sort_keys=True))
+print("\\n" + {_MARK!r} + json.dumps(answer, sort_keys=True))  # own line, whatever came before
 """
 
 
@@ -67,6 +67,18 @@ def _backend(backend_ref: str) -> Any:
     """`module:Class` or `module:Outer.Inner`, resolved as an entry point is."""
     module, _, name = backend_ref.partition(":")
     return functools.reduce(getattr, name.split("."), importlib.import_module(module))
+
+
+class _NoAnswer(Exception):
+    """The probe ended with success and said nothing (a backend that exits at import)."""
+
+
+#: How much of a failing probe's stderr goes into the problem: the reason, not
+#: a wall of it.
+_REASON_CHARS = 400
+
+#: Seconds one probe may take — importing the backend and answering once.
+PROBE_TIMEOUT = 60.0
 
 
 def _probe(backend_ref: str, seed: str, path: str) -> str:
@@ -77,9 +89,11 @@ def _probe(backend_ref: str, seed: str, path: str) -> str:
         capture_output=True,
         text=True,
         check=True,
-        timeout=60,
+        timeout=PROBE_TIMEOUT,
     )
     marked = [line for line in done.stdout.splitlines() if line.startswith(_MARK)]
+    if not marked:
+        raise _NoAnswer
     return marked[-1].removeprefix(_MARK)
 
 
@@ -98,10 +112,17 @@ def identity_drift_across_processes(backend_ref: str, extra_path: Sequence[str] 
     try:
         answers = {_probe(backend_ref, seed, path) for seed in _SEEDS}
     except subprocess.CalledProcessError as exc:
-        reason = (exc.stderr or "").strip().splitlines()[-3:]
-        return [f"could not run identity() in a separate process: {' / '.join(reason)}"]
+        reason = " / ".join((exc.stderr or "").strip().splitlines()[-3:])
+        if len(reason) > _REASON_CHARS:  # an exception says what is wrong first
+            reason = reason[:_REASON_CHARS] + "…"
+        return [f"could not run identity() in a separate process: {reason}"]
+    except _NoAnswer:
+        return [
+            "identity() gave no answer in a separate process: importing the backend ended "
+            "the process before it could run"
+        ]
     except subprocess.TimeoutExpired:
-        return ["identity() did not answer within 60s in a separate process"]
+        return [f"identity() did not answer within {PROBE_TIMEOUT:g}s in a separate process"]
     if len(answers) > 1:
         return [
             "identity() gives a different answer in each process (a set's order, hash() or "
