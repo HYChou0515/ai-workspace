@@ -422,6 +422,11 @@ in a real browser came back with findings. What changed, and why:
   - The tab says that a newer execution has run since, and hides Result,
     Transcript, Continue and Re-run. The execution's own messages are still
     shown, because they are per run.
+  - "Newest" is by the run's creation (`ResourceMeta.created_time` from
+    `search_resources`), not a listing's `RevisionInfo.created_time`, which is
+    when its latest revision was written. Found by the second live check: an
+    older run whose gate was decided late read as the newest. The fixture runs
+    had each been written once, so they agreed with the bug.
 - **`retry` is claimed by CAS before its first await.** Two presses both passed
   the checks and drove one run twice. On failure the run returns to its prior
   status.
@@ -461,6 +466,10 @@ in a real browser came back with findings. What changed, and why:
   - The sidebar names an execution as the tab does (`executionName`, not
     `toLocaleString`).
   - The status bar shows no `lang:` / `UTF-8` for an execution's tab.
+  - A finished execution shows no "Step N of M": a phase its path never
+    needed stays not-started, and the second live check read "Done · Step 1
+    of 2". The header's name block has a basis, so at 1024 px the buttons wrap
+    under it instead of squeezing it to a word per line.
 - **The failure notification links the execution's tab** (`execution_link`).
   The old `/a/<slug>/items/<item>` matched no page. Its title reads "A workflow
   failed".

@@ -1026,6 +1026,7 @@ def test_only_the_newest_execution_of_a_workflow_names_its_step_files():
         _poll(client, item_id, older, "done")
         newer = client.post(f"{_base(item_id)}/run").json()["run_id"]
         _poll(client, item_id, newer, "done")
+        _mark(app, _spec, older, "error")  # the older one written again, after the newer
 
         old = client.get(f"{_base(item_id)}/runs/{older}").json()
         new = client.get(f"{_base(item_id)}/runs/{newer}").json()

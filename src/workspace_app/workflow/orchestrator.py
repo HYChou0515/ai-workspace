@@ -409,16 +409,20 @@ class WorkflowOrchestrator:
 
     def newest_run_of_workflow(self, item_id: str, workflow_id: str) -> str | None:
         """The item's most recently created run of ``workflow_id``, or None. Its runs
-        share one journal, so only this one's step files are its own (review R1)."""
-        newest: tuple[Any, str] | None = None
-        for r in self._rm().list_resources((QB["item_id"] == item_id).build()):
+        share one journal, so only this one's step files are its own (review R1).
+
+        By the RESOURCE's creation (``ResourceMeta.created_time``), never a listing's
+        ``RevisionInfo.created_time``, which is when its latest revision was written:
+        an older run whose gate was decided late read as the newest (found live)."""
+        query = (QB["item_id"] == item_id).build()
+        ours = set()
+        for r in self._rm().list_resources(query):
             data = r.data
             assert isinstance(data, WorkflowRun)
-            if data.workflow_id == workflow_id and (
-                newest is None or r.info.created_time > newest[0]
-            ):
-                newest = (r.info.created_time, r.info.resource_id)
-        return newest[1] if newest else None
+            if data.workflow_id == workflow_id:
+                ours.add(r.info.resource_id)
+        metas = [m for m in self._rm().search_resources(query) if m.resource_id in ours]
+        return max(metas, key=lambda m: m.created_time).resource_id if metas else None
 
     def _active_run_of_workflow(self, item_id: str, workflow_id: str) -> str | None:
         """A run of ``workflow_id`` on the item that is executing (pending or

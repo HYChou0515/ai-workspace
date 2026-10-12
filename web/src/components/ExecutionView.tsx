@@ -220,14 +220,20 @@ export function ExecutionView({
       style={{ height: "100%", overflowY: "auto", padding: "16px 20px", fontSize: pxToRem(13) }}
     >
       <header style={{ display: "flex", alignItems: "flex-start", gap: 12, flexWrap: "wrap" }}>
-        <div style={{ flex: 1, minWidth: 0 }}>
+        {/* A basis, so a narrow tab wraps the buttons under the name instead of
+            squeezing the name to one word per line (found live at 1024 px). */}
+        <div style={{ flex: "1 1 16rem", minWidth: 0 }}>
           <h2 style={{ margin: 0, fontSize: pxToRem(17) }}>{name}</h2>
           {run && (
             <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 4, flexWrap: "wrap" }}>
               <span data-testid="execution-status" style={chipStyle(chipTone(run.status))}>
                 {statusText(run.status)}
               </span>
-              {of > 0 && <span style={{ color: "var(--text-paper-d)" }}>{`Step ${at} of ${of}`}</span>}
+              {/* "Done" already says how far a finished one got: a phase its path
+                  never needed stays not-started (found live: "Done · Step 1 of 2"). */}
+              {of > 0 && run.status !== "done" && (
+                <span style={{ color: "var(--text-paper-d)" }}>{`Step ${at} of ${of}`}</span>
+              )}
             </div>
           )}
         </div>

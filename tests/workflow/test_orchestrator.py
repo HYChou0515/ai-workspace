@@ -1788,10 +1788,16 @@ async def test_only_the_newest_execution_of_a_workflow_is_continued(spec_instanc
     """Review R1 (defect 2): a workflow's executions share one journal, so an older
     one's Re-run deleted the newer one's results. Continuing it would build on
     the newer one's files too."""
+    import msgspec
+
     orch, _ = _orch(spec_instance, _two_step_run([]))
-    older = _insert_run(orch, item_id="iC3", status=RunStatus.ERROR, workflow_id="w")
+    older = _insert_run(orch, item_id="iC3", status=RunStatus.DONE, workflow_id="w")
     _insert_run(orch, item_id="iC3", status=RunStatus.DONE, workflow_id="w")
     _insert_run(orch, item_id="iC3", status=RunStatus.DONE, workflow_id="other")
+    # Written AFTER the newer one exists (found live: a gate decided late). A
+    # revision's time is not the run's: "newest" is by when the run was created.
+    rm = orch._rm()
+    rm.update(older, msgspec.structs.replace(rm.get(older).data, status=RunStatus.ERROR))
 
     with pytest.raises(NotRetryable, match="newer"):
         await orch.retry(slug="rca", item_id="iC3", profile="echo", run_id=older)

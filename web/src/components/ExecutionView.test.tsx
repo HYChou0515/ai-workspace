@@ -198,6 +198,7 @@ describe("ExecutionView", () => {
     render();
     await waitFor(() => expect(screen.getByTestId("execution-status")).toHaveTextContent("Done"));
     expect(screen.queryByRole("button", { name: "Stop" })).toBeNull();
+    expect(screen.queryByText(/^Step \d+ of \d+$/)).toBeNull(); // "Done" says how far
   });
 
   it("asks for a gate's decision in the step it waits at", async () => {

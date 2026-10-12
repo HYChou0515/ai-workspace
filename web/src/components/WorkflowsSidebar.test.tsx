@@ -154,6 +154,9 @@ describe("WorkflowsSidebar", () => {
     expect(within(rows[0]).getByText("Scheduled")).toBeInTheDocument();
     expect(within(rows[1]).queryByText("Scheduled")).toBeNull();
     expect(within(rows[1]).getByText("Done")).toBeInTheDocument();
+    // found live: a finished execution read "Done · Step 1 of 2" when a phase its
+    // path never needed stayed not-started; "Done" says how far it got
+    expect(within(rows[1]).queryByText(/^Step /)).toBeNull();
 
     fireEvent.click(rows[1]);
     expect(onOpenFile).toHaveBeenCalledWith(executionPath("workflow-run:old"));
