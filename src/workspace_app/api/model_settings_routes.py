@@ -27,6 +27,7 @@ from ..model_settings.effective import (
     DOES_NOT_LOAD,
     config_dir_of,
     effective_settings,
+    load_problem,
     problems,
     redact,
     secrets_written,
@@ -73,6 +74,9 @@ class _PageOut(BaseModel):
     #: Keys in force now — the last Apply's. Clearing one of these stops it at
     #: the next Apply; clearing any other only withdraws a staged change.
     applied_keys: list[str] = []
+    #: Which revision of every staged key the page read — Apply sends it back,
+    #: so a key set or cleared since is a 409, not published unseen.
+    key_revision: str = ""
 
 
 class _Apply(BaseModel):
@@ -81,6 +85,10 @@ class _Apply(BaseModel):
     draft: dict[str, Any] | None = None
     #: The key changes it listed — refused (409) when others are pending now.
     pending_keys: list[str] | None = None
+    #: The page's `key_revision` — refused (409) when any staged key changed
+    #: since, value included (final review 5: paths alone let a clear through
+    #: that the dialog listed as a set).
+    key_revision: str | None = None
 
 
 class _Rollback(BaseModel):
@@ -155,6 +163,7 @@ def register_model_settings_routes(
                 keys=store.key_status(),
                 pending_keys=store.pending_keys(),
                 applied_keys=sorted(store.applied_key_values()),
+                key_revision=store.key_revision(),
             )
 
         return await asyncio.to_thread(read)
@@ -191,15 +200,20 @@ def register_model_settings_routes(
                 and body.pending_keys is not None
                 and sorted(body.pending_keys) != store.pending_keys()
             )
-            if changed_draft or changed_keys:
+            changed_values = (
+                body is not None
+                and body.key_revision is not None
+                and body.key_revision != store.key_revision()
+            )
+            if changed_draft or changed_keys or changed_values:
+                # A sentence, not a problem: nothing in the draft is wrong — the
+                # page reads it again and the person looks before applying.
                 raise HTTPException(
                     status_code=409,
-                    detail={
-                        "problems": [
-                            "the draft or the key changes moved since this page read "
-                            "them — someone saved others; reload to see them before applying"
-                        ]
-                    },
+                    detail=(
+                        "the draft or the keys changed since this page read them — "
+                        "someone else saved; look at the changes before applying"
+                    ),
                 )
             found = _problems(draft)
             if found:
@@ -280,7 +294,10 @@ def register_model_settings_routes(
             except DOES_NOT_LOAD as exc:
                 return _ConnectionOut(
                     ok=False,
-                    error=redact(f"the draft does not load: {exc}", store.key_values()),
+                    error=redact(
+                        f"the draft does not load: {load_problem(exc, config_path, env)}",
+                        store.key_values(),
+                    ),
                 )
             result = try_connection(
                 settings,

@@ -2036,6 +2036,7 @@ def create_app(
     # For the reclaim tick (`turn_reclaim.ReclaimTick.of`): what it judges by
     # and re-runs through, off `app.state` like every other lifespan sweeper.
     app.state.spec = spec
+    app.state.app_catalog = app_catalog  # what an App turn resolves through
     app.state.turn_claims = turn_claims
     app.state.turn_activity = turn_activity
     app.state.turn_control = turn_control

@@ -16,7 +16,6 @@ from typing import Any
 from specstar import SpecStar
 
 from ..agent.config_catalog import AgentConfigCatalog
-from ..apps.catalog import AppCatalog
 from ..apps.overlay import set_source as set_app_overlay_source
 from ..config.catalog_build import build_catalog
 from ..config.schema import Preset, Settings
@@ -141,10 +140,6 @@ def live_agent_config_catalog(
     live: LiveSettings, config_dir: Path | None = None
 ) -> AgentConfigCatalog:
     return _LiveAgentConfigCatalog(live, config_dir)
-
-
-def live_app_catalog(catalog: AgentConfigCatalog) -> AppCatalog:
-    return AppCatalog(presets=catalog.presets)
 
 
 def follow_published(live: LiveSettings, spec: SpecStar) -> SettingsStore:

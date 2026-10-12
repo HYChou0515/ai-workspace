@@ -491,3 +491,56 @@ def test_an_endpoint_that_is_not_text_is_refused_not_crashed_on(keyed_config, ba
     found = problems(document, config_path=keyed_config, env={})
 
     assert any("base_url" in p and "text" in p for p in found), found
+
+
+@pytest.fixture
+def prompted_config(tmp_path: Path) -> Path:
+    (tmp_path / "p.md").write_text("You answer.", encoding="utf-8")
+    (tmp_path / "other.md").write_text("Anything beside config.yaml.", encoding="utf-8")
+    path = tmp_path / "config.yaml"
+    path.write_text(
+        "agents:\n  presets:\n    mine:\n      model: openai/mine\n      prompt_file: p.md\n",
+        encoding="utf-8",
+    )
+    return path
+
+
+def _prompt_at(where: str, value: str) -> dict:
+    if where == "preset":
+        return {"config": {"agents": {"presets": {"kb-default": {"prompt_file": value}}}}}
+    entry = {"preset": "kb-default", "name": "X", "prompt_file": value}
+    return {"config": {"agents": {"kb_chat": [entry]}}}
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["/proc/self/environ", "../../../../proc/self/environ", "config.yaml", "other.md"],
+)
+@pytest.mark.parametrize("where", ["preset", "usage"])
+def test_a_prompt_file_the_page_writes_reads_no_other_file(prompted_config, where, value):
+    # final review 5: Apps were confined (M21), the config part was not — a
+    # preset's or usage entry's prompt_file of /proc/self/environ put the
+    # server's environment into the KB system prompt. Even a file beside
+    # config.yaml (config.yaml itself) may hold what no one should read back.
+    found = problems(_prompt_at(where, value), config_path=prompted_config, env={})
+
+    assert any("prompt_file" in p for p in found), found
+
+
+@pytest.mark.parametrize("value", ["pkg:workspace_app.kb.prompts/system.md", "p.md"])
+@pytest.mark.parametrize("where", ["preset", "usage"])
+def test_a_packaged_prompt_or_one_config_yaml_names_is_fine(prompted_config, where, value):
+    found = problems(_prompt_at(where, value), config_path=prompted_config, env={})
+
+    assert not any("prompt_file" in p for p in found), found
+
+
+def test_a_typo_in_the_draft_is_named_at_its_own_path_not_as_config_yaml(config):
+    # final review 5: the loader's "config <file>: unknown key …" named the
+    # deploy file and its path on disk, and marked the "config" line.
+    document = {"config": {"agents": {"presets": {"kb-default": {"modle": "x"}}}}}
+
+    found = problems(document, config_path=config, env={})
+
+    assert found and found[0].startswith("config.agents.presets.kb-default.modle:"), found
+    assert str(config) not in found[0]

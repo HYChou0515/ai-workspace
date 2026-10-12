@@ -256,6 +256,11 @@ class SettingsStore:
         now = self._key_revs()
         return sorted(p for p in set(now) | set(before) if now.get(p) != before.get(p))
 
+    def key_revision(self) -> str:
+        """One string for which revision of every staged key there is: any
+        key set or cleared changes it, and it never carries a value."""
+        return _content_id({}, self._key_revs())
+
     def key_values(self) -> dict[str, str]:
         """The staged values — what the next Apply puts in force; for checking a
         draft and testing a connection, never for a route's answer."""

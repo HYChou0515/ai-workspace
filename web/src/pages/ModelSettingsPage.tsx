@@ -198,6 +198,7 @@ function useDraft(client: Client, data: PageData) {
   const queryClient = useQueryClient();
   const { defaults, draft, published, keys } = data;
   const pendingKeys = data.pending_keys ?? [];
+  const keyRevision = data.key_revision;
   const saved = useMemo(() => pretty(draft), [draft]);
   const [text, setText] = useState(saved);
   const [checkedText, setCheckedText] = useState(saved);
@@ -253,8 +254,8 @@ function useDraft(client: Client, data: PageData) {
     meta: { silentError: true },
     // What the dialog LISTED goes with it — captured when it opened, not read
     // from a later render (final review) — and the server refuses anything else.
-    mutationFn: (seen: { draft: Patch; pendingKeys: string[] }) =>
-      client.apply(seen.draft, seen.pendingKeys),
+    mutationFn: (seen: { draft: Patch; pendingKeys: string[]; keyRevision: string }) =>
+      client.apply(seen.draft, seen.pendingKeys, seen.keyRevision),
     onMutate: () => setApplyError(""),
     onSuccess: (applied: Applied) => {
       setRefused([]);
@@ -302,7 +303,7 @@ function useDraft(client: Client, data: PageData) {
             : "";
 
   const askToApply = async () => {
-    const seen = { draft, pendingKeys };
+    const seen = { draft, pendingKeys, keyRevision };
     const choice = await dialog.confirm({
       title: t("modelSettings.applyTitle"),
       body: (
@@ -1051,7 +1052,12 @@ function KeysTab({
           <input
             className="input"
             data-testid="model-settings-key-path"
-            aria-describedby="model-settings-key-path-help"
+            aria-invalid={refused.length > 0}
+            aria-describedby={
+              refused.length > 0
+                ? "model-settings-key-path-help model-settings-key-refused"
+                : "model-settings-key-path-help"
+            }
             value={path}
             onChange={(e) => setPath(e.target.value)}
             autoComplete="off"
@@ -1064,6 +1070,19 @@ function KeysTab({
           <span id="model-settings-key-path-help" style={{ ...MUTED, overflowWrap: "anywhere" }}>
             {t("modelSettings.keyPath")}
           </span>
+          {/* An error, drawn as the other tabs draw theirs and under the field every refusal names
+              (NN/g "10 Design Guidelines for Reporting Errors in Forms"). */}
+          {refused.length > 0 && (
+            <p
+              role="alert"
+              id="model-settings-key-refused"
+              data-testid="model-settings-key-refused"
+              className="ev-banner ev-banner--err"
+              style={{ ...MONO, ...WRAP, margin: 0 }}
+            >
+              {refused.join(" · ")}
+            </p>
+          )}
         </div>
         <label style={{ display: "grid", gap: 4, flex: "1 1 12rem", minWidth: 0 }}>
           <span style={LABEL}>{t("modelSettings.keyValue")}</span>
@@ -1102,11 +1121,6 @@ function KeysTab({
       {(!path.trim() || !value) && (
         <p data-testid="model-settings-key-why" style={{ ...MUTED, margin: 0 }}>
           {t("modelSettings.keyNeedBoth")}
-        </p>
-      )}
-      {refused.length > 0 && (
-        <p role="alert" data-testid="model-settings-key-refused" style={MONO}>
-          {refused.join(" · ")}
         </p>
       )}
     </div>

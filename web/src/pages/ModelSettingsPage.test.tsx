@@ -66,6 +66,7 @@ function fakeClient(page: Partial<PageData> = {}) {
     keys: {},
     pending_keys: [],
     applied_keys: [],
+    key_revision: "rev-1",
     ...page,
   };
   const client = {
@@ -163,7 +164,7 @@ describe("ModelSettingsPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "套用" }));
 
     // the draft the dialog listed goes with it, so the server can refuse another
-    await waitFor(() => expect(client.apply).toHaveBeenCalledWith(KB_2, []));
+    await waitFor(() => expect(client.apply).toHaveBeenCalledWith(KB_2, [], "rev-1"));
     expect(await screen.findByTestId("model-settings-notice")).toHaveTextContent("abcdef12");
   });
 
@@ -492,6 +493,7 @@ describe("ModelSettingsPage", () => {
       keys: {},
       pending_keys: [],
       applied_keys: [],
+      key_revision: "rev-1",
     }));
     await act(async () => queryClient.invalidateQueries());
 
@@ -553,6 +555,7 @@ describe("ModelSettingsPage", () => {
         keys: { [path]: "…4321" },
         pending_keys: [],
         applied_keys: [path],
+        key_revision: "rev-2",
       }));
       return applied("abcdef1234567890", {});
     });
@@ -640,7 +643,7 @@ describe("ModelSettingsPage", () => {
     await waitFor(() => expect(JSON.parse(editor().value)).toEqual(other));
     fireEvent.click(screen.getByRole("button", { name: "套用" }));
 
-    await waitFor(() => expect(client.apply).toHaveBeenCalledWith(KB_2, []));
+    await waitFor(() => expect(client.apply).toHaveBeenCalledWith(KB_2, [], "rev-1"));
   });
 
   it("does not say the draft changes nothing while its text does not parse", async () => {
@@ -811,5 +814,37 @@ describe("ModelSettingsPage", () => {
     fireEvent.click(screen.getByTestId("model-settings-key-set"));
 
     expect(await screen.findByTestId("model-settings-key-refused")).toHaveTextContent("not a secret");
+  });
+
+  it("draws a refused key as an error at its field", async () => {
+    // final review 5: plain black text, away from the field, no aria-invalid.
+    const client = fakeClient();
+    client.setKey.mockRejectedValue(
+      new HttpError(422, "refused", undefined, undefined, { problems: ["config.x.model: not a secret"] }),
+    );
+    renderWithQuery(<ModelSettingsPage client={client} />);
+    fireEvent.click(await screen.findByRole("tab", { name: "API 金鑰" }));
+    fireEvent.change(screen.getByTestId("model-settings-key-path"), { target: { value: "config.x.model" } });
+    fireEvent.change(screen.getByTestId("model-settings-key-value"), { target: { value: "v" } });
+    fireEvent.click(screen.getByTestId("model-settings-key-set"));
+
+    const refused = await screen.findByTestId("model-settings-key-refused");
+    expect(refused).toHaveClass("ev-banner--err");
+    const path = screen.getByTestId("model-settings-key-path");
+    expect(path).toHaveAttribute("aria-invalid", "true");
+    expect(path.getAttribute("aria-describedby")).toContain(refused.id);
+  });
+
+  it("sends the key revision its confirmation listed", async () => {
+    // final review 5: the server compares it, so a key changed since is a 409.
+    const path = "config.llm.api_key";
+    const client = fakeClient({ keys: { [path]: "…4321" }, pending_keys: [path], key_revision: "rev-7" });
+    renderWithQuery(<ModelSettingsPage client={client} />);
+    fireEvent.click(await screen.findByRole("tab", { name: "API 金鑰" }));
+
+    fireEvent.click(await screen.findByTestId("model-settings-keys-apply"));
+    fireEvent.click(await screen.findByRole("button", { name: "套用" }));
+
+    await waitFor(() => expect(client.apply).toHaveBeenCalledWith({}, [path], "rev-7"));
   });
 });

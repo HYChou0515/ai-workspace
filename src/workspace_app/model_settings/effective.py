@@ -15,6 +15,7 @@ consumer can build from the published one with the same code (M13).
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
@@ -135,6 +136,58 @@ DOES_NOT_LOAD: tuple[type[Exception], ...] = (
     AttributeError,
     AssertionError,
 )
+
+
+_UNKNOWN_KEY = re.compile(r"unknown key '([^']+)'; (valid keys .*)", re.S)
+
+
+def load_problem(exc: Exception, config_path: Path | None, env: Mapping[str, str]) -> str:
+    """The loader's refusal of a draft, as the page says it: without the
+    `config <file>: ` it starts with — the draft is what is wrong, not the
+    deploy's file, and its path on the server is nobody's business — and an
+    unknown key at its own dotted path, so the editor marks that line (final
+    review 5; NN/g "Error-Message Guidelines": the indicator where the error is)."""
+    from ..config.loader import _resolve_config_path
+
+    in_use = _resolve_config_path(config_path, env)
+    message = str(exc).removeprefix(f"config {in_use or '<bundled defaults>'}: ")
+    unknown = _UNKNOWN_KEY.fullmatch(message)
+    if unknown:
+        return f"config.{unknown[1]}: unknown key; {unknown[2]}"
+    return f"config: {message}"
+
+
+def _prompt_files(node: Any, at: str) -> list[tuple[str, Any]]:
+    """Every `prompt_file` under `node`, wherever it sits — presets, usage
+    entries, sub-agents: the class, not the places known today."""
+    found: list[tuple[str, Any]] = []
+    if isinstance(node, dict):
+        for key, value in node.items():
+            here = f"{at}.{key}"
+            found += [(here, value)] if key == "prompt_file" else _prompt_files(value, here)
+    elif isinstance(node, list):
+        for i, value in enumerate(node):
+            found += _prompt_files(value, f"{at}[{i}]")
+    return found
+
+
+def _prompt_file_problems(config_part: dict[str, Any], deploy: Settings) -> list[str]:
+    """A `prompt_file` the page writes is a packaged prompt or one config.yaml
+    already names. Any other path is a file on the server read into a system
+    prompt a chat can repeat back: `/proc/self/environ` put the process's
+    environment there, and even config.yaml beside it may hold literal keys
+    (final review 5; M21 — the App side is `app_file_path`)."""
+    named = {
+        value
+        for _, value in _prompt_files(msgspec.to_builtins(deploy.agents), "agents")
+        if isinstance(value, str)
+    }
+    return [
+        f"{where}: a prompt is a packaged one (pkg:…) or a prompt_file config.yaml "
+        "already names — the page does not point a prompt at another file on the server"
+        for where, value in _prompt_files(config_part, "config")
+        if isinstance(value, str) and value and not value.startswith("pkg:") and value not in named
+    ]
 
 
 def config_dir_of(config_path: Path | None, env: Mapping[str, str]) -> Path | None:
@@ -463,10 +516,15 @@ def _problems(
     try:
         settings = effective_settings(document, config_path=config_path, env=env, keys=keys)
     except DOES_NOT_LOAD as exc:
-        return [f"config: {exc}"]
+        return [load_problem(exc, config_path, env)]
     from ..factories import get_infer_modules_run_config
 
     default = effective_settings({}, config_path=config_path, env=env)
+    # Before the usage lists are built below: building them reads the files
+    # (the loader above reads none).
+    prompts = _prompt_file_problems(document.get("config") or {}, default)
+    if prompts:
+        return prompts
     config_dir = config_dir_of(config_path, env)
     # The usage lists as the running KB chat / sub-agents build them: an entry
     # whose preset has no prompt_file is refused by a boot, and live it would

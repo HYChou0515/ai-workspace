@@ -9,7 +9,7 @@
  * `HttpError.detail.problems` — read it with `problemsOf`.
  */
 
-import { apiFetch, HttpError, httpErrorFrom } from "./http";
+import { apiFetch, detailSentence, HttpError, httpErrorFrom } from "./http";
 
 export type Patch = Record<string, unknown>;
 
@@ -32,6 +32,8 @@ export type ModelSettingsPage = {
   pending_keys: string[];
   /** Keys in force now — the last Apply's. */
   applied_keys: string[];
+  /** Which revision of every staged key this read saw — Apply sends it back. */
+  key_revision: string;
 };
 
 export type Applied = {
@@ -76,15 +78,19 @@ export const modelSettingsApi = {
     return ((await r.json()) as { problems: string[] }).problems;
   },
 
-  /** Publish the stored draft and the pending keys — exactly `seen` and
-   * `pendingKeys`, what the confirmation listed, or refused (409) when another
-   * superuser saved or set others since. */
-  async apply(seen?: Patch, pendingKeys?: string[]): Promise<Applied> {
+  /** Publish the stored draft and the pending keys — exactly `seen`,
+   * `pendingKeys` and `keyRevision`, what the confirmation listed, or refused
+   * (409) when another superuser saved, set or cleared anything since. */
+  async apply(seen?: Patch, pendingKeys?: string[], keyRevision?: string): Promise<Applied> {
     const r = await send(
       "/apply",
       "POST",
-      seen === undefined ? undefined : { draft: seen, pending_keys: pendingKeys ?? null },
+      seen === undefined
+        ? undefined
+        : { draft: seen, pending_keys: pendingKeys ?? null, key_revision: keyRevision ?? null },
     );
+    // 409: someone saved since — the server's sentence, not a problem in the draft.
+    if (r.status === 409) throw new HttpError(409, (await detailSentence(r)) ?? `apply failed: ${r.status}`);
     if (!r.ok) throw await httpErrorFrom(r, `apply failed: ${r.status}`);
     return (await r.json()) as Applied;
   },

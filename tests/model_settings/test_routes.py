@@ -60,6 +60,7 @@ class Page:
             agent_config_catalog=live_agent_config_catalog(self.live, tmp_path),
             live=self.live,
         )
+        self.app = app
         self.client = TestClient(app)
 
     def kb_model(self) -> str:
@@ -373,3 +374,49 @@ def test_a_draft_the_loader_asserts_against_is_named_on_every_route(page, patch)
     assert tried.status_code == 200 and tried.json()["ok"] is False
     key = page.client.put(f"{BASE}/keys", json={"path": API_KEY, "value": "sk-live-0000-0000-1"})
     assert key.status_code == 422
+
+
+def test_apply_refuses_a_key_changed_after_its_confirmation_listed_it(page):
+    # final review 5: the guard compared pending key PATHS — A's dialog listed
+    # "set X", B cleared X, the paths still matched and the clear went live.
+    page.client.put(f"{BASE}/keys", json={"path": API_KEY, "value": "sk-first-0000-0000"})
+    page.client.post(f"{BASE}/apply")
+    page.client.put(f"{BASE}/keys", json={"path": API_KEY, "value": "sk-second-000-0000"})
+    seen = page.client.get(BASE).json()
+    page.client.delete(f"{BASE}/keys", params={"path": API_KEY})
+
+    response = page.client.post(
+        f"{BASE}/apply",
+        json={
+            "draft": seen["draft"],
+            "pending_keys": seen["pending_keys"],
+            "key_revision": seen["key_revision"],
+        },
+    )
+
+    assert response.status_code == 409
+    # a sentence to read, not a problem in the draft to fix
+    assert isinstance(response.json()["detail"], str)
+    assert page.client.get(BASE).json()["applied_keys"] == [API_KEY]
+
+
+def test_a_preset_published_on_the_page_reaches_an_app_turn(page):
+    # final review 5: the only test of this went through a helper production
+    # never called; this goes through create_app's own App catalog.
+    page.client.put(
+        f"{BASE}/draft",
+        json={
+            "patch": {
+                "config": {"agents": {"presets": {"brand-new": {"model": "openai/brand-new-1"}}}},
+                "apps": {
+                    "playground": {"agent": {"picker": [{"preset": "brand-new", "name": "New"}]}}
+                },
+            }
+        },
+    )
+    assert page.client.post(f"{BASE}/apply").status_code == 200
+    page.clock.now += 2
+
+    config = page.app.state.app_catalog.resolve(app_slug="playground", profile="default")
+
+    assert config.model == "openai/brand-new-1"

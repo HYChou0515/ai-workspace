@@ -12,13 +12,11 @@ from pathlib import Path
 import pytest
 
 from workspace_app.api.litellm_runner import LitellmAgentRunner
-from workspace_app.apps import overlay
 from workspace_app.config.loader import load
 from workspace_app.factories import get_kb_describer, get_kb_llm, get_runner
 from workspace_app.model_settings.consumers import (
     LiveLlm,
     live_agent_config_catalog,
-    live_app_catalog,
 )
 from workspace_app.model_settings.live import LiveSettings
 from workspace_app.model_settings.store import SettingsStore, register_settings_models
@@ -153,25 +151,6 @@ def test_a_vision_role_calls_the_published_model(live, store, clock, echo_model)
     _apply(store, clock, {"config": {"agents": {"presets": {vlm_preset.preset: {"model": "v/2"}}}}})
 
     assert describer._vlm.collect("q", images=[]) == "v/2"
-
-
-ADDED = {
-    "config": {"agents": {"presets": {"brand-new": {"model": "openai/brand-new-1"}}}},
-    "apps": {"playground": {"agent": {"picker": [{"preset": "brand-new", "name": "New"}]}}},
-}
-
-
-def test_a_preset_added_and_picked_reaches_the_app_turn(live, store, clock):
-    overlay.set_source(lambda: (live.version(), live.document()))
-    try:
-        app_catalog = live_app_catalog(live_agent_config_catalog(live))
-        _apply(store, clock, ADDED)
-
-        config = app_catalog.resolve(app_slug="playground", profile="default")
-    finally:
-        overlay.set_source(None)
-
-    assert config.model == "openai/brand-new-1"
 
 
 def test_the_kb_chat_list_follows_the_published_settings(live, store, clock):
