@@ -169,14 +169,18 @@ run the tool itself with another value. It reaches only jobs under the same
 credential, which is why D43 puts the boundary on the credential. Items that
 must be isolated from each other use different tokens.
 
-### Still open (not decided — asked one at a time)
+### Settled after the second pass (asked one at a time, 2026-10-12)
 
-- **A hook for "what counts as the same"** — `Idempotency.identity(spec)` the
-  author may override (case, whitespace, nested fields), the hash and the item
-  scope staying in the template. Proposed; not yet confirmed.
-- **How long "the same" lasts** — today forever: the same spec a month later
-  returns the month-old job. Alternatives: only while the job is running, or
-  within a window.
+| # | Decision | Source |
+|---|---|---|
+| D49 | The author may override `Idempotency.identity(spec)` — what counts as the same (case, whitespace, nested fields). The hash and the item scope stay in the template's `key()`. `fields` stays required: the generated description names them and they are checked against `spec_schema`. A shape test calls `identity` twice on the same spec and demands the same, JSON-serialisable result | user ("對") |
+| D50 | "The same job" holds for a window declared once on the contract, `Idempotency.window_seconds`, default 86400 (24 h). Within it the same key returns the same job; after it, it starts a new one. The backend honours it in `submit` and `find_by_key`; the generated description states it | user ("可以"; options were forever / while running / a window) |
+| D51 | `submit` returns `Submitted(job_id, created)`: only the backend knows whether it started a job or returned one it already had, and the shell must tell the model which ("already submitted earlier" vs "submitted") instead of announcing an old, possibly finished job as new | mine |
+
+Why a window: a retry after a lost answer comes within seconds or minutes, so
+24 h stops every double-submit that matters; "forever" made re-running the same
+spec impossible without a field to change; "only while running" let a fast job
+that finished during the timeout be started twice.
 
 ### Phases
 
@@ -199,7 +203,15 @@ Each `/tdd`, one commit; the review lenses and CI after, as for P1–P8.
 - **P12 — the demo backend.** Store the item id; list/get over the
   credential's jobs (`DEMO_JOBS_USER` stays the credential stand-in).
 - **P13 — the README, the author brief and the plan's interface sketch**
-  rewritten for D41–D48.
+  rewritten for D41–D51.
+- **P14 — `identity` (D49).** The overridable method, the template's `key()`
+  over it, and the determinism shape test.
+- **P15 — the window and what `submit` says (D50, D51).**
+  `Idempotency.window_seconds`, `Submitted(job_id, created)`, the shell's two
+  messages, the description's sentence, the demo backend honouring the window.
+
+Each plan change is pushed to master as well as the branch (the in-app AI
+reads master's `docs/`).
 
 ## The interface (target shape)
 
