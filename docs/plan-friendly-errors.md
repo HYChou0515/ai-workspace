@@ -85,6 +85,7 @@ that fails after producing output keeps that output; the notice follows it.
 | P5 | Workflow and background-job errors. |
 | P6 | Our own API's non-2xx. |
 | P7 | `docs/migrations.md`: retry behaviour changes with no knob; one new index with no backfill. |
+| P8 | A stream that drops mid-answer reaches the call wrapper (litellm's httpx transport); the classifier names a failure by its connection / timeout evidence before its status code; a failure-shape matrix test through real litellm and a real HTTP endpoint. See [P8](#p8). |
 
 ## What the build changed, and why (P1–P6)
 
@@ -253,6 +254,116 @@ know which turn produced a persisted message, which nothing on it says today
 (the same prerequisite CLAUDE.md names for re-pairing queued answers). Of the
 two errors this rule can make, it is chosen to show a failure twice rather than
 hide one; before this fix every failure showed twice once the thread was re-read.
+
+## P8 — a dropped stream must reach the wrapper (2026-10-12) {#p8}
+
+### Why, with the evidence
+
+D3 promises that a stream which breaks after it has shown text is re-sent. Every
+test of it used `ScriptedLlm`, which raises at the MODEL layer, so "a dropped
+connection arrives as an exception" was an assumption built into the double,
+never checked. Recording a second demo against an HTTP stand-in showed it false:
+the turn ended `done` with the answer cut at 「良率比上週高 0」.
+
+A failure-shape matrix — each failure made for real by a FastAPI stand-in and
+sent through real `litellm.acompletion(stream=True, max_retries=0)`, then named
+by `classify_error` — on litellm 1.85.1:
+
+| Failure | aiohttp transport (litellm's default) | httpx transport | Should be |
+|---|---|---|---|
+| 429 rate limit | rate_limited | rate_limited | ✓ |
+| 503 before the stream | provider_error | provider_error | ✓ |
+| 401 bad key | auth | auth | ✓ |
+| 400 bad request | bad_request | bad_request | ✓ |
+| 400 context too long | context_overflow | context_overflow | ✓ |
+| no response | timeout | timeout | ✓ |
+| stream stalls mid-answer | provider_error | provider_error | **timeout** |
+| stream drops mid-answer | **ends normally, text truncated** | provider_error | **connection** |
+| nothing listening | provider_error | provider_error | **connection** |
+
+Two defects, in two layers:
+
+1. **litellm's aiohttp transport swallows a mid-stream drop.** It turns
+   `ClientPayloadError` / `TransferEncodingError` into a graceful EOF
+   (`litellm/llms/custom_httpx/aiohttp_transport.py:90-114`) and the stream
+   wrapper then reports `finish_reason="stop"`. The OpenAI SDK alone raises
+   `RemoteProtocolError` on the same drop; so does litellm on httpx
+   (`MidStreamFallbackError ← APIConnectionError`). Pre-existing on master; it
+   defeats D3 for real network drops.
+2. **Our classifier reads the status code before the evidence.** litellm wraps a
+   connection error in `MidStreamFallbackError` (a `ServiceUnavailableError`) or
+   `InternalServerError`, so `_link_kind` takes the 5xx and names it
+   `provider_error`. These kinds are re-sent anyway; what is wrong is the copy —
+   「模型服務本身出錯」 for a model that could not be reached or went silent.
+
+The same blind spot as the client's own `max_retries` (§ Found recording the
+demo): both live UNDER the double, where no unit test and no review round can
+see them.
+
+### What changes if the transport is switched (researched, measured)
+
+`litellm.disable_aiohttp_transport = True` (also honoured as env
+`DISABLE_AIOHTTP_TRANSPORT`) only changes litellm's ASYNC client. In this app
+the one async caller is the Agents SDK's `LitellmModel` → `litellm.acompletion`
+— every chat / agent turn. Every other caller (`kb/llm.py`, `kb/vlm/litellm.py`,
+`kb/embedder.py`, health checks, `skill_eval`, observability) is sync and
+already runs on httpx today. The transport was never chosen deliberately here
+(`git log -S DISABLE_AIOHTTP`: nothing; `-S aiohttp`: only incidental hits — the
+lock file and a once-committed LLM call log).
+
+| Aspect | Verdict |
+|---|---|
+| Proxy env (`HTTP(S)_PROXY`, `ALL_PROXY`, `NO_PROXY` forms) | same — measured against a fake proxy on both paths |
+| CA bundle (`SSL_CERT_FILE`, `SSL_VERIFY`, `litellm.ssl_verify`) | same — both use `get_ssl_configuration()` (`http_handler.py:279-342`) |
+| Client certificate (`SSL_CERTIFICATE`) | sent only on httpx (the aiohttp path drops it); not configured anywhere in this repo |
+| Connect / read timeouts; long streams | same; neither path has a total cap that cuts a long stream (measured) |
+| Mid-stream drop | aiohttp: graceful EOF (the defect); httpx: raises |
+| Connection pool | aiohttp 1000 total / 500 per host / 120 s keep-alive; httpx 100 / 20 kept alive / 5 s idle expiry |
+| Error message text | same types, different strings in technical details |
+
+Concurrency, measured locally (N concurrent streamed completions through real
+litellm against the stand-in, p95 latency; N=200 was run twice, the others once):
+
+| N | aiohttp | httpx |
+|---|---|---|
+| 20 | 1.64 s | 1.71 s |
+| 50 | 1.72 s | 1.77 s |
+| 100 | 1.88 s | 1.96 s |
+| 200 | 2.38–2.44 s | 4.04–4.05 s |
+
+Up to 100 concurrent streams per pod per endpoint the two are within 0.1 s;
+beyond that httpx queues on its 100-connection pool. **Assumption — the user
+asked for this plan on the condition that it holds (2026-10-12), not yet
+confirmed: no single pod runs more than 100 model calls to one endpoint at
+once.** If that stops holding, the symptom is p95 latency rising with load, and
+the knob is the client's pool limit.
+
+### Decisions
+
+| # | Decision | Source |
+|---|---|---|
+| D11 | Agent turns use litellm's httpx transport: `litellm.disable_aiohttp_transport = True`, set where `LitellmAgentRunner` is built — the only async litellm caller. Not a config knob: the default must not truncate answers. | proposed — rests on the ≤100 assumption above |
+| D12 | `classify_error` looks for connection / timeout evidence anywhere in the chain (httpx `RemoteProtocolError` / `ConnectError` / `ReadTimeout`, litellm `APIConnectionError` / `Timeout`, a "connect" refusal) BEFORE reading a status code, so a mid-stream drop and a refused connection are `connection` and a stalled stream is `timeout`. | proposed |
+| D13 | The failure-shape matrix becomes a test: an in-process HTTP stand-in on a free port, real `litellm.acompletion` through the same `CallRetryModel` path a turn takes, one case per row above, asserting the kind AND whether the call was re-sent. It is the gate this feature was missing; a litellm upgrade or transport change that alters a shape reddens it. | proposed |
+| D14 | Amends **D9** (proposed): the retry status names the failure instead of always saying 「連線不穩」 — it reuses the D5 "what happened" sentence of that kind, then 「正在重試（第 N 次）…」 (e.g. 「模型服務本身出錯。正在重試（第 1 次）…」). NN/g: an error message must precisely describe the exact problem; a generic one gives no context ([Error-Message Guidelines](https://www.nngroup.com/articles/error-message-guidelines/), [Scoring Rubric](https://www.nngroup.com/articles/error-messages-scoring-rubric/)). Material 3 governs the indicator, not the words ([Progress indicators](https://m3.material.io/components/progress-indicators/overview)). One sentence per kind, shared with the failure copy, so the two cannot drift. | **awaiting user** |
+
+### Work
+
+1. RED first, through the real path: the D13 matrix test (it reddens on the
+   aiohttp drop and the three misnamed kinds today).
+2. D11: the transport switch, pinned by the matrix's drop case (mutation: remove
+   the line, the drop case reddens).
+3. D12: the classifier, pinned by the stall / drop / refused cases plus the
+   existing `test_classify.py` (a 5xx with no connection evidence stays
+   `provider_error`).
+4. D14 (if confirmed): `turn.retrying` takes the kind; FE test per kind; a
+   parity test that the status sentence IS the failure sentence.
+5. Live: the drop scenario in the real app — the half sentence withdrawn, the
+   status line, the full answer — and a third demo MP4.
+6. `docs/migrations.md` #915: mid-stream drops are re-sent; the pool is 100
+   connections per pod per endpoint with a 5 s idle expiry; the ≤100 assumption
+   and its symptom.
+7. One review round (D11 and D12 replace mechanisms), then CI on the final sha.
 
 ## Risks
 
