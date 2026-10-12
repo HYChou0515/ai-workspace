@@ -134,6 +134,17 @@ Report the list before P2 changes behaviour.
 - `Message` gains the run mark (done in P2).
 - `history_items` callers for chat turns drop messages of any run. Legacy mixed
   chats are matched by the run window.
+- **Built:**
+  - An app chat builds its history in one place (`chat_send.py`, the only
+    `history_messages=` a chat passes), now through
+    `run_windows.without_runs`. That drops every message a run marked. In a chat
+    #343 took over (`conv.run_id` set), it also drops the unmarked messages
+    inside the window of each run that drove that chat (`WorkflowRun` by
+    `item_id`, then `chat_id`). A message with no time cannot be placed and is
+    kept. A free chat never pays for the lookup.
+  - Pinned through `POST …/chats/{id}/messages`. Mutation-probed: 7 guard
+    lines each redden; the control stays green. One probe first came back
+    unpinned (counting another chat's run), and a test now covers it.
 
 **P4 — no takeover.**
 - `?chat_id=` returns 400 with a reason.

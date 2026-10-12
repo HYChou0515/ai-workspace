@@ -54,6 +54,7 @@ from .markings import markings_prompt_block, write_markings
 from .notifications import notify
 from .private_env import private_layer, unattended_layer
 from .rca_messages import bubble_kb_citations, to_rca_message
+from .run_windows import run_windows_of_chat, without_runs
 from .timeutil import now_ms
 from .turn_claims import TurnClaim
 from .turn_gate import admit_turn
@@ -1361,7 +1362,15 @@ class ChatSendService:
                     # Cross-turn memory: the dialogue BEFORE the message this turn
                     # answers — found, not assumed to be last: a re-run's thread
                     # may have grown past it (a queued follow-up, the #624 notice).
-                    history_messages=_history_before(conv.messages, created, body.content),
+                    # Never a run's messages (plan-workflow-out-of-chat P3): marked
+                    # ones, and in a chat #343 took over, the unmarked ones inside a
+                    # run's window — looked up only for such a chat.
+                    history_messages=without_runs(
+                        _history_before(conv.messages, created, body.content),
+                        run_windows_of_chat(self._spec, investigation_id, rid)
+                        if conv.run_id
+                        else [],
+                    ),
                     reasoning_effort=body.reasoning_effort,
                     kb_enhancements=caller_enh,
                     collection_ids=hub_collection_ids,
