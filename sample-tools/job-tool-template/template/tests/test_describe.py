@@ -28,15 +28,12 @@ def test_submit_carries_the_authors_words_and_the_contracts_rules():
     assert "ask" in text and "later" in text
 
 
-def test_sameness_that_spans_callers_is_said_to():
-    class Shared(Minimal):
-        contract = Contract(
-            spec_schema=SPEC,
-            idempotency=Idempotency(fields=("image",), per_user=False),
-        )
-
-    assert "anyone" in describe("submit", Shared)
-    assert "anyone" not in describe("submit", Described)
+def test_sameness_is_described_per_item_and_the_queue_as_the_whole_queue():
+    # D41/D42, said where the model decides: the same work from this item is
+    # one job; list shows every job the credential can see, marked by origin.
+    assert "this item" in describe("submit", Described)
+    listing = describe("list", Minimal)
+    assert "from_this_item" in listing and "not only" in listing
 
 
 def test_get_says_unknown_is_not_gone():

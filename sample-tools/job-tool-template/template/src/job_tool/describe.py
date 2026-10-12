@@ -14,12 +14,11 @@ from job_contract import JobBackend
 
 def _submit(backend: type[JobBackend]) -> str:
     rule = backend.contract.idempotency
-    who = "anyone" if not rule.per_user else "you"
     return (
         "Submit a job. Returns at once with its job_id; the job then runs on its own and "
         "nothing announces when it ends, so tell the user to ask about it later. "
-        f"If {who} already submitted the same {', '.join(rule.fields)}, this returns that "
-        "job instead of starting another."
+        f"If this item already submitted the same {', '.join(rule.fields)}, this returns "
+        "that job instead of starting another."
     )
 
 
@@ -29,7 +28,10 @@ _FIXED = {
         "could not say just now and does NOT mean the job does not exist. Its state is the "
         "backend's own word for where the job is."
     ),
-    "list": "List your jobs, newest first, one page at a time.",
+    "list": (
+        "List the jobs this backend shows you, newest first, one page at a time — not only "
+        "this item's; each says from_this_item."
+    ),
     "update": (
         "Change a job that was already submitted; the patch says what can change. The "
         "change is accepted, not necessarily applied: call get to see when it has taken "

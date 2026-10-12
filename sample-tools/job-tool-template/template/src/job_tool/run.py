@@ -16,6 +16,7 @@ failure described by its message alone.
 
 from __future__ import annotations
 
+import os
 import threading
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
@@ -72,8 +73,25 @@ def within[T](seconds: float, fn: Callable[[], T]) -> T:
     return box["value"]
 
 
+#: Set by the platform on every dispatch: the item this call runs for (D44).
+ITEM_ENV = "WORKSPACE_ITEM_ID"
+
+
+def this_item() -> str | None:
+    """The item this call runs for, or None — the MCP runner has none (D47)."""
+    return os.environ.get(ITEM_ENV) or None
+
+
+def _job(job: JobStatus) -> dict[str, Any]:
+    """A job as the model reads it: the backend's record, plus whether it came
+    from this item (D42) — the queue is shown whole, so this is how the model
+    tells "yours" from "someone else's"."""
+    here = this_item()
+    return {**asdict(job), "from_this_item": here is not None and job.item_id == here}
+
+
 def _status(job: JobStatus, advice: str) -> dict[str, Any]:
-    return {"job": asdict(job), "next": advice}
+    return {"job": _job(job), "next": advice}
 
 
 _RUNNING = "Still running; it continues on its own. Call get again later to check."
@@ -128,23 +146,24 @@ def _submit(backend: type[JobBackend], spec: dict[str, Any]) -> Outcome:
     landed before saying anything — so "try again" is never said about a job
     that is already running (two jobs, two bills)."""
     contract = backend.contract
-    sent: dict[str, str] = {}
+    item_id = this_item()
+    key = contract.idempotency.key(spec, item_id=item_id)
+    calling: list[bool] = []  # set the moment `submit` itself is entered
 
     def send() -> str:
         instance = backend()
-        sent["key"] = contract.idempotency.key(spec, caller=instance.caller_id())
-        return instance.submit(spec, sent["key"])
+        calling.append(True)
+        return instance.submit(spec, key, item_id)
 
     try:
         job_id = within(contract.budget.submit, send)
     except TimedOut:
-        key = sent.get("key")
-        if key is None:
-            # Stuck before `submit` was called, and the stuck thread ends with
-            # this process. Not airtight — `caller_id` could return in the
-            # instant before the process ends and the thread call `submit` —
-            # but the same spec carries the same key, so sending it again
-            # returns that job rather than starting a second.
+        if not calling:
+            # Stuck building the backend, before `submit` was called, and the
+            # stuck thread ends with this process. Not airtight — the build
+            # could finish in the instant before the process ends and the
+            # thread call `submit` — but the same spec carries the same key,
+            # so sending it again returns that job rather than starting a second.
             return Outcome(
                 2,
                 error=f"The backend gave no answer within {contract.budget.submit:g}s, "
@@ -186,7 +205,7 @@ def _list(backend: type[JobBackend], args: dict[str, Any]) -> Outcome:
         if after is not None
         else "There are no more jobs."
     )
-    return Outcome(0, {"jobs": [asdict(job) for job in jobs], "next_cursor": after, "next": advice})
+    return Outcome(0, {"jobs": [_job(job) for job in jobs], "next_cursor": after, "next": advice})
 
 
 def _update(backend: type[JobBackend], args: dict[str, Any]) -> Outcome:

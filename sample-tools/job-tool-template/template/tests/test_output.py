@@ -22,7 +22,7 @@ TESTS = Path(__file__).resolve().parent
 
 @pytest.fixture(autouse=True)
 def fresh_script():
-    Scripted.answers = {"caller_id": "ann"}
+    Scripted.answers = {}
     Scripted.delay = {}
     Scripted.calls = []
 

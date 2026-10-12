@@ -1,8 +1,8 @@
 """The commands a backend is offered to the model as.
 
 A command exists for each call the backend supports (`JobBackend.offers`),
-except the two the shell keeps to itself: `caller_id` (whose key this is) and
-`find_by_key` (did a submit that ran out of time land?).
+except the one the shell keeps to itself: `find_by_key` (did a submit that ran
+out of time land?).
 """
 
 from __future__ import annotations
@@ -13,7 +13,7 @@ from typing import Any
 from job_contract import JobBackend
 
 #: Calls the shell makes on its own and never offers.
-INTERNAL = ("caller_id", "find_by_key")
+INTERNAL = ("find_by_key",)
 
 
 @dataclass(frozen=True)

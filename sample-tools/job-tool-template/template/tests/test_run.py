@@ -14,11 +14,16 @@ from job_tool.cli import main
 from job_tool.commands import LIST_PAGE, LOG_PAGE
 
 
+ITEM = "item-1"
+
+
 @pytest.fixture(autouse=True)
-def fresh_script():
-    Scripted.answers = {"caller_id": "ann"}
+def fresh_script(monkeypatch):
+    Scripted.answers = {}
     Scripted.delay = {}
     Scripted.calls = []
+    # As the platform sets it on every dispatch (D44).
+    monkeypatch.setenv("WORKSPACE_ITEM_ID", ITEM)
 
 
 def _run(capsys, name, args):
@@ -34,7 +39,14 @@ def test_a_running_job_is_reported_with_the_advice_to_ask_again_later(capsys):
 
     answer = json.loads(out)
     assert code == 0
-    assert answer["job"] == {"job_id": "j1", "phase": "running", "state": "suspended", "detail": {}}
+    assert answer["job"] == {
+        "job_id": "j1",
+        "phase": "running",
+        "state": "suspended",
+        "detail": {},
+        "item_id": None,
+        "from_this_item": False,
+    }
     assert "get" in answer["next"] and "later" in answer["next"]
 
 
@@ -123,18 +135,56 @@ def test_arguments_outside_the_schema_never_reach_the_backend(capsys):
 SPEC_IN = {"image": "trainer:3", "command": "train.py"}
 
 
-def test_submit_sends_the_key_the_contract_derives_for_this_caller(capsys):
+def test_submit_sends_the_key_the_contract_derives_for_this_item(capsys):
     Scripted.answers["submit"] = "j1"
 
     code, out, _ = _run(capsys, "submit", SPEC_IN)
 
-    expected = Scripted.contract.idempotency.key(SPEC_IN, caller="ann")
-    assert ("submit", SPEC_IN, expected) in Scripted.calls
+    expected = Scripted.contract.idempotency.key(SPEC_IN, item_id=ITEM)
+    assert ("submit", SPEC_IN, expected, ITEM) in Scripted.calls
     answer = json.loads(out)
     assert code == 0
     assert answer["job_id"] == "j1"
     # Nothing will call the user back (D10): the model has to say so.
     assert "get" in answer["next"] and "later" in answer["next"]
+
+
+def test_without_an_item_the_key_is_the_fields_alone(capsys, monkeypatch):
+    # D47: the MCP runner sets no item. The tool still works.
+    monkeypatch.delenv("WORKSPACE_ITEM_ID")
+    Scripted.answers["submit"] = "j1"
+
+    code, _, _ = _run(capsys, "submit", SPEC_IN)
+
+    expected = Scripted.contract.idempotency.key(SPEC_IN, item_id=None)
+    assert code == 0
+    assert ("submit", SPEC_IN, expected, None) in Scripted.calls
+
+
+def test_jobs_from_this_item_are_marked_and_the_rest_are_still_shown(capsys):
+    # D42: the queue as the credential sees it — never filtered to the item —
+    # with each job saying whether it came from here.
+    Scripted.answers["list"] = (
+        [
+            JobStatus(job_id="mine", phase="running", state="q", item_id=ITEM),
+            JobStatus(job_id="theirs", phase="running", state="q", item_id="item-2"),
+            JobStatus(job_id="unknown", phase="done", state="ok"),
+        ],
+        None,
+    )
+
+    _, out, _ = _run(capsys, "list", {})
+
+    marks = {j["job_id"]: j["from_this_item"] for j in json.loads(out)["jobs"]}
+    assert marks == {"mine": True, "theirs": False, "unknown": False}
+
+
+def test_get_says_whether_the_job_came_from_this_item(capsys):
+    Scripted.answers["get"] = JobStatus(job_id="j1", phase="running", state="q", item_id=ITEM)
+
+    _, out, _ = _run(capsys, "get", {"job_id": "j1"})
+
+    assert json.loads(out)["job"]["from_this_item"] is True
 
 
 def test_a_slow_submit_that_landed_is_reported_as_submitted(capsys):
@@ -144,7 +194,7 @@ def test_a_slow_submit_that_landed_is_reported_as_submitted(capsys):
 
     code, out, _ = _run(capsys, "submit", SPEC_IN)
 
-    key = Scripted.contract.idempotency.key(SPEC_IN, caller="ann")
+    key = Scripted.contract.idempotency.key(SPEC_IN, item_id=ITEM)
     assert ("find_by_key", key) in Scripted.calls  # asked about THIS submit
     answer = json.loads(out)
     assert code == 0
@@ -205,10 +255,10 @@ def test_a_lookup_that_needs_a_person_still_says_so(capsys):
 
 
 def test_a_submit_stuck_before_it_was_sent_is_safe_to_send_again(capsys):
-    # Stuck asking who the caller is: submit was not called. Resending is safe
-    # because of the key, which is what the model must be told — not that
-    # nothing could ever have been sent.
-    Scripted.delay["caller_id"] = 30.0
+    # Stuck building the backend (connecting to the scheduler): submit was not
+    # called. Resending is safe because of the key, which is what the model
+    # must be told — not that nothing could ever have been sent.
+    Scripted.delay["__init__"] = 30.0
 
     code, _, err = _run(capsys, "submit", SPEC_IN)
 

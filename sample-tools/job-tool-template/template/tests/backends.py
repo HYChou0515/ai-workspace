@@ -29,10 +29,7 @@ class Minimal(JobBackend):
 
     contract = Contract(spec_schema=SPEC, idempotency=Idempotency(fields=("image", "command")))
 
-    def caller_id(self):
-        return "ann"
-
-    def submit(self, spec, key):
+    def submit(self, spec, key, item_id):
         return "j1"
 
     def find_by_key(self, key):
@@ -50,10 +47,7 @@ class NoGet(JobBackend):
 
     contract = Minimal.contract
 
-    def caller_id(self):
-        return "ann"
-
-    def submit(self, spec, key):
+    def submit(self, spec, key, item_id):
         return "j1"
 
     def find_by_key(self, key):
@@ -82,7 +76,7 @@ class Shelling(Minimal):
     """`submit` runs a command, the way a backend calls `sbatch` or `kubectl`.
     The child writes to file descriptor 1, which no `sys.stdout` swap reaches."""
 
-    def submit(self, spec, key):
+    def submit(self, spec, key, item_id):
         subprocess.run(["echo", "CHILD-OUTPUT"], check=True)
         return "j1"
 
@@ -126,11 +120,13 @@ class Scripted(Minimal):
             raise answer
         return answer
 
-    def caller_id(self):
-        return self._answer("caller_id")
+    def __init__(self):
+        # Building a backend may itself be slow (connecting to the scheduler);
+        # a delay under "__init__" stands for that.
+        time.sleep(type(self).delay.get("__init__", 0))
 
-    def submit(self, spec, key):
-        return self._answer("submit", spec, key)
+    def submit(self, spec, key, item_id):
+        return self._answer("submit", spec, key, item_id)
 
     def find_by_key(self, key):
         return self._answer("find_by_key", key)
