@@ -2087,24 +2087,36 @@ agent 步驟裡 AI 的呼叫、WUI 的工具呼叫、view plugin、圖表重畫�
 
 **設定** — 沒有新 key，沒有要做的事。**行為改變，沒有開關**：
 
-- **重試改在單次模型呼叫裡做，不再整輪重跑**（`docs/plan-friendly-errors.md` D2）。單一端點的部署以前在回答到一半收到
-  429／逾時／5xx 時直接結束這一輪（因為整輪重跑會重複執行已經跑過的工具）；現在是那一次呼叫自己等待或重送，
-  已經跑過的工具不會再跑一次。等待上限沿用原本的數字（單一端點 120 秒、chain 沿用 `rate_limit_budget_s`），
-  重送次數沿用 `runner.max_retries`，所以**沒有新的設定可以調**。為什麼沒有開關：舊的整輪重試在「已經有輸出」時本來就不重試，
-  新做法是同一件事做在正確的層，沒有「想要舊行為」的情境。
-- 小模型送出非物件、或多個黏在一起的 tool 參數時，改成工具回覆錯誤、模型下一次呼叫自己改正；以前是整輪重跑。
+- **重試改在單次模型呼叫裡做，不再整輪重跑**（`docs/plan-friendly-errors.md` D2）。以前失敗會把整輪重跑，為了不重複執行
+  已經跑過的工具，只要回答已經有輸出就不重試——回答到一半的 429／逾時／5xx 直接結束這一輪。現在是那一次呼叫自己等待或重送，
+  已經跑過的工具不會再跑；講到一半斷掉的那段文字會被收回、換成重送的內容。
+  - 429 的等待：**一輪共用一個等待池**，單一端點沿用 120 秒（沒有設定可調）。failover chain 先用自己的
+    `rate_limit_budget_s` 等，等不到時外層的呼叫層**還會再等最多 120 秒**（以前只在還沒有輸出時才會疊這一層）。
+  - 逾時／連線中斷／5xx／所有模型都忙：同一次呼叫最多重送 `runner.max_retries` 次，**每次呼叫各自計算**
+    （以前是整輪共用）。
+  - **不再重試的**：401／403、400、其他認不出來的錯誤，以及憑證解析（`ITokenService`）丟出的例外——以前在還沒有輸出時
+    會整輪重跑最多 `max_retries` 次，現在第一次就結束這一輪並說明原因。自訂 `ITokenService` 的部署：一輪只會打你們一次，
+    見 [configuration 的契約 3](configuration.md)。
+  - 小模型送出非物件、或多個黏在一起的 tool 參數：工具回覆錯誤、模型下一次呼叫自己改正；以前是整輪重跑。
 - 錯誤一律以「發生了什麼／可以怎麼做／技術細節（預設收合，可複製）」顯示，**所有使用者都看得到技術細節**（D1）。
   技術細節是 provider 的原文，可能包含端點網址或模型名稱。
+- 子 agent（`ask_knowledge_base`、`run_agent`、skill hub 審查）被限流或重試時，**父輪**的狀態列會顯示；
+  子 agent 失敗時，工具卡旁邊顯示說人話的原因，交給模型的工具結果仍是原文。
+- 伺服器重啟、回合被接手太多次而放棄時，訊息改成「這個回覆在伺服器重新啟動時中斷…請再送一次你的訊息」。
+- 夜間 goal「今晚無法開始」的註記：畫面上原因改為說人話＋技術細節；註記文字本身（匯出、影片看到的）照舊以原文結尾。
 
 **資料** — 沒有 `Schema` 升版，**不需要跑 migrate**：
 
-- `Message`／`KbMessage` 多了 `error_params`，`Message` 多了 `tool_failure`，`SourceDoc` 多了 `status_error_kind`，都是有預設值的新欄位。
+- `Message` 多了 `error_params` 與 `failure`，`KbMessage` 多了 `error_params`，`SourceDoc` 多了 `status_error_kind`，
+  都是有預設值的新欄位。
 - `SourceDoc.status_error_kind` 加進了索引欄位（文件列表從索引 metadata 讀，#395），但**故意不升版、不回填**：
-  舊資料的 data 裡本來就沒有這個值，重抽也抽不出來；也沒有任何查詢以它過濾。舊的失敗文件照舊顯示「處理失敗」加上原本的說明。
+  舊資料的 data 裡本來就沒有這個值，重抽也抽不出來；也沒有任何查詢以它過濾。舊的失敗文件在列表上照舊顯示原本的說明，
+  點進文件會看到「處理失敗」與原本的說明。
+- 失敗的 workflow run 的 `result` 多了 `error_kind`（和 `step_failed` 時的 `error_reason`）；`error` 照舊是原文。
 - 已經存下來的錯誤訊息（`error_kind="error"`）會以「發生了預期外的錯誤」顯示，原本的文字移到技術細節裡。
 
 **k8s · CI 側** — 沒有新的 manifest、env、probe 或 JobType；照常重 build、照常部署。API image 和前端一起換才完整
-（前端要看得懂新的 `model_retrying`／`output_retracted` 事件和 `error_kind`）。
+（前端要看得懂新的 `model_retrying`／`output_retracted` 事件、`error_kind` 和 `failure`）。
 
 **確認做完**（`rollout 後`）：
 

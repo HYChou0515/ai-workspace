@@ -33,7 +33,8 @@
 | 決策 | 理由 | 否決的替代方案 | 出處 |
 |---|---|---|---|
 | 預設本機 Qwen3（Ollama）而非 hosted | 成本/隱私；模型是可抽換的外部依賴，用 LiteLLM 模型字串即可切換 | 預設 hosted OpenAI/Claude（綁定外部付費/資料外流）| [architecture.md](architecture.md) §9；user memory `feedback_llm_choice`, `feedback_ai_external_dependency` |
-| 小模型失敗模式帶提示重試（`diagnose_error`）| Ollama chunk_parser 在多工具呼叫會吐無效 JSON，帶提示重試比硬失敗好 | 一次失敗就終止回合 | [architecture.md](architecture.md) §9, [subsystems/agent-runtime.md](subsystems/agent-runtime.md) |
+| 小模型失敗模式帶提示重試（`diagnose_error`）（已被 #915 / plan-friendly-errors.md 推翻：重試改在單次模型呼叫）| Ollama chunk_parser 在多工具呼叫會吐無效 JSON，帶提示重試比硬失敗好 | 一次失敗就終止回合 | [architecture.md](architecture.md) §9, [subsystems/agent-runtime.md](subsystems/agent-runtime.md) |
+| 重試只在單次模型呼叫（`CallRetryModel`）：429 等待、逾時/連線/5xx 重送同一請求、context 超限裁 history 再送；壞掉的 tool args 在工具結果裡回覆 | 重跑整個回合會重複已執行的工具，且一旦串流過就不能重試；只重送失敗的請求，已跑的工具留著，已串流的部分輸出以 `OutputRetracted` 撤回 | 整個回合帶提示重試（`diagnose_error`，#26 有可見進度就不重試）；SDK 的 `ModelSettings.retry`（串流過就不重試、無法顯示等待） | [plan-friendly-errors.md](plan-friendly-errors.md) D2/D3/D9；`agent/call_retry_model.py` |
 | LLM 功能 DoD 要含 live canned check | fake-LLM 測試 ≠ 功能真的可用；replay 只跑 context→LLM、不跑工具 | 只靠 fake-LLM 單元測試就宣告完成 | user memory `feedback_llm_features_need_live_checks` |
 
 ## 知識庫（KB）

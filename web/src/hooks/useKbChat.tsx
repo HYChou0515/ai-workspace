@@ -5,7 +5,6 @@ import { kbApi, type KbApi, type KbImageInput } from "../api/kb";
 import { qk } from "../api/queryKeys";
 import { eventId, eventSeq, isTerminal } from "../events";
 import { type Failure, failureFromError, failureFromHttp } from "../lib/failure";
-import { initialLocale, translate } from "../lib/i18n";
 import { getKbAgentName } from "../lib/kbAgent";
 import {
   getStored as getKbEnhancementSelection,
@@ -234,11 +233,7 @@ export function useKbChat({
             // exactly like a chat where nothing is happening, and the answer
             // simply stops growing. Our OWN stream, not the model's — the
             // model-side `connection` copy would send the reader the wrong way.
-            const notice = failureFromError(
-              err,
-              "stream_dropped",
-              translate(initialLocale(), "failure.streamDropped"),
-            );
+            const notice = failureFromError(err, "stream_dropped");
             dropNotice = notice;
             setLog((prev) => ({ ...prev, error: notice }));
           }

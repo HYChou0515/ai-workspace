@@ -45,6 +45,14 @@ describe("ErrorNotice (docs/plan-friendly-errors.md D1)", () => {
     expect(screen.getByRole("button", { name: zh("failure.copied") })).toBeInTheDocument();
   });
 
+  it("offers no copy button that would do nothing — an http deploy has no clipboard", () => {
+    Object.defineProperty(navigator, "clipboard", { value: undefined, configurable: true });
+    render(<ErrorNotice failure={{ kind: "timeout", raw: RAW }} />);
+
+    expect(screen.getByTestId("error-notice-details")).toHaveTextContent(RAW);
+    expect(screen.queryByRole("button", { name: zh("failure.copy") })).toBeNull();
+  });
+
   it("words an old row's `error` as unknown, with its text under details", () => {
     render(<ErrorNotice failure={{ kind: "error", raw: "giving up after 3 attempts: Boom" }} />);
 

@@ -48,7 +48,7 @@ def to_rca_message(m: TurnMessage) -> Message:
         tool_name=m.tool_name,
         tool_args=m.tool_args,
         tool_display=m.tool_display,
-        tool_failure=m.tool_failure,
+        failure=m.failure,
         created_at=m.created_at,
     )
 

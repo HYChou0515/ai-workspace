@@ -393,6 +393,8 @@ def test_findability_answer_surfaces_llm_error_in_the_stream():
     assert r.status_code == 200
     body = r.text
     assert "error" in body and "boom" in body
+    # Named like a turn's failure, so the modal words it (review round 1).
+    assert '"kind": "unknown"' in body or '"kind":"unknown"' in body
 
 
 def test_document_guidance_write_and_render_roundtrip():

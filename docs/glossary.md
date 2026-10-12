@@ -36,7 +36,7 @@
 - **AgentConfigCatalog** — runner-time 的 `AgentConfig` 目錄 ＋ 解析器：`list()`/`get(name)`/`default()`/`resolve(attached, template)`。解析串接 `attached → template → default` ＋ template 附錄合成。位於 `agent/config_catalog.py`。歸 [Agent 執行時](subsystems/agent-runtime.md)。
 - **AgentToolContext** — agent 工具逐回合拿到的 context（sandbox、filestore、ask_kb bridge…）。RCA／KB 兩種 flavour 共用一個 dataclass，「flavour 不對」由可選欄位為 `None` 表示。歸 [Agent 執行時](subsystems/agent-runtime.md)。
 - **AgentRunner** — 驅動一回合的 Protocol；catalog 重構後不管 picker，只在給定 context 下跑回合。實作：`LitellmAgentRunner`（prod）、`ScriptedAgentRunner`（測試）。歸 [Agent 執行時](subsystems/agent-runtime.md)。
-- **args_recovery** — `agent/args_recovery.py` 的 FunctionTool wrap，在 invoke 時攔截 LiteLLM streaming 把多個 `tool_call.arguments` 併成 concat-JSON 的情況；剝出第一個 JSON 物件、丟出含「Extra data」的 `ValueError`，runner 的 `diagnose_error` 導向「一次只送一個 tool_call」retry。歸 [Agent 執行時](subsystems/agent-runtime.md)。
+- **args_recovery** — `agent/args_recovery.py` 的 FunctionTool wrap，在 invoke 時攔截 LiteLLM streaming 把多個 `tool_call.arguments` 併成 concat-JSON 的情況；不執行該工具，直接在工具結果裡（in-band）回覆「一次只送一個 tool_call」；無法解析或非物件的 args 也一樣在工具結果裡說明原因，模型下一次呼叫自行修正。歸 [Agent 執行時](subsystems/agent-runtime.md)。
 
 ---
 

@@ -847,7 +847,7 @@ export function KbCollectionPage({ client = kbApi }: { client?: KbApi }) {
                                   button, so no copy control fits inside it —
                                   the doc it opens carries the full notice).
                                   Unnamed, the detail stays the reason (#170). */}
-                              {d.status_error_kind
+                              {d.status_error_kind && d.status_error_kind !== "unknown"
                                 ? describeFailure(docFailure(d, locale), locale).headline
                                 : d.status_detail || t("kb.doc.processingFailed")}
                             </span>

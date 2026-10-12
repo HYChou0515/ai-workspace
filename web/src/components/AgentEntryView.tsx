@@ -400,7 +400,7 @@ export function EntryView({
   if (entry.kind === "goal_note") {
     // #613 P3: the goal driver's outcome marker — a quiet status line, like a
     // mention (informational, not part of the dialogue).
-    return (
+    const note = (
       <div
         data-testid="goal-note"
         style={{
@@ -413,7 +413,15 @@ export function EntryView({
           borderLeft: "2px solid var(--accent)",
         }}
       >
-        <span>{entry.text}</span>
+        <span style={{ whiteSpace: "pre-wrap" }}>{entry.text}</span>
+      </div>
+    );
+    // Review round 1: why a night could not start, worded, raw text beneath.
+    if (!entry.failure) return note;
+    return (
+      <div>
+        {note}
+        <ErrorNotice failure={entry.failure} />
       </div>
     );
   }

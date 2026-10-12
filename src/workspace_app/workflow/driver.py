@@ -20,7 +20,7 @@ from typing import Any
 import msgspec
 from specstar import SpecStar
 
-from ..failover.classify import classify_error
+from ..failover.classify import classify_error, raw_error_text
 from .engine import StepFailed
 from .gate import AwaitingHuman
 from .handle import WorkflowHandle
@@ -92,7 +92,7 @@ def _failure_result(exc: BaseException) -> dict[str, Any]:
     a reader (a gate's verdict, `fail("…")`), which is the headline; anything
     else is named by the kind a turn's failure would be, its raw text kept for
     technical details."""
-    raw = f"{type(exc).__name__}: {exc}"
+    raw = raw_error_text(exc)
     if isinstance(exc, StepFailed):
         return {"error": raw, "error_kind": "step_failed", "error_reason": str(exc)}
     return {"error": raw, "error_kind": classify_error(exc)}

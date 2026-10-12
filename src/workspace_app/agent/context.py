@@ -550,9 +550,9 @@ class AgentToolContext:
     # Per-call citation lists from this turn's sub-agent invocations,
     # keyed by purpose. Per purpose, lists are in CALL ORDER — the
     # persist step pairs the Nth list with the Nth tool message of
-    # that purpose. (RunContextWrapper-typed tool params don't expose
-    # the call id; the SDK runs tools sequentially within a turn, so
-    # per-purpose order pairing is unambiguous.)
+    # that purpose — by order, not by call id (a tool can read its call id,
+    # `ctx.tool_call_id`, as `tool_failures` below does); the SDK runs tools
+    # sequentially within a turn, so per-purpose order pairing is unambiguous.
     subagent_citations: dict[str, list[list[Citation]]] = field(default_factory=dict)
     # #537: this turn's knowledge-source allowance, rendered for the prompt. Set
     # where the budgets are resolved (that's the only place that still knows a
@@ -578,7 +578,7 @@ class AgentToolContext:
     # when the two differ (exit 0 with non-empty stderr), so it stays tiny.
     # String-keyed: the cleaned output is what the ToolEnd carries verbatim.
     # (A tool the SDK invokes DOES get its call id — `tool_call_id` on the
-    # ToolContext it is handed, which `tool_failures` below keys by.)
+    # ToolContext it is handed, which `tool_failures` above keys by.)
     tool_displays: dict[str, str] = field(default_factory=dict)
     # RCA agent's `mention_user` tool reaches this to summon a human to the
     # investigation. Args: (investigation_id, user_ids, note). Wired by the API.

@@ -21,7 +21,7 @@ import base64
 import contextlib
 import logging
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, NoReturn, cast
+from typing import TYPE_CHECKING, Any, NoReturn, cast
 
 import magic
 import msgspec
@@ -787,7 +787,7 @@ class ChatSendService:
         upsert_goal(self._spec, fresh, user=fresh.set_by)
         return fresh
 
-    async def offhours_night_abandoned(self, conversation_id: str, reason: str) -> None:
+    async def offhours_night_abandoned(self, conversation_id: str, failure: RunError) -> None:
         """The sweeper gave up on tonight after too many failed starts. Say so.
 
         Deliberately NOT `_hand_over`: that ending asks the cheap model to write
@@ -804,8 +804,15 @@ class ChatSendService:
             return  # cleared or finished between the failure and now
         conv = self._conv_rm.get(conversation_id).data
         assert isinstance(conv, Conversation)
+        # The reason ends the note's text, as it always did — the export and
+        # the video read text only — and rides it as what it IS, so the thread
+        # can word it (docs/plan-friendly-errors.md, review round 1): the raw
+        # chain of an exhausted failover is not a sentence for the person.
+        reason = failure.message
         self._append_goal_marker(
-            conversation_id, marker_text("unstartable", goal.condition, reason)
+            conversation_id,
+            marker_text("unstartable", goal.condition, reason),
+            failure={"kind": failure.kind or "unknown", "params": failure.params, "raw": reason},
         )
         self._ring_the_bell(conversation_id, goal, "unstartable", reason)
         self._publish_goal(self._locator.engine_key(conv.item_id, conversation_id), goal)
@@ -856,13 +863,17 @@ class ChatSendService:
         except Exception:  # noqa: BLE001 — the ending stands with or without the bell
             logger.exception("goal hand-over notification failed for %s", rid)
 
-    def _append_goal_marker(self, rid: str, text: str) -> None:
+    def _append_goal_marker(
+        self, rid: str, text: str, *, failure: dict[str, Any] | None = None
+    ) -> None:
         """A `role="goal"` marker in the thread — rendered by the FE, and by
         design never replayed into LLM history (`history_items` only folds
         user/assistant/tool/error; #199's lesson rules out `system`)."""
         conv = self._conv_rm.get(rid).data
         assert isinstance(conv, Conversation)
-        conv.messages.append(Message(role="goal", content=text, created_at=now_ms()))
+        conv.messages.append(
+            Message(role="goal", content=text, failure=failure, created_at=now_ms())
+        )
         self._conv_rm.update(rid, conv)
 
     def _publish_goal(self, engine_key: str, goal) -> None:  # noqa: ANN001 — ConversationGoal (late import cycle)
@@ -1112,7 +1123,13 @@ class ChatSendService:
         and end the thread with an error that says so, so the person stops
         waiting (#559 reads the last message) and can send again."""
         attempts = row.claim.reruns + 1  # the first run plus each takeover
-        failure = RunError(message=_GIVE_UP_MESSAGE.format(attempts=attempts))
+        # Named, so the FE says what to do — send it again — rather than
+        # "unexpected error"; `content` keeps the sentence `_GIVE_UP_PREFIX` finds.
+        failure = RunError(
+            message=_GIVE_UP_MESSAGE.format(attempts=attempts),
+            kind="turn_lost",
+            params={"attempts": attempts},
+        )
         # A `finish` the store refused leaves the row for the next tick, which
         # gives up on it again (one more attempt on the count): the ending is
         # written once, not once per tick — looked for anywhere after the

@@ -72,7 +72,7 @@ from ..resources.kb import Citation, KbChat, KbMessage
 from ..tokens import CallLane
 from ..users.protocol import UserDirectory
 from .chat_naming import first_user_snippet
-from .events import AgentEvent, MessageDelta, RunError, ToolEnd, ToolStart, UserMessage
+from .events import AgentEvent, AnswerText, RunError, ToolEnd, ToolStart, UserMessage
 from .notifications import notify
 from .permission_body import PermissionBody, PermissionOut, build_permission, granted_user_ids
 from .runner import AgentRunner
@@ -221,7 +221,8 @@ async def answer_question(
         # not read; the sub-agent's kb_search discloses a competitive match here.
         discoverable_collection_ids=discoverable_collection_ids or [],
     )
-    parts: list[str] = []
+    # D3: a re-sent call's broken half is withdrawn (review round 1).
+    answer_text = AnswerText()
     # (tool_name, error_text) pairs captured from ToolEnd events whose
     # output looks like the agents-SDK default error wrapper. When ALL
     # of the sub-agent's tool calls failed this way, the LLM tends to
@@ -235,9 +236,8 @@ async def answer_question(
     async for ev in runner.run(question, ctx):
         if on_event is not None:
             on_event(ev)
-        if isinstance(ev, MessageDelta) and not ev.reasoning:
-            parts.append(ev.text)
-        elif isinstance(ev, ToolStart):
+        answer_text.add(ev)
+        if isinstance(ev, ToolStart):
             pending_tools[ev.call_id] = ev.name
         elif isinstance(ev, ToolEnd) and _looks_like_tool_error(ev.output):
             tool_name = pending_tools.pop(ev.call_id, "tool")
@@ -259,7 +259,7 @@ async def answer_question(
         # surfaces the root cause to both the operator (log + chat) and
         # the LLM (so it can decide what to do, not hallucinate).
         return "KB lookup failed:\n" + "\n".join(f"- {name}: {err}" for name, err in tool_errors)
-    answer = "".join(parts)
+    answer = answer_text.text
     cites = parse_citations(answer, ctx.kb_passages)
     if on_citations is not None:
         on_citations(cites)

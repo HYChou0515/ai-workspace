@@ -354,11 +354,11 @@ export function eventId(ev: AgentEvent): string | undefined {
  * event type therefore defaults to "not turn progress": the cost of forgetting
  * to add one here is a warning we don't show, which is the cheaper mistake.
  *
- * A retry notice arrives as either `tool_call_parse_error` (in this list, so it
- * arms) or `RunError` — wire type `"error"`, which `isTerminal` treats as an
- * ending even though the turn continues. That is pre-existing and unchanged
- * here; stating it plainly because an earlier version of this comment claimed
- * the opposite. */
+ * A model call being re-sent arrives as `model_retrying`, and the text it had
+ * shown is withdrawn by `output_retracted` — both in this list, like the
+ * `rate_limited` hold (docs/plan-friendly-errors.md). A `RunError` (wire type
+ * `"error"`) is only ever the turn's ending now: the mid-turn "retry: …"
+ * notice it used to carry is gone with the whole-turn retry. */
 const TURN_PROGRESS: ReadonlySet<string> = new Set([
   // A turn is starting: broadcast only after admission and after the message is
   // persisted, so unlike `file_changed` it cannot fire without one. The window
@@ -376,6 +376,8 @@ const TURN_PROGRESS: ReadonlySet<string> = new Set([
   "failover_switch",
   "restore_progress",
   "rate_limited",
+  "model_retrying",
+  "output_retracted",
   "context_trimmed",
 ]);
 

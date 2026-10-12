@@ -77,15 +77,22 @@ export function FailureDetails({ raw }: { raw: string }) {
       >
         {raw}
       </pre>
-      <button
-        type="button"
-        className="btn"
-        onClick={() => {
-          void navigator.clipboard?.writeText(raw).then(() => setCopied(true));
-        }}
-      >
-        {copied ? t("failure.copied") : t("failure.copy")}
-      </button>
+      {/* No clipboard API on a plain-http deploy: no button that does
+          nothing — the text above can still be selected. */}
+      {typeof navigator !== "undefined" && navigator.clipboard && (
+        <button
+          type="button"
+          className="btn"
+          onClick={() => {
+            navigator.clipboard.writeText(raw).then(
+              () => setCopied(true),
+              () => setCopied(false),
+            );
+          }}
+        >
+          {copied ? t("failure.copied") : t("failure.copy")}
+        </button>
+      )}
     </details>
   );
 }

@@ -19,7 +19,7 @@ import { holdingFromSendError } from "./useChatSessionHolding";
 import { type ChatThread, useChatLog } from "./useChatLog";
 import { useCurrentUser } from "./useCurrentUser";
 import { failureFromError, failureFromHttp } from "../lib/failure";
-import { initialLocale, translate, useT } from "../lib/i18n";
+import { useT } from "../lib/i18n";
 import { STORE_POLL_MS, useStorePollFallback } from "./useStorePollFallback";
 
 /** A quota refusal is the one send failure the user can do something about, so
@@ -709,7 +709,7 @@ export function useChatSession(
     void Promise.resolve(transport.requestCancel()).catch((err: unknown) => {
       setLog((prev) => ({
         ...prev,
-        error: failureFromError(err, "stop_failed", translate(initialLocale(), "failure.stopFailed")),
+        error: failureFromError(err, "stop_failed"),
         errorFromTurn: false,
         // …and stop claiming to be stopping. `stopping` means the backend has
         // been TOLD; if telling it failed, it has not been, and the state only

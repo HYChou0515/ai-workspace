@@ -841,6 +841,31 @@ describe("KbCollectionsPage", () => {
     expect(strip).not.toHaveTextContent("litellm.RateLimitError");
   });
 
+  it("keeps a parser's own reason when the failure could only be named unknown (review round 1)", async () => {
+    const client = {
+      listCollections: async () => [col({ resource_id: "c1", name: "kb" })],
+      listDocuments: async () =>
+        page([
+          {
+            resource_id: "c1/me/a.pdf",
+            path: "a.pdf",
+            content_type: "application/pdf",
+            created_by: "me",
+            status: "error",
+            status_detail: "PdfReadError: File has not been decrypted",
+            status_error_kind: "unknown",
+          },
+        ]),
+    } as unknown as Client;
+    renderKb(client);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Open kb" }));
+    const strip = await screen.findByTestId("kb-index-status");
+    await userEvent.click(within(strip).getByRole("button", { name: /1 份處理失敗/ }));
+    // "Something unexpected went wrong" would say less than the parser did.
+    expect(strip).toHaveTextContent("PdfReadError: File has not been decrypted");
+  });
+
   it("opens the failed doc's read-only viewer when its row is clicked (#170)", async () => {
     const openDoc = vi.fn();
     const client = {

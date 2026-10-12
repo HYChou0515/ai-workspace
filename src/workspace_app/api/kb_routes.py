@@ -68,11 +68,12 @@ from ..perm import Actor, Permission, Verb, Visibility, authorize
 from ..resources.graph import mention_id
 from ..resources.groups import groups_of
 from ..resources.kb import Collection, DocChunk, IndexRun, SourceDoc
-from .events import AgentEvent, MessageDelta, RunDone, RunError, to_sse
+from .events import AgentEvent, MessageDelta, RunDone, to_sse
 from .notifications import notification_sent, notify
 from .permission_body import PermissionBody as _PermissionBody
 from .permission_body import PermissionOut, build_permission
 from .permission_body import granted_user_ids as _granted_user_ids
+from .turns import _terminal_error
 
 if TYPE_CHECKING:
     from ..kb.graph.coordinator import GraphCoordinator
@@ -1505,7 +1506,8 @@ def register_kb_routes(
                         ),
                     )
                 except Exception as exc:  # noqa: BLE001 — failures belong IN the stream
-                    emit(RunError(message=str(exc)))
+                    # Named like a turn's failure (docs/plan-friendly-errors.md D6).
+                    emit(_terminal_error(exc))
                 finally:
                     loop.call_soon_threadsafe(queue.put_nowait, None)
 

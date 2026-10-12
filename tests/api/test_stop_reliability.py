@@ -1281,7 +1281,11 @@ async def test_a_night_that_never_started_still_tells_its_owner():
         user="alice",
     )
 
-    await service.offhours_night_abandoned(rid, "WorkspaceFull: 20.0 GB of 20.0 GB used")
+    from workspace_app.api.events import RunError
+
+    await service.offhours_night_abandoned(
+        rid, RunError(message="WorkspaceFull: 20.0 GB of 20.0 GB used", kind="unknown")
+    )
 
     conv = spec.get_resource_manager(Conversation).get(rid).data
     assert isinstance(conv, Conversation)
@@ -1291,6 +1295,15 @@ async def test_a_night_that_never_started_still_tells_its_owner():
     assert "WorkspaceFull" in markers[0].content, (
         "the reason is the only fact this ending has — a body without it is invention"
     )
+    # Review round 1 (docs/plan-friendly-errors.md): carried as what it IS too,
+    # so the thread words it — `content` still ends on it for every reader that
+    # only reads text (the export, the video).
+    assert markers[0].failure == {
+        "kind": "unknown",
+        "params": None,
+        "raw": "WorkspaceFull: 20.0 GB of 20.0 GB used",
+    }
+    assert markers[0].content.endswith("\n\nWorkspaceFull: 20.0 GB of 20.0 GB used")
 
     rm = spec.get_resource_manager(Notification)
     bells = [

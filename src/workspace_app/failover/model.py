@@ -220,10 +220,11 @@ class FallbackModel(Model):
             "failover-model: all endpoints failed or cooling (get_response) — cause %r",
             rate_limited or last,
         )
-        # Chain from the 429 when one was seen: the turn loop upstream tells
-        # "rate limited" (wait, own budget, own message) from "broken" (retry
-        # hints) by walking exactly this cause chain, and the LAST failure is
-        # often the least informative one — a dead spare, not the throttle.
+        # Chain from the 429 when one was seen: the call wrapper upstream
+        # (`CallRetryModel`) and the failure's naming (`failover.classify`) tell
+        # "rate limited" from "busy" by walking exactly this cause chain, and the
+        # LAST failure is often the least informative one — a dead spare, not
+        # the throttle.
         raise AllProvidersFailed("all agent models failed or were cooling") from (
             rate_limited or last
         )
@@ -294,7 +295,7 @@ class FallbackModel(Model):
             rate_limited or last,
         )
         # Same cause preference as get_response: surface the 429 when one was
-        # seen, so the turn loop can wait it out instead of "giving up".
+        # seen, so the call wrapper can wait it out instead of "giving up".
         raise AllProvidersFailed("all agent models failed or were cooling") from (
             rate_limited or last
         )

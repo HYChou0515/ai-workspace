@@ -48,12 +48,18 @@ const WORDED = new Set([
   // Our own API (P6, `failureFromHttp`).
   "forbidden",
   "server_error",
+  // Named by the app itself (review round 1): a turn given up after its pod
+  // was replaced too often, a Stop that did not get through, our own stream.
+  "turn_lost",
+  "stop_failed",
+  "stream_dropped",
 ]);
 
 /** The variant of a kind's headline that says the number, when it was counted. */
 const COUNTED: Record<string, { param: string; key: MsgKey }> = {
   rate_limited: { param: "waited_s", key: "failure.rate_limited.waited" },
   timeout: { param: "attempts", key: "failure.timeout.tried" },
+  turn_lost: { param: "attempts", key: "failure.turn_lost.tried" },
 };
 
 /** A failure caught in the browser (a request that was refused, a stream that
@@ -116,7 +122,7 @@ export function describeFailure(failure: Failure, locale: Locale): FailureText {
   if (failure.headline) {
     return {
       headline: failure.headline,
-      action: null,
+      action: failure.action ?? null,
       details: raw && raw !== failure.headline ? raw : null,
     };
   }

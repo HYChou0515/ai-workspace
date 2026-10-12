@@ -15,10 +15,11 @@ mid-answer case this exists for, and it has no hook to show a hold to the user.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from abc import ABC, abstractmethod
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 from agents.models.interface import Model
 
@@ -71,20 +72,22 @@ class InputTrim(ABC):
 
 
 class _Attempts:
-    """One call's retry bookkeeping, shared by both shapes of a call."""
+    """One call's retry bookkeeping, shared by both shapes of a call.
+
+    The re-send COUNT is per call, deliberately: it bounds one call's blips,
+    and a long agentic turn that weathered two early ones must not end on the
+    first blip of a later call (the turn's length is bounded by max_turns). The
+    rate-limit HOLDS are the turn's — see `CallRetryModel`."""
 
     def __init__(self, owner: CallRetryModel) -> None:
         self._owner = owner
         self.retries = 0
-        # Rate-limit holds are charged to their OWN budget, in seconds, not to
-        # `max_retries`: that count exists for a provider blip, a different
-        # failure on a different timescale, and spending it on a limit gives up
-        # on one that would have cleared (the turn loop's rule, kept).
         self.holds = 0
-        self.waited_s = 0.0
 
     def _given_up(self, exc: BaseException) -> ModelCallFailed:
-        return ModelCallFailed(attempts=self.retries + self.holds + 1, waited_s=self.waited_s)
+        return ModelCallFailed(
+            attempts=self.retries + self.holds + 1, waited_s=self._owner._waited_s
+        )
 
     async def next_input(self, input: Any, exc: Exception) -> Any:
         """The input to re-send after ``exc``, having waited if that is the
@@ -92,10 +95,10 @@ class _Attempts:
         owner = self._owner
         if is_rate_limited(exc):
             held = rate_limit_wait_s(exc, attempt=self.holds + 1)
-            if self.waited_s + held > owner._rate_limit_budget_s:
+            if owner._waited_s + held > owner._rate_limit_budget_s:
                 raise self._given_up(exc) from exc
             self.holds += 1
-            self.waited_s += held
+            owner._waited_s += held
             if owner._on_hold is not None:
                 owner._on_hold(held)
             await owner._sleep(held)
@@ -139,6 +142,14 @@ class CallRetryModel(Model):
         self._on_hold = on_hold
         self._trim = trim
         self._sleep = sleep
+        # Rate-limit holds are charged to their OWN budget, in seconds, not to
+        # `max_retries`: that count exists for a provider blip, a different
+        # failure on a different timescale, and spending it on a limit gives up
+        # on one that would have cleared. The budget is a POOL for this
+        # instance — one per agent run, i.e. per turn (`_call_retry`) — never a
+        # per-call allowance: that reset every tool round, so a turn of N calls
+        # could wait N times the budget (review round 1).
+        self._waited_s = 0.0
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._inner, name)
@@ -166,12 +177,20 @@ class CallRetryModel(Model):
             yield CallStarted()
             recorded = False
             try:
-                async for event in self._inner.stream_response(
-                    system_instructions, input, *args, **kwargs
-                ):
-                    if getattr(event, "type", None) == _ITEM_DONE:
-                        recorded = True
-                    yield event
+                # `aclosing`: a consumer that stops (a Stop mid-answer) closes
+                # this stream, and the inner one is the HTTP stream to the
+                # provider — closed with it, not left for GC.
+                # The SDK types it an AsyncIterator; at runtime it is an async
+                # generator (DeadlineModel relies on the same).
+                inner = cast(
+                    "AsyncGenerator[Any]",
+                    self._inner.stream_response(system_instructions, input, *args, **kwargs),
+                )
+                async with contextlib.aclosing(inner) as stream:
+                    async for event in stream:
+                        if getattr(event, "type", None) == _ITEM_DONE:
+                            recorded = True
+                        yield event
                 return
             except Exception as exc:
                 if recorded:

@@ -27,7 +27,7 @@ from llama_index.core.schema import Document
 from specstar import QB, SpecStar
 from specstar.types import Binary, DuplicateResourceError, ResourceIDNotFoundError
 
-from ..failover.classify import classify_error
+from ..failover.classify import classify_error, raw_error_text
 from ..resources.kb import CachedChunk, Collection, DocChunk, IndexCache, SourceDoc
 from .chunker import Chunker
 from .code_lang import is_code_file
@@ -652,7 +652,7 @@ class Ingestor:
                 msgspec.structs.replace(
                     doc,
                     status="error",
-                    status_detail=f"{type(exc).__name__}: {exc!s}"[:240],
+                    status_detail=raw_error_text(exc)[:240],
                     status_error_kind=classify_error(exc),
                     preview=None,
                     text=None,

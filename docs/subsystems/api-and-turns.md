@@ -26,7 +26,7 @@ HTTP / SSE 邊界：對外暴露 FastAPI 的 REST 表面（Apps/items、KB colle
 | --- | --- |
 | `src/workspace_app/api/turns.py` | `ChatTurnEngine`：#43 `enqueue`/`_worker`/`_run_turn`/`subscribe_sse`/`publish`/`cancel_current`(RCA 與 KB 共用);`stream()` 只剩沒有自己佇列語意的呼叫者在用。`_TurnReducer` 把 `AgentEvent` 折成 `TurnMessage`；`history_items` 由持久訊息重建 SDK input items（#199 折疊、#45 token 預算）。 |
 | `src/workspace_app/api/runner.py` | `AgentRunner` Protocol（swap 接縫）+ `ScriptedAgentRunner`（測試用）。 |
-| `src/workspace_app/api/litellm_runner.py` | `LitellmAgentRunner`：`run()` 重試迴圈（`diagnose_error`/`classify_retry_event`，#26 progress-gated）、`_run_once` fan-in queue（producer 正規化 SDK 事件 + `ctx.on_exec_output` stdout）、`_delta_channel`、`ThinkSplitter`、`_final_tokens`、`_agent_for`。 |
+| `src/workspace_app/api/litellm_runner.py` | `LitellmAgentRunner`：`run()` 只跑一次 `_run_once`（例外 → `turns._terminal_error` → `RunError`）、`_call_retry`（每個模型包一層 `CallRetryModel`）、`_run_once` fan-in queue（producer 正規化 SDK 事件 + `ctx.on_exec_output` stdout）、`_delta_channel`、`ThinkSplitter`、`_final_tokens`、`_agent_for`。 |
 | `src/workspace_app/api/events.py` | `AgentEvent` dataclass union + `to_sse()`；在 `web/src/events.ts` 鏡像。 |
 | `src/workspace_app/api/registry.py` | `InvestigationRegistry`：只管 per-investigation 的 **SANDBOX** 生命週期（`ensure_handle`、`peek_handle`、`mirror_warm`/`kill_idle`/`close_all`）。 |
 | `src/workspace_app/api/app.py` | `create_app` 組裝根（#54 後精簡為純 composition root，~767 行）：建構 `KernelService`、安裝 monitor、`build_coordinators`、接出兩個 `ChatTurnEngine`（`turn_engine` 與 `kb_turn_engine` 都套在 `runner`；#537 後不再有 wiki 路由層），再呼叫每個 `register_*_routes`。**不再**定義路由 handler 或 lifespan body——lifespan→`lifecycle.py:build_lifespan`、`_run_subagent` bridge→`subagent_bridge.py`、RCA send/stream/cancel→`chat_routes.py`（見下方路由模組表）。 |
@@ -99,7 +99,7 @@ flowchart TD
 
 ### Runner（`LitellmAgentRunner.run`）
 
-`run()` 先守 `ctx.agent_config`（`None` → yield `RunError`，#94 不靜默跑某個 default agent），再進迴圈跑 `_run_once`。小模型失敗時 `diagnose_error` 給回饋 hint、`classify_retry_event` 選最貼切的事件（三種 tool-arg 失敗 → `ToolCallParseError`，其餘 → `RunError`），**只有在沒有使用者可見進度時**才重試（#26：SDK 無法 mid-turn resume，restart 會清掉已串流的可見輸出；reasoning-only 仍可重試）。
+`run()` 先守 `ctx.agent_config`（`None` → yield `RunError`，#94 不靜默跑某個 default agent），再跑**一次** `_run_once`——不重跑整個回合。重試發生在單次模型呼叫（`agent/call_retry_model.py:CallRetryModel`，經 `_agent_for(..., wrap_model=...)` 包住單一 endpoint 或 `FallbackModel` 鏈）：429 從整回合共用的 `rate_limit_budget_s` 裡等待；timeout/connection/provider_error/all_busy 重送同一請求，每次呼叫最多 `max_retries` 次（發 ephemeral `ModelRetrying`）；context 超限由 `_HistoryTrim` 裁掉本回合之前的對話再送（必須嚴格變小）；其他（auth、bad_request、unknown）不重試。已串流出文字後才斷的呼叫會重送，並以 `OutputRetracted` 撤回那次呼叫的部分輸出；看過 `response.output_item.done` 就不再重送。到得了 `run()` 的例外都已重試過，一律 `turns._terminal_error(exc)` → `RunError(message=raw_error_text(exc), kind=classify_error(exc))`。
 
 `_run_once` 先建 fan-in `queue`（**先建 queue 再建 agent**，這樣 #196 的 `FallbackModel` 切換能往裡推 `FailoverSwitch`），設 `ctx.on_exec_output = lambda b: queue.put_nowait(ToolLog(...))`（讓還在跑的長 exec 的 stdout 能 live 插進來），跑 `Runner.run_streamed`。一個 `produce()` task 把 `raw_response_event` 的 delta 經 `_delta_channel` + `ThinkSplitter` 路由成 `MessageDelta(content|reasoning)`，把 `run_item_stream_event` 經 `_map_event` 路由成 `ToolStart`/`ToolEnd`，並發 `AgentMetrics`（`up`/`down`/`final`）。drain 迴圈 yield 先到的；遇 `done` sentinel 結束。
 
@@ -142,7 +142,7 @@ agent 回合不是這層唯一的串流。`POST /a/{slug}/items/{item_id}/notebo
 | `_delta_channel` 按事件型別分類而非按 `.delta` 是否存在 | `function_call_arguments.delta` 必須忽略，否則 tool-call JSON 洩漏進答案 | `litellm_runner.py:_delta_channel` |
 | usage 缺席或為 0 時保留 chars/4 近似 | Ollama 常串流 usage=0，否則最後 token 行會翻成 0/0 | `litellm_runner.py:_final_tokens` |
 | RCA enqueue/broadcast：新訊息不取消執行中的 turn | 協作者共用一個 sandbox/檔案；turn 序列化，Stop 才是明確中斷 | `turns.py:enqueue`（#43）+ `chat_send.py:ChatSendService.send` |
-| 只在沒有使用者可見進度時重試 | SDK 無法 mid-turn resume，restart 會清掉可見輸出；reasoning-only 仍可重試 | `litellm_runner.py:_should_retry`（#26） |
+| 重試在單次模型呼叫，不重跑整個回合 | 重跑回合會重複已執行的工具，且一旦串流過就不能重試（舊 #26 限制）；只重送失敗的那個請求，已跑的工具留著 | `agent/call_retry_model.py:CallRetryModel`、`litellm_runner.py:_call_retry`（plan-friendly-errors.md D2/D3） |
 | 每個 turn 把 runner 包進 `guard_repetition` | 偵測退化重複迴圈並截斷持久訊息，活的串流保留重複以示模型出錯 | `ChatTurnEngine._events`（#113） |
 | `_agent_for` 不強制 `parallel_tool_calls=False` | 是 replay/live 唯一線級差異且部分 provider 直接拒絕；`args_recovery` wrap 才是真正防線 | `litellm_runner.py`（#69） |
 
@@ -162,7 +162,7 @@ agent 回合不是這層唯一的串流。`POST /a/{slug}/items/{item_id}/notebo
 
 - `src/workspace_app/api/turns.py` — `enqueue` / `_worker` / `_run_turn` / `cancel_current` / `subscribe_sse`（#43 broadcast，兩個聊天表面共用）、`stream` / `_drive`（per-requester，cancel-prior）、`_TurnReducer`、`history_items`。
 - `src/workspace_app/api/runner.py` — `AgentRunner` Protocol 的 swap 契約 + `ScriptedAgentRunner`。
-- `src/workspace_app/api/litellm_runner.py` — `LitellmAgentRunner.run`（重試迴圈）/ `_run_once`（fan-in queue）/ `_delta_channel` / `ThinkSplitter` / `_final_tokens` / `diagnose_error` / `_map_event` / `_agent_for`。
+- `src/workspace_app/api/litellm_runner.py` — `LitellmAgentRunner.run`（只跑一次）/ `_run_once`（fan-in queue）/ `_call_retry` / `_HistoryTrim` / `_delta_channel` / `ThinkSplitter` / `_final_tokens` / `_map_event` / `_agent_for`。
 - `src/workspace_app/api/events.py` — `AgentEvent` union + `to_sse`（與 `web/src/events.ts` 對照）。
 - `src/workspace_app/api/registry.py` — `InvestigationRegistry`（只看 sandbox，對照 turn 生命週期的分界）。
 - `src/workspace_app/api/kb_chat_routes.py` — `register_kb_chat_routes` / `send_message` / `answer_question` / `kb_progress`。

@@ -106,7 +106,7 @@ def test_a_delegated_failure_survives_a_reload_on_its_tool_card():
     _drain(client, iid, "q")
 
     [tool] = [m for m in _messages(spec, iid) if m.role == "tool"]
-    assert tool.tool_failure == failure
+    assert tool.failure == failure
     assert tool.content == "sub-agent 'x' failed: RateLimitError: slow"
 
 

@@ -76,6 +76,24 @@ async def test_failing_run_records_error_with_message(spec_instance: SpecStar):
     assert got.result["error_reason"] == "input is malformed"  # ty: ignore[not-subscriptable]
 
 
+async def test_a_failed_run_keeps_the_whole_cause_chain(spec_instance: SpecStar):
+    """Review round 1 (D6): the outer link alone is often the least useful one —
+    an exhausted chain reads `AllProvidersFailed: …` while the 429 that WAS the
+    failure sits one link down."""
+    rid = _run(spec_instance)
+
+    async def run(wf, inputs):
+        try:
+            raise TimeoutError("the model did not answer")
+        except TimeoutError as e:
+            raise RuntimeError("the step gave up") from e
+
+    await run_workflow(spec_instance, run_id=rid, profile_run=run, wf=_wf(), inputs={})
+    got = spec_instance.get_resource_manager(WorkflowRun).get(rid).data
+    assert "RuntimeError: the step gave up" in got.result["error"]  # ty: ignore[not-subscriptable]
+    assert "TimeoutError: the model did not answer" in got.result["error"]  # ty: ignore[not-subscriptable]
+
+
 async def test_a_run_that_died_on_a_provider_is_named_by_its_kind(spec_instance: SpecStar):
     """Anything else is named like a turn's failure, the raw text kept as the
     error for technical details."""

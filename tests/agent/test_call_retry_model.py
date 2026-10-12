@@ -323,3 +323,70 @@ async def test_a_trim_that_does_not_shrink_stops_instead_of_spinning() -> None:
         await _drain(_model(inner, notes, trim=trim), input=[_m("a" * 400), _m("go")])
 
     assert trim.asked == 1
+
+
+@pytest.mark.asyncio
+async def test_the_rate_limit_budget_is_the_turns_not_each_calls() -> None:
+    """Review round 1: one budget per TURN (one CallRetryModel per agent run).
+    A fresh allowance per call reset every tool round, so a turn of N calls
+    could wait N times the budget — exactly what the budget exists to bound."""
+    notes = _Notes()
+    inner = _Scripted(
+        [([], _rate_limited("50")), ([_Ev(DELTA, "a")], None), ([], _rate_limited("50"))]
+    )
+    model = _model(inner, notes, rate_limit_budget_s=60.0)
+
+    await _drain(model)  # the first call waits 50 s of the turn's 60
+    with pytest.raises(ModelCallFailed) as raised:
+        await _drain(model)  # the second cannot fit another 50
+
+    assert notes.slept == [50.0]
+    assert raised.value.waited_s == 50.0
+
+
+@pytest.mark.asyncio
+async def test_a_blip_late_in_the_turn_is_not_charged_against_an_earlier_one() -> None:
+    """The re-send COUNT stays per call, deliberately: it bounds one call's
+    blips, and a long agentic turn that weathered two early ones must not end on
+    the first blip of its tenth call. The turn's length is bounded by max_turns."""
+    notes = _Notes()
+    inner = _Scripted(
+        [
+            ([], _unavailable()),
+            ([], _unavailable()),
+            ([_Ev(DELTA, "a")], None),
+            ([], _unavailable()),
+            ([_Ev(DELTA, "b")], None),
+        ]
+    )
+    model = _model(inner, notes, max_retries=2)
+
+    await _drain(model)
+    events = await _drain(model)
+
+    assert _visible(events) == [_Ev(DELTA, "b")]
+
+
+@pytest.mark.asyncio
+async def test_a_consumer_that_stops_closes_the_providers_stream() -> None:
+    """A Stop mid-answer closes the outer stream; the inner one is the HTTP
+    stream to the provider and must be closed with it, not left to GC."""
+    closed: list[bool] = []
+
+    class _Endless(Model):
+        async def get_response(self, *a: Any, **k: Any) -> Any:  # pragma: no cover
+            raise NotImplementedError
+
+        async def stream_response(self, *a: Any, **k: Any):
+            try:
+                while True:
+                    yield _Ev(DELTA, "x")
+            finally:
+                closed.append(True)
+
+    stream: Any = _model(_Endless(), _Notes()).stream_response(None, "in", None, [], None, [], None)
+    await stream.__anext__()  # CallStarted
+    await stream.__anext__()  # the first delta
+    await stream.aclose()
+
+    assert closed == [True]

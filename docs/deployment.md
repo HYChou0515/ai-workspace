@@ -251,7 +251,7 @@ class AgentRunner(Protocol):
   ```python
   LitellmAgentRunner(
       config=default_rca_agent_config(),  # 預設 AgentConfig（模型 + system prompt + 工具）
-      max_retries=2,                      # 工具/格式錯誤時自動帶提示重試的次數
+      max_retries=2,                      # 單次模型呼叫遇到逾時／連線中斷／5xx 時最多重送幾次（#915）
       max_turns=10,                       # 單一回合最多幾個 agent turn（超過視為未收斂）
   )
   ```

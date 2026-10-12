@@ -40,7 +40,7 @@ from specstar.types import (
     TaskStatus,
 )
 
-from ..failover.classify import classify_error
+from ..failover.classify import classify_error, raw_error_text
 from ..failover.retry import is_transient
 from ..resources import Collection, DocChunk, IndexRun, IndexUnitText, SourceDoc
 from .index_jobs import IndexJob, IndexJobPayload
@@ -615,7 +615,7 @@ class IndexCoordinator:
                 doc_id,
                 updater,
                 status="error",
-                detail=f"{type(exc).__name__}: {exc!s}"[:240],
+                detail=raw_error_text(exc)[:240],
                 error_kind=classify_error(exc),
             )
             return

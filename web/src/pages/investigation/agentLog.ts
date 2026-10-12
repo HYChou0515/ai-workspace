@@ -113,7 +113,7 @@ export type AgentEntry =
   | { kind: "tool_call"; call: ToolCallView }
   | { kind: "mention"; by: string; users: string[]; note: string; at?: number }
   // #613 P3: a persisted goal marker (met / exhausted) — FE-only, never LLM history.
-  | { kind: "goal_note"; text: string; at?: number }
+  | { kind: "goal_note"; text: string; at?: number; failure?: Failure }
   // #624: a persisted system notice (history no longer reaches the model).
   | { kind: "notice"; text: string; at?: number }
   // #739: the thread outgrew its window, so this span was replaced — for the
@@ -381,7 +381,7 @@ export function logFromMessages(messages: readonly Message[]): AgentLog {
           // tool message reloads with its reference cards. Non-ask_kb tools
           // never set this on the BE side — empty becomes undefined.
           citations: m.citations && m.citations.length > 0 ? m.citations : undefined,
-          ...(m.tool_failure ? { failure: m.tool_failure } : {}),
+          ...(m.failure ? { failure: m.failure } : {}),
         },
       });
     } else if (m.role === "mention") {
@@ -398,7 +398,17 @@ export function logFromMessages(messages: readonly Message[]): AgentLog {
       entries.push({ kind: "notice", text: m.content, at: m.created_at ?? undefined });
     } else if (m.role === "goal") {
       // #613 P3: the goal driver's outcome marker (達成 / 額度用盡).
-      entries.push({ kind: "goal_note", text: m.content, at: m.created_at ?? undefined });
+      // Review round 1: a night that could not start carries WHY as what it
+      // is; the note's text ends on the same raw words for text-only readers
+      // (export, video), so that paragraph is taken off here — exactly that
+      // suffix, never guessed — and the notice words it instead.
+      const tail = m.failure ? `\n\n${m.failure.raw}` : null;
+      entries.push({
+        kind: "goal_note",
+        text: tail && m.content.endsWith(tail) ? m.content.slice(0, -tail.length) : m.content,
+        at: m.created_at ?? undefined,
+        ...(m.failure ? { failure: m.failure } : {}),
+      });
     } else if (m.role === "error") {
       // #37: a persisted terminal failure — rendered as a banner so a
       // reloaded thread shows the turn died, rather than the message silently
@@ -786,6 +796,14 @@ function findStep(entries: AgentEntry[], phase: string, name: string, key?: stri
   return -1;
 }
 
+/** `s` less its last `n` CHARACTERS — code points, as the backend counted
+ *  them (`len()`); `.length` counts UTF-16 units, two for an emoji. */
+function dropChars(s: string, n: number): string {
+  if (n <= 0) return s;
+  const chars = Array.from(s);
+  return chars.slice(0, Math.max(0, chars.length - n)).join("");
+}
+
 /** The answer the RUNNING turn is writing, found by its own flag rather than by
  * where it sits. See `live` on AgentEntry for the two ways position got this
  * wrong once questions could be drawn in the middle of a turn. */
@@ -946,11 +964,8 @@ export function reduceAgent(log: AgentLog, ev: AgentEvent, now: number = Date.no
       const last = idx >= 0 ? entries[idx] : undefined;
       if (last && last.kind === "message") {
         const m = last.message;
-        const content = m.content.slice(0, Math.max(0, m.content.length - ev.text_chars));
-        const reasoning = (m.reasoning ?? "").slice(
-          0,
-          Math.max(0, (m.reasoning ?? "").length - ev.reasoning_chars),
-        );
+        const content = dropChars(m.content, ev.text_chars);
+        const reasoning = dropChars(m.reasoning ?? "", ev.reasoning_chars);
         entries[idx] = {
           ...last,
           message: { ...m, content, reasoning: reasoning || undefined },

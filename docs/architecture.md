@@ -96,7 +96,8 @@ POST /investigations/{id}/messages   { "content": "..." }
 `runner.run`（`LitellmAgentRunner`）內部：
 
 ```
-run()                          ← 重試外圈：工具/格式錯誤帶提示重試，MaxTurnsExceeded 終止
+run()                          ← 只跑一次 _run_once；例外 → _terminal_error → RunError，MaxTurnsExceeded 終止
+                                 （重試在單次模型呼叫：CallRetryModel）
  └─ _run_once()                ← 把兩個來源 fan-in 成一個 queue：
       ├─ producer task: Runner.run_streamed(...).stream_events()
       │     把 LiteLLM/Qwen 的原始事件正規化成我們的 AgentEvent
@@ -270,7 +271,7 @@ viewer）。RCA 與 KB 對話共用 `web/src/components/AgentEntryView.tsx` 渲�
 | `AgentRunner` 為 scripted↔真 LLM 的抽換點 | 測試不依賴 LLM；SSE plumbing 可獨立開發 |
 | SSE schema 在 BE/FE 鏡像 | `events.py` ↔ `events.ts` 必須同步 |
 | 預設本機 Qwen3（Ollama）而非 hosted | 成本/隱私；可用 LiteLLM 模型字串切換 |
-| 小模型失敗模式的重試提示 | Ollama chunk_parser 多工具呼叫會產生無效 JSON → `diagnose_error` 帶提示重試 |
+| 重試在單次模型呼叫，不重跑整個回合 | `CallRetryModel` 對 429 等待、對逾時/連線/5xx 重送同一請求、context 超限先裁 history 再送；壞掉的 tool args 由 `args_recovery` 在工具結果裡告訴模型（plan-friendly-errors.md D2） |
 | 記憶體 FileStore 為預設 | 最簡單；要持久化換 `SpecstarFileStore` |
 | KB 嵌入由我們算、原始向量存 specstar | 控制非對稱 prefix；dense 檢索可下推 specstar 原生向量查詢（pgvector 時走索引） |
 | KB 攝取切成 store（快、同步）+ index（慢、背景） | 慢的嵌入不擋上傳；文件即時以 `indexing` 出現，再翻成 `ready` |

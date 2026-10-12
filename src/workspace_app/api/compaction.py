@@ -30,7 +30,7 @@ from ..agent.context import AgentToolContext
 from ..context_budget import SUMMARY_ROLE
 from ..context_reduce import Estimator
 from ..context_reducers import fold_bulky
-from .events import MessageDelta
+from .events import AnswerText
 from .runner import AgentRunner
 
 #: What the summariser is told to preserve. Ordered by what hurts most to lose:
@@ -294,8 +294,8 @@ class AgentCompactor(IConversationCompactor):
             turn_image_urls=(),
             agent_config=msgspec.structs.replace(cfg, allowed_tools=[]) if cfg else None,
         )
-        parts: list[str] = []
+        # Reasoning kept, as it always was; a re-sent call's half withdrawn (D3).
+        answer = AnswerText(include_reasoning=True)
         async for ev in self._runner.run(compaction_prompt(messages), sub):
-            if isinstance(ev, MessageDelta):
-                parts.append(ev.text)
-        return "".join(parts).strip()
+            answer.add(ev)
+        return answer.text.strip()

@@ -109,16 +109,62 @@ Recorded as they were decided while building; each names its evidence.
   sink every wrapper already forwards, plus the turn's status line and a way
   back to the calling tool call. `ask_wiki` (the KB agent's own wiki
   delegation) has its own relay and is not covered.
-- **P5 covers document indexing and workflow runs.** Not covered: the off-hours
-  goal driver's "could not start tonight" note (`goal_offhours` →
-  `_night_abandoned`) still embeds the raw text in the note's sentence — its
-  shape would have to change to split it; KB archive-import errors already sit
-  in a collapsed "Why (N)" list.
+- **P5 covers document indexing and workflow runs.** A failed run records
+  `error_kind`; a step's own failure is `step_failed` — a workflow-only kind
+  outside `failover.classify.ERROR_KINDS` — whose `error_reason` (written for a
+  reader by a gate or `fail()`) is the headline. KB archive-import errors are
+  not covered: they already sit in a collapsed "Why (N)" list.
 - **P6 copy is proposed, not from D5.** D5 worded the MODEL service; our own
   API's refusals needed their own: `failure.forbidden.*` (403) and
   `failure.server_error.*` (5xx). Every other status stays `unknown` with its
   status line as the details, rather than copy invented for statuses this app
   has not seen.
+
+## Review round 1 (2026-10-12)
+
+Four lenses (conformance, veracity, defect, regression) on `c0dd942d`. What
+they found, and what changed — each fix built test-first, the test red on the
+unfixed code, the fixed line then mutated to prove the test guards it:
+
+- **Defect — a re-sent call's partial text survived outside the transcript.**
+  Five callers joined `MessageDelta` text themselves (`drive_subagent`,
+  `answer_question`, the wiki reader, the card drafter, compaction) and handed
+  the model "half an the whole answer". They now read through
+  `events.AnswerText`, which honours `OutputRetracted`; a source test keeps a
+  sixth from joining by hand.
+- **Defect — the rate-limit budget reset on every model call.** It is now one
+  pool per `CallRetryModel`, i.e. per turn. The re-send COUNT stays per call,
+  deliberately (a late blip is not charged against an early one; the turn is
+  bounded by max_turns).
+- **Defect — the inner stream was not closed on Stop** (`aclosing`); the FE
+  withdrew by UTF-16 unit where the backend counted code points; a document
+  failure with no kind lost its remedy; the copy button did nothing on a
+  plain-http deploy (now absent there).
+- **Regression — the reclaim give-up and the off-hours night note read worse.**
+  The give-up is `turn_lost` ("send it again"); the night note carries its
+  failure as `Message.failure` (the field `tool_failure` was renamed — it was
+  unmerged) and the thread words it, while the note's text still ends on the
+  raw words for text-only readers.
+- **Regression — a parser's reason was hidden in the doc list** behind
+  "unexpected error": an `unknown` kind falls back to the detail there.
+- **D6 everywhere** — jobs, workflow runs and the findability answer keep the
+  whole cause chain (`raw_error_text`) and a kind.
+- **Recorded rather than changed:** D3 does not re-send a call once the SDK has
+  recorded one of its items (`response.output_item.done`) — a re-send would add
+  a second copy; a failover chain's own 429 hold is followed by up to 120 s
+  more from the call wrapper (master stacked these only before output); retries
+  are narrower than the old loop's — auth, bad requests, unknown errors and a
+  failing credential resolver end the turn at once (`docs/migrations.md#pr-915`,
+  `configuration.md` contract 3); the doc list shows a headline with the raw
+  text on hover (the row is a button — no copy control fits) and
+  `WriteFailureNotice` keeps its own headline over `FailureDetails`; copy beyond
+  D5: count-less `timeout.what`, trailing 。, and the app's own kinds
+  (`turn_lost`, `stop_failed`, `stream_dropped`). D5's `rate_limited.do` and
+  `context_overflow.do` were restored to the approved wording. Chat export and
+  video render a failure's `content` verbatim, i.e. the raw text — accepted.
+- **Docs the in-app AI reads** (`subsystems/api-and-turns.md`,
+  `subsystems/agent-runtime.md`, `architecture.md`, `glossary.md`,
+  `decisions.md`) described the removed whole-turn retry and are updated.
 
 ## Risks
 

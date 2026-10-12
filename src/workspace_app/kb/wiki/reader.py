@@ -90,7 +90,7 @@ async def read_wiki(
     ``on_event`` (when given) fires for every reader event so a caller can relay
     the navigation into a parent stream. ``max_turns`` (operator-configured via
     settings.kb.wiki.reader_max_turns) must cover navigating + grounding."""
-    from ...api.events import MessageDelta, RunError
+    from ...api.events import AnswerText, RunError
 
     ctx = AgentToolContext(
         tool_output_max_chars=tool_output_max_chars,
@@ -104,18 +104,17 @@ async def read_wiki(
         wiki_cite_sources=True,
         max_turns=max_turns,
     )
-    parts: list[str] = []
+    answer = AnswerText()  # withdraws a re-sent call's half (D3)
     run_error: str | None = None
     async for ev in runner.run(question, ctx):
         if on_event is not None:
             on_event(ev)
-        if isinstance(ev, MessageDelta) and not ev.reasoning:
-            parts.append(ev.text)
-        elif isinstance(ev, RunError):
+        answer.add(ev)
+        if isinstance(ev, RunError):
             run_error = ev.message
     if run_error is not None:
         return f"Wiki reader failed: {run_error}", []
-    return "".join(parts), list(ctx.kb_passages)
+    return answer.text, list(ctx.kb_passages)
 
 
 async def answer_from_wiki(

@@ -120,8 +120,9 @@ export type Message = {
    * (docs/plan-friendly-errors.md; `error` on older rows), `cancelled` or
    * `max_turns`. `content` is then the raw text for technical details. */
   error_kind?: string | null;
-  /** role=tool only — a delegated sub-agent's failure (docs/plan-friendly-errors.md P4). */
-  tool_failure?: Failure | null;
+  /** A failure this message reports (docs/plan-friendly-errors.md): role=tool — a
+   * delegated sub-agent's; role=goal — why an off-hours night could not start. */
+  failure?: Failure | null;
   /** role=error only — the numbers the kind's copy needs (`waited_s`, `attempts`). */
   error_params?: Record<string, number> | null;
   /** #113 — "repetition" when role=assistant was stopped mid-stream for a

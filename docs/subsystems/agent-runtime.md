@@ -19,7 +19,7 @@
 
 **不**負責：
 
-- 真正驅動 Agents SDK / LiteLLM、組 `Agent[AgentToolContext]`、把 `ToolArgsError` 對映成 retry hint——那是 `api/litellm_runner.py`（見 [API 與回合引擎](api-and-turns.md)）。
+- 真正驅動 Agents SDK / LiteLLM、組 `Agent[AgentToolContext]`、包 `CallRetryModel` 做單次呼叫重試——那是 `api/litellm_runner.py`（見 [API 與回合引擎](api-and-turns.md)）。
 - 每回合的鎖 / SSE / 取消（`ChatTurnEngine`，同上）。
 - sandbox 的真正建立與 idle reap（`sandbox/` 與 `InvestigationRegistry`，見 [Sandbox、FileStore 與同步](sandbox-and-filestore.md)）。
 - 檢索本身的 dense+BM25→RRF→MMR 管線（`kb/retriever.py`，見 [知識庫:檢索與 Agent](kb-retrieval-agent.md)）。
@@ -35,7 +35,7 @@
 | `src/workspace_app/agent/tool_prompt.py` | `format_tools_for_prompt()`——把 live `FunctionTool` 清單（name、description、JSON args schema）渲染成 Markdown「Tools available」system-prompt 區塊，讓小模型不會把已 provision 的 tool 誤當成 shell binary。由 `_agent_for` 在 template-time prompt 之後於 runtime 接上。 |
 | `src/workspace_app/agent/config_catalog.py` | `AgentConfigCatalog`——（現只剩 KB）依 purpose（`kb_chat`、`infer_modules`）索引的 `AgentConfig` 目錄，外加被 `AppCatalog` 消費的具名 preset 註冊表。`configs_for`/`default_for`/`purposes` + 各 purpose 的薄包裝。 |
 | `src/workspace_app/agent/reasoning.py` | provider-aware 的 reasoning-OFF kwargs。`is_ollama(model)` + `reasoning_off_kwargs(model)`：Ollama → `{"think": False}`；其他（vLLM/openai-compatible）→ `{"extra_body": {"chat_template_kwargs": {"enable_thinking": False}}}`。 |
-| `src/workspace_app/agent/args_recovery.py` | 防衛回合不被壞掉的 tool-call args 打死。`peel_first_json()` 抽出第一個完整 JSON 值 + 剩餘字串；`wrap_with_args_recovery()` 回傳一個會分類 args、並 RAISE 三種 `ToolArgsError` 子類之一（Malformed / NonObject / Concatenated）的 `FunctionTool`，好讓 runner 的 `diagnose_error` 把它對映成 retry hint 並從乾淨 history 重啟。 |
+| `src/workspace_app/agent/args_recovery.py` | 防衛回合不被壞掉的 tool-call args 打死。`peel_first_json()` 抽出第一個完整 JSON 值 + 剩餘字串；`wrap_with_args_recovery()` 回傳一個會分類 args 的 `FunctionTool`：三種壞法（Malformed / NonObject / Concatenated）都**不執行**原工具，改以工具結果字串（in-band）告訴模型原因，讓它下一次呼叫自行修正。 |
 | `src/workspace_app/agent/arg_repair.py` | in-band backstop sentinel：`make_backstop_sentinel(raw)` / `malformed_raw(parsed)`。在模型輸出邊界把無法解析/修復的 args 換成一個**合法** JSON sentinel；tool wrap 認得它，於是**回傳**乾淨的 in-band 錯誤（而非 raise），不污染下一個 request 也不中止回合。 |
 
 ## 介面與接縫
@@ -68,8 +68,8 @@ flowchart TD
   RE["reasoning_off_kwargs + reasoning_effort"] -->|ModelSettings| RUN
   RUN -->|依名字呼叫| SAFER["safer: peel_first_json + 分類"]
   SAFER -->|乾淨 JSON| IMPL["*_impl"]
-  SAFER -->|Malformed/NonObject/Concatenated| ERR[raise ToolArgsError]
-  ERR -->|diagnose_error → retry hint| RUN
+  SAFER -->|Malformed/NonObject/Concatenated| ERR["in-band 錯誤字串（不執行工具）"]
+  ERR -->|工具結果| RUN
   IMPL -->|exec| SB["ensure_sandbox → Sandbox"]
   IMPL -->|read/write/ls| FS["WorkspaceFiles / FileStore"]
   IMPL -->|kb_search| RET["Retriever + kb_passages"]
@@ -81,7 +81,7 @@ flowchart TD
 
 1. **每回合組裝**：某個 surface 的 turn builder（KB chat、Topic Hub、RCA 的 `_send_into`）建一個 `AgentToolContext`，只填它那個 flavour 的欄位（RCA 填 `sandbox`/`files`；KB 填 `retriever`/`collection_ids`），其餘留 `None`。同時用 `build_tools(allowed, app_slug, profile)` 把該 agent 的 allowed-list 變成 `FunctionTool` 清單。
 2. **runner 接手**：`LitellmAgentRunner` 把每個 tool 用 `wrap_with_args_recovery` 包起來、用 `format_tools_for_prompt` 把工具清單接到 system prompt 尾端、把 `reasoning_off_kwargs` 與 `reasoning_effort` 折進 `ModelSettings`，然後組出 `Agent[AgentToolContext]` 交給 Agents SDK。
-3. **tool 呼叫**：模型決定呼叫某 tool 時，SDK 先進到包裝層 `safer()`，由 `peel_first_json` 把 args 分類：乾淨單一物件 → 透傳給原 `*_impl`；三種壞法 → raise 對應 `ToolArgsError`，runner 的 `diagnose_error` 把它對映成 retry hint，從乾淨的 persisted history 重啟回合（被污染的 in-flight call 被丟掉）。
+3. **tool 呼叫**：模型決定呼叫某 tool 時，SDK 先進到包裝層 `safer()`，由 `peel_first_json` 把 args 分類：乾淨單一物件 → 透傳給原 `*_impl`；三種壞法 → 不執行工具，回一個說明原因的錯誤字串當工具結果，模型在下一次呼叫自行修正；回合繼續，不重啟。
 4. **impl 落地**：`exec_impl`（與 `make_deck` 的 exec_run）是唯一會喚醒 sandbox 的路徑——透過 `ctx.ensure_sandbox()`。純檔案操作走 `ctx.files`/`filestore`，**絕不**喚醒 sandbox。`kb_search_impl` 打 `ctx.retriever` 並把命中段落 append 進 `ctx.kb_passages`。`ask_knowledge_base_impl` / `infer_modules_impl` 走 `ctx.run_subagent` bridge 開 sub-agent。`lookup_glossary` / `resolve_collection` / context-card 工具直接查 `ctx.spec`（specstar）。
 
 `ensure_sandbox()` 還負責：sandbox 一旦建好（`handle` 從 `None` 變有值），把 `agent_config.allowed_tools` 裡（用 `pkg` 或 `pkg:cmd` colon 語法命中的）套件 eager 裝進去，每個 sandbox 只裝一次。
@@ -94,8 +94,8 @@ flowchart TD
 !!! warning "kb_search 是 leaf，不是 consumer 介面（#270）"
     `kb_search` 在 `_IMPLS` 裡但**刻意不在** `_WORKSPACE_TOOLS`：它需要 RCA 從不設定的 `retriever`。每個非 KB app 改拿 `ask_knowledge_base`。用 `kb_search`/`search_wiki` 接一個新 app 會在 call time `assert`/失敗。詳見 CLAUDE.md 的 leaf-vs-consumer 規則。
 
-!!! warning "args-recovery 必須 raise，不能回字串"
-    對 Malformed/NonObject/Concatenated，`wrap_with_args_recovery` **必須 raise**（不能回 error string）。回字串會（a）設定 `progress_made`（擋住 retry）並（b）把被污染的對話送回 LiteLLM，那邊 `json.loads(arguments)` 會以 `Extra data` 炸掉（APIConnectionError）。只有 `malformed_raw` sentinel backstop 例外——它回 in-band 錯誤（對話裡已經是合法 sentinel，所以不會污染）。
+!!! warning "args-recovery 回 in-band 錯誤，靠 RepairingModel 才安全"
+    對 Malformed/NonObject/Concatenated（以及 `malformed_raw` sentinel），`wrap_with_args_recovery` 回 in-band 錯誤字串、不執行工具。這之所以不會把壞掉的 `arguments` 送回 LiteLLM（Ollama transform 會 `json.loads` history 而炸掉），是因為 `RepairingModel` 在 stream_response 與 get_response 兩條路徑都先把 args 整理成合法 JSON。拿掉 `RepairingModel` 的任一條路徑，這個前提就不成立。
 
 !!! warning "safer() 的 context 型別標註不能改窄"
     `safer()` 標註成 `ToolContext[AgentToolContext]`，**不是** `RunContextWrapper`——SDK 會 introspect 這個標註；較窄的型別會觸發 `_fork_with_tool_input` 把 `run_config` 剝掉，弄壞被包的 invoker。
@@ -138,7 +138,7 @@ flowchart TD
 | 決策 | 理由 | 出處 |
 | --- | --- | --- |
 | 一個 `AgentToolContext` dataclass 服務 RCA 與 KB 兩 flavour，optional 欄位 = 錯 flavour | 讓同一個 `LitellmAgentRunner` 服務兩 surface；KB agent 重用 runner 而非另寫一套 | `context.py` docstring + CLAUDE.md AgentRunner 慣例 |
-| args-recovery 對 malformed/concatenated 是 **raise** 而非回 error string | 回字串會設 `progress_made`（擋 retry）且把污染對話送回 LiteLLM，`json.loads(arguments)` 以 `Extra data` 炸掉；raise 會跳出 `run_streamed`，讓 `diagnose_error` 從乾淨 history retry | `args_recovery.py` docstring，#76 / #69 |
+| args-recovery 對 malformed/non-object/concatenated 回 **in-band 錯誤字串**、不執行工具（以前是 raise 讓整個回合重跑） | 整回合重試已移除（plan-friendly-errors.md D2）；`RepairingModel` 兩條路徑都先把 args 修成合法 JSON，對話不會被污染，模型下一次呼叫自行修正；合併呼叫的第一個物件也不執行，因為它常屬於另一個工具 | `args_recovery.py` docstring，#76 / #69，`test_a_whole_response_is_repaired_too` |
 | 拿掉 `parallel_tool_calls=False`，args-recovery 為唯一防線 | 那 flag 是與可靠的 Replay 路徑唯一的 wire 差異，使部分模型把 tool call 當純文字吐出，且 litellm 在 `ollama_chat` 上拒收 | `args_recovery.py` docstring，#69 |
 | `kb_search` 有 per-turn budget（`ctx.kb_search_budget` 的 `KbSearchBudget`：`max_calls`/`used`，取代舊的 scalar `kb_search_max_calls`/`kb_search_calls`）且**搜尋前**就 `used += 1` | 否則小模型會把昂貴的 multi-query/HyDE/rerank 重跑到 `max_turns`；搜尋前計數可擋住空結果 loop。`max_calls=0` ⇒ 本回合不搜尋；budget 物件 by-reference 共享給一個 app turn 的 `ask_knowledge_base` sub-agent，使整回合共用同一份額度 | `tools.py` `kb_search_impl`，`context.py` `KbSearchBudget`，#195/#334 |
 | 把 tool 清單（name+desc+JSON-schema）注入 system prompt | 小型本地 LLM（Qwen3:14b）不可靠地把 provisioned tool 綁到其呼叫慣例，會退化成 `exec(['<tool-name>'])`；顯式清單讓它躲不掉 | `tool_prompt.py` docstring |
@@ -148,7 +148,7 @@ flowchart TD
 
 ## 與其他子系統的關係
 
-- **[API 與回合引擎](api-and-turns.md)**：`LitellmAgentRunner` 組 `Agent[AgentToolContext]`、接上 `format_tools_for_prompt`、把 `reasoning_off_kwargs`/`reasoning_effort` 折進 `ModelSettings`、用 args-recovery 包 tool、並擁有把 `ToolArgsError` 種類對映成 retry hint 的 `diagnose_error`。`ChatTurnEngine` 是共用的 per-conversation turn pump；每個 surface 建自己的 `AgentToolContext` + `on_complete` 後丟進引擎跑。
+- **[API 與回合引擎](api-and-turns.md)**：`LitellmAgentRunner` 組 `Agent[AgentToolContext]`、接上 `format_tools_for_prompt`、把 `reasoning_off_kwargs`/`reasoning_effort` 折進 `ModelSettings`、用 args-recovery 包 tool、並用 `CallRetryModel` 包住每個模型做單次呼叫重試。`ChatTurnEngine` 是共用的 per-conversation turn pump；每個 surface 建自己的 `AgentToolContext` + `on_complete` 後丟進引擎跑。
 - **[Sandbox、FileStore 與同步](sandbox-and-filestore.md)**：透過 `ctx.sandbox` + `ensure_sandbox()`；`InvestigationRegistry` 經 `ensure_sandbox_via` 擁有 handle 建立。檔案 tool 與 liveness routing 走 `ctx.files`/`filestore`（`WorkspaceFiles` facade）。
 - **[知識庫:檢索與 Agent](kb-retrieval-agent.md)**：`Retriever`、`Enhancements`/`LocationFilter`、`doc_resolve`、provenance、context_cards、collections、`VlmDescriber`；`kb_search`/`lookup_glossary`/`resolve_collection` 伸手進去。
 - **[App 平台](apps-platform.md)**：`read_skill`/`save_skill` 的解析與 `build_tools` 的條件式 `read_skill` 注入（`apps/skills` + `apps/shared_skills` + `apps/manifest`）；`config.catalog_build.build_catalog` + `apps.catalog.AppCatalog` 構造 `AgentConfigCatalog` 並把 preset 解析成 `AgentConfig`。
@@ -163,7 +163,7 @@ flowchart TD
 - `src/workspace_app/agent/context.py` — `AgentToolContext`（中心接縫）與 `ensure_sandbox()`。
 - `src/workspace_app/agent/tools.py` — `_IMPLS` 註冊表、`_WORKSPACE_TOOLS`、`build_tools`，以及 `kb_search_impl` / `ask_knowledge_base_impl` / `infer_modules_impl` / `save_workflow_impl` + `_profile_tool_ceiling`（#323）/ `builtin_tool_descriptions`（#322）/ `_format_exec` / `_truncate_middle`。
 - `src/workspace_app/tooling/catalog.py` — `ToolMeta` / `humanize_tool_label` / `picker_units` / `flat_catalog`：tool 顯示 metadata 的單一來源（#322），讓 per-item picker 與 chat tool card 不會與 agent 實際跑的 tool 飄移。
-- `src/workspace_app/agent/args_recovery.py` — `peel_first_json`、`wrap_with_args_recovery` / `safer`、`ToolArgsError` 與 Malformed/NonObject/Concatenated 子類。
+- `src/workspace_app/agent/args_recovery.py` — `peel_first_json`、`wrap_with_args_recovery` / `safer`（Malformed/NonObject/Concatenated 皆回 in-band 錯誤）。
 - `src/workspace_app/agent/arg_repair.py` — `make_backstop_sentinel` / `malformed_raw`（in-band backstop sentinel）。
 - `src/workspace_app/agent/tool_prompt.py` — `format_tools_for_prompt`。
 - `src/workspace_app/agent/reasoning.py` — `is_ollama` / `reasoning_off_kwargs`。

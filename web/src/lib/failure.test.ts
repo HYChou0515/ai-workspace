@@ -125,3 +125,35 @@ describe("a document failure's remedy is a document's, not a chat's (P5)", () =>
     expect(describeFailure(f, "zh-TW").action).not.toBe(zh("failure.rate_limited.do"));
   });
 });
+
+describe("review round 1 — failure copy", () => {
+  it("keeps a surface's own remedy even when the headline is the surface's too", () => {
+    const f = docFailure({ status_detail: "processing was interrupted", status_error_kind: null }, "zh-TW");
+    expect(describeFailure(f, "zh-TW").action).toBe(zh("kb.doc.failedAction"));
+  });
+
+  it("words a lost turn with how often it was tried, and tells the reader to send again", () => {
+    const out = describeFailure(
+      { kind: "turn_lost", params: { attempts: 3 }, raw: "The assistant could not finish…" },
+      "zh-TW",
+    );
+    expect(out.headline).toBe(zh("failure.turn_lost.tried", { attempts: 3 }));
+    expect(out.action).toBe(zh("failure.turn_lost.do"));
+  });
+
+  it("words a failed Stop and a dropped stream in the language shown NOW, not when it happened", () => {
+    for (const kind of ["stop_failed", "stream_dropped"]) {
+      const en = describeFailure({ kind, raw: "x" }, "en").headline;
+      const tw = describeFailure({ kind, raw: "x" }, "zh-TW").headline;
+      expect(en, kind).not.toBe(tw);
+      expect(tw, kind).not.toBe(zh("failure.unknown.what"));
+    }
+  });
+
+  it("says what the user approved (D5)", () => {
+    expect(zh("failure.rate_limited.do")).toBe(
+      "過幾分鐘再送一次；常發生請管理員提高額度或加備援模型。",
+    );
+    expect(zh("failure.context_overflow.do")).toBe("請把訊息拆小，或開一個新對話重試。");
+  });
+});

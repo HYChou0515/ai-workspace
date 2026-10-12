@@ -32,7 +32,7 @@ from ..agent.context import AgentToolContext
 from ..kb.card_drafter import _parse_digest, drafting_prompt
 from ..kb.card_gen import DocDigest
 from ..resources import AgentConfig
-from .events import MessageDelta, RunError
+from .events import AnswerText, RunError
 from .runner import AgentRunner
 
 if TYPE_CHECKING:
@@ -140,18 +140,17 @@ class AgentCardDrafter:
     async def _adigest(self, *, doc_path: str, doc_text: str, collection_id: str) -> DocDigest:
         ctx = self._build_context(collection_id)
         prompt = drafting_prompt(doc_text, doc_path=doc_path, template=self._template)
-        parts: list[str] = []
+        answer = AnswerText()  # withdraws a re-sent call's half (D3)
         async for ev in self._runner.run(prompt, ctx):
-            if isinstance(ev, MessageDelta) and not ev.reasoning:
-                parts.append(ev.text)
-            elif isinstance(ev, RunError):
+            answer.add(ev)
+            if isinstance(ev, RunError):
                 # The runner exhausted its retry budget — a genuine give-up. Raise
                 # so the coordinator marks this doc FAILED (#414 partial tolerance)
                 # instead of parsing whatever partial text leaked before the error
                 # into a falsely-green empty digest (#494).
                 logger.error("AgentCardDrafter: run failed for doc %s: %s", doc_path, ev.message)
                 raise RuntimeError(ev.message)
-        return _parse_digest("".join(parts), max_cards=self._max_cards, doc_path=doc_path)
+        return _parse_digest(answer.text, max_cards=self._max_cards, doc_path=doc_path)
 
 
 def drafter_context_builder(

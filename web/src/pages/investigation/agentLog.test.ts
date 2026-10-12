@@ -1092,9 +1092,11 @@ describe("a finished turn leaves no stale waiting-state (#739 review round 3)", 
 
 describe("a turn that recovers stops reporting the attempt that failed", () => {
   /**
-   * A retry notice is not the end of a turn. `classify_retry_event` sends it as
-   * a `RunError` mid-flight — "retry: … all agent models failed or were
-   * cooling" — and the turn carries on and can finish perfectly well. But the
+   * A retry notice is not the end of a turn. It USED to arrive as a `RunError`
+   * mid-flight — "retry: … all agent models failed or were cooling" — and the
+   * turn carried on and could finish perfectly well. (A re-sent model call is
+   * `model_retrying` now, docs/plan-friendly-errors.md D9; the rule below stays
+   * as the guard against any emitter that reports and then recovers.) But the
    * reducer treats every `error` as terminal, and `error` is sticky: only the
    * NEXT question cleared it (#721). So a turn that stumbled and then succeeded
    * left the red box standing over its own good answer until the user typed
@@ -1160,7 +1162,7 @@ describe("a turn that recovers stops reporting the attempt that failed", () => {
   });
 
   it("keeps a failure that produced partial output before dying", () => {
-    // `progress_made` — output, then the failure, then `done`. The output came
+    // Output, then the failure, then `done`. The output came
     // BEFORE the error, so it is not evidence of recovery.
     let log = reduceAgent(EMPTY_LOG, { type: "message_delta", text: "half an answer" });
     log = reduceAgent(log, { type: "error", message: "APIConnectionError: refused" });
@@ -1744,11 +1746,45 @@ describe("a delegated sub-agent's failure rides its tool card (docs/plan-friendl
         content: "sub-agent 'x' failed: RateLimitError: slow",
         tool_call_id: "c1",
         tool_name: "run_agent",
-        tool_failure: failure,
+        failure,
       },
     ] as Message[]);
 
     const [entry] = log.entries;
     expect(entry?.kind === "tool_call" && entry.call.failure).toEqual(failure);
+  });
+});
+
+describe("review round 1 — the retraction and the night note (docs/plan-friendly-errors.md)", () => {
+  it("withdraws by CHARACTER, as the backend counted them — an emoji is one, not two", () => {
+    const log = fold([
+      { type: "message_delta", text: "ok 🚀🚀" },
+      // Python counted 5 code points; JS `.length` would say 7.
+      { type: "output_retracted", text_chars: 5, reasoning_chars: 0 },
+      { type: "message_delta", text: "done" },
+    ] as AgentEvent[]);
+
+    const answers = log.entries.flatMap((e) =>
+      e.kind === "message" && e.message.role === "assistant" ? [e.message.content] : [],
+    );
+    expect(answers).toEqual(["done"]);
+  });
+
+  it("words a night's failure on its note, without repeating the raw text as prose", () => {
+    const raw = "AllProvidersFailed: all agent models failed or were cooling\n← RateLimitError: slow";
+    const log = logFromMessages([
+      {
+        role: "goal",
+        content: `今晚無法開始。\n\n明天會再試。\n\n${raw}`,
+        failure: { kind: "rate_limited", params: null, raw },
+      },
+    ] as Message[]);
+
+    expect(log.entries[0]).toEqual({
+      kind: "goal_note",
+      text: "今晚無法開始。\n\n明天會再試。",
+      at: undefined,
+      failure: { kind: "rate_limited", params: null, raw },
+    });
   });
 });

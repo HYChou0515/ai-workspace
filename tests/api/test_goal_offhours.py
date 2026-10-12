@@ -13,6 +13,7 @@ from datetime import UTC, datetime
 import pytest
 from specstar import SpecStar
 
+from workspace_app.api.events import RunError
 from workspace_app.api.goal_offhours import OffHoursGoalSweeper, SpecstarStretchClaims
 from workspace_app.config.schema import OffHoursSettings
 from workspace_app.resources.conversation import Conversation, Message
@@ -65,9 +66,9 @@ def _sweeper(
         if fail:
             raise RuntimeError("the sandbox would not wake")
 
-    async def night_abandoned(conversation_id: str, reason: str) -> None:
+    async def night_abandoned(conversation_id: str, failure: RunError) -> None:
         if abandoned is not None:
-            abandoned.append((conversation_id, reason))
+            abandoned.append((conversation_id, failure.message))
 
     return OffHoursGoalSweeper(
         spec,
@@ -239,7 +240,7 @@ async def test_one_chat_failing_to_start_costs_it_a_tick_not_its_night():
         if len(calls) == 1:
             raise RuntimeError("sandbox is having a moment")
 
-    async def _never_called(conversation_id: str, reason: str) -> None:
+    async def _never_called(conversation_id: str, failure: RunError) -> None:
         raise AssertionError("one failure is not a night given up on")
 
     sweeper = OffHoursGoalSweeper(
@@ -500,7 +501,7 @@ async def test_a_failure_to_TELL_one_chat_does_not_end_the_sweep_either():
         attempts.append(conversation_id)
         raise RuntimeError("the sandbox would not wake")
 
-    async def telling_explodes(conversation_id: str, reason: str) -> None:
+    async def telling_explodes(conversation_id: str, failure: RunError) -> None:
         raise RuntimeError("that chat was deleted while we were failing")
 
     sweeper = OffHoursGoalSweeper(

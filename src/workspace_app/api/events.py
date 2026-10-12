@@ -249,13 +249,39 @@ class RateLimited:
 @dataclass(frozen=True)
 class ModelRetrying:
     """A model call failed in a way a re-send can cure (a timeout, a dropped
-    connection, a 5xx) and is being sent again — attempt ``attempt``.
+    connection, a 5xx, a failover chain with every model busy) and is being
+    sent again — attempt ``attempt``.
     Ephemeral, like ``RateLimited``: a recovered retry is not a failure, so it
     is never persisted (docs/plan-friendly-errors.md D9)."""
 
     attempt: int
     kind: str
     type: Literal["model_retrying"] = "model_retrying"
+
+
+@dataclass
+class AnswerText:
+    """The answer a run's events add up to, for a caller that reads the text
+    rather than persisting the turn (a sub-agent's report, a KB answer, a
+    summary). It honours `OutputRetracted`: a re-sent call's broken half is
+    withdrawn here as it is on the transcript — five callers joined
+    `MessageDelta` text themselves and handed the model the half glued to the
+    whole (docs/plan-friendly-errors.md, review round 1).
+
+    `include_reasoning` keeps the reasoning channel too (the compaction
+    summary always did); a re-sent call's output on BOTH channels is then the
+    tail of what was gathered, so both counts come off the end."""
+
+    include_reasoning: bool = False
+    text: str = ""
+
+    def add(self, ev: object) -> None:
+        if isinstance(ev, MessageDelta):
+            if self.include_reasoning or not ev.reasoning:
+                self.text += ev.text
+        elif isinstance(ev, OutputRetracted):
+            drop = ev.text_chars + (ev.reasoning_chars if self.include_reasoning else 0)
+            self.text = self.text[: max(0, len(self.text) - drop)]
 
 
 @dataclass(frozen=True)

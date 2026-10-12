@@ -25,7 +25,7 @@ import msgspec
 from ..agent.context import AgentToolContext
 from ..apps.subagents import SUBAGENT_FORBIDDEN_TOOLS, SubagentDef
 from ..tooling.catalog import narrow_entries
-from .events import AgentEvent, MessageDelta, RunError
+from .events import AgentEvent, AnswerText, RunError
 from .runner import AgentRunner
 
 if TYPE_CHECKING:
@@ -92,16 +92,15 @@ async def drive_subagent(
     publish): the callers differ in what a failure means, not in how the
     sub-agent is run."""
     child = _child_context(parent_ctx, defn, model)
-    parts: list[str] = []
+    answer = AnswerText()
     failure: str | None = None
     async for ev in runner.run(prompt, child):
         if on_event is not None:
             on_event(ev)
-        if isinstance(ev, MessageDelta) and not ev.reasoning:
-            parts.append(ev.text)
-        elif isinstance(ev, RunError):
+        answer.add(ev)
+        if isinstance(ev, RunError):
             failure = ev.message
-    return "".join(parts).strip(), failure
+    return answer.text.strip(), failure
 
 
 def _child_context(

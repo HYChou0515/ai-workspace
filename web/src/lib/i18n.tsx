@@ -2236,7 +2236,7 @@ export const messages = {
     en: "The model service is limiting how often we can ask; we waited about {waited_s} seconds and it has not cleared.",
   },
   "failure.rate_limited.do": {
-    "zh-TW": "過幾分鐘再送一次；常發生的話請管理員提高額度或加備援模型。",
+    "zh-TW": "過幾分鐘再送一次；常發生請管理員提高額度或加備援模型。",
     en: "Send it again in a few minutes. If this keeps happening, ask an administrator to raise the quota or add a fallback model.",
   },
   "failure.all_busy.what": {
@@ -2279,8 +2279,8 @@ export const messages = {
     en: "This is more than the model can read at once.",
   },
   "failure.context_overflow.do": {
-    "zh-TW": "把訊息拆小，或開一個新對話。",
-    en: "Split the message up, or start a new conversation.",
+    "zh-TW": "請把訊息拆小，或開一個新對話重試。",
+    en: "Split the message up, or start a new conversation and try again.",
   },
   "failure.bad_request.what": {
     "zh-TW": "模型服務不接受這次的請求，通常是設定或模型不支援某功能。",
@@ -2313,14 +2313,33 @@ export const messages = {
     en: "Try again later. If it persists, copy the technical details to an administrator.",
   },
   "failure.details": { "zh-TW": "技術細節", en: "Technical details" },
-  "failure.stopFailed": {
+  // Named by the app itself (review round 1), so worded in the language shown
+  // when it is read rather than frozen at the moment it happened.
+  "failure.stop_failed.what": {
     "zh-TW": "停止失敗，這一輪可能仍在進行。",
     en: "Stop did not go through — this turn may still be running.",
   },
-  "failure.streamDropped": {
+  "failure.stop_failed.do": {
+    "zh-TW": "再按一次停止；持續失敗請重新整理頁面。",
+    en: "Press Stop again. If it keeps failing, reload the page.",
+  },
+  "failure.stream_dropped.what": {
     "zh-TW": "與伺服器的連線中斷，正在重新連線…",
     en: "Lost the connection to the server — reconnecting…",
   },
+  "failure.stream_dropped.do": {
+    "zh-TW": "稍等一下；回覆會在重新連上之後出現。",
+    en: "Wait a moment — the reply appears once it reconnects.",
+  },
+  "failure.turn_lost.what": {
+    "zh-TW": "這個回覆在伺服器重新啟動時中斷，沒能完成。",
+    en: "This reply was interrupted when the server restarted, and did not finish.",
+  },
+  "failure.turn_lost.tried": {
+    "zh-TW": "這個回覆在伺服器重新啟動時中斷，試了 {attempts} 次都沒能完成。",
+    en: "This reply was interrupted when the server restarted, and did not finish after {attempts} tries.",
+  },
+  "failure.turn_lost.do": { "zh-TW": "請再送一次你的訊息。", en: "Send your message again." },
   "failure.copy": { "zh-TW": "複製", en: "Copy" },
   "failure.copied": { "zh-TW": "已複製", en: "Copied" },
   // D9: a model call being re-sent — a status line, never a failure.

@@ -779,8 +779,8 @@ def _agent_for(
             on_switch=on_switch,
             # #742's visibility rule, inside the chain: the hold happens mid-turn
             # and can last minutes, so it must SAY so — the FE shows the same
-            # transient "rate limited, retrying in Ns" notice the turn loop's own
-            # holds get.
+            # transient "rate limited, retrying in Ns" notice the call wrapper's
+            # own holds get (`CallRetryModel`).
             on_hold=on_rate_limit_hold,
         )
     else:
@@ -893,7 +893,7 @@ def _rate_limit_hold_emitter(
 ) -> Callable[[str, float], None]:
     """A per-turn sink that turns a FallbackModel rate-limit hold into a live
     ``RateLimited`` event on this turn's stream — the same transient notice the
-    turn loop's own holds emit (#742: a held turn must say it is held, because a
+    call wrapper's own holds emit (#742: a held turn must say it is held, because a
     stated window can be minutes and silent minutes read as a hang).
     ``put_nowait`` is safe — the hold fires on the same event loop that drains
     the queue."""
@@ -984,8 +984,8 @@ def _map_event(event: Any) -> AgentEvent | None:
                 # emitted garbage) → leave args empty. Fabricating a
                 # `{"_raw": <string>}` sentinel here used to leak through
                 # history into the model's NEXT prompt, where it mimicked
-                # the shape (`read_file(_raw="…")`); args_recovery already
-                # raises at invoke-time so the run retries cleanly.
+                # the shape (`read_file(_raw="…")`); args_recovery answers
+                # bad args in-band at invoke-time instead.
                 args_obj = {}
         elif isinstance(raw_args, dict):
             args_obj = raw_args
@@ -1228,10 +1228,10 @@ _NONSTREAM_TOOL_EVENT = {
 
 
 class LitellmAgentRunner:
-    """Runs one user turn through agents-SDK + LiteLLM, retrying once on
-    recognised small-model failures and surfacing the diagnosis to the
-    model on each retry. Caps retries so a wedged turn can't loop forever.
-    """
+    """Runs one user turn through agents-SDK + LiteLLM — once. A failed model
+    call is retried as that call (`_call_retry` → `CallRetryModel`), bounded by
+    `max_retries` re-sends per call and a rate-limit budget per turn; what still
+    fails ends the turn, named (`turns._terminal_error`)."""
 
     def __init__(
         self,
@@ -1803,7 +1803,7 @@ class LitellmAgentRunner:
             if not task.done():
                 task.cancel()
             # Re-raise producer failures (e.g. MaxTurnsExceeded) so run()'s
-            # retry/terminal handling still fires.
+            # terminal handling still fires.
             with contextlib.suppress(asyncio.CancelledError):
                 await task
 
@@ -1816,9 +1816,10 @@ class LitellmAgentRunner:
         output (and live exec logs) for a clean structured tool_call — the streaming
         aggregator's tool_call corruption can't happen on a one-shot response.
 
-        Same retry/terminal contract as the streamed path: this raises (MaxTurns,
-        recovery errors) straight up to ``run()`` which maps them as usual. The
-        RepairingModel + args_recovery backstops still apply (``_agent_for``)."""
+        Same terminal contract as the streamed path: what its model calls'
+        retries (``_call_retry``) did not cure raises straight up to ``run()``,
+        which names it. The RepairingModel + args_recovery backstops still apply
+        (``_agent_for``)."""
         assert ctx.agent_config is not None
         resolve_credential = await self._credential_resolver(ctx)
         agent = _agent_for(
