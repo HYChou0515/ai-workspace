@@ -245,3 +245,26 @@ describe("a chat asked for from an execution", () => {
     await waitFor(() => expect(screen.queryByRole("button", { name: "Show chat" })).toBeNull());
   });
 });
+
+// P11: the schedules overview links an execution as `?open=workflow-run:<id>`.
+describe("an address that names an execution", () => {
+  afterEach(() => window.history.replaceState(null, "", "/"));
+
+  it("opens that execution's tab, the workspace unfolded", async () => {
+    vi.spyOn(workflowApi, "getRun").mockResolvedValue(run("r7", "done"));
+    window.history.replaceState(null, "", "/?open=workflow-run%3Ar7");
+    const chatFirst = {
+      ...manifest,
+      layout: { ...manifest.layout, primary_surface: "chat" },
+    } as unknown as AppManifest;
+    openShell(chatFirst);
+    expect((await screen.findByTestId("execution-view")).dataset.run).toBe("r7");
+  });
+
+  it("opens no file by it — only an execution", async () => {
+    window.history.replaceState(null, "", "/?open=%2Fsecret.md");
+    openShell();
+    await screen.findByRole("button", { name: /^Workflows/ });
+    expect(screen.queryByRole("tab", { name: /secret/ })).toBeNull();
+  });
+});

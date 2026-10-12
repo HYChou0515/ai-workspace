@@ -125,12 +125,14 @@ describe("SchedulesOverviewPage", () => {
     expect(await screen.findByText(word("scheduleOverview.empty"))).toBeInTheDocument();
   });
 
-  it("links the last run to the schedule's own conversation", async () => {
+  it("links the last run to that execution's tab in its item", async () => {
+    // plan-workflow-out-of-chat P11: an execution is no longer a chat, so the
+    // schedule's conversation is not where its runs are read.
     const ran = row({ last_run: { run_id: "r1", status: "error", started: 1, ended: 2, by_hand: false } });
     render(<SchedulesOverviewPage client={client({ rows: [ran] })} />, { wrapper: Wrap });
 
     const link = await screen.findByRole("link", { name: new RegExp(word("scheduleOverview.status.error")) });
-    expect(link).toHaveAttribute("href", "/a/rca/i-1?chat=wui%3Ai-1%3Aaaaa&from=schedules");
+    expect(link).toHaveAttribute("href", "/a/rca/i-1?open=workflow-run%3Ar1");
     expect(link).not.toHaveTextContent(word("scheduleOverview.byHand"));
   });
 
@@ -326,7 +328,7 @@ describe("SchedulesOverviewPage", () => {
     // The refetch after the press already carries the run: the last-run cell
     // says it all, so the note goes.
     const last = await within(tr).findByRole("link", { name: new RegExp(word("scheduleOverview.status.running")) });
-    expect(last).toHaveAttribute("href", "/a/rca/i-1?chat=wui%3Ai-1%3Aaaaa&from=schedules");
+    expect(last).toHaveAttribute("href", "/a/rca/i-1?open=workflow-run%3Arun-1");
     await waitFor(() => expect(within(tr).queryByRole("status")).toBeNull());
   });
 
@@ -394,9 +396,10 @@ describe("SchedulesOverviewPage", () => {
     fireEvent.click(within(tr).getByRole("button", { name: word("schedules.runNow") }));
 
     const note = await within(tr).findByRole("status");
+    // the run the press started, by the id it answered with
     expect(within(note).getByRole("link", { name: word("scheduleOverview.seeRun") })).toHaveAttribute(
       "href",
-      "/a/rca/i-1?chat=wui%3Ai-1%3Aaaaa&from=schedules",
+      "/a/rca/i-1?open=workflow-run%3Arun-1",
     );
   });
 

@@ -152,10 +152,10 @@ flowchart TD
 | --- | --- | --- |
 | Filesystem-as-journal + input-hash 快取,不做抽象 replay | resume/skip 立基於具體 workspace artifact + 穩定 args hash,重跑是 deterministic 且人類可檢視/編輯 journal;inputs-as-args 讓 cache 失效從內容變動自然落下 | #100 / [workflows.md](../workflows.md) / `engine.py` docstring |
 | Steer = 唯讀 PROPOSE(decision)+ deterministic APPLY(action),經人類 confirm 把關 | 誤 steer 在批准前碰不到 workspace;LLM 只成計畫(編輯 inputs + 按名 invalidate),apply 是 deterministic;全內容重寫(非 diff)規避長內容的 tool-arg 不可靠 | #288 / `steer.py` + `run.py` `SteerInputEdit` docstring(#107) |
-| Steer/decide 增量續跑**同一** run,而非開新 run | 重跑跳過有效(昂貴)前綴,只重跑被 invalidate/下游的 step,steering 便宜且 run 歷史連續 | #288 `orchestrator.confirm_steer`/`decide` docstring |
+| Steer/decide/retry 增量續跑**同一** run,而非開新 run | 重跑跳過有效(昂貴)前綴,只重跑被 invalidate/下游的 step,steering 便宜且 run 歷史連續;Re-run this step 走 steer 的 invalidate(留稽核收據) | #288 `orchestrator.confirm_steer`/`decide`/`retry` docstring |
 | Orchestrator App-agnostic;API 注入 `load_run`/`load_manifest`/`wire_handle`/`publish`/`release`/`notify_failure` | 讓引擎能用 fake 單元測,並把 Conversation/SSE/sandbox 接線留給 FastAPI 層;`chat_id` 在此是不透明 stream key | `orchestrator.py` docstring |
 | 以 file path 載入 `run.py`,非 `import_module` | profile 目錄名可能非識別字(連字號範例),不是可 import 的 package | `discovery.py` docstring |
-| 一 chat 一 run(平行),legacy 無 chat_id 路徑維持一 item 一 active run | topic-hub 在一 item 上平行驅動多個 workflow chat;legacy 路徑保留原始併發守則 | `orchestrator.start` |
+| 每個執行有自己的 conversation(一 conversation 一 run),一 item 上可平行;Continue / Re-run 只在同一個 workflow 沒有別的 run 在跑時才接受 | 執行不在聊天裡、不接管聊天(plan-workflow-out-of-chat D3);同一 workflow 的 run 共用 `/.workflow/<workflow_id>` journal,同時跑會搶同一批 step 檔 | `orchestrator.start` / `orchestrator.retry` |
 | Journal 從 workspace 根移到 `/.workflow/<workflow_id>/` | 避免 `step_*` artifact 弄亂使用者可見的 workspace,並把每個 workflow 的 journal 各自分隔 | #136 / `handle.journal_dir` |
 | Step board 以 collapse 限界(loop 元素終局時 drop) | 長 step 不該看起來像死掉,但大批次的無界 board 會撐爆資源;計數吸收完成的 loop 元素 | #178 / `run.StepState` + `orchestrator._apply_step_record` |
 

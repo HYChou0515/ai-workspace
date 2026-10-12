@@ -119,8 +119,9 @@ export function ItemChatShell({
    * `collections.json`; off for most Apps (RCA / Playground). */
   showCollections: boolean;
 } & AgentChrome) {
-  // The chat the address names (`?chat=`), read once — the schedules overview
-  // links a schedule's last run to its own chat this way. Tied to the item it
+  // The chat the address names (`?chat=`), read once. (The schedules overview
+  // linked a schedule's runs this way; it opens their execution tab now —
+  // plan-workflow-out-of-chat P11.) Tied to the item it
   // was read for: the shell is not remounted between items, and an id held
   // for another item left the next one with no chat selected (review round 3).
   const [address] = useState(() => ({ itemId, chat: chatFromAddress() }));
@@ -134,9 +135,7 @@ export function ItemChatShell({
       // chat (Run now just made it): fetch it on mount when the address asks.
       addressChat ? "always" : undefined,
     );
-  // `?chat=<id>` opens that chat — the schedules overview links a schedule's
-  // last run to its own conversation this way (docs/plan-schedule-overview.md).
-  // Read once, from the address the item was opened with; an id the item has
+  // `?chat=<id>` opens that chat. Read once, from the address the item was opened with; an id the item has
   // no chat for falls back to the most recent one like any other.
   const [activeChatId, setActiveChatId] = useState<string | null>(addressChat);
   const [managing, setManaging] = useState(false);

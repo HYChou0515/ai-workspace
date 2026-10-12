@@ -18,6 +18,17 @@ export function isExecutionPath(path: string): boolean {
   return path.startsWith(PREFIX);
 }
 
+/** The item page's address parameter that opens an execution's tab: the
+ * schedules overview links a schedule's last run this way (`?open=<path>`). */
+export const OPEN_PARAM = "open";
+
+/** The execution tab an address asks the item page to open, or null — only an
+ * execution's path; the parameter is not a way to open arbitrary files. */
+export function executionFromAddress(search: string): string | null {
+  const path = new URLSearchParams(search).get(OPEN_PARAM);
+  return path && isExecutionPath(path) && runIdOf(path) ? path : null;
+}
+
 /** The run an execution tab shows, or null for any other tab. */
 export function runIdOf(path: string): string | null {
   return isExecutionPath(path) ? path.slice(PREFIX.length) : null;

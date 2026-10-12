@@ -829,8 +829,9 @@ def register_workflow_routes(
         """plan-workflow-out-of-chat D9: a failed or stopped execution's Continue from
         here (`rerun` empty — what passed skips) or Re-run this step (`rerun` names
         it — its artifacts are dropped first). Same run, same id; the FE refetches it.
-        409 when the run is not failed / stopped, another run of the item is live, or
-        its workflow no longer loads; 400 for a step not on the run's board."""
+        409 when the run is not failed / stopped, another run of its workflow on the
+        item is live, or its workflow no longer loads; 400 for a step not on the
+        run's board."""
         investigation_id = locator.require_access(slug, item_id, "converse")
         profile = locator.profile_of(investigation_id)
         try:

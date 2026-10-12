@@ -298,10 +298,10 @@ export function ExecutionView({
           <label htmlFor={changeId}>What should change?</label>
           <textarea
             id={changeId}
+            className="input input--block"
             rows={3}
             value={instruction}
             onChange={(e) => setInstruction(e.target.value)}
-            style={{ font: "inherit", padding: 6 }}
           />
           <div style={{ display: "flex", gap: 8 }}>
             <button

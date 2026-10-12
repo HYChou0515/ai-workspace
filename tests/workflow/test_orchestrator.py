@@ -1656,9 +1656,11 @@ async def test_only_a_failed_or_stopped_run_is_continued(spec_instance: SpecStar
     assert orch._get(run_id).status is status
 
 
-async def test_continuing_waits_its_turn_behind_another_live_execution(spec_instance: SpecStar):
-    """Every execution of a workflow on an item shares one journal, so two at once
-    would race on the same step files — the same rule `start` keeps."""
+async def test_continuing_waits_its_turn_behind_another_live_execution_of_that_workflow(
+    spec_instance: SpecStar,
+):
+    """Every execution of a workflow on an item shares one journal
+    (`/.workflow/<workflow_id>`), so two at once would race on the same step files."""
     orch, _ = _orch(spec_instance, _two_step_run([]))
     old = _insert_run(orch, item_id="iR5", status=RunStatus.ERROR)
     _insert_run(orch, item_id="iR5", status=RunStatus.RUNNING)
@@ -1691,3 +1693,17 @@ async def test_continuing_is_only_answered_through_its_own_item(spec_instance: S
     with pytest.raises(ResourceIDNotFoundError):
         await orch.retry(slug="rca", item_id="iB", profile="echo", run_id=rid)
     assert orch._get(rid).status is RunStatus.ERROR
+
+
+async def test_continuing_is_not_held_up_by_a_live_execution_of_another_workflow(
+    spec_instance: SpecStar,
+):
+    """Another workflow journals under its own folder: nothing is shared to race on."""
+    calls: list[str] = []
+    orch, _ = _orch(spec_instance, _two_step_run(calls, fail_second=0))
+    old = _insert_run(orch, item_id="iR7", status=RunStatus.ERROR, workflow_id="classify")
+    _insert_run(orch, item_id="iR7", status=RunStatus.RUNNING, workflow_id="digest")
+
+    await orch.retry(slug="rca", item_id="iR7", profile="echo", run_id=old)
+
+    assert (await _ran(orch, old, spec_instance)).status is RunStatus.DONE

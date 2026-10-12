@@ -43,7 +43,7 @@ import { WorkflowsSidebar } from "../../components/WorkflowsSidebar";
 import { WaitingNotice } from "../../components/WaitingNotice";
 import { ItemProfileProvider } from "../../hooks/itemProfile";
 import { subscribeChatRequest } from "../../lib/chatRequestBus";
-import { isExecutionPath } from "../../lib/executionTab";
+import { executionFromAddress, isExecutionPath } from "../../lib/executionTab";
 import { ExecutionTitle } from "../../components/ExecutionTitle";
 import { useItemRuns } from "../../hooks/useWorkflow";
 import { WorkspaceSlugProvider, useWorkspaceSlug } from "../../hooks/useWorkspaceSlug";
@@ -599,6 +599,17 @@ function ShellBody({
     [ideCollapsed, chatCollapsed, manifest.function.workspace, setIdeCollapsed],
   );
   const toggleChat = useCallback(() => applyPanels("chat"), [applyPanels]);
+  // `?open=workflow-run:<id>` — the schedules overview links a schedule's last
+  // run this way (plan-workflow-out-of-chat P11). Read once, from the address
+  // the item was opened with; the workspace unfolds so the tab is seen.
+  const [addressExecution] = useState(() => executionFromAddress(window.location.search));
+  useEffect(() => {
+    if (!addressExecution || !manifest.function.workspace) return;
+    setIdeCollapsed(false);
+    groups.openInActive(addressExecution);
+    // once, on arrival
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [addressExecution]);
   // An execution asked for a chat about it (plan-workflow-out-of-chat D8 / D9):
   // the chat shell opens one, and a folded chat must unfold for it to be seen.
   useEffect(

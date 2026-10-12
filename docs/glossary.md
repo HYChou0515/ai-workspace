@@ -94,9 +94,11 @@
 
 - **Workflow** — API 觸發的 headless 工作流；backend 編排 ＋ 以檔案系統為 journal（filesystem artifacts ＋ input-hash，非抽象 replay）；可用 Python `run()` 或使用者共筆的宣告式 `workflow.json` DSL（#323，見下）；profile 級。歸 [Workflow 引擎](subsystems/workflow-engine.md)。
 - **decision／action split** — workflow 把判斷（decision）與副作用（action）分開；produce → review → commit。歸 [Workflow 引擎](subsystems/workflow-engine.md)。
-- **human_gate** — produce → review → commit 流程中的人類關卡（v1）；以釘頂 `WorkflowDecisionCard` 呈現。歸 [Workflow 引擎](subsystems/workflow-engine.md)。
+- **human_gate** — produce → review → commit 流程中的人類關卡（v1）；在執行分頁裡等待的那一列以 `WorkflowDecisionCard` 呈現（不在聊天裡）。歸 [Workflow 引擎](subsystems/workflow-engine.md)。
 - **journal（`/.workflow/<workflow_id>/`）** — workflow 的 `step_*` 日誌資料夾，移出 item root；經 `WorkflowHandle.journal_dir` 串接。歸 [Workflow 引擎](subsystems/workflow-engine.md)。
-- **steering** — 對話式調整（free-text → LLM 計畫：改 inputs ＋ 失效 steps → 人類確認影響範圍 → 確定性套用 → 同一個 run 增量續跑）。歸 [Workflow 引擎](subsystems/workflow-engine.md)。
+- **steering** — 用文字調整一次執行（執行分頁 `⋯` →「Change this execution…」：free-text → LLM 計畫：改 inputs ＋ 失效 steps → 人類確認影響範圍 → 確定性套用 → 同一個 run 增量續跑）。steerer 的 turn 不寫進任何對話。歸 [Workflow 引擎](subsystems/workflow-engine.md)。
+- **執行（execution）** — UI 對一次 workflow run 的稱呼（程式、API 仍叫 `run`）；名稱是「workflow · 開始時間」。有自己的 conversation，不在聊天裡；在 workspace 的 Workflows 側欄列出、開成編輯區的分頁（路徑 `workflow-run:<id>`）。歸 [Workflow 引擎](subsystems/workflow-engine.md)。
+- **Continue from here／Re-run this step** — 失敗或停下的執行再跑一次（同一個 run）：前者已做完的跳過，後者先丟掉那一步的 artifact。`POST .../runs/{id}/retry`。歸 [Workflow 引擎](subsystems/workflow-engine.md)。
 - **User-authored workflow（降權 DSL）** — 與 AI 共同設計、存成資料（一份 `workflow.json`）而非 Python 的工作流；可信賴的 interpreter（`build_run`）在既有 step primitives 上跑它，故 **API 內不執行使用者程式碼**。是 user skill 的工作流類比（#298／#323）。歸 [Workflow 引擎](subsystems/workflow-engine.md)。
 - **workflow.json（DSL schema）** — 非圖靈完備的宣告式定義：有序 steps，`type ∈ agent／sandbox／gate／capability／map`，加上確定性 `{x}`／`{x.field}` 字串內插（無 eval）。由 `parse_def` 解析成 `WorkflowDef`。歸 [Workflow 引擎](subsystems/workflow-engine.md)。
 - **Capability（workflow step）** — 可靠、冪等的副作用 step（`ingest_to_collection` 或 `upsert_context_card`），在擷取到的使用者 authz 下執行——使用者 DSL 唯一的副作用路徑，因為使用者的 sandbox step 是純計算（無 credential）。歸 [Workflow 引擎](subsystems/workflow-engine.md)。

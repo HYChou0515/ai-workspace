@@ -2163,6 +2163,8 @@ agent 步驟裡 AI 的呼叫、WUI 的工具呼叫、view plugin、圖表重畫�
 - 執行的分頁有「Open a chat with these results」（執行結束後）和失敗那一列的「Ask AI why it failed」：開一個**新**聊天，
   把執行的編號、結果檔（或那一步的錯誤與 transcript 路徑）放進輸入框，不會自動送出。聊天裡的 AI 可以用
   `show_file` 叫出某個執行的卡片（路徑寫成 `workflow-run:<id>`），只限這個 item 的執行。
+- **排程總表（`/schedules`）的「上次執行」連到那個執行的分頁**（`/a/<slug>/<item>?open=workflow-run:<id>`），
+  不再連到排程的對話（`?chat=`）。舊的 `?chat=` 書籤會打開 item，但落在最近的聊天上。
 - 有執行在等人決定時，workspace 右下角會出現一則提示（哪個執行、等什麼），按 Open 到那個執行的分頁；
   不會自己消失，可以關掉，下一個關卡會再提示。
 - **`GET …/runs/{run_id}` 和 `…/runs/{run_id}/stream` 會檢查這個 run 屬於網址裡的 item**，不屬於就回 404。

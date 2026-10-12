@@ -400,6 +400,17 @@ class WorkflowOrchestrator:
                 return r.info.resource_id
         return None
 
+    def _active_run_of_workflow(self, item_id: str, workflow_id: str) -> str | None:
+        """A live run of ``workflow_id`` on the item, or None. Its runs share one
+        journal (``journal_dir_of(workflow_id)``), so two at once race on the same
+        step files; another workflow's runs journal elsewhere."""
+        for r in self._rm().list_resources((QB["item_id"] == item_id).build()):
+            data = r.data
+            assert isinstance(data, WorkflowRun)
+            if data.status in _ACTIVE and data.workflow_id == workflow_id:
+                return r.info.resource_id
+        return None
+
     def active_run_for_chat(self, item_id: str, chat_id: str) -> str | None:
         """The active run driving ``chat_id`` (a specific thread), or None. #343: a
         chat hosts one run at a time — a takeover launch checks this so a thread whose
@@ -988,8 +999,8 @@ class WorkflowOrchestrator:
 
         Refuses before anything is written: a run that is not ``error`` /
         ``cancelled`` (:class:`NotRetryable`), a ``rerun`` that is not a named step
-        on the run's board (:class:`UnknownStep`), another live run on the item
-        (:class:`ActiveRunExists` — every run of a workflow on an item shares one
+        on the run's board (:class:`UnknownStep`), another live run of the same
+        workflow on the item (:class:`ActiveRunExists` — its runs share one
         journal), a workflow that no longer loads (:class:`WorkflowUnavailable`).
 
         The person whose private values the run uses is kept, as a gate decision
@@ -1002,7 +1013,7 @@ class WorkflowOrchestrator:
             )
         if rerun and rerun not in {s.name for s in data.steps if not s.key}:
             raise UnknownStep(rerun)
-        other = self.active_run(item_id)
+        other = self._active_run_of_workflow(item_id, data.workflow_id)
         if other is not None:
             raise ActiveRunExists(item_id, other)
         manifest = await self._resolve_manifest(slug, profile, data.workflow_id, item_id)

@@ -257,7 +257,7 @@ so a schedule's shared conversation shows one execution at a time.
       `apply_steer`, which also writes the audit receipt. The steps after it
       re-run as far as their inputs changed.
     - It is refused (409) for a run that is not `error` / `cancelled`, while
-      another run of the item is live (the journal is shared), or when the
+      another run of the same workflow on the item is live (its runs share one journal), or when the
       workflow no longer loads. It is refused (400) for a name that is not a
       named step on the board; the name reaches a journal glob.
     - The phases, the board, `ended` and `result` restart: a skipped step counts
@@ -372,6 +372,30 @@ gate.
 - Rewrite `workflows.md` §1 / §5.1 / §10.
 - Update the glossary (steering, human_gate rendering).
 - Point the schedule overview at the execution tab.
+- **Built:**
+  - `workflows.md` §1, §5.1 and §10 describe an execution as its own
+    conversation that the web keeps out of the chat. Each node sees only what
+    it references. The tab, Stop, Continue / Re-run, the chats about an
+    execution and the waiting notice are described there. Steer is reached
+    from the `⋯` menu as an aside.
+  - The glossary's `human_gate` and `steering` entries are updated, and
+    "execution" and "Continue from here / Re-run this step" are added.
+  - `subsystems/workflow-engine.md`'s decision rows are updated, and
+    `topic-hub.md` gets a note that its "workflow chat" is history.
+  - The schedules overview's last run, and its note after Run now, link to
+    `?open=workflow-run:<id>`, the run the row shows or the one the press
+    started. It used to link the schedule's conversation (`?chat=`), which the
+    chat list stopped showing in P6, so that link had been landing on another
+    chat.
+    - The item page reads `open` once (`executionFromAddress`; an execution's
+      path only, never a file) and opens that tab with the workspace
+      unfolded.
+  - Found while writing §10: every run has its own conversation, so `start`
+    lets two runs on an item go side by side, but `retry` refused while any
+    run of the item was live. It now refuses only for a live run of the SAME
+    workflow, the one that shares the journal.
+  - Mutation probes, each reddening its test: the address check, the unfold
+    on arrival, and both halves of the same-workflow guard.
 
 ## Verification
 
