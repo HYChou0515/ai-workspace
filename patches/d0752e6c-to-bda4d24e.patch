@@ -1,0 +1,1884 @@
+diff --git a/docs/design-history.md b/docs/design-history.md
+index 20d5a3a6..42b15810 100644
+--- a/docs/design-history.md
++++ b/docs/design-history.md
+@@ -88,6 +88,7 @@
+ | [plan-schedule-overview.md](plan-schedule-overview.md) | 排程總表：跨 item 列出看得到的排程，上次／下次、改時間、現在執行；新排程不補跑 |
+ | [plan-schedule-overview-polish.md](plan-schedule-overview-polish.md) | 排程總表整修：時間換成看的人的時區與相對說法、名稱用標題、手動執行標記、排程對話的橫幅 |
+ | [plan-schedule-cron.md](plan-schedule-cron.md) | cron 排程：一列寫完原本要拆成好幾列的排程；改時間有簡單／cron 兩種模式 |
++| [plan-workflow-out-of-chat.md](plan-workflow-out-of-chat.md) | Workflow 移出聊天：每個 node 只看它引用的東西；執行在 workspace 的 Workflows 側欄與分頁；steer 不再走聊天、不顯示 JSON |
+ | [plan-storage-all-items.md](plan-storage-all-items.md) | 儲存空間列出你名下所有項目（含閒置、已回收、沒設上限的人），總量與上限一起變正確 |
+ 
+ ## Sandbox 與基礎設施
+@@ -99,6 +100,7 @@
+ | [plan-sandbox-resource-quota.md](plan-sandbox-resource-quota.md) | 依 App 設定 sandbox 資源（cpu/memory/disk）+ 每人跨 App 總量上限；債務人是 item 的 `owner`（前提見 #687） |
+ | [plan-item-sandbox-resources.md](plan-item-sandbox-resources.md) | 每個 item 自己決定環境開多大（使用者可調、由 owner 的額度支出）；狀態／用量／關閉搬到 item 頁面；閘門是 `change_permission` |
+ | [plan-llm-failover.md](plan-llm-failover.md) | LLM failover / 多供應商備援 |
++| [plan-friendly-errors.md](plan-friendly-errors.md) | 錯誤要說人話：發生什麼、怎麼辦、原文收合在技術細節；重試只在單次 LLM 呼叫 |
+ | [plan-sanity-checks.md](plan-sanity-checks.md) | 開機健康檢查 / sanity matrix |
+ | [plan-repetition-guard.md](plan-repetition-guard.md) | #113 重複迴圈偵測與優雅阻擋 |
+ | [plan-max-turns-continues-goal.md](plan-max-turns-continues-goal.md) | #721 撞到 `runner.max_turns` 不再被當成失敗——goal 的自動續跑改由「工具呼叫指紋」判斷是否在原地打轉,而不是「這輪結束得好不好」 |
+diff --git a/docs/migrations.md b/docs/migrations.md
+index 2b1eed9e..6e3f71a0 100644
+--- a/docs/migrations.md
++++ b/docs/migrations.md
+@@ -2038,7 +2038,7 @@ image 做不出來。能連公開 registry 的 build 不用做事。沒有新的
+ 
+ 1. 在任一 item 開一個 WUI，瀏覽器開發者工具看 iframe 的網址是 `/api/wui-content/…`（不是 `about:srcdoc`）。
+    是 `about:srcdoc` 就是 ping 沒通——在 pod 外用 `curl -s -o /dev/null -w '%{http_code}' <網址>/__wui/ping`
+-  （**不帶 cookie**）應該回 200；回 302/401 就是 gateway 還沒放行。
++  （**不帶 cookie**）應該回 200；回 302/401 就是 gateway 還沒放行；放行了卻回 500，見 [#912](#pr-912)。
+ 2. 把 `sample-skills/wui/examples/docs/` 複製進一個 item，按 Rebuild，打開：側欄能換頁、搜尋有結果、網址列的
+    `?page=` 跟著變，錯誤面板沒有任何「not allowed to load」。
+ 3. 在任一 WUI 點一個外部連結：出現確認框、按 Cancel 不開、按 Open 開新分頁。
+@@ -2083,6 +2083,56 @@ agent 步驟裡 AI 的呼叫、WUI 的工具呼叫、view plugin、圖表重畫
+ - **Firefox 114 以前的版本畫不出圓點，值會以明碼顯示**（Chrome、Edge、Safari 都支援）。使用者若還在用舊版 Firefox，
+   請他們升級。
+ 
++### 2026-10-12 · 675eb6bc · #912 WUI 多頁在真的 gateway 後面能載入：內容路由以通行證的主人身分讀檔 {#pr-912}
++
++**設定** — 沒有新 key，沒有要做的事。**修 #904 的 bug，沒有開關**：
++
++- #904 之後，`/api/wui-content/` 在 gateway 放行（不驗 cookie）的部署上**每個請求都回 500**：路由驗過通行證之後，
++  裡面讀通行證那一列、檢查權限、讀 workspace 檔案的 specstar 呼叫，仍去問部署接在 `get_spec(settings,
++  get_user_id=…)` 的 cookie 讀取器，而 iframe 的請求沒有 cookie。現在內容路由在驗過通行證後，整個請求以
++  **發通行證的人**的身分執行；讀取器不用改（`make_spec` 會先看路由宣告的身分，沒宣告才問讀取器）。
++- 其他路由照舊只認 cookie；身分只在那一個內容請求裡有效。
++
++**資料** — 沒有。
++
++**k8s · CI 側** — 沒有新的 manifest、env、probe 或 JobType。#904 要求的 gateway 放行照舊需要
++（`/api/wui-content/` 前綴不驗 SSO cookie）；放行了而頁面仍是單頁（`about:srcdoc`）、或 `…/__wui/ping` 回 500，
++且讀取器在沒有 cookie 時會丟錯，就是還沒部署這一版。
++
++**確認做完**（`rollout 後`）：
++
++- 不帶 cookie：`curl -s -o /dev/null -w '%{http_code}' '<網址>/api/wui-content/<通行證>/__wui/ping'` 回 200
++  （通行證從開發者工具 Network 裡任一個 `…/api/wui-content/…` 請求複製；回 404 是通行證過期，重開 WUI 再拿）。
++- 打開一個多頁 WUI（例如 mkdocs 文件站）：iframe 網址是 `…/api/wui-content/…`，側欄能換頁。
++
++### 2026-10-12 · 40d53264 · #910 AI 回完話，檔案樹會自己更新——不論是哪個聊天 {#pr-910}
++
++**設定** — 沒有新 key，沒有要做的事。**行為改變，沒有開關**：
++
++- AI 的一個回合結束（成功、出錯、按停止都算），後端在這個 item 的串流上送出 `turn_ended`，開著這個 item 的
++  畫面就重新讀檔案樹、已開的檔案、沒有未存改動的編輯器分頁。和重新整理按鈕不同的是它**不要求伺服器先寫回**：
++  一般聊天的回合在送出 `turn_ended` 之前已經試著寫回過，而且檔案樹讀的是活著的沙盒；一連串回合結束（例如
++  workflow 的 map 每個元素一個回合）任何時候最多只有一次重新讀取在跑、一次在排隊。重新讀取不會動到
++  正在存檔中的編輯器分頁。
++  為什麼：之前只有 item 的**預設聊天**（通常是第一個）結束時才會自動整理；第二個以後的聊天、workflow 的聊天、
++  AI 還在跑時又送出的第二則訊息，結束後檔案樹都不動，要使用者自己按重新整理。
++- 串流斷線重連時也會重新讀一次（斷線期間結束的回合不會補送給接到另一顆 pod 的畫面）。
++- 在 chat mode 從卡片另開的「只有編輯區」分頁，現在也會在回合結束時重新讀檔。
++- 一個人存檔、搬移、刪除檔案的 `file_changed` 廣播，過去在「這顆 pod 從沒服務過這個 item」時不會送到其他 pod；
++  現在照常跨 pod 送達（`turn_ended` 也一樣；其他事件照舊要發出事件的那顆 pod 服務過這個 item 才會跨 pod）。
++
++**資料** — 沒有。
++
++**k8s · CI 側** — 沒有新的 manifest、env、probe 或 JobType；照常重 build、照常部署。滾動更新途中，
++跑在舊 pod 上的回合不會送 `turn_ended`，那段期間的回合結束後檔案樹不會自己更新（按重新整理即可）；
++舊版畫面收到 `turn_ended` 會忽略它。全部 pod 換完之後就沒有這個縫。
++
++**確認做完**（`rollout 後`）：
++
++- 在一個 item 開**第二個**聊天，請 AI 建一個新檔案：AI 回完話，檔案樹不用按重新整理就出現那個檔案。
++  沒部署到這一版的症狀：要按重新整理才看得到。
++
++
+ ## 附錄 A：資料回填的機制（specstar 為什麼不會自己補）
+ 
+ 有些升版會改變「資料在資料庫裡的儲存形狀」，但 **specstar 只在寫入當下**把一列的 `indexed_data`
+diff --git a/docs/plan-friendly-errors.md b/docs/plan-friendly-errors.md
+new file mode 100644
+index 00000000..717688da
+--- /dev/null
++++ b/docs/plan-friendly-errors.md
+@@ -0,0 +1,97 @@
++# Plan — errors a user can read, with the raw text one click away
++
++## Problem
++
++When a turn fails, the user is usually handed the provider's raw exception
++string. The case that started this: a **429 that arrives after the turn has
++already streamed** (e.g. the agent's second model call, after a tool ran). The
++user sees `RateLimitError: litellm.RateLimitError: …`, or on a fallback chain
++`AllProvidersFailed: all agent models failed or were cooling` — nothing about
++what happened or what to do.
++
++Read from `origin/master` at `d0752e6c` (not measured live):
++
++- **Retry is whole-turn.** `LitellmAgentRunner.run`
++  (`api/litellm_runner.py`, the `while True` around `_run_once`) re-runs the
++  ENTIRE agent run on failure. Because that would repeat tools already
++  executed, it refuses once anything visible has streamed (`progress_made`,
++  #26). So a mid-turn 429, timeout, connection drop or 5xx can only fail.
++- **Only a chain of ≥2 endpoints retries per call.** `failover/model.py`
++  `FallbackModel` wraps each model call and waits out a 429 there (#742), but
++  a single-endpoint preset gets a bare `LitellmModel` (`litellm_runner.py`
++  `_build_model`) with no per-call handling at all.
++- **Raw text everywhere else.** Give-ups are `giving up after N attempts:
++  Type: exc` / `Type: exc`; `turns.py:_terminal_error` falls back to
++  `f"{type(exc).__name__}: {exc}"`. Only `rate_limited` / `all_busy` /
++  `cancelled` (+ `max_turns`) have worded text in the FE
++  (`agentLog.ts:errorTextFor`). Two zh-TW sentences are hard-coded in the
++  runner (429 give-up, context overflow) with no `kind`.
++- **Recovered retries persist as errors.** Every `RunError`, including the
++  non-terminal `retry: …` notice, is persisted `role="error"` by
++  `_TurnReducer`, so a turn that recovered still shows a red banner on reload,
++  and `answer_question` / `run_agent_task` report a sub-agent as failed when
++  its last `RunError` was only a retry notice.
++- **Sub-agent holds are invisible.** `agent_progress.py` forwards tool and
++  reasoning progress only; a held sub-agent looks like a stuck tool card.
++- **Other surfaces** show raw text too: workflow `result.error = "Type: exc"`,
++  `SourceDoc.status_detail = "Type: exc"[:240]`, our own API's non-2xx as
++  `send failed: 500`.
++- **No expandable raw-error UI exists** (only the archive import's
++  `<details>` "Why (N)").
++
++## Locked decisions
++
++Source of each: **user** = decided by the user in the 2026-10-12 /grill-me;
++**proposed** = mine, listed for the user to overturn, not yet confirmed.
++
++| # | Decision | Source |
++|---|---|---|
++| D1 | Every error is shown in three parts: **what happened**, **what you can do**, and **technical details** (the raw text). The details are visible to **everyone**, collapsed by default, with a copy button. | user (Q2) |
++| D2 | **Retries happen only at the single LLM API call.** The whole-turn retry is removed. A single-endpoint preset gets the same per-call wrapper a chain has. | user |
++| D3 | A call whose stream **breaks after it has shown text** is re-sent; the partial text of THAT call is withdrawn and replaced. Earlier calls' text and tool results stay. | user (Q3) |
++| D4 | **Wait budgets are out of scope.** Single endpoint keeps its 120 s; chains keep `rate_limit_budget_s`. Only the place the wait happens moves. | user (Q4: "離題") |
++| D5 | The copy, per `kind` (English translates the same meaning): see the table below. | user (Q4) |
++| D6 | Backend classifies (`classify_error(exc) → kind`); `RunError` and the persisted error message carry `kind` + `raw`; `message` no longer holds the raw string. FE words it from `kind` via i18n. | proposed |
++| D7 | Error rows persisted before this have no `kind`: shown as `unknown`, their old text under technical details. | proposed |
++| D8 | One FE component, `ErrorNotice`, for every surface: chat error box, persisted banner, KB chat, sub-agent tool card, workflow, document index status, our own API's non-2xx. | proposed |
++| D9 | A retry in progress is an ephemeral event (status line "連線不穩，正在重試（第 N 次）…"), never persisted — which also fixes recovered retries persisting as errors and sub-agents reported as failed. | proposed |
++| D10 | Sub-agent holds / retries are forwarded to the parent stream. The tool card shows the worded error; the tool RESULT given to the LLM keeps the raw text (a model decides its next step better from it). | proposed |
++
++### D5 copy
++
++| kind | 發生了什麼 | 你可以怎麼做 |
++|---|---|---|
++| `rate_limited` | 模型服務限制了請求頻率，已自動等了約 N 秒仍未解除 | 過幾分鐘再送一次；常發生請管理員提高額度或加備援模型 |
++| `all_busy` | 所有可用的模型都在忙 | 稍後再送一次 |
++| `auth` | 模型服務不接受目前的憑證 | 請管理員檢查模型的 API key 或帳號設定 |
++| `timeout` | 模型太久沒有回應，已重試 N 次 | 稍後再試，或換一個較快的模型 |
++| `connection` | 連不上模型服務 | 可能是網路暫時中斷，稍後再試；持續發生請聯絡管理員 |
++| `provider_error` (5xx) | 模型服務本身出錯 | 稍後再試；持續發生請聯絡管理員 |
++| `context_overflow` | 內容超過模型一次能讀的範圍 | 把訊息拆小，或開新對話（the current sentence） |
++| `bad_request` (400) | 模型服務不接受這次的請求，通常是設定或模型不支援某功能 | 把技術細節複製給管理員 |
++| `unknown` | 發生了預期外的錯誤 | 把技術細節複製給管理員 |
++
++`cancelled` / `max_turns` keep their copy and gain technical details. A turn
++that fails after producing output keeps that output; the notice follows it.
++
++## Phases
++
++| Phase | Work |
++|---|---|
++| P1 | Backend: `classify_error`, `RunError.kind/raw`, the persisted error field, `events.ts` mirror. |
++| P2 | Per-call wrapper for every endpoint: 429 hold, transient re-send (timeout / connection / 5xx), garbled tool-call JSON re-sent with a hint (#76), context overflow trimmed on THIS call's input (#624); the "withdraw partial output" event (D3); remove the whole-turn retry. |
++| P3 | FE `ErrorNotice` + i18n copy; wired into app chat and KB chat. |
++| P4 | Sub-agents: forward holds / retries, worded failure on the tool card. |
++| P5 | Workflow and background-job errors. |
++| P6 | Our own API's non-2xx. |
++| P7 | `docs/migrations.md`: retry behaviour changes with no knob (and a schema bump if the persisted field needs one). |
++
++## Risks
++
++- **P2 context trimming moves.** The whole-turn retry trims conversation
++  HISTORY and re-runs; per call, the input also holds this turn's own tool
++  results. The termination guarantee (#624: every round strictly smaller in
++  tokens) has to move with it, and be pinned by a test that reddens on the
++  unfixed code.
++- **P2 removes a mechanism**, so per the review budget rule it is new code and
++  earns its own review round.
+diff --git a/docs/plan-issue-288.md b/docs/plan-issue-288.md
+index bc806696..4436c6d4 100644
+--- a/docs/plan-issue-288.md
++++ b/docs/plan-issue-288.md
+@@ -1,5 +1,7 @@
+ # Plan — #288 Conversational steering of workflow runs + incremental resume
+ 
++> 被 #911（plan-workflow-out-of-chat.md）推翻
++
+ The normative target is **`docs/workflows.md` §10 (Steer-and-resume)**. This is the
+ implementation plan: flat integer phases, built via `/tdd`.
+ 
+diff --git a/docs/plan-issue-343.md b/docs/plan-issue-343.md
+index e35b8942..89313b17 100644
+--- a/docs/plan-issue-343.md
++++ b/docs/plan-issue-343.md
+@@ -1,5 +1,7 @@
+ # Plan — #343 Launch a workflow *in the current chat* (takeover)
+ 
++> 被 #911（plan-workflow-out-of-chat.md）推翻
++
+ > Status: grill-locked, building via `/tdd` (flat phases, one commit per phase).
+ 
+ ## Problem
+diff --git a/docs/plan-workflow-out-of-chat.md b/docs/plan-workflow-out-of-chat.md
+new file mode 100644
+index 00000000..26de4ba3
+--- /dev/null
++++ b/docs/plan-workflow-out-of-chat.md
+@@ -0,0 +1,161 @@
++# Plan — workflows out of the chat: each node sees only what it references
++
++> Status: grill-locked 2026-10-12 (D1–D10 below, each the user's answer to one
++> question); build via `/tdd`, flat phases, one commit each.
++
++## Problem
++
++Two reports, both from running a workflow in an item's chat:
++
++1. **Context leaks both ways.** The workflow's turns and the chat's turns read
++   each other.
++2. **Typing in a workflow chat produces odd JSON**, not a conversation.
++
++Read from `origin/master` at `5aa45d3b` (not measured live):
++
++- **One thread, no marks.** A workflow chat is a `Conversation` with `run_id`
++  set (`resources/conversation.py:278`). `Message` carries no run or step
++  field, and an agent step appends its turn to that thread
++  (`api/workflow_exec.py:235-245`, `persist`). The step's prompt is not
++  persisted, so the thread holds answers without their questions.
++- **Every agent node reads the whole thread.** `drive_turn` builds the turn
++  with `history_messages=conv.messages` (`api/workflow_exec.py:215`): the
++  chat before a takeover, every earlier step, earlier runs in a reused
++  schedule chat, and steer replies. Map elements and the steerer go through
++  the same `drive_turn`, so siblings read each other too.
++- **The chat reads the run.** A chat turn's history is everything before the
++  user's message (`api/chat_send.py:1364`, `_history_before`). `history_items`
++  filters by role and size only, never by origin.
++- **Both were designed in.** #343 locked "agent nodes auto-inherit the chat
++  history" and takeover via `?chat_id=` (`plan-issue-343.md`).
++  `workflows.md` §1 / §5.1 make a run and the interactive workspace "two modes
++  of one item sharing one conversation", for human takeover (§10).
++- **The JSON is the steerer's.** The FE routes every message typed in a chat
++  with a `run_id` to steer, whatever the run's status
++  (`web/src/components/ItemChatShell.tsx:643`). `propose_steer` wraps the text
++  in a prompt that ends "Reply with ONLY the JSON object" and runs it as a
++  normal turn (`workflow/steer.py:143-149`, `:173`), so the raw JSON is
++  persisted and shown as the agent's reply, up to three times on parse
++  retries. The user's own words are never shown. #343 had locked the opposite
++  (after a run ends, "free chatting continues").
++
++## Decisions (grilled 2026-10-12)
++
++| # | Decision | Overturns |
++|---|---|---|
++| D1 | An agent node never reads chat history. What a user prepares reaches a workflow through workspace files and `input.json`. | #343 "agent nodes auto-inherit the chat history" |
++| D2 | Steer stays, as a deliberate action in an execution's `⋯` menu ("rarely needed, so it may take a click more"). Only the confirm card shows, with the user's own request on it. The steerer's JSON is neither persisted nor shown. The chat composer never steers. | #288 "free text in a run's chat" |
++| D3 | Workflows leave the chat. An execution has its own page; a chat is never taken over. | #343 takeover; `workflows.md` §1 / §5.1 / §10 "one conversation for both" |
++| D4 | One resource, two surfaces. An execution's transcript stays a `Conversation` (with `run_id`); only the web separates them. No data migration. | — |
++| D5 | A node sees only what it references: upstream `outputs` it names, files, `input.json`. Two nodes with no reference between them never affect each other. This covers parallel branches and map elements. | — |
++| D6 | The execution page lists one row per step, collapsed, with its status and `outputs`. Expanding a row shows the step's prompt, reasoning, tool calls and reply. The step's prompt is now persisted. A gate is decided in its row. A running step is expanded. | — |
++| D7 | Workspace mode gets a **labelled** activity-bar entry (NN/g: an icon needs a visible label). It carries a badge with the count of executions awaiting a gate, plus a non-blocking notice naming which execution waits and for what. An execution opens as an editor-area tab, with Stop and "Step N of M". Rows support Expand all / Collapse all; a running, waiting or failed step is never collapsed. Chat-only mode is unchanged and has no workflows. | the chat header's launch menu |
++| D8 | The chat's AI never reads step transcripts, but may read an execution's result files. It can summon an execution card with `show_file`. An execution page has "Open a chat with these results". The AI cannot start or change an execution. | — |
++| D9 | A failed step is expanded. It shows its error, attempts and inputs (as file links), plus **Continue from here** (resume: done steps skip) and **Re-run this step** (invalidate it; downstream cascades). **Ask AI why it failed** opens a chat pointing at the step's journal. Each agent step writes its transcript to the journal (`step_<name>/<key>/transcript.md`) so the AI reads it as a file. | — |
++| D10 | The UI calls it **Workflows**. An execution is named by workflow and start time ("Classify wafers · 10/12 14:03"); buttons are verbs. Code, API and glossary keep `run`. | the `Run` / `Runs` noun-and-verb clash |
++
++Chosen while planning (the user may overturn):
++
++- `POST /run?chat_id=` answers **400** naming the change. It does not silently
++  ignore the parameter. Callers are only the FE takeover menu and
++  `scripts/check_inchat_workflow_343.py`; #197's headless launch never passes
++  it.
++- Every other entrance keeps working and opens a fresh execution, which the
++  Workflows sidebar lists. The entrances are:
++  - `WorkflowsModal` (`web/src/components/WorkflowsModal.tsx:103`);
++  - `useWorkflow` (`web/src/hooks/useWorkflow.ts:70`);
++  - a WUI page through its bridge (`web/src/renderers/wui/bridge.ts:248`);
++  - schedules;
++  - #197's headless launch.
++
++  Only `ItemChatShell.tsx:304` passes a `chatId` (the takeover).
++- A free chat never holds an execution. A legacy chat taken over under #343
++  keeps its own messages, and its chat turns exclude that run's step messages.
++  Messages gain a run mark for this; legacy ones are matched by the run's time
++  window.
++- A schedule keeps reusing one conversation across its executions, as
++  `locator.chat_for_schedule` does on purpose:
++  - the one-run-per-chat rule is what stops a slow workflow on a fast schedule
++    from piling up executions;
++  - a chat per firing is 1440 conversations a day at `every: minutes`.
++
++  The execution tab shows one execution's messages by their run mark (P3), and
++  P2 already keeps executions from reading each other. Schedule overview and
++  outbound notification links open the execution tab.
++
++## Phases
++
++**P1 — audit what shipped.** Walk every App's packaged and sample workflows for
++a node whose prompt relies on an earlier node's conversation (e.g. "as above",
++or no reference to the data it uses). Convert each one to an explicit reference.
++Report the list before P2 changes behaviour.
++
++**P2 — a node's context is its references.**
++- Agent nodes start from an empty history: no `conv.messages`. This covers map
++  elements, parallel branches and the steerer.
++- The step's prompt is persisted with its turn.
++- Each agent step writes `transcript.md` into its journal key.
++
++**P3 — the chat never reads a run.**
++- `Message` gains the run mark.
++- `history_items` callers for chat turns drop messages of any run. Legacy mixed
++  chats are matched by the run window.
++
++**P4 — no takeover.**
++- `?chat_id=` returns 400 with a reason.
++- Runbook entry in `docs/migrations.md`.
++
++The execution tab (P8) selects an execution's messages by the run mark from P3,
++so a schedule's shared conversation shows one execution at a time.
++
++**P5 — steer off the thread.**
++- The steerer's turn persists nothing to the execution's conversation.
++- `pending_steer` carries the instruction for the confirm card.
++
++**P6 — chat surfaces stop showing runs.**
++- The chat list, switcher and manage-chats leave out conversations with
++  `run_id`.
++- The chat header's launch menu and composer steer routing go.
++
++**P7 — the Workflows sidebar.**
++- A labelled activity-bar entry, with a badge of executions awaiting a gate.
++- The sidebar lists the workflows to start, then executions newest first
++  (name · time, status, Step N of M, schedule mark).
++
++**P8 — the execution tab.**
++- Step rows per D6 / D7, with Expand all / Collapse all.
++- A gate is decided inline.
++- Stop.
++- A failed step offers Continue from here and Re-run this step.
++- `⋯` → Change this execution… (steer; D2).
++
++**P9 — the waiting notice.** Wherever the user is in the workspace, a
++non-blocking notice names the execution and what it waits for. It opens that
++gate.
++
++**P10 — the AI side.**
++- A `show_file` execution card.
++- "Open a chat with these results".
++- "Ask AI why it failed", reading `transcript.md`.
++
++**P11 — docs.**
++- Rewrite `workflows.md` §1 / §5.1 / §10.
++- Update the glossary (steering, human_gate rendering).
++- Point the schedule overview at the execution tab.
++
++## Verification
++
++- Targeted tests, the four gates, and typecheck per phase.
++- Each isolation claim (D1, D5, P3) gets a test that reddens on today's code:
++  a node or chat turn whose built history contains a message it must not see.
++  The line that applies each filter is mutation-probed.
++- **Live check** (real browser, workspace mode), against a base differential
++  on `5aa45d3b`:
++  - Start a workflow from the sidebar; it opens a tab and leaves the chat
++    alone.
++  - Chat during it; the execution's steps do not appear in the chat's
++    context, and the chat's messages do not appear in a node's context.
++  - A gate badges and notifies.
++  - A failing step offers Continue / Re-run.
++  - Change this execution shows the card, not JSON.
++  - Measure layouts at two widths.
+diff --git a/src/workspace_app/acting_user.py b/src/workspace_app/acting_user.py
+new file mode 100644
+index 00000000..07843d89
+--- /dev/null
++++ b/src/workspace_app/acting_user.py
+@@ -0,0 +1,46 @@
++"""Who a request acts as, when it is not who its cookie says.
++
++A deploy reads the current user from its own credential — `get_spec(settings,
++get_user_id=<cookie reader>)` — and every specstar call not wrapped in
++`rm.using(user=…)` asks that reader. One route has a credential of its own
++instead: the WUI content route (`api/wui_content.py`), whose opaque-origin
++frame sends no cookie at all and authorises by a pass. Having checked the pass,
++it declares the pass's holder here, and every reader the app was given answers
++with that holder for the rest of that request (a `ContextVar`: per request,
++carried into `asyncio.to_thread`, gone when the request ends).
++
++The override is applied where the reader is handed in — `make_spec` wraps it
++(`honouring`) — so a deploy's reader needs no change. Only specstar's reads ask
++it inside that route; the app-side `get_user_id` is not consulted there.
++"""
++
++from __future__ import annotations
++
++from collections.abc import Callable, Iterator
++from contextlib import contextmanager
++from contextvars import ContextVar
++
++_ACTING: ContextVar[str | None] = ContextVar("acting_user", default=None)
++
++
++@contextmanager
++def acting_as(user: str) -> Iterator[None]:
++    """For the duration of the block, the current user is `user`."""
++    token = _ACTING.set(user)
++    try:
++        yield
++    finally:
++        _ACTING.reset(token)
++
++
++def honouring(reader: Callable[[], str]) -> Callable[[], str]:
++    """`reader`, unless the request declared whom it acts as."""
++    if getattr(reader, "_honours_acting", False):
++        return reader
++
++    def current_user() -> str:
++        acting = _ACTING.get()
++        return acting if acting is not None else reader()
++
++    current_user._honours_acting = True  # ty: ignore[unresolved-attribute]
++    return current_user
+diff --git a/src/workspace_app/api/chat_send.py b/src/workspace_app/api/chat_send.py
+index 4249b5ab..8f6d436f 100644
+--- a/src/workspace_app/api/chat_send.py
++++ b/src/workspace_app/api/chat_send.py
+@@ -46,7 +46,7 @@ from ..sandbox.protocol import OutputSink
+ from ..tokens import CallLane
+ from ..workcalendar import OffHoursCalendar
+ from .env_layers import PersonEnv
+-from .events import GoalUpdated, RunError, UserMessage
++from .events import GoalUpdated, RunError, TurnEnded, UserMessage
+ from .goal_offhours import build_offhours_calendar, owner_is_active, turn_signature
+ from .goal_wrapup import headline, marker_text, night_transcript, write_summary
+ from .kb_chat_routes import resolve_max_searches, to_caller_enhancements
+@@ -1020,6 +1020,17 @@ class ChatSendService:
+         except Exception:  # noqa: BLE001 — the reclaimer sweeps what this leaves
+             logger.exception("chat_send: could not finish the turn claim %s", claim)
+ 
++    async def _turn_ended(self, item_id: str, chat_id: str) -> None:
++        """A turn in chat `chat_id` ended: flush the item's live sandbox to durable
++        (#492), then say so on the ITEM's stream -- whichever chat ran it, because
++        that is the stream every open file tree listens on. Announced even when the
++        flush fails: the flush is best-effort durability, and the viewer's refresh
++        reads the live sandbox, not what the flush wrote."""
++        try:
++            await self._flush_item(item_id)
++        finally:
++            self._turn_engine.publish(item_id, TurnEnded(chat_id=chat_id))
++
+     async def rerun(self, row: ClaimRow) -> None:
+         """Run the turn a claim describes, on THIS pod — the peer's half of the
+         handover (plan-graceful-shutdown P3). The question is already in the
+@@ -1545,7 +1556,7 @@ class ChatSendService:
+                     turn_content,
+                     ctx,
+                     on_complete=persist,
+-                    on_turn_end=lambda: self._flush_item(investigation_id),
++                    on_turn_end=lambda: self._turn_ended(investigation_id, rid),
+                     pending=pending,
+                 )
+                 # #493 symptom 1 (504): await THIS turn's completion, but only up to a
+diff --git a/src/workspace_app/api/entity_broadcast.py b/src/workspace_app/api/entity_broadcast.py
+index 0dd57c08..cbb4263e 100644
+--- a/src/workspace_app/api/entity_broadcast.py
++++ b/src/workspace_app/api/entity_broadcast.py
+@@ -23,8 +23,9 @@ def build_entity_write_sink(
+     """Wrap the P9 ``dispatch`` sink so it also broadcasts a ``FileChanged`` for the
+     written record. Broadcast FIRST: this runs post-commit inside ``_emit``, so the
+     record already landed and viewers must learn of it even if the trigger dispatch
+-    raises (``turn_engine.publish`` is synchronous + a no-op when nobody's watching,
+-    so it never blocks or fails the write)."""
++    raises (``turn_engine.publish`` is synchronous and fire-and-forget: local
++    viewers, plus the cross-pod bus for a viewer on another pod, so it never blocks
++    or fails the write)."""
+ 
+     async def sink(ev: EntityWriteEvent) -> None:
+         turn_engine.publish(ev.item_id, FileChanged(path=ev.path, by=ev.actor, kind="written"))
+diff --git a/src/workspace_app/api/events.py b/src/workspace_app/api/events.py
+index 6e039bf4..b2b13793 100644
+--- a/src/workspace_app/api/events.py
++++ b/src/workspace_app/api/events.py
+@@ -152,6 +152,22 @@ class FileChanged:
+     type: Literal["file_changed"] = "file_changed"
+ 
+ 
++@dataclass(frozen=True)
++class TurnEnded:
++    """A turn in one of the item's chats has ended (done, failed or stopped).
++
++    Published on the ITEM's key whichever chat ran the turn: a viewer's file tree
++    listens on the item's stream, and a turn in any chat but the default one
++    streams on its own key, so without this the tree never heard that a second
++    chat's or a workflow's turn wrote anything. An app chat publishes it after
++    its turn-end flush (announced even when that flush fails); a workflow turn
++    has no per-turn flush. Broadcast-only, like `FileChanged`; never folded into
++    a transcript."""
++
++    chat_id: str
++    type: Literal["turn_ended"] = "turn_ended"
++
++
+ @dataclass(frozen=True)
+ class AgentMetrics:
+     """Live token telemetry for the current turn. `phase` is:
+@@ -324,6 +340,7 @@ AgentEvent = (
+     | GoalUpdated  # #613 P3: the chat's goal was set / cleared / advanced
+     | UserMessage  # #43: broadcast-only (a human's message on the shared stream)
+     | FileChanged  # #43: broadcast-only (a workspace file changed)
++    | TurnEnded  # broadcast-only, on the ITEM's key: a turn in any of its chats ended
+     | Presence  # #455: broadcast-only (live viewer roster on the item stream)
+     | PhaseEntered  # #100: workflow phase/step observability (manual §12)
+     | StepStarted
+diff --git a/src/workspace_app/api/turns.py b/src/workspace_app/api/turns.py
+index 00c180f0..78bb13d7 100644
+--- a/src/workspace_app/api/turns.py
++++ b/src/workspace_app/api/turns.py
+@@ -46,6 +46,7 @@ from .event_bus import IEventBus, InMemoryEventBus
+ from .events import (
+     AgentEvent,
+     AgentMetrics,
++    FileChanged,
+     MaxTurnsExceeded,
+     MessageDelta,
+     Presence,
+@@ -54,6 +55,7 @@ from .events import (
+     RunError,
+     ToolEnd,
+     ToolStart,
++    TurnEnded,
+     to_sse,
+ )
+ from .repetition_guard import guard_repetition
+@@ -887,8 +889,9 @@ class ChatTurnEngine:
+         problem and wants #349's answer.
+ 
+         #492: `on_turn_end` (optional) runs once after the turn's messages are
+-        persisted — the surface flushes the item's live sandbox to durable
+-        (turn-end reconcile). It runs on the worker, off the POST's back, and a
++        persisted — an app chat flushes the item's live sandbox to durable
++        (turn-end reconcile), and both an app chat and a workflow announce
++        `TurnEnded` on the item's stream. It runs on the worker, off the POST's back, and a
+         failure is swallowed so durability best-effort never fails the turn."""
+         session = self._ws_session(key)
+         if session.worker is None or session.worker.done():
+@@ -1237,12 +1240,26 @@ class ChatTurnEngine:
+         return await self._turn_control.current(key)
+ 
+     def publish(self, key: str, event: AgentEvent) -> None:
+-        """#43: broadcast an externally-produced event (e.g. a human `UserMessage`
+-        or a `FileChanged`) on the investigation's stream. No-op if nobody has
+-        ever subscribed / enqueued for this key."""
++        """#43: broadcast an externally-produced event (e.g. a human `UserMessage`,
++        a `FileChanged`, a `TurnEnded`) on the investigation's stream.
++
++        With no session here, this pod never served `key` -- but a viewer on
++        another pod may be watching it. The two facts a file pane acts on still
++        go to the bus for them: a file a human changed (`FileChanged`) and a
++        turn that ended (`TurnEnded`). They used to be dropped here outright, so
++        a save or a turn end on a pod where nobody had opened the item never
++        reached the pod where somebody had. Nothing else crosses this way: a
++        headless workflow run publishes every stdout chunk on a key nobody here
++        watches. Known and left: a viewer on another pod of a run whose own pod
++        has no session for the run's chat yet (a script-only run, before any
++        agent turn) misses its step events -- as it did before this change.
++        No session is created for it: a pod that never served the key keeps
++        nothing."""
+         session = self._ws_sessions.get(key)
+         if session is not None:
+             session.publish(event)
++        elif isinstance(event, (FileChanged, TurnEnded)):
++            self._event_bus.publish(key, self._pod_id, event, uuid.uuid4().hex)
+ 
+     def subscribe(self, key: str, user_id: str = "") -> AsyncGenerator[AgentEvent, None]:
+         """#43: register a live broadcast subscriber and return an async iterator
+diff --git a/src/workspace_app/api/workflow_exec.py b/src/workspace_app/api/workflow_exec.py
+index dcc1e133..79cc5a38 100644
+--- a/src/workspace_app/api/workflow_exec.py
++++ b/src/workspace_app/api/workflow_exec.py
+@@ -35,6 +35,7 @@ from ..workflow.handle import WorkflowHandle
+ from ..workflow.run import RunStatus, WorkflowRun
+ from ..workflow.run_identity import RunIdentities
+ from .env_layers import PersonEnv
++from .events import TurnEnded
+ from .notifications import notification_sent, notify
+ from .private_env import unattended_layer
+ from .rca_messages import to_rca_message
+@@ -252,7 +253,16 @@ class WorkflowExecutor:
+             item_id,
+             chat_key,
+         )
+-        await self._turn_engine.enqueue(enqueue_key, prompt, ctx, on_complete=persist)
++
++        async def _announce() -> None:
++            # Every turn tells the ITEM's stream it ended, as an app chat's does
++            # (`ChatSendService._turn_ended`): a workflow chat streams on its own
++            # key, and the open file tree listens on the item's.
++            self._turn_engine.publish(item_id, TurnEnded(chat_id=rid))
++
++        await self._turn_engine.enqueue(
++            enqueue_key, prompt, ctx, on_complete=persist, on_turn_end=_announce
++        )
+         if lane is not None and lane != chat_key:  # transient sub-lane → drop its session
+             await self._turn_engine.forget(lane)
+         # A Stop that landed DURING this turn advanced the epoch past the baseline
+diff --git a/src/workspace_app/api/wui_content.py b/src/workspace_app/api/wui_content.py
+index 3c7aab4c..7e7031f4 100644
+--- a/src/workspace_app/api/wui_content.py
++++ b/src/workspace_app/api/wui_content.py
+@@ -39,6 +39,7 @@ from pydantic import BaseModel
+ from specstar import QB, SpecStar
+ from specstar.types import ResourceIDNotFoundError
+ 
++from ..acting_user import acting_as
+ from ..files import WorkspaceFiles
+ from ..files.media_type import media_type_for
+ from ..filestore.protocol import FileNotFound
+@@ -204,6 +205,11 @@ def register_wui_pass(spec: SpecStar) -> None:
+         spec.add_model(WuiPass, indexed_fields=["user", "item_id", "folder", "expires_at"])
+ 
+ 
++#: Who looks a pass up: no one in particular — the content request that
++#: presents it carries no cookie, and the pass row has no owner to check.
++_PASS_DESK = "wui-pass-desk"
++
++
+ class WuiPasses:
+     """Mint and look up passes."""
+ 
+@@ -258,8 +264,11 @@ class WuiPasses:
+         if held is not None and now - held[1] < _HOLD_S:
+             data = held[0]
+         else:
++            # Looked up as itself: a content request carries no cookie, and the
++            # pass, not the asker, is what is being identified here.
+             try:
+-                found = self._rm().get(token).data
++                with acting_as(_PASS_DESK):
++                    found = self._rm().get(token).data
+             except ResourceIDNotFoundError:
+                 return None
+             assert isinstance(found, WuiPass)  # narrow for ty (coverage-clean)
+@@ -411,7 +420,13 @@ def register_wui_content_routes(
+             return PlainTextResponse(
+                 "This page's link has expired. Open the page again.", status_code=404
+             )
+-        locator.require_access(grant.slug, grant.item_id, "read_content", user=grant.user)
++        # The frame sends no cookie: from here the request acts as the pass's
++        # holder — whose read access is checked first, and again every request.
++        with acting_as(grant.user):
++            locator.require_access(grant.slug, grant.item_id, "read_content", user=grant.user)
++            return await _serve(grant, path, request)
++
++    async def _serve(grant: WuiPass, path: str, request: Request) -> Response:
+         if path == "__wui/ping":
+             if runtime() is None:
+                 return PlainTextResponse("no runtime", status_code=503, headers=_headers())
+diff --git a/src/workspace_app/resources/__init__.py b/src/workspace_app/resources/__init__.py
+index 62758756..aca2d03b 100644
+--- a/src/workspace_app/resources/__init__.py
++++ b/src/workspace_app/resources/__init__.py
+@@ -20,6 +20,7 @@ from specstar import BackendConfig, Schema, SpecStar
+ from specstar.crud.route_templates.migrate import MigrateRouteTemplate
+ from specstar.types import IndexableField
+ 
++from ..acting_user import honouring
+ from ..kb.chat_permission import kbchat_permission_event_handler
+ from ..perm import Permission
+ from ..perm.checker import (
+@@ -225,7 +226,10 @@ def make_spec(
+     that's an implementation detail of this function."""
+     spec = SpecStar()
+     cfg: dict[str, Any] = {
+-        "default_user": default_user,
++        # A per-request reader (a deploy's cookie reader) also answers with the
++        # user a route declared it acts as — the WUI content route's pass holder
++        # (`acting_user`). A fixed id needs no override: there is one user.
++        "default_user": default_user if isinstance(default_user, str) else honouring(default_user),
+         "default_now": default_now or (lambda: datetime.now(UTC)),
+     }
+     if backend is not None:
+diff --git a/tests/api/test_turn_context_entity_dispatch.py b/tests/api/test_turn_context_entity_dispatch.py
+index 0bd9aa1f..92f9e463 100644
+--- a/tests/api/test_turn_context_entity_dispatch.py
++++ b/tests/api/test_turn_context_entity_dispatch.py
+@@ -147,9 +147,9 @@ async def test_wire_handle_threads_the_runs_origin_into_the_agent_turn(monkeypat
+     seen: dict[str, object] = {}
+     real_enqueue = executor._turn_engine.enqueue
+ 
+-    def spy_enqueue(key, content, ctx, *, on_complete):
++    def spy_enqueue(key, content, ctx, *, on_complete, **kw):
+         seen["ctx"] = ctx
+-        return real_enqueue(key, content, ctx, on_complete=on_complete)
++        return real_enqueue(key, content, ctx, on_complete=on_complete, **kw)
+ 
+     monkeypatch.setattr(executor._turn_engine, "enqueue", spy_enqueue)
+ 
+diff --git a/tests/api/test_turn_ended.py b/tests/api/test_turn_ended.py
+new file mode 100644
+index 00000000..4381b7d5
+--- /dev/null
++++ b/tests/api/test_turn_ended.py
+@@ -0,0 +1,251 @@
++"""Every turn that ends tells the ITEM's stream so, whichever chat ran it.
++
++The file tree refreshed only on the default chat's `streaming` true→false edge,
++seen by the open tab. A turn in any other chat (a second chat, a workflow chat)
++streams on its own key, so the item's stream never saw it, and the tree stayed
++stale until the user pressed refresh. A queued follow-up (no new user message
++starts it) had no edge either.
++
++The fix is a fact the backend states once per turn: `TurnEnded(chat_id)` on the
++item's key (an app chat's after its turn-end flush). The engine stream is read directly, as in
++`test_file_broadcast.py` (ASGITransport cannot read an infinite response).
++"""
++
++from __future__ import annotations
++
++import asyncio
++
++import pytest
++from httpx import ASGITransport
++
++import workspace_app.api.app as app_mod
++from workspace_app.api import MessageDelta, RunDone, ScriptedAgentRunner, create_app
++from workspace_app.api.event_bus import InMemoryEventBus
++from workspace_app.api.events import FileChanged, TurnEnded
++from workspace_app.api.turns import ChatTurnEngine
++from workspace_app.apps.playground.model import PlaygroundItem
++from workspace_app.filestore.memory import MemoryFileStore
++from workspace_app.filestore.specstar_impl import SpecstarFileStore
++from workspace_app.resources import make_spec
++from workspace_app.sandbox.mock import MockSandbox
++
++from ._client import AsyncClient
++from .conftest import register_rca_item
++
++
++def _app():
++    spec = make_spec(default_user="u")
++    app = create_app(
++        spec=spec,
++        sandbox=MockSandbox(),
++        filestore=MemoryFileStore(),
++        runner=ScriptedAgentRunner([MessageDelta(text="hi"), RunDone()]),
++        get_user_id=lambda: "alice",
++    )
++    return app, register_rca_item(spec)
++
++
++def _await_turn_ended(engine: ChatTurnEngine, key: str) -> asyncio.Task[TurnEnded]:
++    """Subscribe NOW (before the turn), and resolve with the first TurnEnded."""
++    sub = engine.subscribe(key)
++
++    async def collect() -> TurnEnded:
++        async for ev in sub:
++            if isinstance(ev, TurnEnded):
++                return ev
++        raise AssertionError("stream ended without a TurnEnded")  # pragma: no cover
++
++    return asyncio.create_task(collect())
++
++
++async def _send(app, iid: str, chat: str) -> None:
++    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
++        r = await c.post(f"/a/rca/items/{iid}/chats/{chat}/messages", json={"content": "go"})
++        assert r.status_code in (200, 202), r.text
++
++
++async def _chats(app, iid: str, *titles: str) -> list[str]:
++    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
++        return [
++            (await c.post(f"/a/rca/items/{iid}/chats", json={"title": t})).json()["chat_id"]
++            for t in titles
++        ]
++
++
++async def test_a_turn_in_a_second_chat_tells_the_item_stream_it_ended():
++    app, iid = _app()
++    _first, second = await _chats(app, iid, "first", "second")
++    assert app.state.chat_send._locator.engine_key(iid, second) == second  # streams on its own key
++    ended = _await_turn_ended(app.state.turn_engine, iid)
++
++    await _send(app, iid, second)
++
++    ev = await asyncio.wait_for(ended, 5)
++    assert ev.chat_id == second
++
++
++async def test_a_turn_in_the_default_chat_tells_it_too():
++    app, iid = _app()
++    (first,) = await _chats(app, iid, "first")
++    assert app.state.chat_send._locator.engine_key(iid, first) == iid
++    ended = _await_turn_ended(app.state.turn_engine, iid)
++
++    await _send(app, iid, first)
++
++    assert (await asyncio.wait_for(ended, 5)).chat_id == first
++
++
++# The flush is best-effort durability; the announcement is what the viewer
++# refreshes on, so a flush that fails must not swallow it.
++async def test_a_flush_that_fails_still_announces_the_end(monkeypatch):
++    app, iid = _app()
++    (first,) = await _chats(app, iid, "first")
++
++    async def broken(_item: str) -> None:
++        raise RuntimeError("flush failed")
++
++    monkeypatch.setattr(app.state.chat_send, "_flush_item", broken)
++    ended = _await_turn_ended(app.state.turn_engine, iid)
++
++    await _send(app, iid, first)
++
++    assert (await asyncio.wait_for(ended, 5)).chat_id == first
++
++
++class _Hangs:
++    """Streams one delta, then waits to be stopped."""
++
++    def __init__(self) -> None:
++        self.started = asyncio.Event()
++
++    async def run(self, prompt, ctx):  # noqa: ANN001, ANN201
++        self.started.set()
++        yield MessageDelta(text="working")
++        await asyncio.sleep(30)
++        yield RunDone()  # pragma: no cover — reached only if the Stop is lost
++
++
++# A stopped turn may already have written files; Stop ends it like any other.
++async def test_a_stopped_turn_announces_its_end_too():
++    spec = make_spec(default_user="u")
++    runner = _Hangs()
++    app = create_app(
++        spec=spec,
++        sandbox=MockSandbox(),
++        filestore=MemoryFileStore(),
++        runner=runner,
++        get_user_id=lambda: "alice",
++        send_await_timeout=0.1,
++    )
++    iid = register_rca_item(spec)
++    _first, second = await _chats(app, iid, "first", "second")
++    ended = _await_turn_ended(app.state.turn_engine, iid)
++    await _send(app, iid, second)
++    await asyncio.wait_for(runner.started.wait(), 5)
++
++    await app.state.turn_engine.cancel_current(second)
++
++    assert (await asyncio.wait_for(ended, 5)).chat_id == second
++
++
++async def test_a_workflow_turn_tells_the_item_stream_it_ended(monkeypatch):
++    spec = make_spec()
++    captured: dict[str, object] = {}
++    real = app_mod.WorkflowExecutor
++
++    def _capture(**kw):
++        captured["ex"] = ex = real(**kw)
++        return ex
++
++    monkeypatch.setattr(app_mod, "WorkflowExecutor", _capture)
++    app = create_app(
++        spec=spec,
++        sandbox=MockSandbox(),
++        filestore=SpecstarFileStore(spec),
++        runner=ScriptedAgentRunner([RunDone()]),
++    )
++    item = (
++        spec.get_resource_manager(PlaygroundItem)
++        .create(PlaygroundItem(title="t", owner="u", profile="echo"))
++        .resource_id
++    )
++    executor = captured["ex"]
++    ended = _await_turn_ended(app.state.turn_engine, item)
++
++    await executor.drive_turn(item, "no-such-chat", "u", "hello", None)  # ty: ignore[unresolved-attribute]
++
++    rid, _conv = executor._locator.conversation_for(item)  # ty: ignore[unresolved-attribute]
++    assert (await asyncio.wait_for(ended, 5)).chat_id == rid
++
++
++# The item's stream may be watched only on ANOTHER pod: this pod runs the turn
++# but nobody here opened the item, so it holds no session for the item's key.
++# The announcement still has to cross the bus — dropping it there is the same
++# stale tree, one pod over. `file_changed` (a human save) goes the same way.
++async def test_publishing_with_no_viewer_on_this_pod_still_reaches_another_pod():
++    bus = InMemoryEventBus()
++    turn_pod = ChatTurnEngine(ScriptedAgentRunner([]), event_bus=bus, pod_id="A")
++    viewer_pod = ChatTurnEngine(ScriptedAgentRunner([]), event_bus=bus, pod_id="B")
++    ended = _await_turn_ended(viewer_pod, "item-1")
++    await asyncio.sleep(0)  # let the subscriber register
++
++    turn_pod.publish("item-1", TurnEnded(chat_id="c1"))
++
++    assert (await asyncio.wait_for(ended, 3)).chat_id == "c1"
++    await turn_pod.forget("item-1")
++    await viewer_pod.forget("item-1")
++
++
++def _two_pods():
++    bus = InMemoryEventBus()
++    turn_pod = ChatTurnEngine(ScriptedAgentRunner([]), event_bus=bus, pod_id="A")
++    viewer_pod = ChatTurnEngine(ScriptedAgentRunner([]), event_bus=bus, pod_id="B")
++    return turn_pod, viewer_pod
++
++
++async def _first_event(engine: ChatTurnEngine, key: str) -> asyncio.Task:
++    sub = engine.subscribe(key)
++
++    async def collect():
++        async for ev in sub:
++            return ev
++
++    task = asyncio.create_task(collect())
++    await asyncio.sleep(0)
++    return task
++
++
++# A human's save on a pod where nobody opened the item reaches the pod where
++# somebody did — the same gap, the same fix.
++async def test_a_file_change_with_no_viewer_here_still_reaches_another_pod():
++    turn_pod, viewer_pod = _two_pods()
++    got = await _first_event(viewer_pod, "item-1")
++
++    turn_pod.publish("item-1", FileChanged(path="/a.txt", by="bob", kind="written"))
++
++    ev = await asyncio.wait_for(got, 3)
++    assert isinstance(ev, FileChanged) and ev.path == "/a.txt"
++
++
++# Only those two facts cross without a session. A headless workflow run
++# publishes every stdout chunk (`StepOutput`) on a key nobody here watches;
++# sending each one to every pod would be traffic for no viewer. (A viewer that
++# IS watching a run has a session on the run's pod — `subscribe` makes one.)
++async def test_a_turn_stream_event_with_no_viewer_here_does_not_cross():
++    turn_pod, viewer_pod = _two_pods()
++    got = await _first_event(viewer_pod, "item-1")
++
++    turn_pod.publish("item-1", MessageDelta(text="chunk"))
++    turn_pod.publish("item-1", TurnEnded(chat_id="c1"))
++
++    ev = await asyncio.wait_for(got, 3)
++    assert isinstance(ev, TurnEnded)  # the delta never arrived first
++
++
++@pytest.mark.parametrize("event", [TurnEnded(chat_id="c1")])
++def test_turn_ended_crosses_the_bus_as_itself(event):
++    from dataclasses import asdict
++
++    from workspace_app.api.events import event_from_dict
++
++    assert event_from_dict(asdict(event)) == event
+diff --git a/tests/api/test_wui_content_identity.py b/tests/api/test_wui_content_identity.py
+new file mode 100644
+index 00000000..b0dada43
+--- /dev/null
++++ b/tests/api/test_wui_content_identity.py
+@@ -0,0 +1,103 @@
++"""The content route acts as the pass's holder, not as the request's cookie.
++
++A deploy reads the current user from the access cookie (`get_spec(settings,
++get_user_id=<cookie reader>)`), and an opaque-origin frame sends no cookie on
++anything it requests. #904 made the pass the credential, but the specstar
++calls inside the route still asked the deploy's reader who was asking — and
++with no cookie that reader fails, so every page broke behind a real gateway
++while tests (a fixed `default_user`) passed. Built here the way production is
++built: one reader, given to the spec, that refuses a request without a cookie.
++"""
++
++from __future__ import annotations
++
++from workspace_app.api import ScriptedAgentRunner, create_app
++from workspace_app.apps.rca.model import RcaInvestigation
++from workspace_app.filestore.specstar_impl import SpecstarFileStore
++from workspace_app.resources import make_spec
++from workspace_app.sandbox.mock import MockSandbox
++
++from ._client import TestClient
++
++RUNTIME = "/*wui runtime*/"
++
++
++class NoCookie(Exception):
++    """What a cookie reader does with a request that carries none."""
++
++
++def _app(cookie: dict[str, str | None]):
++    def read_cookie() -> str:
++        user = cookie["user"]
++        if user is None:
++            raise NoCookie("no access cookie on this request")
++        return user
++
++    # As production wires it: the one reader given to the spec AND to the app,
++    # and the workspace files in specstar (whose reads ask the reader too).
++    spec = make_spec(default_user=read_cookie)
++    app = create_app(
++        spec=spec,
++        sandbox=MockSandbox(),
++        filestore=SpecstarFileStore(spec),
++        runner=ScriptedAgentRunner([]),
++        get_user_id=read_cookie,
++        wui_runtime=lambda: RUNTIME,
++    )
++    return TestClient(app, raise_server_exceptions=False), spec
++
++
++def _signed_in_page(cookie: dict[str, str | None]):
++    client, spec = _app(cookie)
++    rm = spec.get_resource_manager(RcaInvestigation)
++    with rm.using("alice"):
++        iid = rm.create(RcaInvestigation(title="Docs", owner="alice")).resource_id
++    page = b"<!doctype html><html><head></head><body>hi</body></html>"
++    assert client.put(f"/a/rca/items/{iid}/files/docs/index.html", content=page).status_code == 204
++    assert client.put(f"/a/rca/items/{iid}/files/docs/a.css", content=b"b{}").status_code == 204
++    r = client.post(f"/a/rca/items/{iid}/wui/pass", json={"folder": "/docs"})
++    assert r.status_code == 200, r.text
++    return client, r.json()["base"]
++
++
++def test_a_page_and_its_files_load_with_no_cookie_as_the_pass_holder():
++    cookie: dict[str, str | None] = {"user": "alice"}
++    client, base = _signed_in_page(cookie)
++
++    cookie["user"] = None  # the frame's requests: no cookie at all
++    page = client.get(f"{base}docs/index.html")
++    css = client.get(f"{base}docs/a.css")
++    ping = client.get(f"{base}__wui/ping")
++
++    assert page.status_code == 200, page.text
++    assert "hi" in page.text
++    assert css.status_code == 200, css.text
++    assert ping.status_code == 200, ping.text
++
++
++def test_a_request_outside_the_content_route_still_asks_the_reader():
++    """Only the content route acts as the holder: any other request with no
++    cookie still meets the deploy's reader, and is refused. (That the override
++    ends with its block is pinned in `tests/test_acting_user.py`; each request
++    runs in a context of its own, so a leak could not show here.)"""
++    cookie: dict[str, str | None] = {"user": "alice"}
++    client, base = _signed_in_page(cookie)
++
++    cookie["user"] = None
++    assert client.get(f"{base}docs/index.html").status_code == 200
++    other = client.get("/rca-investigation")
++
++    # The deploy's reader is asked again — and finds no cookie.
++    assert other.status_code == 500, other.status_code
++
++
++def test_a_bad_pass_is_a_404_even_with_no_cookie():
++    """Looking a pass up asks no one's cookie — a bad one is the same 404 as
++    a lapsed one, not a 500 from the reader."""
++    cookie: dict[str, str | None] = {"user": "alice"}
++    client, _base = _signed_in_page(cookie)
++
++    cookie["user"] = None
++    r = client.get("/wui-content/not-a-real-token/docs/index.html")
++
++    assert r.status_code == 404
+diff --git a/tests/test_acting_user.py b/tests/test_acting_user.py
+new file mode 100644
+index 00000000..616ca192
+--- /dev/null
++++ b/tests/test_acting_user.py
+@@ -0,0 +1,32 @@
++"""`acting_user`: a route's declared identity, over the deploy's own reader."""
++
++from __future__ import annotations
++
++from workspace_app.acting_user import acting_as, honouring
++
++
++def test_the_reader_answers_unless_a_route_declared_whom_it_acts_as():
++    read = honouring(lambda: "from-cookie")
++
++    assert read() == "from-cookie"
++    with acting_as("alice"):
++        assert read() == "alice"
++        with acting_as("bob"):
++            assert read() == "bob"
++        assert read() == "alice"
++    assert read() == "from-cookie"
++
++
++def test_the_override_ends_with_its_block_even_when_the_block_raises():
++    read = honouring(lambda: "from-cookie")
++    try:
++        with acting_as("alice"):
++            raise RuntimeError
++    except RuntimeError:
++        pass
++    assert read() == "from-cookie"
++
++
++def test_wrapping_twice_is_wrapping_once():
++    once = honouring(lambda: "x")
++    assert honouring(once) is once
+diff --git a/web/src/events.ts b/web/src/events.ts
+index e34d9cb5..b9b0a42d 100644
+--- a/web/src/events.ts
++++ b/web/src/events.ts
+@@ -148,6 +148,14 @@ export type FileChanged = {
+   kind: "written" | "moved" | "copied" | "deleted" | "dir_created";
+ };
+ 
++/** A turn in one of the item's chats ended (done, failed or stopped). Sent on
++ * the ITEM's stream whichever chat ran it, so the item's file panes reload on
++ * it. Broadcast-only; mirrors `api/events.py` `TurnEnded`. */
++export type TurnEnded = {
++  type: "turn_ended";
++  chat_id: string;
++};
++
+ /** #455: the live roster of an item's stream — the distinct users currently
+  * subscribed. Broadcast when a viewer joins/leaves. Broadcast-only, per-pod. */
+ export type Presence = {
+@@ -288,6 +296,7 @@ export type AgentEvent =
+   | Compacting
+   | UserMessage
+   | FileChanged
++  | TurnEnded
+   | Presence
+   | WorkflowEvent;
+ 
+diff --git a/web/src/hooks/fileBuffer.test.ts b/web/src/hooks/fileBuffer.test.ts
+index c63cccaf..ec9e669d 100644
+--- a/web/src/hooks/fileBuffer.test.ts
++++ b/web/src/hooks/fileBuffer.test.ts
+@@ -196,6 +196,33 @@ describe("FileBufferStore backed by a shared react-query content cache", () => {
+     expect(qc.getQueryData(qk.file("s", "/a.md"))).toMatchObject({ kind: "text", text: "new" });
+   });
+ 
++  // A reload landing while a save is in flight (a turn ended in another chat)
++  // re-read the pre-save text; the save then resolved, the buffer read "old,
++  // dirty", and the next ⌘S wrote the old bytes over the user's own save.
++  it("reload leaves a buffer whose save is in flight alone", async () => {
++    const io = makeIO({ "/a.md": "old" });
++    let release!: () => void;
++    io.writeFile.mockImplementationOnce(async (path: string, body) => {
++      await new Promise<void>((r) => (release = r));
++      io.files[path] = typeof body === "string" ? body : "[bytes]";
++    });
++    const s = new FileBufferStore(io);
++    s.ensureLoaded("/a.md");
++    await tick();
++    s.setText("/a.md", "NEW");
++    const saving = s.save("/a.md");
++
++    s.reload("/a.md");
++    await tick();
++    release();
++    await saving;
++    await tick();
++
++    expect(s.snapshot("/a.md").text).toBe("NEW");
++    expect(s.isDirty("/a.md")).toBe(false);
++    expect(io.files["/a.md"]).toBe("NEW");
++  });
++
+   it("reload drops the cached entry so it refetches past the Infinity staleTime", async () => {
+     const io = makeIO({ "/a.md": "v1" });
+     const qc = new QueryClient();
+diff --git a/web/src/hooks/fileBuffer.tsx b/web/src/hooks/fileBuffer.tsx
+index a96afad8..409615fa 100644
+--- a/web/src/hooks/fileBuffer.tsx
++++ b/web/src/hooks/fileBuffer.tsx
+@@ -178,6 +178,12 @@ export class FileBufferStore {
+   }
+ 
+   reload(path: string): void {
++    // A save in flight is not "clean" — `isDirty` says false while it runs, so
++    // every refresh skipped it as clean and re-read the PRE-save text; the save
++    // then resolved onto "old, dirty" and the next ⌘S wrote the old bytes over
++    // it. What it is saving is what the server is about to hold: nothing to
++    // re-read (#910 review round 2 — a turn's end now reloads far more often).
++    if (this.entries.get(path)?.save === "saving") return;
+     this.entries.delete(path);
+     this.inflight.delete(path);
+     // Hard-drop the shared cache entry so the re-`read` refetches from the
+diff --git a/web/src/hooks/useChatSession.test.tsx b/web/src/hooks/useChatSession.test.tsx
+index 70d466c8..1b1cc5fd 100644
+--- a/web/src/hooks/useChatSession.test.tsx
++++ b/web/src/hooks/useChatSession.test.tsx
+@@ -90,6 +90,51 @@ describe("useChatSession", () => {
+     expect(qc.getQueryState(["treeDir", "it", "/node_modules"])?.isInvalidated).toBe(true);
+   });
+ 
++  // A turn in ANY of the item's chats ended (the backend says so on the item's
++  // stream). The panes that show its files listen on the turn-ended bus; the
++  // event is never a transcript entry.
++  it("hands turn_ended to the item's file panes instead of the log", async () => {
++    const { subscribeTurnEnded } = await import("../lib/turnEndedBus");
++    const heard = vi.fn();
++    const off = subscribeTurnEnded("it", heard);
++    const other = vi.fn();
++    const offOther = subscribeTurnEnded("another-item", other);
++    const t = fakeTransport({
++      fileScopeId: "it",
++      subscribe: async function* () {
++        yield { type: "turn_ended", chat_id: "c2" } as AgentEvent;
++        await new Promise<void>(() => {});
++      },
++    });
++    const { result } = render(t);
++    await waitFor(() => expect(heard).toHaveBeenCalledTimes(1));
++    expect(other).not.toHaveBeenCalled();
++    expect(result.current.log.entries).toHaveLength(1); // only the hydrated message
++    off();
++    offOther();
++  });
++
++  // A turn that ended while the stream was down is not replayed when the
++  // reconnect lands on another pod, so a reconnect announces one too.
++  it("announces a possible turn end when the stream comes back", async () => {
++    const { subscribeTurnEnded } = await import("../lib/turnEndedBus");
++    const heard = vi.fn();
++    const off = subscribeTurnEnded("it", heard);
++    let calls = 0;
++    const t = fakeTransport({
++      fileScopeId: "it",
++      subscribe: async function* () {
++        calls += 1;
++        if (calls === 1) return; // the server closed the stream
++        await new Promise<void>(() => {});
++      },
++    });
++    render(t);
++    await waitFor(() => expect(calls).toBe(2), { timeout: 4000 });
++    await waitFor(() => expect(heard).toHaveBeenCalled());
++    off();
++  });
++
+   // #613: `todos_updated` is panel state, not transcript — it must land in the
+   // todos query cache (whole-list replace) and never fold into the log.
+   it("writes todos_updated into the todos cache and keeps it out of the log", async () => {
+diff --git a/web/src/hooks/useChatSession.tsx b/web/src/hooks/useChatSession.tsx
+index 365cc961..2861690b 100644
+--- a/web/src/hooks/useChatSession.tsx
++++ b/web/src/hooks/useChatSession.tsx
+@@ -12,6 +12,7 @@ import {
+   retractOwnAsk,
+ } from "../pages/investigation/agentLog";
+ import { publishFileChanged } from "../lib/fileChangedBus";
++import { publishTurnEnded } from "../lib/turnEndedBus";
+ import type { MsgKey } from "../lib/i18n";
+ import { type QuotaDetail, type QuotaKind, quotaMessage } from "../lib/quotaFailure";
+ import { invalidateTree } from "./invalidateTree";
+@@ -344,6 +345,13 @@ export function useChatSession(
+               if (transport.fileScopeId) publishFileChanged(transport.fileScopeId, ev.path);
+               continue;
+             }
++            if (ev.type === "turn_ended") {
++              // A turn in one of the item's chats ended — any chat, so this is
++              // the one signal the file panes refresh on (`turnEndedBus`). It
++              // arrives on the item's stream only; never a transcript entry.
++              if (transport.fileScopeId) publishTurnEnded(transport.fileScopeId);
++              continue;
++            }
+             if (ev.type === "todos_updated") {
+               // #613: the agent rewrote the todo checklist — the event carries
+               // the whole new list, so write it straight into the cache (no
+@@ -474,6 +482,10 @@ export function useChatSession(
+         gapBannerPendingRef.current = interruptedATurn;
+         await sleep(backoff);
+         if (stopped) return;
++        // A turn that ended while the stream was down announced it to nobody
++        // here, and a reconnect onto another pod replays none of it — so the
++        // item's file panes refresh as if one had.
++        if (transport.fileScopeId) publishTurnEnded(transport.fileScopeId);
+         const fresh = await transport.getThread().catch(() => null);
+         if (fresh && !stopped) {
+           qc.setQueryData(transport.queryKey, fresh);
+diff --git a/web/src/hooks/useOnTurnEnd.test.ts b/web/src/hooks/useOnTurnEnd.test.ts
+deleted file mode 100644
+index d8b7c042..00000000
+--- a/web/src/hooks/useOnTurnEnd.test.ts
++++ /dev/null
+@@ -1,44 +0,0 @@
+-// @vitest-environment happy-dom
+-import { renderHook } from "@testing-library/react";
+-import { describe, expect, it, vi } from "vitest";
+-
+-import { useOnTurnEnd } from "./useOnTurnEnd";
+-
+-describe("useOnTurnEnd", () => {
+-  it("fires when streaming transitions true → false (turn finished)", () => {
+-    const cb = vi.fn();
+-    const { rerender } = renderHook(({ s }) => useOnTurnEnd(s, cb), {
+-      initialProps: { s: true },
+-    });
+-    expect(cb).not.toHaveBeenCalled(); // still streaming
+-    rerender({ s: false });
+-    expect(cb).toHaveBeenCalledTimes(1);
+-  });
+-
+-  it("does not fire on the initial render when already idle", () => {
+-    const cb = vi.fn();
+-    renderHook(({ s }) => useOnTurnEnd(s, cb), { initialProps: { s: false } });
+-    expect(cb).not.toHaveBeenCalled();
+-  });
+-
+-  it("does not fire when a new turn starts (false → true)", () => {
+-    const cb = vi.fn();
+-    const { rerender } = renderHook(({ s }) => useOnTurnEnd(s, cb), {
+-      initialProps: { s: false },
+-    });
+-    rerender({ s: true });
+-    expect(cb).not.toHaveBeenCalled();
+-  });
+-
+-  it("fires once per turn across multiple turns", () => {
+-    const cb = vi.fn();
+-    const { rerender } = renderHook(({ s }) => useOnTurnEnd(s, cb), {
+-      initialProps: { s: false },
+-    });
+-    rerender({ s: true }); // turn 1 starts
+-    rerender({ s: false }); // turn 1 ends → fire
+-    rerender({ s: true }); // turn 2 starts
+-    rerender({ s: false }); // turn 2 ends → fire
+-    expect(cb).toHaveBeenCalledTimes(2);
+-  });
+-});
+diff --git a/web/src/hooks/useOnTurnEnd.ts b/web/src/hooks/useOnTurnEnd.ts
+deleted file mode 100644
+index 67c36ef5..00000000
+--- a/web/src/hooks/useOnTurnEnd.ts
++++ /dev/null
+@@ -1,15 +0,0 @@
+-import { useEffect, useRef } from "react";
+-
+-/**
+- * Fire `cb` exactly when `streaming` transitions true → false — i.e. when an
+- * agent turn finishes. Used to re-fetch the file tree so files the agent
+- * created/edited via its tools mid-turn become visible (nothing else
+- * notifies the listing). Never fires on the initial render or on turn START.
+- */
+-export function useOnTurnEnd(streaming: boolean, cb: () => void): void {
+-  const wasStreaming = useRef(streaming);
+-  useEffect(() => {
+-    if (wasStreaming.current && !streaming) cb();
+-    wasStreaming.current = streaming;
+-  }, [streaming, cb]);
+-}
+diff --git a/web/src/hooks/useRefreshFiles.ts b/web/src/hooks/useRefreshFiles.ts
+index adee85c3..afbe5e25 100644
+--- a/web/src/hooks/useRefreshFiles.ts
++++ b/web/src/hooks/useRefreshFiles.ts
+@@ -21,21 +21,39 @@ import { useWorkspaceSlug } from "./useWorkspaceSlug";
+  *        - `FileBufferStore`: the editor's per-path `Map<path, BufferEntry>`.
+  *          Independent of TanStack — has to be reloaded directly.
+  *
+- * Call this from: the refresh button, agent-turn end, terminal exec end.
++ * Call this from: the refresh button, terminal exec end. A turn's end uses
++ * `useReloadFileViews` (no flush) — see there.
+  * Must be invoked inside a `<FileBufferProvider>` (uses `useFileBufferStore`).
+  */
+ export function useRefreshFiles(investigationId: string): () => Promise<void> {
+   const slug = useWorkspaceSlug();
+-  const queryClient = useQueryClient();
+-  const buffers = useFileBufferStore();
++  const reload = useReloadFileViews(investigationId);
+   return useCallback(async () => {
+     // 1. Sandbox → snapshot. Tolerate failure (a stale snapshot is still
+-    //    better than nothing; the invalidations below still help).
++    //    better than nothing; the reload below still helps).
+     try {
+       await api.refreshFiles(slug, investigationId);
+     } catch {
+       /* ignore */
+     }
++    await reload();
++  }, [slug, investigationId, reload]);
++}
++
++/**
++ * Steps 2 and 3 of `useRefreshFiles` — re-read what the panes show, without
++ * asking the server to flush first.
++ *
++ * What a turn's end uses: the app chat's turn already flushed on the server
++ * before it announced, and the tree and file reads go to the live sandbox when
++ * one is up (#345). A viewer's own flush there is a whole-workspace write-back
++ * WITH deletions, once per viewer per turn — and with turns ending in other
++ * chats or a workflow's lanes, often in the middle of someone else's turn.
++ */
++export function useReloadFileViews(investigationId: string): () => Promise<void> {
++  const queryClient = useQueryClient();
++  const buffers = useFileBufferStore();
++  return useCallback(async () => {
+     // 2. Drop both TanStack caches: the file list + dirs + every open file's
+     //    content. Prefix invalidation on `["file", id]` covers every
+     //    `qk.file(id, *)` query — opened-file readers refetch on next render.
+@@ -58,5 +76,5 @@ export function useRefreshFiles(investigationId: string): () => Promise<void> {
+     for (const path of buffers.bufferedPaths()) {
+       if (!buffers.isDirty(path)) buffers.reload(path);
+     }
+-  }, [slug, investigationId, queryClient, buffers]);
++  }, [investigationId, queryClient, buffers]);
+ }
+diff --git a/web/src/lib/turnEndedBus.ts b/web/src/lib/turnEndedBus.ts
+new file mode 100644
+index 00000000..340bfdf6
+--- /dev/null
++++ b/web/src/lib/turnEndedBus.ts
+@@ -0,0 +1,23 @@
++/**
++ * "A turn in this item may have changed its files", for the panes that show
++ * them.
++ *
++ * The backend says so once per turn, on the ITEM's stream, whichever chat ran
++ * it (`turn_ended`). The chat session that receives it is not an ancestor of
++ * the file tree or the editor, so it is handed over here — see `scopedBus`.
++ *
++ * A reconnect announces too: a turn that ended while the stream was down is
++ * never replayed to a viewer whose stream landed on another pod. What a
++ * listener does is a reload of what is on screen (`useReloadFileViews` — the
++ * tree, open files, clean buffers), never a server flush, and one at a time.
++ */
++
++import { createScopedBus } from "./scopedBus";
++
++const bus = createScopedBus<void>();
++
++/** Subscribe to turn ends in one item. Returns the unsubscribe. */
++export const subscribeTurnEnded = bus.subscribe;
++
++/** Announce one. Called where the item's stream is handled. */
++export const publishTurnEnded = (scopeId: string) => bus.publish(scopeId, undefined);
+diff --git a/web/src/pages/investigation/WorkspaceProviders.turnEnd.test.tsx b/web/src/pages/investigation/WorkspaceProviders.turnEnd.test.tsx
+new file mode 100644
+index 00000000..75bed58c
+--- /dev/null
++++ b/web/src/pages/investigation/WorkspaceProviders.turnEnd.test.tsx
+@@ -0,0 +1,133 @@
++// @vitest-environment happy-dom
++/**
++ * The file panes reload when a turn in ANY of the item's chats ends — not on
++ * the default chat's `streaming` edge, which a turn in another chat or a
++ * workflow never produced (each streams on its own key). Both pages an item
++ * opens on (the workspace and the editor-area page) mount `WorkspaceProviders`,
++ * so the reload lives there.
++ */
++import "@testing-library/jest-dom/vitest";
++import { act, cleanup, waitFor } from "@testing-library/react";
++import { afterEach, describe, expect, it, vi } from "vitest";
++
++import { api } from "../../api";
++import { qk } from "../../api/queryKeys";
++import { publishTurnEnded } from "../../lib/turnEndedBus";
++import { makeTestQueryClient, renderWithQuery } from "../../test/queryWrapper";
++import { WorkspaceProviders } from "./WorkspaceShell";
++
++vi.mock("../../hooks/useAgent", () => ({
++  AgentProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
++  useAgent: () => ({ log: { entries: [], streaming: false }, metrics: null }),
++}));
++
++afterEach(() => {
++  cleanup();
++  vi.restoreAllMocks();
++});
++
++const EMPTY = { items: [], dirs: [], unwalked: [], truncated: false };
++
++describe("WorkspaceProviders — reload on a turn's end", () => {
++  it("re-reads this item's tree when one of its turns ends", async () => {
++    const client = makeTestQueryClient();
++    client.setQueryData(qk.files("PG-1"), EMPTY);
++    renderWithQuery(
++      <WorkspaceProviders slug="pm" itemId="PG-1">
++        {() => null}
++      </WorkspaceProviders>,
++      client,
++    );
++
++    act(() => publishTurnEnded("PG-1"));
++
++    await waitFor(() => expect(client.getQueryState(qk.files("PG-1"))?.isInvalidated).toBe(true));
++  });
++
++  // The turn's end already flushed on the server (an app chat), or the tree
++  // reads the live sandbox (#345). A viewer's own flush is a whole-workspace
++  // write-back with deletions, once per viewer per turn — mid-turn for a
++  // sibling chat or lane. The refresh button still flushes; a turn's end does not.
++  it("does not ask the server to flush", async () => {
++    const flush = vi.spyOn(api, "refreshFiles").mockResolvedValue(undefined);
++    const client = makeTestQueryClient();
++    client.setQueryData(qk.files("PG-1"), EMPTY);
++    renderWithQuery(
++      <WorkspaceProviders slug="pm" itemId="PG-1">
++        {() => null}
++      </WorkspaceProviders>,
++      client,
++    );
++
++    act(() => publishTurnEnded("PG-1"));
++    await waitFor(() => expect(client.getQueryState(qk.files("PG-1"))?.isInvalidated).toBe(true));
++
++    expect(flush).not.toHaveBeenCalled();
++  });
++
++  // The page's own follow-ups (the usage bar) run after the reload.
++  it("then tells the page", async () => {
++    const onTurnEnd = vi.fn();
++    renderWithQuery(
++      <WorkspaceProviders slug="pm" itemId="PG-1" onTurnEnd={onTurnEnd}>
++        {() => null}
++      </WorkspaceProviders>,
++    );
++
++    act(() => publishTurnEnded("PG-1"));
++
++    await waitFor(() => expect(onTurnEnd).toHaveBeenCalledTimes(1));
++  });
++
++  // A workflow map ends one turn per element. A burst is one reload in flight
++  // and one after it — never one per turn.
++  it("folds a burst of turn ends into at most two reloads", async () => {
++    const onTurnEnd = vi.fn();
++    renderWithQuery(
++      <WorkspaceProviders slug="pm" itemId="PG-1" onTurnEnd={onTurnEnd}>
++        {() => null}
++      </WorkspaceProviders>,
++    );
++
++    act(() => {
++      for (let i = 0; i < 10; i++) publishTurnEnded("PG-1");
++    });
++    await waitFor(() => expect(onTurnEnd).toHaveBeenCalled());
++    await new Promise((r) => setTimeout(r, 100));
++
++    expect(onTurnEnd.mock.calls.length).toBeLessThanOrEqual(2);
++    expect(onTurnEnd.mock.calls.length).toBeGreaterThanOrEqual(1);
++  });
++
++  // …and a turn that ends WHILE a reload is running still gets one after it,
++  // or what it wrote stays unseen.
++  it("reloads again for a turn that ended during a reload", async () => {
++    const onTurnEnd = vi.fn();
++    renderWithQuery(
++      <WorkspaceProviders slug="pm" itemId="PG-1" onTurnEnd={onTurnEnd}>
++        {() => null}
++      </WorkspaceProviders>,
++    );
++
++    act(() => {
++      publishTurnEnded("PG-1");
++      publishTurnEnded("PG-1");
++    });
++
++    await waitFor(() => expect(onTurnEnd).toHaveBeenCalledTimes(2));
++  });
++
++  it("does nothing for another item's turn", async () => {
++    const onTurnEnd = vi.fn();
++    renderWithQuery(
++      <WorkspaceProviders slug="pm" itemId="PG-1" onTurnEnd={onTurnEnd}>
++        {() => null}
++      </WorkspaceProviders>,
++    );
++
++    act(() => publishTurnEnded("PG-2"));
++    await new Promise((r) => setTimeout(r, 50));
++
++    expect(onTurnEnd).not.toHaveBeenCalled();
++  });
++});
+diff --git a/web/src/pages/investigation/WorkspaceProviders.turnEndLoop.test.tsx b/web/src/pages/investigation/WorkspaceProviders.turnEndLoop.test.tsx
+new file mode 100644
+index 00000000..fea2f70c
+--- /dev/null
++++ b/web/src/pages/investigation/WorkspaceProviders.turnEndLoop.test.tsx
+@@ -0,0 +1,80 @@
++// @vitest-environment happy-dom
++/**
++ * The reload loop's own state, with a reload whose end the test decides: a
++ * real reload is a few cache invalidations and finishes before a test can act
++ * inside it (#910 review round 2 — none of these lines was pinned).
++ */
++import "@testing-library/jest-dom/vitest";
++import { act, cleanup, waitFor } from "@testing-library/react";
++import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
++
++import { publishTurnEnded } from "../../lib/turnEndedBus";
++import { renderWithQuery } from "../../test/queryWrapper";
++import { WorkspaceProviders } from "./WorkspaceShell";
++
++const pending: Array<() => void> = [];
++const reload = vi.fn(() => new Promise<void>((r) => pending.push(r)));
++
++vi.mock("../../hooks/useRefreshFiles", () => ({
++  useRefreshFiles: () => async () => {},
++  useReloadFileViews: () => reload,
++}));
++vi.mock("../../hooks/useAgent", () => ({
++  AgentProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
++  useAgent: () => ({ log: { entries: [], streaming: false }, metrics: null }),
++}));
++
++beforeEach(() => {
++  pending.length = 0;
++  reload.mockClear();
++});
++afterEach(cleanup);
++
++const finishReload = async () => {
++  await act(async () => {
++    pending.shift()?.();
++    await Promise.resolve();
++  });
++};
++
++function mount(onTurnEnd = vi.fn()) {
++  const r = renderWithQuery(
++    <WorkspaceProviders slug="pm" itemId="PG-1" onTurnEnd={onTurnEnd}>
++      {() => null}
++    </WorkspaceProviders>,
++  );
++  return { ...r, onTurnEnd };
++}
++
++describe("RefreshOnTurnEnd — the loop's state", () => {
++  // After one reload finishes, the NEXT turn's end must reload again — a
++  // loop left "running" would only ever queue, and the tree would stop
++  // following turns after the first.
++  it("reloads for a turn that ends after the last reload finished", async () => {
++    const { onTurnEnd } = mount();
++    act(() => publishTurnEnded("PG-1"));
++    await finishReload();
++    await waitFor(() => expect(onTurnEnd).toHaveBeenCalledTimes(1));
++
++    act(() => publishTurnEnded("PG-1"));
++
++    await waitFor(() => expect(reload).toHaveBeenCalledTimes(2));
++  });
++
++  // A page that went away is not told, and its queued reload does not run.
++  it("stops when the page goes away mid-reload", async () => {
++    const { onTurnEnd, unmount } = mount();
++    act(() => {
++      publishTurnEnded("PG-1");
++      publishTurnEnded("PG-1"); // queued behind the first
++    });
++    expect(reload).toHaveBeenCalledTimes(1);
++
++    unmount();
++    await finishReload();
++    await new Promise((r) => setTimeout(r, 20));
++
++    expect(onTurnEnd).not.toHaveBeenCalled();
++    expect(reload).toHaveBeenCalledTimes(1);
++  });
++});
+diff --git a/web/src/pages/investigation/WorkspaceShell.tsx b/web/src/pages/investigation/WorkspaceShell.tsx
+index 8728ba0d..4b2d6115 100644
+--- a/web/src/pages/investigation/WorkspaceShell.tsx
++++ b/web/src/pages/investigation/WorkspaceShell.tsx
+@@ -78,8 +78,8 @@ import { usePersistentDeque } from "../../hooks/usePersistentSet";
+ import { usePersistentBoolean } from "../../hooks/usePersistentBoolean";
+ import { usePersistentNumber } from "../../hooks/usePersistentNumber";
+ import { useStickToBottom } from "../../hooks/useStickToBottom";
+-import { useOnTurnEnd } from "../../hooks/useOnTurnEnd";
+-import { useRefreshFiles } from "../../hooks/useRefreshFiles";
++import { useRefreshFiles, useReloadFileViews } from "../../hooks/useRefreshFiles";
++import { subscribeTurnEnded } from "../../lib/turnEndedBus";
+ import { emitRunAll } from "../../lib/editorEvents";
+ import { compareNames } from "../../lib/treeOrder";
+ import { FileView } from "../../renderers/FileView";
+@@ -185,7 +185,12 @@ export function WorkspaceShell({
+   onInvestigationChanged?: () => void;
+ }) {
+   return (
+-    <WorkspaceProviders slug={manifest.slug} itemId={item.resource_id} unwalked={unwalked}>
++    <WorkspaceProviders
++      slug={manifest.slug}
++      itemId={item.resource_id}
++      unwalked={unwalked}
++      onTurnEnd={onFilesChanged}
++    >
+       {(bufferStore) => (
+         <ShellBody
+           item={item}
+@@ -213,11 +218,15 @@ export function WorkspaceProviders({
+   slug,
+   itemId,
+   unwalked = [],
++  onTurnEnd,
+   children,
+ }: {
+   slug: string;
+   itemId: string;
+   unwalked?: string[];
++  /** Called after the files were refreshed for a turn's end (the page's own
++   * follow-ups, e.g. the usage bar). */
++  onTurnEnd?: () => void;
+   children: (bufferStore: FileBufferStore) => React.ReactNode;
+ }) {
+   const service = useMemo(() => investigationFileService(slug, itemId), [slug, itemId]);
+@@ -241,6 +250,7 @@ export function WorkspaceProviders({
+       <FileServiceProvider value={service}>
+         <AgentProvider investigationId={itemId}>
+           <FileBufferProvider store={bufferStore}>
++            <RefreshOnTurnEnd itemId={itemId} after={onTurnEnd} />
+             <EditModeProvider>
+               <MarkingProvider store={markings}>
+                 <LazyFoldersContext.Provider value={unwalked}>
+@@ -255,6 +265,51 @@ export function WorkspaceProviders({
+   );
+ }
+ 
++/** Re-read the item's files whenever a turn in ANY of its chats ends.
++ *
++ * It used to follow the default chat's `streaming` true→false edge in this tab,
++ * which a turn in a second chat or a workflow chat never produced (each streams
++ * on its own key), nor did a queued follow-up (no new `user_message` starts it).
++ * The backend now says so once per turn on the item's stream (`turn_ended`),
++ * and a reconnect says so too; this is the one place either becomes a reload.
++ *
++ * A reload, not the refresh button's flush-then-reload — see
++ * `useReloadFileViews`. And one at a time: a workflow map ends a turn per
++ * element, so at any moment there is at most one reload running and at most
++ * one waiting behind it, however many turns end meanwhile (a turn that ended
++ * during a reload may have written after it read, so it gets the one after). */
++function RefreshOnTurnEnd({ itemId, after }: { itemId: string; after?: () => void }) {
++  const reload = useReloadFileViews(itemId);
++  const afterRef = useRef(after);
++  afterRef.current = after;
++  useEffect(() => {
++    let running = false;
++    let again = false;
++    let alive = true;
++    const run = async () => {
++      running = true;
++      try {
++        do {
++          again = false;
++          await reload();
++          if (alive) afterRef.current?.();
++        } while (again && alive);
++      } finally {
++        running = false;
++      }
++    };
++    const off = subscribeTurnEnded(itemId, () => {
++      if (running) again = true;
++      else void run();
++    });
++    return () => {
++      alive = false;
++      off();
++    };
++  }, [itemId, reload]);
++  return null;
++}
++
+ /** Close a tab, asking first when it holds the only copy of unsaved edits. */
+ export function useRequestCloseTab(groups: Groups, bufferStore: FileBufferStore) {
+   const dialog = useDialog();
+@@ -633,16 +688,10 @@ function ShellBody({
+   gRef.current = groups;
+ 
+   // Full refresh: sandbox flush → invalidate file list + dirs + every open
+-  // file's content + reload editor buffers. Called from the refresh button,
+-  // after agent turns, and after terminal exec — see useRefreshFiles for the
+-  // four caches it busts.
++  // file's content + reload editor buffers. Called from the refresh button and
++  // after terminal exec — see useRefreshFiles for the caches it busts. A turn's
++  // end refreshes through `RefreshOnTurnEnd` in `WorkspaceProviders`.
+   const refreshFiles = useRefreshFiles(item.resource_id);
+-  // When an agent turn finishes it may have created/edited/deleted files via
+-  // its tools — refresh everything so the tree, viewers, and editor catch up.
+-  useOnTurnEnd(useAgent().log.streaming, () => {
+-    void refreshFiles();
+-    onFilesChanged?.();
+-  });
+ 
+   // VSCode-style delete-open-file handling: when a file disappears from the
+   // listing (deleted in the tree), auto-close its CLEAN tabs; keep dirty
+diff --git a/web/src/pages/investigation/WorkspaceShell.turnEnd.test.tsx b/web/src/pages/investigation/WorkspaceShell.turnEnd.test.tsx
+new file mode 100644
+index 00000000..adeb6157
+--- /dev/null
++++ b/web/src/pages/investigation/WorkspaceShell.turnEnd.test.tsx
+@@ -0,0 +1,83 @@
++// @vitest-environment happy-dom
++/**
++ * A turn's end tells the page too (`onFilesChanged`): the item's file list and
++ * its usage bar (#538) re-read on it. The shell hands that callback to
++ * `WorkspaceProviders`, which runs it after the files reload.
++ */
++import "@testing-library/jest-dom/vitest";
++import { act, cleanup, waitFor } from "@testing-library/react";
++import { MemoryRouter } from "react-router-dom";
++import { afterEach, describe, expect, it, vi } from "vitest";
++
++import type { AppItem, AppManifest } from "../../api/types";
++import { publishTurnEnded } from "../../lib/turnEndedBus";
++import { renderWithQuery } from "../../test/queryWrapper";
++import { WorkspaceShell } from "./WorkspaceShell";
++
++vi.mock("../../components/ItemChatShell", () => ({ ItemChatShell: () => null }));
++vi.mock("../../components/PresenceBar", () => ({ PresenceBar: () => null }));
++vi.mock("../../components/ActivityFeed", () => ({ ActivityFeed: () => null }));
++vi.mock("../../hooks/useAgent", () => ({
++  AgentProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
++  useAgent: () => ({ log: { entries: [], streaming: false }, metrics: null }),
++}));
++vi.mock("../../hooks/useIsSuperuser", () => ({
++  useIsSuperuser: () => true,
++  useIsSuperuserState: () => ({ isSuperuser: true, ready: true }),
++}));
++vi.mock("../../hooks/useCurrentUser", () => ({
++  useCurrentUser: () => "root",
++  useCurrentUserState: () => ({ id: "root", ready: true }),
++}));
++
++const manifest = {
++  slug: "playground",
++  title: "Playground",
++  icon: "sparkle",
++  color: "#000",
++  function: { workspace: true, sandbox: false, terminal: false },
++  agent: { picker: [] },
++  item: { noun: "Scratch", noun_plural: "Scratches" },
++  layout: {
++    breadcrumb: [],
++    statusbar: [],
++    list: [],
++    default_tabs: [],
++    primary_surface: "chat",
++    chat_switcher: false,
++  },
++  labels: {},
++  fields: [],
++  field_styles: {},
++  profiles: [],
++  default_profile: "default",
++  resource_route: "/playground-item",
++} as unknown as AppManifest;
++
++const item = {
++  resource_id: "PG-1",
++  title: "Sine wave demo",
++  owner: "root",
++  created_by: "root",
++  permission: { visibility: "private" },
++} as unknown as AppItem;
++
++afterEach(() => {
++  localStorage.clear();
++  cleanup();
++});
++
++describe("WorkspaceShell — a turn's end", () => {
++  it("tells the page its files changed", async () => {
++    const onFilesChanged = vi.fn();
++    renderWithQuery(
++      <MemoryRouter>
++        <WorkspaceShell manifest={manifest} item={item} files={[]} onFilesChanged={onFilesChanged} />
++      </MemoryRouter>,
++    );
++
++    act(() => publishTurnEnded("PG-1"));
++
++    await waitFor(() => expect(onFilesChanged).toHaveBeenCalledTimes(1));
++  });
++});
