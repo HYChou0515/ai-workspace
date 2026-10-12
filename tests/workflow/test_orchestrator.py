@@ -1973,3 +1973,25 @@ async def test_a_stop_while_a_continue_is_starting_stops_it(spec_instance: SpecS
 
     assert orch._get(run_id).status is RunStatus.CANCELLED
     assert calls == []
+
+
+async def test_a_phase_whose_steps_were_already_done_reads_as_done(spec_instance: SpecStar):
+    """Found by the plan's Verification live check: a step skipped from the journal
+    (an earlier run of the workflow did it) counted `done` but left its phase
+    `pending`, so the execution tab said "Not started" next to that step's
+    Result."""
+    calls: list[str] = []
+
+    async def run(wf, inputs):
+        await run_step(wf, name="think", phase="think", args={"a": 1}, execute=_rec(calls, "think"))
+        return {}
+
+    orch, _ = _orch(spec_instance, run)
+    first = await orch.start(slug="rca", item_id="iK1", profile="echo", captured_user="u")
+    await _ran(orch, first, spec_instance)
+    second = await orch.start(slug="rca", item_id="iK1", profile="echo", captured_user="u")
+    got = await _ran(orch, second, spec_instance)
+
+    assert calls == ["think"]  # the second run skipped it
+    think = next(p for p in got.phases if p.phase == "think")
+    assert (think.status, think.done) == ("skipped", 1)

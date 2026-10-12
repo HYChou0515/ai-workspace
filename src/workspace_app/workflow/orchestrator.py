@@ -1217,6 +1217,10 @@ class WorkflowOrchestrator:
                 p = msgspec.structs.replace(p, status="running")
             if isinstance(ev, (StepPassed, StepSkipped)):
                 p = msgspec.structs.replace(p, done=p.done + 1)
+            if isinstance(ev, StepSkipped) and p.status == "pending":
+                # Satisfied from the journal without being entered: done already,
+                # not "not started" (the execution tab shows this phase's Result).
+                p = msgspec.structs.replace(p, status="skipped")
             elif isinstance(ev, StepFailed):
                 p = msgspec.structs.replace(p, failed=p.failed + 1, status="failed")
             phases[idx] = p

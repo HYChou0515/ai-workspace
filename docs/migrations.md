@@ -2185,6 +2185,8 @@ agent 步驟裡 AI 的呼叫、WUI 的工具呼叫、view plugin、圖表重畫�
   不會自己消失，可以關掉，下一個關卡會再提示；那個執行的分頁在前面時不顯示。已經有更新的執行的舊執行不算在等
   （它只能 Stop），不出現在提示與圖示的數字裡。`GET …/runs` 的每一筆多了 `latest`（是不是那個 workflow 最新的一次）。沒有執行在跑時，畫面每 30 秒重新看一次這個 item 的執行
   （有在跑的時候每 2 秒），所以排程或別人啟動的執行也會出現。
+- 一個階段的步驟若因為之前的執行已經做過而直接沿用（journal 快取），`WorkflowRun.phases` 裡那個階段的狀態現在是
+  `skipped`（畫面上「Already done」），以前停在 `pending`（「Not started」）。
 - **`GET …/runs/{run_id}` 和 `…/runs/{run_id}/stream` 會檢查這個 run 屬於網址裡的 item**，不屬於就回 404。
   以前不檢查：對某個 item 有讀取權，就能用它的網址讀到別的 item 的 run 和即時串流。正常的呼叫（用 run 自己的 item）不受影響；
   **rollout 前**：若有外部腳本用錯的 item 網址去讀 run，改成用 run 自己的 item 網址。為什麼：那是一個跨 item

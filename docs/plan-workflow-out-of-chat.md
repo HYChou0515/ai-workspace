@@ -554,3 +554,24 @@ proposing and confirming a change now refresh the item's list too
   - A failing step offers Continue / Re-run.
   - Change this execution shows the card, not JSON.
   - Measure layouts at two widths.
+- **Done** (2026-10-12; branch `ffad33cd` plus the phase fix below, base
+  `5aa45d3b`). This was the real app in a real Chromium, with one stand-in: the
+  model, a runner that logs each turn's prompt and the history it was handed.
+  The same flow ran on both through the HTTP API: a person chats, a workflow
+  starts (first trying to take over that chat), the person chats again while it
+  waits at its gate, a change is proposed, and a failing execution is started.
+  | Check | Base `5aa45d3b` | Branch |
+  |---|---|---|
+  | `POST /run?chat_id=<that chat>` | 202, the chat is taken over | 400 |
+  | The node's history | the chat's "my private note" and its reply | empty |
+  | The chat's next turn | includes the node's answer | only the chat's own two messages |
+  | The steer's JSON | persisted in the conversation and shown in it | in no conversation, not on the page: the card shows the instruction |
+  | Starting a workflow | from the chat | from the sidebar's Start: a tab opens, and the chat count stays 1 → 1 |
+  | A gate | a card inside the chat | the badge "1 waiting for you"; the banner shows while a file is in front |
+  | A failing step | progress bar in the chat | Continue from here + Re-run this step |
+  | Layout | — | no horizontal overflow, no clipped row, no page error, at 1440 and 1024 |
+  - Found by it: a phase satisfied from the journal (its step skipped because
+    an earlier run did it) counted `done` but stayed `pending`, so the tab read
+    "Not started" next to its Result. A skipped step now marks a still-pending
+    phase `skipped` ("Already done"). This predates the PR; the old diagram had
+    the same blind spot.
