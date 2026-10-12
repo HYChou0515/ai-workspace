@@ -10,6 +10,7 @@ import {
   type AgentMetricsState,
   reduceAgent,
 } from "../pages/investigation/agentLog";
+import { describeFailure } from "../lib/failure";
 import { TurnStatus } from "./TurnStatus";
 
 const up: AgentMetricsState = { phase: "up", promptTokens: 256, completionTokens: 0, elapsedMs: 0 };
@@ -170,10 +171,23 @@ describe("TurnStatus", () => {
   it("says a model call is being re-sent, and which attempt (docs/plan-friendly-errors.md D9)", () => {
     // A recovered retry is not a failure, so it is a passing line here — never
     // the red box, and never in the transcript.
-    const log = fold([{ type: "model_retrying", attempt: 2, kind: "timeout" }]);
+    const log = fold([{ type: "model_retrying", attempt: 2, kind: "provider_error" }]);
     render(<TurnStatus log={{ ...log, streaming: true }} />);
-    expect(screen.getByTestId("turn-retrying")).toHaveTextContent("連線不穩，正在重試（第 2 次）…");
+    expect(screen.getByTestId("turn-retrying")).toHaveTextContent("模型服務本身出錯。正在重試（第 2 次）…");
   });
+
+  it.each(["timeout", "connection", "provider_error", "all_busy"])(
+    "names what failed with the sentence the red box would use — %s (D14)",
+    (kind) => {
+      // It always said 「連線不穩」, also for a 503 — the server, not the line.
+      // NN/g: an error message names the exact problem. The sentence is the
+      // failure copy's own, so the two cannot drift apart.
+      const log = fold([{ type: "model_retrying", attempt: 1, kind }]);
+      render(<TurnStatus log={{ ...log, streaming: true }} />);
+      const what = describeFailure({ kind, raw: "" }, "zh-TW").headline;
+      expect(screen.getByTestId("turn-retrying")).toHaveTextContent(`${what}正在重試（第 1 次）…`);
+    },
+  );
 
   it("shows one elapsed figure while thinking, not two that disagree", () => {
     // The shared line already prints this component's own FE-anchored clock.

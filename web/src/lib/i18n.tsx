@@ -2344,8 +2344,8 @@ export const messages = {
   "failure.copied": { "zh-TW": "已複製", en: "Copied" },
   // D9: a model call being re-sent — a status line, never a failure.
   "turn.retrying": {
-    "zh-TW": "連線不穩，正在重試（第 {attempt} 次）…",
-    en: "Connection unstable — retrying (attempt {attempt})…",
+    "zh-TW": "{what}正在重試（第 {attempt} 次）…",
+    en: "{what} Retrying (attempt {attempt})…",
   },
 
   // The skill hub (docs/plan-skill-hub.md). "Skill hub" is the proper noun

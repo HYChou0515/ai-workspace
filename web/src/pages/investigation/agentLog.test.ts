@@ -1698,7 +1698,7 @@ describe("a failure is carried as what it IS, not as a sentence (docs/plan-frien
       ...EMPTY_LOG,
       streaming: true,
     });
-    expect(retrying.retrying).toEqual({ attempt: 2 });
+    expect(retrying.retrying).toEqual({ attempt: 2, kind: "timeout" });
     expect(retrying.error).toBeNull();
 
     const resumed = reduceAgent(retrying, { type: "message_delta", text: "ok" });

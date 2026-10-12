@@ -176,7 +176,7 @@ export type AgentLog = {
   /** Set while a model call that failed is being re-sent (D9). Ephemeral, like
    * `rateLimited`: a recovered retry is not a failure, so it only explains the
    * pause and is cleared the moment output arrives. */
-  retrying: { attempt: number } | null;
+  retrying: { attempt: number; kind: string } | null;
   /** Stop has been asked for and the turn has not ended yet.
    *
    * Stop used to flip `streaming` straight to false, which was a claim the
@@ -987,7 +987,7 @@ export function reduceAgent(log: AgentLog, ev: AgentEvent, now: number = Date.no
     case "model_retrying":
       // D9: ephemeral — a model call is being re-sent. NOT pushed to `entries`:
       // a recovered retry never enters the transcript. Cleared once output resumes.
-      return { ...log, retrying: { attempt: ev.attempt } };
+      return { ...log, retrying: { attempt: ev.attempt, kind: ev.kind } };
 
     case "output_retracted": {
       // D3: the call that streamed these characters failed and is being re-sent;

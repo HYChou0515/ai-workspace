@@ -9,7 +9,8 @@ import {
   turnLooksSilent,
   turnPhase,
 } from "../pages/investigation/agentLog";
-import { useT } from "../lib/i18n";
+import { failureWhat } from "../lib/failure";
+import { useLocale, useT } from "../lib/i18n";
 import { pxToRem } from "../lib/pxToRem";
 
 /** The trailing status of an in-flight turn — replaces the opaque "working…"
@@ -46,6 +47,7 @@ export function TurnStatus({
   alive?: boolean | null;
 }) {
   const t = useT();
+  const [locale] = useLocale();
   const phase = turnPhase(log);
   const toolRunning = isToolRunning(log);
   const active = phase !== "idle";
@@ -204,7 +206,11 @@ export function TurnStatus({
   if (log.retrying != null) {
     return (
       <div className={className} style={box} data-testid="turn-retrying">
-        {t("turn.retrying", { attempt: log.retrying.attempt })}
+        {/* D14: what failed, in the red box's own sentence for it, then the attempt. */}
+        {t("turn.retrying", {
+          what: failureWhat(log.retrying.kind, locale),
+          attempt: log.retrying.attempt,
+        })}
         {elapsedSec >= 1 && <span style={{ opacity: 0.7 }}> · {elapsedSec}s</span>}
       </div>
     );

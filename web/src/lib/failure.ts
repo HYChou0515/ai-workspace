@@ -117,6 +117,13 @@ export function failureLine(failure: Failure, locale: Locale): string {
   return details ? `${headline} — ${details}` : headline;
 }
 
+/** What happened, in one sentence, for ``kind`` — the red box's headline when
+ * there is no number to say, and the retry status's opening (D14). One source,
+ * so the two cannot drift apart. */
+export function failureWhat(kind: string, locale: Locale): string {
+  return translate(locale, `failure.${WORDED.has(kind) ? kind : "unknown"}.what` as MsgKey);
+}
+
 export function describeFailure(failure: Failure, locale: Locale): FailureText {
   const raw = failure.raw.trim();
   if (failure.headline) {
@@ -135,7 +142,7 @@ export function describeFailure(failure: Failure, locale: Locale): FailureText {
   const headline =
     counted && n != null && n > 0
       ? translate(locale, counted.key, { [counted.param]: n })
-      : translate(locale, `failure.${kind}.what` as MsgKey);
+      : failureWhat(kind, locale);
   return {
     headline,
     action: failure.action ?? translate(locale, `failure.${kind}.do` as MsgKey),
