@@ -113,6 +113,10 @@ def register_settings_models(spec: SpecStar) -> None:
             spec.add_model(model)
 
 
+class KeysMoved(Exception):
+    """The staged keys are not the ones the Apply was confirmed with."""
+
+
 def _content_id(patch: dict[str, Any], key_revs: dict[str, str]) -> str:
     """The version consumers compare: the published patch and which revision of
     each key — so a changed key is a new version, while history never sees its
@@ -175,7 +179,14 @@ class SettingsStore:
         record = self._get(_SettingsCurrent, _CURRENT_ID)
         return {} if record is None else record.patch
 
-    def publish(self, patch: dict[str, Any], *, by: str, apply_keys: bool = True) -> Applied:
+    def publish(
+        self,
+        patch: dict[str, Any],
+        *,
+        by: str,
+        apply_keys: bool = True,
+        key_revision: str | None = None,
+    ) -> Applied:
         """Make `patch` the published settings. Validation is the caller's (P3):
         this only records.
 
@@ -187,6 +198,13 @@ class SettingsStore:
         # One read of the keys: the version counts exactly the keys it applies
         # (review r2 — a second read could apply a key the version never saw).
         staged = self._keys()
+        # The keys the confirmation listed, checked on the very read that is put
+        # in force: one checked earlier and read again here let a key set in
+        # between go live unseen (final review 11).
+        if key_revision is not None and key_revision != _content_id(
+            {}, {key.path: key.rev for key in staged}
+        ):
+            raise KeysMoved
         source = staged if apply_keys else self._list_data(_SettingsAppliedKey)
         revs = {key.path: key.rev for key in source}
         before = {} if current is None else current.key_revs

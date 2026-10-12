@@ -293,8 +293,12 @@ function useDraft(client: Client, data: PageData) {
         void queryClient.invalidateQueries({ queryKey: qk.modelSettings });
       }
     },
-    // What it builds on next follows the refetch (the effect above).
-    onSuccess: () => {
+    // What it builds on next is what it just saved — not left to the refetch:
+    // typing on before that arrives kept the old base, and the next Save got a
+    // false "someone else saved" (final review 11).
+    onSuccess: (_problems, p) => {
+      base.current = p;
+      told.current = false;
       setSaveError("");
       setNotice(t("modelSettings.saved"));
       void queryClient.invalidateQueries({ queryKey: qk.modelSettings });
@@ -800,22 +804,24 @@ function TestConnection({ client, defaults, draft }: { client: Client; defaults:
         >
           {t("modelSettings.test")}
         </button>
-        {test.isPending && (
-          <span role="status" data-testid="model-settings-test-running" style={MUTED}>
-            {t("modelSettings.testRunning", { preset: test.variables ?? chosen, s: String(waited) })}
-          </span>
-        )}
       </div>
+      {/* Its own line, so the picker beside the button stays put (final review 11). */}
+      {test.isPending && (
+        <p role="status" data-testid="model-settings-test-running" style={{ ...MUTED, margin: 0 }}>
+          {t("modelSettings.testRunning", { preset: test.variables ?? chosen, s: String(waited) })}
+        </p>
+      )}
       {test.data && (
         <p data-testid="model-settings-test-result" role={test.data.ok ? undefined : "alert"} style={WRAP}>
           {test.data.ok ? (
             t("modelSettings.testOk", { model: test.data.model, ms: String(test.data.ms), reply: test.data.reply })
           ) : (
-            // A plain sentence first, the provider's own words after it (NN/g
-            // "Error-Message Guidelines"; final review 9).
+            // A plain sentence first, then the reason as given — often the
+            // page's own refusal, sometimes the provider's words (NN/g
+            // "Error-Message Guidelines"; final reviews 9–11).
             <>
               {t("modelSettings.testFailedLead", { preset: test.variables ?? chosen })}{" "}
-              <span data-testid="model-settings-test-detail" style={{ ...MONO, ...MUTED }}>
+              <span data-testid="model-settings-test-detail" style={MUTED}>
                 {test.data.error}
               </span>
             </>
@@ -1062,6 +1068,9 @@ function KeysTab({
   const set = useMutation({
     meta: { silentError: true },
     mutationFn: () => client.setKey(path.trim(), value),
+    // An earlier result (an Apply's "Applied: version …") is not this action's:
+    // left beside a refusal it read as the key applied (final review 11).
+    onMutate: () => draft.clearNotice(),
     onSuccess: () => {
       setPath("");
       setValue("");
@@ -1169,7 +1178,14 @@ function KeysTab({
           Harmful"), and beside the field they explain, not the row (NN/g
           "Proximity"). So the row aligns to the inputs' tops and the button
           gets a label-high spacer. */}
-      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "flex-start" }}>
+      {/* A form, so Enter sets the key as it does in any form. */}
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (path.trim() && value && !set.isPending) set.mutate();
+        }}
+        style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "flex-start" }}
+      >
         <div data-testid="model-settings-key-path-field" style={{ display: "grid", gap: 4, flex: "1 1 20rem", minWidth: 0 }}>
           <label style={{ display: "grid", gap: 4 }}>
             <span style={LABEL}>{t("modelSettings.keyPathLabel")}</span>
@@ -1231,17 +1247,16 @@ function KeysTab({
             {"\u00a0"}
           </span>
           <button
-            type="button"
+            type="submit"
             className="btn"
             data-variant="secondary"
             data-testid="model-settings-key-set"
             disabled={!path.trim() || !value || set.isPending}
-            onClick={() => set.mutate()}
           >
             {t("modelSettings.keySet")}
           </button>
         </div>
-      </div>
+      </form>
       {(!path.trim() || !value) && (
         <p data-testid="model-settings-key-why" style={{ ...MUTED, margin: 0 }}>
           {t("modelSettings.keyNeedBoth")}

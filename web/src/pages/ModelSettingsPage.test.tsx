@@ -979,7 +979,10 @@ describe("ModelSettingsPage", () => {
     expect(result.textContent?.startsWith("測試 kb-default 沒有成功")).toBe(true);
     // final review 10: not "the provider said" — most refusals are the page's own
     expect(result).not.toHaveTextContent("提供方");
-    expect(within(result).getByTestId("model-settings-test-detail")).toHaveTextContent("Missing credentials");
+    const detail = within(result).getByTestId("model-settings-test-detail");
+    expect(detail).toHaveTextContent("Missing credentials");
+    // final review 11: often the page's own sentence, so not set as code
+    expect(detail.style.fontFamily).toBe("");
   });
 
   it("says a rollback's result where the person is, and announces it", async () => {
@@ -1015,6 +1018,77 @@ describe("ModelSettingsPage", () => {
     fireEvent.click(await screen.findByRole("tab", { name: "API 金鑰" }));
 
     expect(screen.getByTestId("model-settings-key-set")).toHaveAttribute("data-variant", "secondary");
+  });
+
+  it("builds the next Save on its own last save, even when typing went on meanwhile", async () => {
+    // final review 11: typing between a save and its refetch left `based_on` at
+    // the draft before — the next Save got a false "someone else saved".
+    const client = fakeClient();
+    renderWithQuery(<ModelSettingsPage client={client} />);
+    await screen.findByRole("textbox", { name: "草稿（JSON）" });
+    const t1 = { config: { llm: { base_url: "http://one" } } };
+    const t2 = { config: { llm: { base_url: "http://two" } } };
+    let release: () => void = () => {};
+    const base = client.get.getMockImplementation()!;
+    type(JSON.stringify(t1));
+    client.get.mockImplementationOnce(
+      () => new Promise((resolve) => (release = () => void base().then(resolve))),
+    );
+
+    fireEvent.click(screen.getByTestId("model-settings-save"));
+    await waitFor(() => expect(client.saveDraft).toHaveBeenCalledTimes(1));
+    type(JSON.stringify(t2));
+    await act(async () => release());
+    fireEvent.click(screen.getByTestId("model-settings-save"));
+
+    await waitFor(() => expect(client.saveDraft).toHaveBeenLastCalledWith(t2, t1));
+  });
+
+  it("does not leave an Edit-tab result beside a refused key", async () => {
+    // final review 11: "Applied: version …" sat right above the key refusal.
+    const client = fakeClient({ draft: KB_2 });
+    client.setKey.mockRejectedValue(
+      new HttpError(422, "refused", undefined, undefined, { problems: ["config.x: no"] }),
+    );
+    renderWithQuery(<ModelSettingsPage client={client} />);
+    await waitFor(() => expect(screen.getByTestId("model-settings-apply")).toBeEnabled());
+    fireEvent.click(screen.getByTestId("model-settings-apply"));
+    fireEvent.click(await screen.findByRole("button", { name: "套用" }));
+    await screen.findByTestId("model-settings-notice");
+
+    fireEvent.click(screen.getByRole("tab", { name: "API 金鑰" }));
+    fireEvent.change(screen.getByTestId("model-settings-key-path"), { target: { value: "config.x" } });
+    fireEvent.change(screen.getByTestId("model-settings-key-value"), { target: { value: "v" } });
+    fireEvent.click(screen.getByTestId("model-settings-key-set"));
+
+    await screen.findByTestId("model-settings-key-refused");
+    expect(screen.queryByTestId("model-settings-notice")).toBeNull();
+  });
+
+  it("sets a key on Enter, as a form does", async () => {
+    const client = fakeClient();
+    renderWithQuery(<ModelSettingsPage client={client} />);
+    fireEvent.click(await screen.findByRole("tab", { name: "API 金鑰" }));
+    fireEvent.change(screen.getByTestId("model-settings-key-path"), { target: { value: "config.llm.api_key" } });
+    const value = screen.getByTestId("model-settings-key-value");
+    fireEvent.change(value, { target: { value: "sk-0000-0000-0000-0001" } });
+
+    fireEvent.submit(value.closest("form")!);
+
+    await waitFor(() => expect(client.setKey).toHaveBeenCalledWith("config.llm.api_key", "sk-0000-0000-0000-0001"));
+  });
+
+  it("keeps the preset picker where it is while a test runs", async () => {
+    // final review 11: the running line shared the picker's row and squeezed it.
+    const client = fakeClient();
+    client.testConnection.mockImplementation(() => new Promise(() => {}));
+    renderWithQuery(<ModelSettingsPage client={client} />);
+    const button = await screen.findByTestId("model-settings-test");
+
+    fireEvent.click(button);
+
+    const running = await screen.findByTestId("model-settings-test-running");
+    expect(running.parentElement).not.toBe(button.parentElement);
   });
 
   it("draws a refused key as an error at its field", async () => {

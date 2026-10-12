@@ -39,11 +39,19 @@ from ..model_settings.page import (
     key_path_problem,
     try_connection,
 )
-from ..model_settings.store import Applied, SettingsStore
+from ..model_settings.store import Applied, KeysMoved, SettingsStore
 
 
 class _Patch(BaseModel):
     patch: dict[str, Any] = {}
+
+
+#: An Apply's 409: a sentence, not a problem — nothing in the draft is wrong;
+#: the page reads it again and the person looks before applying.
+_MOVED = (
+    "the draft or the keys changed since this page read them — "
+    "someone else saved; look at the changes before applying"
+)
 
 
 class _SaveDraft(BaseModel):
@@ -225,17 +233,16 @@ def register_model_settings_routes(
             if changed_draft or changed_keys or changed_values:
                 # A sentence, not a problem: nothing in the draft is wrong — the
                 # page reads it again and the person looks before applying.
-                raise HTTPException(
-                    status_code=409,
-                    detail=(
-                        "the draft or the keys changed since this page read them — "
-                        "someone else saved; look at the changes before applying"
-                    ),
-                )
+                raise HTTPException(status_code=409, detail=_MOVED)
             found = _problems(draft)
             if found:
                 raise HTTPException(status_code=422, detail={"problems": found})
-            return store.publish(draft, by=me)
+            try:
+                return store.publish(
+                    draft, by=me, key_revision=None if body is None else body.key_revision
+                )
+            except KeysMoved:
+                raise HTTPException(status_code=409, detail=_MOVED) from None
 
         return _out(await asyncio.to_thread(publish))
 

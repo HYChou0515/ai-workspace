@@ -438,3 +438,27 @@ def test_save_refuses_to_overwrite_a_draft_saved_since_the_editor_read_it(page):
     assert page.client.get(BASE).json()["draft"] == theirs
     again = page.client.put(f"{BASE}/draft", json={"patch": mine, "based_on": theirs})
     assert again.status_code == 200
+
+
+def test_a_key_set_while_apply_checks_is_not_published_unseen(page, monkeypatch):
+    # final review 11: Apply compared the key revision, then checked, then
+    # published whatever keys were staged by then — a key set in between went
+    # into force although the dialog never listed it.
+    import workspace_app.api.model_settings_routes as routes
+
+    seen = page.client.get(BASE).json()
+    real = routes.problems
+
+    def meanwhile(*args, **kwargs):
+        SettingsStore(page.spec).set_key(API_KEY, "sk-sneaked-0000-0000", by=ALICE)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(routes, "problems", meanwhile)
+
+    response = page.client.post(
+        f"{BASE}/apply",
+        json={"draft": seen["draft"], "pending_keys": [], "key_revision": seen["key_revision"]},
+    )
+
+    assert response.status_code == 409
+    assert page.client.get(BASE).json()["applied_keys"] == []
