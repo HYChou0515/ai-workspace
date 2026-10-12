@@ -13,19 +13,22 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from fastapi import APIRouter, FastAPI, HTTPException, Response
+from fastapi import APIRouter, FastAPI, HTTPException, Request, Response
 from pydantic import BaseModel
 
 from ..resources.conversation import Conversation
 from .locator import ItemLocator
 from .outside_jobs import OutsideJob, OutsideJobStore, job_id
-from .outside_lookup_routes import _open_card
+from .outside_lookup_routes import AnswerForm, Deliver, OutsideAnswerOut, _open_card
 
 
 class HandOverIn(BaseModel):
     tool_call_id: str
     #: The query as the person edited it on the card (D4); ignored for a URL.
     query: str = ""
+    #: The card asking on its own, with no 「查」 (D12): allowed only for a URL
+    #: an earlier lookup in this chat brought back, and never restarts a job.
+    auto: bool = False
 
 
 class JobOut(BaseModel):
@@ -43,6 +46,16 @@ class HeartbeatIn(BaseModel):
 
 class HelperStatusOut(BaseModel):
     online: bool
+
+
+class ResultIn(BaseModel):
+    """One fetched page: the page as Markdown (the card's own paste converter,
+    D11), where it was, and the person's local date for the file name."""
+
+    markdown: str
+    url: str = ""
+    title: str = ""
+    date: str = ""
 
 
 class FailIn(BaseModel):
@@ -63,6 +76,7 @@ def register_outside_job_routes(
     locator: ItemLocator,
     store: OutsideJobStore,
     get_user_id: Callable[[], str],
+    deliver: Deliver,
 ) -> None:
     async def hand_over(
         slug: str,
@@ -80,6 +94,15 @@ def register_outside_job_routes(
             kind, args = "search", (body.query.strip() or card["query"])
         else:
             kind, args = "open_url", card["url"]
+        if body.auto:
+            if kind != "open_url" or not await store.seen(investigation_id, rid, args):
+                raise HTTPException(
+                    status_code=409, detail="this lookup waits for the person's 「查」"
+                )
+            jid = job_id(investigation_id, rid, body.tool_call_id)
+            existing = await store.get(jid)
+            if existing is not None and existing.state != "cancelled":
+                return _out(jid, existing)  # already running or ran: leave it
         job = OutsideJob(
             owner=owner,
             item_id=investigation_id,
@@ -155,6 +178,44 @@ def register_outside_job_routes(
         return await cancel_job(_card_job_id(slug, item_id, rid, tool_call_id, "converse"))
 
     # ── the helper ──────────────────────────────────────────────────────────
+
+    @app.post("/outside-helper/jobs/{jid}/result", response_model=OutsideAnswerOut)
+    async def result(request: Request, jid: str, body: ResultIn) -> OutsideAnswerOut:
+        """The page the helper fetched answers the card — through the SAME code
+        a person's paste goes through (`deliver`), as the person who handed it
+        over: the helper is signed in as them, and only their claimed job is
+        theirs to answer."""
+        owner = get_user_id()
+        job = await store.get(jid)
+        if job is None or job.owner != owner or job.state != "claimed":
+            raise HTTPException(status_code=404, detail="no claimed job of yours with this id")
+        form = AnswerForm(
+            job.tool_call_id,
+            "found",
+            body.markdown,
+            job.args if job.kind == "search" else "",
+            body.url,
+            "",
+            "",
+            body.date,
+            [],
+            by_helper=True,
+        )
+        try:
+            out = await deliver(
+                request,
+                job.slug,
+                job.item_id,
+                lambda: locator.require_chat(job.slug, job.item_id, job.chat_id),
+                locator.engine_key,
+                form,
+            )
+        except HTTPException as exc:
+            if exc.status_code == 409:  # answered meanwhile: theirs stands
+                await store.end(jid, owner, "cancelled")
+            raise
+        await store.end(jid, owner, "done")
+        return out
 
     @app.post("/outside-helper/jobs/{jid}/fail", status_code=204)
     async def fail(jid: str, body: FailIn) -> Response:

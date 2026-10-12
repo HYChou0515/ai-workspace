@@ -2530,10 +2530,15 @@ def create_app(
     )
     # docs/plan-outside-lookup.md D4: answering the "請幫我查" card — save under
     # `lookups/`, then the SAME send a typed message takes.
+    from .outside_jobs import OutsideJobStore, register_outside_jobs
     from .outside_lookup_routes import register_outside_lookup_routes
 
-    register_outside_lookup_routes(
+    register_outside_jobs(spec)
+    outside_jobs = OutsideJobStore(spec)
+    app.state.outside_jobs = outside_jobs
+    deliver_outside_answer = register_outside_lookup_routes(
         api,
+        on_answered=outside_jobs.remember_links,
         locator=locator,
         files=files,
         send_into=chat_send_svc.send,
@@ -2546,12 +2551,14 @@ def create_app(
     # lookup instead of the person. Registered here, post-`spec.apply`, so the
     # job model gets no CRUD routes (like _SandboxAddress).
     from .outside_job_routes import register_outside_job_routes
-    from .outside_jobs import OutsideJobStore, register_outside_jobs
 
-    register_outside_jobs(spec)
-    outside_jobs = OutsideJobStore(spec)
-    app.state.outside_jobs = outside_jobs
-    register_outside_job_routes(api, locator=locator, store=outside_jobs, get_user_id=get_user_id)
+    register_outside_job_routes(
+        api,
+        locator=locator,
+        store=outside_jobs,
+        get_user_id=get_user_id,
+        deliver=deliver_outside_answer,
+    )
 
     # ---- Files API (plan-backend §3.8) ----
 

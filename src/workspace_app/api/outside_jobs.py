@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import hashlib
+import re
 import time
 from collections.abc import Callable
 from typing import Literal
@@ -34,6 +35,8 @@ from specstar.types import (
 
 JobKind = Literal["search", "open_url"]
 JobState = Literal["queued", "claimed", "done", "failed", "cancelled"]
+
+_MAX_CAS_RETRIES = 100
 
 #: A claimed job with no result after this long goes back to the queue.
 CLAIM_TIMEOUT_MS = 120_000
@@ -66,6 +69,38 @@ class _OutsideHelperPresence(Struct):
     protocol: int = 0
 
 
+class _OutsideSeenUrls(Struct):
+    """The links lookups in one chat brought back (D12): opening one of these
+    sends nothing the person has not already seen come in from outside."""
+
+    item_id: str
+    chat_id: str
+    urls: list[str]
+
+
+#: Most links remembered per chat; the oldest go first.
+SEEN_URLS_CAP = 2_000
+
+#: `[text](https://…)` and `<https://…>` — how Markdown writes a link, which is
+#: how both the card's paste converter and the helper's write a page (D11).
+_LINK = re.compile(r"\]\((https?://[^)\s]+)\)|<(https?://[^>\s]+)>")
+
+
+def links_in(markdown: str) -> list[str]:
+    """The web links a lookup's Markdown carries, in order, each once, without
+    a `#fragment` (the same page whichever anchor it was linked at)."""
+    out: list[str] = []
+    for m in _LINK.finditer(markdown):
+        url = _without_fragment(m.group(1) or m.group(2))
+        if url not in out:
+            out.append(url)
+    return out
+
+
+def _without_fragment(url: str) -> str:
+    return url.split("#", 1)[0]
+
+
 def job_id(item_id: str, chat_id: str, tool_call_id: str) -> str:
     """One job per card: handing it over again replaces the previous one.
     Hashed — an item id may hold characters a specstar id may not."""
@@ -82,6 +117,8 @@ def register_outside_jobs(spec: SpecStar) -> None:
         spec.add_model(OutsideJob, indexed_fields=["owner", "state", "created_ms"])
     with contextlib.suppress(ValueError):
         spec.add_model(_OutsideHelperPresence)
+    with contextlib.suppress(ValueError):
+        spec.add_model(_OutsideSeenUrls)
 
 
 def _ms() -> int:
@@ -204,6 +241,65 @@ class OutsideJobStore:
         not theirs, not claimed, or gone — the helper gets a 404, not the power
         to end someone else's job."""
         return await asyncio.to_thread(self._finish_sync, jid, owner, "failed", error)
+
+    # ── links lookups brought back (D12) ────────────────────────────────────
+
+    async def remember_links(self, item_id: str, chat_id: str, markdown: str) -> None:
+        urls = links_in(markdown)
+        if urls:
+            await asyncio.to_thread(self._remember_sync, item_id, chat_id, urls)
+
+    def _remember_sync(self, item_id: str, chat_id: str, urls: list[str]) -> None:
+        rm = self._spec.get_resource_manager(_OutsideSeenUrls)
+        key = job_id(item_id, chat_id, "")
+        for _ in range(_MAX_CAS_RETRIES):
+            try:
+                res = rm.get(key)
+            except (ResourceIDNotFoundError, ResourceIsDeletedError):
+                try:
+                    rm.create(
+                        _OutsideSeenUrls(
+                            item_id=item_id, chat_id=chat_id, urls=urls[-SEEN_URLS_CAP:]
+                        ),
+                        resource_id=key,
+                        if_not_exists=True,  # ty: ignore[unknown-argument]
+                    )
+                    return
+                except DuplicateResourceError:
+                    continue  # another answer wrote first: merge into theirs
+            data = res.data
+            assert isinstance(data, _OutsideSeenUrls)
+            merged = [u for u in data.urls if u not in urls] + urls
+            try:
+                rm.modify(
+                    key,
+                    _OutsideSeenUrls(
+                        item_id=item_id, chat_id=chat_id, urls=merged[-SEEN_URLS_CAP:]
+                    ),
+                    status=RevisionStatus.draft,
+                    expected_etag=res.info.etag,  # ty: ignore[unknown-argument]
+                )
+                return
+            except PreconditionFailedError:
+                continue
+        raise RuntimeError(f"seen-links CAS exhausted retries for {key!r}")  # pragma: no cover
+
+    async def seen(self, item_id: str, chat_id: str, url: str) -> bool:
+        return await asyncio.to_thread(self._seen_sync, item_id, chat_id, url)
+
+    def _seen_sync(self, item_id: str, chat_id: str, url: str) -> bool:
+        rm = self._spec.get_resource_manager(_OutsideSeenUrls)
+        try:
+            data = rm.get(job_id(item_id, chat_id, "")).data
+        except (ResourceIDNotFoundError, ResourceIsDeletedError):
+            return False
+        assert isinstance(data, _OutsideSeenUrls)
+        return _without_fragment(url) in data.urls
+
+    async def end(self, jid: str, owner: str, state: JobState) -> bool:
+        """End the owner's claimed job as ``state`` (``done`` once its result
+        answered the card, ``cancelled`` when the card was answered meanwhile)."""
+        return await asyncio.to_thread(self._finish_sync, jid, owner, state, "")
 
     async def cancel(self, jid: str) -> bool:
         """Cancel a job that has not finished. False when there is none."""

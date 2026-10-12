@@ -1,0 +1,124 @@
+"""The helper's result goes to the AI (docs/plan-outside-helper.md §3.2, P3).
+
+What the helper fetched is saved and sent exactly as a person's paste is — the
+same code (`outside_lookup_routes`) writes `lookups/` and sends the message that
+answers the card — so the AI reads one shape whichever way the page arrived.
+And the links in anything a lookup brought back are remembered for the chat, so
+a later open-URL card for one of them needs no nod (D12).
+"""
+
+from __future__ import annotations
+
+from tests.api.test_outside_answers import _answer, _answers, _read
+from tests.api.test_outside_jobs import _beat, _claim, _hand, _state
+
+PAGE = "# Results\n\n- [pandas 2.0 whatsnew](https://pandas.example/whatsnew#top)\n- plain text"
+
+
+def _result(client, jid, **body):
+    data = {
+        "title": "Google 搜尋",
+        "url": "https://www.google.com/search?q=pandas",
+        "markdown": PAGE,
+        "date": "2026-10-12",
+        **body,
+    }
+    return client.post(f"/outside-helper/jobs/{jid}/result", json=data)
+
+
+def _taken(client, iid):
+    _beat(client)
+    assert _hand(client, iid).status_code == 201
+    return _claim(client).json()["id"]
+
+
+def test_what_the_helper_fetched_is_saved_and_answers_the_card():
+    from tests.api.test_outside_answers import _asked
+
+    client, spec, iid = _asked()
+    jid = _taken(client, iid)
+
+    r = _result(client, jid)
+
+    assert r.status_code == 200, r.text
+    path = r.json()["path"]
+    assert path.startswith("lookups/2026-10-12-") and path.endswith(".md")
+    saved = _read(client, iid, path)
+    assert "外網小幫手" in saved  # who fetched it
+    assert "https://www.google.com/search?q=pandas" in saved  # where from
+    assert "[pandas 2.0 whatsnew](https://pandas.example/whatsnew#top)" in saved
+    [answer] = _answers(spec)
+    assert answer.content.startswith("我在外面查了:pandas 2.0 新功能")
+    assert path in answer.content
+    assert _state(client, iid)["state"] == "done"
+
+
+# The same shape as a hand-pasted answer: the same function writes both.
+def test_a_helper_answer_reads_like_a_pasted_one():
+    from tests.api.test_outside_answers import _asked
+
+    by_hand, hand_spec, hand_iid = _asked()
+    assert _answer(by_hand, hand_iid, content=PAGE, date="2026-10-12").status_code == 200
+    by_helper, helper_spec, helper_iid = _asked()
+    _result(by_helper, _taken(by_helper, helper_iid))
+
+    [pasted] = _answers(hand_spec)
+    [fetched] = _answers(helper_spec)
+    assert pasted.content == fetched.content
+
+
+# The message says what was actually searched — the query as the person
+# edited it before 「查」 — as a hand-pasted answer does (D8).
+def test_the_answer_names_the_query_the_person_edited():
+    from tests.api.test_outside_answers import _asked
+
+    client, spec, iid = _asked()
+    _beat(client)
+    _hand(client, iid, query="pandas 3 roadmap")
+    jid = _claim(client).json()["id"]
+
+    _result(client, jid)
+
+    [answer] = _answers(spec)
+    assert answer.content.startswith("我在外面查了:pandas 3 roadmap")
+
+
+def test_a_helper_cannot_answer_with_a_job_that_is_not_its_own():
+    from tests.api.test_outside_answers import _asked
+
+    holder = {"id": "u"}
+    client, spec, iid = _asked(holder=holder)
+    jid = _taken(client, iid)
+
+    holder["id"] = "someone-else"
+    assert _result(client, jid).status_code == 404
+    holder["id"] = "u"
+    assert _answers(spec) == []
+    assert _state(client, iid)["state"] == "claimed"
+
+
+def test_a_job_not_taken_cannot_be_answered():
+    from tests.api.test_outside_answers import _asked
+
+    client, spec, iid = _asked()
+    _beat(client)
+    jid = _hand(client, iid).json()["id"]
+
+    assert _result(client, jid).status_code == 404
+    assert _answers(spec) == []
+
+
+# Someone answered the card by hand while the helper was fetching: theirs
+# stands, the helper's is refused, and the job does not hang.
+def test_a_card_answered_meanwhile_refuses_the_helpers_result():
+    from tests.api.test_outside_answers import _asked
+
+    client, spec, iid = _asked()
+    jid = _taken(client, iid)
+    assert _answer(client, iid, kind="not_found").status_code == 200
+
+    r = _result(client, jid)
+
+    assert r.status_code == 409
+    assert len(_answers(spec)) == 1
+    assert _state(client, iid)["state"] == "cancelled"

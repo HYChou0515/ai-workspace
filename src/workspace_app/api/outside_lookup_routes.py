@@ -32,7 +32,7 @@ import asyncio
 import contextlib
 import logging
 import re
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from datetime import UTC, datetime
 from pathlib import PurePosixPath
 from typing import Annotated, Literal
@@ -103,6 +103,22 @@ class OutsideAnswerOut(BaseModel):
     attachments: list[str]
 
 
+#: Answers a card: what the routes below call, and what the outside helper's
+#: result route calls (docs/plan-outside-helper.md P3) — one function, so a page
+#: the helper fetched is saved and sent exactly as a person's paste is.
+Deliver = Callable[
+    [
+        Request,
+        str,
+        str,
+        Callable[[], tuple[str, Conversation]],
+        Callable[[str, str], str],
+        "AnswerForm",
+    ],
+    Awaitable[OutsideAnswerOut],
+]
+
+
 def register_outside_lookup_routes(
     app: FastAPI | APIRouter,
     *,
@@ -112,14 +128,15 @@ def register_outside_lookup_routes(
     turn_engine: ChatTurnEngine,
     get_user_id: Callable[[], str],
     max_file_size: int,
-) -> None:
+    on_answered: Callable[[str, str, str], Awaitable[None]] | None = None,
+) -> Deliver:
     async def answer(
         request: Request,
         slug: str,
         item_id: str,
         conversation: Callable[[], tuple[str, Conversation]],
         engine_key: Callable[[str, str], str],
-        form: _Form,
+        form: AnswerForm,
     ) -> OutsideAnswerOut:
         investigation_id = locator.require_access(slug, item_id, "converse")
         async with card_lock((investigation_id, form.tool_call_id)):
@@ -133,7 +150,7 @@ def register_outside_lookup_routes(
         investigation_id: str,
         conversation: Callable[[], tuple[str, Conversation]],
         engine_key: Callable[[str, str], str],
-        form: _Form,
+        form: AnswerForm,
     ) -> OutsideAnswerOut:
         _rid, conv = conversation()
         card = _open_card(conv, form.tool_call_id)
@@ -143,12 +160,15 @@ def register_outside_lookup_routes(
         written: list[str] = []
         saved: str | None = None
         attached: list[str] = []
+        body = ""
         if form.kind == "not_found":
             text = f"沒有查到／不查了:{searched}" + (
                 f"\n原因:{form.reason.strip()}" if form.reason.strip() else ""
             )
         else:
-            body = (await _read_text(form.content, max_file_size)).strip()
+            body = (
+                form.text if form.content is None else await _read_text(form.content, max_file_size)
+            ).strip()
             if not body and not form.attachments:
                 raise HTTPException(status_code=422, detail="nothing to send — paste or attach")
             may_add = _may(locator, slug, investigation_id)
@@ -191,6 +211,14 @@ def register_outside_lookup_routes(
         # A cancelled request (`CancelledError` is not an `Exception`) keeps its
         # files: once shielded, the send carries on and persists the message —
         # the window before that is in the module doc.
+        if on_answered is not None and body:
+            # docs/plan-outside-helper.md D12: the links this answer brought back.
+            # Best effort — the answer is already sent; failing here only means
+            # a later card for one of these links asks for the nod.
+            try:
+                await on_answered(investigation_id, rid, body)
+            except Exception:  # noqa: BLE001 — logged; the answer stands
+                logger.warning("outside lookup: could not remember links", exc_info=True)
         who = get_user_id()
         for path in written:
             turn_engine.publish(
@@ -220,8 +248,17 @@ def register_outside_lookup_routes(
             lambda: locator.conversation_for(item_id),
             # The default chat keys on the ITEM id, like its send route.
             lambda iid, _rid: iid,
-            _Form(
-                tool_call_id, kind, content, query, source_url, reason, target, date, attachments
+            AnswerForm(
+                tool_call_id,
+                kind,
+                "",
+                query,
+                source_url,
+                reason,
+                target,
+                date,
+                attachments,
+                content=content,
             ),
         )
 
@@ -250,32 +287,52 @@ def register_outside_lookup_routes(
             item_id,
             lambda: locator.require_chat(slug, item_id, chat_id),
             locator.engine_key,
-            _Form(
-                tool_call_id, kind, content, query, source_url, reason, target, date, attachments
+            AnswerForm(
+                tool_call_id,
+                kind,
+                "",
+                query,
+                source_url,
+                reason,
+                target,
+                date,
+                attachments,
+                content=content,
             ),
         )
 
+    return answer
 
-class _Form:
-    """The answer as posted. `content` — the pasted text — is a FILE part, not
-    a field: Starlette caps a plain field at 1 MiB, and one pasted page in CJK
-    (three bytes a character) passes that."""
+
+class AnswerForm:
+    """An answer to a card. From the card it is posted as a form whose
+    pasted text is a FILE part, not a field (Starlette caps a plain field at
+    1 MiB, and one pasted page in CJK — three bytes a character — passes that);
+    the routes pass that part as `content`. The outside helper passes its page
+    as `text` (`by_helper`)."""
 
     def __init__(
         self,
         tool_call_id: str,
         kind: str,
-        content: UploadFile | None,
+        text: str,
         query: str,
         source_url: str,
         reason: str,
         target: str,
         date: str,
         attachments: list[UploadFile],
+        *,
+        content: UploadFile | None = None,
+        by_helper: bool = False,
     ) -> None:
         self.tool_call_id = tool_call_id
         self.kind = kind
+        # The card posts its text as an unread file part (`content`), read only
+        # after the access check — as before; the helper passes `text`.
+        self.text = text
         self.content = content
+        self.by_helper = by_helper
         self.query = query
         self.source_url = source_url.strip()
         self.reason = reason
@@ -366,7 +423,7 @@ def _stem(subject: str) -> str:
     return slug or "lookup"
 
 
-def _document(card: dict, searched: str, body: str, form: _Form, who: str) -> str:
+def _document(card: dict, searched: str, body: str, form: AnswerForm, who: str) -> str:
     asked = card.get("query") or card.get("url") or ""
     lines = [f"# 外部查詢:{searched}", "", f"- 為什麼:{card['why']}"]
     if "query" in card:
@@ -379,6 +436,8 @@ def _document(card: dict, searched: str, body: str, form: _Form, who: str) -> st
         lines.append(f"- 用:{form.target}")
     if form.source_url:
         lines.append(f"- 來源:{form.source_url}")
+    if form.by_helper:
+        lines.append("- 由外網小幫手抓取")
     lines += [f"- 查的人:{who}", f"- 時間:{datetime.now(UTC).isoformat(timespec='seconds')}"]
     return "\n".join([*lines, "", "---", "", body, ""])
 
@@ -460,4 +519,4 @@ def _message(subject: str, body: str, path: str | None, attached: list[str]) -> 
     return "\n".join(lines)
 
 
-__all__ = ["OutsideAnswerOut", "register_outside_lookup_routes"]
+__all__ = ["AnswerForm", "Deliver", "OutsideAnswerOut", "register_outside_lookup_routes"]
