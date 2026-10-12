@@ -39,6 +39,7 @@ from pydantic import BaseModel
 from specstar import QB, SpecStar
 from specstar.types import ResourceIDNotFoundError
 
+from ..acting_user import acting_as
 from ..files import WorkspaceFiles
 from ..files.media_type import media_type_for
 from ..filestore.protocol import FileNotFound
@@ -204,6 +205,11 @@ def register_wui_pass(spec: SpecStar) -> None:
         spec.add_model(WuiPass, indexed_fields=["user", "item_id", "folder", "expires_at"])
 
 
+#: Who looks a pass up: no one in particular — the content request that
+#: presents it carries no cookie, and the pass row has no owner to check.
+_PASS_DESK = "wui-pass-desk"
+
+
 class WuiPasses:
     """Mint and look up passes."""
 
@@ -258,8 +264,11 @@ class WuiPasses:
         if held is not None and now - held[1] < _HOLD_S:
             data = held[0]
         else:
+            # Looked up as itself: a content request carries no cookie, and the
+            # pass, not the asker, is what is being identified here.
             try:
-                found = self._rm().get(token).data
+                with acting_as(_PASS_DESK):
+                    found = self._rm().get(token).data
             except ResourceIDNotFoundError:
                 return None
             assert isinstance(found, WuiPass)  # narrow for ty (coverage-clean)
@@ -411,7 +420,13 @@ def register_wui_content_routes(
             return PlainTextResponse(
                 "This page's link has expired. Open the page again.", status_code=404
             )
-        locator.require_access(grant.slug, grant.item_id, "read_content", user=grant.user)
+        # The frame sends no cookie: from here the request acts as the pass's
+        # holder — whose read access is checked first, and again every request.
+        with acting_as(grant.user):
+            locator.require_access(grant.slug, grant.item_id, "read_content", user=grant.user)
+            return await _serve(grant, path, request)
+
+    async def _serve(grant: WuiPass, path: str, request: Request) -> Response:
         if path == "__wui/ping":
             if runtime() is None:
                 return PlainTextResponse("no runtime", status_code=503, headers=_headers())
