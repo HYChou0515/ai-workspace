@@ -277,9 +277,16 @@ by `classify_error` — on litellm 1.85.1:
 | 400 bad request | bad_request | bad_request | ✓ |
 | 400 context too long | context_overflow | context_overflow | ✓ |
 | no response | timeout | timeout | ✓ |
-| stream stalls mid-answer | provider_error | provider_error | **timeout** |
+| stream stalls mid-answer | provider_error | provider_error | timeout — see note |
 | stream drops mid-answer | **ends normally, text truncated** | provider_error | **connection** |
 | nothing listening | provider_error | provider_error | **connection** |
+
+Note on the stall row: this table calls litellm alone. Through the runner, a
+stalled or silent stream is cut first by `DeadlineModel` (`stream_deadlines`,
+always set in `factories.py` from `failover.total_deadline_s` /
+`idle_timeout_s`), which raises `StreamStalled` / `TtftTimeout` — already named
+`timeout` and re-sent. Measured by the D13 matrix test, which goes through the
+runner: both stall rows passed before any fix.
 
 Two defects, in two layers:
 
@@ -332,10 +339,9 @@ litellm against the stand-in, p95 latency; N=200 was run twice, the others once)
 | 200 | 2.38–2.44 s | 4.04–4.05 s |
 
 Up to 100 concurrent streams per pod per endpoint the two are within 0.1 s;
-beyond that httpx queues on its 100-connection pool. **Assumption — the user
-asked for this plan on the condition that it holds (2026-10-12), not yet
-confirmed: no single pod runs more than 100 model calls to one endpoint at
-once.** If that stops holding, the symptom is p95 latency rising with load.
+beyond that httpx queues on its 100-connection pool. **Confirmed by the user
+(2026-10-12): no single pod runs more than 100 model calls to one endpoint at
+once — pods are scaled out before that.** If that stops holding, the symptom is p95 latency rising with load.
 litellm exposes no pool setting (no `httpx.Limits` / `max_connections` in
 `http_handler.py`, `openai/common_utils.py` or `constants.py`); raising it means
 supplying our own client, and `litellm.aclient_session` reaches only the
@@ -345,8 +351,8 @@ supplying our own client, and `litellm.aclient_session` reaches only the
 
 | # | Decision | Source |
 |---|---|---|
-| D11 | Agent turns use litellm's httpx transport: `litellm.disable_aiohttp_transport = True`, set where `LitellmAgentRunner` is built — the only async litellm caller. Not a config knob: the default must not truncate answers. | proposed — rests on the ≤100 assumption above |
-| D12 | `classify_error` looks for connection / timeout evidence anywhere in the chain (httpx `RemoteProtocolError` / `ConnectError` / `ReadTimeout`, litellm `APIConnectionError` / `Timeout`, a "connect" refusal) BEFORE reading a status code, so a mid-stream drop and a refused connection are `connection` and a stalled stream is `timeout`. | proposed |
+| D11 | Agent turns use litellm's httpx transport: `litellm.disable_aiohttp_transport = True`, set where `LitellmAgentRunner` is built — the only async litellm caller. Not a config knob: the default must not truncate answers. | user (2026-10-12), on the ≤100 condition above |
+| D12 | `classify_error` looks for the network stack's own error anywhere in the chain — `httpx.TransportError` (which covers `RemoteProtocolError`, `ConnectError`, `ReadTimeout`; litellm's aiohttp path maps to the same types) or Python's `TimeoutError` / `ConnectionError` — BEFORE reading a status code: a timeout among them is `timeout`, otherwise `connection`. litellm's own `APIConnectionError` is NOT evidence (it also wraps real 429s). A response the server did send ends in `httpx.HTTPStatusError`, which is not a transport error, so a real 429 / 503 is unaffected. Evidence, the chains on the httpx transport: drop `MidStreamFallbackError(500) ← httpx.RemoteProtocolError`; refused `InternalServerError(500) ← … ← httpx.ConnectError ← ConnectionRefusedError`; 429 `RateLimitError(429) ← … ← httpx.HTTPStatusError`; 503 `ServiceUnavailableError(503) ← … ← httpx.HTTPStatusError`. | proposed |
 | D13 | The failure-shape matrix becomes a test: an in-process HTTP stand-in on a free port, real `litellm.acompletion` through the same `CallRetryModel` path a turn takes, one case per row above, asserting the kind AND whether the call was re-sent. It is the gate this feature was missing; a litellm upgrade or transport change that alters a shape reddens it. | proposed |
 | D14 | Amends **D9** (proposed): the retry status names the failure instead of always saying 「連線不穩」 — it reuses the D5 "what happened" sentence of that kind, then 「正在重試（第 N 次）…」 (e.g. 「模型服務本身出錯。正在重試（第 1 次）…」). NN/g: an error message must precisely describe the exact problem; a generic one gives no context ([Error-Message Guidelines](https://www.nngroup.com/articles/error-message-guidelines/), [Scoring Rubric](https://www.nngroup.com/articles/error-messages-scoring-rubric/)). Material 3 governs the indicator, not the words ([Progress indicators](https://m3.material.io/components/progress-indicators/overview)). One sentence per kind, shared with the failure copy, so the two cannot drift. | user (2026-10-12) |
 
