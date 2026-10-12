@@ -2542,6 +2542,17 @@ def create_app(
         max_file_size=max_file_size,
     )
 
+    # docs/plan-outside-helper.md: the person's own helper takes the card's
+    # lookup instead of the person. Registered here, post-`spec.apply`, so the
+    # job model gets no CRUD routes (like _SandboxAddress).
+    from .outside_job_routes import register_outside_job_routes
+    from .outside_jobs import OutsideJobStore, register_outside_jobs
+
+    register_outside_jobs(spec)
+    outside_jobs = OutsideJobStore(spec)
+    app.state.outside_jobs = outside_jobs
+    register_outside_job_routes(api, locator=locator, store=outside_jobs, get_user_id=get_user_id)
+
     # ---- Files API (plan-backend §3.8) ----
 
     register_item_routes(
