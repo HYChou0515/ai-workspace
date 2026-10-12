@@ -72,6 +72,16 @@ class _SettingsKey(Struct):
     by: str
 
 
+class _SettingsAppliedKey(Struct):
+    """A key as the last Apply put it in force. The key the page sets is
+    staged (`_SettingsKey`) until then (M20) — a process built from the staged
+    value would run a key nobody applied (review r1)."""
+
+    path: str
+    value: str
+    rev: str
+
+
 class Applied(Struct, frozen=True):
     """A version as the history shows it — never a key's value."""
 
@@ -85,7 +95,13 @@ class Applied(Struct, frozen=True):
 
 def register_settings_models(spec: SpecStar) -> None:
     """Idempotently register the models, post-`spec.apply` (no CRUD routes)."""
-    for model in (_SettingsDraft, _SettingsVersion, _SettingsCurrent, _SettingsKey):
+    for model in (
+        _SettingsDraft,
+        _SettingsVersion,
+        _SettingsCurrent,
+        _SettingsKey,
+        _SettingsAppliedKey,
+    ):
         with contextlib.suppress(ValueError):
             spec.add_model(model)
 
@@ -157,8 +173,7 @@ class SettingsStore:
         Validation is the caller's (P3): this only records."""
         current = self._get(_SettingsCurrent, _CURRENT_ID)
         revs = self._key_revs()
-        before = {} if current is None else current.key_revs
-        changed = sorted(p for p in set(revs) | set(before) if revs.get(p) != before.get(p))
+        changed = self.pending_keys()
         event = _SettingsVersion(
             version=_content_id(patch, revs),
             patch=patch,
@@ -169,12 +184,24 @@ class SettingsStore:
         )
         event_id = f"{time.time_ns():020d}-{uuid.uuid4().hex[:8]}"  # sorts by time
         self._put(_SettingsVersion, event_id, event)
+        # Keys before the pointer: a process that builds in between sees the old
+        # version with the new keys and rebuilds once the pointer moves. The
+        # other order could leave it on the old keys under the new version.
+        self._apply_keys()
         self._put(
             _SettingsCurrent,
             _CURRENT_ID,
             _SettingsCurrent(version=event.version, patch=patch, key_revs=revs),
         )
         return _applied(event)
+
+    def applied(self, version: str) -> Applied | None:
+        """The newest Apply of `version` — any one ever made, not only the
+        newest 50 `history` lists (rollback reaches all of them)."""
+        events = [e for e in self._list_data(_SettingsVersion) if e.version == version]
+        if not events:
+            return None
+        return _applied(max(events, key=lambda event: event.applied_at))
 
     def history(self, limit: int = 50) -> list[Applied]:
         """Applies, newest first."""
@@ -197,15 +224,45 @@ class SettingsStore:
         """Which keys are set, each shown by its last four characters only."""
         return {key.path: "…" + key.value[-4:] for key in self._keys()}
 
+    def pending_keys(self) -> list[str]:
+        """Keys set or cleared since the last Apply — in force only after the
+        next one (M20), so the page can say what an Apply would switch."""
+        current = self._get(_SettingsCurrent, _CURRENT_ID)
+        before = {} if current is None else current.key_revs
+        now = self._key_revs()
+        return sorted(p for p in set(now) | set(before) if now.get(p) != before.get(p))
+
     def key_values(self) -> dict[str, str]:
-        """The values themselves — for building settings, never for a route."""
+        """The staged values — what the next Apply puts in force; for checking a
+        draft and testing a connection, never for a route's answer."""
         return {key.path: key.value for key in self._keys()}
+
+    def applied_key_values(self) -> dict[str, str]:
+        """The values the last Apply put in force — what a process builds with."""
+        return {key.path: key.value for key in self._list_data(_SettingsAppliedKey)}
+
+    def _apply_keys(self) -> None:
+        staged = {key.path: key for key in self._keys()}
+        rm = self._spec.get_resource_manager(_SettingsAppliedKey)
+        for applied in self._list_data(_SettingsAppliedKey):
+            if applied.path not in staged:
+                with contextlib.suppress(ResourceIDNotFoundError, ResourceIsDeletedError):
+                    rm.delete(_key_id(applied.path))
+        for path, key in staged.items():
+            self._put(
+                _SettingsAppliedKey,
+                _key_id(path),
+                _SettingsAppliedKey(path=path, value=key.value, rev=key.rev),
+            )
 
     def _key_revs(self) -> dict[str, str]:
         return {key.path: key.rev for key in self._keys()}
 
     def _keys(self) -> list[_SettingsKey]:
-        return [rev.data for rev in self._list(_SettingsKey)]
+        return self._list_data(_SettingsKey)
+
+    def _list_data(self, model: type[Struct]) -> list[Any]:
+        return [rev.data for rev in self._list(model)]
 
     def _list(self, model: type[Struct]) -> list[Any]:
         # Soft-deleted rows come back from list_resources: without the filter a

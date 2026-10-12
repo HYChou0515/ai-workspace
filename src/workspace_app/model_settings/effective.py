@@ -31,16 +31,32 @@ from ..config.schema import Settings
 from ..workflow.discovery import validate_workflow_profiles
 
 
+def key_segments(path: str) -> list[str]:
+    """A key's dotted path as its parts. A preset name may hold a dot
+    (`qwen2.5`), so a preset's key is split around the name: what follows it is
+    `llm.<leaf>` or `env.<VAR>`, and neither part has a dot."""
+    parts = path.split(".")
+    head = ["config", "agents", "presets"]
+    if parts[:3] == head and len(parts) >= 6 and parts[-2] in ("llm", "env"):
+        return [*head, ".".join(parts[3:-2]), *parts[-2:]]
+    return parts
+
+
 def with_keys(document: dict[str, Any], keys: Mapping[str, str]) -> dict[str, Any]:
-    """`document` with each key's value written at its dotted path — a copy;
-    keys live apart from the patch so history never holds them (M6)."""
+    """`document` with each key's value written at its path — a copy; keys live
+    apart from the patch so history never holds them (M6). A key whose place
+    the document hides (`null`, M12) is left out: nothing reads it."""
     out = copy.deepcopy(document)
     for path, value in keys.items():
-        *parents, leaf = path.split(".")
-        node = out
+        *parents, leaf = key_segments(path)
+        node: Any = out
         for part in parents:
+            if part in node and not isinstance(node[part], dict):
+                node = None
+                break
             node = node.setdefault(part, {})
-        node[leaf] = value
+        if node is not None:
+            node[leaf] = value
     return out
 
 
@@ -116,6 +132,12 @@ def _roles_switched(settings: Settings, default: Settings) -> list[str]:
     ]
 
 
+def secrets_written(document: dict[str, Any]) -> list[str]:
+    """Every secret typed into the document's text (M6) — refused wherever the
+    text is stored or applied; a secret is set as a key instead."""
+    return _secrets_written(document.get("config") or {})
+
+
 def _secrets_written(patch: Any, path: str = "") -> list[str]:
     """A secret typed into the text would be stored in the patch — shown in
     the diff, kept in history (M6). It is set as a key instead."""
@@ -130,20 +152,74 @@ def _secrets_written(patch: Any, path: str = "") -> list[str]:
     return []
 
 
+def _nulls(patch: Any, path: str) -> list[str]:
+    if patch is None:
+        return [
+            f"{path}: null hides a preset and means nothing here; to return a "
+            "value to its default, remove it from the patch"
+        ]
+    if isinstance(patch, dict):
+        return [p for key, value in patch.items() for p in _nulls(value, f"{path}.{key}")]
+    return []
+
+
+_NO_SUCH_APP = "no such App — an App is a folder shipped with the server"
+
+
+def _apps_part_problems(document: dict[str, Any]) -> list[str]:
+    """What the apps / profiles parts cannot mean: an App or a profile that is
+    not shipped (it is a folder beside the server — a patch can change one, not
+    create one, M18), and a null (M19)."""
+    slugs = set(discover_app_slugs())
+    found: list[str] = []
+    for slug, patch in (document.get("apps") or {}).items():
+        if slug not in slugs:
+            found.append(f"apps.{slug}: {_NO_SUCH_APP}")
+        else:
+            found += _nulls(patch, f"apps.{slug}")
+    for slug, profiles in (document.get("profiles") or {}).items():
+        if slug not in slugs:
+            found.append(f"profiles.{slug}: {_NO_SUCH_APP}")
+            continue
+        shipped = set(list_profiles(slug))
+        for name, patch in (profiles or {}).items():
+            if name not in shipped:
+                found.append(
+                    f"profiles.{slug}.{name}: no such profile — a profile is a folder "
+                    f"in apps/{slug}/profiles; add it there"
+                )
+            else:
+                found += _nulls(patch, f"profiles.{slug}.{name}")
+    return found
+
+
+def _config_nulls(patch: Any, parts: tuple[str, ...] = ()) -> list[str]:
+    """Every null in the config part that does not hide a preset (M12, M19) —
+    walked through the whole part, live subtrees included: the scope walk stops
+    at a live key such as `agents` and would never see one inside it."""
+    found: list[str] = []
+    for key, value in patch.items() if isinstance(patch, dict) else ():
+        here = (*parts, key)
+        if value is None:
+            # by parts, not by counting dots: a preset name may hold one (`qwen2.5`)
+            if not (here[:2] == ("agents", "presets") and len(here) == 3):
+                found.append(
+                    f"config.{'.'.join(here)}: null only hides a preset; to return it "
+                    "to its config.yaml value, remove it from the patch"
+                )
+        else:
+            found += _config_nulls(value, here)
+    return found
+
+
 def _outside_live(patch: Any, path: str = "") -> list[str]:
-    """Every path in a config patch that is not live, or that is `null`
-    somewhere other than a preset."""
+    """Every path in a config patch that is not live."""
     found: list[str] = []
     for key, value in patch.items() if isinstance(patch, dict) else ():
         here = f"{path}.{key}" if path else key
         if value is None:
-            hides_a_preset = here.startswith("agents.presets.") and here.count(".") == 2
-            if not hides_a_preset:
-                found.append(
-                    f"config.{here}: null only hides a preset; to return it to its "
-                    "config.yaml value, remove it from the patch"
-                )
-        elif any(here == live or here.startswith(live + ".") for live in LIVE_CONFIG):
+            continue  # `_config_nulls` judges every null, inside live parts too
+        if any(here == live or here.startswith(live + ".") for live in LIVE_CONFIG):
             continue
         elif isinstance(value, dict) and any(live.startswith(here + ".") for live in LIVE_CONFIG):
             found += _outside_live(value, here)
@@ -173,9 +249,13 @@ def problems(
 
     `keys` are checked with the document as `LiveSettings` builds it, but only
     the document's own text is checked for a secret typed into it."""
-    written = _secrets_written(document.get("config") or {})
+    written = secrets_written(document) + _apps_part_problems(document)
     document = with_keys(document, keys or {})
-    outside = written + _outside_live(document.get("config") or {})
+    outside = (
+        written
+        + _config_nulls(document.get("config") or {})
+        + _outside_live(document.get("config") or {})
+    )
     if outside:
         return outside
     try:

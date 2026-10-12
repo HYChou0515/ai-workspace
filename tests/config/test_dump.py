@@ -219,3 +219,9 @@ def test_a_tuple_field_the_operator_set_is_not_labelled_default(tmp_path: Path):
     plain, plain_prov = _resolved(tmp_path, "server: { port: 9090 }\n")
     plain_out = render(plain, plain_prov, reveal_secrets=True)
     assert "subagent_models: []  # ← default" in plain_out
+
+
+def test_a_dotted_preset_names_env_values_are_secret():
+    from workspace_app.config.dump import is_secret
+
+    assert is_secret("agents.presets.qwen2.5.env.HF_HOME")

@@ -27,6 +27,8 @@ export type ModelSettingsPage = {
   version: string | null;
   /** Setting path -> "…" + last four characters. Never a value. */
   keys: Record<string, string>;
+  /** Keys set or cleared since the last Apply — what the next Apply switches. */
+  pending_keys: string[];
 };
 
 export type Applied = {

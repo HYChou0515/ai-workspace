@@ -181,7 +181,8 @@ class LiveSettings:
 
     def _build(self, version: str | None) -> Snapshot:
         assert self._store is not None
-        document = with_keys(self._store.published_patch(), self._store.key_values())
+        # The keys the last Apply put in force — never the staged ones (M20).
+        document = with_keys(self._store.published_patch(), self._store.applied_key_values())
         settings = effective_settings(document, config_path=self._config_path, env=self._env)
         snapshot = Snapshot(version=version, document=document, settings=settings)
         if self._on_build is not None:

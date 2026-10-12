@@ -125,7 +125,8 @@ def is_secret(path: str) -> bool:
     if leaf in ("api_key", "pg_dsn") or leaf.lower().endswith("_token"):
         return True
     parts = path.split(".")
-    if len(parts) >= 5 and parts[:2] == ["agents", "presets"] and parts[3] == "env":
+    # `parts[-2]`, not `parts[3]`: a preset name may itself hold a dot (`qwen2.5`).
+    if len(parts) >= 5 and parts[:2] == ["agents", "presets"] and parts[-2] == "env":
         return True
     return path.endswith("rabbitmq.url")
 

@@ -1,5 +1,5 @@
 """docs/plan-model-settings.md P5 — every reader of an app.json or a profile sees
-the published patch, through the two loaders all 32 of them call, not by each
+the published patch, through the two loaders every one of them calls, not by each
 learning about the page."""
 
 from __future__ import annotations

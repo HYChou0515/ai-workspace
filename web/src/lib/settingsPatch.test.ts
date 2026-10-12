@@ -1,6 +1,42 @@
 import { describe, expect, it } from "vitest";
 
-import { diffPatches, flattenPatch, parsePatch, withoutPath } from "./settingsPatch";
+import { diffPatches, flattenPatch, flattenParts, lineOfPath, parsePatch, withoutPath } from "./settingsPatch";
+
+describe("lineOfPath", () => {
+  const text = [
+    "{", //                                            1
+    '  "config": {', //                                2
+    '    "agents": { "presets": { "a": {', //          3
+    '      "model": "m",', //                           4
+    '      "note": "the \\"config\\" word: {",', //     5
+    '      "fallbacks": ["x9"]', //                     6
+    "    } } }", //                                    7
+    "  },", //                                         8
+    '  "apps": { "playground": { "agent": {} } }', //  9
+    "}",
+  ].join("\n");
+
+  it("finds the line a dotted path's key is written on", () => {
+    expect(lineOfPath(text, "config.agents.presets.a.fallbacks")).toBe(6);
+    expect(lineOfPath(text, "config.agents.presets.a.model")).toBe(4);
+    expect(lineOfPath(text, "apps.playground")).toBe(9);
+  });
+
+  it("falls back to the deepest part of the path the text has", () => {
+    // a problem can name a key the patch does not set (the effective value's)
+    expect(lineOfPath(text, "apps.playground.agent.picker")).toBe(9);
+    expect(lineOfPath(text, "config.agents.presets.a.llm.base_url")).toBe(3);
+  });
+
+  it("is not fooled by a key's name inside a string", () => {
+    expect(lineOfPath('{"note": "\\"config\\": x"}', "config")).toBeNull();
+  });
+
+  it("answers null for a path the text does not have, or text that is not JSON", () => {
+    expect(lineOfPath(text, "profiles.x")).toBeNull();
+    expect(lineOfPath("{", "config")).toBeNull();
+  });
+});
 
 describe("flattenPatch", () => {
   it("lists every changed value by its dotted path; a list or null is one value", () => {
@@ -38,7 +74,7 @@ describe("withoutPath", () => {
   it("returns one value to its default and drops the parents it emptied", () => {
     const patch = { config: { agents: { presets: { a: { model: "m" } } }, llm: { base_url: "x" } } };
 
-    expect(withoutPath(patch, "config.agents.presets.a.model")).toEqual({
+    expect(withoutPath(patch, ["config", "agents", "presets", "a", "model"])).toEqual({
       config: { llm: { base_url: "x" } },
     });
     expect(patch.config.agents.presets.a.model).toBe("m"); // a copy
@@ -54,5 +90,22 @@ describe("parsePatch", () => {
     const broken = parsePatch("{");
     expect(broken.ok).toBe(false);
     expect(parsePatch("[1]")).toEqual({ ok: false, error: "not-an-object" });
+  });
+});
+
+
+describe("a preset whose name holds a dot", () => {
+  // review r1: paths joined and split on "." made `qwen2.5` read as `qwen2` -> `5`,
+  // so its reset did nothing at all.
+  const patch = { config: { agents: { presets: { "qwen2.5": { model: "m" } } } } };
+
+  it("keeps the name whole in each value's parts", () => {
+    expect(flattenParts(patch)).toEqual([
+      { path: "config.agents.presets.qwen2.5.model", parts: ["config", "agents", "presets", "qwen2.5", "model"], value: "m" },
+    ]);
+  });
+
+  it("resets that value", () => {
+    expect(withoutPath(patch, ["config", "agents", "presets", "qwen2.5", "model"])).toEqual({});
   });
 });

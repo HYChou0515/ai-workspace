@@ -192,3 +192,72 @@ def test_the_same_secret_set_as_a_key_is_fine(config):
     keys = {"config.agents.presets.kb-default.llm.api_key": "sk-key"}
 
     assert problems({}, config_path=config, env={}, keys=keys) == []
+
+
+def test_a_key_under_a_hidden_preset_is_left_out(config):
+    # review r1: hiding a preset that has a key set raised AttributeError in
+    # with_keys — a 500 on check / save / Apply until the key was cleared.
+    keys = {"config.agents.presets.openai-mini.llm.api_key": "sk-1"}
+    hidden = {"config": {"agents": {"presets": {"openai-mini": None}}}}
+
+    assert with_keys(hidden, keys) == hidden
+    # A refusal, for the reason a person can act on: a picker still offers it.
+    found = problems(hidden, config_path=config, env={}, keys=keys)
+    assert found and all("is not in agents.presets" in p for p in found), found
+
+
+def test_a_preset_named_with_a_dot_takes_its_key_and_can_be_hidden(config):
+    # Model-style names (`qwen2.5`) are allowed by the schema; a path split on
+    # every dot wrote the key under a preset `qwen2` and refused the hide.
+    add = {"config": {"agents": {"presets": {"qwen2.5": {"model": "ollama_chat/qwen2.5"}}}}}
+    keys = {
+        "config.agents.presets.qwen2.5.llm.api_key": "sk-q",
+        "config.agents.presets.qwen2.5.env.HF_HOME": "/x",
+    }
+
+    document = with_keys(add, keys)
+
+    preset = document["config"]["agents"]["presets"]["qwen2.5"]
+    assert preset["llm"]["api_key"] == "sk-q" and preset["env"]["HF_HOME"] == "/x"
+    hide = {"config": {"agents": {"presets": {"qwen2.5": None}}}}
+    assert problems(hide, config_path=config, env={}) == []
+
+
+@pytest.mark.parametrize(
+    ("document", "named"),
+    [
+        # M18, review r1: a profile is a folder in the App; one that exists only
+        # in the patch passed Apply and was never listed or used anywhere
+        ({"profiles": {"playground": {"ghost": {"default_preset": "kb-default"}}}}, "ghost"),
+        ({"apps": {"no-such-app": {"title": "X"}}}, "no-such-app"),
+        # M19, review r1: null under apps / profiles deleted a key the App needs
+        (
+            {"apps": {"playground": {"agent": {"suggestions": None}}}},
+            "apps.playground.agent.suggestions",
+        ),
+        (
+            {"profiles": {"playground": {"default": {"tools": None}}}},
+            "profiles.playground.default.tools",
+        ),
+    ],
+)
+def test_what_the_apps_part_cannot_mean_is_refused(config, document, named):
+    found = problems(document, config_path=config, env={})
+
+    assert any(named in p for p in found), found
+
+
+@pytest.mark.parametrize(
+    "document",
+    [
+        # r1 probe: `agents` is live as a whole, so the scope walk stopped there
+        # and never looked for a null inside it
+        {"config": {"agents": {"presets": {"kb-default": {"model": None}}}}},
+        {"config": {"agents": {"kb_chat": None}}},
+        {"config": {"agents": {"presets": {"qwen2.5": {"model": None}}}}},
+    ],
+)
+def test_a_null_inside_agents_that_hides_no_preset_is_refused(config, document):
+    found = problems(document, config_path=config, env={})
+
+    assert any("null only hides a preset" in p for p in found), found

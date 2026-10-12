@@ -15,6 +15,7 @@ from workspace_app.kb.chunker import FixedTokenChunker
 from workspace_app.kb.embedder import HashEmbedder
 from workspace_app.model_settings.consumers import live_agent_config_catalog
 from workspace_app.model_settings.live import LiveSettings
+from workspace_app.model_settings.store import SettingsStore
 from workspace_app.resources import make_spec
 from workspace_app.resources.kb import EMBED_DIM
 from workspace_app.sandbox.mock import MockSandbox
@@ -46,8 +47,9 @@ class Page:
             clock=self.clock,
         )
         self.user = ROOT
+        self.spec = make_spec()
         app = create_app(
-            spec=make_spec(),
+            spec=self.spec,
             get_user_id=lambda: self.user,
             superusers=frozenset({ROOT}),
             sandbox=MockSandbox(),
@@ -153,6 +155,7 @@ def test_a_key_is_written_never_read_and_in_force_after_apply(page):
     )
     body = page.client.get(BASE).json()
     assert body["keys"] == {API_KEY: "…9876"}
+    assert body["pending_keys"] == [API_KEY]  # waiting for Apply (M20)
     assert "sk-live-9876" not in page.client.get(BASE).text
     page.clock.now += 2
     assert page.live.settings().agents.presets["kb-default"].llm.api_key != "sk-live-9876"
@@ -160,6 +163,7 @@ def test_a_key_is_written_never_read_and_in_force_after_apply(page):
     applied = page.client.post(f"{BASE}/apply").json()
 
     assert applied["keys_changed"] == [API_KEY]
+    assert page.client.get(BASE).json()["pending_keys"] == []
     assert "sk-live-9876" not in page.client.get(f"{BASE}/history").text
     page.clock.now += 2
     assert page.live.settings().agents.presets["kb-default"].llm.api_key == "sk-live-9876"
@@ -196,3 +200,29 @@ def test_test_connection_calls_the_draft_not_what_is_in_force(page, monkeypatch)
         "reply": "openai/kb-2",
         "error": "",
     }
+
+
+def test_a_secret_typed_into_the_draft_is_not_stored(page):
+    # M6, review r1: the refusal was only at Apply, so a typed key was saved in
+    # the draft and handed back by GET to every superuser.
+    typed = {"config": {"agents": {"presets": {"kb-default": {"llm": {"api_key": "sk-typed-1"}}}}}}
+
+    response = page.client.put(f"{BASE}/draft", json={"patch": typed})
+
+    assert response.status_code == 422
+    assert any("api_key" in p for p in response.json()["detail"]["problems"])
+    assert "sk-typed-1" not in page.client.get(BASE).text
+
+
+def test_rollback_reaches_a_version_older_than_the_history_page(page):
+    # review r1: the route looked the version up in `history()` (newest 50).
+    page.client.put(f"{BASE}/draft", json={"patch": KB_2})
+    first = page.client.post(f"{BASE}/apply").json()
+    store = SettingsStore(page.spec)
+    for i in range(51):
+        store.publish({"config": {"llm": {"base_url": f"http://{i}"}}}, by="root")
+
+    response = page.client.post(f"{BASE}/rollback", json={"version": first["version"]})
+
+    assert response.status_code == 200
+    assert page.kb_model() == "openai/kb-2"

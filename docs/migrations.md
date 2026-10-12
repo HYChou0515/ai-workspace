@@ -2137,28 +2137,30 @@ agent 步驟裡 AI 的呼叫、WUI 的工具呼叫、view plugin、圖表重畫�
 **設定** — 沒有新 key，沒有要做的事。**行為改變，沒有開關**：
 
 - 新增只有 superuser 看得到的「模型設定」頁（`/api/admin/model-settings`，其他人一律 404）。頁面改的是
-  preset、每個 App 的 `app.json`、profile、平台自己的模型選擇（`kb.retrieval_llm`、`card_drafter`、`vlm_llm`、
-  `wiki.llm`、`health.judge_llm`、sub-agent 模型）；改動存在資料庫，**蓋過** `config.yaml` / `app.json`。
+  preset、每個 App 的 `app.json`、profile、平台自己的模型選擇（完整清單見 `docs/configuration.md` §1 第四層）；改動存在資料庫，**蓋過** `config.yaml` / `app.json`。
   沒有人按過「套用」時，每個行程跑的就是 `config.yaml` —— 和這一版之前一模一樣。
 - **頁面改過的值，之後在 `config.yaml` 再改不會生效**（頁面的值贏）；要讓 `config.yaml` 的值回來，在頁面上把那個值
   「重設」再套用。頁面沒碰過的值，`config.yaml` 照舊說了算（照舊要重啟）。
   為什麼：頁面只存跟預設不同的部分（JSON Merge Patch），預設仍是部署帶的檔案。
 - 套用後，API 與每個 worker 在**一秒內**改用新設定，不用重啟：每個行程每秒最多讀一次「目前版本」（一筆小資料），
   版本變了才重建；讀不到資料庫或新版本建不起來，就繼續用上一個好的版本並記 log
-  （`model settings: could not read the version` / `does not build`）。正在跑的 job 用舊設定跑完，下一個 job 用新的。
+  （`model settings: could not read the version` / `does not build`）。生效的單位是**一次模型呼叫**：已經送出的呼叫用舊設定跑完，之後的每次呼叫都用新的——一個正在跑的 job（wiki、card-gen）下一步就換，所以同一個 job 可能前後用到兩版。
 - 頁面**不收**只在開機時讀的值：其他 config key、角色的開／關（例如把 `health.judge_llm` 從 null 改成某個 preset）、
   `infer_modules` 的 `enhancements` / `reasoning_effort` / `parallelism` / `collection`、App 的 `resources` / `slug`
-  —— 套用時直接拒絕並說「去改 config.yaml」，不存一個重啟前不生效的值。
+  —— 套用時直接拒絕並說「去改 config.yaml」，不存一個重啟前不生效的值。同樣拒絕：沒有出貨的 App 或 profile
+  （頁面只能改，不能新增；profile 是 App 裡的資料夾）、`apps` / `profiles` 底下的 `null`。
+- 頁面上設定或清除的 API key **按下套用才生效**：在那之前，連新起來的 pod 也照舊用上一次套用的 key。
 - 診斷頁的模型檢查（`/health/checks`）照舊在開機時建好，套用後要重啟才會檢查新模型；它是診斷，不在對話的路徑上。
 
-**資料** — 新增四個 specstar model（`_SettingsDraft` / `_SettingsVersion` / `_SettingsCurrent` / `_SettingsKey`），
+**資料** — 新增五個 specstar model（`_SettingsDraft` / `_SettingsVersion` / `_SettingsCurrent` / `_SettingsKey` /
+`_SettingsAppliedKey`），
 在 `spec.apply` 之後註冊（沒有 CRUD 路由）；沒有要回填、沒有要打的 migrate。**頁面上輸入的 API key 以明碼存在資料庫**
 （和既有的 Private 環境變數一樣），只有 superuser 能寫、任何路由都讀不回來，歷史只記「哪個 key 改了」。
 
 **k8s · CI 側** — 沒有新的 manifest、env、probe 或 JobType；照常重 build、照常部署，**API 與所有 worker 一起換**：
 
-- `blob-gc` worker 以 API 的組合建起（`__main__.build_app`），兩邊都註冊這四個 model。滾動更新途中，新的 API
-  問到舊的 `blob-gc` worker 時，worker 會拒絕那一輪（`blob-gc` job FAILED，log 列出這四個 model 名稱）——這是
+- `blob-gc` worker 以 API 的組合建起（`__main__.build_app`），兩邊都註冊這五個 model。滾動更新途中，新的 API
+  問到舊的 `blob-gc` worker 時，worker 會拒絕那一輪（`blob-gc` job FAILED，log 列出這五個 model 名稱）——這是
   `_check_registry` 該做的事，worker 換完就好；舊的 worker 不會刪任何東西。
 - 還沒換的 worker 不會跟著頁面的套用走（它跑的是開機時的 `config.yaml`）。全部換完之前不要套用。
 

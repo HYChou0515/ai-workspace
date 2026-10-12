@@ -72,3 +72,31 @@ def test_clearing_a_key_removes_it(store):
     store.clear_key("agents.presets.fast.llm.api_key", by="root")
 
     assert store.key_status() == {}
+
+
+def test_a_key_set_or_cleared_since_the_last_apply_is_pending(store):
+    # The page says which key changes are waiting for Apply (M20), or a key-only
+    # change would show "nothing to apply" while Apply would switch the key.
+    path, other = "config.llm.api_key", "config.agents.presets.a.llm.api_key"
+    store.set_key(path, "sk-1", by="root")
+    assert store.pending_keys() == [path]
+
+    store.publish({}, by="root")
+    assert store.pending_keys() == []
+
+    store.set_key(other, "sk-2", by="root")
+    store.clear_key(path, by="root")
+    assert store.pending_keys() == sorted([path, other])
+
+
+def test_any_version_ever_applied_can_be_found(store):
+    # review r1: rollback looked in `history()` (the newest 50), so anything
+    # older answered 404 although it was stored.
+    first = store.publish({"config": {"llm": {"base_url": "http://first"}}}, by="root")
+    for i in range(55):
+        store.publish({"config": {"llm": {"base_url": f"http://{i}"}}}, by="root")
+
+    found = store.applied(first.version)
+
+    assert found is not None and found.patch == first.patch
+    assert store.applied("never") is None

@@ -1,7 +1,7 @@
 """The settings page's patch, as every app.json / profile reader sees it
 (docs/plan-model-settings.md P5).
 
-32 call sites read an App's manifest or a profile through `load_app_manifest` /
+Every reader of an App's manifest or a profile goes through `load_app_manifest` /
 `load_profile`. Rather than teach each of them about the page, the two loaders
 ask this module for the patch — so a reader added tomorrow is covered too. A
 process registers where the published document comes from (`set_source`, at

@@ -21,13 +21,21 @@ vi.mock("../components/MonacoEditor", () => ({
     onChange,
     readOnly,
     ariaLabel,
+    markers,
   }: {
     value: string;
     onChange?: (v: string) => void;
     readOnly?: boolean;
     ariaLabel?: string;
+    markers?: { line: number; message: string }[];
   }) => (
-    <textarea aria-label={ariaLabel} value={value} readOnly={readOnly} onChange={(e) => onChange?.(e.target.value)} />
+    <textarea
+      aria-label={ariaLabel}
+      data-markers={JSON.stringify(markers ?? [])}
+      value={value}
+      readOnly={readOnly}
+      onChange={(e) => onChange?.(e.target.value)}
+    />
   ),
 }));
 
@@ -50,7 +58,15 @@ function applied(version: string, patch: Record<string, unknown>, at = 1): Appli
 }
 
 function fakeClient(page: Partial<PageData> = {}) {
-  let data: PageData = { defaults: DEFAULTS, draft: {}, published: {}, version: null, keys: {}, ...page };
+  let data: PageData = {
+    defaults: DEFAULTS,
+    draft: {},
+    published: {},
+    version: null,
+    keys: {},
+    pending_keys: [],
+    ...page,
+  };
   const client = {
     get: vi.fn(async () => data),
     saveDraft: vi.fn(async (patch: Record<string, unknown>) => {
@@ -161,6 +177,94 @@ describe("ModelSettingsPage", () => {
     expect(client.apply).not.toHaveBeenCalled();
   });
 
+  it("offers Apply only when it would do something, and says why not", async () => {
+    renderWithQuery(<ModelSettingsPage client={fakeClient({ draft: KB_2, published: KB_2, version: "v1v1v1v1" })} />);
+    await waitFor(() => expect(JSON.parse(editor().value)).toEqual(KB_2));
+
+    expect(screen.getByTestId("model-settings-apply")).toBeDisabled();
+    await waitFor(() => expect(screen.getByTestId("model-settings-status")).toHaveTextContent("沒有要套用的改動"));
+    // said once, right above the button — not repeated beside it
+    expect(screen.queryByTestId("model-settings-apply-why")).toBeNull();
+  });
+
+  it("does not offer Apply while the checks name a problem", async () => {
+    const client = fakeClient({ draft: KB_2 });
+    client.check.mockResolvedValue(["config.agents.presets.kb-default.model: nope"]);
+    renderWithQuery(<ModelSettingsPage client={client} />);
+
+    expect(await screen.findByTestId("model-settings-problems")).toBeInTheDocument();
+    expect(screen.getByTestId("model-settings-apply")).toBeDisabled();
+  });
+
+  it("draws each problem on the line it names", async () => {
+    const client = fakeClient({ draft: KB_2 });
+    client.check.mockResolvedValue(["config.agents.presets.kb-default.model: nope"]);
+    renderWithQuery(<ModelSettingsPage client={client} />);
+    await screen.findByTestId("model-settings-problems");
+
+    // line 6 of the pretty-printed draft is `"model": "openai/kb-2"`
+    expect(JSON.parse(editor().getAttribute("data-markers") ?? "[]")).toEqual([
+      { line: 6, message: "config.agents.presets.kb-default.model: nope" },
+    ]);
+  });
+
+  it("applies a key-only change and names the key in the confirmation", async () => {
+    const path = "config.agents.presets.kb-default.llm.api_key";
+    const client = fakeClient({ keys: { [path]: "…4321" }, pending_keys: [path] });
+    renderWithQuery(<ModelSettingsPage client={client} />);
+    await screen.findByRole("textbox", { name: "草稿（JSON）" });
+
+    await waitFor(() => expect(screen.getByTestId("model-settings-status")).toHaveTextContent("1 個金鑰"));
+    fireEvent.click(screen.getByTestId("model-settings-apply"));
+
+    expect(await screen.findByTestId("model-settings-key-diff")).toHaveTextContent(`${path} (…4321)`);
+    fireEvent.click(screen.getByRole("button", { name: "套用" }));
+    await waitFor(() => expect(client.apply).toHaveBeenCalled());
+  });
+
+  it("says when the check itself failed, instead of reporting no problems", async () => {
+    const client = fakeClient({ draft: KB_2 });
+    client.check.mockRejectedValue(new HttpError(500, "check failed: 500"));
+    renderWithQuery(<ModelSettingsPage client={client} />);
+
+    expect(await screen.findByTestId("model-settings-check-failed")).toBeInTheDocument();
+    expect(screen.queryByTestId("model-settings-status")).toBeNull();
+    expect(screen.getByTestId("model-settings-apply")).toBeDisabled();
+  });
+
+  it("shows why an Apply failed even when the server named no problem", async () => {
+    const client = fakeClient({ draft: KB_2 });
+    client.apply.mockRejectedValue(new HttpError(500, "apply failed: 500"));
+    renderWithQuery(<ModelSettingsPage client={client} />);
+    await waitFor(() => expect(screen.getByTestId("model-settings-apply")).toBeEnabled());
+
+    fireEvent.click(screen.getByTestId("model-settings-apply"));
+    fireEvent.click(await screen.findByRole("button", { name: "套用" }));
+
+    expect(await screen.findByTestId("model-settings-problems")).toHaveTextContent("apply failed: 500");
+  });
+
+  it("shows why a save failed", async () => {
+    const client = fakeClient();
+    client.saveDraft.mockRejectedValue(new HttpError(500, "saving the draft failed: 500"));
+    renderWithQuery(<ModelSettingsPage client={client} />);
+    await screen.findByRole("textbox", { name: "草稿（JSON）" });
+
+    type(JSON.stringify(KB_2));
+    fireEvent.click(screen.getByTestId("model-settings-save"));
+
+    expect(await screen.findByTestId("model-settings-save-failed")).toHaveTextContent("saving the draft failed");
+  });
+
+  it("does not offer to test a preset the draft hides", async () => {
+    renderWithQuery(
+      <ModelSettingsPage client={fakeClient({ draft: { config: { agents: { presets: { "openai-mini": null } } } } })} />,
+    );
+    const select = (await screen.findByLabelText("要測試的 preset")) as HTMLSelectElement;
+
+    expect([...select.options].map((o) => o.value)).toEqual(["kb-default"]);
+  });
+
   it("lists a refused Apply's reasons", async () => {
     const client = fakeClient({ draft: KB_2 });
     client.apply.mockRejectedValue(
@@ -184,6 +288,17 @@ describe("ModelSettingsPage", () => {
     expect(changes).toHaveTextContent("預設：ollama_chat/qwen3:14b");
 
     fireEvent.click(screen.getByTestId("model-settings-reset-config.agents.presets.kb-default.model"));
+
+    expect(JSON.parse(editor().value)).toEqual({});
+  });
+
+  it("resets a value of a preset whose name holds a dot", async () => {
+    // review r1: a joined path split back on "." read `qwen2.5` as `qwen2` -> `5`.
+    const dotted = { config: { agents: { presets: { "qwen2.5": { model: "m" } } } } };
+    renderWithQuery(<ModelSettingsPage client={fakeClient({ draft: dotted })} />);
+    await waitFor(() => expect(JSON.parse(editor().value)).toEqual(dotted));
+
+    fireEvent.click(screen.getByTestId("model-settings-reset-config.agents.presets.qwen2.5.model"));
 
     expect(JSON.parse(editor().value)).toEqual({});
   });

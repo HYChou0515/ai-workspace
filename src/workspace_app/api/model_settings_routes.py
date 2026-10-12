@@ -23,7 +23,12 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from ..model_settings.effective import effective_settings, problems, with_keys
+from ..model_settings.effective import (
+    effective_settings,
+    problems,
+    secrets_written,
+    with_keys,
+)
 from ..model_settings.live import LiveSettings
 from ..model_settings.page import defaults_document, key_path_problem, try_connection
 from ..model_settings.store import Applied, SettingsStore
@@ -55,6 +60,8 @@ class _PageOut(BaseModel):
     version: str | None = None
     #: path -> "…" + last four characters; never a value (M6).
     keys: dict[str, str] = {}
+    #: Keys set or cleared since the last Apply — what the next Apply switches (M20).
+    pending_keys: list[str] = []
 
 
 class _Rollback(BaseModel):
@@ -126,6 +133,7 @@ def register_model_settings_routes(
                 published=store.published_patch(),
                 version=store.current_version(),
                 keys=store.key_status(),
+                pending_keys=store.pending_keys(),
             )
 
         return await asyncio.to_thread(read)
@@ -135,6 +143,11 @@ def register_model_settings_routes(
         me = _require_superuser()
 
         def save() -> _Problems:
+            # Refused before it is stored: a secret in the draft would sit in the
+            # database and come back to every superuser in GET (M6).
+            written = secrets_written(body.patch)
+            if written:
+                raise HTTPException(status_code=422, detail={"problems": written})
             store.save_draft(body.patch, by=me)
             return _Problems(problems=_problems(body.patch))
 
@@ -160,7 +173,7 @@ def register_model_settings_routes(
         me = _require_superuser()
 
         def roll() -> Applied:
-            earlier = next((a for a in store.history() if a.version == body.version), None)
+            earlier = store.applied(body.version)
             if earlier is None:
                 raise HTTPException(status_code=404, detail="no such version")
             applied = _publish(earlier.patch, me)

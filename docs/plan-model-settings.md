@@ -35,9 +35,9 @@ settled by me, listed for the user to overturn.
 | M15 | The page sits under a superuser-only "Settings" entry; its layout follows NN/g and Material 3, cited in the PR | mine |
 | M16 | A process reads the version string **once a second on a thread of its own** (`LiveSettings.start`, started by the API's and every worker's `main`); a request or a job only reads memory. An Apply is in force everywhere within about a second. Without the thread (tests, `skill_eval`) a use reads the version itself at most once a second (`VERSION_TTL_S`). P10 is why: one read measured ~17 ms on Postgres, and the request that crossed the window paid it on the event loop | mine — found in P4, changed by P10 |
 | M17 | **Turning a role on or off is not done here.** Whether a role (`kb.retrieval_llm`, `card_drafter`, `health.judge_llm`, …) is on decided at boot which features were wired (the quality judge, the drafter, the goal checker, code-wiki), and boot reads `config.yaml`, not the page — so Apply refuses a change to whether a role is on, with "change it in config.yaml" (`ROLES` in `model_settings/effective.py`). Changing **which** model a role uses is live | mine — found in P5 |
-| M18 | **The page edits only what a running process reads again.** The config part is limited to the model choices of M3 (`LIVE_CONFIG` in `model_settings/effective.py`: `llm`, everything under `agents` (presets, `subagent_models`, the usage lists such as `kb_chat`), the role references); any other config key is refused at Apply with "change it in config.yaml". Storing a value that does nothing until a restart is a dead knob. The same holds inside a live part: the `infer_modules` run knobs (`enhancements`, `reasoning_effort`, `parallelism`, `collection`) and an App's `resources` / `slug` are read at boot and held, so a change to them is refused. Apply also runs the boot's workflow check (`validate_workflow_profiles`) on the draft, so a workflow without its `run.py` is refused rather than found at its first run | mine — found in P5 |
-| M19 | `null` **hides a preset and means nothing else** (M12). Anywhere else it would delete a key the loader needs; a value goes back to its default by leaving the patch, which is what reset does | mine — found in P5 |
-| M20 | A **key** set or cleared on the page takes effect at the next **Apply**, like every other change: it is part of the version string (its revision, never its value), so it reaches the processes the same way and history records that it changed | mine — found in P2 |
+| M18 | **The page edits only what a running process reads again.** The config part is limited to the model choices of M3 (`LIVE_CONFIG` in `model_settings/effective.py`: `llm`, everything under `agents` (presets, `subagent_models`, the usage lists such as `kb_chat`), the role references); any other config key is refused at Apply with "change it in config.yaml". Storing a value that does nothing until a restart is a dead knob. The same holds inside a live part: the `infer_modules` run knobs (`enhancements`, `reasoning_effort`, `parallelism`, `collection`) and an App's `resources` / `slug` are read at boot and held, so a change to them is refused. Apply also runs the boot's workflow check (`validate_workflow_profiles`) on the draft, so a workflow without its `run.py` is refused rather than found at its first run. A patch can change an App or profile that ships and cannot create one: a patch-only App or profile would pass Apply and never be listed or used (review r1), so it is refused too | mine — found in P5 |
+| M19 | `null` **hides a preset and means nothing else** (M12). Anywhere else — in the config part or under `apps` / `profiles` — it would delete a key the loader or the App needs; a value goes back to its default by leaving the patch, which is what reset does | mine — found in P5 |
+| M20 | A **key** set or cleared on the page takes effect at the next **Apply**, like every other change: it is part of the version string (its revision, never its value), so it reaches the processes the same way and history records that it changed. A key is **staged** until then (`_SettingsKey`) and Apply copies it to the **applied** record (`_SettingsAppliedKey`) every process builds from — review r1 found a process that started after a key change built with the staged value, a key nobody applied | mine — found in P2, fixed by review r1 |
 
 ### Known costs
 
@@ -112,7 +112,12 @@ Each `/tdd`, one commit; the review lenses, then CI, as usual.
 
 ## Open risks
 
-- A worker that is mid-job when Apply lands finishes that job on the old
+- An Apply takes effect per model CALL, not per job: a call already under way
+  finishes on the old settings, and every call after it — including the next
+  step of a job already running (a wiki pass, a card-gen run) — uses the new
+  ones, so one job can span two versions. (Review r1 caught the earlier
+  sentence, "finishes that job on the old settings", as untrue.)
+- (superseded) A worker that is mid-job when Apply lands finishes that job on the old
   settings; the next job reads the new version. Stated in the page's copy.
 - Validation at Apply covers structure only (M8); a wrong model name passes it
   and fails on first use — the test-connection button is how to find out first.

@@ -182,3 +182,24 @@ def test_a_derived_value_is_built_once_per_version(store, config):
     assert live.derive("x", make) is not first
     assert made[-1] == "openai/gpt-4.1-mini"
     assert len(made) == 2
+
+
+def test_a_key_changed_but_not_applied_reaches_no_process(store, config):
+    # M20, review r1: a process that STARTS after a key was changed (a new pod,
+    # a restarted worker) built from the keys as they are now — so it ran a key
+    # nobody applied, under the same version string as the pods that did not.
+    path = "config.agents.presets.openai-mini.llm.api_key"
+    store.set_key(path, "sk-old", by="root")
+    store.publish(MINI, by="root")
+    store.set_key(path, "sk-not-applied", by="root")
+    boot = load(config_path=config, env={})
+
+    late = LiveSettings(store, config_path=config, env={}, boot=boot)
+
+    assert late.settings().agents.presets["openai-mini"].llm.api_key == "sk-old"
+    store.clear_key(path, by="root")
+    later = LiveSettings(store, config_path=config, env={}, boot=boot)
+    assert later.settings().agents.presets["openai-mini"].llm.api_key == "sk-old"
+    store.publish(MINI, by="root")
+    applied = LiveSettings(store, config_path=config, env={}, boot=boot)
+    assert applied.settings().agents.presets["openai-mini"].llm.api_key != "sk-old"

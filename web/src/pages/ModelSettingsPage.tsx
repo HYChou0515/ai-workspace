@@ -29,17 +29,28 @@ import {
 } from "../api/modelSettings";
 import { qk } from "../api/queryKeys";
 import { useDialog } from "../components/Dialog";
-import { MonacoEditor } from "../components/MonacoEditor";
+import { MonacoEditor, type EditorMarker } from "../components/MonacoEditor";
 import { Tabs } from "../components/ShareTabs";
 import { useBreadcrumbs } from "../hooks/breadcrumbs";
 import { useIsSuperuserState } from "../hooks/useIsSuperuser";
 import { useT } from "../lib/i18n";
 import { blockMaskedCopy } from "../lib/maskedSecret";
 import { pxToRem } from "../lib/pxToRem";
-import { diffPatches, flattenPatch, parsePatch, withoutPath, type Change, type Patch } from "../lib/settingsPatch";
+import {
+  diffPatches,
+  flattenParts,
+  lineOfPath,
+  parsePatch,
+  withoutPath,
+  type Change,
+  type Patch,
+} from "../lib/settingsPatch";
 
 const MONO = { fontFamily: "var(--font-mono, ui-monospace, monospace)", fontSize: pxToRem(12) };
 const MUTED = { fontSize: pxToRem(12), color: "var(--text-paper-d)" } as const;
+/** A status the operator acts on: body size and colour, not muted. */
+const STATUS = { fontSize: pxToRem(13), color: "var(--text-paper)", margin: 0 } as const;
+const H2 = { margin: 0 } as const;
 /** The "in force" tag on a history row — the tokens the skill hub's badge uses. */
 const BADGE = {
   display: "inline-block",
@@ -54,12 +65,14 @@ const BADGE = {
 const CHECK_AFTER_MS = 400;
 
 const pretty = (value: unknown) => JSON.stringify(value, null, 2);
+const messageOf = (e: unknown) => (e instanceof Error ? e.message : String(e));
 const short = (version: string) => version.slice(0, 8);
 const shown = (value: unknown) => (typeof value === "string" ? value : JSON.stringify(value));
 
-function valueAt(document: SettingsDocument, path: string): { found: boolean; value?: unknown } {
+/** The value at `parts` (never a joined path: a preset name may hold a dot). */
+function valueAt(document: SettingsDocument, parts: string[]): { found: boolean; value?: unknown } {
   let node: unknown = document;
-  for (const part of path.split(".")) {
+  for (const part of parts) {
     if (typeof node !== "object" || node === null || Array.isArray(node) || !(part in node))
       return { found: false };
     node = (node as Record<string, unknown>)[part];
@@ -91,9 +104,20 @@ export function ModelSettingsPage({ client = modelSettingsApi }: { client?: Clie
     );
 
   return (
-    <div className="page" style={{ display: "grid", gap: 12 }}>
-      <h1>{t("modelSettings.title")}</h1>
-      <p style={MUTED}>{t("modelSettings.desc")}</p>
+    <div className="page" style={{ display: "grid", gap: 16 }}>
+      {/* One header block — NN/g "Proximity Principle": the title, what the page
+          does and what is in force read as one group. */}
+      <header style={{ display: "grid", gap: 6 }}>
+        <h1 style={{ margin: 0 }}>{t("modelSettings.title")}</h1>
+        <p style={{ ...MUTED, margin: 0 }}>{t("modelSettings.desc")}</p>
+        {page.data && (
+          <p data-testid="model-settings-in-force" style={{ ...STATUS, margin: 0 }}>
+            {page.data.version
+              ? t("modelSettings.inForce", { version: short(page.data.version) })
+              : t("modelSettings.inForceNone")}
+          </p>
+        )}
+      </header>
       {page.isPending ? (
         <p style={MUTED}>…</p>
       ) : page.isError ? (
@@ -102,11 +126,6 @@ export function ModelSettingsPage({ client = modelSettingsApi }: { client?: Clie
         </p>
       ) : (
         <>
-          <p data-testid="model-settings-in-force" style={MUTED}>
-            {page.data.version
-              ? t("modelSettings.inForce", { version: short(page.data.version) })
-              : t("modelSettings.inForceNone")}
-          </p>
           <Tabs
             tabs={[
               { id: "edit", label: t("modelSettings.tab.edit") },
@@ -125,6 +144,8 @@ export function ModelSettingsPage({ client = modelSettingsApi }: { client?: Clie
                 defaults={page.data.defaults}
                 draft={page.data.draft}
                 published={page.data.published}
+                keys={page.data.keys}
+                pendingKeys={page.data.pending_keys ?? []}
               />
             )}
             {tab === "history" && (
@@ -160,16 +181,45 @@ function ChangeList({ changes }: { changes: Change[] }) {
   );
 }
 
+/** Problems name a dotted path first ("config.server: …", "config: …"). */
+const pathOf = (problem: string) => problem.split(":", 1)[0].trim();
+
+/** Where JSON.parse says it gave up, as a line — when the message says. */
+function lineOfParseError(text: string, error: string): number | null {
+  const at = /position (\d+)/.exec(error);
+  if (!at) return null;
+  return text.slice(0, Number(at[1])).split("\n").length;
+}
+
+function KeyChangeList({ pending, keys }: { pending: string[]; keys: Record<string, string> }) {
+  const t = useT();
+  return (
+    <ul data-testid="model-settings-key-diff" style={{ ...MONO, margin: 0, paddingLeft: 18 }}>
+      {pending.map((path) => (
+        <li key={path}>
+          <strong>{t(path in keys ? "modelSettings.keyChangeSet" : "modelSettings.keyChangeCleared")}</strong>{" "}
+          {path}
+          {path in keys && ` (${keys[path]})`}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 function EditTab({
   client,
   defaults,
   draft,
   published,
+  keys,
+  pendingKeys,
 }: {
   client: Client;
   defaults: SettingsDocument;
   draft: Patch;
   published: Patch;
+  keys: Record<string, string>;
+  pendingKeys: string[];
 }) {
   const t = useT();
   const dialog = useDialog();
@@ -179,6 +229,7 @@ function EditTab({
   const [checkedText, setCheckedText] = useState(saved);
   const [notice, setNotice] = useState("");
   const [refused, setRefused] = useState<string[]>([]);
+  const [saveError, setSaveError] = useState("");
   // A save, an Apply or a rollback hands back a new draft; the editor follows it.
   useEffect(() => setText(saved), [saved]);
   useEffect(() => {
@@ -195,11 +246,14 @@ function EditTab({
   });
   const dirty = text !== saved;
   const patch = parsed.ok ? parsed.patch : null;
+  const checking = text !== checkedText || check.isFetching;
 
   const save = useMutation({
     meta: { silentError: true },
     mutationFn: (p: Patch) => client.saveDraft(p),
+    onError: (e) => setSaveError(problemsOf(e).join(" · ") || messageOf(e)),
     onSuccess: () => {
+      setSaveError("");
       setNotice(t("modelSettings.saved"));
       void queryClient.invalidateQueries({ queryKey: qk.modelSettings });
     },
@@ -212,17 +266,35 @@ function EditTab({
       setNotice(t("modelSettings.applied", { version: short(applied.version) }));
       void queryClient.invalidateQueries({ queryKey: qk.modelSettings });
     },
-    onError: (e) => setRefused(problemsOf(e)),
+    // A refusal names its problems; any other failure (a 500, the network) is
+    // still a reason the person must see — the mutation is `silentError`.
+    onError: (e) => setRefused(problemsOf(e).length ? problemsOf(e) : [messageOf(e)]),
   });
 
+  // What Apply would do — computed from the SAVED draft, which is what it publishes.
+  const changes = useMemo(() => diffPatches(published, draft), [published, draft]);
+  const problems = refused.length ? refused : (check.data ?? []);
+  const nothingToApply = changes.length === 0 && pendingKeys.length === 0;
+  // NN/g heuristic #1 (visibility of system status): the button is offered only
+  // when it would do something, and the line beside it says why not otherwise.
+  // A check that FAILED is not a check that found nothing (review r1).
+  const checkFailed = check.isError && !checking;
+  const blocked = dirty
+    ? t("modelSettings.saveFirst")
+    : checkFailed || problems.length
+      ? t("modelSettings.applyBlockedProblems")
+      : nothingToApply
+        ? t("modelSettings.nothingToApply")
+        : "";
+
   const askToApply = async () => {
-    const changes = diffPatches(published, draft);
     const choice = await dialog.confirm({
       title: t("modelSettings.applyTitle"),
       body: (
         <div style={{ display: "grid", gap: 8 }}>
-          <p>{t("modelSettings.applyBody")}</p>
-          {changes.length ? <ChangeList changes={changes} /> : <p>{t("modelSettings.applyNothing")}</p>}
+          <p style={{ margin: 0 }}>{t("modelSettings.applyBody")}</p>
+          {changes.length > 0 && <ChangeList changes={changes} />}
+          {pendingKeys.length > 0 && <KeyChangeList pending={pendingKeys} keys={keys} />}
         </div>
       ),
       actions: [
@@ -233,13 +305,22 @@ function EditTab({
     if (choice === "apply") apply.mutate();
   };
 
-  const problems = refused.length ? refused : (check.data ?? []);
-  const changed = patch ? flattenPatch(patch) : [];
+  // Each problem drawn on the line it names (NN/g "Error-Message Guidelines":
+  // close to its source); the list under the editor stays as the summary.
+  const markers: EditorMarker[] = !parsed.ok
+    ? [{ line: lineOfParseError(text, parsed.error) ?? 1, message: parsed.error }]
+    : problems.flatMap((p) => {
+        const line = lineOfPath(text, pathOf(p));
+        return line === null ? [] : [{ line, message: p }];
+      });
+  const changed = patch ? flattenParts(patch) : [];
 
   return (
-    <div style={{ display: "grid", gap: 12 }}>
-      <section aria-labelledby="model-settings-draft" style={{ display: "grid", gap: 6 }}>
-        <h2 id="model-settings-draft">{t("modelSettings.editor")}</h2>
+    <div style={{ display: "grid", gap: 16 }}>
+      <section aria-labelledby="model-settings-draft" style={{ display: "grid", gap: 8 }}>
+        <h2 id="model-settings-draft" style={H2}>
+          {t("modelSettings.editor")}
+        </h2>
         <MonacoEditor
           ariaLabel={t("modelSettings.editor")}
           value={text}
@@ -247,35 +328,57 @@ function EditTab({
             setText(v);
             setNotice("");
             setRefused([]);
+            setSaveError("");
           }}
           language="json"
           autoHeight
           minHeight={240}
+          markers={markers}
         />
-        {!parsed.ok ? (
-          <div role="alert" data-testid="model-settings-parse" className="ev-banner ev-banner--err">
-            <div className="ev-banner__body">
-              {parsed.error === "not-an-object"
-                ? t("modelSettings.notObject")
-                : t("modelSettings.notJson", { error: parsed.error })}
+        {/* Polite, not an alert: it is re-evaluated at every pause in typing, and
+            an interrupting announcement mid-brace is the "too early" error NN/g
+            warns against. */}
+        <div aria-live="polite">
+          {!parsed.ok ? (
+            <div data-testid="model-settings-parse" className="ev-banner ev-banner--err">
+              <div className="ev-banner__body">
+                {parsed.error === "not-an-object"
+                  ? t("modelSettings.notObject")
+                  : t("modelSettings.notJson", { error: parsed.error })}
+              </div>
             </div>
-          </div>
-        ) : problems.length ? (
-          <div role="alert" data-testid="model-settings-problems" className="ev-banner ev-banner--err">
-            <div className="ev-banner__body">
-              {t("modelSettings.problems")}
-              <ul style={{ ...MONO, margin: "4px 0 0", paddingLeft: 18 }}>
-                {problems.map((p) => (
-                  <li key={p}>{p}</li>
-                ))}
-              </ul>
+          ) : checkFailed && !refused.length ? (
+            <div data-testid="model-settings-check-failed" className="ev-banner ev-banner--err">
+              <div className="ev-banner__body">
+                {t("modelSettings.checkFailed", { error: messageOf(check.error) })}
+              </div>
             </div>
-          </div>
-        ) : (
-          <p data-testid="model-settings-ok" style={MUTED}>
-            {check.isFetching || text !== checkedText ? t("modelSettings.checking") : t("modelSettings.noProblems")}
-          </p>
-        )}
+          ) : problems.length ? (
+            <div data-testid="model-settings-problems" className="ev-banner ev-banner--err">
+              <div className="ev-banner__body">
+                {t("modelSettings.problems")}
+                <ul style={{ ...MONO, margin: "4px 0 0", paddingLeft: 18 }}>
+                  {problems.map((p) => (
+                    <li key={p}>{p}</li>
+                  ))}
+                </ul>
+              </div>
+            </div>
+          ) : (
+            <p data-testid="model-settings-status" style={STATUS}>
+              {checking
+                ? t("modelSettings.checking")
+                : dirty
+                  ? t("modelSettings.noProblems")
+                  : nothingToApply
+                    ? t("modelSettings.nothingToApply")
+                    : t("modelSettings.readyToApply", {
+                        values: String(changes.length),
+                        keys: String(pendingKeys.length),
+                      })}
+            </p>
+          )}
+        </div>
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
           <button
             type="button"
@@ -292,30 +395,55 @@ function EditTab({
             className="btn"
             data-variant="primary"
             data-testid="model-settings-apply"
-            disabled={dirty || apply.isPending}
+            disabled={blocked !== "" || apply.isPending}
             onClick={() => void askToApply()}
           >
             {t("modelSettings.apply")}
           </button>
-          {dirty && <span style={MUTED}>{t("modelSettings.saveFirst")}</span>}
+          {dirty && (
+            <span data-testid="model-settings-apply-why" style={MUTED}>
+              {blocked}
+            </span>
+          )}
           {notice && (
             <span data-testid="model-settings-notice" style={MUTED}>
               {notice}
             </span>
           )}
+          {saveError && (
+            <span role="alert" data-testid="model-settings-save-failed" style={{ ...MUTED, color: "var(--err)" }}>
+              {t("modelSettings.saveFailed", { error: saveError })}
+            </span>
+          )}
         </div>
+        <details>
+          <summary>{t("modelSettings.defaults")}</summary>
+          <MonacoEditor
+            ariaLabel={t("modelSettings.defaults")}
+            value={pretty(defaults)}
+            language="json"
+            readOnly
+            autoHeight
+            minHeight={240}
+          />
+        </details>
       </section>
 
-      <section aria-labelledby="model-settings-changes" style={{ display: "grid", gap: 6 }}>
-        <h2 id="model-settings-changes">{t("modelSettings.changes")}</h2>
+      <section aria-labelledby="model-settings-changes" style={{ display: "grid", gap: 8 }}>
+        <h2 id="model-settings-changes" style={H2}>
+          {t("modelSettings.changes")}
+        </h2>
         {changed.length === 0 ? (
-          <p style={MUTED}>{t("modelSettings.changesNone")}</p>
+          <p style={{ ...MUTED, margin: 0 }}>{t("modelSettings.changesNone")}</p>
         ) : (
-          <ul data-testid="model-settings-changes" style={{ ...MONO, margin: 0, paddingLeft: 0, listStyle: "none" }}>
-            {changed.map(([path, value]) => {
-              const fallback = valueAt(defaults, path);
+          <ul
+            data-testid="model-settings-changes"
+            style={{ ...MONO, margin: 0, paddingLeft: 0, listStyle: "none", display: "grid", gap: 6 }}
+          >
+            {changed.map(({ path, parts, value }) => {
+              const fallback = valueAt(defaults, parts);
               return (
-                <li key={path} style={{ display: "flex", gap: 8, alignItems: "baseline", flexWrap: "wrap" }}>
+                <li key={path} style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
                   <span>
                     {path}: {shown(value)}
                   </span>
@@ -324,13 +452,15 @@ function EditTab({
                       ? t("modelSettings.default", { value: shown(fallback.value) })
                       : t("modelSettings.defaultNone")}
                   </span>
+                  {/* Outlined, not ghost: NN/g "Beyond Blue Links" — a flat
+                      control must still look clickable; M3 outlined = medium emphasis. */}
                   <button
                     type="button"
                     className="btn"
-                    data-variant="ghost"
+                    data-variant="secondary"
                     data-size="sm"
                     data-testid={`model-settings-reset-${path}`}
-                    onClick={() => patch && setText(pretty(withoutPath(patch, path)))}
+                    onClick={() => patch && setText(pretty(withoutPath(patch, parts)))}
                   >
                     {t("modelSettings.reset")}
                   </button>
@@ -342,30 +472,25 @@ function EditTab({
       </section>
 
       <TestConnection client={client} defaults={defaults} draft={draft} />
-
-      <details>
-        <summary>{t("modelSettings.defaults")}</summary>
-        <MonacoEditor
-          ariaLabel={t("modelSettings.defaults")}
-          value={pretty(defaults)}
-          language="json"
-          readOnly
-          autoHeight
-          minHeight={240}
-        />
-      </details>
     </div>
   );
 }
 
 function TestConnection({ client, defaults, draft }: { client: Client; defaults: SettingsDocument; draft: Patch }) {
   const t = useT();
+  // The presets the draft has: the defaults', plus what it adds, minus what it
+  // hides (`null`, M12) — a hidden one would only answer "no preset named …".
   const presets = useMemo(() => {
-    const names = new Set<string>();
-    for (const doc of [defaults, draft] as Record<string, unknown>[]) {
-      const found = valueAt(doc as SettingsDocument, "config.agents.presets");
-      if (found.found && found.value && typeof found.value === "object")
-        for (const [name, v] of Object.entries(found.value)) if (v !== null) names.add(name);
+    const at = (doc: SettingsDocument) => {
+      const found = valueAt(doc, ["config", "agents", "presets"]);
+      return found.found && found.value && typeof found.value === "object"
+        ? Object.entries(found.value as Record<string, unknown>)
+        : [];
+    };
+    const names = new Set(at(defaults).map(([name]) => name));
+    for (const [name, v] of at(draft as SettingsDocument)) {
+      if (v === null) names.delete(name);
+      else names.add(name);
     }
     return [...names].sort();
   }, [defaults, draft]);
@@ -477,27 +602,45 @@ function HistoryTab({ client, current, published }: { client: Client; current: s
           </div>
         </div>
       )}
-      <ol data-testid="model-settings-history" style={{ margin: 0, paddingLeft: 0, listStyle: "none", display: "grid", gap: 6 }}>
+      <ol data-testid="model-settings-history" style={{ margin: 0, paddingLeft: 0, listStyle: "none" }}>
         {history.data.map((entry, i) => {
           // The newest entry carrying the current content id is what is in force.
           const inForce = entry.version === current && history.data.findIndex((e) => e.version === current) === i;
           return (
-            <li key={`${entry.version}-${entry.applied_at}`} style={{ display: "flex", gap: 8, alignItems: "baseline", flexWrap: "wrap" }}>
-              <span style={MONO}>
-                {t("modelSettings.historyRow", {
-                  version: short(entry.version),
-                  when: new Date(entry.applied_at * 1000).toLocaleString(),
-                })}
-              </span>
-              <span style={MUTED}>{entry.by}</span>
-              {inForce && (
-                <span data-testid="model-settings-current" style={BADGE}>
-                  {t("modelSettings.current")}
-                </span>
-              )}
-              {entry.keys_changed.length > 0 && (
-                <span style={MUTED}>{t("modelSettings.keysChanged", { paths: entry.keys_changed.join(", ") })}</span>
-              )}
+            // Two fixed columns — what the version is, and its one action at the
+            // right edge — so the button stays put whatever the row says.
+            <li
+              key={`${entry.version}-${entry.applied_at}`}
+              style={{
+                display: "flex",
+                gap: 12,
+                alignItems: "center",
+                justifyContent: "space-between",
+                padding: "8px 0",
+                borderBottom: "1px solid var(--paper-3)",
+              }}
+            >
+              <div style={{ display: "grid", gap: 2, minWidth: 0 }}>
+                <div style={{ display: "flex", gap: 8, alignItems: "baseline", flexWrap: "wrap" }}>
+                  <span style={MONO}>
+                    {t("modelSettings.historyRow", {
+                      when: new Date(entry.applied_at * 1000).toLocaleString(),
+                      version: short(entry.version),
+                    })}
+                  </span>
+                  <span style={MUTED}>{entry.by}</span>
+                  {inForce && (
+                    <span data-testid="model-settings-current" style={BADGE}>
+                      {t("modelSettings.current")}
+                    </span>
+                  )}
+                </div>
+                {entry.keys_changed.length > 0 && (
+                  <span style={{ ...MUTED, overflowWrap: "anywhere" }}>
+                    {t("modelSettings.keysChanged", { paths: entry.keys_changed.join(", ") })}
+                  </span>
+                )}
+              </div>
               {!inForce && (
                 <button
                   type="button"
@@ -621,6 +764,11 @@ function KeysTab({ client, keys }: { client: Client; keys: Record<string, string
           {t("modelSettings.keySet")}
         </button>
       </div>
+      {(!path.trim() || !value) && (
+        <p data-testid="model-settings-key-why" style={{ ...MUTED, margin: 0 }}>
+          {t("modelSettings.keyNeedBoth")}
+        </p>
+      )}
       {refused.length > 0 && (
         <p role="alert" data-testid="model-settings-key-refused" style={MONO}>
           {refused.join(" · ")}

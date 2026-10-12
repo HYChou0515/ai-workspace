@@ -15,12 +15,21 @@ function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-/** Every value the patch sets, `[dotted path, value]`, in its own order. */
-export function flattenPatch(patch: Patch, prefix = ""): [string, unknown][] {
+export type Leaf = { path: string; parts: string[]; value: unknown };
+
+/** Every value the patch sets, in its own order. `parts` is the path to act
+ * on; `path` (joined with ".") is only for showing it — a preset name may hold
+ * a dot (`qwen2.5`), so a joined path cannot be split back. */
+export function flattenParts(patch: Patch, prefix: string[] = []): Leaf[] {
   return Object.entries(patch).flatMap(([key, value]) => {
-    const path = prefix ? `${prefix}.${key}` : key;
-    return isObject(value) ? flattenPatch(value, path) : [[path, value] as [string, unknown]];
+    const parts = [...prefix, key];
+    return isObject(value) ? flattenParts(value, parts) : [{ path: parts.join("."), parts, value }];
   });
+}
+
+/** Every value the patch sets, `[dotted path, value]`, in its own order. */
+export function flattenPatch(patch: Patch): [string, unknown][] {
+  return flattenParts(patch).map((leaf) => [leaf.path, leaf.value]);
 }
 
 export type Change =
@@ -44,23 +53,77 @@ export function diffPatches(before: Patch, after: Patch): Change[] {
   return out;
 }
 
-/** `patch` without the value at `path` — that value back to its default — on a copy. */
-export function withoutPath(patch: Patch, path: string): Patch {
-  const [head, ...rest] = path.split(".");
-  if (!(head in patch)) return patch;
+/** `patch` without the value at `parts` — that value back to its default — on a copy. */
+export function withoutPath(patch: Patch, parts: string[]): Patch {
+  const [head, ...rest] = parts;
+  if (head === undefined || !(head in patch)) return patch;
   const out = { ...patch };
   const child = out[head];
   if (rest.length === 0 || !isObject(child)) {
     delete out[head];
     return out;
   }
-  const trimmed = withoutPath(child, rest.join("."));
+  const trimmed = withoutPath(child, rest);
   if (Object.keys(trimmed).length === 0) delete out[head];
   else out[head] = trimmed;
   return out;
 }
 
-export type Parsed = { ok: true; patch: Patch } | { ok: false; error: string };
+type Frame = { kind: "obj" | "arr"; path: string | null };
+
+/** The line each object key is written on, by dotted path — first occurrence;
+ * keys inside arrays are not indexed (a patch replaces a list whole). */
+function keyLines(text: string): Map<string, number> {
+  const out = new Map<string, number>();
+  const frames: Frame[] = [];
+  let line = 1;
+  let expectKey = false;
+  let pendingKey: string | null = null;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    const top = frames[frames.length - 1];
+    if (ch === "\n") line++;
+    else if (ch === "{" || ch === "[") {
+      const path = frames.length === 0 ? "" : top.kind === "arr" ? null : pendingKey;
+      frames.push({ kind: ch === "{" ? "obj" : "arr", path: ch === "{" ? path : null });
+      expectKey = ch === "{";
+      pendingKey = null;
+    } else if (ch === "}" || ch === "]") {
+      frames.pop();
+      expectKey = false;
+    } else if (ch === ",") expectKey = top?.kind === "obj";
+    else if (ch === ":") expectKey = false;
+    else if (ch === '"') {
+      let j = i + 1;
+      while (j < text.length && text[j] !== '"') j += text[j] === "\\" ? 2 : 1;
+      const raw = text.slice(i, j + 1);
+      if (expectKey && top?.kind === "obj" && top.path !== null) {
+        const key = JSON.parse(raw) as string;
+        pendingKey = top.path ? `${top.path}.${key}` : key;
+        if (!out.has(pendingKey)) out.set(pendingKey, line);
+      } else pendingKey = null;
+      expectKey = false;
+      i = j;
+    } else if (!/\s/.test(ch)) pendingKey = null;
+  }
+  return out;
+}
+
+/** The line `path` (dotted, as a problem names it) is written on in `text` —
+ * or its deepest part the text has, since a problem can name a key the patch
+ * leaves to the default. null when none of it is there, or the text is not JSON. */
+export function lineOfPath(text: string, path: string): number | null {
+  if (!parsePatch(text).ok) return null;
+  const lines = keyLines(text);
+  const parts = path.split(".");
+  for (let n = parts.length; n > 0; n--) {
+    const found = lines.get(parts.slice(0, n).join("."));
+    if (found !== undefined) return found;
+  }
+  return null;
+}
+
+export type Parsed ={ ok: true; patch: Patch } | { ok: false; error: string };
 
 /** The editor's text as a patch; `error` is the parser's own words, or `not-an-object`. */
 export function parsePatch(text: string): Parsed {
