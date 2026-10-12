@@ -13,7 +13,10 @@ import asyncio
 import hashlib
 import json
 import logging
-from typing import Any
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
+from typing import Any, NamedTuple
 
 from .checks import artifact_valid, exit_zero
 from .engine import Check, StepFailed, _emit, run_step
@@ -60,6 +63,38 @@ def _parse_fields(text: str) -> Any:
     return parsed
 
 
+class StepRef(NamedTuple):
+    """A step as the journal knows it: ``name`` plus ``key``, the loop element."""
+
+    name: str
+    key: str = ""
+
+    @property
+    def id(self) -> str:
+        """``name``, or ``name/key`` for one element of a loop: what a message
+        the step persists is marked with (``Message.step``)."""
+        return f"{self.name}/{self.key}" if self.key else self.name
+
+
+#: The step whose agent turn is running. The executor that persists the turn
+#: marks the messages with it and writes its transcript beside its artifact
+#: (plan-workflow-out-of-chat D6 / D9). A ContextVar, not a handle attribute:
+#: steps running side by side (``asyncio.gather``, map elements) each hold their
+#: own copy, where one attribute would be overwritten.
+CURRENT_STEP: ContextVar[StepRef | None] = ContextVar("workflow_current_step", default=None)
+
+
+@contextmanager
+def _as_step(name: str, key: str) -> Iterator[None]:
+    # Set before the turn's coroutine is created: `asyncio.wait_for` runs it as
+    # a task that copies the context at that moment.
+    token = CURRENT_STEP.set(StepRef(name, key))
+    try:
+        yield
+    finally:
+        CURRENT_STEP.reset(token)
+
+
 def _retry_prompt(prompt: str, feedback: str | None) -> str:
     if not feedback:
         return prompt
@@ -91,6 +126,10 @@ async def agent_step(
     drive_turn = wf.drive_turn
 
     async def execute(feedback: str | None) -> Any:
+        with _as_step(name or phase, key):
+            return await _turn(feedback)
+
+    async def _turn(feedback: str | None) -> Any:
         coro = drive_turn(_retry_prompt(prompt, feedback), tools)
         if wf.step_timeout_s is None:
             return await coro
@@ -157,6 +196,10 @@ async def agent_write_step(
     drive_turn = wf.drive_turn
 
     async def execute(feedback: str | None) -> Any:
+        with _as_step(name or phase, key):
+            return await _write(feedback)
+
+    async def _write(feedback: str | None) -> Any:
         coro = drive_turn(_retry_prompt(prompt, feedback), tools)
         if wf.step_timeout_s is None:
             text = await coro

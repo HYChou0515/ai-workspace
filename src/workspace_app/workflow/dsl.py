@@ -27,7 +27,7 @@ import msgspec
 from msgspec import Struct, field
 
 from .checks import ARTIFACT_KINDS, choice_in, collection_has, file_nonempty
-from .engine import Check, CheckResult, StepFailed, _artifact_path
+from .engine import Check, CheckResult, StepFailed, _artifact_path, transcript_path
 from .gate import _decision_path, human_gate
 from .handle import WorkflowHandle
 from .manifest import WorkflowManifest, WorkflowPhase
@@ -657,6 +657,10 @@ async def _gc_map_orphans(wf: WorkflowHandle, step: MapStep, current_keys: set[s
             key = path.rsplit("/", 1)[-1].removesuffix(".json")
             if key not in current_keys:
                 await wf.delete(path)
+                # its transcript (an agent step's) goes with it, or it stays forever
+                transcript = transcript_path(wf.journal_dir, jname, key)
+                if await wf.exists(transcript):
+                    await wf.delete(transcript)
 
 
 def _collected_value(result: Any) -> Any:

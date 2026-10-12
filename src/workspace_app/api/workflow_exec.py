@@ -30,17 +30,18 @@ from ..agent.python_env import ProjectEnvError
 from ..resources import Conversation, Message
 from ..sandbox.protocol import OutputSink, Sandbox
 from ..workflow.capabilities import convert_upload, ingest_to_collection, upsert_context_card
-from ..workflow.engine import StepFailed
+from ..workflow.engine import StepFailed, transcript_path
 from ..workflow.handle import WorkflowHandle
 from ..workflow.run import RunStatus, WorkflowRun
 from ..workflow.run_identity import RunIdentities
+from ..workflow.steps import CURRENT_STEP, StepRef
 from .env_layers import PersonEnv
 from .notifications import notification_sent, notify
 from .private_env import unattended_layer
 from .rca_messages import to_rca_message
 from .timeutil import now_ms
 from .turn_gate import admit_turn
-from .turns import CONTEXT_NOTICE_ROLE, already_noticed
+from .workflow_transcript import render_transcript
 
 if TYPE_CHECKING:
     from ..entity.events import EntityOrigin
@@ -60,6 +61,11 @@ if TYPE_CHECKING:
 RunSubagent = Callable[..., Awaitable[tuple[str, list]]]
 
 logger = logging.getLogger(__name__)
+
+#: `Message.driven_by` of a workflow step's prompt: it is persisted as
+#: `role="user"` but no person said it, which is what "has my owner said
+#: anything recently?" checks (`goal_offhours`).
+WORKFLOW_DRIVER = "workflow"
 
 #: What a failed run that used someone's credentials tells them (`plan-personal-env` D11).
 _SIGN_IN_HINT = "If your sign-in has expired, sign in again under My environment variables."
@@ -163,6 +169,8 @@ class WorkflowExecutor:
         lane: str | None = None,
         entity_write_origin: EntityOrigin | None = None,
         run_id: str = "",
+        step: StepRef | None = None,
+        journal_dir: str = "",
     ) -> str:
         """Run one agent node as a turn on the run's WORKFLOW CHAT (§3, §5.1):
         ``chat_key`` is that chat's conversation id, so turns enqueue + persist there
@@ -195,24 +203,27 @@ class WorkflowExecutor:
         # exemption would be a way to spend resources the limit says you do not
         # have, just by scheduling it. #9 in the plan makes the refusal visible.
         await admit_turn(self._files, self._admission, item_id)
+        # Where the turn persists; the node reads none of it (below).
         try:
             rid = chat_key
-            got = self._conv_rm.get(rid).data
-            assert isinstance(got, Conversation)
-            conv = got
+            assert isinstance(self._conv_rm.get(rid).data, Conversation)
         except (ResourceIDNotFoundError, AssertionError):
             logger.warning(
                 "workflow_exec: chat %s unresolved, using default chat for item %s",
                 chat_key,
                 item_id,
             )
-            rid, conv = self._locator.conversation_for(item_id)  # legacy fallback (default chat)
+            rid, _ = self._locator.conversation_for(item_id)  # legacy fallback (default chat)
         cfg = self._locator.resolve_agent_config(item_id)
         ctx = await self._turn_ctx.build_workflow_turn(
             item_id,
             agent_config=cfg,
             run_subagent=self._run_subagent,
-            history_messages=conv.messages,
+            # A node reads none of the thread it persists to (plan-workflow-out-
+            # of-chat D1 / D5): not the chat before it, not earlier steps, not
+            # other runs. What it needs is in its prompt — the upstream outputs
+            # it names, files, `input.json`.
+            history_messages=[],
             # tools= ⊆ what the item holds (manual §5.1): a step can't widen the
             # boundary. Applied by the builder, AFTER the item's pins are
             # finalized against the turn's package list — narrowing here, on a
@@ -223,26 +234,38 @@ class WorkflowExecutor:
             entity_write_origin=entity_write_origin,
             caller_env=await self._headless_env(captured_user, item_id, run_id),
         )
-        # #624: this node had to leave part of the thread out. Say so in the
-        # workflow chat — it is a real conversation the user can open, and a run
-        # that quietly forgot its earlier steps reads as a model gone vague.
-        # Nobody watching right now is a reason to PERSIST the notice, not to
-        # skip it.
-        if ctx.history_reduced_note:
-            self._notice_history_reduced(rid, captured_user, ctx.history_reduced_note)
         answer = ""
+
+        asked_at = now_ms()
+        # The handle drives `(prompt, tools)`; which step this is comes from where
+        # the step runs (`CURRENT_STEP`, set by `agent_step` / `agent_write_step`).
+        ref = step or CURRENT_STEP.get()
+        step_id = ref.id if ref else None
 
         def persist(produced: list[TurnMessage]) -> None:
             nonlocal answer
-            if produced:
-                conv2 = self._conv_rm.get(rid).data  # re-fetch the workflow chat
-                assert isinstance(conv2, Conversation)
-                # Background step → attribute the persisted turn to the captured
-                # user (§15, the job-pod acting-user pattern).
-                with self._conv_rm.using(user=captured_user):
-                    for tm in produced:
-                        conv2.messages.append(to_rca_message(tm))
-                    self._conv_rm.update(rid, conv2)
+            conv2 = self._conv_rm.get(rid).data  # re-fetch the workflow chat
+            assert isinstance(conv2, Conversation)
+            # The step's own prompt first, then what it produced, all marked with
+            # the execution and step (plan-workflow-out-of-chat D6): the thread
+            # used to hold answers without the questions that led to them. The
+            # prompt is a driver's, not a person's (`driven_by`).
+            prompt_msg = Message(
+                role="user",
+                content=prompt,
+                author=captured_user,
+                driven_by=WORKFLOW_DRIVER,
+                created_at=asked_at,
+            )
+            turn = [to_rca_message(tm) for tm in produced]
+            for m in (prompt_msg, *turn):
+                m.run_id = run_id or None
+                m.step = step_id
+            # Background step → attribute the persisted turn to the captured
+            # user (§15, the job-pod acting-user pattern).
+            with self._conv_rm.using(user=captured_user):
+                conv2.messages.extend((prompt_msg, *turn))
+                self._conv_rm.update(rid, conv2)
             answer = _reply_text(produced)
 
         enqueue_key = lane or chat_key
@@ -253,6 +276,8 @@ class WorkflowExecutor:
             chat_key,
         )
         await self._turn_engine.enqueue(enqueue_key, prompt, ctx, on_complete=persist)
+        if ref is not None and journal_dir and run_id:
+            await self._write_transcript(item_id, rid, run_id, ref, journal_dir)
         if lane is not None and lane != chat_key:  # transient sub-lane → drop its session
             await self._turn_engine.forget(lane)
         # A Stop that landed DURING this turn advanced the epoch past the baseline
@@ -260,6 +285,22 @@ class WorkflowExecutor:
         if await self._turn_engine.cancel_epoch(chat_key) > baseline:
             raise asyncio.CancelledError
         return answer
+
+    async def _write_transcript(
+        self, item_id: str, rid: str, run_id: str, ref: StepRef, journal_dir: str
+    ) -> None:
+        """The step's whole record, every attempt, as one file beside its artifact
+        (plan-workflow-out-of-chat D9): "Ask AI why it failed" points a chat at it,
+        so the chat reads the one step it is asked about as a file, never the
+        run's messages."""
+        conv = self._conv_rm.get(rid).data
+        assert isinstance(conv, Conversation)
+        mine = [m for m in conv.messages if m.run_id == run_id and m.step == ref.id]
+        await self._files.write(
+            item_id,
+            transcript_path(journal_dir, ref.name, ref.key),
+            render_transcript(ref.id, mine).encode(),
+        )
 
     async def _headless_env(self, captured_user: str, item_id: str, run_id: str = "") -> PersonEnv:
         """What this node's tools get from the deploy's seam, given that no
@@ -311,28 +352,6 @@ class WorkflowExecutor:
             # The right that admitted them to start it — which they must still hold.
             verb=cast("Verb", env_verb),
         )
-
-    def _notice_history_reduced(self, rid: str, acting_user: str, note: str) -> None:
-        """Leave the #624 marker in the workflow chat.
-
-        Same wording and same once-per-thread rule as the two interactive chats,
-        taken from `turns` rather than restated — three surfaces persist this
-        marker, and a rule kept in three places is a rule that will hold in two
-        of them. Written as the captured user, like every other background write
-        on this path (§15, the job-pod acting-user pattern)."""
-        conv = self._conv_rm.get(rid).data
-        assert isinstance(conv, Conversation)
-        if already_noticed(conv.messages):
-            return  # already told, at the transition
-        conv.messages.append(
-            Message(
-                role=CONTEXT_NOTICE_ROLE,
-                content=note,  # composed in `history_items` (#739)
-                created_at=now_ms(),
-            )
-        )
-        with self._conv_rm.using(user=acting_user):
-            self._conv_rm.update(rid, conv)
 
     async def run_sandbox(
         self,
@@ -595,6 +614,7 @@ class WorkflowExecutor:
             tools,
             entity_write_origin=origin,
             run_id=run_id,
+            journal_dir=wf.journal_dir,
         )
         wf.reconcile = lambda: self._reconcile(item_id)
         # #429 P5: a per-element turn-lane factory — each map element drives its own
@@ -610,6 +630,7 @@ class WorkflowExecutor:
                 lane=f"{chat_key}#{subkey}",
                 entity_write_origin=origin,
                 run_id=run_id,
+                journal_dir=wf.journal_dir,
             )
         )
         wf.turn_concurrency = self._turn_concurrency

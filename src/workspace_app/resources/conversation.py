@@ -212,6 +212,17 @@ class Message(Struct):
     decides whether an unattended agent stands down — and sniffing a `[goal]`
     text prefix would hinge on a string a user can type themselves."""
 
+    run_id: str | None = None
+    """The workflow execution this message belongs to; `None` for a chat's own.
+    A workflow step persists its prompt and its turn with it, so a chat never
+    reads a run's messages and an execution page selects its own out of a
+    conversation a schedule shares across executions (plan-workflow-out-of-chat
+    P2 / P3)."""
+
+    step: str | None = None
+    """Which step of `run_id` produced it: the step's journal id, its name, or
+    `name/key` for one element of a loop. The execution page's rows are these."""
+
     created_at: int | None = None
     """Epoch milliseconds when the message was produced. Persisted so the agent
     log's timestamps survive a reload. None for messages created before this

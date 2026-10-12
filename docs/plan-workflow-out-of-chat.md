@@ -51,7 +51,7 @@ Read from `origin/master` at `5aa45d3b` (not measured live):
 | D6 | The execution page lists one row per step, collapsed, with its status and `outputs`. Expanding a row shows the step's prompt, reasoning, tool calls and reply. The step's prompt is now persisted. A gate is decided in its row. A running step is expanded. | — |
 | D7 | Workspace mode gets a **labelled** activity-bar entry (NN/g: an icon needs a visible label). It carries a badge with the count of executions awaiting a gate, plus a non-blocking notice naming which execution waits and for what. An execution opens as an editor-area tab, with Stop and "Step N of M". Rows support Expand all / Collapse all; a running, waiting or failed step is never collapsed. Chat-only mode is unchanged and has no workflows. | the chat header's launch menu |
 | D8 | The chat's AI never reads step transcripts, but may read an execution's result files. It can summon an execution card with `show_file`. An execution page has "Open a chat with these results". The AI cannot start or change an execution. | — |
-| D9 | A failed step is expanded. It shows its error, attempts and inputs (as file links), plus **Continue from here** (resume: done steps skip) and **Re-run this step** (invalidate it; downstream cascades). **Ask AI why it failed** opens a chat pointing at the step's journal. Each agent step writes its transcript to the journal (`step_<name>/<key>/transcript.md`) so the AI reads it as a file. | — |
+| D9 | A failed step is expanded. It shows its error, attempts and inputs (as file links), plus **Continue from here** (resume: done steps skip) and **Re-run this step** (invalidate it; downstream cascades). **Ask AI why it failed** opens a chat pointing at the step's journal. Each agent step writes its transcript to the journal, beside its artifact (`step_<name>/<key or main>.transcript.md`), so the AI reads it as a file. | — |
 | D10 | The UI calls it **Workflows**. An execution is named by workflow and start time ("Classify wafers · 10/12 14:03"); buttons are verbs. Code, API and glossary keep `run`. | the `Run` / `Runs` noun-and-verb clash |
 
 Chosen while planning (the user may overturn):
@@ -107,9 +107,31 @@ Report the list before P2 changes behaviour.
   elements, parallel branches and the steerer.
 - The step's prompt is persisted with its turn.
 - Each agent step writes `transcript.md` into its journal key.
+- **Built:**
+  - `drive_turn` hands every node an empty history, so a node reads none of
+    the thread it persists to. Map elements and the steerer drive through the
+    same call. The #624 "history reduced" notice on workflow turns went with it:
+    an empty history is never reduced. Its test, whose premise this overturns,
+    was replaced by `test_a_node_reads_nothing_of_the_conversation_it_runs_on`.
+  - The run mark moved here from P3, because persisting the prompt needs it.
+    `Message` gains `run_id` and `step` (`name`, or `name/key` for one loop
+    element). Each turn persists its prompt first (`role="user"`,
+    `driven_by="workflow"`, so off-hours autonomy does not hear a person),
+    then its turn, all marked.
+  - The step reaches the executor through `steps.CURRENT_STEP`, a ContextVar
+    `agent_step` / `agent_write_step` set around their turn. It is not a
+    `DriveTurn` argument, which would change 48 test doubles to pass a mark.
+    Steps side by side (`gather`, map elements) each hold their own copy.
+  - The transcript sits beside the artifact,
+    `step_<name>/<key or main>.transcript.md` (`engine.transcript_path`, one
+    rule with `_artifact_path`). It holds every attempt, rendered from the
+    step's marked messages. Map GC prunes a departed element's transcript with
+    its artifact; steer's `step_<name>/*` invalidation already took both.
+  - Mutation-probed: 13 guard lines, each reddening the P2 tests; the control
+    stays green.
 
 **P3 — the chat never reads a run.**
-- `Message` gains the run mark.
+- `Message` gains the run mark (done in P2).
 - `history_items` callers for chat turns drop messages of any run. Legacy mixed
   chats are matched by the run window.
 
