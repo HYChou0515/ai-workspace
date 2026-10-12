@@ -15,7 +15,6 @@ consumer can build from the published one with the same code (M13).
 
 from __future__ import annotations
 
-import copy
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
@@ -42,31 +41,32 @@ def key_segments(path: str) -> list[str]:
     return parts
 
 
-def with_keys(document: dict[str, Any], keys: Mapping[str, str]) -> dict[str, Any]:
-    """`document` with each key's value written at its path — a copy; keys live
-    apart from the patch so history never holds them (M6). A key whose place
-    the document hides (`null`, M12) is left out: nothing reads it."""
-    out = copy.deepcopy(document)
+def keys_by_parts(keys: Mapping[str, str]) -> list[tuple[list[str], str]]:
+    """The config keys as (parts below `config`, value) for the loader, which
+    puts each where its setting exists after the merge — never into the patch,
+    so history never holds one (M6) and a key cannot create a setting."""
+    out: list[tuple[list[str], str]] = []
     for path, value in keys.items():
-        *parents, leaf = key_segments(path)
-        node: Any = out
-        for part in parents:
-            if part in node and not isinstance(node[part], dict):
-                node = None
-                break
-            node = node.setdefault(part, {})
-        if node is not None:
-            node[leaf] = value
+        parts = key_segments(path)
+        if parts[0] == "config" and len(parts) > 1:
+            out.append((parts[1:], value))
     return out
 
 
 def effective_settings(
-    document: dict[str, Any], *, config_path: Path | None, env: Mapping[str, str]
+    document: dict[str, Any],
+    *,
+    config_path: Path | None,
+    env: Mapping[str, str],
+    keys: Mapping[str, str] | None = None,
 ) -> Settings:
-    """The typed settings with the document's `config` part applied — through
-    the loader, so every check a boot runs runs here too (M8)."""
+    """The typed settings with the document's `config` part and `keys` applied
+    — through the loader, so every check a boot runs runs here too (M8)."""
     settings, _ = load_with_provenance(
-        config_path=config_path, env=env, overlay=document.get("config") or None
+        config_path=config_path,
+        env=env,
+        overlay=document.get("config") or None,
+        keys=keys_by_parts(keys or {}),
     )
     return settings
 
@@ -166,6 +166,34 @@ def _nulls(patch: Any, path: str) -> list[str]:
 _NO_SUCH_APP = "no such App — an App is a folder shipped with the server"
 
 
+PARTS = ("config", "apps", "profiles")
+
+
+def _shape_problems(document: dict[str, Any]) -> list[str]:
+    """The document's own shape, checked before anything reads it (review r2: a
+    part that was not an object crashed the check after the draft was stored,
+    and a null part was taken as empty — stored, shown, doing nothing)."""
+    found = [
+        f"{key}: not a part of the settings (one of {', '.join(PARTS)})"
+        for key in document
+        if key not in PARTS
+    ]
+    levels = {"config": 0, "apps": 1, "profiles": 2}
+    for part, depth in levels.items():
+        if part in document:
+            found += _objects(document[part], part, depth)
+    return found
+
+
+def _objects(value: Any, path: str, depth: int) -> list[str]:
+    """`value` and `depth` levels below it are objects {…}."""
+    if not isinstance(value, dict):
+        return [f"{path}: must be an object {{…}}, got {type(value).__name__}"]
+    if depth == 0:
+        return []
+    return [p for key, child in value.items() for p in _objects(child, f"{path}.{key}", depth - 1)]
+
+
 def _apps_part_problems(document: dict[str, Any]) -> list[str]:
     """What the apps / profiles parts cannot mean: an App or a profile that is
     not shipped (it is a folder beside the server — a patch can change one, not
@@ -231,7 +259,34 @@ def _outside_live(patch: Any, path: str = "") -> list[str]:
     return found
 
 
+def redact(text: str, keys: Mapping[str, str] | None) -> str:
+    """`text` with every key's value replaced — for anything a route hands
+    back, since a refusal may quote a value (`got {x!r}`) (M6, review r2)."""
+    values: list[str] = [] if keys is None else [str(v) for v in keys.values()]
+    values.sort(key=len, reverse=True)  # a longer key first, if one holds another
+    out = text
+    for value in values:
+        if value:
+            out = out.replace(value, "*** key ***")
+    return out
+
+
 def problems(
+    document: dict[str, Any],
+    *,
+    config_path: Path | None,
+    env: Mapping[str, str],
+    keys: Mapping[str, str] | None = None,
+) -> list[str]:
+    """What stops `document` from running — empty when it can; no key's value
+    ever appears in one (see `_problems`)."""
+    return [
+        redact(problem, keys)
+        for problem in _problems(document, config_path=config_path, env=env, keys=keys)
+    ]
+
+
+def _problems(
     document: dict[str, Any],
     *,
     config_path: Path | None,
@@ -249,8 +304,10 @@ def problems(
 
     `keys` are checked with the document as `LiveSettings` builds it, but only
     the document's own text is checked for a secret typed into it."""
+    shape = _shape_problems(document)
+    if shape:
+        return shape
     written = secrets_written(document) + _apps_part_problems(document)
-    document = with_keys(document, keys or {})
     outside = (
         written
         + _config_nulls(document.get("config") or {})
@@ -259,7 +316,7 @@ def problems(
     if outside:
         return outside
     try:
-        settings = effective_settings(document, config_path=config_path, env=env)
+        settings = effective_settings(document, config_path=config_path, env=env, keys=keys)
     except (ValueError, TypeError, KeyError, AttributeError) as exc:
         return [f"config: {exc}"]
     from ..factories import get_infer_modules_run_config

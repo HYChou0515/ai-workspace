@@ -2,17 +2,20 @@
 
 Changes are a JSON Merge Patch (RFC 7396) over the deploy defaults — only what
 differs is stored (M11), `null` hides a default (M12), and resetting a value is
-removing it from the patch. Four records:
+removing it from the patch. Five records:
 
 - the **draft**: one shared patch; saving it changes nothing running (M4);
 - **versions**: each Apply publishes the draft as a version — its id, the
-  patch, who, when and the previous version (M5);
+  patch, who, when, the previous version, and which key paths changed (M5);
 - the **current** pointer: one small record holding the published version id,
-  which every user of the settings compares before each use (M4);
-- **keys**: secret values by setting path, written and never read back through
-  any route (M6). Each carries a revision marker that goes into the version id,
-  so changing a key changes the version — but history holds the marker, never
-  the value.
+  the patch and the revision of each key in force, which every user of the
+  settings compares before each use (M4);
+- **staged keys**: secret values by setting path, written and never read back
+  through any route (M6), each with a revision marker;
+- **applied keys**: the values the last Apply put in force (M20). An Apply
+  copies the staged keys over and their revisions go into the version id, so a
+  key change reaches the version at the next Apply. History holds key paths,
+  never a value.
 
 Registered after `spec.apply`, like `_UserQuota`: none of this may be reachable
 through generic CRUD routes.
@@ -38,6 +41,8 @@ from specstar.types import (
 )
 
 _DRAFT_ID = "draft"
+#: A key this long or longer is shown by its last four characters.
+_SHOWN_FROM = 16
 _CURRENT_ID = "current"
 
 
@@ -47,9 +52,10 @@ class _SettingsDraft(Struct):
 
 
 class _SettingsVersion(Struct):
-    """One Apply. `version` is the content id consumers compare; the record's
-    own id is per event, so applying an old patch again (a rollback) is a new
-    entry in the history with the old content id."""
+    """One Apply or rollback. `version` is the content id consumers compare
+    (the patch and the revision of each key in force); the record's own id is
+    per event, so a rollback is a new entry in the history — with the old
+    content id when the keys in force are the ones that version had."""
 
     version: str
     patch: dict[str, Any]
@@ -168,12 +174,22 @@ class SettingsStore:
         record = self._get(_SettingsCurrent, _CURRENT_ID)
         return {} if record is None else record.patch
 
-    def publish(self, patch: dict[str, Any], *, by: str) -> Applied:
-        """Make `patch` the published settings, with the keys as they are now.
-        Validation is the caller's (P3): this only records."""
+    def publish(self, patch: dict[str, Any], *, by: str, apply_keys: bool = True) -> Applied:
+        """Make `patch` the published settings. Validation is the caller's (P3):
+        this only records.
+
+        `apply_keys` puts the staged keys in force with it (an Apply, M20). A
+        rollback passes False: it brings back an earlier version's values and
+        leaves the keys as they are in force — a staged key stays staged (review
+        r2: rollback used to apply it while its dialog said keys stay)."""
         current = self._get(_SettingsCurrent, _CURRENT_ID)
-        revs = self._key_revs()
-        changed = self.pending_keys()
+        # One read of the keys: the version counts exactly the keys it applies
+        # (review r2 — a second read could apply a key the version never saw).
+        staged = self._keys()
+        source = staged if apply_keys else self._list_data(_SettingsAppliedKey)
+        revs = {key.path: key.rev for key in source}
+        before = {} if current is None else current.key_revs
+        changed = sorted(p for p in set(revs) | set(before) if revs.get(p) != before.get(p))
         event = _SettingsVersion(
             version=_content_id(patch, revs),
             patch=patch,
@@ -187,7 +203,8 @@ class SettingsStore:
         # Keys before the pointer: a process that builds in between sees the old
         # version with the new keys and rebuilds once the pointer moves. The
         # other order could leave it on the old keys under the new version.
-        self._apply_keys()
+        if apply_keys:
+            self._apply_keys(staged)
         self._put(
             _SettingsCurrent,
             _CURRENT_ID,
@@ -221,8 +238,13 @@ class SettingsStore:
             rm.delete(_key_id(path))
 
     def key_status(self) -> dict[str, str]:
-        """Which keys are set, each shown by its last four characters only."""
-        return {key.path: "…" + key.value[-4:] for key in self._keys()}
+        """Which keys are set: by the last four characters of a long one, as
+        "set" otherwise — the end of a short value is most of it (review r2;
+        every preset env value is a key, M7, and those are often short)."""
+        return {
+            key.path: "…" + key.value[-4:] if len(key.value) >= _SHOWN_FROM else "set"
+            for key in self._keys()
+        }
 
     def pending_keys(self) -> list[str]:
         """Keys set or cleared since the last Apply — in force only after the
@@ -241,8 +263,8 @@ class SettingsStore:
         """The values the last Apply put in force — what a process builds with."""
         return {key.path: key.value for key in self._list_data(_SettingsAppliedKey)}
 
-    def _apply_keys(self) -> None:
-        staged = {key.path: key for key in self._keys()}
+    def _apply_keys(self, keys: list[_SettingsKey]) -> None:
+        staged = {key.path: key for key in keys}
         rm = self._spec.get_resource_manager(_SettingsAppliedKey)
         for applied in self._list_data(_SettingsAppliedKey):
             if applied.path not in staged:

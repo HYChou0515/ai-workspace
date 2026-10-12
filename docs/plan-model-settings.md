@@ -37,7 +37,38 @@ settled by me, listed for the user to overturn.
 | M17 | **Turning a role on or off is not done here.** Whether a role (`kb.retrieval_llm`, `card_drafter`, `health.judge_llm`, …) is on decided at boot which features were wired (the quality judge, the drafter, the goal checker, code-wiki), and boot reads `config.yaml`, not the page — so Apply refuses a change to whether a role is on, with "change it in config.yaml" (`ROLES` in `model_settings/effective.py`). Changing **which** model a role uses is live | mine — found in P5 |
 | M18 | **The page edits only what a running process reads again.** The config part is limited to the model choices of M3 (`LIVE_CONFIG` in `model_settings/effective.py`: `llm`, everything under `agents` (presets, `subagent_models`, the usage lists such as `kb_chat`), the role references); any other config key is refused at Apply with "change it in config.yaml". Storing a value that does nothing until a restart is a dead knob. The same holds inside a live part: the `infer_modules` run knobs (`enhancements`, `reasoning_effort`, `parallelism`, `collection`) and an App's `resources` / `slug` are read at boot and held, so a change to them is refused. Apply also runs the boot's workflow check (`validate_workflow_profiles`) on the draft, so a workflow without its `run.py` is refused rather than found at its first run. A patch can change an App or profile that ships and cannot create one: a patch-only App or profile would pass Apply and never be listed or used (review r1), so it is refused too | mine — found in P5 |
 | M19 | `null` **hides a preset and means nothing else** (M12). Anywhere else — in the config part or under `apps` / `profiles` — it would delete a key the loader or the App needs; a value goes back to its default by leaving the patch, which is what reset does | mine — found in P5 |
-| M20 | A **key** set or cleared on the page takes effect at the next **Apply**, like every other change: it is part of the version string (its revision, never its value), so it reaches the processes the same way and history records that it changed. A key is **staged** until then (`_SettingsKey`) and Apply copies it to the **applied** record (`_SettingsAppliedKey`) every process builds from — review r1 found a process that started after a key change built with the staged value, a key nobody applied | mine — found in P2, fixed by review r1 |
+| M20 | A **key** set or cleared on the page takes effect at the next **Apply**, like every other change: it is part of the version string (its revision, never its value), so it reaches the processes the same way and history records that it changed. A key is **staged** until then (`_SettingsKey`) and Apply copies it to the **applied** record (`_SettingsAppliedKey`) every process builds from — review r1 found a process that started after a key change built with the staged value, a key nobody applied. A rollback brings back an earlier version's values and leaves the keys as they are in force (`publish(..., apply_keys=False)`): a staged key stays staged — review r2 found rollback applying it while its dialog said keys stay | mine — found in P2, fixed by reviews r1 and r2 |
+
+### Sources for the page (M15)
+
+Checked against a screenshot of the built page (CLAUDE.md "UI work must
+follow published UI/UX guidance"); each is cited where it is applied in
+`web/src/pages/ModelSettingsPage.tsx`.
+
+- Three peer sections as a tab strip, two cues on the selected tab — NN/g,
+  "Tabs, Used Right" (https://www.nngroup.com/articles/tabs-used-right/);
+  Material 3, Tabs (https://m3.material.io/components/tabs/guidelines).
+- Apply / roll back / clear behind a confirmation that names the outcome and
+  lists what changes — NN/g, "Confirmation Dialogs Can Prevent User Errors"
+  (https://www.nngroup.com/articles/confirmation-dialog/).
+- Apply offered only when it would change something, the status saying which —
+  NN/g, "10 Usability Heuristics", #1 visibility of system status
+  (https://www.nngroup.com/articles/ten-usability-heuristics/).
+- Problems drawn on the editor line they name, a summary under the editor,
+  announced politely — NN/g, "Error-Message Guidelines"
+  (https://www.nngroup.com/articles/error-message-guidelines/); "10 Design
+  Guidelines for Reporting Errors in Forms"
+  (https://www.nngroup.com/articles/errors-forms-design-guidelines/).
+- Title, description and what is in force as one block — NN/g, "Proximity
+  Principle in Visual Design" (https://www.nngroup.com/articles/gestalt-proximity/).
+- A reset that looks clickable (outlined, not text-only) — NN/g, "Beyond Blue
+  Links" (https://www.nngroup.com/articles/clickable-elements/); Material 3,
+  Buttons (https://m3.material.io/components/buttons/guidelines).
+- "Apply…" with an ellipsis because it asks for confirmation — Microsoft,
+  "Command Buttons" (https://learn.microsoft.com/en-us/windows/win32/uxguide/ctrl-command-buttons).
+- A visible label on the key path field, not a placeholder — NN/g,
+  "Placeholders in Form Fields Are Harmful"
+  (https://www.nngroup.com/articles/form-design-placeholders/).
 
 ### Known costs
 

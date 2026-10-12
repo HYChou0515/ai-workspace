@@ -40,3 +40,25 @@ def test_an_overlay_is_refused_by_the_checks_a_boot_runs(tmp_path):
 
     with pytest.raises(ValueError, match="no-such-preset"):
         _load(tmp_path, bad)
+
+
+def test_a_key_lands_only_where_its_setting_exists(tmp_path):
+    # review r2: a key was written into the patch, creating whatever parents it
+    # named — so a key for a preset the version did not have (a rollback to an
+    # older version) made a half preset the loader refused, and rollback with it.
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text("server:\n  port: 9090\n", encoding="utf-8")
+    keys = [
+        (["agents", "presets", "openai-mini", "llm", "api_key"], "sk-mini"),
+        (["agents", "presets", "gone", "llm", "api_key"], "sk-gone"),
+    ]
+
+    settings, _ = load_with_provenance(
+        config_path=cfg,
+        env={},
+        overlay={"agents": {"presets": {"openai-mini": {"model": "openai/x"}}}},
+        keys=keys,
+    )
+
+    assert settings.agents.presets["openai-mini"].llm.api_key == "sk-mini"
+    assert "gone" not in settings.agents.presets

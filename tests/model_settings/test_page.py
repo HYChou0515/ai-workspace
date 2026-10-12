@@ -70,6 +70,16 @@ def test_every_app_and_profile_is_shown_as_shipped(settings):
         # a secret the page does not edit (M18)
         ("config.storage.pg_dsn", False),
         ("apps.playground.api_key", False),
+        # review r2: secret-NAMED but no such text setting — the loader's refusal
+        # of the shape quoted the value back in every check and save response
+        ("config.agents.subagent_models.api_key", False),
+        ("config.agents.kb_chat.0.api_key", False),
+        ("config.agents.presets.api_key", False),
+        ("config.agents.foo_token", False),
+        ("config.llm.x.api_key", False),
+        # role references are text settings
+        ("config.kb.retrieval_llm.llm.api_key", True),
+        ("config.agents.presets.qwen2.5.env.HF_TOKEN", True),
     ],
 )
 def test_only_a_live_secret_takes_a_key(path, fine):

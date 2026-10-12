@@ -100,3 +100,54 @@ def test_any_version_ever_applied_can_be_found(store):
 
     assert found is not None and found.patch == first.patch
     assert store.applied("never") is None
+
+
+def test_a_rollback_puts_no_staged_key_in_force(store):
+    # review r2 (all five lenses): rollback went through `publish`, which put
+    # every staged key in force — while its dialog said keys keep their values.
+    path = "config.llm.api_key"
+    store.set_key(path, "sk-applied", by="root")
+    first = store.publish({"config": {"llm": {"base_url": "http://a"}}}, by="root")
+    store.publish({"config": {"llm": {"base_url": "http://b"}}}, by="root")
+    store.set_key(path, "sk-staged", by="root")
+
+    rolled = store.publish(first.patch, by="root", apply_keys=False)
+
+    assert store.applied_key_values() == {path: "sk-applied"}
+    assert store.pending_keys() == [path] and rolled.keys_changed == []
+    # the same patch with the same keys in force is the same version again
+    assert rolled.version == first.version
+
+
+def test_a_version_records_the_keys_it_puts_in_force(store, monkeypatch):
+    # review r2: publish read the keys for the version, wrote the version, then
+    # read them AGAIN to apply them; a key set in between went into force under
+    # a version that did not count it (and stayed "pending" though applied).
+    path = "config.llm.api_key"
+    store.set_key(path, "sk-1", by="root")
+    real_put = store._put
+
+    def put_then_someone_sets_a_key(model, resource_id, record):
+        real_put(model, resource_id, record)
+        if type(record).__name__ == "_SettingsVersion":
+            store.set_key(path, "sk-2", by="root")
+
+    monkeypatch.setattr(store, "_put", put_then_someone_sets_a_key)
+    store.publish({}, by="root")
+    monkeypatch.setattr(store, "_put", real_put)
+
+    assert store.applied_key_values() == {path: "sk-1"}
+    assert store.pending_keys() == [path]
+
+
+def test_a_short_key_is_shown_as_set_not_by_its_end(store):
+    # review r2: "…" + the last four of a four-character value is the value;
+    # every preset env value is a key (M7), and those are often short.
+    store.set_key("config.agents.presets.a.env.REGION", "us-east-1", by="root")
+    store.set_key("config.llm.api_key", "sk-1234567890abcdef", by="root")
+
+    status = store.key_status()
+
+    assert status["config.llm.api_key"] == "…cdef"
+    assert "east" not in status["config.agents.presets.a.env.REGION"]
+    assert status["config.agents.presets.a.env.REGION"] == "set"

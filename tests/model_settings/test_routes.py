@@ -149,24 +149,22 @@ def test_rollback_to_a_version_that_never_was_is_404(page):
 
 
 def test_a_key_is_written_never_read_and_in_force_after_apply(page):
-    assert (
-        page.client.put(f"{BASE}/keys", json={"path": API_KEY, "value": "sk-live-9876"}).status_code
-        == 204
-    )
+    response = page.client.put(f"{BASE}/keys", json={"path": API_KEY, "value": "sk-live-0000-9876"})
+    assert response.status_code == 204
     body = page.client.get(BASE).json()
     assert body["keys"] == {API_KEY: "…9876"}
     assert body["pending_keys"] == [API_KEY]  # waiting for Apply (M20)
-    assert "sk-live-9876" not in page.client.get(BASE).text
+    assert "sk-live-0000-9876" not in page.client.get(BASE).text
     page.clock.now += 2
-    assert page.live.settings().agents.presets["kb-default"].llm.api_key != "sk-live-9876"
+    assert page.live.settings().agents.presets["kb-default"].llm.api_key != "sk-live-0000-9876"
 
     applied = page.client.post(f"{BASE}/apply").json()
 
     assert applied["keys_changed"] == [API_KEY]
     assert page.client.get(BASE).json()["pending_keys"] == []
-    assert "sk-live-9876" not in page.client.get(f"{BASE}/history").text
+    assert "sk-live-0000-9876" not in page.client.get(f"{BASE}/history").text
     page.clock.now += 2
-    assert page.live.settings().agents.presets["kb-default"].llm.api_key == "sk-live-9876"
+    assert page.live.settings().agents.presets["kb-default"].llm.api_key == "sk-live-0000-9876"
 
 
 def test_a_key_where_no_key_belongs_is_refused(page):
@@ -178,7 +176,7 @@ def test_a_key_where_no_key_belongs_is_refused(page):
 
 
 def test_a_cleared_key_is_gone(page):
-    page.client.put(f"{BASE}/keys", json={"path": API_KEY, "value": "sk-live-9876"})
+    page.client.put(f"{BASE}/keys", json={"path": API_KEY, "value": "sk-live-0000-9876"})
 
     assert page.client.delete(f"{BASE}/keys", params={"path": API_KEY}).status_code == 204
 
@@ -226,3 +224,37 @@ def test_rollback_reaches_a_version_older_than_the_history_page(page):
 
     assert response.status_code == 200
     assert page.kb_model() == "openai/kb-2"
+
+
+def test_a_rollback_leaves_a_staged_key_staged(page):
+    # review r2 (all five lenses), through the route the page calls.
+    page.client.put(f"{BASE}/draft", json={"patch": KB_2})
+    first = page.client.post(f"{BASE}/apply").json()
+    later = {"config": {"agents": {"presets": {"kb-default": {"model": "openai/kb-3"}}}}}
+    page.client.put(f"{BASE}/draft", json={"patch": later})
+    page.client.post(f"{BASE}/apply")
+    page.client.put(f"{BASE}/keys", json={"path": API_KEY, "value": "sk-staged-1"})
+
+    rolled = page.client.post(f"{BASE}/rollback", json={"version": first["version"]}).json()
+
+    assert rolled["keys_changed"] == []
+    assert page.client.get(BASE).json()["pending_keys"] == [API_KEY]
+    page.clock.now += 2
+    assert page.live.settings().agents.presets["kb-default"].llm.api_key != "sk-staged-1"
+
+
+def test_a_rollback_to_before_a_preset_existed_is_not_blocked_by_its_key(page):
+    # review r2: the key of a preset the earlier version lacks made a half
+    # preset, and the rollback was refused with a message about `model`.
+    page.client.put(f"{BASE}/draft", json={"patch": {}})
+    before = page.client.post(f"{BASE}/apply").json()
+    zz = {"config": {"agents": {"presets": {"zz": {"model": "openai/zz-1"}}}}}
+    page.client.put(f"{BASE}/draft", json={"patch": zz})
+    page.client.put(
+        f"{BASE}/keys", json={"path": "config.agents.presets.zz.llm.api_key", "value": "sk-zz"}
+    )
+    page.client.post(f"{BASE}/apply")
+
+    response = page.client.post(f"{BASE}/rollback", json={"version": before["version"]})
+
+    assert response.status_code == 200, response.json()

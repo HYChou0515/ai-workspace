@@ -53,6 +53,40 @@ export function diffPatches(before: Patch, after: Patch): Change[] {
   return out;
 }
 
+/** The value at `parts` in `document`; `found` false when any part is absent. */
+export function valueAt(document: unknown, parts: string[]): { found: boolean; value?: unknown } {
+  let node: unknown = document;
+  for (const part of parts) {
+    if (!isObject(node) || !(part in node)) return { found: false };
+    node = node[part];
+  }
+  return { found: true, value: node };
+}
+
+/** What changes in what RUNS when `after` is published in place of `before`,
+ * both patches over `defaults` — value by value, for every path either patch
+ * sets: a replaced default is "changed" from the default, a value given back
+ * is "changed" to it, a `null` (a hidden preset) is "removed". */
+export function diffEffective(defaults: Patch, before: Patch, after: Patch): Change[] {
+  const paths = new Map<string, string[]>();
+  for (const leaf of [...flattenParts(before), ...flattenParts(after)]) paths.set(leaf.path, leaf.parts);
+  const runs = (patch: Patch, parts: string[]) => {
+    const set = valueAt(patch, parts);
+    if (set.found) return set.value === null ? { found: false } : set;
+    return valueAt(defaults, parts);
+  };
+  const out: Change[] = [];
+  for (const [path, parts] of paths) {
+    const was = runs(before, parts);
+    const will = runs(after, parts);
+    if (was.found && will.found) {
+      if (!same(was.value, will.value)) out.push({ path, kind: "changed", before: was.value, after: will.value });
+    } else if (will.found) out.push({ path, kind: "added", after: will.value });
+    else if (was.found) out.push({ path, kind: "removed", before: was.value });
+  }
+  return out;
+}
+
 /** `patch` without the value at `parts` — that value back to its default — on a copy. */
 export function withoutPath(patch: Patch, parts: string[]): Patch {
   const [head, ...rest] = parts;

@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest";
 
-import { diffPatches, flattenPatch, flattenParts, lineOfPath, parsePatch, withoutPath } from "./settingsPatch";
+import {
+  diffEffective,
+  diffPatches,
+  flattenPatch,
+  flattenParts,
+  lineOfPath,
+  parsePatch,
+  withoutPath,
+} from "./settingsPatch";
 
 describe("lineOfPath", () => {
   const text = [
@@ -107,5 +115,37 @@ describe("a preset whose name holds a dot", () => {
 
   it("resets that value", () => {
     expect(withoutPath(patch, ["config", "agents", "presets", "qwen2.5", "model"])).toEqual({});
+  });
+});
+
+
+describe("diffEffective", () => {
+  // review r2 (ux): comparing the two patches called a value that replaces a
+  // deploy default "Added", with no old value; what changes is what RUNS.
+  const defaults = { config: { agents: { presets: { a: { model: "default-a" } } } } };
+
+  it("names a replaced default as changed, from the default", () => {
+    const after = { config: { agents: { presets: { a: { model: "new-a" } } } } };
+
+    expect(diffEffective(defaults, {}, after)).toEqual([
+      { path: "config.agents.presets.a.model", kind: "changed", before: "default-a", after: "new-a" },
+    ]);
+  });
+
+  it("names a value back to its default as changed, to the default", () => {
+    const before = { config: { agents: { presets: { a: { model: "new-a" } } } } };
+
+    expect(diffEffective(defaults, before, {})).toEqual([
+      { path: "config.agents.presets.a.model", kind: "changed", before: "new-a", after: "default-a" },
+    ]);
+  });
+
+  it("names a value the defaults lack as added, and a hidden preset as removed", () => {
+    expect(diffEffective(defaults, {}, { config: { llm: { base_url: "x" } } })).toEqual([
+      { path: "config.llm.base_url", kind: "added", after: "x" },
+    ]);
+    expect(diffEffective(defaults, {}, { config: { agents: { presets: { a: null } } } })).toEqual([
+      { path: "config.agents.presets.a", kind: "removed", before: { model: "default-a" } },
+    ]);
   });
 });

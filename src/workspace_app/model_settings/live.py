@@ -22,7 +22,7 @@ from typing import Any, TypeVar
 from msgspec import Struct
 
 from ..config.schema import Settings
-from .effective import effective_settings, with_keys
+from .effective import effective_settings
 from .store import SettingsStore
 
 logger = logging.getLogger(__name__)
@@ -34,8 +34,9 @@ VERSION_TTL_S = 1.0
 
 
 class Snapshot(Struct, frozen=True):
-    """One published version, built: the document the page published (patch
-    with keys) and the typed settings made from it."""
+    """One published version, built: the document the page published (its
+    patch — keys stay apart, M6) and the typed settings made from it with the
+    keys that version put in force."""
 
     version: str | None
     document: dict[str, Any]
@@ -96,8 +97,7 @@ class LiveSettings:
         return self.snapshot().settings
 
     def document(self) -> dict[str, Any]:
-        """The published document (patch with keys) — what app.json and
-        profiles are patched with."""
+        """The published patch — what app.json and profiles are patched with."""
         return self.snapshot().document
 
     def version(self) -> str | None:
@@ -182,8 +182,13 @@ class LiveSettings:
     def _build(self, version: str | None) -> Snapshot:
         assert self._store is not None
         # The keys the last Apply put in force — never the staged ones (M20).
-        document = with_keys(self._store.published_patch(), self._store.applied_key_values())
-        settings = effective_settings(document, config_path=self._config_path, env=self._env)
+        document = self._store.published_patch()
+        settings = effective_settings(
+            document,
+            config_path=self._config_path,
+            env=self._env,
+            keys=self._store.applied_key_values(),
+        )
         snapshot = Snapshot(version=version, document=document, settings=settings)
         if self._on_build is not None:
             self._on_build(snapshot)

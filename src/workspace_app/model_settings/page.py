@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import dataclasses
 import time
+import types
+import typing
 from typing import Any
 
 from msgspec import Struct
@@ -22,7 +24,7 @@ from ..apps.manifest import read_app_manifest_raw
 from ..apps.profiles import list_profiles, read_profile_raw
 from ..config.dump import is_secret
 from ..config.schema import Settings
-from .effective import LIVE_CONFIG
+from .effective import LIVE_CONFIG, key_segments
 
 #: What a secret shows as. Set or unset is all the page may say (M6).
 SET, UNSET = "*** set ***", "*** unset ***"
@@ -85,9 +87,35 @@ def defaults_document(settings: Settings) -> dict[str, Any]:
     }
 
 
+def _is_text_setting(parts: list[str]) -> bool:
+    """Whether `parts` (below `config`) name a text setting in the schema —
+    walking the settings dataclasses, a `dict[str, V]` taking any one key, an
+    optional value its inner type. A key anywhere else would be refused by the
+    loader, whose message quotes the value back (review r2)."""
+    kind: Any = Settings
+    for part in parts:
+        kind = _strip_optional(kind)
+        if dataclasses.is_dataclass(kind):
+            hints = typing.get_type_hints(kind)
+            if part not in hints:
+                return False
+            kind = hints[part]
+        elif typing.get_origin(kind) is dict:
+            kind = typing.get_args(kind)[1]
+        else:
+            return False
+    return _strip_optional(kind) is str
+
+
+def _strip_optional(kind: Any) -> Any:
+    args = [a for a in typing.get_args(kind) if a is not type(None)]
+    is_union = typing.get_origin(kind) in (typing.Union, types.UnionType)
+    return args[0] if is_union and len(args) == 1 else kind
+
+
 def key_path_problem(path: str) -> str | None:
     """Why `path` cannot hold a key, or None. A key is a secret (M7's rule)
-    inside the part of config the page edits (M18)."""
+    inside the part of config the page edits (M18), at a text setting."""
     if not path.startswith("config."):
         return f"{path}: a key lives in the config part (config.…)"
     inner = path.removeprefix("config.")
@@ -95,6 +123,11 @@ def key_path_problem(path: str) -> str | None:
         return f"{path}: not a secret — set it in the text, not as a key"
     if not any(inner == live or inner.startswith(live + ".") for live in LIVE_CONFIG):
         return f"{path}: read only when the server starts — set it in config.yaml"
+    parts = key_segments(path)[1:]
+    # config.yaml's `agents.<purpose>` lists are `sub_agents` once loaded; a
+    # key inside a list is not a text setting either way.
+    if not _is_text_setting(parts):
+        return f"{path}: no such text setting — a key is set at a preset's llm.api_key or env"
     return None
 
 

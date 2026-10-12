@@ -2752,14 +2752,25 @@ export const messages = {
     en: "The draft matches what is in force; nothing to apply",
   },
   "modelSettings.readyToApply": {
-    "zh-TW": "可以套用：{values} 個值、{keys} 個金鑰會改變",
-    en: "Ready to apply: {values} values and {keys} keys change",
+    "zh-TW": "可以套用：改變 {values} 個值、{keys} 個金鑰",
+    en: "Ready to apply — values changed: {values}, keys changed: {keys}",
   },
   "modelSettings.applyBlockedProblems": {
     "zh-TW": "先修正上面列出的問題才能套用",
     en: "Fix the problems listed above to apply",
   },
   "modelSettings.keyChangeSet": { "zh-TW": "金鑰設定", en: "Key set" },
+  "modelSettings.keyPendingSet": { "zh-TW": "等待套用", en: "Waiting for Apply" },
+  "modelSettings.keyPendingCleared": { "zh-TW": "已清除，等待套用", en: "Cleared, waiting for Apply" },
+  "modelSettings.keysWaiting": {
+    "zh-TW": "{n} 個金鑰改動等待套用",
+    en: "{n} key change(s) waiting for Apply",
+  },
+  "modelSettings.keyPathLabel": { "zh-TW": "設定路徑", en: "Setting path" },
+  "modelSettings.fixJsonFirst": {
+    "zh-TW": "先修正 JSON 才能儲存或套用",
+    en: "Fix the JSON to save or apply",
+  },
   "modelSettings.keyChangeCleared": { "zh-TW": "金鑰清除", en: "Key cleared" },
   "modelSettings.keyNeedBoth": {
     "zh-TW": "填入設定路徑和金鑰才能設定",
@@ -2800,8 +2811,8 @@ export const messages = {
   "modelSettings.test": { "zh-TW": "測試連線", en: "Test connection" },
   "modelSettings.testPreset": { "zh-TW": "要測試的 preset", en: "Preset to test" },
   "modelSettings.testHint": {
-    "zh-TW": "用草稿（含金鑰）對這個 preset 的模型送一次很短的請求。不影響套用。",
-    en: "Sends one short request to this preset's model using the draft (keys included). It never blocks Apply.",
+    "zh-TW": "用已儲存的草稿（含金鑰）對這個 preset 的模型送一次很短的請求。不影響套用。",
+    en: "Sends one short request to this preset's model using the saved draft (keys included). It never blocks Apply.",
   },
   "modelSettings.testOk": { "zh-TW": "連得上 {model}（{ms} ms）：{reply}", en: "{model} answered in {ms} ms: {reply}" },
   "modelSettings.testFailed": { "zh-TW": "連不上：{error}", en: "Failed: {error}" },
@@ -2812,14 +2823,14 @@ export const messages = {
   "modelSettings.rollback": { "zh-TW": "回復到這一版…", en: "Roll back to this…" },
   "modelSettings.rollbackTitle": { "zh-TW": "回復到版本 {version}？", en: "Roll back to version {version}?" },
   "modelSettings.rollbackBody": {
-    "zh-TW": "這一版的設定會重新生效，草稿也改成這一版。金鑰維持目前的值（歷史不存金鑰）。",
-    en: "This version's settings take effect again and the draft becomes this version. Keys keep their current values (history never holds a key).",
+    "zh-TW": "這一版的設定會重新生效，草稿也改成這一版。金鑰維持目前生效的值（歷史不存金鑰）；還沒套用的金鑰改動繼續等下一次套用。",
+    en: "This version's settings take effect again and the draft becomes this version. Keys keep the values in force (history never holds a key); key changes not yet applied keep waiting for the next Apply.",
   },
   "modelSettings.rollbackConfirm": { "zh-TW": "回復", en: "Roll back" },
   "modelSettings.keysDesc": {
     "zh-TW":
-      "金鑰只寫不讀：存了之後只顯示最後四碼，不出現在草稿、差異或歷史裡。改了金鑰要再按一次「套用」才生效。",
-    en: "Keys are write-only: once saved only the last four characters show, and never in the draft, a diff or the history. A changed key takes effect at the next Apply.",
+      "金鑰只寫不讀：存了之後長的只顯示最後四碼、短的只顯示「已設定」，不出現在草稿、差異或歷史裡。改了金鑰要再按一次「套用」才生效。",
+    en: "Keys are write-only: once saved a long one shows only its last four characters and a short one only that it is set — never in the draft, a diff or the history. A changed key takes effect at the next Apply.",
   },
   "modelSettings.keysNone": { "zh-TW": "沒有在這裡設過金鑰。", en: "No key has been set here." },
   "modelSettings.keyPath": {

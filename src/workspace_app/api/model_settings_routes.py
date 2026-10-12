@@ -26,8 +26,8 @@ from pydantic import BaseModel
 from ..model_settings.effective import (
     effective_settings,
     problems,
+    redact,
     secrets_written,
-    with_keys,
 )
 from ..model_settings.live import LiveSettings
 from ..model_settings.page import defaults_document, key_path_problem, try_connection
@@ -112,15 +112,16 @@ def register_model_settings_routes(
             raise HTTPException(status_code=404, detail="not found")
         return me
 
-    def _problems(patch: dict[str, Any]) -> list[str]:
-        # Checked as it would run: with the keys in it, as `LiveSettings` builds it.
-        return problems(patch, config_path=config_path, env=env, keys=store.key_values())
-
-    def _publish(patch: dict[str, Any], by: str) -> Applied:
-        found = _problems(patch)
-        if found:
-            raise HTTPException(status_code=422, detail={"problems": found})
-        return store.publish(patch, by=by)
+    def _problems(patch: dict[str, Any], keys: dict[str, str] | None = None) -> list[str]:
+        # Checked as it would run: with the keys it would run with (by default
+        # the staged ones, which the next Apply puts in force).
+        found = problems(
+            patch,
+            config_path=config_path,
+            env=env,
+            keys=store.key_values() if keys is None else keys,
+        )
+        return found
 
     @app.get("/admin/model-settings")
     async def page() -> _PageOut:
@@ -161,7 +162,15 @@ def register_model_settings_routes(
     @app.post("/admin/model-settings/apply")
     async def apply() -> _AppliedOut:
         me = _require_superuser()
-        return _out(await asyncio.to_thread(lambda: _publish(store.draft(), me)))
+
+        def publish() -> Applied:
+            draft = store.draft()
+            found = _problems(draft)
+            if found:
+                raise HTTPException(status_code=422, detail={"problems": found})
+            return store.publish(draft, by=me)
+
+        return _out(await asyncio.to_thread(publish))
 
     @app.get("/admin/model-settings/history")
     async def history() -> list[_AppliedOut]:
@@ -176,7 +185,12 @@ def register_model_settings_routes(
             earlier = store.applied(body.version)
             if earlier is None:
                 raise HTTPException(status_code=404, detail="no such version")
-            applied = _publish(earlier.patch, me)
+            # Checked with, and published with, the keys IN FORCE: a rollback
+            # brings back values and leaves a staged key staged (review r2).
+            found = _problems(earlier.patch, store.applied_key_values())
+            if found:
+                raise HTTPException(status_code=422, detail={"problems": found})
+            applied = store.publish(earlier.patch, by=me, apply_keys=False)
             # The draft follows what is now in force, or the next Apply would
             # quietly re-publish what was just rolled back.
             store.save_draft(earlier.patch, by=me)
@@ -202,18 +216,22 @@ def register_model_settings_routes(
         _require_superuser()
 
         def call() -> _ConnectionOut:
-            document = with_keys(store.draft(), store.key_values())
             try:
-                settings = effective_settings(document, config_path=config_path, env=env)
+                settings = effective_settings(
+                    store.draft(), config_path=config_path, env=env, keys=store.key_values()
+                )
             except (ValueError, TypeError, KeyError, AttributeError) as exc:
-                return _ConnectionOut(ok=False, error=f"the draft does not load: {exc}")
+                return _ConnectionOut(
+                    ok=False,
+                    error=redact(f"the draft does not load: {exc}", store.key_values()),
+                )
             result = try_connection(settings, body.preset)
             return _ConnectionOut(
                 ok=result.ok,
                 model=result.model,
                 ms=result.ms,
                 reply=result.reply,
-                error=result.error,
+                error=redact(result.error, store.key_values()),
             )
 
         return await asyncio.to_thread(call)

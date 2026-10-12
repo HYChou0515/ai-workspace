@@ -118,14 +118,14 @@ describe("ModelSettingsPage", () => {
     expect(screen.getByTestId("model-settings-in-force")).toHaveTextContent("01234567");
   });
 
-  it("names a JSON mistake at once, and saves nothing", async () => {
+  it("names a JSON mistake once typing pauses, and saves nothing", async () => {
     const client = fakeClient();
     renderWithQuery(<ModelSettingsPage client={client} />);
     await screen.findByRole("textbox", { name: "草稿（JSON）" });
 
     type("{ not json");
 
-    expect(screen.getByTestId("model-settings-parse")).toHaveTextContent("不是合法的 JSON");
+    expect(await screen.findByTestId("model-settings-parse")).toHaveTextContent("不是合法的 JSON");
     expect(screen.getByTestId("model-settings-save")).toBeDisabled();
   });
 
@@ -157,7 +157,7 @@ describe("ModelSettingsPage", () => {
 
     fireEvent.click(screen.getByTestId("model-settings-apply"));
     const diff = await screen.findByTestId("model-settings-diff");
-    expect(diff).toHaveTextContent("config.agents.presets.kb-default.model: openai/kb-2");
+    expect(diff).toHaveTextContent("config.agents.presets.kb-default.model: ollama_chat/qwen3:14b → openai/kb-2");
     expect(client.apply).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "套用" }));
 
@@ -263,6 +263,87 @@ describe("ModelSettingsPage", () => {
     const select = (await screen.findByLabelText("要測試的 preset")) as HTMLSelectElement;
 
     expect([...select.options].map((o) => o.value)).toEqual(["kb-default"]);
+  });
+
+  it("is not stuck on unsaved edits when the saved draft says the same in other spacing", async () => {
+    // review r2 (ux): dirtiness compared the TEXT, so a save of the same content
+    // left "unsaved edits" on with Apply off for good — CLAUDE.md: sameShape.
+    renderWithQuery(<ModelSettingsPage client={fakeClient({ draft: KB_2 })} />);
+    await waitFor(() => expect(JSON.parse(editor().value)).toEqual(KB_2));
+
+    type(JSON.stringify(KB_2)); // one line instead of pretty-printed
+
+    expect(screen.getByTestId("model-settings-save")).toBeDisabled();
+    expect(screen.queryByTestId("model-settings-apply-why")).toBeNull();
+    await waitFor(() => expect(screen.getByTestId("model-settings-apply")).toBeEnabled());
+  });
+
+  it("says to fix the JSON, not to save, when the text does not parse", async () => {
+    renderWithQuery(<ModelSettingsPage client={fakeClient()} />);
+    await screen.findByRole("textbox", { name: "草稿（JSON）" });
+
+    type("{ not json");
+
+    expect(screen.getByTestId("model-settings-apply-why")).toHaveTextContent("先修正 JSON");
+  });
+
+  it("waits for a pause in typing before calling the JSON wrong", async () => {
+    // review r2 (ux): the banner came at every keystroke (NN/g: not too early).
+    renderWithQuery(<ModelSettingsPage client={fakeClient()} />);
+    await screen.findByRole("textbox", { name: "草稿（JSON）" });
+
+    type('{"config": ');
+
+    expect(screen.queryByTestId("model-settings-parse")).toBeNull();
+    expect(await screen.findByTestId("model-settings-parse")).toBeInTheDocument();
+  });
+
+  it("keeps unsaved edits across a switch of tabs", async () => {
+    // review r2 (ux): the editor's text lived in the Edit tab, so looking at
+    // the keys and coming back threw it away without a word.
+    renderWithQuery(<ModelSettingsPage client={fakeClient()} />);
+    await screen.findByRole("textbox", { name: "草稿（JSON）" });
+    type(JSON.stringify(KB_2));
+
+    fireEvent.click(screen.getByRole("tab", { name: "API 金鑰" }));
+    fireEvent.click(screen.getByRole("tab", { name: "編輯" }));
+
+    expect(JSON.parse(editor().value)).toEqual(KB_2);
+  });
+
+  it("shows which keys wait for Apply, and applies them from the keys tab", async () => {
+    const set = "config.agents.presets.kb-default.llm.api_key";
+    const cleared = "config.llm.api_key";
+    const client = fakeClient({ keys: { [set]: "…4321" }, pending_keys: [cleared, set] });
+    renderWithQuery(<ModelSettingsPage client={client} />);
+    fireEvent.click(await screen.findByRole("tab", { name: "API 金鑰" }));
+
+    expect(screen.getByTestId(`model-settings-key-pending-${set}`)).toHaveTextContent("等待套用");
+    expect(screen.getByTestId(`model-settings-key-pending-${cleared}`)).toHaveTextContent("已清除");
+    fireEvent.click(await screen.findByTestId("model-settings-keys-apply"));
+    fireEvent.click(await screen.findByRole("button", { name: "套用" }));
+
+    await waitFor(() => expect(client.apply).toHaveBeenCalled());
+  });
+
+  it("names a value that replaces a deploy default as changed, from that default", async () => {
+    const client = fakeClient({ draft: KB_2 });
+    renderWithQuery(<ModelSettingsPage client={client} />);
+    await waitFor(() => expect(screen.getByTestId("model-settings-apply")).toBeEnabled());
+
+    fireEvent.click(screen.getByTestId("model-settings-apply"));
+
+    expect(await screen.findByTestId("model-settings-diff")).toHaveTextContent(
+      "config.agents.presets.kb-default.model: ollama_chat/qwen3:14b → openai/kb-2",
+    );
+  });
+
+  it("labels the key path with visible text, not only a placeholder", async () => {
+    renderWithQuery(<ModelSettingsPage client={fakeClient()} />);
+    fireEvent.click(await screen.findByRole("tab", { name: "API 金鑰" }));
+
+    expect(screen.getByText("設定路徑")).toBeVisible();
+    expect(screen.getByLabelText("設定路徑")).toBe(screen.getByTestId("model-settings-key-path"));
   });
 
   it("lists a refused Apply's reasons", async () => {

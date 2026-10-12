@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import dataclasses
 import os
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any, cast
 
@@ -114,6 +114,7 @@ def load_with_provenance(
     config_path: Path | None = None,
     env: Mapping[str, str] | None = None,
     overlay: dict[str, Any] | None = None,
+    keys: Sequence[tuple[Sequence[str], str]] | None = None,
 ) -> tuple[Settings, Provenance]:
     """`load` plus a per-leaf provenance map (observability feature A): for
     every dotted path in `asdict(settings)`, whether the value came from the
@@ -150,6 +151,23 @@ def load_with_provenance(
     # validation, so an Apply is refused by exactly what refuses a boot (M8).
     if overlay:
         merged = apply_merge_patch(merged, _walk_strings(overlay, lambda s: expand_env(s, e)))
+    # 4c — the page's write-only keys, by parts: each lands only where the
+    # setting's OWNER exists after the merge (a preset, a role reference); the
+    # level that holds the value (`llm`, `env`) may be created. A key whose
+    # owner this version does not have (a hidden preset, a rollback to before
+    # it was added, a role turned off) is unused — writing it would make a half
+    # preset the checks then refuse.
+    for parts, value in keys or ():
+        owner, holder, leaf = list(parts[:-2]), list(parts[-2:-1]), parts[-1]
+        node: Any = merged
+        for part in owner:
+            node = node.get(part) if isinstance(node, dict) else None
+        if not isinstance(node, dict):
+            continue
+        for part in holder:
+            node = node.setdefault(part, {})
+        if isinstance(node, dict):
+            node[leaf] = value
 
     # 5 — strict validation
     _validate(merged, source=str(path) if path else "<bundled defaults>")
