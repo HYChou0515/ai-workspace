@@ -408,6 +408,9 @@ export function EnvVarsModal({
             query={query}
             shared={shared}
             own={ownLayer(mineValues, auto)}
+            // The stored row plus every edit, a cleared one included: the row of
+            // a value being emptied stays put while it is typed (review of P7).
+            heldNames={Object.keys({ ...personal, ...personalEdits })}
             policy={policy}
             values={personalValues}
             failed={personalQ.isError}
@@ -1317,6 +1320,7 @@ function PersonalTab({
   query,
   shared,
   own,
+  heldNames,
   policy,
   values,
   failed,
@@ -1333,6 +1337,8 @@ function PersonalTab({
    * whether this item uses my value for every item (`layerInUse`). */
   shared: Record<string, string>;
   own: Record<string, string>;
+  /** Every name I hold or am editing, one being cleared included. */
+  heldNames: string[];
   policy: Record<string, string>;
   /** My values for every item, as the box holds them now. */
   values: Record<string, string>;
@@ -1355,7 +1361,7 @@ function PersonalTab({
   for (const n of asked) needed.set(n, "");
   // Every name I hold too: these are my values, and each row says whether
   // this item uses it — a name no tool declared included (2026-10-12).
-  const held = Object.keys(values).filter((n) => !needed.has(n));
+  const held = heldNames.filter((n) => !needed.has(n));
   for (const n of held) needed.set(n, "");
   const q = query.trim().toLowerCase();
   const found = new Set([

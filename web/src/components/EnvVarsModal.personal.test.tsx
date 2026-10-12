@@ -193,6 +193,19 @@ describe("a value of mine that no tool declared (2026-10-12)", () => {
     expect(row).toHaveTextContent("使用中：Shared");
   });
 
+  it("stays listed while its value is being cleared", async () => {
+    // Review of P7: the list was the non-empty values, so the row unmounted on
+    // the keystroke that emptied it — focus gone, and "nothing to fill" shown
+    // over a pending removal.
+    open({ tools: [], envPolicy: {}, personal: { MCP_TOKEN: "t" } });
+    await personalTab();
+
+    fireEvent.change(await screen.findByTestId("env-personal-MCP_TOKEN"), { target: { value: "" } });
+
+    expect(screen.getByTestId("env-personal-row-MCP_TOKEN")).toBeInTheDocument();
+    expect(screen.queryByTestId("env-personal-none")).not.toBeInTheDocument();
+  });
+
   it("is listed on Private too, where typing would take over for this item", async () => {
     open({ tools: [], envPolicy: {}, personal: { MCP_TOKEN: "t" } });
 
