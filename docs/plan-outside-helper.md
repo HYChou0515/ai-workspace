@@ -34,10 +34,10 @@
 | D2 | 使用者電腦上跑一支 Python 小程式(外網小幫手)代替人上外網 | 〔user〕「一個python小工具」 |
 | D3 | 因為只有瀏覽器能上網,小幫手用 Playwright 開公司裝好的 **Chrome**(`channel="chrome"`)代為操作;不裝擴充功能 | 〔user〕「只能用瀏覽器上網」「我們是chrome」 |
 | D4 | **搜尋**送出去前,人在卡片上點頭(看得到查詢、可以改)按「查」。抓回來的內容**都直接送給 AI**,不再經人 | 〔user〕先選 B(兩個點),後改「直接送」——每頁只回一頁(D10),第二個點只剩「按送出」的搬運 |
-| D13 | **怎麼開**:雙擊桌面的「外網小幫手」捷徑(由安裝建立,D16),開一個小視窗(Python 內建 tkinter):狀態(已連線/正在查/登入過期)、「登入」「暫停/繼續」「結束」、可勾「開機時自動啟動」(在 Windows「啟動」資料夾放捷徑)。關掉視窗 = 關掉小幫手 | 〔user〕「你如果能安裝好我也是可以」;呼應最初「一個簡單的gui代勞」 |
+| D13 | **怎麼開**:雙擊桌面捷徑 `Outside Helper`(由安裝建立,D16;檔名用英文),開一個小視窗(Python 內建 tkinter):狀態(已連線/正在查/登入過期)、「登入」「暫停/繼續」「結束」、可勾「開機時自動啟動」(在 Windows「啟動」資料夾放捷徑)。關掉視窗 = 關掉小幫手 | 〔user〕「你如果能安裝好我也是可以」;呼應最初「一個簡單的gui代勞」 |
 | D14 | **打包在 dev server**(連得到 PyPI):`pip download --platform win_amd64 --only-binary=:all:` 抓 Windows 用的套件(Playwright 本身不分 Python 版本;`greenlet` 依版本,一次放 CPython 3.10–3.14 各一份〔施工〕),加上小幫手自己的 wheel 和 `.pyw`,組成離線安裝包;放在 **AI workspace 網頁**的「外網小幫手」頁下載。沒有 Windows CI——Windows 上的驗證是 user 在公司筆電裝起來跑一次 | 〔user〕「只能是我在dev server打包 或是在公司筆電打包」「可以 甚至可以在ai workspace網頁下載」 |
 | D15 | **更新**:一般更新由小幫手在背景下載、裝好,**下次開啟時生效**,使用者不用做任何事;只有後端說「低於最低可用版本」時,才跳視窗要求立刻更新 | 〔user〕「要放給使用者的東西 要有好的update流程」;選「一般自動、低於最低版本才強制」 |
-| D16 | **安裝(每台筆電一次)**:從 AI workspace 網頁下載 zip、解壓縮、雙擊 `安裝.pyw`(只用 Python 內建功能)。它先顯示「將使用 Python 3.x(完整路徑)」讓人確認,建好資料夾、裝好套件,在桌面放捷徑;**捷徑寫死那個 `pythonw.exe` 的絕對路徑**,之後不靠副檔名關聯。系統挑錯 Python 時,取消、改用 `py -3.x 安裝.pyw`。不處理「Python 被升級」——沒有人會自動升級 Python,真的換了就重跑一次安裝 | 〔user〕「什麼叫執行安裝指令?我是在dev server打包的耶」「可以吧 簡單即可」「沒有人會自動升級python」「你有指定執行檔路徑?」 |
+| D16 | **安裝(每台筆電一次)**:從 AI workspace 網頁下載 zip、解壓縮、雙擊 `install.pyw`(只用 Python 內建功能;檔名一律英文)。它先顯示「將使用 Python 3.x(完整路徑)」讓人確認,建好資料夾、裝好套件,在桌面放捷徑;**捷徑寫死那個 `pythonw.exe` 的絕對路徑**,之後不靠副檔名關聯。系統挑錯 Python 時,取消、改用 `py -3.x install.pyw`。不處理「Python 被升級」——沒有人會自動升級 Python,真的換了就重跑一次安裝 | 〔user〕「什麼叫執行安裝指令?我是在dev server打包的耶」「可以吧 簡單即可」「沒有人會自動升級python」「你有指定執行檔路徑?」 |
 | D12 | **開網址**:網址若出現在**這個聊天先前任何一次查回來的內容**裡,直接開;否則和搜尋一樣,先在卡片上點頭 | 〔user〕「純網址可以直接開 搜尋要先確認」,後收緊為「網址出現在上一次查詢中的話就可以直接開」「查過都算」——外面網頁上的連結是外面帶回來的,AI 自己寫的網址才可能夾帶內部字詞 |
 | D5 | 小幫手主動向後端領工作(網頁不能控制它);**Python 直接連我們的後端** | 〔user〕選 1 |
 | D6 | 身分沿用 app 現有的登入(「要登入才能用」那道門),不另做金鑰 | 〔user〕「我們已經有卡(限制)登入了」 |
@@ -123,7 +123,7 @@ AI 呼叫 ask_outside ──► 卡片(D7:沒連線 = 今天的手動流程)
 ### 3.6 安裝包(D8)〔施工〕
 
 - dev server 上一支打包指令(D14)產生 wheelhouse(小幫手 + Playwright、greenlet 等 Windows 用的 wheel)與
-  `安裝.pyw`,壓成一個 zip;AI workspace 網頁有一頁「外網小幫手」提供下載與一行說明(解壓縮、雙擊 `安裝.pyw`,D16)。
+  `install.pyw`、`launch.pyw`,壓成 `outside-helper-<版本>.zip`;AI workspace 網頁有一頁「外網小幫手」提供下載與一行說明(解壓縮、雙擊 `install.pyw`,D16)。發布流程見 §3.7.2。
 - 不下載 Playwright 自帶的瀏覽器(`channel="chrome"` 用已安裝的 Chrome)。
 - **跨平台下載要指定每個 Python 版本**:`pip download` 的 `--python-version`/`--implementation`/`--abi` 預設是
   跑 pip 的那台 Linux 的版本([pip download](https://pip.pypa.io/en/stable/cli/pip_download/));`greenlet` 每個
@@ -141,22 +141,98 @@ AI 呼叫 ask_outside ──► 卡片(D7:沒連線 = 今天的手動流程)
 | 公司 Chrome 自動更新,Playwright 跟不上 | 啟動逾時、Chrome 一開就關 | Playwright 每版只保證當時那一版 Chrome([release notes](https://playwright.dev/python/docs/release-notes));企業政策也可能擋自動化([browsers](https://playwright.dev/python/docs/browsers))。心跳回報 Chrome / Playwright / Python 版本,看得到誰快出事;Chrome 超過測過的版本就出新版小幫手;啟動失敗顯示「Chrome 已更新,請更新小幫手」而不是錯誤堆疊 |
 | Windows 不能覆蓋正在跑的檔案 | `pip install --upgrade` 失敗(WinError 32);更新一半壞掉 | **不原地更新**:每個版本裝在自己的資料夾,下次啟動才換,換不成就留舊版——Chrome 與 VS Code 的做法([Chromium upgrade_util_win](https://chromium.googlesource.com/chromium/src/+/lkgr/chrome/browser/first_run/upgrade_util_win.h)) |
 | 一台電腦好幾個 Python | 「裝好了,雙擊卻找不到模組」 | `pip`、`py`、`.pyw` 可能各找到不同 Python([Python on Windows](https://docs.python.org/3/using/windows.html));venv 綁死建它的 Python([venv](https://docs.python.org/3/library/venv.html))。所以安裝時讓人確認用哪個 Python,捷徑寫死它的絕對路徑(D16),之後不靠副檔名關聯;每版一個 venv,都由這個 Python 建 |
-| 開機捷徑指著舊路徑 | 開機沒啟動,或啟動舊版 | 捷徑永遠指向「安裝時那個 `pythonw.exe` + 同一個固定的啟動檔」,不指向版本資料夾 |
+| 開機捷徑指著舊路徑 | 開機沒啟動,或啟動舊版 | 捷徑永遠指向「安裝時那個 `pythonw.exe` + 同一個固定的 `launch.pyw`」,不指向版本資料夾 |
 | 公司防毒擋 Playwright 的 `node.exe`;下載的 zip 被標記 | 「Could not connect to the playwright process」;第一次雙擊跳警告 | 企業防毒擋過 Playwright 的執行檔([playwright-java#1016](https://github.com/microsoft/playwright-java/issues/1016));請 IT 依資料夾或簽章放行一次。之後的更新由小幫手從內網直接拿,不經瀏覽器下載,沒有「從網路下載」的標記 |
 | 同一個 Chrome 設定檔不能同時開兩個;Chrome 降版 | 開機自動啟動 + 又雙擊一次,第二個失敗;「設定檔來自較新版本」 | 一次只能有一個小幫手([BrowserType](https://playwright.dev/python/docs/api/class-browsertype));設定檔放在版本資料夾外面,更新不會登出;壞掉時有「重設登入」 |
 
-機制〔施工〕:
+機制〔施工〕(檔名一律英文——〔user〕「檔名都不要用中文」):
 
-- **後端說了算**:`GET` 一支版本資訊(最低可用版本、最新版本、協定號、安裝包網址、sha256)。每個請求帶小幫手版本;
-  低於最低版本回 426,小幫手跳「請更新」視窗(D15 的強制更新)。
-- **版本並排、下次啟動才換**:`%LOCALAPPDATA%\OutsideHelper\versions\<版本>\venv`,外加一個指標檔記錄現在用哪一版
-  (用 `os.replace` 原子寫入),上一版留著。小幫手在背景:從後端下載新安裝包 → 驗 sha256 → 建新 venv →
-  `pip install --no-index` → 試跑(能 import、`playwright --version`)→ 換指標。新版連續啟動失敗 N 次,啟動檔自動退回
-  上一版,並在心跳回報。
-- **固定的啟動檔**:桌面捷徑和開機捷徑都是「安裝時那個 `pythonw.exe` + `%LOCALAPPDATA%\OutsideHelper\啟動.pyw`」——
-  啟動檔只用標準函式庫,讀指標、用那一版 venv 的 `pythonw.exe` 啟動、確保只開一個。它幾乎不更新,所以捷徑永遠有效。
-- **Chrome 設定檔**放在 `%LOCALAPPDATA%\OutsideHelper\profile`,不在版本資料夾裡;單一實例鎖、殘留鎖重試、「重設登入」。
-- **第一次安裝**:D16(雙擊 `安裝.pyw`)建好上面的結構與捷徑;之後都由小幫手自己更新。
+#### 3.7.1 使用者電腦上的檔案
+
+```
+%LOCALAPPDATA%\OutsideHelper\
+  launch.pyw              固定的啟動檔(只用標準函式庫);捷徑都指向它
+  state.json              現在用哪一版、上一版、待換的新版、壞掉的版本、安裝時的 Python 路徑
+  helper.lock             單一實例鎖
+  versions\
+    1.4.0\venv\           每個版本一個 venv(由安裝時那個 Python 建)
+    1.5.0\venv\
+    1.6.0.partial\        下載、安裝到一半的新版(還沒驗過,啟動檔不會用它)
+  downloads\              下載回來的 zip(驗過 sha256 才解壓)
+  profile\                小幫手自己的 Chrome 設定檔(放在版本外面,更新不會登出)
+  logs\helper.log         記錄(輪替保留幾個檔),出事時請使用者傳這個
+桌面\Outside Helper.lnk  目標:<安裝時那個 pythonw.exe> "%LOCALAPPDATA%\OutsideHelper\launch.pyw"
+啟動資料夾\Outside Helper.lnk  同上,勾「開機時自動啟動」才有
+```
+
+`state.json`(用暫存檔 + `os.replace` 原子寫入,永遠不會寫一半):
+
+```json
+{
+  "base_python": "C:\\...\\Python312\\pythonw.exe",
+  "current": "1.5.0",
+  "previous": "1.4.0",
+  "pending": "1.6.0",
+  "pending_attempts": 0,
+  "bad": ["1.5.1"]
+}
+```
+
+#### 3.7.2 發布新版(dev server → 後端)
+
+1. 在 dev server 跑打包指令 `scripts/pack_outside_helper.py --version 1.6.0`,產出兩個檔:
+   - `outside-helper-1.6.0.zip`:wheelhouse(3.10–3.14 各版本的 Windows wheel,版本釘死)+ `install.pyw` + `launch.pyw`;
+   - `outside-helper.json`(版本資訊):`{"version": "1.6.0", "min_version": "1.4.0", "file": "outside-helper-1.6.0.zip", "sha256": "…"}`。
+2. 把兩個檔放進後端設定 `server.outside_helper_dir` 指向的資料夾(掛載的 volume)。**不用重新部署**:後端每次請求
+   直接讀這個資料夾。沒設或資料夾空 → 「外網小幫手」頁顯示尚未發布、卡片照手動流程。
+3. 要強迫所有人升級(例如舊版有 bug):改 `outside-helper.json` 的 `min_version`。
+4. 後端提供:`GET /api/outside-helper/manifest`(上面那份 json)、`GET /api/outside-helper/download/<file>`(zip;只給
+   版本資訊裡列的那個檔,不能拿來讀資料夾裡別的東西)。都要登入,和其他路由一樣。
+
+#### 3.7.3 小幫手和後端的版本約定
+
+- 小幫手每個請求帶兩個標頭:`X-Outside-Helper-Version: 1.5.0`、`X-Outside-Helper-Protocol: 1`。
+- 後端拒絕(回 **426**,內容附上版本資訊)的條件:
+  - 協定號低於程式碼裡寫死的最低協定號——開發者改了不相容的 API 時調高它;
+  - 或版本低於 `outside-helper.json` 的 `min_version`——運營方要強迫升級時調高它。
+- API 只加不刪;小幫手看不懂的欄位一律忽略。要拿掉欄位,先調高最低協定號,讓讀它的舊版都被擋下、升級。
+
+#### 3.7.4 一般更新(背景,下次開啟生效 — D15)
+
+小幫手啟動時與之後每 6 小時〔施工:值〕:
+
+1. 讀版本資訊。`version` 不比現在新、或在 `bad` 裡 → 不動作。
+2. 下載 zip 到 `downloads\`,驗 sha256;不對就刪掉,下次再試。
+3. 解壓到 `versions\1.6.0.partial\`,用 `base_python` 建 venv,`pip install --no-index --find-links <wheelhouse> outside-helper==1.6.0`。
+4. 試跑:用新 venv 執行 `python -m outside_helper --self-test`(import 得到 Playwright、它的 driver 在、版本號對)。
+5. 全部成功 → 資料夾改名成 `versions\1.6.0\`,`state.json` 寫 `pending: "1.6.0"`;小視窗顯示「新版已備好,下次開啟生效」。
+   任一步失敗 → 刪掉 `.partial`、記 log,現在這版照常跑;同一版連續失敗 3 次記進 `bad`,不再試(等下一個新版)。
+6. 整個過程不碰現在正在跑的版本——Windows 會鎖住執行中的檔案,原地覆蓋才會壞(§3.7 表)。
+
+#### 3.7.5 下次開啟:換版與自動退回(`launch.pyw`)
+
+1. 拿 `helper.lock`;已經有一個小幫手在跑 → 把它的視窗叫到前面,自己結束(不會開出兩個,§3.7 表最後一列)。
+2. 有 `pending`:`pending_attempts + 1` 寫回 `state.json`,用新版啟動。
+3. 新版連上後端、小視窗正常出現後,由新版自己把 `state.json` 改成 `current: 新版、previous: 舊版、pending: 無、attempts: 0`,
+   並刪掉 `current`、`previous` 以外的舊版本資料夾。
+4. `pending_attempts` 到 3 還沒被新版確認(啟動就當掉)→ 啟動檔把它記進 `bad`、清掉 `pending`,改用 `current` 啟動,
+   並在下次心跳回報「1.6.0 起不來,已退回 1.5.0」。
+5. 沒有 `pending`:用 `current` 啟動。
+6. `launch.pyw` 本身的更新:新版確認成功後(第 3 步),若新版附的 `launch.pyw` 和根目錄那份不同,就用 `os.replace` 換掉——
+   那時啟動檔已經結束,`.pyw` 是文字檔,Windows 不會鎖。捷徑指向的路徑不變。
+
+#### 3.7.6 強制更新(低於最低版本 — D15)
+
+- 收到 426:小視窗改成「這個版本已停用,需要更新」,不再領工作;同時照 §3.7.4 下載、安裝、試跑,完成後按鈕「重新開啟」
+  (結束自己、由啟動檔換版)。卡片那邊照 D7 退回手動流程,所以這段時間使用者仍然查得到東西。
+- 下載或安裝失敗:顯示原因與「外網小幫手」下載頁的連結,讓使用者重跑 `install.pyw`。
+
+#### 3.7.7 其他
+
+- **心跳**附上小幫手版本、協定號、Chrome 版本、Playwright 版本、Python 版本、上一次更新結果——後端看得到誰還在舊版、誰的 Chrome
+  已經超過測過的版本。
+- **Chrome 設定檔**在 `profile\`,單一實例鎖保證不會兩個小幫手同時用;壞掉時小視窗有「重設登入」(移開設定檔、重新登入)。
+- **第一次安裝**:D16,`install.pyw` 建好上面的結構與捷徑,之後都由小幫手自己更新。
 
 ## 4. Phases
 
@@ -168,8 +244,8 @@ AI 呼叫 ask_outside ──► 卡片(D7:沒連線 = 今天的手動流程)
 | P4 | 卡片:連線狀態、交給小幫手、進行中/取消/失敗;沒連線退回手動 | 小幫手沒連線時卡片與今天一模一樣 |
 | P5 | `outside-helper/` 骨架:小視窗(D13)、Chrome persistent context、登入與過期重登、領工作迴圈、差事外掛介面、驗證碼等待 | 對本機假後端 + 本機假網站跑通(Linux) |
 | P6 | 差事 `search` / `open_url`:開頁、整頁 HTML 經打包的 `htmlToMarkdown` 轉 Markdown | parity:範例 HTML 在前端與小幫手轉出逐字相同;對本機假搜尋頁抓得到結果連結 |
-| P7 | 安裝包:dev server 上的打包指令(D14,產 Windows 用的 wheelhouse + `.pyw`)、AI workspace 的下載頁 | 在 Linux 上產出的安裝包含小幫手與 Playwright、greenlet cp310–cp314 的 win_amd64 wheel,版本釘死;`pip install --no-index --dry-run` 對 win_amd64 解得出全部依賴;下載頁下載得到 |
-| P8 | 更新(§3.7):版本資訊路由與 426、版本並排安裝、固定啟動檔、試跑後換指標、失敗退回、設定檔放外面、心跳回報版本 | 舊版收到 426 跳更新視窗;更新中途中斷不影響現在這版;新版起不來 N 次自動退回;`安裝.pyw` 建出的捷徑目標是安裝時那個 `pythonw.exe` 的絕對路徑(Linux 上用假路徑測產生的捷徑內容) |
+| P7 | 安裝包:`scripts/pack_outside_helper.py`(D14、§3.7.2,產 `outside-helper-<版本>.zip` + `outside-helper.json`)、`install.pyw`(D16)、AI workspace 的下載頁 | 在 Linux 上產出的安裝包含小幫手與 Playwright、greenlet cp310–cp314 的 win_amd64 wheel,版本釘死;`pip install --no-index --dry-run` 對 win_amd64 解得出全部依賴;下載頁下載得到 |
+| P8 | 更新(§3.7):`outside_helper_dir` 與版本資訊/下載路由(§3.7.2)、426 與協定號(§3.7.3)、背景更新(§3.7.4)、`launch.pyw` 換版與退回(§3.7.5)、強制更新(§3.7.6)、心跳回報版本 | 版本資訊只列出的檔可下載;低於 `min_version` 或最低協定號回 426;下載 sha256 不符不裝;任一步失敗現在這版照常跑、同版連 3 次失敗進 `bad`;`pending` 3 次沒確認自動退回;`state.json` 只用原子寫入;已有一個在跑時不開第二個;`launch.pyw` 只在新版確認後才被換掉。全部在 Linux 上用假的 Python 與假的後端測 |
 | P9 | 文件:`docs/migrations.md`(新 resource、新路由、新下載物、IT 要放行的項目)、使用者說明 | mkdocs `--strict` 綠 |
 | P10 | live check(真 app + 真 Chrome + 本機假網站)+ demo MP4 | 搜尋與開網址各走一次:按「查」之後不再經人,`lookups/` 有檔、AI 讀到;一次更新(換指標、下次開啟生效) |
 | P11 | review(四把鏡頭)→ CI | 照 CLAUDE.md |
@@ -188,7 +264,7 @@ AI 呼叫 ask_outside ──► 卡片(D7:沒連線 = 今天的手動流程)
 
 ## 7. prod 怎麼驗證
 
-1. 從 app 的「外網小幫手」頁下載 zip、解壓縮、雙擊 `安裝.pyw`:確認顯示的 Python、按「安裝」,桌面出現捷徑。雙擊捷徑:小視窗出現;
+1. 從 app 的「外網小幫手」頁下載 zip、解壓縮、雙擊 `install.pyw`:確認顯示的 Python、按「安裝」,桌面出現 `Outside Helper` 捷徑。雙擊捷徑:小視窗出現;
    按「登入」開 Chrome 登入 app,視窗顯示「已連線」。這一步是 Windows 上唯一的驗證(D14):裝不裝得起來、`.pyw` 能不能雙擊、
    捷徑開不開得起來、Chrome 開不開得出來、公司代理與 SSO。
 2. 在聊天問一個需要外部資料的問題;卡片上方顯示小幫手已連線,主要按鈕是「查」。
