@@ -148,9 +148,9 @@ export type FileChanged = {
   kind: "written" | "moved" | "copied" | "deleted" | "dir_created";
 };
 
-/** A turn in one of the item's chats ended (its files are flushed). Sent on the
- * ITEM's stream whichever chat ran it, so the item's file panes refresh on it.
- * Broadcast-only; mirrors `api/events.py` `TurnEnded`. */
+/** A turn in one of the item's chats ended (done, failed or stopped). Sent on
+ * the ITEM's stream whichever chat ran it, so the item's file panes reload on
+ * it. Broadcast-only; mirrors `api/events.py` `TurnEnded`. */
 export type TurnEnded = {
   type: "turn_ended";
   chat_id: string;

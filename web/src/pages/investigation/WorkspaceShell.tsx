@@ -78,7 +78,7 @@ import { usePersistentDeque } from "../../hooks/usePersistentSet";
 import { usePersistentBoolean } from "../../hooks/usePersistentBoolean";
 import { usePersistentNumber } from "../../hooks/usePersistentNumber";
 import { useStickToBottom } from "../../hooks/useStickToBottom";
-import { useRefreshFiles } from "../../hooks/useRefreshFiles";
+import { useRefreshFiles, useReloadFileViews } from "../../hooks/useRefreshFiles";
 import { subscribeTurnEnded } from "../../lib/turnEndedBus";
 import { emitRunAll } from "../../lib/editorEvents";
 import { compareNames } from "../../lib/treeOrder";
@@ -265,25 +265,47 @@ export function WorkspaceProviders({
   );
 }
 
-/** Refresh the item's files whenever a turn in ANY of its chats ends.
+/** Re-read the item's files whenever a turn in ANY of its chats ends.
  *
  * It used to follow the default chat's `streaming` true→false edge in this tab,
  * which a turn in a second chat or a workflow chat never produced (each streams
- * on its own key), nor did a queued follow-up, a turn longer than the "awaiting
- * reply" window, or a turn this tab opened in the middle of. The backend now
- * says so once per turn on the item's stream (`turn_ended`), and a reconnect
- * says so too; this is the one place either becomes a refresh. */
+ * on its own key), nor did a queued follow-up (no new `user_message` starts it).
+ * The backend now says so once per turn on the item's stream (`turn_ended`),
+ * and a reconnect says so too; this is the one place either becomes a reload.
+ *
+ * A reload, not the refresh button's flush-then-reload — see
+ * `useReloadFileViews`. And one at a time: a workflow map ends a turn per
+ * element, so a burst becomes the reload in flight plus ONE after it (a turn
+ * that ended during a reload may have written after it read). */
 function RefreshOnTurnEnd({ itemId, after }: { itemId: string; after?: () => void }) {
-  const refreshFiles = useRefreshFiles(itemId);
+  const reload = useReloadFileViews(itemId);
   const afterRef = useRef(after);
   afterRef.current = after;
-  useEffect(
-    () =>
-      subscribeTurnEnded(itemId, () => {
-        void refreshFiles().then(() => afterRef.current?.());
-      }),
-    [itemId, refreshFiles],
-  );
+  useEffect(() => {
+    let running = false;
+    let again = false;
+    let alive = true;
+    const run = async () => {
+      running = true;
+      try {
+        do {
+          again = false;
+          await reload();
+          if (alive) afterRef.current?.();
+        } while (again && alive);
+      } finally {
+        running = false;
+      }
+    };
+    const off = subscribeTurnEnded(itemId, () => {
+      if (running) again = true;
+      else void run();
+    });
+    return () => {
+      alive = false;
+      off();
+    };
+  }, [itemId, reload]);
   return null;
 }
 

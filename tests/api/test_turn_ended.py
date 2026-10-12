@@ -3,11 +3,11 @@
 The file tree refreshed only on the default chat's `streaming` true→false edge,
 seen by the open tab. A turn in any other chat (a second chat, a workflow chat)
 streams on its own key, so the item's stream never saw it, and the tree stayed
-stale until the user pressed refresh. A queued follow-up, a turn longer than the
-"awaiting reply" window and a turn started elsewhere had no edge either.
+stale until the user pressed refresh. A queued follow-up (no new user message
+starts it) had no edge either.
 
 The fix is a fact the backend states once per turn: `TurnEnded(chat_id)` on the
-item's key, after the turn-end flush. The engine stream is read directly, as in
+item's key (an app chat's after its turn-end flush). The engine stream is read directly, as in
 `test_file_broadcast.py` (ASGITransport cannot read an infinite response).
 """
 
@@ -21,7 +21,7 @@ from httpx import ASGITransport
 import workspace_app.api.app as app_mod
 from workspace_app.api import MessageDelta, RunDone, ScriptedAgentRunner, create_app
 from workspace_app.api.event_bus import InMemoryEventBus
-from workspace_app.api.events import TurnEnded
+from workspace_app.api.events import FileChanged, TurnEnded
 from workspace_app.api.turns import ChatTurnEngine
 from workspace_app.apps.playground.model import PlaygroundItem
 from workspace_app.filestore.memory import MemoryFileStore
@@ -133,7 +133,7 @@ async def test_a_stopped_turn_announces_its_end_too():
         spec=spec,
         sandbox=MockSandbox(),
         filestore=MemoryFileStore(),
-        runner=runner,  # ty: ignore[invalid-argument-type]
+        runner=runner,
         get_user_id=lambda: "alice",
         send_await_timeout=0.1,
     )
@@ -194,6 +194,52 @@ async def test_publishing_with_no_viewer_on_this_pod_still_reaches_another_pod()
     assert (await asyncio.wait_for(ended, 3)).chat_id == "c1"
     await turn_pod.forget("item-1")
     await viewer_pod.forget("item-1")
+
+
+def _two_pods():
+    bus = InMemoryEventBus()
+    turn_pod = ChatTurnEngine(ScriptedAgentRunner([]), event_bus=bus, pod_id="A")
+    viewer_pod = ChatTurnEngine(ScriptedAgentRunner([]), event_bus=bus, pod_id="B")
+    return turn_pod, viewer_pod
+
+
+async def _first_event(engine: ChatTurnEngine, key: str) -> asyncio.Task:
+    sub = engine.subscribe(key)
+
+    async def collect():
+        async for ev in sub:
+            return ev
+
+    task = asyncio.create_task(collect())
+    await asyncio.sleep(0)
+    return task
+
+
+# A human's save on a pod where nobody opened the item reaches the pod where
+# somebody did — the same gap, the same fix.
+async def test_a_file_change_with_no_viewer_here_still_reaches_another_pod():
+    turn_pod, viewer_pod = _two_pods()
+    got = await _first_event(viewer_pod, "item-1")
+
+    turn_pod.publish("item-1", FileChanged(path="/a.txt", by="bob", kind="written"))
+
+    ev = await asyncio.wait_for(got, 3)
+    assert isinstance(ev, FileChanged) and ev.path == "/a.txt"
+
+
+# Only those two facts cross without a session. A headless workflow run
+# publishes every stdout chunk (`StepOutput`) on a key nobody here watches;
+# sending each one to every pod would be traffic for no viewer. (A viewer that
+# IS watching a run has a session on the run's pod — `subscribe` makes one.)
+async def test_a_turn_stream_event_with_no_viewer_here_does_not_cross():
+    turn_pod, viewer_pod = _two_pods()
+    got = await _first_event(viewer_pod, "item-1")
+
+    turn_pod.publish("item-1", MessageDelta(text="chunk"))
+    turn_pod.publish("item-1", TurnEnded(chat_id="c1"))
+
+    ev = await asyncio.wait_for(got, 3)
+    assert isinstance(ev, TurnEnded)  # the delta never arrived first
 
 
 @pytest.mark.parametrize("event", [TurnEnded(chat_id="c1")])

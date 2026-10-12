@@ -7,8 +7,9 @@
  * the file tree or the editor, so it is handed over here — see `scopedBus`.
  *
  * A reconnect announces too: a turn that ended while the stream was down is
- * never replayed to a viewer whose stream landed on another pod, and a refresh
- * nobody needed costs one listing.
+ * never replayed to a viewer whose stream landed on another pod. What a
+ * listener does is a reload of what is on screen (`useReloadFileViews` — the
+ * tree, open files, clean buffers), never a server flush, and one at a time.
  */
 
 import { createScopedBus } from "./scopedBus";

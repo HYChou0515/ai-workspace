@@ -154,13 +154,15 @@ class FileChanged:
 
 @dataclass(frozen=True)
 class TurnEnded:
-    """A turn in one of the item's chats has ended, and its files are flushed.
+    """A turn in one of the item's chats has ended (done, failed or stopped).
 
     Published on the ITEM's key whichever chat ran the turn: a viewer's file tree
     listens on the item's stream, and a turn in any chat but the default one
     streams on its own key, so without this the tree never heard that a second
-    chat's or a workflow's turn wrote anything. Broadcast-only, like
-    `FileChanged`; never folded into a transcript."""
+    chat's or a workflow's turn wrote anything. An app chat publishes it after
+    its turn-end flush (announced even when that flush fails); a workflow turn
+    has no per-turn flush. Broadcast-only, like `FileChanged`; never folded into
+    a transcript."""
 
     chat_id: str
     type: Literal["turn_ended"] = "turn_ended"

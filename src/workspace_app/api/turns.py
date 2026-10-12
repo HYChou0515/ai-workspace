@@ -46,6 +46,7 @@ from .event_bus import IEventBus, InMemoryEventBus
 from .events import (
     AgentEvent,
     AgentMetrics,
+    FileChanged,
     MaxTurnsExceeded,
     MessageDelta,
     Presence,
@@ -54,6 +55,7 @@ from .events import (
     RunError,
     ToolEnd,
     ToolStart,
+    TurnEnded,
     to_sse,
 )
 from .repetition_guard import guard_repetition
@@ -887,8 +889,9 @@ class ChatTurnEngine:
         problem and wants #349's answer.
 
         #492: `on_turn_end` (optional) runs once after the turn's messages are
-        persisted — the surface flushes the item's live sandbox to durable
-        (turn-end reconcile). It runs on the worker, off the POST's back, and a
+        persisted — an app chat flushes the item's live sandbox to durable
+        (turn-end reconcile), and both an app chat and a workflow announce
+        `TurnEnded` on the item's stream. It runs on the worker, off the POST's back, and a
         failure is swallowed so durability best-effort never fails the turn."""
         session = self._ws_session(key)
         if session.worker is None or session.worker.done():
@@ -1240,15 +1243,20 @@ class ChatTurnEngine:
         """#43: broadcast an externally-produced event (e.g. a human `UserMessage`,
         a `FileChanged`, a `TurnEnded`) on the investigation's stream.
 
-        With no session here, nobody on THIS pod is watching `key` -- but a viewer
-        on another pod may be, and the event still goes to the bus for them. It
-        used to be dropped here outright, so a save or a turn end on a pod where
-        nobody had opened the item never reached the pod where somebody had. No
-        session is created for it: a pod that never served the key keeps nothing."""
+        With no session here, this pod never served `key` -- but a viewer on
+        another pod may be watching it. The two facts a file pane acts on still
+        go to the bus for them: a file a human changed (`FileChanged`) and a
+        turn that ended (`TurnEnded`). They used to be dropped here outright, so
+        a save or a turn end on a pod where nobody had opened the item never
+        reached the pod where somebody had. Nothing else crosses this way: a
+        headless workflow run publishes every stdout chunk on a key nobody here
+        watches, and a viewer that IS watching a run subscribes on the run's pod.
+        No session is created for it: a pod that never served the key keeps
+        nothing."""
         session = self._ws_sessions.get(key)
         if session is not None:
             session.publish(event)
-        elif not isinstance(event, Presence):
+        elif isinstance(event, (FileChanged, TurnEnded)):
             self._event_bus.publish(key, self._pod_id, event, uuid.uuid4().hex)
 
     def subscribe(self, key: str, user_id: str = "") -> AsyncGenerator[AgentEvent, None]:
