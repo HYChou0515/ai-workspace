@@ -299,15 +299,17 @@ class WorkflowExecutor:
                 headless = await self._request_env.env_without_request(
                     user_id=captured_user, item_id=item_id
                 )
-            except Exception as exc:
+            except Exception:
                 logger.exception(
                     "workflow_exec: request env source failed for item %s (user %s)",
                     item_id,
                     captured_user,
                 )
+                # `from None`: the technical details show what a traceback shows,
+                # and this boundary exists to keep the impl's message out of them.
                 raise StepFailed(
                     "the deployment's environment source failed for this turn"
-                ) from exc
+                ) from None
         # `plan-wui-viewer-login`: the person who started the run (``env_user``,
         # "" for an unbound schedule or a trigger) contributes their own stored
         # values over the seam's answer — not the captured user, who for a

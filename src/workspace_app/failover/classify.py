@@ -10,6 +10,7 @@ The kinds are a closed set the FE has copy for; anything unrecognised is
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from typing import Final
 
 from ..context_budget import is_context_overflow
@@ -106,4 +107,18 @@ def raw_error_text(exc: BaseException) -> str:
     first. The outer link alone is often the least useful one — an exhausted
     chain reads ``AllProvidersFailed: …`` while the 429 that WAS the failure
     sits one link down."""
-    return "\n← ".join(f"{type(link).__name__}: {link}" for link in _chain(exc))
+    return "\n← ".join(f"{type(link).__name__}: {link}" for link in _shown_chain(exc))
+
+
+def _shown_chain(exc: BaseException) -> Iterator[BaseException]:
+    """The links a traceback would show — and a reader may see. Unlike
+    `_chain` (which looks everywhere for a 429), it stops where the code said
+    ``raise … from None``: that is how a boundary keeps a message out of what
+    everyone reads, e.g. a deployment's env source whose error may hold the
+    token it was exchanging (`workflow_exec`)."""
+    seen: set[int] = set()
+    cur: BaseException | None = exc
+    while cur is not None and id(cur) not in seen:
+        seen.add(id(cur))
+        yield cur
+        cur = cur.__cause__ or (None if cur.__suppress_context__ else cur.__context__)

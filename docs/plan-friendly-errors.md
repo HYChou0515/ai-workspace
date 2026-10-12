@@ -235,6 +235,14 @@ while its turn was not yet stored. A send failure (never a turn's persisted
 ending) is left alone. The KB test that guards "the error survives `done`" again
 reads a store that is behind; the dedupe has its own test.
 
+CI on that state caught a leak the review rounds had not: the run record's
+`error` walked the whole cause chain, and the workflow executor hides a
+deployment env source's message (which may hold the token it was exchanging)
+behind fixed text RAISED FROM it — so `token=hunter2` reached a record every
+participant reads (`test_headless_env`). The technical details now show the
+links a Python traceback shows, a parity test with `traceback` as the oracle,
+and the executor's boundary is `from None` after logging the traceback.
+
 **Known, not fixed — one failure can still show twice after a reconnect**
 (final review). The reconnect path reads the thread before the stream replays
 what it missed, so the stored failure is already on screen as an entry when the

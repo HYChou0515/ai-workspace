@@ -8,7 +8,7 @@ import httpx
 import litellm
 import pytest
 
-from workspace_app.failover.classify import ERROR_KINDS, classify_error
+from workspace_app.failover.classify import ERROR_KINDS, classify_error, raw_error_text
 from workspace_app.failover.core import AllProvidersFailed
 
 
@@ -102,3 +102,42 @@ def test_every_kind_has_copy_in_both_languages() -> None:
             m = re.search(rf'"failure\.{kind}\.{part}": \{{(.*?)\}},', catalog, re.S)
             assert m, f"no copy for failure.{kind}.{part}"
             assert '"zh-TW":' in m.group(1) and "en:" in m.group(1), f"failure.{kind}.{part}"
+
+
+def _raised(build) -> BaseException:
+    try:
+        build()
+    except BaseException as exc:  # noqa: BLE001 — the test wants whatever was raised
+        return exc
+    raise AssertionError("nothing raised")
+
+
+def _wrapped_from(cause_mode: str) -> None:
+    try:
+        raise RuntimeError("exchange failed for token=hunter2")
+    except RuntimeError as inner:
+        if cause_mode == "from":
+            raise ValueError("fixed text") from inner
+        if cause_mode == "none":
+            raise ValueError("fixed text") from None
+        raise ValueError("fixed text")  # noqa: B904 — the implicit-context case under test
+
+
+@pytest.mark.parametrize("mode", ["from", "none", "context"])
+def test_the_technical_details_show_the_links_a_traceback_shows(mode):
+    """`raw_error_text` is what a reader sees as technical details, so it shows
+    exactly the links Python's own traceback would — the oracle here — and no
+    more. `raise … from None` is how code says a cause must not be shown: the
+    workflow executor uses it to keep a deployment's env-source message (which
+    may hold the token it was exchanging) out of a run record every
+    participant reads. Walking past it put `token=hunter2` in that record."""
+    import traceback
+
+    exc = _raised(lambda: _wrapped_from(mode))
+    shown = [
+        line.split(":", 1)[0]
+        for line in traceback.format_exception(exc)
+        if line and not line.startswith((" ", "Traceback", "\n", "During", "The above"))
+    ]
+
+    assert [link.split(":", 1)[0] for link in raw_error_text(exc).split("\n← ")][::-1] == shown

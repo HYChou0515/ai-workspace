@@ -2171,7 +2171,8 @@ agent 步驟裡 AI 的呼叫、WUI 的工具呼叫、view plugin、圖表重畫�
   舊資料的 data 裡本來就沒有這個值，重抽也抽不出來；也沒有任何查詢以它過濾。舊的失敗文件在列表上照舊顯示原本的說明，
   點進文件會看到「處理失敗」與原本的說明。
 - 失敗的 workflow run 的 `result` 多了 `error_kind`（和 `step_failed` 時的 `error_reason`）；`error` 仍是原文，
-  但從單一 `Type: message` 變成整條 cause 鏈（以 `\n← ` 串接）。
+  但從單一 `Type: message` 變成整條 cause 鏈（以 `\n← ` 串接）——和 Python traceback 顯示的層數相同，
+  程式寫了 `raise … from None` 的地方就停（部署自訂的環境來源出錯時，它的訊息因此不會進到 run 紀錄）。
 - 已經存下來的錯誤訊息（`error_kind="error"`）會以「發生了預期外的錯誤」顯示，原本的文字移到技術細節裡。
 
 **k8s · CI 側** — 沒有新的 manifest、env、probe 或 JobType；照常重 build、照常部署。API image 和前端一起換才完整
