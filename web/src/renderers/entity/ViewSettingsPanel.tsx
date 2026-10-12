@@ -222,6 +222,7 @@ export function ViewSettingsPanel({ config }: { config: ViewConfig }) {
                       <div className="ev-viewpanel__hint">Hours the chart draws each day</div>
                       <div className="input input-group ev-viewpanel__range">
                       <input
+                        autoComplete="off"
                         className="input-group__field"
                         type="time"
                         aria-label="day starts"
@@ -232,6 +233,7 @@ export function ViewSettingsPanel({ config }: { config: ViewConfig }) {
                         –
                       </span>
                       <input
+                        autoComplete="off"
                         className="input-group__field"
                         type="time"
                         aria-label="day ends"

@@ -48,6 +48,7 @@ export function UserPicker({
   return (
     <div style={{ minWidth: 240 }}>
       <input
+        autoComplete="off"
         type="search"
         className="input"
         aria-labelledby={labelledBy}

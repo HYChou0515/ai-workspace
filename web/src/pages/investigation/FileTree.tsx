@@ -585,6 +585,7 @@ export function FileTree({
           <div className="input input-group" style={{ gap: 4, margin: "0 6px", minHeight: 24, padding: "0 6px" }}>
             <Icon name="search" size={12} color="var(--text-paper-d)" />
             <input
+              autoComplete="off"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               onKeyDown={(e) => {
@@ -973,6 +974,7 @@ function InlineEdit({
     >
       <Icon name={kind === "folder" ? "folder" : "file"} size={13} color="var(--text-paper-d)" />
       <input
+        autoComplete="off"
         autoFocus
         value={value}
         onChange={(e) => setValue(e.target.value)}

@@ -152,6 +152,7 @@ export function KbChatsPage({
       <li key={c.resource_id} className="kb-chats__row">
         {editingId === c.resource_id ? (
           <input
+            autoComplete="off"
             className="input kb-chats__rename"
             aria-label={`Rename ${label}`}
             autoFocus

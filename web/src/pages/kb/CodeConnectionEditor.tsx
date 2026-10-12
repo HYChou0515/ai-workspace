@@ -13,6 +13,7 @@ import { useState } from "react";
 import { type KbApi, type KbCollection } from "../../api/kb";
 import { qk } from "../../api/queryKeys";
 import { Icon } from "../../components/Icon";
+import { blockMaskedCopy } from "../../lib/maskedSecret";
 
 export function CodeConnectionEditor({
   collection,
@@ -62,11 +63,12 @@ export function CodeConnectionEditor({
 
       <div className="kb-field" style={{ marginBottom: 4 }}>
         <span className="kb-field__label">Git URL</span>
-        <input className="input input--block" value={collection.git_url ?? ""} readOnly disabled />
+        <input autoComplete="off" className="input input--block" value={collection.git_url ?? ""} readOnly disabled />
       </div>
       <label className="kb-field">
         <span className="kb-field__label">Branch</span>
         <input
+          autoComplete="off"
           className="input input--block"
           placeholder="(default branch)"
           value={branch}
@@ -77,8 +79,15 @@ export function CodeConnectionEditor({
         <span className="kb-field__label">Access token</span>
         <input
           className="input input--block"
-          type="password"
+          // Masked by the stylesheet, not `type="password"` (src/styles/autofill.test.ts).
+          data-masked
           autoComplete="off"
+          spellCheck={false}
+          autoCapitalize="off"
+          autoCorrect="off"
+          onCopy={blockMaskedCopy}
+          onCut={blockMaskedCopy}
+          onDragStart={blockMaskedCopy}
           placeholder="leave blank to keep the current token"
           value={token}
           onChange={(e) => setToken(e.target.value)}

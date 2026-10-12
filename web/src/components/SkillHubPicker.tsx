@@ -103,6 +103,7 @@ export function SkillHubPicker({
         <Link to="/skill-hub">{t("skills.fromHub.browse")}</Link>
       </p>
       <input
+        autoComplete="off"
         type="search"
         value={query}
         onChange={(e) => setQuery(e.target.value)}

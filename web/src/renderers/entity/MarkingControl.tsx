@@ -133,6 +133,7 @@ export function MarkingControl({
           style={{ display: "inline-flex", gap: 4 }}
         >
           <input
+            autoComplete="off"
             aria-label="New marking name"
             className="input"
             value={draft}

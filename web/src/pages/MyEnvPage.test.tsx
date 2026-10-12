@@ -71,6 +71,17 @@ describe("MyEnvPage", () => {
     await waitFor(() => expect(client.put).toHaveBeenCalledWith({ OLD: "o", API_KEY: "k-1" }));
   });
 
+  it("masks the value being typed without a password field", async () => {
+    // A password field takes the name field before it for a user name, and a
+    // password manager fills both with a login it saved for this origin
+    // (src/styles/autofill.test.ts).
+    open();
+    const value = (await screen.findByTestId("my-env-new-value")) as HTMLInputElement;
+    expect(value.type).toBe("text");
+    expect(value).toHaveAttribute("data-masked", "true");
+    expect(value).toHaveAttribute("autocomplete", "off");
+  });
+
   it("refuses a name a tool could not be given", async () => {
     const client = open();
     await screen.findByTestId("my-env-empty");

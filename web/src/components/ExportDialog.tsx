@@ -326,6 +326,7 @@ export function ExportDialog({
                 />
                 {t("export.range.latest")}
                 <input
+                  autoComplete="off"
                   type="number"
                   data-testid="export-latest-n"
                   className="input export-dialog__num"
@@ -541,6 +542,7 @@ export function ExportDialog({
                     <div className="export-dialog__field">
                       <label htmlFor="export-width">{t("export.video.width")}</label>
                       <input
+                        autoComplete="off"
                         id="export-width"
                         type="number"
                         data-testid="export-width"
@@ -558,6 +560,7 @@ export function ExportDialog({
                     <div className="export-dialog__field">
                       <label htmlFor="export-height">{t("export.video.height")}</label>
                       <input
+                        autoComplete="off"
                         id="export-height"
                         type="number"
                         data-testid="export-height"
@@ -626,6 +629,7 @@ export function ExportDialog({
                   <div key={key} className="export-dialog__field">
                     <label htmlFor={`export-${key}`}>{t(label)}</label>
                     <input
+                      autoComplete="off"
                       id={`export-${key}`}
                       type="number"
                       data-testid={`export-${key.replace(/_/g, "-")}`}

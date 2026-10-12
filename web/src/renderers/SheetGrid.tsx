@@ -237,6 +237,7 @@ export function SheetGrid({
     const editing = edit?.fileRow === fileRow && edit.col === col;
     return (
       <input
+        autoComplete="off"
         className="sheet-cell"
         aria-label={cellLabel(displayRow, col)}
         value={editing ? edit.draft : value}

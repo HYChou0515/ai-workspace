@@ -135,6 +135,7 @@ export function SearchPanel({
         <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 6 }}>
           <div className="input input-group" style={fieldWrap} data-testid="search-field">
             <input
+              autoComplete="off"
               autoFocus
               value={query}
               onChange={(e) => setQuery(e.target.value)}
@@ -158,6 +159,7 @@ export function SearchPanel({
           {showReplace && (
             <div className="input input-group" style={fieldWrap}>
               <input
+                autoComplete="off"
                 value={replacement}
                 onChange={(e) => setReplacement(e.target.value)}
                 placeholder="Replace"
@@ -179,6 +181,7 @@ export function SearchPanel({
 
           <div className="input input-group" style={fieldWrap}>
             <input
+              autoComplete="off"
               value={include}
               onChange={(e) => setInclude(e.target.value)}
               placeholder="files to include — e.g. *.md, src/**"
@@ -188,6 +191,7 @@ export function SearchPanel({
           </div>
           <div className="input input-group" style={fieldWrap}>
             <input
+              autoComplete="off"
               value={exclude}
               onChange={(e) => setExclude(e.target.value)}
               placeholder="files to exclude"

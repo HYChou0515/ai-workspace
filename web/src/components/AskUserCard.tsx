@@ -322,6 +322,7 @@ export function AskUserCard({
                       {/* This option's OWN supplement — a note about THIS choice,
                           not one shared box that could mean any of them. */}
                       <input
+                        autoComplete="off"
                         type="text"
                         aria-label={`補充:${opt.label}`}
                         value={optNote[noteKey(i, opt.label)] ?? ""}
@@ -359,6 +360,7 @@ export function AskUserCard({
                 看不懂
               </button>
               <input
+                autoComplete="off"
                 type="text"
                 aria-label="自己回答"
                 value={freeText[i] ?? ""}

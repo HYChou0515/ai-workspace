@@ -164,6 +164,7 @@ export function SkillHubPage({
         <>
           <div className="page-tools">
             <input
+              autoComplete="off"
               className="input"
               type="search"
               value={query}

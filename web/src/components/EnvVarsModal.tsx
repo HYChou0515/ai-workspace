@@ -47,10 +47,12 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 
 import { api as defaultApi } from "../api";
+import { API_BASE } from "../api/http";
+import { blockMaskedCopy } from "../lib/maskedSecret";
 import { PERSONAL_ENV_WRITES, personalEnvApi, type PersonalEnvClient } from "../api/personalEnv";
 import { privateEnvApi, type PrivateEnvClient } from "../api/privateEnv";
 import { qk } from "../api/queryKeys";
-import type { ApiClient, EnvProvider } from "../api/types";
+import type { ApiClient, EnvProvider, EnvProviderInput } from "../api/types";
 import type { EnvTarget } from "../hooks/chatItem";
 import { useDirtyClose } from "../hooks/useDirtyClose";
 import { mergeEnv, parseEnvText, setEnvValue, toEnvText, unstorable } from "../lib/envFile";
@@ -353,6 +355,7 @@ export function EnvVarsModal({
 
       {hasItem && (
         <input
+          autoComplete="off"
           type="search"
           className="input input--block"
           data-testid="env-search"
@@ -826,6 +829,7 @@ function SharedTab({
           canEdit ? (
             <div style={{ display: "flex", gap: 6 }}>
               <input
+                autoComplete="off"
                 className="input"
                 data-testid="env-add-private-name"
                 value={newName}
@@ -1037,6 +1041,7 @@ function SharedRow({
           </span>
         )}
         <input
+          autoComplete="off"
           data-testid={`env-field-${field.name}`}
           value={value}
           onChange={(e) => onVar(field.name, e.target.value)}
@@ -1240,12 +1245,19 @@ function MineRow({
           <input
             data-testid={`env-mine-${name}`}
             // Masked: these are the person's own credentials and only they can
-            // read them — but a screen can be seen over a shoulder.
-            type={revealed ? "text" : "password"}
+            // read them — but a screen can be seen over a shoulder. By the
+            // stylesheet, not `type="password"`: a password manager fills a
+            // saved login into every password field (src/styles/autofill.test.ts).
+            data-masked={!revealed}
             value={mine[name] ?? ""}
             onChange={(e) => setMine(name, e.target.value)}
             autoComplete="off"
             spellCheck={false}
+            autoCapitalize="off"
+            autoCorrect="off"
+            onCopy={blockMaskedCopy}
+            onCut={blockMaskedCopy}
+            onDragStart={blockMaskedCopy}
             // `.input` (fills what is left), not `.input--block` (width 100%,
             // never shrinks): beside the reveal button that pushed the button out of
             // the panel and gave it a sideways scroll — on master too.
@@ -1346,7 +1358,8 @@ function PersonalTab({
           ) : (
             <span key={i}>
               <a
-                href="/my-env"
+                // A plain anchor, so the deploy prefix is ours to add (`API_BASE`).
+                href={`${API_BASE}/my-env`}
                 data-testid="env-personal-page"
                 style={{ color: "var(--accent-h)", textDecoration: "underline", whiteSpace: "nowrap" }}
               >
@@ -1411,12 +1424,18 @@ function PersonalRow({
       <div style={{ display: "flex", gap: 6 }}>
         <input
           data-testid={`env-personal-${name}`}
-          type={revealed ? "text" : "password"}
+          // Masked by the stylesheet, not `type="password"` (src/styles/autofill.test.ts).
+          data-masked={!revealed}
           value={value}
           disabled={disabled}
           onChange={(e) => onEdit(name, e.target.value)}
           autoComplete="off"
           spellCheck={false}
+          autoCapitalize="off"
+          autoCorrect="off"
+          onCopy={blockMaskedCopy}
+          onCut={blockMaskedCopy}
+          onDragStart={blockMaskedCopy}
           // `.input` (fills what is left), not `.input--block` (width 100%,
           // never shrinks): beside the reveal button that pushed the button out of
           // the panel and gave it a sideways scroll — on master too.
@@ -1439,6 +1458,20 @@ function PersonalRow({
 }
 
 // ── logins (`IEnvProvider`, #750) ─────────────────────────────────────────
+
+/** What a browser may fill into each of a provider's inputs. The list is the
+ * operator's, with no field saying "I am the user name", so it is read the way
+ * a login form is laid out: the first secret is the password, the plain field
+ * right before it the user name. Every other secret (a one-time code) is masked
+ * text and every other plain field (a tenant) is offered nothing — tagging them
+ * all filled the saved password into the code (review round 1). */
+function loginRoles(inputs: EnvProviderInput[]): [EnvProviderInput, "user" | "password" | "secret" | "plain"][] {
+  const password = inputs.findIndex((f) => f.secret);
+  return inputs.map((f, i) => [
+    f,
+    i === password ? "password" : f.secret ? "secret" : i === password - 1 ? "user" : "plain",
+  ]);
+}
 
 /** The deploy's "log in, get the variables" buttons. The exchange result goes
  * to the caller's `onFilled`, which puts it in that tab's own layer: Shared and
@@ -1538,16 +1571,53 @@ export function Logins({
       ))}
       {openProvider && (
         <div data-testid="env-cred-dialog" style={{ display: "grid", gap: 6 }}>
-          {openProvider.inputs.map((field) => (
+          {/* A real login, so the browser may remember it and fill it back —
+              here, and nowhere else on the page (src/styles/autofill.test.ts):
+              one user name, one password, and nothing offered to the rest. */}
+          {loginRoles(openProvider.inputs).map(([field, role]) => (
             <label key={field.name} style={{ display: "block", fontSize: pxToRem(12) }}>
               {field.label}
-              <input
-                data-testid={`env-cred-${field.name}`}
-                type={field.secret ? "password" : "text"}
-                value={creds[field.name] ?? ""}
-                onChange={(e) => setCreds({ ...creds, [field.name]: e.target.value })}
-                className="input input--block"
-              />
+              {role === "password" ? (
+                <input
+                  data-testid={`env-cred-${field.name}`}
+                  type="password"
+                  autoComplete="current-password"
+                  value={creds[field.name] ?? ""}
+                  onChange={(e) => setCreds({ ...creds, [field.name]: e.target.value })}
+                  className="input input--block"
+                />
+              ) : role === "user" ? (
+                <input
+                  data-testid={`env-cred-${field.name}`}
+                  autoComplete="username"
+                  value={creds[field.name] ?? ""}
+                  onChange={(e) => setCreds({ ...creds, [field.name]: e.target.value })}
+                  className="input input--block"
+                />
+              ) : role === "secret" ? (
+                <input
+                  data-testid={`env-cred-${field.name}`}
+                  data-masked
+                  autoComplete="off"
+                  spellCheck={false}
+                  autoCapitalize="off"
+                  autoCorrect="off"
+                  onCopy={blockMaskedCopy}
+                  onCut={blockMaskedCopy}
+                  onDragStart={blockMaskedCopy}
+                  value={creds[field.name] ?? ""}
+                  onChange={(e) => setCreds({ ...creds, [field.name]: e.target.value })}
+                  className="input input--block"
+                />
+              ) : (
+                <input
+                  data-testid={`env-cred-${field.name}`}
+                  autoComplete="off"
+                  value={creds[field.name] ?? ""}
+                  onChange={(e) => setCreds({ ...creds, [field.name]: e.target.value })}
+                  className="input input--block"
+                />
+              )}
             </label>
           ))}
           {credError && (

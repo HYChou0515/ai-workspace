@@ -113,6 +113,7 @@ export function CommandPalette({
         >
           <Icon name="search" size={14} color="var(--text-paper-d)" />
           <input
+            autoComplete="off"
             ref={inputRef}
             value={query}
             onChange={(e) => setQuery(e.target.value)}

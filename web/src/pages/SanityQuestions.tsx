@@ -87,6 +87,7 @@ export function SanityQuestions({ client = sanityApi }: { client?: SanityApi }) 
       {/* author / edit form */}
       <div style={{ display: "grid", gap: 8, maxWidth: 560 }}>
         <input
+          autoComplete="off"
           data-testid="q-category"
           placeholder={t("sanity.q.ph.category")}
           value={form.category}

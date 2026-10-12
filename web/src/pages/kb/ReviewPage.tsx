@@ -138,6 +138,7 @@ export function ReviewPage() {
           <label className="input input-group rvw__search">
             <Icon name="search" size={14} color="var(--text-paper-d2)" />
             <input
+              autoComplete="off"
               className="input-group__field"
               type="search"
               aria-label={t("review.filter.search")}

@@ -207,6 +207,7 @@ export function TodoPanel({
             {t("goal.title")}
           </span>
           <input
+            autoComplete="off"
             data-testid="goal-input"
             className="input inline-edit"
             value={goalDraft}
@@ -328,6 +329,7 @@ export function TodoPanel({
       {expanded && !readOnly && (
         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
           <input
+            autoComplete="off"
             data-testid="todo-add-input"
             className="input inline-edit"
             value={draft}

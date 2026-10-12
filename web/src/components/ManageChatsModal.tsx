@@ -80,6 +80,7 @@ function ChatRow({
       <td className="manage-chats__name">
         {editing ? (
           <input
+            autoComplete="off"
             className="input input--block inline-edit"
             data-testid={`manage-rename-input-${id}`}
             value={draft}
@@ -223,6 +224,7 @@ export function ManageChatsModal({
         </button>
       </header>
       <input
+        autoComplete="off"
         className="input input--block manage-chats__search"
         type="search"
         placeholder="Search chats"

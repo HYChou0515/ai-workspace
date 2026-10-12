@@ -46,6 +46,7 @@ export function GroupPicker({
   return (
     <div style={{ minWidth: 240 }}>
       <input
+        autoComplete="off"
         type="search"
         className="input"
         aria-labelledby={labelledBy}

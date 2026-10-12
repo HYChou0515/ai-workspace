@@ -177,6 +177,7 @@ function DateRangeInput({
   return (
     <span className="ev-field--range">
       <input
+        autoComplete="off"
         aria-label={`${name} start`}
         className="input ev-field"
         type="date"
@@ -188,6 +189,7 @@ function DateRangeInput({
         }}
       />
       <input
+        autoComplete="off"
         aria-label={`${name} end`}
         className="input ev-field"
         type="date"
@@ -292,6 +294,7 @@ export function RoleField({ widget, name, value, values, users, refOptions, disa
     // Keyed by the committed value so a successful patch remounts the input with
     // the fresh value (uncontrolled → no stale-draft bookkeeping).
     <input
+      autoComplete="off"
       key={text}
       aria-label={name}
       className="input ev-field"
@@ -345,6 +348,7 @@ export function RoleCreateInput({ widget, name, value, values, users, refOptions
   const placeholder = widget === "ref" ? "#" : "";
   return (
     <input
+      autoComplete="off"
       className="input ev-field"
       aria-label={name}
       type={type}

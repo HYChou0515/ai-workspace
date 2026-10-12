@@ -298,6 +298,7 @@ export function ScheduleTimeModal({
         <label style={field}>
           {t("schedules.edit.cronField")}
           <input
+            autoComplete="off"
             className="input"
             type="text"
             value={state.cron}
@@ -347,6 +348,7 @@ export function ScheduleTimeModal({
         <label style={field}>
           {t("schedules.edit.n")}
           <input
+            autoComplete="off"
             className="input"
             type="number"
             min={1}
@@ -378,6 +380,7 @@ export function ScheduleTimeModal({
         <label style={field}>
           {t("schedules.edit.dom")}
           <input
+            autoComplete="off"
             className="input"
             type="number"
             min={1}

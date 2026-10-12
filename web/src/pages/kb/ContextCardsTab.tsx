@@ -282,6 +282,7 @@ export function ContextCardsTab({
             </button>
           </div>
           <input
+            autoComplete="off"
             className="input input--block kb-cards__search-input"
             aria-label="Search cards"
             placeholder={
@@ -376,6 +377,7 @@ export function ContextCardsTab({
             {editing ? (
               <>
                 <input
+                  autoComplete="off"
                   className="input input--block kb-cards__title"
                   aria-label="Title"
                   placeholder="Title"
@@ -398,6 +400,7 @@ export function ContextCardsTab({
                     </span>
                   ))}
                   <input
+                    autoComplete="off"
                     className="input kb-cards__term"
                     aria-label="Add a term"
                     placeholder="Add a term…"

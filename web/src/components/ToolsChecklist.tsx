@@ -119,6 +119,7 @@ export function ToolsChecklist({
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 8, flex: 1, minHeight: 0 }}>
       <input
+        autoComplete="off"
         className="input input--block"
         data-testid="tools-search"
         placeholder={t("tools.search")}

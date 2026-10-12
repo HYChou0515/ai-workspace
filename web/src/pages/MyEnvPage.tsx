@@ -23,6 +23,7 @@ import { qk } from "../api/queryKeys";
 import { useDialog } from "../components/Dialog";
 import { Logins } from "../components/EnvVarsModal";
 import { useT } from "../lib/i18n";
+import { blockMaskedCopy } from "../lib/maskedSecret";
 import { pxToRem } from "../lib/pxToRem";
 
 const DAY = 86_400_000;
@@ -141,13 +142,19 @@ export function MyEnvPage({
           <input
             data-testid="my-env-new-value"
             className="input"
-            type="password"
+            // Masked by the stylesheet, not `type="password"` (src/styles/autofill.test.ts).
+            data-masked
             placeholder={t("myEnv.value")}
             aria-label={t("myEnv.value")}
             value={value}
             onChange={(e) => setValue(e.target.value)}
             autoComplete="off"
             spellCheck={false}
+            autoCapitalize="off"
+            autoCorrect="off"
+            onCopy={blockMaskedCopy}
+            onCut={blockMaskedCopy}
+            onDragStart={blockMaskedCopy}
             style={MONO}
           />
           <button

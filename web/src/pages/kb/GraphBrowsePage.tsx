@@ -87,6 +87,7 @@ export function GraphBrowsePage() {
 
       <div className="gbr__filters">
         <input
+          autoComplete="off"
           type="search"
           className="input gbr__search"
           placeholder={t("graph.browse.searchPlaceholder")}
@@ -94,6 +95,7 @@ export function GraphBrowsePage() {
           onChange={(e) => narrow(setQ)(e.target.value)}
         />
         <input
+          autoComplete="off"
           className="input gbr__kind"
           placeholder={t("graph.browse.kindPlaceholder")}
           value={kind}

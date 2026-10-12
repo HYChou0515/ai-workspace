@@ -64,6 +64,7 @@ export function ItemShareManagers({
 
       <form data-testid="manager-add-form" onSubmit={add}>
         <input
+          autoComplete="off"
           className="input input--block"
           data-testid="manager-add"
           value={draft}

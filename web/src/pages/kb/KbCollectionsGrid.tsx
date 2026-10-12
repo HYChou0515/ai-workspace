@@ -170,6 +170,7 @@ export function KbCollectionsGrid({ client = kbApi }: { client?: KbApi }) {
         <label className="input input-group kb-docsearch kb-docsearch--inline">
           <Icon name="search" size={14} color="var(--text-paper-d)" />
           <input
+            autoComplete="off"
             className="input-group__field"
             type="search"
             placeholder="Filter collections…"

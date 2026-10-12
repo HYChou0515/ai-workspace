@@ -117,6 +117,7 @@ function CardDetail({
       <label className="rvw-drawer__field">
         <span>{t("review.drawer.title")}</span>
         <input
+          autoComplete="off"
           className="input input--block"
           value={title}
           disabled={!canAct}
@@ -147,6 +148,7 @@ function CardDetail({
         ))}
         {canAct && (
           <input
+            autoComplete="off"
             className="input rvw-drawer__addkey"
             aria-label={t("review.drawer.addKey")}
             placeholder={t("review.drawer.addKey")}
