@@ -4,6 +4,8 @@ everything that decides is the controller, driven here one step at a time."""
 
 from __future__ import annotations
 
+import platform
+
 from outside_helper.app import Controller, describe
 
 
@@ -250,6 +252,39 @@ def test_the_self_test_fails_when_the_driver_is_gone(monkeypatch, tmp_path, caps
 
     assert app.self_test() == 1
     assert "node.exe" in capsys.readouterr().out
+
+
+# The helper as the window runs it — Backend, Worker, Updater, the check-in's
+# report — wired once, here, for the window and for the live check alike.
+def test_the_helper_is_wired_to_report_what_it_runs_on(tmp_path):
+    from outside_helper.app import make_controller
+
+    from tests.api.test_outside_answers import _asked
+    from tests.outside_helper.test_worker import _backend
+
+    client, _spec, _iid = _asked()
+    transport = _backend(client)
+
+    class _Chrome:
+        def send(self, *a):
+            return transport._send(*a)
+
+        def fetch_bytes(self, *a):
+            return transport._fetch_bytes(*a)  # ty: ignore[call-non-callable]
+
+        def version(self) -> str:
+            return "141.0.7390.55"
+
+        def close(self) -> None:
+            pass
+
+    ctl = make_controller(tmp_path, "http://app", _Chrome)
+    ctl.open()
+    ctl.step()
+
+    assert ctl.snapshot()[0] == "connected"
+    seen = client.app.state.outside_jobs.presence("u")
+    assert (seen.chrome, seen.python) == ("141.0.7390.55", platform.python_version())
 
 
 # What the window says about the next version (§3.7.4–§3.7.6).

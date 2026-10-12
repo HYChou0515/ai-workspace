@@ -1013,6 +1013,13 @@ a.skills-row-name {
   color: var(--text-paper-d);
 }
 
+/* 「怎麼安裝」: a link inside a sentence must look like one — the app's base
+   `a` is unstyled. */
+.outside-lookup-hint a {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
 .outside-lookup-actions {
   display: flex;
   flex-wrap: wrap;

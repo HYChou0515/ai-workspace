@@ -157,6 +157,10 @@ export function OutsideLookupCard({
       setNeedsNod(false);
       qc.setQueryData(jobKey, j);
     },
+    // Said in the card, not app-wide: a refused 「查」 shows its reason here
+    // (`handError`), and an automatic request refused is just the way back to
+    // the nod — not a failed save to announce over the chat.
+    meta: { silentError: true },
     // An automatic request refused (a URL no lookup brought back — D12) waits
     // for the nod instead.
     onError: (_err, auto) => {

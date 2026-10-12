@@ -148,3 +148,50 @@ def test_an_automatic_request_leaves_a_job_already_running_alone():
     assert r.status_code == 201
     assert r.json()["state"] == "claimed"
     assert _claim(client).status_code == 204
+
+
+class _Watching(_Turns):
+    """Records, as each turn STARTS, whether `url` is already a seen link."""
+
+    def __init__(self, spec, url, *turns):
+        super().__init__(*turns)
+        self._spec, self._url = spec, url
+        self.seen_at_start: list[bool] = []
+
+    async def run(self, prompt, ctx):  # noqa: ANN001, ANN201
+        from workspace_app.api.outside_jobs import _OutsideSeenUrls
+
+        rm = self._spec.get_resource_manager(_OutsideSeenUrls)
+        rows = [rm.get(m.resource_id).data for m in rm.search_resources(query=None)]
+        self.seen_at_start.append(any(self._url in row.urls for row in rows))
+        async for ev in super().run(prompt, ctx):
+            yield ev
+
+
+# The answer's message starts the AI's next turn, and that turn may at once ask
+# to open a link the answer brought back — the card then asks the server whether
+# the link was seen. Remembered only after the message went out, the card could
+# lose that race and ask for a nod D12 says it need not (found live in P10).
+def test_a_link_is_already_seen_when_the_next_turn_starts():
+    spec = make_spec(default_user="u")
+    runner = _Watching(
+        spec,
+        "https://pandas.example/whatsnew",
+        _card("c1", query="pandas"),
+        _card("c2", url="https://pandas.example/whatsnew"),
+    )
+    client = TestClient(
+        create_app(
+            spec=spec,
+            sandbox=MockSandbox(),
+            filestore=MemoryFileStore(),
+            runner=runner,
+            get_user_id=lambda: "u",
+        )
+    )
+    iid = register_rca_item(spec)
+    assert client.post(f"/a/rca/items/{iid}/messages", json={"content": "q1"}).status_code == 202
+
+    assert _answer(client, iid, call="c1", content=PAGE).status_code == 200
+
+    assert runner.seen_at_start == [False, True]

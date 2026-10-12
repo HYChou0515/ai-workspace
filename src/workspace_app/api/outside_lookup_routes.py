@@ -192,6 +192,16 @@ def register_outside_lookup_routes(
             rid, conv = conversation()  # the writes can wait on a cold sandbox: read it fresh
             # Answered meanwhile — another tab, another viewer: theirs stands.
             _open_card(conv, form.tool_call_id)
+            if on_answered is not None and body:
+                # docs/plan-outside-helper.md D12: the links this answer brought
+                # back — remembered BEFORE the message goes out: it starts the
+                # AI's next turn, which may at once ask to open one of them (and
+                # the card asks the server whether it was seen; found live, P10).
+                # Best effort — failing only means that card asks for the nod.
+                try:
+                    await on_answered(investigation_id, rid, body)
+                except Exception:  # noqa: BLE001 — logged; the answer stands
+                    logger.warning("outside lookup: could not remember links", exc_info=True)
             await send_into(
                 investigation_id,
                 rid,
@@ -211,14 +221,6 @@ def register_outside_lookup_routes(
         # A cancelled request (`CancelledError` is not an `Exception`) keeps its
         # files: once shielded, the send carries on and persists the message —
         # the window before that is in the module doc.
-        if on_answered is not None and body:
-            # docs/plan-outside-helper.md D12: the links this answer brought back.
-            # Best effort — the answer is already sent; failing here only means
-            # a later card for one of these links asks for the nod.
-            try:
-                await on_answered(investigation_id, rid, body)
-            except Exception:  # noqa: BLE001 — logged; the answer stands
-                logger.warning("outside lookup: could not remember links", exc_info=True)
         who = get_user_id()
         for path in written:
             turn_engine.publish(

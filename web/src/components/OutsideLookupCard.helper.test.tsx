@@ -9,7 +9,11 @@ import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import type { QueryClient } from "@tanstack/react-query";
+
 import { HttpError } from "../api/http";
+import { makeQueryClient } from "../api/queryClient";
+import { currentWriteFailure, resetWriteFailures } from "../lib/writeFailures";
 import type { HelperJob, OutsideLookupClient } from "../api/outsideLookup";
 import { ChatItemProvider } from "../hooks/chatItem";
 import type { OutsideLookup } from "../renderers/outsideLookup";
@@ -42,11 +46,14 @@ function draw({
   online = true,
   handOver = async () => job(),
   current = async () => job(),
+  queryClient,
 }: {
   lookup?: OutsideLookup;
   online?: boolean;
   handOver?: OutsideLookupClient["handOver"];
   current?: OutsideLookupClient["job"];
+  /** The app's own client — with its "could not save" notice — when that matters. */
+  queryClient?: QueryClient;
 } = {}) {
   const client = {
     targets: vi.fn(async () => [{ name: "Google", url: "https://www.google.com/search?q={q}" }]),
@@ -61,6 +68,7 @@ function draw({
     <ChatItemProvider value={{ slug: "rca", itemId: "i1", chatId: "ch1", answered: () => false }}>
       <OutsideLookupCard callId="call_1" lookup={lookup} client={client} />
     </ChatItemProvider>,
+    queryClient,
   );
   return client;
 }
@@ -159,6 +167,38 @@ describe("a page, with the helper connected (D12)", () => {
     );
     expect(await screen.findByText("小幫手正在開…")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "查" })).not.toBeInTheDocument();
+  });
+
+  // The card asking on its own and being told "not this one" is the ordinary
+  // way back to the nod — not a failed save to announce app-wide (found live,
+  // P10: 「儲存失敗,內容未套用。」 popped over the chat).
+  it("is told to wait for the nod without an app-wide error", async () => {
+    resetWriteFailures();
+    draw({
+      lookup: PAGE,
+      queryClient: makeQueryClient(),
+      handOver: async (args) => {
+        if (args.auto) throw new HttpError(409, "this lookup waits for the person's 「查」");
+        return job({ kind: "open_url" });
+      },
+    });
+
+    expect(await screen.findByRole("button", { name: "查" })).toBeInTheDocument();
+    expect(currentWriteFailure()).toBeNull();
+  });
+
+  // Silent app-wide is not silent: a 「查」 the server refuses says why, here.
+  it("says in the card why a 「查」 was refused", async () => {
+    draw({
+      queryClient: makeQueryClient(),
+      handOver: async () => {
+        throw new HttpError(409, "the outside helper is not connected");
+      },
+    });
+
+    fireEvent.click(await screen.findByRole("button", { name: "查" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("the outside helper is not connected");
   });
 
   it("waits for the nod for one no lookup brought back", async () => {

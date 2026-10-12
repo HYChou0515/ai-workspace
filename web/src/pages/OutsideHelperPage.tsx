@@ -14,6 +14,7 @@ import { useQuery } from "@tanstack/react-query";
 import { API_BASE, API_PREFIX } from "../api/http";
 import { type HelperRelease, outsideLookupApi } from "../api/outsideLookup";
 import { qk } from "../api/queryKeys";
+import { Icon } from "../components/Icon";
 import { useT } from "../lib/i18n";
 import { pxToRem } from "../lib/pxToRem";
 
@@ -67,10 +68,16 @@ export function OutsideHelperPage({
             {t("outsideHelper.version", { version: release.data.version })}
           </p>
           <p>
+            {/* Getting a file is an action, so it is drawn as the page's one
+                primary button (Material 3, buttons; the app's own download in
+                KbDocViewer); still an <a download> for what it does. */}
             <a
+              className="btn"
+              data-variant="primary"
               href={`${API_PREFIX}/outside-helper/download/${encodeURIComponent(release.data.file)}`}
               download={release.data.file}
             >
+              <Icon name="download" size={14} />{" "}
               {t("outsideHelper.download", {
                 file: release.data.file,
                 size: fileSize(release.data.size),

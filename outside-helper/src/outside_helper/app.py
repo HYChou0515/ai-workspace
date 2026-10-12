@@ -185,6 +185,44 @@ class Controller:
             self._snapshot = (status, detail)
 
 
+def make_controller(home: Any, app_url: str, make_chrome: Callable[[], Any]) -> Controller:
+    """The helper as the window runs it: on the Chrome `make_chrome` opens, a
+    Backend over its signed-in line, the job loop with the shipped errands, the
+    updater, and what each check-in reports (§3.7.7). The window and the live
+    check (scripts/check_outside_helper.py) both start it from here."""
+    import platform
+    from importlib.metadata import version as dist_version
+
+    from .backend import Backend
+    from .builtin_errands import build as build_errands
+    from .updates import Updater
+    from .worker import Worker
+
+    updaters: list[Updater] = []
+    chrome_version: list[str] = []
+
+    def make_worker(chrome: Any) -> Worker:
+        backend = Backend(chrome.send, fetch_bytes=chrome.fetch_bytes)
+        updaters.append(Updater(home, backend))
+
+        def info() -> dict[str, str]:
+            if not chrome_version:
+                try:
+                    chrome_version.append(chrome.version())
+                except Exception:  # noqa: BLE001 — a report, not a reason to stop
+                    chrome_version.append("")
+            return {
+                "chrome": chrome_version[0],
+                "playwright": dist_version("playwright"),
+                "python": platform.python_version(),
+                "update": updaters[0].report(),
+            }
+
+        return Worker(backend, chrome, errands=build_errands(backend.lookup_targets), info=info)
+
+    return Controller(make_chrome, make_worker, make_updater=lambda _chrome: updaters[0])
+
+
 def _driver_paths() -> tuple[str, str]:
     from playwright._impl._driver import compute_driver_executable
 
@@ -236,12 +274,9 @@ def main() -> int:  # pragma: no cover — the window needs a display; verified 
     import tkinter as tk
     from tkinter import messagebox
 
-    from .backend import Backend
-    from .builtin_errands import build as build_errands
     from .chrome import Chrome
     from .home import InstanceLock, profile_dir, read_settings, root, write_settings
     from .version import __version__
-    from .worker import Worker
 
     home = root()
     (home / "logs").mkdir(parents=True, exist_ok=True)
@@ -270,43 +305,14 @@ def main() -> int:  # pragma: no cover — the window needs a display; verified 
             return 0
         write_settings(home, {**settings, "app_url": app_url})
 
-    import platform
     import shutil
     import subprocess
     import tempfile
-    from importlib.metadata import version as dist_version
     from pathlib import Path
 
     from . import setup_core
-    from .updates import Updater
 
-    updater_box: list[Updater] = []
-    chrome_version: list[str] = []
-
-    def make_worker(chrome: Chrome) -> Worker:
-        backend = Backend(chrome.send, fetch_bytes=chrome.fetch_bytes)
-        updater_box.append(Updater(home, backend))
-
-        def info() -> dict[str, str]:
-            if not chrome_version:
-                try:
-                    chrome_version.append(chrome.version())
-                except Exception:  # noqa: BLE001 — a report, not a reason to stop
-                    chrome_version.append("")
-            return {
-                "chrome": chrome_version[0],
-                "playwright": dist_version("playwright"),
-                "python": platform.python_version(),
-                "update": updater_box[0].report(),
-            }
-
-        return Worker(backend, chrome, errands=build_errands(backend.lookup_targets), info=info)
-
-    ctl = Controller(
-        lambda: Chrome(profile_dir(home), app_url),
-        make_worker,
-        make_updater=lambda _chrome: updater_box[0],
-    )
+    ctl = make_controller(home, app_url, lambda: Chrome(profile_dir(home), app_url))
     thread = threading.Thread(target=ctl.run, name="outside-helper", daemon=True)
     thread.start()
 
