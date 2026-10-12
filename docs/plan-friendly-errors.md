@@ -84,7 +84,41 @@ that fails after producing output keeps that output; the notice follows it.
 | P4 | Sub-agents: forward holds / retries, worded failure on the tool card. |
 | P5 | Workflow and background-job errors. |
 | P6 | Our own API's non-2xx. |
-| P7 | `docs/migrations.md`: retry behaviour changes with no knob (and a schema bump if the persisted field needs one). |
+| P7 | `docs/migrations.md`: retry behaviour changes with no knob; one new index with no backfill. |
+
+## What the build changed, and why (P1–P6)
+
+Recorded as they were decided while building; each names its evidence.
+
+- **D6 amended in P1** — no separate `raw` field: the message / persisted
+  `content` is the raw text (every cause-chain link). See D6 above.
+- **The tool-arg retry moved in-band (P2).** With no whole-turn retry, a
+  non-object or concatenated tool-call argument is answered in-band by
+  `args_recovery` and the model corrects itself next call. Safe because
+  `RepairingModel` now sanitizes the whole-response path too
+  (`test_a_whole_response_is_repaired_too`).
+- **`cancelled` / `max_turns` gained no technical details (P3).** Their stored
+  text is an explanatory sentence, not something to debug from; there is
+  nothing to open.
+- **`failure.rate_limited.what` (no count) is neutral (P5).** The first draft
+  said "this reply did not finish", which is wrong for a document; the counted
+  variant (D5) is unchanged. A document's remedy is its own
+  (`kb.doc.failedAction`, re-read it), not a chat's ("send it again").
+- **P4 covers `ask_knowledge_base`, `run_agent` and the skill-hub review.**
+  They hand their sub-agent a `Delegation` (`agent/delegation.py`): the card
+  sink every wrapper already forwards, plus the turn's status line and a way
+  back to the calling tool call. `ask_wiki` (the KB agent's own wiki
+  delegation) has its own relay and is not covered.
+- **P5 covers document indexing and workflow runs.** Not covered: the off-hours
+  goal driver's "could not start tonight" note (`goal_offhours` →
+  `_night_abandoned`) still embeds the raw text in the note's sentence — its
+  shape would have to change to split it; KB archive-import errors already sit
+  in a collapsed "Why (N)" list.
+- **P6 copy is proposed, not from D5.** D5 worded the MODEL service; our own
+  API's refusals needed their own: `failure.forbidden.*` (403) and
+  `failure.server_error.*` (5xx). Every other status stays `unknown` with its
+  status line as the details, rather than copy invented for statuses this app
+  has not seen.
 
 ## Risks
 
