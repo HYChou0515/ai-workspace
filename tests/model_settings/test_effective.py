@@ -476,3 +476,18 @@ def test_a_usage_entry_the_running_catalog_cannot_build_is_refused(config):
     found = problems(document, config_path=config, env={})
 
     assert any("prompt" in p for p in found), found
+
+
+@pytest.mark.parametrize("base_url", [[1], {"a": 1}, 7])
+@pytest.mark.parametrize("where", [("llm",), ("agents", "presets", "openai-mini", "llm")])
+def test_an_endpoint_that_is_not_text_is_refused_not_crashed_on(keyed_config, base_url, where):
+    # final review 4: a list base_url loaded, then the key check could not hash
+    # it (a preset carrying the deploy's key: TypeError, a 500).
+    part: dict = {"base_url": base_url}
+    for segment in reversed(where):
+        part = {segment: part}
+    document = {"config": part}
+
+    found = problems(document, config_path=keyed_config, env={})
+
+    assert any("base_url" in p and "text" in p for p in found), found

@@ -234,16 +234,61 @@ describe("ModelSettingsPage", () => {
     expect(screen.getByTestId("model-settings-apply")).toBeDisabled();
   });
 
-  it("shows why an Apply failed even when the server named no problem", async () => {
+  it("shows why an Apply failed even when the server named no problem, and lets it be retried", async () => {
+    // final review 4: a failure that names no problem (a 409, a 500) was listed
+    // as a problem, and Apply stayed blocked with nothing to fix.
     const client = fakeClient({ draft: KB_2 });
-    client.apply.mockRejectedValue(new HttpError(500, "apply failed: 500"));
+    client.apply.mockRejectedValueOnce(new HttpError(500, "apply failed: 500"));
     renderWithQuery(<ModelSettingsPage client={client} />);
     await waitFor(() => expect(screen.getByTestId("model-settings-apply")).toBeEnabled());
 
     fireEvent.click(screen.getByTestId("model-settings-apply"));
     fireEvent.click(await screen.findByRole("button", { name: "套用" }));
 
-    expect(await screen.findByTestId("model-settings-problems")).toHaveTextContent("apply failed: 500");
+    expect(await screen.findByTestId("model-settings-apply-failed")).toHaveTextContent("apply failed: 500");
+    expect(screen.queryByTestId("model-settings-problems")).toBeNull();
+    await waitFor(() => expect(screen.getByTestId("model-settings-apply")).toBeEnabled());
+  });
+
+  it("keeps the page and its unsaved edits when a refresh fails", async () => {
+    // final review 4: a failed background refetch swapped the whole page for
+    // "load failed", and the text being typed went with it.
+    const client = fakeClient();
+    const { client: queryClient } = renderWithQuery(<ModelSettingsPage client={client} />);
+    await screen.findByRole("textbox", { name: "草稿（JSON）" });
+    type('{"config": {"llm": {"base_url": "http://mine"}}}');
+
+    client.get.mockRejectedValue(new HttpError(503, "down"));
+    await act(async () => queryClient.invalidateQueries());
+
+    expect(JSON.parse(editor().value)).toEqual({ config: { llm: { base_url: "http://mine" } } });
+    expect(screen.getByTestId("model-settings-refresh-failed")).toBeInTheDocument();
+  });
+
+  it("shows an empty text value as empty quotes, not as nothing", async () => {
+    // final review 4: `Default: ` with nothing after it looked like missing data.
+    const client = fakeClient({
+      defaults: { config: { llm: { base_url: "" } } },
+      draft: { config: { llm: { base_url: "http://x" } } },
+    });
+    renderWithQuery(<ModelSettingsPage client={client} />);
+
+    expect(await screen.findByTestId("model-settings-changes")).toHaveTextContent('""');
+  });
+
+  it("lets a long value wrap instead of widening the page", async () => {
+    // final review 4: hiding a preset printed the whole preset on one line —
+    // the page scrolled sideways and the Apply dialog clipped it.
+    const client = fakeClient({ draft: KB_2 });
+    renderWithQuery(<ModelSettingsPage client={client} />);
+    await waitFor(() => expect(screen.getByTestId("model-settings-apply")).toBeEnabled());
+
+    fireEvent.click(screen.getByTestId("model-settings-apply"));
+
+    const item = (await screen.findByTestId("model-settings-diff")).querySelector("li");
+    expect(item?.style.overflowWrap).toBe("anywhere");
+    const row = screen.getByTestId("model-settings-changes").querySelector("li > span");
+    expect((row as HTMLElement | null)?.style.overflowWrap).toBe("anywhere");
   });
 
   it("shows why a save failed", async () => {
@@ -624,7 +669,7 @@ describe("ModelSettingsPage", () => {
     expect(diff).not.toHaveTextContent("回到預設");
   });
 
-  it("says a key never applied is withdrawn at once when cleared", async () => {
+  it("says a key not in force is withdrawn at once when cleared", async () => {
     // final review 3: the dialog said "takes effect at the next Apply" — but a
     // key that was never in force is simply withdrawn, now.
     const path = "config.llm.api_key";

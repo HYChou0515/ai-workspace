@@ -15,6 +15,7 @@ import dataclasses
 import time
 import types
 import typing
+from pathlib import Path
 from typing import Any
 
 from msgspec import Struct
@@ -164,6 +165,7 @@ def try_connection(
     *,
     deploy: Settings | None = None,
     page_keys: set[str] | frozenset[str] = frozenset(),
+    config_dir: Path | None,
     timeout_s: float = 30.0,
 ) -> Connection:
     """Call `preset`'s first endpoint once with `settings` (the draft, keys
@@ -177,7 +179,9 @@ def try_connection(
         return Connection(ok=False, error=f"no preset named {preset!r}")
     if deploy is not None:
         # The deploy's key goes only where config.yaml sends it (final review).
-        leaks = key_destination_problems(settings, deploy, set(page_keys), presets=[preset])
+        leaks = key_destination_problems(
+            settings, deploy, set(page_keys), presets=[preset], config_dir=config_dir
+        )
         if leaks:
             return Connection(ok=False, error=leaks[0])
     chain = resolve_llm_chain(settings, RetrievalLlmRef(preset=preset))

@@ -105,7 +105,7 @@ Worker 路徑(`python -m workspace_app.worker <jobtype>`)重用 `load_with_prove
     **永遠不要讀 `configs/config.yaml`(活的 secret)** —— 只讀 `config.example.yaml` 與 `config/schema.py`。dump 在 stdout 上遮罩 `api_key`/`pg_dsn`/`*_token`(大小寫不拘)/`rabbitmq.url`,以及每個 preset 的 `env` 值;`base_url` 刻意**不**遮罩(operator 想看打去哪)。判斷規則是 `config/dump.py:is_secret`,模型設定頁也用同一條(`plan-model-settings.md` M7)。真值只寫進 `config.resolved.yaml`(0600)。
 
 !!! warning "`${VAR}` 是唯一的環境覆蓋機制"
-    只在 `config.yaml` 裡展開:superuser「模型設定」頁的文字照字面使用,寫 `${…}` 會被拒絕(否則能把伺服器的任何環境變數讀回來)。沒有 per-field 1:1 的 env 查找。未設定的引用在 load 時丟 `EnvVarUnset`(fail-loud),絕不靜默變空字串(一個 typo 例如 `${OPENAPI_KEY}` 不會悄悄關掉認證)。`$$`→字面 `$`;`FOO=""`(設了但空)會代入空字串且**不**報錯。
+    只在 `config.yaml` 裡展開:superuser「模型設定」頁的文字照字面使用,config 部分寫 `${…}` 會被拒絕(否則能把伺服器的任何環境變數讀回來);App 文字裡的 `${` 就是字。沒有 per-field 1:1 的 env 查找。未設定的引用在 load 時丟 `EnvVarUnset`(fail-loud),絕不靜默變空字串(一個 typo 例如 `${OPENAPI_KEY}` 不會悄悄關掉認證)。`$$`→字面 `$`;`FOO=""`(設了但空)會代入空字串且**不**報錯。
 
 !!! note "Provenance 答的是『我設了什麼』"
     Provenance 由**插值前的原始 YAML** 推導(operator 實際寫了哪些 leaf),與寫的值是否剛好等於 default 無關。

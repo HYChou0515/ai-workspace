@@ -30,6 +30,7 @@ from importlib import resources
 import msgspec
 
 from ..apps.profiles import ProfileManifest, workflow_profiles
+from .discovery import PLAIN_ID
 from .dsl import DslError, parse_def, stale_risk_warnings, validate_def
 from .manifest import WorkflowManifest
 
@@ -204,6 +205,15 @@ def _check_workflow_ids(workflows: list[WorkflowManifest], where: str) -> list[D
                     "a workflow in 'workflows' is missing its 'id'",
                     "each entry needs a stable, non-empty id (its run.py lives at "
                     "workflows/<id>/run.py)",
+                )
+            )
+        elif not PLAIN_ID.fullmatch(wf.id):
+            diags.append(
+                Diagnostic(
+                    "error",
+                    where,
+                    f"workflow id {wf.id!r} must be a plain name",
+                    "letters, digits, '-' and '_' — the id is a path (workflows/<id>/run.py)",
                 )
             )
         elif wf.id in seen:

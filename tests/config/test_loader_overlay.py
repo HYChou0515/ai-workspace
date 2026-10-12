@@ -62,3 +62,20 @@ def test_a_key_lands_only_where_its_setting_exists(tmp_path):
 
     assert settings.agents.presets["openai-mini"].llm.api_key == "sk-mini"
     assert "gone" not in settings.agents.presets
+
+
+def test_kb_quality_judge_is_built(tmp_path):
+    # final review 4: the loader validated `kb.quality_judge` and never built it,
+    # so the judge always fell back to `retrieval_llm` — from config.yaml and
+    # from the settings page alike.
+    from workspace_app.config.loader import load
+
+    config = tmp_path / "config.yaml"
+    config.write_text(
+        "kb:\n  quality_judge:\n    preset: kb-default\n    model: openai/judge\n",
+        encoding="utf-8",
+    )
+
+    judge = load(config_path=config, env={}).kb.quality_judge
+
+    assert judge is not None and judge.preset == "kb-default"

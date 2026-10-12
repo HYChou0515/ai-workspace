@@ -2823,10 +2823,15 @@ export const messages = {
   },
   "modelSettings.applyTitle": { "zh-TW": "套用這些改動？", en: "Apply these changes?" },
   "modelSettings.applyBody": {
-    "zh-TW": "所有服務在一秒內改用新設定。已經開始的一次模型呼叫或一個聊天回合，用舊設定跑完；之後開始的都用新的。",
-    en: "Every service uses the new settings within a second. A model call or a chat turn already under way finishes on the old settings; everything started after uses the new ones.",
+    "zh-TW": "所有服務在一秒內改用新設定。已經開始的一次模型呼叫用舊設定跑完；之後的每次呼叫都用新的——進行中的聊天回合保留它開始時的模型，但回合裡的重試可能走新的端點。",
+    en: "Every service uses the new settings within a second. A model call already under way finishes on the old settings; every call after it uses the new ones — a chat turn under way keeps the model it started with, but a retry within it may go to the new endpoint.",
   },
   "modelSettings.applyConfirm": { "zh-TW": "套用", en: "Apply" },
+  "modelSettings.applyFailed": { "zh-TW": "沒有套用：{error}", en: "Not applied: {error}" },
+  "modelSettings.refreshFailed": {
+    "zh-TW": "重新讀取設定失敗；畫面上是上一次讀到的內容。",
+    en: "Could not reload the settings; this is what was last read.",
+  },
   "modelSettings.cancel": { "zh-TW": "取消", en: "Cancel" },
   "modelSettings.applied": { "zh-TW": "已套用：版本 {version}", en: "Applied: version {version}" },
   "modelSettings.added": { "zh-TW": "新增", en: "Added" },
@@ -2883,8 +2888,8 @@ export const messages = {
     en: "Clearing takes effect at the next Apply, like setting one; a cleared key cannot be recovered.",
   },
   "modelSettings.keyClearUnappliedBody": {
-    "zh-TW": "這把金鑰還沒套用過，清除會立刻撤回它，正在用的設定不受影響；清掉的金鑰拿不回來。",
-    en: "This key has never been applied: clearing withdraws it at once, and the settings in use are unaffected. A cleared key cannot be recovered.",
+    "zh-TW": "這把金鑰目前沒有生效，清除會立刻撤回它，正在用的設定不受影響；清掉的金鑰拿不回來。",
+    en: "This key is not in force: clearing withdraws it at once, and the settings in use are unaffected. A cleared key cannot be recovered.",
   },
 } satisfies Record<string, Entry>;
 

@@ -35,9 +35,9 @@ class Clock:
 
 
 class Page:
-    def __init__(self, tmp_path: Path) -> None:
+    def __init__(self, tmp_path: Path, yaml: str = "server:\n  port: 9090\n") -> None:
         config = tmp_path / "config.yaml"
-        config.write_text("server:\n  port: 9090\n", encoding="utf-8")
+        config.write_text(yaml, encoding="utf-8")
         self.clock = Clock()
         self.live = LiveSettings(
             None,
@@ -57,7 +57,7 @@ class Page:
             runner=ScriptedAgentRunner([]),
             kb_embedder=HashEmbedder(dim=EMBED_DIM),
             kb_chunker=FixedTokenChunker(max_tokens=3, overlap_tokens=1),
-            agent_config_catalog=live_agent_config_catalog(self.live),
+            agent_config_catalog=live_agent_config_catalog(self.live, tmp_path),
             live=self.live,
         )
         self.client = TestClient(app)
@@ -322,3 +322,54 @@ def test_the_page_says_which_keys_are_in_force(page):
     page.client.post(f"{BASE}/apply")
 
     assert page.client.get(BASE).json()["applied_keys"] == [API_KEY]
+
+
+def test_test_connection_works_when_config_yaml_names_a_relative_prompt_file(tmp_path, monkeypatch):
+    # final review 4: the endpoint check built the deploy's usage catalog without
+    # the config file's directory, so a relative `prompt_file` (the documented
+    # form) made every Test connection a 500.
+    from workspace_app.kb.llm import LitellmLlm
+
+    (tmp_path / "p.md").write_text("You answer.", encoding="utf-8")
+    yaml = (
+        "agents:\n"
+        "  presets:\n"
+        "    mine:\n"
+        "      model: openai/mine\n"
+        "      prompt_file: p.md\n"
+        "      allowed_tools: [kb_search, kb_grep, read_page, read_lines]\n"
+        "  kb_chat:\n"
+        "    - preset: mine\n"
+        "      name: Mine\n"
+    )
+    page = Page(tmp_path, yaml)
+    monkeypatch.setattr(LitellmLlm, "stream", lambda self, prompt: iter([("pong", False)]))
+    try:
+        reply = page.client.post(f"{BASE}/test-connection", json={"preset": "mine"})
+    finally:
+        overlay.set_source(None)
+
+    assert reply.status_code == 200, reply.text
+    assert reply.json()["ok"] is True
+
+
+@pytest.mark.parametrize(
+    "patch",
+    [
+        {"config": {"kb": {"retrieval_llm": "s"}}},
+        {"config": {"goal": {"checker": 7}}},
+    ],
+)
+def test_a_draft_the_loader_asserts_against_is_named_on_every_route(page, patch):
+    # final review 4: the loader validates role references with `assert`; the
+    # check caught four error types but not that one, so the saved draft made
+    # save, check, Apply and Test connection all 500 until it was replaced.
+    saved = page.client.put(f"{BASE}/draft", json={"patch": patch})
+    assert saved.status_code == 200 and saved.json()["problems"], saved.text
+
+    assert page.client.post(f"{BASE}/check", json={"patch": patch}).json()["problems"]
+    assert page.client.post(f"{BASE}/apply").status_code == 422
+    tried = page.client.post(f"{BASE}/test-connection", json={"preset": "kb-default"})
+    assert tried.status_code == 200 and tried.json()["ok"] is False
+    key = page.client.put(f"{BASE}/keys", json={"path": API_KEY, "value": "sk-live-0000-0000-1"})
+    assert key.status_code == 422

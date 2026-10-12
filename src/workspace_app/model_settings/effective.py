@@ -125,8 +125,29 @@ ROLES: dict[str, Callable[[Settings], Any]] = {
 }
 
 
+#: What the loader raises for a document it refuses — `assert` included: it
+#: checks a role reference's shape with one (final review 4). Every place that
+#: builds a draft catches exactly these, so a bad draft is named, never a 500.
+DOES_NOT_LOAD: tuple[type[Exception], ...] = (
+    ValueError,
+    TypeError,
+    KeyError,
+    AttributeError,
+    AssertionError,
+)
+
+
+def config_dir_of(config_path: Path | None, env: Mapping[str, str]) -> Path | None:
+    """The directory of the config file in use, found the way boot finds it: a
+    usage entry's relative `prompt_file` is resolved against it."""
+    from ..config.loader import _resolve_config_path
+
+    in_use = _resolve_config_path(config_path, env)
+    return in_use.parent if in_use else None
+
+
 def _endpoints(
-    settings: Settings, presets: list[str] | None = None, config_dir: Path | None = None
+    settings: Settings, presets: list[str] | None, *, config_dir: Path | None
 ) -> list[tuple[str, str | None, str | None]]:
     """(where, base_url, api_key) of every endpoint a call can go to: each
     preset's failover chain, each role's (a role reference may carry its own
@@ -169,16 +190,27 @@ def key_destination_problems(
     deploy: Settings,
     page_keys: set[str],
     presets: list[str] | None = None,
-    config_dir: Path | None = None,
+    *,
+    config_dir: Path | None,
 ) -> list[str]:
     """A deploy key — one config.yaml sets, which no one can read — goes only
     to an endpoint config.yaml itself sends it to. Without this, changing a
     preset's `base_url` sent that key to any server the page named, on every
     call after Apply and on a test call (final review). A key set on the page
     may go anywhere: its setter knows it."""
-    paired = {(base, key) for _, base, key in _endpoints(deploy, config_dir=config_dir)}
+    paired = {
+        (base, key)
+        for _, base, key in _endpoints(deploy, None, config_dir=config_dir)
+        if isinstance(base, str | None)
+    }
     found: list[str] = []
-    for where, base, key in _endpoints(settings, presets, config_dir):
+    for where, base, key in _endpoints(settings, presets, config_dir=config_dir):
+        if not isinstance(base, str | None):
+            # A list or a number loads; it is no address (final review 4).
+            problem = f"config.{where}: base_url must be text"
+            if problem not in found:
+                found.append(problem)
+            continue
         if key and key not in page_keys and (base, key) not in paired:
             problem = (
                 f"config.{where}: the deploy's key would go to {base or 'the provider default'!r}, "
@@ -430,17 +462,12 @@ def _problems(
         return outside
     try:
         settings = effective_settings(document, config_path=config_path, env=env, keys=keys)
-    except (ValueError, TypeError, KeyError, AttributeError) as exc:
+    except DOES_NOT_LOAD as exc:
         return [f"config: {exc}"]
     from ..factories import get_infer_modules_run_config
 
     default = effective_settings({}, config_path=config_path, env=env)
-    # The directory of the config file in use, found the way boot finds it: a
-    # usage entry's `prompt_file` is relative to it.
-    from ..config.loader import _resolve_config_path
-
-    in_use = _resolve_config_path(config_path, env)
-    config_dir = in_use.parent if in_use else None
+    config_dir = config_dir_of(config_path, env)
     # The usage lists as the running KB chat / sub-agents build them: an entry
     # whose preset has no prompt_file is refused by a boot, and live it would
     # fail every use of the catalog (final review 3).

@@ -91,7 +91,7 @@ def test_a_connection_test_reports_the_reply(settings, monkeypatch):
 
     monkeypatch.setattr(LitellmLlm, "stream", lambda self, prompt: iter([(" OK ", False)]))
 
-    result = try_connection(settings, "openai-mini")
+    result = try_connection(settings, "openai-mini", config_dir=None)
 
     assert result.ok and result.reply == "OK" and result.model
 
@@ -104,14 +104,14 @@ def test_a_failed_connection_says_why_without_the_key(settings, monkeypatch):
 
     monkeypatch.setattr(LitellmLlm, "stream", refuse)
 
-    result = try_connection(settings, "openai-mini")
+    result = try_connection(settings, "openai-mini", config_dir=None)
 
     assert not result.ok and "401" in result.error
     assert "sk-secret-1234" not in result.error
 
 
 def test_an_unknown_preset_is_named(settings):
-    assert "nope" in try_connection(settings, "nope").error
+    assert "nope" in try_connection(settings, "nope", config_dir=None).error
 
 
 def test_a_connection_test_does_not_send_a_deploy_key_to_a_new_endpoint(settings, monkeypatch):
@@ -129,6 +129,8 @@ def test_a_connection_test_does_not_send_a_deploy_key_to_a_new_endpoint(settings
         agents=replace(settings.agents, presets={**settings.agents.presets, "openai-mini": moved}),
     )
 
-    result = try_connection(drafted, "openai-mini", deploy=settings, page_keys=set())
+    result = try_connection(
+        drafted, "openai-mini", deploy=settings, page_keys=set(), config_dir=None
+    )
 
     assert not result.ok and "key" in result.error and calls == []

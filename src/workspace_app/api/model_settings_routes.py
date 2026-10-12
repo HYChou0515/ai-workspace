@@ -24,6 +24,8 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from ..model_settings.effective import (
+    DOES_NOT_LOAD,
+    config_dir_of,
     effective_settings,
     problems,
     redact,
@@ -247,7 +249,7 @@ def register_model_settings_routes(
                 settings = effective_settings(
                     store.draft(), config_path=config_path, env=env, keys=keys
                 )
-            except (ValueError, TypeError, KeyError, AttributeError):
+            except DOES_NOT_LOAD:
                 return f"{body.path}: the saved draft does not load — fix it on the Edit tab first"
             if key_lands(settings, body.path, body.value):
                 return None
@@ -275,7 +277,7 @@ def register_model_settings_routes(
                 settings = effective_settings(
                     store.draft(), config_path=config_path, env=env, keys=store.key_values()
                 )
-            except (ValueError, TypeError, KeyError, AttributeError) as exc:
+            except DOES_NOT_LOAD as exc:
                 return _ConnectionOut(
                     ok=False,
                     error=redact(f"the draft does not load: {exc}", store.key_values()),
@@ -285,6 +287,7 @@ def register_model_settings_routes(
                 body.preset,
                 deploy=effective_settings({}, config_path=config_path, env=env),
                 page_keys=set(store.key_values().values()),
+                config_dir=config_dir_of(config_path, env),
             )
             return _ConnectionOut(
                 ok=result.ok,

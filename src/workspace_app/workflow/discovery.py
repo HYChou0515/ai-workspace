@@ -129,7 +129,9 @@ def _check_phase_ids(manifest: WorkflowManifest, label: str) -> None:
             )
 
 
-_PLAIN_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*")
+#: A workflow id is a path (`workflows/<id>/run.py`): boot, `workflow check`
+#: and `workflow new` all hold it to this one rule.
+PLAIN_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*")
 
 
 def _check_workflow_ids(workflows: list[WorkflowManifest], label: str) -> None:
@@ -142,7 +144,7 @@ def _check_workflow_ids(workflows: list[WorkflowManifest], label: str) -> None:
                 f"{label}: a workflow in 'workflows' is missing its 'id' "
                 f"(manual §4 — each workflow is addressed by a stable id)"
             )
-        if not _PLAIN_ID.fullmatch(wf.id):
+        if not PLAIN_ID.fullmatch(wf.id):
             # An id is a path (`workflows/<id>/run.py`) — a `../` one could load
             # and run a run.py from anywhere; the settings page can change ids.
             raise ValueError(

@@ -95,7 +95,7 @@ def test_scaffold_rejects_an_unknown_recipe(tmp_path):
 
 @pytest.mark.parametrize("bad_id", ["", "a/b"])
 def test_scaffold_rejects_a_bad_id(tmp_path, bad_id):
-    with pytest.raises(ValueError, match="must be non-empty"):
+    with pytest.raises(ValueError, match="plain name"):
         scaffold_workflow(tmp_path, "myapp", "default", bad_id)
 
 
@@ -166,3 +166,13 @@ async def test_batch_recipe_processes_each_upload(tmp_path):
     assert result["status"] == "done" and result["processed"] == 2
     assert await wf.exists("notes/uploads_a.txt.md")
     assert await wf.exists("notes/uploads_b.txt.md")
+
+
+def test_new_refuses_a_workflow_id_that_boot_refuses(tmp_path):
+    # final review 4: `workflow new` scaffolded `daily.v2`, which boot refuses.
+    import pytest as _pytest
+
+    from workspace_app.workflow.scaffold import scaffold_workflow
+
+    with _pytest.raises(ValueError, match="plain name"):
+        scaffold_workflow(tmp_path, "app", "default", "daily.v2")

@@ -1152,6 +1152,7 @@ def _settings_from_dict(d: dict[str, Any]) -> Settings:
             git=_build(GitSettings, d["kb"]["git"]),
             vlm_llm=_build_retrieval_llm(d["kb"]["vlm_llm"]),
             vlm_format_llm=_build_retrieval_llm(d["kb"].get("vlm_format_llm")),
+            quality_judge=_build_retrieval_llm(d["kb"].get("quality_judge")),
             deck_vlm=_build_retrieval_llm(d["kb"].get("deck_vlm")),
             wiki=_build_wiki(d["kb"]["wiki"]),
             parsers=list(d["kb"].get("parsers", [])),

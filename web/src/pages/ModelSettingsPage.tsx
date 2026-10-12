@@ -73,7 +73,13 @@ const CHECK_AFTER_MS = 400;
 const pretty = (value: unknown) => JSON.stringify(value, null, 2);
 const messageOf = (e: unknown) => (e instanceof Error ? e.message : String(e));
 const short = (version: string) => version.slice(0, 8);
-const shown = (value: unknown) => (typeof value === "string" ? value : JSON.stringify(value));
+// An empty text is said as `""`: printed as nothing it read as missing data
+// (final review 4, NN/g heuristic #1).
+const shown = (value: unknown) =>
+  typeof value === "string" && value !== "" ? value : JSON.stringify(value);
+/** A value may be a whole preset on one line: it wraps rather than widen the
+ * page or clip a dialog (final review 4; NN/g "Beware Horizontal Scrolling"). */
+const WRAP = { overflowWrap: "anywhere", minWidth: 0 } as const;
 
 type Client = Pick<
   ModelSettingsClient,
@@ -112,14 +118,23 @@ export function ModelSettingsPage({ client = modelSettingsApi }: { client?: Clie
           </p>
         )}
       </header>
-      {page.isPending ? (
-        <p style={MUTED}>…</p>
+      {/* Data in hand is kept: a failed REFRESH must not swap the page — and
+          the unsaved edits in it — for "load failed" (final review 4). */}
+      {page.data ? (
+        <>
+          {page.isError && (
+            <p role="alert" data-testid="model-settings-refresh-failed" style={{ ...MUTED, margin: 0 }}>
+              {t("modelSettings.refreshFailed")}
+            </p>
+          )}
+          <Loaded client={client} data={page.data} />
+        </>
       ) : page.isError ? (
         <p role="alert" style={MUTED}>
           {t("modelSettings.loadFailed")}
         </p>
       ) : (
-        <Loaded client={client} data={page.data} />
+        <p style={MUTED}>…</p>
       )}
     </div>
   );
@@ -136,7 +151,7 @@ function ChangeList({ changes, testId = "model-settings-diff" }: { changes: Chan
   return (
     <ul data-testid={testId} style={{ ...MONO, margin: 0, paddingLeft: 18 }}>
       {changes.map((c) => (
-        <li key={c.path} style={BULLET}>
+        <li key={c.path} style={{ ...BULLET, ...WRAP }}>
           <strong>{t(KIND[c.kind])}</strong> {c.path}
           {c.kind === "changed" && `: ${shown(c.before)} → ${shown(c.after)}`}
           {c.kind === "added" && `: ${shown(c.after)}`}
@@ -189,6 +204,9 @@ function useDraft(client: Client, data: PageData) {
   const [notice, setNotice] = useState("");
   const [refused, setRefused] = useState<string[]>([]);
   const [saveError, setSaveError] = useState("");
+  // An Apply that failed without naming a problem (a 409, a 500, the network):
+  // said beside Apply and retryable — not a problem to fix in the draft.
+  const [applyError, setApplyError] = useState("");
   // A save or a rollback hands back a new draft; the editor follows it — but
   // only while it still says what the LAST saved draft said. Unsaved edits are
   // never replaced by a refetch (confirmation round: another superuser's save,
@@ -237,14 +255,25 @@ function useDraft(client: Client, data: PageData) {
     // from a later render (final review) — and the server refuses anything else.
     mutationFn: (seen: { draft: Patch; pendingKeys: string[] }) =>
       client.apply(seen.draft, seen.pendingKeys),
+    onMutate: () => setApplyError(""),
     onSuccess: (applied: Applied) => {
       setRefused([]);
       setNotice(t("modelSettings.applied", { version: short(applied.version) }));
       void queryClient.invalidateQueries({ queryKey: qk.modelSettings });
     },
-    // A refusal names its problems; any other failure (a 500, the network) is
-    // still a reason the person must see — the mutation is `silentError`.
-    onError: (e) => setRefused(problemsOf(e).length ? problemsOf(e) : [messageOf(e)]),
+    // A refusal names its problems, which block Apply until the draft changes.
+    // Any other failure (a 409, a 500, the network) is still a reason the person
+    // must see — the mutation is `silentError` — but nothing in the draft to fix:
+    // it is said beside Apply, which stays offered, and the page is read again
+    // so a 409 shows what changed (final review 4).
+    onError: (e) => {
+      if (problemsOf(e).length) {
+        setRefused(problemsOf(e));
+        return;
+      }
+      setApplyError(messageOf(e));
+      void queryClient.invalidateQueries({ queryKey: qk.modelSettings });
+    },
   });
 
   // What Apply would change in what RUNS — the SAVED draft is what it publishes.
@@ -296,6 +325,7 @@ function useDraft(client: Client, data: PageData) {
     setNotice("");
     setRefused([]);
     setSaveError("");
+    setApplyError("");
   };
   // NN/g heuristic #3 (user control): one button gives the saved draft back —
   // the editor's own undo is gone once a tab switch unmounts it (final review).
@@ -318,6 +348,7 @@ function useDraft(client: Client, data: PageData) {
     refused,
     notice,
     saveError,
+    applyError,
     save,
     apply,
     changes,
@@ -381,6 +412,11 @@ function ApplyButton({
       {explain && blocked && (
         <span data-testid={`${testId}-why`} style={MUTED}>
           {t(WHY[where][blocked])}
+        </span>
+      )}
+      {draft.applyError && (
+        <span role="alert" data-testid={`${testId}-failed`} style={{ ...MUTED, ...WRAP, color: "var(--err)" }}>
+          {t("modelSettings.applyFailed", { error: draft.applyError })}
         </span>
       )}
       {explain && goEdit && blocked && blocked !== "nothing" && (
@@ -594,10 +630,10 @@ function EditTab({
               const fallback = valueAt(defaults, parts);
               return (
                 <li key={path} style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-                  <span>
+                  <span style={WRAP}>
                     {path}: {shown(value)}
                   </span>
-                  <span style={MUTED}>
+                  <span style={{ ...MUTED, ...WRAP }}>
                     {fallback.found
                       ? t("modelSettings.default", { value: shown(fallback.value) })
                       : t("modelSettings.defaultNone")}
@@ -932,7 +968,7 @@ function KeysTab({
   const askToClear = async (p: string) => {
     const choice = await dialog.confirm({
       title: t("modelSettings.keyClearTitle", { path: p }),
-      // A key never applied is not in force: clearing it only withdraws it.
+      // A key not in force now: clearing it only withdraws a staged change.
       body: t(applied.includes(p) ? "modelSettings.keyClearBody" : "modelSettings.keyClearUnappliedBody"),
       actions: [
         { id: "cancel", label: t("modelSettings.cancel") },
@@ -1003,9 +1039,11 @@ function KeysTab({
       )}
       {/* Visible labels, not placeholders — NN/g "Placeholders in Form Fields
           Are Harmful": a placeholder disappears as you type and was cut off. */}
-      {/* The format hint sits under its own field (NN/g "Form Design"
-          guidance: help text next to the field it explains), so the row
-          aligns to the inputs' tops and the button gets a label-high spacer. */}
+      {/* The format hint sits under its own field: hints are "persistent and
+          placed outside of the field" (NN/g "Placeholders in Form Fields Are
+          Harmful"), and beside the field they explain, not the row (NN/g
+          "Proximity"). So the row aligns to the inputs' tops and the button
+          gets a label-high spacer. */}
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "flex-start" }}>
         <div data-testid="model-settings-key-path-field" style={{ display: "grid", gap: 4, flex: "1 1 20rem", minWidth: 0 }}>
           <label style={{ display: "grid", gap: 4 }}>

@@ -2172,7 +2172,7 @@ agent 步驟裡 AI 的呼叫、WUI 的工具呼叫、view plugin、圖表重畫�
   為什麼：頁面只存跟預設不同的部分（JSON Merge Patch），預設仍是部署帶的檔案。
 - 套用後，API 與每個 worker 在**一秒內**改用新設定，不用重啟：每個行程每秒最多讀一次「目前版本」（一筆小資料），
   版本變了才重建；讀不到資料庫或新版本建不起來，就繼續用上一個好的版本並記 log
-  （`model settings: could not read the version` / `does not build`）。已經開始的一次模型呼叫或一個 agent 回合（聊天、wiki 維護的一輪）用舊設定跑完；之後開始的都用新的——一個正在跑的 job 下一次呼叫或下一輪就換，所以同一個 job 可能前後用到兩版。
+  （`model settings: could not read the version` / `does not build`）。已經開始的一次模型呼叫用舊設定跑完；之後的每次呼叫都用新的。一個進行中的 agent 回合（聊天、wiki 維護的一輪）保留它開始時的模型，但回合裡的重試（等 rate limit、修壞掉的 tool call、超出 context 縮短）會重讀端點與備援鏈，所以可能換到新的端點；一個正在跑的 job 下一次呼叫或下一輪就換，所以同一個 job 可能前後用到兩版。
 - 頁面**不收**只在開機時讀的值：其他 config key、角色的開／關（例如把 `health.judge_llm` 從 null 改成某個 preset）、
   `infer_modules` 的 `enhancements` / `reasoning_effort` / `parallelism` / `collection`、App 的 `resources` / `slug`
   —— 套用時直接拒絕並說「去改 config.yaml」，不存一個重啟前不生效的值。同樣拒絕：沒有出貨的 App 或 profile
@@ -2186,6 +2186,13 @@ agent 步驟裡 AI 的呼叫、WUI 的工具呼叫、view plugin、圖表重畫�
   現在都印成 `*** set (N chars) ***`。為什麼：頁面和開機 dump 用同一個判斷哪些是秘密的規則（M7），
   token 常放在 env 裡、名字又認不出來。症狀：升級後在開機 log 裡找 preset 的 env 值，看到的是遮罩。
 - 診斷頁的模型檢查（`/health/checks`）照舊在開機時建好，套用後要重啟才會檢查新模型；它是診斷，不在對話的路徑上。
+- **`kb.quality_judge` 開始生效**：以前 loader 檢查了這個值卻沒建出來，文件品質評分永遠用 `kb.retrieval_llm`。
+  升級後，`config.yaml` 裡設了 `kb.quality_judge` 的部署，評分改用它指的模型（成本與結果可能跟著變）。
+  沒設的部署不變。不想換：rollout 前把它從 `config.yaml` 拿掉。
+- **workflow id 只能是一般名稱**（英數字、`-`、`_`）：id 就是路徑（`workflows/<id>/run.py`），
+  開機會拒絕其他寫法（例如 `daily.v2`、`../x`），`workflow check` 與 `workflow new` 用同一條規則先擋。
+  出貨的 App 都符合；自己寫的 profile 在 rollout 前跑 `uv run python -m workspace_app.workflow check`，
+  症狀是開機失敗並說 `workflow id '…' must be a plain name`。
 
 **資料** — 新增五個 specstar model（`_SettingsDraft` / `_SettingsVersion` / `_SettingsCurrent` / `_SettingsKey` /
 `_SettingsAppliedKey`），
