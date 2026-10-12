@@ -45,18 +45,28 @@ def test_two_submits_of_the_same_job_get_the_same_key_whatever_else_differs():
     first = {"image": "trainer:3", "command": "train.py", "note": "first try"}
     again = {"note": "second try", "command": "train.py", "image": "trainer:3"}
 
-    assert rule.key(first, caller="ann") == rule.key(again, caller="ann")
-    assert rule.key(first, caller="ann") != rule.key({**first, "command": "eval.py"}, caller="ann")
+    assert rule.key(first, item_id="i1") == rule.key(again, item_id="i1")
+    assert rule.key(first, item_id="i1") != rule.key({**first, "command": "eval.py"}, item_id="i1")
 
 
-def test_the_same_spec_from_two_callers_is_two_jobs_unless_declared_shared():
+def test_sameness_is_per_item_not_per_person():
+    # D41: a job's outputs land in one item's workspace, so the same work sent
+    # from two items is two jobs, and from one item is one — whoever sent it.
     spec = {"image": "trainer:3"}
+    rule = Idempotency(fields=("image",))
 
-    mine = Idempotency(fields=("image",))
-    assert mine.key(spec, caller="ann") != mine.key(spec, caller="bob")
+    assert rule.key(spec, item_id="i1") != rule.key(spec, item_id="i2")
 
-    shared = Idempotency(fields=("image",), per_user=False)
-    assert shared.key(spec, caller="ann") == shared.key(spec, caller="bob")
+
+def test_without_an_item_sameness_is_the_fields_alone():
+    # D47: under the MCP runner there is no item; the key must still be stable,
+    # and must not collide with any item's key for the same spec.
+    spec = {"image": "trainer:3"}
+    rule = Idempotency(fields=("image",))
+
+    assert rule.key(spec, item_id=None) == rule.key(spec, item_id=None)
+    assert rule.key(spec, item_id=None) != rule.key(spec, item_id="")
+    assert rule.key(spec, item_id=None) != rule.key(spec, item_id="i1")
 
 
 SPEC = {
@@ -76,8 +86,8 @@ def test_sameness_named_on_a_field_the_spec_does_not_have_is_refused_when_declar
 
 
 def test_sameness_named_on_no_field_at_all_is_refused_when_declared():
-    # With no fields the key depends on the caller alone: a person's second,
-    # different job would be answered with their first job's id.
+    # With no fields the key depends on the item alone: an item's second,
+    # different job would be answered with its first job's id.
     with pytest.raises(ContractError, match="at least one"):
         Contract(spec_schema=SPEC, idempotency=Idempotency(fields=()))
 
@@ -109,6 +119,15 @@ def test_a_status_outside_the_three_phases_is_refused():
 
     status = JobStatus(job_id="j1", phase="running", state="suspended")
     assert status.detail == {}
+    # D48: which item it came from, as the backend recorded it; unknown is None.
+    assert status.item_id is None
+    assert JobStatus(job_id="j1", phase="done", state="ok", item_id="i1").item_id == "i1"
+
+
+def test_caller_id_is_no_longer_part_of_the_contract():
+    # D41 replaced the person with the item: a backend need not say who calls.
+    assert "caller_id" not in REQUIRED
+    assert not hasattr(JobBackend, "caller_id")
 
 
 CONTRACT = Contract(spec_schema=SPEC, idempotency=Idempotency(fields=("image",)))
@@ -119,10 +138,7 @@ class Minimal(JobBackend):
 
     contract = CONTRACT
 
-    def caller_id(self):
-        return "ann"
-
-    def submit(self, spec, key):
+    def submit(self, spec, key, item_id):
         return "j1"
 
     def find_by_key(self, key):
@@ -150,8 +166,7 @@ def test_a_backend_missing_a_required_call_is_refused_by_the_check():
     class NoGet(JobBackend):
         contract = CONTRACT
 
-        def caller_id(self): ...
-        def submit(self, spec, key): ...
+        def submit(self, spec, key, item_id): ...
         def find_by_key(self, key): ...
         def list(self, cursor, limit): ...
 
@@ -185,8 +200,8 @@ def test_a_shared_base_without_a_contract_can_be_written():
     # Helpers shared by several backends live on a base that is not a backend
     # itself; only the class that is loaded must be complete.
     class Base(JobBackend):
-        def caller_id(self):
-            return "ann"
+        def _client(self):
+            return "shared helper"
 
     class Complete(Base, Minimal):
         pass

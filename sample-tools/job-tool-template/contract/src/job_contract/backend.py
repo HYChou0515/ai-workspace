@@ -16,7 +16,7 @@ from typing import Any, ClassVar
 from job_contract.contract import Contract, ContractError, JobStatus
 
 #: The calls every backend has.
-REQUIRED = ("caller_id", "submit", "find_by_key", "get", "list")
+REQUIRED = ("submit", "find_by_key", "get", "list")
 #: The calls a backend may have. Not overriding one means not supporting it.
 OPTIONAL = ("update", "cancel", "logs", "fetch")
 
@@ -51,8 +51,8 @@ class NeedsAction(JobError):
 
 
 class NotFound(JobError):
-    """The backend is certain this job does not exist (for this caller). Not
-    the same as being unable to say: for that, return `phase="unknown"`."""
+    """The backend is certain this job does not exist (for this credential).
+    Not the same as being unable to say: for that, return `phase="unknown"`."""
 
     exit_code = 1
 
@@ -111,19 +111,18 @@ class JobBackend(ABC):
     # ── required ────────────────────────────────────────────────────────────
 
     @abstractmethod
-    def caller_id(self) -> str:
-        """Who the backend recognises from the credential this call carries.
-        The shell derives idempotency keys from it, so two people sharing one
-        credential are one caller."""
-
-    @abstractmethod
-    def submit(self, spec: dict[str, Any], key: str) -> str:
+    def submit(self, spec: dict[str, Any], key: str, item_id: str | None) -> str:
         """Send the job and return its id, without waiting for it to run.
 
-        `key` is derived by the shell from `contract.idempotency`. Sending the
-        same key again MUST return the same id and MUST NOT start a second
-        job: an answer can be lost after the job was accepted, and whoever
-        sends it again — the model, or a person — cannot tell."""
+        `key` is derived by the shell from `contract.idempotency` and the item.
+        Sending the same key again MUST return the same id and MUST NOT start a
+        second job: an answer can be lost after the job was accepted, and
+        whoever sends it again — the model, or a person — cannot tell.
+
+        `item_id` is the item it is sent from (None outside the platform).
+        Record it and report it back as `JobStatus.item_id`; it is a label for
+        the model, not a permission — who may see or change a job is decided
+        by the credential."""
 
     @abstractmethod
     def find_by_key(self, key: str) -> JobStatus | None:
@@ -137,8 +136,9 @@ class JobBackend(ABC):
 
     @abstractmethod
     def list(self, cursor: str | None, limit: int) -> tuple[list[JobStatus], str | None]:
-        """This caller's jobs, newest first, read-only: one page and the cursor
-        of the next, or None after the last."""
+        """The jobs this credential can see, newest first, read-only — NOT only
+        this item's (D42): a person asking about the queue expects the queue.
+        One page and the cursor of the next, or None after the last."""
 
     # ── optional: not overriding one means not supporting it ────────────────
 

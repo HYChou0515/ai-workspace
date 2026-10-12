@@ -47,6 +47,11 @@ class JobStatus:
     OOM"). Shown to the model verbatim; the shell never interprets it."""
     detail: dict[str, Any] = field(default_factory=dict)
     """Anything else worth showing. Printed verbatim."""
+    item_id: str | None = None
+    """The item the job was submitted from, as the backend recorded it at
+    `submit` — None when unknown (submitted elsewhere, or with no item). The
+    shell uses it only to tell the model which jobs came from this item; what
+    a job may be seen or changed by is the credential's business (D42, D43)."""
 
     def __post_init__(self) -> None:
         if self.phase not in PHASES:
@@ -102,13 +107,13 @@ class Idempotency:
     """The spec fields that decide sameness. A field left out (a free-text
     note, say) never makes a resubmit look like a new job."""
 
-    per_user: bool = True
-    """Two callers sending the same spec get two jobs."""
-
-    def key(self, spec: dict[str, Any], *, caller: str) -> str:
+    def key(self, spec: dict[str, Any], *, item_id: str | None) -> str:
+        """The key for `spec` sent from `item_id`. Sameness is per item (D41): a
+        job's outputs land in one item's workspace, so the same work from two
+        items is two jobs. With no item (the MCP runner, D47) the fields alone
+        decide — and None never equals any item's id, empty included."""
         picked = {name: spec.get(name) for name in self.fields}
-        who = caller if self.per_user else None
-        canonical = json.dumps([who, picked], sort_keys=True, separators=(",", ":"))
+        canonical = json.dumps([item_id, picked], sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(canonical.encode()).hexdigest()
 
 
@@ -161,7 +166,7 @@ class Contract:
         if not self.idempotency.fields:
             raise ContractError(
                 "idempotency.fields must name at least one spec field: with none, the key "
-                "depends on the caller alone and every submit of theirs is the same job"
+                "depends on the item alone and every submit from it is the same job"
             )
         known = set(self.spec_schema.get("properties", {}))
         unknown = [name for name in self.idempotency.fields if name not in known]
