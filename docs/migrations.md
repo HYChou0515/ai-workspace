@@ -2148,10 +2148,12 @@ agent 步驟裡 AI 的呼叫、WUI 的工具呼叫、view plugin、圖表重畫�
     `invalid_request_error` 的 400 以前就不重試），現在第一次就結束這一輪並說明原因。自訂 `ITokenService` 的部署：每個 key 每輪只解析一次、不重試（子 agent 與壓縮摘要另算），
     見 [configuration 的契約 3](configuration.md)。
   - 小模型送出非物件、或多個黏在一起的 tool 參數：工具回覆錯誤、模型下一次呼叫自己改正；以前是整輪重跑。
-  - **provider client 自己的重試關掉了**：每次模型呼叫都帶 `max_retries=0`、`num_retries=0`。以 OpenAI 相容端點
-    （`openai/…`）為例，litellm 建 client 時預設 `max_retries=2`，那個 client 會自己照 `Retry-After` 等完再重送——
-    短的 429 與 5xx 因此在畫面上只是「等候模型回應」，不顯示等待、不計次數、也不算進等待池。現在只剩上面這一層重試，
-    重送次數就是 `runner.max_retries`。
+  - **provider client 自己的重試關掉了**：agent 回合的每次模型呼叫都帶 `max_retries=0`、`num_retries=0`。以 OpenAI
+    相容端點（`openai/…`）為例，litellm 建 client 時預設 `max_retries=2`，那個 client 會自己照 `Retry-After` 等完再重送——
+    短的 429 與 5xx 因此在畫面上只是「等候模型回應」，不顯示等待、不計次數、也不算進等待池。現在由上面那一層接手：
+    429 照等待池等，逾時／連線／5xx 重送前退避（0.5 秒起、每次加倍、最多 8 秒，和 OpenAI client 原本的節奏相同）。
+    設了 failover chain 的部署，chain 自己的快速重試與限流等待（`num_retries`、`rate_limit_budget_s`）照舊在這一層底下。
+    **409 不再重試**：OpenAI client 以前會重送 409，現在 409 算請求錯誤，第一次就結束這一輪並說明原因。
 - 錯誤一律以「發生了什麼／可以怎麼做／技術細節（預設收合，可複製）」顯示，**所有使用者都看得到技術細節**（D1）。
   技術細節是 provider 的原文，可能包含端點網址或模型名稱。
 - 子 agent（`ask_knowledge_base`、`run_agent`、skill hub 審查）被限流或重試時，**父輪**的狀態列會顯示；

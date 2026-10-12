@@ -27,6 +27,7 @@ from agents.models.interface import Model
 from ..context_budget import estimate_messages
 from ..failover.classify import ModelCallFailed, classify_error
 from ..failover.rate_limit import is_rate_limited, rate_limit_wait_s
+from .settings_arg import with_settings
 
 _ITEM_DONE = "response.output_item.done"
 
@@ -34,6 +35,14 @@ _ITEM_DONE = "response.output_item.done"
 #: it) was unwell for a moment. Everything else — a bad request, a refused
 #: credential — fails identically however often it is sent.
 _TRANSIENT = frozenset({"timeout", "connection", "provider_error", "all_busy"})
+
+
+def _backoff_s(retry: int) -> float:
+    """The wait before re-send number ``retry`` (1-based): 0.5 s, doubling, at
+    most 8 s — the OpenAI client's own schedule, which this layer replaces
+    since the client's retries are off (review round 3)."""
+    return min(0.5 * 2 ** (retry - 1), 8.0)
+
 
 CALL_STARTED = "workspace.call_started"
 CALL_RETRACTED = "workspace.call_retracted"
@@ -121,25 +130,22 @@ class _Attempts:
         self.retries += 1
         if owner._on_retry is not None:
             owner._on_retry(self.retries, kind)
+        await owner._sleep(_backoff_s(self.retries))
         return input
 
 
-# This wrapper is the ONE retry layer only if the client under it does not
-# retry too: litellm builds its OpenAI client with `max_retries=2`, which waits
-# out a short Retry-After and re-sends on its own, so a 429 never reached here —
-# no hold shown, no count, no budget charged (found recording the #915 demo).
+# This wrapper sees a failure only if the client under it does not retry it
+# first: litellm builds its OpenAI client with `max_retries=2`, which waits out
+# a short Retry-After and re-sends on its own, so a 429 never reached here — no
+# hold shown, no count, no budget charged (found recording the #915 demo). A
+# failover chain's own quick retries still sit beneath; they are configured.
 _PROVIDER_RETRIES_OFF = ModelSettings(extra_args={"max_retries": 0, "num_retries": 0})
 
 
-def _provider_retries_off(args: tuple[Any, ...]) -> tuple[Any, ...]:
-    """`model_settings` is the third parameter of `Model.get_response` /
-    `stream_response`; the SDK passes it positionally. `resolve` merges
-    `extra_args`, so the call's own arguments (`num_ctx`, `think`) survive."""
-    return (_off(args[0]), *args[1:])
-
-
-def _off(settings: ModelSettings | None) -> ModelSettings:
-    return (settings or ModelSettings()).resolve(_PROVIDER_RETRIES_OFF)
+def _provider_retries_off(settings: ModelSettings) -> ModelSettings:
+    """`resolve` merges `extra_args`, so the call's own (`num_ctx`, `think`)
+    survive."""
+    return settings.resolve(_PROVIDER_RETRIES_OFF)
 
 
 class CallRetryModel(Model):
@@ -179,7 +185,7 @@ class CallRetryModel(Model):
     async def get_response(
         self, system_instructions: Any, input: Any, *args: Any, **kwargs: Any
     ) -> Any:
-        args = _provider_retries_off(args)
+        args, kwargs = with_settings(args, kwargs, _provider_retries_off, at=0)
         attempts = _Attempts(self)
         input = self._first_input(input)
         while True:
@@ -191,7 +197,7 @@ class CallRetryModel(Model):
     async def stream_response(
         self, system_instructions: Any, input: Any, *args: Any, **kwargs: Any
     ) -> AsyncIterator[Any]:
-        args = _provider_retries_off(args)
+        args, kwargs = with_settings(args, kwargs, _provider_retries_off, at=0)
         attempts = _Attempts(self)
         input = self._first_input(input)
         while True:

@@ -191,13 +191,19 @@ async def test_a_request_that_is_wrong_ends_the_turn_at_once(monkeypatch):
     assert len(llm.inputs) == 1
 
 
-async def test_the_provider_client_does_not_retry_behind_our_back(monkeypatch):
+@pytest.mark.parametrize("stream", ["1", "0"])
+async def test_the_provider_client_does_not_retry_behind_our_back(monkeypatch, stream):
     """Found recording the demo: a 429 with `Retry-After: 4` never reached this
     layer. litellm builds its OpenAI client with `max_retries=2`, and that client
     waits out a short Retry-After and re-sends on its own — so the turn sat on
     "waiting for the model" with no hold, no count and no budget charged. The
     wrapper is the one retry layer only if every call it makes says so; this
-    goes through the real `LitellmModel` to the `acompletion` it calls."""
+    goes through the real `LitellmModel` to the `acompletion` it calls.
+
+    Both shapes of a call (review round 3): the SDK hands `stream_response` its
+    settings positionally and `get_response` (WORKSPACE_AGENT_STREAM=0) by
+    keyword, and reading only the first broke every non-streamed turn."""
+    monkeypatch.setenv("WORKSPACE_AGENT_STREAM", stream)
     seen: list[dict[str, Any]] = []
 
     async def acompletion(**kwargs: Any) -> Any:

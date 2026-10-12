@@ -201,12 +201,23 @@ never the hold. The SSE stream carried no `rate_limited` at all, and the
 stand-in saw the 429'd call re-sent about five seconds later: litellm builds
 its OpenAI client with `max_retries=2`, and that client waited out the
 Retry-After and re-sent on its own, so `CallRetryModel` never saw the failure.
-D2 holds only if the wrapper is the one retry layer, so every call it makes
-now carries `max_retries=0` / `num_retries=0`, merged into the call's own
-`extra_args` (Ollama's `num_ctx` rides the same dict). Re-probed after the
-fix: `rate_limited` arrives right after `tool_end`. The unit tests never saw
-this because they replace `LitellmModel`; the new runner test goes through
-the real one to the `acompletion` it calls.
+D2 needs the wrapper to see the failure, so every call it makes now carries
+`max_retries=0` / `num_retries=0`, merged into the call's own `extra_args`
+(Ollama's `num_ctx` rides the same dict). A configured failover chain keeps its
+own quick retries and rate-limit holds beneath the wrapper; those were always
+there and are not what hid this. Re-probed after the fix: `rate_limited`
+arrives right after `tool_end`. The unit tests never saw this because they
+replace `LitellmModel`; the new runner test goes through the real one to the
+`acompletion` it calls.
+
+Review round 3 on that fix found three things. Reading the settings only where
+`stream_response` puts them (third positional) broke every non-streamed turn:
+`get_response` gets them by keyword. Both wrappers that rewrite the settings
+(`HeaderModel`, `CallRetryModel`) now go through one function,
+`agent/settings_arg.py`, and the runner test runs both shapes. Turning the
+client's retries off also turned off its backoff, so a transient re-send now
+waits 0.5 s, doubling, at most 8 s, the client's own schedule. And a 409, which
+the client used to re-send, is a request error now (recorded in the runbook).
 
 The same recording showed a turn's failure **twice**, two identical boxes one
 under the other. The thread held it once (one `role="error"` message); the

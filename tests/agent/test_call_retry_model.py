@@ -412,3 +412,20 @@ async def test_turning_the_providers_retries_off_keeps_the_calls_own_arguments()
     _ = [ev async for ev in model.stream_response(None, "in", settings, [], None, [], None)]
 
     assert [s.extra_args for s in seen] == [{"num_ctx": 8192, "max_retries": 0, "num_retries": 0}]
+
+
+@pytest.mark.asyncio
+async def test_a_transient_failure_backs_off_before_each_resend() -> None:
+    """Review round 3: turning the provider client's retries off also turned
+    off its backoff (0.5 s, doubling, at most 8 s), so a gateway that answers
+    503 for a second got every re-send within milliseconds and the turn ended.
+    The re-send waits the same way the client did — announced first, like a
+    hold, so the status line says why the call went quiet."""
+    notes = _Notes()
+    inner = _Scripted([([], _unavailable()), ([], _unavailable()), ([_Ev(DELTA, "hi")], None)])
+
+    events = await _drain(_model(inner, notes, max_retries=5))
+
+    assert _visible(events) == [_Ev(DELTA, "hi")]
+    assert notes.slept == [0.5, 1.0]
+    assert notes.retries == [(1, "provider_error"), (2, "provider_error")]
