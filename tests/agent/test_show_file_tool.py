@@ -307,3 +307,69 @@ def test_inlining_refuses_a_recursive_schema_instead_of_leaving_a_dangling_ref()
         "a": {"type": "string"},
         "b": {"type": "string"},
     }
+
+
+# ── plan-workflow-out-of-chat D8: the chat's AI summons an execution's card ──
+
+
+def _with_run(item_id: str) -> tuple[RunContextWrapper, str]:
+    from workspace_app.resources import make_spec
+    from workspace_app.workflow.run import RunStatus, WorkflowRun
+
+    spec = make_spec()
+    run_id = (
+        spec.get_resource_manager(WorkflowRun)
+        .create(WorkflowRun(item_id=item_id, captured_user="u", status=RunStatus.DONE))
+        .resource_id
+    )
+    files = WorkspaceFiles(MemoryFileStore())
+    ctx = AgentToolContext(investigation_id="inv-1", files=files, spec=spec)
+    return RunContextWrapper(ctx), run_id
+
+
+async def test_show_file_declares_an_execution_of_this_workspace_as_a_card():
+    """`workflow-run:<id>` is an execution's tab path; the card opens it."""
+    ctx, run_id = _with_run("inv-1")
+
+    out = await show_file_impl(ctx, f"workflow-run:{run_id}", caption="last night's run")
+
+    assert _declared(out) == [
+        {
+            "path": f"workflow-run:{run_id}",
+            "mime": "application/x-workflow-execution",
+            "size": 0,
+            "caption": "last night's run",
+        }
+    ]
+    assert "displayed in the chat" in out
+
+
+async def test_show_file_never_shows_another_workspaces_execution():
+    ctx, run_id = _with_run("inv-OTHER")
+
+    out = await show_file_impl(ctx, f"workflow-run:{run_id}")
+
+    assert out.startswith("error:")
+    assert SHOWN_FILES_MARKER not in out
+
+
+async def test_show_file_declares_nothing_for_an_execution_that_does_not_exist():
+    ctx, _ = _with_run("inv-1")
+
+    out = await show_file_impl(ctx, "workflow-run:nope")
+
+    assert out.startswith("error:")
+    assert "nope" in out
+    assert SHOWN_FILES_MARKER not in out
+
+
+def test_the_execution_path_is_the_one_the_web_opens_as_a_tab():
+    """`show_file` declares the path the FE's execution tab is known by; the two
+    are written in two languages, so this pins them equal (the FE is the oracle:
+    it is what opens the tab)."""
+    from pathlib import Path
+
+    from workspace_app.workflow.run import EXECUTION_PATH_PREFIX
+
+    ts = (Path(__file__).parents[2] / "web/src/lib/executionTab.ts").read_text()
+    assert f'const PREFIX = "{EXECUTION_PATH_PREFIX}";' in ts

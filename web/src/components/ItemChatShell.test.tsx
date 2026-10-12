@@ -36,6 +36,7 @@ vi.mock("../pages/investigation/AgentPanel", () => ({
       data-can-add-files={String(canAddFiles)}
       // the composer must never be handed a steer route (plan-workflow-out-of-chat D2)
       data-steers={String("onSteer" in rest)}
+      data-chat={String(rest.chatId)}
     >
       {onNewChat ? (
         <button type="button" data-testid="header-new-chat" onClick={onNewChat}>
@@ -509,4 +510,35 @@ describe("the chat the address names (?chat=)", () => {
     }
   });
 
+});
+
+// plan-workflow-out-of-chat D8 / D9: an execution's tab asks for a chat about
+// it; the shell opens a NEW one and drops the words in its box, unsent.
+describe("a chat asked for from an execution", () => {
+  it("is a new chat, selected, whose composer is handed the draft", async () => {
+    const { publishChatRequest } = await import("../lib/chatRequestBus");
+    const { subscribeAgentDraft } = await import("../lib/agentDraftBus");
+    stubChatApi([summary({ chat_id: "conversation:c1", is_default: true })]);
+    const created = summary({ chat_id: "conversation:new", is_default: false });
+    const create = vi.spyOn(itemChatApi, "createChat").mockResolvedValue(created);
+    render();
+    await screen.findByTestId("agent-panel-stub");
+    // The list the shell refetches after the create now has the new chat.
+    vi.mocked(itemChatApi.listChats).mockResolvedValue([
+      created,
+      summary({ chat_id: "conversation:c1", is_default: true }),
+    ]);
+
+    // Which chat was in front when the draft arrived — it must be the new one.
+    const handedTo: string[] = [];
+    const stop = subscribeAgentDraft("it", (text) =>
+      handedTo.push(`${screen.getByTestId("agent-panel-stub").dataset.chat}: ${text}`),
+    );
+    publishChatRequest("it", "Why did Sort fail?");
+
+    await waitFor(() => expect(handedTo).toEqual(["conversation:new: Why did Sort fail?"]));
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(itemChatApi.sendMessage).not.toHaveBeenCalled(); // a draft, not a send
+    stop();
+  });
 });

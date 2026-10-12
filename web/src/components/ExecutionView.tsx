@@ -24,7 +24,8 @@ import {
   useRun,
   useSteerRun,
 } from "../hooks/useWorkflow";
-import { executionName, statusText } from "../lib/executionTab";
+import { publishChatRequest } from "../lib/chatRequestBus";
+import { executionName, executionPath, statusText } from "../lib/executionTab";
 import { pxToRem } from "../lib/pxToRem";
 import { logFromMessages } from "../pages/investigation/agentLog";
 import { EntryView } from "./AgentEntryView";
@@ -64,6 +65,45 @@ function chipTone(status: string) {
     default:
       return "muted" as const;
   }
+}
+
+/** Whether the step wrote a transcript: only agent steps do, so a link or a
+ * pointer to one is offered only once the file is known to be there. */
+function useHasTranscript(fileService: FileService, path: string | undefined): boolean {
+  const q = useQuery({
+    queryKey: ["executionTranscript", path],
+    queryFn: () => fileService.exists(path!),
+    enabled: !!path,
+  });
+  return !!q.data;
+}
+
+/** "Open a chat with these results" (D8): the execution and the result files
+ * the chat may read — never its transcripts, which are how they were made. */
+function resultsDraft(name: string, runId: string, run: WorkflowRunDTO | undefined): string {
+  const results = (run?.steps ?? [])
+    .filter((st) => !st.key && (st.status === "passed" || st.status === "skipped"))
+    .map((st) => run?.step_files?.[st.name]?.result)
+    .filter((p): p is string => !!p);
+  const lines = [`About the workflow execution "${name}" (${executionPath(runId)}).`];
+  if (results.length) lines.push("Its results:", ...results.map((p) => `- ${p}`));
+  return `${lines.join("\n")}\n\n`;
+}
+
+/** "Ask AI why it failed" (D9): which step, what it said, and its record. */
+function whyDraft(
+  name: string,
+  runId: string,
+  phaseTitle: string,
+  step: StepStateDTO | undefined,
+  transcript: string | undefined,
+): string {
+  const lines = [
+    `Why did the step "${phaseTitle}" of the workflow execution "${name}" (${executionPath(runId)}) fail?`,
+  ];
+  if (step?.reason) lines.push(`The error: ${step.reason}`);
+  if (transcript) lines.push(`Its record (prompt, tool calls and replies of each attempt): ${transcript}`);
+  return lines.join("\n");
 }
 
 const STEP_STATUS: Record<string, string> = {
@@ -145,6 +185,7 @@ export function ExecutionView({
   const changeId = useId();
 
   const title = def?.title || run?.workflow_id || "Workflow";
+  const name = executionName(title, run?.started);
   const firstRunning = nodes.findIndex((n) => n.status === "running");
   const gate = run?.status === "awaiting_human" ? run.pending_decision : null;
   const steerPlan = run?.pending_steer ?? null;
@@ -167,7 +208,7 @@ export function ExecutionView({
     >
       <header style={{ display: "flex", alignItems: "flex-start", gap: 12, flexWrap: "wrap" }}>
         <div style={{ flex: 1, minWidth: 0 }}>
-          <h2 style={{ margin: 0, fontSize: pxToRem(17) }}>{executionName(title, run?.started)}</h2>
+          <h2 style={{ margin: 0, fontSize: pxToRem(17) }}>{name}</h2>
           {run && (
             <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 4, flexWrap: "wrap" }}>
               <span data-testid="execution-status" style={chipStyle(chipTone(run.status))}>
@@ -187,6 +228,17 @@ export function ExecutionView({
             onClick={() => cancel.mutate(runId, report)}
           >
             Stop
+          </button>
+        )}
+        {run && isRunTerminal(run.status) && (
+          <button
+            type="button"
+            className="btn"
+            data-size="sm"
+            data-variant="secondary"
+            onClick={() => publishChatRequest(itemId, resultsDraft(name, runId, run))}
+          >
+            Open a chat with these results
           </button>
         )}
         {run?.status === "cancelled" && (
@@ -348,6 +400,11 @@ export function ExecutionView({
                 busy={retry.isPending}
                 canRetry={run?.status === "error" || run?.status === "cancelled"}
                 onRetry={(rerun) => retry.mutate(rerun, report)}
+                files={run?.step_files}
+                fileService={fileService}
+                onAsk={(step, transcript) =>
+                  publishChatRequest(itemId, whyDraft(name, runId, node.title, step, transcript))
+                }
               />
             ) : null}
           </StepRow>
@@ -502,12 +559,7 @@ function StepLine({
   many: boolean;
 }) {
   const done = step.status === "passed" || step.status === "skipped";
-  // Only agent steps write a transcript: ask before offering a link that opens nothing.
-  const transcript = useQuery({
-    queryKey: ["executionTranscript", files?.transcript],
-    queryFn: () => fileService.exists(files!.transcript),
-    enabled: !!files,
-  });
+  const hasTranscript = useHasTranscript(fileService, files?.transcript);
   const label = (what: string) => (many ? `${step.name} ${what.toLowerCase()}` : what);
   return (
     <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", color: "var(--text-paper-d)" }}>
@@ -521,7 +573,7 @@ function StepLine({
           {label("Result")}
         </button>
       )}
-      {files && transcript.data && (
+      {files && hasTranscript && (
         <button
           type="button"
           className="btn"
@@ -541,15 +593,34 @@ function FailureActions({
   busy,
   canRetry,
   onRetry,
+  files,
+  fileService,
+  onAsk,
 }: {
   steps: StepStateDTO[];
   busy: boolean;
   canRetry: boolean;
   onRetry: (rerun: string) => void;
+  files: WorkflowRunDTO["step_files"];
+  fileService: FileService;
+  onAsk: (step: StepStateDTO | undefined, transcript: string | undefined) => void;
 }) {
-  if (!canRetry) return null;
   // Re-run names a step on the board; a failed loop element has left it.
   const named = steps.find((s) => s.status === "failed" && !s.key) ?? steps.find((s) => !s.key);
+  const transcriptPath = named ? files?.[named.name]?.transcript : undefined;
+  const hasTranscript = useHasTranscript(fileService, transcriptPath);
+  const ask = (
+    <button
+      type="button"
+      className="btn"
+      data-size="sm"
+      data-variant="secondary"
+      onClick={() => onAsk(named, hasTranscript ? transcriptPath : undefined)}
+    >
+      Ask AI why it failed
+    </button>
+  );
+  if (!canRetry) return <div>{ask}</div>;
   return (
     <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
       <button type="button" className="btn" data-variant="primary" data-size="sm" disabled={busy} onClick={() => onRetry("")}>
@@ -560,6 +631,7 @@ function FailureActions({
           Re-run this step
         </button>
       )}
+      {ask}
     </div>
   );
 }

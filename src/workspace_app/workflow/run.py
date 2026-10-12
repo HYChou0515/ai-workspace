@@ -15,6 +15,13 @@ from msgspec import Struct, field
 
 from ..apps.base import IndexedFields
 
+#: An execution's tab path in the web UI, and what `show_file` takes to show one
+#: (plan-workflow-out-of-chat D7 / D8). Mirrors `PREFIX` in
+#: `web/src/lib/executionTab.ts` — keep them in sync.
+EXECUTION_PATH_PREFIX = "workflow-run:"
+#: The `mime` an execution's card is declared with, which the chat renders as one.
+EXECUTION_MIME = "application/x-workflow-execution"
+
 
 class RunStatus(StrEnum):
     """A run's lifecycle (manual §13). ``pending`` before the driver starts;

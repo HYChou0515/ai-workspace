@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import csv
 import dataclasses
 import functools
@@ -435,6 +436,9 @@ async def show_file_impl(
     pane shows one file by `path`. The user gets one card that opens them all
     in split panes.
 
+    To show a workflow execution — its steps, their status and results — give
+    `path` as `workflow-run:<id>`. The user gets a card that opens it.
+
     Call it once per file — or once per layout — as soon as the files exist,
     then carry on.
     """
@@ -447,6 +451,10 @@ async def show_file_impl(
         return await _show_layout(ctx.context, fs, inv, layout, caption)
     if path is None:
         return PATH_OR_LAYOUT
+    from ..workflow.run import EXECUTION_PATH_PREFIX
+
+    if path.startswith(EXECUTION_PATH_PREFIX):
+        return _show_execution(ctx.context, inv, path, caption)
     shown = await describe_for_display(fs, inv, path)
     if not shown:
         # Declare nothing on failure: the FE renders whatever is declared, so an
@@ -467,6 +475,27 @@ async def show_file_impl(
     if verdict:
         said += f" {verdict}"
     return declare_shown_files(said, [shown])
+
+
+def _show_execution(actx: AgentToolContext, inv: str, path: str, caption: str | None) -> str:
+    """plan-workflow-out-of-chat D8: a card for one of THIS workspace's workflow
+    executions; the FE opens it as the execution's tab. Another workspace's run,
+    or one that does not exist, declares nothing."""
+    from ..workflow.run import EXECUTION_MIME, EXECUTION_PATH_PREFIX, WorkflowRun
+
+    run_id = path[len(EXECUTION_PATH_PREFIX) :]
+    run = None
+    if actx.spec is not None and run_id:
+        with contextlib.suppress(ResourceIDNotFoundError):
+            run = actx.spec.get_resource_manager(WorkflowRun).get(run_id).data
+    if not isinstance(run, WorkflowRun) or run.item_id != inv:
+        return f"error: no workflow execution {run_id!r} in this workspace — nothing was shown."
+    shown: dict[str, Any] = {"path": path, "mime": EXECUTION_MIME, "size": 0}
+    if caption:
+        shown["caption"] = caption
+    return declare_shown_files(
+        "The workflow execution is now displayed in the chat — the user can see it.", [shown]
+    )
 
 
 def _backend_has_no_tools(sandbox: object) -> bool:

@@ -2160,6 +2160,9 @@ agent 步驟裡 AI 的呼叫、WUI 的工具呼叫、view plugin、圖表重畫�
   失敗的會打開），等人決定的在那一列直接決定；失敗的那一列有「Continue from here」（已經做完的跳過）和
   「Re-run this step」（那一步重做，後面的照輸入有沒有變決定要不要重做）；`⋯` 裡的「Change this execution…」是以前的 steer。
   新路由 `POST /a/{slug}/items/{item_id}/runs/{run_id}/retry`。
+- 執行的分頁有「Open a chat with these results」（執行結束後）和失敗那一列的「Ask AI why it failed」：開一個**新**聊天，
+  把執行的編號、結果檔（或那一步的錯誤與 transcript 路徑）放進輸入框，不會自動送出。聊天裡的 AI 可以用
+  `show_file` 叫出某個執行的卡片（路徑寫成 `workflow-run:<id>`），只限這個 item 的執行。
 - 有執行在等人決定時，workspace 右下角會出現一則提示（哪個執行、等什麼），按 Open 到那個執行的分頁；
   不會自己消失，可以關掉，下一個關卡會再提示。
 - **`GET …/runs/{run_id}` 和 `…/runs/{run_id}/stream` 會檢查這個 run 屬於網址裡的 item**，不屬於就回 404。

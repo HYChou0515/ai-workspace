@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -231,5 +231,17 @@ describe("the waiting notice", () => {
     expect((await screen.findByTestId("execution-view")).dataset.run).toBe("r1");
     // now in front of the person: the notice has done its job
     await waitFor(() => expect(screen.queryByTestId("waiting-notice")).toBeNull());
+  });
+});
+
+// D8 / D9: an execution asks for a chat — a folded chat unfolds to show it.
+describe("a chat asked for from an execution", () => {
+  it("unfolds the chat", async () => {
+    const { publishChatRequest } = await import("../../lib/chatRequestBus");
+    localStorage.setItem("rca:layout:chat-collapsed", "true");
+    openShell();
+    expect(await screen.findByRole("button", { name: "Show chat" })).toBeInTheDocument();
+    act(() => publishChatRequest("INC-1", "Why did it fail?"));
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Show chat" })).toBeNull());
   });
 });

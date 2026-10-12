@@ -6,6 +6,8 @@ import type { Suggestion } from "../api/types";
 import { useItemChat } from "../hooks/useItemChat";
 import { useItemChats } from "../hooks/useItemChats";
 import { useItemCollections } from "../hooks/useItemCollections";
+import { publishAgentDraft } from "../lib/agentDraftBus";
+import { subscribeChatRequest } from "../lib/chatRequestBus";
 import { AgentPanel } from "../pages/investigation/AgentPanel";
 import { ChatSwitcher } from "./ChatSwitcher";
 import { CollectionsButton } from "./CollectionsButton";
@@ -196,6 +198,37 @@ export function ItemChatShell({
     setActiveChatId((await createFreeChat()).chat_id);
   };
   const active = chats.find((c) => c.chat_id === activeChatId) ?? null;
+
+  // plan-workflow-out-of-chat D8 / D9: an execution's tab asks for a chat about
+  // it ("Open a chat with these results", "Ask AI why it failed"). A NEW chat —
+  // the execution's own conversation is never continued (D3) — and its draft
+  // waits until that chat is the one on screen, so it lands in its composer.
+  const [handOff, setHandOff] = useState<{ draft: string } | null>(null);
+  const createRef = useRef(createFreeChat);
+  createRef.current = createFreeChat;
+  useEffect(
+    () =>
+      subscribeChatRequest(itemId, (draft) => {
+        void createRef.current().then(
+          (c) => {
+            setActiveChatId(c.chat_id);
+            setHandOff({ draft });
+          },
+          (err: unknown) => setOpenFailed(err instanceof Error ? err.message : String(err)),
+        );
+      }),
+    [itemId],
+  );
+  useEffect(() => {
+    if (!handOff) return;
+    // Handed over from an effect, not from the create's callback: by now the
+    // new chat is the one drawn (`createFreeChat` resolves after the list has
+    // been refetched, so it is listed), and its composer subscribed in this
+    // same commit — a child's effects run before its parent's. From the
+    // callback the draft would land in the chat that was in front before.
+    publishAgentDraft(itemId, handOff.draft);
+    setHandOff(null);
+  }, [handOff, itemId]);
 
   // #200: the switcher leans single-chat — hidden until a second chat exists,
   // unless the App opts into an always-visible switcher (Topic Hub). The bar as a

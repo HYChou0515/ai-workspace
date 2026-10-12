@@ -337,6 +337,36 @@ gate.
 - A `show_file` execution card.
 - "Open a chat with these results".
 - "Ask AI why it failed", reading `transcript.md`.
+- **Built:**
+  - `show_file` takes `path: "workflow-run:<id>"` (`EXECUTION_PATH_PREFIX`,
+    pinned equal to the FE's `PREFIX` by a test). It declares a card with mime
+    `application/x-workflow-execution` for an execution of this workspace, and
+    declares nothing for another workspace's or an unknown one.
+  - The chat draws that card as `ExecutionCard`: the execution's name (the
+    shared `ExecutionTitle`, its own module so the chat does not import the
+    execution view) and the caption, with no path or byte count. It opens the
+    tab when the workspace is on screen, and otherwise links to the item's
+    editor-area page.
+  - The tab's "Open a chat with these results" (on an ended execution) and a
+    failed row's "Ask AI why it failed" publish on `chatRequestBus`.
+    - `ItemChatShell` opens a NEW chat. The execution's conversation is never
+      continued (D3).
+    - It hands the text to that chat's composer as a draft, never a send,
+      through `agentDraftBus`. The hand-off happens in an effect after the new
+      chat is drawn; from the create's callback the draft went to the chat in
+      front before (probed).
+    - `WorkspaceShell` unfolds a folded chat.
+  - The results draft names the execution (`workflow-run:<id>`) and the result
+    files of the steps that passed or were skipped, never transcripts (D8). The
+    why draft names the step, its error, and its transcript when one exists.
+  - How the AI learns an id: these drafts. A chat started anywhere else does
+    not know the item's executions.
+  - Mutation probes, each reddening its test:
+    - the item check in `show_file`, the card's routing, and the chat
+      unfolding;
+    - the terminal-only results button, and the results filter;
+    - the why draft's transcript and error;
+    - the hand-off, and the callback ordering.
 
 **P11 — docs.**
 - Rewrite `workflows.md` §1 / §5.1 / §10.

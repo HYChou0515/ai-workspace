@@ -42,8 +42,9 @@ import { FileServiceProvider, investigationFileService, useFileService } from ".
 import { WorkflowsSidebar } from "../../components/WorkflowsSidebar";
 import { WaitingNotice } from "../../components/WaitingNotice";
 import { ItemProfileProvider } from "../../hooks/itemProfile";
+import { subscribeChatRequest } from "../../lib/chatRequestBus";
 import { isExecutionPath } from "../../lib/executionTab";
-import { ExecutionTitle } from "../../renderers/ExecutionRenderer";
+import { ExecutionTitle } from "../../components/ExecutionTitle";
 import { useItemRuns } from "../../hooks/useWorkflow";
 import { WorkspaceSlugProvider, useWorkspaceSlug } from "../../hooks/useWorkspaceSlug";
 import { EditModeProvider, useEditMode } from "../../hooks/editMode";
@@ -598,6 +599,12 @@ function ShellBody({
     [ideCollapsed, chatCollapsed, manifest.function.workspace, setIdeCollapsed],
   );
   const toggleChat = useCallback(() => applyPanels("chat"), [applyPanels]);
+  // An execution asked for a chat about it (plan-workflow-out-of-chat D8 / D9):
+  // the chat shell opens one, and a folded chat must unfold for it to be seen.
+  useEffect(
+    () => subscribeChatRequest(item.resource_id, () => setChatCollapsed(false)),
+    [item.resource_id, setChatCollapsed],
+  );
   const toggleIde = useCallback(() => applyPanels("ide"), [applyPanels]);
 
   // Cap the chat width so the editor always keeps a usable minimum. The chat is

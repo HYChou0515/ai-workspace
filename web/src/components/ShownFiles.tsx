@@ -9,6 +9,8 @@ import type { ReactNode, Ref } from "react";
 
 import { useOptionalFileService } from "../api/fileService";
 import { useOpenFile, useViewPageHref, useWorkspaceVisible } from "../hooks/openFile";
+import { isExecutionPath } from "../lib/executionTab";
+import { ExecutionTitle } from "./ExecutionTitle";
 import { formatBytes } from "../lib/bytes";
 import { useT } from "../lib/i18n";
 import { pxToRem } from "../lib/pxToRem";
@@ -68,8 +70,42 @@ function ShownFileView(props: CardProps) {
   // A view file in an item's workspace may be drawn small (P6); anything else,
   // or a surface with no workspace to read it from, is today's card.
   const svc = useOptionalFileService();
+  if (svc && isExecutionPath(props.file.path)) return <ExecutionCard {...props} />;
   if (svc && isViewFile(props.file.path)) return <ViewFileCard {...props} />;
   return <FileCard {...props} />;
+}
+
+/** plan-workflow-out-of-chat D8: an execution the AI showed. Named like its tab
+ * ("Classify wafers · 10/12 14:03"); opens it there when the workspace is on
+ * screen, else on the item's editor-area page — never a byte count or a path. */
+function ExecutionCard({ file, openFile }: CardProps) {
+  const viewHref = useViewPageHref()?.({ path: file.path });
+  const body = (
+    <>
+      {file.caption && (
+        <div style={{ fontSize: pxToRem(13), color: "var(--text-paper)" }}>{file.caption}</div>
+      )}
+      <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: pxToRem(12) }}>
+        <Icon name="workflow" size={12} color="var(--text-paper-d)" />
+        <span style={{ fontWeight: 600 }}>
+          <ExecutionTitle path={file.path} />
+        </span>
+      </div>
+    </>
+  );
+  if (openFile)
+    return (
+      <button type="button" onClick={() => openFile(file.path)} style={frame({ button: true })}>
+        {body}
+      </button>
+    );
+  if (viewHref)
+    return (
+      <a href={viewHref} target="_blank" rel="noreferrer" style={frame({})}>
+        {body}
+      </a>
+    );
+  return <div style={frame({})}>{body}</div>;
 }
 
 function ViewFileCard(props: CardProps) {

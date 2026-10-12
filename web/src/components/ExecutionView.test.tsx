@@ -290,3 +290,70 @@ describe("ExecutionView", () => {
     await waitFor(() => expect(confirm).toHaveBeenCalledWith("hub", "it", "r1", true));
   });
 });
+
+// D8 / D9: from an execution, a chat about it — a new one, with the words in
+// its box: the results it should read, or the record of the step that broke.
+describe("asking the AI about an execution", () => {
+  const asked = async () => {
+    const { subscribeChatRequest } = await import("../lib/chatRequestBus");
+    const drafts: string[] = [];
+    const stop = subscribeChatRequest("it", (d) => drafts.push(d));
+    return { drafts, stop };
+  };
+
+  it("opens a chat with an ended execution's results — only the ones it has", async () => {
+    vi.mocked(workflowApi.getRun).mockResolvedValue(
+      run({
+        status: "error",
+        ended: STARTED + 1,
+        steps: [
+          { phase: "read", name: "read", key: "", status: "passed", attempts: 1, reason: "", started: 1, ended: 2 },
+          { phase: "sort", name: "sort", key: "", status: "failed", attempts: 1, reason: "x", started: 3, ended: 4 },
+        ],
+      }),
+    );
+    const { drafts, stop } = await asked();
+    render();
+    fireEvent.click(await screen.findByRole("button", { name: "Open a chat with these results" }));
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0]).toContain("Classify wafers · 10/12 14:03");
+    expect(drafts[0]).toContain("workflow-run:r1");
+    expect(drafts[0]).toContain("/.workflow/classify/step_read/main.json");
+    // the failed step wrote no result
+    expect(drafts[0]).not.toContain("/.workflow/classify/step_sort/main.json");
+    expect(drafts[0]).not.toContain("transcript"); // results, not how they were made (D8)
+    stop();
+  });
+
+  it("offers no results chat while it is still going", async () => {
+    render();
+    await row("sort");
+    expect(screen.queryByRole("button", { name: "Open a chat with these results" })).toBeNull();
+  });
+
+  it("asks why a step failed, pointing at its record", async () => {
+    vi.mocked(workflowApi.getRun).mockResolvedValue(
+      run({
+        status: "error",
+        ended: STARTED + 9,
+        phases: [
+          { phase: "read", status: "passed", done: 1, total: 1, failed: 0 },
+          { phase: "sort", status: "failed", done: 0, total: 1, failed: 1 },
+        ],
+        steps: [
+          { phase: "read", name: "read", key: "", status: "passed", attempts: 1, reason: "", started: 1, ended: 2 },
+          { phase: "sort", name: "sort", key: "", status: "failed", attempts: 2, reason: "sort broke", started: 3, ended: 4 },
+        ],
+      }),
+    );
+    const { drafts, stop } = await asked();
+    render();
+    fireEvent.click(await within(await row("sort")).findByRole("button", { name: "Ask AI why it failed" }));
+    await waitFor(() => expect(drafts).toHaveLength(1));
+    expect(drafts[0]).toContain("Sort");
+    expect(drafts[0]).toContain("sort broke");
+    expect(drafts[0]).toContain("/.workflow/classify/step_sort/main.transcript.md");
+    expect(drafts[0]).toContain("workflow-run:r1");
+    stop();
+  });
+});
