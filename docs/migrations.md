@@ -2155,6 +2155,16 @@ agent 步驟裡 AI 的呼叫、WUI 的工具呼叫、view plugin、圖表重畫�
     **5xx 帶的 `Retry-After` 不再照做**：client 以前會照它等（60 秒內），現在照上面的退避重送；會長時間回 503 的閘道，重送用完就結束這一輪並說明原因。
     設了 failover chain 的部署，chain 自己的快速重試與限流等待（`num_retries`、`rate_limit_budget_s`）照舊在這一層底下。
     **409 不再重試**：OpenAI client 以前會重送 409，現在 409 算請求錯誤，第一次就結束這一輪並說明原因。
+  - **回答講到一半斷線，現在會重送**：litellm 預設的 aiohttp 連線方式會把串流途中的斷線當成正常結束，
+    使用者拿到一句沒講完的回答、沒有任何提示。agent 回合（唯一的 async litellm 呼叫）改用 httpx 連線方式
+    （`litellm.disable_aiohttp_transport = True`，寫死在 runner，不是設定），斷線變成錯誤、照上面的規則重送。
+    其他 litellm 呼叫（KB、embedding、wiki、圖片、健康檢查）本來就是同步的 httpx，不受影響；proxy 環境變數、
+    CA 憑證（`SSL_CERT_FILE`/`SSL_VERIFY`）、連線與讀取逾時的處理兩種方式相同（`docs/plan-friendly-errors.md` P8）。
+    **連線池**：httpx 對同一個模型端點最多同時 100 條連線（aiohttp 是 1000），閒置 5 秒就關（aiohttp 120 秒）。
+    一個 pod 對同一端點同時超過 100 個模型呼叫時，多出來的會排隊——症狀是負載上來時回答的 p95 延遲變長；
+    **在那之前先加 pod**，litellm 沒有調連線池上限的設定。
+  - 連不上模型、回答講到一半斷線，錯誤說明改成「連不上模型服務」（以前寫「模型服務本身出錯」）；重送時的狀態列
+    改成說出是哪種錯誤，例如「模型服務本身出錯。正在重試（第 1 次）…」（以前一律「連線不穩，正在重試」）。
 - 錯誤一律以「發生了什麼／可以怎麼做／技術細節（預設收合，可複製）」顯示，**所有使用者都看得到技術細節**（D1）。
   技術細節是 provider 的原文，可能包含端點網址或模型名稱。
 - 子 agent（`ask_knowledge_base`、`run_agent`、skill hub 審查）被限流或重試時，**父輪**的狀態列會顯示；
@@ -2179,6 +2189,9 @@ agent 步驟裡 AI 的呼叫、WUI 的工具呼叫、view plugin、圖表重畫�
 （前端要看得懂新的 `model_retrying`／`output_retracted` 事件、`error_kind` 和 `failure`）。
 
 **確認做完**（`rollout 後`）：
+
+- 讓 agent 回答一段長文時，把模型端點那段網路切斷一次（或重啟端點前面的 proxy）：狀態列出現「連不上模型服務。正在重試…」，
+  講到一半的那段被收回、接著出現完整回答。**沒部署到這一版的症狀**：回答停在半句、沒有任何錯誤或提示。
 
 - 在 app 聊天讓 agent 呼叫一次工具，而端點正在限流（或用一把額度很低的 key）：狀態列出現「請求過於頻繁,N 秒後自動重試…」，
   等完之後回答接著出來。**沒部署到這一版的症狀**：回答到一半出現 `RateLimitError: litellm.RateLimitError: …` 原文，這一輪結束。
