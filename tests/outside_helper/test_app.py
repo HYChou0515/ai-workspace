@@ -289,6 +289,28 @@ def test_a_chrome_that_will_not_reopen_says_so():
     assert ctl.snapshot()[0] == "no_chrome"
 
 
+# Paused, and Chrome closed and reopened: still paused (round 3).
+def test_a_reopened_chrome_keeps_the_helper_paused():
+    events: list[str] = []
+    made, make = _made(events)
+    workers: list[_Worker] = []
+
+    def make_worker(_c):
+        workers.append(_Worker(["connected"] * 3))
+        return workers[-1]
+
+    ctl = Controller(make, make_worker)
+    ctl.open()
+    ctl.send("pause")
+    ctl.step()
+    made[0].gone = True
+
+    ctl.step()
+
+    assert len(workers) == 2 and workers[1].paused
+    assert ctl.snapshot()[0] == "paused"
+
+
 # 「重設登入」 when it cannot be done (the profile held by a Chrome still
 # ending, on Windows): the window says why; the helper keeps running.
 def test_a_reset_that_fails_does_not_stop_the_helper():

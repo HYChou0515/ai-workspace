@@ -45,6 +45,11 @@ CLAIM_TIMEOUT_MS = 120_000
 #: the manual flow (D7) rather than a 「查」 nobody will act on.
 ONLINE_WINDOW_MS = 30_000
 
+#: A job taken this many times and never finished — the workspace full, a
+#: refusal that persists, a helper crashing on that page — is not taken again
+#: but ends, with why: otherwise it is fetched every CLAIM_TIMEOUT_MS forever.
+MAX_CLAIMS = 3
+
 #: The oldest helper↔backend protocol this backend speaks (§3.7.3). Raise it
 #: when an API change would break helpers already installed: they then get a
 #: 426 and update, instead of quietly misreading the new API.
@@ -71,6 +76,8 @@ class OutsideJob(Struct):
     auto: bool = False
     #: Where the page was saved once the job is done (`lookups/…`).
     saved: str = ""
+    #: How many times a helper has taken it (see MAX_CLAIMS).
+    claims: int = 0
 
 
 class _OutsideHelperPresence(Struct):
@@ -252,7 +259,21 @@ class OutsideJobStore:
                 if data.state == "claimed" and now - data.claimed_ms <= CLAIM_TIMEOUT_MS:
                     continue
                 jid = res.info.resource_id
-                claimed = _with(data, state="claimed", claimed_ms=now)
+                if data.claims >= MAX_CLAIMS:
+                    with contextlib.suppress(PreconditionFailedError):
+                        rm.modify(
+                            jid,
+                            _with(
+                                data,
+                                state="failed",
+                                error=f"the helper took it {MAX_CLAIMS} times and never "
+                                "finished — stopped trying",
+                            ),
+                            status=RevisionStatus.draft,
+                            expected_etag=res.info.etag,
+                        )
+                    continue
+                claimed = _with(data, state="claimed", claimed_ms=now, claims=data.claims + 1)
                 try:
                     rm.modify(
                         jid,

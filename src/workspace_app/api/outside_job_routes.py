@@ -191,7 +191,11 @@ def register_outside_job_routes(
                 # running, ran, or stopped by the person: the card asking again
                 # (it asks on every mount) starts nothing — 「查」 still can
                 return _out(jid, existing, now=store.now())
-        elif existing is not None and existing.state in ("queued", "claimed"):
+        elif (
+            existing is not None
+            and existing.owner == owner
+            and existing.state in ("queued", "claimed")
+        ):
             # under way (a reloaded card offering 「查」 again): never restarted
             return _out(jid, existing, now=store.now())
         job = OutsideJob(

@@ -151,10 +151,12 @@ class Controller:
             return True  # Chrome never started: nothing to poll
         if getattr(self._chrome, "gone", False):
             # the person closed the helper's Chrome window: open it again
+            paused = self._worker.paused
             self._close()
             self.open()
             if self._worker is None:
                 return True
+            self._worker.paused = paused
         self._worker.tick()
         status = self._worker.status
         if status == "needs_login" and not self._asked_login:

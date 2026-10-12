@@ -167,6 +167,45 @@ def test_the_card_reads_a_lapsed_claim_as_waiting():
     assert _state(client, iid)["state"] == "queued"
 
 
+# A job its helper keeps taking and never finishes (the workspace full, a
+# refusal that persists, a helper crashing on that page) ends, with why,
+# after MAX_CLAIMS takes — never fetched again every two minutes (round 3).
+def test_a_job_taken_too_often_ends_with_why():
+    from workspace_app.api.outside_jobs import CLAIM_TIMEOUT_MS, MAX_CLAIMS
+
+    client, _spec, iid = _asked()
+    store = client.app.state.outside_jobs
+    t = [1_000_000]
+    store.now = lambda: t[0]
+    _beat(client)
+    _hand(client, iid)
+    for _ in range(MAX_CLAIMS):
+        assert _claim(client).status_code == 200
+        t[0] += CLAIM_TIMEOUT_MS + 1
+        _beat(client)
+
+    assert _claim(client).status_code == 204
+    job = _state(client, iid)
+    assert job["state"] == "failed" and str(MAX_CLAIMS) in job["error"]
+
+
+# On a shared item someone else's job — their helper gone — is not handed
+# back to this person's 「查」: theirs would spin forever (round 3).
+def test_a_lookup_is_not_handed_back_someone_elses_job():
+    holder = {"id": "bob"}
+    client, _spec, iid = _asked(holder=holder)
+    _beat(client)
+    bobs = _hand(client, iid).json()
+    _claim(client)
+
+    holder["id"] = "alice"
+    _beat(client)
+    mine = _hand(client, iid)
+
+    assert mine.status_code == 201 and mine.json()["id"] == bobs["id"]
+    assert _claim(client).status_code == 200  # alice's helper takes it now
+
+
 def test_a_job_taken_recently_is_not_taken_again():
     from workspace_app.api.outside_jobs import CLAIM_TIMEOUT_MS
 
