@@ -58,6 +58,9 @@ class OutsideJob(Struct):
     created_ms: int
     claimed_ms: int = 0
     error: str = ""
+    #: What the helper is waiting on while it holds the job (`captcha`: the
+    #: person solves one in the helper's Chrome window, §3.4); "" otherwise.
+    note: str = ""
 
 
 class _OutsideHelperPresence(Struct):
@@ -241,6 +244,34 @@ class OutsideJobStore:
         not theirs, not claimed, or gone — the helper gets a 404, not the power
         to end someone else's job."""
         return await asyncio.to_thread(self._finish_sync, jid, owner, "failed", error)
+
+    async def note(self, jid: str, owner: str, note: str) -> bool:
+        """Say what the owner's helper is waiting on for this claimed job. It
+        also renews the claim: a person solving a captcha can take longer than
+        `CLAIM_TIMEOUT_MS`, and the job must not go back to the queue — and be
+        fetched a second time — while they do. False as `fail`."""
+        return await asyncio.to_thread(self._note_sync, jid, owner, note)
+
+    def _note_sync(self, jid: str, owner: str, note: str) -> bool:
+        rm = self._jobs()
+        try:
+            res = rm.get(jid)
+        except (ResourceIDNotFoundError, ResourceIsDeletedError):
+            return False
+        data = res.data
+        assert isinstance(data, OutsideJob)
+        if data.owner != owner or data.state != "claimed":
+            return False
+        try:
+            rm.modify(
+                jid,
+                _with(data, note=note, claimed_ms=self.now()),
+                status=RevisionStatus.draft,
+                expected_etag=res.info.etag,
+            )
+        except PreconditionFailedError:
+            return False  # cancelled or answered meanwhile
+        return True
 
     # ── links lookups brought back (D12) ────────────────────────────────────
 

@@ -180,6 +180,7 @@ def test_a_failure_reaches_the_card_with_its_reason():
         "args": "pandas 2.0 新功能",
         "state": "failed",
         "error": "page timed out",
+        "note": "",
     }
 
 
@@ -270,3 +271,53 @@ def test_someone_with_no_access_to_the_item_learns_nothing_of_its_job():
     assert client.delete(f"/a/rca/items/{iid}/outside-jobs/c1").status_code == 404
     holder["id"] = "bob"
     assert _state(client, iid)["state"] == "queued"
+
+
+# §3.4: a captcha stops the helper until the person solves it in the helper's
+# Chrome window — the card says so, or the person is left watching 「正在查…」.
+def test_the_helper_tells_the_card_it_is_waiting_on_the_person():
+    client, _spec, iid = _asked()
+    _beat(client)
+    _hand(client, iid)
+    jid = _claim(client).json()["id"]
+
+    r = client.post(f"/outside-helper/jobs/{jid}/note", json={"note": "captcha"})
+
+    assert r.status_code == 204, r.text
+    assert _state(client, iid)["note"] == "captcha"
+
+
+# A person solving a captcha can take longer than a claim lasts; the job they
+# are working on must not go back to the queue (and be fetched twice) meanwhile.
+def test_a_job_waiting_on_the_person_is_not_taken_again():
+    from workspace_app.api.outside_jobs import CLAIM_TIMEOUT_MS
+
+    client, _spec, iid = _asked()
+    store = client.app.state.outside_jobs
+    t = [1_000_000]
+    store.now = lambda: t[0]
+    _beat(client)
+    _hand(client, iid)
+    jid = _claim(client).json()["id"]
+
+    t[0] += CLAIM_TIMEOUT_MS - 1
+    client.post(f"/outside-helper/jobs/{jid}/note", json={"note": "captcha"})
+    t[0] += CLAIM_TIMEOUT_MS - 1
+    _beat(client)
+
+    assert _claim(client).status_code == 204
+
+
+def test_a_helper_cannot_note_someone_elses_job():
+    holder = {"id": "u"}
+    client, _spec, iid = _asked(holder=holder)
+    _beat(client)
+    _hand(client, iid)
+    jid = _claim(client).json()["id"]
+
+    holder["id"] = "someone-else"
+    r = client.post(f"/outside-helper/jobs/{jid}/note", json={"note": "captcha"})
+
+    assert r.status_code == 404
+    holder["id"] = "u"
+    assert _state(client, iid)["note"] == ""

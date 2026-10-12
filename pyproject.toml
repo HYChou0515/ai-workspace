@@ -103,8 +103,9 @@ markers = [
 
 [tool.coverage.run]
 branch = true
-source = ["src/workspace_app"]
+source = ["src/workspace_app", "outside-helper/src/outside_helper"]
 omit = [
+    "outside-helper/src/outside_helper/__main__.py",
     "src/workspace_app/__main__.py",
     "src/workspace_app/workflow/__main__.py",
     "src/workspace_app/worker/__main__.py",  # #312: settings-driven composition + CLI glue
@@ -116,6 +117,10 @@ omit = [
 # subprocess record its own .coverage.* file; `coverage combine` merges them.
 # Harmless for serial runs (one data file, still combined).
 parallel = true
+# Playwright's sync API runs on greenlets: without this, everything after the
+# first call into it (`sync_playwright().start()`) goes untraced — measured on
+# outside-helper's chrome.py, 59% → 83% with no test changed.
+concurrency = ["thread", "greenlet"]
 
 [tool.coverage.report]
 show_missing = true
@@ -144,6 +149,12 @@ extend-exclude = ["sample-tools", "sandbox-host", "tool-starter", "view-plugins"
 # these made every off-hours round die on `NameError` before it sent anything.
 # Project-wide it flags exactly that one line, so it costs no noise.
 select = ["E", "F", "I", "B", "UP", "SIM", "TC004"]
+
+[tool.ty.environment]
+# The outside helper (docs/plan-outside-helper.md) is its own package, installed
+# on the person's PC; its tests run here against the real backend
+# (tests/outside_helper/conftest.py puts it on the path the same way).
+extra-paths = ["outside-helper/src"]
 
 [tool.ty.src]
 exclude = [

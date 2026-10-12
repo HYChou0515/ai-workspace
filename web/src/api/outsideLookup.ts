@@ -36,6 +36,8 @@ export type HelperJob = {
   args: string;
   state: "queued" | "claimed" | "done" | "failed" | "cancelled";
   error: string;
+  /** What the helper waits on while it holds the job: `captcha`, or "". */
+  note: string;
 };
 
 type CardArgs = { slug: string; itemId: string; chatId?: string; callId: string };

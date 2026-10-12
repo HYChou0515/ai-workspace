@@ -37,6 +37,8 @@ class JobOut(BaseModel):
     args: str
     state: str
     error: str = ""
+    #: What the helper waits on (`captcha`), shown on the card while claimed.
+    note: str = ""
 
 
 class HeartbeatIn(BaseModel):
@@ -62,12 +64,18 @@ class FailIn(BaseModel):
     error: str = ""
 
 
+class NoteIn(BaseModel):
+    note: str = ""
+
+
 #: Longest failure reason kept: it is shown on the card, not a log.
 _ERROR_CHARS = 500
 
 
 def _out(jid: str, job: OutsideJob) -> JobOut:
-    return JobOut(id=jid, kind=job.kind, args=job.args, state=job.state, error=job.error)
+    return JobOut(
+        id=jid, kind=job.kind, args=job.args, state=job.state, error=job.error, note=job.note
+    )
 
 
 def register_outside_job_routes(
@@ -220,6 +228,12 @@ def register_outside_job_routes(
     @app.post("/outside-helper/jobs/{jid}/fail", status_code=204)
     async def fail(jid: str, body: FailIn) -> Response:
         if not await store.fail(jid, get_user_id(), body.error.strip()[:_ERROR_CHARS]):
+            raise HTTPException(status_code=404, detail="no claimed job of yours with this id")
+        return Response(status_code=204)
+
+    @app.post("/outside-helper/jobs/{jid}/note", status_code=204)
+    async def note(jid: str, body: NoteIn) -> Response:
+        if not await store.note(jid, get_user_id(), body.note.strip()[:_ERROR_CHARS]):
             raise HTTPException(status_code=404, detail="no claimed job of yours with this id")
         return Response(status_code=204)
 

@@ -155,6 +155,7 @@ AI 呼叫 ask_outside ──► 卡片(D7:沒連線 = 今天的手動流程)
   launch.pyw              固定的啟動檔(只用標準函式庫);捷徑都指向它
   state.json              現在用哪一版、上一版、待換的新版、壞掉的版本、安裝時的 Python 路徑
   helper.lock             單一實例鎖
+  settings.json           第一次啟動時問的 app 網址(小幫手自己寫;state.json 歸啟動檔管,兩個分開)
   versions\
     1.4.0\venv\           每個版本一個 venv(由安裝時那個 Python 建)
     1.5.0\venv\

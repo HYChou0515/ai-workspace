@@ -26,7 +26,15 @@ const SEARCH: OutsideLookup = { why: "需要變更", query: "pandas 2.0" };
 const PAGE: OutsideLookup = { why: "看那一頁", url: "https://pandas.example/whatsnew" };
 
 function job(over: Partial<HelperJob> = {}): HelperJob {
-  return { id: "j1", kind: "search", args: "pandas 2.0", state: "queued", error: "", ...over };
+  return {
+    id: "j1",
+    kind: "search",
+    args: "pandas 2.0",
+    state: "queued",
+    error: "",
+    note: "",
+    ...over,
+  };
 }
 
 function draw({
@@ -119,6 +127,16 @@ describe("a search, with the helper connected", () => {
     fireEvent.click(await screen.findByRole("button", { name: "查" }));
 
     expect(await screen.findByText("小幫手已送給 AI")).toBeInTheDocument();
+  });
+
+  // §3.4: a captcha stops the helper until the person solves it in the
+  // helper's own Chrome window — the card says where to look.
+  it("says where to look when the helper waits on a verification", async () => {
+    draw({ current: async () => job({ state: "claimed", note: "captcha" }) });
+    fireEvent.click(await screen.findByRole("button", { name: "查" }));
+
+    expect(await screen.findByText("請在小幫手的 Chrome 視窗裡完成驗證")).toBeInTheDocument();
+    expect(screen.queryByText("小幫手正在查…")).not.toBeInTheDocument();
   });
 });
 

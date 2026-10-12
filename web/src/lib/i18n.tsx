@@ -1913,6 +1913,10 @@ export const messages = {
   "lookup.helperGo": { "zh-TW": "查", en: "Look it up" },
   "lookup.helperSearching": { "zh-TW": "小幫手正在查…", en: "The helper is looking it up…" },
   "lookup.helperOpening": { "zh-TW": "小幫手正在開…", en: "The helper is opening it…" },
+  "lookup.helperCaptcha": {
+    "zh-TW": "請在小幫手的 Chrome 視窗裡完成驗證",
+    en: "Complete the verification in the helper's Chrome window",
+  },
   "lookup.helperCancel": { "zh-TW": "取消", en: "Cancel" },
   "lookup.helperFailed": {
     "zh-TW": "小幫手沒查到:{reason}",

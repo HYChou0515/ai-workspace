@@ -222,7 +222,13 @@ export function OutsideLookupCard({
         ) : working ? (
           <div className="outside-lookup-actions">
             <p className="outside-lookup-note">
-              {t(isSearch ? "lookup.helperSearching" : "lookup.helperOpening")}
+              {t(
+                jobState === "claimed" && job.data?.note === "captcha"
+                  ? "lookup.helperCaptcha"
+                  : isSearch
+                    ? "lookup.helperSearching"
+                    : "lookup.helperOpening",
+              )}
             </p>
             <button
               type="button"
