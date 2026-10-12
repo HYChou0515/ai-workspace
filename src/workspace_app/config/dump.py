@@ -120,16 +120,16 @@ def is_secret(path: str) -> bool:
     By leaf name — `api_key`, `pg_dsn`, any `*_token` in either case (variable
     names are upper case) — plus the rabbitmq URL (may embed amqp
     credentials) and every value of a preset's `env`, where tokens sit under
-    names nothing can recognise (a usage entry's `env` too). `base_url` is
-    intentionally excluded."""
+    names nothing can recognise. `base_url` is intentionally excluded."""
     leaf = path.rsplit(".", 1)[-1].split("[", 1)[0]
     if leaf in ("api_key", "pg_dsn") or leaf.lower().endswith("_token"):
         return True
     parts = path.split(".")
-    # Every value of an `env` under `agents` — a preset's (`agents.presets.<p>.env`)
-    # or a usage entry's (`agents.kb_chat[0].env`). `parts[-2]`, not a fixed
-    # index: a preset name may itself hold a dot (`qwen2.5`).
-    if len(parts) >= 4 and parts[0] == "agents" and parts[-2] == "env":
+    # Every value of a preset's `env`. `parts[-2]`, not a fixed index: a preset
+    # name may itself hold a dot (`qwen2.5`). A usage entry's `env`
+    # (`agents.kb_chat[0].env`) stays plain: a key cannot sit inside a list, so
+    # making it secret left no way to keep it through an edit (known cost, plan).
+    if len(parts) >= 5 and parts[:2] == ["agents", "presets"] and parts[-2] == "env":
         return True
     return path.endswith("rabbitmq.url")
 

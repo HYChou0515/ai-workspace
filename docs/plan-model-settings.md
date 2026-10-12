@@ -78,6 +78,10 @@ what they shaped; the ellipsis and the forms-error article are cited only here.
   merge patch replaces a list whole, the page will not take the secret as text
   (M6), and a key cannot sit inside a list (only at a text setting). Edit such
   a list in `config.yaml`; a preset's key is the place the page manages.
+- A usage entry's `env` values are plain on this superuser-only page, as they
+  are in the boot dump (M7: one rule for both): a key cannot sit inside a
+  list, so treating them as secret left no way to keep one through an edit of
+  that list. A secret for a usage entry belongs in its preset's `env`.
 
 - Keys are stored in the database in clear, as the existing Private env values
   are; only superusers can set them and no one can read them back.

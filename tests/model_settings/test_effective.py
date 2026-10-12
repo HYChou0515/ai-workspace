@@ -336,15 +336,3 @@ def test_a_short_key_is_not_scrubbed_out_of_every_message(config):
     )
 
     assert any("read only when the server starts" in p for p in found), found
-
-
-def test_a_usage_entrys_env_value_typed_into_the_text_is_refused(config):
-    document = {
-        "config": {
-            "agents": {"kb_chat": [{"preset": "kb-default", "env": {"SERVICE_PASSWORD": "pw"}}]}
-        }
-    }
-
-    found = problems(document, config_path=config, env={})
-
-    assert any("SERVICE_PASSWORD" in p and "key" in p for p in found), found
