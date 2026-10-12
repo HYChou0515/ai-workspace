@@ -49,6 +49,37 @@ def test_two_submits_of_the_same_job_get_the_same_key_whatever_else_differs():
     assert rule.key(first, item_id="i1") != rule.key({**first, "command": "eval.py"}, item_id="i1")
 
 
+class Lenient(Idempotency):
+    """An author's sameness: case and surrounding spaces do not make a new job."""
+
+    def identity(self, spec):
+        return {"image": spec["image"].lower(), "command": spec["command"].strip()}
+
+
+def test_an_author_can_say_what_counts_as_the_same_and_the_key_follows_it():
+    # D49: the author decides WHAT is compared; the template still hashes it
+    # with the item, so the scope cannot be lost by an override.
+    rule = Lenient(fields=("image", "command"))
+    first = {"image": "Trainer:3", "command": "train.py"}
+    again = {"image": "trainer:3", "command": "train.py "}
+
+    assert rule.key(first, item_id="i1") == rule.key(again, item_id="i1")
+    assert rule.key(first, item_id="i1") != rule.key(again, item_id="i2")
+
+
+def test_an_overridden_sameness_must_come_with_an_example_to_check_it_on():
+    # The shape test has to run it on something; only the author knows a
+    # valid spec, and a missing one would make the check silently absent.
+    with pytest.raises(ContractError, match="example_spec"):
+        Contract(spec_schema=SPEC, idempotency=Lenient(fields=("image", "command")))
+
+    Contract(
+        spec_schema=SPEC,
+        idempotency=Lenient(fields=("image", "command")),
+        example_spec={"image": "trainer:3", "command": "train.py"},
+    )
+
+
 def test_sameness_is_per_item_not_per_person():
     # D41: a job's outputs land in one item's workspace, so the same work sent
     # from two items is two jobs, and from one item is one — whoever sent it.

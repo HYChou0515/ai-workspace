@@ -107,14 +107,31 @@ class Idempotency:
     """The spec fields that decide sameness. A field left out (a free-text
     note, say) never makes a resubmit look like a new job."""
 
+    def identity(self, spec: dict[str, Any]) -> Any:
+        """What two submits must share to be the same job. By default the
+        declared `fields`, as sent.
+
+        Override it to compare loosely — ignore case, strip spaces, reach into a
+        nested field (D49). Return only what is compared: the item scope and the
+        hash are added by `key`, which is not to be overridden. It must give
+        the same, JSON-serialisable answer every time for the same spec — no
+        clock, no randomness — or every resubmit becomes a new job; the shape
+        tests check it on `Contract.example_spec`. Keep `fields` naming what it
+        reads: the model is told those names."""
+        return {name: spec.get(name) for name in self.fields}
+
     def key(self, spec: dict[str, Any], *, item_id: str | None) -> str:
         """The key for `spec` sent from `item_id`. Sameness is per item (D41): a
         job's outputs land in one item's workspace, so the same work from two
-        items is two jobs. With no item (the MCP runner, D47) the fields alone
-        decide — and None never equals any item's id, empty included."""
-        picked = {name: spec.get(name) for name in self.fields}
-        canonical = json.dumps([item_id, picked], sort_keys=True, separators=(",", ":"))
+        items is two jobs. With no item (the MCP runner, D47) the identity alone
+        decides — and None never equals any item's id, empty included."""
+        canonical = json.dumps(
+            [item_id, self.identity(spec)], sort_keys=True, separators=(",", ":")
+        )
         return hashlib.sha256(canonical.encode()).hexdigest()
+
+    def overrides_identity(self) -> bool:
+        return type(self).identity is not Idempotency.identity
 
 
 @dataclass(frozen=True)
@@ -158,7 +175,16 @@ class Contract:
     """The environment variables the backend reads. None says nothing — which
     is NOT the same as `()`, "needs none": the panel tells the two apart."""
 
+    example_spec: dict[str, Any] | None = None
+    """One valid spec. Required when `idempotency.identity` is overridden: the
+    shape tests run it there, twice, and demand the same answer."""
+
     def __post_init__(self) -> None:
+        if self.idempotency.overrides_identity() and self.example_spec is None:
+            raise ContractError(
+                "idempotency overrides identity(), so the contract needs an example_spec: "
+                "the shape tests check on it that the same spec always gives the same answer"
+            )
         names = [var.name for var in self.env or ()]
         twice = sorted({name for name in names if names.count(name) > 1})
         if twice:

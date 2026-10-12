@@ -18,6 +18,7 @@ from jsonschema import Draft202012Validator
 from job_tool.cli import main
 from job_tool.discover import load_backend
 from job_tool.envfile import FILENAME, render
+from job_tool.shape import identity_problems
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -40,6 +41,12 @@ def test_the_tool_lists_its_commands_and_describes_each_one(capsys):
         described = json.loads(capsys.readouterr().out)
         # A schema the validator rejects would reject every call made with it.
         Draft202012Validator.check_schema(described["params_json_schema"])
+
+
+def test_what_counts_as_the_same_job_is_steady():
+    # D49: an overridden identity() that drifts would make every resubmit a new
+    # job; checked on the contract's example_spec, never on the service.
+    assert identity_problems(load_backend().contract) == []
 
 
 def test_env_json_says_what_the_contract_says():
