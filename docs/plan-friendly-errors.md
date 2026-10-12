@@ -208,6 +208,16 @@ fix: `rate_limited` arrives right after `tool_end`. The unit tests never saw
 this because they replace `LitellmModel`; the new runner test goes through
 the real one to the `acompletion` it calls.
 
+The same recording showed a turn's failure **twice**, two identical boxes one
+under the other. The thread held it once (one `role="error"` message); the
+screen kept the live notice from the `error` event AND the transcript entry the
+re-hydrate after the turn builds from that message — `reconcileSnapshot` kept
+`prev.error` unconditionally. Now, once the re-read thread's latest turn holds a
+failure with the same raw text as the live one, the live notice goes and the
+transcript entry is the notice: the same screen a reload shows. A send failure
+(never persisted as a turn's message) and an identical failure from an EARLIER
+turn leave the live notice alone.
+
 ## Risks
 
 - **P2 context trimming moves.** The whole-turn retry trims conversation

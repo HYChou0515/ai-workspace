@@ -276,13 +276,22 @@ describe("useKbChat — a turn that FAILS still says why", () => {
       useKbChat({ collectionIds: ["c1"], chatId: "kb-boom", client }),
     );
 
-    await waitFor(() => expect(result.current.log.error?.raw).toContain("model exploded"));
+    // What the reader sees: the live notice, or — once the re-read thread holds
+    // this turn's failure — its transcript entry. One of them, never both (the
+    // #915 demo showed the same failure twice).
+    const shown = (): string[] => [
+      ...(result.current.log.error ? [result.current.log.error.raw] : []),
+      ...result.current.log.entries.flatMap((e: AgentEntry) =>
+        e.kind === "banner" && e.failure ? [e.failure.raw] : [],
+      ),
+    ];
+    await waitFor(() => expect(shown()).toEqual(["model exploded"]));
     // …and it is still there once everything has settled, not just in the frame
     // between the two events.
     await act(async () => {
       await new Promise<void>((r) => setTimeout(r, 50));
     });
-    expect(result.current.log.error?.raw).toContain("model exploded");
+    expect(shown()).toEqual(["model exploded"]);
   });
 
   // The post-send safety net gates on "the turn ended". A failed, cancelled or

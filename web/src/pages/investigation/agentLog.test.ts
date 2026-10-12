@@ -1802,3 +1802,65 @@ describe("review round 2 — an unnamed night failure keeps its own words", () =
     expect(log.entries[0]).toEqual({ kind: "goal_note", text: `今晚無法開始。\n\n${raw}`, at: undefined });
   });
 });
+
+describe("a turn's failure is shown once (found recording the #915 demo)", () => {
+  /**
+   * A failed turn raises the live notice from the `error` event, and the turn
+   * also persists it as `role="error"`, which the re-hydrate after the turn turns
+   * into a transcript entry worded the same way. `reconcileSnapshot` kept the
+   * live one too, so one failure read as two identical red boxes, one under the
+   * other. Once the thread holds THIS turn's failure, the transcript entry is
+   * the notice — the same screen a reload shows.
+   */
+  const RAW = "ModelCallFailed: gave up\n← RateLimitError: slow down";
+  const failed = (): AgentLog =>
+    reduceAgent(reduceAgent(EMPTY_LOG, { type: "user_message", content: "go" } as AgentEvent), {
+      type: "error",
+      message: RAW,
+      kind: "rate_limited",
+      params: { waited_s: 0 },
+    } as AgentEvent);
+  const notices = (log: AgentLog): number =>
+    log.entries.filter((e) => e.kind === "banner" && e.failure).length + (log.error ? 1 : 0);
+
+  it("drops the live notice once the thread holds the turn's failure", () => {
+    const rehydrated = reconcileSnapshot(failed(), {
+      messages: [
+        { role: "user", content: "go" },
+        { role: "error", content: RAW, error_kind: "rate_limited", error_params: { waited_s: 0 } },
+      ] as Message[],
+    });
+    expect(notices(rehydrated)).toBe(1);
+    expect(rehydrated.error).toBeNull();
+  });
+
+  it("keeps it while the thread does not hold the failure yet", () => {
+    const rehydrated = reconcileSnapshot(failed(), {
+      messages: [{ role: "user", content: "go" }] as Message[],
+    });
+    expect(rehydrated.error?.raw).toBe(RAW);
+  });
+
+  it("keeps it when only an EARLIER turn failed the same way", () => {
+    const earlier = reduceAgent(
+      reduceAgent(
+        reduceAgent(EMPTY_LOG, { type: "user_message", content: "first" } as AgentEvent),
+        { type: "error", message: RAW, kind: "rate_limited" } as AgentEvent,
+      ),
+      { type: "user_message", content: "again" } as AgentEvent,
+    );
+    const failedAgain = reduceAgent(earlier, {
+      type: "error",
+      message: RAW,
+      kind: "rate_limited",
+    } as AgentEvent);
+    const rehydrated = reconcileSnapshot(failedAgain, {
+      messages: [
+        { role: "user", content: "first" },
+        { role: "error", content: RAW, error_kind: "rate_limited" },
+        { role: "user", content: "again" },
+      ] as Message[],
+    });
+    expect(rehydrated.error?.raw).toBe(RAW);
+  });
+});

@@ -601,13 +601,23 @@ export function reconcileSnapshot(
       !snapTail.some((s) => s.kind === "banner" && s.text === e.text)
     );
   });
+  // A turn's failure is persisted too, and the snapshot words it as a transcript
+  // entry: once THIS turn's tail holds it, that entry is the notice. Keeping the
+  // live one as well put the same failure on screen twice, one box under the
+  // other (found recording the #915 demo) — and a reload shows only the entry.
+  const live = prev.error;
+  const persisted =
+    live !== null &&
+    prev.errorFromTurn &&
+    snapTail.some((s) => s.kind === "banner" && s.failure?.raw === live.raw);
+  const error = persisted ? null : (live ?? snap.error);
   return {
     ...snap,
     entries: [...snap.entries, ...carried],
-    error: prev.error ?? snap.error,
+    error,
     // …and with it, who owns it — or a re-hydrate would hand a send failure to
     // the turn, which then retracts it on its next token.
-    errorFromTurn: prev.error !== null ? prev.errorFromTurn : snap.errorFromTurn,
+    errorFromTurn: persisted ? false : live !== null ? prev.errorFromTurn : snap.errorFromTurn,
     // A re-hydrate must not quietly cancel a Stop that is still in flight — the
     // store-poll runs every few seconds, so without this the buttons would
     // unlock themselves halfway through stopping. Carried only while the
