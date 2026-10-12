@@ -178,6 +178,12 @@ export class FileBufferStore {
   }
 
   reload(path: string): void {
+    // A save in flight is not "clean" — `isDirty` says false while it runs, so
+    // every refresh skipped it as clean and re-read the PRE-save text; the save
+    // then resolved onto "old, dirty" and the next ⌘S wrote the old bytes over
+    // it. What it is saving is what the server is about to hold: nothing to
+    // re-read (#910 review round 2 — a turn's end now reloads far more often).
+    if (this.entries.get(path)?.save === "saving") return;
     this.entries.delete(path);
     this.inflight.delete(path);
     // Hard-drop the shared cache entry so the re-`read` refetches from the

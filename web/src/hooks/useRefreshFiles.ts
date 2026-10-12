@@ -21,21 +21,39 @@ import { useWorkspaceSlug } from "./useWorkspaceSlug";
  *        - `FileBufferStore`: the editor's per-path `Map<path, BufferEntry>`.
  *          Independent of TanStack — has to be reloaded directly.
  *
- * Call this from: the refresh button, agent-turn end, terminal exec end.
+ * Call this from: the refresh button, terminal exec end. A turn's end uses
+ * `useReloadFileViews` (no flush) — see there.
  * Must be invoked inside a `<FileBufferProvider>` (uses `useFileBufferStore`).
  */
 export function useRefreshFiles(investigationId: string): () => Promise<void> {
   const slug = useWorkspaceSlug();
-  const queryClient = useQueryClient();
-  const buffers = useFileBufferStore();
+  const reload = useReloadFileViews(investigationId);
   return useCallback(async () => {
     // 1. Sandbox → snapshot. Tolerate failure (a stale snapshot is still
-    //    better than nothing; the invalidations below still help).
+    //    better than nothing; the reload below still helps).
     try {
       await api.refreshFiles(slug, investigationId);
     } catch {
       /* ignore */
     }
+    await reload();
+  }, [slug, investigationId, reload]);
+}
+
+/**
+ * Steps 2 and 3 of `useRefreshFiles` — re-read what the panes show, without
+ * asking the server to flush first.
+ *
+ * What a turn's end uses: the app chat's turn already flushed on the server
+ * before it announced, and the tree and file reads go to the live sandbox when
+ * one is up (#345). A viewer's own flush there is a whole-workspace write-back
+ * WITH deletions, once per viewer per turn — and with turns ending in other
+ * chats or a workflow's lanes, often in the middle of someone else's turn.
+ */
+export function useReloadFileViews(investigationId: string): () => Promise<void> {
+  const queryClient = useQueryClient();
+  const buffers = useFileBufferStore();
+  return useCallback(async () => {
     // 2. Drop both TanStack caches: the file list + dirs + every open file's
     //    content. Prefix invalidation on `["file", id]` covers every
     //    `qk.file(id, *)` query — opened-file readers refetch on next render.
@@ -58,5 +76,5 @@ export function useRefreshFiles(investigationId: string): () => Promise<void> {
     for (const path of buffers.bufferedPaths()) {
       if (!buffers.isDirty(path)) buffers.reload(path);
     }
-  }, [slug, investigationId, queryClient, buffers]);
+  }, [investigationId, queryClient, buffers]);
 }

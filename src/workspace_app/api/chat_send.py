@@ -46,7 +46,7 @@ from ..sandbox.protocol import OutputSink
 from ..tokens import CallLane
 from ..workcalendar import OffHoursCalendar
 from .env_layers import PersonEnv
-from .events import GoalUpdated, RunError, UserMessage
+from .events import GoalUpdated, RunError, TurnEnded, UserMessage
 from .goal_offhours import build_offhours_calendar, owner_is_active, turn_signature
 from .goal_wrapup import headline, marker_text, night_transcript, write_summary
 from .kb_chat_routes import resolve_max_searches, to_caller_enhancements
@@ -1020,6 +1020,17 @@ class ChatSendService:
         except Exception:  # noqa: BLE001 — the reclaimer sweeps what this leaves
             logger.exception("chat_send: could not finish the turn claim %s", claim)
 
+    async def _turn_ended(self, item_id: str, chat_id: str) -> None:
+        """A turn in chat `chat_id` ended: flush the item's live sandbox to durable
+        (#492), then say so on the ITEM's stream -- whichever chat ran it, because
+        that is the stream every open file tree listens on. Announced even when the
+        flush fails: the flush is best-effort durability, and the viewer's refresh
+        reads the live sandbox, not what the flush wrote."""
+        try:
+            await self._flush_item(item_id)
+        finally:
+            self._turn_engine.publish(item_id, TurnEnded(chat_id=chat_id))
+
     async def rerun(self, row: ClaimRow) -> None:
         """Run the turn a claim describes, on THIS pod — the peer's half of the
         handover (plan-graceful-shutdown P3). The question is already in the
@@ -1545,7 +1556,7 @@ class ChatSendService:
                     turn_content,
                     ctx,
                     on_complete=persist,
-                    on_turn_end=lambda: self._flush_item(investigation_id),
+                    on_turn_end=lambda: self._turn_ended(investigation_id, rid),
                     pending=pending,
                 )
                 # #493 symptom 1 (504): await THIS turn's completion, but only up to a

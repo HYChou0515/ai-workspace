@@ -90,6 +90,51 @@ describe("useChatSession", () => {
     expect(qc.getQueryState(["treeDir", "it", "/node_modules"])?.isInvalidated).toBe(true);
   });
 
+  // A turn in ANY of the item's chats ended (the backend says so on the item's
+  // stream). The panes that show its files listen on the turn-ended bus; the
+  // event is never a transcript entry.
+  it("hands turn_ended to the item's file panes instead of the log", async () => {
+    const { subscribeTurnEnded } = await import("../lib/turnEndedBus");
+    const heard = vi.fn();
+    const off = subscribeTurnEnded("it", heard);
+    const other = vi.fn();
+    const offOther = subscribeTurnEnded("another-item", other);
+    const t = fakeTransport({
+      fileScopeId: "it",
+      subscribe: async function* () {
+        yield { type: "turn_ended", chat_id: "c2" } as AgentEvent;
+        await new Promise<void>(() => {});
+      },
+    });
+    const { result } = render(t);
+    await waitFor(() => expect(heard).toHaveBeenCalledTimes(1));
+    expect(other).not.toHaveBeenCalled();
+    expect(result.current.log.entries).toHaveLength(1); // only the hydrated message
+    off();
+    offOther();
+  });
+
+  // A turn that ended while the stream was down is not replayed when the
+  // reconnect lands on another pod, so a reconnect announces one too.
+  it("announces a possible turn end when the stream comes back", async () => {
+    const { subscribeTurnEnded } = await import("../lib/turnEndedBus");
+    const heard = vi.fn();
+    const off = subscribeTurnEnded("it", heard);
+    let calls = 0;
+    const t = fakeTransport({
+      fileScopeId: "it",
+      subscribe: async function* () {
+        calls += 1;
+        if (calls === 1) return; // the server closed the stream
+        await new Promise<void>(() => {});
+      },
+    });
+    render(t);
+    await waitFor(() => expect(calls).toBe(2), { timeout: 4000 });
+    await waitFor(() => expect(heard).toHaveBeenCalled());
+    off();
+  });
+
   // #613: `todos_updated` is panel state, not transcript — it must land in the
   // todos query cache (whole-list replace) and never fold into the log.
   it("writes todos_updated into the todos cache and keeps it out of the log", async () => {
