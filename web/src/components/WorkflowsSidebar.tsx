@@ -6,14 +6,10 @@ import { qk } from "../api/queryKeys";
 import { phaseView, stepOf, workflowApi, type WorkflowRunDTO } from "../api/workflows";
 import { useLaunchableWorkflows } from "../hooks/useLaunchableWorkflows";
 import { useItemRuns } from "../hooks/useWorkflow";
-import { executionPath, statusText } from "../lib/executionTab";
+import { executionName, executionPath, statusText } from "../lib/executionTab";
 import { pxToRem } from "../lib/pxToRem";
 import { WorkflowLaunchDialog } from "./WorkflowLaunchDialog";
 import { WorkflowsModal } from "./WorkflowsModal";
-
-function startedText(ms: number | null): string {
-  return ms == null ? "" : new Date(ms).toLocaleString();
-}
 
 /**
  * The workspace's Workflows sidebar (plan-workflow-out-of-chat D7 / D10): where a
@@ -23,8 +19,8 @@ function startedText(ms: number | null): string {
  *   through the pre-flight dialog and opens the execution's tab.
  * - "Manage workflows…" opens the Workflows panel (#323: the workspace's own
  *   workflows — run, download, import, templates, schedule times).
- * - The item's executions, newest first, each named by its workflow and start
- *   time, with its status and how far it got ("Step 2 of 3", after NN/g
+ * - The item's executions, newest first, each named as its tab is
+ *   (`executionName`: "Classify wafers · 10/12 14:03"), with its status and how far it got ("Step 2 of 3", after NN/g
  *   "Progress Indicators"); a schedule's are marked. One opens as a tab.
  *
  * Presentational over the API hooks; the shell gives it its frame and title.
@@ -90,6 +86,7 @@ export function WorkflowsSidebar({
               type="button"
               className="btn"
               data-size="sm"
+              data-variant="secondary"
               aria-label={`Start ${w.title || w.id}`}
               onClick={() => setPending(w.id)}
             >
@@ -142,12 +139,13 @@ export function WorkflowsSidebar({
                 background: "transparent",
               }}
             >
-              <span style={{ display: "block", fontWeight: 600 }}>{titleOf(r)}</span>
+              <span style={{ display: "block", fontWeight: 600 }}>
+                {executionName(titleOf(r), r.started)}
+              </span>
               <span style={{ display: "flex", flexWrap: "wrap", gap: 6, color: "var(--text-paper-d)" }}>
                 <span>{statusText(r.status)}</span>
                 {of > 0 && <span>{`Step ${at} of ${of}`}</span>}
                 {r.schedule_key && <span>Scheduled</span>}
-                <span>{startedText(r.started)}</span>
               </span>
             </button>
           );

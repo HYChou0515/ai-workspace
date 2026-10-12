@@ -110,10 +110,10 @@ describe("the Workflows activity-bar entry", () => {
 
   it("counts the executions waiting for you, and only those", async () => {
     vi.mocked(workflowApi.listRuns).mockResolvedValue([
-      run("a", "awaiting_human"),
-      run("b", "running"),
-      run("c", "awaiting_human"),
-      run("d", "done"),
+      run("workflow-run:a", "awaiting_human"),
+      run("workflow-run:b", "running"),
+      run("workflow-run:c", "awaiting_human"),
+      run("workflow-run:d", "done"),
     ]);
     openShell();
     const badge = await screen.findByTestId("workflows-waiting");
@@ -124,7 +124,7 @@ describe("the Workflows activity-bar entry", () => {
   });
 
   it("carries no badge when nothing is waiting", async () => {
-    vi.mocked(workflowApi.listRuns).mockResolvedValue([run("b", "running")]);
+    vi.mocked(workflowApi.listRuns).mockResolvedValue([run("workflow-run:b", "running")]);
     openShell();
     await screen.findByRole("button", { name: /^Workflows/ });
     await waitFor(() => expect(workflowApi.listRuns).toHaveBeenCalled());
@@ -157,7 +157,7 @@ describe("an execution's tab", () => {
 
   beforeEach(() => {
     vi.spyOn(workflowApi, "getRun").mockResolvedValue({
-      ...run("r1", "running"),
+      ...run("workflow-run:r1", "running"),
       started: new Date(2026, 9, 12, 14, 3).getTime(),
     });
     vi.spyOn(workflowApi, "listProfiles").mockResolvedValue([
@@ -175,9 +175,12 @@ describe("an execution's tab", () => {
   it("shows the execution for this item and its profile", async () => {
     await openExecution();
     const view = await screen.findByTestId("execution-view");
-    expect(view).toHaveAttribute("data-run", "r1");
+    expect(view).toHaveAttribute("data-run", "workflow-run:r1");
     expect(view).toHaveAttribute("data-item", "INC-1");
     expect(view).toHaveAttribute("data-profile", "default");
+    // the status bar's file facts are not an execution's (found live: "lang: execution")
+    expect(screen.queryByText(/^lang: /)).toBeNull();
+    expect(screen.queryByText("UTF-8")).toBeNull();
   });
 
   it("is named after the execution, not its path", async () => {
@@ -219,16 +222,16 @@ describe("the waiting notice", () => {
   it("announces an execution waiting at a gate and opens its tab", async () => {
     vi.mocked(workflowApi.listRuns).mockResolvedValue([
       {
-        ...run("r1", "awaiting_human"),
+        ...run("workflow-run:r1", "awaiting_human"),
         pending_decision: { phase: "p", title: "Check it", summary: "", allow: ["approve"], decided_by: "" },
       },
     ]);
-    vi.spyOn(workflowApi, "getRun").mockResolvedValue(run("r1", "awaiting_human"));
+    vi.spyOn(workflowApi, "getRun").mockResolvedValue(run("workflow-run:r1", "awaiting_human"));
     openShell();
     const notice = await screen.findByTestId("waiting-notice");
     expect(notice).toHaveTextContent("Check it");
     fireEvent.click(within(notice).getByRole("button", { name: "Open" }));
-    expect((await screen.findByTestId("execution-view")).dataset.run).toBe("r1");
+    expect((await screen.findByTestId("execution-view")).dataset.run).toBe("workflow-run:r1");
     // now in front of the person: the notice has done its job
     await waitFor(() => expect(screen.queryByTestId("waiting-notice")).toBeNull());
   });
@@ -251,14 +254,14 @@ describe("an address that names an execution", () => {
   afterEach(() => window.history.replaceState(null, "", "/"));
 
   it("opens that execution's tab, the workspace unfolded", async () => {
-    vi.spyOn(workflowApi, "getRun").mockResolvedValue(run("r7", "done"));
+    vi.spyOn(workflowApi, "getRun").mockResolvedValue(run("workflow-run:r7", "done"));
     window.history.replaceState(null, "", "/?open=workflow-run%3Ar7");
     const chatFirst = {
       ...manifest,
       layout: { ...manifest.layout, primary_surface: "chat" },
     } as unknown as AppManifest;
     openShell(chatFirst);
-    expect((await screen.findByTestId("execution-view")).dataset.run).toBe("r7");
+    expect((await screen.findByTestId("execution-view")).dataset.run).toBe("workflow-run:r7");
   });
 
   it("opens no file by it — only an execution", async () => {

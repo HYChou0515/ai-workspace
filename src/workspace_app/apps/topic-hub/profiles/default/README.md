@@ -8,16 +8,13 @@ Topic Hub 是一個圍繞某個主題、長期累積知識的工作區。你把�
 
 1. 建一個 **Topic Hub**，取一個能代表主題的標題。
 2. 系統會自動幫你準備好：一份記憶索引 `MEMORY.md`、放筆記的 `memory/` 資料夾，以及這個 Hub 要參考的知識庫清單 `collections.json`。
-3. 直接開聊天問問題，或上傳資料後跑 workflow 幫你整理。
+3. 直接開聊天問問題，或上傳資料後到左側活動列的 **Workflows** 跑 workflow 幫你整理。
 
 ---
 
 ## 聊天
 
-右側面板上方可以開**多個聊天分頁**：
-
-- **+ New chat** —— 開一個自由聊天。
-- **Run workflow** —— 挑一個 workflow 來跑（見下方）。
+右側面板上方可以開**多個聊天分頁**：按 **New chat** 開一個自由聊天。聊天只用來聊天——workflow 不在這裡啟動，而是從左側的 **Workflows** 側欄（見下方）。
 
 聊天本身有完整功能：選模型、快捷提示、`@` 提及他人、附加檔案、復原、`Enter` 送出。
 
@@ -45,12 +42,12 @@ Topic Hub 是一個圍繞某個主題、長期累積知識的工作區。你把�
 
 ## Workflows
 
-從上方的 **Run workflow** 啟動。每個 workflow 跑完都會把成果寫成檔案，而且可以重複跑。
+從左側活動列的 **Workflows** 側欄啟動：每個 workflow 旁有 **Start**，按下確認後，這次執行會在編輯區開成一個分頁，一步一步的進度、需要你決定的關卡、**Stop** 都在那個分頁裡；側欄下方的 **Executions** 列出每一次執行，點一下就能再打開它的分頁。每個 workflow 跑完都會把成果寫成檔案，而且可以重複跑。
 
 ### 把上傳資料整理進記憶 —— *Digest uploads into memory*
 
 1. 在檔案區的 `uploads/` 資料夾放入要整理的檔案。
-2. **Run workflow → Digest uploads into memory**。
+2. **Workflows** 側欄 → **Digest uploads into memory** 旁的 **Start**。
 3. 它會把每個檔案整理成一篇 `memory/` 筆記，再更新 `MEMORY.md` 索引。
 
 跑完到檔案區看 `MEMORY.md` 與 `memory/`，內容有進去就代表成功了。
@@ -60,16 +57,16 @@ Topic Hub 是一個圍繞某個主題、長期累積知識的工作區。你把�
 > 需要 `collections.json` 裡至少有一個知識庫。
 
 1. 在 `uploads/` 放入要歸檔的文件。
-2. **Run workflow → File uploads into collections**。
+2. **Workflows** 側欄 → **File uploads into collections** 旁的 **Start**。
 3. 它會幫每個檔案挑一個知識庫、寫一段摘要，並把文件裡的生詞整理成「提案詞彙卡」，寫進 `context-card.todo.md`。
-4. 在 review 階段按 **查看變更**，會跳出像 git diff 的對照：左邊是現有的詞彙卡（唯讀）、右邊是這次要寫入的版本（可直接編輯）。確認沒有把舊內容洗掉、需要的話就地修改右側，然後按 **Continue**（不想繼續就按 Reject）。
+4. 在這次執行的分頁裡，review 階段按 **查看變更**，會跳出像 git diff 的對照：左邊是現有的詞彙卡（唯讀）、右邊是這次要寫入的版本（可直接編輯）。確認沒有把舊內容洗掉、需要的話就地修改右側，然後按 **Continue**（不想繼續就按 Reject）。
 5. 核可後，它才會真的把文件歸檔，並把右側的詞彙卡寫入知識庫（既有卡會被覆寫、新的會新增）。
 
 在你按 Continue 之前，不會有任何東西被寫進知識庫。每一筆會被覆寫的卡片都看得到「舊 → 新」對照，不會盲簽。
 
 ### 整理記憶 —— *Consolidate memory*
 
-1. **Run workflow → Consolidate memory**（不需要上傳檔案）。
+1. **Workflows** 側欄 → **Consolidate memory** 旁的 **Start**（不需要上傳檔案）。
 2. 它會重讀目前的記憶，合併重複、精簡冗長、刪掉過時的內容，重寫成更乾淨的版本。
 
 適合在累積一段時間後，偶爾跑一次做整理。

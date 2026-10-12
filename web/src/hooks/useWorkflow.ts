@@ -42,11 +42,15 @@ export function usePreviewRun(
   });
 }
 
-/** How often to re-read an item's executions: while any is still going, so the
- * Workflows sidebar's progress and the waiting-for-you badge follow it (a gate is
- * reached between reads); never once they have all ended. */
-export function runsPollMs(runs: WorkflowRunDTO[] | undefined): number | false {
-  return runs?.some((r) => !isRunTerminal(r.status)) ? 2000 : false;
+/** How often to re-read an item's executions: every 2 s while any is executing,
+ * so the sidebar's progress and the waiting-for-you badge follow it (a gate is
+ * reached between reads); every 30 s otherwise, because nothing else refetches
+ * the list and an execution a schedule, a page or another person starts must
+ * still reach the badge and the notice (review R1). */
+export function runsPollMs(runs: WorkflowRunDTO[] | undefined): number {
+  // A gate waiting for a person (possibly for days) is not "going": the badge is
+  // already up, and a decision taken elsewhere shows within the slow pace.
+  return runs?.some((r) => r.status === "pending" || r.status === "running") ? 2000 : 30_000;
 }
 
 export function useItemRuns(slug: string | undefined, itemId: string | undefined) {
@@ -67,8 +71,13 @@ export function useRun(
     queryKey: qk.workflowRun(slug ?? "", itemId ?? "", runId ?? ""),
     queryFn: () => workflowApi.getRun(slug!, itemId!, runId!),
     enabled: !!slug && !!itemId && !!runId,
-    // Poll while the run is live; stop once it reaches a terminal status.
-    refetchInterval: (q) => (q.state.data && isRunTerminal(q.state.data.status) ? false : 1000),
+    // Poll while the run is live; stop once it reaches a terminal status — or
+    // cannot be read (a pruned run, a bad link: review R1 found one polled every
+    // second for as long as its tab stayed open).
+    refetchInterval: (q) =>
+      q.state.status === "error" || (q.state.data && isRunTerminal(q.state.data.status))
+        ? false
+        : 1000,
   });
 }
 

@@ -105,6 +105,12 @@ def _abs(path: str) -> str:
     return path if path.startswith("/") else "/" + path
 
 
+def aside_lane(chat_key: str) -> str:
+    """The turn lane an execution's aside turns (the steerer, P5) run on: off the
+    run's own stream, and the second lane Stop must reach (review R1)."""
+    return f"{chat_key}#aside"
+
+
 def journal_dir_of(workflow_id: str) -> str:
     """Where a workflow's journal lives in the workspace (#136) — the one rule the
     handle and the run route both read."""

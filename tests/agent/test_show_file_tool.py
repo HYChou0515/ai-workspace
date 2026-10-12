@@ -328,14 +328,14 @@ def _with_run(item_id: str) -> tuple[RunContextWrapper, str]:
 
 
 async def test_show_file_declares_an_execution_of_this_workspace_as_a_card():
-    """`workflow-run:<id>` is an execution's tab path; the card opens it."""
+    """An execution's id is its tab's path (`workflow-run:<uuid>`); the card opens it."""
     ctx, run_id = _with_run("inv-1")
 
-    out = await show_file_impl(ctx, f"workflow-run:{run_id}", caption="last night's run")
+    out = await show_file_impl(ctx, run_id, caption="last night's run")
 
     assert _declared(out) == [
         {
-            "path": f"workflow-run:{run_id}",
+            "path": run_id,
             "mime": "application/x-workflow-execution",
             "size": 0,
             "caption": "last night's run",
@@ -347,7 +347,7 @@ async def test_show_file_declares_an_execution_of_this_workspace_as_a_card():
 async def test_show_file_never_shows_another_workspaces_execution():
     ctx, run_id = _with_run("inv-OTHER")
 
-    out = await show_file_impl(ctx, f"workflow-run:{run_id}")
+    out = await show_file_impl(ctx, run_id)
 
     assert out.startswith("error:")
     assert SHOWN_FILES_MARKER not in out
@@ -373,3 +373,19 @@ def test_the_execution_path_is_the_one_the_web_opens_as_a_tab():
 
     ts = (Path(__file__).parents[2] / "web/src/lib/executionTab.ts").read_text()
     assert f'const PREFIX = "{EXECUTION_PATH_PREFIX}";' in ts
+
+
+def test_an_executions_path_is_its_run_id():
+    """The FE opens an execution's tab by the run's id, and the AI passes that id
+    to `show_file`: both rely on a WorkflowRun's id carrying this prefix."""
+    from workspace_app.resources import make_spec
+    from workspace_app.workflow.run import EXECUTION_PATH_PREFIX, RunStatus, WorkflowRun
+
+    rid = (
+        make_spec()
+        .get_resource_manager(WorkflowRun)
+        .create(WorkflowRun(item_id="i", captured_user="u", status=RunStatus.DONE))
+        .resource_id
+    )
+    assert rid.startswith(EXECUTION_PATH_PREFIX)
+    assert len(rid) > len(EXECUTION_PATH_PREFIX)

@@ -17,6 +17,9 @@ export type ScopedBus<T> = {
   publish(scopeId: string, value: T): void;
   /** Returns the unsubscribe. */
   subscribe(scopeId: string, fn: (value: T) => void): () => void;
+  /** Whether anything listens on this scope now — so a control that publishes
+   * is not offered where nothing would answer it. */
+  has(scopeId: string): boolean;
 };
 
 export function createScopedBus<T>(): ScopedBus<T> {
@@ -33,6 +36,9 @@ export function createScopedBus<T>(): ScopedBus<T> {
         set.delete(fn);
         if (set.size === 0) listeners.delete(scopeId);
       };
+    },
+    has(scopeId) {
+      return (listeners.get(scopeId)?.size ?? 0) > 0;
     },
     publish(scopeId, value) {
       for (const fn of listeners.get(scopeId) ?? []) {

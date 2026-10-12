@@ -13,7 +13,7 @@ from typing import NamedTuple
 from specstar import QB, SpecStar
 
 from ..resources import Message
-from ..workflow.run import WorkflowRun
+from ..workflow.run import RunStatus, WorkflowRun
 
 
 class RunWindow(NamedTuple):
@@ -27,14 +27,21 @@ def _inside(at: int, windows: list[RunWindow]) -> bool:
     return any(w.started <= at and (w.ended is None or at <= w.ended) for w in windows)
 
 
+def _a_persons(m: Message) -> bool:
+    """What a person typed: never a run's output, whatever window it falls in."""
+    return m.role == "user" and m.driven_by is None
+
+
 def without_runs(messages: list[Message], windows: list[RunWindow]) -> list[Message]:
     """``messages`` less every one a run produced: those marked with a run, and,
     in a chat a run took over before marks existed, the unmarked ones inside a
-    run's window. A message with no time cannot be placed, and is kept."""
+    run's window — except what a person said (review R1). A message with no time
+    cannot be placed, and is kept."""
     return [
         m
         for m in messages
-        if m.run_id is None and (m.created_at is None or not _inside(m.created_at, windows))
+        if m.run_id is None
+        and (_a_persons(m) or m.created_at is None or not _inside(m.created_at, windows))
     ]
 
 
@@ -47,5 +54,18 @@ def run_windows_of_chat(spec: SpecStar, item_id: str, chat_id: str) -> list[RunW
         run = r.data
         assert isinstance(run, WorkflowRun)
         if run.chat_id == chat_id and run.started is not None:
-            out.append(RunWindow(started=run.started, ended=run.ended))
+            out.append(RunWindow(started=run.started, ended=_end_of(run)))
     return out
+
+
+def _end_of(run: WorkflowRun) -> int | None:
+    """Where a run's window closes. Every message a run writes now carries its mark,
+    so a window only places older, unmarked ones — all written by the time the run
+    last did anything (``progress_at``). A run that settled without ``ended`` (a
+    failed or stopped steer) or waits at a gate would otherwise read as open
+    forever and swallow the chat after it (review R1)."""
+    if run.ended is not None:
+        return run.ended
+    if run.progress_at is not None:
+        return run.progress_at
+    return None if run.status in (RunStatus.PENDING, RunStatus.RUNNING) else run.started

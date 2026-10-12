@@ -38,8 +38,9 @@
   input-hash 仍然吻合，就 **跳過** ——重用它的 artifact，不重做這份工。
   這是 Make 風格的 incremental 執行（§9）。它就是我們 resume／retry／rewind／
   crash-recovery 的全部故事。
-- **一次 workflow run（UI 上叫「執行」）有自己的 conversation，不在聊天裡**
-  （`docs/plan-workflow-out-of-chat.md` D3 / D4）。它和聊天用同一種 `Conversation`
+- **一次 workflow run（UI 上叫「執行」）不在聊天裡**（`docs/plan-workflow-out-of-chat.md`
+  D3 / D4）。從網頁或 API 啟動的 run 開一個自己的 conversation；同一個排程的執行共用那個排程的
+  一個 conversation（一次一個），每則訊息都標著是哪個執行的。它和聊天用同一種 `Conversation`
   resource、同一個 `ChatTurnEngine`，只是網頁把兩者分開：聊天列表不列它，它開在
   workspace 的 **Workflows** 側欄和編輯區的執行分頁（§10）。一個 agent node 是那個
   conversation 上的一次 turn，它寫下的每則訊息都帶著 `run_id`、`step`、`phase`；
@@ -329,21 +330,25 @@ node 保證 exactly-once。
 - **每一步一列**（diagram 的 phase，「Step N of M」數的就是它），預設收合，可以
   Expand all / Collapse all；正在跑的、等人決定的、失敗的那一列一打開就展開，
   Collapse all 也不收它。展開後是這一步自己的 prompt、思考、tool 呼叫、回覆，
-  它的 Result / Transcript 檔案連結，以及嘗試次數與錯誤。
+  它的 Result / Transcript 檔案連結，以及嘗試次數與錯誤；收合的一列也顯示它的 Result。
+  同一個 workflow 的執行共用一份 journal，所以只有**最新**的那一次提供結果檔、transcript、
+  Continue 與 Re-run；較舊的執行寫明有更新的跑過了，它自己的訊息照樣看得到。
 - **Stop。** 任何時候都可以 **Stop** 這次 run（一個控制動作，重用 `cancel_current`）。
   run 進入終態；對一個平行 batch（§11），在途的元素被取消；已完成的（idempotent、
   已 commit）保留。停下來的執行有 **Continue**。
 - **失敗的一步**是展開的，有 **Continue from here**（同一個 run 再跑，已經做完的
   跳過，§9）、**Re-run this step**（先丟掉那一步的 artifact 再跑；後面的步驟照
-  input-hash 決定要不要重做）、**Ask AI why it failed**。路由是
+  input-hash 決定要不要重做）、**Inputs**（它讀的 `input.json`）、**Ask AI why it failed**。
+  兩個人同時按 Continue 只會跑一次（第一個以 CAS 認領，另一個被拒）。路由是
   `POST .../runs/{id}/retry {rerun}`：只接受 `error` / `cancelled` 的 run，同一個 item
-  還有同一個 workflow 的別的 run 在跑時拒絕（它們共用一個 journal）。
+  同一個 workflow 還有別的 run 正在跑（pending / running）時拒絕（它們共用一個 journal；停在關卡等人的不算）。
 - **跟 AI 談一次執行**：執行結束後的「Open a chat with these results」和「Ask AI why it
   failed」都開一個**新**聊天，把執行編號與該讀的檔案（結果檔，或那一步的錯誤與
   transcript）放進輸入框，不會自動送出。聊天的 AI 可以用 `show_file` 叫出某個執行的
-  卡片（`path: "workflow-run:<id>"`），但不能啟動或修改執行（D8）。
-- **等人的時候**：活動列上 Workflows 圖示有數字；workspace 裡不論在哪，右下角都有一則
-  提示說哪個執行在等什麼，按 Open 到它的分頁。
+  卡片（`path` 就是執行的編號，`workflow-run:<uuid>`），但不能啟動或修改執行（D8）。
+- **等人的時候**：活動列上 Workflows 圖示有數字；workspace 頂列下方有一條提示說哪個執行
+  在等什麼，按 Open 到它的分頁。執行清單在有東西在跑時每 2 秒、否則每 30 秒重新讀一次，
+  所以排程或別人啟動的執行也會出現。
 - **Human gate（v1）。** `await human_gate(wf, phase, title, summary, allow)`
   暫停 run 並記錄一個 **pending decision**（它的結果只是另一個 **artifact**，
   在 run 的 journal 家目錄裡的 `step_<gate>/decision.json` ——即
@@ -364,7 +369,7 @@ node 保證 exactly-once。
   手動編輯檔案（§9）。入口是執行分頁 `⋯` 選單裡的「Change this execution…」（刻意
   多一步：不常用；D2），打一段自由文字指令（例如
   *"use the a, b collections and redo the upload"*）；一次唯讀的 **steerer** turn
-  讀目前的 inputs + journal + transcript，提出一個 **steer plan**：要重寫哪些 input
+  讀目前的 inputs 與 journal 裡已完成 step 的名稱，提出一個 **steer plan**：要重寫哪些 input
   檔案、要 **invalidate** 哪些 step（刪掉 artifact → 強迫重跑）。這個 plan **在套用之前
   先被審閱**（produce → review → commit，跟 gate 同樣的形狀）：一張 confirm card 顯示
   檔案 diff + 哪些 step 會重跑 vs. 被保留（blast radius，影響範圍），人類
@@ -938,8 +943,8 @@ Workflows 面板的排程區用同一組路由。
 顯示與輸入。列名用標題：
 `ScheduleView.run_title`（item 自己的 workflow 檔的標題，與解析檢查同一次讀取；否則 profile 的）、
 總表的 `page_title`（那個資料夾裡 Deploy 的頁面）。「現在執行」啟動的 run 記 `WorkflowRun.by_hand`，
-總表的「上一次」標「手動」。總表的「上一次」連到 `?chat=<trigger_id>&from=schedules`，對話上方顯示那條排程
-與「回到排程」、進度展開（只這一次，不寫回記住的偏好）。
+總表的「上一次」標「手動」。總表的「上一次」連到那個執行在 item 裡的分頁（`?open=<執行編號>`，
+plan-workflow-out-of-chat P11）；以前連到排程的對話（`?chat=<trigger_id>&from=schedules`）並在上方顯示排程。
 
 **一列也可以是 cron**（`docs/plan-schedule-cron.md`）：`{"cron": "0 9 * * 1-5", "tz": "...", "run": "..."}`，
 標準 5 欄（分 時 日 月 星期），用在一列 `every` 說不出來、原本要拆成好幾列的排程（平日、每 2 小時、1 號和 15 號）；

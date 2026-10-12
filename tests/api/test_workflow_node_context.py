@@ -247,3 +247,39 @@ async def test_a_steer_proposal_leaves_no_trace_in_the_executions_thread(
     assert plan.instruction == "use collection b"
     assert stack["conv_rm"].get(rid).data.messages == []
     assert not [ev for ev in streamed if isinstance(ev, MessageDelta)]
+
+
+async def test_a_full_workspace_does_not_fail_a_step_over_its_transcript(
+    stack: dict[str, Any],
+) -> None:
+    """Review R1 (#538 class): the transcript is written AFTER the turn's effects;
+    a quota-gated write there failed the step with no record, and the re-run
+    repeated every side effect. It is a record, written like the journal's."""
+    from workspace_app.files.facade import WorkspaceFull
+    from workspace_app.resources import Conversation
+    from workspace_app.workflow.steps import StepRef
+
+    ex = stack["ex"]
+    rid = stack["conv_rm"].create(Conversation(item_id=stack["item_id"])).resource_id
+
+    async def full(*_a: Any, **_k: Any) -> None:
+        raise WorkspaceFull(used=100, quota=100, attempted=1)
+
+    ex._files.write = full  # every growing write is refused: the workspace is full
+
+    answer = await ex.drive_turn(
+        stack["item_id"],
+        rid,
+        "u",
+        "classify",
+        None,
+        run_id="run-1",
+        step=StepRef("classify", "", "sort"),
+        journal_dir="/.workflow/w",
+    )
+
+    assert answer == "ok"
+    text = (
+        await ex._files.read(stack["item_id"], "/.workflow/w/step_classify/main.transcript.md")
+    ).decode()
+    assert "classify" in text

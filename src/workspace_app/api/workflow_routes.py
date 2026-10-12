@@ -29,7 +29,7 @@ from ..workflow.engine import journal_stem, transcript_path
 from ..workflow.event_backfill import backfill_trigger_lag, find_trigger_lag
 from ..workflow.event_dispatch import EventTriggerDispatcher
 from ..workflow.handle import WorkflowHandle, journal_dir_of
-from ..workflow.inputs import resolve_inputs
+from ..workflow.inputs import inputs_path, resolve_inputs
 from ..workflow.orchestrator import (
     ActiveRunExists,
     NotAwaitingDecision,
@@ -648,19 +648,49 @@ def register_workflow_routes(
 
         `step_files` names, per step on the board, where its result and transcript
         are in the journal (the execution tab links them), from the journal's own
-        layout. A run of another item is not found here."""
+        layout — for the newest run of its workflow only (`latest`), since they share
+        that journal. `inputs_path` is the `input.json` the workflow reads. A run of
+        another item is not found here."""
         investigation_id = locator.require_access(slug, item_id, "read_chat")
         data = _run_of(run_id, investigation_id)
+        # A workflow's runs share one journal: only the newest one's step files are
+        # its own, so an older one names none (review R1).
+        latest = (
+            workflow_orchestrator.newest_run_of_workflow(investigation_id, data.workflow_id)
+            == run_id
+        )
         journal = journal_dir_of(data.workflow_id)
-        step_files = {
-            s.name: {
-                "result": journal_stem(journal, s.name, "") + ".json",
-                "transcript": transcript_path(journal, s.name, ""),
+        step_files = (
+            {
+                s.name: {
+                    "result": journal_stem(journal, s.name, "") + ".json",
+                    "transcript": transcript_path(journal, s.name, ""),
+                }
+                for s in data.steps
+                if not s.key
             }
-            for s in data.steps
-            if not s.key
+            if latest
+            else {}
+        )
+        profile = locator.profile_of(investigation_id)
+        manifest = await workflow_orchestrator.manifest_of(
+            slug, profile, data.workflow_id, investigation_id
+        )
+        inputs = (
+            "/"
+            + inputs_path(manifest, workflow_orchestrator.load_upload_dir(slug, profile)).lstrip(
+                "/"
+            )
+            if manifest is not None
+            else ""
+        )
+        return {
+            "run_id": run_id,
+            **msgspec.to_builtins(data),
+            "step_files": step_files,
+            "latest": latest,
+            "inputs_path": inputs,
         }
-        return {"run_id": run_id, **msgspec.to_builtins(data), "step_files": step_files}
 
     def _run_of(run_id: str, item_id: str) -> WorkflowRun:
         """The run, read only through its own item: the route takes the item from
@@ -830,8 +860,8 @@ def register_workflow_routes(
         here (`rerun` empty — what passed skips) or Re-run this step (`rerun` names
         it — its artifacts are dropped first). Same run, same id; the FE refetches it.
         409 when the run is not failed / stopped, another run of its workflow on the
-        item is live, or its workflow no longer loads; 400 for a step not on the
-        run's board."""
+        item is executing, or its workflow no longer loads; 400 for a step not on
+        the run's board."""
         investigation_id = locator.require_access(slug, item_id, "converse")
         profile = locator.profile_of(investigation_id)
         try:

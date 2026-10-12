@@ -97,7 +97,7 @@
 - **human_gate** — produce → review → commit 流程中的人類關卡（v1）；在執行分頁裡等待的那一列以 `WorkflowDecisionCard` 呈現（不在聊天裡）。歸 [Workflow 引擎](subsystems/workflow-engine.md)。
 - **journal（`/.workflow/<workflow_id>/`）** — workflow 的 `step_*` 日誌資料夾，移出 item root；經 `WorkflowHandle.journal_dir` 串接。歸 [Workflow 引擎](subsystems/workflow-engine.md)。
 - **steering** — 用文字調整一次執行（執行分頁 `⋯` →「Change this execution…」：free-text → LLM 計畫：改 inputs ＋ 失效 steps → 人類確認影響範圍 → 確定性套用 → 同一個 run 增量續跑）。steerer 的 turn 不寫進任何對話。歸 [Workflow 引擎](subsystems/workflow-engine.md)。
-- **執行（execution）** — UI 對一次 workflow run 的稱呼（程式、API 仍叫 `run`）；名稱是「workflow · 開始時間」。有自己的 conversation，不在聊天裡；在 workspace 的 Workflows 側欄列出、開成編輯區的分頁（路徑 `workflow-run:<id>`）。歸 [Workflow 引擎](subsystems/workflow-engine.md)。
+- **執行（execution）** — UI 對一次 workflow run 的稱呼（程式、API 仍叫 `run`）；名稱是「workflow · 開始時間」。不在聊天裡：從網頁或 API 啟動的有自己的 conversation，同一個排程的執行共用排程的那一個；在 workspace 的 Workflows 側欄列出、開成編輯區的分頁（路徑就是執行的編號 `workflow-run:<uuid>`）。歸 [Workflow 引擎](subsystems/workflow-engine.md)。
 - **Continue from here／Re-run this step** — 失敗或停下的執行再跑一次（同一個 run）：前者已做完的跳過，後者先丟掉那一步的 artifact。`POST .../runs/{id}/retry`。歸 [Workflow 引擎](subsystems/workflow-engine.md)。
 - **User-authored workflow（降權 DSL）** — 與 AI 共同設計、存成資料（一份 `workflow.json`）而非 Python 的工作流；可信賴的 interpreter（`build_run`）在既有 step primitives 上跑它，故 **API 內不執行使用者程式碼**。是 user skill 的工作流類比（#298／#323）。歸 [Workflow 引擎](subsystems/workflow-engine.md)。
 - **workflow.json（DSL schema）** — 非圖靈完備的宣告式定義：有序 steps，`type ∈ agent／sandbox／gate／capability／map`，加上確定性 `{x}`／`{x.field}` 字串內插（無 eval）。由 `parse_def` 解析成 `WorkflowDef`。歸 [Workflow 引擎](subsystems/workflow-engine.md)。

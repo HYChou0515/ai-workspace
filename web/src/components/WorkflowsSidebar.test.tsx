@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { FileService } from "../api/fileService";
 import { workflowApi, type ProfileDTO, type WorkflowRunDTO } from "../api/workflows";
 import { workspaceWorkflowsApi } from "../api/workspaceWorkflows";
-import { executionPath } from "../lib/executionTab";
+import { executionName, executionPath } from "../lib/executionTab";
 import { renderWithQuery } from "../test/queryWrapper";
 import { DialogProvider } from "./Dialog";
 import { WorkflowsSidebar } from "./WorkflowsSidebar";
@@ -39,7 +39,7 @@ const PROFILES: ProfileDTO[] = [
 ];
 
 const run = (over: Partial<WorkflowRunDTO>): WorkflowRunDTO => ({
-  run_id: "r1",
+  run_id: "workflow-run:r1",
   item_id: "it",
   workflow_id: "classify",
   captured_user: "u",
@@ -92,7 +92,7 @@ describe("WorkflowsSidebar", () => {
     });
     const start = vi
       .spyOn(workflowApi, "startRun")
-      .mockResolvedValue({ run_id: "r9", item_id: "it", chat_id: "conversation:x" });
+      .mockResolvedValue({ run_id: "workflow-run:r9", item_id: "it", chat_id: "conversation:x" });
     const onOpenFile = render();
 
     fireEvent.click(await screen.findByRole("button", { name: "Start Classify wafers" }));
@@ -103,7 +103,7 @@ describe("WorkflowsSidebar", () => {
     fireEvent.click(go);
 
     await waitFor(() => expect(start).toHaveBeenCalledWith("hub", "it", "classify"));
-    await waitFor(() => expect(onOpenFile).toHaveBeenCalledWith(executionPath("r9")));
+    await waitFor(() => expect(onOpenFile).toHaveBeenCalledWith(executionPath("workflow-run:r9")));
   });
 
   it("says why a start failed instead of going quiet", async () => {
@@ -130,9 +130,9 @@ describe("WorkflowsSidebar", () => {
 
   it("lists executions newest first, each saying how far it got, and opens one as a tab", async () => {
     vi.mocked(workflowApi.listRuns).mockResolvedValue([
-      run({ run_id: "old", started: 1_000, status: "done" }),
+      run({ run_id: "workflow-run:old", started: 1_000, status: "done" }),
       run({
-        run_id: "new",
+        run_id: "workflow-run:new",
         started: 5_000,
         status: "running",
         current_phase: "sort",
@@ -146,8 +146,9 @@ describe("WorkflowsSidebar", () => {
     const onOpenFile = render();
 
     const rows = await screen.findAllByTestId("execution-row");
-    expect(rows.map((r) => r.getAttribute("data-run"))).toEqual(["new", "old"]);
-    expect(within(rows[0]).getByText("Classify wafers")).toBeInTheDocument();
+    expect(rows.map((r) => r.getAttribute("data-run"))).toEqual(["workflow-run:new", "workflow-run:old"]);
+    // named as its tab is: the workflow and when it started
+    expect(within(rows[0]).getByText(executionName("Classify wafers", 5_000))).toBeInTheDocument();
     expect(within(rows[0]).getByText("Step 2 of 3")).toBeInTheDocument();
     expect(within(rows[0]).getByText("Running")).toBeInTheDocument();
     expect(within(rows[0]).getByText("Scheduled")).toBeInTheDocument();
@@ -155,7 +156,7 @@ describe("WorkflowsSidebar", () => {
     expect(within(rows[1]).getByText("Done")).toBeInTheDocument();
 
     fireEvent.click(rows[1]);
-    expect(onOpenFile).toHaveBeenCalledWith(executionPath("old"));
+    expect(onOpenFile).toHaveBeenCalledWith(executionPath("workflow-run:old"));
   });
 
   it("opens the Workflows panel to manage the workspace's own workflows", async () => {

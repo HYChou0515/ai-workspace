@@ -89,8 +89,8 @@ CURRENT_STEP: ContextVar[StepRef | None] = ContextVar("workflow_current_step", d
 
 @contextmanager
 def _as_step(name: str, key: str, phase: str) -> Iterator[None]:
-    # Set before the turn's coroutine is created: `asyncio.wait_for` runs it as
-    # a task that copies the context at that moment.
+    # Set before the turn's coroutine is created and awaited, so the turn — and
+    # any task it starts, which copies the context then — sees this step.
     token = CURRENT_STEP.set(StepRef(name, key, phase))
     try:
         yield
@@ -98,11 +98,23 @@ def _as_step(name: str, key: str, phase: str) -> Iterator[None]:
         CURRENT_STEP.reset(token)
 
 
-def _retry_prompt(prompt: str, feedback: str | None) -> str:
+#: How much of the previous answer a retry prompt carries.
+_PREVIOUS_ANSWER_CHARS = 4000
+
+
+def _retry_prompt(prompt: str, feedback: str | None, previous: str | None = None) -> str:
+    """The prompt again, with why the last attempt failed — and what it answered:
+    a node reads no conversation (plan-workflow-out-of-chat D1), so the attempt
+    it is told to fix must travel in the prompt itself (review R1)."""
     if not feedback:
         return prompt
+    shown = ""
+    if previous:
+        cut = previous[:_PREVIOUS_ANSWER_CHARS]
+        more = " …(cut)" if len(previous) > _PREVIOUS_ANSWER_CHARS else ""
+        shown = f"\n\nYour previous answer was:\n{cut}{more}"
     return (
-        f"{prompt}\n\nYour previous attempt did not pass its check: {feedback}\n"
+        f"{prompt}{shown}\n\nYour previous attempt did not pass its check: {feedback}\n"
         "Fix it and try again."
     )
 
@@ -128,12 +140,16 @@ async def agent_step(
         raise RuntimeError("agent_step needs a turn driver (wired by the run driver)")
     drive_turn = wf.drive_turn
 
+    previous: list[str] = []  # the last attempt's answer, for the retry prompt
+
     async def execute(feedback: str | None) -> Any:
         with _as_step(name or phase, key, phase):
-            return await _turn(feedback)
+            answer = await _turn(feedback)
+            previous[:] = [answer] if isinstance(answer, str) else []
+            return answer
 
     async def _turn(feedback: str | None) -> Any:
-        coro = drive_turn(_retry_prompt(prompt, feedback), tools)
+        coro = drive_turn(_retry_prompt(prompt, feedback, next(iter(previous), None)), tools)
         if wf.step_timeout_s is None:
             return await coro
         try:
@@ -198,12 +214,14 @@ async def agent_write_step(
         raise RuntimeError("agent_write_step needs a turn driver (wired by the run driver)")
     drive_turn = wf.drive_turn
 
+    previous: list[str] = []  # the last attempt's reply, for the retry prompt
+
     async def execute(feedback: str | None) -> Any:
         with _as_step(name or phase, key, phase):
             return await _write(feedback)
 
     async def _write(feedback: str | None) -> Any:
-        coro = drive_turn(_retry_prompt(prompt, feedback), tools)
+        coro = drive_turn(_retry_prompt(prompt, feedback, next(iter(previous), None)), tools)
         if wf.step_timeout_s is None:
             text = await coro
         else:
@@ -216,6 +234,7 @@ async def agent_write_step(
                 raise StepFailed(
                     f"agent step {name or phase!r} timed out after {wf.step_timeout_s}s"
                 ) from exc
+        previous[:] = [text]
         result: dict[str, Any] = {"out": out, "bytes": len(text)}
         if out:
             await wf.write(out, text)

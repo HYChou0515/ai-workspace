@@ -77,13 +77,39 @@ const run = (status: WorkflowRunDTO["status"]): WorkflowRunDTO => ({
 describe("runsPollMs", () => {
   it("keeps the list fresh while any execution is still going, so a gate's badge appears", () => {
     expect(runsPollMs([run("done"), run("running")])).toBeGreaterThan(0);
-    expect(runsPollMs([run("awaiting_human")])).toBeGreaterThan(0);
     expect(runsPollMs([run("pending")])).toBeGreaterThan(0);
   });
 
-  it("stops once every execution has ended", () => {
-    expect(runsPollMs([run("done"), run("error"), run("cancelled")])).toBe(false);
-    expect(runsPollMs([])).toBe(false);
-    expect(runsPollMs(undefined)).toBe(false);
+  it("waits at the slow pace while an execution only waits at a gate", () => {
+    // Review R1: a gate may wait for days; every open tab polling every 2 s for it
+    // is load, not news — the badge is already up.
+    expect(runsPollMs([run("awaiting_human")])).toBe(runsPollMs([]));
+  });
+
+  it("slows down, but never stops, once every execution has ended", () => {
+    // Review R1: a run a schedule, a page or another person starts later must still
+    // reach the badge and the notice — nothing else refetches the list.
+    const live = runsPollMs([run("running")]);
+    for (const idle of [runsPollMs([run("done"), run("error"), run("cancelled")]), runsPollMs([])]) {
+      expect(idle).toBeGreaterThan(live as number);
+      expect(idle).toBeLessThanOrEqual(60_000);
+    }
+  });
+});
+
+describe("useRun", () => {
+  it("stops asking for a run it cannot read", async () => {
+    // Review R1: a pruned run or a bad link was asked for every second for as
+    // long as its tab stayed open.
+    const { renderHook, waitFor } = await import("@testing-library/react");
+    const { useRun } = await import("./useWorkflow");
+    const get = vi.spyOn(workflowApi, "getRun").mockRejectedValue(new Error("unknown run"));
+    const { result } = renderHook(() => useRun("hub", "it", "workflow-run:gone"), {
+      wrapper: QueryWrap,
+    });
+    await waitFor(() => expect(result.current.isError).toBe(true));
+    const asked = get.mock.calls.length;
+    await new Promise((r) => setTimeout(r, 2500));
+    expect(get.mock.calls.length).toBe(asked);
   });
 });

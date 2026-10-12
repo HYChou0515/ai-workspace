@@ -16,8 +16,9 @@ function waitKey(r: WorkflowRunDTO): string {
  * An execution waiting for the person, said wherever they are in the workspace
  * (plan-workflow-out-of-chat P9 / D7). A non-modal notification (NN/g,
  * "Indicators, Validations, and Notifications": it reports an event the person
- * did not cause, without blocking what they are doing). It asks for an action,
- * so no timer takes it away: it stays until acted on or dismissed. It names
+ * did not cause, without blocking what they are doing), drawn as a banner in
+ * the page's flow so it covers nothing. It asks for an action, so no timer
+ * takes it away: it stays until acted on or dismissed. It names
  * the execution and what it waits for, and Open
  * goes to that execution's tab, where the gate is decided. Not shown while that
  * tab is in front — the person is already there.
@@ -57,32 +58,27 @@ export function WaitingNotice({
     <div
       role="status"
       data-testid="waiting-notice"
+      // A banner in the page's flow, under the top bar (found live: floating in
+      // a corner it sat on the chat's composer and its send button).
       style={{
-        position: "fixed",
-        right: 18,
-        bottom: 18,
-        zIndex: 55,
-        maxWidth: "min(380px, calc(100vw - 32px))",
+        flexShrink: 0,
         display: "flex",
-        alignItems: "flex-start",
+        alignItems: "center",
+        flexWrap: "wrap",
         gap: 10,
-        padding: "10px 12px",
-        borderRadius: "var(--radius-btn)",
+        padding: "6px 14px",
         background: "var(--paper-2)",
-        border: "1px solid var(--warn)",
-        boxShadow: "0 6px 20px rgba(0,0,0,0.18)",
+        borderBottom: "1px solid var(--warn)",
         fontSize: pxToRem(13),
         lineHeight: 1.5,
       }}
     >
-      <div style={{ minWidth: 0, flex: 1 }}>
-        <div style={{ fontWeight: 600, overflowWrap: "anywhere" }}>
+      <div style={{ minWidth: 0, flex: 1, display: "flex", flexWrap: "wrap", columnGap: 8 }}>
+        <span style={{ fontWeight: 600, overflowWrap: "anywhere" }}>
           {`${executionName(title, shown.started)} is waiting for you`}
-        </div>
-        <div style={{ color: "var(--text-paper-d)", overflowWrap: "anywhere" }}>{what}</div>
-        {more > 0 && (
-          <div style={{ color: "var(--text-paper-d)", fontSize: pxToRem(11) }}>{`${more} more waiting`}</div>
-        )}
+        </span>
+        <span style={{ color: "var(--text-paper-d)", overflowWrap: "anywhere" }}>{what}</span>
+        {more > 0 && <span style={{ color: "var(--text-paper-d)" }}>{`· ${more} more waiting`}</span>}
       </div>
       <button
         type="button"

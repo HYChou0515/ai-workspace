@@ -22,6 +22,7 @@ import logging
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, cast
+from urllib.parse import quote
 
 from specstar import SpecStar
 from specstar.types import ResourceIDNotFoundError
@@ -31,7 +32,7 @@ from ..resources import Conversation, Message
 from ..sandbox.protocol import OutputSink, Sandbox
 from ..workflow.capabilities import convert_upload, ingest_to_collection, upsert_context_card
 from ..workflow.engine import StepFailed, transcript_path
-from ..workflow.handle import WorkflowHandle
+from ..workflow.handle import WorkflowHandle, aside_lane
 from ..workflow.run import RunStatus, WorkflowRun
 from ..workflow.run_identity import RunIdentities
 from ..workflow.steps import CURRENT_STEP, StepRef
@@ -92,6 +93,12 @@ def _reply_text(produced: list[TurnMessage]) -> str:
         if msg.role == "assistant" and msg.content.strip():
             return msg.content
     return ""
+
+
+def execution_link(slug: str, item_id: str, run_id: str) -> str:
+    """The web address of an execution's tab: its item, with `?open=<run id>`."""
+    base = f"/a/{slug}/{item_id}"
+    return f"{base}?open={quote(run_id, safe='')}" if run_id else base
 
 
 class WorkflowExecutor:
@@ -275,7 +282,7 @@ class WorkflowExecutor:
 
         # An aside runs on a lane of its own, so nothing it streams reaches the
         # run's live stream (subscribers listen on ``chat_key``).
-        enqueue_key = f"{chat_key}#aside" if not record else (lane or chat_key)
+        enqueue_key = aside_lane(chat_key) if not record else (lane or chat_key)
         logger.debug(
             "workflow_exec: enqueue turn on %s for item %s (chat %s)",
             enqueue_key,
@@ -289,13 +296,17 @@ class WorkflowExecutor:
             # key, and the open file tree listens on the item's.
             self._turn_engine.publish(item_id, TurnEnded(chat_id=rid))
 
-        await self._turn_engine.enqueue(
-            enqueue_key, prompt, ctx, on_complete=persist, on_turn_end=_announce
-        )
-        if record and ref is not None and journal_dir and run_id:
-            await self._write_transcript(item_id, rid, run_id, ref, journal_dir)
-        if enqueue_key != chat_key:  # transient sub-lane → drop its session
-            await self._turn_engine.forget(enqueue_key)
+        try:
+            await self._turn_engine.enqueue(
+                enqueue_key, prompt, ctx, on_complete=persist, on_turn_end=_announce
+            )
+            if record and ref is not None and journal_dir and run_id:
+                await self._write_transcript(item_id, rid, run_id, ref, journal_dir)
+        finally:
+            # A transient sub-lane drops its session even when the turn was
+            # stopped — or the next turn there queues behind the stopped one's.
+            if enqueue_key != chat_key:
+                await self._turn_engine.forget(enqueue_key)
         # A Stop that landed DURING this turn advanced the epoch past the baseline
         # (the watcher already cancelled the turn) → abort the run, don't step on.
         if await self._turn_engine.cancel_epoch(chat_key) > baseline:
@@ -312,7 +323,10 @@ class WorkflowExecutor:
         conv = self._conv_rm.get(rid).data
         assert isinstance(conv, Conversation)
         mine = [m for m in conv.messages if m.run_id == run_id and m.step == ref.id]
-        await self._files.write(
+        # A record of a turn that has ALREADY happened, like the journal's own: not
+        # quota gated (`write_record`, #538) — refusing it would fail the step with
+        # no record, and its re-run would repeat every side effect (review R1).
+        await self._files.write_record(
             item_id,
             transcript_path(journal_dir, ref.name, ref.key),
             render_transcript(ref.id, mine).encode(),
@@ -753,11 +767,13 @@ class WorkflowExecutor:
             self._spec,
             recipient=recipient,
             kind="status",
-            title=f"Workflow run failed at “{phase}”",
+            title=f"A workflow failed at “{phase}”",
             # The owner ran it as themselves: one notice, carrying the hint the
             # second one would have — they are the likeliest to need it.
             body=_SIGN_IN_HINT if acting == recipient else "",
-            link=f"/a/{slug}/items/{run.item_id}",
+            # The execution's own tab (plan-workflow-out-of-chat P11; the SPA's item
+            # route is `/a/<slug>/<item>` — `/items/` matched no page).
+            link=execution_link(slug, run.item_id, run_id),
             actor=run.captured_user,
         )
         if identity is None or not acting or acting == recipient:

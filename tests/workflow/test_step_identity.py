@@ -90,3 +90,41 @@ async def test_a_step_knows_the_phase_it_runs_in() -> None:
     await agent_write_step(wf, prompt="p", phase="digest", name="summarise", key="a", out="a.md")
 
     assert phases == ["digest"]
+
+
+async def test_a_retried_agent_step_is_shown_what_it_answered_last_time() -> None:
+    """Review R1: a node no longer reads the conversation (D1), so the retry
+    prompt's "your previous attempt" pointed at nothing the model could see. It
+    now carries that answer itself."""
+    from workspace_app.workflow.checks import file_nonempty
+
+    prompts: list[str] = []
+    wf = _wf([])
+
+    async def drive_turn(prompt: str, tools: list[str] | None) -> str:
+        prompts.append(prompt)
+        if len(prompts) == 2:
+            await wf.write("out.md", "x")
+        return f"answer {len(prompts)}"
+
+    wf.drive_turn = drive_turn
+    await agent_step(wf, prompt="Write out.md", phase="w", check=file_nonempty("out.md"), retries=1)
+
+    assert len(prompts) == 2
+    assert "answer 1" not in prompts[0]
+    assert "answer 1" in prompts[1]
+
+
+async def test_a_retried_write_step_is_shown_what_it_wrote_last_time() -> None:
+    prompts: list[str] = []
+    wf = _wf([])
+
+    async def drive_turn(prompt: str, tools: list[str] | None) -> str:
+        prompts.append(prompt)
+        return "not json at all" if len(prompts) == 1 else '{"ok": true}'
+
+    wf.drive_turn = drive_turn
+    await agent_write_step(wf, prompt="Write it", phase="w", out="o.json", kind="json", retries=1)
+
+    assert len(prompts) == 2
+    assert "not json at all" in prompts[1]

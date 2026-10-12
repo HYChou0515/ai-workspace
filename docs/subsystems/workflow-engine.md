@@ -155,7 +155,7 @@ flowchart TD
 | Steer/decide/retry 增量續跑**同一** run,而非開新 run | 重跑跳過有效(昂貴)前綴,只重跑被 invalidate/下游的 step,steering 便宜且 run 歷史連續;Re-run this step 走 steer 的 invalidate(留稽核收據) | #288 `orchestrator.confirm_steer`/`decide`/`retry` docstring |
 | Orchestrator App-agnostic;API 注入 `load_run`/`load_manifest`/`wire_handle`/`publish`/`release`/`notify_failure` | 讓引擎能用 fake 單元測,並把 Conversation/SSE/sandbox 接線留給 FastAPI 層;`chat_id` 在此是不透明 stream key | `orchestrator.py` docstring |
 | 以 file path 載入 `run.py`,非 `import_module` | profile 目錄名可能非識別字(連字號範例),不是可 import 的 package | `discovery.py` docstring |
-| 每個執行有自己的 conversation(一 conversation 一 run),一 item 上可平行;Continue / Re-run 只在同一個 workflow 沒有別的 run 在跑時才接受 | 執行不在聊天裡、不接管聊天(plan-workflow-out-of-chat D3);同一 workflow 的 run 共用 `/.workflow/<workflow_id>` journal,同時跑會搶同一批 step 檔 | `orchestrator.start` / `orchestrator.retry` |
+| 從網頁/API 啟動的執行各有自己的 conversation(排程的執行共用排程的那一個,一次一個),一 item 上可平行;Continue / Re-run 只給同一個 workflow 最新的那次執行,且沒有別的 run 正在執行(pending / running;停在關卡等人的不算)時才接受;兩個同時按的,CAS 認領只讓一個跑 | 執行不在聊天裡、不接管聊天(plan-workflow-out-of-chat D3);同一 workflow 的 run 共用 `/.workflow/<workflow_id>` journal,同時跑會搶同一批 step 檔 | `orchestrator.start` / `orchestrator.retry` |
 | Journal 從 workspace 根移到 `/.workflow/<workflow_id>/` | 避免 `step_*` artifact 弄亂使用者可見的 workspace,並把每個 workflow 的 journal 各自分隔 | #136 / `handle.journal_dir` |
 | Step board 以 collapse 限界(loop 元素終局時 drop) | 長 step 不該看起來像死掉,但大批次的無界 board 會撐爆資源;計數吸收完成的 loop 元素 | #178 / `run.StepState` + `orchestrator._apply_step_record` |
 

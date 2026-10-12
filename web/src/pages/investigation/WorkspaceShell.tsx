@@ -836,6 +836,20 @@ function ShellBody({
             }}
           />
         )}
+        {/* P9: an execution waiting for the person says so wherever they are in
+            the workspace — folded or not, so Open unfolds to its tab. */}
+        {manifest.function.workspace && _canSeeFiles && (
+          <WaitingNotice
+            slug={manifest.slug}
+            itemId={item.resource_id}
+            profile={String(item.profile ?? manifest.default_profile)}
+            activePath={workspaceVisible ? groups.activeFile : null}
+            onOpen={(path) => {
+              setIdeCollapsed(false);
+              openFile(path);
+            }}
+          />
+        )}
         <div style={{ flex: 1, display: "flex", minHeight: 0, position: "relative" }}>
           {/* #89: the file IDE (activity bar + file tree + editor + bottom
               panel) renders only when the App enables `function.workspace`; a
@@ -843,20 +857,6 @@ function ShellBody({
               terminal tab inside is further gated on `function.terminal` —
               sandbox's only human UI surface (exec/package are backend tools,
               gated by allowed_tools), so there is no separate sandbox pane. */}
-          {/* P9: an execution waiting for the person says so wherever they are in
-              the workspace — folded or not, so Open unfolds to its tab. */}
-          {manifest.function.workspace && _canSeeFiles && (
-            <WaitingNotice
-              slug={manifest.slug}
-              itemId={item.resource_id}
-              profile={String(item.profile ?? manifest.default_profile)}
-              activePath={workspaceVisible ? groups.activeFile : null}
-              onOpen={(path) => {
-                setIdeCollapsed(false);
-                openFile(path);
-              }}
-            />
-          )}
           {manifest.function.workspace && !ideCollapsed && _canSeeFiles && (
             <>
           <ActivityBar
@@ -1781,8 +1781,8 @@ function ActivityBar({
   itemId: string;
 }) {
   // plan-workflow-out-of-chat D7: how many of this item's executions wait for a
-  // person at a gate — the Workflows entry's badge. The same read the sidebar
-  // lists from, polled while any execution is still going.
+  // person at a gate — a count badge on the Workflows entry's icon (Material 3
+  // "Badges"). The same read the sidebar lists from (`runsPollMs` paces it).
   const waiting = (useItemRuns(slug, itemId).data ?? []).filter(
     (r) => r.status === "awaiting_human",
   ).length;
@@ -3717,7 +3717,8 @@ export function StatusBar({
   activeTab: string | null;
   investigationId: string;
 }) {
-  const kind = activeTab ? pickRenderer(activeTab) : null;
+  // A file's facts; an execution's tab is not a file (plan-workflow-out-of-chat D7).
+  const kind = activeTab && !isExecutionPath(activeTab) ? pickRenderer(activeTab) : null;
   const isNotebook = kind === "notebook" && activeTab != null;
   return (
     <div
@@ -3742,7 +3743,7 @@ export function StatusBar({
           notebookPath={activeTab}
         />
       )}
-      <span>UTF-8</span>
+      {kind && <span>UTF-8</span>}
       <span>default-user</span>
     </div>
   );

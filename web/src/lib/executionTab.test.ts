@@ -11,16 +11,19 @@ import {
 // plan-workflow-out-of-chat D7: an execution opens as an editor tab. A tab's
 // identity is its path, so an execution gets a path no file can have.
 describe("execution tab path", () => {
-  it("names an execution by its run, and reads the run back", () => {
-    const path = executionPath("run:abc-123");
-    expect(isExecutionPath(path)).toBe(true);
-    expect(runIdOf(path)).toBe("run:abc-123");
+  it("is the run's own id — the id the AI and the address use", () => {
+    // A WorkflowRun's id carries its model's prefix (`workflow-run:<uuid>`); the
+    // backend pins that (`test_an_executions_path_is_its_run_id`).
+    const id = "workflow-run:3f1c9a2e-0b7d-4e55-9a51-7c2d0f6b8e14";
+    expect(executionPath(id)).toBe(id);
+    expect(isExecutionPath(id)).toBe(true);
+    expect(runIdOf(id)).toBe(id);
   });
 
   it("is never a workspace file's path", () => {
     // workspace paths are absolute (`/notes.md`) or relative (`notes.md`); a
     // file named like the prefix is still a file
-    for (const file of ["/notes.md", "notes.md", "/workflow-run/x", "workflow-run.md"]) {
+    for (const file of ["/notes.md", "notes.md", "/workflow-run/x", "workflow-run.md", "workflow-run:"]) {
       expect(isExecutionPath(file)).toBe(false);
       expect(runIdOf(file)).toBeNull();
     }

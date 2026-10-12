@@ -11,12 +11,18 @@ from .handle import WorkflowHandle
 from .manifest import WorkflowManifest
 
 
+def inputs_path(manifest: WorkflowManifest, upload_dir: str) -> str:
+    """Where a workflow reads its ``input.json``: the manifest's ``input_json`` if
+    pinned, else ``{upload_dir}/input.json`` (#198) so the control file sits in the
+    same staging folder a chat attach lands in. One rule for the run that reads it
+    and the execution page that links it."""
+    return manifest.input_json or f"{upload_dir.rstrip('/')}/input.json"
+
+
 async def resolve_inputs(wf: WorkflowHandle, manifest: WorkflowManifest) -> Any:
-    """Parsed ``input.json`` — ``{}`` when the file is absent so a no-input workflow just
-    runs. The location is the manifest's ``input_json`` if pinned, else
-    ``{upload_dir}/input.json`` (#198) so the control file sits in the same staging folder
-    a chat attach lands in."""
-    path = manifest.input_json or f"{wf.upload_dir.rstrip('/')}/input.json"
+    """Parsed ``input.json`` (at :func:`inputs_path`) — ``{}`` when the file is absent
+    so a no-input workflow just runs."""
+    path = inputs_path(manifest, wf.upload_dir)
     if await wf.exists(path):
         return await wf.read_json(path)
     return {}

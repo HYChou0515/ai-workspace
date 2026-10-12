@@ -2138,7 +2138,8 @@ agent 步驟裡 AI 的呼叫、WUI 的工具呼叫、view plugin、圖表重畫�
 
 - **啟動 workflow 不再接受 `chat_id`**（`POST /a/{slug}/items/{item_id}/run?chat_id=…` 回 **400**，訊息寫明原因，
   而且整個呼叫什麼都不做：不寫上傳的檔案、不啟動 run）。以前帶 `chat_id` 會讓 run 接管那個既有聊天（#343）；
-  現在每個 run 都有自己的對話，聊天不會被接管（`docs/plan-workflow-out-of-chat.md` D3）。
+  現在從網頁或 API 啟動的 run 都開一個自己的對話，聊天不會被接管（`docs/plan-workflow-out-of-chat.md` D3）。
+  排程照舊：同一個排程的執行共用那個排程的一個對話（一次一個），每則訊息標著是哪個執行的。
   **rollout 前**：如果你們有自己的腳本或外部系統會帶 `chat_id` 呼叫這支，把參數拿掉。為什麼：它現在會被明確拒絕，
   而不是默默忽略。沒做的症狀：那支腳本每次都拿到 400，訊息裡寫著 `chat_id is no longer accepted`。
   不帶 `chat_id` 的呼叫（包含 #197 的外部觸發、上傳輸入檔一起送的那種）完全不受影響。
@@ -2146,44 +2147,59 @@ agent 步驟裡 AI 的呼叫、WUI 的工具呼叫、view plugin、圖表重畫�
   檔案、`input.json`）；以前它會讀整串對話，包括被接管前的聊天、前面每個 step 的回覆、同一個排程對話裡之前的 run。
   出貨的 workflow 都已確認不依賴這件事（計畫 P1）。**自訂的 workflow** 若有 node 的 prompt 寫「依照上面的內容」
   卻沒有指名要讀哪個檔案，升版後它會看不到前文：改成在 prompt 裡指名檔案或引用上游的 `outputs`。
+  一個 agent step 沒過檢查而重試時，重試的 prompt 裡會附上它上一次的回答（最多 4000 字）——以前它是從對話歷史看到的。
 - **聊天裡不再有 workflow**：聊天列表只列真正的聊天（為 run 開的對話、排程的對話不再出現，改在 workspace 的
   Workflows 側欄）；聊天標頭的「Workflows」按鈕、列表上方的「在這個聊天裡啟動」、「New…」選單裡的 workflow、
   聊天裡的進度列與確認卡片都移除，「New…」變成一顆「New chat」按鈕。被 #343 接管過、裡面有人說過話的舊聊天照樣列出。
+- **chat-only 的 App（`function.workspace: false`）在網頁上不再有任何 workflow 入口**。以前它們能從聊天的
+  「New…」選單或標頭的「Workflows」按鈕啟動 workflow；新的入口（Workflows 側欄、執行分頁、等待提示）只在
+  workspace 模式。排程照跑，但停在關卡等人決定的執行，在 chat-only App 的網頁上沒有地方決定。
+  **rollout 前**：若有 chat-only 的 App 的 profile 帶著 workflow（`app.json` 的 `function.workspace` 為 false、profile 有
+  `workflows`），決定它要不要改成 workspace 模式。沒做的症狀：使用者找不到原本聊天裡的 workflow 按鈕。
 - **一般聊天不再讀到 run 的內容**：run 寫下的訊息帶有標記，聊天組 context 時排除；以前被 #343 接管過的舊聊天，
-  run 那段時間內沒有標記的訊息也一併排除。
+  run 那段時間內沒有標記的訊息也一併排除——人自己打的字除外，一律保留。
 - **用文字修改執行（steer）時，steer 回的 JSON 不再出現在對話裡**：以前那段 JSON 會被當成 agent 的回覆存進執行的對話、
-  也會即時串流出來（解析失敗重試時最多三次），而使用者自己寫的要求反而看不到。現在只顯示確認卡片，卡片上寫著那句要求。
+  也會即時串流出來（解析失敗重試時最多三次），而使用者自己寫的要求反而看不到。現在只顯示確認卡片，卡片上寫著那句要求；
+  提不出計畫時，執行分頁寫出原因。按 Stop 會連 steer 的那一輪一起停掉。
 - **workflow 改在 workspace 左側的「Workflows」**（活動列上唯一印出名字的圖示）啟動與追蹤：上半列出能啟動的 workflow，
-  下半列出這個 item 的執行（新的在上，狀態、「Step N of M」、排程啟動的標「Scheduled」）；有執行在等人決定時，
-  圖示上有數字。chat-only 的 App 沒有這個入口，和以前一樣。
+  下半列出這個 item 的執行（新的在上：名稱與開始時間、狀態、「Step N of M」、排程啟動的標「Scheduled」）；
+  有執行在等人決定時，圖示上有數字。
 - **執行開在編輯區的分頁**：分頁名稱是「workflow 名 · 開始時間」，列出每個階段（預設收合；跑到的、等人決定的、
-  失敗的會打開），等人決定的在那一列直接決定；失敗的那一列有「Continue from here」（已經做完的跳過）和
-  「Re-run this step」（那一步重做，後面的照輸入有沒有變決定要不要重做）；`⋯` 裡的「Change this execution…」是以前的 steer。
-  新路由 `POST /a/{slug}/items/{item_id}/runs/{run_id}/retry`。
+  失敗的會打開而且收不起來），等人決定的在那一列直接決定；失敗的那一列有「Continue from here」（已經做完的跳過）、
+  「Re-run this step」（那一步重做，後面的照輸入有沒有變決定要不要重做）、「Inputs」（打開它讀的 `input.json`）；
+  `⋯` 裡的「Change this execution…」是以前的 steer。新路由 `POST /a/{slug}/items/{item_id}/runs/{run_id}/retry`。
+  同一個 workflow 的執行共用一份 journal，所以**只有最新的那一次**提供結果檔、transcript、Continue 與 Re-run；
+  較舊的執行會寫明「有更新的執行跑過了」，它自己的訊息照樣看得到。
 - 執行的分頁有「Open a chat with these results」（執行結束後）和失敗那一列的「Ask AI why it failed」：開一個**新**聊天，
   把執行的編號、結果檔（或那一步的錯誤與 transcript 路徑）放進輸入框，不會自動送出。聊天裡的 AI 可以用
-  `show_file` 叫出某個執行的卡片（路徑寫成 `workflow-run:<id>`），只限這個 item 的執行。
-- **排程總表（`/schedules`）的「上次執行」連到那個執行的分頁**（`/a/<slug>/<item>?open=workflow-run:<id>`），
+  `show_file` 叫出某個執行的卡片（路徑就是執行的編號 `workflow-run:<uuid>`），只限這個 item 的執行。
+- **排程總表（`/schedules`）的「上次執行」連到那個執行的分頁**（`/a/<slug>/<item>?open=<執行編號>`），
   不再連到排程的對話（`?chat=`）。舊的 `?chat=` 書籤會打開 item，但落在最近的聊天上。
-- 有執行在等人決定時，workspace 右下角會出現一則提示（哪個執行、等什麼），按 Open 到那個執行的分頁；
-  不會自己消失，可以關掉，下一個關卡會再提示。
+  **workflow 失敗的通知**也改連到那個執行的分頁（以前的 `/a/<slug>/items/<item>` 對不到任何頁面），標題改成
+  「A workflow failed at “…”」。
+- 有執行在等人決定時，workspace 頂列下方會出現一條提示（哪個執行、等什麼），按 Open 到那個執行的分頁；
+  不會自己消失，可以關掉，下一個關卡會再提示。沒有執行在跑時，畫面每 30 秒重新看一次這個 item 的執行
+  （有在跑的時候每 2 秒），所以排程或別人啟動的執行也會出現。
 - **`GET …/runs/{run_id}` 和 `…/runs/{run_id}/stream` 會檢查這個 run 屬於網址裡的 item**，不屬於就回 404。
   以前不檢查：對某個 item 有讀取權，就能用它的網址讀到別的 item 的 run 和即時串流。正常的呼叫（用 run 自己的 item）不受影響；
   若有外部腳本用錯的 item 網址去讀 run，升版後會拿到 404，改成用 run 自己的 item 網址。
-- 每個 agent step 會在 journal 裡、產物旁邊多寫一份 `step_<名稱>/<key 或 main>.transcript.md`（每次嘗試的
-  prompt、思考、tool 呼叫與回覆），供「問 AI 為什麼失敗」讀取。它和產物一起被 steer 作廢、被 map 清理。
+- 每個 agent step 會在 journal 裡、產物旁邊多寫一份 `step_<名稱>/<key 或 main>.transcript.md`（prompt、思考、
+  tool 呼叫與回覆），供「問 AI 為什麼失敗」讀取。它和產物一樣是「已經發生的事的紀錄」，不受 workspace 容量上限擋
+  （和 journal 的紀錄同一條規則，#538）；它和產物一起被 steer 作廢、被 map 清理。
 
-**資料** — 不用 migrate，沒有 `Schema` 升版。`Message` 多了三個有預設值的欄位（`run_id`、`step`、`phase`），`WorkflowRun` 多了 `schedule_key`（預設 `""`），
-舊資料照樣讀得出來。升版前由排程啟動的執行沒有這個欄位，所以側欄不會標「Scheduled」——這是預期的，不用補。
+**資料** — 不用 migrate，沒有 `Schema` 升版。`Message` 多了三個有預設值的欄位（`run_id`、`step`、`phase`），
+`WorkflowRun` 多了 `schedule_key`（預設 `""`），舊資料照樣讀得出來。升版前由排程啟動的執行沒有這個欄位，所以側欄不會標
+「Scheduled」——這是預期的，不用補。
 
 **k8s · CI 側** — 沒有新的 manifest、env、probe 或 JobType；照常重 build、照常部署。
 
 **確認做完**（`rollout 後`）：
 
-- `curl -X POST '<api>/a/<slug>/items/<item>/run?chat_id=x'` 回 400 且訊息含 `chat_id is no longer accepted`。
-  沒部署到這一版的症狀：回 202，run 跑進那個聊天。
+- `curl -X POST '<api>/a/<slug>/items/<item>/run?chat_id=<這個 item 的一個聊天 id>'` 回 400 且訊息含
+  `chat_id is no longer accepted`。沒部署到這一版的症狀：回 202，run 接管了那個聊天（給一個不存在的 id 時，舊版回 404）。
 - 用另一個 item 的網址讀某個 run：`curl '<api>/a/<slug>/items/<另一個 item>/runs/<run>'` 回 404。
   沒部署到這一版的症狀：回 200 和那個 run 的內容。
+- 打開一個 workspace 模式的 item：左側活動列有印著「Workflows」的圖示，點開列出它的 workflow 與執行。
 
 ## 附錄 A：資料回填的機制（specstar 為什麼不會自己補）
 

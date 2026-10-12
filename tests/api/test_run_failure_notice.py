@@ -58,7 +58,7 @@ def test_the_person_a_failed_run_ran_as_is_told_where_to_sign_in_again():
 
     assert _inbox(spec) == [
         ("bob", "/my-env"),
-        ("owner-o", f"/a/playground/items/{item_id}"),
+        ("owner-o", f"/a/playground/{item_id}?open=run-1"),
     ]
 
 

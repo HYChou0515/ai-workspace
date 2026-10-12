@@ -19,3 +19,6 @@ export const subscribeChatRequest = bus.subscribe;
 
 /** Ask the item's chat for a new chat whose composer holds `draft`. */
 export const publishChatRequest = bus.publish;
+
+/** Whether the item's chat is mounted to answer (not on the editor-area page). */
+export const canRequestChat = bus.has;

@@ -437,7 +437,8 @@ async def show_file_impl(
     in split panes.
 
     To show a workflow execution — its steps, their status and results — give
-    `path` as `workflow-run:<id>`. The user gets a card that opens it.
+    `path` as its id (it starts with `workflow-run:`). The user gets a card that
+    opens it.
 
     Call it once per file — or once per layout — as soon as the files exist,
     then carry on.
@@ -483,9 +484,9 @@ def _show_execution(actx: AgentToolContext, inv: str, path: str, caption: str | 
     or one that does not exist, declares nothing."""
     from ..workflow.run import EXECUTION_MIME, EXECUTION_PATH_PREFIX, WorkflowRun
 
-    run_id = path[len(EXECUTION_PATH_PREFIX) :]
+    run_id = path  # an execution's path is its run's id (`workflow-run:<uuid>`)
     run = None
-    if actx.spec is not None and run_id:
+    if actx.spec is not None and len(run_id) > len(EXECUTION_PATH_PREFIX):
         with contextlib.suppress(ResourceIDNotFoundError):
             run = actx.spec.get_resource_manager(WorkflowRun).get(run_id).data
     if not isinstance(run, WorkflowRun) or run.item_id != inv:

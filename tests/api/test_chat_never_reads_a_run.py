@@ -192,3 +192,70 @@ def test_a_run_conversation_is_a_chat_only_if_a_person_spoke_in_it() -> None:
     # a run conversation from before marks: its steps' unmarked answers
     assert not is_chat(conv(_m("a legacy step's answer", 5)))
     assert is_chat(conv(_m("asked after the run", 99, role="user")))
+
+
+# ── review round 1 ──
+
+
+def test_a_persons_own_words_inside_a_runs_window_are_kept() -> None:
+    """Review R1: a window that never closed (a gate, a failed steer) cut every
+    later word a person typed in that chat out of its history. A person's message
+    was never a run's output."""
+    msgs = [_m("my question", 50, role="user"), _m("legacy step", 60)]
+
+    kept = without_runs(msgs, [RunWindow(started=10, ended=None)])
+
+    assert [m.content for m in kept] == ["my question"]
+
+
+async def test_a_run_that_settled_without_an_end_time_lets_the_chat_go_on() -> None:
+    """Review R1: a steer that failed or was stopped settles `cancelled` with no
+    `ended`, and its window read as open forever — the chat lost every turn after
+    it. A settled run's window closes where it last did anything."""
+    from workspace_app.workflow.run import RunStatus, WorkflowRun
+
+    def seed(spec: Any, item_id: str, rid: str, conv: Any) -> None:
+        conv.run_id = "legacy-run"
+        spec.get_resource_manager(WorkflowRun).create(
+            WorkflowRun(
+                item_id=item_id,
+                captured_user="u",
+                chat_id=rid,
+                status=RunStatus.CANCELLED,
+                started=1,
+                ended=None,
+                progress_at=2,
+            )
+        )
+
+    second = await _second_turns_history(seed)
+
+    assert "first" in second and "reply" in second
+
+
+async def test_a_run_waiting_at_a_gate_does_not_swallow_the_chat_after_it() -> None:
+    """A gate may wait for days. Its window closes where the run last did anything
+    (`progress_at`): the chat's own replies after that are the chat's."""
+    from workspace_app.workflow.run import RunStatus, WorkflowRun
+
+    def seed(spec: Any, item_id: str, rid: str, conv: Any) -> None:
+        at = conv.messages[-1].created_at + 1
+        # written by the run before it reached its gate, before messages were marked
+        conv.messages.append(_m("a legacy step's answer", at + 1))
+        conv.run_id = "legacy-run"
+        spec.get_resource_manager(WorkflowRun).create(
+            WorkflowRun(
+                item_id=item_id,
+                captured_user="u",
+                chat_id=rid,
+                status=RunStatus.AWAITING_HUMAN,
+                started=at,
+                ended=None,
+                progress_at=at + 5,  # where it last acted: reaching the gate
+            )
+        )
+
+    second = await _second_turns_history(seed)
+
+    assert "a legacy step's answer" not in second  # inside the run, up to its gate
+    assert "first" in second and "reply" in second

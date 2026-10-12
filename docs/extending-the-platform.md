@@ -878,8 +878,8 @@ DSL 的天花板(刻意收窄):
 `save_workflow` tool 在寫入前**驗證**(schema、phase 一致、`tools` ⊆ profile 上限、capability 在
 允許清單、`check` 格式)並把無效的 DSL **退回原因讓 AI 修**。它存進
 `<workspace>/.workflows/<id>.json`(FileStore、item-local、live 讀,同名 **shadow** 掉 package
-workflow,**不是** specstar resource)。FE 的 **Workflows 面板**(`WorkflowsModal`,掛在
-AgentPanel)每列一個 **Run** + 下載／匯入;使用者按 Run,既有的 Run 端點／orchestrator／journal／
+workflow,**不是** specstar resource)。FE 的 **Workflows 面板**(`WorkflowsModal`,從 workspace
+Workflows 側欄的「Manage workflows…」開啟)每列一個 **Run** + 下載／匯入;使用者按 Run,既有的 Run 端點／orchestrator／journal／
 gate 機制原樣把它跑起來。
 
 當一個 user workflow 穩定了,dev 可以把它**升格**成 profile 內建(免 transpile,因為同一個

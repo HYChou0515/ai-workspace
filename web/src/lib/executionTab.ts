@@ -2,20 +2,23 @@ import type { RunStatus } from "../api/workflows";
 
 /**
  * An execution's editor tab (plan-workflow-out-of-chat D7). A tab is known by
- * its path, so an execution gets one no workspace file can have: workspace paths
- * are absolute (`/notes.md`) or relative (`notes.md`) and never carry a scheme.
- * The shell asks `isExecutionPath` before treating a tab as a file — a file
- * that is absent closes its tab, an execution never is one.
+ * its path, and an execution's path is its run's own id: a WorkflowRun's id
+ * carries its model's prefix (`workflow-run:<uuid>`), which no workspace path
+ * has — those are absolute (`/notes.md`) or relative (`notes.md`) and carry no
+ * scheme. One string, so the id the AI passes to `show_file`, the one in an
+ * address and the tab's are the same; the backend pins the prefix
+ * (`EXECUTION_PATH_PREFIX`). The shell asks `isExecutionPath` before treating a
+ * tab as a file — a file that is absent closes its tab, an execution never is one.
  */
 
 const PREFIX = "workflow-run:";
 
 export function executionPath(runId: string): string {
-  return `${PREFIX}${runId}`;
+  return runId;
 }
 
 export function isExecutionPath(path: string): boolean {
-  return path.startsWith(PREFIX);
+  return path.startsWith(PREFIX) && path.length > PREFIX.length;
 }
 
 /** The item page's address parameter that opens an execution's tab: the
@@ -26,12 +29,12 @@ export const OPEN_PARAM = "open";
  * execution's path; the parameter is not a way to open arbitrary files. */
 export function executionFromAddress(search: string): string | null {
   const path = new URLSearchParams(search).get(OPEN_PARAM);
-  return path && isExecutionPath(path) && runIdOf(path) ? path : null;
+  return path && isExecutionPath(path) ? path : null;
 }
 
 /** The run an execution tab shows, or null for any other tab. */
 export function runIdOf(path: string): string | null {
-  return isExecutionPath(path) ? path.slice(PREFIX.length) : null;
+  return isExecutionPath(path) ? path : null;
 }
 
 const pad = (n: number) => String(n).padStart(2, "0");

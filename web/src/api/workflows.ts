@@ -123,6 +123,11 @@ export type WorkflowRunDTO = {
   /** Per step on the board: where its result and transcript are in the journal,
    * named by the server's own layout (GET one run only). */
   step_files?: Record<string, { result: string; transcript: string }>;
+  /** Whether this is the newest execution of its workflow on the item: its runs
+   * share one journal, so only the newest one's step files are its own. */
+  latest?: boolean;
+  /** The `input.json` the workflow reads (GET one run only). */
+  inputs_path?: string;
 };
 
 /** One pre-flight checklist line in the launch dialog (#283). `severity` is
@@ -356,15 +361,12 @@ export const workflowApi = {
     slug: string,
     itemId: string,
     workflowId = "",
-    chatId = "",
   ): Promise<{ run_id: string; item_id: string; chat_id: string }> {
-    // topic-hub §3/§4: launching opens a workflow CHAT (returns its chat_id) and
-    // `workflow_id` picks which of the profile's workflows to run. #343: with a
-    // `chatId`, the run TAKES OVER that existing chat (the one prepared in) instead
-    // of opening a fresh one — the returned chat_id is that same chat.
+    // Launching opens the execution's own conversation (returns its chat_id);
+    // `workflow_id` picks which of the profile's workflows to run. No chat is
+    // ever taken over (plan-workflow-out-of-chat D3: `chat_id` is answered 400).
     const params = new URLSearchParams();
     if (workflowId) params.set("workflow_id", workflowId);
-    if (chatId) params.set("chat_id", chatId);
     const qs = params.toString() ? `?${params}` : "";
     return jsonOrThrow(
       await apiFetch(`${base(slug, itemId)}/run${qs}`, { method: "POST" }),

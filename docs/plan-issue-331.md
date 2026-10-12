@@ -1,5 +1,7 @@
 # Plan — #331 topic-hub 沒有 step 以外的詳細進度
 
+> 被 #911（plan-workflow-out-of-chat.md）推翻
+
 > 來源：#331「topic-hub 沒有 step 以外的詳細進度」+ 內文「#283 沒修復？」。
 > 經 /grill-me 收斂：這是 #283 進度視覺化的**回歸**，不是新功能。
 

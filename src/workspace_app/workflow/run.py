@@ -15,11 +15,13 @@ from msgspec import Struct, field
 
 from ..apps.base import IndexedFields
 
-#: An execution's tab path in the web UI, and what `show_file` takes to show one
-#: (plan-workflow-out-of-chat D7 / D8). Mirrors `PREFIX` in
-#: `web/src/lib/executionTab.ts` — keep them in sync.
+#: How a WorkflowRun's id begins (specstar prefixes an id with its model's
+#: name). An execution's tab path in the web UI IS its run id, and `show_file`
+#: takes it as the path (plan-workflow-out-of-chat D7 / D8). Mirrors `PREFIX` in
+#: `web/src/lib/executionTab.ts`; both are pinned by tests.
 EXECUTION_PATH_PREFIX = "workflow-run:"
-#: The `mime` an execution's card is declared with, which the chat renders as one.
+#: The `mime` an execution's card is declared with (the shown-files declaration
+#: needs one); the chat picks the execution card by its path, not by this.
 EXECUTION_MIME = "application/x-workflow-execution"
 
 

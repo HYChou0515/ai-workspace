@@ -3,8 +3,11 @@ import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import type { QueryClient } from "@tanstack/react-query";
+
 import type { FileService } from "../api/fileService";
 import { itemChatApi } from "../api/itemChats";
+import { makeQueryClient } from "../api/queryClient";
 import type { Message } from "../api/types";
 import { workflowApi, type ProfileDTO, type WorkflowRunDTO } from "../api/workflows";
 import { workspaceWorkflowsApi } from "../api/workspaceWorkflows";
@@ -59,7 +62,7 @@ const STARTED = new Date(2026, 9, 12, 14, 3).getTime();
 
 const run = (over: Partial<WorkflowRunDTO> = {}): WorkflowRunDTO =>
   ({
-    run_id: "r1",
+    run_id: "workflow-run:r1",
     item_id: "it",
     workflow_id: "classify",
     chat_id: "conversation:c1",
@@ -92,11 +95,11 @@ let persisted: Message[] = [];
 
 beforeEach(() => {
   persisted = [
-    msg({ role: "user", content: "Read the wafers", run_id: "r1", step: "read", phase: "read", driven_by: "workflow" }),
-    msg({ content: "Read 12 wafers", run_id: "r1", step: "read", phase: "read" }),
-    msg({ role: "user", content: "Sort them by defect", run_id: "r1", step: "sort", phase: "sort", driven_by: "workflow" }),
+    msg({ role: "user", content: "Read the wafers", run_id: "workflow-run:r1", step: "read", phase: "read", driven_by: "workflow" }),
+    msg({ content: "Read 12 wafers", run_id: "workflow-run:r1", step: "read", phase: "read" }),
+    msg({ role: "user", content: "Sort them by defect", run_id: "workflow-run:r1", step: "sort", phase: "sort", driven_by: "workflow" }),
     // another execution of a schedule that shares this conversation
-    msg({ content: "From an older execution", run_id: "r0", step: "read", phase: "read" }),
+    msg({ content: "From an older execution", run_id: "workflow-run:r0", step: "read", phase: "read" }),
   ];
   vi.spyOn(workflowApi, "listProfiles").mockResolvedValue(PROFILES);
   vi.spyOn(workspaceWorkflowsApi, "list").mockResolvedValue([]);
@@ -104,21 +107,26 @@ beforeEach(() => {
   vi.spyOn(itemChatApi, "getChat").mockImplementation(async () => ({
     chatId: "conversation:c1",
     title: "",
-    runId: "r1",
+    runId: "workflow-run:r1",
     messages: persisted,
   }));
 });
 
-const render = (onOpenFile = vi.fn()) => {
+const render = (
+  onOpenFile = vi.fn(),
+  exists: (p: string) => Promise<boolean> = async () => true,
+  client?: QueryClient,
+) => {
   renderWithQuery(
     <ExecutionView
       slug="hub"
       itemId="it"
-      runId="r1"
+      runId="workflow-run:r1"
       profile="default"
-      fileService={{ exists: async () => true } as unknown as FileService}
+      fileService={{ exists } as unknown as FileService}
       onOpenFile={onOpenFile}
     />,
+    client,
   );
   return onOpenFile;
 };
@@ -183,7 +191,7 @@ describe("ExecutionView", () => {
     const cancel = vi.spyOn(workflowApi, "cancelRun").mockResolvedValue();
     render();
     fireEvent.click(await screen.findByRole("button", { name: "Stop" }));
-    await waitFor(() => expect(cancel).toHaveBeenCalledWith("hub", "it", "r1"));
+    await waitFor(() => expect(cancel).toHaveBeenCalledWith("hub", "it", "workflow-run:r1"));
 
     cleanup();
     vi.mocked(workflowApi.getRun).mockResolvedValue(run({ status: "done", ended: STARTED + 1 }));
@@ -205,7 +213,7 @@ describe("ExecutionView", () => {
     expect(toggle(sort)).toHaveAttribute("aria-expanded", "true");
     const card = await within(sort).findByTestId("wf-decision-card");
     fireEvent.click(within(card).getByRole("button", { name: /approve/i }));
-    await waitFor(() => expect(decide).toHaveBeenCalledWith("hub", "it", "r1", { choice: "approve" }));
+    await waitFor(() => expect(decide).toHaveBeenCalledWith("hub", "it", "workflow-run:r1", { choice: "approve" }));
   });
 
   describe("a failed step", () => {
@@ -242,9 +250,9 @@ describe("ExecutionView", () => {
       render();
       const sort = await row("sort");
       fireEvent.click(within(sort).getByRole("button", { name: "Continue from here" }));
-      await waitFor(() => expect(retry).toHaveBeenCalledWith("hub", "it", "r1", ""));
+      await waitFor(() => expect(retry).toHaveBeenCalledWith("hub", "it", "workflow-run:r1", ""));
       fireEvent.click(within(sort).getByRole("button", { name: "Re-run this step" }));
-      await waitFor(() => expect(retry).toHaveBeenCalledWith("hub", "it", "r1", "sort"));
+      await waitFor(() => expect(retry).toHaveBeenCalledWith("hub", "it", "workflow-run:r1", "sort"));
     });
 
     it("says why continuing was refused", async () => {
@@ -275,7 +283,7 @@ describe("ExecutionView", () => {
       target: { value: "use the new collection" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Propose the change" }));
-    await waitFor(() => expect(steer).toHaveBeenCalledWith("hub", "it", "r1", "use the new collection"));
+    await waitFor(() => expect(steer).toHaveBeenCalledWith("hub", "it", "workflow-run:r1", "use the new collection"));
 
     cleanup();
     vi.mocked(workflowApi.getRun).mockResolvedValue(
@@ -287,7 +295,7 @@ describe("ExecutionView", () => {
     const confirm = vi.spyOn(workflowApi, "confirmSteer").mockResolvedValue();
     render();
     fireEvent.click(await screen.findByTestId("wf-steer-approve"));
-    await waitFor(() => expect(confirm).toHaveBeenCalledWith("hub", "it", "r1", true));
+    await waitFor(() => expect(confirm).toHaveBeenCalledWith("hub", "it", "workflow-run:r1", true));
   });
 });
 
@@ -355,5 +363,150 @@ describe("asking the AI about an execution", () => {
     expect(drafts[0]).toContain("/.workflow/classify/step_sort/main.transcript.md");
     expect(drafts[0]).toContain("workflow-run:r1");
     stop();
+  });
+});
+
+// ── review round 1 ──
+
+const failedRun = (over: Partial<WorkflowRunDTO> = {}) =>
+  run({
+    status: "error",
+    ended: STARTED + 9,
+    phases: [
+      { phase: "read", status: "passed", done: 1, total: 1, failed: 0 },
+      { phase: "sort", status: "failed", done: 0, total: 1, failed: 1 },
+    ],
+    steps: [
+      { phase: "read", name: "read", key: "", status: "passed", attempts: 1, reason: "", started: 1, ended: 2 },
+      { phase: "sort", name: "sort", key: "", status: "failed", attempts: 1, reason: "sort broke", started: 3, ended: 4 },
+    ],
+    latest: true,
+    inputs_path: "/uploads/input.json",
+    ...over,
+  } as Partial<WorkflowRunDTO>);
+
+describe("review round 1", () => {
+  it("never collapses the step being worked on, even from its own header (D7)", async () => {
+    render();
+    const sort = await row("sort");
+    expect(toggle(sort)).toHaveAttribute("aria-disabled", "true"); // WAI-ARIA APG
+    fireEvent.click(toggle(sort));
+    expect(toggle(await row("sort"))).toHaveAttribute("aria-expanded", "true");
+  });
+
+  it("offers no Re-run when the step that broke is not a named step on the board", async () => {
+    // a loop element failed: it has left the board; the phase's named step passed
+    vi.mocked(workflowApi.getRun).mockResolvedValue(
+      failedRun({
+        steps: [
+          { phase: "read", name: "read", key: "", status: "passed", attempts: 1, reason: "", started: 1, ended: 2 },
+          { phase: "sort", name: "prepare", key: "", status: "passed", attempts: 1, reason: "", started: 3, ended: 4 },
+        ],
+      }),
+    );
+    render();
+    const sort = await row("sort");
+    expect(await within(sort).findByRole("button", { name: "Continue from here" })).toBeInTheDocument();
+    expect(within(sort).queryByRole("button", { name: "Re-run this step" })).toBeNull();
+  });
+
+  it("links the inputs the failed step was given (D9)", async () => {
+    vi.mocked(workflowApi.getRun).mockResolvedValue(failedRun());
+    const onOpenFile = render();
+    fireEvent.click(await within(await row("sort")).findByRole("button", { name: "Inputs" }));
+    expect(onOpenFile).toHaveBeenCalledWith("/uploads/input.json");
+  });
+
+  it("shows a closed step's result in its row (D6)", async () => {
+    const onOpenFile = render();
+    const read = await row("read");
+    expect(toggle(read)).toHaveAttribute("aria-expanded", "false");
+    fireEvent.click(within(read).getByRole("button", { name: "Result" }));
+    expect(onOpenFile).toHaveBeenCalledWith("/.workflow/classify/step_read/main.json");
+  });
+
+  it("an older execution says a newer one has run, and offers nothing that would touch its files", async () => {
+    const { subscribeChatRequest } = await import("../lib/chatRequestBus");
+    const stop = subscribeChatRequest("it", () => {});
+    vi.mocked(workflowApi.getRun).mockResolvedValue(failedRun({ latest: false, step_files: {} }));
+    render();
+    expect(await screen.findByText(/A newer execution of this workflow has run since/)).toBeInTheDocument();
+    const sort = await row("sort");
+    expect(within(sort).queryByRole("button", { name: "Continue from here" })).toBeNull();
+    expect(within(sort).queryByRole("button", { name: "Re-run this step" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Open a chat with these results" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Result" })).toBeNull();
+    // its own record still reads, and the AI can still be asked
+    expect(within(sort).getByRole("button", { name: "Ask AI why it failed" })).toBeInTheDocument();
+    stop();
+  });
+
+  it("offers no chat about the execution where no chat is there to open", async () => {
+    vi.mocked(workflowApi.getRun).mockResolvedValue(failedRun());
+    render();
+    await within(await row("sort")).findByRole("button", { name: "Continue from here" });
+    expect(screen.queryByRole("button", { name: "Ask AI why it failed" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Open a chat with these results" })).toBeNull();
+  });
+
+  it("says why a proposed change could not be made", async () => {
+    vi.mocked(workflowApi.getRun).mockResolvedValue(
+      run({ status: "cancelled", ended: STARTED + 2, result: { steer_error: "the model gave no plan" } }),
+    );
+    render();
+    expect(await screen.findByText(/The change could not be proposed: the model gave no plan/)).toBeInTheDocument();
+  });
+
+  it("puts a run's messages that belong to no step under Not in a step", async () => {
+    persisted.push(msg({ content: "Said outside any step", run_id: "workflow-run:r1" }));
+    render();
+    const section = await screen.findByRole("region", { name: "Not in a step" });
+    expect(within(section).getByText("Said outside any step")).toBeInTheDocument();
+  });
+
+  it("asks again whether the transcript exists once the step has moved on", async () => {
+    // Review R1: the answer cached while the step ran (no transcript yet) was
+    // reused after it failed, so the link and the AI's pointer went missing.
+    let written = false;
+    vi.mocked(workflowApi.getRun)
+      .mockResolvedValueOnce(run())
+      .mockResolvedValue(failedRun());
+    // the app's own client: its staleTime is what kept the stale answer
+    render(vi.fn(), async () => written, makeQueryClient());
+    await row("sort");
+    written = true; // the turn wrote it, then the step failed
+    expect(
+      await within(await row("sort")).findByRole("button", { name: "Transcript" }, { timeout: 4000 }),
+    ).toBeInTheDocument();
+  });
+});
+
+describe("a row closed by hand", () => {
+  it("opens again when its step fails — a failed step is never collapsed (D7)", async () => {
+    vi.mocked(workflowApi.getRun)
+      .mockResolvedValueOnce(run())
+      .mockResolvedValue(
+        failedRun({
+          phases: [
+            { phase: "read", status: "passed", done: 1, total: 1, failed: 0 },
+            { phase: "sort", status: "passed", done: 1, total: 1, failed: 0 },
+            { phase: "write", status: "failed", done: 0, total: 1, failed: 1 },
+          ],
+          current_phase: "write",
+        }),
+      );
+    render();
+    fireEvent.click(toggle(await row("write"))); // open it while pending…
+    fireEvent.click(toggle(await row("write"))); // …and close it again
+    expect(toggle(await row("write"))).toHaveAttribute("aria-expanded", "false");
+    // then its step fails: the row opens, whatever the hand did before
+    await waitFor(
+      () =>
+        expect(toggle(screen.getAllByTestId("execution-step")[2])).toHaveAttribute(
+          "aria-expanded",
+          "true",
+        ),
+      { timeout: 4000 },
+    );
   });
 });

@@ -124,8 +124,9 @@ Report the list before P2 changes behaviour.
     Steps side by side (`gather`, map elements) each hold their own copy.
   - The transcript sits beside the artifact,
     `step_<name>/<key or main>.transcript.md` (`engine.transcript_path`, one
-    rule with `_artifact_path`). It holds every attempt, rendered from the
-    step's marked messages. Map GC prunes a departed element's transcript with
+    rule with `_artifact_path`). It holds every attempt that finished,
+    rendered from the step's marked messages; an attempt cut off by
+    `step_timeout_s` is cancelled before the transcript is written. Map GC prunes a departed element's transcript with
     its artifact; steer's `step_<name>/*` invalidation already took both.
   - Mutation-probed: 13 guard lines, each reddening the P2 tests; the control
     stays green.
@@ -230,14 +231,15 @@ so a schedule's shared conversation shows one execution at a time.
     the run carries `schedule_key`, a new `WorkflowRun` field. That field is
     set only by `start_page_schedule`, so runs started before this version are
     never marked.
-  - `useItemRuns` polls every 2 s while any execution is not terminal
-    (`runsPollMs`), so progress and the badge move on their own.
+  - `useItemRuns` polls every 2 s while any execution is pending or running,
+    every 30 s otherwise (`runsPollMs`; as amended in review round 1, below).
   - The rail entry is the only one with its name printed under the icon. The
     older five keep tooltip-only names: a 50 px rail cannot print "Search
     files", and changing them was not asked for. Its badge counts
     `awaiting_human` executions, and its accessible name says "Workflows, N
     waiting for you".
-  - A row opens `workflow-run:<run_id>` (`lib/executionTab.ts`) as a tab. The
+  - A row opens the execution's tab, whose path is its run id
+    (`lib/executionTab.ts`; as amended by the live check, below). The
     tab renders from P8.
   - Mutation probes, each reddening its test: the waiting filter, the profile
     fallback, the printed label, the sort order, the schedule mark, and the
@@ -257,7 +259,7 @@ so a schedule's shared conversation shows one execution at a time.
       `apply_steer`, which also writes the audit receipt. The steps after it
       re-run as far as their inputs changed.
     - It is refused (409) for a run that is not `error` / `cancelled`, while
-      another run of the same workflow on the item is live (its runs share one journal), or when the
+      another run of the same workflow on the item is executing (pending or running; its runs share one journal), or when the
       workflow no longer loads. It is refused (400) for a name that is not a
       named step on the board; the name reaches a journal glob.
     - The phases, the board, `ended` and `result` restart: a skipped step counts
@@ -288,7 +290,8 @@ so a schedule's shared conversation shows one execution at a time.
       decided in its row (`WorkflowDecisionCard` + `CardDiffReview`).
     - A failed row offers Continue from here and Re-run this step. Re-run
       names the failed named step; a failed loop element has none, so only
-      Continue shows.
+      Continue shows (true since review round 1, which dropped a fallback that
+      offered another named step of the phase).
     - Messages with no phase, and unmarked ones in a conversation that is this
       execution's own, show under "Not in a step"; they are never guessed into
       a row.
@@ -338,7 +341,7 @@ gate.
 - "Open a chat with these results".
 - "Ask AI why it failed", reading `transcript.md`.
 - **Built:**
-  - `show_file` takes `path: "workflow-run:<id>"` (`EXECUTION_PATH_PREFIX`,
+  - `show_file` takes an execution's id as `path` (`EXECUTION_PATH_PREFIX`,
     pinned equal to the FE's `PREFIX` by a test). It declares a card with mime
     `application/x-workflow-execution` for an execution of this workspace, and
     declares nothing for another workspace's or an unknown one.
@@ -356,7 +359,7 @@ gate.
       chat is drawn; from the create's callback the draft went to the chat in
       front before (probed).
     - `WorkspaceShell` unfolds a folded chat.
-  - The results draft names the execution (`workflow-run:<id>`) and the result
+  - The results draft names the execution (its run id) and the result
     files of the steps that passed or were skipped, never transcripts (D8). The
     why draft names the step, its error, and its transcript when one exists.
   - How the AI learns an id: these drafts. A chat started anywhere else does
@@ -383,7 +386,7 @@ gate.
   - `subsystems/workflow-engine.md`'s decision rows are updated, and
     `topic-hub.md` gets a note that its "workflow chat" is history.
   - The schedules overview's last run, and its note after Run now, link to
-    `?open=workflow-run:<id>`, the run the row shows or the one the press
+    `?open=<run id>`, the run the row shows or the one the press
     started. It used to link the schedule's conversation (`?chat=`), which the
     chat list stopped showing in P6, so that link had been landing on another
     chat.
@@ -392,10 +395,84 @@ gate.
       unfolded.
   - Found while writing §10: every run has its own conversation, so `start`
     lets two runs on an item go side by side, but `retry` refused while any
-    run of the item was live. It now refuses only for a live run of the SAME
-    workflow, the one that shares the journal.
+    run of the item was live. It now refuses only for a run of the SAME
+    workflow that is executing (pending or running), the one that shares the
+    journal. The live check narrowed this from "live": a run paused at a gate
+    blocked Continue for as long as nobody decided.
   - Mutation probes, each reddening its test: the address check, the unfold
     on arrival, and both halves of the same-workflow guard.
+
+## Review round 1 and the live check
+
+Four review lenses (conformance, veracity, defect, regression) and a live check
+in a real browser came back with findings. What changed, and why:
+
+- **The execution's path is its run id.** A WorkflowRun's id already starts
+  with `workflow-run:`, so the tab path was `workflow-run:workflow-run:<uuid>`
+  (found live in a draft). The id the AI passes to `show_file`, the tab path
+  and `?open=` are now one string. A backend test pins the id prefix
+  (`test_an_executions_path_is_its_run_id`), and the FE tests use real-format
+  ids, since `"r1"` doubles were what hid it.
+- **Only the newest execution of a workflow owns its step files.** All of a
+  workflow's runs on an item share one journal (#136). An older execution's
+  Result opened the newer one's file, and its Re-run deleted the newer one's
+  results.
+  - `GET /runs/{id}` gives `step_files` only to the newest (`latest`).
+  - `retry` refuses an older execution.
+  - The tab says that a newer execution has run since, and hides Result,
+    Transcript, Continue and Re-run. The execution's own messages are still
+    shown, because they are per run.
+- **`retry` is claimed by CAS before its first await.** Two presses both passed
+  the checks and drove one run twice. On failure the run returns to its prior
+  status.
+- **The same-workflow guard counts only pending and running runs.** Found
+  live: a run waiting at a gate blocked Continue for as long as nobody decided.
+- **Re-run escapes the step name** in `apply_steer`'s glob, so `pick[1]`
+  matches itself.
+- **The transcript is written through `write_record`.** It is a record of
+  effects that already happened. A quota-gated write there failed the step with
+  no record, and its re-run repeated the side effects (#538).
+- **Stop reaches the steerer.** It is signalled on `aside_lane(key)` as well,
+  and the aside lane is forgotten in a `finally`.
+- **Legacy run windows close where the run last acted** (`progress_at`), and a
+  person's own messages are never dropped. A gate wait or a failed steer had
+  left the window open forever, so a taken-over chat lost every later turn.
+- **A retry prompt carries the previous answer**, capped at 4000 characters. A
+  node reads no history (D1), so "your previous attempt" pointed at nothing.
+- **FE changes:**
+  - Rows that are running, waiting or failed are `aria-disabled` and cannot be
+    collapsed (D7; WAI-ARIA APG Accordion).
+  - A closed row shows its Result (D6).
+  - A failed row links its Inputs (`inputs_path`, the run's `input.json`
+    through `workflow.inputs.inputs_path`, the run's own rule; D9).
+  - A failed steer proposal shows its `steer_error`.
+  - `useRun` stops polling a run it cannot read.
+  - The transcript check is keyed on the step's state, so an answer cached
+    while the step ran does not outlive its failure.
+  - Chat buttons are hidden where no chat is mounted (`canRequestChat`).
+  - The view page provides the item's profile.
+- **The runs list keeps a slow poll** (30 s) when nothing is executing.
+  Otherwise an execution started elsewhere never reached the badge or the
+  notice. A run waiting at a gate no longer counts as live for the fast pace.
+- **Found live:**
+  - The waiting notice is a banner in the page's flow under the top bar,
+    because in the corner it covered the chat's composer.
+  - "Start" and "Re-run this step" look like buttons.
+  - The sidebar names an execution as the tab does (`executionName`, not
+    `toLocaleString`).
+  - The status bar shows no `lang:` / `UTF-8` for an execution's tab.
+- **The failure notification links the execution's tab** (`execution_link`).
+  The old `/a/<slug>/items/<item>` matched no page. Its title reads "A workflow
+  failed".
+- **D7's premise "Chat-only mode is unchanged" was wrong.** On master a
+  chat-only App could start workflows from the chat's New picker and header.
+  Now it has no workflow entrance at all. That is what the user asked for
+  ("chat only mode不該有人在上面弄workflow"), but it is a removal, and the
+  runbook says so. One consequence to weigh: a schedule's execution waiting at
+  a gate cannot be decided on a chat-only App's web pages.
+- **D8's "never reads step transcripts" holds for the chats the platform opens**
+  (the drafts never name one), except "Ask AI why it failed", which points at
+  one by design (D9). The AI's `read_file` can reach the journal like any file.
 
 ## Verification
 

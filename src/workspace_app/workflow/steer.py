@@ -11,6 +11,7 @@ with retry-with-feedback, mirroring the gate's in-step retry (§6).
 
 from __future__ import annotations
 
+import glob
 import json
 import logging
 from typing import TYPE_CHECKING, Any
@@ -206,7 +207,8 @@ async def apply_steer(wf: WorkflowHandle, plan: SteerPlan, *, decided_by: str = 
         applied.append(rel_path(edit.path))
     deleted: list[str] = []
     for name in plan.invalidate:
-        for p in await wf.glob([f"{wf.journal_dir.lstrip('/')}/step_{name}/*"]):
+        # The name is a step's, not a pattern: `pick[1]` must match itself (review R1).
+        for p in await wf.glob([f"{wf.journal_dir.lstrip('/')}/step_{glob.escape(name)}/*"]):
             await wf.delete(p)
             logger.debug("steer: invalidated step %r artifact %s", name, p)
             deleted.append(p)

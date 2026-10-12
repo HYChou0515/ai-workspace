@@ -63,18 +63,18 @@ const render = (activePath: string | null = null, onOpen = vi.fn()) => {
 // and without a timer taking it away, since it asks for an action.
 describe("WaitingNotice", () => {
   it("names the execution and what it waits for, and opens it", async () => {
-    vi.mocked(workflowApi.listRuns).mockResolvedValue([waiting("r1", at(14, 3))]);
+    vi.mocked(workflowApi.listRuns).mockResolvedValue([waiting("workflow-run:r1", at(14, 3))]);
     const { onOpen } = render();
     const notice = await screen.findByRole("status");
     expect(notice).toHaveTextContent("Classify wafers · 10/12 14:03 is waiting for you");
     expect(notice).toHaveTextContent("Check the sort");
     fireEvent.click(screen.getByRole("button", { name: "Open" }));
-    expect(onOpen).toHaveBeenCalledWith(executionPath("r1"));
+    expect(onOpen).toHaveBeenCalledWith(executionPath("workflow-run:r1"));
   });
 
   it("says a proposed change waits to be confirmed", async () => {
     vi.mocked(workflowApi.listRuns).mockResolvedValue([
-      waiting("r1", at(14, 3), {
+      waiting("workflow-run:r1", at(14, 3), {
         pending_decision: null,
         pending_steer: { instruction: "x", rationale: "", input_edits: [], invalidate: [], decided_by: "" },
       }),
@@ -86,8 +86,8 @@ describe("WaitingNotice", () => {
   it("speaks only of an execution that waits — a running one does not", async () => {
     // The running one is newer: picked if "waiting" meant "not finished".
     vi.mocked(workflowApi.listRuns).mockResolvedValue([
-      waiting("going", at(15, 0), { status: "running", pending_decision: null }),
-      waiting("r1", at(14, 3)),
+      waiting("workflow-run:going", at(15, 0), { status: "running", pending_decision: null }),
+      waiting("workflow-run:r1", at(14, 3)),
     ]);
     render();
     const notice = await screen.findByRole("status");
@@ -99,25 +99,25 @@ describe("WaitingNotice", () => {
   it("is not about the execution whose tab is in front", async () => {
     // The one in front is the newer; the notice speaks of the other.
     vi.mocked(workflowApi.listRuns).mockResolvedValue([
-      waiting("front", at(15, 0)),
-      waiting("other", at(14, 3)),
+      waiting("workflow-run:front", at(15, 0)),
+      waiting("workflow-run:other", at(14, 3)),
     ]);
-    const { onOpen } = render(executionPath("front"));
+    const { onOpen } = render(executionPath("workflow-run:front"));
     const notice = await screen.findByRole("status");
     expect(notice).toHaveTextContent("10/12 14:03");
     expect(notice).not.toHaveTextContent("more waiting"); // nor counted as another
     fireEvent.click(screen.getByRole("button", { name: "Open" }));
-    expect(onOpen).toHaveBeenCalledWith(executionPath("other"));
+    expect(onOpen).toHaveBeenCalledWith(executionPath("workflow-run:other"));
   });
 
   it("goes when dismissed, and comes back for the next gate", async () => {
-    vi.mocked(workflowApi.listRuns).mockResolvedValue([waiting("r1", at(14, 3))]);
+    vi.mocked(workflowApi.listRuns).mockResolvedValue([waiting("workflow-run:r1", at(14, 3))]);
     const { client } = render();
     fireEvent.click(await screen.findByRole("button", { name: "Dismiss" }));
     expect(screen.queryByRole("status")).toBeNull();
 
     vi.mocked(workflowApi.listRuns).mockResolvedValue([
-      waiting("r1", at(14, 3), {
+      waiting("workflow-run:r1", at(14, 3), {
         pending_decision: { phase: "write", title: "Check the report", summary: "", allow: ["approve"], decided_by: "" },
       }),
     ]);
@@ -127,14 +127,14 @@ describe("WaitingNotice", () => {
 
   it("shows the newest, and how many more wait", async () => {
     vi.mocked(workflowApi.listRuns).mockResolvedValue([
-      waiting("old", at(9, 0)),
-      waiting("new", at(14, 3)),
+      waiting("workflow-run:old", at(9, 0)),
+      waiting("workflow-run:new", at(14, 3)),
     ]);
     const { onOpen } = render();
     const notice = await screen.findByRole("status");
     expect(notice).toHaveTextContent("10/12 14:03");
     expect(notice).toHaveTextContent("1 more waiting");
     fireEvent.click(screen.getByRole("button", { name: "Open" }));
-    expect(onOpen).toHaveBeenCalledWith(executionPath("new"));
+    expect(onOpen).toHaveBeenCalledWith(executionPath("workflow-run:new"));
   });
 });

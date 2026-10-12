@@ -951,7 +951,7 @@ def test_continuing_an_unknown_execution_is_404():
 # ── the execution tab's reads (plan-workflow-out-of-chat P8) ──
 
 
-def test_a_run_says_where_each_steps_files_are_and_they_are_there():
+def test_a_run_says_where_each_steps_files_are_and_the_result_is_there():
     """The tab links a step's result and transcript. The paths come from the
     server's own journal layout, and the result it names is a file the run
     actually wrote (the workspace is the oracle, not a second copy of the rule)."""
@@ -1013,3 +1013,25 @@ async def test_a_runs_stream_is_not_followed_through_another_items_url():
     with pytest.raises(HTTPException) as exc:
         await stream(slug="playground", item_id=other, run_id=run_id)
     assert exc.value.status_code == 404
+
+
+def test_only_the_newest_execution_of_a_workflow_names_its_step_files():
+    """Review R1: a workflow's executions share one journal, so an older one's
+    "Result" opened the newer one's file. Only the newest names step files; every
+    one names the inputs file the workflow reads."""
+    app, _spec, item_id = _app()
+    with TestClient(app) as client:
+        _put_input(client, item_id, '{"n": 1}')
+        older = client.post(f"{_base(item_id)}/run").json()["run_id"]
+        _poll(client, item_id, older, "done")
+        newer = client.post(f"{_base(item_id)}/run").json()["run_id"]
+        _poll(client, item_id, newer, "done")
+
+        old = client.get(f"{_base(item_id)}/runs/{older}").json()
+        new = client.get(f"{_base(item_id)}/runs/{newer}").json()
+        assert (old["latest"], new["latest"]) == (False, True)
+        assert old["step_files"] == {}
+        assert new["step_files"]
+        for got in (old, new):
+            assert got["inputs_path"] == "/uploads/input.json"
+            assert client.get(f"{_base(item_id)}/files/uploads/input.json").status_code == 200

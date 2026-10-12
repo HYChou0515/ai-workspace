@@ -24,7 +24,7 @@ import {
   useRun,
   useSteerRun,
 } from "../hooks/useWorkflow";
-import { publishChatRequest } from "../lib/chatRequestBus";
+import { canRequestChat, publishChatRequest } from "../lib/chatRequestBus";
 import { executionName, executionPath, statusText } from "../lib/executionTab";
 import { pxToRem } from "../lib/pxToRem";
 import { logFromMessages } from "../pages/investigation/agentLog";
@@ -69,9 +69,16 @@ function chipTone(status: string) {
 
 /** Whether the step wrote a transcript: only agent steps do, so a link or a
  * pointer to one is offered only once the file is known to be there. */
-function useHasTranscript(fileService: FileService, path: string | undefined): boolean {
+function useHasTranscript(
+  fileService: FileService,
+  path: string | undefined,
+  step: StepStateDTO | undefined,
+): boolean {
+  // Asked again whenever the step moves on: an answer cached while it ran (no
+  // transcript yet) must not outlive its failure (review R1).
+  const version = step ? `${step.status}:${step.attempts}:${step.ended ?? ""}` : "";
   const q = useQuery({
-    queryKey: ["executionTranscript", path],
+    queryKey: qk.executionTranscript(path ?? "", version),
     queryFn: () => fileService.exists(path!),
     enabled: !!path,
   });
@@ -178,8 +185,14 @@ export function ExecutionView({
   const [failure, setFailure] = useState<string | null>(null);
   const report = { onError: (err: unknown) => setFailure(errorText(err)), onSuccess: () => setFailure(null) };
 
+  // A row being worked on, waiting or failed is open and stays open (D7 "never
+  // collapsed"); the others follow Expand all / Collapse all and their header.
   const [open, setOpen] = useState<Record<string, boolean>>({});
-  const isOpen = (n: PhaseNode) => open[n.id] ?? sticky(n, run);
+  const isOpen = (n: PhaseNode) => sticky(n, run) || open[n.id] === true;
+  // A workflow's executions share one journal: an older one's files are the
+  // newer one's now, so nothing here may read or redo them (review R1).
+  const latest = run?.latest !== false;
+  const chatAvailable = canRequestChat(itemId);
   const [changing, setChanging] = useState(false);
   const [instruction, setInstruction] = useState("");
   const changeId = useId();
@@ -230,7 +243,7 @@ export function ExecutionView({
             Stop
           </button>
         )}
-        {run && isRunTerminal(run.status) && (
+        {run && isRunTerminal(run.status) && latest && chatAvailable && (
           <button
             type="button"
             className="btn"
@@ -241,7 +254,7 @@ export function ExecutionView({
             Open a chat with these results
           </button>
         )}
-        {run?.status === "cancelled" && (
+        {run?.status === "cancelled" && latest && (
           <button
             type="button"
             className="btn"
@@ -288,6 +301,18 @@ export function ExecutionView({
       )}
       {run?.status === "error" && typeof run.result?.error === "string" && (
         <p style={{ color: "var(--err)", margin: "10px 0 0" }}>{run.result.error}</p>
+      )}
+      {typeof run?.result?.steer_error === "string" && (
+        <p style={{ color: "var(--err)", margin: "10px 0 0" }}>
+          {`The change could not be proposed: ${run.result.steer_error}`}
+        </p>
+      )}
+      {!latest && (
+        <p role="note" style={{ color: "var(--text-paper-d)", margin: "10px 0 0" }}>
+          A newer execution of this workflow has run since. They share their step files, so
+          this one&apos;s results, records and Continue are no longer offered here; its own
+          messages below are still its own.
+        </p>
       )}
 
       {changing && (
@@ -369,6 +394,7 @@ export function ExecutionView({
             steps={steps}
             run={run}
             expanded={isOpen(node)}
+            locked={sticky(node, run)}
             onToggle={() => setOpen((o) => ({ ...o, [node.id]: !isOpen(node) }))}
             messages={mine.filter((m) => m.phase === node.id)}
             liveChat={i === firstRunning && chatId && thread.data ? { chatId, persisted: messages } : null}
@@ -398,12 +424,17 @@ export function ExecutionView({
               <FailureActions
                 steps={steps}
                 busy={retry.isPending}
-                canRetry={run?.status === "error" || run?.status === "cancelled"}
+                canRetry={latest && (run?.status === "error" || run?.status === "cancelled")}
                 onRetry={(rerun) => retry.mutate(rerun, report)}
                 files={run?.step_files}
                 fileService={fileService}
-                onAsk={(step, transcript) =>
-                  publishChatRequest(itemId, whyDraft(name, runId, node.title, step, transcript))
+                inputsPath={run?.inputs_path}
+                onOpenFile={onOpenFile}
+                onAsk={
+                  chatAvailable
+                    ? (step, transcript) =>
+                        publishChatRequest(itemId, whyDraft(name, runId, node.title, step, transcript))
+                    : undefined
                 }
               />
             ) : null}
@@ -463,6 +494,7 @@ function StepRow({
   steps,
   run,
   expanded,
+  locked,
   onToggle,
   messages,
   liveChat,
@@ -476,6 +508,8 @@ function StepRow({
   steps: StepStateDTO[];
   run: WorkflowRunDTO | undefined;
   expanded: boolean;
+  /** Open and not closable: being worked on, waiting, or failed (D7). */
+  locked: boolean;
   onToggle: () => void;
   messages: Message[];
   liveChat: { chatId: string; persisted: Message[] } | null;
@@ -487,17 +521,25 @@ function StepRow({
 }) {
   const bodyId = useId();
   const counter = node.total > 1 ? ` · ${node.done}/${node.total}` : "";
+  // D6: a closed row still shows its outputs — the result of its one named step.
+  const named = steps.filter((s) => !s.key);
+  const done = named.length === 1 && (named[0].status === "passed" || named[0].status === "skipped");
+  const result = done ? run?.step_files?.[named[0].name]?.result : undefined;
   return (
     <li
       data-testid="execution-step"
       data-phase={node.id}
       style={{ border: "1px solid var(--paper-3)", borderRadius: "var(--radius-card)", background: "var(--white)" }}
     >
-      <h3 style={{ margin: 0, fontSize: "inherit" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, paddingRight: result && !expanded ? 12 : 0 }}>
+      <h3 style={{ margin: 0, fontSize: "inherit", flex: 1, minWidth: 0 }}>
         <button
           type="button"
           aria-expanded={expanded}
           aria-controls={bodyId}
+          // WAI-ARIA APG Accordion: a panel that may not be collapsed marks its
+          // header aria-disabled.
+          aria-disabled={locked || undefined}
           onClick={onToggle}
           style={{
             display: "flex",
@@ -521,6 +563,18 @@ function StepRow({
           </span>
         </button>
       </h3>
+      {result && !expanded && (
+        <button
+          type="button"
+          className="btn"
+          data-size="sm"
+          data-variant="secondary"
+          onClick={() => onOpenFile(result)}
+        >
+          Result
+        </button>
+      )}
+      </div>
       {expanded && (
         <div id={bodyId} style={{ padding: "4px 12px 10px", display: "flex", flexDirection: "column", gap: 8 }}>
           {children}
@@ -559,7 +613,7 @@ function StepLine({
   many: boolean;
 }) {
   const done = step.status === "passed" || step.status === "skipped";
-  const hasTranscript = useHasTranscript(fileService, files?.transcript);
+  const hasTranscript = useHasTranscript(fileService, files?.transcript, step);
   const label = (what: string) => (many ? `${step.name} ${what.toLowerCase()}` : what);
   return (
     <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", color: "var(--text-paper-d)" }}>
@@ -595,6 +649,8 @@ function FailureActions({
   onRetry,
   files,
   fileService,
+  inputsPath,
+  onOpenFile,
   onAsk,
 }: {
   steps: StepStateDTO[];
@@ -603,13 +659,28 @@ function FailureActions({
   onRetry: (rerun: string) => void;
   files: WorkflowRunDTO["step_files"];
   fileService: FileService;
-  onAsk: (step: StepStateDTO | undefined, transcript: string | undefined) => void;
+  inputsPath: string | undefined;
+  onOpenFile: (path: string) => void;
+  /** Absent where no chat is mounted to open (the editor-area page). */
+  onAsk: ((step: StepStateDTO | undefined, transcript: string | undefined) => void) | undefined;
 }) {
-  // Re-run names a step on the board; a failed loop element has left it.
-  const named = steps.find((s) => s.status === "failed" && !s.key) ?? steps.find((s) => !s.key);
+  // Re-run names the named step that failed; a failed loop element has left the
+  // board, and no other step is the one that broke (review R1).
+  const named = steps.find((s) => s.status === "failed" && !s.key);
   const transcriptPath = named ? files?.[named.name]?.transcript : undefined;
-  const hasTranscript = useHasTranscript(fileService, transcriptPath);
-  const ask = (
+  const hasTranscript = useHasTranscript(fileService, transcriptPath, named);
+  const inputs = inputsPath ? (
+    <button
+      type="button"
+      className="btn"
+      data-size="sm"
+      data-variant="secondary"
+      onClick={() => onOpenFile(inputsPath)}
+    >
+      Inputs
+    </button>
+  ) : null;
+  const ask = onAsk ? (
     <button
       type="button"
       className="btn"
@@ -619,18 +690,32 @@ function FailureActions({
     >
       Ask AI why it failed
     </button>
-  );
-  if (!canRetry) return <div>{ask}</div>;
+  ) : null;
+  if (!canRetry)
+    return (
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        {inputs}
+        {ask}
+      </div>
+    );
   return (
     <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
       <button type="button" className="btn" data-variant="primary" data-size="sm" disabled={busy} onClick={() => onRetry("")}>
         Continue from here
       </button>
       {named && (
-        <button type="button" className="btn" data-size="sm" disabled={busy} onClick={() => onRetry(named.name)}>
+        <button
+          type="button"
+          className="btn"
+          data-size="sm"
+          data-variant="secondary"
+          disabled={busy}
+          onClick={() => onRetry(named.name)}
+        >
           Re-run this step
         </button>
       )}
+      {inputs}
       {ask}
     </div>
   );
