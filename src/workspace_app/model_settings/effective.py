@@ -199,10 +199,24 @@ def config_dir_of(config_path: Path | None, env: Mapping[str, str]) -> Path | No
     return in_use.parent if in_use else None
 
 
+def _destination(model: str | None, base: Any) -> tuple[str, Any, str | None]:
+    """Where litellm sends a call — not `base_url` alone (final review 7): the
+    provider it resolves from the model, the base_url, and a URL the model
+    string itself carries (`huggingface/https://…` is its own address)."""
+    import litellm
+
+    text = model or ""
+    try:
+        provider = litellm.get_llm_provider(text)[1]
+    except Exception:  # a model litellm cannot place: its prefix is what we have
+        provider = text.split("/", 1)[0] if "/" in text else text
+    return (provider, base, text if "://" in text else None)
+
+
 def _endpoints(
     settings: Settings, presets: list[str] | None, *, config_dir: Path | None
-) -> list[tuple[str, str | None, str | None]]:
-    """(where, base_url, api_key) of every endpoint a call can go to: each
+) -> list[tuple[str, str | None, Any, str | None]]:
+    """(where, model, base_url, api_key) of every endpoint a call can go to: each
     preset's failover chain, each role's (a role reference may carry its own
     `llm`), and each usage entry (`agents.<purpose>` — an entry may carry its
     own `llm` too; final review 3). `presets` narrows it to those presets'
@@ -211,18 +225,18 @@ def _endpoints(
     from ..config.schema import RetrievalLlmRef
     from ..factories import resolve_llm_chain
 
-    out: list[tuple[str, str | None, str | None]] = []
+    out: list[tuple[str, str | None, Any, str | None]] = []
     names = list(settings.agents.presets) if presets is None else presets
     for name in names:
         if name in settings.agents.presets:
             for e in resolve_llm_chain(settings, RetrievalLlmRef(preset=name)):
-                out.append((f"agents.presets.{name}", e.base_url, e.api_key))
+                out.append((f"agents.presets.{name}", e.model, e.base_url, e.api_key))
     if presets is None:
         for role, ref_of in ROLES.items():
             ref = ref_of(settings)
             if ref is not None:
                 for e in resolve_llm_chain(settings, ref):
-                    out.append((role, e.base_url, e.api_key))
+                    out.append((role, e.model, e.base_url, e.api_key))
         from ..config.catalog_build import build_catalog
 
         catalog = build_catalog(settings, config_dir=config_dir)
@@ -231,6 +245,7 @@ def _endpoints(
                 out.append(
                     (
                         f"agents.{purpose}",
+                        cfg.model,
                         cfg.llm_base_url or settings.llm.base_url or None,
                         cfg.llm_api_key or settings.llm.api_key or None,
                     )
@@ -252,21 +267,23 @@ def key_destination_problems(
     call after Apply and on a test call (final review). A key set on the page
     may go anywhere: its setter knows it."""
     paired = {
-        (base, key)
-        for _, base, key in _endpoints(deploy, None, config_dir=config_dir)
+        (_destination(model, base), key)
+        for _, model, base, key in _endpoints(deploy, None, config_dir=config_dir)
         if isinstance(base, str | None)
     }
     found: list[str] = []
-    for where, base, key in _endpoints(settings, presets, config_dir=config_dir):
+    for where, model, base, key in _endpoints(settings, presets, config_dir=config_dir):
         if not isinstance(base, str | None):
             # A list or a number loads; it is no address (final review 4).
             problem = f"config.{where}: base_url must be text"
             if problem not in found:
                 found.append(problem)
             continue
-        if key and key not in page_keys and (base, key) not in paired:
+        if key and key not in page_keys and (_destination(model, base), key) not in paired:
+            provider, _, in_model = _destination(model, base)
+            to = in_model or base or f"{provider or 'the provider'}'s default address"
             problem = (
-                f"config.{where}: the deploy's key would go to {base or 'the provider default'!r}, "
+                f"config.{where}: the deploy's key would go to {to!r}, "
                 "where config.yaml never sends it — set a key for this endpoint on the API keys tab"
             )
             if problem not in found:
@@ -534,7 +551,9 @@ def _problems(
     try:
         build_catalog(settings, config_dir=config_dir)
     except Exception as exc:  # whatever building refuses with, named — it is the boot's own check
-        return [f"config.agents: {exc}"]
+        # Without the server's directory (final review 7), as `load_problem`.
+        said = str(exc).replace(str(config_dir), "<config dir>") if config_dir else str(exc)
+        return [f"config.agents: a usage entry cannot be built — {said}"]
     switched = _roles_switched(settings, default) + key_destination_problems(
         settings,
         default,

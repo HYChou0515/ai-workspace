@@ -849,6 +849,33 @@ describe("ModelSettingsPage", () => {
     expect(row?.style.flexWrap).toBe("wrap");
   });
 
+  it("says a connection test is running, and for how long, without changing the button", async () => {
+    // final review 7: a bare "…" in a shrunken button for a call that can take
+    // 40 s, and nothing for a screen reader (NN/g "Progress Indicators").
+    const client = fakeClient();
+    client.testConnection.mockImplementation(() => new Promise(() => {}));
+    renderWithQuery(<ModelSettingsPage client={client} />);
+    const button = await screen.findByTestId("model-settings-test");
+    const label = button.textContent;
+
+    fireEvent.click(button);
+
+    const running = await screen.findByTestId("model-settings-test-running");
+    expect(running).toHaveAttribute("role", "status");
+    expect(running.textContent).toMatch(/\d/);
+    expect(button.textContent).toBe(label);
+  });
+
+  it("keeps buttons in the page's font inside the monospace lists", async () => {
+    // final review 7: Reset and Clear inherited the lists' monospace font.
+    const path = "config.llm.api_key";
+    renderWithQuery(<ModelSettingsPage client={fakeClient({ draft: KB_2, keys: { [path]: "…4321" } })} />);
+
+    expect((await screen.findByTestId("model-settings-changes")).style.fontFamily).toBe("");
+    fireEvent.click(screen.getByRole("tab", { name: "API 金鑰" }));
+    expect(screen.getByTestId("model-settings-keys").style.fontFamily).toBe("");
+  });
+
   it("draws a refused key as an error at its field", async () => {
     // final review 5: plain black text, away from the field, no aria-invalid.
     const client = fakeClient();

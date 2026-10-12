@@ -2827,6 +2827,10 @@ export const messages = {
     en: "Every service uses the new settings within a second. A model call already under way finishes on the old settings; every call after it uses the new ones — a chat turn under way keeps the model it started with, but a retry within it may go to the new endpoint.",
   },
   "modelSettings.applyConfirm": { "zh-TW": "套用", en: "Apply" },
+  "modelSettings.testRunning": {
+    "zh-TW": "正在測試 {preset}…已等 {s} 秒（慢的模型可能要幾十秒）",
+    en: "Testing {preset}… {s} s so far (a slow model can take tens of seconds)",
+  },
   "modelSettings.applyFailed": { "zh-TW": "沒有套用：{error}", en: "Not applied: {error}" },
   "modelSettings.refreshFailed": {
     "zh-TW": "重新讀取設定失敗；畫面上是上一次讀到的內容。",

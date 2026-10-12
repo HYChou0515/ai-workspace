@@ -623,18 +623,21 @@ function EditTab({
         ) : changed.length === 0 ? (
           <p style={{ ...MUTED, margin: 0 }}>{t("modelSettings.changesNone")}</p>
         ) : (
+          // Monospace on the paths and values only: a button in the list keeps
+          // the page's font, like every other button (final review 7; NN/g
+          // heuristic #4, consistency).
           <ul
             data-testid="model-settings-changes"
-            style={{ ...MONO, margin: 0, paddingLeft: 0, listStyle: "none", display: "grid", gap: 6 }}
+            style={{ margin: 0, paddingLeft: 0, listStyle: "none", display: "grid", gap: 6 }}
           >
             {changed.map(({ path, parts, value }) => {
               const fallback = valueAt(defaults, parts);
               return (
                 <li key={path} style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-                  <span style={WRAP}>
+                  <span style={{ ...MONO, ...WRAP }}>
                     {path}: {shown(value)}
                   </span>
-                  <span style={{ ...MUTED, ...WRAP }}>
+                  <span style={{ ...MONO, ...MUTED, ...WRAP }}>
                     {fallback.found
                       ? t("modelSettings.default", { value: shown(fallback.value) })
                       : t("modelSettings.defaultNone")}
@@ -684,6 +687,17 @@ function TestConnection({ client, defaults, draft }: { client: Client; defaults:
   const [preset, setPreset] = useState("");
   const test = useMutation({ meta: { silentError: true }, mutationFn: (p: string) => client.testConnection(p) });
   const chosen = preset || presets[0] || "";
+  // A call can take tens of seconds on a slow model: say it is running and
+  // for how long, beside a button that keeps its label (final review 7; NN/g
+  // "Progress Indicators Make a Slow System Less Insufferable").
+  const [waited, setWaited] = useState(0);
+  useEffect(() => {
+    if (!test.isPending) return;
+    setWaited(0);
+    const started = Date.now();
+    const timer = setInterval(() => setWaited(Math.floor((Date.now() - started) / 1000)), 1000);
+    return () => clearInterval(timer);
+  }, [test.isPending]);
 
   return (
     <section aria-labelledby="model-settings-test" style={{ display: "grid", gap: 8 }}>
@@ -712,8 +726,13 @@ function TestConnection({ client, defaults, draft }: { client: Client; defaults:
           disabled={!chosen || test.isPending}
           onClick={() => test.mutate(chosen)}
         >
-          {test.isPending ? "…" : t("modelSettings.test")}
+          {t("modelSettings.test")}
         </button>
+        {test.isPending && (
+          <span role="status" data-testid="model-settings-test-running" style={MUTED}>
+            {t("modelSettings.testRunning", { preset: test.variables ?? chosen, s: String(waited) })}
+          </span>
+        )}
       </div>
       {test.data && (
         <p data-testid="model-settings-test-result" role={test.data.ok ? undefined : "alert"} style={MONO}>
@@ -1003,14 +1022,14 @@ function KeysTab({
       ) : (
         <ul
           data-testid="model-settings-keys"
-          style={{ ...MONO, margin: 0, paddingLeft: 0, listStyle: "none", display: "grid", gap: 6 }}
+          style={{ margin: 0, paddingLeft: 0, listStyle: "none", display: "grid", gap: 6 }}
         >
           {rows.map((p) => {
             const isSet = p in keys;
             return (
               <li key={p} style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-                <span style={{ overflowWrap: "anywhere" }}>{p}</span>
-                {isSet && <span style={MUTED}>{keys[p] || t("modelSettings.keyIsSet")}</span>}
+                <span style={{ ...MONO, overflowWrap: "anywhere" }}>{p}</span>
+                {isSet && <span style={{ ...MONO, ...MUTED }}>{keys[p] || t("modelSettings.keyIsSet")}</span>}
                 {pending.has(p) && (
                   <span data-testid={`model-settings-key-pending-${p}`} style={BADGE}>
                     {t(isSet ? "modelSettings.keyPendingSet" : "modelSettings.keyPendingCleared")}

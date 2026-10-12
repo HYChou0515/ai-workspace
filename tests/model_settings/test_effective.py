@@ -544,3 +544,62 @@ def test_a_typo_in_the_draft_is_named_at_its_own_path_not_as_config_yaml(config)
 
     assert found and found[0].startswith("config.agents.presets.kb-default.modle:"), found
     assert str(config) not in found[0]
+
+
+@pytest.fixture
+def hosted_config(tmp_path: Path) -> Path:
+    # The common hosted setup: a key, no base_url — the provider's default.
+    path = tmp_path / "hosted.yaml"
+    path.write_text(
+        "agents:\n"
+        "  presets:\n"
+        "    kb-default:\n"
+        "      model: openai/gpt-4o\n"
+        "      llm:\n"
+        "        api_key: sk-deploy-0000-0000-0002\n",
+        encoding="utf-8",
+    )
+    return path
+
+
+@pytest.mark.parametrize(
+    "model", ["huggingface/https://attacker.example", "openai/https://attacker.example"]
+)
+def test_a_model_that_names_another_destination_may_not_carry_the_deploy_key(hosted_config, model):
+    # final review 7: litellm takes the address from the model string too
+    # (`huggingface/https://…` is its own api_base) — the (base_url, key) pair
+    # stayed the same and the deploy's key went to any URL.
+    document = {"config": {"agents": {"presets": {"kb-default": {"model": model}}}}}
+
+    found = problems(document, config_path=hosted_config, env={})
+
+    assert any("deploy's key" in p for p in found), found
+
+
+def test_another_provider_may_not_carry_the_deploy_key(hosted_config):
+    document = {"config": {"agents": {"presets": {"kb-default": {"model": "anthropic/claude-x"}}}}}
+
+    found = problems(document, config_path=hosted_config, env={})
+
+    assert any("deploy's key" in p for p in found), found
+
+
+@pytest.mark.parametrize("model", ["openai/gpt-4.1", "gpt-4.1"])
+def test_another_model_of_the_same_provider_keeps_the_deploy_key(hosted_config, model):
+    document = {"config": {"agents": {"presets": {"kb-default": {"model": model}}}}}
+
+    found = problems(document, config_path=hosted_config, env={})
+
+    assert not any("deploy's key" in p for p in found), found
+
+
+def test_a_usage_list_refusal_does_not_show_the_server_directory(tmp_path):
+    # final review 7: building the usage list failed with "file not found at
+    # <config dir>" — load_problem drops that path two lines up.
+    config = tmp_path / "config.yaml"
+    config.write_text("server:\n  port: 9090\n", encoding="utf-8")
+    entry = {"preset": "qwen3-local", "name": "X", "allowed_tools": ["kb_search"]}
+
+    found = problems({"config": {"agents": {"kb_chat": [entry]}}}, config_path=config, env={})
+
+    assert found and not any(str(tmp_path) in p for p in found), found

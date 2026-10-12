@@ -144,15 +144,23 @@ def test_a_connection_test_does_not_send_a_deploy_key_to_a_new_endpoint(settings
         "config.agent.presets.openai-mini.llm.api_key",
     ],
 )
-def test_a_mistyped_key_path_is_called_no_such_setting(path):
+def test_a_mistyped_key_path_is_called_no_place_for_a_key(path):
     # final review 6: a typo was told "not a secret — set it in the text" (which
     # sends a real key into the draft, history and diffs) or "set it in
     # config.yaml" (no such setting exists there either).
     problem = key_path_problem(path)
 
-    assert problem is not None and "no such setting" in problem, problem
+    assert problem is not None and "not a text setting" in problem, problem
 
 
 def test_advice_to_use_the_text_or_config_yaml_is_kept_for_real_settings():
     assert "in the text" in (key_path_problem("config.agents.presets.openai-mini.model") or "")
     assert "config.yaml" in (key_path_problem("config.kb.embedder.api_key") or "")
+
+
+def test_a_real_setting_the_page_does_not_edit_is_sent_to_config_yaml():
+    # final review 7: "not a secret — set it in the text" for server.host, which
+    # Apply then refused; and "no such setting" for server.port, which exists.
+    assert "config.yaml" in (key_path_problem("config.server.host") or "")
+    port = key_path_problem("config.server.port") or ""
+    assert port and "llm.api_key" in port, port

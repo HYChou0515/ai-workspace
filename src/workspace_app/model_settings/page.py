@@ -131,9 +131,11 @@ def key_path_problem(path: str) -> str | None:
     """Why `path` cannot hold a key, or None. A key is a secret (M7's rule)
     inside the part of config the page edits (M18), at a text setting.
 
-    Whether the setting EXISTS is asked first: each later answer is advice for
-    a real setting, and given for a typo it was false — "set it in the text"
-    sent a real key into the draft, history and diffs (final review 6)."""
+    Whether a key can sit there at all is asked first, then whether the page
+    edits it, then whether it is a secret: each answer is advice the next step
+    accepts. Given for a typo, "set it in the text" sent a real key into the
+    draft, history and diffs (final review 6); given for a boot-only setting it
+    sent the person to a text that refuses it (final review 7)."""
     if not path.startswith("config."):
         return f"{path}: a key lives in the config part (config.…)"
     inner = path.removeprefix("config.")
@@ -142,13 +144,15 @@ def key_path_problem(path: str) -> str | None:
     # key inside a list is not a text setting either way.
     if not _is_text_setting(parts):
         return (
-            f"{path}: no such setting — a key goes at a preset's or role's "
-            "llm.api_key, or a preset's env.<NAME>"
+            f"{path}: not a text setting a key can sit at — a key goes at a preset's "
+            "or role's llm.api_key, or a preset's env.<NAME>"
         )
-    if not is_secret(inner):
-        return f"{path}: not a secret — set it in the text, not as a key"
+    # Boot-only before "in the text": the text refuses a boot-only setting too
+    # (final review 7 — `server.host` was sent to the text, then refused there).
     if not any(inner == live or inner.startswith(live + ".") for live in LIVE_CONFIG):
         return f"{path}: read only when the server starts — set it in config.yaml"
+    if not is_secret(inner):
+        return f"{path}: not a secret — set it in the text, not as a key"
     return None
 
 
