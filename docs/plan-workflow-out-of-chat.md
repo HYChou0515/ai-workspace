@@ -89,6 +89,18 @@ Chosen while planning (the user may overturn):
 a node whose prompt relies on an earlier node's conversation (e.g. "as above",
 or no reference to the data it uses). Convert each one to an explicit reference.
 Report the list before P2 changes behaviour.
+- **Built:** nothing to convert. Every agent node names its data, read on
+  `b7b83a94`:
+  - topic-hub `collections` (classify: `Read the file {f}`);
+  - topic-hub `consolidate` (`MEMORY.md` and the notes; recent chats arrive as
+    the explicit `inputs["context"]`);
+  - topic-hub `memory` (digest per file, then `refresh_index` from the notes
+    list);
+  - `sample-workflows/image-to-knowledge` (`{image}`, then `notes/{image}.md`);
+  - playground DSL `file-uploads` (`Read {file}`);
+  - the `workflow new` recipes, which read no input.
+
+  Playground `alpha` / `beta` have no agent node.
 
 **P2 — a node's context is its references.**
 - Agent nodes start from an empty history: no `conv.messages`. This covers map
