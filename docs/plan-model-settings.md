@@ -45,7 +45,7 @@ settled by me, listed for the user to overturn.
 Checked against screenshots of the built page in real Chromium at 1280, 768
 and 390 px during the PR (CLAUDE.md "UI work must follow published UI/UX
 guidance"). Most are also cited in `web/src/pages/ModelSettingsPage.tsx` beside
-what they shaped; the ellipsis and the forms-error article are cited only here.
+what they shaped; the ellipsis is cited only here.
 
 - Three peer sections as a tab strip, two cues on the selected tab — NN/g,
   "Tabs, Used Right" (https://www.nngroup.com/articles/tabs-used-right/);
@@ -79,10 +79,12 @@ what they shaped; the ellipsis and the forms-error article are cited only here.
   merge patch replaces a list whole, the page will not take the secret as text
   (M6), and a key cannot sit inside a list (only at a text setting). Edit such
   a list in `config.yaml`; a preset's key is the place the page manages.
-- A usage entry's `env` values are plain on this superuser-only page, as they
-  are in the boot dump (M7: one rule for both): a key cannot sit inside a
-  list, so treating them as secret left no way to keep one through an edit of
-  that list. A secret for a usage entry belongs in its preset's `env`.
+- A usage entry's `env` values are not secret by their place, on this
+  superuser-only page as in the boot dump (M7: one rule for both): a key cannot
+  sit inside a list, so treating them as secret left no way to keep one through
+  an edit of that list. One whose NAME is a secret's (any `*_token`, in
+  either case — M7's leaf-name rule) is still secret, and so is the list trap above: such a list is edited in
+  `config.yaml`. A secret for a usage entry belongs in its preset's `env`.
 
 - Keys are stored in the database in clear, as the existing Private env values
   are; only superusers can set them and no one can read them back.

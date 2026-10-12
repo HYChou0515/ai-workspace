@@ -127,8 +127,10 @@ def is_secret(path: str) -> bool:
     parts = path.split(".")
     # Every value of a preset's `env`. `parts[-2]`, not a fixed index: a preset
     # name may itself hold a dot (`qwen2.5`). A usage entry's `env`
-    # (`agents.kb_chat[0].env`) stays plain: a key cannot sit inside a list, so
-    # making it secret left no way to keep it through an edit (known cost, plan).
+    # (`agents.kb_chat[0].env`) is not secret BY PLACE: a key cannot sit inside a
+    # list, so that left no way to keep it through an edit (known cost, plan).
+    # A value whose NAME is a secret's (`*_token` in either case) still is, by
+    # the leaf-name rule above.
     if len(parts) >= 5 and parts[:2] == ["agents", "presets"] and parts[-2] == "env":
         return True
     return path.endswith("rabbitmq.url")

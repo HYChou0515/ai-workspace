@@ -580,7 +580,9 @@ describe("ModelSettingsPage", () => {
     fireEvent.click(screen.getByTestId(`model-settings-key-clear-${path}`));
     fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "清除" }));
 
-    expect(await screen.findByTestId("model-settings-key-refused")).toHaveTextContent("clearing the key failed");
+    expect(await screen.findByTestId(`model-settings-key-clear-failed-${path}`)).toHaveTextContent(
+      "clearing the key failed",
+    );
   });
 
   it("discards unsaved edits with one button, also after a tab switch", async () => {
@@ -814,6 +816,37 @@ describe("ModelSettingsPage", () => {
     fireEvent.click(screen.getByTestId("model-settings-key-set"));
 
     expect(await screen.findByTestId("model-settings-key-refused")).toHaveTextContent("not a secret");
+  });
+
+  it("says a failed clear on the key's own row, not at the path field", async () => {
+    // final review 6: a failed Clear marked the EMPTY path field invalid and
+    // sat under it, away from the row and without naming the key.
+    const path = "config.llm.api_key";
+    const client = fakeClient({ keys: { [path]: "…4321" }, applied_keys: [path] });
+    client.clearKey.mockRejectedValue(new HttpError(503, "clearing the key failed: 503"));
+    renderWithQuery(<ModelSettingsPage client={client} />);
+    fireEvent.click(await screen.findByRole("tab", { name: "API 金鑰" }));
+
+    fireEvent.click(screen.getByTestId(`model-settings-key-clear-${path}`));
+    fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "清除" }));
+
+    const failed = await screen.findByTestId(`model-settings-key-clear-failed-${path}`);
+    expect(failed).toHaveTextContent("clearing the key failed");
+    expect(failed.closest("li")).toBe(screen.getByTestId(`model-settings-key-clear-${path}`).closest("li"));
+    expect(screen.getByTestId("model-settings-key-path")).not.toHaveAttribute("aria-invalid", "true");
+    expect(screen.queryByTestId("model-settings-key-refused")).toBeNull();
+  });
+
+  it("lets a history row wrap, so its button drops below on a phone", async () => {
+    // final review 6: at 390 px the button kept its column and the change list
+    // was squeezed to ~200 px (Material 3: compact = one column).
+    const client = fakeClient({ version: "v2v2v2v2v2v2v2v2", published: KB_2 });
+    client.history.mockResolvedValue([applied("v2v2v2v2v2v2v2v2", KB_2, 2), applied("v1v1v1v1v1v1v1v1", {}, 1)]);
+    renderWithQuery(<ModelSettingsPage client={client} />);
+    fireEvent.click(await screen.findByRole("tab", { name: "版本紀錄" }));
+
+    const row = (await screen.findByTestId("model-settings-rollback-1")).closest("li");
+    expect(row?.style.flexWrap).toBe("wrap");
   });
 
   it("draws a refused key as an error at its field", async () => {

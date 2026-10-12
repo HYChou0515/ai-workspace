@@ -833,12 +833,13 @@ function HistoryTab({
           const changesSomething =
             diffEffective((defaults ?? {}) as Patch, published, entry.patch).length > 0;
           return (
-            // Two fixed columns — what the version is, and its one action at the
-            // right edge — so the button stays put whatever the row says.
+            // What the version is, and its one action at the right edge — so the
+            // button stays put whatever the row says, until the row is too narrow.
             <li
               key={`${entry.version}-${entry.applied_at}`}
               style={{
                 display: "flex",
+                flexWrap: "wrap",
                 gap: 12,
                 alignItems: "center",
                 justifyContent: "space-between",
@@ -846,7 +847,9 @@ function HistoryTab({
                 borderBottom: "1px solid var(--paper-3)",
               }}
             >
-              <div style={{ display: "grid", gap: 2, minWidth: 0 }}>
+              {/* Wraps: on a phone the button drops below rather than squeeze
+                  the changes into a narrow column (Material 3, compact window). */}
+              <div style={{ display: "grid", gap: 2, minWidth: 0, flex: "1 1 18rem" }}>
                 <div style={{ display: "flex", gap: 8, alignItems: "baseline", flexWrap: "wrap" }}>
                   <span style={MONO}>
                     {t("modelSettings.historyRow", {
@@ -959,11 +962,16 @@ function KeysTab({
     },
     onError: (e) => setRefused(problemsOf(e).length ? problemsOf(e) : [messageOf(e)]),
   });
+  // A failed Clear is said on the key's own row, not at the path field — that
+  // field was not what failed (final review 6; NN/g "Reporting Errors in Forms").
+  const [clearFailed, setClearFailed] = useState<{ path: string; error: string } | null>(null);
   const clear = useMutation({
     meta: { silentError: true },
     mutationFn: (p: string) => client.clearKey(p),
+    onMutate: () => setClearFailed(null),
     onSuccess: done,
-    onError: (e) => setRefused(problemsOf(e).length ? problemsOf(e) : [messageOf(e)]),
+    onError: (e, p) =>
+      setClearFailed({ path: p, error: problemsOf(e).length ? problemsOf(e).join(" · ") : messageOf(e) }),
   });
 
   const askToClear = async (p: string) => {
@@ -1019,6 +1027,15 @@ function KeysTab({
                   >
                     {t("modelSettings.keyClear")}
                   </button>
+                )}
+                {clearFailed?.path === p && (
+                  <span
+                    role="alert"
+                    data-testid={`model-settings-key-clear-failed-${p}`}
+                    style={{ ...MUTED, ...WRAP, color: "var(--err)" }}
+                  >
+                    {clearFailed.error}
+                  </span>
                 )}
               </li>
             );

@@ -73,6 +73,9 @@ export function diffEffective(defaults: Patch, before: Patch, after: Patch): Cha
   // What runs at `parts` under `patch`: a null at the path or ANY ancestor
   // hides it (a hidden preset — review r3: an ancestor fell through to the
   // defaults); a path the patch does not reach is the default.
+  // A patch's object is merged over the defaults there (RFC 7396), as the
+  // loader does: a preset shown again runs with its defaults under the patch's
+  // values, and saying the fragment alone named only those (final review 6).
   const runs = (patch: Patch, parts: string[]): { found: boolean; value?: unknown } => {
     let node: unknown = patch;
     for (const part of parts) {
@@ -80,7 +83,8 @@ export function diffEffective(defaults: Patch, before: Patch, after: Patch): Cha
       node = node[part];
       if (node === null) return { found: false };
     }
-    return { found: true, value: node };
+    const under = valueAt(defaults, parts);
+    return { found: true, value: mergePatch(under.found ? under.value : undefined, node) };
   };
   // What is said, decided on PARTS — never on joined paths: a preset name may
   // hold a dot, so `qwen2` is not above `qwen2.5` (confirmation round).
@@ -105,6 +109,18 @@ export function diffEffective(defaults: Patch, before: Patch, after: Patch): Cha
       if (!same(was.value, will.value)) out.push({ path, kind: "changed", before: was.value, after: will.value });
     } else if (will.found) out.push({ path, kind: "added", after: will.value });
     else if (was.found) out.push({ path, kind: "removed", before: was.value });
+  }
+  return out;
+}
+
+/** RFC 7396: `patch` over `target` — an object merges key by key, a `null`
+ * removes its key, anything else replaces. */
+function mergePatch(target: unknown, patch: unknown): unknown {
+  if (!isObject(patch)) return patch;
+  const out: Record<string, unknown> = isObject(target) ? { ...target } : {};
+  for (const [key, value] of Object.entries(patch)) {
+    if (value === null) delete out[key];
+    else out[key] = mergePatch(out[key], value);
   }
   return out;
 }

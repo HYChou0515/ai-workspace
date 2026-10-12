@@ -2211,8 +2211,9 @@ agent 步驟裡 AI 的呼叫、WUI 的工具呼叫、view plugin、圖表重畫�
 **確認做完**（`rollout 後`）：
 
 - superuser：`curl -s -o /dev/null -w '%{http_code}' -b '<cookie>' '<網址>/api/admin/model-settings'` 回 200；一般使用者回 404。
-- 在頁面上把一個 KB 聊天用的 preset 換成另一個模型、套用：一秒後 KB 聊天的模型選單顯示新模型，不用重啟任何 pod。
-  再按「回復」到前一版，選單回到原本的模型。沒部署到這一版的症狀：`/api/admin/model-settings` 回 404 給 superuser。
+- 在頁面上把一個 KB 聊天用的 preset 換成另一個模型、套用：一秒後
+  `curl -s -b '<cookie>' '<網址>/api/kb/agent'` 的 `model` 欄位是新模型，不用重啟任何 pod
+  （聊天畫面的模型選單只列名稱，不列模型，看不出差別）。再按「回復」到前一版，`model` 回到原本的模型。沒部署到這一版的症狀：`/api/admin/model-settings` 回 404 給 superuser。
 
 ## 附錄 A：資料回填的機制（specstar 為什麼不會自己補）
 

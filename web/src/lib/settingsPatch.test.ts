@@ -170,6 +170,19 @@ describe("diffEffective under a hidden preset", () => {
     ]);
   });
 
+  it("says a hidden or shown preset as what runs, the defaults under it included", () => {
+    // final review 6: the patch's own fragment was said, not the merged preset
+    // — "added {model: y}" for a preset that runs with its default base_url.
+    const full = { foo: { model: "d", llm: { base_url: "u" } } };
+
+    expect(diffEffective(full, { foo: null }, { foo: { model: "y" } })).toEqual([
+      { path: "foo", kind: "added", after: { model: "y", llm: { base_url: "u" } } },
+    ]);
+    expect(diffEffective(full, { foo: { model: "x" } }, { foo: null })).toEqual([
+      { path: "foo", kind: "removed", before: { model: "x", llm: { base_url: "u" } } },
+    ]);
+  });
+
   it("is not fooled by a sibling whose name extends this one's with a dot", () => {
     // confirmation round: deeper-than was decided on JOINED paths, so a hide
     // of `qwen2` vanished beside `qwen2.5.model` — Apply said "nothing to apply".
