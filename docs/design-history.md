@@ -36,6 +36,7 @@
 | [plan-env-request-card.md](plan-env-request-card.md) | 工具缺環境變數時,AI 在聊天裡出「登入 / 設定」卡片,turn 停在卡片、使用者設定後按重試 |
 | [plan-pptx-preview.md](plan-pptx-preview.md) | workspace 裡的簡報(pptx/ppt/odp)在沙盒轉 PDF、以內容 hash 快取在沙盒旁,用 PDF 檢視器看 |
 | [plan-outside-lookup.md](plan-outside-lookup.md) | 斷網部署：AI 出「請幫我查」卡片，使用者在瀏覽器查網路或開網址，貼回結果存成檔案 |
+| [plan-outside-helper.md](plan-outside-helper.md) | 外網小幫手：使用者電腦上的 Python 小程式用 Playwright 開 Chrome 代為查網路，人只在卡片上點頭兩次（查詢出去前、結果送 AI 前）；沒連線退回手動流程 |
 | [plan-tools-picker-groups.md](plan-tools-picker-groups.md) | 工具挑選器依套件摺疊、內建工具一組、每組三態 |
 | [plan-user-env-exec-injection.md](plan-user-env-exec-injection.md) | 使用者環境變數改由 exec 注入（取代 `.userenv` 檔） |
 | [plan-view-plugins-pr5-finish.md](plan-view-plugins-pr5-finish.md) | #847 / #848 在 #855 分支上的收尾（PR5） |
