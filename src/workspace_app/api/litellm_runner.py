@@ -1250,6 +1250,13 @@ class LitellmAgentRunner:
         # ctx.agent_config (resolved per-item via the AppCatalog / KB / wiki
         # catalogs); run() fails loud if it's missing.
         self._max_retries = max_retries
+        # docs/plan-friendly-errors.md P8 (D11): litellm's default aiohttp
+        # transport turns a stream that drops mid-answer into a normal end
+        # (`aiohttp_transport.py`: payload errors become EOF), so a turn kept a
+        # truncated answer as if it were whole and nothing re-sent it. httpx
+        # raises on the same drop. Process-wide, but this runner is the only
+        # async litellm caller; every other one is sync and already on httpx.
+        litellm.disable_aiohttp_transport = True
         # #624: what we have learned about each endpoint's real ceiling, from
         # the rejections it hands back. Per-pod and in-memory on purpose — a
         # cache that re-learns in one turn, never a durable claim that can go

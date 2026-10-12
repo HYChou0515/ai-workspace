@@ -13,6 +13,8 @@ from __future__ import annotations
 from collections.abc import Iterator
 from typing import Final
 
+import httpx
+
 from ..context_budget import is_context_overflow
 from .core import AllProvidersFailed
 from .rate_limit import _chain, is_rate_limited
@@ -60,6 +62,16 @@ def _link_kind(exc: BaseException) -> str:
     return "unknown"
 
 
+def _is_transport(link: BaseException) -> bool:
+    """A failure of the connection itself, raised by the network stack — not a
+    wrapper's reading of one."""
+    return isinstance(link, (httpx.TransportError, TimeoutError, ConnectionError))
+
+
+def _is_timeout(link: BaseException) -> bool:
+    return isinstance(link, (httpx.TimeoutException, TimeoutError))
+
+
 def classify_error(exc: BaseException) -> str:
     """One of :data:`ERROR_KINDS` for ``exc``.
 
@@ -73,6 +85,15 @@ def classify_error(exc: BaseException) -> str:
     links = list(_chain(exc))
     if any(isinstance(link, AllProvidersFailed) for link in links):
         return "all_busy"
+    # The network's own word beats a status code the client invented (plan P8,
+    # D12): litellm puts a 500/503 of its own over a refused connection
+    # (`InternalServerError`) and a stream that broke or went quiet
+    # (`MidStreamFallbackError`), and read outermost-first that said "the
+    # provider failed" for a model nobody reached. A response the server DID
+    # send ends in `httpx.HTTPStatusError`, which is not a transport error.
+    transport = [link for link in links if _is_transport(link)]
+    if transport:
+        return "timeout" if any(_is_timeout(link) for link in transport) else "connection"
     kinds = [_link_kind(link) for link in links]
     for kind in kinds:
         if kind not in ("connection", "unknown"):
