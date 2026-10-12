@@ -137,6 +137,7 @@ export function ItemEnvironmentPanel({
               <label htmlFor={cpuEnforced ? "itemenv-cpu" : undefined}>{t("itemenv.field.cpu")}</label>
               {cpuEnforced ? (
                 <input
+                  autoComplete="off"
                   className="input input--block"
                   id="itemenv-cpu"
                   data-testid="cpu-input"
@@ -203,6 +204,7 @@ export function ItemEnvironmentPanel({
               <label htmlFor={memEnforced ? "itemenv-memory" : undefined}>{t("resources.memory")}</label>
               {memEnforced ? (
                 <input
+                  autoComplete="off"
                   className="input input--block"
                   id="itemenv-memory"
                   data-testid="memory-input"

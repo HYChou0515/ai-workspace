@@ -85,6 +85,7 @@ export function AttachmentBar({
               <li key={a.resource_id} className="kb-att__card">
                 {renaming === a.resource_id ? (
                   <input
+                    autoComplete="off"
                     className="input kb-att__rename"
                     autoFocus
                     value={draft}

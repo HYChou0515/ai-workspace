@@ -51,6 +51,7 @@ export function CollectionsChecklist({
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 8, flex: 1, minHeight: 0 }}>
       <input
+        autoComplete="off"
         className="input input--block"
         data-testid="collections-search"
         placeholder={t("collections.search")}

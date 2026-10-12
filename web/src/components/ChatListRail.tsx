@@ -293,6 +293,7 @@ function ChatRailItem({
     };
     return (
       <input
+        autoComplete="off"
         // eslint-disable-next-line jsx-a11y/no-autofocus
         autoFocus
         className="input input--block chat-rail__rename"

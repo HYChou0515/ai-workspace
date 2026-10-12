@@ -354,6 +354,7 @@ export function EnvVarsModal({
 
       {hasItem && (
         <input
+          autoComplete="off"
           type="search"
           className="input input--block"
           data-testid="env-search"
@@ -827,6 +828,7 @@ function SharedTab({
           canEdit ? (
             <div style={{ display: "flex", gap: 6 }}>
               <input
+                autoComplete="off"
                 className="input"
                 data-testid="env-add-private-name"
                 value={newName}
@@ -1038,6 +1040,7 @@ function SharedRow({
           </span>
         )}
         <input
+          autoComplete="off"
           data-testid={`env-field-${field.name}`}
           value={value}
           onChange={(e) => onVar(field.name, e.target.value)}
@@ -1241,8 +1244,10 @@ function MineRow({
           <input
             data-testid={`env-mine-${name}`}
             // Masked: these are the person's own credentials and only they can
-            // read them — but a screen can be seen over a shoulder.
-            type={revealed ? "text" : "password"}
+            // read them — but a screen can be seen over a shoulder. By the
+            // stylesheet, not `type="password"`: a password manager fills a
+            // saved login into every password field (src/styles/autofill.test.ts).
+            data-masked={!revealed}
             value={mine[name] ?? ""}
             onChange={(e) => setMine(name, e.target.value)}
             autoComplete="off"
@@ -1413,7 +1418,8 @@ function PersonalRow({
       <div style={{ display: "flex", gap: 6 }}>
         <input
           data-testid={`env-personal-${name}`}
-          type={revealed ? "text" : "password"}
+          // Masked by the stylesheet, not `type="password"` (src/styles/autofill.test.ts).
+          data-masked={!revealed}
           value={value}
           disabled={disabled}
           onChange={(e) => onEdit(name, e.target.value)}
@@ -1543,13 +1549,26 @@ export function Logins({
           {openProvider.inputs.map((field) => (
             <label key={field.name} style={{ display: "block", fontSize: pxToRem(12) }}>
               {field.label}
-              <input
-                data-testid={`env-cred-${field.name}`}
-                type={field.secret ? "password" : "text"}
-                value={creds[field.name] ?? ""}
-                onChange={(e) => setCreds({ ...creds, [field.name]: e.target.value })}
-                className="input input--block"
-              />
+              {/* A real login, so the browser may remember it and fill it back
+                  — here, and nowhere else on the page (src/styles/autofill.test.ts). */}
+              {field.secret ? (
+                <input
+                  data-testid={`env-cred-${field.name}`}
+                  type="password"
+                  autoComplete="current-password"
+                  value={creds[field.name] ?? ""}
+                  onChange={(e) => setCreds({ ...creds, [field.name]: e.target.value })}
+                  className="input input--block"
+                />
+              ) : (
+                <input
+                  data-testid={`env-cred-${field.name}`}
+                  autoComplete="username"
+                  value={creds[field.name] ?? ""}
+                  onChange={(e) => setCreds({ ...creds, [field.name]: e.target.value })}
+                  className="input input--block"
+                />
+              )}
             </label>
           ))}
           {credError && (

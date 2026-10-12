@@ -151,6 +151,7 @@ export function GroupsPage({ client = groupsApi }: { client?: GroupsApi }) {
       ) : (
         <>
           <input
+            autoComplete="off"
             type="search"
             data-testid="groups-search"
             className="input"
@@ -362,6 +363,7 @@ function GroupNameEditor({
 
   return (
     <input
+      autoComplete="off"
       // eslint-disable-next-line jsx-a11y/no-autofocus
       autoFocus
       className="input inline-edit"
@@ -624,6 +626,7 @@ function CreateGroupModal({
         <label style={field}>
           <span className="caps">Name</span>
           <input
+            autoComplete="off"
             aria-label="Group name"
             value={name}
             onChange={(e) => setName(e.target.value)}
@@ -633,6 +636,7 @@ function CreateGroupModal({
         <label style={field}>
           <span className="caps">Description</span>
           <input
+            autoComplete="off"
             aria-label="Group description"
             value={description}
             onChange={(e) => setDescription(e.target.value)}

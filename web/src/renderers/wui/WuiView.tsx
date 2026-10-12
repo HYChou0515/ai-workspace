@@ -1398,6 +1398,7 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
                     clipboard is unavailable (a non-secure context), so there is
                     one way to show the address, not two. */}
                 <input
+                  autoComplete="off"
                   className="input"
                   aria-label="Page address"
                   readOnly

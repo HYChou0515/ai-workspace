@@ -187,6 +187,7 @@ export function TerminalPane({ investigationId }: { investigationId: string }) {
       >
         <span style={{ color: "var(--accent)" }}>{prompt(investigationId)}</span>
         <input
+          autoComplete="off"
           ref={inputRef}
           value={draft}
           onChange={(e) => setDraft(e.target.value)}

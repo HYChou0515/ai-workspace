@@ -272,11 +272,14 @@ describe("Private", () => {
 
     const input = () => screen.getByTestId("env-mine-ERP_TOKEN") as HTMLInputElement;
     await waitFor(() => expect(input().value).toBe("s3cret"));
-    expect(input().type).toBe("password");
+    // Masked by the stylesheet, never as a password field: a password manager
+    // fills a saved login into every one of those (src/styles/autofill.test.ts).
+    expect(input().type).toBe("text");
+    expect(input()).toHaveAttribute("data-masked", "true");
 
     fireEvent.click(screen.getByTestId("env-reveal-ERP_TOKEN"));
 
-    expect(input().type).toBe("text");
+    expect(input()).toHaveAttribute("data-masked", "false");
   });
 
   it("saves the person's values on their own, never the shared ones", async () => {

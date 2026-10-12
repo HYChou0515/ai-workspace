@@ -227,6 +227,7 @@ export function WuiOverviewPage({ client = wuiApi }: { client?: WuiApi }) {
               {t("wui.mine")}
             </Chip>
             <input
+              autoComplete="off"
               className="input"
               type="search"
               value={query}

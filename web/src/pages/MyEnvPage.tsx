@@ -141,7 +141,8 @@ export function MyEnvPage({
           <input
             data-testid="my-env-new-value"
             className="input"
-            type="password"
+            // Masked by the stylesheet, not `type="password"` (src/styles/autofill.test.ts).
+            data-masked
             placeholder={t("myEnv.value")}
             aria-label={t("myEnv.value")}
             value={value}

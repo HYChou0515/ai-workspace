@@ -568,6 +568,7 @@ export function KbCollectionPage({ client = kbApi }: { client?: KbApi }) {
             </div>
             {editingName ? (
               <input
+                autoComplete="off"
                 className="input kb-colpage__nameedit"
                 // biome-ignore lint/a11y/noAutofocus: rename input should grab focus
                 autoFocus

@@ -832,11 +832,11 @@ export function FacetGallery({
         )}
         <label style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
           from rank
-          <input className="input" value={from} onChange={(e) => setFrom(e.target.value)} style={{ flex: "none", width: 64 }} />
+          <input autoComplete="off" className="input" value={from} onChange={(e) => setFrom(e.target.value)} style={{ flex: "none", width: 64 }} />
         </label>
         <label style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
           to rank
-          <input className="input" value={to} onChange={(e) => setTo(e.target.value)} style={{ flex: "none", width: 64 }} />
+          <input autoComplete="off" className="input" value={to} onChange={(e) => setTo(e.target.value)} style={{ flex: "none", width: 64 }} />
         </label>
         <button
           type="button"

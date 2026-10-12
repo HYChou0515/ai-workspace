@@ -96,6 +96,7 @@ function TagInput({ label, value, onChange }: { label: string; value: string[]; 
         </span>
       ))}
       <input
+        autoComplete="off"
         aria-label={label}
         value={draft}
         onChange={(e) => setDraft(e.target.value)}
@@ -208,6 +209,7 @@ export function ItemForm({
     >
       <Field label={labelOf("title")} required>
         <input
+          autoComplete="off"
           ref={titleRef}
           aria-label={labelOf("title")}
           value={String(values.title ?? "")}
@@ -238,7 +240,7 @@ export function ItemForm({
                 ) : field.kind === "tags" ? (
                   <TagInput label={label} value={Array.isArray(values[n]) ? (values[n] as string[]) : []} onChange={(v) => set(n, v)} />
                 ) : (
-                  <input aria-label={label} value={String(values[n] ?? "")} onChange={(e) => set(n, e.target.value)} className="input input--block" style={fieldSize} />
+                  <input autoComplete="off" aria-label={label} value={String(values[n] ?? "")} onChange={(e) => set(n, e.target.value)} className="input input--block" style={fieldSize} />
                 )}
               </Field>
             );

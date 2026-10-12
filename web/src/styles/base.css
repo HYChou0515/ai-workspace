@@ -233,6 +233,13 @@ select {
 .input[aria-invalid="true"] {
   border-color: var(--err);
 }
+/* A secret that is not a login (an env value, a token): drawn as dots by the
+   stylesheet, because a `type="password"` field is one a password manager fills
+   with whatever login it saved for this origin (src/styles/autofill.test.ts).
+   Chrome / Edge / Safari, and Firefox from 114. */
+.input[data-masked="true"] {
+  -webkit-text-security: disc;
+}
 
 /* A textarea with `.input`'s `padding: 0 10px` has its first line on the
    border. By element, not a modifier to remember: a forgotten modifier is the

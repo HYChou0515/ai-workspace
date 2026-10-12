@@ -188,6 +188,7 @@ export function TuneParsingModal({
             {t("kb.tuneParsing.question")}
           </span>
           <input
+            autoComplete="off"
             aria-label={t("kb.tuneParsing.question")}
             value={question}
             placeholder={t("kb.tuneParsing.questionPlaceholder")}

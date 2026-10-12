@@ -53,6 +53,7 @@ export function DomainField({
   if (editing && field.kind === "text") {
     return (
       <input
+        autoComplete="off"
         className="input inline-edit"
         autoFocus
         defaultValue={text}

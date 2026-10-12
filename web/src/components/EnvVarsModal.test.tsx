@@ -283,6 +283,10 @@ describe("EnvVarsModal declared fields (#750)", () => {
     fireEvent.change(screen.getByTestId("env-cred-user"), { target: { value: "alice" } });
     const secret = screen.getByTestId("env-cred-password") as HTMLInputElement;
     expect(secret.type).toBe("password");
+    // A real login: the browser may remember it and fill it back here
+    // (user 2026-10-12), and only here (src/styles/autofill.test.ts).
+    expect(secret).toHaveAttribute("autocomplete", "current-password");
+    expect(screen.getByTestId("env-cred-user")).toHaveAttribute("autocomplete", "username");
     fireEvent.change(secret, { target: { value: "hunter2" } });
     fireEvent.click(screen.getByTestId("env-cred-submit"));
 

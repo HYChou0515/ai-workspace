@@ -170,6 +170,7 @@ export function OutsideLookupCard({
             {t("lookup.query")}
           </label>
           <input
+            autoComplete="off"
             id={`${ids}-q`}
             className="input"
             value={query}
@@ -244,6 +245,7 @@ export function OutsideLookupCard({
             {t("lookup.reason")}
           </label>
           <input
+            autoComplete="off"
             id={`${ids}-r`}
             className="input"
             value={reason}
@@ -366,6 +368,7 @@ export function OutsideLookupCard({
               {t("lookup.source")}
             </label>
             <input
+              autoComplete="off"
               id={`${ids}-s`}
               className="input"
               type="url"

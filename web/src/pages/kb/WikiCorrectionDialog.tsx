@@ -179,6 +179,7 @@ export function WikiCorrectionDialog({
                 <label className="kb-field" key={i}>
                   <span className="kb-field__label">{q}</span>
                   <input
+                    autoComplete="off"
                     className="input input--block"
                     value={pendingAnswers[i] ?? ""}
                     onChange={(e) =>
@@ -208,6 +209,7 @@ export function WikiCorrectionDialog({
           <label className="kb-field">
             <span className="kb-field__label">{t("wikiCorrection.targetLabel")}</span>
             <input
+              autoComplete="off"
               className="input input--block"
               placeholder={t("wikiCorrection.targetPlaceholder")}
               value={targetPage}

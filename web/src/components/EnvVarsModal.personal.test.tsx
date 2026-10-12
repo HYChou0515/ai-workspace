@@ -13,7 +13,7 @@
  */
 // @vitest-environment happy-dom
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { ItemToolState } from "../api/types";
@@ -369,6 +369,21 @@ describe("the Private(跨workspace) tab", () => {
 
     await waitFor(() => expect(onClose).toHaveBeenCalled());
     expect(personalClient.put).not.toHaveBeenCalled();
+  });
+
+  it("masks each value until asked, without a password field", async () => {
+    // A password field is one a password manager fills with whatever login it
+    // saved for this origin (src/styles/autofill.test.ts).
+    open({ personal: { ERP_TOKEN: "everywhere" } });
+    await personalTab();
+    const input = (await screen.findByTestId("env-personal-ERP_TOKEN")) as HTMLInputElement;
+    expect(input.type).toBe("text");
+    expect(input).toHaveAttribute("data-masked", "true");
+
+    const row = screen.getByTestId("env-personal-row-ERP_TOKEN");
+    fireEvent.click(within(row).getByRole("button", { pressed: false }));
+
+    expect(input).toHaveAttribute("data-masked", "false");
   });
 
   it("links to the page that holds all of them", async () => {
