@@ -1784,7 +1784,8 @@ function ActivityBar({
   // person at a gate — a count badge on the Workflows entry's icon (Material 3
   // "Badges"). The same read the sidebar lists from (`runsPollMs` paces it).
   const waiting = (useItemRuns(slug, itemId).data ?? []).filter(
-    (r) => r.status === "awaiting_human",
+    // not one superseded by a newer execution of its workflow: it can only be stopped
+    (r) => r.status === "awaiting_human" && r.latest !== false,
   ).length;
   // Which pane was on show when the current gesture began — the first click of
   // a double click has already switched `mode`, so "did you double-click the

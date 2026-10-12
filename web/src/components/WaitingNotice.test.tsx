@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, screen } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { workflowApi, type ProfileDTO, type WorkflowRunDTO } from "../api/workflows";
@@ -139,13 +139,28 @@ describe("WaitingNotice", () => {
   });
 });
 
-describe("review round 2", () => {
-  it("keeps its place while its own execution's tab is in front, saying to decide there", async () => {
-    // Unmounting it there moved the whole workspace by its height on every switch.
-    vi.mocked(workflowApi.listRuns).mockResolvedValue([waiting("workflow-run:front", at(15, 0))]);
+describe("review round 3", () => {
+  it("is not there for its own execution's tab, which is the page it would point at", async () => {
+    // GOV.UK "Notification banner": not for what is directly relevant to the page
+    // in front. (Round 2 kept it there to stop a layout shift; round 3 put it back.)
+    vi.mocked(workflowApi.listRuns).mockResolvedValue([
+      waiting("workflow-run:front", at(15, 0)),
+      waiting("workflow-run:other", at(9, 0), { status: "running", pending_decision: null }),
+    ]);
     render(executionPath("workflow-run:front"));
+    await waitFor(() => expect(workflowApi.listRuns).toHaveBeenCalled());
+    await new Promise((r) => setTimeout(r, 50));
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+
+  it("does not ask for a decision nobody can take — a superseded execution only stops", async () => {
+    vi.mocked(workflowApi.listRuns).mockResolvedValue([
+      waiting("workflow-run:old", at(9, 0), { latest: false }),
+      waiting("workflow-run:new", at(14, 3), { latest: true }),
+    ]);
+    render();
     const notice = await screen.findByRole("status");
-    expect(notice).toHaveTextContent("decide it below");
-    expect(screen.queryByRole("button", { name: "Open" })).toBeNull();
+    expect(notice).toHaveTextContent("10/12 14:03");
+    expect(notice).not.toHaveTextContent("more waiting");
   });
 });

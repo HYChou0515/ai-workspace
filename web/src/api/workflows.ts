@@ -120,6 +120,10 @@ export type WorkflowRunDTO = {
    * a schedule's executions share one) — what the execution tab reads its
    * rows' messages from, selected by `run_id`. */
   chat_id?: string;
+  /** In the item's run list only: whether this is the newest execution of its
+   * workflow (they share one journal; only the newest may be continued, changed
+   * or decided). Absent on `GET …/runs/{id}`. */
+  latest?: boolean;
 };
 
 /** `GET …/runs/{id}/files` — what an execution's tab links, asked when the run

@@ -22,6 +22,7 @@ import {
   useCancelRun,
   useConfirmSteer,
   useDecide,
+  useItemRuns,
   useRetryRun,
   useRun,
   useSteerRun,
@@ -200,14 +201,19 @@ export function ExecutionView({
   // A workflow's executions share one journal: an older one's files are the
   // newer one's now, so nothing here may read or redo them (review R1).
   // Asked when the run moves (status, the steps on its board), not every poll.
+  // …and when the item's list (already polled) says it stopped being the newest:
+  // a run waiting at a gate does not move, and a newer one may start (review R3).
+  const listed = useItemRuns(slug, itemId).data?.find((r) => r.run_id === runId);
   const moved = run
-    ? `${run.status}:${run.steps.map((st) => `${st.name}/${st.key}:${st.status}`).join(",")}`
+    ? `${run.status}:${run.steps.map((st) => `${st.name}/${st.key}:${st.status}`).join(",")}:${listed?.latest ?? ""}`
     : "";
   const filesQ = useQuery({
     queryKey: qk.workflowRunFiles(slug, itemId, runId, moved),
     queryFn: () => workflowApi.runFiles(slug, itemId, runId),
     enabled: !!run,
     placeholderData: (prev) => prev,
+    // a failed answer is asked again, or the actions would stay gone (review R3)
+    refetchInterval: (q) => (q.state.status === "error" ? 5000 : false),
   });
   const files = filesQ.data;
   // Shown as the newest until known otherwise only for reading; anything that
@@ -389,7 +395,7 @@ export function ExecutionView({
         </section>
       )}
 
-      {steerPlan && (
+      {steerPlan && latest && (
         <div style={{ marginTop: 12 }}>
           <SteerConfirmCard
             plan={steerPlan}

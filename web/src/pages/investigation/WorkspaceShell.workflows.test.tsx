@@ -232,10 +232,8 @@ describe("the waiting notice", () => {
     expect(notice).toHaveTextContent("Check it");
     fireEvent.click(within(notice).getByRole("button", { name: "Open" }));
     expect((await screen.findByTestId("execution-view")).dataset.run).toBe("workflow-run:r1");
-    // now in front of the person: no Open, but it keeps its place (no layout jump)
-    await waitFor(() =>
-      expect(within(screen.getByTestId("waiting-notice")).queryByRole("button", { name: "Open" })).toBeNull(),
-    );
+    // now in front of the person: the notice has done its job
+    await waitFor(() => expect(screen.queryByTestId("waiting-notice")).toBeNull());
   });
 });
 
@@ -271,5 +269,16 @@ describe("an address that names an execution", () => {
     openShell();
     await screen.findByRole("button", { name: /^Workflows/ });
     expect(screen.queryByRole("tab", { name: /secret/ })).toBeNull();
+  });
+});
+
+describe("the badge (review round 3)", () => {
+  it("does not count an execution superseded by a newer one: it can only be stopped", async () => {
+    vi.mocked(workflowApi.listRuns).mockResolvedValue([
+      { ...run("workflow-run:a", "awaiting_human"), latest: false },
+      { ...run("workflow-run:b", "awaiting_human"), latest: true },
+    ]);
+    openShell();
+    expect(await screen.findByTestId("workflows-waiting")).toHaveTextContent("1");
   });
 });

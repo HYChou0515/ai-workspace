@@ -498,7 +498,7 @@ Each finding and the fix chosen for it:
 | 3 | A Stop while a Continue was being claimed (PENDING, no driver yet) answered success and was lost. | `retry` records the claim (`_claiming`); `cancel` settles a claimed run as `cancelled`, and `retry` stands down if the run is no longer its PENDING claim. A Stop from another pod in that window is not caught (the claim is pod-local). |
 | 4 | One failed poll swapped the tab for an error and stopped polling for good. | `useRun` stops only for a run never read. The error view shows only without data. |
 | 5 | Every 1 s poll listed the item's runs and read the workflow file. | `GET /runs/{id}` is one read again. `latest`, `step_files` and `inputs_path` are on `GET /runs/{id}/files`, which the tab asks again only when the run's status or board changes. A run waiting at a gate is polled every 5 s. |
-| 6 | The banner left the page flow while its execution's tab was in front, so switching tabs moved the workspace by its height. | It keeps its place there, without Open, saying "decide it below". |
+| 6 | The banner left the page flow while its execution's tab was in front, so switching tabs moved the workspace by its height. | It kept its place there, without Open, saying "decide it below" (undone in round 3: the cited guidance says not to). |
 | 7 | The Inputs link named a file the run may not have read, or one that does not exist. | `inputs_path` is the `input.json` the workflow reads NOW, for the newest only, and "" when absent. |
 | 8 | Text still describing the chat flow, missing 409s, runbook WHEN / symptoms. | Reworded at HEAD (`workflows.md` schedules paragraph and Run section, `start` docstring, `WorkflowsModal`, plan P8, runbook). |
 
@@ -513,11 +513,30 @@ source in the plan and the PR):
 - The count on the Workflows entry follows Material 3 "Badges" (a small count
   on a navigation icon).
 - The waiting notice, as a banner in the page's flow, follows GOV.UK Design
-  System "Notification banner": it tells the user about something that needs
-  their attention, at the top of the page.
+  System "Notification banner": "something they need to know about, but that's
+  not directly related to the page content" — so it is not shown for the
+  execution whose tab is in front (round 3).
 - Locked accordion rows follow WAI-ARIA APG Accordion: "if the accordion does
   not permit the panel to be collapsed, the header button element has
   aria-disabled set to true."
+
+## Review round 3 and the third live check
+
+The last round of the budget. Its fixes are small, each pinned by a test that
+reddened on the code before and by a mutation probe; no mechanism was replaced.
+
+| # | Finding | Fix |
+|---|---|---|
+| 1 | A superseded execution waiting at a gate still asked for a decision: the banner said "decide it below" and the badge counted it, though only Stop was left. | `GET /runs` carries `latest` per run (newest of its workflow by creation, once per list poll). The badge and the banner skip `latest: false`. |
+| 2 | GOV.UK "Notification banner" is not for what is "directly relevant to the thing the user is doing on that page"; round 2 kept the banner for the execution whose tab was in front. | Back to hiding it there. The page shifts by the banner's height when that one tab comes to the front; the guidance outranks the shift. |
+| 3 | A tab waiting at a gate never learned it had been superseded (the `/files` key moved only with the run), and one failed `/files` answer removed the actions for good. | The key also carries the list's `latest` for the run; a failed `/files` is asked again every 5 s. |
+| 4 | A PENDING run with no driver anywhere (a pod died mid-claim, or mid-`start` in its queue) blocks every Continue of its workflow, and Stop answers success without settling it. | **Not fixed here.** Settling a PENDING run that has no local task would also settle one queued in another pod's semaphore, whose driver then starts anyway. The class predates this PR; it needs a cross-pod claim lease, which is a mechanism. Recorded as a follow-up. |
+| 5 | The steer confirm card still showed Approve on an older execution (answered 409), and the query keys' docs were misplaced. | The card shows only for the newest; the docs moved. |
+
+The third live check found the badge trailing an Approve by up to 30 s: a gate
+wait is the slow pace, and deciding refreshed only the one run. Deciding,
+proposing and confirming a change now refresh the item's list too
+(`useDecide` / `useSteerRun` / `useConfirmSteer`).
 
 ## Verification
 

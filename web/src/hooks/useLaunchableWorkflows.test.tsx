@@ -113,3 +113,30 @@ describe("useRun", () => {
     expect(get.mock.calls.length).toBe(asked);
   });
 });
+
+describe("acting on an execution", () => {
+  it("refreshes the item's executions, so the badge and the sidebar follow at once", async () => {
+    // Live check 3: a gate wait is the slow pace (30 s); after Approve the badge
+    // still read 1 because only the one run was refreshed.
+    const { renderHook, waitFor } = await import("@testing-library/react");
+    const { useDecide, useConfirmSteer, useSteerRun } = await import("./useWorkflow");
+    const { QueryClient } = await import("@tanstack/react-query");
+    const { qk } = await import("../api/queryKeys");
+    vi.spyOn(workflowApi, "decide").mockResolvedValue();
+    vi.spyOn(workflowApi, "confirmSteer").mockResolvedValue();
+    vi.spyOn(workflowApi, "steer").mockResolvedValue();
+    const spy = vi.spyOn(QueryClient.prototype, "invalidateQueries");
+    const keys = () => spy.mock.calls.map((c) => JSON.stringify(c[0]?.queryKey));
+    const list = JSON.stringify(qk.workflowRuns("hub", "it"));
+
+    for (const act of [
+      () => renderHook(() => useDecide("hub", "it", "r"), { wrapper: QueryWrap }).result.current.mutate({ choice: "approve" }),
+      () => renderHook(() => useConfirmSteer("hub", "it", "r"), { wrapper: QueryWrap }).result.current.mutate(true),
+      () => renderHook(() => useSteerRun("hub", "it", "r"), { wrapper: QueryWrap }).result.current.mutate("x"),
+    ]) {
+      spy.mockClear();
+      act();
+      await waitFor(() => expect(keys()).toContain(list));
+    }
+  });
+});

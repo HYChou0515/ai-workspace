@@ -42,14 +42,15 @@ export function WaitingNotice({
 
   const waitingRuns = runs
     .filter((r) => r.status === "awaiting_human" && (r.pending_decision || r.pending_steer))
+    // superseded by a newer execution of its workflow: it can only be stopped (R3)
+    .filter((r) => r.latest !== false)
     .filter((r) => !dismissed.has(waitKey(r)))
     .sort((a, b) => (b.started ?? 0) - (a.started ?? 0));
-  // Another one waiting is the news; the one whose tab is in front keeps the
-  // banner's place (no Open), so switching tabs never moves the page (review R2).
-  const shown =
-    waitingRuns.find((r) => executionPath(r.run_id) !== activePath) ?? waitingRuns[0];
+  // Not about the page in front (GOV.UK "Notification banner": not for what is
+  // directly relevant to it). Round 2 kept it there to spare a layout shift; the
+  // guidance outranks that (review R3).
+  const shown = waitingRuns.find((r) => executionPath(r.run_id) !== activePath);
   if (!shown) return null;
-  const inFront = executionPath(shown.run_id) === activePath;
   // The others, but not the one in front: the person is looking at it.
   const more = waitingRuns.filter((r) => r !== shown && executionPath(r.run_id) !== activePath).length;
   const title =
@@ -81,22 +82,18 @@ export function WaitingNotice({
         <span style={{ fontWeight: 600, overflowWrap: "anywhere" }}>
           {`${executionName(title, shown.started)} is waiting for you`}
         </span>
-        <span style={{ color: "var(--text-paper-d)", overflowWrap: "anywhere" }}>
-          {inFront ? `${what} — decide it below` : what}
-        </span>
+        <span style={{ color: "var(--text-paper-d)", overflowWrap: "anywhere" }}>{what}</span>
         {more > 0 && <span style={{ color: "var(--text-paper-d)" }}>{`· ${more} more waiting`}</span>}
       </div>
-      {!inFront && (
-        <button
-          type="button"
-          className="btn"
-          data-variant="primary"
-          data-size="sm"
-          onClick={() => onOpen(executionPath(shown.run_id))}
-        >
-          Open
-        </button>
-      )}
+      <button
+        type="button"
+        className="btn"
+        data-variant="primary"
+        data-size="sm"
+        onClick={() => onOpen(executionPath(shown.run_id))}
+      >
+        Open
+      </button>
       <button
         type="button"
         className="btn"

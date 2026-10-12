@@ -570,3 +570,62 @@ describe("review round 2", () => {
     });
   });
 });
+
+// ── review round 3 ──
+
+describe("review round 3", () => {
+  it("a tab waiting at a gate learns from the list that a newer execution superseded it", async () => {
+    vi.mocked(workflowApi.getRun).mockResolvedValue(
+      run({
+        status: "awaiting_human",
+        pending_decision: { phase: "sort", title: "Check the sort", summary: "", allow: ["approve"], decided_by: "" },
+      }),
+    );
+    const list = vi
+      .spyOn(workflowApi, "listRuns")
+      .mockResolvedValue([{ ...run(), status: "awaiting_human", latest: true }]);
+    const { client } = renderWithQueryView();
+    expect(await screen.findByTestId("wf-decision-card")).toBeInTheDocument();
+    // a newer execution starts; the list says so; the tab follows
+    list.mockResolvedValue([{ ...run(), status: "awaiting_human", latest: false }]);
+    vi.mocked(workflowApi.runFiles).mockResolvedValue({ latest: false, step_files: {}, inputs_path: "" });
+    await client.invalidateQueries({ queryKey: ["workflowRuns"] });
+    expect(await screen.findByText(/A newer execution of this workflow has run since/)).toBeInTheDocument();
+    expect(screen.queryByTestId("wf-decision-card")).toBeNull();
+  });
+
+  it("asks for the files again after a failed answer", async () => {
+    vi.mocked(workflowApi.getRun).mockResolvedValue(failedRun());
+    vi.mocked(workflowApi.runFiles).mockRejectedValueOnce(new Error("503")).mockResolvedValue(FILES);
+    render();
+    expect(
+      await within(await row("sort")).findByRole("button", { name: "Continue from here" }, { timeout: 8000 }),
+    ).toBeInTheDocument();
+  }, 12000);
+
+  it("offers an older execution's pending change no Approve", async () => {
+    vi.mocked(workflowApi.getRun).mockResolvedValue(
+      run({
+        status: "awaiting_human",
+        pending_steer: { instruction: "x", rationale: "", input_edits: [], invalidate: [], decided_by: "" },
+      }),
+    );
+    vi.mocked(workflowApi.runFiles).mockResolvedValue({ latest: false, step_files: {}, inputs_path: "" });
+    render();
+    await screen.findByText(/A newer execution of this workflow has run since/);
+    expect(screen.queryByTestId("wf-steer-approve")).toBeNull();
+  });
+});
+
+function renderWithQueryView() {
+  return renderWithQuery(
+    <ExecutionView
+      slug="hub"
+      itemId="it"
+      runId="workflow-run:r1"
+      profile="default"
+      fileService={{ exists: async () => true } as unknown as FileService}
+      onOpenFile={vi.fn()}
+    />,
+  );
+}

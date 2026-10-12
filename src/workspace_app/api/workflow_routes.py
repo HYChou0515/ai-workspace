@@ -576,18 +576,27 @@ def register_workflow_routes(
 
     @app.get("/a/{slug}/items/{item_id}/runs")
     async def list_workflow_runs(slug: str, item_id: str) -> list[dict]:
-        """#100: the item's run history (newest first), for the run-list view."""
+        """#100: the item's run history (newest first), for the run-list view.
+        `latest`: whether a run is the newest of its workflow on the item — its runs
+        share one journal, so only that one may be continued, changed or decided.
+        Computed here, once per list poll, so the badge, the waiting banner and an
+        open tab follow it without asking per run (review R3)."""
         investigation_id = locator.require_access(slug, item_id, "read_chat")
         rm = spec.get_resource_manager(WorkflowRun)
+        query = (QB["item_id"] == investigation_id).build()
+        created = {m.resource_id: m.created_time for m in rm.search_resources(query)}
         out: list[dict] = []
-        for r in rm.list_resources((QB["item_id"] == investigation_id).build()):
+        newest: dict[str, tuple[Any, str]] = {}
+        for r in rm.list_resources(query):
             assert isinstance(r.data, WorkflowRun)
-            out.append(
-                {
-                    "run_id": r.info.resource_id,  # ty: ignore[unresolved-attribute]
-                    **msgspec.to_builtins(r.data),
-                }
-            )
+            rid = r.info.resource_id  # ty: ignore[unresolved-attribute]
+            at = created.get(rid)
+            seen = newest.get(r.data.workflow_id)
+            if at is not None and (seen is None or at > seen[0]):
+                newest[r.data.workflow_id] = (at, rid)
+            out.append({"run_id": rid, **msgspec.to_builtins(r.data)})
+        for d in out:
+            d["latest"] = newest.get(d.get("workflow_id", ""), (None, ""))[1] == d["run_id"]
         out.sort(key=lambda d: d.get("started") or 0, reverse=True)
         return out
 

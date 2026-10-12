@@ -112,6 +112,9 @@ export function useDecide(slug: string, itemId: string, runId: string) {
       workflowApi.decide(slug, itemId, runId, body),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: qk.workflowRun(slug, itemId, runId) });
+      // and the item's list: a gate wait polls at the slow pace, so the badge and
+      // the sidebar would trail the action by up to 30 s (live check 3)
+      qc.invalidateQueries({ queryKey: qk.workflowRuns(slug, itemId) });
     },
   });
 }
@@ -137,6 +140,9 @@ export function useSteerRun(slug: string, itemId: string, runId: string) {
     mutationFn: (instruction: string) => workflowApi.steer(slug, itemId, runId, instruction),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: qk.workflowRun(slug, itemId, runId) });
+      // and the item's list: a gate wait polls at the slow pace, so the badge and
+      // the sidebar would trail the action by up to 30 s (live check 3)
+      qc.invalidateQueries({ queryKey: qk.workflowRuns(slug, itemId) });
     },
   });
 }
@@ -148,6 +154,9 @@ export function useConfirmSteer(slug: string, itemId: string, runId: string) {
     mutationFn: (approve: boolean) => workflowApi.confirmSteer(slug, itemId, runId, approve),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: qk.workflowRun(slug, itemId, runId) });
+      // and the item's list: a gate wait polls at the slow pace, so the badge and
+      // the sidebar would trail the action by up to 30 s (live check 3)
+      qc.invalidateQueries({ queryKey: qk.workflowRuns(slug, itemId) });
     },
   });
 }

@@ -1089,3 +1089,18 @@ def test_an_older_executions_decision_and_change_are_409_not_500():
         assert r.status_code == 409, r.text
         r = client.post(f"{_base(item_id)}/runs/{older}/steer", json={"instruction": "x"})
         assert r.status_code == 409, r.text
+
+
+def test_the_runs_list_says_which_execution_is_the_newest_of_its_workflow():
+    """Review R3: the badge, the waiting banner and a tab waiting at a gate learn
+    from the list they already poll that a newer execution superseded one."""
+    app, spec, item_id = _app()
+    with TestClient(app) as client:
+        _put_input(client, item_id, '{"n": 1}')
+        older = client.post(f"{_base(item_id)}/run").json()["run_id"]
+        _poll(client, item_id, older, "done")
+        newer = client.post(f"{_base(item_id)}/run").json()["run_id"]
+        _poll(client, item_id, newer, "done")
+        _mark(app, spec, older, "error")  # written again after the newer: still older
+        listed = {r["run_id"]: r["latest"] for r in client.get(f"{_base(item_id)}/runs").json()}
+    assert listed == {older: False, newer: True}
