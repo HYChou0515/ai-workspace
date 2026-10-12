@@ -23,11 +23,12 @@ class _RecordingRunner:
     def __init__(self) -> None:
         self.histories: list[list[dict[str, Any]]] = []
         self.prompts: list[str] = []
+        self.reply = "ok"
 
     async def run(self, prompt: str, ctx: Any) -> AsyncIterator[AgentEvent]:
         self.prompts.append(prompt)
         self.histories.append(list(ctx.history or []))
-        yield MessageDelta(text="ok")
+        yield MessageDelta(text=self.reply)
         yield RunDone()
 
 
@@ -207,3 +208,42 @@ async def test_a_map_elements_turn_on_its_own_lane_is_journaled_too(stack: dict[
 
     path = transcript_path(wf.journal_dir, "note", "x.png")
     assert "describe x.png" in (await stack["ex"]._files.read(stack["item_id"], path)).decode()
+
+
+async def test_a_steer_proposal_leaves_no_trace_in_the_executions_thread(
+    stack: dict[str, Any],
+) -> None:
+    """D2: the steerer answers in JSON, and that JSON was persisted and streamed
+    as the agent's reply. Its turn is not part of the execution's record: nothing
+    is persisted and nothing reaches the execution's live stream. The plan is
+    shown as a confirm card instead (`pending_steer`, carrying the request)."""
+    import asyncio
+    import json
+
+    from workspace_app.resources import Conversation
+    from workspace_app.workflow.handle import WorkflowHandle
+    from workspace_app.workflow.steer import propose_steer
+
+    rid = stack["conv_rm"].create(Conversation(item_id=stack["item_id"])).resource_id
+    wf = WorkflowHandle(store=stack["ex"]._files, workspace_id=stack["item_id"], workflow_id="w")
+    stack["ex"].wire_handle(wf, "run-1", stack["item_id"], "u", rid)
+    stack["runner"].reply = json.dumps(
+        {"rationale": "use b", "input_edits": [], "invalidate": ["classify"]}
+    )
+
+    streamed: list[Any] = []
+    sub = stack["ex"]._turn_engine.subscribe(rid)
+
+    async def watch() -> None:
+        async for ev in sub:
+            streamed.append(ev)
+
+    watcher = asyncio.create_task(watch())
+    await asyncio.sleep(0)
+    plan = await propose_steer(wf, instruction="use collection b")
+    await asyncio.sleep(0.05)
+    watcher.cancel()
+
+    assert plan.instruction == "use collection b"
+    assert stack["conv_rm"].get(rid).data.messages == []
+    assert not [ev for ev in streamed if isinstance(ev, MessageDelta)]

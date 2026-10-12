@@ -171,6 +171,7 @@ class WorkflowExecutor:
         run_id: str = "",
         step: StepRef | None = None,
         journal_dir: str = "",
+        record: bool = True,
     ) -> str:
         """Run one agent node as a turn on the run's WORKFLOW CHAT (§3, §5.1):
         ``chat_key`` is that chat's conversation id, so turns enqueue + persist there
@@ -244,6 +245,9 @@ class WorkflowExecutor:
 
         def persist(produced: list[TurnMessage]) -> None:
             nonlocal answer
+            answer = _reply_text(produced)
+            if not record:  # an aside (the steerer): not part of the run's record
+                return
             conv2 = self._conv_rm.get(rid).data  # re-fetch the workflow chat
             assert isinstance(conv2, Conversation)
             # The step's own prompt first, then what it produced, all marked with
@@ -266,9 +270,10 @@ class WorkflowExecutor:
             with self._conv_rm.using(user=captured_user):
                 conv2.messages.extend((prompt_msg, *turn))
                 self._conv_rm.update(rid, conv2)
-            answer = _reply_text(produced)
 
-        enqueue_key = lane or chat_key
+        # An aside runs on a lane of its own, so nothing it streams reaches the
+        # run's live stream (subscribers listen on ``chat_key``).
+        enqueue_key = f"{chat_key}#aside" if not record else (lane or chat_key)
         logger.debug(
             "workflow_exec: enqueue turn on %s for item %s (chat %s)",
             enqueue_key,
@@ -276,10 +281,10 @@ class WorkflowExecutor:
             chat_key,
         )
         await self._turn_engine.enqueue(enqueue_key, prompt, ctx, on_complete=persist)
-        if ref is not None and journal_dir and run_id:
+        if record and ref is not None and journal_dir and run_id:
             await self._write_transcript(item_id, rid, run_id, ref, journal_dir)
-        if lane is not None and lane != chat_key:  # transient sub-lane → drop its session
-            await self._turn_engine.forget(lane)
+        if enqueue_key != chat_key:  # transient sub-lane → drop its session
+            await self._turn_engine.forget(enqueue_key)
         # A Stop that landed DURING this turn advanced the epoch past the baseline
         # (the watcher already cancelled the turn) → abort the run, don't step on.
         if await self._turn_engine.cancel_epoch(chat_key) > baseline:
@@ -615,6 +620,16 @@ class WorkflowExecutor:
             entity_write_origin=origin,
             run_id=run_id,
             journal_dir=wf.journal_dir,
+        )
+        wf.aside_turn = lambda prompt, tools: self.drive_turn(
+            item_id,
+            chat_key,
+            captured_user,
+            prompt,
+            tools,
+            entity_write_origin=origin,
+            run_id=run_id,
+            record=False,
         )
         wf.reconcile = lambda: self._reconcile(item_id)
         # #429 P5: a per-element turn-lane factory — each map element drives its own

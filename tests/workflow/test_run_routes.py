@@ -659,6 +659,27 @@ def test_steer_proposes_a_plan_then_confirm_resumes_with_the_new_input():
     assert resumed["pending_steer"] is None
 
 
+def test_a_steer_over_http_puts_no_json_in_the_executions_thread():
+    """plan-workflow-out-of-chat D2: the steerer's JSON used to land in the run's
+    conversation as the agent's reply (up to three times on retries) while the
+    person's own words were never shown. Now the thread is untouched; the plan
+    is the confirm card, carrying the request."""
+    app, spec, item_id = _app(reply=_STEER_PLAN)
+    conv_rm = spec.get_resource_manager(Conversation)
+    with TestClient(app) as client:
+        _put_input(client, item_id, '{"n": 7}')
+        started = client.post(f"{_base(item_id)}/run").json()
+        run_id, chat_id = started["run_id"], started["chat_id"]
+        _poll(client, item_id, run_id, "done")
+        before = list(conv_rm.get(chat_id).data.messages)
+
+        client.post(f"{_base(item_id)}/runs/{run_id}/steer", json={"instruction": "use n=42"})
+        paused = _poll(client, item_id, run_id, "awaiting_human")
+
+    assert paused["pending_steer"]["instruction"] == "use n=42"
+    assert conv_rm.get(chat_id).data.messages == before
+
+
 def test_reject_steer_discards_the_plan():
     """Rejecting a proposed steer discards it (no edits applied) and leaves the run
     stopped — the operator can re-instruct or take over."""

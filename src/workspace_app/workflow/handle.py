@@ -198,6 +198,11 @@ class WorkflowHandle:
         self.step_timeout_s = step_timeout_s
         """Per-step wall-clock cap for an agent turn (manual §17); None ⇒ no cap.
         Exceeding it aborts the step (and so the run) to ``error``."""
+        self.aside_turn: DriveTurn | None = None
+        """A turn that is not part of the run's record (plan-workflow-out-of-chat D2):
+        nothing persisted, nothing on the run's live stream, no transcript. The
+        steerer proposes through it, so its JSON is never shown as the agent's
+        reply. Wired by the executor; None ⇒ ``drive_turn`` (unit tests)."""
         self.sub_turn = sub_turn
         """#429 P5: a ``subkey → DriveTurn`` factory the driver wires so ``sub_handle``
         can bind each map element its own turn lane (real parallel agent turns). None ⇒

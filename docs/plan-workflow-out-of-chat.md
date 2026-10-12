@@ -169,6 +169,18 @@ so a schedule's shared conversation shows one execution at a time.
 **P5 — steer off the thread.**
 - The steerer's turn persists nothing to the execution's conversation.
 - `pending_steer` carries the instruction for the confirm card.
+- **Built:**
+  - `WorkflowHandle.aside_turn` is a turn that is not part of the run's record.
+    The executor wires it as `drive_turn(record=False)`, which persists
+    nothing, writes no transcript, and runs on a lane of its own
+    (`<chat>#aside`, dropped after), so nothing it streams reaches the run's
+    live stream.
+  - `propose_steer` drives through it, falling back to `drive_turn` only where
+    nothing wired it (unit tests).
+  - `SteerPlan.instruction` already carried the person's request, so the card
+    (P8) reads it. Nothing new was needed there.
+  - Pinned through `wire_handle` and over `POST …/steer`. Mutation-probed: 4
+    guard lines each redden.
 
 **P6 — chat surfaces stop showing runs.**
 - The chat list, switcher and manage-chats leave out conversations with
