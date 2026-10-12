@@ -138,3 +138,14 @@ describe("WaitingNotice", () => {
     expect(onOpen).toHaveBeenCalledWith(executionPath("workflow-run:new"));
   });
 });
+
+describe("review round 2", () => {
+  it("keeps its place while its own execution's tab is in front, saying to decide there", async () => {
+    // Unmounting it there moved the whole workspace by its height on every switch.
+    vi.mocked(workflowApi.listRuns).mockResolvedValue([waiting("workflow-run:front", at(15, 0))]);
+    render(executionPath("workflow-run:front"));
+    const notice = await screen.findByRole("status");
+    expect(notice).toHaveTextContent("decide it below");
+    expect(screen.queryByRole("button", { name: "Open" })).toBeNull();
+  });
+});

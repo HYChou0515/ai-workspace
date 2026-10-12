@@ -10,7 +10,9 @@ import {
   phaseView,
   stepBoard,
   stepOf,
+  workflowApi,
   type PhaseNode,
+  type RunFilesDTO,
   type StepStateDTO,
   type WorkflowRunDTO,
 } from "../api/workflows";
@@ -67,30 +69,36 @@ function chipTone(status: string) {
   }
 }
 
-/** Whether the step wrote a transcript: only agent steps do, so a link or a
- * pointer to one is offered only once the file is known to be there. */
-function useHasTranscript(
+/** Whether the step wrote a transcript (only agent steps do), and whether that
+ * answer is in yet: a link or a pointer to one is offered only once the file is
+ * known to be there, and Ask waits for the answer so its question never goes out
+ * without the record. Asked again whenever the step moves on: an answer cached
+ * while it ran (no transcript yet) must not outlive its failure (review R1). */
+function useTranscript(
   fileService: FileService,
   path: string | undefined,
   step: StepStateDTO | undefined,
-): boolean {
-  // Asked again whenever the step moves on: an answer cached while it ran (no
-  // transcript yet) must not outlive its failure (review R1).
+): { has: boolean; known: boolean } {
   const version = step ? `${step.status}:${step.attempts}:${step.ended ?? ""}` : "";
   const q = useQuery({
     queryKey: qk.executionTranscript(path ?? "", version),
     queryFn: () => fileService.exists(path!),
     enabled: !!path,
   });
-  return !!q.data;
+  return { has: !!q.data, known: !path || q.isFetched };
 }
 
 /** "Open a chat with these results" (D8): the execution and the result files
  * the chat may read — never its transcripts, which are how they were made. */
-function resultsDraft(name: string, runId: string, run: WorkflowRunDTO | undefined): string {
+function resultsDraft(
+  name: string,
+  runId: string,
+  run: WorkflowRunDTO | undefined,
+  files: RunFilesDTO | undefined,
+): string {
   const results = (run?.steps ?? [])
     .filter((st) => !st.key && (st.status === "passed" || st.status === "skipped"))
-    .map((st) => run?.step_files?.[st.name]?.result)
+    .map((st) => files?.step_files?.[st.name]?.result)
     .filter((p): p is string => !!p);
   const lines = [`About the workflow execution "${name}" (${executionPath(runId)}).`];
   if (results.length) lines.push("Its results:", ...results.map((p) => `- ${p}`));
@@ -191,7 +199,21 @@ export function ExecutionView({
   const isOpen = (n: PhaseNode) => sticky(n, run) || open[n.id] === true;
   // A workflow's executions share one journal: an older one's files are the
   // newer one's now, so nothing here may read or redo them (review R1).
-  const latest = run?.latest !== false;
+  // Asked when the run moves (status, the steps on its board), not every poll.
+  const moved = run
+    ? `${run.status}:${run.steps.map((st) => `${st.name}/${st.key}:${st.status}`).join(",")}`
+    : "";
+  const filesQ = useQuery({
+    queryKey: qk.workflowRunFiles(slug, itemId, runId, moved),
+    queryFn: () => workflowApi.runFiles(slug, itemId, runId),
+    enabled: !!run,
+    placeholderData: (prev) => prev,
+  });
+  const files = filesQ.data;
+  // Shown as the newest until known otherwise only for reading; anything that
+  // touches the shared journal waits until it is known (`latest === true`).
+  const latest = files?.latest === true;
+  const superseded = files?.latest === false;
   const chatAvailable = canRequestChat(itemId);
   const [changing, setChanging] = useState(false);
   const [instruction, setInstruction] = useState("");
@@ -205,7 +227,9 @@ export function ExecutionView({
   const decideWith = (choice: string, input?: string) =>
     decide.mutate(input === undefined ? { choice } : { choice, input }, report);
 
-  if (runQ.isError) {
+  // An error view only for a run never read: a failed poll of one already
+  // shown keeps it on screen while polling goes on (review R2).
+  if (runQ.isError && !run) {
     return (
       <div role="alert" style={{ padding: 20 }}>
         This execution could not be read: {errorText(runQ.error)}
@@ -255,7 +279,7 @@ export function ExecutionView({
             className="btn"
             data-size="sm"
             data-variant="secondary"
-            onClick={() => publishChatRequest(itemId, resultsDraft(name, runId, run))}
+            onClick={() => publishChatRequest(itemId, resultsDraft(name, runId, run, files))}
           >
             Open a chat with these results
           </button>
@@ -271,6 +295,9 @@ export function ExecutionView({
             Continue
           </button>
         )}
+        {/* Its only action changes the run, which an older execution may not
+            (it would invalidate the newer one's step files; review R2). */}
+        {latest && (
         <Popover
           align="end"
           trigger={({ onClick, open: menuOpen }) => (
@@ -298,6 +325,7 @@ export function ExecutionView({
             </PopoverItem>
           )}
         </Popover>
+        )}
       </header>
 
       {failure && (
@@ -313,11 +341,11 @@ export function ExecutionView({
           {`The change could not be proposed: ${run.result.steer_error}`}
         </p>
       )}
-      {!latest && (
+      {superseded && (
         <p role="note" style={{ color: "var(--text-paper-d)", margin: "10px 0 0" }}>
           A newer execution of this workflow has run since. They share their step files, so
-          this one&apos;s results, records and Continue are no longer offered here; its own
-          messages below are still its own.
+          this one&apos;s results, records, Continue, changes and decisions are no longer offered
+          here — stop it if it still waits. Its own messages below are still its own.
         </p>
       )}
 
@@ -398,7 +426,7 @@ export function ExecutionView({
             key={node.id}
             node={node}
             steps={steps}
-            run={run}
+            stepFiles={files?.step_files}
             expanded={isOpen(node)}
             locked={sticky(node, run)}
             onToggle={() => setOpen((o) => ({ ...o, [node.id]: !isOpen(node) }))}
@@ -409,7 +437,7 @@ export function ExecutionView({
             fileService={fileService}
             onOpenFile={onOpenFile}
           >
-            {gate && gate.phase === node.id && (
+            {gate && gate.phase === node.id && latest && (
               <WorkflowDecisionCard
                 decision={gate}
                 busy={decide.isPending}
@@ -432,12 +460,13 @@ export function ExecutionView({
                 busy={retry.isPending}
                 canRetry={latest && (run?.status === "error" || run?.status === "cancelled")}
                 onRetry={(rerun) => retry.mutate(rerun, report)}
-                files={run?.step_files}
+                files={files?.step_files}
                 fileService={fileService}
-                inputsPath={run?.inputs_path}
+                inputsPath={files?.inputs_path || undefined}
                 onOpenFile={onOpenFile}
+                // only once its files are known, so the question carries the record
                 onAsk={
-                  chatAvailable
+                  chatAvailable && files !== undefined
                     ? (step, transcript) =>
                         publishChatRequest(itemId, whyDraft(name, runId, node.title, step, transcript))
                     : undefined
@@ -498,7 +527,7 @@ function LiveTail({
 function StepRow({
   node,
   steps,
-  run,
+  stepFiles,
   expanded,
   locked,
   onToggle,
@@ -512,7 +541,7 @@ function StepRow({
 }: {
   node: PhaseNode;
   steps: StepStateDTO[];
-  run: WorkflowRunDTO | undefined;
+  stepFiles: RunFilesDTO["step_files"] | undefined;
   expanded: boolean;
   /** Open and not closable: being worked on, waiting, or failed (D7). */
   locked: boolean;
@@ -530,7 +559,7 @@ function StepRow({
   // D6: a closed row still shows its outputs — the result of its one named step.
   const named = steps.filter((s) => !s.key);
   const done = named.length === 1 && (named[0].status === "passed" || named[0].status === "skipped");
-  const result = done ? run?.step_files?.[named[0].name]?.result : undefined;
+  const result = done ? stepFiles?.[named[0].name]?.result : undefined;
   return (
     <li
       data-testid="execution-step"
@@ -588,7 +617,7 @@ function StepRow({
             <StepLine
               key={`${s.name}/${s.key}`}
               step={s}
-              files={s.key ? undefined : run?.step_files?.[s.name]}
+              files={s.key ? undefined : stepFiles?.[s.name]}
               fileService={fileService}
               onOpenFile={onOpenFile}
               many={steps.length > 1}
@@ -619,7 +648,7 @@ function StepLine({
   many: boolean;
 }) {
   const done = step.status === "passed" || step.status === "skipped";
-  const hasTranscript = useHasTranscript(fileService, files?.transcript, step);
+  const { has: hasTranscript } = useTranscript(fileService, files?.transcript, step);
   const label = (what: string) => (many ? `${step.name} ${what.toLowerCase()}` : what);
   return (
     <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", color: "var(--text-paper-d)" }}>
@@ -663,7 +692,7 @@ function FailureActions({
   busy: boolean;
   canRetry: boolean;
   onRetry: (rerun: string) => void;
-  files: WorkflowRunDTO["step_files"];
+  files: RunFilesDTO["step_files"] | undefined;
   fileService: FileService;
   inputsPath: string | undefined;
   onOpenFile: (path: string) => void;
@@ -674,7 +703,11 @@ function FailureActions({
   // board, and no other step is the one that broke (review R1).
   const named = steps.find((s) => s.status === "failed" && !s.key);
   const transcriptPath = named ? files?.[named.name]?.transcript : undefined;
-  const hasTranscript = useHasTranscript(fileService, transcriptPath, named);
+  const { has: hasTranscript, known: transcriptKnown } = useTranscript(
+    fileService,
+    transcriptPath,
+    named,
+  );
   const inputs = inputsPath ? (
     <button
       type="button"
@@ -686,7 +719,7 @@ function FailureActions({
       Inputs
     </button>
   ) : null;
-  const ask = onAsk ? (
+  const ask = onAsk && transcriptKnown ? (
     <button
       type="button"
       className="btn"
@@ -697,19 +730,16 @@ function FailureActions({
       Ask AI why it failed
     </button>
   ) : null;
-  if (!canRetry)
-    return (
-      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-        {inputs}
-        {ask}
-      </div>
-    );
+  // One structure whatever is known yet: the actions arrive with `/files`, and a
+  // tree swapped under the pointer dropped a click on Ask (review R2).
   return (
     <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-      <button type="button" className="btn" data-variant="primary" data-size="sm" disabled={busy} onClick={() => onRetry("")}>
-        Continue from here
-      </button>
-      {named && (
+      {canRetry && (
+        <button type="button" className="btn" data-variant="primary" data-size="sm" disabled={busy} onClick={() => onRetry("")}>
+          Continue from here
+        </button>
+      )}
+      {canRetry && named && (
         <button
           type="button"
           className="btn"

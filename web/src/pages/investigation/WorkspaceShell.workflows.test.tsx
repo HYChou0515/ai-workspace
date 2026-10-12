@@ -232,8 +232,10 @@ describe("the waiting notice", () => {
     expect(notice).toHaveTextContent("Check it");
     fireEvent.click(within(notice).getByRole("button", { name: "Open" }));
     expect((await screen.findByTestId("execution-view")).dataset.run).toBe("workflow-run:r1");
-    // now in front of the person: the notice has done its job
-    await waitFor(() => expect(screen.queryByTestId("waiting-notice")).toBeNull());
+    // now in front of the person: no Open, but it keeps its place (no layout jump)
+    await waitFor(() =>
+      expect(within(screen.getByTestId("waiting-notice")).queryByRole("button", { name: "Open" })).toBeNull(),
+    );
   });
 });
 

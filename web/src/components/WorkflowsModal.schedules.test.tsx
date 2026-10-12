@@ -507,10 +507,11 @@ describe("WorkflowsModal — schedules", () => {
     fireEvent.click(await screen.findByTestId("schedule-run-0"));
 
     expect(await screen.findByTestId("schedule-said-0")).toHaveTextContent("已開始執行");
-    // The run may have made the schedule's own chat: this item's chat list refreshes.
+    // The run is an execution: this item's Workflows sidebar list refreshes now
+    // (plan-workflow-out-of-chat D7; the schedule's conversation is not a chat).
     await waitFor(() =>
       expect(spy.mock.calls.map((c) => JSON.stringify(c[0]?.queryKey))).toContain(
-        JSON.stringify(qk.itemChats("playground", "inv1")),
+        JSON.stringify(qk.workflowRuns("playground", "inv1")),
       ),
     );
     expect(runNowMock).toHaveBeenCalledWith("playground", "inv1", {

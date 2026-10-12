@@ -120,14 +120,19 @@ export type WorkflowRunDTO = {
    * a schedule's executions share one) — what the execution tab reads its
    * rows' messages from, selected by `run_id`. */
   chat_id?: string;
-  /** Per step on the board: where its result and transcript are in the journal,
-   * named by the server's own layout (GET one run only). */
-  step_files?: Record<string, { result: string; transcript: string }>;
+};
+
+/** `GET …/runs/{id}/files` — what an execution's tab links, asked when the run
+ * moves rather than on every poll (review R2). */
+export type RunFilesDTO = {
   /** Whether this is the newest execution of its workflow on the item: its runs
-   * share one journal, so only the newest one's step files are its own. */
-  latest?: boolean;
-  /** The `input.json` the workflow reads (GET one run only). */
-  inputs_path?: string;
+   * share one journal, so only the newest's step files are its own, and only it
+   * may be continued, changed or decided. */
+  latest: boolean;
+  /** Per step on the board: its result and transcript in the journal (newest only). */
+  step_files: Record<string, { result: string; transcript: string }>;
+  /** The `input.json` the workflow reads now (newest only; "" when absent). */
+  inputs_path: string;
 };
 
 /** One pre-flight checklist line in the launch dialog (#283). `severity` is
@@ -450,6 +455,13 @@ export const workflowApi = {
       },
     );
     if (!r.ok) throw new Error(`steer confirm failed: ${r.status}`);
+  },
+
+  async runFiles(slug: string, itemId: string, runId: string): Promise<RunFilesDTO> {
+    return jsonOrThrow(
+      await apiFetch(`${base(slug, itemId)}/runs/${encodeURIComponent(runId)}/files`),
+      "run files",
+    ) as Promise<RunFilesDTO>;
   },
 
   /** plan-workflow-out-of-chat D9: drive a failed or stopped execution again.

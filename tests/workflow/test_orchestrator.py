@@ -1872,3 +1872,104 @@ async def test_a_continue_another_pod_claimed_first_is_refused(spec_instance: Sp
             await orch.retry(slug="rca", item_id="iC5", profile="echo", run_id=run_id)
     finally:
         rm.get = real_get
+
+
+# ── review round 2 ──
+
+
+@pytest.mark.parametrize("verb", ["steer", "confirm_steer", "decide"])
+async def test_an_older_execution_cannot_be_changed(spec_instance: SpecStar, verb: str):
+    """Review R2: round 1 closed Re-run on an older execution, but its change (the
+    steer) still applied: `apply_steer` deletes `step_<name>/*` in the journal it
+    shares with the newer execution, then re-drives the old run into it."""
+    from workspace_app.workflow.orchestrator import SupersededRun
+    from workspace_app.workflow.run import PendingDecision, SteerPlan
+
+    orch, _ = _orch(spec_instance, _two_step_run([]))
+    older = _insert_run(
+        orch,
+        item_id="iS1",
+        status=RunStatus.AWAITING_HUMAN,
+        pending_steer=SteerPlan(instruction="x", invalidate=["first"]),
+        pending_decision=PendingDecision(phase="think", title="t", allow=["approve"]),
+    )
+    _insert_run(orch, item_id="iS1", status=RunStatus.DONE)
+    common = {"slug": "rca", "item_id": "iS1", "profile": "echo", "run_id": older}
+    call = {
+        "steer": lambda: orch.steer(**common, instruction="redo first"),
+        "confirm_steer": lambda: orch.confirm_steer(**common, approve=True),
+        # a gate decided on it re-drives it into the journal the newer one owns now
+        "decide": lambda: orch.decide(**common, choice="approve"),
+    }[verb]
+
+    with pytest.raises(SupersededRun):
+        await call()
+    assert orch._get(older).status is RunStatus.AWAITING_HUMAN
+
+
+async def test_rejecting_an_older_executions_change_still_works(spec_instance: SpecStar):
+    """Discarding a plan touches no file, so an older execution can still be told no."""
+    from workspace_app.workflow.run import SteerPlan
+
+    orch, _ = _orch(spec_instance, _two_step_run([]))
+    older = _insert_run(
+        orch,
+        item_id="iS2",
+        status=RunStatus.AWAITING_HUMAN,
+        pending_steer=SteerPlan(instruction="x"),
+    )
+    _insert_run(orch, item_id="iS2", status=RunStatus.DONE)
+
+    await orch.confirm_steer(slug="rca", item_id="iS2", profile="echo", run_id=older, approve=False)
+
+    assert orch._get(older).pending_steer is None
+
+
+async def test_a_continue_checks_the_run_on_the_read_it_claims_with(spec_instance: SpecStar):
+    """Review R2: the status was checked on one read and the CAS used a later one;
+    a peer's whole claim between the two left this pod CASing the peer's PENDING
+    row successfully, and both drove the run."""
+    import msgspec
+
+    orch, _ = _orch(spec_instance, _two_step_run([]))
+    run_id = _insert_run(orch, item_id="iC6", status=RunStatus.ERROR)
+    real = orch.newest_run_of_workflow
+
+    def newest_while_a_peer_claims(item_id, workflow_id):
+        rm = orch._rm()  # the peer's claim lands between the checks and the claim
+        rm.update(run_id, msgspec.structs.replace(rm.get(run_id).data, status=RunStatus.PENDING))
+        return real(item_id, workflow_id)
+
+    orch.newest_run_of_workflow = newest_while_a_peer_claims
+    with pytest.raises(NotRetryable):
+        await orch.retry(slug="rca", item_id="iC6", profile="echo", run_id=run_id)
+
+
+async def test_a_stop_while_a_continue_is_starting_stops_it(spec_instance: SpecStar):
+    """Review R2: Stop during the claim (the run PENDING, no driver yet) answered
+    success, and the drive that followed ran to done."""
+    calls: list[str] = []
+    gate = asyncio.Event()
+
+    async def load_workspace(_item, _wf):
+        await gate.wait()
+        return None
+
+    orch, _ = _orch(
+        spec_instance, _two_step_run(calls, fail_second=0), load_workspace=load_workspace
+    )
+    run_id = _insert_run(orch, item_id="iC7", status=RunStatus.ERROR)
+
+    going = asyncio.ensure_future(
+        orch.retry(slug="rca", item_id="iC7", profile="echo", run_id=run_id)
+    )
+    await asyncio.sleep(0)
+    assert orch._get(run_id).status is RunStatus.PENDING  # claimed, not driven yet
+    assert await orch.cancel(run_id, "iC7") is True
+    gate.set()
+    await going
+    for _ in range(20):
+        await asyncio.sleep(0)
+
+    assert orch._get(run_id).status is RunStatus.CANCELLED
+    assert calls == []

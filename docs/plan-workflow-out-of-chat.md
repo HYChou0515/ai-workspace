@@ -259,8 +259,10 @@ so a schedule's shared conversation shows one execution at a time.
       `apply_steer`, which also writes the audit receipt. The steps after it
       re-run as far as their inputs changed.
     - It is refused (409) for a run that is not `error` / `cancelled`, while
-      another run of the same workflow on the item is executing (pending or running; its runs share one journal), or when the
-      workflow no longer loads. It is refused (400) for a name that is not a
+      another run of the same workflow on the item is executing (pending or
+      running; its runs share one journal), or when the workflow no longer
+      loads. Review rounds 1 and 2 added two more 409s: a run that is not the
+      newest of its workflow, and one already being continued. It is refused (400) for a name that is not a
       named step on the board; the name reaches a journal glob.
     - The phases, the board, `ended` and `result` restart: a skipped step counts
       done again on the way back.
@@ -393,8 +395,9 @@ gate.
     - The item page reads `open` once (`executionFromAddress`; an execution's
       path only, never a file) and opens that tab with the workspace
       unfolded.
-  - Found while writing §10: every run has its own conversation, so `start`
-    lets two runs on an item go side by side, but `retry` refused while any
+  - Found while writing §10: a run launched from the web or API opens a
+    conversation of its own (a schedule's runs share the schedule's one), so
+    `start` lets two runs on an item go side by side, but `retry` refused while any
     run of the item was live. It now refuses only for a run of the SAME
     workflow that is executing (pending or running), the one that shares the
     journal. The live check narrowed this from "live": a run paused at a gate
@@ -482,6 +485,39 @@ in a real browser came back with findings. What changed, and why:
 - **D8's "never reads step transcripts" holds for the chats the platform opens**
   (the drafts never name one), except "Ask AI why it failed", which points at
   one by design (D9). The AI's `read_file` can reach the journal like any file.
+
+## Review round 2
+
+Two lenses (defect + regression, veracity + conformance) on the round-1 fixes.
+Each finding and the fix chosen for it:
+
+| # | Finding | Fix |
+|---|---|---|
+| 1 | An older execution could still be changed (steer / confirm) or have its gate decided, which deletes or overwrites the newer one's step files; round 1 closed only Re-run. | `SupersededRun` (409 on every route, pinned over HTTP) from `steer`, `confirm_steer` (approve; reject still works) and `decide`, like `retry`. The FE hides `⋯`, the gate card, Continue and Re-run unless `/files` says `latest`. An older execution still waiting can only be stopped, and its note says so. |
+| 2 | The CAS claim checked the status on one read and claimed with a later one's etag; a peer's whole claim between them was CASed over. | The status is checked on the read whose etag is claimed with; the newest / active checks come first. |
+| 3 | A Stop while a Continue was being claimed (PENDING, no driver yet) answered success and was lost. | `retry` records the claim (`_claiming`); `cancel` settles a claimed run as `cancelled`, and `retry` stands down if the run is no longer its PENDING claim. A Stop from another pod in that window is not caught (the claim is pod-local). |
+| 4 | One failed poll swapped the tab for an error and stopped polling for good. | `useRun` stops only for a run never read. The error view shows only without data. |
+| 5 | Every 1 s poll listed the item's runs and read the workflow file. | `GET /runs/{id}` is one read again. `latest`, `step_files` and `inputs_path` are on `GET /runs/{id}/files`, which the tab asks again only when the run's status or board changes. A run waiting at a gate is polled every 5 s. |
+| 6 | The banner left the page flow while its execution's tab was in front, so switching tabs moved the workspace by its height. | It keeps its place there, without Open, saying "decide it below". |
+| 7 | The Inputs link named a file the run may not have read, or one that does not exist. | `inputs_path` is the `input.json` the workflow reads NOW, for the newest only, and "" when absent. |
+| 8 | Text still describing the chat flow, missing 409s, runbook WHEN / symptoms. | Reworded at HEAD (`workflows.md` schedules paragraph and Run section, `start` docstring, `WorkflowsModal`, plan P8, runbook). |
+
+Found while fixing: FailureActions drew a different tree before and after
+`/files` answered, so a click on Ask could land on a detached node. It now has
+one structure, and Ask waits until the files and the transcript check are in,
+so its question carries the record.
+
+UI sources for the controls these rounds added or changed (CLAUDE.md: cite the
+source in the plan and the PR):
+
+- The count on the Workflows entry follows Material 3 "Badges" (a small count
+  on a navigation icon).
+- The waiting notice, as a banner in the page's flow, follows GOV.UK Design
+  System "Notification banner": it tells the user about something that needs
+  their attention, at the top of the page.
+- Locked accordion rows follow WAI-ARIA APG Accordion: "if the accordion does
+  not permit the panel to be collapsed, the header button element has
+  aria-disabled set to true."
 
 ## Verification
 

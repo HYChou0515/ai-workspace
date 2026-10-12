@@ -71,13 +71,16 @@ export function useRun(
     queryKey: qk.workflowRun(slug ?? "", itemId ?? "", runId ?? ""),
     queryFn: () => workflowApi.getRun(slug!, itemId!, runId!),
     enabled: !!slug && !!itemId && !!runId,
-    // Poll while the run is live; stop once it reaches a terminal status — or
-    // cannot be read (a pruned run, a bad link: review R1 found one polled every
-    // second for as long as its tab stayed open).
-    refetchInterval: (q) =>
-      q.state.status === "error" || (q.state.data && isRunTerminal(q.state.data.status))
-        ? false
-        : 1000,
+    // Poll while the run is live — every second while it moves, every 5 s while it
+    // waits at a gate (that can last days) — and stop once it ends, or when it has
+    // never been readable (a pruned run, a bad link: review R1). A failed poll of a
+    // run already shown keeps polling: a 502 during a rollout must not freeze the
+    // tab for good (review R2).
+    refetchInterval: (q) => {
+      if (q.state.data === undefined) return q.state.status === "error" ? false : 1000;
+      if (isRunTerminal(q.state.data.status)) return false;
+      return q.state.data.status === "awaiting_human" ? 5000 : 1000;
+    },
   });
 }
 

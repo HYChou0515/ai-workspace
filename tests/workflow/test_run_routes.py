@@ -962,9 +962,10 @@ def test_a_run_says_where_each_steps_files_are_and_the_result_is_there():
         done = _poll(client, item_id, run_id, "done")
         named = [s["name"] for s in done["steps"] if not s["key"]]
         assert named
-        assert set(done["step_files"]) == set(named)
+        step_files = client.get(f"{_base(item_id)}/runs/{run_id}/files").json()["step_files"]
+        assert set(step_files) == set(named)
         for name in named:
-            files = done["step_files"][name]
+            files = step_files[name]
             assert files["transcript"] == files["result"].removesuffix(".json") + ".transcript.md"
             r = client.get(f"{_base(item_id)}/files/{files['result'].lstrip('/')}")
             assert r.status_code == 200, files["result"]
@@ -1028,11 +1029,63 @@ def test_only_the_newest_execution_of_a_workflow_names_its_step_files():
         _poll(client, item_id, newer, "done")
         _mark(app, _spec, older, "error")  # the older one written again, after the newer
 
-        old = client.get(f"{_base(item_id)}/runs/{older}").json()
-        new = client.get(f"{_base(item_id)}/runs/{newer}").json()
+        old = client.get(f"{_base(item_id)}/runs/{older}/files").json()
+        new = client.get(f"{_base(item_id)}/runs/{newer}/files").json()
         assert (old["latest"], new["latest"]) == (False, True)
         assert old["step_files"] == {}
         assert new["step_files"]
-        for got in (old, new):
-            assert got["inputs_path"] == "/uploads/input.json"
-            assert client.get(f"{_base(item_id)}/files/uploads/input.json").status_code == 200
+        # the staging file the workflow reads now: the newest's to link, not the older's
+        assert (old["inputs_path"], new["inputs_path"]) == ("", "/uploads/input.json")
+        assert client.get(f"{_base(item_id)}/files/uploads/input.json").status_code == 200
+
+
+def test_a_workflow_with_no_input_file_links_none():
+    """Review R2: the inputs link opened a path that does not exist."""
+    app, _spec, item_id = _app()
+    with TestClient(app) as client:
+        run_id = client.post(f"{_base(item_id)}/run").json()["run_id"]  # no input.json put
+        _poll(client, item_id, run_id, "done")
+        assert client.get(f"{_base(item_id)}/runs/{run_id}/files").json()["inputs_path"] == ""
+
+
+def test_polling_a_run_reads_only_that_run():
+    """Review R2: the 1 s poll listed every run of the item and read the workspace's
+    workflow file each time; that work lives on `/files`, asked when the run moves."""
+    app, _spec, item_id = _app()
+    with TestClient(app) as client:
+        _put_input(client, item_id, '{"n": 1}')
+        run_id = client.post(f"{_base(item_id)}/run").json()["run_id"]
+        got = _poll(client, item_id, run_id, "done")
+    assert {"step_files", "latest", "inputs_path"}.isdisjoint(got)
+
+
+def _older_waiting_and_newer(spec: SpecStar, item_id: str) -> str:
+    from workspace_app.workflow.run import PendingDecision, RunStatus, SteerPlan, WorkflowRun
+
+    rm = spec.get_resource_manager(WorkflowRun)
+    older = rm.create(
+        WorkflowRun(
+            item_id=item_id,
+            captured_user="u",
+            status=RunStatus.AWAITING_HUMAN,
+            pending_decision=PendingDecision(phase="think", title="t", allow=["approve"]),
+            pending_steer=SteerPlan(instruction="x"),
+        )
+    ).resource_id
+    rm.create(WorkflowRun(item_id=item_id, captured_user="u", status=RunStatus.DONE))
+    return older
+
+
+def test_an_older_executions_decision_and_change_are_409_not_500():
+    """Review R2: deciding or approving a change on an execution that is not the
+    newest of its workflow is refused — as a 409 the page can say, not a 500."""
+    app, spec, item_id = _app()
+    older = _older_waiting_and_newer(spec, item_id)
+    with TestClient(app) as client:
+        r = client.post(f"{_base(item_id)}/runs/{older}/decisions", json={"choice": "approve"})
+        assert r.status_code == 409, r.text
+        assert "newest" in r.json()["detail"]
+        r = client.post(f"{_base(item_id)}/runs/{older}/steer/confirm", json={"approve": True})
+        assert r.status_code == 409, r.text
+        r = client.post(f"{_base(item_id)}/runs/{older}/steer", json={"instruction": "x"})
+        assert r.status_code == 409, r.text

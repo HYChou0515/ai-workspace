@@ -176,6 +176,9 @@ export const qk = {
   itemChats: (slug: string, itemId: string) => ["itemChats", slug, itemId] as const,
   /** Whether a step's transcript exists — asked again when the step moves on
    * (`version`), since it is written by the step's turn. */
+  /** An execution's links (`/files`), asked again when the run moves (`version`). */
+  workflowRunFiles: (slug: string, itemId: string, runId: string, version: string) =>
+    ["workflowRunFiles", slug, itemId, runId, version] as const,
   executionTranscript: (path: string, version: string) =>
     ["executionTranscript", path, version] as const,
   itemChat: (slug: string, itemId: string, chatId: string) =>

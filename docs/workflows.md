@@ -475,13 +475,13 @@ node 保證 exactly-once。
 **沒有獨立的「manual vs auto」模式** —— 兩者都化約為 *準備 item 的 inputs，然後 Run*：
 
 - **人類：** 開一個 workflow-profile item，透過 file UI 丟檔案／編輯 `input.json`，
-  按 **Run workflow**。
+  在 workspace 的 **Workflows** 側欄按那個 workflow 的 **Start**。
 - **外部／週期性：** 建一個 item，然後 **把 input 檔案附在同一次 multipart 呼叫裡
   一起 Run**（如上）——一個自包含的 trigger。（先透過既有的 file 路由上傳檔案、
   再帶空 body 呼叫 Run，是等價的；multipart form 只是便利。）
 
 按下 Run 後，平台做的就只有兩件事：**orchestrator 更新 `WorkflowRun` 狀態**，
-以及 **agent node 像在跟使用者說話那樣串流進 item 的 chat**（§1、§5.1）。
+以及 **agent node 的 turn 串流進這次執行的分頁裡它那一步的列**（不進聊天；§1、§5.1、§10）。
 
 - **Poll：** `GET /a/{slug}/items/{item_id}/runs/{run_id}` → 狀態 + result +
   per-phase 進度 + failures。
@@ -926,8 +926,8 @@ sweep 沒開的部署會**照存但大聲警告**。
 `schedule_reconcile` 登記的，**不記落地時間**——這種檔照舊補跑（或沿用之前一次 façade 寫入的時間）。
 
 **排程總表 `/schedules`**（全域導覽「排程」）列出使用者讀得到（`read_meta`）的每個 item 的排程——
-item 自己的與頁面資料夾的——每列有下一次、上一次（狀態＋時間，點進去是那條排程自己的對話），以及
-「現在執行」（`execute`，跑進排程自己的對話、用按的人的身分、不動帳本；它還沒跑完時到點的那次會被當成
+item 自己的與頁面資料夾的——每列有下一次、上一次（狀態＋時間，點進去是那次執行在 item 裡的分頁），以及
+「現在執行」（`execute`，跑進排程共用的那個對話——聊天列表不列它——用按的人的身分、不動帳本；它還沒跑完時到點的那次會被當成
 重疊而跳過，跟排程自己撞上時同一條規則）、「改時間」與「移除」
 （`edit_content`）。三個動作走 `POST /a/{slug}/items/{id}/schedules/{run,edit,remove}`，由伺服器
 重讀檔案、用 `trigger_id` 找那一列（被 linter 拒絕的列只能移除、用它寫的值找），找不到就 409；

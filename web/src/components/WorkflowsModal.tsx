@@ -155,9 +155,10 @@ export function WorkflowsModal({
     await qc.invalidateQueries({ queryKey: qk.itemSchedules(slug, itemId) });
     await qc.invalidateQueries({ queryKey: qk.files(itemId) });
     await qc.invalidateQueries({ queryKey: qk.schedulesOverview });
-    // Run now may have just made the schedule's own chat — the chat switcher
-    // of this very item lists it (decision 9: as the overview refreshes).
-    await qc.invalidateQueries({ queryKey: qk.itemChats(slug, itemId) });
+    // Run now may have just started an execution — the Workflows sidebar of this
+    // very item lists it (plan-workflow-out-of-chat D7), so its list refreshes now
+    // rather than at the next idle poll.
+    await qc.invalidateQueries({ queryKey: qk.workflowRuns(slug, itemId) });
   };
   const failed = (row: ScheduleRow, e: unknown) =>
     setSaid({ index: row.index, ok: false, text: e instanceof ScheduleActionError ? e.message : String(e) });

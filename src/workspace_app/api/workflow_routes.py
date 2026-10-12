@@ -35,6 +35,7 @@ from ..workflow.orchestrator import (
     NotAwaitingDecision,
     NotAwaitingSteer,
     NotRetryable,
+    SupersededRun,
     UnknownStep,
     WorkflowOrchestrator,
     WorkflowUnavailable,
@@ -644,17 +645,25 @@ def register_workflow_routes(
 
     @app.get("/a/{slug}/items/{item_id}/runs/{run_id}")
     async def get_workflow_run(slug: str, item_id: str, run_id: str) -> dict:
-        """#100 (manual §14): poll a run — status + result + per-phase progress.
-
-        `step_files` names, per step on the board, where its result and transcript
-        are in the journal (the execution tab links them), from the journal's own
-        layout — for the newest run of its workflow only (`latest`), since they share
-        that journal. `inputs_path` is the `input.json` the workflow reads. A run of
-        another item is not found here."""
+        """#100 (manual §14): poll a run — status + result + per-phase progress. One
+        read of the run (it is polled every second while it moves); what needs the
+        item's other runs or its workflow file is on `…/files`. A run of another
+        item is not found here."""
         investigation_id = locator.require_access(slug, item_id, "read_chat")
         data = _run_of(run_id, investigation_id)
-        # A workflow's runs share one journal: only the newest one's step files are
-        # its own, so an older one names none (review R1).
+        return {"run_id": run_id, **msgspec.to_builtins(data)}
+
+    @app.get("/a/{slug}/items/{item_id}/runs/{run_id}/files")
+    async def get_workflow_run_files(slug: str, item_id: str, run_id: str) -> dict:
+        """What the execution tab links (plan-workflow-out-of-chat D6 / D9), asked
+        when the run moves rather than on every poll (review R2). `latest`: whether
+        it is the newest run of its workflow on the item — they share one journal,
+        so only the newest's `step_files` (per step on the board, its result and
+        transcript, from the journal's own layout) are its own, and only it may be
+        continued or changed. `inputs_path`: the `input.json` the workflow reads now
+        (a staging file shared by its runs), for the newest only, "" when absent."""
+        investigation_id = locator.require_access(slug, item_id, "read_chat")
+        data = _run_of(run_id, investigation_id)
         latest = (
             workflow_orchestrator.newest_run_of_workflow(investigation_id, data.workflow_id)
             == run_id
@@ -672,25 +681,19 @@ def register_workflow_routes(
             if latest
             else {}
         )
-        profile = locator.profile_of(investigation_id)
-        manifest = await workflow_orchestrator.manifest_of(
-            slug, profile, data.workflow_id, investigation_id
-        )
-        inputs = (
-            "/"
-            + inputs_path(manifest, workflow_orchestrator.load_upload_dir(slug, profile)).lstrip(
-                "/"
+        inputs = ""
+        if latest:
+            profile = locator.profile_of(investigation_id)
+            manifest = await workflow_orchestrator.manifest_of(
+                slug, profile, data.workflow_id, investigation_id
             )
-            if manifest is not None
-            else ""
-        )
-        return {
-            "run_id": run_id,
-            **msgspec.to_builtins(data),
-            "step_files": step_files,
-            "latest": latest,
-            "inputs_path": inputs,
-        }
+            if manifest is not None:
+                path = "/" + inputs_path(
+                    manifest, workflow_orchestrator.load_upload_dir(slug, profile)
+                ).lstrip("/")
+                if await files.exists(investigation_id, path):
+                    inputs = path
+        return {"latest": latest, "step_files": step_files, "inputs_path": inputs}
 
     def _run_of(run_id: str, item_id: str) -> WorkflowRun:
         """The run, read only through its own item: the route takes the item from
@@ -767,7 +770,7 @@ def register_workflow_routes(
                 "workflow_routes: decision for run %s not awaiting a gate: %s", run_id, exc
             )
             raise HTTPException(status_code=409, detail=str(exc)) from exc
-        except WorkflowUnavailable as exc:
+        except (WorkflowUnavailable, SupersededRun) as exc:
             logger.warning("workflow_routes: decision for run %s refused: %s", run_id, exc)
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         logger.info(
@@ -803,7 +806,7 @@ def register_workflow_routes(
         except ResourceIDNotFoundError as exc:
             logger.warning("workflow_routes: steer for unknown run %s: %s", run_id, exc)
             raise HTTPException(status_code=404, detail=f"unknown run: {run_id!r}") from exc
-        except WorkflowUnavailable as exc:
+        except (WorkflowUnavailable, SupersededRun) as exc:
             logger.warning("workflow_routes: steer for run %s refused: %s", run_id, exc)
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         logger.info(
@@ -836,7 +839,7 @@ def register_workflow_routes(
         except ResourceIDNotFoundError as exc:
             logger.warning("workflow_routes: steer confirm for unknown run %s: %s", run_id, exc)
             raise HTTPException(status_code=404, detail=f"unknown run: {run_id!r}") from exc
-        except WorkflowUnavailable as exc:
+        except (WorkflowUnavailable, SupersededRun) as exc:
             logger.warning("workflow_routes: steer confirm for run %s refused: %s", run_id, exc)
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         except NotAwaitingSteer as exc:
@@ -859,9 +862,10 @@ def register_workflow_routes(
         """plan-workflow-out-of-chat D9: a failed or stopped execution's Continue from
         here (`rerun` empty — what passed skips) or Re-run this step (`rerun` names
         it — its artifacts are dropped first). Same run, same id; the FE refetches it.
-        409 when the run is not failed / stopped, another run of its workflow on the
-        item is executing, or its workflow no longer loads; 400 for a step not on
-        the run's board."""
+        409 when the run is not failed / stopped, is not the newest of its workflow
+        (they share step files), is already being continued, another run of its
+        workflow on the item is executing, or its workflow no longer loads; 400 for
+        a step not on the run's board."""
         investigation_id = locator.require_access(slug, item_id, "converse")
         profile = locator.profile_of(investigation_id)
         try:

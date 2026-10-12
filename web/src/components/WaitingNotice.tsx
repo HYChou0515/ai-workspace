@@ -44,8 +44,12 @@ export function WaitingNotice({
     .filter((r) => r.status === "awaiting_human" && (r.pending_decision || r.pending_steer))
     .filter((r) => !dismissed.has(waitKey(r)))
     .sort((a, b) => (b.started ?? 0) - (a.started ?? 0));
-  const shown = waitingRuns.find((r) => executionPath(r.run_id) !== activePath);
+  // Another one waiting is the news; the one whose tab is in front keeps the
+  // banner's place (no Open), so switching tabs never moves the page (review R2).
+  const shown =
+    waitingRuns.find((r) => executionPath(r.run_id) !== activePath) ?? waitingRuns[0];
   if (!shown) return null;
+  const inFront = executionPath(shown.run_id) === activePath;
   // The others, but not the one in front: the person is looking at it.
   const more = waitingRuns.filter((r) => r !== shown && executionPath(r.run_id) !== activePath).length;
   const title =
@@ -77,18 +81,22 @@ export function WaitingNotice({
         <span style={{ fontWeight: 600, overflowWrap: "anywhere" }}>
           {`${executionName(title, shown.started)} is waiting for you`}
         </span>
-        <span style={{ color: "var(--text-paper-d)", overflowWrap: "anywhere" }}>{what}</span>
+        <span style={{ color: "var(--text-paper-d)", overflowWrap: "anywhere" }}>
+          {inFront ? `${what} — decide it below` : what}
+        </span>
         {more > 0 && <span style={{ color: "var(--text-paper-d)" }}>{`· ${more} more waiting`}</span>}
       </div>
-      <button
-        type="button"
-        className="btn"
-        data-variant="primary"
-        data-size="sm"
-        onClick={() => onOpen(executionPath(shown.run_id))}
-      >
-        Open
-      </button>
+      {!inFront && (
+        <button
+          type="button"
+          className="btn"
+          data-variant="primary"
+          data-size="sm"
+          onClick={() => onOpen(executionPath(shown.run_id))}
+        >
+          Open
+        </button>
+      )}
       <button
         type="button"
         className="btn"

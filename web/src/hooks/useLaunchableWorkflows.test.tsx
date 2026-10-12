@@ -98,7 +98,7 @@ describe("runsPollMs", () => {
 });
 
 describe("useRun", () => {
-  it("stops asking for a run it cannot read", async () => {
+  it("stops asking for a run it has never been able to read", async () => {
     // Review R1: a pruned run or a bad link was asked for every second for as
     // long as its tab stayed open.
     const { renderHook, waitFor } = await import("@testing-library/react");

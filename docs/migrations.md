@@ -2145,8 +2145,10 @@ agent 步驟裡 AI 的呼叫、WUI 的工具呼叫、view plugin、圖表重畫�
   不帶 `chat_id` 的呼叫（包含 #197 的外部觸發、上傳輸入檔一起送的那種）完全不受影響。
 - **workflow 的 agent node 不再讀它所在對話的歷史**。node 只看得到自己的 prompt 裡明寫的東西（引用的上游 `outputs`、
   檔案、`input.json`）；以前它會讀整串對話，包括被接管前的聊天、前面每個 step 的回覆、同一個排程對話裡之前的 run。
-  出貨的 workflow 都已確認不依賴這件事（計畫 P1）。**自訂的 workflow** 若有 node 的 prompt 寫「依照上面的內容」
-  卻沒有指名要讀哪個檔案，升版後它會看不到前文：改成在 prompt 裡指名檔案或引用上游的 `outputs`。
+  出貨的 workflow 都已確認不依賴這件事（計畫 P1）。**rollout 前**：檢查**自訂的 workflow**（workspace 的
+  `.workflows/*.json`、自己寫的 `run.py`）——若有 node 的 prompt 寫「依照上面的內容」卻沒有指名要讀哪個檔案，
+  改成在 prompt 裡指名檔案或引用上游的 `outputs`。為什麼：升版後它看不到前文。沒做的症狀：那個 node 的回答
+  像是沒看到前面的步驟（它真的沒看到）。
   一個 agent step 沒過檢查而重試時，重試的 prompt 裡會附上它上一次的回答（最多 4000 字）——以前它是從對話歷史看到的。
 - **聊天裡不再有 workflow**：聊天列表只列真正的聊天（為 run 開的對話、排程的對話不再出現，改在 workspace 的
   Workflows 側欄）；聊天標頭的「Workflows」按鈕、列表上方的「在這個聊天裡啟動」、「New…」選單裡的 workflow、
@@ -2168,8 +2170,10 @@ agent 步驟裡 AI 的呼叫、WUI 的工具呼叫、view plugin、圖表重畫�
   失敗的會打開而且收不起來），等人決定的在那一列直接決定；失敗的那一列有「Continue from here」（已經做完的跳過）、
   「Re-run this step」（那一步重做，後面的照輸入有沒有變決定要不要重做）、「Inputs」（打開它讀的 `input.json`）；
   `⋯` 裡的「Change this execution…」是以前的 steer。新路由 `POST /a/{slug}/items/{item_id}/runs/{run_id}/retry`。
-  同一個 workflow 的執行共用一份 journal，所以**只有最新的那一次**提供結果檔、transcript、Continue 與 Re-run；
-  較舊的執行會寫明「有更新的執行跑過了」，它自己的訊息照樣看得到。
+  同一個 workflow 的執行共用一份 journal，所以**只有最新的那一次**提供結果檔、transcript、Inputs、Continue、
+  Re-run、修改與關卡決定（對較舊的執行呼叫 `…/retry`、`…/steer`、`…/steer/confirm` 的 approve、`…/decisions`
+  都回 409）；較舊的執行會寫明「有更新的執行跑過了」，還在等的只能 Stop，它自己的訊息照樣看得到。
+  兩個人同時按 Continue 只會跑一次；按 Continue 後立刻按 Stop，它就不會開始。
 - 執行的分頁有「Open a chat with these results」（執行結束後）和失敗那一列的「Ask AI why it failed」：開一個**新**聊天，
   把執行的編號、結果檔（或那一步的錯誤與 transcript 路徑）放進輸入框，不會自動送出。聊天裡的 AI 可以用
   `show_file` 叫出某個執行的卡片（路徑就是執行的編號 `workflow-run:<uuid>`），只限這個 item 的執行。
@@ -2182,7 +2186,10 @@ agent 步驟裡 AI 的呼叫、WUI 的工具呼叫、view plugin、圖表重畫�
   （有在跑的時候每 2 秒），所以排程或別人啟動的執行也會出現。
 - **`GET …/runs/{run_id}` 和 `…/runs/{run_id}/stream` 會檢查這個 run 屬於網址裡的 item**，不屬於就回 404。
   以前不檢查：對某個 item 有讀取權，就能用它的網址讀到別的 item 的 run 和即時串流。正常的呼叫（用 run 自己的 item）不受影響；
-  若有外部腳本用錯的 item 網址去讀 run，升版後會拿到 404，改成用 run 自己的 item 網址。
+  **rollout 前**：若有外部腳本用錯的 item 網址去讀 run，改成用 run 自己的 item 網址。為什麼：那是一個跨 item
+  讀取的漏洞，現在被擋下。沒做的症狀：那支腳本拿到 404 `unknown run`。
+  `GET …/runs/{run_id}` 只讀那一個 run（它每秒被輪詢）；執行分頁要的結果檔、是不是最新、`input.json` 在
+  新的 `GET …/runs/{run_id}/files`。
 - 每個 agent step 會在 journal 裡、產物旁邊多寫一份 `step_<名稱>/<key 或 main>.transcript.md`（prompt、思考、
   tool 呼叫與回覆），供「問 AI 為什麼失敗」讀取。它和產物一樣是「已經發生的事的紀錄」，不受 workspace 容量上限擋
   （和 journal 的紀錄同一條規則，#538）；它和產物一起被 steer 作廢、被 map 清理。
@@ -2200,6 +2207,7 @@ agent 步驟裡 AI 的呼叫、WUI 的工具呼叫、view plugin、圖表重畫�
 - 用另一個 item 的網址讀某個 run：`curl '<api>/a/<slug>/items/<另一個 item>/runs/<run>'` 回 404。
   沒部署到這一版的症狀：回 200 和那個 run 的內容。
 - 打開一個 workspace 模式的 item：左側活動列有印著「Workflows」的圖示，點開列出它的 workflow 與執行。
+  沒部署到這一版的症狀：活動列沒有這個圖示，聊天標頭還有「Workflows」按鈕、「New…」選單裡列著 workflow。
 
 ## 附錄 A：資料回填的機制（specstar 為什麼不會自己補）
 

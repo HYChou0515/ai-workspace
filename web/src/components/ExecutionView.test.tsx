@@ -82,12 +82,18 @@ const run = (over: Partial<WorkflowRunDTO> = {}): WorkflowRunDTO =>
     ended: null,
     result: null,
     pending_decision: null,
-    step_files: {
-      read: { result: "/.workflow/classify/step_read/main.json", transcript: "/.workflow/classify/step_read/main.transcript.md" },
-      sort: { result: "/.workflow/classify/step_sort/main.json", transcript: "/.workflow/classify/step_sort/main.transcript.md" },
-    },
     ...over,
   }) as WorkflowRunDTO;
+
+// What `…/runs/{id}/files` answers: asked when the run moves, not every poll (R2).
+const FILES = {
+  latest: true,
+  step_files: {
+    read: { result: "/.workflow/classify/step_read/main.json", transcript: "/.workflow/classify/step_read/main.transcript.md" },
+    sort: { result: "/.workflow/classify/step_sort/main.json", transcript: "/.workflow/classify/step_sort/main.transcript.md" },
+  },
+  inputs_path: "",
+};
 
 const msg = (over: Partial<Message>): Message => ({ role: "assistant", content: "", ...over }) as Message;
 
@@ -104,6 +110,7 @@ beforeEach(() => {
   vi.spyOn(workflowApi, "listProfiles").mockResolvedValue(PROFILES);
   vi.spyOn(workspaceWorkflowsApi, "list").mockResolvedValue([]);
   vi.spyOn(workflowApi, "getRun").mockResolvedValue(run());
+  vi.spyOn(workflowApi, "runFiles").mockResolvedValue(FILES);
   vi.spyOn(itemChatApi, "getChat").mockImplementation(async () => ({
     chatId: "conversation:c1",
     title: "",
@@ -250,9 +257,9 @@ describe("ExecutionView", () => {
       const retry = vi.spyOn(workflowApi, "retry").mockResolvedValue();
       render();
       const sort = await row("sort");
-      fireEvent.click(within(sort).getByRole("button", { name: "Continue from here" }));
+      fireEvent.click((await within(sort).findByRole("button", { name: "Continue from here" })));
       await waitFor(() => expect(retry).toHaveBeenCalledWith("hub", "it", "workflow-run:r1", ""));
-      fireEvent.click(within(sort).getByRole("button", { name: "Re-run this step" }));
+      fireEvent.click((await within(sort).findByRole("button", { name: "Re-run this step" })));
       await waitFor(() => expect(retry).toHaveBeenCalledWith("hub", "it", "workflow-run:r1", "sort"));
     });
 
@@ -260,7 +267,7 @@ describe("ExecutionView", () => {
       vi.mocked(workflowApi.getRun).mockResolvedValue(failed());
       vi.spyOn(workflowApi, "retry").mockRejectedValue(new Error("another execution is running"));
       render();
-      fireEvent.click(within(await row("sort")).getByRole("button", { name: "Continue from here" }));
+      fireEvent.click((await within(await row("sort")).findByRole("button", { name: "Continue from here" })));
       expect(await screen.findByRole("alert")).toHaveTextContent("another execution is running");
     });
   });
@@ -356,6 +363,7 @@ describe("asking the AI about an execution", () => {
       }),
     );
     const { drafts, stop } = await asked();
+    try {
     render();
     fireEvent.click(await within(await row("sort")).findByRole("button", { name: "Ask AI why it failed" }));
     await waitFor(() => expect(drafts).toHaveLength(1));
@@ -363,7 +371,9 @@ describe("asking the AI about an execution", () => {
     expect(drafts[0]).toContain("sort broke");
     expect(drafts[0]).toContain("/.workflow/classify/step_sort/main.transcript.md");
     expect(drafts[0]).toContain("workflow-run:r1");
-    stop();
+    } finally {
+      stop(); // a failure must not leave a listener for the next test
+    }
   });
 });
 
@@ -381,8 +391,6 @@ const failedRun = (over: Partial<WorkflowRunDTO> = {}) =>
       { phase: "read", name: "read", key: "", status: "passed", attempts: 1, reason: "", started: 1, ended: 2 },
       { phase: "sort", name: "sort", key: "", status: "failed", attempts: 1, reason: "sort broke", started: 3, ended: 4 },
     ],
-    latest: true,
-    inputs_path: "/uploads/input.json",
     ...over,
   } as Partial<WorkflowRunDTO>);
 
@@ -413,6 +421,7 @@ describe("review round 1", () => {
 
   it("links the inputs the failed step was given (D9)", async () => {
     vi.mocked(workflowApi.getRun).mockResolvedValue(failedRun());
+    vi.mocked(workflowApi.runFiles).mockResolvedValue({ ...FILES, inputs_path: "/uploads/input.json" });
     const onOpenFile = render();
     fireEvent.click(await within(await row("sort")).findByRole("button", { name: "Inputs" }));
     expect(onOpenFile).toHaveBeenCalledWith("/uploads/input.json");
@@ -422,14 +431,15 @@ describe("review round 1", () => {
     const onOpenFile = render();
     const read = await row("read");
     expect(toggle(read)).toHaveAttribute("aria-expanded", "false");
-    fireEvent.click(within(read).getByRole("button", { name: "Result" }));
+    fireEvent.click((await within(read).findByRole("button", { name: "Result" })));
     expect(onOpenFile).toHaveBeenCalledWith("/.workflow/classify/step_read/main.json");
   });
 
   it("an older execution says a newer one has run, and offers nothing that would touch its files", async () => {
     const { subscribeChatRequest } = await import("../lib/chatRequestBus");
     const stop = subscribeChatRequest("it", () => {});
-    vi.mocked(workflowApi.getRun).mockResolvedValue(failedRun({ latest: false, step_files: {} }));
+    vi.mocked(workflowApi.getRun).mockResolvedValue(failedRun());
+    vi.mocked(workflowApi.runFiles).mockResolvedValue({ latest: false, step_files: {}, inputs_path: "" });
     render();
     expect(await screen.findByText(/A newer execution of this workflow has run since/)).toBeInTheDocument();
     const sort = await row("sort");
@@ -437,8 +447,9 @@ describe("review round 1", () => {
     expect(within(sort).queryByRole("button", { name: "Re-run this step" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Open a chat with these results" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Result" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "More actions" })).toBeNull(); // no change (R2)
     // its own record still reads, and the AI can still be asked
-    expect(within(sort).getByRole("button", { name: "Ask AI why it failed" })).toBeInTheDocument();
+    expect((await within(sort).findByRole("button", { name: "Ask AI why it failed" }))).toBeInTheDocument();
     stop();
   });
 
@@ -509,5 +520,53 @@ describe("a row closed by hand", () => {
         ),
       { timeout: 4000 },
     );
+  });
+});
+
+// ── review round 2 ──
+
+describe("review round 2", () => {
+  it("an older execution waiting at a gate offers no decision, only Stop", async () => {
+    // Deciding it would re-drive it into the journal the newer one owns now.
+    vi.mocked(workflowApi.getRun).mockResolvedValue(
+      run({
+        status: "awaiting_human",
+        pending_decision: { phase: "sort", title: "Check the sort", summary: "", allow: ["approve"], decided_by: "" },
+      }),
+    );
+    vi.mocked(workflowApi.runFiles).mockResolvedValue({ latest: false, step_files: {}, inputs_path: "" });
+    render();
+    expect(await screen.findByText(/A newer execution of this workflow has run since/)).toBeInTheDocument();
+    expect(screen.queryByTestId("wf-decision-card")).toBeNull();
+    expect(screen.getByRole("button", { name: "Stop" })).toBeInTheDocument();
+  });
+
+  it("asks for the files when the run moves, not on every poll", async () => {
+    render();
+    await row("sort");
+    await new Promise((r) => setTimeout(r, 2200)); // two polls of the run
+    expect(vi.mocked(workflowApi.getRun).mock.calls.length).toBeGreaterThanOrEqual(2);
+    expect(vi.mocked(workflowApi.runFiles)).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps showing a live execution through a failed poll, and recovers", async () => {
+    // Review R2: one failed read swapped the view for an error and stopped polling.
+    vi.mocked(workflowApi.getRun)
+      .mockResolvedValueOnce(run())
+      .mockRejectedValueOnce(new Error("502"))
+      .mockRejectedValueOnce(new Error("502"))
+      .mockResolvedValue(run({ status: "done", ended: STARTED + 5 }));
+    render();
+    await row("sort");
+    // inside the failure: the last good view stays, no error screen
+    await waitFor(() => expect(vi.mocked(workflowApi.getRun).mock.calls.length).toBeGreaterThanOrEqual(2), {
+      timeout: 3000,
+    });
+    await new Promise((r) => setTimeout(r, 50));
+    expect(screen.queryByText(/could not be read/)).toBeNull();
+    expect(screen.getAllByTestId("execution-step")).toHaveLength(3);
+    await waitFor(() => expect(screen.getByTestId("execution-status")).toHaveTextContent("Done"), {
+      timeout: 6000,
+    });
   });
 });
