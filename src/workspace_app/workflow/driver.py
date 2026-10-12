@@ -20,6 +20,8 @@ from typing import Any
 import msgspec
 from specstar import SpecStar
 
+from ..failover.classify import classify_error
+from .engine import StepFailed
 from .gate import AwaitingHuman
 from .handle import WorkflowHandle
 from .run import PendingDecision, RunStatus, WorkflowRun
@@ -74,11 +76,7 @@ async def run_workflow(
         raise
     except Exception as exc:  # noqa: BLE001 — surface any run() failure as a terminal status
         logger.exception("run %s failed", run_id)
-        _patch(
-            status=RunStatus.ERROR,
-            ended=now(),
-            result={"error": f"{type(exc).__name__}: {exc}"},
-        )
+        _patch(status=RunStatus.ERROR, ended=now(), result=_failure_result(exc))
         return
     _patch(
         status=RunStatus.DONE,
@@ -86,3 +84,15 @@ async def run_workflow(
         result=result if isinstance(result, dict) else {"result": result},
     )
     logger.info("run %s done", run_id)
+
+
+def _failure_result(exc: BaseException) -> dict[str, Any]:
+    """What a failed run records (docs/plan-friendly-errors.md P5). `error` is the
+    raw text, as it always was. A step's own failure carries a REASON written for
+    a reader (a gate's verdict, `fail("…")`), which is the headline; anything
+    else is named by the kind a turn's failure would be, its raw text kept for
+    technical details."""
+    raw = f"{type(exc).__name__}: {exc}"
+    if isinstance(exc, StepFailed):
+        return {"error": raw, "error_kind": "step_failed", "error_reason": str(exc)}
+    return {"error": raw, "error_kind": classify_error(exc)}

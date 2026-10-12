@@ -314,6 +314,13 @@ class SourceDoc(Struct):  # → resource "source-doc"
     # minutes. Cleared on success; carries the exception summary when
     # status flips to "error".
     status_detail: str = ""
+    # docs/plan-friendly-errors.md P5: when `status_detail` is an exception's
+    # raw text, the kind it was named by (`failover.classify.ERROR_KINDS`), so
+    # the doc list can say what happened and keep the raw text as the details.
+    # Written by EVERY `status_detail` writer (None unless an exception made it),
+    # so a kind can never outlive the text it describes
+    # (tests/kb/test_status_error_kind.py pins that).
+    status_error_kind: str | None = None
     # #513 P7: the parent document this doc is an ATTACHMENT of — its
     # `encode_doc_id` id. Empty ⇒ a top-level document (the overwhelming
     # majority). Set when an HTML/MD upload's referenced image is fetched into

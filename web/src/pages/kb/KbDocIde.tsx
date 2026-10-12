@@ -21,6 +21,7 @@ import { kbFileService } from "../../api/kbFileService";
 import { normPath } from "../../api/refPath";
 import { qk } from "../../api/queryKeys";
 import { useDialog } from "../../components/Dialog";
+import { ErrorNotice } from "../../components/ErrorNotice";
 import { Icon } from "../../components/Icon";
 import { PermissionDialog } from "../../components/PermissionDialog";
 import { useCurrentUser } from "../../hooks/useCurrentUser";
@@ -38,7 +39,8 @@ import {
   useFileBuffer,
   useIsDirty,
 } from "../../hooks/fileBuffer";
-import { useT } from "../../lib/i18n";
+import { docFailure } from "../../lib/failure";
+import { useLocale, useT } from "../../lib/i18n";
 import { FileView } from "../../renderers/FileView";
 import { hasEditToggle, pickRenderer } from "../../renderers/registry";
 import { FileTree } from "../investigation/FileTree";
@@ -616,6 +618,7 @@ function KbEditorPane({
   onRenameAttachment: (att: KbDocument, newName: string) => void;
 }) {
   const t = useT();
+  const [locale] = useLocale();
   const { save } = useFileBuffer(path);
   const dirty = useIsDirty(path);
   const { isEditing, toggle } = useEditMode();
@@ -695,6 +698,11 @@ function KbEditorPane({
         </button>
       </header>
       <div className="kb-ide__body">
+        {/* docs/plan-friendly-errors.md P5: what stopped this doc, worded,
+            with the raw text under details — the status bar has one line. */}
+        {doc?.status === "error" && (
+          <ErrorNotice failure={docFailure(doc, locale)} />
+        )}
         <FileView path={path} />
         <AttachmentBar
           parentPath={path}

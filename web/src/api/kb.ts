@@ -244,6 +244,9 @@ export type KbDocument = {
    * exception summary on `status="error"`. Empty while indexing (the racy
    * per-page string was dropped in #248 — use the unit counts below). */
   status_detail?: string;
+  /** docs/plan-friendly-errors.md P5: the kind a failed doc's detail was named
+   * by; absent for a row from before kinds, or a failure that was a sentence. */
+  status_error_kind?: string | null;
   /** #248: real fan-out progress — units (e.g. PDF pages) done / total. Both 0
    * (or absent) for a single-job / ready doc, which means "no progress bar".
    * Monotonic while indexing. */
@@ -325,6 +328,8 @@ export type KbRenderedDoc = {
   status: string;
   /** Issue #39 Q11 — progress / error line beside the status chip. */
   status_detail?: string;
+  /** P5: see `KbDocumentRow.status_error_kind`. */
+  status_error_kind?: string | null;
   /** Issue #39: blob id of a browser-displayable derivative a parser
    * handed back (pptx → soffice-converted PDF). The viewer iframes
    * `/blobs/{preview_file_id}` when set; "" / absent = no preview. */

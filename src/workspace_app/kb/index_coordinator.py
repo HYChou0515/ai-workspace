@@ -40,6 +40,7 @@ from specstar.types import (
     TaskStatus,
 )
 
+from ..failover.classify import classify_error
 from ..failover.retry import is_transient
 from ..resources import Collection, DocChunk, IndexRun, IndexUnitText, SourceDoc
 from .index_jobs import IndexJob, IndexJobPayload
@@ -611,7 +612,11 @@ class IndexCoordinator:
                 )
                 raise  # the split job re-raises → specstar re-delivers it (#249)
             self._set_doc_status(
-                doc_id, updater, status="error", detail=f"{type(exc).__name__}: {exc!s}"[:240]
+                doc_id,
+                updater,
+                status="error",
+                detail=f"{type(exc).__name__}: {exc!s}"[:240],
+                error_kind=classify_error(exc),
             )
             return
         self._post_index_hooks(doc_id, requester, updater)
@@ -626,7 +631,15 @@ class IndexCoordinator:
         self._quality_hook(doc_id, updater)
         self._digest_hook(doc_id, updater)
 
-    def _set_doc_status(self, doc_id: str, updater: str, *, status: str, detail: str) -> None:
+    def _set_doc_status(
+        self,
+        doc_id: str,
+        updater: str,
+        *,
+        status: str,
+        detail: str,
+        error_kind: str | None = None,
+    ) -> None:
         """Stamp a SourceDoc's terminal/interim status (#249), AS its real
         updater so a worker run never erases ``updated_by`` (#83). A no-op if the
         doc was deleted between enqueue and run."""
@@ -637,7 +650,12 @@ class IndexCoordinator:
             return
         assert isinstance(doc, SourceDoc)
         with doc_rm.using(user=updater):
-            doc_rm.update(doc_id, msgspec.structs.replace(doc, status=status, status_detail=detail))
+            doc_rm.update(
+                doc_id,
+                msgspec.structs.replace(
+                    doc, status=status, status_detail=detail, status_error_kind=error_kind
+                ),
+            )
 
     def _handle_process(self, payload, requester: str) -> None:
         """Index ONE unit batch end-to-end, stage its text, record it done, and —
@@ -760,6 +778,7 @@ class IndexCoordinator:
                     doc,
                     status=status,
                     status_detail=detail,
+                    status_error_kind=None,
                     text=text or None,
                     token_count=count_tokens(text or ""),  # #88: chunk-based token estimate
                 ),

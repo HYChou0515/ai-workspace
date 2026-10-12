@@ -25,8 +25,10 @@ import {
   type WorkflowRunDTO,
 } from "../api/workflows";
 import { usePersistentBoolean } from "../hooks/usePersistentBoolean";
+import { runFailure } from "../lib/failure";
 import { useT } from "../lib/i18n";
 import { pxToRem } from "../lib/pxToRem";
+import { ErrorNotice } from "./ErrorNotice";
 import { chipStyle } from "./StatusChip";
 import { WorkflowPhaseDiagram } from "./WorkflowPhaseDiagram";
 import { WorkflowStepBoard } from "./WorkflowStepBoard";
@@ -171,6 +173,7 @@ export function WorkflowProgress({
   const ranNothing =
     run.status === "done" && run.phases.every((p) => p.done === 0 && p.failed === 0);
   const message = typeof run.result?.message === "string" ? run.result.message : null;
+  const failure = runFailure(run.result);
 
   // The "current" segment for the collapsed summary: the phase the run is on, else
   // the one awaiting a human, else the first not-yet-passed, else the last.
@@ -290,6 +293,10 @@ export function WorkflowProgress({
           {message}
         </div>
       )}
+
+      {/* docs/plan-friendly-errors.md P5: why it failed, without expanding —
+          the expanded JSON was the only place a failed run said anything. */}
+      {run.status === "error" && failure && <ErrorNotice failure={failure} />}
 
       {run.failures.length > 0 && (
         <ul data-testid="wf-failures" style={{ margin: 0, paddingLeft: 18, fontSize: pxToRem(12) }}>

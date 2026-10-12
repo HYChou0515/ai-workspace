@@ -255,3 +255,31 @@ describe("WorkflowProgress — controls (#331)", () => {
     expect(screen.queryByTestId("wf-stop")).toBeNull();
   });
 });
+
+describe("WorkflowProgress — a failed run says why, even collapsed (docs/plan-friendly-errors.md P5)", () => {
+  it("leads with a step's own reason — it was written for the reader", () => {
+    renderProgress({
+      status: "error",
+      ended: 2,
+      result: {
+        error: "StepFailed: input is malformed",
+        error_kind: "step_failed",
+        error_reason: "input is malformed",
+      },
+    });
+    const notice = screen.getByTestId("error-notice");
+    expect(notice).toHaveTextContent("input is malformed");
+    expect(screen.queryByTestId("wf-metrics")).toBeNull(); // collapsed
+  });
+
+  it("words anything else from its kind, with the raw text under details", () => {
+    renderProgress({
+      status: "error",
+      ended: 2,
+      result: { error: "TimeoutError: the model did not answer", error_kind: "timeout" },
+    });
+    const notice = screen.getByTestId("error-notice");
+    expect(notice).toHaveTextContent("模型太久沒有回應。");
+    expect(screen.getByTestId("error-notice-details")).toHaveTextContent("the model did not answer");
+  });
+});

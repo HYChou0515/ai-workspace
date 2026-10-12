@@ -21,6 +21,9 @@ export type Failure = {
   raw: string;
   /** For a writer that already has the whole sentence (a quota refusal). */
   headline?: string;
+  /** What to do, when the surface's remedy is not the kind's own — a document
+   *  is re-read, not sent again. */
+  action?: string;
 };
 
 export type FailureText = {
@@ -71,6 +74,37 @@ export function failureFromHttp(err: unknown): Failure {
   return failureFromError(err);
 }
 
+/** A document that failed to process (P5): worded from the kind the backend
+ *  named its exception by; with no kind (a row from before kinds, or a failure
+ *  that was a sentence to begin with — "processing was interrupted") the page's
+ *  own `fallback` is the headline. The detail is the raw text either way. */
+export function docFailure(
+  doc: { status_detail?: string | null; status_error_kind?: string | null },
+  locale: Locale,
+): Failure {
+  const raw = doc.status_detail ?? "";
+  // The kind's own remedy is a chat's ("send it again", "split the message");
+  // a document's is to re-read it.
+  const action = translate(locale, "kb.doc.failedAction");
+  return doc.status_error_kind
+    ? { kind: doc.status_error_kind, raw, action }
+    : { kind: "doc_failed", headline: translate(locale, "kb.doc.processingFailed"), raw, action };
+}
+
+/** A workflow run that ended in error (P5), from its `result` — null when it
+ *  recorded none. A step's own failure leads with its REASON, which was written
+ *  for the reader; anything else is worded from its kind. */
+export function runFailure(result: Record<string, unknown> | null | undefined): Failure | null {
+  const raw = result?.error;
+  if (typeof raw !== "string") return null;
+  const kind = typeof result?.error_kind === "string" ? result.error_kind : "unknown";
+  const reason = result?.error_reason;
+  if (kind === "step_failed" && typeof reason === "string" && reason) {
+    return { kind, headline: reason, raw };
+  }
+  return { kind, raw };
+}
+
 /** One line for a developer's log: the headline, then the raw text. */
 export function failureLine(failure: Failure, locale: Locale): string {
   const { headline, details } = describeFailure(failure, locale);
@@ -95,7 +129,7 @@ export function describeFailure(failure: Failure, locale: Locale): FailureText {
       : translate(locale, `failure.${kind}.what` as MsgKey);
   return {
     headline,
-    action: translate(locale, `failure.${kind}.do` as MsgKey),
+    action: failure.action ?? translate(locale, `failure.${kind}.do` as MsgKey),
     details: raw || null,
   };
 }

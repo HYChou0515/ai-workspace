@@ -382,6 +382,29 @@ describe("KbDocIde", () => {
     expect(bar).toHaveTextContent("cited 2×");
   });
 
+  it("says what stopped a failed doc, with the raw text under details (docs/plan-friendly-errors.md P5)", async () => {
+    const user = userEvent.setup();
+    renderWithQuery(
+      <KbDocIde
+        collectionId="c1"
+        client={stubClient([
+          doc({
+            path: "/big.pdf",
+            status: "error",
+            status_detail: "Timeout: litellm.Timeout: embedding took too long",
+            status_error_kind: "timeout",
+          }),
+        ])}
+      />,
+    );
+    await user.click(await screen.findByText("big.pdf"));
+    const notice = await screen.findByTestId("error-notice");
+    expect(notice).toHaveTextContent("模型太久沒有回應。");
+    expect(within(notice).getByTestId("error-notice-details")).toHaveTextContent(
+      "embedding took too long",
+    );
+  });
+
   it("shows a monotonic unit progress bar while a fanned-out doc indexes (#248)", async () => {
     const user = userEvent.setup();
     renderWithQuery(

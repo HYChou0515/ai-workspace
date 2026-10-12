@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { describeFailure, failureFromHttp } from "./failure";
+import { describeFailure, docFailure, failureFromHttp } from "./failure";
 import { translate } from "./i18n";
 
 const zh = (key: Parameters<typeof translate>[1], vars?: Record<string, string | number>) =>
@@ -95,5 +95,33 @@ describe("failureFromHttp — our own API refusing a request (docs/plan-friendly
     );
     expect(out.headline).toBe(zh("failure.unknown.what"));
     expect(out.details).toBe("messages failed: 409");
+  });
+});
+
+describe("docFailure — a document that failed to process (docs/plan-friendly-errors.md P5)", () => {
+  it("words it from the kind the backend named, keeping the detail as the raw text", () => {
+    const f = docFailure(
+      { status_detail: "RateLimitError: slow down", status_error_kind: "rate_limited" },
+      "zh-TW",
+    );
+    expect(describeFailure(f, "zh-TW").headline).toBe(zh("failure.rate_limited.what"));
+    expect(describeFailure(f, "zh-TW").details).toBe("RateLimitError: slow down");
+  });
+
+  it("falls back to the page's own sentence when nothing named it — an older row, an interruption", () => {
+    const f = docFailure({ status_detail: "processing was interrupted", status_error_kind: null }, "zh-TW");
+    expect(describeFailure(f, "zh-TW").headline).toBe("處理失敗");
+    expect(describeFailure(f, "zh-TW").details).toBe("processing was interrupted");
+  });
+});
+
+describe("a document failure's remedy is a document's, not a chat's (P5)", () => {
+  it("offers re-reading the document rather than sending a message again", () => {
+    const f = docFailure(
+      { status_detail: "RateLimitError: slow down", status_error_kind: "rate_limited" },
+      "zh-TW",
+    );
+    expect(describeFailure(f, "zh-TW").action).toBe(zh("kb.doc.failedAction"));
+    expect(describeFailure(f, "zh-TW").action).not.toBe(zh("failure.rate_limited.do"));
   });
 });

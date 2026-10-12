@@ -815,6 +815,32 @@ describe("KbCollectionsPage", () => {
     expect(strip).toHaveTextContent(/PdfParser: page 12/);
   });
 
+  it("words a failure the backend named, keeping the provider's text for hover (docs/plan-friendly-errors.md P5)", async () => {
+    const client = {
+      listCollections: async () => [col({ resource_id: "c1", name: "kb" })],
+      listDocuments: async () =>
+        page([
+          {
+            resource_id: "c1/me/a.md",
+            path: "a.md",
+            content_type: "text/markdown",
+            created_by: "me",
+            status: "error",
+            status_detail: "RateLimitError: litellm.RateLimitError: slow down",
+            status_error_kind: "rate_limited",
+          },
+        ]),
+    } as unknown as Client;
+    renderKb(client);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Open kb" }));
+    const strip = await screen.findByTestId("kb-index-status");
+    await userEvent.click(within(strip).getByRole("button", { name: /1 份處理失敗/ }));
+    const reason = within(strip).getByText("模型服務限制了請求頻率。");
+    expect(reason).toHaveAttribute("title", "RateLimitError: litellm.RateLimitError: slow down");
+    expect(strip).not.toHaveTextContent("litellm.RateLimitError");
+  });
+
   it("opens the failed doc's read-only viewer when its row is clicked (#170)", async () => {
     const openDoc = vi.fn();
     const client = {

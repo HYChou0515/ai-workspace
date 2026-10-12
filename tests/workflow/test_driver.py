@@ -70,6 +70,26 @@ async def test_failing_run_records_error_with_message(spec_instance: SpecStar):
     assert got.status is RunStatus.ERROR
     assert "malformed" in got.result["error"]  # ty: ignore[not-subscriptable]
     assert got.ended is not None
+    # docs/plan-friendly-errors.md P5: a step's reason was written for a reader —
+    # it is the headline, not something to hide under "unexpected error".
+    assert got.result["error_kind"] == "step_failed"  # ty: ignore[not-subscriptable]
+    assert got.result["error_reason"] == "input is malformed"  # ty: ignore[not-subscriptable]
+
+
+async def test_a_run_that_died_on_a_provider_is_named_by_its_kind(spec_instance: SpecStar):
+    """Anything else is named like a turn's failure, the raw text kept as the
+    error for technical details."""
+    rid = _run(spec_instance)
+
+    async def run(wf, inputs):
+        raise TimeoutError("the model did not answer")
+
+    await run_workflow(spec_instance, run_id=rid, profile_run=run, wf=_wf(), inputs={})
+    got = spec_instance.get_resource_manager(WorkflowRun).get(rid).data
+    assert got.result == {
+        "error": "TimeoutError: the model did not answer",
+        "error_kind": "timeout",
+    }
 
 
 async def test_cancelled_run_records_cancelled_and_propagates(spec_instance: SpecStar):

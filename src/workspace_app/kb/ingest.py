@@ -27,6 +27,7 @@ from llama_index.core.schema import Document
 from specstar import QB, SpecStar
 from specstar.types import Binary, DuplicateResourceError, ResourceIDNotFoundError
 
+from ..failover.classify import classify_error
 from ..resources.kb import CachedChunk, Collection, DocChunk, IndexCache, SourceDoc
 from .chunker import Chunker
 from .code_lang import is_code_file
@@ -652,6 +653,7 @@ class Ingestor:
                     doc,
                     status="error",
                     status_detail=f"{type(exc).__name__}: {exc!s}"[:240],
+                    status_error_kind=classify_error(exc),
                     preview=None,
                     text=None,
                 ),
@@ -665,6 +667,7 @@ class Ingestor:
                 doc,
                 status="ready",
                 status_detail="",
+                status_error_kind=None,
                 preview=preview,
                 text=text,
                 token_count=count_tokens(text or ""),  # #88: chunk-based token estimate
@@ -731,6 +734,7 @@ class Ingestor:
                 doc,
                 status="ready",
                 status_detail="",
+                status_error_kind=None,
                 # Carry the sibling's derived render surfaces so this path reads +
                 # views identically without re-parsing: `text` feeds the wiki +
                 # retrieval, `preview` feeds the doc viewer (a pptx/PDF alias would
@@ -865,7 +869,10 @@ class Ingestor:
         try:
             sd = drm.get(doc_id).data
             assert isinstance(sd, SourceDoc)
-            drm.update(doc_id, msgspec.structs.replace(sd, status_detail=message))
+            drm.update(
+                doc_id,
+                msgspec.structs.replace(sd, status_detail=message, status_error_kind=None),
+            )
         except Exception:  # noqa: BLE001
             logger.warning("status_detail update failed for %s", doc_id, exc_info=True)
 
@@ -1367,6 +1374,7 @@ class Ingestor:
                 doc,
                 status="ready",
                 status_detail="",
+                status_error_kind=None,
                 text=entry.text,
                 preview=entry.preview,
                 token_count=count_tokens(entry.text or ""),

@@ -348,6 +348,11 @@ export const messages = {
   "kb.doc.processing": { "zh-TW": "處理中…", en: "Processing…" },
   "kb.doc.failed": { "zh-TW": "失敗", en: "Failed" },
   "kb.doc.processingFailed": { "zh-TW": "處理失敗", en: "Processing failed" },
+  // docs/plan-friendly-errors.md P5: a failed document's remedy (`docFailure`).
+  "kb.doc.failedAction": {
+    "zh-TW": "重新讀取這份文件再試一次；持續失敗請把技術細節複製給管理員。",
+    en: "Re-read this document to try again. If it keeps failing, copy the technical details to an administrator.",
+  },
   // Shown when the rendered-document fetch fails — a friendly line instead of the
   // raw "render document failed: 404" the API throws (#465).
   "kb.doc.loadError": {
@@ -2223,8 +2228,8 @@ export const messages = {
   // (docs/plan-friendly-errors.md D5; `lib/failure.ts`): what happened, then
   // what the reader can do. The raw text goes under "technical details".
   "failure.rate_limited.what": {
-    "zh-TW": "模型服務限制了請求頻率，這次回答沒有完成。",
-    en: "The model service is limiting how often we can ask, so this reply did not finish.",
+    "zh-TW": "模型服務限制了請求頻率。",
+    en: "The model service is limiting how often we can ask.",
   },
   "failure.rate_limited.waited": {
     "zh-TW": "模型服務限制了請求頻率，已自動等了約 {waited_s} 秒仍未解除。",

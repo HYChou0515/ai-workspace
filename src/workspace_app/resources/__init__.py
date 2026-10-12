@@ -476,6 +476,12 @@ def _register_all(spec: SpecStar, superusers: frozenset[str] = frozenset()) -> N
             IndexableField("quality_score", int),
             IndexableField("status", str),
             IndexableField("status_detail", str),
+            # docs/plan-friendly-errors.md P5: read by the doc list, which serves
+            # from index metas (#395). No Schema bump: nothing filters on it, and
+            # a row indexed before it has no kind in its DATA either, so a
+            # re-extract would find nothing — such a row reads as "processing
+            # failed" with its detail, exactly as before.
+            IndexableField("status_error_kind", str),
             IndexableField("content.content_type", str, index_key="content_type"),
             IndexableField("content.file_id", str, index_key="file_id"),
             IndexableField("collection_visibility", str),

@@ -42,7 +42,8 @@ import { useIsSuperuser } from "../../hooks/useIsSuperuser";
 import { usePickableGroups } from "../../hooks/usePickableGroups";
 import { usePersistentBoolean } from "../../hooks/usePersistentBoolean";
 import { usePersistentSet } from "../../hooks/usePersistentSet";
-import { type MsgKey, useT } from "../../lib/i18n";
+import { describeFailure, docFailure } from "../../lib/failure";
+import { type MsgKey, useLocale, useT } from "../../lib/i18n";
 import { type CollectionPermission, canManageAccess } from "../../lib/permission";
 import { fmtBytes, fmtDate, ICON_OPTIONS, uploadDocPath } from "./collectionFormat";
 import { CodeConnectionEditor } from "./CodeConnectionEditor";
@@ -98,6 +99,7 @@ import { ArchiveImportStatus } from "./ArchiveImportStatus";
 // for the re-index confirms. The provider is at the app root now.
 export function KbCollectionPage({ client = kbApi }: { client?: KbApi }) {
   const t = useT();
+  const [locale] = useLocale();
   const dialog = useDialog();
   const qc = useQueryClient();
   const navigate = useNavigate();
@@ -836,8 +838,18 @@ export function KbCollectionPage({ client = kbApi }: { client?: KbApi }) {
                             onClick={() => openDoc(d.resource_id)}
                           >
                             <span className="kb-index-status__fail-name">{name}</span>
-                            <span className="kb-index-status__fail-reason">
-                              {d.status_detail || t("kb.doc.processingFailed")}
+                            <span
+                              className="kb-index-status__fail-reason"
+                              title={d.status_error_kind ? d.status_detail : undefined}
+                            >
+                              {/* P5: a failure the backend named is worded, its
+                                  provider text kept for hover (the row is a
+                                  button, so no copy control fits inside it —
+                                  the doc it opens carries the full notice).
+                                  Unnamed, the detail stays the reason (#170). */}
+                              {d.status_error_kind
+                                ? describeFailure(docFailure(d, locale), locale).headline
+                                : d.status_detail || t("kb.doc.processingFailed")}
                             </span>
                           </button>
                         </li>
