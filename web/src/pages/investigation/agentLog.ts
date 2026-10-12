@@ -402,12 +402,18 @@ export function logFromMessages(messages: readonly Message[]): AgentLog {
       // is; the note's text ends on the same raw words for text-only readers
       // (export, video), so that paragraph is taken off here — exactly that
       // suffix, never guessed — and the notice words it instead.
-      const tail = m.failure ? `\n\n${m.failure.raw}` : null;
+      //
+      // Only a NAMED failure, though (review round 2): the turn gate's refusals
+      // — a full workspace, a spent sandbox quota — are named `unknown` and ARE
+      // sentences for the reader, the only fact this note has; worded as
+      // "something unexpected, ask an admin" they would say less than they do.
+      const named = m.failure && m.failure.kind !== "unknown" ? m.failure : null;
+      const tail = named ? `\n\n${named.raw}` : null;
       entries.push({
         kind: "goal_note",
         text: tail && m.content.endsWith(tail) ? m.content.slice(0, -tail.length) : m.content,
         at: m.created_at ?? undefined,
-        ...(m.failure ? { failure: m.failure } : {}),
+        ...(named ? { failure: named } : {}),
       });
     } else if (m.role === "error") {
       // #37: a persisted terminal failure — rendered as a banner so a

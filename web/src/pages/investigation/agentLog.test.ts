@@ -1788,3 +1788,17 @@ describe("review round 1 — the retraction and the night note (docs/plan-friend
     });
   });
 });
+
+describe("review round 2 — an unnamed night failure keeps its own words", () => {
+  it("leaves the note as written when the failure could only be named unknown", () => {
+    // The turn gate's refusals — a full workspace, a spent sandbox quota — ARE
+    // sentences for the reader, and the only fact the note has. "Something
+    // unexpected went wrong, ask an admin" would say less than they do.
+    const raw = "WorkspaceFull: 20.0 GB of 20.0 GB used";
+    const log = logFromMessages([
+      { role: "goal", content: `今晚無法開始。\n\n${raw}`, failure: { kind: "unknown", params: null, raw } },
+    ] as Message[]);
+
+    expect(log.entries[0]).toEqual({ kind: "goal_note", text: `今晚無法開始。\n\n${raw}`, at: undefined });
+  });
+});

@@ -157,3 +157,17 @@ describe("review round 1 — failure copy", () => {
     expect(zh("failure.context_overflow.do")).toBe("請把訊息拆小，或開一個新對話重試。");
   });
 });
+
+describe("review round 2 — the counted copy says what happened", () => {
+  it("counts tries as tries: three sends are not three RE-sends", () => {
+    // `attempts` is every send (`ModelCallFailed.attempts`): max_retries=2 → 3.
+    const tw = describeFailure({ kind: "timeout", params: { attempts: 3 }, raw: "x" }, "zh-TW").headline;
+    expect(tw).toBe("模型太久沒有回應，試了 3 次都沒能完成。");
+    expect(tw).not.toContain("重試 3 次");
+  });
+
+  it("never says it waited 0 seconds — a wait that could not fit was not waited at all", () => {
+    const out = describeFailure({ kind: "rate_limited", params: { waited_s: 0 }, raw: "x" }, "zh-TW");
+    expect(out.headline).toBe(zh("failure.rate_limited.what"));
+  });
+});

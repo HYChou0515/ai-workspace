@@ -97,8 +97,11 @@ class RunCancelled:
 class ToolCallParseError:
     """The model emitted a tool call we couldn't parse — typically the
     LiteLLM Ollama chunk_parser bug where multi-tool-call streaming
-    concatenates arguments into invalid JSON. Non-terminal: a retry
-    with feedback to the model follows."""
+    concatenates arguments into invalid JSON.
+
+    Nothing emits it since docs/plan-friendly-errors.md (P2): bad tool args are
+    answered in-band by `args_recovery` and the whole-turn retry that sent
+    this is gone. Kept so an older client's handling still type-checks."""
 
     hint: str
     call_id: str = ""

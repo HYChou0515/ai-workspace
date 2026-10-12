@@ -129,8 +129,11 @@ export function describeFailure(failure: Failure, locale: Locale): FailureText {
   const kind = WORDED.has(failure.kind) ? failure.kind : "unknown";
   const counted = COUNTED[kind];
   const n = counted ? failure.params?.[counted.param] : undefined;
+  // Only a number that happened: a wait that could not fit the budget gave up
+  // before waiting at all (`waited_s` 0), and "waited about 0 seconds" is not
+  // something that occurred (review round 2).
   const headline =
-    counted && n != null
+    counted && n != null && n > 0
       ? translate(locale, counted.key, { [counted.param]: n })
       : translate(locale, `failure.${kind}.what` as MsgKey);
   return {

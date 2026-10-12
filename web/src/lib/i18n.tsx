@@ -2254,7 +2254,7 @@ export const messages = {
   },
   "failure.timeout.what": { "zh-TW": "模型太久沒有回應。", en: "The model took too long to respond." },
   "failure.timeout.tried": {
-    "zh-TW": "模型太久沒有回應，已重試 {attempts} 次。",
+    "zh-TW": "模型太久沒有回應，試了 {attempts} 次都沒能完成。",
     en: "The model took too long to respond, after {attempts} tries.",
   },
   "failure.timeout.do": {

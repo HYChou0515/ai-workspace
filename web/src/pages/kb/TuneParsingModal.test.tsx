@@ -128,6 +128,27 @@ describe("TuneParsingModal", () => {
     );
   });
 
+  it("says why a Try-answer failed, with the raw text under details (docs/plan-friendly-errors.md)", async () => {
+    const client = fakeClient({
+      answerFindability: vi.fn(async function* () {
+        yield {
+          type: "error",
+          message: "RateLimitError: litellm.RateLimitError: slow down",
+          kind: "rate_limited",
+        };
+      }),
+    });
+    open(client);
+    fireEvent.change(screen.getByLabelText("問題"), { target: { value: "why voids?" } });
+    fireEvent.click(screen.getByRole("button", { name: /用指引重新解讀/ }));
+    await screen.findByText(/最佳 #2/);
+    fireEvent.click(screen.getByRole("button", { name: /試答 \(套用新指引後\)/ }));
+
+    const notice = await screen.findByTestId("error-notice");
+    expect(notice).toHaveTextContent("模型服務限制了請求頻率。");
+    expect(screen.getByTestId("error-notice-details")).toHaveTextContent("litellm.RateLimitError");
+  });
+
   it("saves the guidance for this document only", async () => {
     const client = fakeClient();
     open(client);

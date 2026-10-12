@@ -1501,10 +1501,11 @@ class LitellmAgentRunner:
         on_hold: Callable[[float], None] | None = None,
         on_trimmed: Callable[[ContextTrimmed], None] | None = None,
     ) -> Callable[[Model], Model]:
-        """How this turn's model calls are retried (docs/plan-friendly-errors.md
+        """How this run's model calls are retried (docs/plan-friendly-errors.md
         D2): a fresh `CallRetryModel` per agent, so the rate-limit budget is a
-        pool for the whole turn — a per-call allowance would reset each tool
-        round and make a turn's total hold unbounded."""
+        pool for this `run()` — a per-call allowance would reset each tool round
+        and make the hold unbounded. A delegated sub-agent or a compaction pass
+        is a `run()` of its own, with its own pool (review round 2)."""
         from ..agent.call_retry_model import CallRetryModel
 
         def wrap(model: Model) -> Model:

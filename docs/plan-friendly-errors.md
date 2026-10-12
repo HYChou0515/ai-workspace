@@ -166,6 +166,33 @@ unfixed code, the fixed line then mutated to prove the test guards it:
   `subsystems/agent-runtime.md`, `architecture.md`, `glossary.md`,
   `decisions.md`) described the removed whole-turn retry and are updated.
 
+## Review round 2 (2026-10-12)
+
+Two lenses (defect + regression, veracity + conformance) on `076400a2`. The
+defect lens re-ran every round-1 failure and found each one fixed. New:
+
+- **Regression — an unnamed night failure hid its own words.** The off-hours
+  note's usual cause is the turn gate refusing (a full workspace, a spent
+  sandbox quota), named `unknown`; stripped and worded as "something
+  unexpected", it said less than the sentence it replaced. A note whose failure
+  is `unknown` now stays as written, the same rule the doc list follows.
+- **Copy said what did not happen.** `failure.timeout.tried` counted every send
+  as a RE-send ("已重試 3 次" after two re-sends): it is now "試了 N 次都沒能完成"
+  (a deviation from D5's "已重試 N 次", for accuracy). A rate limit given up
+  before any wait no longer reads "waited about 0 seconds".
+- **The findability Try-answer** now words its failure (`ErrorNotice`) instead
+  of printing the raw cause chain.
+- **Recorded rather than changed:** the rate-limit pool is per `run()` — a
+  delegated sub-agent or a compaction pass has its own (docstrings corrected);
+  `aclosing` closes the stream the wrapper iterates, the provider's own stream
+  is finalized by the loop's asyncgen hooks shortly after (comment corrected);
+  a re-sent sub-agent call's withdrawn reasoning stays in the parent tool card's
+  progress lines (cosmetic); the failover chain's `rate_limit_budget_s: 0` still
+  gets the call wrapper's 120 s (`configuration.md` corrected);
+  `ToolCallParseError` has no emitter (marked so in `events.py` and
+  `contract.md`); older plans (`plan-repetition-guard.md`, `plan-issue-624.md`)
+  mention `progress_made` as their own history and are left as written.
+
 ## Risks
 
 - **P2 context trimming moves.** The whole-turn retry trims conversation

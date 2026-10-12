@@ -146,9 +146,9 @@ class CallRetryModel(Model):
         # `max_retries`: that count exists for a provider blip, a different
         # failure on a different timescale, and spending it on a limit gives up
         # on one that would have cleared. The budget is a POOL for this
-        # instance — one per agent run, i.e. per turn (`_call_retry`) — never a
-        # per-call allowance: that reset every tool round, so a turn of N calls
-        # could wait N times the budget (review round 1).
+        # instance — one per `run()` (`_call_retry`); a delegated sub-agent's run
+        # has its own — never a per-call allowance: that reset every tool round,
+        # so a turn of N calls could wait N times the budget (review round 1).
         self._waited_s = 0.0
 
     def __getattr__(self, name: str) -> Any:
@@ -178,8 +178,10 @@ class CallRetryModel(Model):
             recorded = False
             try:
                 # `aclosing`: a consumer that stops (a Stop mid-answer) closes
-                # this stream, and the inner one is the HTTP stream to the
-                # provider — closed with it, not left for GC.
+                # the stream this wrapper iterates. The wrappers below it
+                # (RepairingModel, HeaderModel, DeadlineModel) re-yield, so the
+                # provider's own stream is finalized by the loop's asyncgen
+                # hooks shortly after rather than here (review round 2).
                 # The SDK types it an AsyncIterator; at runtime it is an async
                 # generator (DeadlineModel relies on the same).
                 inner = cast(
