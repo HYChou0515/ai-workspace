@@ -2043,6 +2043,22 @@ image 做不出來。能連公開 registry 的 build 不用做事。沒有新的
    `?page=` 跟著變，錯誤面板沒有任何「not allowed to load」。
 3. 在任一 WUI 點一個外部連結：出現確認框、按 Cancel 不開、按 Open 開新分頁。
 
+### 2026-10-12 · #907 job tool template；第三方工具多拿到一個 `WORKSPACE_ITEM_ID` {#pr-907}
+
+**設定** — 沒有新 key，沒有要做的事。**行為改變，沒有開關**：平台每次執行第三方工具的 command（聊天、workflow、
+WUI 的工具呼叫、view plugin、圖表重畫）都多帶一個環境變數 `WORKSPACE_ITEM_ID`，值是那個 item 的 id
+（`docs/tool-authoring.md`）。使用者或 item 自己設了同名變數也會被平台的值蓋過，而且不會被 launcher 還原回去。
+既有工具不讀它就沒有任何差別。新的 `sample-tools/job-tool-template/` 靠它判斷「同一個 item 送了同一份工作」。
+
+**資料** — 沒有 `Schema` 升版，沒有回填。
+
+**k8s · CI 側** — 沒有新的 manifest、env、probe 或 JobType；照常重 build、照常部署。只換 API image 就生效
+（變數是 API 在派送時帶進 exec 的，sandbox-host 不用動）。
+
+**確認做完**（`rollout 後`）：在一個 item 用任何第三方工具，讓它印出環境（或用 job tool template 的示範後端
+送一個 job、`list` 時看到「from this item」）。沒部署到這一版的症狀：工具讀不到 `WORKSPACE_ITEM_ID`，
+job template 會把同一份工作當成跟 item 無關（只以欄位判斷是否相同）。
+
 ## 附錄 A：資料回填的機制（specstar 為什麼不會自己補）
 
 有些升版會改變「資料在資料庫裡的儲存形狀」，但 **specstar 只在寫入當下**把一列的 `indexed_data`
