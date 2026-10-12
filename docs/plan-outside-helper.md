@@ -156,6 +156,8 @@ AI 呼叫 ask_outside ──► 卡片(D7:沒連線 = 今天的手動流程)
   state.json              現在用哪一版、上一版、待換的新版、壞掉的版本、安裝時的 Python 路徑
   helper.lock             單一實例鎖
   settings.json           第一次啟動時問的 app 網址(小幫手自己寫;state.json 歸啟動檔管,兩個分開)
+  setup_core.py           launch.pyw 用的同一份安裝/換版/退回邏輯(標準函式庫)
+  show.request            已經有一個在跑時,啟動檔留下它,那一個看到就把視窗叫到前面
   versions\
     1.4.0\venv\           每個版本一個 venv(由安裝時那個 Python 建)
     1.5.0\venv\
@@ -176,9 +178,16 @@ AI 呼叫 ask_outside ──► 卡片(D7:沒連線 = 今天的手動流程)
   "previous": "1.4.0",
   "pending": "1.6.0",
   "pending_attempts": 0,
-  "bad": ["1.5.1"]
+  "bad": ["1.5.1"],
+  "failures": {"1.6.1": 1},
+  "update": "1.5.1 起不來,已退回 1.5.0",
+  "start_at_login": true
 }
 ```
+
+〔施工〕`failures` 是背景準備新版失敗的次數(§3.7.4 第 5 點,到 3 次進 `bad`);`update` 是上一次更新的結果,
+心跳時回報(§3.7.7);`start_at_login` 記小視窗那個勾。全部的讀寫邏輯在 `outside_helper/setup_core.py`(只用
+標準函式庫,同一個檔在套件裡、zip 根目錄、`launch.pyw` 旁邊各一份,打包時複製,不另外改)。
 
 #### 3.7.2 發布新版(dev server → 後端)
 

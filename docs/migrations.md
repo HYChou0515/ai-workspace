@@ -2132,6 +2132,47 @@ agent 步驟裡 AI 的呼叫、WUI 的工具呼叫、view plugin、圖表重畫�
 - 在一個 item 開**第二個**聊天，請 AI 建一個新檔案：AI 回完話，檔案樹不用按重新整理就出現那個檔案。
   沒部署到這一版的症狀：要按重新整理才看得到。
 
+### 2026-10-13 · #927 外網小幫手：使用者電腦上的小程式用自己的 Chrome 代查,「請幫我查」只剩按一下「查」 {#pr-927}
+
+**設定** — 一個新 key,**opt-in**:`server.outside_helper_dir`(預設空 = 不發布)。不設什麼都不會壞:
+「外網小幫手」頁寫「還沒有發布」,卡片照舊讓使用者自己查([設定](configuration.md))。
+**行為改變,沒有開關**:
+
+- 左側選單多一項「外網小幫手」(`/outside-helper`),永遠看得到:下載、安裝步驟、你的小幫手連線了沒。
+- 「請幫我查」卡片在**這個人自己的**小幫手連線時,搜尋改成按「查」交給它(「自己查」收在展開區);
+  開網址時,這個聊天先前查回來的內容裡出現過的網址直接交給它,不再問。小幫手沒連線時卡片和以前一樣,
+  只多一行「外網小幫手未連線」和一個「怎麼安裝」連結(新分頁開「外網小幫手」頁)。
+- 小幫手的請求會帶 `X-Outside-Helper-Version` / `X-Outside-Helper-Protocol`;低於 `outside-helper.json` 的
+  `min_version`、或低於程式裡的最低協定號,回 **426** 要它更新。卡片自己的請求不受影響。
+
+**資料** — 三個新的 specstar model(`OutsideJob`、`_OutsideHelperPresence`、`_OutsideSeenUrls`),在
+`spec.apply` 之後註冊(沒有 CRUD 路由),第一次寫入時建表。沒有 `Schema` 升版,沒有回填。
+
+**k8s · CI 側** — 沒有新的 JobType、probe 或必填 env;照常重 build、照常部署。**要讓使用者下載時**(`rollout 後`,
+隨時):
+
+1. 在 dev server 打包:`python3 scripts/pack_outside_helper.py --version 0.1.0`(要 PyPI、`pnpm`、`uv`、
+   一個裝了 pip 的 Python)。它最後會對 Python 3.10–3.14 各跑一次只靠安裝包的 `pip install --dry-run`,
+   有一個解不出來就失敗、不產出檔案。
+2. 給 API pod 掛一個 volume(放得下約 40 MB 的 zip;多 pod 時每顆都要看得到同一份),設
+   `server.outside_helper_dir` 指向它,把 `dist/outside-helper/` 裡的兩個檔放進去。之後換版只換這兩個檔,
+   **不用重新部署**。為什麼要 volume:後端每個請求都重讀這個資料夾,檔案不在 image 裡。
+3. 要強迫所有人升級:改 json 的 `min_version`。
+
+小幫手走的是部署原本的登入(使用者在小幫手自己的 Chrome 設定檔裡登入一次),gateway 不用改。
+登入過期時 gateway 把請求導去 SSO(3xx),小幫手當成「要重新登入」,不會誤以為連上了。
+
+**IT 側**(每台裝的電腦):防毒放行 Playwright 自帶的 `node.exe`
+(`%LOCALAPPDATA%\OutsideHelper\versions\<版本>\venv\` 底下);Chrome 政策不能停用自動化/遠端偵錯。
+見[外網小幫手 §IT 要放行的](outside-helper.md#it-要放行的)。
+
+**確認做完**(`rollout 後`):
+
+- 打開「外網小幫手」頁:有版本號與 `outside-helper-<版本>.zip(ZIP,約 38 MB)` 的下載連結。
+  沒放檔案或 `outside_helper_dir` 沒設的症狀:頁面寫「還沒有發布外網小幫手」。
+- 在一台 Windows 電腦照頁面裝起來、登入,小視窗顯示「已連線」;在一個 item 請 AI 查外面的東西,卡片出現「查」,
+  按下去不用再經手,`lookups/` 出現存檔、AI 接著讀。這一步是 Windows 上唯一的驗證(plan D14)。
+
 
 ## 附錄 A：資料回填的機制（specstar 為什麼不會自己補）
 

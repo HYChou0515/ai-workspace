@@ -126,6 +126,7 @@ nav:
       - Sandbox Host: sandbox-host.md
       - Sandbox Host 線上契約: sandbox-host-wire.md
       - sci-plot 科學繪圖: sci-plot.md
+      - 外網小幫手（安裝、更新、發布、IT 放行）: outside-helper.md
   - 部署與運維:
       - 設定指南: configuration.md
       - 部署與客製化: deployment.md
