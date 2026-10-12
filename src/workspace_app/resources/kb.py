@@ -742,7 +742,8 @@ class KbMessage(Struct):
     withheld: list[WithheldSource] = field(default_factory=list)
     created_at: int | None = None  # epoch ms
     metrics: MessageMetrics | None = None  # assistant answers: final token usage (survives reload)
-    error_kind: str | None = None  # role=error (#37): error | cancelled | max_turns
+    error_kind: str | None = None  # role=error (#37): see `Message.error_kind`
+    error_params: dict[str, int] | None = None  # role=error: see `Message.error_params`
     stopped_reason: str | None = None  # #113: "repetition" → truncated + FE notice on reload
 
 

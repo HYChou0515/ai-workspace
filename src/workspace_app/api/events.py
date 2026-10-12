@@ -69,14 +69,16 @@ class RunDone:
 class RunError:
     message: str
     type: Literal["error"] = "error"
-    #: WHICH terminal failure this is, when we can tell — `rate_limited`,
-    #: `all_busy`, or None for anything else. The message alone could not carry
-    #: it: one English sentence was doing duty for two different failures with
-    #: two different remedies, in a product that speaks zh-TW. Stamped onto the
-    #: persisted message as `error_kind`, which the FE already words from
-    #: (`agentLog.persistedErrorText`), falling back to this message when it has
-    #: no wording for a kind.
+    #: WHICH failure this is — one of `failover.classify.ERROR_KINDS`, or None
+    #: when the emitter could not tell (persisted as `unknown`). The FE words
+    #: the failure from it (docs/plan-friendly-errors.md D5); `message` is the
+    #: raw text it shows under technical details (D1). Stamped onto the
+    #: persisted message as `error_kind`.
     kind: str | None = None
+    #: The numbers the kind's copy needs — `waited_s` for `rate_limited`,
+    #: `attempts` for a give-up after retries. Persisted as `error_params` so a
+    #: reloaded thread can say them too.
+    params: dict[str, int] | None = None
 
 
 @dataclass(frozen=True)

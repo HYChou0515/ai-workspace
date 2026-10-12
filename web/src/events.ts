@@ -41,10 +41,16 @@ export type ToolLog = { type: "tool_log"; call_id: string; text: string };
 
 export type RunDone = { type: "done" };
 
-/** `kind` names WHICH terminal failure this is when the backend could tell
- *  (`rate_limited` / `all_busy`); absent otherwise. `message` stays the
- *  fallback for kinds the FE has no wording for. */
-export type RunError = { type: "error"; message: string; kind?: string | null };
+/** `kind` names WHICH failure this is (`failover.classify.ERROR_KINDS`, or
+ *  absent when the backend could not tell); the FE words it from the kind
+ *  (docs/plan-friendly-errors.md D5) and `message` is the raw text shown under
+ *  technical details (D1). `params` are the numbers the kind's copy needs. */
+export type RunError = {
+  type: "error";
+  message: string;
+  kind?: string | null;
+  params?: Record<string, number> | null;
+};
 
 export type RunCancelled = { type: "run_cancelled" };
 

@@ -36,8 +36,7 @@ from fastapi.responses import StreamingResponse
 
 from ..agent.context import AgentToolContext
 from ..context_budget import SUMMARY_ROLE, estimate_messages
-from ..failover.core import AllProvidersFailed
-from ..failover.rate_limit import is_rate_limited
+from ..failover.classify import classify_error, raw_error_text
 from ..resources.conversation import MessageMetrics
 from ..turn_control import InMemoryTurnControl, ITurnControl
 from ..users.labels import speaker_label
@@ -314,58 +313,22 @@ class TurnMessage:
     tool_display: str = ""
     created_at: int = field(default_factory=_now_ms)
     metrics: MessageMetrics | None = None
-    error_kind: str | None = None  # role=error: error | cancelled | max_turns
+    # role=error: a `failover.classify.ERROR_KINDS` kind, `cancelled` or
+    # `max_turns` (`error` on rows persisted before docs/plan-friendly-errors.md)
+    error_kind: str | None = None
+    error_params: dict[str, int] | None = None  # role=error: numbers for the kind's copy
     # #113: "repetition" when the turn was stopped for a degenerate loop — the
     # FE renders a notice and `content`/`reasoning` is truncated to before it.
     stopped_reason: str | None = None
 
 
-# #196-followup: when the failover chain is exhausted (every model busy/cooling),
-# show a human-readable "try again" instead of the raw `AllProvidersFailed: …`.
-_BUSY_MESSAGE = (
-    "All available models are busy right now, so this response couldn't be "
-    "completed. Please try again in a moment."
-)
-
-#: The same chain, exhausted for a DIFFERENT reason. `failover/model.py` raises
-#: `AllProvidersFailed ... from (rate_limited or last)` on purpose — its comment
-#: says the turn loop tells "rate limited" from "broken" by walking exactly this
-#: chain — and this is the reading it was chained for. Saying "busy" here sent
-#: an operator looking at model load for a limit that a quota page explains, and
-#: "try again in a moment" is wrong advice for a limit that is deterministic.
-_RATE_LIMITED_MESSAGE = (
-    "The model endpoint is rate-limiting us, so this response couldn't be "
-    "completed. It is not a busy model: the limit has to clear, or be raised."
-)
-
-
-def _is_all_busy(exc: BaseException) -> bool:
-    """True if ``exc`` (or anything in its cause/context chain — the SDK may wrap
-    it) is an :class:`AllProvidersFailed` from the failover loop."""
-    seen: set[int] = set()
-    cur: BaseException | None = exc
-    while cur is not None and id(cur) not in seen:
-        seen.add(id(cur))
-        if isinstance(cur, AllProvidersFailed):
-            return True
-        cur = cur.__cause__ or cur.__context__
-    return False
-
-
 def _terminal_error(exc: BaseException) -> RunError:
-    """A terminal `RunError` for a turn that died — a readable notice when the
-    failover chain was exhausted, else the raw class+message for an operator.
-
-    Two readings of the SAME exhausted chain, because they need different things
-    from the reader: a rate limit clears on its own schedule or is raised by
-    somebody, while genuinely busy models are a capacity question. `kind` is what
-    lets the FE say either in the reader's own language; the message stays as the
-    fallback for a client that has no wording for the kind."""
-    if _is_all_busy(exc):
-        if is_rate_limited(exc):
-            return RunError(message=_RATE_LIMITED_MESSAGE, kind="rate_limited")
-        return RunError(message=_BUSY_MESSAGE, kind="all_busy")
-    return RunError(message=f"{type(exc).__name__}: {exc}")
+    """A terminal `RunError` for a turn that died: the kind the FE words it from
+    (docs/plan-friendly-errors.md D5) and the raw text down the whole cause
+    chain for technical details (D1). An exhausted failover chain is told apart
+    by its cause — `failover/model.py` raises `AllProvidersFailed ... from` the
+    429 on purpose, and a limit is not a busy model."""
+    return RunError(message=raw_error_text(exc), kind=classify_error(exc))
 
 
 def _error_message(item: RunError | RunCancelled | MaxTurnsExceeded) -> TurnMessage:
@@ -381,9 +344,14 @@ def _error_message(item: RunError | RunCancelled | MaxTurnsExceeded) -> TurnMess
             content=f"The agent stopped after reaching its step limit ({item.turns}).",
             error_kind="max_turns",
         )
-    # `kind` when the failure named itself, so the FE can word it; `error`
-    # otherwise, which is what every terminal failure carried before.
-    return TurnMessage(role="error", content=item.message, error_kind=item.kind or "error")
+    # The kind the FE words it from; `unknown` when the emitter could not tell.
+    # `content` is the raw text, shown under technical details.
+    return TurnMessage(
+        role="error",
+        content=item.message,
+        error_kind=item.kind or "unknown",
+        error_params=item.params,
+    )
 
 
 @dataclass

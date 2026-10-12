@@ -754,6 +754,48 @@ async def test_preparation_that_fails_still_ends_the_thread():
     assert kinds, "a send that died mid-preparation left the thread with no ending"
 
 
+async def test_a_failed_preparation_keeps_the_kind_it_was_named():
+    """docs/plan-friendly-errors.md D6: `_terminal_error` names the failure and
+    `_end_with_failure` persisted every one as `error` regardless — the FE then
+    had nothing to word it from, on exactly the path that cannot show a turn."""
+    from httpx import ASGITransport
+
+    from workspace_app.api import create_app
+    from workspace_app.filestore.memory import MemoryFileStore
+    from workspace_app.resources import Conversation, make_spec
+    from workspace_app.sandbox.mock import MockSandbox
+
+    from ._client import AsyncClient
+    from .conftest import register_rca_item
+
+    spec = make_spec(default_user="u")
+    iid = register_rca_item(spec)
+    app = create_app(
+        spec=spec,
+        sandbox=MockSandbox(),
+        filestore=MemoryFileStore(),
+        runner=_QuickRunner(),
+        get_user_id=lambda: "alice",
+    )
+
+    async def time_out(*a: object, **k: object) -> None:
+        raise TimeoutError("the sandbox did not answer")
+
+    app.state.chat_send._turn_ctx.build_chat_turn = time_out
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as client:
+        await client.post(f"/a/rca/items/{iid}/messages", json={"content": "hi"})
+
+    rm = spec.get_resource_manager(Conversation)
+    conv = next(
+        r.data
+        for r in rm.list_resources(QB.all())  # ty: ignore[invalid-argument-type]
+        if isinstance(r.data, Conversation) and r.data.item_id == iid
+    )
+    [err] = [m for m in conv.messages if m.role == "error"]
+    assert (err.error_kind, err.content) == ("timeout", "TimeoutError: the sandbox did not answer")
+
+
 async def test_a_preparation_that_fails_does_not_leak_its_token():
     """`preparing` is paired with a release, so a send that never reaches
     `enqueue` does not leave its token behind.

@@ -38,6 +38,7 @@ def to_rca_message(m: TurnMessage) -> Message:
             role="error",
             content=m.content,
             error_kind=m.error_kind,
+            error_params=m.error_params,
             created_at=m.created_at,
         )
     return Message(

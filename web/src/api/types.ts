@@ -115,9 +115,12 @@ export type Message = {
   withheld?: WithheldSource[];
   /** role=mention only — the user ids summoned ("@ come look"). */
   mentions?: string[];
-  /** role=error only (#37) — why the turn failed: error | cancelled |
-   * max_turns. The thread renders the failure as a banner on reload. */
+  /** role=error only (#37) — why the turn failed: a backend error kind
+   * (docs/plan-friendly-errors.md; `error` on older rows), `cancelled` or
+   * `max_turns`. `content` is then the raw text for technical details. */
   error_kind?: string | null;
+  /** role=error only — the numbers the kind's copy needs (`waited_s`, `attempts`). */
+  error_params?: Record<string, number> | null;
   /** #113 — "repetition" when role=assistant was stopped mid-stream for a
    * degenerate loop and the answer was truncated to before it. The view shows
    * a notice so a reloaded thread doesn't read the truncated answer as normal. */

@@ -1159,7 +1159,8 @@ class ChatSendService:
                     Message(
                         role="error",
                         content=failure.message,
-                        error_kind="error",
+                        error_kind=failure.kind or "unknown",
+                        error_params=failure.params,
                         created_at=now_ms(),
                     )
                 )

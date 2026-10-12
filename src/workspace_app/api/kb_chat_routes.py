@@ -1008,6 +1008,7 @@ def register_kb_chat_routes(
                     created_at=m.created_at,
                     metrics=m.metrics,
                     error_kind=m.error_kind,  # role=error (#37)
+                    error_params=m.error_params,
                     stopped_reason=m.stopped_reason,  # #113: repetition-stop notice survives reload
                 )
                 # Resolve [n] on answers against the passages this turn searched,
@@ -1149,6 +1150,7 @@ def _message_dict(m: KbMessage) -> dict:
         "tool_call_id": m.tool_call_id,
         "created_at": m.created_at,
         "error_kind": m.error_kind,  # role=error (#37)
+        "error_params": m.error_params,
         "stopped_reason": m.stopped_reason,  # #113
         "metrics": (
             {

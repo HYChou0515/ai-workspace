@@ -185,11 +185,17 @@ class Message(Struct):
     """Only set when role=tool — the tool that produced this output."""
 
     error_kind: str | None = None
-    """Only set when role=error (issue #37) — why the turn failed:
-    `error` (system/model failure), `cancelled` (user interrupted),
-    `max_turns` (hit the step cap). Drives whether the failure re-enters
+    """Only set when role=error (issue #37) — why the turn failed: one of
+    `failover.classify.ERROR_KINDS` (docs/plan-friendly-errors.md; rows
+    persisted before it say `error`), `cancelled` (user interrupted),
+    `max_turns` (hit the step cap). `content` is then the raw text the FE
+    shows under technical details. Drives whether the failure re-enters
     the next turn's LLM history (`api.turns.history_items`): `cancelled`
     is replayed as a system note, the rest are human-only diagnostics."""
+
+    error_params: dict[str, int] | None = None
+    """Only set when role=error — the numbers the kind's copy needs
+    (`waited_s`, `attempts`), so a reloaded thread can say them too."""
 
     stopped_reason: str | None = None
     """#113: `repetition` when role=assistant was stopped mid-stream for a
