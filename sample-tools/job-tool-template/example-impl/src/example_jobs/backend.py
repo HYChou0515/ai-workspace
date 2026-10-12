@@ -6,15 +6,17 @@ template run end to end. Replace this package with one that talks to your
 scheduler; keep its shape.
 
 What it shows a real backend doing:
-- the caller comes from the credential (here a plain variable, DEMO_JOBS_USER),
-  and a missing one is `NeedsAction` naming the variable;
-- the same key twice is one job;
-- another caller's job does not exist for you (`NotFound`);
+- who may see a job comes from the credential (here a plain variable,
+  DEMO_JOBS_USER), and a missing one is `NeedsAction` naming the variable;
+- the same key twice is one job; the key is per item, so the same work from
+  two items is two jobs — and `list` shows both, each with its `item_id`;
+- a job the credential cannot see does not exist for it (`NotFound`);
 - `phase` is the template's three words; `state` is this backend's own.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import time
@@ -94,38 +96,47 @@ class DemoBackend(JobBackend):
         (STORE / f"{record['job_id']}.json").write_text(json.dumps(record))
 
     def _mine(self, job_id: str) -> dict[str, Any]:
+        caller = self._credential()  # asked first, as a real backend checks the token first
         path = STORE / f"{job_id}.json"
         record = json.loads(path.read_text()) if path.is_file() else None
-        if record is None or record["caller"] != self.caller_id():
-            raise NotFound(f"no job {job_id!r} for {self.caller_id()}")
+        if record is None or record["caller"] != caller:
+            raise NotFound(f"no job {job_id!r} for {self._credential()}")
         return record
 
     def _status(self, record: dict[str, Any]) -> JobStatus:
         elapsed = time.time() - record["submitted_at"]
         detail = {"task": record["spec"]["task"], "seconds": record["seconds"]}
+        item = record.get("item_id")
         if record["cancelled"]:
-            return JobStatus(record["job_id"], "done", "cancelled", detail)
+            return JobStatus(record["job_id"], "done", "cancelled", detail, item)
         if elapsed >= record["seconds"]:
-            return JobStatus(record["job_id"], "done", "succeeded", detail)
+            return JobStatus(record["job_id"], "done", "succeeded", detail, item)
         detail["remaining"] = round(record["seconds"] - elapsed)
-        return JobStatus(record["job_id"], "running", "running", detail)
+        return JobStatus(record["job_id"], "running", "running", detail, item)
 
-    # ── required ────────────────────────────────────────────────────────────
-
-    def caller_id(self) -> str:
+    def _credential(self) -> str:
+        """Whose jobs these are, as a real backend learns it from the token it
+        is called with. Who may see or change a job is decided here (D43) —
+        the item is only a label."""
         user = os.environ.get("DEMO_JOBS_USER", "").strip()
         if not user:
             raise NeedsAction("set DEMO_JOBS_USER to say who you are to the demo backend")
         return user
 
-    def submit(self, spec: dict[str, Any], key: str) -> str:
+    # ── required ────────────────────────────────────────────────────────────
+
+    def submit(self, spec: dict[str, Any], key: str, item_id: str | None) -> str:
         existing = self.find_by_key(key)
         if existing is not None:
             return existing.job_id
+        caller = self._credential()
         record = {
-            "job_id": key[:12],
+            # Unique per credential too: the key no longer says who sent it, and
+            # two credentials sending the same work from one item are two jobs.
+            "job_id": hashlib.sha256(f"{caller}\0{key}".encode()).hexdigest()[:12],
             "key": key,
-            "caller": self.caller_id(),
+            "item_id": item_id,
+            "caller": caller,
             "spec": spec,
             "seconds": spec["seconds"],
             "submitted_at": time.time(),
@@ -135,8 +146,9 @@ class DemoBackend(JobBackend):
         return record["job_id"]
 
     def find_by_key(self, key: str) -> JobStatus | None:
+        caller = self._credential()
         for record in self._records():
-            if record["key"] == key and record["caller"] == self.caller_id():
+            if record["key"] == key and record["caller"] == caller:
                 return self._status(record)
         return None
 
@@ -144,7 +156,8 @@ class DemoBackend(JobBackend):
         return self._status(self._mine(job_id))
 
     def list(self, cursor: str | None, limit: int) -> tuple[list[JobStatus], str | None]:
-        mine = [r for r in self._records() if r["caller"] == self.caller_id()]
+        caller = self._credential()
+        mine = [r for r in self._records() if r["caller"] == caller]
         mine.sort(key=lambda r: r["submitted_at"], reverse=True)
         try:
             start = int(cursor or 0)
