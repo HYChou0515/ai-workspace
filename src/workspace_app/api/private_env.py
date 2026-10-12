@@ -499,7 +499,8 @@ def register_private_env_routes(
             shadowing = [
                 n
                 for n in held_names
-                if n in mine
+                # A blank value of mine is not a value (N5): nothing to hide.
+                if not is_blank(mine.get(n, ""))
                 and (
                     layers.policy.get(n) in (PRIVATE_FIRST, PRIVATE_ONLY)
                     or is_blank(layers.shared.get(n, ""))

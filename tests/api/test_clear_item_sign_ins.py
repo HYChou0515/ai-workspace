@@ -108,6 +108,19 @@ def test_a_shared_item_with_no_shared_copy_is_cleared_like_a_private_one():
     assert store.get("alice", b) == {}
 
 
+def test_a_blank_value_of_mine_hides_nothing_so_the_item_keeps_its_own():
+    """Review round 2 of #917, F1: a blank value counts as not set (N5), so it
+    is not a value the item's copy could be hiding — with the item's gone, the
+    tool would get nothing. `PUT /me/env` stores blanks as typed."""
+    client, _, store, a, b, c = _world()
+    store.replace("dave", a, {"SAP_TOKEN": "only-real"})
+    store.replace_personal("dave", {"SAP_TOKEN": "  "})
+
+    client.post(URL, json={"apply": True})
+
+    assert store.get("dave", a) == {"SAP_TOKEN": "only-real"}
+
+
 def test_a_shared_item_with_a_shared_copy_keeps_its_value():
     """There the shared copy is what the tools get; the item's value hides
     nothing, so it is not this cleanup's to remove (round 1, F1)."""
