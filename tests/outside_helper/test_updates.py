@@ -307,6 +307,29 @@ def test_with_a_helper_running_the_launcher_brings_it_forward_instead(tmp_path):
     assert (tmp_path / "show.request").exists()
 
 
+# 「重新開啟」 (§3.7.6): the old helper is still ending when the launcher starts
+# — its lock goes with its process, which still holds Chrome's profile. Asked
+# to wait, the launcher waits for the lock rather than bringing a dying window
+# forward, and only then starts the new version (review round 1).
+def test_a_restarting_launcher_waits_for_the_old_helper_to_end(tmp_path):
+    _installed(tmp_path, pending="0.4.0")
+    running = setup_core.InstanceLock(tmp_path / "helper.lock")
+    assert running.acquire()
+    waited: list[float] = []
+
+    def sleep(s: float) -> None:
+        waited.append(s)
+        if len(waited) == 2:
+            running.release()  # the old process has ended
+
+    started: list[list[str]] = []
+    version = setup_core.launch(
+        tmp_path, popen=lambda argv, cwd: started.append(argv), wait_s=15, sleep=sleep
+    )
+
+    assert version == "0.4.0" and len(started) == 1 and len(waited) == 2
+
+
 def test_with_nothing_installed_the_launcher_says_so(tmp_path):
     with pytest.raises(SetupFailed, match="install"):
         setup_core.launch(tmp_path, popen=lambda argv, cwd: None)

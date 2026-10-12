@@ -31,8 +31,8 @@
  * query still editable — D4); a URL an earlier lookup in this chat brought back
  * goes with no nod at all (D12 — the server decides, the card just asks); the
  * card then shows the errand under way, failed or done. Doing it by hand stays
- * one press away (「自己查」). With no helper the card is exactly the manual one
- * above (D7).
+ * one press away (「自己查」). With no helper the card is the manual one above
+ * (D7), plus a line saying the helper is not connected and where to get it.
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useId, useRef, useState } from "react";
@@ -45,6 +45,7 @@ import {
   searchUrl,
 } from "../api/outsideLookup";
 import { qk } from "../api/queryKeys";
+import { Icon } from "./Icon";
 import { useChatItem } from "../hooks/chatItem";
 import { CHAT_QUOTA_KEY } from "../hooks/useChatSession";
 import { htmlToMarkdown } from "../lib/htmlToMarkdown";
@@ -132,17 +133,26 @@ export function OutsideLookupCard({
     refetchInterval: 15_000,
   });
   const online = helper.data?.online === true;
+  // Whether there is a helper to get at all (§3.7.2): with none published,
+  // the card does not point at one (D7).
+  const release = useQuery({
+    queryKey: qk.outsideHelperRelease(),
+    queryFn: () => client.release!(),
+    enabled: Boolean(item) && Boolean(client.release) && !answeredAlready && done === null,
+    staleTime: 10 * 60_000,
+  });
   const cardRef = item
     ? { slug: item.slug, itemId: item.itemId, chatId: item.chatId, callId }
     : null;
-  const [handed, setHanded] = useState(false);
   const [needsNod, setNeedsNod] = useState(false);
   const [byHand, setByHand] = useState(false);
   const jobKey = qk.outsideJob(item?.itemId ?? "", item?.chatId, callId);
   const job = useQuery({
     queryKey: jobKey,
     queryFn: () => client.job!(cardRef!),
-    enabled: handed && cardRef !== null && helperAvailable,
+    // Read whether or not this page handed it over: after a reload the card
+    // must see a job already under way, or its 「查」 would restart it.
+    enabled: cardRef !== null && helperAvailable && !answeredAlready && done === null,
     // Polled only while the helper is at it; an ended job does not change.
     refetchInterval: (q) => {
       const s = q.state.data?.state;
@@ -153,9 +163,9 @@ export function OutsideLookupCard({
     mutationFn: (auto: boolean) =>
       client.handOver!({ ...cardRef!, query: isSearch ? query.trim() : undefined, auto }),
     onSuccess: (j) => {
-      setHanded(true);
       setNeedsNod(false);
       qc.setQueryData(jobKey, j);
+      void qc.invalidateQueries({ queryKey: jobKey }); // and read back how it goes
     },
     // Said in the card, not app-wide: a refused 「查」 shows its reason here
     // (`handError`), and an automatic request refused is just the way back to
@@ -170,8 +180,7 @@ export function OutsideLookupCard({
   const stop = useMutation({
     mutationFn: () => client.cancel!(cardRef!),
     onSuccess: () => {
-      setHanded(false);
-      qc.removeQueries({ queryKey: jobKey });
+      void qc.invalidateQueries({ queryKey: jobKey });
     },
   });
   // A page asks on its own, once: the server sends it only if an earlier lookup
@@ -212,19 +221,29 @@ export function OutsideLookupCard({
   // Without `add_content` the server saves nothing and refuses attachments.
   const canAttach = item.canAddFiles !== false;
   const error = hint ?? (answer.error ? failure(t, answer.error) : null);
-  // By hand: no helper, the person chose to, or the card is already sent.
-  const manual = !online || byHand || locked;
   const jobState = job.data?.state;
+  // A helper holding this card's job is helping even when its check-ins lapse:
+  // it checks in between jobs, and a captcha can keep it on one for minutes.
+  const helping = online || jobState === "claimed";
+  // By hand: no helper, the person chose to, or the card is already sent.
+  const manual = !helping || byHand || locked;
   const working = hand.isPending || jobState === "queued" || jobState === "claimed";
   const handError =
     hand.error && hand.variables === false ? failure(t, hand.error) : null;
   const helperBlock =
-    online && !locked ? (
+    helping && !locked ? (
       <div className="outside-lookup-section" data-testid="outside-lookup-helper">
         {jobState === "done" ? (
-          <p className="outside-lookup-note">{t("lookup.helperDone")}</p>
+          <p className="outside-lookup-note">
+            {job.data?.saved
+              ? t("lookup.helperDoneSaved", { path: job.data.saved })
+              : t("lookup.helperDone")}
+          </p>
         ) : working ? (
           <div className="outside-lookup-actions">
+            {job.data?.auto && (
+              <p className="outside-lookup-note">{t("lookup.helperFromEarlier")}</p>
+            )}
             <p className="outside-lookup-note">
               {t(
                 jobState === "claimed" && job.data?.note === "captcha"
@@ -273,15 +292,19 @@ export function OutsideLookupCard({
             )}
           </>
         )}
-        {!byHand && jobState !== "done" && (
+        {jobState !== "done" && (
+          // 「自己查」 is a disclosure (§3.5 展開區): it says whether it is open
+          // and closes again — GOV.UK Design System, Details; NN/g,
+          // "Progressive Disclosure".
           <button
             type="button"
             className="btn"
             data-size="sm"
             data-variant="ghost"
-            onClick={() => setByHand(true)}
+            aria-expanded={byHand}
+            onClick={() => setByHand((open) => !open)}
           >
-            {t("lookup.byHand")}
+            <Icon name={byHand ? "chev_d" : "chev_r"} size={12} /> {t("lookup.byHand")}
           </button>
         )}
       </div>
@@ -310,7 +333,7 @@ export function OutsideLookupCard({
   return (
     <div className="outside-lookup-card" data-testid="outside-lookup-card">
       {head}
-      {helperAvailable && helper.isSuccess && !online && !locked && (
+      {helperAvailable && helper.isSuccess && release.data && !helping && !locked && (
         <p className="outside-lookup-hint">
           {t("lookup.helperOffline")}{" "}
           <a href={`${API_BASE}/outside-helper`} target="_blank" rel="noopener noreferrer">

@@ -35,6 +35,22 @@ def test_a_verification_brings_the_window_forward_and_waits_for_the_person():
     assert notes == ["captcha", ""]
 
 
+# A person may take minutes over a verification; the job they work on must not
+# lapse back to the queue meanwhile (a claim lasts 120 s) — the card is told
+# again, which renews the claim, every RENEW_S.
+def test_a_long_verification_keeps_the_job_held():
+    from outside_helper.errands import RENEW_S
+
+    page, notes, clock = _Page(), [], [0.0]
+    answers = iter([True] * 100 + [False])
+
+    _ctx(page, notes, clock).wait_for_person(lambda: next(answers))
+
+    assert notes.count("captcha") == 1 + int(99 // RENEW_S)
+    assert notes[-1] == ""
+    assert RENEW_S < 120  # inside the backend's CLAIM_TIMEOUT_MS
+
+
 def test_a_page_with_nothing_in_the_way_does_not_wait():
     page, notes, clock = _Page(), [], [0.0]
 

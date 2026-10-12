@@ -4,7 +4,7 @@
  * into the helper's package and run in its Chrome. Each sample page's Markdown
  * is pinned here, from the card's own converter; the helper's tests run the
  * built bundle in Chrome over the same samples and must match these files
- * byte for byte (tests/outside_helper/test_parity.py). A change to the
+ * byte for byte (tests/outside_helper/test_errands_in_chrome.py). A change to the
  * converter fails here first — `vitest -u` rewrites the files, and the
  * helper's parity test then checks the rebuilt bundle agrees.
  */

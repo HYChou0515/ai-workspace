@@ -181,6 +181,8 @@ def test_a_failure_reaches_the_card_with_its_reason():
         "state": "failed",
         "error": "page timed out",
         "note": "",
+        "auto": False,
+        "saved": "",
     }
 
 
@@ -306,6 +308,43 @@ def test_a_job_waiting_on_the_person_is_not_taken_again():
     _beat(client)
 
     assert _claim(client).status_code == 204
+
+
+# A card reloaded mid-errand used to offer 「查」 again, and pressing it reset
+# the helper's running job to `queued` — fetched twice, the first result then
+# refused. A job under way is returned as it is (review round 1).
+def test_handing_over_a_job_under_way_does_not_restart_it():
+    client, _spec, iid = _asked()
+    _beat(client)
+    first = _hand(client, iid).json()
+    _claim(client)
+
+    again = _hand(client, iid)
+
+    assert again.status_code == 201
+    assert again.json()["id"] == first["id"]
+    assert _state(client, iid)["state"] == "claimed"
+    assert _claim(client).status_code == 204
+
+
+# A helper waiting on the person is busy, not gone: what it says while it waits
+# counts as checking in, so it still reads as connected (review round 1).
+def test_a_helper_waiting_on_the_person_still_reads_as_connected():
+    client, _spec, iid = _asked()
+    store = client.app.state.outside_jobs
+    t = [1_000_000]
+    store.now = lambda: t[0]
+    _beat(client)
+    _hand(client, iid)
+    jid = _claim(client).json()["id"]
+
+    t[0] += 25_000
+    client.post(f"/outside-helper/jobs/{jid}/note", json={"note": "captcha"})
+    t[0] += 25_000
+
+    assert client.get("/outside-helper/status").json() == {"online": True}
+    # and what it last reported on its check-in is kept
+    assert store.presence("u").version == "0.1.0"
 
 
 def test_a_helper_cannot_note_someone_elses_job():

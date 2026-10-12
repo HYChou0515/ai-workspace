@@ -4,8 +4,9 @@
 STANDARD LIBRARY ONLY, no relative imports, Python 3.10+: this one file runs in
 three places — inside the installed package (the helper's own updates), at the
 root of the zip beside `install.pyw` (before anything is installed), and beside
-`launch.pyw` in the helper's folder. The pack script copies it verbatim to the
-other two; it is never edited there.
+`launch.pyw` in the helper's folder. It is copied, never edited: by the pack
+script into the zip, by `install` beside the launcher, and by `confirm` from a
+newly confirmed version.
 
 Every command goes through an injected `run`, so the layout it builds is tested
 on Linux; the default runs it with no console window.
@@ -116,6 +117,10 @@ class InstanceLock:
             return False
         self._file = f
         return True
+
+    @property
+    def held(self) -> bool:
+        return self._file is not None
 
     def release(self) -> None:
         if self._file is not None:
@@ -316,11 +321,23 @@ def start_choice(state: dict[str, Any]) -> tuple[str, dict[str, Any]]:
 SHOW_REQUEST = "show.request"
 
 
-def launch(home: Path, *, popen: Callable[..., Any] = subprocess.Popen) -> str:
+def launch(
+    home: Path,
+    *,
+    popen: Callable[..., Any] = subprocess.Popen,
+    wait_s: float = 0.0,
+    sleep: Callable[[float], None] = time.sleep,
+) -> str:
     """What `launch.pyw` does. Returns the version started, or `"shown"` when a
-    helper was already running and has been asked to come forward."""
+    helper was already running and has been asked to come forward. `wait_s`:
+    「重新開啟」 starts this while the old helper is still ending — wait that
+    long for its lock (which goes with its process) before deciding."""
     lock = InstanceLock(home / "helper.lock")
-    if not lock.acquire():
+    waited = 0.0
+    while not lock.acquire() and waited < wait_s:
+        sleep(0.5)
+        waited += 0.5
+    if not lock.held:
         (home / SHOW_REQUEST).write_text("show", encoding="utf-8")
         return "shown"
     lock.release()  # the helper takes it for itself
@@ -526,7 +543,11 @@ def _uninstall_cli(home: str) -> int:  # pragma: no cover — the %TEMP% process
             + "\n".join(left)
             + f"\n\n清單也寫在 %TEMP%\\{UNINSTALL_LOG}",
         )
-    Path(__file__).unlink(missing_ok=True)  # this copy, in %TEMP%
+    here = Path(__file__).resolve()
+    if here.parent.name.startswith("outside-helper-"):  # the window's mkdtemp
+        shutil.rmtree(here.parent, ignore_errors=True)
+    else:
+        here.unlink(missing_ok=True)  # this copy, in %TEMP%
     return 0
 
 
@@ -558,6 +579,9 @@ def install(zip_dir: Path, home: Path, *, base_python: str, run: Run = run_quiet
     write_state(
         home,
         {
+            # what was recorded stays (start_at_login: the Startup shortcut is
+            # still there; the last update's outcome) — install sets the rest
+            **old,
             "base_python": base_python,
             "current": version,
             "previous": current if current and current != version else old.get("previous"),

@@ -40,6 +40,10 @@ class JobOut(BaseModel):
     error: str = ""
     #: What the helper waits on (`captcha`), shown on the card while claimed.
     note: str = ""
+    #: Opened with no nod — a link an earlier lookup brought back (D12).
+    auto: bool = False
+    #: Where the page was saved, once done.
+    saved: str = ""
 
 
 class HeartbeatIn(BaseModel):
@@ -85,9 +89,29 @@ class NoteIn(BaseModel):
 _ERROR_CHARS = 500
 
 
+def _asker(conv: Conversation, call_id: str) -> str | None:
+    """Who sent the message that started the turn drawing card `call_id` — the
+    last person's message before that card."""
+    at = next(
+        (i for i, m in enumerate(conv.messages) if m.role == "tool" and m.tool_call_id == call_id),
+        len(conv.messages),
+    )
+    return next(
+        (m.author for m in reversed(conv.messages[:at]) if m.role == "user"),
+        None,
+    )
+
+
 def _out(jid: str, job: OutsideJob) -> JobOut:
     return JobOut(
-        id=jid, kind=job.kind, args=job.args, state=job.state, error=job.error, note=job.note
+        id=jid,
+        kind=job.kind,
+        args=job.args,
+        state=job.state,
+        error=job.error,
+        note=job.note,
+        auto=job.auto,
+        saved=job.saved,
     )
 
 
@@ -99,6 +123,7 @@ def register_outside_job_routes(
     get_user_id: Callable[[], str],
     deliver: Deliver,
     release_dir: str | None = None,
+    max_file_size: int = 2 * 1024 * 1024 * 1024,
 ) -> None:
     def current_helper(request: Request) -> None:
         """§3.7.3: a helper below the minimum protocol (ours, in code) or the
@@ -142,15 +167,25 @@ def register_outside_job_routes(
             kind, args = "search", (body.query.strip() or card["query"])
         else:
             kind, args = "open_url", card["url"]
+        jid = job_id(investigation_id, rid, body.tool_call_id)
+        existing = await store.get(jid)
         if body.auto:
             if kind != "open_url" or not await store.seen(investigation_id, rid, args):
                 raise HTTPException(
                     status_code=409, detail="this lookup waits for the person's 「查」"
                 )
-            jid = job_id(investigation_id, rid, body.tool_call_id)
-            existing = await store.get(jid)
+            if _asker(conv, body.tool_call_id) != owner:
+                # plan §3.2: opened for the person whose answer led to it — not
+                # for whoever else has the chat open, whose helper would fetch
+                # it as them
+                raise HTTPException(
+                    status_code=409, detail="this lookup opens by itself only for who asked"
+                )
             if existing is not None and existing.state != "cancelled":
                 return _out(jid, existing)  # already running or ran: leave it
+        elif existing is not None and existing.state in ("queued", "claimed"):
+            # under way (a reloaded card offering 「查」 again): never restarted
+            return _out(jid, existing)
         job = OutsideJob(
             owner=owner,
             item_id=investigation_id,
@@ -161,6 +196,7 @@ def register_outside_job_routes(
             args=args,
             state="queued",
             created_ms=store.now(),
+            auto=body.auto,
         )
         jid = await store.hand_over(job)
         return _out(jid, job)
@@ -241,6 +277,11 @@ def register_outside_job_routes(
         job = await store.get(jid)
         if job is None or job.owner != owner or job.state != "claimed":
             raise HTTPException(status_code=404, detail="no claimed job of yours with this id")
+        if len(body.markdown.encode()) > max_file_size:
+            # the same limit a pasted page meets (`filestore.max_file_size`)
+            detail = f"the page is larger than this workspace accepts ({max_file_size} bytes)"
+            await store.fail(jid, owner, detail)
+            raise HTTPException(status_code=413, detail=detail)
         form = AnswerForm(
             job.tool_call_id,
             "found",
@@ -265,8 +306,13 @@ def register_outside_job_routes(
         except HTTPException as exc:
             if exc.status_code == 409:  # answered meanwhile: theirs stands
                 await store.end(jid, owner, "cancelled")
+            else:
+                # Never sendable as it is (nothing to send, the chat gone, the
+                # right to send revoked): end it, with why — left claimed, it
+                # went back to the queue to be fetched and refused forever.
+                await store.fail(jid, owner, str(exc.detail)[:_ERROR_CHARS])
             raise
-        await store.end(jid, owner, "done")
+        await store.end(jid, owner, "done", saved=out.path or "")
         return out
 
     @app.post("/outside-helper/jobs/{jid}/fail", status_code=204, dependencies=helper_only)

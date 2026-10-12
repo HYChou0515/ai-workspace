@@ -187,6 +187,20 @@ def test_what_the_errand_waits_on_reaches_the_card_while_it_runs():
     assert during == ["captcha"]
 
 
+# 403 is "not allowed", not "signed out": signing in again changes nothing, so
+# the helper must not keep popping the login page at the person (review r1).
+def test_a_refusal_is_not_taken_for_an_expired_login():
+    worker = Worker(
+        Backend(lambda m, p, b, h: (403, {"detail": "you may not converse here"})),
+        _Browser([]),
+        errands={},
+    )
+
+    worker.tick()
+
+    assert (worker.status, worker.detail) == ("error", "you may not converse here")
+
+
 # Behind a company gateway an expired login is usually not a 401 but a redirect
 # to the SSO page; followed, that is a 200 login page the helper would take for
 # a check-in. The helper does not follow redirects, and a 3xx means: sign in.

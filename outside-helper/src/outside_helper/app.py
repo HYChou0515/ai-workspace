@@ -1,8 +1,9 @@
 """The helper's window (docs/plan-outside-helper.md D13) and the thread behind it.
 
-The window (tkinter, in the standard library) shows a status line and four
-buttons — 登入, 暫停/繼續, 結束 — and draws nothing it did not read from
-`Controller.snapshot()`. The controller lives on ONE worker thread: it owns the
+The window (tkinter, in the standard library) shows a status line, a line
+about the next version, the buttons 登入, 暫停/繼續, 結束 (and 重新開啟 once a
+new version is ready), the 「開機時自動啟動」 box and 解除安裝 — and draws no
+state it did not read from the controller. The controller lives on ONE worker thread: it owns the
 Chrome (Playwright's sync API must stay on the thread that started it) and the
 `Worker` loop, and takes the buttons as commands through a queue. Closing the
 window ends the helper.
@@ -30,7 +31,7 @@ _TEXT = {
     "update_required": "這個版本已停用,需要更新",
     "unreachable": "連不到 AI 工作區",
     "error": "發生錯誤",
-    "no_chrome": "開不了 Chrome",
+    "no_chrome": "開不了 Chrome(Chrome 剛更新的話,請更新外網小幫手;或按「重設登入」)",
 }
 
 logger = logging.getLogger(__name__)
@@ -68,11 +69,13 @@ class Controller:
         make_worker: Callable[[Any], Any],
         *,
         make_updater: Callable[[Any], Any] | None = None,
+        reset_profile: Callable[[], None] | None = None,
         poll_s: float = POLL_S,
     ) -> None:
         self._make_chrome = make_chrome
         self._make_worker = make_worker
         self._make_updater = make_updater
+        self._reset_profile = reset_profile
         self._poll_s = poll_s
         self._commands: queue.Queue[str] = queue.Queue()
         self._lock = threading.Lock()
@@ -124,13 +127,22 @@ class Controller:
                 self.restart = command == "restart"
                 self._close()
                 return False
-            self._apply(command)
+            if command == "reset_login":
+                self._reset_login()
+            else:
+                self._apply(command)
             try:
                 command = self._commands.get_nowait()
             except queue.Empty:
                 command = None
         if self._worker is None:
             return True  # Chrome never started: nothing to poll
+        if getattr(self._chrome, "gone", False):
+            # the person closed the helper's Chrome window: open it again
+            self._close()
+            self.open()
+            if self._worker is None:
+                return True
         self._worker.tick()
         status = self._worker.status
         if status == "needs_login" and not self._asked_login:
@@ -143,17 +155,18 @@ class Controller:
         return True
 
     def _keep_current(self, status: str) -> None:
-        """§3.7.4–§3.7.6, on this thread (the zip comes through Playwright):
-        connected, confirm this version and check when due; refused, update
-        from the release the refusal named. Signed out or unreachable, the
-        backend cannot be asked — nothing to do."""
-        if self._updater is None or status not in ("connected", "update_required"):
+        """§3.7.4–§3.7.6, on this thread (the zip comes through Playwright).
+        A tick that ran means this version is up — signed out, paused or
+        offline included, none of which is the version's doing — so a waiting
+        version confirms itself (§3.7.5). Connected, check for a newer one
+        when due; refused, update from the release the refusal named."""
+        if self._updater is None:
             return
         try:
+            self._updater.connected()
             if status == "connected":
-                self._updater.connected()
                 self._updater.tick()
-            else:
+            elif status == "update_required":
                 self._updater.tick(required=self._worker.manifest)
         except Exception:  # noqa: BLE001 — an update is never worth the helper
             logger.exception("update check")
@@ -162,6 +175,16 @@ class Controller:
         self.open()
         while self.step(self._poll_s):
             pass
+
+    def _reset_login(self) -> None:
+        """「重設登入」 (§3.7.7): close Chrome — it holds its profile — move
+        the profile aside, start again on a fresh one and open the login."""
+        self._close()
+        if self._reset_profile is not None:
+            self._reset_profile()
+        self.open()
+        if self._chrome is not None and self._worker is not None:
+            self._chrome.open_login()
 
     def _apply(self, command: str) -> None:
         if self._worker is None:
@@ -220,7 +243,14 @@ def make_controller(home: Any, app_url: str, make_chrome: Callable[[], Any]) -> 
 
         return Worker(backend, chrome, errands=build_errands(backend.lookup_targets), info=info)
 
-    return Controller(make_chrome, make_worker, make_updater=lambda _chrome: updaters[0])
+    from .home import reset_profile
+
+    return Controller(
+        make_chrome,
+        make_worker,
+        make_updater=lambda _chrome: updaters[-1],
+        reset_profile=lambda: reset_profile(home),
+    )
 
 
 def _driver_paths() -> tuple[str, str]:
@@ -337,15 +367,17 @@ def main() -> int:  # pragma: no cover — the window needs a display; verified 
         pause_text.set("繼續" if paused else "暫停")
 
     def end(command: str = "quit") -> None:
+        # The lock is NOT released here: it goes with this process, which may
+        # still hold Chrome's profile for a moment — the launcher (restart) and
+        # the clean-up (uninstall) wait for it, so neither races that.
         ctl.send(command)
         thread.join(timeout=10)
-        lock.release()
         window.destroy()
 
     def restart() -> None:
         # §3.7.6: end, and let the fixed launcher start the version now ready
         end("restart")
-        subprocess.Popen([base_python, str(home / "launch.pyw")], cwd=str(home))
+        subprocess.Popen([base_python, str(home / "launch.pyw"), "--wait"], cwd=str(home))
 
     def remove() -> None:
         if not messagebox.askyesno(
@@ -374,6 +406,13 @@ def main() -> int:  # pragma: no cover — the window needs a display; verified 
             startup_var.set(not on)
             messagebox.showerror("Outside Helper", str(exc))
 
+    def reset_login() -> None:
+        if messagebox.askyesno(
+            "Outside Helper",
+            "重設登入:把小幫手的 Chrome 設定檔移到旁邊,重新開一個再登入。要繼續嗎?",
+        ):
+            ctl.send("reset_login")
+
     tk.Button(buttons, text="登入", command=lambda: ctl.send("login")).pack(side="left")
     tk.Button(buttons, textvariable=pause_text, command=toggle_pause).pack(side="left", padx=6)
     restart_button = tk.Button(buttons, text="重新開啟", command=restart)
@@ -384,6 +423,7 @@ def main() -> int:  # pragma: no cover — the window needs a display; verified 
         options, text="開機時自動啟動", variable=startup_var, command=toggle_startup
     ).pack(side="left")
     tk.Button(options, text="解除安裝", command=remove).pack(side="right")
+    tk.Button(options, text="重設登入", command=reset_login).pack(side="right", padx=6)
     window.protocol("WM_DELETE_WINDOW", end)
 
     def refresh() -> None:

@@ -13,6 +13,7 @@ class _Chrome:
     def __init__(self) -> None:
         self.logins = 0
         self.closed = False
+        self.gone = False
 
     def open_login(self) -> None:
         self.logins += 1
@@ -202,17 +203,66 @@ def test_a_refused_helper_updates_from_the_release_it_was_given():
 
     ctl.step()
 
-    assert up.calls == [("tick", release)]
+    assert up.calls == ["connected", ("tick", release)]
     assert ctl.update_status() == ""
 
 
-def test_signed_out_it_does_not_look_for_updates():
+# Signed out, the backend cannot be asked — but the version itself is up:
+# being signed out (or paused, or offline) is no reason to roll it back
+# (§3.7.5; review round 1).
+def test_signed_out_it_confirms_itself_but_does_not_look_for_updates():
     up = _Updater()
     ctl, _chrome = _with_updater(["needs_login"], up)
 
     ctl.step()
 
-    assert up.calls == []
+    assert up.calls == ["connected"]
+
+
+def _made(events: list[str]):
+    made: list[_Chrome] = []
+
+    def make() -> _Chrome:
+        chrome = _Chrome()
+        events.append(f"open {len(made)}")
+        made.append(chrome)
+        return chrome
+
+    return made, make
+
+
+# The person closed the helper's Chrome window (it looks like any browser):
+# the helper opens it again instead of reading "unreachable" until restarted.
+def test_a_chrome_the_person_closed_is_opened_again():
+    events: list[str] = []
+    made, make = _made(events)
+    ctl = Controller(make, lambda _c: _Worker(["connected"] * 3))
+    ctl.open()
+    made[0].gone = True
+
+    ctl.step()
+
+    assert len(made) == 2
+    assert ctl.snapshot()[0] == "connected"
+
+
+# §3.7.7 「重設登入」: a profile gone bad (a login that never takes) is moved
+# aside — only once Chrome has let go of it — and the person signs in afresh.
+def test_reset_login_starts_over_with_a_fresh_profile():
+    events: list[str] = []
+    made, make = _made(events)
+
+    def reset() -> None:
+        events.append(f"reset (old closed: {made[0].closed})")
+
+    ctl = Controller(make, lambda _c: _Worker(["connected"] * 3), reset_profile=reset)
+    ctl.open()
+
+    ctl.send("reset_login")
+    ctl.step()
+
+    assert events == ["open 0", "reset (old closed: True)", "open 1"]
+    assert made[1].logins == 1
 
 
 def test_an_update_check_that_fails_does_not_stop_the_helper():
@@ -299,6 +349,14 @@ def test_the_update_line_says_where_the_next_version_stands():
     # reinstall from the download page is left (§3.7.6)
     assert describe_update("failed: sha256", forced=False) == "新版準備失敗:sha256(這一版照常使用)"
     assert "外網小幫手" in describe_update("failed: sha256", forced=True)
+
+
+# §3.7 table: Chrome updated past what this helper drives fails at start —
+# the window says what to do, not an error dump.
+def test_a_chrome_that_will_not_start_says_what_to_do():
+    text = describe("no_chrome", "Target page, context or browser has been closed")
+
+    assert "更新外網小幫手" in text and "重設登入" in text
 
 
 def test_a_status_reads_with_or_without_its_detail():

@@ -108,6 +108,21 @@ def test_a_job_not_taken_cannot_be_answered():
     assert _answers(spec) == []
 
 
+# §3.5: done, the card says where the page was saved.
+def test_a_done_job_names_where_it_was_saved():
+    from tests.api.test_outside_answers import _asked
+
+    client, _spec, iid = _asked()
+    jid = _taken(client, iid)
+
+    saved = _result(client, jid).json()["path"]
+
+    job = _state(client, iid)
+    assert job["state"] == "done"
+    assert job["saved"] == saved and saved.startswith("lookups/")
+    assert job["auto"] is False
+
+
 # Someone answered the card by hand while the helper was fetching: theirs
 # stands, the helper's is refused, and the job does not hang.
 def test_a_card_answered_meanwhile_refuses_the_helpers_result():
@@ -122,3 +137,44 @@ def test_a_card_answered_meanwhile_refuses_the_helpers_result():
     assert r.status_code == 409
     assert len(_answers(spec)) == 1
     assert _state(client, iid)["state"] == "cancelled"
+
+
+# A page that can never be sent (an empty page, a PDF viewer; a chat deleted;
+# the right to send revoked) must end the job, with why — left claimed it went
+# back to the queue every two minutes, to be fetched and refused forever
+# (review round 1).
+def test_a_result_that_cannot_be_sent_ends_the_job_with_why():
+    from tests.api.test_outside_answers import _asked
+    from workspace_app.api.outside_jobs import CLAIM_TIMEOUT_MS
+
+    client, spec, iid = _asked()
+    store = client.app.state.outside_jobs
+    t = [1_000_000]
+    store.now = lambda: t[0]
+    jid = _taken(client, iid)
+
+    r = _result(client, jid, markdown="   ")
+
+    assert r.status_code == 422
+    state = _state(client, iid)
+    assert state["state"] == "failed" and "nothing to send" in state["error"]
+    t[0] += CLAIM_TIMEOUT_MS + 1
+    _beat(client)
+    assert _claim(client).status_code == 204
+    assert _answers(spec) == []
+
+
+# A result too large for the workspace's file limit is refused like a paste.
+def test_a_result_larger_than_a_file_may_be_is_refused():
+    from tests.api.conftest import register_rca_item
+    from tests.api.test_outside_answers import _app
+
+    client, spec = _app(max_file_size=1000)
+    iid = register_rca_item(spec)
+    assert client.post(f"/a/rca/items/{iid}/messages", json={"content": "q"}).status_code == 202
+    jid = _taken(client, iid)
+
+    r = _result(client, jid, markdown="x" * 1001)
+
+    assert r.status_code == 413
+    assert _state(client, iid)["state"] == "failed"

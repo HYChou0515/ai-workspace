@@ -151,6 +151,24 @@ def test_install_lays_out_the_folder_and_puts_the_shortcut_on_the_desktop(tmp_pa
     assert "'/py/pythonw'" in shortcut[3]
 
 
+# D16: running install.pyw again (a new Python, a broken install) keeps what
+# the person and the helper recorded — the Startup shortcut is still there, so
+# the window must still show 「開機時自動啟動」 ticked (review round 1).
+def test_installing_again_keeps_what_was_recorded(tmp_path):
+    home = tmp_path / "home"
+    write_state(home, {"current": "0.2.0", "start_at_login": True, "update": "已更新到 0.2.0"})
+    wheelhouse = _wheelhouse(tmp_path)
+    for name in ("launch.pyw", "setup_core.py"):
+        (wheelhouse.parent / name).write_text(name)
+
+    install(wheelhouse.parent, home, base_python="/py/pythonw", run=_Run())
+
+    state = read_state(home)
+    assert (state["current"], state["previous"]) == ("0.3.0", "0.2.0")
+    assert state["start_at_login"] is True
+    assert state["update"] == "已更新到 0.2.0"
+
+
 def test_a_zip_with_no_helper_in_it_says_so(tmp_path):
     (tmp_path / "zip" / "wheelhouse").mkdir(parents=True)
 

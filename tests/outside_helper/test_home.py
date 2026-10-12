@@ -31,6 +31,22 @@ def test_only_one_helper_runs_at_a_time(tmp_path):
     second.release()  # ending twice (window closed, then quit) is harmless
 
 
+# 「重設登入」 (§3.7.7): the profile is moved aside, not deleted — a reset by
+# mistake loses nothing, and the next Chrome starts on a fresh one.
+def test_resetting_the_login_moves_the_profile_aside(tmp_path):
+    from outside_helper.home import reset_profile
+
+    (profile_dir(tmp_path) / "Default").mkdir(parents=True)
+    (profile_dir(tmp_path) / "Default" / "Cookies").write_text("sid")
+
+    reset_profile(tmp_path)
+
+    assert not profile_dir(tmp_path).exists()
+    [aside] = [p for p in tmp_path.iterdir() if p.name.startswith("profile.old-")]
+    assert (aside / "Default" / "Cookies").read_text() == "sid"
+    reset_profile(tmp_path)  # nothing there: nothing to do
+
+
 def test_settings_are_kept_between_starts(tmp_path):
     write_settings(tmp_path, {"app_url": "https://ai.example.corp"})
 

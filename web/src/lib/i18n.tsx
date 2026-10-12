@@ -1913,6 +1913,11 @@ export const messages = {
   "lookup.helperGo": { "zh-TW": "查", en: "Look it up" },
   "lookup.helperSearching": { "zh-TW": "小幫手正在查…", en: "The helper is looking it up…" },
   "lookup.helperOpening": { "zh-TW": "小幫手正在開…", en: "The helper is opening it…" },
+  "lookup.helperDoneSaved": {
+    "zh-TW": "小幫手已送給 AI,存在 {path}",
+    en: "The helper sent it to the AI, saved as {path}",
+  },
+  "lookup.helperFromEarlier": { "zh-TW": "來自先前查到的內容", en: "From what an earlier lookup brought back" },
   "lookup.helperInstall": { "zh-TW": "怎麼安裝", en: "How to install it" },
   "outsideHelper.title": { "zh-TW": "外網小幫手", en: "Outside helper" },
   "outsideHelper.desc": {
@@ -1940,8 +1945,8 @@ export const messages = {
     en: "Double-click “Outside Helper” on the desktop. The first time it asks for this site's address:",
   },
   "outsideHelper.step4": {
-    "zh-TW": "在它開的 Chrome 視窗裡登入一次,之後就會一直連著。",
-    en: "Sign in once in the Chrome window it opens; it stays connected after that.",
+    "zh-TW": "在它開的 Chrome 視窗裡登入一次。登入過期時,它會把那個視窗叫到前面請你再登入。",
+    en: "Sign in once in the Chrome window it opens. When that sign-in expires, it brings the window forward for you to sign in again.",
   },
   "outsideHelper.online": { "zh-TW": "你的外網小幫手已連線", en: "Your outside helper is connected" },
   "outsideHelper.offline": { "zh-TW": "你的外網小幫手未連線", en: "Your outside helper is not connected" },

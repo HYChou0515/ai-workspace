@@ -14,10 +14,11 @@ import type { QueryClient } from "@tanstack/react-query";
 import { HttpError } from "../api/http";
 import { makeQueryClient } from "../api/queryClient";
 import { currentWriteFailure, resetWriteFailures } from "../lib/writeFailures";
-import type { HelperJob, OutsideLookupClient } from "../api/outsideLookup";
+import type { HelperJob, HelperRelease, OutsideLookupClient } from "../api/outsideLookup";
 import { ChatItemProvider } from "../hooks/chatItem";
 import type { OutsideLookup } from "../renderers/outsideLookup";
-import { renderWithQuery } from "../test/queryWrapper";
+import { qk } from "../api/queryKeys";
+import { makeTestQueryClient, renderWithQuery } from "../test/queryWrapper";
 
 import { OutsideLookupCard } from "./OutsideLookupCard";
 
@@ -28,6 +29,13 @@ afterEach(() => {
 
 const SEARCH: OutsideLookup = { why: "需要變更", query: "pandas 2.0" };
 const PAGE: OutsideLookup = { why: "看那一頁", url: "https://pandas.example/whatsnew" };
+const RELEASE: HelperRelease = {
+  version: "0.1.0",
+  min_version: "0.0.0",
+  file: "outside-helper-0.1.0.zip",
+  sha256: "ab",
+  size: 1,
+};
 
 function job(over: Partial<HelperJob> = {}): HelperJob {
   return {
@@ -37,6 +45,8 @@ function job(over: Partial<HelperJob> = {}): HelperJob {
     state: "queued",
     error: "",
     note: "",
+    auto: false,
+    saved: "",
     ...over,
   };
 }
@@ -45,23 +55,40 @@ function draw({
   lookup = SEARCH,
   online = true,
   handOver = async () => job(),
-  current = async () => job(),
+  current,
+  existing = null,
+  release = RELEASE,
   queryClient,
+  status,
 }: {
   lookup?: OutsideLookup;
   online?: boolean;
+  /** Overrides `online`: a status that changes over the test. */
+  status?: () => Promise<{ online: boolean }>;
   handOver?: OutsideLookupClient["handOver"];
-  current?: OutsideLookupClient["job"];
+  /** The job as read once one exists; defaults to the last one handed over. */
+  current?: (args: Parameters<NonNullable<OutsideLookupClient["job"]>>[0]) => Promise<HelperJob>;
+  /** A job the card already has when it is drawn (a reload mid-errand). */
+  existing?: HelperJob | null;
+  release?: HelperRelease | null;
   /** The app's own client — with its "could not save" notice — when that matters. */
   queryClient?: QueryClient;
 } = {}) {
+  // As the server answers: no job until one is handed over, then that job.
+  let latest: HelperJob | null = existing;
   const client = {
     targets: vi.fn(async () => [{ name: "Google", url: "https://www.google.com/search?q={q}" }]),
     answer: vi.fn(async () => ({ path: null, attachments: [] })),
-    helperStatus: vi.fn(async () => ({ online })),
-    handOver: vi.fn(handOver),
-    job: vi.fn(current),
+    helperStatus: vi.fn(status ?? (async () => ({ online }))),
+    handOver: vi.fn(async (args: Parameters<OutsideLookupClient["handOver"] & object>[0]) => {
+      latest = await handOver(args);
+      return latest;
+    }),
+    job: vi.fn(async (args: Parameters<NonNullable<OutsideLookupClient["job"]>>[0]) =>
+      latest === null ? null : current ? current(args) : latest,
+    ),
     cancel: vi.fn(async () => {}),
+    release: vi.fn(async () => release),
   };
   vi.spyOn(window, "open").mockReturnValue(null);
   renderWithQuery(
@@ -158,6 +185,57 @@ describe("a search, with the helper connected", () => {
   });
 });
 
+describe("review round 1", () => {
+  // A reload mid-errand: the card reads its own job, not just one it handed
+  // over in this page's life — offering 「查」 again restarted it.
+  it("shows a job already under way after a reload, with no 「查」", async () => {
+    draw({ existing: job({ state: "claimed" }) });
+
+    expect(await screen.findByText("小幫手正在查…")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "查" })).not.toBeInTheDocument();
+  });
+
+  // D7: with nothing published there is no helper to get — the card is
+  // today's, not a pointer to an empty page.
+  it("says nothing of a helper when none is published", async () => {
+    const client = draw({ online: false, release: null });
+
+    expect(await screen.findByRole("button", { name: /Google/ })).toBeInTheDocument();
+    await waitFor(() => expect(client.release).toHaveBeenCalled());
+    expect(screen.queryByText("外網小幫手未連線")).not.toBeInTheDocument();
+  });
+
+  // §3.5 「自己查」展開區 — a disclosure: says whether it is open, and closes
+  // again (GOV.UK Design System, Details; NN/g, progressive disclosure).
+  it("opens and closes doing it by hand", async () => {
+    draw();
+    const toggle = await screen.findByRole("button", { name: "自己查" });
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    expect(await screen.findByRole("button", { name: /Google/ })).toBeInTheDocument();
+
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByRole("button", { name: /Google/ })).not.toBeInTheDocument();
+  });
+
+  // §3.5: done names where it was saved; a page opened with no nod says why.
+  it("names where it was saved, and why a page opened by itself", async () => {
+    draw({ existing: job({ state: "done", saved: "lookups/2026-10-13-pandas.md" }) });
+    expect(
+      await screen.findByText("小幫手已送給 AI,存在 lookups/2026-10-13-pandas.md"),
+    ).toBeInTheDocument();
+    cleanup();
+
+    const running = job({ kind: "open_url", state: "claimed", auto: true });
+    // as the server answers the card's own request for a job already running
+    draw({ lookup: PAGE, existing: running, handOver: async () => running });
+    expect(await screen.findByText("來自先前查到的內容")).toBeInTheDocument();
+  });
+});
+
 describe("a page, with the helper connected (D12)", () => {
   it("opens one an earlier lookup brought back, with no nod", async () => {
     const client = draw({ lookup: PAGE, current: async () => job({ kind: "open_url" }) });
@@ -185,6 +263,28 @@ describe("a page, with the helper connected (D12)", () => {
 
     expect(await screen.findByRole("button", { name: "查" })).toBeInTheDocument();
     expect(currentWriteFailure()).toBeNull();
+  });
+
+  // A helper waiting minutes on a captcha checks in with nobody — it is busy
+  // holding THIS card's job. The card keeps saying where to look rather than
+  // turning into "not connected, do it yourself" (review round 1).
+  it("keeps showing the job a helper holds when its check-ins lapse", async () => {
+    const qc = makeTestQueryClient();
+    let online = true;
+    draw({
+      queryClient: qc,
+      status: async () => ({ online }),
+      current: async () => job({ state: "claimed", note: "captcha" }),
+    });
+    fireEvent.click(await screen.findByRole("button", { name: "查" }));
+    expect(await screen.findByText("請在小幫手的 Chrome 視窗裡完成驗證")).toBeInTheDocument();
+
+    online = false;
+    await qc.invalidateQueries({ queryKey: qk.outsideHelper() });
+
+    await waitFor(() => expect(screen.queryByText("外網小幫手未連線")).not.toBeInTheDocument());
+    expect(screen.getByText("請在小幫手的 Chrome 視窗裡完成驗證")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Google/ })).not.toBeInTheDocument();
   });
 
   // Silent app-wide is not silent: a 「查」 the server refuses says why, here.

@@ -55,7 +55,8 @@ def _headers() -> dict[str, str]:
 def _refusal(status: int, data: Any) -> None:
     # A gateway in front of the app sends an expired login to the SSO page
     # (3xx) rather than answering 401; the transport never follows it.
-    if status in (401, 403) or 300 <= status < 400:
+    # 403 is "not allowed" — signing in again would change nothing.
+    if status == 401 or 300 <= status < 400:
         raise NeedsLogin()
     detail = data.get("detail") if isinstance(data, dict) else None
     if status == 426:

@@ -2562,6 +2562,7 @@ def create_app(
         get_user_id=get_user_id,
         deliver=deliver_outside_answer,
         release_dir=outside_helper_dir,
+        max_file_size=max_file_size,
     )
     from .outside_helper_release import register_outside_helper_release_routes
 

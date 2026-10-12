@@ -90,6 +90,10 @@ class Updater:
         settled = setup_core.update_outcome(self._home, setup_core.read_state(self._home), manifest)
         if settled == "ready":
             self.status = "ready"
+        elif settled == "bad" and required is not None:
+            # refused, and the one release it may update to failed here
+            # before: only a reinstall is left (§3.7.6)
+            self.status = "failed: 這個新版先前在這台電腦裝不起來"
         if settled is not None:
             return
         try:

@@ -25,6 +25,7 @@ Backend (Python 3.12, uv-managed):
 
 - Install: `uv sync --all-extras` (the `process-sandbox` extra — pandera / scipy / scikit-learn / seaborn — is needed by the tabular parser + data-analysis tools; a bare `uv sync` leaves `test_infer_modules` failing)
 - Run all tests + coverage (the **authoritative 100% gate** — full suite, needs docker / uv / etc. available locally): `uv run coverage run -m pytest && uv run coverage combine && uv run coverage report --fail-under=100`
+  - The outside helper's integration tests (`tests/outside_helper/`) also need Playwright's Chromium (`uv run playwright install chromium`, once) and `pnpm` (they build the page converter from `web/`).
   - Use `coverage.py` directly — **do not** add `pytest-cov`.
   - `coverage` runs in **`parallel` mode** (so CI's xdist workers each record their own data), which means a `coverage combine` step is now **required** before `report` — even for a serial local run.
   - **CI runs UNIT tests only** — `pytest -m "not integration" -n auto` (parallel), ~97% coverage, **not** gated at 100%. **integration** tests (real docker / subprocess sandbox / jupyter kernel / uv / ollama; tagged `@pytest.mark.integration`) fill a CI runner's disk and take ~90 min, so they only run in the **full local suite** above — which is where the 100% gate lives.

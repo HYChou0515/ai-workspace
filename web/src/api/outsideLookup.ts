@@ -38,6 +38,10 @@ export type HelperJob = {
   error: string;
   /** What the helper waits on while it holds the job: `captcha`, or "". */
   note: string;
+  /** Opened with no nod — a link an earlier lookup brought back (D12). */
+  auto: boolean;
+  /** Where the page was saved, once done. */
+  saved: string;
 };
 
 /** A packed helper the operator published (docs/plan-outside-helper.md §3.7.2). */
@@ -85,8 +89,10 @@ export const outsideLookupApi = {
     return (await r.json()) as HelperJob;
   },
 
-  async job(args: CardArgs): Promise<HelperJob> {
+  /** The card's job, or null when it has none (never handed over). */
+  async job(args: CardArgs): Promise<HelperJob | null> {
     const r = await apiFetch(`${cardJobs(args)}/${enc(args.callId)}`);
+    if (r.status === 404) return null;
     if (!r.ok) return refused(r, `helper job failed: ${r.status}`);
     return (await r.json()) as HelperJob;
   },
@@ -156,4 +162,6 @@ export const outsideLookupApi = {
 /** What the card needs. The helper's calls are optional: a client without
  * them (a test, a surface with no helper) reads as "not connected" (D7). */
 export type OutsideLookupClient = Pick<typeof outsideLookupApi, "targets" | "answer"> &
-  Partial<Pick<typeof outsideLookupApi, "helperStatus" | "handOver" | "job" | "cancel">>;
+  Partial<
+    Pick<typeof outsideLookupApi, "helperStatus" | "handOver" | "job" | "cancel" | "release">
+  >;

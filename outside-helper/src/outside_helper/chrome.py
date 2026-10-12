@@ -67,6 +67,10 @@ class Chrome:
         except BaseException:
             self._pw.stop()
             raise
+        #: The window was closed under the helper (or by `close`): its
+        #: Playwright objects are dead, and a new `Chrome` is needed.
+        self.gone = False
+        self._ctx.on("close", lambda _ctx: setattr(self, "gone", True))
 
     def send(
         self, method: str, path: str, body: dict[str, Any] | None, headers: dict[str, str]
@@ -169,7 +173,8 @@ class Chrome:
 
     def close(self) -> None:
         try:
-            self._ctx.close()
+            if not self.gone:
+                self._ctx.close()
         finally:
             self._pw.stop()
 

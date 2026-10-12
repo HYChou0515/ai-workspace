@@ -66,6 +66,11 @@ class OutsideJob(Struct):
     #: What the helper is waiting on while it holds the job (`captcha`: the
     #: person solves one in the helper's Chrome window, §3.4); "" otherwise.
     note: str = ""
+    #: Handed over by the card on its own — a link an earlier lookup in this
+    #: chat brought back (D12) — rather than with the person's 「查」.
+    auto: bool = False
+    #: Where the page was saved once the job is done (`lookups/…`).
+    saved: str = ""
 
 
 class _OutsideHelperPresence(Struct):
@@ -269,8 +274,10 @@ class OutsideJobStore:
     async def note(self, jid: str, owner: str, note: str) -> bool:
         """Say what the owner's helper is waiting on for this claimed job. It
         also renews the claim: a person solving a captcha can take longer than
-        `CLAIM_TIMEOUT_MS`, and the job must not go back to the queue — and be
-        fetched a second time — while they do. False as `fail`."""
+        `CLAIM_TIMEOUT_MS`, so the helper says it again every
+        `outside_helper.errands.RENEW_S` while it waits, and the job does not go
+        back to the queue — to be fetched a second time — meanwhile. False as
+        `fail`."""
         return await asyncio.to_thread(self._note_sync, jid, owner, note)
 
     def _note_sync(self, jid: str, owner: str, note: str) -> bool:
@@ -292,7 +299,18 @@ class OutsideJobStore:
             )
         except PreconditionFailedError:
             return False  # cancelled or answered meanwhile
+        # Busy with the person, not gone: this counts as checking in.
+        self._touch_sync(owner)
         return True
+
+    def _touch_sync(self, owner: str) -> None:
+        """Renew the owner's presence, keeping what its last check-in said."""
+        seen = self.presence(owner)
+        if seen is None:
+            return
+        fields = {f: getattr(seen, f) for f in seen.__struct_fields__}
+        row = _OutsideHelperPresence(**{**fields, "last_seen_ms": self.now()})  # ty: ignore[invalid-argument-type]
+        self._presence().modify(_owner_key(owner), row, status=RevisionStatus.draft)
 
     # ── links lookups brought back (D12) ────────────────────────────────────
 
@@ -348,16 +366,18 @@ class OutsideJobStore:
         assert isinstance(data, _OutsideSeenUrls)
         return _without_fragment(url) in data.urls
 
-    async def end(self, jid: str, owner: str, state: JobState) -> bool:
+    async def end(self, jid: str, owner: str, state: JobState, *, saved: str = "") -> bool:
         """End the owner's claimed job as ``state`` (``done`` once its result
         answered the card, ``cancelled`` when the card was answered meanwhile)."""
-        return await asyncio.to_thread(self._finish_sync, jid, owner, state, "")
+        return await asyncio.to_thread(self._finish_sync, jid, owner, state, "", saved)
 
     async def cancel(self, jid: str) -> bool:
         """Cancel a job that has not finished. False when there is none."""
         return await asyncio.to_thread(self._finish_sync, jid, None, "cancelled", "")
 
-    def _finish_sync(self, jid: str, owner: str | None, state: JobState, error: str) -> bool:
+    def _finish_sync(
+        self, jid: str, owner: str | None, state: JobState, error: str, saved: str = ""
+    ) -> bool:
         rm = self._jobs()
         try:
             res = rm.get(jid)
@@ -372,7 +392,7 @@ class OutsideJobStore:
         try:
             rm.modify(
                 jid,
-                _with(data, state=state, error=error),
+                _with(data, state=state, error=error, saved=saved),
                 status=RevisionStatus.draft,
                 expected_etag=res.info.etag,
             )

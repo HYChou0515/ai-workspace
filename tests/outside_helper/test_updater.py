@@ -124,6 +124,35 @@ def test_a_refused_version_updates_at_once_from_the_release_it_was_given(tmp_pat
     assert up.status == "ready"
 
 
+# Refused, and the release it must update to already failed here three times:
+# it will not be tried again, so the window must say what is left — a
+# reinstall — rather than nothing at all (review round 1).
+def test_a_refused_helper_whose_update_is_marked_bad_says_to_reinstall(tmp_path):
+    manifest, data = _release("0.4.0")
+    home = _home(tmp_path)
+    write_state(home, {**read_state(home), "bad": ["0.4.0"]})
+    backend = _Backend(None, data)
+    up = _updater(home, backend, [0.0])
+
+    up.tick(required=manifest)
+
+    assert backend.downloads == []
+    assert up.status.startswith("failed")
+
+
+# A manifest's version names folders on the PC (versions/<v>): only a version.
+def test_a_release_whose_version_is_not_a_version_is_not_installed(tmp_path):
+    manifest, data = _release("0.4.0")
+    manifest["version"] = "../../0.9.0"
+    backend = _Backend(manifest, data)
+    up = _updater(_home(tmp_path), backend, [0.0])
+
+    up.tick()
+
+    assert backend.downloads == []
+    assert not (tmp_path.parent / "0.9.0").exists()
+
+
 def test_a_forced_update_that_failed_waits_before_trying_again(tmp_path):
     manifest, data = _release("0.4.0")
     backend, clock = _Backend(None, data), [0.0]

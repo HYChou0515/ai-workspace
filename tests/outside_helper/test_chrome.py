@@ -201,6 +201,18 @@ def test_a_file_from_a_backend_that_is_not_there_is_an_os_error(tmp_path):
         chrome.close()
 
 
+# The person closed the helper's Chrome window: it says so, so the helper can
+# open it again (review round 1), and closing it after that is harmless.
+def test_a_closed_chrome_says_it_is_gone(tmp_path, site):
+    chrome = _chrome(tmp_path, site)
+    assert chrome.gone is False
+
+    chrome._ctx.close()  # what closing its last window does
+
+    assert chrome.gone is True
+    chrome.close()
+
+
 # §3.7.7: which Chrome the helper drives, for the check-in.
 def test_it_says_which_chrome_it_drives(tmp_path, site):
     chrome = _chrome(tmp_path, site)

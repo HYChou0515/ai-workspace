@@ -150,6 +150,35 @@ def test_an_automatic_request_leaves_a_job_already_running_alone():
     assert _claim(client).status_code == 204
 
 
+# D12's no-nod open belongs to the person whose answer led to it (plan §3.2:
+# "為送出這一輪的人"), not to whoever else in a shared item has the chat open —
+# their helper would fetch it as them (review round 1).
+def test_a_link_opens_by_itself_only_for_the_person_who_asked():
+    spec = make_spec(default_user="u")
+    holder = {"id": "u"}
+    runner = _Turns(_card("c1", query="pandas"), _card("c2", url="https://pandas.example/whatsnew"))
+    client = TestClient(
+        create_app(
+            spec=spec,
+            sandbox=MockSandbox(),
+            filestore=MemoryFileStore(),
+            runner=runner,
+            get_user_id=lambda: holder["id"],
+        )
+    )
+    iid = register_rca_item(spec)  # public: anyone may converse
+    assert client.post(f"/a/rca/items/{iid}/messages", json={"content": "q1"}).status_code == 202
+    assert _answer(client, iid, call="c1", content=PAGE).status_code == 200
+
+    holder["id"] = "colleague"
+    _beat(client)
+    assert _auto(client, iid).status_code == 409
+
+    holder["id"] = "u"
+    _beat(client)
+    assert _auto(client, iid).status_code == 201
+
+
 class _Watching(_Turns):
     """Records, as each turn STARTS, whether `url` is already a seen link."""
 
