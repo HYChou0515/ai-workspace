@@ -194,6 +194,7 @@ describe("useAgent — stop / cancel (#49)", () => {
     });
     expect(result.current.log.streaming).toBe(false);
     expect(result.current.log.error?.raw).toContain("400");
+    expect(result.current.log.error?.kind).toBe("unknown"); // P6: no copy guessed for a 400
   });
 
   it("undo removes turns server-side then re-snapshots the thread (#38)", async () => {

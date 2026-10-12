@@ -2,6 +2,7 @@
 import { act, renderHook as rtlRenderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { HttpError } from "../api/http";
 import { mockKbApi, _resetKbMock } from "../api/kbMock";
 import type { AgentEntry } from "../pages/investigation/agentLog";
 import { QueryWrap } from "../test/queryWrapper";
@@ -527,7 +528,7 @@ describe("useKbChat — send failure", () => {
     const client = {
       ...mockKbApi,
       createChat: vi.fn().mockResolvedValue({ resource_id: "kb-1" }),
-      sendMessage: vi.fn().mockRejectedValue(new Error("kb message failed: 503")),
+      sendMessage: vi.fn().mockRejectedValue(new HttpError(503, "kb message failed: 503")),
       subscribeChat: async function* () {},
     } as unknown as typeof mockKbApi;
 
@@ -537,6 +538,7 @@ describe("useKbChat — send failure", () => {
     });
 
     expect(result.current.log.error?.raw).toContain("503");
+    expect(result.current.log.error?.kind).toBe("server_error"); // P6: worded, not echoed
     expect(result.current.log.streaming).toBe(false);
     // …and the question is taken back off the screen. Nothing was stored, so no
     // broadcast will ever adopt it — left drawn it would sit there with the

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { describeFailure } from "./failure";
+import { describeFailure, failureFromHttp } from "./failure";
 import { translate } from "./i18n";
 
 const zh = (key: Parameters<typeof translate>[1], vars?: Record<string, string | number>) =>
@@ -68,5 +68,32 @@ describe("describeFailure (docs/plan-friendly-errors.md D1/D5)", () => {
     expect(
       describeFailure({ kind: "quota", headline: "工作區已滿", raw: "工作區已滿" }, "zh-TW").details,
     ).toBeNull();
+  });
+});
+
+describe("failureFromHttp — our own API refusing a request (docs/plan-friendly-errors.md P6)", () => {
+  it("names a permission refusal and a server fault, and keeps the status line as details", () => {
+    const forbidden = describeFailure(
+      failureFromHttp(Object.assign(new Error("messages failed: 403"), { status: 403 })),
+      "zh-TW",
+    );
+    expect(forbidden.headline).toBe(zh("failure.forbidden.what"));
+    expect(forbidden.details).toBe("messages failed: 403");
+
+    const fault = describeFailure(
+      failureFromHttp(Object.assign(new Error("messages failed: 500"), { status: 500 })),
+      "zh-TW",
+    );
+    expect(fault.headline).toBe(zh("failure.server_error.what"));
+    expect(fault.action).toBe(zh("failure.server_error.do"));
+  });
+
+  it("does not guess at anything else — the raw text stays, under unknown", () => {
+    const out = describeFailure(
+      failureFromHttp(Object.assign(new Error("messages failed: 409"), { status: 409 })),
+      "zh-TW",
+    );
+    expect(out.headline).toBe(zh("failure.unknown.what"));
+    expect(out.details).toBe("messages failed: 409");
   });
 });

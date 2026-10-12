@@ -28,9 +28,7 @@ export function ErrorNotice({
    *  is holding). */
   children?: ReactNode;
 }) {
-  const t = useT();
   const [locale] = useLocale();
-  const [copied, setCopied] = useState(false);
   const { headline, action, details } = describeFailure(failure, locale);
 
   return (
@@ -53,32 +51,41 @@ export function ErrorNotice({
       </div>
       {action && <div style={{ color: "var(--text-paper-d)" }}>{action}</div>}
       {children}
-      {details && (
-        <details data-testid="error-notice-details" style={{ marginTop: 4 }}>
-          <summary style={{ cursor: "pointer", fontSize: pxToRem(12), color: "var(--text-paper-d)" }}>
-            {t("failure.details")}
-          </summary>
-          <pre
-            style={{
-              margin: "4px 0",
-              whiteSpace: "pre-wrap",
-              fontFamily: "var(--font-mono)",
-              fontSize: pxToRem(12),
-            }}
-          >
-            {details}
-          </pre>
-          <button
-            type="button"
-            className="btn"
-            onClick={() => {
-              void navigator.clipboard?.writeText(details).then(() => setCopied(true));
-            }}
-          >
-            {copied ? t("failure.copied") : t("failure.copy")}
-          </button>
-        </details>
-      )}
+      {details && <FailureDetails raw={details} />}
     </div>
+  );
+}
+
+/** The raw text of a failure, collapsed under "technical details" with a copy
+ *  button — the one shape every surface that shows a failure uses for it, so a
+ *  person reporting a problem finds it in the same place everywhere. */
+export function FailureDetails({ raw }: { raw: string }) {
+  const t = useT();
+  const [copied, setCopied] = useState(false);
+  return (
+    <details data-testid="error-notice-details" style={{ marginTop: 4 }}>
+      <summary style={{ cursor: "pointer", fontSize: pxToRem(12), color: "var(--text-paper-d)" }}>
+        {t("failure.details")}
+      </summary>
+      <pre
+        style={{
+          margin: "4px 0",
+          whiteSpace: "pre-wrap",
+          fontFamily: "var(--font-mono)",
+          fontSize: pxToRem(12),
+        }}
+      >
+        {raw}
+      </pre>
+      <button
+        type="button"
+        className="btn"
+        onClick={() => {
+          void navigator.clipboard?.writeText(raw).then(() => setCopied(true));
+        }}
+      >
+        {copied ? t("failure.copied") : t("failure.copy")}
+      </button>
+    </details>
   );
 }

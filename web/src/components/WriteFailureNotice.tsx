@@ -15,6 +15,7 @@
 import { useSyncExternalStore } from "react";
 
 import { useT } from "../lib/i18n";
+import { FailureDetails } from "./ErrorNotice";
 import { pxToRem } from "../lib/pxToRem";
 import {
   currentWriteFailure,
@@ -63,16 +64,11 @@ export function WriteFailureNotice() {
     >
       <div style={{ minWidth: 0 }}>
         <div style={{ fontWeight: 600 }}>{headline}</div>
-        <div
-          style={{
-            color: "var(--text-paper-d)",
-            fontSize: pxToRem(11),
-            marginTop: 2,
-            // A long server message must not stretch the banner off-screen.
-            overflowWrap: "anywhere",
-          }}
-        >
-          {failure.message}
+        {/* docs/plan-friendly-errors.md D1: the server's own message, kept for
+            whoever needs it — collapsed and copyable, like every other failure.
+            A long one must not stretch the banner off-screen. */}
+        <div style={{ overflowWrap: "anywhere" }}>
+          <FailureDetails raw={failure.message} />
         </div>
       </div>
       <button

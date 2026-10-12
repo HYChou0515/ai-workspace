@@ -10,7 +10,7 @@
 import type { AgentEvent } from "../events";
 import type { UploadCheckHint } from "../kb/uploadChecks";
 import type { CollectionPermission } from "../lib/permission";
-import { API_PREFIX, apiFetch } from "./http";
+import { API_PREFIX, apiFetch, httpErrorFrom } from "./http";
 import { mockKbApi } from "./kbMock";
 import { parseSseStream } from "./sse";
 import type { Provenance, ReasoningEffort, WithheldSource } from "./types";
@@ -1634,7 +1634,7 @@ export const realKbApi: KbApi = {
     });
     // 202 = queued. The reply arrives on the subscription, whenever this turn's
     // place in the queue comes up.
-    if (!resp.ok) throw new Error(`kb message failed: ${resp.status}`);
+    if (!resp.ok) throw await httpErrorFrom(resp, `kb message failed: ${resp.status}`);
   },
   async *subscribeChat(chatId, signal, since) {
     const q = since !== undefined ? `?since=${since}` : "";

@@ -50,3 +50,18 @@ describe("KB sendMessage request body", () => {
     expect(body.max_kb_searches).toBe(0);
   });
 });
+
+describe("KB sendMessage refusal", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("keeps the status, so the composer can say WHAT refused it (docs/plan-friendly-errors.md P6)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("nope", { status: 403 })),
+    );
+
+    const refused = await realKbApi.sendMessage({ chatId: "chat-1", content: "q" }).catch((e) => e);
+
+    expect(refused).toMatchObject({ status: 403, message: "kb message failed: 403" });
+  });
+});

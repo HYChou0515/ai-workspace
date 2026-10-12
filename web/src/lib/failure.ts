@@ -42,6 +42,9 @@ const WORDED = new Set([
   "context_overflow",
   "bad_request",
   "unknown",
+  // Our own API (P6, `failureFromHttp`).
+  "forbidden",
+  "server_error",
 ]);
 
 /** The variant of a kind's headline that says the number, when it was counted. */
@@ -55,6 +58,17 @@ const COUNTED: Record<string, { param: string; key: MsgKey }> = {
 export function failureFromError(err: unknown, kind = "unknown", headline?: string): Failure {
   const raw = err instanceof Error ? err.message : String(err);
   return headline === undefined ? { kind, raw } : { kind, raw, headline };
+}
+
+/** A request OUR API refused (P6). Only the two answers with a remedy of their
+ *  own are named — "ask for access" and "the server broke, not you"; any other
+ *  status is `unknown` with its status line kept as the details, rather than
+ *  copy guessed for a status nobody has seen in this app. */
+export function failureFromHttp(err: unknown): Failure {
+  const status = (err as { status?: number } | null)?.status;
+  if (status === 403) return failureFromError(err, "forbidden");
+  if (status !== undefined && status >= 500) return failureFromError(err, "server_error");
+  return failureFromError(err);
 }
 
 /** One line for a developer's log: the headline, then the raw text. */

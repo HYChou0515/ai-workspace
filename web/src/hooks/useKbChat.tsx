@@ -4,7 +4,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 import { kbApi, type KbApi, type KbImageInput } from "../api/kb";
 import { qk } from "../api/queryKeys";
 import { eventId, eventSeq, isTerminal } from "../events";
-import { type Failure, failureFromError } from "../lib/failure";
+import { type Failure, failureFromError, failureFromHttp } from "../lib/failure";
 import { initialLocale, translate } from "../lib/i18n";
 import { getKbAgentName } from "../lib/kbAgent";
 import {
@@ -410,7 +410,7 @@ export function useKbChat({
           // route to the same snapshot, so this is not the last chance.
         }
       } catch (err: unknown) {
-        const failure = failureFromError(err);
+        const failure = failureFromHttp(err);
         // Take the drawn question back: the send was refused, so no broadcast
         // will ever adopt that entry and no turn is coming for it. Left drawn it
         // would sit there with the error beside it saying it was never sent.

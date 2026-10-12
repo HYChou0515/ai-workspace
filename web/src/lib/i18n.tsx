@@ -2290,6 +2290,23 @@ export const messages = {
     "zh-TW": "把技術細節複製給管理員。",
     en: "Copy the technical details to an administrator.",
   },
+  // Our own API refusing a request (P6) — not the model service.
+  "failure.forbidden.what": {
+    "zh-TW": "你沒有權限做這件事。",
+    en: "You don't have permission to do this.",
+  },
+  "failure.forbidden.do": {
+    "zh-TW": "請這個項目的擁有者或管理員開放權限給你。",
+    en: "Ask the owner of this item, or an administrator, for access.",
+  },
+  "failure.server_error.what": {
+    "zh-TW": "伺服器處理這個請求時出錯。",
+    en: "The server failed while handling this request.",
+  },
+  "failure.server_error.do": {
+    "zh-TW": "稍後再試；持續發生請把技術細節複製給管理員。",
+    en: "Try again later. If it persists, copy the technical details to an administrator.",
+  },
   "failure.details": { "zh-TW": "技術細節", en: "Technical details" },
   "failure.stopFailed": {
     "zh-TW": "停止失敗，這一輪可能仍在進行。",

@@ -318,5 +318,6 @@ describe("useItemChat — recovery parity with useAgent (#493)", () => {
 
     expect(result.current.log.streaming).toBe(false);
     expect(result.current.log.error?.raw).toContain("403");
+    expect(result.current.log.error?.kind).toBe("forbidden"); // P6: worded, not echoed
   });
 });
