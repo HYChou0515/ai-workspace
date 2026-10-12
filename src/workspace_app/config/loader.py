@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from .interpolate import expand_env, has_env_reference
-from .merge import merge_layered
+from .merge import apply_merge_patch, merge_layered
 from .schema import (
     AgentsSettings,
     ChatVideoSettings,
@@ -113,6 +113,7 @@ def load_with_provenance(
     *,
     config_path: Path | None = None,
     env: Mapping[str, str] | None = None,
+    overlay: dict[str, Any] | None = None,
 ) -> tuple[Settings, Provenance]:
     """`load` plus a per-leaf provenance map (observability feature A): for
     every dotted path in `asdict(settings)`, whether the value came from the
@@ -142,6 +143,13 @@ def load_with_provenance(
     bundled = dataclasses.asdict(Settings())
     _flatten_bundled_sub_agents(bundled)
     merged = merge_layered(bundled, yaml_d)
+
+    # 4b — the settings page's published changes (docs/plan-model-settings.md):
+    # a JSON Merge Patch over the merged defaults, so it wins over both layers
+    # and `null` can hide even a bundled preset (M12). Applied BEFORE
+    # validation, so an Apply is refused by exactly what refuses a boot (M8).
+    if overlay:
+        merged = apply_merge_patch(merged, _walk_strings(overlay, lambda s: expand_env(s, e)))
 
     # 5 — strict validation
     _validate(merged, source=str(path) if path else "<bundled defaults>")

@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from importlib import resources
 from importlib.resources.abc import Traversable
-from typing import Literal
+from typing import Any, Literal
 
 import msgspec
 from msgspec import UNSET, Struct, UnsetType, field
@@ -210,10 +210,15 @@ def apps_root() -> Traversable:
     return resources.files(_APPS_PKG)
 
 
+def read_app_manifest_raw(slug: str) -> dict[str, Any]:
+    """``apps/<slug>/app.json`` as shipped, untyped — what the settings page's
+    patch is applied to (docs/plan-model-settings.md)."""
+    return msgspec.json.decode((apps_root() / slug / _MANIFEST_FILE).read_bytes())
+
+
 def load_app_manifest(slug: str) -> AppManifest:
     """Decode ``apps/<slug>/app.json`` into a typed ``AppManifest``."""
-    raw = (apps_root() / slug / _MANIFEST_FILE).read_bytes()
-    return msgspec.json.decode(raw, type=AppManifest)
+    return msgspec.convert(read_app_manifest_raw(slug), type=AppManifest)
 
 
 # What an App may ship its `icon` as. The extension decides the media type, so

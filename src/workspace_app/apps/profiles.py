@@ -11,6 +11,7 @@ to a subset (``tools`` ⊆ app.tools, ``presets`` ⊆ app.picker) plus per-profi
 from __future__ import annotations
 
 from importlib import resources
+from typing import Any
 
 import msgspec
 from msgspec import UNSET, Struct, UnsetType, field
@@ -79,14 +80,20 @@ def list_profiles(app_slug: str) -> list[str]:
     return sorted(c.name for c in children if c.is_dir() and c.name not in _NON_PROFILE)
 
 
-def load_profile(app_slug: str, name: str) -> ProfileManifest:
-    """The profile's declared overrides (``_profile.json``), or all-defaults
-    (inherit the App ceiling) when it ships none."""
+def read_profile_raw(app_slug: str, name: str) -> dict[str, Any]:
+    """The profile's ``_profile.json`` as shipped, untyped — ``{}`` when it ships
+    none. What the settings page's patch is applied to."""
     try:
         raw = (_profiles_root(app_slug) / name / _PROFILE_FILE).read_bytes()
     except (FileNotFoundError, IsADirectoryError, NotADirectoryError, OSError):
-        return ProfileManifest()
-    return msgspec.json.decode(raw, type=ProfileManifest)
+        return {}
+    return msgspec.json.decode(raw)
+
+
+def load_profile(app_slug: str, name: str) -> ProfileManifest:
+    """The profile's declared overrides (``_profile.json``), or all-defaults
+    (inherit the App ceiling) when it ships none."""
+    return msgspec.convert(read_profile_raw(app_slug, name), type=ProfileManifest)
 
 
 def load_workflow_manifest(app_slug: str, name: str) -> WorkflowManifest | None:
