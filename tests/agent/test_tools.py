@@ -694,7 +694,10 @@ async def test_ask_knowledge_base_delegates_to_the_context_bridge():
         received["collection_ids"] = collection_ids
         return f"KB answer to: {payload}", [cite]
 
-    def sink(b: bytes) -> None: ...
+    written: list[bytes] = []
+
+    def sink(b: bytes) -> None:
+        written.append(b)
 
     actx = AgentToolContext(run_subagent=fake_run, on_exec_output=sink)
     ctx = RunContextWrapper(actx)
@@ -707,7 +710,14 @@ async def test_ask_knowledge_base_delegates_to_the_context_bridge():
     # and adds no tier banner.
     assert received["collection_ids"] is None
     # The run's output sink is handed to the bridge so KB progress can stream.
-    assert received["emit"] is sink
+    # What reaches the bridge writes into THIS turn's card — wrapped, since P4
+    # (docs/plan-friendly-errors.md), so a hold can reach the turn as well.
+    from workspace_app.agent.delegation import Delegation
+
+    emit = received["emit"]
+    assert isinstance(emit, Delegation)
+    emit(b"searching\n")
+    assert written == [b"searching\n"]
     # Citations are stashed in CALL ORDER on the context, bucketed by
     # tool name; the turn engine pairs them with each successive
     # ask_knowledge_base tool message.

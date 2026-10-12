@@ -12,6 +12,7 @@ from typing import Any
 import httpx
 import litellm
 import pytest
+from agents import RunContextWrapper
 
 from workspace_app.agent.context import AgentToolContext
 from workspace_app.api import litellm_runner as lr
@@ -99,6 +100,57 @@ async def test_a_tool_that_already_ran_is_not_run_again(monkeypatch):
     assert not [e for e in events if isinstance(e, RunError)]
     assert _answer(events) == "I noted it."
     assert llm.inputs[1] == llm.inputs[2], "the second call re-sent as it was"
+
+
+async def test_a_tool_can_put_a_hold_on_the_turns_own_status_line(monkeypatch):
+    """P4: a sub-agent's hold is the TURN waiting — the delegating tool hands it
+    to `ctx.on_turn_status`, and the runner puts it on this turn's stream."""
+    from agents import function_tool
+
+    @function_tool
+    async def delegate(ctx: RunContextWrapper[AgentToolContext]) -> str:
+        """Delegate."""
+        assert ctx.context.on_turn_status is not None
+        ctx.context.on_turn_status(RateLimited(seconds=7))
+        return "done"
+
+    monkeypatch.setattr(lr, "build_tools", lambda *a, **k: [delegate])
+    llm = ScriptedLlm([Call("delegate", {}), Say(["ok"])])
+
+    events = await _run(monkeypatch, llm)
+
+    assert [e.seconds for e in events if isinstance(e, RateLimited)] == [7.0]
+
+
+async def test_a_delegated_failure_reaches_the_tool_card_named_and_the_model_raw(monkeypatch):
+    """P4 / D10: the card says what happened to the sub-agent; the model reads the
+    raw text, which it can act on. The failure is recorded against the CALL, so
+    whatever the tool does to its result on the way out cannot unpair them."""
+    from agents import function_tool
+
+    from workspace_app.agent.tools import _delegation
+    from workspace_app.api.events import ToolEnd
+
+    @function_tool
+    async def delegate(ctx: RunContextWrapper[AgentToolContext]) -> str:
+        """Delegate."""
+        _delegation(ctx).failed(
+            RunError(message="RateLimitError: slow", kind="rate_limited", params={"waited_s": 120})
+        )
+        return "[sub-agent ran on m]\n\nsub-agent 'x' failed: RateLimitError: slow"
+
+    monkeypatch.setattr(lr, "build_tools", lambda *a, **k: [delegate])
+    llm = ScriptedLlm([Call("delegate", {}), Say(["ok"])])
+
+    events = await _run(monkeypatch, llm)
+
+    [end] = [e for e in events if isinstance(e, ToolEnd)]
+    assert end.failure == {
+        "kind": "rate_limited",
+        "params": {"waited_s": 120},
+        "raw": "RateLimitError: slow",
+    }
+    assert "RateLimitError: slow" in end.output, "the model still reads the raw text"
 
 
 def _unavailable() -> Exception:

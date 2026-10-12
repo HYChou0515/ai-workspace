@@ -32,6 +32,10 @@ export type ToolCallView = {
    * sub-agent's citations onto the persisted tool message. Rendered as
    * clickable source cards under the tool card (same UX as KB chat). */
   citations?: MessageCitation[];
+  /** A delegating tool whose sub-agent failed (docs/plan-friendly-errors.md
+   * P4): the card says what happened while `output` keeps the raw result the
+   * model read. */
+  failure?: Failure;
 };
 
 /** Live token telemetry for the current turn (Claude-Code-style ↑/↓). */
@@ -377,6 +381,7 @@ export function logFromMessages(messages: readonly Message[]): AgentLog {
           // tool message reloads with its reference cards. Non-ask_kb tools
           // never set this on the BE side — empty becomes undefined.
           citations: m.citations && m.citations.length > 0 ? m.citations : undefined,
+          ...(m.tool_failure ? { failure: m.tool_failure } : {}),
         },
       });
     } else if (m.role === "mention") {
@@ -981,7 +986,13 @@ export function reduceAgent(log: AgentLog, ev: AgentEvent, now: number = Date.no
             // #62: prefer the full display result (success stderr kept) so the
             // card keeps the error that streamed live instead of the cleaned
             // "exit_code=0"; absent ⇒ the cleaned output.
-            call: { ...e.call, status: "done", output: ev.display || ev.output, endedAt: now },
+            call: {
+              ...e.call,
+              status: "done",
+              output: ev.display || ev.output,
+              endedAt: now,
+              ...(ev.failure ? { failure: ev.failure } : {}),
+            },
           };
         }
       }

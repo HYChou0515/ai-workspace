@@ -318,6 +318,8 @@ class TurnMessage:
     # `max_turns` (`error` on rows persisted before docs/plan-friendly-errors.md)
     error_kind: str | None = None
     error_params: dict[str, int] | None = None  # role=error: numbers for the kind's copy
+    # role=tool: a delegated sub-agent's failure (P4), for the card to word
+    tool_failure: dict[str, Any] | None = None
     # #113: "repetition" when the turn was stopped for a degenerate loop — the
     # FE renders a notice and `content`/`reasoning` is truncated to before it.
     stopped_reason: str | None = None
@@ -406,6 +408,7 @@ class _TurnReducer:
                     tool_name=start.name if start else None,
                     tool_args=dict(start.args) if start else None,
                     tool_display=item.display,
+                    tool_failure=item.failure,
                 )
             )
         elif isinstance(item, AgentMetrics) and item.phase != "up":

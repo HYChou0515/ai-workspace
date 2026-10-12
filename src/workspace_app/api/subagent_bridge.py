@@ -33,8 +33,7 @@ from ..resources.groups import groups_of
 from ..resources.kb import Citation, Collection
 from ..sandbox.protocol import OutputSink
 from ..tokens import CallLane
-from .agent_progress import progress_line
-from .events import AgentEvent
+from .agent_progress import make_relay
 from .kb_chat_routes import answer_question
 from .runner import AgentRunner
 
@@ -204,12 +203,7 @@ class SubagentBridge:
             superusers=self._superusers,
         )
 
-        def relay(ev: AgentEvent) -> None:
-            if emit is None:
-                return
-            line = progress_line(ev)
-            if line:
-                emit(line.encode())
+        relay = make_relay(emit)
 
         captured: list[Citation] = []
 

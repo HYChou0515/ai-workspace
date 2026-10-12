@@ -11,7 +11,19 @@ relaying it here too would show the user the same text twice.
 
 from __future__ import annotations
 
-from .events import AgentEvent, MessageDelta, ToolLog, ToolStart
+from collections.abc import Callable
+
+from ..agent.delegation import Delegation
+from ..sandbox.protocol import OutputSink
+from .events import (
+    AgentEvent,
+    MessageDelta,
+    ModelRetrying,
+    RateLimited,
+    RunError,
+    ToolLog,
+    ToolStart,
+)
 
 #: Which argument is worth showing beside a tool's name, most-telling first. A
 #: tool call reads as "what it is doing to what", and these are the "what".
@@ -46,3 +58,26 @@ def _hint(args: dict[str, object]) -> str:
         if isinstance(value, str) and value.strip():
             return value
     return ""
+
+
+def make_relay(emit: OutputSink | None) -> Callable[[AgentEvent], None]:
+    """The one relay every delegation path hands its sub-agent. Work lines go
+    under the parent's tool card. When the delegating tool handed down a
+    `Delegation` (docs/plan-friendly-errors.md P4), a hold or a retry goes to
+    the parent TURN's status line — a sub-agent waiting out a 429 is the turn
+    waiting, and shown as a card that stopped moving it read as a hang — and the
+    run's failure goes back to the tool, so its card can say what happened."""
+
+    def relay(ev: AgentEvent) -> None:
+        if isinstance(ev, (RateLimited, ModelRetrying)):
+            if isinstance(emit, Delegation):
+                emit.status(ev)
+            return
+        if isinstance(ev, RunError):
+            if isinstance(emit, Delegation):
+                emit.failed(ev)
+            return
+        if emit is not None and (line := progress_line(ev)):
+            emit(line.encode())
+
+    return relay

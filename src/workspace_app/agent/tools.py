@@ -26,6 +26,7 @@ from ..quota.disk_ledger import UserDiskFull
 from ..resources.kb import RetrievedPassage, SourceDoc
 from ..sandbox.protocol import ExecResult, OutputSink, SandboxNotFound
 from .context import AgentToolContext
+from .delegation import Delegation
 from .exit_codes import explain
 from .output_cap import cap_tool_outputs, truncate_middle
 from .shown_files import (
@@ -41,6 +42,7 @@ from .shown_files import (
 from .tool_authz import LEGACY_TOOL_RENAMES, TOOL_VERBS, authorize_tool
 
 if TYPE_CHECKING:
+    from ..api.events import RunError
     from ..apps.skill_hub import SkillHubEntry
     from ..apps.subagents import SubagentDef
     from ..factories import SubagentModel
@@ -1826,6 +1828,25 @@ async def read_page_impl(
     return _truncate_middle(out, ctx.context.read_file_max_chars)
 
 
+def _delegation(ctx: RunContextWrapper[AgentToolContext]) -> Delegation:
+    """What a delegating tool hands its sub-agent run (docs/plan-friendly-errors
+    .md P4): the card it writes under, the turn's status line for a hold or a
+    retry, and — recorded against THIS call — the run's failure, which the card
+    words while the model keeps reading the raw text."""
+    c = ctx.context
+    call_id = getattr(ctx, "tool_call_id", "") or ""
+
+    def failed(error: RunError) -> None:
+        if call_id:
+            c.tool_failures[call_id] = {
+                "kind": error.kind or "unknown",
+                "params": error.params,
+                "raw": error.message,
+            }
+
+    return Delegation(c.on_exec_output, status=c.on_turn_status, on_failure=failed)
+
+
 async def ask_knowledge_base_impl(
     ctx: RunContextWrapper[AgentToolContext], question: str, rank: int = 0
 ) -> str:
@@ -1894,7 +1915,7 @@ async def ask_knowledge_base_impl(
     answer, citations = await run(
         "kb_chat",
         question,
-        ctx.context.on_exec_output,
+        _delegation(ctx),
         ctx.context.investigation_id,
         scope,
         # Permission-disclosure: the KB sub-agent surfaces read_meta-only sources
@@ -1976,8 +1997,8 @@ async def run_agent_impl(
             )
         return f"error: no sub-agent named {agent_type!r}, and none are defined."
     if picked is None:
-        return await run(ctx.context, chosen, prompt, ctx.context.on_exec_output)
-    report = await run(ctx.context, chosen, prompt, ctx.context.on_exec_output, model=picked)
+        return await run(ctx.context, chosen, prompt, _delegation(ctx))
+    report = await run(ctx.context, chosen, prompt, _delegation(ctx), model=picked)
     # #748's rule, applied to delegation: where a report came from must be
     # visible — to the model reading it AND in the transcript. A PREFIX, not a
     # suffix: the output cap trims the tail, and a report sitting at the
@@ -2723,7 +2744,7 @@ async def publish_skill_impl(ctx: RunContextWrapper[AgentToolContext], name: str
 
     # The review is the gate (Q9): a review that did not happen is not a pass.
     try:
-        review = await review_via(c, name, payload, c.on_exec_output)
+        review = await review_via(c, name, payload, _delegation(ctx))
     except SkillReviewUnavailable as e:
         return (
             f"error: not published — the review service could not review it ({e}). "

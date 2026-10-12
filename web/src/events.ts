@@ -7,6 +7,7 @@
 
 import type { ChatGoal } from "./api/itemGoal";
 import type { SentMarking } from "./api/types";
+import type { Failure } from "./lib/failure";
 
 /* ------------------------------------------------------------------ */
 /* AgentEvent — POST /investigations/{id}/messages                     */
@@ -33,7 +34,14 @@ export type ToolStart = {
 // it differs from `output` (the cleaned, LLM-facing result). The FE renders
 // `display` when present so an error the user saw stream live doesn't vanish
 // from the final card; absent ⇒ render `output`.
-export type ToolEnd = { type: "tool_end"; call_id: string; output: string; display?: string };
+export type ToolEnd = {
+  type: "tool_end";
+  call_id: string;
+  output: string;
+  display?: string;
+  /** A delegated sub-agent's failure (docs/plan-friendly-errors.md P4). */
+  failure?: Failure | null;
+};
 
 /** Incremental stdout from a still-running tool (e.g. a long exec). call_id
  * may be empty — then it attaches to the latest running tool. */

@@ -90,6 +90,26 @@ def test_a_withdrawn_partial_answer_is_not_persisted():
     assert (answer.content, answer.reasoning) == ("The answer is 42.", "Thinking")
 
 
+def test_a_delegated_failure_survives_a_reload_on_its_tool_card():
+    """P4/D10: the card words a sub-agent's failure; a reloaded thread has only
+    what was persisted, so the failure rides the tool message."""
+    failure = {"kind": "rate_limited", "params": {"waited_s": 120}, "raw": "RateLimitError: slow"}
+    client, spec, iid = _client(
+        [
+            ToolStart(call_id="c1", name="run_agent", args={"agent_type": "x"}),
+            ToolEnd(
+                call_id="c1", output="sub-agent 'x' failed: RateLimitError: slow", failure=failure
+            ),
+            MessageDelta(text="It could not finish."),
+        ]
+    )
+    _drain(client, iid, "q")
+
+    [tool] = [m for m in _messages(spec, iid) if m.role == "tool"]
+    assert tool.tool_failure == failure
+    assert tool.content == "sub-agent 'x' failed: RateLimitError: slow"
+
+
 def test_the_numbers_the_copy_needs_survive_a_reload():
     """D5's copy says how long the turn waited; a reloaded thread has only what
     was persisted, so the number has to be persisted with the kind."""

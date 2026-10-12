@@ -1094,7 +1094,7 @@ function ToolCallCard({
   // We know the tool when either source names it → show its primary arg. Only a
   // truly-unknown tool falls back to surfacing its raw name in the hint slot (#206).
   const hint = labelKey || catalogLabel ? toolArgHint(call.name, call.args) : call.name;
-  return (
+  const card = (
     <details
       open={streamingLive}
       style={{
@@ -1186,6 +1186,17 @@ function ToolCallCard({
         </div>
       )}
     </details>
+  );
+  // P4: a delegated sub-agent's failure goes BESIDE the card — collapsed, the
+  // card would hide the one thing the reader most needs to see.
+  if (!call.failure) return card;
+  return (
+    <div>
+      {card}
+      <div style={{ marginTop: 4 }}>
+        <ErrorNotice failure={call.failure} />
+      </div>
+    </div>
   );
 }
 

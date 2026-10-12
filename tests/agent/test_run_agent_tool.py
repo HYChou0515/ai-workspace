@@ -67,6 +67,38 @@ async def test_the_sub_agents_work_streams_under_the_calling_card():
     assert b"looked at app.log" in b"".join(seen)
 
 
+async def test_a_sub_agents_hold_reaches_the_turn_and_its_failure_reaches_this_call():
+    """docs/plan-friendly-errors.md P4: what run_agent hands down is the turn's
+    status line and a way back to THIS call — not a bare card sink."""
+    from workspace_app.agent.delegation import Delegation
+    from workspace_app.api.events import RateLimited, RunError
+
+    status: list[object] = []
+
+    async def run_agent(parent, defn, prompt, emit=None, model=None):
+        assert isinstance(emit, Delegation)
+        emit.status(RateLimited(seconds=5))
+        emit.failed(RunError(message="TimeoutError: slow", kind="timeout", params={"attempts": 3}))
+        return "sub-agent 'log-digger' failed: TimeoutError: slow"
+
+    ctx = RunContextWrapper(
+        AgentToolContext(
+            investigation_id="inv-1",
+            subagent_defs=(_DIGGER, _REPORTER),
+            run_agent=run_agent,
+            on_turn_status=status.append,
+        )
+    )
+    ctx.tool_call_id = "c1"  # ty: ignore[unresolved-attribute] — what the SDK's ToolContext carries
+
+    await run_agent_impl(ctx, "log-digger", "go")
+
+    assert status == [RateLimited(seconds=5)]
+    assert ctx.context.tool_failures == {
+        "c1": {"kind": "timeout", "params": {"attempts": 3}, "raw": "TimeoutError: slow"}
+    }
+
+
 def test_the_tool_is_not_offered_when_there_is_nobody_to_delegate_to():
     """#537's lesson: granting a tool and then refusing every call reads to a
     model as "stop trying", and costs a round trip to learn it. An App that

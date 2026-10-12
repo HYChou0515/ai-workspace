@@ -1309,3 +1309,29 @@ describe("EntryView — a failure banner (docs/plan-friendly-errors.md D8)", () 
     expect(screen.queryByTestId("error-notice")).toBeNull();
   });
 });
+
+describe("EntryView — a delegated sub-agent's failure (docs/plan-friendly-errors.md P4)", () => {
+  afterEach(cleanup);
+
+  it("says what happened beside the card, where a collapsed card cannot hide it", () => {
+    render(
+      <EntryView
+        entry={{
+          kind: "tool_call",
+          call: {
+            call_id: "c1",
+            name: "run_agent",
+            status: "done",
+            args: {},
+            output: "sub-agent 'x' failed: RateLimitError: slow",
+            failure: { kind: "rate_limited", params: { waited_s: 120 }, raw: "RateLimitError: slow" },
+          },
+        }}
+      />,
+    );
+
+    const notice = screen.getByTestId("error-notice");
+    expect(notice).toHaveTextContent(translate("zh-TW", "failure.rate_limited.waited", { waited_s: 120 }));
+    expect(notice.closest("details:not([data-testid='error-notice-details'])")).toBeNull();
+  });
+});

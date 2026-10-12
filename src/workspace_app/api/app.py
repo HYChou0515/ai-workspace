@@ -89,7 +89,7 @@ from ..workflow.user_schedule_sweep import DEFAULT_MAX_ROWS, UserScheduleSweeper
 from ..workflow.user_schedules import ITEM_SCHEDULES_PATH, SchedulePolicy
 from . import perf_trace
 from .activity import ActivityLog
-from .agent_progress import progress_line
+from .agent_progress import make_relay
 from .capability_routes import register_capability_routes
 from .card_gen_routes import register_card_gen_routes
 from .chat_routes import register_chat_routes
@@ -103,7 +103,7 @@ from .entity_routes import register_entity_routes
 from .env_provider import IEnvProvider
 from .env_provider_routes import register_env_provider_routes
 from .event_bus import IEventBus
-from .events import AgentEvent, FileChanged
+from .events import FileChanged
 from .file_routes import register_file_routes
 from .goal_offhours import register_stretch_claims
 from .health_routes import (
@@ -2142,11 +2142,7 @@ def create_app(
         card that sits there. `model` is the caller's pick from
         `agents.subagent_models`, already resolved by the tool impl."""
 
-        def relay(ev: AgentEvent) -> None:
-            if emit is None:
-                return
-            if line := progress_line(ev):
-                emit(line.encode())
+        relay = make_relay(emit)
 
         return await run_agent_task(runner, parent_ctx, defn, prompt, model=model, on_event=relay)
 
@@ -2160,11 +2156,7 @@ def create_app(
         publishing turn on the same runner — same relay into the tool card as
         `_delegate`, so the person sees the review happening."""
 
-        def relay(ev: AgentEvent) -> None:
-            if emit is None:
-                return
-            if line := progress_line(ev):
-                emit(line.encode())
+        relay = make_relay(emit)
 
         return await review_skill(runner, parent_ctx, folder, payload, on_event=relay)
 

@@ -193,6 +193,11 @@ class Message(Struct):
     the next turn's LLM history (`api.turns.history_items`): `cancelled`
     is replayed as a system note, the rest are human-only diagnostics."""
 
+    tool_failure: dict[str, Any] | None = None
+    """Only set when role=tool, for a delegating tool whose sub-agent failed
+    (docs/plan-friendly-errors.md P4): `{kind, params, raw}`, which the card
+    words while `content` keeps the raw result the model read."""
+
     error_params: dict[str, int] | None = None
     """Only set when role=error — the numbers the kind's copy needs
     (`waited_s`, `attempts`), so a reloaded thread can say them too."""

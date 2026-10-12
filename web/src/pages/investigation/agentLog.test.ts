@@ -1723,3 +1723,32 @@ describe("a failure is carried as what it IS, not as a sentence (docs/plan-frien
     ]);
   });
 });
+
+describe("a delegated sub-agent's failure rides its tool card (docs/plan-friendly-errors.md P4)", () => {
+  const failure = { kind: "rate_limited", params: { waited_s: 120 }, raw: "RateLimitError: slow" };
+
+  it("keeps the failure on the call when it ends live", () => {
+    const log = fold([
+      { type: "tool_start", call_id: "c1", name: "run_agent", args: {} },
+      { type: "tool_end", call_id: "c1", output: "sub-agent 'x' failed: RateLimitError: slow", failure },
+    ] as AgentEvent[]);
+
+    const [entry] = log.entries;
+    expect(entry?.kind === "tool_call" && entry.call.failure).toEqual(failure);
+  });
+
+  it("keeps it on a reloaded call", () => {
+    const log = logFromMessages([
+      {
+        role: "tool",
+        content: "sub-agent 'x' failed: RateLimitError: slow",
+        tool_call_id: "c1",
+        tool_name: "run_agent",
+        tool_failure: failure,
+      },
+    ] as Message[]);
+
+    const [entry] = log.entries;
+    expect(entry?.kind === "tool_call" && entry.call.failure).toEqual(failure);
+  });
+});

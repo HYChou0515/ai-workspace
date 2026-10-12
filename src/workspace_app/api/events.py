@@ -46,6 +46,10 @@ class ToolEnd:
     # separate display; the FE renders `output`. The exec tools record it on
     # the context and the runner attaches it here keyed by `output`.
     display: str = ""
+    #: docs/plan-friendly-errors.md P4/D10: a delegating tool whose sub-agent
+    #: failed — `{kind, params, raw}`, worded by the FE on the card while
+    #: `output` keeps the raw text the model reads. None for every other call.
+    failure: dict[str, Any] | None = None
     type: Literal["tool_end"] = "tool_end"
 
 

@@ -4,7 +4,7 @@ import asyncio
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from ..files import WorkspaceFiles
 from ..filestore.protocol import FileStore
@@ -218,6 +218,12 @@ class AgentToolContext:
     # instead of leaving a blank running card. Set per-run by the runner (like
     # on_exec_output); None ⇒ no progress surfaced (host-managed / non-turn wakes).
     on_restore_progress: Callable[[int, int], None] | None = None
+    # docs/plan-friendly-errors.md P4: a delegated sub-agent's hold / retry
+    # (`RateLimited`, `ModelRetrying`) is THIS turn waiting, so the delegating
+    # tool hands it here and the runner puts it on this turn's stream — the
+    # status line, not a tool card that stopped moving. Set per-run (like
+    # on_exec_output); None ⇒ nobody to tell.
+    on_turn_status: Callable[[Any], None] | None = None
     # read_file caps (deploy config; the API layer sets these from Settings).
     # A read past either cap is truncated with a notice; the agent pages with
     # offset/limit. Defaults sized for a large-context model.
@@ -558,15 +564,21 @@ class AgentToolContext:
     # records up front instead of guessing. Set where the catalog is discovered
     # for the turn. The runner appends it to the system prompt; "" ⇒ nothing.
     entity_schema_note: str = ""
+    # docs/plan-friendly-errors.md P4: a delegating tool's sub-agent failure,
+    # by the CALL it belongs to (`{kind, params, raw}`), so the runner can put it
+    # on that call's ToolEnd for the card to word — while the result the model
+    # reads stays raw. Keyed by call id rather than by output, so whatever the
+    # tool does to its result on the way out cannot unpair them.
+    tool_failures: dict[str, dict[str, Any]] = field(default_factory=dict)
     # #62: a per-turn map from an exec tool's LLM-facing result (the cleaned
     # `_format_exec`, which IS the ToolEnd.output) to the FULL display result
     # (stderr kept even on success). The runner keys off ToolEnd.output to
     # attach the display version, so the FE/persisted card can show the error
     # the user saw stream live instead of a clean "exit_code=0". Only populated
     # when the two differ (exit 0 with non-empty stderr), so it stays tiny.
-    # String-keyed, not call-id keyed: RunContextWrapper tool params don't
-    # expose a call id (see subagent_citations above), and the cleaned output
-    # is what the ToolEnd carries verbatim.
+    # String-keyed: the cleaned output is what the ToolEnd carries verbatim.
+    # (A tool the SDK invokes DOES get its call id — `tool_call_id` on the
+    # ToolContext it is handed, which `tool_failures` below keys by.)
     tool_displays: dict[str, str] = field(default_factory=dict)
     # RCA agent's `mention_user` tool reaches this to summon a human to the
     # investigation. Args: (investigation_id, user_ids, note). Wired by the API.

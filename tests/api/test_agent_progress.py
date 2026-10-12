@@ -30,3 +30,48 @@ def test_only_work_in_progress_surfaces_not_the_answer():
     assert progress_line(MessageDelta(text="the answer")) is None
     assert progress_line(ToolEnd(call_id="a", output="x")) is None
     assert progress_line(RunDone()) is None
+
+
+def test_a_held_or_retrying_sub_agent_says_so_on_the_turn_not_as_a_stuck_card():
+    """docs/plan-friendly-errors.md P4: a sub-agent waiting out a 429 used to look
+    like a tool that hung. The hold reaches the PARENT turn's status line — the
+    same "rate limited, N s" a held turn of its own shows — while the work lines
+    still go under the card, and the run's failure goes back to the tool."""
+    from workspace_app.agent.delegation import Delegation
+    from workspace_app.api.agent_progress import make_relay
+    from workspace_app.api.events import ModelRetrying, RateLimited, RunError
+
+    lines: list[bytes] = []
+    status: list[object] = []
+    failures: list[object] = []
+    relay = make_relay(Delegation(lines.append, status=status.append, on_failure=failures.append))
+
+    failure = RunError(message="RateLimitError: slow", kind="rate_limited")
+    for ev in (
+        ToolStart(call_id="a", name="kb_search", args={"query": "voids"}),
+        RateLimited(seconds=5),
+        ModelRetrying(attempt=1, kind="timeout"),
+        MessageDelta(text="the answer"),
+        failure,
+    ):
+        relay(ev)
+
+    assert lines == ["🔎 kb_search: voids\n".encode()]
+    assert status == [RateLimited(seconds=5), ModelRetrying(attempt=1, kind="timeout")]
+    assert failures == [failure]
+
+
+def test_a_plain_sink_still_gets_its_lines_and_nothing_else():
+    """Not every caller hands down a Delegation (an operator-side run, a test):
+    a plain output sink keeps working exactly as before."""
+    from workspace_app.api.agent_progress import make_relay
+    from workspace_app.api.events import RateLimited, RunError
+
+    lines: list[bytes] = []
+    relay = make_relay(lines.append)
+    relay(RateLimited(seconds=5))
+    relay(RunError(message="x"))
+    relay(ToolStart(call_id="a", name="kb_search", args={}))
+    make_relay(None)(ToolStart(call_id="a", name="kb_search", args={}))
+
+    assert lines == ["🔎 kb_search\n".encode()]

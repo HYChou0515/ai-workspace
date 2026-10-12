@@ -1587,6 +1587,9 @@ class LitellmAgentRunner:
         # #613: the update_todos tool streams its freshly-written checklist here so
         # the FE's pinned panel updates live mid-turn.
         ctx.on_todos_updated = _todos_emitter(queue)
+        # P4 (docs/plan-friendly-errors.md): a delegated sub-agent's hold or retry
+        # is this turn waiting — it goes on this turn's stream like our own.
+        ctx.on_turn_status = queue.put_nowait
         resolve_credential = await self._credential_resolver(ctx)
         agent = _agent_for(
             ctx.agent_config,
@@ -1733,6 +1736,9 @@ class LitellmAgentRunner:
                             disp = ctx.tool_displays.get(mapped.output, "")
                             if disp:
                                 mapped = replace(mapped, display=disp)
+                            # P4: a delegated sub-agent's failure, for the card.
+                            if (failed := ctx.tool_failures.pop(mapped.call_id, None)) is not None:
+                                mapped = replace(mapped, failure=failed)
                         queue.put_nowait(mapped)
 
                 tail_content, tail_reasoning = splitter.flush()
@@ -1859,6 +1865,8 @@ class LitellmAgentRunner:
                     disp = ctx.tool_displays.get(mapped.output, "")
                     if disp:
                         mapped = replace(mapped, display=disp)
+                    if (failed := ctx.tool_failures.pop(mapped.call_id, None)) is not None:
+                        mapped = replace(mapped, failure=failed)
                 yield mapped
             elif isinstance(item, MessageOutputItem):
                 content, reasoning = splitter.feed(ItemHelpers.text_message_output(item))
