@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from dataclasses import asdict, dataclass, field
 from typing import Any, Literal, get_args
 
@@ -104,6 +105,12 @@ class Submitted:
     job_id: str
     created: bool
 
+    def __post_init__(self) -> None:
+        # None would read as the shell's own "cannot say"; a truthy string as
+        # "a new job". Only True or False says which.
+        if not isinstance(self.created, bool):
+            raise ContractError(f"Submitted.created={self.created!r}: must be True or False")
+
 
 @dataclass(frozen=True)
 class Idempotency:
@@ -125,8 +132,13 @@ class Idempotency:
 
     def __post_init__(self) -> None:
         seconds = self.window_seconds
-        if not isinstance(seconds, int | float) or isinstance(seconds, bool) or seconds <= 0:
-            raise ContractError(f"window_seconds={seconds!r}: must be a positive number of seconds")
+        is_number = isinstance(seconds, int | float) and not isinstance(seconds, bool)
+        # NaN compares false with everything, so as a window it would silently
+        # switch sameness off; infinity would make "tomorrow" never come.
+        if not is_number or not math.isfinite(seconds) or seconds <= 0:
+            raise ContractError(
+                f"window_seconds={seconds!r}: must be a positive, finite number of seconds"
+            )
 
     def identity(self, spec: dict[str, Any]) -> Any:
         """What two submits must share to be the same job. By default the

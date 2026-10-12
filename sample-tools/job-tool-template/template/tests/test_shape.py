@@ -11,6 +11,7 @@ Remove the CI step if you must; you own this repository. Do it on purpose.
 from __future__ import annotations
 
 import json
+from importlib.metadata import entry_points
 from pathlib import Path
 
 from jsonschema import Draft202012Validator
@@ -18,7 +19,8 @@ from jsonschema import Draft202012Validator
 from job_tool.cli import main
 from job_tool.discover import load_backend
 from job_tool.envfile import FILENAME, render
-from job_tool.shape import identity_problems
+from job_tool.discover import GROUP
+from job_tool.shape import identity_drift_across_processes, identity_problems
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -45,8 +47,11 @@ def test_the_tool_lists_its_commands_and_describes_each_one(capsys):
 
 def test_what_counts_as_the_same_job_is_steady():
     # D49: an overridden identity() that drifts would make every resubmit a new
-    # job; checked on the contract's example_spec, never on the service.
+    # job; checked on the contract's example_spec, never on the service — in
+    # this process, and across processes, since every tool call is a new one.
     assert identity_problems(load_backend().contract) == []
+    (registered,) = entry_points(group=GROUP)
+    assert identity_drift_across_processes(registered.value) == []
 
 
 def test_env_json_says_what_the_contract_says():

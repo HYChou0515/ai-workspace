@@ -14,7 +14,8 @@ Ask one question at a time until you can answer these in the user's words:
 how long it takes. That becomes `domain_description` and `spec_schema`.
 
 **When are two submits the same job?** Which spec fields decide it — within
-one item, for `idempotency.window_seconds` (a day unless they say otherwise).
+one item and under one credential (the backend only finds what its token
+sees), for `idempotency.window_seconds` (a day unless they say otherwise).
 This is `idempotency.fields`, and getting it wrong is either two jobs for one
 request or one job for two. If "the same" needs loosening (case, spaces, a
 nested field), override `identity(spec)` and give `example_spec`.

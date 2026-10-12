@@ -88,8 +88,10 @@ def test_sameness_lasts_a_day_unless_declared_otherwise():
     assert Idempotency(fields=("image",), window_seconds=600).window_seconds == 600
 
 
-@pytest.mark.parametrize("seconds", [0, -1, True, "1h"])
+@pytest.mark.parametrize("seconds", [0, -1, True, "1h", float("nan"), float("inf")])
 def test_a_window_that_is_not_a_positive_number_of_seconds_is_refused(seconds):
+    # NaN compares false with everything: as a window it silently turns
+    # sameness off — two identical submits, two jobs.
     with pytest.raises(ContractError, match="window_seconds"):
         Idempotency(fields=("image",), window_seconds=seconds)  # type: ignore[arg-type]
 
@@ -97,6 +99,14 @@ def test_a_window_that_is_not_a_positive_number_of_seconds_is_refused(seconds):
 def test_a_submit_says_whether_it_started_a_job():
     # D51: only the backend knows; the shell must not call an old job new.
     assert Submitted(job_id="j1", created=False).created is False
+
+
+@pytest.mark.parametrize("created", [None, "no", 1])
+def test_whether_a_submit_started_a_job_is_yes_or_no(created):
+    # None would read as the shell's own "cannot say"; "no" is truthy and
+    # would announce a new job. Only a bool says which.
+    with pytest.raises(ContractError, match="created"):
+        Submitted(job_id="j1", created=created)  # type: ignore[arg-type]
 
 
 def test_sameness_is_per_item_not_per_person():

@@ -575,7 +575,9 @@ async def _exec_tool(
 #: The item a third-party command runs for, set by the platform on every
 #: dispatch (docs/tool-authoring.md). A tool that keys its work by item — the job
 #: template's sameness (docs/plan-job-tool-template.md D44) — reads it here.
-#: Absent where no item is in play, and under the MCP runner.
+#: Absent where no item is in play, and from anything the platform does not
+#: dispatch (the agent's own `exec`, a workflow `run:` step); the MCP runner
+#: sets none, so there a tool sees whatever the engineer's shell holds.
 ITEM_ID_ENV = "WORKSPACE_ITEM_ID"
 
 

@@ -99,6 +99,38 @@ class Lingering(Minimal):
         return JobStatus(job_id=job_id, phase="running", state="queued")
 
 
+class _SetOrder(Idempotency):
+    """Sameness through a set: the same within one process, different in the
+    next — string hashing is randomised per process, and every tool call is a
+    new process."""
+
+    def identity(self, spec):
+        return list({spec["image"], spec["command"], "a", "b", "c", "d", "e", "f"})
+
+
+class _Lowercase(Idempotency):
+    def identity(self, spec):
+        return {"image": spec["image"].lower(), "command": spec["command"].strip()}
+
+
+class SteadyOverride(Minimal):
+    """An overridden sameness that is the same in every process."""
+
+    contract = Contract(
+        spec_schema=SPEC,
+        idempotency=_Lowercase(fields=("image", "command")),
+        example_spec={"image": "Trainer:3", "command": " train.py "},
+    )
+
+
+class HashDrift(Minimal):
+    contract = Contract(
+        spec_schema=SPEC,
+        idempotency=_SetOrder(fields=("image", "command")),
+        example_spec={"image": "trainer:3", "command": "train.py"},
+    )
+
+
 class Scripted(Minimal):
     """Answers with whatever the test put in `answers`, or raises it, after
     `delay` seconds. A real thread really waits: the budget is real too."""

@@ -1,6 +1,6 @@
 """The interface a backend implements.
 
-Five calls are required; four are optional. An optional call a backend does
+Four calls are required; four are optional. An optional call a backend does
 not override is a call it does not support, and the shell never offers it to
 the model — so the model cannot try something only to be told no.
 

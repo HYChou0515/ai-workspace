@@ -4,10 +4,12 @@ two cannot disagree."""
 
 from __future__ import annotations
 
+import pytest
 from backends import PATCH, SPEC, Minimal
 
 from job_contract import Contract, Idempotency
 from job_tool.describe import describe
+from job_tool.run import describe_window
 
 
 class Described(Minimal):
@@ -26,6 +28,27 @@ def test_submit_carries_the_authors_words_and_the_contracts_rules():
     assert "image, command" in text
     # Nothing calls back (D10).
     assert "ask" in text and "later" in text
+
+
+@pytest.mark.parametrize(
+    ("seconds", "said"),
+    [
+        (1, "1 second"),
+        (60, "1 minute"),
+        (3600.0, "1 hour"),
+        (86400, "24 hours"),
+        (0.5, "0.5 seconds"),
+    ],
+)
+def test_a_window_reads_as_a_person_would_say_it(seconds, said):
+    assert describe_window(seconds) == said
+
+
+def test_sameness_is_said_to_need_the_same_credential_too():
+    # A backend finds only the jobs its credential can see: two people in one
+    # item with their own tokens are two jobs, and the model must not be told
+    # otherwise.
+    assert "credential" in describe("submit", Described)
 
 
 def test_how_long_sameness_lasts_is_said_from_the_contract():

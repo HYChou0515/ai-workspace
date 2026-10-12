@@ -83,7 +83,7 @@ def describe_window(seconds: float) -> str:
         if seconds >= size and seconds % size == 0:
             count = int(seconds // size)
             return f"{count} {unit}{'s' if count != 1 else ''}"
-    return f"{seconds:g} seconds"
+    return f"{seconds:g} second{'' if seconds == 1 else 's'}"
 
 
 def this_item() -> str | None:
@@ -149,8 +149,8 @@ _SUBMITTED = (
     "Tell the user to ask again later, and call get with this job_id then."
 )
 _ALREADY = (
-    "This item already submitted the same work within the last {window}: this is that "
-    "job, not a new one, and it may have finished. Call get to see where it is."
+    "{who} already submitted the same work within the last {window}: this is that job, "
+    "not a new one, and it may have finished. Call get to see where it is."
 )
 _LANDED = (
     "The submit was slow to answer, but the job is there. It runs on its own; call get "
@@ -209,7 +209,9 @@ def _submit(backend: type[JobBackend], spec: dict[str, Any]) -> Outcome:
                 "first one is returned rather than started twice.",
             )
         # Whether this call started it, the lookup cannot say: neither claim it.
-        return Outcome(0, {"job_id": found.job_id, "created": None, "next": _LANDED})
+        return Outcome(
+            0, {"job_id": found.job_id, "created": None, "job": _job(found), "next": _LANDED}
+        )
     if not isinstance(result, Submitted):
         # Guessing "new" would be exactly the false sentence D51 exists to stop.
         raise TypeError(
@@ -218,7 +220,11 @@ def _submit(backend: type[JobBackend], spec: dict[str, Any]) -> Outcome:
     advice = (
         _SUBMITTED
         if result.created
-        else _ALREADY.format(window=describe_window(contract.idempotency.window_seconds))
+        else _ALREADY.format(
+            # D47: with no item there is no "this item" to speak of.
+            who="This item" if item_id is not None else "The same work was",
+            window=describe_window(contract.idempotency.window_seconds),
+        )
     )
     return Outcome(0, {"job_id": result.job_id, "created": result.created, "next": advice})
 

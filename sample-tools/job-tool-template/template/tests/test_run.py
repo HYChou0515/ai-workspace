@@ -162,6 +162,17 @@ def test_a_submit_that_found_the_job_already_there_says_so(capsys):
     assert "already" in answer["next"] and "not a new" in answer["next"]
 
 
+def test_with_no_item_the_job_already_there_is_not_called_this_items(capsys, monkeypatch):
+    # D47: under the MCP runner there is no item to speak of.
+    monkeypatch.delenv("WORKSPACE_ITEM_ID")
+    Scripted.answers["submit"] = Submitted("j1", created=False)
+
+    _, out, _ = _run(capsys, "submit", SPEC_IN)
+
+    advice = json.loads(out)["next"]
+    assert "already" in advice and "this item" not in advice.lower()
+
+
 def test_a_submit_that_started_a_job_says_it_is_new(capsys):
     Scripted.answers["submit"] = Submitted("j1", created=True)
 
@@ -210,6 +221,17 @@ def test_jobs_from_this_item_are_marked_and_the_rest_are_still_shown(capsys):
     assert marks == {"mine": True, "theirs": False, "unknown": False}
 
 
+def test_with_no_item_no_job_is_from_this_item(capsys, monkeypatch):
+    # D47: a job with no recorded item, read where there is no item, must not
+    # be marked as this item's — None equals None, and nothing else stops it.
+    monkeypatch.delenv("WORKSPACE_ITEM_ID")
+    Scripted.answers["get"] = JobStatus(job_id="j1", phase="running", state="q", item_id=None)
+
+    _, out, _ = _run(capsys, "get", {"job_id": "j1"})
+
+    assert json.loads(out)["job"]["from_this_item"] is False
+
+
 def test_get_says_whether_the_job_came_from_this_item(capsys):
     Scripted.answers["get"] = JobStatus(job_id="j1", phase="running", state="q", item_id=ITEM)
 
@@ -221,7 +243,9 @@ def test_get_says_whether_the_job_came_from_this_item(capsys):
 def test_a_slow_submit_that_landed_is_reported_as_submitted(capsys):
     Scripted.answers["submit"] = Submitted("j1", created=True)
     Scripted.delay["submit"] = 30.0  # budget is 0.2
-    Scripted.answers["find_by_key"] = JobStatus(job_id="j1", phase="running", state="queued")
+    Scripted.answers["find_by_key"] = JobStatus(
+        job_id="j1", phase="running", state="queued", item_id=ITEM
+    )
 
     code, out, _ = _run(capsys, "submit", SPEC_IN)
 
@@ -230,6 +254,8 @@ def test_a_slow_submit_that_landed_is_reported_as_submitted(capsys):
     answer = json.loads(out)
     assert code == 0
     assert answer["job_id"] == "j1"
+    # The job the lookup found, marked like every other job the model sees.
+    assert answer["job"]["from_this_item"] is True
 
 
 def test_a_slow_submit_that_did_not_land_may_be_sent_again(capsys):
