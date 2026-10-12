@@ -2219,17 +2219,92 @@ export const messages = {
   "dirtyClose.keep": { "zh-TW": "繼續編輯", en: "Keep editing" },
   "dirtyClose.discard": { "zh-TW": "放棄變更", en: "Discard changes" },
 
-  // A turn that died with the failover chain exhausted. TWO kinds, because they
-  // need different things from the reader: a rate limit clears on its own
-  // schedule or somebody raises it; genuinely busy models are a capacity
-  // question. The backend used to send one English sentence for both.
-  "turn.allBusy": {
-    "zh-TW": "目前每個可用的模型都在忙，這次回答沒有完成。請稍後再試一次。",
-    en: "All available models are busy right now, so this response wasn't completed. Please try again in a moment.",
+  // A failure, worded from the kind the backend names it by
+  // (docs/plan-friendly-errors.md D5; `lib/failure.ts`): what happened, then
+  // what the reader can do. The raw text goes under "technical details".
+  "failure.rate_limited.what": {
+    "zh-TW": "模型服務限制了請求頻率，這次回答沒有完成。",
+    en: "The model service is limiting how often we can ask, so this reply did not finish.",
   },
-  "turn.rateLimited": {
-    "zh-TW": "模型服務正在限制我們的請求頻率，這次回答沒有完成。這不是模型忙 —— 要等限制解除，或把額度調高。",
-    en: "The model endpoint is rate-limiting us, so this response wasn't completed. This is not a busy model: the limit has to clear, or be raised.",
+  "failure.rate_limited.waited": {
+    "zh-TW": "模型服務限制了請求頻率，已自動等了約 {waited_s} 秒仍未解除。",
+    en: "The model service is limiting how often we can ask; we waited about {waited_s} seconds and it has not cleared.",
+  },
+  "failure.rate_limited.do": {
+    "zh-TW": "過幾分鐘再送一次；常發生的話請管理員提高額度或加備援模型。",
+    en: "Send it again in a few minutes. If this keeps happening, ask an administrator to raise the quota or add a fallback model.",
+  },
+  "failure.all_busy.what": {
+    "zh-TW": "所有可用的模型都在忙。",
+    en: "Every available model is busy.",
+  },
+  "failure.all_busy.do": { "zh-TW": "稍後再送一次。", en: "Send it again in a moment." },
+  "failure.auth.what": {
+    "zh-TW": "模型服務不接受目前的憑證。",
+    en: "The model service did not accept the current credentials.",
+  },
+  "failure.auth.do": {
+    "zh-TW": "請管理員檢查模型的 API key 或帳號設定。",
+    en: "Ask an administrator to check the model's API key or account settings.",
+  },
+  "failure.timeout.what": { "zh-TW": "模型太久沒有回應。", en: "The model took too long to respond." },
+  "failure.timeout.tried": {
+    "zh-TW": "模型太久沒有回應，已重試 {attempts} 次。",
+    en: "The model took too long to respond, after {attempts} tries.",
+  },
+  "failure.timeout.do": {
+    "zh-TW": "稍後再試，或換一個較快的模型。",
+    en: "Try again later, or switch to a faster model.",
+  },
+  "failure.connection.what": { "zh-TW": "連不上模型服務。", en: "Could not reach the model service." },
+  "failure.connection.do": {
+    "zh-TW": "可能是網路暫時中斷，稍後再試；持續發生請聯絡管理員。",
+    en: "The network may have dropped for a moment — try again later. If it persists, contact an administrator.",
+  },
+  "failure.provider_error.what": {
+    "zh-TW": "模型服務本身出錯。",
+    en: "The model service itself failed.",
+  },
+  "failure.provider_error.do": {
+    "zh-TW": "稍後再試；持續發生請聯絡管理員。",
+    en: "Try again later. If it persists, contact an administrator.",
+  },
+  "failure.context_overflow.what": {
+    "zh-TW": "內容超過模型一次能讀的範圍。",
+    en: "This is more than the model can read at once.",
+  },
+  "failure.context_overflow.do": {
+    "zh-TW": "把訊息拆小，或開一個新對話。",
+    en: "Split the message up, or start a new conversation.",
+  },
+  "failure.bad_request.what": {
+    "zh-TW": "模型服務不接受這次的請求，通常是設定或模型不支援某功能。",
+    en: "The model service rejected this request — usually a setting, or a feature the model does not support.",
+  },
+  "failure.bad_request.do": {
+    "zh-TW": "把技術細節複製給管理員。",
+    en: "Copy the technical details to an administrator.",
+  },
+  "failure.unknown.what": { "zh-TW": "發生了預期外的錯誤。", en: "Something unexpected went wrong." },
+  "failure.unknown.do": {
+    "zh-TW": "把技術細節複製給管理員。",
+    en: "Copy the technical details to an administrator.",
+  },
+  "failure.details": { "zh-TW": "技術細節", en: "Technical details" },
+  "failure.stopFailed": {
+    "zh-TW": "停止失敗，這一輪可能仍在進行。",
+    en: "Stop did not go through — this turn may still be running.",
+  },
+  "failure.streamDropped": {
+    "zh-TW": "與伺服器的連線中斷，正在重新連線…",
+    en: "Lost the connection to the server — reconnecting…",
+  },
+  "failure.copy": { "zh-TW": "複製", en: "Copy" },
+  "failure.copied": { "zh-TW": "已複製", en: "Copied" },
+  // D9: a model call being re-sent — a status line, never a failure.
+  "turn.retrying": {
+    "zh-TW": "連線不穩，正在重試（第 {attempt} 次）…",
+    en: "Connection unstable — retrying (attempt {attempt})…",
   },
 
   // The skill hub (docs/plan-skill-hub.md). "Skill hub" is the proper noun

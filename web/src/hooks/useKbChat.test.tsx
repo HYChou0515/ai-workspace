@@ -275,13 +275,13 @@ describe("useKbChat — a turn that FAILS still says why", () => {
       useKbChat({ collectionIds: ["c1"], chatId: "kb-boom", client }),
     );
 
-    await waitFor(() => expect(result.current.log.error).toContain("model exploded"));
+    await waitFor(() => expect(result.current.log.error?.raw).toContain("model exploded"));
     // …and it is still there once everything has settled, not just in the frame
     // between the two events.
     await act(async () => {
       await new Promise<void>((r) => setTimeout(r, 50));
     });
-    expect(result.current.log.error).toContain("model exploded");
+    expect(result.current.log.error?.raw).toContain("model exploded");
   });
 
   // The post-send safety net gates on "the turn ended". A failed, cancelled or
@@ -536,7 +536,7 @@ describe("useKbChat — send failure", () => {
       await result.current.send("q");
     });
 
-    expect(result.current.log.error).toContain("503");
+    expect(result.current.log.error?.raw).toContain("503");
     expect(result.current.log.streaming).toBe(false);
     // …and the question is taken back off the screen. Nothing was stored, so no
     // broadcast will ever adopt it — left drawn it would sit there with the

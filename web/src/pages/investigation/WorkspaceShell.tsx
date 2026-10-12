@@ -37,7 +37,8 @@ import { resolveUploadDir } from "./attach";
 import { presenceOf } from "./fileTree";
 import { useDialog } from "../../components/Dialog";
 import { useDirtyClose } from "../../hooks/useDirtyClose";
-import { useT } from "../../lib/i18n";
+import { failureLine } from "../../lib/failure";
+import { useLocale, useT } from "../../lib/i18n";
 import { FileServiceProvider, investigationFileService } from "../../api/fileService";
 import { WorkspaceSlugProvider, useWorkspaceSlug } from "../../hooks/useWorkspaceSlug";
 import { EditModeProvider, useEditMode } from "../../hooks/editMode";
@@ -3133,6 +3134,7 @@ function PanelBody({
   tab: "problems" | "output" | "terminal" | "agent_log" | "run_history";
 }) {
   const { log } = useAgent();
+  const [locale] = useLocale();
 
   if (tab === "problems") {
     const banners = log.entries.filter((e) => e.kind === "banner");
@@ -3144,7 +3146,10 @@ function PanelBody({
     }
     return (
       <>
-        {log.error && <LogLine ts="now" kind="warn" text={`stream error: ${log.error}`} />}
+        {log.error && (
+          // A developer's log: the headline AND the raw text, on one line.
+          <LogLine ts="now" kind="warn" text={`stream error: ${failureLine(log.error, locale)}`} />
+        )}
         {banners.map((b, i) =>
           b.kind === "banner" ? <LogLine key={`b-${i}`} ts="—" kind="warn" text={b.text} /> : null,
         )}

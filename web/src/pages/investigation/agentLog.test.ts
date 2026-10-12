@@ -314,7 +314,7 @@ describe("reduceAgent", () => {
 
   it("captures error message", () => {
     const log = fold([{ type: "error", message: "boom" }], { ...EMPTY_LOG, streaming: true });
-    expect(log.error).toBe("boom");
+    expect(log.error?.raw).toBe("boom");
   });
 
   it("attaches a parse-error hint to the running tool call", () => {
@@ -592,7 +592,9 @@ describe("logFromMessages — persisted error markers (#37)", () => {
     expect(log.entries).toHaveLength(3);
     const last = log.entries[2];
     if (last?.kind === "banner") {
-      expect(last.text).toContain("refused");
+      // Worded at render (docs/plan-friendly-errors.md); the provider's text is
+      // the technical detail the banner carries, not the banner's words.
+      expect(last.failure?.raw).toContain("refused");
     } else {
       throw new Error("expected a banner entry for the error message");
     }
@@ -903,7 +905,7 @@ describe("a new turn clears the previous turn's error (#721)", () => {
     } as AgentEvent);
 
   it("leaves the error up while nothing else has happened", () => {
-    expect(capped().error).toContain("30");
+    expect(capped().error?.headline).toContain("30");
   });
 
   it("clears it when the next turn opens", () => {
@@ -927,7 +929,12 @@ describe("a new turn clears the previous turn's error (#721)", () => {
     const rehydrated = reconcileSnapshot(continued, {
       messages: [
         { role: "user", content: "go" },
-        { role: "error", content: "The agent stopped after reaching its step limit (30)." },
+        {
+          role: "error",
+          content: "The agent stopped after reaching its step limit (30).",
+          // What `turns._error_message` stamps on every step-limit ending.
+          error_kind: "max_turns",
+        },
         { role: "user", content: "[goal] keep going" },
         { role: "assistant", content: "carrying on" },
       ] as Message[],
@@ -1104,7 +1111,7 @@ describe("a turn that recovers stops reporting the attempt that failed", () => {
     } as AgentEvent);
 
   it("keeps the notice while the turn is still unresolved", () => {
-    expect(retried().error).toContain("retry");
+    expect(retried().error?.raw).toContain("retry");
   });
 
   it("drops it once the turn goes on producing", () => {
@@ -1129,7 +1136,7 @@ describe("a turn that recovers stops reporting the attempt that failed", () => {
     } as AgentEvent);
     const closed = reduceAgent(failed, { type: "done" } as AgentEvent);
 
-    expect(closed.error).toBe("giving up after 3 attempts: APIConnectionError: refused");
+    expect(closed.error?.raw).toBe("giving up after 3 attempts: APIConnectionError: refused");
   });
 
   it("does not clear a message the STREAM never set", () => {
@@ -1139,14 +1146,17 @@ describe("a turn that recovers stops reporting the attempt that failed", () => {
     // that failed. Only the first belongs to a turn. On a shared item another
     // participant's turn is streaming deltas at any moment, so "output arrived"
     // must not be read as "your quota refusal stopped being true".
-    const refused = { ...EMPTY_LOG, error: "workspace is full — free some space" };
+    const refused: AgentLog = {
+      ...EMPTY_LOG,
+      error: { kind: "quota", headline: "workspace is full — free some space", raw: "" },
+    };
 
     const other = reduceAgent(refused, {
       type: "message_delta",
       text: "someone else's turn, producing away",
     } as AgentEvent);
 
-    expect(other.error).toBe("workspace is full — free some space");
+    expect(other.error?.headline).toBe("workspace is full — free some space");
   });
 
   it("keeps a failure that produced partial output before dying", () => {
@@ -1156,7 +1166,7 @@ describe("a turn that recovers stops reporting the attempt that failed", () => {
     log = reduceAgent(log, { type: "error", message: "APIConnectionError: refused" });
     log = reduceAgent(log, { type: "done" } as AgentEvent);
 
-    expect(log.error).toBe("APIConnectionError: refused");
+    expect(log.error?.raw).toBe("APIConnectionError: refused");
   });
 });
 
@@ -1612,5 +1622,104 @@ describe("a broadcast answer says which call it answers", () => {
 
     const [entry] = next.entries;
     expect(entry?.kind === "message" && "answers" in entry.message).toBe(false);
+  });
+});
+
+describe("a failure is carried as what it IS, not as a sentence (docs/plan-friendly-errors.md)", () => {
+  it("keeps the kind, the numbers and the raw text of a live failure", () => {
+    const log = fold(
+      [
+        {
+          type: "error",
+          message: "RateLimitError: litellm.RateLimitError: slow down",
+          kind: "rate_limited",
+          params: { waited_s: 120 },
+        },
+      ],
+      { ...EMPTY_LOG, streaming: true },
+    );
+
+    expect(log.error).toEqual({
+      kind: "rate_limited",
+      params: { waited_s: 120 },
+      raw: "RateLimitError: litellm.RateLimitError: slow down",
+    });
+  });
+
+  it("reads a failure with no kind as unknown", () => {
+    const log = fold([{ type: "error", message: "boom" }], { ...EMPTY_LOG, streaming: true });
+    expect(log.error).toEqual({ kind: "unknown", params: null, raw: "boom" });
+  });
+
+  it("turns a persisted failure into a banner that carries it — worded, with the raw kept", () => {
+    const log = logFromMessages([
+      { role: "user", content: "q" },
+      {
+        role: "error",
+        content: "RateLimitError: slow down",
+        error_kind: "rate_limited",
+        error_params: { waited_s: 60 },
+        created_at: 5,
+      },
+    ] as Message[]);
+
+    expect(log.entries[1]).toEqual({
+      kind: "banner",
+      at: 5,
+      text: "模型服務限制了請求頻率，已自動等了約 60 秒仍未解除。",
+      failure: { kind: "rate_limited", params: { waited_s: 60 }, raw: "RateLimitError: slow down" },
+    });
+  });
+
+  it("words an old row's `error` as unknown — its text is the technical detail, not the message", () => {
+    const log = logFromMessages([
+      { role: "error", content: "giving up after 3 attempts: Boom", error_kind: "error" },
+    ] as Message[]);
+
+    expect(log.entries[0]).toMatchObject({
+      kind: "banner",
+      text: "發生了預期外的錯誤。",
+      failure: { kind: "error", raw: "giving up after 3 attempts: Boom" },
+    });
+  });
+
+  it("keeps a cancellation a plain banner — there is nothing technical to show", () => {
+    const log = logFromMessages([
+      { role: "error", content: "The previous response was interrupted.", error_kind: "cancelled" },
+    ] as Message[]);
+
+    expect(log.entries[0]).toEqual({ kind: "banner", text: "已取消。", at: undefined });
+  });
+
+  it("shows a re-sent model call as a passing status, gone once output resumes", () => {
+    const retrying = fold([{ type: "model_retrying", attempt: 2, kind: "timeout" }], {
+      ...EMPTY_LOG,
+      streaming: true,
+    });
+    expect(retrying.retrying).toEqual({ attempt: 2 });
+    expect(retrying.error).toBeNull();
+
+    const resumed = reduceAgent(retrying, { type: "message_delta", text: "ok" });
+    expect(resumed.retrying).toBeNull();
+  });
+
+  it("withdraws what the re-sent call had shown, and only that", () => {
+    const log = fold([
+      { type: "message_delta", text: "Before the tool. " },
+      { type: "tool_start", call_id: "c1", name: "look", args: {} },
+      { type: "tool_end", call_id: "c1", output: "seen" },
+      { type: "message_delta", text: "half an ans" },
+      { type: "message_delta", text: "Half a thought", reasoning: true },
+      { type: "output_retracted", text_chars: 11, reasoning_chars: 14 },
+      { type: "message_delta", text: "The whole answer." },
+    ] as AgentEvent[]);
+
+    const answers = log.entries.flatMap((e) =>
+      e.kind === "message" && e.message.role === "assistant" ? [e.message] : [],
+    );
+    expect(answers.map((m) => [m.content, m.reasoning ?? null])).toEqual([
+      ["Before the tool. ", null],
+      ["The whole answer.", null],
+    ]);
   });
 });

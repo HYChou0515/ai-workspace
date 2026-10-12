@@ -46,6 +46,7 @@ import { modCombo } from "../../lib/platform";
 import { nameForPreset, pickerModels, presetForName } from "./agentPicker";
 import { useStickToBottom } from "../../hooks/useStickToBottom";
 import { ConnectionNotice } from "../../components/ConnectionNotice";
+import { ErrorNotice } from "../../components/ErrorNotice";
 import { QuotaHoldingList } from "../../components/QuotaHoldingList";
 import { ResourceLinkText } from "../../components/ResourceLinkText";
 import { myResourcesApi } from "../../api/myResources";
@@ -896,21 +897,11 @@ export function AgentPanel({
         <ConnectionNotice connection={connection} />
         <TurnStatus log={log} onRetry={othersTurn ? undefined : retryTurn} alive={turnAlive} />
         {log.error && (
-          <div
-            style={{
-              padding: 8,
-              border: "1px solid var(--err)",
-              borderRadius: "var(--radius-card)",
-              color: "var(--err)",
-              fontFamily: "var(--font-mono)",
-              fontSize: pxToRem(12),
-            }}
-          >
-            {/* #692: when the refusal names /my-resources, that name is the way
-                there — a message that only TELLS you where to go leaves the
-                #688 "refuse outright" trade-off resting on a page you have to
-                go and find. */}
-            <ResourceLinkText text={log.error} />
+          // docs/plan-friendly-errors.md D1: what happened, what to do, and the
+          // raw text collapsed beneath. #692: a refusal that names /my-resources
+          // links there — `ErrorNotice` renders its headline through the same
+          // link-aware text this box always used.
+          <ErrorNotice failure={log.error} live>
             {/* #P5: naming /my-resources tells someone where to go; this lets
                 them act without going. The list is empty for every refusal that
                 is not about environments, and for a collaborator the backend
@@ -925,7 +916,7 @@ export function AgentPanel({
                   .finally(() => setClosingItemId(null));
               }}
             />
-          </div>
+          </ErrorNotice>
         )}
         </div>
       </div>

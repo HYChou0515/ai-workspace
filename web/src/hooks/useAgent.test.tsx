@@ -193,7 +193,7 @@ describe("useAgent — stop / cancel (#49)", () => {
       await result.current.send("q");
     });
     expect(result.current.log.streaming).toBe(false);
-    expect(result.current.log.error).toContain("400");
+    expect(result.current.log.error?.raw).toContain("400");
   });
 
   it("undo removes turns server-side then re-snapshots the thread (#38)", async () => {

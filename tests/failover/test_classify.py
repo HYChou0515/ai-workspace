@@ -86,3 +86,19 @@ def test_an_exhausted_chain_that_was_rate_limited_says_rate_limited() -> None:
             raise AllProvidersFailed("all cooling") from e
     except AllProvidersFailed as exc:
         assert classify_error(exc) == "rate_limited"
+
+
+def test_every_kind_has_copy_in_both_languages() -> None:
+    """D5: the FE words a failure from its kind; a kind with no copy reads as
+    "something unexpected went wrong" — true, and useless. The backend's set is
+    the oracle, so a kind added here without copy fails HERE, not in front of a
+    user."""
+    import re
+    from pathlib import Path
+
+    catalog = (Path(__file__).parents[2] / "web/src/lib/i18n.tsx").read_text(encoding="utf-8")
+    for kind in sorted(ERROR_KINDS):
+        for part in ("what", "do"):
+            m = re.search(rf'"failure\.{kind}\.{part}": \{{(.*?)\}},', catalog, re.S)
+            assert m, f"no copy for failure.{kind}.{part}"
+            assert '"zh-TW":' in m.group(1) and "en:" in m.group(1), f"failure.{kind}.{part}"

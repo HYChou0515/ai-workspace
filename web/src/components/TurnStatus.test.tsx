@@ -167,6 +167,14 @@ describe("TurnStatus", () => {
     expect(screen.getByText(/請求過於頻繁/)).toHaveTextContent("30");
   });
 
+  it("says a model call is being re-sent, and which attempt (docs/plan-friendly-errors.md D9)", () => {
+    // A recovered retry is not a failure, so it is a passing line here — never
+    // the red box, and never in the transcript.
+    const log = fold([{ type: "model_retrying", attempt: 2, kind: "timeout" }]);
+    render(<TurnStatus log={{ ...log, streaming: true }} />);
+    expect(screen.getByTestId("turn-retrying")).toHaveTextContent("連線不穩，正在重試（第 2 次）…");
+  });
+
   it("shows one elapsed figure while thinking, not two that disagree", () => {
     // The shared line already prints this component's own FE-anchored clock.
     // Appending formatMetrics whole added the BACKEND's elapsed beside it — and

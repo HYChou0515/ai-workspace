@@ -4,6 +4,8 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 import { kbApi, type KbApi, type KbImageInput } from "../api/kb";
 import { qk } from "../api/queryKeys";
 import { eventId, eventSeq, isTerminal } from "../events";
+import { type Failure, failureFromError } from "../lib/failure";
+import { initialLocale, translate } from "../lib/i18n";
 import { getKbAgentName } from "../lib/kbAgent";
 import {
   getStored as getKbEnhancementSelection,
@@ -167,7 +169,7 @@ export function useKbChat({
         let firstConnect = true;
         // The last "the stream dropped" message this loop put on screen, so a
         // successful reconnect can retract exactly it and nothing else.
-        let dropNotice: string | null = null;
+        let dropNotice: Failure | null = null;
         let maxSeq: number | undefined;
         const seen = new Set<string>();
         while (!controller.signal.aborted) {
@@ -228,12 +230,17 @@ export function useKbChat({
             }
           } catch (err: unknown) {
             if (controller.signal.aborted) return;
-            const msg = err instanceof Error ? err.message : String(err);
             // Say so rather than going quiet: a stream that dropped looks
             // exactly like a chat where nothing is happening, and the answer
-            // simply stops growing.
-            dropNotice = msg;
-            setLog((prev) => ({ ...prev, error: msg }));
+            // simply stops growing. Our OWN stream, not the model's — the
+            // model-side `connection` copy would send the reader the wrong way.
+            const notice = failureFromError(
+              err,
+              "stream_dropped",
+              translate(initialLocale(), "failure.streamDropped"),
+            );
+            dropNotice = notice;
+            setLog((prev) => ({ ...prev, error: notice }));
           }
           if (controller.signal.aborted) return;
           await new Promise<void>((resolve) => setTimeout(resolve, backoff));
@@ -403,7 +410,7 @@ export function useKbChat({
           // route to the same snapshot, so this is not the last chance.
         }
       } catch (err: unknown) {
-        const msg = err instanceof Error ? err.message : String(err);
+        const failure = failureFromError(err);
         // Take the drawn question back: the send was refused, so no broadcast
         // will ever adopt that entry and no turn is coming for it. Left drawn it
         // would sit there with the error beside it saying it was never sent.
@@ -419,7 +426,7 @@ export function useKbChat({
           // local model, and a failure inside that window would read as nothing
           // running at all.
           streaming: wasStreaming,
-          error: msg,
+          error: failure,
           entries: retractOwnAsk(prev, { author: currentUser, content: trimmed }).entries,
         }));
       } finally {

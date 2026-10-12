@@ -28,6 +28,7 @@ import { parseOutsideLookup } from "../renderers/outsideLookup";
 import { useStickToBottom } from "../hooks/useStickToBottom";
 import { useT, type MsgKey } from "../lib/i18n";
 import { AskUserCard, type AskUserAnswer } from "./AskUserCard";
+import { ErrorNotice } from "./ErrorNotice";
 import { ShownFiles } from "./ShownFiles";
 import { MarkingChips } from "./MarkingChips";
 import { ShownLayoutCard } from "./ShownLayoutCard";
@@ -284,6 +285,10 @@ export function EntryView({
   currentUser?: string;
 }) {
   if (entry.kind === "banner") {
+    // A failure says what happened, what to do, and keeps the raw text
+    // collapsed beneath (docs/plan-friendly-errors.md D8). Other banners — a
+    // cancellation, a step limit — are already a sentence.
+    if (entry.failure) return <ErrorNotice failure={entry.failure} />;
     return (
       <div
         style={{

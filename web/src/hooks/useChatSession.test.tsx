@@ -309,8 +309,10 @@ describe("useChatSession", () => {
       await result.current.send("q");
     });
     expect(result.current.log.streaming).toBe(false);
-    expect(result.current.log.error).toContain("沒有送出");
-    expect(result.current.log.error).not.toContain("500");
+    // The headline says what happened; the status line is the technical
+    // detail kept beneath it (docs/plan-friendly-errors.md D1), not the message.
+    expect(result.current.log.error?.headline).toContain("沒有送出");
+    expect(result.current.log.error?.headline).not.toContain("500");
   });
 
   it("cancel tells the transport and unlocks the composer immediately", async () => {
