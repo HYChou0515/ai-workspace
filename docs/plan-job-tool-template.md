@@ -42,7 +42,7 @@ Source of each: **user** = chosen by the user in the 2026-10-11/12 grill;
 | D4 | Tests check **shape only** — no backend, no mocks | user |
 | D5 | `update(job_id, patch)`'s content is the author's (`patch_schema`); suspend/priority/… are impl details. `cancel` is optional | user |
 | D6 | Values defined **once** live on the impl's `Contract`: `spec_schema`, `idempotency`, `budget`, `patch_schema`. No deployment override of the budget | user |
-| D7 | Required `caller_id()`: identity is whoever the backend recognises from the credential | user |
+| D7 | ~~Required `caller_id()`: identity is whoever the backend recognises from the credential~~ — **overturned by D41** (the item, not the person) | user |
 | D8 | What the model reads: the **behaviour** half is generated from the `Contract`; the author writes only the **domain** half | user |
 | D9 | Lives in a folder of this repo, `sample-tools/job-tool-template/` (a separate repo was chosen first, then dropped for simplicity); still imports nothing from ai-workspace | user |
 | D10 | No completion notification; the generated description tells the model to have the user come back and ask | user |
@@ -142,6 +142,64 @@ demo; neither calls a real service.
 - **A shared credential is a shared identity** (D7): a token in the item layer
   makes every participant the same caller — they see each other's jobs and an
   identical spec dedupes across people. Documented for authors, not prevented.
+  (D41–D44 replace the per-person scope this note describes.)
+
+## Second pass: the item, not the person (2026-10-12)
+
+The user's questions after P1–P8 ("same key from two people?", "who may see
+it?") showed the per-person scope (D7, `per_user`) was the wrong unit. A job's
+outputs land in one item's workspace and the people who may touch that
+workspace are decided by the item's permission — so sameness is per item.
+
+### Decisions
+
+| # | Decision | Source |
+|---|---|---|
+| D41 | Sameness is per **item**: the key is derived from the item id plus the declared fields. `caller_id()` and `Idempotency.per_user` are removed | user ("用 user 來作為區分是錯的，應該用 item id") |
+| D42 | `get` / `list` show whatever the backend shows for the credential — never filtered to the item. Each job in an answer is marked as submitted from this item or not | user ("get list 應該還是能讓 ai 看其他…看不到 user 會困惑") |
+| D43 | Who may read or change jobs is the credential's business. Where the token lives decides who shares it: the item's layer = everyone who can open the item; a person's Private layer = that person | user (follows the item's permission, via the platform's existing env layers) |
+| D44 | The platform passes the item id to a third-party tool as an environment variable, `WORKSPACE_ITEM_ID`, documented in `tool-authoring.md` as part of the published contract | user (confirmed the plan) |
+| D45 | The platform's check on a third-party command stays as it is — "may this item run this tool" — with no per-command read/write split: the platform cannot know which a command is, and an author's label would be a claim it cannot verify | user ("現在第三方檢查的權限是能不能執行…這樣就夠了不用改") |
+| D46 | The platform certificate, `authors`, and "add a command rather than change one" are the tool author's, covered by `tool-authoring.md`; the template neither fills nor restates them | user ("沒做到的就是不該做到") |
+| D47 | No `WORKSPACE_ITEM_ID` (the MCP runner on an engineer's machine has none): the key is derived from the fields alone, and no job is marked as from this item. Not refused — the tool must work on both paths (`tool-authoring.md` §5b) | mine |
+| D48 | The item id reaches the backend: `submit(spec, key, item_id)`, and `JobStatus` gains `item_id: str \| None` (the item it was submitted from, as the backend recorded it) so the shell can mark "from this item" | mine |
+
+The item id is a label, not a boundary: the agent shares the sandbox and can
+run the tool itself with another value. It reaches only jobs under the same
+credential, which is why D43 puts the boundary on the credential. Items that
+must be isolated from each other use different tokens.
+
+### Still open (not decided — asked one at a time)
+
+- **A hook for "what counts as the same"** — `Idempotency.identity(spec)` the
+  author may override (case, whitespace, nested fields), the hash and the item
+  scope staying in the template. Proposed; not yet confirmed.
+- **How long "the same" lasts** — today forever: the same spec a month later
+  returns the month-old job. Alternatives: only while the job is running, or
+  within a window.
+
+### Phases
+
+Each `/tdd`, one commit; the review lenses and CI after, as for P1–P8.
+
+- **P9 — the platform passes the item id.** Every path that dispatches a
+  third-party command sets `WORKSPACE_ITEM_ID`: list the entrances first (chat
+  turn, workflow `run:`/agent node, WUI tool call, scheduled turn, sub-agent) —
+  `AgentToolContext.investigation_id` carries it, but the WUI and workflow
+  contexts are built differently, so each gets a test through its real entry.
+  `tool-authoring.md` documents the variable and that it is absent under the
+  MCP runner. Whether it needs a `docs/migrations.md` entry: none if no operator
+  action is needed (a new variable a tool may read) — the review decides.
+- **P10 — the contract.** Remove `caller_id` and `per_user`;
+  `Idempotency.key(spec, *, item_id: str | None)`; `submit(spec, key, item_id)`;
+  `JobStatus.item_id`.
+- **P11 — the shell.** Read `WORKSPACE_ITEM_ID` (D47 when absent); pass it to
+  `submit`; mark each job in `get` / `list` / `find_by_key` answers with
+  `from_this_item`; the generated description says sameness is per item.
+- **P12 — the demo backend.** Store the item id; list/get over the
+  credential's jobs (`DEMO_JOBS_USER` stays the credential stand-in).
+- **P13 — the README, the author brief and the plan's interface sketch**
+  rewritten for D41–D48.
 
 ## The interface (target shape)
 
