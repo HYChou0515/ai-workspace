@@ -1,5 +1,6 @@
 """#242 — the per-turn system note that tells the agent who it is replying to,
-and how it composes with retry feedback into the system prompt."""
+and how it reaches the system prompt. (Retry feedback no longer joins it: a
+failed model call is re-sent as itself, docs/plan-friendly-errors.md D2.)"""
 
 from workspace_app.agent.context import AgentToolContext
 from workspace_app.api.litellm_runner import _agent_for, _turn_instructions
@@ -9,32 +10,19 @@ from workspace_app.users import User
 _ALICE = User(id="u1", name="Alice Chen", section="Reflow", email="alice.chen@acme.test")
 
 
-def test_turn_instructions_merges_speaker_note_then_feedback():
-    out = _turn_instructions(
-        AgentToolContext(speaker=_ALICE), "retry: send ONE tool_call per response"
-    )
-    assert out is not None
-    assert "replying to Alice Chen (alice.chen) from Reflow." in out
-    assert out.endswith("retry: send ONE tool_call per response")
-
-
-def test_turn_instructions_speaker_only_when_no_feedback():
-    out = _turn_instructions(AgentToolContext(speaker=_ALICE), None)
+def test_turn_instructions_carry_the_speaker_note():
+    out = _turn_instructions(AgentToolContext(speaker=_ALICE))
     assert out is not None
     assert "Alice Chen (alice.chen)" in out
 
 
-def test_turn_instructions_feedback_only_without_a_speaker():
-    assert _turn_instructions(AgentToolContext(), "retry hint") == "retry hint"
-
-
 def test_turn_instructions_none_when_nothing_to_add():
-    assert _turn_instructions(AgentToolContext(), None) is None
+    assert _turn_instructions(AgentToolContext()) is None
 
 
 def test_turn_instructions_includes_the_entity_schema_note():
     out = _turn_instructions(
-        AgentToolContext(entity_schema_note="## This workspace's record types"), None
+        AgentToolContext(entity_schema_note="## This workspace's record types")
     )
     assert out is not None
     assert "This workspace's record types" in out
@@ -44,8 +32,7 @@ def test_entity_schema_note_reaches_the_agent_system_prompt():
     note = _turn_instructions(
         AgentToolContext(
             entity_schema_note="- **issue** (issues/N.md): status (one of: open, done)"
-        ),
-        None,
+        )
     )
     agent = _agent_for(
         AgentConfig(name="a", model="m", system_prompt="BASE PROMPT"),
@@ -57,7 +44,7 @@ def test_entity_schema_note_reaches_the_agent_system_prompt():
 
 
 def test_speaker_note_reaches_the_agent_system_prompt():
-    note = _turn_instructions(AgentToolContext(speaker=_ALICE), None)
+    note = _turn_instructions(AgentToolContext(speaker=_ALICE))
     agent = _agent_for(
         AgentConfig(name="a", model="m", system_prompt="BASE PROMPT"),
         extra_instructions=note,

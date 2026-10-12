@@ -95,7 +95,7 @@ def _ctx_with(tools: list[str], defs=(_DIGGER,)) -> AgentToolContext:
 
 
 def test_the_delegation_note_reaches_the_system_prompt():
-    note = _turn_instructions(_ctx_with(["read_file", "run_agent"]), None) or ""
+    note = _turn_instructions(_ctx_with(["read_file", "run_agent"])) or ""
     assert "log-digger" in note
 
 
@@ -104,7 +104,7 @@ def test_the_note_is_withheld_when_the_turn_has_no_tool_to_act_on_it():
     for a tool that was never built spends the model's next step on a call that
     cannot resolve. Reachable today — an App that lists neither `run_agent` nor
     `save_subagent` still loads `.agent/` files a user drops in the workspace."""
-    note = _turn_instructions(_ctx_with(["read_file"]), None) or ""
+    note = _turn_instructions(_ctx_with(["read_file"])) or ""
     assert "log-digger" not in note
     assert "run_agent" not in note
 

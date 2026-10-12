@@ -36,7 +36,7 @@ from fastapi.responses import StreamingResponse
 
 from ..agent.context import AgentToolContext
 from ..context_budget import SUMMARY_ROLE, estimate_messages
-from ..failover.classify import classify_error, raw_error_text
+from ..failover.classify import classify_error, error_params, raw_error_text
 from ..resources.conversation import MessageMetrics
 from ..turn_control import InMemoryTurnControl, ITurnControl
 from ..users.labels import speaker_label
@@ -47,6 +47,7 @@ from .events import (
     AgentMetrics,
     MaxTurnsExceeded,
     MessageDelta,
+    OutputRetracted,
     Presence,
     RepetitionStopped,
     RunCancelled,
@@ -328,7 +329,7 @@ def _terminal_error(exc: BaseException) -> RunError:
     chain for technical details (D1). An exhausted failover chain is told apart
     by its cause — `failover/model.py` raises `AllProvidersFailed ... from` the
     429 on purpose, and a limit is not a busy model."""
-    return RunError(message=raw_error_text(exc), kind=classify_error(exc))
+    return RunError(message=raw_error_text(exc), kind=classify_error(exc), params=error_params(exc))
 
 
 def _error_message(item: RunError | RunCancelled | MaxTurnsExceeded) -> TurnMessage:
@@ -379,6 +380,18 @@ class _TurnReducer:
     def add(self, item: AgentEvent) -> None:
         if isinstance(item, MessageDelta):
             self._add_assistant(item.text, item.reasoning)
+        elif isinstance(item, OutputRetracted):
+            # docs/plan-friendly-errors.md D3: the call that streamed these
+            # characters failed and is being re-sent — withdraw them. A call
+            # streams into ONE assistant message (a tool call ends it), so they
+            # are all on the last one.
+            last = self.produced[-1] if self.produced else None
+            if last is not None and last.role == "assistant":
+                if item.text_chars:
+                    last.content = last.content[: max(0, len(last.content) - item.text_chars)]
+                if item.reasoning_chars and last.reasoning:
+                    kept = len(last.reasoning) - item.reasoning_chars
+                    last.reasoning = last.reasoning[: max(0, kept)] or None
         elif isinstance(item, ToolStart):
             # call_id → its ToolStart, so the persisted tool message keeps the
             # tool's name + args (ToolEnd alone carries only the output).

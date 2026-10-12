@@ -229,10 +229,11 @@ async def test_forget_on_an_unknown_key_is_a_noop():
     await ChatTurnEngine(_Runner()).forget("never-touched")  # ty: ignore[invalid-argument-type]
 
 
-async def test_all_providers_failed_surfaces_a_readable_busy_message():
+async def test_all_providers_failed_is_named_busy():
     """When the runner exhausts the whole failover chain (every model busy →
-    AllProvidersFailed), the turn persists a human-readable "models are busy"
-    message instead of the raw exception class name (#196-followup)."""
+    AllProvidersFailed), the turn persists the `all_busy` kind the FE words as
+    "every model is busy" (#196-followup; docs/plan-friendly-errors.md D5) —
+    with the raw text kept as the content, for technical details."""
     from workspace_app.failover.core import AllProvidersFailed
 
     class _Runner:
@@ -254,13 +255,13 @@ async def test_all_providers_failed_surfaces_a_readable_busy_message():
 
     errs = [m for m in captured if m.role == "error"]
     assert errs, "a terminal error message should be persisted"
-    assert "busy" in errs[-1].content.lower()
-    assert "AllProvidersFailed" not in errs[-1].content  # the raw class is hidden
+    assert errs[-1].error_kind == "all_busy"
+    assert "AllProvidersFailed" in errs[-1].content  # the raw text is the technical detail
 
 
 async def test_busy_failure_is_detected_even_when_wrapped_by_the_runner():
     """The SDK may re-raise the failover exhaustion wrapped in another error; the
-    readable busy message is still produced by walking the cause chain."""
+    busy kind is still read by walking the cause chain."""
     from workspace_app.failover.core import AllProvidersFailed
 
     class _Runner:
@@ -284,7 +285,7 @@ async def test_busy_failure_is_detected_even_when_wrapped_by_the_runner():
     await engine.forget("inv")
 
     errs = [m for m in captured if m.role == "error"]
-    assert errs and "busy" in errs[-1].content.lower()
+    assert errs and errs[-1].error_kind == "all_busy"
 
 
 async def test_app_turn_warms_the_sandbox_at_turn_start():

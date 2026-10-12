@@ -79,6 +79,28 @@ def classify_error(exc: BaseException) -> str:
     return "connection" if "connection" in kinds else "unknown"
 
 
+class ModelCallFailed(Exception):
+    """A model call was given up on after its retries (``agent.call_retry_model``).
+    Raised FROM the last failure, so the kind is still read off the cause; it
+    carries only the numbers the kind's copy needs."""
+
+    def __init__(self, *, attempts: int, waited_s: float) -> None:
+        super().__init__(f"gave up on the model call after {attempts} attempt(s)")
+        self.attempts = attempts
+        self.waited_s = waited_s
+
+
+def error_params(exc: BaseException) -> dict[str, int] | None:
+    """The numbers D5's copy says — how long a rate limit was waited out, or
+    how many times a call was tried — when a give-up recorded them."""
+    for link in _chain(exc):
+        if isinstance(link, ModelCallFailed):
+            if is_rate_limited(exc):
+                return {"waited_s": round(link.waited_s)}
+            return {"attempts": link.attempts}
+    return None
+
+
 def raw_error_text(exc: BaseException) -> str:
     """The technical details (D1): every link's ``Type: message``, outermost
     first. The outer link alone is often the least useful one — an exhausted

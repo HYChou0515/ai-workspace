@@ -19,7 +19,14 @@ import logging
 from collections.abc import AsyncIterator
 
 from ..agent.repetition import RepetitionDetector
-from .events import AgentEvent, MessageDelta, RepetitionStopped, RunDone, ToolStart
+from .events import (
+    AgentEvent,
+    MessageDelta,
+    OutputRetracted,
+    RepetitionStopped,
+    RunDone,
+    ToolStart,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -53,7 +60,10 @@ async def guard_repetition(
     try:
         async for ev in events:
             yield ev  # forward unchanged — repeats stay live
-            if isinstance(ev, ToolStart):
+            if isinstance(ev, (ToolStart, OutputRetracted)):
+                # A withdrawn call (docs/plan-friendly-errors.md D3) is gone from
+                # the answer, and its re-send says much the same again: counting
+                # the two together would stop an ordinary answer as a loop.
                 # A tool call ends the current text response; the next deltas are
                 # a fresh response. Reset so a block repeated once per step
                 # (cross-step repetition, case 2) never accumulates into a

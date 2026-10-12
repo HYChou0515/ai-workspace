@@ -111,9 +111,14 @@ class RepairingModel(Model):
         return getattr(self._inner, name)
 
     async def get_response(self, *args: Any, **kwargs: Any) -> Any:
-        # We always stream (run_streamed), so the repair lives on stream_response.
-        # get_response is pure delegation — non-streaming isn't a path we use.
-        return await self._inner.get_response(*args, **kwargs)
+        # The whole-response path (WORKSPACE_AGENT_STREAM=0) is sanitized too:
+        # `args_recovery` answers bad args in-band rather than raising, which is
+        # only safe while EVERY path into the conversation hands the SDK valid
+        # JSON (docs/plan-friendly-errors.md D2).
+        response = await self._inner.get_response(*args, **kwargs)
+        for item in getattr(response, "output", None) or []:
+            _sanitize_item(item)
+        return response
 
     async def stream_response(self, *args: Any, **kwargs: Any) -> AsyncIterator[Any]:
         async for chunk in self._inner.stream_response(*args, **kwargs):

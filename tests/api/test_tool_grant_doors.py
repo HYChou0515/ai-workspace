@@ -190,7 +190,7 @@ def _ask_outside_held(ctx) -> bool:
     from workspace_app.api.litellm_runner import LitellmAgentRunner
     from workspace_app.tokens import LlmCredential
 
-    kw = LitellmAgentRunner()._agent_kwargs(ctx, None, LlmCredential)
+    kw = LitellmAgentRunner()._agent_kwargs(ctx, LlmCredential)
     agent = _agent_for(ctx.agent_config, ctx.packages, ctx.unavailable_tools, **kw)
     return "ask_outside" in {t.name for t in agent.tools}
 

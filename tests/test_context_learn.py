@@ -116,7 +116,7 @@ async def test_a_silently_truncated_turn_is_detected_and_learned():
     from workspace_app.api.litellm_runner import LitellmAgentRunner
 
     class _Runner(LitellmAgentRunner):
-        async def _run_once(self, prompt, ctx, feedback):  # type: ignore[override]
+        async def _run_once(self, prompt, ctx):  # type: ignore[override]
             yield MessageDelta(text="ok")
             self._note_prompt_usage(ctx, sent_estimate=20_000, reported=4_091)
 
@@ -134,7 +134,7 @@ async def test_a_healthy_turn_teaches_nothing():
     from workspace_app.api.litellm_runner import LitellmAgentRunner
 
     class _Runner(LitellmAgentRunner):
-        async def _run_once(self, prompt, ctx, feedback):  # type: ignore[override]
+        async def _run_once(self, prompt, ctx):  # type: ignore[override]
             yield MessageDelta(text="ok")
             self._note_prompt_usage(ctx, sent_estimate=8_000, reported=8_755)
 

@@ -243,6 +243,31 @@ class RateLimited:
 
 
 @dataclass(frozen=True)
+class ModelRetrying:
+    """A model call failed in a way a re-send can cure (a timeout, a dropped
+    connection, a 5xx) and is being sent again — attempt ``attempt``.
+    Ephemeral, like ``RateLimited``: a recovered retry is not a failure, so it
+    is never persisted (docs/plan-friendly-errors.md D9)."""
+
+    attempt: int
+    kind: str
+    type: Literal["model_retrying"] = "model_retrying"
+
+
+@dataclass(frozen=True)
+class OutputRetracted:
+    """The model call that streamed the last ``text_chars`` of answer and
+    ``reasoning_chars`` of reasoning failed and is being re-sent: withdraw them
+    (docs/plan-friendly-errors.md D3). Counted from where that call began, so
+    earlier calls' text and every tool result stay. Like ``RepetitionStopped``,
+    it trims what was streamed rather than re-sending it."""
+
+    text_chars: int
+    reasoning_chars: int = 0
+    type: Literal["output_retracted"] = "output_retracted"
+
+
+@dataclass(frozen=True)
 class RestoreProgress:
     """#492 P11: the item's sandbox was cold, so before the turn can run its
     durable snapshot is being restored file-by-file. `done`/`total` count files
@@ -320,6 +345,8 @@ AgentEvent = (
     | FailoverSwitch  # #249/#131: chat model switched mid-turn (ephemeral notice)
     | RestoreProgress  # #492 P11: cold-wake snapshot restore progress (ephemeral)
     | RateLimited  # the turn is holding out a 429 before retrying (ephemeral)
+    | ModelRetrying  # a model call is being re-sent (ephemeral)
+    | OutputRetracted  # the failed call's streamed text is withdrawn before its re-send
     | TodosUpdated  # #613: the agent rewrote the conversation's todo checklist
     | ContextTrimmed  # #624: the request was too long; older history was dropped
     | Compacting  # #739: the thread outgrew the window; this turn summarises first

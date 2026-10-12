@@ -27,10 +27,11 @@ run makes, because a per-call allowance would reset each tool round and make a
 turn's total unbounded again. A window that cannot fit what is left of the pool
 parks the endpoint for the window it stated — the shared registry then makes
 every other caller honour it — and an exhausted chain raises from the 429
-rather than whichever endpoint failed last, so the turn loop upstream can keep
-waiting instead of "giving up after N attempts". (The runner may retry the run
-with a fresh chain after its own, shorter hold; the operator accepts the rare
-stacking that allows — even unbounded waiting was acceptable to them.)
+rather than whichever endpoint failed last, so the call wrapper above it
+(``agent.call_retry_model``) reads it as a rate limit and keeps waiting. (That
+wrapper may re-send the call to this chain after its own, shorter hold; the
+operator accepts the rare stacking that allows — even unbounded waiting was
+acceptable to them.)
 """
 
 from __future__ import annotations

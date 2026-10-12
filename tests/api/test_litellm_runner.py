@@ -21,7 +21,6 @@ from workspace_app.api.events import (
     FailoverSwitch,
     MessageDelta,
     RestoreProgress,
-    RunDone,
     RunError,
     TodosUpdated,
     ToolEnd,
@@ -40,11 +39,8 @@ from workspace_app.api.litellm_runner import (
     _final_tokens,
     _ItemEvent,
     _map_event,
-    _should_retry,
     _stream_enabled,
     _tool_log_emitter,
-    classify_retry_event,
-    diagnose_error,
 )
 from workspace_app.files import WorkspaceFiles
 from workspace_app.resources import AgentConfig, make_spec
@@ -183,130 +179,6 @@ async def test_runner_fails_loud_when_ctx_has_no_agent_config():
     assert "RunError" in kinds and "RunDone" in kinds
     msg = " ".join(e.message for e in events if isinstance(e, RunError))
     assert "agent config" in msg.lower()
-
-
-def test_should_retry_blocks_restart_after_assistant_progress():
-    """Issue #26: once the user has seen partial output, restarting the turn
-    (which is what the SDK does — no resume) would clobber it. So retry only
-    when nothing assistant-visible has streamed yet."""
-    # Fresh attempt, no progress, retries available → retry.
-    assert _should_retry(progress_made=False, attempt=1, max_retries=2) is True
-    # Progress made → never retry, regardless of attempt count.
-    assert _should_retry(progress_made=True, attempt=1, max_retries=2) is False
-    assert _should_retry(progress_made=True, attempt=0, max_retries=5) is False
-    # No progress but out of retries.
-    assert _should_retry(progress_made=False, attempt=3, max_retries=2) is False
-    # Edge: max_retries=0 means no retry ever.
-    assert _should_retry(progress_made=False, attempt=1, max_retries=0) is False
-
-
-class _ScriptedOnce(LitellmAgentRunner):
-    """Test double: replaces `_run_once` with a per-attempt event script so
-    we can drive the run() outer loop deterministically without an LLM."""
-
-    def __init__(self, per_attempt):
-        super().__init__(max_retries=2)
-        self._per_attempt = list(per_attempt)
-        self._calls = 0
-
-    async def _run_once(self, prompt, ctx, feedback):  # type: ignore[override]
-        events = self._per_attempt[self._calls]
-        self._calls += 1
-        for ev in events:
-            if isinstance(ev, BaseException):
-                raise ev
-            yield ev
-
-
-async def test_run_does_not_restart_after_assistant_delta_streamed():
-    """#26 repro: if `_run_once` emitted a MessageDelta then raised, the user
-    has already seen that content. `run()` must NOT call `_run_once` again
-    (which would re-prompt the LLM from scratch and clobber the partial
-    answer). Instead, surface the error and end."""
-    runner = _ScriptedOnce(
-        [
-            [MessageDelta(text="Looking at the logs… "), RuntimeError("model timed out")],
-            # If `run()` restarts despite progress, this second script would run.
-            [MessageDelta(text="should-not-see"), RunDone()],
-        ]
-    )
-    events = [
-        ev
-        async for ev in runner.run(
-            "anything", AgentToolContext(investigation_id="x", agent_config=AgentConfig(name="t"))
-        )
-    ]
-    # Exactly one attempt: delta then RunError then RunDone (no retry).
-    assert runner._calls == 1
-    kinds = [type(e).__name__ for e in events]
-    assert kinds == ["MessageDelta", "RunError", "RunDone"]
-    err = next(e for e in events if isinstance(e, RunError))
-    assert "model timed out" in err.message
-    # The retry-budget phrasing is reserved for "no progress + give up" —
-    # we made one attempt that produced output, not N attempts that gave up.
-    assert "giving up" not in err.message
-
-
-async def test_run_still_retries_when_failure_is_early():
-    """Counterpart: an early failure (before any content) keeps the existing
-    retry-with-hint behaviour — that's the small-model JSON-parse fix path."""
-    runner = _ScriptedOnce(
-        [
-            [ValueError("Extra data: tool call malformed")],  # diagnose → ToolCallParseError
-            [MessageDelta(text="OK, one tool at a time."), RunDone()],
-        ]
-    )
-    events = [
-        ev
-        async for ev in runner.run(
-            "anything", AgentToolContext(investigation_id="x", agent_config=AgentConfig(name="t"))
-        )
-    ]
-    assert runner._calls == 2  # actually retried
-    kinds = [type(e).__name__ for e in events]
-    # First attempt: the classify_retry_event yields ToolCallParseError; then
-    # second attempt streams delta + RunDone.
-    assert "MessageDelta" in kinds
-    assert "RunDone" in kinds
-    assert "RunError" not in kinds
-
-
-async def test_run_retries_when_only_reasoning_streamed_before_failure():
-    """Production transcript: model emits ~500 tokens of <think>…</think>
-    reasoning, THEN a malformed concatenated tool_call. args_recovery
-    raises 'Extra data on `plot`', the exception reaches run(), and
-    _should_retry sees progress_made=True (because the runner's
-    progress check treated reasoning-channel MessageDelta as visible
-    progress). Result: no retry, user sees the raw error and 'then it
-    just stopped'.
-
-    Reasoning is collapsed in the FE and doesn't constitute the
-    'partial output a restart would clobber' that progress_made is
-    supposed to gate. Only visible deltas (reasoning=False) and
-    ToolEnd should set progress_made → block retry."""
-    runner = _ScriptedOnce(
-        [
-            [
-                MessageDelta(text="Let me think about which tool …", reasoning=True),
-                ValueError("Extra data on `plot`: streaming aggregator merged …"),
-            ],
-            # If retry works the second attempt runs cleanly.
-            [MessageDelta(text="OK, one tool at a time."), RunDone()],
-        ]
-    )
-    events = [
-        ev
-        async for ev in runner.run(
-            "anything", AgentToolContext(investigation_id="x", agent_config=AgentConfig(name="t"))
-        )
-    ]
-    assert runner._calls == 2  # actually retried — reasoning didn't gate progress
-    kinds = [type(e).__name__ for e in events]
-    # First attempt's reasoning delta is preserved; then the retry event;
-    # second attempt's visible delta + RunDone. No RunError.
-    assert "MessageDelta" in kinds
-    assert "RunDone" in kinds
-    assert "RunError" not in kinds
 
 
 def test_runner_constructs_with_custom_config():
@@ -811,109 +683,11 @@ def test_agent_for_appends_tool_inventory_section_to_instructions():
         assert f"### `{t.name}`" in instructions, f"tool {t.name} missing from prompt"
 
 
-# ---- diagnose_error ----
-
-
-def test_diagnose_concatenated_tool_calls_returns_one_tool_per_turn_hint():
-    """#76: our own ConcatenatedToolCallsError routes to the 'one tool call
-    per turn' hint via isinstance, independent of message wording."""
-    from workspace_app.agent.args_recovery import ConcatenatedToolCallsError
-
-    hint = diagnose_error(ConcatenatedToolCallsError("Tool `plot` received more than one…"))
-    assert "one tool call" in hint.lower()
-
-
-def test_diagnose_malformed_args_tells_model_to_resend_valid_json():
-    """#76: a single malformed-JSON tool call must NOT be mis-coached as
-    'you combined multiple tool calls' — it gets an accurate 'your args
-    weren't valid JSON, re-send one JSON object' hint."""
-    from workspace_app.agent.args_recovery import MalformedToolArgsError
-
-    hint = diagnose_error(MalformedToolArgsError("The arguments for tool `read_file`…"))
-    low = hint.lower()
-    assert "valid json" in low
-    assert "multiple tool calls" not in low
-
-
-def test_diagnose_non_object_args_tells_model_to_send_one_object():
-    """#76: valid JSON but wrong shape (list/scalar) → 'send a single JSON
-    object' hint, distinct from both the malformed and the concat hints."""
-    from workspace_app.agent.args_recovery import NonObjectToolArgsError
-
-    hint = diagnose_error(NonObjectToolArgsError("…must be a single JSON object, not a list."))
-    low = hint.lower()
-    assert "json object" in low
-    assert "multiple tool calls" not in low
-
-
-def test_diagnose_upstream_extra_data_string_still_routes_to_concat_hint():
-    """Backstop: a genuine upstream LiteLLM/Ollama 'Extra data: line…' error
-    (a plain string, not our exception type) still means concatenation."""
-    hint = diagnose_error(RuntimeError("Extra data: line 1 column 54 (char 53)"))
-    assert "one tool call" in hint.lower()
-
-
-def test_diagnose_upstream_json_tool_string_routes_to_malformed_hint():
-    """#76 flip: a generic upstream 'parse tool args as json' failure (no
-    'extra data') is a malformed-single-object case, so it now routes to the
-    'valid JSON' hint — NOT the old 'one tool call' hint."""
-    hint = diagnose_error(RuntimeError("failed to parse tool args as json"))
-    assert "valid json" in hint.lower()
-
-
-def test_diagnose_timeout_returns_smaller_step_hint():
-    hint = diagnose_error(RuntimeError("request timed out"))
-    assert "smaller step" in hint.lower()
-
-
-def test_diagnose_unknown_falls_back_to_generic_hint():
-    hint = diagnose_error(RuntimeError("some weird upstream 500"))
-    assert "try again" in hint.lower()
-
-
-# ---- classify_retry_event ----
-
-
-@pytest.mark.parametrize(
-    "exc_type",
-    ["MalformedToolArgsError", "NonObjectToolArgsError", "ConcatenatedToolCallsError"],
-)
-def test_classify_retry_event_maps_all_tool_arg_errors_to_parse_error(exc_type):
-    """#76: every flavour of bad tool args is a model-format glitch the FE
-    should render as a parse-error banner — not a generic RunError."""
-    import workspace_app.agent.args_recovery as ar
-    from workspace_app.api.events import ToolCallParseError
-
-    exc = getattr(ar, exc_type)("bad")
-    ev = classify_retry_event(exc, "some hint")
-    assert isinstance(ev, ToolCallParseError)
-    assert ev.hint == "some hint"
-
-
-def test_classify_retry_event_carries_raw_offending_args_for_transparency():
-    """#76: the user has a right to see WHAT the model got wrong. The parse-error
-    event must carry the model's actual bad args string in `raw` (and the
-    affected tool's call_id) so the FE can show it, not just a generic hint."""
-    from workspace_app.agent.args_recovery import MalformedToolArgsError
-    from workspace_app.api.events import ToolCallParseError
-
-    exc = MalformedToolArgsError(
-        "clean message", tool_name="read_file", raw_args='{"path": ./hello.md"}'
-    )
-    ev = classify_retry_event(exc, "re-send valid JSON")
-    assert isinstance(ev, ToolCallParseError)
-    assert ev.raw == '{"path": ./hello.md"}'  # the model's actual mistake, surfaced
-    assert ev.hint == "re-send valid JSON"
-
-
-def test_classify_retry_event_non_tool_error_is_generic_run_error():
-    from workspace_app.api.events import RunError
-
-    ev = classify_retry_event(RuntimeError("upstream 500"), "h")
-    assert isinstance(ev, RunError)
-
-
-# ---- retry loop ----
+# ---- the run ----
+#
+# One run per turn: a failure is retried as the MODEL CALL that failed
+# (docs/plan-friendly-errors.md D2) — see tests/agent/test_call_retry_model.py
+# and tests/api/test_call_retry_runner.py, which drive the real SDK run.
 
 
 class _RecordingRunner(LitellmAgentRunner):
@@ -922,10 +696,10 @@ class _RecordingRunner(LitellmAgentRunner):
     def __init__(self, scripts, **kw):
         super().__init__(**kw)
         self._scripts = list(scripts)
-        self.feedbacks: list[str | None] = []
+        self.runs = 0
 
-    async def _run_once(self, prompt, ctx, feedback):
-        self.feedbacks.append(feedback)
+    async def _run_once(self, prompt, ctx):
+        self.runs += 1
         script = self._scripts.pop(0)
         if isinstance(script, Exception):
             raise script
@@ -956,159 +730,16 @@ async def test_runner_succeeds_first_try_emits_done():
     runner = _RecordingRunner(scripts=[[MessageDelta(text="hi")]])
     events = [ev async for ev in runner.run("p", _ctx())]
     assert [type(e).__name__ for e in events] == ["MessageDelta", "RunDone"]
-    assert runner.feedbacks == [None]
+    assert runner.runs == 1
 
 
-async def test_runner_retries_after_extra_data_error_and_feeds_back_hint():
-    """Extra-data classifies as ToolCallParseError (not generic RunError)
-    so the FE can render it distinctly."""
-    from workspace_app.api.events import ToolCallParseError
-
-    err = RuntimeError("Extra data: line 1 column 54 (char 53)")
-    runner = _RecordingRunner(scripts=[err, [MessageDelta(text="ok")]])
+async def test_a_failure_that_reaches_the_turn_ends_it_once():
+    """What reaches the turn has already had its call's retries; running the
+    turn again would repeat every tool it ran."""
+    runner = _RecordingRunner(scripts=[RuntimeError("boom"), [MessageDelta(text="never")]])
     events = [ev async for ev in runner.run("p", _ctx())]
-    types = [type(e).__name__ for e in events]
-    assert types == ["ToolCallParseError", "MessageDelta", "RunDone"]
-    tcpe = next(e for e in events if isinstance(e, ToolCallParseError))
-    assert "one tool call" in tcpe.hint.lower()
-    # Second attempt should have received the hint as feedback.
-    assert runner.feedbacks[0] is None
-    assert "one tool call" in (runner.feedbacks[1] or "").lower()
-
-
-async def test_runner_gives_up_after_max_retries():
-    """N retries of Extra-data → N ToolCallParseError + 1 final RunError
-    (giving up) + RunDone."""
-    from workspace_app.api.events import ToolCallParseError
-
-    err = RuntimeError("Extra data: blah")
-    runner = _RecordingRunner(scripts=[err, err, err], max_retries=2)
-    events = [ev async for ev in runner.run("p", _ctx())]
-    tcpes = [e for e in events if isinstance(e, ToolCallParseError)]
-    err_events = [e for e in events if isinstance(e, RunError)]
-    assert len(tcpes) == 2  # two retries
-    assert len(err_events) == 1  # final give-up
-    assert "giving up" in err_events[-1].message
-    done = [e for e in events if isinstance(e, RunDone)]
-    assert len(done) == 1
-
-
-def _rate_limited(headers: dict[str, str]):
-    """A 429 exactly as litellm raises one — the wait rides in the response
-    headers, never in the message text."""
-    import litellm
-
-    return litellm.exceptions.RateLimitError(
-        message="rate limit exceeded",
-        llm_provider="openai",
-        model="gpt",
-        response=httpx.Response(
-            429,
-            headers=headers,
-            request=httpx.Request("POST", "http://x/v1/chat/completions"),
-        ),
-    )
-
-
-async def test_runner_waits_the_window_a_429_stated_before_retrying():
-    """The single-endpoint path has no failover chain to fall back on, so this
-    loop is the ONLY thing standing between a rate limit and a dead turn — and
-    it re-sent immediately, burning the whole budget inside a millisecond
-    against a limiter that needed seconds. The sleep must be awaited, not
-    `time.sleep`: this runs on the event loop that serves every other request.
-    """
-    slept: list[float] = []
-
-    async def sleep(seconds: float) -> None:
-        slept.append(seconds)
-
-    runner = _RecordingRunner(
-        scripts=[_rate_limited({"retry-after": "5"}), [MessageDelta(text="ok")]],
-        sleep=sleep,
-    )
-    events = [ev async for ev in runner.run("p", _ctx())]
-
-    assert slept == [5.0]
-    assert [type(e).__name__ for e in events][-2:] == ["MessageDelta", "RunDone"]
-
-
-async def test_a_rate_limit_does_not_spend_the_small_model_retry_budget():
-    """`max_retries` is the #76 budget for a model garbling its own tool call —
-    a different failure, with a different cure, on a different timescale.
-    Charging 429s to it means a limit that clears on the third window is given
-    up on because two JSON glitches' worth of attempts was the whole allowance.
-    """
-    slept: list[float] = []
-
-    async def sleep(seconds: float) -> None:
-        slept.append(seconds)
-
-    runner = _RecordingRunner(
-        scripts=[
-            _rate_limited({"retry-after": "5"}),
-            _rate_limited({"retry-after": "5"}),
-            _rate_limited({"retry-after": "5"}),
-            [MessageDelta(text="ok")],
-        ],
-        max_retries=2,
-        sleep=sleep,
-    )
-    events = [ev async for ev in runner.run("p", _ctx())]
-
-    assert slept == [5.0, 5.0, 5.0]
-    assert [type(e).__name__ for e in events][-2:] == ["MessageDelta", "RunDone"]
-
-
-async def test_a_turn_gives_up_readably_when_the_rate_limit_never_clears():
-    """The hold needs a bound or a throttled endpoint parks the turn forever.
-    The bound is time HELD, not a number of holds: three holds is three seconds
-    against one provider and three minutes against another. When it runs out
-    the user gets a sentence about what happened, not a raw provider string."""
-    slept: list[float] = []
-
-    async def sleep(seconds: float) -> None:
-        slept.append(seconds)
-
-    runner = _RecordingRunner(
-        scripts=[
-            _rate_limited({"retry-after": "60"}),
-            _rate_limited({"retry-after": "60"}),
-            _rate_limited({"retry-after": "60"}),
-        ],
-        rate_limit_budget_s=100.0,
-        sleep=sleep,
-    )
-    events = [ev async for ev in runner.run("p", _ctx())]
-
-    assert slept == [60.0]  # one hold fits; a second would overrun the budget
-    errors = [e for e in events if isinstance(e, RunError)]
-    assert len(errors) == 1
-    assert "過於頻繁" in errors[0].message
-    assert type(events[-1]).__name__ == "RunDone"
-
-
-async def test_the_hold_is_announced_before_the_turn_goes_quiet():
-    """A 60-second hold with nothing on screen is indistinguishable from a hung
-    turn — and this change made the quiet part LONGER, so it has to say why.
-    The notice goes out BEFORE the sleep, not after it, or it arrives once the
-    silence it explains is already over."""
-    timeline: list[str] = []
-
-    async def sleep(seconds: float) -> None:
-        timeline.append(f"slept:{seconds}")
-
-    runner = _RecordingRunner(
-        scripts=[_rate_limited({"retry-after": "5"}), [MessageDelta(text="ok")]],
-        sleep=sleep,
-    )
-    events = []
-    async for ev in runner.run("p", _ctx()):
-        timeline.append(type(ev).__name__)
-        events.append(ev)
-
-    assert timeline[:2] == ["RateLimited", "slept:5.0"]
-    held = [e for e in events if type(e).__name__ == "RateLimited"]
-    assert [e.seconds for e in held] == [5.0]
+    assert runner.runs == 1
+    assert [type(e).__name__ for e in events] == ["RunError", "RunDone"]
 
 
 async def test_runner_emits_max_turns_exceeded_terminal():
@@ -1127,17 +758,6 @@ async def test_runner_emits_max_turns_exceeded_terminal():
     assert types == ["MaxTurnsExceeded", "RunDone"]
     mte = next(e for e in events if isinstance(e, MTEEvent))
     assert mte.turns == 7
-
-
-async def test_runner_classifies_non_parse_retry_as_run_error():
-    """Generic errors still get the RunError catch-all on retry."""
-    err = RuntimeError("upstream 500: something else")
-    runner = _RecordingRunner(scripts=[err, [MessageDelta(text="ok")]])
-    events = [ev async for ev in runner.run("p", _ctx())]
-    types = [type(e).__name__ for e in events]
-    assert types == ["RunError", "MessageDelta", "RunDone"]
-    err_ev = next(e for e in events if isinstance(e, RunError))
-    assert "retry:" in err_ev.message
 
 
 # ---- live test against Ollama (skipped when unavailable) ----
@@ -1367,7 +987,7 @@ def test_both_turn_shapes_build_the_agent_from_one_argument_list():
         template_profile="default",
         skills_reachable=False,
     )
-    kw = LitellmAgentRunner()._agent_kwargs(ctx, feedback=None, resolve_credential=LlmCredential)
+    kw = LitellmAgentRunner()._agent_kwargs(ctx, resolve_credential=LlmCredential)
     # CALL THROUGH, do not inspect keys. Sharing the list cost the two literal
     # call sites their type check: `ty` rejects a bad keyword written out at a
     # call, and says nothing about one delivered through `**dict[str, Any]`. The
@@ -1438,7 +1058,7 @@ def test_agent_for_threads_the_curated_subagent_models_onto_run_agent():
 
     runner = LitellmAgentRunner()
     ctx = AgentToolContext(investigation_id="inv-1", subagent_models=(choice,))
-    kw = runner._agent_kwargs(ctx, None, LlmCredential)
+    kw = runner._agent_kwargs(ctx, LlmCredential)
     assert kw["subagent_models"] == (choice,)
 
 
@@ -1524,7 +1144,7 @@ async def test_the_non_streaming_turn_says_it_has_nowhere_to_report():
 
     # Annotated `AsyncIterator`, which is what callers need; it is an async
     # GENERATOR, which is what lets the test stop it before it calls the model.
-    gen = cast(Any, LitellmAgentRunner()._run_once_nonstream("hi", ctx, None))
+    gen = cast(Any, LitellmAgentRunner()._run_once_nonstream("hi", ctx))
     first = await anext(gen)  # the "up" metrics, yielded before the model is called
     await gen.aclose()
 

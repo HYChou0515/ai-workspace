@@ -69,6 +69,27 @@ def test_errored_turn_persists_an_error_message():
     assert "refused" in err.content
 
 
+def test_a_withdrawn_partial_answer_is_not_persisted():
+    """docs/plan-friendly-errors.md D3: a model call that broke mid-answer is
+    re-sent; what it had shown is withdrawn, so the thread keeps the answer
+    once — not the broken half glued to the whole."""
+    from workspace_app.api.events import OutputRetracted
+
+    client, spec, iid = _client(
+        [
+            MessageDelta(text="the answer is"),
+            MessageDelta(text="Half a", reasoning=True),
+            OutputRetracted(text_chars=len("the answer is"), reasoning_chars=len("Half a")),
+            MessageDelta(text="Thinking", reasoning=True),
+            MessageDelta(text="The answer is 42."),
+        ]
+    )
+    _drain(client, iid, "q")
+
+    [answer] = [m for m in _messages(spec, iid) if m.role == "assistant"]
+    assert (answer.content, answer.reasoning) == ("The answer is 42.", "Thinking")
+
+
 def test_the_numbers_the_copy_needs_survive_a_reload():
     """D5's copy says how long the turn waited; a reloaded thread has only what
     was persisted, so the number has to be persisted with the kind."""

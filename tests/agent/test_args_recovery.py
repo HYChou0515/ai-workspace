@@ -12,9 +12,6 @@ from agents import FunctionTool
 from agents.tool_context import ToolContext
 
 from workspace_app.agent.args_recovery import (
-    ConcatenatedToolCallsError,
-    MalformedToolArgsError,
-    NonObjectToolArgsError,
     peel_first_json,
     wrap_with_args_recovery,
 )
@@ -119,21 +116,7 @@ async def test_wrap_passes_clean_args_through_unchanged():
     assert out == 'echo: {"x": 1}'
 
 
-async def test_wrap_raises_when_leftover_present_so_run_can_restart():
-    """Cascade-defence: when args has multiple concatenated JSON objects,
-    the wrap MUST raise (not return). Returning an error string lets
-    the SDK treat it as a normal tool result — yields ToolEnd, sets
-    progress_made=True in the runner, blocks retry, AND leaves the
-    bad tool_call (with concat `arguments`) sitting in the SDK's
-    internal conversation. The very next iteration sends that
-    conversation back to LiteLLM, and LiteLLM's
-    `ollama/chat/transformation.py` does `json.loads(arguments)` →
-    `Extra data: line 1 column N` → APIConnectionError, run dies.
-
-    Raising instead: no ToolEnd, no progress_made, the SDK's
-    Runner.run_streamed exits with the exception, our runner catches
-    it via `diagnose_error` (matches 'extra data') → hint to emit
-    one tool_call at a time → fresh retry with a clean convo."""
+def _traced(name: str) -> tuple[FunctionTool, list[str]]:
     invoked: list[str] = []
 
     async def trace(_ctx: ToolContext[Any], args_json: str) -> str:
@@ -141,119 +124,67 @@ async def test_wrap_raises_when_leftover_present_so_run_can_restart():
         return "ran"
 
     base = FunctionTool(
-        name="plot",
+        name=name,
         description="d",
         params_json_schema={"type": "object", "properties": {}},
         on_invoke_tool=trace,
         strict_json_schema=False,
     )
-    wrapped = wrap_with_args_recovery(base)
-    # Mimic the production fail: model meant write_file + plot in
-    # parallel; the aggregator merged into one tool_call with
-    # cross-tool args.
+    return wrap_with_args_recovery(base), invoked
+
+
+async def test_concatenated_calls_are_refused_in_band_and_the_tool_is_not_run():
+    """The wrap refuses merged parallel calls IN-BAND (docs/plan-friendly-errors
+    .md D2): a raise used to end the run so the whole turn could restart from a
+    clean conversation — the turn-level retry, now gone. Nothing needs
+    discarding any more: the model-output boundary hands the SDK valid JSON
+    either way (`RepairingModel`), so the model is told and corrects itself on
+    its next call. The tool stays uninvoked — the first object's shape often
+    belongs to a DIFFERENT tool."""
+    wrapped, invoked = _traced("plot")
     args = '{"path": "x.csv", "content": "hello"}{"csv": "x.csv"}'
-    with pytest.raises(ConcatenatedToolCallsError) as exc:
-        await wrapped.on_invoke_tool(_tool_ctx(), args)
-    assert invoked == []  # tool stayed uninvoked — no spurious exec
-    # The message names the affected tool + tells the model the fix, but
-    # keeps the merged raw data out (that goes to the log) so it's safe to
-    # surface in the user-facing failure banner.
-    msg = str(exc.value)
-    assert "plot" in msg
-    assert "ONE tool" in msg
-    assert "csv" not in msg  # the merged leftover payload must not leak
+
+    out = await wrapped.on_invoke_tool(_tool_ctx(), args)
+
+    assert invoked == []
+    assert "plot" in out and "ONE tool call" in out
+    assert "hello" not in out, "the merged payload goes to the log, not the reply"
 
 
-async def test_wrap_raises_malformed_error_on_unparseable_json():
-    """#76: when the model's args can't parse as JSON at all, the wrap
-    raises the dedicated MalformedToolArgsError (a ValueError subclass) so
-    diagnose_error can hand back an accurate "your JSON was invalid" hint
-    — NOT the misleading "you combined multiple tool calls" hint. The
-    message is clean (names the tool, no Python json internals) because it
-    can surface in the user-facing failure banner."""
-    wrapped = wrap_with_args_recovery(_echo_tool())
-    with pytest.raises(MalformedToolArgsError) as exc:
-        await wrapped.on_invoke_tool(_tool_ctx(), "not json")
-    msg = str(exc.value)
-    assert "echo" in msg
-    # the raw "Expecting value: line 1 column 1" json-internals must NOT leak
-    assert "line 1" not in msg.lower()
-    assert "expecting" not in msg.lower()
+async def test_unparseable_args_are_refused_in_band_with_their_own_reason():
+    """#76: "your JSON was invalid" — not the misleading "you combined multiple
+    tool calls" — and without Python's json internals."""
+    wrapped, invoked = _traced("echo")
+
+    out = await wrapped.on_invoke_tool(_tool_ctx(), "not json")
+
+    assert invoked == []
+    assert "echo" in out and "not valid JSON" in out
+    assert "line 1" not in out.lower() and "expecting" not in out.lower()
 
 
 async def test_wrap_returns_in_band_error_for_backstop_sentinel():
     """#76 backstop: when the model-output boundary couldn't parse/repair args
     it hands the tool a valid-JSON sentinel. The wrap RETURNS a clean in-band
-    error (NOT raise) carrying the raw, so the turn continues and the model can
-    retry — and the underlying tool is never run on the sentinel."""
+    error carrying the raw, and the underlying tool is never run on it."""
     from workspace_app.agent.arg_repair import make_backstop_sentinel
 
-    invoked: list[str] = []
-
-    async def trace(_ctx: ToolContext[Any], args_json: str) -> str:
-        invoked.append(args_json)
-        return "ran"
-
-    base = FunctionTool(
-        name="write_file",
-        description="d",
-        params_json_schema={"type": "object", "properties": {}},
-        on_invoke_tool=trace,
-        strict_json_schema=False,
-    )
-    wrapped = wrap_with_args_recovery(base)
+    wrapped, invoked = _traced("write_file")
     out = await wrapped.on_invoke_tool(_tool_ctx(), make_backstop_sentinel('{"path": ./x"}'))
-    assert invoked == []  # the real tool was NOT run on the sentinel
+    assert invoked == []
     assert "not valid JSON" in out
     assert '{"path": ./x"}' in out  # the model's raw emission surfaced in-band
 
 
-async def test_wrap_raises_non_object_error_on_array_root():
-    """#76: valid JSON whose root is a list/scalar (not an object) is a
-    distinct failure from malformed JSON — the model sent the wrong shape,
-    not invalid syntax. The wrap raises NonObjectToolArgsError naming the
-    received type so diagnose_error can say 'send a single JSON object'."""
-    wrapped = wrap_with_args_recovery(_echo_tool())
-    with pytest.raises(NonObjectToolArgsError) as exc:
-        await wrapped.on_invoke_tool(_tool_ctx(), "[1, 2, 3]")
-    msg = str(exc.value)
-    assert "echo" in msg
-    assert "list" in msg  # names the wrong type the model sent
+async def test_a_non_object_root_is_refused_in_band_naming_what_was_sent():
+    """#76: valid JSON whose root is a list/scalar is a distinct failure from
+    malformed JSON — the wrong shape, not invalid syntax."""
+    wrapped, invoked = _traced("echo")
 
+    out = await wrapped.on_invoke_tool(_tool_ctx(), "[1, 2, 3]")
 
-async def test_wrap_unparseable_error_is_a_value_error_for_sdk_propagation():
-    """All three ToolArgsError kinds subclass ValueError, so they still
-    satisfy the SDK / runner's broad `except (json.JSONDecodeError,
-    ValueError)` and propagate cleanly out of Runner.run_streamed to
-    diagnose_error (same cascade reasoning as the concat case: the bad
-    tool_call is already in the SDK convo, so raising — not returning — is
-    what discards the poison on retry)."""
-    wrapped = wrap_with_args_recovery(_echo_tool())
-    with pytest.raises(ValueError):
-        await wrapped.on_invoke_tool(_tool_ctx(), "not json")
-
-
-async def test_wrap_does_not_call_underlying_tool_on_parse_failure():
-    """Unparseable args ⇒ tool stays uninvoked even though we raise —
-    avoids calling the tool with garbage that the SDK would otherwise
-    surface as a tool error attributable to the tool itself."""
-    invoked: list[str] = []
-
-    async def trace(_ctx: ToolContext[Any], args_json: str) -> str:
-        invoked.append(args_json)
-        return "ran"
-
-    base = FunctionTool(
-        name="trace",
-        description="d",
-        params_json_schema={"type": "object", "properties": {}},
-        on_invoke_tool=trace,
-        strict_json_schema=False,
-    )
-    wrapped = wrap_with_args_recovery(base)
-    with pytest.raises(ValueError):
-        await wrapped.on_invoke_tool(_tool_ctx(), "junk")
     assert invoked == []
+    assert "echo" in out and "list" in out and "JSON object" in out
 
 
 def test_wrap_preserves_name_description_and_schema():

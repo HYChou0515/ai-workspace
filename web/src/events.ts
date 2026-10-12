@@ -122,6 +122,24 @@ export type RateLimited = {
   seconds: number;
 };
 
+/** A model call failed in a way a re-send can cure and is being sent again
+ * (docs/plan-friendly-errors.md D9). Ephemeral, like `rate_limited` — a
+ * recovered retry is not a failure, so it never reaches the transcript. */
+export type ModelRetrying = {
+  type: "model_retrying";
+  attempt: number;
+  kind: string;
+};
+
+/** The model call that streamed the last `text_chars` of answer and
+ * `reasoning_chars` of reasoning failed and is being re-sent: withdraw them
+ * (D3). Counted from where that call began, so earlier calls' text stays. */
+export type OutputRetracted = {
+  type: "output_retracted";
+  text_chars: number;
+  reasoning_chars: number;
+};
+
 /** #492 P11: the item's sandbox was cold, so its durable snapshot is being
  * restored file-by-file before the turn runs. Ephemeral — a transient "還原中 N/M"
  * status line while a slow cold wake completes, NEVER added to the transcript. */
@@ -288,6 +306,8 @@ export type AgentEvent =
   | FailoverSwitch
   | RestoreProgress
   | RateLimited
+  | ModelRetrying
+  | OutputRetracted
   | TodosUpdated
   | GoalUpdated
   | ContextTrimmed

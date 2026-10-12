@@ -107,3 +107,17 @@ async def test_get_response_delegates_to_inner():
         None, "in", None, [], None, [], None
     )
     assert resp is sentinel
+
+
+async def test_a_whole_response_is_repaired_too():
+    """docs/plan-friendly-errors.md D2: `args_recovery` answers bad args
+    in-band now instead of raising so the whole turn could restart from a clean
+    conversation — which is only safe while every path into the conversation is
+    sanitized here. The whole-response path (WORKSPACE_AGENT_STREAM=0) was pure
+    delegation, so a malformed call reached the SDK raw and poisoned the next
+    request."""
+    item = _fc('{"path": ./hello.md"}')
+    resp = await RepairingModel(_FakeInner([], response=NS(output=[item]))).get_response(  # ty: ignore
+        None, "in", None, [], None, [], None
+    )
+    assert "path" in json.loads(resp.output[0].arguments)
