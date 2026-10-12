@@ -75,9 +75,11 @@ def test_a_page_and_its_files_load_with_no_cookie_as_the_pass_holder():
     assert ping.status_code == 200, ping.text
 
 
-def test_acting_as_the_holder_ends_with_the_content_request():
-    """The holder's identity is the content route's alone: the next request
-    without a cookie is still nobody."""
+def test_a_request_outside_the_content_route_still_asks_the_reader():
+    """Only the content route acts as the holder: any other request with no
+    cookie still meets the deploy's reader, and is refused. (That the override
+    ends with its block is pinned in `tests/test_acting_user.py`; each request
+    runs in a context of its own, so a leak could not show here.)"""
     cookie: dict[str, str | None] = {"user": "alice"}
     client, base = _signed_in_page(cookie)
 
@@ -89,7 +91,9 @@ def test_acting_as_the_holder_ends_with_the_content_request():
     assert other.status_code == 500, other.status_code
 
 
-def test_a_bad_pass_never_acts_as_anyone():
+def test_a_bad_pass_is_a_404_even_with_no_cookie():
+    """Looking a pass up asks no one's cookie — a bad one is the same 404 as
+    a lapsed one, not a 500 from the reader."""
     cookie: dict[str, str | None] = {"user": "alice"}
     client, _base = _signed_in_page(cookie)
 
