@@ -56,7 +56,7 @@ import type { ApiClient, EnvProvider, EnvProviderInput } from "../api/types";
 import type { EnvTarget } from "../hooks/chatItem";
 import { useDirtyClose } from "../hooks/useDirtyClose";
 import { mergeEnv, parseEnvText, setEnvValue, toEnvText, unstorable } from "../lib/envFile";
-import { isBlank, layerInUse, ownLayer, policyOf, POLICIES, type EnvPolicy } from "../lib/envLayers";
+import { isBlank, layerInUse, ownLayer, policyOf, POLICIES, type EnvPolicy, type Layer } from "../lib/envLayers";
 import { deriveEnvNeeds, type EnvField, type SectionStatus, type ToolSection } from "../lib/envNeeds";
 import { useT } from "../lib/i18n";
 import { pxToRem } from "../lib/pxToRem";
@@ -406,6 +406,8 @@ export function EnvVarsModal({
             settled={toolsSettled && (personalQ.isSuccess || personalQ.isError)}
             tools={tools}
             query={query}
+            shared={shared}
+            own={ownLayer(mineValues, auto)}
             policy={policy}
             values={personalValues}
             failed={personalQ.isError}
@@ -1139,12 +1141,15 @@ function MineTab({
   }
   const view = deriveEnvNeeds(tools, effective);
   const declared = new Set(view.sections.flatMap((s) => s.fields.map((f) => f.name)));
-  // Undeclared names worth showing here: ones the person holds, and ones the
-  // item asks each person to fill in.
+  // Undeclared names worth showing here: ones the person holds, ones the item
+  // asks each person to fill in, and ones whose tool gets my value for every
+  // item — no tool declared them, so without this nothing in the panel said
+  // the item uses it (2026-10-12).
   const other = [
     ...new Set([
       ...Object.keys(own),
       ...Object.keys(policy).filter((n) => policyOf(n, policy) !== "shared_first"),
+      ...Object.keys(personal).filter((n) => layerInUse(n, shared, own, policy, personal) === "personal"),
       ...(focus ? [focus] : []),
     ]),
   ].filter((n) => !declared.has(n));
@@ -1310,6 +1315,8 @@ function PersonalTab({
   settled,
   tools,
   query,
+  shared,
+  own,
   policy,
   values,
   failed,
@@ -1322,6 +1329,10 @@ function PersonalTab({
   settled: boolean;
   tools: Parameters<typeof deriveEnvNeeds>[0];
   query: string;
+  /** This item's shared copy and my value for it — what decides, per row,
+   * whether this item uses my value for every item (`layerInUse`). */
+  shared: Record<string, string>;
+  own: Record<string, string>;
   policy: Record<string, string>;
   /** My values for every item, as the box holds them now. */
   values: Record<string, string>;
@@ -1342,10 +1353,14 @@ function PersonalTab({
   // Names the item asks each person for without a tool declaring them.
   const asked = Object.keys(policy).filter((n) => policyOf(n, policy) !== "shared_first" && !needed.has(n));
   for (const n of asked) needed.set(n, "");
+  // Every name I hold too: these are my values, and each row says whether
+  // this item uses it — a name no tool declared included (2026-10-12).
+  const held = Object.keys(values).filter((n) => !needed.has(n));
+  for (const n of held) needed.set(n, "");
   const q = query.trim().toLowerCase();
   const found = new Set([
     ...matching(sections, query).flatMap((x) => x.fields.map((f) => f.name)),
-    ...asked.filter((n) => !q || n.toLowerCase().includes(q)),
+    ...[...asked, ...held].filter((n) => !q || n.toLowerCase().includes(q)),
   ]);
   const names = [...needed.keys()].filter((n) => found.has(n));
   return (
@@ -1393,6 +1408,7 @@ function PersonalTab({
             key={name}
             name={name}
             description={needed.get(name) ?? ""}
+            layer={layerInUse(name, shared, own, policy, values)}
             value={values[name] ?? ""}
             disabled={saving}
             onEdit={onEdit}
@@ -1408,12 +1424,15 @@ function PersonalTab({
 function PersonalRow({
   name,
   description,
+  layer,
   value,
   disabled,
   onEdit,
 }: {
   name: string;
   description: string;
+  /** Which layer this item's tools get the name from (`layerInUse`). */
+  layer: Layer;
   value: string;
   disabled: boolean;
   onEdit: (name: string, value: string) => void;
@@ -1421,7 +1440,7 @@ function PersonalRow({
   const t = useT();
   const [revealed, setRevealed] = useState(false);
   return (
-    <div data-testid={`env-personal-row-${name}`} style={{ display: "grid", gap: 3 }}>
+    <div data-testid={`env-personal-row-${name}`} data-in-use={layer} style={{ display: "grid", gap: 3 }}>
       <span style={MONO}>{name}</span>
       {description && <span style={MUTED}>{description}</span>}
       <div style={{ display: "flex", gap: 6 }}>
@@ -1456,6 +1475,18 @@ function PersonalRow({
           {t(revealed ? "env.hide" : "env.reveal")}
         </button>
       </div>
+      {/* Whether this item uses it, named by the tab holding what it uses —
+          the same words as the Private tab's rows (A22). */}
+      <span data-testid={`env-personal-in-use-${name}`} style={{ ...MUTED, marginLeft: "auto", whiteSpace: "nowrap" }}>
+        {layer === "none" ? (
+          t("env.inUse.none")
+        ) : (
+          <>
+            {layer === "personal" ? "✓ " : ""}
+            {t("env.inUse", { tab: t(`env.tab.${TAB_OF[layer]}`) })}
+          </>
+        )}
+      </span>
     </div>
   );
 }
