@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 
 from workspace_app.model_settings.effective import (
+    SET,
     effective_app,
     effective_profile,
     effective_settings,
@@ -294,3 +295,44 @@ def test_a_part_of_the_wrong_shape_is_named_not_crashed_on(config, document):
     found = problems(document, config_path=config, env={})
 
     assert found, document
+
+
+@pytest.mark.parametrize(
+    "document",
+    [
+        # review r3: the typed-secret walk never went into lists, and a usage entry
+        # takes an `llm.api_key` — stored, published, shown in history (M6)
+        {
+            "config": {
+                "agents": {"kb_chat": [{"preset": "kb-default", "llm": {"api_key": "sk-typed"}}]}
+            }
+        },
+        # ...and the defaults show a secret as a mask; applying the mask text
+        # back would make it the key
+        {"config": {"agents": {"presets": {"kb-default": {"env": {"HF_HOME": SET}}}}}},
+        {
+            "config": {
+                "agents": {
+                    "kb_chat": [{"preset": "kb-default", "llm": {"base_url": "*** set ***"}}]
+                }
+            }
+        },
+    ],
+)
+def test_a_secret_or_a_mask_typed_anywhere_is_refused(config, document):
+    found = problems(document, config_path=config, env={})
+
+    assert any("key" in p for p in found), found
+
+
+def test_a_short_key_is_not_scrubbed_out_of_every_message(config):
+    # review r3: substring scrubbing of a one-letter key shredded every message
+    # and told a guesser which letters the key had.
+    found = problems(
+        {"config": {"server": {"port": 1}}},
+        config_path=config,
+        env={},
+        keys={"config.agents.presets.kb-default.env.REGION": "e"},
+    )
+
+    assert any("read only when the server starts" in p for p in found), found

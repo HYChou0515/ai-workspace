@@ -28,6 +28,7 @@ from ..config.dump import is_secret
 from ..config.loader import load_with_provenance
 from ..config.schema import Settings
 from ..workflow.discovery import validate_workflow_profiles
+from .store import SHOWN_FROM
 
 
 def key_segments(path: str) -> list[str]:
@@ -138,6 +139,11 @@ def secrets_written(document: dict[str, Any]) -> list[str]:
     return _secrets_written(document.get("config") or {})
 
 
+#: How the page shows a secret it will not reveal (`page.mask`). Typed back
+#: as a value it would become that setting (review r3).
+SET, UNSET = "*** set ***", "*** unset ***"
+
+
 def _secrets_written(patch: Any, path: str = "") -> list[str]:
     """A secret typed into the text would be stored in the patch — shown in
     the diff, kept in history (M6). It is set as a key instead."""
@@ -146,6 +152,14 @@ def _secrets_written(patch: Any, path: str = "") -> list[str]:
             problem
             for key, value in patch.items()
             for problem in _secrets_written(value, f"{path}.{key}" if path else str(key))
+        ]
+    if isinstance(patch, list):
+        # review r3: a usage entry takes an `llm.api_key` too
+        return [p for i, item in enumerate(patch) for p in _secrets_written(item, f"{path}[{i}]")]
+    if patch in (SET, UNSET):
+        return [
+            f"config.{path}: that is how the defaults show a secret, not a value — "
+            "leave it out, or set the secret as a key"
         ]
     if patch is not None and path and is_secret(path):
         return [f"config.{path}: a secret is set as a key on this page, not in the text"]
@@ -260,9 +274,16 @@ def _outside_live(patch: Any, path: str = "") -> list[str]:
 
 
 def redact(text: str, keys: Mapping[str, str] | None) -> str:
-    """`text` with every key's value replaced — for anything a route hands
-    back, since a refusal may quote a value (`got {x!r}`) (M6, review r2)."""
-    values: list[str] = [] if keys is None else [str(v) for v in keys.values()]
+    """`text` with each long key's value replaced — for anything a route hands
+    back, since a refusal may quote a value (`got {x!r}`) (M6, review r2).
+
+    Only a value of `SHOWN_FROM` characters or more: scrubbing a short one out
+    of every message shredded them (a key "e" took every letter e) and told a
+    guesser which strings it held (review r3). A key path is a text setting
+    (`page.key_path_problem`), so the loader has no shape to refuse and quote."""
+    values: list[str] = (
+        [] if keys is None else [str(v) for v in keys.values() if len(str(v)) >= SHOWN_FROM]
+    )
     values.sort(key=len, reverse=True)  # a longer key first, if one holds another
     out = text
     for value in values:

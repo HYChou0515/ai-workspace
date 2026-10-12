@@ -58,7 +58,8 @@ class _PageOut(BaseModel):
     draft: dict[str, Any]
     published: dict[str, Any]
     version: str | None = None
-    #: path -> "…" + last four characters; never a value (M6).
+    #: path -> "…" + the last four characters of a long key, "" for a short
+    #: one (shown as "set"); never a value (M6).
     keys: dict[str, str] = {}
     #: Keys set or cleared since the last Apply — what the next Apply switches (M20).
     pending_keys: list[str] = []

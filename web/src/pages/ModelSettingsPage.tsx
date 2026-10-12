@@ -163,7 +163,7 @@ function KeyChangeList({ pending, keys }: { pending: string[]; keys: Record<stri
         <li key={path}>
           <strong>{t(path in keys ? "modelSettings.keyChangeSet" : "modelSettings.keyChangeCleared")}</strong>{" "}
           {path}
-          {path in keys && ` (${keys[path]})`}
+          {path in keys && ` (${keys[path] || t("modelSettings.keyIsSet")})`}
         </li>
       ))}
     </ul>
@@ -240,16 +240,18 @@ function useDraft(client: Client, data: PageData) {
   const nothingToApply = changes.length === 0 && pendingKeys.length === 0;
   // A check that FAILED is not a check that found nothing (review r1).
   const checkFailed = check.isError && !checking;
-  // NN/g heuristic #1: Apply is offered only when it would do something; this
-  // says why not otherwise — advice the person can act on.
-  const blocked = !parsed.ok
-    ? t("modelSettings.fixJsonFirst")
+  // NN/g heuristic #1: Apply is offered only when it would do something. Why
+  // not is a KIND, worded by the tab that shows it (review r3: the keys tab
+  // pointed at "the problems listed above" it does not list). The JSON reason
+  // waits for a pause in typing, like the banner (NN/g: not before input ends).
+  const blocked: Blocked = !settled.ok
+    ? "json"
     : dirty
-      ? t("modelSettings.saveFirst")
+      ? "dirty"
       : checkFailed || problems.length
-        ? t("modelSettings.applyBlockedProblems")
+        ? "problems"
         : nothingToApply
-          ? t("modelSettings.nothingToApply")
+          ? "nothing"
           : "";
 
   const askToApply = async () => {
@@ -276,6 +278,9 @@ function useDraft(client: Client, data: PageData) {
     setRefused([]);
     setSaveError("");
   };
+  // "Applied: version X" describes the last Apply; a key change or a rollback
+  // since makes it stale beside an Apply with work waiting (review r3).
+  const clearNotice = () => setNotice("");
 
   return {
     text,
@@ -298,13 +303,44 @@ function useDraft(client: Client, data: PageData) {
     nothingToApply,
     blocked,
     askToApply,
+    clearNotice,
   };
 }
 
 type Draft = ReturnType<typeof useDraft>;
+type Blocked = "" | "json" | "dirty" | "problems" | "nothing";
 
-function ApplyButton({ draft, testId, explain }: { draft: Draft; testId: string; explain: boolean }) {
+const WHY = {
+  edit: {
+    json: "modelSettings.fixJsonFirst",
+    dirty: "modelSettings.saveFirst",
+    problems: "modelSettings.applyBlockedProblems",
+    nothing: "modelSettings.nothingToApply",
+  },
+  // the keys tab cannot save the draft nor show its problems — it says where
+  keys: {
+    json: "modelSettings.keysBlockedDirty",
+    dirty: "modelSettings.keysBlockedDirty",
+    problems: "modelSettings.keysBlockedProblems",
+    nothing: "modelSettings.nothingToApply",
+  },
+} as const;
+
+function ApplyButton({
+  draft,
+  testId,
+  explain,
+  where,
+  goEdit,
+}: {
+  draft: Draft;
+  testId: string;
+  explain: boolean;
+  where: "edit" | "keys";
+  goEdit?: () => void;
+}) {
   const t = useT();
+  const blocked = draft.blocked;
   return (
     <>
       <button
@@ -312,15 +348,27 @@ function ApplyButton({ draft, testId, explain }: { draft: Draft; testId: string;
         className="btn"
         data-variant="primary"
         data-testid={testId}
-        disabled={draft.blocked !== "" || draft.apply.isPending}
+        disabled={blocked !== "" || draft.apply.isPending}
         onClick={() => void draft.askToApply()}
       >
         {t("modelSettings.apply")}
       </button>
-      {explain && draft.blocked && (
+      {explain && blocked && (
         <span data-testid={`${testId}-why`} style={MUTED}>
-          {draft.blocked}
+          {t(WHY[where][blocked])}
         </span>
+      )}
+      {explain && goEdit && blocked && blocked !== "nothing" && (
+        <button
+          type="button"
+          className="btn"
+          data-variant="secondary"
+          data-size="sm"
+          data-testid="model-settings-go-edit"
+          onClick={goEdit}
+        >
+          {t("modelSettings.goEdit")}
+        </button>
       )}
       {draft.notice && (
         <span data-testid="model-settings-notice" style={MUTED}>
@@ -339,7 +387,7 @@ function Loaded({ client, data }: { client: Client; data: PageData }) {
     <>
       <Tabs
         tabs={[
-          { id: "edit", label: t("modelSettings.tab.edit") },
+          { id: "edit", label: t(draft.dirty ? "modelSettings.tab.editUnsaved" : "modelSettings.tab.edit") },
           { id: "history", label: t("modelSettings.tab.history") },
           { id: "keys", label: t("modelSettings.tab.keys") },
         ]}
@@ -351,9 +399,17 @@ function Loaded({ client, data }: { client: Client; data: PageData }) {
       <div role="tabpanel" id={`model-settings-panel-${tab}`} aria-labelledby={`model-settings-tab-${tab}`}>
         {tab === "edit" && <EditTab client={client} defaults={data.defaults} saved={data.draft} draft={draft} />}
         {tab === "history" && (
-          <HistoryTab client={client} current={data.version} published={data.published} defaults={data.defaults} />
+          <HistoryTab
+            client={client}
+            current={data.version}
+            published={data.published}
+            defaults={data.defaults}
+            draft={draft}
+          />
         )}
-        {tab === "keys" && <KeysTab client={client} keys={data.keys} draft={draft} />}
+        {tab === "keys" && (
+          <KeysTab client={client} keys={data.keys} draft={draft} goEdit={() => setTab("edit")} />
+        )}
       </div>
     </>
   );
@@ -456,7 +512,7 @@ function EditTab({
           </button>
           {/* The status line above already says "nothing to apply" / "problems";
               the reason beside the button is for what it does not say. */}
-          <ApplyButton draft={draft} testId="model-settings-apply" explain={draft.dirty} />
+          <ApplyButton draft={draft} testId="model-settings-apply" explain={draft.dirty} where="edit" />
           {draft.saveError && (
             <span role="alert" data-testid="model-settings-save-failed" style={{ ...MUTED, color: "var(--err)" }}>
               {t("modelSettings.saveFailed", { error: draft.saveError })}
@@ -596,22 +652,29 @@ function HistoryTab({
   current,
   published,
   defaults,
+  draft,
 }: {
   client: Client;
   current: string | null;
   published: Patch;
   defaults: SettingsDocument;
+  draft: Draft;
 }) {
   const t = useT();
   const dialog = useDialog();
   const queryClient = useQueryClient();
   const history = useQuery({ queryKey: qk.modelSettingsHistory, queryFn: () => client.history() });
   const [refused, setRefused] = useState<string[]>([]);
+  const [rolled, setRolled] = useState<{ from: string; now: string } | null>(null);
   const rollback = useMutation({
     meta: { silentError: true },
     mutationFn: (version: string) => client.rollback(version),
-    onSuccess: () => {
+    // NN/g heuristic #1: say what happened — a rollback is a new version whose
+    // id differs from the one named whenever the keys in force differ (M20).
+    onSuccess: (applied: Applied, version: string) => {
       setRefused([]);
+      setRolled({ from: version, now: applied.version });
+      draft.clearNotice();
       void queryClient.invalidateQueries({ queryKey: qk.modelSettings });
     },
     onError: (e) => setRefused(problemsOf(e).length ? problemsOf(e) : [String(e)]),
@@ -624,7 +687,7 @@ function HistoryTab({
       body: (
         <div style={{ display: "grid", gap: 8 }}>
           <p>{t("modelSettings.rollbackBody")}</p>
-          {changes.length ? <ChangeList changes={changes} /> : <p>{t("modelSettings.applyNothing")}</p>}
+          <ChangeList changes={changes} />
         </div>
       ),
       actions: [
@@ -648,8 +711,21 @@ function HistoryTab({
         {t("modelSettings.historyEmpty")}
       </p>
     );
+  // A rollback replaces the draft; over unsaved edits it would throw them away
+  // without a word (review r3) — they are saved or undone first.
+  const blockedByEdits = draft.dirty;
   return (
     <div style={{ display: "grid", gap: 8 }}>
+      {blockedByEdits && (
+        <p data-testid="model-settings-rollback-why" style={{ ...STATUS, margin: 0 }}>
+          {t("modelSettings.rollbackBlockedDirty")}
+        </p>
+      )}
+      {rolled && (
+        <p data-testid="model-settings-rolled-back" style={{ ...STATUS, margin: 0 }}>
+          {t("modelSettings.rolledBack", { from: short(rolled.from), now: short(rolled.now) })}
+        </p>
+      )}
       {refused.length > 0 && (
         <div role="alert" className="ev-banner ev-banner--err">
           <div className="ev-banner__body">
@@ -665,6 +741,11 @@ function HistoryTab({
         {history.data.map((entry, i) => {
           // The newest entry carrying the current content id is what is in force.
           const inForce = entry.version === current && history.data.findIndex((e) => e.version === current) === i;
+          // Offered only where it would change what runs — not on a version with
+          // the values in force, the current one included (NN/g heuristic #5:
+          // no do-nothing action).
+          const changesSomething =
+            diffEffective((defaults ?? {}) as Patch, published, entry.patch).length > 0;
           return (
             // Two fixed columns — what the version is, and its one action at the
             // right edge — so the button stays put whatever the row says.
@@ -700,14 +781,14 @@ function HistoryTab({
                   </span>
                 )}
               </div>
-              {!inForce && (
+              {changesSomething && (
                 <button
                   type="button"
                   className="btn"
                   data-variant="secondary"
                   data-size="sm"
                   data-testid={`model-settings-rollback-${i}`}
-                  disabled={rollback.isPending}
+                  disabled={rollback.isPending || blockedByEdits}
                   onClick={() => void askToRollBack(entry)}
                 >
                   {t("modelSettings.rollback")}
@@ -721,7 +802,17 @@ function HistoryTab({
   );
 }
 
-function KeysTab({ client, keys, draft }: { client: Client; keys: Record<string, string>; draft: Draft }) {
+function KeysTab({
+  client,
+  keys,
+  draft,
+  goEdit,
+}: {
+  client: Client;
+  keys: Record<string, string>;
+  draft: Draft;
+  goEdit: () => void;
+}) {
   const t = useT();
   const dialog = useDialog();
   const queryClient = useQueryClient();
@@ -730,6 +821,7 @@ function KeysTab({ client, keys, draft }: { client: Client; keys: Record<string,
   const [refused, setRefused] = useState<string[]>([]);
   const done = () => {
     setRefused([]);
+    draft.clearNotice();
     void queryClient.invalidateQueries({ queryKey: qk.modelSettings });
   };
   const set = useMutation({
@@ -779,7 +871,7 @@ function KeysTab({ client, keys, draft }: { client: Client; keys: Record<string,
             return (
               <li key={p} style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
                 <span style={{ overflowWrap: "anywhere" }}>{p}</span>
-                {isSet && <span style={MUTED}>{keys[p]}</span>}
+                {isSet && <span style={MUTED}>{keys[p] || t("modelSettings.keyIsSet")}</span>}
                 {pending.has(p) && (
                   <span data-testid={`model-settings-key-pending-${p}`} style={BADGE}>
                     {t(isSet ? "modelSettings.keyPendingSet" : "modelSettings.keyPendingCleared")}
@@ -805,7 +897,7 @@ function KeysTab({ client, keys, draft }: { client: Client; keys: Record<string,
       {draft.pendingKeys.length > 0 && (
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
           <span style={STATUS}>{t("modelSettings.keysWaiting", { n: String(draft.pendingKeys.length) })}</span>
-          <ApplyButton draft={draft} testId="model-settings-keys-apply" explain />
+          <ApplyButton draft={draft} testId="model-settings-keys-apply" explain where="keys" goEdit={goEdit} />
         </div>
       )}
       {/* Visible labels, not placeholders — NN/g "Placeholders in Form Fields

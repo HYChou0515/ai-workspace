@@ -150,4 +150,5 @@ def test_a_short_key_is_shown_as_set_not_by_its_end(store):
 
     assert status["config.llm.api_key"] == "…cdef"
     assert "east" not in status["config.agents.presets.a.env.REGION"]
-    assert status["config.agents.presets.a.env.REGION"] == "set"
+    # an empty tail: the page says "set" in the reader's language (review r3)
+    assert status["config.agents.presets.a.env.REGION"] == ""

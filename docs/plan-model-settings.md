@@ -23,7 +23,7 @@ settled by me, listed for the user to overturn.
 | M3 | Scope: **presets**, **whole `app.json`** of each App, and the **platform's own model choices** (`kb.retrieval_llm`, `card_drafter`, `vlm_llm`, `wiki.llm`, `health.judge_llm`, sub-agent models) | user |
 | M4 | **Draft, then Apply.** Edits are saved as a draft and change nothing running. Apply validates and publishes the draft as a new version identified by a string (the content hash); every user of the settings compares that string before each use and reloads only when it differs | user |
 | M5 | **History and one-click rollback.** Each Apply is a version: who, when, the diff from the previous one. Rollback = apply an earlier version again | user |
-| M6 | **API keys can be entered on the page**, write-only: shown as set / unset with a short suffix, never returned, never in history or diffs (history records that a key changed) | user |
+| M6 | **API keys can be entered on the page**, write-only: shown as set / unset with a short suffix, never returned, never in history or diffs (history records that a key changed) *As built:* a key under 16 characters shows only that it is set — the end of a short value is most of it (every preset `env` value is a key, M7); the threshold is mine (review r2) | user |
 | M7 | What is secret is decided by the **same function** the boot-time config dump uses (`config/dump.py:_is_secret`); its known gaps are fixed there, once, for both: `_token` matched case-insensitively, and every value of a preset's `env` | user ("用同一套就好") |
 | M8 | Apply runs **structure checks only** (a default preset that exists, fallbacks that resolve, required fields — the loader's own checks) and refuses on failure. A separate **"test connection"** button per preset makes one minimal call and shows the result; it never blocks Apply — a provider outage must not stop a rollback | user |
 | M9 | The editor is **text** (YAML/JSON) checked against the same schema as Apply, with the error's line and reason shown as you type, a diff before Apply, and each value's source (deploy default / changed here) with reset | user |
@@ -41,9 +41,10 @@ settled by me, listed for the user to overturn.
 
 ### Sources for the page (M15)
 
-Checked against a screenshot of the built page (CLAUDE.md "UI work must
-follow published UI/UX guidance"); each is cited where it is applied in
-`web/src/pages/ModelSettingsPage.tsx`.
+Checked against screenshots of the built page in real Chromium at 1280, 768
+and 390 px during the PR (CLAUDE.md "UI work must follow published UI/UX
+guidance"). Most are also cited in `web/src/pages/ModelSettingsPage.tsx` beside
+what they shaped; the ellipsis and the forms-error article are cited only here.
 
 - Three peer sections as a tab strip, two cues on the selected tab — NN/g,
   "Tabs, Used Right" (https://www.nngroup.com/articles/tabs-used-right/);

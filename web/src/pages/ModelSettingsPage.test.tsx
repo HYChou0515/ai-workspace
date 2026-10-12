@@ -284,7 +284,7 @@ describe("ModelSettingsPage", () => {
 
     type("{ not json");
 
-    expect(screen.getByTestId("model-settings-apply-why")).toHaveTextContent("先修正 JSON");
+    await waitFor(() => expect(screen.getByTestId("model-settings-apply-why")).toHaveTextContent("先修正 JSON"));
   });
 
   it("waits for a pause in typing before calling the JSON wrong", async () => {
@@ -306,7 +306,7 @@ describe("ModelSettingsPage", () => {
     type(JSON.stringify(KB_2));
 
     fireEvent.click(screen.getByRole("tab", { name: "API 金鑰" }));
-    fireEvent.click(screen.getByRole("tab", { name: "編輯" }));
+    fireEvent.click(screen.getByRole("tab", { name: "編輯（未儲存）" }));
 
     expect(JSON.parse(editor().value)).toEqual(KB_2);
   });
@@ -344,6 +344,88 @@ describe("ModelSettingsPage", () => {
 
     expect(screen.getByText("設定路徑")).toBeVisible();
     expect(screen.getByLabelText("設定路徑")).toBe(screen.getByTestId("model-settings-key-path"));
+  });
+
+  it("says a short key is set, in the reader's language", async () => {
+    // review r3: the server's short-key marker was shown raw ("set").
+    renderWithQuery(<ModelSettingsPage client={fakeClient({ keys: { "config.llm.api_key": "" } })} />);
+    fireEvent.click(await screen.findByRole("tab", { name: "API 金鑰" }));
+
+    expect(screen.getByTestId("model-settings-keys")).toHaveTextContent("已設定");
+  });
+
+  it("from the keys tab, says the Edit tab holds unsaved edits and leads there", async () => {
+    // review r3 (ux): Apply on the keys tab was blocked by edits only the Edit
+    // tab can save, with nothing saying so — and the Edit tab looked clean.
+    const path = "config.llm.api_key";
+    const client = fakeClient({ keys: { [path]: "…4321" }, pending_keys: [path] });
+    renderWithQuery(<ModelSettingsPage client={client} />);
+    await screen.findByRole("textbox", { name: "草稿（JSON）" });
+    type(JSON.stringify(KB_2));
+
+    fireEvent.click(screen.getByRole("tab", { name: "API 金鑰" }));
+
+    expect(screen.getByRole("tab", { name: "編輯（未儲存）" })).toBeInTheDocument();
+    expect(screen.getByTestId("model-settings-keys-apply-why")).toHaveTextContent("編輯分頁有沒儲存的改動");
+    fireEvent.click(screen.getByTestId("model-settings-go-edit"));
+    expect(screen.getByRole("textbox", { name: "草稿（JSON）" })).toBeInTheDocument();
+  });
+
+  it("from the keys tab, does not point at a list of problems it does not show", async () => {
+    const path = "config.llm.api_key";
+    const client = fakeClient({ draft: KB_2, keys: { [path]: "…4321" }, pending_keys: [path] });
+    client.check.mockResolvedValue(["config.agents.presets.kb-default.model: nope"]);
+    renderWithQuery(<ModelSettingsPage client={client} />);
+    await screen.findByTestId("model-settings-problems");
+
+    fireEvent.click(screen.getByRole("tab", { name: "API 金鑰" }));
+
+    const why = screen.getByTestId("model-settings-keys-apply-why");
+    expect(why).toHaveTextContent("編輯分頁的草稿有問題");
+    expect(why).not.toHaveTextContent("上面");
+  });
+
+  it("does not call the JSON wrong beside Apply before typing pauses", async () => {
+    renderWithQuery(<ModelSettingsPage client={fakeClient()} />);
+    await screen.findByRole("textbox", { name: "草稿（JSON）" });
+
+    type('{"config": ');
+
+    expect(screen.getByTestId("model-settings-apply-why")).not.toHaveTextContent("JSON");
+    await waitFor(() => expect(screen.getByTestId("model-settings-apply-why")).toHaveTextContent("先修正 JSON"));
+  });
+
+  it("does not roll back over unsaved edits", async () => {
+    // review r3: the rolled-back draft replaced the editor's unsaved text.
+    const client = fakeClient({ published: KB_2, version: "v2v2v2v2v2" });
+    client.history.mockResolvedValue([applied("v2v2v2v2v2", KB_2, 2), applied("v1v1v1v1v1", {}, 1)]);
+    renderWithQuery(<ModelSettingsPage client={client} />);
+    await screen.findByRole("textbox", { name: "草稿（JSON）" });
+    type('{"config": {"llm": {"base_url": "http://mine"}}}');
+
+    fireEvent.click(screen.getByRole("tab", { name: "版本紀錄" }));
+
+    expect(await screen.findByTestId("model-settings-rollback-1")).toBeDisabled();
+    expect(screen.getByTestId("model-settings-rollback-why")).toHaveTextContent("沒儲存的改動");
+  });
+
+  it("says what a rollback did, and offers none that would change nothing", async () => {
+    const client = fakeClient({ published: KB_2, version: "v3v3v3v3v3" });
+    client.history.mockResolvedValue([
+      applied("v3v3v3v3v3", KB_2, 3),
+      applied("v2v2v2v2v2", KB_2, 2), // the same values: rolling back changes nothing
+      applied("v1v1v1v1v1", {}, 1),
+    ]);
+    client.rollback.mockResolvedValue(applied("v4v4v4v4v4", {}, 4));
+    renderWithQuery(<ModelSettingsPage client={client} />);
+    fireEvent.click(await screen.findByRole("tab", { name: "版本紀錄" }));
+    await screen.findByTestId("model-settings-history");
+
+    expect(screen.queryByTestId("model-settings-rollback-1")).toBeNull();
+    fireEvent.click(screen.getByTestId("model-settings-rollback-2"));
+    fireEvent.click(await screen.findByRole("button", { name: "回復" }));
+
+    expect(await screen.findByTestId("model-settings-rolled-back")).toHaveTextContent("v1v1v1v1");
   });
 
   it("lists a refused Apply's reasons", async () => {

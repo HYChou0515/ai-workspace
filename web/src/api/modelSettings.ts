@@ -25,7 +25,8 @@ export type ModelSettingsPage = {
   draft: Patch;
   published: Patch;
   version: string | null;
-  /** Setting path -> "…" + last four characters. Never a value. */
+  /** Setting path -> "…" + the last four characters of a long key, "" for a
+   * short one (shown as "set"). Never a value. */
   keys: Record<string, string>;
   /** Keys set or cleared since the last Apply — what the next Apply switches. */
   pending_keys: string[];

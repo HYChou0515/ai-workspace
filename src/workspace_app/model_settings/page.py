@@ -24,10 +24,7 @@ from ..apps.manifest import read_app_manifest_raw
 from ..apps.profiles import list_profiles, read_profile_raw
 from ..config.dump import is_secret
 from ..config.schema import Settings
-from .effective import LIVE_CONFIG, key_segments
-
-#: What a secret shows as. Set or unset is all the page may say (M6).
-SET, UNSET = "*** set ***", "*** unset ***"
+from .effective import LIVE_CONFIG, SET, UNSET, key_segments
 
 
 def config_tree(settings: Settings) -> dict[str, Any]:

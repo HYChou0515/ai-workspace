@@ -149,3 +149,22 @@ describe("diffEffective", () => {
     ]);
   });
 });
+
+
+describe("diffEffective under a hidden preset", () => {
+  // review r3: a null ANCESTOR fell through to the defaults, so hiding a preset
+  // read as "its model goes back to the default".
+  const defaults = { foo: { model: "d" } };
+
+  it("hiding a preset reads as removed, not as its values going back", () => {
+    expect(diffEffective(defaults, { foo: { model: "x" } }, { foo: null })).toEqual([
+      { path: "foo.model", kind: "removed", before: "x" },
+    ]);
+  });
+
+  it("showing a hidden preset again reads as added, not changed from the default", () => {
+    expect(diffEffective(defaults, { foo: null }, { foo: { model: "y" } })).toEqual([
+      { path: "foo.model", kind: "added", after: "y" },
+    ]);
+  });
+});

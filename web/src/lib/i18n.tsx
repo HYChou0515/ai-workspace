@@ -2723,6 +2723,7 @@ export const messages = {
   },
   "modelSettings.loadFailed": { "zh-TW": "讀不到模型設定。", en: "Could not load the model settings." },
   "modelSettings.tab.edit": { "zh-TW": "編輯", en: "Edit" },
+  "modelSettings.tab.editUnsaved": { "zh-TW": "編輯（未儲存）", en: "Edit (unsaved)" },
   "modelSettings.tab.history": { "zh-TW": "版本紀錄", en: "History" },
   "modelSettings.tab.keys": { "zh-TW": "API 金鑰", en: "API keys" },
   "modelSettings.tabs": { "zh-TW": "模型設定的區塊", en: "Model settings sections" },
@@ -2743,10 +2744,7 @@ export const messages = {
     en: "Could not check this draft ({error}); it cannot be applied until a check passes.",
   },
   "modelSettings.saveFailed": { "zh-TW": "草稿沒有存成：{error}", en: "The draft was not saved: {error}" },
-  "modelSettings.noProblems": {
-    "zh-TW": "沒有問題；儲存草稿後就能套用",
-    en: "No problems; save the draft to apply it",
-  },
+  "modelSettings.noProblems": { "zh-TW": "沒有問題", en: "No problems found" },
   "modelSettings.nothingToApply": {
     "zh-TW": "草稿和目前生效的相同，沒有要套用的改動",
     en: "The draft matches what is in force; nothing to apply",
@@ -2760,6 +2758,24 @@ export const messages = {
     en: "Fix the problems listed above to apply",
   },
   "modelSettings.keyChangeSet": { "zh-TW": "金鑰設定", en: "Key set" },
+  "modelSettings.keyIsSet": { "zh-TW": "已設定", en: "set" },
+  "modelSettings.goEdit": { "zh-TW": "前往編輯", en: "Go to Edit" },
+  "modelSettings.keysBlockedDirty": {
+    "zh-TW": "編輯分頁有沒儲存的改動：先在那裡儲存或還原，才能套用",
+    en: "The Edit tab has unsaved edits: save or undo them there to apply",
+  },
+  "modelSettings.keysBlockedProblems": {
+    "zh-TW": "編輯分頁的草稿有問題：先在那裡修正，才能套用",
+    en: "The draft on the Edit tab has problems: fix them there to apply",
+  },
+  "modelSettings.rollbackBlockedDirty": {
+    "zh-TW": "編輯分頁有沒儲存的改動：回復會換掉草稿，先儲存或還原它們",
+    en: "The Edit tab has unsaved edits: a rollback replaces the draft, so save or undo them first",
+  },
+  "modelSettings.rolledBack": {
+    "zh-TW": "已回復到版本 {from} 的設定；目前生效：版本 {now}（金鑰維持目前生效的值）",
+    en: "Rolled back to version {from}'s settings; now in force: version {now} (keys as they were in force)",
+  },
   "modelSettings.keyPendingSet": { "zh-TW": "等待套用", en: "Waiting for Apply" },
   "modelSettings.keyPendingCleared": { "zh-TW": "已清除，等待套用", en: "Cleared, waiting for Apply" },
   "modelSettings.keysWaiting": {
@@ -2842,8 +2858,8 @@ export const messages = {
   "modelSettings.keyClear": { "zh-TW": "清除", en: "Clear" },
   "modelSettings.keyClearTitle": { "zh-TW": "清除 {path}？", en: "Clear {path}?" },
   "modelSettings.keyClearBody": {
-    "zh-TW": "下次套用後改回 config.yaml 裡的值。清掉的金鑰拿不回來。",
-    en: "After the next Apply the config.yaml value is used again. A cleared key cannot be recovered.",
+    "zh-TW": "清除和設定一樣，下次套用才生效；清掉的金鑰拿不回來。",
+    en: "Clearing takes effect at the next Apply, like setting one; a cleared key cannot be recovered.",
   },
 } satisfies Record<string, Entry>;
 

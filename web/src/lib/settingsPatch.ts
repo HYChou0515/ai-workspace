@@ -70,13 +70,22 @@ export function valueAt(document: unknown, parts: string[]): { found: boolean; v
 export function diffEffective(defaults: Patch, before: Patch, after: Patch): Change[] {
   const paths = new Map<string, string[]>();
   for (const leaf of [...flattenParts(before), ...flattenParts(after)]) paths.set(leaf.path, leaf.parts);
-  const runs = (patch: Patch, parts: string[]) => {
-    const set = valueAt(patch, parts);
-    if (set.found) return set.value === null ? { found: false } : set;
-    return valueAt(defaults, parts);
+  // What runs at `parts` under `patch`: a null at the path or ANY ancestor
+  // hides it (a hidden preset — review r3: an ancestor fell through to the
+  // defaults); a path the patch does not reach is the default.
+  const runs = (patch: Patch, parts: string[]): { found: boolean; value?: unknown } => {
+    let node: unknown = patch;
+    for (const part of parts) {
+      if (!isObject(node) || !(part in node)) return valueAt(defaults, parts);
+      node = node[part];
+      if (node === null) return { found: false };
+    }
+    return { found: true, value: node };
   };
+  // Value by value: a path with a deeper path beside it is said through those.
+  const leaves = [...paths].filter(([path]) => ![...paths.keys()].some((other) => other.startsWith(`${path}.`)));
   const out: Change[] = [];
-  for (const [path, parts] of paths) {
+  for (const [path, parts] of leaves) {
     const was = runs(before, parts);
     const will = runs(after, parts);
     if (was.found && will.found) {

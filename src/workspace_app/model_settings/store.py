@@ -41,8 +41,9 @@ from specstar.types import (
 )
 
 _DRAFT_ID = "draft"
-#: A key this long or longer is shown by its last four characters.
-_SHOWN_FROM = 16
+#: A key this long or longer is shown by its last four characters, and is
+#: what a message is scrubbed of; a shorter one is only "set" (review r2/r3).
+SHOWN_FROM = 16
 _CURRENT_ID = "current"
 
 
@@ -238,11 +239,12 @@ class SettingsStore:
             rm.delete(_key_id(path))
 
     def key_status(self) -> dict[str, str]:
-        """Which keys are set: by the last four characters of a long one, as
-        "set" otherwise — the end of a short value is most of it (review r2;
-        every preset env value is a key, M7, and those are often short)."""
+        """Which keys are set: by the last four characters of a long one, by an
+        empty string otherwise — the end of a short value is most of it (review
+        r2; every preset env value is a key, M7, and those are often short). The
+        page says "set" in the reader's language."""
         return {
-            key.path: "…" + key.value[-4:] if len(key.value) >= _SHOWN_FROM else "set"
+            key.path: "…" + key.value[-4:] if len(key.value) >= SHOWN_FROM else ""
             for key in self._keys()
         }
 
