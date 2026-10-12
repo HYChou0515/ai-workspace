@@ -33,11 +33,19 @@ settled by me, listed for the user to overturn.
 | M13 | **One function** produces the effective settings (defaults ⊕ published patch), used by the API, all nine workers and `skill_eval` — no consumer merges on its own | mine |
 | M14 | Expensive objects (failover chains, LLM clients with their connection pools) are cached by a **fingerprint of their resolved settings** and rebuilt only when it changes; if the version cannot be read, the last good settings stay in use | mine |
 | M15 | The page sits under a superuser-only "Settings" entry; its layout follows NN/g and Material 3, cited in the PR | mine |
+| M16 | A process reads the version string **at most once a second** and trusts it in between (`model_settings/live.py:VERSION_TTL_S`). A request reads the settings about ten times (`load_app_manifest` alone); one small read a second per process is the whole cost, and an Apply is in force everywhere within a second | mine — found in P4 |
+| M17 | **Turning a role on or off is not done here.** Whether a role (`kb.retrieval_llm`, `card_drafter`, `health.judge_llm`, …) is on decided at boot which features were wired (the quality judge, the drafter, the goal checker, code-wiki), and boot reads `config.yaml`, not the page — so Apply refuses a change to whether a role is on, with "change it in config.yaml" (`ROLES` in `model_settings/effective.py`). Changing **which** model a role uses is live | mine — found in P5 |
+| M18 | **The page edits only what a running process reads again.** The config part is limited to the model choices of M3 (`LIVE_CONFIG` in `model_settings/effective.py`: `llm`, everything under `agents` (presets, `subagent_models`, the usage lists such as `kb_chat`), the role references); any other config key is refused at Apply with "change it in config.yaml". Storing a value that does nothing until a restart is a dead knob. The same holds inside a live part: the `infer_modules` run knobs (`enhancements`, `reasoning_effort`, `parallelism`, `collection`) and an App's `resources` / `slug` are read at boot and held, so a change to them is refused. Apply also runs the boot's workflow check (`validate_workflow_profiles`) on the draft, so a workflow without its `run.py` is refused rather than found at its first run | mine — found in P5 |
+| M19 | `null` **hides a preset and means nothing else** (M12). Anywhere else it would delete a key the loader needs; a value goes back to its default by leaving the patch, which is what reset does | mine — found in P5 |
+| M20 | A **key** set or cleared on the page takes effect at the next **Apply**, like every other change: it is part of the version string (its revision, never its value), so it reaches the processes the same way and history records that it changed | mine — found in P2 |
 
 ### Known costs
 
 - Keys are stored in the database in clear, as the existing Private env values
   are; only superusers can set them and no one can read them back.
+- The Diagnostics checks (`get_check_registry`: one probe per App's default
+  agent, the KB / wiki probes) are built at boot and probe the boot settings
+  until a restart. They are diagnostics, not the turn path.
 - The bulk of the work is turning every boot snapshot (API and nine workers)
   into "read when used".
 
@@ -60,7 +68,9 @@ Each `/tdd`, one commit; the review lenses, then CI, as usual.
 - **P3 — the effective settings.** One function: defaults ⊕ published patch for
   presets, every App's `app.json`, profiles and the platform's model choices
   (M3, M10–M13); hidden presets (M12); validation returning every error with
-  its path (M8).
+  its path (M8). *As built:* app.json and profile errors are all returned; the
+  config part reports the loader's **first** error only, because the loader
+  raises on the first problem it finds — the same refusal a boot gives.
 - **P4 — version check and caches.** The cheap current-version read; a process
   cache keyed by version; fingerprinted failover chains and LLM clients; last
   good kept on read failure (M4, M14).
