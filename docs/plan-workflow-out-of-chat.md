@@ -318,6 +318,21 @@ so a schedule's shared conversation shows one execution at a time.
 non-blocking notice names the execution and what it waits for. It opens that
 gate.
 
+- **Built:** `WaitingNotice` is mounted by the shell in workspace mode, folded
+  IDE or not. Open unfolds the IDE and opens that execution's tab.
+  - It uses the poll the sidebar already makes (`useItemRuns`).
+  - It speaks of the newest execution that waits at a gate or on a proposed
+    change, says the gate's title (or "A change to confirm"), and counts the
+    others, leaving out the one in front.
+  - It is not shown while that execution's tab is in front. Dismiss holds for
+    that one wait (run plus gate phase, or plus a pending steer), so the next
+    gate asks again.
+  - It is non-modal, with `role="status"`, and no timer takes it away, because
+    it asks for an action (NN/g, "Indicators, Validations, and Notifications").
+  - Mutation probes, each reddening its test: the waiting filter, the
+    dismissal, the dismissal key, the in-front exclusion, the newest-first
+    sort, the count, and the shell's active path.
+
 **P10 — the AI side.**
 - A `show_file` execution card.
 - "Open a chat with these results".

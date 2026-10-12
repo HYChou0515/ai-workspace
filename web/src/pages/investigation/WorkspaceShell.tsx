@@ -40,6 +40,7 @@ import { useDirtyClose } from "../../hooks/useDirtyClose";
 import { useT } from "../../lib/i18n";
 import { FileServiceProvider, investigationFileService, useFileService } from "../../api/fileService";
 import { WorkflowsSidebar } from "../../components/WorkflowsSidebar";
+import { WaitingNotice } from "../../components/WaitingNotice";
 import { ItemProfileProvider } from "../../hooks/itemProfile";
 import { isExecutionPath } from "../../lib/executionTab";
 import { ExecutionTitle } from "../../renderers/ExecutionRenderer";
@@ -824,6 +825,20 @@ function ShellBody({
               terminal tab inside is further gated on `function.terminal` —
               sandbox's only human UI surface (exec/package are backend tools,
               gated by allowed_tools), so there is no separate sandbox pane. */}
+          {/* P9: an execution waiting for the person says so wherever they are in
+              the workspace — folded or not, so Open unfolds to its tab. */}
+          {manifest.function.workspace && _canSeeFiles && (
+            <WaitingNotice
+              slug={manifest.slug}
+              itemId={item.resource_id}
+              profile={String(item.profile ?? manifest.default_profile)}
+              activePath={workspaceVisible ? groups.activeFile : null}
+              onOpen={(path) => {
+                setIdeCollapsed(false);
+                openFile(path);
+              }}
+            />
+          )}
           {manifest.function.workspace && !ideCollapsed && _canSeeFiles && (
             <>
           <ActivityBar

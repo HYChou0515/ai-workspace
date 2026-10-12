@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -211,5 +211,25 @@ describe("an execution's tab", () => {
     await openExecution();
     await screen.findByTestId("execution-view");
     expect(localStorage.getItem("rca:recent-files:INC-1") ?? "").not.toContain("workflow-run:");
+  });
+});
+
+// P9: a waiting execution is announced wherever the person is in the workspace.
+describe("the waiting notice", () => {
+  it("announces an execution waiting at a gate and opens its tab", async () => {
+    vi.mocked(workflowApi.listRuns).mockResolvedValue([
+      {
+        ...run("r1", "awaiting_human"),
+        pending_decision: { phase: "p", title: "Check it", summary: "", allow: ["approve"], decided_by: "" },
+      },
+    ]);
+    vi.spyOn(workflowApi, "getRun").mockResolvedValue(run("r1", "awaiting_human"));
+    openShell();
+    const notice = await screen.findByTestId("waiting-notice");
+    expect(notice).toHaveTextContent("Check it");
+    fireEvent.click(within(notice).getByRole("button", { name: "Open" }));
+    expect((await screen.findByTestId("execution-view")).dataset.run).toBe("r1");
+    // now in front of the person: the notice has done its job
+    await waitFor(() => expect(screen.queryByTestId("waiting-notice")).toBeNull());
   });
 });
