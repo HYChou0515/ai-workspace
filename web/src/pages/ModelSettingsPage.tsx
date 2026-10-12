@@ -500,7 +500,7 @@ function ApplyButton({
         </button>
       )}
       {draft.notice && (
-        <span data-testid="model-settings-notice" style={MUTED}>
+        <span role="status" data-testid="model-settings-notice" style={MUTED}>
           {draft.notice}
         </span>
       )}
@@ -850,6 +850,13 @@ function HistoryTab({
   const history = useQuery({ queryKey: qk.modelSettingsHistory, queryFn: () => client.history() });
   const [refused, setRefused] = useState<string[]>([]);
   const [rolled, setRolled] = useState<{ from: string; now: string } | null>(null);
+  // Said where the person is: the button pressed may be far down a long list
+  // on a phone, and the message sits above it (final review 10; NN/g
+  // heuristic #1, visibility of system status).
+  const rolledAt = useRef<HTMLParagraphElement>(null);
+  useEffect(() => {
+    if (rolled) rolledAt.current?.scrollIntoView?.({ block: "nearest" });
+  }, [rolled]);
   const rollback = useMutation({
     meta: { silentError: true },
     mutationFn: (version: string) => client.rollback(version),
@@ -906,7 +913,7 @@ function HistoryTab({
         </p>
       )}
       {rolled && (
-        <p data-testid="model-settings-rolled-back" style={{ ...STATUS, margin: 0 }}>
+        <p ref={rolledAt} role="status" data-testid="model-settings-rolled-back" style={{ ...STATUS, margin: 0 }}>
           {t("modelSettings.rolledBack", { from: short(rolled.from), now: short(rolled.now) })}
         </p>
       )}
@@ -1151,7 +1158,7 @@ function KeysTab({
       {/* An Apply empties the pending row it sits in; its result stays said here
           (NN/g heuristic #1 — feedback where the person acted). */}
       {draft.pendingKeys.length === 0 && draft.notice && (
-        <p data-testid="model-settings-notice" style={{ ...STATUS, margin: 0 }}>
+        <p role="status" data-testid="model-settings-notice" style={{ ...STATUS, margin: 0 }}>
           {draft.notice}
         </p>
       )}
@@ -1226,7 +1233,7 @@ function KeysTab({
           <button
             type="button"
             className="btn"
-            data-variant="primary"
+            data-variant="secondary"
             data-testid="model-settings-key-set"
             disabled={!path.trim() || !value || set.isPending}
             onClick={() => set.mutate()}

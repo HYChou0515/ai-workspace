@@ -168,7 +168,11 @@ def load_with_provenance(
         if not isinstance(node, dict):
             continue
         for part in holder:
-            node = node.setdefault(part, {})
+            # `llm: null` is a valid role reference (no per-ref creds): the key
+            # makes that level, as for a level not written at all (final review 10).
+            if node.get(part) is None:
+                node[part] = {}
+            node = node[part]
         if isinstance(node, dict):
             node[leaf] = value
 

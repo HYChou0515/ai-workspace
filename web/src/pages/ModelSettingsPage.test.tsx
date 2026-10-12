@@ -976,8 +976,45 @@ describe("ModelSettingsPage", () => {
     fireEvent.click(await screen.findByTestId("model-settings-test"));
 
     const result = await screen.findByTestId("model-settings-test-result");
-    expect(result.textContent?.startsWith("連不上")).toBe(true);
+    expect(result.textContent?.startsWith("測試 kb-default 沒有成功")).toBe(true);
+    // final review 10: not "the provider said" — most refusals are the page's own
+    expect(result).not.toHaveTextContent("提供方");
     expect(within(result).getByTestId("model-settings-test-detail")).toHaveTextContent("Missing credentials");
+  });
+
+  it("says a rollback's result where the person is, and announces it", async () => {
+    // final review 10: on a phone the message appeared above the screen, unread.
+    const scrolled = vi.fn();
+    Element.prototype.scrollIntoView = scrolled;
+    const client = fakeClient({ version: "v2v2v2v2v2v2v2v2", published: KB_2 });
+    client.history.mockResolvedValue([applied("v2v2v2v2v2v2v2v2", KB_2, 2), applied("v1v1v1v1v1v1v1v1", {}, 1)]);
+    renderWithQuery(<ModelSettingsPage client={client} />);
+    fireEvent.click(await screen.findByRole("tab", { name: "版本紀錄" }));
+
+    fireEvent.click(await screen.findByTestId("model-settings-rollback-1"));
+    fireEvent.click(await screen.findByRole("button", { name: "回復" }));
+
+    const said = await screen.findByTestId("model-settings-rolled-back");
+    expect(said).toHaveAttribute("role", "status");
+    await waitFor(() => expect(scrolled.mock.contexts).toContain(said));
+  });
+
+  it("announces a saved draft", async () => {
+    renderWithQuery(<ModelSettingsPage client={fakeClient()} />);
+    await screen.findByRole("textbox", { name: "草稿（JSON）" });
+    type('{"config": {"llm": {"base_url": "http://mine"}}}');
+
+    fireEvent.click(screen.getByTestId("model-settings-save"));
+
+    expect(await screen.findByTestId("model-settings-notice")).toHaveAttribute("role", "status");
+  });
+
+  it("draws Set key as a secondary action beside Apply", async () => {
+    // final review 10: two filled buttons on one tab (M3: filled = the main one).
+    renderWithQuery(<ModelSettingsPage client={fakeClient()} />);
+    fireEvent.click(await screen.findByRole("tab", { name: "API 金鑰" }));
+
+    expect(screen.getByTestId("model-settings-key-set")).toHaveAttribute("data-variant", "secondary");
   });
 
   it("draws a refused key as an error at its field", async () => {

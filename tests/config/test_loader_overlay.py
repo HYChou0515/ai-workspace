@@ -79,3 +79,20 @@ def test_kb_quality_judge_is_built(tmp_path):
     judge = load(config_path=config, env={}).kb.quality_judge
 
     assert judge is not None and judge.preset == "kb-default"
+
+
+def test_a_key_lands_under_a_role_whose_config_yaml_says_llm_null(tmp_path):
+    # final review 10: `llm: null` is a valid role reference (no per-ref creds);
+    # the key loop kept the None, dropped the key and the page called the role
+    # missing.
+    config = tmp_path / "config.yaml"
+    config.write_text(
+        "kb:\n  retrieval_llm:\n    preset: kb-default\n    llm: null\n", encoding="utf-8"
+    )
+
+    settings, _ = load_with_provenance(
+        config_path=config, env={}, keys=[(["kb", "retrieval_llm", "llm", "api_key"], "sk-x")]
+    )
+
+    assert settings.kb.retrieval_llm is not None
+    assert settings.kb.retrieval_llm.llm.api_key == "sk-x"

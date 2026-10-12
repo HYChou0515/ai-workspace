@@ -2863,8 +2863,8 @@ export const messages = {
   "modelSettings.testOk": { "zh-TW": "連得上 {model}（{ms} ms）：{reply}", en: "{model} answered in {ms} ms: {reply}" },
   "modelSettings.testFailed": { "zh-TW": "連不上：{error}", en: "Failed: {error}" },
   "modelSettings.testFailedLead": {
-    "zh-TW": "連不上 {preset} 的模型。提供方的回覆：",
-    en: "Could not reach {preset}'s model. The provider said:",
+    "zh-TW": "測試 {preset} 沒有成功：",
+    en: "Testing {preset} did not succeed:",
   },
   "modelSettings.restored": {
     "zh-TW": "這是你上次離開時沒儲存的改動，已經放回來；不要的話按「放棄改動」。",
