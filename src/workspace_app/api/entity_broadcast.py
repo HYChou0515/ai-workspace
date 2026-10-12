@@ -23,8 +23,9 @@ def build_entity_write_sink(
     """Wrap the P9 ``dispatch`` sink so it also broadcasts a ``FileChanged`` for the
     written record. Broadcast FIRST: this runs post-commit inside ``_emit``, so the
     record already landed and viewers must learn of it even if the trigger dispatch
-    raises (``turn_engine.publish`` is synchronous + a no-op when nobody's watching,
-    so it never blocks or fails the write)."""
+    raises (``turn_engine.publish`` is synchronous and fire-and-forget: local
+    viewers, plus the cross-pod bus for a viewer on another pod, so it never blocks
+    or fails the write)."""
 
     async def sink(ev: EntityWriteEvent) -> None:
         turn_engine.publish(ev.item_id, FileChanged(path=ev.path, by=ev.actor, kind="written"))

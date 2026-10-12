@@ -36,6 +36,7 @@ from ..workflow.run import RunStatus, WorkflowRun
 from ..workflow.run_identity import RunIdentities
 from ..workflow.steps import CURRENT_STEP, StepRef
 from .env_layers import PersonEnv
+from .events import TurnEnded
 from .notifications import notification_sent, notify
 from .private_env import unattended_layer
 from .rca_messages import to_rca_message
@@ -281,7 +282,16 @@ class WorkflowExecutor:
             item_id,
             chat_key,
         )
-        await self._turn_engine.enqueue(enqueue_key, prompt, ctx, on_complete=persist)
+
+        async def _announce() -> None:
+            # Every turn tells the ITEM's stream it ended, as an app chat's does
+            # (`ChatSendService._turn_ended`): a workflow chat streams on its own
+            # key, and the open file tree listens on the item's.
+            self._turn_engine.publish(item_id, TurnEnded(chat_id=rid))
+
+        await self._turn_engine.enqueue(
+            enqueue_key, prompt, ctx, on_complete=persist, on_turn_end=_announce
+        )
         if record and ref is not None and journal_dir and run_id:
             await self._write_transcript(item_id, rid, run_id, ref, journal_dir)
         if enqueue_key != chat_key:  # transient sub-lane → drop its session
