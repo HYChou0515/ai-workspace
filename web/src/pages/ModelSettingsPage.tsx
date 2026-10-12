@@ -34,6 +34,7 @@ import { useDialog } from "../components/Dialog";
 import { MonacoEditor, type EditorMarker } from "../components/MonacoEditor";
 import { Tabs } from "../components/ShareTabs";
 import { useBreadcrumbs } from "../hooks/breadcrumbs";
+import { useDirtyClose } from "../hooks/useDirtyClose";
 import { useIsSuperuserState } from "../hooks/useIsSuperuser";
 import { useT } from "../lib/i18n";
 import { sameShape } from "../lib/sameShape";
@@ -193,6 +194,32 @@ function KeyChangeList({ pending, keys }: { pending: string[]; keys: Record<stri
  * looking at the keys or the history does not throw unsaved edits away
  * (review r2), and Apply is the same flow from the Edit and the API keys tab
  * (NN/g "Tabs, Used Right": a task must not need two tabs at once). */
+const UNSAVED_KEY = "model-settings.unsaved";
+
+type Unsaved = { text: string; base: Patch };
+
+/** The unsaved edits this session left, unless they say what is saved. Storage
+ * can be missing or refuse (a private window): then there is nothing kept. */
+function readUnsaved(saved: string): Unsaved | null {
+  try {
+    const raw = sessionStorage.getItem(UNSAVED_KEY);
+    if (!raw) return null;
+    const kept = JSON.parse(raw) as Unsaved;
+    return typeof kept.text === "string" && kept.text !== saved ? kept : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeUnsaved(kept: Unsaved | null) {
+  try {
+    if (kept) sessionStorage.setItem(UNSAVED_KEY, JSON.stringify(kept));
+    else sessionStorage.removeItem(UNSAVED_KEY);
+  } catch {
+    // storage refused: the edits live only in the page, as before
+  }
+}
+
 function useDraft(client: Client, data: PageData) {
   const t = useT();
   const dialog = useDialog();
@@ -201,7 +228,12 @@ function useDraft(client: Client, data: PageData) {
   const pendingKeys = data.pending_keys ?? [];
   const keyRevision = data.key_revision;
   const saved = useMemo(() => pretty(draft), [draft]);
-  const [text, setText] = useState(saved);
+  // Unsaved edits outlive the page for this browser session: the router here
+  // cannot hold a navigation back to ask, so leaving and coming back gives
+  // them back instead — NN/g's undo in place of a confirmation (final review 9).
+  const [kept] = useState(() => readUnsaved(saved));
+  const [text, setText] = useState(kept?.text ?? saved);
+  const [restored, setRestored] = useState(kept !== null);
   const [checkedText, setCheckedText] = useState(saved);
   const [notice, setNotice] = useState("");
   const [refused, setRefused] = useState<string[]>([]);
@@ -218,7 +250,7 @@ function useDraft(client: Client, data: PageData) {
   // the server refuses (409) to overwrite a newer save unseen (final review 8:
   // Apply was guarded against that race, Save was not). Once told, the next
   // Save builds on the newest one: replacing it is then a choice.
-  const base = useRef(draft);
+  const base = useRef<Patch>(kept?.base ?? draft);
   const told = useRef(false);
   const textNow = useRef(text);
   textNow.current = text;
@@ -348,11 +380,23 @@ function useDraft(client: Client, data: PageData) {
   };
   // NN/g heuristic #3 (user control): one button gives the saved draft back —
   // the editor's own undo is gone once a tab switch unmounts it (final review).
-  const discard = () => {
+  // Hand-written JSON is work: Discard asks once (NN/g "Confirmation
+  // Dialogs"; M3's example is "Discard draft?"), as a modal's close does.
+  // Kept while there is something unsaved; a reload or a closed tab asks
+  // first (the browser's own prompt).
+  useEffect(() => {
+    writeUnsaved(dirty ? { text, base: base.current } : null);
+    if (!dirty) return;
+    const ask = (event: BeforeUnloadEvent) => event.preventDefault();
+    window.addEventListener("beforeunload", ask);
+    return () => window.removeEventListener("beforeunload", ask);
+  }, [dirty, text]);
+  const discard = useDirtyClose(true, () => {
     base.current = draft;
     told.current = false;
+    setRestored(false);
     edit(saved);
-  };
+  });
   // "Applied: version X" describes the last Apply; a key change or a rollback
   // since makes it stale beside an Apply with work waiting (review r3).
   const clearNotice = () => setNotice("");
@@ -381,6 +425,7 @@ function useDraft(client: Client, data: PageData) {
     askToApply,
     clearNotice,
     discard,
+    restored,
   };
 }
 
@@ -536,6 +581,11 @@ function EditTab({
         <h2 id="model-settings-draft" style={H2}>
           {t("modelSettings.editor")}
         </h2>
+        {draft.restored && draft.dirty && (
+          <p data-testid="model-settings-restored" role="status" style={STATUS}>
+            {t("modelSettings.restored")}
+          </p>
+        )}
         <MonacoEditor
           ariaLabel={t("modelSettings.editor")}
           value={text}
@@ -758,9 +808,18 @@ function TestConnection({ client, defaults, draft }: { client: Client; defaults:
       </div>
       {test.data && (
         <p data-testid="model-settings-test-result" role={test.data.ok ? undefined : "alert"} style={WRAP}>
-          {test.data.ok
-            ? t("modelSettings.testOk", { model: test.data.model, ms: String(test.data.ms), reply: test.data.reply })
-            : t("modelSettings.testFailed", { error: test.data.error })}
+          {test.data.ok ? (
+            t("modelSettings.testOk", { model: test.data.model, ms: String(test.data.ms), reply: test.data.reply })
+          ) : (
+            // A plain sentence first, the provider's own words after it (NN/g
+            // "Error-Message Guidelines"; final review 9).
+            <>
+              {t("modelSettings.testFailedLead", { preset: test.variables ?? chosen })}{" "}
+              <span data-testid="model-settings-test-detail" style={{ ...MONO, ...MUTED }}>
+                {test.data.error}
+              </span>
+            </>
+          )}
         </p>
       )}
       {test.isError && (

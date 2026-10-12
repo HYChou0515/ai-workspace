@@ -20,6 +20,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import re
+from collections.abc import Sequence
 from pathlib import Path
 from typing import IO, Any
 
@@ -71,27 +72,33 @@ def render(settings: Settings, provenance: Provenance, *, reveal_secrets: bool) 
     """Annotated YAML for the whole resolved tree. One line per leaf with a
     `# ← <source>` comment; secrets masked unless `reveal_secrets`."""
     lines: list[str] = []
-    _render_node(dataclasses.asdict(settings), "", "", provenance, reveal_secrets, lines)
+    _render_node(dataclasses.asdict(settings), "", (), "", provenance, reveal_secrets, lines)
     return "\n".join(lines) + "\n"
 
 
 def _render_node(
-    node: Any, path: str, indent: str, prov: Provenance, reveal: bool, lines: list[str]
+    node: Any,
+    path: str,
+    parts: tuple[str | int, ...],
+    indent: str,
+    prov: Provenance,
+    reveal: bool,
+    lines: list[str],
 ) -> None:
     """Emit `node` (always a non-empty dict or list — `render` feeds asdict and
     only recurses on branches). Dict entries render as `key: …`, list entries as
     `- …`."""
     if isinstance(node, dict):
-        entries = [(_join(path, str(k)), v, f"{k}:") for k, v in node.items()]
+        entries = [(_join(path, str(k)), (*parts, str(k)), v, f"{k}:") for k, v in node.items()]
     else:
-        entries = [(f"{path}[{i}]", v, "-") for i, v in enumerate(node)]
-    for child, value, label in entries:
+        entries = [(f"{path}[{i}]", (*parts, i), v, "-") for i, v in enumerate(node)]
+    for child, at, value, label in entries:
         if _is_branch(value):
             lines.append(f"{indent}{label}")
-            _render_node(value, child, indent + "  ", prov, reveal, lines)
+            _render_node(value, child, at, indent + "  ", prov, reveal, lines)
         else:
             src = prov.get(child, _DEFAULT)
-            lines.append(f"{indent}{label} {_value(child, value, src, reveal)}  # ← {src.kind}")
+            lines.append(f"{indent}{label} {_value(at, value, src, reveal)}  # ← {src.kind}")
 
 
 _DEFAULT = Source("default")
@@ -106,34 +113,48 @@ def _is_branch(value: Any) -> bool:
     return bool(value) and isinstance(value, dict | list | tuple)
 
 
-def _value(path: str, value: Any, src: Source, reveal: bool) -> str:
-    if is_secret(path) and not reveal:
+def _value(parts: tuple[str | int, ...], value: Any, src: Source, reveal: bool) -> str:
+    if is_secret_at(parts) and not reveal:
         return _mask(value, src)
     return _scalar(value)
 
 
-def is_secret(path: str) -> bool:
-    """Whether the setting at dotted `path` must never be shown. The one rule:
-    the boot-time dump and the model settings page both ask it
-    (docs/plan-model-settings.md M7), so they cannot disagree.
+def is_secret_at(parts: Sequence[str | int]) -> bool:
+    """Whether the setting at `parts` (the walked keys; an int is a list index)
+    must never be shown. The one rule: the boot-time dump and the model
+    settings page both ask it (docs/plan-model-settings.md M7), so they cannot
+    disagree. Walkers pass the keys they walked — a preset name and an env name
+    may both hold a dot, which a joined path cannot say (final review 9).
 
     By leaf name — `api_key`, `pg_dsn`, any `*_token` in either case (variable
     names are upper case) — plus the rabbitmq URL (may embed amqp
     credentials) and every value of a preset's `env`, where tokens sit under
-    names nothing can recognise. `base_url` is intentionally excluded."""
-    leaf = path.rsplit(".", 1)[-1].split("[", 1)[0]
+    names nothing can recognise. `base_url` is intentionally excluded. A usage
+    entry's `env` (`agents.kb_chat[0].env`) is not secret BY PLACE: a key cannot
+    sit inside a list, so that left no way to keep it through an edit (known
+    cost, plan); a value whose NAME is a secret's still is."""
+    names = [p for p in parts if isinstance(p, str)]
+    if not names:
+        return False
+    leaf = names[-1]
     if leaf in ("api_key", "pg_dsn") or leaf.lower().endswith("_token"):
         return True
-    parts = path.split(".")
-    # Every value of a preset's `env`. `parts[-2]`, not a fixed index: a preset
-    # name may itself hold a dot (`qwen2.5`). A usage entry's `env`
-    # (`agents.kb_chat[0].env`) is not secret BY PLACE: a key cannot sit inside a
-    # list, so that left no way to keep it through an edit (known cost, plan).
-    # A value whose NAME is a secret's (`*_token` in either case) still is, by
-    # the leaf-name rule above.
-    if len(parts) >= 5 and parts[:2] == ["agents", "presets"] and parts[-2] == "env":
+    if len(parts) == 5 and parts[0] == "agents" and parts[1] == "presets" and parts[3] == "env":
         return True
-    return path.endswith("rabbitmq.url")
+    return names[-2:] == ["rabbitmq", "url"]
+
+
+def is_secret(path: str) -> bool:
+    """`is_secret_at` for a caller holding only a joined path. A preset's name
+    may hold a dot (`qwen2.5`) and is put back together; an env name with a
+    dot cannot be told from it — walkers use `is_secret_at`."""
+    parts: list[str | int] = []
+    for segment in path.split("."):
+        name, *indexes = segment.split("[")
+        parts += [name, *(int(i.rstrip("]")) for i in indexes)]
+    if parts[:2] == ["agents", "presets"] and len(parts) >= 5 and parts[-2] in ("llm", "env"):
+        parts = [*parts[:2], ".".join(map(str, parts[2:-2])), *parts[-2:]]
+    return is_secret_at(parts)
 
 
 def _mask(value: Any, src: Source) -> str:

@@ -30,7 +30,7 @@ from ..apps.catalog import (
 )
 from ..apps.manifest import AppManifest, patched_app
 from ..apps.profiles import ProfileManifest, list_profiles, patched_profile
-from ..config.dump import is_secret
+from ..config.dump import is_secret_at
 from ..config.loader import load_with_provenance
 from ..config.schema import Settings
 from ..workflow.discovery import validate_workflow_profiles
@@ -213,23 +213,6 @@ def _destination(model: str | None, base: Any) -> tuple[str, Any, str | None]:
     return (provider, base, text if "://" in text else None)
 
 
-def _key_used(model: str | None, key: str | None) -> str | None:
-    """The key a call sends: config's, or — with none there — the provider's
-    own variable from the server's environment, which litellm reads when it is
-    set (`OPENAI_API_KEY`, the documented hosted shape). Asked of litellm, the
-    one that reads it (final review 8: with no config key there was nothing to
-    pair, and a new base_url took the environment's key anywhere)."""
-    if key:
-        return key
-    import litellm
-
-    try:
-        held = bool(litellm.validate_environment(model=model or "")["keys_in_environment"])
-    except Exception:  # a model litellm cannot place reads no provider variable
-        held = False
-    return f"env:{_destination(model, None)[0]}" if held else None
-
-
 def _endpoints(
     settings: Settings, presets: list[str] | None, *, config_dir: Path | None
 ) -> list[tuple[str, str | None, Any, str | None]]:
@@ -284,7 +267,7 @@ def key_destination_problems(
     call after Apply and on a test call (final review). A key set on the page
     may go anywhere: its setter knows it."""
     paired = {
-        (_destination(model, base), _key_used(model, key))
+        (_destination(model, base), key)
         for _, model, base, key in _endpoints(deploy, None, config_dir=config_dir)
         if isinstance(base, str | None)
     }
@@ -296,17 +279,15 @@ def key_destination_problems(
             if problem not in found:
                 found.append(problem)
             continue
-        used = _key_used(model, key)
-        if used and used not in page_keys and (_destination(model, base), used) not in paired:
+        # Only a key config.yaml sets: whether the server's ENVIRONMENT holds a
+        # provider key cannot be told reliably (final review 9 — litellm's
+        # "nothing missing" is true for keyless providers and for an address
+        # variable), so that case is a known cost with a remedy (plan).
+        if key and key not in page_keys and (_destination(model, base), key) not in paired:
             provider, _, in_model = _destination(model, base)
             to = in_model or base or f"{provider or 'the provider'}'s default address"
-            whose = (
-                f"the server's own {provider} key (from its environment)"
-                if used.startswith("env:")
-                else "the deploy's key"
-            )
             problem = (
-                f"config.{where}: {whose} would go to {to!r}, "
+                f"config.{where}: the deploy's key would go to {to!r}, "
                 "where config.yaml never sends it — set a key for this endpoint on the API keys tab"
             )
             if problem not in found:
@@ -338,24 +319,31 @@ def secrets_written(document: dict[str, Any]) -> list[str]:
 SET, UNSET = "*** set ***", "*** unset ***"
 
 
-def _secrets_written(patch: Any, path: str = "") -> list[str]:
+def _secrets_written(patch: Any, path: str = "", parts: tuple[str | int, ...] = ()) -> list[str]:
     """A secret typed into the text would be stored in the patch — shown in
-    the diff, kept in history (M6). It is set as a key instead."""
+    the diff, kept in history (M6). It is set as a key instead. Decided on the
+    walked `parts`: a name may hold a dot (final review 9)."""
     if isinstance(patch, dict):
         return [
             problem
             for key, value in patch.items()
-            for problem in _secrets_written(value, f"{path}.{key}" if path else str(key))
+            for problem in _secrets_written(
+                value, f"{path}.{key}" if path else str(key), (*parts, str(key))
+            )
         ]
     if isinstance(patch, list):
         # review r3: a usage entry takes an `llm.api_key` too
-        return [p for i, item in enumerate(patch) for p in _secrets_written(item, f"{path}[{i}]")]
+        return [
+            p
+            for i, item in enumerate(patch)
+            for p in _secrets_written(item, f"{path}[{i}]", (*parts, i))
+        ]
     if patch in (SET, UNSET):
         return [
             f"config.{path}: that is how the defaults show a secret, not a value — "
             "leave it out, or set the secret as a key"
         ]
-    if patch is not None and path and is_secret(path):
+    if patch is not None and parts and is_secret_at(parts):
         return [f"config.{path}: a secret is set as a key on this page, not in the text"]
     return []
 

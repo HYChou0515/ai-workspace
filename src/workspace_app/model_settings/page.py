@@ -23,7 +23,7 @@ from msgspec import Struct
 from ..apps.catalog import discover_app_slugs
 from ..apps.manifest import read_app_manifest_raw
 from ..apps.profiles import list_profiles, read_profile_raw
-from ..config.dump import is_secret
+from ..config.dump import is_secret_at
 from ..config.schema import Settings
 from .effective import LIVE_CONFIG, SET, UNSET, key_destination_problems, key_segments
 
@@ -62,13 +62,14 @@ def live_config(tree: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-def mask(node: Any, path: str = "") -> Any:
-    """`node` with every secret leaf replaced by SET / UNSET."""
+def mask(node: Any, parts: tuple[str | int, ...] = ()) -> Any:
+    """`node` with every secret leaf replaced by SET / UNSET — decided on the
+    walked `parts`, since a name may hold a dot (final review 9)."""
     if isinstance(node, dict):
-        return {k: mask(v, f"{path}.{k}" if path else str(k)) for k, v in node.items()}
+        return {k: mask(v, (*parts, str(k))) for k, v in node.items()}
     if isinstance(node, list | tuple):
-        return [mask(v, f"{path}[{i}]") for i, v in enumerate(node)]
-    if path and is_secret(path):
+        return [mask(v, (*parts, i)) for i, v in enumerate(node)]
+    if parts and is_secret_at(parts):
         return SET if node else UNSET
     return node
 
@@ -151,7 +152,7 @@ def key_path_problem(path: str) -> str | None:
     # (final review 7 — `server.host` was sent to the text, then refused there).
     if not any(inner == live or inner.startswith(live + ".") for live in LIVE_CONFIG):
         return f"{path}: read only when the server starts — set it in config.yaml"
-    if not is_secret(inner):
+    if not is_secret_at(parts):
         return f"{path}: not a secret — set it in the text, not as a key"
     return None
 

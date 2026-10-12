@@ -101,6 +101,8 @@ const type = (text: string) => fireEvent.change(editor(), { target: { value: tex
 beforeEach(() => {
   state.superuser = true;
   state.ready = true;
+  // unsaved edits are kept for the session; one test's must not reach the next
+  sessionStorage.clear();
 });
 
 describe("ModelSettingsPage", () => {
@@ -585,7 +587,7 @@ describe("ModelSettingsPage", () => {
     );
   });
 
-  it("discards unsaved edits with one button, also after a tab switch", async () => {
+  it("discards unsaved edits from one button, also after a tab switch", async () => {
     // final review (ux): the messages said "undo", but the editor's undo history
     // is gone once a tab switch unmounts it — NN/g heuristic #3, user control.
     renderWithQuery(<ModelSettingsPage client={fakeClient({ draft: KB_2 })} />);
@@ -595,8 +597,9 @@ describe("ModelSettingsPage", () => {
     fireEvent.click(screen.getByRole("tab", { name: "編輯（未儲存）" }));
 
     fireEvent.click(screen.getByTestId("model-settings-discard"));
+    fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "放棄變更" }));
 
-    expect(JSON.parse(editor().value)).toEqual(KB_2);
+    await waitFor(() => expect(JSON.parse(editor().value)).toEqual(KB_2));
     expect(screen.getByRole("tab", { name: "編輯" })).toBeInTheDocument();
   });
 
@@ -915,6 +918,66 @@ describe("ModelSettingsPage", () => {
     fireEvent.change(screen.getByTestId("model-settings-key-value"), { target: { value: "v" } });
     fireEvent.click(screen.getByTestId("model-settings-key-set"));
     expect((await screen.findByTestId("model-settings-key-refused")).style.fontFamily).toBe("");
+  });
+
+  it("asks before Discard edits throws the edits away", async () => {
+    // final review 9: Discard threw away hand-written JSON at once, no undo
+    // (NN/g "Confirmation Dialogs"; M3's own example is "Discard draft?").
+    renderWithQuery(<ModelSettingsPage client={fakeClient()} />);
+    await screen.findByRole("textbox", { name: "草稿（JSON）" });
+    type('{"config": {"llm": {"base_url": "http://mine"}}}');
+
+    fireEvent.click(screen.getByTestId("model-settings-discard"));
+    fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "繼續編輯" }));
+    expect(JSON.parse(editor().value)).toEqual({ config: { llm: { base_url: "http://mine" } } });
+
+    fireEvent.click(screen.getByTestId("model-settings-discard"));
+    fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "放棄變更" }));
+    await waitFor(() => expect(JSON.parse(editor().value)).toEqual({}));
+  });
+
+  it("gives unsaved edits back when the page is opened again", async () => {
+    // final review 9: leaving the page (a link, a reload) lost the edits with
+    // no question and no undo; the router here cannot block a navigation.
+    const first = renderWithQuery(<ModelSettingsPage client={fakeClient()} />);
+    await screen.findByRole("textbox", { name: "草稿（JSON）" });
+    type('{"config": {"llm": {"base_url": "http://mine"}}}');
+    first.unmount();
+
+    renderWithQuery(<ModelSettingsPage client={fakeClient()} />);
+
+    await waitFor(() => expect(JSON.parse(editor().value)).toEqual({ config: { llm: { base_url: "http://mine" } } }));
+    expect(screen.getByTestId("model-settings-restored")).toBeInTheDocument();
+  });
+
+  it("asks before the tab closes while there are unsaved edits", async () => {
+    renderWithQuery(<ModelSettingsPage client={fakeClient()} />);
+    await screen.findByRole("textbox", { name: "草稿（JSON）" });
+    type('{"config": {"llm": {"base_url": "http://mine"}}}');
+
+    const event = new Event("beforeunload", { cancelable: true });
+    window.dispatchEvent(event);
+
+    expect(event.defaultPrevented).toBe(true);
+  });
+
+  it("leads a failed connection test with a plain sentence", async () => {
+    // final review 9: the raw provider exception was the whole message.
+    const client = fakeClient();
+    client.testConnection.mockResolvedValue({
+      ok: false,
+      model: "openai/x",
+      ms: 0,
+      reply: "",
+      error: "litellm.InternalServerError: OpenAIException - Missing credentials",
+    });
+    renderWithQuery(<ModelSettingsPage client={client} />);
+
+    fireEvent.click(await screen.findByTestId("model-settings-test"));
+
+    const result = await screen.findByTestId("model-settings-test-result");
+    expect(result.textContent?.startsWith("連不上")).toBe(true);
+    expect(within(result).getByTestId("model-settings-test-detail")).toHaveTextContent("Missing credentials");
   });
 
   it("draws a refused key as an error at its field", async () => {

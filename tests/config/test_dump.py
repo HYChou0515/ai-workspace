@@ -235,3 +235,18 @@ def test_a_usage_entrys_env_values_stay_plain():
 
     assert not is_secret("agents.kb_chat[0].env.OLLAMA_NUM_CTX")
     assert is_secret("agents.presets.qwen2.5.env.HF_HOME")
+
+
+def test_the_dump_masks_a_preset_env_value_whose_name_holds_a_dot(tmp_path):
+    # final review 9: `parts[-2] == "env"` on a re-split path missed `my.secret`.
+    from workspace_app.config.loader import load_with_provenance
+
+    config = tmp_path / "config.yaml"
+    config.write_text(
+        "agents:\n  presets:\n    p:\n      model: openai/x\n"
+        "      env:\n        my.secret: hunter2-value\n",
+        encoding="utf-8",
+    )
+    settings, provenance = load_with_provenance(config_path=config, env={})
+
+    assert "hunter2-value" not in render(settings, provenance, reveal_secrets=False)

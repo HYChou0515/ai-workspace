@@ -2862,6 +2862,14 @@ export const messages = {
   },
   "modelSettings.testOk": { "zh-TW": "連得上 {model}（{ms} ms）：{reply}", en: "{model} answered in {ms} ms: {reply}" },
   "modelSettings.testFailed": { "zh-TW": "連不上：{error}", en: "Failed: {error}" },
+  "modelSettings.testFailedLead": {
+    "zh-TW": "連不上 {preset} 的模型。提供方的回覆：",
+    en: "Could not reach {preset}'s model. The provider said:",
+  },
+  "modelSettings.restored": {
+    "zh-TW": "這是你上次離開時沒儲存的改動，已經放回來；不要的話按「放棄改動」。",
+    en: "These are the unsaved edits you left behind, put back; press Discard edits if you do not want them.",
+  },
   "modelSettings.historyEmpty": { "zh-TW": "還沒有套用過任何版本。", en: "Nothing has been applied yet." },
   "modelSettings.historyRow": { "zh-TW": "{when}・版本 {version}", en: "{when} · version {version}" },
   "modelSettings.current": { "zh-TW": "目前", en: "Current" },

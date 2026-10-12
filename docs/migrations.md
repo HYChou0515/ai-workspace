@@ -2179,10 +2179,13 @@ agent 步驟裡 AI 的呼叫、WUI 的工具呼叫、view plugin、圖表重畫�
   （頁面只能改，不能新增；profile 是 App 裡的資料夾）、`apps` / `profiles` 底下的 `null`、config 部分裡的 `${…}`
   （頁面的文字照字面使用，不讀伺服器的環境變數；App 文字裡的 `${` 就是字）、
   用途清單（例如 `kb_chat`）裡開機會拒絕的條目，以及會把 `config.yaml` 的金鑰送到別的端點的改動（端點＝模型名稱的提供者、`base_url`、模型名稱裡帶的網址；同一個提供者換模型照常可以；
-  `config.yaml` 沒寫金鑰、靠伺服器環境變數（例如 `OPENAI_API_KEY`）的 preset 也一樣：換到別的位址要先在頁面替它設一把金鑰）
-  （preset、角色、用途條目都算；要換端點，到 API 金鑰分頁替新端點設一把金鑰），
+  preset、角色、用途條目都算；要換端點，到 API 金鑰分頁替新端點設一把金鑰），
   以及指向別的檔案的 `prompt_file`（只收 `pkg:…` 或 `config.yaml` 本來就寫過的值——其他路徑會把伺服器上的檔案讀進
   聊天的 system prompt）。
+- **金鑰保護只認 `config.yaml` 寫出來的金鑰**（`rollout 前` 決定）：preset 沒寫 `api_key`、靠伺服器環境變數
+  （例如 `OPENAI_API_KEY`）的，superuser 在頁面改它的 `base_url` 時，那把環境變數金鑰會跟著送到新位址，頁面擋不住
+  （分不出環境變數裡哪個是金鑰）。要它也受保護：rollout 前在 `config.yaml` 寫明 `llm.api_key: ${OPENAI_API_KEY}`。
+  不做的症狀：沒有——直到有人把這種 preset 指到別的位址。
 - 頁面上設定或清除的 API key **按下套用才生效**：在那之前，連新起來的 pod 也照舊用上一次套用的 key；
   「回復」只帶回那一版的值，金鑰維持目前生效的，還沒套用的金鑰改動繼續等。
 - **開機時印出的設定（config dump）多遮了一些值**：每個 preset 的 `env` 值，以及任何大小寫的 `*_token`，

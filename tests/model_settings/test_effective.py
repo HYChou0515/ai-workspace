@@ -605,52 +605,25 @@ def test_a_usage_list_refusal_does_not_show_the_server_directory(tmp_path):
     assert found and not any(str(tmp_path) in p for p in found), found
 
 
-@pytest.fixture
-def env_keyed_config(tmp_path: Path, monkeypatch) -> Path:
-    # The documented hosted shape (deployment.md): no api_key in config.yaml,
-    # the provider's key in the server's environment, which litellm reads.
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-env-0000-0000-0003")
-    path = tmp_path / "env.yaml"
-    path.write_text(
-        "agents:\n  presets:\n    kb-default:\n      model: openai/gpt-4o\n",
-        encoding="utf-8",
-    )
-    return path
-
-
 @pytest.mark.parametrize(
-    "document",
+    ("model", "env_var"),
     [
-        {
-            "config": {
-                "agents": {
-                    "presets": {"kb-default": {"llm": {"base_url": "https://attacker.example/v1"}}}
-                }
-            }
-        },
-        {"config": {"llm": {"base_url": "https://attacker.example/v1"}}},
+        ("ollama_chat/qwen3:14b", ("OLLAMA_API_BASE", "http://ollama:11434")),
+        ("hosted_vllm/qwen", None),
+        ("openai/gpt-4o", ("OPENAI_API_KEY", "sk-env-0000-0000-0003")),
     ],
 )
-def test_the_servers_own_provider_key_goes_only_where_config_yaml_sends_it(
-    env_keyed_config, document
-):
-    # final review 8: with no api_key in config.yaml there was nothing to pair,
-    # so a new base_url took the server's OPENAI_API_KEY to any address.
-    found = problems(document, config_path=env_keyed_config, env={})
-
-    assert any("environment" in p for p in found), found
-
-
-def test_a_new_address_is_fine_when_the_server_holds_no_key_for_it(tmp_path, monkeypatch):
-    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+def test_a_preset_config_yaml_gives_no_key_may_move_host(tmp_path, monkeypatch, model, env_var):
+    # final review 9: reading litellm's "nothing missing" as "the server holds a
+    # key" refused moving a keyless vLLM, or an Ollama with OLLAMA_API_BASE set
+    # (the k8s base), naming a key that did not exist. M21 guards the keys
+    # config.yaml sets; a key only in the environment is the known cost below.
+    if env_var:
+        monkeypatch.setenv(*env_var)
     config = tmp_path / "config.yaml"
-    config.write_text(
-        "agents:\n  presets:\n    kb-default:\n      model: openai/gpt-4o\n", encoding="utf-8"
-    )
+    config.write_text(f"agents:\n  presets:\n    p:\n      model: {model}\n", encoding="utf-8")
     document = {
-        "config": {
-            "agents": {"presets": {"kb-default": {"llm": {"base_url": "http://other:8000/v1"}}}}
-        }
+        "config": {"agents": {"presets": {"p": {"llm": {"base_url": "http://gpu-2:9000"}}}}}
     }
 
     found = problems(document, config_path=config, env={})
@@ -658,14 +631,35 @@ def test_a_new_address_is_fine_when_the_server_holds_no_key_for_it(tmp_path, mon
     assert not any("key" in p for p in found), found
 
 
-def test_a_keyless_local_model_may_move_host(env_keyed_config):
-    # Ollama needs no key: moving it to another host sends none of the server's.
+def test_a_key_config_yaml_takes_from_the_environment_is_guarded(tmp_path):
+    # The mitigation the runbook gives: name the environment's key in
+    # config.yaml (`${OPENAI_API_KEY}`) and M21 guards it like any other.
+    config = tmp_path / "config.yaml"
+    config.write_text(
+        "agents:\n  presets:\n    p:\n      model: openai/gpt-4o\n"
+        "      llm:\n        api_key: ${OPENAI_API_KEY}\n",
+        encoding="utf-8",
+    )
     document = {
-        "config": {
-            "agents": {"presets": {"qwen3-local": {"llm": {"base_url": "http://gpu-2:11434"}}}}
-        }
+        "config": {"agents": {"presets": {"p": {"llm": {"base_url": "https://attacker.example"}}}}}
     }
 
-    found = problems(document, config_path=env_keyed_config, env={})
+    found = problems(document, config_path=config, env={"OPENAI_API_KEY": "sk-env-0000-0000-0004"})
 
-    assert not any("key" in p for p in found), found
+    assert any("deploy's key" in p for p in found), found
+
+
+@pytest.mark.parametrize("name", ["my.secret", "spring.datasource.password", "PLAIN"])
+def test_every_value_of_a_presets_env_is_a_secret_whatever_its_name(name):
+    # final review 9: the rule split a joined path, so a dotted env name was
+    # not under `env` any more — taken in clear in the text, shown in clear in
+    # the defaults and the boot dump.
+    from workspace_app.config.dump import is_secret_at
+    from workspace_app.model_settings.effective import secrets_written
+    from workspace_app.model_settings.page import mask
+
+    assert is_secret_at(["agents", "presets", "qwen2.5", "env", name])
+    document = {"config": {"agents": {"presets": {"openai-mini": {"env": {name: "v"}}}}}}
+    assert secrets_written(document), name
+    masked = mask({"agents": {"presets": {"openai-mini": {"env": {name: "v"}}}}})
+    assert masked["agents"]["presets"]["openai-mini"]["env"][name] != "v"
