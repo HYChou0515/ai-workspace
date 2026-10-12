@@ -355,33 +355,6 @@ describe("AgentPanel applied skills (#380)", () => {
   });
 });
 
-describe("AgentPanel steer (#288)", () => {
-  it("a run-chat composer steers the run instead of sending an interactive turn", () => {
-    const onSteer = vi.fn();
-    const agent = stubAgent();
-    renderWithQuery(
-      <DialogProvider>
-        <AgentPanel
-          investigationId="it1"
-          chatId="chat-1"
-          agent={agent}
-          picker={[]}
-          suggestions={[]}
-          attachedPreset=""
-          onAttachPreset={() => {}}
-          onSteer={onSteer}
-        />
-      </DialogProvider>,
-    );
-    const composer = screen.getByPlaceholderText(/Tell the run what to change/) as HTMLTextAreaElement;
-    fireEvent.change(composer, { target: { value: "use the X collection" } });
-    fireEvent.keyDown(composer, { key: "Enter" });
-    expect(onSteer).toHaveBeenCalledWith("use the X collection");
-    expect(agent.send).not.toHaveBeenCalled(); // NOT a normal interactive turn
-    expect(composer.value).toBe(""); // draft cleared
-  });
-});
-
 describe("AgentPanel undo restores draft (#370)", () => {
   const userMsg = (content: string) => ({ kind: "message", message: { role: "user", content } });
   const assistantMsg = (content: string) => ({
@@ -1496,7 +1469,6 @@ describe("the header's seven buttons can be told apart", () => {
       "item-environment-button",
       "env-button",
       "skills-button",
-      "workflows-button",
       "export-button",
     ];
     const icons = ids.map((id) => {

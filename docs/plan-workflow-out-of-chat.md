@@ -186,6 +186,32 @@ so a schedule's shared conversation shows one execution at a time.
 - The chat list, switcher and manage-chats leave out conversations with
   `run_id`.
 - The chat header's launch menu and composer steer routing go.
+- **Built:**
+  - `GET …/chats` lists a conversation with `run_id` only if a person spoke in
+    it (`chat_info.is_chat`: a `user` message no driver sent and no run
+    marked). That is a chat #343 took over, or one where a person chatted on
+    after a run ended. A run's own conversation, opened by its launch or a
+    schedule's, holds no such message and is left out.
+  - A first cut asked for a person's message *before the first run started*.
+    That would have hidden a #343 chat in which the person spoke only after its
+    run, and since the execution tab shows a run's messages only, their words
+    would have been shown nowhere.
+  - The chat no longer carries any workflow surface: the bar's
+    run-in-this-chat menu (`WorkflowLaunchMenu`, deleted), the New picker's
+    workflows and their launch dialog, the progress bar, the gate and steer
+    cards, the schedules banner (`scheduleChat.*`), the composer's steer
+    route, and the header's **Workflows** button.
+  - Chosen here (may be overturned):
+    - The **Workflows panel** (`WorkflowsModal`, #323: run, download, import,
+      templates, schedule times) is more than a launcher. It moves with
+      launching to the Workflows sidebar (P7) rather than being removed.
+    - The **New picker** became a one-click "New chat" button. Without
+      workflows it was a menu of one item, and #466's ellipsis meant "pick
+      next".
+    - The chat switcher's and manage-chats' run **status badge** stays, for the
+      legacy #343 chats still listed.
+  - Mutation-probed: the list's rule, 6 guard lines; re-adding the steer
+    route, the bar, or the ellipsis each redden.
 
 **P7 — the Workflows sidebar.**
 - A labelled activity-bar entry, with a badge of executions awaiting a gate.

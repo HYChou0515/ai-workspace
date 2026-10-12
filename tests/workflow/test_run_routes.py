@@ -295,12 +295,47 @@ def test_run_drives_its_own_workflow_chat_and_persists_there():
         run_id, chat_id = resp["run_id"], resp["chat_id"]
         _poll(client, item_id, run_id, "done")
         chats = {c["chat_id"]: c for c in client.get(f"{_base(item_id)}/chats").json()}
-    assert chat_id in chats
-    assert chats[chat_id]["run_id"] == run_id  # a workflow chat, not the default
-    assert chats[chat_id]["is_default"] is False
+    # plan-workflow-out-of-chat D3 / D4: the run's conversation is not a chat — the
+    # chat list leaves it out; the Workflows sidebar lists the execution instead
+    assert chat_id not in chats
     conv = spec.get_resource_manager(Conversation).get(chat_id).data
     assert conv.run_id == run_id
     assert any(m.role == "assistant" and m.content == "ack" for m in conv.messages)
+
+
+def test_the_chat_list_keeps_a_chat_a_run_took_over_but_not_a_runs_own_conversation():
+    """A conversation with `run_id` is a chat only when a person spoke in it —
+    a chat #343 took over holds their own words. A run's own conversation
+    (opened by the launch, or a schedule's) has none, and stays out of the chat
+    list."""
+    from workspace_app.resources import Message
+    from workspace_app.workflow.run import RunStatus, WorkflowRun
+
+    app, spec, item_id = _app()
+    conv_rm = spec.get_resource_manager(Conversation)
+    with TestClient(app) as client:
+        _put_input(client, item_id, '{"n": 1}')
+        free = client.post(f"{_base(item_id)}/chats", json={"title": "free"}).json()["chat_id"]
+        taken = client.post(f"{_base(item_id)}/chats", json={"title": "prep"}).json()["chat_id"]
+        conv = conv_rm.get(taken).data
+        conv.messages.append(Message(role="user", content="prepared", created_at=1_000))
+        conv.run_id = "legacy-run"
+        conv_rm.update(taken, conv)
+        spec.get_resource_manager(WorkflowRun).create(
+            WorkflowRun(
+                item_id=item_id,
+                captured_user="u",
+                chat_id=taken,
+                status=RunStatus.DONE,
+                started=2_000,
+                ended=3_000,
+            )
+        )
+        own = client.post(f"{_base(item_id)}/run").json()["chat_id"]
+        listed = {c["chat_id"] for c in client.get(f"{_base(item_id)}/chats").json()}
+
+    assert free in listed and taken in listed
+    assert own not in listed
 
 
 def test_a_launch_naming_a_chat_is_refused_and_changes_nothing():

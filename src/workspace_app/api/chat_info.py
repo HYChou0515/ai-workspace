@@ -62,16 +62,42 @@ def chat_info_from_resource(
     )
 
 
-def item_run_status(spec: SpecStar, investigation_id: str) -> dict[str, str]:
-    """``run_id → status`` for the item's workflow runs — one bounded per-item
-    query so the chat list shows each workflow chat's badge without polling each
-    run (#132)."""
-    out: dict[str, str] = {}
+def _item_runs(spec: SpecStar, investigation_id: str) -> list[tuple[str, WorkflowRun]]:
+    """The item's workflow runs — one bounded per-item query (#132)."""
+    out: list[tuple[str, WorkflowRun]] = []
     for r in spec.get_resource_manager(WorkflowRun).list_resources(
         (QB["item_id"] == investigation_id).build()
     ):
         # The query is on the WorkflowRun manager, so every row IS a WorkflowRun;
         # the isinstance is a typing narrowing guard, never False at runtime.
         if isinstance(r.data, WorkflowRun):  # pragma: no branch
-            out[r.info.resource_id] = str(r.data.status)  # ty: ignore[unresolved-attribute]
+            out.append((r.info.resource_id, r.data))  # ty: ignore[unresolved-attribute]
     return out
+
+
+def item_run_status(
+    spec: SpecStar, investigation_id: str, runs: list[tuple[str, WorkflowRun]] | None = None
+) -> dict[str, str]:
+    """``run_id → status`` for the item's workflow runs, so the chat list shows a
+    chat's run badge without polling each run (#132)."""
+    rows = _item_runs(spec, investigation_id) if runs is None else runs
+    return {rid: str(run.status) for rid, run in rows}
+
+
+def is_chat(conv: Conversation) -> bool:
+    """Whether the chat list shows this conversation (plan-workflow-out-of-chat
+    D3 / D4). One with no run is a chat. One with a run is a chat only if a person
+    spoke in it — a chat #343 took over holds their own words, and under #343 a
+    person could chat on after a run ended. A run's own conversation (opened by
+    its launch, or a schedule's) holds none. A person's message is a `user` one
+    no driver sent (a goal round, a workflow step's prompt) and no run marked."""
+    if conv.run_id is None:
+        return True
+    return any(m.role == "user" and m.driven_by is None and m.run_id is None for m in conv.messages)
+
+
+def is_chat_resource(r: Any) -> bool:
+    """`is_chat` of a fetched conversation resource, as the chat list holds it."""
+    conv = r.data
+    assert isinstance(conv, Conversation)
+    return is_chat(conv)

@@ -1,43 +1,22 @@
-import { pxToRem } from "../lib/pxToRem";
-import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Link } from "react-router-dom";
 
 import { investigationFileService } from "../api/fileService";
 import { type ItemChatSummary } from "../api/itemChats";
-import { qk } from "../api/queryKeys";
 import type { Suggestion } from "../api/types";
-import { workflowApi, type WorkflowManifestDTO } from "../api/workflows";
 import { useItemChat } from "../hooks/useItemChat";
 import { useItemChats } from "../hooks/useItemChats";
 import { useItemCollections } from "../hooks/useItemCollections";
-import {
-  useCancelRun,
-  useConfirmSteer,
-  useDecide,
-  useRun,
-  useSteerRun,
-  useWorkflowProfiles,
-} from "../hooks/useWorkflow";
-import { useWorkspaceWorkflows } from "../hooks/useWorkspaceWorkflows";
 import { AgentPanel } from "../pages/investigation/AgentPanel";
-import { CardDiffReview } from "./CardDiffReview";
-import { SteerConfirmCard } from "./SteerConfirmCard";
 import { ChatSwitcher } from "./ChatSwitcher";
 import { CollectionsButton } from "./CollectionsButton";
 import { CollectionsPickerModal } from "./CollectionsPickerModal";
 import { ManageChatsModal } from "./ManageChatsModal";
 import { NewItemPicker } from "./NewItemPicker";
-import { WorkflowDecisionCard } from "./WorkflowDecisionCard";
-import { WorkflowLaunchDialog } from "./WorkflowLaunchDialog";
-import { WorkflowLaunchMenu } from "./WorkflowLaunchMenu";
 import { TodoPanel } from "./TodoPanel";
-import { WorkflowProgress } from "./WorkflowProgress";
-import { useT } from "../lib/i18n";
 
 /** What ItemChatShell feeds straight through to each chat's AgentPanel — the
  * App-manifest-derived chat chrome (mirrors the props WorkspaceShell passes the
- * RCA `<AgentPanel>`). The shell adds the multi-chat switcher + workflow gate. */
+ * RCA `<AgentPanel>`). The shell adds the multi-chat switcher. */
 type AgentChrome = {
   picker: { preset: string; name: string }[];
   suggestions?: Suggestion[];
@@ -90,12 +69,6 @@ function chatFromAddress(): string | null {
   return new URLSearchParams(window.location.search).get("chat") || null;
 }
 
-/** Whether the reader came from the schedules overview (`&from=schedules` on
- * its last-run link) — the chat then says what it is and leads back. */
-function cameFromSchedules(): boolean {
-  return new URLSearchParams(window.location.search).get("from") === "schedules";
-}
-
 /**
  * The per-item multi-chat shell (topic-hub §3, redesigned in #132): a compact chat
  * switcher dropdown + a single `+ New` picker ([Free chat] + the seed profile's
@@ -111,7 +84,6 @@ export function ItemChatShell({
   slug,
   itemId,
   readOnly = false,
-  profile,
   chatSwitcher,
   showCollections,
   picker,
@@ -137,7 +109,6 @@ export function ItemChatShell({
   /** Permission-disclosure: forwarded to the composer — true disables it (the
    * user can read the thread but lacks `converse`). */
   readOnly?: boolean;
-  profile: string;
   /** #200: how prominent the switcher is. "auto" hides it until a 2nd chat
    * exists (single-chat-leaning); "always" surfaces it up front (Topic Hub). */
   chatSwitcher: "auto" | "always";
@@ -146,12 +117,11 @@ export function ItemChatShell({
    * `collections.json`; off for most Apps (RCA / Playground). */
   showCollections: boolean;
 } & AgentChrome) {
-  const qc = useQueryClient();
   // The chat the address names (`?chat=`), read once — the schedules overview
   // links a schedule's last run to its own chat this way. Tied to the item it
   // was read for: the shell is not remounted between items, and an id held
   // for another item left the next one with no chat selected (review round 3).
-  const [address] = useState(() => ({ itemId, chat: chatFromAddress(), fromSchedules: cameFromSchedules() }));
+  const [address] = useState(() => ({ itemId, chat: chatFromAddress() }));
   const addressChat = address.itemId === itemId ? address.chat : null;
   const { chats, isLoading, isFetchedAfterMount, createFreeChat, renameChat, deleteChat } =
     useItemChats(
@@ -162,32 +132,12 @@ export function ItemChatShell({
       // chat (Run now just made it): fetch it on mount when the address asks.
       addressChat ? "always" : undefined,
     );
-  const profilesQ = useWorkflowProfiles(slug);
-  const wsWorkflowsQ = useWorkspaceWorkflows(slug, itemId);
-  // The launch list = the profile's package workflows PLUS the ones the user
-  // co-authored in THIS workspace (#323 `.workflows/`, surfaced for launch by #400),
-  // so a just-authored workflow is runnable from the same chat that made it. A
-  // workspace def shadows a same-id package one — the run resolver does the same.
-  const workflows = useMemo<WorkflowManifestDTO[]>(() => {
-    const byId = new Map<string, WorkflowManifestDTO>();
-    for (const w of profilesQ.data?.find((p) => p.name === profile)?.workflows ?? [])
-      byId.set(w.id, w);
-    // A file that will not parse is listed by the panel (with its reason, no
-    // Run) and not offered here: picking it reached the pre-flight and came
-    // back "no such workflow".
-    for (const w of wsWorkflowsQ.data ?? [])
-      if (!w.problem) byId.set(w.id, { input_json: "", ...w });
-    return [...byId.values()];
-  }, [profilesQ.data, wsWorkflowsQ.data, profile]);
   // `?chat=<id>` opens that chat — the schedules overview links a schedule's
   // last run to its own conversation this way (docs/plan-schedule-overview.md).
   // Read once, from the address the item was opened with; an id the item has
   // no chat for falls back to the most recent one like any other.
   const [activeChatId, setActiveChatId] = useState<string | null>(addressChat);
   const [managing, setManaging] = useState(false);
-  // #283: a workflow launch opens the pre-flight dialog first; the real start (which
-  // opens a workflow chat) happens only on confirm.
-  const [pendingWorkflow, setPendingWorkflow] = useState<string | null>(null);
   const reopening = useRef(false);
   /** Why auto-opening the item's first chat failed, if it did. */
   const [openFailed, setOpenFailed] = useState<string | null>(null);
@@ -245,68 +195,7 @@ export function ItemChatShell({
   const onFreeChat = async () => {
     setActiveChatId((await createFreeChat()).chat_id);
   };
-  const onWorkflow = (workflowId: string) => setPendingWorkflow(workflowId);
-  /** Why the last workflow launch failed, if it did. A launch that throws left
-   * the dialog closed and nothing else — indistinguishable from a launch that
-   * worked but is slow to show up, so the user waits for a run that never
-   * started. */
-  const [launchFailed, setLaunchFailed] = useState<string | null>(null);
-
-  const confirmWorkflow = async () => {
-    if (pendingWorkflow == null) return;
-    const workflowId = pendingWorkflow;
-    setPendingWorkflow(null);
-    setLaunchFailed(null);
-    try {
-      const { chat_id } = await workflowApi.startRun(slug, itemId, workflowId);
-      void qc.invalidateQueries({ queryKey: qk.itemChats(slug, itemId) });
-      setActiveChatId(chat_id);
-    } catch (err: unknown) {
-      setLaunchFailed(err instanceof Error ? err.message : String(err));
-    }
-  };
-
   const active = chats.find((c) => c.chat_id === activeChatId) ?? null;
-
-  // #343: launch a workflow IN this chat (takeover), offered when the active chat
-  // has no ACTIVE run — a free chat, or one whose previous run is terminal. It is
-  // offered in the bar, on the same line as "+ New", rather than on a row of its
-  // own beneath it: that row cost the message area a line for a control the bar
-  // had room for. The two stay two controls — "+ New" runs a workflow in a NEW
-  // chat, this runs one in THIS chat — they only share the line.
-  //
-  // `useRun` is the same query the panel polls for its gate and progress, so
-  // reading it here is a cache hit, not a second request.
-  const activeRun = useRun(slug, itemId, active?.run_id ?? undefined);
-  const runActive =
-    !!active?.run_id &&
-    (activeRun.data?.status === "pending" ||
-      activeRun.data?.status === "running" ||
-      activeRun.data?.status === "awaiting_human");
-  const canLaunchHere = active != null && !runActive && workflows.length > 0;
-  // The chat is captured when the workflow is PICKED, not read when the dialog
-  // is confirmed. The dialog used to live in the per-chat panel, keyed by chat,
-  // so switching chats unmounted it; in the shell it would have survived a
-  // switch and started the run in whichever chat was active by then. Pinning
-  // the chat here, and dropping the dialog when the active chat moves away from
-  // it (below), gives back what the key used to guarantee.
-  const [pendingLaunchHere, setPendingLaunchHere] = useState<{
-    workflowId: string;
-    chatId: string;
-  } | null>(null);
-  useEffect(() => {
-    if (pendingLaunchHere && pendingLaunchHere.chatId !== activeChatId) setPendingLaunchHere(null);
-  }, [activeChatId, pendingLaunchHere]);
-  const launchHere = async () => {
-    if (pendingLaunchHere == null) return;
-    const { workflowId, chatId } = pendingLaunchHere;
-    setPendingLaunchHere(null);
-    await workflowApi.startRun(slug, itemId, workflowId, chatId);
-    // The chat's run_id now points at the new run — refetch the list + thread so
-    // the progress bar / run polling pick it up in place.
-    void qc.invalidateQueries({ queryKey: qk.itemChats(slug, itemId) });
-    void qc.invalidateQueries({ queryKey: qk.itemChat(slug, itemId, chatId) });
-  };
 
   // #200: the switcher leans single-chat — hidden until a second chat exists,
   // unless the App opts into an always-visible switcher (Topic Hub). The bar as a
@@ -315,8 +204,9 @@ export function ItemChatShell({
   // App with one chat, e.g. RCA), the lone "+ New chat" escape moves into the chat
   // header instead so the App reads as a single chat — `onNewChat` below.
   const showSwitcher = chatSwitcher === "always" || chats.length > 1;
-  const hasWorkflows = workflows.length > 0;
-  const showBar = showSwitcher || hasWorkflows || showCollections;
+  // Not workflows: none is started from a chat (plan-workflow-out-of-chat D3 /
+  // D7) — the workspace's Workflows sidebar starts them.
+  const showBar = showSwitcher || showCollections;
 
   return (
     <div
@@ -356,13 +246,7 @@ export function ItemChatShell({
               onManage={() => setManaging(true)}
             />
           )}
-          <NewItemPicker workflows={workflows} onFreeChat={onFreeChat} onWorkflow={onWorkflow} />
-          {canLaunchHere && active && (
-            <WorkflowLaunchMenu
-              workflows={workflows}
-              onPick={(workflowId) => setPendingLaunchHere({ workflowId, chatId: active.chat_id })}
-            />
-          )}
+          <NewItemPicker onFreeChat={onFreeChat} />
           {showCollections && (
             // `margin-left: auto`, not a spacer element. A spacer is an item:
             // on a wrapped line it still costs a `gap`, and at the workspace's
@@ -388,33 +272,6 @@ export function ItemChatShell({
       {pickerOpen && (
         <CollectionsPickerModal fileService={fileService} onClose={() => setPickerOpen(false)} />
       )}
-      {pendingWorkflow != null && (
-        <WorkflowLaunchDialog
-          slug={slug}
-          itemId={itemId}
-          workflowId={pendingWorkflow}
-          onConfirm={confirmWorkflow}
-          onClose={() => setPendingWorkflow(null)}
-        />
-      )}
-      {pendingLaunchHere != null && (
-        <WorkflowLaunchDialog
-          slug={slug}
-          itemId={itemId}
-          workflowId={pendingLaunchHere.workflowId}
-          onConfirm={launchHere}
-          onClose={() => setPendingLaunchHere(null)}
-        />
-      )}
-      {launchFailed && (
-        <p
-          data-testid="launch-failed"
-          role="alert"
-          style={{ margin: 0, padding: "6px 12px", fontSize: pxToRem(12), color: "var(--err)" }}
-        >
-          工作流程沒有啟動:{launchFailed}
-        </p>
-      )}
       {active ? (
         <ItemChatPanel
           key={active.chat_id}
@@ -422,7 +279,6 @@ export function ItemChatShell({
           itemId={itemId}
           readOnly={readOnly}
           chat={active}
-          workflows={workflows}
           // #200: when the bar is hidden the chat header carries the lone escape
           // hatch; when the bar is shown its "+ New" picker already does, so the
           // header omits it (exactly one create-entry is ever visible).
@@ -444,9 +300,6 @@ export function ItemChatShell({
           canAddFiles={canAddFiles}
           onSaveSkillPrefs={onSaveSkillPrefs}
           uploadDir={uploadDir}
-          // Arrived from the schedules overview's last-run link, and still on
-          // the chat it named (docs/plan-schedule-overview-polish.md decision 9).
-          fromSchedules={address.fromSchedules && active.chat_id === addressChat}
         />
       ) : (
         <div className="item-chat-panel__empty" data-testid="no-chat">
@@ -488,7 +341,6 @@ function ItemChatPanel({
   itemId,
   readOnly = false,
   chat,
-  workflows,
   onNewChat,
   picker,
   suggestions,
@@ -507,16 +359,11 @@ function ItemChatPanel({
   canAddFiles,
   onSaveSkillPrefs,
   uploadDir,
-  fromSchedules = false,
 }: {
   slug: string;
   itemId: string;
   readOnly?: boolean;
   chat: ItemChatSummary;
-  workflows: WorkflowManifestDTO[];
-  /** The reader followed a schedule's last-run link here: say whose runs these
-   * are, lead back, and open the run's progress. */
-  fromSchedules?: boolean;
   /** #200: the single-chat-leaning escape hatch — present only when the shell
    * bar is hidden, so the header is the sole place to start a fresh chat. */
   onNewChat?: () => void;
@@ -524,59 +371,13 @@ function ItemChatPanel({
   // The active chat drives the full RCA AgentPanel (AgentState shape) — the
   // model picker, suggestions, @mention, attach, undo and Cmd-Enter all work
   // per chat. Injected as a prop so AgentPanel needs no <AgentProvider> here.
-  const t = useT();
   const agent = useItemChat({ slug, itemId, chatId: chat.chat_id });
-  // Poll the driving run only for a workflow chat — to surface its human gate.
-  const run = useRun(slug, itemId, chat.run_id ?? undefined);
-  const decide = useDecide(slug, itemId, chat.run_id ?? "");
-  const steer = useSteerRun(slug, itemId, chat.run_id ?? "");
-  const confirmSteer = useConfirmSteer(slug, itemId, chat.run_id ?? "");
-  const cancel = useCancelRun(slug, itemId);
-  const gate = run.data?.status === "awaiting_human" ? run.data.pending_decision : null;
-  // #288: a steer plan awaiting confirm — pinned like the gate. The steer card and the
-  // gate card are mutually exclusive (the backend sets one pending field, not both).
-  const steerPlan = run.data?.pending_steer ?? null;
-  // #331: the run's declared phase skeleton — WorkflowProgress merges it with the live
-  // per-phase progress for the collapsible bar / detail. A free chat (no run_id) → no
-  // panel (run.data is undefined, the panel renders nothing).
-  const declared = workflows.find((w) => w.id === run.data?.workflow_id)?.phases ?? [];
-
-  // #343's run-in-this-chat launcher used to be drawn here, on a row of its own
-  // above the feed. It lives in the shell's bar now (`canLaunchHere`), on the
-  // same line as "+ New" — the row here cost the message area a line.
-
   return (
     <div
       className="item-chat-panel"
       data-testid="item-chat-panel"
       style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0 }}
     >
-      {/* #331: the run's progress (collapsible bar → #283 detail) sits above the
-          decision/steer cards and the feed (I1 甲) — the structural overview the
-          retired WorkflowRunPanel used to give, restored for the multi-chat shell. */}
-      {fromSchedules && (
-        <div className="item-chat-panel__schedule" data-testid="schedule-chat-banner" role="note">
-          {/* The schedule's chat is named after its workflow when it is made
-              (`chat_for_schedule`); the workflow's title wins when it is known. */}
-          <span>
-            {t("scheduleChat.banner", {
-              title: workflows.find((w) => w.id === run.data?.workflow_id)?.title || chat.title,
-            })}
-          </span>
-          <Link to="/schedules">{t("scheduleChat.back")}</Link>
-        </div>
-      )}
-      {chat.run_id && (
-        <WorkflowProgress
-          run={run.data}
-          declaredPhases={declared}
-          expandedAtFirst={fromSchedules}
-          disconnected={(run.failureCount ?? 0) > 0}
-          onStop={() => cancel.mutate(chat.run_id!)}
-          stopping={cancel.isPending}
-        />
-      )}
-
       {/* #613: the agent's todo checklist for THIS chat — pinned above the feed
           like the workflow progress. Locks editing while a turn streams. */}
       <TodoPanel
@@ -587,52 +388,6 @@ function ItemChatPanel({
         readOnly={!!readOnly}
       />
 
-      {gate && (
-        <div
-          className="item-chat-panel__gate"
-          data-testid="workflow-continue"
-          // Pin the decision to the top of the chat (#170): the old gate scrolled
-          // away with the feed, so a paused run was easy to miss. The richer
-          // WorkflowDecisionCard (summary + revise) replaces the bare buttons.
-          style={{ flex: "0 0 auto", position: "sticky", top: 0, zIndex: 2, padding: "6px 8px" }}
-        >
-          <WorkflowDecisionCard
-            decision={gate}
-            busy={decide.isPending}
-            onDecide={(choice, input) =>
-              decide.mutate(input === undefined ? { choice } : { choice, input })
-            }
-            aux={
-              <CardDiffReview
-                slug={slug}
-                itemId={itemId}
-                allow={gate.allow}
-                busy={decide.isPending}
-                onDecide={(choice, input) =>
-                  decide.mutate(input === undefined ? { choice } : { choice, input })
-                }
-              />
-            }
-          />
-        </div>
-      )}
-
-      {steerPlan && (
-        <div
-          className="item-chat-panel__steer"
-          data-testid="workflow-steer"
-          // Pin the steer plan to the top like the gate (#288) — it's the same
-          // "it's your turn to act" moment, just for a redirect instead of a gate.
-          style={{ flex: "0 0 auto", position: "sticky", top: 0, zIndex: 2, padding: "6px 8px" }}
-        >
-          <SteerConfirmCard
-            plan={steerPlan}
-            busy={confirmSteer.isPending}
-            onConfirm={(approve) => confirmSteer.mutate(approve)}
-          />
-        </div>
-      )}
-
       <AgentPanel
         investigationId={itemId}
         chatId={chat.chat_id}
@@ -640,7 +395,6 @@ function ItemChatPanel({
         agent={agent}
         fill
         onNewChat={onNewChat}
-        onSteer={chat.run_id ? (text) => steer.mutate(text) : undefined}
         picker={picker}
         suggestions={suggestions}
         attachedPreset={attachedPreset}

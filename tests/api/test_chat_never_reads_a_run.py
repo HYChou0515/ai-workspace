@@ -171,3 +171,24 @@ def test_a_message_with_no_time_cannot_be_placed_and_is_kept() -> None:
     msgs = [_m("from before timestamps existed", None, role="user")]
 
     assert without_runs(msgs, [RunWindow(started=0, ended=None)]) == msgs
+
+
+def test_a_run_conversation_is_a_chat_only_if_a_person_spoke_in_it() -> None:
+    """The chat list's rule (`chat_info.is_chat`): a conversation with no run is a
+    chat; one with a run is a chat only if it holds a person's words — not a
+    driver's (a goal round, a workflow step's prompt), not a run's. Whenever
+    they spoke: under #343 a person could chat on after a run ended, and hiding
+    that conversation would leave their words shown nowhere."""
+    from workspace_app.api.chat_info import is_chat
+    from workspace_app.resources import Conversation
+
+    def conv(*msgs: Message, run_id: str | None = "r1") -> Conversation:
+        return Conversation(item_id="i", run_id=run_id, messages=list(msgs))
+
+    assert is_chat(conv(run_id=None))
+    assert not is_chat(conv())
+    assert not is_chat(conv(Message(role="user", content="round", driven_by="goal")))
+    assert not is_chat(conv(_m("a step's prompt", 5, role="user", run_id="r1")))
+    # a run conversation from before marks: its steps' unmarked answers
+    assert not is_chat(conv(_m("a legacy step's answer", 5)))
+    assert is_chat(conv(_m("asked after the run", 99, role="user")))

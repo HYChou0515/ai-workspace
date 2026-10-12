@@ -20,7 +20,6 @@ import { Icon } from "../../components/Icon";
 import { ModelEffortPicker } from "../../components/ModelEffortPicker";
 import { ResizeDivider } from "../../components/ResizeDivider";
 import { SkillsModal } from "../../components/SkillsModal";
-import { WorkflowsModal } from "../../components/WorkflowsModal";
 import { EnvVarsModal } from "../../components/EnvVarsModal";
 import { missingLabel, useEnvMissing } from "../../components/PageIdentity";
 import { ItemEnvironmentModal } from "../../components/ItemEnvironmentModal";
@@ -147,7 +146,6 @@ export function AgentPanel({
   appIcon,
   appColor,
   onNewChat,
-  onSteer,
   onSaveToolPrefs,
   onSaveSkillPrefs,
   envVars,
@@ -203,11 +201,6 @@ export function AgentPanel({
    * is the lone, low-key place to escape a wedged chat. Absent → no header button
    * (the shell bar already carries a creator, or this is a bare RCA chat). */
   onNewChat?: () => void;
-  /** #288: when set, this is a workflow RUN chat — the composer STEERS the run (the
-   * text becomes a free-text instruction the read-only steerer turns into a reviewable
-   * plan) instead of starting a normal interactive turn. Absent → ordinary chat (RCA,
-   * KB, free chats). */
-  onSteer?: (text: string) => void;
   /** #322: persist this item's per-tool override (`attached_tool_prefs`). Threaded
    * to the header's Tools picker; absent → no picker button. */
   onSaveToolPrefs?: (prefs: Record<string, boolean>) => void;
@@ -684,15 +677,6 @@ export function AgentPanel({
     if (chatId && parseComposerCommand(text) === "compact") {
       setDraft("");
       compact.mutate();
-      return;
-    }
-    // #288: in a workflow run chat the composer steers the run — the text is a
-    // free-text instruction, not an interactive turn. (Stop the run from the
-    // progress bar above (#331); the composer is inert while a turn streams.)
-    if (onSteer) {
-      if (!text) return;
-      setDraft("");
-      onSteer(text);
       return;
     }
     // A message that @-mentions people is a summon — it notifies them and does
@@ -1323,11 +1307,9 @@ export function AgentPanel({
           placeholder={
             readOnly
               ? NO_PERMISSION_TO_SEND
-              : onSteer
-                ? "Tell the run what to change (e.g. use the X collection, redo from ingest)…"
-                : mentions.length > 0
-                  ? "Add a note (optional)…"
-                  : "Ask the agent…"
+              : mentions.length > 0
+                ? "Add a note (optional)…"
+                : "Ask the agent…"
           }
           className="input input--block"
           style={{
@@ -1623,7 +1605,6 @@ export function AgentHeader({
   // for the same person on the same item while the first is alive.
   const [videoJob, setVideoJob] = useState<ChatVideoQueued | null>(null);
   const [showSkills, setShowSkills] = useState(false);
-  const [showWorkflows, setShowWorkflows] = useState(false);
   const [showTools, setShowTools] = useState(false);
   const [showEnv, setShowEnv] = useState(false);
   const [showItemEnv, setShowItemEnv] = useState(false);
@@ -1640,7 +1621,6 @@ export function AgentHeader({
     environment ? t("itemenv.button") : "",
     canOpenEnv || onSaveEnvVars ? t("env.button") : "",
     t("skills.button"),
-    t("workflows.button"),
     chatId ? "export" : "",
     videoJob ? "video" : "",
   ].join("|");
@@ -1690,14 +1670,6 @@ export function AgentHeader({
           onSaveSkillPrefs={onSaveSkillPrefs}
           appliedSkills={appliedSkills}
           onToggleApply={onToggleApplySkill}
-        />
-      )}
-      {showWorkflows && (
-        <WorkflowsModal
-          slug={slug}
-          itemId={investigationId}
-          fileService={fileService}
-          onClose={() => setShowWorkflows(false)}
         />
       )}
       {showItemEnv && environment && (
@@ -1841,16 +1813,6 @@ export function AgentHeader({
             label: t("skills.button"),
             tip: t("skills.tip"),
             onClick: () => setShowSkills(true),
-          },
-          // #323: the Workflows panel — run / download / import the workflows the
-          // user co-created here (the IDE tree hides `.workflows/`).
-          {
-            id: "workflows",
-            testid: "workflows-button",
-            icon: "workflow",
-            label: t("workflows.button"),
-            tip: t("workflows.tip"),
-            onClick: () => setShowWorkflows(true),
           },
           // Only where there is a chat to name. Without one the button could
           // only ask the server to pick, and it used to pick the item's first —

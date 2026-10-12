@@ -958,7 +958,6 @@ function ShellBody({
               readOnly={!_canConverse}
               slug={manifest.slug}
               itemId={item.resource_id}
-              profile={String(item.profile ?? manifest.default_profile)}
               // #198: where the composer's attach stages files — the item's profile's
               // upload_dir (default uploads/), the same folder its workflows glob.
               uploadDir={resolveUploadDir(

@@ -23,7 +23,12 @@ from ..resources import Conversation
 from ..tokens import CallLane
 from ..workflow.orchestrator import WorkflowOrchestrator
 from .activity import ActivityLog
-from .chat_info import chat_info_from_resource, item_run_status
+from .chat_info import (
+    _item_runs,
+    chat_info_from_resource,
+    is_chat_resource,
+    item_run_status,
+)
 from .events import GoalUpdated, TodosUpdated
 from .item_conversation_perm import item_conversation_mirror
 from .locator import ItemLocator
@@ -244,10 +249,14 @@ def register_chat_routes(
         investigation_id = locator.require_access(slug, item_id, "read_chat")
         default = find_default_conversation(conv_rm, investigation_id)
         default_id = default[0] if default else None
-        run_status = item_run_status(spec, investigation_id)
+        runs = _item_runs(spec, investigation_id)
+        run_status = item_run_status(spec, investigation_id, runs)
+        # Not a run's own conversation (plan-workflow-out-of-chat D3 / D4): the
+        # Workflows sidebar lists those; a chat a run took over stays.
         infos = [
             chat_info_from_resource(r, default_id, run_status)
             for r in conv_rm.list_resources(_item_chats_query(investigation_id))
+            if is_chat_resource(r)
         ]
         # Most-recent activity first; chat_id breaks ties for a stable order.
         infos.sort(key=lambda c: (-(c.last_activity_ms or 0), c.chat_id))

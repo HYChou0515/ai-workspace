@@ -12,7 +12,6 @@ import { workspaceWorkflowsApi } from "../api/workspaceWorkflows";
 import type { FileContent } from "../api/types";
 import { qk } from "../api/queryKeys";
 import { makeTestQueryClient, renderWithQuery } from "../test/queryWrapper";
-import { MemoryRouter } from "react-router-dom";
 
 import { DialogProvider } from "./Dialog";
 import { ItemChatShell } from "./ItemChatShell";
@@ -23,8 +22,21 @@ import { ItemChatShell } from "./ItemChatShell";
 // stub forwards `onNewChat` (#200) so we can assert the escape hatch is threaded
 // into the chat header exactly when the shell bar is hidden.
 vi.mock("../pages/investigation/AgentPanel", () => ({
-  AgentPanel: ({ onNewChat, canAddFiles }: { onNewChat?: () => void; canAddFiles?: boolean }) => (
-    <div data-testid="agent-panel-stub" data-can-add-files={String(canAddFiles)}>
+  AgentPanel: ({
+    onNewChat,
+    canAddFiles,
+    ...rest
+  }: {
+    onNewChat?: () => void;
+    canAddFiles?: boolean;
+    [prop: string]: unknown;
+  }) => (
+    <div
+      data-testid="agent-panel-stub"
+      data-can-add-files={String(canAddFiles)}
+      // the composer must never be handed a steer route (plan-workflow-out-of-chat D2)
+      data-steers={String("onSteer" in rest)}
+    >
       {onNewChat ? (
         <button type="button" data-testid="header-new-chat" onClick={onNewChat}>
           + New chat
@@ -118,7 +130,6 @@ const render = (
     <ItemChatShell
       slug="topic-hub"
       itemId="it"
-      profile="default"
       picker={[]}
       suggestions={[]}
       appTitle="Topic Hub"
@@ -168,29 +179,52 @@ describe("ItemChatShell", () => {
     expect(await screen.findByText("fix bug")).toBeInTheDocument();
   });
 
-  it("renders the chat switcher and a single New picker listing the profile's workflows", async () => {
+  it("renders the chat switcher and a New picker that offers chats only — no workflow", async () => {
+    // plan-workflow-out-of-chat D3 / D7: a workflow is started from the
+    // workspace's Workflows sidebar, never from a chat — even with a profile
+    // full of them (PROFILES, beforeEach).
     stubChatApi([summary({ chat_id: "conversation:c1", is_default: true })]);
     render();
     await waitFor(() => expect(screen.getByTestId("chat-switcher-trigger")).toBeInTheDocument());
-    // The merged "+ New" picker offers Free chat + the profile's workflows.
-    fireEvent.click(await screen.findByTestId("new-item-button"));
-    expect(screen.getByTestId("new-item-free")).toBeInTheDocument();
-    expect(await screen.findByText("Digest uploads into memory")).toBeInTheDocument();
+    expect(await screen.findByTestId("new-item-button")).toHaveTextContent("New chat");
+    expect(screen.queryByText("Digest uploads into memory")).toBeNull();
+    expect(screen.queryByTestId("wf-launch-menu")).toBeNull();
   });
 
-  it("the New picker does not offer a workspace workflow that will not parse", async () => {
-    // The Workflows panel lists it with its reason and no Run; this second
-    // consumer of the same listing must not hand it out either — picking it
-    // reached the pre-flight and came back "no such workflow".
-    stubChatApi([summary({ chat_id: "conversation:c1", is_default: true })]);
-    vi.spyOn(workspaceWorkflowsApi, "list").mockResolvedValue([
-      { id: "good", title: "Good one", phases: [{ id: "a", title: "A" }] },
-      { id: "broken", title: "broken", phases: [], problem: "steps[0]: `cache` is required — …" },
-    ]);
+  it("a chat a run once drove shows none of the run and never steers", async () => {
+    // A chat #343 took over still has the run's id, and that run sits at a gate
+    // with a steer plan pending. None of it belongs in the chat any more (D3):
+    // no progress, no gate, no steer card — the execution tab carries them —
+    // and the composer is a chat composer, not a steer box (D2).
+    stubChatApi([summary({ chat_id: "conversation:c1", run_id: "r1", is_default: true })]);
+    const run: WorkflowRunDTO = {
+      run_id: "r1",
+      item_id: "it",
+      captured_user: "u",
+      status: "awaiting_human",
+      current_phase: "review",
+      phases: [],
+      steps: [],
+      failures: [],
+      started: 1,
+      ended: null,
+      result: null,
+      pending_decision: {
+        phase: "review",
+        title: "Continue?",
+        summary: "",
+        allow: ["approve"],
+        decided_by: "",
+      },
+    };
+    const getRun = vi.spyOn(workflowApi, "getRun").mockResolvedValue(run);
     render();
-    fireEvent.click(await screen.findByTestId("new-item-button"));
-    expect(await screen.findByTestId("new-item-workflow-good")).toBeInTheDocument();
-    expect(screen.queryByTestId("new-item-workflow-broken")).toBeNull();
+    const panel = await screen.findByTestId("agent-panel-stub");
+    expect(panel).toHaveAttribute("data-steers", "false");
+    expect(screen.queryByTestId("workflow-continue")).toBeNull();
+    expect(screen.queryByTestId("workflow-steer")).toBeNull();
+    expect(screen.queryByTestId("workflow-progress")).toBeNull();
+    expect(getRun).not.toHaveBeenCalled();
   });
 
   it("auto-opens a default free chat when the hub has none yet", async () => {
@@ -246,160 +280,7 @@ describe("ItemChatShell", () => {
     render();
     await waitFor(() => expect(screen.getByTestId("new-item-button")).toBeInTheDocument());
     fireEvent.click(screen.getByTestId("new-item-button"));
-    fireEvent.click(screen.getByTestId("new-item-free"));
     await waitFor(() => expect(create).toHaveBeenCalledWith("topic-hub", "it", ""));
-  });
-
-  it("launches a workflow via the New picker — pre-flight dialog first, then startRun", async () => {
-    stubChatApi([summary({ chat_id: "conversation:c1", is_default: true })]);
-    vi.spyOn(workflowApi, "previewRun").mockResolvedValue({
-      workflow_id: "collections",
-      title: "File uploads into collections",
-      description: "",
-      phases: [{ id: "classify", title: "Classify" }],
-      summary: "把 1 個檔案歸檔",
-      checks: [],
-      can_run: true,
-      has_preflight: true,
-    });
-    const start = vi
-      .spyOn(workflowApi, "startRun")
-      .mockResolvedValue({ run_id: "r1", item_id: "it", chat_id: "conversation:wf1" });
-    render();
-    await waitFor(() => expect(screen.getByTestId("new-item-button")).toBeInTheDocument());
-    fireEvent.click(screen.getByTestId("new-item-button"));
-    fireEvent.click(await screen.findByTestId("new-item-workflow-collections"));
-    // the dialog opens first; nothing starts until the operator confirms
-    await screen.findByTestId("wf-launch-dialog");
-    expect(start).not.toHaveBeenCalled();
-    fireEvent.click(await screen.findByTestId("wf-launch-run"));
-    await waitFor(() => expect(start).toHaveBeenCalledWith("topic-hub", "it", "collections"));
-  });
-
-  it("launches a workflow IN the current chat (takeover) — dialog then startRun with chat_id (#343)", async () => {
-    stubChatApi([summary({ chat_id: "conversation:c1", is_default: true, run_id: null })]);
-    vi.spyOn(workflowApi, "previewRun").mockResolvedValue({
-      workflow_id: "collections",
-      title: "File uploads into collections",
-      description: "",
-      phases: [{ id: "classify", title: "Classify" }],
-      summary: "x",
-      checks: [],
-      can_run: true,
-      has_preflight: true,
-    });
-    const start = vi
-      .spyOn(workflowApi, "startRun")
-      .mockResolvedValue({ run_id: "r1", item_id: "it", chat_id: "conversation:c1" });
-    render({ chatSwitcher: "auto", showCollections: false });
-    // A free chat with no active run offers an in-chat launch entry (distinct from the
-    // "+ New" picker, which opens a fresh chat).
-    fireEvent.click(await screen.findByTestId("launch-in-chat-button"));
-    fireEvent.click(await screen.findByTestId("launch-in-chat-workflow-collections"));
-    await screen.findByTestId("wf-launch-dialog");
-    expect(start).not.toHaveBeenCalled();
-    fireEvent.click(await screen.findByTestId("wf-launch-run"));
-    // Takeover: startRun is called WITH the current chat's id.
-    await waitFor(() =>
-      expect(start).toHaveBeenCalledWith("topic-hub", "it", "collections", "conversation:c1"),
-    );
-  });
-
-  it("lists a user-authored workspace workflow alongside package ones in the in-chat launch menu (#400)", async () => {
-    // A free chat with no active run offers the in-chat launch menu; it must surface
-    // the workflow the user co-authored here (`.workflows/`) next to the package ones.
-    stubChatApi([summary({ chat_id: "conversation:c1", is_default: true, run_id: null })]);
-    vi.spyOn(workspaceWorkflowsApi, "list").mockResolvedValue([
-      { id: "my-flow", title: "My hand-made flow", phases: [] },
-    ]);
-    render({ chatSwitcher: "auto", showCollections: false });
-    fireEvent.click(await screen.findByTestId("launch-in-chat-button"));
-    expect(await screen.findByTestId("launch-in-chat-workflow-collections")).toBeInTheDocument();
-    expect(await screen.findByTestId("launch-in-chat-workflow-my-flow")).toBeInTheDocument();
-    expect(screen.getByText("My hand-made flow")).toBeInTheDocument();
-  });
-
-  it("lists a user-authored workspace workflow in the + New picker too (#400)", async () => {
-    stubChatApi([summary({ chat_id: "conversation:c1", is_default: true })]);
-    vi.spyOn(workspaceWorkflowsApi, "list").mockResolvedValue([
-      { id: "my-flow", title: "My hand-made flow", phases: [] },
-    ]);
-    render();
-    fireEvent.click(await screen.findByTestId("new-item-button"));
-    expect(await screen.findByTestId("new-item-workflow-my-flow")).toBeInTheDocument();
-  });
-
-  it("hides the in-chat launch entry while the chat's run is active (#343)", async () => {
-    stubChatApi([
-      summary({ chat_id: "conversation:wf1", run_id: "r1", is_default: false, title: "Run" }),
-    ]);
-    vi.spyOn(workflowApi, "getRun").mockResolvedValue({
-      run_id: "r1",
-      item_id: "it",
-      captured_user: "u",
-      status: "running",
-      current_phase: "classify",
-      phases: [],
-      steps: [],
-      failures: [],
-      started: 1,
-      ended: null,
-      result: null,
-      pending_decision: null,
-      pending_steer: null,
-      workflow_id: "collections",
-    } as WorkflowRunDTO);
-    render({ chatSwitcher: "auto", showCollections: false });
-    // Once the running run loads, the in-chat launch entry is gone (a thread hosts one
-    // run at a time — you can't launch another over a live one).
-    await waitFor(() =>
-      expect(screen.queryByTestId("launch-in-chat-button")).not.toBeInTheDocument(),
-    );
-  });
-
-  it("re-offers the in-chat launch after a run finished and relaunches in the same thread (#343)", async () => {
-    // A chat whose previous run is terminal (done) — the same thread may host another.
-    stubChatApi([
-      summary({ chat_id: "conversation:wf1", run_id: "r1", is_default: false, title: "Run" }),
-    ]);
-    vi.spyOn(workflowApi, "getRun").mockResolvedValue({
-      run_id: "r1",
-      item_id: "it",
-      captured_user: "u",
-      status: "done",
-      current_phase: "",
-      phases: [],
-      steps: [],
-      failures: [],
-      started: 1,
-      ended: 2,
-      result: null,
-      pending_decision: null,
-    } as WorkflowRunDTO);
-    vi.spyOn(workflowApi, "previewRun").mockResolvedValue({
-      workflow_id: "collections",
-      title: "File uploads into collections",
-      description: "",
-      phases: [],
-      summary: "x",
-      checks: [],
-      can_run: true,
-      has_preflight: true,
-    });
-    const start = vi
-      .spyOn(workflowApi, "startRun")
-      .mockResolvedValue({ run_id: "r2", item_id: "it", chat_id: "conversation:wf1" });
-    render({ chatSwitcher: "auto", showCollections: false });
-    // The launch entry is back on the finished chat; relaunching reuses its id (r1→r2).
-    fireEvent.click(await screen.findByTestId("launch-in-chat-button"));
-    fireEvent.click(await screen.findByTestId("launch-in-chat-workflow-collections"));
-    await screen.findByTestId("wf-launch-dialog");
-    const runBtn = await screen.findByTestId("wf-launch-run");
-    await waitFor(() => expect(runBtn).not.toBeDisabled());
-    fireEvent.click(runBtn);
-    await waitFor(() =>
-      expect(start).toHaveBeenCalledWith("topic-hub", "it", "collections", "conversation:wf1"),
-    );
   });
 
   it("nudges to pick collections when the hub has none, and opens the picker modal", async () => {
@@ -478,180 +359,23 @@ describe("ItemChatShell", () => {
     expect(screen.queryByTestId("header-new-chat")).not.toBeInTheDocument();
   });
 
-  it("shows the bar for an App with workflows but keeps the switcher hidden in auto mode with one chat (#200)", async () => {
-    // PROFILES (beforeEach) carries workflows → the bar must show its New picker,
-    // but with a single chat and `auto` the switcher and header hatch stay away.
+  it("workflows no longer bring up the bar: a one-chat auto App with workflows reads as a single chat", async () => {
+    // PROFILES (beforeEach) carries workflows; they used to put a New picker in
+    // the bar. With no workflow in the chat (D3), only the switcher or the
+    // collection set does, so the header carries the lone escape hatch.
     stubChatApi([summary({ chat_id: "conversation:c1", is_default: true })]);
     render({ chatSwitcher: "auto", showCollections: false });
-    await waitFor(() => expect(screen.getByTestId("new-item-button")).toBeInTheDocument());
-    expect(screen.getByTestId("item-chat-shell__bar")).toBeInTheDocument();
-    expect(screen.queryByTestId("chat-switcher-trigger")).not.toBeInTheDocument();
-    expect(screen.queryByTestId("collections-button")).not.toBeInTheDocument();
-    expect(screen.queryByTestId("header-new-chat")).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.getByTestId("header-new-chat")).toBeInTheDocument());
+    expect(screen.queryByTestId("item-chat-shell__bar")).toBeNull();
   });
 
-  it("shows a Continue affordance on a paused workflow chat and decides on click", async () => {
-    // The only chat is a workflow chat → auto-selected; its run is awaiting_human.
-    stubChatApi([summary({ chat_id: "conversation:wf1", run_id: "r1", is_default: false, title: "Run" })]);
-    const run: WorkflowRunDTO = {
-      run_id: "r1",
-      item_id: "it",
-      captured_user: "u",
-      status: "awaiting_human",
-      current_phase: "review",
-      phases: [],
-      steps: [],
-      failures: [],
-      started: 1,
-      ended: null,
-      result: null,
-      pending_decision: {
-        phase: "review",
-        title: "Filled in the glossary? Continue to commit?",
-        summary: "",
-        allow: ["approve", "reject"],
-        decided_by: "",
-      },
-    };
-    vi.spyOn(workflowApi, "getRun").mockResolvedValue(run);
-    const decide = vi.spyOn(workflowApi, "decide").mockResolvedValue();
-    render();
-    await waitFor(() => expect(screen.getByTestId("workflow-continue")).toBeInTheDocument());
-    // The gate is pinned to the top of the chat (#170) so scrolling past the
-    // feed can't bury the decision.
-    expect(screen.getByTestId("workflow-continue")).toHaveStyle({ position: "sticky" });
-    expect(screen.getByText("Filled in the glossary? Continue to commit?")).toBeInTheDocument();
-    fireEvent.click(screen.getByText("Approve"));
-    await waitFor(() => expect(decide).toHaveBeenCalledWith("topic-hub", "it", "r1", { choice: "approve" }));
-  });
-
-  it("pins the steer confirm card on a pending_steer and applies it on click (#288)", async () => {
-    stubChatApi([summary({ chat_id: "conversation:wf1", run_id: "r1", is_default: false, title: "Run" })]);
-    const run: WorkflowRunDTO = {
-      run_id: "r1",
-      item_id: "it",
-      captured_user: "u",
-      status: "awaiting_human",
-      current_phase: "",
-      phases: [],
-      steps: [],
-      failures: [],
-      started: 1,
-      ended: null,
-      result: null,
-      pending_decision: null,
-      pending_steer: {
-        instruction: "use the a collection and redo ingest",
-        rationale: "switch ingest target",
-        input_edits: [{ path: "collections.json", content: "[]" }],
-        invalidate: ["ingest"],
-        decided_by: "",
-      },
-    };
-    vi.spyOn(workflowApi, "getRun").mockResolvedValue(run);
-    const confirm = vi.spyOn(workflowApi, "confirmSteer").mockResolvedValue();
-    render();
-    await waitFor(() => expect(screen.getByTestId("workflow-steer")).toBeInTheDocument());
-    expect(screen.getByTestId("workflow-steer")).toHaveStyle({ position: "sticky" });
-    expect(screen.getByText("use the a collection and redo ingest")).toBeInTheDocument();
-    fireEvent.click(screen.getByTestId("wf-steer-approve"));
-    await waitFor(() => expect(confirm).toHaveBeenCalledWith("topic-hub", "it", "r1", true));
-  });
-
-  it("mounts the run progress panel on a workflow chat and stops the run (#331)", async () => {
-    stubChatApi([summary({ chat_id: "conversation:wf1", run_id: "r1", is_default: false, title: "Run" })]);
-    const run: WorkflowRunDTO = {
-      run_id: "r1",
-      item_id: "it",
-      captured_user: "u",
-      status: "running",
-      current_phase: "classify",
-      workflow_id: "collections",
-      phases: [{ phase: "classify", status: "running", done: 0, total: 0, failed: 0 }],
-      steps: [],
-      failures: [],
-      started: 1,
-      ended: null,
-      result: null,
-      pending_decision: null,
-    };
-    vi.spyOn(workflowApi, "getRun").mockResolvedValue(run);
-    const cancel = vi.spyOn(workflowApi, "cancelRun").mockResolvedValue();
-    render();
-    await waitFor(() => expect(screen.getByTestId("wf-progress")).toBeInTheDocument());
-    // Run-level Stop lives on the progress bar (topic-hub had no way to stop a run).
-    fireEvent.click(screen.getByTestId("wf-stop"));
-    await waitFor(() => expect(cancel).toHaveBeenCalledWith("topic-hub", "it", "r1"));
-  });
-
-  it("shows no run progress panel on a free chat (#331)", async () => {
-    stubChatApi([summary({ chat_id: "conversation:c1", run_id: null, is_default: true })]);
-    render();
-    await waitFor(() => expect(screen.getByTestId("agent-panel-stub")).toBeInTheDocument());
-    expect(screen.queryByTestId("wf-progress")).toBeNull();
-  });
 });
 
-describe("run-in-this-chat lives in the bar", () => {
+describe("the chat the address names (?chat=)", () => {
   // The launcher used to sit on a row of its own beneath the bar — one more
   // row taken from the message area for a control the bar had room for. It is
   // in the bar now, after "+ New": the two are different asks (a new chat vs.
   // this one) and stay two controls, but they share the line.
-  it("offers it in the bar, not on a row of its own", async () => {
-    stubChatApi([summary({ chat_id: "conversation:c1", is_default: true })]);
-    render();
-    const btn = await screen.findByTestId("launch-in-chat-button");
-    expect(btn.closest('[data-testid="item-chat-shell__bar"]')).not.toBeNull();
-    expect(screen.queryByTestId("item-chat-panel__launch")).toBeNull();
-  });
-
-  it("does not offer it while the active chat's run is still going", async () => {
-    // The rule the launcher always had, now checked where it is drawn.
-    stubChatApi([summary({ chat_id: "conversation:wf1", run_id: "r1", is_default: false, title: "Run" })]);
-    vi.spyOn(workflowApi, "getRun").mockResolvedValue({
-      run_id: "r1",
-      item_id: "it",
-      captured_user: "u",
-      status: "running",
-      current_phase: "digest",
-      phases: [],
-      steps: [],
-      failures: [],
-      started: 1,
-      ended: null,
-      result: null,
-      pending_decision: null,
-    } as WorkflowRunDTO);
-    render();
-    await screen.findByTestId("item-chat-shell__bar");
-    await waitFor(() => expect(workflowApi.getRun).toHaveBeenCalled());
-    expect(screen.queryByTestId("launch-in-chat-button")).toBeNull();
-  });
-
-  it("starts the run in THIS chat after the pre-flight dialog", async () => {
-    stubChatApi([summary({ chat_id: "conversation:c1", is_default: true })]);
-    vi.spyOn(workflowApi, "previewRun").mockResolvedValue({
-      workflow_id: "memory",
-      title: "Digest uploads into memory",
-      description: "",
-      phases: [{ id: "digest", title: "Digest" }],
-      summary: "",
-      checks: [],
-      can_run: true,
-      has_preflight: true,
-    });
-    const start = vi
-      .spyOn(workflowApi, "startRun")
-      .mockResolvedValue({ run_id: "r9", item_id: "it", chat_id: "conversation:c1" });
-    render();
-    fireEvent.click(await screen.findByTestId("launch-in-chat-button"));
-    fireEvent.click(await screen.findByTestId("launch-in-chat-workflow-memory"));
-    await screen.findByTestId("wf-launch-dialog");
-    fireEvent.click(await screen.findByTestId("wf-launch-run"));
-    await waitFor(() =>
-      expect(start).toHaveBeenCalledWith("topic-hub", "it", "memory", "conversation:c1"),
-    );
-  });
   it("opens the chat the address names (?chat=), not the most recent one", async () => {
     // The schedules overview links a schedule's last run to its own chat
     // (docs/plan-schedule-overview.md); without this the link landed on
@@ -685,8 +409,7 @@ describe("run-in-this-chat lives in the bar", () => {
         <ItemChatShell
           slug="topic-hub"
           itemId="it"
-          profile="default"
-          picker={[]}
+              picker={[]}
           suggestions={[]}
           appTitle="Topic Hub"
           attachedPreset=""
@@ -721,8 +444,7 @@ describe("run-in-this-chat lives in the bar", () => {
         <ItemChatShell
           slug="topic-hub"
           itemId="it"
-          profile="default"
-          picker={[]}
+              picker={[]}
           suggestions={[]}
           appTitle="Topic Hub"
           attachedPreset=""
@@ -759,8 +481,7 @@ describe("run-in-this-chat lives in the bar", () => {
       <ItemChatShell
         slug="topic-hub"
         itemId={itemId}
-        profile="default"
-        picker={[]}
+          picker={[]}
         suggestions={[]}
         appTitle="Topic Hub"
         attachedPreset=""
@@ -788,108 +509,4 @@ describe("run-in-this-chat lives in the bar", () => {
     }
   });
 
-  it("closes the launch dialog when the active chat changes, and never starts in the other chat", async () => {
-    // The dialog used to live in the per-chat panel under `key={chat_id}`, so a
-    // switch unmounted it and nothing could launch. In the shell it survived
-    // the switch, and confirming started the run in whichever chat was active
-    // BY THEN. The chat is captured at pick time and the dialog leaves with it.
-    stubChatApi([
-      summary({ chat_id: "conversation:c1", is_default: true, title: "A" }),
-      summary({ chat_id: "conversation:c2", is_default: false, title: "B" }),
-    ]);
-    vi.spyOn(workflowApi, "previewRun").mockResolvedValue({
-      workflow_id: "memory",
-      title: "Digest uploads into memory",
-      description: "",
-      phases: [{ id: "digest", title: "Digest" }],
-      summary: "",
-      checks: [],
-      can_run: true,
-      has_preflight: true,
-    });
-    const start = vi
-      .spyOn(workflowApi, "startRun")
-      .mockResolvedValue({ run_id: "r9", item_id: "it", chat_id: "conversation:c1" });
-    render();
-    fireEvent.click(await screen.findByTestId("launch-in-chat-button"));
-    fireEvent.click(await screen.findByTestId("launch-in-chat-workflow-memory"));
-    await screen.findByTestId("wf-launch-dialog");
-
-    // switch to B underneath the dialog
-    fireEvent.click(screen.getByTestId("chat-switcher-trigger"));
-    fireEvent.click(await screen.findByTestId("chat-switcher-item-conversation:c2"));
-
-    await waitFor(() => expect(screen.queryByTestId("wf-launch-dialog")).toBeNull());
-    expect(start).not.toHaveBeenCalled();
-  });
-
-  describe("arriving from the schedules overview", () => {
-    const schedRun: WorkflowRunDTO = {
-      run_id: "r1",
-      item_id: "it",
-      captured_user: "u",
-      status: "done",
-      current_phase: "",
-      phases: [],
-      steps: [],
-      failures: [],
-      started: 1,
-      ended: 2,
-      result: null,
-      pending_decision: null,
-      workflow_id: "memory",
-    } as WorkflowRunDTO;
-
-    const renderAt = (address: string) => {
-      stubChatApi([
-        summary({ chat_id: "conversation:c1", is_default: true, title: "A" }),
-        summary({ chat_id: "wui:it:sched", run_id: "r1", is_default: false, title: "memory" }),
-      ]);
-      vi.spyOn(workflowApi, "getRun").mockResolvedValue(schedRun);
-      window.history.pushState({}, "", address);
-      renderWithQuery(
-        <MemoryRouter>
-          <ItemChatShell
-            slug="topic-hub"
-            itemId="it"
-            profile="default"
-            picker={[]}
-            suggestions={[]}
-            appTitle="Topic Hub"
-            attachedPreset=""
-            onAttachPreset={() => {}}
-            uploadDir="uploads"
-            chatSwitcher="always"
-            showCollections={false}
-          />
-        </MemoryRouter>,
-      );
-    };
-
-    it("says whose runs these are, leads back, and opens the run's progress", async () => {
-      try {
-        renderAt("/a/topic-hub/it?chat=wui%3Ait%3Asched&from=schedules");
-        const banner = await screen.findByTestId("schedule-chat-banner");
-        // The workflow's title, from the profile — not the chat's raw name.
-        await waitFor(() => expect(banner).toHaveTextContent("這是排程「Digest uploads into memory」的執行紀錄"));
-        expect(screen.getByRole("link", { name: "回到排程" })).toHaveAttribute("href", "/schedules");
-        await waitFor(() =>
-          expect(screen.getByTestId("wf-progress-toggle")).toHaveAttribute("aria-expanded", "true"),
-        );
-      } finally {
-        window.history.pushState({}, "", "/");
-      }
-    });
-
-    it("says nothing when the chat was opened any other way", async () => {
-      try {
-        renderAt("/a/topic-hub/it?chat=wui%3Ait%3Asched");
-        await screen.findByTestId("wf-progress-toggle");
-        expect(screen.queryByTestId("schedule-chat-banner")).toBeNull();
-        expect(screen.getByTestId("wf-progress-toggle")).toHaveAttribute("aria-expanded", "false");
-      } finally {
-        window.history.pushState({}, "", "/");
-      }
-    });
-  });
 });
