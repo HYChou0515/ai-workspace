@@ -112,6 +112,42 @@ async def test_a_flush_that_fails_still_announces_the_end(monkeypatch):
     assert (await asyncio.wait_for(ended, 5)).chat_id == first
 
 
+class _Hangs:
+    """Streams one delta, then waits to be stopped."""
+
+    def __init__(self) -> None:
+        self.started = asyncio.Event()
+
+    async def run(self, prompt, ctx):  # noqa: ANN001, ANN201
+        self.started.set()
+        yield MessageDelta(text="working")
+        await asyncio.sleep(30)
+        yield RunDone()  # pragma: no cover — reached only if the Stop is lost
+
+
+# A stopped turn may already have written files; Stop ends it like any other.
+async def test_a_stopped_turn_announces_its_end_too():
+    spec = make_spec(default_user="u")
+    runner = _Hangs()
+    app = create_app(
+        spec=spec,
+        sandbox=MockSandbox(),
+        filestore=MemoryFileStore(),
+        runner=runner,  # ty: ignore[invalid-argument-type]
+        get_user_id=lambda: "alice",
+        send_await_timeout=0.1,
+    )
+    iid = register_rca_item(spec)
+    _first, second = await _chats(app, iid, "first", "second")
+    ended = _await_turn_ended(app.state.turn_engine, iid)
+    await _send(app, iid, second)
+    await asyncio.wait_for(runner.started.wait(), 5)
+
+    await app.state.turn_engine.cancel_current(second)
+
+    assert (await asyncio.wait_for(ended, 5)).chat_id == second
+
+
 async def test_a_workflow_turn_tells_the_item_stream_it_ended(monkeypatch):
     spec = make_spec()
     captured: dict[str, object] = {}
