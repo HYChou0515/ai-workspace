@@ -13,7 +13,7 @@ from __future__ import annotations
 from pathlib import Path
 from textwrap import dedent
 
-from workspace_app.config.dump import emit_config_dump, render
+from workspace_app.config.dump import emit_config_dump, is_secret, render
 from workspace_app.config.loader import load_with_provenance
 
 
@@ -60,6 +60,35 @@ def test_render_masks_unset_secret(tmp_path: Path):
     settings, prov = _resolved(tmp_path, "server:\n  port: 9090\n")
     masked = render(settings, prov, reveal_secrets=False)
     assert "api_key: *** unset ***  # ← default" in masked
+
+
+def test_every_value_of_a_presets_env_is_masked(tmp_path: Path):
+    """docs/plan-model-settings.md M7: a preset's `env` holds tokens under names
+    nothing can recognise (HF_HUB_URL may carry one too), so all of it is
+    secret — on stdout here, and on the settings page, which asks the same
+    rule."""
+    settings, prov = _resolved(
+        tmp_path,
+        """
+        agents:
+          presets:
+            local:
+              model: ollama_chat/qwen3
+              env:
+                HF_HUB_URL: https://user:hunter2@hub.example
+        """,
+    )
+    masked = render(settings, prov, reveal_secrets=False)
+    assert "hunter2" not in masked
+    assert "HF_HUB_URL: *** set" in masked
+
+
+def test_a_token_named_in_capitals_is_masked():
+    """Environment variable names are upper case: `HF_TOKEN` is as much a
+    token as `hf_token`."""
+    assert is_secret("server.HF_TOKEN")
+    assert is_secret("agents.presets.local.llm.api_key")
+    assert not is_secret("agents.presets.local.llm.base_url")
 
 
 def test_render_base_url_is_not_masked(tmp_path: Path):

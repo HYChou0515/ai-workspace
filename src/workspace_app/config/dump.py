@@ -107,17 +107,25 @@ def _is_branch(value: Any) -> bool:
 
 
 def _value(path: str, value: Any, src: Source, reveal: bool) -> str:
-    if _is_secret(path) and not reveal:
+    if is_secret(path) and not reveal:
         return _mask(value, src)
     return _scalar(value)
 
 
-def _is_secret(path: str) -> bool:
-    """Leaves that must be masked on stdout. By leaf name (`api_key`, `pg_dsn`,
-    any `*_token`) plus the rabbitmq URL (may embed amqp credentials).
-    `base_url` is intentionally excluded."""
+def is_secret(path: str) -> bool:
+    """Whether the setting at dotted `path` must never be shown. The one rule:
+    the boot-time dump and the model settings page both ask it
+    (docs/plan-model-settings.md M7), so they cannot disagree.
+
+    By leaf name — `api_key`, `pg_dsn`, any `*_token` in either case (variable
+    names are upper case) — plus the rabbitmq URL (may embed amqp
+    credentials) and every value of a preset's `env`, where tokens sit under
+    names nothing can recognise. `base_url` is intentionally excluded."""
     leaf = path.rsplit(".", 1)[-1].split("[", 1)[0]
-    if leaf in ("api_key", "pg_dsn") or leaf.endswith("_token"):
+    if leaf in ("api_key", "pg_dsn") or leaf.lower().endswith("_token"):
+        return True
+    parts = path.split(".")
+    if len(parts) >= 5 and parts[:2] == ["agents", "presets"] and parts[3] == "env":
         return True
     return path.endswith("rabbitmq.url")
 
