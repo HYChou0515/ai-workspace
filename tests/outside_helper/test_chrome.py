@@ -173,3 +173,40 @@ def test_an_answer_that_is_not_json_reads_as_none(tmp_path, site):
 def test_a_chrome_that_will_not_start_says_why(tmp_path, site):
     with pytest.raises(Exception, match="no-such-browser"):
         Chrome(tmp_path / "profile", site, channel="no-such-browser", headless=True)
+
+
+# §3.7.4: the update zip comes through the same signed-in line, as bytes.
+def test_a_file_is_fetched_whole_with_the_login(tmp_path, site):
+    chrome = _chrome(tmp_path, site)
+    try:
+        _visit(chrome, f"{site}/login")
+        status, body = chrome.fetch_bytes("/api/me", {})
+        redirect, _ = chrome.fetch_bytes("/api/expired", {})
+    finally:
+        chrome.close()
+
+    assert status == 200 and b"sid=abc" in body
+    assert redirect == 302
+
+
+def test_a_file_from_a_backend_that_is_not_there_is_an_os_error(tmp_path):
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    chrome = _chrome(tmp_path, f"http://127.0.0.1:{port}")
+    try:
+        with pytest.raises(OSError):
+            chrome.fetch_bytes("/api/x", {})
+    finally:
+        chrome.close()
+
+
+# §3.7.7: which Chrome the helper drives, for the check-in.
+def test_it_says_which_chrome_it_drives(tmp_path, site):
+    chrome = _chrome(tmp_path, site)
+    try:
+        version = chrome.version()
+    finally:
+        chrome.close()
+
+    assert version.split(".")[0].isdigit()

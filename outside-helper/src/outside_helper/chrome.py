@@ -29,6 +29,8 @@ from .errands import Errand, ErrandContext, ErrandFailed, FetchedPage
 
 #: A backend request that takes longer than this is treated as unreachable.
 REQUEST_TIMEOUT_MS = 30_000
+#: The update zip is ~40 MB; on an office LAN that is seconds, not minutes.
+DOWNLOAD_TIMEOUT_MS = 300_000
 
 #: The card's paste converter, built from the frontend source into this
 #: package (web/vite.outside-helper.config.ts) — defines `__outsideHelper`.
@@ -95,6 +97,37 @@ class Chrome:
             return r.status, data
         finally:
             r.dispose()
+
+    def fetch_bytes(self, path: str, headers: dict[str, str]) -> tuple[int, bytes]:
+        """A GET whose answer is a file (the update zip, §3.7.4), with the
+        profile's login; see `backend.FetchBytes`. Redirects not followed."""
+        from playwright.sync_api import Error as PlaywrightError
+
+        try:
+            r = self._ctx.request.get(
+                f"{self.app_url}{path}",
+                headers=headers,
+                max_redirects=0,
+                fail_on_status_code=False,
+                timeout=DOWNLOAD_TIMEOUT_MS,
+            )
+        except PlaywrightError as exc:
+            raise OSError(str(exc)) from exc
+        try:
+            return r.status, r.body()
+        finally:
+            r.dispose()
+
+    def version(self) -> str:
+        """The Chrome being driven, e.g. `141.0.7390.55` (§3.7.7). A persistent
+        context has no `Browser` object to ask, so the browser itself is."""
+        page = self._ctx.pages[0] if self._ctx.pages else self._ctx.new_page()
+        session = self._ctx.new_cdp_session(page)
+        try:
+            product = str(session.send("Browser.getVersion")["product"])
+        finally:
+            session.detach()
+        return product.split("/", 1)[-1]
 
     def run(self, errand: Errand, args: str, note: Callable[[str], None]) -> FetchedPage:
         """Run one errand in a fresh tab, closed afterwards whatever happens."""

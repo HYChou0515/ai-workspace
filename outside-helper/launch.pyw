@@ -3,10 +3,11 @@
 Both shortcuts point here, run by the Python the person confirmed at install
 (its absolute pythonw.exe path — D16). Standard library only: it lives in
 %LOCALAPPDATA%\\OutsideHelper\\ beside setup_core.py and state.json, outside
-every version folder, so an update never has to replace a running file.
+every version folder, so an update never has to replace a running file. What
+it decides — which version, the rollback, one helper at a time — is
+`setup_core.launch`, tested; this file only shows a failure.
 """
 
-import subprocess
 import sys
 from pathlib import Path
 
@@ -18,8 +19,7 @@ import setup_core  # noqa: E402  # ty: ignore[unresolved-import] — beside this
 
 def main() -> int:
     try:
-        argv = setup_core.launch_command(HERE, setup_core.read_state(HERE))
-        subprocess.Popen(argv, cwd=str(HERE))
+        setup_core.launch(HERE)
     except (setup_core.SetupFailed, OSError) as exc:
         import tkinter
         from tkinter import messagebox

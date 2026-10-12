@@ -32,7 +32,11 @@ def _backend(client) -> Backend:
             data = None
         return r.status_code, data
 
-    return Backend(send)
+    def fetch_bytes(path: str, headers: dict[str, str]):
+        r = raw.get(path, headers=headers)
+        return r.status_code, r.content
+
+    return Backend(send, fetch_bytes=fetch_bytes)
 
 
 @dataclass
@@ -196,13 +200,54 @@ def test_a_redirect_to_the_login_page_asks_for_the_login():
 
 # §3.7.6: below the minimum version the backend refuses with the manifest of
 # the current one; the helper stops taking jobs and knows what to fetch.
-def test_a_version_no_longer_accepted_says_an_update_is_needed():
-    manifest = {"version": "0.2.0", "min_version": "0.2.0", "file": "outside-helper-0.2.0.zip"}
-    worker = Worker(Backend(lambda m, p, b, h: (426, manifest)), _Browser([]), errands={})
+def test_a_version_no_longer_accepted_says_an_update_is_needed(tmp_path):
+    from tests.api.test_outside_helper_release import _publish
+
+    manifest, _ = _publish(tmp_path, "0.9.0", min_version="0.9.0")
+    client, _spec, _iid = _asked(outside_helper_dir=str(tmp_path))
+    worker = Worker(_backend(client), _Browser([]), errands={})
 
     worker.tick()
 
-    assert (worker.status, worker.manifest) == ("update_required", manifest)
+    assert worker.status == "update_required"
+    assert worker.manifest == {**manifest, "size": len(b"zip of 0.9.0")}
+
+
+# §3.7.4: the helper reads the published release and fetches its zip through
+# the same signed-in line it takes jobs through.
+def test_the_helper_reads_and_fetches_the_published_release(tmp_path):
+    from tests.api.test_outside_helper_release import _publish
+
+    manifest, zip_bytes = _publish(tmp_path, "0.9.0")
+    client, _spec, _iid = _asked(outside_helper_dir=str(tmp_path))
+    backend = _backend(client)
+
+    release = backend.manifest()
+    assert release is not None and release["version"] == "0.9.0"
+    assert backend.download(manifest["file"]) == zip_bytes
+
+
+def test_with_nothing_published_there_is_no_release():
+    client, _spec, _iid = _asked()
+
+    assert _backend(client).manifest() is None
+
+
+# §3.7.7: each check-in says what the helper runs on.
+def test_the_check_in_says_what_the_helper_runs_on():
+    client, _spec, _iid = _asked()
+    info = {"chrome": "141.0", "playwright": "1.63.0", "python": "3.12.5", "update": ""}
+    worker = Worker(_backend(client), _Browser([]), errands={}, info=lambda: info)
+
+    worker.tick()
+
+    seen = client.app.state.outside_jobs.presence("u")
+    assert (seen.version, seen.chrome, seen.playwright, seen.python) == (
+        __version__,
+        "141.0",
+        "1.63.0",
+        "3.12.5",
+    )
 
 
 def test_any_other_refusal_shows_the_backends_reason():

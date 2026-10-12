@@ -2561,6 +2561,7 @@ def create_app(
         store=outside_jobs,
         get_user_id=get_user_id,
         deliver=deliver_outside_answer,
+        release_dir=outside_helper_dir,
     )
     from .outside_helper_release import register_outside_helper_release_routes
 

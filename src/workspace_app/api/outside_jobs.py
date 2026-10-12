@@ -45,6 +45,11 @@ CLAIM_TIMEOUT_MS = 120_000
 #: the manual flow (D7) rather than a 「查」 nobody will act on.
 ONLINE_WINDOW_MS = 30_000
 
+#: The oldest helper↔backend protocol this backend speaks (§3.7.3). Raise it
+#: when an API change would break helpers already installed: they then get a
+#: 426 and update, instead of quietly misreading the new API.
+MIN_PROTOCOL = 1
+
 
 class OutsideJob(Struct):
     owner: str
@@ -70,6 +75,13 @@ class _OutsideHelperPresence(Struct):
     last_seen_ms: int
     version: str = ""
     protocol: int = 0
+    #: What it drives — who is about to break when Chrome updates past what
+    #: the helper's Playwright was tested with (§3.7.7).
+    chrome: str = ""
+    playwright: str = ""
+    python: str = ""
+    #: The last update's outcome, e.g. "0.4.0 起不來,已退回 0.3.0" (§3.7.5).
+    update: str = ""
 
 
 class _OutsideSeenUrls(Struct):
@@ -144,12 +156,16 @@ class OutsideJobStore:
 
     # ── presence ────────────────────────────────────────────────────────────
 
-    async def heartbeat(self, owner: str, *, version: str, protocol: int) -> None:
-        await asyncio.to_thread(self._heartbeat_sync, owner, version, protocol)
+    async def heartbeat(self, owner: str, **seen: str | int) -> None:
+        """The owner's helper checked in; ``seen`` is what it runs on — the
+        `_OutsideHelperPresence` fields past ``last_seen_ms``."""
+        await asyncio.to_thread(self._heartbeat_sync, owner, seen)
 
-    def _heartbeat_sync(self, owner: str, version: str, protocol: int) -> None:
+    def _heartbeat_sync(self, owner: str, seen: dict[str, str | int]) -> None:
         row = _OutsideHelperPresence(
-            owner=owner, last_seen_ms=self.now(), version=version, protocol=protocol
+            owner=owner,
+            last_seen_ms=self.now(),
+            **seen,  # ty: ignore[invalid-argument-type]
         )
         rm = self._presence()
         key = _owner_key(owner)
@@ -167,12 +183,17 @@ class OutsideJobStore:
         return await asyncio.to_thread(self._online_sync, owner)
 
     def _online_sync(self, owner: str) -> bool:
+        seen = self.presence(owner)
+        return seen is not None and self.now() - seen.last_seen_ms <= ONLINE_WINDOW_MS
+
+    def presence(self, owner: str) -> _OutsideHelperPresence | None:
+        """The owner's helper as it last checked in, or None (blocking)."""
         try:
             data = self._presence().get(_owner_key(owner)).data
         except (ResourceIDNotFoundError, ResourceIsDeletedError):
-            return False
+            return None
         assert isinstance(data, _OutsideHelperPresence)
-        return self.now() - data.last_seen_ms <= ONLINE_WINDOW_MS
+        return data
 
     # ── jobs ────────────────────────────────────────────────────────────────
 

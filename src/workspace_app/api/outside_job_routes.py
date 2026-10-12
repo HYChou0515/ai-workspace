@@ -13,12 +13,13 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from fastapi import APIRouter, FastAPI, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request, Response
 from pydantic import BaseModel
 
 from ..resources.conversation import Conversation
 from .locator import ItemLocator
-from .outside_jobs import OutsideJob, OutsideJobStore, job_id
+from .outside_helper_release import read_release
+from .outside_jobs import MIN_PROTOCOL, OutsideJob, OutsideJobStore, job_id
 from .outside_lookup_routes import AnswerForm, Deliver, OutsideAnswerOut, _open_card
 
 
@@ -44,6 +45,18 @@ class JobOut(BaseModel):
 class HeartbeatIn(BaseModel):
     version: str = ""
     protocol: int = 0
+    chrome: str = ""
+    playwright: str = ""
+    python: str = ""
+    update: str = ""
+
+
+def _version(text: str) -> tuple[int, ...]:
+    """`1.10.0` as numbers (newer than `1.9.0`); unreadable reads as oldest."""
+    try:
+        return tuple(int(part) for part in text.strip().split("."))
+    except ValueError:
+        return (0,)
 
 
 class HelperStatusOut(BaseModel):
@@ -85,7 +98,34 @@ def register_outside_job_routes(
     store: OutsideJobStore,
     get_user_id: Callable[[], str],
     deliver: Deliver,
+    release_dir: str | None = None,
 ) -> None:
+    def current_helper(request: Request) -> None:
+        """§3.7.3: a helper below the minimum protocol (ours, in code) or the
+        minimum version (the operator's, in the published manifest) is told to
+        update — 426 with where the current release is — rather than left to
+        misread an API that moved on. Only a request that says it is a helper
+        is judged; the card's own reads never are."""
+        version = request.headers.get("X-Outside-Helper-Version")
+        protocol = request.headers.get("X-Outside-Helper-Protocol")
+        if version is None and protocol is None:
+            return
+        found = read_release(release_dir)
+        too_old_protocol = _version(protocol or "0") < (MIN_PROTOCOL,)
+        too_old_version = found is not None and _version(version or "0") < _version(
+            found[0].min_version
+        )
+        if too_old_protocol or too_old_version:
+            raise HTTPException(
+                status_code=426,
+                detail={
+                    "message": "this outside helper is too old — update it",
+                    "release": found[0].model_dump() if found else None,
+                },
+            )
+
+    helper_only = [Depends(current_helper)]
+
     async def hand_over(
         slug: str,
         item_id: str,
@@ -187,7 +227,11 @@ def register_outside_job_routes(
 
     # ── the helper ──────────────────────────────────────────────────────────
 
-    @app.post("/outside-helper/jobs/{jid}/result", response_model=OutsideAnswerOut)
+    @app.post(
+        "/outside-helper/jobs/{jid}/result",
+        response_model=OutsideAnswerOut,
+        dependencies=helper_only,
+    )
     async def result(request: Request, jid: str, body: ResultIn) -> OutsideAnswerOut:
         """The page the helper fetched answers the card — through the SAME code
         a person's paste goes through (`deliver`), as the person who handed it
@@ -225,28 +269,28 @@ def register_outside_job_routes(
         await store.end(jid, owner, "done")
         return out
 
-    @app.post("/outside-helper/jobs/{jid}/fail", status_code=204)
+    @app.post("/outside-helper/jobs/{jid}/fail", status_code=204, dependencies=helper_only)
     async def fail(jid: str, body: FailIn) -> Response:
         if not await store.fail(jid, get_user_id(), body.error.strip()[:_ERROR_CHARS]):
             raise HTTPException(status_code=404, detail="no claimed job of yours with this id")
         return Response(status_code=204)
 
-    @app.post("/outside-helper/jobs/{jid}/note", status_code=204)
+    @app.post("/outside-helper/jobs/{jid}/note", status_code=204, dependencies=helper_only)
     async def note(jid: str, body: NoteIn) -> Response:
         if not await store.note(jid, get_user_id(), body.note.strip()[:_ERROR_CHARS]):
             raise HTTPException(status_code=404, detail="no claimed job of yours with this id")
         return Response(status_code=204)
 
-    @app.post("/outside-helper/heartbeat", status_code=204)
+    @app.post("/outside-helper/heartbeat", status_code=204, dependencies=helper_only)
     async def heartbeat(body: HeartbeatIn) -> Response:
-        await store.heartbeat(get_user_id(), version=body.version, protocol=body.protocol)
+        await store.heartbeat(get_user_id(), **body.model_dump())
         return Response(status_code=204)
 
     @app.get("/outside-helper/status", response_model=HelperStatusOut)
     async def status() -> HelperStatusOut:
         return HelperStatusOut(online=await store.online(get_user_id()))
 
-    @app.post("/outside-helper/jobs/claim", response_model=JobOut | None)
+    @app.post("/outside-helper/jobs/claim", response_model=JobOut | None, dependencies=helper_only)
     async def claim() -> JobOut | Response:
         got = await store.claim(get_user_id())
         if got is None:

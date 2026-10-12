@@ -44,26 +44,52 @@ class Job:
     args: str
 
 
+#: (path, headers) -> (status, body bytes): a GET whose answer is a file.
+FetchBytes = Callable[[str, dict[str, str]], tuple[int, bytes]]
+
+
+def _headers() -> dict[str, str]:
+    return {"X-Outside-Helper-Version": __version__, "X-Outside-Helper-Protocol": str(PROTOCOL)}
+
+
+def _refusal(status: int, data: Any) -> None:
+    # A gateway in front of the app sends an expired login to the SSO page
+    # (3xx) rather than answering 401; the transport never follows it.
+    if status in (401, 403) or 300 <= status < 400:
+        raise NeedsLogin()
+    detail = data.get("detail") if isinstance(data, dict) else None
+    if status == 426:
+        # §3.7.3: the body names the current release to update to
+        raise UpdateRequired(detail.get("release") if isinstance(detail, dict) else None)
+    if status >= 400:
+        raise BackendError(str(detail or f"HTTP {status}"))
+
+
 class Backend:
-    def __init__(self, send: Send) -> None:
+    def __init__(self, send: Send, *, fetch_bytes: FetchBytes | None = None) -> None:
         self._send = send
+        self._fetch_bytes = fetch_bytes
 
     def _call(self, method: str, path: str, body: dict[str, Any] | None = None) -> Any:
-        headers = {
-            "X-Outside-Helper-Version": __version__,
-            "X-Outside-Helper-Protocol": str(PROTOCOL),
-        }
-        status, data = self._send(method, f"/api{path}", body, headers)
-        # A gateway in front of the app sends an expired login to the SSO page
-        # (3xx) rather than answering 401; the transport never follows it.
-        if status in (401, 403) or 300 <= status < 400:
-            raise NeedsLogin()
-        if status == 426:
-            raise UpdateRequired(data)
-        if status >= 400:
-            detail = data.get("detail") if isinstance(data, dict) else None
-            raise BackendError(str(detail or f"HTTP {status}"))
+        status, data = self._send(method, f"/api{path}", body, _headers())
+        _refusal(status, data)
         return data if status != 204 else None
+
+    def manifest(self) -> dict[str, Any] | None:
+        """The release the operator published (§3.7.2), or None."""
+        try:
+            return self._call("GET", "/outside-helper/manifest")
+        except BackendError:
+            return None
+
+    def download(self, file: str) -> bytes:
+        """The release's zip — through the same signed-in line as the jobs, so
+        it never carries a browser's "downloaded from the internet" mark."""
+        if self._fetch_bytes is None:
+            raise BackendError("this transport cannot fetch files")
+        status, data = self._fetch_bytes(f"/api/outside-helper/download/{file}", _headers())
+        _refusal(status, None)
+        return data
 
     def heartbeat(self, **info: Any) -> None:
         self._call(
@@ -97,4 +123,4 @@ class Backend:
         self._call("POST", f"/outside-helper/jobs/{job_id}/note", {"note": note})
 
 
-__all__ = ["Backend", "BackendError", "Job", "NeedsLogin", "Send", "UpdateRequired"]
+__all__ = ["Backend", "BackendError", "FetchBytes", "Job", "NeedsLogin", "Send", "UpdateRequired"]

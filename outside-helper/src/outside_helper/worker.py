@@ -37,11 +37,14 @@ class Worker:
         *,
         errands: Mapping[str, Errand],
         date: Callable[[], str] = _today,
+        info: Callable[[], Mapping[str, str]] = dict,
     ) -> None:
         self._backend = backend
         self._browser = browser
         self._errands = errands
         self._date = date
+        #: What each check-in reports beyond the version (§3.7.7).
+        self._info = info
         self.paused = False
         self.status = "starting"
         #: What the window shows under the status: the errand under way, or the
@@ -56,7 +59,7 @@ class Worker:
             self.status, self.detail = "paused", ""
             return
         try:
-            self._backend.heartbeat()
+            self._backend.heartbeat(**self._info())
             self.status, self.detail = "connected", ""
             job = self._backend.claim()
             if job is not None:

@@ -26,6 +26,7 @@ class _Worker:
         self.status = "starting"
         self.detail = ""
         self.ticks = 0
+        self.manifest = None
 
     def tick(self) -> None:
         self.ticks += 1
@@ -157,6 +158,78 @@ def test_a_chrome_that_fails_to_close_still_lets_the_helper_end():
     assert ctl.step() is False
 
 
+class _Updater:
+    def __init__(self, fails: bool = False) -> None:
+        self.calls: list[object] = []
+        self.status = ""
+        self.fails = fails
+
+    def connected(self) -> None:
+        self.calls.append("connected")
+
+    def tick(self, required=None) -> None:
+        self.calls.append(("tick", required))
+        if self.fails:
+            raise RuntimeError("manifest unreadable")
+
+
+def _with_updater(statuses, updater, manifest=None):
+    chrome, worker = _Chrome(), _Worker(statuses)
+    worker.manifest = manifest
+    ctl = Controller(lambda: chrome, lambda _c: worker, make_updater=lambda _c: updater)
+    ctl.open()
+    return ctl, chrome
+
+
+# §3.7.5 step 3 / §3.7.4: once connected, the version confirms itself and the
+# scheduled check runs, on the same thread as the jobs.
+def test_once_connected_the_update_check_runs():
+    up = _Updater()
+    ctl, _chrome = _with_updater(["connected"], up)
+
+    ctl.step()
+
+    assert up.calls == ["connected", ("tick", None)]
+
+
+# §3.7.6: refused, the helper updates from the release the refusal named.
+def test_a_refused_helper_updates_from_the_release_it_was_given():
+    up = _Updater()
+    release = {"version": "0.4.0", "file": "outside-helper-0.4.0.zip"}
+    ctl, _chrome = _with_updater(["update_required"], up, manifest=release)
+
+    ctl.step()
+
+    assert up.calls == [("tick", release)]
+    assert ctl.update_status() == ""
+
+
+def test_signed_out_it_does_not_look_for_updates():
+    up = _Updater()
+    ctl, _chrome = _with_updater(["needs_login"], up)
+
+    ctl.step()
+
+    assert up.calls == []
+
+
+def test_an_update_check_that_fails_does_not_stop_the_helper():
+    ctl, _chrome = _with_updater(["connected", "connected"], _Updater(fails=True))
+
+    assert ctl.step() is True
+    assert ctl.step() is True
+
+
+# §3.7.6: 「重新開啟」 — end, so the launcher can start the version now ready.
+def test_restart_ends_the_helper_and_asks_for_the_launcher():
+    ctl, chrome = _with_updater(["connected"], _Updater())
+
+    ctl.send("restart")
+
+    assert ctl.step() is False
+    assert chrome.closed and ctl.restart
+
+
 # §3.7.4 step 4: a freshly installed version proves it can drive Chrome before
 # it counts as installed — Playwright imports and its driver is on disk (an
 # antivirus that removed node.exe is caught here, not at the first lookup).
@@ -177,6 +250,20 @@ def test_the_self_test_fails_when_the_driver_is_gone(monkeypatch, tmp_path, caps
 
     assert app.self_test() == 1
     assert "node.exe" in capsys.readouterr().out
+
+
+# What the window says about the next version (§3.7.4–§3.7.6).
+def test_the_update_line_says_where_the_next_version_stands():
+    from outside_helper.app import describe_update
+
+    assert describe_update("", forced=False) == ""
+    assert describe_update("preparing", forced=False) == "正在準備新版…"
+    assert describe_update("ready", forced=False) == "新版已備好,下次開啟生效"
+    assert describe_update("ready", forced=True) == "新版已備好,按「重新開啟」換上"
+    # the running version carries on — unless it is refused, when only a
+    # reinstall from the download page is left (§3.7.6)
+    assert describe_update("failed: sha256", forced=False) == "新版準備失敗:sha256(這一版照常使用)"
+    assert "外網小幫手" in describe_update("failed: sha256", forced=True)
 
 
 def test_a_status_reads_with_or_without_its_detail():

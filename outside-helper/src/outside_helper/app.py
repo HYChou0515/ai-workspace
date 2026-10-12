@@ -46,23 +46,43 @@ def describe(status: str, detail: str) -> str:
     return f"{text}:{detail}"
 
 
+def describe_update(status: str, *, forced: bool) -> str:
+    """The window's line about the next version; `forced` when this version is
+    refused (§3.7.6)."""
+    if status == "preparing":
+        return "正在準備新版…"
+    if status == "ready":
+        return "新版已備好,按「重新開啟」換上" if forced else "新版已備好,下次開啟生效"
+    if status.startswith("failed"):
+        why = status.partition(":")[2].strip()
+        if forced:
+            return f"新版準備失敗:{why}。請到 AI 工作區的「外網小幫手」頁重新下載、執行 install.pyw"
+        return f"新版準備失敗:{why}(這一版照常使用)"
+    return ""
+
+
 class Controller:
     def __init__(
         self,
         make_chrome: Callable[[], Any],
         make_worker: Callable[[Any], Any],
         *,
+        make_updater: Callable[[Any], Any] | None = None,
         poll_s: float = POLL_S,
     ) -> None:
         self._make_chrome = make_chrome
         self._make_worker = make_worker
+        self._make_updater = make_updater
         self._poll_s = poll_s
         self._commands: queue.Queue[str] = queue.Queue()
         self._lock = threading.Lock()
         self._snapshot = ("starting", "")
         self._chrome: Any = None
         self._worker: Any = None
+        self._updater: Any = None
         self._asked_login = False
+        #: Set by 「重新開啟」: the window starts the launcher once this ends.
+        self.restart = False
 
     # ── the window's side (any thread) ──────────────────────────────────────
 
@@ -72,6 +92,10 @@ class Controller:
     def snapshot(self) -> tuple[str, str]:
         with self._lock:
             return self._snapshot
+
+    def update_status(self) -> str:
+        """The updater's: "" | "preparing" | "ready" | "failed: …"."""
+        return str(getattr(self._updater, "status", "") or "")
 
     # ── the worker thread ───────────────────────────────────────────────────
 
@@ -83,6 +107,8 @@ class Controller:
             self._show("no_chrome", str(exc).splitlines()[0] if str(exc) else type(exc).__name__)
             return
         self._worker = self._make_worker(self._chrome)
+        if self._make_updater is not None:
+            self._updater = self._make_updater(self._chrome)
 
     def step(self, wait: float = 0.0) -> bool:
         """Take the commands waiting (up to `wait` seconds for the first), then
@@ -94,7 +120,8 @@ class Controller:
         except queue.Empty:
             command = None
         while command is not None:
-            if command == "quit":
+            if command in ("quit", "restart"):
+                self.restart = command == "restart"
                 self._close()
                 return False
             self._apply(command)
@@ -112,7 +139,24 @@ class Controller:
             self._chrome.open_login()
         self._asked_login = status == "needs_login"
         self._show(status, self._worker.detail)
+        self._keep_current(status)
         return True
+
+    def _keep_current(self, status: str) -> None:
+        """§3.7.4–§3.7.6, on this thread (the zip comes through Playwright):
+        connected, confirm this version and check when due; refused, update
+        from the release the refusal named. Signed out or unreachable, the
+        backend cannot be asked — nothing to do."""
+        if self._updater is None or status not in ("connected", "update_required"):
+            return
+        try:
+            if status == "connected":
+                self._updater.connected()
+                self._updater.tick()
+            else:
+                self._updater.tick(required=self._worker.manifest)
+        except Exception:  # noqa: BLE001 — an update is never worth the helper
+            logger.exception("update check")
 
     def run(self) -> None:
         self.open()
@@ -226,51 +270,140 @@ def main() -> int:  # pragma: no cover — the window needs a display; verified 
             return 0
         write_settings(home, {**settings, "app_url": app_url})
 
-    def make_worker(chrome: Chrome) -> Worker:
-        backend = Backend(chrome.send)
-        return Worker(backend, chrome, errands=build_errands(backend.lookup_targets))
+    import platform
+    import shutil
+    import subprocess
+    import tempfile
+    from importlib.metadata import version as dist_version
+    from pathlib import Path
 
-    ctl = Controller(lambda: Chrome(profile_dir(home), app_url), make_worker)
+    from . import setup_core
+    from .updates import Updater
+
+    updater_box: list[Updater] = []
+    chrome_version: list[str] = []
+
+    def make_worker(chrome: Chrome) -> Worker:
+        backend = Backend(chrome.send, fetch_bytes=chrome.fetch_bytes)
+        updater_box.append(Updater(home, backend))
+
+        def info() -> dict[str, str]:
+            if not chrome_version:
+                try:
+                    chrome_version.append(chrome.version())
+                except Exception:  # noqa: BLE001 — a report, not a reason to stop
+                    chrome_version.append("")
+            return {
+                "chrome": chrome_version[0],
+                "playwright": dist_version("playwright"),
+                "python": platform.python_version(),
+                "update": updater_box[0].report(),
+            }
+
+        return Worker(backend, chrome, errands=build_errands(backend.lookup_targets), info=info)
+
+    ctl = Controller(
+        lambda: Chrome(profile_dir(home), app_url),
+        make_worker,
+        make_updater=lambda _chrome: updater_box[0],
+    )
     thread = threading.Thread(target=ctl.run, name="outside-helper", daemon=True)
     thread.start()
 
     status_var = tk.StringVar(value=describe("starting", ""))
+    update_var = tk.StringVar(value="")
     tk.Label(
-        window, textvariable=status_var, wraplength=360, justify="left", padx=12, pady=12
+        window, textvariable=status_var, wraplength=380, justify="left", padx=12, pady=12
     ).pack(fill="x")
     tk.Label(window, text=app_url, fg="#666", padx=12).pack(fill="x")
+    tk.Label(window, textvariable=update_var, wraplength=380, justify="left", padx=12).pack(
+        fill="x"
+    )
     buttons = tk.Frame(window, padx=12, pady=12)
     buttons.pack(fill="x")
     pause_text = tk.StringVar(value="暫停")
+    state = setup_core.read_state(home)
+    base_python = str(state.get("base_python") or sys.executable)
 
     def toggle_pause() -> None:
         paused = pause_text.get() == "暫停"
         ctl.send("pause" if paused else "resume")
         pause_text.set("繼續" if paused else "暫停")
 
-    def quit_helper() -> None:
-        ctl.send("quit")
+    def end(command: str = "quit") -> None:
+        ctl.send(command)
         thread.join(timeout=10)
         lock.release()
         window.destroy()
 
+    def restart() -> None:
+        # §3.7.6: end, and let the fixed launcher start the version now ready
+        end("restart")
+        subprocess.Popen([base_python, str(home / "launch.pyw")], cwd=str(home))
+
+    def remove() -> None:
+        if not messagebox.askyesno(
+            "Outside Helper", "會刪掉外網小幫手和它的登入資料(它自己的 Chrome 設定檔)。確定嗎?"
+        ):
+            return
+        # D17: this program's own files cannot be removed while it runs, so a
+        # copy of the clean-up code runs from %TEMP% once it has ended
+        script = Path(tempfile.mkdtemp(prefix="outside-helper-")) / "setup_core.py"
+        shutil.copy2(setup_core.__file__, script)
+        end()
+        subprocess.Popen(
+            [base_python, str(script), "--uninstall", str(home)], cwd=str(script.parent)
+        )
+
+    startup_var = tk.BooleanVar(value=bool(state.get("start_at_login")))
+
+    def toggle_startup() -> None:
+        on = startup_var.get()
+        try:
+            setup_core.run_quietly(
+                setup_core.startup_command(on, base_python=base_python, home=home)
+            )
+            setup_core.write_state(home, {**setup_core.read_state(home), "start_at_login": on})
+        except setup_core.SetupFailed as exc:
+            startup_var.set(not on)
+            messagebox.showerror("Outside Helper", str(exc))
+
     tk.Button(buttons, text="登入", command=lambda: ctl.send("login")).pack(side="left")
     tk.Button(buttons, textvariable=pause_text, command=toggle_pause).pack(side="left", padx=6)
-    tk.Button(buttons, text="結束", command=quit_helper).pack(side="right")
-    window.protocol("WM_DELETE_WINDOW", quit_helper)
+    restart_button = tk.Button(buttons, text="重新開啟", command=restart)
+    tk.Button(buttons, text="結束", command=end).pack(side="right")
+    options = tk.Frame(window, padx=12)
+    options.pack(fill="x", pady=(0, 12))
+    tk.Checkbutton(
+        options, text="開機時自動啟動", variable=startup_var, command=toggle_startup
+    ).pack(side="left")
+    tk.Button(options, text="解除安裝", command=remove).pack(side="right")
+    window.protocol("WM_DELETE_WINDOW", end)
 
     def refresh() -> None:
         status, detail = ctl.snapshot()
         status_var.set(describe(status, detail))
+        update = ctl.update_status()
+        update_var.set(describe_update(update, forced=status == "update_required"))
+        if update == "ready":
+            restart_button.pack(side="left")
+        else:
+            restart_button.pack_forget()
         window.title(
             f"正在查:{detail} — Outside Helper"
             if status == "connected" and detail
             else f"Outside Helper {__version__}"
         )
+        show = home / setup_core.SHOW_REQUEST
+        if show.exists():  # launched again: come forward instead (§3.7.5)
+            show.unlink(missing_ok=True)
+            window.deiconify()
+            window.lift()
+            window.focus_force()
         window.after(500, refresh)
 
     refresh()
-    window.minsize(400, 0)
+    window.minsize(420, 0)
     window.mainloop()
     return 0
 
