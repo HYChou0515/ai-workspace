@@ -21,7 +21,8 @@ import { useWorkspaceSlug } from "./useWorkspaceSlug";
  *        - `FileBufferStore`: the editor's per-path `Map<path, BufferEntry>`.
  *          Independent of TanStack — has to be reloaded directly.
  *
- * Call this from: the refresh button, agent-turn end, terminal exec end.
+ * Call this from: the refresh button, terminal exec end. A turn's end uses
+ * `useReloadFileViews` (no flush) — see there.
  * Must be invoked inside a `<FileBufferProvider>` (uses `useFileBufferStore`).
  */
 export function useRefreshFiles(investigationId: string): () => Promise<void> {

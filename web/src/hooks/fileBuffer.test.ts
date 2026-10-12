@@ -196,6 +196,33 @@ describe("FileBufferStore backed by a shared react-query content cache", () => {
     expect(qc.getQueryData(qk.file("s", "/a.md"))).toMatchObject({ kind: "text", text: "new" });
   });
 
+  // A reload landing while a save is in flight (a turn ended in another chat)
+  // re-read the pre-save text; the save then resolved, the buffer read "old,
+  // dirty", and the next ⌘S wrote the old bytes over the user's own save.
+  it("reload leaves a buffer whose save is in flight alone", async () => {
+    const io = makeIO({ "/a.md": "old" });
+    let release!: () => void;
+    io.writeFile.mockImplementationOnce(async (path: string, body) => {
+      await new Promise<void>((r) => (release = r));
+      io.files[path] = typeof body === "string" ? body : "[bytes]";
+    });
+    const s = new FileBufferStore(io);
+    s.ensureLoaded("/a.md");
+    await tick();
+    s.setText("/a.md", "NEW");
+    const saving = s.save("/a.md");
+
+    s.reload("/a.md");
+    await tick();
+    release();
+    await saving;
+    await tick();
+
+    expect(s.snapshot("/a.md").text).toBe("NEW");
+    expect(s.isDirty("/a.md")).toBe(false);
+    expect(io.files["/a.md"]).toBe("NEW");
+  });
+
   it("reload drops the cached entry so it refetches past the Infinity staleTime", async () => {
     const io = makeIO({ "/a.md": "v1" });
     const qc = new QueryClient();

@@ -1250,7 +1250,9 @@ class ChatTurnEngine:
         a save or a turn end on a pod where nobody had opened the item never
         reached the pod where somebody had. Nothing else crosses this way: a
         headless workflow run publishes every stdout chunk on a key nobody here
-        watches, and a viewer that IS watching a run subscribes on the run's pod.
+        watches. Known and left: a viewer on another pod of a run whose own pod
+        has no session for the run's chat yet (a script-only run, before any
+        agent turn) misses its step events -- as it did before this change.
         No session is created for it: a pod that never served the key keeps
         nothing."""
         session = self._ws_sessions.get(key)

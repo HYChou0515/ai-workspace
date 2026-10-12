@@ -275,8 +275,9 @@ export function WorkspaceProviders({
  *
  * A reload, not the refresh button's flush-then-reload — see
  * `useReloadFileViews`. And one at a time: a workflow map ends a turn per
- * element, so a burst becomes the reload in flight plus ONE after it (a turn
- * that ended during a reload may have written after it read). */
+ * element, so at any moment there is at most one reload running and at most
+ * one waiting behind it, however many turns end meanwhile (a turn that ended
+ * during a reload may have written after it read, so it gets the one after). */
 function RefreshOnTurnEnd({ itemId, after }: { itemId: string; after?: () => void }) {
   const reload = useReloadFileViews(itemId);
   const afterRef = useRef(after);
