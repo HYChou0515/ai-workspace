@@ -32,7 +32,7 @@
 `kb.card_drafter`、`kb.quality_judge`、`kb.wiki.llm`、`health.judge_llm`、`goal.checker`），外加每個 App 的
 `app.json` 與 profile。三件事要知道：
 
-- **頁面改過的值，`config.yaml` 再改不會生效**——頁面贏。要讓 `config.yaml` 回來，到頁面上「重設」那個值再套用。
+- **頁面改過的值，`config.yaml` 再改不會生效**——頁面贏。要讓 `config.yaml` 回來，到頁面上「重設」那個值、儲存草稿，再套用。
   「改了沒生效」先看頁面有沒有改過它。
 - 頁面的文字**照字面使用**，不展開 `${ENV_VAR}`（寫了會被拒絕）：秘密請用頁面的「API 金鑰」分頁。
 - 套用後一秒內所有行程（API、每個 worker）就改用新值，不用重啟。只在開機時讀的值（其他 key、角色的開／關、

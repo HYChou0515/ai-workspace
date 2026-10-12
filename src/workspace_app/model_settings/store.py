@@ -8,8 +8,8 @@ removing it from the patch. Five records:
 - **versions**: each Apply publishes the draft as a version — its id, the
   patch, who, when, the previous version, and which key paths changed (M5);
 - the **current** pointer: one small record holding the published version id,
-  the patch and the revision of each key in force, which every user of the
-  settings compares before each use (M4);
+  the patch and the revision of each key in force, whose version string each
+  process reads once a second and compares with the one it built from (M4, P10);
 - **staged keys**: secret values by setting path, written and never read back
   through any route (M6), each with a revision marker;
 - **applied keys**: the values the last Apply put in force (M20). An Apply
@@ -167,7 +167,7 @@ class SettingsStore:
     # ── published ───────────────────────────────────────────────────────────
 
     def current_version(self) -> str | None:
-        """The one value every user of the settings reads before each use."""
+        """The one value each process polls to know an Apply landed (M4, P10)."""
         record = self._get(_SettingsCurrent, _CURRENT_ID)
         return None if record is None else record.version
 

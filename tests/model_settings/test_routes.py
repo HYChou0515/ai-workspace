@@ -311,3 +311,14 @@ def test_apply_refuses_key_changes_other_than_the_ones_its_confirmation_listed(p
     assert response.status_code == 409
     ok = page.client.post(f"{BASE}/apply", json={"draft": KB_2, "pending_keys": [API_KEY]})
     assert ok.status_code == 200
+
+
+def test_the_page_says_which_keys_are_in_force(page):
+    # final review 3: clearing a key never applied is immediate; the page needs
+    # to know which keys are in force to say so.
+    page.client.put(f"{BASE}/keys", json={"path": API_KEY, "value": "sk-live-0000-0000-1"})
+    assert page.client.get(BASE).json()["applied_keys"] == []
+
+    page.client.post(f"{BASE}/apply")
+
+    assert page.client.get(BASE).json()["applied_keys"] == [API_KEY]

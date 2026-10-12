@@ -126,11 +126,14 @@ ROLES: dict[str, Callable[[Settings], Any]] = {
 
 
 def _endpoints(
-    settings: Settings, presets: list[str] | None = None
+    settings: Settings, presets: list[str] | None = None, config_dir: Path | None = None
 ) -> list[tuple[str, str | None, str | None]]:
     """(where, base_url, api_key) of every endpoint a call can go to: each
-    preset's failover chain, and each role's (a role reference may carry its
-    own `llm`). `presets` narrows it to those presets' chains."""
+    preset's failover chain, each role's (a role reference may carry its own
+    `llm`), and each usage entry (`agents.<purpose>` — an entry may carry its
+    own `llm` too; final review 3). `presets` narrows it to those presets'
+    chains. Usage entries are resolved by `build_catalog`, the resolution the
+    running KB chat / sub-agents use, with the runner's fallback to `llm.*`."""
     from ..config.schema import RetrievalLlmRef
     from ..factories import resolve_llm_chain
 
@@ -146,6 +149,18 @@ def _endpoints(
             if ref is not None:
                 for e in resolve_llm_chain(settings, ref):
                     out.append((role, e.base_url, e.api_key))
+        from ..config.catalog_build import build_catalog
+
+        catalog = build_catalog(settings, config_dir=config_dir)
+        for purpose in catalog.purposes():
+            for cfg in catalog.configs_for(purpose):
+                out.append(
+                    (
+                        f"agents.{purpose}",
+                        cfg.llm_base_url or settings.llm.base_url or None,
+                        cfg.llm_api_key or settings.llm.api_key or None,
+                    )
+                )
     return out
 
 
@@ -154,15 +169,16 @@ def key_destination_problems(
     deploy: Settings,
     page_keys: set[str],
     presets: list[str] | None = None,
+    config_dir: Path | None = None,
 ) -> list[str]:
     """A deploy key — one config.yaml sets, which no one can read — goes only
     to an endpoint config.yaml itself sends it to. Without this, changing a
     preset's `base_url` sent that key to any server the page named, on every
     call after Apply and on a test call (final review). A key set on the page
     may go anywhere: its setter knows it."""
-    paired = {(base, key) for _, base, key in _endpoints(deploy)}
+    paired = {(base, key) for _, base, key in _endpoints(deploy, config_dir=config_dir)}
     found: list[str] = []
-    for where, base, key in _endpoints(settings, presets):
+    for where, base, key in _endpoints(settings, presets, config_dir):
         if key and key not in page_keys and (base, key) not in paired:
             problem = (
                 f"config.{where}: the deploy's key would go to {base or 'the provider default'!r}, "
@@ -399,7 +415,9 @@ def _problems(
 
     `keys` are checked with the document as `LiveSettings` builds it, but only
     the document's own text is checked for a secret typed into it."""
-    shape = _shape_problems(document) + _env_markers(document)
+    # Only the config part: config.yaml is what is env-expanded at boot, so only
+    # there would `${…}` be written expecting it; app.json text is plain text.
+    shape = _shape_problems(document) + _env_markers(document.get("config") or {}, "config")
     if shape:
         return shape
     written = secrets_written(document) + _apps_part_problems(document)
@@ -417,8 +435,26 @@ def _problems(
     from ..factories import get_infer_modules_run_config
 
     default = effective_settings({}, config_path=config_path, env=env)
+    # The directory of the config file in use, found the way boot finds it: a
+    # usage entry's `prompt_file` is relative to it.
+    from ..config.loader import _resolve_config_path
+
+    in_use = _resolve_config_path(config_path, env)
+    config_dir = in_use.parent if in_use else None
+    # The usage lists as the running KB chat / sub-agents build them: an entry
+    # whose preset has no prompt_file is refused by a boot, and live it would
+    # fail every use of the catalog (final review 3).
+    from ..config.catalog_build import build_catalog
+
+    try:
+        build_catalog(settings, config_dir=config_dir)
+    except Exception as exc:  # whatever building refuses with, named — it is the boot's own check
+        return [f"config.agents: {exc}"]
     switched = _roles_switched(settings, default) + key_destination_problems(
-        settings, default, {str(v) for v in (keys or {}).values()}
+        settings,
+        default,
+        {str(v) for v in (keys or {}).values()},
+        config_dir=config_dir,
     )
     if switched:
         return switched

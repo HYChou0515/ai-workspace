@@ -68,6 +68,9 @@ class _PageOut(BaseModel):
     keys: dict[str, str] = {}
     #: Keys set or cleared since the last Apply — what the next Apply switches (M20).
     pending_keys: list[str] = []
+    #: Keys in force now — the last Apply's. Clearing one of these stops it at
+    #: the next Apply; clearing any other only withdraws a staged change.
+    applied_keys: list[str] = []
 
 
 class _Apply(BaseModel):
@@ -149,6 +152,7 @@ def register_model_settings_routes(
                 version=store.current_version(),
                 keys=store.key_status(),
                 pending_keys=store.pending_keys(),
+                applied_keys=sorted(store.applied_key_values()),
             )
 
         return await asyncio.to_thread(read)

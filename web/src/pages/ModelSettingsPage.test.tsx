@@ -65,6 +65,7 @@ function fakeClient(page: Partial<PageData> = {}) {
     version: null,
     keys: {},
     pending_keys: [],
+    applied_keys: [],
     ...page,
   };
   const client = {
@@ -445,6 +446,7 @@ describe("ModelSettingsPage", () => {
       version: null,
       keys: {},
       pending_keys: [],
+      applied_keys: [],
     }));
     await act(async () => queryClient.invalidateQueries());
 
@@ -505,6 +507,7 @@ describe("ModelSettingsPage", () => {
         version: "abcdef1234567890",
         keys: { [path]: "…4321" },
         pending_keys: [],
+        applied_keys: [path],
       }));
       return applied("abcdef1234567890", {});
     });
@@ -619,6 +622,52 @@ describe("ModelSettingsPage", () => {
     const diff = await screen.findByTestId("model-settings-diff");
     expect(diff).toHaveTextContent("移除");
     expect(diff).not.toHaveTextContent("回到預設");
+  });
+
+  it("says a key never applied is withdrawn at once when cleared", async () => {
+    // final review 3: the dialog said "takes effect at the next Apply" — but a
+    // key that was never in force is simply withdrawn, now.
+    const path = "config.llm.api_key";
+    renderWithQuery(
+      <ModelSettingsPage client={fakeClient({ keys: { [path]: "…4321" }, pending_keys: [path], applied_keys: [] })} />,
+    );
+    fireEvent.click(await screen.findByRole("tab", { name: "API 金鑰" }));
+
+    fireEvent.click(screen.getByTestId(`model-settings-key-clear-${path}`));
+
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog).toHaveTextContent("立刻");
+    expect(dialog).not.toHaveTextContent("下次套用");
+  });
+
+  it("says a key in force stops at the next Apply when cleared", async () => {
+    const path = "config.llm.api_key";
+    renderWithQuery(<ModelSettingsPage client={fakeClient({ keys: { [path]: "…4321" }, applied_keys: [path] })} />);
+    fireEvent.click(await screen.findByRole("tab", { name: "API 金鑰" }));
+
+    fireEvent.click(screen.getByTestId(`model-settings-key-clear-${path}`));
+
+    expect(await screen.findByRole("dialog")).toHaveTextContent("下次套用");
+  });
+
+  it("titles the Apply confirmation by what it applies, not as a draft", async () => {
+    const path = "config.llm.api_key";
+    renderWithQuery(<ModelSettingsPage client={fakeClient({ keys: { [path]: "…4321" }, pending_keys: [path] })} />);
+    fireEvent.click(await screen.findByRole("tab", { name: "API 金鑰" }));
+
+    fireEvent.click(await screen.findByTestId("model-settings-keys-apply"));
+
+    expect(await screen.findByRole("dialog")).not.toHaveTextContent("草稿？");
+  });
+
+  it("puts the path format right under its own field", async () => {
+    renderWithQuery(<ModelSettingsPage client={fakeClient()} />);
+    fireEvent.click(await screen.findByRole("tab", { name: "API 金鑰" }));
+
+    const help = document.getElementById("model-settings-key-path-help");
+    const field = screen.getByTestId("model-settings-key-path-field");
+    expect(field).toContainElement(help);
+    expect(field).toContainElement(screen.getByLabelText("設定路徑"));
   });
 
   it("lists a refused Apply's reasons", async () => {

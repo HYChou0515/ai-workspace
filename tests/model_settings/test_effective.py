@@ -117,7 +117,7 @@ def test_every_model_choice_can_be_changed_here(config):
             "agents": {
                 "presets": {"openai-mini": {"model": "openai/gpt-4.1-mini"}},
                 "subagent_models": [],
-                "kb_chat": [{"preset": "openai-mini", "name": "KB · Mini"}],
+                "kb_chat": [{"preset": "kb-default", "name": "KB · Mini"}],
             },
             "kb": {
                 "retrieval_llm": {"preset": "openai-mini"},
@@ -343,7 +343,6 @@ def test_a_short_key_is_not_scrubbed_out_of_every_message(config):
     [
         {"config": {"kb": {"retrieval_llm": {"preset": "${SECRET_VAR}"}}}},
         {"config": {"agents": {"presets": {"openai-mini": {"model": "x-${SECRET_VAR}"}}}}},
-        {"apps": {"playground": {"title": "${SECRET_VAR}"}}},
     ],
 )
 def test_the_text_never_reads_the_servers_environment(config, document):
@@ -407,6 +406,10 @@ def keyed_config(tmp_path: Path) -> Path:
         "    openai-mini:\n"
         "      llm:\n"
         "        base_url: https://api.provider.example/v1\n"
+        "        api_key: sk-deploy-0000-0000-0001\n"
+        "    kb-default:\n"
+        "      llm:\n"
+        "        base_url: https://api.provider.example/v1\n"
         "        api_key: sk-deploy-0000-0000-0001\n",
         encoding="utf-8",
     )
@@ -437,3 +440,39 @@ def test_a_new_model_on_the_same_endpoint_keeps_the_deploy_key(keyed_config):
     same = {"config": {"agents": {"presets": {"openai-mini": {"model": "openai/gpt-4.1-mini"}}}}}
 
     assert problems(same, config_path=keyed_config, env={}) == []
+
+
+def test_a_usage_entry_may_not_send_a_deploy_key_elsewhere(keyed_config):
+    # final review 3: M21 checked presets and roles but not the usage lists —
+    # a kb_chat entry overriding only `llm.base_url` kept its preset's key.
+    entry = {"preset": "kb-default", "name": "KB", "llm": {"base_url": "https://attacker.example"}}
+    document = {"config": {"agents": {"kb_chat": [entry]}}}
+
+    found = problems(document, config_path=keyed_config, env={})
+
+    assert any("kb_chat" in p and "key" in p for p in found), found
+
+
+def test_a_usage_entry_on_the_deploys_endpoint_is_fine(keyed_config):
+    entry = {"preset": "kb-default", "name": "KB", "model": "openai/other-model"}
+
+    document = {"config": {"agents": {"kb_chat": [entry]}}}
+    assert problems(document, config_path=keyed_config, env={}) == []
+
+
+def test_text_in_an_app_may_contain_a_dollar_brace(config):
+    # final review 3: app.json / _profile.json are never env-expanded, so `${` in
+    # them is just text — refusing it gave a reason that was not true there.
+    document = {"profiles": {"playground": {"default": {"description": "Plot ${col} on x"}}}}
+
+    assert problems(document, config_path=config, env={}) == []
+
+
+def test_a_usage_entry_the_running_catalog_cannot_build_is_refused(config):
+    # final review 3: a kb_chat entry on a preset with no prompt_file passed
+    # Apply; a boot refuses it, and live it failed every use of the catalog.
+    document = {"config": {"agents": {"kb_chat": [{"preset": "openai-mini", "name": "X"}]}}}
+
+    found = problems(document, config_path=config, env={})
+
+    assert any("prompt" in p for p in found), found

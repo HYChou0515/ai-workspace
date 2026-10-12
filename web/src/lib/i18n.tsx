@@ -2821,7 +2821,7 @@ export const messages = {
     "zh-TW": "有沒儲存的改動：先儲存草稿再套用。",
     en: "There are unsaved edits: save the draft before applying.",
   },
-  "modelSettings.applyTitle": { "zh-TW": "套用這份草稿？", en: "Apply this draft?" },
+  "modelSettings.applyTitle": { "zh-TW": "套用這些改動？", en: "Apply these changes?" },
   "modelSettings.applyBody": {
     "zh-TW": "所有服務在一秒內改用新設定。已經開始的一次模型呼叫或一個聊天回合，用舊設定跑完；之後開始的都用新的。",
     en: "Every service uses the new settings within a second. A model call or a chat turn already under way finishes on the old settings; everything started after uses the new ones.",
@@ -2881,6 +2881,10 @@ export const messages = {
   "modelSettings.keyClearBody": {
     "zh-TW": "清除和設定一樣，下次套用才生效；清掉的金鑰拿不回來。",
     en: "Clearing takes effect at the next Apply, like setting one; a cleared key cannot be recovered.",
+  },
+  "modelSettings.keyClearUnappliedBody": {
+    "zh-TW": "這把金鑰還沒套用過，清除會立刻撤回它，正在用的設定不受影響；清掉的金鑰拿不回來。",
+    en: "This key has never been applied: clearing withdraws it at once, and the settings in use are unaffected. A cleared key cannot be recovered.",
   },
 } satisfies Record<string, Entry>;
 

@@ -433,7 +433,13 @@ function Loaded({ client, data }: { client: Client; data: PageData }) {
           />
         )}
         {tab === "keys" && (
-          <KeysTab client={client} keys={data.keys} draft={draft} goEdit={() => setTab("edit")} />
+          <KeysTab
+            client={client}
+            keys={data.keys}
+            applied={data.applied_keys}
+            draft={draft}
+            goEdit={() => setTab("edit")}
+          />
         )}
       </div>
     </>
@@ -885,11 +891,13 @@ function VersionChanges({
 function KeysTab({
   client,
   keys,
+  applied,
   draft,
   goEdit,
 }: {
   client: Client;
   keys: Record<string, string>;
+  applied: string[];
   draft: Draft;
   goEdit: () => void;
 }) {
@@ -924,7 +932,8 @@ function KeysTab({
   const askToClear = async (p: string) => {
     const choice = await dialog.confirm({
       title: t("modelSettings.keyClearTitle", { path: p }),
-      body: t("modelSettings.keyClearBody"),
+      // A key never applied is not in force: clearing it only withdraws it.
+      body: t(applied.includes(p) ? "modelSettings.keyClearBody" : "modelSettings.keyClearUnappliedBody"),
       actions: [
         { id: "cancel", label: t("modelSettings.cancel") },
         { id: "clear", label: t("modelSettings.keyClear"), variant: "danger" },
@@ -994,9 +1003,13 @@ function KeysTab({
       )}
       {/* Visible labels, not placeholders — NN/g "Placeholders in Form Fields
           Are Harmful": a placeholder disappears as you type and was cut off. */}
-      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "flex-end" }}>
-        <label style={{ display: "grid", gap: 4, flex: "1 1 20rem", minWidth: 0 }}>
-          <span style={LABEL}>{t("modelSettings.keyPathLabel")}</span>
+      {/* The format hint sits under its own field (NN/g "Form Design"
+          guidance: help text next to the field it explains), so the row
+          aligns to the inputs' tops and the button gets a label-high spacer. */}
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "flex-start" }}>
+        <div data-testid="model-settings-key-path-field" style={{ display: "grid", gap: 4, flex: "1 1 20rem", minWidth: 0 }}>
+          <label style={{ display: "grid", gap: 4 }}>
+            <span style={LABEL}>{t("modelSettings.keyPathLabel")}</span>
           <input
             className="input"
             data-testid="model-settings-key-path"
@@ -1007,7 +1020,13 @@ function KeysTab({
             spellCheck={false}
             style={MONO}
           />
-        </label>
+          </label>
+          {/* Beside the label, not inside it: inside, it would become part of
+              the field's name instead of its description. */}
+          <span id="model-settings-key-path-help" style={{ ...MUTED, overflowWrap: "anywhere" }}>
+            {t("modelSettings.keyPath")}
+          </span>
+        </div>
         <label style={{ display: "grid", gap: 4, flex: "1 1 12rem", minWidth: 0 }}>
           <span style={LABEL}>{t("modelSettings.keyValue")}</span>
           <input
@@ -1026,20 +1045,22 @@ function KeysTab({
             style={MONO}
           />
         </label>
-        <button
-          type="button"
-          className="btn"
-          data-variant="primary"
-          data-testid="model-settings-key-set"
-          disabled={!path.trim() || !value || set.isPending}
-          onClick={() => set.mutate()}
-        >
-          {t("modelSettings.keySet")}
-        </button>
+        <div style={{ display: "grid", gap: 4 }}>
+          <span aria-hidden="true" style={LABEL}>
+            {"\u00a0"}
+          </span>
+          <button
+            type="button"
+            className="btn"
+            data-variant="primary"
+            data-testid="model-settings-key-set"
+            disabled={!path.trim() || !value || set.isPending}
+            onClick={() => set.mutate()}
+          >
+            {t("modelSettings.keySet")}
+          </button>
+        </div>
       </div>
-      <p id="model-settings-key-path-help" style={{ ...MUTED, margin: 0, overflowWrap: "anywhere" }}>
-        {t("modelSettings.keyPath")}
-      </p>
       {(!path.trim() || !value) && (
         <p data-testid="model-settings-key-why" style={{ ...MUTED, margin: 0 }}>
           {t("modelSettings.keyNeedBoth")}

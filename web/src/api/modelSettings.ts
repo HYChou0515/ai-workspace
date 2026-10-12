@@ -30,6 +30,8 @@ export type ModelSettingsPage = {
   keys: Record<string, string>;
   /** Keys set or cleared since the last Apply — what the next Apply switches. */
   pending_keys: string[];
+  /** Keys in force now — the last Apply's. */
+  applied_keys: string[];
 };
 
 export type Applied = {

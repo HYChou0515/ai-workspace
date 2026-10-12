@@ -1,11 +1,12 @@
 """What a process runs with (docs/plan-model-settings.md P4).
 
 One `LiveSettings` per process — the API and every worker. Each use asks it for
-the settings; it compares the published version string with the one it built
-from and rebuilds only when they differ (M4). The string is read from the
-database at most once per `version_ttl_s` (1 s): a single request reads the
-settings many times, and one small read a second per process is the whole
-cost. A failed read, or a published document that cannot build, keeps the
+the settings; the published version string is compared with the one it built
+from, and it rebuilds only when they differ (M4). Once `start()` runs (the API
+and every worker call it, P10), a thread of its own reads the string once per
+second and a use reads memory only, so no request waits on the database.
+Without it — tests, a bare composition — a use reads the string itself, at most
+once per `version_ttl_s` (1 s). A failed read, or a published document that cannot build, keeps the
 last good settings and is logged — a broken Apply must not take a running
 process down with it (M14).
 """

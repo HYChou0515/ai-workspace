@@ -2168,7 +2168,7 @@ agent 步驟裡 AI 的呼叫、WUI 的工具呼叫、view plugin、圖表重畫�
   preset、每個 App 的 `app.json`、profile、平台自己的模型選擇（完整清單見 `docs/configuration.md` §1 第四層）；改動存在資料庫，**蓋過** `config.yaml` / `app.json`。
   沒有人按過「套用」時，每個行程跑的就是 `config.yaml` —— 和這一版之前一模一樣。
 - **頁面改過的值，之後在 `config.yaml` 再改不會生效**（頁面的值贏）；要讓 `config.yaml` 的值回來，在頁面上把那個值
-  「重設」再套用。頁面沒碰過的值，`config.yaml` 照舊說了算（照舊要重啟）。
+  「重設」、儲存草稿，再套用。頁面沒碰過的值，`config.yaml` 照舊說了算（照舊要重啟）。
   為什麼：頁面只存跟預設不同的部分（JSON Merge Patch），預設仍是部署帶的檔案。
 - 套用後，API 與每個 worker 在**一秒內**改用新設定，不用重啟：每個行程每秒最多讀一次「目前版本」（一筆小資料），
   版本變了才重建；讀不到資料庫或新版本建不起來，就繼續用上一個好的版本並記 log
@@ -2176,8 +2176,10 @@ agent 步驟裡 AI 的呼叫、WUI 的工具呼叫、view plugin、圖表重畫�
 - 頁面**不收**只在開機時讀的值：其他 config key、角色的開／關（例如把 `health.judge_llm` 從 null 改成某個 preset）、
   `infer_modules` 的 `enhancements` / `reasoning_effort` / `parallelism` / `collection`、App 的 `resources` / `slug`
   —— 套用時直接拒絕並說「去改 config.yaml」，不存一個重啟前不生效的值。同樣拒絕：沒有出貨的 App 或 profile
-  （頁面只能改，不能新增；profile 是 App 裡的資料夾）、`apps` / `profiles` 底下的 `null`、任何 `${…}`
-  （頁面的文字照字面使用，不讀伺服器的環境變數）。
+  （頁面只能改，不能新增；profile 是 App 裡的資料夾）、`apps` / `profiles` 底下的 `null`、config 部分裡的 `${…}`
+  （頁面的文字照字面使用，不讀伺服器的環境變數；App 文字裡的 `${` 就是字）、
+  用途清單（例如 `kb_chat`）裡開機會拒絕的條目，以及會把 `config.yaml` 的金鑰送到別的端點的改動
+  （preset、角色、用途條目都算；要換端點，到 API 金鑰分頁替新端點設一把金鑰）。
 - 頁面上設定或清除的 API key **按下套用才生效**：在那之前，連新起來的 pod 也照舊用上一次套用的 key；
   「回復」只帶回那一版的值，金鑰維持目前生效的，還沒套用的金鑰改動繼續等。
 - **開機時印出的設定（config dump）多遮了一些值**：每個 preset 的 `env` 值，以及任何大小寫的 `*_token`，
