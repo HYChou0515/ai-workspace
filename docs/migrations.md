@@ -2038,7 +2038,7 @@ image 做不出來。能連公開 registry 的 build 不用做事。沒有新的
 
 1. 在任一 item 開一個 WUI，瀏覽器開發者工具看 iframe 的網址是 `/api/wui-content/…`（不是 `about:srcdoc`）。
    是 `about:srcdoc` 就是 ping 沒通——在 pod 外用 `curl -s -o /dev/null -w '%{http_code}' <網址>/__wui/ping`
-  （**不帶 cookie**）應該回 200；回 302/401 就是 gateway 還沒放行。
+  （**不帶 cookie**）應該回 200；回 302/401 就是 gateway 還沒放行；放行了卻回 500，見 [#912](#pr-912)。
 2. 把 `sample-skills/wui/examples/docs/` 複製進一個 item，按 Rebuild，打開：側欄能換頁、搜尋有結果、網址列的
    `?page=` 跟著變，錯誤面板沒有任何「not allowed to load」。
 3. 在任一 WUI 點一個外部連結：出現確認框、按 Cancel 不開、按 Open 開新分頁。
@@ -2082,6 +2082,28 @@ agent 步驟裡 AI 的呼叫、WUI 的工具呼叫、view plugin、圖表重畫�
   瀏覽器仍會帶入存過的帳密。沒部署到這一版的症狀：搜尋框裡出現存過的帳號。
 - **Firefox 114 以前的版本畫不出圓點，值會以明碼顯示**（Chrome、Edge、Safari 都支援）。使用者若還在用舊版 Firefox，
   請他們升級。
+
+### 2026-10-12 · 675eb6bc · #912 WUI 多頁在真的 gateway 後面能載入：內容路由以通行證的主人身分讀檔 {#pr-912}
+
+**設定** — 沒有新 key，沒有要做的事。**修 #904 的 bug，沒有開關**：
+
+- #904 之後，`/api/wui-content/` 在 gateway 放行（不驗 cookie）的部署上**每個請求都回 500**：路由驗過通行證之後，
+  裡面讀通行證那一列、檢查權限、讀 workspace 檔案的 specstar 呼叫，仍去問部署接在 `get_spec(settings,
+  get_user_id=…)` 的 cookie 讀取器，而 iframe 的請求沒有 cookie。現在內容路由在驗過通行證後，整個請求以
+  **發通行證的人**的身分執行；讀取器不用改（`make_spec` 會先看路由宣告的身分，沒宣告才問讀取器）。
+- 其他路由照舊只認 cookie；身分只在那一個內容請求裡有效。
+
+**資料** — 沒有。
+
+**k8s · CI 側** — 沒有新的 manifest、env、probe 或 JobType。#904 要求的 gateway 放行照舊需要
+（`/api/wui-content/` 前綴不驗 SSO cookie）；放行了而頁面仍是單頁（`about:srcdoc`）、或 `…/__wui/ping` 回 500，
+且讀取器在沒有 cookie 時會丟錯，就是還沒部署這一版。
+
+**確認做完**（`rollout 後`）：
+
+- 不帶 cookie：`curl -s -o /dev/null -w '%{http_code}' '<網址>/api/wui-content/<通行證>/__wui/ping'` 回 200
+  （通行證從開發者工具 Network 裡任一個 `…/api/wui-content/…` 請求複製；回 404 是通行證過期，重開 WUI 再拿）。
+- 打開一個多頁 WUI（例如 mkdocs 文件站）：iframe 網址是 `…/api/wui-content/…`，側欄能換頁。
 
 ### 2026-10-12 · #915 錯誤說人話：發生了什麼、怎麼辦、原文收合在技術細節；重試只在單次模型呼叫 {#pr-915}
 
