@@ -88,6 +88,11 @@ class Backend:
     def fail(self, job_id: str, error: str) -> None:
         self._call("POST", f"/outside-helper/jobs/{job_id}/fail", {"error": error})
 
+    def lookup_targets(self) -> list[dict[str, str]]:
+        """The card's search destinations (`server.lookup_targets`)."""
+        data = self._call("GET", "/lookup-targets")
+        return [t for t in data or [] if isinstance(t, dict)]
+
     def note(self, job_id: str, note: str) -> None:
         self._call("POST", f"/outside-helper/jobs/{job_id}/note", {"note": note})
 

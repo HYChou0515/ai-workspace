@@ -247,3 +247,12 @@ def test_a_login_that_expires_mid_errand_does_not_fail_the_job():
     assert not any(p.endswith("/fail") for p in paths)
     expired[0] = False
     assert client.get(f"/a/rca/items/{iid}/outside-jobs/c1").json()["state"] == "claimed"
+
+
+# A search goes where the card's own buttons go — the deploy's
+# `server.lookup_targets`, read from the backend, not a list of the helper's.
+def test_the_helper_searches_where_the_deploy_says():
+    targets = [{"name": "Corp search", "url": "https://search.corp/?q={q}"}]
+    client, _spec, _iid = _asked(lookup_targets=targets)
+
+    assert _backend(client).lookup_targets() == targets

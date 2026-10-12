@@ -25,10 +25,23 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from .errands import Errand, ErrandContext, FetchedPage
+from .errands import Errand, ErrandContext, ErrandFailed, FetchedPage
 
 #: A backend request that takes longer than this is treated as unreachable.
 REQUEST_TIMEOUT_MS = 30_000
+
+#: The card's paste converter, built from the frontend source into this
+#: package (web/vite.outside-helper.config.ts) — defines `__outsideHelper`.
+_CONVERTER = Path(__file__).with_name("page_to_markdown.js")
+
+
+def _converter_source() -> str:
+    try:
+        return _CONVERTER.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise ErrandFailed(
+            "the outside helper's page converter is missing — reinstall the outside helper"
+        ) from exc
 
 
 class Chrome:
@@ -88,11 +101,31 @@ class Chrome:
         page = self._ctx.new_page()
         try:
             ctx = ErrandContext(
-                page=page, note=note, sleep=lambda s: page.wait_for_timeout(s * 1000)
+                page=page,
+                note=note,
+                convert=lambda html: self._convert_in(page, html),
+                sleep=lambda s: page.wait_for_timeout(s * 1000),
             )
             return errand(ctx, args)
         finally:
             page.close()
+
+    def convert(self, html: str) -> str:
+        """`html` as Markdown, by the card's own converter (D11), in a tab of
+        its own."""
+        page = self._ctx.new_page()
+        try:
+            return self._convert_in(page, html)
+        finally:
+            page.close()
+
+    def _convert_in(self, page: Any, html: str) -> str:
+        # On a blank page of the helper's own: the fetched page's CSP or
+        # Trusted Types (Google enforces them) would refuse the converter's
+        # HTML parsing, and nothing here needs the network.
+        page.goto("about:blank")
+        page.evaluate(_converter_source())
+        return page.evaluate("html => __outsideHelper.outsideHelper.htmlToMarkdown(html)", html)
 
     def open_login(self) -> None:
         """Bring the browser forward on the app, so the person signs in the way

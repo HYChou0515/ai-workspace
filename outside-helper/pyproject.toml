@@ -19,3 +19,5 @@ path = "src/outside_helper/version.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/outside_helper"]
+# Generated (gitignored) — hatch skips ignored files unless named here.
+artifacts = ["src/outside_helper/page_to_markdown.js"]

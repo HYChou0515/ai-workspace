@@ -162,7 +162,7 @@ def main() -> int:  # pragma: no cover — the window needs a display; verified 
     from tkinter import messagebox
 
     from .backend import Backend
-    from .builtin_errands import BUILTIN
+    from .builtin_errands import build as build_errands
     from .chrome import Chrome
     from .home import InstanceLock, profile_dir, read_settings, root, write_settings
     from .version import __version__
@@ -195,10 +195,11 @@ def main() -> int:  # pragma: no cover — the window needs a display; verified 
             return 0
         write_settings(home, {**settings, "app_url": app_url})
 
-    ctl = Controller(
-        lambda: Chrome(profile_dir(home), app_url),
-        lambda chrome: Worker(Backend(chrome.send), chrome, errands=BUILTIN),
-    )
+    def make_worker(chrome: Chrome) -> Worker:
+        backend = Backend(chrome.send)
+        return Worker(backend, chrome, errands=build_errands(backend.lookup_targets))
+
+    ctl = Controller(lambda: Chrome(profile_dir(home), app_url), make_worker)
     thread = threading.Thread(target=ctl.run, name="outside-helper", daemon=True)
     thread.start()
 

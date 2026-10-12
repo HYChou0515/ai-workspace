@@ -36,12 +36,19 @@ class FetchedPage:
     markdown: str
 
 
+def _no_converter(_html: str) -> str:
+    raise ErrandFailed("no page converter in this context")
+
+
 @dataclass
 class ErrandContext:
     #: The Playwright `Page` the errand works in (a fresh tab, closed after).
     page: Any
     #: Tell the card what the helper waits on (`captcha`), or "" once it doesn't.
     note: Callable[[str], None]
+    #: A page's HTML as Markdown — the card's own paste converter (D11), run in
+    #: the helper's Chrome. It may navigate `page` away: call it last.
+    convert: Callable[[str], str] = field(default=_no_converter)
     sleep: Callable[[float], None] = field(default=time.sleep)
     clock: Callable[[], float] = field(default=time.monotonic)
 
