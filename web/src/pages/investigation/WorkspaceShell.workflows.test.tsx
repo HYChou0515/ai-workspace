@@ -1,11 +1,13 @@
 // @vitest-environment happy-dom
 import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { AppItem, AppManifest } from "../../api/types";
 import { workflowApi, type WorkflowRunDTO } from "../../api/workflows";
+import { DialogProvider } from "../../components/Dialog";
 import { renderWithQuery } from "../../test/queryWrapper";
 import { WorkspaceShell } from "./WorkspaceShell";
 
@@ -18,8 +20,17 @@ vi.mock("../../components/PresenceBar", () => ({ PresenceBar: () => null }));
 vi.mock("../../components/ActivityFeed", () => ({ ActivityFeed: () => null }));
 vi.mock("./TerminalPane", () => ({ TerminalPane: () => null }));
 vi.mock("../../components/WorkflowsSidebar", () => ({
-  WorkflowsSidebar: (p: { profile: string; itemId: string }) => (
-    <div data-testid="workflows-sidebar" data-profile={p.profile} data-item={p.itemId} />
+  WorkflowsSidebar: (p: { profile: string; itemId: string; onOpenFile: (path: string) => void }) => (
+    <div data-testid="workflows-sidebar" data-profile={p.profile} data-item={p.itemId}>
+      <button type="button" onClick={() => p.onOpenFile("workflow-run:r1")}>
+        open execution r1
+      </button>
+    </div>
+  ),
+}));
+vi.mock("../../components/ExecutionView", () => ({
+  ExecutionView: (p: { runId: string; profile: string; itemId: string }) => (
+    <div data-testid="execution-view" data-run={p.runId} data-profile={p.profile} data-item={p.itemId} />
   ),
 }));
 vi.mock("../../hooks/useAgent", () => ({
@@ -132,5 +143,73 @@ describe("the Workflows activity-bar entry", () => {
     openShell();
     fireEvent.click(await screen.findByRole("button", { name: /^Workflows/ }), { detail: 1 });
     expect(await screen.findByTestId("workflows-sidebar")).toHaveAttribute("data-profile", "default");
+  });
+});
+
+// D7: an execution opens as an editor tab — not a file, so the rules for files
+// (closed when the listing lacks it, kept in Recently opened) do not apply.
+describe("an execution's tab", () => {
+  const openExecution = async () => {
+    openShell();
+    fireEvent.click(await screen.findByRole("button", { name: /^Workflows/ }), { detail: 1 });
+    fireEvent.click(await screen.findByRole("button", { name: "open execution r1" }));
+  };
+
+  beforeEach(() => {
+    vi.spyOn(workflowApi, "getRun").mockResolvedValue({
+      ...run("r1", "running"),
+      started: new Date(2026, 9, 12, 14, 3).getTime(),
+    });
+    vi.spyOn(workflowApi, "listProfiles").mockResolvedValue([
+      {
+        name: "default",
+        title: "Default",
+        description: "",
+        has_workflow: true,
+        workflow: null,
+        workflows: [{ id: "w", title: "Classify wafers", phases: [], input_json: "" }],
+      },
+    ]);
+  });
+
+  it("shows the execution for this item and its profile", async () => {
+    await openExecution();
+    const view = await screen.findByTestId("execution-view");
+    expect(view).toHaveAttribute("data-run", "r1");
+    expect(view).toHaveAttribute("data-item", "INC-1");
+    expect(view).toHaveAttribute("data-profile", "default");
+  });
+
+  it("is named after the execution, not its path", async () => {
+    await openExecution();
+    const tab = await screen.findByRole("tab", { name: /Classify wafers · 10\/12 14:03/ });
+    expect(tab).not.toHaveTextContent("workflow-run:");
+  });
+
+  it("stays open when the file listing comes back without its path", async () => {
+    // A fresh listing is what closes a tab whose file is gone; the tab was
+    // opened under the first one, so only the second is the test.
+    const { rerender, client } = openShell();
+    fireEvent.click(await screen.findByRole("button", { name: /^Workflows/ }), { detail: 1 });
+    fireEvent.click(await screen.findByRole("button", { name: "open execution r1" }));
+    await screen.findByTestId("execution-view");
+    rerender(
+      <QueryClientProvider client={client}>
+        <DialogProvider>
+          <MemoryRouter>
+            <WorkspaceShell manifest={manifest} item={item} files={[{ path: "/a.md", size: 1 }] as never} />
+          </MemoryRouter>
+        </DialogProvider>
+      </QueryClientProvider>,
+    );
+    await waitFor(() => expect(screen.getByRole("tab", { name: /Classify wafers/ })).toBeInTheDocument());
+    expect(screen.getByTestId("execution-view")).toBeInTheDocument();
+  });
+
+  it("does not take a place in Recently opened", async () => {
+    // History keeps the last ten files; an execution would push one out.
+    await openExecution();
+    await screen.findByTestId("execution-view");
+    expect(localStorage.getItem("rca:recent-files:INC-1") ?? "").not.toContain("workflow-run:");
   });
 });

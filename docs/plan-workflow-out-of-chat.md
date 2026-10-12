@@ -249,6 +249,70 @@ so a schedule's shared conversation shows one execution at a time.
 - Stop.
 - A failed step offers Continue from here and Re-run this step.
 - `⋯` → Change this execution… (steer; D2).
+- **Built:**
+  - Backend. `POST /runs/{id}/retry` (`Orchestrator.retry`) drives a failed or
+    stopped execution again, as the same run.
+    - `rerun: ""` is Continue from here: what passed skips.
+    - `rerun: <step>` is Re-run this step. Its artifacts are dropped first through
+      `apply_steer`, which also writes the audit receipt. The steps after it
+      re-run as far as their inputs changed.
+    - It is refused (409) for a run that is not `error` / `cancelled`, while
+      another run of the item is live (the journal is shared), or when the
+      workflow no longer loads. It is refused (400) for a name that is not a
+      named step on the board; the name reaches a journal glob.
+    - The phases, the board, `ended` and `result` restart: a skipped step counts
+      done again on the way back.
+    - The presser's identity is kept, as a gate decision keeps it.
+  - `GET /runs/{id}` carries `step_files`, each step's result and transcript
+    paths from the journal's own layout (`journal_stem`, `journal_dir_of`).
+  - Found while building: `GET /runs/{id}` and `/runs/{id}/stream` never
+    checked that the run belongs to the URL's item, so read access to one item
+    read every item's runs and live streams. Both now 404 for another item's
+    run.
+  - A step's messages carry their phase (`Message.phase`, set from
+    `StepRef.phase`). Rows are phases ("Step N of M" counts them), and a loop
+    element leaves the board once it ends.
+  - FE. `ExecutionView` is the tab body: the `execution` renderer entry for
+    `workflow-run:` paths, with the item's profile from `ItemProfileProvider`.
+    - The header holds the name (`executionName`), the status, Step N of M,
+      Stop while live, Continue when stopped, and `⋯` → Change this
+      execution…. That opens a box whose proposal shows as the
+      `SteerConfirmCard`.
+    - The rows are an accordion (NN/g "Accordions on Desktop"; WAI-ARIA APG
+      Accordion: a heading button with `aria-expanded` / `aria-controls`). A
+      running, waiting or failed row opens on arrival, and Collapse all leaves
+      it open.
+    - An open row shows its messages (`run_id` and `phase` match), its steps'
+      attempts and error, and its Result and Transcript links. Transcript is
+      offered only when the file exists; only agent steps write one. A gate is
+      decided in its row (`WorkflowDecisionCard` + `CardDiffReview`).
+    - A failed row offers Continue from here and Re-run this step. Re-run
+      names the failed named step; a failed loop element has none, so only
+      Continue shows.
+    - Messages with no phase, and unmarked ones in a conversation that is this
+      execution's own, show under "Not in a step"; they are never guessed into
+      a row.
+  - The first running row also shows what the execution's own lane has
+    streamed beyond the saved thread (`useItemChat` minus the persisted
+    entries). A map element's turn runs on a lane of its own, which the run's
+    stream does not carry, so it shows only once saved.
+  - In the shell, an execution tab is `present` to the auto-close, is kept out
+    of Recently opened (ten slots), and is labelled by `ExecutionTitle` in the
+    tab and the breadcrumb.
+  - Mutation probes, each reddening its test:
+    - the retry guards: status, unknown step, live run, invalidation, the
+      counter reset and the `ended` / `result` reset;
+    - the item checks on get and stream, and the `step_files` path;
+    - the run filter;
+    - the sticky rule and Collapse all;
+    - the live tail;
+    - the rerun name;
+    - Stop while live;
+    - the gate card;
+    - the failure text;
+    - the transcript check;
+    - the presence exemption, the recent-files guard, the tab label and the
+      renderer entry.
 
 **P9 — the waiting notice.** Wherever the user is in the workspace, a
 non-blocking notice names the execution and what it waits for. It opens that

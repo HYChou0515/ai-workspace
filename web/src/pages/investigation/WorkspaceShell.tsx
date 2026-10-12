@@ -40,6 +40,9 @@ import { useDirtyClose } from "../../hooks/useDirtyClose";
 import { useT } from "../../lib/i18n";
 import { FileServiceProvider, investigationFileService, useFileService } from "../../api/fileService";
 import { WorkflowsSidebar } from "../../components/WorkflowsSidebar";
+import { ItemProfileProvider } from "../../hooks/itemProfile";
+import { isExecutionPath } from "../../lib/executionTab";
+import { ExecutionTitle } from "../../renderers/ExecutionRenderer";
 import { useItemRuns } from "../../hooks/useWorkflow";
 import { WorkspaceSlugProvider, useWorkspaceSlug } from "../../hooks/useWorkspaceSlug";
 import { EditModeProvider, useEditMode } from "../../hooks/editMode";
@@ -420,8 +423,10 @@ function ShellBody({
   // shell: the listing is a pruned preload, so a path under an unwalked folder
   // is `unknown`, not missing — a view an App keeps under `dist/` must open.
   const filePaths = useMemo(() => new Set(files.map((f) => f.path)), [files]);
+  // An execution's tab is not a file: no listing vouches for it, and none
+  // closes it (plan-workflow-out-of-chat D7).
   const presence = useCallback(
-    (p: string) => presenceOf(p, filePaths, unwalked),
+    (p: string) => (isExecutionPath(p) ? "present" : presenceOf(p, filePaths, unwalked)),
     [filePaths, unwalked],
   );
   const initialPaths = useMemo(
@@ -657,7 +662,8 @@ function ShellBody({
   const openFile = useCallback<OpenFileFn>(
     (path, opts) => {
       groups.openInActive(path, opts);
-      recentFiles.push(path);
+      // Recently opened lists files; an execution is listed in Workflows.
+      if (!isExecutionPath(path)) recentFiles.push(path);
       // Glancing at the tree is a means to this end: the file is now on screen,
       // so the peek has done its job and retracts. Same rule as pressing
       // outside — the "something else" simply started inside the panel. A
@@ -762,6 +768,7 @@ function ShellBody({
   }, []);
 
   return (
+    <ItemProfileProvider value={String(item.profile ?? manifest.default_profile)}>
     <OpenFileProvider value={openFile}>
       <OpenLayoutProvider value={openLayout}>
       <ViewPageHrefProvider value={viewHref}>
@@ -1088,6 +1095,7 @@ function ShellBody({
       </ViewPageHrefProvider>
       </OpenLayoutProvider>
     </OpenFileProvider>
+    </ItemProfileProvider>
   );
 }
 
@@ -2644,6 +2652,17 @@ export function Breadcrumb({
       </div>
     );
   }
+  if (isExecutionPath(activeTab)) {
+    return (
+      <div style={crumbBar}>
+        <span style={{ color: "var(--text-paper-d2)" }}>Workflows</span>
+        <Icon name="chev_r" size={10} color="var(--text-paper-d2)" />
+        <span>
+          <ExecutionTitle path={activeTab} />
+        </span>
+      </div>
+    );
+  }
   const folders = breadcrumbSegments(activeTab); // ancestor folder names
   const paths = files.map((f) => f.path);
   return (
@@ -2933,7 +2952,10 @@ function GroupTabStrip({ group, groups }: { group: EditorGroup; groups: Groups }
                 overflow: "hidden",
               }}
             >
-              <Icon name={t.pinned ? "pin" : "file"} size={12} />
+              <Icon
+                name={t.pinned ? "pin" : isExecutionPath(t.path) ? "workflow" : "file"}
+                size={12}
+              />
               <span
                 style={{
                   fontSize: pxToRem(12),
@@ -2942,7 +2964,7 @@ function GroupTabStrip({ group, groups }: { group: EditorGroup; groups: Groups }
                   textOverflow: "ellipsis",
                 }}
               >
-                {basename(t.path)}
+                {isExecutionPath(t.path) ? <ExecutionTitle path={t.path} /> : basename(t.path)}
               </span>
               <TabClose
                 path={t.path}

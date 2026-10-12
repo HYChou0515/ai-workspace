@@ -2156,10 +2156,17 @@ agent 步驟裡 AI 的呼叫、WUI 的工具呼叫、view plugin、圖表重畫�
 - **workflow 改在 workspace 左側的「Workflows」**（活動列上唯一印出名字的圖示）啟動與追蹤：上半列出能啟動的 workflow，
   下半列出這個 item 的執行（新的在上，狀態、「Step N of M」、排程啟動的標「Scheduled」）；有執行在等人決定時，
   圖示上有數字。chat-only 的 App 沒有這個入口，和以前一樣。
+- **執行開在編輯區的分頁**：分頁名稱是「workflow 名 · 開始時間」，列出每個階段（預設收合；跑到的、等人決定的、
+  失敗的會打開），等人決定的在那一列直接決定；失敗的那一列有「Continue from here」（已經做完的跳過）和
+  「Re-run this step」（那一步重做，後面的照輸入有沒有變決定要不要重做）；`⋯` 裡的「Change this execution…」是以前的 steer。
+  新路由 `POST /a/{slug}/items/{item_id}/runs/{run_id}/retry`。
+- **`GET …/runs/{run_id}` 和 `…/runs/{run_id}/stream` 會檢查這個 run 屬於網址裡的 item**，不屬於就回 404。
+  以前不檢查：對某個 item 有讀取權，就能用它的網址讀到別的 item 的 run 和即時串流。正常的呼叫（用 run 自己的 item）不受影響；
+  若有外部腳本用錯的 item 網址去讀 run，升版後會拿到 404，改成用 run 自己的 item 網址。
 - 每個 agent step 會在 journal 裡、產物旁邊多寫一份 `step_<名稱>/<key 或 main>.transcript.md`（每次嘗試的
   prompt、思考、tool 呼叫與回覆），供「問 AI 為什麼失敗」讀取。它和產物一起被 steer 作廢、被 map 清理。
 
-**資料** — 不用 migrate，沒有 `Schema` 升版。`Message` 多了兩個有預設值的欄位（`run_id`、`step`），`WorkflowRun` 多了 `schedule_key`（預設 `""`），
+**資料** — 不用 migrate，沒有 `Schema` 升版。`Message` 多了三個有預設值的欄位（`run_id`、`step`、`phase`），`WorkflowRun` 多了 `schedule_key`（預設 `""`），
 舊資料照樣讀得出來。升版前由排程啟動的執行沒有這個欄位，所以側欄不會標「Scheduled」——這是預期的，不用補。
 
 **k8s · CI 側** — 沒有新的 manifest、env、probe 或 JobType；照常重 build、照常部署。
@@ -2168,6 +2175,8 @@ agent 步驟裡 AI 的呼叫、WUI 的工具呼叫、view plugin、圖表重畫�
 
 - `curl -X POST '<api>/a/<slug>/items/<item>/run?chat_id=x'` 回 400 且訊息含 `chat_id is no longer accepted`。
   沒部署到這一版的症狀：回 202，run 跑進那個聊天。
+- 用另一個 item 的網址讀某個 run：`curl '<api>/a/<slug>/items/<另一個 item>/runs/<run>'` 回 404。
+  沒部署到這一版的症狀：回 200 和那個 run 的內容。
 
 ## 附錄 A：資料回填的機制（specstar 為什麼不會自己補）
 

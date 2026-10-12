@@ -91,6 +91,9 @@ export type Message = {
   run_id?: string | null;
   step?: string | null;
   phase?: string | null;
+  /** #615: which driver produced a role=user message that no person typed
+   * (`"workflow"` for a step's prompt, `"goal"` for an auto-continue). */
+  driven_by?: string | null;
   /** Epoch ms the message was produced; restores the agent log's timestamps
    * after a reload. Absent for messages saved before this existed. */
   created_at?: number | null;

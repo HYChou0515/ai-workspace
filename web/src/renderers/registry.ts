@@ -27,6 +27,8 @@ import { ReportRenderer } from "./report/ReportRenderer";
 import { SheetRenderer } from "./SheetRenderer";
 import { JsonRenderer, JsonlRenderer, YamlRenderer } from "./structuredRenderers";
 import { TextRenderer } from "./TextRenderer";
+import { ExecutionRenderer } from "./ExecutionRenderer";
+import { isExecutionPath } from "../lib/executionTab";
 
 export type RendererProps = { path: string };
 
@@ -46,6 +48,9 @@ const ext =
     exts.includes(path.toLowerCase().split(".").pop() ?? "");
 
 export const RENDERERS: RendererDef[] = [
+  // plan-workflow-out-of-chat D7: a workflow execution's tab. Its path is not a
+  // file's (`lib/executionTab`), so it is matched before anything by extension.
+  { key: "execution", match: isExecutionPath, Component: ExecutionRenderer },
   // Report version files (basename `report.v*.md`) get a dedicated renderer,
   // not generic md. Matches anywhere in the workspace (root or step folder),
   // so the by-step organisation that the local-lab prompt recommends doesn't
