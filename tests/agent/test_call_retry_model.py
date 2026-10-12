@@ -390,3 +390,25 @@ async def test_a_consumer_that_stops_closes_the_providers_stream() -> None:
     await stream.aclose()
 
     assert closed == [True]
+
+
+async def test_turning_the_providers_retries_off_keeps_the_calls_own_arguments():
+    """The off switch is merged into the call's settings, not swapped in for
+    them: Ollama's `num_ctx` rides the same `extra_args`, and losing it would
+    shrink the window the turn was planned for."""
+    from agents import ModelSettings
+
+    seen: list[Any] = []
+
+    class _Records(_Scripted):
+        async def stream_response(self, system_instructions: Any, input: Any, *a: Any, **k: Any):
+            seen.append(a[0])
+            async for ev in super().stream_response(system_instructions, input, *a, **k):
+                yield ev
+
+    model = _model(_Records([([_Ev(DELTA, "ok")], None)]), _Notes())
+    settings = ModelSettings(extra_args={"num_ctx": 8192})
+
+    _ = [ev async for ev in model.stream_response(None, "in", settings, [], None, [], None)]
+
+    assert [s.extra_args for s in seen] == [{"num_ctx": 8192, "max_retries": 0, "num_retries": 0}]

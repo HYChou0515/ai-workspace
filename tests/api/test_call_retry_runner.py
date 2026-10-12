@@ -189,3 +189,26 @@ async def test_a_request_that_is_wrong_ends_the_turn_at_once(monkeypatch):
     [err] = [e for e in events if isinstance(e, RunError)]
     assert (err.kind, err.params) == ("bad_request", None)
     assert len(llm.inputs) == 1
+
+
+async def test_the_provider_client_does_not_retry_behind_our_back(monkeypatch):
+    """Found recording the demo: a 429 with `Retry-After: 4` never reached this
+    layer. litellm builds its OpenAI client with `max_retries=2`, and that client
+    waits out a short Retry-After and re-sends on its own — so the turn sat on
+    "waiting for the model" with no hold, no count and no budget charged. The
+    wrapper is the one retry layer only if every call it makes says so; this
+    goes through the real `LitellmModel` to the `acompletion` it calls."""
+    seen: list[dict[str, Any]] = []
+
+    async def acompletion(**kwargs: Any) -> Any:
+        seen.append(kwargs)
+        raise litellm.BadRequestError("stop here", "m", "openai", response=_resp(400))
+
+    monkeypatch.setattr(litellm, "acompletion", acompletion)
+    runner = LitellmAgentRunner(sleep=_no_sleep)
+    ctx = AgentToolContext(investigation_id="i", agent_config=AgentConfig(name="t", model="m"))
+
+    events = [ev async for ev in runner.run("go", ctx)]
+
+    assert [e.kind for e in events if isinstance(e, RunError)] == ["bad_request"]
+    assert [(k["max_retries"], k["num_retries"]) for k in seen] == [(0, 0)]

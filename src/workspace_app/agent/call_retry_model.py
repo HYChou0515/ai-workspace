@@ -21,6 +21,7 @@ from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any, cast
 
+from agents import ModelSettings
 from agents.models.interface import Model
 
 from ..context_budget import estimate_messages
@@ -123,6 +124,24 @@ class _Attempts:
         return input
 
 
+# This wrapper is the ONE retry layer only if the client under it does not
+# retry too: litellm builds its OpenAI client with `max_retries=2`, which waits
+# out a short Retry-After and re-sends on its own, so a 429 never reached here —
+# no hold shown, no count, no budget charged (found recording the #915 demo).
+_PROVIDER_RETRIES_OFF = ModelSettings(extra_args={"max_retries": 0, "num_retries": 0})
+
+
+def _provider_retries_off(args: tuple[Any, ...]) -> tuple[Any, ...]:
+    """`model_settings` is the third parameter of `Model.get_response` /
+    `stream_response`; the SDK passes it positionally. `resolve` merges
+    `extra_args`, so the call's own arguments (`num_ctx`, `think`) survive."""
+    return (_off(args[0]), *args[1:])
+
+
+def _off(settings: ModelSettings | None) -> ModelSettings:
+    return (settings or ModelSettings()).resolve(_PROVIDER_RETRIES_OFF)
+
+
 class CallRetryModel(Model):
     def __init__(
         self,
@@ -160,6 +179,7 @@ class CallRetryModel(Model):
     async def get_response(
         self, system_instructions: Any, input: Any, *args: Any, **kwargs: Any
     ) -> Any:
+        args = _provider_retries_off(args)
         attempts = _Attempts(self)
         input = self._first_input(input)
         while True:
@@ -171,6 +191,7 @@ class CallRetryModel(Model):
     async def stream_response(
         self, system_instructions: Any, input: Any, *args: Any, **kwargs: Any
     ) -> AsyncIterator[Any]:
+        args = _provider_retries_off(args)
         attempts = _Attempts(self)
         input = self._first_input(input)
         while True:

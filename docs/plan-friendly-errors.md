@@ -193,6 +193,21 @@ defect lens re-ran every round-1 failure and found each one fixed. New:
   `contract.md`); older plans (`plan-repetition-guard.md`, `plan-issue-624.md`)
   mention `progress_made` as their own history and are left as written.
 
+## Found recording the demo (2026-10-12)
+
+Recording the screencast against an OpenAI-compatible stand-in, a 429 with
+`Retry-After: 4` on the call after a tool showed "waiting for the model",
+never the hold. The SSE stream carried no `rate_limited` at all, and the
+stand-in saw the 429'd call re-sent about five seconds later: litellm builds
+its OpenAI client with `max_retries=2`, and that client waited out the
+Retry-After and re-sent on its own, so `CallRetryModel` never saw the failure.
+D2 holds only if the wrapper is the one retry layer, so every call it makes
+now carries `max_retries=0` / `num_retries=0`, merged into the call's own
+`extra_args` (Ollama's `num_ctx` rides the same dict). Re-probed after the
+fix: `rate_limited` arrives right after `tool_end`. The unit tests never saw
+this because they replace `LitellmModel`; the new runner test goes through
+the real one to the `acompletion` it calls.
+
 ## Risks
 
 - **P2 context trimming moves.** The whole-turn retry trims conversation
