@@ -2038,7 +2038,7 @@ image 做不出來。能連公開 registry 的 build 不用做事。沒有新的
 
 1. 在任一 item 開一個 WUI，瀏覽器開發者工具看 iframe 的網址是 `/api/wui-content/…`（不是 `about:srcdoc`）。
    是 `about:srcdoc` 就是 ping 沒通——在 pod 外用 `curl -s -o /dev/null -w '%{http_code}' <網址>/__wui/ping`
-  （**不帶 cookie**）應該回 200；回 302/401 就是 gateway 還沒放行。
+  （**不帶 cookie**）應該回 200；回 302/401 就是 gateway 還沒放行；放行了卻回 500，見 [#912](#pr-912)。
 2. 把 `sample-skills/wui/examples/docs/` 複製進一個 item，按 Rebuild，打開：側欄能換頁、搜尋有結果、網址列的
    `?page=` 跟著變，錯誤面板沒有任何「not allowed to load」。
 3. 在任一 WUI 點一個外部連結：出現確認框、按 Cancel 不開、按 Open 開新分頁。
@@ -2097,7 +2097,7 @@ agent 步驟裡 AI 的呼叫、WUI 的工具呼叫、view plugin、圖表重畫�
 
 **k8s · CI 側** — 沒有新的 manifest、env、probe 或 JobType。#904 要求的 gateway 放行照舊需要
 （`/api/wui-content/` 前綴不驗 SSO cookie）；放行了而頁面仍是單頁（`about:srcdoc`）、或 `…/__wui/ping` 回 500，
-就是還沒部署這一版。
+且讀取器在沒有 cookie 時會丟錯，就是還沒部署這一版。
 
 **確認做完**（`rollout 後`）：
 
