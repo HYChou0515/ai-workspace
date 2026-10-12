@@ -25,9 +25,17 @@
  * Pressing 送出 takes only the actions away; what was sent stays, read-only, as
  * the record (the `ask_user` card's rule). Outside an item chat (the knowledge
  * base, a replay) the request shows without actions.
+ *
+ * With the person's outside helper connected (docs/plan-outside-helper.md
+ * §3.5) the helper fetches instead: a search asks only for the nod (「查」, the
+ * query still editable — D4); a URL an earlier lookup in this chat brought back
+ * goes with no nod at all (D12 — the server decides, the card just asks); the
+ * card then shows the errand under way, failed or done. Doing it by hand stays
+ * one press away (「自己查」). With no helper the card is exactly the manual one
+ * above (D7).
  */
-import { useMutation, useQuery } from "@tanstack/react-query";
-import { useId, useRef, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useId, useRef, useState } from "react";
 
 import { HttpError } from "../api/http";
 import {
@@ -111,6 +119,67 @@ export function OutsideLookupCard({
       ),
   });
 
+  // ── the person's outside helper (docs/plan-outside-helper.md §3.5) ──
+  const qc = useQueryClient();
+  const answeredAlready = Boolean(item?.answered?.(callId));
+  const helperAvailable = Boolean(
+    client.helperStatus && client.handOver && client.job && client.cancel,
+  );
+  const helper = useQuery({
+    queryKey: qk.outsideHelper(),
+    queryFn: () => client.helperStatus!(),
+    enabled: Boolean(item) && helperAvailable && !answeredAlready && done === null,
+    refetchInterval: 15_000,
+  });
+  const online = helper.data?.online === true;
+  const cardRef = item
+    ? { slug: item.slug, itemId: item.itemId, chatId: item.chatId, callId }
+    : null;
+  const [handed, setHanded] = useState(false);
+  const [needsNod, setNeedsNod] = useState(false);
+  const [byHand, setByHand] = useState(false);
+  const jobKey = qk.outsideJob(item?.itemId ?? "", item?.chatId, callId);
+  const job = useQuery({
+    queryKey: jobKey,
+    queryFn: () => client.job!(cardRef!),
+    enabled: handed && cardRef !== null && helperAvailable,
+    // Polled only while the helper is at it; an ended job does not change.
+    refetchInterval: (q) => {
+      const s = q.state.data?.state;
+      return s === "queued" || s === "claimed" ? 2_000 : false;
+    },
+  });
+  const hand = useMutation({
+    mutationFn: (auto: boolean) =>
+      client.handOver!({ ...cardRef!, query: isSearch ? query.trim() : undefined, auto }),
+    onSuccess: (j) => {
+      setHanded(true);
+      setNeedsNod(false);
+      qc.setQueryData(jobKey, j);
+    },
+    // An automatic request refused (a URL no lookup brought back — D12) waits
+    // for the nod instead.
+    onError: (_err, auto) => {
+      if (auto) setNeedsNod(true);
+    },
+  });
+  const stop = useMutation({
+    mutationFn: () => client.cancel!(cardRef!),
+    onSuccess: () => {
+      setHanded(false);
+      qc.removeQueries({ queryKey: jobKey });
+    },
+  });
+  // A page asks on its own, once: the server sends it only if an earlier lookup
+  // in this chat brought that link back (D12), and answers 409 otherwise.
+  const asked = useRef(false);
+  useEffect(() => {
+    if (isSearch || !online || answeredAlready || asked.current || !cardRef) return;
+    asked.current = true;
+    hand.mutate(true);
+    // `hand` and `cardRef` are new each render; `asked` makes this run once.
+  }, [isSearch, online, answeredAlready]);
+
   const head = (
     <>
       <p className="outside-lookup-title">{t("lookup.title")}</p>
@@ -139,6 +208,74 @@ export function OutsideLookupCard({
   // Without `add_content` the server saves nothing and refuses attachments.
   const canAttach = item.canAddFiles !== false;
   const error = hint ?? (answer.error ? failure(t, answer.error) : null);
+  // By hand: no helper, the person chose to, or the card is already sent.
+  const manual = !online || byHand || locked;
+  const jobState = job.data?.state;
+  const working = hand.isPending || jobState === "queued" || jobState === "claimed";
+  const handError =
+    hand.error && hand.variables === false ? failure(t, hand.error) : null;
+  const helperBlock =
+    online && !locked ? (
+      <div className="outside-lookup-section" data-testid="outside-lookup-helper">
+        {jobState === "done" ? (
+          <p className="outside-lookup-note">{t("lookup.helperDone")}</p>
+        ) : working ? (
+          <div className="outside-lookup-actions">
+            <p className="outside-lookup-note">
+              {t(isSearch ? "lookup.helperSearching" : "lookup.helperOpening")}
+            </p>
+            <button
+              type="button"
+              className="btn"
+              data-size="sm"
+              data-variant="ghost"
+              disabled={stop.isPending || hand.isPending}
+              onClick={() => stop.mutate()}
+            >
+              {t("lookup.helperCancel")}
+            </button>
+          </div>
+        ) : (
+          <>
+            {jobState === "failed" && (
+              <p className="outside-lookup-error" role="alert">
+                {t("lookup.helperFailed", { reason: job.data?.error ?? "" })}
+              </p>
+            )}
+            {handError && (
+              <p className="outside-lookup-error" role="alert">
+                {handError}
+              </p>
+            )}
+            {(isSearch || needsNod || jobState === "failed" || jobState === "cancelled") && (
+              <div className="outside-lookup-actions">
+                <button
+                  type="button"
+                  className="btn"
+                  data-size="sm"
+                  data-variant="primary"
+                  disabled={isSearch && !query.trim()}
+                  onClick={() => hand.mutate(false)}
+                >
+                  {t(jobState === "failed" ? "lookup.helperRetry" : "lookup.helperGo")}
+                </button>
+              </div>
+            )}
+          </>
+        )}
+        {!byHand && jobState !== "done" && (
+          <button
+            type="button"
+            className="btn"
+            data-size="sm"
+            data-variant="ghost"
+            onClick={() => setByHand(true)}
+          >
+            {t("lookup.byHand")}
+          </button>
+        )}
+      </div>
+    ) : null;
 
   const copy = (text: string) => {
     void navigator.clipboard?.writeText(text).then(() => setCopied(true));
@@ -163,6 +300,9 @@ export function OutsideLookupCard({
   return (
     <div className="outside-lookup-card" data-testid="outside-lookup-card">
       {head}
+      {helperAvailable && helper.isSuccess && !online && !locked && (
+        <p className="outside-lookup-hint">{t("lookup.helperOffline")}</p>
+      )}
 
       {isSearch ? (
         <div className="outside-lookup-section">
@@ -180,6 +320,8 @@ export function OutsideLookupCard({
               setCopied(false);
             }}
           />
+          {manual && (
+          <>
           <div className="outside-lookup-actions">
             {(targets.data ?? []).map((tg) => (
               <button
@@ -209,11 +351,15 @@ export function OutsideLookupCard({
             </button>
           </div>
           <p className="outside-lookup-hint">{t("lookup.newTab")}</p>
+          </>
+          )}
         </div>
       ) : (
         <div className="outside-lookup-section">
           <span className="outside-lookup-label">{t("lookup.url")}</span>
           <code className="outside-lookup-url">{lookup.url}</code>
+          {manual && (
+          <>
           <div className="outside-lookup-actions">
             <button
               type="button"
@@ -236,10 +382,14 @@ export function OutsideLookupCard({
             </button>
           </div>
           <p className="outside-lookup-hint">{t("lookup.newTab")}</p>
+          </>
+          )}
         </div>
       )}
 
-      {giveUp ? (
+      {helperBlock}
+
+      {!manual ? null : giveUp ? (
         <div className="outside-lookup-section">
           <label className="outside-lookup-label" htmlFor={`${ids}-r`}>
             {t("lookup.reason")}
@@ -388,7 +538,7 @@ export function OutsideLookupCard({
 
       {locked ? (
         <p className="outside-lookup-note">{done}</p>
-      ) : giveUp ? (
+      ) : !manual ? null : giveUp ? (
         <div className="outside-lookup-actions">
           <button
             type="button"

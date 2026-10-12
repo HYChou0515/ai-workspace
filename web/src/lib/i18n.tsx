@@ -1908,6 +1908,19 @@ export const messages = {
   "lookup.sentNotFound": { "zh-TW": "已告訴 AI 查不到", en: "Told the AI you couldn't find it" },
   "lookup.answered": { "zh-TW": "已回覆", en: "Answered" },
   "lookup.failed": { "zh-TW": "沒有送出:{reason}", en: "Not sent — {reason}" },
+  // docs/plan-outside-helper.md §3.5 — the person's own outside helper.
+  "lookup.helperOffline": { "zh-TW": "外網小幫手未連線", en: "Outside helper not connected" },
+  "lookup.helperGo": { "zh-TW": "查", en: "Look it up" },
+  "lookup.helperSearching": { "zh-TW": "小幫手正在查…", en: "The helper is looking it up…" },
+  "lookup.helperOpening": { "zh-TW": "小幫手正在開…", en: "The helper is opening it…" },
+  "lookup.helperCancel": { "zh-TW": "取消", en: "Cancel" },
+  "lookup.helperFailed": {
+    "zh-TW": "小幫手沒查到:{reason}",
+    en: "The helper couldn't — {reason}",
+  },
+  "lookup.helperRetry": { "zh-TW": "重查", en: "Try again" },
+  "lookup.helperDone": { "zh-TW": "小幫手已送給 AI", en: "The helper sent it to the AI" },
+  "lookup.byHand": { "zh-TW": "自己查", en: "Do it myself" },
   "env.bar.set": { "zh-TW": "需要設定 {names}", en: "Set {names}" },
   "env.bar.many": { "zh-TW": "需要登入 {count} 個系統", en: "Sign in to {count} systems" },
   // Three or more, not all sign-ins: a variable to type is not a "system" —
