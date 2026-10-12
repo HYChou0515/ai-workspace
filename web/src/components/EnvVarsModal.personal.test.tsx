@@ -137,10 +137,17 @@ describe("my environment variables in an item's Env panel", () => {
     expect(await row()).toHaveTextContent("使用中：Private");
   });
 
-  it("does not use it for an item that uses the shared value", async () => {
+  it("uses it under Shared when there is no shared value, and says this tab would take over", async () => {
+    // D1: a private value is this item's or mine for every item; Shared falls
+    // back to them (D2 as corrected 2026-10-12). Typing here would win over
+    // mine for every item (D4), so the row says so.
     open({ envPolicy: { ERP_TOKEN: "shared_first" }, personal: { ERP_TOKEN: "everywhere" } });
+    // The value counting as present is itself what folds the section ready.
+    await readyThenUnfold();
 
-    await waitFor(async () => expect(await row()).toHaveAttribute("data-in-use", "none"));
+    expect(await row()).toHaveAttribute("data-in-use", "personal");
+    expect(await row()).toHaveTextContent("使用中：Private(跨workspace)");
+    expect(await row()).toHaveTextContent("覆蓋 Private(跨workspace)");
   });
 
   it("on Private, a sign-in fills this item's own value, saved with this tab — whatever the policy", async () => {

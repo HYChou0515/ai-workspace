@@ -28,8 +28,9 @@ export function identityState({
   shared: Record<string, string>;
   policy: Record<string, string>;
   mine: Record<string, string>;
-  /** The viewer's values for every item (`plan-personal-env`): used only for a
-   * name the item asks for as personal (Private first / Private only). */
+  /** The viewer's values for every item (`plan-personal-env`): used for a name
+   * wherever `layerInUse` says the tool would get it — every policy reads them
+   * below this item's own (D1; D2 as corrected 2026-10-12). */
   personal?: Record<string, string>;
   providers: EnvProvider[];
   hasSchedules: boolean;
@@ -55,16 +56,16 @@ export function identityState({
     missing.push(entry);
   }
 
-  const asksPersonal = Object.keys(policy).some((n) => policyOf(n, policy) !== "shared_first");
+  // Whether the page asks each person for a value of their own — what puts
+  // the bar up. Not "reads my environment variables": every name does now.
+  const asksEachPerson = Object.keys(policy).some((n) => policyOf(n, policy) !== "shared_first");
   // Whether "signed in" would be TRUE: nothing missing is not the same as
   // holding anything of one's own. A value from my environment variables
-  // counts only where this item would use it.
+  // counts only where this item's tools would get it.
   const holdsOwn =
     Object.values(mine).some((v) => !isBlank(v)) ||
-    Object.entries(personal).some(
-      ([n, v]) => policyOf(n, policy) !== "shared_first" && !isBlank(v),
-    );
-  return { show: asksPersonal || offered.length > 0 || hasSchedules, missing, holdsOwn };
+    Object.keys(personal).some((n) => layerInUse(n, shared, mine, policy, personal) === "personal");
+  return { show: asksEachPerson || offered.length > 0 || hasSchedules, missing, holdsOwn };
 }
 
 /** Where one variable stands for this viewer — the ONE judgement the key

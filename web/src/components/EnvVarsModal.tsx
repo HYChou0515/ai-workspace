@@ -1283,7 +1283,10 @@ function MineRow({
         {/* What typing here would take over from — named by its tab, so the
             words are the ones on the tabs above (A22). Nothing when this tab
             already holds the value, or when nothing is in use to take over. */}
-        {!pinned && !automatic && p !== "shared_first" && (layer === "shared" || layer === "personal") && (
+        {/* Under Shared a shared value pins the row (above), so a "shared"
+            layer reaching here is Private first's; a "personal" one is any
+            policy's — Shared reads mine too (D2 as corrected 2026-10-12). */}
+        {!pinned && !automatic && (layer === "shared" || layer === "personal") && (
           <span style={{ whiteSpace: "nowrap" }}>{t("env.override", { tab: t(`env.tab.${TAB_OF[layer]}`) })}</span>
         )}
         <span style={{ marginLeft: "auto", whiteSpace: "nowrap" }}>

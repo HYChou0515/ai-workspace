@@ -1021,9 +1021,11 @@ describe("AgentPanel env vars", () => {
     vi.restoreAllMocks();
   });
 
-  it("in an item that never reads my environment variables, neither asks for them nor counts them", async () => {
-    // `plan-personal-env` D2 + round 2 (R1): a Shared name never reads them, so
-    // holding the token there does not satisfy this item, and nothing fetches them.
+  it("in an item that sets no policy, counts my environment variables for a name it has no shared value for", async () => {
+    // D2 as corrected 2026-10-12: Shared falls back to the person's values,
+    // mine for every item included (D1). The item names no policy at all — the
+    // report's case, a tool that declared nothing so nobody set one — and the
+    // token held in my environment variables satisfies it.
     const { privateEnvApi } = await import("../../api/privateEnv");
     const { personalEnvApi } = await import("../../api/personalEnv");
     const { api } = await import("../../api");
@@ -1069,10 +1071,9 @@ describe("AgentPanel env vars", () => {
       </WorkspaceSlugProvider>,
     );
 
-    await waitFor(() =>
-      expect(screen.getByTestId("env-button")).toHaveAttribute("data-attention", "true"),
-    );
-    expect(personal).not.toHaveBeenCalled();
+    await waitFor(() => expect(personal).toHaveBeenCalled());
+    await new Promise((r) => setTimeout(r, 20));
+    expect(screen.getByTestId("env-button")).not.toHaveAttribute("data-attention", "true");
     vi.restoreAllMocks();
   });
 
