@@ -137,11 +137,15 @@ SVC = {"K": "service"}
 @pytest.mark.parametrize(
     ("policy", "shared", "private", "personal", "service", "expected"),
     [
-        # Shared never reads my environment variables (D2), even with nothing else.
-        ("shared_first", {}, {}, V, {}, None),
+        # Shared: the shared copy, then the person's values — this item's, then
+        # mine for every item (D1: a private value is either), then the service
+        # account (D2 as corrected 2026-10-12).
+        ("shared_first", {}, {}, V, {}, "personal"),
         ("shared_first", S, P, V, SVC, "shared"),
+        ("shared_first", S, {}, V, SVC, "shared"),
         ("shared_first", {}, P, V, SVC, "private"),
-        ("shared_first", {}, {}, V, SVC, "service"),
+        ("shared_first", {}, {}, V, SVC, "personal"),
+        ("shared_first", {}, {}, {}, SVC, "service"),
         # Private first: this item's own value, then mine, then the service
         # account, then the shared copy (D4, D7).
         ("private_first", S, P, V, SVC, "private"),
@@ -162,25 +166,36 @@ def test_each_policy_orders_the_four_sources(policy, shared, private, personal, 
     assert got.get("K") == expected
 
 
-def test_a_name_only_in_my_variables_does_not_appear_without_a_private_policy():
-    """D2: the item must ask. A name it never set a policy for is not passed,
-    and neither is one it set to Shared."""
+def test_a_name_only_in_my_variables_reaches_the_tool_under_every_policy():
+    """D1: a private value is this item's OR mine for every item, and Shared
+    falls back to the private value (D2 as corrected 2026-10-12). Before, a name
+    no tool declared kept the default policy and never got my value — the
+    report: "I set it in my environment variables and it is not applied"."""
     got = resolve_env(
-        shared={}, private={}, personal={"A": "1", "B": "2"}, policy={"B": "shared_first"}
+        shared={},
+        private={},
+        personal={"A": "1", "B": "2", "C": "3"},
+        policy={"B": "shared_first", "C": "private_only"},
     )
-    assert got == {}
+    assert got == {"A": "1", "B": "2", "C": "3"}
 
 
-def test_an_item_that_never_asked_cannot_tell_from_the_order_that_i_hold_a_name():
-    """The names' ORDER reaches a tool (`SANDBOX_USER_ENV_KEYS`). A name in my
-    variables that this item does not ask for must not move the others: that
-    would tell the item's tools I hold such a name (review round 1, N1)."""
+def test_the_order_does_not_tell_an_item_i_hold_a_name_it_already_has():
+    """The names' ORDER reaches a tool (`SANDBOX_USER_ENV_KEYS`). A name of mine
+    that this item also holds must not move the others: where the item's value
+    wins, the order alone would tell its tools I hold that name (review round 1,
+    N1). Since 2026-10-12 every policy reads my values, so this is about
+    position only."""
     shared = {"A": "a", "B": "b"}
 
     without = resolve_env(shared=shared, private={}, policy={})
     with_mine = resolve_env(shared=shared, private={}, personal={"B": "mine"}, policy={})
-
     assert list(with_mine) == list(without) == ["A", "B"]
+
+    own = {"C": "c", "D": "d"}
+    without = resolve_env(shared={}, private=own, policy={})
+    with_mine = resolve_env(shared={}, private=own, personal={"D": "mine"}, policy={})
+    assert list(with_mine) == list(without) == ["C", "D"]
 
 
 def test_splitting_the_service_account_out_changes_nothing_without_my_variables():

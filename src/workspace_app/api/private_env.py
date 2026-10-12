@@ -55,7 +55,7 @@ from specstar import QB, SpecStar
 from specstar.types import DuplicateResourceError, ResourceIDNotFoundError
 
 from ..perm import Verb
-from .env_layers import PRIVATE_FIRST, PRIVATE_ONLY, PersonEnv
+from .env_layers import PRIVATE_FIRST, PRIVATE_ONLY, PersonEnv, is_blank
 from .locator import ItemLocator
 from .timeutil import now_ms
 
@@ -82,10 +82,10 @@ class PrivateSeam(Struct):
 
 class PersonalEnv(Struct):
     """A person's values for EVERY item — "my environment variables"
-    (`docs/plan-personal-env.md`). One row per person, keyed by them alone. An
-    item uses a name from here only when its policy asks for a personal value
-    (Private first / Private only), so a token set here does not reach the
-    tools of an item that never asked for it."""
+    (`docs/plan-personal-env.md`). One row per person, keyed by them alone. A
+    private value is the person's value for this item or from here (D1), so
+    every policy reads a name from here below the item's own value — Shared
+    only when the item's shared copy is not set (D2 as corrected 2026-10-12)."""
 
     user_id: str
     values: dict[str, str]
@@ -469,13 +469,14 @@ def register_private_env_routes(
     async def clear_item_sign_ins(body: CleanupBody, request: Request) -> CleanupOut:
         """`plan-personal-env` D10/A9: remove, from every person's values for
         single items, the names a deploy sign-in produces — where the old value
-        hides one there: the item's policy for the name is Private first /
-        Private only and the person holds it in my environment variables too.
+        hides one there: the item would read the person's values for the name
+        (any policy but Shared with a shared copy set — D2 as corrected
+        2026-10-12) and the person holds it in my environment variables too.
         Before "my environment variables" a sign-in wrote its token into that
-        one item, and an item's own value wins a name — so there those old
-        tokens would shadow a new sign-in. A Shared item reads only its own
-        value, and someone who has not signed in again has no other, so both
-        keep theirs. Run when the operator chooses
+        one item, and an item's own value wins a name (D4) — so there those old
+        tokens would shadow a new sign-in. Where a shared copy wins, the item's
+        value hides nothing; someone who has not signed in again has no other
+        value; both keep theirs. Run when the operator chooses
         (`scripts/clear_item_sign_ins.py`); dry run unless ``apply``.
 
         The names come from the providers this API loaded — the deploy's list,
@@ -486,19 +487,24 @@ def register_private_env_routes(
         names = _sign_in_names(getattr(request.app.state, "env_providers", ()) or ())
         held = await asyncio.to_thread(store.item_values_named, names)
         # Only a value that HIDES one (by presence, not by date): where the
-        # item asks for a personal value (a Shared item never reads my
-        # environment variables, so the value stored in it is the one its
-        # tools USE — round 1, F1) and the person
+        # item reads the person's values for the name — every policy does
+        # unless it is Shared with a shared copy set, whose copy is what the
+        # tools get (round 1, F1; D2 as corrected 2026-10-12) — and the person
         # holds that name there too (until they sign in on their page, the
         # item's value is the only one their tools have — round 2, F1).
         found = []
         for user_id, item_id, held_names in held:
-            policy = (await asyncio.to_thread(locator.env_layers_of, item_id)).policy
+            layers = await asyncio.to_thread(locator.env_layers_of, item_id)
             mine = await asyncio.to_thread(store.personal, user_id)
             shadowing = [
                 n
                 for n in held_names
-                if policy.get(n) in (PRIVATE_FIRST, PRIVATE_ONLY) and n in mine
+                # A blank value of mine is not a value (N5): nothing to hide.
+                if not is_blank(mine.get(n, ""))
+                and (
+                    layers.policy.get(n) in (PRIVATE_FIRST, PRIVATE_ONLY)
+                    or is_blank(layers.shared.get(n, ""))
+                )
             ]
             if shadowing:
                 found.append((user_id, item_id, shadowing))
