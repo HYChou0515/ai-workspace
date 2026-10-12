@@ -29,6 +29,7 @@
 | [plan-issue-331.md](plan-issue-331.md) | #331 topic-hub 在 step 之外沒有詳細進度 |
 | [plan-issue-748.md](plan-issue-748.md) | #748 一則回答是誰、什麼時候、花多少 |
 | [plan-subagent-model-choice.md](plan-subagent-model-choice.md) | `run_agent` 的呼叫方替子 agent 選模型 |
+| [plan-model-settings.md](plan-model-settings.md) | superuser 在網頁上改模型設定：preset、整份 app.json、平台內部用的模型；疊在 config.yaml 上、先存草稿按套用才生效、版本與退回 |
 | [plan-verify-number.md](plan-verify-number.md) | `verify-number` skill：交出可以查核的數字 |
 | [plan-third-party-tools.md](plan-third-party-tools.md) | 第三方 tool 散布：作者跑自己的 CI，新 sandbox 自動帶上 |
 | [plan-third-party-tool-names.md](plan-third-party-tool-names.md) | 第三方工具同名 command:模型看到 `<本地名>__<command>`,舊的扁平名不撞名時當別名 |
