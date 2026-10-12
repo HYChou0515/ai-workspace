@@ -35,7 +35,8 @@
 | D3 | 因為只有瀏覽器能上網,小幫手用 Playwright 開公司裝好的 **Chrome**(`channel="chrome"`)代為操作;不裝擴充功能 | 〔user〕「只能用瀏覽器上網」「我們是chrome」 |
 | D4 | **搜尋**送出去前,人在卡片上點頭(看得到查詢、可以改)按「查」。抓回來的內容**都直接送給 AI**,不再經人 | 〔user〕先選 B(兩個點),後改「直接送」——每頁只回一頁(D10),第二個點只剩「按送出」的搬運 |
 | D13 | **怎麼開**:安裝包附一個 `外網小幫手.pyw`,雙擊由 `pythonw` 執行(不是 exe、不出命令列視窗),開一個小視窗(Python 內建 tkinter):狀態(已連線/正在查/登入過期)、「登入」「暫停/繼續」「結束」、可勾「開機時自動啟動」(在 Windows「啟動」資料夾放捷徑)。關掉視窗 = 關掉小幫手 | 〔user〕「你如果能安裝好我也是可以」;呼應最初「一個簡單的gui代勞」 |
-| D14 | **打包在 dev server**(連得到 PyPI):`pip download --platform win_amd64 --only-binary=:all:` 抓 Windows 用的套件(Playwright 本身不分 Python 版本;`greenlet` 依版本,一次放 CPython 3.10–3.13 各一份〔施工〕),加上小幫手自己的 wheel 和 `.pyw`,組成離線安裝包;放在 **AI workspace 網頁**的「外網小幫手」頁下載。沒有 Windows CI——Windows 上的驗證是 user 在公司筆電裝起來跑一次 | 〔user〕「只能是我在dev server打包 或是在公司筆電打包」「可以 甚至可以在ai workspace網頁下載」 |
+| D14 | **打包在 dev server**(連得到 PyPI):`pip download --platform win_amd64 --only-binary=:all:` 抓 Windows 用的套件(Playwright 本身不分 Python 版本;`greenlet` 依版本,一次放 CPython 3.10–3.14 各一份〔施工〕),加上小幫手自己的 wheel 和 `.pyw`,組成離線安裝包;放在 **AI workspace 網頁**的「外網小幫手」頁下載。沒有 Windows CI——Windows 上的驗證是 user 在公司筆電裝起來跑一次 | 〔user〕「只能是我在dev server打包 或是在公司筆電打包」「可以 甚至可以在ai workspace網頁下載」 |
+| D15 | **更新**:一般更新由小幫手在背景下載、裝好,**下次開啟時生效**,使用者不用做任何事;只有後端說「低於最低可用版本」時,才跳視窗要求立刻更新 | 〔user〕「要放給使用者的東西 要有好的update流程」;選「一般自動、低於最低版本才強制」 |
 | D12 | **開網址**:網址若出現在**這個聊天先前任何一次查回來的內容**裡,直接開;否則和搜尋一樣,先在卡片上點頭 | 〔user〕「純網址可以直接開 搜尋要先確認」,後收緊為「網址出現在上一次查詢中的話就可以直接開」「查過都算」——外面網頁上的連結是外面帶回來的,AI 自己寫的網址才可能夾帶內部字詞 |
 | D5 | 小幫手主動向後端領工作(網頁不能控制它);**Python 直接連我們的後端** | 〔user〕選 1 |
 | D6 | 身分沿用 app 現有的登入(「要登入才能用」那道門),不另做金鑰 | 〔user〕「我們已經有卡(限制)登入了」 |
@@ -124,6 +125,39 @@ AI 呼叫 ask_outside ──► 卡片(D7:沒連線 = 今天的手動流程)
   `外網小幫手.pyw`,壓成一個檔;AI workspace 網頁有一頁「外網小幫手」提供下載與安裝說明
   (`pip install --no-index --find-links <資料夾> outside-helper`,再雙擊 `.pyw`)。
 - 不下載 Playwright 自帶的瀏覽器(`channel="chrome"` 用已安裝的 Chrome)。
+- **跨平台下載要指定每個 Python 版本**:`pip download` 的 `--python-version`/`--implementation`/`--abi` 預設是
+  跑 pip 的那台 Linux 的版本([pip download](https://pip.pypa.io/en/stable/cli/pip_download/));`greenlet` 每個
+  CPython 小版本一個 wheel([PyPI](https://pypi.org/project/greenlet/#files))。所以對 3.10–3.14 各跑一次
+  `pip download --platform win_amd64 --implementation cp --python-version 3.X --abi cp3X --only-binary=:all:`
+  進同一個 wheelhouse;版本用 `==` 釘死,`--no-index` 才不會撿到資料夾裡留下的舊 wheel。
+
+### 3.7 更新(D15)
+
+研究過的坑與對策(來源附在每條;user 要求「去查一下有什麼 pitfall」):
+
+| 坑 | 使用者看到的 | 對策 |
+|---|---|---|
+| 小幫手與後端版本不一致(我們滾動升級後端) | 舊小幫手問錯路由、看不懂新欄位,默默不工作 | 每個請求帶小幫手版本與協定號;後端回「最低可用版本」,低於它回明確的「請更新」(426 + 下載位置),小幫手跳視窗——不當成網路錯誤。後端 API 只加不刪,欄位要等最低版本越過所有讀它的舊版才拿掉。同 Sparkle 的 critical update / minimum version([Sparkle](https://sparkle-project.org/documentation/publishing/)) |
+| 公司 Chrome 自動更新,Playwright 跟不上 | 啟動逾時、Chrome 一開就關 | Playwright 每版只保證當時那一版 Chrome([release notes](https://playwright.dev/python/docs/release-notes));企業政策也可能擋自動化([browsers](https://playwright.dev/python/docs/browsers))。心跳回報 Chrome / Playwright / Python 版本,看得到誰快出事;Chrome 超過測過的版本就出新版小幫手;啟動失敗顯示「Chrome 已更新,請更新小幫手」而不是錯誤堆疊 |
+| Windows 不能覆蓋正在跑的檔案 | `pip install --upgrade` 失敗(WinError 32);更新一半壞掉 | **不原地更新**:每個版本裝在自己的資料夾,下次啟動才換,換不成就留舊版——Chrome 與 VS Code 的做法([Chromium upgrade_util_win](https://chromium.googlesource.com/chromium/src/+/lkgr/chrome/browser/first_run/upgrade_util_win.h)) |
+| 一台電腦好幾個 Python;IT 升級 Python | 「裝好了,雙擊卻找不到模組」;升級後全部不見 | `pip`、`py`、`.pyw` 可能各找到不同 Python([Python on Windows](https://docs.python.org/3/using/windows.html));`--user` 套件依小版本分開([PEP 370](https://peps.python.org/pep-0370/));venv 綁死建它的 Python([venv](https://docs.python.org/3/library/venv.html))。所以每版一個 venv,由啟動檔建,壞了就重建 |
+| 開機捷徑指著舊路徑 | 開機沒啟動,或啟動舊版 | 捷徑永遠指向同一個固定的啟動檔,不指向版本資料夾或某個 python.exe |
+| 公司防毒擋 Playwright 的 `node.exe`;下載的 zip 被標記 | 「Could not connect to the playwright process」;第一次雙擊跳警告 | 企業防毒擋過 Playwright 的執行檔([playwright-java#1016](https://github.com/microsoft/playwright-java/issues/1016));請 IT 依資料夾或簽章放行一次。之後的更新由小幫手從內網直接拿,不經瀏覽器下載,沒有「從網路下載」的標記 |
+| 同一個 Chrome 設定檔不能同時開兩個;Chrome 降版 | 開機自動啟動 + 又雙擊一次,第二個失敗;「設定檔來自較新版本」 | 一次只能有一個小幫手([BrowserType](https://playwright.dev/python/docs/api/class-browsertype));設定檔放在版本資料夾外面,更新不會登出;壞掉時有「重設登入」 |
+
+機制〔施工〕:
+
+- **後端說了算**:`GET` 一支版本資訊(最低可用版本、最新版本、協定號、安裝包網址、sha256)。每個請求帶小幫手版本;
+  低於最低版本回 426,小幫手跳「請更新」視窗(D15 的強制更新)。
+- **版本並排、下次啟動才換**:`%LOCALAPPDATA%\OutsideHelper\versions\<版本>\venv`,外加一個指標檔記錄現在用哪一版
+  (用 `os.replace` 原子寫入),上一版留著。小幫手在背景:從後端下載新安裝包 → 驗 sha256 → 建新 venv →
+  `pip install --no-index` → 試跑(能 import、`playwright --version`)→ 換指標。新版連續啟動失敗 N 次,啟動檔自動退回
+  上一版,並在心跳回報。
+- **固定的啟動檔**:使用者雙擊的、開機捷徑指向的,都是 `%LOCALAPPDATA%\OutsideHelper\啟動.pyw`——只用標準函式庫,
+  讀指標、用那一版 venv 的 `pythonw.exe` 啟動、確保只開一個;base Python 被 IT 升級(venv 壞了)時,用跑啟動檔的這個
+  Python 從快取的安裝包重建。它幾乎不更新,所以捷徑永遠有效。
+- **Chrome 設定檔**放在 `%LOCALAPPDATA%\OutsideHelper\profile`,不在版本資料夾裡;單一實例鎖、殘留鎖重試、「重設登入」。
+- **第一次安裝**:從 AI workspace 網頁下載安裝包,執行一次安裝指令建好上面的結構;之後都由小幫手自己更新。
 
 ## 4. Phases
 
@@ -135,10 +169,11 @@ AI 呼叫 ask_outside ──► 卡片(D7:沒連線 = 今天的手動流程)
 | P4 | 卡片:連線狀態、交給小幫手、進行中/取消/失敗;沒連線退回手動 | 小幫手沒連線時卡片與今天一模一樣 |
 | P5 | `outside-helper/` 骨架:小視窗(D13)、Chrome persistent context、登入與過期重登、領工作迴圈、差事外掛介面、驗證碼等待 | 對本機假後端 + 本機假網站跑通(Linux) |
 | P6 | 差事 `search` / `open_url`:開頁、整頁 HTML 經打包的 `htmlToMarkdown` 轉 Markdown | parity:範例 HTML 在前端與小幫手轉出逐字相同;對本機假搜尋頁抓得到結果連結 |
-| P7 | 安裝包:dev server 上的打包指令(D14,產 Windows 用的 wheelhouse + `.pyw`)、AI workspace 的下載頁 | 在 Linux 上產出的安裝包含小幫手與 Playwright、greenlet cp310–cp313 的 win_amd64 wheel;`pip install --no-index --dry-run` 對 win_amd64 解得出全部依賴;下載頁下載得到 |
-| P8 | 文件:`docs/migrations.md`(新 resource、新路由、新下載物)、使用者說明 | mkdocs `--strict` 綠 |
-| P9 | live check(真 app + 真 Chrome + 本機假網站)+ demo MP4 | 搜尋與開網址各走一次:按「查」之後不再經人,`lookups/` 有檔、AI 讀到 |
-| P10 | review(四把鏡頭)→ CI | 照 CLAUDE.md |
+| P7 | 安裝包:dev server 上的打包指令(D14,產 Windows 用的 wheelhouse + `.pyw`)、AI workspace 的下載頁 | 在 Linux 上產出的安裝包含小幫手與 Playwright、greenlet cp310–cp314 的 win_amd64 wheel,版本釘死;`pip install --no-index --dry-run` 對 win_amd64 解得出全部依賴;下載頁下載得到 |
+| P8 | 更新(§3.7):版本資訊路由與 426、版本並排安裝、固定啟動檔、試跑後換指標、失敗退回、設定檔放外面、心跳回報版本 | 舊版收到 426 跳更新視窗;更新中途中斷不影響現在這版;新版起不來 N 次自動退回;啟動檔在 base Python 換掉後重建 venv(Linux 上用假 Python 路徑測) |
+| P9 | 文件:`docs/migrations.md`(新 resource、新路由、新下載物、IT 要放行的項目)、使用者說明 | mkdocs `--strict` 綠 |
+| P10 | live check(真 app + 真 Chrome + 本機假網站)+ demo MP4 | 搜尋與開網址各走一次:按「查」之後不再經人,`lookups/` 有檔、AI 讀到;一次更新(換指標、下次開啟生效) |
+| P11 | review(四把鏡頭)→ CI | 照 CLAUDE.md |
 
 ## 5. 不做(這一版)
 
