@@ -1237,12 +1237,19 @@ class ChatTurnEngine:
         return await self._turn_control.current(key)
 
     def publish(self, key: str, event: AgentEvent) -> None:
-        """#43: broadcast an externally-produced event (e.g. a human `UserMessage`
-        or a `FileChanged`) on the investigation's stream. No-op if nobody has
-        ever subscribed / enqueued for this key."""
+        """#43: broadcast an externally-produced event (e.g. a human `UserMessage`,
+        a `FileChanged`, a `TurnEnded`) on the investigation's stream.
+
+        With no session here, nobody on THIS pod is watching `key` -- but a viewer
+        on another pod may be, and the event still goes to the bus for them. It
+        used to be dropped here outright, so a save or a turn end on a pod where
+        nobody had opened the item never reached the pod where somebody had. No
+        session is created for it: a pod that never served the key keeps nothing."""
         session = self._ws_sessions.get(key)
         if session is not None:
             session.publish(event)
+        elif not isinstance(event, Presence):
+            self._event_bus.publish(key, self._pod_id, event, uuid.uuid4().hex)
 
     def subscribe(self, key: str, user_id: str = "") -> AsyncGenerator[AgentEvent, None]:
         """#43: register a live broadcast subscriber and return an async iterator

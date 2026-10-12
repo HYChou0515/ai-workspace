@@ -78,8 +78,8 @@ import { usePersistentDeque } from "../../hooks/usePersistentSet";
 import { usePersistentBoolean } from "../../hooks/usePersistentBoolean";
 import { usePersistentNumber } from "../../hooks/usePersistentNumber";
 import { useStickToBottom } from "../../hooks/useStickToBottom";
-import { useOnTurnEnd } from "../../hooks/useOnTurnEnd";
 import { useRefreshFiles } from "../../hooks/useRefreshFiles";
+import { subscribeTurnEnded } from "../../lib/turnEndedBus";
 import { emitRunAll } from "../../lib/editorEvents";
 import { compareNames } from "../../lib/treeOrder";
 import { FileView } from "../../renderers/FileView";
@@ -185,7 +185,12 @@ export function WorkspaceShell({
   onInvestigationChanged?: () => void;
 }) {
   return (
-    <WorkspaceProviders slug={manifest.slug} itemId={item.resource_id} unwalked={unwalked}>
+    <WorkspaceProviders
+      slug={manifest.slug}
+      itemId={item.resource_id}
+      unwalked={unwalked}
+      onTurnEnd={onFilesChanged}
+    >
       {(bufferStore) => (
         <ShellBody
           item={item}
@@ -213,11 +218,15 @@ export function WorkspaceProviders({
   slug,
   itemId,
   unwalked = [],
+  onTurnEnd,
   children,
 }: {
   slug: string;
   itemId: string;
   unwalked?: string[];
+  /** Called after the files were refreshed for a turn's end (the page's own
+   * follow-ups, e.g. the usage bar). */
+  onTurnEnd?: () => void;
   children: (bufferStore: FileBufferStore) => React.ReactNode;
 }) {
   const service = useMemo(() => investigationFileService(slug, itemId), [slug, itemId]);
@@ -241,6 +250,7 @@ export function WorkspaceProviders({
       <FileServiceProvider value={service}>
         <AgentProvider investigationId={itemId}>
           <FileBufferProvider store={bufferStore}>
+            <RefreshOnTurnEnd itemId={itemId} after={onTurnEnd} />
             <EditModeProvider>
               <MarkingProvider store={markings}>
                 <LazyFoldersContext.Provider value={unwalked}>
@@ -253,6 +263,28 @@ export function WorkspaceProviders({
       </FileServiceProvider>
     </WorkspaceSlugProvider>
   );
+}
+
+/** Refresh the item's files whenever a turn in ANY of its chats ends.
+ *
+ * It used to follow the default chat's `streaming` true→false edge in this tab,
+ * which a turn in a second chat or a workflow chat never produced (each streams
+ * on its own key), nor did a queued follow-up, a turn longer than the "awaiting
+ * reply" window, or a turn this tab opened in the middle of. The backend now
+ * says so once per turn on the item's stream (`turn_ended`), and a reconnect
+ * says so too; this is the one place either becomes a refresh. */
+function RefreshOnTurnEnd({ itemId, after }: { itemId: string; after?: () => void }) {
+  const refreshFiles = useRefreshFiles(itemId);
+  const afterRef = useRef(after);
+  afterRef.current = after;
+  useEffect(
+    () =>
+      subscribeTurnEnded(itemId, () => {
+        void refreshFiles().then(() => afterRef.current?.());
+      }),
+    [itemId, refreshFiles],
+  );
+  return null;
 }
 
 /** Close a tab, asking first when it holds the only copy of unsaved edits. */
@@ -633,16 +665,10 @@ function ShellBody({
   gRef.current = groups;
 
   // Full refresh: sandbox flush → invalidate file list + dirs + every open
-  // file's content + reload editor buffers. Called from the refresh button,
-  // after agent turns, and after terminal exec — see useRefreshFiles for the
-  // four caches it busts.
+  // file's content + reload editor buffers. Called from the refresh button and
+  // after terminal exec — see useRefreshFiles for the caches it busts. A turn's
+  // end refreshes through `RefreshOnTurnEnd` in `WorkspaceProviders`.
   const refreshFiles = useRefreshFiles(item.resource_id);
-  // When an agent turn finishes it may have created/edited/deleted files via
-  // its tools — refresh everything so the tree, viewers, and editor catch up.
-  useOnTurnEnd(useAgent().log.streaming, () => {
-    void refreshFiles();
-    onFilesChanged?.();
-  });
 
   // VSCode-style delete-open-file handling: when a file disappears from the
   // listing (deleted in the tree), auto-close its CLEAN tabs; keep dirty

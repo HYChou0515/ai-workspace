@@ -12,6 +12,7 @@ import {
   retractOwnAsk,
 } from "../pages/investigation/agentLog";
 import { publishFileChanged } from "../lib/fileChangedBus";
+import { publishTurnEnded } from "../lib/turnEndedBus";
 import type { MsgKey } from "../lib/i18n";
 import { type QuotaDetail, type QuotaKind, quotaMessage } from "../lib/quotaFailure";
 import { invalidateTree } from "./invalidateTree";
@@ -344,6 +345,13 @@ export function useChatSession(
               if (transport.fileScopeId) publishFileChanged(transport.fileScopeId, ev.path);
               continue;
             }
+            if (ev.type === "turn_ended") {
+              // A turn in one of the item's chats ended — any chat, so this is
+              // the one signal the file panes refresh on (`turnEndedBus`). It
+              // arrives on the item's stream only; never a transcript entry.
+              if (transport.fileScopeId) publishTurnEnded(transport.fileScopeId);
+              continue;
+            }
             if (ev.type === "todos_updated") {
               // #613: the agent rewrote the todo checklist — the event carries
               // the whole new list, so write it straight into the cache (no
@@ -474,6 +482,10 @@ export function useChatSession(
         gapBannerPendingRef.current = interruptedATurn;
         await sleep(backoff);
         if (stopped) return;
+        // A turn that ended while the stream was down announced it to nobody
+        // here, and a reconnect onto another pod replays none of it — so the
+        // item's file panes refresh as if one had.
+        if (transport.fileScopeId) publishTurnEnded(transport.fileScopeId);
         const fresh = await transport.getThread().catch(() => null);
         if (fresh && !stopped) {
           qc.setQueryData(transport.queryKey, fresh);
