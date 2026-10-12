@@ -7,13 +7,12 @@ item they had signed in to before, by the old one. Nothing clears those
 automatically (D5); the operator runs this when they choose.
 
 It removes only names a deploy sign-in produces — read from the providers the
-API actually loaded, not a hand-kept list — and only in items whose policy for
-that name is Private first / Private only, where the old value shadows my
-environment variables — and only for a person who holds that name there too,
-since until they sign in again the item's value is the only one their tools
-have (review round 2, F1). In a Shared item the old value is the one the item
-USES (it never reads my environment variables), so it stays (review round 1,
-F1).
+API actually loaded, not a hand-kept list — and only where the old value
+shadows my environment variables: any policy, except Shared with a shared copy
+set, whose copy is what the tools get (review round 1, F1; D2 as corrected
+2026-10-12 — Shared with no shared copy reads the item's value, then mine) —
+and only for a person who holds that name there too, since until they sign in
+again the item's value is the only one their tools have (review round 2, F1).
 Never shows a value. Dry run by default. Superusers only: it writes everyone's
 rows.
 """
@@ -50,41 +49,45 @@ def _world():
     app.state.env_providers = [_SapLogin()]  # produces SAP_TOKEN, SAP_HOST
     rm = spec.get_resource_manager(PlaygroundItem)
 
-    def item(policy: dict[str, str]) -> str:
-        made = PlaygroundItem(title="t", owner="root", profile="echo", env_policy=policy)
+    def item(policy: dict[str, str], shared: dict[str, str] | None = None) -> str:
+        made = PlaygroundItem(
+            title="t", owner="root", profile="echo", env_policy=policy, env_vars=shared or {}
+        )
         return rm.create(made).resource_id
 
     a = item({"SAP_TOKEN": "private_first", "SAP_HOST": "private_only"})  # asks for mine
-    b = item({})  # Shared: uses what is stored in it
+    b = item({})  # Shared, no shared copy: falls back to the item's value, then mine
+    c = item({}, shared={"SAP_HOST": "shared-h"})  # Shared with a shared copy: uses it
     store = PrivateEnvStore(spec)
     store.replace("alice", a, {"SAP_TOKEN": "old-a", "MY_KEY": "typed"})
     store.replace("alice", b, {"SAP_HOST": "h"})
+    store.replace("alice", c, {"SAP_HOST": "hc"})
     store.replace("bob", a, {"OTHER": "o"})
     store.record_seam("alice", a, {"SAP_TOKEN": "from-sso"})
     # Alice has signed in again on her page — so the old item value hides it.
     store.replace_personal("alice", {"SAP_TOKEN": "fresh", "SAP_HOST": "fresh-h"})
     # Carol has not: the value in the item is the only one her tools have.
     store.replace("carol", a, {"SAP_TOKEN": "only-copy"})
-    return TestClient(app), holder, store, a, b
+    return TestClient(app), holder, store, a, b, c
 
 
 def test_a_dry_run_lists_what_would_go_and_changes_nothing():
-    client, _, store, a, b = _world()
+    client, _, store, a, b, c = _world()
 
     resp = client.post(URL, json={"apply": False})
 
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["applied"] is False
-    assert [(r["user_id"], r["item_id"], r["names"]) for r in body["rows"]] == [
-        ("alice", a, ["SAP_TOKEN"]),
-    ]
+    assert sorted((r["user_id"], r["item_id"], r["names"]) for r in body["rows"]) == sorted(
+        [("alice", a, ["SAP_TOKEN"]), ("alice", b, ["SAP_HOST"])]
+    )
     assert "old-a" not in resp.text and "from-sso" not in resp.text
     assert store.get("alice", a) == {"SAP_TOKEN": "old-a", "MY_KEY": "typed"}
 
 
 def test_applying_removes_only_the_sign_in_names():
-    client, _, store, a, b = _world()
+    client, _, store, a, b, c = _world()
 
     assert client.post(URL, json={"apply": True}).json()["applied"] is True
 
@@ -94,20 +97,44 @@ def test_applying_removes_only_the_sign_in_names():
     assert store.seam("alice", a) == {"SAP_TOKEN": "from-sso"}
 
 
-def test_a_shared_item_keeps_the_value_it_uses():
-    """Round 1, F1: a Shared item never reads my environment variables, so the
-    value stored in it is the one its tools get. Clearing it would break it."""
-    client, _, store, a, b = _world()
+def test_a_shared_item_with_no_shared_copy_is_cleared_like_a_private_one():
+    """D2 as corrected 2026-10-12: Shared falls back to the item's value and
+    then mine, so with no shared copy the old item value hides mine exactly as
+    under Private first (D4)."""
+    client, _, store, a, b, c = _world()
 
     client.post(URL, json={"apply": True})
 
-    assert store.get("alice", b) == {"SAP_HOST": "h"}
+    assert store.get("alice", b) == {}
+
+
+def test_a_blank_value_of_mine_hides_nothing_so_the_item_keeps_its_own():
+    """Review round 2 of #917, F1: a blank value counts as not set (N5), so it
+    is not a value the item's copy could be hiding — with the item's gone, the
+    tool would get nothing. `PUT /me/env` stores blanks as typed."""
+    client, _, store, a, b, c = _world()
+    store.replace("dave", a, {"SAP_TOKEN": "only-real"})
+    store.replace_personal("dave", {"SAP_TOKEN": "  "})
+
+    client.post(URL, json={"apply": True})
+
+    assert store.get("dave", a) == {"SAP_TOKEN": "only-real"}
+
+
+def test_a_shared_item_with_a_shared_copy_keeps_its_value():
+    """There the shared copy is what the tools get; the item's value hides
+    nothing, so it is not this cleanup's to remove (round 1, F1)."""
+    client, _, store, a, b, c = _world()
+
+    client.post(URL, json={"apply": True})
+
+    assert store.get("alice", c) == {"SAP_HOST": "hc"}
 
 
 def test_a_value_that_hides_nothing_stays():
     """Round 2 (F1): until a person signs in on their page, the value in the
     item is the only one their tools have — removing it would break them."""
-    client, _, store, a, b = _world()
+    client, _, store, a, b, c = _world()
 
     client.post(URL, json={"apply": True})
 
@@ -115,14 +142,14 @@ def test_a_value_that_hides_nothing_stays():
 
 
 def test_a_second_run_finds_nothing():
-    client, _, _, a, b = _world()
+    client, _, _, a, b, c = _world()
     client.post(URL, json={"apply": True})
 
     assert client.post(URL, json={"apply": False}).json()["rows"] == []
 
 
 def test_only_a_superuser_may_run_it():
-    client, holder, store, a, b = _world()
+    client, holder, store, a, b, c = _world()
     holder["id"] = "alice"
 
     assert client.post(URL, json={"apply": True}).status_code == 403
@@ -142,28 +169,29 @@ def _script():
 
 
 def test_the_script_dry_runs_by_default_and_never_prints_a_value(capsys):
-    client, _, store, a, b = _world()
+    client, _, store, a, b, c = _world()
 
     assert _script().run(client, "", apply=False) == 0
 
     out = capsys.readouterr().out
     assert f"alice\t{a}\tSAP_TOKEN" in out
-    assert "would remove 1 name(s) in 1" in out
+    assert f"alice\t{b}\tSAP_HOST" in out  # Shared, no shared copy (D2 as corrected)
+    assert "would remove 2 name(s) in 2" in out
     assert "old-a" not in out
     assert store.get("alice", a)["SAP_TOKEN"] == "old-a"
 
 
 def test_the_script_applies_when_asked(capsys):
-    client, _, store, a, b = _world()
+    client, _, store, a, b, c = _world()
 
     assert _script().run(client, "", apply=True) == 0
 
-    assert "removed 1 name(s)" in capsys.readouterr().out
+    assert "removed 2 name(s)" in capsys.readouterr().out
     assert store.get("alice", a) == {"MY_KEY": "typed"}
 
 
 def test_the_script_says_why_it_was_refused(capsys):
-    client, holder, _, a, b = _world()
+    client, holder, _, a, b, c = _world()
     holder["id"] = "alice"
 
     assert _script().run(client, "", apply=True) == 1
@@ -184,7 +212,7 @@ def test_the_script_can_carry_who_it_runs_as():
 
 def test_the_names_are_the_ones_this_deploy_signs_in_for():
     """Not a list kept by hand: change the deploy's sign-ins, change the names."""
-    client, _, store, a, b = _world()
+    client, _, store, a, b, c = _world()
     app = client.app
     assert isinstance(app, FastAPI)
     app.state.env_providers = []

@@ -1,8 +1,9 @@
 """My environment variables reach the tools (`docs/plan-personal-env.md`, P3).
 
 Every entry point that runs a tool FOR a person hands it that person's values
-for every item — but only for a name the item's policy asks for as personal
-(Private first / Private only, D2). Who the person is does not change (D7): the
+for every item, under every policy: a private value is this item's or mine for
+every item (D1), and Shared falls back to it when the shared copy is not set
+(D2 as corrected 2026-10-12). Who the person is does not change (D7): the
 sender, the presser, the setter of a goal, the binder of a schedule. Their
 values for THIS item still win a name (D4), and the deploy's service account
 ranks below them.
@@ -54,8 +55,10 @@ def test_my_variable_reaches_my_turn_when_the_item_asks_for_a_personal_value():
     assert runner.envs == [{"ERP": "a-erp", "MES": "a-mes"}]
 
 
-def test_an_item_that_never_asked_does_not_get_it():
-    """D2: no policy, or Shared — not passed, even with nothing else supplying it."""
+def test_a_shared_name_with_no_shared_value_gets_mine():
+    """D2 as corrected 2026-10-12: no policy, or Shared, falls back to the
+    person's values — mine for every item included (D1). The report: a tool
+    that declared nothing, so nobody gave its name a policy, never got it."""
     client, runner, item_id, spec = _send_app(None, user="alice")
     _policy(spec, item_id, MES="shared_first")
     PrivateEnvStore(spec).replace_personal("alice", {"ERP": "a-erp", "MES": "a-mes"})
@@ -63,7 +66,7 @@ def test_an_item_that_never_asked_does_not_get_it():
     with client:
         _send(client, item_id)
 
-    assert runner.envs == [{}]
+    assert runner.envs == [{"ERP": "a-erp", "MES": "a-mes"}]
 
 
 def test_this_items_own_value_beats_mine():
@@ -105,7 +108,7 @@ def test_a_page_tool_call_carries_the_pressers_variables():
     from .test_wui_routes import URL, _private_store, _Sandbox, build
 
     store = _private_store()
-    store.replace_personal("default-user", {"ERP_TOKEN": "mine", "NOT_ASKED": "x"})
+    store.replace_personal("default-user", {"ERP_TOKEN": "mine", "NO_POLICY": "x"})
     sandbox = _Sandbox(ExecResult(exit_code=0, stdout=b"{}"))
     client, _, _, _ = build(
         sandbox=sandbox, env_policy={"ERP_TOKEN": "private_only"}, private_env=store
@@ -114,7 +117,8 @@ def test_a_page_tool_call_carries_the_pressers_variables():
     assert client.post(URL, json={"args": {}}).status_code == 200
 
     assert sandbox.envs[-1]["ERP_TOKEN"] == "mine"
-    assert "NOT_ASKED" not in sandbox.envs[-1]
+    # A name with no policy is Shared, which falls back to mine (D2 as corrected).
+    assert sandbox.envs[-1]["NO_POLICY"] == "x"
 
 
 def test_a_page_build_gets_nobodys_variables():

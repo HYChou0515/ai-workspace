@@ -105,13 +105,13 @@ describe("PageIdentityBar", () => {
     expect(await screen.findByTestId("page-identity-key")).toHaveAttribute("data-state", "signedIn");
   });
 
-  it("on a page that asks nothing personal, neither asks for nor waits on my environment variables", async () => {
-    // Round 2 (R1): the bar waited on `/me/env` on every page, though only a
-    // Private first / Private only name can use it.
-    const { personalGet } = open({ providers: [ERP_LOGIN], personalGet: vi.fn(() => new Promise<never>(() => {})) });
-
-    expect(await screen.findByTestId("page-identity-key")).toHaveTextContent("ERP");
-    expect(personalGet).not.toHaveBeenCalled();
+  it("is signed in by my environment variables for a Shared name with no shared value", async () => {
+    // D2 as corrected 2026-10-12: Shared falls back to the person's values,
+    // mine for every item included (D1). The page has no policy at all, so it
+    // used to skip `/me/env` (round 2, R1) and name ERP as missing while the
+    // tool was handed my ERP_TOKEN.
+    open({ providers: [ERP_LOGIN], personal: { ERP_TOKEN: "t" } });
+    expect(await screen.findByTestId("page-identity-key")).toHaveAttribute("data-state", "signedIn");
   });
 
   it("counts a value the deploy filled in as the viewer's own", async () => {
