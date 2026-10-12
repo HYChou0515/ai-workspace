@@ -217,8 +217,27 @@ def read_app_manifest_raw(slug: str) -> dict[str, Any]:
 
 
 def load_app_manifest(slug: str) -> AppManifest:
-    """Decode ``apps/<slug>/app.json`` into a typed ``AppManifest``."""
-    return msgspec.convert(read_app_manifest_raw(slug), type=AppManifest)
+    """Decode ``apps/<slug>/app.json`` into a typed ``AppManifest`` — with the
+    settings page's published patch over it, when the process has one
+    (``apps/overlay.py``)."""
+    from . import overlay
+
+    published = overlay.current()
+    if published is None:
+        return patched_app(slug, {})
+    version, document = published
+    return overlay.memoised(("app", slug), version, lambda: patched_app(slug, document))
+
+
+def patched_app(slug: str, document: dict[str, Any]) -> AppManifest:
+    """The shipped app.json with `document`'s `apps.<slug>` merge patch over it.
+    The one place that is done — the loader above and the settings page's
+    checks (`model_settings.effective`) both call it."""
+    from ..config.merge import apply_merge_patch
+
+    raw = read_app_manifest_raw(slug)
+    patch = (document.get("apps") or {}).get(slug)
+    return msgspec.convert(apply_merge_patch(raw, patch) if patch else raw, type=AppManifest)
 
 
 # What an App may ship its `icon` as. The extension decides the media type, so

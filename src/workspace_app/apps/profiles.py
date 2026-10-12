@@ -92,8 +92,27 @@ def read_profile_raw(app_slug: str, name: str) -> dict[str, Any]:
 
 def load_profile(app_slug: str, name: str) -> ProfileManifest:
     """The profile's declared overrides (``_profile.json``), or all-defaults
-    (inherit the App ceiling) when it ships none."""
-    return msgspec.convert(read_profile_raw(app_slug, name), type=ProfileManifest)
+    (inherit the App ceiling) when it ships none — with the settings page's
+    published patch over it, when the process has one (``apps/overlay.py``)."""
+    from . import overlay
+
+    published = overlay.current()
+    if published is None:
+        return patched_profile(app_slug, name, {})
+    version, document = published
+    return overlay.memoised(
+        ("profile", app_slug, name), version, lambda: patched_profile(app_slug, name, document)
+    )
+
+
+def patched_profile(app_slug: str, name: str, document: dict[str, Any]) -> ProfileManifest:
+    """The shipped _profile.json with `document`'s `profiles.<slug>.<name>`
+    merge patch over it — the one place that is done (see `patched_app`)."""
+    from ..config.merge import apply_merge_patch
+
+    raw = read_profile_raw(app_slug, name)
+    patch = ((document.get("profiles") or {}).get(app_slug) or {}).get(name)
+    return msgspec.convert(apply_merge_patch(raw, patch) if patch else raw, type=ProfileManifest)
 
 
 def load_workflow_manifest(app_slug: str, name: str) -> WorkflowManifest | None:

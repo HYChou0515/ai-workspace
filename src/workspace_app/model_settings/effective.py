@@ -23,10 +23,9 @@ from typing import Any
 import msgspec
 
 from ..apps.catalog import _subset_or_raise, discover_app_slugs, validate_function_coherence
-from ..apps.manifest import AppManifest, read_app_manifest_raw
-from ..apps.profiles import ProfileManifest, list_profiles, read_profile_raw
+from ..apps.manifest import AppManifest, patched_app
+from ..apps.profiles import ProfileManifest, list_profiles, patched_profile
 from ..config.loader import load_with_provenance
-from ..config.merge import apply_merge_patch
 from ..config.schema import Settings
 
 
@@ -55,15 +54,11 @@ def effective_settings(
 
 
 def effective_app(slug: str, document: dict[str, Any]) -> AppManifest:
-    patch = (document.get("apps") or {}).get(slug)
-    raw = read_app_manifest_raw(slug)
-    return msgspec.convert(apply_merge_patch(raw, patch) if patch else raw, type=AppManifest)
+    return patched_app(slug, document)
 
 
 def effective_profile(slug: str, name: str, document: dict[str, Any]) -> ProfileManifest:
-    patch = ((document.get("profiles") or {}).get(slug) or {}).get(name)
-    raw = read_profile_raw(slug, name)
-    return msgspec.convert(apply_merge_patch(raw, patch) if patch else raw, type=ProfileManifest)
+    return patched_profile(slug, name, document)
 
 
 def problems(
