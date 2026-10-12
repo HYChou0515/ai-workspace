@@ -99,6 +99,7 @@
 | [plan-sandbox-resource-quota.md](plan-sandbox-resource-quota.md) | 依 App 設定 sandbox 資源（cpu/memory/disk）+ 每人跨 App 總量上限；債務人是 item 的 `owner`（前提見 #687） |
 | [plan-item-sandbox-resources.md](plan-item-sandbox-resources.md) | 每個 item 自己決定環境開多大（使用者可調、由 owner 的額度支出）；狀態／用量／關閉搬到 item 頁面；閘門是 `change_permission` |
 | [plan-llm-failover.md](plan-llm-failover.md) | LLM failover / 多供應商備援 |
+| [plan-friendly-errors.md](plan-friendly-errors.md) | 錯誤要說人話：發生什麼、怎麼辦、原文收合在技術細節；重試只在單次 LLM 呼叫 |
 | [plan-sanity-checks.md](plan-sanity-checks.md) | 開機健康檢查 / sanity matrix |
 | [plan-repetition-guard.md](plan-repetition-guard.md) | #113 重複迴圈偵測與優雅阻擋 |
 | [plan-max-turns-continues-goal.md](plan-max-turns-continues-goal.md) | #721 撞到 `runner.max_turns` 不再被當成失敗——goal 的自動續跑改由「工具呼叫指紋」判斷是否在原地打轉,而不是「這輪結束得好不好」 |
