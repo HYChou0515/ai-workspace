@@ -47,6 +47,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 
 import { api as defaultApi } from "../api";
+import { API_BASE } from "../api/http";
 import { PERSONAL_ENV_WRITES, personalEnvApi, type PersonalEnvClient } from "../api/personalEnv";
 import { privateEnvApi, type PrivateEnvClient } from "../api/privateEnv";
 import { qk } from "../api/queryKeys";
@@ -1346,7 +1347,8 @@ function PersonalTab({
           ) : (
             <span key={i}>
               <a
-                href="/my-env"
+                // A plain anchor, so the deploy prefix is ours to add (`API_BASE`).
+                href={`${API_BASE}/my-env`}
                 data-testid="env-personal-page"
                 style={{ color: "var(--accent-h)", textDecoration: "underline", whiteSpace: "nowrap" }}
               >
