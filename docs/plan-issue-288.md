@@ -1,5 +1,7 @@
 # Plan — #288 Conversational steering of workflow runs + incremental resume
 
+> 被 #911（plan-workflow-out-of-chat.md）推翻
+
 The normative target is **`docs/workflows.md` §10 (Steer-and-resume)**. This is the
 implementation plan: flat integer phases, built via `/tdd`.
 
