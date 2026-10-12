@@ -1,5 +1,7 @@
 # Plan — #343 Launch a workflow *in the current chat* (takeover)
 
+> 被 #911（plan-workflow-out-of-chat.md）推翻
+
 > Status: grill-locked, building via `/tdd` (flat phases, one commit per phase).
 
 ## Problem
