@@ -13,12 +13,16 @@ Ask one question at a time until you can answer these in the user's words:
 **What is a job here?** One real example: what gets submitted, where it runs,
 how long it takes. That becomes `domain_description` and `spec_schema`.
 
-**When are two submits the same job?** Which spec fields decide it. This is
-`idempotency.fields`, and getting it wrong is either two jobs for one request
-or one job for two.
+**When are two submits the same job?** Which spec fields decide it — within
+one item, for `idempotency.window_seconds` (a day unless they say otherwise).
+This is `idempotency.fields`, and getting it wrong is either two jobs for one
+request or one job for two. If "the same" needs loosening (case, spaces, a
+nested field), override `identity(spec)` and give `example_spec`.
 
-**Who is the caller?** What credential the backend sees, and how to learn
-whose it is. That is `caller_id`, and it scopes `list`.
+**Whose credential is it, and who should share it?** The token decides what
+the backend shows and lets anyone change. Put it in the item's environment
+variables and everyone who can open the item shares those jobs; in a person's
+Private layer and they are that person's alone.
 
 **Which optional calls does the backend support?** Change a job, cancel it,
 read its log, fetch its outputs. Write only those; the rest are never offered.
@@ -36,8 +40,10 @@ endpoint), not a bigger number — the platform stops every call at 60 s.
 generated from the backend's `Contract`. Edit the template only on purpose,
 and know that its tests are what CI runs before every build.
 
-**`submit` with a seen key returns the same job.** No test can check it here;
-it is the promise that only the backend can keep.
+**`submit` with a key seen within the window returns that job, as
+`Submitted(job_id, created=False)`.** No test can check it here; it is the
+promise only the backend can keep. Record the `item_id` it is given and report
+it back on every `JobStatus`.
 
 **`phase` is `running`, `done` or `unknown`.** The backend's own words go in
 `state`. `unknown` is "could not ask", never "does not exist".

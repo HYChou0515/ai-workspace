@@ -40,7 +40,7 @@ description the model reads — never restated anywhere else:
 | field | what it is |
 |---|---|
 | `spec_schema` | JSON schema of what `submit` accepts. The model fills these fields directly. Arguments are checked against it before your backend is called, so add `"additionalProperties": false` if fields you did not declare must not reach you. |
-| `idempotency` | `fields`: which spec fields make two submits the same job. `per_user` (default true): two callers are two jobs. The shell derives the key; you never do. |
+| `idempotency` | `fields`: which spec fields make two submits the same job — **per item**: the same work from two items is two jobs. `window_seconds` (default 86400, a day): how long it stays the same job; after it the same work starts a new one. Override `identity(spec)` to compare loosely (case, spaces, nested fields) — then also give `example_spec`, on which the shape tests check it answers the same twice. The shell derives the key; you never do. |
 | `budget` | seconds per call. Defaults: submit 10, find_by_key 5, get 3, list 5, update 10, cancel 10, logs 5, fetch 50. Each at most 55, and submit + find_by_key at most 55 together. |
 | `patch_schema` | what `update` accepts, or None when you have no `update`. Must come with `update`, and `update` with it. |
 | `domain_description` | what these jobs ARE, in your words. The model reads it first. |
@@ -55,21 +55,29 @@ backends may be incomplete; only the class you register must be whole.
 
 ## What your backend implements
 
-Required: `caller_id`, `submit`, `find_by_key`, `get`, `list`. Optional:
+Required: `submit`, `find_by_key`, `get`, `list`. Optional:
 `update`, `cancel`, `logs`, `fetch` — one you do not write is one the model is
 never offered. The docstrings in `contract/src/job_contract/backend.py` say
 what each must do; the ones that matter most:
 
-- **`submit` with a key it has seen returns the same job.** Nothing tests this
-  (the shape tests never call your service); it is the one promise that only
-  you can keep, and breaking it is two jobs and two bills.
+- **`submit` with a key it has seen within the window returns that job, and
+  says so:** `Submitted(job_id, created=False)`; a job it starts is
+  `created=True`. Nothing tests this (the shape tests never call your
+  service); it is the one promise only you can keep, and breaking it is two
+  jobs and two bills.
+- **`submit` is given the item id; record it and return it as
+  `JobStatus.item_id`.** The shell uses it to tell the model which jobs came
+  from this item. It is a label, not a permission.
+- **Who may see or change a job is your credential's business.** `get` and
+  `list` answer with what the token may see — the whole queue, not this
+  item's slice; the model is told which are this item's. A token in the
+  item's environment variables is shared by everyone who can open the item; a
+  token in a person's Private layer is theirs alone. Items that must not see
+  each other's jobs need different tokens.
 - **`get` that cannot ask returns `phase="unknown"`**; `NotFound` is only for
   a job you are certain does not exist.
 - **`phase` is one of `running`, `done`, `unknown`.** Your own word for where a
   job is ("suspended", "failed: OOM") goes in `state`.
-- **`caller_id` is who the credential belongs to.** Two people sharing one
-  token are one caller: they see each other's jobs, and the same spec from
-  either is one job.
 
 Raise `Retryable` when calling again may work, `NeedsAction` when a person
 must act first — naming the variable in full (`set GPU_API_TOKEN`), which is
@@ -80,16 +88,17 @@ plain failure.
 
 | outcome | exit | the model hears |
 |---|---|---|
-| a call returns | 0 | the answer, and a `next` line: ask again later / finished, its `state` says how (and, if offered, `logs`, or `fetch` if it produced outputs) / read on from offset N |
+| a call returns | 0 | the answer, and a `next` line: ask again later / finished, its `state` says how (and, if offered, `logs`, or `fetch` if it produced outputs) / read on from offset N. Every job carries `from_this_item` |
+| `submit` finds the same work already there (within the window) | 0 | `created: false` — "this item already submitted the same work within the last 24 hours: this is that job, not a new one" |
 | `get` returns `phase="unknown"` | 2 | the backend could not say — not that the job is gone (a `cancel` that returns it succeeded: 0, "Cancel accepted." followed by the same words) |
 | a call overruns its budget | 2 | no answer within N s; calling again may work |
-| a submit overruns before it was sent (in `caller_id`) | 2 | most likely not sent; sending the same spec again is safe (same key) |
-| a submit overruns, and `find_by_key` finds it | 0 | submitted |
+| a submit overruns before it was sent (building your backend) | 2 | most likely not sent; sending the same spec again is safe (same key) |
+| a submit overruns, and `find_by_key` finds it | 0 | the job is there (`created: null` — the lookup cannot say whether this call started it) |
 | a submit overruns, and `find_by_key` finds nothing | 2 | not there; sending the same spec again is safe |
 | a submit overruns, and `find_by_key` cannot answer | 1 (3 if it raised `NeedsAction`) | unknown; call `list` before submitting again |
 | arguments outside the schema, or more than one argument | 2 | what is wrong; the backend is never called |
 | `fetch` to a path that is empty, absolute, through `..`, or out through a link | 2 | it must name a file inside the workspace |
-| your code raises anything else, or calls `sys.exit` | 1 | the backend failed, and with what |
+| your code raises anything else, or calls `sys.exit`, or `submit` returns a bare id instead of `Submitted` | 1 | the backend failed, and with what |
 
 Nothing announces when a job ends: the model is told to have the user ask
 again later.
