@@ -16,6 +16,7 @@ from job_contract.contract import (
     Idempotency,
     JobStatus,
     Phase,
+    Submitted,
 )
 
 __all__ = [
@@ -34,4 +35,5 @@ __all__ = [
     "NotFound",
     "Phase",
     "Retryable",
+    "Submitted",
 ]

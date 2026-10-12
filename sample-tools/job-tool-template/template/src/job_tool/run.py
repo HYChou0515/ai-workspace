@@ -23,7 +23,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from job_contract import JobBackend, JobError, JobStatus, NeedsAction, Retryable
+from job_contract import JobBackend, JobError, JobStatus, NeedsAction, Retryable, Submitted
 
 from job_tool.commands import LIST_PAGE, LOG_PAGE
 
@@ -75,6 +75,15 @@ def within[T](seconds: float, fn: Callable[[], T]) -> T:
 
 #: Set by the platform on every dispatch: the item this call runs for (D44).
 ITEM_ENV = "WORKSPACE_ITEM_ID"
+
+
+def describe_window(seconds: float) -> str:
+    """`window_seconds` as a person says it: "24 hours", "10 minutes", "90 seconds"."""
+    for size, unit in ((3600, "hour"), (60, "minute")):
+        if seconds >= size and seconds % size == 0:
+            count = int(seconds // size)
+            return f"{count} {unit}{'s' if count != 1 else ''}"
+    return f"{seconds:g} seconds"
 
 
 def this_item() -> str | None:
@@ -139,6 +148,14 @@ _SUBMITTED = (
     "Submitted; it runs on its own and nothing will announce when it ends. "
     "Tell the user to ask again later, and call get with this job_id then."
 )
+_ALREADY = (
+    "This item already submitted the same work within the last {window}: this is that "
+    "job, not a new one, and it may have finished. Call get to see where it is."
+)
+_LANDED = (
+    "The submit was slow to answer, but the job is there. It runs on its own; call get "
+    "with this job_id to see where it is."
+)
 
 
 def _submit(backend: type[JobBackend], spec: dict[str, Any]) -> Outcome:
@@ -150,13 +167,13 @@ def _submit(backend: type[JobBackend], spec: dict[str, Any]) -> Outcome:
     key = contract.idempotency.key(spec, item_id=item_id)
     calling: list[bool] = []  # set the moment `submit` itself is entered
 
-    def send() -> str:
+    def send() -> Submitted:
         instance = backend()
         calling.append(True)
         return instance.submit(spec, key, item_id)
 
     try:
-        job_id = within(contract.budget.submit, send)
+        result = within(contract.budget.submit, send)
     except TimedOut:
         if not calling:
             # Stuck building the backend, before `submit` was called, and the
@@ -191,8 +208,19 @@ def _submit(backend: type[JobBackend], spec: dict[str, Any]) -> Outcome:
                 "spec again is safe: it carries the same key, so a late arrival of the "
                 "first one is returned rather than started twice.",
             )
-        return Outcome(0, {"job_id": found.job_id, "next": _SUBMITTED})
-    return Outcome(0, {"job_id": job_id, "next": _SUBMITTED})
+        # Whether this call started it, the lookup cannot say: neither claim it.
+        return Outcome(0, {"job_id": found.job_id, "created": None, "next": _LANDED})
+    if not isinstance(result, Submitted):
+        # Guessing "new" would be exactly the false sentence D51 exists to stop.
+        raise TypeError(
+            f"submit must return Submitted(job_id, created), got {type(result).__name__}"
+        )
+    advice = (
+        _SUBMITTED
+        if result.created
+        else _ALREADY.format(window=describe_window(contract.idempotency.window_seconds))
+    )
+    return Outcome(0, {"job_id": result.job_id, "created": result.created, "next": advice})
 
 
 def _list(backend: type[JobBackend], args: dict[str, Any]) -> Outcome:

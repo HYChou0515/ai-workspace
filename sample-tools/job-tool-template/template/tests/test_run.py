@@ -9,7 +9,7 @@ import time
 import pytest
 from backends import Scripted, ScriptedFull
 
-from job_contract import JobError, JobStatus, NeedsAction, NotFound, Retryable
+from job_contract import JobError, JobStatus, NeedsAction, NotFound, Retryable, Submitted
 from job_tool.cli import main
 from job_tool.commands import LIST_PAGE, LOG_PAGE
 
@@ -136,7 +136,7 @@ SPEC_IN = {"image": "trainer:3", "command": "train.py"}
 
 
 def test_submit_sends_the_key_the_contract_derives_for_this_item(capsys):
-    Scripted.answers["submit"] = "j1"
+    Scripted.answers["submit"] = Submitted("j1", created=True)
 
     code, out, _ = _run(capsys, "submit", SPEC_IN)
 
@@ -149,10 +149,41 @@ def test_submit_sends_the_key_the_contract_derives_for_this_item(capsys):
     assert "get" in answer["next"] and "later" in answer["next"]
 
 
+def test_a_submit_that_found_the_job_already_there_says_so(capsys):
+    # D51: within the window the backend returns the job it already has; the
+    # model must not tell the user a new one was started.
+    Scripted.answers["submit"] = Submitted("j1", created=False)
+
+    code, out, _ = _run(capsys, "submit", SPEC_IN)
+
+    answer = json.loads(out)
+    assert code == 0
+    assert answer["job_id"] == "j1" and answer["created"] is False
+    assert "already" in answer["next"] and "not a new" in answer["next"]
+
+
+def test_a_submit_that_started_a_job_says_it_is_new(capsys):
+    Scripted.answers["submit"] = Submitted("j1", created=True)
+
+    _, out, _ = _run(capsys, "submit", SPEC_IN)
+
+    assert json.loads(out)["created"] is True
+
+
+def test_a_backend_that_answers_submit_with_a_bare_id_is_a_failure(capsys):
+    # Not guessing "new": a wrong guess is exactly the false sentence D51 stops.
+    Scripted.answers["submit"] = "j1"
+
+    code, out, err = _run(capsys, "submit", SPEC_IN)
+
+    assert (code, out) == (1, "")
+    assert "Submitted" in err
+
+
 def test_without_an_item_the_key_is_the_fields_alone(capsys, monkeypatch):
     # D47: the MCP runner sets no item. The tool still works.
     monkeypatch.delenv("WORKSPACE_ITEM_ID")
-    Scripted.answers["submit"] = "j1"
+    Scripted.answers["submit"] = Submitted("j1", created=True)
 
     code, _, _ = _run(capsys, "submit", SPEC_IN)
 
@@ -188,7 +219,7 @@ def test_get_says_whether_the_job_came_from_this_item(capsys):
 
 
 def test_a_slow_submit_that_landed_is_reported_as_submitted(capsys):
-    Scripted.answers["submit"] = "j1"
+    Scripted.answers["submit"] = Submitted("j1", created=True)
     Scripted.delay["submit"] = 30.0  # budget is 0.2
     Scripted.answers["find_by_key"] = JobStatus(job_id="j1", phase="running", state="queued")
 
@@ -202,7 +233,7 @@ def test_a_slow_submit_that_landed_is_reported_as_submitted(capsys):
 
 
 def test_a_slow_submit_that_did_not_land_may_be_sent_again(capsys):
-    Scripted.answers["submit"] = "j1"
+    Scripted.answers["submit"] = Submitted("j1", created=True)
     Scripted.delay["submit"] = 30.0
     Scripted.answers["find_by_key"] = None
 
@@ -228,7 +259,7 @@ def test_a_slow_submit_that_did_not_land_may_be_sent_again(capsys):
     ids=["lookup-times-out", "lookup-fails", "lookup-retryable", "lookup-exits"],
 )
 def test_a_slow_submit_nobody_can_confirm_is_unknown_and_must_be_checked_first(capsys, lookup):
-    Scripted.answers["submit"] = "j1"
+    Scripted.answers["submit"] = Submitted("j1", created=True)
     Scripted.delay["submit"] = 30.0
     Scripted.answers["find_by_key"] = lookup.get("answer")
     Scripted.delay["find_by_key"] = lookup.get("delay", 0)
@@ -244,7 +275,7 @@ def test_a_slow_submit_nobody_can_confirm_is_unknown_and_must_be_checked_first(c
 def test_a_lookup_that_needs_a_person_still_says_so(capsys):
     # The outcome is unknown either way, but exit 3 is what lets the platform
     # offer the person a way to fix it; flattening it to 1 loses that.
-    Scripted.answers["submit"] = "j1"
+    Scripted.answers["submit"] = Submitted("j1", created=True)
     Scripted.delay["submit"] = 30.0
     Scripted.answers["find_by_key"] = NeedsAction("set GPU_API_TOKEN")
 

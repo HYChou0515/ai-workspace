@@ -33,6 +33,7 @@ from job_contract import (
     NeedsAction,
     NotFound,
     Retryable,
+    Submitted,
 )
 
 #: Where the jobs live, inside the workspace (the working directory).
@@ -125,32 +126,40 @@ class DemoBackend(JobBackend):
 
     # ── required ────────────────────────────────────────────────────────────
 
-    def submit(self, spec: dict[str, Any], key: str, item_id: str | None) -> str:
+    def submit(self, spec: dict[str, Any], key: str, item_id: str | None) -> Submitted:
         existing = self.find_by_key(key)
         if existing is not None:
-            return existing.job_id
-        caller = self._credential()
+            return Submitted(existing.job_id, created=False)
+        caller, now = self._credential(), time.time()
         record = {
-            # Unique per credential too: the key no longer says who sent it, and
-            # two credentials sending the same work from one item are two jobs.
-            "job_id": hashlib.sha256(f"{caller}\0{key}".encode()).hexdigest()[:12],
+            # Unique per credential and per submission: the key no longer says
+            # who sent it, and after the window the same key is a new job.
+            "job_id": hashlib.sha256(f"{caller}\0{key}\0{now}".encode()).hexdigest()[:12],
             "key": key,
             "item_id": item_id,
             "caller": caller,
             "spec": spec,
             "seconds": spec["seconds"],
-            "submitted_at": time.time(),
+            "submitted_at": now,
             "cancelled": False,
         }
         self._save(record)
-        return record["job_id"]
+        return Submitted(record["job_id"], created=True)
 
     def find_by_key(self, key: str) -> JobStatus | None:
+        """The newest job under `key` still inside the window (D50)."""
         caller = self._credential()
-        for record in self._records():
-            if record["key"] == key and record["caller"] == caller:
-                return self._status(record)
-        return None
+        since = time.time() - self.contract.idempotency.window_seconds
+        recent = [
+            record
+            for record in self._records()
+            if record["key"] == key
+            and record["caller"] == caller
+            and record["submitted_at"] > since
+        ]
+        if not recent:
+            return None
+        return self._status(max(recent, key=lambda record: record["submitted_at"]))
 
     def get(self, job_id: str) -> JobStatus:
         return self._status(self._mine(job_id))

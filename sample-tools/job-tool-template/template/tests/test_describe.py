@@ -28,6 +28,18 @@ def test_submit_carries_the_authors_words_and_the_contracts_rules():
     assert "ask" in text and "later" in text
 
 
+def test_how_long_sameness_lasts_is_said_from_the_contract():
+    # D50: the window the backend honours is the one the model is told.
+    assert "24 hours" in describe("submit", Described)
+
+    class Brief(Minimal):
+        contract = Contract(
+            spec_schema=SPEC, idempotency=Idempotency(fields=("image",), window_seconds=90)
+        )
+
+    assert "90 seconds" in describe("submit", Brief)
+
+
 def test_sameness_is_described_per_item_and_the_queue_as_the_whole_queue():
     # D41/D42, said where the model decides: the same work from this item is
     # one job; list shows every job the credential can see, marked by origin.

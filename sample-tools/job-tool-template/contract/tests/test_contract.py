@@ -13,6 +13,7 @@ from job_contract import (
     REQUIRED,
     JobBackend,
     JobStatus,
+    Submitted,
 )
 
 
@@ -78,6 +79,24 @@ def test_an_overridden_sameness_must_come_with_an_example_to_check_it_on():
         idempotency=Lenient(fields=("image", "command")),
         example_spec={"image": "trainer:3", "command": "train.py"},
     )
+
+
+def test_sameness_lasts_a_day_unless_declared_otherwise():
+    # D50: long enough to stop every retry after a lost answer, short enough
+    # that the same work can be run again tomorrow without a field to change.
+    assert Idempotency(fields=("image",)).window_seconds == 86400
+    assert Idempotency(fields=("image",), window_seconds=600).window_seconds == 600
+
+
+@pytest.mark.parametrize("seconds", [0, -1, True, "1h"])
+def test_a_window_that_is_not_a_positive_number_of_seconds_is_refused(seconds):
+    with pytest.raises(ContractError, match="window_seconds"):
+        Idempotency(fields=("image",), window_seconds=seconds)  # type: ignore[arg-type]
+
+
+def test_a_submit_says_whether_it_started_a_job():
+    # D51: only the backend knows; the shell must not call an old job new.
+    assert Submitted(job_id="j1", created=False).created is False
 
 
 def test_sameness_is_per_item_not_per_person():

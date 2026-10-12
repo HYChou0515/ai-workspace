@@ -13,7 +13,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Any, ClassVar
 
-from job_contract.contract import Contract, ContractError, JobStatus
+from job_contract.contract import Contract, ContractError, JobStatus, Submitted
 
 #: The calls every backend has.
 REQUIRED = ("submit", "find_by_key", "get", "list")
@@ -111,13 +111,16 @@ class JobBackend(ABC):
     # ── required ────────────────────────────────────────────────────────────
 
     @abstractmethod
-    def submit(self, spec: dict[str, Any], key: str, item_id: str | None) -> str:
-        """Send the job and return its id, without waiting for it to run.
+    def submit(self, spec: dict[str, Any], key: str, item_id: str | None) -> Submitted:
+        """Send the job without waiting for it to run; say which job it is and
+        whether this call started it (`Submitted.created`).
 
         `key` is derived by the shell from `contract.idempotency` and the item.
-        Sending the same key again MUST return the same id and MUST NOT start a
-        second job: an answer can be lost after the job was accepted, and
-        whoever sends it again — the model, or a person — cannot tell.
+        Sending the same key again within `contract.idempotency.window_seconds`
+        of the first MUST return that job with `created=False` and MUST NOT
+        start a second one: an answer can be lost after the job was accepted,
+        and whoever sends it again — the model, or a person — cannot tell.
+        After the window, the same key starts a new job.
 
         `item_id` is the item it is sent from (None outside the platform).
         Record it and report it back as `JobStatus.item_id`; it is a label for
@@ -126,8 +129,9 @@ class JobBackend(ABC):
 
     @abstractmethod
     def find_by_key(self, key: str) -> JobStatus | None:
-        """The job submitted under `key`, or None if none was. After a submit
-        that ran out of time, this is how the shell learns whether it landed."""
+        """The job submitted under `key` within the window, or None if none was.
+        After a submit that ran out of time, this is how the shell learns
+        whether it landed."""
 
     @abstractmethod
     def get(self, job_id: str) -> JobStatus:

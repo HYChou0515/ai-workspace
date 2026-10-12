@@ -11,14 +11,17 @@ from __future__ import annotations
 
 from job_contract import JobBackend
 
+from job_tool.run import describe_window
+
 
 def _submit(backend: type[JobBackend]) -> str:
     rule = backend.contract.idempotency
     return (
         "Submit a job. Returns at once with its job_id; the job then runs on its own and "
         "nothing announces when it ends, so tell the user to ask about it later. "
-        f"If this item already submitted the same {', '.join(rule.fields)}, this returns "
-        "that job instead of starting another."
+        f"If this item already submitted the same {', '.join(rule.fields)} within the last "
+        f"{describe_window(rule.window_seconds)}, this returns that job instead of starting "
+        "another; after that, the same work starts a new job."
     )
 
 

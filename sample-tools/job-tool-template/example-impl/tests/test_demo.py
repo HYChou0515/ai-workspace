@@ -6,6 +6,8 @@ runs, not to prescribe how yours should be tested.
 
 from __future__ import annotations
 
+import time
+
 import pytest
 
 from example_jobs.backend import DemoBackend
@@ -26,9 +28,36 @@ def _key(spec, item=ITEM):
     return DemoBackend.contract.idempotency.key(spec, item_id=item)
 
 
-def _send(backend, spec, item=ITEM):
+def _submit(backend, spec, item=ITEM):
     """What the shell does: key by item, then submit with the item."""
     return backend.submit(spec, _key(spec, item), item)
+
+
+def _send(backend, spec, item=ITEM):
+    return _submit(backend, spec, item).job_id
+
+
+def test_within_the_window_the_same_work_is_the_job_already_there(backend):
+    spec = {"task": "train", "seconds": 600}
+
+    first, again = _submit(backend, spec), _submit(backend, spec)
+
+    assert first.created is True and again.created is False
+    assert first.job_id == again.job_id
+
+
+def test_after_the_window_the_same_work_is_a_new_job(backend, monkeypatch):
+    # D50: a day later, the same work runs again instead of answering with the
+    # day-old job.
+    spec = {"task": "train", "seconds": 600}
+    first = _submit(backend, spec)
+
+    later = time.time() + DemoBackend.contract.idempotency.window_seconds + 1
+    monkeypatch.setattr("example_jobs.backend.time.time", lambda: later)
+
+    again = _submit(backend, spec)
+    assert again.created is True and again.job_id != first.job_id
+    assert backend.find_by_key(_key(spec)).job_id == again.job_id
 
 
 def test_the_item_a_job_came_from_is_recorded_and_reported(backend):

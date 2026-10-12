@@ -11,7 +11,7 @@ import subprocess
 import time
 from concurrent.futures import ThreadPoolExecutor
 
-from job_contract import Budget, Contract, Idempotency, JobBackend, JobStatus
+from job_contract import Budget, Contract, Idempotency, JobBackend, JobStatus, Submitted
 
 SPEC = {
     "type": "object",
@@ -30,7 +30,7 @@ class Minimal(JobBackend):
     contract = Contract(spec_schema=SPEC, idempotency=Idempotency(fields=("image", "command")))
 
     def submit(self, spec, key, item_id):
-        return "j1"
+        return Submitted("j1", created=True)
 
     def find_by_key(self, key):
         return None
@@ -48,7 +48,7 @@ class NoGet(JobBackend):
     contract = Minimal.contract
 
     def submit(self, spec, key, item_id):
-        return "j1"
+        return Submitted("j1", created=True)
 
     def find_by_key(self, key):
         return None
@@ -78,7 +78,7 @@ class Shelling(Minimal):
 
     def submit(self, spec, key, item_id):
         subprocess.run(["echo", "CHILD-OUTPUT"], check=True)
-        return "j1"
+        return Submitted("j1", created=True)
 
 
 class Lingering(Minimal):

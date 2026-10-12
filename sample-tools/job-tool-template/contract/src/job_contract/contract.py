@@ -96,6 +96,16 @@ class Budget:
 
 
 @dataclass(frozen=True)
+class Submitted:
+    """What `submit` answers (D51): the job, and whether this call started it.
+    Only the backend knows the second part, and the shell must tell the model
+    which — announcing a day-old, finished job as "submitted" would be false."""
+
+    job_id: str
+    created: bool
+
+
+@dataclass(frozen=True)
 class Idempotency:
     """What makes two submits the same job.
 
@@ -106,6 +116,17 @@ class Idempotency:
     fields: tuple[str, ...]
     """The spec fields that decide sameness. A field left out (a free-text
     note, say) never makes a resubmit look like a new job."""
+
+    window_seconds: float = 86400
+    """How long the same work stays the same job (D50). Within it, sending the
+    same key returns the job already there; after it, the same work starts a
+    new one. A day stops every retry after a lost answer — those come within
+    minutes — and still lets the same work be run again tomorrow."""
+
+    def __post_init__(self) -> None:
+        seconds = self.window_seconds
+        if not isinstance(seconds, int | float) or isinstance(seconds, bool) or seconds <= 0:
+            raise ContractError(f"window_seconds={seconds!r}: must be a positive number of seconds")
 
     def identity(self, spec: dict[str, Any]) -> Any:
         """What two submits must share to be the same job. By default the

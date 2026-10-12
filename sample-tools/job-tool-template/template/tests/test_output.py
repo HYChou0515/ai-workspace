@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 from backends import Scripted
 
-from job_contract import JobStatus
+from job_contract import JobStatus, Submitted
 from job_tool.cli import main
 
 TESTS = Path(__file__).resolve().parent
@@ -170,7 +170,7 @@ def test_a_whole_number_written_with_a_point_is_the_same_whole_number(capsys):
     # JSON Schema counts 5.0 as an integer, so it passes validation; left a
     # float, it gives the same spec a different key (two jobs, two bills) and
     # breaks a backend that slices or ranges with it.
-    Scripted.answers["submit"] = "j1"
+    Scripted.answers["submit"] = Submitted("j1", created=True)
     spec = {"image": "trainer:3", "command": "train.py", "gpus": 2.0, "lr": 0.5}
 
     assert main(["submit", json.dumps(spec)], backend=Scripted) == 0
