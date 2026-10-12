@@ -16,8 +16,12 @@ class Noisy(SteadyOverride):
     """Steady sameness, noisy import."""
 
 
+# Built apart from the raise, so the traceback's source line does not carry it:
+# a test that finds it has found the exception message, not the code.
+_REASON = "set " + "ACME" + "_TOKEN before importing the backend " + "x" * 5000
+
 if os.environ.get("PROBE_BREAK_IMPORT"):
-    raise RuntimeError("set ACME_TOKEN before importing the backend " + "x" * 5000)
+    raise RuntimeError(_REASON)
 
 if os.environ.get("PROBE_SILENT_EXIT"):
     os._exit(0)  # leaves without a word — and with success

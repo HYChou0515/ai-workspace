@@ -112,8 +112,11 @@ def identity_drift_across_processes(backend_ref: str, extra_path: Sequence[str] 
     try:
         answers = {_probe(backend_ref, seed, path) for seed in _SEEDS}
     except subprocess.CalledProcessError as exc:
-        reason = " / ".join((exc.stderr or "").strip().splitlines()[-3:])
-        if len(reason) > _REASON_CHARS:  # an exception says what is wrong first
+        # A traceback ends with the exception's message; the frames above it
+        # are paths, and a long one would crowd the message out of the cut.
+        lines = (exc.stderr or "").strip().splitlines()
+        reason = lines[-1] if lines else f"exit status {exc.returncode}"
+        if len(reason) > _REASON_CHARS:
             reason = reason[:_REASON_CHARS] + "…"
         return [f"could not run identity() in a separate process: {reason}"]
     except _NoAnswer:

@@ -70,9 +70,13 @@ def test_a_probe_that_cannot_load_the_backend_says_why(monkeypatch):
 
     problems = identity_drift_across_processes("probe_backends:Noisy", extra_path=[TESTS])
 
-    assert any("ACME_TOKEN" in p for p in problems)
+    (problem,) = problems
+    # The exception's own message — not the traceback frames that precede it,
+    # which a long path would let crowd the message out.
+    assert "RuntimeError: set ACME_TOKEN" in problem
+    assert "probe_backends.py" not in problem
     # The reason, not a 5000-character wall of it.
-    assert all(len(p) < 600 for p in problems)
+    assert len(problem) < 600
 
 
 def test_a_banner_left_without_a_newline_does_not_swallow_the_answer(monkeypatch):
