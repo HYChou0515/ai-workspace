@@ -149,8 +149,11 @@ def load_with_provenance(
     # a JSON Merge Patch over the merged defaults, so it wins over both layers
     # and `null` can hide even a bundled preset (M12). Applied BEFORE
     # validation, so an Apply is refused by exactly what refuses a boot (M8).
+    # Taken LITERALLY — never `${VAR}`-expanded: the page's text expanded from
+    # the server's environment handed any variable back to whoever typed its
+    # name (a DSN, a provider key) in a refusal or a test call (final review).
     if overlay:
-        merged = apply_merge_patch(merged, _walk_strings(overlay, lambda s: expand_env(s, e)))
+        merged = apply_merge_patch(merged, overlay)
     # 4c — the page's write-only keys, by parts: each lands only where the
     # setting's OWNER exists after the merge (a preset, a role reference); the
     # level that holds the value (`llm`, `env`) may be created. A key whose

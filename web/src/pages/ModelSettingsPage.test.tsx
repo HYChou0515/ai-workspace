@@ -74,7 +74,7 @@ function fakeClient(page: Partial<PageData> = {}) {
       return [];
     }),
     check: vi.fn(async (_patch: Record<string, unknown>) => [] as string[]),
-    apply: vi.fn(async () => {
+    apply: vi.fn(async (_seen?: Record<string, unknown>) => {
       data = { ...data, published: data.draft, version: "abcdef1234567890" };
       return applied("abcdef1234567890", data.draft);
     }),
@@ -161,7 +161,8 @@ describe("ModelSettingsPage", () => {
     expect(client.apply).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "套用" }));
 
-    await waitFor(() => expect(client.apply).toHaveBeenCalled());
+    // the draft the dialog listed goes with it, so the server can refuse another
+    await waitFor(() => expect(client.apply).toHaveBeenCalledWith(KB_2));
     expect(await screen.findByTestId("model-settings-notice")).toHaveTextContent("abcdef12");
   });
 
@@ -462,7 +463,7 @@ describe("ModelSettingsPage", () => {
     fireEvent.click(screen.getByRole("tab", { name: "版本紀錄" }));
 
     const why = await screen.findByTestId("model-settings-rollback-why");
-    expect(why).toHaveTextContent("先還原");
+    expect(why).toHaveTextContent("放棄改動");
     expect(why).toHaveTextContent("存起來也會被換掉");
   });
 
@@ -529,6 +530,48 @@ describe("ModelSettingsPage", () => {
     fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "清除" }));
 
     expect(await screen.findByTestId("model-settings-key-refused")).toHaveTextContent("clearing the key failed");
+  });
+
+  it("discards unsaved edits with one button, also after a tab switch", async () => {
+    // final review (ux): the messages said "undo", but the editor's undo history
+    // is gone once a tab switch unmounts it — NN/g heuristic #3, user control.
+    renderWithQuery(<ModelSettingsPage client={fakeClient({ draft: KB_2 })} />);
+    await waitFor(() => expect(JSON.parse(editor().value)).toEqual(KB_2));
+    type('{"config": {"llm": {"base_url": "http://mine"}}}');
+    fireEvent.click(screen.getByRole("tab", { name: "版本紀錄" }));
+    fireEvent.click(screen.getByRole("tab", { name: "編輯（未儲存）" }));
+
+    fireEvent.click(screen.getByTestId("model-settings-discard"));
+
+    expect(JSON.parse(editor().value)).toEqual(KB_2);
+    expect(screen.getByRole("tab", { name: "編輯" })).toBeInTheDocument();
+  });
+
+  it("shows what each version changed from the one before it", async () => {
+    // final review (ux): M5 promises each version's diff from the previous one;
+    // the rows showed only hashes.
+    const v1 = { ...applied("v1v1v1v1v1", KB_2, 1), previous: null };
+    const later = { config: { agents: { presets: { "kb-default": { model: "openai/kb-3" } } } } };
+    const v2 = { ...applied("v2v2v2v2v2", later, 2), previous: "v1v1v1v1v1" };
+    const client = fakeClient({ published: later, version: "v2v2v2v2v2" });
+    client.history.mockResolvedValue([v2, v1]);
+    renderWithQuery(<ModelSettingsPage client={client} />);
+    fireEvent.click(await screen.findByRole("tab", { name: "版本紀錄" }));
+
+    const first = await screen.findByTestId("model-settings-version-changes-0");
+    expect(first).toHaveTextContent("openai/kb-2 → openai/kb-3");
+    expect(screen.getByTestId("model-settings-version-changes-1")).toHaveTextContent(
+      "ollama_chat/qwen3:14b → openai/kb-2",
+    );
+  });
+
+  it("keeps the path format in helper text, not only in the placeholder", async () => {
+    renderWithQuery(<ModelSettingsPage client={fakeClient()} />);
+    fireEvent.click(await screen.findByRole("tab", { name: "API 金鑰" }));
+
+    const field = screen.getByLabelText("設定路徑");
+    expect(field).not.toHaveAttribute("placeholder");
+    expect(field).toHaveAccessibleDescription(/config\.agents\.presets\.openai-mini\.llm\.api_key/);
   });
 
   it("lists a refused Apply's reasons", async () => {

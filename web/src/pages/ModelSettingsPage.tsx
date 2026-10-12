@@ -129,10 +129,10 @@ const KIND = {
   changed: "modelSettings.changed",
 } as const;
 
-function ChangeList({ changes }: { changes: Change[] }) {
+function ChangeList({ changes, testId = "model-settings-diff" }: { changes: Change[]; testId?: string }) {
   const t = useT();
   return (
-    <ul data-testid="model-settings-diff" style={{ ...MONO, margin: 0, paddingLeft: 18 }}>
+    <ul data-testid={testId} style={{ ...MONO, margin: 0, paddingLeft: 18 }}>
       {changes.map((c) => (
         <li key={c.path}>
           <strong>{t(KIND[c.kind])}</strong> {c.path}
@@ -231,7 +231,8 @@ function useDraft(client: Client, data: PageData) {
   });
   const apply = useMutation({
     meta: { silentError: true },
-    mutationFn: () => client.apply(),
+    // The draft the dialog listed goes with it: the server refuses another.
+    mutationFn: () => client.apply(draft),
     onSuccess: (applied: Applied) => {
       setRefused([]);
       setNotice(t("modelSettings.applied", { version: short(applied.version) }));
@@ -291,6 +292,9 @@ function useDraft(client: Client, data: PageData) {
     setRefused([]);
     setSaveError("");
   };
+  // NN/g heuristic #3 (user control): one button gives the saved draft back —
+  // the editor's own undo is gone once a tab switch unmounts it (final review).
+  const discard = () => edit(saved);
   // "Applied: version X" describes the last Apply; a key change or a rollback
   // since makes it stale beside an Apply with work waiting (review r3).
   const clearNotice = () => setNotice("");
@@ -317,6 +321,7 @@ function useDraft(client: Client, data: PageData) {
     blocked,
     askToApply,
     clearNotice,
+    discard,
   };
 }
 
@@ -524,6 +529,16 @@ function EditTab({
             onClick={() => patch && draft.save.mutate(patch)}
           >
             {t("modelSettings.save")}
+          </button>
+          <button
+            type="button"
+            className="btn"
+            data-variant="secondary"
+            data-testid="model-settings-discard"
+            disabled={!draft.dirty}
+            onClick={draft.discard}
+          >
+            {t("modelSettings.discard")}
           </button>
           {/* The status line above already says "nothing to apply" / "problems";
               the reason beside the button is for what it does not say. */}
@@ -790,6 +805,12 @@ function HistoryTab({
                     </span>
                   )}
                 </div>
+                <VersionChanges
+                  defaults={defaults}
+                  entry={entry}
+                  before={history.data.slice(i + 1).find((e) => e.version === entry.previous)}
+                  testId={`model-settings-version-changes-${i}`}
+                />
                 {entry.keys_changed.length > 0 && (
                   <span style={{ ...MUTED, overflowWrap: "anywhere" }}>
                     {t("modelSettings.keysChanged", { paths: entry.keys_changed.join(", ") })}
@@ -815,6 +836,37 @@ function HistoryTab({
       </ol>
     </div>
   );
+}
+
+/** What a version changed from the one before it (M5): what RUNS before and
+ * after, by `diffEffective`. The first version is compared with the deploy
+ * defaults; one whose predecessor is beyond the history page says so. */
+function VersionChanges({
+  defaults,
+  entry,
+  before,
+  testId,
+}: {
+  defaults: SettingsDocument;
+  entry: Applied;
+  before: Applied | undefined;
+  testId: string;
+}) {
+  const t = useT();
+  if (entry.previous !== null && before === undefined)
+    return (
+      <span data-testid={testId} style={MUTED}>
+        {t("modelSettings.versionChangesUnknown")}
+      </span>
+    );
+  const changes = diffEffective((defaults ?? {}) as Patch, before?.patch ?? {}, entry.patch);
+  if (changes.length === 0)
+    return (
+      <span data-testid={testId} style={MUTED}>
+        {t("modelSettings.versionChangesNone")}
+      </span>
+    );
+  return <ChangeList changes={changes} testId={testId} />;
 }
 
 function KeysTab({
@@ -935,7 +987,7 @@ function KeysTab({
           <input
             className="input"
             data-testid="model-settings-key-path"
-            placeholder={t("modelSettings.keyPath")}
+            aria-describedby="model-settings-key-path-help"
             value={path}
             onChange={(e) => setPath(e.target.value)}
             autoComplete="off"
@@ -972,6 +1024,9 @@ function KeysTab({
           {t("modelSettings.keySet")}
         </button>
       </div>
+      <p id="model-settings-key-path-help" style={{ ...MUTED, margin: 0, overflowWrap: "anywhere" }}>
+        {t("modelSettings.keyPath")}
+      </p>
       {(!path.trim() || !value) && (
         <p data-testid="model-settings-key-why" style={{ ...MUTED, margin: 0 }}>
           {t("modelSettings.keyNeedBoth")}

@@ -102,10 +102,10 @@ Worker 路徑(`python -m workspace_app.worker <jobtype>`)重用 `load_with_prove
 ## 關鍵不變式與眉角
 
 !!! warning "Secret 紀律與遮罩"
-    **永遠不要讀 `configs/config.yaml`(活的 secret)** —— 只讀 `config.example.yaml` 與 `config/schema.py`。dump 在 stdout 上遮罩 `api_key`/`pg_dsn`/`*_token`/`rabbitmq.url`;`base_url` 刻意**不**遮罩(operator 想看打去哪)。真值只寫進 `config.resolved.yaml`(0600)。
+    **永遠不要讀 `configs/config.yaml`(活的 secret)** —— 只讀 `config.example.yaml` 與 `config/schema.py`。dump 在 stdout 上遮罩 `api_key`/`pg_dsn`/`*_token`(大小寫不拘)/`rabbitmq.url`,以及每個 preset 的 `env` 值;`base_url` 刻意**不**遮罩(operator 想看打去哪)。判斷規則是 `config/dump.py:is_secret`,模型設定頁也用同一條(`plan-model-settings.md` M7)。真值只寫進 `config.resolved.yaml`(0600)。
 
 !!! warning "`${VAR}` 是唯一的環境覆蓋機制"
-    沒有 per-field 1:1 的 env 查找。未設定的引用在 load 時丟 `EnvVarUnset`(fail-loud),絕不靜默變空字串(一個 typo 例如 `${OPENAPI_KEY}` 不會悄悄關掉認證)。`$$`→字面 `$`;`FOO=""`(設了但空)會代入空字串且**不**報錯。
+    只在 `config.yaml` 裡展開:superuser「模型設定」頁的文字照字面使用,寫 `${…}` 會被拒絕(否則能把伺服器的任何環境變數讀回來)。沒有 per-field 1:1 的 env 查找。未設定的引用在 load 時丟 `EnvVarUnset`(fail-loud),絕不靜默變空字串(一個 typo 例如 `${OPENAPI_KEY}` 不會悄悄關掉認證)。`$$`→字面 `$`;`FOO=""`(設了但空)會代入空字串且**不**報錯。
 
 !!! note "Provenance 答的是『我設了什麼』"
     Provenance 由**插值前的原始 YAML** 推導(operator 實際寫了哪些 leaf),與寫的值是否剛好等於 default 無關。
@@ -165,7 +165,8 @@ Worker 路徑(`python -m workspace_app.worker <jobtype>`)重用 `load_with_prove
 - `src/workspace_app/config/schema.py` —— `Settings`、`ServerSettings`(`default_user`/`superusers`/`run_consumers`)。
 - `src/workspace_app/config/catalog_build.py` —— `build_catalog`、`resolve_usage`、`_validate_kb_search_granted`、`_KB_REQUIRED_PURPOSES`。
 - `src/workspace_app/factories.py` —— `get_spec`、`_backend_for`、`_with_connect_timeout`、`get_sandbox`、`get_filestore`、`get_runner`、`resolve_llm_chain`、`LlmEndpoint`、`_llm_from_chain`/`_vlm_from_chain`。
-- `src/workspace_app/config/dump.py` —— `emit_config_dump`、`render`、`_is_secret`、`_mask`。
+- `src/workspace_app/config/dump.py` —— `emit_config_dump`、`render`、`is_secret`、`_mask`。
+- `src/workspace_app/model_settings/` —— superuser 模型設定頁(`plan-model-settings.md`):`store`(草稿、版本、目前指標、暫存與生效的金鑰)、`effective`(預設 ⊕ 已發布的 patch,以及套用前的檢查)、`live`(每個行程一個 `LiveSettings`,背景執行緒每秒讀一次版本)、`consumers`、`page`;loader 的 `overlay` / `keys` 參數。
 - `src/workspace_app/observability/boot.py`、`setup.py`、`logger.py`、`record.py`、`writer.py`。
 - `src/workspace_app/api/app.py` —— `create_app` 精簡組裝根（#54):組 deep module → `register_*_routes` 掛 route → `build_lifespan` → mount SPA;route handler 不再住這裡。
 - `src/workspace_app/api/lifecycle.py` —— `build_lifespan`:FastAPI lifespan、`run_consumers` 消費 gate（`start_consuming`）、`seed help collection` boot_step（#230,store + enqueue index）、背景 sweeper（pod-local 或純 producer,#804）。

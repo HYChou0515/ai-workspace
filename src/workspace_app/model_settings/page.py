@@ -110,6 +110,22 @@ def _strip_optional(kind: Any) -> Any:
     return args[0] if is_union and len(args) == 1 else kind
 
 
+def key_lands(settings: Settings, path: str, value: str) -> bool:
+    """Whether a key at `path` reached `settings` — its preset or role exists.
+    The loader drops a key whose owner is not there (a hidden preset, a role
+    turned off); at the moment a key is SET that is a typo, and a key that
+    does nothing must not be taken in silence (final review)."""
+    node: Any = settings
+    for part in key_segments(path)[1:]:
+        if dataclasses.is_dataclass(node) and not isinstance(node, type):
+            node = getattr(node, part, None)
+        elif isinstance(node, dict):
+            node = node.get(part)
+        else:
+            return False
+    return node == value
+
+
 def key_path_problem(path: str) -> str | None:
     """Why `path` cannot hold a key, or None. A key is a secret (M7's rule)
     inside the part of config the page edits (M18), at a text setting."""

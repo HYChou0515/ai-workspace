@@ -258,3 +258,43 @@ def test_a_rollback_to_before_a_preset_existed_is_not_blocked_by_its_key(page):
     response = page.client.post(f"{BASE}/rollback", json={"version": before["version"]})
 
     assert response.status_code == 200, response.json()
+
+
+def test_a_key_for_a_preset_that_is_not_there_is_refused(page):
+    # final review: a typo (`qwen3-locla`) was accepted, listed as set, applied —
+    # and used by nothing, with no surface saying so.
+    response = page.client.put(
+        f"{BASE}/keys",
+        json={"path": "config.agents.presets.qwen3-locla.llm.api_key", "value": "sk-typo-0000"},
+    )
+
+    assert response.status_code == 422
+    assert any("qwen3-locla" in p for p in response.json()["detail"]["problems"])
+    assert page.client.get(BASE).json()["keys"] == {}
+
+
+def test_a_key_for_a_preset_the_saved_draft_adds_is_taken(page):
+    zz = {"config": {"agents": {"presets": {"zz": {"model": "openai/zz-1"}}}}}
+    page.client.put(f"{BASE}/draft", json={"patch": zz})
+
+    response = page.client.put(
+        f"{BASE}/keys", json={"path": "config.agents.presets.zz.llm.api_key", "value": "sk-zz"}
+    )
+
+    assert response.status_code == 204
+
+
+def test_apply_refuses_a_draft_other_than_the_one_its_confirmation_listed(page):
+    # final review: Apply took no body and published whatever was stored — a
+    # draft another superuser saved after the dialog opened went live under the
+    # name of someone who never saw it.
+    page.client.put(f"{BASE}/draft", json={"patch": KB_2})
+    seen = page.client.get(BASE).json()["draft"]
+    theirs = {"config": {"agents": {"presets": {"kb-default": {"model": "openai/theirs"}}}}}
+    page.client.put(f"{BASE}/draft", json={"patch": theirs})
+
+    response = page.client.post(f"{BASE}/apply", json={"draft": seen})
+
+    assert response.status_code == 409
+    assert page.client.get(BASE).json()["version"] is None
+    assert page.client.post(f"{BASE}/apply", json={"draft": theirs}).status_code == 200

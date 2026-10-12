@@ -30,7 +30,12 @@ from ..model_settings.effective import (
     secrets_written,
 )
 from ..model_settings.live import LiveSettings
-from ..model_settings.page import defaults_document, key_path_problem, try_connection
+from ..model_settings.page import (
+    defaults_document,
+    key_lands,
+    key_path_problem,
+    try_connection,
+)
 from ..model_settings.store import Applied, SettingsStore
 
 
@@ -63,6 +68,12 @@ class _PageOut(BaseModel):
     keys: dict[str, str] = {}
     #: Keys set or cleared since the last Apply — what the next Apply switches (M20).
     pending_keys: list[str] = []
+
+
+class _Apply(BaseModel):
+    #: The draft the confirmation listed. When given, Apply refuses (409) if the
+    #: stored draft is another — someone saved since the dialog opened.
+    draft: dict[str, Any] | None = None
 
 
 class _Rollback(BaseModel):
@@ -161,11 +172,21 @@ def register_model_settings_routes(
         return _Problems(problems=await asyncio.to_thread(_problems, body.patch))
 
     @app.post("/admin/model-settings/apply")
-    async def apply() -> _AppliedOut:
+    async def apply(body: _Apply | None = None) -> _AppliedOut:
         me = _require_superuser()
 
         def publish() -> Applied:
             draft = store.draft()
+            if body is not None and body.draft is not None and body.draft != draft:
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "problems": [
+                            "the draft changed since this page read it — someone saved "
+                            "another; reload to see it before applying"
+                        ]
+                    },
+                )
             found = _problems(draft)
             if found:
                 raise HTTPException(status_code=422, detail={"problems": found})
@@ -203,6 +224,27 @@ def register_model_settings_routes(
     async def set_key(body: _Key) -> None:
         me = _require_superuser()
         problem = key_path_problem(body.path)
+        if problem is not None:
+            raise HTTPException(status_code=422, detail={"problems": [problem]})
+
+        def owner_problem() -> str | None:
+            # A key whose preset or role the saved draft does not have would be
+            # accepted, listed, applied and used by nothing (final review).
+            keys = {**store.key_values(), body.path: body.value}
+            try:
+                settings = effective_settings(
+                    store.draft(), config_path=config_path, env=env, keys=keys
+                )
+            except (ValueError, TypeError, KeyError, AttributeError):
+                return f"{body.path}: the saved draft does not load — fix it on the Edit tab first"
+            if key_lands(settings, body.path, body.value):
+                return None
+            return (
+                f"{body.path}: no preset or role there in the saved draft — the key "
+                "would do nothing (a typo?)"
+            )
+
+        problem = await asyncio.to_thread(owner_problem)
         if problem is not None:
             raise HTTPException(status_code=422, detail={"problems": [problem]})
         await asyncio.to_thread(store.set_key, body.path, body.value, by=me)

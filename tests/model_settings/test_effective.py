@@ -336,3 +336,32 @@ def test_a_short_key_is_not_scrubbed_out_of_every_message(config):
     )
 
     assert any("read only when the server starts" in p for p in found), found
+
+
+@pytest.mark.parametrize(
+    "document",
+    [
+        {"config": {"kb": {"retrieval_llm": {"preset": "${SECRET_VAR}"}}}},
+        {"config": {"agents": {"presets": {"openai-mini": {"model": "x-${SECRET_VAR}"}}}}},
+        {"apps": {"playground": {"title": "${SECRET_VAR}"}}},
+    ],
+)
+def test_the_text_never_reads_the_servers_environment(config, document):
+    # final round (High): `${VAR}` in the page's text was expanded from the
+    # server's environment, and the value came back in a problem message or as
+    # the model name test-connection reports — any variable, a DSN, a provider
+    # key. The text is literal, and `${` is refused with a reason.
+    env = {"SECRET_VAR": "sk-REAL-SECRET-VALUE-0001"}
+
+    found = problems(document, config_path=config, env=env)
+
+    assert any("${" in p for p in found), found
+    assert not any("sk-REAL-SECRET-VALUE-0001" in p for p in found), found
+
+
+def test_the_overlay_is_taken_literally(config):
+    document = {"config": {"agents": {"presets": {"openai-mini": {"model": "m-${SECRET_VAR}"}}}}}
+
+    settings = effective_settings(document, config_path=config, env={"SECRET_VAR": "sk-REAL"})
+
+    assert settings.agents.presets["openai-mini"].model == "m-${SECRET_VAR}"

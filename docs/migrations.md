@@ -2176,7 +2176,8 @@ agent 步驟裡 AI 的呼叫、WUI 的工具呼叫、view plugin、圖表重畫�
 - 頁面**不收**只在開機時讀的值：其他 config key、角色的開／關（例如把 `health.judge_llm` 從 null 改成某個 preset）、
   `infer_modules` 的 `enhancements` / `reasoning_effort` / `parallelism` / `collection`、App 的 `resources` / `slug`
   —— 套用時直接拒絕並說「去改 config.yaml」，不存一個重啟前不生效的值。同樣拒絕：沒有出貨的 App 或 profile
-  （頁面只能改，不能新增；profile 是 App 裡的資料夾）、`apps` / `profiles` 底下的 `null`。
+  （頁面只能改，不能新增；profile 是 App 裡的資料夾）、`apps` / `profiles` 底下的 `null`、任何 `${…}`
+  （頁面的文字照字面使用，不讀伺服器的環境變數）。
 - 頁面上設定或清除的 API key **按下套用才生效**：在那之前，連新起來的 pod 也照舊用上一次套用的 key；
   「回復」只帶回那一版的值，金鑰維持目前生效的，還沒套用的金鑰改動繼續等。
 - **開機時印出的設定（config dump）多遮了一些值**：每個 preset 的 `env` 值，以及任何大小寫的 `*_token`，

@@ -183,6 +183,25 @@ _NO_SUCH_APP = "no such App — an App is a folder shipped with the server"
 PARTS = ("config", "apps", "profiles")
 
 
+def _env_markers(node: Any, path: str = "") -> list[str]:
+    """Every `${…}` in the document. The text is taken literally (the loader
+    never expands it — that read the server's environment back to the typist,
+    final review); one written expecting expansion is named, not stored as a
+    value that would reach a provider as the literal string."""
+    if isinstance(node, dict):
+        return [
+            p for k, v in node.items() for p in _env_markers(v, f"{path}.{k}" if path else str(k))
+        ]
+    if isinstance(node, list):
+        return [p for i, v in enumerate(node) for p in _env_markers(v, f"{path}[{i}]")]
+    if isinstance(node, str) and "${" in node:
+        return [
+            f"{path}: this page does not read the server's environment (${{…}}) — "
+            "write the value itself, or set a secret as a key"
+        ]
+    return []
+
+
 def _shape_problems(document: dict[str, Any]) -> list[str]:
     """The document's own shape, checked before anything reads it (review r2: a
     part that was not an object crashed the check after the draft was stored,
@@ -327,7 +346,7 @@ def _problems(
 
     `keys` are checked with the document as `LiveSettings` builds it, but only
     the document's own text is checked for a secret typed into it."""
-    shape = _shape_problems(document)
+    shape = _shape_problems(document) + _env_markers(document)
     if shape:
         return shape
     written = secrets_written(document) + _apps_part_problems(document)

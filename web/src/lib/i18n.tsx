@@ -2761,12 +2761,12 @@ export const messages = {
   "modelSettings.keyIsSet": { "zh-TW": "已設定", en: "set" },
   "modelSettings.goEdit": { "zh-TW": "前往編輯", en: "Go to Edit" },
   "modelSettings.keysBlockedDirty": {
-    "zh-TW": "編輯分頁有沒儲存的改動：先在那裡儲存或還原，才能套用",
-    en: "The Edit tab has unsaved edits: save or undo them there to apply",
+    "zh-TW": "編輯分頁有沒儲存的改動：先在那裡儲存或按「放棄改動」，才能套用",
+    en: "The Edit tab has unsaved edits: save them or press \"Discard edits\" there to apply",
   },
   "modelSettings.keysBlockedJson": {
-    "zh-TW": "編輯分頁的內容不是合法的 JSON：先在那裡修正或還原，才能套用",
-    en: "The Edit tab's text is not valid JSON: fix or undo it there to apply",
+    "zh-TW": "編輯分頁的內容不是合法的 JSON：先在那裡修正或按「放棄改動」，才能套用",
+    en: "The Edit tab's text is not valid JSON: fix it or press \"Discard edits\" there to apply",
   },
   "modelSettings.keysBlockedCheck": {
     "zh-TW": "沒辦法檢查編輯分頁的草稿：檢查通過前不能套用",
@@ -2781,8 +2781,8 @@ export const messages = {
     en: "The draft on the Edit tab has problems: fix them there to apply",
   },
   "modelSettings.rollbackBlockedDirty": {
-    "zh-TW": "編輯分頁有沒儲存的改動，而回復會換掉草稿：先還原它們（存起來也會被換掉）",
-    en: "The Edit tab has unsaved edits and a rollback replaces the draft: undo them first (saving them would not keep them either)",
+    "zh-TW": "編輯分頁有沒儲存的改動，而回復會換掉草稿：先在那裡按「放棄改動」（存起來也會被換掉）",
+    en: "The Edit tab has unsaved edits and a rollback replaces the draft: press \"Discard edits\" there first (saving them would not keep them either)",
   },
   "modelSettings.rolledBack": {
     "zh-TW": "已回復到版本 {from} 的設定；目前生效：版本 {now}（金鑰維持目前生效的值）",
@@ -2806,6 +2806,15 @@ export const messages = {
   },
   "modelSettings.problems": { "zh-TW": "套用前要先修正：", en: "Fix before applying:" },
   "modelSettings.save": { "zh-TW": "儲存草稿", en: "Save draft" },
+  "modelSettings.discard": { "zh-TW": "放棄改動", en: "Discard edits" },
+  "modelSettings.versionChangesNone": {
+    "zh-TW": "設定值和前一版相同（只換了金鑰，或回復到相同的值）",
+    en: "Same values as the version before (keys changed, or a rollback to the same values)",
+  },
+  "modelSettings.versionChangesUnknown": {
+    "zh-TW": "前一版不在這份清單裡，無法比較",
+    en: "The version before is not in this list, so it cannot be compared",
+  },
   "modelSettings.saved": { "zh-TW": "草稿已儲存（還沒生效）", en: "Draft saved (not in force yet)" },
   "modelSettings.apply": { "zh-TW": "套用…", en: "Apply…" },
   "modelSettings.saveFirst": {

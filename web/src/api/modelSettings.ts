@@ -74,8 +74,10 @@ export const modelSettingsApi = {
     return ((await r.json()) as { problems: string[] }).problems;
   },
 
-  async apply(): Promise<Applied> {
-    const r = await send("/apply", "POST");
+  /** Publish the stored draft — `seen`, the draft the confirmation listed, or
+   * refused (409) when another superuser saved since. */
+  async apply(seen?: Patch): Promise<Applied> {
+    const r = await send("/apply", "POST", seen === undefined ? undefined : { draft: seen });
     if (!r.ok) throw await httpErrorFrom(r, `apply failed: ${r.status}`);
     return (await r.json()) as Applied;
   },
