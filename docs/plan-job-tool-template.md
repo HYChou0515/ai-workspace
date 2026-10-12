@@ -48,7 +48,7 @@ Source of each: **user** = chosen by the user in the 2026-10-11/12 grill;
 | D10 | No completion notification; the generated description tells the model to have the user come back and ask | user |
 | D11 | Three packages, one-way dependencies: `contract/` ← `example-impl/` ← `template/` (and `template/` → `contract/`) | user |
 | D12 | `phase ∈ {running, done, unknown}` is the only state the template defines; everything else is the author's `state` string + `detail` dict | mine |
-| D13 | Required: `submit / find_by_key / get / list / caller_id`. Optional: `update / cancel / logs / fetch`; an optional method not overridden is **not offered** to the model | mine |
+| D13 | Required: `submit / find_by_key / get / list` (`caller_id` was here until D41). Optional: `update / cancel / logs / fetch`; an optional method not overridden is **not offered** to the model | mine |
 | D14 | Exceptions → exit codes: `Retryable`→2, `NeedsAction`→3, `NotFound`→1; timeouts are produced by the shell | mine |
 | D15 | Budgets have defaults; `Contract` refuses at load any budget outside `(0, 60 − 5]` | mine |
 | D16 | After a submit timeout the shell calls `find_by_key` itself; only when that also fails is the model told "outcome unknown — call list before submitting again" | mine |
@@ -61,7 +61,7 @@ Source of each: **user** = chosen by the user in the 2026-10-11/12 grill;
 | # | Decision | Why |
 |---|---|---|
 | D20 | `budget.submit + budget.find_by_key ≤ 55`, refused at declaration | A submit that runs out of time is followed by `find_by_key` in the same call; two budgets of 55 each would overrun the platform's 60 s before the shell could say anything |
-| D21 | `caller_id` runs inside the submit budget; a submit stuck there is "most likely not sent — sending the same spec again is safe", exit 2 | The key is not known yet, so `submit` was not called. Not airtight: `caller_id` may return in the instant before the process ends and the thread call `submit`; the same key makes a resend harmless either way |
+| D21 | (After D41: building the backend, not `caller_id`.) `caller_id` runs inside the submit budget; a submit stuck there is "most likely not sent — sending the same spec again is safe", exit 2 | The key is not known yet, so `submit` was not called. Not airtight: `caller_id` may return in the instant before the process ends and the thread call `submit`; the same key makes a resend harmless either way |
 | D22 | After a submit timeout, `find_by_key` returning None is exit 2 "sending the same spec again is safe"; failing to answer is exit 1 "call list first" (D16), or 3 when it raised `NeedsAction` | None is the backend saying it has nothing; the same spec carries the same key, so a late arrival is returned, not doubled |
 | D23 | Arguments are validated against the schema the model was shown (`jsonschema`, a new template dependency) before the backend is called; failures are exit 2 naming the field | Arguments are held to the schema the backend declared — which admits undeclared fields unless that schema says `additionalProperties: false` (the README tells authors) |
 | D24 | `fetch` refuses a `dest` that is empty, absolute, through `..`, or resolves outside the working directory (a symlink), exit 2, before the backend is called | The working directory is the user's workspace |
@@ -92,7 +92,7 @@ mechanisms (D27, D28) held under mutation; D29 did not and was replaced (above).
 
 | # | Decision | Why |
 |---|---|---|
-| D35 | `idempotency.fields` must name at least one field | With none, the key depends on the caller alone: a second, different job is answered with the first's id |
+| D35 | `idempotency.fields` must name at least one field | With none, the key depends on the item alone (the caller, before D41): a second, different job is answered with the first's id |
 | D36 | A call is offered/accepted only if it is callable and not abstract: a required call set to None or a property fails `check()`; `fetch = None` in a subclass switches an inherited optional call off | Each of those passed `check()` and failed on every call |
 | D37 | Any failure of the lookup after a submit timeout — `SystemExit` included — is "outcome unknown, call list first", exit 1, or 3 for `NeedsAction`; never 2 | A `Retryable` there exited 2, and the platform's "call it again" contradicted "list first" |
 | D38 | A `dest` the path check itself cannot resolve (a NUL byte, a vanished cwd) is exit 2, the model's to fix | It surfaced as "the backend failed" |
@@ -225,6 +225,12 @@ class JobStatus:
     phase: Phase             # the only field the shell reads
     state: str               # author's
     detail: dict[str, Any]   # author's, printed verbatim
+    item_id: str | None = None   # D48: the item it came from, as recorded
+
+@dataclass(frozen=True)
+class Submitted:                 # D51
+    job_id: str
+    created: bool                # False: the job already there, within the window
 
 class JobError(Exception): ...     # exit 1
 class Retryable(JobError): ...     # exit 2
@@ -239,8 +245,9 @@ class Budget:                      # seconds; enforced by the shell at run time
 @dataclass(frozen=True)
 class Idempotency:
     fields: tuple[str, ...]        # which spec fields make two submits "the same"
-    per_user: bool = True
-    def key(self, spec: dict, *, caller: str) -> str: ...   # the ONLY derivation
+    window_seconds: float = 86400  # D50: how long they stay the same job
+    def identity(self, spec: dict) -> Any: ...   # D49: overridable — what is compared
+    def key(self, spec: dict, *, item_id: str | None) -> str: ...   # D41: the ONLY derivation
 
 @dataclass(frozen=True)
 class EnvVar:
@@ -254,15 +261,14 @@ class Contract:
     patch_schema: dict | None = None
     domain_description: str = ""   # D8: the author's half
     env: tuple[EnvVar, ...] | None = None   # D25: None = did not say
+    example_spec: dict | None = None        # D49: required when identity() is overridden
 
 class JobBackend(ABC):
     contract: ClassVar[Contract]
     @classmethod
     def check(cls) -> None: ...    # D27: run by load_backend
     @abstractmethod
-    def caller_id(self) -> str: ...
-    @abstractmethod
-    def submit(self, spec: dict, key: str) -> str: ...
+    def submit(self, spec: dict, key: str, item_id: str | None) -> Submitted: ...
     @abstractmethod
     def find_by_key(self, key: str) -> JobStatus | None: ...
     @abstractmethod
