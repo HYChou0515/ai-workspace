@@ -933,7 +933,7 @@ server:
 ([plan-personal-env](plan-personal-env.md)):
 
 - 在「我的環境變數」頁,或 item 環境變數面板的「Private(跨workspace)」分頁 →
-  **立刻存進「我的環境變數」**,所有把那個變數設成 Private first／Private only 的 item 都用它;token 過期時在一處重新登入就好。
+  **立刻存進「我的環境變數」**,所有 item 都會用它(Shared 的變數在共用值沒填時才用;某個 item 自己的值優先);token 過期時在一處重新登入就好。
 - 在「Private」分頁 → 填進這個 item 的個人值表單,按儲存才存,只給這個 item。
 - 在「Shared」分頁 → 填進共用值的表單,按儲存才存。
 

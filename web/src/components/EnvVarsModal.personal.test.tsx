@@ -137,10 +137,17 @@ describe("my environment variables in an item's Env panel", () => {
     expect(await row()).toHaveTextContent("使用中：Private");
   });
 
-  it("does not use it for an item that uses the shared value", async () => {
+  it("uses it under Shared when there is no shared value, and says this tab would take over", async () => {
+    // D1: a private value is this item's or mine for every item; Shared falls
+    // back to them (D2 as corrected 2026-10-12). Typing here would win over
+    // mine for every item (D4), so the row says so.
     open({ envPolicy: { ERP_TOKEN: "shared_first" }, personal: { ERP_TOKEN: "everywhere" } });
+    // The value counting as present is itself what folds the section ready.
+    await readyThenUnfold();
 
-    await waitFor(async () => expect(await row()).toHaveAttribute("data-in-use", "none"));
+    expect(await row()).toHaveAttribute("data-in-use", "personal");
+    expect(await row()).toHaveTextContent("使用中：Private(跨workspace)");
+    expect(await row()).toHaveTextContent("覆蓋 Private(跨workspace)");
   });
 
   it("on Private, a sign-in fills this item's own value, saved with this tab — whatever the policy", async () => {
@@ -164,6 +171,49 @@ describe("my environment variables in an item's Env panel", () => {
 });
 
 const personalTab = async () => fireEvent.click(await screen.findByTestId("env-tab-personal"));
+
+describe("a value of mine that no tool declared (2026-10-12)", () => {
+  // The report: an MCP with no env.json used MCP_TOKEN from my environment
+  // variables, and nowhere in the panel said so — neither tab listed the name.
+  it("is listed on Private(跨workspace), saying this item uses it", async () => {
+    open({ tools: [], envPolicy: {}, personal: { MCP_TOKEN: "t" } });
+    await personalTab();
+
+    const row = await screen.findByTestId("env-personal-row-MCP_TOKEN");
+    expect(row).toHaveAttribute("data-in-use", "personal");
+    expect(row).toHaveTextContent("使用中：Private(跨workspace)");
+  });
+
+  it("says which value this item uses instead when the item has its own", async () => {
+    open({ tools: [], envPolicy: {}, envVars: { MCP_TOKEN: "s" }, personal: { MCP_TOKEN: "t" } });
+    await personalTab();
+
+    const row = await screen.findByTestId("env-personal-row-MCP_TOKEN");
+    expect(row).toHaveAttribute("data-in-use", "shared");
+    expect(row).toHaveTextContent("使用中：Shared");
+  });
+
+  it("stays listed while its value is being cleared", async () => {
+    // Review of P7: the list was the non-empty values, so the row unmounted on
+    // the keystroke that emptied it — focus gone, and "nothing to fill" shown
+    // over a pending removal.
+    open({ tools: [], envPolicy: {}, personal: { MCP_TOKEN: "t" } });
+    await personalTab();
+
+    fireEvent.change(await screen.findByTestId("env-personal-MCP_TOKEN"), { target: { value: "" } });
+
+    expect(screen.getByTestId("env-personal-row-MCP_TOKEN")).toBeInTheDocument();
+    expect(screen.queryByTestId("env-personal-none")).not.toBeInTheDocument();
+  });
+
+  it("is listed on Private too, where typing would take over for this item", async () => {
+    open({ tools: [], envPolicy: {}, personal: { MCP_TOKEN: "t" } });
+
+    const row = await screen.findByTestId("env-mine-row-MCP_TOKEN");
+    expect(row).toHaveAttribute("data-in-use", "personal");
+    expect(row).toHaveTextContent("使用中：Private(跨workspace)");
+  });
+});
 
 describe("the Private(跨workspace) tab", () => {
   it("sits third, after Shared and Private, under the names the user chose", async () => {

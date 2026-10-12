@@ -20,7 +20,7 @@ import { privateEnvApi, type PrivateEnvClient } from "../api/privateEnv";
 import { qk } from "../api/queryKeys";
 import type { ApiClient, EnvProvider } from "../api/types";
 import { useChatItem } from "../hooks/chatItem";
-import { asksPersonal, ownLayer } from "../lib/envLayers";
+import { ownLayer } from "../lib/envLayers";
 import { envRequestRows } from "../lib/envRequestRows";
 import { useT } from "../lib/i18n";
 import type { EnvRequest } from "../renderers/envRequest";
@@ -58,12 +58,12 @@ export function EnvRequestCard({
     queryFn: () => privateClient.get(slug, itemId),
     enabled: on,
   });
-  // Read only where the item asks for personal values — like the header does.
-  const asks = asksPersonal(env?.policy ?? {});
+  // Every policy reads my values below this item's own (D1; D2 as corrected
+  // 2026-10-12) — like the header does.
   const personal = useQuery({
     queryKey: qk.personalEnv(),
     queryFn: () => personalClient.get(),
-    enabled: on && asks,
+    enabled: on,
   });
   const rows = envRequestRows(request.names, {
     shared: env?.shared ?? {},
@@ -74,7 +74,7 @@ export function EnvRequestCard({
   });
   // Settled, not succeeded: a list of logins that could not be read still
   // leaves a field to fill — the card must not go inert over it.
-  const loaded = !providers.isPending && !mine.isPending && (!asks || !personal.isPending);
+  const loaded = !providers.isPending && !mine.isPending && !personal.isPending;
   const allSet = loaded && rows.every((r) => r.status === "ready");
   // N6: a login opens its own page — the panel's login form on its own.
   const [signingIn, setSigningIn] = useState<EnvProvider | null>(null);

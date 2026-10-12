@@ -164,6 +164,15 @@ describe("EnvRequestCard", () => {
     expect(await screen.findByRole("button", { name: /重試|Retry/ })).toBeEnabled();
   });
 
+  it("counts my value across workspaces for a Shared name with no shared value", async () => {
+    // D2 as corrected 2026-10-12: Shared falls back to the person's values,
+    // mine for every item included (D1) — the tool gets MAP_KEY, so the card
+    // must not ask for it again.
+    draw({ names: ["MAP_KEY"], personal: { MAP_KEY: "k" } });
+
+    expect(await screen.findByRole("button", { name: /重試|Retry/ })).toBeEnabled();
+  });
+
   it("keeps Retry when the send was refused, so it can be pressed again", async () => {
     const host = draw({ names: ["ERP_TOKEN"], mine: { ERP_TOKEN: "t" }, sends: false });
 

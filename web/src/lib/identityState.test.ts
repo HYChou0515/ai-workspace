@@ -136,9 +136,15 @@ describe("my environment variables (`plan-personal-env`)", () => {
     expect(s.holdsOwn).toBe(true);
   });
 
-  it("does not count it for an item that uses the shared value (D2)", () => {
+  it("counts it under Shared where there is no shared value (D2 as corrected 2026-10-12)", () => {
     const s = identityState({ ...base, tools: [tool([req("A")])], personal: { A: "v" } });
-    expect(s.missing).toEqual([{ kind: "set", name: "A" }]);
+    expect(s.missing).toEqual([]);
+    expect(s.holdsOwn).toBe(true);
+  });
+
+  it("does not count it under Shared where the shared value wins", () => {
+    const s = identityState({ ...base, tools: [tool([req("A")])], shared: { A: "s" }, personal: { A: "v" } });
+    expect(s.missing).toEqual([]);
     expect(s.holdsOwn).toBe(false);
   });
 });
