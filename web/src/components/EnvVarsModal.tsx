@@ -52,7 +52,7 @@ import { blockMaskedCopy } from "../lib/maskedSecret";
 import { PERSONAL_ENV_WRITES, personalEnvApi, type PersonalEnvClient } from "../api/personalEnv";
 import { privateEnvApi, type PrivateEnvClient } from "../api/privateEnv";
 import { qk } from "../api/queryKeys";
-import type { ApiClient, EnvProvider } from "../api/types";
+import type { ApiClient, EnvProvider, EnvProviderInput } from "../api/types";
 import type { EnvTarget } from "../hooks/chatItem";
 import { useDirtyClose } from "../hooks/useDirtyClose";
 import { mergeEnv, parseEnvText, setEnvValue, toEnvText, unstorable } from "../lib/envFile";
@@ -1457,6 +1457,20 @@ function PersonalRow({
 
 // ── logins (`IEnvProvider`, #750) ─────────────────────────────────────────
 
+/** What a browser may fill into each of a provider's inputs. The list is the
+ * operator's, with no field saying "I am the user name", so it is read the way
+ * a login form is laid out: the first secret is the password, the plain field
+ * right before it the user name. Every other secret (a one-time code) is masked
+ * text and every other plain field (a tenant) is offered nothing — tagging them
+ * all filled the saved password into the code (review round 1). */
+function loginRoles(inputs: EnvProviderInput[]): [EnvProviderInput, "user" | "password" | "secret" | "plain"][] {
+  const password = inputs.findIndex((f) => f.secret);
+  return inputs.map((f, i) => [
+    f,
+    i === password ? "password" : f.secret ? "secret" : i === password - 1 ? "user" : "plain",
+  ]);
+}
+
 /** The deploy's "log in, get the variables" buttons. The exchange result goes
  * to the caller's `onFilled`, which puts it in that tab's own layer: Shared and
  * Private fill their form (saved with Save); the cross-workspace tab and the
@@ -1555,12 +1569,13 @@ export function Logins({
       ))}
       {openProvider && (
         <div data-testid="env-cred-dialog" style={{ display: "grid", gap: 6 }}>
-          {openProvider.inputs.map((field) => (
+          {/* A real login, so the browser may remember it and fill it back —
+              here, and nowhere else on the page (src/styles/autofill.test.ts):
+              one user name, one password, and nothing offered to the rest. */}
+          {loginRoles(openProvider.inputs).map(([field, role]) => (
             <label key={field.name} style={{ display: "block", fontSize: pxToRem(12) }}>
               {field.label}
-              {/* A real login, so the browser may remember it and fill it back
-                  — here, and nowhere else on the page (src/styles/autofill.test.ts). */}
-              {field.secret ? (
+              {role === "password" ? (
                 <input
                   data-testid={`env-cred-${field.name}`}
                   type="password"
@@ -1569,10 +1584,32 @@ export function Logins({
                   onChange={(e) => setCreds({ ...creds, [field.name]: e.target.value })}
                   className="input input--block"
                 />
-              ) : (
+              ) : role === "user" ? (
                 <input
                   data-testid={`env-cred-${field.name}`}
                   autoComplete="username"
+                  value={creds[field.name] ?? ""}
+                  onChange={(e) => setCreds({ ...creds, [field.name]: e.target.value })}
+                  className="input input--block"
+                />
+              ) : role === "secret" ? (
+                <input
+                  data-testid={`env-cred-${field.name}`}
+                  data-masked
+                  autoComplete="off"
+                  spellCheck={false}
+                  autoCapitalize="off"
+                  autoCorrect="off"
+                  onCopy={blockMaskedCopy}
+                  onCut={blockMaskedCopy}
+                  value={creds[field.name] ?? ""}
+                  onChange={(e) => setCreds({ ...creds, [field.name]: e.target.value })}
+                  className="input input--block"
+                />
+              ) : (
+                <input
+                  data-testid={`env-cred-${field.name}`}
+                  autoComplete="off"
                   value={creds[field.name] ?? ""}
                   onChange={(e) => setCreds({ ...creds, [field.name]: e.target.value })}
                   className="input input--block"

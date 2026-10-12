@@ -307,6 +307,52 @@ describe("EnvVarsModal declared fields (#750)", () => {
     });
   });
 
+  it("names one user name and one password in a login that asks for more", async () => {
+    // A provider's inputs are the operator's list (review round 1): tagging
+    // every plain field `username` and every secret `current-password` filled
+    // the saved user name into the tenant and the saved password into the
+    // one-time code. The user name is the plain field right before the first
+    // secret; that secret is the password; the rest are offered nothing.
+    renderWithQuery(
+      <EnvVarsModal
+        envVars={{}}
+        onSave={vi.fn()}
+        onClose={vi.fn()}
+        slug="rca"
+        itemId="i1"
+        client={{
+          getItemTools: vi.fn(async () => ({ tools: SAP, updateNeedsClose: false, canClose: false })),
+          getEnvProviders: vi.fn(async () => [
+            {
+              id: "sap-login",
+              label: "SAP production login",
+              produces: ["SAP_HOST", "SAP_TOKEN"],
+              inputs: [
+                { name: "tenant", label: "Tenant", secret: false },
+                { name: "user", label: "Account", secret: false },
+                { name: "password", label: "Password", secret: true },
+                { name: "otp", label: "One-time code", secret: true },
+              ],
+            },
+          ]),
+          resolveEnvProvider: vi.fn(async () => ({})),
+        }}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("env-tab-shared"));
+    fireEvent.click(await screen.findByTestId("env-provider-sap-login"));
+
+    expect(screen.getByTestId("env-cred-tenant")).toHaveAttribute("autocomplete", "off");
+    expect(screen.getByTestId("env-cred-user")).toHaveAttribute("autocomplete", "username");
+    const password = screen.getByTestId("env-cred-password") as HTMLInputElement;
+    expect(password.type).toBe("password");
+    expect(password).toHaveAttribute("autocomplete", "current-password");
+    const otp = screen.getByTestId("env-cred-otp") as HTMLInputElement;
+    expect(otp.type).toBe("text");
+    expect(otp).toHaveAttribute("data-masked", "true");
+    expect(otp).toHaveAttribute("autocomplete", "off");
+  });
+
   it("refuses a value the box cannot hold instead of storing half of it", async () => {
     // `.env` text is one line per variable, so a value with a newline — a PEM
     // certificate, which the seam names as a thing a provider might mint —
