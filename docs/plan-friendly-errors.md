@@ -335,8 +335,11 @@ Up to 100 concurrent streams per pod per endpoint the two are within 0.1 s;
 beyond that httpx queues on its 100-connection pool. **Assumption — the user
 asked for this plan on the condition that it holds (2026-10-12), not yet
 confirmed: no single pod runs more than 100 model calls to one endpoint at
-once.** If that stops holding, the symptom is p95 latency rising with load, and
-the knob is the client's pool limit.
+once.** If that stops holding, the symptom is p95 latency rising with load.
+litellm exposes no pool setting (no `httpx.Limits` / `max_connections` in
+`http_handler.py`, `openai/common_utils.py` or `constants.py`); raising it means
+supplying our own client, and `litellm.aclient_session` reaches only the
+`openai/` path (`openai/common_utils.py:216`), not `ollama_chat/`.
 
 ### Decisions
 
@@ -345,7 +348,7 @@ the knob is the client's pool limit.
 | D11 | Agent turns use litellm's httpx transport: `litellm.disable_aiohttp_transport = True`, set where `LitellmAgentRunner` is built — the only async litellm caller. Not a config knob: the default must not truncate answers. | proposed — rests on the ≤100 assumption above |
 | D12 | `classify_error` looks for connection / timeout evidence anywhere in the chain (httpx `RemoteProtocolError` / `ConnectError` / `ReadTimeout`, litellm `APIConnectionError` / `Timeout`, a "connect" refusal) BEFORE reading a status code, so a mid-stream drop and a refused connection are `connection` and a stalled stream is `timeout`. | proposed |
 | D13 | The failure-shape matrix becomes a test: an in-process HTTP stand-in on a free port, real `litellm.acompletion` through the same `CallRetryModel` path a turn takes, one case per row above, asserting the kind AND whether the call was re-sent. It is the gate this feature was missing; a litellm upgrade or transport change that alters a shape reddens it. | proposed |
-| D14 | Amends **D9** (proposed): the retry status names the failure instead of always saying 「連線不穩」 — it reuses the D5 "what happened" sentence of that kind, then 「正在重試（第 N 次）…」 (e.g. 「模型服務本身出錯。正在重試（第 1 次）…」). NN/g: an error message must precisely describe the exact problem; a generic one gives no context ([Error-Message Guidelines](https://www.nngroup.com/articles/error-message-guidelines/), [Scoring Rubric](https://www.nngroup.com/articles/error-messages-scoring-rubric/)). Material 3 governs the indicator, not the words ([Progress indicators](https://m3.material.io/components/progress-indicators/overview)). One sentence per kind, shared with the failure copy, so the two cannot drift. | **awaiting user** |
+| D14 | Amends **D9** (proposed): the retry status names the failure instead of always saying 「連線不穩」 — it reuses the D5 "what happened" sentence of that kind, then 「正在重試（第 N 次）…」 (e.g. 「模型服務本身出錯。正在重試（第 1 次）…」). NN/g: an error message must precisely describe the exact problem; a generic one gives no context ([Error-Message Guidelines](https://www.nngroup.com/articles/error-message-guidelines/), [Scoring Rubric](https://www.nngroup.com/articles/error-messages-scoring-rubric/)). Material 3 governs the indicator, not the words ([Progress indicators](https://m3.material.io/components/progress-indicators/overview)). One sentence per kind, shared with the failure copy, so the two cannot drift. | user (2026-10-12) |
 
 ### Work
 
@@ -356,7 +359,7 @@ the knob is the client's pool limit.
 3. D12: the classifier, pinned by the stall / drop / refused cases plus the
    existing `test_classify.py` (a 5xx with no connection evidence stays
    `provider_error`).
-4. D14 (if confirmed): `turn.retrying` takes the kind; FE test per kind; a
+4. D14: `turn.retrying` takes the kind; FE test per kind; a
    parity test that the status sentence IS the failure sentence.
 5. Live: the drop scenario in the real app — the half sentence withdrawn, the
    status line, the full answer — and a third demo MP4.
