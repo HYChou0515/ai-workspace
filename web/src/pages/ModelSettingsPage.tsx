@@ -18,7 +18,7 @@
  */
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import {
   modelSettingsApi,
@@ -187,8 +187,19 @@ function useDraft(client: Client, data: PageData) {
   const [notice, setNotice] = useState("");
   const [refused, setRefused] = useState<string[]>([]);
   const [saveError, setSaveError] = useState("");
-  // A save, an Apply or a rollback hands back a new draft; the editor follows it.
-  useEffect(() => setText(saved), [saved]);
+  // A save or a rollback hands back a new draft; the editor follows it — but
+  // only while it still says what the LAST saved draft said. Unsaved edits are
+  // never replaced by a refetch (confirmation round: another superuser's save,
+  // picked up by any refetch, replaced the text being typed without a word).
+  const previous = useRef(draft);
+  useEffect(() => {
+    const was = previous.current;
+    previous.current = draft;
+    setText((current) => {
+      const now = parsePatch(current);
+      return now.ok && sameShape(now.patch, was) ? saved : current;
+    });
+  }, [draft, saved]);
   useEffect(() => {
     const timer = setTimeout(() => setCheckedText(text), CHECK_AFTER_MS);
     return () => clearTimeout(timer);
@@ -248,11 +259,13 @@ function useDraft(client: Client, data: PageData) {
     ? "json"
     : dirty
       ? "dirty"
-      : checkFailed || problems.length
-        ? "problems"
-        : nothingToApply
-          ? "nothing"
-          : "";
+      : checkFailed && !refused.length
+        ? "checkFailed"
+        : problems.length
+          ? "problems"
+          : nothingToApply
+            ? "nothing"
+            : "";
 
   const askToApply = async () => {
     const choice = await dialog.confirm({
@@ -308,19 +321,21 @@ function useDraft(client: Client, data: PageData) {
 }
 
 type Draft = ReturnType<typeof useDraft>;
-type Blocked = "" | "json" | "dirty" | "problems" | "nothing";
+type Blocked = "" | "json" | "dirty" | "checkFailed" | "problems" | "nothing";
 
 const WHY = {
   edit: {
     json: "modelSettings.fixJsonFirst",
     dirty: "modelSettings.saveFirst",
+    checkFailed: "modelSettings.applyBlockedCheck",
     problems: "modelSettings.applyBlockedProblems",
     nothing: "modelSettings.nothingToApply",
   },
   // the keys tab cannot save the draft nor show its problems — it says where
   keys: {
-    json: "modelSettings.keysBlockedDirty",
+    json: "modelSettings.keysBlockedJson",
     dirty: "modelSettings.keysBlockedDirty",
+    checkFailed: "modelSettings.keysBlockedCheck",
     problems: "modelSettings.keysBlockedProblems",
     nothing: "modelSettings.nothingToApply",
   },
@@ -742,8 +757,8 @@ function HistoryTab({
           // The newest entry carrying the current content id is what is in force.
           const inForce = entry.version === current && history.data.findIndex((e) => e.version === current) === i;
           // Offered only where it would change what runs — not on a version with
-          // the values in force, the current one included (NN/g heuristic #5:
-          // no do-nothing action).
+          // the values in force, the current one included (NN/g heuristic #8,
+          // aesthetic and minimalist design: no action that does nothing).
           const changesSomething =
             diffEffective((defaults ?? {}) as Patch, published, entry.patch).length > 0;
           return (
@@ -834,7 +849,12 @@ function KeysTab({
     },
     onError: (e) => setRefused(problemsOf(e).length ? problemsOf(e) : [messageOf(e)]),
   });
-  const clear = useMutation({ meta: { silentError: true }, mutationFn: (p: string) => client.clearKey(p), onSuccess: done });
+  const clear = useMutation({
+    meta: { silentError: true },
+    mutationFn: (p: string) => client.clearKey(p),
+    onSuccess: done,
+    onError: (e) => setRefused(problemsOf(e).length ? problemsOf(e) : [messageOf(e)]),
+  });
 
   const askToClear = async (p: string) => {
     const choice = await dialog.confirm({
@@ -899,6 +919,13 @@ function KeysTab({
           <span style={STATUS}>{t("modelSettings.keysWaiting", { n: String(draft.pendingKeys.length) })}</span>
           <ApplyButton draft={draft} testId="model-settings-keys-apply" explain where="keys" goEdit={goEdit} />
         </div>
+      )}
+      {/* An Apply empties the pending row it sits in; its result stays said here
+          (NN/g heuristic #1 — feedback where the person acted). */}
+      {draft.pendingKeys.length === 0 && draft.notice && (
+        <p data-testid="model-settings-notice" style={{ ...STATUS, margin: 0 }}>
+          {draft.notice}
+        </p>
       )}
       {/* Visible labels, not placeholders — NN/g "Placeholders in Form Fields
           Are Harmful": a placeholder disappears as you type and was cut off. */}

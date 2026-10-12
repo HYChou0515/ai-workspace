@@ -2764,13 +2764,25 @@ export const messages = {
     "zh-TW": "編輯分頁有沒儲存的改動：先在那裡儲存或還原，才能套用",
     en: "The Edit tab has unsaved edits: save or undo them there to apply",
   },
+  "modelSettings.keysBlockedJson": {
+    "zh-TW": "編輯分頁的內容不是合法的 JSON：先在那裡修正或還原，才能套用",
+    en: "The Edit tab's text is not valid JSON: fix or undo it there to apply",
+  },
+  "modelSettings.keysBlockedCheck": {
+    "zh-TW": "沒辦法檢查編輯分頁的草稿：檢查通過前不能套用",
+    en: "The draft on the Edit tab could not be checked: it cannot be applied until a check passes",
+  },
+  "modelSettings.applyBlockedCheck": {
+    "zh-TW": "檢查通過前不能套用",
+    en: "It cannot be applied until a check passes",
+  },
   "modelSettings.keysBlockedProblems": {
     "zh-TW": "編輯分頁的草稿有問題：先在那裡修正，才能套用",
     en: "The draft on the Edit tab has problems: fix them there to apply",
   },
   "modelSettings.rollbackBlockedDirty": {
-    "zh-TW": "編輯分頁有沒儲存的改動：回復會換掉草稿，先儲存或還原它們",
-    en: "The Edit tab has unsaved edits: a rollback replaces the draft, so save or undo them first",
+    "zh-TW": "編輯分頁有沒儲存的改動，而回復會換掉草稿：先還原它們（存起來也會被換掉）",
+    en: "The Edit tab has unsaved edits and a rollback replaces the draft: undo them first (saving them would not keep them either)",
   },
   "modelSettings.rolledBack": {
     "zh-TW": "已回復到版本 {from} 的設定；目前生效：版本 {now}（金鑰維持目前生效的值）",
@@ -2779,8 +2791,8 @@ export const messages = {
   "modelSettings.keyPendingSet": { "zh-TW": "等待套用", en: "Waiting for Apply" },
   "modelSettings.keyPendingCleared": { "zh-TW": "已清除，等待套用", en: "Cleared, waiting for Apply" },
   "modelSettings.keysWaiting": {
-    "zh-TW": "{n} 個金鑰改動等待套用",
-    en: "{n} key change(s) waiting for Apply",
+    "zh-TW": "等待套用的金鑰改動：{n}",
+    en: "Key changes waiting for Apply: {n}",
   },
   "modelSettings.keyPathLabel": { "zh-TW": "設定路徑", en: "Setting path" },
   "modelSettings.fixJsonFirst": {
@@ -2804,10 +2816,6 @@ export const messages = {
   "modelSettings.applyBody": {
     "zh-TW": "所有服務在一秒內改用新設定。已經送出的模型呼叫用舊設定跑完；之後的每次呼叫都用新的——包括正在跑的工作的下一步。",
     en: "Every service uses the new settings within a second. A model call already under way finishes on the old settings; every call after it uses the new ones — including the next step of work already running.",
-  },
-  "modelSettings.applyNothing": {
-    "zh-TW": "這一版和目前生效的一樣，沒有值會改變。",
-    en: "This version matches what is in force; no value changes.",
   },
   "modelSettings.applyConfirm": { "zh-TW": "套用", en: "Apply" },
   "modelSettings.cancel": { "zh-TW": "取消", en: "Cancel" },

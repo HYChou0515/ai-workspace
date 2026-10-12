@@ -82,8 +82,21 @@ export function diffEffective(defaults: Patch, before: Patch, after: Patch): Cha
     }
     return { found: true, value: node };
   };
-  // Value by value: a path with a deeper path beside it is said through those.
-  const leaves = [...paths].filter(([path]) => ![...paths.keys()].some((other) => other.startsWith(`${path}.`)));
+  // What is said, decided on PARTS — never on joined paths: a preset name may
+  // hold a dot, so `qwen2` is not above `qwen2.5` (confirmation round).
+  // A null in either patch is one change — the preset stops (or starts)
+  // running, all of it — said as itself; anything else, value by value.
+  const all = [...paths.values()];
+  const above = (a: string[], b: string[]) => a.length < b.length && a.every((part, i) => b[i] === part);
+  const hidden = (patch: Patch, parts: string[]) => {
+    const at = valueAt(patch, parts);
+    return at.found && at.value === null;
+  };
+  const isHide = (parts: string[]) => hidden(before, parts) || hidden(after, parts);
+  const leaves = [...paths].filter(([, parts]) => {
+    if (all.some((other) => above(other, parts) && isHide(other))) return false;
+    return isHide(parts) || !all.some((other) => above(parts, other));
+  });
   const out: Change[] = [];
   for (const [path, parts] of leaves) {
     const was = runs(before, parts);

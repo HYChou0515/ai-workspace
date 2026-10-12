@@ -428,6 +428,109 @@ describe("ModelSettingsPage", () => {
     expect(await screen.findByTestId("model-settings-rolled-back")).toHaveTextContent("v1v1v1v1");
   });
 
+  it("keeps unsaved edits when the saved draft changes under them", async () => {
+    // confirmation round: any refetch with another superuser's draft replaced
+    // the text being typed, without a word.
+    const client = fakeClient();
+    const { client: queryClient } = renderWithQuery(<ModelSettingsPage client={client} />);
+    await screen.findByRole("textbox", { name: "草稿（JSON）" });
+    type('{"config": {"llm": {"base_url": "http://mine"}}}');
+
+    const theirs = { config: { llm: { base_url: "http://theirs" } } };
+    client.get.mockImplementation(async () => ({
+      defaults: {},
+      draft: theirs,
+      published: {},
+      version: null,
+      keys: {},
+      pending_keys: [],
+    }));
+    await act(async () => queryClient.invalidateQueries());
+
+    expect(JSON.parse(editor().value)).toEqual({ config: { llm: { base_url: "http://mine" } } });
+  });
+
+  it("says why a rollback is off without suggesting that saving would help", async () => {
+    // confirmation round: "save or undo" — but a rollback replaces a saved
+    // draft too, so saving did not protect the edits.
+    const client = fakeClient({ published: KB_2, version: "v2v2v2v2v2" });
+    client.history.mockResolvedValue([applied("v2v2v2v2v2", KB_2, 2), applied("v1v1v1v1v1", {}, 1)]);
+    renderWithQuery(<ModelSettingsPage client={client} />);
+    await screen.findByRole("textbox", { name: "草稿（JSON）" });
+    type('{"config": {"llm": {"base_url": "http://mine"}}}');
+
+    fireEvent.click(screen.getByRole("tab", { name: "版本紀錄" }));
+
+    const why = await screen.findByTestId("model-settings-rollback-why");
+    expect(why).toHaveTextContent("先還原");
+    expect(why).toHaveTextContent("存起來也會被換掉");
+  });
+
+  it("from the keys tab, says the check failed rather than that the draft has problems", async () => {
+    const path = "config.llm.api_key";
+    const client = fakeClient({ draft: KB_2, keys: { [path]: "…4321" }, pending_keys: [path] });
+    client.check.mockRejectedValue(new HttpError(500, "check failed: 500"));
+    renderWithQuery(<ModelSettingsPage client={client} />);
+    await screen.findByTestId("model-settings-check-failed");
+
+    fireEvent.click(screen.getByRole("tab", { name: "API 金鑰" }));
+
+    expect(screen.getByTestId("model-settings-keys-apply-why")).toHaveTextContent("沒辦法檢查");
+  });
+
+  it("from the keys tab, says the Edit tab's text is not JSON instead of asking to save it", async () => {
+    const path = "config.llm.api_key";
+    renderWithQuery(<ModelSettingsPage client={fakeClient({ keys: { [path]: "…4321" }, pending_keys: [path] })} />);
+    await screen.findByRole("textbox", { name: "草稿（JSON）" });
+    type("{ not json");
+    await screen.findByTestId("model-settings-parse");
+
+    fireEvent.click(screen.getByRole("tab", { name: "API 金鑰" }));
+
+    expect(screen.getByTestId("model-settings-keys-apply-why")).toHaveTextContent("不是合法的 JSON");
+  });
+
+  it("confirms an Apply made from the keys tab on the keys tab", async () => {
+    // confirmation round: the notice lived in the pending-only row, which an
+    // Apply empties — so the tab acted on went blank.
+    const path = "config.llm.api_key";
+    const client = fakeClient({ keys: { [path]: "…4321" }, pending_keys: [path] });
+    client.apply.mockImplementation(async () => {
+      // what the server does: the key is in force, nothing waits any more
+      client.get.mockImplementation(async () => ({
+        defaults: {},
+        draft: {},
+        published: {},
+        version: "abcdef1234567890",
+        keys: { [path]: "…4321" },
+        pending_keys: [],
+      }));
+      return applied("abcdef1234567890", {});
+    });
+    renderWithQuery(<ModelSettingsPage client={client} />);
+    fireEvent.click(await screen.findByRole("tab", { name: "API 金鑰" }));
+
+    fireEvent.click(await screen.findByTestId("model-settings-keys-apply"));
+    fireEvent.click(await screen.findByRole("button", { name: "套用" }));
+    // once the page has re-read: nothing waits, so the pending row is gone
+    await waitFor(() => expect(screen.queryByTestId("model-settings-keys-apply")).toBeNull());
+
+    expect(screen.getByTestId("model-settings-notice")).toHaveTextContent("abcdef12");
+  });
+
+  it("says why a key could not be cleared", async () => {
+    const path = "config.llm.api_key";
+    const client = fakeClient({ keys: { [path]: "…4321" } });
+    client.clearKey.mockRejectedValue(new HttpError(500, "clearing the key failed: 500"));
+    renderWithQuery(<ModelSettingsPage client={client} />);
+    fireEvent.click(await screen.findByRole("tab", { name: "API 金鑰" }));
+
+    fireEvent.click(screen.getByTestId(`model-settings-key-clear-${path}`));
+    fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "清除" }));
+
+    expect(await screen.findByTestId("model-settings-key-refused")).toHaveTextContent("clearing the key failed");
+  });
+
   it("lists a refused Apply's reasons", async () => {
     const client = fakeClient({ draft: KB_2 });
     client.apply.mockRejectedValue(

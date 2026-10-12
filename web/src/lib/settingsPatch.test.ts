@@ -156,15 +156,39 @@ describe("diffEffective under a hidden preset", () => {
   // read as "its model goes back to the default".
   const defaults = { foo: { model: "d" } };
 
-  it("hiding a preset reads as removed, not as its values going back", () => {
+  // confirmation round: a hide is ONE change — the preset stops running, all
+  // of it — so it is said as the preset, not through the values under it.
+  it("hiding a preset reads as the preset removed", () => {
     expect(diffEffective(defaults, { foo: { model: "x" } }, { foo: null })).toEqual([
-      { path: "foo.model", kind: "removed", before: "x" },
+      { path: "foo", kind: "removed", before: { model: "x" } },
     ]);
   });
 
-  it("showing a hidden preset again reads as added, not changed from the default", () => {
+  it("showing a hidden preset again reads as the preset added", () => {
     expect(diffEffective(defaults, { foo: null }, { foo: { model: "y" } })).toEqual([
-      { path: "foo.model", kind: "added", after: "y" },
+      { path: "foo", kind: "added", after: { model: "y" } },
+    ]);
+  });
+
+  it("is not fooled by a sibling whose name extends this one's with a dot", () => {
+    // confirmation round: deeper-than was decided on JOINED paths, so a hide
+    // of `qwen2` vanished beside `qwen2.5.model` — Apply said "nothing to apply".
+    const both = { presets: { qwen2: { model: "a" }, "qwen2.5": { model: "b" } } };
+    const published = { presets: { "qwen2.5": { model: "x" } } };
+    const draft = { presets: { qwen2: null, "qwen2.5": { model: "x" } } };
+
+    expect(diffEffective(both, published, draft)).toEqual([
+      { path: "presets.qwen2", kind: "removed", before: { model: "a" } },
+    ]);
+  });
+
+  it("does not take a sibling's values as under a hidden preset", () => {
+    const both = { presets: { qwen2: { model: "a" }, "qwen2.5": { model: "b" } } };
+    const draft = { presets: { qwen2: null, "qwen2.5": { model: "y" } } };
+
+    expect(diffEffective(both, {}, draft)).toEqual([
+      { path: "presets.qwen2", kind: "removed", before: { model: "a" } },
+      { path: "presets.qwen2.5.model", kind: "changed", before: "b", after: "y" },
     ]);
   });
 });

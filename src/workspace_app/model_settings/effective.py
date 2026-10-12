@@ -299,8 +299,10 @@ def problems(
     env: Mapping[str, str],
     keys: Mapping[str, str] | None = None,
 ) -> list[str]:
-    """What stops `document` from running — empty when it can; no key's value
-    ever appears in one (see `_problems`)."""
+    """What stops `document` from running — empty when it can. Each is scrubbed
+    of every key of `SHOWN_FROM` characters or more (`redact`); a shorter one is
+    not scrubbed, and cannot reach one by the loader, since a key sits only at a
+    text setting (`page.key_path_problem`)."""
     return [
         redact(problem, keys)
         for problem in _problems(document, config_path=config_path, env=env, keys=keys)

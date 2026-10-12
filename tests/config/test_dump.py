@@ -225,3 +225,12 @@ def test_a_dotted_preset_names_env_values_are_secret():
     from workspace_app.config.dump import is_secret
 
     assert is_secret("agents.presets.qwen2.5.env.HF_HOME")
+
+
+def test_a_usage_entrys_env_values_are_secret():
+    # confirmation round: a usage entry (`agents.kb_chat[0]`) takes an `env`
+    # too — its values were shown in clear on the settings page (M6, M7).
+    from workspace_app.config.dump import is_secret
+
+    assert is_secret("agents.kb_chat[0].env.SERVICE_PASSWORD")
+    assert not is_secret("agents.kb_chat[0].model")

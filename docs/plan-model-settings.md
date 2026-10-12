@@ -73,6 +73,12 @@ what they shaped; the ellipsis and the forms-error article are cited only here.
 
 ### Known costs
 
+- A usage entry's own `llm.api_key` set in `config.yaml` (e.g. on
+  `agents.kb_chat[0]`) cannot be kept through an edit of that list here: a
+  merge patch replaces a list whole, the page will not take the secret as text
+  (M6), and a key cannot sit inside a list (only at a text setting). Edit such
+  a list in `config.yaml`; a preset's key is the place the page manages.
+
 - Keys are stored in the database in clear, as the existing Private env values
   are; only superusers can set them and no one can read them back.
 - The Diagnostics checks (`get_check_registry`: one probe per App's default
