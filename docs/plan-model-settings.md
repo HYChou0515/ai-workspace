@@ -23,7 +23,7 @@ settled by me, listed for the user to overturn.
 | M3 | Scope: **presets**, **whole `app.json`** of each App, and the **platform's own model choices** (`kb.retrieval_llm`, `card_drafter`, `vlm_llm`, `wiki.llm`, `health.judge_llm`, sub-agent models) | user |
 | M4 | **Draft, then Apply.** Edits are saved as a draft and change nothing running. Apply validates and publishes the draft as a new version identified by a string (the content hash); every user of the settings compares that string before each use and reloads only when it differs | user |
 | M5 | **History and one-click rollback.** Each Apply is a version: who, when, the diff from the previous one. Rollback = apply an earlier version again | user |
-| M6 | **API keys can be entered on the page**, write-only: shown as set / unset with a short suffix, never returned, never in history or diffs (history records that a key changed) | user |
+| M6 | **API keys can be entered on the page**, write-only: shown as set / unset with a short suffix, never returned, never in history or diffs (history records that a key changed) *As built:* a key under 16 characters shows only that it is set — the end of a short value is most of it (every preset `env` value is a key, M7); the threshold is mine (review r2) | user |
 | M7 | What is secret is decided by the **same function** the boot-time config dump uses (`config/dump.py:_is_secret`); its known gaps are fixed there, once, for both: `_token` matched case-insensitively, and every value of a preset's `env` | user ("用同一套就好") |
 | M8 | Apply runs **structure checks only** (a default preset that exists, fallbacks that resolve, required fields — the loader's own checks) and refuses on failure. A separate **"test connection"** button per preset makes one minimal call and shows the result; it never blocks Apply — a provider outage must not stop a rollback | user |
 | M9 | The editor is **text** (YAML/JSON) checked against the same schema as Apply, with the error's line and reason shown as you type, a diff before Apply, and each value's source (deploy default / changed here) with reset | user |
@@ -33,13 +33,55 @@ settled by me, listed for the user to overturn.
 | M13 | **One function** produces the effective settings (defaults ⊕ published patch), used by the API, all nine workers and `skill_eval` — no consumer merges on its own | mine |
 | M14 | Expensive objects (failover chains, LLM clients with their connection pools) are cached by a **fingerprint of their resolved settings** and rebuilt only when it changes; if the version cannot be read, the last good settings stay in use | mine |
 | M15 | The page sits under a superuser-only "Settings" entry; its layout follows NN/g and Material 3, cited in the PR | mine |
-| M16 | A process reads the version string **at most once a second** and trusts it in between (`model_settings/live.py:VERSION_TTL_S`). A request reads the settings about ten times (`load_app_manifest` alone); one small read a second per process is the whole cost, and an Apply is in force everywhere within a second | mine — found in P4 |
+| M16 | A process reads the version string **once a second on a thread of its own** (`LiveSettings.start`, started by the API's and every worker's `main`); a request or a job only reads memory. An Apply is in force everywhere within about a second. Without the thread (tests, `skill_eval`) a use reads the version itself at most once a second (`VERSION_TTL_S`). P10 is why: one read measured ~17 ms on Postgres, and the request that crossed the window paid it on the event loop | mine — found in P4, changed by P10 |
 | M17 | **Turning a role on or off is not done here.** Whether a role (`kb.retrieval_llm`, `card_drafter`, `health.judge_llm`, …) is on decided at boot which features were wired (the quality judge, the drafter, the goal checker, code-wiki), and boot reads `config.yaml`, not the page — so Apply refuses a change to whether a role is on, with "change it in config.yaml" (`ROLES` in `model_settings/effective.py`). Changing **which** model a role uses is live | mine — found in P5 |
-| M18 | **The page edits only what a running process reads again.** The config part is limited to the model choices of M3 (`LIVE_CONFIG` in `model_settings/effective.py`: `llm`, everything under `agents` (presets, `subagent_models`, the usage lists such as `kb_chat`), the role references); any other config key is refused at Apply with "change it in config.yaml". Storing a value that does nothing until a restart is a dead knob. The same holds inside a live part: the `infer_modules` run knobs (`enhancements`, `reasoning_effort`, `parallelism`, `collection`) and an App's `resources` / `slug` are read at boot and held, so a change to them is refused. Apply also runs the boot's workflow check (`validate_workflow_profiles`) on the draft, so a workflow without its `run.py` is refused rather than found at its first run | mine — found in P5 |
-| M19 | `null` **hides a preset and means nothing else** (M12). Anywhere else it would delete a key the loader needs; a value goes back to its default by leaving the patch, which is what reset does | mine — found in P5 |
-| M20 | A **key** set or cleared on the page takes effect at the next **Apply**, like every other change: it is part of the version string (its revision, never its value), so it reaches the processes the same way and history records that it changed | mine — found in P2 |
+| M18 | **The page edits only what a running process reads again.** The config part is limited to the model choices of M3 (`LIVE_CONFIG` in `model_settings/effective.py`: `llm`, everything under `agents` (presets, `subagent_models`, the usage lists such as `kb_chat`), the role references); any other config key is refused at Apply with "change it in config.yaml". Storing a value that does nothing until a restart is a dead knob. The same holds inside a live part: the `infer_modules` run knobs (`enhancements`, `reasoning_effort`, `parallelism`, `collection`) and an App's `resources` / `slug` are read at boot and held, so a change to them is refused. Apply also runs the boot's workflow check (`validate_workflow_profiles`) on the draft, so a workflow without its `run.py` is refused rather than found at its first run. A patch can change an App or profile that ships and cannot create one: a patch-only App or profile would pass Apply and never be listed or used (review r1), so it is refused too | mine — found in P5 |
+| M19 | `null` **hides a preset and means nothing else** (M12). Anywhere else — in the config part or under `apps` / `profiles` — it would delete a key the loader or the App needs; a value goes back to its default by leaving the patch, which is what reset does | mine — found in P5 |
+| M20 | A **key** set or cleared on the page takes effect at the next **Apply**, like every other change: it is part of the version string (its revision, never its value), so it reaches the processes the same way and history records that it changed. A key is **staged** until then (`_SettingsKey`) and Apply copies it to the **applied** record (`_SettingsAppliedKey`) every process builds from — review r1 found a process that started after a key change built with the staged value, a key nobody applied. A rollback brings back an earlier version's values and leaves the keys as they are in force (`publish(..., apply_keys=False)`): a staged key stays staged — review r2 found rollback applying it while its dialog said keys stay | mine — found in P2, fixed by reviews r1 and r2 |
+
+### Sources for the page (M15)
+
+Checked against screenshots of the built page in real Chromium at 1280, 768
+and 390 px during the PR (CLAUDE.md "UI work must follow published UI/UX
+guidance"). Most are also cited in `web/src/pages/ModelSettingsPage.tsx` beside
+what they shaped; the ellipsis and the forms-error article are cited only here.
+
+- Three peer sections as a tab strip, two cues on the selected tab — NN/g,
+  "Tabs, Used Right" (https://www.nngroup.com/articles/tabs-used-right/);
+  Material 3, Tabs (https://m3.material.io/components/tabs/guidelines).
+- Apply / roll back / clear behind a confirmation that names the outcome and
+  lists what changes — NN/g, "Confirmation Dialogs Can Prevent User Errors"
+  (https://www.nngroup.com/articles/confirmation-dialog/).
+- Apply offered only when it would change something, the status saying which —
+  NN/g, "10 Usability Heuristics", #1 visibility of system status
+  (https://www.nngroup.com/articles/ten-usability-heuristics/).
+- Problems drawn on the editor line they name, a summary under the editor,
+  announced politely — NN/g, "Error-Message Guidelines"
+  (https://www.nngroup.com/articles/error-message-guidelines/); "10 Design
+  Guidelines for Reporting Errors in Forms"
+  (https://www.nngroup.com/articles/errors-forms-design-guidelines/).
+- Title, description and what is in force as one block — NN/g, "Proximity
+  Principle in Visual Design" (https://www.nngroup.com/articles/gestalt-proximity/).
+- A reset that looks clickable (outlined, not text-only) — NN/g, "Beyond Blue
+  Links" (https://www.nngroup.com/articles/clickable-elements/); Material 3,
+  Buttons (https://m3.material.io/components/buttons/guidelines).
+- "Apply…" with an ellipsis because it asks for confirmation — Microsoft,
+  "Command Buttons" (https://learn.microsoft.com/en-us/windows/win32/uxguide/ctrl-command-buttons).
+- A visible label on the key path field, not a placeholder — NN/g,
+  "Placeholders in Form Fields Are Harmful"
+  (https://www.nngroup.com/articles/form-design-placeholders/).
 
 ### Known costs
+
+- A usage entry's own `llm.api_key` set in `config.yaml` (e.g. on
+  `agents.kb_chat[0]`) cannot be kept through an edit of that list here: a
+  merge patch replaces a list whole, the page will not take the secret as text
+  (M6), and a key cannot sit inside a list (only at a text setting). Edit such
+  a list in `config.yaml`; a preset's key is the place the page manages.
+- A usage entry's `env` values are plain on this superuser-only page, as they
+  are in the boot dump (M7: one rule for both): a key cannot sit inside a
+  list, so treating them as secret left no way to keep one through an edit of
+  that list. A secret for a usage entry belongs in its preset's `env`.
 
 - Keys are stored in the database in clear, as the existing Private env values
   are; only superusers can set them and no one can read them back.
@@ -50,6 +92,24 @@ settled by me, listed for the user to overturn.
   into "read when used".
 
 ### Performance (to be measured, not assumed — P10)
+
+*Measured 2026-10-12* (local Postgres 16 in docker for the meta / resource rows,
+blobs on disk; and the disk backend alone — the production image ships no
+Postgres driver, so disk is likely what production runs):
+
+| | disk | Postgres |
+|---|---|---|
+| read the version (one row) | 0.16 ms | 16.6 ms (max 49) |
+| a use of the settings, version unchanged | 0.3 µs | 0.5 µs |
+| first use after an Apply: read + rebuild | 2.7 ms (max 46) | 41 ms (max 94) |
+| `load_app_manifest`, same version | 1.4 µs | 2.7 µs |
+| `load_app_manifest`, first read after an Apply | 0.14 ms | 0.27 ms |
+| the checks Apply runs (`problems`) | 7 ms (first 3 s: imports) | 6 ms |
+
+The Postgres read is specstar's `get`, not a bare row; paid by whichever request
+crossed the one-second window, synchronously, it was a ~17 ms stall of the event
+loop every second. So the read moved to a thread (M16): a request now pays the
+0.5 µs, and the rebuild happens off the request path too.
 
 Each use reads one small "current version" value; only a change reloads the
 patch. Merging is microseconds; a turn is seconds of model time. The two ways
@@ -94,7 +154,12 @@ Each `/tdd`, one commit; the review lenses, then CI, as usual.
 
 ## Open risks
 
-- A worker that is mid-job when Apply lands finishes that job on the old
+- An Apply takes effect per model CALL, not per job: a call already under way
+  finishes on the old settings, and every call after it — including the next
+  step of a job already running (a wiki pass, a card-gen run) — uses the new
+  ones, so one job can span two versions. (Review r1 caught the earlier
+  sentence, "finishes that job on the old settings", as untrue.)
+- (superseded) A worker that is mid-job when Apply lands finishes that job on the old
   settings; the next job reads the new version. Stated in the page's copy.
 - Validation at Apply covers structure only (M8); a wrong model name passes it
   and fails on first use — the test-connection button is how to find out first.
