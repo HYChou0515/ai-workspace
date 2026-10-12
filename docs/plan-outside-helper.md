@@ -34,6 +34,8 @@
 | D2 | 使用者電腦上跑一支 Python 小程式(外網小幫手)代替人上外網 | 〔user〕「一個python小工具」 |
 | D3 | 因為只有瀏覽器能上網,小幫手用 Playwright 開公司裝好的 **Chrome**(`channel="chrome"`)代為操作;不裝擴充功能 | 〔user〕「只能用瀏覽器上網」「我們是chrome」 |
 | D4 | **搜尋**送出去前,人在卡片上點頭(看得到查詢、可以改)按「查」。抓回來的內容**都直接送給 AI**,不再經人 | 〔user〕先選 B(兩個點),後改「直接送」——每頁只回一頁(D10),第二個點只剩「按送出」的搬運 |
+| D13 | **怎麼開**:安裝包附一個 `外網小幫手.pyw`,雙擊由 `pythonw` 執行(不是 exe、不出命令列視窗),開一個小視窗(Python 內建 tkinter):狀態(已連線/正在查/登入過期)、「登入」「暫停/繼續」「結束」、可勾「開機時自動啟動」(在 Windows「啟動」資料夾放捷徑)。關掉視窗 = 關掉小幫手 | 〔user〕「你如果能安裝好我也是可以」;呼應最初「一個簡單的gui代勞」 |
+| D14 | **打包在 dev server**(連得到 PyPI):`pip download --platform win_amd64 --only-binary=:all:` 抓 Windows 用的套件(Playwright 本身不分 Python 版本;`greenlet` 依版本,一次放 CPython 3.10–3.13 各一份〔施工〕),加上小幫手自己的 wheel 和 `.pyw`,組成離線安裝包;放在 **AI workspace 網頁**的「外網小幫手」頁下載。沒有 Windows CI——Windows 上的驗證是 user 在公司筆電裝起來跑一次 | 〔user〕「只能是我在dev server打包 或是在公司筆電打包」「可以 甚至可以在ai workspace網頁下載」 |
 | D12 | **開網址**:網址若出現在**這個聊天先前任何一次查回來的內容**裡,直接開;否則和搜尋一樣,先在卡片上點頭 | 〔user〕「純網址可以直接開 搜尋要先確認」,後收緊為「網址出現在上一次查詢中的話就可以直接開」「查過都算」——外面網頁上的連結是外面帶回來的,AI 自己寫的網址才可能夾帶內部字詞 |
 | D5 | 小幫手主動向後端領工作(網頁不能控制它);**Python 直接連我們的後端** | 〔user〕選 1 |
 | D6 | 身分沿用 app 現有的登入(「要登入才能用」那道門),不另做金鑰 | 〔user〕「我們已經有卡(限制)登入了」 |
@@ -92,7 +94,7 @@ AI 呼叫 ask_outside ──► 卡片(D7:沒連線 = 今天的手動流程)
 
 ### 3.4 小幫手(`outside-helper/`)〔施工〕
 
-- 一支 Python 套件,`python -m outside_helper --app <網址>` 啟動。
+- 一支 Python 套件;使用者雙擊 `外網小幫手.pyw` 開(D13),第一次問 app 網址並記住;`python -m outside_helper` 也能開,同一個視窗。
 - **差事外掛**(D9):每種差事一個模組,宣告 `kind`、參數、執行函式(拿到一個 Playwright page、回傳結果)。
   第一批:
   - `search`:開搜尋網址(卡片目的地清單裡 Google 那一筆的 `{q}` 代入),帶回**搜尋結果頁本身**(D10)。
@@ -118,8 +120,9 @@ AI 呼叫 ask_outside ──► 卡片(D7:沒連線 = 今天的手動流程)
 
 ### 3.6 安裝包(D8)〔施工〕
 
-- CI 產生 wheelhouse(小幫手 + Playwright 的 Windows wheel),和 image 一起出貨;app 有一頁「外網小幫手」提供下載與
-  三行安裝說明(`pip install --no-index --find-links <資料夾> outside-helper`)。
+- dev server 上一支打包指令(D14)產生 wheelhouse(小幫手 + Playwright、greenlet 等 Windows 用的 wheel)與
+  `外網小幫手.pyw`,壓成一個檔;AI workspace 網頁有一頁「外網小幫手」提供下載與安裝說明
+  (`pip install --no-index --find-links <資料夾> outside-helper`,再雙擊 `.pyw`)。
 - 不下載 Playwright 自帶的瀏覽器(`channel="chrome"` 用已安裝的 Chrome)。
 
 ## 4. Phases
@@ -130,9 +133,9 @@ AI 呼叫 ask_outside ──► 卡片(D7:沒連線 = 今天的手動流程)
 | P2 | `OutsideJob` resource + 卡片路由(建立/讀/取消)+ 小幫手路由(心跳/領/交失敗、逾時回收) | 只領自己的工作;CAS 不雙領;逾時回 `queued`;權限同送訊息 |
 | P3 | 交結果 = 送給 AI:經既有 outside-answers 存檔 + 以按「查」的人送 `answers` 訊息;存檔時抽出內容裡的連結記為查過的網址,`ask_outside(url=…)` 比對後自動建工作(D12) | 與手動送出走同一段程式(parity 測試);檔頭記來源網址;同一張卡不會送兩次;查過的網址自動開、沒查過的等「查」;手動貼上的也算;錨點不同視為同一網址 |
 | P4 | 卡片:連線狀態、交給小幫手、進行中/取消/失敗;沒連線退回手動 | 小幫手沒連線時卡片與今天一模一樣 |
-| P5 | `outside-helper/` 骨架:啟動、Chrome persistent context、登入與過期重登、領工作迴圈、差事外掛介面、驗證碼等待 | 對本機假後端 + 本機假網站跑通 |
+| P5 | `outside-helper/` 骨架:小視窗(D13)、Chrome persistent context、登入與過期重登、領工作迴圈、差事外掛介面、驗證碼等待 | 對本機假後端 + 本機假網站跑通(Linux) |
 | P6 | 差事 `search` / `open_url`:開頁、整頁 HTML 經打包的 `htmlToMarkdown` 轉 Markdown | parity:範例 HTML 在前端與小幫手轉出逐字相同;對本機假搜尋頁抓得到結果連結 |
-| P7 | 安裝包:CI 產 wheelhouse、app 下載頁 | 乾淨的 Windows Python 只用安裝包就裝得起來 |
+| P7 | 安裝包:dev server 上的打包指令(D14,產 Windows 用的 wheelhouse + `.pyw`)、AI workspace 的下載頁 | 在 Linux 上產出的安裝包含小幫手與 Playwright、greenlet cp310–cp313 的 win_amd64 wheel;`pip install --no-index --dry-run` 對 win_amd64 解得出全部依賴;下載頁下載得到 |
 | P8 | 文件:`docs/migrations.md`(新 resource、新路由、新下載物)、使用者說明 | mkdocs `--strict` 綠 |
 | P9 | live check(真 app + 真 Chrome + 本機假網站)+ demo MP4 | 搜尋與開網址各走一次:按「查」之後不再經人,`lookups/` 有檔、AI 讀到 |
 | P10 | review(四把鏡頭)→ CI | 照 CLAUDE.md |
@@ -151,7 +154,8 @@ AI 呼叫 ask_outside ──► 卡片(D7:沒連線 = 今天的手動流程)
 
 ## 7. prod 怎麼驗證
 
-1. 從 app 的「外網小幫手」頁下載安裝包,照三行說明在自己電腦裝好、啟動;第一次會開 Chrome 請你登入 app。
+1. 從 app 的「外網小幫手」頁下載安裝包,照說明在自己電腦裝好,雙擊 `外網小幫手.pyw`:小視窗出現;按「登入」開 Chrome 登入 app,視窗顯示「已連線」。
+   這一步是 Windows 上唯一的驗證(D14):安裝包裝不裝得起來、`.pyw` 能不能雙擊、Chrome 開不開得出來、公司代理與 SSO。
 2. 在聊天問一個需要外部資料的問題;卡片上方顯示小幫手已連線,主要按鈕是「查」。
 3. 改一下查詢、按「查」:小幫手的 Chrome 搜尋改過的字;不用再按別的,`lookups/` 多一個檔(搜尋結果頁),AI 接著讀。
 4. AI 想看結果頁上的其中一頁時出「開網址」卡片;不用按,小幫手直接開那一頁送給 AI,AI 引用它作答。
