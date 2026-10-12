@@ -20,6 +20,7 @@ function field(masked: boolean) {
       autoCorrect="off"
       onCopy={blockMaskedCopy}
       onCut={blockMaskedCopy}
+      onDragStart={blockMaskedCopy}
     />,
   );
   return screen.getByTestId("secret");
@@ -33,11 +34,15 @@ describe("blockMaskedCopy", () => {
     // fireEvent returns false when a handler called preventDefault.
     expect(fireEvent.copy(el)).toBe(false);
     expect(fireEvent.cut(el)).toBe(false);
+    // Dragging the selected dots into another field drops the plain value
+    // (review round 2); a password field does not let its text be dragged.
+    expect(fireEvent.dragStart(el)).toBe(false);
   });
 
   it("lets the value go once it is shown", () => {
     const el = field(false);
     expect(fireEvent.copy(el)).toBe(true);
     expect(fireEvent.cut(el)).toBe(true);
+    expect(fireEvent.dragStart(el)).toBe(true);
   });
 });

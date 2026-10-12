@@ -87,6 +87,7 @@ export function CodeConnectionEditor({
           autoCorrect="off"
           onCopy={blockMaskedCopy}
           onCut={blockMaskedCopy}
+          onDragStart={blockMaskedCopy}
           placeholder="leave blank to keep the current token"
           value={token}
           onChange={(e) => setToken(e.target.value)}

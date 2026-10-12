@@ -1257,6 +1257,7 @@ function MineRow({
             autoCorrect="off"
             onCopy={blockMaskedCopy}
             onCut={blockMaskedCopy}
+            onDragStart={blockMaskedCopy}
             // `.input` (fills what is left), not `.input--block` (width 100%,
             // never shrinks): beside the reveal button that pushed the button out of
             // the panel and gave it a sideways scroll — on master too.
@@ -1434,6 +1435,7 @@ function PersonalRow({
           autoCorrect="off"
           onCopy={blockMaskedCopy}
           onCut={blockMaskedCopy}
+          onDragStart={blockMaskedCopy}
           // `.input` (fills what is left), not `.input--block` (width 100%,
           // never shrinks): beside the reveal button that pushed the button out of
           // the panel and gave it a sideways scroll — on master too.
@@ -1602,6 +1604,7 @@ export function Logins({
                   autoCorrect="off"
                   onCopy={blockMaskedCopy}
                   onCut={blockMaskedCopy}
+                  onDragStart={blockMaskedCopy}
                   value={creds[field.name] ?? ""}
                   onChange={(e) => setCreds({ ...creds, [field.name]: e.target.value })}
                   className="input input--block"

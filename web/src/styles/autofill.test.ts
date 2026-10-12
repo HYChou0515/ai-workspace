@@ -84,6 +84,7 @@ const MASKED_NEEDS: [string, (el: ts.JsxOpeningLikeElement, sf: ts.SourceFile) =
   ['autoCorrect="off"', (el) => literal(attr(el, "autoCorrect")) === "off"],
   ["onCopy={blockMaskedCopy}", (el, sf) => attr(el, "onCopy")?.initializer?.getText(sf) === "{blockMaskedCopy}"],
   ["onCut={blockMaskedCopy}", (el, sf) => attr(el, "onCut")?.initializer?.getText(sf) === "{blockMaskedCopy}"],
+  ["onDragStart={blockMaskedCopy}", (el, sf) => attr(el, "onDragStart")?.initializer?.getText(sf) === "{blockMaskedCopy}"],
 ];
 
 function attr(el: ts.JsxOpeningLikeElement, name: string): ts.JsxAttribute | undefined {

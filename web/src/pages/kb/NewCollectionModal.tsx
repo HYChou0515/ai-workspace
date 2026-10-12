@@ -271,6 +271,7 @@ export function NewCollectionModal({
                       autoCorrect="off"
                       onCopy={blockMaskedCopy}
                       onCut={blockMaskedCopy}
+                      onDragStart={blockMaskedCopy}
                       value={gitToken}
                       onChange={(e) => setGitToken(e.target.value)}
                     />

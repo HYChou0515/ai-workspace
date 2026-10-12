@@ -154,6 +154,7 @@ export function MyEnvPage({
             autoCorrect="off"
             onCopy={blockMaskedCopy}
             onCut={blockMaskedCopy}
+            onDragStart={blockMaskedCopy}
             style={MONO}
           />
           <button
