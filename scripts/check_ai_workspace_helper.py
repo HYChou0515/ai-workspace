@@ -405,7 +405,10 @@ def _update_check(repo: Path, wheels: Path, check: _Check) -> None:
 
     print("\n=== update: install 0.1.0, publish 0.2.0, next start takes it", flush=True)
     installed = setup_core.install(zip_of("0.1.0"), home, base_python=sys.executable, run=run)
-    check("0.1.0 installs from the wheelhouse alone (venv, pip, self-test)", installed == "0.1.0")
+    check(
+        "0.1.0 installs from the wheelhouse alone (venv, pip, self-test)",
+        installed.version == "0.1.0",
+    )
 
     folder = zip_of("0.2.0")
     buf = io.BytesIO()

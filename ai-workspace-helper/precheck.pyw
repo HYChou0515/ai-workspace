@@ -31,7 +31,7 @@ def main() -> int:
         anchor="w",
     ).pack(fill="x")
     text = tkinter.Text(window, width=78, height=14, wrap="word", padx=8, pady=8)
-    text.insert("end", "檢查中…（約半分鐘）")
+    text.insert("end", "檢查中…")
     text.configure(state="disabled")
     text.pack(fill="both", expand=True, padx=12)
     result: dict[str, str] = {}

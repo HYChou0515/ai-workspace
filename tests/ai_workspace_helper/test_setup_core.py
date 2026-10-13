@@ -35,7 +35,7 @@ class _Run:
         if self.fail_on and any(self.fail_on in a for a in argv):
             raise SetupFailed(f"{self.fail_on} failed")
         if argv[1:3] == ["-m", "venv"]:
-            python = setup_core.venv_python(Path(argv[3]))
+            python = setup_core.venv_python(Path(argv[-1]))  # the venv path is last
             python.parent.mkdir(parents=True, exist_ok=True)
             python.write_text("")
 
