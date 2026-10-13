@@ -496,7 +496,7 @@ def test_the_update_line_says_where_the_next_version_stands():
     # the running version carries on — unless it is refused, when only a
     # reinstall from the download page is left (§3.7.6)
     assert describe_update("failed: sha256", forced=False) == "新版準備失敗:sha256(這一版照常使用)"
-    assert "「小幫手」頁" in describe_update("failed: sha256", forced=True)
+    assert "請到 AI Workspace 的「小幫手」頁" in describe_update("failed: sha256", forced=True)
 
 
 # §3.7 table: Chrome updated past what this helper drives fails at start —
@@ -509,4 +509,4 @@ def test_a_chrome_that_will_not_start_says_what_to_do():
 
 def test_a_status_reads_with_or_without_its_detail():
     assert describe("paused", "") == "已暫停 — 卡片會改成自己查"
-    assert describe("unreachable", "connection refused") == "連不到 AI 工作區:connection refused"
+    assert describe("unreachable", "connection refused") == "連不到 AI Workspace:connection refused"

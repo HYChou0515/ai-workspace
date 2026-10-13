@@ -30,7 +30,7 @@ _TEXT = {
     "paused": "已暫停 — 卡片會改成自己查",
     "needs_login": "登入過期 — 請在小幫手的 Chrome 視窗登入",
     "update_required": "這個版本已停用,需要更新",
-    "unreachable": "連不到 AI 工作區",
+    "unreachable": "連不到 AI Workspace",
     "error": "發生錯誤",
     "no_chrome": "開不了 Chrome(Chrome 剛更新的話,請更新小幫手;或按「重設登入」)",
 }
@@ -58,7 +58,7 @@ def describe_update(status: str, *, forced: bool) -> str:
     if status.startswith("failed"):
         why = status.partition(":")[2].strip()
         if forced:
-            return f"新版準備失敗:{why}。請到 AI 工作區的「小幫手」頁重新下載、執行 install.pyw"
+            return f"新版準備失敗:{why}。請到 AI Workspace 的「小幫手」頁重新下載、執行 install.pyw"
         return f"新版準備失敗:{why}(這一版照常使用)"
     return ""
 
@@ -332,7 +332,7 @@ def _ask_app_url(tk_root: Any) -> str | None:  # pragma: no cover — needs a di
     while True:
         url = simpledialog.askstring(
             "AI Workspace",
-            "AI 工作區的網址(例如 https://ai.example.corp):",
+            "AI Workspace 的網址(例如 https://ai.example.corp):",
             parent=tk_root,
         )
         if url is None:
