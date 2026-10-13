@@ -1915,37 +1915,37 @@ export const messages = {
   "lookup.helperOpening": { "zh-TW": "小幫手正在開…", en: "The helper is opening it…" },
   "lookup.helperFromEarlier": { "zh-TW": "來自先前查到的內容", en: "From what an earlier lookup brought back" },
   "lookup.helperInstall": { "zh-TW": "怎麼安裝", en: "How to install it" },
-  "aiWorkspace.title": { "zh-TW": "小幫手", en: "Helper" },
-  "aiWorkspace.desc": {
+  "aiWorkspaceHelper.title": { "zh-TW": "小幫手", en: "Helper" },
+  "aiWorkspaceHelper.desc": {
     "zh-TW":
       "裝在你電腦上的小程式:用你的 Chrome 幫 AI 開外面的網頁。「請幫我查」卡片會交給它,不用你自己複製貼上。",
     en: "A small program on your PC that opens outside pages for the AI in your Chrome. The 請幫我查 card hands lookups to it instead of you copying them.",
   },
-  "aiWorkspace.version": { "zh-TW": "目前版本 {version}", en: "Current version {version}" },
-  "aiWorkspace.download": {
+  "aiWorkspaceHelper.version": { "zh-TW": "目前版本 {version}", en: "Current version {version}" },
+  "aiWorkspaceHelper.download": {
     "zh-TW": "下載 {file}(ZIP,{size})",
     en: "Download {file} (ZIP, {size})",
   },
-  "aiWorkspace.unpublished": {
+  "aiWorkspaceHelper.unpublished": {
     "zh-TW": "還沒有發布小幫手。請洽系統管理員。",
     en: "The helper has not been published yet. Ask your administrator.",
   },
-  "aiWorkspace.install": { "zh-TW": "安裝", en: "Install" },
-  "aiWorkspace.step1": { "zh-TW": "下載後解壓縮。", en: "Unzip the download." },
-  "aiWorkspace.step2": {
+  "aiWorkspaceHelper.install": { "zh-TW": "安裝", en: "Install" },
+  "aiWorkspaceHelper.step1": { "zh-TW": "下載後解壓縮。", en: "Unzip the download." },
+  "aiWorkspaceHelper.step2": {
     "zh-TW": "雙擊 install.pyw,確認它要用的 Python(3.10–3.14)。",
     en: "Double-click install.pyw and confirm the Python it will use (3.10–3.14).",
   },
-  "aiWorkspace.step3": {
-    "zh-TW": "雙擊桌面的「AI Workspace」。第一次會問這個網站的網址,填:",
-    en: "Double-click “AI Workspace” on the desktop. The first time it asks for this site's address:",
+  "aiWorkspaceHelper.step3": {
+    "zh-TW": "雙擊桌面的「AI Workspace Helper」。第一次會問這個網站的網址,填:",
+    en: "Double-click “AI Workspace Helper” on the desktop. The first time it asks for this site's address:",
   },
-  "aiWorkspace.step4": {
+  "aiWorkspaceHelper.step4": {
     "zh-TW": "在它開的 Chrome 視窗裡登入一次。登入過期時,它會把那個視窗叫到前面請你再登入。",
     en: "Sign in once in the Chrome window it opens. When that sign-in expires, it brings the window forward for you to sign in again.",
   },
-  "aiWorkspace.online": { "zh-TW": "小幫手已連線", en: "Helper connected" },
-  "aiWorkspace.offline": { "zh-TW": "小幫手未連線", en: "Helper not connected" },
+  "aiWorkspaceHelper.online": { "zh-TW": "小幫手已連線", en: "Helper connected" },
+  "aiWorkspaceHelper.offline": { "zh-TW": "小幫手未連線", en: "Helper not connected" },
   "lookup.helperCaptcha": {
     "zh-TW": "請在小幫手的 Chrome 視窗裡完成驗證",
     en: "Complete the verification in the helper's Chrome window",

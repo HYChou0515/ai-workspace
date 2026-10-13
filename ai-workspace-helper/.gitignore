@@ -1,0 +1,3 @@
+# Built from the frontend source (web/vite.ai-workspace-helper.config.ts) by
+# `pnpm run build:ai-workspace-helper`; never committed, never hand-edited.
+src/ai_workspace_helper/page_to_markdown.js

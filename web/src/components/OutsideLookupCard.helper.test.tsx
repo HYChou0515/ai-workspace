@@ -32,7 +32,7 @@ const PAGE: OutsideLookup = { why: "看那一頁", url: "https://pandas.example/
 const RELEASE: HelperRelease = {
   version: "0.1.0",
   min_version: "0.0.0",
-  file: "ai-workspace-0.1.0.zip",
+  file: "ai-workspace-helper-0.1.0.zip",
   sha256: "ab",
   size: 1,
 };
@@ -116,7 +116,7 @@ describe("with no helper connected", () => {
     draw({ online: false });
 
     const link = await screen.findByRole("link", { name: "怎麼安裝" });
-    expect(link).toHaveAttribute("href", "/ai-workspace");
+    expect(link).toHaveAttribute("href", "/ai-workspace-helper");
     expect(link).toHaveAttribute("target", "_blank");
   });
 });
@@ -274,7 +274,7 @@ describe("a page, with the helper connected (D12)", () => {
     expect(await screen.findByText("請在小幫手的 Chrome 視窗裡完成驗證")).toBeInTheDocument();
 
     online = false;
-    await qc.invalidateQueries({ queryKey: qk.aiWorkspace() });
+    await qc.invalidateQueries({ queryKey: qk.aiWorkspaceHelper() });
 
     await waitFor(() => expect(screen.queryByText("小幫手未連線")).not.toBeInTheDocument());
     expect(screen.getByText("請在小幫手的 Chrome 視窗裡完成驗證")).toBeInTheDocument();

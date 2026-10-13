@@ -12,7 +12,7 @@ from tests.api.test_outside_answers import _asked
 
 
 def _beat(client) -> None:
-    r = client.post("/ai-workspace/heartbeat", json={"version": "0.1.0", "protocol": 1})
+    r = client.post("/ai-workspace-helper/heartbeat", json={"version": "0.1.0", "protocol": 1})
     assert r.status_code == 204, r.text
 
 
@@ -21,7 +21,7 @@ def _hand(client, iid, call="c1", **body):
 
 
 def _claim(client):
-    return client.post("/ai-workspace/jobs/claim")
+    return client.post("/ai-workspace-helper/jobs/claim")
 
 
 def test_the_card_hands_a_search_to_the_persons_helper():
@@ -59,7 +59,7 @@ def test_a_helper_checked_in_too_long_ago_is_offline():
     t[0] += 31_000
 
     assert _hand(client, iid).status_code == 409
-    assert client.get("/ai-workspace/status").json() == {"online": False}
+    assert client.get("/ai-workspace-helper/status").json() == {"online": False}
 
 
 # A job belongs to the person who pressed 「查」; only their own helper takes it.
@@ -230,7 +230,7 @@ def test_a_failure_reaches_the_card_with_its_reason():
     _hand(client, iid)
     jid = _claim(client).json()["id"]
 
-    r = client.post(f"/ai-workspace/jobs/{jid}/fail", json={"error": "page timed out"})
+    r = client.post(f"/ai-workspace-helper/jobs/{jid}/fail", json={"error": "page timed out"})
 
     assert r.status_code == 204, r.text
     assert _state(client, iid) | {"id": None} == {
@@ -253,7 +253,7 @@ def test_a_helper_cannot_fail_someone_elses_job():
     jid = _claim(client).json()["id"]
 
     holder["id"] = "someone-else"
-    r = client.post(f"/ai-workspace/jobs/{jid}/fail", json={"error": "x"})
+    r = client.post(f"/ai-workspace-helper/jobs/{jid}/fail", json={"error": "x"})
 
     assert r.status_code == 404
     holder["id"] = "u"
@@ -279,7 +279,7 @@ def test_a_job_that_has_ended_cannot_be_cancelled():
     _beat(client)
     _hand(client, iid)
     jid = _claim(client).json()["id"]
-    client.post(f"/ai-workspace/jobs/{jid}/fail", json={"error": "page timed out"})
+    client.post(f"/ai-workspace-helper/jobs/{jid}/fail", json={"error": "page timed out"})
 
     r = client.delete(f"/a/rca/items/{iid}/outside-jobs/c1")
 
@@ -293,7 +293,7 @@ def test_handing_a_card_over_again_replaces_its_job():
     _beat(client)
     _hand(client, iid)
     jid = _claim(client).json()["id"]
-    client.post(f"/ai-workspace/jobs/{jid}/fail", json={"error": "x"})
+    client.post(f"/ai-workspace-helper/jobs/{jid}/fail", json={"error": "x"})
 
     _hand(client, iid, query="again")
 
@@ -342,7 +342,7 @@ def test_the_helper_tells_the_card_it_is_waiting_on_the_person():
     _hand(client, iid)
     jid = _claim(client).json()["id"]
 
-    r = client.post(f"/ai-workspace/jobs/{jid}/note", json={"note": "captcha"})
+    r = client.post(f"/ai-workspace-helper/jobs/{jid}/note", json={"note": "captcha"})
 
     assert r.status_code == 204, r.text
     assert _state(client, iid)["note"] == "captcha"
@@ -362,7 +362,7 @@ def test_a_job_waiting_on_the_person_is_not_taken_again():
     jid = _claim(client).json()["id"]
 
     t[0] += CLAIM_TIMEOUT_MS - 1
-    client.post(f"/ai-workspace/jobs/{jid}/note", json={"note": "captcha"})
+    client.post(f"/ai-workspace-helper/jobs/{jid}/note", json={"note": "captcha"})
     t[0] += CLAIM_TIMEOUT_MS - 1
     _beat(client)
 
@@ -398,10 +398,10 @@ def test_a_helper_waiting_on_the_person_still_reads_as_connected():
     jid = _claim(client).json()["id"]
 
     t[0] += 25_000
-    client.post(f"/ai-workspace/jobs/{jid}/note", json={"note": "captcha"})
+    client.post(f"/ai-workspace-helper/jobs/{jid}/note", json={"note": "captcha"})
     t[0] += 25_000
 
-    assert client.get("/ai-workspace/status").json() == {"online": True}
+    assert client.get("/ai-workspace-helper/status").json() == {"online": True}
     # and what it last reported on its check-in is kept
     assert store.presence("u").version == "0.1.0"
 
@@ -414,7 +414,7 @@ def test_a_helper_cannot_note_someone_elses_job():
     jid = _claim(client).json()["id"]
 
     holder["id"] = "someone-else"
-    r = client.post(f"/ai-workspace/jobs/{jid}/note", json={"note": "captcha"})
+    r = client.post(f"/ai-workspace-helper/jobs/{jid}/note", json={"note": "captcha"})
 
     assert r.status_code == 404
     holder["id"] = "u"

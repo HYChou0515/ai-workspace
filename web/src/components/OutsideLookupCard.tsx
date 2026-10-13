@@ -127,7 +127,7 @@ export function OutsideLookupCard({
     client.helperStatus && client.handOver && client.job && client.cancel,
   );
   const helper = useQuery({
-    queryKey: qk.aiWorkspace(),
+    queryKey: qk.aiWorkspaceHelper(),
     queryFn: () => client.helperStatus!(),
     enabled: Boolean(item) && helperAvailable && !answeredAlready && done === null,
     refetchInterval: 15_000,
@@ -136,7 +136,7 @@ export function OutsideLookupCard({
   // Whether there is a helper to get at all (§3.7.2): with none published,
   // the card does not point at one (D7).
   const release = useQuery({
-    queryKey: qk.aiWorkspaceRelease(),
+    queryKey: qk.aiWorkspaceHelperRelease(),
     queryFn: () => client.release!(),
     enabled: Boolean(item) && Boolean(client.release) && !answeredAlready && done === null,
     staleTime: 10 * 60_000,
@@ -333,7 +333,7 @@ export function OutsideLookupCard({
       {helperAvailable && helper.isSuccess && release.data && !helping && !locked && (
         <p className="outside-lookup-hint">
           {t("lookup.helperOffline")}{" "}
-          <a href={`${API_BASE}/ai-workspace`} target="_blank" rel="noopener noreferrer">
+          <a href={`${API_BASE}/ai-workspace-helper`} target="_blank" rel="noopener noreferrer">
             {t("lookup.helperInstall")}
           </a>
         </p>

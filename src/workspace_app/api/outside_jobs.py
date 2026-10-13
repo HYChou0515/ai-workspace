@@ -80,7 +80,7 @@ class OutsideJob(Struct):
     claims: int = 0
 
 
-class _AiWorkspacePresence(Struct):
+class _AiWorkspaceHelperPresence(Struct):
     """The last time a person's helper checked in, and what it runs."""
 
     owner: str
@@ -143,7 +143,7 @@ def register_outside_jobs(spec: SpecStar) -> None:
     with contextlib.suppress(ValueError):
         spec.add_model(OutsideJob, indexed_fields=["owner", "state", "created_ms"])
     with contextlib.suppress(ValueError):
-        spec.add_model(_AiWorkspacePresence)
+        spec.add_model(_AiWorkspaceHelperPresence)
     with contextlib.suppress(ValueError):
         spec.add_model(_OutsideSeenUrls)
 
@@ -164,17 +164,17 @@ class OutsideJobStore:
         return self._spec.get_resource_manager(OutsideJob)
 
     def _presence(self):
-        return self._spec.get_resource_manager(_AiWorkspacePresence)
+        return self._spec.get_resource_manager(_AiWorkspaceHelperPresence)
 
     # ── presence ────────────────────────────────────────────────────────────
 
     async def heartbeat(self, owner: str, **seen: str | int) -> None:
         """The owner's helper checked in; ``seen`` is what it runs on — the
-        `_AiWorkspacePresence` fields past ``last_seen_ms``."""
+        `_AiWorkspaceHelperPresence` fields past ``last_seen_ms``."""
         await asyncio.to_thread(self._heartbeat_sync, owner, seen)
 
     def _heartbeat_sync(self, owner: str, seen: dict[str, str | int]) -> None:
-        row = _AiWorkspacePresence(
+        row = _AiWorkspaceHelperPresence(
             owner=owner,
             last_seen_ms=self.now(),
             **seen,  # ty: ignore[invalid-argument-type]
@@ -198,13 +198,13 @@ class OutsideJobStore:
         seen = self.presence(owner)
         return seen is not None and self.now() - seen.last_seen_ms <= ONLINE_WINDOW_MS
 
-    def presence(self, owner: str) -> _AiWorkspacePresence | None:
+    def presence(self, owner: str) -> _AiWorkspaceHelperPresence | None:
         """The owner's helper as it last checked in, or None (blocking)."""
         try:
             data = self._presence().get(_owner_key(owner)).data
         except (ResourceIDNotFoundError, ResourceIsDeletedError):
             return None
-        assert isinstance(data, _AiWorkspacePresence)
+        assert isinstance(data, _AiWorkspaceHelperPresence)
         return data
 
     # ── jobs ────────────────────────────────────────────────────────────────
@@ -296,7 +296,7 @@ class OutsideJobStore:
         """Say what the owner's helper is waiting on for this claimed job. It
         also renews the claim: a person solving a captcha can take longer than
         `CLAIM_TIMEOUT_MS`, so the helper says it again every
-        `ai_workspace.errands.RENEW_S` while it waits, and the job does not go
+        `ai_workspace_helper.errands.RENEW_S` while it waits, and the job does not go
         back to the queue — to be fetched a second time — meanwhile. False as
         `fail`."""
         return await asyncio.to_thread(self._note_sync, jid, owner, note)
@@ -330,7 +330,7 @@ class OutsideJobStore:
         if seen is None:
             return
         fields = {f: getattr(seen, f) for f in seen.__struct_fields__}
-        row = _AiWorkspacePresence(**{**fields, "last_seen_ms": self.now()})  # ty: ignore[invalid-argument-type]
+        row = _AiWorkspaceHelperPresence(**{**fields, "last_seen_ms": self.now()})  # ty: ignore[invalid-argument-type]
         self._presence().modify(_owner_key(owner), row, status=RevisionStatus.draft)
 
     # ── links lookups brought back (D12) ────────────────────────────────────

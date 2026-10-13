@@ -9,7 +9,7 @@ import { AppWorkspace } from "./pages/AppWorkspace";
 import { DiagnosticsPage } from "./pages/DiagnosticsPage";
 import { GroupsPage } from "./pages/GroupsPage";
 import { MyEnvPage } from "./pages/MyEnvPage";
-import { AiWorkspacePage } from "./pages/AiWorkspacePage";
+import { AiWorkspaceHelperPage } from "./pages/AiWorkspaceHelperPage";
 import { MyResourcesPage } from "./pages/MyResourcesPage";
 import { SkillHubEntryPage } from "./pages/SkillHubEntryPage";
 import { SkillHubPage } from "./pages/SkillHubPage";
@@ -79,7 +79,7 @@ export function AppRoutes() {
         <Route path="/my-resources" element={<MyResourcesPage />} />
         <Route path="/my-env" element={<MyEnvPage />} />
         {/* Where the helper is downloaded (docs/plan-outside-helper.md §3.6). */}
-        <Route path="/ai-workspace" element={<AiWorkspacePage />} />
+        <Route path="/ai-workspace-helper" element={<AiWorkspaceHelperPage />} />
         {/* Every Deployed WUI the viewer may open (docs/plan-wui-overview.md).
             Inside the shell: it is a place to find pages; the pages themselves
             open at `/w/` outside it. */}

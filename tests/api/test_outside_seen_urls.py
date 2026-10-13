@@ -93,7 +93,7 @@ def test_a_link_the_helper_brought_back_opens_without_a_nod():
     _beat(client)
     client.post(f"/a/rca/items/{iid}/outside-jobs", json={"tool_call_id": "c1"})
     jid = _claim(client).json()["id"]
-    r = client.post(f"/ai-workspace/jobs/{jid}/result", json={"markdown": PAGE})
+    r = client.post(f"/ai-workspace-helper/jobs/{jid}/result", json={"markdown": PAGE})
     assert r.status_code == 200, r.text
     _second_turn(client, iid)
 
