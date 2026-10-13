@@ -538,6 +538,7 @@ function Loaded({ client, data }: { client: Client; data: PageData }) {
             published={data.published}
             defaults={data.defaults}
             draft={draft}
+            goEdit={() => setTab("edit")}
           />
         )}
         {tab === "keys" && (
@@ -767,6 +768,12 @@ function TestConnection({ client, defaults, draft }: { client: Client; defaults:
   // for how long, under a button that keeps its label (final review 7; NN/g
   // "Progress Indicators Make a Slow System Less Insufferable").
   const [waited, setWaited] = useState(0);
+  // The section sits low on the page: its progress and result are brought into
+  // view, as a rollback's result is (final review 15).
+  const testAt = useRef<HTMLParagraphElement>(null);
+  useEffect(() => {
+    testAt.current?.scrollIntoView?.({ block: "nearest" });
+  }, [test.isPending, test.data]);
   useEffect(() => {
     if (!test.isPending) return;
     setWaited(0);
@@ -807,12 +814,17 @@ function TestConnection({ client, defaults, draft }: { client: Client; defaults:
       </div>
       {/* Its own line, so the picker beside the button stays put (final review 11). */}
       {test.isPending && (
-        <p role="status" data-testid="model-settings-test-running" style={{ ...MUTED, margin: 0 }}>
+        <p ref={testAt} role="status" data-testid="model-settings-test-running" style={{ ...MUTED, margin: 0 }}>
           {t("modelSettings.testRunning", { preset: test.variables ?? chosen, s: String(waited) })}
         </p>
       )}
       {test.data && (
-        <p data-testid="model-settings-test-result" role={test.data.ok ? undefined : "alert"} style={WRAP}>
+        <p
+          ref={testAt}
+          data-testid="model-settings-test-result"
+          role={test.data.ok ? undefined : "alert"}
+          style={WRAP}
+        >
           {test.data.ok ? (
             t("modelSettings.testOk", { model: test.data.model, ms: String(test.data.ms), reply: test.data.reply })
           ) : (
@@ -843,12 +855,14 @@ function HistoryTab({
   published,
   defaults,
   draft,
+  goEdit,
 }: {
   client: Client;
   current: string | null;
   published: Patch;
   defaults: SettingsDocument;
   draft: Draft;
+  goEdit: () => void;
 }) {
   const t = useT();
   const dialog = useDialog();
@@ -910,13 +924,31 @@ function HistoryTab({
     );
   // A rollback replaces the draft; over unsaved edits it would throw them away
   // without a word (review r3) — they are saved or undone first.
+  // Said only where a rollback is offered — a reason for an action the page
+  // does not show is noise (final review 15; NN/g heuristic #8).
+  const rollable = history.data.some(
+    (entry) => diffEffective((defaults ?? {}) as Patch, published, entry.patch).length > 0,
+  );
   const blockedByEdits = draft.dirty;
   return (
     <div style={{ display: "grid", gap: 8 }}>
-      {blockedByEdits && (
-        <p data-testid="model-settings-rollback-why" style={{ ...STATUS, margin: 0 }}>
-          {t("modelSettings.rollbackBlockedDirty")}
-        </p>
+      {blockedByEdits && rollable && (
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          <p data-testid="model-settings-rollback-why" style={{ ...STATUS, margin: 0 }}>
+            {t("modelSettings.rollbackBlockedDirty")}
+          </p>
+          {/* A way there, as the keys tab gives (NN/g heuristic #4). */}
+          <button
+            type="button"
+            className="btn"
+            data-variant="secondary"
+            data-size="sm"
+            data-testid="model-settings-go-edit"
+            onClick={goEdit}
+          >
+            {t("modelSettings.goEdit")}
+          </button>
+        </div>
       )}
       {rolled && (
         <p ref={rolledAt} role="status" data-testid="model-settings-rolled-back" style={{ ...STATUS, margin: 0 }}>

@@ -1117,6 +1117,47 @@ describe("ModelSettingsPage", () => {
     expect(changes).not.toHaveTextContent("前一版");
   });
 
+  it("brings a connection test's progress into view", async () => {
+    // final review 15: at 1280×900 the running line sat below the fold.
+    const scrolled = vi.fn();
+    Element.prototype.scrollIntoView = scrolled;
+    const client = fakeClient();
+    client.testConnection.mockImplementation(() => new Promise(() => {}));
+    renderWithQuery(<ModelSettingsPage client={client} />);
+
+    fireEvent.click(await screen.findByTestId("model-settings-test"));
+
+    const running = await screen.findByTestId("model-settings-test-running");
+    await waitFor(() => expect(scrolled.mock.contexts).toContain(running));
+  });
+
+  it("says rollback waits for unsaved edits only where a rollback is offered, with a way there", async () => {
+    // final review 15: the reason showed with no row to roll back, and gave no
+    // way to the Edit tab (the keys tab does).
+    const same = fakeClient({ version: "v1v1v1v1v1v1v1v1", published: {} });
+    same.history.mockResolvedValue([applied("v1v1v1v1v1v1v1v1", {}, 1)]);
+    const first = renderWithQuery(<ModelSettingsPage client={same} />);
+    await screen.findByRole("textbox", { name: "草稿（JSON）" });
+    type('{"config": {"llm": {"base_url": "http://mine"}}}');
+    fireEvent.click(screen.getByRole("tab", { name: "版本紀錄" }));
+    await screen.findByTestId("model-settings-version-changes-0");
+    expect(screen.queryByTestId("model-settings-rollback-why")).toBeNull();
+    first.unmount();
+    sessionStorage.clear();
+
+    const client = fakeClient({ version: "v2v2v2v2v2v2v2v2", published: KB_2 });
+    client.history.mockResolvedValue([applied("v2v2v2v2v2v2v2v2", KB_2, 2), applied("v1v1v1v1v1v1v1v1", {}, 1)]);
+    renderWithQuery(<ModelSettingsPage client={client} />);
+    await screen.findByRole("textbox", { name: "草稿（JSON）" });
+    type('{"config": {"llm": {"base_url": "http://mine"}}}');
+    fireEvent.click(screen.getByRole("tab", { name: "版本紀錄" }));
+    await screen.findByTestId("model-settings-rollback-why");
+
+    fireEvent.click(screen.getByTestId("model-settings-go-edit"));
+
+    expect(await screen.findByRole("textbox", { name: "草稿（JSON）" })).toBeInTheDocument();
+  });
+
   it("draws a refused key as an error at its field", async () => {
     // final review 5: plain black text, away from the field, no aria-invalid.
     const client = fakeClient();

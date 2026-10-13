@@ -675,3 +675,18 @@ def test_a_model_that_is_not_text_is_refused_not_crashed_on(keyed_config, model)
     found = problems(document, config_path=keyed_config, env={})
 
     assert any("model must be text" in p for p in found), found
+
+
+def test_a_usage_list_refusal_reads_whole_with_config_yaml_in_the_working_dir(
+    tmp_path, monkeypatch
+):
+    # final review 15: with ./config.yaml in use the config dir is `.`, and
+    # hiding it replaced every period of the message.
+    (tmp_path / "config.yaml").write_text("server:\n  port: 9090\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    entry = {"preset": "kb-default", "allowed_tools": ["read_page"]}
+
+    found = problems({"config": {"agents": {"kb_chat": [entry]}}}, config_path=None, env={})
+
+    assert found and "agents.kb_chat[0]" in found[0], found
+    assert "<config dir>" not in found[0], found

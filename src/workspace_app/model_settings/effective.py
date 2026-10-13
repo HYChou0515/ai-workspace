@@ -570,7 +570,11 @@ def _problems(
         build_catalog(settings, config_dir=config_dir)
     except Exception as exc:  # whatever building refuses with, named — it is the boot's own check
         # Without the server's directory (final review 7), as `load_problem`.
-        said = str(exc).replace(str(config_dir), "<config dir>") if config_dir else str(exc)
+        # Only the absolute path: a relative dir (`.` for ./config.yaml) shows no
+        # server location, and replacing it rewrote every period (final review 15).
+        said = (
+            str(exc).replace(str(config_dir.resolve()), "<config dir>") if config_dir else str(exc)
+        )
         return [f"config.agents: a usage entry cannot be built — {said}"]
     switched = _roles_switched(settings, default) + key_destination_problems(
         settings,
