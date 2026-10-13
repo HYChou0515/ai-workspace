@@ -34,6 +34,9 @@ export type ModelSettingsPage = {
   applied_keys: string[];
   /** Which revision of every staged key this read saw — Apply sends it back. */
   key_revision: string;
+  /** The whole boot config, secrets masked — what a pasted config is diffed
+   * against, so sections the page does not edit drop out unchanged (M23). */
+  boot_config: Patch;
   /** Every place a key can go in the saved draft — picked, never typed (M22). */
   key_slots: KeySlot[];
 };

@@ -51,7 +51,7 @@ def test_render_masks_secret_on_stdout_reveals_in_file(tmp_path: Path):
     masked = render(settings, prov, reveal_secrets=False)
     revealed = render(settings, prov, reveal_secrets=True)
     assert "sk-secretvalue123" not in masked
-    assert "api_key: *** set (17 chars) via ${OPENAI_KEY} ***  # ← env" in masked
+    assert 'api_key: "*** set (17 chars) via ${OPENAI_KEY} ***"  # ← env' in masked
     assert "sk-secretvalue123" in revealed
 
 
@@ -59,7 +59,7 @@ def test_render_masks_unset_secret(tmp_path: Path):
     """An unset secret reports `*** unset ***`, not a fake length."""
     settings, prov = _resolved(tmp_path, "server:\n  port: 9090\n")
     masked = render(settings, prov, reveal_secrets=False)
-    assert "api_key: *** unset ***  # ← default" in masked
+    assert 'api_key: "*** unset ***"  # ← default' in masked
 
 
 def test_every_value_of_a_presets_env_is_masked(tmp_path: Path):
@@ -80,7 +80,7 @@ def test_every_value_of_a_presets_env_is_masked(tmp_path: Path):
     )
     masked = render(settings, prov, reveal_secrets=False)
     assert "hunter2" not in masked
-    assert "HF_HUB_URL: *** set" in masked
+    assert 'HF_HUB_URL: "*** set' in masked
 
 
 def test_a_token_named_in_capitals_is_masked():
@@ -250,3 +250,36 @@ def test_the_dump_masks_a_preset_env_value_whose_name_holds_a_dot(tmp_path):
     settings, provenance = load_with_provenance(config_path=config, env={})
 
     assert "hunter2-value" not in render(settings, provenance, reveal_secrets=False)
+
+
+def test_the_masked_dump_is_yaml_that_can_be_pasted(tmp_path):
+    # M23: `pg_dsn: *** unset ***` unquoted is a YAML alias error — the dump
+    # could not be pasted into the settings page at all.
+    import yaml
+
+    from workspace_app.config.loader import load_with_provenance
+
+    config = tmp_path / "config.yaml"
+    config.write_text("llm:\n  api_key: sk-0000-0000-0000-0001\n", encoding="utf-8")
+    settings, provenance = load_with_provenance(config_path=config, env={})
+
+    tree = yaml.safe_load(render(settings, provenance, reveal_secrets=False))
+
+    assert tree["llm"]["api_key"].startswith("*** set (")
+
+
+def test_the_dump_spells_the_usage_lists_as_config_yaml_does(tmp_path):
+    # M23, found pasting a real dump into the page: the dump wrote the loaded
+    # `agents.sub_agents`, config.yaml and the page write `agents.kb_chat`.
+    import yaml
+
+    from workspace_app.config.loader import load_with_provenance
+
+    config = tmp_path / "config.yaml"
+    config.write_text("server:\n  port: 9090\n", encoding="utf-8")
+    settings, provenance = load_with_provenance(config_path=config, env={})
+
+    agents = yaml.safe_load(render(settings, provenance, reveal_secrets=False))["agents"]
+
+    assert "sub_agents" not in agents
+    assert agents["kb_chat"][0]["preset"]

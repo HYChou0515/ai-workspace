@@ -2852,7 +2852,6 @@ export const messages = {
   "modelSettings.default": { "zh-TW": "預設：{value}", en: "Default: {value}" },
   "modelSettings.defaultNone": { "zh-TW": "預設沒有這個值", en: "Not in the defaults" },
   "modelSettings.reset": { "zh-TW": "重設為預設", en: "Reset to default" },
-  "modelSettings.defaults": { "zh-TW": "部署預設（唯讀）", en: "Deploy defaults (read-only)" },
   "modelSettings.test": { "zh-TW": "測試連線", en: "Test connection" },
   "modelSettings.testPreset": { "zh-TW": "要測試的 preset", en: "Preset to test" },
   "modelSettings.testHint": {

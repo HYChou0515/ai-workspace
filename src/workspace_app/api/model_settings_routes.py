@@ -34,10 +34,12 @@ from ..model_settings.effective import (
 )
 from ..model_settings.live import LiveSettings
 from ..model_settings.page import (
+    config_tree,
     defaults_document,
     key_lands,
     key_path_problem,
     key_slots,
+    mask,
     try_connection,
 )
 from ..model_settings.store import Applied, KeysMoved, SettingsStore
@@ -103,6 +105,10 @@ class _PageOut(BaseModel):
     #: Which revision of every staged key the page read — Apply sends it back,
     #: so a key set or cleared since is a 409, not published unseen.
     key_revision: str = ""
+    #: The whole boot config, secrets masked — the baseline a pasted config is
+    #: diffed against, so sections the page does not edit drop out when
+    #: unchanged (M23).
+    boot_config: dict[str, Any] = {}
     #: Every place a key can go in the saved draft — picked, never typed (M22).
     key_slots: list[_KeySlot] = []
 
@@ -207,6 +213,7 @@ def register_model_settings_routes(
                 applied_keys=sorted(store.applied_key_values()),
                 key_revision=store.key_revision(),
                 key_slots=slots(),
+                boot_config=mask(config_tree(live.boot)),
             )
 
         return await asyncio.to_thread(read)

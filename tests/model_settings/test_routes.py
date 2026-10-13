@@ -477,3 +477,15 @@ def test_the_page_offers_the_places_a_key_can_go_from_the_saved_draft(page):
     assert API_KEY in paths
     assert "config.agents.presets.brand-new.llm.api_key" in paths
     assert {"path": API_KEY, "owner": "kb-default", "kind": "api_key", "name": ""} in slots
+
+
+def test_the_page_has_the_whole_boot_config_to_diff_a_paste_against(page):
+    # M23: a pasted resolved config's sections the page does not edit drop out
+    # when unchanged — so the baseline is the whole boot config, secrets masked.
+    from workspace_app.model_settings.page import SET, UNSET
+
+    boot = page.client.get(BASE).json()["boot_config"]
+
+    assert boot["server"]["port"] == 9090
+    assert boot["llm"]["api_key"] in (SET, UNSET)
+    assert "sub_agents" not in boot["agents"]  # spelled as config.yaml spells it

@@ -18,7 +18,7 @@
  */
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   modelSettingsApi,
@@ -45,11 +45,14 @@ import {
   diffEffective,
   flattenParts,
   dumpPatch,
+  effectiveOf,
   lineOfPath,
   parsePatch,
+  patchOf,
   valueAt,
   withoutPath,
   type Change,
+  type Parsed,
   type Patch,
 } from "../lib/settingsPatch";
 
@@ -223,7 +226,22 @@ function useDraft(client: Client, data: PageData) {
   const { defaults, draft, published, keys } = data;
   const pendingKeys = data.pending_keys ?? [];
   const keyRevision = data.key_revision;
-  const saved = useMemo(() => pretty(draft), [draft]);
+  // M23: the editor holds the whole settings — the defaults with the saved
+  // draft over them — and what is stored is only what differs, worked out
+  // against the whole boot config (so a pasted resolved config's sections the
+  // page does not edit drop out when unchanged). The patch is never shown.
+  const baseline = useMemo(
+    () => ({ ...(defaults as Patch), config: data.boot_config ?? (defaults as Patch).config }) as Patch,
+    [defaults, data.boot_config],
+  );
+  const readDraft = useCallback(
+    (source: string): Parsed => {
+      const read = parsePatch(source);
+      return read.ok ? { ok: true, patch: patchOf(baseline, read.patch) } : read;
+    },
+    [baseline],
+  );
+  const saved = useMemo(() => pretty(effectiveOf(defaults as Patch, draft)), [defaults, draft]);
   // Unsaved edits outlive the page for this browser session: the router here
   // cannot hold a navigation back to ask, so leaving and coming back gives
   // them back instead — NN/g's undo in place of a confirmation (final review 9).
@@ -253,7 +271,7 @@ function useDraft(client: Client, data: PageData) {
   useEffect(() => {
     const was = previous.current;
     previous.current = draft;
-    const now = parsePatch(textNow.current);
+    const now = readDraft(textNow.current);
     if (now.ok && sameShape(now.patch, was)) setText(saved);
     if (now.ok && (sameShape(now.patch, was) || sameShape(now.patch, draft))) {
       base.current = draft;
@@ -265,10 +283,10 @@ function useDraft(client: Client, data: PageData) {
     return () => clearTimeout(timer);
   }, [text]);
 
-  const parsed = parsePatch(text);
+  const parsed = readDraft(text);
   // What the page SAYS about the text waits for a pause in typing, like the
   // check — an error at every keystroke is the "too early" NN/g warns against.
-  const settled = parsePatch(checkedText);
+  const settled = readDraft(checkedText);
   const check = useQuery({
     queryKey: [...qk.modelSettings, "check", checkedText],
     queryFn: () => client.check(settled.ok ? settled.patch : {}),
@@ -673,17 +691,6 @@ function EditTab({
             </span>
           )}
         </div>
-        <details>
-          <summary>{t("modelSettings.defaults")}</summary>
-          <MonacoEditor
-            ariaLabel={t("modelSettings.defaults")}
-            value={pretty(defaults)}
-            language="yaml"
-            readOnly
-            autoHeight
-            minHeight={240}
-          />
-        </details>
       </section>
 
       <section aria-labelledby="model-settings-changes" style={{ display: "grid", gap: 8 }}>
@@ -724,7 +731,9 @@ function EditTab({
                     data-variant="secondary"
                     data-size="sm"
                     data-testid={`model-settings-reset-${path}`}
-                    onClick={() => patch && draft.edit(pretty(withoutPath(patch, parts)))}
+                    onClick={() =>
+                      patch && draft.edit(pretty(effectiveOf(defaults as Patch, withoutPath(patch, parts))))
+                    }
                   >
                     {t("modelSettings.reset")}
                   </button>

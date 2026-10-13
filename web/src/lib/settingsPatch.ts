@@ -11,6 +11,8 @@
 
 import { CORE_SCHEMA, dump as dumpYaml, load as loadYaml } from "js-yaml";
 
+import { sameShape } from "./sameShape";
+
 export type Patch = Record<string, unknown>;
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -39,7 +41,9 @@ export type Change =
   | { path: string; kind: "removed"; before: unknown }
   | { path: string; kind: "changed"; before: unknown; after: unknown };
 
-const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
+// By shape, never by text (CLAUDE.md `sameShape`): a pasted list entry
+// reorders its keys and is still the same entry (M23).
+const same = sameShape;
 
 /** What publishing `after` in place of `before` changes, value by value. */
 export function diffPatches(before: Patch, after: Patch): Change[] {
@@ -125,6 +129,49 @@ function mergePatch(target: unknown, patch: unknown): unknown {
     else out[key] = mergePatch(out[key], value);
   }
   return out;
+}
+
+/** What the editor shows (M23): the defaults with `patch` over them, as the
+ * loader builds it — except a preset the patch hides, shown as `null`: left
+ * out, the text would read as "back to the default" and lose the hide. */
+export function effectiveOf(defaults: Patch, patch: Patch): Patch {
+  const shown = mergePatch(defaults, patch) as Patch;
+  const hidden = valueAt(patch, ["config", "agents", "presets"]);
+  const presets = valueAt(shown, ["config", "agents", "presets"]);
+  if (hidden.found && isObject(hidden.value) && presets.found && isObject(presets.value)) {
+    for (const [name, value] of Object.entries(hidden.value)) if (value === null) presets.value[name] = null;
+  }
+  return shown;
+}
+
+/** A secret's mask, the page's (`*** set ***`) or the boot dump's
+ * (`*** set (17 chars) via ${X} ***`): pasted back, it changes nothing. */
+const MASK = /^\*\*\* (?:set|unset)(?: \(\d+ chars\))?(?: via \S+)? \*\*\*$/;
+const isMask = (value: unknown) => typeof value === "string" && MASK.test(value);
+const UNCHANGED = Symbol("unchanged");
+
+/** What is stored for an edited text (M23): only what differs from `base` —
+ * the whole boot config and every App — so the person edits the settings as
+ * they read and never writes a patch. Anything left out is the default (a
+ * pasted fragment changes just itself); a preset is hidden only where `null`
+ * is written for it (M12); an unchanged mask is no change; a section the page
+ * does not edit drops out when unchanged and stays, for the check to refuse,
+ * when changed. */
+export function patchOf(base: Patch, edited: Patch): Patch {
+  const diff = (was: unknown, now: unknown): unknown => {
+    if (isObject(was) && isObject(now)) {
+      const out: Record<string, unknown> = {};
+      for (const [key, value] of Object.entries(now)) {
+        const d = diff(was[key], value);
+        if (d !== UNCHANGED) out[key] = d;
+      }
+      return Object.keys(out).length ? out : UNCHANGED;
+    }
+    if (isMask(was) && isMask(now)) return UNCHANGED;
+    return same(was, now) ? UNCHANGED : now;
+  };
+  const out = diff(base, edited);
+  return out === UNCHANGED ? {} : (out as Patch);
 }
 
 /** `patch` without the value at `parts` — that value back to its default — on a copy. */

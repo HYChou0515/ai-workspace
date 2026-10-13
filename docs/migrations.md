@@ -2189,7 +2189,7 @@ agent 步驟裡 AI 的呼叫、WUI 的工具呼叫、view plugin、圖表重畫�
 - 頁面上設定或清除的 API key **按下套用才生效**：在那之前，連新起來的 pod 也照舊用上一次套用的 key；
   「回復」只帶回那一版的值，金鑰維持目前生效的，還沒套用的金鑰改動繼續等。
 - **開機時印出的設定（config dump）多遮了一些值**：每個 preset 的 `env` 值，以及任何大小寫的 `*_token`，
-  現在都印成 `*** set (N chars) ***`。為什麼：頁面和開機 dump 用同一個判斷哪些是秘密的規則（M7），
+  現在都印成 `"*** set (N chars) ***"`（遮罩加上引號，讓整份 dump 是合法的 YAML，可以直接貼進模型設定頁）；用途清單也改照 `config.yaml` 的寫法印在 `agents.kb_chat` 等底下，不再是 `agents.sub_agents`——在 log 裡找 `sub_agents` 的，改找 `kb_chat`。為什麼：頁面和開機 dump 用同一個判斷哪些是秘密的規則（M7），
   token 常放在 env 裡、名字又認不出來。症狀：升級後在開機 log 裡找 preset 的 env 值，看到的是遮罩。
 - 診斷頁的模型檢查（`/health/checks`）照舊在開機時建好，套用後要重啟才會檢查新模型；它是診斷，不在對話的路徑上。
 - **`kb.quality_judge` 開始生效**：以前 loader 檢查了這個值卻沒建出來，文件品質評分永遠用 `kb.retrieval_llm`。

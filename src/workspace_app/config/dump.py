@@ -68,11 +68,23 @@ def emit_config_dump(
     return target
 
 
+def config_tree(settings: Settings) -> dict[str, Any]:
+    """`settings` as config.yaml spells it: the usage lists back under
+    `agents.<purpose>` (the loader packs them into `sub_agents`). The dump and
+    the model settings page both write it this way, so a dump pastes into the
+    page — and back into config.yaml (M23)."""
+    tree = dataclasses.asdict(settings)
+    agents = tree.get("agents") or {}
+    sub_agents = agents.pop("sub_agents", None) or {}
+    agents.update(sub_agents)
+    return tree
+
+
 def render(settings: Settings, provenance: Provenance, *, reveal_secrets: bool) -> str:
     """Annotated YAML for the whole resolved tree. One line per leaf with a
     `# ← <source>` comment; secrets masked unless `reveal_secrets`."""
     lines: list[str] = []
-    _render_node(dataclasses.asdict(settings), "", (), "", provenance, reveal_secrets, lines)
+    _render_node(config_tree(settings), "", (), "", provenance, reveal_secrets, lines)
     return "\n".join(lines) + "\n"
 
 
@@ -115,7 +127,9 @@ def _is_branch(value: Any) -> bool:
 
 def _value(parts: tuple[str | int, ...], value: Any, src: Source, reveal: bool) -> str:
     if is_secret_at(parts) and not reveal:
-        return _mask(value, src)
+        # Quoted: `*** set ***` bare is a YAML alias, and the dump is pasted
+        # into the model settings page (M23).
+        return json.dumps(_mask(value, src), ensure_ascii=False)
     return _scalar(value)
 
 

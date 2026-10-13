@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 import {
   diffEffective,
   dumpPatch,
+  effectiveOf,
+  patchOf,
   diffPatches,
   flattenPatch,
   flattenParts,
@@ -263,5 +265,79 @@ describe("the draft as YAML (M9, as config.yaml is written)", () => {
     expect(text).not.toContain("{");
     expect(parsePatch(text)).toEqual({ ok: true, patch });
     expect(dumpPatch({})).toBe("{}\n");
+  });
+});
+
+describe("editing the whole settings (M23): what is shown, and what is stored", () => {
+  const base = {
+    config: {
+      server: { port: 9090 },
+      llm: { base_url: "http://a", api_key: "*** set ***" },
+      agents: { presets: { a: { model: "m1", env: { T: "*** set ***" } }, b: { model: "m2" } } },
+    },
+    apps: { playground: { title: "P" } },
+  };
+
+  it("shows the defaults with the saved draft over them", () => {
+    expect(effectiveOf(base, { config: { agents: { presets: { a: { model: "m9" }, b: null } } } })).toEqual({
+      ...base,
+      config: { ...base.config, agents: { presets: { a: { model: "m9", env: { T: "*** set ***" } }, b: null } } },
+    });
+  });
+
+  it("stores only what differs from the defaults", () => {
+    const edited = structuredClone(base);
+    edited.config.agents.presets.a.model = "m9";
+
+    expect(patchOf(base, edited)).toEqual({ config: { agents: { presets: { a: { model: "m9" } } } } });
+  });
+
+  it("takes a pasted fragment as just that change — what is left out is the default", () => {
+    const fragment = { config: { agents: { presets: { a: { model: "m9" } } } } };
+
+    expect(patchOf(base, fragment)).toEqual(fragment);
+  });
+
+  it("drops an unchanged section the page does not edit, and keeps a changed one for the check", () => {
+    const pasted = structuredClone(base);
+    expect(patchOf(base, pasted)).toEqual({});
+    pasted.config.server.port = 1;
+    expect(patchOf(base, pasted)).toEqual({ config: { server: { port: 1 } } });
+  });
+
+  it("takes a secret's mask — the page's or the boot dump's — as no change", () => {
+    const pasted = structuredClone(base);
+    pasted.config.llm.api_key = "*** set (17 chars) via ${OPENAI_KEY} ***";
+    pasted.config.agents.presets.a.env.T = "*** set (3 chars) ***";
+
+    expect(patchOf(base, pasted)).toEqual({});
+  });
+
+  it("shows a hidden preset as null, so the text keeps the hide", () => {
+    const hide = { config: { agents: { presets: { b: null } } } };
+    const shown = effectiveOf(base, hide);
+
+    expect((shown.config as { agents: { presets: Record<string, unknown> } }).agents.presets.b).toBeNull();
+    expect(patchOf(base, shown)).toEqual(hide);
+  });
+
+  it("hides a preset only where null is written for it", () => {
+    expect(patchOf(base, { config: { agents: { presets: { b: null } } } })).toEqual({
+      config: { agents: { presets: { b: null } } },
+    });
+  });
+
+  it("takes a list written with its keys in another order as no change", () => {
+    // CLAUDE.md: compare with sameShape, never JSON.stringify — a pasted usage
+    // entry reorders its keys and is still the same entry.
+    const listed = { config: { agents: { kb_chat: [{ preset: "a", name: "A" }] } } };
+
+    expect(patchOf(listed, { config: { agents: { kb_chat: [{ name: "A", preset: "a" }] } } })).toEqual({});
+  });
+
+  it("keeps a new preset whole", () => {
+    expect(patchOf(base, { config: { agents: { presets: { c: { model: "m3" } } } } })).toEqual({
+      config: { agents: { presets: { c: { model: "m3" } } } },
+    });
   });
 });

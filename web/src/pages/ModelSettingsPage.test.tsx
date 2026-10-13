@@ -6,7 +6,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { HttpError } from "../api/http";
 import type { Applied, ModelSettingsPage as PageData } from "../api/modelSettings";
-import { parsePatch } from "../lib/settingsPatch";
+import { parsePatch, patchOf } from "../lib/settingsPatch";
 import { renderWithQuery } from "../test/queryWrapper";
 import { ModelSettingsPage } from "./ModelSettingsPage";
 
@@ -68,6 +68,7 @@ function fakeClient(page: Partial<PageData> = {}) {
     pending_keys: [],
     applied_keys: [],
     key_revision: "rev-1",
+    boot_config: (page.defaults ?? DEFAULTS).config ?? {},
     key_slots: [
       { path: "config.llm.api_key", owner: "", kind: "api_key", name: "" },
       { path: "config.agents.presets.kb-default.llm.api_key", owner: "kb-default", kind: "api_key", name: "" },
@@ -102,11 +103,12 @@ function fakeClient(page: Partial<PageData> = {}) {
 }
 
 const editor = () => screen.getByRole("textbox", { name: "草稿（YAML）" }) as HTMLTextAreaElement;
-/** The draft the editor holds, read as the page reads it (YAML, M9). */
-const draftNow = () => {
+/** The draft the editor holds, read as the page reads it: YAML (M9) holding
+ * the whole settings, stored as what differs from the defaults (M23). */
+const draftNow = (defaults: Record<string, unknown> = DEFAULTS) => {
   const parsed = parsePatch(editor().value);
   if (!parsed.ok) throw new Error(parsed.error);
-  return parsed.patch;
+  return patchOf(defaults, parsed.patch);
 };
 const type = (text: string) => fireEvent.change(editor(), { target: { value: text } });
 const SLOT = "config.agents.presets.kb-default.llm.api_key";
@@ -520,6 +522,7 @@ describe("ModelSettingsPage", () => {
       pending_keys: [],
       applied_keys: [],
       key_revision: "rev-1",
+      boot_config: {},
       key_slots: [],
     }));
     await act(async () => queryClient.invalidateQueries());
@@ -583,6 +586,7 @@ describe("ModelSettingsPage", () => {
         pending_keys: [],
         applied_keys: [path],
         key_revision: "rev-2",
+        boot_config: {},
         key_slots: [],
       }));
       return applied("abcdef1234567890", {});
@@ -1195,13 +1199,50 @@ describe("ModelSettingsPage", () => {
     expect(await screen.findByRole("textbox", { name: "草稿（YAML）" })).toBeInTheDocument();
   });
 
+  it("saves only the line changed in a pasted copy of the whole settings", async () => {
+    // M23 (user: 能改的要能複製貼上): the whole settings pasted — a section the
+    // page does not edit, secrets as the boot dump masks them — with one model
+    // changed is that one change.
+    const client = fakeClient({
+      boot_config: { ...DEFAULTS.config, server: { port: 9090 } },
+    });
+    renderWithQuery(<ModelSettingsPage client={client} />);
+    await screen.findByRole("textbox", { name: "草稿（YAML）" });
+    type(
+      [
+        "config:",
+        "  server:",
+        "    port: 9090",
+        "  agents:",
+        "    presets:",
+        "      kb-default:",
+        "        model: openai/gpt-4.1-mini",
+        "        llm:",
+        '          api_key: "*** unset ***"',
+        "      openai-mini:",
+        "        model: openai/gpt-4o-mini",
+        "apps: {}",
+        "profiles: {}",
+      ].join("\n"),
+    );
+
+    fireEvent.click(screen.getByTestId("model-settings-save"));
+
+    await waitFor(() =>
+      expect(client.saveDraft).toHaveBeenCalledWith(
+        { config: { agents: { presets: { "kb-default": { model: "openai/gpt-4.1-mini" } } } } },
+        {},
+      ),
+    );
+  });
+
   it("shows the saved draft as YAML, as config.yaml is written", async () => {
     // M9 (user): the editor is text, YAML/JSON — built as JSON only, which
     // narrowed it; config.yaml is YAML and so is the page now.
     renderWithQuery(<ModelSettingsPage client={fakeClient({ draft: KB_2 })} />);
 
     await waitFor(() => expect(editor().value).toContain("kb-default:"));
-    expect(editor().value).not.toContain("{");
+    expect(editor().value).not.toMatch(/\{\s*"/); // not JSON text
     expect(draftNow()).toEqual(KB_2);
   });
 

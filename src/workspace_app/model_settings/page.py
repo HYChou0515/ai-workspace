@@ -24,7 +24,7 @@ from msgspec import Struct
 from ..apps.catalog import discover_app_slugs
 from ..apps.manifest import read_app_manifest_raw
 from ..apps.profiles import list_profiles, read_profile_raw
-from ..config.dump import is_secret_at
+from ..config.dump import config_tree, is_secret_at
 from ..config.schema import Settings
 from .effective import (
     LIVE_CONFIG,
@@ -34,16 +34,6 @@ from .effective import (
     key_destination_problems,
     key_segments,
 )
-
-
-def config_tree(settings: Settings) -> dict[str, Any]:
-    """`settings` as config.yaml spells it: the usage lists back under
-    `agents.<purpose>` (the loader packs them into `sub_agents`)."""
-    tree = dataclasses.asdict(settings)
-    agents = tree.get("agents") or {}
-    sub_agents = agents.pop("sub_agents", None) or {}
-    agents.update(sub_agents)
-    return tree
 
 
 def _at(tree: dict[str, Any], path: str) -> tuple[bool, Any]:
