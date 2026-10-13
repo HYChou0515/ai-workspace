@@ -1,4 +1,4 @@
-"""Routes for the outside helper (docs/plan-outside-helper.md §3.2, §3.3).
+"""Routes for the helper (docs/plan-outside-helper.md §3.2, §3.3).
 
 Two callers:
 
@@ -18,8 +18,8 @@ from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request, Respons
 from pydantic import BaseModel
 
 from ..resources.conversation import Conversation
+from .ai_workspace_release import read_release
 from .locator import ItemLocator
-from .outside_helper_release import read_release
 from .outside_jobs import CLAIM_TIMEOUT_MS, MIN_PROTOCOL, OutsideJob, OutsideJobStore, job_id
 from .outside_lookup_routes import AnswerForm, Deliver, OutsideAnswerOut, _open_card
 
@@ -137,8 +137,8 @@ def register_outside_job_routes(
         update — 426 with where the current release is — rather than left to
         misread an API that moved on. Only a request that says it is a helper
         is judged; the card's own reads never are."""
-        version = request.headers.get("X-Outside-Helper-Version")
-        protocol = request.headers.get("X-Outside-Helper-Protocol")
+        version = request.headers.get("X-AI-Workspace-Version")
+        protocol = request.headers.get("X-AI-Workspace-Protocol")
         if version is None and protocol is None:
             return
         found = read_release(release_dir)
@@ -150,7 +150,7 @@ def register_outside_job_routes(
             raise HTTPException(
                 status_code=426,
                 detail={
-                    "message": "this outside helper is too old — update it",
+                    "message": "this helper is too old — update it",
                     "release": found[0].model_dump() if found else None,
                 },
             )
@@ -168,7 +168,7 @@ def register_outside_job_routes(
         card = _open_card(conv, body.tool_call_id)
         owner = get_user_id()
         if not await store.online(owner):
-            raise HTTPException(status_code=409, detail="your outside helper is not connected")
+            raise HTTPException(status_code=409, detail="your helper is not connected")
         if "query" in card:
             kind, args = "search", (body.query.strip() or card["query"])
         else:
@@ -276,7 +276,7 @@ def register_outside_job_routes(
     # ── the helper ──────────────────────────────────────────────────────────
 
     @app.post(
-        "/outside-helper/jobs/{jid}/result",
+        "/ai-workspace/jobs/{jid}/result",
         response_model=OutsideAnswerOut,
         dependencies=helper_only,
     )
@@ -328,28 +328,28 @@ def register_outside_job_routes(
         await store.end(jid, owner, "done", saved=out.path or "")
         return out
 
-    @app.post("/outside-helper/jobs/{jid}/fail", status_code=204, dependencies=helper_only)
+    @app.post("/ai-workspace/jobs/{jid}/fail", status_code=204, dependencies=helper_only)
     async def fail(jid: str, body: FailIn) -> Response:
         if not await store.fail(jid, get_user_id(), body.error.strip()[:_ERROR_CHARS]):
             raise HTTPException(status_code=404, detail="no claimed job of yours with this id")
         return Response(status_code=204)
 
-    @app.post("/outside-helper/jobs/{jid}/note", status_code=204, dependencies=helper_only)
+    @app.post("/ai-workspace/jobs/{jid}/note", status_code=204, dependencies=helper_only)
     async def note(jid: str, body: NoteIn) -> Response:
         if not await store.note(jid, get_user_id(), body.note.strip()[:_ERROR_CHARS]):
             raise HTTPException(status_code=404, detail="no claimed job of yours with this id")
         return Response(status_code=204)
 
-    @app.post("/outside-helper/heartbeat", status_code=204, dependencies=helper_only)
+    @app.post("/ai-workspace/heartbeat", status_code=204, dependencies=helper_only)
     async def heartbeat(body: HeartbeatIn) -> Response:
         await store.heartbeat(get_user_id(), **body.model_dump())
         return Response(status_code=204)
 
-    @app.get("/outside-helper/status", response_model=HelperStatusOut)
+    @app.get("/ai-workspace/status", response_model=HelperStatusOut)
     async def status() -> HelperStatusOut:
         return HelperStatusOut(online=await store.online(get_user_id()))
 
-    @app.post("/outside-helper/jobs/claim", response_model=JobOut | None, dependencies=helper_only)
+    @app.post("/ai-workspace/jobs/claim", response_model=JobOut | None, dependencies=helper_only)
     async def claim() -> JobOut | Response:
         got = await store.claim(get_user_id())
         if got is None:

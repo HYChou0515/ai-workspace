@@ -2162,29 +2162,29 @@ agent 步驟裡 AI 的呼叫、WUI 的工具呼叫、view plugin、圖表重畫�
 
 ### 2026-10-13 · #927 AI Workspace Helper：使用者電腦上的小程式用自己的 Chrome 代查,「請幫我查」只剩按一下「查」 {#pr-927}
 
-**設定** — 一個新 key,**opt-in**:`server.outside_helper_dir`(預設空 = 不發布)。不設什麼都不會壞:
+**設定** — 一個新 key,**opt-in**:`server.ai_workspace_dir`(預設空 = 不發布)。不設什麼都不會壞:
 「AI Workspace Helper」頁寫「還沒有發布」,卡片照舊讓使用者自己查([設定](configuration.md))。
 **行為改變,沒有開關**:
 
-- 左側選單多一項「AI Workspace Helper」(`/outside-helper`),永遠看得到:下載、安裝步驟、你的 AI Workspace Helper 連線了沒。
+- 左側選單多一項「AI Workspace Helper」(`/ai-workspace`),永遠看得到:下載、安裝步驟、你的 AI Workspace Helper 連線了沒。
 - 「請幫我查」卡片在**這個人自己的**AI Workspace Helper 連線時,搜尋改成按「查」交給它(「自己查」收在展開區);
   開網址時,這個聊天先前查回來的內容裡出現過的網址直接交給它,不再問。AI Workspace Helper 沒連線時卡片和以前一樣,
   只多一行「AI Workspace Helper 未連線」和一個「怎麼安裝」連結(新分頁開「AI Workspace Helper」頁)——這一行只在
-  `outside_helper_dir` 有發布版本時出現,沒發布的部署卡片和以前一模一樣。
-- AI Workspace Helper 的請求會帶 `X-Outside-Helper-Version` / `X-Outside-Helper-Protocol`;低於 `outside-helper.json` 的
+  `ai_workspace_dir` 有發布版本時出現,沒發布的部署卡片和以前一模一樣。
+- AI Workspace Helper 的請求會帶 `X-AI-Workspace-Version` / `X-AI-Workspace-Protocol`;低於 `ai-workspace.json` 的
   `min_version`、或低於程式裡的最低協定號,回 **426** 要它更新。卡片自己的請求不受影響。
 
-**資料** — 三個新的 specstar model(`OutsideJob`、`_OutsideHelperPresence`、`_OutsideSeenUrls`),在
+**資料** — 三個新的 specstar model(`OutsideJob`、`_AiWorkspacePresence`、`_OutsideSeenUrls`),在
 `spec.apply` 之後註冊(沒有 CRUD 路由),第一次寫入時建表。沒有 `Schema` 升版,沒有回填。
 
 **k8s · CI 側** — 沒有新的 JobType、probe 或必填 env;照常重 build、照常部署。**要讓使用者下載時**(`rollout 後`,
 隨時):
 
-1. 在 dev server 打包:`python3 scripts/pack_outside_helper.py --version 0.1.0`(要 PyPI、`pnpm`、`uv`、
+1. 在 dev server 打包:`python3 scripts/pack_ai_workspace.py --version 0.1.0`(要 PyPI、`pnpm`、`uv`、
    一個裝了 pip 的 Python)。它最後會對 Python 3.10–3.14 各跑一次只靠安裝包的 `pip install --dry-run`,
    有一個解不出來就失敗、不產出檔案。
 2. 給 API pod 掛一個 volume(放得下約 40 MB 的 zip;多 pod 時每顆都要看得到同一份),設
-   `server.outside_helper_dir` 指向它,把 `dist/outside-helper/` 裡的兩個檔放進去。之後換版只換這兩個檔,
+   `server.ai_workspace_dir` 指向它,把 `dist/ai-workspace/` 裡的兩個檔放進去。之後換版只換這兩個檔,
    **不用重新部署**。為什麼要 volume:後端每個請求都重讀這個資料夾,檔案不在 image 裡。
 3. 要強迫所有人升級:改 json 的 `min_version`。
 
@@ -2193,12 +2193,12 @@ AI Workspace Helper 走的是部署原本的登入(使用者在 AI Workspace Hel
 
 **IT 側**(每台裝的電腦):防毒放行 Playwright 自帶的 `node.exe`
 (`%LOCALAPPDATA%\AIWorkspaceHelper\versions\<版本>\venv\` 底下);Chrome 政策不能停用自動化/遠端偵錯。
-見[AI Workspace Helper §IT 要放行的](outside-helper.md#it-要放行的)。
+見[AI Workspace Helper §IT 要放行的](ai-workspace.md#it-要放行的)。
 
 **確認做完**(`rollout 後`):
 
 - 打開「AI Workspace Helper」頁:有版本號與 `ai-workspace-helper-<版本>.zip(ZIP,約 38 MB)` 的下載連結。
-  沒放檔案或 `outside_helper_dir` 沒設的症狀:頁面寫「還沒有發布 AI Workspace Helper」。
+  沒放檔案或 `ai_workspace_dir` 沒設的症狀:頁面寫「還沒有發布 AI Workspace Helper」。
 - 在一台 Windows 電腦照頁面裝起來、登入,小視窗顯示「已連線」;在一個 item 請 AI 查外面的東西,卡片出現「查」,
   按下去不用再經手,`lookups/` 出現存檔、AI 接著讀。這一步是 Windows 上唯一的驗證(plan D14)。
 

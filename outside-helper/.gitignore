@@ -1,3 +1,0 @@
-# Built from the frontend source (web/vite.outside-helper.config.ts) by
-# `pnpm run build:outside-helper`; never committed, never hand-edited.
-src/outside_helper/page_to_markdown.js

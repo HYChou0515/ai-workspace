@@ -103,7 +103,7 @@ class OutsideAnswerOut(BaseModel):
     attachments: list[str]
 
 
-#: Answers a card: what the routes below call, and what the outside helper's
+#: Answers a card: what the routes below call, and what the helper's
 #: result route calls (docs/plan-outside-helper.md P3) — one function, so a page
 #: the helper fetched is saved and sent exactly as a person's paste is.
 Deliver = Callable[
@@ -312,7 +312,7 @@ class AnswerForm:
     """An answer to a card. From the card it is posted as a form whose
     pasted text is a FILE part, not a field (Starlette caps a plain field at
     1 MiB, and one pasted page in CJK — three bytes a character — passes that);
-    the routes pass that part as `content`. The outside helper passes its page
+    the routes pass that part as `content`. The helper passes its page
     as `text` (`by_helper`)."""
 
     def __init__(

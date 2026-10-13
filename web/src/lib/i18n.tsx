@@ -1908,44 +1908,44 @@ export const messages = {
   "lookup.sentNotFound": { "zh-TW": "已告訴 AI 查不到", en: "Told the AI you couldn't find it" },
   "lookup.answered": { "zh-TW": "已回覆", en: "Answered" },
   "lookup.failed": { "zh-TW": "沒有送出:{reason}", en: "Not sent — {reason}" },
-  // docs/plan-outside-helper.md §3.5 — the person's own outside helper.
+  // docs/plan-outside-helper.md §3.5 — the person's own helper.
   "lookup.helperOffline": { "zh-TW": "AI Workspace Helper 未連線", en: "AI Workspace Helper not connected" },
   "lookup.helperGo": { "zh-TW": "查", en: "Look it up" },
   "lookup.helperSearching": { "zh-TW": "AI Workspace Helper 正在查…", en: "AI Workspace Helper is looking it up…" },
   "lookup.helperOpening": { "zh-TW": "AI Workspace Helper 正在開…", en: "AI Workspace Helper is opening it…" },
   "lookup.helperFromEarlier": { "zh-TW": "來自先前查到的內容", en: "From what an earlier lookup brought back" },
   "lookup.helperInstall": { "zh-TW": "怎麼安裝", en: "How to install it" },
-  "outsideHelper.title": { "zh-TW": "AI Workspace Helper", en: "AI Workspace Helper" },
-  "outsideHelper.desc": {
+  "aiWorkspace.title": { "zh-TW": "AI Workspace Helper", en: "AI Workspace Helper" },
+  "aiWorkspace.desc": {
     "zh-TW":
       "裝在你電腦上的小程式:用你的 Chrome 幫 AI 開外面的網頁。「請幫我查」卡片會交給它,不用你自己複製貼上。",
     en: "A small program on your PC that opens outside pages for the AI in your Chrome. The 請幫我查 card hands lookups to it instead of you copying them.",
   },
-  "outsideHelper.version": { "zh-TW": "目前版本 {version}", en: "Current version {version}" },
-  "outsideHelper.download": {
+  "aiWorkspace.version": { "zh-TW": "目前版本 {version}", en: "Current version {version}" },
+  "aiWorkspace.download": {
     "zh-TW": "下載 {file}(ZIP,{size})",
     en: "Download {file} (ZIP, {size})",
   },
-  "outsideHelper.unpublished": {
+  "aiWorkspace.unpublished": {
     "zh-TW": "還沒有發布 AI Workspace Helper。請洽系統管理員。",
     en: "AI Workspace Helper has not been published yet. Ask your administrator.",
   },
-  "outsideHelper.install": { "zh-TW": "安裝", en: "Install" },
-  "outsideHelper.step1": { "zh-TW": "下載後解壓縮。", en: "Unzip the download." },
-  "outsideHelper.step2": {
+  "aiWorkspace.install": { "zh-TW": "安裝", en: "Install" },
+  "aiWorkspace.step1": { "zh-TW": "下載後解壓縮。", en: "Unzip the download." },
+  "aiWorkspace.step2": {
     "zh-TW": "雙擊 install.pyw,確認它要用的 Python(3.10–3.14)。",
     en: "Double-click install.pyw and confirm the Python it will use (3.10–3.14).",
   },
-  "outsideHelper.step3": {
+  "aiWorkspace.step3": {
     "zh-TW": "雙擊桌面的「AI Workspace Helper」。第一次會問這個網站的網址,填:",
     en: "Double-click “AI Workspace Helper” on the desktop. The first time it asks for this site's address:",
   },
-  "outsideHelper.step4": {
+  "aiWorkspace.step4": {
     "zh-TW": "在它開的 Chrome 視窗裡登入一次。登入過期時,它會把那個視窗叫到前面請你再登入。",
     en: "Sign in once in the Chrome window it opens. When that sign-in expires, it brings the window forward for you to sign in again.",
   },
-  "outsideHelper.online": { "zh-TW": "你的 AI Workspace Helper 已連線", en: "Your AI Workspace Helper is connected" },
-  "outsideHelper.offline": { "zh-TW": "你的 AI Workspace Helper 未連線", en: "Your AI Workspace Helper is not connected" },
+  "aiWorkspace.online": { "zh-TW": "你的 AI Workspace Helper 已連線", en: "Your AI Workspace Helper is connected" },
+  "aiWorkspace.offline": { "zh-TW": "你的 AI Workspace Helper 未連線", en: "Your AI Workspace Helper is not connected" },
   "lookup.helperCaptcha": {
     "zh-TW": "請在 AI Workspace Helper 的 Chrome 視窗裡完成驗證",
     en: "Complete the verification in AI Workspace Helper's Chrome window",

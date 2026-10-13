@@ -26,7 +26,7 @@
  * the record (the `ask_user` card's rule). Outside an item chat (the knowledge
  * base, a replay) the request shows without actions.
  *
- * With the person's outside helper connected (docs/plan-outside-helper.md
+ * With the person's helper connected (docs/plan-outside-helper.md
  * §3.5) the helper fetches instead: a search asks only for the nod (「查」, the
  * query still editable — D4); a URL an earlier lookup in this chat brought back
  * goes with no nod at all (D12 — the server decides, the card just asks); the
@@ -120,14 +120,14 @@ export function OutsideLookupCard({
       ),
   });
 
-  // ── the person's outside helper (docs/plan-outside-helper.md §3.5) ──
+  // ── the person's helper (docs/plan-outside-helper.md §3.5) ──
   const qc = useQueryClient();
   const answeredAlready = Boolean(item?.answered?.(callId));
   const helperAvailable = Boolean(
     client.helperStatus && client.handOver && client.job && client.cancel,
   );
   const helper = useQuery({
-    queryKey: qk.outsideHelper(),
+    queryKey: qk.aiWorkspace(),
     queryFn: () => client.helperStatus!(),
     enabled: Boolean(item) && helperAvailable && !answeredAlready && done === null,
     refetchInterval: 15_000,
@@ -136,7 +136,7 @@ export function OutsideLookupCard({
   // Whether there is a helper to get at all (§3.7.2): with none published,
   // the card does not point at one (D7).
   const release = useQuery({
-    queryKey: qk.outsideHelperRelease(),
+    queryKey: qk.aiWorkspaceRelease(),
     queryFn: () => client.release!(),
     enabled: Boolean(item) && Boolean(client.release) && !answeredAlready && done === null,
     staleTime: 10 * 60_000,
@@ -333,7 +333,7 @@ export function OutsideLookupCard({
       {helperAvailable && helper.isSuccess && release.data && !helping && !locked && (
         <p className="outside-lookup-hint">
           {t("lookup.helperOffline")}{" "}
-          <a href={`${API_BASE}/outside-helper`} target="_blank" rel="noopener noreferrer">
+          <a href={`${API_BASE}/ai-workspace`} target="_blank" rel="noopener noreferrer">
             {t("lookup.helperInstall")}
           </a>
         </p>

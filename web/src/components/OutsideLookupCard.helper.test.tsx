@@ -1,5 +1,5 @@
 /**
- * The card with the person's outside helper (docs/plan-outside-helper.md §3.5):
+ * The card with the person's helper (docs/plan-outside-helper.md §3.5):
  * a Python program on their PC fetches the page, so the card asks only for the
  * nod a search needs (D4) and shows how the errand is going. With no helper
  * connected the card is exactly today's manual one (D7).
@@ -116,7 +116,7 @@ describe("with no helper connected", () => {
     draw({ online: false });
 
     const link = await screen.findByRole("link", { name: "怎麼安裝" });
-    expect(link).toHaveAttribute("href", "/outside-helper");
+    expect(link).toHaveAttribute("href", "/ai-workspace");
     expect(link).toHaveAttribute("target", "_blank");
   });
 });
@@ -274,7 +274,7 @@ describe("a page, with the helper connected (D12)", () => {
     expect(await screen.findByText("請在 AI Workspace Helper 的 Chrome 視窗裡完成驗證")).toBeInTheDocument();
 
     online = false;
-    await qc.invalidateQueries({ queryKey: qk.outsideHelper() });
+    await qc.invalidateQueries({ queryKey: qk.aiWorkspace() });
 
     await waitFor(() => expect(screen.queryByText("AI Workspace Helper 未連線")).not.toBeInTheDocument());
     expect(screen.getByText("請在 AI Workspace Helper 的 Chrome 視窗裡完成驗證")).toBeInTheDocument();
@@ -286,13 +286,13 @@ describe("a page, with the helper connected (D12)", () => {
     draw({
       queryClient: makeQueryClient(),
       handOver: async () => {
-        throw new HttpError(409, "the outside helper is not connected");
+        throw new HttpError(409, "the helper is not connected");
       },
     });
 
     fireEvent.click(await screen.findByRole("button", { name: "查" }));
 
-    expect(await screen.findByRole("alert")).toHaveTextContent("the outside helper is not connected");
+    expect(await screen.findByRole("alert")).toHaveTextContent("the helper is not connected");
   });
 
   it("waits for the nod for one no lookup brought back", async () => {

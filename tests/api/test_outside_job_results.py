@@ -23,7 +23,7 @@ def _result(client, jid, **body):
         "date": "2026-10-12",
         **body,
     }
-    return client.post(f"/outside-helper/jobs/{jid}/result", json=data)
+    return client.post(f"/ai-workspace/jobs/{jid}/result", json=data)
 
 
 def _taken(client, iid):

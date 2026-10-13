@@ -28,7 +28,7 @@ export function searchUrl(target: LookupTarget, query: string): string {
   return target.url.split("{q}").join(enc(query));
 }
 
-/** A lookup the card handed to the person's outside helper
+/** A lookup the card handed to the person's helper
  * (docs/plan-outside-helper.md §3.2). */
 export type HelperJob = {
   id: string;
@@ -48,7 +48,7 @@ export type HelperJob = {
 export type HelperRelease = {
   version: string;
   min_version: string;
-  /** The zip's file name; downloaded from `/outside-helper/download/<file>`. */
+  /** The zip's file name; downloaded from `/ai-workspace/download/<file>`. */
   file: string;
   sha256: string;
   /** Bytes. */
@@ -71,7 +71,7 @@ async function refused(r: Response, fallback: string): Promise<never> {
 export const outsideLookupApi = {
   /** Whether the person's own helper checked in just now (D7). */
   async helperStatus(): Promise<{ online: boolean }> {
-    const r = await apiFetch("/outside-helper/status");
+    const r = await apiFetch("/ai-workspace/status");
     if (!r.ok) return refused(r, `helper status failed: ${r.status}`);
     return (await r.json()) as { online: boolean };
   },
@@ -104,7 +104,7 @@ export const outsideLookupApi = {
 
   /** The helper the operator published (§3.7.2), or null when there is none. */
   async release(): Promise<HelperRelease | null> {
-    const r = await apiFetch("/outside-helper/manifest");
+    const r = await apiFetch("/ai-workspace/manifest");
     if (r.status === 404) return null;
     if (!r.ok) return refused(r, `helper release failed: ${r.status}`);
     return (await r.json()) as HelperRelease;
