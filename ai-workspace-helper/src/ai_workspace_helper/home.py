@@ -2,7 +2,8 @@
 
 `%LOCALAPPDATA%\\AIWorkspaceHelper\\` on Windows; `AI_WORKSPACE_HELPER_HOME` overrides it
 (tests, a developer's Linux box). Holds the single-instance lock, the settings
-the person gave on first start, the helper's own Chrome profile and its logs.
+the person gave on first start, the helper's own Chrome profile, its logs and
+the window's 查詢紀錄 (history.jsonl).
 
 The folder, the lock and the atomic writer are `setup_core`'s — one definition
 shared with the installer, the launcher and the uninstaller, which run with no

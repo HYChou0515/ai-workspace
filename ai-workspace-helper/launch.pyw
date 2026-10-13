@@ -19,7 +19,7 @@ import setup_core  # noqa: E402  # ty: ignore[unresolved-import] — beside this
 
 def main() -> int:
     try:
-        # 「重新開啟」 passes --wait: the old helper is still ending
+        # 「立即更新」 passes --wait: the old helper is still ending
         setup_core.launch(HERE, wait_s=20.0 if "--wait" in sys.argv[1:] else 0.0)
     except (setup_core.SetupFailed, OSError) as exc:
         import tkinter

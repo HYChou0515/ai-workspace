@@ -1,12 +1,15 @@
 """The helper's window (docs/plan-outside-helper.md D13) and the thread behind it.
 
-The window (tkinter, in the standard library) shows a status line, a line
-about the next version, the buttons 登入, 暫停/繼續, 結束 (and 重新開啟 once a
-new version is ready), the 「開機時自動啟動」 box, 重設登入 and 解除安裝 — and draws no
-state it did not read from the controller. The controller lives on ONE worker thread: it owns the
-Chrome (Playwright's sync API must stay on the thread that started it) and the
-`Worker` loop, and takes the buttons as commands through a queue. Closing the
-window ends the helper.
+The window (tkinter, in the standard library) has three tabs. 狀態: a status
+line, a line about the next version, the buttons 登入, 暫停/繼續, 結束 (and
+立即更新 once a new version is ready), the 「開機時自動啟動」 box, 重設登入 and
+解除安裝. 查詢紀錄: the jobs this PC ran (history.History). 記錄檔: the end of
+helper.log. It draws no state it did not read from the controller.
+
+The controller lives on ONE worker thread: it owns the Chrome (Playwright's
+sync API must stay on the thread that started it) and the `Worker` loop, and
+takes the buttons as commands through a queue. Closing the window ends the
+helper.
 """
 
 from __future__ import annotations
@@ -71,13 +74,21 @@ def history_row(row: dict[str, Any]) -> tuple[str, str, str, str]:
     return when, what, str(row.get("args", "")), ended
 
 
-def log_tail(path: Any, *, lines: int = 300) -> str:
-    """The 記錄檔 tab: the last `lines` of helper.log ("" before there is one)."""
+def log_tail(path: Any, *, lines: int = 300, max_bytes: int = 64_000) -> str:
+    """The 記錄檔 tab: the last `lines` of helper.log, read from its last
+    `max_bytes` only — the tab asks twice a second, and the log runs to a
+    megabyte ("" before there is one)."""
     try:
-        text = path.read_text(encoding="utf-8", errors="replace")
+        with open(path, "rb") as f:
+            size = f.seek(0, 2)
+            f.seek(max(0, size - max_bytes))
+            data = f.read()
     except OSError:
         return ""
-    return "".join(text.splitlines(keepends=True)[-lines:])
+    parts = data.decode("utf-8", errors="replace").splitlines(keepends=True)
+    if size > max_bytes:
+        parts = parts[1:]  # where the read began, a line was cut in half
+    return "".join(parts[-lines:])
 
 
 def describe_update(status: str, *, forced: bool) -> str:
@@ -131,7 +142,7 @@ class Controller:
         self._worker: Any = None
         self._updater: Any = None
         self._asked_login = False
-        #: Set by 「重新開啟」: the window starts the launcher once this ends.
+        #: Set by 「立即更新」: the window starts the launcher once this ends.
         self.restart = False
 
     # ── the window's side (any thread) ──────────────────────────────────────
@@ -263,6 +274,7 @@ class Controller:
         if failed:
             self._show("error", f"重設登入沒有成功：{failed}")
             return False
+        self._signed_in = False  # a fresh profile: its sign-in is a first one
         if self._chrome is not None and self._worker is not None:
             self._chrome.open_login()
         return True
@@ -615,10 +627,16 @@ def main() -> int:  # pragma: no cover — the window needs a display; verified 
             text = log_tail(log_path)
             if text != shown_log[0]:
                 shown_log[0] = text
+                # follow new lines only if the person is at the end already;
+                # otherwise keep where they scrolled to
+                top, bottom = log_text.yview()
                 log_text.configure(state="normal")
                 log_text.delete("1.0", "end")
                 log_text.insert("end", text)
-                log_text.see("end")
+                if bottom >= 0.999:
+                    log_text.see("end")
+                else:
+                    log_text.yview_moveto(top)
                 log_text.configure(state="disabled")
         show = home / setup_core.SHOW_REQUEST
         if show.exists():  # launched again: come forward instead (§3.7.5)

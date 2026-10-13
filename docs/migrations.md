@@ -2199,7 +2199,7 @@ agent 步驟裡 AI 的呼叫、WUI 的工具呼叫、view plugin、圖表重畫�
 
 - 打開「小幫手」頁:有版本號與 `ai-workspace-helper-<版本>.zip(ZIP,約 38 MB)` 的下載連結。
   沒放檔案或 `ai_workspace_helper_dir` 沒設的症狀:頁面寫「還沒有發布小幫手」。
-- 在一台 Windows 電腦照頁面裝起來、登入,小視窗顯示「已連線」;在一個 item 請 AI 查外面的東西,卡片出現「查」,
+- 在一台 Windows 電腦照頁面裝起來、登入,小視窗顯示「已連線，等待查詢」;在一個 item 請 AI 查外面的東西,卡片出現「查」,
   按下去不用再經手,`lookups/` 出現存檔、AI 接著讀。這一步是 Windows 上唯一的驗證(plan D14)。
 
 

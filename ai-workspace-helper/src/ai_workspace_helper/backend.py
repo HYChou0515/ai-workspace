@@ -1,4 +1,4 @@
-"""Talking to the AI workspace backend (docs/plan-outside-helper.md §3.2, §3.7.3).
+"""Talking to the AI Workspace backend (docs/plan-outside-helper.md §3.2, §3.7.3).
 
 The transport is injected (`Send`): on the PC it is Playwright's request
 context, which shares the cookie jar of the helper's own Chrome profile — the

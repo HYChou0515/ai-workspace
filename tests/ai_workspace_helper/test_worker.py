@@ -351,3 +351,43 @@ def test_each_job_leaves_a_line_in_the_history_and_the_log(caplog):
     ]
     # what it did comes first — the 記錄檔 tab is narrow; the job id is short, last
     assert re.search(r"search 'pandas 2\.0' done \(job [0-9a-f]{8}\)$", caplog.text, re.M)
+
+
+# Review round 4: the history is best-effort. A file Excel or an antivirus
+# holds (Windows refuses the append) must not turn a job that was answered
+# into 「連不上 AI Workspace」.
+def test_a_history_that_cannot_be_written_changes_nothing():
+    from ai_workspace_helper.history import History
+
+    class _Locked(History):
+        def add(self, **_row) -> None:
+            raise PermissionError(13, "Permission denied", "history.jsonl")
+
+    client, spec, iid = _asked()
+    worker = Worker(_backend(client), _Browser([]), errands=_errands(), history=_Locked(None))
+    worker.tick()
+    _hand(client, iid, query="pandas 2.0")
+    worker.tick()
+
+    assert worker.status == "connected"
+    assert _answers(spec)  # the card was answered all the same
+
+
+# A job cut short by a lapsed login is not finished: it stays queued and runs
+# again, so the history does not call it 「沒查到」 now.
+def test_a_job_cut_short_by_the_login_leaves_no_row():
+    from ai_workspace_helper.backend import NeedsLogin
+    from ai_workspace_helper.history import History
+
+    def signed_out(browser, query: str) -> FetchedPage:
+        raise NeedsLogin()
+
+    client, _spec, iid = _asked()
+    history = History(None)
+    worker = Worker(_backend(client), _Browser([]), errands={"search": signed_out}, history=history)
+    worker.tick()
+    _hand(client, iid, query="pandas 2.0")
+    worker.tick()
+
+    assert worker.status == "needs_login"
+    assert history.recent() == []

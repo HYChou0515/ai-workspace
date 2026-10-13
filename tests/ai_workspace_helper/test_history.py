@@ -67,3 +67,43 @@ def test_a_long_file_from_an_earlier_start_is_still_bounded(tmp_path):
     _add(history, 2)
 
     assert len(path.read_text(encoding="utf-8").splitlines()) <= 2 * 3
+
+
+# Review round 4: a history is not worth failing a start over.
+def test_a_line_cut_inside_a_character_does_not_stop_a_start(tmp_path):
+    path = tmp_path / "history.jsonl"
+    good = '{"args": "q1", "kind": "search"}\n'
+    cut = '{"args": "pandas 新功能", "kind": "search"}'.encode()[:19]  # inside 新
+    path.write_bytes(good.encode() + cut)
+
+    assert [r["args"] for r in History(path).recent()] == ["q1"]
+
+
+# ...and the row after a line cut short is not glued onto it and lost.
+def test_the_row_after_a_cut_line_is_kept(tmp_path):
+    path = tmp_path / "history.jsonl"
+    path.write_text('{"args": "q1"}\n{"args": "cut', encoding="utf-8")
+    history = History(path)
+
+    _add(history, 2)
+
+    assert [r["args"] for r in History(path).recent()] == ["q2", "q1"]
+
+
+# The rewrite to the newest `keep` replaces the file whole, never leaves it
+# half-written: written beside it, then moved over it.
+def test_the_rewrite_goes_through_a_file_beside_it(tmp_path, monkeypatch):
+    import os
+
+    path = tmp_path / "history.jsonl"
+    history = History(path, keep=2)
+    replaced: list[tuple[str, str]] = []
+    real = os.replace
+    monkeypatch.setattr(
+        os, "replace", lambda a, b: (replaced.append((str(a), str(b))), real(a, b))[1]
+    )
+    for n in range(4):
+        _add(history, n)
+
+    assert replaced and replaced[-1][1] == str(path)
+    assert [r["args"] for r in History(path, keep=2).recent()] == ["q3", "q2"]

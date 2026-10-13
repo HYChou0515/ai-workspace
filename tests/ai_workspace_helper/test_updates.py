@@ -307,7 +307,7 @@ def test_with_a_helper_running_the_launcher_brings_it_forward_instead(tmp_path):
     assert (tmp_path / "show.request").exists()
 
 
-# 「重新開啟」 (§3.7.6): the old helper is still ending when the launcher starts
+# 「立即更新」 (§3.7.6): the old helper is still ending when the launcher starts
 # — its lock goes with its process, which still holds Chrome's profile. Asked
 # to wait, the launcher waits for the lock rather than bringing a dying window
 # forward, and only then starts the new version (review round 1).

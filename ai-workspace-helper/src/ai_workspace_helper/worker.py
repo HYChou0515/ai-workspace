@@ -93,13 +93,29 @@ class Worker:
         self._changed()
 
     def _record(self, job, outcome: str, reason: str = "") -> None:  # noqa: ANN001
+        """How a job ENDED — done, or failed and told to the card. Not for one
+        cut short (signed out, refused, offline): that stays queued and runs
+        again, and is only logged."""
         # what it did first — the 記錄檔 tab is narrow — and the job id last, short
         ended = f"{outcome}: {reason}" if reason else outcome
         logger.info("%s %r %s (job %s)", job.kind, job.args, ended, job.id[:8])
-        if self._history is not None:
+        if self._history is None:
+            return
+        try:
             self._history.add(
                 kind=job.kind, args=job.args, site=self.site, outcome=outcome, reason=reason
             )
+        except Exception:  # noqa: BLE001 — a history (held by Excel, disk full) is never worth a job
+            logger.warning("could not write the history", exc_info=True)
+
+    def _cut_short(self, job, exc: BaseException) -> None:  # noqa: ANN001
+        logger.info(
+            "%s %r interrupted: %s (job %s)",
+            job.kind,
+            job.args,
+            str(exc) or type(exc).__name__,
+            job.id[:8],
+        )
 
     def _run(self, job) -> None:  # noqa: ANN001 — backend.Job
         errand = self._errands.get(job.kind)
@@ -117,7 +133,7 @@ class Worker:
                 errand, job.args, lambda text: self._backend.note(job.id, text), self._at
             )
         except (NeedsLogin, UpdateRequired, OSError, BackendError) as exc:
-            self._record(job, "failed", str(exc) or type(exc).__name__)
+            self._cut_short(job, exc)
             raise
         except Exception as exc:  # noqa: BLE001 — any errand failure is reported to the card
             logger.warning("errand %s failed", job.kind, exc_info=True)
@@ -132,9 +148,13 @@ class Worker:
             self._backend.result(
                 job.id, title=page.title, url=page.url, markdown=page.markdown, date=self._date()
             )
-        except (NeedsLogin, UpdateRequired, OSError, BackendError) as exc:
-            # fetched, but not handed back (signed out, refused, offline)
+        except BackendError as exc:
+            # refused (4xx): the backend failed the job, and the card says why
             self._record(job, "failed", str(exc) or type(exc).__name__)
+            raise
+        except (NeedsLogin, UpdateRequired, OSError) as exc:
+            # fetched, but not handed back: the job stays and runs again
+            self._cut_short(job, exc)
             raise
         self._record(job, "done")
 

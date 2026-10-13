@@ -330,7 +330,7 @@ def launch(
 ) -> str:
     """What `launch.pyw` does. Returns the version started, or `"shown"` when a
     helper was already running and has been asked to come forward. `wait_s`:
-    「重新開啟」 starts this while the old helper is still ending — wait that
+    「立即更新」 starts this while the old helper is still ending — wait that
     long for its lock (which goes with its process) before deciding."""
     lock = InstanceLock(home / "helper.lock")
     waited = 0.0

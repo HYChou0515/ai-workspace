@@ -404,7 +404,7 @@ def test_an_update_check_that_fails_does_not_stop_the_helper():
     assert ctl.step() is True
 
 
-# §3.7.6: 「重新開啟」 — end, so the launcher can start the version now ready.
+# §3.7.6: 「立即更新」 — end, so the launcher can start the version now ready.
 def test_restart_ends_the_helper_and_asks_for_the_launcher():
     ctl, chrome = _with_updater(["connected"], _Updater())
 
@@ -614,3 +614,32 @@ def test_the_log_tab_shows_the_end_of_the_log(tmp_path):
     log.write_text("".join(f"line {n}\n" for n in range(1, 6)), encoding="utf-8")
 
     assert log_tail(log, lines=2) == "line 4\nline 5\n"
+
+
+# 重設登入 starts on an empty profile: its first sign-in is not an expiry.
+def test_after_reset_login_the_sign_in_is_not_called_expired():
+    chrome = _Chrome()
+    worker = _Worker(["connected", "needs_login"])
+    ctl = Controller(lambda: chrome, lambda _c: worker, reset_profile=lambda: None)
+    ctl.open()
+    ctl.step()  # signed in
+
+    ctl.send("reset_login")
+    ctl.step()
+
+    assert ctl.snapshot()[0] == "needs_login"
+
+
+# The tab reads the log's end, not a megabyte twice a second — and never a
+# line cut in half where the read began.
+def test_the_log_tab_reads_only_the_end_of_a_long_log(tmp_path):
+    from ai_workspace_helper.app import log_tail
+
+    log = tmp_path / "helper.log"
+    log.write_text("".join(f"line {n:05d}\n" for n in range(20_000)), encoding="utf-8")
+
+    tail = log_tail(log, lines=1000, max_bytes=100)
+
+    assert len(tail.encode()) <= 100
+    assert tail.endswith("line 19999\n")
+    assert all(line.startswith("line ") and len(line) == 10 for line in tail.splitlines())

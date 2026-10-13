@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import datetime
 import json
+import os
 import threading
 from collections.abc import Callable
 from pathlib import Path
@@ -40,6 +41,9 @@ class History:
         self._lock = threading.Lock()
         #: Lines in the file now — it is rewritten once that reaches 2 × keep.
         self._lines = 0
+        #: The file ends inside a line (cut short by a crash): the next row
+        #: starts on a line of its own rather than glued onto that one.
+        self._cut = False
         self._rows: list[dict[str, Any]] = self._read()
         #: Changes on every `add`: the window redraws the tab when it does.
         self.version = 0
@@ -48,11 +52,14 @@ class History:
         if self._path is None:
             return []
         try:
-            text = self._path.read_text(encoding="utf-8")
+            # a line cut inside a character (a crash mid-append) or a file
+            # re-saved in another encoding only spoils its own lines
+            text = self._path.read_text(encoding="utf-8", errors="replace")
         except OSError:
             return []
         rows = []
         self._lines = len(text.splitlines())
+        self._cut = bool(text) and not text.endswith("\n")
         for line in text.splitlines():
             try:
                 row = json.loads(line)
@@ -78,12 +85,17 @@ class History:
                 return
             self._lines += 1
             if self._lines >= 2 * self._keep:
+                # whole or not at all: written beside it, then moved over it
                 text = "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in self._rows)
-                self._path.write_text(text, encoding="utf-8")
+                beside = self._path.with_name(self._path.name + ".new")
+                beside.write_text(text, encoding="utf-8")
+                os.replace(beside, self._path)
                 self._lines = len(self._rows)
             else:
                 with self._path.open("a", encoding="utf-8") as f:
-                    f.write(json.dumps(row, ensure_ascii=False) + "\n")
+                    line = json.dumps(row, ensure_ascii=False) + "\n"
+                    f.write(("\n" if self._cut else "") + line)
+            self._cut = False
 
     def recent(self) -> list[dict[str, Any]]:
         """The newest first."""
