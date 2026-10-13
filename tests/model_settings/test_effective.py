@@ -663,3 +663,15 @@ def test_every_value_of_a_presets_env_is_a_secret_whatever_its_name(name):
     assert secrets_written(document), name
     masked = mask({"agents": {"presets": {"openai-mini": {"env": {name: "v"}}}}})
     assert masked["agents"]["presets"]["openai-mini"]["env"][name] != "v"
+
+
+@pytest.mark.parametrize("model", [5, ["x"], {"a": 1}])
+def test_a_model_that_is_not_text_is_refused_not_crashed_on(keyed_config, model):
+    # final review 14: base_url was refused by name (final review 4) but a
+    # non-text model reached `_destination` — every route that checks a draft
+    # answered 500, after Save had stored it.
+    document = {"config": {"agents": {"presets": {"openai-mini": {"model": model}}}}}
+
+    found = problems(document, config_path=keyed_config, env={})
+
+    assert any("model must be text" in p for p in found), found

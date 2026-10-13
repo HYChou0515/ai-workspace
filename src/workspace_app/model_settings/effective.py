@@ -269,15 +269,22 @@ def key_destination_problems(
     paired = {
         (_destination(model, base), key)
         for _, model, base, key in _endpoints(deploy, None, config_dir=config_dir)
-        if isinstance(base, str | None)
+        if isinstance(base, str | None) and isinstance(model, str | None)
     }
     found: list[str] = []
     for where, model, base, key in _endpoints(settings, presets, config_dir=config_dir):
-        if not isinstance(base, str | None):
-            # A list or a number loads; it is no address (final review 4).
-            problem = f"config.{where}: base_url must be text"
-            if problem not in found:
-                found.append(problem)
+        # A list or a number loads; it is no address and no model, and either
+        # crashed the destination check (final reviews 4 and 14).
+        wrong = [
+            name
+            for name, value in (("base_url", base), ("model", model))
+            if not isinstance(value, str | None)
+        ]
+        if wrong:
+            for name in wrong:
+                problem = f"config.{where}: {name} must be text"
+                if problem not in found:
+                    found.append(problem)
             continue
         # Only a key config.yaml sets: whether the server's ENVIRONMENT holds a
         # provider key cannot be told reliably (final review 9 — litellm's

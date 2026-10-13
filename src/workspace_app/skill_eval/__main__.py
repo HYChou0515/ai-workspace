@@ -7,7 +7,9 @@ what changed, against their own model and their own data.
 The model is never a command-line string. The turn is resolved by
 ``AppCatalog.resolve`` — the same call a live turn makes — so the model, the
 endpoint and the system prompt all come from config.yaml + app.json + the
-profile, and ``--preset`` picks another of the App picker's presets.
+profile, with what the model settings page published on top (it opens the
+deploy's specstar backend to read it; plan-model-settings P6), and
+``--preset`` picks another of the App picker's presets.
 
     # 1. get the shipped guidance as a file you can edit
     python -m workspace_app.skill_eval --dump-skill verify-number -o ./tune
@@ -78,9 +80,9 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--preset",
         default=None,
         metavar="NAME",
-        help="a preset from config.yaml `agents.presets` — the same names the App's "
-        "model picker offers. Default: the App's own first picker entry, so the eval "
-        "runs against what that App actually ships with",
+        help="a preset from `agents.presets` — config.yaml's and any the model settings "
+        "page added — the same names the App's model picker offers. Default: the App's "
+        "own first picker entry, so the eval runs against what that App actually ships with",
     )
     p.add_argument(
         "--config",
@@ -120,7 +122,8 @@ def _resolve_agent(app_slug: str, profile: str, preset: str | None, config_path:
 
     ``AppCatalog.resolve`` is the same call a live turn makes, so the model, the
     endpoint and the system prompt all come from config.yaml + app.json + the
-    profile — not from a string retyped on the command line. It also carries the
+    profile with the settings page's published patch on top — not from a string
+    retyped on the command line. It also carries the
     ``## Available skills`` index, without which ``read_skill`` triggering cannot
     be measured at all.
     """
@@ -141,7 +144,7 @@ def _resolve_agent(app_slug: str, profile: str, preset: str | None, config_path:
     )
     known = ", ".join(sorted(settings.agents.presets))
     if preset is not None and preset not in settings.agents.presets:
-        raise SystemExit(f"unknown preset {preset!r}. config knows: {known}")
+        raise SystemExit(f"unknown preset {preset!r}. known presets: {known}")
     try:
         cfg = get_app_catalog(settings).resolve(
             app_slug=app_slug, profile=profile, attached_preset=preset
@@ -160,7 +163,8 @@ def _resolve_agent(app_slug: str, profile: str, preset: str | None, config_path:
             raise SystemExit(
                 f"preset {preset!r} is not in app {app_slug!r} / profile {profile!r}'s picker, "
                 f"so the turn resolved to {cfg.name!r} ({cfg.model}) instead. Name a picker "
-                f"preset, or override one of them in the config you pass with --config."
+                f"preset, or override one of them — in the config you pass with --config, or "
+                f"on the model settings page."
             )
     return cfg
 
