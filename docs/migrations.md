@@ -2160,6 +2160,56 @@ agent 步驟裡 AI 的呼叫、WUI 的工具呼叫、view plugin、圖表重畫�
 在它的聊天請 AI 跑一個讀 X 的工具——它拿得到你的值。再到那個 item 的共用值填上 X，同一個工具改拿共用值。
 沒部署到這一版的症狀：工具拿不到 X。
 
+### 2026-10-13 · #927 小幫手：使用者電腦上的小程式用自己的 Chrome 代查,「請幫我查」只剩按一下「查」 {#pr-927}
+
+**設定** — 一個新 key,**opt-in**:`server.ai_workspace_helper_dir`(預設空 = 不發布)。不設什麼都不會壞:
+「小幫手」頁寫「還沒有發布」,卡片照舊讓使用者自己查([設定](configuration.md))。
+**行為改變,沒有開關**:
+
+- 左側選單多一項「小幫手」(`/ai-workspace-helper`),永遠看得到:下載、安裝步驟、你的小幫手連線了沒。
+- 「請幫我查」卡片在**這個人自己的**小幫手連線時,搜尋改成按「查」交給它(「自己查」收在展開區);
+  開網址時,這個聊天先前查回來的內容裡出現過的網址直接交給它,不再問。小幫手沒連線時卡片和以前一樣,
+  只多一行「小幫手未連線」和一個「怎麼安裝」連結(新分頁開「小幫手」頁)——這一行只在
+  `ai_workspace_helper_dir` 有發布版本時出現,沒發布的部署卡片和以前一模一樣。
+- 小幫手的請求會帶 `X-AI-Workspace-Helper-Version` / `X-AI-Workspace-Helper-Protocol`;低於 `ai-workspace-helper.json` 的
+  `min_version`、或低於程式裡的最低協定號,回 **426** 要它更新。卡片自己的請求不受影響。
+
+**資料** — 三個新的 specstar model(`OutsideJob`、`_AiWorkspaceHelperPresence`、`_OutsideSeenUrls`),在
+`spec.apply` 之後註冊(沒有 CRUD 路由),第一次寫入時建表。沒有 `Schema` 升版,沒有回填。
+
+**k8s · CI 側** — 沒有新的 JobType、probe 或必填 env;照常重 build、照常部署。**要讓使用者下載時**(`rollout 後`,
+隨時):
+
+1. 在 dev server 打包:`python3 scripts/pack_ai_workspace_helper.py --version 0.1.0`(要 PyPI、`pnpm`、`uv`、
+   一個裝了 pip 的 Python)。它最後會對 Python 3.10–3.14 各跑一次只靠安裝包的 `pip install --dry-run`,
+   有一個解不出來就失敗、不產出檔案。
+2. 給 API pod 掛一個 volume(放得下約 40 MB 的 zip;多 pod 時每顆都要看得到同一份),設
+   `server.ai_workspace_helper_dir` 指向它,把 `dist/ai-workspace-helper/` 裡的兩個檔放進去。之後換版只換這兩個檔,
+   **不用重新部署**。為什麼要 volume:後端每個請求都重讀這個資料夾,檔案不在 image 裡。
+3. 要強迫所有人升級:改 json 的 `min_version`。
+
+小幫手走的是部署原本的登入(使用者在小幫手自己的 Chrome 設定檔裡登入一次),gateway 不用改。
+登入過期時 gateway 把請求導去 SSO(3xx),小幫手當成「要重新登入」,不會誤以為連上了。
+
+**IT 側**(每台裝的電腦,`裝之前`):安裝**不需要系統管理員權限**(只寫 `%LOCALAPPDATA%\AIWorkspaceHelper\`
+與自己的桌面捷徑),但要被允許**執行**:
+
+- `%LOCALAPPDATA%\AIWorkspaceHelper\` 底下的程式——venv 的 Python 與 Playwright 自帶的 `node.exe`。AppLocker 預設只放行
+  Program Files 與 Windows 資料夾;沒放行的症狀:安裝在「建 venv」或試跑那一步失敗,或裝好了卻「開不了 Chrome」。
+- 下載的 zip 裡包著 `node.exe`(在 Playwright 套件裡);擋 exe 的代理或防毒可能擋下載或刪掉它。
+- Chrome 政策不能停用自動化/遠端偵錯(`RemoteDebuggingAllowed`);停用的症狀:「開不了 Chrome」。
+- PowerShell 受限語言模式只會讓桌面捷徑建不起來(安裝照樣完成,改雙擊 `launch.pyw`)。
+
+**每台先跑一次 `precheck.pyw`**(zip 裡,和 `install.pyw` 並排):不安裝任何東西,把上面每一項真的試一次、列表,
+「複製結果」可以直接交給 IT。見[小幫手 §IT 要放行的](ai-workspace-helper.md#it-要放行的)。
+
+**確認做完**(`rollout 後`):
+
+- 打開「小幫手」頁:有版本號與 `ai-workspace-helper-<版本>.zip(ZIP,約 38 MB)` 的下載連結。
+  沒放檔案或 `ai_workspace_helper_dir` 沒設的症狀:頁面寫「還沒有發布小幫手」。
+- 在一台 Windows 電腦先雙擊 `precheck.pyw`:六項都 ✔(沒通過的照它寫的找 IT);再照頁面裝起來、登入,小視窗顯示「已連線，等待查詢」;在一個 item 請 AI 查外面的東西,卡片出現「查」,
+  按下去不用再經手,`lookups/` 出現存檔、AI 接著讀。這一步是 Windows 上唯一的驗證(plan D14)。
+
 
 ## 附錄 A：資料回填的機制（specstar 為什麼不會自己補）
 

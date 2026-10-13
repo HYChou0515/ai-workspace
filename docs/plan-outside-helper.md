@@ -1,6 +1,6 @@
-# 外網小幫手:使用者電腦上的 Python 小程式代替人去外網查,AI 自己寫的字出去前人點頭
+# 小幫手:使用者電腦上的 Python 小程式代替人去外網查,AI 自己寫的字出去前人點頭
 
-**狀態:** 計劃(尚未動工)。延伸 [plan-outside-lookup.md](plan-outside-lookup.md)(#897 的「請幫我查」卡片),不推翻它:
+**狀態:** 已施工(PR #927,P2–P10)。延伸 [plan-outside-lookup.md](plan-outside-lookup.md)(#897 的「請幫我查」卡片),不推翻它:
 手動流程原封不動留著當備援。
 **來源標記:** 〔user〕= user 的原話或明確選擇(2026-10-12 grill-me);〔查證〕= 讀 `origin/master` 程式碼確認的事實;
 〔施工〕= 我定的實作細節,可推翻。
@@ -31,14 +31,16 @@
 | # | 決定 | 來源 |
 |---|---|---|
 | D1 | 要省的是搬運,不是讓 AI 變聰明 | 〔user〕「對 人當搬運工太累」「不是智商問題」 |
-| D2 | 使用者電腦上跑一支 Python 小程式(外網小幫手)代替人上外網 | 〔user〕「一個python小工具」 |
+| D2 | 使用者電腦上跑一支 Python 小程式(小幫手)代替人上外網 | 〔user〕「一個python小工具」 |
 | D3 | 因為只有瀏覽器能上網,小幫手用 Playwright 開公司裝好的 **Chrome**(`channel="chrome"`)代為操作;不裝擴充功能 | 〔user〕「只能用瀏覽器上網」「我們是chrome」 |
 | D4 | **搜尋**送出去前,人在卡片上點頭(看得到查詢、可以改)按「查」。抓回來的內容**都直接送給 AI**,不再經人 | 〔user〕先選 B(兩個點),後改「直接送」——每頁只回一頁(D10),第二個點只剩「按送出」的搬運 |
-| D13 | **怎麼開**:雙擊桌面捷徑 `Outside Helper`(由安裝建立,D16;檔名用英文),開一個小視窗(Python 內建 tkinter):狀態(已連線/正在查/登入過期)、「登入」「暫停/繼續」「結束」、可勾「開機時自動啟動」(在 Windows「啟動」資料夾放捷徑)。關掉視窗 = 關掉小幫手 | 〔user〕「你如果能安裝好我也是可以」;呼應最初「一個簡單的gui代勞」 |
-| D14 | **打包在 dev server**(連得到 PyPI):`pip download --platform win_amd64 --only-binary=:all:` 抓 Windows 用的套件(Playwright 本身不分 Python 版本;`greenlet` 依版本,一次放 CPython 3.10–3.14 各一份〔施工〕),加上小幫手自己的 wheel 和 `.pyw`,組成離線安裝包;放在 **AI workspace 網頁**的「外網小幫手」頁下載。沒有 Windows CI——Windows 上的驗證是 user 在公司筆電裝起來跑一次 | 〔user〕「只能是我在dev server打包 或是在公司筆電打包」「可以 甚至可以在ai workspace網頁下載」 |
+| D13 | **怎麼開**:雙擊桌面捷徑 `AI Workspace Helper`(由安裝建立,D16;檔名用英文),開一個小視窗(Python 內建 tkinter),三個分頁:**狀態**(已連線/正在搜尋（Google）/正在開啟/請登入/登入已過期)與「登入」「暫停/繼續」「結束」、可勾「開機時自動啟動」(在 Windows「啟動」資料夾放捷徑);**查詢紀錄**(最近 200 筆,只存本機 `history.jsonl`);**記錄檔**(`helper.log` 尾端、開啟記錄資料夾)。關掉視窗 = 關掉小幫手 | 〔user〕「你如果能安裝好我也是可以」;呼應最初「一個簡單的gui代勞」;2026-10-13 跑過真視窗後〔user〕「Wording有點醜」「在那邊應該要有搜尋紀錄和log」 |
+| D14 | **打包在 dev server**(連得到 PyPI):`pip download --platform win_amd64 --only-binary=:all:` 抓 Windows 用的套件(Playwright 本身不分 Python 版本;`greenlet` 依版本,一次放 CPython 3.10–3.14 各一份〔施工〕),加上小幫手自己的 wheel 和 `.pyw`,組成離線安裝包;放在 **AI Workspace 網頁**的「小幫手」頁下載。沒有 Windows CI——Windows 上的驗證是 user 在公司筆電裝起來跑一次 | 〔user〕「只能是我在dev server打包 或是在公司筆電打包」「可以 甚至可以在ai workspace網頁下載」 |
 | D15 | **更新**:一般更新由小幫手在背景下載、裝好,**下次開啟時生效**,使用者不用做任何事;只有後端說「低於最低可用版本」時,才跳視窗要求立刻更新 | 〔user〕「要放給使用者的東西 要有好的update流程」;選「一般自動、低於最低版本才強制」 |
-| D16 | **安裝(每台筆電一次)**:從 AI workspace 網頁下載 zip、解壓縮、雙擊 `install.pyw`(只用 Python 內建功能;檔名一律英文)。它先顯示「將使用 Python 3.x(完整路徑)」讓人確認,建好資料夾、裝好套件,在桌面放捷徑;**捷徑寫死那個 `pythonw.exe` 的絕對路徑**,之後不靠副檔名關聯。系統挑錯 Python 時,取消、改用 `py -3.x install.pyw`。不處理「Python 被升級」——沒有人會自動升級 Python,真的換了就重跑一次安裝 | 〔user〕「什麼叫執行安裝指令?我是在dev server打包的耶」「可以吧 簡單即可」「沒有人會自動升級python」「你有指定執行檔路徑?」 |
-| D17 | **解除安裝**:小視窗裡的「解除安裝」按鈕,確認後刪掉小幫手留下的三樣東西(`%LOCALAPPDATA%\OutsideHelper\` 整個資料夾、桌面與啟動資料夾的 `Outside Helper.lnk`);按鈕不能用時,手動刪掉這三樣就等於解除安裝。不碰登錄檔、不裝系統資料夾,所以沒有別的痕跡;後端不用做任何事(沒有心跳,卡片自動退回手動,D7) | 〔user〕「怎麼解安裝」「要」 |
+| D16 | **安裝(每台筆電一次)**:從 AI Workspace 網頁下載 zip、解壓縮、雙擊 `install.pyw`(只用 Python 內建功能;檔名一律英文)。它先顯示「將使用 Python 3.x(完整路徑)」讓人確認,建好資料夾、裝好套件,在桌面放捷徑;**捷徑寫死那個 `pythonw.exe` 的絕對路徑**,之後不靠副檔名關聯。系統挑錯 Python 時,取消、改用 `py -3.x install.pyw`。不處理「Python 被升級」——沒有人會自動升級 Python,真的換了就重跑一次安裝 | 〔user〕「什麼叫執行安裝指令?我是在dev server打包的耶」「可以吧 簡單即可」「沒有人會自動升級python」「你有指定執行檔路徑?」 |
+| D17 | **解除安裝**:小視窗裡的「解除安裝」按鈕,確認後刪掉小幫手留下的三樣東西(`%LOCALAPPDATA%\AIWorkspaceHelper\` 整個資料夾、桌面與啟動資料夾的 `AI Workspace Helper.lnk`);按鈕不能用時,手動刪掉這三樣就等於解除安裝。不碰登錄檔、不裝系統資料夾,所以沒有別的痕跡;後端不用做任何事(沒有心跳,卡片自動退回手動,D7) | 〔user〕「怎麼解安裝」「要」 |
+| D18 | **名稱**:app 叫「AI Workspace」;這支程式的正式名稱是「AI Workspace Helper」——桌面捷徑、視窗與對話框標題、安裝資料夾 `%LOCALAPPDATA%\AIWorkspaceHelper\`、下載的 `ai-workspace-helper-<版本>.zip`;視窗裡和網頁上自稱「小幫手」(例如「小幫手已連線」),不再叫「外網小幫手」。程式碼裡叫 `ai-workspace-helper` / `ai_workspace_helper`:`ai-workspace-helper/` 資料夾(Python 套件 `ai_workspace_helper`)、`/api/ai-workspace-helper/*` 路由、`X-AI-Workspace-Helper-*` header、`server.ai_workspace_helper_dir`、`ai-workspace-helper.json`。卡片的工作(`OutsideJob`、`/outside-jobs`)屬於卡片,不改名;本計劃檔名不改 | 〔user〕「名稱改叫ai workspace helper」「中文名也要改啊」「正式名稱AI workspace」(我先讀成程式的名字,其實是 app 的)「視窗內自稱小幫手」「outside-helper.json也改掉」「AI工作區 改為AI Workspace」「AI Workspace.lnk 不是應該叫做ooxx helper?」 |
+| D19 | **不需要系統管理員權限,但要被允許執行**:安裝只寫 `%LOCALAPPDATA%\AIWorkspaceHelper\` 與自己的捷徑(不跑安裝程式、不寫 Program Files、不改登錄檔);公司電腦可能擋的是**執行**——使用者資料夾裡的程式(AppLocker)、zip 裡的 `node.exe`(防毒/代理)、PowerShell 受限(只影響捷徑)、Chrome 自動化政策。zip 裡附 **`precheck.pyw`**:不安裝任何東西,在暫存資料夾把每一樣真的試一次、列表、可複製給 IT,結束就刪掉。捷徑建不起來不再算安裝失敗(安裝結束時說要雙擊哪個檔);捷徑的 PowerShell 遇到任何錯誤都算失敗(`$ErrorActionPreference = 'Stop'`,否則沒建出來也會回 0) | 〔user〕「請問他會安裝嗎?我想我們沒有安裝權限」「可以 你就一起寫到docs裡面」 |
 | D12 | **開網址**:網址若出現在**這個聊天先前任何一次查回來的內容**裡,直接開;否則和搜尋一樣,先在卡片上點頭 | 〔user〕「純網址可以直接開 搜尋要先確認」,後收緊為「網址出現在上一次查詢中的話就可以直接開」「查過都算」——外面網頁上的連結是外面帶回來的,AI 自己寫的網址才可能夾帶內部字詞 |
 | D5 | 小幫手主動向後端領工作(網頁不能控制它);**Python 直接連我們的後端** | 〔user〕選 1 |
 | D6 | 身分沿用 app 現有的登入(「要登入才能用」那道門),不另做金鑰 | 〔user〕「我們已經有卡(限制)登入了」 |
@@ -73,13 +75,19 @@ AI 呼叫 ask_outside ──► 卡片(D7:沒連線 = 今天的手動流程)
 `tool_call_id`、`kind`(`search` | `open_url`)、`args`(實際要查的字或網址——人改過的版本)、`state`
 (`queued` → `claimed` → `done` | `failed` | `cancelled`)、`claimed_at`、`error`。抓回來的內容不存在這裡(D4:直接送)。
 
-- **卡片的路由**(權限同送訊息,`converse`):建立工作、讀工作狀態、取消。
+- **卡片的路由**:建立工作、取消(權限同送訊息,`converse`);讀工作狀態用 `read_chat`〔施工〕——只能讀這個聊天的人
+  看得到卡片進度,不能代人按「查」。
 - **查過的網址**(D12):每次結果經 outside-answers 存檔時(小幫手抓的、人手動貼的都算——兩者都是外面的內容),
   從內容的 Markdown 連結抽出網址,記在這個聊天名下〔施工:存放處〕。比對時去掉 `#` 之後的錨點,其餘逐字相同〔施工〕。
-- **開網址自動建工作**(D12):`ask_outside(url=…)` 畫出卡片時,網址在這個聊天查過的網址裡,伺服器就順手為**送出這一輪的人**
-  建好工作;不在裡面就和搜尋一樣等人按「查」。小幫手沒連線就不建,卡片照今天的手動流程(D7)。
+- **開網址自動建工作**(D12):`ask_outside(url=…)` 畫出卡片時,網址在這個聊天查過的網址裡,就為**送出這一輪的人**建好工作;
+  不在裡面就和搜尋一樣等人按「查」。小幫手沒連線就不建,卡片照今天的手動流程(D7)。
+  〔施工〕由卡片畫出時自己請求(`auto`),伺服器判斷:網址查過、而且請求的人就是這一輪的發問者(最後一則使用者訊息的
+  作者)才建——共用 item 裡其他開著聊天的人,他們的小幫手不會以他們的身分去開。代價:發問者沒開著這個聊天時,要等他
+  回來卡片才請求;按完「查」的人通常就在畫面上。答案帶回的連結在答案訊息送出**之前**記下(那則訊息會開始下一輪,
+  下一輪可能馬上要開其中一個;live check 抓到過先送後記的競態)。
 - **小幫手的路由**:報到/心跳、領工作(只領 `owner == 呼叫者` 的,CAS 把 `queued` 改 `claimed`)、交結果、交失敗。
-  `claimed` 太久沒交(小幫手關掉、當掉)就回到 `queued`〔施工:逾時值〕。
+  `claimed` 太久沒交(小幫手關掉、當掉)就回到 `queued`〔施工:逾時值〕;同一份工作被領了 3 次都沒交成(工作區滿了、
+  一直被拒、小幫手在那一頁當掉)就標成 `failed` 並寫原因,不再每兩分鐘重抓一次〔施工〕。
 - **小幫手連線狀態**:每個使用者最後一次心跳的時間;卡片讀它決定畫「交給小幫手」還是手動流程(D7)。
 - **交結果 = 送給 AI**(D4):小幫手交回這一頁,伺服器以**按「查」的那個人**的身分,呼叫既有 outside-answers 的
   同一段程式(存 `lookups/` 檔 + 送帶 `answers` 的訊息),工作標成 `done`。檔頭多記「由小幫手抓取」與網址。
@@ -92,10 +100,11 @@ AI 呼叫 ask_outside ──► 卡片(D7:沒連線 = 今天的手動流程)
   (refresh 只能用一次,共用會互相登出)。
 - 小幫手連後端用 Playwright 的 `APIRequestContext`(和那個 Chrome 設定檔共用 cookie)——是 Python 直接發 HTTP,
   不經網頁 JS(D5);gateway 換發的 cookie 也自動存回同一個設定檔。
-- 後端用 `GET /api/me` 判斷是否已登入;過期(401)時小幫手把 Chrome 視窗叫到前面、開登入頁,等你登入,這段時間
+- 〔施工〕小幫手每次報到的回應判斷是否已登入:401 或被 gateway 導去 SSO(3xx,不跟隨)= 要重新登入;403 是「沒權限」,
+  不是登入過期。要重新登入時小幫手把 Chrome 視窗叫到前面、開登入頁,等你登入,這段時間
   的工作留在 `queued`,不丟。
 
-### 3.4 小幫手(`outside-helper/`)〔施工〕
+### 3.4 小幫手(`ai-workspace-helper/`)〔施工〕
 
 - 一支 Python 套件;使用者雙擊桌面捷徑開(D13、D16),第一次問 app 網址並記住。
 - **差事外掛**(D9):每種差事一個模組,宣告 `kind`、參數、執行函式(拿到一個 Playwright page、回傳結果)。
@@ -109,22 +118,23 @@ AI 呼叫 ask_outside ──► 卡片(D7:沒連線 = 今天的手動流程)
   打包檔由建置從前端原始碼產生,不手抄。
 - **視窗開著跑**(headed):比較不會被當成機器人;遇到驗證碼,小幫手把視窗叫到前面、在卡片上顯示「請在小幫手
   視窗裡完成驗證」,等你解完再繼續。
-- 一次只做一件差事;做的時候在自己的視窗標題和卡片上顯示「正在查:…」。
+- 一次只做一件差事;做的時候在自己的視窗(狀態與標題)顯示「正在搜尋（Google）：…」或「正在開啟：…」,卡片上顯示「小幫手正在查…」。
 
 ### 3.5 卡片(前端)
 
-- 讀小幫手連線狀態(D7):沒連線 → 今天的手動流程,上方多一行「外網小幫手未連線」+ 怎麼安裝的連結。
+- 讀小幫手連線狀態(D7):沒連線 → 今天的手動流程,上方多一行「小幫手未連線」+ 怎麼安裝的連結。
 - 已連線、搜尋:查詢框照舊可改;主要按鈕變成「查」(交給小幫手);目的地按鈕和貼上區收進「自己查」展開區(手動照樣可用)。
 - 已連線、開網址且查過(D12):不出「查」,直接顯示「小幫手正在開…」、完整網址(明文,照 plan-outside-lookup D5)、
   「來自先前查到的內容」和取消。沒查過的網址:和搜尋一樣,網址可看、按「查」。
 - 進行中:顯示「小幫手正在查…」與取消。
-- 完成:卡片照 `plan-outside-lookup` §3.4 第 5 點收起(唯讀、留著當紀錄),顯示「小幫手已送給 AI」和存檔路徑。
+- 完成:卡片照 `plan-outside-lookup` §3.4 第 5 點收起(唯讀、留著當紀錄)。存檔路徑寫在小幫手送出的那則訊息裡(「存在
+  `lookups/…`」),就在卡片下面〔施工〕——卡片在那則訊息出現的同時收起,不另外再顯示一次。
 - 失敗:顯示原因,「重查」或展開手動流程。
 
 ### 3.6 安裝包(D8)〔施工〕
 
 - dev server 上一支打包指令(D14)產生 wheelhouse(小幫手 + Playwright、greenlet 等 Windows 用的 wheel)與
-  `install.pyw`、`launch.pyw`,壓成 `outside-helper-<版本>.zip`;AI workspace 網頁有一頁「外網小幫手」提供下載與一行說明(解壓縮、雙擊 `install.pyw`,D16)。發布流程見 §3.7.2。
+  `install.pyw`、`launch.pyw`,壓成 `ai-workspace-helper-<版本>.zip`;AI Workspace 網頁有一頁「小幫手」提供下載與一行說明(解壓縮、雙擊 `install.pyw`,D16)。發布流程見 §3.7.2。
 - 不下載 Playwright 自帶的瀏覽器(`channel="chrome"` 用已安裝的 Chrome)。
 - **跨平台下載要指定每個 Python 版本**:`pip download` 的 `--python-version`/`--implementation`/`--abi` 預設是
   跑 pip 的那台 Linux 的版本([pip download](https://pip.pypa.io/en/stable/cli/pip_download/));`greenlet` 每個
@@ -151,10 +161,13 @@ AI 呼叫 ask_outside ──► 卡片(D7:沒連線 = 今天的手動流程)
 #### 3.7.1 使用者電腦上的檔案
 
 ```
-%LOCALAPPDATA%\OutsideHelper\
+%LOCALAPPDATA%\AIWorkspaceHelper\
   launch.pyw              固定的啟動檔(只用標準函式庫);捷徑都指向它
   state.json              現在用哪一版、上一版、待換的新版、壞掉的版本、安裝時的 Python 路徑
   helper.lock             單一實例鎖
+  settings.json           第一次啟動時問的 app 網址(小幫手自己寫;state.json 歸啟動檔管,兩個分開)
+  setup_core.py           launch.pyw 用的同一份安裝/換版/退回邏輯(標準函式庫)
+  show.request            已經有一個在跑時,啟動檔留下它,那一個看到就把視窗叫到前面
   versions\
     1.4.0\venv\           每個版本一個 venv(由安裝時那個 Python 建)
     1.5.0\venv\
@@ -162,8 +175,9 @@ AI 呼叫 ask_outside ──► 卡片(D7:沒連線 = 今天的手動流程)
   downloads\              下載回來的 zip(驗過 sha256 才解壓)
   profile\                小幫手自己的 Chrome 設定檔(放在版本外面,更新不會登出)
   logs\helper.log         記錄(輪替保留幾個檔),出事時請使用者傳這個
-桌面\Outside Helper.lnk  目標:<安裝時那個 pythonw.exe> "%LOCALAPPDATA%\OutsideHelper\launch.pyw"
-啟動資料夾\Outside Helper.lnk  同上,勾「開機時自動啟動」才有
+  history.jsonl           查詢紀錄(最近 200 筆,只在這台電腦;小視窗「查詢紀錄」分頁)
+桌面\AI Workspace Helper.lnk  目標:<安裝時那個 pythonw.exe> "%LOCALAPPDATA%\AIWorkspaceHelper\launch.pyw"
+啟動資料夾\AI Workspace Helper.lnk  同上,勾「開機時自動啟動」才有
 ```
 
 `state.json`(用暫存檔 + `os.replace` 原子寫入,永遠不會寫一半):
@@ -175,27 +189,34 @@ AI 呼叫 ask_outside ──► 卡片(D7:沒連線 = 今天的手動流程)
   "previous": "1.4.0",
   "pending": "1.6.0",
   "pending_attempts": 0,
-  "bad": ["1.5.1"]
+  "bad": ["1.5.1"],
+  "failures": {"1.6.1": 1},
+  "update": "1.5.1 起不來,已退回 1.5.0",
+  "start_at_login": true
 }
 ```
 
+〔施工〕`failures` 是背景準備新版失敗的次數(§3.7.4 第 5 點,到 3 次進 `bad`);`update` 是上一次更新的結果,
+心跳時回報(§3.7.7);`start_at_login` 記小視窗那個勾。全部的讀寫邏輯在 `ai_workspace_helper/setup_core.py`(只用
+標準函式庫,同一個檔在套件裡、zip 根目錄、`launch.pyw` 旁邊各一份:打包放進 zip、安裝與新版確認時放到 `launch.pyw` 旁,都是複製,不另外改)。
+
 #### 3.7.2 發布新版(dev server → 後端)
 
-1. 在 dev server 跑打包指令 `scripts/pack_outside_helper.py --version 1.6.0`,產出兩個檔:
-   - `outside-helper-1.6.0.zip`:wheelhouse(3.10–3.14 各版本的 Windows wheel,版本釘死)+ `install.pyw` + `launch.pyw`;
-   - `outside-helper.json`(版本資訊):`{"version": "1.6.0", "min_version": "1.4.0", "file": "outside-helper-1.6.0.zip", "sha256": "…"}`。
-2. 把兩個檔放進後端設定 `server.outside_helper_dir` 指向的資料夾(掛載的 volume)。**不用重新部署**:後端每次請求
-   直接讀這個資料夾。沒設或資料夾空 → 「外網小幫手」頁顯示尚未發布、卡片照手動流程。
-3. 要強迫所有人升級(例如舊版有 bug):改 `outside-helper.json` 的 `min_version`。
-4. 後端提供:`GET /api/outside-helper/manifest`(上面那份 json)、`GET /api/outside-helper/download/<file>`(zip;只給
+1. 在 dev server 跑打包指令 `scripts/pack_ai_workspace_helper.py --version 1.6.0`,產出兩個檔:
+   - `ai-workspace-helper-1.6.0.zip`:wheelhouse(3.10–3.14 各版本的 Windows wheel,版本釘死)+ `install.pyw` + `launch.pyw`;
+   - `ai-workspace-helper.json`(版本資訊):`{"version": "1.6.0", "min_version": "1.4.0", "file": "ai-workspace-helper-1.6.0.zip", "sha256": "…"}`。
+2. 把兩個檔放進後端設定 `server.ai_workspace_helper_dir` 指向的資料夾(掛載的 volume)。**不用重新部署**:後端每次請求
+   直接讀這個資料夾。沒設或資料夾空 → 「小幫手」頁顯示尚未發布、卡片照手動流程。
+3. 要強迫所有人升級(例如舊版有 bug):改 `ai-workspace-helper.json` 的 `min_version`。
+4. 後端提供:`GET /api/ai-workspace-helper/manifest`(上面那份 json)、`GET /api/ai-workspace-helper/download/<file>`(zip;只給
    版本資訊裡列的那個檔,不能拿來讀資料夾裡別的東西)。都要登入,和其他路由一樣。
 
 #### 3.7.3 小幫手和後端的版本約定
 
-- 小幫手每個請求帶兩個標頭:`X-Outside-Helper-Version: 1.5.0`、`X-Outside-Helper-Protocol: 1`。
+- 小幫手每個請求帶兩個標頭:`X-AI-Workspace-Helper-Version: 1.5.0`、`X-AI-Workspace-Helper-Protocol: 1`。
 - 後端拒絕(回 **426**,內容附上版本資訊)的條件:
   - 協定號低於程式碼裡寫死的最低協定號——開發者改了不相容的 API 時調高它;
-  - 或版本低於 `outside-helper.json` 的 `min_version`——運營方要強迫升級時調高它。
+  - 或版本低於 `ai-workspace-helper.json` 的 `min_version`——運營方要強迫升級時調高它。
 - API 只加不刪;小幫手看不懂的欄位一律忽略。要拿掉欄位,先調高最低協定號,讓讀它的舊版都被擋下、升級。
 
 #### 3.7.4 一般更新(背景,下次開啟生效 — D15)
@@ -204,9 +225,9 @@ AI 呼叫 ask_outside ──► 卡片(D7:沒連線 = 今天的手動流程)
 
 1. 讀版本資訊。`version` 不比現在新、或在 `bad` 裡 → 不動作。
 2. 下載 zip 到 `downloads\`,驗 sha256;不對就刪掉,下次再試。
-3. 解壓到 `versions\1.6.0.partial\`,用 `base_python` 建 venv,`pip install --no-index --find-links <wheelhouse> outside-helper==1.6.0`。
-4. 試跑:用新 venv 執行 `python -m outside_helper --self-test`(import 得到 Playwright、它的 driver 在、版本號對)。
-5. 全部成功 → 資料夾改名成 `versions\1.6.0\`,`state.json` 寫 `pending: "1.6.0"`;小視窗顯示「新版已備好,下次開啟生效」。
+3. 解壓到 `versions\1.6.0.partial\`,用 `base_python` 建 venv,`pip install --no-index --find-links <wheelhouse> ai-workspace-helper==1.6.0`。
+4. 試跑:用新 venv 執行 `python -m ai_workspace_helper --self-test`(import 得到 Playwright、它的 driver 在、版本號對)。
+5. 全部成功 → 資料夾改名成 `versions\1.6.0\`,`state.json` 寫 `pending: "1.6.0"`;小視窗顯示「新版已下載，下次開啟時套用」。
    任一步失敗 → 刪掉 `.partial`、記 log,現在這版照常跑;同一版連續失敗 3 次記進 `bad`,不再試(等下一個新版)。
 6. 整個過程不碰現在正在跑的版本——Windows 會鎖住執行中的檔案,原地覆蓋才會壞(§3.7 表)。
 
@@ -214,7 +235,7 @@ AI 呼叫 ask_outside ──► 卡片(D7:沒連線 = 今天的手動流程)
 
 1. 拿 `helper.lock`;已經有一個小幫手在跑 → 把它的視窗叫到前面,自己結束(不會開出兩個,§3.7 表最後一列)。
 2. 有 `pending`:`pending_attempts + 1` 寫回 `state.json`,用新版啟動。
-3. 新版連上後端、小視窗正常出現後,由新版自己把 `state.json` 改成 `current: 新版、previous: 舊版、pending: 無、attempts: 0`,
+3. 新版跑起來之後——報到成功、或後端回「要登入」(證明連得上)、或被暫停、或被要求更新——由新版自己把 `state.json` 改成 `current: 新版、previous: 舊版、pending: 無、attempts: 0`,
    並刪掉 `current`、`previous` 以外的舊版本資料夾。
 4. `pending_attempts` 到 3 還沒被新版確認(啟動就當掉)→ 啟動檔把它記進 `bad`、清掉 `pending`,改用 `current` 啟動,
    並在下次心跳回報「1.6.0 起不來,已退回 1.5.0」。
@@ -224,9 +245,9 @@ AI 呼叫 ask_outside ──► 卡片(D7:沒連線 = 今天的手動流程)
 
 #### 3.7.6 強制更新(低於最低版本 — D15)
 
-- 收到 426:小視窗改成「這個版本已停用,需要更新」,不再領工作;同時照 §3.7.4 下載、安裝、試跑,完成後按鈕「重新開啟」
+- 收到 426:小視窗改成「這個版本已停用,需要更新」,不再領工作;同時照 §3.7.4 下載、安裝、試跑,完成後按鈕「立即更新」
   (結束自己、由啟動檔換版)。卡片那邊照 D7 退回手動流程,所以這段時間使用者仍然查得到東西。
-- 下載或安裝失敗:顯示原因與「外網小幫手」下載頁的連結,讓使用者重跑 `install.pyw`。
+- 下載或安裝失敗:顯示原因與「小幫手」下載頁的連結,讓使用者重跑 `install.pyw`。
 
 #### 3.7.7 其他
 
@@ -236,9 +257,9 @@ AI 呼叫 ask_outside ──► 卡片(D7:沒連線 = 今天的手動流程)
 - **第一次安裝**:D16,`install.pyw` 建好上面的結構與捷徑,之後都由小幫手自己更新。
 - **解除安裝**(D17):小視窗按「解除安裝」→ 確認「會刪掉小幫手和它的登入資料」→ 小幫手放掉 `helper.lock`、結束 Chrome,
   啟動一個收尾程序(用 `base_python`,程式碼先複製到 `%TEMP%`,因為正在跑的檔案刪不掉)後結束自己;收尾程序等小幫手
-  的行程結束,刪掉兩個捷徑與 `%LOCALAPPDATA%\OutsideHelper\`,最後刪掉自己在 `%TEMP%` 的檔案。刪不掉的(例如被防毒鎖住)
-  寫進 `%TEMP%\outside-helper-uninstall.log` 並跳視窗列出位置,讓人手動刪。
-  說明頁寫明手動解除安裝 = 刪掉這三樣:`%LOCALAPPDATA%\OutsideHelper\`、桌面與啟動資料夾的 `Outside Helper.lnk`。
+  的行程結束,刪掉兩個捷徑與 `%LOCALAPPDATA%\AIWorkspaceHelper\`,最後刪掉自己在 `%TEMP%` 的檔案。刪不掉的(例如被防毒鎖住)
+  寫進 `%TEMP%\ai-workspace-helper-uninstall.log` 並跳視窗列出位置,讓人手動刪。
+  說明頁寫明手動解除安裝 = 刪掉這三樣:`%LOCALAPPDATA%\AIWorkspaceHelper\`、桌面與啟動資料夾的 `AI Workspace Helper.lnk`。
 
 ## 4. Phases
 
@@ -248,10 +269,10 @@ AI 呼叫 ask_outside ──► 卡片(D7:沒連線 = 今天的手動流程)
 | P2 | `OutsideJob` resource + 卡片路由(建立/讀/取消)+ 小幫手路由(心跳/領/交失敗、逾時回收) | 只領自己的工作;CAS 不雙領;逾時回 `queued`;權限同送訊息 |
 | P3 | 交結果 = 送給 AI:經既有 outside-answers 存檔 + 以按「查」的人送 `answers` 訊息;存檔時抽出內容裡的連結記為查過的網址,`ask_outside(url=…)` 比對後自動建工作(D12) | 與手動送出走同一段程式(parity 測試);檔頭記來源網址;同一張卡不會送兩次;查過的網址自動開、沒查過的等「查」;手動貼上的也算;錨點不同視為同一網址 |
 | P4 | 卡片:連線狀態、交給小幫手、進行中/取消/失敗;沒連線退回手動 | 小幫手沒連線時卡片與今天一模一樣 |
-| P5 | `outside-helper/` 骨架:小視窗(D13)、Chrome persistent context、登入與過期重登、領工作迴圈、差事外掛介面、驗證碼等待 | 對本機假後端 + 本機假網站跑通(Linux) |
+| P5 | `ai-workspace-helper/` 骨架:小視窗(D13)、Chrome persistent context、登入與過期重登、領工作迴圈、差事外掛介面、驗證碼等待 | 對本機假後端 + 本機假網站跑通(Linux) |
 | P6 | 差事 `search` / `open_url`:開頁、整頁 HTML 經打包的 `htmlToMarkdown` 轉 Markdown | parity:範例 HTML 在前端與小幫手轉出逐字相同;對本機假搜尋頁抓得到結果連結 |
-| P7 | 安裝包:`scripts/pack_outside_helper.py`(D14、§3.7.2,產 `outside-helper-<版本>.zip` + `outside-helper.json`)、`install.pyw`(D16)、AI workspace 的下載頁 | 在 Linux 上產出的安裝包含小幫手與 Playwright、greenlet cp310–cp314 的 win_amd64 wheel,版本釘死;`pip install --no-index --dry-run` 對 win_amd64 解得出全部依賴;下載頁下載得到 |
-| P8 | 更新(§3.7)與解除安裝(D17):`outside_helper_dir` 與版本資訊/下載路由(§3.7.2)、426 與協定號(§3.7.3)、背景更新(§3.7.4)、`launch.pyw` 換版與退回(§3.7.5)、強制更新(§3.7.6)、心跳回報版本 | 版本資訊只列出的檔可下載;低於 `min_version` 或最低協定號回 426;下載 sha256 不符不裝;任一步失敗現在這版照常跑、同版連 3 次失敗進 `bad`;`pending` 3 次沒確認自動退回;`state.json` 只用原子寫入;已有一個在跑時不開第二個;`launch.pyw` 只在新版確認後才被換掉。解除安裝刪掉三樣、刪不掉的列出來。全部在 Linux 上用假的 Python 與假的後端測 |
+| P7 | 安裝包:`scripts/pack_ai_workspace_helper.py`(D14、§3.7.2,產 `ai-workspace-helper-<版本>.zip` + `ai-workspace-helper.json`)、`install.pyw`(D16)、AI Workspace 的下載頁 | 在 Linux 上產出的安裝包含小幫手與 Playwright、greenlet cp310–cp314 的 win_amd64 wheel,版本釘死;`pip install --no-index --dry-run` 對 win_amd64 解得出全部依賴;下載頁下載得到 |
+| P8 | 更新(§3.7)與解除安裝(D17):`ai_workspace_helper_dir` 與版本資訊/下載路由(§3.7.2)、426 與協定號(§3.7.3)、背景更新(§3.7.4)、`launch.pyw` 換版與退回(§3.7.5)、強制更新(§3.7.6)、心跳回報版本 | 版本資訊只列出的檔可下載;低於 `min_version` 或最低協定號回 426;下載 sha256 不符不裝;任一步失敗現在這版照常跑、同版連 3 次失敗進 `bad`;`pending` 3 次沒確認自動退回;`state.json` 只用原子寫入;已有一個在跑時不開第二個;`launch.pyw` 只在新版確認後才被換掉。解除安裝刪掉三樣、刪不掉的列出來。全部在 Linux 上用假的 Python 與假的後端測 |
 | P9 | 文件:`docs/migrations.md`(新 resource、新路由、新下載物、IT 要放行的項目)、使用者說明 | mkdocs `--strict` 綠 |
 | P10 | live check(真 app + 真 Chrome + 本機假網站)+ demo MP4 | 搜尋與開網址各走一次:按「查」之後不再經人,`lookups/` 有檔、AI 讀到;一次更新(換指標、下次開啟生效) |
 | P11 | review(四把鏡頭)→ CI | 照 CLAUDE.md |
@@ -267,11 +288,18 @@ AI 呼叫 ask_outside ──► 卡片(D7:沒連線 = 今天的手動流程)
 
 - **不經人的網址只限查過的**(D12):AI 自己寫的網址一律等人點頭;直接開的只有先前查回來的內容裡本來就有的連結。
   內容是人手動貼的時候,裡面的連結也算查過——那是人自己貼進來、看過的東西。
+- **「只為發問的人自動開」靠的是訊息順序**(§3.2):發問者 = 卡片之前最後一則使用者訊息的作者。共用 item 裡兩個人的
+  訊息排隊時(Q1、Q2 先存、答案後到),那個人可能認錯——和 CLAUDE.md 記的「排隊的對話讀起來是 Q1、Q2、A1、A2」
+  同一個原因:訊息上沒有記它屬於哪一輪。被開的只會是先前查回來的公開連結。
+- **共用 item 裡,別人看得到你的小幫手正在查,也按得到「取消」**:取消照卡片的權限(`converse`),不限工作的主人。
+- **交答案的請求在記下連結、送出訊息之前被中斷**(連線斷掉):`lookups/` 留下一個沒有訊息指著的檔;連結也已記下,
+  後面的卡片開它不再問。這個窗口只有記連結那一下。
 
 ## 7. prod 怎麼驗證
 
-1. 從 app 的「外網小幫手」頁下載 zip、解壓縮、雙擊 `install.pyw`:確認顯示的 Python、按「安裝」,桌面出現 `Outside Helper` 捷徑。雙擊捷徑:小視窗出現;
-   按「登入」開 Chrome 登入 app,視窗顯示「已連線」。這一步是 Windows 上唯一的驗證(D14):裝不裝得起來、`.pyw` 能不能雙擊、
+1. 從 app 的「小幫手」頁下載 zip、解壓縮,先雙擊 `precheck.pyw`(D19):六項都 ✔ 再往下;沒通過的那一項就是公司電腦擋住的地方。
+   雙擊 `install.pyw`:確認顯示的 Python、按「安裝」,桌面出現 `AI Workspace Helper` 捷徑。雙擊捷徑:小視窗出現;
+   按「登入」開 Chrome 登入 app,視窗顯示「已連線，等待查詢」。這一步是 Windows 上唯一的驗證(D14):裝不裝得起來、`.pyw` 能不能雙擊、
    捷徑開不開得起來、Chrome 開不開得出來、公司代理與 SSO。
 2. 在聊天問一個需要外部資料的問題;卡片上方顯示小幫手已連線,主要按鈕是「查」。
 3. 改一下查詢、按「查」:小幫手的 Chrome 搜尋改過的字;不用再按別的,`lookups/` 多一個檔(搜尋結果頁),AI 接著讀。

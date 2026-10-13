@@ -8,6 +8,7 @@
     "build": "tsc --noEmit && vite build && node scripts/check-shared-build.mjs",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.plugins.json",
+    "build:ai-workspace-helper": "vite build --config vite.ai-workspace-helper.config.ts",
     "test": "vitest",
     "test:run": "vitest run",
     "test:coverage": "vitest run --coverage"

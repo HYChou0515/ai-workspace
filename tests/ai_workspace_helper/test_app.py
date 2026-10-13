@@ -1,0 +1,645 @@
+"""The helper's window (docs/plan-outside-helper.md D13, §3.3): what the person
+sees and what the buttons do. The window only draws `Controller.snapshot()`;
+everything that decides is the controller, driven here one step at a time."""
+
+from __future__ import annotations
+
+import platform
+
+from ai_workspace_helper.app import Controller, describe
+
+
+class _Chrome:
+    def __init__(self) -> None:
+        self.logins = 0
+        self.closed = False
+        self.gone = False
+
+    def open_login(self) -> None:
+        self.logins += 1
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class _Worker:
+    def __init__(self, statuses: list[str]) -> None:
+        self._statuses = iter(statuses)
+        self.paused = False
+        self.status = "starting"
+        self.detail = ""
+        self.ticks = 0
+        self.manifest = None
+
+    def tick(self) -> None:
+        self.ticks += 1
+        self.status = "paused" if self.paused else next(self._statuses)
+
+
+def _controller(statuses, chrome=None):
+    chrome = chrome or _Chrome()
+    worker = _Worker(statuses)
+    ctl = Controller(lambda: chrome, lambda _chrome: worker)
+    ctl.open()
+    return ctl, chrome, worker
+
+
+# §3.3: the login expired — bring Chrome forward on the app ONCE, and let the
+# person sign in; not a new tab every couple of seconds while they type.
+def test_an_expired_login_opens_the_login_once():
+    ctl, chrome, _worker = _controller(["needs_login", "needs_login", "connected", "needs_login"])
+
+    for _ in range(4):
+        ctl.step()
+
+    assert chrome.logins == 2  # once per time it expired
+
+
+def test_the_login_button_opens_the_login():
+    ctl, chrome, _worker = _controller(["connected", "connected"])
+
+    ctl.send("login")
+    ctl.step()
+
+    assert chrome.logins == 1
+
+
+def test_pause_and_resume():
+    ctl, _chrome, worker = _controller(["connected"])
+
+    ctl.send("pause")
+    ctl.step()
+    assert ctl.snapshot()[0] == "paused"
+
+    ctl.send("resume")
+    ctl.step()
+    assert ctl.snapshot()[0] == "connected"
+    assert not worker.paused
+
+
+def test_quitting_closes_chrome_and_stops():
+    ctl, chrome, worker = _controller(["connected"])
+
+    ctl.send("quit")
+
+    assert ctl.step() is False
+    assert chrome.closed and worker.ticks == 0
+
+
+# Chrome not installed, or its profile held by a helper still shutting down:
+# the window says so instead of the helper vanishing.
+def test_a_chrome_that_will_not_start_is_shown_not_a_crash():
+    def broken():
+        raise RuntimeError("Chromium distribution 'chrome' is not found")
+
+    ctl = Controller(broken, lambda _c: _Worker([]))
+    ctl.open()
+
+    status, detail, *_ = ctl.snapshot()
+    assert status == "no_chrome" and "not found" in detail
+    assert ctl.step() is True  # still running: the person can read it and quit
+
+
+def test_every_status_reads_as_a_sentence():
+    for status in (
+        "starting",
+        "connected",
+        "paused",
+        "needs_login",
+        "login_expired",
+        "update_required",
+        "unreachable",
+        "error",
+        "no_chrome",
+    ):
+        text = describe(status, "x")
+        assert text and status not in text
+    searching = describe("connected", "pandas 2.0", "search", "Google")
+    assert searching == "正在搜尋（Google）：pandas 2.0"
+    assert describe("connected", "https://a.example/", "open_url") == "正在開啟：https://a.example/"
+    assert describe("login_expired", "") == "登入已過期，請在小幫手開的 Chrome 視窗重新登入"
+    # the window's own text is in full-width punctuation
+    for status in (
+        "starting",
+        "connected",
+        "paused",
+        "needs_login",
+        "login_expired",
+        "update_required",
+        "unreachable",
+        "error",
+        "no_chrome",
+    ):
+        assert not set(describe(status, "")) & set(",:;?()"), status
+
+
+def test_the_thread_polls_until_told_to_quit():
+    chrome = _Chrome()
+    ctl: Controller
+
+    class _Quits(_Worker):
+        def tick(self) -> None:
+            super().tick()
+            if self.ticks == 3:
+                ctl.send("quit")
+
+    worker = _Quits(["connected"] * 3)
+    ctl = Controller(lambda: chrome, lambda _c: worker, poll_s=0.01)
+
+    ctl.run()
+
+    assert (worker.ticks, chrome.closed) == (3, True)
+
+
+# Anything the loop did not expect is shown, and the loop goes on — a dead
+# worker thread froze the window on its last status (review round 2).
+def test_an_unexpected_failure_is_shown_and_the_helper_goes_on():
+    chrome = _Chrome()
+    ctl: Controller
+
+    class _Breaks(_Worker):
+        def tick(self) -> None:
+            super().tick()
+            if self.ticks == 1:
+                raise RuntimeError("Target page, context or browser has been closed")
+            if self.ticks == 3:
+                ctl.send("quit")
+
+    worker = _Breaks(["connected"] * 3)
+    ctl = Controller(lambda: chrome, lambda _c: worker, poll_s=0.01)
+
+    ctl.run()
+
+    assert worker.ticks == 3 and chrome.closed
+
+
+def test_with_no_chrome_the_buttons_do_nothing_but_quit():
+    def broken():
+        raise RuntimeError("")
+
+    ctl = Controller(broken, lambda _c: _Worker([]))
+    ctl.open()
+    assert ctl.snapshot()[:2] == ("no_chrome", "RuntimeError")
+
+    for command in ("login", "pause", "resume"):
+        ctl.send(command)
+    assert ctl.step() is True
+    ctl.send("quit")
+    assert ctl.step() is False
+
+
+def test_a_chrome_that_fails_to_close_still_lets_the_helper_end():
+    class _Stuck(_Chrome):
+        def close(self) -> None:
+            raise RuntimeError("Target closed")
+
+    ctl, _chrome, _worker = _controller(["connected"], chrome=_Stuck())
+
+    ctl.send("quit")
+
+    assert ctl.step() is False
+
+
+class _Updater:
+    def __init__(self, fails: bool = False) -> None:
+        self.calls: list[object] = []
+        self.status = ""
+        self.fails = fails
+
+    def connected(self) -> None:
+        self.calls.append("connected")
+
+    def tick(self, required=None) -> None:
+        self.calls.append(("tick", required))
+        if self.fails:
+            raise RuntimeError("manifest unreadable")
+
+
+def _with_updater(statuses, updater, manifest=None):
+    chrome, worker = _Chrome(), _Worker(statuses)
+    worker.manifest = manifest
+    ctl = Controller(lambda: chrome, lambda _c: worker, make_updater=lambda _c: updater)
+    ctl.open()
+    return ctl, chrome
+
+
+# §3.7.5 step 3 / §3.7.4: once connected, the version confirms itself and the
+# scheduled check runs, on the same thread as the jobs.
+def test_once_connected_the_update_check_runs():
+    up = _Updater()
+    ctl, _chrome = _with_updater(["connected"], up)
+
+    ctl.step()
+
+    assert up.calls == ["connected", ("tick", None)]
+
+
+# §3.7.6: refused, the helper updates from the release the refusal named.
+def test_a_refused_helper_updates_from_the_release_it_was_given():
+    up = _Updater()
+    release = {"version": "0.4.0", "file": "ai-workspace-helper-0.4.0.zip"}
+    ctl, _chrome = _with_updater(["update_required"], up, manifest=release)
+
+    ctl.step()
+
+    assert up.calls == ["connected", ("tick", release)]
+    assert ctl.update_status() == ""
+
+
+# Signed out, the backend cannot be asked — but the version itself is up:
+# being signed out (or paused, or offline) is no reason to roll it back
+# (§3.7.5; review round 1).
+def test_signed_out_it_confirms_itself_but_does_not_look_for_updates():
+    up = _Updater()
+    ctl, _chrome = _with_updater(["needs_login"], up)
+
+    ctl.step()
+
+    assert up.calls == ["connected"]
+
+
+def _made(events: list[str]):
+    made: list[_Chrome] = []
+
+    def make() -> _Chrome:
+        chrome = _Chrome()
+        events.append(f"open {len(made)}")
+        made.append(chrome)
+        return chrome
+
+    return made, make
+
+
+# The person closed the helper's Chrome window (it looks like any browser):
+# the helper opens it again instead of reading "unreachable" until restarted.
+def test_a_chrome_the_person_closed_is_opened_again():
+    events: list[str] = []
+    made, make = _made(events)
+    ctl = Controller(make, lambda _c: _Worker(["connected"] * 3))
+    ctl.open()
+    made[0].gone = True
+
+    ctl.step()
+
+    assert len(made) == 2
+    assert ctl.snapshot()[0] == "connected"
+
+
+# Chrome closed and will not open again: the window says so — not the dead
+# Chrome's "unreachable", ticked forever (review round 2).
+def test_a_chrome_that_will_not_reopen_says_so():
+    events: list[str] = []
+    made, make = _made(events)
+    calls = [0]
+
+    def flaky() -> _Chrome:
+        calls[0] += 1
+        if calls[0] > 1:
+            raise RuntimeError("Chrome failed to start")
+        return make()
+
+    ctl = Controller(flaky, lambda _c: _Worker(["unreachable"] * 3))
+    ctl.open()
+    made[0].gone = True
+
+    assert ctl.step() is True
+    assert ctl.snapshot()[0] == "no_chrome"
+
+
+# Paused, and Chrome closed and reopened: still paused (round 3).
+def test_a_reopened_chrome_keeps_the_helper_paused():
+    events: list[str] = []
+    made, make = _made(events)
+    workers: list[_Worker] = []
+
+    def make_worker(_c):
+        workers.append(_Worker(["connected"] * 3))
+        return workers[-1]
+
+    ctl = Controller(make, make_worker)
+    ctl.open()
+    ctl.send("pause")
+    ctl.step()
+    made[0].gone = True
+
+    ctl.step()
+
+    assert len(workers) == 2 and workers[1].paused
+    assert ctl.snapshot()[0] == "paused"
+
+
+# 「重設登入」 when it cannot be done (the profile held by a Chrome still
+# ending, on Windows): the window says why; the helper keeps running.
+def test_a_reset_that_fails_does_not_stop_the_helper():
+    events: list[str] = []
+    _made_list, make = _made(events)
+
+    def stuck() -> None:
+        raise PermissionError(13, "in use", "profile")
+
+    ctl = Controller(make, lambda _c: _Worker(["connected"] * 3), reset_profile=stuck)
+    ctl.open()
+    ctl.send("reset_login")
+
+    assert ctl.step() is True
+    assert ctl.snapshot()[0] == "error"
+    assert ctl.step() is True
+
+
+# Reopening Chrome keeps the one updater: a second would start a second
+# preparation of the same version over the first's files (review round 2).
+def test_reopening_chrome_keeps_the_updater():
+    events: list[str] = []
+    made, make = _made(events)
+    built: list[_Updater] = []
+
+    def make_updater(_c):
+        built.append(_Updater())
+        return built[-1]
+
+    ctl = Controller(make, lambda _c: _Worker(["connected"] * 3), make_updater=make_updater)
+    ctl.open()
+    made[0].gone = True
+    ctl.step()
+
+    assert len(made) == 2 and len(built) == 1
+
+
+# A version the backend refuses ("error") or that cannot reach it does not
+# confirm itself: it may be the version's own fault, and confirmed it could
+# never be rolled back (review round 2).
+def test_a_version_that_cannot_work_with_the_backend_is_not_confirmed():
+    for status in ("error", "unreachable"):
+        up = _Updater()
+        ctl, _chrome = _with_updater([status], up)
+
+        ctl.step()
+
+        assert up.calls == [], status
+
+
+# §3.7.7 「重設登入」: a profile gone bad (a login that never takes) is moved
+# aside — only once Chrome has let go of it — and the person signs in afresh.
+def test_reset_login_starts_over_with_a_fresh_profile():
+    events: list[str] = []
+    made, make = _made(events)
+
+    def reset() -> None:
+        events.append(f"reset (old closed: {made[0].closed})")
+
+    ctl = Controller(make, lambda _c: _Worker(["connected"] * 3), reset_profile=reset)
+    ctl.open()
+
+    ctl.send("reset_login")
+    ctl.step()
+
+    assert events == ["open 0", "reset (old closed: True)", "open 1"]
+    assert made[1].logins == 1
+
+
+def test_an_update_check_that_fails_does_not_stop_the_helper():
+    ctl, _chrome = _with_updater(["connected", "connected"], _Updater(fails=True))
+
+    assert ctl.step() is True
+    assert ctl.step() is True
+
+
+# §3.7.6: 「立即更新」 — end, so the launcher can start the version now ready.
+def test_restart_ends_the_helper_and_asks_for_the_launcher():
+    ctl, chrome = _with_updater(["connected"], _Updater())
+
+    ctl.send("restart")
+
+    assert ctl.step() is False
+    assert chrome.closed and ctl.restart
+
+
+# §3.7.4 step 4: a freshly installed version proves it can drive Chrome before
+# it counts as installed — Playwright imports and its driver is on disk (an
+# antivirus that removed node.exe is caught here, not at the first lookup).
+def test_the_self_test_passes_on_a_working_install(capsys):
+    from ai_workspace_helper.app import self_test
+    from ai_workspace_helper.version import __version__
+
+    assert self_test() == 0
+    assert __version__ in capsys.readouterr().out
+
+
+def test_the_self_test_fails_when_the_driver_is_gone(monkeypatch, tmp_path, capsys):
+    from ai_workspace_helper import app
+
+    monkeypatch.setattr(
+        app, "_driver_paths", lambda: (str(tmp_path / "node.exe"), str(tmp_path / "cli.js"))
+    )
+
+    assert app.self_test() == 1
+    assert "node.exe" in capsys.readouterr().out
+
+
+# The helper as the window runs it — Backend, Worker, Updater, the check-in's
+# report — wired once, here, for the window and for the live check alike.
+def test_the_helper_is_wired_to_report_what_it_runs_on(tmp_path):
+    from ai_workspace_helper.app import make_controller
+
+    from tests.ai_workspace_helper.test_worker import _backend
+    from tests.api.test_outside_answers import _asked
+
+    client, _spec, _iid = _asked()
+    transport = _backend(client)
+
+    class _Chrome:
+        def send(self, *a):
+            return transport._send(*a)
+
+        def fetch_bytes(self, *a):
+            return transport._fetch_bytes(*a)  # ty: ignore[call-non-callable]
+
+        def version(self) -> str:
+            return "141.0.7390.55"
+
+        def close(self) -> None:
+            pass
+
+    ctl = make_controller(tmp_path, "http://app", _Chrome)
+    ctl.open()
+    ctl.step()
+
+    assert ctl.snapshot()[0] == "connected"
+    seen = client.app.state.outside_jobs.presence("u")
+    assert (seen.chrome, seen.python) == ("141.0.7390.55", platform.python_version())
+
+
+# D13: while it fetches, the window says what — 「正在查:…」 — DURING the
+# errand, not after it (the window used to read the status only once a poll
+# was over, when the detail was already cleared; found running the window).
+def test_the_window_says_what_is_being_looked_up_while_it_is():
+    from ai_workspace_helper.backend import Backend
+    from ai_workspace_helper.errands import FetchedPage
+    from ai_workspace_helper.worker import Worker
+
+    from tests.ai_workspace_helper.test_worker import _backend, _Browser, _hand
+    from tests.api.test_outside_answers import _asked
+
+    client, _spec, iid = _asked()
+    seen_mid_errand: list[tuple[str, ...]] = []
+    ctl: Controller
+
+    def search(browser, query):
+        seen_mid_errand.append(ctl.snapshot())
+        return FetchedPage(title="t", url="https://x.example/", markdown="ok")
+
+    backend: Backend = _backend(client)
+    ctl = Controller(
+        lambda: _Chrome(), lambda _c: Worker(backend, _Browser([]), errands={"search": search})
+    )
+    ctl.open()
+    ctl.step()  # checks in
+    _hand(client, iid, query="pandas 2.0 新功能")
+
+    ctl.step()
+
+    assert seen_mid_errand == [("connected", "pandas 2.0 新功能", "search", "")]
+    assert describe(*seen_mid_errand[0]) == "正在搜尋：pandas 2.0 新功能"
+    assert ctl.snapshot() == ("connected", "", "", "")
+
+
+# What the window says about the next version (§3.7.4–§3.7.6).
+def test_the_update_line_says_where_the_next_version_stands():
+    from ai_workspace_helper.app import describe_update
+
+    assert describe_update("", forced=False) == ""
+    assert describe_update("preparing", forced=False) == "正在準備新版…"
+    assert describe_update("ready", forced=False) == "新版已下載，下次開啟時套用"
+    assert describe_update("ready", forced=True) == "新版已下載，按「立即更新」換上"
+    # the running version carries on — unless it is refused, when only a
+    # reinstall from the download page is left (§3.7.6)
+    failed = describe_update("failed: sha256", forced=False)
+    assert failed == "新版準備失敗：sha256（這一版照常使用）"
+    assert "請到 AI Workspace 的「小幫手」頁" in describe_update("failed: sha256", forced=True)
+
+
+# §3.7 table: Chrome updated past what this helper drives fails at start —
+# the window says what to do, not an error dump.
+def test_a_chrome_that_will_not_start_says_what_to_do():
+    text = describe("no_chrome", "Target page, context or browser has been closed")
+
+    assert "更新小幫手" in text and "重設登入" in text
+
+
+def test_a_status_reads_with_or_without_its_detail():
+    assert describe("paused", "") == "已暫停：AI 會請你自己查"
+    assert describe("connected", "") == "已連線，等待查詢"
+    # a reason goes on a line of its own, under the sentence
+    assert describe("unreachable", "connection refused") == (
+        "連不上 AI Workspace，會自動重試\nconnection refused"
+    )
+
+
+# Never signed in vs signed in and expired: the first start asks to sign in;
+# only a login that worked and then lapsed is "expired" (found running the
+# login demo: a first start said 「登入過期」).
+def test_the_first_sign_in_is_not_called_expired():
+    ctl, _chrome, _worker = _controller(["needs_login", "connected", "needs_login"])
+
+    ctl.step()
+    assert ctl.snapshot()[0] == "needs_login"
+    ctl.step()
+    ctl.step()
+    assert ctl.snapshot()[0] == "login_expired"
+
+
+# 「正在搜尋（Google）」: the search errand says which destination it opened,
+# and the window shows it while the errand runs.
+def test_the_window_names_the_site_a_search_runs_on():
+    from ai_workspace_helper.backend import Backend
+    from ai_workspace_helper.errands import FetchedPage
+    from ai_workspace_helper.worker import Worker
+
+    from tests.ai_workspace_helper.test_worker import _backend, _Browser, _hand
+    from tests.api.test_outside_answers import _asked
+
+    client, _spec, iid = _asked()
+    seen: list[str] = []
+    ctl: Controller
+
+    def search(browser, query):
+        browser.where("Google")
+        seen.append(describe(*ctl.snapshot()))
+        return FetchedPage(title="t", url="https://x.example/", markdown="ok")
+
+    backend: Backend = _backend(client)
+    ctl = Controller(
+        lambda: _Chrome(), lambda _c: Worker(backend, _Browser([]), errands={"search": search})
+    )
+    ctl.open()
+    ctl.step()
+    _hand(client, iid, query="pandas 2.0 新功能")
+    ctl.step()
+
+    assert seen == ["正在搜尋（Google）：pandas 2.0 新功能"]
+
+
+# The 查詢紀錄 tab: one row per job, newest first, in the person's words.
+def test_a_history_row_reads_as_what_happened():
+    from ai_workspace_helper.app import history_row
+
+    assert history_row(
+        {
+            "at": "2026-10-13T09:12:20",
+            "kind": "search",
+            "args": "pandas 2.0",
+            "site": "Google",
+            "outcome": "done",
+            "reason": "",
+        }
+    ) == ("10-13 09:12", "搜尋（Google）", "pandas 2.0", "已送給 AI")
+    assert history_row(
+        {
+            "at": "2026-10-13T09:13:00",
+            "kind": "open_url",
+            "args": "https://a.example/",
+            "site": "",
+            "outcome": "failed",
+            "reason": "the page answered 404",
+        }
+    ) == ("10-13 09:13", "開啟網頁", "https://a.example/", "沒查到：the page answered 404")
+
+
+# The 記錄檔 tab: the end of helper.log, not the whole file.
+def test_the_log_tab_shows_the_end_of_the_log(tmp_path):
+    from ai_workspace_helper.app import log_tail
+
+    log = tmp_path / "helper.log"
+    assert log_tail(log, lines=2) == ""  # no log yet
+    log.write_text("".join(f"line {n}\n" for n in range(1, 6)), encoding="utf-8")
+
+    assert log_tail(log, lines=2) == "line 4\nline 5\n"
+
+
+# 重設登入 starts on an empty profile: its first sign-in is not an expiry.
+def test_after_reset_login_the_sign_in_is_not_called_expired():
+    chrome = _Chrome()
+    worker = _Worker(["connected", "needs_login"])
+    ctl = Controller(lambda: chrome, lambda _c: worker, reset_profile=lambda: None)
+    ctl.open()
+    ctl.step()  # signed in
+
+    ctl.send("reset_login")
+    ctl.step()
+
+    assert ctl.snapshot()[0] == "needs_login"
+
+
+# The tab reads the log's end, not a megabyte twice a second — and never a
+# line cut in half where the read began.
+def test_the_log_tab_reads_only_the_end_of_a_long_log(tmp_path):
+    from ai_workspace_helper.app import log_tail
+
+    log = tmp_path / "helper.log"
+    log.write_text("".join(f"line {n:05d}\n" for n in range(20_000)), encoding="utf-8")
+
+    tail = log_tail(log, lines=1000, max_bytes=100)
+
+    assert len(tail.encode()) <= 100
+    assert tail.endswith("line 19999\n")
+    assert all(line.startswith("line ") and len(line) == 10 for line in tail.splitlines())

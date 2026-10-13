@@ -28,7 +28,88 @@ export function searchUrl(target: LookupTarget, query: string): string {
   return target.url.split("{q}").join(enc(query));
 }
 
+/** A lookup the card handed to the person's helper
+ * (docs/plan-outside-helper.md §3.2). */
+export type HelperJob = {
+  id: string;
+  kind: "search" | "open_url";
+  args: string;
+  state: "queued" | "claimed" | "done" | "failed" | "cancelled";
+  error: string;
+  /** What the helper waits on while it holds the job: `captcha`, or "". */
+  note: string;
+  /** Opened with no nod — a link an earlier lookup brought back (D12). */
+  auto: boolean;
+  /** Where the page was saved, once done. */
+  saved: string;
+};
+
+/** A packed helper the operator published (docs/plan-outside-helper.md §3.7.2). */
+export type HelperRelease = {
+  version: string;
+  min_version: string;
+  /** The zip's file name; downloaded from `/ai-workspace-helper/download/<file>`. */
+  file: string;
+  sha256: string;
+  /** Bytes. */
+  size: number;
+};
+
+type CardArgs = { slug: string; itemId: string; chatId?: string; callId: string };
+
+function cardJobs(args: CardArgs): string {
+  const item = `/a/${enc(args.slug)}/items/${enc(args.itemId)}`;
+  const chat = args.chatId ? `/chats/${enc(args.chatId)}` : "";
+  return `${item}${chat}/outside-jobs`;
+}
+
+async function refused(r: Response, fallback: string): Promise<never> {
+  const why = await detailSentence(r.clone());
+  throw await httpErrorFrom(r, why ?? fallback);
+}
+
 export const outsideLookupApi = {
+  /** Whether the person's own helper checked in just now (D7). */
+  async helperStatus(): Promise<{ online: boolean }> {
+    const r = await apiFetch("/ai-workspace-helper/status");
+    if (!r.ok) return refused(r, `helper status failed: ${r.status}`);
+    return (await r.json()) as { online: boolean };
+  },
+
+  /** Hand the card to the helper. `auto` is the card asking on its own, with
+   * no 「查」 — the server allows it only for a URL an earlier lookup in this
+   * chat brought back (D12) and answers 409 otherwise. */
+  async handOver(args: CardArgs & { query?: string; auto: boolean }): Promise<HelperJob> {
+    const r = await apiFetch(cardJobs(args), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ tool_call_id: args.callId, query: args.query ?? "", auto: args.auto }),
+    });
+    if (!r.ok) return refused(r, `hand over failed: ${r.status}`);
+    return (await r.json()) as HelperJob;
+  },
+
+  /** The card's job, or null when it has none (never handed over). */
+  async job(args: CardArgs): Promise<HelperJob | null> {
+    const r = await apiFetch(`${cardJobs(args)}/${enc(args.callId)}`);
+    if (r.status === 404) return null;
+    if (!r.ok) return refused(r, `helper job failed: ${r.status}`);
+    return (await r.json()) as HelperJob;
+  },
+
+  async cancel(args: CardArgs): Promise<void> {
+    const r = await apiFetch(`${cardJobs(args)}/${enc(args.callId)}`, { method: "DELETE" });
+    if (!r.ok && r.status !== 404) return refused(r, `cancel failed: ${r.status}`);
+  },
+
+  /** The helper the operator published (§3.7.2), or null when there is none. */
+  async release(): Promise<HelperRelease | null> {
+    const r = await apiFetch("/ai-workspace-helper/manifest");
+    if (r.status === 404) return null;
+    if (!r.ok) return refused(r, `helper release failed: ${r.status}`);
+    return (await r.json()) as HelperRelease;
+  },
+
   async targets(): Promise<LookupTarget[]> {
     const r = await apiFetch("/lookup-targets");
     if (!r.ok) throw await httpErrorFrom(r, `search buttons failed: ${r.status}`);
@@ -78,4 +159,9 @@ export const outsideLookupApi = {
   },
 };
 
-export type OutsideLookupClient = typeof outsideLookupApi;
+/** What the card needs. The helper's calls are optional: a client without
+ * them (a test, a surface with no helper) reads as "not connected" (D7). */
+export type OutsideLookupClient = Pick<typeof outsideLookupApi, "targets" | "answer"> &
+  Partial<
+    Pick<typeof outsideLookupApi, "helperStatus" | "handOver" | "job" | "cancel" | "release">
+  >;

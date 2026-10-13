@@ -466,6 +466,9 @@ def create_app(
     # docs/plan-outside-lookup.md D3: the "請幫我查" card's search buttons
     # (`server.lookup_targets`, validated by the loader). None ⇒ Google alone.
     lookup_targets: list[dict[str, str]] | None = None,
+    # docs/plan-outside-helper.md §3.7.2: `server.ai_workspace_helper_dir`, where the
+    # operator publishes a packed helper. None/"" ⇒ nothing published.
+    ai_workspace_helper_dir: str | None = None,
     # #262: user ids with UNRESTRICTED collection access — threaded into the
     # route-level `authorize(...)` guards (the dedicated permission endpoint +
     # content-route guards). MUST match the set passed to `make_spec(superusers=…)`
@@ -2530,10 +2533,15 @@ def create_app(
     )
     # docs/plan-outside-lookup.md D4: answering the "請幫我查" card — save under
     # `lookups/`, then the SAME send a typed message takes.
+    from .outside_jobs import OutsideJobStore, register_outside_jobs
     from .outside_lookup_routes import register_outside_lookup_routes
 
-    register_outside_lookup_routes(
+    register_outside_jobs(spec)
+    outside_jobs = OutsideJobStore(spec)
+    app.state.outside_jobs = outside_jobs
+    deliver_outside_answer = register_outside_lookup_routes(
         api,
+        on_answered=outside_jobs.remember_links,
         locator=locator,
         files=files,
         send_into=chat_send_svc.send,
@@ -2541,6 +2549,24 @@ def create_app(
         get_user_id=get_user_id,
         max_file_size=max_file_size,
     )
+
+    # docs/plan-outside-helper.md: the person's own helper takes the card's
+    # lookup instead of the person. Registered here, post-`spec.apply`, so the
+    # job model gets no CRUD routes (like _SandboxAddress).
+    from .outside_job_routes import register_outside_job_routes
+
+    register_outside_job_routes(
+        api,
+        locator=locator,
+        store=outside_jobs,
+        get_user_id=get_user_id,
+        deliver=deliver_outside_answer,
+        release_dir=ai_workspace_helper_dir,
+        max_file_size=max_file_size,
+    )
+    from .ai_workspace_helper_release import register_ai_workspace_helper_release_routes
+
+    register_ai_workspace_helper_release_routes(api, folder=ai_workspace_helper_dir)
 
     # ---- Files API (plan-backend §3.8) ----
 

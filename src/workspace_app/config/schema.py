@@ -173,6 +173,13 @@ class ServerSettings:
     # `{q}`, names distinct — anything else refuses to boot, naming the entry.
     lookup_targets: list[dict[str, str]] = field(default_factory=default_lookup_targets)
 
+    # docs/plan-outside-helper.md §3.7.2 — the folder (a mounted volume) the
+    # operator drops a packed helper into: `ai-workspace-helper.json` and
+    # the zip it names (`scripts/pack_ai_workspace_helper.py`). Read per request, so
+    # publishing needs no redeploy. Unset ⇒ nothing published: the 小幫手
+    # page says so and every card stays on the manual flow.
+    ai_workspace_helper_dir: str = ""
+
 
 # ─── sandbox ────────────────────────────────────────────────────────────
 @dataclass(frozen=True)

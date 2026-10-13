@@ -1908,6 +1908,62 @@ export const messages = {
   "lookup.sentNotFound": { "zh-TW": "已告訴 AI 查不到", en: "Told the AI you couldn't find it" },
   "lookup.answered": { "zh-TW": "已回覆", en: "Answered" },
   "lookup.failed": { "zh-TW": "沒有送出:{reason}", en: "Not sent — {reason}" },
+  // docs/plan-outside-helper.md §3.5 — the person's own helper.
+  "lookup.helperOffline": { "zh-TW": "小幫手未連線", en: "Helper not connected" },
+  "lookup.helperGo": { "zh-TW": "查", en: "Look it up" },
+  "lookup.helperSearching": { "zh-TW": "小幫手正在查…", en: "The helper is looking it up…" },
+  "lookup.helperOpening": { "zh-TW": "小幫手正在開…", en: "The helper is opening it…" },
+  "lookup.helperFromEarlier": { "zh-TW": "來自先前查到的內容", en: "From what an earlier lookup brought back" },
+  "lookup.helperInstall": { "zh-TW": "怎麼安裝", en: "How to install it" },
+  "aiWorkspaceHelper.title": { "zh-TW": "小幫手", en: "Helper" },
+  "aiWorkspaceHelper.desc": {
+    "zh-TW":
+      "裝在你電腦上的小程式:用你的 Chrome 幫 AI 開外面的網頁。「請幫我查」卡片會交給它,不用你自己複製貼上。",
+    en: "A small program on your PC that opens outside pages for the AI in your Chrome. The 請幫我查 card hands lookups to it instead of you copying them.",
+  },
+  "aiWorkspaceHelper.version": { "zh-TW": "目前版本 {version}", en: "Current version {version}" },
+  "aiWorkspaceHelper.download": {
+    "zh-TW": "下載 {file}(ZIP,{size})",
+    en: "Download {file} (ZIP, {size})",
+  },
+  "aiWorkspaceHelper.unpublished": {
+    "zh-TW": "還沒有發布小幫手。請洽系統管理員。",
+    en: "The helper has not been published yet. Ask your administrator.",
+  },
+  "aiWorkspaceHelper.install": { "zh-TW": "安裝", en: "Install" },
+  "aiWorkspaceHelper.step1": { "zh-TW": "下載後解壓縮。", en: "Unzip the download." },
+  // plan D19: no admin rights needed, but a company PC may refuse what it runs
+  "aiWorkspaceHelper.stepCheck": {
+    "zh-TW":
+      "先雙擊 precheck.pyw:它不安裝任何東西,只檢查這台電腦能不能跑小幫手。有沒通過的,按「複製結果」交給 IT。",
+    en: "First double-click precheck.pyw: it installs nothing, only checks whether this PC can run the helper. If anything fails, copy the result for IT.",
+  },
+  "aiWorkspaceHelper.step2": {
+    "zh-TW": "雙擊 install.pyw,確認它要用的 Python(3.10–3.14)。",
+    en: "Double-click install.pyw and confirm the Python it will use (3.10–3.14).",
+  },
+  "aiWorkspaceHelper.step3": {
+    "zh-TW": "雙擊桌面的「AI Workspace Helper」。第一次會問這個網站的網址,填:",
+    en: "Double-click “AI Workspace Helper” on the desktop. The first time it asks for this site's address:",
+  },
+  "aiWorkspaceHelper.step4": {
+    "zh-TW": "在它開的 Chrome 視窗裡登入一次。登入過期時,它會把那個視窗叫到前面請你再登入。",
+    en: "Sign in once in the Chrome window it opens. When that sign-in expires, it brings the window forward for you to sign in again.",
+  },
+  "aiWorkspaceHelper.online": { "zh-TW": "小幫手已連線", en: "Helper connected" },
+  "aiWorkspaceHelper.offline": { "zh-TW": "小幫手未連線", en: "Helper not connected" },
+  "lookup.helperCaptcha": {
+    "zh-TW": "請在小幫手的 Chrome 視窗裡完成驗證",
+    en: "Complete the verification in the helper's Chrome window",
+  },
+  "lookup.helperCancel": { "zh-TW": "取消", en: "Cancel" },
+  "lookup.helperFailed": {
+    "zh-TW": "小幫手沒查到:{reason}",
+    en: "The helper couldn't — {reason}",
+  },
+  "lookup.helperRetry": { "zh-TW": "重查", en: "Try again" },
+  "lookup.helperDone": { "zh-TW": "小幫手已送給 AI", en: "The helper sent it to the AI" },
+  "lookup.byHand": { "zh-TW": "自己查", en: "Do it myself" },
   "env.bar.set": { "zh-TW": "需要設定 {names}", en: "Set {names}" },
   "env.bar.many": { "zh-TW": "需要登入 {count} 個系統", en: "Sign in to {count} systems" },
   // Three or more, not all sign-ins: a variable to type is not a "system" —
