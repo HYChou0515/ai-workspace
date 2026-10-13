@@ -1932,6 +1932,12 @@ export const messages = {
   },
   "aiWorkspaceHelper.install": { "zh-TW": "安裝", en: "Install" },
   "aiWorkspaceHelper.step1": { "zh-TW": "下載後解壓縮。", en: "Unzip the download." },
+  // plan D19: no admin rights needed, but a company PC may refuse what it runs
+  "aiWorkspaceHelper.stepCheck": {
+    "zh-TW":
+      "先雙擊 precheck.pyw:它不安裝任何東西,只檢查這台電腦能不能跑小幫手。有沒通過的,按「複製結果」交給 IT。",
+    en: "First double-click precheck.pyw: it installs nothing, only checks whether this PC can run the helper. If anything fails, copy the result for IT.",
+  },
   "aiWorkspaceHelper.step2": {
     "zh-TW": "雙擊 install.pyw,確認它要用的 Python(3.10–3.14)。",
     en: "Double-click install.pyw and confirm the Python it will use (3.10–3.14).",

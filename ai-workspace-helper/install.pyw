@@ -11,6 +11,7 @@ cancel and run `py -3.12 install.pyw` (any 3.10–3.14) instead.
 import sys
 import threading
 import tkinter
+from typing import Any
 from pathlib import Path
 from tkinter import messagebox
 
@@ -46,11 +47,11 @@ def main() -> int:
     window.deiconify()
     window.title("AI Workspace Helper")
     tkinter.Label(window, text="安裝中…（約一分鐘，不用連網）", padx=24, pady=24).pack()
-    outcome: dict[str, object] = {}
+    outcome: dict[str, Any] = {}
 
     def work() -> None:
         try:
-            outcome["version"] = setup_core.install(HERE, setup_core.root(), base_python=python)
+            outcome["installed"] = setup_core.install(HERE, setup_core.root(), base_python=python)
         except Exception as exc:  # noqa: BLE001 — shown to the person
             outcome["error"] = exc
         window.after(0, window.quit)
@@ -61,9 +62,19 @@ def main() -> int:
     if "error" in outcome:
         messagebox.showerror("AI Workspace Helper", f"安裝失敗：\n{outcome['error']}")
         return 1
+    installed = outcome["installed"]
+    if installed.shortcut_error:
+        # PowerShell refused (plan D19): installed all the same
+        where = setup_core.root() / "launch.pyw"
+        shortcut = (
+            f"桌面捷徑沒有建成（{installed.shortcut_error}）。"
+            f"之後請雙擊 {where} 開啟小幫手。"
+        )
+    else:
+        shortcut = "桌面有「AI Workspace Helper」捷徑。"
     if messagebox.askyesno(
         "AI Workspace Helper",
-        f"小幫手 {outcome['version']} 已安裝，桌面有「AI Workspace Helper」捷徑。\n\n現在開啟嗎？",
+        f"小幫手 {installed.version} 已安裝。{shortcut}\n\n現在開啟嗎？",
     ):
         home = setup_core.root()
         import subprocess

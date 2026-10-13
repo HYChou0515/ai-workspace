@@ -134,9 +134,9 @@ def test_install_lays_out_the_folder_and_puts_the_shortcut_on_the_desktop(tmp_pa
     for name in ("launch.pyw", "setup_core.py"):
         (wheelhouse.parent / name).write_text(f"# {name}")
 
-    version = install(wheelhouse.parent, home, base_python="/py/pythonw", run=run)
+    installed = install(wheelhouse.parent, home, base_python="/py/pythonw", run=run)
 
-    assert version == "0.3.0"
+    assert installed == ("0.3.0", "")
     assert read_state(home) == {
         "base_python": "/py/pythonw",
         "current": "0.3.0",
@@ -208,3 +208,145 @@ def test_the_state_file_is_json(tmp_path):
     write_state(tmp_path, {"current": "0.3.0"})
 
     assert json.loads((tmp_path / "state.json").read_text()) == {"current": "0.3.0"}
+
+
+# Without admin rights a PowerShell locked to its constrained language mode
+# cannot make the shortcut (New-Object -ComObject). Everything else is in
+# place by then: the install stands, and the person is told how to start it.
+def test_a_shortcut_that_cannot_be_made_does_not_undo_the_install(tmp_path):
+    home = tmp_path / "home"
+    wheelhouse = _wheelhouse(tmp_path)
+    for name in ("launch.pyw", "setup_core.py"):
+        (wheelhouse.parent / name).write_text(name)
+
+    installed = install(wheelhouse.parent, home, base_python="/py/pythonw", run=_Run("WScript"))
+
+    assert installed.version == "0.3.0" and "WScript failed" in installed.shortcut_error
+    assert read_state(home)["current"] == "0.3.0"
+
+
+# `powershell -Command` can carry on past an error and still exit 0: any
+# error must fail the command, or a shortcut that was never made reads as made.
+def test_the_shortcut_script_stops_at_any_error():
+    script = shortcut_command("Desktop", target="t", arguments="", workdir="")[3]
+
+    assert script.startswith("$ErrorActionPreference = 'Stop'; ")
+
+
+def test_a_shortcut_can_go_to_a_folder_by_its_path():
+    script = shortcut_command("", target="t", arguments="", workdir="", in_dir=r"C:\it's")[3]
+
+    assert "$d = 'C:\\it''s'" in script and "GetFolderPath" not in script
+
+
+# ── the precheck (plan D19): may this PC run the helper, before installing ──
+
+
+def _zip_with_node(tmp_path: Path) -> Path:
+    import zipfile
+
+    wh = tmp_path / "zip" / "wheelhouse"
+    wh.mkdir(parents=True)
+    with zipfile.ZipFile(wh / "playwright-1.63.0-py3-none-win_amd64.whl", "w") as z:
+        z.writestr("playwright/driver/node.exe", "MZ")
+    return wh.parent
+
+
+class _PrecheckRun(_Run):
+    """Also makes the shortcut the precheck asks PowerShell for — unless told
+    the shortcut fails silently, as PowerShell can."""
+
+    def __init__(self, fail_on: str | None = None, *, silent_shortcut: bool = False) -> None:
+        super().__init__(fail_on)
+        self.silent_shortcut = silent_shortcut
+
+    def __call__(self, argv: list[str]) -> None:
+        super().__call__(argv)
+        if argv[0] == "powershell" and not self.silent_shortcut:
+            folder = argv[3].split("$d = '")[1].split("'")[0]
+            (Path(folder) / "precheck.lnk").write_text("")
+
+
+def _precheck(tmp_path, run=None, **over):
+    from ai_workspace_helper.setup_core import precheck
+
+    chrome = tmp_path / "chrome.exe"
+    chrome.write_text("")
+    kwargs = {
+        "base_python": "/py/pythonw",
+        "python_version": (3, 12, 5),
+        "chrome_paths": [tmp_path / "nowhere.exe", chrome],
+        "chrome_policy": lambda _name: None,
+        "run": run or _PrecheckRun(),
+        **over,
+    }
+    return precheck(_zip_with_node(tmp_path), tmp_path / "scratch", **kwargs)
+
+
+def test_a_pc_that_can_run_the_helper_passes_every_check_and_keeps_nothing(tmp_path):
+    run = _PrecheckRun()
+    checks = _precheck(tmp_path, run)
+
+    assert [c.ok for c in checks] == [True] * 6, checks
+    assert [c.name for c in checks] == [
+        "Python 3.10 以上",
+        "在使用者資料夾執行程式",
+        "Playwright 的 node.exe",
+        "建立桌面捷徑（PowerShell）",
+        "Chrome",
+        "Chrome 允許自動化",
+    ]
+    ran = [a for a in run.commands]
+    assert ran[0][1:4] == ["-m", "venv", "--without-pip"]
+    assert ran[2][0].endswith("node.exe") and ran[2][1] == "--version"
+    assert not (tmp_path / "scratch").exists()  # it installs nothing
+
+
+@pytest.mark.parametrize(
+    ("breakage", "failed", "hint"),
+    [
+        ({"python_version": (3, 9, 1)}, "Python 3.10 以上", "3.9.1"),
+        ({"run": _PrecheckRun("-c")}, "在使用者資料夾執行程式", "%LOCALAPPDATA%"),
+        ({"run": _PrecheckRun("--version")}, "Playwright 的 node.exe", "防毒"),
+        ({"run": _PrecheckRun("WScript")}, "建立桌面捷徑（PowerShell）", "PowerShell"),
+        ({"run": _PrecheckRun(silent_shortcut=True)}, "建立桌面捷徑（PowerShell）", "PowerShell"),
+        ({"chrome_paths": []}, "Chrome", "沒有找到 Chrome"),
+        ({"chrome_policy": lambda name: 0}, "Chrome 允許自動化", "RemoteDebuggingAllowed"),
+    ],
+)
+def test_each_check_fails_on_its_own_and_says_what_to_do(tmp_path, breakage, failed, hint):
+    checks = _precheck(tmp_path, **breakage)
+
+    bad = [c for c in checks if not c.ok]
+    assert [c.name for c in bad] == [failed]
+    assert hint in bad[0].detail
+    assert len(checks) == 6  # one failing check does not stop the rest
+    assert not (tmp_path / "scratch").exists()
+
+
+def test_a_zip_without_playwright_s_node_says_the_zip_is_incomplete(tmp_path):
+    from ai_workspace_helper.setup_core import precheck
+
+    (tmp_path / "zip" / "wheelhouse").mkdir(parents=True)
+    checks = precheck(
+        tmp_path / "zip",
+        tmp_path / "scratch",
+        base_python="/py/pythonw",
+        python_version=(3, 12, 5),
+        chrome_paths=[],
+        chrome_policy=lambda _n: None,
+        run=_PrecheckRun(),
+    )
+
+    node = next(c for c in checks if c.name == "Playwright 的 node.exe")
+    assert not node.ok and "zip 不完整" in node.detail
+
+
+def test_the_summary_says_what_to_do_next():
+    from ai_workspace_helper.setup_core import Check, precheck_summary
+
+    ok = [Check("A", True, "可以"), Check("B", True, "可以")]
+    assert "接著雙擊 install.pyw" in precheck_summary(ok)
+    one_bad = [Check("A", True, "可以"), Check("B", False, "被擋")]
+    summary = precheck_summary(one_bad)
+    assert "1 項沒有通過" in summary and "✘ B：被擋" in summary and "✔ A：可以" in summary

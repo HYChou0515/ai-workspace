@@ -22,9 +22,10 @@ import subprocess
 import sys
 import tempfile
 import time
+import zipfile
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 #: The shortcut's file name, on the desktop and in the Startup folder (D13).
 SHORTCUT_NAME = "AI Workspace Helper"
@@ -214,14 +215,25 @@ def _ps(text: str) -> str:
 
 
 def shortcut_command(
-    folder: str, *, target: str, arguments: str, workdir: str, name: str = SHORTCUT_NAME
+    folder: str,
+    *,
+    target: str,
+    arguments: str,
+    workdir: str,
+    name: str = SHORTCUT_NAME,
+    in_dir: str | None = None,
 ) -> list[str]:
     """Create `<folder>\\<name>.lnk` (`folder` is a .NET special folder:
-    `Desktop`, `Startup`). Asked of Windows rather than built from the user
-    profile, so a Desktop redirected to OneDrive still gets it."""
+    `Desktop`, `Startup`) — or in the folder `in_dir` names (the precheck's).
+    Asked of Windows rather than built from the user profile, so a Desktop
+    redirected to OneDrive still gets it. Any error fails the command:
+    `powershell -Command` may otherwise carry on and exit 0 with no shortcut
+    made (a constrained language mode refuses New-Object -ComObject)."""
+    where = _ps(in_dir) if in_dir is not None else f"[Environment]::GetFolderPath({_ps(folder)})"
     script = "; ".join(
         [
-            f"$d = [Environment]::GetFolderPath({_ps(folder)})",
+            "$ErrorActionPreference = 'Stop'",
+            f"$d = {where}",
             "$s = (New-Object -ComObject WScript.Shell).CreateShortcut("
             f"(Join-Path $d {_ps(name + '.lnk')}))",
             f"$s.TargetPath = {_ps(target)}",
@@ -569,10 +581,17 @@ def zip_version(wheelhouse: Path) -> str:
     return wheels[-1].name.split("-")[1]
 
 
-def install(zip_dir: Path, home: Path, *, base_python: str, run: Run = run_quietly) -> str:
+class Installed(NamedTuple):
+    version: str
+    #: Why the desktop shortcut could not be made ("" when it was): everything
+    #: else is in place, and the person is told how to start the helper.
+    shortcut_error: str
+
+
+def install(zip_dir: Path, home: Path, *, base_python: str, run: Run = run_quietly) -> Installed:
     """Everything `install.pyw` does once the person confirmed `base_python`:
     the version from the zip, the folder layout, `state.json`, the fixed
-    launcher, and the desktop shortcut. Returns the version installed."""
+    launcher, and the desktop shortcut."""
     version = zip_version(zip_dir / "wheelhouse")
     install_version(home, base_python, zip_dir / "wheelhouse", version, run=run)
     old = read_state(home)
@@ -593,5 +612,164 @@ def install(zip_dir: Path, home: Path, *, base_python: str, run: Run = run_quiet
     )
     for name in _CARRIED:
         shutil.copy2(zip_dir / name, home / name)
-    run(_launcher_shortcut("Desktop", base_python, home))
-    return version
+    try:
+        run(_launcher_shortcut("Desktop", base_python, home))
+    except SetupFailed as exc:
+        return Installed(version, str(exc))
+    return Installed(version, "")
+
+
+# ── the precheck (plan D19): may this PC run the helper? ────────────────────
+
+
+class Check(NamedTuple):
+    name: str
+    ok: bool
+    #: What was found, or — when not ok — what stops it and whom to ask.
+    detail: str
+
+
+#: Where Playwright keeps the Node it drives Chrome with, inside its wheel.
+_NODE = "playwright/driver/node.exe"
+
+
+def chrome_install_paths() -> list[Path]:  # pragma: no cover — Windows folders
+    """Where Chrome installs: for all users, or for this one."""
+    found = []
+    for env in ("PROGRAMFILES", "PROGRAMFILES(X86)", "LOCALAPPDATA"):
+        base = os.environ.get(env)
+        if base:
+            found.append(Path(base) / "Google" / "Chrome" / "Application" / "chrome.exe")
+    return found
+
+
+def chrome_policy(name: str) -> int | None:  # pragma: no cover — the Windows registry
+    """A Chrome policy set by the company (machine first, then user), or None."""
+    if sys.platform != "win32":
+        return None
+    import winreg
+
+    for hive in (winreg.HKEY_LOCAL_MACHINE, winreg.HKEY_CURRENT_USER):
+        try:
+            with winreg.OpenKey(hive, r"SOFTWARE\Policies\Google\Chrome") as key:
+                return int(winreg.QueryValueEx(key, name)[0])
+        except OSError:
+            continue
+    return None
+
+
+def precheck(
+    zip_dir: Path,
+    scratch: Path,
+    *,
+    base_python: str,
+    python_version: tuple[int, int, int],
+    chrome_paths: list[Path],
+    chrome_policy: Callable[[str], int | None],
+    run: Run = run_quietly,
+) -> list[Check]:
+    """What `precheck.pyw` checks, installing nothing: each thing the helper
+    needs that a company PC may refuse a person without admin rights. Every
+    check runs whatever the others found; `scratch` (beside where the helper
+    would live, so the same rules apply) is removed at the end."""
+    checks: list[Check] = []
+
+    def check(name: str, step: Callable[[], str], hint: str) -> None:
+        try:
+            checks.append(Check(name, True, step()))
+        except (SetupFailed, OSError, KeyError, zipfile.BadZipFile) as exc:
+            checks.append(Check(name, False, f"{hint}（{exc}）"))
+
+    version = ".".join(str(n) for n in python_version)
+
+    def python_ok() -> str:
+        if python_version < (3, 10):
+            raise SetupFailed(f"這是 {version}")
+        return f"{version}（{base_python}）"
+
+    def runs_here() -> str:
+        venv = scratch / "venv"
+        run([base_python, "-m", "venv", "--without-pip", str(venv)])
+        run([str(venv_python(venv)), "-c", "pass"])
+        return "可以"
+
+    def node_runs() -> str:
+        wheels = sorted((zip_dir / "wheelhouse").glob("playwright-*.whl"))
+        if not wheels:
+            raise SetupFailed("zip 不完整：沒有 Playwright")
+        node = scratch / "node.exe"
+        with zipfile.ZipFile(wheels[-1]) as z:
+            try:
+                data = z.read(_NODE)
+            except KeyError as exc:
+                raise SetupFailed("zip 不完整：Playwright 裡沒有 node.exe") from exc
+        node.write_bytes(data)
+        run([str(node), "--version"])
+        return "可以"
+
+    def shortcut_ok() -> str:
+        run(
+            shortcut_command(
+                "",
+                target=base_python,
+                arguments="",
+                workdir=str(scratch),
+                name="precheck",
+                in_dir=str(scratch),
+            )
+        )
+        if not (scratch / "precheck.lnk").exists():
+            raise SetupFailed("PowerShell 沒有回報錯誤，但捷徑沒有建出來")
+        return "可以"
+
+    def chrome_found() -> str:
+        for path in chrome_paths:
+            if path.exists():
+                return str(path)
+        raise SetupFailed("沒有找到 Chrome")
+
+    def automation_allowed() -> str:
+        if chrome_policy("RemoteDebuggingAllowed") == 0:
+            raise SetupFailed("公司的 Chrome 政策 RemoteDebuggingAllowed = 0")
+        return "沒有被政策禁止"
+
+    scratch.mkdir(parents=True, exist_ok=True)
+    try:
+        check("Python 3.10 以上", python_ok, "需要 Python 3.10–3.14")
+        check(
+            "在使用者資料夾執行程式",
+            runs_here,
+            "公司政策不讓程式在 %LOCALAPPDATA% 底下執行（例如 AppLocker）；"
+            "請 IT 放行 %LOCALAPPDATA%\\AIWorkspaceHelper\\",
+        )
+        check(
+            "Playwright 的 node.exe",
+            node_runs,
+            "防毒或公司政策擋下 Playwright 自帶的 node.exe；請 IT 放行它",
+        )
+        check(
+            "建立桌面捷徑（PowerShell）",
+            shortcut_ok,
+            "PowerShell 被限制，建不了捷徑；安裝照樣能完成，之後從"
+            " %LOCALAPPDATA%\\AIWorkspaceHelper\\launch.pyw 開",
+        )
+        check("Chrome", chrome_found, "沒有找到 Chrome；小幫手要用已安裝的 Chrome")
+        check(
+            "Chrome 允許自動化",
+            automation_allowed,
+            "Chrome 被政策禁止自動化，小幫手開不了它；請 IT 放行",
+        )
+    finally:
+        _remove_tree(scratch)
+    return checks
+
+
+def precheck_summary(checks: list[Check]) -> str:
+    """What `precheck.pyw` shows, and what 「複製結果」 copies."""
+    lines = [f"{'✔' if c.ok else '✘'} {c.name}：{c.detail}" for c in checks]
+    bad = sum(not c.ok for c in checks)
+    if bad:
+        lines.append(f"\n有 {bad} 項沒有通過。請把這份結果交給 IT 或系統管理員。")
+    else:
+        lines.append("\n這台電腦可以跑小幫手：接著雙擊 install.pyw。")
+    return "\n".join(lines)

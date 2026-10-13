@@ -83,10 +83,13 @@ def test_the_zip_carries_the_installer_and_the_wheels_and_the_manifest_names_it(
     assert zip_path == tmp_path / "out" / "ai-workspace-helper-0.3.0.zip"
     with zipfile.ZipFile(zip_path) as z:
         names = sorted(z.namelist())
+        readme = z.read("README.txt").decode("utf-8")
+    assert "precheck.pyw" in readme  # plan D19: check the PC before installing
     assert names == [
         "README.txt",
         "install.pyw",
         "launch.pyw",
+        "precheck.pyw",  # plan D19: run it before installing
         "setup_core.py",
         "wheelhouse/ai_workspace_helper-0.3.0-py3-none-any.whl",
         "wheelhouse/greenlet-3.5.6-cp312-cp312-win_amd64.whl",

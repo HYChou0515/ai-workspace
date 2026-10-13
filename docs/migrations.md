@@ -2191,15 +2191,23 @@ agent 步驟裡 AI 的呼叫、WUI 的工具呼叫、view plugin、圖表重畫�
 小幫手走的是部署原本的登入(使用者在小幫手自己的 Chrome 設定檔裡登入一次),gateway 不用改。
 登入過期時 gateway 把請求導去 SSO(3xx),小幫手當成「要重新登入」,不會誤以為連上了。
 
-**IT 側**(每台裝的電腦):防毒放行 Playwright 自帶的 `node.exe`
-(`%LOCALAPPDATA%\AIWorkspaceHelper\versions\<版本>\venv\` 底下);Chrome 政策不能停用自動化/遠端偵錯。
-見[小幫手 §IT 要放行的](ai-workspace-helper.md#it-要放行的)。
+**IT 側**(每台裝的電腦,`裝之前`):安裝**不需要系統管理員權限**(只寫 `%LOCALAPPDATA%\AIWorkspaceHelper\`
+與自己的桌面捷徑),但要被允許**執行**:
+
+- `%LOCALAPPDATA%\AIWorkspaceHelper\` 底下的程式——venv 的 Python 與 Playwright 自帶的 `node.exe`。AppLocker 預設只放行
+  Program Files 與 Windows 資料夾;沒放行的症狀:安裝在「建 venv」或試跑那一步失敗,或裝好了卻「開不了 Chrome」。
+- 下載的 zip 裡包著 `node.exe`(在 Playwright 套件裡);擋 exe 的代理或防毒可能擋下載或刪掉它。
+- Chrome 政策不能停用自動化/遠端偵錯(`RemoteDebuggingAllowed`);停用的症狀:「開不了 Chrome」。
+- PowerShell 受限語言模式只會讓桌面捷徑建不起來(安裝照樣完成,改雙擊 `launch.pyw`)。
+
+**每台先跑一次 `precheck.pyw`**(zip 裡,和 `install.pyw` 並排):不安裝任何東西,把上面每一項真的試一次、列表,
+「複製結果」可以直接交給 IT。見[小幫手 §IT 要放行的](ai-workspace-helper.md#it-要放行的)。
 
 **確認做完**(`rollout 後`):
 
 - 打開「小幫手」頁:有版本號與 `ai-workspace-helper-<版本>.zip(ZIP,約 38 MB)` 的下載連結。
   沒放檔案或 `ai_workspace_helper_dir` 沒設的症狀:頁面寫「還沒有發布小幫手」。
-- 在一台 Windows 電腦照頁面裝起來、登入,小視窗顯示「已連線，等待查詢」;在一個 item 請 AI 查外面的東西,卡片出現「查」,
+- 在一台 Windows 電腦先雙擊 `precheck.pyw`:六項都 ✔(沒通過的照它寫的找 IT);再照頁面裝起來、登入,小視窗顯示「已連線，等待查詢」;在一個 item 請 AI 查外面的東西,卡片出現「查」,
   按下去不用再經手,`lookups/` 出現存檔、AI 接著讀。這一步是 Windows 上唯一的驗證(plan D14)。
 
 

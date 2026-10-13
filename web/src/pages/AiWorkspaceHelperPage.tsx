@@ -86,6 +86,7 @@ export function AiWorkspaceHelperPage({
           </p>
           <ol style={{ display: "grid", gap: 4, paddingLeft: pxToRem(20) }}>
             <li>{t("aiWorkspaceHelper.step1")}</li>
+            <li>{t("aiWorkspaceHelper.stepCheck")}</li>
             <li>{t("aiWorkspaceHelper.step2")}</li>
             <li>
               {/* With the deploy's base path: the helper asks `<this>/api/…`. */}

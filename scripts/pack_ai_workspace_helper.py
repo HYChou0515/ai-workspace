@@ -8,7 +8,7 @@ the card's converter into the helper, D11), `uv` (builds the helper's wheel)
 and a Python with pip (downloads the Windows wheels). Writes into DIR (default
 `dist/ai-workspace-helper/`):
 
-- `ai-workspace-helper-<version>.zip` — `install.pyw`, `launch.pyw`, `setup_core.py`
+- `ai-workspace-helper-<version>.zip` — `precheck.pyw`, `install.pyw`, `launch.pyw`, `setup_core.py`
   and `wheelhouse/`: the helper's wheel plus every package it needs as
   win_amd64 wheels for CPython 3.10–3.14, each pinned with `==`;
 - `ai-workspace-helper.json` — `{version, min_version, file, sha256}`.
@@ -142,11 +142,14 @@ def pack(
         with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as z:
             z.write(HELPER / "install.pyw", "install.pyw")
             z.write(HELPER / "launch.pyw", "launch.pyw")
+            z.write(HELPER / "precheck.pyw", "precheck.pyw")
             z.write(HELPER / "src" / "ai_workspace_helper" / "setup_core.py", "setup_core.py")
             z.writestr(
                 "README.txt",
-                "AI Workspace Helper — 解壓縮後雙擊 install.pyw。\n"
-                "Unzip, then double-click install.pyw.\n",
+                "AI Workspace Helper — 解壓縮後,先雙擊 precheck.pyw 檢查這台電腦"
+                "(不安裝任何東西),都通過再雙擊 install.pyw。\n"
+                "Unzip, double-click precheck.pyw to check this PC (it installs nothing),"
+                " then install.pyw.\n",
             )
             for wheel in sorted(wheelhouse.glob("*.whl")):
                 z.write(wheel, f"wheelhouse/{wheel.name}")

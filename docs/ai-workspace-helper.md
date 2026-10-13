@@ -13,12 +13,28 @@ Markdown 交回卡片——使用者只要在搜尋時按一下「查」。設�
 ## 使用者:安裝(每台電腦一次)
 
 需要:Windows、電腦上有 Python 3.10–3.14、有 Google Chrome。不用連外網裝套件,安裝包裡都有。
+**不需要系統管理員權限**:不跑安裝程式、不寫 Program Files、不改登錄檔、不跳 UAC——只寫你自己的
+`%LOCALAPPDATA%\AIWorkspaceHelper\`(用電腦上的 Python 建一個 venv、從 zip 裡的套件離線裝好)和你自己桌面上的捷徑。
+但公司電腦可能不讓它**執行**:見下面的預檢與「IT 要放行的」。
 
 1. 在 AI Workspace 左側選單打開「**小幫手**」,下載 `ai-workspace-helper-<版本>.zip`。
-2. 解壓縮,雙擊 **`install.pyw`**。它會先說「將使用 Python 3.x(完整路徑)」——電腦上有好幾個 Python 而
+2. 解壓縮,先雙擊 **`precheck.pyw`**(預檢):它**不安裝任何東西**,只在 `%LOCALAPPDATA%` 旁邊的暫存資料夾裡把小幫手
+   需要的每一樣真的試一次,結束就刪掉,最後列一張表:
+
+   | 檢查 | 試的是 | 沒通過代表 |
+   |---|---|---|
+   | Python 3.10 以上 | 執行它的那個 Python | 換一個 Python(`py -3.12 precheck.pyw`) |
+   | 在使用者資料夾執行程式 | 在 `%LOCALAPPDATA%` 建 venv 並執行它 | 公司政策(例如 AppLocker)不讓使用者資料夾裡的程式執行;請 IT 放行 `%LOCALAPPDATA%\AIWorkspaceHelper\` |
+   | Playwright 的 node.exe | 從 zip 裡取出 Playwright 自帶的 `node.exe` 執行 | 防毒或政策擋下它;請 IT 放行 |
+   | 建立桌面捷徑(PowerShell) | 用安裝時同一段 PowerShell 建一個捷徑,並確認檔案真的出現 | PowerShell 被限制;**安裝照樣完成**,之後從 `%LOCALAPPDATA%\AIWorkspaceHelper\launch.pyw` 開 |
+   | Chrome | 已安裝的 `chrome.exe` | 先裝 Chrome |
+   | Chrome 允許自動化 | 公司的 Chrome 政策 `RemoteDebuggingAllowed` | 被政策禁止;請 IT 放行 |
+
+   有沒通過的,按「**複製結果**」貼給 IT 或系統管理員。全部通過再往下。
+3. 雙擊 **`install.pyw`**。它會先說「將使用 Python 3.x(完整路徑)」——電腦上有好幾個 Python 而
    這不是你要的,按「取消」,在那個資料夾開命令列改用 `py -3.12 install.pyw`(換成你要的版本)。
-3. 裝好後桌面有「**AI Workspace Helper**」。雙擊它;第一次會問 AI Workspace 的網址(「小幫手」頁上寫著,照抄)。
-4. 它會開一個**自己的** Chrome 視窗(和你平常的 Chrome 分開,登入資料也分開)。在那裡照平常方式登入 AI Workspace
+4. 裝好後桌面有「**AI Workspace Helper**」(PowerShell 被限制時沒有捷徑,安裝結束的訊息會寫要雙擊哪個檔)。雙擊它;第一次會問 AI Workspace 的網址(「小幫手」頁上寫著,照抄)。
+5. 它會開一個**自己的** Chrome 視窗(和你平常的 Chrome 分開,登入資料也分開)。在那裡照平常方式登入 AI Workspace
    一次,小視窗變成「已連線，等待查詢」。之後登入過期時,它會自己把那個 Chrome 視窗叫到前面、開登入頁(開著的時候過期,小視窗寫「登入已過期」;重開時已經過期,寫「請在小幫手開的 Chrome 視窗登入」)。
 
 小視窗有三個分頁:
@@ -100,9 +116,19 @@ python3 scripts/pack_ai_workspace_helper.py --version 0.1.0 [--min-version 0.1.0
 
 ## IT 要放行的
 
+小幫手**不需要系統管理員權限**;下面是它需要被允許**執行**的東西。`precheck.pyw` 逐項試給你看。
+
+- **使用者資料夾裡的程式**:小幫手的 venv(`python.exe`/`pythonw.exe`)和 Playwright 的 `node.exe` 都在
+  `%LOCALAPPDATA%\AIWorkspaceHelper\` 底下。AppLocker 的預設規則只放行 Program Files 與 Windows 資料夾
+  ([AppLocker default rules](https://learn.microsoft.com/en-us/windows/security/application-security/application-control/app-control-for-business/applocker/understanding-applocker-default-rules)),這種電腦要對這個資料夾(或依簽章)加一條允許規則。
+- **下載**:安裝包是 zip,但裡面的 Playwright 套件包著 `node.exe`;擋 exe 下載的代理或防毒可能擋下或刪掉它
+  (預檢的「Playwright 的 node.exe」會失敗)。
+- **PowerShell**:安裝時用 PowerShell 建桌面捷徑(`New-Object -ComObject WScript.Shell`);
+  受限語言模式不允許([about_Language_Modes](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_language_modes))。這一項不影響安裝,只是沒有捷徑。
 - **防毒**:Playwright 會啟動它自帶的 `node.exe`(在 `%LOCALAPPDATA%\AIWorkspaceHelper\versions\<版本>\venv\` 底下)。
   企業防毒擋過 Playwright 的執行檔([playwright-java#1016](https://github.com/microsoft/playwright-java/issues/1016))。
   被擋時小視窗會是「開不了 Chrome」或連不上;請依資料夾或簽章放行一次。
-- **Chrome 政策**:小幫手透過 Chrome 的自動化介面驅動它;公司若用政策停用 Chrome 的遠端偵錯/自動化,小幫手開不了 Chrome
+- **Chrome 政策**:小幫手透過 Chrome 的自動化介面驅動它;公司若用政策停用 Chrome 的遠端偵錯/自動化
+  (`RemoteDebuggingAllowed` = 0,[Chrome 政策](https://chromeenterprise.google/policies/#RemoteDebuggingAllowed)),小幫手開不了 Chrome
   ([Playwright: browsers](https://playwright.dev/python/docs/browsers))。
 - **網路**:小幫手只連 AI Workspace(工作、更新都從那裡拿)與它替你開的網頁;更新檔不經瀏覽器下載,不會被標成「從網路下載」。

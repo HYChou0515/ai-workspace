@@ -40,6 +40,7 @@
 | D16 | **安裝(每台筆電一次)**:從 AI Workspace 網頁下載 zip、解壓縮、雙擊 `install.pyw`(只用 Python 內建功能;檔名一律英文)。它先顯示「將使用 Python 3.x(完整路徑)」讓人確認,建好資料夾、裝好套件,在桌面放捷徑;**捷徑寫死那個 `pythonw.exe` 的絕對路徑**,之後不靠副檔名關聯。系統挑錯 Python 時,取消、改用 `py -3.x install.pyw`。不處理「Python 被升級」——沒有人會自動升級 Python,真的換了就重跑一次安裝 | 〔user〕「什麼叫執行安裝指令?我是在dev server打包的耶」「可以吧 簡單即可」「沒有人會自動升級python」「你有指定執行檔路徑?」 |
 | D17 | **解除安裝**:小視窗裡的「解除安裝」按鈕,確認後刪掉小幫手留下的三樣東西(`%LOCALAPPDATA%\AIWorkspaceHelper\` 整個資料夾、桌面與啟動資料夾的 `AI Workspace Helper.lnk`);按鈕不能用時,手動刪掉這三樣就等於解除安裝。不碰登錄檔、不裝系統資料夾,所以沒有別的痕跡;後端不用做任何事(沒有心跳,卡片自動退回手動,D7) | 〔user〕「怎麼解安裝」「要」 |
 | D18 | **名稱**:app 叫「AI Workspace」;這支程式的正式名稱是「AI Workspace Helper」——桌面捷徑、視窗與對話框標題、安裝資料夾 `%LOCALAPPDATA%\AIWorkspaceHelper\`、下載的 `ai-workspace-helper-<版本>.zip`;視窗裡和網頁上自稱「小幫手」(例如「小幫手已連線」),不再叫「外網小幫手」。程式碼裡叫 `ai-workspace-helper` / `ai_workspace_helper`:`ai-workspace-helper/` 資料夾(Python 套件 `ai_workspace_helper`)、`/api/ai-workspace-helper/*` 路由、`X-AI-Workspace-Helper-*` header、`server.ai_workspace_helper_dir`、`ai-workspace-helper.json`。卡片的工作(`OutsideJob`、`/outside-jobs`)屬於卡片,不改名;本計劃檔名不改 | 〔user〕「名稱改叫ai workspace helper」「中文名也要改啊」「正式名稱AI workspace」(我先讀成程式的名字,其實是 app 的)「視窗內自稱小幫手」「outside-helper.json也改掉」「AI工作區 改為AI Workspace」「AI Workspace.lnk 不是應該叫做ooxx helper?」 |
+| D19 | **不需要系統管理員權限,但要被允許執行**:安裝只寫 `%LOCALAPPDATA%\AIWorkspaceHelper\` 與自己的捷徑(不跑安裝程式、不寫 Program Files、不改登錄檔);公司電腦可能擋的是**執行**——使用者資料夾裡的程式(AppLocker)、zip 裡的 `node.exe`(防毒/代理)、PowerShell 受限(只影響捷徑)、Chrome 自動化政策。zip 裡附 **`precheck.pyw`**:不安裝任何東西,在暫存資料夾把每一樣真的試一次、列表、可複製給 IT,結束就刪掉。捷徑建不起來不再算安裝失敗(安裝結束時說要雙擊哪個檔);捷徑的 PowerShell 遇到任何錯誤都算失敗(`$ErrorActionPreference = 'Stop'`,否則沒建出來也會回 0) | 〔user〕「請問他會安裝嗎?我想我們沒有安裝權限」「可以 你就一起寫到docs裡面」 |
 | D12 | **開網址**:網址若出現在**這個聊天先前任何一次查回來的內容**裡,直接開;否則和搜尋一樣,先在卡片上點頭 | 〔user〕「純網址可以直接開 搜尋要先確認」,後收緊為「網址出現在上一次查詢中的話就可以直接開」「查過都算」——外面網頁上的連結是外面帶回來的,AI 自己寫的網址才可能夾帶內部字詞 |
 | D5 | 小幫手主動向後端領工作(網頁不能控制它);**Python 直接連我們的後端** | 〔user〕選 1 |
 | D6 | 身分沿用 app 現有的登入(「要登入才能用」那道門),不另做金鑰 | 〔user〕「我們已經有卡(限制)登入了」 |
@@ -296,7 +297,8 @@ AI 呼叫 ask_outside ──► 卡片(D7:沒連線 = 今天的手動流程)
 
 ## 7. prod 怎麼驗證
 
-1. 從 app 的「小幫手」頁下載 zip、解壓縮、雙擊 `install.pyw`:確認顯示的 Python、按「安裝」,桌面出現 `AI Workspace Helper` 捷徑。雙擊捷徑:小視窗出現;
+1. 從 app 的「小幫手」頁下載 zip、解壓縮,先雙擊 `precheck.pyw`(D19):六項都 ✔ 再往下;沒通過的那一項就是公司電腦擋住的地方。
+   雙擊 `install.pyw`:確認顯示的 Python、按「安裝」,桌面出現 `AI Workspace Helper` 捷徑。雙擊捷徑:小視窗出現;
    按「登入」開 Chrome 登入 app,視窗顯示「已連線，等待查詢」。這一步是 Windows 上唯一的驗證(D14):裝不裝得起來、`.pyw` 能不能雙擊、
    捷徑開不開得起來、Chrome 開不開得出來、公司代理與 SSO。
 2. 在聊天問一個需要外部資料的問題;卡片上方顯示小幫手已連線,主要按鈕是「查」。

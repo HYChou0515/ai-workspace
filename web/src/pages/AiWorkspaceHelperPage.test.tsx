@@ -57,6 +57,19 @@ describe("the helper page", () => {
     expect(screen.getByText(window.location.origin)).toBeInTheDocument();
   });
 
+  // plan D19: no admin rights needed, but a company PC may refuse what the
+  // helper runs — the precheck, before installing, says which.
+  it("says to check the PC with precheck.pyw before installing", async () => {
+    draw();
+
+    const steps = (await screen.findAllByRole("listitem")).map((li) => li.textContent ?? "");
+    const check = steps.findIndex((s) => s.includes("precheck.pyw"));
+    const install = steps.findIndex((s) => s.includes("install.pyw"));
+    expect(check).toBeGreaterThanOrEqual(0);
+    expect(check).toBeLessThan(install);
+    expect(steps[check]).toMatch(/不安裝任何東西/);
+  });
+
   it("says when nothing is published", async () => {
     draw({ release: null });
 
