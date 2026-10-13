@@ -45,8 +45,9 @@ class _Browser:
 
     asked: list[tuple[str, str]]
 
-    def run(self, errand, args: str, note) -> FetchedPage:
+    def run(self, errand, args: str, note, where=None) -> FetchedPage:
         self.note = note
+        self.where = where or (lambda _site: None)
         return errand(self, args)
 
 
@@ -315,3 +316,36 @@ def test_the_helper_searches_where_the_deploy_says():
     client, _spec, _iid = _asked(lookup_targets=targets)
 
     assert _backend(client).lookup_targets() == targets
+
+
+# The window's 查詢紀錄 (D13): each job the helper ran leaves one line — what,
+# on which site, and how it ended — and the log says the same.
+def test_each_job_leaves_a_line_in_the_history_and_the_log(caplog):
+    import logging
+
+    from ai_workspace_helper.errands import ErrandFailed
+    from ai_workspace_helper.history import History
+
+    def found(browser, query: str) -> FetchedPage:
+        browser.where("Google")
+        return FetchedPage(title="r", url="https://www.google.com/search?q=x", markdown="ok")
+
+    def not_found(browser, query: str) -> FetchedPage:
+        browser.where("Google")
+        raise ErrandFailed("the page answered 404")
+
+    history = History(None)
+    for errand, query in ((found, "pandas 2.0"), (not_found, "numpy 3")):
+        client, _spec, iid = _asked()
+        worker = Worker(_backend(client), _Browser([]), errands={"search": errand}, history=history)
+        worker.tick()
+        _hand(client, iid, query=query)
+        with caplog.at_level(logging.INFO, logger="ai_workspace_helper.worker"):
+            worker.tick()
+
+    rows = [(r["kind"], r["args"], r["site"], r["outcome"], r["reason"]) for r in history.recent()]
+    assert rows == [
+        ("search", "numpy 3", "Google", "failed", "the page answered 404"),
+        ("search", "pandas 2.0", "Google", "done", ""),
+    ]
+    assert "search 'pandas 2.0'" in caplog.text and "done" in caplog.text

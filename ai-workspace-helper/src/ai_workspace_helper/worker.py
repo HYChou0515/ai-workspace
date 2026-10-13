@@ -18,6 +18,7 @@ from typing import Any
 
 from .backend import Backend, BackendError, NeedsLogin, UpdateRequired
 from .errands import Errand
+from .history import History
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +39,7 @@ class Worker:
         errands: Mapping[str, Errand],
         date: Callable[[], str] = _today,
         info: Callable[[], Mapping[str, str]] = dict,
+        history: History | None = None,
     ) -> None:
         self._backend = backend
         self._browser = browser
@@ -45,15 +47,21 @@ class Worker:
         self._date = date
         #: What each check-in reports beyond the version (§3.7.7).
         self._info = info
+        #: The window's 查詢紀錄: one row per job run.
+        self._history = history
         self.paused = False
         self.status = "starting"
         #: What the window shows under the status: the errand under way, or the
         #: backend's reason for a refusal.
         self.detail = ""
+        #: The errand under way (its job `kind`) and the site it said it is on.
+        self.kind = ""
+        self.site = ""
         self.manifest: Any = None
-        #: Told (status, detail) the moment an errand starts or ends — the
-        #: window shows 「正在查:…」 while it runs, not once the poll is over.
-        self.on_change: Callable[[str, str], None] | None = None
+        #: Told (status, detail, kind, site) the moment an errand starts, names
+        #: its site, or ends — the window shows 「正在搜尋（Google）：…」 while it
+        #: runs, not once the poll is over.
+        self.on_change: Callable[[str, str, str, str], None] | None = None
 
     def tick(self) -> None:
         if self.paused:
@@ -78,31 +86,55 @@ class Worker:
 
     def _changed(self) -> None:
         if self.on_change is not None:
-            self.on_change(self.status, self.detail)
+            self.on_change(self.status, self.detail, self.kind, self.site)
+
+    def _at(self, site: str) -> None:
+        self.site = site
+        self._changed()
+
+    def _record(self, job, outcome: str, reason: str = "") -> None:  # noqa: ANN001
+        logger.info("job %s: %s %r %s %s", job.id, job.kind, job.args, outcome, reason)
+        if self._history is not None:
+            self._history.add(
+                kind=job.kind, args=job.args, site=self.site, outcome=outcome, reason=reason
+            )
 
     def _run(self, job) -> None:  # noqa: ANN001 — backend.Job
         errand = self._errands.get(job.kind)
         if errand is None:
-            self._backend.fail(job.id, f"this helper cannot do {job.kind!r} — update the helper")
+            reason = f"this helper cannot do {job.kind!r} — update the helper"
+            self._backend.fail(job.id, reason)
+            self.site = ""
+            self._record(job, "failed", reason)
             return
-        self.detail = job.args
+        logger.info("job %s: %s %r started", job.id, job.kind, job.args)
+        self.detail, self.kind, self.site = job.args, job.kind, ""
         self._changed()
         try:
             page = self._browser.run(
-                errand, job.args, lambda text: self._backend.note(job.id, text)
+                errand, job.args, lambda text: self._backend.note(job.id, text), self._at
             )
-        except (NeedsLogin, UpdateRequired, OSError, BackendError):
+        except (NeedsLogin, UpdateRequired, OSError, BackendError) as exc:
+            self._record(job, "failed", str(exc) or type(exc).__name__)
             raise
         except Exception as exc:  # noqa: BLE001 — any errand failure is reported to the card
             logger.warning("errand %s failed", job.kind, exc_info=True)
-            self._backend.fail(job.id, (str(exc) or type(exc).__name__)[:_ERROR_CHARS])
+            reason = (str(exc) or type(exc).__name__)[:_ERROR_CHARS]
+            self._backend.fail(job.id, reason)
+            self._record(job, "failed", reason)
             return
         finally:
-            self.detail = ""
+            self.detail, self.kind = "", ""
             self._changed()
-        self._backend.result(
-            job.id, title=page.title, url=page.url, markdown=page.markdown, date=self._date()
-        )
+        try:
+            self._backend.result(
+                job.id, title=page.title, url=page.url, markdown=page.markdown, date=self._date()
+            )
+        except (NeedsLogin, UpdateRequired, OSError, BackendError) as exc:
+            # fetched, but not handed back (signed out, refused, offline)
+            self._record(job, "failed", str(exc) or type(exc).__name__)
+            raise
+        self._record(job, "done")
 
 
 __all__ = ["Worker"]

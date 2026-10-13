@@ -132,8 +132,15 @@ class Chrome:
             session.detach()
         return product.split("/", 1)[-1]
 
-    def run(self, errand: Errand, args: str, note: Callable[[str], None]) -> FetchedPage:
-        """Run one errand in a fresh tab, closed afterwards whatever happens."""
+    def run(
+        self,
+        errand: Errand,
+        args: str,
+        note: Callable[[str], None],
+        where: Callable[[str], None] | None = None,
+    ) -> FetchedPage:
+        """Run one errand in a fresh tab, closed afterwards whatever happens.
+        `note` reaches the card; `where` the window."""
         page = self._ctx.new_page()
         try:
             ctx = ErrandContext(
@@ -141,6 +148,7 @@ class Chrome:
                 note=note,
                 convert=lambda html: self._convert_in(page, html),
                 sleep=lambda s: page.wait_for_timeout(s * 1000),
+                where=where if where is not None else (lambda _site: None),
             )
             return errand(ctx, args)
         finally:

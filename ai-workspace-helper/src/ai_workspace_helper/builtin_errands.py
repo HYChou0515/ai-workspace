@@ -94,7 +94,9 @@ def build(targets: Callable[[], list[dict[str, str]]]) -> dict[str, Errand]:
     reaches a helper that is already running)."""
 
     def search(ctx: ErrandContext, query: str) -> FetchedPage:
-        return fetch(ctx, search_url(pick_search_target(targets())["url"], query))
+        target = pick_search_target(targets())
+        ctx.where(target.get("name", ""))
+        return fetch(ctx, search_url(target["url"], query))
 
     def open_url(ctx: ErrandContext, url: str) -> FetchedPage:
         if urlsplit(url).scheme not in ("http", "https"):

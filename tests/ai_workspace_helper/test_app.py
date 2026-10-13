@@ -95,7 +95,7 @@ def test_a_chrome_that_will_not_start_is_shown_not_a_crash():
     ctl = Controller(broken, lambda _c: _Worker([]))
     ctl.open()
 
-    status, detail = ctl.snapshot()
+    status, detail, *_ = ctl.snapshot()
     assert status == "no_chrome" and "not found" in detail
     assert ctl.step() is True  # still running: the person can read it and quit
 
@@ -106,6 +106,7 @@ def test_every_status_reads_as_a_sentence():
         "connected",
         "paused",
         "needs_login",
+        "login_expired",
         "update_required",
         "unreachable",
         "error",
@@ -113,7 +114,23 @@ def test_every_status_reads_as_a_sentence():
     ):
         text = describe(status, "x")
         assert text and status not in text
-    assert describe("connected", "pandas 2.0") == "已連線 — 正在查:pandas 2.0"
+    searching = describe("connected", "pandas 2.0", "search", "Google")
+    assert searching == "正在搜尋（Google）：pandas 2.0"
+    assert describe("connected", "https://a.example/", "open_url") == "正在開啟：https://a.example/"
+    assert describe("login_expired", "") == "登入已過期，請在小幫手開的 Chrome 視窗重新登入"
+    # the window's own text is in full-width punctuation
+    for status in (
+        "starting",
+        "connected",
+        "paused",
+        "needs_login",
+        "login_expired",
+        "update_required",
+        "unreachable",
+        "error",
+        "no_chrome",
+    ):
+        assert not set(describe(status, "")) & set(",:;?()"), status
 
 
 def test_the_thread_polls_until_told_to_quit():
@@ -162,7 +179,7 @@ def test_with_no_chrome_the_buttons_do_nothing_but_quit():
 
     ctl = Controller(broken, lambda _c: _Worker([]))
     ctl.open()
-    assert ctl.snapshot() == ("no_chrome", "RuntimeError")
+    assert ctl.snapshot()[:2] == ("no_chrome", "RuntimeError")
 
     for command in ("login", "pause", "resume"):
         ctl.send(command)
@@ -464,7 +481,7 @@ def test_the_window_says_what_is_being_looked_up_while_it_is():
     from tests.api.test_outside_answers import _asked
 
     client, _spec, iid = _asked()
-    seen_mid_errand: list[tuple[str, str]] = []
+    seen_mid_errand: list[tuple[str, ...]] = []
     ctl: Controller
 
     def search(browser, query):
@@ -481,8 +498,9 @@ def test_the_window_says_what_is_being_looked_up_while_it_is():
 
     ctl.step()
 
-    assert seen_mid_errand == [("connected", "pandas 2.0 新功能")]
-    assert describe(*seen_mid_errand[0]) == "已連線 — 正在查:pandas 2.0 新功能"
+    assert seen_mid_errand == [("connected", "pandas 2.0 新功能", "search", "")]
+    assert describe(*seen_mid_errand[0]) == "正在搜尋：pandas 2.0 新功能"
+    assert ctl.snapshot() == ("connected", "", "", "")
 
 
 # What the window says about the next version (§3.7.4–§3.7.6).
@@ -491,11 +509,12 @@ def test_the_update_line_says_where_the_next_version_stands():
 
     assert describe_update("", forced=False) == ""
     assert describe_update("preparing", forced=False) == "正在準備新版…"
-    assert describe_update("ready", forced=False) == "新版已備好,下次開啟生效"
-    assert describe_update("ready", forced=True) == "新版已備好,按「重新開啟」換上"
+    assert describe_update("ready", forced=False) == "新版已下載，下次開啟時套用"
+    assert describe_update("ready", forced=True) == "新版已下載，按「立即更新」換上"
     # the running version carries on — unless it is refused, when only a
     # reinstall from the download page is left (§3.7.6)
-    assert describe_update("failed: sha256", forced=False) == "新版準備失敗:sha256(這一版照常使用)"
+    failed = describe_update("failed: sha256", forced=False)
+    assert failed == "新版準備失敗：sha256（這一版照常使用）"
     assert "請到 AI Workspace 的「小幫手」頁" in describe_update("failed: sha256", forced=True)
 
 
@@ -508,5 +527,90 @@ def test_a_chrome_that_will_not_start_says_what_to_do():
 
 
 def test_a_status_reads_with_or_without_its_detail():
-    assert describe("paused", "") == "已暫停 — 卡片會改成自己查"
-    assert describe("unreachable", "connection refused") == "連不到 AI Workspace:connection refused"
+    assert describe("paused", "") == "已暫停：AI 會請你自己查"
+    assert describe("connected", "") == "已連線，等待查詢"
+    # a reason goes on a line of its own, under the sentence
+    assert describe("unreachable", "connection refused") == (
+        "連不上 AI Workspace，會自動重試\nconnection refused"
+    )
+
+
+# Never signed in vs signed in and expired: the first start asks to sign in;
+# only a login that worked and then lapsed is "expired" (found running the
+# login demo: a first start said 「登入過期」).
+def test_the_first_sign_in_is_not_called_expired():
+    ctl, _chrome, _worker = _controller(["needs_login", "connected", "needs_login"])
+
+    ctl.step()
+    assert ctl.snapshot()[0] == "needs_login"
+    ctl.step()
+    ctl.step()
+    assert ctl.snapshot()[0] == "login_expired"
+
+
+# 「正在搜尋（Google）」: the search errand says which destination it opened,
+# and the window shows it while the errand runs.
+def test_the_window_names_the_site_a_search_runs_on():
+    from ai_workspace_helper.backend import Backend
+    from ai_workspace_helper.errands import FetchedPage
+    from ai_workspace_helper.worker import Worker
+
+    from tests.ai_workspace_helper.test_worker import _backend, _Browser, _hand
+    from tests.api.test_outside_answers import _asked
+
+    client, _spec, iid = _asked()
+    seen: list[str] = []
+    ctl: Controller
+
+    def search(browser, query):
+        browser.where("Google")
+        seen.append(describe(*ctl.snapshot()))
+        return FetchedPage(title="t", url="https://x.example/", markdown="ok")
+
+    backend: Backend = _backend(client)
+    ctl = Controller(
+        lambda: _Chrome(), lambda _c: Worker(backend, _Browser([]), errands={"search": search})
+    )
+    ctl.open()
+    ctl.step()
+    _hand(client, iid, query="pandas 2.0 新功能")
+    ctl.step()
+
+    assert seen == ["正在搜尋（Google）：pandas 2.0 新功能"]
+
+
+# The 查詢紀錄 tab: one row per job, newest first, in the person's words.
+def test_a_history_row_reads_as_what_happened():
+    from ai_workspace_helper.app import history_row
+
+    assert history_row(
+        {
+            "at": "2026-10-13T09:12:20",
+            "kind": "search",
+            "args": "pandas 2.0",
+            "site": "Google",
+            "outcome": "done",
+            "reason": "",
+        }
+    ) == ("10-13 09:12", "搜尋（Google）", "pandas 2.0", "已送給 AI")
+    assert history_row(
+        {
+            "at": "2026-10-13T09:13:00",
+            "kind": "open_url",
+            "args": "https://a.example/",
+            "site": "",
+            "outcome": "failed",
+            "reason": "the page answered 404",
+        }
+    ) == ("10-13 09:13", "開啟網頁", "https://a.example/", "沒查到：the page answered 404")
+
+
+# The 記錄檔 tab: the end of helper.log, not the whole file.
+def test_the_log_tab_shows_the_end_of_the_log(tmp_path):
+    from ai_workspace_helper.app import log_tail
+
+    log = tmp_path / "helper.log"
+    assert log_tail(log, lines=2) == ""  # no log yet
+    log.write_text("".join(f"line {n}\n" for n in range(1, 6)), encoding="utf-8")
+
+    assert log_tail(log, lines=2) == "line 4\nline 5\n"

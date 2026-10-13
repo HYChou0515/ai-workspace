@@ -94,6 +94,19 @@ def test_a_search_brings_back_the_results_page_itself():
     )
 
 
+# The window says 「正在搜尋（<site>）」: the search names the destination it
+# picked, before it goes there.
+def test_a_search_says_which_destination_it_opened():
+    page = _Page()
+    sites: list[str] = []
+    ctx = ErrandContext(page=page, note=lambda _n: None, convert=str, where=sites.append)
+    errands = build(lambda: [{"name": "Bing", "url": "https://b.example/?q={q}"}])
+
+    errands["search"](ctx, "pandas 2.0")
+
+    assert sites == ["Bing"]
+
+
 def test_a_page_is_opened_as_given():
     page = _Page()
 

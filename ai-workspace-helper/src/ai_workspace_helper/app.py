@@ -26,26 +26,58 @@ POLL_S = 2.0
 
 _TEXT = {
     "starting": "啟動中…",
-    "connected": "已連線",
-    "paused": "已暫停 — 卡片會改成自己查",
-    "needs_login": "登入過期 — 請在小幫手的 Chrome 視窗登入",
-    "update_required": "這個版本已停用,需要更新",
-    "unreachable": "連不到 AI Workspace",
+    "connected": "已連線，等待查詢",
+    "paused": "已暫停：AI 會請你自己查",
+    # never signed in on this run vs signed in and then lapsed (Controller)
+    "needs_login": "請在小幫手開的 Chrome 視窗登入 AI Workspace",
+    "login_expired": "登入已過期，請在小幫手開的 Chrome 視窗重新登入",
+    "update_required": "這個版本已停用，需要更新",
+    "unreachable": "連不上 AI Workspace，會自動重試",
     "error": "發生錯誤",
-    "no_chrome": "開不了 Chrome(Chrome 剛更新的話,請更新小幫手;或按「重設登入」)",
+    "no_chrome": "開不了 Chrome。Chrome 剛更新的話，請更新小幫手；或按「重設登入」",
 }
+
+#: What each errand is doing, as the window says it.
+_DOING = {"search": "正在搜尋", "open_url": "正在開啟"}
+#: The 查詢紀錄 tab's name for each errand.
+_KIND = {"search": "搜尋", "open_url": "開啟網頁"}
 
 logger = logging.getLogger(__name__)
 
 
-def describe(status: str, detail: str) -> str:
-    """The status line the person reads."""
+def describe(status: str, detail: str, kind: str = "", site: str = "") -> str:
+    """The status line the person reads: while an errand runs, what it does
+    (「正在搜尋（Google）：pandas 2.0」); otherwise the status, with any reason
+    on a line of its own."""
+    if status == "connected" and detail:
+        doing = _DOING.get(kind, "正在查")
+        return f"{doing}（{site}）：{detail}" if site else f"{doing}：{detail}"
     text = _TEXT.get(status, status)
-    if not detail:
-        return text
-    if status == "connected":
-        return f"{text} — 正在查:{detail}"
-    return f"{text}:{detail}"
+    return f"{text}\n{detail}" if detail else text
+
+
+def history_row(row: dict[str, Any]) -> tuple[str, str, str, str]:
+    """One row of the 查詢紀錄 tab: (when, what, which, how it ended)."""
+    at = str(row.get("at", ""))
+    when = f"{at[5:10]} {at[11:16]}" if len(at) >= 16 else at
+    kind = str(row.get("kind", ""))
+    what = _KIND.get(kind, kind)
+    if row.get("site"):
+        what = f"{what}（{row['site']}）"
+    if row.get("outcome") == "done":
+        ended = "已送給 AI"
+    else:
+        ended = f"沒查到：{row.get('reason', '')}" if row.get("reason") else "沒查到"
+    return when, what, str(row.get("args", "")), ended
+
+
+def log_tail(path: Any, *, lines: int = 300) -> str:
+    """The 記錄檔 tab: the last `lines` of helper.log ("" before there is one)."""
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+    return "".join(text.splitlines(keepends=True)[-lines:])
 
 
 def describe_update(status: str, *, forced: bool) -> str:
@@ -54,12 +86,14 @@ def describe_update(status: str, *, forced: bool) -> str:
     if status == "preparing":
         return "正在準備新版…"
     if status == "ready":
-        return "新版已備好,按「重新開啟」換上" if forced else "新版已備好,下次開啟生效"
+        return "新版已下載，按「立即更新」換上" if forced else "新版已下載，下次開啟時套用"
     if status.startswith("failed"):
         why = status.partition(":")[2].strip()
         if forced:
-            return f"新版準備失敗:{why}。請到 AI Workspace 的「小幫手」頁重新下載、執行 install.pyw"
-        return f"新版準備失敗:{why}(這一版照常使用)"
+            return (
+                f"新版準備失敗：{why}。請到 AI Workspace 的「小幫手」頁重新下載、執行 install.pyw"
+            )
+        return f"新版準備失敗：{why}（這一版照常使用）"
     return ""
 
 
@@ -79,6 +113,7 @@ class Controller:
         make_updater: Callable[[Any], Any] | None = None,
         reset_profile: Callable[[], None] | None = None,
         poll_s: float = POLL_S,
+        history: Any = None,
     ) -> None:
         self._make_chrome = make_chrome
         self._make_worker = make_worker
@@ -87,7 +122,11 @@ class Controller:
         self._poll_s = poll_s
         self._commands: queue.Queue[str] = queue.Queue()
         self._lock = threading.Lock()
-        self._snapshot = ("starting", "")
+        self._snapshot: tuple[str, str, str, str] = ("starting", "", "", "")
+        #: Signed in at least once on this run: a later sign-out is an expiry.
+        self._signed_in = False
+        #: The 查詢紀錄 the window shows (history.History), or None.
+        self.history = history
         self._chrome: Any = None
         self._worker: Any = None
         self._updater: Any = None
@@ -100,7 +139,8 @@ class Controller:
     def send(self, command: str) -> None:
         self._commands.put(command)
 
-    def snapshot(self) -> tuple[str, str]:
+    def snapshot(self) -> tuple[str, str, str, str]:
+        """(status, detail, kind, site) — `describe`'s arguments."""
         with self._lock:
             return self._snapshot
 
@@ -167,7 +207,14 @@ class Controller:
             # tab every poll while the person is typing their password.
             self._chrome.open_login()
         self._asked_login = status == "needs_login"
-        self._show(status, self._worker.detail)
+        self._signed_in = self._signed_in or status == "connected"
+        shown = "login_expired" if status == "needs_login" and self._signed_in else status
+        self._show(
+            shown,
+            self._worker.detail,
+            getattr(self._worker, "kind", ""),
+            getattr(self._worker, "site", ""),
+        )
         self._keep_current(status)
         return True
 
@@ -214,7 +261,7 @@ class Controller:
                 logger.warning("reset login", exc_info=True)
         self.open()
         if failed:
-            self._show("error", f"重設登入沒有成功:{failed}")
+            self._show("error", f"重設登入沒有成功：{failed}")
             return False
         if self._chrome is not None and self._worker is not None:
             self._chrome.open_login()
@@ -237,9 +284,9 @@ class Controller:
             except Exception:  # noqa: BLE001 — ending anyway
                 logger.exception("closing Chrome")
 
-    def _show(self, status: str, detail: str) -> None:
+    def _show(self, status: str, detail: str, kind: str = "", site: str = "") -> None:
         with self._lock:
-            self._snapshot = (status, detail)
+            self._snapshot = (status, detail, kind, site)
 
 
 def make_controller(home: Any, app_url: str, make_chrome: Callable[[], Any]) -> Controller:
@@ -252,6 +299,7 @@ def make_controller(home: Any, app_url: str, make_chrome: Callable[[], Any]) -> 
 
     from .backend import Backend
     from .builtin_errands import build as build_errands
+    from .history import History
     from .updates import Updater
     from .worker import Worker
 
@@ -266,6 +314,7 @@ def make_controller(home: Any, app_url: str, make_chrome: Callable[[], Any]) -> 
             return getattr(backends[-1], name)
 
     updater = Updater(home, _Latest())
+    history = History(home / "history.jsonl")
 
     def make_worker(chrome: Any) -> Worker:
         backend = Backend(chrome.send, fetch_bytes=chrome.fetch_bytes)
@@ -285,7 +334,13 @@ def make_controller(home: Any, app_url: str, make_chrome: Callable[[], Any]) -> 
                 "update": updater.report(),
             }
 
-        return Worker(backend, chrome, errands=build_errands(backend.lookup_targets), info=info)
+        return Worker(
+            backend,
+            chrome,
+            errands=build_errands(backend.lookup_targets),
+            info=info,
+            history=history,
+        )
 
     from .home import reset_profile
 
@@ -294,6 +349,7 @@ def make_controller(home: Any, app_url: str, make_chrome: Callable[[], Any]) -> 
         make_worker,
         make_updater=lambda _chrome: updater,
         reset_profile=lambda: reset_profile(home),
+        history=history,
     )
 
 
@@ -332,7 +388,7 @@ def _ask_app_url(tk_root: Any) -> str | None:  # pragma: no cover — needs a di
     while True:
         url = simpledialog.askstring(
             "AI Workspace Helper",
-            "AI Workspace 的網址(例如 https://ai.example.corp):",
+            "AI Workspace 的網址（例如 https://ai.example.corp）：",
             parent=tk_root,
         )
         if url is None:
@@ -401,20 +457,35 @@ def main() -> int:  # pragma: no cover — the window needs a display; verified 
     thread = threading.Thread(target=ctl.run, name="ai-workspace-helper", daemon=True)
     thread.start()
 
-    status_var = tk.StringVar(value=describe("starting", ""))
-    update_var = tk.StringVar(value="")
-    tk.Label(
-        window, textvariable=status_var, wraplength=380, justify="left", padx=12, pady=12
-    ).pack(fill="x")
-    tk.Label(window, text=app_url, fg="#666", padx=12).pack(fill="x")
-    tk.Label(window, textvariable=update_var, wraplength=380, justify="left", padx=12).pack(
-        fill="x"
-    )
-    buttons = tk.Frame(window, padx=12, pady=12)
-    buttons.pack(fill="x")
-    pause_text = tk.StringVar(value="暫停")
+    from tkinter import ttk
+
     state = setup_core.read_state(home)
     base_python = str(state.get("base_python") or sys.executable)
+
+    # Three tabs (a tab strip — switching panels, CLAUDE.md UI rule): what it
+    # is doing now, what it has looked up, and its log.
+    tabs = ttk.Notebook(window)
+    tabs.pack(fill="both", expand=True, padx=8, pady=8)
+    status_tab = ttk.Frame(tabs, padding=12)
+    history_tab = ttk.Frame(tabs, padding=12)
+    log_tab = ttk.Frame(tabs, padding=12)
+    tabs.add(status_tab, text="狀態")
+    tabs.add(history_tab, text="查詢紀錄")
+    tabs.add(log_tab, text="記錄檔")
+
+    # ── 狀態 ────────────────────────────────────────────────────────────────
+    status_var = tk.StringVar(value=describe("starting", ""))
+    update_var = tk.StringVar(value="")
+    ttk.Label(status_tab, textvariable=status_var, wraplength=460, justify="left").pack(
+        fill="x", pady=(0, 6)
+    )
+    ttk.Label(status_tab, text=app_url, foreground="#666").pack(fill="x")
+    ttk.Label(status_tab, textvariable=update_var, wraplength=460, justify="left").pack(
+        fill="x", pady=(6, 0)
+    )
+    buttons = ttk.Frame(status_tab)
+    buttons.pack(fill="x", pady=(12, 8))
+    pause_text = tk.StringVar(value="暫停")
 
     def toggle_pause() -> None:
         paused = pause_text.get() == "暫停"
@@ -437,7 +508,7 @@ def main() -> int:  # pragma: no cover — the window needs a display; verified 
     def remove() -> None:
         if not messagebox.askyesno(
             "AI Workspace Helper",
-            "會刪掉小幫手和它的登入資料(它自己的 Chrome 設定檔)。確定嗎?",
+            "會刪掉小幫手和它的登入資料（它自己的 Chrome 設定檔）。確定嗎？",
         ):
             return
         # D17: this program's own files cannot be removed while it runs, so a
@@ -465,26 +536,65 @@ def main() -> int:  # pragma: no cover — the window needs a display; verified 
     def reset_login() -> None:
         if messagebox.askyesno(
             "AI Workspace Helper",
-            "重設登入:把小幫手的 Chrome 設定檔移到旁邊,重新開一個再登入。要繼續嗎?",
+            "重設登入：把小幫手的 Chrome 設定檔移到旁邊，重新開一個再登入。要繼續嗎？",
         ):
             ctl.send("reset_login")
 
-    tk.Button(buttons, text="登入", command=lambda: ctl.send("login")).pack(side="left")
-    tk.Button(buttons, textvariable=pause_text, command=toggle_pause).pack(side="left", padx=6)
-    restart_button = tk.Button(buttons, text="重新開啟", command=restart)
-    tk.Button(buttons, text="結束", command=end).pack(side="right")
-    options = tk.Frame(window, padx=12)
-    options.pack(fill="x", pady=(0, 12))
-    tk.Checkbutton(
+    ttk.Button(buttons, text="登入", command=lambda: ctl.send("login")).pack(side="left")
+    ttk.Button(buttons, textvariable=pause_text, command=toggle_pause).pack(side="left", padx=6)
+    restart_button = ttk.Button(buttons, text="立即更新", command=restart)
+    ttk.Button(buttons, text="結束", command=end).pack(side="right")
+    options = ttk.Frame(status_tab)
+    options.pack(fill="x")
+    ttk.Checkbutton(
         options, text="開機時自動啟動", variable=startup_var, command=toggle_startup
     ).pack(side="left")
-    tk.Button(options, text="解除安裝", command=remove).pack(side="right")
-    tk.Button(options, text="重設登入", command=reset_login).pack(side="right", padx=6)
+    ttk.Button(options, text="解除安裝", command=remove).pack(side="right")
+    ttk.Button(options, text="重設登入", command=reset_login).pack(side="right", padx=6)
     window.protocol("WM_DELETE_WINDOW", end)
 
+    # ── 查詢紀錄 ────────────────────────────────────────────────────────────
+    ttk.Label(history_tab, text="最近 200 筆，只存在這台電腦。", foreground="#666").pack(
+        fill="x", pady=(0, 6)
+    )
+    columns = ("when", "what", "args", "ended")
+    table = ttk.Treeview(history_tab, columns=columns, show="headings", height=12)
+    for column, heading, width in zip(
+        columns, ("時間", "類型", "內容", "結果"), (90, 110, 220, 140), strict=True
+    ):
+        table.heading(column, text=heading, anchor="w")
+        table.column(column, width=width, anchor="w", stretch=column in ("args", "ended"))
+    table_scroll = ttk.Scrollbar(history_tab, orient="vertical", command=table.yview)
+    table.configure(yscrollcommand=table_scroll.set)
+    table_scroll.pack(side="right", fill="y")
+    table.pack(fill="both", expand=True)
+    shown_history = [-1]
+
+    # ── 記錄檔 ──────────────────────────────────────────────────────────────
+    log_path = home / "logs" / "helper.log"
+
+    def open_logs() -> None:
+        folder = str(home / "logs")
+        startfile = getattr(os, "startfile", None)  # Windows only
+        if startfile is not None:
+            startfile(folder)
+        else:
+            subprocess.Popen(["xdg-open", folder])
+
+    log_bar = ttk.Frame(log_tab)
+    log_bar.pack(fill="x", pady=(0, 6))
+    ttk.Label(log_bar, text="出問題時，請附上這個記錄檔。", foreground="#666").pack(side="left")
+    ttk.Button(log_bar, text="開啟記錄資料夾", command=open_logs).pack(side="right")
+    log_text = tk.Text(log_tab, height=14, wrap="none", font=("TkFixedFont", 9))
+    log_scroll = ttk.Scrollbar(log_tab, orient="vertical", command=log_text.yview)
+    log_text.configure(yscrollcommand=log_scroll.set, state="disabled")
+    log_scroll.pack(side="right", fill="y")
+    log_text.pack(fill="both", expand=True)
+    shown_log = [""]
+
     def refresh() -> None:
-        status, detail = ctl.snapshot()
-        status_var.set(describe(status, detail))
+        status, detail, kind, site = ctl.snapshot()
+        status_var.set(describe(status, detail, kind, site))
         update = ctl.update_status()
         update_var.set(describe_update(update, forced=status == "update_required"))
         if update == "ready":
@@ -492,10 +602,24 @@ def main() -> int:  # pragma: no cover — the window needs a display; verified 
         else:
             restart_button.pack_forget()
         window.title(
-            f"正在查:{detail} — AI Workspace Helper"
+            f"{describe(status, detail, kind, site)} — AI Workspace Helper"
             if status == "connected" and detail
             else f"AI Workspace Helper {__version__}"
         )
+        if ctl.history is not None and ctl.history.version != shown_history[0]:
+            shown_history[0] = ctl.history.version
+            table.delete(*table.get_children())
+            for row in ctl.history.recent():
+                table.insert("", "end", values=history_row(row))
+        if tabs.index(tabs.select()) == 2:
+            text = log_tail(log_path)
+            if text != shown_log[0]:
+                shown_log[0] = text
+                log_text.configure(state="normal")
+                log_text.delete("1.0", "end")
+                log_text.insert("end", text)
+                log_text.see("end")
+                log_text.configure(state="disabled")
         show = home / setup_core.SHOW_REQUEST
         if show.exists():  # launched again: come forward instead (§3.7.5)
             show.unlink(missing_ok=True)
@@ -505,7 +629,7 @@ def main() -> int:  # pragma: no cover — the window needs a display; verified 
         window.after(500, refresh)
 
     refresh()
-    window.minsize(420, 0)
+    window.minsize(520, 0)
     window.mainloop()
     return 0
 

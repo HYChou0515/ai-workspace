@@ -34,18 +34,18 @@ def main() -> int:
     python = windowed_python()
     version = "%d.%d.%d" % sys.version_info[:3]
     if sys.version_info < (3, 10):
-        messagebox.showerror("AI Workspace Helper", f"需要 Python 3.10 以上,這是 {version}:\n{python}")
+        messagebox.showerror("AI Workspace Helper", f"需要 Python 3.10 以上，這是 {version}：\n{python}")
         return 1
     if not messagebox.askokcancel(
         "AI Workspace Helper",
         f"將使用 Python {version}\n{python}\n\n"
-        "不是這個 Python 的話,按「取消」,改用 py -3.x install.pyw。",
+        "不是這個 Python 的話，按「取消」，改用 py -3.x install.pyw。",
     ):
         return 0
 
     window.deiconify()
     window.title("AI Workspace Helper")
-    tkinter.Label(window, text="安裝中…(約一分鐘,不用連網)", padx=24, pady=24).pack()
+    tkinter.Label(window, text="安裝中…（約一分鐘，不用連網）", padx=24, pady=24).pack()
     outcome: dict[str, object] = {}
 
     def work() -> None:
@@ -59,11 +59,11 @@ def main() -> int:
     window.mainloop()
     window.withdraw()
     if "error" in outcome:
-        messagebox.showerror("AI Workspace Helper", f"安裝失敗:\n{outcome['error']}")
+        messagebox.showerror("AI Workspace Helper", f"安裝失敗：\n{outcome['error']}")
         return 1
     if messagebox.askyesno(
         "AI Workspace Helper",
-        f"小幫手 {outcome['version']} 已安裝,桌面有「AI Workspace Helper」捷徑。\n\n現在開啟嗎?",
+        f"小幫手 {outcome['version']} 已安裝，桌面有「AI Workspace Helper」捷徑。\n\n現在開啟嗎？",
     ):
         home = setup_core.root()
         import subprocess

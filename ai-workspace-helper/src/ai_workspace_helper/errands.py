@@ -44,6 +44,10 @@ def _no_converter(_html: str) -> str:
     raise ErrandFailed("no page converter in this context")
 
 
+def _nowhere(_site: str) -> None:
+    pass
+
+
 @dataclass
 class ErrandContext:
     #: The Playwright `Page` the errand works in (a fresh tab, closed after).
@@ -54,6 +58,8 @@ class ErrandContext:
     #: the helper's Chrome. It may navigate `page` away: call it last.
     convert: Callable[[str], str] = field(default=_no_converter)
     sleep: Callable[[float], None] = field(default=time.sleep)
+    #: Tell the window which site the errand is on (「正在搜尋（Google）」).
+    where: Callable[[str], None] = field(default=_nowhere)
     clock: Callable[[], float] = field(default=time.monotonic)
 
     def wait_for_person(

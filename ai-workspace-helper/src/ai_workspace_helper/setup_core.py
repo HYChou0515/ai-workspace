@@ -525,7 +525,7 @@ def uninstall_main(
     if left:
         log = (log_dir or Path(tempfile.gettempdir())) / UNINSTALL_LOG
         log.write_text(
-            "小幫手解除安裝時刪不掉,請手動刪除:\n" + "\n".join(left) + "\n",
+            "小幫手解除安裝時刪不掉，請手動刪除：\n" + "\n".join(left) + "\n",
             encoding="utf-8",
         )
     return left
@@ -540,7 +540,7 @@ def _uninstall_cli(home: str) -> int:  # pragma: no cover — the %TEMP% process
         tkinter.Tk().withdraw()
         messagebox.showwarning(
             "AI Workspace Helper",
-            "這些刪不掉(可能被防毒鎖住),請手動刪除:\n\n"
+            "這些刪不掉（可能被防毒鎖住），請手動刪除：\n\n"
             + "\n".join(left)
             + f"\n\n清單也寫在 %TEMP%\\{UNINSTALL_LOG}",
         )
