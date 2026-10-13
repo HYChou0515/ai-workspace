@@ -93,7 +93,9 @@ class Worker:
         self._changed()
 
     def _record(self, job, outcome: str, reason: str = "") -> None:  # noqa: ANN001
-        logger.info("job %s: %s %r %s %s", job.id, job.kind, job.args, outcome, reason)
+        # what it did first — the 記錄檔 tab is narrow — and the job id last, short
+        ended = f"{outcome}: {reason}" if reason else outcome
+        logger.info("%s %r %s (job %s)", job.kind, job.args, ended, job.id[:8])
         if self._history is not None:
             self._history.add(
                 kind=job.kind, args=job.args, site=self.site, outcome=outcome, reason=reason
@@ -107,7 +109,7 @@ class Worker:
             self.site = ""
             self._record(job, "failed", reason)
             return
-        logger.info("job %s: %s %r started", job.id, job.kind, job.args)
+        logger.info("%s %r started (job %s)", job.kind, job.args, job.id[:8])
         self.detail, self.kind, self.site = job.args, job.kind, ""
         self._changed()
         try:

@@ -8,6 +8,7 @@ tests); the backend is the app itself, through the same HTTP the helper speaks.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 from ai_workspace_helper.backend import Backend
@@ -348,4 +349,5 @@ def test_each_job_leaves_a_line_in_the_history_and_the_log(caplog):
         ("search", "numpy 3", "Google", "failed", "the page answered 404"),
         ("search", "pandas 2.0", "Google", "done", ""),
     ]
-    assert "search 'pandas 2.0'" in caplog.text and "done" in caplog.text
+    # what it did comes first — the 記錄檔 tab is narrow; the job id is short, last
+    assert re.search(r"search 'pandas 2\.0' done \(job [0-9a-f]{8}\)$", caplog.text, re.M)

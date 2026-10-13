@@ -558,9 +558,9 @@ def main() -> int:  # pragma: no cover — the window needs a display; verified 
         fill="x", pady=(0, 6)
     )
     columns = ("when", "what", "args", "ended")
-    table = ttk.Treeview(history_tab, columns=columns, show="headings", height=12)
+    table = ttk.Treeview(history_tab, columns=columns, show="headings", height=8)
     for column, heading, width in zip(
-        columns, ("時間", "類型", "內容", "結果"), (90, 110, 220, 140), strict=True
+        columns, ("時間", "類型", "內容", "結果"), (110, 110, 210, 130), strict=True
     ):
         table.heading(column, text=heading, anchor="w")
         table.column(column, width=width, anchor="w", stretch=column in ("args", "ended"))
@@ -585,7 +585,7 @@ def main() -> int:  # pragma: no cover — the window needs a display; verified 
     log_bar.pack(fill="x", pady=(0, 6))
     ttk.Label(log_bar, text="出問題時，請附上這個記錄檔。", foreground="#666").pack(side="left")
     ttk.Button(log_bar, text="開啟記錄資料夾", command=open_logs).pack(side="right")
-    log_text = tk.Text(log_tab, height=14, wrap="none", font=("TkFixedFont", 9))
+    log_text = tk.Text(log_tab, height=14, wrap="word", font=("TkFixedFont", 9))
     log_scroll = ttk.Scrollbar(log_tab, orient="vertical", command=log_text.yview)
     log_text.configure(yscrollcommand=log_scroll.set, state="disabled")
     log_scroll.pack(side="right", fill="y")
