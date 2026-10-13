@@ -1,6 +1,6 @@
 """The helper's own folder (docs/plan-outside-helper.md §3.7.1).
 
-`%LOCALAPPDATA%\\AIWorkspaceHelper\\` on Windows; `AI_WORKSPACE_HOME` overrides it
+`%LOCALAPPDATA%\\AIWorkspace\\` on Windows; `AI_WORKSPACE_HOME` overrides it
 (tests, a developer's Linux box). Holds the single-instance lock, the settings
 the person gave on first start, the helper's own Chrome profile and its logs.
 

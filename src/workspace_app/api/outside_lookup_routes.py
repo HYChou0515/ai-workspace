@@ -441,7 +441,7 @@ def _document(card: dict, searched: str, body: str, form: AnswerForm, who: str) 
     if form.source_url:
         lines.append(f"- 來源:{form.source_url}")
     if form.by_helper:
-        lines.append("- 由 AI Workspace Helper 抓取")
+        lines.append("- 由小幫手抓取")
     lines += [f"- 查的人:{who}", f"- 時間:{datetime.now(UTC).isoformat(timespec='seconds')}"]
     return "\n".join([*lines, "", "---", "", body, ""])
 

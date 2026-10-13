@@ -72,7 +72,7 @@ def test_the_folder_is_the_override_then_local_app_data(monkeypatch, tmp_path):
     assert root() == tmp_path / "dev"
 
     monkeypatch.delenv("AI_WORKSPACE_HOME")
-    assert root() == tmp_path / "AppData" / "Local" / "AIWorkspaceHelper"
+    assert root() == tmp_path / "AppData" / "Local" / "AIWorkspace"
     # the profile sits beside the versions, so an update keeps the login
     assert profile_dir(root()) == root() / "profile"
 

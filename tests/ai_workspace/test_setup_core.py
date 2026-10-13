@@ -107,16 +107,16 @@ def test_the_shortcut_runs_the_confirmed_python_on_the_fixed_launcher():
     argv = shortcut_command(
         "Desktop",
         target=r"C:\Python312\pythonw.exe",
-        arguments=r'"C:\Users\me\AppData\Local\AIWorkspaceHelper\launch.pyw"',
-        workdir=r"C:\Users\me\AppData\Local\AIWorkspaceHelper",
+        arguments=r'"C:\Users\me\AppData\Local\AIWorkspace\launch.pyw"',
+        workdir=r"C:\Users\me\AppData\Local\AIWorkspace",
     )
 
     assert argv[:3] == ["powershell", "-NoProfile", "-Command"]
     script = argv[3]
     assert "GetFolderPath('Desktop')" in script  # follows a redirected Desktop
-    assert "AI Workspace Helper.lnk" in script
+    assert "AI Workspace.lnk" in script
     assert r"$s.TargetPath = 'C:\Python312\pythonw.exe'" in script
-    launcher = r"C:\Users\me\AppData\Local\AIWorkspaceHelper\launch.pyw"
+    launcher = r"C:\Users\me\AppData\Local\AIWorkspace\launch.pyw"
     assert f"""$s.Arguments = '"{launcher}"'""" in script
 
 

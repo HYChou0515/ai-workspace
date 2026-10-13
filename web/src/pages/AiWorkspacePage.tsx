@@ -1,5 +1,5 @@
 /**
- * AI Workspace Helper (docs/plan-outside-helper.md §3.6, D16): where a person downloads
+ * 小幫手 (docs/plan-outside-helper.md §3.6, D16): where a person downloads
  * the helper the operator published and reads how to install it, and sees
  * whether their own helper is connected.
  *

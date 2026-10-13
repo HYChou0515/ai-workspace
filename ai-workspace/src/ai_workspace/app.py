@@ -28,11 +28,11 @@ _TEXT = {
     "starting": "啟動中…",
     "connected": "已連線",
     "paused": "已暫停 — 卡片會改成自己查",
-    "needs_login": "登入過期 — 請在 AI Workspace Helper 的 Chrome 視窗登入",
+    "needs_login": "登入過期 — 請在小幫手的 Chrome 視窗登入",
     "update_required": "這個版本已停用,需要更新",
     "unreachable": "連不到 AI 工作區",
     "error": "發生錯誤",
-    "no_chrome": "開不了 Chrome(Chrome 剛更新的話,請更新 AI Workspace Helper;或按「重設登入」)",
+    "no_chrome": "開不了 Chrome(Chrome 剛更新的話,請更新小幫手;或按「重設登入」)",
 }
 
 logger = logging.getLogger(__name__)
@@ -58,10 +58,7 @@ def describe_update(status: str, *, forced: bool) -> str:
     if status.startswith("failed"):
         why = status.partition(":")[2].strip()
         if forced:
-            return (
-                f"新版準備失敗:{why}。"
-                "請到 AI 工作區的「AI Workspace Helper」頁重新下載、執行 install.pyw"
-            )
+            return f"新版準備失敗:{why}。請到 AI 工作區的「小幫手」頁重新下載、執行 install.pyw"
         return f"新版準備失敗:{why}(這一版照常使用)"
     return ""
 
@@ -334,7 +331,7 @@ def _ask_app_url(tk_root: Any) -> str | None:  # pragma: no cover — needs a di
 
     while True:
         url = simpledialog.askstring(
-            "AI Workspace Helper",
+            "AI Workspace",
             "AI 工作區的網址(例如 https://ai.example.corp):",
             parent=tk_root,
         )
@@ -368,10 +365,10 @@ def main() -> int:  # pragma: no cover — the window needs a display; verified 
     )
 
     window = tk.Tk()
-    window.title(f"AI Workspace Helper {__version__}")
+    window.title(f"AI Workspace {__version__}")
     lock = InstanceLock(home / "helper.lock")
     if not lock.acquire():
-        messagebox.showinfo("AI Workspace Helper", "AI Workspace Helper 已經在執行了。")
+        messagebox.showinfo("AI Workspace", "小幫手已經在執行了。")
         return 0
 
     settings = read_settings(home)
@@ -439,8 +436,8 @@ def main() -> int:  # pragma: no cover — the window needs a display; verified 
 
     def remove() -> None:
         if not messagebox.askyesno(
-            "AI Workspace Helper",
-            "會刪掉 AI Workspace Helper 和它的登入資料(它自己的 Chrome 設定檔)。確定嗎?",
+            "AI Workspace",
+            "會刪掉小幫手和它的登入資料(它自己的 Chrome 設定檔)。確定嗎?",
         ):
             return
         # D17: this program's own files cannot be removed while it runs, so a
@@ -463,12 +460,12 @@ def main() -> int:  # pragma: no cover — the window needs a display; verified 
             setup_core.write_state(home, {**setup_core.read_state(home), "start_at_login": on})
         except setup_core.SetupFailed as exc:
             startup_var.set(not on)
-            messagebox.showerror("AI Workspace Helper", str(exc))
+            messagebox.showerror("AI Workspace", str(exc))
 
     def reset_login() -> None:
         if messagebox.askyesno(
-            "AI Workspace Helper",
-            "重設登入:把 AI Workspace Helper 的 Chrome 設定檔移到旁邊,重新開一個再登入。要繼續嗎?",
+            "AI Workspace",
+            "重設登入:把小幫手的 Chrome 設定檔移到旁邊,重新開一個再登入。要繼續嗎?",
         ):
             ctl.send("reset_login")
 
@@ -495,9 +492,9 @@ def main() -> int:  # pragma: no cover — the window needs a display; verified 
         else:
             restart_button.pack_forget()
         window.title(
-            f"正在查:{detail} — AI Workspace Helper"
+            f"正在查:{detail} — AI Workspace"
             if status == "connected" and detail
-            else f"AI Workspace Helper {__version__}"
+            else f"AI Workspace {__version__}"
         )
         show = home / setup_core.SHOW_REQUEST
         if show.exists():  # launched again: come forward instead (§3.7.5)

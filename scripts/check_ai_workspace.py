@@ -313,9 +313,9 @@ def _tour(base: str, iid: str, out: Path, check: _Check) -> Path | None:
         try:
             # 1. the download page: published, and this person's helper is connected
             page.goto(f"{base}/ai-workspace", wait_until="domcontentloaded")
-            page.get_by_text("你的 AI Workspace Helper 已連線").wait_for(timeout=60_000)
-            check("the AI Workspace Helper page says the helper is connected", True)
-            link = page.get_by_role("link", name="ai-workspace-helper-0.1.0.zip", exact=False)
+            page.get_by_text("小幫手已連線").wait_for(timeout=60_000)
+            check("the 小幫手 page says the helper is connected", True)
+            link = page.get_by_role("link", name="ai-workspace-0.1.0.zip", exact=False)
             check("…and offers the published zip", link.count() == 1)
             _glide(page, link)
             page.wait_for_timeout(1500)
@@ -381,7 +381,7 @@ def _update_check(repo: Path, wheels: Path, check: _Check) -> None:
     spec.loader.exec_module(pack)
 
     work = Path(tempfile.mkdtemp(prefix="ai-workspace-update-"))
-    home = work / "AIWorkspaceHelper"
+    home = work / "AIWorkspace"
 
     def zip_of(version: str) -> Path:
         folder = work / f"zip-{version}"
@@ -417,7 +417,7 @@ def _update_check(repo: Path, wheels: Path, check: _Check) -> None:
     manifest = {
         "version": "0.2.0",
         "min_version": "0.0.0",
-        "file": "ai-workspace-helper-0.2.0.zip",
+        "file": "ai-workspace-0.2.0.zip",
         "sha256": hashlib.sha256(data).hexdigest(),
     }
     outcome = setup_core.prepare_update(home, manifest, lambda _f: data, run=run)
@@ -520,7 +520,7 @@ def main() -> int:
         )
         print(f"\napp {base} · logs in {work}", flush=True)
 
-        title = "AI Workspace Helper live check"
+        title = "小幫手 live check"
         _, item = _req("POST", f"{base}/api/a/rca/items", {"title": title})
         iid = item["resource_id"]
         video = _tour(base, iid, out, check)
@@ -537,7 +537,7 @@ def main() -> int:
         text = "\n".join(
             s if isinstance(s, str) else json.dumps(s, ensure_ascii=False) for s in saved
         )
-        check("each says the helper fetched it", text.count("由 AI Workspace Helper 抓取") == 2)
+        check("each says the helper fetched it", text.count("由小幫手抓取") == 2)
         check(
             "the search results' relative link came back absolute",
             f"http://127.0.0.1:{site_port}/article" in text,

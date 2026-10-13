@@ -1,5 +1,5 @@
 /**
- * The AI Workspace Helper page (docs/plan-outside-helper.md §3.6, D16): where a person
+ * The 小幫手 page (docs/plan-outside-helper.md §3.6, D16): where a person
  * gets the helper and reads the one line on installing it.
  */
 // @vitest-environment happy-dom
@@ -20,7 +20,7 @@ afterEach(() => {
 const RELEASE: HelperRelease = {
   version: "0.3.0",
   min_version: "0.2.0",
-  file: "ai-workspace-helper-0.3.0.zip",
+  file: "ai-workspace-0.3.0.zip",
   sha256: "ab".repeat(32),
   size: 41_943_040,
 };
@@ -44,8 +44,8 @@ describe("the helper page", () => {
   it("offers the published zip by name, type and size", async () => {
     draw();
 
-    const link = await screen.findByRole("link", { name: /ai-workspace-helper-0\.3\.0\.zip/ });
-    expect(link).toHaveAttribute("href", "/api/ai-workspace/download/ai-workspace-helper-0.3.0.zip");
+    const link = await screen.findByRole("link", { name: /ai-workspace-0\.3\.0\.zip/ });
+    expect(link).toHaveAttribute("href", "/api/ai-workspace/download/ai-workspace-0.3.0.zip");
     expect(link).toHaveAccessibleName(expect.stringMatching(/ZIP.*40 MB/));
     expect(screen.getByText(/0\.3\.0/, { selector: "[data-testid=ai-workspace-version]" })).toBeInTheDocument();
   });
@@ -67,12 +67,12 @@ describe("the helper page", () => {
   it("says whether the person's own helper is connected", async () => {
     draw({ online: true });
 
-    expect(await screen.findByText("你的 AI Workspace Helper 已連線")).toBeInTheDocument();
+    expect(await screen.findByText("小幫手已連線")).toBeInTheDocument();
   });
 
   it("says when it is not", async () => {
     draw({ online: false });
 
-    expect(await screen.findByText("你的 AI Workspace Helper 未連線")).toBeInTheDocument();
+    expect(await screen.findByText("小幫手未連線")).toBeInTheDocument();
   });
 });

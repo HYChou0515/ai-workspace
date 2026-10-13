@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import Any
 
 #: The shortcut's file name, on the desktop and in the Startup folder (D13).
-SHORTCUT_NAME = "AI Workspace Helper"
+SHORTCUT_NAME = "AI Workspace"
 
 Run = Callable[[list[str]], None]
 
@@ -37,14 +37,14 @@ class SetupFailed(Exception):
 
 
 def root() -> Path:
-    """`%LOCALAPPDATA%\\AIWorkspaceHelper\\`; `AI_WORKSPACE_HOME` overrides it
+    """`%LOCALAPPDATA%\\AIWorkspace\\`; `AI_WORKSPACE_HOME` overrides it
     (tests, a developer's Linux box)."""
     override = os.environ.get("AI_WORKSPACE_HOME")
     if override:
         return Path(override)
     local = os.environ.get("LOCALAPPDATA")
     if local:
-        return Path(local) / "AIWorkspaceHelper"
+        return Path(local) / "AIWorkspace"
     return Path.home() / ".local" / "share" / "ai-workspace"
 
 
@@ -525,7 +525,7 @@ def uninstall_main(
     if left:
         log = (log_dir or Path(tempfile.gettempdir())) / UNINSTALL_LOG
         log.write_text(
-            "AI Workspace Helper 解除安裝時刪不掉,請手動刪除:\n" + "\n".join(left) + "\n",
+            "小幫手解除安裝時刪不掉,請手動刪除:\n" + "\n".join(left) + "\n",
             encoding="utf-8",
         )
     return left
@@ -539,7 +539,7 @@ def _uninstall_cli(home: str) -> int:  # pragma: no cover — the %TEMP% process
 
         tkinter.Tk().withdraw()
         messagebox.showwarning(
-            "AI Workspace Helper",
+            "AI Workspace",
             "這些刪不掉(可能被防毒鎖住),請手動刪除:\n\n"
             + "\n".join(left)
             + f"\n\n清單也寫在 %TEMP%\\{UNINSTALL_LOG}",

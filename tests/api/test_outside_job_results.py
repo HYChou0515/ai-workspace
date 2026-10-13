@@ -44,7 +44,7 @@ def test_what_the_helper_fetched_is_saved_and_answers_the_card():
     path = r.json()["path"]
     assert path.startswith("lookups/2026-10-12-") and path.endswith(".md")
     saved = _read(client, iid, path)
-    assert "AI Workspace Helper" in saved  # who fetched it
+    assert "由小幫手抓取" in saved  # who fetched it
     assert "https://www.google.com/search?q=pandas" in saved  # where from
     assert "[pandas 2.0 whatsnew](https://pandas.example/whatsnew#top)" in saved
     [answer] = _answers(spec)

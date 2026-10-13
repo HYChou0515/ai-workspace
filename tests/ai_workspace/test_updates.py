@@ -43,7 +43,7 @@ def _manifest(version: str, data: bytes, **over) -> dict:
     return {
         "version": version,
         "min_version": "0.0.0",
-        "file": f"ai-workspace-helper-{version}.zip",
+        "file": f"ai-workspace-{version}.zip",
         "sha256": hashlib.sha256(data).hexdigest(),
         **over,
     }
@@ -244,14 +244,14 @@ def test_start_at_login_puts_the_same_shortcut_in_startup(tmp_path):
 
     assert "GetFolderPath('Startup')" in on[3] and "CreateShortcut" in on[3]
     assert "GetFolderPath('Startup')" in off[3] and "Remove-Item" in off[3]
-    assert "AI Workspace Helper.lnk" in off[3]
+    assert "AI Workspace.lnk" in off[3]
 
 
 # ── D17: uninstall ──────────────────────────────────────────────────────────
 
 
 def test_uninstall_removes_the_folder_and_both_shortcuts(tmp_path):
-    home = tmp_path / "AIWorkspaceHelper"
+    home = tmp_path / "AIWorkspace"
     _installed(home)
     run = _Run()
 
@@ -265,7 +265,7 @@ def test_uninstall_removes_the_folder_and_both_shortcuts(tmp_path):
 
 
 def test_what_uninstall_cannot_remove_is_listed(tmp_path):
-    home = tmp_path / "AIWorkspaceHelper"
+    home = tmp_path / "AIWorkspace"
     _installed(home)
 
     def stuck(path, onexc=None):  # an antivirus holding a file
@@ -339,7 +339,7 @@ def test_with_nothing_installed_the_launcher_says_so(tmp_path):
 
 
 def test_the_clean_up_waits_for_the_helper_to_end_then_removes_it(tmp_path):
-    home = tmp_path / "AIWorkspaceHelper"
+    home = tmp_path / "AIWorkspace"
     _installed(home)
     running = setup_core.InstanceLock(home / "helper.lock")
     assert running.acquire()
@@ -358,7 +358,7 @@ def test_the_clean_up_waits_for_the_helper_to_end_then_removes_it(tmp_path):
 
 
 def test_what_the_clean_up_cannot_remove_is_written_down(tmp_path):
-    home = tmp_path / "AIWorkspaceHelper"
+    home = tmp_path / "AIWorkspace"
     _installed(home)
 
     def stuck(path):
