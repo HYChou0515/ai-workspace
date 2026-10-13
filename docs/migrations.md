@@ -2160,18 +2160,18 @@ agent 步驟裡 AI 的呼叫、WUI 的工具呼叫、view plugin、圖表重畫�
 在它的聊天請 AI 跑一個讀 X 的工具——它拿得到你的值。再到那個 item 的共用值填上 X，同一個工具改拿共用值。
 沒部署到這一版的症狀：工具拿不到 X。
 
-### 2026-10-13 · #927 外網小幫手：使用者電腦上的小程式用自己的 Chrome 代查,「請幫我查」只剩按一下「查」 {#pr-927}
+### 2026-10-13 · #927 AI Workspace Helper：使用者電腦上的小程式用自己的 Chrome 代查,「請幫我查」只剩按一下「查」 {#pr-927}
 
 **設定** — 一個新 key,**opt-in**:`server.outside_helper_dir`(預設空 = 不發布)。不設什麼都不會壞:
-「外網小幫手」頁寫「還沒有發布」,卡片照舊讓使用者自己查([設定](configuration.md))。
+「AI Workspace Helper」頁寫「還沒有發布」,卡片照舊讓使用者自己查([設定](configuration.md))。
 **行為改變,沒有開關**:
 
-- 左側選單多一項「外網小幫手」(`/outside-helper`),永遠看得到:下載、安裝步驟、你的小幫手連線了沒。
-- 「請幫我查」卡片在**這個人自己的**小幫手連線時,搜尋改成按「查」交給它(「自己查」收在展開區);
-  開網址時,這個聊天先前查回來的內容裡出現過的網址直接交給它,不再問。小幫手沒連線時卡片和以前一樣,
-  只多一行「外網小幫手未連線」和一個「怎麼安裝」連結(新分頁開「外網小幫手」頁)——這一行只在
+- 左側選單多一項「AI Workspace Helper」(`/outside-helper`),永遠看得到:下載、安裝步驟、你的 AI Workspace Helper 連線了沒。
+- 「請幫我查」卡片在**這個人自己的**AI Workspace Helper 連線時,搜尋改成按「查」交給它(「自己查」收在展開區);
+  開網址時,這個聊天先前查回來的內容裡出現過的網址直接交給它,不再問。AI Workspace Helper 沒連線時卡片和以前一樣,
+  只多一行「AI Workspace Helper 未連線」和一個「怎麼安裝」連結(新分頁開「AI Workspace Helper」頁)——這一行只在
   `outside_helper_dir` 有發布版本時出現,沒發布的部署卡片和以前一模一樣。
-- 小幫手的請求會帶 `X-Outside-Helper-Version` / `X-Outside-Helper-Protocol`;低於 `outside-helper.json` 的
+- AI Workspace Helper 的請求會帶 `X-Outside-Helper-Version` / `X-Outside-Helper-Protocol`;低於 `outside-helper.json` 的
   `min_version`、或低於程式裡的最低協定號,回 **426** 要它更新。卡片自己的請求不受影響。
 
 **資料** — 三個新的 specstar model(`OutsideJob`、`_OutsideHelperPresence`、`_OutsideSeenUrls`),在
@@ -2188,17 +2188,17 @@ agent 步驟裡 AI 的呼叫、WUI 的工具呼叫、view plugin、圖表重畫�
    **不用重新部署**。為什麼要 volume:後端每個請求都重讀這個資料夾,檔案不在 image 裡。
 3. 要強迫所有人升級:改 json 的 `min_version`。
 
-小幫手走的是部署原本的登入(使用者在小幫手自己的 Chrome 設定檔裡登入一次),gateway 不用改。
-登入過期時 gateway 把請求導去 SSO(3xx),小幫手當成「要重新登入」,不會誤以為連上了。
+AI Workspace Helper 走的是部署原本的登入(使用者在 AI Workspace Helper 自己的 Chrome 設定檔裡登入一次),gateway 不用改。
+登入過期時 gateway 把請求導去 SSO(3xx),AI Workspace Helper 當成「要重新登入」,不會誤以為連上了。
 
 **IT 側**(每台裝的電腦):防毒放行 Playwright 自帶的 `node.exe`
-(`%LOCALAPPDATA%\OutsideHelper\versions\<版本>\venv\` 底下);Chrome 政策不能停用自動化/遠端偵錯。
-見[外網小幫手 §IT 要放行的](outside-helper.md#it-要放行的)。
+(`%LOCALAPPDATA%\AIWorkspaceHelper\versions\<版本>\venv\` 底下);Chrome 政策不能停用自動化/遠端偵錯。
+見[AI Workspace Helper §IT 要放行的](outside-helper.md#it-要放行的)。
 
 **確認做完**(`rollout 後`):
 
-- 打開「外網小幫手」頁:有版本號與 `outside-helper-<版本>.zip(ZIP,約 38 MB)` 的下載連結。
-  沒放檔案或 `outside_helper_dir` 沒設的症狀:頁面寫「還沒有發布外網小幫手」。
+- 打開「AI Workspace Helper」頁:有版本號與 `ai-workspace-helper-<版本>.zip(ZIP,約 38 MB)` 的下載連結。
+  沒放檔案或 `outside_helper_dir` 沒設的症狀:頁面寫「還沒有發布 AI Workspace Helper」。
 - 在一台 Windows 電腦照頁面裝起來、登入,小視窗顯示「已連線」;在一個 item 請 AI 查外面的東西,卡片出現「查」,
   按下去不用再經手,`lookups/` 出現存檔、AI 接著讀。這一步是 Windows 上唯一的驗證(plan D14)。
 

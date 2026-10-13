@@ -80,7 +80,7 @@ def test_the_zip_carries_the_installer_and_the_wheels_and_the_manifest_names_it(
 
     zip_path, manifest = pack_mod.pack("0.3.0", tmp_path / "out", min_version="0.2.0", run=run)
 
-    assert zip_path == tmp_path / "out" / "outside-helper-0.3.0.zip"
+    assert zip_path == tmp_path / "out" / "ai-workspace-helper-0.3.0.zip"
     with zipfile.ZipFile(zip_path) as z:
         names = sorted(z.namelist())
     assert names == [
@@ -94,7 +94,7 @@ def test_the_zip_carries_the_installer_and_the_wheels_and_the_manifest_names_it(
     assert json.loads(manifest.read_text()) == {
         "version": "0.3.0",
         "min_version": "0.2.0",
-        "file": "outside-helper-0.3.0.zip",
+        "file": "ai-workspace-helper-0.3.0.zip",
         "sha256": hashlib.sha256(zip_path.read_bytes()).hexdigest(),
     }
     # the converter is built from the frontend before the wheel is (D11)

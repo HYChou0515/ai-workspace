@@ -32,7 +32,7 @@ const PAGE: OutsideLookup = { why: "看那一頁", url: "https://pandas.example/
 const RELEASE: HelperRelease = {
   version: "0.1.0",
   min_version: "0.0.0",
-  file: "outside-helper-0.1.0.zip",
+  file: "ai-workspace-helper-0.1.0.zip",
   sha256: "ab",
   size: 1,
 };
@@ -104,7 +104,7 @@ describe("with no helper connected", () => {
   it("is today's card, and says the helper is not connected", async () => {
     const client = draw({ online: false });
 
-    expect(await screen.findByText("外網小幫手未連線")).toBeInTheDocument();
+    expect(await screen.findByText("AI Workspace Helper 未連線")).toBeInTheDocument();
     expect(await screen.findByRole("button", { name: /Google/ })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "查" })).not.toBeInTheDocument();
     expect(client.handOver).not.toHaveBeenCalled();
@@ -145,7 +145,7 @@ describe("a search, with the helper connected", () => {
         expect.objectContaining({ callId: "call_1", query: "pandas 2.0 breaking", auto: false }),
       ),
     );
-    expect(await screen.findByText("小幫手正在查…")).toBeInTheDocument();
+    expect(await screen.findByText("AI Workspace Helper 正在查…")).toBeInTheDocument();
   });
 
   it("can be cancelled while under way", async () => {
@@ -161,7 +161,7 @@ describe("a search, with the helper connected", () => {
     const client = draw({ current: async () => job({ state: "failed", error: "page timed out" }) });
     fireEvent.click(await screen.findByRole("button", { name: "查" }));
 
-    expect(await screen.findByText("小幫手沒查到:page timed out")).toBeInTheDocument();
+    expect(await screen.findByText("AI Workspace Helper 沒查到:page timed out")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "重查" }));
 
     await waitFor(() => expect(client.handOver).toHaveBeenCalledTimes(2));
@@ -171,7 +171,7 @@ describe("a search, with the helper connected", () => {
     draw({ current: async () => job({ state: "done" }) });
     fireEvent.click(await screen.findByRole("button", { name: "查" }));
 
-    expect(await screen.findByText("小幫手已送給 AI")).toBeInTheDocument();
+    expect(await screen.findByText("AI Workspace Helper 已送給 AI")).toBeInTheDocument();
   });
 
   // §3.4: a captcha stops the helper until the person solves it in the
@@ -180,8 +180,8 @@ describe("a search, with the helper connected", () => {
     draw({ current: async () => job({ state: "claimed", note: "captcha" }) });
     fireEvent.click(await screen.findByRole("button", { name: "查" }));
 
-    expect(await screen.findByText("請在小幫手的 Chrome 視窗裡完成驗證")).toBeInTheDocument();
-    expect(screen.queryByText("小幫手正在查…")).not.toBeInTheDocument();
+    expect(await screen.findByText("請在 AI Workspace Helper 的 Chrome 視窗裡完成驗證")).toBeInTheDocument();
+    expect(screen.queryByText("AI Workspace Helper 正在查…")).not.toBeInTheDocument();
   });
 });
 
@@ -191,7 +191,7 @@ describe("review round 1", () => {
   it("shows a job already under way after a reload, with no 「查」", async () => {
     draw({ existing: job({ state: "claimed" }) });
 
-    expect(await screen.findByText("小幫手正在查…")).toBeInTheDocument();
+    expect(await screen.findByText("AI Workspace Helper 正在查…")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "查" })).not.toBeInTheDocument();
   });
 
@@ -202,7 +202,7 @@ describe("review round 1", () => {
 
     expect(await screen.findByRole("button", { name: /Google/ })).toBeInTheDocument();
     await waitFor(() => expect(client.release).toHaveBeenCalled());
-    expect(screen.queryByText("外網小幫手未連線")).not.toBeInTheDocument();
+    expect(screen.queryByText("AI Workspace Helper 未連線")).not.toBeInTheDocument();
   });
 
   // §3.5 「自己查」展開區 — a disclosure: says whether it is open, and closes
@@ -237,7 +237,7 @@ describe("a page, with the helper connected (D12)", () => {
     await waitFor(() =>
       expect(client.handOver).toHaveBeenCalledWith(expect.objectContaining({ auto: true })),
     );
-    expect(await screen.findByText("小幫手正在開…")).toBeInTheDocument();
+    expect(await screen.findByText("AI Workspace Helper 正在開…")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "查" })).not.toBeInTheDocument();
   });
 
@@ -271,13 +271,13 @@ describe("a page, with the helper connected (D12)", () => {
       current: async () => job({ state: "claimed", note: "captcha" }),
     });
     fireEvent.click(await screen.findByRole("button", { name: "查" }));
-    expect(await screen.findByText("請在小幫手的 Chrome 視窗裡完成驗證")).toBeInTheDocument();
+    expect(await screen.findByText("請在 AI Workspace Helper 的 Chrome 視窗裡完成驗證")).toBeInTheDocument();
 
     online = false;
     await qc.invalidateQueries({ queryKey: qk.outsideHelper() });
 
-    await waitFor(() => expect(screen.queryByText("外網小幫手未連線")).not.toBeInTheDocument());
-    expect(screen.getByText("請在小幫手的 Chrome 視窗裡完成驗證")).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByText("AI Workspace Helper 未連線")).not.toBeInTheDocument());
+    expect(screen.getByText("請在 AI Workspace Helper 的 Chrome 視窗裡完成驗證")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Google/ })).not.toBeInTheDocument();
   });
 

@@ -220,7 +220,7 @@ def test_once_connected_the_update_check_runs():
 # §3.7.6: refused, the helper updates from the release the refusal named.
 def test_a_refused_helper_updates_from_the_release_it_was_given():
     up = _Updater()
-    release = {"version": "0.4.0", "file": "outside-helper-0.4.0.zip"}
+    release = {"version": "0.4.0", "file": "ai-workspace-helper-0.4.0.zip"}
     ctl, _chrome = _with_updater(["update_required"], up, manifest=release)
 
     ctl.step()
@@ -496,7 +496,7 @@ def test_the_update_line_says_where_the_next_version_stands():
     # the running version carries on — unless it is refused, when only a
     # reinstall from the download page is left (§3.7.6)
     assert describe_update("failed: sha256", forced=False) == "新版準備失敗:sha256(這一版照常使用)"
-    assert "外網小幫手" in describe_update("failed: sha256", forced=True)
+    assert "AI Workspace Helper" in describe_update("failed: sha256", forced=True)
 
 
 # §3.7 table: Chrome updated past what this helper drives fails at start —
@@ -504,7 +504,7 @@ def test_the_update_line_says_where_the_next_version_stands():
 def test_a_chrome_that_will_not_start_says_what_to_do():
     text = describe("no_chrome", "Target page, context or browser has been closed")
 
-    assert "更新外網小幫手" in text and "重設登入" in text
+    assert "更新 AI Workspace Helper" in text and "重設登入" in text
 
 
 def test_a_status_reads_with_or_without_its_detail():

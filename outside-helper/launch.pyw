@@ -2,7 +2,7 @@
 
 Both shortcuts point here, run by the Python the person confirmed at install
 (its absolute pythonw.exe path — D16). Standard library only: it lives in
-%LOCALAPPDATA%\\OutsideHelper\\ beside setup_core.py and state.json, outside
+%LOCALAPPDATA%\\AIWorkspaceHelper\\ beside setup_core.py and state.json, outside
 every version folder, so an update never has to replace a running file. What
 it decides — which version, the rollback, one helper at a time — is
 `setup_core.launch`, tested; this file only shows a failure.
@@ -26,7 +26,7 @@ def main() -> int:
         from tkinter import messagebox
 
         tkinter.Tk().withdraw()
-        messagebox.showerror("Outside Helper", str(exc))
+        messagebox.showerror("AI Workspace Helper", str(exc))
         return 1
     return 0
 

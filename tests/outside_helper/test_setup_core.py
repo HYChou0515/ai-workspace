@@ -107,16 +107,17 @@ def test_the_shortcut_runs_the_confirmed_python_on_the_fixed_launcher():
     argv = shortcut_command(
         "Desktop",
         target=r"C:\Python312\pythonw.exe",
-        arguments=r'"C:\Users\me\AppData\Local\OutsideHelper\launch.pyw"',
-        workdir=r"C:\Users\me\AppData\Local\OutsideHelper",
+        arguments=r'"C:\Users\me\AppData\Local\AIWorkspaceHelper\launch.pyw"',
+        workdir=r"C:\Users\me\AppData\Local\AIWorkspaceHelper",
     )
 
     assert argv[:3] == ["powershell", "-NoProfile", "-Command"]
     script = argv[3]
     assert "GetFolderPath('Desktop')" in script  # follows a redirected Desktop
-    assert "Outside Helper.lnk" in script
+    assert "AI Workspace Helper.lnk" in script
     assert r"$s.TargetPath = 'C:\Python312\pythonw.exe'" in script
-    assert r"""$s.Arguments = '"C:\Users\me\AppData\Local\OutsideHelper\launch.pyw"'""" in script
+    launcher = r"C:\Users\me\AppData\Local\AIWorkspaceHelper\launch.pyw"
+    assert f"""$s.Arguments = '"{launcher}"'""" in script
 
 
 def test_a_quote_in_a_path_cannot_break_out_of_the_shortcut_script():
