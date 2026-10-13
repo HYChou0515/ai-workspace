@@ -488,11 +488,11 @@ def main() -> int:  # pragma: no cover — the window needs a display; verified 
     # ── 狀態 ────────────────────────────────────────────────────────────────
     status_var = tk.StringVar(value=describe("starting", ""))
     update_var = tk.StringVar(value="")
-    ttk.Label(status_tab, textvariable=status_var, wraplength=460, justify="left").pack(
+    ttk.Label(status_tab, textvariable=status_var, wraplength=580, justify="left").pack(
         fill="x", pady=(0, 6)
     )
     ttk.Label(status_tab, text=app_url, foreground="#666").pack(fill="x")
-    ttk.Label(status_tab, textvariable=update_var, wraplength=460, justify="left").pack(
+    ttk.Label(status_tab, textvariable=update_var, wraplength=580, justify="left").pack(
         fill="x", pady=(6, 0)
     )
     buttons = ttk.Frame(status_tab)
@@ -647,7 +647,8 @@ def main() -> int:  # pragma: no cover — the window needs a display; verified 
         window.after(500, refresh)
 
     refresh()
-    window.minsize(520, 0)
+    # wide enough for the 查詢紀錄 table (its columns: 560 px) and its scrollbar
+    window.minsize(640, 0)
     window.mainloop()
     return 0
 
