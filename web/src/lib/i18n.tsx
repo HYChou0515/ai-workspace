@@ -2727,13 +2727,13 @@ export const messages = {
   "modelSettings.tab.history": { "zh-TW": "版本紀錄", en: "History" },
   "modelSettings.tab.keys": { "zh-TW": "API 金鑰", en: "API keys" },
   "modelSettings.tabs": { "zh-TW": "模型設定的區塊", en: "Model settings sections" },
-  "modelSettings.editor": { "zh-TW": "草稿（JSON）", en: "Draft (JSON)" },
+  "modelSettings.editor": { "zh-TW": "草稿（YAML）", en: "Draft (YAML)" },
   "modelSettings.inForce": { "zh-TW": "目前生效：版本 {version}", en: "In force: version {version}" },
   "modelSettings.inForceNone": {
     "zh-TW": "目前生效：部署預設（還沒套用過）",
     en: "In force: the deploy defaults (nothing applied yet)",
   },
-  "modelSettings.notJson": { "zh-TW": "不是合法的 JSON：{error}", en: "Not valid JSON: {error}" },
+  "modelSettings.notJson": { "zh-TW": "不是合法的 YAML：{error}", en: "Not valid YAML: {error}" },
   "modelSettings.notObject": {
     "zh-TW": "最外層要是一個物件 {…}",
     en: "The outermost value must be an object {…}",
@@ -2765,8 +2765,8 @@ export const messages = {
     en: "The Edit tab has unsaved edits: save them or press \"Discard edits\" there to apply",
   },
   "modelSettings.keysBlockedJson": {
-    "zh-TW": "編輯分頁的內容不是合法的 JSON：先在那裡修正或按「放棄改動」，才能套用",
-    en: "The Edit tab's text is not valid JSON: fix it or press \"Discard edits\" there to apply",
+    "zh-TW": "編輯分頁的內容不是合法的 YAML：先在那裡修正或按「放棄改動」，才能套用",
+    en: "The Edit tab's text is not valid YAML: fix it or press \"Discard edits\" there to apply",
   },
   "modelSettings.keysBlockedCheck": {
     "zh-TW": "沒辦法檢查編輯分頁的草稿：檢查通過前不能套用",
@@ -2794,16 +2794,11 @@ export const messages = {
     "zh-TW": "等待套用的金鑰改動：{n}",
     en: "Key changes waiting for Apply: {n}",
   },
-  "modelSettings.keyPathLabel": { "zh-TW": "設定路徑", en: "Setting path" },
   "modelSettings.fixJsonFirst": {
-    "zh-TW": "先修正 JSON 才能儲存或套用",
-    en: "Fix the JSON to save or apply",
+    "zh-TW": "先修正 YAML 才能儲存或套用",
+    en: "Fix the YAML to save or apply",
   },
   "modelSettings.keyChangeCleared": { "zh-TW": "金鑰清除", en: "Key cleared" },
-  "modelSettings.keyNeedBoth": {
-    "zh-TW": "填入設定路徑和金鑰才能設定",
-    en: "Enter a setting path and a key to set it",
-  },
   "modelSettings.problems": { "zh-TW": "套用前要先修正：", en: "Fix before applying:" },
   "modelSettings.save": { "zh-TW": "儲存草稿", en: "Save draft" },
   "modelSettings.discard": { "zh-TW": "放棄改動", en: "Discard edits" },
@@ -2847,8 +2842,8 @@ export const messages = {
   "modelSettings.changed": { "zh-TW": "改變", en: "Changed" },
   "modelSettings.changes": { "zh-TW": "這頁改過的值", en: "Values changed here" },
   "modelSettings.changesUnknown": {
-    "zh-TW": "先修正 JSON，才看得到這份草稿改了哪些值",
-    en: "Fix the JSON to see which values this draft changes",
+    "zh-TW": "先修正 YAML，才看得到這份草稿改了哪些值",
+    en: "Fix the YAML to see which values this draft changes",
   },
   "modelSettings.changesNone": {
     "zh-TW": "草稿沒有改任何值：全部是部署預設。",
@@ -2890,14 +2885,21 @@ export const messages = {
       "金鑰只寫不讀：存了之後長的只顯示最後四碼、短的只顯示「已設定」，不出現在草稿、差異或歷史裡。改了金鑰要再按一次「套用」才生效。",
     en: "Keys are write-only: once saved a long one shows only its last four characters and a short one only that it is set — never in the draft, a diff or the history. A changed key takes effect at the next Apply.",
   },
-  "modelSettings.keysNone": { "zh-TW": "沒有在這裡設過金鑰。", en: "No key has been set here." },
-  "modelSettings.keyPath": {
-    "zh-TW": "設定路徑，例如 config.agents.presets.openai-mini.llm.api_key",
-    en: "Setting path, e.g. config.agents.presets.openai-mini.llm.api_key",
-  },
   "modelSettings.keyValue": { "zh-TW": "金鑰", en: "Key" },
   "modelSettings.keySet": { "zh-TW": "設定金鑰", en: "Set key" },
   "modelSettings.keyClear": { "zh-TW": "清除", en: "Clear" },
+  "modelSettings.keySetOpen": { "zh-TW": "設定…", en: "Set…" },
+  "modelSettings.keyNotSet": { "zh-TW": "未設定", en: "Not set" },
+  "modelSettings.keyNew": { "zh-TW": "新的金鑰", en: "New key" },
+  "modelSettings.slotDefault": { "zh-TW": "預設（llm）", en: "Default (llm)" },
+  "modelSettings.slotApiKey": { "zh-TW": "API 金鑰", en: "API key" },
+  "modelSettings.envTitle": {
+    "zh-TW": "加一個環境變數的秘密值",
+    en: "Add a secret environment variable",
+  },
+  "modelSettings.envPreset": { "zh-TW": "Preset", en: "Preset" },
+  "modelSettings.envName": { "zh-TW": "變數名稱", en: "Variable name" },
+  "modelSettings.envAdd": { "zh-TW": "加入", en: "Add" },
   "modelSettings.keyClearTitle": { "zh-TW": "清除 {path}？", en: "Clear {path}?" },
   "modelSettings.keyClearBody": {
     "zh-TW": "清除和設定一樣，下次套用才生效；清掉的金鑰拿不回來。",

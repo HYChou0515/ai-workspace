@@ -9,6 +9,8 @@
  * give one value back to its default (remove it).
  */
 
+import { CORE_SCHEMA, dump as dumpYaml, load as loadYaml } from "js-yaml";
+
 export type Patch = Record<string, unknown>;
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -145,7 +147,7 @@ type Frame = { kind: "obj" | "arr"; path: string | null };
 
 /** The line each object key is written on, by dotted path — first occurrence;
  * keys inside arrays are not indexed (a patch replaces a list whole). */
-function keyLines(text: string): Map<string, number> {
+function jsonKeyLines(text: string): Map<string, number> {
   const out = new Map<string, number>();
   const frames: Frame[] = [];
   let line = 1;
@@ -181,12 +183,43 @@ function keyLines(text: string): Map<string, number> {
   return out;
 }
 
+/** The line each mapping key is written on in block YAML, by dotted path —
+ * first occurrence; keys inside a list are not indexed (a patch replaces a
+ * list whole), as in `jsonKeyLines`. */
+function yamlKeyLines(text: string): Map<string, number> {
+  const out = new Map<string, number>();
+  const frames: { indent: number; path: string | null }[] = [];
+  const KEY = /^(?:"((?:[^"\\]|\\.)*)"|'([^']*)'|([^\s#'"{}[\],&*!|>%@`-][^#]*?|-[^\s#][^#]*?))\s*:(?:\s|$)/;
+  text.split("\n").forEach((raw, i) => {
+    if (/^\s*(#|$)/.test(raw)) return;
+    const indent = raw.length - raw.trimStart().length;
+    while (frames.length && frames[frames.length - 1].indent >= indent) frames.pop();
+    let rest = raw.slice(indent);
+    let at = indent;
+    const dash = /^-(\s+|$)/.exec(rest);
+    if (dash) {
+      frames.push({ indent, path: null });
+      rest = rest.slice(dash[0].length);
+      at = indent + dash[0].length;
+    }
+    const m = KEY.exec(rest);
+    if (!m) return;
+    const key = m[1] ?? m[2] ?? m[3];
+    const top = frames[frames.length - 1];
+    const path = top === undefined ? key : top.path === null ? null : `${top.path}.${key}`;
+    if (path !== null && !out.has(path)) out.set(path, i + 1);
+    frames.push({ indent: at, path });
+  });
+  return out;
+}
+
 /** The line `path` (dotted, as a problem names it) is written on in `text` —
  * or its deepest part the text has, since a problem can name a key the patch
- * leaves to the default. null when none of it is there, or the text is not JSON. */
+ * leaves to the default. null when none of it is there, or the text does not
+ * parse. Block YAML is the page's form (M9); flow / JSON text still reads. */
 export function lineOfPath(text: string, path: string): number | null {
   if (!parsePatch(text).ok) return null;
-  const lines = keyLines(text);
+  const lines = text.trimStart().startsWith("{") ? jsonKeyLines(text) : yamlKeyLines(text);
   const parts = path.split(".");
   for (let n = parts.length; n > 0; n--) {
     const found = lines.get(parts.slice(0, n).join("."));
@@ -195,15 +228,25 @@ export function lineOfPath(text: string, path: string): number | null {
   return null;
 }
 
-export type Parsed ={ ok: true; patch: Patch } | { ok: false; error: string };
+export type Parsed = { ok: true; patch: Patch } | { ok: false; error: string; line?: number };
 
-/** The editor's text as a patch; `error` is the parser's own words, or `not-an-object`. */
+/** The editor's text as a patch — YAML, as `config.yaml` is written (M9; JSON,
+ * being YAML, reads too). The core schema, so a date-like value stays text.
+ * `error` is the parser's own words (with the line it names), or `not-an-object`. */
 export function parsePatch(text: string): Parsed {
+  if (text.trim() === "") return { ok: true, patch: {} };
   let value: unknown;
   try {
-    value = JSON.parse(text);
+    value = loadYaml(text, { schema: CORE_SCHEMA });
   } catch (e) {
-    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+    const { reason, mark } = e as { reason?: string; mark?: { line?: number } };
+    const error = reason ?? (e instanceof Error ? e.message : String(e));
+    return mark?.line === undefined ? { ok: false, error } : { ok: false, error, line: mark.line + 1 };
   }
   return isObject(value) ? { ok: true, patch: value } : { ok: false, error: "not-an-object" };
+}
+
+/** A patch as the page writes it: block YAML, as `config.yaml` is (M9). */
+export function dumpPatch(patch: unknown): string {
+  return dumpYaml(patch, { schema: CORE_SCHEMA, lineWidth: -1, noRefs: true });
 }

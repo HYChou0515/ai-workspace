@@ -3,7 +3,7 @@
  * platform's models are — presets, each App's app.json and profiles, the
  * platform's own model choices — without a redeploy.
  *
- * The draft is a JSON Merge Patch over the deploy defaults, edited as text (M9):
+ * The draft is a JSON Merge Patch over the deploy defaults, edited as YAML text (M9):
  * it is checked as you type (the same checks Apply runs), saved as a draft that
  * changes nothing running, and applied with a confirmation that lists every
  * value the Apply changes (M4). Each Apply is a version; any earlier one can be
@@ -24,6 +24,7 @@ import {
   modelSettingsApi,
   problemsOf,
   type Applied,
+  type KeySlot,
   type ModelSettingsClient,
   type ModelSettingsPage as PageData,
   type SettingsDocument,
@@ -43,6 +44,7 @@ import { pxToRem } from "../lib/pxToRem";
 import {
   diffEffective,
   flattenParts,
+  dumpPatch,
   lineOfPath,
   parsePatch,
   valueAt,
@@ -72,7 +74,8 @@ const BADGE = {
 /** How long typing pauses before the draft is checked. */
 const CHECK_AFTER_MS = 400;
 
-const pretty = (value: unknown) => JSON.stringify(value, null, 2);
+// The page writes YAML, as config.yaml is (M9); JSON typed in still reads.
+const pretty = (value: unknown) => dumpPatch(value);
 const messageOf = (e: unknown) => (e instanceof Error ? e.message : String(e));
 const short = (version: string) => version.slice(0, 8);
 // An empty text is said as `""`: printed as nothing it read as missing data
@@ -166,13 +169,6 @@ function ChangeList({ changes, testId = "model-settings-diff" }: { changes: Chan
 
 /** Problems name a dotted path first ("config.server: …", "config: …"). */
 const pathOf = (problem: string) => problem.split(":", 1)[0].trim();
-
-/** Where JSON.parse says it gave up, as a line — when the message says. */
-function lineOfParseError(text: string, error: string): number | null {
-  const at = /position (\d+)/.exec(error);
-  if (!at) return null;
-  return text.slice(0, Number(at[1])).split("\n").length;
-}
 
 function KeyChangeList({ pending, keys }: { pending: string[]; keys: Record<string, string> }) {
   const t = useT();
@@ -384,7 +380,7 @@ function useDraft(client: Client, data: PageData) {
   };
   // NN/g heuristic #3 (user control): one button gives the saved draft back —
   // the editor's own undo is gone once a tab switch unmounts it (final review).
-  // Hand-written JSON is work: Discard asks once (NN/g "Confirmation
+  // Hand-written YAML is work: Discard asks once (NN/g "Confirmation
   // Dialogs"; M3's example is "Discard draft?"), as a modal's close does.
   // Kept while there is something unsaved; a reload or a closed tab asks
   // first (the browser's own prompt).
@@ -546,6 +542,7 @@ function Loaded({ client, data }: { client: Client; data: PageData }) {
             client={client}
             keys={data.keys}
             applied={data.applied_keys}
+            slots={data.key_slots ?? []}
             draft={draft}
             goEdit={() => setTab("edit")}
           />
@@ -567,12 +564,12 @@ function EditTab({
   draft: Draft;
 }) {
   const t = useT();
-  const { text, parsed, settled, checkedText } = draft;
+  const { text, parsed, settled } = draft;
 
   // Each problem drawn on the line it names (NN/g "Error-Message Guidelines":
   // close to its source); the list under the editor stays as the summary.
   const markers: EditorMarker[] = !settled.ok
-    ? [{ line: lineOfParseError(checkedText, settled.error) ?? 1, message: settled.error }]
+    ? [{ line: settled.line ?? 1, message: settled.error }]
     : draft.problems.flatMap((p) => {
         const line = lineOfPath(text, pathOf(p));
         return line === null ? [] : [{ line, message: p }];
@@ -595,7 +592,7 @@ function EditTab({
           ariaLabel={t("modelSettings.editor")}
           value={text}
           onChange={draft.edit}
-          language="json"
+          language="yaml"
           autoHeight
           minHeight={240}
           markers={markers}
@@ -681,7 +678,7 @@ function EditTab({
           <MonacoEditor
             ariaLabel={t("modelSettings.defaults")}
             value={pretty(defaults)}
-            language="json"
+            language="yaml"
             readOnly
             autoHeight
             minHeight={240}
@@ -1079,19 +1076,22 @@ function KeysTab({
   client,
   keys,
   applied,
+  slots,
   draft,
   goEdit,
 }: {
   client: Client;
   keys: Record<string, string>;
   applied: string[];
+  slots: KeySlot[];
   draft: Draft;
   goEdit: () => void;
 }) {
   const t = useT();
   const dialog = useDialog();
   const queryClient = useQueryClient();
-  const [path, setPath] = useState("");
+  // The row whose field is open: one at a time, in that row (M22).
+  const [editing, setEditing] = useState<string | null>(null);
   const [value, setValue] = useState("");
   const [refused, setRefused] = useState<string[]>([]);
   const done = () => {
@@ -1101,19 +1101,19 @@ function KeysTab({
   };
   const set = useMutation({
     meta: { silentError: true },
-    mutationFn: () => client.setKey(path.trim(), value),
+    mutationFn: ({ path, secret }: { path: string; secret: string }) => client.setKey(path, secret),
     // An earlier result (an Apply's "Applied: version …") is not this action's:
     // left beside a refusal it read as the key applied (final review 11).
     onMutate: () => draft.clearNotice(),
     onSuccess: () => {
-      setPath("");
+      setEditing(null);
       setValue("");
       done();
     },
     onError: (e) => setRefused(problemsOf(e).length ? problemsOf(e) : [messageOf(e)]),
   });
-  // A failed Clear is said on the key's own row, not at the path field — that
-  // field was not what failed (final review 6; NN/g "Reporting Errors in Forms").
+  // A failed Clear is said on the key's own row (final review 6; NN/g
+  // "Reporting Errors in Forms").
   const [clearFailed, setClearFailed] = useState<{ path: string; error: string } | null>(null);
   const clear = useMutation({
     meta: { silentError: true },
@@ -1124,9 +1124,14 @@ function KeysTab({
       setClearFailed({ path: p, error: problemsOf(e).length ? problemsOf(e).join(" · ") : messageOf(e) }),
   });
 
-  const askToClear = async (p: string) => {
+  const nameOf = (slot: KeySlot | undefined, path: string) =>
+    slot === undefined
+      ? path
+      : `${slot.owner || t("modelSettings.slotDefault")} · ${slot.kind === "env" ? slot.name : t("modelSettings.slotApiKey")}`;
+
+  const askToClear = async (p: string, name: string) => {
     const choice = await dialog.confirm({
-      title: t("modelSettings.keyClearTitle", { path: p }),
+      title: t("modelSettings.keyClearTitle", { path: name }),
       // A key not in force now: clearing it only withdraws a staged change.
       body: t(applied.includes(p) ? "modelSettings.keyClearBody" : "modelSettings.keyClearUnappliedBody"),
       actions: [
@@ -1136,35 +1141,63 @@ function KeysTab({
     });
     if (choice === "clear") clear.mutate(p);
   };
+  const open = (p: string) => {
+    setEditing(p);
+    setValue("");
+    setRefused([]);
+  };
 
-  // Every key the page knows: set ones, and ones cleared but still in force
-  // until the next Apply (review r2: a cleared key vanished from the list
-  // while it went on running).
+  // Every place a key can go (the server lists them from the saved draft), and
+  // every key the page knows besides — one whose place is gone, or cleared but
+  // still in force until the next Apply (review r2), stays listed to be cleared.
+  const bySlot = new Map(slots.map((slot) => [slot.path, slot]));
   const pending = new Set(draft.pendingKeys);
-  const rows = [...new Set([...Object.keys(keys), ...draft.pendingKeys])].sort();
+  const rows = [...new Set([...slots.map((slot) => slot.path), ...Object.keys(keys), ...draft.pendingKeys])];
+  const presets = [...new Set(slots.filter((s) => s.path.startsWith("config.agents.presets.")).map((s) => s.owner))];
 
   return (
     <div style={{ display: "grid", gap: 12 }}>
       <p style={{ ...MUTED, margin: 0 }}>{t("modelSettings.keysDesc")}</p>
-      {rows.length === 0 ? (
-        <p data-testid="model-settings-keys-empty" style={{ ...MUTED, margin: 0 }}>
-          {t("modelSettings.keysNone")}
-        </p>
-      ) : (
-        <ul
-          data-testid="model-settings-keys"
-          style={{ margin: 0, paddingLeft: 0, listStyle: "none", display: "grid", gap: 6 }}
-        >
-          {rows.map((p) => {
-            const isSet = p in keys;
-            return (
-              <li key={p} style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-                <span style={{ ...MONO, overflowWrap: "anywhere" }}>{p}</span>
-                {isSet && <span style={{ ...MONO, ...MUTED }}>{keys[p] || t("modelSettings.keyIsSet")}</span>}
+      {/* Each place listed, picked rather than typed: NN/g heuristic #6,
+          recognition rather than recall (M22). */}
+      <ul
+        data-testid="model-settings-keys"
+        style={{ margin: 0, paddingLeft: 0, listStyle: "none", display: "grid", gap: 0 }}
+      >
+        {rows.map((p) => {
+          const isSet = p in keys;
+          const slot = bySlot.get(p);
+          const name = nameOf(slot, p);
+          return (
+            <li
+              key={p}
+              data-testid={`model-settings-key-row-${p}`}
+              style={{ display: "grid", gap: 6, padding: "8px 0", borderBottom: "1px solid var(--paper-3)" }}
+            >
+              <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                <div style={{ display: "grid", gap: 2, flex: "1 1 14rem", minWidth: 0 }}>
+                  <span style={{ ...WRAP, fontWeight: 600 }}>{name}</span>
+                  {slot !== undefined && <span style={{ ...MONO, ...MUTED, ...WRAP }}>{p}</span>}
+                </div>
+                <span style={{ ...MONO, ...MUTED }}>
+                  {isSet ? keys[p] || t("modelSettings.keyIsSet") : t("modelSettings.keyNotSet")}
+                </span>
                 {pending.has(p) && (
                   <span data-testid={`model-settings-key-pending-${p}`} style={BADGE}>
                     {t(isSet ? "modelSettings.keyPendingSet" : "modelSettings.keyPendingCleared")}
                   </span>
+                )}
+                {slot !== undefined && editing !== p && (
+                  <button
+                    type="button"
+                    className="btn"
+                    data-variant="secondary"
+                    data-size="sm"
+                    data-testid={`model-settings-key-edit-${p}`}
+                    onClick={() => open(p)}
+                  >
+                    {t("modelSettings.keySetOpen")}
+                  </button>
                 )}
                 {isSet && (
                   <button
@@ -1173,25 +1206,85 @@ function KeysTab({
                     data-variant="danger"
                     data-size="sm"
                     data-testid={`model-settings-key-clear-${p}`}
-                    onClick={() => void askToClear(p)}
+                    onClick={() => void askToClear(p, name)}
                   >
                     {t("modelSettings.keyClear")}
                   </button>
                 )}
-                {clearFailed?.path === p && (
-                  <span
-                    role="alert"
-                    data-testid={`model-settings-key-clear-failed-${p}`}
-                    style={{ ...MUTED, ...WRAP, color: "var(--err)" }}
-                  >
-                    {clearFailed.error}
-                  </span>
-                )}
-              </li>
-            );
-          })}
-        </ul>
-      )}
+              </div>
+              {clearFailed?.path === p && (
+                <span
+                  role="alert"
+                  data-testid={`model-settings-key-clear-failed-${p}`}
+                  style={{ ...MUTED, ...WRAP, color: "var(--err)" }}
+                >
+                  {clearFailed.error}
+                </span>
+              )}
+              {editing === p && (
+                // A form, so Enter sets the key; the field opens in the row it is
+                // for, and a refusal is drawn under it (NN/g "10 Design
+                // Guidelines for Reporting Errors in Forms").
+                <form
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    if (value && !set.isPending) set.mutate({ path: p, secret: value });
+                  }}
+                  style={{ display: "grid", gap: 6 }}
+                >
+                  <div style={{ display: "flex", gap: 8, alignItems: "flex-end", flexWrap: "wrap" }}>
+                    <label style={{ display: "grid", gap: 4, flex: "1 1 14rem", minWidth: 0 }}>
+                      {/* The row's heading names whose key it is; the label says only what
+                          to type (it read "kb-default · API key 的金鑰"). */}
+                      <span style={LABEL}>{t("modelSettings.keyNew")}</span>
+                      <input
+                        className="input"
+                        data-masked
+                        data-testid="model-settings-key-value"
+                        aria-invalid={refused.length > 0}
+                        aria-describedby={refused.length > 0 ? "model-settings-key-refused" : undefined}
+                        value={value}
+                        onChange={(e) => setValue(e.target.value)}
+                        autoComplete="off"
+                        spellCheck={false}
+                        autoCapitalize="off"
+                        autoCorrect="off"
+                        onCopy={blockMaskedCopy}
+                        onCut={blockMaskedCopy}
+                        onDragStart={blockMaskedCopy}
+                        style={MONO}
+                      />
+                    </label>
+                    <button
+                      type="submit"
+                      className="btn"
+                      data-variant="secondary"
+                      data-testid="model-settings-key-set"
+                      disabled={!value || set.isPending}
+                    >
+                      {t("modelSettings.keySet")}
+                    </button>
+                    <button type="button" className="btn" data-variant="ghost" onClick={() => setEditing(null)}>
+                      {t("modelSettings.cancel")}
+                    </button>
+                  </div>
+                  {refused.length > 0 && (
+                    <p
+                      role="alert"
+                      id="model-settings-key-refused"
+                      data-testid="model-settings-key-refused"
+                      className="ev-banner ev-banner--err"
+                      style={{ ...WRAP, margin: 0 }}
+                    >
+                      {refused.join(" · ")}
+                    </p>
+                  )}
+                </form>
+              )}
+            </li>
+          );
+        })}
+      </ul>
       {draft.pendingKeys.length > 0 && (
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
           <span style={STATUS}>{t("modelSettings.keysWaiting", { n: String(draft.pendingKeys.length) })}</span>
@@ -1205,97 +1298,79 @@ function KeysTab({
           {draft.notice}
         </p>
       )}
-      {/* Visible labels, not placeholders — NN/g "Placeholders in Form Fields
-          Are Harmful": a placeholder disappears as you type and was cut off. */}
-      {/* The format hint sits under its own field: hints are "persistent and
-          placed outside of the field" (NN/g "Placeholders in Form Fields Are
-          Harmful"), and beside the field they explain, not the row (NN/g
-          "Proximity"). So the row aligns to the inputs' tops and the button
-          gets a label-high spacer. */}
-      {/* A form, so Enter sets the key as it does in any form. */}
-      <form
-        onSubmit={(e) => {
-          e.preventDefault();
-          if (path.trim() && value && !set.isPending) set.mutate();
-        }}
-        style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "flex-start" }}
-      >
-        <div data-testid="model-settings-key-path-field" style={{ display: "grid", gap: 4, flex: "1 1 20rem", minWidth: 0 }}>
-          <label style={{ display: "grid", gap: 4 }}>
-            <span style={LABEL}>{t("modelSettings.keyPathLabel")}</span>
+      {presets.length > 0 && <EnvSecretForm presets={presets} set={set} />}
+    </div>
+  );
+}
+
+/** A secret under an `env` name a preset does not have yet: the one thing the
+ * list cannot offer, so its name is typed — the preset is still picked (M22). */
+function EnvSecretForm({
+  presets,
+  set,
+}: {
+  presets: string[];
+  set: { mutate: (v: { path: string; secret: string }) => void; isPending: boolean };
+}) {
+  const t = useT();
+  const [preset, setPreset] = useState(presets[0]);
+  const [name, setName] = useState("");
+  const [secret, setSecret] = useState("");
+  const ready = Boolean(preset && /^[A-Za-z_][A-Za-z0-9_]*$/.test(name) && secret) && !set.isPending;
+  return (
+    <form
+      onSubmit={(e) => {
+        e.preventDefault();
+        if (!ready) return;
+        set.mutate({ path: `config.agents.presets.${preset}.env.${name}`, secret });
+        setName("");
+        setSecret("");
+      }}
+      style={{ display: "grid", gap: 8 }}
+    >
+      <h3 style={{ ...H2, fontSize: pxToRem(14) }}>{t("modelSettings.envTitle")}</h3>
+      <div style={{ display: "flex", gap: 8, alignItems: "flex-end", flexWrap: "wrap" }}>
+        <label style={{ display: "grid", gap: 4, flex: "1 1 10rem", minWidth: 0 }}>
+          <span style={LABEL}>{t("modelSettings.envPreset")}</span>
+          <select className="input" value={preset} onChange={(e) => setPreset(e.target.value)}>
+            {presets.map((p) => (
+              <option key={p} value={p}>
+                {p}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label style={{ display: "grid", gap: 4, flex: "1 1 10rem", minWidth: 0 }}>
+          <span style={LABEL}>{t("modelSettings.envName")}</span>
           <input
             className="input"
-            data-testid="model-settings-key-path"
-            aria-invalid={refused.length > 0}
-            aria-describedby={
-              refused.length > 0
-                ? "model-settings-key-path-help model-settings-key-refused"
-                : "model-settings-key-path-help"
-            }
-            value={path}
-            onChange={(e) => setPath(e.target.value)}
+            value={name}
+            onChange={(e) => setName(e.target.value)}
             autoComplete="off"
             spellCheck={false}
             style={MONO}
           />
-          </label>
-          {/* Beside the label, not inside it: inside, it would become part of
-              the field's name instead of its description. */}
-          <span id="model-settings-key-path-help" style={{ ...MUTED, overflowWrap: "anywhere" }}>
-            {t("modelSettings.keyPath")}
-          </span>
-          {/* An error, drawn as the other tabs draw theirs and under the field every refusal names
-              (NN/g "10 Design Guidelines for Reporting Errors in Forms"). */}
-          {refused.length > 0 && (
-            <p
-              role="alert"
-              id="model-settings-key-refused"
-              data-testid="model-settings-key-refused"
-              className="ev-banner ev-banner--err"
-              style={{ ...WRAP, margin: 0 }}
-            >
-              {refused.join(" · ")}
-            </p>
-          )}
-        </div>
+        </label>
         <label style={{ display: "grid", gap: 4, flex: "1 1 12rem", minWidth: 0 }}>
           <span style={LABEL}>{t("modelSettings.keyValue")}</span>
           <input
             className="input"
             data-masked
-            data-testid="model-settings-key-value"
-            value={value}
-            onChange={(e) => setValue(e.target.value)}
+            data-testid="model-settings-env-value"
+            value={secret}
+            onChange={(e) => setSecret(e.target.value)}
             autoComplete="off"
             spellCheck={false}
-            autoCapitalize="off"
-            autoCorrect="off"
             onCopy={blockMaskedCopy}
             onCut={blockMaskedCopy}
             onDragStart={blockMaskedCopy}
             style={MONO}
           />
         </label>
-        <div style={{ display: "grid", gap: 4 }}>
-          <span aria-hidden="true" style={LABEL}>
-            {"\u00a0"}
-          </span>
-          <button
-            type="submit"
-            className="btn"
-            data-variant="secondary"
-            data-testid="model-settings-key-set"
-            disabled={!path.trim() || !value || set.isPending}
-          >
-            {t("modelSettings.keySet")}
-          </button>
-        </div>
-      </form>
-      {(!path.trim() || !value) && (
-        <p data-testid="model-settings-key-why" style={{ ...MUTED, margin: 0 }}>
-          {t("modelSettings.keyNeedBoth")}
-        </p>
-      )}
-    </div>
+        <button type="submit" className="btn" data-variant="secondary" disabled={!ready}>
+          {t("modelSettings.envAdd")}
+        </button>
+      </div>
+    </form>
   );
 }

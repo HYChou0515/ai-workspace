@@ -462,3 +462,18 @@ def test_a_key_set_while_apply_checks_is_not_published_unseen(page, monkeypatch)
 
     assert response.status_code == 409
     assert page.client.get(BASE).json()["applied_keys"] == []
+
+
+def test_the_page_offers_the_places_a_key_can_go_from_the_saved_draft(page):
+    # M22: picked, not typed; a preset the saved draft adds is a place too.
+    page.client.put(
+        f"{BASE}/draft",
+        json={"patch": {"config": {"agents": {"presets": {"brand-new": {"model": "openai/x"}}}}}},
+    )
+
+    slots = page.client.get(BASE).json()["key_slots"]
+
+    paths = {slot["path"] for slot in slots}
+    assert API_KEY in paths
+    assert "config.agents.presets.brand-new.llm.api_key" in paths
+    assert {"path": API_KEY, "owner": "kb-default", "kind": "api_key", "name": ""} in slots

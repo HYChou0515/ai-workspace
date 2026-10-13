@@ -210,3 +210,31 @@ def test_a_short_key_quoted_by_the_provider_is_still_masked(settings, monkeypatc
     error = try_connection(keyed, "openai-mini", config_dir=None).error
 
     assert f"provided: {key}." not in error and "ollama_chat ok" in error, error
+
+
+def test_the_page_lists_every_place_a_key_can_go(settings):
+    # M22: a key is set by picking where it goes; the list is every real place —
+    # the default llm, each preset, each role reference, each env name a preset has.
+    from workspace_app.model_settings.page import key_slots
+
+    slots = {slot.path: slot for slot in key_slots(settings)}
+
+    assert "config.llm.api_key" in slots
+    assert "config.agents.presets.openai-mini.llm.api_key" in slots
+    assert "config.agents.presets.openai-mini.env.HF_TOKEN" in slots
+    assert "config.kb.retrieval_llm.llm.api_key" in slots
+    mini = slots["config.agents.presets.openai-mini.env.HF_TOKEN"]
+    assert (mini.owner, mini.kind, mini.name) == ("openai-mini", "env", "HF_TOKEN")
+    # every place listed is one the key route accepts
+    assert all(key_path_problem(path) is None for path in slots), [
+        (p, key_path_problem(p)) for p in slots if key_path_problem(p)
+    ]
+
+
+def test_a_role_that_is_off_offers_no_place(settings):
+    from workspace_app.model_settings.page import key_slots
+
+    paths = {slot.path for slot in key_slots(settings)}
+
+    assert settings.health.judge_llm is None
+    assert "config.health.judge_llm.llm.api_key" not in paths

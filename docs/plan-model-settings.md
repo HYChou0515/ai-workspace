@@ -26,7 +26,7 @@ settled by me, listed for the user to overturn.
 | M6 | **API keys can be entered on the page**, write-only: shown as set / unset with a short suffix, never returned, never in history or diffs (history records that a key changed) *As built:* a key under 16 characters shows only that it is set — the end of a short value is most of it (every preset `env` value is a key, M7); the threshold is mine (review r2) | user |
 | M7 | What is secret is decided by the **same function** the boot-time config dump uses (`config/dump.py:is_secret_at`, decided on the walked keys — final review 9; `is_secret` was `_is_secret` before P1 and now only splits a joined path for it); its known gaps are fixed there, once, for both: `_token` matched case-insensitively, and every value of a preset's `env` | user ("用同一套就好") |
 | M8 | Apply runs **structure checks only** (a default preset that exists, fallbacks that resolve, required fields — the loader's own checks) and refuses on failure. A separate **"test connection"** button per preset makes one minimal call and shows the result; it never blocks Apply — a provider outage must not stop a rollback | user |
-| M9 | The editor is **text** (YAML/JSON) checked against the same schema as Apply, with the error's line and reason shown as you type, a diff before Apply, and each value's source (deploy default / changed here) with reset | user |
+| M9 | The editor is **text** (YAML/JSON) checked against the same schema as Apply, with the error's line and reason shown as you type, a diff before Apply, and each value's source (deploy default / changed here) with reset. *As built:* the text is **YAML**, as `config.yaml` is (JSON, being YAML, is still read); it was first built as JSON only, which narrowed this decision (user, 2026-10-13) | user |
 | M10 | **Profiles** (`presets`, `default_preset`) are in scope too | mine — they name presets; editing presets without them is half an edit |
 | M11 | The database stores a **sparse patch**: only the values that differ from the default. A later `config.yaml` change to a value the page never touched still takes effect; where both changed, the page wins | mine |
 | M12 | "Deleting" a preset that comes from `config.yaml` **hides** it in the overlay; reset brings it back | mine |
@@ -39,6 +39,7 @@ settled by me, listed for the user to overturn.
 | M19 | `null` **hides a preset and means nothing else** (M12). Anywhere else — in the config part or under `apps` / `profiles` — it would delete a key the loader or the App needs; a value goes back to its default by leaving the patch, which is what reset does | mine — found in P5 |
 | M20 | A **key** set or cleared on the page takes effect at the next **Apply**, like every other change: it is part of the version string (its revision, never its value), so it reaches the processes the same way and history records that it changed. A key is **staged** until then (`_SettingsKey`) and Apply copies it to the **applied** record (`_SettingsAppliedKey`) every process builds from — review r1 found a process that started after a key change built with the staged value, a key nobody applied. A rollback brings back an earlier version's values and leaves the keys as they are in force (`publish(..., apply_keys=False)`): a staged key stays staged — review r2 found rollback applying it while its dialog said keys stay | mine — found in P2, fixed by reviews r1 and r2 |
 | M21 | **A deploy key goes only where config.yaml sends it.** A key config.yaml sets (often `${…}` from the environment) can be read by no one; Apply and test connection refuse an endpoint (`base_url`, a preset's chain, a role's reference) or a usage entry (`agents.kb_chat` and the like, resolved as the running catalog resolves it — final review 3) that would send such a key somewhere config.yaml never pairs it with — where a call goes being the provider litellm resolves from the model, the base_url, and a URL the model string itself carries (final review 7: `huggingface/https://…` is its own address, so pairing on base_url alone let the key through) — set a key for the new endpoint on the API keys tab instead. A key set on the page may go anywhere: its setter knows it. Likewise an App's files stay inside its folder: `prompt_file` must resolve under `apps/<slug>/`, and a workflow id is a plain name (it is a path). On the config side a `prompt_file` the page writes — anywhere: a preset, a usage entry — is a packaged prompt (`pkg:…`) or one config.yaml already names; any other path is a file on the server read into a system prompt a chat can repeat back, config.yaml itself included (final review 5: `/proc/self/environ` passed Apply). Apply also sends the revision of every staged key it listed, so a key set or cleared since is a 409 — paths alone let a clear through that the dialog listed as a set (final review 5) | mine — final review (a changed `base_url` sent the deploy's key to any server; `prompt_file` read `/proc/self/environ`; a `../` workflow id could load any `run.py`) |
+| M22 | **A key is set by picking where it goes, never by typing a path.** The API keys tab lists every place a key can sit — the default `llm`, each preset, each role reference, each `env` name a preset has — with its status (not set / `…4321` / waiting for Apply) and Set / Clear on the row; Set opens a masked field in that row. Only a new `env` name is typed (the one thing the system cannot list): pick a preset, name the variable, give the value. The server computes the list (`key_slots`) from the saved draft, so it always names real places. NN/g heuristic #6, recognition rather than recall (https://www.nngroup.com/articles/recognition-and-recall/): typing `config.agents.presets.kb-default.llm.api_key` was recall | user ("金鑰設定方式有點反直覺 — 要手打設定路徑") |
 
 ### Sources for the page (M15)
 
@@ -71,9 +72,17 @@ what they shaped; the ellipsis is cited only here.
 - A test call that can take tens of seconds says it is running and for how
   long, under a button that keeps its label — NN/g, "Progress Indicators Make
   a Slow System Less Insufferable" (https://www.nngroup.com/articles/progress-indicators/).
-- A visible label on the key path field, not a placeholder — NN/g,
-  "Placeholders in Form Fields Are Harmful"
-  (https://www.nngroup.com/articles/form-design-placeholders/).
+- Every place a key can go listed by name, each with its status and Set /
+  Clear on its row — no path to type (M22) — NN/g, "Memory Recognition and
+  Recall in User Interfaces" (https://www.nngroup.com/articles/recognition-and-recall/):
+  "making information and interface functions visible"; the classic case is a
+  menu, where "the computer shows you the available commands, and you
+  recognize the one you want".
+- The key field opens in the row it is for, with a visible label rather than a
+  placeholder, and a refusal is drawn under that field — NN/g, "Placeholders in
+  Form Fields Are Harmful" (https://www.nngroup.com/articles/form-design-placeholders/),
+  "10 Design Guidelines for Reporting Errors in Forms"
+  (https://www.nngroup.com/articles/errors-forms-design-guidelines/).
 
 ### Known costs
 

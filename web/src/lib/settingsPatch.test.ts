@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   diffEffective,
+  dumpPatch,
   diffPatches,
   flattenPatch,
   flattenParts,
@@ -203,5 +204,64 @@ describe("diffEffective under a hidden preset", () => {
       { path: "presets.qwen2", kind: "removed", before: { model: "a" } },
       { path: "presets.qwen2.5.model", kind: "changed", before: "b", after: "y" },
     ]);
+  });
+});
+
+describe("the draft as YAML (M9, as config.yaml is written)", () => {
+  const yaml = [
+    "config:", //               1
+    "  agents:", //             2
+    "    presets:", //          3
+    "      qwen2.5:", //        4
+    "        model: x", //      5
+    "        fallbacks:", //    6
+    "          - b", //         7
+    "apps:", //                 8
+    "  playground: {}", //      9
+  ].join("\n");
+
+  it("reads YAML into the patch, and JSON still, which is YAML", () => {
+    expect(parsePatch(yaml)).toEqual({
+      ok: true,
+      patch: {
+        config: { agents: { presets: { "qwen2.5": { model: "x", fallbacks: ["b"] } } } },
+        apps: { playground: {} },
+      },
+    });
+    expect(parsePatch('{"config": {}}')).toEqual({ ok: true, patch: { config: {} } });
+    expect(parsePatch("")).toEqual({ ok: true, patch: {} });
+  });
+
+  it("keeps a date-like text a text (no YAML surprises)", () => {
+    expect(parsePatch("note: 2026-10-13")).toEqual({ ok: true, patch: { note: "2026-10-13" } });
+  });
+
+  it("names the line a YAML error is on", () => {
+    const broken = parsePatch("config:\n  a: 1\n b: 2");
+    expect(broken.ok).toBe(false);
+    expect(broken.ok ? null : broken.line).toBe(3);
+  });
+
+  it("finds the line a path is written on", () => {
+    expect(lineOfPath(yaml, "config.agents.presets.qwen2.5.model")).toBe(5);
+    expect(lineOfPath(yaml, "config.agents.presets.qwen2.5.fallbacks")).toBe(6);
+    expect(lineOfPath(yaml, "apps.playground.agent")).toBe(9);
+    expect(lineOfPath(yaml, "profiles.x")).toBeNull();
+  });
+
+  it("does not index keys inside a list item — a patch replaces a list whole", () => {
+    const list = ["config:", "  agents:", "    kb_chat:", "      - preset: a", "        name: X"].join("\n");
+    // a problem about an entry is marked on the list, not on a sibling's key
+    expect(lineOfPath(list, "config.agents.kb_chat.preset")).toBe(3);
+    expect(lineOfPath(list, "config.agents.kb_chat.name")).toBe(3);
+  });
+
+  it("writes a patch back as YAML that reads back the same", () => {
+    const patch = { config: { agents: { presets: { "qwen2.5": { model: "x" } } } } };
+    const text = dumpPatch(patch);
+    expect(text).toContain("qwen2.5:");
+    expect(text).not.toContain("{");
+    expect(parsePatch(text)).toEqual({ ok: true, patch });
+    expect(dumpPatch({})).toBe("{}\n");
   });
 });

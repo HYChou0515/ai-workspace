@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { HttpError } from "../api/http";
 import type { Applied, ModelSettingsPage as PageData } from "../api/modelSettings";
+import { parsePatch } from "../lib/settingsPatch";
 import { renderWithQuery } from "../test/queryWrapper";
 import { ModelSettingsPage } from "./ModelSettingsPage";
 
@@ -67,6 +68,11 @@ function fakeClient(page: Partial<PageData> = {}) {
     pending_keys: [],
     applied_keys: [],
     key_revision: "rev-1",
+    key_slots: [
+      { path: "config.llm.api_key", owner: "", kind: "api_key", name: "" },
+      { path: "config.agents.presets.kb-default.llm.api_key", owner: "kb-default", kind: "api_key", name: "" },
+      { path: "config.agents.presets.kb-default.env.HF_TOKEN", owner: "kb-default", kind: "env", name: "HF_TOKEN" },
+    ],
     ...page,
   };
   const client = {
@@ -95,8 +101,20 @@ function fakeClient(page: Partial<PageData> = {}) {
   return client;
 }
 
-const editor = () => screen.getByRole("textbox", { name: "草稿（JSON）" }) as HTMLTextAreaElement;
+const editor = () => screen.getByRole("textbox", { name: "草稿（YAML）" }) as HTMLTextAreaElement;
+/** The draft the editor holds, read as the page reads it (YAML, M9). */
+const draftNow = () => {
+  const parsed = parsePatch(editor().value);
+  if (!parsed.ok) throw new Error(parsed.error);
+  return parsed.patch;
+};
 const type = (text: string) => fireEvent.change(editor(), { target: { value: text } });
+const SLOT = "config.agents.presets.kb-default.llm.api_key";
+/** Open a place's row and type the key into it — M22: a key is picked, never typed as a path. */
+const setOnRow = (path: string, value: string) => {
+  fireEvent.click(screen.getByTestId(`model-settings-key-edit-${path}`));
+  fireEvent.change(screen.getByTestId("model-settings-key-value"), { target: { value } });
+};
 
 beforeEach(() => {
   state.superuser = true;
@@ -118,18 +136,18 @@ describe("ModelSettingsPage", () => {
   it("shows the draft in the editor and what is in force", async () => {
     renderWithQuery(<ModelSettingsPage client={fakeClient({ draft: KB_2, published: KB_2, version: "0123456789abcdef" })} />);
 
-    await waitFor(() => expect(JSON.parse(editor().value)).toEqual(KB_2));
+    await waitFor(() => expect(draftNow()).toEqual(KB_2));
     expect(screen.getByTestId("model-settings-in-force")).toHaveTextContent("01234567");
   });
 
-  it("names a JSON mistake once typing pauses, and saves nothing", async () => {
+  it("names a YAML mistake once typing pauses, and saves nothing", async () => {
     const client = fakeClient();
     renderWithQuery(<ModelSettingsPage client={client} />);
-    await screen.findByRole("textbox", { name: "草稿（JSON）" });
+    await screen.findByRole("textbox", { name: "草稿（YAML）" });
 
     type("{ not json");
 
-    expect(await screen.findByTestId("model-settings-parse")).toHaveTextContent("不是合法的 JSON");
+    expect(await screen.findByTestId("model-settings-parse")).toHaveTextContent("不是合法的 YAML");
     expect(screen.getByTestId("model-settings-save")).toBeDisabled();
   });
 
@@ -139,7 +157,7 @@ describe("ModelSettingsPage", () => {
       "server" in ((patch.config as Record<string, unknown>) ?? {}) ? ["config.server: change it in config.yaml"] : [],
     );
     renderWithQuery(<ModelSettingsPage client={client} />);
-    await screen.findByRole("textbox", { name: "草稿（JSON）" });
+    await screen.findByRole("textbox", { name: "草稿（YAML）" });
 
     type('{"config": {"server": {"port": 1}}}');
 
@@ -151,7 +169,7 @@ describe("ModelSettingsPage", () => {
   it("saves a draft, then applies it after showing every value it changes", async () => {
     const client = fakeClient();
     renderWithQuery(<ModelSettingsPage client={client} />);
-    await screen.findByRole("textbox", { name: "草稿（JSON）" });
+    await screen.findByRole("textbox", { name: "草稿（YAML）" });
 
     type(JSON.stringify(KB_2));
     expect(screen.getByTestId("model-settings-apply")).toBeDisabled(); // unsaved: save first
@@ -173,7 +191,7 @@ describe("ModelSettingsPage", () => {
   it("applies nothing when the confirmation is cancelled", async () => {
     const client = fakeClient({ draft: KB_2 });
     renderWithQuery(<ModelSettingsPage client={client} />);
-    await waitFor(() => expect(JSON.parse(editor().value)).toEqual(KB_2));
+    await waitFor(() => expect(draftNow()).toEqual(KB_2));
 
     fireEvent.click(screen.getByTestId("model-settings-apply"));
     fireEvent.click(await screen.findByRole("button", { name: "取消" }));
@@ -184,7 +202,7 @@ describe("ModelSettingsPage", () => {
 
   it("offers Apply only when it would do something, and says why not", async () => {
     renderWithQuery(<ModelSettingsPage client={fakeClient({ draft: KB_2, published: KB_2, version: "v1v1v1v1" })} />);
-    await waitFor(() => expect(JSON.parse(editor().value)).toEqual(KB_2));
+    await waitFor(() => expect(draftNow()).toEqual(KB_2));
 
     expect(screen.getByTestId("model-settings-apply")).toBeDisabled();
     await waitFor(() => expect(screen.getByTestId("model-settings-status")).toHaveTextContent("沒有要套用的改動"));
@@ -207,9 +225,9 @@ describe("ModelSettingsPage", () => {
     renderWithQuery(<ModelSettingsPage client={client} />);
     await screen.findByTestId("model-settings-problems");
 
-    // line 6 of the pretty-printed draft is `"model": "openai/kb-2"`
+    // line 5 of the draft as the page writes it (YAML) is `model: openai/kb-2`
     expect(JSON.parse(editor().getAttribute("data-markers") ?? "[]")).toEqual([
-      { line: 6, message: "config.agents.presets.kb-default.model: nope" },
+      { line: 5, message: "config.agents.presets.kb-default.model: nope" },
     ]);
   });
 
@@ -217,7 +235,7 @@ describe("ModelSettingsPage", () => {
     const path = "config.agents.presets.kb-default.llm.api_key";
     const client = fakeClient({ keys: { [path]: "…4321" }, pending_keys: [path] });
     renderWithQuery(<ModelSettingsPage client={client} />);
-    await screen.findByRole("textbox", { name: "草稿（JSON）" });
+    await screen.findByRole("textbox", { name: "草稿（YAML）" });
 
     await waitFor(() => expect(screen.getByTestId("model-settings-status")).toHaveTextContent("1 個金鑰"));
     fireEvent.click(screen.getByTestId("model-settings-apply"));
@@ -258,13 +276,13 @@ describe("ModelSettingsPage", () => {
     // "load failed", and the text being typed went with it.
     const client = fakeClient();
     const { client: queryClient } = renderWithQuery(<ModelSettingsPage client={client} />);
-    await screen.findByRole("textbox", { name: "草稿（JSON）" });
+    await screen.findByRole("textbox", { name: "草稿（YAML）" });
     type('{"config": {"llm": {"base_url": "http://mine"}}}');
 
     client.get.mockRejectedValue(new HttpError(503, "down"));
     await act(async () => queryClient.invalidateQueries());
 
-    expect(JSON.parse(editor().value)).toEqual({ config: { llm: { base_url: "http://mine" } } });
+    expect(draftNow()).toEqual({ config: { llm: { base_url: "http://mine" } } });
     expect(screen.getByTestId("model-settings-refresh-failed")).toBeInTheDocument();
   });
 
@@ -298,7 +316,7 @@ describe("ModelSettingsPage", () => {
     const client = fakeClient();
     client.saveDraft.mockRejectedValue(new HttpError(500, "saving the draft failed: 500"));
     renderWithQuery(<ModelSettingsPage client={client} />);
-    await screen.findByRole("textbox", { name: "草稿（JSON）" });
+    await screen.findByRole("textbox", { name: "草稿（YAML）" });
 
     type(JSON.stringify(KB_2));
     fireEvent.click(screen.getByTestId("model-settings-save"));
@@ -319,7 +337,7 @@ describe("ModelSettingsPage", () => {
     // review r2 (ux): dirtiness compared the TEXT, so a save of the same content
     // left "unsaved edits" on with Apply off for good — CLAUDE.md: sameShape.
     renderWithQuery(<ModelSettingsPage client={fakeClient({ draft: KB_2 })} />);
-    await waitFor(() => expect(JSON.parse(editor().value)).toEqual(KB_2));
+    await waitFor(() => expect(draftNow()).toEqual(KB_2));
 
     type(JSON.stringify(KB_2)); // one line instead of pretty-printed
 
@@ -328,19 +346,19 @@ describe("ModelSettingsPage", () => {
     await waitFor(() => expect(screen.getByTestId("model-settings-apply")).toBeEnabled());
   });
 
-  it("says to fix the JSON, not to save, when the text does not parse", async () => {
+  it("says to fix the YAML, not to save, when the text does not parse", async () => {
     renderWithQuery(<ModelSettingsPage client={fakeClient()} />);
-    await screen.findByRole("textbox", { name: "草稿（JSON）" });
+    await screen.findByRole("textbox", { name: "草稿（YAML）" });
 
     type("{ not json");
 
-    await waitFor(() => expect(screen.getByTestId("model-settings-apply-why")).toHaveTextContent("先修正 JSON"));
+    await waitFor(() => expect(screen.getByTestId("model-settings-apply-why")).toHaveTextContent("先修正 YAML"));
   });
 
-  it("waits for a pause in typing before calling the JSON wrong", async () => {
+  it("waits for a pause in typing before calling the YAML wrong", async () => {
     // review r2 (ux): the banner came at every keystroke (NN/g: not too early).
     renderWithQuery(<ModelSettingsPage client={fakeClient()} />);
-    await screen.findByRole("textbox", { name: "草稿（JSON）" });
+    await screen.findByRole("textbox", { name: "草稿（YAML）" });
 
     type('{"config": ');
 
@@ -352,13 +370,13 @@ describe("ModelSettingsPage", () => {
     // review r2 (ux): the editor's text lived in the Edit tab, so looking at
     // the keys and coming back threw it away without a word.
     renderWithQuery(<ModelSettingsPage client={fakeClient()} />);
-    await screen.findByRole("textbox", { name: "草稿（JSON）" });
+    await screen.findByRole("textbox", { name: "草稿（YAML）" });
     type(JSON.stringify(KB_2));
 
     fireEvent.click(screen.getByRole("tab", { name: "API 金鑰" }));
     fireEvent.click(screen.getByRole("tab", { name: "編輯（未儲存）" }));
 
-    expect(JSON.parse(editor().value)).toEqual(KB_2);
+    expect(draftNow()).toEqual(KB_2);
   });
 
   it("shows which keys wait for Apply, and applies them from the keys tab", async () => {
@@ -388,12 +406,18 @@ describe("ModelSettingsPage", () => {
     );
   });
 
-  it("labels the key path with visible text, not only a placeholder", async () => {
+  it("offers each place a key can go by name, with no path to type", async () => {
+    // M22 (user: "要手打設定路徑" was counter-intuitive): NN/g heuristic #6,
+    // recognition rather than recall — the places are listed, the person picks.
     renderWithQuery(<ModelSettingsPage client={fakeClient()} />);
     fireEvent.click(await screen.findByRole("tab", { name: "API 金鑰" }));
 
-    expect(screen.getByText("設定路徑")).toBeVisible();
-    expect(screen.getByLabelText("設定路徑")).toBe(screen.getByTestId("model-settings-key-path"));
+    const list = screen.getByTestId("model-settings-keys");
+    expect(list).toHaveTextContent("kb-default · API 金鑰");
+    expect(list).toHaveTextContent("kb-default · HF_TOKEN");
+    expect(list).toHaveTextContent("預設（llm） · API 金鑰");
+    expect(screen.queryByTestId("model-settings-key-path")).toBeNull();
+    expect(within(list).queryByRole("textbox")).toBeNull();
   });
 
   it("says a short key is set, in the reader's language", async () => {
@@ -410,7 +434,7 @@ describe("ModelSettingsPage", () => {
     const path = "config.llm.api_key";
     const client = fakeClient({ keys: { [path]: "…4321" }, pending_keys: [path] });
     renderWithQuery(<ModelSettingsPage client={client} />);
-    await screen.findByRole("textbox", { name: "草稿（JSON）" });
+    await screen.findByRole("textbox", { name: "草稿（YAML）" });
     type(JSON.stringify(KB_2));
 
     fireEvent.click(screen.getByRole("tab", { name: "API 金鑰" }));
@@ -418,7 +442,7 @@ describe("ModelSettingsPage", () => {
     expect(screen.getByRole("tab", { name: "編輯（未儲存）" })).toBeInTheDocument();
     expect(screen.getByTestId("model-settings-keys-apply-why")).toHaveTextContent("編輯分頁有沒儲存的改動");
     fireEvent.click(screen.getByTestId("model-settings-go-edit"));
-    expect(screen.getByRole("textbox", { name: "草稿（JSON）" })).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "草稿（YAML）" })).toBeInTheDocument();
   });
 
   it("from the keys tab, does not point at a list of problems it does not show", async () => {
@@ -435,14 +459,14 @@ describe("ModelSettingsPage", () => {
     expect(why).not.toHaveTextContent("上面");
   });
 
-  it("does not call the JSON wrong beside Apply before typing pauses", async () => {
+  it("does not call the YAML wrong beside Apply before typing pauses", async () => {
     renderWithQuery(<ModelSettingsPage client={fakeClient()} />);
-    await screen.findByRole("textbox", { name: "草稿（JSON）" });
+    await screen.findByRole("textbox", { name: "草稿（YAML）" });
 
     type('{"config": ');
 
-    expect(screen.getByTestId("model-settings-apply-why")).not.toHaveTextContent("JSON");
-    await waitFor(() => expect(screen.getByTestId("model-settings-apply-why")).toHaveTextContent("先修正 JSON"));
+    expect(screen.getByTestId("model-settings-apply-why")).not.toHaveTextContent("YAML");
+    await waitFor(() => expect(screen.getByTestId("model-settings-apply-why")).toHaveTextContent("先修正 YAML"));
   });
 
   it("does not roll back over unsaved edits", async () => {
@@ -450,7 +474,7 @@ describe("ModelSettingsPage", () => {
     const client = fakeClient({ published: KB_2, version: "v2v2v2v2v2" });
     client.history.mockResolvedValue([applied("v2v2v2v2v2", KB_2, 2), applied("v1v1v1v1v1", {}, 1)]);
     renderWithQuery(<ModelSettingsPage client={client} />);
-    await screen.findByRole("textbox", { name: "草稿（JSON）" });
+    await screen.findByRole("textbox", { name: "草稿（YAML）" });
     type('{"config": {"llm": {"base_url": "http://mine"}}}');
 
     fireEvent.click(screen.getByRole("tab", { name: "版本紀錄" }));
@@ -483,7 +507,7 @@ describe("ModelSettingsPage", () => {
     // the text being typed, without a word.
     const client = fakeClient();
     const { client: queryClient } = renderWithQuery(<ModelSettingsPage client={client} />);
-    await screen.findByRole("textbox", { name: "草稿（JSON）" });
+    await screen.findByRole("textbox", { name: "草稿（YAML）" });
     type('{"config": {"llm": {"base_url": "http://mine"}}}');
 
     const theirs = { config: { llm: { base_url: "http://theirs" } } };
@@ -496,10 +520,11 @@ describe("ModelSettingsPage", () => {
       pending_keys: [],
       applied_keys: [],
       key_revision: "rev-1",
+      key_slots: [],
     }));
     await act(async () => queryClient.invalidateQueries());
 
-    expect(JSON.parse(editor().value)).toEqual({ config: { llm: { base_url: "http://mine" } } });
+    expect(draftNow()).toEqual({ config: { llm: { base_url: "http://mine" } } });
   });
 
   it("says why a rollback is off without suggesting that saving would help", async () => {
@@ -508,7 +533,7 @@ describe("ModelSettingsPage", () => {
     const client = fakeClient({ published: KB_2, version: "v2v2v2v2v2" });
     client.history.mockResolvedValue([applied("v2v2v2v2v2", KB_2, 2), applied("v1v1v1v1v1", {}, 1)]);
     renderWithQuery(<ModelSettingsPage client={client} />);
-    await screen.findByRole("textbox", { name: "草稿（JSON）" });
+    await screen.findByRole("textbox", { name: "草稿（YAML）" });
     type('{"config": {"llm": {"base_url": "http://mine"}}}');
 
     fireEvent.click(screen.getByRole("tab", { name: "版本紀錄" }));
@@ -530,16 +555,16 @@ describe("ModelSettingsPage", () => {
     expect(screen.getByTestId("model-settings-keys-apply-why")).toHaveTextContent("沒辦法檢查");
   });
 
-  it("from the keys tab, says the Edit tab's text is not JSON instead of asking to save it", async () => {
+  it("from the keys tab, says the Edit tab's text is not YAML instead of asking to save it", async () => {
     const path = "config.llm.api_key";
     renderWithQuery(<ModelSettingsPage client={fakeClient({ keys: { [path]: "…4321" }, pending_keys: [path] })} />);
-    await screen.findByRole("textbox", { name: "草稿（JSON）" });
+    await screen.findByRole("textbox", { name: "草稿（YAML）" });
     type("{ not json");
     await screen.findByTestId("model-settings-parse");
 
     fireEvent.click(screen.getByRole("tab", { name: "API 金鑰" }));
 
-    expect(screen.getByTestId("model-settings-keys-apply-why")).toHaveTextContent("不是合法的 JSON");
+    expect(screen.getByTestId("model-settings-keys-apply-why")).toHaveTextContent("不是合法的 YAML");
   });
 
   it("confirms an Apply made from the keys tab on the keys tab", async () => {
@@ -558,6 +583,7 @@ describe("ModelSettingsPage", () => {
         pending_keys: [],
         applied_keys: [path],
         key_revision: "rev-2",
+        key_slots: [],
       }));
       return applied("abcdef1234567890", {});
     });
@@ -591,7 +617,7 @@ describe("ModelSettingsPage", () => {
     // final review (ux): the messages said "undo", but the editor's undo history
     // is gone once a tab switch unmounts it — NN/g heuristic #3, user control.
     renderWithQuery(<ModelSettingsPage client={fakeClient({ draft: KB_2 })} />);
-    await waitFor(() => expect(JSON.parse(editor().value)).toEqual(KB_2));
+    await waitFor(() => expect(draftNow()).toEqual(KB_2));
     type('{"config": {"llm": {"base_url": "http://mine"}}}');
     fireEvent.click(screen.getByRole("tab", { name: "版本紀錄" }));
     fireEvent.click(screen.getByRole("tab", { name: "編輯（未儲存）" }));
@@ -599,7 +625,7 @@ describe("ModelSettingsPage", () => {
     fireEvent.click(screen.getByTestId("model-settings-discard"));
     fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "放棄變更" }));
 
-    await waitFor(() => expect(JSON.parse(editor().value)).toEqual(KB_2));
+    await waitFor(() => expect(draftNow()).toEqual(KB_2));
     expect(screen.getByRole("tab", { name: "編輯" })).toBeInTheDocument();
   });
 
@@ -621,13 +647,28 @@ describe("ModelSettingsPage", () => {
     );
   });
 
-  it("keeps the path format in helper text, not only in the placeholder", async () => {
-    renderWithQuery(<ModelSettingsPage client={fakeClient()} />);
+  it("still lists a key whose place is gone, so it can be cleared", async () => {
+    const orphan = "config.agents.presets.gone.llm.api_key";
+    renderWithQuery(<ModelSettingsPage client={fakeClient({ keys: { [orphan]: "…1111" } })} />);
     fireEvent.click(await screen.findByRole("tab", { name: "API 金鑰" }));
 
-    const field = screen.getByLabelText("設定路徑");
-    expect(field).not.toHaveAttribute("placeholder");
-    expect(field).toHaveAccessibleDescription(/config\.agents\.presets\.openai-mini\.llm\.api_key/);
+    expect(screen.getByTestId("model-settings-keys")).toHaveTextContent(orphan);
+    expect(screen.getByTestId(`model-settings-key-clear-${orphan}`)).toBeInTheDocument();
+  });
+
+  it("adds a secret under a new env name: the one thing typed, the preset picked", async () => {
+    const client = fakeClient();
+    renderWithQuery(<ModelSettingsPage client={client} />);
+    fireEvent.click(await screen.findByRole("tab", { name: "API 金鑰" }));
+
+    fireEvent.change(screen.getByLabelText("Preset"), { target: { value: "kb-default" } });
+    fireEvent.change(screen.getByLabelText("變數名稱"), { target: { value: "GH_TOKEN" } });
+    fireEvent.change(screen.getByTestId("model-settings-env-value"), { target: { value: "ghp-0000" } });
+    fireEvent.submit(screen.getByTestId("model-settings-env-value").closest("form")!);
+
+    await waitFor(() =>
+      expect(client.setKey).toHaveBeenCalledWith("config.agents.presets.kb-default.env.GH_TOKEN", "ghp-0000"),
+    );
   });
 
   it("applies what its confirmation listed, even if the page re-reads meanwhile", async () => {
@@ -645,7 +686,7 @@ describe("ModelSettingsPage", () => {
       await queryClient.invalidateQueries();
     });
     // the page has re-read: the editor now shows the other superuser's draft
-    await waitFor(() => expect(JSON.parse(editor().value)).toEqual(other));
+    await waitFor(() => expect(draftNow()).toEqual(other));
     fireEvent.click(screen.getByRole("button", { name: "套用" }));
 
     await waitFor(() => expect(client.apply).toHaveBeenCalledWith(KB_2, [], "rev-1"));
@@ -655,13 +696,13 @@ describe("ModelSettingsPage", () => {
     // final review (ux): an unparsable text was read as an empty patch, so the
     // section claimed "everything is the deploy default".
     renderWithQuery(<ModelSettingsPage client={fakeClient({ draft: KB_2 })} />);
-    await waitFor(() => expect(JSON.parse(editor().value)).toEqual(KB_2));
+    await waitFor(() => expect(draftNow()).toEqual(KB_2));
 
     type('{"config": ');
 
     const section = screen.getByRole("region", { name: "這頁改過的值" });
     expect(section).not.toHaveTextContent("全部是部署預設");
-    expect(section).toHaveTextContent("JSON");
+    expect(section).toHaveTextContent("YAML");
   });
 
   it("names hiding a preset as removing it, not as going back to the default", async () => {
@@ -713,14 +754,16 @@ describe("ModelSettingsPage", () => {
     expect(await screen.findByRole("dialog")).not.toHaveTextContent("草稿？");
   });
 
-  it("puts the path format right under its own field", async () => {
+  it("opens one row's field at a time, and Cancel closes it", async () => {
     renderWithQuery(<ModelSettingsPage client={fakeClient()} />);
     fireEvent.click(await screen.findByRole("tab", { name: "API 金鑰" }));
 
-    const help = document.getElementById("model-settings-key-path-help");
-    const field = screen.getByTestId("model-settings-key-path-field");
-    expect(field).toContainElement(help);
-    expect(field).toContainElement(screen.getByLabelText("設定路徑"));
+    fireEvent.click(screen.getByTestId(`model-settings-key-edit-${SLOT}`));
+    expect(screen.getByTestId("model-settings-key-value").closest("li")).toBe(
+      screen.getByTestId(`model-settings-key-row-${SLOT}`),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "取消" }));
+    expect(screen.queryByTestId("model-settings-key-value")).toBeNull();
   });
 
   it("lists a refused Apply's reasons", async () => {
@@ -729,7 +772,7 @@ describe("ModelSettingsPage", () => {
       new HttpError(422, "apply failed", undefined, undefined, { problems: ["config.kb: read at boot"] }),
     );
     renderWithQuery(<ModelSettingsPage client={client} />);
-    await waitFor(() => expect(JSON.parse(editor().value)).toEqual(KB_2));
+    await waitFor(() => expect(draftNow()).toEqual(KB_2));
 
     fireEvent.click(screen.getByTestId("model-settings-apply"));
     fireEvent.click(await screen.findByRole("button", { name: "套用" }));
@@ -739,7 +782,7 @@ describe("ModelSettingsPage", () => {
 
   it("lists each changed value beside its default, and resets one", async () => {
     renderWithQuery(<ModelSettingsPage client={fakeClient({ draft: KB_2 })} />);
-    await waitFor(() => expect(JSON.parse(editor().value)).toEqual(KB_2));
+    await waitFor(() => expect(draftNow()).toEqual(KB_2));
 
     const changes = screen.getByTestId("model-settings-changes");
     expect(changes).toHaveTextContent("openai/kb-2");
@@ -747,24 +790,24 @@ describe("ModelSettingsPage", () => {
 
     fireEvent.click(screen.getByTestId("model-settings-reset-config.agents.presets.kb-default.model"));
 
-    expect(JSON.parse(editor().value)).toEqual({});
+    expect(draftNow()).toEqual({});
   });
 
   it("resets a value of a preset whose name holds a dot", async () => {
     // review r1: a joined path split back on "." read `qwen2.5` as `qwen2` -> `5`.
     const dotted = { config: { agents: { presets: { "qwen2.5": { model: "m" } } } } };
     renderWithQuery(<ModelSettingsPage client={fakeClient({ draft: dotted })} />);
-    await waitFor(() => expect(JSON.parse(editor().value)).toEqual(dotted));
+    await waitFor(() => expect(draftNow()).toEqual(dotted));
 
     fireEvent.click(screen.getByTestId("model-settings-reset-config.agents.presets.qwen2.5.model"));
 
-    expect(JSON.parse(editor().value)).toEqual({});
+    expect(draftNow()).toEqual({});
   });
 
   it("tests a preset's connection", async () => {
     const client = fakeClient();
     renderWithQuery(<ModelSettingsPage client={client} />);
-    await screen.findByRole("textbox", { name: "草稿（JSON）" });
+    await screen.findByRole("textbox", { name: "草稿（YAML）" });
 
     fireEvent.change(screen.getByLabelText("要測試的 preset"), { target: { value: "openai-mini" } });
     fireEvent.click(screen.getByTestId("model-settings-test"));
@@ -795,13 +838,10 @@ describe("ModelSettingsPage", () => {
     fireEvent.click(await screen.findByRole("tab", { name: "API 金鑰" }));
 
     expect(screen.getByTestId("model-settings-keys")).toHaveTextContent("…9876");
+    setOnRow(SLOT, "sk-new");
     const value = screen.getByTestId("model-settings-key-value") as HTMLInputElement;
     expect(value.type).toBe("text");
     expect(value).toHaveAttribute("data-masked");
-    fireEvent.change(screen.getByTestId("model-settings-key-path"), {
-      target: { value: "config.agents.presets.kb-default.llm.api_key" },
-    });
-    fireEvent.change(value, { target: { value: "sk-new" } });
     await act(async () => fireEvent.click(screen.getByTestId("model-settings-key-set")));
 
     expect(client.setKey).toHaveBeenCalledWith("config.agents.presets.kb-default.llm.api_key", "sk-new");
@@ -814,8 +854,7 @@ describe("ModelSettingsPage", () => {
     );
     renderWithQuery(<ModelSettingsPage client={client} />);
     fireEvent.click(await screen.findByRole("tab", { name: "API 金鑰" }));
-    fireEvent.change(screen.getByTestId("model-settings-key-path"), { target: { value: "config.x.model" } });
-    fireEvent.change(screen.getByTestId("model-settings-key-value"), { target: { value: "v" } });
+    setOnRow(SLOT, "v");
     fireEvent.click(screen.getByTestId("model-settings-key-set"));
 
     expect(await screen.findByTestId("model-settings-key-refused")).toHaveTextContent("not a secret");
@@ -836,7 +875,7 @@ describe("ModelSettingsPage", () => {
     const failed = await screen.findByTestId(`model-settings-key-clear-failed-${path}`);
     expect(failed).toHaveTextContent("clearing the key failed");
     expect(failed.closest("li")).toBe(screen.getByTestId(`model-settings-key-clear-${path}`).closest("li"));
-    expect(screen.getByTestId("model-settings-key-path")).not.toHaveAttribute("aria-invalid", "true");
+    expect(document.querySelector('[aria-invalid="true"]')).toBeNull();
     expect(screen.queryByTestId("model-settings-key-refused")).toBeNull();
   });
 
@@ -884,7 +923,7 @@ describe("ModelSettingsPage", () => {
     // draft was silently replaced.
     const client = fakeClient({ draft: KB_2 });
     const { client: queryClient } = renderWithQuery(<ModelSettingsPage client={client} />);
-    await screen.findByRole("textbox", { name: "草稿（JSON）" });
+    await screen.findByRole("textbox", { name: "草稿（YAML）" });
     type('{"config": {"llm": {"base_url": "http://mine"}}}');
     const theirs = { config: { llm: { base_url: "http://theirs" } } };
     const base = client.get.getMockImplementation();
@@ -914,45 +953,44 @@ describe("ModelSettingsPage", () => {
     expect((await screen.findByTestId("model-settings-test-result")).style.fontFamily).toBe("");
 
     fireEvent.click(screen.getByRole("tab", { name: "API 金鑰" }));
-    fireEvent.change(screen.getByTestId("model-settings-key-path"), { target: { value: "config.x" } });
-    fireEvent.change(screen.getByTestId("model-settings-key-value"), { target: { value: "v" } });
+    setOnRow(SLOT, "v");
     fireEvent.click(screen.getByTestId("model-settings-key-set"));
     expect((await screen.findByTestId("model-settings-key-refused")).style.fontFamily).toBe("");
   });
 
   it("asks before Discard edits throws the edits away", async () => {
-    // final review 9: Discard threw away hand-written JSON at once, no undo
+    // final review 9: Discard threw away hand-written text at once, no undo
     // (NN/g "Confirmation Dialogs"; M3's own example is "Discard draft?").
     renderWithQuery(<ModelSettingsPage client={fakeClient()} />);
-    await screen.findByRole("textbox", { name: "草稿（JSON）" });
+    await screen.findByRole("textbox", { name: "草稿（YAML）" });
     type('{"config": {"llm": {"base_url": "http://mine"}}}');
 
     fireEvent.click(screen.getByTestId("model-settings-discard"));
     fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "繼續編輯" }));
-    expect(JSON.parse(editor().value)).toEqual({ config: { llm: { base_url: "http://mine" } } });
+    expect(draftNow()).toEqual({ config: { llm: { base_url: "http://mine" } } });
 
     fireEvent.click(screen.getByTestId("model-settings-discard"));
     fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "放棄變更" }));
-    await waitFor(() => expect(JSON.parse(editor().value)).toEqual({}));
+    await waitFor(() => expect(draftNow()).toEqual({}));
   });
 
   it("gives unsaved edits back when the page is opened again", async () => {
     // final review 9: leaving the page (a link, a reload) lost the edits with
     // no question and no undo; the router here cannot block a navigation.
     const first = renderWithQuery(<ModelSettingsPage client={fakeClient()} />);
-    await screen.findByRole("textbox", { name: "草稿（JSON）" });
+    await screen.findByRole("textbox", { name: "草稿（YAML）" });
     type('{"config": {"llm": {"base_url": "http://mine"}}}');
     first.unmount();
 
     renderWithQuery(<ModelSettingsPage client={fakeClient()} />);
 
-    await waitFor(() => expect(JSON.parse(editor().value)).toEqual({ config: { llm: { base_url: "http://mine" } } }));
+    await waitFor(() => expect(draftNow()).toEqual({ config: { llm: { base_url: "http://mine" } } }));
     expect(screen.getByTestId("model-settings-restored")).toBeInTheDocument();
   });
 
   it("asks before the tab closes while there are unsaved edits", async () => {
     renderWithQuery(<ModelSettingsPage client={fakeClient()} />);
-    await screen.findByRole("textbox", { name: "草稿（JSON）" });
+    await screen.findByRole("textbox", { name: "草稿（YAML）" });
     type('{"config": {"llm": {"base_url": "http://mine"}}}');
 
     const event = new Event("beforeunload", { cancelable: true });
@@ -1004,7 +1042,7 @@ describe("ModelSettingsPage", () => {
 
   it("announces a saved draft", async () => {
     renderWithQuery(<ModelSettingsPage client={fakeClient()} />);
-    await screen.findByRole("textbox", { name: "草稿（JSON）" });
+    await screen.findByRole("textbox", { name: "草稿（YAML）" });
     type('{"config": {"llm": {"base_url": "http://mine"}}}');
 
     fireEvent.click(screen.getByTestId("model-settings-save"));
@@ -1017,6 +1055,8 @@ describe("ModelSettingsPage", () => {
     renderWithQuery(<ModelSettingsPage client={fakeClient()} />);
     fireEvent.click(await screen.findByRole("tab", { name: "API 金鑰" }));
 
+    expect(screen.getByTestId(`model-settings-key-edit-${SLOT}`)).toHaveAttribute("data-variant", "secondary");
+    setOnRow(SLOT, "v");
     expect(screen.getByTestId("model-settings-key-set")).toHaveAttribute("data-variant", "secondary");
   });
 
@@ -1025,7 +1065,7 @@ describe("ModelSettingsPage", () => {
     // the draft before — the next Save got a false "someone else saved".
     const client = fakeClient();
     renderWithQuery(<ModelSettingsPage client={client} />);
-    await screen.findByRole("textbox", { name: "草稿（JSON）" });
+    await screen.findByRole("textbox", { name: "草稿（YAML）" });
     const t1 = { config: { llm: { base_url: "http://one" } } };
     const t2 = { config: { llm: { base_url: "http://two" } } };
     let release: () => void = () => {};
@@ -1057,8 +1097,7 @@ describe("ModelSettingsPage", () => {
     await screen.findByTestId("model-settings-notice");
 
     fireEvent.click(screen.getByRole("tab", { name: "API 金鑰" }));
-    fireEvent.change(screen.getByTestId("model-settings-key-path"), { target: { value: "config.x" } });
-    fireEvent.change(screen.getByTestId("model-settings-key-value"), { target: { value: "v" } });
+    setOnRow(SLOT, "v");
     fireEvent.click(screen.getByTestId("model-settings-key-set"));
 
     await screen.findByTestId("model-settings-key-refused");
@@ -1069,11 +1108,9 @@ describe("ModelSettingsPage", () => {
     const client = fakeClient();
     renderWithQuery(<ModelSettingsPage client={client} />);
     fireEvent.click(await screen.findByRole("tab", { name: "API 金鑰" }));
-    fireEvent.change(screen.getByTestId("model-settings-key-path"), { target: { value: "config.llm.api_key" } });
-    const value = screen.getByTestId("model-settings-key-value");
-    fireEvent.change(value, { target: { value: "sk-0000-0000-0000-0001" } });
+    setOnRow("config.llm.api_key", "sk-0000-0000-0000-0001");
 
-    fireEvent.submit(value.closest("form")!);
+    fireEvent.submit(screen.getByTestId("model-settings-key-value").closest("form")!);
 
     await waitFor(() => expect(client.setKey).toHaveBeenCalledWith("config.llm.api_key", "sk-0000-0000-0000-0001"));
   });
@@ -1137,7 +1174,7 @@ describe("ModelSettingsPage", () => {
     const same = fakeClient({ version: "v1v1v1v1v1v1v1v1", published: {} });
     same.history.mockResolvedValue([applied("v1v1v1v1v1v1v1v1", {}, 1)]);
     const first = renderWithQuery(<ModelSettingsPage client={same} />);
-    await screen.findByRole("textbox", { name: "草稿（JSON）" });
+    await screen.findByRole("textbox", { name: "草稿（YAML）" });
     type('{"config": {"llm": {"base_url": "http://mine"}}}');
     fireEvent.click(screen.getByRole("tab", { name: "版本紀錄" }));
     await screen.findByTestId("model-settings-version-changes-0");
@@ -1148,14 +1185,24 @@ describe("ModelSettingsPage", () => {
     const client = fakeClient({ version: "v2v2v2v2v2v2v2v2", published: KB_2 });
     client.history.mockResolvedValue([applied("v2v2v2v2v2v2v2v2", KB_2, 2), applied("v1v1v1v1v1v1v1v1", {}, 1)]);
     renderWithQuery(<ModelSettingsPage client={client} />);
-    await screen.findByRole("textbox", { name: "草稿（JSON）" });
+    await screen.findByRole("textbox", { name: "草稿（YAML）" });
     type('{"config": {"llm": {"base_url": "http://mine"}}}');
     fireEvent.click(screen.getByRole("tab", { name: "版本紀錄" }));
     await screen.findByTestId("model-settings-rollback-why");
 
     fireEvent.click(screen.getByTestId("model-settings-go-edit"));
 
-    expect(await screen.findByRole("textbox", { name: "草稿（JSON）" })).toBeInTheDocument();
+    expect(await screen.findByRole("textbox", { name: "草稿（YAML）" })).toBeInTheDocument();
+  });
+
+  it("shows the saved draft as YAML, as config.yaml is written", async () => {
+    // M9 (user): the editor is text, YAML/JSON — built as JSON only, which
+    // narrowed it; config.yaml is YAML and so is the page now.
+    renderWithQuery(<ModelSettingsPage client={fakeClient({ draft: KB_2 })} />);
+
+    await waitFor(() => expect(editor().value).toContain("kb-default:"));
+    expect(editor().value).not.toContain("{");
+    expect(draftNow()).toEqual(KB_2);
   });
 
   it("draws a refused key as an error at its field", async () => {
@@ -1166,15 +1213,15 @@ describe("ModelSettingsPage", () => {
     );
     renderWithQuery(<ModelSettingsPage client={client} />);
     fireEvent.click(await screen.findByRole("tab", { name: "API 金鑰" }));
-    fireEvent.change(screen.getByTestId("model-settings-key-path"), { target: { value: "config.x.model" } });
-    fireEvent.change(screen.getByTestId("model-settings-key-value"), { target: { value: "v" } });
+    setOnRow(SLOT, "v");
     fireEvent.click(screen.getByTestId("model-settings-key-set"));
 
     const refused = await screen.findByTestId("model-settings-key-refused");
     expect(refused).toHaveClass("ev-banner--err");
-    const path = screen.getByTestId("model-settings-key-path");
-    expect(path).toHaveAttribute("aria-invalid", "true");
-    expect(path.getAttribute("aria-describedby")).toContain(refused.id);
+    const value = screen.getByTestId("model-settings-key-value");
+    expect(value).toHaveAttribute("aria-invalid", "true");
+    expect(value.getAttribute("aria-describedby")).toContain(refused.id);
+    expect(refused.closest("li")).toBe(screen.getByTestId(`model-settings-key-row-${SLOT}`));
   });
 
   it("sends the key revision its confirmation listed", async () => {

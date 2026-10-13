@@ -34,7 +34,13 @@ export type ModelSettingsPage = {
   applied_keys: string[];
   /** Which revision of every staged key this read saw — Apply sends it back. */
   key_revision: string;
+  /** Every place a key can go in the saved draft — picked, never typed (M22). */
+  key_slots: KeySlot[];
 };
+
+/** One place a key can go: a preset or role (`owner`, "" for the default
+ * `llm`), its API key or one of its `env` variables (`name`). */
+export type KeySlot = { path: string; owner: string; kind: "api_key" | "env" | string; name: string };
 
 export type Applied = {
   version: string;

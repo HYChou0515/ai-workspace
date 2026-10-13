@@ -26,7 +26,14 @@ from ..apps.manifest import read_app_manifest_raw
 from ..apps.profiles import list_profiles, read_profile_raw
 from ..config.dump import is_secret_at
 from ..config.schema import Settings
-from .effective import LIVE_CONFIG, SET, UNSET, key_destination_problems, key_segments
+from .effective import (
+    LIVE_CONFIG,
+    ROLES,
+    SET,
+    UNSET,
+    key_destination_problems,
+    key_segments,
+)
 
 
 def config_tree(settings: Settings) -> dict[str, Any]:
@@ -111,6 +118,37 @@ def _strip_optional(kind: Any) -> Any:
     args = [a for a in typing.get_args(kind) if a is not type(None)]
     is_union = typing.get_origin(kind) in (typing.Union, types.UnionType)
     return args[0] if is_union and len(args) == 1 else kind
+
+
+class KeySlot(Struct, frozen=True):
+    """One place a key can go: `owner` is a preset or role name ("" for the
+    default `llm`), `kind` is "api_key" or "env" (then `name` is the variable)."""
+
+    path: str
+    owner: str
+    kind: str
+    name: str = ""
+
+
+def key_slots(settings: Settings) -> list[KeySlot]:
+    """Every place a key can sit in `settings` — so the page offers them to
+    pick from, and nobody types a path (M22; NN/g heuristic #6, recognition
+    rather than recall). Each is one the key route accepts."""
+    slots = [KeySlot(path="config.llm.api_key", owner="", kind="api_key")]
+    for name, preset in sorted(settings.agents.presets.items()):
+        base = f"config.agents.presets.{name}"
+        slots.append(KeySlot(path=f"{base}.llm.api_key", owner=name, kind="api_key"))
+        for var in sorted(preset.env or {}):
+            slots.append(KeySlot(path=f"{base}.env.{var}", owner=name, kind="env", name=var))
+    for role in ROLES:
+        # The role's own reference, not the fallback `ROLES` resolves to: a key
+        # lands only where the reference is written (`key_lands`).
+        node: Any = settings
+        for part in role.split("."):
+            node = getattr(node, part, None)
+        if node is not None:
+            slots.append(KeySlot(path=f"config.{role}.llm.api_key", owner=role, kind="api_key"))
+    return [slot for slot in slots if key_path_problem(slot.path) is None]
 
 
 def key_lands(settings: Settings, path: str, value: str) -> bool:

@@ -37,6 +37,7 @@ from ..model_settings.page import (
     defaults_document,
     key_lands,
     key_path_problem,
+    key_slots,
     try_connection,
 )
 from ..model_settings.store import Applied, KeysMoved, SettingsStore
@@ -75,6 +76,15 @@ class _AppliedOut(BaseModel):
     keys_changed: list[str] = []
 
 
+class _KeySlot(BaseModel):
+    """One place a key can go (`page.KeySlot`)."""
+
+    path: str
+    owner: str
+    kind: str
+    name: str = ""
+
+
 class _PageOut(BaseModel):
     """Everything the page renders, in one answer so its parts agree."""
 
@@ -93,6 +103,8 @@ class _PageOut(BaseModel):
     #: Which revision of every staged key the page read — Apply sends it back,
     #: so a key set or cleared since is a 409, not published unseen.
     key_revision: str = ""
+    #: Every place a key can go in the saved draft — picked, never typed (M22).
+    key_slots: list[_KeySlot] = []
 
 
 class _Apply(BaseModel):
@@ -170,6 +182,20 @@ def register_model_settings_routes(
     async def page() -> _PageOut:
         _require_superuser()
 
+        def slots() -> list[_KeySlot]:
+            # From the saved draft, so a preset it adds is a place too; a draft
+            # that does not load offers the deploy's places.
+            try:
+                built = effective_settings(
+                    store.draft(), config_path=config_path, env=env, keys=store.key_values()
+                )
+            except DOES_NOT_LOAD:
+                built = live.boot
+            return [
+                _KeySlot(path=k.path, owner=k.owner, kind=k.kind, name=k.name)
+                for k in key_slots(built)
+            ]
+
         def read() -> _PageOut:
             return _PageOut(
                 defaults=defaults_document(live.boot),
@@ -180,6 +206,7 @@ def register_model_settings_routes(
                 pending_keys=store.pending_keys(),
                 applied_keys=sorted(store.applied_key_values()),
                 key_revision=store.key_revision(),
+                key_slots=slots(),
             )
 
         return await asyncio.to_thread(read)
