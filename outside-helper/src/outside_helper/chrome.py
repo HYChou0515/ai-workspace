@@ -54,6 +54,7 @@ class Chrome:
         *,
         channel: str | None = "chrome",
         headless: bool = False,
+        args: list[str] | None = None,
     ) -> None:
         from playwright.sync_api import sync_playwright
 
@@ -62,7 +63,7 @@ class Chrome:
         self._pw = sync_playwright().start()
         try:
             self._ctx = self._pw.chromium.launch_persistent_context(
-                str(profile), channel=channel, headless=headless, no_viewport=True
+                str(profile), channel=channel, headless=headless, no_viewport=True, args=args
             )
         except BaseException:
             self._pw.stop()

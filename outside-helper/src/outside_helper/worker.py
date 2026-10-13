@@ -51,6 +51,9 @@ class Worker:
         #: backend's reason for a refusal.
         self.detail = ""
         self.manifest: Any = None
+        #: Told (status, detail) the moment an errand starts or ends — the
+        #: window shows 「正在查:…」 while it runs, not once the poll is over.
+        self.on_change: Callable[[str, str], None] | None = None
 
     def tick(self) -> None:
         if self.paused:
@@ -73,6 +76,10 @@ class Worker:
         except BackendError as exc:
             self.status, self.detail = "error", str(exc)
 
+    def _changed(self) -> None:
+        if self.on_change is not None:
+            self.on_change(self.status, self.detail)
+
     def _run(self, job) -> None:  # noqa: ANN001 — backend.Job
         errand = self._errands.get(job.kind)
         if errand is None:
@@ -81,6 +88,7 @@ class Worker:
             )
             return
         self.detail = job.args
+        self._changed()
         try:
             page = self._browser.run(
                 errand, job.args, lambda text: self._backend.note(job.id, text)
@@ -93,6 +101,7 @@ class Worker:
             return
         finally:
             self.detail = ""
+            self._changed()
         self._backend.result(
             job.id, title=page.title, url=page.url, markdown=page.markdown, date=self._date()
         )

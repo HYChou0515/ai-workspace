@@ -452,6 +452,39 @@ def test_the_helper_is_wired_to_report_what_it_runs_on(tmp_path):
     assert (seen.chrome, seen.python) == ("141.0.7390.55", platform.python_version())
 
 
+# D13: while it fetches, the window says what — 「正在查:…」 — DURING the
+# errand, not after it (the window used to read the status only once a poll
+# was over, when the detail was already cleared; found running the window).
+def test_the_window_says_what_is_being_looked_up_while_it_is():
+    from outside_helper.backend import Backend
+    from outside_helper.errands import FetchedPage
+    from outside_helper.worker import Worker
+
+    from tests.api.test_outside_answers import _asked
+    from tests.outside_helper.test_worker import _backend, _Browser, _hand
+
+    client, _spec, iid = _asked()
+    seen_mid_errand: list[tuple[str, str]] = []
+    ctl: Controller
+
+    def search(browser, query):
+        seen_mid_errand.append(ctl.snapshot())
+        return FetchedPage(title="t", url="https://x.example/", markdown="ok")
+
+    backend: Backend = _backend(client)
+    ctl = Controller(
+        lambda: _Chrome(), lambda _c: Worker(backend, _Browser([]), errands={"search": search})
+    )
+    ctl.open()
+    ctl.step()  # checks in
+    _hand(client, iid, query="pandas 2.0 新功能")
+
+    ctl.step()
+
+    assert seen_mid_errand == [("connected", "pandas 2.0 新功能")]
+    assert describe(*seen_mid_errand[0]) == "已連線 — 正在查:pandas 2.0 新功能"
+
+
 # What the window says about the next version (§3.7.4–§3.7.6).
 def test_the_update_line_says_where_the_next_version_stands():
     from outside_helper.app import describe_update

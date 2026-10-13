@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 import logging.handlers
+import os
 import queue
 import sys
 import threading
@@ -119,6 +120,8 @@ class Controller:
             self._show("no_chrome", str(exc).splitlines()[0] if str(exc) else type(exc).__name__)
             return
         self._worker = self._make_worker(self._chrome)
+        if hasattr(self._worker, "on_change"):
+            self._worker.on_change = self._show
         if self._make_updater is not None and self._updater is None:
             # one for the helper's life: a second would prepare the same
             # version again over the first one's files
@@ -371,10 +374,13 @@ def main() -> int:  # pragma: no cover — the window needs a display; verified 
     settings = read_settings(home)
     app_url = settings.get("app_url")
     if not isinstance(app_url, str) or not app_url:
+        # only the question on screen — not an empty window behind it
+        window.withdraw()
         app_url = _ask_app_url(window)
         if app_url is None:
             return 0
         write_settings(home, {**settings, "app_url": app_url})
+        window.deiconify()
 
     import shutil
     import subprocess
@@ -383,7 +389,15 @@ def main() -> int:  # pragma: no cover — the window needs a display; verified 
 
     from . import setup_core
 
-    ctl = make_controller(home, app_url, lambda: Chrome(profile_dir(home), app_url))
+    # Developer knobs, unset on the person's PC: a Linux box has Chromium, not
+    # Chrome; a recording places the window.
+    channel = os.environ.get("OUTSIDE_HELPER_CHROME_CHANNEL") or "chrome"
+    chrome_args = os.environ.get("OUTSIDE_HELPER_CHROME_ARGS", "").split()
+    ctl = make_controller(
+        home,
+        app_url,
+        lambda: Chrome(profile_dir(home), app_url, channel=channel, args=chrome_args),
+    )
     thread = threading.Thread(target=ctl.run, name="outside-helper", daemon=True)
     thread.start()
 
