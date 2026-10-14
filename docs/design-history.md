@@ -177,6 +177,7 @@
 | [plan-wui.md](plan-wui.md) | WUI：資料夾當可互動的網頁 |
 | [plan-wui-deploy.md](plan-wui-deploy.md) | WUI「Deploy」：一個直接落在頁面上的 URL |
 | [plan-wui-overview.md](plan-wui-overview.md) | WUI 總覽：列出所有已部署 WUI 的一頁 |
+| [plan-wui-call-agent.md](plan-wui-call-agent.md) | WUI 頁面直接叫 subagent：`callAgent(名稱, 輸入)`、只叫頁面宣告過的、權限同聊天、文字進出、每次留一筆 run 紀錄、可並行 |
 | [plan-wui-overview-icon-favourites.md](plan-wui-overview-icon-favourites.md) | WUI 總覽：頁面自己的 icon 與瀏覽者的最愛 |
 | [plan-wui-multipage.md](plan-wui-multipage.md) | WUI 多頁（MPA）：一個資料夾多份 HTML，例如 mkdocs 站——頁面改從自己的網址載入（綁人、item、資料夾的通行證），換頁、錨點、讀自己資料夾的檔都是瀏覽器原生；外部連結經平台確認框才開；部署不放行時退回單頁組裝 |
 
