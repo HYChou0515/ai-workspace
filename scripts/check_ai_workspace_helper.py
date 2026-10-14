@@ -360,15 +360,12 @@ def _tour(base: str, iid: str, out: Path, check: _Check) -> Path | None:
 
 
 def _update_check(repo: Path, wheels: Path, check: _Check) -> None:
-    """§3.7.4–§3.7.5 for real on this machine: install 0.1.0 from a wheelhouse,
-    prepare 0.2.0 beside it (a real venv, real pip, the real self-test), the
-    launcher takes 0.2.0 on the next start, 0.2.0 confirms itself. Linux wheels
+    """§3.7.5 (D21) for real on this machine: install 0.1.0 from a wheelhouse,
+    then 0.2.0 over it as install.pyw does (a real venv, real pip, the real
+    self-test), and the launcher takes 0.2.0 on the next start. Linux wheels
     (`wheels`: playwright and its dependencies for this machine) stand in for
     the Windows ones; only the Windows shortcuts are skipped."""
-    import hashlib
     import importlib.util
-    import io
-    import zipfile
 
     sys.path.insert(0, str(repo / "ai-workspace-helper" / "src"))
     from ai_workspace_helper import setup_core  # noqa: PLC0415
@@ -403,32 +400,18 @@ def _update_check(repo: Path, wheels: Path, check: _Check) -> None:
             return
         setup_core.run_quietly(argv)
 
-    print("\n=== update: install 0.1.0, publish 0.2.0, next start takes it", flush=True)
+    print("\n=== update: install 0.1.0, then 0.2.0 over it (D21: install.pyw again)", flush=True)
     installed = setup_core.install(zip_of("0.1.0"), home, base_python=sys.executable, run=run)
     check(
         "0.1.0 installs from the wheelhouse alone (venv, pip, self-test)",
         installed.version == "0.1.0",
     )
-
-    folder = zip_of("0.2.0")
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w") as z:
-        for path in folder.rglob("*"):
-            if path.is_file():
-                z.write(path, str(path.relative_to(folder)))
-    data = buf.getvalue()
-    manifest = {
-        "version": "0.2.0",
-        "min_version": "0.0.0",
-        "file": "ai-workspace-helper-0.2.0.zip",
-        "sha256": hashlib.sha256(data).hexdigest(),
-    }
-    outcome = setup_core.prepare_update(home, manifest, lambda _f: data, run=run)
+    installed = setup_core.install(zip_of("0.2.0"), home, base_python=sys.executable, run=run)
     state = setup_core.read_state(home)
     check(
-        "0.2.0 is prepared beside 0.1.0, which stays current",
-        (outcome, state["current"], state["pending"]) == ("ready", "0.1.0", "0.2.0"),
-        f"{outcome} current={state['current']} pending={state['pending']}",
+        "0.2.0 installs beside it: current, 0.1.0 kept as previous",
+        (installed.version, state["current"], state["previous"]) == ("0.2.0", "0.2.0", "0.1.0"),
+        json.dumps({k: state.get(k) for k in ("current", "previous")}),
     )
 
     started: list[list[str]] = []
@@ -443,13 +426,6 @@ def _update_check(repo: Path, wheels: Path, check: _Check) -> None:
         "…and that version runs",
         probe.returncode == 0 and "ai-workspace-helper 0.2.0" in probe.stdout,
         probe.stdout.strip() or probe.stderr.strip()[-200:],
-    )
-    check("0.2.0 confirms itself once up", setup_core.confirm(home, "0.2.0"))
-    state = setup_core.read_state(home)
-    check(
-        "0.2.0 is current, 0.1.0 kept as previous",
-        (state["current"], state["previous"], state["pending"]) == ("0.2.0", "0.1.0", None),
-        json.dumps({k: state.get(k) for k in ("current", "previous", "pending")}),
     )
 
 

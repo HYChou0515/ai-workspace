@@ -4,7 +4,7 @@ Both shortcuts point here, run by the Python the person confirmed at install
 (its absolute pythonw.exe path — D16). Standard library only: it lives in
 %LOCALAPPDATA%\\AIWorkspaceHelper\\ beside setup_core.py and state.json, outside
 every version folder, so an update never has to replace a running file. What
-it decides — which version, the rollback, one helper at a time — is
+it decides — which version, one helper at a time — is
 `setup_core.launch`, tested; this file only shows a failure.
 """
 
@@ -19,8 +19,9 @@ import setup_core  # noqa: E402  # ty: ignore[unresolved-import] — beside this
 
 def main() -> int:
     try:
-        # 「立即更新」 passes --wait: the old helper is still ending
-        setup_core.launch(HERE, wait_s=20.0 if "--wait" in sys.argv[1:] else 0.0)
+        # a 0.1.0's 「立即更新」 passes --wait: that helper is still ending
+        wait_s = 20.0 if "--wait" in sys.argv[1:] else 0.0
+        setup_core.launch(setup_core.launcher_home(HERE), wait_s=wait_s)
     except (setup_core.SetupFailed, OSError) as exc:
         import tkinter
         from tkinter import messagebox
