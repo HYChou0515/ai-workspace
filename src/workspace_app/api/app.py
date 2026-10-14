@@ -36,6 +36,7 @@ from ..context_budget import DEFAULT_MAX_TOKENS_WINDOW_RATIO
 if TYPE_CHECKING:
     # Annotation-only: `factories` composes THIS module, so a runtime import
     # here would be circular. `SubagentModel` values arrive through parameters.
+    from ..agent.tool_usage import ToolUsageRecorder
     from ..factories import SubagentModel
 from ..apps.skills import readonly_skill_path
 from ..files import ReadOnlyPath, WorkspaceFiles, WorkspaceFull, rel_path
@@ -520,6 +521,11 @@ def create_app(
     # plan-skill-hub-history U4: how often this pod writes its skill hub counts
     # (also written when it stops).
     skill_hub_flush_interval: timedelta = timedelta(hours=2),
+    # plan-tool-usage-stats: where this process's runner counts tool calls (the
+    # SAME recorder `__main__` hands the runner), and how often they are written
+    # (also when it stops). None ⇒ nothing counted here is written.
+    tool_usage: ToolUsageRecorder | None = None,
+    tool_usage_flush_interval: timedelta = timedelta(minutes=5),
     # #345: soft cap (bytes) on ONE item's shared scratch dir; the idle reaper's
     # du-sweep recycles any item over it so a runaway workspace can't fill the
     # scratch volume the whole fleet shares. 0 ⇒ disabled (the lenient default).
@@ -1439,6 +1445,7 @@ def create_app(
         uv_cache_max_bytes=uv_cache_max_bytes,
         mirror_interval=mirror_interval,
         skill_hub_flush_interval=skill_hub_flush_interval,
+        tool_usage_flush_interval=tool_usage_flush_interval,
         code_sync_check_interval=code_sync_check_interval,
         code_daily_sync=code_daily_sync,
         wiki_reflect_daily=wiki_reflect_daily,
@@ -2024,6 +2031,15 @@ def create_app(
     # the hub routes share — exposed so a test can publish through the app's own.
     app.state.skill_hub = skill_hub
     app.state.skill_hub_usage = skill_hub.usage  # flushed by the lifespan (U4)
+    # plan-tool-usage-stats §3.5: this pod's tool-call counts, flushed by the
+    # lifespan. The model is registered either way — the report reads it.
+    from ..apps.skill_hub_usage import pod_name
+    from .tool_usage_store import ToolUsageStore, register_tool_usage
+
+    register_tool_usage(spec)
+    app.state.tool_usage_store = (
+        ToolUsageStore(spec, tool_usage, pod=pod_name()) if tool_usage is not None else None
+    )
     # KB chat runs through a wiki-aware runner that routes each turn across
     # chunk-RAG / wiki / both (#50 P5). It's a pure pass-through to `runner`
     # unless the query opts into the wiki AND a collection has use_wiki, so the

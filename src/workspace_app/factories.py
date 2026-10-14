@@ -29,6 +29,7 @@ from specstar import BackendBinding, BackendConfig, ConnectionProfile, SpecStar
 from workspace_app.resources import make_spec
 
 from .agent.config_catalog import AgentConfigCatalog
+from .agent.tool_usage import ToolUsageRecorder
 from .api.env_provider import IEnvProvider
 from .api.litellm_runner import LitellmAgentRunner
 from .api.notification_delivery import INotificationChannel
@@ -437,7 +438,7 @@ def get_sandbox_filestore(
             raise ValueError(f"unknown sandbox.durable.kind: {other!r}")
 
 
-def get_runner(settings: Settings) -> AgentRunner:
+def get_runner(settings: Settings, *, tool_usage: ToolUsageRecorder | None = None) -> AgentRunner:
     """Production agent runner. Reads top-level `runner` / `llm`
     settings for the runner-wide defaults; per-preset endpoint overrides
     (set via `agents.presets.<name>.llm.*`) ride on each AgentConfig and
@@ -475,6 +476,9 @@ def get_runner(settings: Settings) -> AgentRunner:
             settings.failover.idle_timeout_s,
         ),
         token_service=PassthroughTokenService(),
+        # plan-tool-usage-stats: where every turn this runner drives counts its
+        # tool calls — the recorder the process's flush writes.
+        tool_usage=tool_usage,
     )
 
 

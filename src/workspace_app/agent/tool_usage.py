@@ -137,6 +137,30 @@ class ToolUsageRecorder:
             rows, self._rows = list(self._rows.values()), {}
         return rows
 
+    def merge_back(self, rows: list[ToolUsageRow]) -> None:
+        """Put rows a flush could not write back, for the next flush."""
+        with self._lock:
+            for got in rows:
+                row = self._rows.get((got.day, got.tool, got.source))
+                if row is None:
+                    self._rows[(got.day, got.tool, got.source)] = got
+                    continue
+                add_row(row, got)
+
+
+def add_row(into: ToolUsageRow | Any, more: ToolUsageRow) -> None:
+    """Add `more`'s sums to `into` — a pending row or a stored one."""
+    into.calls += more.calls
+    into.fails += more.fails
+    into.total_ms += more.total_ms
+    for name in ("by_user", "by_surface_app", "by_item"):
+        mine: dict[str, list[int]] = getattr(into, name)
+        for key, (calls, fails, ms) in getattr(more, name).items():
+            cell = mine.setdefault(key, [0, 0, 0])
+            cell[0] += calls
+            cell[1] += fails
+            cell[2] += ms
+
 
 def who(actx: AgentToolContext) -> str:
     """The person a call is attributed to (§3.4): the one the turn's builder

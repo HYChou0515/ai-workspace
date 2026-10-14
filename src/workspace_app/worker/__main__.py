@@ -20,6 +20,7 @@ from ..coordinators import CoordinatorBundle, build_coordinators, build_ingestor
 from . import _JOBTYPE_ATTR, API_REGISTRY_JOBTYPES, consume_until_stopped, select_coordinator
 
 if TYPE_CHECKING:
+    from ..agent.tool_usage import ToolUsageRecorder
     from ..kb.embedder import Embedder
     from ..kb.llm import ILlm
     from ..kb.retriever import Retriever
@@ -28,7 +29,11 @@ logger = logging.getLogger(__name__)
 
 
 def build_bundle(
-    settings: Settings, spec: object, *, config_dir: Path | None = None
+    settings: Settings,
+    spec: object,
+    *,
+    config_dir: Path | None = None,
+    tool_usage: ToolUsageRecorder | None = None,
 ) -> CoordinatorBundle:
     """Build the coordinator bundle from settings — the worker's composition
     root, mirroring the slice of ``__main__`` that feeds ``create_app`` (minus
@@ -43,7 +48,8 @@ def build_bundle(
     embedder = f.get_embedder(settings)
     kb_llm = f.get_kb_llm(settings)
     wiki_model, wiki_base, wiki_key = f.get_wiki_endpoint(settings)
-    runner = f.get_runner(settings)
+    # plan-tool-usage-stats: this worker's agents count into the recorder `main` flushes.
+    runner = f.get_runner(settings, tool_usage=tool_usage)
     catalog = f.get_agent_config_catalog(settings, config_dir=config_dir)
     card_drafter_llm = f.get_card_drafter_llm(settings)
     ingestor = build_ingestor(
@@ -176,7 +182,13 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return p.parse_args(argv)
 
 
-def build_coordinator(settings: Settings, jobtype: str, *, config_dir: Path | None) -> object:
+def build_coordinator(
+    settings: Settings,
+    jobtype: str,
+    *,
+    config_dir: Path | None,
+    tool_usage: ToolUsageRecorder | None = None,
+) -> object:
     """The coordinator this worker consumes, from the composition its JobType
     needs. Most JobTypes come from the FastAPI-free ``build_bundle``; those in
     ``API_REGISTRY_JOBTYPES`` come from the API's own composition —
@@ -192,7 +204,9 @@ def build_coordinator(settings: Settings, jobtype: str, *, config_dir: Path | No
 
     get_user_id = lambda: settings.server.default_user  # noqa: E731
     spec = get_spec(settings, get_user_id=get_user_id)
-    return select_coordinator(build_bundle(settings, spec, config_dir=config_dir), jobtype)
+    return select_coordinator(
+        build_bundle(settings, spec, config_dir=config_dir, tool_usage=tool_usage), jobtype
+    )
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -205,7 +219,25 @@ def main(argv: list[str] | None = None) -> None:
     # Faithful LLM call log (default-on; WORKSPACE_LLM_LOG=0 to silence) so a
     # wiki/card-gen worker's LLM calls are as observable as the API's.
     install_llm_logging(settings)
-    coordinator = build_coordinator(settings, args.jobtype, config_dir=config_dir)
+    from ..agent.tool_usage import ToolUsageRecorder
+    from ..api.tool_usage_store import (
+        FLUSH_INTERVAL_S,
+        ToolUsageStore,
+        register_tool_usage,
+        run_flusher,
+    )
+    from ..apps.skill_hub_usage import pod_name
+    from ..factories import get_spec
+
+    # plan-tool-usage-stats §3.5: what this worker's agents (wiki, card drafting)
+    # call is counted like the API's, and written on the same interval + at stop.
+    tool_usage = ToolUsageRecorder()
+    coordinator = build_coordinator(
+        settings, args.jobtype, config_dir=config_dir, tool_usage=tool_usage
+    )
+    usage_spec = get_spec(settings, get_user_id=lambda: settings.server.default_user)
+    register_tool_usage(usage_spec)
+    usage_store = ToolUsageStore(usage_spec, tool_usage, pod=pod_name())
     logger.info(
         "worker: booted jobtype=%s coordinator=%s", args.jobtype, type(coordinator).__name__
     )
@@ -215,7 +247,12 @@ def main(argv: list[str] | None = None) -> None:
         signal.signal(sig, lambda *_: stop.set())
     logger.info("worker: consuming jobtype=%s, blocking until SIGTERM/SIGINT", args.jobtype)
     print(f"worker: consuming {args.jobtype!r} — block until SIGTERM/SIGINT", flush=True)
+    flusher = threading.Thread(
+        target=run_flusher, args=(usage_store, stop, FLUSH_INTERVAL_S), daemon=True
+    )
+    flusher.start()
     consume_until_stopped(coordinator, stop)
+    flusher.join(timeout=30)  # its last flush: what the drained jobs counted
     logger.info("worker: jobtype=%s drained and stopped", args.jobtype)
     print(f"worker: {args.jobtype!r} drained and stopped", flush=True)
 

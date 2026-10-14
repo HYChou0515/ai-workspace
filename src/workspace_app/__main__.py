@@ -234,6 +234,9 @@ def build_app(settings: Settings, *, config_dir: Path | None) -> FastAPI:
         # (sandbox.durable.kind "") ⇒ sandbox_filestore IS api_filestore (unchanged).
         api_filestore = get_filestore(settings, spec)
         sandbox_filestore = get_sandbox_filestore(settings, spec, api_filestore)
+        from .agent.tool_usage import ToolUsageRecorder
+
+        tool_usage = ToolUsageRecorder()
         app = create_app(
             spec=spec,
             get_user_id=get_user_id,
@@ -307,7 +310,10 @@ def build_app(settings: Settings, *, config_dir: Path | None) -> FastAPI:
                 if settings.server.turn_reclaim_interval_sec > 0
                 else None
             ),
-            runner=get_runner(settings),
+            # plan-tool-usage-stats: ONE recorder — the runner counts into it,
+            # the lifespan writes it.
+            runner=get_runner(settings, tool_usage=tool_usage),
+            tool_usage=tool_usage,
             agent_config_catalog=get_agent_config_catalog(settings, config_dir=config_dir),
             # plan-subagent-model-choice: the curated engines a run_agent call
             # may pick; empty (unset knob) ⇒ the tool grows no `model` argument.
