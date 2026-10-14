@@ -722,3 +722,109 @@ describe("the picker under a search (review r4)", () => {
     expect(within(box).getByRole("checkbox", { name: "acme__lookup" })).toBeInTheDocument();
   });
 });
+
+describe("a row's details, in a side panel (NN/g, Data Tables)", () => {
+  async function openSpc() {
+    draw();
+    fireEvent.click(await within(toolsPart()).findByRole("button", { name: "spc" }));
+    return within(toolsPart()).findByTestId("tool-usage-detail");
+  }
+
+  it("is a panel beside the table, named for the row, which the table stays usable under", async () => {
+    const panel = await openSpc();
+
+    expect(panel).toHaveAttribute("role", "region");
+    expect(panel).toHaveAccessibleName("spc 的使用詳情");
+    expect(panel.className).toContain("tool-usage-sidepanel");
+    // The table is still there to pick another row: the panel swaps.
+    fireEvent.click(within(toolsPart()).getByRole("button", { name: "exec" }));
+    expect(within(toolsPart()).getByTestId("tool-usage-detail")).toHaveAccessibleName("exec 的使用詳情");
+  });
+
+  it("says first what it is and the totals, in words", async () => {
+    const panel = await openSpc();
+
+    expect(within(panel).getByText("工具 · 第一方套件 · 最近 30 天")).toBeInTheDocument();
+    expect(within(panel).getByTestId("tool-usage-summary")).toHaveTextContent(
+      "呼叫 40 次 · 失敗 10 次(25%) · 平均 1.2 秒",
+    );
+  });
+
+  it("names its parts in plain words", async () => {
+    const panel = await openSpc();
+    await within(panel).findByText("Alice Chen");
+
+    const heads = within(panel)
+      .getAllByRole("heading", { level: 4 })
+      .map((h) => h.textContent);
+    expect(heads).toEqual(["誰在用", "在哪裡用(場合與 App)", "在哪些 item"]);
+  });
+
+  it("heads each table's first column with what is in it, not the part's title again", async () => {
+    const panel = await openSpc();
+    await within(panel).findByText("Alice Chen");
+
+    const firsts = within(panel)
+      .getAllByRole("table")
+      .map((tb) => within(tb).getAllByRole("columnheader")[0]!.textContent);
+    expect(firsts).toEqual(["人", "場合 · App", "Item"]);
+  });
+
+  it("tells two items of one title apart by their App and id", async () => {
+    draw();
+    const twins: ToolUsageDetail = {
+      ...DETAIL,
+      by_item: [
+        { item: "rca-item:aaaa1111-x", title: "Line 3", slug: "rca", calls: 2, fails: 0, avg_ms: 1 },
+        { item: "rca-item:bbbb2222-y", title: "Line 3", slug: "rca", calls: 1, fails: 0, avg_ms: 1 },
+      ],
+    };
+    cleanup();
+    const c = {
+      report: vi.fn(async () => TOOLS),
+      detail: vi.fn(async () => twins),
+      rawUrl: () => "/raw",
+    } satisfies ToolUsageClient;
+    renderWithQuery(
+      <MemoryRouter>
+        <ToolUsagePanel client={c} />
+      </MemoryRouter>,
+    );
+    fireEvent.click((await screen.findAllByRole("button", { name: "spc" }))[0]!);
+    const panel = await screen.findByTestId("tool-usage-detail");
+    const items = await within(panel).findByRole("table", { name: "在哪些 item" });
+
+    expect(within(items).getByText("RCA · aaaa1111")).toBeInTheDocument();
+    expect(within(items).getByText("RCA · bbbb2222")).toBeInTheDocument();
+  });
+
+  it("draws each count as a bar against the largest, as the charts do", async () => {
+    const panel = await openSpc();
+    await within(panel).findByText("Alice Chen");
+
+    const items = within(panel).getByRole("table", { name: "在哪些 item" });
+    const widths = [...items.querySelectorAll<HTMLElement>("[data-bar]")].map((b) => b.style.width);
+    expect(widths).toEqual(["100%", "3%"]); // 39 and 1 of 39
+  });
+
+  it("closes with its ✕ and with Escape", async () => {
+    let panel = await openSpc();
+    fireEvent.click(within(panel).getByRole("button", { name: "關閉" }));
+    expect(within(toolsPart()).queryByTestId("tool-usage-detail")).toBeNull();
+
+    fireEvent.click(within(toolsPart()).getByRole("button", { name: "spc" }));
+    panel = await within(toolsPart()).findByTestId("tool-usage-detail");
+    fireEvent.keyDown(panel, { key: "Escape" });
+    expect(within(toolsPart()).queryByTestId("tool-usage-detail")).toBeNull();
+  });
+
+  it("speaks of loads, not calls, for a skill", async () => {
+    draw();
+    fireEvent.click(await within(skillsPart()).findByRole("button", { name: "author-skill" }));
+    const panel = await within(skillsPart()).findByTestId("tool-usage-detail");
+
+    expect(within(panel).getByText("Skill · 平台內建 · 最近 30 天")).toBeInTheDocument();
+    expect(within(panel).getByTestId("tool-usage-summary")).toHaveTextContent("載入 12 次");
+    expect(within(panel).getByTestId("tool-usage-summary")).not.toHaveTextContent("失敗");
+  });
+});

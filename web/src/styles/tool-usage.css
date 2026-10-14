@@ -88,19 +88,81 @@
   color: var(--text-paper-d);
 }
 
-.tool-usage-detail {
-  margin-top: var(--space-24);
-  padding-top: var(--space-12);
-  border-top: 1px solid var(--paper-3);
+/* A row's details (§3.6): a nonmodal side panel beside the table (NN/g, Data
+   Tables) — fixed to the right below the top bar; the full width on a phone. */
+.tool-usage-sidepanel {
+  position: fixed;
+  top: 40px; /* the top bar's height, measured */
+  right: 0;
+  bottom: 0;
+  width: min(420px, 100vw);
+  overflow-y: auto;
+  padding: var(--space-16);
+  background: var(--paper);
+  border-left: 1px solid var(--paper-3);
+  box-shadow: -8px 0 24px rgb(0 0 0 / 0.08);
+  z-index: 20;
 }
 
-.tool-usage-detail-title {
-  margin: 0 0 var(--space-8);
-  font-family: var(--font-mono);
+.tool-usage-sidepanel-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-8);
+}
+
+.tool-usage-sidepanel-close {
+  border: none;
+  background: none;
+  cursor: pointer;
+  color: var(--text-paper-d);
   font-size: var(--text-body);
+  padding: 2px 6px;
 }
 
-.tool-usage-detail h4 {
+.tool-usage-detail-which {
+  display: block;
+  font-size: var(--text-small);
+  color: var(--text-paper-d);
+}
+
+.tool-usage-detail-what {
+  margin: 0;
+  font-size: var(--text-small);
+  color: var(--text-paper-d);
+}
+
+/* The totals, first and in words. */
+.tool-usage-detail-summary {
+  margin: var(--space-8) 0 0;
+  font-size: var(--text-body-lg);
+  font-weight: 600;
+}
+
+/* A count with its bar against the part's largest, as the page's charts. */
+.tool-usage-cellbar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-8);
+  width: 100%;
+}
+
+.tool-usage-cellbar-track {
+  display: block;
+  width: 72px;
+  height: 8px;
+}
+
+.tool-usage-cellbar-track [data-bar] {
+  display: block;
+  height: 100%;
+  min-width: 2px;
+  border-radius: 0 2px 2px 0;
+  background: var(--accent-h);
+}
+
+.tool-usage-detail-part {
   margin: var(--space-16) 0 var(--space-4);
   font-size: var(--text-small);
   color: var(--text-paper-d);

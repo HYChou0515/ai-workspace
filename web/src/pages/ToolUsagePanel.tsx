@@ -21,7 +21,7 @@
  *   content, so it is a segmented control (Material 3, "Segmented buttons").
  */
 import { useQuery } from "@tanstack/react-query";
-import { useId, useMemo, useState } from "react";
+import { type ReactNode, useEffect, useId, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 
 import {
@@ -403,10 +403,10 @@ function UsagePart({
           or the picker took away would describe something no longer shown. */}
       {picked && rows.some(isPicked) && (
         <ToolDetail
-          tool={picked.tool}
+          row={picked}
           title={nameOf(picked)}
-          source={picked.source}
-          pkg={picked.package ?? ""}
+          sourceLabel={sources[picked.source] ? t(sources[picked.source]) : picked.source}
+          onClose={() => setPicked(null)}
           kind={kind}
           group={group}
           days={days}
@@ -562,11 +562,27 @@ function ShownPicker({
   );
 }
 
+/**
+ * One row's details (§3.6, D4/D7) — in a NONMODAL SIDE PANEL beside the table:
+ * NN/g, "Data Tables: Four Major User Tasks", on viewing one record — a modal
+ * covers the rows a reader wants to compare against, an accordion clutters
+ * the table, a side panel covers part of it and leaves the rest usable, so
+ * picking another row swaps the panel.
+ *
+ * It says first what it is and the totals, in words (summary first), then
+ * three plain-worded parts — who, where, which items — each count drawn as a
+ * bar against the largest, as the page's charts are.
+ */
+/** An item id's first eight characters after its kind (`rca-item:aaaa1111-…`). */
+function shortId(item: string): string {
+  return item.slice(item.indexOf(":") + 1, item.indexOf(":") + 9);
+}
+
 function ToolDetail({
-  tool,
+  row,
   title,
-  source,
-  pkg,
+  sourceLabel,
+  onClose,
   kind,
   group,
   days,
@@ -575,11 +591,11 @@ function ToolDetail({
   pct,
   appTitle,
 }: {
-  tool: string;
+  row: ToolUsageTool;
   /** How the table names this row (with its package or source when the name repeats). */
   title: string;
-  source: string;
-  pkg: string;
+  sourceLabel: string;
+  onClose: () => void;
   kind: UsageKind;
   group: UsageGroup;
   days: UsageDays;
@@ -589,103 +605,158 @@ function ToolDetail({
   appTitle: (slug: string) => string;
 }) {
   const t = useT();
+  const skills = kind === "skill";
+  const pkg = row.package ?? "";
   const detail = useQuery({
-    queryKey: qk.toolUsageDetail(tool, days, kind, group, `${source}\u0000${pkg}`),
-    queryFn: () => client.detail(tool, days, kind, group, source, pkg),
+    queryKey: qk.toolUsageDetail(row.tool, days, kind, group, `${row.source}\u0000${pkg}`),
+    queryFn: () => client.detail(row.tool, days, kind, group, row.source, pkg),
   });
   const d = detail.data;
-  // A skill load has a count only (D11).
-  const skills = kind === "skill";
-  const counts = (r: { calls: number; fails: number; avg_ms: number }) => (
-    <>
-      <td style={num}>{r.calls}</td>
-      {!skills && (
-        <>
-          <td style={num}>{r.fails}</td>
-          <td style={num}>{pct(r)}</td>
-          <td style={num}>{ms(r.avg_ms)}</td>
-        </>
-      )}
-    </>
-  );
-  const head = (first: string) => (
-    <thead>
-      <tr>
-        <th style={cell}>{first}</th>
-        <th style={num}>{t(skills ? "usage.col.loads" : "usage.col.calls")}</th>
-        {!skills && (
-          <>
-            <th style={num}>{t("usage.col.fails")}</th>
-            <th style={num}>{t("usage.col.rate")}</th>
-            <th style={num}>{t("usage.col.avg")}</th>
-          </>
-        )}
-      </tr>
-    </thead>
-  );
+  const headingRef = useRef<HTMLHeadingElement>(null);
+  // Opening a row (or another one) puts the reader at the panel's heading.
+  useEffect(() => {
+    headingRef.current?.focus();
+  }, [row.tool, row.source, pkg]);
+
+  const summary = skills
+    ? t("usage.detail.loads", { n: row.calls })
+    : t("usage.detail.calls", {
+        n: row.calls,
+        f: row.fails,
+        rate: pct(row),
+        avg: ms(row.avg_ms),
+      });
+
+  const part = (
+    heading: string,
+    /** What the first column holds — not the heading again. */
+    column: string,
+    rows: { key: string; label: ReactNode; calls: number; fails: number; avg_ms: number }[],
+  ) => {
+    const max = Math.max(1, ...rows.map((r) => r.calls));
+    return (
+      <>
+        <h4 className="tool-usage-detail-part">{heading}</h4>
+        <div className="tool-usage-scroll">
+          <table className="tool-usage-table" aria-label={heading}>
+            <thead>
+              <tr>
+                <th style={cell}>{column}</th>
+                <th style={num}>{t(skills ? "usage.col.loads" : "usage.col.calls")}</th>
+                {!skills && (
+                  <>
+                    <th style={num}>{t("usage.col.fails")}</th>
+                    <th style={num}>{t("usage.col.rate")}</th>
+                    <th style={num}>{t("usage.col.avg")}</th>
+                  </>
+                )}
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r) => (
+                <tr key={r.key}>
+                  <td style={cell}>{r.label}</td>
+                  <td style={num}>
+                    <span className="tool-usage-cellbar">
+                      <span className="tool-usage-cellbar-track" aria-hidden="true">
+                        <span data-bar style={{ width: `${Math.round((r.calls / max) * 100)}%` }} />
+                      </span>
+                      {r.calls}
+                    </span>
+                  </td>
+                  {!skills && (
+                    <>
+                      <td style={num}>{r.fails}</td>
+                      <td style={num}>{pct(r)}</td>
+                      <td style={num}>{ms(r.avg_ms)}</td>
+                    </>
+                  )}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </>
+    );
+  };
+
   return (
-    <section className="tool-usage-detail" data-testid="tool-usage-detail" aria-label={title}>
-      <h3 className="tool-usage-detail-title">{title}</h3>
+    <section
+      role="region"
+      className="tool-usage-sidepanel"
+      data-testid="tool-usage-detail"
+      aria-label={t("usage.detail.title", { name: title })}
+      onKeyDown={(e) => {
+        if (e.key === "Escape") onClose();
+      }}
+    >
+      <div className="tool-usage-sidepanel-head">
+        <h3 ref={headingRef} tabIndex={-1} className="tool-usage-detail-title">
+          {title}
+        </h3>
+        <button
+          type="button"
+          className="tool-usage-sidepanel-close"
+          aria-label={t("usage.detail.close")}
+          onClick={onClose}
+        >
+          ✕
+        </button>
+      </div>
+      <p className="tool-usage-detail-what">
+        {t("usage.detail.what", {
+          kind: t(skills ? "usage.part.skill" : "usage.part.tool"),
+          source: sourceLabel,
+          days,
+        })}
+      </p>
+      <p className="tool-usage-detail-summary" data-testid="tool-usage-summary">
+        {summary}
+      </p>
       {detail.isError && (
         <p role="alert">{t("usage.failed", { reason: (detail.error as Error).message })}</p>
       )}
       {d && (
         <>
-          <h4>{t("usage.by.user")}</h4>
-          <div className="tool-usage-scroll">
-            <table className="tool-usage-table">
-              {head(t("usage.col.user"))}
-              <tbody>
-                {d.by_user.map((r) => (
-                  <tr key={r.user}>
-                    <td style={cell}>
-                      <UserChip userId={r.user} />
-                    </td>
-                    {counts(r)}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          <h4>{t("usage.by.surface")}</h4>
-          <div className="tool-usage-scroll">
-            <table className="tool-usage-table">
-              {head(t("usage.col.surface"))}
-              <tbody>
-                {d.by_surface_app.map((r) => (
-                  <tr key={`${r.surface}\u0000${r.app}`}>
-                    <td style={cell}>
-                      {t(SURFACES[r.surface] ?? "usage.surface.background")}
-                      {r.app ? ` · ${appTitle(r.app)}` : ""}
-                    </td>
-                    {counts(r)}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          <h4>{t("usage.by.item")}</h4>
-          <div className="tool-usage-scroll">
-            <table className="tool-usage-table">
-              {head(t("usage.col.item"))}
-              <tbody>
-                {d.by_item.map((r) => (
-                  <tr key={r.item}>
-                    <td style={cell}>
-                      {r.slug && r.title ? (
-                        <Link to={`/a/${encodeURIComponent(r.slug)}/${encodeURIComponent(r.item)}`}>
-                          {r.title}
-                        </Link>
-                      ) : (
-                        r.item || t("usage.noItem")
-                      )}
-                    </td>
-                    {counts(r)}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          {part(
+            t("usage.by.user"),
+            t("usage.col.user"),
+            d.by_user.map((r) => ({ ...r, key: r.user, label: <UserChip userId={r.user} /> })),
+          )}
+          {part(
+            t("usage.by.surface"),
+            t("usage.col.surface"),
+            d.by_surface_app.map((r) => ({
+              ...r,
+              key: `${r.surface}\u0000${r.app}`,
+              label: `${t(SURFACES[r.surface] ?? "usage.surface.background")}${r.app ? ` · ${appTitle(r.app)}` : ""}`,
+            })),
+          )}
+          {part(
+            t("usage.by.item"),
+            t("usage.col.item"),
+            d.by_item.map((r) => ({
+              ...r,
+              key: r.item,
+              label:
+                r.slug && r.title ? (
+                  <>
+                    <Link to={`/a/${encodeURIComponent(r.slug)}/${encodeURIComponent(r.item)}`}>
+                      {r.title}
+                    </Link>
+                    {/* Two items can share a title: then each says which App
+                        and which item it is. */}
+                    {d.by_item.filter((o) => o.title === r.title).length > 1 && (
+                      <span className="tool-usage-detail-which">
+                        {`${appTitle(r.slug)} · ${shortId(r.item)}`}
+                      </span>
+                    )}
+                  </>
+                ) : (
+                  r.item || t("usage.noItem")
+                ),
+            })),
+          )}
         </>
       )}
     </section>
