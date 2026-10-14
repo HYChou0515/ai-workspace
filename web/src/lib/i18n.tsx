@@ -2195,6 +2195,7 @@ export const messages = {
     en: "{n} calls · {f} failed ({rate}) · {avg} on average",
   },
   "usage.detail.loads": { "zh-TW": "載入 {n} 次", en: "Loaded {n} times" },
+  "usage.detail.loading": { "zh-TW": "讀取中…", en: "Loading…" },
   "usage.detail.unfiltered": {
     "zh-TW": "這裡的數字是所有場合與 App 的合計,不受上方的場合/App 篩選。",
     en: "These numbers cover every surface and App; the surface / App filters above do not apply here.",

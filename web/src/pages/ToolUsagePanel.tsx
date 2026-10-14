@@ -20,7 +20,7 @@
  * - The window (7 / 30 / 90 days) is one choice among modes of the SAME
  *   content, so it is a segmented control (Material 3, "Segmented buttons").
  */
-import { useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { type ReactNode, useEffect, useId, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 
@@ -98,13 +98,27 @@ export function ToolUsagePanel({ client = toolUsageApi }: { client?: ToolUsageCl
   const [picked, setPicked] = useState<{ kind: UsageKind; row: ToolUsageTool } | null>(null);
   // The button a panel was opened from, to put the keyboard back on (review r5).
   const opener = useRef<HTMLElement | null>(null);
+  // The panel takes the keyboard when a person picks a row — never because it
+  // re-rendered for another window (review r6).
+  const wantsFocus = useRef(false);
   const pick = (kind: UsageKind, row: ToolUsageTool | null, from?: HTMLElement) => {
-    if (from) opener.current = from;
+    if (from) {
+      opener.current = from;
+      wantsFocus.current = true;
+    }
     setPicked(row ? { kind, row } : null);
   };
   const close = () => {
+    const key = picked ? rowKey(picked.row) : null;
     setPicked(null);
-    opener.current?.focus();
+    // The opener may have been rebuilt since (a new window, a filter): find
+    // the same row's button by its key.
+    const target = opener.current?.isConnected
+      ? opener.current
+      : [...document.querySelectorAll<HTMLElement>(".tool-usage-tool")].find(
+          (b) => b.dataset.rowKey === key,
+        );
+    target?.focus();
   };
 
   return (
@@ -161,6 +175,7 @@ export function ToolUsagePanel({ client = toolUsageApi }: { client?: ToolUsageCl
         client={client}
         appTitle={appTitle}
         picked={picked?.kind === "tool" ? picked.row : null}
+        wantsFocus={wantsFocus}
         pick={(row, from) => pick("tool", row, from)}
         close={close}
       />
@@ -171,6 +186,7 @@ export function ToolUsagePanel({ client = toolUsageApi }: { client?: ToolUsageCl
         client={client}
         appTitle={appTitle}
         picked={picked?.kind === "skill" ? picked.row : null}
+        wantsFocus={wantsFocus}
         pick={(row, from) => pick("skill", row, from)}
         close={close}
       />
@@ -188,6 +204,7 @@ function UsagePart({
   picked,
   pick,
   close,
+  wantsFocus,
 }: {
   kind: UsageKind;
   days: UsageDays;
@@ -198,6 +215,7 @@ function UsagePart({
   picked: ToolUsageTool | null;
   pick: (row: ToolUsageTool | null, from?: HTMLElement) => void;
   close: () => void;
+  wantsFocus: { current: boolean };
 }) {
   const t = useT();
   const skills = kind === "skill";
@@ -218,6 +236,9 @@ function UsagePart({
   const report = useQuery({
     queryKey: qk.toolUsage(days, filter, kind, group),
     queryFn: () => client.report(days, filter, kind, group),
+    // Another window keeps the rows (and an open panel) in place while it
+    // loads, rather than tearing them down and building new ones (review r6).
+    placeholderData: keepPreviousData,
   });
   const all = useMemo(() => report.data?.tools ?? [], [report.data]);
   // `hidden` holds row keys (`rowKey`), not names: one name can be two rows.
@@ -403,6 +424,7 @@ function UsagePart({
                       <button
                         type="button"
                         className="tool-usage-tool"
+                        data-row-key={rowKey(r)}
                         onClick={(e) => pick(isPicked(r) ? null : r, e.currentTarget)}
                       >
                         {nameOf(r)}
@@ -434,6 +456,7 @@ function UsagePart({
           sourceLabel={sources[picked.source] ? t(sources[picked.source]) : picked.source}
           onClose={close}
           filtered={Boolean(shared.surface || shared.app)}
+          wantsFocus={wantsFocus}
           kind={kind}
           group={group}
           days={days}
@@ -611,6 +634,7 @@ function ToolDetail({
   sourceLabel,
   onClose,
   filtered,
+  wantsFocus,
   kind,
   group,
   days,
@@ -626,6 +650,7 @@ function ToolDetail({
   onClose: () => void;
   /** The page is filtered by surface or App, which a breakdown cannot be. */
   filtered: boolean;
+  wantsFocus: { current: boolean };
   kind: UsageKind;
   group: UsageGroup;
   days: UsageDays;
@@ -643,34 +668,21 @@ function ToolDetail({
   });
   const d = detail.data;
   const headingRef = useRef<HTMLHeadingElement>(null);
-  // Opening a row (or another one) puts the reader at the panel's heading.
+  // A row a person just picked puts them at the panel's heading — once.
   useEffect(() => {
+    if (!wantsFocus.current) return;
+    wantsFocus.current = false;
     headingRef.current?.focus();
-  }, [row.tool, row.source, pkg]);
+  }, [row.tool, row.source, pkg, wantsFocus]);
 
-  // The totals from the breakdown itself (every call has a person, so the
-  // "who" part adds up to the whole) — never from the table row, which the
-  // page's filters narrowed and which a later window would leave stale.
-  const total = d
-    ? d.by_user.reduce(
-        (acc, r) => ({
-          calls: acc.calls + r.calls,
-          fails: acc.fails + r.fails,
-          ms: acc.ms + r.avg_ms * r.calls,
-        }),
-        { calls: 0, fails: 0, ms: 0 },
-      )
-    : null;
-  const summary = !total
+  // The totals come WITH the breakdown (the server's unrounded sums) — never
+  // from the table row, which the page's filters narrowed and which a later
+  // window would leave stale.
+  const summary = !d
     ? null
     : skills
-      ? t("usage.detail.loads", { n: total.calls })
-      : t("usage.detail.calls", {
-          n: total.calls,
-          f: total.fails,
-          rate: pct(total),
-          avg: ms(total.calls ? Math.round(total.ms / total.calls) : 0),
-        });
+      ? t("usage.detail.loads", { n: d.calls })
+      : t("usage.detail.calls", { n: d.calls, f: d.fails, rate: pct(d), avg: ms(d.avg_ms) });
 
   const part = (
     heading: string,
@@ -687,7 +699,6 @@ function ToolDetail({
             <thead>
               <tr>
                 <th style={cell}>{column}</th>
-                <th style={num}>{t(skills ? "usage.col.loads" : "usage.col.calls")}</th>
                 {!skills && (
                   <>
                     <th style={num}>{t("usage.col.fails")}</th>
@@ -695,29 +706,43 @@ function ToolDetail({
                     <th style={num}>{t("usage.col.avg")}</th>
                   </>
                 )}
+                {/* The count last, in a fixed-width column whose bar starts at
+                    its left edge, the number on the bar (user, review of T8). */}
+                <th style={cell} className="tool-usage-cellbar-col">
+                  {t(skills ? "usage.col.loads" : "usage.col.calls")}
+                </th>
               </tr>
             </thead>
             <tbody>
-              {rows.map((r) => (
-                <tr key={r.key}>
-                  <td style={cell}>{r.label}</td>
-                  <td style={num}>
-                    <span className="tool-usage-cellbar">
-                      <span className="tool-usage-cellbar-track" aria-hidden="true">
-                        <span data-bar style={{ width: `${Math.round((r.calls / max) * 100)}%` }} />
+              {rows.map((r) => {
+                const pctOf = Math.round((r.calls / max) * 100);
+                // A long bar holds its number inside its end; a short one
+                // has it just past the end.
+                const inside = pctOf >= 60;
+                return (
+                  <tr key={r.key}>
+                    <td style={cell}>{r.label}</td>
+                    {!skills && (
+                      <>
+                        <td style={num}>{r.fails}</td>
+                        <td style={num}>{pct(r)}</td>
+                        <td style={num}>{ms(r.avg_ms)}</td>
+                      </>
+                    )}
+                    <td style={cell} className="tool-usage-cellbar-col">
+                      <span className="tool-usage-cellbar">
+                        <span data-bar style={{ width: `${pctOf}%` }} />
+                        <span
+                          className={`tool-usage-cellbar-num${inside ? " is-inside" : ""}`}
+                          style={inside ? { right: `${100 - pctOf}%` } : { left: `${pctOf}%` }}
+                        >
+                          {r.calls}
+                        </span>
                       </span>
-                      {r.calls}
-                    </span>
-                  </td>
-                  {!skills && (
-                    <>
-                      <td style={num}>{r.fails}</td>
-                      <td style={num}>{pct(r)}</td>
-                      <td style={num}>{ms(r.avg_ms)}</td>
-                    </>
-                  )}
-                </tr>
-              ))}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -731,6 +756,7 @@ function ToolDetail({
       className="tool-usage-sidepanel"
       data-testid="tool-usage-detail"
       aria-label={t("usage.detail.title", { name: title })}
+      aria-busy={detail.isPending}
       onKeyDown={(e) => {
         if (e.key === "Escape") onClose();
       }}
@@ -755,6 +781,7 @@ function ToolDetail({
           days,
         })}
       </p>
+      {detail.isPending && <p className="tool-usage-detail-what">{t("usage.detail.loading")}</p>}
       {summary && (
         <p className="tool-usage-detail-summary" data-testid="tool-usage-summary">
           {summary}

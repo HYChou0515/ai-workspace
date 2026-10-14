@@ -176,7 +176,16 @@ def test_an_unknown_tool_has_an_empty_breakdown() -> None:
 
     body = client.get("/admin/tool-usage/nope").json()
 
-    assert body == {"tool": "nope", "days": 30, "by_user": [], "by_surface_app": [], "by_item": []}
+    assert body == {
+        "tool": "nope",
+        "days": 30,
+        "calls": 0,
+        "fails": 0,
+        "avg_ms": 0,
+        "by_user": [],
+        "by_surface_app": [],
+        "by_item": [],
+    }
 
 
 # ── skills (plan §8.3) ──────────────────────────────────────────────────────
@@ -402,3 +411,16 @@ def test_the_raw_csv_never_hands_excel_a_formula(lead: str) -> None:
     [total] = [r for r in _csv(client, "days=7&kind=skill") if r["dimension"] == "total"]
 
     assert total["name"] == f'\'{lead}HYPERLINK("http://e","x")'
+
+
+def test_a_breakdown_carries_its_totals_from_the_unrounded_sums() -> None:
+    """The panel's summary line reads these (review r6): an average recomputed
+    from per-person averages the server already rounded drifts by one."""
+    client, spec = _app({"id": "root"})
+    _seed(spec, 1, "exec", "builtin", ms=0, user="alice")
+    _seed(spec, 1, "exec", "builtin", ms=1, user="alice")  # alice: 2 calls, 1 ms
+    _seed(spec, 1, "exec", "builtin", ms=1, user="bob")  # bob: 1 call, 1 ms
+
+    d = client.get("/admin/tool-usage/exec").json()
+
+    assert (d["calls"], d["fails"], d["avg_ms"]) == (3, 0, 1)  # round(2/3), not 0

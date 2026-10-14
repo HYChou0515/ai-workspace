@@ -50,7 +50,14 @@ const SKILLS: ToolUsageReport = {
 const DETAIL: ToolUsageDetail = {
   tool: "spc",
   days: 30,
-  by_user: [{ user: "alice", calls: 30, fails: 5, avg_ms: 1000 }],
+  // The totals, and three breakdowns that each add up to them.
+  calls: 40,
+  fails: 10,
+  avg_ms: 1200,
+  by_user: [
+    { user: "alice", calls: 30, fails: 5, avg_ms: 1000 },
+    { user: "bob", calls: 10, fails: 5, avg_ms: 1800 },
+  ],
   by_surface_app: [{ surface: "schedule", app: "rca", calls: 40, fails: 10, avg_ms: 1200 }],
   by_item: [
     { item: "rca-1", title: "Line 3", slug: "rca", calls: 39, fails: 9, avg_ms: 1100 },
@@ -745,10 +752,9 @@ describe("a row's details, in a side panel (NN/g, Data Tables)", () => {
     const panel = await openSpc();
 
     expect(within(panel).getByText("工具 · 第一方套件 · 最近 30 天")).toBeInTheDocument();
-    // The totals come from the breakdown below them (DETAIL: 30 calls, 5 failed,
-    // 1 s each), so the two can never disagree.
+    // The totals come with the breakdown below them, so the two never disagree.
     expect(await within(panel).findByTestId("tool-usage-summary")).toHaveTextContent(
-      "呼叫 30 次 · 失敗 5 次(17%) · 平均 1.0 秒",
+      "呼叫 40 次 · 失敗 10 次(25%) · 平均 1.2 秒",
     );
   });
 
@@ -826,7 +832,7 @@ describe("a row's details, in a side panel (NN/g, Data Tables)", () => {
     const panel = await within(skillsPart()).findByTestId("tool-usage-detail");
 
     expect(within(panel).getByText("Skill · 平台內建 · 最近 30 天")).toBeInTheDocument();
-    expect(await within(panel).findByTestId("tool-usage-summary")).toHaveTextContent("載入 30 次");
+    expect(await within(panel).findByTestId("tool-usage-summary")).toHaveTextContent("載入 40 次");
     expect(within(panel).getByTestId("tool-usage-summary")).not.toHaveTextContent("失敗");
   });
 });
@@ -878,5 +884,144 @@ describe("one side panel for the page (review r5)", () => {
     fireEvent.keyDown(panel, { key: "Escape" });
 
     expect(document.activeElement).toBe(within(toolsPart()).getByRole("button", { name: "spc" }));
+  });
+});
+
+describe("the side panel, review r6", () => {
+  it("closing a tool's panel never touches an open skill panel — not even by switching granularity", async () => {
+    draw();
+    fireEvent.click(await within(skillsPart()).findByRole("button", { name: "my-notes" }));
+    await within(skillsPart()).findByTestId("tool-usage-detail");
+
+    fireEvent.click(within(toolsPart()).getByRole("button", { name: "依套件" }));
+
+    expect(within(skillsPart()).getByTestId("tool-usage-detail")).toBeInTheDocument();
+  });
+
+  it("says it is loading while the breakdown is on its way", async () => {
+    const client = {
+      report: vi.fn(async () => TOOLS),
+      detail: vi.fn(() => new Promise<ToolUsageDetail>(() => {})),
+      rawUrl: () => "/raw",
+    } satisfies ToolUsageClient;
+    renderWithQuery(
+      <MemoryRouter>
+        <ToolUsagePanel client={client} />
+      </MemoryRouter>,
+    );
+    fireEvent.click((await screen.findAllByRole("button", { name: "spc" }))[0]!);
+    const panel = await screen.findByTestId("tool-usage-detail");
+
+    expect(panel).toHaveAttribute("aria-busy", "true");
+    expect(within(panel).getByText("讀取中…")).toBeInTheDocument();
+  });
+
+  it("keeps the keyboard where it is when the window changes, and still returns it to the row on close", async () => {
+    draw();
+    fireEvent.click(await within(toolsPart()).findByRole("button", { name: "spc" }));
+    await within(toolsPart()).findByTestId("tool-usage-detail");
+
+    const seven = screen.getByRole("button", { name: "7 天" });
+    seven.focus();
+    fireEvent.click(seven);
+    await waitFor(() => expect(within(toolsPart()).getByTestId("tool-usage-detail")).toBeInTheDocument());
+    expect(document.activeElement).toBe(seven); // not taken by the panel's heading
+
+    fireEvent.keyDown(within(toolsPart()).getByTestId("tool-usage-detail"), { key: "Escape" });
+    const spc = within(toolsPart()).getByRole("button", { name: "spc" });
+    expect(document.activeElement).toBe(spc);
+    expect(spc.isConnected).toBe(true);
+  });
+});
+
+describe("the breakdown's bars (user: left-aligned, rightmost, number on the bar)", () => {
+  async function openSpc() {
+    draw();
+    fireEvent.click(await within(toolsPart()).findByRole("button", { name: "spc" }));
+    const panel = await within(toolsPart()).findByTestId("tool-usage-detail");
+    await within(panel).findByText("Alice Chen");
+    return panel;
+  }
+
+  it("puts the count with its bar in the last column", async () => {
+    const panel = await openSpc();
+
+    const heads = within(within(panel).getByRole("table", { name: "誰在用" }))
+      .getAllByRole("columnheader")
+      .map((h) => h.textContent);
+    expect(heads).toEqual(["人", "失敗", "失敗率", "平均耗時", "呼叫"]);
+  });
+
+  it("draws the bar from the column's left edge, with the number on it", async () => {
+    const panel = await openSpc();
+    const items = within(panel).getByRole("table", { name: "在哪些 item" });
+
+    const cells = within(items)
+      .getAllByRole("row")
+      .slice(1)
+      .map((tr) => tr.lastElementChild as HTMLElement);
+    for (const cell of cells) {
+      const track = cell.querySelector(".tool-usage-cellbar")!;
+      expect(track.querySelector("[data-bar]")).not.toBeNull();
+      expect(track.querySelector(".tool-usage-cellbar-num")).not.toBeNull(); // number lives with the bar
+    }
+    expect(cells.map((c) => c.textContent)).toEqual(["39", "1"]);
+  });
+
+  it("puts a long bar's number inside its end, a short one's just past it", async () => {
+    const panel = await openSpc();
+    const items = within(panel).getByRole("table", { name: "在哪些 item" });
+
+    const nums = [...items.querySelectorAll<HTMLElement>(".tool-usage-cellbar-num")];
+    expect(nums.map((n) => n.classList.contains("is-inside"))).toEqual([true, false]);
+  });
+
+  it("has just a name and a count for a skill, the count with its bar last", async () => {
+    draw();
+    fireEvent.click(await within(skillsPart()).findByRole("button", { name: "author-skill" }));
+    const panel = await within(skillsPart()).findByTestId("tool-usage-detail");
+    await within(panel).findByText("Alice Chen");
+
+    const heads = within(within(panel).getByRole("table", { name: "誰在用" }))
+      .getAllByRole("columnheader")
+      .map((h) => h.textContent);
+    expect(heads).toEqual(["人", "次數"]);
+  });
+});
+
+describe("a panel whose row is rebuilt (review r6)", () => {
+  it("does not take the keyboard when its row comes back, and closes onto the rebuilt row", async () => {
+    // A report that honours the source filter, so 第一方套件 → 內建 → 全部
+    // takes spc's row away and brings a NEW one back.
+    const client = {
+      report: vi.fn(async (_d: number, f?: { source?: string }) => ({
+        days: 30,
+        tools: TOOLS.tools.filter((r) => !f?.source || r.source === f.source),
+      })),
+      detail: vi.fn(async () => DETAIL),
+      rawUrl: () => "/raw",
+    } satisfies ToolUsageClient;
+    renderWithQuery(
+      <MemoryRouter>
+        <ToolUsagePanel client={client} />
+      </MemoryRouter>,
+    );
+    const first = await within(toolsPart()).findByRole("button", { name: "spc" });
+    fireEvent.click(first);
+    await within(toolsPart()).findByTestId("tool-usage-detail");
+
+    const source = within(toolsPart()).getByLabelText("來源");
+    source.focus();
+    fireEvent.change(source, { target: { value: "builtin" } });
+    await waitFor(() => expect(within(toolsPart()).queryByRole("button", { name: "spc" })).toBeNull());
+    fireEvent.change(source, { target: { value: "" } });
+    const again = await within(toolsPart()).findByRole("button", { name: "spc" });
+    const panel = await within(toolsPart()).findByTestId("tool-usage-detail");
+
+    expect(again).not.toBe(first); // rebuilt
+    expect(document.activeElement).toBe(source); // the panel's return took nothing
+
+    fireEvent.keyDown(panel, { key: "Escape" });
+    expect(document.activeElement).toBe(again);
   });
 });

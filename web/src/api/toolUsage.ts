@@ -31,6 +31,10 @@ type Counts = { calls: number; fails: number; avg_ms: number };
 export type ToolUsageDetail = {
   tool: string;
   days: number;
+  /** The whole, from the server's unrounded sums. */
+  calls: number;
+  fails: number;
+  avg_ms: number;
   by_user: (Counts & { user: string })[];
   by_surface_app: (Counts & { surface: string; app: string })[];
   /** `title` / `slug` are "" when the item no longer exists. */

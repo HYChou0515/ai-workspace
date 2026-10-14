@@ -122,6 +122,11 @@ class ByItem(BaseModel):
 class ToolUsageDetail(BaseModel):
     tool: str
     days: int
+    #: The whole, from the unrounded sums (review r6): averaging the rounded
+    #: per-person averages again drifts by one.
+    calls: int = 0
+    fails: int = 0
+    avg_ms: int = 0
     by_user: list[ByUser]
     by_surface_app: list[BySurfaceApp]
     by_item: list[ByItem]
@@ -238,9 +243,14 @@ def register_tool_usage_routes(
             lambda: [item_row(i, c, f, m) for i, (c, f, m) in items.items()]
         )
         by_item.sort(key=lambda x: (-x.calls, x.item))
+        calls = sum(r.calls for r in rows)
+        total_ms = sum(r.total_ms for r in rows)
         return ToolUsageDetail(
             tool=tool,
             days=days,
+            calls=calls,
+            fails=sum(r.fails for r in rows),
+            avg_ms=_avg(calls, total_ms),
             by_user=by_user,
             by_surface_app=by_surface_app,
             by_item=by_item,
