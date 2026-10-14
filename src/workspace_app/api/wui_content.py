@@ -6,9 +6,9 @@ URL from `location` throws on its first line (measured: mkdocs-material's does).
 A multi-page site needs each page at an `http(s)` URL, with its siblings beside
 it, the way a static file server would hand them out.
 
-The frame is opaque-origin (`sandbox="allow-scripts"`, and the `sandbox` CSP
-directive below for anyone opening the URL directly), and an opaque origin's
-requests carry no `SameSite=Lax` cookie — scripts, stylesheets, `fetch`, even its
+The frame is opaque-origin (`sandbox="allow-scripts allow-downloads"`, and the
+`sandbox` CSP directive below for anyone opening the URL directly), and an opaque
+origin's requests carry no `SameSite=Lax` cookie — scripts, stylesheets, `fetch`, even its
 own link navigations all go out `cross-site` (Phase 1 measured each). So the
 content route cannot lean on the session the rest of the API uses. It
 authorises by a **pass** instead: a random token the pane mints through a
@@ -69,13 +69,16 @@ _HOLD_MAX = 1024
 
 #: The envelope, as the server's own header — a page's `<meta>` can only
 #: tighten it. `sandbox` makes the document opaque-origin even when the URL is
-#: opened as a top-level page; `'self'` is this host and nothing else, so a page
-#: cannot send what it read anywhere; `blob:` workers because an opaque origin
-#: may not start a worker from a URL (Phase 1), so the runtime loads the script
-#: into a blob. `form-action 'none'`: a form post is a request out.
+#: opened as a top-level page, and lets the page save a file it made to the
+#: reader's disk — with or without a click (`allow-downloads`, the same tokens
+#: as the frame's `WUI_SANDBOX`); `'self'`
+#: is this host and nothing else, so a page cannot send what it read anywhere;
+#: `blob:` workers because an opaque origin may not start a worker from a URL
+#: (Phase 1), so the runtime loads the script into a blob. `form-action
+#: 'none'`: a form post is a request out.
 CONTENT_CSP = "; ".join(
     [
-        "sandbox allow-scripts",
+        "sandbox allow-scripts allow-downloads",
         "default-src 'none'",
         "script-src 'self' 'unsafe-inline'",
         "style-src 'self' 'unsafe-inline'",
