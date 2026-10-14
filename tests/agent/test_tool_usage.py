@@ -254,6 +254,7 @@ async def test_an_ambiguous_old_name_the_tool_never_ran_is_a_failed_call(exec_ex
     # Under the name the model called — not the first candidate it was routed
     # through, which never ran and would wear a failure it did not earn (r2).
     assert (row.tool, row.source, row.calls, row.fails) == ("ls", "third_party", 1, 1)
+    assert row.package == ""  # two packages answer to "ls": it is neither's
 
 
 async def test_who_where_and_which_item_come_from_the_turn(exec_exits) -> None:  # noqa: ANN001
@@ -405,3 +406,18 @@ async def test_a_wiki_pass_nobody_asked_for_is_background_with_no_item() -> None
     [row] = rec.drain()
     assert list(row.by_item) == [""]
     assert list(row.by_surface_app) == [f"background{SEP}"]
+
+
+async def test_each_command_is_counted_with_its_package(exec_exits) -> None:  # noqa: ANN001
+    """§9.1: a package's commands carry the package's name, so a report can add
+    them up per package; a built-in belongs to none."""
+    rec = ToolUsageRecorder(day=lambda: "d", clock=_Clock())
+    agent = _agent(_pkg("rca-tools", "spc"), _pkg("acme", "lookup", third_party=True))
+    exec_exits.extend([0, 0])
+
+    await _call(agent, _ctx(rec), "ask_outside", json.dumps({"why": "w"}))
+    await _call(agent, _ctx(rec), "spc", "{}")
+    await _call(agent, _ctx(rec), "acme__lookup", "{}")
+
+    got = {r.tool: r.package for r in rec.drain()}
+    assert got == {"ask_outside": "", "spc": "rca-tools", "acme__lookup": "acme"}

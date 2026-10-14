@@ -4,20 +4,34 @@ Superusers only (D2). A window of 7, 30 or 90 days ending today (D5); per tool,
 calls / failures / average time (D3), filterable by source (D6), surface and
 App (D7); and one tool's breakdown by person (D4), by surface × App and by item.
 `kind=skill` asks the same of skill loads (§8.3); without it, tools.
+`group=package` adds a package's commands into one row (§9.1), and
+`/admin/tool-usage.csv` hands over the raw cells (§9.3).
 """
 
 from __future__ import annotations
 
 import asyncio
+import csv
+import datetime as dt
+import io
 from collections.abc import Callable
 
 from fastapi import APIRouter, FastAPI, HTTPException
+from fastapi.responses import Response
 from pydantic import BaseModel
 from specstar import SpecStar
 
 from ..agent.tool_usage import SEP
 from .locator import ItemLocator
-from .tool_usage_store import breakdown, per_tool, rows_since, since_day
+from .tool_usage_store import (
+    RAW_COLUMNS,
+    ToolUsageDay,
+    breakdown,
+    per_tool,
+    raw_lines,
+    rows_since,
+    since_day,
+)
 
 #: The windows a report may ask for (D5).
 DAYS = (7, 30, 90)
@@ -39,6 +53,26 @@ def _kind(kind: str) -> str:
     if kind not in KINDS:
         raise HTTPException(status_code=422, detail="kind must be tool or skill")
     return kind
+
+
+#: How a report groups tools (§9.1).
+GROUPS = ("command", "package")
+
+
+def _group(group: str) -> str:
+    if group not in GROUPS:
+        raise HTTPException(status_code=422, detail="group must be command or package")
+    return group
+
+
+def _rows_of(spec: SpecStar, since: str, name: str, kind: str, group: str) -> list[ToolUsageDay]:
+    """The rows one report line adds up: a tool's — or, by package, every
+    command of the package `name`, and a built-in of that name (it has none)."""
+    if group != "package":
+        return rows_since(spec, since, tool=name, kind=kind)
+    of_package = rows_since(spec, since, package=name, kind=kind)
+    alone = [r for r in rows_since(spec, since, tool=name, kind=kind) if not r.package]
+    return of_package + alone
 
 
 def _avg(calls: int, ms: int) -> int:
@@ -103,27 +137,56 @@ def register_tool_usage_routes(
         if get_user_id() not in superusers:
             raise HTTPException(status_code=403, detail="superusers only")
 
-    @app.get("/admin/tool-usage", response_model=ToolUsageReport)
-    async def tool_usage(
-        days: int = 30, source: str = "", surface: str = "", app: str = "", kind: str = "tool"
-    ) -> ToolUsageReport:
+    @app.get("/admin/tool-usage.csv")
+    async def tool_usage_raw(days: int = 30, kind: str = "tool") -> Response:
         _require_superuser()
         days = _window(days)
         kind = _kind(kind)
         rows = await asyncio.to_thread(rows_since, spec, since_day(days), kind=kind)
+        out = io.StringIO()
+        writer = csv.DictWriter(out, fieldnames=RAW_COLUMNS, lineterminator="\n")
+        writer.writeheader()
+        writer.writerows(raw_lines(rows))
+        name = f"tool-usage-{kind}-{days}d-{dt.datetime.now(dt.UTC).date().isoformat()}.csv"
+        # UTF-8 with a BOM: Excel opens it as UTF-8 only when it sees one.
+        return Response(
+            content=out.getvalue().encode("utf-8-sig"),
+            media_type="text/csv; charset=utf-8",
+            headers={"Content-Disposition": f'attachment; filename="{name}"'},
+        )
+
+    @app.get("/admin/tool-usage", response_model=ToolUsageReport)
+    async def tool_usage(
+        days: int = 30,
+        source: str = "",
+        surface: str = "",
+        app: str = "",
+        kind: str = "tool",
+        group: str = "command",
+    ) -> ToolUsageReport:
+        _require_superuser()
+        days = _window(days)
+        kind = _kind(kind)
+        group = _group(group)
+        rows = await asyncio.to_thread(rows_since, spec, since_day(days), kind=kind)
         tools = [
             ToolUsageTool(tool=t, source=s, calls=c, fails=f, avg_ms=_avg(c, m))
-            for t, s, c, f, m in per_tool(rows, source=source, surface=surface, app=app)
+            for t, s, c, f, m in per_tool(
+                rows, source=source, surface=surface, app=app, group=group
+            )
         ]
         tools.sort(key=lambda t: (-t.calls, t.tool))
         return ToolUsageReport(days=days, tools=tools)
 
     @app.get("/admin/tool-usage/{tool}", response_model=ToolUsageDetail)
-    async def tool_usage_detail(tool: str, days: int = 30, kind: str = "tool") -> ToolUsageDetail:
+    async def tool_usage_detail(
+        tool: str, days: int = 30, kind: str = "tool", group: str = "command"
+    ) -> ToolUsageDetail:
         _require_superuser()
         days = _window(days)
         kind = _kind(kind)
-        rows = await asyncio.to_thread(rows_since, spec, since_day(days), tool=tool, kind=kind)
+        group = _group(group)
+        rows = await asyncio.to_thread(_rows_of, spec, since_day(days), tool, kind, group)
 
         by_user = sorted(
             (

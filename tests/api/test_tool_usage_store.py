@@ -289,3 +289,25 @@ def test_the_skill_hub_counts_under_this_processs_name(monkeypatch) -> None:
     hub = SkillHubStore(make_spec(), SkillHubRepos(tempfile.mkdtemp()))
 
     assert hub.usage._pod == "vm-7"  # noqa: SLF001
+
+
+def test_a_rows_package_is_stored() -> None:
+    from workspace_app.api.tool_usage_store import rows_since
+
+    spec = _spec()
+    rec = ToolUsageRecorder(day=lambda: "2026-10-14")
+    rec.record(
+        "acme__ls",
+        "third_party",
+        package="acme",
+        failed=False,
+        ms=1,
+        user="u",
+        surface="c",
+        app="",
+        item="",
+    )
+    ToolUsageStore(spec, rec, pod="p", today=lambda: "2026-10-14").flush()
+
+    [row] = rows_since(spec, "2026-10-01")
+    assert row.package == "acme"

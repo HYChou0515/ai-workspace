@@ -86,6 +86,8 @@ class ToolUsageRow:
     tool: str
     source: str
     kind: str = "tool"
+    #: The package a command belongs to (plan §9.1); "" for a built-in or a skill.
+    package: str = ""
     calls: int = 0
     fails: int = 0
     total_ms: int = 0
@@ -113,7 +115,7 @@ class ToolUsageRecorder:
     ) -> None:
         self._day = day
         self.clock = clock
-        self._rows: dict[tuple[str, str, str, str], ToolUsageRow] = {}
+        self._rows: dict[tuple[str, str, str, str, str], ToolUsageRow] = {}
         self._lock = threading.Lock()
 
     def record(
@@ -128,13 +130,14 @@ class ToolUsageRecorder:
         app: str,
         item: str,
         kind: str = "tool",
+        package: str = "",
     ) -> None:
         day = self._day()
-        key = (day, kind, tool, source)
+        key = (day, kind, tool, source, package)
         with self._lock:
             row = self._rows.get(key)
             if row is None:
-                row = self._rows[key] = ToolUsageRow(day, tool, source, kind)
+                row = self._rows[key] = ToolUsageRow(day, tool, source, kind, package)
             row.calls += 1
             row.fails += int(failed)
             row.total_ms += ms
@@ -152,7 +155,7 @@ class ToolUsageRecorder:
         """Put rows a flush could not write back, for the next flush."""
         with self._lock:
             for got in rows:
-                key = (got.day, got.kind, got.tool, got.source)
+                key = (got.day, got.kind, got.tool, got.source, got.package)
                 row = self._rows.get(key)
                 if row is None:
                     self._rows[key] = got
@@ -226,7 +229,7 @@ def record_skill(actx: AgentToolContext, name: str, source: str) -> None:
     )
 
 
-def wrap_with_usage(tool: FunctionTool, source: str) -> FunctionTool:
+def wrap_with_usage(tool: FunctionTool, source: str, package: str = "") -> FunctionTool:
     """`tool`, counted: each call is timed and judged, and added to the
     turn's recorder. Wraps OUTSIDE the argument recovery, so a call whose
     arguments the tool never saw is counted too — as a failure: the model
@@ -255,9 +258,13 @@ def wrap_with_usage(tool: FunctionTool, source: str) -> FunctionTool:
             return result
         finally:
             _CALLER.reset(token)
+            # An ambiguous old name is the name the model called — two
+            # packages answer to it, so it is neither's.
+            called = ambiguous_called_name(args_json)
             rec.record(
-                ambiguous_called_name(args_json) or tool.name,
+                called or tool.name,
                 source,
+                package="" if called else package,
                 failed=failed,
                 ms=round((rec.clock() - start) * 1000),
                 user=user,

@@ -603,12 +603,21 @@ def _agent_for(
         model_tool_name(p, c) for p in packages or () if p.third_party for c in p.commands
     }
 
+    # …and the package it came from (§9.1), so a report can add a package's
+    # commands up; a built-in shadows a command of its name, so it has none.
+    package_of = {model_tool_name(p, c): p.name for p in packages or () for c in p.commands}
+
     def source(name: str) -> str:
         if name in builtin_names:
             return "builtin"
         return "third_party" if name in third_party else "first_party"
 
-    tools = [wrap_with_usage(wrap_with_args_recovery(t), source(t.name)) for t in tools]
+    def package(name: str) -> str:
+        return "" if name in builtin_names else package_of.get(name, "")
+
+    tools = [
+        wrap_with_usage(wrap_with_args_recovery(t), source(t.name), package(t.name)) for t in tools
+    ]
     # Per-message reasoning effort (the UI selector). Only set when chosen —
     # absent leaves the model's default. drop_params (above) drops it on models
     # that don't support it, so it's safe to send to any model.

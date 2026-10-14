@@ -46,6 +46,8 @@ class ToolUsageDay(Struct, kw_only=True):
     tool: str
     source: str
     kind: str = "tool"
+    #: The package a command belongs to (§9.1); "" for a built-in or a skill.
+    package: str = ""
     day: str
     pod: str
     calls: int = 0
@@ -61,7 +63,7 @@ def register_tool_usage(spec: SpecStar) -> None:
     window a report asks for and the prune are ranges on it; `tool` because a
     tool's own breakdown is read by it; `kind` because a report reads one."""
     with contextlib.suppress(ValueError):
-        spec.add_model(ToolUsageDay, indexed_fields=["day", "tool", "kind"])
+        spec.add_model(ToolUsageDay, indexed_fields=["day", "tool", "kind", "package"])
 
 
 def _today() -> str:
@@ -128,7 +130,12 @@ class ToolUsageStore:
             assert isinstance(stored, ToolUsageDay)
         except ResourceIDNotFoundError:
             stored = ToolUsageDay(
-                tool=row.tool, source=row.source, kind=row.kind, day=row.day, pod=self._pod
+                tool=row.tool,
+                source=row.source,
+                kind=row.kind,
+                package=row.package,
+                day=row.day,
+                pod=self._pod,
             )
             add_row(stored, row)
             rm.create(stored, resource_id=row_id)
@@ -180,13 +187,20 @@ def since_day(days: int, today: str | None = None) -> str:
 
 
 def rows_since(
-    spec: SpecStar, since: str, *, tool: str | None = None, kind: str = "tool"
+    spec: SpecStar,
+    since: str,
+    *,
+    tool: str | None = None,
+    kind: str = "tool",
+    package: str | None = None,
 ) -> list[ToolUsageDay]:
     """Every row of one `kind` from `since` on — an indexed range on `day` (and
-    `tool` when one is named), never the whole table."""
+    `tool` / `package` when one is named), never the whole table."""
     q = (QB["day"] >= since) & (QB["kind"] == kind)
     if tool is not None:
         q = q & (QB["tool"] == tool)
+    if package is not None:
+        q = q & (QB["package"] == package)
     out: list[ToolUsageDay] = []
     for res in spec.get_resource_manager(ToolUsageDay).list_resources(q.build(), returns=["data"]):
         if isinstance(res.data, ToolUsageDay):
@@ -198,12 +212,23 @@ def _sum_cells(cells: list[list[int]]) -> tuple[int, int, int]:
     return (sum(c[0] for c in cells), sum(c[1] for c in cells), sum(c[2] for c in cells))
 
 
+def group_name(row: ToolUsageDay, group: str) -> str:
+    """What a row is reported under: its tool, or — by package (§9.1) — its
+    package; a built-in has none, so it stays itself."""
+    return row.package if group == "package" and row.package else row.tool
+
+
 def per_tool(
-    rows: list[ToolUsageDay], *, source: str = "", surface: str = "", app: str = ""
+    rows: list[ToolUsageDay],
+    *,
+    source: str = "",
+    surface: str = "",
+    app: str = "",
+    group: str = "command",
 ) -> list[tuple[str, str, int, int, int]]:
-    """`(tool, source, calls, fails, total_ms)` per tool, every pod and day
-    added. Filtering by surface or App reads the tool's surface × App
-    breakdown, since a row's totals cover every surface."""
+    """`(name, source, calls, fails, total_ms)` per tool — or per package
+    (`group`) — every pod and day added. Filtering by surface or App reads the
+    tool's surface × App breakdown, since a row's totals cover every surface."""
     sums: dict[tuple[str, str], list[int]] = {}
     for row in rows:
         if source and row.source != source:
@@ -220,7 +245,7 @@ def per_tool(
             calls, fails, ms = row.calls, row.fails, row.total_ms
         if not calls:
             continue
-        acc = sums.setdefault((row.tool, row.source), [0, 0, 0])
+        acc = sums.setdefault((group_name(row, group), row.source), [0, 0, 0])
         acc[0] += calls
         acc[1] += fails
         acc[2] += ms
@@ -238,3 +263,68 @@ def breakdown(rows: list[ToolUsageDay], name: str) -> dict[str, tuple[int, int, 
             acc[1] += fails
             acc[2] += ms
     return {k: (c, f, m) for k, (c, f, m) in sums.items()}
+
+
+#: The raw export's columns (§9.3), in order.
+RAW_COLUMNS = (
+    "day",
+    "kind",
+    "name",
+    "package",
+    "source",
+    "dimension",
+    "user",
+    "surface",
+    "app",
+    "item",
+    "calls",
+    "fails",
+    "total_ms",
+)
+
+
+def _raw_line(
+    base: dict[str, str | int], dimension: str, cells: tuple[int, int, int], **who: str
+) -> dict[str, str | int]:
+    return {
+        **base,
+        "dimension": dimension,
+        "user": who.get("user", ""),
+        "surface": who.get("surface", ""),
+        "app": who.get("app", ""),
+        "item": who.get("item", ""),
+        "calls": cells[0],
+        "fails": cells[1],
+        "total_ms": cells[2],
+    }
+
+
+def raw_lines(rows: list[ToolUsageDay]) -> list[dict[str, str | int]]:
+    """Every stored cell of `rows`, one line each (§9.3): a row's total and each
+    of its three breakdowns — the processes' rows of one day added, since which
+    process counted a call is ours, not the reader's. Ordered by day, then name."""
+    by_day: dict[tuple[str, str, str, str, str], ToolUsageRow] = {}
+    for row in rows:
+        key = (row.day, row.kind, row.tool, row.source, row.package)
+        acc = by_day.setdefault(
+            key, ToolUsageRow(row.day, row.tool, row.source, row.kind, row.package)
+        )
+        add_row(acc, row)  # ty: ignore[invalid-argument-type]
+    out: list[dict[str, str | int]] = []
+    for (day, kind, tool, source, package), r in sorted(by_day.items()):
+        base: dict[str, str | int] = {
+            "day": day,
+            "kind": kind,
+            "name": tool,
+            "package": package,
+            "source": source,
+        }
+        out.append(_raw_line(base, "total", (r.calls, r.fails, r.total_ms)))
+        for user, (c, f, m) in sorted(r.by_user.items()):
+            out.append(_raw_line(base, "user", (c, f, m), user=user))
+        for key, (c, f, m) in sorted(r.by_surface_app.items()):
+            surface, _, app = key.partition(SEP)
+            out.append(_raw_line(base, "surface_app", (c, f, m), surface=surface, app=app))
+        for item, (c, f, m) in sorted(r.by_item.items()):
+            out.append(_raw_line(base, "item", (c, f, m), item=item))
+    return out
