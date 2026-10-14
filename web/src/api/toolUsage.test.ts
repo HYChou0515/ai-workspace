@@ -50,6 +50,25 @@ describe("toolUsageApi", () => {
     ]);
   });
 
+  it("asks for a package's commands added up, and says nothing about group by command", async () => {
+    const urls = capture();
+
+    await toolUsageApi.report(30, {}, "tool", "package");
+    await toolUsageApi.detail("acme", 30, "tool", "package");
+    await toolUsageApi.report(30, {}, "tool", "command");
+
+    expect(urls).toEqual([
+      "/api/admin/tool-usage?days=30&group=package",
+      "/api/admin/tool-usage/acme?days=30&group=package",
+      "/api/admin/tool-usage?days=30",
+    ]);
+  });
+
+  it("names the raw-data download for a window and a kind", () => {
+    expect(toolUsageApi.rawUrl(7, "skill")).toBe("/api/admin/tool-usage.csv?days=7&kind=skill");
+    expect(toolUsageApi.rawUrl(30, "tool")).toBe("/api/admin/tool-usage.csv?days=30&kind=tool");
+  });
+
   it("carries the status of a refusal", async () => {
     capture(403, { detail: "superusers only" });
 

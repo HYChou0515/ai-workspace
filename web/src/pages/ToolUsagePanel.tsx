@@ -28,6 +28,7 @@ import {
   type ToolUsageClient,
   type ToolUsageTool,
   type UsageDays,
+  type UsageGroup,
   type UsageKind,
   toolUsageApi,
 } from "../api/toolUsage";
@@ -37,6 +38,11 @@ import { useApps } from "../hooks/useResources";
 import { type MsgKey, useT } from "../lib/i18n";
 
 const WINDOWS: UsageDays[] = [7, 30, 90];
+
+const GROUPS: { group: UsageGroup; label: MsgKey }[] = [
+  { group: "command", label: "usage.group.command" },
+  { group: "package", label: "usage.group.package" },
+];
 
 /** How many a chart shows; the table below keeps every one. */
 const CHART_TOP = 10;
@@ -171,25 +177,47 @@ function UsagePart({
   const [source, setSource] = useState("");
   const [sort, setSort] = useState<{ key: SortKey; desc: boolean }>({ key: "calls", desc: true });
   const [picked, setPicked] = useState<string | null>(null);
+  // §9: tools only — a skill has no package, and the ask was "which tools".
+  const [group, setGroup] = useState<UsageGroup>("command");
+  // What is UNticked, so a name the report newly brings shows (ticked) by default.
+  const [hidden, setHidden] = useState<ReadonlySet<string>>(new Set());
   const filter = useMemo(() => ({ source, ...shared }), [source, shared]);
   const headingId = useId();
 
   const report = useQuery({
-    queryKey: qk.toolUsage(days, filter, kind),
-    queryFn: () => client.report(days, filter, kind),
+    queryKey: qk.toolUsage(days, filter, kind, group),
+    queryFn: () => client.report(days, filter, kind, group),
   });
   const all = useMemo(() => report.data?.tools ?? [], [report.data]);
+  const shown = useMemo(() => all.filter((r) => !hidden.has(r.tool)), [all, hidden]);
+
+  // Commands and packages are two different sets of names: a new granularity
+  // starts from every one shown, nothing open, sorted by use.
+  const pickGroup = (next: UsageGroup) => {
+    if (next === group) return;
+    setGroup(next);
+    setHidden(new Set());
+    setPicked(null);
+    setSort({ key: "calls", desc: true });
+  };
+  const toggle = (name: string) =>
+    setHidden((h) => {
+      const next = new Set(h);
+      if (next.has(name)) next.delete(name);
+      else next.add(name);
+      return next;
+    });
 
   const rows = useMemo(() => {
     const value = (r: ToolUsageTool): number | string =>
       sort.key === "rate" ? rate(r) : r[sort.key];
-    return [...all].sort((a, b) => {
+    return [...shown].sort((a, b) => {
       const x = value(a);
       const y = value(b);
       const c = typeof x === "string" ? x.localeCompare(String(y)) : x - (y as number);
       return (sort.desc ? -c : c) || a.tool.localeCompare(b.tool);
     });
-  }, [all, sort]);
+  }, [shown, sort]);
 
   const ms = (n: number) =>
     n < 1000 ? t("usage.ms", { n }) : t("usage.seconds", { n: (n / 1000).toFixed(1) });
@@ -216,10 +244,12 @@ function UsagePart({
     );
   };
 
-  const failed = all.filter((r) => r.fails > 0);
+  const failed = shown.filter((r) => r.fails > 0);
   // One scale for every chart of the part: failures side by side with calls
   // are only comparable on the same axis (a failure can never outnumber its calls).
-  const scale = Math.max(0, ...all.map((r) => r.calls));
+  const scale = Math.max(0, ...shown.map((r) => r.calls));
+  // The tick boxes, busiest first — the order the chart and the table start in.
+  const names = [...all].sort((a, b) => b.calls - a.calls || a.tool.localeCompare(b.tool));
 
   return (
     <section className="tool-usage-part" aria-labelledby={headingId}>
@@ -238,20 +268,84 @@ function UsagePart({
             ))}
           </select>
         </label>
+        {/* §9.3: a file to save, so a link — not a button. The raw data is all of
+            it for the window: the filters above are not applied. */}
+        <a className="tool-usage-raw" href={client.rawUrl(days, kind)} download>
+          {t("usage.raw")}
+        </a>
       </div>
+
+      {!skills && (
+        <div className="tool-usage-pick">
+          <div className="tool-usage-segmented" role="group" aria-label={t("usage.group")}>
+            {GROUPS.map((g) => (
+              <button
+                key={g.group}
+                type="button"
+                aria-pressed={g.group === group}
+                onClick={() => pickGroup(g.group)}
+              >
+                {t(g.label)}
+              </button>
+            ))}
+          </div>
+          {/* NN/g, "Listboxes vs. Dropdown Lists": several choices are a list of
+              tick boxes laid open, not a dropdown; it does not scroll, so what is
+              ticked is in sight. */}
+          {names.length > 0 && (
+            <fieldset className="tool-usage-shown">
+              <legend>{t("usage.shown")}</legend>
+              <div className="tool-usage-shown-actions">
+                <button
+                  type="button"
+                  className="btn"
+                  data-size="sm"
+                  data-variant="ghost"
+                  onClick={() => setHidden(new Set())}
+                >
+                  {t("usage.shown.all")}
+                </button>
+                <button
+                  type="button"
+                  className="btn"
+                  data-size="sm"
+                  data-variant="ghost"
+                  onClick={() => setHidden(new Set(all.map((r) => r.tool)))}
+                >
+                  {t("usage.shown.none")}
+                </button>
+              </div>
+              <div className="tool-usage-shown-boxes">
+                {names.map((r) => (
+                  <label key={r.tool}>
+                    <input
+                      type="checkbox"
+                      checked={!hidden.has(r.tool)}
+                      onChange={() => toggle(r.tool)}
+                    />
+                    {r.tool}
+                  </label>
+                ))}
+              </div>
+            </fieldset>
+          )}
+        </div>
+      )}
 
       {report.isError ? (
         <p className="tool-usage-note" role="alert">
           {t("usage.failed", { reason: (report.error as Error).message })}
         </p>
-      ) : report.data && rows.length === 0 ? (
+      ) : report.data && all.length === 0 ? (
         <p className="tool-usage-note">{t(skills ? "usage.empty.skill" : "usage.empty")}</p>
+      ) : report.data && rows.length === 0 ? (
+        <p className="tool-usage-note">{t("usage.shown.empty")}</p>
       ) : (
         <>
           <div className="tool-usage-charts">
             <UsageBars
               title={t(skills ? "usage.chart.loads" : "usage.chart.calls")}
-              rows={all.map((r) => ({ name: r.tool, value: r.calls }))}
+              rows={shown.map((r) => ({ name: r.tool, value: r.calls }))}
               scale={scale}
             />
             {/* Failures on a chart of their own — never stacked onto the calls. */}
@@ -313,6 +407,7 @@ function UsagePart({
         <ToolDetail
           tool={picked}
           kind={kind}
+          group={group}
           days={days}
           client={client}
           ms={ms}
@@ -401,6 +496,7 @@ function UsageBars({
 function ToolDetail({
   tool,
   kind,
+  group,
   days,
   client,
   ms,
@@ -409,6 +505,7 @@ function ToolDetail({
 }: {
   tool: string;
   kind: UsageKind;
+  group: UsageGroup;
   days: UsageDays;
   client: ToolUsageClient;
   ms: (n: number) => string;
@@ -417,8 +514,8 @@ function ToolDetail({
 }) {
   const t = useT();
   const detail = useQuery({
-    queryKey: qk.toolUsageDetail(tool, days, kind),
-    queryFn: () => client.detail(tool, days, kind),
+    queryKey: qk.toolUsageDetail(tool, days, kind, group),
+    queryFn: () => client.detail(tool, days, kind, group),
   });
   const d = detail.data;
   // A skill load has a count only (D11).

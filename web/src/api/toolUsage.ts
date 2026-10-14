@@ -3,11 +3,13 @@
  * and the same report of skill loads (§8). Superusers only — the server
  * answers 403 to anyone else.
  */
-import { apiFetch, httpErrorFrom } from "./http";
+import { API_PREFIX, apiFetch, httpErrorFrom } from "./http";
 
 export type UsageDays = 7 | 30 | 90;
 /** What the report counts: tool calls, or skill loads (§8). */
 export type UsageKind = "tool" | "skill";
+/** One row per command, or a package's commands added up (§9.1). */
+export type UsageGroup = "command" | "package";
 export type ToolSource = "builtin" | "first_party" | "third_party";
 export type SkillSource = "shared" | "profile" | "hub" | "workspace";
 
@@ -42,21 +44,35 @@ export const toolUsageApi = {
     days: UsageDays,
     filter: UsageFilter = {},
     kind: UsageKind = "tool",
+    group: UsageGroup = "command",
   ): Promise<ToolUsageReport> {
     const q = new URLSearchParams({ days: String(days) });
     for (const [k, v] of Object.entries(filter)) if (v) q.set(k, v);
-    // Tools are the server's default — a caller that never names a kind is unchanged.
+    // Tools and commands are the server's defaults — a caller that names
+    // neither is unchanged.
     if (kind !== "tool") q.set("kind", kind);
+    if (group !== "command") q.set("group", group);
     const r = await apiFetch(`/admin/tool-usage?${q}`);
     if (!r.ok) throw await httpErrorFrom(r, `tool usage failed: ${r.status}`);
     return (await r.json()) as ToolUsageReport;
   },
 
-  async detail(tool: string, days: UsageDays, kind: UsageKind = "tool"): Promise<ToolUsageDetail> {
+  async detail(
+    tool: string,
+    days: UsageDays,
+    kind: UsageKind = "tool",
+    group: UsageGroup = "command",
+  ): Promise<ToolUsageDetail> {
     const k = kind === "tool" ? "" : `&kind=${kind}`;
-    const r = await apiFetch(`/admin/tool-usage/${enc(tool)}?days=${days}${k}`);
+    const g = group === "command" ? "" : `&group=${group}`;
+    const r = await apiFetch(`/admin/tool-usage/${enc(tool)}?days=${days}${k}${g}`);
     if (!r.ok) throw await httpErrorFrom(r, `tool usage failed: ${r.status}`);
     return (await r.json()) as ToolUsageDetail;
+  },
+
+  /** Where one kind's raw data downloads from (§9.3) — a link, not a fetch. */
+  rawUrl(days: UsageDays, kind: UsageKind): string {
+    return `${API_PREFIX}/admin/tool-usage.csv?days=${days}&kind=${kind}`;
   },
 };
 

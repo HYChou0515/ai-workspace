@@ -237,3 +237,58 @@
   font-variant-numeric: tabular-nums;
   text-align: right;
 }
+
+/* §9.3: the raw-data download sits with the part's own controls. */
+.tool-usage-raw {
+  font-size: var(--text-small);
+  color: var(--accent-h);
+  align-self: flex-end;
+  padding-bottom: 6px;
+}
+
+/* §9: granularity, then the tick boxes of what to show. */
+.tool-usage-pick {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-8);
+  margin-bottom: var(--space-12);
+}
+
+.tool-usage-shown {
+  margin: 0;
+  padding: var(--space-8) var(--space-12);
+  border: 1px solid var(--paper-3);
+  border-radius: var(--radius-btn);
+  width: 100%;
+  min-width: 0;
+}
+
+.tool-usage-shown legend {
+  padding: 0 var(--space-4);
+  font-size: var(--text-small);
+  color: var(--text-paper-d);
+}
+
+.tool-usage-shown-actions {
+  display: flex;
+  gap: var(--space-4);
+  margin-bottom: var(--space-4);
+}
+
+/* Laid open and wrapping — never a scrolling box, so every tick is in sight. */
+.tool-usage-shown-boxes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-4) var(--space-16);
+}
+
+.tool-usage-shown-boxes label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-4);
+  font-family: var(--font-mono);
+  font-size: var(--text-small);
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}

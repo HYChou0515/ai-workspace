@@ -53,12 +53,23 @@ const DETAIL: ToolUsageDetail = {
 
 const EMPTY: ToolUsageReport = { days: 30, tools: [] };
 
+/** The tools report by package: acme's two commands are one row; built-ins stay. */
+const BY_PACKAGE: ToolUsageReport = {
+  days: 30,
+  tools: [
+    { tool: "exec", source: "builtin", calls: 100, fails: 1, avg_ms: 85 },
+    { tool: "rca-tools", source: "first_party", calls: 40, fails: 10, avg_ms: 1200 },
+    { tool: "acme", source: "third_party", calls: 5, fails: 5, avg_ms: 30000 },
+  ],
+};
+
 function draw(tools: ToolUsageReport = TOOLS, skills: ToolUsageReport = SKILLS) {
   const client = {
-    report: vi.fn(async (_d: number, _f?: object, kind?: string) =>
-      kind === "skill" ? skills : tools,
+    report: vi.fn(async (_d: number, _f?: object, kind?: string, group?: string) =>
+      kind === "skill" ? skills : group === "package" ? BY_PACKAGE : tools,
     ),
     detail: vi.fn(async () => DETAIL),
+    rawUrl: (days: number, kind: string) => `/raw?days=${days}&kind=${kind}`,
   } satisfies ToolUsageClient;
   renderWithQuery(
     <MemoryRouter>
@@ -113,8 +124,18 @@ describe("one page, both kinds", () => {
 
     await within(toolsPart()).findAllByTestId("tool-usage-row");
     await within(skillsPart()).findAllByTestId("tool-usage-row");
-    expect(client.report).toHaveBeenCalledWith(30, { source: "", surface: "", app: "" }, "tool");
-    expect(client.report).toHaveBeenCalledWith(30, { source: "", surface: "", app: "" }, "skill");
+    expect(client.report).toHaveBeenCalledWith(
+      30,
+      { source: "", surface: "", app: "" },
+      "tool",
+      "command",
+    );
+    expect(client.report).toHaveBeenCalledWith(
+      30,
+      { source: "", surface: "", app: "" },
+      "skill",
+      "command",
+    );
     expect(screen.queryByRole("group", { name: "看哪一種" })).toBeNull();
   });
 
@@ -126,8 +147,8 @@ describe("one page, both kinds", () => {
     fireEvent.click(screen.getByRole("button", { name: "7 天" }));
 
     await waitFor(() => {
-      expect(client.report).toHaveBeenCalledWith(7, expect.anything(), "tool");
-      expect(client.report).toHaveBeenCalledWith(7, expect.anything(), "skill");
+      expect(client.report).toHaveBeenCalledWith(7, expect.anything(), "tool", "command");
+      expect(client.report).toHaveBeenCalledWith(7, expect.anything(), "skill", "command");
     });
     expect(screen.getByRole("button", { name: "7 天" })).toHaveAttribute("aria-pressed", "true");
   });
@@ -148,11 +169,13 @@ describe("one page, both kinds", () => {
         30,
         { source: "third_party", surface: "schedule", app: "pm" },
         "tool",
+        "command",
       );
       expect(client.report).toHaveBeenCalledWith(
         30,
         { source: "", surface: "schedule", app: "pm" },
         "skill",
+        "command",
       );
     });
     const skillSources = within(within(skillsPart()).getByLabelText("來源"))
@@ -276,7 +299,7 @@ describe("tools", () => {
     fireEvent.click(await within(toolsPart()).findByRole("button", { name: "spc" }));
 
     const detail = await within(toolsPart()).findByTestId("tool-usage-detail");
-    expect(client.detail).toHaveBeenCalledWith("spc", 30, "tool");
+    expect(client.detail).toHaveBeenCalledWith("spc", 30, "tool", "command");
     expect(await within(detail).findByText("Alice Chen")).toBeInTheDocument();
     expect(within(detail).getByText("排程 · RCA")).toBeInTheDocument();
     const link = within(detail).getByRole("link", { name: "Line 3" });
@@ -320,7 +343,7 @@ describe("skills (plan §8)", () => {
     fireEvent.click(await within(skillsPart()).findByRole("button", { name: "author-skill" }));
 
     const detail = await within(skillsPart()).findByTestId("tool-usage-detail");
-    expect(client.detail).toHaveBeenCalledWith("author-skill", 30, "skill");
+    expect(client.detail).toHaveBeenCalledWith("author-skill", 30, "skill", "command");
     await within(detail).findByText("Alice Chen");
     expect(within(detail).queryByText("失敗")).toBeNull();
     expect(within(detail).queryByText("平均耗時")).toBeNull();
@@ -335,5 +358,104 @@ describe("skills (plan §8)", () => {
     draw(TOOLS, EMPTY);
 
     expect(await within(skillsPart()).findByText("這段期間沒有 skill 被載入")).toBeInTheDocument();
+  });
+});
+
+describe("which tools, at which granularity (plan §9)", () => {
+  const shown = () => within(toolsPart()).getByRole("group", { name: "顯示哪些" });
+
+  it("shows every tool by default, each with a ticked box", async () => {
+    draw();
+    await within(toolsPart()).findAllByTestId("tool-usage-row");
+
+    const boxes = within(shown()).getAllByRole("checkbox");
+    expect(boxes.map((b) => b.getAttribute("aria-label") ?? b.closest("label")?.textContent)).toEqual([
+      "exec",
+      "spc",
+      "acme__lookup",
+    ]);
+    expect(boxes.every((b) => (b as HTMLInputElement).checked)).toBe(true);
+  });
+
+  it("leaves an unticked tool out of the charts and the table", async () => {
+    draw();
+    await within(toolsPart()).findAllByTestId("tool-usage-row");
+
+    fireEvent.click(within(shown()).getByRole("checkbox", { name: "exec" }));
+
+    expect(order(toolsPart())).toEqual(["spc", "acme__lookup"]);
+    expect(bars(toolsPart(), "呼叫次數")).toEqual(["spc 40", "acme__lookup 5"]);
+    expect(bars(toolsPart(), "失敗次數")).toEqual(["spc 10", "acme__lookup 5"]);
+  });
+
+  it("clears every tick, then shows only the ones ticked back", async () => {
+    draw();
+    await within(toolsPart()).findAllByTestId("tool-usage-row");
+
+    fireEvent.click(within(toolsPart()).getByRole("button", { name: "清除" }));
+    expect(within(toolsPart()).queryAllByTestId("tool-usage-row")).toHaveLength(0);
+    expect(within(toolsPart()).getByText("沒有勾選要顯示的工具")).toBeInTheDocument();
+
+    fireEvent.click(within(shown()).getByRole("checkbox", { name: "spc" }));
+    expect(order(toolsPart())).toEqual(["spc"]);
+
+    fireEvent.click(within(toolsPart()).getByRole("button", { name: "全部" }));
+    expect(order(toolsPart())).toEqual(["exec", "spc", "acme__lookup"]);
+  });
+
+  it("adds a package's commands into one row by package, and starts from every one again", async () => {
+    const client = draw();
+    await within(toolsPart()).findAllByTestId("tool-usage-row");
+    fireEvent.click(within(shown()).getByRole("checkbox", { name: "exec" }));
+
+    const unit = within(toolsPart()).getByRole("group", { name: "顯示單位" });
+    expect(within(unit).getByRole("button", { name: "每個 command" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    fireEvent.click(within(unit).getByRole("button", { name: "依套件" }));
+
+    await waitFor(() =>
+      expect(client.report).toHaveBeenLastCalledWith(30, expect.anything(), "tool", "package"),
+    );
+    await waitFor(() => expect(order(toolsPart())).toEqual(["exec", "rca-tools", "acme"]));
+    expect(within(shown()).getAllByRole("checkbox").every((b) => (b as HTMLInputElement).checked)).toBe(true);
+  });
+
+  it("opens a package's breakdown by package", async () => {
+    const client = draw();
+    await within(toolsPart()).findAllByTestId("tool-usage-row");
+    fireEvent.click(within(toolsPart()).getByRole("button", { name: "依套件" }));
+    fireEvent.click(await within(toolsPart()).findByRole("button", { name: "acme" }));
+
+    await within(toolsPart()).findByTestId("tool-usage-detail");
+    expect(client.detail).toHaveBeenCalledWith("acme", 30, "tool", "package");
+  });
+
+  it("has no granularity or tick boxes for skills — a skill has no package", async () => {
+    draw();
+    await within(skillsPart()).findAllByTestId("tool-usage-row");
+
+    expect(within(skillsPart()).queryByRole("group", { name: "顯示單位" })).toBeNull();
+  });
+});
+
+describe("raw data (plan §9.3)", () => {
+  it("offers each part's raw data for the window, as a download link", async () => {
+    draw();
+    await within(toolsPart()).findAllByTestId("tool-usage-row");
+
+    const tools = within(toolsPart()).getByRole("link", { name: "下載原始資料(CSV)" });
+    const skills = within(skillsPart()).getByRole("link", { name: "下載原始資料(CSV)" });
+    expect(tools).toHaveAttribute("href", "/raw?days=30&kind=tool");
+    expect(skills).toHaveAttribute("href", "/raw?days=30&kind=skill");
+    expect(tools).toHaveAttribute("download");
+
+    fireEvent.click(screen.getByRole("button", { name: "7 天" }));
+
+    expect(within(toolsPart()).getByRole("link", { name: "下載原始資料(CSV)" })).toHaveAttribute(
+      "href",
+      "/raw?days=7&kind=tool",
+    );
   });
 });
