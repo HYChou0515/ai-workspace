@@ -2216,6 +2216,13 @@ def create_app(
     # engine-key / chat-validation rules every workspace route crosses. The route
     # modules + the turn/mention/replay services call ``locator.<method>`` directly.
     locator = ItemLocator(spec, app_catalog, get_user_id=get_user_id, superusers=superusers)
+    # plan-tool-usage-stats §3.6: the administrator's report on the tool-call
+    # counts (the model is registered with the store, above).
+    from .tool_usage_routes import register_tool_usage_routes
+
+    register_tool_usage_routes(
+        api, spec=spec, locator=locator, get_user_id=get_user_id, superusers=superusers
+    )
 
     # The write side of `_item_facts`: whoever changes an item's stored facts
     # drops the entry, so the next read re-derives instead of serving a value

@@ -24,7 +24,7 @@ from msgspec import Struct, field
 from specstar import QB, SpecStar
 from specstar.types import ResourceIDNotFoundError
 
-from ..agent.tool_usage import ToolUsageRecorder, ToolUsageRow, add_row
+from ..agent.tool_usage import SEP, ToolUsageRecorder, ToolUsageRow, add_row
 
 logger = logging.getLogger(__name__)
 
@@ -160,3 +160,71 @@ def run_flusher(store: ToolUsageStore | object, stop: threading.Event, interval:
         flush()
     except Exception:  # noqa: BLE001 — the process is stopping; nothing to retry with
         logger.exception("tool usage: final flush failed")
+
+
+# ── reading: what the administrator's report asks (§3.6) ───────────────────
+
+
+def since_day(days: int, today: str | None = None) -> str:
+    """The first day of a `days`-long window ending today (inclusive)."""
+    end = dt.date.fromisoformat(today or _today())
+    return (end - dt.timedelta(days=days - 1)).isoformat()
+
+
+def rows_since(spec: SpecStar, since: str, *, tool: str | None = None) -> list[ToolUsageDay]:
+    """Every row from `since` on — an indexed range on `day` (and `tool` when
+    one is named), never the whole table."""
+    q = QB["day"] >= since
+    if tool is not None:
+        q = q & (QB["tool"] == tool)
+    out: list[ToolUsageDay] = []
+    for res in spec.get_resource_manager(ToolUsageDay).list_resources(q.build(), returns=["data"]):
+        if isinstance(res.data, ToolUsageDay):
+            out.append(res.data)
+    return out
+
+
+def _sum_cells(cells: list[list[int]]) -> tuple[int, int, int]:
+    return (sum(c[0] for c in cells), sum(c[1] for c in cells), sum(c[2] for c in cells))
+
+
+def per_tool(
+    rows: list[ToolUsageDay], *, source: str = "", surface: str = "", app: str = ""
+) -> list[tuple[str, str, int, int, int]]:
+    """`(tool, source, calls, fails, total_ms)` per tool, every pod and day
+    added. Filtering by surface or App reads the tool's surface × App
+    breakdown, since a row's totals cover every surface."""
+    sums: dict[tuple[str, str], list[int]] = {}
+    for row in rows:
+        if source and row.source != source:
+            continue
+        if surface or app:
+            picked = [
+                cell
+                for key, cell in row.by_surface_app.items()
+                if (not surface or key.split(SEP, 1)[0] == surface)
+                and (not app or key.split(SEP, 1)[-1] == app)
+            ]
+            calls, fails, ms = _sum_cells(picked)
+        else:
+            calls, fails, ms = row.calls, row.fails, row.total_ms
+        if not calls:
+            continue
+        acc = sums.setdefault((row.tool, row.source), [0, 0, 0])
+        acc[0] += calls
+        acc[1] += fails
+        acc[2] += ms
+    return [(t, s, c, f, m) for (t, s), (c, f, m) in sums.items()]
+
+
+def breakdown(rows: list[ToolUsageDay], name: str) -> dict[str, tuple[int, int, int]]:
+    """One breakdown (`by_user` / `by_surface_app` / `by_item`) of `rows`,
+    every pod and day added: key → (calls, fails, total_ms)."""
+    sums: dict[str, list[int]] = {}
+    for row in rows:
+        for key, (calls, fails, ms) in getattr(row, name).items():
+            acc = sums.setdefault(key, [0, 0, 0])
+            acc[0] += calls
+            acc[1] += fails
+            acc[2] += ms
+    return {k: (c, f, m) for k, (c, f, m) in sums.items()}
