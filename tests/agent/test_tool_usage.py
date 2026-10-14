@@ -251,7 +251,9 @@ async def test_an_ambiguous_old_name_the_tool_never_ran_is_a_failed_call(exec_ex
 
     assert "collision" in reply and exec_exits == []  # refused; nothing ran
     [row] = rec.drain()
-    assert (row.tool, row.calls, row.fails) == ("acme__ls", 1, 1)
+    # Under the name the model called — not the first candidate it was routed
+    # through, which never ran and would wear a failure it did not earn (r2).
+    assert (row.tool, row.source, row.calls, row.fails) == ("ls", "third_party", 1, 1)
 
 
 async def test_who_where_and_which_item_come_from_the_turn(exec_exits) -> None:  # noqa: ANN001

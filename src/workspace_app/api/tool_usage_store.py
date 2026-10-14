@@ -146,16 +146,18 @@ class ToolUsageStore:
         rm = self._rm()
         old = QB["day"] < cutoff
         for meta in rm.search_resources(query=old.build()):
-            rm.permanently_delete(meta.resource_id)
+            # Another process's prune of the same day may have got there first.
+            with contextlib.suppress(ResourceIDNotFoundError):
+                rm.permanently_delete(meta.resource_id)
 
 
 def writer_name() -> str:
     """The name this process writes its rows under: host + pid. Rows are owned
     by their writer and written unlocked (get → add → update), so two processes
-    must never share one. The pod name alone does not do that: outside k8s
-    `HOSTNAME` is a shell variable, not in the environment, and an API with its
-    workers on one VM would all write `~local`, each overwriting the others'
-    counts. A restart may reuse the name — harmless, the old process is gone."""
+    must never share one. The pod name alone does not do that: on a VM / in a
+    plain shell `HOSTNAME` is a shell variable, not in the environment, and an
+    API with its workers on one VM would all write `~local`, each overwriting
+    the others' counts. A restart may reuse the name — harmless, the old process is gone."""
     return f"{socket.gethostname()}-{os.getpid()}"
 
 

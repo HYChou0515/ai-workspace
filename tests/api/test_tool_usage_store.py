@@ -224,3 +224,33 @@ def test_the_api_writes_under_this_processs_name(monkeypatch) -> None:
     app, _spec = _app(ToolUsageRecorder())
 
     assert app.state.tool_usage_store._pod == "host-7"  # noqa: SLF001
+
+
+def test_a_row_another_process_pruned_first_is_skipped_not_an_error() -> None:
+    """Every process prunes on its first write of a UTC day, with no lease
+    (plan §7 A10): two can find the same expired rows, and the slower one's
+    delete of an id already gone must not abandon the rest (review r2)."""
+    spec = _spec()
+    for pod in ("a", "b", "c"):
+        rec = ToolUsageRecorder(day=lambda: "2026-07-01")
+        _count(rec)
+        ToolUsageStore(spec, rec, pod=pod, today=lambda: "2026-07-01").flush()
+    store = ToolUsageStore(spec, ToolUsageRecorder(), pod="p", today=lambda: "2026-10-14")
+    real = store._rm()  # noqa: SLF001
+
+    class _Racing:
+        """The other process deletes the first match between search and delete."""
+
+        def search_resources(self, **kw: object) -> list:
+            metas = list(real.search_resources(**kw))
+            real.permanently_delete(metas[0].resource_id)
+            return metas
+
+        def permanently_delete(self, rid: str) -> None:
+            real.permanently_delete(rid)
+
+    store._rm = lambda: _Racing()  # ty: ignore[invalid-assignment]  # noqa: SLF001
+
+    store.prune()
+
+    assert _rows(spec) == []

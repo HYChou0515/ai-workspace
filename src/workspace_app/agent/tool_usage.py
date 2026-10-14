@@ -56,7 +56,9 @@ def is_failure(result: object) -> bool:
     - the cross-package collision refusal for an ambiguous old name — the
       tool never ran;
     - an in-band refusal written as `error:` / `Error:`, as most built-ins do.
-      One that is not (`kb_grep`'s budget refusals) counts as a success.
+      The search-budget refusals of `kb_search` / `kb_grep` / `search_wiki` /
+      `ask_wiki` are not, and count as a success: they say "no more searching
+      this reply", not that the tool broke.
 
     A structured output (an image, a list of parts) is a success."""
     from ..tooling.registry import COLLISION
@@ -203,6 +205,8 @@ def wrap_with_usage(tool: FunctionTool, source: str) -> FunctionTool:
     turn's recorder. Wraps OUTSIDE the argument recovery, so a call whose
     arguments the tool never saw is counted too — as a failure: the model
     asked for the tool and it did not run."""
+    from .args_recovery import ambiguous_called_name
+
     original = tool.on_invoke_tool
 
     # `ToolContext`, like the argument recovery's wrap: the SDK reads this
@@ -226,7 +230,7 @@ def wrap_with_usage(tool: FunctionTool, source: str) -> FunctionTool:
         finally:
             _CALLER.reset(token)
             rec.record(
-                tool.name,
+                ambiguous_called_name(args_json) or tool.name,
                 source,
                 failed=failed,
                 ms=round((rec.clock() - start) * 1000),

@@ -69,6 +69,7 @@ def test_a_bundle_worker_writes_what_its_agents_count_through_the_spec_they_use(
         return real(settings, spec, **kw)
 
     monkeypatch.setattr(wm, "build_bundle", spy)
+    monkeypatch.setattr("workspace_app.api.tool_usage_store.writer_name", lambda: "vm-4242")
 
     worker = wm.build_worker(_settings(tmp_path), "wiki", config_dir=None)
 
@@ -76,6 +77,7 @@ def test_a_bundle_worker_writes_what_its_agents_count_through_the_spec_they_use(
     assert store is not None
     assert store._recorder is seen["rec"]  # noqa: SLF001
     assert store._spec is seen["spec"]  # noqa: SLF001
+    assert store._pod == "vm-4242"  # this process's rows, never the API's (r2)  # noqa: SLF001
 
 
 def test_an_api_composed_worker_writes_the_apps_own_counts(tmp_path, monkeypatch) -> None:  # noqa: ANN001

@@ -2221,10 +2221,14 @@ agent 步驟裡 AI 的呼叫、WUI 的工具呼叫、view plugin、圖表重畫�
 
 **資料** — 一張新表 `ToolUsageDay`（索引 `day`、`tool`），不用做事，但要知道它的大小：每個行程（API 和每個 worker
 各算一個，名稱是「主機名-pid」）每個被用過的工具每天一列，所以上限是「工具數 × 每天出現過的行程數 × 91 天」——重啟、
-rollout、HPA 擴張都會在當天多出新的行程名稱。API 與 worker 每 5 分鐘、以及正常停止時寫一次（worker 在排空完工作之後
+rollout、HPA 擴張可能會在當天多出新的行程名稱。API 與 worker 每 5 分鐘、以及正常停止時寫一次（worker 在排空完工作之後
 才寫最後一次）；行程被直接殺掉（沒收到 SIGTERM）會掉最後不到 5 分鐘的計數。**超過 90 天的列每天自動永久刪除**（依 `day` 索引，不掃
 全表）。`WorkflowRun` 多一個 `from_schedule` 欄位（有預設值，舊的 run 讀成 `false`），不用回填；升級前就開始的 run
 一律算「工作流程」。升級後，item 的排程與 profile `triggers.json` 宣告的排程都算「排程」。
+
+**k8s · CI 側** — 沒有新的 manifest、env、probe 或 JobType。要知道的一點：worker 的最後一次寫入排在排空工作之後，
+所以排空要在各 worker 的 `terminationGracePeriodSeconds`（`kubernetes/base/workers.yaml`：多數 60 秒，有的 120、900 秒）內做完；超過就被 SIGKILL，
+即使收到了 SIGTERM，也會掉最後不到 5 分鐘加上排空期間的計數。只影響統計，工作本身照原本的重派機制。
 
 **確認做完**（`rollout 後`）
 

@@ -1,6 +1,6 @@
 # 工具使用統計:管理者看 AI 用了哪些工具、誰用、在哪、成不成功、多快
 
-**狀態:** P1–P7 實作完成(#932);as-built 與計劃不同之處見 §7。
+**狀態:** P1–P8 完成(#932;P8 = 真瀏覽器 1280／390 寬檢查與 demo 影片,兩輪對抗式審查);as-built 與計劃不同之處見 §7。
 **來源標記:** 〔user〕= user 的原話或明確選擇;〔查證〕= 讀 `origin/master`(7bf7e6ff)程式碼確認的事實;
 〔施工〕= 我定的實作細節,可推翻;〔指南〕= 出自公開的 UI/UX 指南,附出處。
 
@@ -68,7 +68,7 @@ sub-agent、`ask_knowledge_base` 裡的 KB 子代理各自的工具呼叫由它�
   `agent/args_recovery.py` 已有這個常數)。
 - 指令結束碼不是 0:套件指令與 `exec` 的回覆開頭是 `Tool \`name\` returned (exit_code=N)`
   (`agent/tools.py:_format_exec`)——包層讀這個開頭,不重寫格式。
-- 回覆以 `error:` / `Error:` 開頭(大多數內建工具與規則給的工具的拒絕這樣寫;不這樣寫的——`kb_grep` 的額度用完——算成功,見 §7 A5)。
+- 回覆以 `error:` / `Error:` 開頭(大多數內建工具與規則給的工具的拒絕這樣寫;不這樣寫的——`kb_search` / `kb_grep` / `search_wiki` / `ask_wiki` 的額度用完——算成功,見 §7 A5)。
 - 引數壞掉、包層根本沒呼叫到工具(`safer` 的幾個出口)也算一次失敗——模型確實叫了這個工具、沒做成。
 
 ### 3.4 誰、在哪個場合〔查證 + 施工〕
@@ -146,8 +146,8 @@ sub-agent、`ask_knowledge_base` 裡的 KB 子代理各自的工具呼叫由它�
 ## 7. 施工後與計劃不同的地方(as-built,#932)
 
 - **A1 寫回不用 CAS**:每個**行程**只寫自己的列(列 id 含「主機名-pid」,`writer_name()`),兩個行程永遠不寫同一列,
-  所以不需要計劃 §3.5 說的「CAS 合併」;一個行程內一次只跑一個寫回(鎖)。不照 skill hub 用 `HOSTNAME`:k8s 以外
-  它是 shell 變數、不在環境裡,同一台 VM 上的 API 與 worker 會都寫 `~local`、互相蓋掉計數(審查 r1 抓到)。
+  所以不需要計劃 §3.5 說的「CAS 合併」;一個行程內一次只跑一個寫回(鎖)。不照 skill hub 用 `HOSTNAME`:在 VM／一般 shell
+  它是 shell 變數、不在環境裡(k8s 與 docker 會設),同一台 VM 上的 API 與 worker 會都寫 `~local`、互相蓋掉計數(審查 r1 抓到)。
   寫回是同步函式——API 用 `to_thread` 叫,worker 用一條 thread(`run_flusher`)每 5 分鐘叫,**排空做完之後**
   再叫最後一次(它有自己的停止旗標;跟 SIGTERM 共用的話,最後一次會在排空期間跑,排空時做完的工作的計數就掉了——
   審查 r1)。worker 寫的是它那套組裝**自己的**計數器、走同一個 spec:`build_app` 組的 worker(blob-gc、
@@ -162,8 +162,9 @@ sub-agent、`ask_knowledge_base` 裡的 KB 子代理各自的工具呼叫由它�
 - **A4 KB 子代理借呼叫端的人/App/item**:不從 `answer_question` 一路傳參數,改用 contextvar——計數層執行一個工具時
   記下這次呼叫的人、App、item,在它裡面跑的 turn(`ask_knowledge_base` 的 KB 子代理)缺哪個就借哪個。
 - **A5 計數層在引數修復的外面**:引數壞掉、工具根本沒跑的呼叫也算一次失敗;舊名稱撞到兩個套件時的拒絕
-  (`cross-package tool name collision:`,與訊息共用常數 `COLLISION`)也算(審查 r1)。`kb_grep` 的額度用完不以
-  `error:` 開頭,算成功——那是「這輪不准再搜」的告知,不是工具壞了。
+  (`cross-package tool name collision:`,與訊息共用常數 `COLLISION`)也算(審查 r1),而且記在**模型叫的那個舊名稱**
+  下——撞名的呼叫會被導到第一個候選工具,但那個工具沒跑,不該替它記一次失敗(審查 r2)。`kb_search` / `kb_grep` /
+  `search_wiki` / `ask_wiki` 的額度用完不以 `error:` 開頭,算成功——那是「這輪不准再搜」的告知,不是工具壞了。
 - **A6 天以 UTC 切**:列的 `day` 是 UTC 日期;7/30/90 天的視窗是「今天(UTC)往回 N 天,含今天」。
 - **A7 `days` 自己檢查**:不用 `Literal[7, 30, 90]` 當查詢參數型別——FastAPI 不會把查詢字串轉成整數字面值,7 和 90
   會一律被拒(測試抓到);改收整數再檢查,不合法回 422。
@@ -172,7 +173,8 @@ sub-agent、`ask_knowledge_base` 裡的 KB 子代理各自的工具呼叫由它�
 - **A9 分項表的 App 顯示名稱**:依「場合 × App」那張表用 App 的標題(`/apps` 清單),不是 slug;item 附標題與連結,
   item 已不存在就只顯示 id、不給連結。
 - **A10 90 天的刪除沒有 `ScanLease`**:每個行程在每個 UTC 日的第一次寫回時刪一次。只按有索引的 `day` 讀過期的列,
-  一天最多一次,讀的量是「昨天過期的那幾列」——多個行程一起刪,最壞是同一批列被刪兩次(第二次找不到,沒事)。
+  一天最多一次,讀的量是「昨天過期的那幾列」——多個行程一起刪時,慢的那個刪到已被刪掉的列會找不到,這一列略過、
+  繼續刪其餘的(審查 r2 抓到原本會丟例外、放棄整批)。
   計劃 §3.5 的租約省下的只有這點,不值得多一張表的寫入。
 - **A11 wiki 的 turn 算在發問的那一輪**:wiki reader(`ask_wiki`)與 maintainer 的 context 用 collection id 當
   `investigation_id`(wiki store 這樣存),所以標 `usage_inside_caller`:它的呼叫記在呼叫端的 item 與場合;沒有

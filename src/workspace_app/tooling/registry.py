@@ -501,7 +501,7 @@ def _check_collisions(selected: list[tuple[PackageInfo, CommandInfo]]) -> None:
             f"command {cmd!r} appears in packages {sorted(set(pkgs))}"
             for cmd, pkgs in collisions.items()
         )
-        raise ValueError(f"cross-package tool name collision: {msg}")
+        raise ValueError(f"{COLLISION} {msg}")
 
 
 def _accepts_style(schema: dict[str, Any]) -> bool:
