@@ -495,7 +495,7 @@ class SkillHubStore:
         now: Callable[[], dt.datetime] = lambda: dt.datetime.now(dt.UTC),
         pod: str | None = None,
     ) -> None:
-        from .skill_hub_usage import UsageCounter, pod_name, register_skill_hub_usage
+        from .skill_hub_usage import UsageCounter, register_skill_hub_usage, writer_name
 
         self._spec = spec
         self.repos = repos
@@ -503,7 +503,7 @@ class SkillHubStore:
         register_skill_hub_usage(spec)
         #: Installs and uses, counted in this pod's memory (§4.8).
         self.usage = UsageCounter(
-            spec, pod=pod or pod_name(), exists=lambda entry_id: self.get(entry_id) is not None
+            spec, pod=pod or writer_name(), exists=lambda entry_id: self.get(entry_id) is not None
         )
         #: Where entries published before the git store keep their files.
         self._legacy = legacy

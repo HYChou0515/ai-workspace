@@ -12,8 +12,8 @@ on the row and never shown (U5).
 
 What a pod that dies without a SIGTERM had not flushed is lost — what
 accumulated since its last successful flush (one interval, unless flushes were
-failing). Rows are not shared between pods: the id carries the pod's
-``HOSTNAME`` — any two processes without one are both ``local`` and share rows.
+failing). Rows are not shared between processes: the id carries
+:func:`writer_name` (host + pid).
 """
 
 from __future__ import annotations
@@ -24,6 +24,7 @@ import datetime as dt
 import logging
 import os
 import re
+import socket
 from collections.abc import Callable, Iterable
 from urllib.parse import quote
 
@@ -62,9 +63,16 @@ def register_skill_hub_usage(spec: SpecStar) -> None:
         spec.add_model(SkillHubUsage, indexed_fields=["entry_id", "installs", "uses"])
 
 
-def pod_name() -> str:
-    """This pod's name — k8s puts it in ``HOSTNAME``."""
-    return os.environ.get("HOSTNAME") or "local"
+def writer_name() -> str:
+    """The name this process writes its counter rows under — the skill hub's
+    and the tool-usage statistics' alike: host + pid. Rows are owned by their
+    writer and written unlocked (get → add → update), so two processes must
+    never share one. The pod name alone does not do that: on a VM / in a plain
+    shell `HOSTNAME` is a shell variable, not in the environment, and an API
+    with its workers on one VM would all write `~local`, each overwriting the
+    others' counts. A restart may reuse the name — harmless, the old process is
+    gone."""
+    return f"{socket.gethostname()}-{os.getpid()}"
 
 
 #: What an entry id can be (`SkillHubRepos.path`'s rule): anything else is not one.

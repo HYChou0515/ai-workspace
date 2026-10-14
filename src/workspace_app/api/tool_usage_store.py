@@ -16,8 +16,6 @@ from __future__ import annotations
 import contextlib
 import datetime as dt
 import logging
-import os
-import socket
 import threading
 from collections.abc import Callable
 from urllib.parse import quote
@@ -27,6 +25,9 @@ from specstar import QB, SpecStar
 from specstar.types import ResourceIDNotFoundError
 
 from ..agent.tool_usage import SEP, ToolUsageRecorder, ToolUsageRow, add_row
+
+# Re-exported: the API and the workers name their rows with it.
+from ..apps.skill_hub_usage import writer_name as writer_name
 
 logger = logging.getLogger(__name__)
 
@@ -38,12 +39,13 @@ FLUSH_INTERVAL_S = 5 * 60
 
 
 class ToolUsageDay(Struct, kw_only=True):
-    """One pod's sums for one tool from one source on one day. Each breakdown
-    maps a key — a person; `"<surface>∕<app>"`; an item id — to
-    `[calls, fails, total_ms]`."""
+    """One process's sums for one tool — or one skill (`kind`, plan §8.3) —
+    from one source on one day. Each breakdown maps a key — a person;
+    `"<surface>∕<app>"`; an item id — to `[calls, fails, total_ms]`."""
 
     tool: str
     source: str
+    kind: str = "tool"
     day: str
     pod: str
     calls: int = 0
@@ -57,19 +59,19 @@ class ToolUsageDay(Struct, kw_only=True):
 def register_tool_usage(spec: SpecStar) -> None:
     """Idempotently register the model. `day` is indexed because both the
     window a report asks for and the prune are ranges on it; `tool` because a
-    tool's own breakdown is read by it."""
+    tool's own breakdown is read by it; `kind` because a report reads one."""
     with contextlib.suppress(ValueError):
-        spec.add_model(ToolUsageDay, indexed_fields=["day", "tool"])
+        spec.add_model(ToolUsageDay, indexed_fields=["day", "tool", "kind"])
 
 
 def _today() -> str:
     return dt.datetime.now(dt.UTC).date().isoformat()
 
 
-def _row_id(tool: str, source: str, day: str, pod: str) -> str:
+def _row_id(kind: str, tool: str, source: str, day: str, pod: str) -> str:
     # A specstar id holds no `/`; every part is quoted, since a third-party
-    # tool name and a pod name are not ours to vouch for.
-    return "~".join(quote(p, safe="") for p in (tool, source, day, pod))
+    # tool name, a skill name and a pod name are not ours to vouch for.
+    return "~".join(quote(p, safe="") for p in (kind, tool, source, day, pod))
 
 
 class ToolUsageStore:
@@ -120,12 +122,14 @@ class ToolUsageStore:
 
     def _add(self, row: ToolUsageRow) -> None:
         rm = self._rm()
-        row_id = _row_id(row.tool, row.source, row.day, self._pod)
+        row_id = _row_id(row.kind, row.tool, row.source, row.day, self._pod)
         try:
             stored = rm.get(row_id).data
             assert isinstance(stored, ToolUsageDay)
         except ResourceIDNotFoundError:
-            stored = ToolUsageDay(tool=row.tool, source=row.source, day=row.day, pod=self._pod)
+            stored = ToolUsageDay(
+                tool=row.tool, source=row.source, kind=row.kind, day=row.day, pod=self._pod
+            )
             add_row(stored, row)
             rm.create(stored, resource_id=row_id)
             return
@@ -149,16 +153,6 @@ class ToolUsageStore:
             # Another process's prune of the same day may have got there first.
             with contextlib.suppress(ResourceIDNotFoundError):
                 rm.permanently_delete(meta.resource_id)
-
-
-def writer_name() -> str:
-    """The name this process writes its rows under: host + pid. Rows are owned
-    by their writer and written unlocked (get → add → update), so two processes
-    must never share one. The pod name alone does not do that: on a VM / in a
-    plain shell `HOSTNAME` is a shell variable, not in the environment, and an
-    API with its workers on one VM would all write `~local`, each overwriting
-    the others' counts. A restart may reuse the name — harmless, the old process is gone."""
-    return f"{socket.gethostname()}-{os.getpid()}"
 
 
 def run_flusher(store: ToolUsageStore | object, stop: threading.Event, interval: float) -> None:
@@ -185,10 +179,12 @@ def since_day(days: int, today: str | None = None) -> str:
     return (end - dt.timedelta(days=days - 1)).isoformat()
 
 
-def rows_since(spec: SpecStar, since: str, *, tool: str | None = None) -> list[ToolUsageDay]:
-    """Every row from `since` on — an indexed range on `day` (and `tool` when
-    one is named), never the whole table."""
-    q = QB["day"] >= since
+def rows_since(
+    spec: SpecStar, since: str, *, tool: str | None = None, kind: str = "tool"
+) -> list[ToolUsageDay]:
+    """Every row of one `kind` from `since` on — an indexed range on `day` (and
+    `tool` when one is named), never the whole table."""
+    q = (QB["day"] >= since) & (QB["kind"] == kind)
     if tool is not None:
         q = q & (QB["tool"] == tool)
     out: list[ToolUsageDay] = []

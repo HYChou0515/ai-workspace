@@ -208,9 +208,9 @@ def test_two_processes_on_one_host_write_different_rows(monkeypatch) -> None:
     from workspace_app.api import tool_usage_store as tus
 
     monkeypatch.delenv("HOSTNAME", raising=False)
-    monkeypatch.setattr(tus.os, "getpid", lambda: 101)
+    monkeypatch.setattr("os.getpid", lambda: 101)
     api = tus.writer_name()
-    monkeypatch.setattr(tus.os, "getpid", lambda: 202)
+    monkeypatch.setattr("os.getpid", lambda: 202)
     worker = tus.writer_name()
 
     assert api != worker
@@ -254,3 +254,38 @@ def test_a_row_another_process_pruned_first_is_skipped_not_an_error() -> None:
     store.prune()
 
     assert _rows(spec) == []
+
+
+def test_a_skill_and_a_tool_of_one_name_are_stored_and_read_apart() -> None:
+    """plan §8.3: one table, a `kind` per row — the row id carries it, so a
+    skill and a tool of one name never add into one row, and a report reads
+    one kind."""
+    from workspace_app.api.tool_usage_store import rows_since
+
+    spec = _spec()
+    rec = ToolUsageRecorder(day=lambda: "2026-10-14")
+    # One name AND one source: only the kind keeps the two rows apart.
+    rec.record("x", "s", failed=True, ms=40, user="u", surface="chat", app="", item="")
+    rec.record("x", "s", kind="skill", failed=False, ms=0, user="u", surface="c", app="", item="")
+    ToolUsageStore(spec, rec, pod="p", today=lambda: "2026-10-14").flush()
+
+    tools = rows_since(spec, "2026-10-01")
+    skills = rows_since(spec, "2026-10-01", kind="skill")
+
+    assert [(r.kind, r.tool, r.calls, r.fails) for r in tools] == [("tool", "x", 1, 1)]
+    assert [(r.kind, r.tool, r.calls, r.fails) for r in skills] == [("skill", "x", 1, 0)]
+
+
+def test_the_skill_hub_counts_under_this_processs_name(monkeypatch) -> None:
+    """The skill hub's counter had the same unlocked, `HOSTNAME`-keyed rows
+    (plan §8.3): it now writes under the same per-process name."""
+    import tempfile
+
+    from workspace_app.apps.skill_hub import SkillHubStore
+    from workspace_app.apps.skill_hub_git import SkillHubRepos
+
+    monkeypatch.setattr("workspace_app.apps.skill_hub_usage.writer_name", lambda: "vm-7")
+
+    hub = SkillHubStore(make_spec(), SkillHubRepos(tempfile.mkdtemp()))
+
+    assert hub.usage._pod == "vm-7"  # noqa: SLF001

@@ -176,3 +176,54 @@ def test_an_unknown_tool_has_an_empty_breakdown() -> None:
     body = client.get("/admin/tool-usage/nope").json()
 
     assert body == {"tool": "nope", "days": 30, "by_user": [], "by_surface_app": [], "by_item": []}
+
+
+# ── skills (plan §8.3) ──────────────────────────────────────────────────────
+
+
+def _seed_skill(spec, back: int, name: str, source: str, *, user="alice", item="i1") -> None:  # noqa: ANN001
+    rec = ToolUsageRecorder(day=lambda: _day(back))
+    rec.record(
+        name,
+        source,
+        kind="skill",
+        failed=False,
+        ms=0,
+        user=user,
+        surface="chat",
+        app="rca",
+        item=item,
+    )
+    ToolUsageStore(spec, rec, pod="p", today=lambda: _day(back)).flush()
+
+
+def test_the_report_reads_one_kind_and_tools_by_default() -> None:
+    client, spec = _app({"id": "root"})
+    _seed(spec, 1, "exec", "builtin")
+    _seed_skill(spec, 1, "report-format", "profile")
+
+    tools = client.get("/admin/tool-usage").json()["tools"]
+    skills = client.get("/admin/tool-usage?kind=skill").json()["tools"]
+
+    assert [t["tool"] for t in tools] == ["exec"]  # a caller that names no kind is unchanged
+    assert [(t["tool"], t["source"], t["calls"]) for t in skills] == [
+        ("report-format", "profile", 1)
+    ]
+
+
+def test_one_skill_breaks_down_by_person_and_item() -> None:
+    client, spec = _app({"id": "root"})
+    _seed_skill(spec, 1, "fmt", "hub", user="bob", item="i9")
+    _seed(spec, 1, "fmt", "builtin", user="carol")  # a TOOL of the same name
+
+    d = client.get("/admin/tool-usage/fmt?kind=skill").json()
+
+    assert [u["user"] for u in d["by_user"]] == ["bob"]
+    assert [i["item"] for i in d["by_item"]] == ["i9"]
+
+
+@pytest.mark.parametrize("path", ["/admin/tool-usage", "/admin/tool-usage/x"])
+def test_a_kind_that_is_not_tool_or_skill_is_refused(path: str) -> None:
+    client, _spec = _app({"id": "root"})
+
+    assert client.get(f"{path}?kind=mcp").status_code == 422

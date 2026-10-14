@@ -3,6 +3,7 @@
 Superusers only (D2). A window of 7, 30 or 90 days ending today (D5); per tool,
 calls / failures / average time (D3), filterable by source (D6), surface and
 App (D7); and one tool's breakdown by person (D4), by surface × App and by item.
+`kind=skill` asks the same of skill loads (§8.3); without it, tools.
 """
 
 from __future__ import annotations
@@ -28,6 +29,16 @@ def _window(days: int) -> int:
     if days not in DAYS:
         raise HTTPException(status_code=422, detail="days must be 7, 30 or 90")
     return days
+
+
+#: What a report counts (§8.3).
+KINDS = ("tool", "skill")
+
+
+def _kind(kind: str) -> str:
+    if kind not in KINDS:
+        raise HTTPException(status_code=422, detail="kind must be tool or skill")
+    return kind
 
 
 def _avg(calls: int, ms: int) -> int:
@@ -94,11 +105,12 @@ def register_tool_usage_routes(
 
     @app.get("/admin/tool-usage", response_model=ToolUsageReport)
     async def tool_usage(
-        days: int = 30, source: str = "", surface: str = "", app: str = ""
+        days: int = 30, source: str = "", surface: str = "", app: str = "", kind: str = "tool"
     ) -> ToolUsageReport:
         _require_superuser()
         days = _window(days)
-        rows = await asyncio.to_thread(rows_since, spec, since_day(days))
+        kind = _kind(kind)
+        rows = await asyncio.to_thread(rows_since, spec, since_day(days), kind=kind)
         tools = [
             ToolUsageTool(tool=t, source=s, calls=c, fails=f, avg_ms=_avg(c, m))
             for t, s, c, f, m in per_tool(rows, source=source, surface=surface, app=app)
@@ -107,10 +119,11 @@ def register_tool_usage_routes(
         return ToolUsageReport(days=days, tools=tools)
 
     @app.get("/admin/tool-usage/{tool}", response_model=ToolUsageDetail)
-    async def tool_usage_detail(tool: str, days: int = 30) -> ToolUsageDetail:
+    async def tool_usage_detail(tool: str, days: int = 30, kind: str = "tool") -> ToolUsageDetail:
         _require_superuser()
         days = _window(days)
-        rows = await asyncio.to_thread(rows_since, spec, since_day(days), tool=tool)
+        kind = _kind(kind)
+        rows = await asyncio.to_thread(rows_since, spec, since_day(days), tool=tool, kind=kind)
 
         by_user = sorted(
             (
