@@ -1,7 +1,7 @@
 """Installing the helper on the person's PC — the first version and every one
 after it (docs/plan-outside-helper.md D16, D21, §3.7.1, §3.7.5).
 
-STANDARD LIBRARY ONLY, no relative imports, Python 3.10+: this one file runs in
+STANDARD LIBRARY ONLY, no relative imports, Python 3.9+: this one file runs in
 three places — inside the installed package (the window: its requests, the
 Startup shortcut, uninstall), at the root of the zip beside `install.pyw`
 (before anything is installed), and beside `launch.pyw` in the helper's folder.
@@ -25,12 +25,15 @@ import time
 import zipfile
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any, NamedTuple
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 #: The shortcut's file name, on the desktop and in the Startup folder (D13).
 SHORTCUT_NAME = "AI Workspace Helper"
 
-Run = Callable[[list[str]], None]
+if TYPE_CHECKING:
+    # Only ever an annotation: evaluated, `list[str]` stops a 3.8 Python at
+    # import, before `python_too_old` can tell the person it is too old.
+    Run = Callable[[list[str]], None]
 
 
 class SetupFailed(Exception):
@@ -598,6 +601,21 @@ def chrome_install_paths() -> list[Path]:  # pragma: no cover — Windows folder
     return found
 
 
+#: The CPython versions the helper installs on (D14, D23): the zip carries
+#: wheels for each, and `install.pyw` and the precheck accept exactly these —
+#: 3.9 because some people's PCs have nothing newer.
+PYTHONS = ("3.9", "3.10", "3.11", "3.12", "3.13", "3.14")
+
+
+def python_too_old(version: tuple[int, ...]) -> str | None:
+    """Why this Python cannot run the helper, or None when it can — the one
+    answer `install.pyw` and the precheck both give."""
+    oldest = tuple(int(n) for n in PYTHONS[0].split("."))
+    if tuple(version[:2]) >= oldest:
+        return None
+    return f"需要 Python {PYTHONS[0]} 以上，這是 {'.'.join(str(n) for n in version)}"
+
+
 def chrome_policy(name: str) -> int | None:  # pragma: no cover — the Windows registry
     """A Chrome policy set by the company (machine first, then user), or None."""
     if sys.platform != "win32":
@@ -638,7 +656,7 @@ def precheck(
     version = ".".join(str(n) for n in python_version)
 
     def python_ok() -> str:
-        if python_version < (3, 10):
+        if python_too_old(python_version):
             raise SetupFailed(f"這是 {version}")
         return f"{version}（{base_python}）"
 
@@ -690,7 +708,7 @@ def precheck(
 
     scratch.mkdir(parents=True, exist_ok=True)
     try:
-        check("Python 3.10 以上", python_ok, "需要 Python 3.10–3.14")
+        check(f"Python {PYTHONS[0]} 以上", python_ok, f"需要 Python {PYTHONS[0]}–{PYTHONS[-1]}")
         check(
             "在使用者資料夾執行程式",
             runs_here,
