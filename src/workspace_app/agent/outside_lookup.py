@@ -54,7 +54,8 @@ async def ask_outside_impl(
       edit the query before searching.
     - `file` and `link` together: a link a lookup brought back. A lookup saved
       as a file lists its links at the bottom, numbered `- [n] <https://…>`
-      (the message that brought it back lists them too, and names the file).
+      (the message that brought it back names the file and lists the first
+      of them too).
       Pass the file's path and the number `n` — search results included —
       rather than copying the address: long addresses copied by hand come out
       wrong.
@@ -121,21 +122,33 @@ def is_web_address(url: str) -> bool:
     return _WEB_ADDRESS.fullmatch(url) is not None
 
 
-#: Opens the numbered list of links under a saved lookup (D24) — an HTML
-#: comment, so it renders as nothing. Only what follows the LAST one is the
-#: list: the answer above it is the page as it came, and may hold `[1]: …`
-#: reference links, list-like lines, even this line, of its own.
-LINK_LIST_MARKER = "<!-- ai-workspace: links -->"
-_LISTED = re.compile(r"^- \[(\d+)\] <([^>\s]+)>", re.MULTILINE)
+#: Heads the numbered list of links under a saved lookup (D24): a heading
+#: line people read too (an HTML comment showed as text in the file viewer).
+#: Only the rows under the LAST such line outside code are the list: the
+#: answer above it is the page as it came, and may hold `[1]: …` reference
+#: links, list-like lines, even this line, of its own.
+LINK_LIST_MARKER = "## 查到的連結"
+_LISTED = re.compile(r"- \[(\d+)\] <([^>\s]+)>")
+_FENCE_LINE = re.compile(r"(`{3,}|~{3,})")
 
 
 def listed_links(text: str) -> dict[int, str]:
     """`{n: address}` of the list under a saved lookup; `{}` without one.
     What `link_list` writes and what `file` + `link` reads."""
-    at = text.rfind(LINK_LIST_MARKER)
-    if at < 0:
+    in_code = False
+    heading: int | None = None
+    lines = text.split("\n")
+    outside: list[bool] = []
+    for at, line in enumerate(lines):
+        if _FENCE_LINE.match(line):
+            in_code = not in_code
+        outside.append(not in_code)
+        if not in_code and line.strip() == LINK_LIST_MARKER:
+            heading = at
+    if heading is None:
         return {}
-    return {int(n): address for n, address in _LISTED.findall(text[at:])}
+    rows = (_LISTED.match(line) for at, line in enumerate(lines) if at > heading and outside[at])
+    return {int(m.group(1)): m.group(2) for m in rows if m}
 
 
 async def _listed_link(ctx: RunContextWrapper[AgentToolContext], file: str, link: int) -> str:

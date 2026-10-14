@@ -14,7 +14,11 @@ import pytest
 from agents import RunContextWrapper
 
 from workspace_app.agent.context import AgentToolContext
-from workspace_app.agent.outside_lookup import OUTSIDE_LOOKUP_MARKER, declared_lookup
+from workspace_app.agent.outside_lookup import (
+    LINK_LIST_MARKER,
+    OUTSIDE_LOOKUP_MARKER,
+    declared_lookup,
+)
 from workspace_app.resources.agent_config import AgentConfig
 from workspace_app.tooling.registry import CommandInfo, PackageInfo
 
@@ -235,7 +239,7 @@ def test_the_shared_case_table_still_says_what_declared_lookup_does() -> None:
 SAVED = (
     "# pandas\n\n- [whatsnew](https://pandas.example/whatsnew)\n"
     "- [api](https://pandas.example/api)\n\n"
-    "<!-- ai-workspace: links -->\n## 連結\n\n"
+    f"{LINK_LIST_MARKER}\n\n"
     "- [1] <https://pandas.example/whatsnew> whatsnew\n- [2] <https://pandas.example/api> api\n"
 )
 
@@ -296,7 +300,7 @@ async def test_a_numbered_link_that_cannot_become_a_card_is_refused(args: dict, 
 # (a hand-edited list) is refused like any `url` that is not one.
 async def test_a_listed_link_that_is_no_web_page_is_refused() -> None:
     reply = await _call_in(
-        {"notes.md": "x\n\n<!-- ai-workspace: links -->\n- [1] <javascript:x>"},
+        {"notes.md": f"x\n\n{LINK_LIST_MARKER}\n\n- [1] <javascript:x>"},
         why="w",
         file="notes.md",
         link=1,

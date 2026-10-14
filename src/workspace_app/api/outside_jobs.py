@@ -139,7 +139,9 @@ def _destination(text: str, at: int) -> str | None:
             out.append(text[at + 1])
             at += 2
             continue
-        if c.isspace() or (c == ")" and depth == 0):
+        # `](` ends it too: no address holds one, and each `](` starts a link
+        # of its own — so every character is read once (`](a](a…` was not).
+        if c.isspace() or (c == ")" and depth == 0) or text.startswith("](", at):
             break
         depth += {"(": 1, ")": -1}.get(c, 0)
         out.append(c)
@@ -147,19 +149,27 @@ def _destination(text: str, at: int) -> str | None:
     return "".join(out) or None
 
 
-def _opening(text: str, close: int) -> int | None:
-    """Where the `[` matching the `]` at `close` is; brackets inside nest."""
-    depth = 0
-    for at in range(close - 1, -1, -1):
-        if at > 0 and text[at - 1] == "\\":
+def _openings(text: str) -> dict[int, int]:
+    """`{where a ] is: where its [ is}`, read once from the start — brackets
+    inside nest, `\\x` is x itself (so `\\\\[` opens one), and a blank line
+    ends them all, as it ends a paragraph. Once, not a scan back from each `]`:
+    that was 28 s for 60 KB (review of #941)."""
+    pairs: dict[int, int] = {}
+    open_at: list[int] = []
+    at = 0
+    while at < len(text):
+        c = text[at]
+        if c == "\\":
+            at += 2
             continue
-        if text[at] == "]":
-            depth += 1
-        elif text[at] == "[":
-            if depth == 0:
-                return at
-            depth -= 1
-    return None
+        if c == "[":
+            open_at.append(at)
+        elif c == "]" and open_at:
+            pairs[at] = open_at.pop()
+        elif c == "\n" and text.startswith("\n", at + 1):
+            open_at.clear()
+        at += 1
+    return pairs
 
 
 def _links(markdown: str) -> list[tuple[int, bool, str, str]]:
@@ -169,10 +179,11 @@ def _links(markdown: str) -> list[tuple[int, bool, str, str]]:
     pattern ended `Foo_(bar)` at its first `)` (review of #941)."""
     text = _CODE_SPAN.sub(_blanked, _FENCE.sub(_blanked, markdown))
     found = [(m.start(), False, "", m.group(1)) for m in _AUTOLINK.finditer(text)]
+    openings = _openings(text)
     close = text.find("](")
     while close >= 0:
         address = _destination(text, close + 2)
-        start = _opening(text, close)
+        start = openings.get(close)
         if address is not None and start is not None:
             image = start > 0 and text[start - 1] == "!"
             found.append((start, image, markdown[start + 1 : close], address))
@@ -187,9 +198,15 @@ _GOOGLE = re.compile(r"(?:www\.)?google(?:\.[a-z]{2,3}){1,2}")
 def _page_of(url: str) -> str:
     """A Google redirect link (`https://www.google.com/url?q=<page>&sa=U…`, what
     a search's results carry) as the page it leads to; any other link as it is
-    (D24). Only an http(s) page counts — `?q=javascript:…` stays the redirect."""
-    parts = urlsplit(url)
-    if parts.path == "/url" and _GOOGLE.fullmatch(parts.hostname or ""):
+    (D24). Only an http(s) page counts — `?q=javascript:…` stays the redirect.
+    An address no parser reads (`https://[your-server]/…`, pasted API docs) is
+    no redirect: it raised, and the answer could not be sent (review of #941)."""
+    try:
+        parts = urlsplit(url)
+        host = parts.hostname
+    except ValueError:
+        return url
+    if parts.path == "/url" and _GOOGLE.fullmatch(host or ""):
         params = parse_qs(parts.query)
         for target in (*params.get("q", []), *params.get("url", [])):
             if is_web_address(target):
@@ -203,13 +220,13 @@ def links_in(markdown: str) -> list[str]:
     at) — a Google redirect both as it came and as the page it leads to (D24):
     what came back stays openable with no nod, and so does the page the list
     names."""
-    out: list[str] = []
+    out: dict[str, None] = {}
     for _, _, _, address in _links(markdown):
         for url in (address, _page_of(address)):
             url = _without_fragment(url)
-            if is_web_address(url) and url not in out:
-                out.append(url)
-    return out
+            if is_web_address(url):
+                out.setdefault(url)
+    return list(out)
 
 
 def numbered_links(markdown: str) -> list[tuple[int, str, str]]:
@@ -219,7 +236,9 @@ def numbered_links(markdown: str) -> list[tuple[int, str, str]]:
     pages: dict[str, str] = {}
     for _, image, text, address in _links(markdown):
         page = _without_fragment(_page_of(address))
-        if not image and is_web_address(page) and page not in pages:
+        # `<` `>` cannot be written inside the list's `<…>`: it would cut it
+        listable = is_web_address(page) and not {"<", ">"} & set(page)
+        if not image and listable and page not in pages:
             pages[page] = " ".join(text.split())
     return [(n, text, page) for n, (page, text) in enumerate(pages.items(), start=1)]
 
@@ -232,7 +251,7 @@ def link_list(numbered: list[tuple[int, str, str]]) -> str:
     if not numbered:
         return ""
     rows = "\n".join(f"- [{n}] <{page}> {text}".rstrip() for n, text, page in numbered)
-    return f"\n\n{LINK_LIST_MARKER}\n## 連結\n\n{rows}\n"
+    return f"\n\n{LINK_LIST_MARKER}\n\n{rows}\n"
 
 
 def _without_fragment(url: str) -> str:
@@ -447,7 +466,7 @@ class OutsideJobStore:
     # ── links lookups brought back (D12) ────────────────────────────────────
 
     async def remember_links(self, item_id: str, chat_id: str, markdown: str) -> None:
-        urls = links_in(markdown)
+        urls = await asyncio.to_thread(links_in, markdown)  # off the loop: a page is big
         if urls:
             await asyncio.to_thread(self._remember_sync, item_id, chat_id, urls)
 

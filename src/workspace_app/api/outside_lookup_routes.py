@@ -186,7 +186,7 @@ def register_outside_lookup_routes(
             ]
             # D24: the links, numbered, under the answer — the AI names one by
             # file and number rather than copying it (it copied wrong).
-            numbered = numbered_links(body)
+            numbered = await asyncio.to_thread(numbered_links, body)  # off the loop
             if may_add:
                 doc = _document(card, searched, body, form, get_user_id()) + link_list(numbered)
                 day = form.date if _is_date(form.date) else f"{datetime.now(UTC):%Y-%m-%d}"
@@ -512,6 +512,15 @@ async def _take_back(files: WorkspaceFiles, workspace_id: str, paths: list[str])
             logger.warning("outside lookup: could not take back %s", path, exc_info=True)
 
 
+def _host(page: str) -> str:
+    """The site a listed page is on, as the message names it; the page itself
+    when no parser reads it (`https://[your-server]/…`)."""
+    try:
+        return urlsplit(page).hostname or page
+    except ValueError:
+        return page
+
+
 #: Most links the message itself lists; the file lists them all.
 MESSAGE_LINKS = 50
 
@@ -534,7 +543,7 @@ def _message(
     if path and numbered:
         lines.append(f"連結(要開其中一個:ask_outside(file=`{path}`, link=編號)):")
         for n, text, page in numbered[:MESSAGE_LINKS]:
-            host = urlsplit(page).hostname or page
+            host = _host(page)
             lines.append(f"[{n}] {text[:60]} — {host}" if text else f"[{n}] {page[:80]}")
         if len(numbered) > MESSAGE_LINKS:
             lines.append(f"…還有 {len(numbered) - MESSAGE_LINKS} 個,列在檔案最下面")

@@ -225,3 +225,92 @@ def test_a_page_of_many_links_lists_the_first_ones_and_says_the_file_has_the_res
     assert "[50] r50 — r.example" in message.content
     assert "[51]" not in message.content
     assert "…還有 10 個,列在檔案最下面" in message.content
+
+
+# ── review of #941, round 2 ──
+
+
+# A placeholder host — `https://[your-server]/api`, common in pasted API docs —
+# is no address `urlsplit` can read. It raised, and the answer could not be sent.
+def test_a_link_no_parser_can_read_does_not_stop_the_answer():
+    md = "Call [the API](https://[your-server]/api/v1) first, then <https://[host]:8080/x>."
+
+    assert [u for _, _, u in numbered_links(md)] == [
+        "https://[your-server]/api/v1",
+        "https://[host]:8080/x",
+    ]
+    assert links_in(md) == ["https://[your-server]/api/v1", "https://[host]:8080/x"]
+
+
+def test_an_answer_with_such_a_link_is_sent():
+    client, spec, iid = _asked()
+
+    r = _answer(client, iid, content="Call [the API](https://[your-server]/api/v1) first")
+
+    assert r.status_code == 200, r.text
+    [message] = _answers(spec)
+    assert "[1] the API — " in message.content
+
+
+# Reading links is linear in the answer: one `[` lookup per `]`, not a scan
+# back to the start for each (30 KB took 7 s, 60 KB 28 s — on the event loop).
+@pytest.mark.parametrize("unit", ["x](y) ", "](a"])
+def test_reading_the_links_of_a_large_answer_takes_no_time(unit):
+    import time
+
+    md = unit * (100_000 // len(unit))
+
+    started = time.monotonic()
+    numbered_links(md)
+    links_in(md)
+
+    assert time.monotonic() - started < 10
+
+
+# The list is read by people too: its heading renders as a heading, not as
+# raw HTML the file viewer prints as text.
+def test_the_list_opens_with_a_heading_people_can_read():
+    listed = link_list(numbered_links("[a](https://a.example/)"))
+
+    assert LINK_LIST_MARKER.startswith("## ")
+    assert "<!--" not in listed
+
+
+# An address the list cannot write between `<` `>` is not listed — the list
+# would hand out a cut-off one.
+def test_an_address_with_angle_brackets_is_not_listed():
+    assert numbered_links("[t](https://a.example/?q=a>b) [ok](https://ok.example/)") == [
+        (1, "ok", "https://ok.example/")
+    ]
+
+
+# What the answer itself holds never becomes the list: the marker in a link's
+# text, or a whole fake list in a code block.
+def test_the_marker_in_the_answer_is_not_the_list():
+    in_text = f"[{LINK_LIST_MARKER} hi](https://m.example/a)"
+    in_code = f"```\n{LINK_LIST_MARKER}\n\n- [1] <https://evil.example/>\n```\nno links here"
+
+    assert listed_links(in_text + link_list(numbered_links(in_text))) == {1: "https://m.example/a"}
+    assert listed_links(in_code + link_list(numbered_links(in_code))) == {}
+
+
+# `\\` is an escaped backslash: the `[` after it opens a link (turndown writes
+# a backslash in the page's text that way).
+def test_a_link_after_an_escaped_backslash_is_a_link():
+    assert numbered_links("C:\\\\[docs](https://a.example/)") == [(1, "docs", "https://a.example/")]
+
+
+# A link's text ends with its paragraph: a `[` before a blank line opens no
+# link after it (and so the reading stays one pass).
+def test_a_bracket_before_a_blank_line_opens_no_link_after_it():
+    md = "[note\n\nmore](https://a.example/) and [b](https://b.example/)"
+
+    assert [u for _, _, u in numbered_links(md)] == ["https://b.example/"]
+
+
+# `\[` `\]` are brackets of the text (turndown escapes a page's `[1]` so):
+# no link opens there.
+def test_escaped_brackets_open_no_link():
+    assert numbered_links(r"cited \[1\](https://a.example/) [b](https://b.example/)") == [
+        (1, "b", "https://b.example/")
+    ]
