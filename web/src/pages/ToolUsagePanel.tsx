@@ -20,7 +20,7 @@
  * - The window (7 / 30 / 90 days) is one choice among modes of the SAME
  *   content, so it is a segmented control (Material 3, "Segmented buttons").
  */
-import { keepPreviousData, useQuery } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { type ReactNode, useEffect, useId, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 
@@ -237,8 +237,10 @@ function UsagePart({
     queryKey: qk.toolUsage(days, filter, kind, group),
     queryFn: () => client.report(days, filter, kind, group),
     // Another window keeps the rows (and an open panel) in place while it
-    // loads, rather than tearing them down and building new ones (review r6).
-    placeholderData: keepPreviousData,
+    // loads, rather than tearing them down and building new ones (review r6)
+    // — but never across a granularity: command rows shown while the package
+    // report loads open breakdowns of nothing (review r7).
+    placeholderData: (prev, prevQuery) => (prevQuery?.queryKey[4] === group ? prev : undefined),
   });
   const all = useMemo(() => report.data?.tools ?? [], [report.data]);
   // `hidden` holds row keys (`rowKey`), not names: one name can be two rows.
@@ -734,7 +736,13 @@ function ToolDetail({
                         <span data-bar style={{ width: `${pctOf}%` }} />
                         <span
                           className={`tool-usage-cellbar-num${inside ? " is-inside" : ""}`}
-                          style={inside ? { right: `${100 - pctOf}%` } : { left: `${pctOf}%` }}
+                          style={
+                            inside
+                              ? { right: `${100 - pctOf}%` }
+                              : // Never past the column's edge: a long number
+                                // after a mid-length bar slides back onto it.
+                                { left: `min(${pctOf}%, calc(100% - ${String(r.calls).length + 1}ch))` }
+                          }
                         >
                           {r.calls}
                         </span>

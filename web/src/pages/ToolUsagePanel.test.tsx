@@ -61,7 +61,7 @@ const DETAIL: ToolUsageDetail = {
   by_surface_app: [{ surface: "schedule", app: "rca", calls: 40, fails: 10, avg_ms: 1200 }],
   by_item: [
     { item: "rca-1", title: "Line 3", slug: "rca", calls: 39, fails: 9, avg_ms: 1100 },
-    { item: "gone", title: "", slug: "", calls: 1, fails: 1, avg_ms: 50 },
+    { item: "gone", title: "", slug: "", calls: 1, fails: 1, avg_ms: 5100 },
   ],
 };
 
@@ -921,11 +921,16 @@ describe("the side panel, review r6", () => {
     fireEvent.click(await within(toolsPart()).findByRole("button", { name: "spc" }));
     await within(toolsPart()).findByTestId("tool-usage-detail");
 
+    const before = within(toolsPart()).getByTestId("tool-usage-detail");
+    const row = within(toolsPart()).getByRole("button", { name: "spc" });
     const seven = screen.getByRole("button", { name: "7 天" });
     seven.focus();
     fireEvent.click(seven);
     await waitFor(() => expect(within(toolsPart()).getByTestId("tool-usage-detail")).toBeInTheDocument());
     expect(document.activeElement).toBe(seven); // not taken by the panel's heading
+    // Another window keeps the rows and the panel in place while it loads.
+    expect(within(toolsPart()).getByTestId("tool-usage-detail")).toBe(before);
+    expect(within(toolsPart()).getByRole("button", { name: "spc" })).toBe(row);
 
     fireEvent.keyDown(within(toolsPart()).getByTestId("tool-usage-detail"), { key: "Escape" });
     const spc = within(toolsPart()).getByRole("button", { name: "spc" });
@@ -1023,5 +1028,35 @@ describe("a panel whose row is rebuilt (review r6)", () => {
 
     fireEvent.keyDown(panel, { key: "Escape" });
     expect(document.activeElement).toBe(again);
+  });
+});
+
+describe("switching granularity never shows the other granularity's rows (review r7)", () => {
+  it("keeps no command rows on the table while the package report loads", async () => {
+    let release: (r: ToolUsageReport) => void = () => {};
+    const client = {
+      report: vi.fn((_d: number, _f?: object, kind?: string, group?: string) =>
+        kind === "skill"
+          ? Promise.resolve(SKILLS)
+          : group === "package"
+            ? new Promise<ToolUsageReport>((r) => (release = r))
+            : Promise.resolve(TOOLS),
+      ),
+      detail: vi.fn(async () => DETAIL),
+      rawUrl: () => "/raw",
+    } satisfies ToolUsageClient;
+    renderWithQuery(
+      <MemoryRouter>
+        <ToolUsagePanel client={client} />
+      </MemoryRouter>,
+    );
+    await within(toolsPart()).findByRole("button", { name: "spc" });
+
+    fireEvent.click(within(toolsPart()).getByRole("button", { name: "依套件" }));
+
+    // A command row clicked now would open a breakdown of zeros: there is none to click.
+    await waitFor(() => expect(within(toolsPart()).queryByRole("button", { name: "spc" })).toBeNull());
+    release(BY_PACKAGE);
+    expect(await within(toolsPart()).findByRole("button", { name: "rca-tools" })).toBeInTheDocument();
   });
 });

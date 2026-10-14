@@ -124,9 +124,9 @@ class ToolUsageDetail(BaseModel):
     days: int
     #: The whole, from the unrounded sums (review r6): averaging the rounded
     #: per-person averages again drifts by one.
-    calls: int = 0
-    fails: int = 0
-    avg_ms: int = 0
+    calls: int
+    fails: int
+    avg_ms: int
     by_user: list[ByUser]
     by_surface_app: list[BySurfaceApp]
     by_item: list[ByItem]
