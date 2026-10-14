@@ -14,7 +14,9 @@ from __future__ import annotations
 import logging
 import sys
 
-_MARK = "_workspace_app_stdout"
+#: Set on the handler this installs: how a caller (a test rebinding stdout)
+#: finds it again.
+OWN_HANDLER = "_workspace_app_stdout"
 
 
 def install_own_handler(
@@ -27,11 +29,11 @@ def install_own_handler(
     """Give `logger` its own stdout handler and INFO level — once, however
     often it is asked. `propagate` stays on unless asked otherwise, so a test's
     log capture (and any logging someone does configure) still sees the lines."""
-    if any(getattr(h, _MARK, False) for h in logger.handlers):
+    if any(getattr(h, OWN_HANDLER, False) for h in logger.handlers):
         return
     handler = logging.StreamHandler(sys.stdout)
     handler.setFormatter(logging.Formatter(fmt, datefmt))
-    setattr(handler, _MARK, True)
+    setattr(handler, OWN_HANDLER, True)
     logger.addHandler(handler)
     logger.setLevel(logging.INFO)
     logger.propagate = propagate
