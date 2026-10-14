@@ -188,7 +188,7 @@ describe("one page, both kinds", () => {
     const skillSources = within(within(skillsPart()).getByLabelText("來源"))
       .getAllByRole("option")
       .map((o) => o.textContent);
-    expect(skillSources).toEqual(["全部", "平台內建", "App 內建", "skill hub", "自己寫的"]);
+    expect(skillSources).toEqual(["全部", "平台內建", "App 內建", "skill hub", "item 內自建"]);
   });
 });
 
@@ -342,7 +342,7 @@ describe("skills (plan §8)", () => {
     const sources = within(skillsPart())
       .getAllByTestId("tool-usage-row")
       .map((r) => r.querySelectorAll("td")[1]?.textContent);
-    expect(sources).toEqual(["平台內建", "App 內建", "skill hub", "自己寫的"]);
+    expect(sources).toEqual(["平台內建", "App 內建", "skill hub", "item 內自建"]);
   });
 
   it("opens one skill's breakdown, in its own part, with a count only", async () => {
@@ -369,68 +369,147 @@ describe("skills (plan §8)", () => {
 });
 
 describe("which tools, at which granularity (plan §9)", () => {
-  /** The picker's one-line summary, which opens it. */
+  /** The one-line summary that opens the picker. */
   const summary = () => within(toolsPart()).getByRole("button", { name: /^顯示哪些/ });
-  const picker = () => within(toolsPart()).getByRole("group", { name: "顯示哪些" });
+  const dialog = () => screen.getByRole("dialog", { name: "顯示哪些工具" });
 
   async function openPicker() {
     await within(toolsPart()).findAllByTestId("tool-usage-row");
     fireEvent.click(summary());
-    return picker();
+    return dialog();
   }
 
-  it("is folded to one line saying what is shown — a hundred commands do not flood the page", async () => {
+  /** Open a package's fold in the picker (built-ins are 核心工具). */
+  function openFold(box: HTMLElement, name: string) {
+    fireEvent.click(within(box).getByRole("button", { name: new RegExp(`^${name}`) }));
+  }
+
+  const apply = () => fireEvent.click(within(dialog()).getByRole("button", { name: "套用" }));
+
+  it("is one line saying what is shown — a hundred commands do not flood the page", async () => {
     draw();
     await within(toolsPart()).findAllByTestId("tool-usage-row");
 
     expect(summary()).toHaveTextContent("顯示哪些:全部(3)");
-    expect(summary()).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByRole("dialog")).toBeNull();
     expect(within(toolsPart()).queryAllByRole("checkbox")).toHaveLength(0);
   });
 
-  it("opens to tick boxes grouped by package, built-ins on their own", async () => {
+  it("opens the tool modal's kind of picker: folds per package, built-ins first, each with a count", async () => {
     draw();
     const box = await openPicker();
 
-    expect(summary()).toHaveAttribute("aria-expanded", "true");
-    const groups = within(box)
-      .getAllByRole("group")
-      .map((g) => g.getAttribute("aria-label"));
-    expect(groups).toEqual(["內建", "rca-tools", "acme"]);
-    expect(within(within(box).getByRole("group", { name: "acme" })).getAllByRole("checkbox")).toHaveLength(1);
+    const folds = within(box)
+      .getAllByRole("button", { expanded: false })
+      .map((b) => b.textContent);
+    expect(folds).toEqual(["▸核心工具1 項", "▸rca-tools1 項", "▸acme1 項"]);
+
+    openFold(box, "acme");
+    expect(within(box).getByRole("checkbox", { name: "acme__lookup" })).toBeChecked();
   });
 
-  it("finds a command by typing part of its name", async () => {
+  it("ticks or clears a whole package from its fold, and shows a fold partly ticked as mixed", async () => {
+    const two: ToolUsageReport = {
+      days: 30,
+      tools: [
+        { tool: "acme__ls", source: "third_party", package: "acme", calls: 9, fails: 0, avg_ms: 1 },
+        { tool: "acme__cat", source: "third_party", package: "acme", calls: 4, fails: 0, avg_ms: 1 },
+        { tool: "exec", source: "builtin", package: "", calls: 3, fails: 0, avg_ms: 1 },
+      ],
+    };
+    draw(two);
+    const box = await openPicker();
+    const fold = within(box).getByRole("checkbox", { name: "acme 全部顯示" });
+
+    fireEvent.click(fold);
+    expect(fold).not.toBeChecked();
+    openFold(box, "acme");
+    fireEvent.click(within(box).getByRole("checkbox", { name: "acme__ls" }));
+    expect((fold as HTMLInputElement).indeterminate).toBe(true);
+    expect(within(box).getByText(/混合/)).toBeInTheDocument();
+
+    apply();
+    expect(order(toolsPart())).toEqual(["acme__ls", "exec"]);
+  });
+
+  it("finds a command by typing, opening the folds it is in", async () => {
     draw();
     const box = await openPicker();
 
-    fireEvent.change(within(box).getByRole("searchbox", { name: "找工具" }), {
+    fireEvent.change(within(box).getByRole("searchbox", { name: "搜尋工具…" }), {
       target: { value: "look" },
     });
 
-    expect(within(box).getAllByRole("checkbox").map((c) => c.getAttribute("name"))).toEqual([
+    expect(within(box).getAllByRole("checkbox", { name: /__|^exec$|^spc$/ }).map((c) => c.getAttribute("name"))).toEqual([
       "acme__lookup",
     ]);
   });
 
-  it("leaves an unticked tool out of the charts and the table, and says how many are shown", async () => {
+  it("changes nothing until 套用, then charts and table show only what is ticked", async () => {
     draw();
     const box = await openPicker();
-
+    openFold(box, "核心工具");
     fireEvent.click(within(box).getByRole("checkbox", { name: "exec" }));
 
+    expect(order(toolsPart())).toEqual(["exec", "spc", "acme__lookup"]); // not yet
+
+    apply();
+    expect(screen.queryByRole("dialog")).toBeNull();
     expect(order(toolsPart())).toEqual(["spc", "acme__lookup"]);
     expect(bars(toolsPart(), "呼叫次數")).toEqual(["spc 40", "acme__lookup 5"]);
     expect(bars(toolsPart(), "失敗次數")).toEqual(["spc 10", "acme__lookup 5"]);
     expect(summary()).toHaveTextContent("顯示哪些:已選 2 / 3");
   });
 
-  it("shows what is picked outside the list, each one removable", async () => {
+  it("asks once before throwing away what was changed, and closes at once when nothing was", async () => {
+    draw();
+    let box = await openPicker();
+    fireEvent.click(within(box).getByRole("button", { name: "取消" }));
+    expect(screen.queryByRole("dialog")).toBeNull(); // clean: no question
+
+    fireEvent.click(summary());
+    box = dialog();
+    openFold(box, "核心工具");
+    fireEvent.click(within(box).getByRole("checkbox", { name: "exec" }));
+    fireEvent.click(within(box).getByRole("button", { name: "取消" }));
+
+    // Dirty: asked (the repo's confirm), and discarding drops the draft.
+    fireEvent.click(await screen.findByTestId("dialog-action-discard"));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "顯示哪些工具" })).toBeNull());
+    expect(order(toolsPart())).toEqual(["exec", "spc", "acme__lookup"]);
+  });
+
+  it("clears every tick, then 套用 shows only the ones ticked back", async () => {
     draw();
     const box = await openPicker();
-    fireEvent.click(within(toolsPart()).getByRole("button", { name: "清除" }));
+
+    fireEvent.click(within(box).getByRole("button", { name: "清除" }));
+    openFold(box, "rca-tools");
     fireEvent.click(within(box).getByRole("checkbox", { name: "spc" }));
+    apply();
+
+    expect(order(toolsPart())).toEqual(["spc"]);
+  });
+
+  it("says so when nothing is ticked", async () => {
+    draw();
+    const box = await openPicker();
+    fireEvent.click(within(box).getByRole("button", { name: "清除" }));
+    apply();
+
+    expect(within(toolsPart()).queryAllByTestId("tool-usage-row")).toHaveLength(0);
+    expect(within(toolsPart()).getByText("沒有勾選要顯示的工具")).toBeInTheDocument();
+  });
+
+  it("shows what is picked outside the picker, each one removable", async () => {
+    draw();
+    const box = await openPicker();
+    fireEvent.click(within(box).getByRole("button", { name: "清除" }));
+    openFold(box, "rca-tools");
+    fireEvent.click(within(box).getByRole("checkbox", { name: "spc" }));
+    openFold(box, "核心工具");
     fireEvent.click(within(box).getByRole("checkbox", { name: "exec" }));
+    apply();
 
     const chosen = within(toolsPart()).getByRole("list", { name: "已選" });
     expect(within(chosen).getAllByRole("listitem").map((li) => li.textContent)).toEqual([
@@ -457,31 +536,20 @@ describe("which tools, at which granularity (plan §9)", () => {
     };
     draw(many);
     const box = await openPicker();
+    openFold(box, "big");
     fireEvent.click(within(box).getByRole("checkbox", { name: "c00" }));
+    apply();
 
     expect(summary()).toHaveTextContent("顯示哪些:已選 29 / 30");
     expect(within(toolsPart()).queryByRole("list", { name: "已選" })).toBeNull();
   });
 
-  it("clears every tick, then shows only the ones ticked back", async () => {
-    draw();
-    const box = await openPicker();
-
-    fireEvent.click(within(toolsPart()).getByRole("button", { name: "清除" }));
-    expect(within(toolsPart()).queryAllByTestId("tool-usage-row")).toHaveLength(0);
-    expect(within(toolsPart()).getByText("沒有勾選要顯示的工具")).toBeInTheDocument();
-
-    fireEvent.click(within(box).getByRole("checkbox", { name: "spc" }));
-    expect(order(toolsPart())).toEqual(["spc"]);
-
-    fireEvent.click(within(toolsPart()).getByRole("button", { name: "全部" }));
-    expect(order(toolsPart())).toEqual(["exec", "spc", "acme__lookup"]);
-  });
-
   it("adds a package's commands into one row by package, and starts from every one again", async () => {
     const client = draw();
     const box = await openPicker();
+    openFold(box, "核心工具");
     fireEvent.click(within(box).getByRole("checkbox", { name: "exec" }));
+    apply();
 
     const unit = within(toolsPart()).getByRole("group", { name: "顯示單位" });
     expect(within(unit).getByRole("button", { name: "每個 command" })).toHaveAttribute(
@@ -550,7 +618,7 @@ describe("one name from two sources (plan §8.2)", () => {
     await within(skillsPart()).findAllByTestId("tool-usage-row");
 
     expect(bars(skillsPart(), "載入次數")).toEqual([
-      "line-report(自己寫的) 3",
+      "line-report(item 內自建) 3",
       "line-report(skill hub) 2",
     ]);
   });
