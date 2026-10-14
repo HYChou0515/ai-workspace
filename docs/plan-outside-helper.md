@@ -36,12 +36,13 @@
 | D4 | **搜尋**送出去前,人在卡片上點頭(看得到查詢、可以改)按「查」。抓回來的內容**都直接送給 AI**,不再經人 | 〔user〕先選 B(兩個點),後改「直接送」——每頁只回一頁(D10),第二個點只剩「按送出」的搬運 |
 | D13 | **怎麼開**:雙擊桌面捷徑 `AI Workspace Helper`(由安裝建立,D16;檔名用英文),開一個小視窗(Python 內建 tkinter),三個分頁:**狀態**(已連線/正在搜尋（Google）/正在開啟/請登入/登入已過期)與「登入」「暫停/繼續」「結束」、可勾「開機時自動啟動」(在 Windows「啟動」資料夾放捷徑);**查詢紀錄**(最近 200 筆,只存本機 `history.jsonl`);**記錄檔**(`helper.log` 尾端、開啟記錄資料夾)。關掉視窗 = 關掉小幫手 | 〔user〕「你如果能安裝好我也是可以」;呼應最初「一個簡單的gui代勞」;2026-10-13 跑過真視窗後〔user〕「Wording有點醜」「在那邊應該要有搜尋紀錄和log」 |
 | D14 | **打包在 dev server**(連得到 PyPI):`pip download --platform win_amd64 --only-binary=:all:` 抓 Windows 用的套件(Playwright 本身不分 Python 版本;`greenlet` 依版本,一次放 CPython 3.10–3.14 各一份〔施工〕),加上小幫手自己的 wheel 和 `.pyw`,組成離線安裝包;放在 **AI Workspace 網頁**的「小幫手」頁下載。沒有 Windows CI——Windows 上的驗證是 user 在公司筆電裝起來跑一次 | 〔user〕「只能是我在dev server打包 或是在公司筆電打包」「可以 甚至可以在ai workspace網頁下載」 |
-| D15 | **更新**:一般更新由小幫手在背景下載、裝好,**下次開啟時生效**,使用者不用做任何事;只有後端說「低於最低可用版本」時,才跳視窗要求立刻更新 | 〔user〕「要放給使用者的東西 要有好的update流程」;選「一般自動、低於最低版本才強制」 |
+| D15 | **〔被 D21 取代〕更新**:一般更新由小幫手在背景下載、裝好,**下次開啟時生效**,使用者不用做任何事;只有後端說「低於最低可用版本」時,才跳視窗要求立刻更新 | 〔user〕「要放給使用者的東西 要有好的update流程」;選「一般自動、低於最低版本才強制」 |
 | D16 | **安裝(每台筆電一次)**:從 AI Workspace 網頁下載 zip、解壓縮、雙擊 `install.pyw`(只用 Python 內建功能;檔名一律英文)。它先顯示「將使用 Python 3.x(完整路徑)」讓人確認,建好資料夾、裝好套件,在桌面放捷徑;**捷徑寫死那個 `pythonw.exe` 的絕對路徑**,之後不靠副檔名關聯。系統挑錯 Python 時,取消、改用 `py -3.x install.pyw`。不處理「Python 被升級」——沒有人會自動升級 Python,真的換了就重跑一次安裝 | 〔user〕「什麼叫執行安裝指令?我是在dev server打包的耶」「可以吧 簡單即可」「沒有人會自動升級python」「你有指定執行檔路徑?」 |
 | D17 | **解除安裝**:小視窗裡的「解除安裝」按鈕,確認後刪掉小幫手留下的三樣東西(`%LOCALAPPDATA%\AIWorkspaceHelper\` 整個資料夾、桌面與啟動資料夾的 `AI Workspace Helper.lnk`);按鈕不能用時,手動刪掉這三樣就等於解除安裝。不碰登錄檔、不裝系統資料夾,所以沒有別的痕跡;後端不用做任何事(沒有心跳,卡片自動退回手動,D7) | 〔user〕「怎麼解安裝」「要」 |
 | D18 | **名稱**:app 叫「AI Workspace」;這支程式的正式名稱是「AI Workspace Helper」——桌面捷徑、視窗與對話框標題、安裝資料夾 `%LOCALAPPDATA%\AIWorkspaceHelper\`、下載的 `ai-workspace-helper-<版本>.zip`;視窗裡和網頁上自稱「小幫手」(例如「小幫手已連線」),不再叫「外網小幫手」。程式碼裡叫 `ai-workspace-helper` / `ai_workspace_helper`:`ai-workspace-helper/` 資料夾(Python 套件 `ai_workspace_helper`)、`/api/ai-workspace-helper/*` 路由、`X-AI-Workspace-Helper-*` header、`server.ai_workspace_helper_dir`、`ai-workspace-helper.json`。卡片的工作(`OutsideJob`、`/outside-jobs`)屬於卡片,不改名;本計劃檔名不改 | 〔user〕「名稱改叫ai workspace helper」「中文名也要改啊」「正式名稱AI workspace」(我先讀成程式的名字,其實是 app 的)「視窗內自稱小幫手」「outside-helper.json也改掉」「AI工作區 改為AI Workspace」「AI Workspace.lnk 不是應該叫做ooxx helper?」 |
 | D19 | **不需要系統管理員權限,但要被允許執行**:安裝只寫 `%LOCALAPPDATA%\AIWorkspaceHelper\` 與自己的捷徑(不跑安裝程式、不寫 Program Files、不改登錄檔);公司電腦可能擋的是**執行**——使用者資料夾裡的程式(AppLocker)、zip 裡的 `node.exe`(防毒/代理)、PowerShell 受限(只影響捷徑)、Chrome 自動化政策。zip 裡附 **`precheck.pyw`**:不安裝任何東西,在暫存資料夾把每一樣真的試一次、列表、可複製給 IT,結束就刪掉。捷徑建不起來不再算安裝失敗(安裝結束時說要雙擊哪個檔);捷徑的 PowerShell 遇到任何錯誤都算失敗(`$ErrorActionPreference = 'Stop'`,否則沒建出來也會回 0) | 〔user〕「請問他會安裝嗎?我想我們沒有安裝權限」「可以 你就一起寫到docs裡面」 |
 | D20 | **小幫手對 AI Workspace 的請求不驗憑證**:那些請求(報到、領工作、交結果、下載更新)由 Playwright 自帶的 Node 送出,不是 Chrome——Node 不讀 Windows 憑證庫、不補伺服器沒送的中繼憑證,於是 Chrome 登入得了的部署,小幫手每次報到都是「unable to verify the first certificate」→「連不上」、卡片「小幫手未連線」(user 的公司筆電,0.1.0)。依這個部署的慣例(user:「我們都是verify=false」)不驗,沒有開關,但**只對這些請求**(`APIRequestContext.fetch/get` 的 `ignore_https_errors`),差事開的網頁仍由 Chrome 驗。代價:更新檔的 sha256 是跟同一條不驗憑證的連線拿到的版本資訊比對,只擋下載損壞、擋不了攔截者換掉更新檔——能在公司網路上攔截這條連線的人,可以讓小幫手裝上並執行他的程式,也看得到登入 cookie(已告知 user)。Playwright 的錯誤訊息附的「Call log」列出每個 header(含登入 cookie),只留第一行再交給視窗與記錄檔。連不上/被拒的原因改為開始時寫進 `helper.log`(原本只在視窗第二行)。另:zip 裡那份 `launch.pyw` 在解壓縮資料夾被雙擊時,改去找已安裝的資料夾(原本說「沒有安裝」);兩邊都沒裝時留在自己的資料夾,不在 `%LOCALAPPDATA%` 留下東西 | 〔user〕「看到 unable to verify the first certificate」「我們都是verify=false」「發現安裝後有開起來 但是按launch仍然說沒有安裝」 |
+| D21 | **更新只通知、不自動裝**(取代 D15):小幫手照舊在開啟時與每 6 小時讀版本資訊,有新版或被要求更新(426)時,小視窗只顯示「有新版 X」與「開啟下載頁」按鈕;使用者在**一般瀏覽器**(會驗憑證)下載 zip、重新雙擊 `install.pyw`,它把正在跑的小幫手關掉、換成新版。小幫手不再自己下載、安裝、換版、退回。為什麼:D20 讓小幫手對 AI Workspace 不驗憑證,自動更新走同一條連線,能攔截它的人就能讓小幫手裝上並執行他的程式(sha256 也是從那條連線來的,擋不住);改成只通知後,偽造的通知最多把人帶去下載頁或讓小幫手暫停,下載本身由瀏覽器驗 | 〔user〕(兩案:A 照常自動、文件寫明風險;B 只提示、自己從網頁下載重跑 `install.pyw`)「B」;「我覺得先討論完 開發玩 再繼續ci」「寫plan」 |
 | D12 | **開網址**:網址若出現在**這個聊天先前任何一次查回來的內容**裡,直接開;否則和搜尋一樣,先在卡片上點頭 | 〔user〕「純網址可以直接開 搜尋要先確認」,後收緊為「網址出現在上一次查詢中的話就可以直接開」「查過都算」——外面網頁上的連結是外面帶回來的,AI 自己寫的網址才可能夾帶內部字詞 |
 | D5 | 小幫手主動向後端領工作(網頁不能控制它);**Python 直接連我們的後端** | 〔user〕選 1 |
 | D6 | 身分沿用 app 現有的登入(「要登入才能用」那道門),不另做金鑰 | 〔user〕「我們已經有卡(限制)登入了」 |
@@ -143,7 +144,7 @@ AI 呼叫 ask_outside ──► 卡片(D7:沒連線 = 今天的手動流程)
   `pip download --platform win_amd64 --implementation cp --python-version 3.X --abi cp3X --only-binary=:all:`
   進同一個 wheelhouse;版本用 `==` 釘死,`--no-index` 才不會撿到資料夾裡留下的舊 wheel。
 
-### 3.7 更新(D15)
+### 3.7 更新(D15 → D21)
 
 研究過的坑與對策(來源附在每條;user 要求「去查一下有什麼 pitfall」):
 
@@ -154,7 +155,7 @@ AI 呼叫 ask_outside ──► 卡片(D7:沒連線 = 今天的手動流程)
 | Windows 不能覆蓋正在跑的檔案 | `pip install --upgrade` 失敗(WinError 32);更新一半壞掉 | **不原地更新**:每個版本裝在自己的資料夾,下次啟動才換,換不成就留舊版——Chrome 與 VS Code 的做法([Chromium upgrade_util_win](https://chromium.googlesource.com/chromium/src/+/lkgr/chrome/browser/first_run/upgrade_util_win.h)) |
 | 一台電腦好幾個 Python | 「裝好了,雙擊卻找不到模組」 | `pip`、`py`、`.pyw` 可能各找到不同 Python([Python on Windows](https://docs.python.org/3/using/windows.html));venv 綁死建它的 Python([venv](https://docs.python.org/3/library/venv.html))。所以安裝時讓人確認用哪個 Python,捷徑寫死它的絕對路徑(D16),之後不靠副檔名關聯;每版一個 venv,都由這個 Python 建 |
 | 開機捷徑指著舊路徑 | 開機沒啟動,或啟動舊版 | 捷徑永遠指向「安裝時那個 `pythonw.exe` + 同一個固定的 `launch.pyw`」,不指向版本資料夾 |
-| 公司防毒擋 Playwright 的 `node.exe`;下載的 zip 被標記 | 「Could not connect to the playwright process」;第一次雙擊跳警告 | 企業防毒擋過 Playwright 的執行檔([playwright-java#1016](https://github.com/microsoft/playwright-java/issues/1016));請 IT 依資料夾或簽章放行一次。之後的更新由小幫手從內網直接拿,不經瀏覽器下載,沒有「從網路下載」的標記 |
+| 公司防毒擋 Playwright 的 `node.exe`;下載的 zip 被標記 | 「Could not connect to the playwright process」;第一次雙擊跳警告 | 企業防毒擋過 Playwright 的執行檔([playwright-java#1016](https://github.com/microsoft/playwright-java/issues/1016));請 IT 依資料夾或簽章放行一次。〔D21〕更新也是從瀏覽器下載 zip,和第一次安裝一樣會帶「從網路下載」的標記 |
 | 同一個 Chrome 設定檔不能同時開兩個;Chrome 降版 | 開機自動啟動 + 又雙擊一次,第二個失敗;「設定檔來自較新版本」 | 一次只能有一個小幫手([BrowserType](https://playwright.dev/python/docs/api/class-browsertype));設定檔放在版本資料夾外面,更新不會登出;壞掉時有「重設登入」 |
 
 機制〔施工〕(檔名一律英文——〔user〕「檔名都不要用中文」):
@@ -186,19 +187,14 @@ AI 呼叫 ask_outside ──► 卡片(D7:沒連線 = 今天的手動流程)
 ```json
 {
   "base_python": "C:\\...\\Python312\\pythonw.exe",
-  "current": "1.5.0",
-  "previous": "1.4.0",
-  "pending": "1.6.0",
-  "pending_attempts": 0,
-  "bad": ["1.5.1"],
-  "failures": {"1.6.1": 1},
-  "update": "1.5.1 起不來,已退回 1.5.0",
+  "current": "1.6.0",
+  "previous": "1.5.0",
   "start_at_login": true
 }
 ```
 
-〔施工〕`failures` 是背景準備新版失敗的次數(§3.7.4 第 5 點,到 3 次進 `bad`);`update` 是上一次更新的結果,
-心跳時回報(§3.7.7);`start_at_login` 記小視窗那個勾。全部的讀寫邏輯在 `ai_workspace_helper/setup_core.py`(只用
+〔D21〕`previous` 是重裝前在跑的那一版(它可能還開著,所以安裝時不刪它的資料夾);`start_at_login` 記小視窗那個勾。
+D15 時代的 `pending`、`pending_attempts`、`bad`、`failures`、`update` 不再寫;舊的 `state.json` 裡有也不讀,下次安裝時清掉。全部的讀寫邏輯在 `ai_workspace_helper/setup_core.py`(只用
 標準函式庫,同一個檔在套件裡、zip 根目錄、`launch.pyw` 旁邊各一份:打包放進 zip、安裝與新版確認時放到 `launch.pyw` 旁,都是複製,不另外改)。
 
 #### 3.7.2 發布新版(dev server → 後端)
@@ -220,42 +216,45 @@ AI 呼叫 ask_outside ──► 卡片(D7:沒連線 = 今天的手動流程)
   - 或版本低於 `ai-workspace-helper.json` 的 `min_version`——運營方要強迫升級時調高它。
 - API 只加不刪;小幫手看不懂的欄位一律忽略。要拿掉欄位,先調高最低協定號,讓讀它的舊版都被擋下、升級。
 
-#### 3.7.4 一般更新(背景,下次開啟生效 — D15)
+#### 3.7.4 有新版:只通知(D21)
 
-小幫手啟動時與之後每 6 小時〔施工:值〕:
+小幫手啟動時與之後每 6 小時(`CHECK_EVERY_S`)讀版本資訊(`GET /api/ai-workspace-helper/manifest`):
 
-1. 讀版本資訊。`version` 不比現在新、或在 `bad` 裡 → 不動作。
-2. 下載 zip 到 `downloads\`,驗 sha256;不對就刪掉,下次再試。
-3. 解壓到 `versions\1.6.0.partial\`,用 `base_python` 建 venv,`pip install --no-index --find-links <wheelhouse> ai-workspace-helper==1.6.0`。
-4. 試跑:用新 venv 執行 `python -m ai_workspace_helper --self-test`(import 得到 Playwright、它的 driver 在、版本號對)。
-5. 全部成功 → 資料夾改名成 `versions\1.6.0\`,`state.json` 寫 `pending: "1.6.0"`;小視窗顯示「新版已下載，下次開啟時套用」。
-   任一步失敗 → 刪掉 `.partial`、記 log,現在這版照常跑;同一版連續失敗 3 次記進 `bad`,不再試(等下一個新版)。
-6. 整個過程不碰現在正在跑的版本——Windows 會鎖住執行中的檔案,原地覆蓋才會壞(§3.7 表)。
+1. `version` 比自己新 → 小視窗狀態分頁多一行「有新版 1.6.0：請到「小幫手」頁下載，重新雙擊 install.pyw」和按鈕
+   「**開啟下載頁**」;不比自己新 → 不顯示。小幫手照常領工作,什麼都不下載、不安裝。
+2. 「開啟下載頁」用 Python 的 `webbrowser.open` 以**使用者的預設瀏覽器**開 `<網址>/ai-workspace-helper`
+   ([webbrowser](https://docs.python.org/3/library/webbrowser.html):Windows 上交給系統的預設程式)。不用小幫手自己的 Chrome:Playwright 開的瀏覽器下載的檔,
+   在那個 context 關掉時就被刪掉([Download](https://playwright.dev/python/docs/api/class-download)),而且下載要讓瀏覽器驗憑證,這正是 D21 的目的。
+3. 讀版本資訊失敗(連不上、被拒)→ 不顯示這一行,下一輪再讀;原因照 D20 進記錄檔。
+4. 為什麼是「一行字 + 一個按鈕」:這是要使用者知道、但不擋住目前工作的通知,附上能處理它的動作——GOV.UK 的
+   notification banner([GOV.UK](https://design-system.service.gov.uk/components/notification-banner/))、NN/g 對「通知」的分類([NN/g](https://www.nngroup.com/articles/indicators-validations-notifications/));下載是一個動作,畫成按鈕。
 
-#### 3.7.5 下次開啟:換版與自動退回(`launch.pyw`)
+#### 3.7.5 重新安裝:換上新版(D21)
 
-1. 拿 `helper.lock`;已經有一個小幫手在跑 → 把它的視窗叫到前面,自己結束(不會開出兩個,§3.7 表最後一列)。
-2. 有 `pending`:`pending_attempts + 1` 寫回 `state.json`,用新版啟動。
-3. 新版跑起來之後——報到成功、或後端回「要登入」(證明連得上)、或被暫停、或被要求更新——由新版自己把 `state.json` 改成 `current: 新版、previous: 舊版、pending: 無、attempts: 0`,
-   並刪掉 `current`、`previous` 以外的舊版本資料夾。
-4. `pending_attempts` 到 3 還沒被新版確認(啟動就當掉)→ 啟動檔把它記進 `bad`、清掉 `pending`,改用 `current` 啟動,
-   並在下次心跳回報「1.6.0 起不來,已退回 1.5.0」。
-5. 沒有 `pending`:用 `current` 啟動。
-6. `launch.pyw` 本身的更新:新版確認成功後(第 3 步),若新版附的 `launch.pyw` 和根目錄那份不同,就用 `os.replace` 換掉——
-   那時啟動檔已經結束,`.pyw` 是文字檔,Windows 不會鎖。捷徑指向的路徑不變。
+`install.pyw` 跑在一個已經裝好的資料夾上(新版的 zip):
 
-#### 3.7.6 強制更新(低於最低版本 — D15)
+1. 照 D16 確認 Python,用它建 `versions\1.6.0\venv\`、離線裝套件、試跑(`--self-test`)——壞掉的新版在這一步就失敗,
+   不會變成 `current`;現在在跑的版本完全不碰(Windows 鎖住執行中的檔案,§3.7 表)。
+2. 成功 → `state.json` 寫 `current: 1.6.0、previous: 原來的 current`,複製 `launch.pyw` / `setup_core.py` 到根目錄(文字檔,
+   沒在執行,換得掉),刪掉 `current`、`previous` 以外的版本資料夾(刪不掉的留著,下次再刪)。
+3. 有小幫手正在跑(拿不到 `helper.lock`)→ 問「小幫手正在執行，要換成新版重新開啟嗎？」:
+   - 是 → 寫 `quit.request`(和 `show.request` 同一個做法:正在跑的那個每 0.5 秒看一次),它照「結束」的路徑關掉 Chrome、
+     放掉鎖、結束;`install.pyw` 等鎖(最多 20 秒,`launch(wait_s=…)`)後用 `current` 啟動新版。
+   - 否 → 舊版照跑,下次開啟就是新版。
+4. 沒有小幫手在跑 → 照原本的「現在開啟嗎？」。
 
-- 收到 426:小視窗改成「這個版本已停用,需要更新」,不再領工作;同時照 §3.7.4 下載、安裝、試跑,完成後按鈕「立即更新」
-  (結束自己、由啟動檔換版)。卡片那邊照 D7 退回手動流程,所以這段時間使用者仍然查得到東西。
-- 下載或安裝失敗:顯示原因與「小幫手」下載頁的連結,讓使用者重跑 `install.pyw`。
+#### 3.7.6 被要求更新(426,D21)
+
+- 收到 426:小視窗「這個版本已停用：請到「小幫手」頁下載新版，重新雙擊 install.pyw」+「開啟下載頁」,不再領工作。
+  卡片照 D7 退回手動流程,所以這段時間使用者仍然查得到東西。重裝(§3.7.5)之後新版接手。
+- 426 也可能是偽造的(D20:那條連線不驗憑證):最壞是小幫手停工、人被帶去下載頁,不會執行任何東西。
 
 #### 3.7.7 其他
 
-- **心跳**附上小幫手版本、協定號、Chrome 版本、Playwright 版本、Python 版本、上一次更新結果——後端看得到誰還在舊版、誰的 Chrome
+- **心跳**附上小幫手版本、協定號、Chrome 版本、Playwright 版本、Python 版本(〔D21〕不再送「上一次更新結果」;後端欄位照 §3.7.3 只加不刪,留著)——後端看得到誰還在舊版、誰的 Chrome
   已經超過測過的版本。
 - **Chrome 設定檔**在 `profile\`,單一實例鎖保證不會兩個小幫手同時用;壞掉時小視窗有「重設登入」(移開設定檔、重新登入)。
-- **第一次安裝**:D16,`install.pyw` 建好上面的結構與捷徑,之後都由小幫手自己更新。
+- **第一次安裝**:D16,`install.pyw` 建好上面的結構與捷徑;〔D21〕之後每一版也都用它裝(§3.7.5)。
 - **解除安裝**(D17):小視窗按「解除安裝」→ 確認「會刪掉小幫手和它的登入資料」→ 小幫手放掉 `helper.lock`、結束 Chrome,
   啟動一個收尾程序(用 `base_python`,程式碼先複製到 `%TEMP%`,因為正在跑的檔案刪不掉)後結束自己;收尾程序等小幫手
   的行程結束,刪掉兩個捷徑與 `%LOCALAPPDATA%\AIWorkspaceHelper\`,最後刪掉自己在 `%TEMP%` 的檔案。刪不掉的(例如被防毒鎖住)
@@ -273,10 +272,15 @@ AI 呼叫 ask_outside ──► 卡片(D7:沒連線 = 今天的手動流程)
 | P5 | `ai-workspace-helper/` 骨架:小視窗(D13)、Chrome persistent context、登入與過期重登、領工作迴圈、差事外掛介面、驗證碼等待 | 對本機假後端 + 本機假網站跑通(Linux) |
 | P6 | 差事 `search` / `open_url`:開頁、整頁 HTML 經打包的 `htmlToMarkdown` 轉 Markdown | parity:範例 HTML 在前端與小幫手轉出逐字相同;對本機假搜尋頁抓得到結果連結 |
 | P7 | 安裝包:`scripts/pack_ai_workspace_helper.py`(D14、§3.7.2,產 `ai-workspace-helper-<版本>.zip` + `ai-workspace-helper.json`)、`install.pyw`(D16)、AI Workspace 的下載頁 | 在 Linux 上產出的安裝包含小幫手與 Playwright、greenlet cp310–cp314 的 win_amd64 wheel,版本釘死;`pip install --no-index --dry-run` 對 win_amd64 解得出全部依賴;下載頁下載得到 |
-| P8 | 更新(§3.7)與解除安裝(D17):`ai_workspace_helper_dir` 與版本資訊/下載路由(§3.7.2)、426 與協定號(§3.7.3)、背景更新(§3.7.4)、`launch.pyw` 換版與退回(§3.7.5)、強制更新(§3.7.6)、心跳回報版本 | 版本資訊只列出的檔可下載;低於 `min_version` 或最低協定號回 426;下載 sha256 不符不裝;任一步失敗現在這版照常跑、同版連 3 次失敗進 `bad`;`pending` 3 次沒確認自動退回;`state.json` 只用原子寫入;已有一個在跑時不開第二個;`launch.pyw` 只在新版確認後才被換掉。解除安裝刪掉三樣、刪不掉的列出來。全部在 Linux 上用假的 Python 與假的後端測 |
+| P8 | 〔其中的背景更新、換版與退回、強制更新的自動下載由 P12–P14 拿掉(D21);§3.7.4–3.7.6 已改寫〕更新(§3.7)與解除安裝(D17):`ai_workspace_helper_dir` 與版本資訊/下載路由(§3.7.2)、426 與協定號(§3.7.3)、背景更新(§3.7.4)、`launch.pyw` 換版與退回(§3.7.5)、強制更新(§3.7.6)、心跳回報版本 | 版本資訊只列出的檔可下載;低於 `min_version` 或最低協定號回 426;下載 sha256 不符不裝;任一步失敗現在這版照常跑、同版連 3 次失敗進 `bad`;`pending` 3 次沒確認自動退回;`state.json` 只用原子寫入;已有一個在跑時不開第二個;`launch.pyw` 只在新版確認後才被換掉。解除安裝刪掉三樣、刪不掉的列出來。全部在 Linux 上用假的 Python 與假的後端測 |
 | P9 | 文件:`docs/migrations.md`(新 resource、新路由、新下載物、IT 要放行的項目)、使用者說明 | mkdocs `--strict` 綠 |
 | P10 | live check(真 app + 真 Chrome + 本機假網站)+ demo MP4 | 搜尋與開網址各走一次:按「查」之後不再經人,`lookups/` 有檔、AI 讀到;一次更新(換指標、下次開啟生效) |
 | P11 | review(四把鏡頭)→ CI | 照 CLAUDE.md |
+| P12 | 〔D21〕更新只通知:`Updater` 讀版本資訊,比自己新 → 狀態「有新版 X」;426 → 「這個版本已停用」;小視窗那一行 + 「開啟下載頁」(`webbrowser.open(<網址>/ai-workspace-helper)`);不下載、不安裝 | 新版 → 顯示、照常領工作;同版或舊版 → 不顯示;讀不到 → 不顯示、記 log;426 → 停領工作 + 顯示;按鈕開的網址帶部署前綴;小幫手沒有任何下載或安裝的呼叫 |
+| P13 | 〔D21〕重裝換版:`install.pyw` 在已安裝的資料夾上裝新版(`previous` = 原 `current`,刪其餘版本資料夾);有小幫手在跑時問、寫 `quit.request`、等鎖、啟動新版 | 新版試跑失敗 → `current` 不變;正在跑的版本資料夾不刪;`quit.request` 讓正在跑的那個走「結束」的路徑(Chrome 關、鎖放掉);等不到鎖 → 說明、不開第二個;不開 → 舊版照跑 |
+| P14 | 〔D21〕拿掉自動更新:`prepare_update` / `update_outcome` / 解壓、`pending`/`bad`/`failures`/`update` 與 `launch.pyw` 的換版退回、`confirm`、`Backend.download` / `Chrome.fetch_bytes`、「立即更新」與 `--wait`、心跳的 `update`、live check 的更新那半(改成「重裝換版」) | 程式裡不再有寫這些欄位或下載 zip 的路徑;舊 `state.json` 有這些欄位照樣啟動;測試跟著刪改,不留沒人用的程式 |
+| P15 | 文件:使用說明「更新」、`docs/migrations.md` #933(行為改變:不再自動更新,每一版都要重裝)、PR 說明 | mkdocs `--strict` 綠;每句寫在驗證之後 |
+| P16 | review(conformance / veracity / defect / regression)→ CI | 照 CLAUDE.md;P12–P14 換掉一個機制,review 至少一輪 |
 
 ## 5. 不做(這一版)
 
