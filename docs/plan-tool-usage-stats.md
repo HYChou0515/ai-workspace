@@ -36,6 +36,9 @@ MCP 伺服器(`tooling/mcp_server.py`、`tooling/builder.py:_inject_mcp`),讓工
 | D9 | 一次 skill 使用 = AI 用 `read_skill` 讀到內容,**或**使用者在選單套用(內容預先載入);兩種合成一個次數,不分開 | 〔user〕選「兩種都算、不分開」 |
 | D10 | **所有來源的 skill 都算**,每筆標來源(平台內建/App 內建/skill hub/自己寫的) | 〔user〕選「全部、標來源」 |
 | D11 | 放在**「工具使用」同一頁**,只給 superuser;**只算成功讀到的**,沒有失敗、沒有耗時 | 〔user〕選「放進同一頁」「只算成功讀到的」 |
+| D13 | 工具區**能選要顯示哪些工具／command** | 〔user〕「要能選顯示哪些tool,command」 |
+| D14 | 工具區**能選顯示的顆粒度:每個 command,或依套件合併** | 〔user〕「要能選要顯示顆粒度」→ 選「工具顆粒度(套件/command)」 |
+| D15 | 工具與 skill **都能下載原始資料** | 〔user〕「兩個都要能下載raw data」 |
 | D12 | 工具與 skill **直接攤在頁面上,放表格和圖表**,不用切換;圖表**不引入 ECharts**,但要畫得像圖表 | 〔user〕「直接放表格和圖表吧 你看uiux guidance」;「不要好了 但你至少不用echart也畫像一點」;「X軸scale要相同」 |
 
 ## 3. 機制
@@ -145,6 +148,9 @@ sub-agent、`ask_knowledge_base` 裡的 KB 子代理各自的工具呼叫由它�
 | P11 | 畫面:「工具使用」頁加「工具/Skill」分段控制;skill 表只有名稱/來源/次數,點進看分項 | 元件測試;版面在 1280/390 量過 |
 | P12 | 文件:migrations 的 #932 條目補上 skill;§7 as-built | mkdocs `--strict` 綠 |
 | P13 | 真瀏覽器檢查 + demo(MP4)涵蓋 skill | 截圖對照引用的指南 |
+| P14 | 記下每次呼叫的套件;API 加 `group=command\|package`(總表與單一分項都可);原始資料 CSV 匯出 | 同套件的 command 合成一列;內建不併;舊參數照舊;CSV 加總得回報表的數字 |
+| P15 | 工具區:顆粒度分段控制 + 多選要顯示的工具/套件,圖與表都照選擇 | 元件測試;突變探針;1280/390 量過 |
+| P16 | 文件、真瀏覽器檢查、demo(MP4) | mkdocs `--strict` 綠;截圖對照指南 |
 
 ## 6. 不做
 
@@ -266,3 +272,36 @@ skill 的「來源」記成四個值,依讀到內容的那條路與工作區副�
 - **S6 先做成「工具／Skill」分段控制,被推翻**(D12):兩種東西藏在切換後面,一次只看得到一種。改成一頁兩區、
   各自的圖表與表格;第一版的橫條只有條與數字,user 要「畫像一點」,補上數值軸、格線與基線。曾試著改用 ECharts
   (`view-plugins/chart` 用的那套),user 說不要——ECharts 也刻意不進 SPA 的主 bundle。
+
+## 9. 選要顯示的工具與顆粒度(D13、D14)
+
+### 9.1 顆粒度:每個 command,或依套件〔user + 施工〕
+
+- 計數時多記一個 `package`:第一方/第三方套件的 command 記它的套件名稱(`PackageInfo.name`,在 `_agent_for`
+  標來源的同一處查),內建工具是空字串。`ToolUsageDay.package` 加索引;#932 還沒合併,不用回填。
+- API 兩條路由加 `group=command|package`(預設 `command`,舊的呼叫不變)。`package` 時同一個套件的列加總成一列,
+  名稱是套件名;**內建工具沒有套件,維持一個一個**〔施工〕。點開一個套件,分項是那個套件所有 command 的加總。
+- 畫面:工具區加「每個 command / 依套件」分段控制——同一份內容的兩種看法 = 切換檢視,Material 3〈Segmented
+  buttons〉。Skill 沒有套件,沒有這個控制。
+
+### 9.2 選要顯示的〔user + 指南〕
+
+- 工具區加一組**「顯示哪些」核取方塊**,列出目前顆粒度下的每個名稱;全部勾 = 全部顯示(預設),另有「全部」
+  「清除」兩個按鈕〔施工〕。勾選結果**圖與表都照著顯示**——選擇是「我要看哪些」,不是只換圖。
+- 形式照 NN/g〈Listboxes vs. Dropdown Lists〉:**下拉不支援多選**,多選用帶核取方塊的清單、選項直接攤開;
+  清單不捲動(自動換行),勾到的就看得見,不另列一次 <https://www.nngroup.com/articles/listbox-dropdown/>。
+  一開始想用 Mantine `MultiSelect`(下拉 + 標籤),查了這篇才改。
+- 切換顆粒度時回到全部顯示:command 與套件是兩組不同的名字〔施工〕。
+- 數字為 0 的不會出現在清單裡(那段期間沒被叫過,本來就不在報表上)。
+
+### 9.3 下載原始資料(D15)〔施工〕
+
+- `GET /admin/tool-usage.csv?days=7|30|90&kind=tool|skill`,只給 superuser。路徑不放在 `/admin/tool-usage/` 底下:
+  `/admin/tool-usage/{tool}` 會把 `export` 之類的名字當成一個工具。
+- 「原始」= 存下來的每一格,不做報表的合併:各行程同一天的列先加總(行程名稱是內部細節),然後**長格式**一格一列——
+  `day, kind, name, package, source, dimension, user, surface, app, item, calls, fails, total_ms`;`dimension`
+  是 `total`(那天那個工具的總數)、`user`、`surface_app`、`item` 之一,只填它那一欄。依人、依場合、依 item 是三份
+  各自的加總,不是交叉表(存法本來就只存這三個邊際,§3.5),所以不給「某人在某 item 用了幾次」這種格子。
+- UTF-8 加 BOM:Excel 直接開才不會把中文顯示成亂碼。檔名 `tool-usage-<kind>-<days>d-<今天>.csv`。
+- 畫面:每區各一個「下載原始資料(CSV)」——是下載檔案,所以是連結(`<a download>`),不是按鈕。下載的是目前的時間
+  範圍;來源、場合、App、顯示哪些的篩選不套用——原始資料就是全部。
