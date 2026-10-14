@@ -36,6 +36,7 @@ MCP 伺服器(`tooling/mcp_server.py`、`tooling/builder.py:_inject_mcp`),讓工
 | D9 | 一次 skill 使用 = AI 用 `read_skill` 讀到內容,**或**使用者在選單套用(內容預先載入);兩種合成一個次數,不分開 | 〔user〕選「兩種都算、不分開」 |
 | D10 | **所有來源的 skill 都算**,每筆標來源(平台內建/App 內建/skill hub/自己寫的) | 〔user〕選「全部、標來源」 |
 | D11 | 放在**「工具使用」同一頁**,只給 superuser;**只算成功讀到的**,沒有失敗、沒有耗時 | 〔user〕選「放進同一頁」「只算成功讀到的」 |
+| D12 | 工具與 skill **直接攤在頁面上,放表格和圖表**,不用切換;圖表**不引入 ECharts**,但要畫得像圖表 | 〔user〕「直接放表格和圖表吧 你看uiux guidance」;「不要好了 但你至少不用echart也畫像一點」;「X軸scale要相同」 |
 
 ## 3. 機制
 
@@ -229,13 +230,25 @@ skill 的「來源」記成四個值,依讀到內容的那條路與工作區副�
 - skill hub 的計數器(`apps/skill_hub_usage.py`)用 `HOSTNAME` 當列的寫入者,跟 §7 A1 是同一個坑;改成同一個
   「主機名-pid」函式(童子軍)。它的總數是各列加總,換名字只是多新列,舊列照算。
 
-### 8.4 畫面〔指南〕
+### 8.4 畫面〔user + 指南〕
 
-- 「工具使用」頁頂端加 **「工具 / Skill」分段控制**:同一份報表看不同種類的東西 = 切換檢視,Material 3
-  〈Segmented buttons〉("help people select options, switch views, or sort elements")。
-  <https://m3.material.io/components/segmented-buttons/overview> 分頁的名稱改成「使用統計」。
-- skill 表欄位:Skill/來源/次數(D11 沒有失敗與耗時),排序、篩選(來源、場合、App)照工具表(NN/g〈Data
-  Tables〉)。點一個 skill 看依人、依場合 × App、依 item 的次數。
+- **一頁兩區,不切換**(D12):最上面是共用的時間(7/30/90)、場合、App;下面「工具」一區、「Skill」一區,
+  各有自己的來源篩選、圖表、表格與點開的分項。分頁的名稱改成「使用統計」。
+- **圖表是橫條圖**:比較各類別的數量用長條圖,標籤長時用橫的,名稱不必縮寫或轉向——NN/g〈Choosing Chart
+  Types〉 <https://www.nngroup.com/articles/choosing-chart-types/>。大小只用**長度**表現、所有條同一個顏色
+  (顏色不能帶數量),不用圓餅——NN/g〈Dashboards: Making Charts and Graphs Easier to Understand〉
+  <https://www.nngroup.com/articles/dashboards-preattentive/>。
+  - 工具:「呼叫次數」與「失敗次數」**兩張並排**,不疊成一張堆疊長條——同一篇 NN/g 說堆疊長條「very hard to
+    understand」,建議改成幾張並排。沒有任何失敗時不畫失敗那張。Skill:「載入次數」一張。
+  - 每張最多前 10 名,由大到小;表格保留全部。
+  - **同一區的圖用同一條 X 軸**(D12「X軸scale要相同」):失敗次數畫在呼叫次數的軸上(軸的終點由該區最大的
+    呼叫次數決定;失敗不會多過呼叫),兩張並排才能比——各用各的軸時,失敗 2 次也畫滿整條。Skill 區是另一種量,
+    用自己的軸。
+  - 畫得像圖表(D12):數值軸從 0 到下一個整數刻度(1、2、5 × 10ⁿ 的步長、約四格,計數不切到 1 以下),
+    0 的基線、每個刻度一條垂直格線、軸下標刻度值,條長 = 值 / 軸的終點。不引入圖表函式庫:這些都是 HTML／CSS。
+  - 時間趨勢(折線圖,NN/g 同一篇:看趨勢用折線)這次不做——API 只有區間總數,沒有逐日的序列。
+- **表格保留**,精確數字、排序、點開分項靠它(NN/g〈Data Tables〉)。skill 表欄位:Skill/來源/次數(D11
+  沒有失敗與耗時)。點一個 skill 看依人、依場合 × App、依 item 的次數。
 
 ### 8.5 施工後與 §8 不同的地方(as-built)
 
@@ -249,4 +262,7 @@ skill 的「來源」記成四個值,依讀到內容的那條路與工作區副�
   共用;`api/tool_usage_store.py` 轉出口同一個函式。
 - **S4 列 id 帶 `kind`**:工具與 skill 的來源詞彙不重疊,單靠來源也分得開;`kind` 放進列 id 是讓「同名」這件事不依賴
   兩份詞彙永遠不撞。
-- **S5 分頁名稱**:「工具使用」改成「使用統計」——先試的「工具與 Skill」在 390 寬把整條分頁擠到換行(截圖抓到;NN/g〈Tabs, Used Right〉要標籤短),「使用統計」跟原本一樣四個字、一行放得下;切換種類時清掉打開的分項、來源篩選與排序(兩種的欄位與來源不同)。
+- **S5 分頁名稱**:「工具使用」改成「使用統計」——先試的「工具與 Skill」在 390 寬把整條分頁擠到換行(截圖抓到;NN/g〈Tabs, Used Right〉要標籤短),「使用統計」跟原本一樣四個字、一行放得下。
+- **S6 先做成「工具／Skill」分段控制,被推翻**(D12):兩種東西藏在切換後面,一次只看得到一種。改成一頁兩區、
+  各自的圖表與表格;第一版的橫條只有條與數字,user 要「畫像一點」,補上數值軸、格線與基線。曾試著改用 ECharts
+  (`view-plugins/chart` 用的那套),user 說不要——ECharts 也刻意不進 SPA 的主 bundle。

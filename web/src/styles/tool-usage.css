@@ -100,8 +100,140 @@
   font-size: var(--text-body);
 }
 
-.tool-usage-detail h3 {
+.tool-usage-detail h4 {
   margin: var(--space-16) 0 var(--space-4);
   font-size: var(--text-small);
   color: var(--text-paper-d);
+}
+
+/* §8.4: tools and skills, each a part of the page — its title and its own
+   source filter, its charts, its table. */
+.tool-usage-part {
+  margin-top: var(--space-24);
+}
+
+.tool-usage-part-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--space-12);
+  margin-bottom: var(--space-12);
+}
+
+.tool-usage-part-title {
+  margin: 0;
+  font-size: var(--text-body-lg);
+}
+
+.tool-usage-part-head label {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  font-size: var(--text-small);
+  color: var(--text-paper-d);
+}
+
+/* Charts side by side when there is room, stacked on a phone. */
+.tool-usage-charts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: var(--space-16);
+  margin-bottom: var(--space-16);
+}
+
+.tool-usage-bars {
+  margin: 0;
+  min-width: 0;
+}
+
+.tool-usage-bars-title {
+  margin-bottom: var(--space-8);
+  font-size: var(--text-small);
+  font-weight: 600;
+  color: var(--text-paper-d);
+}
+
+/* Name | plot | number. The grid lives on the PLOT and the list, each row and
+   the axis take `subgrid` (as `.live-list` in my-resources.css): a grid on the
+   row sizes its own tracks, so every bar would start at a different x and the
+   lengths could not be compared. The name column fits the longest name up to a
+   cap — long names wrap in full rather than squeezing the bars. */
+.tool-usage-bars-plot {
+  display: grid;
+  grid-template-columns: fit-content(11em) minmax(0, 1fr) auto;
+  column-gap: var(--space-8);
+}
+
+.tool-usage-bars ol {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: subgrid;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+/* No gap between rows, so the gridlines run unbroken down the plot. */
+.tool-usage-bars li {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: subgrid;
+  align-items: center;
+  min-height: 24px;
+  font-size: var(--text-small);
+}
+
+.tool-usage-bars-name {
+  font-family: var(--font-mono);
+  overflow-wrap: anywhere;
+}
+
+/* The plot: a baseline at 0 (the left edge) and a gridline at every tick —
+   one gradient stop per 1/--usage-ticks of the width, plus the last one at the end.
+   Magnitude is the bar's LENGTH; one colour for every bar (NN/g: colour must
+   not carry magnitude). */
+.tool-usage-bars-track {
+  align-self: stretch;
+  display: flex;
+  align-items: center;
+  border-left: 1px solid var(--text-paper-d);
+  background-image: linear-gradient(to right, var(--paper-3) 1px, transparent 1px);
+  background-size: calc(100% / var(--usage-ticks, 1)) 100%;
+  box-shadow: inset -1px 0 0 var(--paper-3);
+}
+
+.tool-usage-bars-track [data-bar] {
+  display: block;
+  height: 14px;
+  min-width: 2px;
+  border-radius: 0 2px 2px 0;
+  background: var(--accent-h);
+}
+
+/* The value axis under the plot: a tick label under every gridline. */
+.tool-usage-bars-axis {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: subgrid;
+}
+
+.tool-usage-bars-scale {
+  position: relative;
+  height: 1.4em;
+  border-top: 1px solid var(--text-paper-d);
+}
+
+.tool-usage-bars-scale [data-tick] {
+  position: absolute;
+  top: 2px;
+  transform: translateX(-50%);
+  font-size: var(--text-body-sm);
+  color: var(--text-paper-d);
+  font-variant-numeric: tabular-nums;
+}
+
+.tool-usage-bars-value {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
 }
