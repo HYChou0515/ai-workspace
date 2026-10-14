@@ -8,8 +8,13 @@
  *
  * The boundary is made of three things, in two files and not only this one:
  *
- * - `sandbox="allow-scripts"` WITHOUT `allow-same-origin` — a null origin, so
- *   no cookies, no parent DOM, no API, and `postMessage` is the only way out.
+ * - `sandbox="allow-scripts allow-downloads"` WITHOUT `allow-same-origin` — a
+ *   null origin, so no cookies, no parent DOM, no API, and `postMessage` is the
+ *   only way out. `allow-downloads` lets the page save a file it made (a CSV
+ *   export, a chart library's "save as PNG") to the reader's own disk. It needs
+ *   no click — Chromium let a page download on its own, 7 s after it opened —
+ *   so a page can put a file in the reader's Downloads at any time; what it
+ *   still cannot do is send anything anywhere.
  * - The CSP — no request to anywhere but this host, no remote subresource, so
  *   the page cannot send what it read. A page served from its own address
  *   (`served.ts`, `docs/plan-wui-multipage.md`) gets it as the server's header
@@ -64,6 +69,10 @@ import {
 /** The conventional entry, overridable with `entry:` in the view file. */
 export const DEFAULT_ENTRY = "index.html";
 
+/** The frame's sandbox — the same for both ways a page is shown, and matched by
+ * the `sandbox` directive of the served page's header (`api/wui_content.py`). */
+const WUI_SANDBOX = "allow-scripts allow-downloads";
+
 const FRAME_STYLE = { flex: 1, width: "100%", minHeight: 0, border: 0, background: "#fff" } as const;
 
 /**
@@ -85,7 +94,7 @@ function ServedFrame({
 }) {
   const [at] = useState(src);
   useEffect(() => onMount(), [onMount]);
-  return <iframe ref={frameRef} title={title} sandbox="allow-scripts" src={at} style={FRAME_STYLE} />;
+  return <iframe ref={frameRef} title={title} sandbox={WUI_SANDBOX} src={at} style={FRAME_STYLE} />;
 }
 
 /** `href` as a path below `base`, or `null` when it is not under it — another
@@ -1661,7 +1670,7 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
           // The single-page way: one assembled document, reloaded when it changes.
           ref={frameRef}
           title={viewParamString(spec, "title") ?? folder.split("/").pop() ?? "WUI"}
-          sandbox="allow-scripts"
+          sandbox={WUI_SANDBOX}
           srcDoc={built.data.doc}
           style={FRAME_STYLE}
         />
