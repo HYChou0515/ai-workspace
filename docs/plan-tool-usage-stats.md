@@ -1,6 +1,6 @@
 # 工具使用統計:管理者看 AI 用了哪些工具、誰用、在哪、成不成功、多快
 
-**狀態:** 計劃(P1)。
+**狀態:** P1–P7 實作完成(#932);as-built 與計劃不同之處見 §7。
 **來源標記:** 〔user〕= user 的原話或明確選擇;〔查證〕= 讀 `origin/master`(7bf7e6ff)程式碼確認的事實;
 〔施工〕= 我定的實作細節,可推翻;〔指南〕= 出自公開的 UI/UX 指南,附出處。
 
@@ -142,3 +142,26 @@ sub-agent、`ask_knowledge_base` 裡的 KB 子代理各自的工具呼叫由它�
 - 保留天數做成設定(D5 選 A)。
 - 工具作者、item 擁有者看自己的統計(D2 選 A;同一份資料,之後可加)。
 - 每次呼叫一筆的明細紀錄:只存每天的彙總。
+
+## 7. 施工後與計劃不同的地方(as-built,#932)
+
+- **A1 寫回不用 CAS**:每顆 pod 只寫自己的列(列 id 含 pod 名稱,照 skill hub),兩顆 pod 永遠不寫同一列,所以不需要
+  計劃 §3.5 說的「CAS 合併」;一顆 pod 內一次只跑一個寫回(鎖)。寫回是同步函式——API 用 `to_thread` 叫,worker
+  用一條 thread(`run_flusher`)每 5 分鐘叫、停止時再叫一次。
+- **A2 刪除是永久刪除**:specstar 的 `delete` 是軟刪除,列與所有版本都還在,表照樣長大;90 天的刪除用
+  `permanently_delete`。
+- **A3 排程怎麼認**:`WorkflowRun` 新增 `from_schedule`(排程時間到與排程清單的「立即執行」都設 `True`,由排程的
+  單一啟動函式 `start_page_schedule` 帶進 `orchestrator.start`);`drive_turn` 讀它決定場合是 `schedule` 還是
+  `workflow`。「誰」:有綁定的人(`RunIdentity.env_user`)記綁定的人,沒有就記 run 的 `captured_user`(排程是 item
+  擁有者,手動跑是啟動的人)。
+- **A4 KB 子代理借呼叫端的人/App/item**:不從 `answer_question` 一路傳參數,改用 contextvar——計數層執行一個工具時
+  記下這次呼叫的人、App、item,在它裡面跑的 turn(`ask_knowledge_base` 的 KB 子代理)缺哪個就借哪個。
+- **A5 計數層在引數修復的外面**:引數壞掉、工具根本沒跑的呼叫也算一次失敗。
+- **A6 天以 UTC 切**:列的 `day` 是 UTC 日期;7/30/90 天的視窗是「今天(UTC)往回 N 天,含今天」。
+- **A7 `days` 自己檢查**:不用 `Literal[7, 30, 90]` 當查詢參數型別——FastAPI 不會把查詢字串轉成整數字面值,7 和 90
+  會一律被拒(測試抓到);改收整數再檢查,不合法回 422。
+- **A8 Diagnostics 的分頁條改成共用 `Tabs`**(童子軍):原本是一排有底色的按鈕,讀起來像動作;順手換成文字＋底線的
+  分頁條(CLAUDE.md 的規則)。
+- **A9 分項表的 App 顯示名稱**:依「場合 × App」那張表用 App 的標題(`/apps` 清單),不是 slug;item 附標題與連結,
+  item 已不存在就只顯示 id、不給連結。
+

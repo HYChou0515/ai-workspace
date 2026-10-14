@@ -2211,6 +2211,27 @@ agent 步驟裡 AI 的呼叫、WUI 的工具呼叫、view plugin、圖表重畫�
   按下去不用再經手,`lookups/` 出現存檔、AI 接著讀。這一步是 Windows 上唯一的驗證(plan D14)。
 
 
+### 2026-10-14 · #932 管理者看得到 AI 用了哪些工具、誰用、在哪、失敗幾次、多慢 {#pr-932}
+
+**設定** — 沒有新 key，不用改任何設定。行為改變，沒有開關（`docs/plan-tool-usage-stats.md`）：升級後 AI 的**每一次
+工具呼叫都會被計數**——工具、來源（內建／第一方套件／第三方）、成功或失敗、耗時、是誰、在哪個場合（聊天、KB 聊天、
+工作流程、排程、子代理、KB 子代理、背景工作）、哪個 App、哪個 item。superuser 在 Diagnostics 頁的新分頁「工具使用」
+看得到；其他人看不到這個分頁，`GET /api/admin/tool-usage` 回 403。Diagnostics 頁的分頁條改成底線樣式（和分享面板
+同款），內容不變。
+
+**資料** — 一張新表 `ToolUsageDay`（索引 `day`、`tool`），不用做事，但要知道它的大小：每顆 pod（API 和 worker 都
+算）每個被用過的工具每天一列，所以上限是「工具數 × pod 數 × 90 天」。API 與 worker 每 5 分鐘、以及正常停止時寫一次；
+pod 被直接殺掉（沒收到 SIGTERM）會掉最後不到 5 分鐘的計數。**超過 90 天的列每天自動永久刪除**（依 `day` 索引，不掃
+全表）。`WorkflowRun` 多一個 `from_schedule` 欄位（有預設值，舊的 run 讀成 `false`），不用回填；升級前就開始的 run
+一律算「工作流程」。
+
+**確認做完**（`rollout 後`）
+
+- 用 superuser 開 Diagnostics →「工具使用」：在任一 App 聊天裡讓 AI 用過工具，約 5 分鐘內出現該工具與次數；點工具看得
+  到人、場合、item。
+- 非 superuser 開 Diagnostics：沒有「工具使用」分頁。
+- 沒部署到這一版的症狀：Diagnostics 沒有「工具使用」分頁；`GET /api/admin/tool-usage` 是 404。
+
 ## 附錄 A：資料回填的機制（specstar 為什麼不會自己補）
 
 有些升版會改變「資料在資料庫裡的儲存形狀」，但 **specstar 只在寫入當下**把一列的 `indexed_data`
