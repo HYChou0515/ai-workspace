@@ -1,0 +1,649 @@
+diff --git a/ai-workspace-helper/src/ai_workspace_helper/builtin_errands.py b/ai-workspace-helper/src/ai_workspace_helper/builtin_errands.py
+index ab225df0..1da7158b 100644
+--- a/ai-workspace-helper/src/ai_workspace_helper/builtin_errands.py
++++ b/ai-workspace-helper/src/ai_workspace_helper/builtin_errands.py
+@@ -9,17 +9,27 @@ to open next (D10); nothing here guesses which result matters.
+ from __future__ import annotations
+ 
+ import contextlib
++import time
+ from collections.abc import Callable
+ from typing import Any
+-from urllib.parse import quote, urlsplit
++from urllib.parse import quote, urldefrag, urlsplit
+ 
+ from .errands import Errand, ErrandContext, ErrandFailed, FetchedPage
+ 
+ #: How long a page may take to start answering before the errand gives up.
+ PAGE_TIMEOUT_MS = 30_000
+-#: After the document is there, how long to let the rest (images, late
+-#: scripts that draw the results) arrive before reading it anyway.
+-SETTLE_MS = 5_000
++#: After the first page is there, how long it may keep moving — scripts, a
++#: form that posts itself, server redirects: a company sign-in hops several
++#: times before the page (plan D22) — and take to show its text.
++SETTLE_LIMIT_MS = 30_000
++#: The hops have ended once a page has loaded (or been waited on for
++#: `LOAD_WAIT_MS`) and its address has stayed the same for this long after.
++QUIET_MS = 1_500
++#: How long one page's `load` is waited for: a slow image is no reason to give
++#: up the page, nor to wait for it for ever (a proxy that drops a tracker).
++LOAD_WAIT_MS = 5_000
++#: How often the page is looked at while it settles.
++_LOOK_MS = 250
+ 
+ #: What `encodeURIComponent` leaves unescaped besides letters and digits —
+ #: the card fills `{q}` with it (web/src/api/outsideLookup.ts).
+@@ -67,25 +77,143 @@ def pick_search_target(targets: list[dict[str, str]]) -> dict[str, str]:
+     return targets[0]
+ 
+ 
++#: Whether the page shows anything at all — text, a link, an image, or a
++#: frame / embedded document (a PDF in Chrome's viewer): asked of the live
++#: page, before the conversion (which leaves this tab). A page of frames has
++#: something there, but nothing the conversion can read: it fails at once
++#: rather than after the whole limit.
++_HAS_CONTENT = """() => {
++  const body = document.body;
++  return !!body && (
++    body.innerText.trim() !== "" ||
++    !!document.querySelector("img, a[href], iframe, frame, embed, object")
++  );
++}"""
++
++
+ def looks_like_a_verification(page: Any) -> bool:
++    from playwright.sync_api import Error as PlaywrightError
++
+     if "/sorry/" in urlsplit(page.url).path:
+         return True
+-    return any(page.locator(selector).count() for selector in _VERIFICATION_FRAMES)
++    try:
++        return any(page.locator(selector).count() for selector in _VERIFICATION_FRAMES)
++    except PlaywrightError:
++        # asked while the page moved on (a redirect hop): not a verification —
++        # whatever it moves to is looked at again
++        return False
++
++
++def _where(url: str) -> str:
++    """An address as said in a failure: without its query or fragment — on a
++    sign-in hop the query can carry a one-time code."""
++    parts = urlsplit(url)
++    return f"{parts.scheme}://{parts.netloc}{parts.path}"
++
++
++def _moving(page: Any) -> ErrandFailed:
++    return ErrandFailed(
++        f"這一頁一直在跳轉,{SETTLE_LIMIT_MS // 1000} 秒內沒有停下來:{_where(page.url)}"
++    )
++
++
++def settle(page: Any, deadline: float, *, stop: Callable[[], bool] = lambda: False) -> bool:
++    """Wait until the page has stopped moving: no page on its way, the page
++    loaded (or waited on for `LOAD_WAIT_MS`), and its address — fragment
++    aside — unchanged for `QUIET_MS` after that. A script that moves on, a
++    form that posts itself, a redirect each restart the wait. True once it has
++    stopped (or `stop()` — a verification page is a place to stop, not a
++    hop); False when `deadline` (monotonic seconds) came while it was still
++    moving.
++
++    A page on its way is watched, not read: reading the page meanwhile blocks
++    until the new one is there — for as long as its server takes (measured,
++    Chromium: a form post and a script navigation alike) — so neither the
++    load wait nor `stop()` is asked then."""
++    from playwright.sync_api import Error as PlaywrightError
++    from playwright.sync_api import TimeoutError as PlaywrightTimeout
++
++    on_its_way: set[Any] = set()
++
++    def started(request: Any) -> None:
++        with contextlib.suppress(PlaywrightError):  # a service worker's has no frame
++            if request.is_navigation_request() and request.frame == page.main_frame:
++                on_its_way.add(request)
++
++    def ended(request: Any) -> None:
++        on_its_way.discard(request)
++
++    page.on("request", started)
++    page.on("requestfinished", ended)
++    page.on("requestfailed", ended)
++    try:
++        address: str | None = None
++        loaded: str | None = None  # the address whose load was waited for
++        quiet_since, moved = time.monotonic(), False
++        while (now := time.monotonic()) < deadline:
++            if not on_its_way:
++                if urldefrag(page.url)[0] != loaded:
++                    # once per page: a load that never comes is not waited
++                    # for again on every look
++                    remaining_ms = (deadline - now) * 1000
++                    with contextlib.suppress(PlaywrightTimeout):
++                        page.wait_for_load_state(
++                            "load", timeout=max(1.0, min(LOAD_WAIT_MS, remaining_ms))
++                        )
++                    loaded = urldefrag(page.url)[0]
++                if not on_its_way and stop():
++                    return True
++            here = None if on_its_way else urldefrag(page.url)[0]
++            if here is None or here != address:
++                # counted from now — after this page's load, not its start
++                moved = moved or address is not None or here is None
++                address, quiet_since = here, time.monotonic()
++            elif time.monotonic() - quiet_since >= QUIET_MS / 1000:
++                return True
++            page.wait_for_timeout(_LOOK_MS)
++        return not moved and not on_its_way
++    finally:
++        page.remove_listener("request", started)
++        page.remove_listener("requestfinished", ended)
++        page.remove_listener("requestfailed", ended)
+ 
+ 
+ def fetch(ctx: ErrandContext, url: str) -> FetchedPage:
++    from playwright.sync_api import Error as PlaywrightError
++
+     page = ctx.page
+     response = page.goto(url, wait_until="domcontentloaded", timeout=PAGE_TIMEOUT_MS)
+     if response is not None and response.status >= 400:
+         raise ErrandFailed(f"the page answered {response.status}")
+-    from playwright.sync_api import TimeoutError as PlaywrightTimeout
+-
+-    with contextlib.suppress(PlaywrightTimeout):  # a slow image is no reason to give up the page
+-        page.wait_for_load_state("load", timeout=SETTLE_MS)
+-    ctx.wait_for_person(lambda: looks_like_a_verification(page))
+-    title, where = page.title(), page.url
+-    html = page.evaluate(_PAGE_HTML)
+-    return FetchedPage(title=title, url=where, markdown=ctx.convert(html))
++    verification = lambda: looks_like_a_verification(page)  # noqa: E731
++    deadline = time.monotonic() + SETTLE_LIMIT_MS / 1000
++    while True:
++        if not settle(page, deadline, stop=verification):
++            raise _moving(page)
++        if verification():
++            ctx.wait_for_person(verification)
++            # solved, the page moves on: a fresh wait for where that ends
++            deadline = time.monotonic() + SETTLE_LIMIT_MS / 1000
++            continue
++        # something there, read on the live page before the conversion
++        # (which leaves this tab); nothing yet → wait and look again
++        try:
++            if page.evaluate(_HAS_CONTENT) or time.monotonic() >= deadline:
++                title, where = page.title(), page.url
++                html = page.evaluate(_PAGE_HTML)
++                break
++        except PlaywrightError:
++            # it moved on while being read: settle again, if there is time
++            if time.monotonic() >= deadline:
++                raise _moving(page) from None
++            continue
++        page.wait_for_timeout(500)
++    markdown = ctx.convert(html)
++    if not markdown.strip():
++        raise ErrandFailed(
++            "這一頁轉出來沒有文字(可能還在跳轉、是 PDF 或內嵌框架、或要登入):" + _where(where)
++        )
++    return FetchedPage(title=title, url=where, markdown=markdown)
+ 
+ 
+ def build(targets: Callable[[], list[dict[str, str]]]) -> dict[str, Errand]:
+diff --git a/docs/ai-workspace-helper.md b/docs/ai-workspace-helper.md
+index a4585103..f9f851da 100644
+--- a/docs/ai-workspace-helper.md
++++ b/docs/ai-workspace-helper.md
+@@ -90,6 +90,8 @@ Markdown 交回卡片——使用者只要在搜尋時按一下「查」。設
+ |---|---|---|
+ | 請在小幫手開的 Chrome 視窗登入／登入已過期 | 還沒登入過,或部署的登入過期、被導到 SSO 頁 | 在它的 Chrome 視窗登入;登入前交給它的工作會等著,不會丟 |
+ | 連不上 AI Workspace，會自動重試 | 網址錯、或公司網路不通;原因寫在狀態的第二行(0.1.1 起也記在記錄檔) | 檢查第一次填的網址(存在 `%LOCALAPPDATA%\AIWorkspaceHelper\settings.json`)。第二行是 `unable to verify the first certificate` 之類的憑證錯誤:你的小幫手是 0.1.0,請從「小幫手」頁下載新版、重新雙擊 `install.pyw` |
++| 沒查到:這一頁轉出來沒有文字(可能還在跳轉、是 PDF 或內嵌框架、或要登入) | 小幫手等到那一頁停下來,上面還是沒有任何文字或連結:可能要另外登入那個網站、是 PDF(小幫手只讀網頁)、或內容放在內嵌框架裡 | 在小幫手開的 Chrome 視窗自己開那個網址看看是什麼;要登入的網站在那個視窗登入一次後再查。舊版小幫手看到的是「nothing to send — paste or attach」,常是那時還沒等跳轉結束,請更新 |
++| 沒查到:這一頁一直在跳轉,30 秒內沒有停下來 | 那個網址一直在轉址(例如登入一直繞回原點),或某一步的伺服器一直沒回應 | 在小幫手開的 Chrome 視窗自己開那個網址看看停在哪;登入繞圈時,按「重設登入」後重新登入 |
+ | 開不了 Chrome | 沒裝 Chrome、Chrome 剛更新超過小幫手支援的版本、Chrome 被政策擋下自動化、或上一個小幫手還沒關完 | 更新小幫手;按「重設登入」;見下面「IT 要放行的」;或等一下再開 |
+ | 這個版本已停用 | 管理員調高了最低版本 | 見「更新」 |
+ 
+diff --git a/docs/migrations.md b/docs/migrations.md
+index d68c63f6..7d4c0c0f 100644
+--- a/docs/migrations.md
++++ b/docs/migrations.md
+@@ -2250,6 +2250,30 @@ agent 步驟裡 AI 的呼叫、WUI 的工具呼叫、view plugin、圖表重畫
+ - 之後發布下一版(例如 0.1.2)時:開著的小幫手顯示「有新版 0.1.2」與「開啟下載頁」,按下去開的是「小幫手」頁;
+   開著小幫手時重跑 0.1.2 的 `install.pyw`、按「是」,舊視窗關掉、新版開起來(視窗標題 0.1.2)。
+ 
++### 2026-10-14 · 956c5f51 · #936 小幫手等網頁跳轉停下來才讀，不再把轉址途中的空白頁交給 AI {#pr-936}
++
++**設定** — 無。
++
++**資料** — 無。
++
++**k8s · CI 側** — 後端沒有改,照常重 build、部署。**要做的是發布新版小幫手**(`rollout 後`,隨時):
++
++1. 在 dev server 打包:`python3 scripts/pack_ai_workspace_helper.py --version <比目前發布的大,例如 0.1.2>`,把
++   `dist/ai-workspace-helper/` 的兩個檔換進 `server.ai_workspace_helper_dir`(不用重新部署)。為什麼:修正在小幫手那邊。
++   沒做的症狀:經過腳本跳轉或自動送出表單(例如公司登入)才到的網頁,小幫手照舊回「沒查到：nothing to send — paste or attach」。
++2. 第 1 步之後:使用者的小視窗會顯示「有新版」與「開啟下載頁」,照「小幫手」頁重裝(#933 起不會自動更新)。為什麼:更新只通知
++   (plan D21)。沒重裝的症狀同上。
++
++**行為改變,沒有開關**(plan D22):小幫手開網頁後,等頁面停下來才讀——沒有頁面正在路上、`load` 等到了(每頁最多 5 秒,和以前一樣)、
++之後網址連續 1.5 秒沒變;腳本跳轉、自動送出的登入表單、伺服器轉址都會重新計時,最多 30 秒。所以一般網頁多花約 1.5 秒;`load` 一直不來的
++網頁和以前一樣約 5 秒再加 1.5 秒;真的空白的頁面要等滿 30 秒才回報。讀到的頁面沒有任何文字時回報「這一頁轉出來沒有文字(可能還在跳轉、
++是 PDF 或內嵌框架、或要登入)」,一直跳不停時回報「這一頁一直在跳轉,30 秒內沒有停下來」,不再把空頁交給後端;訊息裡的網址不含查詢字串。
++
++**確認做完**(`rollout 後`):
++
++- 「小幫手」頁顯示新版本號;一台重裝過的電腦小視窗標題是那個版本。
++- 請 AI 開一個要經過公司登入或轉址的網址(先前回「nothing to send」的那種):卡片拿到的是最後那一頁的內容,`lookups/` 有存檔。
++
+ ## 附錄 A：資料回填的機制（specstar 為什麼不會自己補）
+ 
+ 有些升版會改變「資料在資料庫裡的儲存形狀」，但 **specstar 只在寫入當下**把一列的 `indexed_data`
+diff --git a/docs/plan-outside-helper.md b/docs/plan-outside-helper.md
+index c78da029..85b366bb 100644
+--- a/docs/plan-outside-helper.md
++++ b/docs/plan-outside-helper.md
+@@ -43,6 +43,7 @@
+ | D19 | **不需要系統管理員權限,但要被允許執行**:安裝只寫 `%LOCALAPPDATA%\AIWorkspaceHelper\` 與自己的捷徑(不跑安裝程式、不寫 Program Files、不改登錄檔);公司電腦可能擋的是**執行**——使用者資料夾裡的程式(AppLocker)、zip 裡的 `node.exe`(防毒/代理)、PowerShell 受限(只影響捷徑)、Chrome 自動化政策。zip 裡附 **`precheck.pyw`**:不安裝任何東西,在暫存資料夾把每一樣真的試一次、列表、可複製給 IT,結束就刪掉。捷徑建不起來不再算安裝失敗(安裝結束時說要雙擊哪個檔);捷徑的 PowerShell 遇到任何錯誤都算失敗(`$ErrorActionPreference = 'Stop'`,否則沒建出來也會回 0) | 〔user〕「請問他會安裝嗎?我想我們沒有安裝權限」「可以 你就一起寫到docs裡面」 |
+ | D20 | **小幫手對 AI Workspace 的請求不驗憑證**:那些請求(報到、領工作、交結果、下載更新)由 Playwright 自帶的 Node 送出,不是 Chrome——Node 不讀 Windows 憑證庫、不補伺服器沒送的中繼憑證,於是 Chrome 登入得了的部署,小幫手每次報到都是「unable to verify the first certificate」→「連不上」、卡片「小幫手未連線」(user 的公司筆電,0.1.0)。依這個部署的慣例(user:「我們都是verify=false」)不驗,沒有開關,但**只對這些請求**(`APIRequestContext.fetch/get` 的 `ignore_https_errors`),差事開的網頁仍由 Chrome 驗。代價:更新檔的 sha256 是跟同一條不驗憑證的連線拿到的版本資訊比對,只擋下載損壞、擋不了攔截者換掉更新檔——能在公司網路上攔截這條連線的人,可以讓小幫手裝上並執行他的程式,也看得到登入 cookie(已告知 user)。Playwright 的錯誤訊息附的「Call log」列出每個 header(含登入 cookie),只留第一行再交給視窗與記錄檔。連不上/被拒的原因改為開始時寫進 `helper.log`(原本只在視窗第二行)。另:zip 裡那份 `launch.pyw` 在解壓縮資料夾被雙擊時,改去找已安裝的資料夾(原本說「沒有安裝」);兩邊都沒裝時留在自己的資料夾,不在 `%LOCALAPPDATA%` 留下東西 | 〔user〕「看到 unable to verify the first certificate」「我們都是verify=false」「發現安裝後有開起來 但是按launch仍然說沒有安裝」 |
+ | D21 | **更新只通知、不自動裝**(取代 D15):小幫手啟動後第一次連上 AI Workspace 時(以及被停用後恢復連線時)、之後每 6 小時讀版本資訊:有新版時小視窗顯示「有新版 X」,被要求更新(426)時顯示「這個版本已停用」,兩者都附「開啟下載頁」按鈕;使用者在**一般瀏覽器**(會驗憑證)下載 zip、重新雙擊 `install.pyw`,它把正在跑的小幫手關掉、換成新版。小幫手不再自己下載、安裝、換版、退回。為什麼:D20 讓小幫手對 AI Workspace 不驗憑證,自動更新走同一條連線,能攔截它的人就能讓小幫手裝上並執行他的程式(sha256 也是從那條連線來的,擋不住);改成只通知後,偽造的通知最多把人帶去下載頁或讓小幫手停止接工作,下載本身由瀏覽器驗 | 〔user〕(兩案:A 照常自動、文件寫明風險;B 只提示、自己從網頁下載重跑 `install.pyw`)「B」;「我覺得先討論完 開發玩 再繼續ci」「寫plan」 |
++| D22 | **等跳轉停下來才讀頁**:差事開頁後,等頁面停下來才讀——沒有頁面正在路上、這一頁的 `load` 等到了(每頁只等一次、最多 5 秒 `LOAD_WAIT_MS`,和先前一樣)、之後網址(不算 `#` 後面)連續 1.5 秒(`QUIET_MS`)沒變;腳本跳轉、自己送出的表單(SSO 的 form_post)、伺服器轉址,每跳一次重新計時;最多 30 秒(`SETTLE_LIMIT_MS`)。正在路上的頁面只看不讀:跳轉途中去讀頁面會等到新頁出現(伺服器多慢就等多久,實測 Chromium),所以那時不讀、不等 `load`、不查驗證碼,到時限就以「這一頁一直在跳轉,30 秒內沒有停下來」失敗。停下來之後,頁面上沒有任何文字、連結、圖片或內嵌框架就再等、再讀;到時限仍空、或只有內嵌框架(轉不出文字),以「這一頁轉出來沒有文字(可能還在跳轉、是 PDF 或內嵌框架、或要登入)」失敗,不把空頁交給後端。失敗訊息裡的網址去掉查詢字串(SSO 的一次性代碼)。驗證碼頁不論何時碰到都是終點:等人解完,再重新等一次 | 〔user〕「現在看到 小幫手沒查到:nothing to send, paste or attach」「我自己打網址是ok的 但我自己打的話中間可能會好幾次跳轉 有影響嗎」「我不知道跳轉邏輯」 |
+ | D12 | **開網址**:網址若出現在**這個聊天先前任何一次查回來的內容**裡,直接開;否則和搜尋一樣,先在卡片上點頭 | 〔user〕「純網址可以直接開 搜尋要先確認」,後收緊為「網址出現在上一次查詢中的話就可以直接開」「查過都算」——外面網頁上的連結是外面帶回來的,AI 自己寫的網址才可能夾帶內部字詞 |
+ | D5 | 小幫手主動向後端領工作(網頁不能控制它);**Python 直接連我們的後端** | 〔user〕選 1 |
+ | D6 | 身分沿用 app 現有的登入(「要登入才能用」那道門),不另做金鑰 | 〔user〕「我們已經有卡(限制)登入了」 |
+@@ -120,6 +121,7 @@ AI 呼叫 ask_outside ──► 卡片(D7:沒連線 = 今天的手動流程)
+   打包檔由建置從前端原始碼產生,不手抄。
+ - **視窗開著跑**(headed):比較不會被當成機器人;遇到驗證碼,小幫手把視窗叫到前面、在卡片上顯示「請在小幫手
+   視窗裡完成驗證」,等你解完再繼續。
++- 開頁後等跳轉停下來才讀(D22)。
+ - 一次只做一件差事;做的時候在自己的視窗(狀態與標題)顯示「正在搜尋（Google）：…」或「正在開啟：…」,卡片上顯示「小幫手正在查…」。
+ 
+ ### 3.5 卡片(前端)
+@@ -293,6 +295,8 @@ D15 時代的 `pending`、`pending_attempts`、`bad`、`failures`、`update` 不
+ | P14 | 〔D21〕拿掉自動更新(從 0.1.0 過來的 `take_over` 見 §3.7.5 第 5 點):`prepare_update` / `update_outcome` / 解壓、`pending`/`bad`/`failures`/`update` 與 `launch.pyw` 的換版退回、`confirm`、`Backend.download` / `Chrome.fetch_bytes`、「立即更新」(啟動檔仍認得 `--wait`,給 0.1.0 的「立即更新」用,§3.7.5 第 5 點)、心跳的 `update`、live check 的更新那半(改成「重裝換版」) | 程式裡不再有寫這些欄位或下載 zip 的路徑;舊 `state.json` 有這些欄位照樣啟動;測試跟著刪改,不留沒人用的程式 |
+ | P15 | 文件:使用說明「更新」、`docs/migrations.md` #933(行為改變:不再自動更新,每一版都要重裝)、PR 說明 | mkdocs `--strict` 綠;每句寫在驗證之後 |
+ | P16 | review(conformance / veracity / defect / regression)→ CI | 照 CLAUDE.md;P12–P14 換掉一個機制,review 至少一輪 |
++| P17 | 〔D22〕差事等跳轉停下來才讀頁;空頁、跳不停以中文說明失敗 | 真 Chromium 對假網站:SSO 式跳轉(腳本→自送表單→302)讀到最後一頁;有字的轉址頁、載入很慢的有字轉址頁都不被當成答案;每跳都短於 1.5 秒但總長超過、每站有字的跳轉鏈跟到底;表單回應很慢時不讀到送出前那頁;表單永遠不回應時在時限內以「一直在跳轉」失敗;互相跳轉的迴圈同樣失敗;`load` 永遠不來的頁面幾秒內讀到;只改 `#` 的頁面立刻讀到;只有內嵌框架的頁面立刻失敗;晚出現內容的空白頁等得到;永遠空白的頁以「沒有文字」失敗、訊息不含查詢字串;驗證碼——一開始或晚一點才跳到——都等人 |
++| P18 | review → CI | 照 CLAUDE.md |
+ 
+ ## 5. 不做(這一版)
+ 
+@@ -309,6 +313,8 @@ D15 時代的 `pending`、`pending_attempts`、`bad`、`failures`、`update` 不
+   訊息排隊時(Q1、Q2 先存、答案後到),那個人可能認錯——和 CLAUDE.md 記的「排隊的對話讀起來是 Q1、Q2、A1、A2」
+   同一個原因:訊息上沒有記它屬於哪一輪。被開的只會是先前查回來的公開連結。
+ - **共用 item 裡,別人看得到你的小幫手正在查,也按得到「取消」**:取消照卡片的權限(`converse`),不限工作的主人。
++- **長時間等待時看起來離線**:小幫手只在兩件差事之間報到,後端 30 秒沒收到報到就當它離線。等人解驗證碼(本來就是)、或一頁真的空白要等滿
++  30 秒(D22)時,「小幫手」頁會短暫顯示未連線、別張卡片的「查」也會說小幫手沒連線;差事本身照常做完。
+ - **兩個 `install.pyw` 同時跑**(同一版)共用 `versions\<版本>.partial\`:可能兩個都失敗,或其中一個裝成另一個做到一半的 venv;不同版時,先完成且沒有小幫手在跑的那個會清掉另一個的 `.partial`。沒有鎖,因為這要人同時雙擊兩次。
+ - **交答案的請求在記下連結、送出訊息之前被中斷**(連線斷掉):`lookups/` 留下一個沒有訊息指著的檔;連結也已記下,
+   後面的卡片開它不再問。這個窗口只有記連結那一下。
+diff --git a/tests/ai_workspace_helper/test_builtin_errands.py b/tests/ai_workspace_helper/test_builtin_errands.py
+index 5572a95c..efef2bf9 100644
+--- a/tests/ai_workspace_helper/test_builtin_errands.py
++++ b/tests/ai_workspace_helper/test_builtin_errands.py
+@@ -75,6 +75,27 @@ class _Page:
+     def bring_to_front(self) -> None:
+         pass
+ 
++    # what `settle` asks of a page: it never moves on here
++    main_frame = object()
++
++    def on(self, _event: str, _handler) -> None:
++        pass
++
++    def remove_listener(self, _event: str, _handler) -> None:
++        pass
++
++    def wait_for_timeout(self, _ms: float) -> None:
++        pass
++
++
++@pytest.fixture(autouse=True)
++def _settled_at_once(monkeypatch):
++    """A page that never moves on has settled the moment it loaded (the
++    real waits are tested in a real Chrome: test_errands_in_chrome.py)."""
++    from ai_workspace_helper import builtin_errands
++
++    monkeypatch.setattr(builtin_errands, "QUIET_MS", 0)
++
+ 
+ def _ctx(page):
+     return ErrandContext(page=page, note=lambda _n: None, convert=lambda html: f"md:{html}")
+@@ -135,3 +156,43 @@ def test_only_a_web_address_is_opened(url):
+ def test_a_page_that_answers_an_error_fails():
+     with pytest.raises(ErrandFailed, match="404"):
+         build(lambda: [])["open_url"](_ctx(_Page(status=404)), "https://x.example/gone")
++
++
++# A page that starts moving just after it settled: reading it fails as
++# "context destroyed" (the old page is gone), and the errand settles again
++# and reads the new one rather than failing (plan D22).
++def test_a_page_that_moves_on_while_being_read_is_read_again():
++    from playwright.sync_api import Error as PlaywrightError
++
++    class _Moving(_Page):
++        reads = 0
++
++        def evaluate(self, _js: str):
++            self.reads += 1
++            if self.reads == 1:
++                raise PlaywrightError("Execution context was destroyed")
++            return super().evaluate(_js)
++
++    page = _Moving()
++
++    got = build(lambda: [])["open_url"](_ctx(page), "https://pandas.example/whatsnew")
++
++    assert got.markdown == "md:<p>the page's html</p>"
++
++
++# Asked while the page moves on (the instant between a hop's answer and its
++# new page), the verification check reads "not a verification" rather than
++# failing the errand: whatever the page moves to is looked at again (D22).
++def test_a_verification_check_that_meets_a_moving_page_reads_as_none():
++    from ai_workspace_helper.builtin_errands import looks_like_a_verification
++    from playwright.sync_api import Error as PlaywrightError
++
++    class _Gone(_Locator):
++        def count(self) -> int:
++            raise PlaywrightError("Execution context was destroyed")
++
++    class _Moving(_Page):
++        def locator(self, _selector: str) -> _Locator:
++            return _Gone()
++
++    assert looks_like_a_verification(_Moving()) is False
+diff --git a/tests/ai_workspace_helper/test_errands_in_chrome.py b/tests/ai_workspace_helper/test_errands_in_chrome.py
+index 52932349..0185e8aa 100644
+--- a/tests/ai_workspace_helper/test_errands_in_chrome.py
++++ b/tests/ai_workspace_helper/test_errands_in_chrome.py
+@@ -49,6 +49,107 @@ class _Site(BaseHTTPRequestHandler):
+             self.send_response(302)
+             self.send_header("Location", "/sorry/index")
+             self.end_headers()
++        elif self.path == "/sso-start":
++            # a company sign-in's first hop: nothing to read, a script moves on
++            self._html(
++                "<title>Signing in</title>"
++                "<script>addEventListener('load', () => "
++                "setTimeout(() => location.replace('/sso-form'), 300))</script>"
++            )
++        elif self.path == "/sso-form":
++            # the second: a hidden form that posts itself (SAML / OIDC form_post)
++            self._html(
++                "<title>Signing in</title>"
++                '<form id="f" method="post" action="/sso-callback">'
++                '<input type="hidden" name="SAMLResponse" value="x"></form>'
++                "<script>addEventListener('load', () => "
++                "setTimeout(() => document.getElementById('f').submit(), 300))</script>"
++            )
++        elif self.path == "/landed":
++            self._html("<title>Landed</title><p>最後的內容 SSO-TOKEN</p>")
++        elif self.path == "/redirecting":
++            # an interstitial with words of its own, moving on after a while
++            self._html(
++                "<title>Redirecting</title><p>正在轉址，請稍候</p>"
++                "<script>addEventListener('load', () => "
++                "setTimeout(() => location.assign('/landed'), 1200))</script>"
++            )
++        elif self.path.startswith("/chain/"):
++            # four hops, each well inside the quiet time, longer than it in all
++            n = int(self.path.rsplit("/", 1)[1])
++            nxt = f"/chain/{n + 1}" if n < 3 else "/landed"
++            self._html(
++                f"<title>Hop {n}</title><p>第 {n} 站</p>"
++                f"<script>addEventListener('load', () => "
++                f"setTimeout(() => location.replace('{nxt}'), 600))</script>"
++            )
++        elif self.path == "/slow-form":
++            # words of its own, and a form whose answer takes longer than the
++            # quiet time: the page is on its way all along
++            self._html(
++                "<title>Signing in</title><p>正在登入</p>"
++                '<form id="f" method="post" action="/slow-callback"></form>'
++                "<script>addEventListener('load', () => "
++                "setTimeout(() => document.getElementById('f').submit(), 100))</script>"
++            )
++        elif self.path == "/late":
++            # nothing to read, and moving on only after the quiet time
++            self._html(
++                "<title>Wait</title>"
++                "<script>addEventListener('load', () => "
++                "setTimeout(() => location.replace('/landed'), 2500))</script>"
++            )
++        elif self.path == "/slow-hop":
++            # an SSO hop with words and a slow image (a company network):
++            # it loads late, then moves on
++            self._html(
++                "<title>Signing in</title><p>正在轉址</p><img src='/slow.png'>"
++                "<script>addEventListener('load', () => "
++                "setTimeout(() => location.replace('/landed'), 300))</script>"
++            )
++        elif self.path == "/slow.png":
++            import time
++
++            time.sleep(2.5)
++            self.send_response(404)
++            self.end_headers()
++        elif self.path == "/stalled":
++            # words, and an image that never answers (a proxy that drops it)
++            self._html("<title>Stalled</title><p>STALLED-TOKEN</p><img src='/never.png'>")
++        elif self.path == "/never.png":
++            import time
++
++            time.sleep(40)
++        elif self.path == "/hash":
++            # moves its #fragment for ever — not a hop
++            self._html(
++                "<title>Hash</title><p>HASH-TOKEN</p>"
++                "<script>setInterval(() => { location.hash = Date.now(); }, 300)</script>"
++            )
++        elif self.path == "/late-to-sorry":
++            # quiet first, then on to a verification page
++            self._html(
++                "<title>Wait</title>"
++                "<script>addEventListener('load', () => "
++                "setTimeout(() => location.replace('/sorry/index'), 2500))</script>"
++            )
++        elif self.path == "/framed":
++            self._html("<title>Framed</title><iframe src='/landed'></iframe>")
++        elif self.path in ("/loop-a", "/loop-b"):
++            other = "/loop-b" if self.path == "/loop-a" else "/loop-a"
++            self._html(
++                f"<title>Loop</title><p>loop</p><script>addEventListener('load', () => "
++                f"setTimeout(() => location.replace('{other}'), 200))</script>"
++            )
++        elif self.path == "/hang-form":
++            self._html(
++                "<title>Signing in</title><p>正在登入</p>"
++                '<form id="f" method="post" action="/hang-callback"></form>'
++                "<script>addEventListener('load', () => "
++                "setTimeout(() => document.getElementById('f').submit(), 100))</script>"
++            )
++        elif self.path.startswith("/blank"):
++            self._html("<title>Blank</title>")
+         elif self.path.startswith("/sorry/"):
+             # Google's "unusual traffic" page; the person solves it, it moves on
+             self._html(
+@@ -63,6 +164,21 @@ class _Site(BaseHTTPRequestHandler):
+             self.end_headers()
+             self.wfile.write(b"<title>Not Found</title><h1>Not Found</h1>")
+ 
++    def do_POST(self) -> None:
++        self.rfile.read(int(self.headers.get("Content-Length") or 0))
++        if self.path == "/slow-callback":
++            import time
++
++            time.sleep(2.5)
++        if self.path == "/hang-callback":
++            import time
++
++            time.sleep(20)
++        # the sign-in's last hop: the server sends the browser to the page
++        self.send_response(302)
++        self.send_header("Location", "/landed")
++        self.end_headers()
++
+     def _html(self, body: str) -> None:
+         self.send_response(200)
+         self.send_header("Content-Type", "text/html; charset=utf-8")
+@@ -119,3 +235,163 @@ def test_a_verification_waits_for_the_person_then_carries_on(chrome, site):
+ def test_a_page_that_is_not_there_fails(chrome, site):
+     with pytest.raises(Exception, match="404"):
+         chrome.run(build(lambda: [])["open_url"], f"{site}/gone", lambda _n: None)
++
++
++# A page reached through hops the person never sees — a script, a form that
++# posts itself, a server redirect, as a company sign-in does — is read where
++# the hops end, not at the first (it read as nothing: 「沒查到：nothing to
++# send」 on the person's PC, plan D22).
++def test_a_page_behind_redirects_is_read_where_they_end(chrome, site):
++    page = chrome.run(build(lambda: [])["open_url"], f"{site}/sso-start", lambda _n: None)
++
++    assert page.url == f"{site}/landed"
++    assert "SSO-TOKEN" in page.markdown
++
++
++# An interstitial with words of its own is not the page: it is read once the
++# address has stopped changing.
++def test_an_interstitial_that_moves_on_is_not_taken_for_the_page(chrome, site):
++    page = chrome.run(build(lambda: [])["open_url"], f"{site}/redirecting", lambda _n: None)
++
++    assert page.url == f"{site}/landed"
++    assert "SSO-TOKEN" in page.markdown and "正在轉址" not in page.markdown
++
++
++# A page that never shows any text fails with why — in words the person can
++# act on — rather than an empty page the backend refuses in English.
++def test_a_page_with_no_text_says_so(chrome, site, monkeypatch):
++    from ai_workspace_helper import builtin_errands
++
++    monkeypatch.setattr(builtin_errands, "SETTLE_LIMIT_MS", 3_000)
++
++    with pytest.raises(Exception, match="沒有文字"):
++        chrome.run(build(lambda: [])["open_url"], f"{site}/blank", lambda _n: None)
++
++
++# Each hop inside the quiet time, the hops together longer than it — and
++# each with words of its own: the wait starts again at every hop, so the
++# chain is followed to its end.
++def test_a_long_chain_of_quick_hops_is_followed_to_its_end(chrome, site):
++    page = chrome.run(build(lambda: [])["open_url"], f"{site}/chain/0", lambda _n: None)
++
++    assert page.url == f"{site}/landed"
++    assert "站" not in page.markdown
++
++
++# A page with words on it whose form is still being answered is on its way:
++# it is watched, not read (reading it meanwhile would wait for the new page),
++# and the errand reads the page the answer brings.
++def test_a_page_whose_form_is_still_being_answered_is_not_the_page(chrome, site):
++    page = chrome.run(build(lambda: [])["open_url"], f"{site}/slow-form", lambda _n: None)
++
++    assert page.url == f"{site}/landed"
++    assert "正在登入" not in page.markdown
++
++
++# Settled on a page with nothing to read, the helper keeps looking (up to the
++# limit) rather than handing back nothing.
++def test_a_blank_page_that_moves_on_late_is_waited_for(chrome, site):
++    page = chrome.run(build(lambda: [])["open_url"], f"{site}/late", lambda _n: None)
++
++    assert page.url == f"{site}/landed"
++    assert "SSO-TOKEN" in page.markdown
++
++
++#: How long the last `_timed` errand took, in seconds.
++_took = {"s": 0.0}
++
++
++def _timed(chrome, site, path):
++    import time
++
++    start = time.monotonic()
++    try:
++        return chrome.run(build(lambda: [])["open_url"], f"{site}{path}", lambda _n: None)
++    finally:
++        _took["s"] = time.monotonic() - start
++
++
++# Review of D22: the quiet time is counted from the moment a hop has LOADED —
++# a hop with words and a slow image (a company network) loads after 2.5 s and
++# moves on 0.3 s later; counted from its start, it was taken for the page.
++def test_a_slow_loading_hop_with_words_is_not_taken_for_the_page(chrome, site):
++    page = _timed(chrome, site, "/slow-hop")
++
++    assert page.url == f"{site}/landed"
++    assert "正在轉址" not in page.markdown
++
++
++# A page whose load never comes (an image a proxy drops) is read once its load
++# has been waited for as long as before (5 s), not the whole 30 s.
++def test_a_page_whose_load_never_comes_is_read_in_seconds(chrome, site):
++    page = _timed(chrome, site, "/stalled")
++
++    assert "STALLED-TOKEN" in page.markdown
++    assert _took["s"] < 9  # 5 s for the load, 1.5 s quiet — waited for once
++
++
++# A #fragment that keeps changing is not a hop.
++def test_a_page_that_only_moves_its_fragment_is_read_at_once(chrome, site):
++    page = _timed(chrome, site, "/hash")
++
++    assert "HASH-TOKEN" in page.markdown
++    assert _took["s"] < 8
++
++
++# A page that is only a frame has something there — not worth 30 s of
++# waiting — and its body has no text to hand over: said at once.
++def test_a_page_that_is_only_a_frame_says_so_at_once(chrome, site):
++    with pytest.raises(Exception, match="沒有文字"):
++        _timed(chrome, site, "/framed")
++
++    assert _took["s"] < 8
++
++
++# A page that never stops moving (a sign-in that loops) fails in words when
++# the time is up — not with Playwright's own error.
++def test_a_page_that_never_stops_moving_says_so(chrome, site, monkeypatch):
++    from ai_workspace_helper import builtin_errands
++
++    monkeypatch.setattr(builtin_errands, "SETTLE_LIMIT_MS", 3_000)
++
++    with pytest.raises(Exception, match="一直在跳轉"):
++        _timed(chrome, site, "/loop-a")
++
++
++# A form whose answer never comes: reading the page meanwhile would block
++# until it does (minutes) — the errand ends at its time limit instead, in
++# words, well inside the job's claim.
++def test_a_form_whose_answer_never_comes_ends_at_the_limit(chrome, site, monkeypatch):
++    from ai_workspace_helper import builtin_errands
++
++    monkeypatch.setattr(builtin_errands, "SETTLE_LIMIT_MS", 3_000)
++
++    with pytest.raises(Exception, match="一直在跳轉"):
++        _timed(chrome, site, "/hang-form")
++
++    assert _took["s"] < 10
++
++
++# Why a page failed names where it ended — without its query, which on a
++# sign-in hop can carry a one-time code.
++def test_why_a_page_failed_leaves_out_its_query(chrome, site, monkeypatch):
++    from ai_workspace_helper import builtin_errands
++
++    monkeypatch.setattr(builtin_errands, "SETTLE_LIMIT_MS", 3_000)
++
++    with pytest.raises(Exception, match="沒有文字") as failed:
++        _timed(chrome, site, "/blank?code=ONE-TIME-SECRET")
++
++    assert "ONE-TIME-SECRET" not in str(failed.value)
++    assert f"{site}/blank" in str(failed.value)
++
++
++# A verification met AFTER the page first went quiet (a blank hop that moves on
++# late) is still a verification: the person is asked, it is not handed over.
++def test_a_verification_reached_late_still_waits_for_the_person(chrome, site):
++    notes: list[str] = []
++
++    page = chrome.run(build(lambda: [])["open_url"], f"{site}/late-to-sorry", notes.append)
++
++    assert notes == ["captcha", ""]
++    assert "What is new" in page.markdown
