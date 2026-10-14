@@ -61,6 +61,21 @@ _VERIFICATION_FRAMES = (
 )
 
 
+#: Cloudflare's challenge page ("Just a moment..."), by its own markers: its
+#: widget frame is not there at first — its script puts it in later — so the
+#: frames above miss it (GoodInfo, fetched 2026-10-14: `_cf_chl_opt`, the
+#: `/cdn-cgi/challenge-platform/h/…/orchestrate/` script, `#challenge-error-text`).
+#: Not `/cdn-cgi/challenge-platform/scripts/`: that one rides on ordinary pages.
+_CLOUDFLARE_CHALLENGE = """() =>
+  typeof window._cf_chl_opt !== "undefined" ||
+  !!document.querySelector(
+    'script[src*="/cdn-cgi/challenge-platform/h/"], #challenge-error-text'
+  )"""
+
+#: Cloudflare's block page (error 1020 and the like): nobody gets past it.
+_CLOUDFLARE_BLOCK = "#cf-error-details"
+
+
 def search_url(template: str, query: str) -> str:
     """`template` with every `{q}` filled the way the card fills it."""
     return template.replace("{q}", quote(query, safe=_URI_COMPONENT_SAFE))
@@ -97,7 +112,9 @@ def looks_like_a_verification(page: Any) -> bool:
     if "/sorry/" in urlsplit(page.url).path:
         return True
     try:
-        return any(page.locator(selector).count() for selector in _VERIFICATION_FRAMES)
+        return any(page.locator(selector).count() for selector in _VERIFICATION_FRAMES) or bool(
+            page.evaluate(_CLOUDFLARE_CHALLENGE)
+        )
     except PlaywrightError:
         # asked while the page moved on (a redirect hop): not a verification —
         # whatever it moves to is looked at again
@@ -183,9 +200,19 @@ def fetch(ctx: ErrandContext, url: str) -> FetchedPage:
 
     page = ctx.page
     response = page.goto(url, wait_until="domcontentloaded", timeout=PAGE_TIMEOUT_MS)
-    if response is not None and response.status >= 400:
-        raise ErrandFailed(f"the page answered {response.status}")
     verification = lambda: looks_like_a_verification(page)  # noqa: E731
+    if response is not None and response.status >= 400:
+        # A challenge answers 403 (Cloudflare says so in a header): it is a
+        # verification for the person, not a failure — failing here closed
+        # the tab before anyone could press anything (the person, GoodInfo).
+        challenged = response.headers.get("cf-mitigated") == "challenge" or verification()
+        if not challenged:
+            if page.locator(_CLOUDFLARE_BLOCK).count():
+                raise ErrandFailed(
+                    "這個網站擋住了自動瀏覽(Cloudflare 封鎖),請自己開瀏覽器查,把內容貼到卡片上:"
+                    + _where(url)
+                )
+            raise ErrandFailed(f"the page answered {response.status}")
     deadline = time.monotonic() + SETTLE_LIMIT_MS / 1000
     while True:
         if not settle(page, deadline, stop=verification):

@@ -150,6 +150,27 @@ class _Site(BaseHTTPRequestHandler):
             )
         elif self.path.startswith("/blank"):
             self._html("<title>Blank</title>")
+        elif self.path == "/cf-challenge":
+            # Cloudflare's managed challenge, as GoodInfo serves it (fetched
+            # 2026-10-14: 403, cf-mitigated: challenge, these markers; the
+            # widget is put in later by its script). The person solves it in
+            # longer than the quiet time; then it moves on to the page.
+            self._html(
+                "<title>Just a moment...</title>"
+                "<div id='challenge-error-text'>Enable JavaScript and cookies to continue</div>"
+                "<script>window._cf_chl_opt = {cType: 'managed'};"
+                "setTimeout(() => location.assign('/landed'), 4000)</script>",
+                status=403,
+                headers={"cf-mitigated": "challenge"},
+            )
+        elif self.path == "/cf-blocked":
+            # Cloudflare's block page (error 1020): no one gets past it
+            self._html(
+                "<title>Attention Required! | Cloudflare</title>"
+                "<div id='cf-error-details'><h1>Sorry, you have been blocked</h1>"
+                "<span class='cf-error-code'>1020</span></div>",
+                status=403,
+            )
         elif self.path.startswith("/sorry/"):
             # Google's "unusual traffic" page; the person solves it, it moves on
             self._html(
@@ -179,9 +200,11 @@ class _Site(BaseHTTPRequestHandler):
         self.send_header("Location", "/landed")
         self.end_headers()
 
-    def _html(self, body: str) -> None:
-        self.send_response(200)
+    def _html(self, body: str, *, status: int = 200, headers: dict[str, str] | None = None) -> None:
+        self.send_response(status)
         self.send_header("Content-Type", "text/html; charset=utf-8")
+        for name, value in (headers or {}).items():
+            self.send_header(name, value)
         self.end_headers()
         self.wfile.write(body.encode())
 
@@ -395,3 +418,28 @@ def test_a_verification_reached_late_still_waits_for_the_person(chrome, site):
 
     assert notes == ["captcha", ""]
     assert "What is new" in page.markdown
+
+
+# The person's report (GoodInfo): Cloudflare's challenge page has no widget
+# frame at first — its script puts one in later — so it was not taken for a
+# verification; it went quiet, was read as the page, and the tab closed before
+# anyone could press anything. Its own markers say what it is.
+def test_a_cloudflare_challenge_waits_for_the_person_then_carries_on(chrome, site):
+    notes: list[str] = []
+
+    page = chrome.run(build(lambda: [])["open_url"], f"{site}/cf-challenge", notes.append)
+
+    assert "SSO-TOKEN" in page.markdown
+    assert notes == ["captcha", ""]
+
+
+# A block page nobody can get past is said at once, not waited on and not
+# handed to the AI as the page.
+def test_a_cloudflare_block_page_fails_at_once_saying_so(chrome, site):
+    import time
+
+    started = time.monotonic()
+    with pytest.raises(Exception, match="擋住了自動瀏覽"):
+        chrome.run(build(lambda: [])["open_url"], f"{site}/cf-blocked", lambda _n: None)
+
+    assert time.monotonic() - started < 10

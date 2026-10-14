@@ -40,6 +40,7 @@ def test_a_search_goes_to_google_or_else_the_first_destination():
 class _Response:
     def __init__(self, status: int) -> None:
         self.status = status
+        self.headers: dict[str, str] = {}
 
 
 class _Locator:
@@ -66,7 +67,13 @@ class _Page:
     def title(self) -> str:
         return "the page"
 
-    def evaluate(self, _js: str):
+    def evaluate(self, js: str):
+        from ai_workspace_helper.builtin_errands import _CLOUDFLARE_CHALLENGE
+
+        # an ordinary page, as a real one answers: no challenge on it (the
+        # html answer for everything made every page a verification)
+        if js == _CLOUDFLARE_CHALLENGE:
+            return False
         return "<p>the page's html</p>"
 
     def locator(self, _selector: str) -> _Locator:
@@ -167,11 +174,11 @@ def test_a_page_that_moves_on_while_being_read_is_read_again():
     class _Moving(_Page):
         reads = 0
 
-        def evaluate(self, _js: str):
+        def evaluate(self, js: str):
             self.reads += 1
             if self.reads == 1:
                 raise PlaywrightError("Execution context was destroyed")
-            return super().evaluate(_js)
+            return super().evaluate(js)
 
     page = _Moving()
 
