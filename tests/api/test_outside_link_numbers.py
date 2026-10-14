@@ -123,3 +123,9 @@ def test_with_nothing_saved_there_is_no_file_to_name():
     assert r.json()["path"] is None
     [message] = _answers(spec)
     assert "ask_outside(file=" not in message.content
+
+
+def test_a_page_linked_twice_is_remembered_once():
+    md = "[a](https://a.example/p) [b](https://a.example/p#part) [c](https://www.google.com/url?q=https://a.example/p)"
+
+    assert links_in(md) == ["https://a.example/p"]
