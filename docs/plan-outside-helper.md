@@ -174,7 +174,6 @@ AI 呼叫 ask_outside ──► 卡片(D7:沒連線 = 今天的手動流程)
     1.4.0\venv\           每個版本一個 venv(由安裝時那個 Python 建)
     1.5.0\venv\
     1.6.0.partial\        下載、安裝到一半的新版(還沒驗過,啟動檔不會用它)
-  downloads\              下載回來的 zip(驗過 sha256 才解壓)
   profile\                小幫手自己的 Chrome 設定檔(放在版本外面,更新不會登出)
   logs\helper.log         記錄(輪替保留幾個檔),出事時請使用者傳這個
   history.jsonl           查詢紀錄(最近 200 筆,只在這台電腦;小視窗「查詢紀錄」分頁)
@@ -242,6 +241,10 @@ D15 時代的 `pending`、`pending_attempts`、`bad`、`failures`、`update` 不
      放掉鎖、結束;`install.pyw` 等鎖(最多 20 秒,`launch(wait_s=…)`)後用 `current` 啟動新版。
    - 否 → 舊版照跑,下次開啟就是新版。
 4. 沒有小幫手在跑 → 照原本的「現在開啟嗎？」。
+5. **從 0.1.x 過來**:0.1.x 看不懂 `quit.request`,第 3 步等 20 秒後說明、請人在舊視窗按「結束」。另外,連得上 AI Workspace 的
+   0.1.x 仍會照 D15 自己下載下一版、記成 `pending`,由它的啟動檔啟動——而新版不再「確認自己」,三次後會被那個舊啟動檔退回且不再試。
+   所以新版每次啟動時(拿到鎖之後)看一次:自己就是 `pending` 那一版 → 直接接手(`take_over`:`current` = 自己、`previous` = 原
+   `current`、D15 的欄位清掉、其他版本資料夾刪掉、把 D15 放在自己資料夾裡的 `launch.pyw`/`setup_core.py` 換到根目錄)。
 
 #### 3.7.6 被要求更新(426,D21)
 
@@ -278,7 +281,7 @@ D15 時代的 `pending`、`pending_attempts`、`bad`、`failures`、`update` 不
 | P11 | review(四把鏡頭)→ CI | 照 CLAUDE.md |
 | P12 | 〔D21〕更新只通知:`Updater` 讀版本資訊,比自己新 → 狀態「有新版 X」;426 → 「這個版本已停用」;小視窗那一行 + 「開啟下載頁」(`webbrowser.open(<網址>/ai-workspace-helper)`);不下載、不安裝 | 新版 → 顯示、照常領工作;同版或舊版 → 不顯示;讀不到 → 不顯示、記 log;426 → 停領工作 + 顯示;按鈕開的網址帶部署前綴;小幫手沒有任何下載或安裝的呼叫 |
 | P13 | 〔D21〕重裝換版:`install.pyw` 在已安裝的資料夾上裝新版(`previous` = 原 `current`,刪其餘版本資料夾);有小幫手在跑時問、寫 `quit.request`、等鎖、啟動新版 | 新版試跑失敗 → `current` 不變;正在跑的版本資料夾不刪;`quit.request` 讓正在跑的那個走「結束」的路徑(Chrome 關、鎖放掉);等不到鎖 → 說明、不開第二個;不開 → 舊版照跑 |
-| P14 | 〔D21〕拿掉自動更新:`prepare_update` / `update_outcome` / 解壓、`pending`/`bad`/`failures`/`update` 與 `launch.pyw` 的換版退回、`confirm`、`Backend.download` / `Chrome.fetch_bytes`、「立即更新」與 `--wait`、心跳的 `update`、live check 的更新那半(改成「重裝換版」) | 程式裡不再有寫這些欄位或下載 zip 的路徑;舊 `state.json` 有這些欄位照樣啟動;測試跟著刪改,不留沒人用的程式 |
+| P14 | 〔D21〕拿掉自動更新(從 0.1.x 過來的 `take_over` 見 §3.7.5 第 5 點):`prepare_update` / `update_outcome` / 解壓、`pending`/`bad`/`failures`/`update` 與 `launch.pyw` 的換版退回、`confirm`、`Backend.download` / `Chrome.fetch_bytes`、「立即更新」與 `--wait`、心跳的 `update`、live check 的更新那半(改成「重裝換版」) | 程式裡不再有寫這些欄位或下載 zip 的路徑;舊 `state.json` 有這些欄位照樣啟動;測試跟著刪改,不留沒人用的程式 |
 | P15 | 文件:使用說明「更新」、`docs/migrations.md` #933(行為改變:不再自動更新,每一版都要重裝)、PR 說明 | mkdocs `--strict` 綠;每句寫在驗證之後 |
 | P16 | review(conformance / veracity / defect / regression)→ CI | 照 CLAUDE.md;P12–P14 換掉一個機制,review 至少一輪 |
 

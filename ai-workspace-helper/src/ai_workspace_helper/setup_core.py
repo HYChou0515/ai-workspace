@@ -375,6 +375,34 @@ def replace_running(
         request.unlink(missing_ok=True)
 
 
+def take_over(home: Path, version: str) -> bool:
+    """The way from 0.1.x (D15) to D21. A 0.1.x that reaches AI Workspace
+    still downloads the next version itself and marks it `pending`, and its
+    launcher starts it — counting starts, and rolling it back for good after
+    three without the confirmation D15 expected. So `version`, once started
+    as that pending one, takes over at once: current, the old one previous,
+    D15's fields gone, every other version folder removed, and the launcher
+    and this file it brought (D15 put them in its folder) moved to the root.
+    False, changing nothing, when it was not started that way."""
+    s = read_state(home)
+    if s.get("pending") != version:
+        return False
+    old = s.get("current")
+    kept = {k: v for k, v in s.items() if k not in _AUTOMATIC_UPDATE_FIELDS}
+    write_state(home, {**kept, "current": version, "previous": old})
+    for folder in (home / "versions").iterdir():
+        if folder.name not in (version, old):
+            shutil.rmtree(folder, ignore_errors=True)
+    for name in _CARRIED:
+        mine = home / "versions" / version / name
+        if mine.is_file():
+            # text files, and the launcher has exited by now: nothing locks them
+            tmp = home / f".{name}.new"
+            shutil.copy2(mine, tmp)
+            os.replace(tmp, home / name)
+    return True
+
+
 # ── uninstall (D17) ─────────────────────────────────────────────────────────
 
 

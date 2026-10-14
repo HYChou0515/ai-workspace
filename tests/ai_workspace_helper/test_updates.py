@@ -181,6 +181,44 @@ def test_a_stale_quit_request_does_not_end_the_next_helper(tmp_path):
     assert not (tmp_path / setup_core.QUIT_REQUEST).exists()
 
 
+# The way from 0.1.x (D15) to D21: a 0.1.x that reaches AI Workspace still
+# downloads the next version itself and marks it pending, and ITS launcher
+# starts it — counting starts, and after three without the confirmation D15
+# expected, rolling it back for good. So the new version, once started, takes
+# over at once: current, the old one previous, D15's fields gone, and the
+# launcher and setup_core.py it brought put in the helper's folder.
+def test_a_version_started_as_d15s_pending_one_takes_over(tmp_path):
+    _installed(tmp_path, current="0.1.0", pending="0.2.0", pending_attempts=1, bad=[])
+    (tmp_path / "versions" / "0.2.0" / "venv").mkdir(parents=True)
+    for name in ("launch.pyw", "setup_core.py"):
+        (tmp_path / name).write_text(f"old {name}")
+        (tmp_path / "versions" / "0.2.0" / name).write_text(f"new {name}")
+    (tmp_path / "versions" / "0.0.9").mkdir()
+
+    assert setup_core.take_over(tmp_path, "0.2.0") is True
+
+    assert read_state(tmp_path) == {
+        "base_python": "/py/pythonw",
+        "current": "0.2.0",
+        "previous": "0.1.0",
+    }
+    assert (tmp_path / "launch.pyw").read_text() == "new launch.pyw"
+    assert (tmp_path / "setup_core.py").read_text() == "new setup_core.py"
+    assert sorted(f.name for f in (tmp_path / "versions").iterdir()) == ["0.1.0", "0.2.0"]
+
+
+# Started any other way (installed by install.pyw: nothing pending, or another
+# version pending), it changes nothing.
+@pytest.mark.parametrize("pending", [None, "0.3.0"])
+def test_a_version_not_pending_takes_nothing_over(tmp_path, pending):
+    _installed(tmp_path, current="0.2.0", pending=pending)
+    before = read_state(tmp_path)
+
+    assert setup_core.take_over(tmp_path, "0.2.0") is False
+
+    assert read_state(tmp_path) == before
+
+
 def test_with_nothing_installed_the_launcher_says_so(tmp_path):
     with pytest.raises(SetupFailed, match="install"):
         setup_core.launch(tmp_path, popen=lambda argv, cwd: None)

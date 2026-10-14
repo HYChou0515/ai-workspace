@@ -439,6 +439,15 @@ def main() -> int:  # pragma: no cover — the window needs a display; verified 
         messagebox.showinfo("AI Workspace Helper", "小幫手已經在執行了。")
         return 0
 
+    from . import setup_core
+
+    try:
+        # started by a 0.1.x launcher as the version it downloaded (D15 → D21)
+        if setup_core.take_over(home, __version__):
+            logging.getLogger(__name__).info("took over from the automatic update: %s", __version__)
+    except OSError:
+        logging.getLogger(__name__).warning("could not take over", exc_info=True)
+
     settings = read_settings(home)
     app_url = settings.get("app_url")
     if not isinstance(app_url, str) or not app_url:
@@ -454,8 +463,6 @@ def main() -> int:  # pragma: no cover — the window needs a display; verified 
     import subprocess
     import tempfile
     from pathlib import Path
-
-    from . import setup_core
 
     # Developer knobs, unset on the person's PC: a Linux box has Chromium, not
     # Chrome; a recording places the window.
