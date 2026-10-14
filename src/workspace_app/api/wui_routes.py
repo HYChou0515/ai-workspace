@@ -29,14 +29,16 @@ import logging
 import shlex
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, FastAPI, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
+from specstar.types import ResourceIDNotFoundError, ResourceIsDeletedError
 
 from ..agent.context import AgentToolContext
 from ..apps.catalog import finalize_tool_grants
+from ..apps.subagents import SubagentDef
 from ..sandbox.protocol import ExecResult, Sandbox, SandboxSpec
 from ..tooling.external import ExternalTools
 from ..tooling.registry import (
@@ -46,6 +48,8 @@ from ..tooling.registry import (
     find_allowed_command,
 )
 from ..workflow.offered import no_such_workflow, wont_parse
+from ..workflow.orchestrator import TooManyPageJobs
+from ..workflow.run import PageJob
 from .env_layers import PersonEnv, resolve, resolve_env
 from .locator import ItemLocator
 from .private_env import PrivateEnvStore, private_layer
@@ -139,6 +143,52 @@ _BUILD = (
 )
 
 
+class AgentCallBody(BaseModel):
+    """What a page asks a sub-agent (#942 D4): text in."""
+
+    input: str = ""
+
+
+class AgentCallOut(BaseModel):
+    """What comes back (#942 D7): the sub-agent's answer, and whether that
+    answer is a failure — `run_agent`'s own sentence when it is, so a page
+    can show it as it stands."""
+
+    output: str
+    failed: bool
+
+
+class JobBody(BaseModel):
+    """`startTool` / `startAgent` (#942 D8): which capability, and its input —
+    the tool's args object, or the sub-agent's text."""
+
+    kind: Literal["tool", "agent"]
+    name: str
+    input: Any = None
+
+
+class JobStarted(BaseModel):
+    job_id: str
+
+
+class JobOut(BaseModel):
+    """`job.status()`. ``output`` is what the matching `call…` returns, once
+    the job is done; ``error`` says why it failed."""
+
+    state: Literal["running", "done", "failed", "stopped"]
+    output: dict[str, Any] | None = None
+    error: str | None = None
+
+
+#: How long `callAgent` waits for its answer before stopping the job (#942 §3.1)
+#: — the same minute a tool call gets. Module-level so a test can shorten it.
+CALL_TIMEOUT_S = 60.0
+_POLL_S = 0.2
+
+# A page job's work, given the conversation it was opened on.
+_Work = Callable[[Any], Awaitable[dict[str, Any]]]
+
+
 class RunBody(BaseModel):
     """Which workflow to start, and what to hand it.
 
@@ -193,6 +243,8 @@ def register_wui_routes(
     turn_engine: Any = None,
     workflows_for: Callable[[str], Awaitable[Sequence[str]]] = _no_workflows,
     workflow_problem_for: Callable[[str, str], Awaitable[str | None]] = _no_problem,
+    subagents_for: Callable[[str], Awaitable[Sequence[SubagentDef]]] | None = None,
+    drive_agent: Callable[..., Awaitable[tuple[str, bool]]] | None = None,
 ) -> None:
     """Mount the WUI tool-call route.
 
@@ -598,3 +650,145 @@ def register_wui_routes(
         return CallToolOut(
             output=result.stdout.decode("utf-8", "replace"), exit_code=result.exit_code
         )
+
+    # ── page jobs (#942): `callAgent`, `startAgent`, `startTool` ────────────
+    async def _find_agent(investigation_id: str, name: str) -> SubagentDef:
+        """One of the item's sub-agents — the ones its chat could delegate to
+        (D2). Refused by name, with the ones there are, because this reaches a
+        person through the page's error panel."""
+        defs = list(await subagents_for(investigation_id)) if subagents_for else []
+        for d in defs:
+            if d.name == name:
+                return d
+        have = ", ".join(sorted(d.name for d in defs)) or "none"
+        raise HTTPException(
+            status_code=404,
+            detail=f"This item has no sub-agent named {name}. It has: {have}.",
+        )
+
+    async def _start_job(
+        investigation_id: str, job: PageJob, title: str, work_on: Callable[[str], _Work]
+    ) -> str:
+        """Open the job's own conversation, start the job on it, link the two (D5).
+
+        Its OWN chat, as a page's `startRun` gets: the job's turns are recorded
+        there and nowhere else, its Stop is that chat's, and two jobs never
+        share one — which is what lets them run side by side (D6)."""
+        key = locator.open_run_chat(investigation_id, title)
+        try:
+            run_id = await orchestrator.start_page_job(
+                item_id=investigation_id,
+                captured_user=locator.owner_of(investigation_id) or "",
+                # Billed to the owner, run with the PRESSER's private values (D11).
+                env_user=get_user_id() if get_user_id is not None else "",
+                chat_id=key,
+                job=job,
+                work=work_on(key),
+            )
+        except TooManyPageJobs as exc:
+            locator.settle_run_chat(key, None)
+            raise HTTPException(
+                status_code=429,
+                detail=f"This item already has {exc.limit} page jobs running. "
+                "Wait for one to finish, or stop one, then try again.",
+            ) from exc
+        except Exception as exc:
+            # As `wui_run`: a chat with no run is a FREE chat, and the earliest
+            # free chat becomes the item's default — take it back down.
+            locator.settle_run_chat(key, None)
+            logger.exception("wui: item %s could not start %s", investigation_id, job.name)
+            raise HTTPException(
+                status_code=502, detail=f"{job.name} could not be started."
+            ) from exc
+        locator.settle_run_chat(key, run_id)
+        return run_id
+
+    async def _start_agent(investigation_id: str, name: str, text: str) -> str:
+        if drive_agent is None:
+            raise HTTPException(status_code=501, detail="Sub-agents cannot be asked here.")
+        defn = await _find_agent(investigation_id, name)
+        owner = locator.owner_of(investigation_id) or ""
+        drive = drive_agent
+
+        def work_on(key: str) -> _Work:
+            async def work(wf: Any) -> dict[str, Any]:
+                output, failed = await drive(
+                    investigation_id, key, owner, text, defn, run_id=wf.run_id
+                )
+                return {"output": output, "failed": failed}
+
+            return work
+
+        return await _start_job(
+            investigation_id,
+            PageJob(kind="agent", name=name, input=text),
+            f"頁面：subagent {name}",
+            work_on,
+        )
+
+    async def _job_state(job_id: str, investigation_id: str) -> Any:
+        """The job, IF it is a page job of this item — else 404."""
+        try:
+            return await orchestrator.page_job_state(job_id, investigation_id)
+        except (ResourceIDNotFoundError, ResourceIsDeletedError) as exc:
+            raise HTTPException(status_code=404, detail="This item has no such job.") from exc
+
+    @app.post("/a/{slug}/items/{item_id}/wui/agents/{name}/call")
+    async def wui_call_agent(
+        slug: str, item_id: str, name: str, body: AgentCallBody
+    ) -> AgentCallOut:
+        """`callAgent` (#942 D7): ask one of the item's sub-agents and wait for
+        its answer — the same shape as a tool call, `{input}` for `{args}`.
+
+        It IS a job underneath (a run record, a Stop, a place in the item's
+        quota), waited on for at most `CALL_TIMEOUT_S`. Past that the job is
+        stopped rather than left running behind a page that has already been
+        told it failed, and the sentence names the verb to use instead."""
+        investigation_id = locator.require_access(slug, item_id, "execute")
+        run_id = await _start_agent(investigation_id, name, body.input)
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + CALL_TIMEOUT_S
+        state = await _job_state(run_id, investigation_id)
+        while state.state == "running":
+            if loop.time() >= deadline:
+                await orchestrator.cancel(run_id, investigation_id)
+                raise HTTPException(
+                    status_code=504,
+                    detail=f"{name} took longer than {CALL_TIMEOUT_S:g}s, so it was stopped. "
+                    "Use startAgent for work that takes a while.",
+                )
+            await asyncio.sleep(_POLL_S)
+            state = await _job_state(run_id, investigation_id)
+        if state.state == "done":
+            out = state.output or {}
+            return AgentCallOut(output=str(out.get("output", "")), failed=bool(out.get("failed")))
+        if state.state == "stopped":
+            raise HTTPException(status_code=409, detail=f"{name} was stopped before it answered.")
+        raise HTTPException(status_code=502, detail=state.error or f"{name} failed.")
+
+    @app.post("/a/{slug}/items/{item_id}/wui/jobs")
+    async def wui_start_job(slug: str, item_id: str, body: JobBody) -> JobStarted:
+        """`startTool` / `startAgent` (#942 D8): start the work and answer with
+        its id at once; the page asks `GET …/jobs/{id}` how it is going."""
+        investigation_id = locator.require_access(slug, item_id, "execute")
+        if body.kind == "agent":
+            if not isinstance(body.input, str):
+                raise HTTPException(status_code=422, detail="A sub-agent's input is text.")
+            return JobStarted(job_id=await _start_agent(investigation_id, body.name, body.input))
+        raise HTTPException(status_code=422, detail=f"Unknown job kind {body.kind}.")
+
+    @app.get("/a/{slug}/items/{item_id}/wui/jobs/{job_id}")
+    async def wui_job_status(slug: str, item_id: str, job_id: str) -> JobOut:
+        """`job.status()` — and what `job.result()` polls."""
+        investigation_id = locator.require_access(slug, item_id, "execute")
+        state = await _job_state(job_id, investigation_id)
+        return JobOut(state=state.state, output=state.output, error=state.error)
+
+    @app.post("/a/{slug}/items/{item_id}/wui/jobs/{job_id}/stop")
+    async def wui_stop_job(slug: str, item_id: str, job_id: str) -> JobOut:
+        """`job.stop()` — the same Stop the run's own chat has."""
+        investigation_id = locator.require_access(slug, item_id, "execute")
+        await _job_state(job_id, investigation_id)  # a page job of THIS item, or 404
+        await orchestrator.cancel(job_id, investigation_id)
+        state = await _job_state(job_id, investigation_id)
+        return JobOut(state=state.state, output=state.output, error=state.error)

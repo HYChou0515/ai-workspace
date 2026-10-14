@@ -39,11 +39,13 @@ from .events import TurnEnded
 from .notifications import notification_sent, notify
 from .private_env import unattended_layer
 from .rca_messages import to_rca_message
+from .subagent_run import _child_context, report_of
 from .timeutil import now_ms
 from .turn_gate import admit_turn
 from .turns import CONTEXT_NOTICE_ROLE, already_noticed
 
 if TYPE_CHECKING:
+    from ..apps.subagents import SubagentDef
     from ..entity.events import EntityOrigin
     from ..files import WorkspaceFiles
     from ..kb.ingest import Ingestor
@@ -165,6 +167,59 @@ class WorkflowExecutor:
         entity_write_origin: EntityOrigin | None = None,
         run_id: str = "",
     ) -> str:
+        return _reply_text(
+            await self._turn(
+                item_id,
+                chat_key,
+                captured_user,
+                prompt,
+                tools,
+                lane=lane,
+                entity_write_origin=entity_write_origin,
+                run_id=run_id,
+            )
+        )
+
+    async def drive_agent(
+        self,
+        item_id: str,
+        chat_key: str,
+        captured_user: str,
+        prompt: str,
+        agent: SubagentDef,
+        *,
+        run_id: str,
+    ) -> tuple[str, bool]:
+        """Run ``agent`` — one of the item's sub-agents — over ``prompt`` as a
+        turn on a page job's own chat (#942), and return ``(what it said,
+        whether that is a failure)``.
+
+        The same turn a workflow node runs (quota, persistence, cross-pod stop,
+        the run's identity) narrowed exactly as the chat narrows a delegated
+        sub-agent: the definition's prompt and tools, bounded by what the item
+        holds and minus what no sub-agent may hold, an empty history and no way
+        to delegate further (`subagent_run._child_context` — one function for
+        both). What a failure or a silent ending reads as is `run_agent`'s own
+        sentence (`report_of`)."""
+        produced = await self._turn(
+            item_id, chat_key, captured_user, prompt, None, run_id=run_id, agent=agent
+        )
+        failure = next((m.content for m in reversed(produced) if m.role == "error"), None)
+        return report_of(agent.name, _reply_text(produced), failure)
+
+    async def _turn(
+        self,
+        item_id: str,
+        chat_key: str,
+        captured_user: str,
+        prompt: str,
+        tools: list[str] | None,
+        *,
+        lane: str | None = None,
+        entity_write_origin: EntityOrigin | None = None,
+        run_id: str = "",
+        agent: SubagentDef | None = None,
+    ) -> list[TurnMessage]:
         """Run one agent node as a turn on the run's WORKFLOW CHAT (§3, §5.1):
         ``chat_key`` is that chat's conversation id, so turns enqueue + persist there
         (keeping the run's stream separate from the item's other chats). Builds the
@@ -224,6 +279,14 @@ class WorkflowExecutor:
             entity_write_origin=entity_write_origin,
             caller_env=await self._headless_env(captured_user, item_id, run_id),
         )
+        if agent is not None:
+            ctx = _child_context(ctx, agent)
+            # A page job's chat starts empty and is the job's record (D5): what
+            # was asked belongs in it, or the record shows an answer to nothing.
+            # A workflow node's prompt is the workflow's business and stays out.
+            self._append(
+                rid, captured_user, Message(role="user", content=prompt, created_at=now_ms())
+            )
         # #624: this node had to leave part of the thread out. Say so in the
         # workflow chat — it is a real conversation the user can open, and a run
         # that quietly forgot its earlier steps reads as a model gone vague.
@@ -231,10 +294,10 @@ class WorkflowExecutor:
         # skip it.
         if ctx.history_reduced_note:
             self._notice_history_reduced(rid, captured_user, ctx.history_reduced_note)
-        answer = ""
+        produced_all: list[TurnMessage] = []
 
         def persist(produced: list[TurnMessage]) -> None:
-            nonlocal answer
+            produced_all.extend(produced)
             if produced:
                 conv2 = self._conv_rm.get(rid).data  # re-fetch the workflow chat
                 assert isinstance(conv2, Conversation)
@@ -244,7 +307,6 @@ class WorkflowExecutor:
                     for tm in produced:
                         conv2.messages.append(to_rca_message(tm))
                     self._conv_rm.update(rid, conv2)
-            answer = _reply_text(produced)
 
         enqueue_key = lane or chat_key
         logger.debug(
@@ -269,7 +331,14 @@ class WorkflowExecutor:
         # (the watcher already cancelled the turn) → abort the run, don't step on.
         if await self._turn_engine.cancel_epoch(chat_key) > baseline:
             raise asyncio.CancelledError
-        return answer
+        return produced_all
+
+    def _append(self, rid: str, acting_user: str, message: Message) -> None:
+        conv = self._conv_rm.get(rid).data
+        assert isinstance(conv, Conversation)
+        conv.messages.append(message)
+        with self._conv_rm.using(user=acting_user):
+            self._conv_rm.update(rid, conv)
 
     async def _headless_env(self, captured_user: str, item_id: str, run_id: str = "") -> PersonEnv:
         """What this node's tools get from the deploy's seam, given that no

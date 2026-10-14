@@ -610,6 +610,15 @@ class TurnContextBuilder:
             return 0
         return estimate_tokens(payload)
 
+    async def subagents_for(self, item_id: str) -> tuple[SubagentDef, ...]:
+        """The sub-agents a turn in this item may delegate to, as a turn would
+        compute them — for a page asking one directly (#942 D2), so a page can
+        reach exactly the sub-agents the item's chat can and no other."""
+        facts = self._locator.turn_facts(item_id)
+        external = await self._external_tools(item_id)
+        config = self._finalized(self._locator.resolve_agent_config(item_id), external)
+        return await self._subagent_defs(item_id, config, facts)
+
     async def _subagent_defs(
         self, item_id: str, agent_config: AgentConfig | None, facts: TurnFacts
     ) -> tuple[SubagentDef, ...]:

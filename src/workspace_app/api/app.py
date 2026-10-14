@@ -2673,6 +2673,11 @@ def create_app(
         async def start(self, **kw: Any) -> str:
             return await self._get().start(**kw)
 
+        def __getattr__(self, name: str) -> Any:
+            # The page-job entrances (#942) — `start_page_job`, `page_job_state`,
+            # `cancel` — reach the same one orchestrator, looked up as late.
+            return getattr(self._get(), name)
+
     async def _workflows_for_item(item_id: str) -> Sequence[str]:
         """Which workflows this item may start — the ONE list every entrance
         consults (`workflow.offered`): the profile's workflows plus the ones
@@ -2727,6 +2732,10 @@ def create_app(
         workflow_problem_for=lambda item_id, workflow_id: unparsable_workflow(
             files.read, item_id, workflow_id
         ),
+        # #942: a page asks the item's sub-agents — the very list its chat
+        # delegates to, run as a workflow node's turn narrowed as `run_agent` is.
+        subagents_for=turn_ctx.subagents_for,
+        drive_agent=workflow_executor.drive_agent,
     )
 
     register_capability_routes(
