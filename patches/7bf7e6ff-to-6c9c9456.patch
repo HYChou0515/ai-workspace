@@ -1,0 +1,3285 @@
+diff --git a/ai-workspace-helper/install.pyw b/ai-workspace-helper/install.pyw
+index 7e35a925..bd691629 100644
+--- a/ai-workspace-helper/install.pyw
++++ b/ai-workspace-helper/install.pyw
+@@ -72,14 +72,25 @@ def main() -> int:
+         )
+     else:
+         shortcut = "桌面有「AI Workspace Helper」捷徑。"
+-    if messagebox.askyesno(
+-        "AI Workspace Helper",
+-        f"小幫手 {installed.version} 已安裝。{shortcut}\n\n現在開啟嗎？",
+-    ):
+-        home = setup_core.root()
+-        import subprocess
+-
+-        subprocess.Popen(setup_core.launch_command(home, setup_core.read_state(home)), cwd=str(home))
++    home = setup_core.root()
++    done = f"小幫手 {installed.version} 已安裝。{shortcut}"
++    try:
++        if setup_core.helper_running(home):
++            # D21 (§3.7.5 step 3): the version it replaced is still running
++            if messagebox.askyesno(
++                "AI Workspace Helper",
++                f"{done}\n\n小幫手正在執行，要換成新版重新開啟嗎？",
++            ) and setup_core.replace_running(home) == "shown":
++                messagebox.showinfo(
++                    "AI Workspace Helper",
++                    "正在執行的小幫手沒有結束。請在它的視窗按「結束」，再開啟小幫手，就是新版。",
++                )
++        elif messagebox.askyesno("AI Workspace Helper", f"{done}\n\n現在開啟嗎？"):
++            setup_core.launch(home)
++    except (setup_core.SetupFailed, OSError) as exc:
++        # installed all the same; starting it failed (e.g. the antivirus, D19)
++        messagebox.showerror("AI Workspace Helper", f"{done}\n\n但開不起來：{exc}")
++        return 1
+     return 0
+ 
+ 
+diff --git a/ai-workspace-helper/launch.pyw b/ai-workspace-helper/launch.pyw
+index d9dab911..5a07c4f3 100644
+--- a/ai-workspace-helper/launch.pyw
++++ b/ai-workspace-helper/launch.pyw
+@@ -4,7 +4,7 @@ Both shortcuts point here, run by the Python the person confirmed at install
+ (its absolute pythonw.exe path — D16). Standard library only: it lives in
+ %LOCALAPPDATA%\\AIWorkspaceHelper\\ beside setup_core.py and state.json, outside
+ every version folder, so an update never has to replace a running file. What
+-it decides — which version, the rollback, one helper at a time — is
++it decides — which version, one helper at a time — is
+ `setup_core.launch`, tested; this file only shows a failure.
+ """
+ 
+@@ -19,8 +19,9 @@ import setup_core  # noqa: E402  # ty: ignore[unresolved-import] — beside this
+ 
+ def main() -> int:
+     try:
+-        # 「立即更新」 passes --wait: the old helper is still ending
+-        setup_core.launch(HERE, wait_s=20.0 if "--wait" in sys.argv[1:] else 0.0)
++        # a 0.1.0's 「立即更新」 passes --wait: that helper is still ending
++        wait_s = 20.0 if "--wait" in sys.argv[1:] else 0.0
++        setup_core.launch(setup_core.launcher_home(HERE), wait_s=wait_s)
+     except (setup_core.SetupFailed, OSError) as exc:
+         import tkinter
+         from tkinter import messagebox
+diff --git a/ai-workspace-helper/src/ai_workspace_helper/app.py b/ai-workspace-helper/src/ai_workspace_helper/app.py
+index 57e9c000..9772b60b 100644
+--- a/ai-workspace-helper/src/ai_workspace_helper/app.py
++++ b/ai-workspace-helper/src/ai_workspace_helper/app.py
+@@ -2,7 +2,7 @@
+ 
+ The window (tkinter, in the standard library) has three tabs. 狀態: a status
+ line, a line about the next version, the buttons 登入, 暫停/繼續, 結束 (and
+-立即更新 once a new version is ready), the 「開機時自動啟動」 box, 重設登入 and
++開啟下載頁 once a newer version is out), the 「開機時自動啟動」 box, 重設登入 and
+ 解除安裝. 查詢紀錄: the jobs this PC ran (history.History). 記錄檔: the end of
+ helper.log. It draws no state it did not read from the controller.
+ 
+@@ -20,12 +20,18 @@ import os
+ import queue
+ import sys
+ import threading
++import time
+ from collections.abc import Callable
+ from typing import Any
+ 
+ #: Seconds between polls when there is nothing to do. Short, because the card's
+ #: 「查」 waits on it; a poll is one small request.
+ POLL_S = 2.0
++#: Starting Chrome is tried this often, this far apart, before 「開不了 Chrome」:
++#: started the moment the helper it replaced let go of its lock (D21), its
++#: Chrome may still be closing on the same profile.
++CHROME_TRIES = 3
++CHROME_RETRY_S = 2.0
+ 
+ _TEXT = {
+     "starting": "啟動中…",
+@@ -91,28 +97,36 @@ def log_tail(path: Any, *, lines: int = 300, max_bytes: int = 64_000) -> str:
+     return "".join(parts[-lines:])
+ 
+ 
+-def describe_update(status: str, *, forced: bool) -> str:
+-    """The window's line about the next version; `forced` when this version is
+-    refused (§3.7.6)."""
+-    if status == "preparing":
+-        return "正在準備新版…"
+-    if status == "ready":
+-        return "新版已下載，按「立即更新」換上" if forced else "新版已下載，下次開啟時套用"
+-    if status.startswith("failed"):
+-        why = status.partition(":")[2].strip()
+-        if forced:
+-            return (
+-                f"新版準備失敗：{why}。請到 AI Workspace 的「小幫手」頁重新下載、執行 install.pyw"
+-            )
+-        return f"新版準備失敗：{why}（這一版照常使用）"
++def describe_update(status: str) -> str:
++    """The window's line about the next version (D21): only where to get it —
++    the helper fetches and installs nothing (§3.7.4, §3.7.6)."""
++    kind, _, version = status.partition(": ")
++    if kind == "available":
++        return f"有新版 {version}：請到「小幫手」頁下載，重新雙擊 install.pyw"
++    if kind == "required":
++        newer = f"新版 {version}" if version else "新版"
++        return f"請到「小幫手」頁下載{newer}，重新雙擊 install.pyw"
+     return ""
+ 
+ 
+-#: Statuses that show this version runs — a waiting version confirms itself
+-#: on them (§3.7.5). Not "error" (the backend refused its requests) nor
+-#: "unreachable" (its line to the backend may be what is broken): those may be
+-#: the version's own fault, and a confirmed version is never rolled back.
+-_CONFIRMS = ("connected", "needs_login", "paused", "update_required")
++def take_request(home: Any) -> str | None:
++    """What the launcher or install.pyw left the running window (§3.7.5):
++    "show" (come forward), "quit" (end, for a new version — D21) or None.
++    Each is taken once; ending wins when both are there."""
++    from . import setup_core
++
++    quit_request, show_request = home / setup_core.QUIT_REQUEST, home / setup_core.SHOW_REQUEST
++    asked = "quit" if quit_request.exists() else "show" if show_request.exists() else None
++    if asked is not None:
++        quit_request.unlink(missing_ok=True)
++        show_request.unlink(missing_ok=True)
++    return asked
++
++
++def download_page(app_url: str) -> str:
++    """The 小幫手 page under the address the person gave (its sub-path
++    included), where 「開啟下載頁」 sends their own browser (D21)."""
++    return f"{app_url.rstrip('/')}/ai-workspace-helper"
+ 
+ 
+ class Controller:
+@@ -125,12 +139,14 @@ class Controller:
+         reset_profile: Callable[[], None] | None = None,
+         poll_s: float = POLL_S,
+         history: Any = None,
++        sleep: Callable[[float], None] = time.sleep,
+     ) -> None:
+         self._make_chrome = make_chrome
+         self._make_worker = make_worker
+         self._make_updater = make_updater
+         self._reset_profile = reset_profile
+         self._poll_s = poll_s
++        self._sleep = sleep
+         self._commands: queue.Queue[str] = queue.Queue()
+         self._lock = threading.Lock()
+         self._snapshot: tuple[str, str, str, str] = ("starting", "", "", "")
+@@ -142,8 +158,6 @@ class Controller:
+         self._worker: Any = None
+         self._updater: Any = None
+         self._asked_login = False
+-        #: Set by 「立即更新」: the window starts the launcher once this ends.
+-        self.restart = False
+ 
+     # ── the window's side (any thread) ──────────────────────────────────────
+ 
+@@ -156,7 +170,7 @@ class Controller:
+             return self._snapshot
+ 
+     def update_status(self) -> str:
+-        """The updater's: "" | "preparing" | "ready" | "failed: …"."""
++        """The updater's: "" | "available: <v>" | "required: <v>"."""
+         return str(getattr(self._updater, "status", "") or "")
+ 
+     # ── the worker thread ───────────────────────────────────────────────────
+@@ -164,18 +178,26 @@ class Controller:
+     def open(self) -> None:
+         # what a previous Chrome left is dead: never drive it again
+         self._chrome = self._worker = None
+-        try:
+-            self._chrome = self._make_chrome()
+-        except Exception as exc:  # noqa: BLE001 — shown to the person, who can only quit
+-            logger.exception("could not start Chrome")
+-            self._show("no_chrome", str(exc).splitlines()[0] if str(exc) else type(exc).__name__)
+-            return
++        for attempt in range(1, CHROME_TRIES + 1):
++            try:
++                self._chrome = self._make_chrome()
++                break
++            except Exception as exc:  # noqa: BLE001 — shown to the person, who can only quit
++                if attempt < CHROME_TRIES:
++                    logger.warning("could not start Chrome (try %d): %s", attempt, exc)
++                    self._sleep(CHROME_RETRY_S)
++                    continue
++                logger.exception("could not start Chrome")
++                self._show(
++                    "no_chrome", str(exc).splitlines()[0] if str(exc) else type(exc).__name__
++                )
++                return
+         self._worker = self._make_worker(self._chrome)
+         if hasattr(self._worker, "on_change"):
+             self._worker.on_change = self._show
+         if self._make_updater is not None and self._updater is None:
+-            # one for the helper's life: a second would prepare the same
+-            # version again over the first one's files
++            # one for the helper's life: its six-hour clock is the helper's,
++            # not one Chrome window's
+             self._updater = self._make_updater(self._chrome)
+ 
+     def step(self, wait: float = 0.0) -> bool:
+@@ -188,8 +210,7 @@ class Controller:
+         except queue.Empty:
+             command = None
+         while command is not None:
+-            if command in ("quit", "restart"):
+-                self.restart = command == "restart"
++            if command == "quit":
+                 self._close()
+                 return False
+             if command == "reset_login":
+@@ -230,21 +251,17 @@ class Controller:
+         return True
+ 
+     def _keep_current(self, status: str) -> None:
+-        """§3.7.4–§3.7.6, on this thread (the zip comes through Playwright).
+-        A tick that ran means this version is up — signed out, paused or
+-        offline included, none of which is the version's doing — so a waiting
+-        version confirms itself (§3.7.5). Connected, check for a newer one
+-        when due; refused, update from the release the refusal named."""
++        """§3.7.4, §3.7.6 (D21), on this thread (the manifest comes through
++        Playwright). Connected, check for a newer release when due; refused,
++        say which one to install. Nothing is fetched or installed."""
+         if self._updater is None:
+             return
+         try:
+-            if status in _CONFIRMS:
+-                self._updater.connected()
+             if status == "connected":
+                 self._updater.tick()
+             elif status == "update_required":
+-                self._updater.tick(required=self._worker.manifest)
+-        except Exception:  # noqa: BLE001 — an update is never worth the helper
++                self._updater.tick(required=self._worker.manifest or {})
++        except Exception:  # noqa: BLE001 — an update check is never worth the helper
+             logger.exception("update check")
+ 
+     def run(self) -> None:
+@@ -325,11 +342,11 @@ def make_controller(home: Any, app_url: str, make_chrome: Callable[[], Any]) ->
+         def __getattr__(self, name: str) -> Any:
+             return getattr(backends[-1], name)
+ 
+-    updater = Updater(home, _Latest())
++    updater = Updater(_Latest())
+     history = History(home / "history.jsonl")
+ 
+     def make_worker(chrome: Any) -> Worker:
+-        backend = Backend(chrome.send, fetch_bytes=chrome.fetch_bytes)
++        backend = Backend(chrome.send)
+         backends.append(backend)
+         del backends[:-1]
+ 
+@@ -343,7 +360,6 @@ def make_controller(home: Any, app_url: str, make_chrome: Callable[[], Any]) ->
+                 "chrome": chrome_version[0],
+                 "playwright": dist_version("playwright"),
+                 "python": platform.python_version(),
+-                "update": updater.report(),
+             }
+ 
+         return Worker(
+@@ -373,7 +389,7 @@ def _driver_paths() -> tuple[str, str]:
+ 
+ 
+ def self_test() -> int:
+-    """`python -m ai_workspace_helper --self-test` (§3.7.4 step 4): a new version
++    """`python -m ai_workspace_helper --self-test` (§3.7.5 step 1): a new version
+     counts as installed only once this passes in its own venv."""
+     from importlib.metadata import version as dist_version
+     from pathlib import Path
+@@ -439,6 +455,15 @@ def main() -> int:  # pragma: no cover — the window needs a display; verified
+         messagebox.showinfo("AI Workspace Helper", "小幫手已經在執行了。")
+         return 0
+ 
++    from . import setup_core
++
++    try:
++        # started by a 0.1.0 launcher as the version it downloaded (D15 → D21)
++        if setup_core.take_over(home, __version__):
++            logging.getLogger(__name__).info("took over from the automatic update: %s", __version__)
++    except OSError:
++        logging.getLogger(__name__).warning("could not take over", exc_info=True)
++
+     settings = read_settings(home)
+     app_url = settings.get("app_url")
+     if not isinstance(app_url, str) or not app_url:
+@@ -455,8 +480,6 @@ def main() -> int:  # pragma: no cover — the window needs a display; verified
+     import tempfile
+     from pathlib import Path
+ 
+-    from . import setup_core
+-
+     # Developer knobs, unset on the person's PC: a Linux box has Chromium, not
+     # Chrome; a recording places the window.
+     channel = os.environ.get("AI_WORKSPACE_HELPER_CHROME_CHANNEL") or "chrome"
+@@ -492,8 +515,11 @@ def main() -> int:  # pragma: no cover — the window needs a display; verified
+         fill="x", pady=(0, 6)
+     )
+     ttk.Label(status_tab, text=app_url, foreground="#666").pack(fill="x")
+-    ttk.Label(status_tab, textvariable=update_var, wraplength=580, justify="left").pack(
+-        fill="x", pady=(6, 0)
++    # the notice and its one action together, as a notification banner has
++    # them (GOV.UK; plan §3.7.4) — shown only while there is something to say
++    update_row = ttk.Frame(status_tab)
++    ttk.Label(update_row, textvariable=update_var, wraplength=460, justify="left").pack(
++        side="left", fill="x", expand=True
+     )
+     buttons = ttk.Frame(status_tab)
+     buttons.pack(fill="x", pady=(12, 8))
+@@ -504,18 +530,22 @@ def main() -> int:  # pragma: no cover — the window needs a display; verified
+         ctl.send("pause" if paused else "resume")
+         pause_text.set("繼續" if paused else "暫停")
+ 
+-    def end(command: str = "quit") -> None:
++    def end() -> None:
+         # The lock is NOT released here: it goes with this process, which may
+-        # still hold Chrome's profile for a moment — the launcher (restart) and
+-        # the clean-up (uninstall) wait for it, so neither races that.
+-        ctl.send(command)
++        # still hold Chrome's profile for a moment — install.pyw (a new
++        # version, D21) and the clean-up (uninstall) wait for it, so neither
++        # races that.
++        ctl.send("quit")
+         thread.join(timeout=10)
+         window.destroy()
+ 
+-    def restart() -> None:
+-        # §3.7.6: end, and let the fixed launcher start the version now ready
+-        end("restart")
+-        subprocess.Popen([base_python, str(home / "launch.pyw"), "--wait"], cwd=str(home))
++    def open_download_page() -> None:
++        # D21: the person's own browser — it verifies the certificate, and a
++        # file it downloads stays (one downloaded in the helper's Chrome goes
++        # when that context closes)
++        import webbrowser
++
++        webbrowser.open(download_page(app_url))
+ 
+     def remove() -> None:
+         if not messagebox.askyesno(
+@@ -554,7 +584,9 @@ def main() -> int:  # pragma: no cover — the window needs a display; verified
+ 
+     ttk.Button(buttons, text="登入", command=lambda: ctl.send("login")).pack(side="left")
+     ttk.Button(buttons, textvariable=pause_text, command=toggle_pause).pack(side="left", padx=6)
+-    restart_button = ttk.Button(buttons, text="立即更新", command=restart)
++    ttk.Button(update_row, text="開啟下載頁", command=open_download_page).pack(
++        side="right", padx=(6, 0)
++    )
+     ttk.Button(buttons, text="結束", command=end).pack(side="right")
+     options = ttk.Frame(status_tab)
+     options.pack(fill="x")
+@@ -607,12 +639,13 @@ def main() -> int:  # pragma: no cover — the window needs a display; verified
+     def refresh() -> None:
+         status, detail, kind, site = ctl.snapshot()
+         status_var.set(describe(status, detail, kind, site))
+-        update = ctl.update_status()
+-        update_var.set(describe_update(update, forced=status == "update_required"))
+-        if update == "ready":
+-            restart_button.pack(side="left")
++        update_line = describe_update(ctl.update_status())
++        update_var.set(update_line)
++        if update_line:
++            # the whole row comes and goes: an emptied frame keeps its height
++            update_row.pack(fill="x", pady=(6, 0), before=buttons)
+         else:
+-            restart_button.pack_forget()
++            update_row.pack_forget()
+         window.title(
+             f"{describe(status, detail, kind, site)} — AI Workspace Helper"
+             if status == "connected" and detail
+@@ -638,9 +671,11 @@ def main() -> int:  # pragma: no cover — the window needs a display; verified
+                 else:
+                     log_text.yview_moveto(top)
+                 log_text.configure(state="disabled")
+-        show = home / setup_core.SHOW_REQUEST
+-        if show.exists():  # launched again: come forward instead (§3.7.5)
+-            show.unlink(missing_ok=True)
++        asked = take_request(home)
++        if asked == "quit":  # a new version was installed: make way (D21)
++            end()
++            return
++        if asked == "show":  # launched again: come forward instead (§3.7.5)
+             window.deiconify()
+             window.lift()
+             window.focus_force()
+diff --git a/ai-workspace-helper/src/ai_workspace_helper/backend.py b/ai-workspace-helper/src/ai_workspace_helper/backend.py
+index 36e009ff..3900c463 100644
+--- a/ai-workspace-helper/src/ai_workspace_helper/backend.py
++++ b/ai-workspace-helper/src/ai_workspace_helper/backend.py
+@@ -44,10 +44,6 @@ class Job:
+     args: str
+ 
+ 
+-#: (path, headers) -> (status, body bytes): a GET whose answer is a file.
+-FetchBytes = Callable[[str, dict[str, str]], tuple[int, bytes]]
+-
+-
+ def _headers() -> dict[str, str]:
+     return {
+         "X-AI-Workspace-Helper-Version": __version__,
+@@ -70,9 +66,8 @@ def _refusal(status: int, data: Any) -> None:
+ 
+ 
+ class Backend:
+-    def __init__(self, send: Send, *, fetch_bytes: FetchBytes | None = None) -> None:
++    def __init__(self, send: Send) -> None:
+         self._send = send
+-        self._fetch_bytes = fetch_bytes
+ 
+     def _call(self, method: str, path: str, body: dict[str, Any] | None = None) -> Any:
+         status, data = self._send(method, f"/api{path}", body, _headers())
+@@ -86,15 +81,6 @@ class Backend:
+         except BackendError:
+             return None
+ 
+-    def download(self, file: str) -> bytes:
+-        """The release's zip — through the same signed-in line as the jobs, so
+-        it never carries a browser's "downloaded from the internet" mark."""
+-        if self._fetch_bytes is None:
+-            raise BackendError("this transport cannot fetch files")
+-        status, data = self._fetch_bytes(f"/api/ai-workspace-helper/download/{file}", _headers())
+-        _refusal(status, None)
+-        return data
+-
+     def heartbeat(self, **info: Any) -> None:
+         self._call(
+             "POST",
+@@ -127,4 +113,4 @@ class Backend:
+         self._call("POST", f"/ai-workspace-helper/jobs/{job_id}/note", {"note": note})
+ 
+ 
+-__all__ = ["Backend", "BackendError", "FetchBytes", "Job", "NeedsLogin", "Send", "UpdateRequired"]
++__all__ = ["Backend", "BackendError", "Job", "NeedsLogin", "Send", "UpdateRequired"]
+diff --git a/ai-workspace-helper/src/ai_workspace_helper/chrome.py b/ai-workspace-helper/src/ai_workspace_helper/chrome.py
+index da073cc2..7a1384a8 100644
+--- a/ai-workspace-helper/src/ai_workspace_helper/chrome.py
++++ b/ai-workspace-helper/src/ai_workspace_helper/chrome.py
+@@ -29,8 +29,6 @@ from .errands import Errand, ErrandContext, ErrandFailed, FetchedPage
+ 
+ #: A backend request that takes longer than this is treated as unreachable.
+ REQUEST_TIMEOUT_MS = 30_000
+-#: The update zip is ~40 MB; on an office LAN that is seconds, not minutes.
+-DOWNLOAD_TIMEOUT_MS = 300_000
+ 
+ #: The card's paste converter, built from the frontend source into this
+ #: package (web/vite.ai-workspace-helper.config.ts) — defines `__aiWorkspaceHelper`.
+@@ -44,6 +42,13 @@ def _converter_source() -> str:
+         raise ErrandFailed("the helper's page converter is missing — reinstall the helper") from exc
+ 
+ 
++def _reason(exc: BaseException) -> str:
++    """Why a backend request failed, without Playwright's "Call log:", which
++    lists every request header — the login cookie among them — and would go
++    on to the window and helper.log, the file IT is sent."""
++    return str(exc).split("\nCall log:", 1)[0].strip()
++
++
+ class Chrome:
+     def __init__(
+         self,
+@@ -76,7 +81,13 @@ class Chrome:
+     ) -> tuple[int, Any]:
+         """One backend request with the profile's cookies; see `backend.Send`.
+         Redirects are NOT followed — a redirect is the gateway sending an
+-        expired login to sign in, and followed it would read as a success."""
++        expired login to sign in, and followed it would read as a success.
++
++        AI Workspace's certificate is not verified (D20): this request is sent
++        by Playwright's own Node, which neither trusts the company CA Windows
++        and Chrome do nor fetches a missing intermediate — so a deploy Chrome
++        reaches fine read 「連不上」 ("unable to verify the first certificate").
++        Only these requests: the pages an errand opens still verify."""
+         from playwright.sync_api import Error as PlaywrightError
+ 
+         try:
+@@ -87,11 +98,14 @@ class Chrome:
+                 data=json.dumps(body) if body is not None else None,
+                 max_redirects=0,
+                 fail_on_status_code=False,
++                ignore_https_errors=True,
+                 timeout=REQUEST_TIMEOUT_MS,
+             )
+         except PlaywrightError as exc:
+-            # refused, DNS, timeout, TLS: the backend is not reachable from here
+-            raise OSError(str(exc)) from exc
++            # refused, DNS, timeout, TLS: the backend is not reachable from here.
++            # `from None`: the Playwright error, call log and cookie included,
++            # must not ride along into a logged traceback either
++            raise OSError(_reason(exc)) from None
+         try:
+             try:
+                 data = r.json() if r.body() else None
+@@ -101,26 +115,6 @@ class Chrome:
+         finally:
+             r.dispose()
+ 
+-    def fetch_bytes(self, path: str, headers: dict[str, str]) -> tuple[int, bytes]:
+-        """A GET whose answer is a file (the update zip, §3.7.4), with the
+-        profile's login; see `backend.FetchBytes`. Redirects not followed."""
+-        from playwright.sync_api import Error as PlaywrightError
+-
+-        try:
+-            r = self._ctx.request.get(
+-                f"{self.app_url}{path}",
+-                headers=headers,
+-                max_redirects=0,
+-                fail_on_status_code=False,
+-                timeout=DOWNLOAD_TIMEOUT_MS,
+-            )
+-        except PlaywrightError as exc:
+-            raise OSError(str(exc)) from exc
+-        try:
+-            return r.status, r.body()
+-        finally:
+-            r.dispose()
+-
+     def version(self) -> str:
+         """The Chrome being driven, e.g. `141.0.7390.55` (§3.7.7). A persistent
+         context has no `Browser` object to ask, so the browser itself is."""
+diff --git a/ai-workspace-helper/src/ai_workspace_helper/setup_core.py b/ai-workspace-helper/src/ai_workspace_helper/setup_core.py
+index 5389262e..3c91cdd6 100644
+--- a/ai-workspace-helper/src/ai_workspace_helper/setup_core.py
++++ b/ai-workspace-helper/src/ai_workspace_helper/setup_core.py
+@@ -1,12 +1,12 @@
+-"""Installing (and later updating) the helper on the person's PC
+-(docs/plan-outside-helper.md D16, §3.7.1, §3.7.4).
++"""Installing the helper on the person's PC — the first version and every one
++after it (docs/plan-outside-helper.md D16, D21, §3.7.1, §3.7.5).
+ 
+ STANDARD LIBRARY ONLY, no relative imports, Python 3.10+: this one file runs in
+-three places — inside the installed package (the helper's own updates), at the
+-root of the zip beside `install.pyw` (before anything is installed), and beside
+-`launch.pyw` in the helper's folder. It is copied, never edited: by the pack
+-script into the zip, by `install` beside the launcher, and by `confirm` from a
+-newly confirmed version.
++three places — inside the installed package (the window: its requests, the
++Startup shortcut, uninstall), at the root of the zip beside `install.pyw`
++(before anything is installed), and beside `launch.pyw` in the helper's folder.
++It is copied, never edited: by the pack script into the zip, and by `install`
++beside the launcher.
+ 
+ Every command goes through an injected `run`, so the layout it builds is tested
+ on Linux; the default runs it with no console window.
+@@ -151,11 +151,11 @@ else:
+         fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+ 
+ 
+-# ── one version (§3.7.4 steps 3–5) ──────────────────────────────────────────
++# ── one version (§3.7.5 step 1) ─────────────────────────────────────────────
+ 
+ 
+-#: What a version keeps of its zip besides the venv: its own launcher and this
+-#: file, put in place at the root only once that version has proven itself.
++#: What `install` copies from the zip into the helper's folder: the fixed
++#: launcher and this file.
+ _CARRIED = ("launch.pyw", "setup_core.py")
+ 
+ 
+@@ -166,13 +166,15 @@ def install_version(
+     version: str,
+     *,
+     run: Run = run_quietly,
+-    carried_from: Path | None = None,
++    before_replacing: Callable[[], None] | None = None,
+ ) -> Path:
+     """Build `versions/<version>/`: a venv from `base_python`, the helper and
+     its packages from `wheelhouse` only, then a self-test. It is built as
+     `<version>.partial` and renamed only once all of that passed — a failed
+-    step leaves nothing behind for the launcher to pick up. `carried_from`
+-    (the unpacked zip) gives the version its own `_CARRIED` files."""
++    step leaves nothing behind for the launcher to pick up.
++    `before_replacing` is asked right before an existing `versions/<version>/`
++    is removed for the new build; raising stops it (D21: a helper may have
++    started on it while this was building)."""
+     versions = home / "versions"
+     partial, final = versions / f"{version}.partial", versions / version
+     versions.mkdir(parents=True, exist_ok=True)
+@@ -193,11 +195,10 @@ def install_version(
+             ]
+         )
+         run([python, "-m", "ai_workspace_helper", "--self-test"])
+-        for name in _CARRIED if carried_from else ():
+-            if (carried_from / name).is_file():  # ty: ignore[unsupported-operator]
+-                shutil.copy2(carried_from / name, partial / name)  # ty: ignore[unsupported-operator]
+         if final.exists():
+             # reinstalling the same version (D16: run install.pyw again)
++            if before_replacing is not None:
++                before_replacing()
+             shutil.rmtree(final)
+         os.replace(partial, final)
+     except BaseException:
+@@ -285,12 +286,6 @@ def version_key(text: str) -> tuple[int, ...]:
+         return (0,)
+ 
+ 
+-#: Starts a waiting version may take to confirm itself before it is given up.
+-MAX_PENDING_ATTEMPTS = 3
+-#: Failed preparations of one release before it is marked bad (§3.7.4).
+-MAX_PREPARE_FAILURES = 3
+-
+-
+ # ── starting (launch.pyw, §3.7.5) ───────────────────────────────────────────
+ 
+ 
+@@ -308,29 +303,33 @@ def launch_command(home: Path, state: dict[str, Any]) -> list[str]:
+     return version_command(home, str(current))
+ 
+ 
+-def start_choice(state: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+-    """Which version this start runs, and the state to write BEFORE starting
+-    it. A waiting version is tried, each try counted; one that has had
+-    `MAX_PENDING_ATTEMPTS` starts and never confirmed itself (it crashes on
+-    start) is marked bad and the current one runs again — said once, on the
+-    next check-in."""
+-    s = dict(state)
+-    pending = s.get("pending")
+-    if not pending:
+-        return str(s.get("current")), s
+-    attempts = int(s.get("pending_attempts") or 0)
+-    if attempts >= MAX_PENDING_ATTEMPTS:
+-        s["bad"] = [*(v for v in s.get("bad", []) if v != pending), pending]
+-        s["pending"], s["pending_attempts"] = None, 0
+-        s["update"] = f"{pending} 起不來,已退回 {s.get('current')}"
+-        return str(s.get("current")), s
+-    s["pending_attempts"] = attempts + 1
+-    return str(pending), s
+-
+-
+ #: Written by the launcher when a helper is already running: that helper sees
+ #: it and brings its window forward (§3.7.5 step 1).
+ SHOW_REQUEST = "show.request"
++#: Written by install.pyw for a helper still running the version it replaced:
++#: that helper sees it and ends, so the new one can start (D21, §3.7.5).
++QUIT_REQUEST = "quit.request"
++
++
++def helper_running(home: Path) -> bool:
++    """Whether a helper holds `helper.lock` — asked by taking it for a moment."""
++    lock = InstanceLock(home / "helper.lock")
++    if lock.acquire():
++        lock.release()
++        return False
++    return True
++
++
++def launcher_home(here: Path) -> Path:
++    """The helper's folder for a launch.pyw in `here`: its own folder once
++    installed there — or, for the copy in the unzipped download (the zip
++    carries one for `install` to copy), the installed helper's folder. With
++    nothing installed it stays in `here`: launching takes a lock there, and
++    after 解除安裝 the helper's folder must not come back (D17)."""
++    if (here / "state.json").exists():
++        return here
++    installed = root()
++    return installed if (installed / "state.json").exists() else here
+ 
+ 
+ def launch(
+@@ -340,10 +339,11 @@ def launch(
+     wait_s: float = 0.0,
+     sleep: Callable[[float], None] = time.sleep,
+ ) -> str:
+-    """What `launch.pyw` does. Returns the version started, or `"shown"` when a
+-    helper was already running and has been asked to come forward. `wait_s`:
+-    「立即更新」 starts this while the old helper is still ending — wait that
+-    long for its lock (which goes with its process) before deciding."""
++    """What `launch.pyw` does: start the current version. Returns it, or
++    `"shown"` when a helper was already running and has been asked to come
++    forward. `wait_s`: `replace_running` starts this while the old helper is
++    still ending — wait that long for its lock (which goes with its process)
++    before deciding."""
+     lock = InstanceLock(home / "helper.lock")
+     waited = 0.0
+     while not lock.acquire() and waited < wait_s:
+@@ -352,139 +352,67 @@ def launch(
+     if not lock.held:
+         (home / SHOW_REQUEST).write_text("show", encoding="utf-8")
+         return "shown"
++    # holding the lock, no helper runs: a request left for one is stale and
++    # must not end the helper about to start
++    (home / QUIT_REQUEST).unlink(missing_ok=True)
+     lock.release()  # the helper takes it for itself
+     state = read_state(home)
+-    if not state.get("current"):
+-        raise SetupFailed("the helper is not installed — run install.pyw")
+-    version, state = start_choice(state)
+-    write_state(home, state)  # before starting: a crash on start still counts
+-    popen(version_command(home, version), cwd=str(home))
+-    return version
++    popen(launch_command(home, state), cwd=str(home))
++    return str(state["current"])
+ 
+ 
+-def confirm(home: Path, version: str) -> bool:
+-    """The waiting `version` is up and connected: it becomes current, the one
+-    before it previous, every other version folder goes, and its own launcher
+-    replaces the fixed one — only now, when it has proven itself (§3.7.5 steps
+-    3 and 6). False, changing nothing, when `version` is not the one waiting."""
++def replace_running(
++    home: Path,
++    *,
++    popen: Callable[..., Any] = subprocess.Popen,
++    wait_s: float = 20.0,
++    sleep: Callable[[float], None] = time.sleep,
++) -> str:
++    """install.pyw, a new version in place while a helper runs (D21, §3.7.5
++    step 3): ask that helper to end, then start the current version once its
++    lock is free. `"shown"` when it did not end within `wait_s`: it is left
++    running and brought forward, and the request is withdrawn — it must not
++    end later under the person's feet."""
++    request = home / QUIT_REQUEST
++    request.write_text("quit", encoding="utf-8")
++    try:
++        return launch(home, popen=popen, wait_s=wait_s, sleep=sleep)
++    finally:
++        request.unlink(missing_ok=True)
++
++
++def take_over(home: Path, version: str) -> bool:
++    """The way from 0.1.0 (D15) to D21. A 0.1.0 that reaches AI Workspace
++    still downloads the next version itself and marks it `pending`, and its
++    launcher starts it — counting starts, and rolling it back for good after
++    three without the confirmation D15 expected. So `version`, once started
++    as that pending one, takes over at once: current, the old one previous,
++    D15's fields gone, every other version folder removed, and the launcher
++    and this file it brought (D15 put them in its folder) moved to the root.
++    False, changing nothing, when it was not started that way."""
+     s = read_state(home)
+     if s.get("pending") != version:
+         return False
+     old = s.get("current")
+-    s.update(current=version, previous=old, pending=None, pending_attempts=0)
+-    s["update"] = f"已更新到 {version}"
+-    write_state(home, s)
++    kept = {k: v for k, v in s.items() if k not in _AUTOMATIC_UPDATE_FIELDS}
++    if old == version:
++        # install.pyw already made it current: the version before stays previous
++        write_state(home, kept)
++        return True
++    write_state(home, {**kept, "current": version, "previous": old})
+     for folder in (home / "versions").iterdir():
+         if folder.name not in (version, old):
+             shutil.rmtree(folder, ignore_errors=True)
+     for name in _CARRIED:
+         mine = home / "versions" / version / name
+-        if mine.is_file() and (
+-            not (home / name).is_file() or mine.read_bytes() != (home / name).read_bytes()
+-        ):
+-            # .pyw is text and the launcher has exited by now: nothing locks it
++        if mine.is_file():
++            # text files, and the launcher has exited by now: nothing locks them
+             tmp = home / f".{name}.new"
+             shutil.copy2(mine, tmp)
+             os.replace(tmp, home / name)
+     return True
+ 
+ 
+-# ── the next version, in the background (§3.7.4) ────────────────────────────
+-
+-
+-def _plain_name(name: object) -> bool:
+-    return (
+-        isinstance(name, str)
+-        and bool(name)
+-        and not any(c in name for c in "/\\:")
+-        and name not in (".", "..")
+-    )
+-
+-
+-def _unpack(data: bytes, into: Path) -> None:
+-    import io
+-    import zipfile
+-
+-    shutil.rmtree(into, ignore_errors=True)
+-    into.mkdir(parents=True)
+-    with zipfile.ZipFile(io.BytesIO(data)) as z:
+-        for member in z.namelist():
+-            target = (into / member).resolve()
+-            if into.resolve() not in target.parents:
+-                raise SetupFailed(f"the update zip names a path outside itself: {member!r}")
+-        z.extractall(into)
+-
+-
+-def update_outcome(home: Path, state: dict[str, Any], manifest: dict[str, Any]) -> str | None:
+-    """What `prepare_update` would answer without fetching anything — or None
+-    when the release has to be fetched and installed."""
+-    version = str(manifest.get("version", ""))
+-    if version_key(version) <= version_key(str(state.get("current", "0"))):
+-        return "current"
+-    if version in state.get("bad", []):
+-        return "bad"
+-    if state.get("pending") == version and (home / "versions" / version).is_dir():
+-        return "ready"
+-    return None
+-
+-
+-def prepare_update(
+-    home: Path,
+-    manifest: dict[str, Any],
+-    fetch: Callable[[str], bytes],
+-    *,
+-    run: Run = run_quietly,
+-) -> str:
+-    """Make the published release ready for the next start, never touching the
+-    running one. `"current"`: nothing newer. `"bad"`: it failed before and is
+-    not tried again. `"ready"`: installed, waiting for the next start. Raises
+-    `SetupFailed` when this try failed (the running version carries on); the
+-    same release failing `MAX_PREPARE_FAILURES` times is marked bad."""
+-    import hashlib
+-
+-    state = read_state(home)
+-    settled = update_outcome(home, state, manifest)
+-    if settled is not None:
+-        return settled
+-    version = str(manifest.get("version", ""))
+-    name = manifest.get("file")
+-    if not _plain_name(name):
+-        raise SetupFailed(f"the release names a file that is not a plain name: {name!r}")
+-    downloads = home / "downloads"
+-    downloads.mkdir(parents=True, exist_ok=True)
+-    unpacked = downloads / version
+-    try:
+-        data = fetch(str(name))
+-        if hashlib.sha256(data).hexdigest() != manifest.get("sha256"):
+-            raise SetupFailed(f"{name}: sha256 does not match the release — not installed")
+-        _unpack(data, unpacked)
+-        install_version(
+-            home,
+-            str(state["base_python"]),
+-            unpacked / "wheelhouse",
+-            version,
+-            run=run,
+-            carried_from=unpacked,
+-        )
+-    except BaseException:
+-        s = read_state(home)
+-        failures = dict(s.get("failures") or {})
+-        failures[version] = int(failures.get(version, 0)) + 1
+-        if failures[version] >= MAX_PREPARE_FAILURES:
+-            s["bad"] = [*(v for v in s.get("bad", []) if v != version), version]
+-            failures.pop(version)
+-        s["failures"] = failures
+-        write_state(home, s)
+-        raise
+-    finally:
+-        shutil.rmtree(unpacked, ignore_errors=True)
+-    s = read_state(home)
+-    s["pending"], s["pending_attempts"] = version, 0
+-    (s.get("failures") or {}).pop(version, None)
+-    write_state(home, s)
+-    return "ready"
+-
+-
+ # ── uninstall (D17) ─────────────────────────────────────────────────────────
+ 
+ 
+@@ -581,6 +509,10 @@ def zip_version(wheelhouse: Path) -> str:
+     return wheels[-1].name.split("-")[1]
+ 
+ 
++#: What D15's automatic update kept in state.json; D21 writes none of it.
++_AUTOMATIC_UPDATE_FIELDS = ("pending", "pending_attempts", "bad", "failures", "update")
++
++
+ class Installed(NamedTuple):
+     version: str
+     #: Why the desktop shortcut could not be made ("" when it was): everything
+@@ -593,23 +525,46 @@ def install(zip_dir: Path, home: Path, *, base_python: str, run: Run = run_quiet
+     the version from the zip, the folder layout, `state.json`, the fixed
+     launcher, and the desktop shortcut."""
+     version = zip_version(zip_dir / "wheelhouse")
+-    install_version(home, base_python, zip_dir / "wheelhouse", version, run=run)
++    # A running helper holds the lock — which version it runs, the lock does
++    # not say: so no folder already there is touched under it (D21, §3.7.5)
++    running = helper_running(home)
++    in_use = SetupFailed(
++        f"小幫手正在執行，{version} 已經裝著。請先在小幫手的視窗按「結束」，再重新安裝這一版。"
++    )
++    if running and (home / "versions" / version).exists():
++        raise in_use
++
++    def still_free() -> None:
++        # building takes about a minute: a helper started meanwhile (a
++        # shortcut) runs `current` — perhaps this very folder
++        if helper_running(home):
++            raise in_use
++
++    install_version(
++        home, base_python, zip_dir / "wheelhouse", version, run=run, before_replacing=still_free
++    )
+     old = read_state(home)
+     current = old.get("current")
++    previous = current if current and current != version else old.get("previous")
+     write_state(
+         home,
+         {
+-            # what was recorded stays (start_at_login: the Startup shortcut is
+-            # still there; the last update's outcome) — install sets the rest
+-            **old,
++            # what the person recorded stays (start_at_login: the Startup
++            # shortcut is still there); what only the automatic update wrote
++            # (D15) goes; install sets the rest
++            **{k: v for k, v in old.items() if k not in _AUTOMATIC_UPDATE_FIELDS},
+             "base_python": base_python,
+             "current": version,
+-            "previous": current if current and current != version else old.get("previous"),
+-            "pending": None,
+-            "pending_attempts": 0,
+-            "bad": [v for v in old.get("bad", []) if v != version],
++            "previous": previous,
+         },
+     )
++    # D21 (§3.7.5 step 2): only current and previous stay — tidied when no
++    # helper runs (with one running, the next install tidies); a folder that
++    # cannot go now (held) goes on a later install
++    if not running:
++        for folder in (home / "versions").iterdir():
++            if folder.name not in (version, previous):
++                shutil.rmtree(folder, ignore_errors=True)
+     for name in _CARRIED:
+         shutil.copy2(zip_dir / name, home / name)
+     try:
+diff --git a/ai-workspace-helper/src/ai_workspace_helper/updates.py b/ai-workspace-helper/src/ai_workspace_helper/updates.py
+index 83e6e680..3d1ae1db 100644
+--- a/ai-workspace-helper/src/ai_workspace_helper/updates.py
++++ b/ai-workspace-helper/src/ai_workspace_helper/updates.py
+@@ -1,124 +1,71 @@
+-"""The running helper keeps itself current (docs/plan-outside-helper.md
+-§3.7.4–§3.7.6).
+-
+-`tick` runs on the Playwright thread with the job loop: it reads the published
+-release and fetches the zip through the helper's own signed-in line (Playwright
+-is not thread-safe). Installing it — a venv and pip, about a minute — runs on a
+-background thread, so lookups go on meanwhile; the result waits for the next
+-start (`setup_core.prepare_update`). `status` is what the window shows.
++"""The running helper says when a newer version is out
++(docs/plan-outside-helper.md D21, §3.7.4, §3.7.6).
++
++It only tells. The helper's line to AI Workspace does not verify the
++certificate (D20), so whatever came down it could have been replaced on the
++way: the person downloads the zip in their own browser, which verifies, and
++runs install.pyw again (§3.7.5). `tick` runs on the Playwright thread with
++the job loop (Playwright is not thread-safe); `status` is what the window
++shows.
+ """
+ 
+ from __future__ import annotations
+ 
+-import logging
+-import threading
+ import time
+ from collections.abc import Callable
+-from pathlib import Path
+ from typing import Any
+ 
+-from . import setup_core
++from .setup_core import version_key
+ from .version import __version__
+ 
+-#: §3.7.4: at start, then this often.
++#: §3.7.4: on the first connected poll (and the first after a refusal), then
++#: this often.
+ CHECK_EVERY_S = 6 * 3600
+-#: A refused helper (§3.7.6) retries a failed update this much later, not on
+-#: every poll.
+-RETRY_AFTER_S = 600
+-
+-logger = logging.getLogger(__name__)
+-
+-
+-def _thread(work: Callable[[], None]) -> None:  # pragma: no cover — tests run it inline
+-    threading.Thread(target=work, name="ai-workspace-helper-update", daemon=True).start()
+ 
+ 
+ class Updater:
+     def __init__(
+         self,
+-        home: Path,
+         backend: Any,
+         *,
+         clock: Callable[[], float] = time.monotonic,
+-        spawn: Callable[[Callable[[], None]], None] = _thread,
+-        run: setup_core.Run = setup_core.run_quietly,
+         version: str = __version__,
+     ) -> None:
+-        self._home = home
+         self._backend = backend
+         self._clock = clock
+-        self._spawn = spawn
+-        self._run = run
+         self._version = version
+         self._next = 0.0
+-        self._retry_at = 0.0
+-        self._busy = False
+-        self._confirmed = False
+-        #: "" | "preparing" | "ready" | "failed: <why>" — for the window.
++        #: "" | "available: <version>" | "required: <version or nothing>".
+         self.status = ""
+ 
+-    def connected(self) -> None:
+-        """This version runs (the Controller calls it on the statuses that show
+-        that): if it is the version waiting to be tried, it has proven itself
+-        and becomes current (§3.7.5 step 3)."""
+-        if self._confirmed:
+-            return
+-        self._confirmed = True
+-        if setup_core.confirm(self._home, self._version):
+-            logger.info("confirmed %s as the current version", self._version)
+-
+-    def report(self) -> str:
+-        """The last update's outcome, for the check-in (§3.7.7)."""
+-        return str(setup_core.read_state(self._home).get("update") or "")
+-
+-    def tick(self, required: dict[str, Any] | None = None) -> None:
+-        """Check for a newer release when one is due — or, with `required`
+-        (the release a 426 named, §3.7.6), at once."""
+-        if self._busy:
++    def tick(self, required: Any = None) -> None:
++        """Read the published release when a check is due — or, with
++        `required` (what a 426 named, §3.7.6), say at once that this version
++        is refused and which release to install."""
++        if required is not None:
++            # it came down the unverified line (D20): only a release that is a
++            # dict names a version
++            named = required.get("version") if isinstance(required, dict) else None
++            self.status = f"required: {named or ''}"
++            # let back in (min_version lowered), it reads the release at once
++            # rather than saying 「下載新版」 until the next six-hour check
++            self._next = 0.0
+             return
+         now = self._clock()
+-        if required is None:
+-            if now < self._next:
+-                return
+-            self._next = now + CHECK_EVERY_S
+-            manifest = self._backend.manifest()
+-        else:
+-            if now < self._retry_at:
+-                return
+-            manifest = required
+-        if not manifest:
+-            return
+-        settled = setup_core.update_outcome(self._home, setup_core.read_state(self._home), manifest)
+-        if settled == "ready":
+-            self.status = "ready"
+-        elif settled == "bad" and required is not None:
+-            # refused, and the one release it may update to failed here
+-            # before: only a reinstall is left (§3.7.6)
+-            self.status = "failed: 這個新版先前在這台電腦裝不起來"
+-        if settled is not None:
++        if now < self._next:
+             return
++        self._next = now + CHECK_EVERY_S
+         try:
+-            data = self._backend.download(str(manifest["file"]))
+-        except Exception as exc:  # noqa: BLE001 — shown; the running version carries on
+-            self._failed(exc)
+-            return
+-        self._busy, self.status = True, "preparing"
+-
+-        def work() -> None:
+-            try:
+-                setup_core.prepare_update(self._home, manifest, lambda _f: data, run=self._run)
+-                self.status = "ready"
+-            except Exception as exc:  # noqa: BLE001 — shown; the running version carries on
+-                self._failed(exc)
+-            finally:
+-                self._busy = False
+-
+-        self._spawn(work)
+-
+-    def _failed(self, exc: BaseException) -> None:
+-        logger.warning("update failed: %s", exc)
+-        self.status = f"failed: {exc}"
+-        self._retry_at = self._clock() + RETRY_AFTER_S
+-
+-
+-__all__ = ["CHECK_EVERY_S", "RETRY_AFTER_S", "Updater"]
++            manifest = self._backend.manifest() or {}
++        except Exception:
++            # connected, this version is not refused: a failed read must not
++            # leave 「下載新版」 up until the next check
++            if self.status.startswith("required"):
++                self.status = ""
++            raise
++        version = str(manifest.get("version") or "")
++        newer = version_key(version) > version_key(self._version)
++        self.status = f"available: {version}" if newer else ""
++
++
++__all__ = ["CHECK_EVERY_S", "Updater"]
+diff --git a/ai-workspace-helper/src/ai_workspace_helper/worker.py b/ai-workspace-helper/src/ai_workspace_helper/worker.py
+index 8fc41c94..c38d3434 100644
+--- a/ai-workspace-helper/src/ai_workspace_helper/worker.py
++++ b/ai-workspace-helper/src/ai_workspace_helper/worker.py
+@@ -54,6 +54,9 @@ class Worker:
+         #: What the window shows under the status: the errand under way, or the
+         #: backend's reason for a refusal.
+         self.detail = ""
++        #: The last failure written to helper.log: each is logged when it
++        #: begins, not on every poll it lasts.
++        self._logged: tuple[str, str] | None = None
+         #: The errand under way (its job `kind`) and the site it said it is on.
+         self.kind = ""
+         self.site = ""
+@@ -68,6 +71,7 @@ class Worker:
+             # Not checking in: the card falls back to the manual flow (D7)
+             # rather than offering a 「查」 nobody will act on.
+             self.status, self.detail = "paused", ""
++            self._logged = None
+             return
+         try:
+             self._backend.heartbeat(**self._info())
+@@ -83,6 +87,15 @@ class Worker:
+             self.status, self.detail = "unreachable", str(exc)
+         except BackendError as exc:
+             self.status, self.detail = "error", str(exc)
++        self._log_failure()
++
++    def _log_failure(self) -> None:
++        # the window's second line is gone by the time someone reads the log
++        # for IT: 「連不上」 over an empty 記錄檔 hid a certificate (D20)
++        failed = (self.status, self.detail) if self.status in ("unreachable", "error") else None
++        if failed is not None and failed != self._logged:
++            logger.warning("%s: %s", *failed)
++        self._logged = failed
+ 
+     def _changed(self) -> None:
+         if self.on_change is not None:
+diff --git a/docs/ai-workspace-helper.md b/docs/ai-workspace-helper.md
+index 87704db8..a4585103 100644
+--- a/docs/ai-workspace-helper.md
++++ b/docs/ai-workspace-helper.md
+@@ -37,11 +37,15 @@ Markdown 交回卡片——使用者只要在搜尋時按一下「查」。設
+ 5. 它會開一個**自己的** Chrome 視窗(和你平常的 Chrome 分開,登入資料也分開)。在那裡照平常方式登入 AI Workspace
+    一次,小視窗變成「已連線，等待查詢」。之後登入過期時,它會自己把那個 Chrome 視窗叫到前面、開登入頁(開著的時候過期,小視窗寫「登入已過期」;重開時已經過期,寫「請在小幫手開的 Chrome 視窗登入」)。
+ 
++裝好之後,**下載的 zip 和解壓縮出來的資料夾都可以刪掉**:小幫手本身在 `%LOCALAPPDATA%\AIWorkspaceHelper\`(別刪它),
++桌面的「AI Workspace Helper」是指向它的捷徑。不要把 `launch.pyw` 單獨搬到別處——它要和旁邊的 `setup_core.py` 在一起;
++捷徑也寫死了安裝時確認的 Python,比直接雙擊 `.pyw` 可靠。要預檢或重裝時,再從「小幫手」頁下載一次。
++
+ 小視窗有三個分頁:
+ 
+ - **狀態**:現在在做什麼——「已連線，等待查詢」「正在搜尋（Google）：…」「正在開啟：https://…」,和按鈕:
+   「登入」(手動叫出登入頁)、「暫停/繼續」、「結束」、「開機時自動啟動」、「重設登入」(登入一直不成功時:
+-  把它的 Chrome 設定檔移到旁邊、重新開一個再登入)、「解除安裝」;新版備好時多一顆「立即更新」。
++  把它的 Chrome 設定檔移到旁邊、重新開一個再登入)、「解除安裝」;有新版、或這一版被停用時,多一行說明和「開啟下載頁」。
+ - **查詢紀錄**:最近 200 筆——時間、類型(搜尋/開啟網頁)、內容、結果(已送給 AI/沒查到：原因)。
+   只存在這台電腦(`%LOCALAPPDATA%\AIWorkspaceHelper\history.jsonl`),不送回 AI Workspace;解除安裝時一起刪掉。
+ - **記錄檔**:`helper.log` 的最後幾百行,和「開啟記錄資料夾」。
+@@ -59,13 +63,17 @@ Markdown 交回卡片——使用者只要在搜尋時按一下「查」。設
+ 
+ ## 使用者:更新
+ 
+-不用自己做。小幫手開啟時與之後每 6 小時檢查一次新版,有就下載(這幾秒不接新工作)、在背景裝在另一個資料夾、試跑——**不碰正在用的這一版**。
+-好了小視窗寫「新版已下載，下次開啟時套用」,下次開啟就換上。
++小幫手**不會自己下載或安裝新版**(它和 AI Workspace 之間不驗憑證,見「IT 要放行的」;plan D21)。啟動後第一次連上 AI Workspace 時(以及被停用後恢復連線時)、
++之後每 6 小時它看一次有沒有新版,有的話小視窗多一行「有新版 X：請到「小幫手」頁下載，重新雙擊 install.pyw」和「**開啟下載頁**」按鈕——
++按下去用你的預設瀏覽器開「小幫手」頁。下載、解壓縮、雙擊 `install.pyw`:
++
++- 新版裝在另一個資料夾、先試跑,**不碰正在用的這一版**;試跑失敗就留在舊版。
++- 小幫手正開著時,它會問「要換成新版重新開啟嗎？」——按「是」,舊的那個會自己結束、換成新版。
++  從 0.1.0 換上來時,舊版看不懂這個要求:等 20 秒後它會請你在舊視窗按「結束」,再開小幫手就是新版。
++- 小幫手正開著時重裝**已經裝過的版本**(例如同一版修復):它會請你先在小幫手的視窗按「結束」再裝。
++- 只留現在這版和上一版的資料夾(小幫手開著時先不清,下次沒開著時安裝再清)。
+ 
+-- 新版開不起來:連續 3 次開啟都沒跑起來(開不了 Chrome、連不到 AI Workspace、或後端拒絕它的請求),啟動檔自動退回舊版,
+-  這個新版不再試(等下一版)。只是沒登入或暫停著不算,不會因此退回。
+-- 管理員停用了你這一版:小視窗寫「這個版本已停用，需要更新」,同時馬上準備新版,好了按「**立即更新**」。
+-  這段時間卡片照舊讓你自己查。更新失敗時,回「小幫手」頁重新下載、執行 `install.pyw`。
++管理員停用了你這一版:小視窗寫「這個版本已停用，需要更新」,一樣有「開啟下載頁」,不再接工作;這段時間卡片照舊讓你自己查。
+ 
+ ## 使用者:解除安裝
+ 
+@@ -81,7 +89,7 @@ Markdown 交回卡片——使用者只要在搜尋時按一下「查」。設
+ | 小視窗寫 | 是什麼 | 怎麼辦 |
+ |---|---|---|
+ | 請在小幫手開的 Chrome 視窗登入／登入已過期 | 還沒登入過,或部署的登入過期、被導到 SSO 頁 | 在它的 Chrome 視窗登入;登入前交給它的工作會等著,不會丟 |
+-| 連不上 AI Workspace，會自動重試 | 網址錯、或公司網路不通 | 檢查第一次填的網址(存在 `%LOCALAPPDATA%\AIWorkspaceHelper\settings.json`) |
++| 連不上 AI Workspace，會自動重試 | 網址錯、或公司網路不通;原因寫在狀態的第二行(0.1.1 起也記在記錄檔) | 檢查第一次填的網址(存在 `%LOCALAPPDATA%\AIWorkspaceHelper\settings.json`)。第二行是 `unable to verify the first certificate` 之類的憑證錯誤:你的小幫手是 0.1.0,請從「小幫手」頁下載新版、重新雙擊 `install.pyw` |
+ | 開不了 Chrome | 沒裝 Chrome、Chrome 剛更新超過小幫手支援的版本、Chrome 被政策擋下自動化、或上一個小幫手還沒關完 | 更新小幫手;按「重設登入」;見下面「IT 要放行的」;或等一下再開 |
+ | 這個版本已停用 | 管理員調高了最低版本 | 見「更新」 |
+ 
+@@ -108,11 +116,13 @@ python3 scripts/pack_ai_workspace_helper.py --version 0.1.0 [--min-version 0.1.0
+ 
+ 小幫手帶的是 Playwright 1.63.0(驅動已安裝的 Chrome,不另外下載瀏覽器)。這個 repo 的測試環境因為 Debian 11 的
+ 瀏覽器下載限制停在 1.49,所以**驅動瀏覽器的測試跑的是 1.49、發出去的是 1.63**——1.49 需要的 greenlet 沒有 Python 3.14
+-的 Windows 版,無法涵蓋 3.14。1.63 這一版在 Linux 上驗過安裝、換版與試跑(`--self-test`:Playwright 載得起來、
++的 Windows 版,無法涵蓋 3.14。1.63 這一版在 Linux 上驗過安裝、在舊版上重裝新版與試跑(`--self-test`:Playwright 載得起來、
+ 它的 driver 在):`scripts/check_ai_workspace_helper.py --update-wheels <1.63 的 Linux wheel>`。Windows 上的實際驗證由人
+ 在公司筆電上做一次(plan D14)。
+ 
+-小幫手每次報到會回報它的版本、Chrome、Playwright、Python 版本與上一次更新的結果,存在後端(`_AiWorkspaceHelperPresence`)。
++小幫手每次報到會回報它的版本、Chrome、Playwright、Python 版本,存在後端(`_AiWorkspaceHelperPresence`)。
++小幫手**不會自己更新**(plan D21):發布新版後,使用者的小視窗會在啟動後第一次連上 AI Workspace 時(以及被停用後恢復連線時)、或之後 6 小時內顯示「有新版」,由使用者自己下載重裝;
++要強迫升級就改 `min_version`,低於它的小幫手停止接工作、顯示「這個版本已停用」。
+ 
+ ## IT 要放行的
+ 
+@@ -131,4 +141,10 @@ python3 scripts/pack_ai_workspace_helper.py --version 0.1.0 [--min-version 0.1.0
+ - **Chrome 政策**:小幫手透過 Chrome 的自動化介面驅動它;公司若用政策停用 Chrome 的遠端偵錯/自動化
+   (`RemoteDebuggingAllowed` = 0,[Chrome 政策](https://chromeenterprise.google/policies/#RemoteDebuggingAllowed)),小幫手開不了 Chrome
+   ([Playwright: browsers](https://playwright.dev/python/docs/browsers))。
+-- **網路**:小幫手只連 AI Workspace(工作、更新都從那裡拿)與它替你開的網頁;更新檔不經瀏覽器下載,不會被標成「從網路下載」。
++- **憑證**:小幫手跟 AI Workspace 講話(報到、領工作、交結果、讀版本資訊)的請求不是 Chrome 送的,是 Playwright 自帶的 Node
++  送的;Node 不讀 Windows 的憑證庫([Node: --use-system-ca](https://nodejs.org/api/cli.html#--use-system-ca)),也不會去補伺服器沒送的中繼憑證,所以 Chrome 驗得過的
++  公司憑證它驗不過。小幫手對**這些請求**一律不驗憑證、沒有開關(依這個部署的慣例 verify=false,[Playwright: fetch 的
++  `ignore_https_errors`](https://playwright.dev/python/docs/api/class-apirequestcontext#api-request-context-fetch));它替你開的外面網頁仍由 Chrome 照常驗。**代價**:能在公司網路上攔截這條連線的人,看得到登入 cookie、可以假造工作與版本資訊。
++  **更新不走這條連線**(plan D21):小幫手只通知有新版,zip 由你的瀏覽器(會驗憑證)下載、你自己執行 `install.pyw`,
++  所以假造的版本資訊最多把你帶去下載頁、或讓小幫手停止接工作,不會讓它執行任何東西。
++- **網路**:小幫手只連 AI Workspace(工作與版本資訊從那裡拿)與它替你開的網頁;新版的 zip 由你的瀏覽器下載,和第一次安裝一樣。
+diff --git a/docs/design-history.md b/docs/design-history.md
+index 8fb7822b..0e5f3e3e 100644
+--- a/docs/design-history.md
++++ b/docs/design-history.md
+@@ -38,6 +38,7 @@
+ | [plan-pptx-preview.md](plan-pptx-preview.md) | workspace 裡的簡報(pptx/ppt/odp)在沙盒轉 PDF、以內容 hash 快取在沙盒旁,用 PDF 檢視器看 |
+ | [plan-outside-lookup.md](plan-outside-lookup.md) | 斷網部署：AI 出「請幫我查」卡片，使用者在瀏覽器查網路或開網址，貼回結果存成檔案 |
+ | [plan-outside-helper.md](plan-outside-helper.md) | 小幫手：使用者電腦上的 Python 小程式用 Playwright 開 Chrome 代為查網路，搜尋與 AI 自己寫的網址出去前人點頭、先前查到的連結直接開，抓回的整頁（像全選貼上）直接送給 AI；沒連線退回手動流程 |
++| [plan-tool-usage-stats.md](plan-tool-usage-stats.md) | 工具使用統計：管理者在 Diagnostics 看 AI 用了哪些工具、誰用、在哪個場合、失敗幾次、平均多久 |
+ | [plan-tools-picker-groups.md](plan-tools-picker-groups.md) | 工具挑選器依套件摺疊、內建工具一組、每組三態 |
+ | [plan-user-env-exec-injection.md](plan-user-env-exec-injection.md) | 使用者環境變數改由 exec 注入（取代 `.userenv` 檔） |
+ | [plan-view-plugins-pr5-finish.md](plan-view-plugins-pr5-finish.md) | #847 / #848 在 #855 分支上的收尾（PR5） |
+diff --git a/docs/migrations.md b/docs/migrations.md
+index 0471b467..d68c63f6 100644
+--- a/docs/migrations.md
++++ b/docs/migrations.md
+@@ -2211,6 +2211,45 @@ agent 步驟裡 AI 的呼叫、WUI 的工具呼叫、view plugin、圖表重畫
+   按下去不用再經手,`lookups/` 出現存檔、AI 接著讀。這一步是 Windows 上唯一的驗證(plan D14)。
+ 
+ 
++### 2026-10-14 · 7bd8bbd8 · #933 小幫手連得上公司憑證的 AI Workspace、更新改成只通知；解壓縮資料夾裡的 launch.pyw 不再說沒有安裝 {#pr-933}
++
++**設定** — 無。
++
++**資料** — 無。
++
++**k8s · CI 側** — 後端沒有改,照常重 build、部署。**要做的是重新發布小幫手**(`rollout 後`,隨時):
++
++1. 在 dev server 打包新版:`python3 scripts/pack_ai_workspace_helper.py --version 0.1.1`,把 `dist/ai-workspace-helper/` 的兩個檔
++   換進 `server.ai_workspace_helper_dir`(不用重新部署)。為什麼:修正在小幫手那邊,不在後端。
++   沒做的症狀:「小幫手」頁還是 0.1.0,下一步重裝的人裝回同一個連不上的版本。
++2. 第 1 步之後:**小視窗第二行是憑證錯誤(`unable to verify the first certificate`)的 0.1.0 要手動重裝**——從「小幫手」頁
++   下載 0.1.1、解壓縮、雙擊 `install.pyw`。為什麼:0.1.0 檢查新版和下載新版走的也是那條驗不過的連線,這種 0.1.0 自己更新不了;
++   連得上的 0.1.0 會照它自己的舊做法在背景準備好 0.1.1(開啟時或之後每 6 小時看一次),下次開啟時換上,0.1.1 一啟動就接手。沒重裝的症狀:小視窗一直
++   「連不上 AI Workspace，會自動重試」,卡片一直「小幫手未連線」。重裝時舊的 0.1.0 還開著:它看不懂「請結束」,`install.pyw`
++   等 20 秒後會請使用者在舊視窗按「結束」。
++3. **之後每一版都一樣要使用者自己重裝**(沒有自動更新了):發布新版後,使用者的小視窗在啟動後第一次連上 AI Workspace 時(以及被停用後恢復連線時)、或之後 6 小時內
++   顯示「有新版 X」與「開啟下載頁」;要強迫升級就改 `ai-workspace-helper.json` 的 `min_version`(低於它的小幫手停止接工作)。
++   為什麼:小幫手對 AI Workspace 不驗憑證,更新若走那條連線,能攔截它的人就能讓小幫手執行別的程式,所以下載交給會驗憑證的瀏覽器、
++   安裝交給人。沒做(只放檔、不提醒)的症狀:舊版照常跑,只是一直顯示「有新版」。
++
++**行為改變,沒有開關**(plan D20、D21):
++
++- 小幫手對 AI Workspace 的請求(報到、領工作、交結果、讀版本資訊)**不驗憑證**——那些請求由 Playwright 自帶的 Node 送出,它不讀
++  Windows 憑證庫,Chrome 驗得過的公司憑證它驗不過;依這個部署的慣例 verify=false。它替使用者開的外面網頁仍由 Chrome 照常驗。
++  **代價**:能在公司網路上攔截這條連線的人,看得到登入 cookie、可以假造工作與版本資訊。
++- 所以**小幫手不再自己下載、安裝、換版**:有新版或這一版被停用時,小視窗只顯示一行說明和「開啟下載頁」(用使用者的預設瀏覽器
++  開「小幫手」頁,下載由瀏覽器驗憑證),使用者自己重跑 `install.pyw`;它會把正在跑的小幫手關掉、換成新版。假造的版本資訊最多
++  把人帶去下載頁或讓小幫手停止接工作,不會讓它執行任何東西。心跳不再送「上一次更新結果」(後端欄位留著,照 §3.7.3 只加不刪)。
++- 連不上/被拒的原因(不含 cookie)現在會寫進 `helper.log`;在解壓縮資料夾雙擊 `launch.pyw` 會開已安裝的小幫手。
++
++**確認做完**(`rollout 後`):
++
++- 「小幫手」頁顯示版本 0.1.1。
++- 一台重裝過的 Windows 電腦:小視窗「已連線，等待查詢」、頁面「小幫手已連線」,卡片出現「查」。
++- 在解壓縮資料夾雙擊 `launch.pyw`:開的是已安裝的小幫手(已開著就把它叫到前面),不再說沒有安裝。
++- 之後發布下一版(例如 0.1.2)時:開著的小幫手顯示「有新版 0.1.2」與「開啟下載頁」,按下去開的是「小幫手」頁;
++  開著小幫手時重跑 0.1.2 的 `install.pyw`、按「是」,舊視窗關掉、新版開起來(視窗標題 0.1.2)。
++
+ ## 附錄 A：資料回填的機制（specstar 為什麼不會自己補）
+ 
+ 有些升版會改變「資料在資料庫裡的儲存形狀」，但 **specstar 只在寫入當下**把一列的 `indexed_data`
+diff --git a/docs/plan-outside-helper.md b/docs/plan-outside-helper.md
+index 30a94643..c78da029 100644
+--- a/docs/plan-outside-helper.md
++++ b/docs/plan-outside-helper.md
+@@ -36,11 +36,13 @@
+ | D4 | **搜尋**送出去前,人在卡片上點頭(看得到查詢、可以改)按「查」。抓回來的內容**都直接送給 AI**,不再經人 | 〔user〕先選 B(兩個點),後改「直接送」——每頁只回一頁(D10),第二個點只剩「按送出」的搬運 |
+ | D13 | **怎麼開**:雙擊桌面捷徑 `AI Workspace Helper`(由安裝建立,D16;檔名用英文),開一個小視窗(Python 內建 tkinter),三個分頁:**狀態**(已連線/正在搜尋（Google）/正在開啟/請登入/登入已過期)與「登入」「暫停/繼續」「結束」、可勾「開機時自動啟動」(在 Windows「啟動」資料夾放捷徑);**查詢紀錄**(最近 200 筆,只存本機 `history.jsonl`);**記錄檔**(`helper.log` 尾端、開啟記錄資料夾)。關掉視窗 = 關掉小幫手 | 〔user〕「你如果能安裝好我也是可以」;呼應最初「一個簡單的gui代勞」;2026-10-13 跑過真視窗後〔user〕「Wording有點醜」「在那邊應該要有搜尋紀錄和log」 |
+ | D14 | **打包在 dev server**(連得到 PyPI):`pip download --platform win_amd64 --only-binary=:all:` 抓 Windows 用的套件(Playwright 本身不分 Python 版本;`greenlet` 依版本,一次放 CPython 3.10–3.14 各一份〔施工〕),加上小幫手自己的 wheel 和 `.pyw`,組成離線安裝包;放在 **AI Workspace 網頁**的「小幫手」頁下載。沒有 Windows CI——Windows 上的驗證是 user 在公司筆電裝起來跑一次 | 〔user〕「只能是我在dev server打包 或是在公司筆電打包」「可以 甚至可以在ai workspace網頁下載」 |
+-| D15 | **更新**:一般更新由小幫手在背景下載、裝好,**下次開啟時生效**,使用者不用做任何事;只有後端說「低於最低可用版本」時,才跳視窗要求立刻更新 | 〔user〕「要放給使用者的東西 要有好的update流程」;選「一般自動、低於最低版本才強制」 |
++| D15 | **〔被 D21 取代〕更新**:一般更新由小幫手在背景下載、裝好,**下次開啟時生效**,使用者不用做任何事;只有後端說「低於最低可用版本」時,才跳視窗要求立刻更新 | 〔user〕「要放給使用者的東西 要有好的update流程」;選「一般自動、低於最低版本才強制」 |
+ | D16 | **安裝(每台筆電一次)**:從 AI Workspace 網頁下載 zip、解壓縮、雙擊 `install.pyw`(只用 Python 內建功能;檔名一律英文)。它先顯示「將使用 Python 3.x(完整路徑)」讓人確認,建好資料夾、裝好套件,在桌面放捷徑;**捷徑寫死那個 `pythonw.exe` 的絕對路徑**,之後不靠副檔名關聯。系統挑錯 Python 時,取消、改用 `py -3.x install.pyw`。不處理「Python 被升級」——沒有人會自動升級 Python,真的換了就重跑一次安裝 | 〔user〕「什麼叫執行安裝指令?我是在dev server打包的耶」「可以吧 簡單即可」「沒有人會自動升級python」「你有指定執行檔路徑?」 |
+ | D17 | **解除安裝**:小視窗裡的「解除安裝」按鈕,確認後刪掉小幫手留下的三樣東西(`%LOCALAPPDATA%\AIWorkspaceHelper\` 整個資料夾、桌面與啟動資料夾的 `AI Workspace Helper.lnk`);按鈕不能用時,手動刪掉這三樣就等於解除安裝。不碰登錄檔、不裝系統資料夾,所以沒有別的痕跡;後端不用做任何事(沒有心跳,卡片自動退回手動,D7) | 〔user〕「怎麼解安裝」「要」 |
+ | D18 | **名稱**:app 叫「AI Workspace」;這支程式的正式名稱是「AI Workspace Helper」——桌面捷徑、視窗與對話框標題、安裝資料夾 `%LOCALAPPDATA%\AIWorkspaceHelper\`、下載的 `ai-workspace-helper-<版本>.zip`;視窗裡和網頁上自稱「小幫手」(例如「小幫手已連線」),不再叫「外網小幫手」。程式碼裡叫 `ai-workspace-helper` / `ai_workspace_helper`:`ai-workspace-helper/` 資料夾(Python 套件 `ai_workspace_helper`)、`/api/ai-workspace-helper/*` 路由、`X-AI-Workspace-Helper-*` header、`server.ai_workspace_helper_dir`、`ai-workspace-helper.json`。卡片的工作(`OutsideJob`、`/outside-jobs`)屬於卡片,不改名;本計劃檔名不改 | 〔user〕「名稱改叫ai workspace helper」「中文名也要改啊」「正式名稱AI workspace」(我先讀成程式的名字,其實是 app 的)「視窗內自稱小幫手」「outside-helper.json也改掉」「AI工作區 改為AI Workspace」「AI Workspace.lnk 不是應該叫做ooxx helper?」 |
+ | D19 | **不需要系統管理員權限,但要被允許執行**:安裝只寫 `%LOCALAPPDATA%\AIWorkspaceHelper\` 與自己的捷徑(不跑安裝程式、不寫 Program Files、不改登錄檔);公司電腦可能擋的是**執行**——使用者資料夾裡的程式(AppLocker)、zip 裡的 `node.exe`(防毒/代理)、PowerShell 受限(只影響捷徑)、Chrome 自動化政策。zip 裡附 **`precheck.pyw`**:不安裝任何東西,在暫存資料夾把每一樣真的試一次、列表、可複製給 IT,結束就刪掉。捷徑建不起來不再算安裝失敗(安裝結束時說要雙擊哪個檔);捷徑的 PowerShell 遇到任何錯誤都算失敗(`$ErrorActionPreference = 'Stop'`,否則沒建出來也會回 0) | 〔user〕「請問他會安裝嗎?我想我們沒有安裝權限」「可以 你就一起寫到docs裡面」 |
++| D20 | **小幫手對 AI Workspace 的請求不驗憑證**:那些請求(報到、領工作、交結果、下載更新)由 Playwright 自帶的 Node 送出,不是 Chrome——Node 不讀 Windows 憑證庫、不補伺服器沒送的中繼憑證,於是 Chrome 登入得了的部署,小幫手每次報到都是「unable to verify the first certificate」→「連不上」、卡片「小幫手未連線」(user 的公司筆電,0.1.0)。依這個部署的慣例(user:「我們都是verify=false」)不驗,沒有開關,但**只對這些請求**(`APIRequestContext.fetch/get` 的 `ignore_https_errors`),差事開的網頁仍由 Chrome 驗。代價:更新檔的 sha256 是跟同一條不驗憑證的連線拿到的版本資訊比對,只擋下載損壞、擋不了攔截者換掉更新檔——能在公司網路上攔截這條連線的人,可以讓小幫手裝上並執行他的程式,也看得到登入 cookie(已告知 user)。Playwright 的錯誤訊息附的「Call log」列出每個 header(含登入 cookie),只留第一行再交給視窗與記錄檔。連不上/被拒的原因改為開始時寫進 `helper.log`(原本只在視窗第二行)。另:zip 裡那份 `launch.pyw` 在解壓縮資料夾被雙擊時,改去找已安裝的資料夾(原本說「沒有安裝」);兩邊都沒裝時留在自己的資料夾,不在 `%LOCALAPPDATA%` 留下東西 | 〔user〕「看到 unable to verify the first certificate」「我們都是verify=false」「發現安裝後有開起來 但是按launch仍然說沒有安裝」 |
++| D21 | **更新只通知、不自動裝**(取代 D15):小幫手啟動後第一次連上 AI Workspace 時(以及被停用後恢復連線時)、之後每 6 小時讀版本資訊:有新版時小視窗顯示「有新版 X」,被要求更新(426)時顯示「這個版本已停用」,兩者都附「開啟下載頁」按鈕;使用者在**一般瀏覽器**(會驗憑證)下載 zip、重新雙擊 `install.pyw`,它把正在跑的小幫手關掉、換成新版。小幫手不再自己下載、安裝、換版、退回。為什麼:D20 讓小幫手對 AI Workspace 不驗憑證,自動更新走同一條連線,能攔截它的人就能讓小幫手裝上並執行他的程式(sha256 也是從那條連線來的,擋不住);改成只通知後,偽造的通知最多把人帶去下載頁或讓小幫手停止接工作,下載本身由瀏覽器驗 | 〔user〕(兩案:A 照常自動、文件寫明風險;B 只提示、自己從網頁下載重跑 `install.pyw`)「B」;「我覺得先討論完 開發玩 再繼續ci」「寫plan」 |
+ | D12 | **開網址**:網址若出現在**這個聊天先前任何一次查回來的內容**裡,直接開;否則和搜尋一樣,先在卡片上點頭 | 〔user〕「純網址可以直接開 搜尋要先確認」,後收緊為「網址出現在上一次查詢中的話就可以直接開」「查過都算」——外面網頁上的連結是外面帶回來的,AI 自己寫的網址才可能夾帶內部字詞 |
+ | D5 | 小幫手主動向後端領工作(網頁不能控制它);**Python 直接連我們的後端** | 〔user〕選 1 |
+ | D6 | 身分沿用 app 現有的登入(「要登入才能用」那道門),不另做金鑰 | 〔user〕「我們已經有卡(限制)登入了」 |
+@@ -142,18 +144,18 @@ AI 呼叫 ask_outside ──► 卡片(D7:沒連線 = 今天的手動流程)
+   `pip download --platform win_amd64 --implementation cp --python-version 3.X --abi cp3X --only-binary=:all:`
+   進同一個 wheelhouse;版本用 `==` 釘死,`--no-index` 才不會撿到資料夾裡留下的舊 wheel。
+ 
+-### 3.7 更新(D15)
++### 3.7 更新(D15 → D21)
+ 
+ 研究過的坑與對策(來源附在每條;user 要求「去查一下有什麼 pitfall」):
+ 
+ | 坑 | 使用者看到的 | 對策 |
+ |---|---|---|
+-| 小幫手與後端版本不一致(我們滾動升級後端) | 舊小幫手問錯路由、看不懂新欄位,默默不工作 | 每個請求帶小幫手版本與協定號;後端回「最低可用版本」,低於它回明確的「請更新」(426 + 下載位置),小幫手跳視窗——不當成網路錯誤。後端 API 只加不刪,欄位要等最低版本越過所有讀它的舊版才拿掉。同 Sparkle 的 critical update / minimum version([Sparkle](https://sparkle-project.org/documentation/publishing/)) |
++| 小幫手與後端版本不一致(我們滾動升級後端) | 舊小幫手問錯路由、看不懂新欄位,默默不工作 | 每個請求帶小幫手版本與協定號;後端回「最低可用版本」,低於它回明確的「請更新」(426 + 下載位置),小視窗顯示「這個版本已停用」(D21)——不當成網路錯誤。後端 API 只加不刪,欄位要等最低版本越過所有讀它的舊版才拿掉。同 Sparkle 的 critical update / minimum version([Sparkle](https://sparkle-project.org/documentation/publishing/)) |
+ | 公司 Chrome 自動更新,Playwright 跟不上 | 啟動逾時、Chrome 一開就關 | Playwright 每版只保證當時那一版 Chrome([release notes](https://playwright.dev/python/docs/release-notes));企業政策也可能擋自動化([browsers](https://playwright.dev/python/docs/browsers))。心跳回報 Chrome / Playwright / Python 版本,看得到誰快出事;Chrome 超過測過的版本就出新版小幫手;啟動失敗顯示「Chrome 已更新,請更新小幫手」而不是錯誤堆疊 |
+ | Windows 不能覆蓋正在跑的檔案 | `pip install --upgrade` 失敗(WinError 32);更新一半壞掉 | **不原地更新**:每個版本裝在自己的資料夾,下次啟動才換,換不成就留舊版——Chrome 與 VS Code 的做法([Chromium upgrade_util_win](https://chromium.googlesource.com/chromium/src/+/lkgr/chrome/browser/first_run/upgrade_util_win.h)) |
+ | 一台電腦好幾個 Python | 「裝好了,雙擊卻找不到模組」 | `pip`、`py`、`.pyw` 可能各找到不同 Python([Python on Windows](https://docs.python.org/3/using/windows.html));venv 綁死建它的 Python([venv](https://docs.python.org/3/library/venv.html))。所以安裝時讓人確認用哪個 Python,捷徑寫死它的絕對路徑(D16),之後不靠副檔名關聯;每版一個 venv,都由這個 Python 建 |
+ | 開機捷徑指著舊路徑 | 開機沒啟動,或啟動舊版 | 捷徑永遠指向「安裝時那個 `pythonw.exe` + 同一個固定的 `launch.pyw`」,不指向版本資料夾 |
+-| 公司防毒擋 Playwright 的 `node.exe`;下載的 zip 被標記 | 「Could not connect to the playwright process」;第一次雙擊跳警告 | 企業防毒擋過 Playwright 的執行檔([playwright-java#1016](https://github.com/microsoft/playwright-java/issues/1016));請 IT 依資料夾或簽章放行一次。之後的更新由小幫手從內網直接拿,不經瀏覽器下載,沒有「從網路下載」的標記 |
++| 公司防毒擋 Playwright 的 `node.exe`;下載的 zip 被標記 | 「Could not connect to the playwright process」;第一次雙擊跳警告 | 企業防毒擋過 Playwright 的執行檔([playwright-java#1016](https://github.com/microsoft/playwright-java/issues/1016));請 IT 依資料夾或簽章放行一次。〔D21〕更新也是從瀏覽器下載 zip,和第一次安裝一樣會帶「從網路下載」的標記 |
+ | 同一個 Chrome 設定檔不能同時開兩個;Chrome 降版 | 開機自動啟動 + 又雙擊一次,第二個失敗;「設定檔來自較新版本」 | 一次只能有一個小幫手([BrowserType](https://playwright.dev/python/docs/api/class-browsertype));設定檔放在版本資料夾外面,更新不會登出;壞掉時有「重設登入」 |
+ 
+ 機制〔施工〕(檔名一律英文——〔user〕「檔名都不要用中文」):
+@@ -163,16 +165,16 @@ AI 呼叫 ask_outside ──► 卡片(D7:沒連線 = 今天的手動流程)
+ ```
+ %LOCALAPPDATA%\AIWorkspaceHelper\
+   launch.pyw              固定的啟動檔(只用標準函式庫);捷徑都指向它
+-  state.json              現在用哪一版、上一版、待換的新版、壞掉的版本、安裝時的 Python 路徑
++  state.json              現在用哪一版、上一版、安裝時的 Python 路徑、開機自動啟動的勾
+   helper.lock             單一實例鎖
+   settings.json           第一次啟動時問的 app 網址(小幫手自己寫;state.json 歸啟動檔管,兩個分開)
+-  setup_core.py           launch.pyw 用的同一份安裝/換版/退回邏輯(標準函式庫)
++  setup_core.py           launch.pyw 與 install.pyw 用的同一份安裝/啟動邏輯(標準函式庫)
+   show.request            已經有一個在跑時,啟動檔留下它,那一個看到就把視窗叫到前面
++  quit.request            重裝新版時 install.pyw 留下它,正在跑的那一個看到就結束(D21)
+   versions\
+     1.4.0\venv\           每個版本一個 venv(由安裝時那個 Python 建)
+     1.5.0\venv\
+-    1.6.0.partial\        下載、安裝到一半的新版(還沒驗過,啟動檔不會用它)
+-  downloads\              下載回來的 zip(驗過 sha256 才解壓)
++    1.6.0.partial\        安裝到一半的新版(還沒驗過,啟動檔不會用它)
+   profile\                小幫手自己的 Chrome 設定檔(放在版本外面,更新不會登出)
+   logs\helper.log         記錄(輪替保留幾個檔),出事時請使用者傳這個
+   history.jsonl           查詢紀錄(最近 200 筆,只在這台電腦;小視窗「查詢紀錄」分頁)
+@@ -185,20 +187,15 @@ AI 呼叫 ask_outside ──► 卡片(D7:沒連線 = 今天的手動流程)
+ ```json
+ {
+   "base_python": "C:\\...\\Python312\\pythonw.exe",
+-  "current": "1.5.0",
+-  "previous": "1.4.0",
+-  "pending": "1.6.0",
+-  "pending_attempts": 0,
+-  "bad": ["1.5.1"],
+-  "failures": {"1.6.1": 1},
+-  "update": "1.5.1 起不來,已退回 1.5.0",
++  "current": "1.6.0",
++  "previous": "1.5.0",
+   "start_at_login": true
+ }
+ ```
+ 
+-〔施工〕`failures` 是背景準備新版失敗的次數(§3.7.4 第 5 點,到 3 次進 `bad`);`update` 是上一次更新的結果,
+-心跳時回報(§3.7.7);`start_at_login` 記小視窗那個勾。全部的讀寫邏輯在 `ai_workspace_helper/setup_core.py`(只用
+-標準函式庫,同一個檔在套件裡、zip 根目錄、`launch.pyw` 旁邊各一份:打包放進 zip、安裝與新版確認時放到 `launch.pyw` 旁,都是複製,不另外改)。
++〔D21〕`previous` 是重裝前的 `current`;有小幫手在跑時,安裝不刪任何版本資料夾(§3.7.5 第 1、2 點);`start_at_login` 記小視窗那個勾。
++D15 時代的 `pending`、`pending_attempts`、`bad`、`failures`、`update` 不再寫;啟動檔不讀(只有 `take_over` 讀 `pending`,用來接手 0.1.0 下載的版本,§3.7.5 第 5 點),接手或下次安裝時清掉。全部的讀寫邏輯在 `ai_workspace_helper/setup_core.py`(只用
++標準函式庫,同一個檔在套件裡、zip 根目錄、`launch.pyw` 旁邊各一份:打包放進 zip、安裝時(以及 `take_over` 接手時)放到 `launch.pyw` 旁,都是複製,不另外改)。
+ 
+ #### 3.7.2 發布新版(dev server → 後端)
+ 
+@@ -219,42 +216,57 @@ AI 呼叫 ask_outside ──► 卡片(D7:沒連線 = 今天的手動流程)
+   - 或版本低於 `ai-workspace-helper.json` 的 `min_version`——運營方要強迫升級時調高它。
+ - API 只加不刪;小幫手看不懂的欄位一律忽略。要拿掉欄位,先調高最低協定號,讓讀它的舊版都被擋下、升級。
+ 
+-#### 3.7.4 一般更新(背景,下次開啟生效 — D15)
+-
+-小幫手啟動時與之後每 6 小時〔施工:值〕:
+-
+-1. 讀版本資訊。`version` 不比現在新、或在 `bad` 裡 → 不動作。
+-2. 下載 zip 到 `downloads\`,驗 sha256;不對就刪掉,下次再試。
+-3. 解壓到 `versions\1.6.0.partial\`,用 `base_python` 建 venv,`pip install --no-index --find-links <wheelhouse> ai-workspace-helper==1.6.0`。
+-4. 試跑:用新 venv 執行 `python -m ai_workspace_helper --self-test`(import 得到 Playwright、它的 driver 在、版本號對)。
+-5. 全部成功 → 資料夾改名成 `versions\1.6.0\`,`state.json` 寫 `pending: "1.6.0"`;小視窗顯示「新版已下載，下次開啟時套用」。
+-   任一步失敗 → 刪掉 `.partial`、記 log,現在這版照常跑;同一版連續失敗 3 次記進 `bad`,不再試(等下一個新版)。
+-6. 整個過程不碰現在正在跑的版本——Windows 會鎖住執行中的檔案,原地覆蓋才會壞(§3.7 表)。
+-
+-#### 3.7.5 下次開啟:換版與自動退回(`launch.pyw`)
+-
+-1. 拿 `helper.lock`;已經有一個小幫手在跑 → 把它的視窗叫到前面,自己結束(不會開出兩個,§3.7 表最後一列)。
+-2. 有 `pending`:`pending_attempts + 1` 寫回 `state.json`,用新版啟動。
+-3. 新版跑起來之後——報到成功、或後端回「要登入」(證明連得上)、或被暫停、或被要求更新——由新版自己把 `state.json` 改成 `current: 新版、previous: 舊版、pending: 無、attempts: 0`,
+-   並刪掉 `current`、`previous` 以外的舊版本資料夾。
+-4. `pending_attempts` 到 3 還沒被新版確認(啟動就當掉)→ 啟動檔把它記進 `bad`、清掉 `pending`,改用 `current` 啟動,
+-   並在下次心跳回報「1.6.0 起不來,已退回 1.5.0」。
+-5. 沒有 `pending`:用 `current` 啟動。
+-6. `launch.pyw` 本身的更新:新版確認成功後(第 3 步),若新版附的 `launch.pyw` 和根目錄那份不同,就用 `os.replace` 換掉——
+-   那時啟動檔已經結束,`.pyw` 是文字檔,Windows 不會鎖。捷徑指向的路徑不變。
+-
+-#### 3.7.6 強制更新(低於最低版本 — D15)
+-
+-- 收到 426:小視窗改成「這個版本已停用,需要更新」,不再領工作;同時照 §3.7.4 下載、安裝、試跑,完成後按鈕「立即更新」
+-  (結束自己、由啟動檔換版)。卡片那邊照 D7 退回手動流程,所以這段時間使用者仍然查得到東西。
+-- 下載或安裝失敗:顯示原因與「小幫手」下載頁的連結,讓使用者重跑 `install.pyw`。
++#### 3.7.4 有新版:只通知(D21)
++
++小幫手啟動後第一次連上 AI Workspace 時(以及被停用後恢復連線時)、之後每 6 小時(`CHECK_EVERY_S`)讀版本資訊(`GET /api/ai-workspace-helper/manifest`);暫停、沒登入、連不上時不讀:
++
++1. `version` 比自己新 → 小視窗狀態分頁多一行「有新版 1.6.0：請到「小幫手」頁下載，重新雙擊 install.pyw」和按鈕
++   「**開啟下載頁**」;不比自己新 → 不顯示。小幫手照常領工作,什麼都不下載、不安裝。
++2. 「開啟下載頁」用 Python 的 `webbrowser.open` 以**使用者的預設瀏覽器**開 `<網址>/ai-workspace-helper`
++   ([webbrowser](https://docs.python.org/3/library/webbrowser.html):Windows 上交給系統的預設程式)。不用小幫手自己的 Chrome:Playwright 開的瀏覽器下載的檔,
++   在那個 context 關掉時就被刪掉([Download](https://playwright.dev/python/docs/api/class-download)),而且下載要讓瀏覽器驗憑證,這正是 D21 的目的。
++3. 讀版本資訊時連不上 → 「有新版」那一行維持上一次的樣子、「下載新版」(被停用)那一行收起來(連得上就不是被停用),原因進記錄檔(不含 cookie:Playwright 的錯誤只留「Call log」之前,錯誤鏈也切斷);被拒而成為 `BackendError` 的(404 還沒發布、403、5xx)→ 當成沒有新版、不顯示、不記;401/3xx/426 照它們自己的狀態走。都在 6 小時後再讀。
++4. 為什麼是「一行字 + 一個按鈕」:這是要使用者知道、但不擋住目前工作的通知,附上能處理它的動作——GOV.UK 的
++   notification banner([GOV.UK](https://design-system.service.gov.uk/components/notification-banner/))、NN/g 對「通知」的分類([NN/g](https://www.nngroup.com/articles/indicators-validations-notifications/));「開啟下載頁」是一個動作(把人帶到下載頁),畫成按鈕,和它那一行放在同一列——banner 也把動作放在通知裡。
++
++#### 3.7.5 重新安裝:換上新版(D21)
++
++`install.pyw` 跑在一個已經裝好的資料夾上(新版的 zip):
++
++1. 照 D16 確認 Python,用它建 `versions\1.6.0\venv\`、離線裝套件、試跑(`--self-test`)——壞掉的新版在這一步就失敗,
++   不會變成 `current`。**有小幫手在跑時,已經存在的版本資料夾一個都不碰**——鎖只說「有一個在跑」、不說是哪一版
++   (Windows 鎖住執行中的檔案,§3.7 表):已經裝過的版本要重裝 → 先請人在小幫手的視窗按「結束」;新的版本照裝在旁邊。
++   建一版要將近一分鐘,這段時間有人開了小幫手(捷徑)時,它跑的正是 `current`:所以真正刪掉舊的同版資料夾前再問一次,
++   有小幫手在跑就停下、說明。
++2. 成功 → `state.json` 寫 `current: 1.6.0、previous: 原來的 current`,複製 `launch.pyw` / `setup_core.py` 到根目錄(文字檔,
++   沒在執行,換得掉);**沒有小幫手在跑時**才刪掉 `current`、`previous` 以外的版本資料夾(刪不掉的留著,下次再刪)。
++3. 有小幫手正在跑(拿不到 `helper.lock`)→ 問「小幫手正在執行，要換成新版重新開啟嗎？」:
++   - 是 → 寫 `quit.request`(和 `show.request` 同一個做法:正在跑的那個每 0.5 秒看一次),它照「結束」的路徑關掉 Chrome、
++     放掉鎖、結束;`install.pyw` 等鎖(最多 20 秒,`launch(wait_s=…)`)後用 `current` 啟動新版。
++   - 否 → 舊版照跑,下次開啟就是新版。
++4. 沒有小幫手在跑 → 照原本的「現在開啟嗎？」。
++5. **從 0.1.0 過來**:0.1.0 看不懂 `quit.request`,第 3 步等 20 秒後說明、請人在舊視窗按「結束」(0.1.0 的「立即更新」帶 `--wait`
++   啟動根目錄的 `launch.pyw`,新的啟動檔照樣等它結束)。另外,連得上 AI Workspace 的 0.1.0 仍會照 D15 自己下載下一版、記成
++   `pending`,由它的啟動檔啟動——而新版不再「確認自己」,三次後會被那個舊啟動檔退回且不再試。
++   所以新版每次啟動時(拿到鎖之後)看一次:自己就是 `pending` 那一版 → 直接接手(`take_over`:`current` = 自己、`previous` = 原
++   `current`、D15 的欄位清掉、其他版本資料夾刪掉、把 D15 放在自己資料夾裡的 `launch.pyw`/`setup_core.py` 換到根目錄;
++   `pending` 剛好就是 `current`(重裝後舊版才準備好同一版)時只清欄位,`previous` 不動)。
++6. 新版在舊版剛放掉鎖時就啟動,舊的 Chrome 可能還沒放開設定檔:開 Chrome 失敗會隔 2 秒再試,共 3 次,才顯示「開不了 Chrome」。
++
++#### 3.7.6 被要求更新(426,D21)
++
++- 收到 426:小視窗狀態「這個版本已停用，需要更新」,下一行「請到「小幫手」頁下載新版 X，重新雙擊 install.pyw」
++  (426 沒指名版本時不寫 X)+「開啟下載頁」,不再領工作。管理員把 `min_version` 調回去後,下一次連上就馬上重讀版本資訊:
++  發布的版本仍比自己新 → 換成「有新版 X」;不比自己新 → 那一行消失。
++  卡片照 D7 退回手動流程,所以這段時間使用者仍然查得到東西。重裝(§3.7.5)之後新版接手。
++- 426 也可能是偽造的(D20:那條連線不驗憑證):最壞是小幫手停工、人被帶去下載頁,不會執行任何東西。
+ 
+ #### 3.7.7 其他
+ 
+-- **心跳**附上小幫手版本、協定號、Chrome 版本、Playwright 版本、Python 版本、上一次更新結果——後端看得到誰還在舊版、誰的 Chrome
++- **心跳**附上小幫手版本、協定號、Chrome 版本、Playwright 版本、Python 版本(〔D21〕不再送「上一次更新結果」;後端欄位照 §3.7.3 只加不刪,留著)——後端看得到誰還在舊版、誰的 Chrome
+   已經超過測過的版本。
+ - **Chrome 設定檔**在 `profile\`,單一實例鎖保證不會兩個小幫手同時用;壞掉時小視窗有「重設登入」(移開設定檔、重新登入)。
+-- **第一次安裝**:D16,`install.pyw` 建好上面的結構與捷徑,之後都由小幫手自己更新。
++- **第一次安裝**:D16,`install.pyw` 建好上面的結構與捷徑;〔D21〕之後每一版也都用它裝(§3.7.5)。
+ - **解除安裝**(D17):小視窗按「解除安裝」→ 確認「會刪掉小幫手和它的登入資料」→ 小幫手放掉 `helper.lock`、結束 Chrome,
+   啟動一個收尾程序(用 `base_python`,程式碼先複製到 `%TEMP%`,因為正在跑的檔案刪不掉)後結束自己;收尾程序等小幫手
+   的行程結束,刪掉兩個捷徑與 `%LOCALAPPDATA%\AIWorkspaceHelper\`,最後刪掉自己在 `%TEMP%` 的檔案。刪不掉的(例如被防毒鎖住)
+@@ -272,10 +284,15 @@ AI 呼叫 ask_outside ──► 卡片(D7:沒連線 = 今天的手動流程)
+ | P5 | `ai-workspace-helper/` 骨架:小視窗(D13)、Chrome persistent context、登入與過期重登、領工作迴圈、差事外掛介面、驗證碼等待 | 對本機假後端 + 本機假網站跑通(Linux) |
+ | P6 | 差事 `search` / `open_url`:開頁、整頁 HTML 經打包的 `htmlToMarkdown` 轉 Markdown | parity:範例 HTML 在前端與小幫手轉出逐字相同;對本機假搜尋頁抓得到結果連結 |
+ | P7 | 安裝包:`scripts/pack_ai_workspace_helper.py`(D14、§3.7.2,產 `ai-workspace-helper-<版本>.zip` + `ai-workspace-helper.json`)、`install.pyw`(D16)、AI Workspace 的下載頁 | 在 Linux 上產出的安裝包含小幫手與 Playwright、greenlet cp310–cp314 的 win_amd64 wheel,版本釘死;`pip install --no-index --dry-run` 對 win_amd64 解得出全部依賴;下載頁下載得到 |
+-| P8 | 更新(§3.7)與解除安裝(D17):`ai_workspace_helper_dir` 與版本資訊/下載路由(§3.7.2)、426 與協定號(§3.7.3)、背景更新(§3.7.4)、`launch.pyw` 換版與退回(§3.7.5)、強制更新(§3.7.6)、心跳回報版本 | 版本資訊只列出的檔可下載;低於 `min_version` 或最低協定號回 426;下載 sha256 不符不裝;任一步失敗現在這版照常跑、同版連 3 次失敗進 `bad`;`pending` 3 次沒確認自動退回;`state.json` 只用原子寫入;已有一個在跑時不開第二個;`launch.pyw` 只在新版確認後才被換掉。解除安裝刪掉三樣、刪不掉的列出來。全部在 Linux 上用假的 Python 與假的後端測 |
++| P8 | 〔其中的背景更新、換版與退回、強制更新的自動下載由 P12–P14 拿掉(D21);§3.7.4–3.7.6 已改寫〕更新(§3.7)與解除安裝(D17):`ai_workspace_helper_dir` 與版本資訊/下載路由(§3.7.2)、426 與協定號(§3.7.3)、背景更新(§3.7.4)、`launch.pyw` 換版與退回(§3.7.5)、強制更新(§3.7.6)、心跳回報版本 | 版本資訊只列出的檔可下載;低於 `min_version` 或最低協定號回 426;下載 sha256 不符不裝;任一步失敗現在這版照常跑、同版連 3 次失敗進 `bad`;`pending` 3 次沒確認自動退回;`state.json` 只用原子寫入;已有一個在跑時不開第二個;`launch.pyw` 只在新版確認後才被換掉。解除安裝刪掉三樣、刪不掉的列出來。全部在 Linux 上用假的 Python 與假的後端測 |
+ | P9 | 文件:`docs/migrations.md`(新 resource、新路由、新下載物、IT 要放行的項目)、使用者說明 | mkdocs `--strict` 綠 |
+-| P10 | live check(真 app + 真 Chrome + 本機假網站)+ demo MP4 | 搜尋與開網址各走一次:按「查」之後不再經人,`lookups/` 有檔、AI 讀到;一次更新(換指標、下次開啟生效) |
++| P10 | 〔其中的「一次更新(換指標、下次開啟生效)」由 P14 改成「在舊版上重裝新版」(D21)〕live check(真 app + 真 Chrome + 本機假網站)+ demo MP4 | 搜尋與開網址各走一次:按「查」之後不再經人,`lookups/` 有檔、AI 讀到;一次更新(換指標、下次開啟生效) |
+ | P11 | review(四把鏡頭)→ CI | 照 CLAUDE.md |
++| P12 | 〔D21〕更新只通知:`Updater` 讀版本資訊,比自己新 → 狀態「有新版 X」;426 → 「這個版本已停用」;小視窗那一行 + 「開啟下載頁」(`webbrowser.open(<網址>/ai-workspace-helper)`);不下載、不安裝 | 新版 → 顯示、照常領工作;同版或舊版 → 不顯示;讀不到 → 不顯示、記 log;426 → 停領工作 + 顯示;按鈕開的網址帶部署前綴;小幫手沒有任何下載或安裝的呼叫 |
++| P13 | 〔D21〕重裝換版:`install.pyw` 在已安裝的資料夾上裝新版(`previous` = 原 `current`,刪其餘版本資料夾);有小幫手在跑時問、寫 `quit.request`、等鎖、啟動新版 | 新版試跑失敗 → `current` 不變;正在跑的版本資料夾不刪;`quit.request` 讓正在跑的那個走「結束」的路徑(Chrome 關、鎖放掉);等不到鎖 → 說明、不開第二個;不開 → 舊版照跑 |
++| P14 | 〔D21〕拿掉自動更新(從 0.1.0 過來的 `take_over` 見 §3.7.5 第 5 點):`prepare_update` / `update_outcome` / 解壓、`pending`/`bad`/`failures`/`update` 與 `launch.pyw` 的換版退回、`confirm`、`Backend.download` / `Chrome.fetch_bytes`、「立即更新」(啟動檔仍認得 `--wait`,給 0.1.0 的「立即更新」用,§3.7.5 第 5 點)、心跳的 `update`、live check 的更新那半(改成「重裝換版」) | 程式裡不再有寫這些欄位或下載 zip 的路徑;舊 `state.json` 有這些欄位照樣啟動;測試跟著刪改,不留沒人用的程式 |
++| P15 | 文件:使用說明「更新」、`docs/migrations.md` #933(行為改變:不再自動更新,每一版都要重裝)、PR 說明 | mkdocs `--strict` 綠;每句寫在驗證之後 |
++| P16 | review(conformance / veracity / defect / regression)→ CI | 照 CLAUDE.md;P12–P14 換掉一個機制,review 至少一輪 |
+ 
+ ## 5. 不做(這一版)
+ 
+@@ -292,6 +309,7 @@ AI 呼叫 ask_outside ──► 卡片(D7:沒連線 = 今天的手動流程)
+   訊息排隊時(Q1、Q2 先存、答案後到),那個人可能認錯——和 CLAUDE.md 記的「排隊的對話讀起來是 Q1、Q2、A1、A2」
+   同一個原因:訊息上沒有記它屬於哪一輪。被開的只會是先前查回來的公開連結。
+ - **共用 item 裡,別人看得到你的小幫手正在查,也按得到「取消」**:取消照卡片的權限(`converse`),不限工作的主人。
++- **兩個 `install.pyw` 同時跑**(同一版)共用 `versions\<版本>.partial\`:可能兩個都失敗,或其中一個裝成另一個做到一半的 venv;不同版時,先完成且沒有小幫手在跑的那個會清掉另一個的 `.partial`。沒有鎖,因為這要人同時雙擊兩次。
+ - **交答案的請求在記下連結、送出訊息之前被中斷**(連線斷掉):`lookups/` 留下一個沒有訊息指著的檔;連結也已記下,
+   後面的卡片開它不再問。這個窗口只有記連結那一下。
+ 
+diff --git a/docs/plan-tool-usage-stats.md b/docs/plan-tool-usage-stats.md
+new file mode 100644
+index 00000000..8de904c8
+--- /dev/null
++++ b/docs/plan-tool-usage-stats.md
+@@ -0,0 +1,144 @@
++# 工具使用統計:管理者看 AI 用了哪些工具、誰用、在哪、成不成功、多快
++
++**狀態:** 計劃(P1)。
++**來源標記:** 〔user〕= user 的原話或明確選擇;〔查證〕= 讀 `origin/master`(7bf7e6ff)程式碼確認的事實;
++〔施工〕= 我定的實作細節,可推翻;〔指南〕= 出自公開的 UI/UX 指南,附出處。
++
++## 1. 問題
++
++user 要「統計 MCP tool 使用」。查證後,這個系統的 MCP 只用在平台**外面**〔查證〕:每個工具包 build 時塞進一個
++MCP 伺服器(`tooling/mcp_server.py`、`tooling/builder.py:_inject_mcp`),讓工程師在自己電腦上用自己的 agent 跑
++發佈的工具;它不回報平台。平台**裡面**的 AI 呼叫工具不走 MCP——內建工具、第一方套件、第三方工具包
++(`agent.external_tools`,模型看到 `<本地名>__<command>`)都是同一套 function tool。user 選的是後者(D1)。
++
++現在記了什麼〔查證〕:
++
++- 對話裡每次工具呼叫存一則 `Message(role="tool")`:`tool_name`、`tool_args`、輸出、`created_at`
++  (`resources/conversation.py`、`api/turns.py`)。**沒有**:誰、耗時、成功與否、來源;內建和第一方套件工具
++  名字長得一樣分不出來。
++- `activity`(記憶體環狀 200 筆)、`monitor`(SDK trace 原樣存)、`/health` 都沒有工具呼叫的彙總。
++- 前例:skill hub 的「使用 N 次」(`apps/skill_hub_usage.py`):每個條目每天每顆 pod 一列,記憶體累加、
++  每 2 小時與 SIGTERM 時寫回,總數用 specstar `Sum`;誰、哪個 item 有記但不顯示(U5)。
++
++## 2. 決定
++
++| # | 決定 | 來源 |
++|---|---|---|
++| D1 | 統計**平台內 AI 呼叫工具**,不是平台外的 MCP | 〔user〕選 A |
++| D2 | 給**部署管理者(superuser)**看 | 〔user〕選 A |
++| D3 | 指標:**呼叫次數、失敗次數、平均耗時** | 〔user〕選 A |
++| D4 | **顯示是誰呼叫的**:可點進某工具看各人用了幾次 | 〔user〕「要有人」 |
++| D5 | 預設最近 30 天,可切 7/30/90 天;**資料保留 90 天**,更舊的自動刪 | 〔user〕選 A |
++| D6 | **所有工具都算**,每筆標來源(內建/第一方套件/第三方);來源在記錄當下查,不從名字猜 | 〔user〕選 A |
++| D7 | **所有場合都算**,每筆記場合、App、item | 〔user〕「A,使用場合也要紀錄」 |
++
++## 3. 機制
++
++### 3.1 記在哪裡:每個工具外面包一層〔查證 + 施工〕
++
++所有 AI 的 turn 都經過 `LitellmAgentRunner.run`,工具組都在 `_agent_for` 組出來;組完之後**每一個工具**都會被
++`wrap_with_args_recovery` 包一層(`api/litellm_runner.py` 約 600 行;`agent/args_recovery.py:safer`)。那一刻
++所有來源都在:內建(`build_tools`)、規則給的(`request_env`、`ask_outside`)、套件指令(`build_function_tools`)
++〔查證〕。所以計數就做成**同一個位置再包一層**——每次真的呼叫恰好算一次,串流與非串流兩種 turn 都經過
++〔施工〕。
++
++不在事件流(`ToolStart`/`ToolEnd`)上數〔查證〕:非串流 turn 的事件是跑完才重建的,量不到耗時;sub-agent 與 KB
++子代理的事件會轉進父 turn 的串流,會重複算;`ToolEnd` 沒有工具名稱。
++
++sub-agent、`ask_knowledge_base` 裡的 KB 子代理各自的工具呼叫由它們自己的 `_agent_for` 算;父 turn 的
++`run_agent`/`ask_knowledge_base` 本身也算一次——不重複〔查證〕。
++
++### 3.2 一筆記什麼〔施工〕
++
++| 欄位 | 從哪來 |
++|---|---|
++| 工具 | 模型呼叫的名字(第三方是 `<本地名>__<command>`) |
++| 來源(D6) | 在 `_agent_for` 合併前,每份清單本來就分開——內建、規則給的、第一方套件、第三方(`PackageInfo.third_party`)——在那裡就標好,不在之後從名字猜 |
++| 耗時(D3) | 包層裡 `time.monotonic()` 量 `await` 前後 |
++| 失敗(D3) | 見 3.3 |
++| 誰(D4) | 見 3.4 |
++| 場合(D7) | `AgentToolContext` 新增 `surface`,由**建 context 的地方**明確設定(見 3.4);不從 `in_chat`、`retriever` 這些旁證推 |
++| App、item(D7) | `ctx.app_slug`、`ctx.investigation_id` |
++
++### 3.3 什麼算失敗〔查證 + 施工〕
++
++現在沒有一個統一的失敗旗標〔查證〕,失敗有好幾種長相;都算失敗:
++
++- 工具丟例外,或 SDK 把例外變成的字串(`"An error occurred while running the tool"`,
++  `agent/args_recovery.py` 已有這個常數)。
++- 指令結束碼不是 0:套件指令與 `exec` 的回覆開頭是 `Tool \`name\` returned (exit_code=N)`
++  (`agent/tools.py:_format_exec`)——包層讀這個開頭,不重寫格式。
++- 回覆以 `error:` / `Error:` 開頭(內建工具與規則給的工具的拒絕都這樣寫)。
++- 引數壞掉、包層根本沒呼叫到工具(`safer` 的幾個出口)也算一次失敗——模型確實叫了這個工具、沒做成。
++
++### 3.4 誰、在哪個場合〔查證 + 施工〕
++
++| 場合(`surface`) | 誰 | 建 context 的地方 |
++|---|---|---|
++| `chat` App 聊天 | 這則訊息的人(`speaker` / `acting_user`) | `build_chat_turn` |
++| `kb_chat` KB 聊天 | 發問的人 | KB 聊天送出 |
++| `workflow` workflow 步驟 | 啟動這次 run 的人(`captured_user`) | `build_workflow_turn`——**現在 context 沒帶人**〔查證〕,要接上 |
++| `schedule` 排程自動跑 | 按過「用我的身分執行」的人;沒有就 item 擁有者〔施工〕 | 排程觸發的 run 往下帶 |
++| `subagent` sub-agent | 父 turn 的人 | `subagent_run._child_context` 繼承後改場合 |
++| `kb_agent` `ask_knowledge_base` 的子代理 | 父 turn 的人 | `answer_question` 的 context 現在**沒有人、沒有 item**〔查證〕,要從呼叫端帶進去 |
++| `background` 背景工作(wiki 維護、卡片草稿、壓縮…) | 沒有人時記 `(系統)` | 各自的建構處 |
++
++「沒有服務帳號」〔查證〕:排程那一輪是以 item 擁有者跑(`acting_user=owner`),綁定的人只決定工具拿誰的環境
++變數(`env_user`)。統計記「綁定的人,沒有就擁有者」——管理者要找的是「這一輪替誰在跑」〔施工〕。
++
++### 3.5 存法:每天每顆 pod 每個工具一列〔施工,照抄 skill hub〕
++
++- 新 model `ToolUsageDay`:`day`、`pod`、`tool`、`source`,加上 `calls`、`fails`、`total_ms`,以及三個明細:
++  `by_user`、`by_surface_app`、`by_item`(各自記 calls / fails / total_ms)。索引 `day`、`tool`。
++- 包層只在**記憶體**累加;每 5 分鐘、以及 SIGTERM 時寫回(用 CAS 合併到同一列)。skill hub 用 2 小時,
++  但管理者看的是「剛剛那個工具是不是一直壞」,5 分鐘的延遲比較合理;代價是每顆 pod 每 5 分鐘幾筆小寫入。
++  pod 沒收到 SIGTERM 就死掉時,最後不到 5 分鐘的計數會掉——統計用途可接受,文件寫明。
++- 列數有上界:工具數 × pod 數 × 90 天;明細放在列裡,不另開列。
++- **保留 90 天(D5)**:超過的列刪掉。照 #804 的規矩——這是對一張會長大的表做事,但只按有索引的 `day` 刪,
++  一天一次、`ScanLease` 讓一顆 pod 做,不讀整張表。
++
++### 3.6 API(只給 superuser)〔施工〕
++
++- `GET /admin/tool-usage?days=30&source=&surface=&app=` → 每個工具一列:來源、呼叫、失敗、平均耗時。
++- `GET /admin/tool-usage/{tool}?days=30` → 這個工具依**人**、依**場合 × App**、依 **item** 的分項。
++- `days` 只接受 7/30/90(D5)。非 superuser 403。
++
++### 3.7 畫面(Diagnostics 頁的新分頁「工具使用」)〔指南〕
++
++- **分頁**:Diagnostics 頁本來就是分頁條(`DiagnosticsPage.tsx` 的 `kb-tabs`),新的一頁照用;切換面板用分頁
++  (CLAUDE.md 的規則,NN/g〈Tabs, Used Right〉)。<https://www.nngroup.com/articles/tabs-used-right/>
++- **時間範圍 7/30/90**:同一份內容的不同模式 → **segmented control**(Material 3〈Segmented buttons〉)。
++  <https://m3.material.io/components/segmented-buttons/overview>
++- **表格**:每列一個工具,欄位 工具/來源/呼叫/失敗/失敗率/平均耗時,可依欄排序、依來源/場合/App 篩選
++  ——NN/g〈Data Tables: Four Major User Tasks〉(找特定列、比較、檢視/編輯一列、對列採取行動)。
++  <https://www.nngroup.com/articles/data-tables/> 數字欄靠右對齊、同單位。
++- **點進一個工具**:開一個面板列出依人、依場合 × App、依 item 的分項(D4、D7)。
++
++## 4. 施工時我定的事〔施工〕
++
++- 計數點:`_agent_for` 的包層;來源在合併前標。
++- 失敗的四種判斷(3.3)。
++- `surface` 七個值與各自的「誰」(3.4);排程記「綁定的人,沒有就擁有者」。
++- 存法:每天每顆 pod 每工具一列、明細放列內、5 分鐘寫回、90 天刪除一天一次。
++- API 路徑與篩選參數。
++
++## 5. Phases
++
++| Phase | 內容 | 完成的判準 |
++|---|---|---|
++| P1 | 這份計劃 | 文件測試、mkdocs `--strict` 綠 |
++| P2 | 計數包層 + 來源標記 + 失敗判斷 + 耗時;記憶體累加器 | 每種來源、每種失敗長相、引數壞掉各有測試;串流與非串流 turn 都算到 |
++| P3 | `surface` 與「誰」:每個建 context 的地方明確設定;workflow/排程/KB 子代理把人帶進去 | 每個場合走真的入口各一個測試,記到的場合與人正確 |
++| P4 | `ToolUsageDay` model、寫回(5 分鐘 + SIGTERM、CAS 合併)、90 天刪除 | 多 pod 寫同一天不互蓋;刪除只動過期的列 |
++| P5 | superuser API(總表 + 單一工具分項) | 非 superuser 403;`days` 只收 7/30/90 |
++| P6 | Diagnostics「工具使用」分頁:表格、篩選、排序、7/30/90、點進分項 | 元件測試;版面在 1280/390 量過 |
++| P7 | 文件:`docs/migrations.md`(新 model、新的背景寫回與刪除)、架構說明 | mkdocs `--strict` 綠 |
++| P8 | 真瀏覽器檢查 + demo(MP4) | 截圖對照引用的指南 |
++
++## 6. 不做
++
++- 平台外 MCP 的使用(D1)。
++- 失敗原因分類、存錯誤文字(D3 選 A,不選 C)。
++- 保留天數做成設定(D5 選 A)。
++- 工具作者、item 擁有者看自己的統計(D2 選 A;同一份資料,之後可加)。
++- 每次呼叫一筆的明細紀錄:只存每天的彙總。
+diff --git a/scripts/check_ai_workspace_helper.py b/scripts/check_ai_workspace_helper.py
+index 0888793a..74ad71fd 100644
+--- a/scripts/check_ai_workspace_helper.py
++++ b/scripts/check_ai_workspace_helper.py
+@@ -360,15 +360,12 @@ def _tour(base: str, iid: str, out: Path, check: _Check) -> Path | None:
+ 
+ 
+ def _update_check(repo: Path, wheels: Path, check: _Check) -> None:
+-    """§3.7.4–§3.7.5 for real on this machine: install 0.1.0 from a wheelhouse,
+-    prepare 0.2.0 beside it (a real venv, real pip, the real self-test), the
+-    launcher takes 0.2.0 on the next start, 0.2.0 confirms itself. Linux wheels
++    """§3.7.5 (D21) for real on this machine: install 0.1.0 from a wheelhouse,
++    then 0.2.0 over it as install.pyw does (a real venv, real pip, the real
++    self-test), and the launcher takes 0.2.0 on the next start. Linux wheels
+     (`wheels`: playwright and its dependencies for this machine) stand in for
+     the Windows ones; only the Windows shortcuts are skipped."""
+-    import hashlib
+     import importlib.util
+-    import io
+-    import zipfile
+ 
+     sys.path.insert(0, str(repo / "ai-workspace-helper" / "src"))
+     from ai_workspace_helper import setup_core  # noqa: PLC0415
+@@ -403,32 +400,18 @@ def _update_check(repo: Path, wheels: Path, check: _Check) -> None:
+             return
+         setup_core.run_quietly(argv)
+ 
+-    print("\n=== update: install 0.1.0, publish 0.2.0, next start takes it", flush=True)
++    print("\n=== update: install 0.1.0, then 0.2.0 over it (D21: install.pyw again)", flush=True)
+     installed = setup_core.install(zip_of("0.1.0"), home, base_python=sys.executable, run=run)
+     check(
+         "0.1.0 installs from the wheelhouse alone (venv, pip, self-test)",
+         installed.version == "0.1.0",
+     )
+-
+-    folder = zip_of("0.2.0")
+-    buf = io.BytesIO()
+-    with zipfile.ZipFile(buf, "w") as z:
+-        for path in folder.rglob("*"):
+-            if path.is_file():
+-                z.write(path, str(path.relative_to(folder)))
+-    data = buf.getvalue()
+-    manifest = {
+-        "version": "0.2.0",
+-        "min_version": "0.0.0",
+-        "file": "ai-workspace-helper-0.2.0.zip",
+-        "sha256": hashlib.sha256(data).hexdigest(),
+-    }
+-    outcome = setup_core.prepare_update(home, manifest, lambda _f: data, run=run)
++    installed = setup_core.install(zip_of("0.2.0"), home, base_python=sys.executable, run=run)
+     state = setup_core.read_state(home)
+     check(
+-        "0.2.0 is prepared beside 0.1.0, which stays current",
+-        (outcome, state["current"], state["pending"]) == ("ready", "0.1.0", "0.2.0"),
+-        f"{outcome} current={state['current']} pending={state['pending']}",
++        "0.2.0 installs beside it: current, 0.1.0 kept as previous",
++        (installed.version, state["current"], state["previous"]) == ("0.2.0", "0.2.0", "0.1.0"),
++        json.dumps({k: state.get(k) for k in ("current", "previous")}),
+     )
+ 
+     started: list[list[str]] = []
+@@ -444,13 +427,6 @@ def _update_check(repo: Path, wheels: Path, check: _Check) -> None:
+         probe.returncode == 0 and "ai-workspace-helper 0.2.0" in probe.stdout,
+         probe.stdout.strip() or probe.stderr.strip()[-200:],
+     )
+-    check("0.2.0 confirms itself once up", setup_core.confirm(home, "0.2.0"))
+-    state = setup_core.read_state(home)
+-    check(
+-        "0.2.0 is current, 0.1.0 kept as previous",
+-        (state["current"], state["previous"], state["pending"]) == ("0.2.0", "0.1.0", None),
+-        json.dumps({k: state.get(k) for k in ("current", "previous", "pending")}),
+-    )
+ 
+ 
+ def main() -> int:
+diff --git a/src/workspace_app/api/outside_jobs.py b/src/workspace_app/api/outside_jobs.py
+index 7cc362b9..38e90171 100644
+--- a/src/workspace_app/api/outside_jobs.py
++++ b/src/workspace_app/api/outside_jobs.py
+@@ -92,7 +92,8 @@ class _AiWorkspaceHelperPresence(Struct):
+     chrome: str = ""
+     playwright: str = ""
+     python: str = ""
+-    #: The last update's outcome, e.g. "0.4.0 起不來,已退回 0.3.0" (§3.7.5).
++    #: Sent only by 0.1.0 (D15's automatic update); kept — the API only adds
++    #: (docs/plan-outside-helper.md D21, §3.7.3).
+     update: str = ""
+ 
+ 
+diff --git a/tests/ai_workspace_helper/test_app.py b/tests/ai_workspace_helper/test_app.py
+index b12ed3e9..8f3e9259 100644
+--- a/tests/ai_workspace_helper/test_app.py
++++ b/tests/ai_workspace_helper/test_app.py
+@@ -6,6 +6,7 @@ from __future__ import annotations
+ 
+ import platform
+ 
++import pytest
+ from ai_workspace_helper.app import Controller, describe
+ 
+ 
+@@ -92,7 +93,7 @@ def test_a_chrome_that_will_not_start_is_shown_not_a_crash():
+     def broken():
+         raise RuntimeError("Chromium distribution 'chrome' is not found")
+ 
+-    ctl = Controller(broken, lambda _c: _Worker([]))
++    ctl = Controller(broken, lambda _c: _Worker([]), sleep=lambda _s: None)
+     ctl.open()
+ 
+     status, detail, *_ = ctl.snapshot()
+@@ -177,7 +178,7 @@ def test_with_no_chrome_the_buttons_do_nothing_but_quit():
+     def broken():
+         raise RuntimeError("")
+ 
+-    ctl = Controller(broken, lambda _c: _Worker([]))
++    ctl = Controller(broken, lambda _c: _Worker([]), sleep=lambda _s: None)
+     ctl.open()
+     assert ctl.snapshot()[:2] == ("no_chrome", "RuntimeError")
+ 
+@@ -206,9 +207,6 @@ class _Updater:
+         self.status = ""
+         self.fails = fails
+ 
+-    def connected(self) -> None:
+-        self.calls.append("connected")
+-
+     def tick(self, required=None) -> None:
+         self.calls.append(("tick", required))
+         if self.fails:
+@@ -223,39 +221,43 @@ def _with_updater(statuses, updater, manifest=None):
+     return ctl, chrome
+ 
+ 
+-# §3.7.5 step 3 / §3.7.4: once connected, the version confirms itself and the
+-# scheduled check runs, on the same thread as the jobs.
++# D21, §3.7.4: once connected, the scheduled check for a newer release runs,
++# on the same thread as the jobs (Playwright is not thread-safe).
+ def test_once_connected_the_update_check_runs():
+     up = _Updater()
+     ctl, _chrome = _with_updater(["connected"], up)
+ 
+     ctl.step()
+ 
+-    assert up.calls == ["connected", ("tick", None)]
++    assert up.calls == [("tick", None)]
+ 
+ 
+-# §3.7.6: refused, the helper updates from the release the refusal named.
+-def test_a_refused_helper_updates_from_the_release_it_was_given():
++# §3.7.6: refused, the helper names the release the refusal named — or, when
++# it named none, still says to reinstall.
++@pytest.mark.parametrize(
++    ("named", "told"),
++    [({"version": "0.4.0", "file": "ai-workspace-helper-0.4.0.zip"}, None), (None, {})],
++)
++def test_a_refused_helper_says_which_release_to_install(named, told):
+     up = _Updater()
+-    release = {"version": "0.4.0", "file": "ai-workspace-helper-0.4.0.zip"}
+-    ctl, _chrome = _with_updater(["update_required"], up, manifest=release)
++    ctl, _chrome = _with_updater(["update_required"], up, manifest=named)
+ 
+     ctl.step()
+ 
+-    assert up.calls == ["connected", ("tick", release)]
+-    assert ctl.update_status() == ""
++    assert up.calls == [("tick", named if told is None else told)]
+ 
+ 
+-# Signed out, the backend cannot be asked — but the version itself is up:
+-# being signed out (or paused, or offline) is no reason to roll it back
+-# (§3.7.5; review round 1).
+-def test_signed_out_it_confirms_itself_but_does_not_look_for_updates():
++# Signed out, paused, refused or offline, the backend cannot be asked: no
++# check. Nothing is confirmed either — a version is current once installed
++# (D21: no waiting version, no rollback).
++@pytest.mark.parametrize("status", ["needs_login", "paused", "error", "unreachable"])
++def test_without_a_working_line_it_does_not_look_for_updates(status):
+     up = _Updater()
+-    ctl, _chrome = _with_updater(["needs_login"], up)
++    ctl, _chrome = _with_updater([status], up)
+ 
+     ctl.step()
+ 
+-    assert up.calls == ["connected"]
++    assert up.calls == []
+ 
+ 
+ def _made(events: list[str]):
+@@ -298,7 +300,7 @@ def test_a_chrome_that_will_not_reopen_says_so():
+             raise RuntimeError("Chrome failed to start")
+         return make()
+ 
+-    ctl = Controller(flaky, lambda _c: _Worker(["unreachable"] * 3))
++    ctl = Controller(flaky, lambda _c: _Worker(["unreachable"] * 3), sleep=lambda _s: None)
+     ctl.open()
+     made[0].gone = True
+ 
+@@ -346,8 +348,8 @@ def test_a_reset_that_fails_does_not_stop_the_helper():
+     assert ctl.step() is True
+ 
+ 
+-# Reopening Chrome keeps the one updater: a second would start a second
+-# preparation of the same version over the first's files (review round 2).
++# Reopening Chrome keeps the one updater: its six-hour clock is the helper's,
++# not one Chrome window's (review round 2).
+ def test_reopening_chrome_keeps_the_updater():
+     events: list[str] = []
+     made, make = _made(events)
+@@ -365,19 +367,6 @@ def test_reopening_chrome_keeps_the_updater():
+     assert len(made) == 2 and len(built) == 1
+ 
+ 
+-# A version the backend refuses ("error") or that cannot reach it does not
+-# confirm itself: it may be the version's own fault, and confirmed it could
+-# never be rolled back (review round 2).
+-def test_a_version_that_cannot_work_with_the_backend_is_not_confirmed():
+-    for status in ("error", "unreachable"):
+-        up = _Updater()
+-        ctl, _chrome = _with_updater([status], up)
+-
+-        ctl.step()
+-
+-        assert up.calls == [], status
+-
+-
+ # §3.7.7 「重設登入」: a profile gone bad (a login that never takes) is moved
+ # aside — only once Chrome has let go of it — and the person signs in afresh.
+ def test_reset_login_starts_over_with_a_fresh_profile():
+@@ -404,17 +393,7 @@ def test_an_update_check_that_fails_does_not_stop_the_helper():
+     assert ctl.step() is True
+ 
+ 
+-# §3.7.6: 「立即更新」 — end, so the launcher can start the version now ready.
+-def test_restart_ends_the_helper_and_asks_for_the_launcher():
+-    ctl, chrome = _with_updater(["connected"], _Updater())
+-
+-    ctl.send("restart")
+-
+-    assert ctl.step() is False
+-    assert chrome.closed and ctl.restart
+-
+-
+-# §3.7.4 step 4: a freshly installed version proves it can drive Chrome before
++# §3.7.5 step 1: a freshly installed version proves it can drive Chrome before
+ # it counts as installed — Playwright imports and its driver is on disk (an
+ # antivirus that removed node.exe is caught here, not at the first lookup).
+ def test_the_self_test_passes_on_a_working_install(capsys):
+@@ -451,9 +430,6 @@ def test_the_helper_is_wired_to_report_what_it_runs_on(tmp_path):
+         def send(self, *a):
+             return transport._send(*a)
+ 
+-        def fetch_bytes(self, *a):
+-            return transport._fetch_bytes(*a)  # ty: ignore[call-non-callable]
+-
+         def version(self) -> str:
+             return "141.0.7390.55"
+ 
+@@ -503,19 +479,34 @@ def test_the_window_says_what_is_being_looked_up_while_it_is():
+     assert ctl.snapshot() == ("connected", "", "", "")
+ 
+ 
+-# What the window says about the next version (§3.7.4–§3.7.6).
+-def test_the_update_line_says_where_the_next_version_stands():
++# What the window says about the next version (D21, §3.7.4, §3.7.6): only
++# where to get it — the helper fetches nothing.
++def test_the_update_line_says_where_to_get_the_next_version():
+     from ai_workspace_helper.app import describe_update
+ 
+-    assert describe_update("", forced=False) == ""
+-    assert describe_update("preparing", forced=False) == "正在準備新版…"
+-    assert describe_update("ready", forced=False) == "新版已下載，下次開啟時套用"
+-    assert describe_update("ready", forced=True) == "新版已下載，按「立即更新」換上"
+-    # the running version carries on — unless it is refused, when only a
+-    # reinstall from the download page is left (§3.7.6)
+-    failed = describe_update("failed: sha256", forced=False)
+-    assert failed == "新版準備失敗：sha256（這一版照常使用）"
+-    assert "請到 AI Workspace 的「小幫手」頁" in describe_update("failed: sha256", forced=True)
++    assert describe_update("") == ""
++    assert describe_update("available: 0.4.0") == (
++        "有新版 0.4.0：請到「小幫手」頁下載，重新雙擊 install.pyw"
++    )
++    assert describe_update("required: 0.4.0") == (
++        "請到「小幫手」頁下載新版 0.4.0，重新雙擊 install.pyw"
++    )
++    assert describe_update("required: ") == "請到「小幫手」頁下載新版，重新雙擊 install.pyw"
++
++
++# 「開啟下載頁」 opens the 小幫手 page under the address the person gave —
++# the deploy's sub-path included — in their own browser.
++@pytest.mark.parametrize(
++    ("app_url", "page"),
++    [
++        ("https://ai.example.corp", "https://ai.example.corp/ai-workspace-helper"),
++        ("https://corp.example/ws/", "https://corp.example/ws/ai-workspace-helper"),
++    ],
++)
++def test_the_download_page_is_the_helper_page_of_that_address(app_url, page):
++    from ai_workspace_helper.app import download_page
++
++    assert download_page(app_url) == page
+ 
+ 
+ # §3.7 table: Chrome updated past what this helper drives fails at start —
+@@ -643,3 +634,57 @@ def test_the_log_tab_reads_only_the_end_of_a_long_log(tmp_path):
+     assert len(tail.encode()) <= 100
+     assert tail.endswith("line 19999\n")
+     assert all(line.startswith("line ") and len(line) == 10 for line in tail.splitlines())
++
++
++# The running window looks for what the launcher or install.pyw left it
++# (§3.7.5): come forward, or end for a new version (D21). Each is taken once;
++# ending wins when both are there.
++def test_the_window_takes_what_was_asked_of_it_once(tmp_path):
++    from ai_workspace_helper import setup_core
++    from ai_workspace_helper.app import take_request
++
++    assert take_request(tmp_path) is None
++    (tmp_path / setup_core.SHOW_REQUEST).write_text("show")
++    assert take_request(tmp_path) == "show"
++    assert take_request(tmp_path) is None
++    (tmp_path / setup_core.SHOW_REQUEST).write_text("show")
++    (tmp_path / setup_core.QUIT_REQUEST).write_text("quit")
++    assert take_request(tmp_path) == "quit"
++    assert not (tmp_path / setup_core.SHOW_REQUEST).exists()
++    assert take_request(tmp_path) is None
++
++
++# Started the moment the helper it replaced let go of its lock (install.pyw,
++# D21), its Chrome may still be closing on the same profile: starting Chrome
++# is tried again, a few times, before 「開不了 Chrome」 (review of D21).
++def test_chrome_is_tried_again_before_saying_it_will_not_start():
++    tries: list[float] = []
++    chrome = _Chrome()
++
++    def make():
++        tries.append(1)
++        if len(tries) < 3:
++            raise RuntimeError("profile in use")
++        return chrome
++
++    waited: list[float] = []
++    ctl = Controller(make, lambda _c: _Worker(["connected"]), sleep=waited.append)
++    ctl.open()
++
++    assert len(tries) == 3 and len(waited) == 2
++    ctl.step()
++    assert ctl.snapshot()[0] == "connected"
++
++
++def test_a_chrome_that_never_starts_is_said_after_the_last_try():
++    tries: list[int] = []
++
++    def make():
++        tries.append(1)
++        raise RuntimeError("no Chrome here")
++
++    ctl = Controller(make, lambda _c: _Worker(["connected"]), sleep=lambda _s: None)
++    ctl.open()
++
++    assert len(tries) == 3
++    assert ctl.snapshot()[:2] == ("no_chrome", "no Chrome here")
+diff --git a/tests/ai_workspace_helper/test_chrome.py b/tests/ai_workspace_helper/test_chrome.py
+index 1b9374ac..f22945a0 100644
+--- a/tests/ai_workspace_helper/test_chrome.py
++++ b/tests/ai_workspace_helper/test_chrome.py
+@@ -175,32 +175,6 @@ def test_a_chrome_that_will_not_start_says_why(tmp_path, site):
+         Chrome(tmp_path / "profile", site, channel="no-such-browser", headless=True)
+ 
+ 
+-# §3.7.4: the update zip comes through the same signed-in line, as bytes.
+-def test_a_file_is_fetched_whole_with_the_login(tmp_path, site):
+-    chrome = _chrome(tmp_path, site)
+-    try:
+-        _visit(chrome, f"{site}/login")
+-        status, body = chrome.fetch_bytes("/api/me", {})
+-        redirect, _ = chrome.fetch_bytes("/api/expired", {})
+-    finally:
+-        chrome.close()
+-
+-    assert status == 200 and b"sid=abc" in body
+-    assert redirect == 302
+-
+-
+-def test_a_file_from_a_backend_that_is_not_there_is_an_os_error(tmp_path):
+-    with socket.socket() as s:
+-        s.bind(("127.0.0.1", 0))
+-        port = s.getsockname()[1]
+-    chrome = _chrome(tmp_path, f"http://127.0.0.1:{port}")
+-    try:
+-        with pytest.raises(OSError):
+-            chrome.fetch_bytes("/api/x", {})
+-    finally:
+-        chrome.close()
+-
+-
+ # The person closed the helper's Chrome window: it says so, so the helper can
+ # open it again (review round 1), and closing it after that is harmless.
+ def test_a_closed_chrome_says_it_is_gone(tmp_path, site):
+@@ -222,3 +196,115 @@ def test_it_says_which_chrome_it_drives(tmp_path, site):
+         chrome.close()
+ 
+     assert version.split(".")[0].isdigit()
++
++
++# ── a company certificate the helper's Node does not trust (plan D20) ──────
++
++
++@pytest.fixture
++def https_site(tmp_path):
++    """The site over HTTPS with a certificate from a private CA, the chain
++    left out — what the person's PC met: Chrome trusts it (the company pushes
++    its CA to Windows), Playwright's own Node says "unable to verify the first
++    certificate"."""
++    import datetime
++    import ipaddress
++    import ssl
++
++    from cryptography import x509
++    from cryptography.hazmat.primitives import hashes, serialization
++    from cryptography.hazmat.primitives.asymmetric import ec
++    from cryptography.x509.oid import NameOID
++
++    def name(text: str) -> x509.Name:
++        return x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, text)])
++
++    now = datetime.datetime.now(datetime.UTC)
++    company_ca, key = (
++        ec.generate_private_key(ec.SECP256R1()),
++        ec.generate_private_key(ec.SECP256R1()),
++    )
++    leaf = (
++        x509.CertificateBuilder()
++        .subject_name(name("127.0.0.1"))
++        .issuer_name(name("Company CA"))
++        .public_key(key.public_key())
++        .serial_number(x509.random_serial_number())
++        .not_valid_before(now - datetime.timedelta(days=1))
++        .not_valid_after(now + datetime.timedelta(days=1))
++        .add_extension(
++            x509.SubjectAlternativeName([x509.IPAddress(ipaddress.ip_address("127.0.0.1"))]),
++            critical=False,
++        )
++        .sign(company_ca, hashes.SHA256())
++    )
++    (tmp_path / "leaf.pem").write_bytes(leaf.public_bytes(serialization.Encoding.PEM))
++    (tmp_path / "leaf.key").write_bytes(
++        key.private_bytes(
++            serialization.Encoding.PEM,
++            serialization.PrivateFormat.PKCS8,
++            serialization.NoEncryption(),
++        )
++    )
++    tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
++    tls.load_cert_chain(tmp_path / "leaf.pem", tmp_path / "leaf.key")  # the leaf alone
++    server = ThreadingHTTPServer(("127.0.0.1", 0), _Site)
++    server.socket = tls.wrap_socket(server.socket, server_side=True)
++    threading.Thread(target=server.serve_forever, daemon=True).start()
++    yield f"https://127.0.0.1:{server.server_address[1]}"
++    server.shutdown()
++
++
++# D20: the helper's requests to AI Workspace do not verify its certificate —
++# this deploy's convention, its operator says ("verify=false"); otherwise every check-in is
++# 「連不上」 while the person is signed in fine in Chrome.
++def test_the_helpers_requests_to_ai_workspace_pass_a_certificate_node_cannot_verify(
++    tmp_path, https_site
++):
++    chrome = _chrome(tmp_path, https_site)
++    try:
++        status, data = chrome.send("GET", "/api/me", None, {})
++    finally:
++        chrome.close()
++
++    assert status == 200 and isinstance(data, dict)
++
++
++# ...and ONLY those: the pages the helper's Chrome opens for an errand still
++# verify, as the person's Chrome does.
++def test_the_pages_it_opens_still_verify_certificates(tmp_path, https_site):
++    chrome = _chrome(tmp_path, https_site)
++    try:
++        with pytest.raises(Exception, match="CERT"):
++            _visit(chrome, https_site + "/a-page")
++    finally:
++        chrome.close()
++
++
++# Playwright's error ends in a "Call log:" listing every request header — the
++# login cookie among them — and why it cannot reach AI Workspace now goes to
++# helper.log, which the 記錄檔 tab asks the person to send to IT (review of
++# #933). The reason stays; the call log does not.
++def test_why_a_request_failed_never_carries_the_login_cookie(tmp_path):
++    with socket.socket() as s:
++        s.bind(("127.0.0.1", 0))
++        port = s.getsockname()[1]  # closed once the block ends: nobody listens
++    chrome = _chrome(tmp_path, f"http://127.0.0.1:{port}")
++    chrome._ctx.add_cookies(
++        [{"name": "sess", "value": "SSO-SECRET", "url": f"http://127.0.0.1:{port}"}]
++    )
++    try:
++        with pytest.raises(OSError) as failed:
++            chrome.send("GET", "/api/me", None, {})
++    finally:
++        chrome.close()
++
++    reason = str(failed.value)
++    assert "ECONNREFUSED" in reason
++    assert "SSO-SECRET" not in reason and "Call log" not in reason
++    # nor in what logger.exception writes: the traceback with what it was
++    # raised from (the update check logs that way — review round 2 of D21)
++    import traceback
++
++    logged = "".join(traceback.format_exception(failed.value))
++    assert "SSO-SECRET" not in logged
+diff --git a/tests/ai_workspace_helper/test_setup_core.py b/tests/ai_workspace_helper/test_setup_core.py
+index 57bfcbfb..14c93cf1 100644
+--- a/tests/ai_workspace_helper/test_setup_core.py
++++ b/tests/ai_workspace_helper/test_setup_core.py
+@@ -56,7 +56,7 @@ def test_a_version_is_installed_into_a_folder_of_its_own(tmp_path):
+     assert where == home / "versions" / "0.3.0"
+     python = str(setup_core.venv_python(where / "venv"))
+     # built by the Python the person confirmed; packages only from the zip;
+-    # tried before it counts as installed (§3.7.4 steps 3–4)
++    # tried before it counts as installed (§3.7.5 step 1)
+     assert run.commands == [
+         ["/py/python", "-m", "venv", str(home / "versions" / "0.3.0.partial" / "venv")],
+         [
+@@ -141,9 +141,6 @@ def test_install_lays_out_the_folder_and_puts_the_shortcut_on_the_desktop(tmp_pa
+         "base_python": "/py/pythonw",
+         "current": "0.3.0",
+         "previous": None,
+-        "pending": None,
+-        "pending_attempts": 0,
+-        "bad": [],
+     }
+     assert (home / "launch.pyw").read_text() == "# launch.pyw"
+     assert (home / "setup_core.py").read_text() == "# setup_core.py"
+@@ -153,11 +150,11 @@ def test_install_lays_out_the_folder_and_puts_the_shortcut_on_the_desktop(tmp_pa
+ 
+ 
+ # D16: running install.pyw again (a new Python, a broken install) keeps what
+-# the person and the helper recorded — the Startup shortcut is still there, so
+-# the window must still show 「開機時自動啟動」 ticked (review round 1).
++# the person recorded — the Startup shortcut is still there, so the window must
++# still show 「開機時自動啟動」 ticked (review round 1).
+ def test_installing_again_keeps_what_was_recorded(tmp_path):
+     home = tmp_path / "home"
+-    write_state(home, {"current": "0.2.0", "start_at_login": True, "update": "已更新到 0.2.0"})
++    write_state(home, {"current": "0.2.0", "start_at_login": True})
+     wheelhouse = _wheelhouse(tmp_path)
+     for name in ("launch.pyw", "setup_core.py"):
+         (wheelhouse.parent / name).write_text(name)
+@@ -167,7 +164,59 @@ def test_installing_again_keeps_what_was_recorded(tmp_path):
+     state = read_state(home)
+     assert (state["current"], state["previous"]) == ("0.3.0", "0.2.0")
+     assert state["start_at_login"] is True
+-    assert state["update"] == "已更新到 0.2.0"
++
++
++# D21 (§3.7.5 step 2): every new version is installed this way. The version it
++# replaces becomes `previous` — it may still be running, so its folder stays —
++# every other version folder goes, and what only the automatic update wrote
++# (D15) is dropped.
++def test_installing_a_new_version_keeps_the_running_one_and_drops_the_rest(tmp_path):
++    home = tmp_path / "home"
++    for v in ("0.1.0", "0.2.0"):
++        (home / "versions" / v / "venv").mkdir(parents=True)
++    write_state(
++        home,
++        {
++            "base_python": "/py/pythonw",
++            "current": "0.2.0",
++            "previous": "0.1.0",
++            "pending": "0.2.1",
++            "pending_attempts": 2,
++            "bad": ["0.2.1"],
++            "failures": {"0.2.2": 1},
++            "update": "已更新到 0.2.0",
++            "start_at_login": True,
++        },
++    )
++    wheelhouse = _wheelhouse(tmp_path)
++    for name in ("launch.pyw", "setup_core.py"):
++        (wheelhouse.parent / name).write_text(name)
++
++    install(wheelhouse.parent, home, base_python="/py/pythonw", run=_Run())
++
++    assert read_state(home) == {
++        "base_python": "/py/pythonw",
++        "current": "0.3.0",
++        "previous": "0.2.0",
++        "start_at_login": True,
++    }
++    assert sorted(f.name for f in (home / "versions").iterdir()) == ["0.2.0", "0.3.0"]
++
++
++# The same version again (a repair): what was previous stays previous.
++def test_reinstalling_the_same_version_keeps_the_previous_one(tmp_path):
++    home = tmp_path / "home"
++    for v in ("0.2.0", "0.3.0"):
++        (home / "versions" / v / "venv").mkdir(parents=True)
++    write_state(home, {"current": "0.3.0", "previous": "0.2.0"})
++    wheelhouse = _wheelhouse(tmp_path)
++    for name in ("launch.pyw", "setup_core.py"):
++        (wheelhouse.parent / name).write_text(name)
++
++    install(wheelhouse.parent, home, base_python="/py/pythonw", run=_Run())
++
++    assert read_state(home)["previous"] == "0.2.0"
++    assert sorted(f.name for f in (home / "versions").iterdir()) == ["0.2.0", "0.3.0"]
+ 
+ 
+ def test_a_zip_with_no_helper_in_it_says_so(tmp_path):
+@@ -350,3 +399,218 @@ def test_the_summary_says_what_to_do_next():
+     one_bad = [Check("A", True, "可以"), Check("B", False, "被擋")]
+     summary = precheck_summary(one_bad)
+     assert "1 項沒有通過" in summary and "✘ B：被擋" in summary and "✔ A：可以" in summary
++
++
++# The zip carries launch.pyw too (install copies it into the helper's folder).
++# Double-clicked there, in the unzipped folder, it said "not installed" though
++# the helper was installed: it took its own folder for the helper's (D20).
++def test_the_launcher_in_the_unzipped_folder_finds_the_installed_helper(tmp_path, monkeypatch):
++    from ai_workspace_helper.setup_core import launcher_home
++
++    home, unzipped = tmp_path / "home", tmp_path / "unzipped"
++    unzipped.mkdir()
++    write_state(home, {"current": "0.3.0"})
++    monkeypatch.setenv("AI_WORKSPACE_HELPER_HOME", str(home))
++
++    assert launcher_home(unzipped) == home
++    assert launcher_home(home) == home  # the installed launcher: its own folder
++
++
++# ...and leaves no trace where the helper would live: after 解除安裝, the
++# helper's folder must stay gone (D17), so the lock stays in the unzipped one.
++def test_a_launcher_with_nothing_installed_anywhere_still_says_so(tmp_path, monkeypatch):
++    from ai_workspace_helper.setup_core import launch, launcher_home
++
++    home, unzipped = tmp_path / "home", tmp_path / "unzipped"
++    unzipped.mkdir()
++    monkeypatch.setenv("AI_WORKSPACE_HELPER_HOME", str(home))
++
++    with pytest.raises(SetupFailed, match="not installed"):
++        launch(launcher_home(unzipped))
++    assert not home.exists()
++
++
++def test_double_clicking_launch_pyw_in_the_unzipped_folder_starts_the_installed_helper(tmp_path):
++    """The real launch.pyw, run where the person double-clicked it — the
++    unzipped download — starts the version installed in the helper's folder."""
++    import os
++    import shutil
++    import subprocess
++    import sys
++    import time
++
++    helper = Path(setup_core.__file__).resolve().parents[2]
++    home, unzipped = tmp_path / "home", tmp_path / "unzipped"
++    unzipped.mkdir()
++    shutil.copy(helper / "launch.pyw", unzipped / "launch.pyw")
++    shutil.copy(Path(setup_core.__file__), unzipped / "setup_core.py")
++    write_state(home, {"current": "0.3.0"})
++    started = home / "started"
++    python = Path(setup_core.version_command(home, "0.3.0")[0])
++    python.parent.mkdir(parents=True)
++    python.write_text(f"#!/bin/sh\ntouch '{started}'\n")
++    python.chmod(0o755)
++    env = {k: v for k, v in os.environ.items() if k != "DISPLAY"}  # no dialog to show
++
++    done = subprocess.run(
++        [sys.executable, str(unzipped / "launch.pyw")],
++        env={**env, "AI_WORKSPACE_HELPER_HOME": str(home)},
++        capture_output=True,
++        text=True,
++        timeout=60,
++    )
++    for _ in range(50):
++        if started.exists():
++            break
++        time.sleep(0.1)
++
++    assert done.returncode == 0, done.stderr
++    assert started.exists()
++
++
++def _zip_beside(tmp_path: Path, version: str = "0.3.0") -> Path:
++    wheelhouse = _wheelhouse(tmp_path, version)
++    for name in ("launch.pyw", "setup_core.py"):
++        (wheelhouse.parent / name).write_text(name)
++    return wheelhouse.parent
++
++
++def _running(home: Path):
++    lock = setup_core.InstanceLock(home / "helper.lock")
++    assert lock.acquire()
++    return lock
++
++
++# Review of D21: with a helper running, install.pyw never touches a version
++# folder that is already there — it may be the running one (the lock says a
++# helper runs, not which version). Rebuilding the same version is refused
++# until that helper ends (on Windows the rebuild died half-way on a loaded
++# .pyd and left `current` pointing at a gutted venv) ...
++def test_with_a_helper_running_the_same_version_is_not_rebuilt_under_it(tmp_path):
++    home = tmp_path / "home"
++    venv = home / "versions" / "0.3.0" / "venv"
++    venv.mkdir(parents=True)
++    (venv / "in-use").write_text("")
++    write_state(home, {"current": "0.3.0"})
++    running = _running(home)
++    try:
++        with pytest.raises(SetupFailed, match="結束"):
++            install(_zip_beside(tmp_path), home, base_python="/py/pythonw", run=_Run())
++    finally:
++        running.release()
++
++    assert (venv / "in-use").exists()
++
++
++# ... and a new version goes in beside them, nothing removed: the running one
++# may be neither current nor previous (the person said 「否」 and installed
++# again). The next install with no helper running tidies up.
++def test_with_a_helper_running_a_new_version_removes_no_folder(tmp_path):
++    home = tmp_path / "home"
++    for v in ("0.1.0", "0.2.0"):
++        (home / "versions" / v / "venv").mkdir(parents=True)
++    write_state(home, {"current": "0.2.0", "previous": "0.1.0"})
++    running = _running(home)
++    try:
++        install(_zip_beside(tmp_path), home, base_python="/py/pythonw", run=_Run())
++    finally:
++        running.release()
++
++    assert sorted(f.name for f in (home / "versions").iterdir()) == ["0.1.0", "0.2.0", "0.3.0"]
++    assert read_state(home)["current"] == "0.3.0"
++
++
++# P13: a new version whose self-test fails never becomes current.
++def test_a_new_version_that_fails_its_self_test_leaves_the_current_one(tmp_path):
++    home = tmp_path / "home"
++    (home / "versions" / "0.2.0" / "venv").mkdir(parents=True)
++    write_state(home, {"current": "0.2.0", "previous": None})
++
++    with pytest.raises(SetupFailed):
++        install(_zip_beside(tmp_path), home, base_python="/py/pythonw", run=_Run("--self-test"))
++
++    assert read_state(home) == {"current": "0.2.0", "previous": None}
++    assert sorted(f.name for f in (home / "versions").iterdir()) == ["0.2.0"]
++
++
++# A 0.1.0 still running has its own 「立即更新」: it ends, and starts the
++# installed launch.pyw with --wait while its process is still letting go of
++# the lock. That launcher is the D21 one once install.pyw ran: it must still
++# wait, or it brings the dying window forward and nothing starts (review of
++# D21).
++def test_the_launcher_still_waits_when_a_0_1_0_restarts_through_it(tmp_path):
++    import os
++    import shutil
++    import subprocess
++    import sys
++    import time
++
++    helper = Path(setup_core.__file__).resolve().parents[2]
++    home = tmp_path / "home"
++    write_state(home, {"current": "0.3.0"})
++    shutil.copy(helper / "launch.pyw", home / "launch.pyw")
++    shutil.copy(Path(setup_core.__file__), home / "setup_core.py")
++    started = home / "started"
++    python = Path(setup_core.version_command(home, "0.3.0")[0])
++    python.parent.mkdir(parents=True)
++    python.write_text(f"#!/bin/sh\ntouch '{started}'\n")
++    python.chmod(0o755)
++    old = setup_core.InstanceLock(home / "helper.lock")
++    assert old.acquire()  # the 0.1.0 still ending
++    env = {k: v for k, v in os.environ.items() if k != "DISPLAY"}
++
++    launcher = subprocess.Popen(
++        [sys.executable, str(home / "launch.pyw"), "--wait"],
++        env={**env, "AI_WORKSPACE_HELPER_HOME": str(home)},
++        stdout=subprocess.PIPE,
++        stderr=subprocess.PIPE,
++        text=True,
++    )
++    # the old helper ends only once a launcher that does not wait would have
++    # given up (show.request) — or after a while: never on a timer a slow
++    # start could outrun
++    for _ in range(100):
++        if (home / setup_core.SHOW_REQUEST).exists():
++            break
++        time.sleep(0.1)
++    old.release()
++    _out, err = launcher.communicate(timeout=60)
++    for _ in range(50):
++        if started.exists():
++            break
++        time.sleep(0.1)
++
++    assert launcher.returncode == 0, err
++    assert started.exists()
++    assert not (home / setup_core.SHOW_REQUEST).exists()
++
++
++# Rebuilding takes about a minute (venv, pip, self-test): a helper started in
++# the meantime (the desktop shortcut, the Startup one) runs `current` — the
++# very version being rebuilt. The folder is asked about again right before it
++# is replaced, so the running one is never removed (review round 2 of D21).
++def test_a_helper_started_during_the_rebuild_keeps_its_version(tmp_path):
++    home = tmp_path / "home"
++    venv = home / "versions" / "0.3.0" / "venv"
++    venv.mkdir(parents=True)
++    (venv / "in-use").write_text("")
++    write_state(home, {"current": "0.3.0"})
++    started: list[setup_core.InstanceLock] = []
++
++    class _StartsAHelper(_Run):
++        def __call__(self, argv: list[str]) -> None:
++            super().__call__(argv)
++            if argv[1:3] == ["-m", "venv"] and not started:
++                lock = setup_core.InstanceLock(home / "helper.lock")
++                assert lock.acquire()
++                started.append(lock)
++
++    try:
++        with pytest.raises(SetupFailed, match="結束"):
++            install(_zip_beside(tmp_path), home, base_python="/py/pythonw", run=_StartsAHelper())
++    finally:
++        for lock in started:
++            lock.release()
++
++    assert (venv / "in-use").exists()
++    assert not (home / "versions" / "0.3.0.partial").exists()
+diff --git a/tests/ai_workspace_helper/test_updater.py b/tests/ai_workspace_helper/test_updater.py
+index 5b6efc23..1c8a5d9a 100644
+--- a/tests/ai_workspace_helper/test_updater.py
++++ b/tests/ai_workspace_helper/test_updater.py
+@@ -1,204 +1,157 @@
+-"""The running helper keeps itself current (docs/plan-outside-helper.md
+-§3.7.4, §3.7.6): it checks at start and every six hours, fetches through its
+-own signed-in line, prepares in the background — never in the way of the
+-person's lookups — and a version the backend refuses is updated at once."""
++"""The helper says when a newer version is out (docs/plan-outside-helper.md
++D21, §3.7.4, §3.7.6): it reads the published release at start and every six
++hours, and only tells. It downloads and installs nothing — its line to AI
++Workspace does not verify the certificate (D20), so the person downloads the
++zip in their own browser and runs install.pyw again."""
+ 
+ from __future__ import annotations
+ 
+-import hashlib
+-from pathlib import Path
+-
+-from ai_workspace_helper.setup_core import read_state, write_state
+-from ai_workspace_helper.updates import CHECK_EVERY_S, RETRY_AFTER_S, Updater
+-
+-from tests.ai_workspace_helper.test_setup_core import _Run
+-from tests.ai_workspace_helper.test_updates import _zip
++import pytest
++from ai_workspace_helper.updates import CHECK_EVERY_S, Updater
+ 
+ 
+ class _Backend:
+-    def __init__(self, manifest: dict | None, data: bytes = b"") -> None:
++    """The release info, and nothing else: an updater that asks this backend
++    for anything but the manifest (a download) fails the test."""
++
++    def __init__(self, manifest: dict | None) -> None:
+         self._manifest = manifest
+-        self._data = data
+         self.manifests = 0
+-        self.downloads: list[str] = []
+ 
+     def manifest(self):
+         self.manifests += 1
+         return self._manifest
+ 
+-    def download(self, file: str) -> bytes:
+-        self.downloads.append(file)
+-        return self._data
+-
+-
+-def _release(version: str) -> tuple[dict, bytes]:
+-    data = _zip(version)
+-    return (
+-        {
+-            "version": version,
+-            "min_version": "0.0.0",
+-            "file": f"ai-workspace-helper-{version}.zip",
+-            "sha256": hashlib.sha256(data).hexdigest(),
+-        },
+-        data,
+-    )
++    def __getattr__(self, name: str):
++        raise AssertionError(f"the updater asked the backend for {name!r}")
+ 
+ 
+-def _home(tmp_path: Path, current: str = "0.3.0") -> Path:
+-    (tmp_path / "versions" / current / "venv").mkdir(parents=True)
+-    write_state(tmp_path, {"base_python": "/py/pythonw", "current": current, "bad": []})
+-    return tmp_path
++def _release(version: str) -> dict:
++    return {
++        "version": version,
++        "min_version": "0.0.0",
++        "file": f"ai-workspace-helper-{version}.zip",
++        "sha256": "0" * 64,
++    }
+ 
+ 
+-def _updater(home, backend, clock, run=None, version="0.3.0"):
+-    return Updater(
+-        home,
+-        backend,
+-        clock=lambda: clock[0],
+-        spawn=lambda work: work(),  # the background thread, run inline
+-        run=run or _Run(),
+-        version=version,
+-    )
++def _updater(backend, clock, version="0.3.0"):
++    return Updater(backend, clock=lambda: clock[0], version=version)
+ 
+ 
+-def test_a_newer_release_is_prepared_for_the_next_start(tmp_path):
+-    manifest, data = _release("0.4.0")
+-    backend, clock = _Backend(manifest, data), [0.0]
+-    up = _updater(_home(tmp_path), backend, clock)
++def test_a_newer_release_is_told_about_and_nothing_is_fetched():
++    up = _updater(_Backend(_release("0.4.0")), [0.0])
+ 
+     up.tick()
+ 
+-    assert backend.downloads == ["ai-workspace-helper-0.4.0.zip"]
+-    assert read_state(tmp_path)["pending"] == "0.4.0"
+-    assert up.status == "ready"
++    assert up.status == "available: 0.4.0"
+ 
+ 
+-def test_it_checks_at_start_then_every_six_hours(tmp_path):
+-    backend, clock = _Backend(None), [0.0]
+-    up = _updater(_home(tmp_path), backend, clock)
++def test_it_checks_at_start_then_every_six_hours():
++    backend, clock = _Backend(_release("0.4.0")), [0.0]
++    up = _updater(backend, clock)
+ 
+     up.tick()
+     clock[0] = CHECK_EVERY_S - 1
+     up.tick()
++    assert backend.manifests == 1
+     clock[0] = CHECK_EVERY_S
+     up.tick()
+-
+     assert backend.manifests == 2
+ 
+ 
+-def test_nothing_newer_fetches_nothing(tmp_path):
+-    manifest, data = _release("0.3.0")
+-    backend, clock = _Backend(manifest, data), [0.0]
+-    up = _updater(_home(tmp_path), backend, clock)
++@pytest.mark.parametrize("published", ["0.3.0", "0.2.9", "not-a-version"])
++def test_a_release_no_newer_than_this_one_says_nothing(published):
++    up = _updater(_Backend(_release(published)), [0.0])
+ 
+     up.tick()
+ 
+-    assert backend.downloads == []
+     assert up.status == ""
+ 
+ 
+-def test_a_failed_preparation_is_shown_and_the_running_version_carries_on(tmp_path):
+-    manifest, data = _release("0.4.0")
+-    backend, clock = _Backend(manifest, data), [0.0]
+-    up = _updater(_home(tmp_path), backend, clock, run=_Run("--self-test"))
++def test_with_nothing_published_it_says_nothing():
++    up = _updater(_Backend(None), [0.0])
+ 
+     up.tick()
+ 
+-    assert up.status.startswith("failed")
+-    assert read_state(tmp_path)["current"] == "0.3.0"
+-    assert read_state(tmp_path).get("pending") is None
+-
+-
+-# §3.7.6: refused by the backend, the helper updates at once — from the release
+-# the refusal named — and does not hammer the backend when that fails.
+-def test_a_refused_version_updates_at_once_from_the_release_it_was_given(tmp_path):
+-    manifest, data = _release("0.4.0")
+-    backend, clock = _Backend(None, data), [0.0]
+-    up = _updater(_home(tmp_path), backend, clock)
+-    up.tick()  # the scheduled check, nothing published then
+-    clock[0] = 10.0
+-
+-    up.tick(required=manifest)
++    assert up.status == ""
+ 
+-    assert backend.downloads == ["ai-workspace-helper-0.4.0.zip"]
+-    assert up.status == "ready"
+ 
++# The operator took the newer release back: the line goes with it.
++def test_a_release_taken_back_takes_its_line_with_it():
++    backend, clock = _Backend(_release("0.4.0")), [0.0]
++    up = _updater(backend, clock)
++    up.tick()
+ 
+-# Refused, and the release it must update to already failed here three times:
+-# it will not be tried again, so the window must say what is left — a
+-# reinstall — rather than nothing at all (review round 1).
+-def test_a_refused_helper_whose_update_is_marked_bad_says_to_reinstall(tmp_path):
+-    manifest, data = _release("0.4.0")
+-    home = _home(tmp_path)
+-    write_state(home, {**read_state(home), "bad": ["0.4.0"]})
+-    backend = _Backend(None, data)
+-    up = _updater(home, backend, [0.0])
++    backend._manifest = _release("0.3.0")
++    clock[0] = CHECK_EVERY_S
++    up.tick()
+ 
+-    up.tick(required=manifest)
++    assert up.status == ""
+ 
+-    assert backend.downloads == []
+-    assert up.status.startswith("failed")
+ 
++# §3.7.6: refused (426), the helper says which release to install — the one
++# the refusal named — at once, without asking for the manifest.
++def test_a_refused_version_says_which_release_to_install():
++    backend = _Backend(None)
++    up = _updater(backend, [0.0])
+ 
+-# A manifest's version names folders on the PC (versions/<v>): only a version.
+-def test_a_release_whose_version_is_not_a_version_is_not_installed(tmp_path):
+-    manifest, data = _release("0.4.0")
+-    manifest["version"] = "../../0.9.0"
+-    backend = _Backend(manifest, data)
+-    up = _updater(_home(tmp_path), backend, [0.0])
++    up.tick(required=_release("0.4.0"))
+ 
+-    up.tick()
++    assert up.status == "required: 0.4.0"
++    assert backend.manifests == 0
+ 
+-    assert backend.downloads == []
+-    assert not (tmp_path.parent / "0.9.0").exists()
+ 
++def test_a_refusal_that_names_no_release_still_says_to_reinstall():
++    up = _updater(_Backend(None), [0.0])
+ 
+-def test_a_forced_update_that_failed_waits_before_trying_again(tmp_path):
+-    manifest, data = _release("0.4.0")
+-    backend, clock = _Backend(None, data), [0.0]
+-    up = _updater(_home(tmp_path), backend, clock, run=_Run("--self-test"))
++    up.tick(required={})
+ 
+-    up.tick(required=manifest)
+-    clock[0] = RETRY_AFTER_S - 1
+-    up.tick(required=manifest)
+-    clock[0] = RETRY_AFTER_S
+-    up.tick(required=manifest)
++    assert up.status == "required: "
+ 
+-    assert len(backend.downloads) == 2
+ 
++# Refused, then let back in (the operator lowered min_version): the line must
++# not keep saying 「請到「小幫手」頁下載新版」 until the next six-hour check —
++# connected again, it reads the release at once (review of D21).
++def test_connected_again_after_a_refusal_it_reads_the_release_at_once():
++    backend, clock = _Backend(_release("0.3.0")), [0.0]
++    up = _updater(backend, clock)
++    up.tick()
++    clock[0] = 60
++    up.tick(required=_release("0.4.0"))
++    assert up.status == "required: 0.4.0"
+ 
+-# §3.7.5 step 3: the waiting version, once up, makes itself current — once.
+-def test_the_new_version_confirms_itself_once_connected(tmp_path):
+-    home = _home(tmp_path)
+-    (home / "versions" / "0.4.0" / "venv").mkdir(parents=True)
+-    state = read_state(home)
+-    write_state(home, {**state, "pending": "0.4.0", "pending_attempts": 1})
+-    up = _updater(home, _Backend(None), [0.0], version="0.4.0")
++    clock[0] = 120
++    up.tick()
+ 
+-    up.connected()
+-    up.connected()
++    assert backend.manifests == 2
++    assert up.status == ""
+ 
+-    assert read_state(home)["current"] == "0.4.0"
+-    assert read_state(home)["previous"] == "0.3.0"
+ 
++# Whatever came down the unverified line (D20) in a 426's body, a release that
++# is not one names no version — it is not a reason to fail every poll.
++@pytest.mark.parametrize("named", ["x", ["0.4.0"], {"version": 4}])
++def test_a_refusal_naming_something_else_still_says_to_reinstall(named):
++    up = _updater(_Backend(None), [0.0])
+ 
+-# Asked once per run, not on every poll: the check-in happens every couple of
+-# seconds, and there is nothing to confirm after the first.
+-def test_it_asks_to_be_confirmed_once_per_run(tmp_path, monkeypatch):
+-    from ai_workspace_helper import setup_core
++    up.tick(required=named)
+ 
+-    asked: list[str] = []
+-    monkeypatch.setattr(setup_core, "confirm", lambda home, v: asked.append(v) or False)
+-    up = _updater(_home(tmp_path), _Backend(None), [0.0])
++    assert up.status == ("required: 4" if isinstance(named, dict) else "required: ")
+ 
+-    for _ in range(5):
+-        up.connected()
+ 
+-    assert asked == ["0.3.0"]
++# Let back in, the first read failing (a blip) must not leave 「請到「小幫手」頁
++# 下載新版」 up for six hours: connected, this version is not refused (review
++# round 2 of D21).
++def test_let_back_in_a_failed_read_still_takes_the_refusal_down():
++    class _Down(_Backend):
++        def manifest(self):
++            self.manifests += 1
++            raise OSError("timed out")
+ 
++    up = _updater(_Down(None), [0.0])
++    up.tick(required=_release("0.4.0"))
+ 
+-def test_what_it_reports_on_each_check_in(tmp_path):
+-    home = _home(tmp_path)
+-    write_state(home, {**read_state(home), "update": "0.4.0 起不來,已退回 0.3.0"})
++    with pytest.raises(OSError):
++        up.tick()
+ 
+-    assert _updater(home, _Backend(None), [0.0]).report() == "0.4.0 起不來,已退回 0.3.0"
++    assert up.status == ""
+diff --git a/tests/ai_workspace_helper/test_updates.py b/tests/ai_workspace_helper/test_updates.py
+index 745d8b8e..36fd75fd 100644
+--- a/tests/ai_workspace_helper/test_updates.py
++++ b/tests/ai_workspace_helper/test_updates.py
+@@ -1,26 +1,21 @@
+-"""Updating the helper on the person's PC (docs/plan-outside-helper.md §3.7.4–
+-§3.7.6) and removing it (D17). Never in place: a new version is installed
+-beside the running one and taken on the next start; one that will not start is
+-rolled back by the fixed launcher; nothing half-done is ever started.
++"""Starting, replacing and removing the helper on the person's PC
++(docs/plan-outside-helper.md §3.7.5, D13, D17, D21). Never in place: a new
++version is installed beside the running one by install.pyw, which asks the
++running helper to end before starting the new one; nothing half-done is ever
++started.
+ 
+ All on Linux with the commands recorded (D14: Windows is checked by hand).
+ """
+ 
+ from __future__ import annotations
+ 
+-import hashlib
+-import io
+-import zipfile
+ from pathlib import Path
+ 
+ import pytest
+ from ai_workspace_helper import setup_core
+ from ai_workspace_helper.setup_core import (
+     SetupFailed,
+-    confirm,
+-    prepare_update,
+     read_state,
+-    start_choice,
+     startup_command,
+     uninstall,
+     write_state,
+@@ -29,210 +24,10 @@ from ai_workspace_helper.setup_core import (
+ from tests.ai_workspace_helper.test_setup_core import _Run
+ 
+ 
+-def _zip(version: str, launcher: str = "# launch v") -> bytes:
+-    buf = io.BytesIO()
+-    with zipfile.ZipFile(buf, "w") as z:
+-        z.writestr(f"wheelhouse/ai_workspace_helper-{version}-py3-none-any.whl", "wheel")
+-        z.writestr("launch.pyw", f"{launcher}{version}")
+-        z.writestr("setup_core.py", f"# setup_core {version}")
+-        z.writestr("install.pyw", "# install")
+-    return buf.getvalue()
+-
+-
+-def _manifest(version: str, data: bytes, **over) -> dict:
+-    return {
+-        "version": version,
+-        "min_version": "0.0.0",
+-        "file": f"ai-workspace-helper-{version}.zip",
+-        "sha256": hashlib.sha256(data).hexdigest(),
+-        **over,
+-    }
+-
+-
+ def _installed(home: Path, current: str = "0.3.0", **state) -> None:
+     for v in {current, *([state["previous"]] if state.get("previous") else [])}:
+         (home / "versions" / v / "venv").mkdir(parents=True, exist_ok=True)
+-    write_state(
+-        home,
+-        {
+-            "base_python": "/py/pythonw",
+-            "current": current,
+-            "previous": None,
+-            "pending": None,
+-            "pending_attempts": 0,
+-            "bad": [],
+-            **state,
+-        },
+-    )
+-
+-
+-# ── §3.7.4: preparing the next version in the background ────────────────────
+-
+-
+-def test_a_newer_release_is_installed_beside_and_waits_for_the_next_start(tmp_path):
+-    _installed(tmp_path)
+-    data = _zip("0.4.0")
+-    run = _Run()
+-
+-    outcome = prepare_update(tmp_path, _manifest("0.4.0", data), lambda _f: data, run=run)
+-
+-    assert outcome == "ready"
+-    assert (tmp_path / "versions" / "0.4.0" / "venv").is_dir()
+-    # the running version is untouched, and nothing switches until next start
+-    state = read_state(tmp_path)
+-    assert (state["current"], state["pending"], state["pending_attempts"]) == ("0.3.0", "0.4.0", 0)
+-    # the new version keeps its own launcher, to put in place once it is confirmed
+-    assert (tmp_path / "versions" / "0.4.0" / "launch.pyw").read_text() == "# launch v0.4.0"
+-    # the venv is built from the Python the person confirmed at install (D16)
+-    assert run.commands[0][0] == "/py/pythonw"
+-
+-
+-@pytest.mark.parametrize("version", ["0.3.0", "0.2.9"])
+-def test_a_release_no_newer_than_this_one_is_left_alone(tmp_path, version):
+-    _installed(tmp_path)
+-    data = _zip(version)
+-
+-    assert prepare_update(tmp_path, _manifest(version, data), _fail_fetch, run=_Run()) == "current"
+-
+-
+-def test_a_release_marked_bad_is_not_tried_again(tmp_path):
+-    _installed(tmp_path, bad=["0.4.0"])
+-    data = _zip("0.4.0")
+-
+-    assert prepare_update(tmp_path, _manifest("0.4.0", data), _fail_fetch, run=_Run()) == "bad"
+-
+-
+-def test_a_release_already_waiting_is_not_fetched_again(tmp_path):
+-    _installed(tmp_path, pending="0.4.0")
+-    (tmp_path / "versions" / "0.4.0" / "venv").mkdir(parents=True)
+-    data = _zip("0.4.0")
+-
+-    assert prepare_update(tmp_path, _manifest("0.4.0", data), _fail_fetch, run=_Run()) == "ready"
+-
+-
+-# A download that does not match the manifest is never installed.
+-def test_a_download_that_does_not_match_is_thrown_away(tmp_path):
+-    _installed(tmp_path)
+-    data = _zip("0.4.0")
+-
+-    with pytest.raises(SetupFailed, match="sha256"):
+-        prepare_update(tmp_path, _manifest("0.4.0", data), lambda _f: data + b"x", run=_Run())
+-
+-    assert not (tmp_path / "versions" / "0.4.0").exists()
+-    assert list((tmp_path / "downloads").iterdir()) == []
+-    assert read_state(tmp_path)["pending"] is None
+-
+-
+-# §3.7.4 step 5: the running version carries on; the same release failing three
+-# times is marked bad and left until the next one.
+-def test_a_release_that_fails_three_times_is_marked_bad(tmp_path):
+-    _installed(tmp_path)
+-    data = _zip("0.4.0")
+-
+-    for attempt in range(1, 4):
+-        with pytest.raises(SetupFailed):
+-            prepare_update(
+-                tmp_path, _manifest("0.4.0", data), lambda _f: data, run=_Run("--self-test")
+-            )
+-        state = read_state(tmp_path)
+-        assert state["current"] == "0.3.0"
+-        assert ("0.4.0" in state["bad"]) is (attempt == 3)
+-
+-    assert prepare_update(tmp_path, _manifest("0.4.0", data), _fail_fetch, run=_Run()) == "bad"
+-
+-
+-# A zip whose entries climb out of its folder (zip slip) writes nothing — even
+-# one that matches its manifest's checksum.
+-def test_an_update_zip_that_names_paths_outside_itself_is_refused(tmp_path):
+-    home = tmp_path / "home"
+-    _installed(home)
+-    buf = io.BytesIO()
+-    with zipfile.ZipFile(buf, "w") as z:
+-        z.writestr("wheelhouse/ai_workspace_helper-0.4.0-py3-none-any.whl", "wheel")
+-        z.writestr("../../escaped.txt", "out")
+-    data = buf.getvalue()
+-
+-    with pytest.raises(SetupFailed, match="outside"):
+-        prepare_update(home, _manifest("0.4.0", data), lambda _f: data, run=_Run())
+-
+-    assert not (tmp_path / "escaped.txt").exists()
+-    assert not (home / "escaped.txt").exists()
+-
+-
+-def test_a_manifest_naming_a_path_is_refused(tmp_path):
+-    _installed(tmp_path)
+-    data = _zip("0.4.0")
+-
+-    with pytest.raises(SetupFailed):
+-        prepare_update(
+-            tmp_path, _manifest("0.4.0", data, file="../x.zip"), lambda _f: data, run=_Run()
+-        )
+-
+-
+-# ── §3.7.5: the fixed launcher switches, and rolls back ──────────────────────
+-
+-
+-def test_with_nothing_waiting_the_current_version_starts(tmp_path):
+-    version, state = start_choice({"current": "0.3.0", "pending": None})
+-
+-    assert version == "0.3.0"
+-    assert state["pending"] is None
+-
+-
+-def test_a_waiting_version_is_tried_and_counted(tmp_path):
+-    version, state = start_choice({"current": "0.3.0", "pending": "0.4.0", "pending_attempts": 1})
+-
+-    assert version == "0.4.0"
+-    assert state["pending_attempts"] == 2
+-
+-
+-def test_a_version_that_never_confirms_is_rolled_back_after_three_starts(tmp_path):
+-    state = {"current": "0.3.0", "pending": "0.4.0", "pending_attempts": 0, "bad": []}
+-
+-    started = []
+-    for _ in range(4):
+-        version, state = start_choice(state)
+-        started.append(version)
+-
+-    assert started == ["0.4.0", "0.4.0", "0.4.0", "0.3.0"]
+-    assert (state["pending"], state["bad"]) == (None, ["0.4.0"])
+-    # said once, on the next check-in (§3.7.5 step 4)
+-    assert state["update"] == "0.4.0 起不來,已退回 0.3.0"
+-
+-
+-def test_the_new_version_confirms_itself_and_takes_over(tmp_path):
+-    _installed(tmp_path, current="0.3.0", previous="0.2.0", pending="0.4.0", pending_attempts=1)
+-    new = tmp_path / "versions" / "0.4.0"
+-    (new / "venv").mkdir(parents=True)
+-    (new / "launch.pyw").write_text("# launch v0.4.0")
+-    (new / "setup_core.py").write_text("# setup_core 0.4.0")
+-    (tmp_path / "launch.pyw").write_text("# launch v0.3.0")
+-    (tmp_path / "versions" / "0.1.0" / "venv").mkdir(parents=True)
+-
+-    assert confirm(tmp_path, "0.4.0") is True
+-
+-    state = read_state(tmp_path)
+-    assert (state["current"], state["previous"], state["pending"], state["pending_attempts"]) == (
+-        "0.4.0",
+-        "0.3.0",
+-        None,
+-        0,
+-    )
+-    # only the version running and the one before it are kept
+-    assert sorted(p.name for p in (tmp_path / "versions").iterdir()) == ["0.3.0", "0.4.0"]
+-    # the launcher is replaced only now, once the new version has proven itself
+-    assert (tmp_path / "launch.pyw").read_text() == "# launch v0.4.0"
+-    assert (tmp_path / "setup_core.py").read_text() == "# setup_core 0.4.0"
+-
+-
+-def test_a_version_that_is_not_the_one_waiting_confirms_nothing(tmp_path):
+-    _installed(tmp_path, current="0.3.0", pending="0.4.0")
+-    (tmp_path / "launch.pyw").write_text("# launch v0.3.0")
+-
+-    assert confirm(tmp_path, "0.3.0") is False
+-
+-    assert read_state(tmp_path)["pending"] == "0.4.0"
+-    assert (tmp_path / "launch.pyw").read_text() == "# launch v0.3.0"
++    write_state(home, {"base_python": "/py/pythonw", "current": current, "previous": None, **state})
+ 
+ 
+ # ── D13: start at login ─────────────────────────────────────────────────────
+@@ -279,15 +74,25 @@ def test_what_uninstall_cannot_remove_is_listed(tmp_path):
+ # ── launch.pyw (§3.7.5) ─────────────────────────────────────────────────────
+ 
+ 
+-def test_the_launcher_starts_the_chosen_version_after_writing_down_the_try(tmp_path):
+-    _installed(tmp_path, pending="0.4.0", pending_attempts=0)
++def test_the_launcher_starts_the_current_version(tmp_path):
++    _installed(tmp_path)
+     started: list[list[str]] = []
+ 
+-    assert setup_core.launch(tmp_path, popen=lambda argv, cwd: started.append(argv)) == "0.4.0"
++    assert setup_core.launch(tmp_path, popen=lambda argv, cwd: started.append(argv)) == "0.3.0"
+ 
+-    assert started == [setup_core.version_command(tmp_path, "0.4.0")]
+-    # written BEFORE starting: a version that crashes on start is still counted
+-    assert read_state(tmp_path)["pending_attempts"] == 1
++    assert started == [setup_core.version_command(tmp_path, "0.3.0")]
++
++
++# A state.json from D15's automatic update (0.1.0) still starts its current
++# version: the fields only that update wrote are not read (D21).
++def test_a_state_left_by_the_automatic_update_still_starts_its_current_version(tmp_path):
++    _installed(tmp_path, pending="0.4.0", pending_attempts=2, bad=["0.3.1"])
++    started: list[list[str]] = []
++
++    assert setup_core.launch(tmp_path, popen=lambda argv, cwd: started.append(argv)) == "0.3.0"
++
++    assert started == [setup_core.version_command(tmp_path, "0.3.0")]
++    assert read_state(tmp_path)["pending"] == "0.4.0"  # left as it was, unread
+ 
+ 
+ # One helper at a time (§3.7 table): started at login AND double-clicked, the
+@@ -307,27 +112,127 @@ def test_with_a_helper_running_the_launcher_brings_it_forward_instead(tmp_path):
+     assert (tmp_path / "show.request").exists()
+ 
+ 
+-# 「立即更新」 (§3.7.6): the old helper is still ending when the launcher starts
+-# — its lock goes with its process, which still holds Chrome's profile. Asked
+-# to wait, the launcher waits for the lock rather than bringing a dying window
+-# forward, and only then starts the new version (review round 1).
+-def test_a_restarting_launcher_waits_for_the_old_helper_to_end(tmp_path):
+-    _installed(tmp_path, pending="0.4.0")
++def test_whether_a_helper_is_running_is_asked_of_its_lock(tmp_path):
++    _installed(tmp_path)
++    assert setup_core.helper_running(tmp_path) is False
+     running = setup_core.InstanceLock(tmp_path / "helper.lock")
+     assert running.acquire()
+-    waited: list[float] = []
++    try:
++        assert setup_core.helper_running(tmp_path) is True
++    finally:
++        running.release()
++    # asking took nothing: a helper can still start
++    assert setup_core.InstanceLock(tmp_path / "helper.lock").acquire()
+ 
+-    def sleep(s: float) -> None:
+-        waited.append(s)
+-        if len(waited) == 2:
+-            running.release()  # the old process has ended
++
++# D21 (§3.7.5 step 3): install.pyw put a new version in place while a helper
++# runs. Asked to, that helper ends (quit.request) and the new one starts once
++# its lock is free — never two at a time.
++def test_a_new_install_ends_the_running_helper_and_starts_the_new_one(tmp_path):
++    _installed(tmp_path, current="0.4.0")
++    running = setup_core.InstanceLock(tmp_path / "helper.lock")
++    assert running.acquire()
++    asked: list[bool] = []
++
++    def sleep(_s: float) -> None:
++        # the running helper sees the request and ends, letting go of its lock
++        asked.append((tmp_path / setup_core.QUIT_REQUEST).exists())
++        running.release()
+ 
+     started: list[list[str]] = []
+-    version = setup_core.launch(
+-        tmp_path, popen=lambda argv, cwd: started.append(argv), wait_s=15, sleep=sleep
++    outcome = setup_core.replace_running(
++        tmp_path, popen=lambda argv, cwd: started.append(argv), wait_s=20, sleep=sleep
+     )
+ 
+-    assert version == "0.4.0" and len(started) == 1 and len(waited) == 2
++    assert asked == [True]
++    assert outcome == "0.4.0"
++    assert started == [setup_core.version_command(tmp_path, "0.4.0")]
++    assert not (tmp_path / setup_core.QUIT_REQUEST).exists()
++
++
++# A helper that does not end in time is left running and brought forward; its
++# request is withdrawn so it does not end later, under the person's feet.
++def test_a_helper_that_does_not_end_in_time_is_left_running(tmp_path):
++    _installed(tmp_path, current="0.4.0")
++    running = setup_core.InstanceLock(tmp_path / "helper.lock")
++    assert running.acquire()
++    started: list[list[str]] = []
++    try:
++        outcome = setup_core.replace_running(
++            tmp_path, popen=lambda argv, cwd: started.append(argv), wait_s=2, sleep=lambda _s: None
++        )
++    finally:
++        running.release()
++
++    assert outcome == "shown" and started == []
++    assert not (tmp_path / setup_core.QUIT_REQUEST).exists()
++    assert (tmp_path / setup_core.SHOW_REQUEST).exists()
++
++
++# A request left from before (its helper ended on its own first) must not end
++# the next helper the moment it starts: holding the lock, the launcher knows no
++# helper is running, so any request there is stale.
++def test_a_stale_quit_request_does_not_end_the_next_helper(tmp_path):
++    _installed(tmp_path)
++    (tmp_path / setup_core.QUIT_REQUEST).write_text("quit")
++
++    setup_core.launch(tmp_path, popen=lambda argv, cwd: None)
++
++    assert not (tmp_path / setup_core.QUIT_REQUEST).exists()
++
++
++# The way from 0.1.0 (D15) to D21: a 0.1.0 that reaches AI Workspace still
++# downloads the next version itself and marks it pending, and ITS launcher
++# starts it — counting starts, and after three without the confirmation D15
++# expected, rolling it back for good. So the new version, once started, takes
++# over at once: current, the old one previous, D15's fields gone, and the
++# launcher and setup_core.py it brought put in the helper's folder.
++def test_a_version_started_as_d15s_pending_one_takes_over(tmp_path):
++    _installed(tmp_path, current="0.1.0", pending="0.2.0", pending_attempts=1, bad=[])
++    (tmp_path / "versions" / "0.2.0" / "venv").mkdir(parents=True)
++    for name in ("launch.pyw", "setup_core.py"):
++        (tmp_path / name).write_text(f"old {name}")
++        (tmp_path / "versions" / "0.2.0" / name).write_text(f"new {name}")
++    (tmp_path / "versions" / "0.0.9").mkdir()
++
++    assert setup_core.take_over(tmp_path, "0.2.0") is True
++
++    assert read_state(tmp_path) == {
++        "base_python": "/py/pythonw",
++        "current": "0.2.0",
++        "previous": "0.1.0",
++    }
++    assert (tmp_path / "launch.pyw").read_text() == "new launch.pyw"
++    assert (tmp_path / "setup_core.py").read_text() == "new setup_core.py"
++    assert sorted(f.name for f in (tmp_path / "versions").iterdir()) == ["0.1.0", "0.2.0"]
++
++
++# Started any other way (installed by install.pyw: nothing pending, or another
++# version pending), it changes nothing.
++@pytest.mark.parametrize("pending", [None, "0.3.0"])
++def test_a_version_not_pending_takes_nothing_over(tmp_path, pending):
++    _installed(tmp_path, current="0.2.0", pending=pending)
++    before = read_state(tmp_path)
++
++    assert setup_core.take_over(tmp_path, "0.2.0") is False
++
++    assert read_state(tmp_path) == before
++
++
++# A 0.1.0 still running finished preparing the very version install.pyw just
++# put in place: pending == current. Taking over then only drops D15's fields
++# — the version before stays previous, its folder kept (review of D21).
++def test_taking_over_the_version_already_current_keeps_the_previous_one(tmp_path):
++    _installed(tmp_path, current="0.2.0", previous="0.1.0", pending="0.2.0", pending_attempts=1)
++
++    assert setup_core.take_over(tmp_path, "0.2.0") is True
++
++    assert read_state(tmp_path) == {
++        "base_python": "/py/pythonw",
++        "current": "0.2.0",
++        "previous": "0.1.0",
++    }
++    assert sorted(f.name for f in (tmp_path / "versions").iterdir()) == ["0.1.0", "0.2.0"]
+ 
+ 
+ def test_with_nothing_installed_the_launcher_says_so(tmp_path):
+diff --git a/tests/ai_workspace_helper/test_worker.py b/tests/ai_workspace_helper/test_worker.py
+index 16512a92..1a2cad95 100644
+--- a/tests/ai_workspace_helper/test_worker.py
++++ b/tests/ai_workspace_helper/test_worker.py
+@@ -33,11 +33,7 @@ def _backend(client) -> Backend:
+             data = None
+         return r.status_code, data
+ 
+-    def fetch_bytes(path: str, headers: dict[str, str]):
+-        r = raw.get(path, headers=headers)
+-        return r.status_code, r.content
+-
+-    return Backend(send, fetch_bytes=fetch_bytes)
++    return Backend(send)
+ 
+ 
+ @dataclass
+@@ -229,18 +225,17 @@ def test_a_version_no_longer_accepted_says_an_update_is_needed(tmp_path):
+     assert worker.manifest == {**manifest, "size": len(b"zip of 0.9.0")}
+ 
+ 
+-# §3.7.4: the helper reads the published release and fetches its zip through
+-# the same signed-in line it takes jobs through.
+-def test_the_helper_reads_and_fetches_the_published_release(tmp_path):
++# §3.7.4 (D21): the helper reads the published release through the same
++# signed-in line it takes jobs through — to say it is out, nothing more.
++def test_the_helper_reads_the_published_release(tmp_path):
+     from tests.api.test_ai_workspace_helper_release import _publish
+ 
+-    manifest, zip_bytes = _publish(tmp_path, "0.9.0")
++    _publish(tmp_path, "0.9.0")
+     client, _spec, _iid = _asked(ai_workspace_helper_dir=str(tmp_path))
+-    backend = _backend(client)
+ 
+-    release = backend.manifest()
++    release = _backend(client).manifest()
++
+     assert release is not None and release["version"] == "0.9.0"
+-    assert backend.download(manifest["file"]) == zip_bytes
+ 
+ 
+ def test_with_nothing_published_there_is_no_release():
+@@ -391,3 +386,46 @@ def test_a_job_cut_short_by_the_login_leaves_no_row():
+ 
+     assert worker.status == "needs_login"
+     assert history.recent() == []
++
++
++# Why it cannot check in goes to helper.log — once per change, not every poll:
++# the window's second line is gone when the person reads the log for IT, and
++# 「連不上」 with an empty 記錄檔 told nobody it was the certificate (D20).
++def test_why_it_cannot_check_in_is_logged_once_per_change(caplog):
++    import logging
++
++    reasons = iter(["unable to verify the first certificate"] * 3 + ["timed out"])
++
++    def down(method, path, body, headers):
++        raise OSError(next(reasons))
++
++    worker = Worker(Backend(down), _Browser([]), errands={})
++    with caplog.at_level(logging.INFO, logger="ai_workspace_helper.worker"):
++        for _ in range(4):
++            worker.tick()
++
++    lines = [r for r in caplog.records if "unreachable" in r.getMessage()]
++    assert [r.getMessage() for r in lines] == [
++        "unreachable: unable to verify the first certificate",
++        "unreachable: timed out",
++    ]
++    assert all(r.levelno == logging.WARNING for r in lines)
++
++
++# A pause ends the failure it interrupted: the same one after 繼續 is logged
++# again — the person may have paused to fix it, and the log shows it was not.
++def test_the_same_failure_after_a_pause_is_logged_again(caplog):
++    import logging
++
++    def down(method, path, body, headers):
++        raise OSError("unable to verify the first certificate")
++
++    worker = Worker(Backend(down), _Browser([]), errands={})
++    with caplog.at_level(logging.INFO, logger="ai_workspace_helper.worker"):
++        worker.tick()
++        worker.paused = True
++        worker.tick()
++        worker.paused = False
++        worker.tick()
++
++    assert sum("unreachable" in r.getMessage() for r in caplog.records) == 2
