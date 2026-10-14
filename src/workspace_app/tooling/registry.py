@@ -440,6 +440,11 @@ THIRD_PARTY_SEP = "__"
 _warned_names: set[str] = set()
 
 
+#: How `ambiguous_name_message` begins — what the usage count reads to tell
+#: this refusal (nothing ran) from a reply (plan-tool-usage-stats §3.3).
+COLLISION = "cross-package tool name collision:"
+
+
 def ambiguous_name_message(called: str, targets: Sequence[tuple[str, str]]) -> str:
     """What a caller is told when an old name answers to two third-party
     commands (`targets` = `(local name, model name)`): today's collision
@@ -447,10 +452,7 @@ def ambiguous_name_message(called: str, targets: Sequence[tuple[str, str]]) -> s
     call and a page's alike (docs/plan-third-party-tool-names.md N2)."""
     packages = sorted({pkg for pkg, _name in targets})
     names = " or ".join(f"`{name}`" for _pkg, name in sorted(targets))
-    return (
-        f"cross-package tool name collision: command {called!r} appears in packages "
-        f"{packages} — call {names} instead"
-    )
+    return f"{COLLISION} command {called!r} appears in packages {packages} — call {names} instead"
 
 
 def model_tool_name(pkg: PackageInfo, cmd: CommandInfo) -> str:

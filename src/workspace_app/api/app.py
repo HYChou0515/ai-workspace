@@ -2033,12 +2033,11 @@ def create_app(
     app.state.skill_hub_usage = skill_hub.usage  # flushed by the lifespan (U4)
     # plan-tool-usage-stats §3.5: this pod's tool-call counts, flushed by the
     # lifespan. The model is registered either way — the report reads it.
-    from ..apps.skill_hub_usage import pod_name
-    from .tool_usage_store import ToolUsageStore, register_tool_usage
+    from .tool_usage_store import ToolUsageStore, register_tool_usage, writer_name
 
     register_tool_usage(spec)
     app.state.tool_usage_store = (
-        ToolUsageStore(spec, tool_usage, pod=pod_name()) if tool_usage is not None else None
+        ToolUsageStore(spec, tool_usage, pod=writer_name()) if tool_usage is not None else None
     )
     # KB chat runs through a wiki-aware runner that routes each turn across
     # chunk-RAG / wiki / both (#50 P5). It's a pure pass-through to `runner`

@@ -434,6 +434,11 @@ class AgentToolContext:
     tool_usage: ToolUsageRecorder | None = None
     surface: str = "background"
     usage_user: str = ""
+    # A turn that runs INSIDE another turn's tool call and whose
+    # `investigation_id` is not an item (the wiki reader / maintainer key it by
+    # collection): its calls count on the caller's item and surface — with no
+    # caller, background work on no item.
+    usage_inside_caller: bool = False
     # #624: how many history messages this turn had to leave out because they
     # would not fit the endpoint's context window. 0 = nothing was cut (the
     # normal case, and the default when no ceiling is known — we send it all

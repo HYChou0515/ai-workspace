@@ -96,6 +96,8 @@ async def read_wiki(
         tool_output_max_chars=tool_output_max_chars,
         exec_output_max_chars=exec_output_max_chars,
         investigation_id=collection_id,  # WikiFileStore is keyed by collection id
+        # ...so its calls count on the asking turn's item + surface (tool usage).
+        usage_inside_caller=True,
         filestore=wiki_store,
         files=WorkspaceFiles(wiki_store),
         sandbox=None,

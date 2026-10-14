@@ -198,3 +198,29 @@ def test_the_api_writes_on_its_interval_while_it_runs() -> None:
                 break
             threading.Event().wait(0.01)
         assert [r.calls for r in _rows(spec)] == [1]
+
+
+def test_two_processes_on_one_host_write_different_rows(monkeypatch) -> None:
+    """Rows are owned by their writer, unlocked (get → add → update). Outside
+    k8s `HOSTNAME` is a shell variable, not in the environment, so an API and
+    its workers on one VM would all write `~local` — and overwrite each other's
+    counts (review r1). The writer's name must differ per process."""
+    from workspace_app.api import tool_usage_store as tus
+
+    monkeypatch.delenv("HOSTNAME", raising=False)
+    monkeypatch.setattr(tus.os, "getpid", lambda: 101)
+    api = tus.writer_name()
+    monkeypatch.setattr(tus.os, "getpid", lambda: 202)
+    worker = tus.writer_name()
+
+    assert api != worker
+
+
+def test_the_api_writes_under_this_processs_name(monkeypatch) -> None:
+    from workspace_app.api import tool_usage_store as tus
+
+    monkeypatch.setattr(tus, "writer_name", lambda: "host-7")
+
+    app, _spec = _app(ToolUsageRecorder())
+
+    assert app.state.tool_usage_store._pod == "host-7"  # noqa: SLF001

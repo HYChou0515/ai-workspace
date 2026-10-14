@@ -53,12 +53,17 @@ def is_failure(result: object) -> bool:
 
     - the SDK's string for an exception inside a tool;
     - a command that exited non-zero (`_format_exec`'s header);
-    - an in-band refusal, which every built-in writes as `error:` / `Error:`.
+    - the cross-package collision refusal for an ambiguous old name — the
+      tool never ran;
+    - an in-band refusal written as `error:` / `Error:`, as most built-ins do.
+      One that is not (`kb_grep`'s budget refusals) counts as a success.
 
     A structured output (an image, a list of parts) is a success."""
+    from ..tooling.registry import COLLISION
+
     if not isinstance(result, str):
         return False
-    if result.startswith(_SDK_TOOL_ERROR_PREFIX):
+    if result.startswith((_SDK_TOOL_ERROR_PREFIX, COLLISION)):
         return True
     if (m := _EXIT.match(result)) is not None:
         return int(m.group(1)) != 0
@@ -173,17 +178,23 @@ def who(actx: AgentToolContext) -> str:
 
 
 #: The person, App and item of the counted call this code is running inside.
-_CALLER: ContextVar[tuple[str, str, str] | None] = ContextVar("tool_usage_caller", default=None)
+_CALLER: ContextVar[tuple[str, str, str, str] | None] = ContextVar(
+    "tool_usage_caller", default=None
+)
 
 
-def _attribution(actx: AgentToolContext) -> tuple[str, str, str]:
-    """Who, which App, which item — the turn's own, else its caller's."""
-    caller = _CALLER.get() or (NOBODY, "", "")
+def _attribution(actx: AgentToolContext) -> tuple[str, str, str, str]:
+    """Who, which App, which item, which surface — the turn's own, else its
+    caller's. A turn that runs inside its caller (`usage_inside_caller`) has no
+    item or surface of its own: its `investigation_id` is a collection."""
+    caller = _CALLER.get() or (NOBODY, "", "", "background")
     user = who(actx)
+    inside = actx.usage_inside_caller
     return (
         caller[0] if user == NOBODY else user,
         actx.app_slug or caller[1],
-        actx.investigation_id or caller[2],
+        caller[2] if inside else (actx.investigation_id or caller[2]),
+        caller[3] if inside else actx.surface,
     )
 
 
@@ -201,13 +212,13 @@ def wrap_with_usage(tool: FunctionTool, source: str) -> FunctionTool:
         rec = actx.tool_usage
         if rec is None:
             return await original(ctx, args_json)
-        user, app, item = _attribution(actx)
+        user, app, item, surface = _attribution(actx)
         start = rec.clock()
         failed = True
         # A turn this call runs inside (the KB sub-agent of `ask_knowledge_base`,
         # whose context is built from scratch) counts against this call's
         # person, App and item where it names none of its own.
-        token = _CALLER.set((user, app, item))
+        token = _CALLER.set((user, app, item, surface))
         try:
             result = await original(ctx, args_json)
             failed = is_failure(result)
@@ -220,7 +231,7 @@ def wrap_with_usage(tool: FunctionTool, source: str) -> FunctionTool:
                 failed=failed,
                 ms=round((rec.clock() - start) * 1000),
                 user=user,
-                surface=actx.surface,
+                surface=surface,
                 app=app,
                 item=item,
             )

@@ -68,7 +68,7 @@ sub-agent、`ask_knowledge_base` 裡的 KB 子代理各自的工具呼叫由它�
   `agent/args_recovery.py` 已有這個常數)。
 - 指令結束碼不是 0:套件指令與 `exec` 的回覆開頭是 `Tool \`name\` returned (exit_code=N)`
   (`agent/tools.py:_format_exec`)——包層讀這個開頭,不重寫格式。
-- 回覆以 `error:` / `Error:` 開頭(內建工具與規則給的工具的拒絕都這樣寫)。
+- 回覆以 `error:` / `Error:` 開頭(大多數內建工具與規則給的工具的拒絕這樣寫;不這樣寫的——`kb_grep` 的額度用完——算成功,見 §7 A5)。
 - 引數壞掉、包層根本沒呼叫到工具(`safer` 的幾個出口)也算一次失敗——模型確實叫了這個工具、沒做成。
 
 ### 3.4 誰、在哪個場合〔查證 + 施工〕
@@ -145,18 +145,25 @@ sub-agent、`ask_knowledge_base` 裡的 KB 子代理各自的工具呼叫由它�
 
 ## 7. 施工後與計劃不同的地方(as-built,#932)
 
-- **A1 寫回不用 CAS**:每顆 pod 只寫自己的列(列 id 含 pod 名稱,照 skill hub),兩顆 pod 永遠不寫同一列,所以不需要
-  計劃 §3.5 說的「CAS 合併」;一顆 pod 內一次只跑一個寫回(鎖)。寫回是同步函式——API 用 `to_thread` 叫,worker
-  用一條 thread(`run_flusher`)每 5 分鐘叫、停止時再叫一次。
+- **A1 寫回不用 CAS**:每個**行程**只寫自己的列(列 id 含「主機名-pid」,`writer_name()`),兩個行程永遠不寫同一列,
+  所以不需要計劃 §3.5 說的「CAS 合併」;一個行程內一次只跑一個寫回(鎖)。不照 skill hub 用 `HOSTNAME`:k8s 以外
+  它是 shell 變數、不在環境裡,同一台 VM 上的 API 與 worker 會都寫 `~local`、互相蓋掉計數(審查 r1 抓到)。
+  寫回是同步函式——API 用 `to_thread` 叫,worker 用一條 thread(`run_flusher`)每 5 分鐘叫,**排空做完之後**
+  再叫最後一次(它有自己的停止旗標;跟 SIGTERM 共用的話,最後一次會在排空期間跑,排空時做完的工作的計數就掉了——
+  審查 r1)。worker 寫的是它那套組裝**自己的**計數器、走同一個 spec:`build_app` 組的 worker(blob-gc、
+  chat-video)寫 app 的那一個,不另開一個空的。
 - **A2 刪除是永久刪除**:specstar 的 `delete` 是軟刪除,列與所有版本都還在,表照樣長大;90 天的刪除用
   `permanently_delete`。
-- **A3 排程怎麼認**:`WorkflowRun` 新增 `from_schedule`(排程時間到與排程清單的「立即執行」都設 `True`,由排程的
-  單一啟動函式 `start_page_schedule` 帶進 `orchestrator.start`);`drive_turn` 讀它決定場合是 `schedule` 還是
+- **A3 排程怎麼認**:`WorkflowRun` 新增 `from_schedule`,由排程的**兩個**啟動口帶進 `orchestrator.start`:item 的
+  排程(時間到與排程清單的「立即執行」都走 `start_page_schedule`)與 profile 的 `triggers.json`
+  (`trigger_sweeper` → `build_trigger_start`;審查 r1 抓到原本漏了這個口);`drive_turn` 讀它決定場合是 `schedule` 還是
   `workflow`。「誰」:有綁定的人(`RunIdentity.env_user`)記綁定的人,沒有就記 run 的 `captured_user`(排程是 item
   擁有者,手動跑是啟動的人)。
 - **A4 KB 子代理借呼叫端的人/App/item**:不從 `answer_question` 一路傳參數,改用 contextvar——計數層執行一個工具時
   記下這次呼叫的人、App、item,在它裡面跑的 turn(`ask_knowledge_base` 的 KB 子代理)缺哪個就借哪個。
-- **A5 計數層在引數修復的外面**:引數壞掉、工具根本沒跑的呼叫也算一次失敗。
+- **A5 計數層在引數修復的外面**:引數壞掉、工具根本沒跑的呼叫也算一次失敗;舊名稱撞到兩個套件時的拒絕
+  (`cross-package tool name collision:`,與訊息共用常數 `COLLISION`)也算(審查 r1)。`kb_grep` 的額度用完不以
+  `error:` 開頭,算成功——那是「這輪不准再搜」的告知,不是工具壞了。
 - **A6 天以 UTC 切**:列的 `day` 是 UTC 日期;7/30/90 天的視窗是「今天(UTC)往回 N 天,含今天」。
 - **A7 `days` 自己檢查**:不用 `Literal[7, 30, 90]` 當查詢參數型別——FastAPI 不會把查詢字串轉成整數字面值,7 和 90
   會一律被拒(測試抓到);改收整數再檢查,不合法回 422。
@@ -164,4 +171,12 @@ sub-agent、`ask_knowledge_base` 裡的 KB 子代理各自的工具呼叫由它�
   分頁條(CLAUDE.md 的規則)。
 - **A9 分項表的 App 顯示名稱**:依「場合 × App」那張表用 App 的標題(`/apps` 清單),不是 slug;item 附標題與連結,
   item 已不存在就只顯示 id、不給連結。
-
+- **A10 90 天的刪除沒有 `ScanLease`**:每個行程在每個 UTC 日的第一次寫回時刪一次。只按有索引的 `day` 讀過期的列,
+  一天最多一次,讀的量是「昨天過期的那幾列」——多個行程一起刪,最壞是同一批列被刪兩次(第二次找不到,沒事)。
+  計劃 §3.5 的租約省下的只有這點,不值得多一張表的寫入。
+- **A11 wiki 的 turn 算在發問的那一輪**:wiki reader(`ask_wiki`)與 maintainer 的 context 用 collection id 當
+  `investigation_id`(wiki store 這樣存),所以標 `usage_inside_caller`:它的呼叫記在呼叫端的 item 與場合;沒有
+  呼叫端(wiki job)就是 `background`、沒有 item——不會把 collection id 當成 item(審查 r1)。只有這兩處把非 item
+  的 id 放進 `investigation_id`(grep 確認)。
+- **A12 串流與非串流 turn 都算到**(P2 的完成條件):兩條路(`_run_once` / `_run_once_nonstream`)都經過
+  `_agent_for`,包層在那裡套上,是結構上成立;測試直接打 `_agent_for` 交出的工具。

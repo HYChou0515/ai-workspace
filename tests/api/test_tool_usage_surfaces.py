@@ -272,3 +272,34 @@ def test_a_knowledge_base_chat_turn_is_the_kb_chat_surface() -> None:
 
 
 _ = (asyncio, json)
+
+
+async def test_a_profile_declared_schedule_marks_its_run_as_a_schedule_s() -> None:
+    """The other door a schedule fires through: a profile's `triggers.json`,
+    swept by `trigger_sweeper` → `build_trigger_start`. Without the mark its
+    runs are counted as 工作流程 on every fire (review r1)."""
+    from workspace_app.workflow.triggers import (
+        Schedule,
+        ScheduleTrigger,
+        build_trigger_start,
+    )
+
+    starts: list[dict[str, Any]] = []
+
+    async def start(**kw: Any) -> str:
+        starts.append(kw)
+        return "run-1"
+
+    t = ScheduleTrigger(
+        id="w",
+        workflow_id="report",
+        acting_user="bot",
+        item_id="i1",
+        slug="rca",
+        profile="echo",
+        schedule=Schedule(every="daily", at="03:00"),
+    )
+
+    await build_trigger_start(start)(t, "2026-10-14")
+
+    assert starts[0]["from_schedule"] is True

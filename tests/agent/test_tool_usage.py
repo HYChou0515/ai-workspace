@@ -15,7 +15,7 @@ from agents.tool_context import ToolContext
 from agents.usage import Usage
 
 from workspace_app.agent.context import AgentToolContext
-from workspace_app.agent.tool_usage import ToolUsageRecorder, is_failure
+from workspace_app.agent.tool_usage import SEP, ToolUsageRecorder, is_failure
 from workspace_app.resources.agent_config import AgentConfig
 from workspace_app.sandbox.protocol import ExecResult, SandboxHandle
 from workspace_app.tooling.registry import CommandInfo, PackageInfo
@@ -230,6 +230,30 @@ async def test_arguments_the_tool_never_saw_are_a_failed_call() -> None:
     assert (row.tool, row.calls, row.fails) == ("ask_user", 1, 1)
 
 
+async def test_an_ambiguous_old_name_the_tool_never_ran_is_a_failed_call(exec_exits) -> None:  # noqa: ANN001
+    """An old bare name two packages answer to: `ToolAliasModel` points the call
+    at the first candidate with the collision as its arguments, and `safer`
+    answers with the collision sentence without running anything. A call the
+    tool never ran is a failure (§3.3) — this reply has no `error:` prefix
+    (review r1)."""
+    from workspace_app.agent.arg_repair import AMBIGUOUS_CALL_KEY
+
+    rec = ToolUsageRecorder(day=lambda: "d", clock=_Clock())
+    agent = _agent(_pkg("acme", "ls", third_party=True), _pkg("beta", "ls", third_party=True))
+    args = {
+        AMBIGUOUS_CALL_KEY: {
+            "called": "ls",
+            "candidates": [["acme", "acme__ls"], ["beta", "beta__ls"]],
+        }
+    }
+
+    reply = await _call(agent, _ctx(rec), "acme__ls", json.dumps(args))
+
+    assert "collision" in reply and exec_exits == []  # refused; nothing ran
+    [row] = rec.drain()
+    assert (row.tool, row.calls, row.fails) == ("acme__ls", 1, 1)
+
+
 async def test_who_where_and_which_item_come_from_the_turn(exec_exits) -> None:  # noqa: ANN001
     rec = ToolUsageRecorder(day=lambda: "d", clock=_Clock())
     agent = _agent(_pkg("rca-tools", "spc"))
@@ -274,3 +298,108 @@ async def test_a_recorder_the_turn_already_has_is_kept() -> None:
     [_ async for _ in LitellmAgentRunner(tool_usage=ToolUsageRecorder()).run("hi", actx)]
 
     assert actx.tool_usage is mine
+
+
+# ── a wiki turn runs inside whoever asked it (review r1) ────────────────────
+
+
+class _CaptureRunner:
+    def __init__(self) -> None:
+        self.ctxs: list[AgentToolContext] = []
+
+    async def run(self, _q: str, ctx: AgentToolContext):  # noqa: ANN201
+        self.ctxs.append(ctx)
+        return
+        yield  # an async generator that yields nothing
+
+
+def _counted(name: str, body: Any) -> Any:  # noqa: ANN401
+    from agents import FunctionTool
+
+    from workspace_app.agent.tool_usage import wrap_with_usage
+
+    async def invoke(ctx: Any, args: str) -> str:  # noqa: ANN401
+        return await body(ctx, args)
+
+    return wrap_with_usage(
+        FunctionTool(
+            name=name,
+            description="",
+            params_json_schema={"type": "object", "properties": {}},
+            on_invoke_tool=invoke,
+        ),
+        "builtin",
+    )
+
+
+async def _invoke(tool: Any, actx: AgentToolContext) -> Any:  # noqa: ANN401
+    ctx = ToolContext(
+        context=actx, tool_name=tool.name, tool_call_id="c", tool_arguments="{}", usage=Usage()
+    )
+    return await tool.on_invoke_tool(ctx, "{}")
+
+
+async def _ok(_ctx: Any, _args: str) -> str:  # noqa: ANN401
+    return "ok"
+
+
+async def test_the_wiki_reader_s_calls_count_where_the_question_was_asked() -> None:
+    """`ask_wiki` → the reader, whose context carries the COLLECTION id as its
+    `investigation_id` (the wiki store is keyed so) and names no surface. Its
+    calls are the asking turn's: that item, that surface — not a collection id
+    posing as an item, not background work nobody waits on."""
+    from workspace_app.kb.wiki.reader import read_wiki
+
+    rec = ToolUsageRecorder(day=lambda: "d", clock=_Clock())
+    runner = _CaptureRunner()
+    await read_wiki(
+        runner,  # ty: ignore[invalid-argument-type]
+        wiki_store=object(),  # ty: ignore[invalid-argument-type]
+        wiki_sources=object(),  # ty: ignore[invalid-argument-type]
+        collection_id="coll-9",
+        question="q",
+        agent_config=AgentConfig(name="r", model="m"),
+    )
+    [reader_ctx] = runner.ctxs
+    reader_ctx.tool_usage = rec
+    read_file = _counted("read_file", _ok)
+
+    async def ask(_ctx: Any, _args: str) -> Any:  # noqa: ANN401
+        return await _invoke(read_file, reader_ctx)
+
+    await _invoke(_counted("ask_wiki", ask), _ctx(rec))
+
+    rows = {r.tool: r for r in rec.drain()}
+    inner = rows["read_file"]
+    assert list(inner.by_item) == ["item-1"]
+    assert list(inner.by_surface_app) == [f"chat{SEP}rca"]
+    assert list(inner.by_user) == ["alice"]
+
+
+async def test_a_wiki_pass_nobody_asked_for_is_background_with_no_item() -> None:
+    from workspace_app.kb.wiki.maintainer import run_wiki_maintainer
+
+    class _Store:
+        _rm = None
+
+        async def exists(self, *_a: Any) -> bool:  # noqa: ANN401
+            return True
+
+    rec = ToolUsageRecorder(day=lambda: "d", clock=_Clock())
+    runner = _CaptureRunner()
+    await run_wiki_maintainer(
+        runner,  # ty: ignore[invalid-argument-type]
+        wiki_store=_Store(),  # ty: ignore[invalid-argument-type]
+        wiki_sources=object(),  # ty: ignore[invalid-argument-type]
+        collection_id="coll-9",
+        new_source="s",
+        agent_config=AgentConfig(name="m", model="m"),
+    )
+    [ctx] = runner.ctxs
+    ctx.tool_usage = rec
+
+    await _invoke(_counted("write_file", _ok), ctx)
+
+    [row] = rec.drain()
+    assert list(row.by_item) == [""]
+    assert list(row.by_surface_app) == [f"background{SEP}"]
