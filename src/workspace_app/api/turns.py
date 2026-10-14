@@ -39,6 +39,7 @@ from ..agent.context import AgentToolContext
 from ..context_budget import SUMMARY_ROLE, estimate_messages
 from ..failover.core import AllProvidersFailed
 from ..failover.rate_limit import is_rate_limited
+from ..observability.stdout_log import install_own_handler
 from ..resources.conversation import MessageMetrics
 from ..turn_control import InMemoryTurnControl, ITurnControl
 from ..users.labels import speaker_label
@@ -66,6 +67,8 @@ from .runner import AgentRunner
 from .turn_activity import TURN_HEARTBEAT_MS, ITurnActivityStore
 
 logger = logging.getLogger(__name__)
+# the `live:` trace below is INFO: without its own handler it never appears
+install_own_handler(logger)
 
 
 #: The events the live log names — the message that starts a turn and the ones

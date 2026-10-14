@@ -152,6 +152,7 @@ class _FakeAioPika:
         fail_connects: frozenset[int] = frozenset(),
         declare_fails_on: frozenset[int] = frozenset(),
         stream_ends_on: frozenset[int] = frozenset(),
+        stream_raises_on: frozenset[int] = frozenset(),
     ) -> None:
         self.connects = 0
         self._connect_failures = connect_failures
@@ -159,6 +160,7 @@ class _FakeAioPika:
         self._fail_connects = fail_connects
         self._declare_fails_on = declare_fails_on
         self._stream_ends_on = stream_ends_on
+        self._stream_raises_on = stream_raises_on
         self.open: list[_FakeConnection] = []
         self.sent: list[bytes] = []
         self.incoming: asyncio.Queue[bytes] = asyncio.Queue()
@@ -195,7 +197,11 @@ class _FakeChannel:
         return _FakeExchange(self._pika)
 
     async def declare_queue(self, **_kw):  # noqa: ANN201
-        return _FakeQueue(self._pika, ends=self._n in self._pika._stream_ends_on)
+        return _FakeQueue(
+            self._pika,
+            ends=self._n in self._pika._stream_ends_on,
+            raises=self._n in self._pika._stream_raises_on,
+        )
 
 
 class _FakeExchange:
@@ -222,9 +228,10 @@ class _FakeMessage:
 class _FakeQueue:
     name = "amq.gen-this-pod"
 
-    def __init__(self, pika: _FakeAioPika, *, ends: bool = False) -> None:
+    def __init__(self, pika: _FakeAioPika, *, ends: bool = False, raises: bool = False) -> None:
         self._pika = pika
         self._ends = ends
+        self._raises = raises
 
     async def bind(self, exchange):  # noqa: ANN001, ANN201
         pass
@@ -232,6 +239,7 @@ class _FakeQueue:
     def iterator(self):  # noqa: ANN201
         pika = self._pika
         ends = self._ends
+        raises = self._raises
 
         class _It:
             async def __aenter__(self):  # noqa: ANN204
@@ -246,6 +254,8 @@ class _FakeQueue:
             async def __anext__(self):  # noqa: ANN204
                 if ends:
                     raise StopAsyncIteration
+                if raises:
+                    raise ConnectionError("connection reset by the broker")
                 return _FakeMessage(await pika.incoming.get())
 
         return _It()
@@ -305,7 +315,7 @@ async def test_a_failed_send_is_said_and_the_next_one_still_goes(monkeypatch, ca
         t.publish(b"kept")
         await _until(lambda: pika.sent == [b"kept"])
 
-    assert "dropped a frame" in caplog.text
+    assert "dropping frames" in caplog.text
 
 
 # A connection that fails after it opened (the channel refused) is closed
@@ -348,3 +358,35 @@ async def test_the_wait_starts_over_once_connected(monkeypatch):
     await _until(lambda: pika.connects == 5)
 
     assert waits == [1.0, 2.0, 1.0, 2.0]
+
+
+# Review of #938: while the broker is away every streamed token fails to send.
+# One line when the dropping starts, one when sending is back — not a
+# traceback per token.
+async def test_a_run_of_failed_sends_is_said_once_and_its_end_with_the_count(monkeypatch, caplog):
+    pika = _FakeAioPika(publish_failures=5)
+    t = _transport(monkeypatch, pika)
+    with caplog.at_level("INFO", logger="workspace_app.api.event_bus.rabbitmq"):
+        t.start(lambda _b: None)
+        for i in range(6):
+            t.publish(f"f{i}".encode())
+        await _until(lambda: pika.sent == [b"f5"])
+
+    lines = [r.getMessage() for r in caplog.records]
+    assert sum("dropping frames" in m for m in lines) == 1, lines
+    assert any("sending again" in m and "5" in m for m in lines), lines
+
+
+# A connection that was up and then broke is "lost", not "cannot reach": the
+# two point an operator at different causes.
+async def test_a_connection_that_breaks_after_connecting_is_lost_not_unreachable(
+    monkeypatch, caplog
+):
+    pika = _FakeAioPika(stream_raises_on=frozenset({1}))
+    t = _transport(monkeypatch, pika)
+    with caplog.at_level("INFO", logger="workspace_app.api.event_bus.rabbitmq"):
+        t.start(lambda _b: None)
+        await _until(lambda: pika.connects == 2)
+
+    assert "lost the broker" in caplog.text
+    assert "cannot reach the broker" not in caplog.text

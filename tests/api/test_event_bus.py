@@ -289,3 +289,24 @@ async def test_the_log_says_when_an_event_arrives_with_nobody_listening(caplog):
         and "viewers_here=0" in r.getMessage()
         for r in caplog.records
     )
+
+
+# Review of #938: this app configures logging nowhere, so an INFO line on a
+# `workspace_app.*` logger fell to the stdlib's last resort and was dropped —
+# the runbook's `event_bus: connected` check would have found nothing on a
+# healthy pod. A fresh interpreter, nothing configured: the lines appear.
+def test_the_bus_and_live_lines_reach_the_log_with_nothing_configured():
+    import subprocess
+    import sys
+
+    code = (
+        "import logging\n"
+        "import workspace_app.api.turns, workspace_app.api.event_bus.rabbitmq\n"
+        "logging.getLogger('workspace_app.api.turns').info('live: probe')\n"
+        "logging.getLogger('workspace_app.api.event_bus.rabbitmq').info('event_bus: probe')\n"
+    )
+    r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=120)
+
+    out = r.stdout + r.stderr
+    assert r.returncode == 0, out
+    assert "live: probe" in out and "event_bus: probe" in out, out

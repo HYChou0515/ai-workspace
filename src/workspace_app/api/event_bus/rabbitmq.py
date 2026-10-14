@@ -23,10 +23,13 @@ from collections.abc import Awaitable, Callable
 from dataclasses import asdict
 from typing import Any
 
+from ...observability.stdout_log import install_own_handler
 from ..events import AgentEvent, event_from_dict
 from .base import IEventBus, OnEvent
 
 logger = logging.getLogger(__name__)
+# its `event_bus: connected` line is what the runbook checks on each pod
+install_own_handler(logger)
 
 
 class IAmqpTransport(abc.ABC):
@@ -108,10 +111,10 @@ class AioPikaTransport(IAmqpTransport):
 
     `connect_robust` reconnects only a connection that once succeeded: a broker
     not ready when the pod starts (a rollout restarting both) used to end the
-    background task for good — silently, with every live event of this pod
-    piling up unsent and none coming in. So reaching the broker is retried, each
-    try and the connect said in the log, and one failed send never ends the
-    sending."""
+    background task for good — said only once, as asyncio's "Task exception was
+    never retrieved", with every live event of this pod piling up unsent and
+    none coming in. So reaching the broker is retried, each try and the connect
+    said in the log, and one failed send never ends the sending."""
 
     def __init__(
         self,
@@ -128,6 +131,7 @@ class AioPikaTransport(IAmqpTransport):
         self._heartbeat = heartbeat_seconds
         self._sleep = sleep
         self._wait = 1.0
+        self._up = False
         self._outbound: asyncio.Queue[bytes] | None = None  # built on start
         self._on_message: Callable[[bytes], None] | None = None
 
@@ -162,6 +166,9 @@ class AioPikaTransport(IAmqpTransport):
         # Doubles while the broker stays away; a connect starts it over at 1 s.
         self._wait = 1.0
         while True:
+            # set once connected: a connection that breaks after that is "lost",
+            # one that never came up "cannot reach" — two different causes
+            self._up = False
             try:
                 await self._connected(aio_pika)
                 logger.warning(
@@ -173,8 +180,9 @@ class AioPikaTransport(IAmqpTransport):
                 raise
             except Exception:  # noqa: BLE001 — said, and tried again
                 logger.warning(
-                    "event_bus: cannot reach the broker — trying again in %.0f s; "
-                    "until then live events do not cross pods",
+                    "event_bus: %s — trying again in %.0f s; until then live events "
+                    "do not cross pods",
+                    "lost the broker" if self._up else "cannot reach the broker",
                     self._wait,
                     exc_info=True,
                 )
@@ -205,15 +213,28 @@ class AioPikaTransport(IAmqpTransport):
                 queue.name,
             )
             self._wait = 1.0
+            self._up = True
 
             async def _drain_outbound() -> None:
                 assert self._outbound is not None
+                # Every streamed token is a frame: while the channel is down each
+                # fails. One line when the dropping starts, one when it ends —
+                # not a traceback per token (review of #938).
+                dropped = 0
                 while True:
                     body = await self._outbound.get()
                     try:
                         await exchange.publish(aio_pika.Message(body), routing_key="")
-                    except Exception:  # noqa: BLE001 — one lost frame, not the sending
-                        logger.warning("event_bus: dropped a frame on send", exc_info=True)
+                    except Exception:  # noqa: BLE001 — a lost frame, not the sending
+                        if not dropped:
+                            logger.warning("event_bus: dropping frames on send", exc_info=True)
+                        dropped += 1
+                        continue
+                    if dropped:
+                        logger.warning(
+                            "event_bus: sending again — %d frame(s) were dropped", dropped
+                        )
+                        dropped = 0
 
             drain = asyncio.get_event_loop().create_task(_drain_outbound())
             try:

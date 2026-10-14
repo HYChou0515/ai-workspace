@@ -2312,24 +2312,29 @@ agent 步驟裡 AI 的呼叫、WUI 的工具呼叫、view plugin、圖表重畫�
 kubectl logs <api-pod> | grep "event_bus:"
 ```
 
-- 每個 API pod 都要有一行 `event_bus: connected — exchange rca_turn_events, this pod's queue amq.gen-…`。為什麼:這條佇列是別的 pod 跑的
-  AI 回答送到這個 pod 上瀏覽器的唯一路。沒有這行的症狀:接在這個 pod 上的人要重新整理才看得到別的 pod 跑的回答(只剩一個 pod 時正常)。
-- 一直出現 `event_bus: cannot reach the broker — trying again in N s` → 這個 pod 連不上 RabbitMQ(網址、vhost、帳密、NetworkPolicy)。
-  以前這種 pod 啟動時連一次失敗就永遠不再試,也不寫 log;現在會每 1→30 秒重試一次,連上就恢復,不用重啟。
-- `event_bus: lost the broker` / `dropped a frame on send`:連線中途斷掉或某一筆沒送出;會自己重連,偶爾一行不用處理。
+- 每個 API pod 都要有一行 `event_bus: connected — exchange <event_bus.exchange,預設 rca_turn_events>, this pod's queue amq.gen-…`。
+  為什麼:這條佇列是別的 pod 跑的 AI 回答送到這個 pod 上瀏覽器的唯一路。沒有這行的症狀:接在這個 pod 上的人要重新整理才看得到
+  別的 pod 跑的回答(只剩一個 pod 時正常)。(部署過 `patch-b8134d72` 的看不到這行是正常的:那一版的這些行在 INFO,而這個 app
+  沒有設定 logging,INFO 會被丟掉;這一版讓它們一定印出來。)
+- 一直出現 `event_bus: cannot reach the broker — trying again in N s` → 這個 pod 從沒連上 RabbitMQ(網址、vhost、帳密、
+  NetworkPolicy)。以前這種 pod 啟動時連一次失敗就永遠不再試,只在當下由 asyncio 印一次 `Task exception was never retrieved`;
+  現在會每 1→30 秒重試一次,連上就恢復,不用重啟。想確認舊版是不是這個原因:在換版前的 pod log 找那一行(帶 `ConnectionError` 或
+  aio_pika 的錯誤)。
+- `event_bus: lost the broker — trying again in N s`:連上之後斷了,會自己重連。`event_bus: dropping frames on send` 之後接
+  `event_bus: sending again — N frame(s) were dropped`:那段時間的即時事件沒送出(畫面靠資料庫補);一次斷線各一行,偶爾出現不用處理。
 
 **行為改變,沒有開關**:
 
 - 「請幫我查」卡片顯示「小幫手已送給 AI」,或使用者手動貼上答案送出後,若聊天裡還沒出現 AI 的回答(這一頁沒收到那一輪的即時事件),
   聊天會自己讀資料庫直到 AI 的回答存好,不用重新整理。這條路不會跳出「連線中斷,這裡可能少了一段」。
-- 每一輪對話的開始與結束,API pod 會在 INFO 寫一行 `live: published <事件> key=… pod=… viewers_here=N`;收到別的 pod 的事件寫
+- 每一輪對話的開始與結束,API pod 會寫一行 `live: published <事件> key=… pod=… viewers_here=N`;收到別的 pod 的事件寫
   `live: from bus <事件> key=… origin=… pod=… viewers_here=N`;瀏覽器接上/離開串流寫 `live: viewer joined|left key=… pod=…`。
   只記事件種類、對話 key 與 pod,不記內容;一輪約幾行。用來追「誰跑的、誰收到、那裡有沒有人在看」。
 
 **確認做完**(`rollout 後`):
 
-- 每個 API pod 的 log 都有 `event_bus: connected`;`rabbitmqctl list_bindings source_name destination_name | grep rca_turn_events`
-  列出的佇列數不少於 API pod 數。
+- 每個 API pod 的 log 都有 `event_bus: connected`;`rabbitmqctl list_bindings -p <vhost> source_name destination_name | grep <exchange>`
+  (vhost 是 `event_bus.url` 裡的那個,預設 `/`;exchange 預設 `rca_turn_events`)列出的佇列數不少於 API pod 數。
 - 多個 pod 時:請 AI 查外面的東西、按「查」;卡片出現「小幫手已送給 AI」後**不重新整理**,幾秒內聊天出現送出的內容與 AI 的回答。
 
 ## 附錄 A：資料回填的機制（specstar 為什麼不會自己補）
