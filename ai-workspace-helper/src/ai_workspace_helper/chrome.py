@@ -44,6 +44,13 @@ def _converter_source() -> str:
         raise ErrandFailed("the helper's page converter is missing — reinstall the helper") from exc
 
 
+def _reason(exc: BaseException) -> str:
+    """Why a backend request failed, without Playwright's "Call log:", which
+    lists every request header — the login cookie among them — and would go
+    on to the window and helper.log, the file IT is sent."""
+    return str(exc).split("\nCall log:", 1)[0].strip()
+
+
 class Chrome:
     def __init__(
         self,
@@ -98,7 +105,7 @@ class Chrome:
             )
         except PlaywrightError as exc:
             # refused, DNS, timeout, TLS: the backend is not reachable from here
-            raise OSError(str(exc)) from exc
+            raise OSError(_reason(exc)) from exc
         try:
             try:
                 data = r.json() if r.body() else None
@@ -111,7 +118,9 @@ class Chrome:
     def fetch_bytes(self, path: str, headers: dict[str, str]) -> tuple[int, bytes]:
         """A GET whose answer is a file (the update zip, §3.7.4), with the
         profile's login; see `backend.FetchBytes`. Redirects not followed; the
-        certificate not verified, as in `send` (its sha256 is checked)."""
+        certificate not verified, as in `send` — so its sha256, which comes
+        from the manifest over that same line, catches a corrupted download,
+        not a replaced one (D20)."""
         from playwright.sync_api import Error as PlaywrightError
 
         try:
@@ -124,7 +133,7 @@ class Chrome:
                 timeout=DOWNLOAD_TIMEOUT_MS,
             )
         except PlaywrightError as exc:
-            raise OSError(str(exc)) from exc
+            raise OSError(_reason(exc)) from exc
         try:
             return r.status, r.body()
         finally:

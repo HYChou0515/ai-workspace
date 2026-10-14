@@ -354,7 +354,7 @@ def test_the_summary_says_what_to_do_next():
 
 # The zip carries launch.pyw too (install copies it into the helper's folder).
 # Double-clicked there, in the unzipped folder, it said "not installed" though
-# the helper was installed: it took its own folder for the helper's (D16).
+# the helper was installed: it took its own folder for the helper's (D20).
 def test_the_launcher_in_the_unzipped_folder_finds_the_installed_helper(tmp_path, monkeypatch):
     from ai_workspace_helper.setup_core import launcher_home
 
@@ -367,13 +367,18 @@ def test_the_launcher_in_the_unzipped_folder_finds_the_installed_helper(tmp_path
     assert launcher_home(home) == home  # the installed launcher: its own folder
 
 
+# ...and leaves no trace where the helper would live: after 解除安裝, the
+# helper's folder must stay gone (D17), so the lock stays in the unzipped one.
 def test_a_launcher_with_nothing_installed_anywhere_still_says_so(tmp_path, monkeypatch):
     from ai_workspace_helper.setup_core import launch, launcher_home
 
-    monkeypatch.setenv("AI_WORKSPACE_HELPER_HOME", str(tmp_path / "home"))
+    home, unzipped = tmp_path / "home", tmp_path / "unzipped"
+    unzipped.mkdir()
+    monkeypatch.setenv("AI_WORKSPACE_HELPER_HOME", str(home))
 
     with pytest.raises(SetupFailed, match="not installed"):
-        launch(launcher_home(tmp_path / "unzipped"))
+        launch(launcher_home(unzipped))
+    assert not home.exists()
 
 
 def test_double_clicking_launch_pyw_in_the_unzipped_folder_starts_the_installed_helper(tmp_path):

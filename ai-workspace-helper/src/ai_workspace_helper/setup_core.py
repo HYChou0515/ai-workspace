@@ -336,8 +336,13 @@ SHOW_REQUEST = "show.request"
 def launcher_home(here: Path) -> Path:
     """The helper's folder for a launch.pyw in `here`: its own folder once
     installed there — or, for the copy in the unzipped download (the zip
-    carries one for `install` to copy), the installed helper's folder."""
-    return here if (here / "state.json").exists() else root()
+    carries one for `install` to copy), the installed helper's folder. With
+    nothing installed it stays in `here`: launching takes a lock there, and
+    after 解除安裝 the helper's folder must not come back (D17)."""
+    if (here / "state.json").exists():
+        return here
+    installed = root()
+    return installed if (installed / "state.json").exists() else here
 
 
 def launch(

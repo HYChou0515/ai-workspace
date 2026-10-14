@@ -81,7 +81,7 @@ Markdown 交回卡片——使用者只要在搜尋時按一下「查」。設�
 | 小視窗寫 | 是什麼 | 怎麼辦 |
 |---|---|---|
 | 請在小幫手開的 Chrome 視窗登入／登入已過期 | 還沒登入過,或部署的登入過期、被導到 SSO 頁 | 在它的 Chrome 視窗登入;登入前交給它的工作會等著,不會丟 |
-| 連不上 AI Workspace，會自動重試 | 網址錯、或公司網路不通;原因寫在狀態的第二行,也記在記錄檔 | 檢查第一次填的網址(存在 `%LOCALAPPDATA%\AIWorkspaceHelper\settings.json`)。第二行是 `unable to verify the first certificate` 之類的憑證錯誤:你的小幫手是 0.1.0,請從「小幫手」頁下載新版、重新雙擊 `install.pyw` |
+| 連不上 AI Workspace，會自動重試 | 網址錯、或公司網路不通;原因寫在狀態的第二行(0.1.1 起也記在記錄檔) | 檢查第一次填的網址(存在 `%LOCALAPPDATA%\AIWorkspaceHelper\settings.json`)。第二行是 `unable to verify the first certificate` 之類的憑證錯誤:你的小幫手是 0.1.0,請從「小幫手」頁下載新版、重新雙擊 `install.pyw` |
 | 開不了 Chrome | 沒裝 Chrome、Chrome 剛更新超過小幫手支援的版本、Chrome 被政策擋下自動化、或上一個小幫手還沒關完 | 更新小幫手;按「重設登入」;見下面「IT 要放行的」;或等一下再開 |
 | 這個版本已停用 | 管理員調高了最低版本 | 見「更新」 |
 
@@ -133,6 +133,6 @@ python3 scripts/pack_ai_workspace_helper.py --version 0.1.0 [--min-version 0.1.0
   ([Playwright: browsers](https://playwright.dev/python/docs/browsers))。
 - **憑證**:小幫手跟 AI Workspace 講話(報到、領工作、交結果、下載更新)的請求不是 Chrome 送的,是 Playwright 自帶的 Node
   送的;Node 不讀 Windows 的憑證庫([Node: --use-system-ca](https://nodejs.org/api/cli.html#--use-system-ca)),也不會去補伺服器沒送的中繼憑證,所以 Chrome 驗得過的
-  公司憑證它驗不過。小幫手對**這些請求**不驗憑證(和部署裡其他內部呼叫一樣 verify=false,[Playwright: fetch 的
-  `ignore_https_errors`](https://playwright.dev/python/docs/api/class-apirequestcontext#api-request-context-fetch));它替你開的外面網頁仍由 Chrome 照常驗。更新檔另外比對 sha256。
+  公司憑證它驗不過。小幫手對**這些請求**一律不驗憑證、沒有開關(依這個部署的慣例 verify=false,[Playwright: fetch 的
+  `ignore_https_errors`](https://playwright.dev/python/docs/api/class-apirequestcontext#api-request-context-fetch));它替你開的外面網頁仍由 Chrome 照常驗。**代價**:更新檔的 sha256 是跟同一條不驗憑證的連線拿到的版本資訊比對,只擋下載損壞、擋不了攔截者換掉更新檔——能在公司網路上攔截這條連線的人,可以讓小幫手裝上並執行他的程式,也看得到登入 cookie。
 - **網路**:小幫手只連 AI Workspace(工作、更新都從那裡拿)與它替你開的網頁;更新檔不經瀏覽器下載,不會被標成「從網路下載」。

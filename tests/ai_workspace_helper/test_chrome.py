@@ -282,7 +282,7 @@ def https_site(tmp_path):
 
 
 # D20: the helper's requests to AI Workspace do not verify its certificate —
-# the deploy's own convention ("verify=false"); otherwise every check-in is
+# this deploy's convention, its operator says ("verify=false"); otherwise every check-in is
 # 「連不上」 while the person is signed in fine in Chrome.
 def test_the_helpers_requests_to_ai_workspace_pass_a_certificate_node_cannot_verify(
     tmp_path, https_site
@@ -307,3 +307,30 @@ def test_the_pages_it_opens_still_verify_certificates(tmp_path, https_site):
             _visit(chrome, https_site + "/a-page")
     finally:
         chrome.close()
+
+
+# Playwright's error ends in a "Call log:" listing every request header — the
+# login cookie among them — and why it cannot reach AI Workspace now goes to
+# helper.log, which the 記錄檔 tab asks the person to send to IT (review of
+# #933). The reason stays; the call log does not.
+@pytest.mark.parametrize("call", ["send", "fetch_bytes"])
+def test_why_a_request_failed_never_carries_the_login_cookie(tmp_path, call):
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]  # closed once the block ends: nobody listens
+    chrome = _chrome(tmp_path, f"http://127.0.0.1:{port}")
+    chrome._ctx.add_cookies(
+        [{"name": "sess", "value": "SSO-SECRET", "url": f"http://127.0.0.1:{port}"}]
+    )
+    try:
+        with pytest.raises(OSError) as failed:
+            if call == "send":
+                chrome.send("GET", "/api/me", None, {})
+            else:
+                chrome.fetch_bytes("/api/x", {})
+    finally:
+        chrome.close()
+
+    reason = str(failed.value)
+    assert "ECONNREFUSED" in reason
+    assert "SSO-SECRET" not in reason and "Call log" not in reason

@@ -2221,13 +2221,14 @@ agent 步驟裡 AI 的呼叫、WUI 的工具呼叫、view plugin、圖表重畫�
 
 1. 在 dev server 打包新版:`python3 scripts/pack_ai_workspace_helper.py --version 0.1.1`,把 `dist/ai-workspace-helper/` 的兩個檔
    換進 `server.ai_workspace_helper_dir`(不用重新部署)。為什麼:修正在小幫手那邊,不在後端。
-2. **已裝 0.1.0 的人要手動重裝**:從「小幫手」頁下載 0.1.1、解壓縮、雙擊 `install.pyw`。為什麼:0.1.0 對 AI Workspace 的請求
-   驗不過公司憑證(`unable to verify the first certificate`),連報到都做不到,自動更新也就拿不到新版。
-   沒重裝的症狀:小視窗一直「連不上 AI Workspace，會自動重試」,卡片一直「小幫手未連線」。
+   沒做的症狀:「小幫手」頁還是 0.1.0,下一步重裝的人裝回同一個連不上的版本。
+2. 第 1 步之後:**小視窗第二行是憑證錯誤(`unable to verify the first certificate`)的 0.1.0 要手動重裝**——從「小幫手」頁
+   下載 0.1.1、解壓縮、雙擊 `install.pyw`。為什麼:檢查新版和下載新版走的也是那條驗不過的連線,這種 0.1.0 自己更新不了;
+   其他 0.1.0 會在下次開啟或 6 小時內自己更新。沒重裝的症狀:小視窗一直「連不上 AI Workspace，會自動重試」,卡片一直「小幫手未連線」。
 
 **行為改變,沒有開關**:小幫手對 AI Workspace 的請求(報到、領工作、交結果、下載更新)**不驗憑證**——那些請求由 Playwright
-自帶的 Node 送出,它不讀 Windows 憑證庫,Chrome 驗得過的公司憑證它驗不過;照部署慣例 verify=false。它替使用者開的外面網頁
-仍由 Chrome 照常驗,更新檔仍比對 sha256(plan D20)。連不上/被拒的原因現在會寫進 `helper.log`。
+自帶的 Node 送出,它不讀 Windows 憑證庫,Chrome 驗得過的公司憑證它驗不過;依這個部署的慣例 verify=false,沒有開關。它替使用者開的
+外面網頁仍由 Chrome 照常驗(plan D20)。**代價**:更新檔的 sha256 是跟同一條不驗憑證的連線拿到的版本資訊比對,只擋下載損壞、擋不了攔截者換掉更新檔——能在公司網路上攔截這條連線的人,可以讓小幫手裝上並執行他的程式,也看得到登入 cookie。連不上/被拒的原因(不含 cookie)現在會寫進 `helper.log`。
 
 **確認做完**(`rollout 後`):
 
