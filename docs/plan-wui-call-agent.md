@@ -17,7 +17,9 @@ user:「我希望wui要能夠呼叫subagent」。
 - 唯一間接的路:頁面 `startRun` 一個 workflow,workflow 的 agent 步驟裡 AI 再用 `run_agent` 叫 subagent。
 - subagent = item 的 `.agent/<名稱>/AGENT.md`(或 App profile 內建),由 `run_agent` 叫:空白上下文、只回最後的
   文字、不能再往下叫(`api/subagent_run.py`、`apps/subagents.py`)。
-- workflow run 一個 item 同時只能有一個(`workflow/orchestrator.py` `ActiveRunExists`)。
+- 頁面的 `startRun` 每次都開一個新的對話(`locator.open_run_chat`),而「同時一個 run」的檢查是**每個對話**一個
+  (`orchestrator.start`:有 `chat_id` 時查 `active_run_for_chat`),所以頁面起的 run 本來就能並行;只有沒對話的舊式
+  run 才是一個 item 一個(`ActiveRunExists`)。
 
 ## 2. 決定
 
@@ -57,8 +59,8 @@ user:「我希望wui要能夠呼叫subagent」。
 
 - 沿用 workflow run 的紀錄、run chat、停止鍵、SSE:一次呼叫存成一筆 `WorkflowRun`,**種類**標成「頁面叫的
   subagent」,記下頁面、subagent 名稱、輸入;run 清單把它顯示成「頁面 X 叫了 Y」。
-- 「一個 item 一個 run」的檢查**只對 workflow run**,這一種略過(D6);為了不讓頁面一次叫爆,同一個 item 同時
-  進行中的頁面呼叫有上限,超過的回 429 說明「同時太多」〔施工:上限是一個設定,預設 4;是新 knob,記 migrations〕。
+- 每次呼叫開自己的對話,所以本來就能並行(D6,跟頁面的 `startRun` 一樣),不需要例外;為了不讓頁面一次叫爆,同一個 item 同時
+  進行中的頁面呼叫有上限,超過的回 429 說明「同時太多」(上限是一個設定,預設 4——〔user〕「4個ok」;是新 knob,記 migrations)。
 - 執行:用 `workflow_exec.drive_turn` 同一條路跑一個 turn(admit_turn 配額、run chat 持久化、取消 epoch),但
   turn 的系統提示是 subagent 的 AGENT.md、工具是它的 `allowed_tools` ∩ App 上限 − `SUBAGENT_FORBIDDEN_TOOLS`
   (= `_child_context` 的收窄,抽成一個兩邊共用的函式,不各寫一份)。
