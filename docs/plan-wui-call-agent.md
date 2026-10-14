@@ -1,6 +1,6 @@
 # WUI 頁面叫能力的兩種叫法:`call`(拿結果)與 `start`(拿工作);subagent 也能叫
 
-**狀態:** P1(計劃,#942 已合)。P2–P6 實作於 PR #945(實作註記見 §6);統計場合「頁面」等 #932 合進 master 後補;P7 進行中。
+**狀態:** P1(計劃,#942 已合)。P2–P6 實作於 PR #945(實作註記見 §6),統計場合「頁面」也在 #945(接在 #932 之上);P7 真瀏覽器檢查與 demo 做完(PR #945)。
 **來源標記:** 〔user〕= user 的原話或明確選擇;〔查證〕= 讀 `origin/master`(2a4e7d0e)程式碼確認的事實;
 〔施工〕= 我定的實作細節,可推翻。
 
@@ -98,7 +98,7 @@ user:「我希望wui要能夠呼叫subagent」;討論中擴大成「每個能力
 | P3 | subagent:共用收窄函式、subagent turn、`startAgent`、`callAgent`(60 秒、超時停工作) | 同上 |
 | P4 | 工具:`startTool`(沙盒長時間執行、總時間上限) | 同上 |
 | P5 | 前端:`callAgent`/`startAgent`/`startTool` 動詞與工作物件、bridge 擋 `agents:`/`tools:`;run 清單顯示頁面工作;**既有 `callTool`、`startRun` 的測試一個都不改** | 元件測試;動詞表守衛綠 |
-| P6 | 文件(頁面作者 skill 的叫法規則、`docs/wui.md` 動詞表、migrations 條目)、統計場合(**待 #932 合進 master**) | mkdocs 綠 |
+| P6 | 文件(頁面作者 skill 的叫法規則、`docs/wui.md` 動詞表、migrations 條目)、統計場合 | mkdocs 綠 |
 | P7 | 真瀏覽器檢查 + demo(MP4):頁面 `callAgent`、`startAgent` 兩個並行、`startTool`、run 清單、停止;既有頁面照常 | 截圖、demo |
 
 ## 5. 不做
@@ -136,6 +136,10 @@ user:「我希望wui要能夠呼叫subagent」;討論中擴大成「每個能力
   完成時也不顯示「未執行任何步驟」。失敗通知的標題寫「Page job failed: sub-agent “X”」,一天一則的分桶以工作名稱為準。
 - **AI 讀 `wui` skill 時**,除了能叫的工具,也列出這個 item 能讓頁面問的 subagent——取自 turn 自己的 `subagent_defs`
   (聊天能委派的那一份)。兩邊用同一個函式(`_subagent_defs`)算,但輸入的設定不一定一樣:`callAgent` 用 item 解析出的設定(workflow 節點用的那份),聊天 turn 用它自己的(可能掛了別的 preset),所以兩份清單**可能**不同——頁面送出時以`callAgent` 那份為準,不在裡面就 404 並列出有哪些。
+- **統計場合「頁面」**(接在 #932 之上):`_usage_identity` 看到 run 有 `page_job` 就記 `page`,人是點的人
+  (`RunIdentities` 的 `env_user`)。`_child_context` 會把子 turn 標成 `subagent`——頁面工作沒有父 turn,所以收窄之後
+  改回 `page`。**記到的是 subagent turn 裡的工具呼叫**;`startTool` 工作跟 `callTool` 一樣不是 agent 叫的工具,#932
+  不記它們。
 - **已知限制(沿用既有問題)**:item 的沙盒是冷的時候,第一件工作的 turn 會觸發還原;還原期間另一個請求讀 subagent 定義,可能讀到還沒還原完的工作區,回 404「It has: none」。這是「讀檔不等 ready」的既有缺口(不是這次造成的),頁面重試即可;測試改成等前一件真的開始跑再起下一件。
 - **設定值**:`server.wui_page_job_limit`(4)、`server.wui_page_job_timeout_sec`(3600)。上限是每顆 pod 開工作前查一次再寫,不是跨 pod 的鎖——兩顆 pod 同一瞬間各收到一次點擊,可能短暫多出一件。
 - **頁面工作結束不關 item 的沙盒**(第一輪 review):workflow run 結束走 `release`,沒有其他 run 在跑就關掉 item 的

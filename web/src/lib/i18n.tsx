@@ -2170,6 +2170,8 @@ export const messages = {
   "usage.surface.workflow": { "zh-TW": "工作流程", en: "Workflow" },
   "usage.surface.schedule": { "zh-TW": "排程", en: "Schedule" },
   "usage.surface.subagent": { "zh-TW": "子代理", en: "Sub-agent" },
+  // #942: a sub-agent a WUI page asked (`callAgent` / `startAgent`).
+  "usage.surface.page": { "zh-TW": "頁面", en: "Page" },
   "usage.surface.kb_agent": { "zh-TW": "KB 子代理", en: "KB sub-agent" },
   "usage.surface.background": { "zh-TW": "背景工作", en: "Background" },
   "usage.col.tool": { "zh-TW": "工具", en: "Tool" },

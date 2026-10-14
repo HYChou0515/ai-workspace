@@ -68,6 +68,7 @@ const SURFACES: Record<string, MsgKey> = {
   workflow: "usage.surface.workflow",
   schedule: "usage.surface.schedule",
   subagent: "usage.surface.subagent",
+  page: "usage.surface.page",
   kb_agent: "usage.surface.kb_agent",
   background: "usage.surface.background",
 };

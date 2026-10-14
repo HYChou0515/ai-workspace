@@ -670,7 +670,12 @@ class WorkflowExecutor:
                 run = self._spec.get_resource_manager(WorkflowRun).get(run_id).data
             except (ResourceIDNotFoundError, ResourceIsDeletedError):
                 run = None
-        surface = "schedule" if isinstance(run, WorkflowRun) and run.from_schedule else "workflow"
+        if isinstance(run, WorkflowRun) and run.page_job is not None:
+            surface = "page"  # #942: a job a page started, not a workflow
+        elif isinstance(run, WorkflowRun) and run.from_schedule:
+            surface = "schedule"
+        else:
+            surface = "workflow"
         bound, _verb = self._run_identity(run_id)
         return surface, bound or captured_user
 

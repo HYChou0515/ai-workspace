@@ -60,6 +60,8 @@ class SubRunner(ScriptedAgentRunner):
                 tools=list(cfg.allowed_tools or []),
                 history=list(ctx.history),
                 run_agent=ctx.run_agent,
+                surface=ctx.surface,
+                usage_user=ctx.usage_user,
             )
         )
         if self.block:
@@ -126,6 +128,18 @@ def test_a_page_asks_a_sub_agent_and_gets_its_answer_back():
     # D3: the chat's own narrowing — its file ∩ the App ceiling − the forbidden.
     assert turn.tools == ["read_file"]
     assert turn.history == [] and turn.run_agent is None
+
+
+def test_the_sub_agent_s_tool_calls_count_as_the_page_s_and_the_clicker_s():
+    """#942 §3.4 with #932: a page job's turn is counted on the 「頁面」 surface —
+    not "subagent" (it has no parent turn) and not "workflow" (it is no
+    workflow) — and against the person who clicked (D11), not the owner."""
+    runner = SubRunner()
+    client, item_id, _ = _app(runner)
+    with client:
+        client.post(_url(item_id, "agents/log-digger/call"), json={"input": "x"})
+    (turn,) = runner.seen
+    assert (turn.surface, turn.usage_user) == ("page", "admin")
 
 
 def test_the_ask_is_a_run_record_with_its_own_conversation():

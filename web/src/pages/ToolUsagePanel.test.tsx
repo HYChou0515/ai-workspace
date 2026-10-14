@@ -167,6 +167,26 @@ describe("one page, both kinds", () => {
     expect(screen.getByRole("button", { name: "7 天" })).toHaveAttribute("aria-pressed", "true");
   });
 
+  it("offers a page's jobs as a surface of their own (#942)", async () => {
+    const client = draw();
+    await within(toolsPart()).findAllByTestId("tool-usage-row");
+
+    const surfaces = within(screen.getByLabelText("場合"))
+      .getAllByRole("option")
+      .map((o) => o.textContent);
+    expect(surfaces).toContain("頁面");
+    fireEvent.change(screen.getByLabelText("場合"), { target: { value: "page" } });
+
+    await waitFor(() =>
+      expect(client.report).toHaveBeenLastCalledWith(
+        30,
+        { source: "", surface: "page", app: "" },
+        "skill",
+        "command",
+      ),
+    );
+  });
+
   it("filters both by surface and App, and each by its own sources", async () => {
     const client = draw();
     await within(toolsPart()).findAllByTestId("tool-usage-row");

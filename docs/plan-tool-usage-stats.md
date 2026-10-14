@@ -90,6 +90,7 @@ sub-agent、`ask_knowledge_base` 裡的 KB 子代理各自的工具呼叫由它�
 | `schedule` 排程自動跑 | 按過「用我的身分執行」的人;沒有就 item 擁有者〔施工〕 | 排程觸發的 run 往下帶 |
 | `subagent` sub-agent | 父 turn 的人 | `subagent_run._child_context` 繼承後改場合 |
 | `kb_agent` `ask_knowledge_base` 的子代理 | 父 turn 的人 | `answer_question` 的 context 現在**沒有人、沒有 item**〔查證〕,要從呼叫端帶進去 |
+| `page` 頁面(#942:WUI 頁面 `callAgent` / `startAgent` 叫的 subagent) | 點的人(頁面工作的 `env_user`) | `WorkflowExecutor._usage_identity`(run 有 `page_job`);`_child_context` 標的 `subagent` 改回 `page` |
 | `background` 背景工作(wiki 維護、卡片草稿、壓縮…) | 沒有人時記 `(系統)` | 各自的建構處 |
 
 「沒有服務帳號」〔查證〕:排程那一輪是以 item 擁有者跑(`acting_user=owner`),綁定的人只決定工具拿誰的環境
@@ -127,7 +128,7 @@ sub-agent、`ask_knowledge_base` 裡的 KB 子代理各自的工具呼叫由它�
 
 - 計數點:`_agent_for` 的包層;來源在合併前標。
 - 失敗的四種判斷(3.3)。
-- `surface` 七個值與各自的「誰」(3.4);排程記「綁定的人,沒有就擁有者」。
+- `surface` 七個值與各自的「誰」(3.4;#942 加了第八個 `page`);排程記「綁定的人,沒有就擁有者」。
 - 存法:每天每顆 pod 每工具一列、明細放列內、5 分鐘寫回、90 天刪除一天一次。
 - API 路徑與篩選參數。
 

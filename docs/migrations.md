@@ -2461,7 +2461,7 @@ rollout、HPA 擴張可能會在當天多出新的行程名稱。API 與 worker 
 **行為改變，沒有開關**：頁面多了 `callAgent` / `startAgent` / `startTool` 三個動詞（`callTool`、`startRun` 不變）。
 AI 讀 `wui` skill 時會看到「這個 item 能讓頁面問的 subagent」清單與「要馬上拿結果用 `call…`、可能跑久用 `start…`」
 的規則，所以**升級後 AI 寫的新頁面可能會叫 subagent**——每叫一次就是一個 LLM turn，算在 item 擁有者頭上
-（跟頁面按 `startRun` 一樣）；舊頁面不受影響。每件頁面工作會在 item 的對話清單多一筆（標題「頁面：subagent X」/
+（跟頁面按 `startRun` 一樣）；舊頁面不受影響。subagent 在頁面工作裡的工具呼叫，在「使用統計」記成新的場合「頁面」(算在點的人頭上)。每件頁面工作會在 item 的對話清單多一筆（標題「頁面：subagent X」/
 「頁面：工具 X」）；跟頁面的 `startRun` 一樣，對話還在，那筆紀錄就留著（`keep_last_runs` 不會清掉被對話指著的紀錄），要清就刪那個對話。
 
 **資料** — 沒有。`WorkflowRun` 多一個選填欄位 `page_job`（沒有版本、舊紀錄讀成空），不用回填。
