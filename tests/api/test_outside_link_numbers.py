@@ -372,3 +372,53 @@ def test_an_address_in_angle_brackets_is_read_to_its_own_close():
     numbered_links(md)
 
     assert time.monotonic() - started < 10
+
+
+# ── a search's results (the person: 「直接看google search首頁就停住」) ──
+#
+# A results page is mostly the search engine's own links — sign-in, images,
+# maps, the next page — and those took the list's first numbers. For a search,
+# the list leaves out the search engine's own site; the results (Google's
+# redirects, unwrapped) are what is numbered.
+
+SEARCH = "https://www.google.com/search?q=pandas"
+RESULTS = (
+    "[Sign in](https://accounts.google.com/ServiceLogin) [Images](https://www.google.com/imghp) "
+    "[Maps](https://maps.google.com/) "
+    f"[whatsnew]({GOOGLE}) "
+    "[api](https://www.google.com/url?q=https://pandas.example/api&sa=U) "
+    "[Next](https://www.google.com/search?q=pandas&start=10)"
+)
+
+
+def test_a_search_lists_its_results_not_the_search_engines_own_links():
+    assert numbered_links(RESULTS, skip_site=SEARCH) == [
+        (1, "whatsnew", "https://pandas.example/whatsnew"),
+        (2, "api", "https://pandas.example/api"),
+    ]
+
+
+def test_a_search_answer_says_to_open_the_results_before_answering():
+    client, spec, iid = _asked()  # its card is a search
+
+    path = _answer(client, iid, content=RESULTS, source_url=SEARCH).json()["path"]
+
+    [message] = _answers(spec)
+    assert "[1] whatsnew — pandas.example" in message.content
+    assert "accounts.google.com" not in message.content.split("連結")[1].split("\n\n")[0]
+    assert "打開最相關的結果" in message.content
+    assert listed_links(_read(client, iid, path)) == {
+        1: "https://pandas.example/whatsnew",
+        2: "https://pandas.example/api",
+    }
+
+
+# A page opened (not searched) keeps its own site's links: they are what one
+# reads next on it.
+def test_an_opened_page_keeps_its_own_sites_links():
+    md = "[next chapter](https://docs.example/ch2) [elsewhere](https://other.example/)"
+
+    assert [u for _, _, u in numbered_links(md, skip_site=None)] == [
+        "https://docs.example/ch2",
+        "https://other.example/",
+    ]

@@ -186,13 +186,15 @@ def register_outside_lookup_routes(
             ]
             # D24: the links, numbered, under the answer — the AI names one by
             # file and number rather than copying it (it copied wrong).
-            numbered = await asyncio.to_thread(numbered_links, body)  # off the loop
+            # off the loop; a search's own site's links are not its results
+            searched_page = form.source_url if "query" in card else None
+            numbered = await asyncio.to_thread(numbered_links, body, skip_site=searched_page)
             if may_add:
                 doc = _document(card, searched, body, form, get_user_id()) + link_list(numbered)
                 day = form.date if _is_date(form.date) else f"{datetime.now(UTC):%Y-%m-%d}"
                 saved, attached = await _save(files, investigation_id, day, searched, doc, blobs)
                 written = [*attached, saved]
-            text = _message(searched, body, saved, attached, numbered)
+            text = _message(searched, body, saved, attached, numbered, search="query" in card)
         try:
             rid, conv = conversation()  # the writes can wait on a cold sandbox: read it fresh
             # Answered meanwhile — another tab, another viewer: theirs stands.
@@ -531,6 +533,8 @@ def _message(
     path: str | None,
     attached: list[str],
     numbered: list[tuple[int, str, str]] | None = None,
+    *,
+    search: bool = False,
 ) -> str:
     """What the AI reads next turn: what was looked up, where it is saved, its
     links by number and how to open one (D24) — before the text, so an excerpt
@@ -541,6 +545,12 @@ def _message(
         lines.append(f"存在 `{path}`")
     numbered = numbered or []
     if path and numbered:
+        if search:
+            lines.append(
+                "這是搜尋結果:只有標題和摘要,不是原文。"
+                "回答前,用 ask_outside 打開最相關的結果讀原文,一次開一個;"
+                "查回來過的連結,小幫手在線時會直接打開。"
+            )
         lines.append(f"連結(要開其中一個:ask_outside(file=`{path}`, link=編號)):")
         for n, text, page in numbered[:MESSAGE_LINKS]:
             host = _host(page)

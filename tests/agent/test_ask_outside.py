@@ -333,3 +333,5 @@ async def test_the_tool_says_to_name_a_link_by_file_and_number() -> None:
 
     doc = ask_outside_impl.__doc__ or ""
     assert "`file`" in doc and "`link`" in doc and "- [n] <https://…>" in doc
+    # …and to open a search's results before answering from them
+    assert "results page" in doc and "before answering" in doc

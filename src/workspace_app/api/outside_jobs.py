@@ -231,13 +231,28 @@ def links_in(markdown: str) -> list[str]:
     return list(out)
 
 
-def numbered_links(markdown: str) -> list[tuple[int, str, str]]:
+def _host(url: str) -> str:
+    try:
+        return (urlsplit(url).hostname or "").lower()
+    except ValueError:
+        return ""
+
+
+def numbered_links(markdown: str, *, skip_site: str | None = None) -> list[tuple[int, str, str]]:
     """`(n, text, page)` for each web page the answer links to — not images —
     numbered in order from 1, the same page (whatever its `#anchor`) one
-    number, a Google redirect as the page it leads to (D24)."""
+    number, a Google redirect as the page it leads to (D24).
+
+    `skip_site`, a search's results page: its own site's links — sign-in,
+    images, maps, the next page — are not listed, so the results take the
+    numbers (the person: 「直接看google search首頁就停住」)."""
+    site = _host(skip_site or "").removeprefix("www.")
     pages: dict[str, str] = {}
     for _, image, text, address in _links(markdown):
         page = _without_fragment(_page_of(address))
+        host = _host(page)
+        if site and (host == site or host.endswith("." + site)):
+            continue
         # `<` `>` cannot be written inside the list's `<…>`: it would cut it
         listable = is_web_address(page) and not {"<", ">"} & set(page)
         if not image and listable and page not in pages:

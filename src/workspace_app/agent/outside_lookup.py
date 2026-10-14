@@ -58,7 +58,9 @@ async def ask_outside_impl(
       of them too).
       Pass the file's path and the number `n` — search results included —
       rather than copying the address: long addresses copied by hand come out
-      wrong.
+      wrong. A search brings back a results page: titles and snippets, not the
+      pages. Open the results that answer the question this way and read them
+      before answering, one card at a time.
     - `url`: any other web page (http or https), such as a link in another
       file, or in an answer that was not saved as a file.
 
