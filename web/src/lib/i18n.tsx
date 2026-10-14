@@ -2195,6 +2195,10 @@ export const messages = {
     en: "{n} calls · {f} failed ({rate}) · {avg} on average",
   },
   "usage.detail.loads": { "zh-TW": "載入 {n} 次", en: "Loaded {n} times" },
+  "usage.detail.unfiltered": {
+    "zh-TW": "這裡的數字是所有場合與 App 的合計,不受上方的場合/App 篩選。",
+    en: "These numbers cover every surface and App; the surface / App filters above do not apply here.",
+  },
   "usage.noItem": { "zh-TW": "(沒有 item)", en: "(no item)" },
   "usage.ms": { "zh-TW": "{n} 毫秒", en: "{n} ms" },
   "usage.seconds": { "zh-TW": "{n} 秒", en: "{n} s" },

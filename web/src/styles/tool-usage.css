@@ -92,7 +92,7 @@
    Tables) — fixed to the right below the top bar; the full width on a phone. */
 .tool-usage-sidepanel {
   position: fixed;
-  top: 40px; /* the top bar's height, measured */
+  top: var(--nav-height);
   right: 0;
   bottom: 0;
   width: min(420px, 100vw);
@@ -101,7 +101,8 @@
   background: var(--paper);
   border-left: 1px solid var(--paper-3);
   box-shadow: -8px 0 24px rgb(0 0 0 / 0.08);
-  z-index: 20;
+  /* The rail's band: furniture beside the page, under menus and modals. */
+  z-index: var(--z-rail);
 }
 
 .tool-usage-sidepanel-head {
@@ -109,6 +110,28 @@
   align-items: flex-start;
   justify-content: space-between;
   gap: var(--space-8);
+}
+
+/* The name can be one long unbroken identifier: it wraps, and never pushes ✕
+   out of the panel. */
+.tool-usage-detail-title {
+  margin: 0;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: var(--text-body-lg);
+  overflow-wrap: anywhere;
+}
+
+/* While a panel is open on a wide screen, the page makes room for it, so the
+   part's own controls (來源, the CSV link) and the table's right columns are
+   not under it. The page's box is inline-styled (DiagnosticsPage), hence the
+   `!important`; it widens by the panel's width and pads it back out, so the
+   content keeps its width and moves left. */
+@media (min-width: 1100px) {
+  [data-testid="page-diagnostics"] > div:has(.tool-usage-sidepanel) {
+    max-width: calc(760px + 420px) !important;
+    padding-right: calc(20px + 420px) !important;
+  }
 }
 
 .tool-usage-sidepanel-close {

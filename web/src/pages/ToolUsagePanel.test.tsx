@@ -745,8 +745,10 @@ describe("a row's details, in a side panel (NN/g, Data Tables)", () => {
     const panel = await openSpc();
 
     expect(within(panel).getByText("工具 · 第一方套件 · 最近 30 天")).toBeInTheDocument();
-    expect(within(panel).getByTestId("tool-usage-summary")).toHaveTextContent(
-      "呼叫 40 次 · 失敗 10 次(25%) · 平均 1.2 秒",
+    // The totals come from the breakdown below them (DETAIL: 30 calls, 5 failed,
+    // 1 s each), so the two can never disagree.
+    expect(await within(panel).findByTestId("tool-usage-summary")).toHaveTextContent(
+      "呼叫 30 次 · 失敗 5 次(17%) · 平均 1.0 秒",
     );
   });
 
@@ -824,7 +826,57 @@ describe("a row's details, in a side panel (NN/g, Data Tables)", () => {
     const panel = await within(skillsPart()).findByTestId("tool-usage-detail");
 
     expect(within(panel).getByText("Skill · 平台內建 · 最近 30 天")).toBeInTheDocument();
-    expect(within(panel).getByTestId("tool-usage-summary")).toHaveTextContent("載入 12 次");
+    expect(await within(panel).findByTestId("tool-usage-summary")).toHaveTextContent("載入 30 次");
     expect(within(panel).getByTestId("tool-usage-summary")).not.toHaveTextContent("失敗");
+  });
+});
+
+describe("one side panel for the page (review r5)", () => {
+  it("opening a skill's details closes the tool's — the two never stack", async () => {
+    draw();
+    fireEvent.click(await within(toolsPart()).findByRole("button", { name: "spc" }));
+    await within(toolsPart()).findByTestId("tool-usage-detail");
+
+    fireEvent.click(await within(skillsPart()).findByRole("button", { name: "my-notes" }));
+
+    expect(screen.getAllByTestId("tool-usage-detail")).toHaveLength(1);
+    expect(within(skillsPart()).getByTestId("tool-usage-detail")).toHaveAccessibleName(
+      "my-notes 的使用詳情",
+    );
+  });
+
+  it("follows the window: another window asks for that window's breakdown", async () => {
+    const client = draw();
+    fireEvent.click(await within(toolsPart()).findByRole("button", { name: "spc" }));
+    await within(toolsPart()).findByTestId("tool-usage-detail");
+
+    fireEvent.click(screen.getByRole("button", { name: "7 天" }));
+
+    await waitFor(() =>
+      expect(client.detail).toHaveBeenLastCalledWith("spc", 7, "tool", "command", "first_party", "rca-tools"),
+    );
+    expect(within(toolsPart()).getByText("工具 · 第一方套件 · 最近 7 天")).toBeInTheDocument();
+  });
+
+  it("says its numbers are every surface and App's when the page is filtered by them", async () => {
+    draw();
+    await within(toolsPart()).findAllByTestId("tool-usage-row");
+    fireEvent.change(screen.getByLabelText("場合"), { target: { value: "chat" } });
+    fireEvent.click(await within(toolsPart()).findByRole("button", { name: "spc" }));
+    const panel = await within(toolsPart()).findByTestId("tool-usage-detail");
+
+    expect(within(panel).getByText("這裡的數字是所有場合與 App 的合計,不受上方的場合/App 篩選。")).toBeInTheDocument();
+  });
+
+  it("puts the keyboard back on the row it was opened from when it closes", async () => {
+    draw();
+    const opener = await within(toolsPart()).findByRole("button", { name: "spc" });
+    opener.focus();
+    fireEvent.click(opener);
+    const panel = await within(toolsPart()).findByTestId("tool-usage-detail");
+
+    fireEvent.keyDown(panel, { key: "Escape" });
+
+    expect(document.activeElement).toBe(within(toolsPart()).getByRole("button", { name: "spc" }));
   });
 });

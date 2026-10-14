@@ -93,6 +93,19 @@ export function ToolUsagePanel({ client = toolUsageApi }: { client?: ToolUsageCl
   const [days, setDays] = useState<UsageDays>(30);
   const [shared, setShared] = useState<Shared>({ surface: "", app: "" });
   const appTitle = (slug: string) => apps.find((a) => a.slug === slug)?.title ?? slug;
+  // ONE side panel for the page (review r5): which row of which part it shows.
+  // Each part keeping its own put two panels on top of each other.
+  const [picked, setPicked] = useState<{ kind: UsageKind; row: ToolUsageTool } | null>(null);
+  // The button a panel was opened from, to put the keyboard back on (review r5).
+  const opener = useRef<HTMLElement | null>(null);
+  const pick = (kind: UsageKind, row: ToolUsageTool | null, from?: HTMLElement) => {
+    if (from) opener.current = from;
+    setPicked(row ? { kind, row } : null);
+  };
+  const close = () => {
+    setPicked(null);
+    opener.current?.focus();
+  };
 
   return (
     <div className="tool-usage" style={{ marginTop: 16 }}>
@@ -147,6 +160,9 @@ export function ToolUsagePanel({ client = toolUsageApi }: { client?: ToolUsageCl
         shared={shared}
         client={client}
         appTitle={appTitle}
+        picked={picked?.kind === "tool" ? picked.row : null}
+        pick={(row, from) => pick("tool", row, from)}
+        close={close}
       />
       <UsagePart
         kind="skill"
@@ -154,6 +170,9 @@ export function ToolUsagePanel({ client = toolUsageApi }: { client?: ToolUsageCl
         shared={shared}
         client={client}
         appTitle={appTitle}
+        picked={picked?.kind === "skill" ? picked.row : null}
+        pick={(row, from) => pick("skill", row, from)}
+        close={close}
       />
     </div>
   );
@@ -166,20 +185,29 @@ function UsagePart({
   shared,
   client,
   appTitle,
+  picked,
+  pick,
+  close,
 }: {
   kind: UsageKind;
   days: UsageDays;
   shared: Shared;
   client: ToolUsageClient;
   appTitle: (slug: string) => string;
+  /** This part's row in the page's one side panel, if it is this part's. */
+  picked: ToolUsageTool | null;
+  pick: (row: ToolUsageTool | null, from?: HTMLElement) => void;
+  close: () => void;
 }) {
   const t = useT();
   const skills = kind === "skill";
   const sources = skills ? SKILL_SOURCES : TOOL_SOURCES;
   const [source, setSource] = useState("");
   const [sort, setSort] = useState<{ key: SortKey; desc: boolean }>({ key: "calls", desc: true });
-  // A row is a name AND a source: one name can come from two (§8.2).
-  const [picked, setPicked] = useState<ToolUsageTool | null>(null);
+  // Clearing touches only this part's own row: another part's open panel stays.
+  const setPicked = (row: ToolUsageTool | null) => {
+    if (row || picked) pick(row);
+  };
   // §9: tools only — a skill has no package, and the ask was "which tools".
   const [group, setGroup] = useState<UsageGroup>("command");
   // What is UNticked, so a name the report newly brings shows (ticked) by default.
@@ -375,9 +403,7 @@ function UsagePart({
                       <button
                         type="button"
                         className="tool-usage-tool"
-                        onClick={() =>
-                          setPicked(isPicked(r) ? null : r)
-                        }
+                        onClick={(e) => pick(isPicked(r) ? null : r, e.currentTarget)}
                       >
                         {nameOf(r)}
                       </button>
@@ -406,7 +432,8 @@ function UsagePart({
           row={picked}
           title={nameOf(picked)}
           sourceLabel={sources[picked.source] ? t(sources[picked.source]) : picked.source}
-          onClose={() => setPicked(null)}
+          onClose={close}
+          filtered={Boolean(shared.surface || shared.app)}
           kind={kind}
           group={group}
           days={days}
@@ -583,6 +610,7 @@ function ToolDetail({
   title,
   sourceLabel,
   onClose,
+  filtered,
   kind,
   group,
   days,
@@ -596,6 +624,8 @@ function ToolDetail({
   title: string;
   sourceLabel: string;
   onClose: () => void;
+  /** The page is filtered by surface or App, which a breakdown cannot be. */
+  filtered: boolean;
   kind: UsageKind;
   group: UsageGroup;
   days: UsageDays;
@@ -618,14 +648,29 @@ function ToolDetail({
     headingRef.current?.focus();
   }, [row.tool, row.source, pkg]);
 
-  const summary = skills
-    ? t("usage.detail.loads", { n: row.calls })
-    : t("usage.detail.calls", {
-        n: row.calls,
-        f: row.fails,
-        rate: pct(row),
-        avg: ms(row.avg_ms),
-      });
+  // The totals from the breakdown itself (every call has a person, so the
+  // "who" part adds up to the whole) — never from the table row, which the
+  // page's filters narrowed and which a later window would leave stale.
+  const total = d
+    ? d.by_user.reduce(
+        (acc, r) => ({
+          calls: acc.calls + r.calls,
+          fails: acc.fails + r.fails,
+          ms: acc.ms + r.avg_ms * r.calls,
+        }),
+        { calls: 0, fails: 0, ms: 0 },
+      )
+    : null;
+  const summary = !total
+    ? null
+    : skills
+      ? t("usage.detail.loads", { n: total.calls })
+      : t("usage.detail.calls", {
+          n: total.calls,
+          f: total.fails,
+          rate: pct(total),
+          avg: ms(total.calls ? Math.round(total.ms / total.calls) : 0),
+        });
 
   const part = (
     heading: string,
@@ -710,9 +755,14 @@ function ToolDetail({
           days,
         })}
       </p>
-      <p className="tool-usage-detail-summary" data-testid="tool-usage-summary">
-        {summary}
-      </p>
+      {summary && (
+        <p className="tool-usage-detail-summary" data-testid="tool-usage-summary">
+          {summary}
+        </p>
+      )}
+      {/* A breakdown is three separate sums (who, where, which item), not a
+          cross-table: it cannot be narrowed by surface or App. Said, not hidden. */}
+      {filtered && <p className="tool-usage-detail-what">{t("usage.detail.unfiltered")}</p>}
       {detail.isError && (
         <p role="alert">{t("usage.failed", { reason: (detail.error as Error).message })}</p>
       )}
