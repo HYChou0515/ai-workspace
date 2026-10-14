@@ -680,6 +680,7 @@ class WorkflowOrchestrator:
                     await self._post_run(run_id, item_id, key)
                     return
                 wf = self._build_handle(run_id, item_id, captured_user, None, key)
+                wf.stop_baseline = baseline
                 coro = run_workflow(
                     self.spec,
                     run_id=run_id,

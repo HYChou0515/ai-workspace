@@ -64,6 +64,8 @@ def _orchestrator(spec: SpecStar, engine: _Engine | None = None) -> WorkflowOrch
         load_manifest=lambda *_a: None,
         wire_handle=lambda *_a: None,
         on_stop=engine.cancel_current if engine else None,
+        # As `create_app` wires it: the epoch is sampled when a job is accepted.
+        stop_epoch=engine.cancel_epoch if engine else None,
     )
 
 
@@ -193,6 +195,28 @@ def test_a_stop_on_this_pod_takes_the_command_down_too():
         # Inside the client: its shutdown cancels every task, which would
         # satisfy this on its own and prove nothing.
         assert cancelled == [True], "the command was left running after the job was stopped"
+
+
+def test_a_stop_landing_after_the_slot_check_still_reaches_the_command():
+    """Review round 2: the job compared the epoch once it had a slot, then the
+    work sampled a FRESH baseline — a Stop landing between the two reads became
+    part of that baseline and the job ran on. The epoch here moves on its third
+    read: accept (0), slot check (0), then whatever the work does next."""
+
+    class _MovesOnThirdRead(_Engine):
+        def __init__(self) -> None:
+            super().__init__()
+            self.reads = 0
+
+        async def cancel_epoch(self, key: str) -> int:
+            self.reads += 1
+            return 0 if self.reads <= 2 else 1
+
+    engine = _MovesOnThirdRead()
+    client, _, _, _, _ = _setup(_JobSandbox(block=True), engine=engine)
+    with client:
+        job_id = _start(client).json()["job_id"]
+        _wait(client, job_id, "stopped")
 
 
 def test_a_tools_input_is_an_object():

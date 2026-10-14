@@ -222,6 +222,10 @@ class WorkflowHandle:
         its dedup key so each separate invocation mints a FRESH entity while a resume of the
         same invocation reuses. "" ⇒ no per-invocation boundary (tests / legacy), so
         ``create_new`` degrades to within-invocation self-dedup only."""
+        self.stop_baseline: int | None = None
+        """#942: a page job's stop epoch as sampled when the job was ACCEPTED.
+        Its work compares against this rather than sampling again, so a Stop
+        landing between the two reads is not absorbed. None ⇒ not a page job."""
         self.run_started_at = run_started_at
         """#435 P7: this run's creation instant (specstar ``created_time`` — resume-stable,
         unlike the driver's ``started`` which a resume overwrites). ``send_notification``'s

@@ -189,6 +189,7 @@ class WorkflowExecutor:
         agent: SubagentDef,
         *,
         run_id: str,
+        stop_baseline: int | None = None,
     ) -> tuple[str, bool]:
         """Run ``agent`` — one of the item's sub-agents — over ``prompt`` as a
         turn on a page job's own chat (#942), and return ``(what it said,
@@ -201,6 +202,11 @@ class WorkflowExecutor:
         to delegate further (`subagent_run._child_context` — one function for
         both). What a failure or a silent ending reads as is `run_agent`'s own
         sentence (`report_of`)."""
+        if stop_baseline is not None:
+            # The epoch as it was when the page job was accepted (#942): the
+            # turn compares against it instead of sampling one of its own, so a
+            # Stop that landed while the job waited is not absorbed.
+            self._run_baseline.setdefault(chat_key, stop_baseline)
         produced = await self._turn(
             item_id, chat_key, captured_user, prompt, None, run_id=run_id, agent=agent
         )

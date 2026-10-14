@@ -727,7 +727,13 @@ def register_wui_routes(
         def work_on(key: str) -> _Work:
             async def work(wf: Any) -> dict[str, Any]:
                 output, failed = await drive(
-                    investigation_id, key, owner, text, defn, run_id=wf.run_id
+                    investigation_id,
+                    key,
+                    owner,
+                    text,
+                    defn,
+                    run_id=wf.run_id,
+                    stop_baseline=wf.stop_baseline,
                 )
                 return {"output": output, "failed": failed}
 
@@ -754,7 +760,11 @@ def register_wui_routes(
 
         def work_on(key: str) -> _Work:
             async def work(wf: Any) -> dict[str, Any]:
-                epoch = await turn_engine.cancel_epoch(key) if turn_engine else 0
+                # The baseline the job was ACCEPTED with, not a fresh read: a
+                # Stop landing in between would become part of a fresh one.
+                epoch = wf.stop_baseline
+                if epoch is None:
+                    epoch = await turn_engine.cancel_epoch(key) if turn_engine else 0
                 deadline = orchestrator.page_job_deadline(wf.run_id)
 
                 async def run() -> ExecResult:

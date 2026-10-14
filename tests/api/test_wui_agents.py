@@ -248,6 +248,33 @@ def test_an_answered_ask_leaves_the_items_sandbox_alone(monkeypatch):
         assert item_id not in closed
 
 
+def test_a_stop_landing_after_the_slot_check_still_stops_the_sub_agent(monkeypatch):
+    """Review round 2: the turn sampled a fresh stop baseline of its own, so a
+    Stop from another pod landing after the job got its slot was absorbed and
+    the sub-agent ran anyway. The job chat's epoch moves on its third read:
+    accept (0), slot check (0), then the turn's own check."""
+    from workspace_app.api.turns import ChatTurnEngine
+
+    reads: dict[str, int] = {}
+    real = ChatTurnEngine.cancel_epoch
+
+    async def cancel_epoch(self, key: str) -> int:
+        if not key.startswith("conversation:"):
+            return await real(self, key)
+        reads[key] = reads.get(key, 0) + 1
+        return 0 if reads[key] <= 2 else 1
+
+    monkeypatch.setattr(ChatTurnEngine, "cancel_epoch", cancel_epoch)
+    runner = SubRunner()
+    client, item_id, spec = _app(runner)
+    with client:
+        job_id = client.post(
+            _url(item_id, "jobs"), json={"kind": "agent", "name": "log-digger", "input": "x"}
+        ).json()["job_id"]
+        _wait_state(client, item_id, job_id, "stopped")
+    assert runner.seen == [], "the sub-agent ran after it was stopped"
+
+
 # ── startAgent: the job ───────────────────────────────────────────────
 
 
@@ -275,14 +302,24 @@ def test_a_started_job_can_be_stopped():
 
 
 def test_the_fifth_job_at_once_is_refused_with_a_sentence():
-    client, item_id, _ = _app(SubRunner(block=True))
+    runner = SubRunner(block=True)
+    client, item_id, _ = _app(runner)
     with client:
-        ids = [
-            client.post(
-                _url(item_id, "jobs"), json={"kind": "agent", "name": "log-digger", "input": "x"}
-            ).json()["job_id"]
-            for _ in range(4)
-        ]
+        ids = []
+        for n in range(1, 5):
+            ids.append(
+                client.post(
+                    _url(item_id, "jobs"),
+                    json={"kind": "agent", "name": "log-digger", "input": "x"},
+                ).json()["job_id"]
+            )
+            # Each starts once the one before is really running. The first
+            # turn restores the item's cold sandbox, and a sub-agent list read
+            # during that restore sees a half-restored workspace — the known
+            # "a read does not wait for ready" gap, not what this test is about.
+            deadline = time.monotonic() + 10
+            while len(runner.seen) < n and time.monotonic() < deadline:
+                time.sleep(0.05)
         resp = client.post(
             _url(item_id, "jobs"), json={"kind": "agent", "name": "log-digger", "input": "x"}
         )

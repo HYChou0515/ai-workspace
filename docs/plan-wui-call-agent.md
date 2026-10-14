@@ -136,13 +136,15 @@ user:「我希望wui要能夠呼叫subagent」;討論中擴大成「每個能力
   完成時也不顯示「未執行任何步驟」。失敗通知的標題寫「Page job failed: sub-agent “X”」,一天一則的分桶以工作名稱為準。
 - **AI 讀 `wui` skill 時**,除了能叫的工具,也列出這個 item 能讓頁面問的 subagent——取自 turn 自己的 `subagent_defs`
   (聊天能委派的那一份)。兩邊用同一個函式(`_subagent_defs`)算,但輸入的設定不一定一樣:`callAgent` 用 item 解析出的設定(workflow 節點用的那份),聊天 turn 用它自己的(可能掛了別的 preset),所以兩份清單**可能**不同——頁面送出時以`callAgent` 那份為準,不在裡面就 404 並列出有哪些。
+- **已知限制(沿用既有問題)**:item 的沙盒是冷的時候,第一件工作的 turn 會觸發還原;還原期間另一個請求讀 subagent 定義,可能讀到還沒還原完的工作區,回 404「It has: none」。這是「讀檔不等 ready」的既有缺口(不是這次造成的),頁面重試即可;測試改成等前一件真的開始跑再起下一件。
 - **設定值**:`server.wui_page_job_limit`(4)、`server.wui_page_job_timeout_sec`(3600)。上限是每顆 pod 開工作前查一次再寫,不是跨 pod 的鎖——兩顆 pod 同一瞬間各收到一次點擊,可能短暫多出一件。
 - **頁面工作結束不關 item 的沙盒**(第一輪 review):workflow run 結束走 `release`,沒有其他 run 在跑就關掉 item 的
   沙盒——但頁面的 `callTool`、開著的聊天都不是 run,`callAgent` 一回答就會把沙盒從它們底下抽走。頁面工作改走
   `end_page_job`:只放掉自己對話的 turn session,沙盒交給閒置回收(`kill_idle`)。
 - **停止的 epoch 基準在「收下工作」時取**(第一輪 review):別顆 pod 按的停止只推進 epoch;原本工作拿到名額開始跑才取
-  基準,排隊時按的停止就被吃進基準。現在 `start_page_job` 當下取(`stop_epoch`),拿到名額先比對。拿到名額之後、工作
-  自己取基準之前,仍有一小段 await 的空隙。被別顆 pod 停掉的工作,由**跑它的這顆** pod 在取消路徑上自己收尾(按停止的
+  基準,排隊時按的停止就被吃進基準。現在 `start_page_job` 當下取(`stop_epoch`),拿到名額先比對,而且**同一個
+  基準**交給工作(`wf.stop_baseline`:工具工作的監看、subagent turn 的 `_run_baseline` 都用它,不再自己重取——第二輪
+  review 抓到重取的那一下又是一個空隙)。被別顆 pod 停掉的工作,由**跑它的這顆** pod 在取消路徑上自己收尾(按停止的
   那顆沒有 task 可收)。
 - **中斷的紀錄也在開新工作時結算**(第一輪 review):原本只有讀狀態會結算,頁面關掉之後就永遠「進行中」。
 - **停止**:同一顆 pod 上的停止會取消工作的 driver;工具工作的命令是另一個 task,所以工作離開時(不論怎麼離開)一定把命令一起取消並等它結束——第一輪 review 抓到只取消 driver 時命令會一路跑到期限(`test_a_stop_on_this_pod_takes_the_command_down_too`)。
