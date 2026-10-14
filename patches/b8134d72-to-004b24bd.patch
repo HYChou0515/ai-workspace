@@ -1,0 +1,1051 @@
+diff --git a/docs/migrations.md b/docs/migrations.md
+index 7d4c0c0f..4554ccec 100644
+--- a/docs/migrations.md
++++ b/docs/migrations.md
+@@ -2274,6 +2274,38 @@ agent 步驟裡 AI 的呼叫、WUI 的工具呼叫、view plugin、圖表重畫
+ - 「小幫手」頁顯示新版本號;一台重裝過的電腦小視窗標題是那個版本。
+ - 請 AI 開一個要經過公司登入或轉址的網址(先前回「nothing to send」的那種):卡片拿到的是最後那一頁的內容,`lookups/` 有存檔。
+ 
++### 2026-10-14 · #938 「請幫我查」:小幫手送出後,聊天自己跟上 AI 的回答;跨 pod 即時事件斷線會重連並寫 log {#pr-938}
++
++**設定** — 無。
++
++**資料** — 無。
++
++**k8s · CI 側** — 照常重 build、部署,沒有要另外做的事。`event_bus.kind: rabbitmq` 的部署在 `rollout 後`看每個 API pod 的 log:
++
++```
++kubectl logs <api-pod> | grep "event_bus:"
++```
++
++- 每個 API pod 都要有一行 `event_bus: connected — exchange rca_turn_events, this pod's queue amq.gen-…`。為什麼:這條佇列是別的 pod 跑的
++  AI 回答送到這個 pod 上瀏覽器的唯一路。沒有這行的症狀:接在這個 pod 上的人要重新整理才看得到別的 pod 跑的回答(只剩一個 pod 時正常)。
++- 一直出現 `event_bus: cannot reach the broker — trying again in N s` → 這個 pod 連不上 RabbitMQ(網址、vhost、帳密、NetworkPolicy)。
++  以前這種 pod 啟動時連一次失敗就永遠不再試,也不寫 log;現在會每 1→30 秒重試一次,連上就恢復,不用重啟。
++- `event_bus: lost the broker` / `dropped a frame on send`:連線中途斷掉或某一筆沒送出;會自己重連,偶爾一行不用處理。
++
++**行為改變,沒有開關**:
++
++- 「請幫我查」卡片顯示「小幫手已送給 AI」,或使用者手動貼上答案送出後,若聊天裡還沒出現 AI 的回答(這一頁沒收到那一輪的即時事件),
++  聊天會自己讀資料庫直到 AI 的回答存好,不用重新整理。這條路不會跳出「連線中斷,這裡可能少了一段」。
++- 每一輪對話的開始與結束,API pod 會在 INFO 寫一行 `live: published <事件> key=… pod=… viewers_here=N`;收到別的 pod 的事件寫
++  `live: from bus <事件> key=… origin=… pod=… viewers_here=N`;瀏覽器接上/離開串流寫 `live: viewer joined|left key=… pod=…`。
++  只記事件種類、對話 key 與 pod,不記內容;一輪約幾行。用來追「誰跑的、誰收到、那裡有沒有人在看」。
++
++**確認做完**(`rollout 後`):
++
++- 每個 API pod 的 log 都有 `event_bus: connected`;`rabbitmqctl list_bindings source_name destination_name | grep rca_turn_events`
++  列出的佇列數不少於 API pod 數。
++- 多個 pod 時:請 AI 查外面的東西、按「查」;卡片出現「小幫手已送給 AI」後**不重新整理**,幾秒內聊天出現送出的內容與 AI 的回答。
++
+ ## 附錄 A：資料回填的機制（specstar 為什麼不會自己補）
+ 
+ 有些升版會改變「資料在資料庫裡的儲存形狀」，但 **specstar 只在寫入當下**把一列的 `indexed_data`
+diff --git a/src/workspace_app/api/event_bus/rabbitmq.py b/src/workspace_app/api/event_bus/rabbitmq.py
+index 19b5381e..8237f35c 100644
+--- a/src/workspace_app/api/event_bus/rabbitmq.py
++++ b/src/workspace_app/api/event_bus/rabbitmq.py
+@@ -16,9 +16,10 @@ from __future__ import annotations
+ 
+ import abc
+ import asyncio
++import contextlib
+ import json
+ import logging
+-from collections.abc import Callable
++from collections.abc import Awaitable, Callable
+ from dataclasses import asdict
+ from typing import Any
+ 
+@@ -95,33 +96,52 @@ class RabbitMQEventBus(IEventBus):
+             self._on_event(msg["key"], msg["origin"], event, msg.get("id") or "")
+ 
+ 
++#: Waits between tries to reach the broker: doubling from 1 s up to this.
++RECONNECT_MAX_S = 30.0
++
++
+ class AioPikaTransport(IAmqpTransport):
+-    """aio_pika fanout adapter. Not exercised by unit tests (no broker); a
+-    broker-gated integration test covers the real path. aio_pika is imported lazily
+-    so this module loads without it — a clear ImportError only if `event_bus.kind:
+-    rabbitmq` is enabled without the `rabbitmq` extra installed."""
++    """aio_pika fanout adapter, exercised against a stand-in aio_pika by the unit
++    tests and against a real broker by a broker-gated integration test. aio_pika is
++    imported lazily so this module loads without it — a clear ImportError only if
++    `event_bus.kind: rabbitmq` is enabled without the `rabbitmq` extra installed.
++
++    `connect_robust` reconnects only a connection that once succeeded: a broker
++    not ready when the pod starts (a rollout restarting both) used to end the
++    background task for good — silently, with every live event of this pod
++    piling up unsent and none coming in. So reaching the broker is retried, each
++    try and the connect said in the log, and one failed send never ends the
++    sending."""
+ 
+     def __init__(
+-        self, *, url: str, exchange: str, queue_max_length: int, heartbeat_seconds: int
+-    ) -> None:  # pragma: no cover - integration-only
++        self,
++        *,
++        url: str,
++        exchange: str,
++        queue_max_length: int,
++        heartbeat_seconds: int,
++        sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
++    ) -> None:
+         self._url = url
+         self._exchange_name = exchange
+         self._queue_max_length = queue_max_length
+         self._heartbeat = heartbeat_seconds
++        self._sleep = sleep
++        self._wait = 1.0
+         self._outbound: asyncio.Queue[bytes] | None = None  # built on start
+         self._on_message: Callable[[bytes], None] | None = None
+ 
+-    def start(self, on_message: Callable[[bytes], None]) -> None:  # pragma: no cover
++    def start(self, on_message: Callable[[bytes], None]) -> None:
+         self._on_message = on_message
+         self._outbound = asyncio.Queue()
+-        # Background connect + consume + publish drain, on the running loop. Uses
+-        # RobustConnection so a broker blip auto-reconnects (re-declaring the
+-        # exclusive/auto-delete queue). Never blocks the caller.
++        # Background connect + consume + publish drain, on the running loop. Never
++        # blocks the caller.
+         asyncio.get_event_loop().create_task(self._run())
+ 
+-    def publish(self, body: bytes) -> None:  # pragma: no cover - integration-only
+-        # Fire-and-forget: hand off to the outbound queue drained by `_run`. If the
+-        # bus hasn't started (no loop/queue yet), drop — the store-poll backstops.
++    def publish(self, body: bytes) -> None:
++        # Fire-and-forget: hand off to the outbound queue drained while connected.
++        # If the bus hasn't started (no loop/queue yet), drop — the store-poll
++        # backstops.
+         outbound = self._outbound
+         if outbound is not None:
+             try:
+@@ -129,7 +149,7 @@ class AioPikaTransport(IAmqpTransport):
+             except Exception:  # noqa: BLE001 - a full/closed queue drops the frame
+                 logger.warning("event_bus: outbound full, dropped a frame")
+ 
+-    async def _run(self) -> None:  # pragma: no cover - integration-only
++    async def _run(self) -> None:
+         import importlib
+ 
+         # Loaded dynamically and pinned to Any so ty stays agnostic to whether the
+@@ -137,31 +157,73 @@ class AioPikaTransport(IAmqpTransport):
+         # unresolved-import suppression flip used/unused across envs, and once the
+         # real types ARE visible ty rejects connect_robust(heartbeat=...) — aio_pika's
+         # overloads omit heartbeat that the runtime accepts via **kwargs. Typing the
+-        # handle Any sidesteps both without a stale ignore comment. Integration-only.
++        # handle Any sidesteps both without a stale ignore comment.
+         aio_pika: Any = importlib.import_module("aio_pika")
+-
++        # Doubles while the broker stays away; a connect starts it over at 1 s.
++        self._wait = 1.0
++        while True:
++            try:
++                await self._connected(aio_pika)
++                logger.warning(
++                    "event_bus: lost the broker — connecting again in %.0f s; "
++                    "until then live events do not cross pods",
++                    self._wait,
++                )
++            except asyncio.CancelledError:
++                raise
++            except Exception:  # noqa: BLE001 — said, and tried again
++                logger.warning(
++                    "event_bus: cannot reach the broker — trying again in %.0f s; "
++                    "until then live events do not cross pods",
++                    self._wait,
++                    exc_info=True,
++                )
++            await self._sleep(self._wait)
++            self._wait = min(self._wait * 2, RECONNECT_MAX_S)
++
++    async def _connected(self, aio_pika: Any) -> None:
++        """One connection, from connect to its end — closed however it ends: a
++        robust connection left open would go on reconnecting on its own beside
++        the next one."""
+         conn = await aio_pika.connect_robust(self._url, heartbeat=self._heartbeat)
+-        channel = await conn.channel()
+-        exchange = await channel.declare_exchange(
+-            self._exchange_name, aio_pika.ExchangeType.FANOUT, durable=True
+-        )
+-        # One exclusive, auto-delete queue per pod (server-named); transient, bounded.
+-        queue = await channel.declare_queue(
+-            exclusive=True,
+-            auto_delete=True,
+-            arguments={"x-max-length": self._queue_max_length},
+-        )
+-        await queue.bind(exchange)
+-
+-        async def _drain_outbound() -> None:
+-            assert self._outbound is not None
+-            while True:
+-                body = await self._outbound.get()
+-                await exchange.publish(aio_pika.Message(body), routing_key="")
+-
+-        asyncio.get_event_loop().create_task(_drain_outbound())
+-        async with queue.iterator() as it:
+-            async for message in it:
+-                async with message.process():
+-                    if self._on_message is not None:
+-                        self._on_message(message.body)
++        try:
++            channel = await conn.channel()
++            exchange = await channel.declare_exchange(
++                self._exchange_name, aio_pika.ExchangeType.FANOUT, durable=True
++            )
++            # One exclusive, auto-delete queue per pod (server-named); transient,
++            # bounded.
++            queue = await channel.declare_queue(
++                exclusive=True,
++                auto_delete=True,
++                arguments={"x-max-length": self._queue_max_length},
++            )
++            await queue.bind(exchange)
++            logger.info(
++                "event_bus: connected — exchange %s, this pod's queue %s",
++                self._exchange_name,
++                queue.name,
++            )
++            self._wait = 1.0
++
++            async def _drain_outbound() -> None:
++                assert self._outbound is not None
++                while True:
++                    body = await self._outbound.get()
++                    try:
++                        await exchange.publish(aio_pika.Message(body), routing_key="")
++                    except Exception:  # noqa: BLE001 — one lost frame, not the sending
++                        logger.warning("event_bus: dropped a frame on send", exc_info=True)
++
++            drain = asyncio.get_event_loop().create_task(_drain_outbound())
++            try:
++                async with queue.iterator() as it:
++                    async for message in it:
++                        async with message.process():
++                            if self._on_message is not None:
++                                self._on_message(message.body)
++            finally:
++                drain.cancel()
++        finally:
++            with contextlib.suppress(Exception):
++                await conn.close()
+diff --git a/src/workspace_app/api/turns.py b/src/workspace_app/api/turns.py
+index 78bb13d7..eb3b0368 100644
+--- a/src/workspace_app/api/turns.py
++++ b/src/workspace_app/api/turns.py
+@@ -17,6 +17,7 @@ import asyncio
+ import contextlib
+ import json
+ import logging
++import socket
+ import time
+ import uuid
+ from collections import deque
+@@ -52,10 +53,12 @@ from .events import (
+     Presence,
+     RepetitionStopped,
+     RunCancelled,
++    RunDone,
+     RunError,
+     ToolEnd,
+     ToolStart,
+     TurnEnded,
++    UserMessage,
+     to_sse,
+ )
+ from .repetition_guard import guard_repetition
+@@ -65,6 +68,19 @@ from .turn_activity import TURN_HEARTBEAT_MS, ITurnActivityStore
+ logger = logging.getLogger(__name__)
+ 
+ 
++#: The events the live log names — the message that starts a turn and the ones
++#: that end it: one or two lines per turn, never their content. Enough to trace
++#: a viewer who saw a turn only after a reload: which pod published it, which
++#: pods heard of it from the bus, and whether anyone there was listening.
++_TRACED = (UserMessage, RunDone, RunError, RunCancelled, TurnEnded)
++
++
++def _pod(pod_id: str) -> str:
++    """This pod as the live log names it: its host (in k8s, the pod's name) and
++    the engine's own id, which is what a bus envelope carries as its origin."""
++    return f"{socket.gethostname()}/{pod_id[:8]}"
++
++
+ def _now_ms() -> int:
+     return int(datetime.now(UTC).timestamp() * 1000)
+ 
+@@ -650,6 +666,14 @@ class _WorkspaceSession:
+         self._fanout(event, event_id)
+         if self.bus is not None and not isinstance(event, Presence):
+             self.bus.publish(self.key, self.pod_id, event, event_id)
++        if isinstance(event, _TRACED):
++            logger.info(
++                "live: published %s key=%s pod=%s viewers_here=%d",
++                type(event).__name__,
++                self.key,
++                _pod(self.pod_id),
++                len(self.subscribers),
++            )
+ 
+     def deliver_from_bus(self, event: AgentEvent, event_id: str) -> None:
+         """Deliver an event that arrived from ANOTHER pod's turn: the same local
+@@ -784,6 +808,16 @@ class ChatTurnEngine:
+         if origin == self._pod_id:
+             return
+         session = self._ws_sessions.get(key)
++        listening = len(session.subscribers) if session is not None else 0
++        if isinstance(event, _TRACED):
++            logger.info(
++                "live: from bus %s key=%s origin=%s pod=%s viewers_here=%d",
++                type(event).__name__,
++                key,
++                origin[:8],
++                _pod(self._pod_id),
++                listening,
++            )
+         if session is not None and session.subscribers:
+             session.deliver_from_bus(event, event_id)
+ 
+@@ -1323,6 +1357,13 @@ class ChatTurnEngine:
+         replay = session.replay_since(since) if since is not None else []
+         if user_id:
+             session.publish(Presence(users=session.roster()))
++        logger.info(
++            "live: viewer joined key=%s pod=%s viewers_here=%d resumed=%s",
++            key,
++            _pod(self._pod_id),
++            len(session.subscribers),
++            since is not None,
++        )
+ 
+         async def _frames() -> AsyncGenerator[str, None]:
+             try:
+@@ -1341,6 +1382,12 @@ class ChatTurnEngine:
+                 session.subscribers.pop(q, None)
+                 if user_id:
+                     session.publish(Presence(users=session.roster()))
++                logger.info(
++                    "live: viewer left key=%s pod=%s viewers_here=%d",
++                    key,
++                    _pod(self._pod_id),
++                    len(session.subscribers),
++                )
+ 
+         return _frames()
+ 
+diff --git a/tests/api/test_event_bus.py b/tests/api/test_event_bus.py
+index 28e98a23..58410754 100644
+--- a/tests/api/test_event_bus.py
++++ b/tests/api/test_event_bus.py
+@@ -228,3 +228,64 @@ async def test_a_replayed_event_keeps_the_id_it_was_published_with():
+ 
+     await resumed.aclose()
+     await pod.forget(key)
++
++
++# ── what the log says, so a viewer that saw a turn only after a reload can be
++# traced pod by pod (the person's report: fine on one pod, not on several) ──
++
++
++async def test_the_log_traces_a_turn_from_its_pod_to_a_viewer_on_another(caplog):
++    from workspace_app.api.events import RunDone, UserMessage
++
++    bus = InMemoryEventBus()
++    pod_a = ChatTurnEngine(_Runner(), event_bus=bus, pod_id="podA1234xyz")  # ty: ignore[invalid-argument-type]
++    pod_b = ChatTurnEngine(_Runner(), event_bus=bus, pod_id="podB5678xyz")  # ty: ignore[invalid-argument-type]
++    key = "inv"
++    with caplog.at_level("INFO", logger="workspace_app.api.turns"):
++        viewer = pod_b.subscribe_sse(key)
++        await asyncio.sleep(0)  # the generator attaches on first iteration
++        reading = asyncio.ensure_future(_read_frame(viewer))
++        await asyncio.sleep(0)
++        pod_a._ws_session(key).publish(UserMessage(author="u", content="查到的內容"))
++        await reading
++        pod_a._ws_session(key).publish(MessageDelta(text="streamed, not logged"))
++        pod_a._ws_session(key).publish(RunDone())
++        await asyncio.sleep(0.05)
++        await viewer.aclose()
++
++    lines = [r.getMessage() for r in caplog.records if r.getMessage().startswith("live:")]
++    assert any(m.startswith("live: viewer joined key=inv") and "podB5678" in m for m in lines), (
++        lines
++    )
++    assert any(
++        m.startswith("live: published UserMessage key=inv") and "podA1234" in m for m in lines
++    ), lines
++    assert any(
++        m.startswith("live: from bus UserMessage key=inv")
++        and "origin=podA1234" in m
++        and "podB5678" in m
++        and "viewers_here=1" in m
++        for m in lines
++    ), lines
++    assert any(m.startswith("live: published RunDone key=inv") for m in lines), lines
++    assert not any("MessageDelta" in m or "查到的內容" in m for m in lines), lines
++    assert any(m.startswith("live: viewer left key=inv") for m in lines), lines
++
++
++# A pod that hears of a turn with nobody there to hand it to says so — the
++# trace of a viewer whose stream is elsewhere, or gone.
++async def test_the_log_says_when_an_event_arrives_with_nobody_listening(caplog):
++    from workspace_app.api.events import UserMessage
++
++    bus = InMemoryEventBus()
++    pod_a = ChatTurnEngine(_Runner(), event_bus=bus, pod_id="podA1234xyz")  # ty: ignore[invalid-argument-type]
++    ChatTurnEngine(_Runner(), event_bus=bus, pod_id="podB5678xyz")  # ty: ignore[invalid-argument-type]
++    with caplog.at_level("INFO", logger="workspace_app.api.turns"):
++        pod_a._ws_session("inv").publish(UserMessage(author="u", content="q"))
++        await asyncio.sleep(0.05)
++
++    assert any(
++        r.getMessage().startswith("live: from bus UserMessage key=inv")
++        and "viewers_here=0" in r.getMessage()
++        for r in caplog.records
++    )
+diff --git a/tests/api/test_rabbitmq_event_bus.py b/tests/api/test_rabbitmq_event_bus.py
+index 39f30ea7..e3e0cafa 100644
+--- a/tests/api/test_rabbitmq_event_bus.py
++++ b/tests/api/test_rabbitmq_event_bus.py
+@@ -124,3 +124,227 @@ def test_a_frame_from_a_pod_that_predates_event_ids_still_delivers():
+     t.deliver(old_frame)
+ 
+     assert got == [("K", "podOld", MessageDelta(text="hi"), "")]
++
++
++# ── the aio_pika transport, against a stand-in aio_pika (no broker) ─────────
++#
++# A pod whose first connect failed (the broker not ready at rollout) stayed
++# without a bus for its whole life, silently: the task died, publishes piled up
++# in the outbound queue, nothing came in — and nothing said so. It is what a
++# viewer that sees a turn only after a reload looks like (the person's report).
++
++
++class _FakeAioPika:
++    """Just enough of aio_pika for `AioPikaTransport._run`."""
++
++    class ExchangeType:
++        FANOUT = "fanout"
++
++    class Message:
++        def __init__(self, body: bytes) -> None:
++            self.body = body
++
++    def __init__(
++        self,
++        *,
++        connect_failures: int = 0,
++        publish_failures: int = 0,
++        fail_connects: frozenset[int] = frozenset(),
++        declare_fails_on: frozenset[int] = frozenset(),
++        stream_ends_on: frozenset[int] = frozenset(),
++    ) -> None:
++        self.connects = 0
++        self._connect_failures = connect_failures
++        self._publish_failures = publish_failures
++        self._fail_connects = fail_connects
++        self._declare_fails_on = declare_fails_on
++        self._stream_ends_on = stream_ends_on
++        self.open: list[_FakeConnection] = []
++        self.sent: list[bytes] = []
++        self.incoming: asyncio.Queue[bytes] = asyncio.Queue()
++
++    async def connect_robust(self, url, heartbeat):  # noqa: ANN001, ANN201
++        self.connects += 1
++        if self.connects <= self._connect_failures or self.connects in self._fail_connects:
++            raise ConnectionError("broker not ready")
++        conn = _FakeConnection(self, self.connects)
++        self.open.append(conn)
++        return conn
++
++
++class _FakeConnection:
++    def __init__(self, pika: _FakeAioPika, n: int) -> None:
++        self._pika = pika
++        self.n = n
++
++    async def channel(self):  # noqa: ANN201
++        if self.n in self._pika._declare_fails_on:
++            raise ConnectionError("channel refused")
++        return _FakeChannel(self._pika, self.n)
++
++    async def close(self) -> None:
++        self._pika.open.remove(self)
++
++
++class _FakeChannel:
++    def __init__(self, pika: _FakeAioPika, n: int) -> None:
++        self._pika = pika
++        self._n = n
++
++    async def declare_exchange(self, name, kind, durable):  # noqa: ANN001, ANN201
++        return _FakeExchange(self._pika)
++
++    async def declare_queue(self, **_kw):  # noqa: ANN201
++        return _FakeQueue(self._pika, ends=self._n in self._pika._stream_ends_on)
++
++
++class _FakeExchange:
++    def __init__(self, pika: _FakeAioPika) -> None:
++        self._pika = pika
++
++    async def publish(self, message, routing_key):  # noqa: ANN001, ANN201
++        if self._pika._publish_failures:
++            self._pika._publish_failures -= 1
++            raise ConnectionError("channel closed")
++        self._pika.sent.append(message.body)
++
++
++class _FakeMessage:
++    def __init__(self, body: bytes) -> None:
++        self.body = body
++
++    def process(self):  # noqa: ANN201
++        import contextlib
++
++        return contextlib.nullcontext()
++
++
++class _FakeQueue:
++    name = "amq.gen-this-pod"
++
++    def __init__(self, pika: _FakeAioPika, *, ends: bool = False) -> None:
++        self._pika = pika
++        self._ends = ends
++
++    async def bind(self, exchange):  # noqa: ANN001, ANN201
++        pass
++
++    def iterator(self):  # noqa: ANN201
++        pika = self._pika
++        ends = self._ends
++
++        class _It:
++            async def __aenter__(self):  # noqa: ANN204
++                return self
++
++            async def __aexit__(self, *a):  # noqa: ANN001, ANN204
++                return False
++
++            def __aiter__(self):  # noqa: ANN204
++                return self
++
++            async def __anext__(self):  # noqa: ANN204
++                if ends:
++                    raise StopAsyncIteration
++                return _FakeMessage(await pika.incoming.get())
++
++        return _It()
++
++
++def _transport(
++    monkeypatch, pika: _FakeAioPika, waits: list[float] | None = None
++) -> AioPikaTransport:
++    import importlib
++
++    real = importlib.import_module
++    monkeypatch.setattr(
++        importlib, "import_module", lambda name: pika if name == "aio_pika" else real(name)
++    )
++
++    async def no_wait(s: float) -> None:
++        if waits is not None:
++            waits.append(s)
++        await asyncio.sleep(0)
++
++    return AioPikaTransport(
++        url="amqp://broker", exchange="ex", queue_max_length=10, heartbeat_seconds=5, sleep=no_wait
++    )
++
++
++async def _until(cond, *, tries: int = 200) -> None:  # noqa: ANN001
++    for _ in range(tries):
++        if cond():
++            return
++        await asyncio.sleep(0.01)
++    raise AssertionError("never happened")
++
++
++async def test_a_broker_not_ready_at_start_is_tried_again_and_said(monkeypatch, caplog):
++    pika = _FakeAioPika(connect_failures=2)
++    t = _transport(monkeypatch, pika)
++    got: list[bytes] = []
++    with caplog.at_level("INFO", logger="workspace_app.api.event_bus.rabbitmq"):
++        t.start(got.append)
++        t.publish(b"frame-1")
++        await _until(lambda: pika.sent == [b"frame-1"])
++        await pika.incoming.put(b"from-another-pod")
++        await _until(lambda: got == [b"from-another-pod"])
++
++    assert pika.connects == 3
++    text = caplog.text
++    assert text.count("cannot reach the broker") == 2
++    assert "connected" in text and "amq.gen-this-pod" in text
++
++
++async def test_a_failed_send_is_said_and_the_next_one_still_goes(monkeypatch, caplog):
++    pika = _FakeAioPika(publish_failures=1)
++    t = _transport(monkeypatch, pika)
++    with caplog.at_level("INFO", logger="workspace_app.api.event_bus.rabbitmq"):
++        t.start(lambda _b: None)
++        t.publish(b"lost")
++        t.publish(b"kept")
++        await _until(lambda: pika.sent == [b"kept"])
++
++    assert "dropped a frame" in caplog.text
++
++
++# A connection that fails after it opened (the channel refused) is closed
++# before the next try: a robust connection left behind reconnects on its own,
++# forever, beside the new one.
++async def test_a_connect_that_fails_part_way_is_closed_before_the_next(monkeypatch, caplog):
++    pika = _FakeAioPika(declare_fails_on=frozenset({1}))
++    t = _transport(monkeypatch, pika)
++    with caplog.at_level("INFO", logger="workspace_app.api.event_bus.rabbitmq"):
++        t.start(lambda _b: None)
++        await _until(lambda: "connected" in caplog.text)
++
++    assert pika.connects == 2
++    assert [c.n for c in pika.open] == [2]
++
++
++# A stream that ends (the broker closed it) is said and connected again after a
++# wait — not at once, in a loop, in silence — and its connection is closed.
++async def test_a_stream_that_ends_is_said_and_connected_again(monkeypatch, caplog):
++    pika = _FakeAioPika(stream_ends_on=frozenset({1}))
++    t = _transport(monkeypatch, pika, waits := [])
++    got: list[bytes] = []
++    with caplog.at_level("INFO", logger="workspace_app.api.event_bus.rabbitmq"):
++        t.start(got.append)
++        await _until(lambda: pika.connects == 2)
++        await pika.incoming.put(b"after")
++        await _until(lambda: got == [b"after"])
++
++    assert "lost the broker" in caplog.text
++    assert waits == [1.0]
++    assert [c.n for c in pika.open] == [2]
++
++
++# Each outage starts its waits over from 1 s: a pod that was once unlucky must
++# not wait 30 s to come back from every later blip.
++async def test_the_wait_starts_over_once_connected(monkeypatch):
++    pika = _FakeAioPika(fail_connects=frozenset({1, 2, 4}), stream_ends_on=frozenset({3}))
++    t = _transport(monkeypatch, pika, waits := [])
++    t.start(lambda _b: None)
++    await _until(lambda: pika.connects == 5)
++
++    assert waits == [1.0, 2.0, 1.0, 2.0]
+diff --git a/web/src/components/OutsideLookupCard.helper.test.tsx b/web/src/components/OutsideLookupCard.helper.test.tsx
+index b20ca4af..03687360 100644
+--- a/web/src/components/OutsideLookupCard.helper.test.tsx
++++ b/web/src/components/OutsideLookupCard.helper.test.tsx
+@@ -7,6 +7,7 @@
+ // @vitest-environment happy-dom
+ import "@testing-library/jest-dom/vitest";
+ import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
++import { useState } from "react";
+ import { afterEach, describe, expect, it, vi } from "vitest";
+ 
+ import type { QueryClient } from "@tanstack/react-query";
+@@ -60,6 +61,8 @@ function draw({
+   release = RELEASE,
+   queryClient,
+   status,
++  follow,
++  answeredLater = false,
+ }: {
+   lookup?: OutsideLookup;
+   online?: boolean;
+@@ -73,6 +76,11 @@ function draw({
+   release?: HelperRelease | null;
+   /** The app's own client — with its "could not save" notice — when that matters. */
+   queryClient?: QueryClient;
++  /** The chat's `follow` (useChatSession): told when the helper's answer went in. */
++  follow?: (callId: string) => void;
++  /** Drawn unanswered, with a 「answer arrives」 button that marks it answered
++   * while it stays on screen (the thread drawing the answer under it). */
++  answeredLater?: boolean;
+ } = {}) {
+   // As the server answers: no job until one is handed over, then that job.
+   let latest: HelperJob | null = existing;
+@@ -91,12 +99,24 @@ function draw({
+     release: vi.fn(async () => release),
+   };
+   vi.spyOn(window, "open").mockReturnValue(null);
+-  renderWithQuery(
+-    <ChatItemProvider value={{ slug: "rca", itemId: "i1", chatId: "ch1", answered: () => false }}>
+-      <OutsideLookupCard callId="call_1" lookup={lookup} client={client} />
+-    </ChatItemProvider>,
+-    queryClient,
+-  );
++  function Card() {
++    const [answered, setAnswered] = useState(false);
++    return (
++      <>
++        {answeredLater ? (
++          <button type="button" onClick={() => setAnswered(true)}>
++            answer arrives
++          </button>
++        ) : null}
++        <ChatItemProvider
++          value={{ slug: "rca", itemId: "i1", chatId: "ch1", answered: () => answered, follow }}
++        >
++          <OutsideLookupCard callId="call_1" lookup={lookup} client={client} />
++        </ChatItemProvider>
++      </>
++    );
++  }
++  renderWithQuery(<Card />, queryClient);
+   return client;
+ }
+ 
+@@ -167,6 +187,55 @@ describe("a search, with the helper connected", () => {
+     await waitFor(() => expect(client.handOver).toHaveBeenCalledTimes(2));
+   });
+ 
++  // The helper's answer starts the AI's next turn from the helper's own browser:
++  // the chat is told to follow it, once — or the person had to reload to see
++  // the reply (their report: 「要重新整理才看得到回覆」).
++  it("tells the chat to follow the turn the helper's answer started, once", async () => {
++    const follow = vi.fn();
++    draw({ current: async () => job({ state: "done" }), follow });
++    fireEvent.click(await screen.findByRole("button", { name: "查" }));
++
++    await screen.findByText("小幫手已送給 AI");
++    await waitFor(() => expect(follow).toHaveBeenCalledWith("call_1"));
++    await new Promise((r) => setTimeout(r, 50));
++    expect(follow).toHaveBeenCalledTimes(1);
++  });
++
++  // Review of #938: followed, the chat draws the helper's answer under the card,
++  // which then reads as answered while still on screen — it must not change
++  // the hooks it calls (it threw "Rendered fewer hooks" and blanked the app).
++  it("stays drawn when the helper's answer arrives under it", async () => {
++    draw({ current: async () => job({ state: "done" }), follow: vi.fn(), answeredLater: true });
++    fireEvent.click(await screen.findByRole("button", { name: "查" }));
++    await screen.findByText("小幫手已送給 AI");
++
++    fireEvent.click(screen.getByRole("button", { name: "answer arrives" }));
++
++    expect(await screen.findByText("已回覆")).toBeInTheDocument();
++  });
++
++  // Answered by hand, the person's answer starts the next turn just as the
++  // helper's does: the chat follows it too.
++  it("tells the chat to follow the turn a pasted answer started", async () => {
++    const follow = vi.fn();
++    draw({ online: false, follow });
++
++    fireEvent.change(await screen.findByLabelText("查到的內容"), { target: { value: "found" } });
++    fireEvent.click(screen.getByRole("button", { name: "送出" }));
++
++    await waitFor(() => expect(follow).toHaveBeenCalledWith("call_1"));
++  });
++
++  // A job that did not end in an answer started no turn.
++  it("follows nothing when the helper did not answer", async () => {
++    const follow = vi.fn();
++    draw({ current: async () => job({ state: "failed", error: "page timed out" }), follow });
++    fireEvent.click(await screen.findByRole("button", { name: "查" }));
++
++    await screen.findByText("小幫手沒查到:page timed out");
++    expect(follow).not.toHaveBeenCalled();
++  });
++
+   it("says the helper sent it once it is done", async () => {
+     draw({ current: async () => job({ state: "done" }) });
+     fireEvent.click(await screen.findByRole("button", { name: "查" }));
+diff --git a/web/src/components/OutsideLookupCard.tsx b/web/src/components/OutsideLookupCard.tsx
+index 0e175f3c..0560af90 100644
+--- a/web/src/components/OutsideLookupCard.tsx
++++ b/web/src/components/OutsideLookupCard.tsx
+@@ -110,14 +110,17 @@ export function OutsideLookupCard({
+       });
+     },
+     onMutate: () => setHint(null),
+-    onSuccess: (saved, a) =>
++    onSuccess: (saved, a) => {
+       setDone(
+         a.kind === "not_found"
+           ? t("lookup.sentNotFound")
+           : saved.path
+             ? t("lookup.savedTo", { path: saved.path })
+             : t("lookup.sent"),
+-      ),
++      );
++      // The answer started the AI's next turn, on whichever pod took the POST.
++      item?.follow?.(callId);
++    },
+   });
+ 
+   // ── the person's helper (docs/plan-outside-helper.md §3.5) ──
+@@ -193,6 +196,18 @@ export function OutsideLookupCard({
+     // `hand` and `cardRef` are new each render; `asked` makes this run once.
+   }, [isSearch, online, answeredAlready]);
+ 
++  // The helper's answer went in from the helper's own browser and started the
++  // AI's next turn there: this page may hear nothing of it (another pod's
++  // stream) — so the chat follows it, once (the person's report:
++  // 「要重新整理才看得到回覆」). Above every early return: followed, the chat
++  // draws the answer, and the card then reads as answered while still here.
++  // Once: a job that is done stays done (its polling stops there).
++  const followedJob = job.data?.state;
++  useEffect(() => {
++    if (followedJob === "done") item?.follow?.(callId);
++    // `item` is new each render; the job's state is what changes.
++  }, [followedJob]);
++
+   const head = (
+     <>
+       <p className="outside-lookup-title">{t("lookup.title")}</p>
+diff --git a/web/src/hooks/chatItem.tsx b/web/src/hooks/chatItem.tsx
+index 7213a490..d584bad4 100644
+--- a/web/src/hooks/chatItem.tsx
++++ b/web/src/hooks/chatItem.tsx
+@@ -19,6 +19,9 @@ export type ChatItem = {
+   /** Whether a message in the thread already answers this call
+    * (`Message.answers`), so an answered card stays retired after a reload. */
+   answered?: (callId: string) => boolean;
++  /** Follow the turn an answer to `callId` started elsewhere — the helper
++   * posts its 「請幫我查」 result from its own browser (`useChatSession.follow`). */
++  follow?: (callId: string) => void;
+ };
+ 
+ /** Where the panel opens to, from a card (docs/plan-env-request-card.md): the
+diff --git a/web/src/hooks/useAgent.tsx b/web/src/hooks/useAgent.tsx
+index 2ed06300..e3722b48 100644
+--- a/web/src/hooks/useAgent.tsx
++++ b/web/src/hooks/useAgent.tsx
+@@ -55,6 +55,9 @@ export type AgentState = {
+   cancel: () => void;
+   /** Undo the last `turns` whole turns (#38), then re-snapshot the thread. */
+   undo: (turns: number) => Promise<void>;
++  /** Follow a turn an answer to card `callId` started elsewhere
++   * (`useChatSession.follow`). */
++  follow?: (callId: string) => void;
+ };
+ 
+ const AgentContext = createContext<AgentState | null>(null);
+diff --git a/web/src/hooks/useChatSession.replay.test.tsx b/web/src/hooks/useChatSession.replay.test.tsx
+index 718b0947..f66847ea 100644
+--- a/web/src/hooks/useChatSession.replay.test.tsx
++++ b/web/src/hooks/useChatSession.replay.test.tsx
+@@ -1,5 +1,5 @@
+ // @vitest-environment happy-dom
+-import { renderHook, waitFor } from "@testing-library/react";
++import { act, renderHook, waitFor } from "@testing-library/react";
+ import { afterEach, describe, expect, it, vi } from "vitest";
+ 
+ import type { AgentEvent } from "../events";
+@@ -476,6 +476,47 @@ describe("useChatSession — reconnect replay", () => {
+     expect(hasBanner(result.current.log.entries)).toBe(false);
+   });
+ 
++  // Review of #938: following a turn started elsewhere (the helper's answer to
++  // a 「請幫我查」 card) reads the store, not this stream — the stream saw nothing
++  // of that turn, so a drop of it can have lost nothing of it.
++  it("following a turn started elsewhere does not arm the banner", async () => {
++    let attempt = 0;
++    let drop!: () => void;
++    const dropped = new Promise<void>((r) => {
++      drop = r;
++    });
++    // An answered chat — at rest, nothing streaming — whose card the helper answers.
++    const answered = {
++      messages: [
++        { role: "user" as const, content: "q", created_at: Date.now() },
++        { role: "assistant" as const, content: "a", created_at: Date.now() },
++      ],
++    };
++    const { result } = render(
++      transport({
++        getThread: vi.fn().mockResolvedValue(answered),
++        subscribe: async function* (_signal: AbortSignal) {
++          attempt += 1;
++          if (attempt === 1) {
++            await dropped;
++            throw new Error("stream failed: 504");
++          }
++          await new Promise<void>(() => {});
++        },
++      }),
++    );
++    await waitFor(() => expect(result.current.log.entries).toHaveLength(2));
++    expect(result.current.log.streaming).toBe(false);
++
++    act(() => result.current.follow("call-1"));
++    expect(result.current.log.streaming).toBe(true); // it did follow
++    drop();
++
++    await waitFor(() => expect(attempt).toBeGreaterThanOrEqual(2), { timeout: 4000 });
++    await new Promise((r) => setTimeout(r, 200));
++    expect(hasBanner(result.current.log.entries)).toBe(false);
++  });
++
+   it("says nothing when the drop caught no turn in flight", async () => {
+     // A finished chat that blips. Nothing was being written, so nothing can be
+     // missing — and no further event will ever arrive, so a banner added here is
+diff --git a/web/src/hooks/useChatSession.test.tsx b/web/src/hooks/useChatSession.test.tsx
+index 1b1cc5fd..34ec84a7 100644
+--- a/web/src/hooks/useChatSession.test.tsx
++++ b/web/src/hooks/useChatSession.test.tsx
+@@ -671,3 +671,50 @@ describe("a send that was refused leaves nothing behind", () => {
+     expect(result.current.log.stopping).toBe(false);
+   });
+ });
++
++// A turn started ELSEWHERE — the helper's answer to a 「請幫我查」 card, posted
++// from the helper's own browser — reached this page by no event (the person's
++// report: 「要重新整理才看得到回覆」). Told to follow it, the page reads the
++// store until the reply is there, with no stream event at all.
++describe("following a turn started elsewhere", () => {
++  const ASKED = { messages: [{ role: "user" as const, content: "q" }] };
++  const ANSWERED = {
++    messages: [
++      { role: "user" as const, content: "q" },
++      { role: "user" as const, content: "查到的內容", answers: "call-1" },
++      { role: "assistant" as const, content: "讀完了:答案" },
++    ],
++  };
++
++  it("reads the store until the reply is there", async () => {
++    const getThread = vi.fn().mockResolvedValueOnce(ASKED).mockResolvedValue(ANSWERED);
++    const { result } = render(fakeTransport({ getThread }), 50);
++    await waitFor(() => expect(result.current.log.entries).toHaveLength(1));
++
++    act(() => result.current.follow("call-1"));
++
++    await waitFor(() =>
++      expect(
++        result.current.log.entries.some(
++          (e) => e.kind === "message" && e.message.content === "讀完了:答案",
++        ),
++      ).toBe(true),
++    );
++    expect(result.current.log.streaming).toBe(false);
++  });
++
++  // Already on the page — the stream carried it — there is nothing to follow:
++  // no spinner, no store reads beyond the hydrate.
++  it("does nothing when the page already has the answer to that card", async () => {
++    const getThread = vi.fn().mockResolvedValue(ANSWERED);
++    const { result } = render(fakeTransport({ getThread }), 50);
++    await waitFor(() => expect(result.current.log.entries).toHaveLength(3));
++    const reads = getThread.mock.calls.length;
++
++    act(() => result.current.follow("call-1"));
++    await new Promise((r) => setTimeout(r, 200));
++
++    expect(result.current.log.streaming).toBe(false);
++    expect(getThread.mock.calls.length).toBe(reads);
++  });
++});
+diff --git a/web/src/hooks/useChatSession.tsx b/web/src/hooks/useChatSession.tsx
+index 2861690b..c20116dc 100644
+--- a/web/src/hooks/useChatSession.tsx
++++ b/web/src/hooks/useChatSession.tsx
+@@ -143,6 +143,14 @@ export type ChatSession = {
+   mention: (userIds: string[], note: string) => Promise<void>;
+   cancel: () => void;
+   undo: (turns: number) => Promise<void>;
++  /** A turn was started elsewhere by an answer to card `callId` — the helper
++   * posting a 「請幫我查」 result from its own browser, which may reach the API
++   * on another pod than this page's stream. If no message answering that
++   * card is on the page yet, the stream has said nothing of it: show the turn
++   * as running, so the #202 store-poll reads the thread until its reply is
++   * persisted (the person's report: 「要重新整理才看得到回覆」). A no-op when
++   * the answer is already drawn — the stream carried it. */
++  follow: (callId: string) => void;
+ };
+ 
+ /** Gateway/timeout statuses (and a bare network drop, 0) that mean "the request
+@@ -769,5 +777,23 @@ export function useChatSession(
+     [transport, currentUser],
+   );
+ 
+-  return { log, connection, send, mention, cancel, undo };
++  // `follow` asks the log as it is now, not as it was when it was made
++  const logRef = useRef(log);
++  logRef.current = log;
++  const follow = useCallback(
++    (callId: string) => {
++      const now = logRef.current;
++      const drawn = now.entries.some(
++        (e) => e.kind === "message" && e.message.answers === callId,
++      );
++      if (drawn || now.streaming) return;
++      // Not `turnInFlightRef`: that says THIS stream carried a turn, and this
++      // one reaches the page through the store — a drop of the stream can have
++      // lost nothing of it, so it must not raise the 「少了一段」 banner.
++      setLog((prev) => (prev.streaming ? prev : { ...prev, streaming: true }));
++    },
++    [setLog],
++  );
++
++  return { log, connection, send, mention, cancel, undo, follow };
+ }
+diff --git a/web/src/pages/investigation/AgentPanel.outsideLookup.test.tsx b/web/src/pages/investigation/AgentPanel.outsideLookup.test.tsx
+index f4367683..32aa8423 100644
+--- a/web/src/pages/investigation/AgentPanel.outsideLookup.test.tsx
++++ b/web/src/pages/investigation/AgentPanel.outsideLookup.test.tsx
+@@ -121,6 +121,27 @@ describe("AgentPanel — a 請幫我查 card in the log", () => {
+     expect(screen.queryByLabelText("附加檔案")).toBeNull();
+   });
+ 
++  // The helper's answer started the AI's next turn from the helper's own
++  // browser: the panel hands its card the chat's `follow`, so the reply shows
++  // without a reload (the person's report).
++  it("hands the card the chat's way to follow a turn started elsewhere", async () => {
++    vi.spyOn(outsideLookupApi, "helperStatus").mockResolvedValue({ online: true });
++    vi.spyOn(outsideLookupApi, "job").mockResolvedValue({
++      id: "j1",
++      kind: "search",
++      args: "pandas 2.0",
++      state: "done",
++      error: "",
++      note: "",
++      auto: false,
++      saved: "",
++    });
++    const a = { ...agent(), follow: vi.fn() };
++    renderPanel(a);
++
++    await waitFor(() => expect(a.follow).toHaveBeenCalledWith("c1"));
++  });
++
+   it("shows the request without actions to a read-only viewer", async () => {
+     renderPanel(agent(), { readOnly: true });
+ 
+diff --git a/web/src/pages/investigation/AgentPanel.tsx b/web/src/pages/investigation/AgentPanel.tsx
+index d4785eca..e0c0587c 100644
+--- a/web/src/pages/investigation/AgentPanel.tsx
++++ b/web/src/pages/investigation/AgentPanel.tsx
+@@ -252,7 +252,7 @@ export function AgentPanel({
+   const ctxAgent = useOptionalAgent();
+   const agent = agentProp ?? ctxAgent;
+   if (!agent) throw new Error("AgentPanel needs an agent (prop or <AgentProvider>)");
+-  const { log, connection, send, mention, cancel, undo } = agent;
++  const { log, connection, send, mention, cancel, undo, follow } = agent;
+   // plan-skill-hub-history A3: the item a card in this log acts on (the
+   // `show_skill_hub_entry` card's install). None for a read-only viewer.
+   //
+@@ -282,6 +282,8 @@ export function AgentPanel({
+             ...(chatId ? { chatId } : {}),
+             ...(canAddFiles === false ? { canAddFiles: false } : {}),
+             answered: (callId: string) => answeredCalls.has(callId),
++            // the helper's answer starts a turn this page may not hear of
++            follow,
+             ...(canEnv
+               ? {
+                   env: {
+@@ -294,7 +296,7 @@ export function AgentPanel({
+                 }
+               : {}),
+           },
+-    [readOnly, slug, investigationId, chatId, canAddFiles, canEnv, envVars, envPolicy, answeredCalls],
++    [readOnly, slug, investigationId, chatId, canAddFiles, canEnv, envVars, envPolicy, answeredCalls, follow],
+   );
+   // A one-line answer to "I just did something and nothing happened" — the
+   // composer's own feedback channel (Enter during a turn, Stop). Cleared on the
