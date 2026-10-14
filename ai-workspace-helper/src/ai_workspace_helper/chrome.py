@@ -76,7 +76,13 @@ class Chrome:
     ) -> tuple[int, Any]:
         """One backend request with the profile's cookies; see `backend.Send`.
         Redirects are NOT followed — a redirect is the gateway sending an
-        expired login to sign in, and followed it would read as a success."""
+        expired login to sign in, and followed it would read as a success.
+
+        AI Workspace's certificate is not verified (D20): this request is sent
+        by Playwright's own Node, which neither trusts the company CA Windows
+        and Chrome do nor fetches a missing intermediate — so a deploy Chrome
+        reaches fine read 「連不上」 ("unable to verify the first certificate").
+        Only these requests: the pages an errand opens still verify."""
         from playwright.sync_api import Error as PlaywrightError
 
         try:
@@ -87,6 +93,7 @@ class Chrome:
                 data=json.dumps(body) if body is not None else None,
                 max_redirects=0,
                 fail_on_status_code=False,
+                ignore_https_errors=True,
                 timeout=REQUEST_TIMEOUT_MS,
             )
         except PlaywrightError as exc:
@@ -103,7 +110,8 @@ class Chrome:
 
     def fetch_bytes(self, path: str, headers: dict[str, str]) -> tuple[int, bytes]:
         """A GET whose answer is a file (the update zip, §3.7.4), with the
-        profile's login; see `backend.FetchBytes`. Redirects not followed."""
+        profile's login; see `backend.FetchBytes`. Redirects not followed; the
+        certificate not verified, as in `send` (its sha256 is checked)."""
         from playwright.sync_api import Error as PlaywrightError
 
         try:
@@ -112,6 +120,7 @@ class Chrome:
                 headers=headers,
                 max_redirects=0,
                 fail_on_status_code=False,
+                ignore_https_errors=True,
                 timeout=DOWNLOAD_TIMEOUT_MS,
             )
         except PlaywrightError as exc:

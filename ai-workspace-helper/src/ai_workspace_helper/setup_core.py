@@ -333,6 +333,13 @@ def start_choice(state: dict[str, Any]) -> tuple[str, dict[str, Any]]:
 SHOW_REQUEST = "show.request"
 
 
+def launcher_home(here: Path) -> Path:
+    """The helper's folder for a launch.pyw in `here`: its own folder once
+    installed there — or, for the copy in the unzipped download (the zip
+    carries one for `install` to copy), the installed helper's folder."""
+    return here if (here / "state.json").exists() else root()
+
+
 def launch(
     home: Path,
     *,

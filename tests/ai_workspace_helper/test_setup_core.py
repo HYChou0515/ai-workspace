@@ -350,3 +350,65 @@ def test_the_summary_says_what_to_do_next():
     one_bad = [Check("A", True, "可以"), Check("B", False, "被擋")]
     summary = precheck_summary(one_bad)
     assert "1 項沒有通過" in summary and "✘ B：被擋" in summary and "✔ A：可以" in summary
+
+
+# The zip carries launch.pyw too (install copies it into the helper's folder).
+# Double-clicked there, in the unzipped folder, it said "not installed" though
+# the helper was installed: it took its own folder for the helper's (D16).
+def test_the_launcher_in_the_unzipped_folder_finds_the_installed_helper(tmp_path, monkeypatch):
+    from ai_workspace_helper.setup_core import launcher_home
+
+    home, unzipped = tmp_path / "home", tmp_path / "unzipped"
+    unzipped.mkdir()
+    write_state(home, {"current": "0.3.0"})
+    monkeypatch.setenv("AI_WORKSPACE_HELPER_HOME", str(home))
+
+    assert launcher_home(unzipped) == home
+    assert launcher_home(home) == home  # the installed launcher: its own folder
+
+
+def test_a_launcher_with_nothing_installed_anywhere_still_says_so(tmp_path, monkeypatch):
+    from ai_workspace_helper.setup_core import launch, launcher_home
+
+    monkeypatch.setenv("AI_WORKSPACE_HELPER_HOME", str(tmp_path / "home"))
+
+    with pytest.raises(SetupFailed, match="not installed"):
+        launch(launcher_home(tmp_path / "unzipped"))
+
+
+def test_double_clicking_launch_pyw_in_the_unzipped_folder_starts_the_installed_helper(tmp_path):
+    """The real launch.pyw, run where the person double-clicked it — the
+    unzipped download — starts the version installed in the helper's folder."""
+    import os
+    import shutil
+    import subprocess
+    import sys
+    import time
+
+    helper = Path(setup_core.__file__).resolve().parents[2]
+    home, unzipped = tmp_path / "home", tmp_path / "unzipped"
+    unzipped.mkdir()
+    shutil.copy(helper / "launch.pyw", unzipped / "launch.pyw")
+    shutil.copy(Path(setup_core.__file__), unzipped / "setup_core.py")
+    write_state(home, {"current": "0.3.0"})
+    started = home / "started"
+    python = Path(setup_core.version_command(home, "0.3.0")[0])
+    python.parent.mkdir(parents=True)
+    python.write_text(f"#!/bin/sh\ntouch '{started}'\n")
+    python.chmod(0o755)
+    env = {k: v for k, v in os.environ.items() if k != "DISPLAY"}  # no dialog to show
+
+    done = subprocess.run(
+        [sys.executable, str(unzipped / "launch.pyw")],
+        env={**env, "AI_WORKSPACE_HELPER_HOME": str(home)},
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    for _ in range(50):
+        if started.exists():
+            break
+        time.sleep(0.1)
+
+    assert done.returncode == 0, done.stderr
+    assert started.exists()

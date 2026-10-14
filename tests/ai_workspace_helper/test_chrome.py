@@ -222,3 +222,88 @@ def test_it_says_which_chrome_it_drives(tmp_path, site):
         chrome.close()
 
     assert version.split(".")[0].isdigit()
+
+
+# ── a company certificate the helper's Node does not trust (plan D20) ──────
+
+
+@pytest.fixture
+def https_site(tmp_path):
+    """The site over HTTPS with a certificate from a private CA, the chain
+    left out — what the person's PC met: Chrome trusts it (the company pushes
+    its CA to Windows), Playwright's own Node says "unable to verify the first
+    certificate"."""
+    import datetime
+    import ipaddress
+    import ssl
+
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.x509.oid import NameOID
+
+    def name(text: str) -> x509.Name:
+        return x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, text)])
+
+    now = datetime.datetime.now(datetime.UTC)
+    company_ca, key = (
+        ec.generate_private_key(ec.SECP256R1()),
+        ec.generate_private_key(ec.SECP256R1()),
+    )
+    leaf = (
+        x509.CertificateBuilder()
+        .subject_name(name("127.0.0.1"))
+        .issuer_name(name("Company CA"))
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - datetime.timedelta(days=1))
+        .not_valid_after(now + datetime.timedelta(days=1))
+        .add_extension(
+            x509.SubjectAlternativeName([x509.IPAddress(ipaddress.ip_address("127.0.0.1"))]),
+            critical=False,
+        )
+        .sign(company_ca, hashes.SHA256())
+    )
+    (tmp_path / "leaf.pem").write_bytes(leaf.public_bytes(serialization.Encoding.PEM))
+    (tmp_path / "leaf.key").write_bytes(
+        key.private_bytes(
+            serialization.Encoding.PEM,
+            serialization.PrivateFormat.PKCS8,
+            serialization.NoEncryption(),
+        )
+    )
+    tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    tls.load_cert_chain(tmp_path / "leaf.pem", tmp_path / "leaf.key")  # the leaf alone
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _Site)
+    server.socket = tls.wrap_socket(server.socket, server_side=True)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    yield f"https://127.0.0.1:{server.server_address[1]}"
+    server.shutdown()
+
+
+# D20: the helper's requests to AI Workspace do not verify its certificate —
+# the deploy's own convention ("verify=false"); otherwise every check-in is
+# 「連不上」 while the person is signed in fine in Chrome.
+def test_the_helpers_requests_to_ai_workspace_pass_a_certificate_node_cannot_verify(
+    tmp_path, https_site
+):
+    chrome = _chrome(tmp_path, https_site)
+    try:
+        status, data = chrome.send("GET", "/api/me", None, {})
+        file_status, _body = chrome.fetch_bytes("/api/me", {})
+    finally:
+        chrome.close()
+
+    assert status == 200 and isinstance(data, dict)
+    assert file_status == 200
+
+
+# ...and ONLY those: the pages the helper's Chrome opens for an errand still
+# verify, as the person's Chrome does.
+def test_the_pages_it_opens_still_verify_certificates(tmp_path, https_site):
+    chrome = _chrome(tmp_path, https_site)
+    try:
+        with pytest.raises(Exception, match="CERT"):
+            _visit(chrome, https_site + "/a-page")
+    finally:
+        chrome.close()
