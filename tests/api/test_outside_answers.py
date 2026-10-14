@@ -120,6 +120,8 @@ def test_what_was_found_is_saved_and_answers_the_card():
     assert "https://pandas.example/whatsnew" in saved
     assert "Google" in saved
     assert "| 2.0 | [Arrow](https://a.example) |" in saved
+    # …and its link, numbered, under it (plan-outside-helper D24)
+    assert saved.rstrip().endswith("- [1] <https://a.example> Arrow")
     [msg] = _answers(spec)
     assert path in msg.content
     assert "[Arrow](https://a.example)" in msg.content
