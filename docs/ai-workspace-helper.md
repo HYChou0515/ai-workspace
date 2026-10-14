@@ -13,7 +13,7 @@ Markdown 交回卡片——使用者只要在搜尋時按一下「查」。設�
 
 ## 使用者:安裝(每台電腦一次)
 
-需要:Windows、電腦上有 Python 3.10–3.14、有 Google Chrome。不用連外網裝套件,安裝包裡都有。
+需要:Windows、電腦上有 Python 3.9–3.14、有 Google Chrome。不用連外網裝套件,安裝包裡都有。
 **不需要系統管理員權限**:不跑安裝程式、不寫 Program Files、不改登錄檔、不跳 UAC——只寫你自己的
 `%LOCALAPPDATA%\AIWorkspaceHelper\`(用電腦上的 Python 建一個 venv、從 zip 裡的套件離線裝好)和你自己桌面上的捷徑。
 但公司電腦可能不讓它**執行**:見下面的預檢與「IT 要放行的」。
@@ -24,7 +24,7 @@ Markdown 交回卡片——使用者只要在搜尋時按一下「查」。設�
 
    | 檢查 | 試的是 | 沒通過代表 |
    |---|---|---|
-   | Python 3.10 以上 | 執行它的那個 Python | 換一個 Python(`py -3.12 precheck.pyw`) |
+   | Python 3.9 以上 | 執行它的那個 Python | 換一個 Python(`py -3.12 precheck.pyw`) |
    | 在使用者資料夾執行程式 | 在 `%LOCALAPPDATA%` 建 venv 並執行它 | 公司政策(例如 AppLocker)不讓使用者資料夾裡的程式執行;請 IT 放行 `%LOCALAPPDATA%\AIWorkspaceHelper\` |
    | Playwright 的 node.exe | 從 zip 裡取出 Playwright 自帶的 `node.exe` 執行 | 防毒或政策擋下它;請 IT 放行 |
    | 建立桌面捷徑(PowerShell) | 用安裝時同一段 PowerShell 建一個捷徑,並確認檔案真的出現 | PowerShell 被限制;**安裝照樣完成**,之後從 `%LOCALAPPDATA%\AIWorkspaceHelper\launch.pyw` 開 |
@@ -110,18 +110,20 @@ python3 scripts/pack_ai_workspace_helper.py --version 0.1.0 [--min-version 0.1.0
 
 - 從前端原始碼建出卡片用的轉換器;
 - 用版本號建小幫手的 wheel(原始碼不會被改);
-- 對 Python 3.10–3.14 各下載一次 Windows wheel,每個套件版本釘死;
+- 對 Python 3.9–3.14 各下載一次 Windows wheel,每個套件版本釘死;
 - 最後對每個 Python 都跑一次 `pip install --dry-run --no-index`,證明只靠安裝包就裝得起來。
 
 輸出在 `dist/ai-workspace-helper/`:`ai-workspace-helper-<版本>.zip` 與 `ai-workspace-helper.json`。把這兩個檔放進
 `server.ai_workspace_helper_dir` 指的資料夾([設定](configuration.md)),**不用重新部署**。要強迫所有人升級:改
 `ai-workspace-helper.json` 的 `min_version`。
 
-小幫手帶的是 Playwright 1.63.0(驅動已安裝的 Chrome,不另外下載瀏覽器)。這個 repo 的測試環境因為 Debian 11 的
-瀏覽器下載限制停在 1.49,所以**驅動瀏覽器的測試跑的是 1.49、發出去的是 1.63**——1.49 需要的 greenlet 沒有 Python 3.14
-的 Windows 版,無法涵蓋 3.14。1.63 這一版在 Linux 上驗過安裝、在舊版上重裝新版與試跑(`--self-test`:Playwright 載得起來、
-它的 driver 在):`scripts/check_ai_workspace_helper.py --update-wheels <1.63 的 Linux wheel>`。Windows 上的實際驗證由人
-在公司筆電上做一次(plan D14)。
+小幫手帶的是 Playwright 1.60.0(驅動已安裝的 Chrome,不另外下載瀏覽器),每個 Python 都同一版:1.60.0 是最後一個
+裝得上 Python 3.9 的版本(1.61 起要 3.10),而有些人的電腦只有 3.9(plan D23)。只有 greenlet 依 Python 不同:3.9 用 3.2.4
+(它最後一個有 cp39 Windows wheel 的版本),3.10–3.14 用 3.5.6。這個 repo 的測試環境因為 Debian 11 的瀏覽器下載限制停在 1.49,
+所以**驅動瀏覽器的測試跑的是 1.49、發出去的是 1.60**——1.49 需要的 greenlet 沒有 Python 3.14 的 Windows 版,無法涵蓋 3.14。
+1.60 這一版在 Linux 的 CPython 3.9 上驗過:`setup_core.install` 只靠 wheelhouse 裝起來、`--self-test` 通過、開分頁讀頁。
+這個 repo 的測試跑在 3.12,所以 `tests/ai_workspace_helper/test_python39.py` 用 3.9 的語法讀小幫手發出去的每個檔,
+點名 3.9 不認得的語法與常見的新 API(例如 `zip(strict=…)`)。Windows 上的實際驗證由人在公司筆電上做一次(plan D14)。
 
 小幫手每次報到會回報它的版本、Chrome、Playwright、Python 版本,存在後端(`_AiWorkspaceHelperPresence`)。
 小幫手**不會自己更新**(plan D21):發布新版後,使用者的小視窗會在啟動後第一次連上 AI Workspace 時(以及被停用後恢復連線時)、或之後 6 小時內顯示「有新版」,由使用者自己下載重裝;
