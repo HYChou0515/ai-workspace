@@ -76,6 +76,14 @@ class _Page:
         pass
 
     # what `settle` asks of a page: it never moves on here
+    main_frame = object()
+
+    def on(self, _event: str, _handler) -> None:
+        pass
+
+    def remove_listener(self, _event: str, _handler) -> None:
+        pass
+
     def wait_for_timeout(self, _ms: float) -> None:
         pass
 
@@ -170,3 +178,21 @@ def test_a_page_that_moves_on_while_being_read_is_read_again():
     got = build(lambda: [])["open_url"](_ctx(page), "https://pandas.example/whatsnew")
 
     assert got.markdown == "md:<p>the page's html</p>"
+
+
+# Asked while the page moves on (the instant between a hop's answer and its
+# new page), the verification check reads "not a verification" rather than
+# failing the errand: whatever the page moves to is looked at again (D22).
+def test_a_verification_check_that_meets_a_moving_page_reads_as_none():
+    from ai_workspace_helper.builtin_errands import looks_like_a_verification
+    from playwright.sync_api import Error as PlaywrightError
+
+    class _Gone(_Locator):
+        def count(self) -> int:
+            raise PlaywrightError("Execution context was destroyed")
+
+    class _Moving(_Page):
+        def locator(self, _selector: str) -> _Locator:
+            return _Gone()
+
+    assert looks_like_a_verification(_Moving()) is False
