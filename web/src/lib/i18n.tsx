@@ -2124,7 +2124,7 @@ export const messages = {
   "diag.tab.matrix": { "zh-TW": "模型體檢", en: "Model sanity" },
   "diag.tab.activity": { "zh-TW": "活動", en: "Activity" },
   // docs/plan-tool-usage-stats.md — the administrator's tool-usage tab.
-  "diag.tab.usage": { "zh-TW": "工具與 Skill", en: "Tools & skills" },
+  "diag.tab.usage": { "zh-TW": "使用統計", en: "Usage" },
   "usage.kind": { "zh-TW": "看哪一種", en: "Show" },
   "usage.kind.tool": { "zh-TW": "工具", en: "Tools" },
   "usage.kind.skill": { "zh-TW": "Skill", en: "Skills" },

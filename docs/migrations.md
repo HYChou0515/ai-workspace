@@ -2217,7 +2217,7 @@ agent 步驟裡 AI 的呼叫、WUI 的工具呼叫、view plugin、圖表重畫�
 工具呼叫都會被計數**——工具、來源（內建／第一方套件／第三方）、成功或失敗、耗時、是誰、在哪個場合（聊天、KB 聊天、
 工作流程、排程、子代理、KB 子代理、背景工作）、哪個 App、哪個 item。**每一次 skill 被載入也會被計數**——AI 用
 `read_skill` 讀到內容，或使用者在 skill 選單套用，都算一次；記 skill 名稱、來源（平台內建／App 內建／skill hub／
-自己寫的）與同樣的誰、場合、App、item，沒有失敗與耗時。superuser 在 Diagnostics 頁的新分頁「工具與 Skill」看得到
+自己寫的）與同樣的誰、場合、App、item，沒有失敗與耗時。superuser 在 Diagnostics 頁的新分頁「使用統計」看得到
 （頁內用「工具／Skill」切換）；其他人看不到這個分頁，`GET /api/admin/tool-usage`（`?kind=skill` 看 skill）回 403。
 Diagnostics 頁的分頁條改成底線樣式（和分享面板同款），內容不變。
 
@@ -2237,11 +2237,11 @@ rollout、HPA 擴張可能會在當天多出新的行程名稱。API 與 worker 
 
 **確認做完**（`rollout 後`）
 
-- 用 superuser 開 Diagnostics →「工具與 Skill」：在任一 App 聊天裡讓 AI 用過工具，約 5 分鐘內出現該工具與次數；點工具
+- 用 superuser 開 Diagnostics →「使用統計」：在任一 App 聊天裡讓 AI 用過工具，約 5 分鐘內出現該工具與次數；點工具
   看得到人、場合、item。
 - 同一頁切到「Skill」：在聊天裡套用一個 skill 送出，約 5 分鐘內出現那個 skill、它的來源與次數。
-- 非 superuser 開 Diagnostics：沒有「工具與 Skill」分頁。
-- 沒部署到這一版的症狀：Diagnostics 沒有「工具與 Skill」分頁；`GET /api/admin/tool-usage` 是 404。
+- 非 superuser 開 Diagnostics：沒有「使用統計」分頁。
+- 沒部署到這一版的症狀：Diagnostics 沒有「使用統計」分頁；`GET /api/admin/tool-usage` 是 404。
 
 ## 附錄 A：資料回填的機制（specstar 為什麼不會自己補）
 

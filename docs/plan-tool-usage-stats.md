@@ -233,7 +233,7 @@ skill 的「來源」記成四個值,依讀到內容的那條路與工作區副�
 
 - 「工具使用」頁頂端加 **「工具 / Skill」分段控制**:同一份報表看不同種類的東西 = 切換檢視,Material 3
   〈Segmented buttons〉("help people select options, switch views, or sort elements")。
-  <https://m3.material.io/components/segmented-buttons/overview> 分頁的名稱改成「工具與 Skill」。
+  <https://m3.material.io/components/segmented-buttons/overview> 分頁的名稱改成「使用統計」。
 - skill 表欄位:Skill/來源/次數(D11 沒有失敗與耗時),排序、篩選(來源、場合、App)照工具表(NN/g〈Data
   Tables〉)。點一個 skill 看依人、依場合 × App、依 item 的次數。
 
@@ -249,4 +249,4 @@ skill 的「來源」記成四個值,依讀到內容的那條路與工作區副�
   共用;`api/tool_usage_store.py` 轉出口同一個函式。
 - **S4 列 id 帶 `kind`**:工具與 skill 的來源詞彙不重疊,單靠來源也分得開;`kind` 放進列 id 是讓「同名」這件事不依賴
   兩份詞彙永遠不撞。
-- **S5 分頁名稱**:「工具使用」改成「工具與 Skill」;切換種類時清掉打開的分項、來源篩選與排序(兩種的欄位與來源不同)。
+- **S5 分頁名稱**:「工具使用」改成「使用統計」——先試的「工具與 Skill」在 390 寬把整條分頁擠到換行(截圖抓到;NN/g〈Tabs, Used Right〉要標籤短),「使用統計」跟原本一樣四個字、一行放得下;切換種類時清掉打開的分項、來源篩選與排序(兩種的欄位與來源不同)。
