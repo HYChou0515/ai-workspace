@@ -72,14 +72,20 @@ def main() -> int:
         )
     else:
         shortcut = "桌面有「AI Workspace Helper」捷徑。"
-    if messagebox.askyesno(
-        "AI Workspace Helper",
-        f"小幫手 {installed.version} 已安裝。{shortcut}\n\n現在開啟嗎？",
-    ):
-        home = setup_core.root()
-        import subprocess
-
-        subprocess.Popen(setup_core.launch_command(home, setup_core.read_state(home)), cwd=str(home))
+    home = setup_core.root()
+    done = f"小幫手 {installed.version} 已安裝。{shortcut}"
+    if setup_core.helper_running(home):
+        # D21 (§3.7.5 step 3): the version it replaced is still running
+        if messagebox.askyesno(
+            "AI Workspace Helper",
+            f"{done}\n\n小幫手正在執行，要換成新版重新開啟嗎？",
+        ) and setup_core.replace_running(home) == "shown":
+            messagebox.showinfo(
+                "AI Workspace Helper",
+                "正在執行的小幫手沒有結束。請在它的視窗按「結束」，再開啟小幫手，就是新版。",
+            )
+    elif messagebox.askyesno("AI Workspace Helper", f"{done}\n\n現在開啟嗎？"):
+        setup_core.launch(home)
     return 0
 
 

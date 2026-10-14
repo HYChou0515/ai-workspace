@@ -1,124 +1,57 @@
-"""The running helper keeps itself current (docs/plan-outside-helper.md
-§3.7.4–§3.7.6).
+"""The running helper says when a newer version is out
+(docs/plan-outside-helper.md D21, §3.7.4, §3.7.6).
 
-`tick` runs on the Playwright thread with the job loop: it reads the published
-release and fetches the zip through the helper's own signed-in line (Playwright
-is not thread-safe). Installing it — a venv and pip, about a minute — runs on a
-background thread, so lookups go on meanwhile; the result waits for the next
-start (`setup_core.prepare_update`). `status` is what the window shows.
+It only tells. The helper's line to AI Workspace does not verify the
+certificate (D20), so whatever came down it could have been replaced on the
+way: the person downloads the zip in their own browser, which verifies, and
+runs install.pyw again (§3.7.5). `tick` runs on the Playwright thread with
+the job loop (Playwright is not thread-safe); `status` is what the window
+shows.
 """
 
 from __future__ import annotations
 
-import logging
-import threading
 import time
 from collections.abc import Callable
-from pathlib import Path
 from typing import Any
 
-from . import setup_core
+from .setup_core import version_key
 from .version import __version__
 
 #: §3.7.4: at start, then this often.
 CHECK_EVERY_S = 6 * 3600
-#: A refused helper (§3.7.6) retries a failed update this much later, not on
-#: every poll.
-RETRY_AFTER_S = 600
-
-logger = logging.getLogger(__name__)
-
-
-def _thread(work: Callable[[], None]) -> None:  # pragma: no cover — tests run it inline
-    threading.Thread(target=work, name="ai-workspace-helper-update", daemon=True).start()
 
 
 class Updater:
     def __init__(
         self,
-        home: Path,
         backend: Any,
         *,
         clock: Callable[[], float] = time.monotonic,
-        spawn: Callable[[Callable[[], None]], None] = _thread,
-        run: setup_core.Run = setup_core.run_quietly,
         version: str = __version__,
     ) -> None:
-        self._home = home
         self._backend = backend
         self._clock = clock
-        self._spawn = spawn
-        self._run = run
         self._version = version
         self._next = 0.0
-        self._retry_at = 0.0
-        self._busy = False
-        self._confirmed = False
-        #: "" | "preparing" | "ready" | "failed: <why>" — for the window.
+        #: "" | "available: <version>" | "required: <version or nothing>".
         self.status = ""
 
-    def connected(self) -> None:
-        """This version runs (the Controller calls it on the statuses that show
-        that): if it is the version waiting to be tried, it has proven itself
-        and becomes current (§3.7.5 step 3)."""
-        if self._confirmed:
-            return
-        self._confirmed = True
-        if setup_core.confirm(self._home, self._version):
-            logger.info("confirmed %s as the current version", self._version)
-
-    def report(self) -> str:
-        """The last update's outcome, for the check-in (§3.7.7)."""
-        return str(setup_core.read_state(self._home).get("update") or "")
-
     def tick(self, required: dict[str, Any] | None = None) -> None:
-        """Check for a newer release when one is due — or, with `required`
-        (the release a 426 named, §3.7.6), at once."""
-        if self._busy:
+        """Read the published release when a check is due — or, with
+        `required` (what a 426 named, §3.7.6), say at once that this version
+        is refused and which release to install."""
+        if required is not None:
+            self.status = f"required: {required.get('version') or ''}"
             return
         now = self._clock()
-        if required is None:
-            if now < self._next:
-                return
-            self._next = now + CHECK_EVERY_S
-            manifest = self._backend.manifest()
-        else:
-            if now < self._retry_at:
-                return
-            manifest = required
-        if not manifest:
+        if now < self._next:
             return
-        settled = setup_core.update_outcome(self._home, setup_core.read_state(self._home), manifest)
-        if settled == "ready":
-            self.status = "ready"
-        elif settled == "bad" and required is not None:
-            # refused, and the one release it may update to failed here
-            # before: only a reinstall is left (§3.7.6)
-            self.status = "failed: 這個新版先前在這台電腦裝不起來"
-        if settled is not None:
-            return
-        try:
-            data = self._backend.download(str(manifest["file"]))
-        except Exception as exc:  # noqa: BLE001 — shown; the running version carries on
-            self._failed(exc)
-            return
-        self._busy, self.status = True, "preparing"
-
-        def work() -> None:
-            try:
-                setup_core.prepare_update(self._home, manifest, lambda _f: data, run=self._run)
-                self.status = "ready"
-            except Exception as exc:  # noqa: BLE001 — shown; the running version carries on
-                self._failed(exc)
-            finally:
-                self._busy = False
-
-        self._spawn(work)
-
-    def _failed(self, exc: BaseException) -> None:
-        logger.warning("update failed: %s", exc)
-        self.status = f"failed: {exc}"
-        self._retry_at = self._clock() + RETRY_AFTER_S
+        self._next = now + CHECK_EVERY_S
+        manifest = self._backend.manifest() or {}
+        version = str(manifest.get("version") or "")
+        newer = version_key(version) > version_key(self._version)
+        self.status = f"available: {version}" if newer else ""
 
 
-__all__ = ["CHECK_EVERY_S", "RETRY_AFTER_S", "Updater"]
+__all__ = ["CHECK_EVERY_S", "Updater"]

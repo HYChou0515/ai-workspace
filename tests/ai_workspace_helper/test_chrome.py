@@ -175,32 +175,6 @@ def test_a_chrome_that_will_not_start_says_why(tmp_path, site):
         Chrome(tmp_path / "profile", site, channel="no-such-browser", headless=True)
 
 
-# §3.7.4: the update zip comes through the same signed-in line, as bytes.
-def test_a_file_is_fetched_whole_with_the_login(tmp_path, site):
-    chrome = _chrome(tmp_path, site)
-    try:
-        _visit(chrome, f"{site}/login")
-        status, body = chrome.fetch_bytes("/api/me", {})
-        redirect, _ = chrome.fetch_bytes("/api/expired", {})
-    finally:
-        chrome.close()
-
-    assert status == 200 and b"sid=abc" in body
-    assert redirect == 302
-
-
-def test_a_file_from_a_backend_that_is_not_there_is_an_os_error(tmp_path):
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        port = s.getsockname()[1]
-    chrome = _chrome(tmp_path, f"http://127.0.0.1:{port}")
-    try:
-        with pytest.raises(OSError):
-            chrome.fetch_bytes("/api/x", {})
-    finally:
-        chrome.close()
-
-
 # The person closed the helper's Chrome window: it says so, so the helper can
 # open it again (review round 1), and closing it after that is harmless.
 def test_a_closed_chrome_says_it_is_gone(tmp_path, site):
@@ -290,12 +264,10 @@ def test_the_helpers_requests_to_ai_workspace_pass_a_certificate_node_cannot_ver
     chrome = _chrome(tmp_path, https_site)
     try:
         status, data = chrome.send("GET", "/api/me", None, {})
-        file_status, _body = chrome.fetch_bytes("/api/me", {})
     finally:
         chrome.close()
 
     assert status == 200 and isinstance(data, dict)
-    assert file_status == 200
 
 
 # ...and ONLY those: the pages the helper's Chrome opens for an errand still
@@ -313,8 +285,7 @@ def test_the_pages_it_opens_still_verify_certificates(tmp_path, https_site):
 # login cookie among them — and why it cannot reach AI Workspace now goes to
 # helper.log, which the 記錄檔 tab asks the person to send to IT (review of
 # #933). The reason stays; the call log does not.
-@pytest.mark.parametrize("call", ["send", "fetch_bytes"])
-def test_why_a_request_failed_never_carries_the_login_cookie(tmp_path, call):
+def test_why_a_request_failed_never_carries_the_login_cookie(tmp_path):
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
         port = s.getsockname()[1]  # closed once the block ends: nobody listens
@@ -324,10 +295,7 @@ def test_why_a_request_failed_never_carries_the_login_cookie(tmp_path, call):
     )
     try:
         with pytest.raises(OSError) as failed:
-            if call == "send":
-                chrome.send("GET", "/api/me", None, {})
-            else:
-                chrome.fetch_bytes("/api/x", {})
+            chrome.send("GET", "/api/me", None, {})
     finally:
         chrome.close()
 

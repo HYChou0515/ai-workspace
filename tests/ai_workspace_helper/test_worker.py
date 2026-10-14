@@ -33,11 +33,7 @@ def _backend(client) -> Backend:
             data = None
         return r.status_code, data
 
-    def fetch_bytes(path: str, headers: dict[str, str]):
-        r = raw.get(path, headers=headers)
-        return r.status_code, r.content
-
-    return Backend(send, fetch_bytes=fetch_bytes)
+    return Backend(send)
 
 
 @dataclass
@@ -229,18 +225,17 @@ def test_a_version_no_longer_accepted_says_an_update_is_needed(tmp_path):
     assert worker.manifest == {**manifest, "size": len(b"zip of 0.9.0")}
 
 
-# §3.7.4: the helper reads the published release and fetches its zip through
-# the same signed-in line it takes jobs through.
-def test_the_helper_reads_and_fetches_the_published_release(tmp_path):
+# §3.7.4 (D21): the helper reads the published release through the same
+# signed-in line it takes jobs through — to say it is out, nothing more.
+def test_the_helper_reads_the_published_release(tmp_path):
     from tests.api.test_ai_workspace_helper_release import _publish
 
-    manifest, zip_bytes = _publish(tmp_path, "0.9.0")
+    _publish(tmp_path, "0.9.0")
     client, _spec, _iid = _asked(ai_workspace_helper_dir=str(tmp_path))
-    backend = _backend(client)
 
-    release = backend.manifest()
+    release = _backend(client).manifest()
+
     assert release is not None and release["version"] == "0.9.0"
-    assert backend.download(manifest["file"]) == zip_bytes
 
 
 def test_with_nothing_published_there_is_no_release():

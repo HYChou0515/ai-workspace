@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import platform
 
+import pytest
 from ai_workspace_helper.app import Controller, describe
 
 
@@ -206,9 +207,6 @@ class _Updater:
         self.status = ""
         self.fails = fails
 
-    def connected(self) -> None:
-        self.calls.append("connected")
-
     def tick(self, required=None) -> None:
         self.calls.append(("tick", required))
         if self.fails:
@@ -223,39 +221,43 @@ def _with_updater(statuses, updater, manifest=None):
     return ctl, chrome
 
 
-# §3.7.5 step 3 / §3.7.4: once connected, the version confirms itself and the
-# scheduled check runs, on the same thread as the jobs.
+# D21, §3.7.4: once connected, the scheduled check for a newer release runs,
+# on the same thread as the jobs (Playwright is not thread-safe).
 def test_once_connected_the_update_check_runs():
     up = _Updater()
     ctl, _chrome = _with_updater(["connected"], up)
 
     ctl.step()
 
-    assert up.calls == ["connected", ("tick", None)]
+    assert up.calls == [("tick", None)]
 
 
-# §3.7.6: refused, the helper updates from the release the refusal named.
-def test_a_refused_helper_updates_from_the_release_it_was_given():
+# §3.7.6: refused, the helper names the release the refusal named — or, when
+# it named none, still says to reinstall.
+@pytest.mark.parametrize(
+    ("named", "told"),
+    [({"version": "0.4.0", "file": "ai-workspace-helper-0.4.0.zip"}, None), (None, {})],
+)
+def test_a_refused_helper_says_which_release_to_install(named, told):
     up = _Updater()
-    release = {"version": "0.4.0", "file": "ai-workspace-helper-0.4.0.zip"}
-    ctl, _chrome = _with_updater(["update_required"], up, manifest=release)
+    ctl, _chrome = _with_updater(["update_required"], up, manifest=named)
 
     ctl.step()
 
-    assert up.calls == ["connected", ("tick", release)]
-    assert ctl.update_status() == ""
+    assert up.calls == [("tick", named if told is None else told)]
 
 
-# Signed out, the backend cannot be asked — but the version itself is up:
-# being signed out (or paused, or offline) is no reason to roll it back
-# (§3.7.5; review round 1).
-def test_signed_out_it_confirms_itself_but_does_not_look_for_updates():
+# Signed out, paused, refused or offline, the backend cannot be asked: no
+# check. Nothing is confirmed either — a version is current once installed
+# (D21: no waiting version, no rollback).
+@pytest.mark.parametrize("status", ["needs_login", "paused", "error", "unreachable"])
+def test_without_a_working_line_it_does_not_look_for_updates(status):
     up = _Updater()
-    ctl, _chrome = _with_updater(["needs_login"], up)
+    ctl, _chrome = _with_updater([status], up)
 
     ctl.step()
 
-    assert up.calls == ["connected"]
+    assert up.calls == []
 
 
 def _made(events: list[str]):
@@ -346,8 +348,8 @@ def test_a_reset_that_fails_does_not_stop_the_helper():
     assert ctl.step() is True
 
 
-# Reopening Chrome keeps the one updater: a second would start a second
-# preparation of the same version over the first's files (review round 2).
+# Reopening Chrome keeps the one updater: its six-hour clock is the helper's,
+# not one Chrome window's (review round 2).
 def test_reopening_chrome_keeps_the_updater():
     events: list[str] = []
     made, make = _made(events)
@@ -363,19 +365,6 @@ def test_reopening_chrome_keeps_the_updater():
     ctl.step()
 
     assert len(made) == 2 and len(built) == 1
-
-
-# A version the backend refuses ("error") or that cannot reach it does not
-# confirm itself: it may be the version's own fault, and confirmed it could
-# never be rolled back (review round 2).
-def test_a_version_that_cannot_work_with_the_backend_is_not_confirmed():
-    for status in ("error", "unreachable"):
-        up = _Updater()
-        ctl, _chrome = _with_updater([status], up)
-
-        ctl.step()
-
-        assert up.calls == [], status
 
 
 # §3.7.7 「重設登入」: a profile gone bad (a login that never takes) is moved
@@ -404,17 +393,7 @@ def test_an_update_check_that_fails_does_not_stop_the_helper():
     assert ctl.step() is True
 
 
-# §3.7.6: 「立即更新」 — end, so the launcher can start the version now ready.
-def test_restart_ends_the_helper_and_asks_for_the_launcher():
-    ctl, chrome = _with_updater(["connected"], _Updater())
-
-    ctl.send("restart")
-
-    assert ctl.step() is False
-    assert chrome.closed and ctl.restart
-
-
-# §3.7.4 step 4: a freshly installed version proves it can drive Chrome before
+# §3.7.5 step 1: a freshly installed version proves it can drive Chrome before
 # it counts as installed — Playwright imports and its driver is on disk (an
 # antivirus that removed node.exe is caught here, not at the first lookup).
 def test_the_self_test_passes_on_a_working_install(capsys):
@@ -450,9 +429,6 @@ def test_the_helper_is_wired_to_report_what_it_runs_on(tmp_path):
     class _Chrome:
         def send(self, *a):
             return transport._send(*a)
-
-        def fetch_bytes(self, *a):
-            return transport._fetch_bytes(*a)  # ty: ignore[call-non-callable]
 
         def version(self) -> str:
             return "141.0.7390.55"
@@ -503,19 +479,34 @@ def test_the_window_says_what_is_being_looked_up_while_it_is():
     assert ctl.snapshot() == ("connected", "", "", "")
 
 
-# What the window says about the next version (§3.7.4–§3.7.6).
-def test_the_update_line_says_where_the_next_version_stands():
+# What the window says about the next version (D21, §3.7.4, §3.7.6): only
+# where to get it — the helper fetches nothing.
+def test_the_update_line_says_where_to_get_the_next_version():
     from ai_workspace_helper.app import describe_update
 
-    assert describe_update("", forced=False) == ""
-    assert describe_update("preparing", forced=False) == "正在準備新版…"
-    assert describe_update("ready", forced=False) == "新版已下載，下次開啟時套用"
-    assert describe_update("ready", forced=True) == "新版已下載，按「立即更新」換上"
-    # the running version carries on — unless it is refused, when only a
-    # reinstall from the download page is left (§3.7.6)
-    failed = describe_update("failed: sha256", forced=False)
-    assert failed == "新版準備失敗：sha256（這一版照常使用）"
-    assert "請到 AI Workspace 的「小幫手」頁" in describe_update("failed: sha256", forced=True)
+    assert describe_update("") == ""
+    assert describe_update("available: 0.4.0") == (
+        "有新版 0.4.0：請到「小幫手」頁下載，重新雙擊 install.pyw"
+    )
+    assert describe_update("required: 0.4.0") == (
+        "請到「小幫手」頁下載新版 0.4.0，重新雙擊 install.pyw"
+    )
+    assert describe_update("required: ") == "請到「小幫手」頁下載新版，重新雙擊 install.pyw"
+
+
+# 「開啟下載頁」 opens the 小幫手 page under the address the person gave —
+# the deploy's sub-path included — in their own browser.
+@pytest.mark.parametrize(
+    ("app_url", "page"),
+    [
+        ("https://ai.example.corp", "https://ai.example.corp/ai-workspace-helper"),
+        ("https://corp.example/ws/", "https://corp.example/ws/ai-workspace-helper"),
+    ],
+)
+def test_the_download_page_is_the_helper_page_of_that_address(app_url, page):
+    from ai_workspace_helper.app import download_page
+
+    assert download_page(app_url) == page
 
 
 # §3.7 table: Chrome updated past what this helper drives fails at start —
@@ -643,3 +634,21 @@ def test_the_log_tab_reads_only_the_end_of_a_long_log(tmp_path):
     assert len(tail.encode()) <= 100
     assert tail.endswith("line 19999\n")
     assert all(line.startswith("line ") and len(line) == 10 for line in tail.splitlines())
+
+
+# The running window looks for what the launcher or install.pyw left it
+# (§3.7.5): come forward, or end for a new version (D21). Each is taken once;
+# ending wins when both are there.
+def test_the_window_takes_what_was_asked_of_it_once(tmp_path):
+    from ai_workspace_helper import setup_core
+    from ai_workspace_helper.app import take_request
+
+    assert take_request(tmp_path) is None
+    (tmp_path / setup_core.SHOW_REQUEST).write_text("show")
+    assert take_request(tmp_path) == "show"
+    assert take_request(tmp_path) is None
+    (tmp_path / setup_core.SHOW_REQUEST).write_text("show")
+    (tmp_path / setup_core.QUIT_REQUEST).write_text("quit")
+    assert take_request(tmp_path) == "quit"
+    assert not (tmp_path / setup_core.SHOW_REQUEST).exists()
+    assert take_request(tmp_path) is None

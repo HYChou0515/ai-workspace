@@ -56,7 +56,7 @@ def test_a_version_is_installed_into_a_folder_of_its_own(tmp_path):
     assert where == home / "versions" / "0.3.0"
     python = str(setup_core.venv_python(where / "venv"))
     # built by the Python the person confirmed; packages only from the zip;
-    # tried before it counts as installed (§3.7.4 steps 3–4)
+    # tried before it counts as installed (§3.7.5 step 1)
     assert run.commands == [
         ["/py/python", "-m", "venv", str(home / "versions" / "0.3.0.partial" / "venv")],
         [
@@ -141,9 +141,6 @@ def test_install_lays_out_the_folder_and_puts_the_shortcut_on_the_desktop(tmp_pa
         "base_python": "/py/pythonw",
         "current": "0.3.0",
         "previous": None,
-        "pending": None,
-        "pending_attempts": 0,
-        "bad": [],
     }
     assert (home / "launch.pyw").read_text() == "# launch.pyw"
     assert (home / "setup_core.py").read_text() == "# setup_core.py"
@@ -153,11 +150,11 @@ def test_install_lays_out_the_folder_and_puts_the_shortcut_on_the_desktop(tmp_pa
 
 
 # D16: running install.pyw again (a new Python, a broken install) keeps what
-# the person and the helper recorded — the Startup shortcut is still there, so
-# the window must still show 「開機時自動啟動」 ticked (review round 1).
+# the person recorded — the Startup shortcut is still there, so the window must
+# still show 「開機時自動啟動」 ticked (review round 1).
 def test_installing_again_keeps_what_was_recorded(tmp_path):
     home = tmp_path / "home"
-    write_state(home, {"current": "0.2.0", "start_at_login": True, "update": "已更新到 0.2.0"})
+    write_state(home, {"current": "0.2.0", "start_at_login": True})
     wheelhouse = _wheelhouse(tmp_path)
     for name in ("launch.pyw", "setup_core.py"):
         (wheelhouse.parent / name).write_text(name)
@@ -167,7 +164,59 @@ def test_installing_again_keeps_what_was_recorded(tmp_path):
     state = read_state(home)
     assert (state["current"], state["previous"]) == ("0.3.0", "0.2.0")
     assert state["start_at_login"] is True
-    assert state["update"] == "已更新到 0.2.0"
+
+
+# D21 (§3.7.5 step 2): every new version is installed this way. The version it
+# replaces becomes `previous` — it may still be running, so its folder stays —
+# every other version folder goes, and what only the automatic update wrote
+# (D15) is dropped.
+def test_installing_a_new_version_keeps_the_running_one_and_drops_the_rest(tmp_path):
+    home = tmp_path / "home"
+    for v in ("0.1.0", "0.2.0"):
+        (home / "versions" / v / "venv").mkdir(parents=True)
+    write_state(
+        home,
+        {
+            "base_python": "/py/pythonw",
+            "current": "0.2.0",
+            "previous": "0.1.0",
+            "pending": "0.2.1",
+            "pending_attempts": 2,
+            "bad": ["0.2.1"],
+            "failures": {"0.2.2": 1},
+            "update": "已更新到 0.2.0",
+            "start_at_login": True,
+        },
+    )
+    wheelhouse = _wheelhouse(tmp_path)
+    for name in ("launch.pyw", "setup_core.py"):
+        (wheelhouse.parent / name).write_text(name)
+
+    install(wheelhouse.parent, home, base_python="/py/pythonw", run=_Run())
+
+    assert read_state(home) == {
+        "base_python": "/py/pythonw",
+        "current": "0.3.0",
+        "previous": "0.2.0",
+        "start_at_login": True,
+    }
+    assert sorted(f.name for f in (home / "versions").iterdir()) == ["0.2.0", "0.3.0"]
+
+
+# The same version again (a repair): what was previous stays previous.
+def test_reinstalling_the_same_version_keeps_the_previous_one(tmp_path):
+    home = tmp_path / "home"
+    for v in ("0.2.0", "0.3.0"):
+        (home / "versions" / v / "venv").mkdir(parents=True)
+    write_state(home, {"current": "0.3.0", "previous": "0.2.0"})
+    wheelhouse = _wheelhouse(tmp_path)
+    for name in ("launch.pyw", "setup_core.py"):
+        (wheelhouse.parent / name).write_text(name)
+
+    install(wheelhouse.parent, home, base_python="/py/pythonw", run=_Run())
+
+    assert read_state(home)["previous"] == "0.2.0"
+    assert sorted(f.name for f in (home / "versions").iterdir()) == ["0.2.0", "0.3.0"]
 
 
 def test_a_zip_with_no_helper_in_it_says_so(tmp_path):

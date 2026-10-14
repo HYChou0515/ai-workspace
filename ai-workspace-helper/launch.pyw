@@ -19,9 +19,7 @@ import setup_core  # noqa: E402  # ty: ignore[unresolved-import] — beside this
 
 def main() -> int:
     try:
-        # 「立即更新」 passes --wait: the old helper is still ending
-        home = setup_core.launcher_home(HERE)
-        setup_core.launch(home, wait_s=20.0 if "--wait" in sys.argv[1:] else 0.0)
+        setup_core.launch(setup_core.launcher_home(HERE))
     except (setup_core.SetupFailed, OSError) as exc:
         import tkinter
         from tkinter import messagebox

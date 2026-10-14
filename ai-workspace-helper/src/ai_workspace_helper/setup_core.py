@@ -1,12 +1,12 @@
-"""Installing (and later updating) the helper on the person's PC
-(docs/plan-outside-helper.md D16, §3.7.1, §3.7.4).
+"""Installing the helper on the person's PC — the first version and every one
+after it (docs/plan-outside-helper.md D16, D21, §3.7.1, §3.7.5).
 
 STANDARD LIBRARY ONLY, no relative imports, Python 3.10+: this one file runs in
-three places — inside the installed package (the helper's own updates), at the
-root of the zip beside `install.pyw` (before anything is installed), and beside
-`launch.pyw` in the helper's folder. It is copied, never edited: by the pack
-script into the zip, by `install` beside the launcher, and by `confirm` from a
-newly confirmed version.
+three places — inside the installed package (the window: its requests, the
+Startup shortcut, uninstall), at the root of the zip beside `install.pyw`
+(before anything is installed), and beside `launch.pyw` in the helper's folder.
+It is copied, never edited: by the pack script into the zip, and by `install`
+beside the launcher.
 
 Every command goes through an injected `run`, so the layout it builds is tested
 on Linux; the default runs it with no console window.
@@ -151,11 +151,11 @@ else:
         fcntl.flock(f.fileno(), fcntl.LOCK_UN)
 
 
-# ── one version (§3.7.4 steps 3–5) ──────────────────────────────────────────
+# ── one version (§3.7.5 step 1) ─────────────────────────────────────────────
 
 
-#: What a version keeps of its zip besides the venv: its own launcher and this
-#: file, put in place at the root only once that version has proven itself.
+#: What `install` copies from the zip into the helper's folder: the fixed
+#: launcher and this file.
 _CARRIED = ("launch.pyw", "setup_core.py")
 
 
@@ -166,13 +166,11 @@ def install_version(
     version: str,
     *,
     run: Run = run_quietly,
-    carried_from: Path | None = None,
 ) -> Path:
     """Build `versions/<version>/`: a venv from `base_python`, the helper and
     its packages from `wheelhouse` only, then a self-test. It is built as
     `<version>.partial` and renamed only once all of that passed — a failed
-    step leaves nothing behind for the launcher to pick up. `carried_from`
-    (the unpacked zip) gives the version its own `_CARRIED` files."""
+    step leaves nothing behind for the launcher to pick up."""
     versions = home / "versions"
     partial, final = versions / f"{version}.partial", versions / version
     versions.mkdir(parents=True, exist_ok=True)
@@ -193,9 +191,6 @@ def install_version(
             ]
         )
         run([python, "-m", "ai_workspace_helper", "--self-test"])
-        for name in _CARRIED if carried_from else ():
-            if (carried_from / name).is_file():  # ty: ignore[unsupported-operator]
-                shutil.copy2(carried_from / name, partial / name)  # ty: ignore[unsupported-operator]
         if final.exists():
             # reinstalling the same version (D16: run install.pyw again)
             shutil.rmtree(final)
@@ -285,12 +280,6 @@ def version_key(text: str) -> tuple[int, ...]:
         return (0,)
 
 
-#: Starts a waiting version may take to confirm itself before it is given up.
-MAX_PENDING_ATTEMPTS = 3
-#: Failed preparations of one release before it is marked bad (§3.7.4).
-MAX_PREPARE_FAILURES = 3
-
-
 # ── starting (launch.pyw, §3.7.5) ───────────────────────────────────────────
 
 
@@ -308,29 +297,21 @@ def launch_command(home: Path, state: dict[str, Any]) -> list[str]:
     return version_command(home, str(current))
 
 
-def start_choice(state: dict[str, Any]) -> tuple[str, dict[str, Any]]:
-    """Which version this start runs, and the state to write BEFORE starting
-    it. A waiting version is tried, each try counted; one that has had
-    `MAX_PENDING_ATTEMPTS` starts and never confirmed itself (it crashes on
-    start) is marked bad and the current one runs again — said once, on the
-    next check-in."""
-    s = dict(state)
-    pending = s.get("pending")
-    if not pending:
-        return str(s.get("current")), s
-    attempts = int(s.get("pending_attempts") or 0)
-    if attempts >= MAX_PENDING_ATTEMPTS:
-        s["bad"] = [*(v for v in s.get("bad", []) if v != pending), pending]
-        s["pending"], s["pending_attempts"] = None, 0
-        s["update"] = f"{pending} 起不來,已退回 {s.get('current')}"
-        return str(s.get("current")), s
-    s["pending_attempts"] = attempts + 1
-    return str(pending), s
-
-
 #: Written by the launcher when a helper is already running: that helper sees
 #: it and brings its window forward (§3.7.5 step 1).
 SHOW_REQUEST = "show.request"
+#: Written by install.pyw for a helper still running the version it replaced:
+#: that helper sees it and ends, so the new one can start (D21, §3.7.5).
+QUIT_REQUEST = "quit.request"
+
+
+def helper_running(home: Path) -> bool:
+    """Whether a helper holds `helper.lock` — asked by taking it for a moment."""
+    lock = InstanceLock(home / "helper.lock")
+    if lock.acquire():
+        lock.release()
+        return False
+    return True
 
 
 def launcher_home(here: Path) -> Path:
@@ -352,10 +333,11 @@ def launch(
     wait_s: float = 0.0,
     sleep: Callable[[float], None] = time.sleep,
 ) -> str:
-    """What `launch.pyw` does. Returns the version started, or `"shown"` when a
-    helper was already running and has been asked to come forward. `wait_s`:
-    「立即更新」 starts this while the old helper is still ending — wait that
-    long for its lock (which goes with its process) before deciding."""
+    """What `launch.pyw` does: start the current version. Returns it, or
+    `"shown"` when a helper was already running and has been asked to come
+    forward. `wait_s`: `replace_running` starts this while the old helper is
+    still ending — wait that long for its lock (which goes with its process)
+    before deciding."""
     lock = InstanceLock(home / "helper.lock")
     waited = 0.0
     while not lock.acquire() and waited < wait_s:
@@ -364,137 +346,33 @@ def launch(
     if not lock.held:
         (home / SHOW_REQUEST).write_text("show", encoding="utf-8")
         return "shown"
+    # holding the lock, no helper runs: a request left for one is stale and
+    # must not end the helper about to start
+    (home / QUIT_REQUEST).unlink(missing_ok=True)
     lock.release()  # the helper takes it for itself
     state = read_state(home)
-    if not state.get("current"):
-        raise SetupFailed("the helper is not installed — run install.pyw")
-    version, state = start_choice(state)
-    write_state(home, state)  # before starting: a crash on start still counts
-    popen(version_command(home, version), cwd=str(home))
-    return version
+    popen(launch_command(home, state), cwd=str(home))
+    return str(state["current"])
 
 
-def confirm(home: Path, version: str) -> bool:
-    """The waiting `version` is up and connected: it becomes current, the one
-    before it previous, every other version folder goes, and its own launcher
-    replaces the fixed one — only now, when it has proven itself (§3.7.5 steps
-    3 and 6). False, changing nothing, when `version` is not the one waiting."""
-    s = read_state(home)
-    if s.get("pending") != version:
-        return False
-    old = s.get("current")
-    s.update(current=version, previous=old, pending=None, pending_attempts=0)
-    s["update"] = f"已更新到 {version}"
-    write_state(home, s)
-    for folder in (home / "versions").iterdir():
-        if folder.name not in (version, old):
-            shutil.rmtree(folder, ignore_errors=True)
-    for name in _CARRIED:
-        mine = home / "versions" / version / name
-        if mine.is_file() and (
-            not (home / name).is_file() or mine.read_bytes() != (home / name).read_bytes()
-        ):
-            # .pyw is text and the launcher has exited by now: nothing locks it
-            tmp = home / f".{name}.new"
-            shutil.copy2(mine, tmp)
-            os.replace(tmp, home / name)
-    return True
-
-
-# ── the next version, in the background (§3.7.4) ────────────────────────────
-
-
-def _plain_name(name: object) -> bool:
-    return (
-        isinstance(name, str)
-        and bool(name)
-        and not any(c in name for c in "/\\:")
-        and name not in (".", "..")
-    )
-
-
-def _unpack(data: bytes, into: Path) -> None:
-    import io
-    import zipfile
-
-    shutil.rmtree(into, ignore_errors=True)
-    into.mkdir(parents=True)
-    with zipfile.ZipFile(io.BytesIO(data)) as z:
-        for member in z.namelist():
-            target = (into / member).resolve()
-            if into.resolve() not in target.parents:
-                raise SetupFailed(f"the update zip names a path outside itself: {member!r}")
-        z.extractall(into)
-
-
-def update_outcome(home: Path, state: dict[str, Any], manifest: dict[str, Any]) -> str | None:
-    """What `prepare_update` would answer without fetching anything — or None
-    when the release has to be fetched and installed."""
-    version = str(manifest.get("version", ""))
-    if version_key(version) <= version_key(str(state.get("current", "0"))):
-        return "current"
-    if version in state.get("bad", []):
-        return "bad"
-    if state.get("pending") == version and (home / "versions" / version).is_dir():
-        return "ready"
-    return None
-
-
-def prepare_update(
+def replace_running(
     home: Path,
-    manifest: dict[str, Any],
-    fetch: Callable[[str], bytes],
     *,
-    run: Run = run_quietly,
+    popen: Callable[..., Any] = subprocess.Popen,
+    wait_s: float = 20.0,
+    sleep: Callable[[float], None] = time.sleep,
 ) -> str:
-    """Make the published release ready for the next start, never touching the
-    running one. `"current"`: nothing newer. `"bad"`: it failed before and is
-    not tried again. `"ready"`: installed, waiting for the next start. Raises
-    `SetupFailed` when this try failed (the running version carries on); the
-    same release failing `MAX_PREPARE_FAILURES` times is marked bad."""
-    import hashlib
-
-    state = read_state(home)
-    settled = update_outcome(home, state, manifest)
-    if settled is not None:
-        return settled
-    version = str(manifest.get("version", ""))
-    name = manifest.get("file")
-    if not _plain_name(name):
-        raise SetupFailed(f"the release names a file that is not a plain name: {name!r}")
-    downloads = home / "downloads"
-    downloads.mkdir(parents=True, exist_ok=True)
-    unpacked = downloads / version
+    """install.pyw, a new version in place while a helper runs (D21, §3.7.5
+    step 3): ask that helper to end, then start the current version once its
+    lock is free. `"shown"` when it did not end within `wait_s`: it is left
+    running and brought forward, and the request is withdrawn — it must not
+    end later under the person's feet."""
+    request = home / QUIT_REQUEST
+    request.write_text("quit", encoding="utf-8")
     try:
-        data = fetch(str(name))
-        if hashlib.sha256(data).hexdigest() != manifest.get("sha256"):
-            raise SetupFailed(f"{name}: sha256 does not match the release — not installed")
-        _unpack(data, unpacked)
-        install_version(
-            home,
-            str(state["base_python"]),
-            unpacked / "wheelhouse",
-            version,
-            run=run,
-            carried_from=unpacked,
-        )
-    except BaseException:
-        s = read_state(home)
-        failures = dict(s.get("failures") or {})
-        failures[version] = int(failures.get(version, 0)) + 1
-        if failures[version] >= MAX_PREPARE_FAILURES:
-            s["bad"] = [*(v for v in s.get("bad", []) if v != version), version]
-            failures.pop(version)
-        s["failures"] = failures
-        write_state(home, s)
-        raise
+        return launch(home, popen=popen, wait_s=wait_s, sleep=sleep)
     finally:
-        shutil.rmtree(unpacked, ignore_errors=True)
-    s = read_state(home)
-    s["pending"], s["pending_attempts"] = version, 0
-    (s.get("failures") or {}).pop(version, None)
-    write_state(home, s)
-    return "ready"
+        request.unlink(missing_ok=True)
 
 
 # ── uninstall (D17) ─────────────────────────────────────────────────────────
@@ -593,6 +471,10 @@ def zip_version(wheelhouse: Path) -> str:
     return wheels[-1].name.split("-")[1]
 
 
+#: What D15's automatic update kept in state.json; D21 writes none of it.
+_AUTOMATIC_UPDATE_FIELDS = ("pending", "pending_attempts", "bad", "failures", "update")
+
+
 class Installed(NamedTuple):
     version: str
     #: Why the desktop shortcut could not be made ("" when it was): everything
@@ -608,20 +490,24 @@ def install(zip_dir: Path, home: Path, *, base_python: str, run: Run = run_quiet
     install_version(home, base_python, zip_dir / "wheelhouse", version, run=run)
     old = read_state(home)
     current = old.get("current")
+    previous = current if current and current != version else old.get("previous")
     write_state(
         home,
         {
-            # what was recorded stays (start_at_login: the Startup shortcut is
-            # still there; the last update's outcome) — install sets the rest
-            **old,
+            # what the person recorded stays (start_at_login: the Startup
+            # shortcut is still there); what only the automatic update wrote
+            # (D15) goes; install sets the rest
+            **{k: v for k, v in old.items() if k not in _AUTOMATIC_UPDATE_FIELDS},
             "base_python": base_python,
             "current": version,
-            "previous": current if current and current != version else old.get("previous"),
-            "pending": None,
-            "pending_attempts": 0,
-            "bad": [v for v in old.get("bad", []) if v != version],
+            "previous": previous,
         },
     )
+    # D21 (§3.7.5 step 2): `previous` may still be running, so it stays; a
+    # folder that cannot go now (held) goes on a later install
+    for folder in (home / "versions").iterdir():
+        if folder.name not in (version, previous):
+            shutil.rmtree(folder, ignore_errors=True)
     for name in _CARRIED:
         shutil.copy2(zip_dir / name, home / name)
     try:
