@@ -1,6 +1,7 @@
 # 工具使用統計:管理者看 AI 用了哪些工具、誰用、在哪、成不成功、多快
 
-**狀態:** P1–P8 完成(#932;P8 = 真瀏覽器 1280／390 寬檢查與 demo 影片,兩輪對抗式審查);as-built 與計劃不同之處見 §7。
+**狀態:** P1–P8 完成(#932;P8 = 真瀏覽器 1280／390 寬檢查與 demo 影片,兩輪對抗式審查);P9–P13(skill 使用,§8)
+施工中,同一個 PR。as-built 與計劃不同之處見 §7。
 **來源標記:** 〔user〕= user 的原話或明確選擇;〔查證〕= 讀 `origin/master`(7bf7e6ff)程式碼確認的事實;
 〔施工〕= 我定的實作細節,可推翻;〔指南〕= 出自公開的 UI/UX 指南,附出處。
 
@@ -31,6 +32,10 @@ MCP 伺服器(`tooling/mcp_server.py`、`tooling/builder.py:_inject_mcp`),讓工
 | D5 | 預設最近 30 天,可切 7/30/90 天;**資料保留 90 天**,更舊的自動刪 | 〔user〕選 A |
 | D6 | **所有工具都算**,每筆標來源(內建/第一方套件/第三方);來源在記錄當下查,不從名字猜 | 〔user〕選 A |
 | D7 | **所有場合都算**,每筆記場合、App、item | 〔user〕「A,使用場合也要紀錄」 |
+| D8 | **skill 也要像工具一樣記**(§8),同一個 PR 完成 | 〔user〕「我希望skill也能像mcp一樣紀錄」「同一個pr完成即可」 |
+| D9 | 一次 skill 使用 = AI 用 `read_skill` 讀到內容,**或**使用者在選單套用(內容預先載入);兩種合成一個次數,不分開 | 〔user〕選「兩種都算、不分開」 |
+| D10 | **所有來源的 skill 都算**,每筆標來源(平台內建/App 內建/skill hub/自己寫的) | 〔user〕選「全部、標來源」 |
+| D11 | 放在**「工具使用」同一頁**,只給 superuser;**只算成功讀到的**,沒有失敗、沒有耗時 | 〔user〕選「放進同一頁」「只算成功讀到的」 |
 
 ## 3. 機制
 
@@ -134,6 +139,11 @@ sub-agent、`ask_knowledge_base` 裡的 KB 子代理各自的工具呼叫由它�
 | P6 | Diagnostics「工具使用」分頁:表格、篩選、排序、7/30/90、點進分項 | 元件測試;版面在 1280/390 量過 |
 | P7 | 文件:`docs/migrations.md`(新 model、新的背景寫回與刪除)、架構說明 | mkdocs `--strict` 綠 |
 | P8 | 真瀏覽器檢查 + demo(MP4) | 截圖對照引用的指南 |
+| P9 | skill 的計數:`read_skill` 成功讀到的三條路 + 套用預先載入,來源依 §8.2 判定,記在同一個記憶體累加器 | 每個來源、兩個入口各有測試;讀不到的不算 |
+| P10 | 存法與 API 加 `kind`(tool/skill);skill hub 的寫入者名稱改成每個行程一個(童子軍) | 兩種 kind 不混列;舊 API 參數不給 kind 時照舊是工具 |
+| P11 | 畫面:「工具使用」頁加「工具/Skill」分段控制;skill 表只有名稱/來源/次數,點進看分項 | 元件測試;版面在 1280/390 量過 |
+| P12 | 文件:migrations 的 #932 條目補上 skill;§7 as-built | mkdocs `--strict` 綠 |
+| P13 | 真瀏覽器檢查 + demo(MP4)涵蓋 skill | 截圖對照引用的指南 |
 
 ## 6. 不做
 
@@ -142,6 +152,9 @@ sub-agent、`ask_knowledge_base` 裡的 KB 子代理各自的工具呼叫由它�
 - 保留天數做成設定(D5 選 A)。
 - 工具作者、item 擁有者看自己的統計(D2 選 A;同一份資料,之後可加)。
 - 每次呼叫一筆的明細紀錄:只存每天的彙總。
+- skill 讀不到(名字不存在、被關掉、太大)不算(D11);那些是 `read_skill` 這個工具的失敗,工具統計裡已有。
+- skill hub 面板上的「使用 N 次」不改:它仍只算 `read_skill` 讀到的 hub 條目,套用不算,誰用也不顯示(U5)。兩邊
+  數字因此可能不同——hub 面板答的是「這個條目多常被 AI 讀」,這裡答的是「這個 skill 多常被載入」。
 
 ## 7. 施工後與計劃不同的地方(as-built,#932)
 
@@ -182,3 +195,44 @@ sub-agent、`ask_knowledge_base` 裡的 KB 子代理各自的工具呼叫由它�
   的 id 放進 `investigation_id`(grep 確認)。
 - **A12 串流與非串流 turn 都算到**(P2 的完成條件):兩條路(`_run_once` / `_run_once_nonstream`)都經過
   `_agent_for`,包層在那裡套上,是結構上成立;測試直接打 `_agent_for` 交出的工具。
+
+## 8. Skill 使用(D8–D11)
+
+### 8.1 兩個入口〔查證〕
+
+- **AI 讀**:`agent/tools.py:read_skill_impl`。讀到內容的只有三條 return:工作區的 skill
+  (`read_workspace_skill` 之後)、平台內建的(`load_shared_skill`)、App profile 的(`load_skill`);其他
+  return 都是 `error:` 字串,不算(D11)。
+- **使用者套用**:聊天送出帶 `apply_skills`,`api/chat_send.py` 用 `apps/skills.py:build_applied_skills_block`
+  →`resolve_skill_body` 把內容放進這一輪(不經過任何工具)。只有聊天會套用,workflow 不會。
+- 同一輪先套用、AI 又 `read_skill` 同一個 skill,算**兩次**——兩次都把內容載入了(D9 的「一次」是一次載入)。
+
+### 8.2 來源怎麼判〔查證 + 施工〕
+
+skill 的「來源」記成四個值,依讀到內容的那條路與工作區副本的 `.origin`(`SkillOrigin.source`):
+
+| 值 | 畫面 | 怎麼判 |
+|---|---|---|
+| `shared` | 平台內建 | `load_shared_skill` 讀到的;或工作區副本 `.origin.source == "shared"`(帶 scripts 的內建 skill 第一次讀會被複製進工作區) |
+| `profile` | App 內建 | `load_skill` 讀到的;或副本 `.origin.source == "profile"` |
+| `hub` | skill hub | 副本 `.origin.source == "hub"` 且不是 fork(含作者發佈後自己的那份——它的 `.origin` 跟安裝的一樣) |
+| `workspace` | 自己寫的 | 工作區有、沒有 `.origin`(或讀不出來);或 hub 的 fork(fork 之後就是自己的) |
+
+### 8.3 記在哪〔施工〕
+
+- 同一個記憶體累加器、同一張表,多一個欄位 `kind`(`tool` / `skill`),列 id 也帶 `kind`——工具與 skill 同名
+  也不會混在一列。skill 的列 `fails` 與 `total_ms` 都是 0。#932 還沒合併,這張表在 prod 還沒有任何列,加欄位
+  不用回填。
+- 誰、App、item、場合:跟工具一樣取這一輪的(`_attribution`)。套用發生在 runner 開始之前,所以這一輪的
+  context 由建它的地方就帶上累加器(runner 本來就保留 context 已有的累加器)。
+- API:兩條路由加 `kind=tool|skill`(預設 `tool`,舊的呼叫不變)。
+- skill hub 的計數器(`apps/skill_hub_usage.py`)用 `HOSTNAME` 當列的寫入者,跟 §7 A1 是同一個坑;改成同一個
+  「主機名-pid」函式(童子軍)。它的總數是各列加總,換名字只是多新列,舊列照算。
+
+### 8.4 畫面〔指南〕
+
+- 「工具使用」頁頂端加 **「工具 / Skill」分段控制**:同一份報表看不同種類的東西 = 切換檢視,Material 3
+  〈Segmented buttons〉("help people select options, switch views, or sort elements")。
+  <https://m3.material.io/components/segmented-buttons/overview> 分頁的名稱改成「工具與 Skill」。
+- skill 表欄位:Skill/來源/次數(D11 沒有失敗與耗時),排序、篩選(來源、場合、App)照工具表(NN/g〈Data
+  Tables〉)。點一個 skill 看依人、依場合 × App、依 item 的次數。
