@@ -108,3 +108,32 @@ def test_a_refusal_that_names_no_release_still_says_to_reinstall():
     up.tick(required={})
 
     assert up.status == "required: "
+
+
+# Refused, then let back in (the operator lowered min_version): the line must
+# not keep saying 「請到「小幫手」頁下載新版」 until the next six-hour check —
+# connected again, it reads the release at once (review of D21).
+def test_connected_again_after_a_refusal_it_reads_the_release_at_once():
+    backend, clock = _Backend(_release("0.3.0")), [0.0]
+    up = _updater(backend, clock)
+    up.tick()
+    clock[0] = 60
+    up.tick(required=_release("0.4.0"))
+    assert up.status == "required: 0.4.0"
+
+    clock[0] = 120
+    up.tick()
+
+    assert backend.manifests == 2
+    assert up.status == ""
+
+
+# Whatever came down the unverified line (D20) in a 426's body, a release that
+# is not one names no version — it is not a reason to fail every poll.
+@pytest.mark.parametrize("named", ["x", ["0.4.0"], {"version": 4}])
+def test_a_refusal_naming_something_else_still_says_to_reinstall(named):
+    up = _updater(_Backend(None), [0.0])
+
+    up.tick(required=named)
+
+    assert up.status == ("required: 4" if isinstance(named, dict) else "required: ")

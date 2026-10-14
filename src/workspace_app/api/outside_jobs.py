@@ -92,7 +92,8 @@ class _AiWorkspaceHelperPresence(Struct):
     chrome: str = ""
     playwright: str = ""
     python: str = ""
-    #: The last update's outcome, e.g. "0.4.0 起不來,已退回 0.3.0" (§3.7.5).
+    #: Sent only by 0.1.0 (D15's automatic update); kept — the API only adds
+    #: (docs/plan-outside-helper.md D21, §3.7.3).
     update: str = ""
 
 

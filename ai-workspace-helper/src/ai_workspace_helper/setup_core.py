@@ -376,7 +376,7 @@ def replace_running(
 
 
 def take_over(home: Path, version: str) -> bool:
-    """The way from 0.1.x (D15) to D21. A 0.1.x that reaches AI Workspace
+    """The way from 0.1.0 (D15) to D21. A 0.1.0 that reaches AI Workspace
     still downloads the next version itself and marks it `pending`, and its
     launcher starts it — counting starts, and rolling it back for good after
     three without the confirmation D15 expected. So `version`, once started
@@ -389,6 +389,10 @@ def take_over(home: Path, version: str) -> bool:
         return False
     old = s.get("current")
     kept = {k: v for k, v in s.items() if k not in _AUTOMATIC_UPDATE_FIELDS}
+    if old == version:
+        # install.pyw already made it current: the version before stays previous
+        write_state(home, kept)
+        return True
     write_state(home, {**kept, "current": version, "previous": old})
     for folder in (home / "versions").iterdir():
         if folder.name not in (version, old):
@@ -515,6 +519,13 @@ def install(zip_dir: Path, home: Path, *, base_python: str, run: Run = run_quiet
     the version from the zip, the folder layout, `state.json`, the fixed
     launcher, and the desktop shortcut."""
     version = zip_version(zip_dir / "wheelhouse")
+    # A running helper holds the lock — which version it runs, the lock does
+    # not say: so no folder already there is touched under it (D21, §3.7.5)
+    running = helper_running(home)
+    if running and (home / "versions" / version).exists():
+        raise SetupFailed(
+            f"小幫手正在執行，{version} 已經裝著。請先在小幫手的視窗按「結束」，再重新安裝這一版。"
+        )
     install_version(home, base_python, zip_dir / "wheelhouse", version, run=run)
     old = read_state(home)
     current = old.get("current")
@@ -531,11 +542,13 @@ def install(zip_dir: Path, home: Path, *, base_python: str, run: Run = run_quiet
             "previous": previous,
         },
     )
-    # D21 (§3.7.5 step 2): `previous` may still be running, so it stays; a
-    # folder that cannot go now (held) goes on a later install
-    for folder in (home / "versions").iterdir():
-        if folder.name not in (version, previous):
-            shutil.rmtree(folder, ignore_errors=True)
+    # D21 (§3.7.5 step 2): only current and previous stay — tidied when no
+    # helper runs (with one running, the next install tidies); a folder that
+    # cannot go now (held) goes on a later install
+    if not running:
+        for folder in (home / "versions").iterdir():
+            if folder.name not in (version, previous):
+                shutil.rmtree(folder, ignore_errors=True)
     for name in _CARRIED:
         shutil.copy2(zip_dir / name, home / name)
     try:

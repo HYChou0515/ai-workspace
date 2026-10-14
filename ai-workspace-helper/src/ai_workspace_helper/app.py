@@ -20,12 +20,18 @@ import os
 import queue
 import sys
 import threading
+import time
 from collections.abc import Callable
 from typing import Any
 
 #: Seconds between polls when there is nothing to do. Short, because the card's
 #: 「查」 waits on it; a poll is one small request.
 POLL_S = 2.0
+#: Starting Chrome is tried this often, this far apart, before 「開不了 Chrome」:
+#: started the moment the helper it replaced let go of its lock (D21), its
+#: Chrome may still be closing on the same profile.
+CHROME_TRIES = 3
+CHROME_RETRY_S = 2.0
 
 _TEXT = {
     "starting": "啟動中…",
@@ -133,12 +139,14 @@ class Controller:
         reset_profile: Callable[[], None] | None = None,
         poll_s: float = POLL_S,
         history: Any = None,
+        sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         self._make_chrome = make_chrome
         self._make_worker = make_worker
         self._make_updater = make_updater
         self._reset_profile = reset_profile
         self._poll_s = poll_s
+        self._sleep = sleep
         self._commands: queue.Queue[str] = queue.Queue()
         self._lock = threading.Lock()
         self._snapshot: tuple[str, str, str, str] = ("starting", "", "", "")
@@ -170,12 +178,20 @@ class Controller:
     def open(self) -> None:
         # what a previous Chrome left is dead: never drive it again
         self._chrome = self._worker = None
-        try:
-            self._chrome = self._make_chrome()
-        except Exception as exc:  # noqa: BLE001 — shown to the person, who can only quit
-            logger.exception("could not start Chrome")
-            self._show("no_chrome", str(exc).splitlines()[0] if str(exc) else type(exc).__name__)
-            return
+        for attempt in range(1, CHROME_TRIES + 1):
+            try:
+                self._chrome = self._make_chrome()
+                break
+            except Exception as exc:  # noqa: BLE001 — shown to the person, who can only quit
+                if attempt < CHROME_TRIES:
+                    logger.warning("could not start Chrome (try %d): %s", attempt, exc)
+                    self._sleep(CHROME_RETRY_S)
+                    continue
+                logger.exception("could not start Chrome")
+                self._show(
+                    "no_chrome", str(exc).splitlines()[0] if str(exc) else type(exc).__name__
+                )
+                return
         self._worker = self._make_worker(self._chrome)
         if hasattr(self._worker, "on_change"):
             self._worker.on_change = self._show
@@ -442,7 +458,7 @@ def main() -> int:  # pragma: no cover — the window needs a display; verified 
     from . import setup_core
 
     try:
-        # started by a 0.1.x launcher as the version it downloaded (D15 → D21)
+        # started by a 0.1.0 launcher as the version it downloaded (D15 → D21)
         if setup_core.take_over(home, __version__):
             logging.getLogger(__name__).info("took over from the automatic update: %s", __version__)
     except OSError:
@@ -499,8 +515,11 @@ def main() -> int:  # pragma: no cover — the window needs a display; verified 
         fill="x", pady=(0, 6)
     )
     ttk.Label(status_tab, text=app_url, foreground="#666").pack(fill="x")
-    ttk.Label(status_tab, textvariable=update_var, wraplength=580, justify="left").pack(
-        fill="x", pady=(6, 0)
+    # the notice and its one action together, as a notification banner has
+    # them (GOV.UK; plan §3.7.4) — shown only while there is something to say
+    update_row = ttk.Frame(status_tab)
+    ttk.Label(update_row, textvariable=update_var, wraplength=460, justify="left").pack(
+        side="left", fill="x", expand=True
     )
     buttons = ttk.Frame(status_tab)
     buttons.pack(fill="x", pady=(12, 8))
@@ -565,7 +584,9 @@ def main() -> int:  # pragma: no cover — the window needs a display; verified 
 
     ttk.Button(buttons, text="登入", command=lambda: ctl.send("login")).pack(side="left")
     ttk.Button(buttons, textvariable=pause_text, command=toggle_pause).pack(side="left", padx=6)
-    download_button = ttk.Button(buttons, text="開啟下載頁", command=open_download_page)
+    ttk.Button(update_row, text="開啟下載頁", command=open_download_page).pack(
+        side="right", padx=(6, 0)
+    )
     ttk.Button(buttons, text="結束", command=end).pack(side="right")
     options = ttk.Frame(status_tab)
     options.pack(fill="x")
@@ -621,9 +642,10 @@ def main() -> int:  # pragma: no cover — the window needs a display; verified 
         update_line = describe_update(ctl.update_status())
         update_var.set(update_line)
         if update_line:
-            download_button.pack(side="left")
+            # the whole row comes and goes: an emptied frame keeps its height
+            update_row.pack(fill="x", pady=(6, 0), before=buttons)
         else:
-            download_button.pack_forget()
+            update_row.pack_forget()
         window.title(
             f"{describe(status, detail, kind, site)} — AI Workspace Helper"
             if status == "connected" and detail

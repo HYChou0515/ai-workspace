@@ -466,3 +466,113 @@ def test_double_clicking_launch_pyw_in_the_unzipped_folder_starts_the_installed_
 
     assert done.returncode == 0, done.stderr
     assert started.exists()
+
+
+def _zip_beside(tmp_path: Path, version: str = "0.3.0") -> Path:
+    wheelhouse = _wheelhouse(tmp_path, version)
+    for name in ("launch.pyw", "setup_core.py"):
+        (wheelhouse.parent / name).write_text(name)
+    return wheelhouse.parent
+
+
+def _running(home: Path):
+    lock = setup_core.InstanceLock(home / "helper.lock")
+    assert lock.acquire()
+    return lock
+
+
+# Review of D21: with a helper running, install.pyw never touches a version
+# folder that is already there — it may be the running one (the lock says a
+# helper runs, not which version). Rebuilding the same version is refused
+# until that helper ends (on Windows the rebuild died half-way on a loaded
+# .pyd and left `current` pointing at a gutted venv) ...
+def test_with_a_helper_running_the_same_version_is_not_rebuilt_under_it(tmp_path):
+    home = tmp_path / "home"
+    venv = home / "versions" / "0.3.0" / "venv"
+    venv.mkdir(parents=True)
+    (venv / "in-use").write_text("")
+    write_state(home, {"current": "0.3.0"})
+    running = _running(home)
+    try:
+        with pytest.raises(SetupFailed, match="結束"):
+            install(_zip_beside(tmp_path), home, base_python="/py/pythonw", run=_Run())
+    finally:
+        running.release()
+
+    assert (venv / "in-use").exists()
+
+
+# ... and a new version goes in beside them, nothing removed: the running one
+# may be neither current nor previous (the person said 「否」 and installed
+# again). The next install with no helper running tidies up.
+def test_with_a_helper_running_a_new_version_removes_no_folder(tmp_path):
+    home = tmp_path / "home"
+    for v in ("0.1.0", "0.2.0"):
+        (home / "versions" / v / "venv").mkdir(parents=True)
+    write_state(home, {"current": "0.2.0", "previous": "0.1.0"})
+    running = _running(home)
+    try:
+        install(_zip_beside(tmp_path), home, base_python="/py/pythonw", run=_Run())
+    finally:
+        running.release()
+
+    assert sorted(f.name for f in (home / "versions").iterdir()) == ["0.1.0", "0.2.0", "0.3.0"]
+    assert read_state(home)["current"] == "0.3.0"
+
+
+# P13: a new version whose self-test fails never becomes current.
+def test_a_new_version_that_fails_its_self_test_leaves_the_current_one(tmp_path):
+    home = tmp_path / "home"
+    (home / "versions" / "0.2.0" / "venv").mkdir(parents=True)
+    write_state(home, {"current": "0.2.0", "previous": None})
+
+    with pytest.raises(SetupFailed):
+        install(_zip_beside(tmp_path), home, base_python="/py/pythonw", run=_Run("--self-test"))
+
+    assert read_state(home) == {"current": "0.2.0", "previous": None}
+    assert sorted(f.name for f in (home / "versions").iterdir()) == ["0.2.0"]
+
+
+# A 0.1.0 still running has its own 「立即更新」: it ends, and starts the
+# installed launch.pyw with --wait while its process is still letting go of
+# the lock. That launcher is the D21 one once install.pyw ran: it must still
+# wait, or it brings the dying window forward and nothing starts (review of
+# D21).
+def test_the_launcher_still_waits_when_a_0_1_0_restarts_through_it(tmp_path):
+    import os
+    import shutil
+    import subprocess
+    import sys
+    import threading
+    import time
+
+    helper = Path(setup_core.__file__).resolve().parents[2]
+    home = tmp_path / "home"
+    write_state(home, {"current": "0.3.0"})
+    shutil.copy(helper / "launch.pyw", home / "launch.pyw")
+    shutil.copy(Path(setup_core.__file__), home / "setup_core.py")
+    started = home / "started"
+    python = Path(setup_core.version_command(home, "0.3.0")[0])
+    python.parent.mkdir(parents=True)
+    python.write_text(f"#!/bin/sh\ntouch '{started}'\n")
+    python.chmod(0o755)
+    old = setup_core.InstanceLock(home / "helper.lock")
+    assert old.acquire()  # the 0.1.0 still ending
+    threading.Timer(1.5, old.release).start()
+    env = {k: v for k, v in os.environ.items() if k != "DISPLAY"}
+
+    done = subprocess.run(
+        [sys.executable, str(home / "launch.pyw"), "--wait"],
+        env={**env, "AI_WORKSPACE_HELPER_HOME": str(home)},
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    for _ in range(50):
+        if started.exists():
+            break
+        time.sleep(0.1)
+
+    assert done.returncode == 0, done.stderr
+    assert started.exists()
+    assert not (home / setup_core.SHOW_REQUEST).exists()

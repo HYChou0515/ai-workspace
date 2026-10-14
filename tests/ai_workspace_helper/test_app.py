@@ -93,7 +93,7 @@ def test_a_chrome_that_will_not_start_is_shown_not_a_crash():
     def broken():
         raise RuntimeError("Chromium distribution 'chrome' is not found")
 
-    ctl = Controller(broken, lambda _c: _Worker([]))
+    ctl = Controller(broken, lambda _c: _Worker([]), sleep=lambda _s: None)
     ctl.open()
 
     status, detail, *_ = ctl.snapshot()
@@ -178,7 +178,7 @@ def test_with_no_chrome_the_buttons_do_nothing_but_quit():
     def broken():
         raise RuntimeError("")
 
-    ctl = Controller(broken, lambda _c: _Worker([]))
+    ctl = Controller(broken, lambda _c: _Worker([]), sleep=lambda _s: None)
     ctl.open()
     assert ctl.snapshot()[:2] == ("no_chrome", "RuntimeError")
 
@@ -652,3 +652,39 @@ def test_the_window_takes_what_was_asked_of_it_once(tmp_path):
     assert take_request(tmp_path) == "quit"
     assert not (tmp_path / setup_core.SHOW_REQUEST).exists()
     assert take_request(tmp_path) is None
+
+
+# Started the moment the helper it replaced let go of its lock (install.pyw,
+# D21), its Chrome may still be closing on the same profile: starting Chrome
+# is tried again, a few times, before 「開不了 Chrome」 (review of D21).
+def test_chrome_is_tried_again_before_saying_it_will_not_start():
+    tries: list[float] = []
+    chrome = _Chrome()
+
+    def make():
+        tries.append(1)
+        if len(tries) < 3:
+            raise RuntimeError("profile in use")
+        return chrome
+
+    waited: list[float] = []
+    ctl = Controller(make, lambda _c: _Worker(["connected"]), sleep=waited.append)
+    ctl.open()
+
+    assert len(tries) == 3 and len(waited) == 2
+    ctl.step()
+    assert ctl.snapshot()[0] == "connected"
+
+
+def test_a_chrome_that_never_starts_is_said_after_the_last_try():
+    tries: list[int] = []
+
+    def make():
+        tries.append(1)
+        raise RuntimeError("no Chrome here")
+
+    ctl = Controller(make, lambda _c: _Worker(["connected"]), sleep=lambda _s: None)
+    ctl.open()
+
+    assert len(tries) == 3
+    assert ctl.snapshot()[:2] == ("no_chrome", "no Chrome here")

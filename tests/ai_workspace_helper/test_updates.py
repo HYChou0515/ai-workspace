@@ -83,7 +83,7 @@ def test_the_launcher_starts_the_current_version(tmp_path):
     assert started == [setup_core.version_command(tmp_path, "0.3.0")]
 
 
-# A state.json from D15's automatic update (0.1.x) still starts its current
+# A state.json from D15's automatic update (0.1.0) still starts its current
 # version: the fields only that update wrote are not read (D21).
 def test_a_state_left_by_the_automatic_update_still_starts_its_current_version(tmp_path):
     _installed(tmp_path, pending="0.4.0", pending_attempts=2, bad=["0.3.1"])
@@ -181,7 +181,7 @@ def test_a_stale_quit_request_does_not_end_the_next_helper(tmp_path):
     assert not (tmp_path / setup_core.QUIT_REQUEST).exists()
 
 
-# The way from 0.1.x (D15) to D21: a 0.1.x that reaches AI Workspace still
+# The way from 0.1.0 (D15) to D21: a 0.1.0 that reaches AI Workspace still
 # downloads the next version itself and marks it pending, and ITS launcher
 # starts it — counting starts, and after three without the confirmation D15
 # expected, rolling it back for good. So the new version, once started, takes
@@ -217,6 +217,22 @@ def test_a_version_not_pending_takes_nothing_over(tmp_path, pending):
     assert setup_core.take_over(tmp_path, "0.2.0") is False
 
     assert read_state(tmp_path) == before
+
+
+# A 0.1.0 still running finished preparing the very version install.pyw just
+# put in place: pending == current. Taking over then only drops D15's fields
+# — the version before stays previous, its folder kept (review of D21).
+def test_taking_over_the_version_already_current_keeps_the_previous_one(tmp_path):
+    _installed(tmp_path, current="0.2.0", previous="0.1.0", pending="0.2.0", pending_attempts=1)
+
+    assert setup_core.take_over(tmp_path, "0.2.0") is True
+
+    assert read_state(tmp_path) == {
+        "base_python": "/py/pythonw",
+        "current": "0.2.0",
+        "previous": "0.1.0",
+    }
+    assert sorted(f.name for f in (tmp_path / "versions").iterdir()) == ["0.1.0", "0.2.0"]
 
 
 def test_with_nothing_installed_the_launcher_says_so(tmp_path):

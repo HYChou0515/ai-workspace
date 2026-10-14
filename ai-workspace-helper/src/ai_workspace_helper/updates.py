@@ -37,12 +37,18 @@ class Updater:
         #: "" | "available: <version>" | "required: <version or nothing>".
         self.status = ""
 
-    def tick(self, required: dict[str, Any] | None = None) -> None:
+    def tick(self, required: Any = None) -> None:
         """Read the published release when a check is due — or, with
         `required` (what a 426 named, §3.7.6), say at once that this version
         is refused and which release to install."""
         if required is not None:
-            self.status = f"required: {required.get('version') or ''}"
+            # it came down the unverified line (D20): a release names a version
+            # only when it is one
+            named = required.get("version") if isinstance(required, dict) else None
+            self.status = f"required: {named or ''}"
+            # let back in (min_version lowered), it reads the release at once
+            # rather than saying 「下載新版」 until the next six-hour check
+            self._next = 0.0
             return
         now = self._clock()
         if now < self._next:
