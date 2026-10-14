@@ -72,8 +72,19 @@ _CLOUDFLARE_CHALLENGE = """() =>
     'script[src*="/cdn-cgi/challenge-platform/h/"], #challenge-error-text'
   )"""
 
-#: Cloudflare's block page (error 1020 and the like): nobody gets past it.
+#: Cloudflare's error page. On a 403 it is the block page (error 1020 and the
+#: like) nobody gets past; the same markup says a site is down (522 …) — that
+#: is an error status, not a block (review of #943).
 _CLOUDFLARE_BLOCK = "#cf-error-details"
+
+
+def _blocked_by_cloudflare(page: Any) -> bool:
+    from playwright.sync_api import Error as PlaywrightError
+
+    try:
+        return bool(page.locator(_CLOUDFLARE_BLOCK).count())
+    except PlaywrightError:
+        return False  # it moved on while asked: not a block page to report
 
 
 def search_url(template: str, query: str) -> str:
@@ -207,7 +218,7 @@ def fetch(ctx: ErrandContext, url: str) -> FetchedPage:
         # the tab before anyone could press anything (the person, GoodInfo).
         challenged = response.headers.get("cf-mitigated") == "challenge" or verification()
         if not challenged:
-            if page.locator(_CLOUDFLARE_BLOCK).count():
+            if response.status == 403 and _blocked_by_cloudflare(page):
                 raise ErrandFailed(
                     "這個網站擋住了自動瀏覽(Cloudflare 封鎖),請自己開瀏覽器查,把內容貼到卡片上:"
                     + _where(url)

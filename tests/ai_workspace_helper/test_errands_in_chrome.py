@@ -171,6 +171,22 @@ class _Site(BaseHTTPRequestHandler):
                 "<span class='cf-error-code'>1020</span></div>",
                 status=403,
             )
+        elif self.path == "/cf-down":
+            # Cloudflare's own page for a site that is down (522): the same
+            # error-details markup as a block, and not a block
+            self._html(
+                "<title>example.com | 522: Connection timed out</title>"
+                "<div id='cf-error-details'><h1>Connection timed out</h1>"
+                "<span class='cf-error-code'>522</span></div>",
+                status=522,
+            )
+        elif self.path == "/sorry/429":
+            # Google's "unusual traffic" page as Google serves it: 429
+            self._html(
+                "<title>Sorry</title><p>unusual traffic</p>"
+                "<script>setTimeout(() => location.assign('/landed'), 1500)</script>",
+                status=429,
+            )
         elif self.path.startswith("/sorry/"):
             # Google's "unusual traffic" page; the person solves it, it moves on
             self._html(
@@ -443,3 +459,24 @@ def test_a_cloudflare_block_page_fails_at_once_saying_so(chrome, site):
         chrome.run(build(lambda: [])["open_url"], f"{site}/cf-blocked", lambda _n: None)
 
     assert time.monotonic() - started < 10
+
+
+# Review of #943: Cloudflare's page for a site that is down carries the same
+# markup as its block page. Down is not blocked: it fails as an error status
+# does, rather than sending the person off to look by hand.
+def test_a_cloudflare_down_page_is_an_error_not_a_block(chrome, site):
+    with pytest.raises(Exception, match="522") as failed:
+        chrome.run(build(lambda: [])["open_url"], f"{site}/cf-down", lambda _n: None)
+
+    assert "擋住了自動瀏覽" not in str(failed.value)
+
+
+# Google's "unusual traffic" page answers 429: a verification for the person,
+# not a failure, now that an error status is asked whether it is one.
+def test_a_verification_served_with_an_error_status_waits_for_the_person(chrome, site):
+    notes: list[str] = []
+
+    page = chrome.run(build(lambda: [])["open_url"], f"{site}/sorry/429", notes.append)
+
+    assert notes == ["captcha", ""]
+    assert "SSO-TOKEN" in page.markdown
