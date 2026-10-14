@@ -2218,10 +2218,12 @@ agent 步驟裡 AI 的呼叫、WUI 的工具呼叫、view plugin、圖表重畫�
 工作流程、排程、子代理、KB 子代理、背景工作）、哪個 App、哪個 item。**每一次 skill 被載入也會被計數**——AI 用
 `read_skill` 讀到內容，或使用者在 skill 選單套用，都算一次；記 skill 名稱、來源（平台內建／App 內建／skill hub／
 自己寫的）與同樣的誰、場合、App、item，沒有失敗與耗時。superuser 在 Diagnostics 頁的新分頁「使用統計」看得到
-（同一頁上下兩區：工具與 Skill，各有橫條圖與表格）；其他人看不到這個分頁，`GET /api/admin/tool-usage`（`?kind=skill` 看 skill）回 403。
+（同一頁上下兩區：工具與 Skill，各有橫條圖與表格；工具區可以勾選要顯示哪些、切換「每個 command／依套件」；
+兩區都能下載原始資料 CSV）；其他人看不到這個分頁，`GET /api/admin/tool-usage`（`?kind=skill` 看 skill、
+`?group=package` 依套件）與 `GET /api/admin/tool-usage.csv` 回 403。
 Diagnostics 頁的分頁條改成底線樣式（和分享面板同款），內容不變。
 
-**資料** — 一張新表 `ToolUsageDay`（索引 `day`、`tool`、`kind`），不用做事，但要知道它的大小：每個行程（API 和每個
+**資料** — 一張新表 `ToolUsageDay`（索引 `day`、`tool`、`kind`、`package`），不用做事，但要知道它的大小：每個行程（API 和每個
 worker 各算一個，名稱是「主機名-pid」）每個被用過的工具或 skill 每天一列，所以上限是「（工具數 + skill 數）× 每天出現過的
 行程數 × 91 天」——重啟、
 rollout、HPA 擴張可能會在當天多出新的行程名稱。API 與 worker 每 5 分鐘、以及正常停止時寫一次（worker 在排空完工作之後

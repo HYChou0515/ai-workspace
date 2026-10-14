@@ -346,3 +346,18 @@ def test_only_a_superuser_may_download_it() -> None:
     client, _spec = _app({"id": "alice"})
 
     assert client.get("/admin/tool-usage.csv").status_code == 403
+
+
+def test_one_name_from_two_sources_breaks_down_one_source_at_a_time() -> None:
+    """A skill installed from the hub can share its name with one written in
+    another item (§8.2): a breakdown asks for the row's source, or it adds the
+    two together."""
+    client, spec = _app({"id": "root"})
+    _seed_skill(spec, 1, "line-report", "workspace", user="bob")
+    _seed_skill(spec, 1, "line-report", "hub", user="carol")
+
+    both = client.get("/admin/tool-usage/line-report?kind=skill").json()
+    hub = client.get("/admin/tool-usage/line-report?kind=skill&source=hub").json()
+
+    assert sorted(u["user"] for u in both["by_user"]) == ["bob", "carol"]
+    assert [u["user"] for u in hub["by_user"]] == ["carol"]

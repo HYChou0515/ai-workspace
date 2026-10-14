@@ -64,6 +64,14 @@ describe("toolUsageApi", () => {
     ]);
   });
 
+  it("asks for one source of a name when told", async () => {
+    const urls = capture(200, { tool: "x", days: 30, by_user: [], by_surface_app: [], by_item: [] });
+
+    await toolUsageApi.detail("line-report", 30, "skill", "command", "hub");
+
+    expect(urls[0]).toBe("/api/admin/tool-usage/line-report?days=30&kind=skill&source=hub");
+  });
+
   it("names the raw-data download for a window and a kind", () => {
     expect(toolUsageApi.rawUrl(7, "skill")).toBe("/api/admin/tool-usage.csv?days=7&kind=skill");
     expect(toolUsageApi.rawUrl(30, "tool")).toBe("/api/admin/tool-usage.csv?days=30&kind=tool");

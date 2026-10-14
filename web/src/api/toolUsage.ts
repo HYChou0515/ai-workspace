@@ -62,10 +62,13 @@ export const toolUsageApi = {
     days: UsageDays,
     kind: UsageKind = "tool",
     group: UsageGroup = "command",
+    /** The row's source — one name can come from two (§8.2); "" for all of them. */
+    source = "",
   ): Promise<ToolUsageDetail> {
     const k = kind === "tool" ? "" : `&kind=${kind}`;
     const g = group === "command" ? "" : `&group=${group}`;
-    const r = await apiFetch(`/admin/tool-usage/${enc(tool)}?days=${days}${k}${g}`);
+    const s = source ? `&source=${enc(source)}` : "";
+    const r = await apiFetch(`/admin/tool-usage/${enc(tool)}?days=${days}${k}${g}${s}`);
     if (!r.ok) throw await httpErrorFrom(r, `tool usage failed: ${r.status}`);
     return (await r.json()) as ToolUsageDetail;
   },

@@ -299,7 +299,7 @@ describe("tools", () => {
     fireEvent.click(await within(toolsPart()).findByRole("button", { name: "spc" }));
 
     const detail = await within(toolsPart()).findByTestId("tool-usage-detail");
-    expect(client.detail).toHaveBeenCalledWith("spc", 30, "tool", "command");
+    expect(client.detail).toHaveBeenCalledWith("spc", 30, "tool", "command", "first_party");
     expect(await within(detail).findByText("Alice Chen")).toBeInTheDocument();
     expect(within(detail).getByText("排程 · RCA")).toBeInTheDocument();
     const link = within(detail).getByRole("link", { name: "Line 3" });
@@ -343,7 +343,7 @@ describe("skills (plan §8)", () => {
     fireEvent.click(await within(skillsPart()).findByRole("button", { name: "author-skill" }));
 
     const detail = await within(skillsPart()).findByTestId("tool-usage-detail");
-    expect(client.detail).toHaveBeenCalledWith("author-skill", 30, "skill", "command");
+    expect(client.detail).toHaveBeenCalledWith("author-skill", 30, "skill", "command", "shared");
     await within(detail).findByText("Alice Chen");
     expect(within(detail).queryByText("失敗")).toBeNull();
     expect(within(detail).queryByText("平均耗時")).toBeNull();
@@ -429,7 +429,7 @@ describe("which tools, at which granularity (plan §9)", () => {
     fireEvent.click(await within(toolsPart()).findByRole("button", { name: "acme" }));
 
     await within(toolsPart()).findByTestId("tool-usage-detail");
-    expect(client.detail).toHaveBeenCalledWith("acme", 30, "tool", "package");
+    expect(client.detail).toHaveBeenCalledWith("acme", 30, "tool", "package", "third_party");
   });
 
   it("has no granularity or tick boxes for skills — a skill has no package", async () => {
@@ -457,5 +457,37 @@ describe("raw data (plan §9.3)", () => {
       "href",
       "/raw?days=7&kind=tool",
     );
+  });
+});
+
+describe("one name from two sources (plan §8.2)", () => {
+  const TWICE: ToolUsageReport = {
+    days: 30,
+    tools: [
+      { tool: "line-report", source: "workspace", calls: 3, fails: 0, avg_ms: 0 },
+      { tool: "line-report", source: "hub", calls: 2, fails: 0, avg_ms: 0 },
+    ],
+  };
+
+  it("names each bar with its source, so the two can be told apart", async () => {
+    draw(TOOLS, TWICE);
+    await within(skillsPart()).findAllByTestId("tool-usage-row");
+
+    expect(bars(skillsPart(), "載入次數")).toEqual([
+      "line-report(自己寫的) 3",
+      "line-report(skill hub) 2",
+    ]);
+  });
+
+  it("opens the breakdown of the row picked — its source only", async () => {
+    const client = draw(TOOLS, TWICE);
+    const rows = await within(skillsPart()).findAllByTestId("tool-usage-row");
+
+    fireEvent.click(within(rows[1]!).getByRole("button", { name: "line-report" }));
+
+    await within(skillsPart()).findByTestId("tool-usage-detail");
+    expect(client.detail).toHaveBeenCalledWith("line-report", 30, "skill", "command", "hub");
+    expect(rows[1]).toHaveAttribute("aria-selected", "true");
+    expect(rows[0]).toHaveAttribute("aria-selected", "false");
   });
 });

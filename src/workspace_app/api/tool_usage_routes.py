@@ -180,13 +180,17 @@ def register_tool_usage_routes(
 
     @app.get("/admin/tool-usage/{tool}", response_model=ToolUsageDetail)
     async def tool_usage_detail(
-        tool: str, days: int = 30, kind: str = "tool", group: str = "command"
+        tool: str, days: int = 30, kind: str = "tool", group: str = "command", source: str = ""
     ) -> ToolUsageDetail:
         _require_superuser()
         days = _window(days)
         kind = _kind(kind)
         group = _group(group)
         rows = await asyncio.to_thread(_rows_of, spec, since_day(days), tool, kind, group)
+        # One name can come from two sources (a hub copy of a skill written
+        # elsewhere): the row asked about is one of them.
+        if source:
+            rows = [r for r in rows if r.source == source]
 
         by_user = sorted(
             (

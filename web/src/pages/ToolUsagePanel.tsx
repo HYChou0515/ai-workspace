@@ -176,7 +176,8 @@ function UsagePart({
   const sources = skills ? SKILL_SOURCES : TOOL_SOURCES;
   const [source, setSource] = useState("");
   const [sort, setSort] = useState<{ key: SortKey; desc: boolean }>({ key: "calls", desc: true });
-  const [picked, setPicked] = useState<string | null>(null);
+  // A row is a name AND a source: one name can come from two (§8.2).
+  const [picked, setPicked] = useState<{ name: string; source: string } | null>(null);
   // §9: tools only — a skill has no package, and the ask was "which tools".
   const [group, setGroup] = useState<UsageGroup>("command");
   // What is UNticked, so a name the report newly brings shows (ticked) by default.
@@ -248,6 +249,15 @@ function UsagePart({
   // One scale for every chart of the part: failures side by side with calls
   // are only comparable on the same axis (a failure can never outnumber its calls).
   const scale = Math.max(0, ...shown.map((r) => r.calls));
+  // A name that shows more than once (one skill, two sources) is told apart
+  // on the chart by its source.
+  const seen = new Map<string, number>();
+  for (const r of shown) seen.set(r.tool, (seen.get(r.tool) ?? 0) + 1);
+  const label = (r: ToolUsageTool) =>
+    (seen.get(r.tool) ?? 0) > 1
+      ? `${r.tool}(${sources[r.source] ? t(sources[r.source]) : r.source})`
+      : r.tool;
+  const isPicked = (r: ToolUsageTool) => picked?.name === r.tool && picked.source === r.source;
   // The tick boxes, busiest first — the order the chart and the table start in.
   const names = [...all].sort((a, b) => b.calls - a.calls || a.tool.localeCompare(b.tool));
 
@@ -345,14 +355,14 @@ function UsagePart({
           <div className="tool-usage-charts">
             <UsageBars
               title={t(skills ? "usage.chart.loads" : "usage.chart.calls")}
-              rows={shown.map((r) => ({ name: r.tool, value: r.calls }))}
+              rows={shown.map((r) => ({ name: label(r), value: r.calls }))}
               scale={scale}
             />
             {/* Failures on a chart of their own — never stacked onto the calls. */}
             {!skills && failed.length > 0 && (
               <UsageBars
                 title={t("usage.chart.fails")}
-                rows={failed.map((r) => ({ name: r.tool, value: r.fails }))}
+                rows={failed.map((r) => ({ name: label(r), value: r.fails }))}
                 scale={scale}
               />
             )}
@@ -375,13 +385,15 @@ function UsagePart({
                   <tr
                     key={`${r.tool}\u0000${r.source}`}
                     data-testid="tool-usage-row"
-                    aria-selected={picked === r.tool}
+                    aria-selected={isPicked(r)}
                   >
                     <td style={cell}>
                       <button
                         type="button"
                         className="tool-usage-tool"
-                        onClick={() => setPicked(picked === r.tool ? null : r.tool)}
+                        onClick={() =>
+                          setPicked(isPicked(r) ? null : { name: r.tool, source: r.source })
+                        }
                       >
                         {r.tool}
                       </button>
@@ -405,7 +417,8 @@ function UsagePart({
 
       {picked && (
         <ToolDetail
-          tool={picked}
+          tool={picked.name}
+          source={picked.source}
           kind={kind}
           group={group}
           days={days}
@@ -495,6 +508,7 @@ function UsageBars({
 
 function ToolDetail({
   tool,
+  source,
   kind,
   group,
   days,
@@ -504,6 +518,7 @@ function ToolDetail({
   appTitle,
 }: {
   tool: string;
+  source: string;
   kind: UsageKind;
   group: UsageGroup;
   days: UsageDays;
@@ -514,8 +529,8 @@ function ToolDetail({
 }) {
   const t = useT();
   const detail = useQuery({
-    queryKey: qk.toolUsageDetail(tool, days, kind, group),
-    queryFn: () => client.detail(tool, days, kind, group),
+    queryKey: qk.toolUsageDetail(tool, days, kind, group, source),
+    queryFn: () => client.detail(tool, days, kind, group, source),
   });
   const d = detail.data;
   // A skill load has a count only (D11).
