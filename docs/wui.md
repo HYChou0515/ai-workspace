@@ -305,11 +305,17 @@ iframe 從 `/api/wui-content/<通行證>/<資料夾>/…` 載入，瀏覽器自�
 
 ## 頁面的邊界
 
-頁面跑在一個 **null origin** 的 iframe 裡（`sandbox="allow-scripts"`，**沒有**
+頁面跑在一個 **null origin** 的 iframe 裡（`sandbox="allow-scripts allow-downloads"`，**沒有**
 `allow-same-origin`；從網址載入的頁面，伺服器回應的 CSP 還帶 `sandbox`，所以就算直接在
 分頁裡打開那個網址也一樣是 null origin），所以它拿不到 cookie、碰不到外層 DOM、也呼叫不了
 API。
-唯一的出口是 `postMessage`，而外層是關卡。平台注入的 runtime 給它 `window.workspace`，
+
+**頁面可以讓讀者下載它自己做出來的檔案。** 用 `<a download>` 指向 `blob:` 或 `data:` 網址
+（例如把表格匯出成 CSV、圖表套件的「存成 PNG」）就會存進讀者的下載資料夾。檔名和檔案類型由頁面決定，
+而且瀏覽器不要求一定要點過才能下載——頁面可以在任何時候觸發。它存進的是讀者自己的電腦，**不是**把資料往外送：指向別台主機的下載
+會變成這個 iframe 的導覽，被外層頁面 CSP 的 `frame-src` 擋下，請求根本不會送出（見下面）。
+頁面下載得到的，只有讀者自己本來就看得到的東西。
+唯一**往外**的出口是 `postMessage`，而外層是關卡。平台注入的 runtime 給它 `window.workspace`，
 動詞的完整清單如下，而這個集合只在一種情況下會變：新增一個要先寫下它為什麼不能從
 `callTool` 進來的論證。（刻意不寫數字——上一版寫「七個」而 bridge 有八個，而一個手寫的數字沒有任何守衛看得到它過期。）
 

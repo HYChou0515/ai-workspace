@@ -94,15 +94,16 @@ describe("WuiView", () => {
     expect(frame()?.getAttribute("srcdoc")).toContain("<h1>Yield</h1>");
   });
 
-  it("grants scripts but NOT same-origin, which is the whole boundary", async () => {
+  it("grants scripts and downloads but NOT same-origin, the whole boundary", async () => {
     // With `allow-same-origin` the frame could read cookies, reach the parent
     // DOM and call our API as the signed-in user. Without it the origin is
     // `null` and postMessage is the only way out — so this attribute IS the
-    // security model, not a detail of it.
+    // security model, not a detail of it. Downloads save a file the page made
+    // to the reader's own disk (a CSV export, a chart PNG) and send nothing out.
     renderWui({ "/sales/index.html": "<html><body>hi</body></html>" });
 
     await waitFor(() => expect(frame()).toBeInTheDocument());
-    expect(frame()?.getAttribute("sandbox")).toBe("allow-scripts");
+    expect(frame()?.getAttribute("sandbox")).toBe("allow-scripts allow-downloads");
   });
 
   it("carries the CSP into the document it runs", async () => {

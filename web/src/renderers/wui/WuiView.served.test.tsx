@@ -136,8 +136,8 @@ describe("a served WUI", () => {
     await waitFor(() => expect(frame()).toBeInTheDocument());
     expect(frame()!.getAttribute("src")).toBe(`${BASE}sales/index.html`);
     expect(frame()!.hasAttribute("srcdoc")).toBe(false);
-    // The boundary is unchanged: scripts, and NOT same-origin.
-    expect(frame()!.getAttribute("sandbox")).toBe("allow-scripts");
+    // The boundary is unchanged: scripts and downloads, and NOT same-origin.
+    expect(frame()!.getAttribute("sandbox")).toBe("allow-scripts allow-downloads");
     // Nothing is inlined — the browser fetches the siblings itself.
     expect(vi.mocked(fs.readFile).mock.calls.map((c) => c[0])).not.toContain("/sales/s.css");
   });

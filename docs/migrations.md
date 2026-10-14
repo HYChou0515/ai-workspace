@@ -2274,6 +2274,32 @@ agent 步驟裡 AI 的呼叫、WUI 的工具呼叫、view plugin、圖表重畫�
 - 「小幫手」頁顯示新版本號;一台重裝過的電腦小視窗標題是那個版本。
 - 請 AI 開一個要經過公司登入或轉址的網址(先前回「nothing to send」的那種):卡片拿到的是最後那一頁的內容,`lookups/` 有存檔。
 
+### 2026-10-14 · db78fa2b · #934 WUI 頁面可以讓讀者下載它做出來的檔案 {#pr-934}
+
+**設定** — 沒有新 key，沒有要做的事。**行為改變，沒有開關**：
+
+- WUI 頁面的 iframe sandbox 從 `allow-scripts` 變成 `allow-scripts allow-downloads`；從網址載入的頁面，伺服器回應的
+  CSP 裡 `sandbox` 指令也一樣多了 `allow-downloads`（瀏覽器取兩者的交集，兩邊都要有）。頁面用 `<a download>` 指向
+  `blob:` / `data:` 網址（匯出 CSV、圖表的「存成 PNG」）現在會存進讀者的下載資料夾；之前 Chrome 擋下並在主控台寫
+  「the flag 'allow-downloads' is not set」。
+- 為什麼：頁面做出來的檔案沒辦法交給讀者。不需要點擊就能觸發（實測 Chromium：頁面打開 7 秒後自己下載也成立），
+  所以頁面可以在任何時候讓讀者的瀏覽器存一個檔案；它**送不出去任何東西**——沒有 `allow-same-origin`，
+  頁面 CSP 的 `connect-src 'self'`、`form-action 'none'` 都沒變，外層頁面 CSP（`SPA_CSP`）的 `frame-src` 也沒變——
+  指向別台主機的下載會被它擋下，請求送不出去（實測 Chromium）。
+
+**資料** — 沒有。
+
+**k8s · CI 側** — 沒有新的 manifest、env、probe 或 JobType；照常重 build、照常部署（只有 API image 的前端與
+回應 header 改變）。如果前面有 gateway 或 proxy 會**改寫** `Content-Security-Policy` header，要讓它保留
+`sandbox allow-scripts allow-downloads`——被改回 `sandbox allow-scripts` 的話，多頁版頁面的下載仍會被擋（症狀同上，
+單頁版不受影響，因為它的 sandbox 只寫在 iframe 上）。
+
+**確認做完**（`rollout 後`）：
+
+- 開一個 WUI 頁面，按它的匯出按鈕（或在頁面裡放一個 `<a download="x.csv" href="data:text/csv,a,b">`）：
+  瀏覽器存下檔案。沒部署到這一版的症狀：什麼都沒發生（多頁版的頁面，瀏覽器主控台會有上面那句
+  `allow-downloads`；單頁版不一定有訊息）。
+
 ### 2026-10-14 · #938 「請幫我查」:小幫手送出後,聊天自己跟上 AI 的回答;跨 pod 即時事件斷線會重連並寫 log {#pr-938}
 
 **設定** — 無。
