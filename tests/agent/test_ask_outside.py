@@ -228,13 +228,15 @@ def test_the_shared_case_table_still_says_what_declared_lookup_does() -> None:
 # ── a link by its file and number (docs/plan-outside-helper.md D24) ─────────
 #
 # The AI copied long links wrong (the person: 「他對於摳網址有障礙 通常會摳錯」):
-# a saved lookup lists its links as `[n]: url` at the bottom, and the AI names
+# a saved lookup lists its links, numbered, at the bottom, and the AI names
 # the file and the number. The card is the same open-this-page card; whether
 # it opens with no nod is still the server's D12 check on that URL.
 
 SAVED = (
-    "# pandas\n\n- [whatsnew][1]\n- [api][2]\n\n"
-    "[1]: https://pandas.example/whatsnew\n[2]: https://pandas.example/api"
+    "# pandas\n\n- [whatsnew](https://pandas.example/whatsnew)\n"
+    "- [api](https://pandas.example/api)\n\n"
+    "<!-- ai-workspace: links -->\n## 連結\n\n"
+    "- [1] <https://pandas.example/whatsnew> whatsnew\n- [2] <https://pandas.example/api> api\n"
 )
 
 
@@ -290,11 +292,14 @@ async def test_a_numbered_link_that_cannot_become_a_card_is_refused(args: dict, 
     assert declared_lookup(reply) is None
 
 
-# The number names what the file LISTS — a `[n]: …` line that is no web page
-# is refused like any `url` that is not one.
+# The number names what the file LISTS — a listed line that is no web page
+# (a hand-edited list) is refused like any `url` that is not one.
 async def test_a_listed_link_that_is_no_web_page_is_refused() -> None:
     reply = await _call_in(
-        {"notes.md": "x\n\n[1]: javascript:alert(1)"}, why="w", file="notes.md", link=1
+        {"notes.md": "x\n\n<!-- ai-workspace: links -->\n- [1] <javascript:x>"},
+        why="w",
+        file="notes.md",
+        link=1,
     )
 
     assert reply.startswith("error:") and "http:// or https://" in reply
@@ -323,4 +328,4 @@ async def test_the_tool_says_to_name_a_link_by_file_and_number() -> None:
     from workspace_app.agent.outside_lookup import ask_outside_impl
 
     doc = ask_outside_impl.__doc__ or ""
-    assert "`file`" in doc and "`link`" in doc and "[n]:" in doc
+    assert "`file`" in doc and "`link`" in doc and "- [n] <https://…>" in doc

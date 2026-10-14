@@ -34,7 +34,7 @@ from specstar.types import (
     RevisionStatus,
 )
 
-from ..agent.outside_lookup import LISTED_LINK, is_web_address
+from ..agent.outside_lookup import LINK_LIST_MARKER, is_web_address
 
 JobKind = Literal["search", "open_url"]
 JobState = Literal["queued", "claimed", "done", "failed", "cancelled"]
@@ -112,9 +112,72 @@ class _OutsideSeenUrls(Struct):
 #: Most links remembered per chat; the oldest go first.
 SEEN_URLS_CAP = 2_000
 
-#: `[text](https://…)` and `<https://…>` — how Markdown writes a link, which is
-#: how both the card's paste converter and the helper's write a page (D11).
-_LINK = re.compile(r"\]\((https?://[^)\s]+)\)|<(https?://[^>\s]+)>")
+#: Fenced code and code spans: what looks like a link in there is code.
+_FENCE = re.compile(r"^(`{3,}|~{3,})[^\n]*\n.*?^\1[^\n]*$", re.MULTILINE | re.DOTALL)
+_CODE_SPAN = re.compile(r"(`+)(?!`).+?(?<!`)\1", re.DOTALL)
+#: `<https://…>` — an autolink.
+_AUTOLINK = re.compile(r"<(https?://[^>\s]+)>")
+
+
+def _blanked(m: re.Match[str]) -> str:
+    return re.sub(r"[^\n]", " ", m.group(0))
+
+
+def _destination(text: str, at: int) -> str | None:
+    """The address of an inline link whose `(` is just before `at`: `<…>`, or
+    up to whitespace (a title follows) or the `)` that closes it — parentheses
+    in it balanced, `\(` `\)` unescaped (the paste converter escapes them:
+    Wikipedia's `Foo_(bar)`). `None` when there is none."""
+    if text.startswith("<", at):
+        end = text.find(">", at)
+        return text[at + 1 : end] if end > 0 and "\n" not in text[at:end] else None
+    out: list[str] = []
+    depth = 0
+    while at < len(text):
+        c = text[at]
+        if c == "\\" and at + 1 < len(text) and text[at + 1] in "()\\":
+            out.append(text[at + 1])
+            at += 2
+            continue
+        if c.isspace() or (c == ")" and depth == 0):
+            break
+        depth += {"(": 1, ")": -1}.get(c, 0)
+        out.append(c)
+        at += 1
+    return "".join(out) or None
+
+
+def _opening(text: str, close: int) -> int | None:
+    """Where the `[` matching the `]` at `close` is; brackets inside nest."""
+    depth = 0
+    for at in range(close - 1, -1, -1):
+        if at > 0 and text[at - 1] == "\\":
+            continue
+        if text[at] == "]":
+            depth += 1
+        elif text[at] == "[":
+            if depth == 0:
+                return at
+            depth -= 1
+    return None
+
+
+def _links(markdown: str) -> list[tuple[int, bool, str, str]]:
+    """Every link in `markdown` — `(where, is_image, text, address)` in order —
+    read the way Markdown reads one: `[text](address "title")`, `![alt](…)`,
+    `<https://…>`; nothing inside code. Read by a scanner, not one pattern: a
+    pattern ended `Foo_(bar)` at its first `)` (review of #941)."""
+    text = _CODE_SPAN.sub(_blanked, _FENCE.sub(_blanked, markdown))
+    found = [(m.start(), False, "", m.group(1)) for m in _AUTOLINK.finditer(text)]
+    close = text.find("](")
+    while close >= 0:
+        address = _destination(text, close + 2)
+        start = _opening(text, close)
+        if address is not None and start is not None:
+            image = start > 0 and text[start - 1] == "!"
+            found.append((start, image, markdown[start + 1 : close], address))
+        close = text.find("](", close + 2)
+    return sorted(found)
 
 
 #: Google's own hosts: www.google.com, google.com.tw, …
@@ -135,42 +198,41 @@ def _page_of(url: str) -> str:
 
 
 def links_in(markdown: str) -> list[str]:
-    """The web links a lookup's Markdown carries — inline, `<…>`, or listed at
-    the bottom as `[n]: …` — in order, each once, Google's redirects as the
-    page they lead to, without a `#fragment` (the same page whichever anchor it
-    was linked at)."""
-    found = [(m.start(), m.group(1) or m.group(2)) for m in _LINK.finditer(markdown)]
-    found += [(m.start(), m.group(2)) for m in LISTED_LINK.finditer(markdown)]
+    """The web links a lookup's Markdown carries (images too), in order, each
+    once, without a `#fragment` (the same page whichever anchor it was linked
+    at) — a Google redirect both as it came and as the page it leads to (D24):
+    what came back stays openable with no nod, and so does the page the list
+    names."""
     out: list[str] = []
-    for _, link in sorted(found):
-        url = _without_fragment(_page_of(link))
-        if url not in out:
-            out.append(url)
+    for _, _, _, address in _links(markdown):
+        for url in (address, _page_of(address)):
+            url = _without_fragment(url)
+            if is_web_address(url) and url not in out:
+                out.append(url)
     return out
 
 
-def number_links(markdown: str) -> str:
-    """The answer with each link a number — `[text][n]`, `![alt][n]`, `[n]` —
-    and the links listed `[n]: url` at the bottom, so the AI names a link by
-    its file and number instead of copying it (D24; it copied long ones
-    wrong). The same page is one number; Google's redirects are listed as the
-    page they lead to. Plain Markdown reference links: the file still reads
-    and renders as it did."""
-    numbers: dict[str, int] = {}
+def numbered_links(markdown: str) -> list[tuple[int, str, str]]:
+    """`(n, text, page)` for each web page the answer links to — not images —
+    numbered in order from 1, the same page (whatever its `#anchor`) one
+    number, a Google redirect as the page it leads to (D24)."""
+    pages: dict[str, str] = {}
+    for _, image, text, address in _links(markdown):
+        page = _without_fragment(_page_of(address))
+        if not image and is_web_address(page) and page not in pages:
+            pages[page] = " ".join(text.split())
+    return [(n, text, page) for n, (page, text) in enumerate(pages.items(), start=1)]
 
-    def number(link: str) -> int:
-        return numbers.setdefault(_page_of(link), len(numbers) + 1)
 
-    def replace(m: re.Match[str]) -> str:
-        if m.group(1) is not None:
-            return f"][{number(m.group(1))}]"
-        return f"[{number(m.group(2))}]"
-
-    body = _LINK.sub(replace, markdown)
-    if not numbers:
-        return markdown
-    listed = "\n".join(f"[{n}]: {url}" for url, n in numbers.items())
-    return f"{body.rstrip()}\n\n{listed}"
+def link_list(numbered: list[tuple[int, str, str]]) -> str:
+    """The list that goes under a saved answer — after `LINK_LIST_MARKER`, one
+    `- [n] <page> text` per link — or `""` when there is nothing to list. The
+    answer above it is left as it came (review of #941: rewriting its links in
+    place broke some and collided with others)."""
+    if not numbered:
+        return ""
+    rows = "\n".join(f"- [{n}] <{page}> {text}".rstrip() for n, text, page in numbered)
+    return f"\n\n{LINK_LIST_MARKER}\n## 連結\n\n{rows}\n"
 
 
 def _without_fragment(url: str) -> str:

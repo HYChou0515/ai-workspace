@@ -3,7 +3,9 @@
 
 The backend may not reach the internet; the person's browser can. The model
 passes either a `query` (the card offers one button per search destination,
-`server.lookup_targets`) or a `url` (one button that opens it); the reply ends
+`server.lookup_targets`) or a page to open — a `url`, or a `file` + `link`
+naming one of the links a saved lookup lists (docs/plan-outside-helper.md
+D24) — drawn as one button that opens it; the reply ends
 with a declaration the chat draws as the "請幫我查" card. The turn stops when
 the card is drawn, like `ask_user`; a refusal declares nothing and does not
 stop it, so the model reads why and corrects the call. The person's answer —
@@ -50,13 +52,14 @@ async def ask_outside_impl(
     Pass `why` as one short sentence the user reads first, then exactly one of:
     - `query`: what to search for. The card offers search buttons; the user may
       edit the query before searching.
-    - `file` and `link` together: a link a lookup brought back. A saved lookup
-      marks each link `[text][n]` and lists them at the bottom as
-      `[n]: https://…`; pass the file's path and the number `n`. Use this for
-      any link a lookup brought back — search results included — rather than
-      copying its address: long addresses copied by hand come out wrong.
-    - `url`: a web page (http or https) to open that no lookup listed, such as
-      a link you found in another file.
+    - `file` and `link` together: a link a lookup brought back. A lookup saved
+      as a file lists its links at the bottom, numbered `- [n] <https://…>`
+      (the message that brought it back lists them too, and names the file).
+      Pass the file's path and the number `n` — search results included —
+      rather than copying the address: long addresses copied by hand come out
+      wrong.
+    - `url`: any other web page (http or https), such as a link in another
+      file, or in an answer that was not saved as a file.
 
     One card asks for one thing. Your turn ends here. The user's answer is their
     next message: either what they found (usually also saved under `lookups/`;
@@ -118,13 +121,25 @@ def is_web_address(url: str) -> bool:
     return _WEB_ADDRESS.fullmatch(url) is not None
 
 
-#: `[3]: https://…` — a link listed at the bottom of a saved lookup (D24):
-#: what `number_links` writes and what `file` + `link` reads.
-LISTED_LINK = re.compile(r"^\[(\d+)\]: (\S+)$", re.MULTILINE)
+#: Opens the numbered list of links under a saved lookup (D24) — an HTML
+#: comment, so it renders as nothing. Only what follows the LAST one is the
+#: list: the answer above it is the page as it came, and may hold `[1]: …`
+#: reference links, list-like lines, even this line, of its own.
+LINK_LIST_MARKER = "<!-- ai-workspace: links -->"
+_LISTED = re.compile(r"^- \[(\d+)\] <([^>\s]+)>", re.MULTILINE)
+
+
+def listed_links(text: str) -> dict[int, str]:
+    """`{n: address}` of the list under a saved lookup; `{}` without one.
+    What `link_list` writes and what `file` + `link` reads."""
+    at = text.rfind(LINK_LIST_MARKER)
+    if at < 0:
+        return {}
+    return {int(n): address for n, address in _LISTED.findall(text[at:])}
 
 
 async def _listed_link(ctx: RunContextWrapper[AgentToolContext], file: str, link: int) -> str:
-    """The address `file` lists as `[link]: …`, or an `error:` saying why not."""
+    """The address `file`'s link list numbers `link`, or an `error:` saying why not."""
     from ..filestore.protocol import FileNotFound
     from .tool_authz import authorize_tool
     from .tools import _workspace, rel_path
@@ -136,10 +151,10 @@ async def _listed_link(ctx: RunContextWrapper[AgentToolContext], file: str, link
         text = (await fs.read(inv, file)).decode("utf-8", errors="replace")
     except FileNotFound:
         return f"error: file not found: {rel_path(file)}"
-    listed = {int(n): address for n, address in LISTED_LINK.findall(text)}
+    listed = listed_links(text)
     if link not in listed:
         have = f"its links are [1]–[{max(listed)}]" if listed else "it lists no links"
-        return f"error: {rel_path(file)} has no link [{link}] — {have}."
+        return f"error: {rel_path(file)} has no link [{link}] — {have}. Pass `url` instead."
     return listed[link]
 
 

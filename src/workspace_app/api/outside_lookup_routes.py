@@ -36,6 +36,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from datetime import UTC, datetime
 from pathlib import PurePosixPath
 from typing import Annotated, Literal
+from urllib.parse import urlsplit
 
 from fastapi import APIRouter, FastAPI, File, Form, HTTPException, Request, UploadFile
 from pydantic import BaseModel
@@ -47,7 +48,7 @@ from ..resources.conversation import Conversation
 from .chat_routes import SendInto
 from .events import FileChanged
 from .locator import ItemLocator
-from .outside_jobs import links_in, number_links
+from .outside_jobs import link_list, numbered_links
 from .schemas import _MessageBody
 from .turns import ChatTurnEngine
 
@@ -172,9 +173,6 @@ def register_outside_lookup_routes(
             ).strip()
             if not body and not form.attachments:
                 raise HTTPException(status_code=422, detail="nothing to send — paste or attach")
-            # D24: its links become numbers listed at the bottom — the AI names
-            # one by file and number rather than copying it (it copied wrong).
-            body = number_links(body)
             may_add = _may(locator, slug, investigation_id)
             if form.attachments and not may_add:
                 raise HTTPException(
@@ -186,12 +184,15 @@ def register_outside_lookup_routes(
                 (_safe_name(f.filename), await _read_capped(f, max_file_size))
                 for f in form.attachments
             ]
+            # D24: the links, numbered, under the answer — the AI names one by
+            # file and number rather than copying it (it copied wrong).
+            numbered = numbered_links(body)
             if may_add:
-                doc = _document(card, searched, body, form, get_user_id())
+                doc = _document(card, searched, body, form, get_user_id()) + link_list(numbered)
                 day = form.date if _is_date(form.date) else f"{datetime.now(UTC):%Y-%m-%d}"
                 saved, attached = await _save(files, investigation_id, day, searched, doc, blobs)
                 written = [*attached, saved]
-            text = _message(searched, body, saved, attached)
+            text = _message(searched, body, saved, attached, numbered)
         try:
             rid, conv = conversation()  # the writes can wait on a cold sandbox: read it fresh
             # Answered meanwhile — another tab, another viewer: theirs stands.
@@ -511,18 +512,32 @@ async def _take_back(files: WorkspaceFiles, workspace_id: str, paths: list[str])
             logger.warning("outside lookup: could not take back %s", path, exc_info=True)
 
 
-def _message(subject: str, body: str, path: str | None, attached: list[str]) -> str:
-    """What the AI reads next turn: what was looked up, where it is saved, how
-    to open one of its links (D24), and the text — excerpted when the file holds
+#: Most links the message itself lists; the file lists them all.
+MESSAGE_LINKS = 50
+
+
+def _message(
+    subject: str,
+    body: str,
+    path: str | None,
+    attached: list[str],
+    numbered: list[tuple[int, str, str]] | None = None,
+) -> str:
+    """What the AI reads next turn: what was looked up, where it is saved, its
+    links by number and how to open one (D24) — before the text, so an excerpt
+    cut short still shows them — and the text, excerpted when the file holds
     the rest."""
     lines = [f"我在外面查了:{subject}"]
     if path:
         lines.append(f"存在 `{path}`")
-        if links_in(body):
-            lines.append(
-                f"要開其中一個連結:ask_outside(file=`{path}`, link=編號)"
-                "——編號是連結後面的 [n],網址列在檔案最下面"
-            )
+    numbered = numbered or []
+    if path and numbered:
+        lines.append(f"連結(要開其中一個:ask_outside(file=`{path}`, link=編號)):")
+        for n, text, page in numbered[:MESSAGE_LINKS]:
+            host = urlsplit(page).hostname or page
+            lines.append(f"[{n}] {text[:60]} — {host}" if text else f"[{n}] {page[:80]}")
+        if len(numbered) > MESSAGE_LINKS:
+            lines.append(f"…還有 {len(numbered) - MESSAGE_LINKS} 個,列在檔案最下面")
     if attached:
         lines.append("附件:" + "、".join(f"`{p}`" for p in attached))
     if body:

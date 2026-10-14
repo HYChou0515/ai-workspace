@@ -254,3 +254,14 @@ def test_the_page_a_google_redirect_leads_to_opens_without_a_nod():
     _second_turn(client, iid)
 
     assert _auto(client, iid).status_code == 201
+
+
+# …and the redirect itself, as it came back, still opens with no nod, as before.
+def test_a_google_redirect_that_came_back_still_opens_without_a_nod():
+    redirect = "https://www.google.com/url?q=https://pandas.example/whatsnew&sa=U&ved=2"
+    client, iid = _chat(redirect)
+    _beat(client)
+    assert _answer(client, iid, content=f"- [whatsnew]({redirect})").status_code == 200
+    _second_turn(client, iid)
+
+    assert _auto(client, iid).status_code == 201
