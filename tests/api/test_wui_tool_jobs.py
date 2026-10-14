@@ -163,6 +163,38 @@ def test_a_stop_signalled_from_another_pod_reaches_the_command():
     assert isinstance(row, WorkflowRun) and row.status is RunStatus.CANCELLED
 
 
+def test_a_stop_on_this_pod_takes_the_command_down_too():
+    """The ordinary Stop: `orchestrator.cancel` cancels the job's driver here.
+    The command is a task of its own, so cancelling the driver alone left it
+    running to its deadline while the row already read `stopped`."""
+    sandbox = _JobSandbox(block=True)
+    cancelled: list[bool] = []
+    real_exec = sandbox.exec
+
+    async def exec_(*a, **kw):
+        try:
+            return await real_exec(*a, **kw)
+        except asyncio.CancelledError:
+            cancelled.append(True)
+            raise
+
+    sandbox.exec = exec_  # ty: ignore[invalid-assignment]
+    client, _, _, _, _ = _setup(sandbox)
+    with client:
+        job_id = _start(client).json()["job_id"]
+        _wait(client, job_id, "running")
+        deadline = time.monotonic() + 5
+        while not sandbox.calls and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert client.post(f"{JOBS}/{job_id}/stop").json()["state"] == "stopped"
+        deadline = time.monotonic() + 5
+        while not cancelled and time.monotonic() < deadline:
+            time.sleep(0.02)
+        # Inside the client: its shutdown cancels every task, which would
+        # satisfy this on its own and prove nothing.
+        assert cancelled == [True], "the command was left running after the job was stopped"
+
+
 def test_a_tools_input_is_an_object():
     client, _, _, _, _ = _setup(_JobSandbox())
     with client:

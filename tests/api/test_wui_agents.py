@@ -215,6 +215,39 @@ def test_a_call_that_runs_too_long_is_stopped_and_says_to_use_start(monkeypatch)
     assert _runs(spec)[0].status is RunStatus.CANCELLED, "no half-finished work left running"
 
 
+def test_an_answered_ask_leaves_the_items_sandbox_alone(monkeypatch):
+    """Defect review round 1: the job's end went through the workflow release,
+    which closes the item's sandbox when no other RUN is running — and a page's
+    `callTool` or an open chat is not a run. Wired through `create_app`: the
+    job frees its own turn session and nothing else."""
+    from workspace_app.api.registry import InvestigationRegistry
+    from workspace_app.api.turns import ChatTurnEngine
+
+    closed: list[str] = []
+    forgot: list[str] = []
+    real_forget = ChatTurnEngine.forget
+
+    async def close_session(self, investigation_id: str) -> None:
+        closed.append(investigation_id)
+
+    async def forget(self, key: str) -> None:
+        forgot.append(key)
+        await real_forget(self, key)
+
+    monkeypatch.setattr(InvestigationRegistry, "close_session", close_session)
+    monkeypatch.setattr(ChatTurnEngine, "forget", forget)
+    client, item_id, spec = _app(SubRunner())
+    with client:
+        resp = client.post(_url(item_id, "agents/log-digger/call"), json={"input": "x"})
+        assert resp.status_code == 200
+        (run,) = _runs(spec)
+        deadline = time.monotonic() + 5
+        while run.chat_id not in forgot and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert run.chat_id in forgot
+        assert item_id not in closed
+
+
 # ── startAgent: the job ───────────────────────────────────────────────
 
 

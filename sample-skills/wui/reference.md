@@ -189,9 +189,10 @@ else show(r.output);                 // its answer, as text
 Every tool and every sub-agent can be reached two ways. **Choose by how long
 you are willing to wait:**
 
-- `callTool` / `callAgent` wait for the answer, at most a minute. A call that
-  runs past it is stopped and rejects with a sentence naming `startTool` /
-  `startAgent` — switch to that; retrying the call fails the same way.
+- `callTool` / `callAgent` wait for the answer, at most a minute. Past it the
+  work is stopped: `callAgent` rejects with a sentence naming `startAgent`;
+  `callTool` returns `exit_code: 124` with whatever the tool printed so far.
+  Switch to `startAgent` / `startTool` — retrying the call ends the same way.
 - `startTool` / `startAgent` answer at once with a job:
 
 ```js
@@ -212,8 +213,9 @@ try {
 
 There are no callbacks: `result()` waits, `status()` asks once, `stop()` stops.
 Each job is a run in the item's run list ("頁面：subagent log-digger"), where a
-person sees what it did and can stop it. At most four jobs run at once per item;
-a fifth is refused with a sentence, not queued. A job of a tool is not held to
+person sees what it did and can stop it. An item runs a handful of jobs at once
+(four by default); the next is refused with a sentence naming the number, not
+queued. A job of a tool is not held to
 the minute a `callTool` is — it runs to the job's own limit (an hour by default).
 It must still print something now and then: a command silent for longer than the
 sandbox's idle limit (a minute by default) is stopped as hung.
@@ -285,7 +287,7 @@ A rejected `callTool` or `startRun` is a different thing again, and the message 
 |---|---|
 | "did not declare X" | add it to `tools:` (or `agents:`, for a sub-agent) in the view file — yours to fix |
 | "has no sub-agent named X. It has: …" | (a sub-agent) this item has none by that name; the list says which it has |
-| "took longer than 60s, so it was stopped" | (a call) use `startTool` / `startAgent` instead |
+| "took longer than 60s, so it was stopped" | (a `callAgent`) use `startAgent` instead |
 | "already has N page jobs running" | wait for one to finish, or stop one, then try again |
 | "does not offer X" | (a tool) this app does not grant it; an operator must add it |
 | "has no workflow named X" | (a workflow) this item has none by that id — the agent saves one with `save_workflow`, or the profile declares it |

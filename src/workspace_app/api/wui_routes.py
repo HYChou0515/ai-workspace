@@ -185,7 +185,8 @@ class JobOut(BaseModel):
 #: How long `callAgent` waits for its answer before stopping the job (#942 §3.1)
 #: — the same minute a tool call gets. Module-level so a test can shorten it.
 CALL_TIMEOUT_S = 60.0
-_POLL_S = 0.2
+# The turn engine's own cancel watcher polls at this pace too.
+_POLL_S = 0.5
 
 # A page job's work, given the conversation it was opened on.
 _Work = Callable[[Any], Awaitable[dict[str, Any]]]
@@ -767,6 +768,8 @@ def register_wui_routes(
                     # A Stop on another pod only advances this chat's turn
                     # epoch (`orchestrator.cancel` → `on_stop`). A turn notices
                     # that on its own; a command has no turn, so it is watched.
+                    if turn_engine is None:
+                        await asyncio.Event().wait()  # no signal to watch for
                     while turn_engine is not None:
                         await asyncio.sleep(_POLL_S)
                         if await turn_engine.cancel_epoch(key) > epoch:
@@ -777,9 +780,16 @@ def register_wui_routes(
                 try:
                     await asyncio.wait({command_task, watch}, return_when=asyncio.FIRST_COMPLETED)
                 finally:
+                    # However this is left — the epoch moved, or the job's own
+                    # driver was cancelled by a Stop on THIS pod — the command
+                    # goes with it. Cancelling the driver does not reach a task
+                    # of its own, and a stopped job must not keep running.
                     watch.cancel()
-                if not command_task.done():
-                    command_task.cancel()
+                    if not command_task.done():
+                        command_task.cancel()
+                        # Settle it here, so nothing of it outlives the job.
+                        await asyncio.wait({command_task})
+                if command_task.cancelled():
                     raise asyncio.CancelledError
                 result = command_task.result()
                 logger.info(

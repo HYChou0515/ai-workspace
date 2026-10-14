@@ -110,7 +110,7 @@ async def test_a_job_whose_work_raises_reads_as_failed_with_the_reason(spec_inst
     await _settle(orch, run_id)
     state = await orch.page_job_state(run_id, "i1")
     assert state.state == "failed" and "sandbox went away" in (state.error or "")
-    assert ("i1", True) in fakes.released
+    assert fakes.released == [], "a page job never tears down the item's sandbox"
 
 
 async def test_a_stopped_job_reads_as_stopped(spec_instance: SpecStar):
@@ -304,6 +304,125 @@ async def test_a_stuck_page_job_is_never_re_driven_as_a_workflow(spec_instance: 
     )
     assert not await orch.resume(lost, slug="rca", profile="p", grace_ms=1)
     assert lost not in orch._tasks
+
+
+class _Ends:
+    """`end_page_job` and the turn epoch, recorded."""
+
+    def __init__(self) -> None:
+        self.ended: list[tuple[str, str]] = []
+        self.epochs: dict[str, int] = {}
+
+    async def end(self, item_id: str, key: str) -> None:
+        self.ended.append((item_id, key))
+
+    async def epoch(self, key: str) -> int:
+        return self.epochs.get(key, 0)
+
+
+@pytest.mark.parametrize("how", ["done", "failed", "stopped"])
+async def test_a_page_job_frees_its_own_session_and_never_the_items_sandbox(
+    spec_instance: SpecStar, how: str
+):
+    """Defect review round 1: a job ending went through the workflow release,
+    which closes the ITEM's sandbox when no other run is RUNNING — a `callTool`
+    or a chat turn is not a run, so a `callAgent` finishing could take the
+    sandbox out from under them. A job frees its own turn session only."""
+    ends = _Ends()
+    gate = asyncio.Event()
+
+    async def work(_wf):
+        if how == "failed":
+            raise RuntimeError("x")
+        await gate.wait()
+        return {"output": ""}
+
+    orch, fakes = _orch(spec_instance, _never, end_page_job=ends.end)
+    run_id = await _start(orch, work)
+    await asyncio.sleep(0)
+    if how == "stopped":
+        assert await orch.cancel(run_id, "i1")
+    gate.set()
+    await _settle(orch, run_id)
+    assert fakes.released == []
+    assert ends.ended == [("i1", "c1")]
+
+
+async def test_a_job_stopped_from_another_pod_still_frees_its_session_here(
+    spec_instance: SpecStar,
+):
+    """A Stop from another pod reaches the work as a `CancelledError` the work
+    raises itself (the turn or the command saw the epoch move). The pod that
+    pressed Stop holds no task and frees nothing, so this one must."""
+    ends = _Ends()
+
+    async def work(_wf):
+        raise asyncio.CancelledError
+
+    orch, _ = _orch(spec_instance, _never, end_page_job=ends.end)
+    run_id = await _start(orch, work)
+    await _settle(orch, run_id)
+    assert (await orch.page_job_state(run_id, "i1")).state == "stopped"
+    assert ends.ended == [("i1", "c1")]
+
+
+async def test_a_stop_from_another_pod_while_waiting_for_a_slot_is_kept(
+    spec_instance: SpecStar,
+):
+    """Defect review round 1: a Stop on a pod that does not hold the job only
+    advances the chat's epoch. The job's work samples it when it STARTS — after
+    the slot — so a Stop that landed while the job queued became the baseline
+    and the job ran anyway. The epoch is now sampled when the job is accepted."""
+    ends = _Ends()
+    gate = asyncio.Event()
+    ran: list[str] = []
+
+    async def first(_wf):
+        await gate.wait()
+        return {"output": ""}
+
+    async def queued_work(_wf):
+        ran.append("queued")
+        return {"output": ""}
+
+    orch, _ = _orch(
+        spec_instance,
+        _never,
+        concurrency=1,
+        end_page_job=ends.end,
+        stop_epoch=ends.epoch,
+    )
+    holder = await _start(orch, first)
+    queued = await _start(orch, queued_work, chat="c2")
+    await asyncio.sleep(0)
+    ends.epochs["c2"] = 1  # the Stop, pressed on another pod
+    gate.set()
+    await _settle(orch, holder)
+    await _settle(orch, queued)
+    assert ran == []
+    assert (await orch.page_job_state(queued, "i1")).state == "stopped"
+
+
+async def test_a_lost_job_is_settled_by_the_next_start_even_if_nobody_reads_it(
+    spec_instance: SpecStar,
+):
+    """Defect review round 1: only a status read settled a lost row, so a page
+    closed after its pod died left it RUNNING in the run history for good."""
+    clock = [10_000]
+    orch, _ = _orch(spec_instance, _never, now=lambda: clock[0])
+    rm = spec_instance.get_resource_manager(WorkflowRun)
+    lost = rm.create(
+        WorkflowRun(
+            item_id="i1",
+            captured_user="owner",
+            status=RunStatus.RUNNING,
+            page_job=PageJob(kind="tool", name="t", deadline=10_500),
+        )
+    ).resource_id
+    clock[0] = 10_500 + 60_001
+    fresh = await _start(orch, lambda _wf: asyncio.sleep(0, {"output": ""}))
+    await _settle(orch, fresh)
+    assert rm.get(lost).data.status is RunStatus.ERROR
 
 
 async def test_another_items_job_or_a_workflow_run_is_not_found(spec_instance: SpecStar):

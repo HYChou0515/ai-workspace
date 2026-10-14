@@ -252,6 +252,16 @@ class WorkflowOrchestrator:
     # item may have in flight at once, and the total time one may take.
     page_job_limit: int = 4
     page_job_timeout_s: float = 3600.0
+    # A page job's end (#942): free ITS turn session — never the item's sandbox,
+    # which the workflow `release` closes when no other run is RUNNING. A
+    # `callTool` or a chat turn is not a run, so a job finishing would take the
+    # sandbox out from under them. ``(item_id, chat_key)``; None ⇒ nothing freed.
+    end_page_job: Callable[[str, str], Awaitable[None]] | None = None
+    # The shared turn epoch of a chat key (`ChatTurnEngine.cancel_epoch`). A
+    # page job samples it when ACCEPTED, so a Stop pressed on another pod while
+    # the job still waits for a slot is not absorbed into the baseline the
+    # job's work takes once it starts. None ⇒ no cross-pod signal (tests).
+    stop_epoch: Callable[[str], Awaitable[int]] | None = None
     # Keep at most this many runs per item — older *terminal* runs are pruned when a
     # new run starts (manual §16 retention). 0 ⇒ keep all.
     keep_last_runs: int = 0
@@ -386,7 +396,12 @@ class WorkflowOrchestrator:
         logger.warning("abandon: run %s -> error after resume budget (reason: %s)", run_id, reason)
         if self.credentials is not None:
             self.credentials.revoke(run_id)
-        await self._release(data.item_id, terminal=True, key=data.chat_id or data.item_id)
+        await self._release(
+            data.item_id,
+            terminal=True,
+            key=data.chat_id or data.item_id,
+            page_job=data.page_job is not None,
+        )
         if self.notify_failure is not None:
             self.notify_failure(self._get(run_id), run_id)
 
@@ -561,6 +576,19 @@ class WorkflowOrchestrator:
         job = data.page_job
         return job is not None and self.now() > job.deadline + _PAGE_JOB_GRACE_MS
 
+    async def _settle_lost_page_jobs(self, item_id: str) -> None:
+        """Settle the item's page jobs whose pod is gone. A status read settles
+        one too, but a page closed after its pod died never reads again, and
+        the row would read RUNNING in the run history for good."""
+        lost = []
+        for r in self._rm().list_resources((QB["item_id"] == item_id).build()):
+            data = r.data
+            assert isinstance(data, WorkflowRun)
+            if data.status in _ACTIVE and self._page_job_lost(data):
+                lost.append(r.info.resource_id)
+        for run_id in lost:
+            await self.abandon(run_id, reason=PAGE_JOB_LOST)
+
     def _live_page_jobs(self, item_id: str) -> int:
         n = 0
         for r in self._rm().list_resources((QB["item_id"] == item_id).build()):
@@ -590,9 +618,11 @@ class WorkflowOrchestrator:
         has ``page_job_limit`` in flight (D6)."""
         if not captured_user:
             raise ValueError("a page job needs a non-empty captured_user")
+        await self._settle_lost_page_jobs(item_id)
         if self._live_page_jobs(item_id) >= self.page_job_limit:
             raise TooManyPageJobs(item_id, self.page_job_limit)
         deadline = self.now() + int(self.page_job_timeout_s * 1000)
+        baseline = await self.stop_epoch(chat_id or item_id) if self.stop_epoch else 0
         run_id = (
             self._rm()
             .create(
@@ -621,7 +651,9 @@ class WorkflowOrchestrator:
         self._track(
             run_id,
             asyncio.create_task(
-                self._drive_page_job(run_id, item_id, captured_user, chat_id, deadline, work)
+                self._drive_page_job(
+                    run_id, item_id, captured_user, chat_id, deadline, baseline, work
+                )
             ),
         )
         logger.info(
@@ -636,11 +668,17 @@ class WorkflowOrchestrator:
         captured_user: str,
         chat_id: str,
         deadline: int,
+        baseline: int,
         work: PageWork,
     ) -> None:
         key = chat_id or item_id
         try:
             async with self._semaphore():
+                if self.stop_epoch is not None and await self.stop_epoch(key) > baseline:
+                    # Stopped on another pod while it waited for this slot.
+                    self._patch(run_id, status=RunStatus.CANCELLED, ended=self.now())
+                    await self._post_run(run_id, item_id, key)
+                    return
                 wf = self._build_handle(run_id, item_id, captured_user, None, key)
                 coro = run_workflow(
                     self.spec,
@@ -670,6 +708,12 @@ class WorkflowOrchestrator:
             # one of the item's places until its deadline.
             if self._get(run_id).status is RunStatus.PENDING:
                 self._patch(run_id, status=RunStatus.CANCELLED, ended=self.now())
+            # Its own cleanup, here: a Stop from ANOTHER pod reaches this job as
+            # a cancellation its work raised, and the pod that pressed Stop holds
+            # no task to clean up after. A Stop on THIS pod lands here too, and
+            # `cancel` leaves a page job's cleanup to this line.
+            with contextlib.suppress(Exception):
+                await self._post_run(run_id, item_id, key)
             raise
         await self._post_run(run_id, item_id, key)
 
@@ -939,12 +983,19 @@ class WorkflowOrchestrator:
             logger.info(
                 "run %s settled as %s, releasing sandbox (terminal=%s)", run_id, status, terminal
             )
-            await self._release(item_id, terminal, key)
+            await self._release(item_id, terminal, key, page_job=data.page_job is not None)
         if status is RunStatus.ERROR and self.notify_failure is not None:
             logger.warning("run %s errored, firing failure notification", run_id)
             self.notify_failure(self._get(run_id), run_id)
 
-    async def _release(self, item_id: str, terminal: bool, key: str) -> None:
+    async def _release(
+        self, item_id: str, terminal: bool, key: str, *, page_job: bool = False
+    ) -> None:
+        if page_job:
+            # Its own session, not the item's sandbox (see `end_page_job`).
+            if terminal and self.end_page_job is not None:
+                await self.end_page_job(item_id, key)
+            return
         if self.release is not None:
             await self.release(item_id, terminal, key)
 
@@ -980,7 +1031,10 @@ class WorkflowOrchestrator:
         task.cancel()
         with contextlib.suppress(BaseException):
             await task
-        await self._release(item_id, terminal=True, key=key)
+        if data.page_job is None:
+            # A page job's task frees its own session on the way out
+            # (`_drive_page_job`), which the `await` above has just seen through.
+            await self._release(item_id, terminal=True, key=key)
         logger.info("cancel: stopped run %s (item %s)", run_id, item_id)
         return True
 

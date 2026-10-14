@@ -297,7 +297,6 @@ class WorkflowExecutor:
         produced_all: list[TurnMessage] = []
 
         def persist(produced: list[TurnMessage]) -> None:
-            produced_all.extend(produced)
             if produced:
                 conv2 = self._conv_rm.get(rid).data  # re-fetch the workflow chat
                 assert isinstance(conv2, Conversation)
@@ -307,6 +306,9 @@ class WorkflowExecutor:
                     for tm in produced:
                         conv2.messages.append(to_rca_message(tm))
                     self._conv_rm.update(rid, conv2)
+            # After the write, as the answer always was: a node whose turn could
+            # not be persisted answers "" rather than text nobody can find.
+            produced_all.extend(produced)
 
         enqueue_key = lane or chat_key
         logger.debug(
@@ -750,6 +752,16 @@ class WorkflowExecutor:
             return
         if not self._any_running(item_id):
             await self._registry.close_session(item_id)
+        await self._turn_engine.forget(chat_key)
+        self._run_baseline.pop(chat_key, None)
+
+    async def end_page_job(self, item_id: str, chat_key: str) -> None:
+        """A page job ended (#942): drop its chat's turn session and stop
+        baseline — and leave the item's sandbox alone. `release` closes it when
+        no other RUN is running, but a page's `callTool` and an open chat are
+        not runs, and a job finishing must not cut the sandbox out from under
+        them; the idle reaper takes it when the item is really idle."""
+        logger.info("workflow_exec: page job on %s ended (item %s)", chat_key, item_id)
         await self._turn_engine.forget(chat_key)
         self._run_baseline.pop(chat_key, None)
 

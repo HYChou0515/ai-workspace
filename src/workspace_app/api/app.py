@@ -2387,6 +2387,8 @@ def create_app(
         keep_last_runs=workflow_keep_last_runs,
         page_job_limit=wui_page_job_limit,
         page_job_timeout_s=wui_page_job_timeout.total_seconds(),
+        end_page_job=workflow_executor.end_page_job,
+        stop_epoch=turn_engine.cancel_epoch,
     )
     app.state.workflow_orchestrator = workflow_orchestrator
     # Reachable by an app-level test that drives one tick, like the other
