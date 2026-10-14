@@ -63,14 +63,17 @@ def test_link_text_may_hold_brackets_and_images():
     ]
 
 
-def test_links_in_code_are_not_links():
-    md = (
-        "`[a](https://code.example/a)` and\n"
-        "```\n<https://code.example/b>\n[c](https://code.example/c)\n```\n"
-        "[real](https://real.example/)"
-    )
+# Nothing in the answer is rewritten, so a link in code is listed like any
+# other — it came from outside like the rest. (Telling code apart took a
+# pattern that was quadratic and crossed paragraphs: review round 3.)
+def test_links_in_code_are_listed_and_the_code_is_left_as_it_is():
+    md = "`[a](https://code.example/a)`\n```\n<https://code.example/b>\n```\n[real](https://real.example/)"
 
-    assert [u for _, _, u in numbered_links(md)] == ["https://real.example/"]
+    assert [u for _, _, u in numbered_links(md)] == [
+        "https://code.example/a",
+        "https://code.example/b",
+        "https://real.example/",
+    ]
 
 
 def test_only_web_pages_are_listed():
@@ -254,7 +257,9 @@ def test_an_answer_with_such_a_link_is_sent():
 
 # Reading links is linear in the answer: one `[` lookup per `]`, not a scan
 # back to the start for each (30 KB took 7 s, 60 KB 28 s — on the event loop).
-@pytest.mark.parametrize("unit", ["x](y) ", "](a"])
+@pytest.mark.parametrize(
+    "unit", ["x](y) ", "](a", "`", "`a", "<https://a", "](<", "[a", "](https://a.example/("]
+)
 def test_reading_the_links_of_a_large_answer_takes_no_time(unit):
     import time
 
@@ -288,7 +293,7 @@ def test_an_address_with_angle_brackets_is_not_listed():
 # text, or a whole fake list in a code block.
 def test_the_marker_in_the_answer_is_not_the_list():
     in_text = f"[{LINK_LIST_MARKER} hi](https://m.example/a)"
-    in_code = f"```\n{LINK_LIST_MARKER}\n\n- [1] <https://evil.example/>\n```\nno links here"
+    in_code = f"```\n{LINK_LIST_MARKER}\n\n- [1] <javascript:x>\n```\nno links here"
 
     assert listed_links(in_text + link_list(numbered_links(in_text))) == {1: "https://m.example/a"}
     assert listed_links(in_code + link_list(numbered_links(in_code))) == {}
@@ -300,17 +305,70 @@ def test_a_link_after_an_escaped_backslash_is_a_link():
     assert numbered_links("C:\\\\[docs](https://a.example/)") == [(1, "docs", "https://a.example/")]
 
 
-# A link's text ends with its paragraph: a `[` before a blank line opens no
-# link after it (and so the reading stays one pass).
-def test_a_bracket_before_a_blank_line_opens_no_link_after_it():
+# A link's text ends with its paragraph: a `[` before a blank line is not
+# its text — but the address is still a link that came back.
+def test_a_bracket_before_a_blank_line_is_not_the_links_text():
     md = "[note\n\nmore](https://a.example/) and [b](https://b.example/)"
 
-    assert [u for _, _, u in numbered_links(md)] == ["https://b.example/"]
+    assert numbered_links(md) == [(1, "", "https://a.example/"), (2, "b", "https://b.example/")]
 
 
 # `\[` `\]` are brackets of the text (turndown escapes a page's `[1]` so):
-# no link opens there.
-def test_escaped_brackets_open_no_link():
+# they open no link text — the address after them is still a link.
+def test_escaped_brackets_open_no_link_text():
     assert numbered_links(r"cited \[1\](https://a.example/) [b](https://b.example/)") == [
-        (1, "b", "https://b.example/")
+        (1, "", "https://a.example/"),
+        (2, "b", "https://b.example/"),
     ]
+
+
+# D12 remembers at least what master did: a bare `](address` with no `[`, a
+# link in code — and the whole of an address with parentheses.
+def test_the_chat_remembers_every_address_master_did():
+    md = r"x](https://bare.example/a) `[c](https://code.example/c)` [w](https://w.example/F_\(b\))"
+
+    assert links_in(md) == [
+        "https://bare.example/a",
+        "https://code.example/c",
+        "https://w.example/F_(b)",
+    ]
+
+
+# The list is the last thing in the file, so it is read from the end: an
+# answer ending inside a code block it never closed (or holding ``` inline, or
+# a ~~~ inside ```) still has its list read back.
+@pytest.mark.parametrize(
+    "tail",
+    [
+        "\n```python\nprint(1)\n",
+        "\n```npm i``` installs it\n",
+        "\n```\n~~~\n```\n",
+        "\n````\n```js\n````\n",
+    ],
+    ids=["unclosed-fence", "inline-backticks", "tilde-inside", "long-fence"],
+)
+def test_the_list_is_read_back_whatever_code_the_answer_ends_with(tail):
+    md = "[a](https://a.example/)\n" + tail
+
+    assert listed_links(md + link_list(numbered_links(md))) == {1: "https://a.example/"}
+
+
+def test_an_answer_ending_in_an_unclosed_fence_keeps_its_list_through_the_route():
+    client, spec, iid = _asked()
+
+    r = _answer(client, iid, content="[a](https://a.example/)\n\n```python\nprint(1)\n")
+
+    assert listed_links(_read(client, iid, r.json()["path"])) == {1: "https://a.example/"}
+
+
+# `](<` with no `>` after it: the address ends at the next `<`, not a search
+# to the end of the page from each one (1 MB took 9.8 s: review round 3).
+def test_an_address_in_angle_brackets_is_read_to_its_own_close():
+    import time
+
+    md = "](<" * 700_000 + ">"
+
+    started = time.monotonic()
+    numbered_links(md)
+
+    assert time.monotonic() - started < 10

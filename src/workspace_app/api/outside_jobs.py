@@ -112,15 +112,10 @@ class _OutsideSeenUrls(Struct):
 #: Most links remembered per chat; the oldest go first.
 SEEN_URLS_CAP = 2_000
 
-#: Fenced code and code spans: what looks like a link in there is code.
-_FENCE = re.compile(r"^(`{3,}|~{3,})[^\n]*\n.*?^\1[^\n]*$", re.MULTILINE | re.DOTALL)
-_CODE_SPAN = re.compile(r"(`+)(?!`).+?(?<!`)\1", re.DOTALL)
-#: `<https://…>` — an autolink.
-_AUTOLINK = re.compile(r"<(https?://[^>\s]+)>")
-
-
-def _blanked(m: re.Match[str]) -> str:
-    return re.sub(r"[^\n]", " ", m.group(0))
+#: `<https://…>` — an autolink. Neither it nor `<…>` below runs past the next
+#: `<`: a page of `<https://a` without a `>` was read to its end from each one.
+_AUTOLINK = re.compile(r"<(https?://[^<>\s]+)>")
+_ANGLED = re.compile(r"<([^<>\n]*)>")
 
 
 def _destination(text: str, at: int) -> str | None:
@@ -129,8 +124,8 @@ def _destination(text: str, at: int) -> str | None:
     in it balanced, `\(` `\)` unescaped (the paste converter escapes them:
     Wikipedia's `Foo_(bar)`). `None` when there is none."""
     if text.startswith("<", at):
-        end = text.find(">", at)
-        return text[at + 1 : end] if end > 0 and "\n" not in text[at:end] else None
+        angled = _ANGLED.match(text, at)
+        return angled.group(1) if angled else None
     out: list[str] = []
     depth = 0
     while at < len(text):
@@ -175,18 +170,25 @@ def _openings(text: str) -> dict[int, int]:
 def _links(markdown: str) -> list[tuple[int, bool, str, str]]:
     """Every link in `markdown` — `(where, is_image, text, address)` in order —
     read the way Markdown reads one: `[text](address "title")`, `![alt](…)`,
-    `<https://…>`; nothing inside code. Read by a scanner, not one pattern: a
-    pattern ended `Foo_(bar)` at its first `)` (review of #941)."""
-    text = _CODE_SPAN.sub(_blanked, _FENCE.sub(_blanked, markdown))
+    `<https://…>`. Read by a scanner, not one pattern: a pattern ended
+    `Foo_(bar)` at its first `)` (review of #941). An address after a `]` that
+    opens no text (`\\[1\\](…)`, a `[` a blank line ago) is still a link, with
+    no text; and so is one in code — nothing here is rewritten, and it came
+    from outside like the rest (telling code apart took a pattern that was
+    quadratic and crossed paragraphs: review round 3)."""
+    text = markdown
     found = [(m.start(), False, "", m.group(1)) for m in _AUTOLINK.finditer(text)]
     openings = _openings(text)
     close = text.find("](")
     while close >= 0:
         address = _destination(text, close + 2)
-        start = openings.get(close)
-        if address is not None and start is not None:
-            image = start > 0 and text[start - 1] == "!"
-            found.append((start, image, markdown[start + 1 : close], address))
+        if address is not None:
+            start = openings.get(close)
+            if start is None:
+                found.append((close, False, "", address))
+            else:
+                image = start > 0 and text[start - 1] == "!"
+                found.append((start, image, text[start + 1 : close], address))
         close = text.find("](", close + 2)
     return sorted(found)
 

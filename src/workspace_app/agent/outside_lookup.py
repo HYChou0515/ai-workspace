@@ -124,31 +124,33 @@ def is_web_address(url: str) -> bool:
 
 #: Heads the numbered list of links under a saved lookup (D24): a heading
 #: line people read too (an HTML comment showed as text in the file viewer).
-#: Only the rows under the LAST such line outside code are the list: the
-#: answer above it is the page as it came, and may hold `[1]: …` reference
-#: links, list-like lines, even this line, of its own.
 LINK_LIST_MARKER = "## 查到的連結"
 _LISTED = re.compile(r"- \[(\d+)\] <([^>\s]+)>")
-_FENCE_LINE = re.compile(r"(`{3,}|~{3,})")
 
 
 def listed_links(text: str) -> dict[int, str]:
     """`{n: address}` of the list under a saved lookup; `{}` without one.
-    What `link_list` writes and what `file` + `link` reads."""
-    in_code = False
-    heading: int | None = None
+    What `link_list` writes and what `file` + `link` reads.
+
+    The list is the last thing in the file, so it is read from the end: rows
+    and blank lines, then this heading. Anything else ends it. So the answer
+    above — the page as it came, with `[1]: …` lines, list-like rows, this
+    heading, code it never closed — is never read as the list (reading code
+    fences forwards lost the list to an answer ending in an open one)."""
     lines = text.split("\n")
-    outside: list[bool] = []
-    for at, line in enumerate(lines):
-        if _FENCE_LINE.match(line):
-            in_code = not in_code
-        outside.append(not in_code)
-        if not in_code and line.strip() == LINK_LIST_MARKER:
-            heading = at
-    if heading is None:
-        return {}
-    rows = (_LISTED.match(line) for at, line in enumerate(lines) if at > heading and outside[at])
-    return {int(m.group(1)): m.group(2) for m in rows if m}
+    rows: dict[int, str] = {}
+    at = len(lines) - 1
+    while at >= 0:
+        line = lines[at].strip()
+        if line == LINK_LIST_MARKER:
+            return rows
+        m = _LISTED.match(line)
+        if line and m is None:
+            return {}
+        if m is not None:
+            rows.setdefault(int(m.group(1)), m.group(2))
+        at -= 1
+    return {}
 
 
 async def _listed_link(ctx: RunContextWrapper[AgentToolContext], file: str, link: int) -> str:
