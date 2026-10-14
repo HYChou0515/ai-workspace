@@ -2414,7 +2414,7 @@ kubectl logs <api-pod> | grep "event_bus:"
   (vhost 是 `event_bus.url` 裡的那個,預設 `/`;exchange 預設 `rca_turn_events`)列出的佇列數不少於 API pod 數。
 - 多個 pod 時:請 AI 查外面的東西、按「查」;卡片出現「小幫手已送給 AI」後**不重新整理**,幾秒內聊天出現送出的內容與 AI 的回答。
 
-### 2026-10-14 · #943 小幫手遇到 Cloudflare 驗證會等人完成,封鎖頁直接說 {#pr-943}
+### 2026-10-14 · 3e00a83d · #943 小幫手遇到 Cloudflare 驗證會等人完成,封鎖頁直接說 {#pr-943}
 
 **設定** — 無。
 
