@@ -2414,6 +2414,28 @@ kubectl logs <api-pod> | grep "event_bus:"
   (vhost 是 `event_bus.url` 裡的那個,預設 `/`;exchange 預設 `rca_turn_events`)列出的佇列數不少於 API pod 數。
 - 多個 pod 時:請 AI 查外面的東西、按「查」;卡片出現「小幫手已送給 AI」後**不重新整理**,幾秒內聊天出現送出的內容與 AI 的回答。
 
+### 2026-10-14 · 3e00a83d · #943 小幫手遇到 Cloudflare 驗證會等人完成,封鎖頁直接說 {#pr-943}
+
+**設定** — 無。
+
+**資料** — 無。
+
+**k8s · CI 側** — 後端沒有改,照常重 build、部署。**要做的是發布新版小幫手**(`rollout 後`,隨時):
+
+1. 在 dev server 打包:`python3 scripts/pack_ai_workspace_helper.py --version <比目前發布的大>`,把 `dist/ai-workspace-helper/`
+   的兩個檔換進 `server.ai_workspace_helper_dir`(不用重新部署)。為什麼:修正在小幫手那邊。沒做的症狀:Cloudflare 保護的網站
+   (例如 GoodInfo)照舊一開就失敗(「the page answered 403」),分頁馬上關掉。
+2. 第 1 步之後:使用者的小視窗顯示「有新版」,照「小幫手」頁重裝(更新只通知,plan D21)。沒重裝的症狀同上。
+   和 #940(Python 3.9)同一版打包就好。
+
+**行為改變,沒有開關**(plan D25):小幫手開網頁遇到 Cloudflare 的驗證頁(「Just a moment…」,回 403 帶 `cf-mitigated: challenge`,
+或頁上有 Cloudflare 的驗證標記),不再當成失敗:把 Chrome 視窗叫到前面、卡片顯示「請在小幫手的 Chrome 視窗裡完成驗證」,最多等 5 分鐘,
+驗證過了讀跳到的那一頁。Cloudflare 的封鎖頁(錯誤 1020 等,人也過不去)立刻回報「這個網站擋住了自動瀏覽(Cloudflare 封鎖),請自己開瀏覽器查,
+把內容貼到卡片上」(只認 403;同樣樣式的 522 等「網站掛了」頁照一般錯誤處理)。其他不是驗證頁的錯誤狀態照舊失敗;回 429 的 Google「異常流量」頁現在也會等人完成驗證。
+
+**確認做完**(`rollout 後`,重裝後):請 AI 查一個要看 GoodInfo 的問題、按「查」:小幫手的 Chrome 停在 Cloudflare 那頁並跳到前面,
+卡片顯示「請在小幫手的 Chrome 視窗裡完成驗證」;完成驗證後,卡片拿到 GoodInfo 的內容。
+
 ### 2026-10-14 · #932 管理者看得到 AI 用了哪些工具與 skill、誰用、在哪、失敗幾次、多慢 {#pr-932}
 
 **設定** — 沒有新 key，不用改任何設定。行為改變，沒有開關（`docs/plan-tool-usage-stats.md`）：升級後 AI 的**每一次
