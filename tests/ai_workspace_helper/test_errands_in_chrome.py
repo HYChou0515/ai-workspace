@@ -148,6 +148,67 @@ class _Site(BaseHTTPRequestHandler):
                 "<script>addEventListener('load', () => "
                 "setTimeout(() => document.getElementById('f').submit(), 100))</script>"
             )
+        elif self.path == "/saml-post":
+            # the SAML POST binding as IdPs write it: the form posts AT load
+            self._html(
+                '<body onload="document.forms[0].submit()"><p>正在登入</p>'
+                '<form method="post" action="/hang-callback"></form></body>'
+            )
+        elif self.path == "/post-between":
+            # blank, quiet first, then a form that posts to a server that hangs
+            self._html(
+                "<title>Wait</title>"
+                '<form id="f" method="post" action="/hang-callback"></form>'
+                "<script>addEventListener('load', () => "
+                "setTimeout(() => document.getElementById('f').submit(), 1800))</script>"
+            )
+        elif self.path == "/bounce":
+            if "bounced=1" not in (self.headers.get("Cookie") or ""):
+                # the app shell sends the browser to its sign-in ...
+                self._html(
+                    "<title>App</title><script>addEventListener('load', () => "
+                    "setTimeout(() => location.replace('/idp'), 300))</script>"
+                )
+            else:
+                # ... which sends it back to the SAME address — a new page there:
+                # words, a slow image, and on at load
+                self._html(
+                    "<title>Signing in</title><p>正在轉址 BOUNCE-HOP</p><img src='/slow.png'>"
+                    "<script>addEventListener('load', () => "
+                    "setTimeout(() => location.replace('/landed'), 300))</script>"
+                )
+        elif self.path == "/idp":
+            self.send_response(302)
+            self.send_header("Set-Cookie", "bounced=1; Path=/")
+            self.send_header("Location", "/bounce#code=abc")
+            self.end_headers()
+        elif self.path.startswith("/ticker"):
+            # a still page that rewrites its own address (a carousel): not a hop
+            self._html(
+                "<title>Ticker</title><p>TICKER-TOKEN</p>"
+                "<script>let n = 0; setInterval(() => "
+                "history.replaceState(null, '', '/ticker?slide=' + (++n)), 700)</script>"
+            )
+        elif self.path == "/to-stream":
+            self._html(
+                "<title>Go</title><script>addEventListener('load', () => "
+                "setTimeout(() => location.replace('/stream'), 200))</script>"
+            )
+        elif self.path == "/stream":
+            # its words are there at once; its body never ends
+            import time
+
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(("<title>Stream</title><p>STREAM-TOKEN</p>" + " " * 2048).encode())
+            self.wfile.flush()
+            time.sleep(25)
+        elif self.path == "/silent":
+            # never answers at all
+            import time
+
+            time.sleep(25)
         elif self.path.startswith("/blank"):
             self._html("<title>Blank</title>")
         elif self.path.startswith("/sorry/"):
@@ -395,3 +456,68 @@ def test_a_verification_reached_late_still_waits_for_the_person(chrome, site):
 
     assert notes == ["captcha", ""]
     assert "What is new" in page.markdown
+
+
+# Review round 2 of D22: a form that posts AT load (the SAML POST binding) was
+# not seen on its way — the page was read and the read waited for the hanging
+# server. Watched from before the page is opened, it ends at the limit.
+def test_a_form_posted_at_load_whose_answer_never_comes_ends_at_the_limit(
+    chrome, site, monkeypatch
+):
+    from ai_workspace_helper import builtin_errands
+
+    monkeypatch.setattr(builtin_errands, "SETTLE_LIMIT_MS", 3_000)
+
+    with pytest.raises(Exception, match="一直在跳轉"):
+        _timed(chrome, site, "/saml-post")
+
+    assert _took["s"] < 10
+
+
+# ... nor one posted between two looks at a blank page.
+def test_a_form_posted_between_looks_ends_at_the_limit(chrome, site, monkeypatch):
+    from ai_workspace_helper import builtin_errands
+
+    monkeypatch.setattr(builtin_errands, "SETTLE_LIMIT_MS", 5_000)
+
+    with pytest.raises(Exception, match="一直在跳轉"):
+        _timed(chrome, site, "/post-between")
+
+    assert _took["s"] < 12
+
+
+# A sign-in that comes back to the SAME address brings a new page there: its
+# load is waited for again, so its slow-loading interstitial is not the page.
+def test_a_new_page_at_the_same_address_is_waited_for_again(chrome, site):
+    page = _timed(chrome, site, "/bounce")
+
+    assert page.url == f"{site}/landed"
+    assert "BOUNCE-HOP" not in page.markdown
+
+
+# A page that rewrites its own address without going anywhere (a carousel's
+# ?slide=N) is still: it is read, not failed as 「一直在跳轉」.
+def test_a_page_that_rewrites_its_own_address_is_read(chrome, site):
+    page = _timed(chrome, site, "/ticker")
+
+    assert "TICKER-TOKEN" in page.markdown
+    assert _took["s"] < 8
+
+
+# A page whose words are there but whose body never ends has arrived: it is
+# read once it answered, not counted as on its way until the limit.
+def test_a_page_whose_body_never_ends_is_read_once_it_answered(chrome, site):
+    page = _timed(chrome, site, "/to-stream")
+
+    assert "STREAM-TOKEN" in page.markdown
+    assert _took["s"] < 15
+
+
+# A first page that never answers fails in words, not Playwright's English.
+def test_a_page_that_never_answers_says_so(chrome, site, monkeypatch):
+    from ai_workspace_helper import builtin_errands
+
+    monkeypatch.setattr(builtin_errands, "PAGE_TIMEOUT_MS", 2_000)
+
+    with pytest.raises(Exception, match="沒有回應"):
+        _timed(chrome, site, "/silent")

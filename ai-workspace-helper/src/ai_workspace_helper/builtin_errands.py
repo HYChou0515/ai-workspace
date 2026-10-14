@@ -12,7 +12,7 @@ import contextlib
 import time
 from collections.abc import Callable
 from typing import Any
-from urllib.parse import quote, urldefrag, urlsplit
+from urllib.parse import quote, urlsplit
 
 from .errands import Errand, ErrandContext, ErrandFailed, FetchedPage
 
@@ -23,7 +23,7 @@ PAGE_TIMEOUT_MS = 30_000
 #: times before the page (plan D22) — and take to show its text.
 SETTLE_LIMIT_MS = 30_000
 #: The hops have ended once a page has loaded (or been waited on for
-#: `LOAD_WAIT_MS`) and its address has stayed the same for this long after.
+#: `LOAD_WAIT_MS`) and no new page has been asked for this long after.
 QUIET_MS = 1_500
 #: How long one page's `load` is waited for: a slow image is no reason to give
 #: up the page, nor to wait for it for ever (a proxy that drops a tracker).
@@ -117,97 +117,123 @@ def _moving(page: Any) -> ErrandFailed:
     )
 
 
-def settle(page: Any, deadline: float, *, stop: Callable[[], bool] = lambda: False) -> bool:
-    """Wait until the page has stopped moving: no page on its way, the page
-    loaded (or waited on for `LOAD_WAIT_MS`), and its address — fragment
-    aside — unchanged for `QUIET_MS` after that. A script that moves on, a
-    form that posts itself, a redirect each restart the wait. True once it has
-    stopped (or `stop()` — a verification page is a place to stop, not a
-    hop); False when `deadline` (monotonic seconds) came while it was still
-    moving.
+class Navigations:
+    """The main frame's navigations, watched from before the page is opened
+    to the end of the errand. A navigation is on its way from its request to
+    its answer (a redirect's answer leads straight to the next request):
+    reading the page meanwhile would wait for the new page for as long as its
+    server takes (measured, Chromium — a form post and a script navigation
+    alike), so nothing reads it then. Watched for the whole errand because a
+    form posted AT load (the SAML POST binding) starts before any later look
+    could have begun watching. `seen` counts navigations asked for: an address
+    the page rewrites itself (history.replaceState, a #fragment) is no hop."""
 
-    A page on its way is watched, not read: reading the page meanwhile blocks
-    until the new one is there — for as long as its server takes (measured,
-    Chromium: a form post and a script navigation alike) — so neither the
-    load wait nor `stop()` is asked then."""
-    from playwright.sync_api import Error as PlaywrightError
+    def __init__(self, page: Any) -> None:
+        self._page = page
+        self.on_its_way: set[Any] = set()
+        self.seen = 0
+        page.on("request", self._asked)
+        page.on("response", self._answered)
+        page.on("requestfailed", self._failed)
+
+    def _asked(self, request: Any) -> None:
+        from playwright.sync_api import Error as PlaywrightError
+
+        with contextlib.suppress(PlaywrightError):  # a service worker's has no frame
+            if request.is_navigation_request() and request.frame == self._page.main_frame:
+                self.on_its_way.add(request)
+                self.seen += 1
+
+    def _answered(self, response: Any) -> None:
+        # answered — the new page is there, even if its body streams on; a
+        # redirect's answer is followed by the next request at once
+        if not 300 <= response.status < 400:
+            self.on_its_way.discard(response.request)
+
+    def _failed(self, request: Any) -> None:
+        self.on_its_way.discard(request)
+
+    def close(self) -> None:
+        self._page.remove_listener("request", self._asked)
+        self._page.remove_listener("response", self._answered)
+        self._page.remove_listener("requestfailed", self._failed)
+
+
+def settle(
+    page: Any, nav: Navigations, deadline: float, *, stop: Callable[[], bool] = lambda: False
+) -> bool:
+    """Wait until the page has stopped moving: nothing on its way, the page
+    loaded (or waited on for `LOAD_WAIT_MS`), and no new page asked for in
+    `QUIET_MS` after that. Every new page — a script that moves on, a form
+    that posts itself, a redirect, a sign-in that comes back to the same
+    address — restarts the wait and has its own load waited for. Each look
+    first lets the browser's news in (`wait_for_timeout`), so a page is read
+    only when nothing is on its way. True once it has stopped (or `stop()` —
+    a verification page is a place to stop, not a hop); False when
+    `deadline` (monotonic seconds) came while it was still moving."""
     from playwright.sync_api import TimeoutError as PlaywrightTimeout
 
-    on_its_way: set[Any] = set()
-
-    def started(request: Any) -> None:
-        with contextlib.suppress(PlaywrightError):  # a service worker's has no frame
-            if request.is_navigation_request() and request.frame == page.main_frame:
-                on_its_way.add(request)
-
-    def ended(request: Any) -> None:
-        on_its_way.discard(request)
-
-    page.on("request", started)
-    page.on("requestfinished", ended)
-    page.on("requestfailed", ended)
-    try:
-        address: str | None = None
-        loaded: str | None = None  # the address whose load was waited for
-        quiet_since, moved = time.monotonic(), False
-        while (now := time.monotonic()) < deadline:
-            if not on_its_way:
-                if urldefrag(page.url)[0] != loaded:
-                    # once per page: a load that never comes is not waited
-                    # for again on every look
-                    remaining_ms = (deadline - now) * 1000
-                    with contextlib.suppress(PlaywrightTimeout):
-                        page.wait_for_load_state(
-                            "load", timeout=max(1.0, min(LOAD_WAIT_MS, remaining_ms))
-                        )
-                    loaded = urldefrag(page.url)[0]
-                if not on_its_way and stop():
-                    return True
-            here = None if on_its_way else urldefrag(page.url)[0]
-            if here is None or here != address:
-                # counted from now — after this page's load, not its start
-                moved = moved or address is not None or here is None
-                address, quiet_since = here, time.monotonic()
-            elif time.monotonic() - quiet_since >= QUIET_MS / 1000:
-                return True
-            page.wait_for_timeout(_LOOK_MS)
-        return not moved and not on_its_way
-    finally:
-        page.remove_listener("request", started)
-        page.remove_listener("requestfinished", ended)
-        page.remove_listener("requestfailed", ended)
+    seen, loaded, moved = nav.seen, False, False
+    quiet_since: float | None = None
+    while (now := time.monotonic()) < deadline:
+        page.wait_for_timeout(_LOOK_MS)  # the browser's news comes in here
+        if nav.on_its_way or nav.seen != seen:
+            # a new page on its way, or arrived: wait for it from the start
+            seen, loaded, moved, quiet_since = nav.seen, False, True, None
+            continue
+        if not loaded:
+            remaining_ms = (deadline - now) * 1000
+            with contextlib.suppress(PlaywrightTimeout):
+                page.wait_for_load_state("load", timeout=max(1.0, min(LOAD_WAIT_MS, remaining_ms)))
+            loaded = True
+            continue  # let in what the load set off (a form posted at load)
+        if stop():
+            return True
+        if quiet_since is None:
+            quiet_since = time.monotonic()  # counted from after the load
+        elif time.monotonic() - quiet_since >= QUIET_MS / 1000:
+            return True
+    return not moved and not nav.on_its_way
 
 
 def fetch(ctx: ErrandContext, url: str) -> FetchedPage:
     from playwright.sync_api import Error as PlaywrightError
+    from playwright.sync_api import TimeoutError as PlaywrightTimeout
 
     page = ctx.page
-    response = page.goto(url, wait_until="domcontentloaded", timeout=PAGE_TIMEOUT_MS)
-    if response is not None and response.status >= 400:
-        raise ErrandFailed(f"the page answered {response.status}")
-    verification = lambda: looks_like_a_verification(page)  # noqa: E731
-    deadline = time.monotonic() + SETTLE_LIMIT_MS / 1000
-    while True:
-        if not settle(page, deadline, stop=verification):
-            raise _moving(page)
-        if verification():
-            ctx.wait_for_person(verification)
-            # solved, the page moves on: a fresh wait for where that ends
-            deadline = time.monotonic() + SETTLE_LIMIT_MS / 1000
-            continue
-        # something there, read on the live page before the conversion
-        # (which leaves this tab); nothing yet → wait and look again
+    nav = Navigations(page)  # before the page is opened: see `Navigations`
+    try:
         try:
-            if page.evaluate(_HAS_CONTENT) or time.monotonic() >= deadline:
-                title, where = page.title(), page.url
-                html = page.evaluate(_PAGE_HTML)
-                break
-        except PlaywrightError:
-            # it moved on while being read: settle again, if there is time
-            if time.monotonic() >= deadline:
-                raise _moving(page) from None
-            continue
-        page.wait_for_timeout(500)
+            response = page.goto(url, wait_until="domcontentloaded", timeout=PAGE_TIMEOUT_MS)
+        except PlaywrightTimeout:
+            raise ErrandFailed(
+                f"這一頁 {PAGE_TIMEOUT_MS // 1000} 秒內沒有回應:{_where(url)}"
+            ) from None
+        if response is not None and response.status >= 400:
+            raise ErrandFailed(f"the page answered {response.status}")
+        verification = lambda: looks_like_a_verification(page)  # noqa: E731
+        deadline = time.monotonic() + SETTLE_LIMIT_MS / 1000
+        while True:
+            if not settle(page, nav, deadline, stop=verification):
+                raise _moving(page)
+            if verification():
+                ctx.wait_for_person(verification)
+                # solved, the page moves on: a fresh wait for where that ends
+                deadline = time.monotonic() + SETTLE_LIMIT_MS / 1000
+                continue
+            # something there, read on the live page before the conversion
+            # (which leaves this tab); nothing yet → wait and look again
+            try:
+                if page.evaluate(_HAS_CONTENT) or time.monotonic() >= deadline:
+                    title, where = page.title(), page.url
+                    html = page.evaluate(_PAGE_HTML)
+                    break
+            except PlaywrightError:
+                # it moved on while being read: settle again, if there is time
+                if time.monotonic() >= deadline:
+                    raise _moving(page) from None
+    finally:
+        nav.close()
     markdown = ctx.convert(html)
     if not markdown.strip():
         raise ErrandFailed(
