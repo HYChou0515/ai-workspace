@@ -31,7 +31,7 @@ _spec.loader.exec_module(pack_mod)
 def test_every_python_gets_its_own_pinned_windows_wheels():
     commands = [pack_mod.download_command(["pip"], v, Path("/wh")) for v in pack_mod.PYTHONS]
 
-    assert pack_mod.PYTHONS == ["3.10", "3.11", "3.12", "3.13", "3.14"]
+    assert pack_mod.PYTHONS == ["3.9", "3.10", "3.11", "3.12", "3.13", "3.14"]
     for version, argv in zip(pack_mod.PYTHONS, commands, strict=True):
         abi = "cp" + version.replace(".", "")
         assert argv[:2] == ["pip", "download"]
@@ -43,8 +43,30 @@ def test_every_python_gets_its_own_pinned_windows_wheels():
         ):
             assert _has(argv, flag), (version, flag)
         assert "--only-binary=:all:" in argv and "--no-deps" in argv
-    assert all(pin.count("==") == 1 for pin in pack_mod.PINS)
-    assert {p.split("==")[0] for p in pack_mod.PINS} >= {"playwright", "greenlet"}
+    for version in pack_mod.PYTHONS:
+        pins = pack_mod.pins_for(version)
+        assert all(pin.count("==") == 1 for pin in pins)
+        assert {p.split("==")[0] for p in pins} >= {"playwright", "greenlet"}
+
+
+# 3.9 (the person: 「有些人的python是3.9」): the newest Playwright that installs
+# on it is 1.60.0, and greenlet's last cp39 wheel is 3.2.4. Every Python gets
+# the same Playwright — one driver for everyone — and only greenlet differs.
+def test_python_39_gets_wheels_that_install_on_it():
+    on_39 = pack_mod.download_command(["pip"], "3.9", Path("/wh"))
+    on_314 = pack_mod.download_command(["pip"], "3.14", Path("/wh"))
+
+    assert "greenlet==3.2.4" in on_39 and "greenlet==3.5.6" not in on_39
+    assert "greenlet==3.5.6" in on_314
+    for version in pack_mod.PYTHONS:
+        assert "playwright==1.60.0" in pack_mod.pins_for(version), version
+
+
+# The zip claims the Pythons the installer accepts — one list, not two.
+def test_the_pack_covers_the_pythons_the_installer_accepts():
+    from ai_workspace_helper import setup_core
+
+    assert list(setup_core.PYTHONS) == pack_mod.PYTHONS
 
 
 # P7's acceptance: with nothing but the wheelhouse, pip resolves the helper and

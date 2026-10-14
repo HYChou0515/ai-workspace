@@ -601,11 +601,17 @@ def main() -> int:  # pragma: no cover — the window needs a display; verified 
     ttk.Label(history_tab, text="最近 200 筆，只存在這台電腦。", foreground="#666").pack(
         fill="x", pady=(0, 6)
     )
-    columns = ("when", "what", "args", "ended")
+    # one row per column, so the three can never fall out of step (and no
+    # `zip(strict=…)`, which a 3.9 Python refuses)
+    layout = (
+        ("when", "時間", 110),
+        ("what", "類型", 110),
+        ("args", "內容", 210),
+        ("ended", "結果", 130),
+    )
+    columns = tuple(column for column, _, _ in layout)
     table = ttk.Treeview(history_tab, columns=columns, show="headings", height=8)
-    for column, heading, width in zip(
-        columns, ("時間", "類型", "內容", "結果"), (110, 110, 210, 130), strict=True
-    ):
+    for column, heading, width in layout:
         table.heading(column, text=heading, anchor="w")
         table.column(column, width=width, anchor="w", stretch=column in ("args", "ended"))
     table_scroll = ttk.Scrollbar(history_tab, orient="vertical", command=table.yview)

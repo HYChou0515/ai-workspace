@@ -10,7 +10,7 @@ and a Python with pip (downloads the Windows wheels). Writes into DIR (default
 
 - `ai-workspace-helper-<version>.zip` — `precheck.pyw`, `install.pyw`, `launch.pyw`, `setup_core.py`
   and `wheelhouse/`: the helper's wheel plus every package it needs as
-  win_amd64 wheels for CPython 3.10–3.14, each pinned with `==`;
+  win_amd64 wheels for CPython 3.9–3.14, each pinned with `==`;
 - `ai-workspace-helper.json` — `{version, min_version, file, sha256}`.
 
 Put both in `server.ai_workspace_helper_dir` (§3.7.2); no redeploy. Before writing
@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import json
 import re
 import shutil
@@ -35,21 +36,41 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 HELPER = ROOT / "ai-workspace-helper"
 
-#: The CPython versions the zip installs on (D14) — greenlet ships one wheel
-#: per minor, so each is downloaded for explicitly (§3.6).
-PYTHONS = ["3.10", "3.11", "3.12", "3.13", "3.14"]
 
-#: Everything the helper needs, pinned. Playwright drives the installed Chrome
-#: (`channel="chrome"`), so no browser is downloaded. This is NOT the repo's
-#: own 1.49 pin (that one exists for the Debian 11 browser download): 1.49 pins
-#: greenlet 3.1.1, which has no cp314 wheel. Resolved with
-#: `pip download --platform win_amd64 --python-version 3.14 playwright==1.63.0`.
-PINS = [
-    "playwright==1.63.0",
-    "greenlet==3.5.6",
-    "pyee==13.0.1",
-    "typing_extensions==4.16.0",
-]
+def _setup_core():  # noqa: ANN202 — the module, loaded from its file
+    spec = importlib.util.spec_from_file_location(
+        "_ai_workspace_helper_setup_core", HELPER / "src" / "ai_workspace_helper" / "setup_core.py"
+    )
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+#: The CPython versions the zip installs on (D14, D23) — the installer's own
+#: list, so the zip never claims a Python `install.pyw` refuses. greenlet ships
+#: one wheel per minor, so each is downloaded for explicitly (§3.6).
+PYTHONS = list(_setup_core().PYTHONS)
+
+#: One Playwright for every Python, so everyone drives Chrome with the same
+#: driver: 1.60.0 is the newest that installs on 3.9 (1.61 requires 3.10). It
+#: drives the installed Chrome (`channel="chrome"`), so no browser is
+#: downloaded. NOT the repo's own 1.49 pin (that one exists for the Debian 11
+#: browser download): 1.49 pins greenlet 3.1.1, which has no cp314 wheel.
+PLAYWRIGHT = "1.60.0"
+
+
+def pins_for(python: str) -> list[str]:
+    """Everything the helper needs on `python`, pinned. Only greenlet differs:
+    3.2.4 is its last release with a cp39 wheel, 3.5.6 has cp314."""
+    greenlet = "3.2.4" if python == "3.9" else "3.5.6"
+    return [
+        f"playwright=={PLAYWRIGHT}",
+        f"greenlet=={greenlet}",
+        "pyee==13.0.1",
+        "typing_extensions==4.16.0",
+    ]
+
 
 _VERSION = re.compile(r"^\d+\.\d+\.\d+$")
 
@@ -78,7 +99,7 @@ def _windows(version: str) -> list[str]:
 def download_command(pip: list[str], python: str, dest: Path) -> list[str]:
     """The pinned wheels for `python` on Windows. `--no-deps`: the pins ARE the
     closure; `verify_command` proves nothing is missing."""
-    return [*pip, "download", *_windows(python), "--no-deps", "-d", str(dest), *PINS]
+    return [*pip, "download", *_windows(python), "--no-deps", "-d", str(dest), *pins_for(python)]
 
 
 def verify_command(
