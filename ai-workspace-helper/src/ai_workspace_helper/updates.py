@@ -18,7 +18,8 @@ from typing import Any
 from .setup_core import version_key
 from .version import __version__
 
-#: §3.7.4: at start, then this often.
+#: §3.7.4: on the first connected poll (and the first after a refusal), then
+#: this often.
 CHECK_EVERY_S = 6 * 3600
 
 
@@ -42,8 +43,8 @@ class Updater:
         `required` (what a 426 named, §3.7.6), say at once that this version
         is refused and which release to install."""
         if required is not None:
-            # it came down the unverified line (D20): a release names a version
-            # only when it is one
+            # it came down the unverified line (D20): only a release that is a
+            # dict names a version
             named = required.get("version") if isinstance(required, dict) else None
             self.status = f"required: {named or ''}"
             # let back in (min_version lowered), it reads the release at once
@@ -54,7 +55,14 @@ class Updater:
         if now < self._next:
             return
         self._next = now + CHECK_EVERY_S
-        manifest = self._backend.manifest() or {}
+        try:
+            manifest = self._backend.manifest() or {}
+        except Exception:
+            # connected, this version is not refused: a failed read must not
+            # leave 「下載新版」 up until the next check
+            if self.status.startswith("required"):
+                self.status = ""
+            raise
         version = str(manifest.get("version") or "")
         newer = version_key(version) > version_key(self._version)
         self.status = f"available: {version}" if newer else ""

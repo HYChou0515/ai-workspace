@@ -302,3 +302,9 @@ def test_why_a_request_failed_never_carries_the_login_cookie(tmp_path):
     reason = str(failed.value)
     assert "ECONNREFUSED" in reason
     assert "SSO-SECRET" not in reason and "Call log" not in reason
+    # nor in what logger.exception writes: the traceback with what it was
+    # raised from (the update check logs that way — review round 2 of D21)
+    import traceback
+
+    logged = "".join(traceback.format_exception(failed.value))
+    assert "SSO-SECRET" not in logged

@@ -543,7 +543,6 @@ def test_the_launcher_still_waits_when_a_0_1_0_restarts_through_it(tmp_path):
     import shutil
     import subprocess
     import sys
-    import threading
     import time
 
     helper = Path(setup_core.__file__).resolve().parents[2]
@@ -558,21 +557,60 @@ def test_the_launcher_still_waits_when_a_0_1_0_restarts_through_it(tmp_path):
     python.chmod(0o755)
     old = setup_core.InstanceLock(home / "helper.lock")
     assert old.acquire()  # the 0.1.0 still ending
-    threading.Timer(1.5, old.release).start()
     env = {k: v for k, v in os.environ.items() if k != "DISPLAY"}
 
-    done = subprocess.run(
+    launcher = subprocess.Popen(
         [sys.executable, str(home / "launch.pyw"), "--wait"],
         env={**env, "AI_WORKSPACE_HELPER_HOME": str(home)},
-        capture_output=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
         text=True,
-        timeout=60,
     )
+    # the old helper ends only once a launcher that does not wait would have
+    # given up (show.request) — or after a while: never on a timer a slow
+    # start could outrun
+    for _ in range(100):
+        if (home / setup_core.SHOW_REQUEST).exists():
+            break
+        time.sleep(0.1)
+    old.release()
+    _out, err = launcher.communicate(timeout=60)
     for _ in range(50):
         if started.exists():
             break
         time.sleep(0.1)
 
-    assert done.returncode == 0, done.stderr
+    assert launcher.returncode == 0, err
     assert started.exists()
     assert not (home / setup_core.SHOW_REQUEST).exists()
+
+
+# Rebuilding takes about a minute (venv, pip, self-test): a helper started in
+# the meantime (the desktop shortcut, the Startup one) runs `current` — the
+# very version being rebuilt. The folder is asked about again right before it
+# is replaced, so the running one is never removed (review round 2 of D21).
+def test_a_helper_started_during_the_rebuild_keeps_its_version(tmp_path):
+    home = tmp_path / "home"
+    venv = home / "versions" / "0.3.0" / "venv"
+    venv.mkdir(parents=True)
+    (venv / "in-use").write_text("")
+    write_state(home, {"current": "0.3.0"})
+    started: list[setup_core.InstanceLock] = []
+
+    class _StartsAHelper(_Run):
+        def __call__(self, argv: list[str]) -> None:
+            super().__call__(argv)
+            if argv[1:3] == ["-m", "venv"] and not started:
+                lock = setup_core.InstanceLock(home / "helper.lock")
+                assert lock.acquire()
+                started.append(lock)
+
+    try:
+        with pytest.raises(SetupFailed, match="結束"):
+            install(_zip_beside(tmp_path), home, base_python="/py/pythonw", run=_StartsAHelper())
+    finally:
+        for lock in started:
+            lock.release()
+
+    assert (venv / "in-use").exists()
+    assert not (home / "versions" / "0.3.0.partial").exists()

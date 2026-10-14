@@ -300,7 +300,7 @@ def test_a_chrome_that_will_not_reopen_says_so():
             raise RuntimeError("Chrome failed to start")
         return make()
 
-    ctl = Controller(flaky, lambda _c: _Worker(["unreachable"] * 3))
+    ctl = Controller(flaky, lambda _c: _Worker(["unreachable"] * 3), sleep=lambda _s: None)
     ctl.open()
     made[0].gone = True
 

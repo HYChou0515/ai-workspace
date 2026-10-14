@@ -102,8 +102,10 @@ class Chrome:
                 timeout=REQUEST_TIMEOUT_MS,
             )
         except PlaywrightError as exc:
-            # refused, DNS, timeout, TLS: the backend is not reachable from here
-            raise OSError(_reason(exc)) from exc
+            # refused, DNS, timeout, TLS: the backend is not reachable from here.
+            # `from None`: the Playwright error, call log and cookie included,
+            # must not ride along into a logged traceback either
+            raise OSError(_reason(exc)) from None
         try:
             try:
                 data = r.json() if r.body() else None

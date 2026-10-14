@@ -166,11 +166,15 @@ def install_version(
     version: str,
     *,
     run: Run = run_quietly,
+    before_replacing: Callable[[], None] | None = None,
 ) -> Path:
     """Build `versions/<version>/`: a venv from `base_python`, the helper and
     its packages from `wheelhouse` only, then a self-test. It is built as
     `<version>.partial` and renamed only once all of that passed — a failed
-    step leaves nothing behind for the launcher to pick up."""
+    step leaves nothing behind for the launcher to pick up.
+    `before_replacing` is asked right before an existing `versions/<version>/`
+    is removed for the new build; raising stops it (D21: a helper may have
+    started on it while this was building)."""
     versions = home / "versions"
     partial, final = versions / f"{version}.partial", versions / version
     versions.mkdir(parents=True, exist_ok=True)
@@ -193,6 +197,8 @@ def install_version(
         run([python, "-m", "ai_workspace_helper", "--self-test"])
         if final.exists():
             # reinstalling the same version (D16: run install.pyw again)
+            if before_replacing is not None:
+                before_replacing()
             shutil.rmtree(final)
         os.replace(partial, final)
     except BaseException:
@@ -522,11 +528,21 @@ def install(zip_dir: Path, home: Path, *, base_python: str, run: Run = run_quiet
     # A running helper holds the lock — which version it runs, the lock does
     # not say: so no folder already there is touched under it (D21, §3.7.5)
     running = helper_running(home)
+    in_use = SetupFailed(
+        f"小幫手正在執行，{version} 已經裝著。請先在小幫手的視窗按「結束」，再重新安裝這一版。"
+    )
     if running and (home / "versions" / version).exists():
-        raise SetupFailed(
-            f"小幫手正在執行，{version} 已經裝著。請先在小幫手的視窗按「結束」，再重新安裝這一版。"
-        )
-    install_version(home, base_python, zip_dir / "wheelhouse", version, run=run)
+        raise in_use
+
+    def still_free() -> None:
+        # building takes about a minute: a helper started meanwhile (a
+        # shortcut) runs `current` — perhaps this very folder
+        if helper_running(home):
+            raise in_use
+
+    install_version(
+        home, base_python, zip_dir / "wheelhouse", version, run=run, before_replacing=still_free
+    )
     old = read_state(home)
     current = old.get("current")
     previous = current if current and current != version else old.get("previous")

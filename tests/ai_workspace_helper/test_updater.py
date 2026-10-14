@@ -137,3 +137,21 @@ def test_a_refusal_naming_something_else_still_says_to_reinstall(named):
     up.tick(required=named)
 
     assert up.status == ("required: 4" if isinstance(named, dict) else "required: ")
+
+
+# Let back in, the first read failing (a blip) must not leave 「請到「小幫手」頁
+# 下載新版」 up for six hours: connected, this version is not refused (review
+# round 2 of D21).
+def test_let_back_in_a_failed_read_still_takes_the_refusal_down():
+    class _Down(_Backend):
+        def manifest(self):
+            self.manifests += 1
+            raise OSError("timed out")
+
+    up = _updater(_Down(None), [0.0])
+    up.tick(required=_release("0.4.0"))
+
+    with pytest.raises(OSError):
+        up.tick()
+
+    assert up.status == ""
