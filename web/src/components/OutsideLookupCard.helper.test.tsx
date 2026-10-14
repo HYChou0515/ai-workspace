@@ -60,6 +60,7 @@ function draw({
   release = RELEASE,
   queryClient,
   status,
+  follow,
 }: {
   lookup?: OutsideLookup;
   online?: boolean;
@@ -73,6 +74,8 @@ function draw({
   release?: HelperRelease | null;
   /** The app's own client — with its "could not save" notice — when that matters. */
   queryClient?: QueryClient;
+  /** The chat's `follow` (useChatSession): told when the helper's answer went in. */
+  follow?: (callId: string) => void;
 } = {}) {
   // As the server answers: no job until one is handed over, then that job.
   let latest: HelperJob | null = existing;
@@ -92,7 +95,9 @@ function draw({
   };
   vi.spyOn(window, "open").mockReturnValue(null);
   renderWithQuery(
-    <ChatItemProvider value={{ slug: "rca", itemId: "i1", chatId: "ch1", answered: () => false }}>
+    <ChatItemProvider
+      value={{ slug: "rca", itemId: "i1", chatId: "ch1", answered: () => false, follow }}
+    >
       <OutsideLookupCard callId="call_1" lookup={lookup} client={client} />
     </ChatItemProvider>,
     queryClient,
@@ -165,6 +170,30 @@ describe("a search, with the helper connected", () => {
     fireEvent.click(screen.getByRole("button", { name: "重查" }));
 
     await waitFor(() => expect(client.handOver).toHaveBeenCalledTimes(2));
+  });
+
+  // The helper's answer starts the AI's next turn from the helper's own browser:
+  // the chat is told to follow it, once — or the person had to reload to see
+  // the reply (their report: 「要重新整理才看得到回覆」).
+  it("tells the chat to follow the turn the helper's answer started, once", async () => {
+    const follow = vi.fn();
+    draw({ current: async () => job({ state: "done" }), follow });
+    fireEvent.click(await screen.findByRole("button", { name: "查" }));
+
+    await screen.findByText("小幫手已送給 AI");
+    await waitFor(() => expect(follow).toHaveBeenCalledWith("call_1"));
+    await new Promise((r) => setTimeout(r, 50));
+    expect(follow).toHaveBeenCalledTimes(1);
+  });
+
+  // A job that did not end in an answer started no turn.
+  it("follows nothing when the helper did not answer", async () => {
+    const follow = vi.fn();
+    draw({ current: async () => job({ state: "failed", error: "page timed out" }), follow });
+    fireEvent.click(await screen.findByRole("button", { name: "查" }));
+
+    await screen.findByText("小幫手沒查到:page timed out");
+    expect(follow).not.toHaveBeenCalled();
   });
 
   it("says the helper sent it once it is done", async () => {

@@ -222,6 +222,16 @@ export function OutsideLookupCard({
   const canAttach = item.canAddFiles !== false;
   const error = hint ?? (answer.error ? failure(t, answer.error) : null);
   const jobState = job.data?.state;
+  // The helper's answer went in from the helper's own browser and started the
+  // AI's next turn there: this page may hear nothing of it (another pod's
+  // stream) — so the chat follows it, once (the person's report:
+  // 「要重新整理才看得到回覆」).
+  const followed = useRef(false);
+  useEffect(() => {
+    if (jobState !== "done" || followed.current) return;
+    followed.current = true;
+    item?.follow?.(callId);
+  }, [jobState]);
   // A helper holding this card's job is helping even when its check-ins lapse:
   // it checks in between jobs, and a captcha can keep it on one for minutes.
   const helping = online || jobState === "claimed";
