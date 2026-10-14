@@ -43,6 +43,7 @@ from ..sandbox.protocol import ExecResult, Sandbox, SandboxSpec
 from ..tooling.external import ExternalTools
 from ..tooling.registry import (
     THIRD_PARTY_SEP,
+    CommandInfo,
     PackageInfo,
     exec_package_command,
     find_allowed_command,
@@ -54,6 +55,7 @@ from .env_layers import PersonEnv, resolve, resolve_env
 from .locator import ItemLocator
 from .private_env import PrivateEnvStore, private_layer
 from .request_env import IRequestEnv
+from .timeutil import now_ms
 from .turn_context import resolve_item_tools
 
 logger = logging.getLogger(__name__)
@@ -543,14 +545,14 @@ def register_wui_routes(
         locator.settle_run_chat(key, run_id)
         return StreamingResponse(stream, media_type="text/event-stream")
 
-    @app.post("/a/{slug}/items/{item_id}/wui/tools/{name}/call")
-    async def wui_call_tool(
-        slug: str, item_id: str, name: str, body: CallToolBody, request: Request
-    ) -> CallToolOut:
-        # A tool can write, so the caller needs the verb that lets them write —
-        # the same authority they would need to make the change by hand.
-        investigation_id = locator.require_access(slug, item_id, "edit_content")
+    async def _prepare_tool(
+        investigation_id: str, name: str, request: Request
+    ) -> tuple[AgentToolContext, PackageInfo, CommandInfo]:
+        """Which command ``name`` is for this item, and the context it runs in.
 
+        Shared by `callTool` and `startTool` (#942) so a job reaches exactly the
+        tools a call does, refused with the same sentences, run with the same
+        environment — one door, two ways through it."""
         external = await _external(investigation_id)
         available = [*bundled, *external.packages]
         # A door (plan-tools-picker-groups part 2): the resolved config meets
@@ -642,6 +644,17 @@ def register_wui_routes(
                 session, handle, on_output=on_output
             ),
         )
+        return ctx, pkg, command
+
+    @app.post("/a/{slug}/items/{item_id}/wui/tools/{name}/call")
+    async def wui_call_tool(
+        slug: str, item_id: str, name: str, body: CallToolBody, request: Request
+    ) -> CallToolOut:
+        # A tool can write, so the caller needs the verb that lets them write —
+        # the same authority they would need to make the change by hand.
+        investigation_id = locator.require_access(slug, item_id, "edit_content")
+
+        ctx, pkg, command = await _prepare_tool(investigation_id, name, request)
         handle = await ctx.ensure_sandbox()
         result = await exec_package_command(ctx, handle, pkg, command.name, json.dumps(body.args))
         logger.info(
@@ -726,6 +739,69 @@ def register_wui_routes(
             work_on,
         )
 
+    async def _start_tool(
+        investigation_id: str, name: str, args: dict[str, Any], request: Request
+    ) -> str:
+        """`startTool` (#942 P4): `callTool`'s command, run as a job.
+
+        Resolved and given its environment NOW, while the click's request is
+        here — the same refusals and the same person's values a call gets. What
+        differs is time: the command's deadline is the job's own, not the
+        sandbox's minute, and a Stop must reach it from any pod."""
+        ctx, pkg, command = await _prepare_tool(investigation_id, name, request)
+        args_json = json.dumps(args)
+
+        def work_on(key: str) -> _Work:
+            async def work(wf: Any) -> dict[str, Any]:
+                epoch = await turn_engine.cancel_epoch(key) if turn_engine else 0
+                deadline = orchestrator.page_job_deadline(wf.run_id)
+
+                async def run() -> ExecResult:
+                    handle = await ctx.ensure_sandbox()
+                    remaining = max(1.0, (deadline - now_ms()) / 1000)
+                    return await exec_package_command(
+                        ctx, handle, pkg, command.name, args_json, exec_timeout=remaining
+                    )
+
+                async def stopped_elsewhere() -> None:
+                    # A Stop on another pod only advances this chat's turn
+                    # epoch (`orchestrator.cancel` → `on_stop`). A turn notices
+                    # that on its own; a command has no turn, so it is watched.
+                    while turn_engine is not None:
+                        await asyncio.sleep(_POLL_S)
+                        if await turn_engine.cancel_epoch(key) > epoch:
+                            return
+
+                command_task = asyncio.ensure_future(run())
+                watch = asyncio.ensure_future(stopped_elsewhere())
+                try:
+                    await asyncio.wait({command_task, watch}, return_when=asyncio.FIRST_COMPLETED)
+                finally:
+                    watch.cancel()
+                if not command_task.done():
+                    command_task.cancel()
+                    raise asyncio.CancelledError
+                result = command_task.result()
+                logger.info(
+                    "wui: item %s job ran %s (exit %s)",
+                    investigation_id,
+                    command.name,
+                    result.exit_code,
+                )
+                return {
+                    "output": result.stdout.decode("utf-8", "replace"),
+                    "exit_code": result.exit_code,
+                }
+
+            return work
+
+        return await _start_job(
+            investigation_id,
+            PageJob(kind="tool", name=name, input=args_json),
+            f"頁面：工具 {name}",
+            work_on,
+        )
+
     async def _job_state(job_id: str, investigation_id: str) -> Any:
         """The job, IF it is a page job of this item — else 404."""
         try:
@@ -767,7 +843,7 @@ def register_wui_routes(
         raise HTTPException(status_code=502, detail=state.error or f"{name} failed.")
 
     @app.post("/a/{slug}/items/{item_id}/wui/jobs")
-    async def wui_start_job(slug: str, item_id: str, body: JobBody) -> JobStarted:
+    async def wui_start_job(slug: str, item_id: str, body: JobBody, request: Request) -> JobStarted:
         """`startTool` / `startAgent` (#942 D8): start the work and answer with
         its id at once; the page asks `GET …/jobs/{id}` how it is going."""
         investigation_id = locator.require_access(slug, item_id, "execute")
@@ -775,7 +851,11 @@ def register_wui_routes(
             if not isinstance(body.input, str):
                 raise HTTPException(status_code=422, detail="A sub-agent's input is text.")
             return JobStarted(job_id=await _start_agent(investigation_id, body.name, body.input))
-        raise HTTPException(status_code=422, detail=f"Unknown job kind {body.kind}.")
+        if not isinstance(body.input, dict):
+            raise HTTPException(status_code=422, detail="A tool's input is an object of args.")
+        return JobStarted(
+            job_id=await _start_tool(investigation_id, body.name, body.input, request)
+        )
 
     @app.get("/a/{slug}/items/{item_id}/wui/jobs/{job_id}")
     async def wui_job_status(slug: str, item_id: str, job_id: str) -> JobOut:

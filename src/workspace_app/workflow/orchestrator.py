@@ -673,6 +673,13 @@ class WorkflowOrchestrator:
             raise
         await self._post_run(run_id, item_id, key)
 
+    def page_job_deadline(self, run_id: str) -> int:
+        """When this page job's total time runs out (epoch ms) — what a command
+        it runs is given as its own deadline."""
+        job = self._get(run_id).page_job
+        assert job is not None, f"run {run_id} is not a page job"
+        return job.deadline
+
     async def page_job_state(self, run_id: str, item_id: str) -> PageJobState:
         """What a page reads about its job. Not found unless ``run_id`` is a PAGE
         JOB of ``item_id``: the id comes from the page and the item from the URL.
