@@ -22,6 +22,7 @@ import re
 import time
 from collections.abc import Callable
 from typing import Literal
+from urllib.parse import parse_qs, urlsplit
 
 from msgspec import Struct
 from specstar import QB, SpecStar
@@ -32,6 +33,8 @@ from specstar.types import (
     ResourceIsDeletedError,
     RevisionStatus,
 )
+
+from ..agent.outside_lookup import LISTED_LINK, is_web_address
 
 JobKind = Literal["search", "open_url"]
 JobState = Literal["queued", "claimed", "done", "failed", "cancelled"]
@@ -114,15 +117,60 @@ SEEN_URLS_CAP = 2_000
 _LINK = re.compile(r"\]\((https?://[^)\s]+)\)|<(https?://[^>\s]+)>")
 
 
+#: Google's own hosts: www.google.com, google.com.tw, …
+_GOOGLE = re.compile(r"(?:www\.)?google(?:\.[a-z]{2,3}){1,2}")
+
+
+def _page_of(url: str) -> str:
+    """A Google redirect link (`https://www.google.com/url?q=<page>&sa=U…`, what
+    a search's results carry) as the page it leads to; any other link as it is
+    (D24). Only an http(s) page counts — `?q=javascript:…` stays the redirect."""
+    parts = urlsplit(url)
+    if parts.path == "/url" and _GOOGLE.fullmatch(parts.hostname or ""):
+        params = parse_qs(parts.query)
+        for target in (*params.get("q", []), *params.get("url", [])):
+            if is_web_address(target):
+                return target
+    return url
+
+
 def links_in(markdown: str) -> list[str]:
-    """The web links a lookup's Markdown carries, in order, each once, without
-    a `#fragment` (the same page whichever anchor it was linked at)."""
+    """The web links a lookup's Markdown carries — inline, `<…>`, or listed at
+    the bottom as `[n]: …` — in order, each once, Google's redirects as the
+    page they lead to, without a `#fragment` (the same page whichever anchor it
+    was linked at)."""
+    found = [(m.start(), m.group(1) or m.group(2)) for m in _LINK.finditer(markdown)]
+    found += [(m.start(), m.group(2)) for m in LISTED_LINK.finditer(markdown)]
     out: list[str] = []
-    for m in _LINK.finditer(markdown):
-        url = _without_fragment(m.group(1) or m.group(2))
+    for _, link in sorted(found):
+        url = _without_fragment(_page_of(link))
         if url not in out:
             out.append(url)
     return out
+
+
+def number_links(markdown: str) -> str:
+    """The answer with each link a number — `[text][n]`, `![alt][n]`, `[n]` —
+    and the links listed `[n]: url` at the bottom, so the AI names a link by
+    its file and number instead of copying it (D24; it copied long ones
+    wrong). The same page is one number; Google's redirects are listed as the
+    page they lead to. Plain Markdown reference links: the file still reads
+    and renders as it did."""
+    numbers: dict[str, int] = {}
+
+    def number(link: str) -> int:
+        return numbers.setdefault(_page_of(link), len(numbers) + 1)
+
+    def replace(m: re.Match[str]) -> str:
+        if m.group(1) is not None:
+            return f"][{number(m.group(1))}]"
+        return f"[{number(m.group(2))}]"
+
+    body = _LINK.sub(replace, markdown)
+    if not numbers:
+        return markdown
+    listed = "\n".join(f"[{n}]: {url}" for url, n in numbers.items())
+    return f"{body.rstrip()}\n\n{listed}"
 
 
 def _without_fragment(url: str) -> str:

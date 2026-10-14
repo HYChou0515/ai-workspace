@@ -36,6 +36,8 @@ async def ask_outside_impl(
     why: str,
     query: str | None = None,
     url: str | None = None,
+    file: str | None = None,
+    link: int | None = None,
 ) -> str:
     """Ask the user to look something up outside for you, with a card in the chat.
 
@@ -48,8 +50,13 @@ async def ask_outside_impl(
     Pass `why` as one short sentence the user reads first, then exactly one of:
     - `query`: what to search for. The card offers search buttons; the user may
       edit the query before searching.
-    - `url`: a web page (http or https) to open, such as a link you found in a
-      file.
+    - `file` and `link` together: a link a lookup brought back. A saved lookup
+      marks each link `[text][n]` and lists them at the bottom as
+      `[n]: https://…`; pass the file's path and the number `n`. Use this for
+      any link a lookup brought back — search results included — rather than
+      copying its address: long addresses copied by hand come out wrong.
+    - `url`: a web page (http or https) to open that no lookup listed, such as
+      a link you found in another file.
 
     One card asks for one thing. Your turn ends here. The user's answer is their
     next message: either what they found (usually also saved under `lookups/`;
@@ -59,11 +66,25 @@ async def ask_outside_impl(
     why = why.strip()
     query = (query or "").strip() or None
     url = (url or "").strip() or None
+    file = (file or "").strip() or None
     if not why:
         return "error: give `why` — one sentence the user reads before looking anything up."
-    if (query is None) == (url is None):
-        return "error: pass exactly one of `query` or `url` — one card asks for one thing."
-    if url is not None and not _is_web_address(url):
+    if (file is None) != (link is None):
+        return (
+            "error: pass `file` and `link` together — the saved lookup and the number of "
+            "one of the links listed at its bottom."
+        )
+    if sum(x is not None for x in (query, url, file)) != 1:
+        return (
+            "error: pass exactly one of `query` or `url` (or `file` with `link`) — one "
+            "card asks for one thing."
+        )
+    if file is not None and link is not None:
+        listed = await _listed_link(ctx, file, link)
+        if listed.startswith("error:"):
+            return listed
+        url = listed
+    if url is not None and not is_web_address(url):
         return (
             "error: `url` must be a web address starting with http:// or https://. "
             "To have the user search for something instead, pass `query`."
@@ -93,8 +114,33 @@ _SPACE = (
 _WEB_ADDRESS = re.compile(f"https?://[^/?#{_SPACE}]+(?:[/?#][^{_SPACE}]*)?")
 
 
-def _is_web_address(url: str) -> bool:
+def is_web_address(url: str) -> bool:
     return _WEB_ADDRESS.fullmatch(url) is not None
+
+
+#: `[3]: https://…` — a link listed at the bottom of a saved lookup (D24):
+#: what `number_links` writes and what `file` + `link` reads.
+LISTED_LINK = re.compile(r"^\[(\d+)\]: (\S+)$", re.MULTILINE)
+
+
+async def _listed_link(ctx: RunContextWrapper[AgentToolContext], file: str, link: int) -> str:
+    """The address `file` lists as `[link]: …`, or an `error:` saying why not."""
+    from ..filestore.protocol import FileNotFound
+    from .tool_authz import authorize_tool
+    from .tools import _workspace, rel_path
+
+    if (denied := authorize_tool(ctx.context, "read_content")) is not None:
+        return denied
+    fs, inv = _workspace(ctx)
+    try:
+        text = (await fs.read(inv, file)).decode("utf-8", errors="replace")
+    except FileNotFound:
+        return f"error: file not found: {rel_path(file)}"
+    listed = {int(n): address for n, address in LISTED_LINK.findall(text)}
+    if link not in listed:
+        have = f"its links are [1]–[{max(listed)}]" if listed else "it lists no links"
+        return f"error: {rel_path(file)} has no link [{link}] — {have}."
+    return listed[link]
 
 
 def declared_lookup(text: str) -> dict | None:
@@ -113,7 +159,7 @@ def declared_lookup(text: str) -> dict | None:
         return None
     if not all(isinstance(v, str) and v for v in card.values()):
         return None
-    if "url" in card and not _is_web_address(card["url"]):
+    if "url" in card and not is_web_address(card["url"]):
         return None
     return card
 

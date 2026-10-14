@@ -119,10 +119,12 @@ def test_what_was_found_is_saved_and_answers_the_card():
     assert "need it" in saved
     assert "https://pandas.example/whatsnew" in saved
     assert "Google" in saved
-    assert "| 2.0 | [Arrow](https://a.example) |" in saved
+    # the table as pasted, its link a number listed at the bottom (plan D24)
+    assert "| 2.0 | [Arrow][1] |" in saved
+    assert saved.rstrip().endswith("[1]: https://a.example")
     [msg] = _answers(spec)
     assert path in msg.content
-    assert "[Arrow](https://a.example)" in msg.content
+    assert "[Arrow][1]" in msg.content
 
 
 def test_the_answer_starts_the_next_turn():

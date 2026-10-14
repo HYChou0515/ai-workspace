@@ -47,6 +47,7 @@ from ..resources.conversation import Conversation
 from .chat_routes import SendInto
 from .events import FileChanged
 from .locator import ItemLocator
+from .outside_jobs import links_in, number_links
 from .schemas import _MessageBody
 from .turns import ChatTurnEngine
 
@@ -171,6 +172,9 @@ def register_outside_lookup_routes(
             ).strip()
             if not body and not form.attachments:
                 raise HTTPException(status_code=422, detail="nothing to send — paste or attach")
+            # D24: its links become numbers listed at the bottom — the AI names
+            # one by file and number rather than copying it (it copied wrong).
+            body = number_links(body)
             may_add = _may(locator, slug, investigation_id)
             if form.attachments and not may_add:
                 raise HTTPException(
@@ -508,11 +512,17 @@ async def _take_back(files: WorkspaceFiles, workspace_id: str, paths: list[str])
 
 
 def _message(subject: str, body: str, path: str | None, attached: list[str]) -> str:
-    """What the AI reads next turn: what was looked up, where it is saved, and
-    the text — excerpted when the file holds the rest."""
+    """What the AI reads next turn: what was looked up, where it is saved, how
+    to open one of its links (D24), and the text — excerpted when the file holds
+    the rest."""
     lines = [f"我在外面查了:{subject}"]
     if path:
         lines.append(f"存在 `{path}`")
+        if links_in(body):
+            lines.append(
+                f"要開其中一個連結:ask_outside(file=`{path}`, link=編號)"
+                "——編號是連結後面的 [n],網址列在檔案最下面"
+            )
     if attached:
         lines.append("附件:" + "、".join(f"`{p}`" for p in attached))
     if body:
