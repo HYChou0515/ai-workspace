@@ -15,14 +15,17 @@ import { useNavigate } from "react-router-dom";
 import { type HealthApi, type HealthCheckRow, healthApi } from "../api/health";
 import { qk } from "../api/queryKeys";
 import { Icon } from "../components/Icon";
+import { Tabs } from "../components/ShareTabs";
 import { type ChipTone } from "../components/StatusChip";
 import { useBreadcrumbs } from "../hooks/breadcrumbs";
+import { useIsSuperuserState } from "../hooks/useIsSuperuser";
 import { type MsgKey, useT } from "../lib/i18n";
 import { RetrievalEvalPanel } from "./RetrievalEvalPanel";
 import { SanityQuestions } from "./SanityQuestions";
 import { SanityTable } from "./SanityTable";
 import { SanityVerdicts } from "./SanityVerdicts";
 import { TelemetryPanel } from "./TelemetryPanel";
+import { ToolUsagePanel } from "./ToolUsagePanel";
 import { pxToRem } from "../lib/pxToRem";
 
 type Outcome = { key: MsgKey; tone: ChipTone };
@@ -90,7 +93,12 @@ export function DiagnosticsPage({ client = healthApi }: { client?: HealthApi }) 
   const queryClient = useQueryClient();
   const t = useT();
   useBreadcrumbs([{ label: t("nav.home"), to: "/" }, { label: t("diag.crumb") }]);
-  const [tab, setTab] = useState<"checks" | "traces" | "matrix" | "retrieval">("checks");
+  const [tab, setTab] = useState<"checks" | "traces" | "matrix" | "retrieval" | "usage">(
+    "checks",
+  );
+  // plan-tool-usage-stats D2: the report is for superusers — anyone else gets
+  // a 403 from it, so the tab is not offered to them at all.
+  const { isSuperuser } = useIsSuperuserState();
   const { data } = useQuery({
     queryKey: qk.health,
     queryFn: () => client.getChecks(),
@@ -185,45 +193,30 @@ export function DiagnosticsPage({ client = healthApi }: { client?: HealthApi }) 
           )}
         </header>
 
-        <div
-          className="kb-tabs"
-          role="tablist"
-          aria-label={t("diag.viewAria")}
-          style={{ display: "flex", gap: 4, margin: "16px 0 0" }}
-        >
-          {(
-            [
-              ["checks", t("diag.tab.checks")],
-              ["matrix", t("diag.tab.matrix")],
+        {/* A tab strip that looks like one: text + underline on the selected
+            tab (CLAUDE.md; the shared `Tabs`). It used to be a row of filled
+            pill buttons, which read as actions. */}
+        <div style={{ margin: "16px 0 0" }}>
+          <Tabs
+            idPrefix="diag"
+            label={t("diag.viewAria")}
+            value={tab}
+            onChange={(id) => setTab(id as typeof tab)}
+            tabs={[
+              { id: "checks", label: t("diag.tab.checks") },
+              { id: "matrix", label: t("diag.tab.matrix") },
               // #171: "Activity" (not the OTel jargon "Traces") on the tab; the
               // route/state key stays "traces".
-              ["traces", t("diag.tab.activity")],
+              { id: "traces", label: t("diag.tab.activity") },
               // #535: the retrieval-eval face — fire a pass, read recall@k/MRR.
-              ["retrieval", t("diag.tab.retrieval")],
-            ] as const
-          ).map(([id, label]) => (
-            <button
-              key={id}
-              type="button"
-              role="tab"
-              aria-selected={tab === id}
-              className={`kb-tab${tab === id ? " is-active" : ""}`}
-              onClick={() => setTab(id)}
-              style={{
-                padding: "6px 12px",
-                border: "1px solid var(--paper-3)",
-                borderRadius: "var(--radius-btn)",
-                background: tab === id ? "var(--accent-soft)" : "transparent",
-                color: tab === id ? "var(--accent-h)" : "var(--text-paper-d)",
-                fontSize: "var(--text-body-sm)",
-                fontWeight: 600,
-                cursor: "pointer",
-              }}
-            >
-              {label}
-            </button>
-          ))}
+              { id: "retrieval", label: t("diag.tab.retrieval") },
+              ...(isSuperuser ? [{ id: "usage", label: t("diag.tab.usage") }] : []),
+            ]}
+          />
         </div>
+
+        <div role="tabpanel" id={`diag-panel-${tab}`} aria-labelledby={`diag-tab-${tab}`}>
+        {tab === "usage" && <ToolUsagePanel />}
 
         {tab === "traces" && <TelemetryPanel />}
 
@@ -322,6 +315,7 @@ export function DiagnosticsPage({ client = healthApi }: { client?: HealthApi }) 
           ))}
         </ul>
         )}
+        </div>
       </div>
     </div>
   );

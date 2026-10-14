@@ -1,0 +1,107 @@
+/* docs/plan-tool-usage-stats.md — the administrator's tool-usage tab
+   (`pages/ToolUsagePanel.tsx`). Its own classes. */
+
+.tool-usage-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--space-12);
+  margin-bottom: var(--space-12);
+}
+
+.tool-usage-controls label {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  font-size: var(--text-small);
+  color: var(--text-paper-d);
+}
+
+/* Material 3 segmented buttons: one outlined row, the chosen segment filled. */
+.tool-usage-segmented {
+  display: inline-flex;
+  border: 1px solid var(--paper-3);
+  border-radius: var(--radius-btn);
+  overflow: hidden;
+}
+
+.tool-usage-segmented button {
+  padding: 6px 14px;
+  border: none;
+  border-left: 1px solid var(--paper-3);
+  background: transparent;
+  color: var(--text-paper);
+  font-size: var(--text-small);
+  cursor: pointer;
+}
+
+.tool-usage-segmented button:first-child {
+  border-left: none;
+}
+
+.tool-usage-segmented button[aria-pressed="true"] {
+  background: var(--accent-soft);
+  color: var(--accent-h);
+  font-weight: 600;
+}
+
+/* A wide table scrolls inside itself rather than widening the page. */
+.tool-usage-scroll {
+  overflow-x: auto;
+  max-width: 100%;
+}
+
+.tool-usage-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--text-small);
+}
+
+.tool-usage-table th {
+  font-weight: 600;
+  color: var(--text-paper-d);
+  white-space: nowrap;
+}
+
+.tool-usage-table tr[aria-selected="true"] td {
+  background: var(--accent-soft);
+}
+
+/* The tool name opens its breakdown: a link-styled button, not a filled one. */
+.tool-usage-tool {
+  border: none;
+  background: none;
+  padding: 0;
+  color: var(--accent-h);
+  font-family: var(--font-mono);
+  font-size: inherit;
+  text-align: left;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+
+.tool-usage-tool:hover {
+  text-decoration: underline;
+}
+
+.tool-usage-note {
+  color: var(--text-paper-d);
+}
+
+.tool-usage-detail {
+  margin-top: var(--space-24);
+  padding-top: var(--space-12);
+  border-top: 1px solid var(--paper-3);
+}
+
+.tool-usage-detail-title {
+  margin: 0 0 var(--space-8);
+  font-family: var(--font-mono);
+  font-size: var(--text-body);
+}
+
+.tool-usage-detail h3 {
+  margin: var(--space-16) 0 var(--space-4);
+  font-size: var(--text-small);
+  color: var(--text-paper-d);
+}
