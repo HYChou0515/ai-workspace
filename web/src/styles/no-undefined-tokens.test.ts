@@ -20,6 +20,10 @@ const TOKENS_PATH = resolve(HERE, "tokens.css");
 
 /** Custom properties that are NOT declared in tokens.css yet are legitimate. */
 const RUNTIME_ASSIGNED = new Set([
+  // How many steps a usage bar chart's value axis has, published inline per
+  // chart by `ToolUsagePanel`'s `UsageBars` (plan-tool-usage-stats §8.4) so the
+  // gridlines fall on its ticks. Not a design token: it is that chart's data.
+  "--usage-ticks",
   // The colour an App declares in its own `app.json`, published inline per pill
   // by `MyResourcesPage`'s `AppTag`. Not design tokens: an App's identity colour
   // is the App's to state, and there are as many as there are Apps. Two inks

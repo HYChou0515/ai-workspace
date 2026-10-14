@@ -159,6 +159,9 @@ def _child_context(
     )
     return dataclasses.replace(
         parent_ctx,
+        # plan-tool-usage-stats §3.4: its own surface; the person, App and item
+        # are the parent's (copied with the rest).
+        surface="subagent",
         agent_config=msgspec.structs.replace(
             parent_cfg,
             **engine,

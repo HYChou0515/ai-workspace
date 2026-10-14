@@ -12,6 +12,7 @@ import argparse
 import logging
 import signal
 import threading
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -20,6 +21,8 @@ from ..coordinators import CoordinatorBundle, build_coordinators, build_ingestor
 from . import _JOBTYPE_ATTR, API_REGISTRY_JOBTYPES, consume_until_stopped, select_coordinator
 
 if TYPE_CHECKING:
+    from ..agent.tool_usage import ToolUsageRecorder
+    from ..api.tool_usage_store import ToolUsageStore
     from ..kb.embedder import Embedder
     from ..kb.llm import ILlm
     from ..kb.retriever import Retriever
@@ -28,7 +31,11 @@ logger = logging.getLogger(__name__)
 
 
 def build_bundle(
-    settings: Settings, spec: object, *, config_dir: Path | None = None
+    settings: Settings,
+    spec: object,
+    *,
+    config_dir: Path | None = None,
+    tool_usage: ToolUsageRecorder | None = None,
 ) -> CoordinatorBundle:
     """Build the coordinator bundle from settings — the worker's composition
     root, mirroring the slice of ``__main__`` that feeds ``create_app`` (minus
@@ -43,7 +50,8 @@ def build_bundle(
     embedder = f.get_embedder(settings)
     kb_llm = f.get_kb_llm(settings)
     wiki_model, wiki_base, wiki_key = f.get_wiki_endpoint(settings)
-    runner = f.get_runner(settings)
+    # plan-tool-usage-stats: this worker's agents count into the recorder `main` flushes.
+    runner = f.get_runner(settings, tool_usage=tool_usage)
     catalog = f.get_agent_config_catalog(settings, config_dir=config_dir)
     card_drafter_llm = f.get_card_drafter_llm(settings)
     ingestor = build_ingestor(
@@ -176,26 +184,85 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return p.parse_args(argv)
 
 
-def build_coordinator(settings: Settings, jobtype: str, *, config_dir: Path | None) -> object:
-    """The coordinator this worker consumes, from the composition its JobType
-    needs. Most JobTypes come from the FastAPI-free ``build_bundle``; those in
-    ``API_REGISTRY_JOBTYPES`` come from the API's own composition —
-    ``build_app``, built and never served: blob-gc must hold the API's WHOLE
-    model registry (equal by construction), chat-video must write through the
-    API's own ``WorkspaceFiles`` (only ``create_app`` composes it)."""
-    if jobtype in API_REGISTRY_JOBTYPES:
-        from ..__main__ import build_app
+@dataclass(frozen=True)
+class Worker:
+    """What a worker process runs: the coordinator it consumes, and the writer
+    of the tool calls its agents count (plan-tool-usage-stats §3.5)."""
 
-        app = build_app(settings, config_dir=config_dir)
-        return select_coordinator(app.state.coordinators, jobtype)
+    coordinator: object
+    usage_store: ToolUsageStore | None
+
+
+def build_worker(settings: Settings, jobtype: str, *, config_dir: Path | None) -> Worker:
+    """The coordinator this worker consumes, from the composition its JobType
+    needs, and the writer of what its agents count. Most JobTypes come from the
+    FastAPI-free ``build_bundle``; those in ``API_REGISTRY_JOBTYPES`` come from
+    the API's own composition — ``build_app``, built and never served: blob-gc
+    must hold the API's WHOLE model registry (equal by construction), chat-video
+    must write through the API's own ``WorkspaceFiles`` (only ``create_app``
+    composes it). Either way the writer is the composition's OWN — its recorder,
+    its spec: a recorder of the worker's own would be written empty while the
+    one the agents count into is never written."""
+    from specstar import SpecStar
+
+    from ..agent.tool_usage import ToolUsageRecorder
+    from ..api.tool_usage_store import ToolUsageStore, register_tool_usage, writer_name
+
+    if jobtype in API_REGISTRY_JOBTYPES:
+        from .. import __main__ as api_main
+
+        app = api_main.build_app(settings, config_dir=config_dir)
+        return Worker(
+            select_coordinator(app.state.coordinators, jobtype), app.state.tool_usage_store
+        )
     from ..factories import get_spec
 
     get_user_id = lambda: settings.server.default_user  # noqa: E731
     spec = get_spec(settings, get_user_id=get_user_id)
-    return select_coordinator(build_bundle(settings, spec, config_dir=config_dir), jobtype)
+    tool_usage = ToolUsageRecorder()
+    coordinator = select_coordinator(
+        build_bundle(settings, spec, config_dir=config_dir, tool_usage=tool_usage), jobtype
+    )
+    assert isinstance(spec, SpecStar)
+    register_tool_usage(spec)
+    return Worker(coordinator, ToolUsageStore(spec, tool_usage, pod=writer_name()))
+
+
+def build_coordinator(settings: Settings, jobtype: str, *, config_dir: Path | None) -> object:
+    """The coordinator alone — `build_worker` without the writer."""
+    return build_worker(settings, jobtype, config_dir=config_dir).coordinator
+
+
+def serve(
+    coordinator: object,
+    usage_store: ToolUsageStore | object | None,
+    stop: threading.Event,
+    *,
+    interval: float,
+) -> None:
+    """Consume until ``stop`` (SIGTERM), drain, and write the tool-call counts on
+    ``interval`` and once more at the end. The writer has its OWN stop, set
+    once the drain is over: on ``stop`` its last write would run while the
+    coordinator still drains, and what the jobs finishing then count is lost."""
+    from ..api.tool_usage_store import run_flusher
+
+    flusher = None
+    drained = threading.Event()
+    if usage_store is not None:
+        flusher = threading.Thread(
+            target=run_flusher, args=(usage_store, drained, interval), daemon=True
+        )
+        flusher.start()
+    try:
+        consume_until_stopped(coordinator, stop)
+    finally:
+        drained.set()
+        if flusher is not None:
+            flusher.join(timeout=30)
 
 
 def main(argv: list[str] | None = None) -> None:
+    from ..api.tool_usage_store import FLUSH_INTERVAL_S
     from ..config.loader import load_with_provenance
     from ..observability.setup import install_llm_logging
 
@@ -205,9 +272,11 @@ def main(argv: list[str] | None = None) -> None:
     # Faithful LLM call log (default-on; WORKSPACE_LLM_LOG=0 to silence) so a
     # wiki/card-gen worker's LLM calls are as observable as the API's.
     install_llm_logging(settings)
-    coordinator = build_coordinator(settings, args.jobtype, config_dir=config_dir)
+    worker = build_worker(settings, args.jobtype, config_dir=config_dir)
     logger.info(
-        "worker: booted jobtype=%s coordinator=%s", args.jobtype, type(coordinator).__name__
+        "worker: booted jobtype=%s coordinator=%s",
+        args.jobtype,
+        type(worker.coordinator).__name__,
     )
 
     stop = threading.Event()
@@ -215,7 +284,7 @@ def main(argv: list[str] | None = None) -> None:
         signal.signal(sig, lambda *_: stop.set())
     logger.info("worker: consuming jobtype=%s, blocking until SIGTERM/SIGINT", args.jobtype)
     print(f"worker: consuming {args.jobtype!r} — block until SIGTERM/SIGINT", flush=True)
-    consume_until_stopped(coordinator, stop)
+    serve(worker.coordinator, worker.usage_store, stop, interval=FLUSH_INTERVAL_S)
     logger.info("worker: jobtype=%s drained and stopped", args.jobtype)
     print(f"worker: {args.jobtype!r} drained and stopped", flush=True)
 

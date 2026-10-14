@@ -22,6 +22,7 @@ import re
 import time
 from collections.abc import Callable
 from typing import Literal
+from urllib.parse import parse_qs, urlsplit
 
 from msgspec import Struct
 from specstar import QB, SpecStar
@@ -32,6 +33,8 @@ from specstar.types import (
     ResourceIsDeletedError,
     RevisionStatus,
 )
+
+from ..agent.outside_lookup import LINK_LIST_MARKER, is_web_address
 
 JobKind = Literal["search", "open_url"]
 JobState = Literal["queued", "claimed", "done", "failed", "cancelled"]
@@ -109,20 +112,163 @@ class _OutsideSeenUrls(Struct):
 #: Most links remembered per chat; the oldest go first.
 SEEN_URLS_CAP = 2_000
 
-#: `[text](https://…)` and `<https://…>` — how Markdown writes a link, which is
-#: how both the card's paste converter and the helper's write a page (D11).
-_LINK = re.compile(r"\]\((https?://[^)\s]+)\)|<(https?://[^>\s]+)>")
+#: `<https://…>` — an autolink. Neither it nor `<…>` below runs past the next
+#: `<`: a page of `<https://a` without a `>` was read to its end from each one.
+_AUTOLINK = re.compile(r"<(https?://[^<>\s]+)>")
+_ANGLED = re.compile(r"<([^<>\n]*)>")
+
+
+def _destination(text: str, at: int) -> str | None:
+    """The address of an inline link whose `(` is just before `at`: `<…>`, or
+    up to whitespace (a title follows) or the `)` that closes it — parentheses
+    in it balanced, `\(` `\)` unescaped (the paste converter escapes them:
+    Wikipedia's `Foo_(bar)`). `None` when there is none."""
+    if text.startswith("<", at):
+        angled = _ANGLED.match(text, at)
+        return angled.group(1) if angled else None
+    out: list[str] = []
+    depth = 0
+    while at < len(text):
+        c = text[at]
+        if c == "\\" and at + 1 < len(text) and text[at + 1] in "()\\":
+            out.append(text[at + 1])
+            at += 2
+            continue
+        # `](` ends it too: no address holds one, and each `](` starts a link
+        # of its own — so every character is read once (`](a](a…` was not).
+        if c.isspace() or (c == ")" and depth == 0) or text.startswith("](", at):
+            break
+        depth += {"(": 1, ")": -1}.get(c, 0)
+        out.append(c)
+        at += 1
+    return "".join(out) or None
+
+
+def _openings(text: str) -> dict[int, int]:
+    """`{where a ] is: where its [ is}`, read once from the start — brackets
+    inside nest, `\\x` is x itself (so `\\\\[` opens one), and a blank line
+    ends them all, as it ends a paragraph. Once, not a scan back from each `]`:
+    that was 28 s for 60 KB (review of #941)."""
+    pairs: dict[int, int] = {}
+    open_at: list[int] = []
+    at = 0
+    while at < len(text):
+        c = text[at]
+        if c == "\\":
+            at += 2
+            continue
+        if c == "[":
+            open_at.append(at)
+        elif c == "]" and open_at:
+            pairs[at] = open_at.pop()
+        elif c == "\n" and text.startswith("\n", at + 1):
+            open_at.clear()
+        at += 1
+    return pairs
+
+
+def _links(markdown: str) -> list[tuple[int, bool, str, str]]:
+    """Every link in `markdown` — `(where, is_image, text, address)` in order —
+    read the way Markdown reads one: `[text](address "title")`, `![alt](…)`,
+    `<https://…>`. Read by a scanner, not one pattern: a pattern ended
+    `Foo_(bar)` at its first `)` (review of #941). An address after a `]` that
+    opens no text (`\\[1\\](…)`, a `[` a blank line ago) is still a link, with
+    no text; and so is one in code — nothing here is rewritten, and it came
+    from outside like the rest (telling code apart took a pattern that was
+    quadratic and crossed paragraphs: review round 3)."""
+    text = markdown
+    found = [(m.start(), False, "", m.group(1)) for m in _AUTOLINK.finditer(text)]
+    openings = _openings(text)
+    close = text.find("](")
+    while close >= 0:
+        address = _destination(text, close + 2)
+        if address is not None:
+            start = openings.get(close)
+            if start is None:
+                found.append((close, False, "", address))
+            else:
+                image = start > 0 and text[start - 1] == "!"
+                found.append((start, image, text[start + 1 : close], address))
+        close = text.find("](", close + 2)
+    return sorted(found)
+
+
+#: Google's own hosts: www.google.com, google.com.tw, …
+_GOOGLE = re.compile(r"(?:www\.)?google(?:\.[a-z]{2,3}){1,2}")
+
+
+def _page_of(url: str) -> str:
+    """A Google redirect link (`https://www.google.com/url?q=<page>&sa=U…`, what
+    a search's results carry) as the page it leads to; any other link as it is
+    (D24). Only an http(s) page counts — `?q=javascript:…` stays the redirect.
+    An address no parser reads (`https://[your-server]/…`, pasted API docs) is
+    no redirect: it raised, and the answer could not be sent (review of #941)."""
+    try:
+        parts = urlsplit(url)
+        host = parts.hostname
+    except ValueError:
+        return url
+    if parts.path == "/url" and _GOOGLE.fullmatch(host or ""):
+        params = parse_qs(parts.query)
+        for target in (*params.get("q", []), *params.get("url", [])):
+            if is_web_address(target):
+                return target
+    return url
 
 
 def links_in(markdown: str) -> list[str]:
-    """The web links a lookup's Markdown carries, in order, each once, without
-    a `#fragment` (the same page whichever anchor it was linked at)."""
-    out: list[str] = []
-    for m in _LINK.finditer(markdown):
-        url = _without_fragment(m.group(1) or m.group(2))
-        if url not in out:
-            out.append(url)
-    return out
+    """The web links a lookup's Markdown carries (images too), in order, each
+    once, without a `#fragment` (the same page whichever anchor it was linked
+    at) — a Google redirect both as it came and as the page it leads to (D24):
+    what came back stays openable with no nod, and so does the page the list
+    names."""
+    out: dict[str, None] = {}
+    for _, _, _, address in _links(markdown):
+        for url in (address, _page_of(address)):
+            url = _without_fragment(url)
+            if is_web_address(url):
+                out.setdefault(url)
+    return list(out)
+
+
+def _host(url: str) -> str:
+    try:
+        return (urlsplit(url).hostname or "").lower()
+    except ValueError:
+        return ""
+
+
+def numbered_links(markdown: str, *, skip_site: str | None = None) -> list[tuple[int, str, str]]:
+    """`(n, text, page)` for each web page the answer links to — not images —
+    numbered in order from 1, the same page (whatever its `#anchor`) one
+    number, a Google redirect as the page it leads to (D24).
+
+    `skip_site`, a search's results page: its own site's links — sign-in,
+    images, maps, the next page — are not listed, so the results take the
+    numbers (the person: 「直接看google search首頁就停住」)."""
+    site = _host(skip_site or "").removeprefix("www.")
+    pages: dict[str, str] = {}
+    for _, image, text, address in _links(markdown):
+        page = _without_fragment(_page_of(address))
+        host = _host(page)
+        if site and (host == site or host.endswith("." + site)):
+            continue
+        # `<` `>` cannot be written inside the list's `<…>`: it would cut it
+        listable = is_web_address(page) and not {"<", ">"} & set(page)
+        if not image and listable and page not in pages:
+            pages[page] = " ".join(text.split())
+    return [(n, text, page) for n, (page, text) in enumerate(pages.items(), start=1)]
+
+
+def link_list(numbered: list[tuple[int, str, str]]) -> str:
+    """The list that goes under a saved answer — after `LINK_LIST_MARKER`, one
+    `- [n] <page> text` per link — or `""` when there is nothing to list. The
+    answer above it is left as it came (review of #941: rewriting its links in
+    place broke some and collided with others)."""
+    if not numbered:
+        return ""
+    rows = "\n".join(f"- [{n}] <{page}> {text}".rstrip() for n, text, page in numbered)
+    return f"\n\n{LINK_LIST_MARKER}\n\n{rows}\n"
 
 
 def _without_fragment(url: str) -> str:
@@ -337,7 +483,7 @@ class OutsideJobStore:
     # ── links lookups brought back (D12) ────────────────────────────────────
 
     async def remember_links(self, item_id: str, chat_id: str, markdown: str) -> None:
-        urls = links_in(markdown)
+        urls = await asyncio.to_thread(links_in, markdown)  # off the loop: a page is big
         if urls:
             await asyncio.to_thread(self._remember_sync, item_id, chat_id, urls)
 

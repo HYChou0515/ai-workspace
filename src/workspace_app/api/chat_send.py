@@ -1488,6 +1488,7 @@ class ChatSendService:
                 # the live FileStore each turn and handed ONLY to the agent. The persisted user
                 # message + the broadcast UserMessage stay clean (block never enters history),
                 # so it is idempotent + replay-safe. "" for Apps that declare no context_files.
+                from ..agent.tool_usage import record_skill
                 from ..apps.context_files import build_context_block
                 from ..apps.skills import build_applied_skills_block, build_workspace_skills_block
 
@@ -1512,6 +1513,9 @@ class ChatSendService:
                         self._locator.slug_of(investigation_id),
                         self._locator.profile_of(investigation_id),
                         body.apply_skills,
+                        # plan-tool-usage-stats §8.1: the second door a skill is
+                        # loaded through — counted like a `read_skill`.
+                        on_loaded=lambda name, source: record_skill(ctx, name, source),
                     )
                     if body.apply_skills
                     else ""

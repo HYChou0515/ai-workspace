@@ -86,6 +86,7 @@ from .events import (
 from .llm_trace import build_trace, format_trace_line, redact_endpoint, trace_enabled
 
 if TYPE_CHECKING:
+    from ..agent.tool_usage import ToolUsageRecorder
     from ..factories import LlmEndpoint, SubagentModel
     from ..failover.cooldown import CooldownRegistry
 
@@ -531,6 +532,11 @@ def _agent_for(
 
     if in_chat and ask_outside_granted(config):
         tools.append(ask_outside_tool())
+    # plan-tool-usage-stats D6: what is in the list BEFORE the package commands
+    # is ours — built-ins and the rule-granted cards. The last point every
+    # source is still a list of its own, so the source is read here, not
+    # guessed later from a name a first-party command shares with a built-in.
+    builtin_names = {t.name for t in tools}
     if packages:
         tools.extend(build_function_tools(packages, allowed=config.allowed_tools))
     # Last stop before the model sees them, and the only place every source is in
@@ -588,8 +594,30 @@ def _agent_for(
     # off the first valid JSON object, run on that, and warn the model in
     # the result string so it self-corrects instead of getting blocked.
     from ..agent.args_recovery import wrap_with_args_recovery
+    from ..agent.tool_usage import wrap_with_usage
+    from ..tooling.registry import model_tool_name
 
-    tools = [wrap_with_args_recovery(t) for t in tools]
+    # …and each tool counted (plan-tool-usage-stats §3.1), OUTSIDE the
+    # argument recovery so a call it refuses is counted as a failed call.
+    third_party = {
+        model_tool_name(p, c) for p in packages or () if p.third_party for c in p.commands
+    }
+
+    # …and the package it came from (§9.1), so a report can add a package's
+    # commands up; a built-in shadows a command of its name, so it has none.
+    package_of = {model_tool_name(p, c): p.name for p in packages or () for c in p.commands}
+
+    def source(name: str) -> str:
+        if name in builtin_names:
+            return "builtin"
+        return "third_party" if name in third_party else "first_party"
+
+    def package(name: str) -> str:
+        return "" if name in builtin_names else package_of.get(name, "")
+
+    tools = [
+        wrap_with_usage(wrap_with_args_recovery(t), source(t.name), package(t.name)) for t in tools
+    ]
     # Per-message reasoning effort (the UI selector). Only set when chosen —
     # absent leaves the model's default. drop_params (above) drops it on models
     # that don't support it, so it's safe to send to any model.
@@ -1294,7 +1322,12 @@ class LitellmAgentRunner:
         stream_deadlines: tuple[float, float] | None = None,
         sleep: Callable[[float], Awaitable[None]] | None = None,
         rate_limit_budget_s: float = 120.0,
+        tool_usage: ToolUsageRecorder | None = None,
     ) -> None:
+        # plan-tool-usage-stats §3.1: where every turn this runner drives counts
+        # its tool calls. Handed to the turn in `run`, the one door every surface
+        # comes through. None counts nothing.
+        self._tool_usage = tool_usage
         # #94: no runner-level default config. Every turn's config arrives on
         # ctx.agent_config (resolved per-item via the AppCatalog / KB / wiki
         # catalogs); run() fails loud if it's missing.
@@ -1394,6 +1427,8 @@ class LitellmAgentRunner:
         return lambda key: resolved.get(key, LlmCredential(key))
 
     async def run(self, prompt: str, ctx: AgentToolContext) -> AsyncIterator[AgentEvent]:
+        if ctx.tool_usage is None:
+            ctx.tool_usage = self._tool_usage
         # #94: no silent fallback. Every turn must arrive with a resolved
         # agent_config (App items resolve via the AppCatalog; KB/wiki via their
         # catalogs). A None here means resolution failed upstream — fail loud

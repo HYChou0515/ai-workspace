@@ -180,6 +180,11 @@ class WorkflowRun(Struct):
     """Started by a schedule's "run now", not by its time — what the schedules
     overview tags "手動" (`docs/plan-schedule-overview-polish.md`). Additive: a
     run written before this reads False, as a scheduled one."""
+    from_schedule: bool = False
+    """Started by a schedule — by its time or by its "run now" — not by a person
+    launching the workflow (docs/plan-tool-usage-stats.md §3.4: its tool calls
+    are counted on the schedule surface). Additive: a run written before this
+    reads False."""
     page_job: PageJob | None = None
     """Set when a PAGE started this run as a job rather than a workflow (#942).
     Additive: every run written before it reads None, a workflow run."""

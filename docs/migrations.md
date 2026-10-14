@@ -2329,6 +2329,126 @@ agent 步驟裡 AI 的呼叫、WUI 的工具呼叫、view plugin、圖表重畫�
 - 一台只有 Python 3.9 的電腦:`precheck.pyw` 第一列「Python 3.9 以上」通過;`install.pyw` 裝得起來;卡片上按「查」拿得到內容。
 - 一台 3.10 以上的電腦重裝後:小視窗標題是新版本,按「查」照常。
 
+### 2026-10-14 · f25eabb8 · #941 「請幫我查」:AI 用檔名＋編號開連結,不再照抄網址 {#pr-941}
+
+**設定** — 無。
+
+**資料** — 無。已經存好的 `lookups/` 檔不會被改寫;新的回答才會在最下面帶編號清單。舊檔沒有清單,AI 要開那些舊連結時照舊用 `url`。
+
+**k8s · CI 側** — 只改後端,照常重 build、部署。**小幫手不用重新打包**,使用者也不用重裝。
+
+**行為改變,沒有開關**(plan-outside-helper D24):
+
+- 「請幫我查」的回答(你貼上的、小幫手抓的)存檔時**內容原樣不動**,最下面多一段「## 查到的連結」:每行 `- [n] <網址> 標題`;同一頁一個編號;
+  Google 搜尋結果的跳轉連結(`google.*/url?q=…`)列成它導向的那一頁。
+- AI 收到的那則訊息在內容摘要之前列出這些編號(最多 50 個),並寫著「ask_outside(file=…, link=編號)」;AI 給檔名和編號,
+  後端讀那個檔取網址,不必照抄。
+- **搜尋**的回答:清單不列搜尋引擎自己網站的連結(登入、圖片、地圖、下一頁),結果排在最前面;訊息和工具說明都請 AI 回答前
+  打開最相關的結果讀原文(以前它常只看搜尋結果頁的摘要就回答)。
+- 能不能不點頭就由小幫手開,規則照舊(D12:網址要是這個聊天查回來過的);記下的連結多了「跳轉連結導向的那一頁」,
+  跳轉連結本身也照舊記著;含括號的網址(例如維基百科)記的是完整的,不再在第一個 `)` 被切斷。
+
+**確認做完**(`rollout 後`):
+
+- 在聊天裡請 AI 查一個要搜尋的問題,回答之後打開存下來的 `lookups/….md`:內容和以前一樣,最下面有「查到的連結」一段,
+  列的是真正的網址(沒有 `google.com/url`)。
+- 再請 AI 打開其中一個結果:卡片上顯示的是那個網頁的真正網址;小幫手在線時不用按「查」就會開。
+
+### 2026-10-14 · b697fd67 · #938 「請幫我查」:小幫手送出後,聊天自己跟上 AI 的回答;跨 pod 即時事件斷線會重連並寫 log {#pr-938}
+
+**設定** — 無。
+
+**資料** — 無。
+
+**k8s · CI 側** — 後端沒有改,照常重 build、部署(「小幫手」頁那一行改寫成 3.9–3.14,隨前端出去)。**要做的是發布新版小幫手**
+(`rollout 後`,隨時):
+
+1. 在 dev server 打包:`python3 scripts/pack_ai_workspace_helper.py --version <比目前發布的大>`(要用有 pip 的 Python),把
+   `dist/ai-workspace-helper/` 的兩個檔換進 `server.ai_workspace_helper_dir`(不用重新部署)。為什麼:3.9 用的 wheel
+   (greenlet 3.2.4、Playwright 1.60.0)要在安裝包裡,`install.pyw` 才會接受 3.9。打包的輸出要看得到一行
+   `--python-version 3.9 … greenlet==3.2.4` 的下載,以及包括 3.9 在內每個 Python 一次 `--dry-run`。
+   沒做的症狀:只有 Python 3.9 的人雙擊 `install.pyw` 或 `precheck.pyw`,看到「需要 Python 3.10 以上」。
+2. 第 1 步之後:已經裝好的人小視窗會顯示「有新版」,照「小幫手」頁重裝(更新只通知,plan D21)。不重裝也能照常用。
+
+**行為改變,沒有開關**(plan D23):
+
+- 安裝包接受 Python 3.9–3.14(原本 3.10–3.14)。
+- 每個人重裝後,小幫手的 Playwright 從 1.63.0 換成 **1.60.0**(1.60.0 是最後一個裝得上 3.9 的版本,所有 Python 用同一版)。
+  小幫手回報的版本資訊裡 Playwright 會顯示 1.60.0。
+- Python 3.9 已在 2025-10 停止官方支援(不再有安全性更新);能用 3.10 以上的電腦還是建議用 3.10 以上。
+
+**確認做完**(`rollout 後`):
+
+- 「小幫手」頁顯示新版本號,說明那一行寫 3.9–3.14。
+- 一台只有 Python 3.9 的電腦:`precheck.pyw` 第一列「Python 3.9 以上」通過;`install.pyw` 裝得起來;卡片上按「查」拿得到內容。
+- 一台 3.10 以上的電腦重裝後:小視窗標題是新版本,按「查」照常。
+
+**k8s · CI 側** — 照常重 build、部署,沒有要另外做的事。`event_bus.kind: rabbitmq` 的部署在 `rollout 後`看每個 API pod 的 log:
+
+```
+kubectl logs <api-pod> | grep "event_bus:"
+```
+
+- 每個 API pod 都要有一行 `event_bus: connected — exchange <event_bus.exchange,預設 rca_turn_events>, this pod's queue amq.gen-…`。
+  為什麼:這條佇列是別的 pod 跑的 AI 回答送到這個 pod 上瀏覽器的唯一路。沒有這行的症狀:接在這個 pod 上的人要重新整理才看得到
+  別的 pod 跑的回答(只剩一個 pod 時正常)。(部署過 `patch-b8134d72` 的看不到這行是正常的:那一版的這些行在 INFO,而這個 app
+  沒有設定 logging,INFO 會被丟掉;這一版讓它們一定印出來。)
+- 一直出現 `event_bus: cannot reach the broker — trying again in N s` → 這個 pod 從沒連上 RabbitMQ(網址、vhost、帳密、
+  NetworkPolicy)。以前這種 pod 啟動時連一次失敗就永遠不再試,只在當下由 asyncio 印一次 `Task exception was never retrieved`;
+  現在會每 1→30 秒重試一次,連上就恢復,不用重啟。想確認舊版是不是這個原因:在換版前的 pod log 找那一行(帶 `ConnectionError` 或
+  aio_pika 的錯誤)。
+- `event_bus: lost the broker — trying again in N s`:連上之後斷了,會自己重連。`event_bus: dropping frames on send` 之後接
+  `event_bus: sending again — N frame(s) were dropped`:那段時間的即時事件沒送出(畫面靠資料庫補);一次斷線各一行,偶爾出現不用處理。
+
+**行為改變,沒有開關**:
+
+- 「請幫我查」卡片顯示「小幫手已送給 AI」,或使用者手動貼上答案送出後,若聊天裡還沒出現 AI 的回答(這一頁沒收到那一輪的即時事件),
+  聊天會自己讀資料庫直到 AI 的回答存好,不用重新整理。這條路不會跳出「連線中斷,這裡可能少了一段」。
+- 每一輪對話的開始與結束,API pod 會寫一行 `live: published <事件> key=… pod=… viewers_here=N`;收到別的 pod 的事件寫
+  `live: from bus <事件> key=… origin=… pod=… viewers_here=N`;瀏覽器接上/離開串流寫 `live: viewer joined|left key=… pod=…`。
+  只記事件種類、對話 key 與 pod,不記內容;一輪約幾行。用來追「誰跑的、誰收到、那裡有沒有人在看」。
+
+**確認做完**(`rollout 後`):
+
+- 每個 API pod 的 log 都有 `event_bus: connected`;`rabbitmqctl list_bindings -p <vhost> source_name destination_name | grep <exchange>`
+  (vhost 是 `event_bus.url` 裡的那個,預設 `/`;exchange 預設 `rca_turn_events`)列出的佇列數不少於 API pod 數。
+- 多個 pod 時:請 AI 查外面的東西、按「查」;卡片出現「小幫手已送給 AI」後**不重新整理**,幾秒內聊天出現送出的內容與 AI 的回答。
+
+### 2026-10-14 · #932 管理者看得到 AI 用了哪些工具與 skill、誰用、在哪、失敗幾次、多慢 {#pr-932}
+
+**設定** — 沒有新 key，不用改任何設定。行為改變，沒有開關（`docs/plan-tool-usage-stats.md`）：升級後 AI 的**每一次
+工具呼叫都會被計數**——工具、來源（內建／第一方套件／第三方）、成功或失敗、耗時、是誰、在哪個場合（聊天、KB 聊天、
+工作流程、排程、子代理、KB 子代理、背景工作）、哪個 App、哪個 item。**每一次 skill 被載入也會被計數**——AI 用
+`read_skill` 讀到內容，或使用者在 skill 選單套用，都算一次；記 skill 名稱、來源（平台內建／App 內建／skill hub／
+自己寫的）與同樣的誰、場合、App、item，沒有失敗與耗時。superuser 在 Diagnostics 頁的新分頁「使用統計」看得到
+（同一頁上下兩區：工具與 Skill，各有橫條圖與表格；工具區可以勾選要顯示哪些、切換「每個 command／依套件」；
+兩區都能下載原始資料 CSV）；其他人看不到這個分頁，`GET /api/admin/tool-usage`（`?kind=skill` 看 skill、
+`?group=package` 依套件）與 `GET /api/admin/tool-usage.csv` 回 403。skill 的來源「item 內自建」指存在該 item
+工作區、沒有來源標記的 skill，以及從 skill hub fork 出來的那份。
+Diagnostics 頁的分頁條改成底線樣式（和分享面板同款），內容不變。
+
+**資料** — 一張新表 `ToolUsageDay`（索引 `day`、`tool`、`kind`、`package`），不用做事，但要知道它的大小：每個行程（API 和每個
+worker 各算一個，名稱是「主機名-pid」）每個被用過的工具或 skill 每天一列（同名但來源或套件不同的各算一列），所以上限是
+「（工具的「名稱＋來源＋套件」數 ＋ skill 的「名稱＋來源」數）× 每天出現過的行程數 × 91 天」——重啟、
+rollout、HPA 擴張可能會在當天多出新的行程名稱。API 與 worker 每 5 分鐘、以及正常停止時寫一次（worker 在排空完工作之後
+才寫最後一次）；行程被直接殺掉（沒收到 SIGTERM）會掉最後不到 5 分鐘的計數。**超過 90 天的列每天自動永久刪除**（依 `day` 索引，不掃
+全表）。`WorkflowRun` 多一個 `from_schedule` 欄位（有預設值，舊的 run 讀成 `false`），不用回填；升級前就開始的 run
+一律算「工作流程」。升級後，item 的排程與 profile `triggers.json` 宣告的排程都算「排程」。skill hub 的「使用 N 次」
+計數器改用同樣的「主機名-pid」當寫入者（原本用 `HOSTNAME`，同一台 VM 上多個行程會共用一列、互相蓋掉）：升級後寫的是
+新的列，總數是所有列相加，舊列照算，面板上的數字不會跳。
+
+**k8s · CI 側** — 沒有新的 manifest、env、probe 或 JobType。要知道的一點：worker 的最後一次寫入排在排空工作之後，
+所以排空要在各 worker 的 `terminationGracePeriodSeconds`（`kubernetes/base/workers.yaml`：多數 60 秒，有的 120、900 秒）內做完；超過就被 SIGKILL，
+即使收到了 SIGTERM，也會掉最後不到 5 分鐘加上排空期間的計數。只影響統計，工作本身照原本的重派機制。
+
+**確認做完**（`rollout 後`）
+
+- 用 superuser 開 Diagnostics →「使用統計」：在任一 App 聊天裡讓 AI 用過工具，約 5 分鐘內出現該工具與次數；點工具
+  看得到人、場合、item。
+- 同一頁切到「Skill」：在聊天裡套用一個 skill 送出，約 5 分鐘內出現那個 skill、它的來源與次數。
+- 非 superuser 開 Diagnostics：沒有「使用統計」分頁。
+- 沒部署到這一版的症狀：Diagnostics 沒有「使用統計」分頁；`GET /api/admin/tool-usage` 是 404。
+
 ### 2026-10-15 · #945 WUI 頁面可以問 subagent，工具與 subagent 都能「等結果」或「起成工作」 {#pr-945}
 
 **設定** — 兩個新 key，都有預設值，不設也能開機（`docs/configuration.md`「頁面同時能跑幾件工作、每件最多多久」）：

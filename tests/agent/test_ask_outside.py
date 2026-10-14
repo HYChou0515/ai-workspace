@@ -14,7 +14,11 @@ import pytest
 from agents import RunContextWrapper
 
 from workspace_app.agent.context import AgentToolContext
-from workspace_app.agent.outside_lookup import OUTSIDE_LOOKUP_MARKER, declared_lookup
+from workspace_app.agent.outside_lookup import (
+    LINK_LIST_MARKER,
+    OUTSIDE_LOOKUP_MARKER,
+    declared_lookup,
+)
 from workspace_app.resources.agent_config import AgentConfig
 from workspace_app.tooling.registry import CommandInfo, PackageInfo
 
@@ -223,3 +227,111 @@ def test_the_shared_case_table_still_says_what_declared_lookup_does() -> None:
     assert len(table["cases"]) >= 20
     for case in table["cases"]:
         assert declared_lookup(case["output"]) == case["card"], case["output"]
+
+
+# ── a link by its file and number (docs/plan-outside-helper.md D24) ─────────
+#
+# The AI copied long links wrong (the person: 「他對於摳網址有障礙 通常會摳錯」):
+# a saved lookup lists its links, numbered, at the bottom, and the AI names
+# the file and the number. The card is the same open-this-page card; whether
+# it opens with no nod is still the server's D12 check on that URL.
+
+SAVED = (
+    "# pandas\n\n- [whatsnew](https://pandas.example/whatsnew)\n"
+    "- [api](https://pandas.example/api)\n\n"
+    f"{LINK_LIST_MARKER}\n\n"
+    "- [1] <https://pandas.example/whatsnew> whatsnew\n- [2] <https://pandas.example/api> api\n"
+)
+
+
+async def _call_in(files: dict[str, str], **args) -> str:  # noqa: ANN003
+    from workspace_app.agent.outside_lookup import ask_outside_impl
+    from workspace_app.files import WorkspaceFiles
+    from workspace_app.filestore.memory import MemoryFileStore
+
+    ws = WorkspaceFiles(MemoryFileStore())
+    for path, text in files.items():
+        await ws.write("inv-1", path, text.encode())
+    ctx = AgentToolContext(investigation_id="inv-1", files=ws)
+    return await ask_outside_impl(RunContextWrapper(ctx), **args)
+
+
+async def test_a_numbered_link_becomes_an_open_this_page_card() -> None:
+    reply = await _call_in(
+        {"lookups/2026-10-14-pandas.md": SAVED},
+        why="the release notes",
+        file="lookups/2026-10-14-pandas.md",
+        link=2,
+    )
+
+    assert _card(reply) == {"why": "the release notes", "url": "https://pandas.example/api"}
+
+
+@pytest.mark.parametrize(
+    ("args", "says"),
+    [
+        ({"file": "lookups/p.md", "link": 3}, "no link [3]"),
+        ({"file": "notes.md", "link": 1}, "lists no links"),
+        ({"file": "lookups/missing.md", "link": 1}, "not found"),
+        ({"file": "lookups/p.md"}, "`file` and `link` together"),
+        ({"link": 1}, "`file` and `link` together"),
+        ({"file": "lookups/p.md", "link": 1, "url": "https://a.example/"}, "exactly one of"),
+        ({"file": "lookups/p.md", "link": 1, "query": "q"}, "exactly one of"),
+    ],
+    ids=[
+        "no-such-number",
+        "no-links",
+        "no-such-file",
+        "file-alone",
+        "link-alone",
+        "and-url",
+        "and-query",
+    ],
+)
+async def test_a_numbered_link_that_cannot_become_a_card_is_refused(args: dict, says: str) -> None:
+    reply = await _call_in({"lookups/p.md": SAVED, "notes.md": "no links"}, why="w", **args)
+
+    assert reply.startswith("error:"), reply
+    assert says in reply
+    assert declared_lookup(reply) is None
+
+
+# The number names what the file LISTS — a listed line that is no web page
+# (a hand-edited list) is refused like any `url` that is not one.
+async def test_a_listed_link_that_is_no_web_page_is_refused() -> None:
+    reply = await _call_in(
+        {"notes.md": f"x\n\n{LINK_LIST_MARKER}\n\n- [1] <javascript:x>"},
+        why="w",
+        file="notes.md",
+        link=1,
+    )
+
+    assert reply.startswith("error:") and "http:// or https://" in reply
+
+
+# Reading the file is reading the item: a speaker who may only converse gets
+# the same refusal `read_file` gives — not the file's links.
+async def test_a_numbered_link_needs_leave_to_read_the_file() -> None:
+    from tests.agent.test_tool_authz import _ctx, _spec_with_item
+    from workspace_app.agent.outside_lookup import ask_outside_impl
+    from workspace_app.perm import Permission
+
+    spec, iid = _spec_with_item(
+        Permission(visibility="restricted", read_meta=["user:alice"], converse=["user:alice"])
+    )
+    ctx = _ctx(spec, iid, acting_user="alice")
+    await ctx.context.files.write(iid, "lookups/p.md", SAVED.encode())
+
+    reply = await ask_outside_impl(ctx, why="w", file="lookups/p.md", link=1)
+
+    assert "don't have permission" in reply
+    assert declared_lookup(reply) is None
+
+
+async def test_the_tool_says_to_name_a_link_by_file_and_number() -> None:
+    from workspace_app.agent.outside_lookup import ask_outside_impl
+
+    doc = ask_outside_impl.__doc__ or ""
+    assert "`file`" in doc and "`link`" in doc and "- [n] <https://…>" in doc
+    # …and to open a search's results before answering from them
+    assert "results page" in doc and "before answering" in doc

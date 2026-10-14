@@ -308,10 +308,10 @@ def wrap_with_args_recovery(tool: FunctionTool) -> FunctionTool:
     return dataclasses.replace(tool, on_invoke_tool=safer)
 
 
-def ambiguous_call_reply(args: dict) -> str | None:
-    """The reply to a call `ToolAliasModel` found ambiguous — today's collision
-    message, then the names to call instead — or ``None`` for ordinary args."""
-    if set(args) != {AMBIGUOUS_CALL_KEY}:
+def _ambiguous(args: Any) -> tuple[str, list[tuple[str, str]]] | None:
+    """The name called and its candidates, when `ToolAliasModel` found the call
+    ambiguous; ``None`` for ordinary args."""
+    if not isinstance(args, dict) or set(args) != {AMBIGUOUS_CALL_KEY}:
         return None
     detail = args[AMBIGUOUS_CALL_KEY]
     if not isinstance(detail, dict):
@@ -325,6 +325,29 @@ def ambiguous_call_reply(args: dict) -> str | None:
     ]
     if not isinstance(called, str) or not candidates:
         return None
+    return called, candidates
+
+
+def ambiguous_call_reply(args: dict) -> str | None:
+    """The reply to a call `ToolAliasModel` found ambiguous — today's collision
+    message, then the names to call instead — or ``None`` for ordinary args."""
+    found = _ambiguous(args)
+    if found is None:
+        return None
     from ..tooling.registry import ambiguous_name_message
 
-    return ambiguous_name_message(called, candidates)
+    return ambiguous_name_message(*found)
+
+
+def ambiguous_called_name(args_json: str) -> str | None:
+    """The name the model actually called, when the call reached this tool only
+    because `ToolAliasModel` routed an ambiguous old name to the first
+    candidate — what the usage count records it under (that candidate never
+    ran). ``None`` for an ordinary call."""
+    if AMBIGUOUS_CALL_KEY not in args_json:
+        return None
+    try:
+        found = _ambiguous(json.loads(args_json))
+    except ValueError:
+        return None
+    return None if found is None else found[0]
