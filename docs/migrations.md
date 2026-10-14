@@ -2300,11 +2300,36 @@ agent 步驟裡 AI 的呼叫、WUI 的工具呼叫、view plugin、圖表重畫�
   瀏覽器存下檔案。沒部署到這一版的症狀：什麼都沒發生（多頁版的頁面，瀏覽器主控台會有上面那句
   `allow-downloads`；單頁版不一定有訊息）。
 
+### 2026-10-14 · b64bd2a4 · #940 小幫手支援 Python 3.9 {#pr-940}
+
 ### 2026-10-14 · #938 「請幫我查」:小幫手送出後,聊天自己跟上 AI 的回答;跨 pod 即時事件斷線會重連並寫 log {#pr-938}
 
 **設定** — 無。
 
 **資料** — 無。
+
+**k8s · CI 側** — 後端沒有改,照常重 build、部署(「小幫手」頁那一行改寫成 3.9–3.14,隨前端出去)。**要做的是發布新版小幫手**
+(`rollout 後`,隨時):
+
+1. 在 dev server 打包:`python3 scripts/pack_ai_workspace_helper.py --version <比目前發布的大>`(要用有 pip 的 Python),把
+   `dist/ai-workspace-helper/` 的兩個檔換進 `server.ai_workspace_helper_dir`(不用重新部署)。為什麼:3.9 用的 wheel
+   (greenlet 3.2.4、Playwright 1.60.0)要在安裝包裡,`install.pyw` 才會接受 3.9。打包的輸出要看得到一行
+   `--python-version 3.9 … greenlet==3.2.4` 的下載,以及包括 3.9 在內每個 Python 一次 `--dry-run`。
+   沒做的症狀:只有 Python 3.9 的人雙擊 `install.pyw` 或 `precheck.pyw`,看到「需要 Python 3.10 以上」。
+2. 第 1 步之後:已經裝好的人小視窗會顯示「有新版」,照「小幫手」頁重裝(更新只通知,plan D21)。不重裝也能照常用。
+
+**行為改變,沒有開關**(plan D23):
+
+- 安裝包接受 Python 3.9–3.14(原本 3.10–3.14)。
+- 每個人重裝後,小幫手的 Playwright 從 1.63.0 換成 **1.60.0**(1.60.0 是最後一個裝得上 3.9 的版本,所有 Python 用同一版)。
+  小幫手回報的版本資訊裡 Playwright 會顯示 1.60.0。
+- Python 3.9 已在 2025-10 停止官方支援(不再有安全性更新);能用 3.10 以上的電腦還是建議用 3.10 以上。
+
+**確認做完**(`rollout 後`):
+
+- 「小幫手」頁顯示新版本號,說明那一行寫 3.9–3.14。
+- 一台只有 Python 3.9 的電腦:`precheck.pyw` 第一列「Python 3.9 以上」通過;`install.pyw` 裝得起來;卡片上按「查」拿得到內容。
+- 一台 3.10 以上的電腦重裝後:小視窗標題是新版本,按「查」照常。
 
 **k8s · CI 側** — 照常重 build、部署,沒有要另外做的事。`event_bus.kind: rabbitmq` 的部署在 `rollout 後`看每個 API pod 的 log:
 

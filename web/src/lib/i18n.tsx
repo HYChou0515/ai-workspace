@@ -1939,8 +1939,8 @@ export const messages = {
     en: "First double-click precheck.pyw: it installs nothing, only checks whether this PC can run the helper. If anything fails, copy the result for IT.",
   },
   "aiWorkspaceHelper.step2": {
-    "zh-TW": "雙擊 install.pyw,確認它要用的 Python(3.10–3.14)。",
-    en: "Double-click install.pyw and confirm the Python it will use (3.10–3.14).",
+    "zh-TW": "雙擊 install.pyw,確認它要用的 Python(3.9–3.14)。",
+    en: "Double-click install.pyw and confirm the Python it will use (3.9–3.14).",
   },
   "aiWorkspaceHelper.step3": {
     "zh-TW": "雙擊桌面的「AI Workspace Helper」。第一次會問這個網站的網址,填:",
