@@ -241,3 +241,27 @@ def test_a_link_is_already_seen_when_the_next_turn_starts():
     assert _answer(client, iid, call="c1", content=PAGE).status_code == 200
 
     assert runner.seen_at_start == [False, True]
+
+
+# D24: a search's results are Google redirect links. The file lists each as
+# the page it leads to, and that page — what `file` + `link` hands the card —
+# is a link the chat has seen, so the helper opens it with no nod.
+def test_the_page_a_google_redirect_leads_to_opens_without_a_nod():
+    client, iid = _chat("https://pandas.example/whatsnew")
+    _beat(client)
+    page = "- [whatsnew](https://www.google.com/url?q=https://pandas.example/whatsnew&sa=U&ved=2)"
+    assert _answer(client, iid, content=page).status_code == 200
+    _second_turn(client, iid)
+
+    assert _auto(client, iid).status_code == 201
+
+
+# …and the redirect itself, as it came back, still opens with no nod, as before.
+def test_a_google_redirect_that_came_back_still_opens_without_a_nod():
+    redirect = "https://www.google.com/url?q=https://pandas.example/whatsnew&sa=U&ved=2"
+    client, iid = _chat(redirect)
+    _beat(client)
+    assert _answer(client, iid, content=f"- [whatsnew]({redirect})").status_code == 200
+    _second_turn(client, iid)
+
+    assert _auto(client, iid).status_code == 201
