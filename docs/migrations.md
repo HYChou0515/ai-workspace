@@ -2211,20 +2211,25 @@ agent 步驟裡 AI 的呼叫、WUI 的工具呼叫、view plugin、圖表重畫�
   按下去不用再經手,`lookups/` 出現存檔、AI 接著讀。這一步是 Windows 上唯一的驗證(plan D14)。
 
 
-### 2026-10-14 · #932 管理者看得到 AI 用了哪些工具、誰用、在哪、失敗幾次、多慢 {#pr-932}
+### 2026-10-14 · #932 管理者看得到 AI 用了哪些工具與 skill、誰用、在哪、失敗幾次、多慢 {#pr-932}
 
 **設定** — 沒有新 key，不用改任何設定。行為改變，沒有開關（`docs/plan-tool-usage-stats.md`）：升級後 AI 的**每一次
 工具呼叫都會被計數**——工具、來源（內建／第一方套件／第三方）、成功或失敗、耗時、是誰、在哪個場合（聊天、KB 聊天、
-工作流程、排程、子代理、KB 子代理、背景工作）、哪個 App、哪個 item。superuser 在 Diagnostics 頁的新分頁「工具使用」
-看得到；其他人看不到這個分頁，`GET /api/admin/tool-usage` 回 403。Diagnostics 頁的分頁條改成底線樣式（和分享面板
-同款），內容不變。
+工作流程、排程、子代理、KB 子代理、背景工作）、哪個 App、哪個 item。**每一次 skill 被載入也會被計數**——AI 用
+`read_skill` 讀到內容，或使用者在 skill 選單套用，都算一次；記 skill 名稱、來源（平台內建／App 內建／skill hub／
+自己寫的）與同樣的誰、場合、App、item，沒有失敗與耗時。superuser 在 Diagnostics 頁的新分頁「工具與 Skill」看得到
+（頁內用「工具／Skill」切換）；其他人看不到這個分頁，`GET /api/admin/tool-usage`（`?kind=skill` 看 skill）回 403。
+Diagnostics 頁的分頁條改成底線樣式（和分享面板同款），內容不變。
 
-**資料** — 一張新表 `ToolUsageDay`（索引 `day`、`tool`），不用做事，但要知道它的大小：每個行程（API 和每個 worker
-各算一個，名稱是「主機名-pid」）每個被用過的工具每天一列，所以上限是「工具數 × 每天出現過的行程數 × 91 天」——重啟、
+**資料** — 一張新表 `ToolUsageDay`（索引 `day`、`tool`、`kind`），不用做事，但要知道它的大小：每個行程（API 和每個
+worker 各算一個，名稱是「主機名-pid」）每個被用過的工具或 skill 每天一列，所以上限是「（工具數 + skill 數）× 每天出現過的
+行程數 × 91 天」——重啟、
 rollout、HPA 擴張可能會在當天多出新的行程名稱。API 與 worker 每 5 分鐘、以及正常停止時寫一次（worker 在排空完工作之後
 才寫最後一次）；行程被直接殺掉（沒收到 SIGTERM）會掉最後不到 5 分鐘的計數。**超過 90 天的列每天自動永久刪除**（依 `day` 索引，不掃
 全表）。`WorkflowRun` 多一個 `from_schedule` 欄位（有預設值，舊的 run 讀成 `false`），不用回填；升級前就開始的 run
-一律算「工作流程」。升級後，item 的排程與 profile `triggers.json` 宣告的排程都算「排程」。
+一律算「工作流程」。升級後，item 的排程與 profile `triggers.json` 宣告的排程都算「排程」。skill hub 的「使用 N 次」
+計數器改用同樣的「主機名-pid」當寫入者（原本用 `HOSTNAME`，同一台 VM 上多個行程會共用一列、互相蓋掉）：升級後寫的是
+新的列，總數是所有列相加，舊列照算，面板上的數字不會跳。
 
 **k8s · CI 側** — 沒有新的 manifest、env、probe 或 JobType。要知道的一點：worker 的最後一次寫入排在排空工作之後，
 所以排空要在各 worker 的 `terminationGracePeriodSeconds`（`kubernetes/base/workers.yaml`：多數 60 秒，有的 120、900 秒）內做完；超過就被 SIGKILL，
@@ -2232,10 +2237,11 @@ rollout、HPA 擴張可能會在當天多出新的行程名稱。API 與 worker 
 
 **確認做完**（`rollout 後`）
 
-- 用 superuser 開 Diagnostics →「工具使用」：在任一 App 聊天裡讓 AI 用過工具，約 5 分鐘內出現該工具與次數；點工具看得
-  到人、場合、item。
-- 非 superuser 開 Diagnostics：沒有「工具使用」分頁。
-- 沒部署到這一版的症狀：Diagnostics 沒有「工具使用」分頁；`GET /api/admin/tool-usage` 是 404。
+- 用 superuser 開 Diagnostics →「工具與 Skill」：在任一 App 聊天裡讓 AI 用過工具，約 5 分鐘內出現該工具與次數；點工具
+  看得到人、場合、item。
+- 同一頁切到「Skill」：在聊天裡套用一個 skill 送出，約 5 分鐘內出現那個 skill、它的來源與次數。
+- 非 superuser 開 Diagnostics：沒有「工具與 Skill」分頁。
+- 沒部署到這一版的症狀：Diagnostics 沒有「工具與 Skill」分頁；`GET /api/admin/tool-usage` 是 404。
 
 ## 附錄 A：資料回填的機制（specstar 為什麼不會自己補）
 

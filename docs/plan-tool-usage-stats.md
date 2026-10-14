@@ -1,7 +1,7 @@
 # 工具使用統計:管理者看 AI 用了哪些工具、誰用、在哪、成不成功、多快
 
-**狀態:** P1–P8 完成(#932;P8 = 真瀏覽器 1280／390 寬檢查與 demo 影片,兩輪對抗式審查);P9–P13(skill 使用,§8)
-施工中,同一個 PR。as-built 與計劃不同之處見 §7。
+**狀態:** P1–P8 完成(#932;P8 = 真瀏覽器 1280／390 寬檢查與 demo 影片,兩輪對抗式審查);P9–P12 完成、P13
+(skill 的真瀏覽器檢查與 demo)施工中,同一個 PR(§8)。as-built 與計劃不同之處見 §7。
 **來源標記:** 〔user〕= user 的原話或明確選擇;〔查證〕= 讀 `origin/master`(7bf7e6ff)程式碼確認的事實;
 〔施工〕= 我定的實作細節,可推翻;〔指南〕= 出自公開的 UI/UX 指南,附出處。
 
@@ -236,3 +236,17 @@ skill 的「來源」記成四個值,依讀到內容的那條路與工作區副�
   <https://m3.material.io/components/segmented-buttons/overview> 分頁的名稱改成「工具與 Skill」。
 - skill 表欄位:Skill/來源/次數(D11 沒有失敗與耗時),排序、篩選(來源、場合、App)照工具表(NN/g〈Data
   Tables〉)。點一個 skill 看依人、依場合 × App、依 item 的次數。
+
+### 8.5 施工後與 §8 不同的地方(as-built)
+
+- **S1 套用的那一次靠建 context 的地方帶上累加器**:聊天的 turn context 由 `TurnContextBuilder` 建時就帶上 app 的
+  累加器(`create_app` 傳進去),送出路徑在 runner 開始前用它記套用;runner 本來就保留 context 已有的累加器,所以
+  工具呼叫還是進同一個。
+- **S2 來源從同一個解析函式出來**:`apps/skills.py:resolve_skill` 回傳(內容, 來源),套用的預先載入用它;`read_skill`
+  的三條成功路徑各自標來源,工作區副本用同一個 `usage_source(.origin)`。原本的 `load_workspace_skill` 已沒有呼叫者
+  (改用一次讀到內容與 `.origin` 的 `read_workspace_skill`),刪掉。
+- **S3 寫入者名稱只有一份**:`writer_name()` 搬到 `apps/skill_hub_usage.py`(取代 `pod_name()`),skill hub 與工具統計
+  共用;`api/tool_usage_store.py` 轉出口同一個函式。
+- **S4 列 id 帶 `kind`**:工具與 skill 的來源詞彙不重疊,單靠來源也分得開;`kind` 放進列 id 是讓「同名」這件事不依賴
+  兩份詞彙永遠不撞。
+- **S5 分頁名稱**:「工具使用」改成「工具與 Skill」;切換種類時清掉打開的分項、來源篩選與排序(兩種的欄位與來源不同)。
