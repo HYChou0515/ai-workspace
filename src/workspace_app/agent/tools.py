@@ -2507,6 +2507,8 @@ async def read_skill_impl(ctx: RunContextWrapper[AgentToolContext], name: str) -
                 ctx.context.app_slug,
                 ctx.context.template_profile,
                 wui_tools=_wui_callable(ctx.context),
+                # #942: the sub-agents its chat delegates to, from the same list.
+                wui_agents=[d.name for d in ctx.context.subagent_defs],
             )
 
     # #298 Q7: a built-in (shared) skill the App opted into — author-skill etc.
@@ -2522,6 +2524,8 @@ async def read_skill_impl(ctx: RunContextWrapper[AgentToolContext], name: str) -
                 ctx.context.app_slug,
                 ctx.context.template_profile,
                 wui_tools=_wui_callable(ctx.context),
+                # #942: the sub-agents its chat delegates to, from the same list.
+                wui_agents=[d.name for d in ctx.context.subagent_defs],
             )
         except SkillError as e:
             return f"error: {e}"

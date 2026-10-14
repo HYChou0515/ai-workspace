@@ -438,6 +438,9 @@ def build_app(settings: Settings, *, config_dir: Path | None) -> FastAPI:
                 if settings.server.workflow_step_timeout_sec > 0
                 else None
             ),
+            # #942: a page's jobs — how many at once per item, and how long each.
+            wui_page_job_limit=settings.server.wui_page_job_limit,
+            wui_page_job_timeout=timedelta(seconds=settings.server.wui_page_job_timeout_sec),
         )
     if packages:
         names = ", ".join(f"{p.name}({','.join(c.name for c in p.commands)})" for p in packages)

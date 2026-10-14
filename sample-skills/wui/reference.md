@@ -19,8 +19,14 @@ await workspace.openFile(path)       // opens it in the workspace beside the pag
 await workspace.whoami()             // → { user }
 await workspace.openLogin()          // shows the PLATFORM's sign-in; → { opened: true }
 await workspace.callTool(name, args) // → { output, exit_code }
+await workspace.startTool(name, args)// → job; await job.result() → { output, exit_code }
+await workspace.callAgent(name, text)// → { output, failed }
+await workspace.startAgent(name, text)// → job; await job.result() → { output, failed }
 await workspace.startRun(workflow, input, onEvent)  // resolves when it ends
 ```
+
+A job is `{ id, result(), status(), stop() }` — see "Sub-agents, and starting
+instead of waiting" below.
 
 Plus one subscription, which is not a call:
 
@@ -161,6 +167,57 @@ table for another, a sentence when there is nothing to report. This is why the
 assumed and a blank page. **Run the tool yourself before writing the parser**;
 SKILL.md, "Run the tool before you parse it", says what to look at.
 
+### Sub-agents, and starting instead of waiting
+
+A **sub-agent** is one of the item's own agents — `.agent/<name>/AGENT.md`, or
+one the App ships. A page asks it a question in text and gets text back, with
+the same tools it has when the chat delegates to it. Declare it like a tool:
+
+```yaml
+view: wui
+title: Lot triage
+agents: [log-digger]
+tools: [mes__lot-status]
+```
+
+```js
+const r = await workspace.callAgent("log-digger", "Why did lot A1 fail?");
+if (r.failed) showError(r.output);   // it failed or wrote nothing; output says why
+else show(r.output);                 // its answer, as text
+```
+
+Every tool and every sub-agent can be reached two ways. **Choose by how long
+you are willing to wait:**
+
+- `callTool` / `callAgent` wait for the answer, at most a minute. A call that
+  runs past it is stopped and rejects with a sentence naming `startTool` /
+  `startAgent` — switch to that; retrying the call fails the same way.
+- `startTool` / `startAgent` answer at once with a job:
+
+```js
+const job = await workspace.startAgent("log-digger", "Summarise last week's failures");
+show("working…");
+const timer = setInterval(async function () {
+  const s = await job.status();          // { state: "running" | "done" | "failed" | "stopped" }
+  if (s.state !== "running") clearInterval(timer);
+}, 2000);
+try {
+  const r = await job.result();          // the same { output, failed } callAgent gives
+  show(r.output);
+} catch (e) {
+  showError(e.message);                  // the job failed, or somebody stopped it
+}
+// stopButton.onclick = () => job.stop();
+```
+
+There are no callbacks: `result()` waits, `status()` asks once, `stop()` stops.
+Each job is a run in the item's run list ("頁面：subagent log-digger"), where a
+person sees what it did and can stop it. At most four jobs run at once per item;
+a fifth is refused with a sentence, not queued. A job of a tool is not held to
+the minute a `callTool` is — it runs to the job's own limit (an hour by default).
+It must still print something now and then: a command silent for longer than the
+sandbox's idle limit (a minute by default) is stopped as hung.
+
 ### Work that takes minutes
 
 `callTool` runs one command and answers once. When the thing you need is longer
@@ -226,7 +283,10 @@ A rejected `callTool` or `startRun` is a different thing again, and the message 
 
 | message | what the reader must change |
 |---|---|
-| "did not declare X" | add it to `tools:` in the view file — yours to fix |
+| "did not declare X" | add it to `tools:` (or `agents:`, for a sub-agent) in the view file — yours to fix |
+| "has no sub-agent named X. It has: …" | (a sub-agent) this item has none by that name; the list says which it has |
+| "took longer than 60s, so it was stopped" | (a call) use `startTool` / `startAgent` instead |
+| "already has N page jobs running" | wait for one to finish, or stop one, then try again |
 | "does not offer X" | (a tool) this app does not grant it; an operator must add it |
 | "has no workflow named X" | (a workflow) this item has none by that id — the agent saves one with `save_workflow`, or the profile declares it |
 | "Workflow 'X' won't parse: …" | (a workflow) the item has the file and it does not parse — the reason follows; fix the file with `save_workflow` |

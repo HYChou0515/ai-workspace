@@ -382,9 +382,9 @@ export async function dispatchWuiRequest(
 
     case "jobStatus":
     case "stopJob": {
-      // Not held to this page's own starts: a job outlives the page that
-      // started it (its id may be kept in a file and read after a reload), and
-      // the server answers only for page jobs of THIS item.
+      // Not gated on a declaration: the job object the runtime hands back is
+      // the only thing that sends these, and the server answers only for page
+      // jobs of THIS item.
       const job = str(args, "job");
       if (job === null) return refuse(id, `${verb} needs a \`job\`.`);
       if (!ctx.jobs) return refuse(id, "Jobs cannot be read from where this page is shown.");

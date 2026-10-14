@@ -675,6 +675,10 @@ def create_app(
     # Per-item run-history retention (manual §16): keep at most this many runs, pruning
     # the oldest terminal ones when a new run starts. 0 ⇒ keep all.
     workflow_keep_last_runs: int = 0,
+    # #942: a page's jobs — at most this many in flight per item, each at most
+    # this long (`server.wui_page_job_limit` / `wui_page_job_timeout_sec`).
+    wui_page_job_limit: int = 4,
+    wui_page_job_timeout: timedelta = timedelta(hours=1),
     # #429 P7: how often the schedule-trigger sweeper polls declared triggers.json for due
     # runs. None ⇒ the sweeper is off (the safe default — headless triggered runs are opt-in
     # per deploy). A real deploy sets a cadence (e.g. 60 s) to enable time-triggered workflows.
@@ -2381,6 +2385,8 @@ def create_app(
         ),
         concurrency=workflow_concurrency,
         keep_last_runs=workflow_keep_last_runs,
+        page_job_limit=wui_page_job_limit,
+        page_job_timeout_s=wui_page_job_timeout.total_seconds(),
     )
     app.state.workflow_orchestrator = workflow_orchestrator
     # Reachable by an app-level test that drives one tick, like the other
