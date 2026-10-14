@@ -54,6 +54,9 @@ class Worker:
         #: What the window shows under the status: the errand under way, or the
         #: backend's reason for a refusal.
         self.detail = ""
+        #: The last failure written to helper.log: each is logged when it
+        #: begins, not on every poll it lasts.
+        self._logged: tuple[str, str] | None = None
         #: The errand under way (its job `kind`) and the site it said it is on.
         self.kind = ""
         self.site = ""
@@ -68,6 +71,7 @@ class Worker:
             # Not checking in: the card falls back to the manual flow (D7)
             # rather than offering a 「查」 nobody will act on.
             self.status, self.detail = "paused", ""
+            self._logged = None
             return
         try:
             self._backend.heartbeat(**self._info())
@@ -83,6 +87,15 @@ class Worker:
             self.status, self.detail = "unreachable", str(exc)
         except BackendError as exc:
             self.status, self.detail = "error", str(exc)
+        self._log_failure()
+
+    def _log_failure(self) -> None:
+        # the window's second line is gone by the time someone reads the log
+        # for IT: 「連不上」 over an empty 記錄檔 hid a certificate (D20)
+        failed = (self.status, self.detail) if self.status in ("unreachable", "error") else None
+        if failed is not None and failed != self._logged:
+            logger.warning("%s: %s", *failed)
+        self._logged = failed
 
     def _changed(self) -> None:
         if self.on_change is not None:
