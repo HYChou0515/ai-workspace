@@ -2300,6 +2300,33 @@ agent 步驟裡 AI 的呼叫、WUI 的工具呼叫、view plugin、圖表重畫�
   瀏覽器存下檔案。沒部署到這一版的症狀：什麼都沒發生（多頁版的頁面，瀏覽器主控台會有上面那句
   `allow-downloads`；單頁版不一定有訊息）。
 
+### 2026-10-15 · #945 WUI 頁面可以問 subagent，工具與 subagent 都能「等結果」或「起成工作」 {#pr-945}
+
+**設定** — 兩個新 key，都有預設值，不設也能開機（`docs/configuration.md`「頁面同時能跑幾件工作、每件最多多久」）：
+
+- `server.wui_page_job_limit`（預設 `4`）：一個 item 同時進行中的頁面工作上限。超過的那一件被拒（429，訊息寫出
+  數字），不排隊。
+- `server.wui_page_job_timeout_sec`（預設 `3600`）：一件頁面工作的總時間。工具工作的命令拿它當期限，取代沙盒的
+  一分鐘；過了期限還顯示進行中的紀錄，會被當成「跑它的 pod 已經不在了」而標成失敗。
+
+**行為改變，沒有開關**：頁面多了 `callAgent` / `startAgent` / `startTool` 三個動詞（`callTool`、`startRun` 不變）。
+AI 讀 `wui` skill 時會看到「這個 item 能讓頁面問的 subagent」清單與「要馬上拿結果用 `call…`、可能跑久用 `start…`」
+的規則，所以**升級後 AI 寫的新頁面可能會叫 subagent**——每叫一次就是一個 LLM turn，算在 item 擁有者頭上
+（跟頁面按 `startRun` 一樣）；舊頁面不受影響。每件頁面工作會在 item 的對話清單多一筆（標題「頁面：subagent X」/
+「頁面：工具 X」），算進 `keep_last_runs` 的保留數。
+
+**資料** — 沒有。`WorkflowRun` 多一個選填欄位 `page_job`（沒有版本、舊紀錄讀成空），不用回填。
+
+**k8s · CI 側** — 沒有新的 manifest、env、probe 或 JobType；照常重 build、部署。頁面工作在**接到請求的那顆 API pod**
+上跑（跟 `startRun` 一樣），不需要 worker。
+
+**確認做完**（`rollout 後`）：
+
+- 在一個有 `.agent/<名稱>/AGENT.md` 的 item，請 AI 做一個頁面「按一下就問那個 subagent」，打開頁面按下去：
+  頁面顯示 subagent 的回答，對話清單多一筆「頁面：subagent <名稱>」，點進去看得到問題與回答。沒部署到這一版的症狀：
+  頁面錯誤面板寫 `This page asked for "callAgent", which a WUI cannot do.`
+- 同一個頁面連按五次會跑很久的 `startAgent`：第五次被拒，訊息寫「already has 4 page jobs running」。
+
 ## 附錄 A：資料回填的機制（specstar 為什麼不會自己補）
 
 有些升版會改變「資料在資料庫裡的儲存形狀」，但 **specstar 只在寫入當下**把一列的 `indexed_data`

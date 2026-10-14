@@ -1,6 +1,6 @@
 # WUI 頁面叫能力的兩種叫法:`call`(拿結果)與 `start`(拿工作);subagent 也能叫
 
-**狀態:** P1(計劃)。
+**狀態:** P1(計劃,#942 已合)。P2–P6 實作於 PR #945(實作註記見 §6);統計場合「頁面」等 #932 合進 master 後補;P7 進行中。
 **來源標記:** 〔user〕= user 的原話或明確選擇;〔查證〕= 讀 `origin/master`(2a4e7d0e)程式碼確認的事實;
 〔施工〕= 我定的實作細節,可推翻。
 
@@ -108,3 +108,32 @@ user:「我希望wui要能夠呼叫subagent」;討論中擴大成「每個能力
 - 回呼式的進度(D8)。
 - 保證 JSON / schema 驗證(D4)。
 - subagent 再叫 subagent(維持深度 1)。
+
+## 6. 實作註記(PR #945)
+
+做的時候定下、計劃裡沒寫到的事〔施工〕,以及它在哪:
+
+- **頁面工作 = 一筆 `WorkflowRun`,欄位 `page_job`(種類、名稱、輸入、期限)**(`workflow/run.py`)。要跑的東西不是
+  manifest,而是 API 在啟動時交給 orchestrator 的一個函式(`start_page_job`),所以只活在起它的那顆 pod 的記憶體裡、
+  重啟後**不續跑**。紀錄上有期限;過了期限 + 60 秒還是進行中,就當成 pod 已經不在,讀的時候標成失敗、也不再佔同時名額
+  (`page_job_state`、`_live_page_jobs`)。
+- **`call…` 的等待是去讀 run 紀錄**,每 0.2 秒一次,最多 60 秒(`wui_routes.CALL_TIMEOUT_S`)——跨 pod 也成立。超時
+  先停掉工作、再回 504,句子點名 `startAgent`。
+- **三種叫法的結果同形**:`job.result()` 就是對應的 `call…` 會回的東西——工具是 `{output, exit_code}`(命令非零結束是
+  結果,不是工作失敗,跟 `callTool` 一樣),subagent 是 `{output, failed}`。工作的 `failed` 狀態只用在平台層的失敗
+  (例外、逾時、pod 中斷)。
+- **subagent 的收窄沒有另外抽函式**:頁面路徑直接用聊天的 `subagent_run._child_context`(名稱沒改,因為 #932 也動到
+  它),一個函式兩邊用。失敗/沒寫回答的句子抽成 `report_of`,`run_agent` 與頁面共用。工作的對話裡會先寫一則使用者訊息
+  (頁面送的輸入),紀錄才看得到「問了什麼」。
+- **工具工作走 `callTool` 同一扇門**(`_prepare_tool`,原封搬出):名稱檢查、拒絕的句子、環境值(含點的人那次請求的
+  值)都一樣,在**啟動當下**就決定。命令的期限是工作剩下的時間(`exec_package_command(exec_timeout=)`,只有給值時才傳,
+  其他呼叫者不變);沙盒的**閒置**上限(`log_timeout`)照舊。別顆 pod 按的停止只會推進那個對話的 turn epoch——turn
+  自己會看到,命令沒有 turn,所以工具工作自己盯著 epoch。
+- **權限**:三條新路由與 `startTool` 都要 `execute`(`callTool` 仍是 `edit_content`)。`jobStatus` / `stopJob` 不看頁面
+  宣告(工作物件是唯一送它們的地方),後端只回答**這個 item 的頁面工作**,別的 item 或 workflow run 的 id 一律 404。
+- **workflow 才有的操作擋掉頁面工作**:頁面工作的 `workflow_id` 是 "",而 manifest 查找把 "" 讀成 profile 的**第一個**
+  workflow。所以 `steer` 回 409(`PageJobNotSteerable`)、`resume` 不接;前端頁面工作的對話不把輸入框變成「引導 run」,
+  完成時也不顯示「未執行任何步驟」。失敗通知的標題寫「Page job failed: sub-agent “X”」,一天一則的分桶以工作名稱為準。
+- **AI 讀 `wui` skill 時**,除了能叫的工具,也列出這個 item 能讓頁面問的 subagent——取自 turn 自己的 `subagent_defs`
+  (聊天能委派的那一份),所以「skill 說可以問誰」與「`callAgent` 放行誰」是同一份清單。
+- **設定值**:`server.wui_page_job_limit`(4)、`server.wui_page_job_timeout_sec`(3600)。
