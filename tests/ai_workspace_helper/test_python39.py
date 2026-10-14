@@ -237,6 +237,7 @@ def test_install_pyw_takes_python_39(tmp_path, monkeypatch, version, refused):
     import importlib.util
     import shutil
     import sys
+    import types
 
     shutil.copy2(_HELPER / "install.pyw", tmp_path / "install.pyw")
     shutil.copy2(_HELPER / "src" / "ai_workspace_helper" / "setup_core.py", tmp_path)
@@ -244,25 +245,28 @@ def test_install_pyw_takes_python_39(tmp_path, monkeypatch, version, refused):
     # recorded as absent so monkeypatch removes the copy imported below
     monkeypatch.setitem(sys.modules, "setup_core", None)
     del sys.modules["setup_core"]
-    loader = importlib.machinery.SourceFileLoader("_install_pyw", str(tmp_path / "install.pyw"))
-    spec = importlib.util.spec_from_loader("_install_pyw", loader)
-    assert spec
-    module = importlib.util.module_from_spec(spec)
-    loader.exec_module(module)
-
+    # A tkinter of the test's own: the window is not what is tested, and a CI
+    # runner's Python may have no tkinter at all (it did: the first CI run).
     said: list[tuple[str, str]] = []
 
     class _Tk:
         def withdraw(self) -> None:
             pass
 
-    monkeypatch.setattr(module.tkinter, "Tk", _Tk)
-    monkeypatch.setattr(
-        module.messagebox, "showerror", lambda title, text: said.append(("error", text))
-    )
-    monkeypatch.setattr(
-        module.messagebox, "askokcancel", lambda title, text: said.append(("ask", text)) or False
-    )
+    box = types.ModuleType("tkinter.messagebox")
+    box.showerror = lambda title, text: said.append(("error", text))  # ty: ignore[unresolved-attribute]
+    box.askokcancel = lambda title, text: said.append(("ask", text)) or False  # ty: ignore[unresolved-attribute]
+    tk = types.ModuleType("tkinter")
+    tk.Tk = _Tk  # ty: ignore[unresolved-attribute]
+    tk.messagebox = box  # ty: ignore[unresolved-attribute]
+    monkeypatch.setitem(sys.modules, "tkinter", tk)
+    monkeypatch.setitem(sys.modules, "tkinter.messagebox", box)
+
+    loader = importlib.machinery.SourceFileLoader("_install_pyw", str(tmp_path / "install.pyw"))
+    spec = importlib.util.spec_from_loader("_install_pyw", loader)
+    assert spec
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
     monkeypatch.setattr(sys, "version_info", version)
 
     code = module.main()
