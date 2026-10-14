@@ -1,12 +1,14 @@
 /**
  * The administrator's tool-usage tab (docs/plan-tool-usage-stats.md §3.7):
  * which tools the AI called, how often they failed, how long they took — per
- * tool, then one tool by person, by surface × App, by item.
+ * tool, then one tool by person, by surface × App, by item. The same report
+ * of skill loads (§8.4): how many times each skill was loaded, from where.
  *
  * Guidance (cited in the plan):
  * - The window (7 / 30 / 90 days) is one choice among modes of the SAME
  *   content, so it is a segmented control, not tabs or separate buttons
- *   (Material 3, "Segmented buttons").
+ *   (Material 3, "Segmented buttons"). So is tools / skills: the same report
+ *   of a different kind of thing — M3's "switch views".
  * - The report is a data table the administrator scans, compares and acts on
  *   (NN/g, "Data Tables: Four Major User Tasks"): sortable columns, numbers
  *   right-aligned in one unit, filters above, and a row opens its breakdown.
@@ -19,6 +21,7 @@ import {
   type ToolUsageClient,
   type ToolUsageTool,
   type UsageDays,
+  type UsageKind,
   toolUsageApi,
 } from "../api/toolUsage";
 import { qk } from "../api/queryKeys";
@@ -33,6 +36,18 @@ const SOURCES: Record<string, MsgKey> = {
   first_party: "usage.source.first_party",
   third_party: "usage.source.third_party",
 };
+
+const SKILL_SOURCES: Record<string, MsgKey> = {
+  shared: "usage.source.shared",
+  profile: "usage.source.profile",
+  hub: "usage.source.hub",
+  workspace: "usage.source.workspace",
+};
+
+const KINDS: { kind: UsageKind; label: MsgKey }[] = [
+  { kind: "tool", label: "usage.kind.tool" },
+  { kind: "skill", label: "usage.kind.skill" },
+];
 
 const SURFACES: Record<string, MsgKey> = {
   chat: "usage.surface.chat",
@@ -60,14 +75,27 @@ const num: React.CSSProperties = { ...cell, textAlign: "right", fontVariantNumer
 export function ToolUsagePanel({ client = toolUsageApi }: { client?: ToolUsageClient }) {
   const t = useT();
   const apps = useApps();
+  const [kind, setKind] = useState<UsageKind>("tool");
   const [days, setDays] = useState<UsageDays>(30);
   const [filter, setFilter] = useState({ source: "", surface: "", app: "" });
   const [sort, setSort] = useState<{ key: SortKey; desc: boolean }>({ key: "calls", desc: true });
   const [picked, setPicked] = useState<string | null>(null);
+  const skills = kind === "skill";
+  const sources = skills ? SKILL_SOURCES : SOURCES;
+
+  // Another kind is another list: its sources, its columns, its rows — so
+  // nothing picked, filtered by source or sorted for the other one carries over.
+  const pickKind = (next: UsageKind) => {
+    if (next === kind) return;
+    setKind(next);
+    setPicked(null);
+    setFilter((f) => ({ ...f, source: "" }));
+    setSort({ key: "calls", desc: true });
+  };
 
   const report = useQuery({
-    queryKey: qk.toolUsage(days, filter),
-    queryFn: () => client.report(days, filter),
+    queryKey: qk.toolUsage(days, filter, kind),
+    queryFn: () => client.report(days, filter, kind),
   });
 
   const rows = useMemo(() => {
@@ -109,6 +137,18 @@ export function ToolUsagePanel({ client = toolUsageApi }: { client?: ToolUsageCl
   return (
     <div className="tool-usage" style={{ marginTop: 16 }}>
       <div className="tool-usage-controls">
+        <div className="tool-usage-segmented" role="group" aria-label={t("usage.kind")}>
+          {KINDS.map((k) => (
+            <button
+              key={k.kind}
+              type="button"
+              aria-pressed={k.kind === kind}
+              onClick={() => pickKind(k.kind)}
+            >
+              {t(k.label)}
+            </button>
+          ))}
+        </div>
         <div className="tool-usage-segmented" role="group" aria-label={t("usage.window")}>
           {WINDOWS.map((d) => (
             <button
@@ -129,7 +169,7 @@ export function ToolUsagePanel({ client = toolUsageApi }: { client?: ToolUsageCl
             onChange={(e) => setFilter((f) => ({ ...f, source: e.target.value }))}
           >
             <option value="">{t("usage.all")}</option>
-            {Object.entries(SOURCES).map(([id, key]) => (
+            {Object.entries(sources).map(([id, key]) => (
               <option key={id} value={id}>
                 {t(key)}
               </option>
@@ -173,18 +213,19 @@ export function ToolUsagePanel({ client = toolUsageApi }: { client?: ToolUsageCl
           {t("usage.failed", { reason: (report.error as Error).message })}
         </p>
       ) : report.data && rows.length === 0 ? (
-        <p className="tool-usage-note">{t("usage.empty")}</p>
+        <p className="tool-usage-note">{t(skills ? "usage.empty.skill" : "usage.empty")}</p>
       ) : (
         <div className="tool-usage-scroll">
           <table className="tool-usage-table">
             <thead>
               <tr>
-                {header("tool", t("usage.col.tool"))}
+                {header("tool", t(skills ? "usage.col.skill" : "usage.col.tool"))}
                 {header("source", t("usage.col.source"))}
-                {header("calls", t("usage.col.calls"), true)}
-                {header("fails", t("usage.col.fails"), true)}
-                {header("rate", t("usage.col.rate"), true)}
-                {header("avg_ms", t("usage.col.avg"), true)}
+                {header("calls", t(skills ? "usage.col.loads" : "usage.col.calls"), true)}
+                {/* A skill load has no failure and no time (D11). */}
+                {!skills && header("fails", t("usage.col.fails"), true)}
+                {!skills && header("rate", t("usage.col.rate"), true)}
+                {!skills && header("avg_ms", t("usage.col.avg"), true)}
               </tr>
             </thead>
             <tbody>
@@ -203,11 +244,15 @@ export function ToolUsagePanel({ client = toolUsageApi }: { client?: ToolUsageCl
                       {r.tool}
                     </button>
                   </td>
-                  <td style={cell}>{t(SOURCES[r.source] ?? "usage.source.builtin")}</td>
+                  <td style={cell}>{sources[r.source] ? t(sources[r.source]) : r.source}</td>
                   <td style={num}>{r.calls}</td>
-                  <td style={num}>{r.fails}</td>
-                  <td style={num}>{pct(r)}</td>
-                  <td style={num}>{ms(r.avg_ms)}</td>
+                  {!skills && (
+                    <>
+                      <td style={num}>{r.fails}</td>
+                      <td style={num}>{pct(r)}</td>
+                      <td style={num}>{ms(r.avg_ms)}</td>
+                    </>
+                  )}
                 </tr>
               ))}
             </tbody>
@@ -218,6 +263,7 @@ export function ToolUsagePanel({ client = toolUsageApi }: { client?: ToolUsageCl
       {picked && (
         <ToolDetail
           tool={picked}
+          kind={kind}
           days={days}
           client={client}
           ms={ms}
@@ -231,6 +277,7 @@ export function ToolUsagePanel({ client = toolUsageApi }: { client?: ToolUsageCl
 
 function ToolDetail({
   tool,
+  kind,
   days,
   client,
   ms,
@@ -238,6 +285,7 @@ function ToolDetail({
   appTitle,
 }: {
   tool: string;
+  kind: UsageKind;
   days: UsageDays;
   client: ToolUsageClient;
   ms: (n: number) => string;
@@ -246,26 +294,36 @@ function ToolDetail({
 }) {
   const t = useT();
   const detail = useQuery({
-    queryKey: qk.toolUsageDetail(tool, days),
-    queryFn: () => client.detail(tool, days),
+    queryKey: qk.toolUsageDetail(tool, days, kind),
+    queryFn: () => client.detail(tool, days, kind),
   });
   const d = detail.data;
+  // A skill load has a count only (D11).
+  const skills = kind === "skill";
   const counts = (r: { calls: number; fails: number; avg_ms: number }) => (
     <>
       <td style={num}>{r.calls}</td>
-      <td style={num}>{r.fails}</td>
-      <td style={num}>{pct(r)}</td>
-      <td style={num}>{ms(r.avg_ms)}</td>
+      {!skills && (
+        <>
+          <td style={num}>{r.fails}</td>
+          <td style={num}>{pct(r)}</td>
+          <td style={num}>{ms(r.avg_ms)}</td>
+        </>
+      )}
     </>
   );
   const head = (first: string) => (
     <thead>
       <tr>
         <th style={cell}>{first}</th>
-        <th style={num}>{t("usage.col.calls")}</th>
-        <th style={num}>{t("usage.col.fails")}</th>
-        <th style={num}>{t("usage.col.rate")}</th>
-        <th style={num}>{t("usage.col.avg")}</th>
+        <th style={num}>{t(skills ? "usage.col.loads" : "usage.col.calls")}</th>
+        {!skills && (
+          <>
+            <th style={num}>{t("usage.col.fails")}</th>
+            <th style={num}>{t("usage.col.rate")}</th>
+            <th style={num}>{t("usage.col.avg")}</th>
+          </>
+        )}
       </tr>
     </thead>
   );

@@ -207,10 +207,10 @@ describe("DiagnosticsPage — tool usage", () => {
     vi.spyOn(toolUsageApi, "report").mockResolvedValue({ days: 30, tools: [] });
     renderPage(health);
 
-    await userEvent.click(await screen.findByRole("tab", { name: "Tool usage" }));
+    await userEvent.click(await screen.findByRole("tab", { name: "Tools & skills" }));
 
     expect(await screen.findByText("No tool calls in this period")).toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: "Tool usage" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tab", { name: "Tools & skills" })).toHaveAttribute("aria-selected", "true");
   });
 
   it("does not offer it to anyone else", async () => {
@@ -220,6 +220,6 @@ describe("DiagnosticsPage — tool usage", () => {
 
     await screen.findByRole("tab", { name: "Health checks" });
     await waitFor(() => expect(api.getMe).toHaveBeenCalled());
-    expect(screen.queryByRole("tab", { name: "Tool usage" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: "Tools & skills" })).not.toBeInTheDocument();
   });
 });

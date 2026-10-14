@@ -1,15 +1,20 @@
 /**
- * The administrator's tool-usage report (docs/plan-tool-usage-stats.md §3.6).
- * Superusers only — the server answers 403 to anyone else.
+ * The administrator's tool-usage report (docs/plan-tool-usage-stats.md §3.6),
+ * and the same report of skill loads (§8). Superusers only — the server
+ * answers 403 to anyone else.
  */
 import { apiFetch, httpErrorFrom } from "./http";
 
 export type UsageDays = 7 | 30 | 90;
+/** What the report counts: tool calls, or skill loads (§8). */
+export type UsageKind = "tool" | "skill";
 export type ToolSource = "builtin" | "first_party" | "third_party";
+export type SkillSource = "shared" | "profile" | "hub" | "workspace";
 
 export type ToolUsageTool = {
+  /** The tool's — or, for `kind=skill`, the skill's — name. */
   tool: string;
-  source: ToolSource;
+  source: ToolSource | SkillSource;
   calls: number;
   fails: number;
   avg_ms: number;
@@ -33,16 +38,23 @@ export type UsageFilter = { source?: string; surface?: string; app?: string };
 const enc = encodeURIComponent;
 
 export const toolUsageApi = {
-  async report(days: UsageDays, filter: UsageFilter = {}): Promise<ToolUsageReport> {
+  async report(
+    days: UsageDays,
+    filter: UsageFilter = {},
+    kind: UsageKind = "tool",
+  ): Promise<ToolUsageReport> {
     const q = new URLSearchParams({ days: String(days) });
     for (const [k, v] of Object.entries(filter)) if (v) q.set(k, v);
+    // Tools are the server's default — a caller that never names a kind is unchanged.
+    if (kind !== "tool") q.set("kind", kind);
     const r = await apiFetch(`/admin/tool-usage?${q}`);
     if (!r.ok) throw await httpErrorFrom(r, `tool usage failed: ${r.status}`);
     return (await r.json()) as ToolUsageReport;
   },
 
-  async detail(tool: string, days: UsageDays): Promise<ToolUsageDetail> {
-    const r = await apiFetch(`/admin/tool-usage/${enc(tool)}?days=${days}`);
+  async detail(tool: string, days: UsageDays, kind: UsageKind = "tool"): Promise<ToolUsageDetail> {
+    const k = kind === "tool" ? "" : `&kind=${kind}`;
+    const r = await apiFetch(`/admin/tool-usage/${enc(tool)}?days=${days}${k}`);
     if (!r.ok) throw await httpErrorFrom(r, `tool usage failed: ${r.status}`);
     return (await r.json()) as ToolUsageDetail;
   },

@@ -36,6 +36,20 @@ describe("toolUsageApi", () => {
     expect(urls[0]).toBe("/api/admin/tool-usage/a__b%20c?days=90");
   });
 
+  it("asks for skills when told to, and says nothing about kind for tools", async () => {
+    const urls = capture();
+
+    await toolUsageApi.report(30, {}, "skill");
+    await toolUsageApi.detail("fmt", 30, "skill");
+    await toolUsageApi.report(30, {});
+
+    expect(urls).toEqual([
+      "/api/admin/tool-usage?days=30&kind=skill",
+      "/api/admin/tool-usage/fmt?days=30&kind=skill",
+      "/api/admin/tool-usage?days=30",
+    ]);
+  });
+
   it("carries the status of a refusal", async () => {
     capture(403, { detail: "superusers only" });
 

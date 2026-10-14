@@ -110,12 +110,12 @@ describe("the report", () => {
   it("asks for 30 days first, and another window when chosen", async () => {
     const client = draw();
     await screen.findAllByTestId("tool-usage-row");
-    expect(client.report).toHaveBeenLastCalledWith(30, { source: "", surface: "", app: "" });
+    expect(client.report).toHaveBeenLastCalledWith(30, { source: "", surface: "", app: "" }, "tool");
     expect(screen.getByRole("button", { name: "30 天" })).toHaveAttribute("aria-pressed", "true");
 
     fireEvent.click(screen.getByRole("button", { name: "7 天" }));
 
-    await waitFor(() => expect(client.report).toHaveBeenLastCalledWith(7, expect.anything()));
+    await waitFor(() => expect(client.report).toHaveBeenLastCalledWith(7, expect.anything(), "tool"));
     expect(screen.getByRole("button", { name: "7 天" })).toHaveAttribute("aria-pressed", "true");
   });
 
@@ -129,11 +129,11 @@ describe("the report", () => {
     fireEvent.change(screen.getByLabelText("App"), { target: { value: "pm" } });
 
     await waitFor(() =>
-      expect(client.report).toHaveBeenLastCalledWith(30, {
-        source: "third_party",
-        surface: "schedule",
-        app: "pm",
-      }),
+      expect(client.report).toHaveBeenLastCalledWith(
+        30,
+        { source: "third_party", surface: "schedule", app: "pm" },
+        "tool",
+      ),
     );
   });
 
@@ -150,7 +150,7 @@ describe("one tool", () => {
     fireEvent.click(await screen.findByRole("button", { name: "spc" }));
 
     const detail = await screen.findByTestId("tool-usage-detail");
-    expect(client.detail).toHaveBeenCalledWith("spc", 30);
+    expect(client.detail).toHaveBeenCalledWith("spc", 30, "tool");
     expect(await within(detail).findByText("Alice Chen")).toBeInTheDocument();
     expect(within(detail).getByText("排程 · RCA")).toBeInTheDocument();
     const link = within(detail).getByRole("link", { name: "Line 3" });
@@ -158,5 +158,111 @@ describe("one tool", () => {
     // An item that no longer exists is named by its id, unlinked.
     expect(within(detail).getByText("gone")).toBeInTheDocument();
     expect(within(detail).queryByRole("link", { name: "gone" })).toBeNull();
+  });
+});
+
+describe("skills (plan §8)", () => {
+  const SKILLS: ToolUsageReport = {
+    days: 30,
+    tools: [
+      { tool: "report-format", source: "profile", calls: 7, fails: 0, avg_ms: 0 },
+      { tool: "author-skill", source: "shared", calls: 12, fails: 0, avg_ms: 0 },
+      { tool: "my-notes", source: "workspace", calls: 2, fails: 0, avg_ms: 0 },
+      { tool: "spc-review", source: "hub", calls: 3, fails: 0, avg_ms: 0 },
+    ],
+  };
+
+  function drawBoth() {
+    const client = {
+      report: vi.fn(async (_d: number, _f?: object, kind?: string) =>
+        kind === "skill" ? SKILLS : REPORT,
+      ),
+      detail: vi.fn(async () => DETAIL),
+    } satisfies ToolUsageClient;
+    renderWithQuery(
+      <MemoryRouter>
+        <ToolUsagePanel client={client} />
+      </MemoryRouter>,
+    );
+    return client;
+  }
+
+  it("switches between tools and skills with a segmented control, tools first", async () => {
+    const client = drawBoth();
+    const kind = screen.getByRole("group", { name: "看哪一種" });
+    expect(within(kind).getByRole("button", { name: "工具" })).toHaveAttribute("aria-pressed", "true");
+
+    fireEvent.click(within(kind).getByRole("button", { name: "Skill" }));
+
+    await waitFor(() => expect(client.report).toHaveBeenLastCalledWith(30, expect.anything(), "skill"));
+    expect(within(kind).getByRole("button", { name: "Skill" })).toHaveAttribute("aria-pressed", "true");
+    expect(await screen.findByRole("button", { name: "author-skill" })).toBeInTheDocument();
+  });
+
+  it("lists each skill with where it came from and how many times it was loaded — no failures, no time", async () => {
+    drawBoth();
+    fireEvent.click(screen.getByRole("button", { name: "Skill" }));
+    await screen.findByRole("button", { name: "author-skill" });
+
+    const heads = screen.getAllByRole("columnheader").map((h) => h.textContent);
+    expect(heads).toEqual(["Skill", "來源", "次數 ↓"]);
+    expect(toolOrder()).toEqual(["author-skill", "report-format", "spc-review", "my-notes"]);
+    const sources = screen
+      .getAllByTestId("tool-usage-row")
+      .map((r) => r.querySelectorAll("td")[1]?.textContent);
+    expect(sources).toEqual(["平台內建", "App 內建", "skill hub", "自己寫的"]);
+  });
+
+  it("filters skills by their own sources", async () => {
+    drawBoth();
+    fireEvent.click(screen.getByRole("button", { name: "Skill" }));
+    await screen.findByRole("button", { name: "author-skill" });
+
+    const source = screen.getByRole("combobox", { name: /來源/ });
+    const options = within(source)
+      .getAllByRole("option")
+      .map((o) => o.textContent);
+    expect(options).toEqual(["全部", "平台內建", "App 內建", "skill hub", "自己寫的"]);
+  });
+
+  it("opens one skill's breakdown with a count only", async () => {
+    const client = drawBoth();
+    fireEvent.click(screen.getByRole("button", { name: "Skill" }));
+    fireEvent.click(await screen.findByRole("button", { name: "author-skill" }));
+
+    const detail = await screen.findByTestId("tool-usage-detail");
+    expect(client.detail).toHaveBeenCalledWith("author-skill", 30, "skill");
+    await within(detail).findByText("Alice Chen");
+    expect(within(detail).queryByText("失敗")).toBeNull();
+    expect(within(detail).queryByText("平均耗時")).toBeNull();
+    // Every row is a name and a count — no cells under headers that are not there.
+    for (const row of within(detail).getAllByRole("row")) {
+      expect(row.children).toHaveLength(2);
+    }
+  });
+
+  it("closes an open breakdown when switching kinds", async () => {
+    drawBoth();
+    fireEvent.click(await screen.findByRole("button", { name: "spc" }));
+    await screen.findByTestId("tool-usage-detail");
+
+    fireEvent.click(screen.getByRole("button", { name: "Skill" }));
+
+    await waitFor(() => expect(screen.queryByTestId("tool-usage-detail")).toBeNull());
+  });
+
+  it("says when no skill was loaded in the window", async () => {
+    const client = {
+      report: vi.fn(async () => ({ days: 30, tools: [] })),
+      detail: vi.fn(async () => DETAIL),
+    } satisfies ToolUsageClient;
+    renderWithQuery(
+      <MemoryRouter>
+        <ToolUsagePanel client={client} />
+      </MemoryRouter>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Skill" }));
+
+    expect(await screen.findByText("這段期間沒有 skill 被載入")).toBeInTheDocument();
   });
 });

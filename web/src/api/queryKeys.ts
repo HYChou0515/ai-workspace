@@ -126,8 +126,10 @@ export const qk = {
   /** docs/plan-outside-lookup.md D3: the deploy's search buttons. */
   lookupTargets: () => ["lookupTargets"] as const,
   /** plan-tool-usage-stats: the administrator's report and one tool's breakdown. */
-  toolUsage: (days: number, filter: object) => ["toolUsage", days, filter] as const,
-  toolUsageDetail: (tool: string, days: number) => ["toolUsageDetail", tool, days] as const,
+  toolUsage: (days: number, filter: object, kind: string) =>
+    ["toolUsage", days, filter, kind] as const,
+  toolUsageDetail: (tool: string, days: number, kind: string) =>
+    ["toolUsageDetail", tool, days, kind] as const,
   /** docs/plan-outside-helper.md: is the person's own helper connected. */
   aiWorkspaceHelper: () => ["aiWorkspaceHelper"] as const,
   /** The packed helper the operator published (§3.7.2), or null. */
