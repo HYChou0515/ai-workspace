@@ -75,6 +75,8 @@ export function UsageShownModal({
           : f.rows.filter((r) => r.tool.toLowerCase().includes(term)),
     }))
     .filter(({ rows }) => rows.length > 0);
+  // What 全部 / 清除 reach: the rows drawn — under a search, its hits only.
+  const drawn = visible.flatMap(({ rows }) => rows);
 
   const toggle = (key: string) =>
     setDraft((d) => {
@@ -112,10 +114,24 @@ export function UsageShownModal({
         aria-label={t("tools.search")}
         placeholder={t("tools.search")}
         value={search}
-        onChange={(e) => setSearch(e.target.value)}
+        onChange={(e) => {
+          const before = term;
+          setSearch(e.target.value);
+          // A new question releases the folds shut by hand, as the tool modal
+          // does — a fold holding a hit must open.
+          if (e.target.value.trim().toLowerCase() !== before) {
+            setManual((m) => Object.fromEntries(Object.entries(m).filter(([, o]) => o)));
+          }
+        }}
       />
       <div style={{ display: "flex", gap: 8 }}>
-        <button type="button" className="btn" data-size="sm" data-variant="ghost" onClick={() => setDraft(new Set())}>
+        <button
+          type="button"
+          className="btn"
+          data-size="sm"
+          data-variant="ghost"
+          onClick={() => setAll(drawn, true)}
+        >
           {t("usage.shown.all")}
         </button>
         <button
@@ -123,7 +139,7 @@ export function UsageShownModal({
           className="btn"
           data-size="sm"
           data-variant="ghost"
-          onClick={() => setDraft(new Set(names.map(rowKey)))}
+          onClick={() => setAll(drawn, false)}
         >
           {t("usage.shown.none")}
         </button>
@@ -139,7 +155,7 @@ export function UsageShownModal({
           const open = manual[fold.id] ?? term !== "";
           const label = labelOf(fold);
           return (
-            <div key={fold.id || "builtin"} style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+            <div key={fold.id} style={{ display: "flex", flexDirection: "column", gap: 2 }}>
               <div
                 style={{
                   display: "flex",

@@ -2260,7 +2260,7 @@ agent 步驟裡 AI 的呼叫、WUI 的工具呼叫、view plugin、圖表重畫�
 （同一頁上下兩區：工具與 Skill，各有橫條圖與表格；工具區可以勾選要顯示哪些、切換「每個 command／依套件」；
 兩區都能下載原始資料 CSV）；其他人看不到這個分頁，`GET /api/admin/tool-usage`（`?kind=skill` 看 skill、
 `?group=package` 依套件）與 `GET /api/admin/tool-usage.csv` 回 403。skill 的來源「item 內自建」指存在該 item
-工作區、不是從別處複製來的 skill。
+工作區、沒有來源標記的 skill，以及從 skill hub fork 出來的那份。
 Diagnostics 頁的分頁條改成底線樣式（和分享面板同款），內容不變。
 
 **資料** — 一張新表 `ToolUsageDay`（索引 `day`、`tool`、`kind`、`package`），不用做事，但要知道它的大小：每個行程（API 和每個

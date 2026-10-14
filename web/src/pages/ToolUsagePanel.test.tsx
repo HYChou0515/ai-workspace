@@ -627,7 +627,7 @@ describe("one name from two sources (plan §8.2)", () => {
     const client = draw(TOOLS, TWICE);
     const rows = await within(skillsPart()).findAllByTestId("tool-usage-row");
 
-    fireEvent.click(within(rows[1]!).getByRole("button", { name: "line-report" }));
+    fireEvent.click(within(rows[1]!).getByRole("button", { name: "line-report(skill hub)" }));
 
     await within(skillsPart()).findByTestId("tool-usage-detail");
     expect(client.detail).toHaveBeenCalledWith("line-report", 30, "skill", "command", "hub", "");
@@ -649,11 +649,12 @@ describe("one command name in two packages (review r3)", () => {
     const client = draw(TWO);
     const rows = await within(toolsPart()).findAllByTestId("tool-usage-row");
 
-    expect(rows).toHaveLength(2);
+    expect(order(toolsPart())).toEqual(["summarize(pkgA)", "summarize(pkgB)"]);
     expect(bars(toolsPart(), "呼叫次數")).toEqual(["summarize(pkgA) 6", "summarize(pkgB) 4"]);
 
-    fireEvent.click(within(rows[1]!).getByRole("button", { name: "summarize" }));
-    await within(toolsPart()).findByTestId("tool-usage-detail");
+    fireEvent.click(within(rows[1]!).getByRole("button", { name: "summarize(pkgB)" }));
+    const detail = await within(toolsPart()).findByTestId("tool-usage-detail");
+    expect(within(detail).getByRole("heading", { level: 3 })).toHaveTextContent("summarize(pkgB)");
     expect(client.detail).toHaveBeenCalledWith("summarize", 30, "tool", "command", "first_party", "pkgB");
   });
 
@@ -668,6 +669,9 @@ describe("one command name in two packages (review r3)", () => {
 
     expect(bars(toolsPart(), "呼叫次數")).toEqual(["summarize 6"]);
     expect(within(toolsPart()).getAllByTestId("tool-usage-row")).toHaveLength(1);
+    // The token names which one is shown.
+    const chosen = within(toolsPart()).getByRole("list", { name: "已選" });
+    expect(within(chosen).getByRole("button", { name: "移除 summarize(pkgA)" })).toBeInTheDocument();
   });
 });
 
@@ -683,5 +687,38 @@ describe("an open breakdown follows what is shown (review r3)", () => {
     fireEvent.click(within(box).getByRole("button", { name: "套用" }));
 
     expect(within(toolsPart()).queryByTestId("tool-usage-detail")).toBeNull();
+  });
+});
+
+describe("the picker under a search (review r4)", () => {
+  it("clears and ticks only the rows the search shows, as the tool modal's reset does", async () => {
+    draw();
+    await within(toolsPart()).findAllByTestId("tool-usage-row");
+    fireEvent.click(within(toolsPart()).getByRole("button", { name: /^顯示哪些/ }));
+    const box = screen.getByRole("dialog", { name: "顯示哪些工具" });
+
+    fireEvent.change(within(box).getByRole("searchbox", { name: "搜尋工具…" }), {
+      target: { value: "look" },
+    });
+    fireEvent.click(within(box).getByRole("button", { name: "清除" }));
+    fireEvent.click(within(box).getByRole("button", { name: "套用" }));
+
+    expect(order(toolsPart())).toEqual(["exec", "spc"]); // only acme__lookup was cleared
+  });
+
+  it("opens a fold shut by hand once a search finds something in it", async () => {
+    draw();
+    await within(toolsPart()).findAllByTestId("tool-usage-row");
+    fireEvent.click(within(toolsPart()).getByRole("button", { name: /^顯示哪些/ }));
+    const box = screen.getByRole("dialog", { name: "顯示哪些工具" });
+    const fold = () => within(box).getByRole("button", { name: /^.?acme/ });
+    fireEvent.click(fold());
+    fireEvent.click(fold()); // shut by hand
+
+    fireEvent.change(within(box).getByRole("searchbox", { name: "搜尋工具…" }), {
+      target: { value: "look" },
+    });
+
+    expect(within(box).getByRole("checkbox", { name: "acme__lookup" })).toBeInTheDocument();
   });
 });

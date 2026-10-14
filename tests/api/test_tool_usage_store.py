@@ -338,3 +338,11 @@ def test_one_command_name_in_two_packages_is_two_stored_rows() -> None:
 
     got = sorted((r.package, r.calls) for r in rows_since(spec, "2026-10-01"))
     assert got == [("pkgA", 1), ("pkgB", 2)]
+
+
+def test_a_tilde_in_a_name_cannot_make_two_rows_one() -> None:
+    """`~` joins the parts of a row id, and `quote` leaves it alone: a name or a
+    package holding one could spell another row's id (review r4)."""
+    from workspace_app.api.tool_usage_store import _row_id
+
+    assert _row_id("tool", "a~S", "S", "", "d", "p") != _row_id("tool", "a", "S", "S~", "d", "p")

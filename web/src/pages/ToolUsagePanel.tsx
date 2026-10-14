@@ -263,6 +263,14 @@ function UsagePart({
       ? `${r.tool}(${r.package || (sources[r.source] ? t(sources[r.source]) : r.source)})`
       : r.tool;
   const isPicked = (r: ToolUsageTool) => picked !== null && rowKey(picked) === rowKey(r);
+  // The table, the tokens and a breakdown name a row against the whole
+  // report (the chart against what is shown), so one row keeps one name.
+  const twice = new Map<string, number>();
+  for (const r of all) twice.set(r.tool, (twice.get(r.tool) ?? 0) + 1);
+  const nameOf = (r: ToolUsageTool) =>
+    (twice.get(r.tool) ?? 0) > 1
+      ? `${r.tool}(${r.package || (sources[r.source] ? t(sources[r.source]) : r.source)})`
+      : r.tool;
   // The tick boxes, busiest first — the order the chart and the table start in.
   const names = [...all].sort((a, b) => b.calls - a.calls || a.tool.localeCompare(b.tool));
 
@@ -307,7 +315,13 @@ function UsagePart({
             ))}
           </div>
           {names.length > 0 && (
-            <ShownPicker names={names} hidden={hidden} toggle={toggle} setHidden={setHidden} />
+            <ShownPicker
+              names={names}
+              hidden={hidden}
+              toggle={toggle}
+              setHidden={setHidden}
+              nameOf={nameOf}
+            />
           )}
         </div>
       )}
@@ -365,7 +379,7 @@ function UsagePart({
                           setPicked(isPicked(r) ? null : r)
                         }
                       >
-                        {r.tool}
+                        {nameOf(r)}
                       </button>
                     </td>
                     <td style={cell}>{sources[r.source] ? t(sources[r.source]) : r.source}</td>
@@ -390,6 +404,7 @@ function UsagePart({
       {picked && rows.some(isPicked) && (
         <ToolDetail
           tool={picked.tool}
+          title={nameOf(picked)}
           source={picked.source}
           pkg={picked.package ?? ""}
           kind={kind}
@@ -493,11 +508,13 @@ function ShownPicker({
   hidden,
   toggle,
   setHidden,
+  nameOf,
 }: {
   names: ToolUsageTool[];
   hidden: ReadonlySet<string>;
   toggle: (name: string) => void;
   setHidden: (next: ReadonlySet<string>) => void;
+  nameOf: (r: ToolUsageTool) => string;
 }) {
   const t = useT();
   const [open, setOpen] = useState(false);
@@ -521,10 +538,10 @@ function ShownPicker({
         <ul className="tool-usage-chips" aria-label={t("usage.shown.chosen")}>
           {picked.map((r) => (
             <li key={rowKey(r)}>
-              {r.tool}
+              {nameOf(r)}
               <button
                 type="button"
-                aria-label={t("usage.shown.remove", { name: r.tool })}
+                aria-label={t("usage.shown.remove", { name: nameOf(r) })}
                 onClick={() => toggle(rowKey(r))}
               >
                 ✕
@@ -547,6 +564,7 @@ function ShownPicker({
 
 function ToolDetail({
   tool,
+  title,
   source,
   pkg,
   kind,
@@ -558,6 +576,8 @@ function ToolDetail({
   appTitle,
 }: {
   tool: string;
+  /** How the table names this row (with its package or source when the name repeats). */
+  title: string;
   source: string;
   pkg: string;
   kind: UsageKind;
@@ -604,8 +624,8 @@ function ToolDetail({
     </thead>
   );
   return (
-    <section className="tool-usage-detail" data-testid="tool-usage-detail" aria-label={tool}>
-      <h3 className="tool-usage-detail-title">{tool}</h3>
+    <section className="tool-usage-detail" data-testid="tool-usage-detail" aria-label={title}>
+      <h3 className="tool-usage-detail-title">{title}</h3>
       {detail.isError && (
         <p role="alert">{t("usage.failed", { reason: (detail.error as Error).message })}</p>
       )}

@@ -75,7 +75,10 @@ def _row_id(kind: str, tool: str, source: str, package: str, day: str, pod: str)
     # tool name, a skill name and a pod name are not ours to vouch for. The
     # package is part of it: two Apps can each pick a package with a command
     # of one name (the collision check is per App).
-    return "~".join(quote(p, safe="") for p in (kind, tool, source, package, day, pod))
+    # `quote` leaves `~` alone, and `~` is the separator: escape it too.
+    return "~".join(
+        quote(p, safe="").replace("~", "%7E") for p in (kind, tool, source, package, day, pod)
+    )
 
 
 class ToolUsageStore:

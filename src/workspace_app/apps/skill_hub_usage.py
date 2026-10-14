@@ -10,7 +10,7 @@ counter that kept every revision would grow by one per flush (U3). The
 total is a `Sum` over the entry's rows. Who and in which item are recorded
 on the row and never shown (U5).
 
-What a pod that dies without a SIGTERM had not flushed is lost — what
+What a process that dies without a SIGTERM had not flushed is lost — what
 accumulated since its last successful flush (one interval, unless flushes were
 failing). Rows are not shared between processes: the id carries
 :func:`writer_name` (host + pid).
@@ -34,7 +34,7 @@ from specstar.types import ResourceIDNotFoundError
 
 logger = logging.getLogger(__name__)
 
-#: How often a pod writes what it counted (U4).
+#: How often a process writes what it counted (U4).
 FLUSH_INTERVAL_S = 2 * 60 * 60
 
 
@@ -80,7 +80,7 @@ _ENTRY_ID = re.compile(r"[A-Za-z0-9_-]+")
 
 
 def _row_id(entry_id: str, day: str, pod: str) -> str:
-    # A specstar id holds no `/`; the pod name is the only part that is not
+    # A specstar id holds no `/`; the writer's name is the only part that is not
     # already a safe token.
     return f"{entry_id}~{day}~{quote(pod, safe='')}"
 
@@ -120,7 +120,7 @@ class UsageCounter:
         return self._spec.get_resource_manager(SkillHubUsage)
 
     async def flush(self) -> None:
-        """Add what this pod counted to its rows for today. An entry whose
+        """Add what this process counted to its rows for today. An entry whose
         write fails keeps its counts for the next flush, and the failure is
         raised once every other entry has been written.
 
@@ -194,7 +194,7 @@ class UsageCounter:
         return out
 
     def counted_since(self) -> str:
-        """The first day any pod wrote a count (`YYYY-MM-DD`), or "" before
+        """The first day any process wrote a count (`YYYY-MM-DD`), or "" before
         that. Once found it never changes, so it is asked of the store once."""
         if not self._since:
             first = QB.all().sort(QB.created_time().asc(), QB.resource_id().asc()).limit(1).build()

@@ -223,7 +223,7 @@ skill 的「來源」記成四個值,依讀到內容的那條路與工作區副�
 | `shared` | 平台內建 | `load_shared_skill` 讀到的;或工作區副本 `.origin.source == "shared"`(帶 scripts 的內建 skill 第一次讀會被複製進工作區) |
 | `profile` | App 內建 | `load_skill` 讀到的;或副本 `.origin.source == "profile"` |
 | `hub` | skill hub | 副本 `.origin.source == "hub"` 且不是 fork(含作者發佈後自己的那份——它的 `.origin` 跟安裝的一樣) |
-| `workspace` | 自己寫的 | 工作區有、沒有 `.origin`(或讀不出來);或 hub 的 fork(fork 之後就是自己的) |
+| `workspace` | item 內自建 | 工作區有、沒有 `.origin`(或讀不出來);或 hub 的 fork(fork 之後就是自己的) |
 
 ### 8.3 記在哪〔施工〕
 
@@ -330,5 +330,5 @@ skill 的「來源」記成四個值,依讀到內容的那條路與工作區副�
 - **T6 選擇器改成 tool modal 那一款**(user「畫面請參考tool modal那樣的選單」):不再攤在頁面上,而是一行摘要 +
   一個 modal——搜尋、每個套件一個摺疊列(核心工具在前)、摺疊列的方框整包勾/清(部分勾 = 混合)、取消/套用;
   改的是草稿,套用才換,改過再取消會問一次(`useDirtyClose`)。已選的子集合照舊在 modal 外列成標籤。
-- **T7「自己寫的」改名「item 內自建」**(user 同意改名):它指的是存在這個 item 工作區、不是從別處複製來的 skill,
-  不一定是看報表的人寫的。
+- **T7「自己寫的」改名「item 內自建」**(user 同意改名):它指的是存在這個 item 工作區、沒有來源標記(或標記讀不出來)的
+  skill,以及 hub 的 fork(fork 之後算自己的);不一定是看報表的人寫的。
