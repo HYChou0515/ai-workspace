@@ -49,6 +49,58 @@ class _Site(BaseHTTPRequestHandler):
             self.send_response(302)
             self.send_header("Location", "/sorry/index")
             self.end_headers()
+        elif self.path == "/sso-start":
+            # a company sign-in's first hop: nothing to read, a script moves on
+            self._html(
+                "<title>Signing in</title>"
+                "<script>addEventListener('load', () => "
+                "setTimeout(() => location.replace('/sso-form'), 300))</script>"
+            )
+        elif self.path == "/sso-form":
+            # the second: a hidden form that posts itself (SAML / OIDC form_post)
+            self._html(
+                "<title>Signing in</title>"
+                '<form id="f" method="post" action="/sso-callback">'
+                '<input type="hidden" name="SAMLResponse" value="x"></form>'
+                "<script>addEventListener('load', () => "
+                "setTimeout(() => document.getElementById('f').submit(), 300))</script>"
+            )
+        elif self.path == "/landed":
+            self._html("<title>Landed</title><p>最後的內容 SSO-TOKEN</p>")
+        elif self.path == "/redirecting":
+            # an interstitial with words of its own, moving on after a while
+            self._html(
+                "<title>Redirecting</title><p>正在轉址，請稍候</p>"
+                "<script>addEventListener('load', () => "
+                "setTimeout(() => location.assign('/landed'), 1200))</script>"
+            )
+        elif self.path.startswith("/chain/"):
+            # four hops, each well inside the quiet time, longer than it in all
+            n = int(self.path.rsplit("/", 1)[1])
+            nxt = f"/chain/{n + 1}" if n < 3 else "/landed"
+            self._html(
+                f"<title>Hop {n}</title><p>第 {n} 站</p>"
+                f"<script>addEventListener('load', () => "
+                f"setTimeout(() => location.replace('{nxt}'), 600))</script>"
+            )
+        elif self.path == "/slow-form":
+            # words of its own, and a form whose answer takes longer than the
+            # quiet time: the page is on its way all along
+            self._html(
+                "<title>Signing in</title><p>正在登入</p>"
+                '<form id="f" method="post" action="/slow-callback"></form>'
+                "<script>addEventListener('load', () => "
+                "setTimeout(() => document.getElementById('f').submit(), 100))</script>"
+            )
+        elif self.path == "/late":
+            # nothing to read, and moving on only after the quiet time
+            self._html(
+                "<title>Wait</title>"
+                "<script>addEventListener('load', () => "
+                "setTimeout(() => location.replace('/landed'), 2500))</script>"
+            )
+        elif self.path == "/blank":
+            self._html("<title>Blank</title>")
         elif self.path.startswith("/sorry/"):
             # Google's "unusual traffic" page; the person solves it, it moves on
             self._html(
@@ -62,6 +114,17 @@ class _Site(BaseHTTPRequestHandler):
             self.send_header("Content-Type", "text/html")
             self.end_headers()
             self.wfile.write(b"<title>Not Found</title><h1>Not Found</h1>")
+
+    def do_POST(self) -> None:
+        self.rfile.read(int(self.headers.get("Content-Length") or 0))
+        if self.path == "/slow-callback":
+            import time
+
+            time.sleep(2.5)
+        # the sign-in's last hop: the server sends the browser to the page
+        self.send_response(302)
+        self.send_header("Location", "/landed")
+        self.end_headers()
 
     def _html(self, body: str) -> None:
         self.send_response(200)
@@ -119,3 +182,63 @@ def test_a_verification_waits_for_the_person_then_carries_on(chrome, site):
 def test_a_page_that_is_not_there_fails(chrome, site):
     with pytest.raises(Exception, match="404"):
         chrome.run(build(lambda: [])["open_url"], f"{site}/gone", lambda _n: None)
+
+
+# A page reached through hops the person never sees — a script, a form that
+# posts itself, a server redirect, as a company sign-in does — is read where
+# the hops end, not at the first (it read as nothing: 「沒查到：nothing to
+# send」 on the person's PC, plan D22).
+def test_a_page_behind_redirects_is_read_where_they_end(chrome, site):
+    page = chrome.run(build(lambda: [])["open_url"], f"{site}/sso-start", lambda _n: None)
+
+    assert page.url == f"{site}/landed"
+    assert "SSO-TOKEN" in page.markdown
+
+
+# An interstitial with words of its own is not the page: it is read once the
+# address has stopped changing.
+def test_an_interstitial_that_moves_on_is_not_taken_for_the_page(chrome, site):
+    page = chrome.run(build(lambda: [])["open_url"], f"{site}/redirecting", lambda _n: None)
+
+    assert page.url == f"{site}/landed"
+    assert "SSO-TOKEN" in page.markdown and "正在轉址" not in page.markdown
+
+
+# A page that never shows any text fails with why — in words the person can
+# act on — rather than an empty page the backend refuses in English.
+def test_a_page_with_no_text_says_so(chrome, site, monkeypatch):
+    from ai_workspace_helper import builtin_errands
+
+    monkeypatch.setattr(builtin_errands, "SETTLE_LIMIT_MS", 3_000)
+
+    with pytest.raises(Exception, match="沒有文字"):
+        chrome.run(build(lambda: [])["open_url"], f"{site}/blank", lambda _n: None)
+
+
+# Each hop inside the quiet time, the hops together longer than it — and
+# each with words of its own: the wait starts again at every hop, so the
+# chain is followed to its end.
+def test_a_long_chain_of_quick_hops_is_followed_to_its_end(chrome, site):
+    page = chrome.run(build(lambda: [])["open_url"], f"{site}/chain/0", lambda _n: None)
+
+    assert page.url == f"{site}/landed"
+    assert "站" not in page.markdown
+
+
+# A page with words on it whose form is still being answered is on its way:
+# it is not read as the page — reading it meanwhile waits for the new one and
+# fails as "context destroyed", and the errand reads again.
+def test_a_page_whose_form_is_still_being_answered_is_not_the_page(chrome, site):
+    page = chrome.run(build(lambda: [])["open_url"], f"{site}/slow-form", lambda _n: None)
+
+    assert page.url == f"{site}/landed"
+    assert "正在登入" not in page.markdown
+
+
+# Settled on a page with nothing to read, the helper keeps looking (up to the
+# limit) rather than handing back nothing.
+def test_a_blank_page_that_moves_on_late_is_waited_for(chrome, site):
+    page = chrome.run(build(lambda: [])["open_url"], f"{site}/late", lambda _n: None)
+
+    assert page.url == f"{site}/landed"
+    assert "SSO-TOKEN" in page.markdown
