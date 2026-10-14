@@ -82,6 +82,8 @@ def _avg(calls: int, ms: int) -> int:
 class ToolUsageTool(BaseModel):
     tool: str
     source: str
+    #: The package a command belongs to (§9.2); "" for a built-in or a skill.
+    package: str = ""
     calls: int
     fails: int
     avg_ms: int
@@ -170,8 +172,8 @@ def register_tool_usage_routes(
         group = _group(group)
         rows = await asyncio.to_thread(rows_since, spec, since_day(days), kind=kind)
         tools = [
-            ToolUsageTool(tool=t, source=s, calls=c, fails=f, avg_ms=_avg(c, m))
-            for t, s, c, f, m in per_tool(
+            ToolUsageTool(tool=t, source=s, package=p, calls=c, fails=f, avg_ms=_avg(c, m))
+            for t, s, p, c, f, m in per_tool(
                 rows, source=source, surface=surface, app=app, group=group
             )
         ]

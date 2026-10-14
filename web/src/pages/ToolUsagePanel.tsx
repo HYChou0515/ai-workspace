@@ -267,6 +267,7 @@ function UsagePart({
         <h2 id={headingId} className="tool-usage-part-title">
           {t(skills ? "usage.part.skill" : "usage.part.tool")}
         </h2>
+        <div className="tool-usage-part-tools">
         <label>
           {t("usage.filter.source")}
           <select className="input" value={source} onChange={(e) => setSource(e.target.value)}>
@@ -283,6 +284,7 @@ function UsagePart({
         <a className="tool-usage-raw" href={client.rawUrl(days, kind)} download>
           {t("usage.raw")}
         </a>
+        </div>
       </div>
 
       {!skills && (
@@ -299,45 +301,14 @@ function UsagePart({
               </button>
             ))}
           </div>
-          {/* NN/g, "Listboxes vs. Dropdown Lists": several choices are a list of
-              tick boxes laid open, not a dropdown; it does not scroll, so what is
-              ticked is in sight. */}
           {names.length > 0 && (
-            <fieldset className="tool-usage-shown">
-              <legend>{t("usage.shown")}</legend>
-              <div className="tool-usage-shown-actions">
-                <button
-                  type="button"
-                  className="btn"
-                  data-size="sm"
-                  data-variant="ghost"
-                  onClick={() => setHidden(new Set())}
-                >
-                  {t("usage.shown.all")}
-                </button>
-                <button
-                  type="button"
-                  className="btn"
-                  data-size="sm"
-                  data-variant="ghost"
-                  onClick={() => setHidden(new Set(all.map((r) => r.tool)))}
-                >
-                  {t("usage.shown.none")}
-                </button>
-              </div>
-              <div className="tool-usage-shown-boxes">
-                {names.map((r) => (
-                  <label key={r.tool}>
-                    <input
-                      type="checkbox"
-                      checked={!hidden.has(r.tool)}
-                      onChange={() => toggle(r.tool)}
-                    />
-                    {r.tool}
-                  </label>
-                ))}
-              </div>
-            </fieldset>
+            <ShownPicker
+              names={names}
+              hidden={hidden}
+              toggle={toggle}
+              showAll={() => setHidden(new Set())}
+              showNone={() => setHidden(new Set(all.map((r) => r.tool)))}
+            />
           )}
         </div>
       )}
@@ -503,6 +474,130 @@ function UsageBars({
         </div>
       </div>
     </figure>
+  );
+}
+
+/** Past this many, the picked names are counted rather than listed. */
+const CHIPS_MAX = 20;
+
+/**
+ * Which tools to show (§9.2), built for a hundred commands: folded to one
+ * line saying what is shown, and opened to a search field and tick boxes
+ * grouped by package in a box that scrolls — NN/g, "Listboxes vs. Dropdown
+ * Lists": several choices are a list of tick boxes, not a dropdown; and when
+ * the list scrolls, what is picked is shown OUTSIDE it, as removable tokens.
+ */
+function ShownPicker({
+  names,
+  hidden,
+  toggle,
+  showAll,
+  showNone,
+}: {
+  names: ToolUsageTool[];
+  hidden: ReadonlySet<string>;
+  toggle: (name: string) => void;
+  showAll: () => void;
+  showNone: () => void;
+}) {
+  const t = useT();
+  const [open, setOpen] = useState(false);
+  const [find, setFind] = useState("");
+  const boxId = useId();
+  const total = names.length;
+  const picked = names.filter((r) => !hidden.has(r.tool));
+  const narrowed = picked.length < total;
+
+  // Built-ins first (they have no package), then each package, busiest first.
+  const needle = find.trim().toLowerCase();
+  const groups = new Map<string, ToolUsageTool[]>();
+  for (const r of names) {
+    if (needle && !r.tool.toLowerCase().includes(needle)) continue;
+    const key = r.package ?? "";
+    groups.set(key, [...(groups.get(key) ?? []), r]);
+  }
+  const ordered = [...groups.entries()].sort(([a], [b]) => (a === "" ? -1 : b === "" ? 1 : 0));
+
+  return (
+    <div className="tool-usage-shown">
+      <button
+        type="button"
+        className="tool-usage-shown-summary"
+        aria-expanded={open}
+        aria-controls={boxId}
+        onClick={() => setOpen((o) => !o)}
+      >
+        {narrowed
+          ? t("usage.shown.some", { k: picked.length, n: total })
+          : t("usage.shown.every", { n: total })}
+        <span aria-hidden="true">{open ? " ▴" : " ▾"}</span>
+      </button>
+      {narrowed && picked.length > 0 && picked.length <= CHIPS_MAX && (
+        <ul className="tool-usage-chips" aria-label={t("usage.shown.chosen")}>
+          {picked.map((r) => (
+            <li key={r.tool}>
+              {r.tool}
+              <button
+                type="button"
+                aria-label={t("usage.shown.remove", { name: r.tool })}
+                onClick={() => toggle(r.tool)}
+              >
+                ✕
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      {open && (
+        <fieldset id={boxId} className="tool-usage-shown-panel">
+          <legend>{t("usage.shown")}</legend>
+          <div className="tool-usage-shown-actions">
+            <input
+              type="search"
+              className="input"
+              autoComplete="off"
+              aria-label={t("usage.shown.search")}
+              placeholder={t("usage.shown.search")}
+              value={find}
+              onChange={(e) => setFind(e.target.value)}
+            />
+            <button type="button" className="btn" data-size="sm" data-variant="ghost" onClick={showAll}>
+              {t("usage.shown.all")}
+            </button>
+            <button type="button" className="btn" data-size="sm" data-variant="ghost" onClick={showNone}>
+              {t("usage.shown.none")}
+            </button>
+          </div>
+          <div className="tool-usage-shown-list">
+            {ordered.map(([pkg, rows]) => (
+              <div
+                key={pkg}
+                role="group"
+                aria-label={pkg || t("usage.shown.builtin")}
+                className="tool-usage-shown-group"
+              >
+                <div className="tool-usage-shown-group-title" aria-hidden="true">
+                  {pkg || t("usage.shown.builtin")}
+                </div>
+                <div className="tool-usage-shown-boxes">
+                  {rows.map((r) => (
+                    <label key={r.tool}>
+                      <input
+                        type="checkbox"
+                        name={r.tool}
+                        checked={!hidden.has(r.tool)}
+                        onChange={() => toggle(r.tool)}
+                      />
+                      {r.tool}
+                    </label>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        </fieldset>
+      )}
+    </div>
   );
 }
 

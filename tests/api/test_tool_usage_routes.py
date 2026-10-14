@@ -85,6 +85,7 @@ def test_per_tool_calls_failures_and_average_time() -> None:
     assert rows["spc"] == {
         "tool": "spc",
         "source": "first_party",
+        "package": "",  # seeded without one
         "calls": 2,
         "fails": 1,
         "avg_ms": 200,
@@ -361,3 +362,15 @@ def test_one_name_from_two_sources_breaks_down_one_source_at_a_time() -> None:
 
     assert sorted(u["user"] for u in both["by_user"]) == ["bob", "carol"]
     assert [u["user"] for u in hub["by_user"]] == ["carol"]
+
+
+def test_each_command_says_which_package_it_belongs_to() -> None:
+    """§9.2: with a hundred commands the picker groups them by package, so a
+    report line names its package; a built-in names none."""
+    client, spec = _app({"id": "root"})
+    _seed_pkg(spec, 1, "acme__ls", "acme")
+    _seed(spec, 1, "exec", "builtin")
+
+    got = {t["tool"]: t["package"] for t in client.get("/admin/tool-usage").json()["tools"]}
+
+    assert got == {"acme__ls": "acme", "exec": ""}

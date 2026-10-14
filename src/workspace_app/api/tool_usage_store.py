@@ -225,11 +225,11 @@ def per_tool(
     surface: str = "",
     app: str = "",
     group: str = "command",
-) -> list[tuple[str, str, int, int, int]]:
-    """`(name, source, calls, fails, total_ms)` per tool — or per package
-    (`group`) — every pod and day added. Filtering by surface or App reads the
+) -> list[tuple[str, str, str, int, int, int]]:
+    """`(name, source, package, calls, fails, total_ms)` per tool — or per
+    package (`group`) — every pod and day added. Filtering by surface or App reads the
     tool's surface × App breakdown, since a row's totals cover every surface."""
-    sums: dict[tuple[str, str], list[int]] = {}
+    sums: dict[tuple[str, str, str], list[int]] = {}
     for row in rows:
         if source and row.source != source:
             continue
@@ -245,11 +245,11 @@ def per_tool(
             calls, fails, ms = row.calls, row.fails, row.total_ms
         if not calls:
             continue
-        acc = sums.setdefault((group_name(row, group), row.source), [0, 0, 0])
+        acc = sums.setdefault((group_name(row, group), row.source, row.package), [0, 0, 0])
         acc[0] += calls
         acc[1] += fails
         acc[2] += ms
-    return [(t, s, c, f, m) for (t, s), (c, f, m) in sums.items()]
+    return [(t, s, p, c, f, m) for (t, s, p), (c, f, m) in sums.items()]
 
 
 def breakdown(rows: list[ToolUsageDay], name: str) -> dict[str, tuple[int, int, int]]:

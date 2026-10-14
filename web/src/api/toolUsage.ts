@@ -17,6 +17,8 @@ export type ToolUsageTool = {
   /** The tool's — or, for `kind=skill`, the skill's — name. */
   tool: string;
   source: ToolSource | SkillSource;
+  /** The package a command belongs to (§9.2); "" for a built-in or a skill. */
+  package?: string;
   calls: number;
   fails: number;
   avg_ms: number;

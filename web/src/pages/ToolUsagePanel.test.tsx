@@ -24,9 +24,16 @@ vi.mock("../hooks/useUsers", () => ({
 const TOOLS: ToolUsageReport = {
   days: 30,
   tools: [
-    { tool: "spc", source: "first_party", calls: 40, fails: 10, avg_ms: 1200 },
-    { tool: "exec", source: "builtin", calls: 100, fails: 1, avg_ms: 85 },
-    { tool: "acme__lookup", source: "third_party", calls: 5, fails: 5, avg_ms: 30000 },
+    { tool: "spc", source: "first_party", package: "rca-tools", calls: 40, fails: 10, avg_ms: 1200 },
+    { tool: "exec", source: "builtin", package: "", calls: 100, fails: 1, avg_ms: 85 },
+    {
+      tool: "acme__lookup",
+      source: "third_party",
+      package: "acme",
+      calls: 5,
+      fails: 5,
+      avg_ms: 30000,
+    },
   ],
 };
 
@@ -58,8 +65,8 @@ const BY_PACKAGE: ToolUsageReport = {
   days: 30,
   tools: [
     { tool: "exec", source: "builtin", calls: 100, fails: 1, avg_ms: 85 },
-    { tool: "rca-tools", source: "first_party", calls: 40, fails: 10, avg_ms: 1200 },
-    { tool: "acme", source: "third_party", calls: 5, fails: 5, avg_ms: 30000 },
+    { tool: "rca-tools", source: "first_party", package: "rca-tools", calls: 40, fails: 10, avg_ms: 1200 },
+    { tool: "acme", source: "third_party", package: "acme", calls: 5, fails: 5, avg_ms: 30000 },
   ],
 };
 
@@ -362,41 +369,109 @@ describe("skills (plan §8)", () => {
 });
 
 describe("which tools, at which granularity (plan §9)", () => {
-  const shown = () => within(toolsPart()).getByRole("group", { name: "顯示哪些" });
+  /** The picker's one-line summary, which opens it. */
+  const summary = () => within(toolsPart()).getByRole("button", { name: /^顯示哪些/ });
+  const picker = () => within(toolsPart()).getByRole("group", { name: "顯示哪些" });
 
-  it("shows every tool by default, each with a ticked box", async () => {
+  async function openPicker() {
+    await within(toolsPart()).findAllByTestId("tool-usage-row");
+    fireEvent.click(summary());
+    return picker();
+  }
+
+  it("is folded to one line saying what is shown — a hundred commands do not flood the page", async () => {
     draw();
     await within(toolsPart()).findAllByTestId("tool-usage-row");
 
-    const boxes = within(shown()).getAllByRole("checkbox");
-    expect(boxes.map((b) => b.getAttribute("aria-label") ?? b.closest("label")?.textContent)).toEqual([
-      "exec",
-      "spc",
-      "acme__lookup",
-    ]);
-    expect(boxes.every((b) => (b as HTMLInputElement).checked)).toBe(true);
+    expect(summary()).toHaveTextContent("顯示哪些:全部(3)");
+    expect(summary()).toHaveAttribute("aria-expanded", "false");
+    expect(within(toolsPart()).queryAllByRole("checkbox")).toHaveLength(0);
   });
 
-  it("leaves an unticked tool out of the charts and the table", async () => {
+  it("opens to tick boxes grouped by package, built-ins on their own", async () => {
     draw();
-    await within(toolsPart()).findAllByTestId("tool-usage-row");
+    const box = await openPicker();
 
-    fireEvent.click(within(shown()).getByRole("checkbox", { name: "exec" }));
+    expect(summary()).toHaveAttribute("aria-expanded", "true");
+    const groups = within(box)
+      .getAllByRole("group")
+      .map((g) => g.getAttribute("aria-label"));
+    expect(groups).toEqual(["內建", "rca-tools", "acme"]);
+    expect(within(within(box).getByRole("group", { name: "acme" })).getAllByRole("checkbox")).toHaveLength(1);
+  });
+
+  it("finds a command by typing part of its name", async () => {
+    draw();
+    const box = await openPicker();
+
+    fireEvent.change(within(box).getByRole("searchbox", { name: "找工具" }), {
+      target: { value: "look" },
+    });
+
+    expect(within(box).getAllByRole("checkbox").map((c) => c.getAttribute("name"))).toEqual([
+      "acme__lookup",
+    ]);
+  });
+
+  it("leaves an unticked tool out of the charts and the table, and says how many are shown", async () => {
+    draw();
+    const box = await openPicker();
+
+    fireEvent.click(within(box).getByRole("checkbox", { name: "exec" }));
 
     expect(order(toolsPart())).toEqual(["spc", "acme__lookup"]);
     expect(bars(toolsPart(), "呼叫次數")).toEqual(["spc 40", "acme__lookup 5"]);
     expect(bars(toolsPart(), "失敗次數")).toEqual(["spc 10", "acme__lookup 5"]);
+    expect(summary()).toHaveTextContent("顯示哪些:已選 2 / 3");
+  });
+
+  it("shows what is picked outside the list, each one removable", async () => {
+    draw();
+    const box = await openPicker();
+    fireEvent.click(within(toolsPart()).getByRole("button", { name: "清除" }));
+    fireEvent.click(within(box).getByRole("checkbox", { name: "spc" }));
+    fireEvent.click(within(box).getByRole("checkbox", { name: "exec" }));
+
+    const chosen = within(toolsPart()).getByRole("list", { name: "已選" });
+    expect(within(chosen).getAllByRole("listitem").map((li) => li.textContent)).toEqual([
+      "exec✕",
+      "spc✕",
+    ]);
+
+    fireEvent.click(within(chosen).getByRole("button", { name: "移除 exec" }));
+
+    expect(order(toolsPart())).toEqual(["spc"]);
+  });
+
+  it("names the count instead of the names once more than twenty are picked", async () => {
+    const many: ToolUsageReport = {
+      days: 30,
+      tools: Array.from({ length: 30 }, (_, i) => ({
+        tool: `c${String(i).padStart(2, "0")}`,
+        source: "first_party" as const,
+        package: "big",
+        calls: 100 - i,
+        fails: 0,
+        avg_ms: 1,
+      })),
+    };
+    draw(many);
+    const box = await openPicker();
+    fireEvent.click(within(box).getByRole("checkbox", { name: "c00" }));
+
+    expect(summary()).toHaveTextContent("顯示哪些:已選 29 / 30");
+    expect(within(toolsPart()).queryByRole("list", { name: "已選" })).toBeNull();
   });
 
   it("clears every tick, then shows only the ones ticked back", async () => {
     draw();
-    await within(toolsPart()).findAllByTestId("tool-usage-row");
+    const box = await openPicker();
 
     fireEvent.click(within(toolsPart()).getByRole("button", { name: "清除" }));
     expect(within(toolsPart()).queryAllByTestId("tool-usage-row")).toHaveLength(0);
     expect(within(toolsPart()).getByText("沒有勾選要顯示的工具")).toBeInTheDocument();
 
-    fireEvent.click(within(shown()).getByRole("checkbox", { name: "spc" }));
+    fireEvent.click(within(box).getByRole("checkbox", { name: "spc" }));
     expect(order(toolsPart())).toEqual(["spc"]);
 
     fireEvent.click(within(toolsPart()).getByRole("button", { name: "全部" }));
@@ -405,8 +480,8 @@ describe("which tools, at which granularity (plan §9)", () => {
 
   it("adds a package's commands into one row by package, and starts from every one again", async () => {
     const client = draw();
-    await within(toolsPart()).findAllByTestId("tool-usage-row");
-    fireEvent.click(within(shown()).getByRole("checkbox", { name: "exec" }));
+    const box = await openPicker();
+    fireEvent.click(within(box).getByRole("checkbox", { name: "exec" }));
 
     const unit = within(toolsPart()).getByRole("group", { name: "顯示單位" });
     expect(within(unit).getByRole("button", { name: "每個 command" })).toHaveAttribute(
@@ -419,7 +494,7 @@ describe("which tools, at which granularity (plan §9)", () => {
       expect(client.report).toHaveBeenLastCalledWith(30, expect.anything(), "tool", "package"),
     );
     await waitFor(() => expect(order(toolsPart())).toEqual(["exec", "rca-tools", "acme"]));
-    expect(within(shown()).getAllByRole("checkbox").every((b) => (b as HTMLInputElement).checked)).toBe(true);
+    expect(summary()).toHaveTextContent("顯示哪些:全部(3)");
   });
 
   it("opens a package's breakdown by package", async () => {
@@ -432,11 +507,12 @@ describe("which tools, at which granularity (plan §9)", () => {
     expect(client.detail).toHaveBeenCalledWith("acme", 30, "tool", "package", "third_party");
   });
 
-  it("has no granularity or tick boxes for skills — a skill has no package", async () => {
+  it("has no granularity or picker for skills — a skill has no package", async () => {
     draw();
     await within(skillsPart()).findAllByTestId("tool-usage-row");
 
     expect(within(skillsPart()).queryByRole("group", { name: "顯示單位" })).toBeNull();
+    expect(within(skillsPart()).queryByRole("button", { name: /^顯示哪些/ })).toBeNull();
   });
 });
 
