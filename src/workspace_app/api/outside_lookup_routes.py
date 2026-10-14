@@ -128,7 +128,7 @@ def register_outside_lookup_routes(
     turn_engine: ChatTurnEngine,
     get_user_id: Callable[[], str],
     max_file_size: int,
-    on_answered: Callable[[str, str, str], Awaitable[None]] | None = None,
+    on_answered: Callable[[str, str, str, list[str]], Awaitable[None]] | None = None,
 ) -> Deliver:
     async def answer(
         request: Request,
@@ -198,8 +198,12 @@ def register_outside_lookup_routes(
                 # AI's next turn, which may at once ask to open one of them (and
                 # the card asks the server whether it was seen; found live, P10).
                 # Best effort — failing only means that card asks for the nod.
+                # …and where it came in from: the page it ended on (after its
+                # redirects — the helper's, or the one the person names) and
+                # the address the card opened
+                came_from = [form.source_url, str(card.get("url") or "")]
                 try:
-                    await on_answered(investigation_id, rid, body)
+                    await on_answered(investigation_id, rid, body, came_from)
                 except Exception:  # noqa: BLE001 — logged; the answer stands
                     logger.warning("outside lookup: could not remember links", exc_info=True)
             await send_into(

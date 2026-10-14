@@ -20,8 +20,9 @@ import contextlib
 import hashlib
 import re
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from typing import Literal
+from urllib.parse import parse_qsl, quote, unquote, urlencode, urlsplit
 
 from msgspec import Struct
 from specstar import QB, SpecStar
@@ -110,23 +111,67 @@ class _OutsideSeenUrls(Struct):
 SEEN_URLS_CAP = 2_000
 
 #: `[text](https://…)` and `<https://…>` — how Markdown writes a link, which is
-#: how both the card's paste converter and the helper's write a page (D11).
-_LINK = re.compile(r"\]\((https?://[^)\s]+)\)|<(https?://[^>\s]+)>")
+#: how both the card's paste converter and the helper's write a page (D11). An
+#: address may hold balanced parentheses (Wikipedia's `Python_(language)`).
+_LINK = re.compile(r"\]\((https?://(?:[^()\s]|\([^()\s]*\))+)\)|<(https?://[^>\s]+)>")
 
 
-def links_in(markdown: str) -> list[str]:
+def links_in(markdown: str, also: Iterable[str] = ()) -> list[str]:
     """The web links a lookup's Markdown carries, in order, each once, without
-    a `#fragment` (the same page whichever anchor it was linked at)."""
+    a `#fragment` (the same page whichever anchor it was linked at) — and,
+    for one that wraps another address in its query (a search's own redirect,
+    Google's `/url?q=…`, a mail filter's safe-link `?url=…`), that address too:
+    the AI reads the real one out of it. `also`: addresses the lookup came in
+    from (the page it ended on, the one the card opened) — opening them again
+    sends nothing new either."""
     out: list[str] = []
-    for m in _LINK.finditer(markdown):
-        url = _without_fragment(m.group(1) or m.group(2))
-        if url not in out:
-            out.append(url)
+    found = [m.group(1) or m.group(2) for m in _LINK.finditer(markdown)]
+    for url in [*found, *(u for u in also if u.startswith(("http://", "https://")))]:
+        for each in (url, *_wrapped(url)):
+            each = _without_fragment(each)
+            if each not in out:
+                out.append(each)
     return out
+
+
+def _wrapped(url: str) -> list[str]:
+    """The web addresses an address carries as query values."""
+    return [
+        v
+        for _k, v in parse_qsl(urlsplit(url).query, keep_blank_values=True)
+        if v.startswith(("http://", "https://"))
+    ]
 
 
 def _without_fragment(url: str) -> str:
     return url.split("#", 1)[0]
+
+
+#: Left as they are when an address is written out evenly: RFC 3986's
+#: reserved and unreserved characters — everything else is percent-encoded.
+_PATH_SAFE = "/:@!$&'()*+,;=-._~"
+
+
+def same_page(url: str) -> str:
+    """One way of writing an address, so the same page compares equal however
+    a page or the AI wrote it (D12): host in lower case and without a default
+    port, http and https alike, percent-encoding evened out (`%E6%96%B0` and
+    `新`), no trailing slash, no `#fragment`. The query stays — a different
+    query is a different request, and may carry the AI's own words."""
+    parts = urlsplit(_without_fragment(url.strip()))
+    scheme = parts.scheme.lower()
+    host = (parts.hostname or "").lower()
+    try:
+        port = parts.port
+    except ValueError:
+        port = None
+    if port is not None and (scheme, port) not in (("http", 80), ("https", 443)):
+        host = f"{host}:{port}"
+    if scheme in ("http", "https"):
+        scheme = "https"
+    path = quote(unquote(parts.path), safe=_PATH_SAFE).rstrip("/")
+    query = urlencode(parse_qsl(parts.query, keep_blank_values=True))
+    return f"{scheme}://{host}{path}" + (f"?{query}" if query else "")
 
 
 def job_id(item_id: str, chat_id: str, tool_call_id: str) -> str:
@@ -336,8 +381,10 @@ class OutsideJobStore:
 
     # ── links lookups brought back (D12) ────────────────────────────────────
 
-    async def remember_links(self, item_id: str, chat_id: str, markdown: str) -> None:
-        urls = links_in(markdown)
+    async def remember_links(
+        self, item_id: str, chat_id: str, markdown: str, also: Iterable[str] = ()
+    ) -> None:
+        urls = links_in(markdown, also)
         if urls:
             await asyncio.to_thread(self._remember_sync, item_id, chat_id, urls)
 
@@ -386,7 +433,8 @@ class OutsideJobStore:
         except (ResourceIDNotFoundError, ResourceIsDeletedError):
             return False
         assert isinstance(data, _OutsideSeenUrls)
-        return _without_fragment(url) in data.urls
+        # compared written out evenly — rows remembered before that included
+        return same_page(url) in {same_page(u) for u in data.urls}
 
     async def end(self, jid: str, owner: str, state: JobState, *, saved: str = "") -> bool:
         """End the owner's claimed job as ``state`` (``done`` once its result

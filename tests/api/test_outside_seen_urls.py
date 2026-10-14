@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from tests.api._client import TestClient
 from tests.api.conftest import register_rca_item
 from tests.api.test_outside_answers import _answer
@@ -241,3 +243,76 @@ def test_a_link_is_already_seen_when_the_next_turn_starts():
     assert _answer(client, iid, call="c1", content=PAGE).status_code == 200
 
     assert runner.seen_at_start == [False, True]
+
+
+# ── the same page, however it is written (the person's report: a link the
+# lookup brought back kept asking for 「查」) ─────────────────────────────────
+
+
+def _fetched(markdown: str, *, url: str = "", ask: str):
+    """The helper fetched a page (`markdown`, ending at `url`) for the search
+    card; the next turn asks to open `ask`."""
+    client, iid = _chat(ask)
+    _beat(client)
+    client.post(f"/a/rca/items/{iid}/outside-jobs", json={"tool_call_id": "c1"})
+    jid = _claim(client).json()["id"]
+    r = client.post(
+        f"/ai-workspace-helper/jobs/{jid}/result", json={"markdown": markdown, "url": url}
+    )
+    assert r.status_code == 200, r.text
+    _second_turn(client, iid)
+    return client, iid
+
+
+# The page the lookup ended on (after its redirects) came in from outside too:
+# opening it again sends nothing new.
+def test_the_page_a_lookup_ended_on_opens_without_a_nod():
+    client, iid = _fetched(
+        "the page, no links",
+        url="https://wiki.example/page?id=7",
+        ask="https://wiki.example/page?id=7",
+    )
+
+    assert _auto(client, iid).status_code == 201
+
+
+@pytest.mark.parametrize(
+    ("brought_back", "asked"),
+    [
+        # percent-encoded in the page, written out by the AI — and the other way
+        ("https://wiki.example/%E6%96%B0%E5%8A%9F%E8%83%BD", "https://wiki.example/新功能"),
+        ("https://wiki.example/新功能", "https://wiki.example/%E6%96%B0%E5%8A%9F%E8%83%BD"),
+        # host case, a default port, a trailing slash, http and https
+        ("http://Docs.Example:80/guide/", "https://docs.example/guide"),
+        # a link a search wraps in its own redirect (Google's /url?q=, a safe-link)
+        (
+            "https://www.google.com/url?q=https://pandas.example/whatsnew&sa=U",
+            "https://pandas.example/whatsnew",
+        ),
+        (
+            "https://safelinks.example/?url=https%3A%2F%2Fpandas.example%2Fwhatsnew",
+            "https://pandas.example/whatsnew",
+        ),
+        # parentheses in the address (Wikipedia)
+        (
+            "https://en.wikipedia.org/wiki/Python_(programming_language)",
+            "https://en.wikipedia.org/wiki/Python_(programming_language)",
+        ),
+    ],
+)
+def test_a_link_written_another_way_is_still_the_link(brought_back, asked):
+    client, iid = _fetched(f"results\n- [it]({brought_back})", ask=asked)
+
+    r = _auto(client, iid)
+
+    assert r.status_code == 201, r.text
+
+
+# …but a different query is a different request: it may carry the AI's words.
+def test_a_different_query_on_a_seen_page_still_waits_for_the_nod():
+    client, iid = _fetched(
+        "results\n- [it](https://x.example/search?q=pandas)",
+        ask="https://x.example/search?q=secret",
+    )
+
+    assert _auto(client, iid).status_code == 409
