@@ -2274,20 +2274,37 @@ agent 步驟裡 AI 的呼叫、WUI 的工具呼叫、view plugin、圖表重畫�
 - 「小幫手」頁顯示新版本號;一台重裝過的電腦小視窗標題是那個版本。
 - 請 AI 開一個要經過公司登入或轉址的網址(先前回「nothing to send」的那種):卡片拿到的是最後那一頁的內容,`lookups/` 有存檔。
 
-### 2026-10-14 · #938 「請幫我查」:小幫手送出後,聊天自己跟上 AI 的回答 {#pr-938}
+### 2026-10-14 · #938 「請幫我查」:小幫手送出後,聊天自己跟上 AI 的回答;跨 pod 即時事件斷線會重連並寫 log {#pr-938}
 
 **設定** — 無。
 
 **資料** — 無。
 
-**k8s · CI 側** — 只有前端;照常重 build、部署,沒有要另外做的事。
+**k8s · CI 側** — 照常重 build、部署,沒有要另外做的事。`event_bus.kind: rabbitmq` 的部署在 `rollout 後`看每個 API pod 的 log:
 
-**行為改變,沒有開關**:「請幫我查」卡片顯示「小幫手已送給 AI」時,若聊天裡還沒出現那則送給 AI 的內容(這一頁沒收到那一輪的
-即時事件——那一輪是小幫手從它自己的 Chrome 開始的),聊天會自己讀資料庫直到 AI 的回答存好,不用重新整理。即時事件有收到時不多做事。
+```
+kubectl logs <api-pod> | grep "event_bus:"
+```
+
+- 每個 API pod 都要有一行 `event_bus: connected — exchange rca_turn_events, this pod's queue amq.gen-…`。為什麼:這條佇列是別的 pod 跑的
+  AI 回答送到這個 pod 上瀏覽器的唯一路。沒有這行的症狀:接在這個 pod 上的人要重新整理才看得到別的 pod 跑的回答(只剩一個 pod 時正常)。
+- 一直出現 `event_bus: cannot reach the broker — trying again in N s` → 這個 pod 連不上 RabbitMQ(網址、vhost、帳密、NetworkPolicy)。
+  以前這種 pod 啟動時連一次失敗就永遠不再試,也不寫 log;現在會每 1→30 秒重試一次,連上就恢復,不用重啟。
+- `event_bus: lost the broker` / `dropped a frame on send`:連線中途斷掉或某一筆沒送出;會自己重連,偶爾一行不用處理。
+
+**行為改變,沒有開關**:
+
+- 「請幫我查」卡片顯示「小幫手已送給 AI」,或使用者手動貼上答案送出後,若聊天裡還沒出現 AI 的回答(這一頁沒收到那一輪的即時事件),
+  聊天會自己讀資料庫直到 AI 的回答存好,不用重新整理。這條路不會跳出「連線中斷,這裡可能少了一段」。
+- 每一輪對話的開始與結束,API pod 會在 INFO 寫一行 `live: published <事件> key=… pod=… viewers_here=N`;收到別的 pod 的事件寫
+  `live: from bus <事件> key=… origin=… pod=… viewers_here=N`;瀏覽器接上/離開串流寫 `live: viewer joined|left key=… pod=…`。
+  只記事件種類、對話 key 與 pod,不記內容;一輪約幾行。用來追「誰跑的、誰收到、那裡有沒有人在看」。
 
 **確認做完**(`rollout 後`):
 
-- 請 AI 查外面的東西、按「查」;卡片出現「小幫手已送給 AI」後**不重新整理**,幾秒內聊天出現送出的內容與 AI 的回答。
+- 每個 API pod 的 log 都有 `event_bus: connected`;`rabbitmqctl list_bindings source_name destination_name | grep rca_turn_events`
+  列出的佇列數不少於 API pod 數。
+- 多個 pod 時:請 AI 查外面的東西、按「查」;卡片出現「小幫手已送給 AI」後**不重新整理**,幾秒內聊天出現送出的內容與 AI 的回答。
 
 ## 附錄 A：資料回填的機制（specstar 為什麼不會自己補）
 
