@@ -1,4 +1,4 @@
-# WUI 頁面直接叫 subagent
+# WUI 頁面叫能力的兩種叫法:`call`(拿結果)與 `start`(拿工作);subagent 也能叫
 
 **狀態:** P1(計劃)。
 **來源標記:** 〔user〕= user 的原話或明確選擇;〔查證〕= 讀 `origin/master`(2a4e7d0e)程式碼確認的事實;
@@ -6,92 +6,105 @@
 
 ## 1. 問題
 
-user:「我希望wui要能夠呼叫subagent」。
+user:「我希望wui要能夠呼叫subagent」;討論中擴大成「每個能力都有兩種叫法,讓 AI 自己決定」。
 
 現況〔查證〕:
 
 - 頁面能用的動詞是封閉的(`web/src/renderers/wui/protocol.ts`、`bridge.ts`):讀寫檔案、`callTool`(套件工具,
-  一次 ≤ 60 秒、不串流,`api/wui_routes.py` `wui_call_tool`)、`startRun`(起一個 workflow run、串流事件,
-  `wui_run`)。**沒有任何問 AI 的動詞**;`docs/plan-wui.md`「Deliberately not built」把「從頁面問 agent」列為
-  刻意不做。
-- 唯一間接的路:頁面 `startRun` 一個 workflow,workflow 的 agent 步驟裡 AI 再用 `run_agent` 叫 subagent。
+  一個請求一個 JSON 回應、不串流,沙盒每次 ≤ 60 秒,`api/wui_routes.py` `wui_call_tool`)、`startRun`(起一個
+  workflow run、`onEvent` 收串流事件,`wui_run`)。**沒有任何叫 AI 的動詞**;`docs/plan-wui.md`「Deliberately
+  not built」把「從頁面問 agent」列為刻意不做。
+- `startRun` 的串流**沒有結果**:只有過程事件,run 結束時連線就斷,頁面也拿不到 run 編號去查結果
+  (`turns.subscribe_sse`、`workflow_exec.release`)。
 - subagent = item 的 `.agent/<名稱>/AGENT.md`(或 App profile 內建),由 `run_agent` 叫:空白上下文、只回最後的
   文字、不能再往下叫(`api/subagent_run.py`、`apps/subagents.py`)。
-- 頁面的 `startRun` 每次都開一個新的對話(`locator.open_run_chat`),而「同時一個 run」的檢查是**每個對話**一個
-  (`orchestrator.start`:有 `chat_id` 時查 `active_run_for_chat`),所以頁面起的 run 本來就能並行;只有沒對話的舊式
-  run 才是一個 item 一個(`ActiveRunExists`)。
+- 頁面的 `startRun` 每次開一個新對話(`locator.open_run_chat`),「同時一個 run」是**每個對話**一個
+  (`orchestrator.start` 查 `active_run_for_chat`),所以頁面起的 run 本來就能並行。
 
 ## 2. 決定
 
 | # | 決定 | 來源 |
 |---|---|---|
-| D1 | 頁面**直接叫**:新動詞 `window.workspace.callAgent(名稱, 輸入, onEvent)`,背後是一次性的背景 run(串流進度、可停止、有紀錄),不用先寫 workflow | 〔user〕選「頁面直接叫」 |
+| D1 | 頁面能**直接叫 subagent**,不用先寫 workflow | 〔user〕「我希望wui要能夠呼叫subagent」;選「頁面直接叫」 |
 | D2 | 只能叫**頁面宣告過的**:頁面 yaml `agents: [名稱…]`,而且這個 item 真的有(item 的 `.agent/` 或 App 內建) | 〔user〕選「頁面宣告過的」 |
-| D3 | 工具權限**跟在聊天裡一樣**:它 AGENT.md 列的工具,上限是 item 的 App 設定(同一套解析),扣掉 subagent 本來就不能用的;點的人要有 `execute` 權限 | 〔user〕選「跟在聊天裡一樣」 |
-| D4 | **文字進、文字出**:過程串流進度,最後回傳回答文字;寫的檔案留在 item 裡;要結構化就在 AGENT.md 叫它回 JSON | 〔user〕選「文字進、文字出」 |
-| D5 | **留紀錄**:每次呼叫在 item 的 run 清單多一筆,看得到完整過程、能從那裡停止 | 〔user〕選「留,跟 workflow run 一樣」 |
-| D6 | **可以並行**:不受「一個 item 同時一個 run」限制 | 〔user〕選「可以並行」 |
-| D8 | **跟工具 API 同一個形狀**:工具被包成 `POST …/wui/tools/{名稱}/call`(頁面 `callTool`),subagent 照這個模式包成 `POST …/wui/agents/{名稱}/call`(頁面 `callAgent`)——路徑、命名、yaml 宣告、請求 `{input}`(對應 `{args}`)與最後的結果 `{output}` 都對稱;但因為 AI 一跑幾分鐘,**保留串流、run 紀錄與停止**(D5),也沒有工具的 60 秒上限 | 〔user〕「我們是讓mcp被包成api subagent也應如此」→ 選「形狀一樣,但保留串流與紀錄」 |
-| D7 | 身分:算在 item 擁有者頭上,私人環境值用**點的人**的——照 `plan-wui-viewer-login.md` 的「誰的 private」表,與頁面的 `startRun` 相同 | 〔施工,沿用既有決定〕 |
+| D3 | subagent 的工具權限**跟在聊天裡一樣**:它 AGENT.md 列的工具,上限是 item 的 App 設定,扣掉 subagent 本來就不能用的;點的人要有 `execute` 權限 | 〔user〕選「跟在聊天裡一樣」 |
+| D4 | **文字進、文字出**:輸入一段文字,結果是回答文字;寫的檔案留在 item 裡;要結構化就在 AGENT.md 叫它回 JSON | 〔user〕選「文字進、文字出」 |
+| D5 | **留紀錄**:每個 `start` 出來的工作、每次叫 subagent,在 item 的 run 清單多一筆,看得到完整過程、能從那裡停止 | 〔user〕選「留,跟 workflow run 一樣」 |
+| D6 | **可以並行**;同一個 item 同時進行中的頁面工作最多 **4 個**(設定值) | 〔user〕選「可以並行」;「4個ok」 |
+| D7 | **跟工具 API 同一個形狀**:subagent 包成 `POST …/wui/agents/{名稱}/call`,跟 `…/wui/tools/{名稱}/call` 並排;請求 `{input}` 對應 `{args}`、結果 `{output}` 對應 `{output}` | 〔user〕「我們是讓mcp被包成api subagent也應如此」 |
+| D8 | **用動詞名稱區分「多久回來」**:`call…` = `await` 拿結果;`start…` = 拿一個**工作**(`result()` 等結果、`status()` 看進度、`stop()` 停止)。**沒有回呼參數**——回呼與非同步函式容易被 AI 用錯 | 〔user〕「我不喜歡你的解法 這樣ai可能會錯用async func」;「在函數命名上區分」 |
+| D9 | **每個能力都有兩種叫法,由 AI 自己決定**用哪一種;能力不宣告「通常多久」,平台不替能力決定 | 〔user〕「每個mcp都能有async call 和sync call」「讓ai自己決定」;推翻我先前「平台寫死工具=同步、subagent=非同步」的方案(「誰決定要怎麼包裝各個mcp, 現在看起來你打算hardcoded」) |
+| D10 | **不影響現有 WUI**:`callTool`、`startRun` 的行為與回傳形狀完全不變;只**新增**動詞與路由 | 〔user〕「注意不要影響現有wui」 |
+| D11 | 身分:算在 item 擁有者頭上,私人環境值用**點的人**的——照 `plan-wui-viewer-login.md` 的「誰的 private」表,與頁面的 `startRun` 相同 | 〔施工,沿用既有決定〕 |
 
 ## 3. 機制〔施工〕
 
-### 3.1 路由(D8:跟工具 API 對稱)
+### 3.1 頁面看到的動詞(D8、D9、D10)
 
-| | 工具(既有) | subagent(新) |
+| 能力 | `call…`(拿結果) | `start…`(拿工作) |
 |---|---|---|
-| 路徑 | `POST /a/{slug}/items/{item_id}/wui/tools/{name}/call` | `POST /a/{slug}/items/{item_id}/wui/agents/{name}/call` |
-| 請求 | `{args: {...}}` | `{input: "文字"}` |
-| 結果 | `{output, exit_code}`(一個 JSON 回應) | `{output, failed}`,放在串流的**最後一個事件**;之前的事件是進度 |
-| 頁面 | `workspace.callTool(name, args) → output` | `workspace.callAgent(name, input, onEvent?) → output` |
-| yaml 宣告 | `tools:` | `agents:` |
-| 時間 | 沙盒的 60 秒 | 一個 turn 的步數上限;沒有 60 秒 |
-| 紀錄 | 無 | 一筆 run(D5) |
+| 工具 | `callTool(名稱, 參數) → output`(**既有,不變**) | `startTool(名稱, 參數) → 工作`(新) |
+| subagent | `callAgent(名稱, 輸入) → output`(新) | `startAgent(名稱, 輸入) → 工作`(新) |
+| workflow | — | `startRun(…)`(**既有,不變**:還是 `onEvent` 串流;D10) |
 
-回 SSE(跟 `wui/run` 同一種串流)。
+- `call…`:`await` 之後就是結果;**最多等 60 秒**(跟工具一樣的上限)。超過時回一句錯誤「跑太久,請改用
+  `start…`」,並停掉那次工作,不留半套在跑。
+- 工作(`start…` 的回傳):
+  - `await job.result()`:等它結束,拿 `output`;失敗或被停止時拋出一句說明。
+  - `await job.status()`:`{state: running|done|failed|stopped, output?, error?}`,頁面要畫進度就自己定時問。
+  - `await job.stop()`:停止。
+  - 沒有回呼。工作的完整過程在 run 紀錄裡看(D5)。
+- 給 AI 的規則(寫進 `sample-skills/wui`):**要馬上拿結果用 `call`;可能跑久就用 `start` 拿工作;`call` 超時
+  就改用 `start`。** 能叫的工具與 subagent 名稱,照現有做法在 AI 讀 skill 時一個個列出(`_wui_callable`)。
 
-- `require_access(..., "execute")`(D3)。
-- `{name}` 要在這個 item 的 subagent 定義裡(`.agent/` 或 App 內建,同 `run_agent` 的查法);沒有 → 404,說出
-  有哪些。頁面 yaml 的 `agents:` 由前端 bridge 擋(跟 `tools:`、`workflows:` 同一層),後端再擋「item 有沒有」。
-- 先訂閱、再開始(同 `wui_run` 的理由:開頭的事件不能掉)。
+### 3.2 後端路由(全部新增;D10)
 
-### 3.2 一次呼叫 = 一個 run(D5)而且可以並行(D6)
+| 路由 | 用途 |
+|---|---|
+| `POST /a/{slug}/items/{item_id}/wui/agents/{name}/call` `{input}` → `{output, failed}` | `callAgent`(D7);最多等 60 秒 |
+| `POST /a/{slug}/items/{item_id}/wui/jobs` `{kind: tool\|agent, name, input}` → `{job_id}` | `startTool` / `startAgent` |
+| `GET  /a/{slug}/items/{item_id}/wui/jobs/{job_id}` → `{state, output?, error?}` | `job.status()` / `job.result()` |
+| `POST /a/{slug}/items/{item_id}/wui/jobs/{job_id}/stop` | `job.stop()` |
 
-- 沿用 workflow run 的紀錄、run chat、停止鍵、SSE:一次呼叫存成一筆 `WorkflowRun`,**種類**標成「頁面叫的
-  subagent」,記下頁面、subagent 名稱、輸入;run 清單把它顯示成「頁面 X 叫了 Y」。
-- 每次呼叫開自己的對話,所以本來就能並行(D6,跟頁面的 `startRun` 一樣),不需要例外;為了不讓頁面一次叫爆,同一個 item 同時
-  進行中的頁面呼叫有上限,超過的回 429 說明「同時太多」(上限是一個設定,預設 4——〔user〕「4個ok」;是新 knob,記 migrations)。
-- 執行:用 `workflow_exec.drive_turn` 同一條路跑一個 turn(admit_turn 配額、run chat 持久化、取消 epoch),但
-  turn 的系統提示是 subagent 的 AGENT.md、工具是它的 `allowed_tools` ∩ App 上限 − `SUBAGENT_FORBIDDEN_TOOLS`
-  (= `_child_context` 的收窄,抽成一個兩邊共用的函式,不各寫一份)。
-- 回答:turn 結束時把最後的非 reasoning 文字(同 `drive_subagent` 的收法)當成 run 的結果,最後一個 SSE 事件
-  帶著它;失敗或沒寫回答時,跟 `run_agent_task` 一樣給一句說明。
+- 權限:叫 subagent 與起工作都要 `execute`(D3,同 `startRun`);工具的 `call` 照舊 `edit_content`。
+- 名稱檢查:工具用 `wui_call_tool` 同一套(App 上限、item 的開關);subagent 要在這個 item 的定義裡,沒有 → 404
+  並列出有哪些。頁面 yaml 的 `agents:`、`tools:` 由前端 bridge 擋(跟 `startRun` 擋 `workflows:` 同一層)。
+- 同時上限(D6):同一個 item 進行中的頁面工作(含 `callAgent` 進行中的)最多 4 個,超過回 429「同時太多」。
+  新設定值,記 migrations。
 
-### 3.3 頁面那一側(D1、D2、D4)
+### 3.3 一個工作 = 一筆 run(D5)
 
-- `protocol.ts` 加一個動詞 `callAgent`;`bridge.ts` 擋沒在 yaml `agents:` 的名稱(同 `startRun` 擋 `workflows:`)。
-- `runtime.ts`:`window.workspace.callAgent(name, input, onEvent?) → Promise<string>`;`onEvent` 收到的是跟
-  `startRun` 一樣的平台事件(message_delta、tool_start/end…),頁面自己決定畫不畫。
-- 頁面作者文件(`sample-skills/wui/SKILL.md`、`reference.md`)與 `docs/wui.md` 的動詞表加上它;
-  `tests/apps/test_wui_skill.py` 的動詞表守衛會一起管到。
+- 沿用 workflow run 的紀錄、run 對話、停止、run 清單:每個工作開自己的對話(所以能並行),存一筆 run,標成
+  「頁面工作」並記下種類(工具/subagent)、名稱、輸入;run 清單顯示成「頁面:subagent Y」/「頁面:工具 Z」,
+  點進去看得到過程,停止鍵照舊能用。run 的 `result` 存 `{output}`,`GET …/jobs/{id}` 讀它。
+- 跑 subagent:用 `workflow_exec.drive_turn` 同一條路跑一個 turn(配額、對話持久化、取消),但系統提示是
+  subagent 的 AGENT.md、工具是它的 `allowed_tools` ∩ App 上限 − `SUBAGENT_FORBIDDEN_TOOLS`——把 `_child_context`
+  的收窄抽成兩邊共用的一個函式,不各寫一份。回答 = 最後的非 reasoning 文字(同 `drive_subagent`);失敗或沒寫
+  回答時,跟 `run_agent_task` 一樣給一句說明。
+- 跑工具:在 item 的沙盒跑那個 command(同 `wui_call_tool` 的環境值),但不受 60 秒限制;工作本身有一個總時間
+  上限(設定值),到了就停並標成失敗。
+- `callAgent`:等於「起一個 subagent 工作,最多等 60 秒拿結果」;超時就停掉那個工作(3.1)。
 
 ### 3.4 統計
 
-工具使用統計(#932)把這種 turn 記成一個新的場合「頁面」;人 = 點的人(D7)。
+工具使用統計(#932)把頁面工作裡的 turn 記成場合「頁面」;人 = 點的人(D11)。
 
 ## 4. Phases
 
 | Phase | 內容 | 完成的判準 |
 |---|---|---|
 | P1 | 這份計劃;`plan-wui.md` 標註被推翻的那一條 | 文件測試、mkdocs `--strict` 綠 |
-| P2 | 後端:run 種類 + 並行上限 + subagent turn(共用收窄函式)+ 回答收法 | 每條決定一個走真入口的測試;突變探針 |
-| P3 | 路由 `wui/agent`(權限、查名稱、串流、拒絕的說明) | 403/404/429/422 各有測試 |
-| P4 | 前端:`callAgent` 動詞、bridge 擋 `agents:`、runtime;run 清單顯示這一種 | 元件測試;動詞表守衛綠 |
-| P5 | 文件(頁面作者 skill、`docs/wui.md`、migrations 條目)、統計場合 | mkdocs 綠 |
-| P6 | 真瀏覽器檢查 + demo(MP4):頁面叫兩個 subagent 並行、看 run 清單、從清單停止 | 截圖、demo |
+| P2 | 共用的工作機制:run 紀錄種類、`jobs` 三條路由、同時上限、停止 | 每條決定一個走真入口的測試;突變探針 |
+| P3 | subagent:共用收窄函式、subagent turn、`startAgent`、`callAgent`(60 秒、超時停工作) | 同上 |
+| P4 | 工具:`startTool`(沙盒長時間執行、總時間上限) | 同上 |
+| P5 | 前端:`callAgent`/`startAgent`/`startTool` 動詞與工作物件、bridge 擋 `agents:`/`tools:`;run 清單顯示頁面工作;**既有 `callTool`、`startRun` 的測試一個都不改** | 元件測試;動詞表守衛綠 |
+| P6 | 文件(頁面作者 skill 的叫法規則、`docs/wui.md` 動詞表、migrations 條目)、統計場合 | mkdocs 綠 |
+| P7 | 真瀏覽器檢查 + demo(MP4):頁面 `callAgent`、`startAgent` 兩個並行、`startTool`、run 清單、停止;既有頁面照常 | 截圖、demo |
 
 ## 5. 不做
 
-- 保證 JSON / schema 驗證(D4 選文字)。
+- 改 `callTool`、`startRun`(D10)。`startRun` 不收進工作物件:舊的串流寫法與新的工作寫法會並存。
+- 能力宣告「通常多久」(D9:AI 自己決定)。
+- 回呼式的進度(D8)。
+- 保證 JSON / schema 驗證(D4)。
 - subagent 再叫 subagent(維持深度 1)。
-- 頁面以外的地方(聊天、workflow)多一種叫法——它們已經有 `run_agent`。
