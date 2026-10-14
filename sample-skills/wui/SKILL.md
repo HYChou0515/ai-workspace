@@ -253,10 +253,12 @@ A tool and a sub-agent can each be reached two ways, and **you** choose:
   `await job.result()` waits for the same answer the `call…` would have given,
   `await job.status()` asks once how it is going (poll it to draw progress),
   `await job.stop()` stops it.
-- **Past its minute a call is stopped**, and the two say so differently: a
-  `callAgent` rejects with a sentence naming `startAgent`; a `callTool` comes
-  back with `exit_code: 124` and whatever it printed so far. Either way, switch
-  to `start…` — retrying the call ends the same way.
+- **A call that runs too long is stopped**, and the two say so differently: a
+  `callAgent` past its minute rejects with a sentence naming `startAgent`; a
+  `callTool` ends when the sandbox stops the command (a minute by default,
+  sooner if it prints nothing) and comes back with `exit_code: 124` and the
+  stdout it had printed. Either way, switch to `start…` — retrying the call
+  ends the same way.
 
 There are no callbacks. Each started job is in the item's run list, where a
 person can watch it and stop it; an item runs a handful at once (four by

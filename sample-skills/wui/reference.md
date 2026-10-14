@@ -189,9 +189,11 @@ else show(r.output);                 // its answer, as text
 Every tool and every sub-agent can be reached two ways. **Choose by how long
 you are willing to wait:**
 
-- `callTool` / `callAgent` wait for the answer, at most a minute. Past it the
-  work is stopped: `callAgent` rejects with a sentence naming `startAgent`;
-  `callTool` returns `exit_code: 124` with whatever the tool printed so far.
+- `callTool` / `callAgent` wait for the answer, about a minute at most. Past
+  it the work is stopped: `callAgent` rejects with a sentence naming
+  `startAgent`; `callTool` ends when the sandbox stops the command (a minute by
+  default, sooner if it prints nothing) and returns `exit_code: 124` with the
+  stdout it had printed.
   Switch to `startAgent` / `startTool` — retrying the call ends the same way.
 - `startTool` / `startAgent` answer at once with a job:
 

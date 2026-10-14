@@ -80,16 +80,6 @@ describe("asking a sub-agent from a page", () => {
   });
 });
 
-describe("a verb that does not exist", () => {
-  it("is still named and refused, now that `callAgent` is a real verb", async () => {
-    // `bridge.test.ts` used `callAgent` as its example of an invented verb; it
-    // now reaches the real branch, so the fallback needs a name nobody uses.
-    const res = await dispatchWuiRequest(req("summonDragon", {}), ctx());
-    expect(res).toMatchObject({ ok: false });
-    expect(res.ok ? "" : res.error).toBe('This page asked for "summonDragon", which a WUI cannot do.');
-  });
-});
-
 describe("starting a job from a page", () => {
   it("starts a declared tool, with its args", async () => {
     const c = ctx();

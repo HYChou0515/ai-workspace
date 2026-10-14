@@ -2307,7 +2307,7 @@ agent 步驟裡 AI 的呼叫、WUI 的工具呼叫、view plugin、圖表重畫�
 - `server.wui_page_job_limit`（預設 `4`）：一個 item 同時進行中的頁面工作上限。超過的那一件被拒（429，訊息寫出
   數字），不排隊。
 - `server.wui_page_job_timeout_sec`（預設 `3600`）：一件頁面工作的總時間。工具工作的命令拿它當期限，取代沙盒的
-  一分鐘；過了期限再加 60 秒還顯示進行中的紀錄，會被當成「跑它的 pod 已經不在了」而標成失敗。
+  一分鐘；過了期限再加 60 秒還顯示進行中的紀錄，會被當成「跑它的 pod 已經不在了」，在下一次有人讀它、或這個 item 再開工作時標成失敗。
 
 **行為改變，沒有開關**：頁面多了 `callAgent` / `startAgent` / `startTool` 三個動詞（`callTool`、`startRun` 不變）。
 AI 讀 `wui` skill 時會看到「這個 item 能讓頁面問的 subagent」清單與「要馬上拿結果用 `call…`、可能跑久用 `start…`」
