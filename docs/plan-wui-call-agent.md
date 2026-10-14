@@ -136,7 +136,7 @@ user:「我希望wui要能夠呼叫subagent」;討論中擴大成「每個能力
   完成時也不顯示「未執行任何步驟」。失敗通知的標題寫「Page job failed: sub-agent “X”」,一天一則的分桶以工作名稱為準。
 - **AI 讀 `wui` skill 時**,除了能叫的工具,也列出這個 item 能讓頁面問的 subagent——取自 turn 自己的 `subagent_defs`
   (聊天能委派的那一份)。兩邊用同一個函式(`_subagent_defs`)算,但輸入的設定不一定一樣:`callAgent` 用 item 解析出的設定(workflow 節點用的那份),聊天 turn 用它自己的(可能掛了別的 preset),所以兩份清單**可能**不同——頁面送出時以`callAgent` 那份為準,不在裡面就 404 並列出有哪些。
-- **統計場合「頁面」**(接在 #932 之上):`_usage_identity` 看到 run 有 `page_job` 就記 `page`,人是點的人
+- **統計場合「頁面」**(接在 #932 之上):`_usage_identity` 看到 run 有 `page_job` 就記 `page`,人是點的人(沒有就擁有者)
   (`RunIdentities` 的 `env_user`)。`_child_context` 會把子 turn 標成 `subagent`——頁面工作沒有父 turn,所以收窄之後
   改回 `page`。**記到的是 subagent turn 裡的工具呼叫**;`startTool` 工作跟 `callTool` 一樣不是 agent 叫的工具,#932
   不記它們。
