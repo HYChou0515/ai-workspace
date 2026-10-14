@@ -2211,6 +2211,30 @@ agent 步驟裡 AI 的呼叫、WUI 的工具呼叫、view plugin、圖表重畫�
   按下去不用再經手,`lookups/` 出現存檔、AI 接著讀。這一步是 Windows 上唯一的驗證(plan D14)。
 
 
+### 2026-10-14 · #933 小幫手連得上公司憑證的 AI Workspace；解壓縮資料夾裡的 launch.pyw 不再說沒有安裝 {#pr-933}
+
+**設定** — 無。
+
+**資料** — 無。
+
+**k8s · CI 側** — 後端沒有改,照常重 build、部署。**要做的是重新發布小幫手**(`rollout 後`,隨時):
+
+1. 在 dev server 打包新版:`python3 scripts/pack_ai_workspace_helper.py --version 0.1.1`,把 `dist/ai-workspace-helper/` 的兩個檔
+   換進 `server.ai_workspace_helper_dir`(不用重新部署)。為什麼:修正在小幫手那邊,不在後端。
+2. **已裝 0.1.0 的人要手動重裝**:從「小幫手」頁下載 0.1.1、解壓縮、雙擊 `install.pyw`。為什麼:0.1.0 對 AI Workspace 的請求
+   驗不過公司憑證(`unable to verify the first certificate`),連報到都做不到,自動更新也就拿不到新版。
+   沒重裝的症狀:小視窗一直「連不上 AI Workspace，會自動重試」,卡片一直「小幫手未連線」。
+
+**行為改變,沒有開關**:小幫手對 AI Workspace 的請求(報到、領工作、交結果、下載更新)**不驗憑證**——那些請求由 Playwright
+自帶的 Node 送出,它不讀 Windows 憑證庫,Chrome 驗得過的公司憑證它驗不過;照部署慣例 verify=false。它替使用者開的外面網頁
+仍由 Chrome 照常驗,更新檔仍比對 sha256(plan D20)。連不上/被拒的原因現在會寫進 `helper.log`。
+
+**確認做完**(`rollout 後`):
+
+- 「小幫手」頁顯示版本 0.1.1。
+- 一台重裝過的 Windows 電腦:小視窗「已連線，等待查詢」、頁面「小幫手已連線」,卡片出現「查」。
+- 在解壓縮資料夾雙擊 `launch.pyw`:開的是已安裝的小幫手(已開著就把它叫到前面),不再說沒有安裝。
+
 ## 附錄 A：資料回填的機制（specstar 為什麼不會自己補）
 
 有些升版會改變「資料在資料庫裡的儲存形狀」，但 **specstar 只在寫入當下**把一列的 `indexed_data`
