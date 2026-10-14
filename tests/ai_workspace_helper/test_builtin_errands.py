@@ -75,6 +75,27 @@ class _Page:
     def bring_to_front(self) -> None:
         pass
 
+    # what `settle` asks of a page: it never moves on here
+    main_frame = object()
+
+    def on(self, _event: str, _handler) -> None:
+        pass
+
+    def remove_listener(self, _event: str, _handler) -> None:
+        pass
+
+    def wait_for_timeout(self, _ms: float) -> None:
+        pass
+
+
+@pytest.fixture(autouse=True)
+def _settled_at_once(monkeypatch):
+    """A page that never moves on has settled the moment it loaded (the
+    real waits are tested in a real Chrome: test_errands_in_chrome.py)."""
+    from ai_workspace_helper import builtin_errands
+
+    monkeypatch.setattr(builtin_errands, "QUIET_MS", 0)
+
 
 def _ctx(page):
     return ErrandContext(page=page, note=lambda _n: None, convert=lambda html: f"md:{html}")
@@ -135,3 +156,43 @@ def test_only_a_web_address_is_opened(url):
 def test_a_page_that_answers_an_error_fails():
     with pytest.raises(ErrandFailed, match="404"):
         build(lambda: [])["open_url"](_ctx(_Page(status=404)), "https://x.example/gone")
+
+
+# A page that starts moving just after it settled: reading it fails as
+# "context destroyed" (the old page is gone), and the errand settles again
+# and reads the new one rather than failing (plan D22).
+def test_a_page_that_moves_on_while_being_read_is_read_again():
+    from playwright.sync_api import Error as PlaywrightError
+
+    class _Moving(_Page):
+        reads = 0
+
+        def evaluate(self, _js: str):
+            self.reads += 1
+            if self.reads == 1:
+                raise PlaywrightError("Execution context was destroyed")
+            return super().evaluate(_js)
+
+    page = _Moving()
+
+    got = build(lambda: [])["open_url"](_ctx(page), "https://pandas.example/whatsnew")
+
+    assert got.markdown == "md:<p>the page's html</p>"
+
+
+# Asked while the page moves on (the instant between a hop's answer and its
+# new page), the verification check reads "not a verification" rather than
+# failing the errand: whatever the page moves to is looked at again (D22).
+def test_a_verification_check_that_meets_a_moving_page_reads_as_none():
+    from ai_workspace_helper.builtin_errands import looks_like_a_verification
+    from playwright.sync_api import Error as PlaywrightError
+
+    class _Gone(_Locator):
+        def count(self) -> int:
+            raise PlaywrightError("Execution context was destroyed")
+
+    class _Moving(_Page):
+        def locator(self, _selector: str) -> _Locator:
+            return _Gone()
+
+    assert looks_like_a_verification(_Moving()) is False
