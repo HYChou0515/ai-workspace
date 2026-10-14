@@ -48,7 +48,7 @@ import { subscribeFileChanged } from "../../lib/fileChangedBus";
 import { pxToRem } from "../../lib/pxToRem";
 import { autoBuildScope, useWuiAutoBuild } from "../../lib/wuiAutoBuild";
 import { viewParam, viewParamString } from "../entity/shared";
-import { itemCallTool } from "./api";
+import { itemCallAgent, itemCallTool, itemJobs } from "./api";
 import { cleanBuildOutput, hasBuildScript, itemBuild } from "./build";
 import { itemRun } from "./run";
 import type { ViewSpec } from "../entity/types";
@@ -613,6 +613,19 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
     return Array.isArray(raw) ? raw.filter((w): w is string => typeof w === "string") : [];
   }, [spec]);
 
+  /** #942: the sub-agents the view file declares (`agents:`), and the two ways
+   * of reaching the item's capabilities beyond a call — asking a sub-agent, and
+   * starting either as a job. Like `callTool`, they exist only where a slug does. */
+  const declaredAgents = useMemo(() => {
+    const raw = viewParam(spec, "agents");
+    return Array.isArray(raw) ? raw.filter((a): a is string => typeof a === "string") : [];
+  }, [spec]);
+  const callAgent = useMemo(
+    () => (slug ? itemCallAgent(slug, fs.scopeId) : null),
+    [slug, fs.scopeId],
+  );
+  const jobs = useMemo(() => (slug ? itemJobs(slug, fs.scopeId) : null), [slug, fs.scopeId]);
+
   /** The platform's own sign-in for this item, opened at a page's request
    * (`plan-wui-viewer-login`). Drawn here, outside the frame: what is typed
    * into it never reaches the page. No item (no slug) ⇒ nothing to sign in to. */
@@ -771,6 +784,9 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
         declaredWorkflows,
         startRun,
         openLogin,
+        declaredAgents,
+        callAgent,
+        jobs,
         // Each event carries the CALL's id: a page may have two judgements in
         // flight and has no other way to tell whose progress it is looking at.
         onRunEvent: (id, event) =>
@@ -810,6 +826,9 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
     declaredWorkflows,
     startRun,
     openLogin,
+    declaredAgents,
+    callAgent,
+    jobs,
     servedAt,
     pageKey,
     entryAt,

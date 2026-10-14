@@ -520,6 +520,41 @@ function wuiRuntime(window: any, parent: any, document: any): void {
   document.addEventListener("mousemove", onMove, true);
   document.addEventListener("click", onPick, true);
 
+  // A started job (#942): the page gets an object, not a callback. `result()`
+  // waits for the answer — the very one the matching `call…` would have given —
+  // by asking how the job is going once a second; `status()` asks once;
+  // `stop()` stops it. No callback anywhere, because a callback is what an
+  // agent writing a page gets wrong.
+  function job(verb: any, args: any) {
+    return send(verb, args).then(function (started: any) {
+      var id = started && started.job_id;
+      function status() { return send("jobStatus", { job: id }); }
+      return {
+        id: id,
+        status: status,
+        stop: function () { return send("stopJob", { job: id }); },
+        result: function () {
+          return new Promise(function (resolve: any, reject: any) {
+            function check() {
+              status().then(function (s: any) {
+                if (s && s.state === "running") {
+                  setTimeout(check, 1000);
+                } else if (s && s.state === "done") {
+                  resolve(s.output);
+                } else {
+                  reject(new Error(
+                    s && s.state === "stopped" ? "This job was stopped." : (s && s.error) || "This job failed.",
+                  ));
+                }
+              }, reject);
+            }
+            check();
+          });
+        },
+      };
+    });
+  }
+
   window.workspace = {
     listFiles: function (prefix?: any) { return send("listFiles", { prefix: prefix || "" }); },
     readFile: function (path: any) { return send("readFile", { path: path }); },
@@ -536,6 +571,11 @@ function wuiRuntime(window: any, parent: any, document: any): void {
     // The page's only way to reach anything outside itself — it has no network
     // of its own, and a credential never comes in here to be spent.
     callTool: function (name: any, args?: any) { return send("callTool", { name: name, args: args || {} }); },
+    // #942: every capability two ways. `call…` waits for the answer (at most a
+    // minute); `start…` answers at once with a job to wait on, read, or stop.
+    startTool: function (name: any, args?: any) { return job("startTool", { name: name, args: args || {} }); },
+    callAgent: function (name: any, input?: any) { return send("callAgent", { name: name, input: input || "" }); },
+    startAgent: function (name: any, input?: any) { return job("startAgent", { name: name, input: input || "" }); },
     onFileChanged: function (fn: any) { fileListeners.push(fn); },
   };
 }
