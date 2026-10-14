@@ -62,7 +62,9 @@ PLAYWRIGHT = "1.60.0"
 
 def pins_for(python: str) -> list[str]:
     """Everything the helper needs on `python`, pinned. Only greenlet differs:
-    3.2.4 is its last release with a cp39 wheel, 3.5.6 has cp314."""
+    3.2.4 is its last release with a cp39 win_amd64 wheel, 3.5.6 has cp314.
+    The "3.9" is that wheel's Python, not the oldest supported one: were 3.9
+    dropped from `PYTHONS`, this line would simply never match."""
     greenlet = "3.2.4" if python == "3.9" else "3.5.6"
     return [
         f"playwright=={PLAYWRIGHT}",

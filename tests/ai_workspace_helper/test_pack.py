@@ -1,5 +1,5 @@
 """Packing the helper on the dev server (docs/plan-outside-helper.md D14,
-§3.6, §3.7.2): one offline zip a Windows PC with any CPython 3.10–3.14
+§3.6, §3.7.2, D23): one offline zip a Windows PC with any CPython 3.9–3.14
 installs from, and the manifest the backend serves.
 
 The commands (pnpm, uv, pip) go through an injected `run`, recorded here and
@@ -50,7 +50,7 @@ def test_every_python_gets_its_own_pinned_windows_wheels():
 
 
 # 3.9 (the person: 「有些人的python是3.9」): the newest Playwright that installs
-# on it is 1.60.0, and greenlet's last cp39 wheel is 3.2.4. Every Python gets
+# on it is 1.60.0, and greenlet's last cp39 Windows wheel is 3.2.4. Every Python gets
 # the same Playwright — one driver for everyone — and only greenlet differs.
 def test_python_39_gets_wheels_that_install_on_it():
     on_39 = pack_mod.download_command(["pip"], "3.9", Path("/wh"))

@@ -25,12 +25,15 @@ import time
 import zipfile
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any, NamedTuple
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 #: The shortcut's file name, on the desktop and in the Startup folder (D13).
 SHORTCUT_NAME = "AI Workspace Helper"
 
-Run = Callable[[list[str]], None]
+if TYPE_CHECKING:
+    # Only ever an annotation: evaluated, `list[str]` stops a 3.8 Python at
+    # import, before `python_too_old` can tell the person it is too old.
+    Run = Callable[[list[str]], None]
 
 
 class SetupFailed(Exception):

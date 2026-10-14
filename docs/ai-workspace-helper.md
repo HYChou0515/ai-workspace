@@ -118,7 +118,7 @@ python3 scripts/pack_ai_workspace_helper.py --version 0.1.0 [--min-version 0.1.0
 
 小幫手帶的是 Playwright 1.60.0(驅動已安裝的 Chrome,不另外下載瀏覽器),每個 Python 都同一版:1.60.0 是最後一個
 裝得上 Python 3.9 的版本(1.61 起要 3.10),而有些人的電腦只有 3.9(plan D23)。只有 greenlet 依 Python 不同:3.9 用 3.2.4
-(它最後一個有 cp39 wheel 的版本),3.10–3.14 用 3.5.6。這個 repo 的測試環境因為 Debian 11 的瀏覽器下載限制停在 1.49,
+(它最後一個有 cp39 Windows wheel 的版本),3.10–3.14 用 3.5.6。這個 repo 的測試環境因為 Debian 11 的瀏覽器下載限制停在 1.49,
 所以**驅動瀏覽器的測試跑的是 1.49、發出去的是 1.60**——1.49 需要的 greenlet 沒有 Python 3.14 的 Windows 版,無法涵蓋 3.14。
 1.60 這一版在 Linux 的 CPython 3.9 上驗過:`setup_core.install` 只靠 wheelhouse 裝起來、`--self-test` 通過、開分頁讀頁。
 這個 repo 的測試跑在 3.12,所以 `tests/ai_workspace_helper/test_python39.py` 用 3.9 的語法讀小幫手發出去的每個檔,
