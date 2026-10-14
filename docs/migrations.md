@@ -2221,7 +2221,8 @@ agent 步驟裡 AI 的呼叫、WUI 的工具呼叫、view plugin、圖表重畫�
   「the flag 'allow-downloads' is not set」。
 - 為什麼：頁面做出來的檔案沒辦法交給讀者。不需要點擊就能觸發（實測 Chromium：頁面打開 7 秒後自己下載也成立），
   所以頁面可以在任何時候讓讀者的瀏覽器存一個檔案；它**送不出去任何東西**——沒有 `allow-same-origin`，
-  CSP 的 `connect-src 'self'`、`form-action 'none'` 與 `frame-src` 都沒變。
+  頁面 CSP 的 `connect-src 'self'`、`form-action 'none'` 都沒變，外層頁面 CSP（`SPA_CSP`）的 `frame-src` 也沒變——
+  指向別台主機的下載會被它擋下，請求送不出去（實測 Chromium）。
 
 **資料** — 沒有。
 
@@ -2233,7 +2234,8 @@ agent 步驟裡 AI 的呼叫、WUI 的工具呼叫、view plugin、圖表重畫�
 **確認做完**（`rollout 後`）：
 
 - 開一個 WUI 頁面，按它的匯出按鈕（或在頁面裡放一個 `<a download="x.csv" href="data:text/csv,a,b">`）：
-  瀏覽器存下檔案。沒部署到這一版的症狀：什麼都沒發生，瀏覽器主控台有上面那句 `allow-downloads`。
+  瀏覽器存下檔案。沒部署到這一版的症狀：什麼都沒發生（多頁版的頁面，瀏覽器主控台會有上面那句
+  `allow-downloads`；單頁版不一定有訊息）。
 
 ## 附錄 A：資料回填的機制（specstar 為什麼不會自己補）
 
