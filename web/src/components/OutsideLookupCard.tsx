@@ -110,14 +110,17 @@ export function OutsideLookupCard({
       });
     },
     onMutate: () => setHint(null),
-    onSuccess: (saved, a) =>
+    onSuccess: (saved, a) => {
       setDone(
         a.kind === "not_found"
           ? t("lookup.sentNotFound")
           : saved.path
             ? t("lookup.savedTo", { path: saved.path })
             : t("lookup.sent"),
-      ),
+      );
+      // The answer started the AI's next turn, on whichever pod took the POST.
+      item?.follow?.(callId);
+    },
   });
 
   // ── the person's helper (docs/plan-outside-helper.md §3.5) ──
@@ -193,6 +196,18 @@ export function OutsideLookupCard({
     // `hand` and `cardRef` are new each render; `asked` makes this run once.
   }, [isSearch, online, answeredAlready]);
 
+  // The helper's answer went in from the helper's own browser and started the
+  // AI's next turn there: this page may hear nothing of it (another pod's
+  // stream) — so the chat follows it, once (the person's report:
+  // 「要重新整理才看得到回覆」). Above every early return: followed, the chat
+  // draws the answer, and the card then reads as answered while still here.
+  // Once: a job that is done stays done (its polling stops there).
+  const followedJob = job.data?.state;
+  useEffect(() => {
+    if (followedJob === "done") item?.follow?.(callId);
+    // `item` is new each render; the job's state is what changes.
+  }, [followedJob]);
+
   const head = (
     <>
       <p className="outside-lookup-title">{t("lookup.title")}</p>
@@ -222,16 +237,6 @@ export function OutsideLookupCard({
   const canAttach = item.canAddFiles !== false;
   const error = hint ?? (answer.error ? failure(t, answer.error) : null);
   const jobState = job.data?.state;
-  // The helper's answer went in from the helper's own browser and started the
-  // AI's next turn there: this page may hear nothing of it (another pod's
-  // stream) — so the chat follows it, once (the person's report:
-  // 「要重新整理才看得到回覆」).
-  const followed = useRef(false);
-  useEffect(() => {
-    if (jobState !== "done" || followed.current) return;
-    followed.current = true;
-    item?.follow?.(callId);
-  }, [jobState]);
   // A helper holding this card's job is helping even when its check-ins lapse:
   // it checks in between jobs, and a captcha can keep it on one for minutes.
   const helping = online || jobState === "claimed";

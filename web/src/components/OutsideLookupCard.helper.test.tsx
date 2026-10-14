@@ -7,6 +7,7 @@
 // @vitest-environment happy-dom
 import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { QueryClient } from "@tanstack/react-query";
@@ -61,6 +62,7 @@ function draw({
   queryClient,
   status,
   follow,
+  answeredLater = false,
 }: {
   lookup?: OutsideLookup;
   online?: boolean;
@@ -76,6 +78,9 @@ function draw({
   queryClient?: QueryClient;
   /** The chat's `follow` (useChatSession): told when the helper's answer went in. */
   follow?: (callId: string) => void;
+  /** Drawn unanswered, with a 「answer arrives」 button that marks it answered
+   * while it stays on screen (the thread drawing the answer under it). */
+  answeredLater?: boolean;
 } = {}) {
   // As the server answers: no job until one is handed over, then that job.
   let latest: HelperJob | null = existing;
@@ -94,14 +99,24 @@ function draw({
     release: vi.fn(async () => release),
   };
   vi.spyOn(window, "open").mockReturnValue(null);
-  renderWithQuery(
-    <ChatItemProvider
-      value={{ slug: "rca", itemId: "i1", chatId: "ch1", answered: () => false, follow }}
-    >
-      <OutsideLookupCard callId="call_1" lookup={lookup} client={client} />
-    </ChatItemProvider>,
-    queryClient,
-  );
+  function Card() {
+    const [answered, setAnswered] = useState(false);
+    return (
+      <>
+        {answeredLater ? (
+          <button type="button" onClick={() => setAnswered(true)}>
+            answer arrives
+          </button>
+        ) : null}
+        <ChatItemProvider
+          value={{ slug: "rca", itemId: "i1", chatId: "ch1", answered: () => answered, follow }}
+        >
+          <OutsideLookupCard callId="call_1" lookup={lookup} client={client} />
+        </ChatItemProvider>
+      </>
+    );
+  }
+  renderWithQuery(<Card />, queryClient);
   return client;
 }
 
@@ -184,6 +199,31 @@ describe("a search, with the helper connected", () => {
     await waitFor(() => expect(follow).toHaveBeenCalledWith("call_1"));
     await new Promise((r) => setTimeout(r, 50));
     expect(follow).toHaveBeenCalledTimes(1);
+  });
+
+  // Review of #938: followed, the chat draws the helper's answer under the card,
+  // which then reads as answered while still on screen — it must not change
+  // the hooks it calls (it threw "Rendered fewer hooks" and blanked the app).
+  it("stays drawn when the helper's answer arrives under it", async () => {
+    draw({ current: async () => job({ state: "done" }), follow: vi.fn(), answeredLater: true });
+    fireEvent.click(await screen.findByRole("button", { name: "查" }));
+    await screen.findByText("小幫手已送給 AI");
+
+    fireEvent.click(screen.getByRole("button", { name: "answer arrives" }));
+
+    expect(await screen.findByText("已回覆")).toBeInTheDocument();
+  });
+
+  // Answered by hand, the person's answer starts the next turn just as the
+  // helper's does: the chat follows it too.
+  it("tells the chat to follow the turn a pasted answer started", async () => {
+    const follow = vi.fn();
+    draw({ online: false, follow });
+
+    fireEvent.change(await screen.findByLabelText("查到的內容"), { target: { value: "found" } });
+    fireEvent.click(screen.getByRole("button", { name: "送出" }));
+
+    await waitFor(() => expect(follow).toHaveBeenCalledWith("call_1"));
   });
 
   // A job that did not end in an answer started no turn.

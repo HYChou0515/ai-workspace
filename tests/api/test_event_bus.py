@@ -228,3 +228,64 @@ async def test_a_replayed_event_keeps_the_id_it_was_published_with():
 
     await resumed.aclose()
     await pod.forget(key)
+
+
+# ── what the log says, so a viewer that saw a turn only after a reload can be
+# traced pod by pod (the person's report: fine on one pod, not on several) ──
+
+
+async def test_the_log_traces_a_turn_from_its_pod_to_a_viewer_on_another(caplog):
+    from workspace_app.api.events import RunDone, UserMessage
+
+    bus = InMemoryEventBus()
+    pod_a = ChatTurnEngine(_Runner(), event_bus=bus, pod_id="podA1234xyz")  # ty: ignore[invalid-argument-type]
+    pod_b = ChatTurnEngine(_Runner(), event_bus=bus, pod_id="podB5678xyz")  # ty: ignore[invalid-argument-type]
+    key = "inv"
+    with caplog.at_level("INFO", logger="workspace_app.api.turns"):
+        viewer = pod_b.subscribe_sse(key)
+        await asyncio.sleep(0)  # the generator attaches on first iteration
+        reading = asyncio.ensure_future(_read_frame(viewer))
+        await asyncio.sleep(0)
+        pod_a._ws_session(key).publish(UserMessage(author="u", content="查到的內容"))
+        await reading
+        pod_a._ws_session(key).publish(MessageDelta(text="streamed, not logged"))
+        pod_a._ws_session(key).publish(RunDone())
+        await asyncio.sleep(0.05)
+        await viewer.aclose()
+
+    lines = [r.getMessage() for r in caplog.records if r.getMessage().startswith("live:")]
+    assert any(m.startswith("live: viewer joined key=inv") and "podB5678" in m for m in lines), (
+        lines
+    )
+    assert any(
+        m.startswith("live: published UserMessage key=inv") and "podA1234" in m for m in lines
+    ), lines
+    assert any(
+        m.startswith("live: from bus UserMessage key=inv")
+        and "origin=podA1234" in m
+        and "podB5678" in m
+        and "viewers_here=1" in m
+        for m in lines
+    ), lines
+    assert any(m.startswith("live: published RunDone key=inv") for m in lines), lines
+    assert not any("MessageDelta" in m or "查到的內容" in m for m in lines), lines
+    assert any(m.startswith("live: viewer left key=inv") for m in lines), lines
+
+
+# A pod that hears of a turn with nobody there to hand it to says so — the
+# trace of a viewer whose stream is elsewhere, or gone.
+async def test_the_log_says_when_an_event_arrives_with_nobody_listening(caplog):
+    from workspace_app.api.events import UserMessage
+
+    bus = InMemoryEventBus()
+    pod_a = ChatTurnEngine(_Runner(), event_bus=bus, pod_id="podA1234xyz")  # ty: ignore[invalid-argument-type]
+    ChatTurnEngine(_Runner(), event_bus=bus, pod_id="podB5678xyz")  # ty: ignore[invalid-argument-type]
+    with caplog.at_level("INFO", logger="workspace_app.api.turns"):
+        pod_a._ws_session("inv").publish(UserMessage(author="u", content="q"))
+        await asyncio.sleep(0.05)
+
+    assert any(
+        r.getMessage().startswith("live: from bus UserMessage key=inv")
+        and "viewers_here=0" in r.getMessage()
+        for r in caplog.records
+    )

@@ -17,6 +17,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import socket
 import time
 import uuid
 from collections import deque
@@ -52,10 +53,12 @@ from .events import (
     Presence,
     RepetitionStopped,
     RunCancelled,
+    RunDone,
     RunError,
     ToolEnd,
     ToolStart,
     TurnEnded,
+    UserMessage,
     to_sse,
 )
 from .repetition_guard import guard_repetition
@@ -63,6 +66,19 @@ from .runner import AgentRunner
 from .turn_activity import TURN_HEARTBEAT_MS, ITurnActivityStore
 
 logger = logging.getLogger(__name__)
+
+
+#: The events the live log names — the message that starts a turn and the ones
+#: that end it: one or two lines per turn, never their content. Enough to trace
+#: a viewer who saw a turn only after a reload: which pod published it, which
+#: pods heard of it from the bus, and whether anyone there was listening.
+_TRACED = (UserMessage, RunDone, RunError, RunCancelled, TurnEnded)
+
+
+def _pod(pod_id: str) -> str:
+    """This pod as the live log names it: its host (in k8s, the pod's name) and
+    the engine's own id, which is what a bus envelope carries as its origin."""
+    return f"{socket.gethostname()}/{pod_id[:8]}"
 
 
 def _now_ms() -> int:
@@ -650,6 +666,14 @@ class _WorkspaceSession:
         self._fanout(event, event_id)
         if self.bus is not None and not isinstance(event, Presence):
             self.bus.publish(self.key, self.pod_id, event, event_id)
+        if isinstance(event, _TRACED):
+            logger.info(
+                "live: published %s key=%s pod=%s viewers_here=%d",
+                type(event).__name__,
+                self.key,
+                _pod(self.pod_id),
+                len(self.subscribers),
+            )
 
     def deliver_from_bus(self, event: AgentEvent, event_id: str) -> None:
         """Deliver an event that arrived from ANOTHER pod's turn: the same local
@@ -784,6 +808,16 @@ class ChatTurnEngine:
         if origin == self._pod_id:
             return
         session = self._ws_sessions.get(key)
+        listening = len(session.subscribers) if session is not None else 0
+        if isinstance(event, _TRACED):
+            logger.info(
+                "live: from bus %s key=%s origin=%s pod=%s viewers_here=%d",
+                type(event).__name__,
+                key,
+                origin[:8],
+                _pod(self._pod_id),
+                listening,
+            )
         if session is not None and session.subscribers:
             session.deliver_from_bus(event, event_id)
 
@@ -1323,6 +1357,13 @@ class ChatTurnEngine:
         replay = session.replay_since(since) if since is not None else []
         if user_id:
             session.publish(Presence(users=session.roster()))
+        logger.info(
+            "live: viewer joined key=%s pod=%s viewers_here=%d resumed=%s",
+            key,
+            _pod(self._pod_id),
+            len(session.subscribers),
+            since is not None,
+        )
 
         async def _frames() -> AsyncGenerator[str, None]:
             try:
@@ -1341,6 +1382,12 @@ class ChatTurnEngine:
                 session.subscribers.pop(q, None)
                 if user_id:
                     session.publish(Presence(users=session.roster()))
+                logger.info(
+                    "live: viewer left key=%s pod=%s viewers_here=%d",
+                    key,
+                    _pod(self._pod_id),
+                    len(session.subscribers),
+                )
 
         return _frames()
 

@@ -787,7 +787,9 @@ export function useChatSession(
         (e) => e.kind === "message" && e.message.answers === callId,
       );
       if (drawn || now.streaming) return;
-      turnInFlightRef.current = true;
+      // Not `turnInFlightRef`: that says THIS stream carried a turn, and this
+      // one reaches the page through the store — a drop of the stream can have
+      // lost nothing of it, so it must not raise the 「少了一段」 banner.
       setLog((prev) => (prev.streaming ? prev : { ...prev, streaming: true }));
     },
     [setLog],
