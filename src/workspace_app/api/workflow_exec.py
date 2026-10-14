@@ -700,6 +700,13 @@ class WorkflowExecutor:
         # nowhere while the bill for it went to the right person.
         recipient = debtor_of(self._spec, slug, run.item_id, item)
         phase = run.current_phase or "?"
+        # A page job (#942) has no workflow and no phase: name what was asked.
+        job = run.page_job
+        what = (
+            f"{'sub-agent' if job.kind == 'agent' else 'tool'} “{job.name}”"
+            if job is not None
+            else ""
+        )
         logger.warning(
             "workflow_exec: workflow run failed at %r on item %s, notifying owner %s",
             phase,
@@ -716,7 +723,7 @@ class WorkflowExecutor:
             self._spec,
             recipient=recipient,
             kind="status",
-            title=f"Workflow run failed at “{phase}”",
+            title=f"Page job failed: {what}" if job else f"Workflow run failed at “{phase}”",
             # The owner ran it as themselves: one notice, carrying the hint the
             # second one would have — they are the likeliest to need it.
             body=_SIGN_IN_HINT if acting == recipient else "",
@@ -735,14 +742,19 @@ class WorkflowExecutor:
         # One per person, item, workflow and UTC day: a schedule failing every
         # hour must not bury them.
         day = datetime.fromtimestamp(now_ms() / 1000, UTC).date().isoformat()
-        key = f"run-failed-as:{acting}:{run.item_id}:{run.workflow_id}:{day}"
+        bucket = f"page:{job.kind}:{job.name}" if job is not None else run.workflow_id
+        key = f"run-failed-as:{acting}:{run.item_id}:{bucket}:{day}"
         if notification_sent(self._spec, key):
             return
         notify(
             self._spec,
             recipient=acting,
             kind="status",
-            title=f"A workflow run as you failed at “{phase}”",
+            title=(
+                f"A page job as you failed: {what}"
+                if job
+                else f"A workflow run as you failed at “{phase}”"
+            ),
             body=_SIGN_IN_HINT,
             link="/my-env",
             actor=run.captured_user,
