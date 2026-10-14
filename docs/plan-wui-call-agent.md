@@ -29,16 +29,27 @@ user:「我希望wui要能夠呼叫subagent」。
 | D4 | **文字進、文字出**:過程串流進度,最後回傳回答文字;寫的檔案留在 item 裡;要結構化就在 AGENT.md 叫它回 JSON | 〔user〕選「文字進、文字出」 |
 | D5 | **留紀錄**:每次呼叫在 item 的 run 清單多一筆,看得到完整過程、能從那裡停止 | 〔user〕選「留,跟 workflow run 一樣」 |
 | D6 | **可以並行**:不受「一個 item 同時一個 run」限制 | 〔user〕選「可以並行」 |
+| D8 | **跟工具 API 同一個形狀**:工具被包成 `POST …/wui/tools/{名稱}/call`(頁面 `callTool`),subagent 照這個模式包成 `POST …/wui/agents/{名稱}/call`(頁面 `callAgent`)——路徑、命名、yaml 宣告、請求 `{input}`(對應 `{args}`)與最後的結果 `{output}` 都對稱;但因為 AI 一跑幾分鐘,**保留串流、run 紀錄與停止**(D5),也沒有工具的 60 秒上限 | 〔user〕「我們是讓mcp被包成api subagent也應如此」→ 選「形狀一樣,但保留串流與紀錄」 |
 | D7 | 身分:算在 item 擁有者頭上,私人環境值用**點的人**的——照 `plan-wui-viewer-login.md` 的「誰的 private」表,與頁面的 `startRun` 相同 | 〔施工,沿用既有決定〕 |
 
 ## 3. 機制〔施工〕
 
-### 3.1 路由
+### 3.1 路由(D8:跟工具 API 對稱)
 
-`POST /a/{slug}/items/{item_id}/wui/agent`,body `{agent, input}`,回 SSE(跟 `wui/run` 同一種串流)。
+| | 工具(既有) | subagent(新) |
+|---|---|---|
+| 路徑 | `POST /a/{slug}/items/{item_id}/wui/tools/{name}/call` | `POST /a/{slug}/items/{item_id}/wui/agents/{name}/call` |
+| 請求 | `{args: {...}}` | `{input: "文字"}` |
+| 結果 | `{output, exit_code}`(一個 JSON 回應) | `{output, failed}`,放在串流的**最後一個事件**;之前的事件是進度 |
+| 頁面 | `workspace.callTool(name, args) → output` | `workspace.callAgent(name, input, onEvent?) → output` |
+| yaml 宣告 | `tools:` | `agents:` |
+| 時間 | 沙盒的 60 秒 | 一個 turn 的步數上限;沒有 60 秒 |
+| 紀錄 | 無 | 一筆 run(D5) |
+
+回 SSE(跟 `wui/run` 同一種串流)。
 
 - `require_access(..., "execute")`(D3)。
-- `agent` 要在這個 item 的 subagent 定義裡(`.agent/` 或 App 內建,同 `run_agent` 的查法);沒有 → 404,說出
+- `{name}` 要在這個 item 的 subagent 定義裡(`.agent/` 或 App 內建,同 `run_agent` 的查法);沒有 → 404,說出
   有哪些。頁面 yaml 的 `agents:` 由前端 bridge 擋(跟 `tools:`、`workflows:` 同一層),後端再擋「item 有沒有」。
 - 先訂閱、再開始(同 `wui_run` 的理由:開頭的事件不能掉)。
 
