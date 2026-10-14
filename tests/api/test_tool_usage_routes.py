@@ -374,3 +374,31 @@ def test_each_command_says_which_package_it_belongs_to() -> None:
     got = {t["tool"]: t["package"] for t in client.get("/admin/tool-usage").json()["tools"]}
 
     assert got == {"acme__ls": "acme", "exec": ""}
+
+
+def test_one_command_name_in_two_packages_breaks_down_one_package_at_a_time() -> None:
+    client, spec = _app({"id": "root"})
+    _seed_pkg(spec, 1, "summarize", "pkgA", user="bob")
+    _seed_pkg(spec, 1, "summarize", "pkgB", user="carol")
+
+    lines = client.get("/admin/tool-usage").json()["tools"]
+    b = client.get("/admin/tool-usage/summarize?source=third_party&package=pkgB").json()
+
+    assert sorted((t["tool"], t["package"]) for t in lines) == [
+        ("summarize", "pkgA"),
+        ("summarize", "pkgB"),
+    ]
+    assert [u["user"] for u in b["by_user"]] == ["carol"]
+
+
+@pytest.mark.parametrize("lead", ["=", "+", "-", "@", "\t", "\r"])
+def test_the_raw_csv_never_hands_excel_a_formula(lead: str) -> None:
+    """A skill name is the user's (a `.skill/<name>/` folder): one that starts
+    like a formula must reach the administrator's spreadsheet as text — OWASP's
+    CSV injection advice, a leading apostrophe (review r3)."""
+    client, spec = _app({"id": "root"})
+    _seed_skill(spec, 1, f'{lead}HYPERLINK("http://e","x")', "workspace")
+
+    [total] = [r for r in _csv(client, "days=7&kind=skill") if r["dimension"] == "total"]
+
+    assert total["name"] == f'\'{lead}HYPERLINK("http://e","x")'

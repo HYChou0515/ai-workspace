@@ -306,7 +306,7 @@ describe("tools", () => {
     fireEvent.click(await within(toolsPart()).findByRole("button", { name: "spc" }));
 
     const detail = await within(toolsPart()).findByTestId("tool-usage-detail");
-    expect(client.detail).toHaveBeenCalledWith("spc", 30, "tool", "command", "first_party");
+    expect(client.detail).toHaveBeenCalledWith("spc", 30, "tool", "command", "first_party", "rca-tools");
     expect(await within(detail).findByText("Alice Chen")).toBeInTheDocument();
     expect(within(detail).getByText("排程 · RCA")).toBeInTheDocument();
     const link = within(detail).getByRole("link", { name: "Line 3" });
@@ -350,7 +350,7 @@ describe("skills (plan §8)", () => {
     fireEvent.click(await within(skillsPart()).findByRole("button", { name: "author-skill" }));
 
     const detail = await within(skillsPart()).findByTestId("tool-usage-detail");
-    expect(client.detail).toHaveBeenCalledWith("author-skill", 30, "skill", "command", "shared");
+    expect(client.detail).toHaveBeenCalledWith("author-skill", 30, "skill", "command", "shared", "");
     await within(detail).findByText("Alice Chen");
     expect(within(detail).queryByText("失敗")).toBeNull();
     expect(within(detail).queryByText("平均耗時")).toBeNull();
@@ -572,7 +572,7 @@ describe("which tools, at which granularity (plan §9)", () => {
     fireEvent.click(await within(toolsPart()).findByRole("button", { name: "acme" }));
 
     await within(toolsPart()).findByTestId("tool-usage-detail");
-    expect(client.detail).toHaveBeenCalledWith("acme", 30, "tool", "package", "third_party");
+    expect(client.detail).toHaveBeenCalledWith("acme", 30, "tool", "package", "third_party", "acme");
   });
 
   it("has no granularity or picker for skills — a skill has no package", async () => {
@@ -630,8 +630,58 @@ describe("one name from two sources (plan §8.2)", () => {
     fireEvent.click(within(rows[1]!).getByRole("button", { name: "line-report" }));
 
     await within(skillsPart()).findByTestId("tool-usage-detail");
-    expect(client.detail).toHaveBeenCalledWith("line-report", 30, "skill", "command", "hub");
+    expect(client.detail).toHaveBeenCalledWith("line-report", 30, "skill", "command", "hub", "");
     expect(rows[1]).toHaveAttribute("aria-selected", "true");
     expect(rows[0]).toHaveAttribute("aria-selected", "false");
+  });
+});
+
+describe("one command name in two packages (review r3)", () => {
+  const TWO: ToolUsageReport = {
+    days: 30,
+    tools: [
+      { tool: "summarize", source: "first_party", package: "pkgA", calls: 6, fails: 0, avg_ms: 1 },
+      { tool: "summarize", source: "first_party", package: "pkgB", calls: 4, fails: 0, avg_ms: 1 },
+    ],
+  };
+
+  it("keeps the two apart in the chart, the table and the breakdown", async () => {
+    const client = draw(TWO);
+    const rows = await within(toolsPart()).findAllByTestId("tool-usage-row");
+
+    expect(rows).toHaveLength(2);
+    expect(bars(toolsPart(), "呼叫次數")).toEqual(["summarize(pkgA) 6", "summarize(pkgB) 4"]);
+
+    fireEvent.click(within(rows[1]!).getByRole("button", { name: "summarize" }));
+    await within(toolsPart()).findByTestId("tool-usage-detail");
+    expect(client.detail).toHaveBeenCalledWith("summarize", 30, "tool", "command", "first_party", "pkgB");
+  });
+
+  it("hides only the one unticked", async () => {
+    draw(TWO);
+    await within(toolsPart()).findAllByTestId("tool-usage-row");
+    fireEvent.click(within(toolsPart()).getByRole("button", { name: /^顯示哪些/ }));
+    const box = screen.getByRole("dialog", { name: "顯示哪些工具" });
+    fireEvent.click(within(box).getByRole("button", { name: /^.?pkgB/ }));
+    fireEvent.click(within(box).getByRole("checkbox", { name: "summarize" }));
+    fireEvent.click(within(box).getByRole("button", { name: "套用" }));
+
+    expect(bars(toolsPart(), "呼叫次數")).toEqual(["summarize 6"]);
+    expect(within(toolsPart()).getAllByTestId("tool-usage-row")).toHaveLength(1);
+  });
+});
+
+describe("an open breakdown follows what is shown (review r3)", () => {
+  it("closes when its row is no longer shown", async () => {
+    draw();
+    fireEvent.click(await within(toolsPart()).findByRole("button", { name: "spc" }));
+    await within(toolsPart()).findByTestId("tool-usage-detail");
+
+    fireEvent.click(within(toolsPart()).getByRole("button", { name: /^顯示哪些/ }));
+    const box = screen.getByRole("dialog", { name: "顯示哪些工具" });
+    fireEvent.click(within(box).getByRole("checkbox", { name: "rca-tools 全部顯示" }));
+    fireEvent.click(within(box).getByRole("button", { name: "套用" }));
+
+    expect(within(toolsPart()).queryByTestId("tool-usage-detail")).toBeNull();
   });
 });

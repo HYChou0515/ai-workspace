@@ -182,7 +182,12 @@ def register_tool_usage_routes(
 
     @app.get("/admin/tool-usage/{tool}", response_model=ToolUsageDetail)
     async def tool_usage_detail(
-        tool: str, days: int = 30, kind: str = "tool", group: str = "command", source: str = ""
+        tool: str,
+        days: int = 30,
+        kind: str = "tool",
+        group: str = "command",
+        source: str = "",
+        package: str | None = None,
     ) -> ToolUsageDetail:
         _require_superuser()
         days = _window(days)
@@ -193,6 +198,9 @@ def register_tool_usage_routes(
         # elsewhere): the row asked about is one of them.
         if source:
             rows = [r for r in rows if r.source == source]
+        # …and one command name from two packages (two Apps each picked one).
+        if package is not None:
+            rows = [r for r in rows if r.package == package]
 
         by_user = sorted(
             (

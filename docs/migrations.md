@@ -2259,12 +2259,13 @@ agent 步驟裡 AI 的呼叫、WUI 的工具呼叫、view plugin、圖表重畫�
 自己寫的）與同樣的誰、場合、App、item，沒有失敗與耗時。superuser 在 Diagnostics 頁的新分頁「使用統計」看得到
 （同一頁上下兩區：工具與 Skill，各有橫條圖與表格；工具區可以勾選要顯示哪些、切換「每個 command／依套件」；
 兩區都能下載原始資料 CSV）；其他人看不到這個分頁，`GET /api/admin/tool-usage`（`?kind=skill` 看 skill、
-`?group=package` 依套件）與 `GET /api/admin/tool-usage.csv` 回 403。
+`?group=package` 依套件）與 `GET /api/admin/tool-usage.csv` 回 403。skill 的來源「item 內自建」指存在該 item
+工作區、不是從別處複製來的 skill。
 Diagnostics 頁的分頁條改成底線樣式（和分享面板同款），內容不變。
 
 **資料** — 一張新表 `ToolUsageDay`（索引 `day`、`tool`、`kind`、`package`），不用做事，但要知道它的大小：每個行程（API 和每個
-worker 各算一個，名稱是「主機名-pid」）每個被用過的工具或 skill 每天一列，所以上限是「（工具數 + skill 數）× 每天出現過的
-行程數 × 91 天」——重啟、
+worker 各算一個，名稱是「主機名-pid」）每個被用過的工具或 skill 每天一列（同名但來源或套件不同的各算一列），所以上限是
+「（工具的「名稱＋來源＋套件」數 ＋ skill 的「名稱＋來源」數）× 每天出現過的行程數 × 91 天」——重啟、
 rollout、HPA 擴張可能會在當天多出新的行程名稱。API 與 worker 每 5 分鐘、以及正常停止時寫一次（worker 在排空完工作之後
 才寫最後一次）；行程被直接殺掉（沒收到 SIGTERM）會掉最後不到 5 分鐘的計數。**超過 90 天的列每天自動永久刪除**（依 `day` 索引，不掃
 全表）。`WorkflowRun` 多一個 `from_schedule` 欄位（有預設值，舊的 run 讀成 `false`），不用回填；升級前就開始的 run

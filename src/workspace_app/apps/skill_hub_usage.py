@@ -3,9 +3,9 @@
 
 An install (of the entry's current version, by the Skills panel or the
 `install_skill` tool) and a `read_skill` of a skill hub copy each add one to
-THIS pod's memory — a dict increment, so nothing on the request path waits
-for storage (U2). A flush, every two hours and when the pod stops, adds what
-accumulated to this pod's row for the day and prunes it to one revision: a
+THIS process's memory — a dict increment, so nothing on the request path
+waits for storage (U2). A flush, every two hours and when the process stops,
+adds what accumulated to this process's row for the day and prunes it to one revision: a
 counter that kept every revision would grow by one per flush (U3). The
 total is a `Sum` over the entry's rows. Who and in which item are recorded
 on the row and never shown (U5).
@@ -44,7 +44,7 @@ class UserItemUsage(Struct, kw_only=True):
 
 
 class SkillHubUsage(Struct, kw_only=True):
-    """One pod's counts for one entry on one day."""
+    """One process's counts for one entry on one day."""
 
     entry_id: str
     day: str

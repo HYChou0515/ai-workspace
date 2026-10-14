@@ -70,10 +70,12 @@ def _today() -> str:
     return dt.datetime.now(dt.UTC).date().isoformat()
 
 
-def _row_id(kind: str, tool: str, source: str, day: str, pod: str) -> str:
+def _row_id(kind: str, tool: str, source: str, package: str, day: str, pod: str) -> str:
     # A specstar id holds no `/`; every part is quoted, since a third-party
-    # tool name, a skill name and a pod name are not ours to vouch for.
-    return "~".join(quote(p, safe="") for p in (kind, tool, source, day, pod))
+    # tool name, a skill name and a pod name are not ours to vouch for. The
+    # package is part of it: two Apps can each pick a package with a command
+    # of one name (the collision check is per App).
+    return "~".join(quote(p, safe="") for p in (kind, tool, source, package, day, pod))
 
 
 class ToolUsageStore:
@@ -124,7 +126,7 @@ class ToolUsageStore:
 
     def _add(self, row: ToolUsageRow) -> None:
         rm = self._rm()
-        row_id = _row_id(row.kind, row.tool, row.source, row.day, self._pod)
+        row_id = _row_id(row.kind, row.tool, row.source, row.package, row.day, self._pod)
         try:
             stored = rm.get(row_id).data
             assert isinstance(stored, ToolUsageDay)
@@ -283,10 +285,23 @@ RAW_COLUMNS = (
 )
 
 
+#: What makes a spreadsheet read a cell as a formula (OWASP, CSV Injection).
+_FORMULA_LEADS = ("=", "+", "-", "@", "\t", "\r")
+
+
+def _as_text(value: str | int) -> str | int:
+    """A cell as text, never a formula: a name is the user's (a skill is a
+    `.skill/<name>/` folder), so one that starts like a formula gets a leading
+    apostrophe — OWASP's advice for CSV opened in a spreadsheet."""
+    if isinstance(value, str) and value.startswith(_FORMULA_LEADS):
+        return "'" + value
+    return value
+
+
 def _raw_line(
     base: dict[str, str | int], dimension: str, cells: tuple[int, int, int], **who: str
 ) -> dict[str, str | int]:
-    return {
+    line = {
         **base,
         "dimension": dimension,
         "user": who.get("user", ""),
@@ -297,6 +312,7 @@ def _raw_line(
         "fails": cells[1],
         "total_ms": cells[2],
     }
+    return {k: _as_text(v) for k, v in line.items()}
 
 
 def raw_lines(rows: list[ToolUsageDay]) -> list[dict[str, str | int]]:

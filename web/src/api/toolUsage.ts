@@ -66,11 +66,14 @@ export const toolUsageApi = {
     group: UsageGroup = "command",
     /** The row's source — one name can come from two (§8.2); "" for all of them. */
     source = "",
+    /** The row's package — one command name can be in two (review r3); omitted for all. */
+    pkg?: string,
   ): Promise<ToolUsageDetail> {
     const k = kind === "tool" ? "" : `&kind=${kind}`;
     const g = group === "command" ? "" : `&group=${group}`;
     const s = source ? `&source=${enc(source)}` : "";
-    const r = await apiFetch(`/admin/tool-usage/${enc(tool)}?days=${days}${k}${g}${s}`);
+    const p = pkg === undefined ? "" : `&package=${enc(pkg)}`;
+    const r = await apiFetch(`/admin/tool-usage/${enc(tool)}?days=${days}${k}${g}${s}${p}`);
     if (!r.ok) throw await httpErrorFrom(r, `tool usage failed: ${r.status}`);
     return (await r.json()) as ToolUsageDetail;
   },
@@ -82,3 +85,9 @@ export const toolUsageApi = {
 };
 
 export type ToolUsageClient = typeof toolUsageApi;
+
+/** What tells one report line from another: a name can come from two sources
+ * (a skill), and a command name can be in two packages (two Apps). */
+export function rowKey(r: Pick<ToolUsageTool, "tool" | "source" | "package">): string {
+  return `${r.tool}\u0000${r.source}\u0000${r.package ?? ""}`;
+}

@@ -72,6 +72,14 @@ describe("toolUsageApi", () => {
     expect(urls[0]).toBe("/api/admin/tool-usage/line-report?days=30&kind=skill&source=hub");
   });
 
+  it("asks for one package of a command name when told", async () => {
+    const urls = capture(200, { tool: "x", days: 30, by_user: [], by_surface_app: [], by_item: [] });
+
+    await toolUsageApi.detail("summarize", 30, "tool", "command", "first_party", "pkgB");
+
+    expect(urls[0]).toBe("/api/admin/tool-usage/summarize?days=30&source=first_party&package=pkgB");
+  });
+
   it("names the raw-data download for a window and a kind", () => {
     expect(toolUsageApi.rawUrl(7, "skill")).toBe("/api/admin/tool-usage.csv?days=7&kind=skill");
     expect(toolUsageApi.rawUrl(30, "tool")).toBe("/api/admin/tool-usage.csv?days=30&kind=tool");

@@ -311,3 +311,30 @@ def test_a_rows_package_is_stored() -> None:
 
     [row] = rows_since(spec, "2026-10-01")
     assert row.package == "acme"
+
+
+def test_one_command_name_in_two_packages_is_two_stored_rows() -> None:
+    """Two Apps can each pick a package with a command of one name (the
+    collision check is per App): the same tool name, two packages. Their counts
+    must not add into one row (review r3)."""
+    from workspace_app.api.tool_usage_store import rows_since
+
+    spec = _spec()
+    rec = ToolUsageRecorder(day=lambda: "2026-10-14")
+    for package, n in (("pkgA", 1), ("pkgB", 2)):
+        for _ in range(n):
+            rec.record(
+                "summarize",
+                "first_party",
+                package=package,
+                failed=False,
+                ms=1,
+                user="u",
+                surface="c",
+                app="",
+                item="",
+            )
+    ToolUsageStore(spec, rec, pod="p", today=lambda: "2026-10-14").flush()
+
+    got = sorted((r.package, r.calls) for r in rows_since(spec, "2026-10-01"))
+    assert got == [("pkgA", 1), ("pkgB", 2)]

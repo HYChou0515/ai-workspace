@@ -12,7 +12,7 @@
  */
 import { useEffect, useRef, useState } from "react";
 
-import type { ToolUsageTool } from "../api/toolUsage";
+import { type ToolUsageTool, rowKey } from "../api/toolUsage";
 import { ModalShell } from "../components/ModalShell";
 import { useDirtyClose } from "../hooks/useDirtyClose";
 import { useT } from "../lib/i18n";
@@ -32,7 +32,7 @@ export function UsageShownModal({
 }: {
   /** Every name the report has, busiest first. */
   names: ToolUsageTool[];
-  /** What is NOT shown now — the draft starts from it. */
+  /** What is NOT shown now, as row keys (`rowKey`) — the draft starts from it. */
   hidden: ReadonlySet<string>;
   onApply: (hidden: ReadonlySet<string>) => void;
   onClose: () => void;
@@ -76,19 +76,19 @@ export function UsageShownModal({
     }))
     .filter(({ rows }) => rows.length > 0);
 
-  const toggle = (name: string) =>
+  const toggle = (key: string) =>
     setDraft((d) => {
       const next = new Set(d);
-      if (next.has(name)) next.delete(name);
-      else next.add(name);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
       return next;
     });
   const setAll = (rows: ToolUsageTool[], show: boolean) =>
     setDraft((d) => {
       const next = new Set(d);
       for (const r of rows) {
-        if (show) next.delete(r.tool);
-        else next.add(r.tool);
+        if (show) next.delete(rowKey(r));
+        else next.add(rowKey(r));
       }
       return next;
     });
@@ -123,7 +123,7 @@ export function UsageShownModal({
           className="btn"
           data-size="sm"
           data-variant="ghost"
-          onClick={() => setDraft(new Set(names.map((r) => r.tool)))}
+          onClick={() => setDraft(new Set(names.map(rowKey)))}
         >
           {t("usage.shown.none")}
         </button>
@@ -134,7 +134,7 @@ export function UsageShownModal({
         style={{ overflowY: "auto", minHeight: 0, maxHeight: "50vh", display: "flex", flexDirection: "column", gap: 2 }}
       >
         {visible.map(({ fold, rows }) => {
-          const ticked = rows.filter((r) => !draft.has(r.tool)).length;
+          const ticked = rows.filter((r) => !draft.has(rowKey(r))).length;
           const state = ticked === rows.length ? "all" : ticked === 0 ? "none" : "mixed";
           const open = manual[fold.id] ?? term !== "";
           const label = labelOf(fold);
@@ -188,7 +188,7 @@ export function UsageShownModal({
               {open
                 ? rows.map((r) => (
                     <label
-                      key={`${r.tool}\u0000${r.source}`}
+                      key={rowKey(r)}
                       style={{
                         display: "flex",
                         alignItems: "center",
@@ -203,8 +203,8 @@ export function UsageShownModal({
                       <input
                         type="checkbox"
                         name={r.tool}
-                        checked={!draft.has(r.tool)}
-                        onChange={() => toggle(r.tool)}
+                        checked={!draft.has(rowKey(r))}
+                        onChange={() => toggle(rowKey(r))}
                       />
                       {r.tool}
                     </label>

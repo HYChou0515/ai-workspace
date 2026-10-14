@@ -30,6 +30,7 @@ import {
   type UsageDays,
   type UsageGroup,
   type UsageKind,
+  rowKey,
   toolUsageApi,
 } from "../api/toolUsage";
 import { qk } from "../api/queryKeys";
@@ -178,7 +179,7 @@ function UsagePart({
   const [source, setSource] = useState("");
   const [sort, setSort] = useState<{ key: SortKey; desc: boolean }>({ key: "calls", desc: true });
   // A row is a name AND a source: one name can come from two (§8.2).
-  const [picked, setPicked] = useState<{ name: string; source: string } | null>(null);
+  const [picked, setPicked] = useState<ToolUsageTool | null>(null);
   // §9: tools only — a skill has no package, and the ask was "which tools".
   const [group, setGroup] = useState<UsageGroup>("command");
   // What is UNticked, so a name the report newly brings shows (ticked) by default.
@@ -191,7 +192,8 @@ function UsagePart({
     queryFn: () => client.report(days, filter, kind, group),
   });
   const all = useMemo(() => report.data?.tools ?? [], [report.data]);
-  const shown = useMemo(() => all.filter((r) => !hidden.has(r.tool)), [all, hidden]);
+  // `hidden` holds row keys (`rowKey`), not names: one name can be two rows.
+  const shown = useMemo(() => all.filter((r) => !hidden.has(rowKey(r))), [all, hidden]);
 
   // Commands and packages are two different sets of names: a new granularity
   // starts from every one shown, nothing open, sorted by use.
@@ -202,11 +204,11 @@ function UsagePart({
     setPicked(null);
     setSort({ key: "calls", desc: true });
   };
-  const toggle = (name: string) =>
+  const toggle = (key: string) =>
     setHidden((h) => {
       const next = new Set(h);
-      if (next.has(name)) next.delete(name);
-      else next.add(name);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
       return next;
     });
 
@@ -254,11 +256,13 @@ function UsagePart({
   // on the chart by its source.
   const seen = new Map<string, number>();
   for (const r of shown) seen.set(r.tool, (seen.get(r.tool) ?? 0) + 1);
+  // Two sources (a skill) are told apart by source; one source, two packages
+  // (a command name two Apps share) by package.
   const label = (r: ToolUsageTool) =>
     (seen.get(r.tool) ?? 0) > 1
-      ? `${r.tool}(${sources[r.source] ? t(sources[r.source]) : r.source})`
+      ? `${r.tool}(${r.package || (sources[r.source] ? t(sources[r.source]) : r.source)})`
       : r.tool;
-  const isPicked = (r: ToolUsageTool) => picked?.name === r.tool && picked.source === r.source;
+  const isPicked = (r: ToolUsageTool) => picked !== null && rowKey(picked) === rowKey(r);
   // The tick boxes, busiest first — the order the chart and the table start in.
   const names = [...all].sort((a, b) => b.calls - a.calls || a.tool.localeCompare(b.tool));
 
@@ -349,7 +353,7 @@ function UsagePart({
               <tbody>
                 {rows.map((r) => (
                   <tr
-                    key={`${r.tool}\u0000${r.source}`}
+                    key={rowKey(r)}
                     data-testid="tool-usage-row"
                     aria-selected={isPicked(r)}
                   >
@@ -358,7 +362,7 @@ function UsagePart({
                         type="button"
                         className="tool-usage-tool"
                         onClick={() =>
-                          setPicked(isPicked(r) ? null : { name: r.tool, source: r.source })
+                          setPicked(isPicked(r) ? null : r)
                         }
                       >
                         {r.tool}
@@ -381,10 +385,13 @@ function UsagePart({
         </>
       )}
 
-      {picked && (
+      {/* Only while its row is on the table: a breakdown of a row the filters
+          or the picker took away would describe something no longer shown. */}
+      {picked && rows.some(isPicked) && (
         <ToolDetail
-          tool={picked.name}
+          tool={picked.tool}
           source={picked.source}
+          pkg={picked.package ?? ""}
           kind={kind}
           group={group}
           days={days}
@@ -495,7 +502,7 @@ function ShownPicker({
   const t = useT();
   const [open, setOpen] = useState(false);
   const total = names.length;
-  const picked = names.filter((r) => !hidden.has(r.tool));
+  const picked = names.filter((r) => !hidden.has(rowKey(r)));
   const narrowed = picked.length < total;
 
   return (
@@ -513,12 +520,12 @@ function ShownPicker({
       {narrowed && picked.length > 0 && picked.length <= CHIPS_MAX && (
         <ul className="tool-usage-chips" aria-label={t("usage.shown.chosen")}>
           {picked.map((r) => (
-            <li key={r.tool}>
+            <li key={rowKey(r)}>
               {r.tool}
               <button
                 type="button"
                 aria-label={t("usage.shown.remove", { name: r.tool })}
-                onClick={() => toggle(r.tool)}
+                onClick={() => toggle(rowKey(r))}
               >
                 ✕
               </button>
@@ -541,6 +548,7 @@ function ShownPicker({
 function ToolDetail({
   tool,
   source,
+  pkg,
   kind,
   group,
   days,
@@ -551,6 +559,7 @@ function ToolDetail({
 }: {
   tool: string;
   source: string;
+  pkg: string;
   kind: UsageKind;
   group: UsageGroup;
   days: UsageDays;
@@ -561,8 +570,8 @@ function ToolDetail({
 }) {
   const t = useT();
   const detail = useQuery({
-    queryKey: qk.toolUsageDetail(tool, days, kind, group, source),
-    queryFn: () => client.detail(tool, days, kind, group, source),
+    queryKey: qk.toolUsageDetail(tool, days, kind, group, `${source}\u0000${pkg}`),
+    queryFn: () => client.detail(tool, days, kind, group, source, pkg),
   });
   const d = detail.data;
   // A skill load has a count only (D11).
