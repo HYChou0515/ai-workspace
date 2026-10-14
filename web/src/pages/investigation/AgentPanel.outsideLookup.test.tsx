@@ -121,6 +121,27 @@ describe("AgentPanel — a 請幫我查 card in the log", () => {
     expect(screen.queryByLabelText("附加檔案")).toBeNull();
   });
 
+  // The helper's answer started the AI's next turn from the helper's own
+  // browser: the panel hands its card the chat's `follow`, so the reply shows
+  // without a reload (the person's report).
+  it("hands the card the chat's way to follow a turn started elsewhere", async () => {
+    vi.spyOn(outsideLookupApi, "helperStatus").mockResolvedValue({ online: true });
+    vi.spyOn(outsideLookupApi, "job").mockResolvedValue({
+      id: "j1",
+      kind: "search",
+      args: "pandas 2.0",
+      state: "done",
+      error: "",
+      note: "",
+      auto: false,
+      saved: "",
+    });
+    const a = { ...agent(), follow: vi.fn() };
+    renderPanel(a);
+
+    await waitFor(() => expect(a.follow).toHaveBeenCalledWith("c1"));
+  });
+
   it("shows the request without actions to a read-only viewer", async () => {
     renderPanel(agent(), { readOnly: true });
 

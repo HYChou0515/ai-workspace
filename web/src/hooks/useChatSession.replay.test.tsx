@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { renderHook, waitFor } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { AgentEvent } from "../events";
@@ -470,6 +470,47 @@ describe("useChatSession — reconnect replay", () => {
         },
       }),
     );
+
+    await waitFor(() => expect(attempt).toBeGreaterThanOrEqual(2), { timeout: 4000 });
+    await new Promise((r) => setTimeout(r, 200));
+    expect(hasBanner(result.current.log.entries)).toBe(false);
+  });
+
+  // Review of #938: following a turn started elsewhere (the helper's answer to
+  // a 「請幫我查」 card) reads the store, not this stream — the stream saw nothing
+  // of that turn, so a drop of it can have lost nothing of it.
+  it("following a turn started elsewhere does not arm the banner", async () => {
+    let attempt = 0;
+    let drop!: () => void;
+    const dropped = new Promise<void>((r) => {
+      drop = r;
+    });
+    // An answered chat — at rest, nothing streaming — whose card the helper answers.
+    const answered = {
+      messages: [
+        { role: "user" as const, content: "q", created_at: Date.now() },
+        { role: "assistant" as const, content: "a", created_at: Date.now() },
+      ],
+    };
+    const { result } = render(
+      transport({
+        getThread: vi.fn().mockResolvedValue(answered),
+        subscribe: async function* (_signal: AbortSignal) {
+          attempt += 1;
+          if (attempt === 1) {
+            await dropped;
+            throw new Error("stream failed: 504");
+          }
+          await new Promise<void>(() => {});
+        },
+      }),
+    );
+    await waitFor(() => expect(result.current.log.entries).toHaveLength(2));
+    expect(result.current.log.streaming).toBe(false);
+
+    act(() => result.current.follow("call-1"));
+    expect(result.current.log.streaming).toBe(true); // it did follow
+    drop();
 
     await waitFor(() => expect(attempt).toBeGreaterThanOrEqual(2), { timeout: 4000 });
     await new Promise((r) => setTimeout(r, 200));
