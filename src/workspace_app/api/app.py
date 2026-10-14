@@ -315,6 +315,8 @@ async def start_page_schedule(
             chat_id=chat_id,
             payload=payload,
             by_hand=by_hand,
+            # Its tool calls count on the schedule surface (plan-tool-usage-stats).
+            from_schedule=True,
         )
     except Exception:
         # Take the chat down with the run that never started, so a schedule

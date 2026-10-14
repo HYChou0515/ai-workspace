@@ -18,6 +18,7 @@ import re
 import threading
 import time
 from collections.abc import Callable
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Literal
@@ -147,6 +148,21 @@ def who(actx: AgentToolContext) -> str:
     return actx.acting_user or NOBODY
 
 
+#: The person, App and item of the counted call this code is running inside.
+_CALLER: ContextVar[tuple[str, str, str] | None] = ContextVar("tool_usage_caller", default=None)
+
+
+def _attribution(actx: AgentToolContext) -> tuple[str, str, str]:
+    """Who, which App, which item — the turn's own, else its caller's."""
+    caller = _CALLER.get() or (NOBODY, "", "")
+    user = who(actx)
+    return (
+        caller[0] if user == NOBODY else user,
+        actx.app_slug or caller[1],
+        actx.investigation_id or caller[2],
+    )
+
+
 def wrap_with_usage(tool: FunctionTool, source: str) -> FunctionTool:
     """`tool`, counted: each call is timed and judged, and added to the
     turn's recorder. Wraps OUTSIDE the argument recovery, so a call whose
@@ -161,22 +177,28 @@ def wrap_with_usage(tool: FunctionTool, source: str) -> FunctionTool:
         rec = actx.tool_usage
         if rec is None:
             return await original(ctx, args_json)
+        user, app, item = _attribution(actx)
         start = rec.clock()
         failed = True
+        # A turn this call runs inside (the KB sub-agent of `ask_knowledge_base`,
+        # whose context is built from scratch) counts against this call's
+        # person, App and item where it names none of its own.
+        token = _CALLER.set((user, app, item))
         try:
             result = await original(ctx, args_json)
             failed = is_failure(result)
             return result
         finally:
+            _CALLER.reset(token)
             rec.record(
                 tool.name,
                 source,
                 failed=failed,
                 ms=round((rec.clock() - start) * 1000),
-                user=who(actx),
+                user=user,
                 surface=actx.surface,
-                app=actx.app_slug or "",
-                item=actx.investigation_id or "",
+                app=app,
+                item=item,
             )
 
     return dataclasses.replace(tool, on_invoke_tool=counted)
