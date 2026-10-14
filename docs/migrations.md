@@ -2300,6 +2300,28 @@ agent 步驟裡 AI 的呼叫、WUI 的工具呼叫、view plugin、圖表重畫�
   瀏覽器存下檔案。沒部署到這一版的症狀：什麼都沒發生（多頁版的頁面，瀏覽器主控台會有上面那句
   `allow-downloads`；單頁版不一定有訊息）。
 
+### 2026-10-14 · #943 小幫手遇到 Cloudflare 驗證會等人完成,封鎖頁直接說 {#pr-943}
+
+**設定** — 無。
+
+**資料** — 無。
+
+**k8s · CI 側** — 後端沒有改,照常重 build、部署。**要做的是發布新版小幫手**(`rollout 後`,隨時):
+
+1. 在 dev server 打包:`python3 scripts/pack_ai_workspace_helper.py --version <比目前發布的大>`,把 `dist/ai-workspace-helper/`
+   的兩個檔換進 `server.ai_workspace_helper_dir`(不用重新部署)。為什麼:修正在小幫手那邊。沒做的症狀:Cloudflare 保護的網站
+   (例如 GoodInfo)照舊一開就失敗(「the page answered 403」),分頁馬上關掉。
+2. 第 1 步之後:使用者的小視窗顯示「有新版」,照「小幫手」頁重裝(更新只通知,plan D21)。沒重裝的症狀同上。
+   和 #940(Python 3.9)同一版打包就好。
+
+**行為改變,沒有開關**(plan D25):小幫手開網頁遇到 Cloudflare 的驗證頁(「Just a moment…」,回 403 帶 `cf-mitigated: challenge`,
+或頁上有 Cloudflare 的驗證標記),不再當成失敗:把 Chrome 視窗叫到前面、卡片顯示「請在小幫手的 Chrome 視窗裡完成驗證」,最多等 5 分鐘,
+驗證過了讀跳到的那一頁。Cloudflare 的封鎖頁(錯誤 1020 等,人也過不去)立刻回報「這個網站擋住了自動瀏覽(Cloudflare 封鎖),請自己開瀏覽器查,
+把內容貼到卡片上」。其他錯誤狀態照舊失敗。
+
+**確認做完**(`rollout 後`,重裝後):請 AI 查一個要看 GoodInfo 的問題、按「查」:小幫手的 Chrome 停在 Cloudflare 那頁並跳到前面,
+卡片顯示「請在小幫手的 Chrome 視窗裡完成驗證」;完成驗證後,卡片拿到 GoodInfo 的內容。
+
 ## 附錄 A：資料回填的機制（specstar 為什麼不會自己補）
 
 有些升版會改變「資料在資料庫裡的儲存形狀」，但 **specstar 只在寫入當下**把一列的 `indexed_data`
