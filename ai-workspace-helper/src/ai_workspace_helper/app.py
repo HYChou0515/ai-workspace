@@ -2,7 +2,7 @@
 
 The window (tkinter, in the standard library) has three tabs. 狀態: a status
 line, a line about the next version, the buttons 登入, 暫停/繼續, 結束 (and
-立即更新 once a new version is ready), the 「開機時自動啟動」 box, 重設登入 and
+開啟下載頁 once a newer version is out), the 「開機時自動啟動」 box, 重設登入 and
 解除安裝. 查詢紀錄: the jobs this PC ran (history.History). 記錄檔: the end of
 helper.log. It draws no state it did not read from the controller.
 
@@ -20,12 +20,18 @@ import os
 import queue
 import sys
 import threading
+import time
 from collections.abc import Callable
 from typing import Any
 
 #: Seconds between polls when there is nothing to do. Short, because the card's
 #: 「查」 waits on it; a poll is one small request.
 POLL_S = 2.0
+#: Starting Chrome is tried this often, this far apart, before 「開不了 Chrome」:
+#: started the moment the helper it replaced let go of its lock (D21), its
+#: Chrome may still be closing on the same profile.
+CHROME_TRIES = 3
+CHROME_RETRY_S = 2.0
 
 _TEXT = {
     "starting": "啟動中…",
@@ -91,28 +97,36 @@ def log_tail(path: Any, *, lines: int = 300, max_bytes: int = 64_000) -> str:
     return "".join(parts[-lines:])
 
 
-def describe_update(status: str, *, forced: bool) -> str:
-    """The window's line about the next version; `forced` when this version is
-    refused (§3.7.6)."""
-    if status == "preparing":
-        return "正在準備新版…"
-    if status == "ready":
-        return "新版已下載，按「立即更新」換上" if forced else "新版已下載，下次開啟時套用"
-    if status.startswith("failed"):
-        why = status.partition(":")[2].strip()
-        if forced:
-            return (
-                f"新版準備失敗：{why}。請到 AI Workspace 的「小幫手」頁重新下載、執行 install.pyw"
-            )
-        return f"新版準備失敗：{why}（這一版照常使用）"
+def describe_update(status: str) -> str:
+    """The window's line about the next version (D21): only where to get it —
+    the helper fetches and installs nothing (§3.7.4, §3.7.6)."""
+    kind, _, version = status.partition(": ")
+    if kind == "available":
+        return f"有新版 {version}：請到「小幫手」頁下載，重新雙擊 install.pyw"
+    if kind == "required":
+        newer = f"新版 {version}" if version else "新版"
+        return f"請到「小幫手」頁下載{newer}，重新雙擊 install.pyw"
     return ""
 
 
-#: Statuses that show this version runs — a waiting version confirms itself
-#: on them (§3.7.5). Not "error" (the backend refused its requests) nor
-#: "unreachable" (its line to the backend may be what is broken): those may be
-#: the version's own fault, and a confirmed version is never rolled back.
-_CONFIRMS = ("connected", "needs_login", "paused", "update_required")
+def take_request(home: Any) -> str | None:
+    """What the launcher or install.pyw left the running window (§3.7.5):
+    "show" (come forward), "quit" (end, for a new version — D21) or None.
+    Each is taken once; ending wins when both are there."""
+    from . import setup_core
+
+    quit_request, show_request = home / setup_core.QUIT_REQUEST, home / setup_core.SHOW_REQUEST
+    asked = "quit" if quit_request.exists() else "show" if show_request.exists() else None
+    if asked is not None:
+        quit_request.unlink(missing_ok=True)
+        show_request.unlink(missing_ok=True)
+    return asked
+
+
+def download_page(app_url: str) -> str:
+    """The 小幫手 page under the address the person gave (its sub-path
+    included), where 「開啟下載頁」 sends their own browser (D21)."""
+    return f"{app_url.rstrip('/')}/ai-workspace-helper"
 
 
 class Controller:
@@ -125,12 +139,14 @@ class Controller:
         reset_profile: Callable[[], None] | None = None,
         poll_s: float = POLL_S,
         history: Any = None,
+        sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         self._make_chrome = make_chrome
         self._make_worker = make_worker
         self._make_updater = make_updater
         self._reset_profile = reset_profile
         self._poll_s = poll_s
+        self._sleep = sleep
         self._commands: queue.Queue[str] = queue.Queue()
         self._lock = threading.Lock()
         self._snapshot: tuple[str, str, str, str] = ("starting", "", "", "")
@@ -142,8 +158,6 @@ class Controller:
         self._worker: Any = None
         self._updater: Any = None
         self._asked_login = False
-        #: Set by 「立即更新」: the window starts the launcher once this ends.
-        self.restart = False
 
     # ── the window's side (any thread) ──────────────────────────────────────
 
@@ -156,7 +170,7 @@ class Controller:
             return self._snapshot
 
     def update_status(self) -> str:
-        """The updater's: "" | "preparing" | "ready" | "failed: …"."""
+        """The updater's: "" | "available: <v>" | "required: <v>"."""
         return str(getattr(self._updater, "status", "") or "")
 
     # ── the worker thread ───────────────────────────────────────────────────
@@ -164,18 +178,26 @@ class Controller:
     def open(self) -> None:
         # what a previous Chrome left is dead: never drive it again
         self._chrome = self._worker = None
-        try:
-            self._chrome = self._make_chrome()
-        except Exception as exc:  # noqa: BLE001 — shown to the person, who can only quit
-            logger.exception("could not start Chrome")
-            self._show("no_chrome", str(exc).splitlines()[0] if str(exc) else type(exc).__name__)
-            return
+        for attempt in range(1, CHROME_TRIES + 1):
+            try:
+                self._chrome = self._make_chrome()
+                break
+            except Exception as exc:  # noqa: BLE001 — shown to the person, who can only quit
+                if attempt < CHROME_TRIES:
+                    logger.warning("could not start Chrome (try %d): %s", attempt, exc)
+                    self._sleep(CHROME_RETRY_S)
+                    continue
+                logger.exception("could not start Chrome")
+                self._show(
+                    "no_chrome", str(exc).splitlines()[0] if str(exc) else type(exc).__name__
+                )
+                return
         self._worker = self._make_worker(self._chrome)
         if hasattr(self._worker, "on_change"):
             self._worker.on_change = self._show
         if self._make_updater is not None and self._updater is None:
-            # one for the helper's life: a second would prepare the same
-            # version again over the first one's files
+            # one for the helper's life: its six-hour clock is the helper's,
+            # not one Chrome window's
             self._updater = self._make_updater(self._chrome)
 
     def step(self, wait: float = 0.0) -> bool:
@@ -188,8 +210,7 @@ class Controller:
         except queue.Empty:
             command = None
         while command is not None:
-            if command in ("quit", "restart"):
-                self.restart = command == "restart"
+            if command == "quit":
                 self._close()
                 return False
             if command == "reset_login":
@@ -230,21 +251,17 @@ class Controller:
         return True
 
     def _keep_current(self, status: str) -> None:
-        """§3.7.4–§3.7.6, on this thread (the zip comes through Playwright).
-        A tick that ran means this version is up — signed out, paused or
-        offline included, none of which is the version's doing — so a waiting
-        version confirms itself (§3.7.5). Connected, check for a newer one
-        when due; refused, update from the release the refusal named."""
+        """§3.7.4, §3.7.6 (D21), on this thread (the manifest comes through
+        Playwright). Connected, check for a newer release when due; refused,
+        say which one to install. Nothing is fetched or installed."""
         if self._updater is None:
             return
         try:
-            if status in _CONFIRMS:
-                self._updater.connected()
             if status == "connected":
                 self._updater.tick()
             elif status == "update_required":
-                self._updater.tick(required=self._worker.manifest)
-        except Exception:  # noqa: BLE001 — an update is never worth the helper
+                self._updater.tick(required=self._worker.manifest or {})
+        except Exception:  # noqa: BLE001 — an update check is never worth the helper
             logger.exception("update check")
 
     def run(self) -> None:
@@ -325,11 +342,11 @@ def make_controller(home: Any, app_url: str, make_chrome: Callable[[], Any]) -> 
         def __getattr__(self, name: str) -> Any:
             return getattr(backends[-1], name)
 
-    updater = Updater(home, _Latest())
+    updater = Updater(_Latest())
     history = History(home / "history.jsonl")
 
     def make_worker(chrome: Any) -> Worker:
-        backend = Backend(chrome.send, fetch_bytes=chrome.fetch_bytes)
+        backend = Backend(chrome.send)
         backends.append(backend)
         del backends[:-1]
 
@@ -343,7 +360,6 @@ def make_controller(home: Any, app_url: str, make_chrome: Callable[[], Any]) -> 
                 "chrome": chrome_version[0],
                 "playwright": dist_version("playwright"),
                 "python": platform.python_version(),
-                "update": updater.report(),
             }
 
         return Worker(
@@ -373,7 +389,7 @@ def _driver_paths() -> tuple[str, str]:
 
 
 def self_test() -> int:
-    """`python -m ai_workspace_helper --self-test` (§3.7.4 step 4): a new version
+    """`python -m ai_workspace_helper --self-test` (§3.7.5 step 1): a new version
     counts as installed only once this passes in its own venv."""
     from importlib.metadata import version as dist_version
     from pathlib import Path
@@ -439,6 +455,15 @@ def main() -> int:  # pragma: no cover — the window needs a display; verified 
         messagebox.showinfo("AI Workspace Helper", "小幫手已經在執行了。")
         return 0
 
+    from . import setup_core
+
+    try:
+        # started by a 0.1.0 launcher as the version it downloaded (D15 → D21)
+        if setup_core.take_over(home, __version__):
+            logging.getLogger(__name__).info("took over from the automatic update: %s", __version__)
+    except OSError:
+        logging.getLogger(__name__).warning("could not take over", exc_info=True)
+
     settings = read_settings(home)
     app_url = settings.get("app_url")
     if not isinstance(app_url, str) or not app_url:
@@ -454,8 +479,6 @@ def main() -> int:  # pragma: no cover — the window needs a display; verified 
     import subprocess
     import tempfile
     from pathlib import Path
-
-    from . import setup_core
 
     # Developer knobs, unset on the person's PC: a Linux box has Chromium, not
     # Chrome; a recording places the window.
@@ -492,8 +515,11 @@ def main() -> int:  # pragma: no cover — the window needs a display; verified 
         fill="x", pady=(0, 6)
     )
     ttk.Label(status_tab, text=app_url, foreground="#666").pack(fill="x")
-    ttk.Label(status_tab, textvariable=update_var, wraplength=580, justify="left").pack(
-        fill="x", pady=(6, 0)
+    # the notice and its one action together, as a notification banner has
+    # them (GOV.UK; plan §3.7.4) — shown only while there is something to say
+    update_row = ttk.Frame(status_tab)
+    ttk.Label(update_row, textvariable=update_var, wraplength=460, justify="left").pack(
+        side="left", fill="x", expand=True
     )
     buttons = ttk.Frame(status_tab)
     buttons.pack(fill="x", pady=(12, 8))
@@ -504,18 +530,22 @@ def main() -> int:  # pragma: no cover — the window needs a display; verified 
         ctl.send("pause" if paused else "resume")
         pause_text.set("繼續" if paused else "暫停")
 
-    def end(command: str = "quit") -> None:
+    def end() -> None:
         # The lock is NOT released here: it goes with this process, which may
-        # still hold Chrome's profile for a moment — the launcher (restart) and
-        # the clean-up (uninstall) wait for it, so neither races that.
-        ctl.send(command)
+        # still hold Chrome's profile for a moment — install.pyw (a new
+        # version, D21) and the clean-up (uninstall) wait for it, so neither
+        # races that.
+        ctl.send("quit")
         thread.join(timeout=10)
         window.destroy()
 
-    def restart() -> None:
-        # §3.7.6: end, and let the fixed launcher start the version now ready
-        end("restart")
-        subprocess.Popen([base_python, str(home / "launch.pyw"), "--wait"], cwd=str(home))
+    def open_download_page() -> None:
+        # D21: the person's own browser — it verifies the certificate, and a
+        # file it downloads stays (one downloaded in the helper's Chrome goes
+        # when that context closes)
+        import webbrowser
+
+        webbrowser.open(download_page(app_url))
 
     def remove() -> None:
         if not messagebox.askyesno(
@@ -554,7 +584,9 @@ def main() -> int:  # pragma: no cover — the window needs a display; verified 
 
     ttk.Button(buttons, text="登入", command=lambda: ctl.send("login")).pack(side="left")
     ttk.Button(buttons, textvariable=pause_text, command=toggle_pause).pack(side="left", padx=6)
-    restart_button = ttk.Button(buttons, text="立即更新", command=restart)
+    ttk.Button(update_row, text="開啟下載頁", command=open_download_page).pack(
+        side="right", padx=(6, 0)
+    )
     ttk.Button(buttons, text="結束", command=end).pack(side="right")
     options = ttk.Frame(status_tab)
     options.pack(fill="x")
@@ -607,12 +639,13 @@ def main() -> int:  # pragma: no cover — the window needs a display; verified 
     def refresh() -> None:
         status, detail, kind, site = ctl.snapshot()
         status_var.set(describe(status, detail, kind, site))
-        update = ctl.update_status()
-        update_var.set(describe_update(update, forced=status == "update_required"))
-        if update == "ready":
-            restart_button.pack(side="left")
+        update_line = describe_update(ctl.update_status())
+        update_var.set(update_line)
+        if update_line:
+            # the whole row comes and goes: an emptied frame keeps its height
+            update_row.pack(fill="x", pady=(6, 0), before=buttons)
         else:
-            restart_button.pack_forget()
+            update_row.pack_forget()
         window.title(
             f"{describe(status, detail, kind, site)} — AI Workspace Helper"
             if status == "connected" and detail
@@ -638,9 +671,11 @@ def main() -> int:  # pragma: no cover — the window needs a display; verified 
                 else:
                     log_text.yview_moveto(top)
                 log_text.configure(state="disabled")
-        show = home / setup_core.SHOW_REQUEST
-        if show.exists():  # launched again: come forward instead (§3.7.5)
-            show.unlink(missing_ok=True)
+        asked = take_request(home)
+        if asked == "quit":  # a new version was installed: make way (D21)
+            end()
+            return
+        if asked == "show":  # launched again: come forward instead (§3.7.5)
             window.deiconify()
             window.lift()
             window.focus_force()

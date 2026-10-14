@@ -56,7 +56,7 @@ def test_a_version_is_installed_into_a_folder_of_its_own(tmp_path):
     assert where == home / "versions" / "0.3.0"
     python = str(setup_core.venv_python(where / "venv"))
     # built by the Python the person confirmed; packages only from the zip;
-    # tried before it counts as installed (§3.7.4 steps 3–4)
+    # tried before it counts as installed (§3.7.5 step 1)
     assert run.commands == [
         ["/py/python", "-m", "venv", str(home / "versions" / "0.3.0.partial" / "venv")],
         [
@@ -141,9 +141,6 @@ def test_install_lays_out_the_folder_and_puts_the_shortcut_on_the_desktop(tmp_pa
         "base_python": "/py/pythonw",
         "current": "0.3.0",
         "previous": None,
-        "pending": None,
-        "pending_attempts": 0,
-        "bad": [],
     }
     assert (home / "launch.pyw").read_text() == "# launch.pyw"
     assert (home / "setup_core.py").read_text() == "# setup_core.py"
@@ -153,11 +150,11 @@ def test_install_lays_out_the_folder_and_puts_the_shortcut_on_the_desktop(tmp_pa
 
 
 # D16: running install.pyw again (a new Python, a broken install) keeps what
-# the person and the helper recorded — the Startup shortcut is still there, so
-# the window must still show 「開機時自動啟動」 ticked (review round 1).
+# the person recorded — the Startup shortcut is still there, so the window must
+# still show 「開機時自動啟動」 ticked (review round 1).
 def test_installing_again_keeps_what_was_recorded(tmp_path):
     home = tmp_path / "home"
-    write_state(home, {"current": "0.2.0", "start_at_login": True, "update": "已更新到 0.2.0"})
+    write_state(home, {"current": "0.2.0", "start_at_login": True})
     wheelhouse = _wheelhouse(tmp_path)
     for name in ("launch.pyw", "setup_core.py"):
         (wheelhouse.parent / name).write_text(name)
@@ -167,7 +164,59 @@ def test_installing_again_keeps_what_was_recorded(tmp_path):
     state = read_state(home)
     assert (state["current"], state["previous"]) == ("0.3.0", "0.2.0")
     assert state["start_at_login"] is True
-    assert state["update"] == "已更新到 0.2.0"
+
+
+# D21 (§3.7.5 step 2): every new version is installed this way. The version it
+# replaces becomes `previous` — it may still be running, so its folder stays —
+# every other version folder goes, and what only the automatic update wrote
+# (D15) is dropped.
+def test_installing_a_new_version_keeps_the_running_one_and_drops_the_rest(tmp_path):
+    home = tmp_path / "home"
+    for v in ("0.1.0", "0.2.0"):
+        (home / "versions" / v / "venv").mkdir(parents=True)
+    write_state(
+        home,
+        {
+            "base_python": "/py/pythonw",
+            "current": "0.2.0",
+            "previous": "0.1.0",
+            "pending": "0.2.1",
+            "pending_attempts": 2,
+            "bad": ["0.2.1"],
+            "failures": {"0.2.2": 1},
+            "update": "已更新到 0.2.0",
+            "start_at_login": True,
+        },
+    )
+    wheelhouse = _wheelhouse(tmp_path)
+    for name in ("launch.pyw", "setup_core.py"):
+        (wheelhouse.parent / name).write_text(name)
+
+    install(wheelhouse.parent, home, base_python="/py/pythonw", run=_Run())
+
+    assert read_state(home) == {
+        "base_python": "/py/pythonw",
+        "current": "0.3.0",
+        "previous": "0.2.0",
+        "start_at_login": True,
+    }
+    assert sorted(f.name for f in (home / "versions").iterdir()) == ["0.2.0", "0.3.0"]
+
+
+# The same version again (a repair): what was previous stays previous.
+def test_reinstalling_the_same_version_keeps_the_previous_one(tmp_path):
+    home = tmp_path / "home"
+    for v in ("0.2.0", "0.3.0"):
+        (home / "versions" / v / "venv").mkdir(parents=True)
+    write_state(home, {"current": "0.3.0", "previous": "0.2.0"})
+    wheelhouse = _wheelhouse(tmp_path)
+    for name in ("launch.pyw", "setup_core.py"):
+        (wheelhouse.parent / name).write_text(name)
+
+    install(wheelhouse.parent, home, base_python="/py/pythonw", run=_Run())
+
+    assert read_state(home)["previous"] == "0.2.0"
+    assert sorted(f.name for f in (home / "versions").iterdir()) == ["0.2.0", "0.3.0"]
 
 
 def test_a_zip_with_no_helper_in_it_says_so(tmp_path):
@@ -350,3 +399,218 @@ def test_the_summary_says_what_to_do_next():
     one_bad = [Check("A", True, "可以"), Check("B", False, "被擋")]
     summary = precheck_summary(one_bad)
     assert "1 項沒有通過" in summary and "✘ B：被擋" in summary and "✔ A：可以" in summary
+
+
+# The zip carries launch.pyw too (install copies it into the helper's folder).
+# Double-clicked there, in the unzipped folder, it said "not installed" though
+# the helper was installed: it took its own folder for the helper's (D20).
+def test_the_launcher_in_the_unzipped_folder_finds_the_installed_helper(tmp_path, monkeypatch):
+    from ai_workspace_helper.setup_core import launcher_home
+
+    home, unzipped = tmp_path / "home", tmp_path / "unzipped"
+    unzipped.mkdir()
+    write_state(home, {"current": "0.3.0"})
+    monkeypatch.setenv("AI_WORKSPACE_HELPER_HOME", str(home))
+
+    assert launcher_home(unzipped) == home
+    assert launcher_home(home) == home  # the installed launcher: its own folder
+
+
+# ...and leaves no trace where the helper would live: after 解除安裝, the
+# helper's folder must stay gone (D17), so the lock stays in the unzipped one.
+def test_a_launcher_with_nothing_installed_anywhere_still_says_so(tmp_path, monkeypatch):
+    from ai_workspace_helper.setup_core import launch, launcher_home
+
+    home, unzipped = tmp_path / "home", tmp_path / "unzipped"
+    unzipped.mkdir()
+    monkeypatch.setenv("AI_WORKSPACE_HELPER_HOME", str(home))
+
+    with pytest.raises(SetupFailed, match="not installed"):
+        launch(launcher_home(unzipped))
+    assert not home.exists()
+
+
+def test_double_clicking_launch_pyw_in_the_unzipped_folder_starts_the_installed_helper(tmp_path):
+    """The real launch.pyw, run where the person double-clicked it — the
+    unzipped download — starts the version installed in the helper's folder."""
+    import os
+    import shutil
+    import subprocess
+    import sys
+    import time
+
+    helper = Path(setup_core.__file__).resolve().parents[2]
+    home, unzipped = tmp_path / "home", tmp_path / "unzipped"
+    unzipped.mkdir()
+    shutil.copy(helper / "launch.pyw", unzipped / "launch.pyw")
+    shutil.copy(Path(setup_core.__file__), unzipped / "setup_core.py")
+    write_state(home, {"current": "0.3.0"})
+    started = home / "started"
+    python = Path(setup_core.version_command(home, "0.3.0")[0])
+    python.parent.mkdir(parents=True)
+    python.write_text(f"#!/bin/sh\ntouch '{started}'\n")
+    python.chmod(0o755)
+    env = {k: v for k, v in os.environ.items() if k != "DISPLAY"}  # no dialog to show
+
+    done = subprocess.run(
+        [sys.executable, str(unzipped / "launch.pyw")],
+        env={**env, "AI_WORKSPACE_HELPER_HOME": str(home)},
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    for _ in range(50):
+        if started.exists():
+            break
+        time.sleep(0.1)
+
+    assert done.returncode == 0, done.stderr
+    assert started.exists()
+
+
+def _zip_beside(tmp_path: Path, version: str = "0.3.0") -> Path:
+    wheelhouse = _wheelhouse(tmp_path, version)
+    for name in ("launch.pyw", "setup_core.py"):
+        (wheelhouse.parent / name).write_text(name)
+    return wheelhouse.parent
+
+
+def _running(home: Path):
+    lock = setup_core.InstanceLock(home / "helper.lock")
+    assert lock.acquire()
+    return lock
+
+
+# Review of D21: with a helper running, install.pyw never touches a version
+# folder that is already there — it may be the running one (the lock says a
+# helper runs, not which version). Rebuilding the same version is refused
+# until that helper ends (on Windows the rebuild died half-way on a loaded
+# .pyd and left `current` pointing at a gutted venv) ...
+def test_with_a_helper_running_the_same_version_is_not_rebuilt_under_it(tmp_path):
+    home = tmp_path / "home"
+    venv = home / "versions" / "0.3.0" / "venv"
+    venv.mkdir(parents=True)
+    (venv / "in-use").write_text("")
+    write_state(home, {"current": "0.3.0"})
+    running = _running(home)
+    try:
+        with pytest.raises(SetupFailed, match="結束"):
+            install(_zip_beside(tmp_path), home, base_python="/py/pythonw", run=_Run())
+    finally:
+        running.release()
+
+    assert (venv / "in-use").exists()
+
+
+# ... and a new version goes in beside them, nothing removed: the running one
+# may be neither current nor previous (the person said 「否」 and installed
+# again). The next install with no helper running tidies up.
+def test_with_a_helper_running_a_new_version_removes_no_folder(tmp_path):
+    home = tmp_path / "home"
+    for v in ("0.1.0", "0.2.0"):
+        (home / "versions" / v / "venv").mkdir(parents=True)
+    write_state(home, {"current": "0.2.0", "previous": "0.1.0"})
+    running = _running(home)
+    try:
+        install(_zip_beside(tmp_path), home, base_python="/py/pythonw", run=_Run())
+    finally:
+        running.release()
+
+    assert sorted(f.name for f in (home / "versions").iterdir()) == ["0.1.0", "0.2.0", "0.3.0"]
+    assert read_state(home)["current"] == "0.3.0"
+
+
+# P13: a new version whose self-test fails never becomes current.
+def test_a_new_version_that_fails_its_self_test_leaves_the_current_one(tmp_path):
+    home = tmp_path / "home"
+    (home / "versions" / "0.2.0" / "venv").mkdir(parents=True)
+    write_state(home, {"current": "0.2.0", "previous": None})
+
+    with pytest.raises(SetupFailed):
+        install(_zip_beside(tmp_path), home, base_python="/py/pythonw", run=_Run("--self-test"))
+
+    assert read_state(home) == {"current": "0.2.0", "previous": None}
+    assert sorted(f.name for f in (home / "versions").iterdir()) == ["0.2.0"]
+
+
+# A 0.1.0 still running has its own 「立即更新」: it ends, and starts the
+# installed launch.pyw with --wait while its process is still letting go of
+# the lock. That launcher is the D21 one once install.pyw ran: it must still
+# wait, or it brings the dying window forward and nothing starts (review of
+# D21).
+def test_the_launcher_still_waits_when_a_0_1_0_restarts_through_it(tmp_path):
+    import os
+    import shutil
+    import subprocess
+    import sys
+    import time
+
+    helper = Path(setup_core.__file__).resolve().parents[2]
+    home = tmp_path / "home"
+    write_state(home, {"current": "0.3.0"})
+    shutil.copy(helper / "launch.pyw", home / "launch.pyw")
+    shutil.copy(Path(setup_core.__file__), home / "setup_core.py")
+    started = home / "started"
+    python = Path(setup_core.version_command(home, "0.3.0")[0])
+    python.parent.mkdir(parents=True)
+    python.write_text(f"#!/bin/sh\ntouch '{started}'\n")
+    python.chmod(0o755)
+    old = setup_core.InstanceLock(home / "helper.lock")
+    assert old.acquire()  # the 0.1.0 still ending
+    env = {k: v for k, v in os.environ.items() if k != "DISPLAY"}
+
+    launcher = subprocess.Popen(
+        [sys.executable, str(home / "launch.pyw"), "--wait"],
+        env={**env, "AI_WORKSPACE_HELPER_HOME": str(home)},
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    # the old helper ends only once a launcher that does not wait would have
+    # given up (show.request) — or after a while: never on a timer a slow
+    # start could outrun
+    for _ in range(100):
+        if (home / setup_core.SHOW_REQUEST).exists():
+            break
+        time.sleep(0.1)
+    old.release()
+    _out, err = launcher.communicate(timeout=60)
+    for _ in range(50):
+        if started.exists():
+            break
+        time.sleep(0.1)
+
+    assert launcher.returncode == 0, err
+    assert started.exists()
+    assert not (home / setup_core.SHOW_REQUEST).exists()
+
+
+# Rebuilding takes about a minute (venv, pip, self-test): a helper started in
+# the meantime (the desktop shortcut, the Startup one) runs `current` — the
+# very version being rebuilt. The folder is asked about again right before it
+# is replaced, so the running one is never removed (review round 2 of D21).
+def test_a_helper_started_during_the_rebuild_keeps_its_version(tmp_path):
+    home = tmp_path / "home"
+    venv = home / "versions" / "0.3.0" / "venv"
+    venv.mkdir(parents=True)
+    (venv / "in-use").write_text("")
+    write_state(home, {"current": "0.3.0"})
+    started: list[setup_core.InstanceLock] = []
+
+    class _StartsAHelper(_Run):
+        def __call__(self, argv: list[str]) -> None:
+            super().__call__(argv)
+            if argv[1:3] == ["-m", "venv"] and not started:
+                lock = setup_core.InstanceLock(home / "helper.lock")
+                assert lock.acquire()
+                started.append(lock)
+
+    try:
+        with pytest.raises(SetupFailed, match="結束"):
+            install(_zip_beside(tmp_path), home, base_python="/py/pythonw", run=_StartsAHelper())
+    finally:
+        for lock in started:
+            lock.release()
+
+    assert (venv / "in-use").exists()
+    assert not (home / "versions" / "0.3.0.partial").exists()

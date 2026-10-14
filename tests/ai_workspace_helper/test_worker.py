@@ -33,11 +33,7 @@ def _backend(client) -> Backend:
             data = None
         return r.status_code, data
 
-    def fetch_bytes(path: str, headers: dict[str, str]):
-        r = raw.get(path, headers=headers)
-        return r.status_code, r.content
-
-    return Backend(send, fetch_bytes=fetch_bytes)
+    return Backend(send)
 
 
 @dataclass
@@ -229,18 +225,17 @@ def test_a_version_no_longer_accepted_says_an_update_is_needed(tmp_path):
     assert worker.manifest == {**manifest, "size": len(b"zip of 0.9.0")}
 
 
-# §3.7.4: the helper reads the published release and fetches its zip through
-# the same signed-in line it takes jobs through.
-def test_the_helper_reads_and_fetches_the_published_release(tmp_path):
+# §3.7.4 (D21): the helper reads the published release through the same
+# signed-in line it takes jobs through — to say it is out, nothing more.
+def test_the_helper_reads_the_published_release(tmp_path):
     from tests.api.test_ai_workspace_helper_release import _publish
 
-    manifest, zip_bytes = _publish(tmp_path, "0.9.0")
+    _publish(tmp_path, "0.9.0")
     client, _spec, _iid = _asked(ai_workspace_helper_dir=str(tmp_path))
-    backend = _backend(client)
 
-    release = backend.manifest()
+    release = _backend(client).manifest()
+
     assert release is not None and release["version"] == "0.9.0"
-    assert backend.download(manifest["file"]) == zip_bytes
 
 
 def test_with_nothing_published_there_is_no_release():
@@ -391,3 +386,46 @@ def test_a_job_cut_short_by_the_login_leaves_no_row():
 
     assert worker.status == "needs_login"
     assert history.recent() == []
+
+
+# Why it cannot check in goes to helper.log — once per change, not every poll:
+# the window's second line is gone when the person reads the log for IT, and
+# 「連不上」 with an empty 記錄檔 told nobody it was the certificate (D20).
+def test_why_it_cannot_check_in_is_logged_once_per_change(caplog):
+    import logging
+
+    reasons = iter(["unable to verify the first certificate"] * 3 + ["timed out"])
+
+    def down(method, path, body, headers):
+        raise OSError(next(reasons))
+
+    worker = Worker(Backend(down), _Browser([]), errands={})
+    with caplog.at_level(logging.INFO, logger="ai_workspace_helper.worker"):
+        for _ in range(4):
+            worker.tick()
+
+    lines = [r for r in caplog.records if "unreachable" in r.getMessage()]
+    assert [r.getMessage() for r in lines] == [
+        "unreachable: unable to verify the first certificate",
+        "unreachable: timed out",
+    ]
+    assert all(r.levelno == logging.WARNING for r in lines)
+
+
+# A pause ends the failure it interrupted: the same one after 繼續 is logged
+# again — the person may have paused to fix it, and the log shows it was not.
+def test_the_same_failure_after_a_pause_is_logged_again(caplog):
+    import logging
+
+    def down(method, path, body, headers):
+        raise OSError("unable to verify the first certificate")
+
+    worker = Worker(Backend(down), _Browser([]), errands={})
+    with caplog.at_level(logging.INFO, logger="ai_workspace_helper.worker"):
+        worker.tick()
+        worker.paused = True
+        worker.tick()
+        worker.paused = False
+        worker.tick()
+
+    assert sum("unreachable" in r.getMessage() for r in caplog.records) == 2

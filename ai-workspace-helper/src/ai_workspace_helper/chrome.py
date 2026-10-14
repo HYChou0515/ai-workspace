@@ -29,8 +29,6 @@ from .errands import Errand, ErrandContext, ErrandFailed, FetchedPage
 
 #: A backend request that takes longer than this is treated as unreachable.
 REQUEST_TIMEOUT_MS = 30_000
-#: The update zip is ~40 MB; on an office LAN that is seconds, not minutes.
-DOWNLOAD_TIMEOUT_MS = 300_000
 
 #: The card's paste converter, built from the frontend source into this
 #: package (web/vite.ai-workspace-helper.config.ts) — defines `__aiWorkspaceHelper`.
@@ -42,6 +40,13 @@ def _converter_source() -> str:
         return _CONVERTER.read_text(encoding="utf-8")
     except OSError as exc:
         raise ErrandFailed("the helper's page converter is missing — reinstall the helper") from exc
+
+
+def _reason(exc: BaseException) -> str:
+    """Why a backend request failed, without Playwright's "Call log:", which
+    lists every request header — the login cookie among them — and would go
+    on to the window and helper.log, the file IT is sent."""
+    return str(exc).split("\nCall log:", 1)[0].strip()
 
 
 class Chrome:
@@ -76,7 +81,13 @@ class Chrome:
     ) -> tuple[int, Any]:
         """One backend request with the profile's cookies; see `backend.Send`.
         Redirects are NOT followed — a redirect is the gateway sending an
-        expired login to sign in, and followed it would read as a success."""
+        expired login to sign in, and followed it would read as a success.
+
+        AI Workspace's certificate is not verified (D20): this request is sent
+        by Playwright's own Node, which neither trusts the company CA Windows
+        and Chrome do nor fetches a missing intermediate — so a deploy Chrome
+        reaches fine read 「連不上」 ("unable to verify the first certificate").
+        Only these requests: the pages an errand opens still verify."""
         from playwright.sync_api import Error as PlaywrightError
 
         try:
@@ -87,37 +98,20 @@ class Chrome:
                 data=json.dumps(body) if body is not None else None,
                 max_redirects=0,
                 fail_on_status_code=False,
+                ignore_https_errors=True,
                 timeout=REQUEST_TIMEOUT_MS,
             )
         except PlaywrightError as exc:
-            # refused, DNS, timeout, TLS: the backend is not reachable from here
-            raise OSError(str(exc)) from exc
+            # refused, DNS, timeout, TLS: the backend is not reachable from here.
+            # `from None`: the Playwright error, call log and cookie included,
+            # must not ride along into a logged traceback either
+            raise OSError(_reason(exc)) from None
         try:
             try:
                 data = r.json() if r.body() else None
             except (ValueError, PlaywrightError):
                 data = None
             return r.status, data
-        finally:
-            r.dispose()
-
-    def fetch_bytes(self, path: str, headers: dict[str, str]) -> tuple[int, bytes]:
-        """A GET whose answer is a file (the update zip, §3.7.4), with the
-        profile's login; see `backend.FetchBytes`. Redirects not followed."""
-        from playwright.sync_api import Error as PlaywrightError
-
-        try:
-            r = self._ctx.request.get(
-                f"{self.app_url}{path}",
-                headers=headers,
-                max_redirects=0,
-                fail_on_status_code=False,
-                timeout=DOWNLOAD_TIMEOUT_MS,
-            )
-        except PlaywrightError as exc:
-            raise OSError(str(exc)) from exc
-        try:
-            return r.status, r.body()
         finally:
             r.dispose()
 

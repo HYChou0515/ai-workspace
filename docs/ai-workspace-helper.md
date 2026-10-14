@@ -37,11 +37,15 @@ Markdown 交回卡片——使用者只要在搜尋時按一下「查」。設�
 5. 它會開一個**自己的** Chrome 視窗(和你平常的 Chrome 分開,登入資料也分開)。在那裡照平常方式登入 AI Workspace
    一次,小視窗變成「已連線，等待查詢」。之後登入過期時,它會自己把那個 Chrome 視窗叫到前面、開登入頁(開著的時候過期,小視窗寫「登入已過期」;重開時已經過期,寫「請在小幫手開的 Chrome 視窗登入」)。
 
+裝好之後,**下載的 zip 和解壓縮出來的資料夾都可以刪掉**:小幫手本身在 `%LOCALAPPDATA%\AIWorkspaceHelper\`(別刪它),
+桌面的「AI Workspace Helper」是指向它的捷徑。不要把 `launch.pyw` 單獨搬到別處——它要和旁邊的 `setup_core.py` 在一起;
+捷徑也寫死了安裝時確認的 Python,比直接雙擊 `.pyw` 可靠。要預檢或重裝時,再從「小幫手」頁下載一次。
+
 小視窗有三個分頁:
 
 - **狀態**:現在在做什麼——「已連線，等待查詢」「正在搜尋（Google）：…」「正在開啟：https://…」,和按鈕:
   「登入」(手動叫出登入頁)、「暫停/繼續」、「結束」、「開機時自動啟動」、「重設登入」(登入一直不成功時:
-  把它的 Chrome 設定檔移到旁邊、重新開一個再登入)、「解除安裝」;新版備好時多一顆「立即更新」。
+  把它的 Chrome 設定檔移到旁邊、重新開一個再登入)、「解除安裝」;有新版、或這一版被停用時,多一行說明和「開啟下載頁」。
 - **查詢紀錄**:最近 200 筆——時間、類型(搜尋/開啟網頁)、內容、結果(已送給 AI/沒查到：原因)。
   只存在這台電腦(`%LOCALAPPDATA%\AIWorkspaceHelper\history.jsonl`),不送回 AI Workspace;解除安裝時一起刪掉。
 - **記錄檔**:`helper.log` 的最後幾百行,和「開啟記錄資料夾」。
@@ -59,13 +63,17 @@ Markdown 交回卡片——使用者只要在搜尋時按一下「查」。設�
 
 ## 使用者:更新
 
-不用自己做。小幫手開啟時與之後每 6 小時檢查一次新版,有就下載(這幾秒不接新工作)、在背景裝在另一個資料夾、試跑——**不碰正在用的這一版**。
-好了小視窗寫「新版已下載，下次開啟時套用」,下次開啟就換上。
+小幫手**不會自己下載或安裝新版**(它和 AI Workspace 之間不驗憑證,見「IT 要放行的」;plan D21)。啟動後第一次連上 AI Workspace 時(以及被停用後恢復連線時)、
+之後每 6 小時它看一次有沒有新版,有的話小視窗多一行「有新版 X：請到「小幫手」頁下載，重新雙擊 install.pyw」和「**開啟下載頁**」按鈕——
+按下去用你的預設瀏覽器開「小幫手」頁。下載、解壓縮、雙擊 `install.pyw`:
 
-- 新版開不起來:連續 3 次開啟都沒跑起來(開不了 Chrome、連不到 AI Workspace、或後端拒絕它的請求),啟動檔自動退回舊版,
-  這個新版不再試(等下一版)。只是沒登入或暫停著不算,不會因此退回。
-- 管理員停用了你這一版:小視窗寫「這個版本已停用，需要更新」,同時馬上準備新版,好了按「**立即更新**」。
-  這段時間卡片照舊讓你自己查。更新失敗時,回「小幫手」頁重新下載、執行 `install.pyw`。
+- 新版裝在另一個資料夾、先試跑,**不碰正在用的這一版**;試跑失敗就留在舊版。
+- 小幫手正開著時,它會問「要換成新版重新開啟嗎？」——按「是」,舊的那個會自己結束、換成新版。
+  從 0.1.0 換上來時,舊版看不懂這個要求:等 20 秒後它會請你在舊視窗按「結束」,再開小幫手就是新版。
+- 小幫手正開著時重裝**已經裝過的版本**(例如同一版修復):它會請你先在小幫手的視窗按「結束」再裝。
+- 只留現在這版和上一版的資料夾(小幫手開著時先不清,下次沒開著時安裝再清)。
+
+管理員停用了你這一版:小視窗寫「這個版本已停用，需要更新」,一樣有「開啟下載頁」,不再接工作;這段時間卡片照舊讓你自己查。
 
 ## 使用者:解除安裝
 
@@ -81,7 +89,7 @@ Markdown 交回卡片——使用者只要在搜尋時按一下「查」。設�
 | 小視窗寫 | 是什麼 | 怎麼辦 |
 |---|---|---|
 | 請在小幫手開的 Chrome 視窗登入／登入已過期 | 還沒登入過,或部署的登入過期、被導到 SSO 頁 | 在它的 Chrome 視窗登入;登入前交給它的工作會等著,不會丟 |
-| 連不上 AI Workspace，會自動重試 | 網址錯、或公司網路不通 | 檢查第一次填的網址(存在 `%LOCALAPPDATA%\AIWorkspaceHelper\settings.json`) |
+| 連不上 AI Workspace，會自動重試 | 網址錯、或公司網路不通;原因寫在狀態的第二行(0.1.1 起也記在記錄檔) | 檢查第一次填的網址(存在 `%LOCALAPPDATA%\AIWorkspaceHelper\settings.json`)。第二行是 `unable to verify the first certificate` 之類的憑證錯誤:你的小幫手是 0.1.0,請從「小幫手」頁下載新版、重新雙擊 `install.pyw` |
 | 開不了 Chrome | 沒裝 Chrome、Chrome 剛更新超過小幫手支援的版本、Chrome 被政策擋下自動化、或上一個小幫手還沒關完 | 更新小幫手;按「重設登入」;見下面「IT 要放行的」;或等一下再開 |
 | 這個版本已停用 | 管理員調高了最低版本 | 見「更新」 |
 
@@ -108,11 +116,13 @@ python3 scripts/pack_ai_workspace_helper.py --version 0.1.0 [--min-version 0.1.0
 
 小幫手帶的是 Playwright 1.63.0(驅動已安裝的 Chrome,不另外下載瀏覽器)。這個 repo 的測試環境因為 Debian 11 的
 瀏覽器下載限制停在 1.49,所以**驅動瀏覽器的測試跑的是 1.49、發出去的是 1.63**——1.49 需要的 greenlet 沒有 Python 3.14
-的 Windows 版,無法涵蓋 3.14。1.63 這一版在 Linux 上驗過安裝、換版與試跑(`--self-test`:Playwright 載得起來、
+的 Windows 版,無法涵蓋 3.14。1.63 這一版在 Linux 上驗過安裝、在舊版上重裝新版與試跑(`--self-test`:Playwright 載得起來、
 它的 driver 在):`scripts/check_ai_workspace_helper.py --update-wheels <1.63 的 Linux wheel>`。Windows 上的實際驗證由人
 在公司筆電上做一次(plan D14)。
 
-小幫手每次報到會回報它的版本、Chrome、Playwright、Python 版本與上一次更新的結果,存在後端(`_AiWorkspaceHelperPresence`)。
+小幫手每次報到會回報它的版本、Chrome、Playwright、Python 版本,存在後端(`_AiWorkspaceHelperPresence`)。
+小幫手**不會自己更新**(plan D21):發布新版後,使用者的小視窗會在啟動後第一次連上 AI Workspace 時(以及被停用後恢復連線時)、或之後 6 小時內顯示「有新版」,由使用者自己下載重裝;
+要強迫升級就改 `min_version`,低於它的小幫手停止接工作、顯示「這個版本已停用」。
 
 ## IT 要放行的
 
@@ -131,4 +141,10 @@ python3 scripts/pack_ai_workspace_helper.py --version 0.1.0 [--min-version 0.1.0
 - **Chrome 政策**:小幫手透過 Chrome 的自動化介面驅動它;公司若用政策停用 Chrome 的遠端偵錯/自動化
   (`RemoteDebuggingAllowed` = 0,[Chrome 政策](https://chromeenterprise.google/policies/#RemoteDebuggingAllowed)),小幫手開不了 Chrome
   ([Playwright: browsers](https://playwright.dev/python/docs/browsers))。
-- **網路**:小幫手只連 AI Workspace(工作、更新都從那裡拿)與它替你開的網頁;更新檔不經瀏覽器下載,不會被標成「從網路下載」。
+- **憑證**:小幫手跟 AI Workspace 講話(報到、領工作、交結果、讀版本資訊)的請求不是 Chrome 送的,是 Playwright 自帶的 Node
+  送的;Node 不讀 Windows 的憑證庫([Node: --use-system-ca](https://nodejs.org/api/cli.html#--use-system-ca)),也不會去補伺服器沒送的中繼憑證,所以 Chrome 驗得過的
+  公司憑證它驗不過。小幫手對**這些請求**一律不驗憑證、沒有開關(依這個部署的慣例 verify=false,[Playwright: fetch 的
+  `ignore_https_errors`](https://playwright.dev/python/docs/api/class-apirequestcontext#api-request-context-fetch));它替你開的外面網頁仍由 Chrome 照常驗。**代價**:能在公司網路上攔截這條連線的人,看得到登入 cookie、可以假造工作與版本資訊。
+  **更新不走這條連線**(plan D21):小幫手只通知有新版,zip 由你的瀏覽器(會驗憑證)下載、你自己執行 `install.pyw`,
+  所以假造的版本資訊最多把你帶去下載頁、或讓小幫手停止接工作,不會讓它執行任何東西。
+- **網路**:小幫手只連 AI Workspace(工作與版本資訊從那裡拿)與它替你開的網頁;新版的 zip 由你的瀏覽器下載,和第一次安裝一樣。
