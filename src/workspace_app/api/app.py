@@ -2307,6 +2307,8 @@ def create_app(
         # (production: `resolve_subagent_models(settings)`), stamped onto every
         # turn ctx so `_agent_kwargs` can shape the tool's schema.
         subagent_models=subagent_models,
+        # plan-tool-usage-stats §8.3: the recorder an applied skill counts into.
+        tool_usage=tool_usage,
     )
 
     # #624: let the budget consult what the RUNNER has learned about each

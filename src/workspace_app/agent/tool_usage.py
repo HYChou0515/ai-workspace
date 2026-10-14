@@ -78,12 +78,14 @@ def _utc_day() -> str:
 
 @dataclass
 class ToolUsageRow:
-    """One tool's sums for one day — what a flush writes. Each breakdown maps
-    a key to `[calls, fails, total_ms]`."""
+    """One tool's — or one skill's (`kind`, plan §8) — sums for one day: what a
+    flush writes. Each breakdown maps a key to `[calls, fails, total_ms]`; a
+    skill's fails and time are always 0 (D11)."""
 
     day: str
     tool: str
     source: str
+    kind: str = "tool"
     calls: int = 0
     fails: int = 0
     total_ms: int = 0
@@ -111,7 +113,7 @@ class ToolUsageRecorder:
     ) -> None:
         self._day = day
         self.clock = clock
-        self._rows: dict[tuple[str, str, str], ToolUsageRow] = {}
+        self._rows: dict[tuple[str, str, str, str], ToolUsageRow] = {}
         self._lock = threading.Lock()
 
     def record(
@@ -125,12 +127,14 @@ class ToolUsageRecorder:
         surface: str,
         app: str,
         item: str,
+        kind: str = "tool",
     ) -> None:
         day = self._day()
+        key = (day, kind, tool, source)
         with self._lock:
-            row = self._rows.get((day, tool, source))
+            row = self._rows.get(key)
             if row is None:
-                row = self._rows[(day, tool, source)] = ToolUsageRow(day, tool, source)
+                row = self._rows[key] = ToolUsageRow(day, tool, source, kind)
             row.calls += 1
             row.fails += int(failed)
             row.total_ms += ms
@@ -148,9 +152,10 @@ class ToolUsageRecorder:
         """Put rows a flush could not write back, for the next flush."""
         with self._lock:
             for got in rows:
-                row = self._rows.get((got.day, got.tool, got.source))
+                key = (got.day, got.kind, got.tool, got.source)
+                row = self._rows.get(key)
                 if row is None:
-                    self._rows[(got.day, got.tool, got.source)] = got
+                    self._rows[key] = got
                     continue
                 add_row(row, got)
 
@@ -197,6 +202,27 @@ def _attribution(actx: AgentToolContext) -> tuple[str, str, str, str]:
         actx.app_slug or caller[1],
         caller[2] if inside else (actx.investigation_id or caller[2]),
         caller[3] if inside else actx.surface,
+    )
+
+
+def record_skill(actx: AgentToolContext, name: str, source: str) -> None:
+    """Count one load of skill `name` (plan §8, D9): against the turn's person,
+    App, item and surface, as a tool call is. Nothing when the turn has no
+    recorder."""
+    rec = actx.tool_usage
+    if rec is None:
+        return
+    user, app, item, surface = _attribution(actx)
+    rec.record(
+        name,
+        source,
+        kind="skill",
+        failed=False,
+        ms=0,
+        user=user,
+        surface=surface,
+        app=app,
+        item=item,
     )
 
 
