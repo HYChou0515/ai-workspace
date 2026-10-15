@@ -44,6 +44,24 @@ export type StartRun = (
   onEvent: (event: unknown) => void,
 ) => Promise<void>;
 
+/** Ask one of the item's sub-agents and wait for its answer (#942 `callAgent`). */
+export type CallAgent = (name: string, input: string) => Promise<{ output: string; failed: boolean }>;
+
+/** What a page reads about one of its jobs — `job.status()`. `output` is what
+ * the matching `call…` returns, once the job is done. */
+export type JobState = {
+  state: "running" | "done" | "failed" | "stopped";
+  output?: Record<string, unknown> | null;
+  error?: string | null;
+};
+
+/** Start a tool or a sub-agent as a job, read it, stop it (#942 `start…`). */
+export type PageJobs = {
+  start: (kind: "tool" | "agent", name: string, input: unknown) => Promise<{ job_id: string }>;
+  status: (jobId: string) => Promise<JobState>;
+  stop: (jobId: string) => Promise<JobState>;
+};
+
 export type BridgeContext = {
   fs: FileService;
   /** The page's own folder — the write boundary. */
@@ -96,6 +114,15 @@ export type BridgeContext = {
    * echo is the pane's business, not a rule about writing.
    */
   onWrote?: (path: string) => void;
+  /**
+   * The sub-agents this page's view file declares (`agents:` in the yaml) —
+   * disclosure in the same sense as `tools:` (#942 D2). Absent means none.
+   */
+  declaredAgents?: string[];
+  /** Ask a sub-agent, or `null`/absent where no backend is wired. */
+  callAgent?: CallAgent | null;
+  /** Start / read / stop jobs, or `null`/absent where no backend is wired. */
+  jobs?: PageJobs | null;
 };
 
 /**
@@ -164,6 +191,13 @@ const str = (args: Record<string, unknown> | undefined, key: string): string | n
   const v = args?.[key];
   return typeof v === "string" ? v : null;
 };
+
+/** Why this page may not ask `name`, or `null` when its view file declared it. */
+function undeclaredAgent(ctx: BridgeContext, name: string): string | null {
+  return (ctx.declaredAgents ?? []).includes(name)
+    ? null
+    : `This page did not declare ${name}. Add it to \`agents:\` in the page's view file.`;
+}
 
 export async function dispatchWuiRequest(
   req: WuiRequest,
@@ -302,6 +336,62 @@ export async function dispatchWuiRequest(
         return ok(id, await ctx.callTool(name, (toolArgs ?? {}) as Record<string, unknown>));
       } catch (err) {
         return refuse(id, err instanceof Error ? err.message : `${name} could not be run.`);
+      }
+    }
+
+    // #942: a sub-agent, asked the way a tool is called, and either capability
+    // started as a job. Each held to the same declaration its `call…` is.
+    case "callAgent": {
+      const name = str(args, "name");
+      if (name === null) return refuse(id, "callAgent needs a sub-agent `name`.");
+      const undeclared = undeclaredAgent(ctx, name);
+      if (undeclared) return refuse(id, undeclared);
+      if (!ctx.callAgent) return refuse(id, "Sub-agents cannot be asked from where this page is shown.");
+      try {
+        return ok(id, await ctx.callAgent(name, str(args, "input") ?? ""));
+      } catch (err) {
+        return refuse(id, err instanceof Error ? err.message : `${name} could not be asked.`);
+      }
+    }
+
+    case "startTool":
+    case "startAgent": {
+      const name = str(args, "name");
+      if (name === null) return refuse(id, `${verb} needs a \`name\`.`);
+      const tool = verb === "startTool";
+      const undeclared = tool
+        ? ctx.declaredTools.includes(name)
+          ? null
+          : `This page did not declare ${name}. Add it to \`tools:\` in the page's view file.`
+        : undeclaredAgent(ctx, name);
+      if (undeclared) return refuse(id, undeclared);
+      if (!ctx.jobs) return refuse(id, "Jobs cannot be started from where this page is shown.");
+      try {
+        return ok(
+          id,
+          await ctx.jobs.start(
+            tool ? "tool" : "agent",
+            name,
+            tool ? (args?.args ?? {}) : (str(args, "input") ?? ""),
+          ),
+        );
+      } catch (err) {
+        return refuse(id, err instanceof Error ? err.message : `${name} could not be started.`);
+      }
+    }
+
+    case "jobStatus":
+    case "stopJob": {
+      // Not gated on a declaration: the job object the runtime hands back is
+      // the only thing that sends these, and the server answers only for page
+      // jobs of THIS item.
+      const job = str(args, "job");
+      if (job === null) return refuse(id, `${verb} needs a \`job\`.`);
+      if (!ctx.jobs) return refuse(id, "Jobs cannot be read from where this page is shown.");
+      try {
+        return ok(id, verb === "jobStatus" ? await ctx.jobs.status(job) : await ctx.jobs.stop(job));
+      } catch (err) {
+        return refuse(id, err instanceof Error ? err.message : `Job ${job} could not be read.`);
       }
     }
 

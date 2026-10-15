@@ -504,6 +504,29 @@ def describe_wui_tools(names: Sequence[str]) -> str:
     )
 
 
+def describe_wui_agents(names: Sequence[str]) -> str:
+    """The sub-agents a WUI in this item may ask (#942), named.
+
+    The same list the item's chat delegates to — a definition can be a file the
+    model never listed, so it is named here rather than left to be guessed."""
+    if not names:
+        return (
+            "## Sub-agents this item offers its WUIs\n\n"
+            "None. This item has no sub-agent a page could ask — leave `agents:` "
+            "out of the view file."
+        )
+    return "\n".join(
+        [
+            "## Sub-agents this item offers its WUIs",
+            "",
+            "These, and only these, may go in a view file's `agents:` and be asked",
+            "with `workspace.callAgent(...)` or `workspace.startAgent(...)`:",
+            "",
+            *(f"- `{n}`" for n in names),
+        ]
+    )
+
+
 def augment_shared_skill_body(
     name: str,
     body: str,
@@ -511,6 +534,7 @@ def augment_shared_skill_body(
     profile: str | None,
     *,
     wui_tools: Sequence[str] | None = None,
+    wui_agents: Sequence[str] | None = None,
 ) -> str:
     """Append machine-derived, always-current detail to a shared skill whose static body is
     deliberately purpose-only (plan §3). ``author-workflow`` gets the DSL grammar (derived
@@ -523,7 +547,12 @@ def augment_shared_skill_body(
     grants none" and "nobody asked" are different claims and only one of them is
     ever safe to make up."""
     if name == "wui":
-        return body if wui_tools is None else "\n\n".join([body, describe_wui_tools(wui_tools)])
+        parts = [body]
+        if wui_tools is not None:
+            parts.append(describe_wui_tools(wui_tools))
+        if wui_agents is not None:
+            parts.append(describe_wui_agents(wui_agents))
+        return "\n\n".join(parts)
     if name != "author-workflow":
         return body
     from ..agent.tools import _profile_tool_ceiling

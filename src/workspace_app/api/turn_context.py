@@ -616,6 +616,16 @@ class TurnContextBuilder:
             return 0
         return estimate_tokens(payload)
 
+    async def subagents_for(self, item_id: str) -> tuple[SubagentDef, ...]:
+        """The sub-agents a page may ask in this item (#942 D2): computed with
+        the same function a turn uses (`_subagent_defs`), from the item's
+        resolved config — the one a workflow node runs with. A chat turn with
+        another preset attached may hold a different list."""
+        facts = self._locator.turn_facts(item_id)
+        external = await self._external_tools(item_id)
+        config = self._finalized(self._locator.resolve_agent_config(item_id), external)
+        return await self._subagent_defs(item_id, config, facts)
+
     async def _subagent_defs(
         self, item_id: str, agent_config: AgentConfig | None, facts: TurnFacts
     ) -> tuple[SubagentDef, ...]:

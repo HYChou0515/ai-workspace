@@ -54,6 +54,27 @@ export interface WuiToolResult {
   exit_code: number;
 }
 
+/** What a sub-agent answered (`callAgent`, and a `startAgent` job's result). */
+export interface WuiAgentResult {
+  output: string;
+  failed: boolean;
+}
+
+/**
+ * A started job (`startTool` / `startAgent`). Nothing calls you back: ask it.
+ * - `result()` waits for the answer — the same object the matching `call…`
+ *   returns — and REJECTS if the job failed or was stopped.
+ * - `status()` asks once how it is going; poll it yourself to draw progress.
+ * - `stop()` stops it. A job is also listed in the item's runs, and can be
+ *   stopped there.
+ */
+export interface WuiJob<T> {
+  id: string;
+  result(): Promise<T>;
+  status(): Promise<{ state: "running" | "done" | "failed" | "stopped"; output?: T; error?: string }>;
+  stop(): Promise<{ state: "running" | "done" | "failed" | "stopped" }>;
+}
+
 export interface Workspace {
   /** Everything under `prefix`, or the whole item when it is omitted. */
   listFiles(prefix?: string): Promise<{ files: WuiFile[] }>;
@@ -93,6 +114,22 @@ export interface Workspace {
   /** The page's only reach outside the item. Declare the tool in `tools:` first.
    *  `args` is optional — a tool that takes none is called with just a name. */
   callTool(name: string, args?: Record<string, unknown>): Promise<WuiToolResult>;
+  /**
+   * The same tool, STARTED instead of awaited — for a tool that may run longer
+   * than the minute `callTool` waits. Answers at once with a job; its
+   * `result()` is exactly what `callTool` would have returned.
+   */
+  startTool(name: string, args?: Record<string, unknown>): Promise<WuiJob<WuiToolResult>>;
+  /**
+   * Ask one of the item's sub-agents (its `.agent/<name>/AGENT.md`) and wait for
+   * its answer — text in, text out. Declare it in `agents:` first. Waits at most
+   * a minute: past that the work is stopped and this rejects, saying to use
+   * `startAgent`. `failed: true` means the sub-agent itself failed or wrote
+   * nothing; `output` then says why, in a sentence you can show.
+   */
+  callAgent(name: string, input: string): Promise<WuiAgentResult>;
+  /** The same sub-agent, STARTED instead of awaited — for work that takes a while. */
+  startAgent(name: string, input: string): Promise<WuiJob<WuiAgentResult>>;
   /**
    * Start a run and watch it happen.
    *

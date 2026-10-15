@@ -200,6 +200,19 @@ describe("WorkflowProgress — terminal clarity is never buried (#331, #100)", (
     expect(screen.queryByTestId("wf-noop")).toBeNull();
   });
 
+  it("does not call a finished page job a run that did nothing", () => {
+    // #942: a page job is one turn or one command, not a workflow — it has no
+    // phases to count, so "finished without running any steps" would be false
+    // about every one of them.
+    renderProgress({
+      status: "done",
+      ended: 2,
+      page_job: { kind: "agent", name: "digger", input: "why?", deadline: 9 },
+      result: { output: "found it", failed: false },
+    });
+    expect(screen.queryByTestId("wf-noop")).toBeNull();
+  });
+
   it("lists failures on an errored run", () => {
     renderProgress({
       status: "error",

@@ -134,6 +134,10 @@ describe("the WUI runtime", () => {
     const { ws } = boot();
 
     expect(Object.keys(ws()).sort()).toEqual([
+      // #942: a sub-agent is the platform's own agent turn in THIS item, not an
+      // outside system — it cannot be a `callTool` target, which is a package
+      // command. Asked the way a tool is called, so it reads as one.
+      "callAgent",
       "callTool",
       "deleteFile",
       "listFiles",
@@ -145,7 +149,12 @@ describe("the WUI runtime", () => {
       // outside the frame, and the page only asks for it to be shown.
       "openLogin",
       "readFile",
+      // #942: the same capabilities, started rather than awaited. They cannot
+      // be `callTool`/`callAgent` for `startRun`'s reason — a call answers
+      // once, inside a minute — and the name says which one a page is using.
+      "startAgent",
       "startRun",
+      "startTool",
       "whoami",
       "writeFile",
     ]);
@@ -721,5 +730,91 @@ describe("the WUI runtime in a single-page document (the fallback)", () => {
     fire("click", click(link("https://example.com/")));
 
     expect(sent).toContainEqual({ proto: "wui/1", open: "https://example.com/" });
+  });
+});
+
+describe("the WUI runtime's jobs (#942)", () => {
+  /** Answer the latest request the page sent, as the parent would. */
+  function answerLast(t: ReturnType<typeof boot>, value: unknown) {
+    const last = t.sent[t.sent.length - 1];
+    t.fire("message", { data: { proto: "wui/1", id: last.id, ok: true, value } });
+  }
+
+  it("asks a sub-agent with one call, and resolves on its answer", async () => {
+    const t = boot();
+    const answer = t.ws().callAgent("digger", "why?");
+    expect(t.sent[0]).toMatchObject({ verb: "callAgent", args: { name: "digger", input: "why?" } });
+    answerLast(t, { output: "found it", failed: false });
+    await expect(answer).resolves.toEqual({ output: "found it", failed: false });
+  });
+
+  it("starts a tool and hands back a job, not a result", async () => {
+    const t = boot();
+    const started = t.ws().startTool("lot-status", { lot: "A1" });
+    expect(t.sent[0]).toMatchObject({
+      verb: "startTool",
+      args: { name: "lot-status", args: { lot: "A1" } },
+    });
+    answerLast(t, { job_id: "j1" });
+    const job = (await started) as Record<string, unknown>;
+    expect(job.id).toBe("j1");
+    expect(Object.keys(job).sort()).toEqual(["id", "result", "status", "stop"]);
+  });
+
+  it("a job's result waits through running and resolves with what the call would return", async () => {
+    vi.useFakeTimers();
+    try {
+      const t = boot();
+      const started = t.ws().startAgent("digger", "go");
+      expect(t.sent[0]).toMatchObject({ verb: "startAgent", args: { name: "digger", input: "go" } });
+      answerLast(t, { job_id: "j1" });
+      const job = (await started) as { result: () => Promise<unknown> };
+      let settled = false;
+      const result = job.result().then((v) => {
+        settled = true;
+        return v;
+      });
+      await Promise.resolve();
+      expect(t.sent[1]).toMatchObject({ verb: "jobStatus", args: { job: "j1" } });
+      answerLast(t, { state: "running" });
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(settled).toBe(false);
+      expect(t.sent[2]).toMatchObject({ verb: "jobStatus", args: { job: "j1" } });
+      answerLast(t, { state: "done", output: { output: "found it", failed: false } });
+      await expect(result).resolves.toEqual({ output: "found it", failed: false });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a job that failed or was stopped rejects its result with a sentence", async () => {
+    const t = boot();
+    const started = t.ws().startTool("lot-status", {});
+    answerLast(t, { job_id: "j1" });
+    const job = (await started) as { result: () => Promise<unknown> };
+
+    const failed = job.result();
+    await Promise.resolve();
+    answerLast(t, { state: "failed", error: "This job ran past its 3600s limit and was stopped." });
+    await expect(failed).rejects.toThrow(/3600s/);
+
+    const stopped = job.result();
+    await Promise.resolve();
+    answerLast(t, { state: "stopped" });
+    await expect(stopped).rejects.toThrow(/stopped/);
+  });
+
+  it("status and stop are one request each", async () => {
+    const t = boot();
+    const started = t.ws().startTool("lot-status", {});
+    answerLast(t, { job_id: "j1" });
+    const job = (await started) as { status: () => Promise<unknown>; stop: () => Promise<unknown> };
+    const s = job.status();
+    answerLast(t, { state: "running" });
+    await expect(s).resolves.toEqual({ state: "running" });
+    const stop = job.stop();
+    expect(t.sent[t.sent.length - 1]).toMatchObject({ verb: "stopJob", args: { job: "j1" } });
+    answerLast(t, { state: "stopped" });
+    await expect(stop).resolves.toEqual({ state: "stopped" });
   });
 });
