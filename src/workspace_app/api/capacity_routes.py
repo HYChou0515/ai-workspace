@@ -108,6 +108,8 @@ class LineOut(BaseModel):
     #: cores | bytes | inflight
     unit: str
     model: str
+    #: a worker line's job type ("other": pods that ran none); empty otherwise
+    job: str
     #: regression | direct | fixed
     method: str
     capacity: float | None
@@ -177,6 +179,8 @@ class PairOut(BaseModel):
     throttled: list[list[float]] | None
     #: why there is nothing to show, when that is not "it never slowed" (no_psi)
     note: str | None
+    #: (e) only: the job type whose queue it is ("" when the workers are one line)
+    job: str
     x_max: float | None
     span: float
     knee: KneeOut | None

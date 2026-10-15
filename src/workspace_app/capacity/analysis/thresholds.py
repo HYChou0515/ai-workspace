@@ -14,7 +14,8 @@ threshold for the line whose load it is:
   CPU ÷ capacity — sandbox-host.cpu. The throttled share rides along as its
   own series; without PSI on the kernel there is nothing to fit, and the pair
   says so (`note: no_psi`) rather than "never slowed";
-- e: p95 queue wait of jobs, against worker CPU ÷ capacity — worker.cpu;
+- e: p95 queue wait of one job type's jobs, against the CPU ÷ capacity of
+  the workers that run it — that worker line (one pair per job type, §9.8);
 - gpu: p95 time to first token, against a model's requests in flight — that
   model's capacity.
 
@@ -58,6 +59,8 @@ class Pair:
     note: str | None = None
     #: a second slowness on the same load, shown beside the first, fitted never
     throttled: np.ndarray | None = None
+    #: (e) only: the job type whose queue it is ("" when the workers are one line)
+    job: str = ""
 
     @property
     def span(self) -> float:
@@ -184,27 +187,27 @@ def build_pairs(obs: Observations, lines: Mapping[str, Line]) -> list[Pair]:
         d.throttled = held
         d.note = None if obs.psi_seen else "no_psi"
         pairs.append(d)
-    worker = _util(lines.get("worker.cpu"))
-    if worker is not None and obs.jobs:
+    for line in lines.values():
+        if line.component != "worker" or line.resource != "cpu" or line.job == "other":
+            continue
+        worker = _util(line)
+        if worker is None or not obs.jobs:
+            continue
         events = []
         for job in obs.jobs:
+            if line.job and job.get("jobtype") != line.job:
+                continue
             started, enqueued = job.get("started_ms"), job.get("enqueued_ms")
             if started is None or enqueued is None:
                 continue
             slot = p.index(int(started))
             if slot is not None:
                 events.append((slot, (int(started) - int(enqueued)) / 1000))
-        pairs.append(
-            Pair(
-                "e",
-                "worker.util",
-                "queue_wait_p95_s",
-                worker,
-                _p95_by_slot(p.n, events),
-                None,
-                "worker.cpu",
-            )
+        e = Pair(
+            "e", "worker.util", "queue_wait_p95_s", worker, _p95_by_slot(p.n, events), None, line.id
         )
+        e.job = line.job
+        pairs.append(e)
     for pair in pairs:
         if pair.span >= MIN_SPAN or pair.x_label == "gpu.inflight":
             pair.knee = fit_knee(pair.x, pair.y)
@@ -222,6 +225,7 @@ def pair_json(pair: Pair) -> dict[str, Any]:
         "points": pair.points(),
         "throttled": None if pair.throttled is None else _points(pair.x, pair.throttled),
         "note": pair.note,
+        "job": pair.job,
         "x_max": float(pair.x[ok].max()) if ok.any() else None,
         "span": pair.span,
         "knee": None

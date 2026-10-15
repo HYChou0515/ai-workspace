@@ -28,7 +28,7 @@
    }
   },
   {
-   "id": "worker.cpu",
+   "id": "worker.index.cpu",
    "unit": "cores",
    "p50": 1.059999978542328,
    "p95": 2.019999957084656,
@@ -68,7 +68,7 @@
    }
   },
   {
-   "id": "worker.memory",
+   "id": "worker.index.memory",
    "unit": "bytes",
    "p50": 1288490188.80001,
    "p95": 1288490188.80001,

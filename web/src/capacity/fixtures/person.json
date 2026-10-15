@@ -69,7 +69,7 @@
    "rank": 0.9333333333333333
   },
   {
-   "id": "worker.cpu",
+   "id": "worker.index.cpu",
    "unit": "cores",
    "avg": 0.002182539633756119,
    "daily_avg": [
@@ -203,7 +203,7 @@
    "rank": 0.8666666666666667
   },
   {
-   "id": "worker.memory",
+   "id": "worker.index.memory",
    "unit": "bytes",
    "avg": 0.0,
    "daily_avg": [

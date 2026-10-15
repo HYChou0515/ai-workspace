@@ -190,3 +190,105 @@ def test_routes_too_rare_for_their_own_column_merge_by_method():
         "req:(other DELETE)",
         "req:(other PUT)",
     }
+
+
+def _two_worker_types(days: int = 3):  # noqa: ANN202
+    """Two worker Deployments — one indexes, one builds wikis — whose pods'
+    CPU is their idle cost plus what each job-second costs (the truth)."""
+    from workspace_app.capacity.sources import (
+        CapacityEntry,
+        ResourceMetricsSource,
+        ResourceSample,
+        aggregate_documents,
+    )
+    from workspace_app.capacity.usage_wire import document
+
+    w = World(days=days, users=4)
+    rng = np.random.default_rng(5)
+    cost = {"index": 0.6, "wiki": 0.3}
+    docs, samples = [], []
+    for s in range(w.slots):
+        at = w.start_ms + s * w.step_s * 1000
+        for job, pod in (("index", "w-index-1"), ("wiki", "w-wiki-1")):
+            busy = 0.0
+            for u in range(4):
+                seconds = float(rng.integers(0, 120))
+                if seconds:
+                    busy += seconds
+                    fields = {
+                        "user": f"user{u}",
+                        "app": "",
+                        "work": f"job:{job}",
+                        "count": 1,
+                        "seconds": seconds,
+                        "window_s": w.step_s,
+                    }
+                    docs.append(document("work", at, pod=pod, component="worker", fields=fields))
+                    waited = {"index": 1_000, "wiki": 60_000}[job]
+                    jobf = {
+                        "user": f"user{u}",
+                        "jobtype": job,
+                        "enqueued_ms": at - waited,
+                        "started_ms": at,
+                        "ended_ms": at + 1000,
+                        "outcome": "done",
+                        "attempt": 1,
+                    }
+                    docs.append(document("job", at, pod=pod, component="worker", fields=jobf))
+            samples.append(
+                ResourceSample(
+                    at, "worker", pod, cpu_cores=0.1 + cost[job] * busy / w.step_s, memory_bytes=1e9
+                )
+            )
+
+    class Records(WorldRecords):
+        def aggregate(self, q):  # noqa: ANN001, ANN201
+            return aggregate_documents(docs, q)
+
+        def records(self, kind, start_ms, end_ms):  # noqa: ANN001, ANN201
+            return [d["usage"] for d in docs if d["usage"]["kind"] == kind]
+
+    class Pods(ResourceMetricsSource):
+        def usage(self, start_ms, end_ms, step_s):  # noqa: ANN001, ANN201
+            return samples
+
+        def capacity(self):  # noqa: ANN201
+            return [CapacityEntry("worker", 8.0, 32e9, None, 2, "pod 4 cores / 16 GiB")]
+
+    obs = observe(
+        CapacitySources(Records(w), Pods()), Period(w.start_ms, w.end_ms, w.step_s, ZoneInfo(w.tz))
+    )
+    return obs, cost
+
+
+def test_each_job_type_is_a_worker_line_of_its_own():
+    """§9.1: worker CPU and memory per job type — each worker Deployment
+    scales on its own, and a slow graph queue is not an index queue's."""
+    obs, cost = _two_worker_types()
+
+    lines = {line.id: line for line in build_lines(obs)}
+
+    for job in ("index", "wiki"):
+        line = lines[f"worker.{job}.cpu"]
+        assert line.job == job
+        assert dict(line.fit.columns)[f"job:{job}"] == pytest.approx(cost[job], rel=0.05)
+        # the worker entry, split by the pods each type runs on
+        assert (line.capacity, line.machines) == (4.0, 1)
+    assert "worker.cpu" not in lines
+
+
+def test_each_job_type_has_its_own_queue_wait_pair():
+    from workspace_app.capacity.analysis.thresholds import build_pairs
+
+    obs, _ = _two_worker_types()
+    lines = {line.id: line for line in build_lines(obs)}
+
+    pairs = [p for p in build_pairs(obs, lines) if p.id == "e"]
+
+    assert sorted((p.job, p.sets) for p in pairs) == [
+        ("index", "worker.index.cpu"),
+        ("wiki", "worker.wiki.cpu"),
+    ]
+    # each queue is its own: index jobs wait a second, wiki jobs a minute
+    waits = {p.job: float(np.nanmax(p.y)) for p in pairs}
+    assert waits == {"index": pytest.approx(1.0), "wiki": pytest.approx(60.0)}

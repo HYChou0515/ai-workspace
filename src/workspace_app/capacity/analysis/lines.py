@@ -97,6 +97,12 @@ class Line:
     #: in-flight requests, ③ for its memory): a day it has nothing is no day.
     #: Empty when a missing sample is NaN, which marks itself.
     source: str = ""
+    #: A worker line's job type (§9.1: one line per job type); "other" for
+    #: pods that ran none in the period; empty for every other line.
+    job: str = ""
+    #: A worker line's pods running at the period's end — its share of the
+    #: `worker` capacity entry when no `worker:<job>` entry names it.
+    pods_now: int = 0
 
     @property
     def variable(self) -> np.ndarray:
@@ -358,6 +364,35 @@ def _pods_of(obs: Observations, component: str, measure: str) -> list[str]:
     ]
 
 
+def _worker_groups(obs: Observations, measure: str) -> dict[str, list[str]]:
+    """Worker pods by the job type they ran (§9.1: a pod's job type is read
+    off its `work` rows); a worker process consumes one. A pod that ran none
+    in the period is "other". A pod that ran several leaves no clean split,
+    and the workers stay one line (job "")."""
+    ran: dict[str, set[str]] = {}
+    for pod, comp, work in obs.work_pod:
+        if comp == "worker" and work.startswith("job:"):
+            ran.setdefault(pod, set()).add(work[4:])
+    pods = _pods_of(obs, "worker", measure)
+    if any(len(jobs) > 1 for jobs in ran.values()):
+        return {"": pods} if pods else {}
+    groups: dict[str, list[str]] = {}
+    for pod in pods:
+        jobs = ran.get(pod)
+        groups.setdefault(next(iter(jobs)) if jobs else "other", []).append(pod)
+    return groups
+
+
+def _pods_now(obs: Observations, component: str, pods: list[str], measure: str) -> int:
+    """How many of `pods` were running in the last slot any of them reported."""
+    series = [obs.pods[(component, pod)][measure] for pod in pods]
+    if not series:
+        return 0
+    seen = np.isfinite(np.vstack(series))
+    last = np.flatnonzero(seen.any(axis=0))
+    return int(seen[:, last[-1]].sum()) if len(last) else 0
+
+
 def _summed(obs: Observations, component: str, measure: str) -> np.ndarray:
     arrays = [m[measure] for (comp, _pod), m in obs.pods.items() if comp == component]
     if not arrays:
@@ -421,20 +456,24 @@ def build_lines(obs: Observations) -> list[Line]:
             ("cpu", "cpu", "cores", cpu_column),
             ("memory", "memory", "bytes", memory_column),
         ):
-            for component, work_components in (("api", ("api",)), ("worker", ("worker",))):
+            groups = [("", "api", _pods_of(obs, "api", measure))]
+            groups += [(job, "worker", pods) for job, pods in _worker_groups(obs, measure).items()]
+            for job, component, pods in groups:
                 line = _regression_line(
                     obs,
                     users,
-                    line_id=f"{component}.{resource}",
+                    line_id=f"{component}.{job}.{resource}" if job else f"{component}.{resource}",
                     component=component,
                     resource=resource,
                     unit=unit,
-                    pods=_pods_of(obs, component, measure),
+                    pods=pods,
                     column=column,
                     measure=measure,
-                    work_components=work_components,
+                    work_components=(component,),
                 )
                 if line is not None:
+                    line.job = job
+                    line.pods_now = _pods_now(obs, component, pods, measure)
                     lines.append(line)
         pg = _regression_line(
             obs,
@@ -539,17 +578,30 @@ def build_lines(obs: Observations) -> list[Line]:
 
 
 def _attach_capacity(obs: Observations, lines: list[Line]) -> None:
-    """② says what each component may use, and what one more machine is."""
-    for entry in obs.capacity:
-        for line in lines:
-            if line.component != entry.component:
+    """② says what each component may use, and what one more machine is. A
+    worker line of one job type takes the `worker:<job>` entry when ② names
+    one; otherwise its share of the `worker` entry — the pods it runs on, of
+    the entry's machines (each Deployment's pods taken as alike)."""
+    entries = {entry.component: entry for entry in obs.capacity}
+    for line in lines:
+        own = entries.get(f"{line.component}:{line.job}") if line.job else None
+        pooled = entries.get(line.component)
+        if own is not None:
+            entry, share, machines = own, 1.0, own.machines
+        elif pooled is None:
+            continue
+        elif line.job:
+            if not pooled.machines or not line.pods_now:
                 continue
-            value = {
-                "cpu": entry.cpu_cores,
-                "memory": entry.memory_bytes,
-                "disk": entry.disk_bytes,
-            }.get(line.resource)
-            if value is not None:
-                line.capacity = float(value)
-                line.machines = entry.machines
-                line.machine_label = entry.machine_label
+            entry, share, machines = pooled, line.pods_now / pooled.machines, line.pods_now
+        else:
+            entry, share, machines = pooled, 1.0, pooled.machines
+        value = {
+            "cpu": entry.cpu_cores,
+            "memory": entry.memory_bytes,
+            "disk": entry.disk_bytes,
+        }.get(line.resource)
+        if value is not None:
+            line.capacity = float(value) * share
+            line.machines = machines
+            line.machine_label = entry.machine_label

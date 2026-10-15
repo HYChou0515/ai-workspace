@@ -291,6 +291,7 @@ class Analysis:
             "resource": line.resource,
             "unit": line.unit,
             "model": line.model,
+            "job": line.job,
             "method": line.method,
             "capacity": capacity,
             "machines": line.machines,

@@ -274,6 +274,7 @@
    "resource": "cpu",
    "unit": "cores",
    "model": "",
+   "job": "",
    "method": "regression",
    "capacity": 1.2,
    "machines": 2,
@@ -531,11 +532,12 @@
    }
   },
   {
-   "id": "worker.cpu",
+   "id": "worker.index.cpu",
    "component": "worker",
    "resource": "cpu",
    "unit": "cores",
    "model": "",
+   "job": "index",
    "method": "regression",
    "capacity": 4.0,
    "machines": 1,
@@ -762,6 +764,7 @@
    "resource": "memory",
    "unit": "bytes",
    "model": "",
+   "job": "",
    "method": "regression",
    "capacity": 8589934592.0,
    "machines": 2,
@@ -988,11 +991,12 @@
    }
   },
   {
-   "id": "worker.memory",
+   "id": "worker.index.memory",
    "component": "worker",
    "resource": "memory",
    "unit": "bytes",
    "model": "",
+   "job": "index",
    "method": "regression",
    "capacity": 8589934592.0,
    "machines": 1,
@@ -1115,6 +1119,7 @@
    "resource": "cpu",
    "unit": "cores",
    "model": "",
+   "job": "",
    "method": "regression",
    "capacity": 4.0,
    "machines": 1,
@@ -1391,6 +1396,7 @@
    "resource": "memory",
    "unit": "bytes",
    "model": "",
+   "job": "",
    "method": "fixed",
    "capacity": 17179869184.0,
    "machines": 1,
@@ -1489,6 +1495,7 @@
    "resource": "disk",
    "unit": "bytes",
    "model": "",
+   "job": "",
    "method": "fixed",
    "capacity": 214748364800.0,
    "machines": 1,
@@ -1587,6 +1594,7 @@
    "resource": "cpu",
    "unit": "cores",
    "model": "",
+   "job": "",
    "method": "direct",
    "capacity": 8.0,
    "machines": 1,
@@ -1806,6 +1814,7 @@
    "resource": "memory",
    "unit": "bytes",
    "model": "",
+   "job": "",
    "method": "direct",
    "capacity": 34359738368.0,
    "machines": 1,
@@ -2025,6 +2034,7 @@
    "resource": "disk",
    "unit": "bytes",
    "model": "",
+   "job": "",
    "method": "direct",
    "capacity": 536870912000.0,
    "machines": 1,
@@ -2244,6 +2254,7 @@
    "resource": "gpu",
    "unit": "inflight",
    "model": "qwen3",
+   "job": "",
    "method": "direct",
    "capacity": 0.6999860543428099,
    "machines": 2,
@@ -2466,6 +2477,7 @@
    "resource": "memory",
    "unit": "bytes",
    "model": "qwen3",
+   "job": "",
    "method": "fixed",
    "capacity": 171798691840.0,
    "machines": null,
@@ -2565,9 +2577,9 @@
   "binding": "gpu.qwen3",
   "by_line": {
    "api.cpu": 18,
-   "worker.cpu": 48,
+   "worker.index.cpu": 48,
    "api.memory": 320,
-   "worker.memory": 320,
+   "worker.index.memory": 320,
    "postgres.cpu": 320,
    "sandbox-host.cpu": 1,
    "sandbox-host.memory": 60,
@@ -3475,6 +3487,7 @@
    ],
    "throttled": null,
    "note": null,
+   "job": "",
    "x_max": 0.5548795155733395,
    "span": 0.3857998376632563,
    "knee": null
@@ -4301,6 +4314,7 @@
    ],
    "throttled": null,
    "note": null,
+   "job": "",
    "x_max": 0.5548795155733395,
    "span": 0.34738254454322026,
    "knee": null
@@ -5175,6 +5189,7 @@
    ],
    "throttled": null,
    "note": null,
+   "job": "",
    "x_max": 1.426638512464499,
    "span": 1.426638512464499,
    "knee": {
@@ -6054,6 +6069,7 @@
    ],
    "throttled": null,
    "note": null,
+   "job": "",
    "x_max": 1.426638512464499,
    "span": 1.426638512464499,
    "knee": {
@@ -12934,6 +12950,7 @@
     ]
    ],
    "note": null,
+   "job": "",
    "x_max": 1.069771586541008,
    "span": 1.0320925419793079,
    "knee": {
@@ -12948,7 +12965,7 @@
    "model": "",
    "x": "worker.util",
    "y": "queue_wait_p95_s",
-   "sets": "worker.cpu",
+   "sets": "worker.index.cpu",
    "points": [
     [
      0.185,
@@ -13049,6 +13066,7 @@
    ],
    "throttled": null,
    "note": null,
+   "job": "index",
    "x_max": 0.225,
    "span": 0.08000000000000002,
    "knee": null
@@ -13070,7 +13088,7 @@
     ]
    },
    {
-    "line": "worker.cpu",
+    "line": "worker.index.cpu",
     "r2": 1.0,
     "holdout_mape": 4.414075690208602e-15,
     "holdout_days": 7,
@@ -13086,7 +13104,7 @@
     "collinear": []
    },
    {
-    "line": "worker.memory",
+    "line": "worker.index.memory",
     "r2": -1763.0,
     "holdout_mape": 1.1184468988816393e-14,
     "holdout_days": 7,
@@ -13126,9 +13144,9 @@
    ],
    "by_line": {
     "api.cpu": 0.12886239411067846,
-    "worker.cpu": 0.25416306953323325,
+    "worker.index.cpu": 0.25416306953323325,
     "api.memory": 0.00688034469377683,
-    "worker.memory": 7.771561172376096e-15,
+    "worker.index.memory": 7.771561172376096e-15,
     "postgres.cpu": 0.0010903151020881605,
     "sandbox-host.cpu": 0.4355544816419992,
     "sandbox-host.memory": 0.17111932822283163,
