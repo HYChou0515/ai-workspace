@@ -2543,6 +2543,27 @@ AI 讀 `wui` skill 時會看到「這個 item 能讓頁面問的 subagent」清�
 **確認做完**(`rollout 後`):請 AI 查一個要搜尋的問題:卡片上搜尋框是空的、上方有 AI 建議的關鍵字;框空著按「查」會提示要先填;
 按「複製建議」、貼進框、再按「查」,搜尋用的就是框裡的字。
 
+### 2026-10-16 · #963 問外部AI(`ask_ext_ai`),以及小幫手的按鈕和自己查用同一個字 {#pr-963}
+
+**設定** — 必要的:無。選配:`server.ext_ai_enabled: true` 讓聊天裡的 AI 能「問外部AI」(預設關,
+見 [設定](configuration.md));打開前要先做下面「k8s · CI 側」的打包,否則每張卡片都只能手動。
+
+**資料** — 無。小幫手報到多記一個 `ext_ai` 欄位(有預設值,舊資料照讀),工作種類多一種 `ask_ext_ai`。
+
+**k8s · CI 側** — 前後端都改,照常重 build、部署。**只有要用問外部AI 時**才需要重新打包小幫手:複製
+`ai-workspace-helper/ext_ai_site.template.py` 成 `ext_ai_site.py`、填 `URL`、用 `try-ext-ai` 在自己電腦上試過,再
+`python3 scripts/pack_ai_workspace_helper.py --version <新版> --ext-ai-site ext_ai_site.py`,放進
+`server.ai_workspace_helper_dir`,大家重裝(步驟在 [小幫手](ai-workspace-helper.md) 的「讓 AI 能問公司的網頁 AI」)。
+不重新打包的後果:開關打開了,卡片卻一律說「你的小幫手沒有設定外部AI」,只能手動。
+
+**行為改變,沒有開關**(plan-ext-ai D8):「請幫我查」卡片在小幫手連線時,按鈕不再寫「查」/「重查」,而是和自己查
+一樣的字——搜尋是「Google search」(部署設定的第一個目的地名稱;有 Google 就是 Google),開網址是「開啟這個網址」,
+失敗後是「再 Google search 一次」/「再開一次」;自己查的按鈕多一個 ↗。教過使用者「按查」的說明要跟著改。
+
+**確認做完**(`rollout 後`):有小幫手的人開一張要搜尋的卡片,按鈕寫「Google search」;有開問外部AI 時,請 AI 問一個
+需要別人意見的問題,卡片標題是「問外部AI」、問題可以改,按下去之後顯示已等幾秒,回答回來存在 `lookups/`,AI 說明
+這是外部AI 的說法。
+
 ## 附錄 A：資料回填的機制（specstar 為什麼不會自己補）
 
 有些升版會改變「資料在資料庫裡的儲存形狀」，但 **specstar 只在寫入當下**把一列的 `indexed_data`
