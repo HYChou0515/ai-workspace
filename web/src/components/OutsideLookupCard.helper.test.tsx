@@ -120,6 +120,15 @@ function draw({
   return client;
 }
 
+
+/** The person's 「查」 for a search: the keywords typed first (plan-outside-lookup
+ * D13 — the box starts empty), then the button. */
+async function look(keywords = "pandas 2.0 breaking") {
+  const box = screen.queryByLabelText("搜尋關鍵字");
+  if (box) fireEvent.change(box, { target: { value: keywords } });
+  fireEvent.click(await screen.findByRole("button", { name: "查" }));
+}
+
 describe("with no helper connected", () => {
   it("is today's card, and says the helper is not connected", async () => {
     const client = draw({ online: false });
@@ -153,9 +162,19 @@ describe("a search, with the helper connected", () => {
     expect(await screen.findByRole("button", { name: /Google/ })).toBeInTheDocument();
   });
 
-  it("hands over the query as the person edited it, then shows it under way", async () => {
+  // plan-outside-lookup D13: the helper searches what the person typed.
+  it("with nothing typed, 查 hands nothing over and says to type the keywords", async () => {
     const client = draw();
-    const box = await screen.findByLabelText("查詢");
+
+    fireEvent.click(await screen.findByRole("button", { name: "查" }));
+
+    expect(await screen.findByText("先在搜尋框輸入或貼上關鍵字")).toBeInTheDocument();
+    expect(client.handOver).not.toHaveBeenCalled();
+  });
+
+  it("hands over the keywords the person typed, then shows it under way", async () => {
+    const client = draw();
+    const box = await screen.findByLabelText("搜尋關鍵字");
     fireEvent.change(box, { target: { value: "pandas 2.0 breaking" } });
 
     fireEvent.click(await screen.findByRole("button", { name: "查" }));
@@ -170,7 +189,7 @@ describe("a search, with the helper connected", () => {
 
   it("can be cancelled while under way", async () => {
     const client = draw();
-    fireEvent.click(await screen.findByRole("button", { name: "查" }));
+    await look();
 
     fireEvent.click(await screen.findByRole("button", { name: "取消" }));
 
@@ -179,7 +198,7 @@ describe("a search, with the helper connected", () => {
 
   it("says why it failed, and can try again", async () => {
     const client = draw({ current: async () => job({ state: "failed", error: "page timed out" }) });
-    fireEvent.click(await screen.findByRole("button", { name: "查" }));
+    await look();
 
     expect(await screen.findByText("小幫手沒查到:page timed out")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "重查" }));
@@ -193,7 +212,7 @@ describe("a search, with the helper connected", () => {
   it("tells the chat to follow the turn the helper's answer started, once", async () => {
     const follow = vi.fn();
     draw({ current: async () => job({ state: "done" }), follow });
-    fireEvent.click(await screen.findByRole("button", { name: "查" }));
+    await look();
 
     await screen.findByText("小幫手已送給 AI");
     await waitFor(() => expect(follow).toHaveBeenCalledWith("call_1"));
@@ -206,7 +225,7 @@ describe("a search, with the helper connected", () => {
   // the hooks it calls (it threw "Rendered fewer hooks" and blanked the app).
   it("stays drawn when the helper's answer arrives under it", async () => {
     draw({ current: async () => job({ state: "done" }), follow: vi.fn(), answeredLater: true });
-    fireEvent.click(await screen.findByRole("button", { name: "查" }));
+    await look();
     await screen.findByText("小幫手已送給 AI");
 
     fireEvent.click(screen.getByRole("button", { name: "answer arrives" }));
@@ -230,7 +249,7 @@ describe("a search, with the helper connected", () => {
   it("follows nothing when the helper did not answer", async () => {
     const follow = vi.fn();
     draw({ current: async () => job({ state: "failed", error: "page timed out" }), follow });
-    fireEvent.click(await screen.findByRole("button", { name: "查" }));
+    await look();
 
     await screen.findByText("小幫手沒查到:page timed out");
     expect(follow).not.toHaveBeenCalled();
@@ -238,7 +257,7 @@ describe("a search, with the helper connected", () => {
 
   it("says the helper sent it once it is done", async () => {
     draw({ current: async () => job({ state: "done" }) });
-    fireEvent.click(await screen.findByRole("button", { name: "查" }));
+    await look();
 
     expect(await screen.findByText("小幫手已送給 AI")).toBeInTheDocument();
   });
@@ -247,7 +266,7 @@ describe("a search, with the helper connected", () => {
   // helper's own Chrome window — the card says where to look.
   it("says where to look when the helper waits on a verification", async () => {
     draw({ current: async () => job({ state: "claimed", note: "captcha" }) });
-    fireEvent.click(await screen.findByRole("button", { name: "查" }));
+    await look();
 
     expect(await screen.findByText("請在小幫手的 Chrome 視窗裡完成驗證")).toBeInTheDocument();
     expect(screen.queryByText("小幫手正在查…")).not.toBeInTheDocument();
@@ -339,7 +358,7 @@ describe("a page, with the helper connected (D12)", () => {
       status: async () => ({ online }),
       current: async () => job({ state: "claimed", note: "captcha" }),
     });
-    fireEvent.click(await screen.findByRole("button", { name: "查" }));
+    await look();
     expect(await screen.findByText("請在小幫手的 Chrome 視窗裡完成驗證")).toBeInTheDocument();
 
     online = false;
@@ -359,7 +378,7 @@ describe("a page, with the helper connected (D12)", () => {
       },
     });
 
-    fireEvent.click(await screen.findByRole("button", { name: "查" }));
+    await look();
 
     expect(await screen.findByRole("alert")).toHaveTextContent("the helper is not connected");
   });
@@ -373,7 +392,7 @@ describe("a page, with the helper connected (D12)", () => {
       },
     });
 
-    fireEvent.click(await screen.findByRole("button", { name: "查" }));
+    await look();
 
     await waitFor(() =>
       expect(client.handOver).toHaveBeenLastCalledWith(expect.objectContaining({ auto: false })),

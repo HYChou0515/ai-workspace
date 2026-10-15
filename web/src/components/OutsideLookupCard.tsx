@@ -77,7 +77,22 @@ export function OutsideLookupCard({
   const item = useChatItem();
   const ids = useId();
   const isSearch = "query" in lookup;
-  const [query, setQuery] = useState(isSearch ? lookup.query : "");
+  // plan-outside-lookup D13: the box starts empty — what goes out to search is
+  // what the person types or pastes; the AI's query is a suggestion beside it.
+  const [query, setQuery] = useState("");
+  const [needKeywords, setNeedKeywords] = useState(false);
+  const queryBox = useRef<HTMLInputElement>(null);
+  /** `go` with keywords in the box; otherwise say so and put the person there
+   * (NN/g: a button that does nothing explains nothing — this one says why). */
+  const ifTyped = (go: () => void) => {
+    if (!query.trim()) {
+      setNeedKeywords(true);
+      queryBox.current?.focus();
+      return;
+    }
+    setNeedKeywords(false);
+    go();
+  };
   const [content, setContent] = useState("");
   const [sourceUrl, setSourceUrl] = useState("");
   const [files, setFiles] = useState<File[]>([]);
@@ -295,8 +310,7 @@ export function OutsideLookupCard({
                   className="btn"
                   data-size="sm"
                   data-variant="primary"
-                  disabled={isSearch && !query.trim()}
-                  onClick={() => hand.mutate(false)}
+                  onClick={() => (isSearch ? ifTyped(() => hand.mutate(false)) : hand.mutate(false))}
                 >
                   {t(jobState === "failed" ? "lookup.helperRetry" : "lookup.helperGo")}
                 </button>
@@ -356,20 +370,42 @@ export function OutsideLookupCard({
 
       {isSearch ? (
         <div className="outside-lookup-section">
+          <span className="outside-lookup-label">{t("lookup.suggested")}</span>
+          <div className="outside-lookup-actions">
+            <code className="outside-lookup-url">{lookup.query}</code>
+            <button
+              type="button"
+              className="btn"
+              data-size="sm"
+              data-variant="ghost"
+              onClick={() => copy(lookup.query ?? "")}
+            >
+              {copied ? t("lookup.copied") : t("lookup.copySuggestion")}
+            </button>
+          </div>
           <label className="outside-lookup-label" htmlFor={`${ids}-q`}>
             {t("lookup.query")}
           </label>
           <input
+            ref={queryBox}
             autoComplete="off"
             id={`${ids}-q`}
             className="input"
             value={query}
+            placeholder={t("lookup.queryPlaceholder")}
             readOnly={locked}
+            aria-invalid={needKeywords || undefined}
+            aria-describedby={needKeywords ? `${ids}-q-need` : undefined}
             onChange={(e) => {
               setQuery(e.target.value);
-              setCopied(false);
+              setNeedKeywords(false);
             }}
           />
+          {needKeywords && (
+            <p id={`${ids}-q-need`} className="outside-lookup-error" role="alert">
+              {t("lookup.typeKeywords")}
+            </p>
+          )}
           {manual && (
           <>
           <div className="outside-lookup-actions">
@@ -381,24 +417,16 @@ export function OutsideLookupCard({
                 data-size="sm"
                 data-variant="secondary"
                 aria-label={t("lookup.target", { name: tg.name })}
-                disabled={!query.trim()}
-                onClick={() => {
-                  setTarget(tg.name);
-                  window.open(searchUrl(tg, query.trim()), "_blank", NEW_TAB);
-                }}
+                onClick={() =>
+                  ifTyped(() => {
+                    setTarget(tg.name);
+                    window.open(searchUrl(tg, query.trim()), "_blank", NEW_TAB);
+                  })
+                }
               >
                 {tg.name} <span aria-hidden="true">↗</span>
               </button>
             ))}
-            <button
-              type="button"
-              className="btn"
-              data-size="sm"
-              data-variant="ghost"
-              onClick={() => copy(query)}
-            >
-              {copied ? t("lookup.copied") : t("lookup.copy")}
-            </button>
           </div>
           <p className="outside-lookup-hint">{t("lookup.newTab")}</p>
           </>

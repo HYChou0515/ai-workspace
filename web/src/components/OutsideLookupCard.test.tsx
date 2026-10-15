@@ -86,24 +86,51 @@ describe("asking for a search", () => {
     expect(google).toHaveAccessibleName(/新分頁/);
   });
 
-  it("searches what the person edited the query to", async () => {
+  // plan-outside-lookup D13 (the person: 「讓user手動貼上關鍵字，ai建議關鍵字，會
+  // 更安全」): what goes out is what the person put in the box; the AI's query
+  // is only a suggestion beside it, to copy.
+  it("starts with an empty search box and the AI's keywords beside it", () => {
+    draw();
+
+    expect(screen.getByLabelText("搜尋關鍵字")).toHaveValue("");
+    expect(screen.getByText("AI 建議的關鍵字")).toBeInTheDocument();
+    expect(screen.getByText("pandas 2.0 breaking")).toBeInTheDocument();
+  });
+
+  it("searches what the person typed", async () => {
     const { open } = draw();
-    fireEvent.change(screen.getByLabelText("查詢"), { target: { value: "pandas 2.1" } });
+    fireEvent.change(screen.getByLabelText("搜尋關鍵字"), { target: { value: "pandas 2.1" } });
 
     fireEvent.click(await screen.findByRole("button", { name: /Wiki/ }));
 
     expect(open).toHaveBeenCalledWith("http://wiki.example/?s=pandas%202.1", "_blank", "noopener,noreferrer");
   });
 
-  it("copies the query as edited", async () => {
-    const writeText = vi.fn(async () => undefined);
+  // NN/g (disabled buttons): the button stays pressable and says what is
+  // missing, rather than doing nothing.
+  it("with nothing typed, searches nothing and says to type the keywords", async () => {
+    const { open } = draw();
+
+    fireEvent.click(await screen.findByRole("button", { name: /Google/ }));
+
+    expect(open).not.toHaveBeenCalled();
+    expect(screen.getByText("先在搜尋框輸入或貼上關鍵字")).toBeInTheDocument();
+    expect(screen.getByLabelText("搜尋關鍵字")).toHaveFocus();
+  });
+
+  it("copies the AI's suggestion, not the box, and says so once it is copied", async () => {
+    let wrote!: () => void;
+    const writeText = vi.fn(() => new Promise<void>((r) => (wrote = r)));
     Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
     draw();
-    fireEvent.change(screen.getByLabelText("查詢"), { target: { value: "edited" } });
+    fireEvent.change(screen.getByLabelText("搜尋關鍵字"), { target: { value: "typed" } });
 
-    fireEvent.click(screen.getByRole("button", { name: "複製問題" }));
+    fireEvent.click(screen.getByRole("button", { name: "複製建議" }));
 
-    expect(writeText).toHaveBeenCalledWith("edited");
+    expect(writeText).toHaveBeenCalledWith("pandas 2.0 breaking");
+    // Primer: "copied" only once the clipboard write resolved
+    expect(screen.queryByRole("button", { name: "已複製" })).toBeNull();
+    wrote();
     expect(await screen.findByRole("button", { name: "已複製" })).toBeInTheDocument();
   });
 });
@@ -211,6 +238,7 @@ describe("bringing it back", () => {
 
   it("sends what was found, the source, the button pressed and the files", async () => {
     const { client } = draw();
+    fireEvent.change(screen.getByLabelText("搜尋關鍵字"), { target: { value: "pandas 2.0" } });
     fireEvent.click(await screen.findByRole("button", { name: /Google/ }));
     fireEvent.change(screen.getByLabelText("查到的內容"), { target: { value: "found" } });
     fireEvent.change(screen.getByLabelText("來源網址(選填)"), { target: { value: "https://s" } });
@@ -288,7 +316,7 @@ describe("bringing it back", () => {
 describe("review round 1", () => {
   it("sends the query as edited, and the person's own date", async () => {
     const { client } = draw();
-    fireEvent.change(screen.getByLabelText("查詢"), { target: { value: "pandas 2.1" } });
+    fireEvent.change(screen.getByLabelText("搜尋關鍵字"), { target: { value: "pandas 2.1" } });
     fireEvent.change(screen.getByLabelText("查到的內容"), { target: { value: "x" } });
 
     fireEvent.click(screen.getByRole("button", { name: "送出" }));

@@ -91,7 +91,8 @@ def test_a_link_a_pasted_answer_brought_back_opens_without_a_nod():
 def test_a_link_the_helper_brought_back_opens_without_a_nod():
     client, iid = _chat("https://b.example/x")
     _beat(client)
-    client.post(f"/a/rca/items/{iid}/outside-jobs", json={"tool_call_id": "c1"})
+    # the search, with the keywords the person typed (plan-outside-lookup D13)
+    client.post(f"/a/rca/items/{iid}/outside-jobs", json={"tool_call_id": "c1", "query": "pandas"})
     jid = _claim(client).json()["id"]
     r = client.post(f"/ai-workspace-helper/jobs/{jid}/result", json={"markdown": PAGE})
     assert r.status_code == 200, r.text

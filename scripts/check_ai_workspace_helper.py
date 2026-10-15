@@ -338,6 +338,13 @@ def _tour(base: str, iid: str, out: Path, check: _Check) -> Path | None:
             go = page.get_by_role("button", name="查", exact=True)
             go.wait_for(timeout=90_000)
             page.wait_for_timeout(1200)
+            # the box starts empty: the person copies the AI's suggestion and
+            # pastes it (plan-outside-lookup D13)
+            keywords = page.get_by_label("搜尋關鍵字")
+            suggested = page.locator(".outside-lookup-card code").first.inner_text()
+            _glide(page, keywords)
+            keywords.fill(suggested)
+            page.wait_for_timeout(400)
             _glide(page, go)
             go.click()
             check("the search card offered 「查」 and took the nod", True)

@@ -1855,13 +1855,19 @@ export const messages = {
   },
   // docs/plan-outside-lookup.md — the "請幫我查" card.
   "lookup.title": { "zh-TW": "請幫我查", en: "Please look this up" },
-  "lookup.query": { "zh-TW": "查詢", en: "Search for" },
+  "lookup.query": { "zh-TW": "搜尋關鍵字", en: "Search keywords" },
+  "lookup.suggested": { "zh-TW": "AI 建議的關鍵字", en: "Keywords the AI suggests" },
+  "lookup.queryPlaceholder": { "zh-TW": "貼上或輸入關鍵字", en: "Paste or type the keywords" },
+  "lookup.typeKeywords": {
+    "zh-TW": "先在搜尋框輸入或貼上關鍵字",
+    en: "Type or paste the keywords in the search box first",
+  },
+  "lookup.copySuggestion": { "zh-TW": "複製建議", en: "Copy the suggestion" },
   "lookup.newTab": {
     "zh-TW": "標 ↗ 的按鈕會在新分頁開啟",
     en: "Buttons marked ↗ open a new tab",
   },
   "lookup.target": { "zh-TW": "{name}(在新分頁開啟)", en: "{name} (opens in a new tab)" },
-  "lookup.copy": { "zh-TW": "複製問題", en: "Copy the query" },
   "lookup.copied": { "zh-TW": "已複製", en: "Copied" },
   "lookup.url": { "zh-TW": "網址", en: "Address" },
   "lookup.openUrl": { "zh-TW": "開啟這個網址", en: "Open this address" },

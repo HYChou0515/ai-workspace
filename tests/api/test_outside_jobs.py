@@ -8,6 +8,8 @@ answer the helper's poll.
 
 from __future__ import annotations
 
+import pytest
+
 from tests.api.test_outside_answers import _asked
 
 
@@ -17,6 +19,9 @@ def _beat(client) -> None:
 
 
 def _hand(client, iid, call="c1", **body):
+    """The card's 「查」 — for a search, with the keywords the person typed
+    (D13: required; the default stands in for them). Ignored for a URL."""
+    body.setdefault("query", "pandas 2.0 新功能")
     return client.post(f"/a/rca/items/{iid}/outside-jobs", json={"tool_call_id": call, **body})
 
 
@@ -36,6 +41,23 @@ def test_the_card_hands_a_search_to_the_persons_helper():
     # what the person edited on the card, not the AI's original (D4)
     assert job["args"] == "pandas 2.0 新功能 改過"
     assert job["id"] == r.json()["id"]
+
+
+# plan-outside-lookup D13: what goes out to search is what the person typed or
+# pasted — the AI's query is only a suggestion (the person: 「讓user手動貼上關鍵字
+# ，ai建議關鍵字，會更安全」). With nothing typed, nothing is searched: no falling
+# back to the AI's words.
+@pytest.mark.parametrize("query", [None, "", "   "], ids=["absent", "empty", "blank"])
+def test_a_search_with_nothing_typed_is_refused_not_sent_as_the_ais(query):
+    client, _spec, iid = _asked()
+    _beat(client)
+
+    body = {"tool_call_id": "c1"} | ({} if query is None else {"query": query})
+    r = client.post(f"/a/rca/items/{iid}/outside-jobs", json=body)
+
+    assert r.status_code == 422, r.text
+    assert "關鍵字" in r.json()["detail"]
+    assert _claim(client).status_code == 204
 
 
 # D7: with no helper connected the card stays on the manual flow — a 「查」 nobody
