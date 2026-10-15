@@ -1,8 +1,10 @@
 """The period an analysis covers, cut into slots (docs/plan-capacity-usage.md §9.2).
 
-`[end − days, end)` in slots of `step_s`; `end` is now minus the ingest lag,
-floored to a slot. Every slot also knows its local day and its place within
-that day (in `capacity.timezone`), which is what a person's day is made of.
+`days` whole local days before today, plus today so far, in slots of `step_s`
+(E7): a view that needs N days of data can be ready in an N-day period. `end`
+is now minus the ingest lag, floored to a slot. Every slot also knows its local
+day and its place within that day (in `capacity.timezone`), which is what a
+person's day is made of.
 """
 
 from __future__ import annotations
@@ -24,9 +26,15 @@ class Period:
 
     @classmethod
     def ending(cls, now_ms: int, *, days: int, step_s: int, lag_s: int, tz: ZoneInfo) -> Period:
+        """From local midnight `days` days before today to now − `lag_s`. It
+        starts on the slot that holds that midnight: in a +05:30 zone with
+        hourly slots, half an hour before it."""
         step_ms = step_s * 1000
         end = (now_ms - lag_s * 1000) // step_ms * step_ms
-        return cls(start_ms=end - days * 86_400_000, end_ms=end, step_s=step_s, tz=tz)
+        today = dt.datetime.fromtimestamp(end / 1000, tz).date()
+        first = dt.datetime.combine(today - dt.timedelta(days=days), dt.time(0), tzinfo=tz)
+        start = int(first.timestamp() * 1000) // step_ms * step_ms
+        return cls(start_ms=start, end_ms=end, step_s=step_s, tz=tz)
 
     @property
     def step_ms(self) -> int:

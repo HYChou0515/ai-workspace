@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import datetime as dt
 import math
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -46,10 +46,29 @@ NEED = {
     "backtest": 21,
 }
 MIN_PEOPLE = 10
+SOURCES = ("usage_records", "resource_metrics", "gpu_metrics", "llm_requests")
+#: The sources the what-if rests on: it sizes only on days all those connected have.
+MODEL_SOURCES = ("usage_records", "resource_metrics", "llm_requests")
 
 
 def _default_workday(day: dt.date) -> bool:
     return day.weekday() < 5
+
+
+def data_days(obs: Observations, sources: Sequence[str]) -> list[int]:
+    """The period's whole days on which every one of `sources` has data."""
+    p = obs.period
+    ok = np.ones(len(p.days), dtype=bool)
+    for source in sources:
+        ok &= obs.days_with(source)
+    return [d for d in p.full_days if ok[d]]
+
+
+def model_days(obs: Observations) -> list[int]:
+    """The days the what-if sizes on and the backtest tests: whole days on
+    which every connected source of the model has data. A day before the
+    records began would read as a day nobody worked."""
+    return data_days(obs, [s for s in MODEL_SOURCES if obs.connected(s)])
 
 
 @dataclass
@@ -59,6 +78,8 @@ class Analysis:
     people: People
     pairs: list[Pair]
     thresholds: dict[str, tuple[float, str]]
+    #: `model_days`, and the workdays among them (all of them when none is one).
+    model_days: list[int]
     sizing_days: list[int]
     headroom: Headroom | None
     backtest: dict[str, Any] | None
@@ -71,24 +92,55 @@ class Analysis:
         return {line.id: line for line in self.lines}
 
     # ── what each view needs ──────────────────────────────────────────────
-    def have_days(self) -> int:
-        p = self.obs.period
-        seen = np.zeros(len(p.days), dtype=bool)
-        for series in self.obs.work_user.values():
-            seen[np.unique(p.day_of[series.count > 0])] = True
-        return int(seen[p.full_days].sum()) if p.full_days else 0
+    def runway_days(self) -> list[int]:
+        """Recorded days whose N is whole: the people trend is fitted on them
+        only, since a count still filling up rises with no one new."""
+        complete = self.people.complete
+        return [
+            d
+            for d in data_days(self.obs, ["usage_records"])
+            if complete is None or bool(complete[d])
+        ]
 
     def readiness(self) -> dict[str, dict[str, Any]]:
-        have = self.have_days()
+        """Per view: whether it can say anything yet, and if not, why — a
+        source not connected or failing, a period shorter than the view needs
+        (no wait will fix that), days still accumulating, too few people."""
+        holds = len(self.obs.period.full_days)
         n_now = int(self.people.active_30d[-1]) if len(self.people.active_30d) else 0
-        records = self.obs.connected("usage_records")
-        metrics = self.obs.connected("resource_metrics")
         regressions = any(line.method == "regression" for line in self.lines)
 
-        def view(need: int, missing: list[str], *, people: bool = False, extra: str | None = None):  # noqa: ANN202
+        def view(  # noqa: ANN202
+            need: int,
+            sources: Sequence[str],
+            *,
+            have: int | None = None,
+            any_of: bool = False,
+            people: bool = False,
+            extra: str | None = None,
+        ):
+            status = self.obs.status
+            failing = [s for s in sources if s in status and status[s].error is not None]
+            absent = [s for s in sources if not self.obs.connected(s) and s not in failing]
+            usable = [s for s in sources if self.obs.connected(s)]
+            if any_of and usable:
+                failing, absent = [], []
+            if have is None:
+                if any_of:
+                    have = sum(
+                        1
+                        for d in self.obs.period.full_days
+                        if any(self.obs.days_with(s)[d] for s in usable)
+                    )
+                else:
+                    have = len(data_days(self.obs, usable))
             reason = None
-            if missing:
+            if failing:
+                reason = "source_error"
+            elif absent:
                 reason = "source_missing"
+            elif holds < need:
+                reason = "period_too_short"
             elif have < need:
                 reason = "accumulating"
             elif people and n_now < MIN_PEOPLE:
@@ -98,29 +150,31 @@ class Analysis:
             return {
                 "ready": reason is None,
                 "reason": reason,
-                "missing": missing,
+                "missing": failing or absent,
+                "error": status[failing[0]].error if failing else None,
                 "have_days": have,
                 "need_days": need,
+                "period_days": holds,
             }
 
-        def need(*names: str) -> list[str]:
-            return [n for n in names if not self.obs.connected(n)]
-
+        model = len(self.model_days)
+        both = ("usage_records", "resource_metrics")
         return {
-            "overview": view(NEED["overview"], need("resource_metrics")),
-            "allocation": view(NEED["allocation"], need("usage_records")),
-            "person": view(NEED["allocation"], need("usage_records")),
-            "distribution": view(NEED["distribution"], need("usage_records"), people=True),
-            "trends": view(NEED["trends"], [] if (records or metrics) else ["usage_records"]),
+            "overview": view(NEED["overview"], ["resource_metrics"]),
+            "allocation": view(NEED["allocation"], ["usage_records"]),
+            "person": view(NEED["allocation"], ["usage_records"]),
+            "distribution": view(NEED["distribution"], ["usage_records"], people=True),
+            "trends": view(NEED["trends"], SOURCES, any_of=True),
             "whatif": view(
                 NEED["whatif"],
-                need("usage_records", "resource_metrics"),
+                both,
+                have=model,
                 people=True,
                 extra=None if regressions else "no_regression",
             ),
-            "runway": view(NEED["runway"], need("usage_records", "resource_metrics"), people=True),
-            "thresholds": view(NEED["thresholds"], need("usage_records", "resource_metrics")),
-            "confidence": view(NEED["backtest"], need("usage_records")),
+            "runway": view(NEED["runway"], both, have=len(self.runway_days()), people=True),
+            "thresholds": view(NEED["thresholds"], both),
+            "confidence": view(NEED["backtest"], both, have=model),
         }
 
     # ── the page ──────────────────────────────────────────────────────────
@@ -146,6 +200,8 @@ class Analysis:
                 "n_now": int(self.people.active_30d[-1]) if len(self.people.active_30d) else 0,
                 "active_30d": self.people.active_30d.tolist(),
                 "active_today": self.people.active_today.tolist(),
+                "complete": self.people.complete is None or bool(self.people.complete[-1]),
+                "recorded_since_ms": self.obs.recorded_since_ms,
             },
             "lines": [self._line_json(line) for line in self.lines],
             "headroom": None if self.headroom is None else self._headroom_json(),
@@ -205,7 +261,8 @@ class Analysis:
                 ]
         person_peaks = sorted(g["peak"] for g in groups["person"] if g["key"] not in NOT_PEOPLE)
         daily_peak = self._daily(line.total, "max")
-        full_peaks = [v for d in p.full_days if (v := daily_peak[d]) is not None]
+        days = data_days(self.obs, [line.source]) if line.source else p.full_days
+        full_peaks = [v for d in days if (v := daily_peak[d]) is not None]
         threshold, source = self.thresholds.get(line.id, (None, None))
         capacity = line.capacity
         peak = float(np.quantile(full_peaks, 0.95)) if full_peaks else None
@@ -256,12 +313,12 @@ class Analysis:
 
     def _runway_json(self) -> dict[str, Any]:
         p = self.obs.period
-        days = np.array(p.full_days, dtype=float)
-        n = self.people.active_30d[p.full_days].astype(float) if p.full_days else np.zeros(0)
+        days = self.runway_days()
+        n = self.people.active_30d[days].astype(float) if days else np.zeros(0)
         out: dict[str, Any] = {
-            "days": p.full_days,
+            "days": days,
             "n": n.tolist(),
-            "trend": _trend(days, n),
+            "trend": _trend(np.array(days, dtype=float), n),
             "disk": [],
         }
         for line in self.lines:
@@ -546,10 +603,11 @@ def _thresholds(
 
 
 def _backtest(
-    lines: list[Line], people: People, obs: Observations, is_workday
+    lines: list[Line], people: People, obs: Observations, is_workday, days: list[int]
 ) -> dict[str, Any] | None:  # noqa: ANN001
+    """Each of the last 14 of `days` predicted from the days before it."""
     p = obs.period
-    full = p.full_days
+    full = days
     if len(full) < NEED["backtest"]:
         return None
     errors: dict[str, list[float]] = {}
@@ -592,14 +650,16 @@ def analyse(
     pairs = build_pairs(obs, by_id)
     thresholds = _thresholds(lines, pairs, obs.cards)
     p = obs.period
-    workdays = [d for d in p.full_days if is_workday(p.days[d])]
-    sizing = workdays or list(p.full_days)
+    days = model_days(obs)
+    workdays = [d for d in days if is_workday(p.days[d])]
+    sizing = workdays or days
     analysis = Analysis(
         obs=obs,
         lines=lines,
         people=people,
         pairs=pairs,
         thresholds=thresholds,
+        model_days=days,
         sizing_days=sizing,
         headroom=None,
         backtest=None,
@@ -607,7 +667,7 @@ def analyse(
         is_workday=is_workday,
     )
     sim = analysis.simulator()
-    if sim is not None and len(sizing) >= NEED["whatif"]:
+    if sim is not None and len(days) >= NEED["whatif"]:
         analysis.headroom = headroom(sim, analysis.limits())
-    analysis.backtest = _backtest(lines, people, obs, is_workday)
+    analysis.backtest = _backtest(lines, people, obs, is_workday, days)
     return analysis

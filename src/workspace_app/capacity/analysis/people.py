@@ -2,8 +2,10 @@
 
 A person is one of the N on a day when they did anything in the 30 days up to
 and including it — the records' activity is loaded from 30 days before the
-period, so the first day's N is as complete as the last's. `unknown` and
-`system` are not people: their use is kept, as a baseline nobody's N grows.
+period, so the first day's N is as complete as the last's. Until the records
+themselves are 30 days old it is not: N then counts only the people seen so
+far and rises with no one new, which `complete` marks. `unknown` and `system`
+are not people: their use is kept, as a baseline nobody's N grows.
 """
 
 from __future__ import annotations
@@ -29,6 +31,8 @@ class People:
     #: `users`), and how many more are in it with no use in the period at all.
     pool: list[np.ndarray]
     absent: np.ndarray
+    #: [day] whether the 30 days up to it are all recorded; None: every day's are.
+    complete: np.ndarray | None = None
 
 
 def _day_bounds_ms(day: dt.date, tz: dt.tzinfo) -> tuple[int, int]:
@@ -45,6 +49,7 @@ def count_people(obs: Observations, users: list[str]) -> People:
     active_today = np.zeros(n_days, dtype=np.int64)
     pool: list[np.ndarray] = []
     absent = np.zeros(n_days, dtype=np.int64)
+    complete = np.ones(n_days, dtype=bool)
     used = np.zeros((len(users), p.n), dtype=bool)
     for (user, _app, _comp, _work), series in obs.work_user.items():
         if user in row:
@@ -55,6 +60,7 @@ def count_people(obs: Observations, users: list[str]) -> People:
     for d, day in enumerate(p.days):
         start, end = _day_bounds_ms(day, p.tz)
         since = end - LOOKBACK_DAYS * 86_400_000
+        complete[d] = obs.recorded_since_ms is None or since >= obs.recorded_since_ms
         members = {
             u
             for u, days in obs.activity.items()
@@ -67,4 +73,6 @@ def count_people(obs: Observations, users: list[str]) -> People:
         present = np.array(sorted(row[u] for u in members if u in row), dtype=np.int64)
         pool.append(present)
         absent[d] = len(members) - len(present)
-    return People(users, active_30d, active_today, pool, absent)
+    return People(
+        users, active_30d, active_today, pool, absent, None if complete.all() else complete
+    )

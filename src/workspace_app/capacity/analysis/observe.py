@@ -28,6 +28,9 @@ T = TypeVar("T")
 HIST = tuple(f"h{i}" for i in range(BUCKETS))
 #: "N people" = people active at least once in the last 30 days (D12).
 LOOKBACK_DAYS = 30
+#: A week before the 30 days: anyone active there shows the records go back
+#: further than the 30 days, so every day's N is whole.
+PROOF_DAYS = 7
 
 
 class TooManyRows(Exception):
@@ -84,6 +87,11 @@ class Observations:
     #: days before the period to its end: "N people" counts the people active
     #: in the 30 days up to each day (D12), which needs those 30 days.
     activity: dict[str, set[int]] = field(default_factory=dict)
+    #: When the records began, if that is inside the 30 days before the period
+    #: or the period itself (the first day anyone did anything); None when they
+    #: go back further. Until 30 days are recorded, N counts only the people
+    #: seen so far.
+    recorded_since_ms: int | None = None
     turns: list[Mapping[str, Any]] = field(default_factory=list)
     jobs: list[Mapping[str, Any]] = field(default_factory=list)
     dropped: float = 0.0
@@ -101,6 +109,32 @@ class Observations:
     def connected(self, source: str) -> bool:
         s = self.status.get(source)
         return s is not None and s.connected and s.error is None
+
+    def days_with(self, source: str) -> np.ndarray:
+        """[day] whether `source` has anything that day. A day before a
+        source began is not a quiet day — it is no day at all, and the
+        analysis must not size on it."""
+        p = self.period
+        slots = np.zeros(p.n, dtype=bool)
+        if source == "usage_records":
+            for series in self.work_pod.values():
+                slots |= series.count > 0
+            for m in self.sandbox_pod.values():
+                slots |= m["cpu_s"] > 0
+        elif source == "resource_metrics":
+            for m in self.pods.values():
+                slots |= np.isfinite(m["cpu"]) | np.isfinite(m["memory"])
+        elif source == "gpu_metrics":
+            for m in self.gpu.values():
+                slots |= (m["util"] > 0) | (m["memory"] > 0)
+        elif source == "llm_requests":
+            for s in self.llm:
+                slots |= s.requests > 0
+        else:
+            raise ValueError(f"unknown source {source!r}")
+        days = np.zeros(len(p.days), dtype=bool)
+        days[np.unique(p.day_of[slots])] = True
+        return days
 
 
 def _zeros(p: Period) -> np.ndarray:
@@ -258,7 +292,7 @@ def _records(sources: CapacitySources, obs: Observations, budget: _Budget) -> in
         obs.dropped += r.values.get("dropped", 0.0)
     lookback = AggregateQuery(
         kind="work",
-        start_ms=p.start_ms - LOOKBACK_DAYS * 86_400_000,
+        start_ms=p.start_ms - (LOOKBACK_DAYS + PROOF_DAYS) * 86_400_000,
         end_ms=p.end_ms,
         step_s=86_400,
         group_by=("user",),
@@ -266,10 +300,16 @@ def _records(sources: CapacitySources, obs: Observations, budget: _Budget) -> in
     )
     for r in src.aggregate(lookback):
         rows += 1
+        budget.take()
         if r.t_ms is not None and r.values.get("count", 0.0) > 0:
             obs.activity.setdefault(r.keys["user"] or "unknown", set()).add(r.t_ms)
-    obs.turns = list(src.records("turn", p.start_ms, p.end_ms))
-    obs.jobs = list(src.records("job", p.start_ms, p.end_ms))
+    first = min((t for days in obs.activity.values() for t in days), default=None)
+    window = p.start_ms - LOOKBACK_DAYS * 86_400_000
+    obs.recorded_since_ms = first if first is not None and first >= window else None
+    for kind, into in (("turn", obs.turns), ("job", obs.jobs)):
+        for record in src.records(kind, p.start_ms, p.end_ms):
+            budget.take()
+            into.append(record)
     return rows + len(obs.turns) + len(obs.jobs)
 
 
@@ -294,7 +334,9 @@ def _pods(sources: CapacitySources, obs: Observations, budget: _Budget) -> int:
         ):
             if value is not None:
                 acc[name][i] = value
-    obs.capacity = list(src.capacity())
+    for entry in src.capacity():
+        budget.take()
+        obs.capacity.append(entry)
     return rows
 
 
@@ -313,6 +355,7 @@ def _gpus(sources: CapacitySources, obs: Observations, budget: _Budget) -> int:
         acc["util"][i] += sample.util
         acc["memory"][i] += sample.memory_bytes
     for card in src.cards():
+        budget.take()
         obs.cards[card.model] = obs.cards.get(card.model, 0) + 1
         obs.gpu_memory_total[card.model] = (
             obs.gpu_memory_total.get(card.model, 0.0) + card.memory_total_bytes
@@ -348,6 +391,7 @@ def _llm(sources: CapacitySources, obs: Observations, budget: _Budget) -> int:
         s.requests[i] += row.requests
     obs.llm = list(series.values())
     for row in src.latency(p.start_ms, p.end_ms, p.step_s):
+        budget.take()
         i = p.index(row.t_ms)
         if i is None:
             continue

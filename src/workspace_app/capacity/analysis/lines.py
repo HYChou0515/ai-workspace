@@ -87,6 +87,10 @@ class Line:
     machine_label: str = ""
     fit: FitStats | None = None
     model: str = ""
+    #: The source whose missing data reads as zero in `total` (④ for a model's
+    #: in-flight requests, ③ for its memory): a day it has nothing is no day.
+    #: Empty when a missing sample is NaN, which marks itself.
+    source: str = ""
 
     @property
     def variable(self) -> np.ndarray:
@@ -497,12 +501,14 @@ def build_lines(obs: Observations) -> list[Line]:
                     by_purpose=split.by_purpose,
                     other=other,
                     model=model,
+                    source="llm_requests",
                 )
             )
     if obs.connected("gpu_metrics"):
         for model, m in sorted(obs.gpu.items()):
             line = _fixed_line(f"gpu.{model}.memory", "gpu", "memory", "bytes", m["memory"])
             line.model = model
+            line.source = "gpu_metrics"
             line.capacity = obs.gpu_memory_total.get(model)
             lines.append(line)
     _attach_capacity(obs, lines)

@@ -37,17 +37,27 @@ class SourceOut(BaseModel):
 
 class ReadinessOut(BaseModel):
     ready: bool
-    #: source_missing | accumulating | too_few_people | no_regression
+    #: source_error | source_missing | period_too_short | accumulating |
+    #: too_few_people | no_regression
     reason: str | None
+    #: the sources failing (source_error) or not connected (source_missing)
     missing: list[str]
+    #: what the first failing source raised
+    error: str | None
     have_days: int
     need_days: int
+    #: the whole days this period holds; fewer than need_days → period_too_short
+    period_days: int
 
 
 class PeopleOut(BaseModel):
     n_now: int
     active_30d: list[int]
     active_today: list[int]
+    #: whether today's N rests on 30 recorded days (False: it counts only the
+    #: people seen since the records began, and reads low)
+    complete: bool
+    recorded_since_ms: int | None
 
 
 class StatOut(BaseModel):

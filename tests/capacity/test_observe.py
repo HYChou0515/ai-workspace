@@ -10,9 +10,16 @@ from zoneinfo import ZoneInfo
 import numpy as np
 import pytest
 
-from workspace_app.capacity.analysis.observe import observe, parse_tags
+from workspace_app.capacity.analysis.observe import TooManyRows, observe, parse_tags
 from workspace_app.capacity.analysis.period import Period
-from workspace_app.capacity.sources import CapacitySources, ResourceMetricsSource
+from workspace_app.capacity.sources import (
+    AggregateRow,
+    CapacitySources,
+    LlmLatencyRow,
+    LlmRequestSource,
+    ResourceMetricsSource,
+    UsageRecordSource,
+)
 
 from .world import FILES, World, WorldGpus, WorldLlm, WorldPods, WorldRecords
 
@@ -95,3 +102,49 @@ def test_a_failing_source_fails_only_itself():
 )
 def test_tags_parse_back_to_what_was_sent(tags, want):
     assert parse_tags(tags) == want
+
+
+class _ManyRecords(UsageRecordSource):
+    """Nothing to aggregate but one thing in bulk: `kind` records, or the
+    activity lookback (rows of a day's step)."""
+
+    def __init__(self, kind: str, n: int) -> None:
+        self.kind, self.n = kind, n
+
+    def aggregate(self, q):  # noqa: ANN001, ANN201
+        if self.kind == "lookback" and q.step_s == 86_400:
+            return (
+                AggregateRow(q.start_ms, {"user": f"u{i}"}, {"count": 1.0}) for i in range(self.n)
+            )
+        return ()
+
+    def records(self, kind, start_ms, end_ms):  # noqa: ANN001, ANN201
+        return ({"usage": {"user": "u"}} for _ in range(self.n)) if kind == self.kind else ()
+
+
+class _ManyLatency(LlmRequestSource):
+    def __init__(self, n: int) -> None:
+        self.n = n
+
+    def usage(self, start_ms, end_ms, step_s):  # noqa: ANN001, ANN201
+        return ()
+
+    def latency(self, start_ms, end_ms, step_s):  # noqa: ANN001, ANN201
+        return (LlmLatencyRow(start_ms, "m", 1, 0.1, 0.2, 30.0) for _ in range(self.n))
+
+
+@pytest.mark.parametrize(
+    "sources",
+    [
+        CapacitySources(_ManyRecords("turn", 10_000)),
+        CapacitySources(_ManyRecords("job", 10_000)),
+        CapacitySources(_ManyRecords("lookback", 10_000)),
+        CapacitySources(llm_requests=_ManyLatency(10_000)),
+    ],
+    ids=["turns", "jobs", "lookback", "latency"],
+)
+def test_every_row_an_analysis_reads_counts_against_the_limit(sources):
+    """`capacity.max_rows` is what keeps one analysis from taking the API pod's
+    memory (#804): a row it does not count is a row with no bound."""
+    with pytest.raises(TooManyRows):
+        observe(sources, _period(_world()), max_rows=100)

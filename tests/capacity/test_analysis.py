@@ -105,10 +105,47 @@ def test_the_backtest_predicts_the_last_two_weeks_peaks():
     assert backtest["mape"] < 0.25
 
 
+@cache
+def _long_recorded() -> dict:
+    """Records that began long before the period, so every day's N is whole."""
+    w = World(days=60, users=40)
+    sources = CapacitySources(WorldRecords(w), WorldPods(w), WorldGpus(w), WorldLlm(w))
+    period = Period(w.end_ms - 28 * 86_400_000, w.end_ms, w.step_s, ZoneInfo(w.tz))
+    return analyse(observe(sources, period), now_ms=w.end_ms).summary()
+
+
 def test_every_view_is_ready_with_everything_connected():
-    ready = _summary()["readiness"]
+    ready = _long_recorded()["readiness"]
 
     assert {k: v["reason"] for k, v in ready.items() if not v["ready"]} == {}
+    assert _long_recorded()["people"]["complete"] is True
+
+
+def test_while_the_first_30_days_fill_no_growth_is_read_into_them():
+    """Records began with this period: 'used in the last 30 days' counts only
+    the people seen so far, so it rises with no one new. No trend is drawn
+    from it, and the page is told the count is still short."""
+    s = _summary()
+
+    assert s["people"]["complete"] is False
+    assert s["runway"]["trend"] is None
+    assert s["readiness"]["runway"]["reason"] == "accumulating"
+    assert s["readiness"]["runway"]["have_days"] == 0
+
+
+def test_days_before_the_records_began_are_not_drawn_as_quiet_days():
+    """A day with no records yet is not a day nobody worked: sizing on it
+    would dilute the peaks and promise room that is not there."""
+    w = World(days=21, users=40)
+    sources = CapacitySources(WorldRecords(w), WorldPods(w), WorldGpus(w), WorldLlm(w))
+    zone = ZoneInfo(w.tz)
+    own = analyse(observe(sources, Period(w.start_ms, w.end_ms, w.step_s, zone)), now_ms=w.end_ms)
+    wider = Period(w.end_ms - 28 * 86_400_000, w.end_ms, w.step_s, zone)
+
+    padded = analyse(observe(sources, wider), now_ms=w.end_ms)
+
+    assert own.headroom is not None and padded.headroom is not None
+    assert padded.headroom.max_n == own.headroom.max_n
 
 
 def test_without_pods_and_machines_the_views_that_need_them_say_so():
@@ -121,12 +158,38 @@ def test_without_pods_and_machines_the_views_that_need_them_say_so():
     assert ready["allocation"]["ready"]
 
 
-def test_a_week_is_not_enough_to_size_purchases():
+def test_a_week_long_period_cannot_size_purchases_and_says_so():
+    """However much data there is, a 7-day period holds 7 days: the what-if
+    needs 14, so it asks for a longer period rather than promising to appear."""
     ready = _analysis(days=7).summary()["readiness"]
+
+    assert ready["whatif"]["reason"] == "period_too_short"
+    assert (ready["whatif"]["period_days"], ready["whatif"]["need_days"]) == (7, 14)
+    assert ready["distribution"]["ready"]
+    assert ready["allocation"]["ready"]
+
+
+def test_a_week_of_data_in_a_four_week_period_is_still_accumulating():
+    w = World(days=7, users=40)
+    sources = CapacitySources(WorldRecords(w), WorldPods(w), WorldGpus(w), WorldLlm(w))
+    period = Period(w.end_ms - 28 * 86_400_000, w.end_ms, w.step_s, ZoneInfo(w.tz))
+
+    ready = analyse(observe(sources, period), now_ms=w.end_ms).summary()["readiness"]
 
     assert ready["whatif"]["reason"] == "accumulating"
     assert (ready["whatif"]["have_days"], ready["whatif"]["need_days"]) == (7, 14)
-    assert ready["allocation"]["ready"]
+    assert ready["whatif"]["period_days"] == 28
+
+
+def test_with_only_pods_and_machines_the_overview_counts_their_days():
+    """The overview needs ② alone; its days are ②'s days, not the records'."""
+    w = _world()
+
+    ready = _analysis(CapacitySources(resource_metrics=WorldPods(w))).summary()["readiness"]
+
+    assert ready["overview"]["ready"], ready["overview"]
+    assert ready["overview"]["have_days"] == 28
+    assert ready["trends"]["ready"], ready["trends"]
 
 
 def test_one_persons_detail():

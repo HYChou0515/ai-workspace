@@ -42,3 +42,18 @@ def test_the_summary_fixture_has_every_field_a_fresh_one_has():
     kept = json.loads((FIXTURES / "summary.json").read_text(encoding="utf-8"))
 
     assert _keys(fresh) == _keys(kept), "rerun scripts/capacity_fixtures.py"
+
+
+@pytest.mark.parametrize(
+    ("name", "model"),
+    [("summary.json", CapacitySummary), ("person.json", PersonOut), ("whatif.json", WhatIfOut)],
+)
+def test_the_api_passes_on_every_field_the_analysis_makes(name, model):
+    """A response model silently drops a field it does not declare: the page's
+    tests, run on the analysis' own output, would then pass on a field the
+    page never receives."""
+    import scripts.capacity_fixtures as gen
+
+    fresh = json.loads(json.dumps(gen.fixtures()[name]))
+
+    assert _keys(model.model_validate(fresh).model_dump()) == _keys(fresh)
