@@ -87,3 +87,22 @@ def test_a_flat_count_has_no_slope_at_all():
 def test_t90_is_the_t_quantile(dof: int):
     stats = pytest.importorskip("scipy.stats")
     assert t90(dof) == pytest.approx(stats.t.ppf(0.9, dof), abs=2e-3)
+
+
+def test_a_band_of_no_width_reaches_the_limit_with_the_line():
+    """N that grew by exactly one a day has a band of no width; rounding put
+    its one root a hair below zero, the band's dates went missing, and the
+    page dated the order from today: order now."""
+    x = np.array(
+        [2, 5, 6, 8, 10, 11, 12, 15, 16, 21, 23, 24, 27, 32, 33, 34, 39, 42, 43, 44]
+        + [45, 46, 49, 50, 52, 54, 56, 57, 59],
+        dtype=float,
+    )
+    trend = fit_trend(x, 20 + x)
+    assert trend is not None and trend.residual_sd < 1e-12
+
+    got = reach(trend, 59.0, 119.0)
+
+    assert got["at"] == pytest.approx(40.0)
+    assert got["early"] == pytest.approx(40.0, abs=1e-6)
+    assert got["late"] == pytest.approx(40.0, abs=1e-6)

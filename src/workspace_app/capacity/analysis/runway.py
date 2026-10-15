@@ -102,7 +102,11 @@ def _first(trend: Trend, today: float, target: float, side: int) -> float | None
     else:
         disc = qb * qb - 4 * qa * qc
         if disc < 0:
-            return None
+            # a band of no width has the line's one root twice, which rounding
+            # can put a hair below zero
+            if disc < -1e-9 * qb * qb:
+                return None
+            disc = 0.0
         root = math.sqrt(disc)
         roots = [(-qb - root) / (2 * qa), (-qb + root) / (2 * qa)]
     valid = [

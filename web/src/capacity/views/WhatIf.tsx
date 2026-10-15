@@ -55,7 +55,8 @@ export function runwayDate(
   return {
     kind: "date",
     atMs,
-    earlyMs: ms(reach.early) ?? summary.period.end_ms,
+    // the band's early end is never after the line's crossing
+    earlyMs: ms(reach.early) ?? atMs,
     lateMs: ms(reach.late),
     slope: trend.slope,
     target: room.max_n,
