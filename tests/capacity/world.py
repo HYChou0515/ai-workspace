@@ -71,6 +71,21 @@ class World:
     gpu_cards: int = 2
     #: In-flight requests per card past which the GPU slows (the truth view 8 should find).
     gpu_knee_per_card: float = 0.35
+    #: Other systems' mean in-flight requests on the same model (the GPU is shared).
+    other_busy_mean: float = 0.4
+    #: Extra in-flight requests other systems' weekend batch adds, 13:00-18:00 —
+    #: load past the knee that the workday sizing never sees.
+    other_weekend_batch: float = 0.0
+    sandbox_host_cores: float = 8.0
+    #: Host utilisation past which busy sandboxes start hitting their own
+    #: `cpu.max`: throttled time, which the kernel counts as pressure too,
+    #: though the machine has CPU to spare (E15).
+    throttle_from: float | None = None
+    #: Whether the kernel offers pressure (PSI); without it no row carries it.
+    psi: bool = True
+    #: The last `joining` people start partway through, one after another, so the
+    #: number of people grows (what the runway view extrapolates).
+    joining: int = 0
 
     @cached_property
     def zone(self) -> ZoneInfo:
@@ -121,6 +136,10 @@ class World:
         # A third of the people skip a given day: absent days are part of the truth.
         day = (np.arange(self.slots) * self.step_s) // 86_400
         present = rng.random((self.users, self.days)) > 0.33
+        for k in range(self.joining):
+            present[self.users - self.joining + k, : (k + 1) * self.days // (self.joining + 1)] = (
+                False
+            )
         return (rng.random(p.shape) < p) & present[:, day]
 
     @cached_property
@@ -185,7 +204,13 @@ class World:
     def other_busy(self) -> np.ndarray:
         """[slot] other systems' in-flight seconds on the same model."""
         rng = np.random.default_rng(self.seed + 6)
-        return np.clip(rng.normal(0.4, 0.15, self.slots), 0, None) * self.step_s
+        busy = np.clip(rng.normal(self.other_busy_mean, 0.15, self.slots), 0, None)
+        if self.other_weekend_batch:
+            t = self.start_ms / 1000 + np.arange(self.slots) * self.step_s
+            local = [dt.datetime.fromtimestamp(x, self.zone) for x in t]
+            batch = np.array([d.weekday() >= 5 and 13 <= d.hour < 18 for d in local])
+            busy = busy + self.other_weekend_batch * batch
+        return busy * self.step_s
 
     @cached_property
     def gpu_inflight(self) -> np.ndarray:
@@ -325,32 +350,39 @@ class World:
                         )
                 cores = float(self.sandbox_cores[u, s])
                 if cores:
+                    waited = self.step_s * 0.02 * max(0.0, self.host_util[s] - 0.5) * 10
+                    throttled = (
+                        self.step_s * 0.5 * max(0.0, self.host_util[s] - self.throttle_from)
+                        if self.throttle_from is not None
+                        else 0.0
+                    )
+                    fields = {
+                        "item": f"{user}-item",
+                        "user": user,
+                        "app": app,
+                        "sandbox": f"sb-{user}",
+                        "cpu_s": round(cores * self.step_s, 6),
+                        "mem_bs": float(self.sandbox_memory[u, s]) * self.step_s,
+                        "mem_max": int(self.sandbox_memory[u, s]),
+                        "thr_s": round(throttled, 6),
+                        "thr_n": 0.0,
+                        "periods": 0.0,
+                        "cpu_psi_s": round(waited + throttled, 6),
+                        "mem_psi_s": 0.0,
+                        "oom": 0.0,
+                        "cpu_limit": 2.0,
+                        "mem_limit": 2 * GIB,
+                        "window_s": self.step_s,
+                    }
+                    if not self.psi:
+                        del fields["cpu_psi_s"], fields["mem_psi_s"]
                     docs.append(
                         document(
                             "sandbox",
                             at,
                             pod="sandbox-host-1",
                             component="sandbox-host",
-                            fields={
-                                "item": f"{user}-item",
-                                "user": user,
-                                "app": app,
-                                "sandbox": f"sb-{user}",
-                                "cpu_s": round(cores * self.step_s, 6),
-                                "mem_bs": float(self.sandbox_memory[u, s]) * self.step_s,
-                                "mem_max": int(self.sandbox_memory[u, s]),
-                                "thr_s": 0.0,
-                                "thr_n": 0.0,
-                                "periods": 0.0,
-                                "cpu_psi_s": round(
-                                    self.step_s * 0.02 * max(0.0, self.host_util[s] - 0.5) * 10, 6
-                                ),
-                                "mem_psi_s": 0.0,
-                                "oom": 0.0,
-                                "cpu_limit": 2.0,
-                                "mem_limit": 2 * GIB,
-                                "window_s": self.step_s,
-                            },
+                            fields=fields,
                         )
                     )
         for s in range(self.slots):
@@ -361,7 +393,8 @@ class World:
                     self._at(s),
                     pod="sandbox-host-1",
                     component="sandbox-host",
-                    fields={"live_s": live, "cpu_psi_s": 0.0, "window_s": self.step_s},
+                    fields={"live_s": live, "window_s": self.step_s}
+                    | ({"cpu_psi_s": 0.0} if self.psi else {}),
                 )
             )
         for day in range(self.days):
@@ -391,7 +424,7 @@ class World:
 
     @cached_property
     def host_util(self) -> np.ndarray:
-        return (self.sandbox_cores.sum(axis=0) + 0.3) / 8.0
+        return (self.sandbox_cores.sum(axis=0) + 0.3) / self.sandbox_host_cores
 
     def pod_samples(self) -> list[ResourceSample]:
         out: list[ResourceSample] = []
@@ -455,7 +488,14 @@ class World:
             ),
             CapacityEntry("worker", 4.0, 8 * GIB, None, 1, "pod 4 cores / 8 GiB"),
             CapacityEntry("postgres", 4.0, 16 * GIB, 200 * GIB, 1, "node 4 cores / 16 GiB"),
-            CapacityEntry("sandbox-host", 8.0, 32 * GIB, None, 1, "node 8 cores / 32 GiB"),
+            CapacityEntry(
+                "sandbox-host",
+                self.sandbox_host_cores,
+                32 * GIB,
+                None,
+                1,
+                f"node {self.sandbox_host_cores:g} cores / 32 GiB",
+            ),
             CapacityEntry("filestore", None, None, 500 * GIB, 1, "volume 500 GiB"),
         ]
 

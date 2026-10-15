@@ -168,6 +168,10 @@ class PairOut(BaseModel):
     y: str
     sets: str | None
     points: list[list[float]]
+    #: (d) only: the share of sandbox time held at the sandbox's own limit
+    throttled: list[list[float]] | None
+    #: why there is nothing to show, when that is not "it never slowed" (no_psi)
+    note: str | None
     x_max: float | None
     span: float
     knee: KneeOut | None

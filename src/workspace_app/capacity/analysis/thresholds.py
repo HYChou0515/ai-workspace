@@ -8,8 +8,12 @@ threshold for the line whose load it is:
 - b: p95 of first output − acceptance, against API CPU ÷ capacity — api.cpu;
 - c: seconds per generated token (1 ÷ tokens/s), against a model's requests in
   flight — shown, sets nothing;
-- d: share of sandbox time spent waiting for a CPU (pressure), against the
-  sandbox host's CPU ÷ capacity — sandbox-host.cpu;
+- d: share of sandbox time spent waiting for a CPU the machine did not have —
+  pressure minus the time each sandbox was throttled at its own `cpu.max`,
+  which the kernel counts as pressure too (E15) — against the sandbox host's
+  CPU ÷ capacity — sandbox-host.cpu. The throttled share rides along as its
+  own series; without PSI on the kernel there is nothing to fit, and the pair
+  says so (`note: no_psi`) rather than "never slowed";
 - e: p95 queue wait of jobs, against worker CPU ÷ capacity — worker.cpu;
 - gpu: p95 time to first token, against a model's requests in flight — that
   model's capacity.
@@ -50,6 +54,10 @@ class Pair:
     knee: Knee | None
     sets: str | None  # the line whose threshold (or capacity) it decides
     model: str = ""
+    #: why the pair has nothing to show, when that is not "it never slowed"
+    note: str | None = None
+    #: a second slowness on the same load, shown beside the first, fitted never
+    throttled: np.ndarray | None = None
 
     @property
     def span(self) -> float:
@@ -57,10 +65,14 @@ class Pair:
         return float(self.x[ok].max() - self.x[ok].min()) if ok.sum() > 1 else 0.0
 
     def points(self) -> list[list[float]]:
-        ok = np.flatnonzero(np.isfinite(self.x) & np.isfinite(self.y))
-        if len(ok) > MAX_POINTS:
-            ok = np.sort(np.random.default_rng(0).choice(ok, MAX_POINTS, replace=False))
-        return [[round(float(self.x[i]), 5), round(float(self.y[i]), 5)] for i in ok]
+        return _points(self.x, self.y)
+
+
+def _points(x: np.ndarray, y: np.ndarray) -> list[list[float]]:
+    ok = np.flatnonzero(np.isfinite(x) & np.isfinite(y))
+    if len(ok) > MAX_POINTS:
+        ok = np.sort(np.random.default_rng(0).choice(ok, MAX_POINTS, replace=False))
+    return [[round(float(x[i]), 5), round(float(y[i]), 5)] for i in ok]
 
 
 def hist_p95(hist: np.ndarray) -> np.ndarray:
@@ -161,12 +173,18 @@ def build_pairs(obs: Observations, lines: Mapping[str, Line]) -> list[Pair]:
     host = _util(lines.get("sandbox-host.cpu"))
     if host is not None and obs.sandbox_user:
         stalled = sum((m["cpu_psi_s"] for m in obs.sandbox_user.values()), np.zeros(p.n))
+        throttled = sum((m["thr_s"] for m in obs.sandbox_user.values()), np.zeros(p.n))
         live = sum((h["live_s"] for h in obs.host.values()), np.zeros(p.n))
         with np.errstate(divide="ignore", invalid="ignore"):
-            share = np.where(live > 0, stalled / live, np.nan)
-        pairs.append(
-            Pair("d", "sandbox_host.util", "cpu_wait_share", host, share, None, "sandbox-host.cpu")
-        )
+            waited = np.clip(stalled - throttled, 0.0, None)
+            share = np.where(live > 0, waited / live, np.nan)
+            held = np.where(live > 0, throttled / live, np.nan)
+        if not obs.psi_seen:
+            share = np.full(p.n, np.nan)
+        d = Pair("d", "sandbox_host.util", "cpu_wait_share", host, share, None, "sandbox-host.cpu")
+        d.throttled = held
+        d.note = None if obs.psi_seen else "no_psi"
+        pairs.append(d)
     worker = _util(lines.get("worker.cpu"))
     if worker is not None and obs.jobs:
         events = []
@@ -203,6 +221,8 @@ def pair_json(pair: Pair) -> dict[str, Any]:
         "y": pair.y_label,
         "sets": pair.sets,
         "points": pair.points(),
+        "throttled": None if pair.throttled is None else _points(pair.x, pair.throttled),
+        "note": pair.note,
         "x_max": float(pair.x[ok].max()) if ok.any() else None,
         "span": pair.span,
         "knee": None

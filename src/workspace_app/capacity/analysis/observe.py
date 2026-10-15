@@ -92,6 +92,9 @@ class Observations:
     #: go back further. Until 30 days are recorded, N counts only the people
     #: seen so far.
     recorded_since_ms: int | None = None
+    #: Whether any sandbox row carried CPU pressure. A kernel without PSI
+    #: writes none, and a sum over nothing must not read as "never waited".
+    psi_seen: bool = False
     turns: list[Mapping[str, Any]] = field(default_factory=list)
     jobs: list[Mapping[str, Any]] = field(default_factory=list)
     dropped: float = 0.0
@@ -261,6 +264,8 @@ def _records(sources: CapacitySources, obs: Observations, budget: _Budget) -> in
         )
         for m in measured:
             acc[m][i] += r.values.get(m, 0.0)
+    for r in ask("sandbox", (), maxes=("cpu_psi_s",), step_s=None):
+        obs.psi_seen = obs.psi_seen or "cpu_psi_s" in r.values
     for r in ask("sandbox", ("pod", "component"), ("cpu_s", "mem_bs")):
         i = p.index(r.t_ms or 0)
         if i is None:

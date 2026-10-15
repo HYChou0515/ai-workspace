@@ -210,3 +210,38 @@ def test_shares_in_the_summary_add_up():
     total = line["fixed"]["avg"] + people + line["residual"]["avg"]
     assert total == pytest.approx(line["total"]["avg"], rel=1e-3)
     assert np.isclose(sum(g["avg"] for g in line["groups"]["app"]), people, rtol=1e-3)
+
+
+def _pairs(w: World) -> dict[str, dict]:
+    sources = CapacitySources(WorldRecords(w), WorldPods(w), WorldGpus(w), WorldLlm(w))
+    obs = observe(sources, Period(w.start_ms, w.end_ms, w.step_s, ZoneInfo(w.tz)))
+    return {p["id"]: p for p in analyse(obs, now_ms=w.end_ms).summary()["thresholds"]}
+
+
+def test_sandboxes_wait_for_a_busy_machine_where_the_world_makes_them():
+    """Sixty people push the host past 50%, where the world makes them wait."""
+    d = _pairs(World(days=14, users=60))["d"]
+
+    assert d["note"] is None
+    assert d["knee"] is not None and d["knee"]["at"] == pytest.approx(0.5, abs=0.05)
+
+
+def test_sandboxes_held_at_their_own_limit_do_not_read_as_a_busy_machine():
+    """A sandbox at its own cpu.max is throttled, and the kernel counts that as
+    pressure too (E15). Left in, it draws a knee that says "buy machines" where
+    the machine had CPU to spare; it is shown on its own instead."""
+    d = _pairs(World(days=14, users=40, sandbox_host_cores=16.0, throttle_from=0.25))["d"]
+
+    assert d["knee"] is None
+    assert max(y for _x, y in d["points"]) < 1e-6
+    held = np.array(d["throttled"])
+    # the world throttles each live sandbox 0.5 × (load − 0.25) of the time
+    assert np.allclose(held[:, 1], 0.5 * np.clip(held[:, 0] - 0.25, 0, None), atol=1e-3)
+    assert held[:, 1].max() > 0
+
+
+def test_without_pressure_on_the_kernel_the_page_is_told_it_is_not_measured():
+    d = _pairs(World(days=14, users=40, psi=False))["d"]
+
+    assert d["note"] == "no_psi"
+    assert d["knee"] is None and d["points"] == []

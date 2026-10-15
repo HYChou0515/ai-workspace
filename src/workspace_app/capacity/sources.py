@@ -53,8 +53,11 @@ class UsageRecordSource(ABC):
         kind `q.kind` whose `@timestamp` is in [start_ms, end_ms) and whose
         fields equal `q.where`, grouped by the `q.group_by` fields (a missing
         field groups as "") and by `step_s` buckets (None: one bucket, t_ms None).
-        A field missing from a record adds nothing to its sum. A field is named
-        in `sums` or in `maxes`, never both: `values` is keyed by field name."""
+        A field missing from a record adds nothing to its sum. A max over
+        records none of which carries the field is left out of `values`, not
+        0: that is how the analysis tells a kernel without pressure (PSI)
+        from one where nothing waited. A field is named in `sums` or in
+        `maxes`, never both: `values` is keyed by field name."""
 
     @abstractmethod
     def records(self, kind: str, start_ms: int, end_ms: int) -> Iterable[Mapping[str, Any]]:
