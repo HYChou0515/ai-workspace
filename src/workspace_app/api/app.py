@@ -2311,6 +2311,7 @@ def create_app(
         api, spec=spec, locator=locator, get_user_id=get_user_id, superusers=superusers
     )
     # docs/plan-capacity-usage.md §11: the capacity dashboard (superusers only).
+    from ..capacity.local_usage import sandbox_measured as _sandbox_measured
     from ..capacity.service import CapacityService as _CapacityService
     from ..capacity.sources import CapacitySources as _CapacitySources
     from ..config.schema import CapacitySettings as _CapacitySettings
@@ -2318,7 +2319,11 @@ def create_app(
 
     app.state.capacity = capacity or _CapacityService(_CapacitySources(), _CapacitySettings())
     register_capacity_routes(
-        api, service=app.state.capacity, get_user_id=get_user_id, superusers=superusers
+        api,
+        service=app.state.capacity,
+        get_user_id=get_user_id,
+        superusers=superusers,
+        sandbox_measured=_sandbox_measured(sandbox),
     )
 
     # The write side of `_item_facts`: whoever changes an item's stored facts

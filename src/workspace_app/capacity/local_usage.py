@@ -3,9 +3,9 @@
 
 The sandboxes run in this process's pod, in cgroups this process made, so the
 pod-local loop (`api/lifecycle.py`) samples them with the same `UsageSampler`
-sandbox-host runs, writing through this process's own recorder. Every other
-backend has no per-sandbox cgroup to read: no sampler, and the dashboard says
-sandbox use is not measured there.
+sandbox-host runs, writing through this process's own recorder. sandbox-host
+samples its own. Every other backend has no per-sandbox cgroup to read: no
+sampler, and `sandbox_measured` tells the dashboard, which says so.
 """
 
 from __future__ import annotations
@@ -20,6 +20,17 @@ from .recorder import UsageRecorder
 
 #: How often each sandbox's cgroup is read — sandbox-host's default too.
 SAMPLE_S = 60.0
+
+
+def sandbox_measured(sandbox: Any) -> bool | None:
+    """Whether anything measures `sandbox`'s sandboxes one by one: this
+    process does for its own isolated ones; sandbox-host decides for its own
+    (None — not this process's to say); anything else, nothing does."""
+    from ..sandbox.http_client import HttpSandbox
+
+    if isinstance(sandbox, IsolatedProcessSandbox):
+        return True
+    return None if isinstance(sandbox, HttpSandbox) else False
 
 
 def local_sandbox_sampler(

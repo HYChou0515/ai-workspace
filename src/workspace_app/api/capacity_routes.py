@@ -222,6 +222,9 @@ class CapacitySummary(BaseModel):
     runway: RunwayOut
     thresholds: list[PairOut]
     confidence: ConfidenceOut
+    #: whether anything measures sandboxes one by one (§6.5): False — nothing
+    #: does on this backend; None — sandbox-host decides, not this process
+    sandbox_measured: bool | None
 
 
 # ── one person (view 3) ──────────────────────────────────────────────────────
@@ -293,6 +296,7 @@ def register_capacity_routes(
     service: CapacityService,
     get_user_id: Callable[[], str],
     superusers: frozenset[str],
+    sandbox_measured: bool | None = None,
 ) -> None:
     def _require_superuser() -> None:
         if get_user_id() not in superusers:
@@ -317,7 +321,8 @@ def register_capacity_routes(
         _require_superuser()
         analysis = await _analysis(days)
         # Each answer walks the whole analysis: off the loop, like the build.
-        return CapacitySummary.model_validate(await asyncio.to_thread(analysis.summary))
+        summary = await asyncio.to_thread(analysis.summary)
+        return CapacitySummary.model_validate({**summary, "sandbox_measured": sandbox_measured})
 
     @app.get("/admin/capacity/person", response_model=PersonOut)
     async def capacity_person(user: str, days: int = 28) -> PersonOut:

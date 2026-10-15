@@ -231,6 +231,14 @@ async def test_the_answers_are_worked_out_off_the_event_loop():
     assert threading.main_thread().name not in seen.values()
 
 
+async def test_the_page_is_told_when_sandbox_use_is_not_measured():
+    """The test app runs sandboxes with no cgroup each: nothing measures them."""
+    async with _client(_app(_service())) as c:
+        body = (await c.get("/api/admin/capacity?days=28")).json()
+
+    assert body["sandbox_measured"] is False
+
+
 async def test_an_analysis_that_would_load_too_much_says_so():
     w = _world()
     service = _service(CapacitySettings(timezone=w.tz, lag_s=0, max_rows=100))

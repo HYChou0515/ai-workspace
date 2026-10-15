@@ -92,3 +92,15 @@ def test_a_sandbox_without_cgroups_has_no_sampler():
         assert local_sandbox_sampler(MockSandbox(), recorder) is None
     finally:
         recorder.close()
+
+
+def test_whether_sandbox_use_is_measured_comes_from_the_backend(tmp_path):
+    """§6.5: a backend with no cgroup per sandbox measures nothing, and the
+    page says so; sandbox-host decides for its own (None: not this process's
+    to say)."""
+    from workspace_app.capacity.local_usage import sandbox_measured
+    from workspace_app.sandbox.http_client import HttpSandbox
+
+    assert sandbox_measured(_isolated(tmp_path)) is True
+    assert sandbox_measured(MockSandbox()) is False
+    assert sandbox_measured(HttpSandbox("http://host:1")) is None

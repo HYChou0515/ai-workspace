@@ -32,7 +32,8 @@ def fixtures() -> dict[str, object]:
     sources = CapacitySources(WorldRecords(w), WorldPods(w), WorldGpus(w), WorldLlm(w))
     obs = observe(sources, Period(w.start_ms, w.end_ms, w.step_s, ZoneInfo(w.tz)))
     analysis = analyse(obs, now_ms=w.end_ms)
-    summary = analysis.summary()
+    # what the route adds to the analysis: whether sandboxes are measured
+    summary = {**analysis.summary(), "sandbox_measured": True}
     for pair in summary["thresholds"]:  # keep the fixture small: 200 points a pair
         pair["points"] = pair["points"][:: max(1, len(pair["points"]) // 200)]
     n_now = summary["people"]["n_now"]
