@@ -252,3 +252,38 @@ async def test_the_flush_loop_builds_its_rows_off_the_event_loop():
         rec.close()
 
     assert by_the_loop and threading.main_thread().name not in by_the_loop
+
+
+def test_closing_waits_for_a_flush_still_putting_its_rows():
+    """Shutdown cancels the flush loop, not the thread its flush runs in: a
+    close that does not wait for it stops the writer first, and every row that
+    flush puts after the stop is lost — and counted nowhere."""
+    import threading
+
+    clock = _Clock()
+    sink = _ListSink()
+    rec = _recorder(clock, sink)
+    rec.add("alice", "", "req:GET /api/x")
+    rec.add("bob", "", "req:GET /api/x")
+    clock.t = T0 + 300.5  # the window has closed
+    entered, release = threading.Event(), threading.Event()
+    put = rec._writer.put  # noqa: SLF001
+
+    def held(doc):  # noqa: ANN001, ANN202
+        if not entered.is_set():
+            entered.set()
+            release.wait(5)
+        return put(doc)
+
+    rec._writer.put = held  # noqa: SLF001  # ty: ignore[invalid-assignment]
+    flusher = threading.Thread(target=rec.flush)
+    flusher.start()
+    assert entered.wait(5)
+    closer = threading.Thread(target=rec.close)
+    closer.start()
+    closer.join(0.2)  # a close that does not wait has stopped the writer by now
+    release.set()
+    flusher.join(5)
+    closer.join(5)
+
+    assert sorted(r["user"] for r in _rows(sink)) == ["alice", "bob"]

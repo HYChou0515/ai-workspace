@@ -76,6 +76,8 @@ class UsageRecorder:
         self._clock = clock
         self._writer = UsageWriter(sink, queue_max=queue_max)
         self._lock = threading.Lock()
+        #: one flush at a time, start to end (see `flush`)
+        self._flushing = threading.Lock()
         self._windows: dict[int, dict[_Key, _Cell]] = {}
         self._running: set[Running] = set()
 
@@ -132,7 +134,16 @@ class UsageRecorder:
         self._writer.put(to_document(record, at_ms, pod=self.pod, component=self.component))
 
     def flush(self, *, final: bool = False) -> None:
-        """Write every closed window — and, `final`, the one in progress."""
+        """Write every closed window — and, `final`, the one in progress.
+
+        One flush at a time, from taking the windows to putting the last row:
+        shutdown cancels the flush loop but not the thread its flush runs in,
+        and `close` must not stop the writer while that flush is still putting
+        rows — every row put after the stop is lost, and counted nowhere."""
+        with self._flushing:
+            self._flush(final=final)
+
+    def _flush(self, *, final: bool) -> None:
         now = self._clock()
         current = self._window_of(now)
         until_s = now if final else current / 1000
