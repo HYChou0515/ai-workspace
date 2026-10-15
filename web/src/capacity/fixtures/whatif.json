@@ -1,0 +1,210 @@
+{
+ "n": 32,
+ "n_now": 16,
+ "profile": "all",
+ "app": "",
+ "draws": 400,
+ "lines": [
+  {
+   "id": "api.cpu",
+   "unit": "cores",
+   "p50": 0.8426993968342928,
+   "p95": 1.2852584033185182,
+   "capacity": 1.2,
+   "threshold": 0.7,
+   "needed_p50": 1.203856281191847,
+   "needed_p95": 1.836083433312169,
+   "machines_now": 2,
+   "machine_label": "pod 2 cores / 4 GiB",
+   "machines_needed": {
+    "p50": 3,
+    "p95": 4
+   },
+   "fits": {
+    "p50": false,
+    "p95": false
+   }
+  },
+  {
+   "id": "worker.cpu",
+   "unit": "cores",
+   "p50": 1.059999978542328,
+   "p95": 2.019999957084656,
+   "capacity": 4.0,
+   "threshold": 0.7,
+   "needed_p50": 1.5142856836318972,
+   "needed_p95": 2.8857142244066516,
+   "machines_now": 1,
+   "machine_label": "pod 4 cores / 8 GiB",
+   "machines_needed": {
+    "p50": 1,
+    "p95": 1
+   },
+   "fits": {
+    "p50": true,
+    "p95": true
+   }
+  },
+  {
+   "id": "api.memory",
+   "unit": "bytes",
+   "p50": 1416490188.800007,
+   "p95": 1464490188.800007,
+   "capacity": 8589934592.0,
+   "threshold": 0.8,
+   "needed_p50": 1770612736.0000088,
+   "needed_p95": 1830612736.0000088,
+   "machines_now": 2,
+   "machine_label": "pod 2 cores / 4 GiB",
+   "machines_needed": {
+    "p50": 1,
+    "p95": 1
+   },
+   "fits": {
+    "p50": true,
+    "p95": true
+   }
+  },
+  {
+   "id": "worker.memory",
+   "unit": "bytes",
+   "p50": 1288490188.80001,
+   "p95": 1288490188.80001,
+   "capacity": 8589934592.0,
+   "threshold": 0.8,
+   "needed_p50": 1610612736.0000124,
+   "needed_p95": 1610612736.0000124,
+   "machines_now": 1,
+   "machine_label": "pod 4 cores / 8 GiB",
+   "machines_needed": {
+    "p50": 1,
+    "p95": 1
+   },
+   "fits": {
+    "p50": true,
+    "p95": true
+   }
+  },
+  {
+   "id": "postgres.cpu",
+   "unit": "cores",
+   "p50": 0.2019466666549299,
+   "p95": 0.20341433323123898,
+   "capacity": 4.0,
+   "threshold": 0.7,
+   "needed_p50": 0.2884952380784713,
+   "needed_p95": 0.2905919046160557,
+   "machines_now": 1,
+   "machine_label": "node 4 cores / 16 GiB",
+   "machines_needed": {
+    "p50": 1,
+    "p95": 1
+   },
+   "fits": {
+    "p50": true,
+    "p95": true
+   }
+  },
+  {
+   "id": "postgres.memory",
+   "unit": "bytes",
+   "p50": 4294967296.0,
+   "p95": 4294967296.0,
+   "capacity": 17179869184.0,
+   "threshold": 0.8,
+   "needed_p50": 5368709120.0,
+   "needed_p95": 5368709120.0,
+   "machines_now": 1,
+   "machine_label": "node 4 cores / 16 GiB",
+   "machines_needed": {
+    "p50": 1,
+    "p95": 1
+   },
+   "fits": {
+    "p50": true,
+    "p95": true
+   }
+  },
+  {
+   "id": "sandbox-host.cpu",
+   "unit": "cores",
+   "p50": 8.676747554381084,
+   "p95": 22.069379195441595,
+   "capacity": 8.0,
+   "threshold": 0.4636827055567221,
+   "needed_p50": 18.712683156822337,
+   "needed_p95": 47.59586443696218,
+   "machines_now": 1,
+   "machine_label": "node 8 cores / 32 GiB",
+   "machines_needed": {
+    "p50": 3,
+    "p95": 6
+   },
+   "fits": {
+    "p50": false,
+    "p95": false
+   }
+  },
+  {
+   "id": "sandbox-host.memory",
+   "unit": "bytes",
+   "p50": 10750764064.236937,
+   "p95": 14818323851.68764,
+   "capacity": 34359738368.0,
+   "threshold": 0.8,
+   "needed_p50": 13438455080.29617,
+   "needed_p95": 18522904814.609547,
+   "machines_now": 1,
+   "machine_label": "node 8 cores / 32 GiB",
+   "machines_needed": {
+    "p50": 1,
+    "p95": 1
+   },
+   "fits": {
+    "p50": true,
+    "p95": true
+   }
+  },
+  {
+   "id": "gpu.qwen3",
+   "unit": "inflight",
+   "p50": 1.5071996134075336,
+   "p95": 2.3183938479884523,
+   "capacity": 0.7065343740969117,
+   "threshold": 1.0,
+   "needed_p50": 1.5071996134075336,
+   "needed_p95": 2.3183938479884523,
+   "machines_now": 2,
+   "machine_label": "GPU card",
+   "machines_needed": {
+    "p50": 5,
+    "p95": 7
+   },
+   "fits": {
+    "p50": false,
+    "p95": false
+   }
+  },
+  {
+   "id": "gpu.qwen3.memory",
+   "unit": "bytes",
+   "p50": 150323855360.0,
+   "p95": 150323855360.0,
+   "capacity": 171798691840.0,
+   "threshold": 0.8,
+   "needed_p50": 187904819200.0,
+   "needed_p95": 187904819200.0,
+   "machines_now": null,
+   "machine_label": "",
+   "machines_needed": {
+    "p50": null,
+    "p95": null
+   },
+   "fits": {
+    "p50": false,
+    "p95": false
+   }
+  }
+ ],
+ "ready": true
+}

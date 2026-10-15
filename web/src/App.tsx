@@ -16,6 +16,7 @@ import { SkillHubPage } from "./pages/SkillHubPage";
 import { SchedulesOverviewPage } from "./pages/SchedulesOverviewPage";
 import { WuiOverviewPage } from "./pages/WuiOverviewPage";
 import { WorkCalendarPage } from "./pages/WorkCalendarPage";
+import { CapacityPage } from "./pages/CapacityPage";
 import { ModelSettingsPage } from "./pages/ModelSettingsPage";
 import { HelpPage } from "./pages/HelpPage";
 import { KbDocPage } from "./pages/kb/KbDocPage";
@@ -74,6 +75,7 @@ export function AppRoutes() {
             superusers + anyone who belongs to a group. */}
         <Route path="/groups" element={<GroupsPage />} />
         <Route path="/work-calendar" element={<WorkCalendarPage />} />
+        <Route path="/capacity" element={<CapacityPage />} />
         {/* docs/plan-model-settings.md: superuser-only; the page says so to anyone else. */}
         <Route path="/settings/models" element={<ModelSettingsPage />} />
         {/* What I am holding vs what I may hold. The limits refuse rather

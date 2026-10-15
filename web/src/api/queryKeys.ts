@@ -133,6 +133,11 @@ export const qk = {
     ["toolUsage", days, filter, kind, group] as const,
   toolUsageDetail: (tool: string, days: number, kind: string, group: string, source: string) =>
     ["toolUsageDetail", tool, days, kind, group, source] as const,
+  // docs/plan-capacity-usage.md: the capacity dashboard (superusers only).
+  capacity: (days: number) => ["capacity", days] as const,
+  capacityPerson: (user: string, days: number) => ["capacity", days, "person", user] as const,
+  capacityWhatIf: (days: number, n: number, profile: string, app: string) =>
+    ["capacity", days, "whatif", n, profile, app] as const,
   /** docs/plan-outside-helper.md: is the person's own helper connected. */
   aiWorkspaceHelper: () => ["aiWorkspaceHelper"] as const,
   /** The packed helper the operator published (§3.7.2), or null. */
