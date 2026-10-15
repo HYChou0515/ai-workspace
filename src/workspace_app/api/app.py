@@ -2086,6 +2086,7 @@ def create_app(
         event_bus=event_bus,
         pod_id=pod_id,
         turn_activity=turn_activity,
+        usage_recorder=usage_recorder,
     )
     # The sweeper feeds the durable per-person ledger with what the mirror just
     # measured — the ONLY path by which bytes the agent produced with `exec`
@@ -2144,6 +2145,7 @@ def create_app(
 
     kb_turn_engine = ChatTurnEngine(
         runner,
+        usage_recorder=usage_recorder,
         turn_activity=turn_activity,
         turn_control=turn_control,
         poll_interval=turn_cancel_poll_seconds,

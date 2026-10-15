@@ -343,7 +343,12 @@ class WorkflowExecutor:
             self._turn_engine.publish(item_id, TurnEnded(chat_id=rid))
 
         await self._turn_engine.enqueue(
-            enqueue_key, prompt, ctx, on_complete=persist, on_turn_end=_announce
+            enqueue_key,
+            prompt,
+            ctx,
+            on_complete=persist,
+            on_turn_end=_announce,
+            surface="workflow",  # docs/plan-capacity-usage.md §6.3
         )
         if lane is not None and lane != chat_key:  # transient sub-lane → drop its session
             await self._turn_engine.forget(lane)

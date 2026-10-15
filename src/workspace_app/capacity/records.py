@@ -52,9 +52,11 @@ class TurnRecord:
     first_event_ms: int | None
     first_output_ms: int | None
     ended_ms: int
+    #: The model that wrote the reply, and the provider's own token counts —
+    #: absent when it gave none (a cross-check on ④, not a replacement).
     model: str = ""
-    prompt_tokens: int = 0
-    completion_tokens: int = 0
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
 
 
 @dataclass(frozen=True)
