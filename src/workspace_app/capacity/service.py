@@ -1,10 +1,14 @@
 """The capacity analysis, on demand (docs/plan-capacity-usage.md §11, E6).
 
-One analysis per period, built in a worker thread (never on the event loop)
-and kept in memory for `TTL_S`; a second request for the same period while
-one is being built waits for it rather than building another. Nothing is
-written anywhere (D3). The 90-day period is analysed at 15-minute slots or
-coarser, so three months of a large deployment stays within memory.
+One analysis per period, built in a worker thread (never on the event loop),
+one build at a time across periods (each holds a period's records in the API
+process), and kept in memory for `TTL_S` — then let go, whether or not anyone
+asks again. The build belongs to no request: everyone asking for the period
+while it runs waits for the same one, and a request that goes away (a page
+closed) neither cancels it for the others nor makes the next one start
+another. Nothing is written anywhere (D3). The 90-day period is analysed at
+15-minute slots or coarser, so three months of a large deployment stays
+within memory.
 """
 
 from __future__ import annotations
@@ -13,6 +17,7 @@ import asyncio
 import datetime as dt
 import time
 from collections.abc import Callable
+from functools import partial
 from zoneinfo import ZoneInfo
 
 from ..config.schema import CapacitySettings
@@ -48,7 +53,8 @@ class CapacityService:
         self._clock = clock
         self._ttl_s = ttl_s
         self._kept: dict[int, tuple[float, Analysis]] = {}
-        self._building: dict[int, asyncio.Future[Analysis]] = {}
+        self._building: dict[int, asyncio.Task[Analysis]] = {}
+        self._one_at_a_time = asyncio.Lock()
 
     def period(self, days: int) -> Period:
         step = self._settings.step_s
@@ -67,23 +73,30 @@ class CapacityService:
         kept = self._kept.get(days)
         if kept is not None and self._clock() - kept[0] < self._ttl_s:
             return kept[1]
-        building = self._building.get(days)
-        if building is not None:
-            return await asyncio.shield(building)
-        future: asyncio.Future[Analysis] = asyncio.get_running_loop().create_future()
-        self._building[days] = future
-        try:
+        task = self._building.get(days)
+        if task is None:
+            task = asyncio.get_running_loop().create_task(self._build_and_keep(days))
+            self._building[days] = task
+            task.add_done_callback(partial(self._built, days))
+        return await asyncio.shield(task)
+
+    def _built(self, days: int, task: asyncio.Task[Analysis]) -> None:
+        if self._building.get(days) is task:
+            del self._building[days]
+        if not task.cancelled():
+            task.exception()  # retrieved: each waiter re-raises it; nobody else must log it
+
+    async def _build_and_keep(self, days: int) -> Analysis:
+        async with self._one_at_a_time:
             result = await asyncio.to_thread(self._build, days)
-        except BaseException as exc:
-            future.set_exception(exc)
-            future.exception()  # retrieved: a waiter re-raises it, nobody else must log it
-            raise
-        else:
-            self._kept[days] = (self._clock(), result)
-            future.set_result(result)
-            return result
-        finally:
-            self._building.pop(days, None)
+        self._kept[days] = (self._clock(), result)
+        asyncio.get_running_loop().call_later(self._ttl_s, self._let_go, days, result)
+        return result
+
+    def _let_go(self, days: int, result: Analysis) -> None:
+        kept = self._kept.get(days)
+        if kept is not None and kept[1] is result:
+            del self._kept[days]
 
     def _build(self, days: int) -> Analysis:
         period = self.period(days)

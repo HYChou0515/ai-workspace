@@ -7,6 +7,7 @@ demand by `CapacityService` and kept in memory; nothing is stored (D3).
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable
 from typing import Literal
 
@@ -305,13 +306,14 @@ def register_capacity_routes(
     async def capacity_summary(days: int = 28) -> CapacitySummary:
         _require_superuser()
         analysis = await _analysis(days)
-        return CapacitySummary.model_validate(analysis.summary())
+        # Each answer walks the whole analysis: off the loop, like the build.
+        return CapacitySummary.model_validate(await asyncio.to_thread(analysis.summary))
 
     @app.get("/admin/capacity/person", response_model=PersonOut)
     async def capacity_person(user: str, days: int = 28) -> PersonOut:
         _require_superuser()
         analysis = await _analysis(days)
-        found = analysis.person(user)
+        found = await asyncio.to_thread(analysis.person, user)
         if found is None:
             raise HTTPException(status_code=404, detail="no use recorded for this person")
         return PersonOut.model_validate(found)
@@ -322,7 +324,7 @@ def register_capacity_routes(
     ) -> WhatIfOut:
         _require_superuser()
         analysis = await _analysis(days)
-        return WhatIfOut.model_validate(analysis.whatif(n, profile, app))
+        return WhatIfOut.model_validate(await asyncio.to_thread(analysis.whatif, n, profile, app))
 
     @app.post("/admin/capacity/refresh", status_code=204)
     async def capacity_refresh(days: int = 28) -> Response:

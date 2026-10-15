@@ -5,6 +5,8 @@ an analysis that would load too much stops and says so."""
 from __future__ import annotations
 
 import asyncio
+import threading
+import time
 from functools import cache
 
 import pytest
@@ -140,6 +142,93 @@ async def test_two_requests_at_once_build_one_analysis():
     await asyncio.gather(service.analysis(28), service.analysis(28))
 
     assert _Counting.builds == 1
+
+
+async def test_a_cancelled_first_request_neither_fails_the_others_nor_builds_twice():
+    """The build is nobody's request: a page closed while it ran must not hand
+    its cancellation to the other people waiting, nor start a second build."""
+    service = _service()
+    first = asyncio.ensure_future(service.analysis(28))
+    await asyncio.sleep(0)
+    second = asyncio.ensure_future(service.analysis(28))
+    await asyncio.sleep(0)
+
+    first.cancel()
+    got = await asyncio.wait_for(second, 60)
+    again = await service.analysis(28)
+
+    assert got is again
+    assert _Counting.builds == 1
+    with pytest.raises(asyncio.CancelledError):
+        await first
+
+
+class _Watched(CapacityService):
+    """Notes how many builds ran at once."""
+
+    active = most = 0
+
+    def _build(self, days: int):  # noqa: ANN202
+        type(self).active += 1
+        type(self).most = max(type(self).most, type(self).active)
+        try:
+            time.sleep(0.05)
+            return super()._build(days)
+        finally:
+            type(self).active -= 1
+
+
+async def test_analyses_are_built_one_at_a_time():
+    """Each build holds a period's records in the API process: three at once
+    is three times the peak, on the pod that serves everyone."""
+    w = _world()
+    _Watched.active = _Watched.most = 0
+    sources = CapacitySources(_Counting(w), WorldPods(w), WorldGpus(w), WorldLlm(w))
+    service = _Watched(
+        sources, CapacitySettings(timezone=w.tz, lag_s=0), clock=lambda: w.end_ms / 1000
+    )
+
+    await asyncio.gather(service.analysis(7), service.analysis(28), service.analysis(90))
+
+    assert _Watched.most == 1
+
+
+async def test_a_kept_analysis_is_let_go_once_its_time_is_up():
+    """Kept for the TTL to serve the page's next questions — not for as long
+    as the process lives after one look."""
+    w = _world()
+    sources = CapacitySources(_Counting(w), WorldPods(w), WorldGpus(w), WorldLlm(w))
+    service = CapacityService(
+        sources, CapacitySettings(timezone=w.tz, lag_s=0), clock=time.time, ttl_s=0.05
+    )
+
+    await service.analysis(28)
+    await asyncio.sleep(0.2)
+
+    assert 28 not in service._kept  # noqa: SLF001
+
+
+async def test_the_answers_are_worked_out_off_the_event_loop():
+    """summary(), whatif() and person() walk the whole analysis; on the loop
+    they stall every request the pod is serving."""
+    service = _service()
+    seen: dict[str, str] = {}
+    analysis = await service.analysis(28)
+    for name in ("summary", "whatif", "person"):
+        real = getattr(analysis, name)
+
+        def spy(*a, _real=real, _name=name, **kw):  # noqa: ANN002, ANN003, ANN202
+            seen[_name] = threading.current_thread().name
+            return _real(*a, **kw)
+
+        setattr(analysis, name, spy)
+    async with _client(_app(service)) as c:
+        await c.get("/api/admin/capacity?days=28")
+        await c.get("/api/admin/capacity/whatif?n=5&days=28")
+        await c.get("/api/admin/capacity/person?user=user00&days=28")
+
+    assert set(seen) == {"summary", "whatif", "person"}
+    assert threading.main_thread().name not in seen.values()
 
 
 async def test_an_analysis_that_would_load_too_much_says_so():
