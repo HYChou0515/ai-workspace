@@ -72,9 +72,18 @@ export type SkillHubFile = { path: string; size: number | null };
 /** A workspace holding a copy of the entry. */
 export type SkillHubInstall = { app: string; item_id: string; title: string };
 
-/** A workspace the install dialog offers — from the database alone, nothing
- * about what is inside it (plan-skill-install-picker D1). */
+/** A workspace the install dialog offers — from the database alone; what
+ * installing would do there is asked per row (plan-skill-install-picker D1). */
 export type SkillHubTarget = { item_id: string; title: string };
+
+/** What installing would do in one workspace, asked by its row before Install
+ * is pressed (D3). `unavailable`: its sandbox was too busy to answer, so the
+ * install itself will tell. `owner` on `name_taken`: whose copy is in the way
+ * ("" for a hand-written folder). */
+export type SkillInstallState = {
+  state: "ok" | "installed" | "name_taken" | "unavailable";
+  owner: string;
+};
 
 export type SkillHubTargets = { missing_tools: string[]; items: SkillHubTarget[] };
 
@@ -192,6 +201,8 @@ export type SkillHubApi = {
   /** App `app`'s workspaces the viewer may install into, by title — nothing
    * about what is inside them (plan-skill-install-picker D1). */
   targets(entryId: string, app: string): Promise<SkillHubTargets>;
+  /** What installing the entry into ONE of those workspaces would do (D3). */
+  installState(slug: string, itemId: string, entryId: string): Promise<SkillInstallState>;
   /** The Skills panel's install door: 409 when a folder of that name is
    * already in the item (a coded refusal naming whose copy it is), 404 when
    * the entry cannot be read. */
@@ -331,6 +342,12 @@ export const skillHubApi: SkillHubApi = {
     return getJson<SkillHubTargets>(
       `${entryBase(entryId)}/targets?${new URLSearchParams({ app })}`,
       "the workspaces could not be read",
+    );
+  },
+  installState(slug, itemId, entryId) {
+    return getJson<SkillInstallState>(
+      `/a/${encodeURIComponent(slug)}/items/${encodeURIComponent(itemId)}/skills/install-state?${new URLSearchParams({ entry_id: entryId })}`,
+      "the workspace could not be read",
     );
   },
   async install(slug, itemId, entryId) {

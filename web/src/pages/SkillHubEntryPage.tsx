@@ -11,7 +11,7 @@
  * review. Installing happens here (D6) and in a workspace's Skills panel.
  */
 
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useId, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
@@ -367,10 +367,11 @@ function Sidebar({
 }
 
 /** 「安裝到 workspace…」 (D6): an App, then one of its workspaces the viewer
- * may edit. The list is the database alone; 「已經裝了」 comes from
- * where-installed and a folder in the way from the install's own refusal
- * (plan-skill-install-picker D1, D2). A pick is cheap to redo, so the close is
- * not guarded (#779); it is a form, so no backdrop close. */
+ * may edit. The list is the database alone and shows at once; each row then
+ * asks what installing would do there and says it before Install is pressed
+ * (plan-skill-install-picker D1, D3) — NN/g's error prevention, with the
+ * row's own 「檢查中…」 as its status meanwhile. A pick is cheap to redo, so
+ * the close is not guarded (#779); it is a form, so no backdrop close. */
 function InstallDialog({
   entry,
   client,
@@ -394,23 +395,24 @@ function InstallDialog({
     queryKey: qk.skillHubTargets(entry.id, slug),
     queryFn: () => client.targets(entry.id, slug),
   });
-  // 「已經裝了」 is the side panel's where-installed — the same query, and not
-  // refetched on opening, so no second read — and the list does not wait for
-  // it: that reads every workspace, the list only the database
-  // (plan-skill-install-picker D2). A folder of that name in the way is said
-  // by the install's own refusal.
-  const installs = useQuery({
-    queryKey: qk.skillHubInstalls(entry.id),
-    queryFn: () => client.installs(entry.id),
-    refetchOnMount: false,
-  });
-  const installed = new Set(
-    (installs.data ?? []).filter((i) => i.app === slug).map((i) => i.item_id),
-  );
-  // A pick made before where-installed arrived does not survive learning it
-  // is installed: the row greys out, so the pick goes with it (review round 1).
-  const picked = chosen !== null && !installed.has(chosen) ? chosen : null;
   const items = targets.data?.items ?? [];
+  // One question per row, each answered on its own: a busy sandbox holds back
+  // only its own row, never the list (D3).
+  const states = useQueries({
+    queries: items.map((it) => ({
+      queryKey: qk.skillHubTargetState(entry.id, slug, it.item_id),
+      queryFn: () => client.installState(slug, it.item_id, entry.id),
+    })),
+  });
+  const stateOf = new Map(items.map((it, i) => [it.item_id, states[i]?.data]));
+  // Pickable once its answer says installing can go ahead — `unavailable`
+  // included, the install itself checks. A pick whose row stops being
+  // pickable (a refetch found the folder) goes with it.
+  const pickable = (id: string) => {
+    const s = stateOf.get(id)?.state;
+    return s === "ok" || s === "unavailable";
+  };
+  const picked = chosen !== null && pickable(chosen) ? chosen : null;
   const install = useMutation({
     mutationFn: (itemId: string) => client.install(slug, itemId, entry.id),
     onSuccess: (_res, itemId) => {
@@ -457,22 +459,35 @@ function InstallDialog({
         ) : items.length === 0 ? (
           <p className="muted">{t("skillHub.install.none")}</p>
         ) : (
-          items.map((it) => (
-            <label key={it.item_id} className="skill-hub-fork-item">
-              <input
-                type="radio"
-                name={`${titleId}-item`}
-                value={it.item_id}
-                checked={picked === it.item_id}
-                disabled={installed.has(it.item_id)}
-                onChange={() => setChosen(it.item_id)}
-              />
-              <span>{it.title || it.item_id}</span>
-              {installed.has(it.item_id) ? (
-                <span className="muted small">{t("skillHub.install.state.installed")}</span>
-              ) : null}
-            </label>
-          ))
+          items.map((it) => {
+            const s = stateOf.get(it.item_id);
+            return (
+              <label key={it.item_id} className="skill-hub-fork-item">
+                <input
+                  type="radio"
+                  name={`${titleId}-item`}
+                  value={it.item_id}
+                  checked={picked === it.item_id}
+                  disabled={!pickable(it.item_id)}
+                  onChange={() => setChosen(it.item_id)}
+                />
+                <span>{it.title || it.item_id}</span>
+                <span className="muted small">
+                  {s === undefined
+                    ? t("skillHub.install.state.checking")
+                    : s.state === "installed"
+                      ? t("skillHub.install.state.installed")
+                      : s.state === "unavailable"
+                        ? t("skillHub.install.state.unavailable")
+                        : s.state === "name_taken"
+                          ? s.owner
+                            ? t("skillHub.install.state.taken", { owner: nameOf(s.owner) })
+                            : t("skillHub.install.state.takenHand")
+                          : null}
+                </span>
+              </label>
+            );
+          })
         )}
       </fieldset>
       {install.isError ? (

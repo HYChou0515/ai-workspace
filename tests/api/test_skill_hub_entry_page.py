@@ -268,6 +268,106 @@ async def test_targets_for_an_unknown_app_is_an_empty_list(harness: Harness):
     assert res.json() == {"missing_tools": [], "items": []}
 
 
+def _state(harness: Harness, item: str, entry: str) -> dict:
+    res = harness.client.get(
+        f"/a/rca/items/{item}/skills/install-state", params={"entry_id": entry}
+    )
+    assert res.status_code == 200, res.text
+    return res.json()
+
+
+async def test_each_row_asks_what_installing_would_do_there(harness: Harness):
+    """One workspace per request, so the list shows at once and each row says
+    — before Install is pressed — what installing would do there, the same
+    rule the install route refuses by (plan-skill-install-picker D3)."""
+    hub = _hub(harness)
+    entry = await _publish(hub, "one")
+    carols = await _publish(hub, "x", owner="carol")
+    harness.client.post(harness.wpath("/skills/install"), json={"entry_id": entry})
+    free = _item(harness, "free", "read_content", "edit_content")
+    taken = _item(harness, "taken", "read_content", "edit_content")
+    await _copy(harness, taken, "triage", carols)
+    hand = _item(harness, "hand", "read_content", "edit_content")
+    await harness.filestore.write(hand, "/.skill/triage/SKILL.md", _md("mine"))
+
+    assert _state(harness, harness.iid, entry) == {"state": "installed", "owner": ""}
+    assert _state(harness, free, entry) == {"state": "ok", "owner": ""}
+    assert _state(harness, taken, entry) == {"state": "name_taken", "owner": "carol"}
+    assert _state(harness, hand, entry) == {"state": "name_taken", "owner": ""}
+
+
+async def test_a_rows_state_follows_the_install_routes_rule_on_odd_folders(harness: Harness):
+    """A fork's starting point is the viewer's own (no one's name on it); a
+    folder holding only the record is not in the way (the route accepts it);
+    an unreadable record still means a folder of that name is there."""
+    hub = _hub(harness)
+    entry = await _publish(hub, "one")
+    started = _item(harness, "started", "read_content", "edit_content")
+    await harness.filestore.write(started, "/.skill/triage/SKILL.md", _md("x"))
+    forked = SkillOrigin(source="hub", files={}, entry=entry, commit="c", forked=True)
+    await harness.filestore.write(started, "/.skill/triage/.origin", msgspec.json.encode(forked))
+    hollow = _item(harness, "hollow", "read_content", "edit_content")
+    origin = SkillOrigin(source="hub", files={}, entry=entry, commit="c")
+    await harness.filestore.write(hollow, "/.skill/triage/.origin", msgspec.json.encode(origin))
+    broken = _item(harness, "broken", "read_content", "edit_content")
+    await harness.filestore.write(broken, "/.skill/triage/SKILL.md", _md("x"))
+    await harness.filestore.write(broken, "/.skill/triage/.origin", b"{not json")
+
+    assert _state(harness, started, entry) == {"state": "name_taken", "owner": ""}
+    assert _state(harness, hollow, entry) == {"state": "ok", "owner": ""}
+    assert _state(harness, broken, entry) == {"state": "name_taken", "owner": ""}
+
+
+async def test_a_rows_state_never_wakes_a_sandbox(harness: Harness, monkeypatch):
+    """The dialog asks this of every workspace it lists: waking one rebuilds
+    a reaped sandbox, so N idle workspaces would cost N rebuilds an open."""
+    hub = _hub(harness)
+    entry = await _publish(hub, "one")
+    other = await _publish(hub, "x", owner="carol")
+    taken = _item(harness, "taken", "read_content", "edit_content")
+    await _copy(harness, taken, "triage", other)
+    free = _item(harness, "free", "read_content", "edit_content")
+    seen = _record_wakes(harness, monkeypatch)
+
+    _state(harness, taken, entry)
+    _state(harness, free, entry)
+
+    assert seen and not any(seen), seen
+
+
+async def test_a_busy_workspace_says_it_cannot_tell_yet(harness: Harness, monkeypatch):
+    from workspace_app.sandbox.protocol import SandboxBusy
+
+    hub = _hub(harness)
+    entry = await _publish(hub, "one")
+    busy = _item(harness, "busy", "read_content", "edit_content")
+    files = harness.spa_client.app.state.workspace_files  # ty: ignore[unresolved-attribute]
+    real_read = files.read
+
+    async def read(workspace_id: str, path: str, *, wake: bool = True) -> bytes:
+        if workspace_id == busy:
+            raise SandboxBusy(workspace_id)
+        return await real_read(workspace_id, path, wake=wake)
+
+    monkeypatch.setattr(files, "read", read)
+
+    assert _state(harness, busy, entry) == {"state": "unavailable", "owner": ""}
+
+
+async def test_a_rows_state_is_only_for_a_workspace_the_viewer_may_edit(harness: Harness):
+    """The same gate as installing into it: a workspace the viewer can only
+    read is not theirs to look inside this way."""
+    hub = _hub(harness)
+    entry = await _publish(hub, "one")
+    read_only = _item(harness, "read only", "read_content")
+
+    res = harness.client.get(
+        f"/a/rca/items/{read_only}/skills/install-state", params={"entry_id": entry}
+    )
+
+    assert res.status_code == 403, res.text
+
+
 # ── review round 1 ───────────────────────────────────────────────────────────
 
 

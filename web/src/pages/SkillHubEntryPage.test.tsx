@@ -4,7 +4,7 @@
  * who may read it, and the owner's five actions for the owner ALONE.
  */
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { QueryClient } from "@tanstack/react-query";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -18,6 +18,7 @@ import type {
   SkillHubApi,
   SkillHubDetail,
   SkillHubHistoryEvent,
+  SkillInstallState,
 } from "../api/skillHub";
 
 vi.mock("../api", () => ({
@@ -145,6 +146,7 @@ function client(
     get: vi.fn<SkillHubApi["get"]>(async () => entry),
     installs: vi.fn<SkillHubApi["installs"]>(async () => []),
     targets: vi.fn<SkillHubApi["targets"]>(async () => ({ missing_tools: [], items: [] })),
+    installState: vi.fn<SkillHubApi["installState"]>(async () => ({ state: "ok", owner: "" })),
     install: vi.fn<SkillHubApi["install"]>(),
     unpublish: vi.fn<SkillHubApi["unpublish"]>(async () => undefined),
     republish: vi.fn<SkillHubApi["republish"]>(async () => undefined),
@@ -663,7 +665,9 @@ describe("SkillHubEntryPage layout (plan-skill-hub-ux-redo D3, D5, D6, D16)", ()
     qc.setQueryData(qk.skillHubEntry("e-2", ""), two);
     mount(c, qc);
     fireEvent.click(await screen.findByRole("button", { name: word("skillHub.install") }));
-    fireEvent.click(await screen.findByRole("radio", { name: /Free one/ }));
+    const free = await screen.findByRole("radio", { name: /Free one/ });
+    await waitFor(() => expect(free).toBeEnabled());
+    fireEvent.click(free);
     fireEvent.click(screen.getByRole("button", { name: word("skillHub.install.confirm") }));
     await screen.findByRole("status");
 
@@ -727,7 +731,9 @@ describe("SkillHubEntryPage layout (plan-skill-hub-ux-redo D3, D5, D6, D16)", ()
     const go = within(dialog).getByRole("button", { name: word("skillHub.install.confirm") });
     expect(go).toBeDisabled();
 
-    fireEvent.click(within(dialog).getByRole("radio", { name: /Free one/ }));
+    const free = within(dialog).getByRole("radio", { name: /Free one/ });
+    await waitFor(() => expect(free).toBeEnabled());
+    fireEvent.click(free);
     fireEvent.click(go);
 
     await waitFor(() => expect(c.install).toHaveBeenCalledWith("rca", "i-1", "e-1"));
@@ -741,58 +747,80 @@ describe("SkillHubEntryPage layout (plan-skill-hub-ux-redo D3, D5, D6, D16)", ()
     await waitFor(() => expect(c.installs.mock.calls.length).toBeGreaterThan(1));
   });
 
-  it("lists the workspaces without waiting for where it is installed, then marks those (plan-skill-install-picker D1, D2)", async () => {
+  it("lists the workspaces at once and has each row say what installing would do there, as its own answer arrives (plan-skill-install-picker D1, D3)", async () => {
     const c = client(detail({}));
-    let answer: (v: Awaited<ReturnType<SkillHubApi["installs"]>>) => void = () => {};
-    c.installs.mockImplementation(() => new Promise((resolve) => (answer = resolve)));
+    const answers: Record<string, (v: SkillInstallState) => void> = {};
+    c.installState.mockImplementation(
+      (_slug, itemId) => new Promise((resolve) => (answers[itemId] = resolve)),
+    );
     c.targets.mockResolvedValue({
       missing_tools: [],
       items: [
         { item_id: "i-1", title: "Free one" },
         { item_id: "i-2", title: "Has it" },
+        { item_id: "i-3", title: "Clash" },
+        { item_id: "i-4", title: "Hand-made" },
+        { item_id: "i-5", title: "Busy" },
       ],
     });
     mount(c);
 
     fireEvent.click(await screen.findByRole("button", { name: word("skillHub.install") }));
     const dialog = await screen.findByTestId("skill-hub-install");
-    // Where-installed is still out: every row is there and pickable.
-    expect(await within(dialog).findByRole("radio", { name: /Has it/ })).toBeEnabled();
-    expect(within(dialog).getByRole("radio", { name: /Free one/ })).toBeEnabled();
-    expect(within(dialog).queryByText(word("skillHub.install.state.installed"))).toBeNull();
+    const radio = (name: RegExp) => within(dialog).getByRole("radio", { name });
+    // Every row is there before any of them is answered — and says so, not pickable yet.
+    await within(dialog).findByRole("radio", { name: /Free one/ });
+    expect(within(dialog).getAllByText(word("skillHub.install.state.checking"))).toHaveLength(5);
+    for (const r of [/Free one/, /Has it/, /Clash/, /Hand-made/, /Busy/]) expect(radio(r)).toBeDisabled();
+    await waitFor(() => expect(c.installState).toHaveBeenCalledTimes(5));
+    expect(c.installState).toHaveBeenCalledWith("rca", "i-3", "e-1");
 
-    // A copy in the same item id of ANOTHER App is not this one.
-    answer([
-      { app: "rca", item_id: "i-2", title: "Has it" },
-      { app: "pm", item_id: "i-1", title: "Free one" },
-    ]);
+    // One row's answer does not wait for another's.
+    answers["i-1"]({ state: "ok", owner: "" });
+    await waitFor(() => expect(radio(/Free one/)).toBeEnabled());
+    expect(radio(/Has it/)).toBeDisabled();
+    expect(within(dialog).getAllByText(word("skillHub.install.state.checking"))).toHaveLength(4);
 
-    await waitFor(() => expect(within(dialog).getByRole("radio", { name: /Has it/ })).toBeDisabled());
-    expect(within(dialog).getByText(word("skillHub.install.state.installed"))).toBeInTheDocument();
-    expect(within(dialog).getByRole("radio", { name: /Free one/ })).toBeEnabled();
+    answers["i-2"]({ state: "installed", owner: "" });
+    answers["i-3"]({ state: "name_taken", owner: "bob" });
+    answers["i-4"]({ state: "name_taken", owner: "" });
+    answers["i-5"]({ state: "unavailable", owner: "" });
+
+    expect(await within(dialog).findByText(word("skillHub.install.state.installed"))).toBeInTheDocument();
+    expect(radio(/Has it/)).toBeDisabled();
+    expect(within(dialog).getByText(word("skillHub.install.state.taken", { owner: "Bob Lee" }))).toBeInTheDocument();
+    expect(radio(/Clash/)).toBeDisabled();
+    expect(within(dialog).getByText(word("skillHub.install.state.takenHand"))).toBeInTheDocument();
+    expect(radio(/Hand-made/)).toBeDisabled();
+    // Could not tell: pickable, and the install itself will check.
+    expect(within(dialog).getByText(word("skillHub.install.state.unavailable"))).toBeInTheDocument();
+    expect(radio(/Busy/)).toBeEnabled();
+    expect(within(dialog).queryByText(word("skillHub.install.state.checking"))).toBeNull();
   });
 
-  it("drops a pick that turns out to be installed once where-installed arrives (review round 1)", async () => {
+  it("drops a pick whose row turns out not to be free after all (plan-skill-install-picker D3)", async () => {
     const c = client(detail({}));
-    let answer: (v: Awaited<ReturnType<SkillHubApi["installs"]>>) => void = () => {};
-    c.installs.mockImplementation(() => new Promise((resolve) => (answer = resolve)));
-    c.targets.mockResolvedValue({ missing_tools: [], items: [{ item_id: "i-2", title: "Has it" }] });
-    mount(c);
+    c.targets.mockResolvedValue({ missing_tools: [], items: [{ item_id: "i-1", title: "Free one" }] });
+    const qc = makeQueryClient();
+    mount(c, qc);
 
     fireEvent.click(await screen.findByRole("button", { name: word("skillHub.install") }));
     const dialog = await screen.findByTestId("skill-hub-install");
-    fireEvent.click(await within(dialog).findByRole("radio", { name: /Has it/ }));
+    const free = await within(dialog).findByRole("radio", { name: /Free one/ });
+    await waitFor(() => expect(free).toBeEnabled());
+    fireEvent.click(free);
     const go = within(dialog).getByRole("button", { name: word("skillHub.install.confirm") });
     expect(go).toBeEnabled();
 
-    answer([{ app: "rca", item_id: "i-2", title: "Has it" }]);
+    // A later answer for the same row: someone made a folder of that name.
+    act(() => qc.setQueryData(qk.skillHubTargetState("e-1", "rca", "i-1"), { state: "name_taken", owner: "" }));
 
-    await waitFor(() => expect(within(dialog).getByRole("radio", { name: /Has it/ })).toBeDisabled());
-    expect(within(dialog).getByRole("radio", { name: /Has it/ })).not.toBeChecked();
+    await waitFor(() => expect(free).toBeDisabled());
+    expect(free).not.toBeChecked();
     expect(go).toBeDisabled();
   });
 
-  it("does not read where-installed again when the dialog opens — the side panel's answer is reused (plan-skill-install-picker D2)", async () => {
+  it("opening the dialog does not read where-installed — that reads every App's workspaces (plan-skill-install-picker D3)", async () => {
     const c = client(detail({}));
     c.targets.mockResolvedValue({ missing_tools: [], items: [{ item_id: "i-1", title: "Free one" }] });
     // Already stale by the time the dialog opens: the case a default observer refetches.
@@ -822,7 +850,10 @@ describe("SkillHubEntryPage layout (plan-skill-hub-ux-redo D3, D5, D6, D16)", ()
 
     fireEvent.click(await screen.findByRole("button", { name: word("skillHub.install") }));
     const dialog = await screen.findByTestId("skill-hub-install");
-    fireEvent.click(await within(dialog).findByRole("radio", { name: /Clash/ }));
+    // Checked as free a moment ago; someone made the folder since.
+    const clash = await within(dialog).findByRole("radio", { name: /Clash/ });
+    await waitFor(() => expect(clash).toBeEnabled());
+    fireEvent.click(clash);
     fireEvent.click(within(dialog).getByRole("button", { name: word("skillHub.install.confirm") }));
 
     expect(await within(dialog).findByRole("alert")).toHaveTextContent(

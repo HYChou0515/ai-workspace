@@ -98,6 +98,9 @@ export const qk = {
     ["skillHub", "browse", q, mine, owner, sort] as const,
   skillHubInstalls: (id: string) => ["skillHub", "installs", id] as const,
   skillHubTargets: (id: string, app: string) => ["skillHub", "targets", id, app] as const,
+  // Under `targets`, so an install's invalidation reaches every row's answer too.
+  skillHubTargetState: (id: string, app: string, itemId: string) =>
+    ["skillHub", "targets", id, app, itemId] as const,
   skillHubEntry: (id: string, app: string) => ["skillHub", "entry", id, app] as const,
   skillHubHistory: (id: string) => ["skillHub", "history", id] as const,
   skillHubVersion: (id: string, revision: string) => ["skillHub", "version", id, revision] as const,
