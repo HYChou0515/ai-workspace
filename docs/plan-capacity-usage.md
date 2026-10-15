@@ -775,32 +775,96 @@ What the build changed from the plan above, each for a reason found while buildi
   outermost for the reason its comment gives (its wall clock must include every middleware).
 - **The turn's person is `agent.tool_usage.who`** (usage_user, else speaker, else acting user) — the
   rule the tool-usage statistics count by, so the two pages cannot disagree; `NOBODY` maps to `system`.
-- **No `ws.component` tag**: the purpose already says where (a turn surface or a job type). And a call
-  outside any usage scope carries **no tags** rather than `ws.user:system`; tags are only sent while
-  recording is on (`capacity.record`), because only a recorder opens scopes.
+- **No `ws.component` tag**: the purpose already says where (a turn surface or a job type). A call
+  outside any usage scope carries **no tags**; work no person asked for (a job with no requester) carries
+  `ws.user:system`. Tags are only sent while recording is on (`capacity.record`), because only a recorder
+  opens scopes.
 - **The failover producer thread now runs in its caller's context** (`failover/core.py`): a bare thread
   started with an empty context and dropped the tags of every KB call behind a failover chain. Found by
   the tag test that calls each adapter the way production does.
 - **Collinear columns are reported, not guessed apart**: a chat send and its turn's events always come
   together, so only their sum is identifiable; view 9 says so (`FitStats.collinear`).
-- **The knee search reaches the 99th percentile** (not the 95th) — knees live in peak hours — and a knee
-  must survive losing the 30 highest-load points, so a break drawn by a few far points is rejected.
+- **The knee is a continuous two-segment line, y = a + b·x + c·max(0, x − k)** — the plan's flat hinge
+  with a slope allowed before the break, so a load that costs a little before it slows still has its
+  knee found. k is searched over x's 10th–**99th** percentiles (knees live in peak hours) and then
+  refined between the best percentile's two neighbours: load in two clouds (a working day, another
+  system's weekend batch on a shared GPU) has no percentile in the gap between them, and the break can
+  lie there — a synthetic GPU knee of 1.75 read 1.00 before the refinement. A knee must survive losing
+  the 30 highest-load points, so a break drawn by a few far points is rejected.
 - **(d) uses the sandbox time-weighted wait share** (Σ stalled ÷ Σ alive per slot), not a p95 across
-  sandboxes: it needs no per-sandbox rows from ①.
+  sandboxes: it needs no per-sandbox rows from ①. "Stalled" is **pressure minus throttled time**: the
+  kernel counts a sandbox held at its own `cpu.max` as pressure too, and E15 keeps the two apart. The
+  throttled share is drawn beside it. Whether the kernel offers PSI at all is read from a max over the
+  period (the ① contract says a max over records that all lack the field is absent, not 0); without it
+  (d) says so instead of "no slow-down seen".
+- **Workers are one line per job type** (§9.1), each pod's type read off its `work` rows; a pod that ran
+  several leaves no clean split and the workers stay one line. Capacity comes from a `worker:<job>`
+  entry in ② when there is one, else the type's share of the `worker` entry by its pods running now —
+  ② reports capacity per component, and a per-type entry is the operator's to give.
+- **(b) is also paired with each model's requests in flight** (its knee a candidate for the model's
+  capacity), and **(e) is one pair per job type**.
 - **A model's GPU capacity is its total in-flight level at the knee** with its current cards; one more
   card adds knee ÷ cards (data-parallel replicas). The headroom ignores lines N cannot push: fixed lines
   and disk (disk runs out over time, view 7).
 - **"N people" reads 30 days before the period** (one grouped ① query by person and UTC day), so the
-  first day's N is as complete as the last's.
-- **The 90-day period is analysed at 15-minute slots** or coarser, to bound memory.
+  first day's N is as complete as the last's — once the records themselves are 30 days old. Until then
+  N counts only the people seen so far and rises with no one new: the query reaches a week further, and
+  activity there shows the records predate the 30 days; otherwise the first active day is when they
+  began. The runway fits its trend only on days whose 30 days are recorded (so it is ready 58 days after
+  recording starts), and the page says when today's N is still short.
+- **A period of N days is the N whole local days before today, plus today so far** (E7): `[now − N days,
+  now)` held N − 1 whole days, so the runway (28) could never be ready in the default 28-day period and a
+  7-day period held 6. A view that needs more days than its period holds says *period too short* and
+  names the shorter period that fits; a failing source is *source error*, with its message.
+- **Each view counts the days of the sources it reads**, and the what-if sizes, the backtest tests and
+  the headroom stands **only on days every connected source of the model (①, ②, ④) has data**: a day
+  before the records began is not a day nobody worked, and drawing it diluted the peaks. A line whose
+  missing data reads as zero (a model's in-flight requests, its memory) takes its peak over its own
+  source's days.
+- **The simulator's draw sequence stretches on demand**, in blocks fixed by the seed and their position:
+  the backtest asks the days before a day for that day's N, which a period starting before the records,
+  or a team joining at once, put beyond 20× and the page failed. The what-if still answers at most 20×
+  today's N and says which N it answered; the headroom says "N or more" only when N itself fits.
+- **E10, sizing on workdays**: with no work calendar the what-if still draws Monday–Friday, not every
+  day — weekends would dilute the peaks it sizes for; a calendar refines it.
+- **The holdout is the last 7 days** (§9.9), with at least 3 to train on, scoring only the rows of pods
+  the training days saw: a pod born after the cut — every rollout renames them — has no idle cost to
+  predict from.
+- **Lines split by regression wait for 3 days of both sources** (§9.10), through their own readiness
+  entry (`regression`).
+- **Scratch gets a disk line, a day's disk is its latest snapshot, and each disk line in the runway says
+  what one more person adds a month** (§9.1, E16).
+- **The 90-day period is analysed at a coarser slot** to bound memory: the smallest multiple of `step_s`
+  that is at least 15 minutes and divides a day (a slot holding one window and two by turn read a steady
+  load as 1.33 and 0.67). sandbox-host's window is its own setting: a row longer than the slot is spread
+  over the slots it covers, and `capacity check` refuses one that fits neither way.
+- **An analysis' memory follows the rows it read**: series keep the (slot, value) pairs the source
+  returned, the latency histogram is kept per component, the what-if keeps four profiles' simulators,
+  one period is built at a time, and a kept analysis is let go when its TTL ends. Every row read counts
+  against `capacity.max_rows`. A few hundred rows had held hundreds of MB in the API process (#804).
+- **The build belongs to no request** (a closed page does not cancel it for others), and summary,
+  person and what-if run in a thread, like the build.
 - **`turn` records are stamped at acceptance, `job` records at start**, so a period selects work by when
   it began.
 - **`kind: local` with isolation**: the API pod's own sandboxes are subtracted from its CPU and memory
-  before the API regression, since they run inside it.
+  before the API regression, since they run inside it. A backend with no cgroup per sandbox measures
+  none, and the summary says so (`sandbox_measured`) for the page to.
+- **A request's App is its matched route's `slug`, and only when the response did not refuse it**: read
+  off the raw path, any URL minted an App. A request no route answered is `unknown` without a call to
+  `get_user_id`.
+- **The usage flush builds its rows in a thread**, not on the event loop; a stopped turn ends on the
+  record even when the epoch watcher cancels it a second time during the turn-end flush.
+- **The cgroup reader lives in `capacity/cgroup_usage.py`** (the plan said `sandbox/`): it is one file
+  shared byte for byte with sandbox-host, beside the record format it writes.
 - **The ECharts guard** (`web/src/ext/imports.test.ts`) holds a door rule: only `capacity/echarts.ts`
-  imports ECharts, every other module reaches it with `import()` or `import type`, and web's range is the
-  chart plugin's. The production build puts ECharts in its own chunk (577,423 bytes minified, measured
-  on the #962 build); the entry chunk keeps only the `import("./echarts-….js")` call.
-- **The middleware's cost**: `scripts/bench_usage_middleware.py` measured 12.6 µs per request on the dev
-  box (47.5 → 60.1 µs on a trivial route, median of 5 rounds × 10,000).
+  imports ECharts, every other module reaches it with `import()` or `import type` (an import whose names
+  are each `type` still runs the module under `verbatimModuleSyntax`, and counts), web's range is the
+  chart plugin's, and no package in web's lockfile wraps it. The door imports what the views draw — bar,
+  line, scatter; grid, tooltip, legend, mark line; canvas — not the plan's mark area and data zoom,
+  which no view uses. The production build puts ECharts in its own chunk (539,697 bytes minified,
+  measured on the #962 build); the page's own code is in the main bundle, like every page's.
+- **The middleware's cost**: `scripts/bench_usage_middleware.py` measured 12.4 µs per request on the dev
+  box (45.9 → 58.4 µs on a trivial route, median of 5 rounds × 10,000), after the round-1 changes.
+- **Commits**: P8–P9, P9–P11 and P13–P14 went in as combined commits, against "one or more per phase";
+  history is not rewritten.
 

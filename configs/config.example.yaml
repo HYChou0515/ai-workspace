@@ -528,9 +528,12 @@
 # is counted, and the counts are written as one JSON line per record on stdout
 # (`event.dataset: workspace.usage`) for your collector to ship to ES — the
 # platform stores nothing. LLM calls carry `x-litellm-tags` (person, App,
-# purpose); turn that off when your LiteLLM routes on tags with no `default`
-# pool. The dashboard reads four sources YOU implement (dotted paths of
-# classes in your own package); an empty one is simply not connected.
+# purpose); turn `llm_tags` off BEFORE rollout when your LiteLLM proxy sets
+# `general_settings.reject_clientside_metadata_tags: true` (every tagged call
+# is refused), routes on tags with no `default` pool, or when models are
+# called at a hosted provider directly (the person ids would go with them).
+# The dashboard reads four sources YOU implement (dotted paths of classes in
+# your own package); an empty one is simply not connected.
 # capacity:
 #   record: true
 #   sink: ""                      # your UsageSink; "" = stdout JSON lines
@@ -541,7 +544,7 @@
 #   resource_metrics: ""          # ② e.g. acme_capacity.sources.PromPods
 #   gpu_metrics: ""               # ③ e.g. acme_capacity.sources.DcgmGpus
 #   llm_requests: ""              # ④ e.g. acme_capacity.sources.LiteLlmLog
-#   step_s: 300                   # a multiple of window_s
+#   step_s: 300                   # a multiple of window_s that divides a day
 #   lag_s: 600
 #   timezone: Asia/Taipei         # "" = UTC
 #   max_rows: 5000000

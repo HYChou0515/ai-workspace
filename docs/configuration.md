@@ -145,6 +145,7 @@ uv run python -m workspace_app            # API + SPA 一起跑在 127.0.0.1:800
 | `kb` | **KB 子系統**（見 [§9](#9-kb-子系統)） | 用 KB 就會改 |
 | `agents` | **preset 庫 ＋ picker ＋ KB 聊天**（見 [§7](#7-agents心智模型與雷區)） | 幾乎一定改 |
 | `health` | sanity matrix 的 AI 評審 | 診斷時才開 |
+| `capacity` | **容量規劃**：用量紀錄怎麼寫、LLM 標籤、頁面讀的四個資料來源（見 [§15](#15-capacity容量規劃)） | 接上資料來源時改；LiteLLM 擋 client 標籤的部署一定要關 `llm_tags` |
 
 ---
 
@@ -860,25 +861,26 @@ ES；頁面讀的四個資料來源由你們實作。整套說明（紀錄格式
 
 | key | 預設 | 意思 |
 |---|---|---|
-| `capacity.record` | `true` | 寫用量紀錄（每個請求、對話回合、job 的次數與時間）。`false` = 什麼都不記，LLM 標籤也不送 |
+| `capacity.record` | `true` | 寫用量紀錄（每個請求、對話回合、job 的次數與時間）。`false` = 這個 app 與 worker 不記、LLM 標籤不送；sandbox-host 是另一個服務，要停它的沙盒紀錄設 `SANDBOX_HOST_USAGE_SAMPLE_S=0` |
 | `capacity.sink` | `""` | 自己的 `UsageSink`（dotted path）；空 = stdout 一行一筆 JSON |
 | `capacity.window_s` | `300` | 每個行程把用量加總的時段（秒），要整除 3600 |
 | `capacity.queue_max` | `10000` | 寫出佇列能排幾筆；滿了就丟、記在 `meta` 紀錄 |
-| `capacity.llm_tags` | `true` | LLM 呼叫帶 `x-litellm-tags`（人、App、用途）。LiteLLM 開了 tag routing 又沒有 `default` pool 時要關 |
+| `capacity.llm_tags` | `true` | LLM 呼叫帶 `x-litellm-tags`（人、App、用途）。要關的情況：LiteLLM proxy 設了 `general_settings.reject_clientside_metadata_tags: true`（帶標籤的請求全被拒）、開了 tag routing 又沒有 `default` pool、或模型直接呼叫外部供應商（標籤裡的使用者 id 會送出去） |
 | `capacity.usage_records` | `""` | ① 平台用量紀錄的讀取端（你們的 `UsageRecordSource`） |
 | `capacity.resource_metrics` | `""` | ② pod 與機器用量與容量（`ResourceMetricsSource`） |
 | `capacity.gpu_metrics` | `""` | ③ GPU 用量（`GpuMetricsSource`） |
 | `capacity.llm_requests` | `""` | ④ LiteLLM 請求紀錄（`LlmRequestSource`） |
-| `capacity.step_s` | `300` | 分析的時段（秒），要是 `window_s` 的整數倍；90 天的期間至少 900 |
+| `capacity.step_s` | `300` | 分析的時段（秒），要是 `window_s` 的整數倍、而且整除一天；90 天的期間用它的倍數裡最小的、至少 900 又整除一天的那個 |
 | `capacity.lag_s` | `600` | 最新的這幾秒不算（等 ES 收進來） |
 | `capacity.timezone` | `""` | 「一天」從哪個時區的午夜切（IANA 名稱）；空 = UTC |
 | `capacity.max_rows` | `5000000` | 一次分析最多讀幾列；超過就停下並請人改看較短的期間 |
 
-開機會擋下用不了的值（`window_s` 不整除 3600、`step_s` 不是它的倍數、不存在的時區、`queue_max` /
-`max_rows` 不是正數），並說是哪個 key。
+開機會擋下用不了的值（`window_s` 不整除 3600、`step_s` 不是它的倍數或不整除一天、不存在的時區、
+`queue_max` / `max_rows` 不是正數、`lag_s` 是負數），並說是哪個 key。
 
 sandbox-host 那側（環境變數）：`SANDBOX_HOST_USAGE_SAMPLE_S`（預設 `60`，每幾秒讀一次每個沙盒的 cgroup；
-`0` = 不量）、`SANDBOX_HOST_USAGE_WINDOW_S`（預設 `300`，幾秒寫一筆；要整除 3600）。
+**`0` = 不量**）、`SANDBOX_HOST_USAGE_WINDOW_S`（預設 `300`，幾秒寫一筆；要整除 3600——設 `0` 起不來——
+而且要整除 `capacity.step_s` 或是它的整數倍，否則分析放不進時段，`capacity check` 會報錯）。
 
 檢查四個來源的實作：`uv run python -m workspace_app.capacity check --hours 24`。
 

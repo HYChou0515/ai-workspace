@@ -188,8 +188,8 @@ def main() -> None:
         clock=time.time,
     )
     print(
-        f"→ usage: sample every {settings.usage_sample_s:g}s, "
-        f"window {settings.usage_window_s}s (0 = off)",
+        f"→ usage: sample every {settings.usage_sample_s:g}s (0 = off), "
+        f"window {settings.usage_window_s}s",
         flush=True,
     )
     print("✓ sandbox host ready", flush=True)
