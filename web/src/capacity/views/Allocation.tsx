@@ -10,7 +10,7 @@
  * of slots (E8): what machines are bought for.
  */
 import { useQuery } from "@tanstack/react-query";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { qk } from "../../api/queryKeys";
 import { useUsers } from "../../hooks/useUsers";
@@ -237,9 +237,18 @@ export function Allocation({
                   <tr key={r.key} data-kind={r.kind} aria-selected={person === r.key || undefined}>
                     <th scope="row">
                       {by === "person" && r.kind === "group" && !NOT_PEOPLE.has(r.key) ? (
-                        <button type="button" className="capacity-link" onClick={() => setPerson(r.key)}>
+                        // a link to the person's detail below the table, which
+                        // takes the view and the focus there (PersonDetail)
+                        <a
+                          href="#capacity-person"
+                          className="capacity-link"
+                          onClick={(e) => {
+                            e.preventDefault();
+                            setPerson(r.key);
+                          }}
+                        >
                           {r.label}
-                        </button>
+                        </a>
                       ) : (
                         r.label
                       )}
@@ -320,6 +329,13 @@ function PersonDetail({
     queryKey: qk.capacityPerson(user, days),
     queryFn: () => client.person(user, days),
   });
+  // Opened from a link in a table that can run past the screen: take the view
+  // and the focus to the detail, as a link to a place on the page does.
+  const heading = useRef<HTMLHeadingElement>(null);
+  useEffect(() => {
+    heading.current?.scrollIntoView?.({ block: "nearest" });
+    heading.current?.focus();
+  }, [user]);
   // a line split by regression is held back here as everywhere until three
   // days of both sources fit it (§9.10)
   const held = (id: string) =>
@@ -351,10 +367,17 @@ function PersonDetail({
       }));
   }, [data, lines, summary, t]);
   return (
-    <aside className="capacity-person" data-testid="capacity-person" aria-label={t("capacity.person.title", { user: label })}>
+    <aside
+      id="capacity-person"
+      className="capacity-person"
+      data-testid="capacity-person"
+      aria-label={t("capacity.person.title", { user: label })}
+    >
       <header>
-        <h3 className="capacity-h3">{t("capacity.person.title", { user: label })}</h3>
-        <button type="button" className="capacity-link" onClick={onClose}>
+        <h3 className="capacity-h3" ref={heading} tabIndex={-1}>
+          {t("capacity.person.title", { user: label })}
+        </h3>
+        <button type="button" className="btn" data-variant="ghost" data-size="sm" onClick={onClose}>
           {t("capacity.person.close")}
         </button>
       </header>

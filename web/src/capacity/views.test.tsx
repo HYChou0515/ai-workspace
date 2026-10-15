@@ -312,7 +312,7 @@ describe("allocation (view 2)", () => {
     renderWithQuery(<Allocation summary={s} days={28} client={client()} t={t} />);
     fireEvent.change(screen.getByTestId("capacity-alloc-line"), { target: { value: "sandbox-host.cpu" } });
 
-    fireEvent.click(await screen.findByRole("button", { name: "Alice Chen" }));
+    fireEvent.click(await screen.findByRole("link", { name: "Alice Chen" }));
 
     const detail = await screen.findByTestId("capacity-person");
     await waitFor(() => expect(within(detail).getByText("沙盒 CPU")).toBeInTheDocument());
@@ -359,11 +359,34 @@ describe("allocation (view 2)", () => {
     c.person = vi.fn(async () => unknown);
     renderWithQuery(<Allocation summary={s} days={28} client={c} t={t} />);
 
-    fireEvent.click(await screen.findByRole("button", { name: "Alice Chen" }));
+    fireEvent.click(await screen.findByRole("link", { name: "Alice Chen" }));
 
     const detail = await screen.findByTestId("capacity-person");
     await waitFor(() => expect(within(detail).getByText("API CPU")).toBeInTheDocument());
     expect(detail).not.toHaveTextContent("的人");
+  });
+
+  it("takes you to a person's detail: their name is a link to it", async () => {
+    // a link "allows users to jump from one location to another within the
+    // same web page" (NN/g glossary): the detail opens below a table that can
+    // run past the screen, so the link moves the view and the focus there
+    renderWithQuery(<Allocation summary={summary()} days={28} client={client()} t={t} />);
+
+    fireEvent.click(await screen.findByRole("link", { name: "Alice Chen" }));
+
+    const detail = await screen.findByTestId("capacity-person");
+    await waitFor(() => expect(detail.contains(document.activeElement)).toBe(true));
+  });
+
+  it("closes a person's detail with a button, not a link", async () => {
+    // closing is an action: a button (NN/g, buttons vs links); a low-emphasis
+    // one is a text button, never underlined (Material 3, buttons)
+    renderWithQuery(<Allocation summary={summary()} days={28} client={client()} t={t} />);
+
+    fireEvent.click(await screen.findByRole("link", { name: "Alice Chen" }));
+
+    const detail = await screen.findByTestId("capacity-person");
+    expect(within(detail).getByRole("button", { name: "關閉" })).toHaveAttribute("data-variant", "ghost");
   });
 
   it("opens one person's detail from their row", async () => {
@@ -371,7 +394,7 @@ describe("allocation (view 2)", () => {
     const c = client();
     renderWithQuery(<Allocation summary={s} days={28} client={c} t={t} />);
 
-    fireEvent.click(await screen.findByRole("button", { name: "Alice Chen" }));
+    fireEvent.click(await screen.findByRole("link", { name: "Alice Chen" }));
 
     const detail = await screen.findByTestId("capacity-person");
     await waitFor(() => expect(c.person).toHaveBeenCalledWith("user00", 28));

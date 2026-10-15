@@ -927,6 +927,28 @@ What the build changed from the plan above, each for a reason found while buildi
 - **A record's field with no value is left out, not written `null`** (§5.2): ES reads both alike.
 - **A source that lags shows a gap at the end**: gaps run to the period's end, so a metrics pipeline more
   than `lag_s` plus about 15 minutes behind is a gap in view 9 and a `capacity check` warning.
+- **The page's controls follow published guidance** (CLAUDE.md's UI rule; each kind looked up, NN/g first):
+  - switching among the five views is the shared tab strip (`ShareTabs`: text and underline) — a tab bar
+    "allows users to selectively view a single panel of content … from among a list of available
+    options" ([NN/g glossary](https://www.nngroup.com/articles/ui-elements-glossary/); [Tabs, Used
+    Right](https://www.nngroup.com/articles/tabs-used-right/));
+  - choosing a mode of the same content — the period, a grouping, peak or average, how fixed overhead is
+    shown, a what-if profile, p50 or p95 — is a segmented control, "a group of connected buttons laid out
+    in a horizontal row" ([NN/g glossary](https://www.nngroup.com/articles/ui-elements-glossary/)): one
+    outlined row, the selected segment filled and bold, two to five short text segments, not stretched
+    across a wide screen ([Material 3, segmented buttons](https://m3.material.io/components/segmented-buttons/guidelines),
+    which the expressive update calls a connected button group);
+  - running the what-if (filled), recomputing (secondary) and closing a person's detail are buttons — a
+    button "will execute a certain action" ([NN/g glossary](https://www.nngroup.com/articles/ui-elements-glossary/));
+    the close is a text button, which Material 3 keeps for the lowest-priority actions and never
+    underlines ([Material 3, buttons](https://m3.material.io/components/buttons/guidelines)) — it was an
+    underlined link until round 3;
+  - a person's name is a link to their detail below the table, and takes the view and the focus there —
+    a link "allows users to jump from one location to another within the same web page" ([NN/g
+    glossary](https://www.nngroup.com/articles/ui-elements-glossary/)); it was a button drawn as a link
+    that opened the detail out of sight below a long table, and a link standing for an action needs
+    words saying so ([NN/g, command links](https://www.nngroup.com/articles/command-links/)), which a
+    name is not.
 - **The tabs** are the app's shared `Tabs`: the WAI-ARIA tab roles, without the pattern's arrow keys
   (§10); the shared component is not changed here.
 - **Every stream is one column** of the API regression (§9.3 keeps route templates apart): a stream's
