@@ -57,6 +57,21 @@ def test_a_hinge_is_found_where_it_was_put():
     assert knee.slope_after > knee.slope_before
 
 
+def test_a_break_between_two_clouds_of_load_is_found_where_the_lines_meet():
+    """A working day and another system's weekend batch leave no slot between
+    them. The break is where the flat line and the rising one meet, not at the
+    top of the lower cloud — that would put a shared GPU's capacity at the load
+    the platform reaches on its own, and size the card purchase from it."""
+    rng = np.random.default_rng(6)
+    x = np.concatenate([rng.uniform(0.1, 1.0, 2000), rng.uniform(2.2, 3.0, 200)])
+    y = 0.8 + 0.6 * np.maximum(0, x - 1.75) + rng.normal(0, 0.01, len(x))
+
+    knee = fit_knee(x, y)
+
+    assert knee is not None
+    assert knee.at == pytest.approx(1.75, abs=0.03)
+
+
 def test_a_straight_line_has_no_knee():
     rng = np.random.default_rng(4)
     x = rng.uniform(0, 1, 2000)

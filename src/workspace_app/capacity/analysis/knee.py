@@ -2,7 +2,11 @@
 
 A continuous two-segment line, y = a + b·x + c·max(0, x − k), fitted with the
 break k searched over x's 10th–99th percentiles (segmented regression, Muggeo,
-*Statistics in Medicine* 22, 2003). A break counts only when it is real:
+*Statistics in Medicine* 22, 2003), then refined between the best percentile's
+two neighbours. The refinement is not polish: load that comes in two clouds (a
+working day, another system's weekend batch) has no percentile in the gap
+between them, the break can lie there, and the gap's two edges are neighbours.
+A break counts only when it is real:
 
 - the second segment is steeper, and the two segments cut the squared error of
   one straight line by at least `MIN_GAIN`;
@@ -42,6 +46,21 @@ def _sse(design: np.ndarray, y: np.ndarray) -> tuple[float, np.ndarray]:
     return float(resid @ resid), coef
 
 
+def _best(
+    x: np.ndarray, y: np.ndarray, ones: np.ndarray, grid: np.ndarray
+) -> tuple[float, float, np.ndarray] | None:
+    """The break in `grid` with the least squared error and `MIN_BEYOND`
+    points past it."""
+    best: tuple[float, float, np.ndarray] | None = None
+    for k in grid:
+        if int((x > k).sum()) < MIN_BEYOND:
+            continue
+        sse, coef = _sse(np.column_stack([ones, x, np.maximum(0.0, x - k)]), y)
+        if best is None or sse < best[0]:
+            best = (sse, float(k), coef)
+    return best
+
+
 def _fit(x: np.ndarray, y: np.ndarray) -> Knee | None:
     if len(x) < 2 * MIN_BEYOND:
         return None
@@ -49,15 +68,13 @@ def _fit(x: np.ndarray, y: np.ndarray) -> Knee | None:
     line, _ = _sse(np.column_stack([ones, x]), y)
     if line <= 0:
         return None
-    best: tuple[float, float, np.ndarray] | None = None
-    for k in np.unique(np.quantile(x, np.linspace(0.10, 0.99, _GRID))):
-        if int((x > k).sum()) < MIN_BEYOND:
-            continue
-        sse, coef = _sse(np.column_stack([ones, x, np.maximum(0.0, x - k)]), y)
-        if best is None or sse < best[0]:
-            best = (sse, float(k), coef)
+    grid = np.unique(np.quantile(x, np.linspace(0.10, 0.99, _GRID)))
+    best = _best(x, y, ones, grid)
     if best is None:
         return None
+    at = int(np.searchsorted(grid, best[1]))
+    fine = np.linspace(grid[max(0, at - 1)], grid[min(len(grid) - 1, at + 1)], _GRID)
+    best = min(best, _best(x, y, ones, fine) or best, key=lambda b: b[0])
     sse, k, coef = best
     gain = 1.0 - sse / line
     if coef[2] <= 0 or gain < MIN_GAIN:
