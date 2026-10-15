@@ -2536,7 +2536,12 @@ description 的第一句(上限 100 字元)、**沒有參數 schema**。模型�
 模型照樣流暢回答,只是沒看到你的指令。量到的差別(5 個套件、14 個 command):
 19,884 tok → **811 tok**;每個 command 的目錄成本約 47 tok。
 
-**代價**:一輪裡第一次用到某個 command 會多一次 round-trip(載入 → 再呼叫)。
+**代價**:一輪裡第一次用到某個 command 會多一次 round-trip(載入 → 再呼叫)。這會吃掉
+`runner.max_turns`(預設 `10`)的額度:一輪用到 N 個不同的 command,從前要 N+1 步,現在
+最多要 2N+1 步,所以「一輪裡最多用幾個不同的套件 command」從 ~9 掉到 ~4;超過的那一輪
+會收到「已達步數上限」而不是答案。模型被告知可以用一次 `load_tool` 載好幾個(那樣是
+N+2 步),但**如果你們的 item 常常一輪用到四個以上不同的 command,把 `runner.max_turns`
+調高**(`docs/configuration.md` §設定一覽)是這條的出口。
 
 **確認做完**(`rollout 後`):在一個工具很多的 item 送一句話,然後看那一輪的 LLM 呼叫記錄——
 路徑從 pod 自己的 `config.resolved.yaml` 讀 `observability.llm_log.dir`(開機寫在 config.yaml
@@ -2545,11 +2550,16 @@ description 的第一句(上限 100 字元)、**沒有參數 schema**。模型�
 ```
 printenv WORKSPACE_APP_CONFIG            # 沒設就是 cwd 的 ./config.yaml
 grep -n -A3 "llm_log" <config 所在目錄>/config.resolved.yaml
-ls -t <上面讀到的 dir>/$(date +%F) | head -1
+ls <上面讀到的 dir>/$(date +%F)/0001-*.json   # 那一輪的第一通呼叫
 ```
 
-那一筆裡:`request.messages[0].content`(system prompt)的字元數應該從數十萬掉到數萬;
-`request.tools` 裡的套件 command 每個只有名字 + 一行描述、`properties` 是空的。
+**要看那一輪的第一通呼叫(`0001-…`)**,不是最新的一筆:同一輪在載入之後的每一通都會帶著
+已載入 command 的完整 schema——那正是這個功能在做的事。也不要用 `ls -t … | head -1`,
+那個目錄裡還有 `index.jsonl`(寫在 record 之後,所以 mtime 可能更新),而它沒有 `request`。
+
+那一筆裡:`request.messages[0].content` 就是 system prompt,字元數會掉**一到兩個數量級**
+(本機同一組工具量到的是 83,180 → 591 字元;你們的絕對值取決於自己的工具數與描述長度);
+`request.tools` 裡的套件 command 只有名字 + 一行描述、`properties` 是空的。
 ⚠️ 那些記錄裡 `api_key` 是明文(它設計成可重播),貼出來前先拿掉。
 
 **漏做的症狀** — 沒有「漏做」:這是單向的縮減,不需要運營方動手。但如果某個 item 的流程

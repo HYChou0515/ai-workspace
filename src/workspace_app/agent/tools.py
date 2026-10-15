@@ -4149,13 +4149,13 @@ def _with_absent_convention(tool: FunctionTool) -> FunctionTool:
     It is the missing sentence, derived from the schema so any tool that grows an
     optional arg is covered without anyone remembering.
 
-    It rides on the tool DESCRIPTION, which means it reaches the model through the
-    native tool definition AND through `format_tools_for_prompt`, which renders
-    descriptions verbatim into the system prompt. So it does appear twice per turn
-    — worth stating plainly rather than claiming otherwise. The cost is bounded:
-    only 6 of 31 built-ins have nullable args, so this is one short line each, and
-    the alternative (a prompt-only note) would leave the wire-level tool
-    definition silent on its own convention."""
+    It rides on the tool DESCRIPTION, so it reaches the model with the tool
+    definition itself — once. (It used to arrive twice: `format_tools_for_prompt`
+    rendered every description into the system prompt as well, until
+    `docs/plan-tool-on-demand-loading.md` removed that second copy.) The cost is
+    bounded: only 6 of 31 built-ins have nullable args, so this is one short line
+    each, and the alternative (a prompt-only note) would leave the wire-level
+    tool definition silent on its own convention."""
     names = _nullable_arg_names(tool)
     if not names:
         return tool

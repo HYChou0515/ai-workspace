@@ -141,6 +141,33 @@ _WIKI_TRACE_NAMES = {
 }
 
 
+def enabled_function_tools(agent: Any, ctx: Any) -> list[FunctionTool]:  # noqa: ANN401 — Agent/AgentToolContext, kept loose for the sync callers
+    """The tools this step would actually send, for callers that are not the
+    SDK's run loop (`docs/plan-tool-on-demand-loading.md`, round 1 A2/A12).
+
+    `agent.tools` is NOT that list any more: each package command is registered
+    twice under one name — the catalog entry and the executable tool — and
+    `is_enabled` is the only thing that keeps one of the pair off the wire. A
+    caller that reads `agent.tools` raw now sends two definitions of one name,
+    which `dedupe_tools`' docstring describes as "a payload the provider
+    rejects wholesale".
+
+    Mirrors `agents/agent.py:246 get_all_tools` for the one case our callers
+    need — synchronous, no MCP tools, `is_enabled` as a bool or a plain
+    callable — because both callers run in threads with no event loop
+    (`replay_turn` under `asyncio.to_thread`) or inside a sync trace helper.
+    Kept honest by a parity test with `get_all_tools` itself as the oracle.
+    """
+    out: list[FunctionTool] = []
+    for tool in agent.tools:
+        if not isinstance(tool, FunctionTool):
+            continue
+        flag = tool.is_enabled
+        if flag is True or flag is not False and flag(RunContextWrapper(ctx), agent):
+            out.append(tool)
+    return out
+
+
 def _loaded_this_turn(name: str) -> Callable[[RunContextWrapper[Any], Any], bool]:
     """Enable the executable half of `name`'s pair once this turn has loaded it
     (`docs/plan-tool-on-demand-loading.md`).
@@ -567,23 +594,35 @@ def _agent_for(
     # plan-tool-on-demand-loading: `load_tool` is ours, not a package's, so it
     # goes in BEFORE `builtin_names` is read — the usage report would otherwise
     # file it under `first_party`, beside the commands it exists to open.
-    # Granted by the same rule as the cards above: only when there is a package
-    # command whose schema could need loading.
-    if packages:
+    #
+    # Granted by the same rule as the cards above, and that means the same
+    # CHECK: whether this turn is granted any package command, not whether the
+    # item has a bundle installed. `if packages:` was the latter, so every
+    # sub-agent with a narrowed `allowed_tools` — every `ask_knowledge_base`
+    # child, every workflow node with its own `tools:` — got a `load_tool`
+    # whose only possible answer was "there is no tool called that. Tools you
+    # can load: ." (round 1 A6).
+    from ..tooling.registry import allowed_command_names
+
+    # Narrowed once: `grants_commands` is a bool, so it does not narrow
+    # `packages | None` for the blocks below the way `if packages:` did.
+    pkgs: list[PackageInfo] = packages or []
+    grants_commands = bool(allowed_command_names(pkgs, config.allowed_tools))
+    if grants_commands:
+        from agents.tool_context import ToolContext
+
         from ..tooling.registry import build_catalog_tools, build_load_tool
 
-        def _mark_loaded(tool_ctx: Any, name: str) -> None:  # noqa: ANN401 — the SDK's ToolContext
+        def _mark_loaded(tool_ctx: ToolContext[AgentToolContext], name: str) -> None:
             tool_ctx.context.mark_tool_loaded(name, call_id=tool_ctx.tool_call_id)
 
-        tools.append(
-            build_load_tool(packages, allowed=config.allowed_tools, mark_loaded=_mark_loaded)
-        )
+        tools.append(build_load_tool(pkgs, allowed=config.allowed_tools, mark_loaded=_mark_loaded))
     # plan-tool-usage-stats D6: what is in the list BEFORE the package commands
     # is ours — built-ins and the rule-granted cards. The last point every
     # source is still a list of its own, so the source is read here, not
     # guessed later from a name a first-party command shares with a built-in.
     builtin_names = {t.name for t in tools}
-    if packages:
+    if grants_commands:
         # plan-tool-on-demand-loading: each granted command is registered TWICE
         # under one name — the executable tool, enabled once this turn has
         # loaded it, and the catalog entry (one line, no schema), enabled until
@@ -591,10 +630,10 @@ def _agent_for(
         # (`agents/run.py:1028` → `agent.py:254`), so exactly one of the pair
         # reaches the provider and the payload never carries a duplicate name.
         # Same-name registration is safe: the SDK's own duplicate check is
-        # codex-tools-only and runs AFTER that filter (`agent.py:95-113`).
+        # codex-tools-only and runs AFTER that filter (`agent.py:95-118`).
         tools.extend(
             dataclasses.replace(t, is_enabled=_loaded_this_turn(t.name))
-            for t in build_function_tools(packages, allowed=config.allowed_tools)
+            for t in build_function_tools(pkgs, allowed=config.allowed_tools)
         )
     # Last stop before the model sees them, and the only place every source is in
     # one list: built-ins, the conditional grants, and the package commands —
@@ -602,10 +641,12 @@ def _agent_for(
     # ours. Two definitions of one name is a payload the provider refuses
     # wholesale, so the turn dies for a reason nothing in it explains.
     tools = dedupe_tools(tools)  # first-wins: the built-in outranks a package's copy
-    # Append the resolved tool inventory (name + description + JSON args
-    # schema) to the system prompt so small local LLMs don't confuse
-    # provisioned function tools with shell binaries (see plan §B.10 /
-    # agent/tool_prompt.py).
+    # Append the fixed how-to-call-tools note (and, when this turn carries
+    # catalog entries, the paragraph about empty schemas and `load_tool`) so
+    # small local LLMs don't confuse function tools with shell binaries. It no
+    # longer LISTS the tools — that second copy of the inventory is what
+    # `docs/plan-tool-on-demand-loading.md` removed; the tools themselves are
+    # in this request's `tools` array (see agent/tool_prompt.py).
     from ..agent.tool_prompt import (
         format_disabled_tools_for_prompt,
         format_tools_for_prompt,
@@ -685,11 +726,11 @@ def _agent_for(
     # A command a built-in shadows is left out here too, because dedupe just
     # dropped its executable half — a catalog entry for it would advertise
     # something that can never run.
-    if packages:
+    if grants_commands:
         tools.extend(
             dataclasses.replace(stub, is_enabled=_not_loaded_this_turn(stub.name))
             for stub in build_catalog_tools(
-                packages, allowed=config.allowed_tools, mark_loaded=_mark_loaded
+                pkgs, allowed=config.allowed_tools, mark_loaded=_mark_loaded
             )
             if stub.name not in builtin_names
         )
@@ -1243,7 +1284,10 @@ def _emit_llm_trace(
             _effective_model(getattr(agent, "model", None), cfg.model if cfg else "") or "(unknown)"
         )
         endpoint = redact_endpoint((cfg.llm_base_url if cfg else "") or runner_base_url)
-        tools = [t.name for t in agent.tools if isinstance(t, FunctionTool)]
+        # What this step SENDS, not what is registered: the catalog's twins
+        # would otherwise list every package command twice in the one line an
+        # operator reads to see what went out (round 1 A12).
+        tools = [t.name for t in enabled_function_tools(agent, ctx)]
         ms = agent.model_settings
         trace = build_trace(
             model=model,

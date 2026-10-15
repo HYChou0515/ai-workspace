@@ -35,6 +35,14 @@ how five separate tools hid behind an argument that fitted two of them:
   ``authorize_tool(…, "read_content")`` — without it the hits come back without
   that line. Its two siblings that do touch the item (``publish_skill`` reads
   ``.skill/`` out, ``install_skill`` writes it in) are in the table.
+* ``load_tool`` — it touches no workspace at all: it reads the in-process
+  ``PackageInfo`` list (deploy config, not item content) and hands back a
+  description and a JSON schema. It cannot name a command this turn was not
+  granted — it shares ``registry._granted`` with the tool builders — and the
+  commands it opens are themselves on this list, two bullets up, with their own
+  reason. Written down rather than simply absent, because this enumeration's
+  own rule is that an unwritten absence has not been judged
+  (``docs/plan-tool-on-demand-loading.md``).
 * ``show_skill_hub_entry`` — the same again: it reads ONE entry, refused
   unless the speaker may read it (``SkillHubStore.state_for``), and declares a
   card. The card's Install button is the Skills panel's own route, which

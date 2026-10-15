@@ -226,6 +226,15 @@ def _child_context(
         # checks a name against. A sub-agent's runs are not the parent's: the
         # parent's model never saw them (plan-env-request-card, review round 1).
         tool_outputs={},
+        # Which commands THIS turn loaded, and which calls the catalog answered
+        # (`docs/plan-tool-on-demand-loading.md`). Same rule as `tool_outputs`
+        # above: a child's load is not the parent's. Sharing them (they are a
+        # `set` and a `dict`, so `replace` hands over the same objects) made a
+        # child's load send that command's full schema for the rest of the
+        # parent's turn — the saving eroding in proportion to delegation
+        # (review round 1 A11).
+        loaded_tools=set(),
+        catalog_calls={},
         # NOT reset, and deliberately: `kb_search_budget` / `wiki_search_budget`
         # stay shared, so a turn's search allowance is spent once however many
         # sub-agents it delegates to. Resetting them would let an agent multiply

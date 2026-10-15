@@ -28,6 +28,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import unicodedata
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -52,7 +53,13 @@ logger = logging.getLogger(__name__)
 #: machinery (and so the entry is testable without a turn). The whole
 #: `ToolContext` goes in, not just `.context`: the caller also needs the call
 #: id, to keep this call's answer (a schema) out of the stored thread.
-MarkLoaded = Callable[[Any, str], None]
+#:
+#: Spelled out rather than `Callable[[Any, str], None]`: with `Any` here, both
+#: members the only implementation touches (`.context.mark_tool_loaded` and
+#: `.tool_call_id`) could be renamed and `ty` stayed green — the review
+#: renamed both and measured it (round 1 C3, the
+#: `reference_kwargs_dict_loses_type_check` class).
+MarkLoaded = Callable[[ToolContext[AgentToolContext], str], None]
 
 
 @dataclass(frozen=True)
@@ -737,10 +744,16 @@ def describe_command(pkg: PackageInfo, cmd: CommandInfo) -> str:
     command. With nothing joining them, "what is `rca-tools`?" is a question
     about a string the model has never been shown, and it can only guess.
 
-    It goes in the DESCRIPTION rather than anywhere else because that one string
-    is what both channels render: the native tool schema takes it verbatim, and
-    the prompt section renders the same field. A second home would be a second
-    thing to keep in step with the tool list, and nothing would notice it drift.
+    It goes in the DESCRIPTION rather than anywhere else because that is the one
+    string that travels with the tool: the native tool schema takes it verbatim
+    once the command is LOADED. A second home would be a second thing to keep
+    in step with the tool list, and nothing would notice it drift.
+
+    Two things it is no longer: the prompt section stopped rendering
+    descriptions, and an UNLOADED command is advertised by `_catalog_entry`
+    (the author's first sentence + the bundle name) rather than by this text —
+    both `docs/plan-tool-on-demand-loading.md`. So this is what the model reads
+    about a command it has reached for, not about every command it is offered.
 
     The author's sentence stays first. It is what the model reads to decide
     whether to call this command at all; the bundle line answers a different
@@ -775,24 +788,106 @@ CATALOG_DESCRIPTION_LIMIT = 100
 #: Ends a sentence wherever it appears — CJK punctuation is not followed by a
 #: space, so a lookahead would make `。` end nothing in a Chinese description.
 _SENTENCE_END_CJK = "。！？"
-#: Ends a sentence only before whitespace or the end, so `3.5` and `e.g.` do not.
+#: Ends a sentence only before whitespace or the end, so `3.5` does not — and
+#: only when what follows looks like a new sentence and what precedes is not an
+#: abbreviation, so `e.g.` / `etc.` / `U.S.` / `Max.` do not either. The first
+#: version of this comment claimed `e.g.` was covered by the lookahead alone;
+#: it was not, and `'Plot a chart, e.g. a trend…'` became `'Plot a chart, e.g.'`
+#: — an 18-character catalog line, which is the only thing the model reads to
+#: decide whether to reach for the command (round 1 A9).
 _SENTENCE_END_ASCII = ".!?"
+
+#: Words that end in `.` without ending a sentence. Lower-cased, dots stripped,
+#: so `e.g` covers `e.g.` and `E.g.`. Anything with an internal dot (`U.S.`,
+#: `i.e.`) and any single letter (`A.`) is caught by rule, not by this list.
+_ABBREVIATIONS = frozenset(
+    [
+        "e.g",
+        "i.e",
+        "etc",
+        "vs",
+        "cf",
+        "al",
+        "approx",
+        "incl",
+        "excl",
+        "resp",
+        "fig",
+        "no",
+        "nos",
+        "vol",
+        "ca",
+        "max",
+        "min",
+        "avg",
+        "std",
+        "dept",
+        "est",
+        "dr",
+        "mr",
+        "mrs",
+        "ms",
+        "prof",
+        "inc",
+        "ltd",
+        "co",
+        "corp",
+        "jr",
+        "sr",
+        "st",
+    ]
+)
 #: Where a too-long sentence may be cut: a mark the AUTHOR wrote, so the cut
 #: lands between clauses instead of between two characters of one.
 _CLAUSE_END = "，、；：,;"
 
 
+def _looks_like_an_abbreviation(said: str, dot: int) -> bool:
+    """Whether the `.` at `dot` is part of a word that is not a sentence end.
+
+    Three rules, in the order they fire: the word already contains a dot
+    (`i.e.`, `U.S.`), it is a single letter (`A.`), or it is one of the few
+    spellings people actually write (`etc.`, `vs.`, `Max.`)."""
+    start = dot
+    while start > 0 and not said[start - 1].isspace():
+        start -= 1
+    word = said[start:dot]
+    if "." in word:
+        return True
+    bare = word.strip("(）)[]「」\"'“”").lower()
+    return len(bare) == 1 or bare in _ABBREVIATIONS
+
+
 def _first_sentence(said: str) -> str:
     """The author's first sentence. A newline ends one too — plenty of
-    descriptions are a title line followed by a paragraph."""
+    descriptions are a title line followed by a paragraph.
+
+    An ASCII `.` `!` `?` ends a sentence only when all three hold: whitespace
+    (or the end) follows, the next non-space character starts something new
+    (upper case or CJK — a digit or a lower-case word means the sentence
+    continues: `Max. 1000`, `e.g. a trend`), and the word before the dot is not
+    an abbreviation."""
     for i, ch in enumerate(said):
         if ch in _SENTENCE_END_CJK:
             return said[: i + 1]
         if ch == "\n":
             return said[:i].rstrip()
-        if ch in _SENTENCE_END_ASCII and (i + 1 == len(said) or said[i + 1].isspace()):
-            return said[: i + 1]
+        if ch not in _SENTENCE_END_ASCII:
+            continue
+        rest = said[i + 1 :]
+        if rest and not rest[0].isspace():
+            continue  # `3.5`
+        nxt = rest.lstrip()
+        if ch == "." and nxt and not (nxt[0].isupper() or _is_cjk(nxt[0])):
+            continue
+        if ch == "." and _looks_like_an_abbreviation(said, i):
+            continue
+        return said[: i + 1]
     return said
+
+
+def _is_cjk(ch: str) -> bool:
+    return "\u2e80" <= ch <= "\u9fff" or "\uff00" <= ch <= "\uffef"
 
 
 def catalog_description(text: str, *, limit: int = CATALOG_DESCRIPTION_LIMIT) -> str:
@@ -815,10 +910,20 @@ def catalog_description(text: str, *, limit: int = CATALOG_DESCRIPTION_LIMIT) ->
     Nothing is lost by shortening: loading the command hands the model the full
     `describe_command` text and the real schema.
     """
-    said = text.strip()
+    # `str(…)`, not a bare `.strip()`: a published manifest may carry a
+    # command description that is `null`, a number or a list (`parse_manifest`
+    # checks neither), and this is now on the path that builds the WHOLE tool
+    # list — so an odd value used to be an ugly f-string and would now take
+    # every turn on that item down with an AttributeError (round 1 A8).
+    said = str(text or "").strip()
     if not said:
         return ""
     first = _first_sentence(said)
+    # A limit too small to hold a boundary cut is not a limit to honour with
+    # one: `first[: limit - 1]` turned `limit=0` into "keep everything but the
+    # last character" and `limit=-5` into "drop five" (round 1 A16).
+    if limit < 2:
+        return "…" if said else ""
     if len(first) <= limit:
         return first
     kept = first[: limit - 1]
@@ -826,9 +931,34 @@ def catalog_description(text: str, *, limit: int = CATALOG_DESCRIPTION_LIMIT) ->
         (i for i, ch in enumerate(kept) if ch.isspace() or ch in _CLAUSE_END),
         default=-1,
     )
-    if cut >= 0:
+    # A boundary in the first half keeps almost nothing — worse than the
+    # no-boundary fallback, which keeps the whole budget. `'Plot ' + 200 chars`
+    # kept 5 of 100 before this (round 1 A10).
+    if cut >= 0 and cut * 2 >= limit:
         kept = kept[:cut].rstrip() if kept[cut].isspace() else kept[: cut + 1]
-    return f"{kept}…"
+    return f"{_whole_clusters(kept)}…"
+
+
+#: Characters that must not be the last thing before the ellipsis: a combining
+#: mark or a joiner belongs to the character before it, and half a grapheme
+#: cluster is mojibake, not a shortened sentence (round 1 A16).
+_JOINERS = "\u200d\ufe0f\u20e3"
+
+
+def _whole_clusters(kept: str) -> str:
+    """`kept` with any trailing half-cluster removed."""
+    while kept and (unicodedata.combining(kept[-1]) or kept[-1] in _JOINERS):
+        kept = kept[:-1]
+    # A regional-indicator pair is a flag; one on its own is half of one.
+    if kept and "\U0001f1e6" <= kept[-1] <= "\U0001f1ff":
+        pairs = 0
+        i = len(kept) - 1
+        while i >= 0 and "\U0001f1e6" <= kept[i] <= "\U0001f1ff":
+            pairs += 1
+            i -= 1
+        if pairs % 2:
+            kept = kept[:-1]
+    return kept
 
 
 #: The schema a catalog entry carries: none. `additionalProperties` is open
@@ -868,8 +998,9 @@ def build_catalog_tools(
     """One entry per granted command: the real name, one line of what it is, and
     no parameter schema (`docs/plan-tool-on-demand-loading.md`).
 
-    This is what a turn sends INSTEAD of every command's full schema — the
-    thing that put 414,115 characters in one system prompt. `mark_loaded` is
+    This is what a turn sends INSTEAD of every command's full schema, which is
+    the half that grows without bound — an operator reported a 414,115
+    character system prompt. `mark_loaded` is
     called with the turn's context and the model name when an entry is invoked,
     so the next step of the same turn sends that command's real schema.
 
@@ -878,6 +1009,19 @@ def build_catalog_tools(
     """
     return [_stub_function_tool(pkg, cmd, mark_loaded) for pkg, cmd in _granted(packages, allowed)]
 
+
+#: What one `load_tool` call may answer with. The catalog's whole point is
+#: that schemas are not in the window until they are needed; a single call
+#: naming every bundle put 36,054 characters back (and `["sci-plot"] * 20` put
+#: 261,238), in the tool result AND in the next step's tool list at once. The
+#: built-ins' own ceiling (`cap_tool_outputs`, 200,000) does not reach here,
+#: because the catalog tools are appended in `_agent_for` outside `build_tools`
+#: (round 1 A7).
+_LOAD_REPLY_MAX_CHARS = 20_000
+
+#: How many names one call may ask for. 3,000 unknown names answered with
+#: 928,888 characters before this.
+_LOAD_MAX_NAMES = 20
 
 #: How many names an unknown-name answer lists before it stops. A deployment
 #: with hundreds of commands must not get its whole catalog pasted back into
@@ -929,21 +1073,55 @@ def build_load_tool(
             asked = []
         if isinstance(asked, str):  # a model that sent one name, not a list
             asked = [asked]
+        # Deduped, and bounded: `["sci-plot"] * 20` is a plausible thing for a
+        # model to emit, and every repeat used to cost another full schema.
+        wanted: list[str] = []
+        for a in asked:
+            name = str(a)
+            if name not in wanted:
+                wanted.append(name)
+        over = wanted[_LOAD_MAX_NAMES:]
+        wanted = wanted[:_LOAD_MAX_NAMES]
         parts: list[str] = []
-        for name in [str(a) for a in asked]:
+        done: set[str] = set()
+        for name in wanted:
             found = by_name.get(name)
             if not found:
                 parts.append(_unknown_name_reply(name, granted))
                 continue
             for pkg, cmd in found:
-                mark_loaded(ctx, model_tool_name(pkg, cmd))
-                parts.append(load_reply(pkg, cmd))
+                model_name = model_tool_name(pkg, cmd)
+                mark_loaded(ctx, model_name)
+                # A bundle and one of its commands can share a name (the
+                # shipped `data-fetch` does), and both keys point at the same
+                # command — answering twice doubled the schema for nothing.
+                if model_name not in done:
+                    done.add(model_name)
+                    parts.append(load_reply(pkg, cmd))
+        if over:
+            # FIRST, not last: the length cap below trims the tail, and the one
+            # sentence that must survive is the one saying why the model did
+            # not get what it asked for. (A test caught this: the notice was
+            # appended and then cut away.)
+            parts.insert(
+                0,
+                f"Not loaded, too many names in one call (the limit is {_LOAD_MAX_NAMES}): "
+                + ", ".join(f"`{n}`" for n in over[:_UNKNOWN_NAMES_SHOWN])
+                + ". Ask for the ones you need.",
+            )
         if not parts:
             return (
                 "Nothing to load: `names` was empty. Give the name of a tool from "
                 "your tool list, or a bundle's name to load all of its commands."
             )
-        return "\n\n".join(parts)
+        reply = "\n\n".join(parts)
+        if len(reply) > _LOAD_REPLY_MAX_CHARS:
+            reply = (
+                reply[:_LOAD_REPLY_MAX_CHARS]
+                + f"\n\n[cut at {_LOAD_REPLY_MAX_CHARS} characters — ask for fewer tools "
+                "at a time to see the rest]"
+            )
+        return reply
 
     return FunctionTool(
         name="load_tool",
@@ -962,6 +1140,12 @@ def _unknown_name_reply(name: str, granted: list[tuple[PackageInfo, CommandInfo]
     """Say what IS there. Silence here reads as "that tool is gone" and the
     model stops looking for the one it actually wanted."""
     names = sorted({model_tool_name(pkg, cmd) for pkg, cmd in granted})
+    if not names:
+        # Reachable only as a belt-and-braces: `load_tool` is no longer granted
+        # to a turn with no package command (round 1 A6). The sentence below
+        # would end in ": ." here, which is the silence this function exists to
+        # avoid.
+        return f"There is no tool called `{name}`, and this turn has no loadable tools."
     shown = ", ".join(f"`{n}`" for n in names[:_UNKNOWN_NAMES_SHOWN])
     more = (
         f" (and {len(names) - _UNKNOWN_NAMES_SHOWN} more in your tool list)"
@@ -969,6 +1153,23 @@ def _unknown_name_reply(name: str, granted: list[tuple[PackageInfo, CommandInfo]
         else ""
     )
     return f"There is no tool called `{name}`. Tools you can load: {shown}{more}."
+
+
+def _catalog_entry(pkg: PackageInfo, cmd: CommandInfo, name: str) -> str:
+    """One catalog line: what the command is, and which bundle it comes from.
+
+    The bundle name is there because `load_tool` advertises "a bundle's name
+    loads every command in it" — and before this the turn was never told ANY
+    bundle name (a third-party command carries it inside its own
+    `<bundle>__<command>` name; a first-party one does not), so that path, the
+    one escape from paying an extra step per command, could not be used
+    (review round 1 A5). Version, author and the "not the latest release"
+    notice stay in `describe_command`, which arrives when the command loads.
+    """
+    said = catalog_description(cmd.description)
+    if name.startswith(f"{pkg.name}{THIRD_PARTY_SEP}"):
+        return said  # the name already says it
+    return f"{said} [{pkg.name}]" if said else f"[{pkg.name}]"
 
 
 def _stub_function_tool(
@@ -987,7 +1188,7 @@ def _stub_function_tool(
 
     return FunctionTool(
         name=name,
-        description=catalog_description(cmd.description),
+        description=_catalog_entry(pkg, cmd, name),
         params_json_schema=_CATALOG_SCHEMA,
         on_invoke_tool=on_invoke,
         strict_json_schema=False,

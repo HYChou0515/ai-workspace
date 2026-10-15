@@ -49,11 +49,28 @@ def test_the_note_explains_why_a_schema_may_be_empty():
     """A catalog entry carries an empty argument schema
     (`docs/plan-tool-on-demand-loading.md`). Unexplained, that reads as "takes
     no arguments" — and the model would call it, get the schema back, and have
-    no idea it was supposed to call again."""
-    out = format_tools_for_prompt([_ft("wafer-history", "fetch", {})])
+    no idea it was supposed to call again.
+
+    It also has to say that several can be loaded in ONE `load_tool` call:
+    each first use costs an extra step, and `runner.max_turns` bounds the turn,
+    so a turn using five commands one at a time hits the ceiling with the work
+    already done (round 1 A4)."""
+    out = format_tools_for_prompt([_ft("wafer-history", "fetch", {}), _ft("load_tool", "load", {})])
 
     assert "empty" in out
     assert "again" in out
+    assert "load_tool" in out and "ONCE" in out
+
+
+def test_a_turn_with_no_catalog_is_not_told_about_one():
+    """The control: without `load_tool` there is no catalog entry and no empty
+    schema, so the paragraph would be an instruction about something that
+    cannot happen (round 1 A15)."""
+    out = format_tools_for_prompt([_ft("exec", "run", {"type": "object"})])
+
+    assert "exit 127" in out  # the rule that always applies
+    assert "empty" not in out
+    assert "load_tool" not in out
 
 
 def test_the_note_does_not_grow_with_the_tool_list():

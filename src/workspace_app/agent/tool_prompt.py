@@ -2,10 +2,11 @@
 
 The LLM sees the tools themselves via the OpenAI-style tool schemas in the API
 payload. This section does NOT repeat them: it used to render every tool's
-name, description and full JSON schema a second time, and that second copy is
-how one system prompt reached 414,115 characters on a deployment with many
-third-party tools (measured locally: 14 built-ins cost 4,538 tokens as wire
-schemas and 9,397 more as this section — `docs/plan-tool-on-demand-loading.md`).
+name, description and full JSON schema a second time. Measured locally, that
+second copy was the larger half — 14 built-ins cost 4,538 tokens as wire
+schemas and 9,397 more as this section — and an operator reported a 414,115
+character system prompt on a deployment with many third-party tools
+(`docs/plan-tool-on-demand-loading.md`).
 
 What survives is the rule the section existed for. Small local LLMs
 (Qwen3:14b and similar) don't reliably associate ``wafer-history`` in their
@@ -35,31 +36,51 @@ if TYPE_CHECKING:
 
 
 #: Fixed cost, whatever the turn carries. The tools themselves are in the API
-#: payload; this says how to call them and how the catalog behaves.
+#: payload; this says how to call them.
 _TOOLS_NOTE = """## Tools available
 
 Your tools are the ones in this request's tool list — call one by **name**
 through `tool_calls` with a JSON args object. **Do NOT**
 `exec(['<tool-name>', ...])`: they are NOT shell binaries on PATH, and trying
 to exec one fails with `not found` (exit 127).
+"""
 
-A tool you have not used yet in this turn may be listed with an **empty**
-argument schema. That does not mean it takes no arguments — it means its
-schema has not been sent yet. Call it anyway: the answer is its real
+#: Added only when the turn actually carries catalog entries. Two things the
+#: model cannot work out on its own: an empty argument schema does not mean
+#: "no arguments", and several tools can be loaded in ONE step.
+#:
+#: That second sentence is not a nicety. Each first use of a command costs an
+#: extra step, and `runner.max_turns` (default 10) bounds a turn — so a turn
+#: using five commands one at a time hits the ceiling with the work already
+#: done. One `load_tool` naming them all costs one step for all five; without
+#: this paragraph the model was never told that path existed (round 1 A4).
+_CATALOG_NOTE = """A tool you have not used yet in this turn may be listed with
+an **empty** argument schema. That does not mean it takes no arguments — it
+means its schema has not been sent yet. Call it anyway: the answer is its real
 description and argument schema, and you then call it again with arguments
 matching that schema.
+
+If you expect to use several such tools, call `load_tool` ONCE with all of
+their names (or with a bundle's name, shown in each entry as `[bundle]`, to
+load every command in it) — each tool you load separately costs an extra step.
 """
 
 
 def format_tools_for_prompt(tools: Sequence[FunctionTool]) -> str:
-    """The one paragraph about how to call tools. Empty `tools` → empty string
-    (caller skips concatenation).
+    """The one paragraph about how to call tools, plus the catalog paragraph
+    when this turn has catalog entries. Empty `tools` → empty string (caller
+    skips concatenation).
 
-    `tools` decides only WHETHER the note is needed, never its length: it
+    `tools` decides WHETHER each paragraph is needed, never its length: it
     deliberately does not list them. See the module docstring."""
     if not tools:
         return ""
-    return _TOOLS_NOTE
+    # A turn with no package command carries no empty schema and no
+    # `load_tool`, so the catalog paragraph would be ~70 tokens of instruction
+    # about something that cannot happen (round 1 A15).
+    if not any(t.name == "load_tool" for t in tools):
+        return _TOOLS_NOTE
+    return f"{_TOOLS_NOTE}\n{_CATALOG_NOTE}"
 
 
 def format_disabled_tools_for_prompt(metas: Sequence[ToolMeta]) -> str:

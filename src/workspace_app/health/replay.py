@@ -213,9 +213,13 @@ class ReplayService:
         # would implicate the harness instead of the model. Lazy import:
         # `api` imports `health` (routes) — module-load import would
         # cycle. Same for ThinkSplitter (Qwen3 inline `<think>` tags).
-        from agents import FunctionTool
 
-        from ..api.litellm_runner import ThinkSplitter, _agent_for
+        from ..agent.context import AgentToolContext
+        from ..api.litellm_runner import (
+            ThinkSplitter,
+            _agent_for,
+            enabled_function_tools,
+        )
 
         agent = _agent_for(config, packages, template_profile=template_profile, in_chat=in_chat)
         logger.info("replay: replaying turn index=%d model=%s", index, config.model)
@@ -223,6 +227,17 @@ class ReplayService:
         if agent.instructions:
             sent.append({"role": "system", "content": agent.instructions})
         sent.extend(self._history(messages[:index]))
+        # `enabled_function_tools`, never `agent.tools`: a package command is
+        # registered twice under one name (the catalog entry and the executable
+        # tool, `docs/plan-tool-on-demand-loading.md`) and only `is_enabled`
+        # keeps one of the pair off the wire. Reading the registry raw sent two
+        # definitions of one name — bigger than before the catalog existed, and
+        # a payload `dedupe_tools` exists to prevent — which would also break
+        # this module's own promise of a bit-identical replay.
+        # A fresh turn's view: a replay re-sends a turn's FIRST step, and
+        # nothing is loaded then. The real class, so the predicate is answered
+        # the way it is in production.
+        offered = enabled_function_tools(agent, AgentToolContext(investigation_id="replay"))
         tools = [
             {
                 "type": "function",
@@ -232,10 +247,7 @@ class ReplayService:
                     "parameters": t.params_json_schema,
                 },
             }
-            # Everything we build IS a FunctionTool — the isinstance is
-            # a `ty` narrowing for the SDK's wider Tool union.
-            for t in agent.tools
-            if isinstance(t, FunctionTool)
+            for t in offered
         ]
 
         started = time.perf_counter()
@@ -281,7 +293,7 @@ class ReplayService:
         request = ReplayRequest(
             model=config.model,
             endpoint=redact_endpoint(config.llm_base_url or self._default_base_url),
-            tools=[t.name for t in agent.tools if isinstance(t, FunctionTool)],
+            tools=[t.name for t in offered],
         )
         logger.info("replay: turn replay complete for model=%s", config.model)
         return ReplayResult(

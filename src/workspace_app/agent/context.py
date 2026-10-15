@@ -743,10 +743,18 @@ class AgentToolContext:
 
         `call_id` records WHICH call did the loading, so its answer (a schema)
         can be kept out of the thread; a load with no call behind it (a test, a
-        future caller) simply records nothing."""
+        future caller) simply records nothing.
+
+        The per-call list is deduped for the same reason the set is: one
+        `load_tool(["a-bundle", "one-of-its-commands"])` resolves the same
+        command twice, and the names go into a sentence a PERSON reads — it
+        read `載入 \`data-fetch\`、\`plot-trend\`、\`data-fetch\` 的用法`
+        (round 1 F6)."""
         self.loaded_tools.add(name)
         if call_id:
-            self.catalog_calls.setdefault(call_id, []).append(name)
+            seen = self.catalog_calls.setdefault(call_id, [])
+            if name not in seen:
+                seen.append(name)
 
     def is_tool_loaded(self, name: str) -> bool:
         return name in self.loaded_tools

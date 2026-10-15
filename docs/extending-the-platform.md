@@ -240,9 +240,10 @@ def main() -> None:        # pyproject.toml [project.scripts] 指向這裡
 4. **重啟** app——開機時 `tooling/registry.discover_packages` 掃 `.workspace-tools/` 建
    `PackageInfo`,`build_function_tools` 依 `allowed` 展開成 `FunctionTool`(第一方套件用扁平
    command name,兩個第一方套件撞名會 raise;第三方工具的 command 帶本地名前綴 `<本地名>__<command>`,
-   不會撞,見 `plan-third-party-tool-names.md`)。tool 的 name/description/JSON schema 也會被
-   `agent/tool_prompt.format_tools_for_prompt` render 進 system prompt 末段,免得小模型把
-   function tool 當成 PATH 上的 shell binary。
+   不會撞,見 `plan-third-party-tool-names.md`)。tool 的 name/description/JSON schema 隨 API 的
+   `tools` 一起送出;**不再**被 render 進 system prompt(那份複本已移除,見上面「command 的第一句話
+   會被當成目錄那一行」與 [`plan-tool-on-demand-loading.md`](plan-tool-on-demand-loading.md))。
+   system prompt 只留一段固定的話,免得小模型把 function tool 當成 PATH 上的 shell binary。
 
 `app.json` 是**上限**;profile 的 `_profile.json` 可再收窄成子集;per-item 的 `tool_prefs`
 再做三態覆寫(#322 的三層 resolve,見 `apps/catalog.py`)。

@@ -121,6 +121,8 @@ async def test_nothing_belonging_to_the_parents_conversation_or_turn_is_inherite
         kb_passages=[_passage()],
         injected_card_ids={"card-1"},
         subagent_citations={"ask_knowledge_base": [[]]},
+        loaded_tools={"parent-loaded"},
+        catalog_calls={"p1": ["parent-loaded"]},
     )
 
     await run_agent_task(runner, parent, defn, "go")
@@ -137,7 +139,14 @@ async def test_nothing_belonging_to_the_parents_conversation_or_turn_is_inherite
     assert child.kb_passages == []
     assert child.injected_card_ids == set()
     assert child.subagent_citations == {}
+    # Which commands THIS turn loaded, and which calls the catalog answered
+    # (`docs/plan-tool-on-demand-loading.md`). Shared, a child's load made the
+    # parent's next step carry that command's full schema (round 1 A11).
+    assert child.loaded_tools == set()
+    assert child.catalog_calls == {}
     # ...and none of it reached back into the parent.
+    assert parent.loaded_tools == {"parent-loaded"}
+    assert parent.catalog_calls == {"p1": ["parent-loaded"]}
     assert parent.withheld_collection_ids == ["col-x"]
     assert parent.turn_image_urls == ["data:image/png;base64,AAAA"]
     assert len(parent.kb_passages) == 1

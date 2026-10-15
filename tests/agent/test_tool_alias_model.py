@@ -162,8 +162,14 @@ async def test_the_failed_call_runs_nothing_and_the_model_reads_why(monkeypatch)
     assert "cross-package tool name collision: command 'list-files'" in str(out)
 
 
-def test_the_system_prompt_lists_third_party_commands_by_their_new_names() -> None:
-    """P4: the inventory the model reads names what it can call."""
+def test_the_model_is_offered_third_party_commands_by_their_new_names() -> None:
+    """P4: what the model is offered names what it can call.
+
+    It used to read this off the system prompt, because the prompt carried a
+    second copy of the whole inventory. `docs/plan-tool-on-demand-loading.md`
+    removed that copy — the names now live only in the tool list itself, which
+    is where this guard belongs (the property is unchanged; its address moved).
+    """
     from workspace_app.api.litellm_runner import _agent_for
     from workspace_app.resources.agent_config import AgentConfig
 
@@ -172,8 +178,8 @@ def test_the_system_prompt_lists_third_party_commands_by_their_new_names() -> No
         packages=[_pkg("a", "list-files"), _pkg("b", "list-files")],
     )
 
-    assert isinstance(agent.instructions, str)
-    assert "a__list-files" in agent.instructions and "b__list-files" in agent.instructions
+    offered = {t.name for t in agent.tools}
+    assert "a__list-files" in offered and "b__list-files" in offered
 
 
 async def test_a_non_streamed_response_is_renamed_too() -> None:

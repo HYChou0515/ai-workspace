@@ -19,7 +19,7 @@ from agents import RunContextWrapper
 
 from workspace_app.agent.context import AgentToolContext
 from workspace_app.api.events import ToolEnd
-from workspace_app.api.litellm_runner import _agent_for, _map_event
+from workspace_app.api.litellm_runner import _agent_for, _map_event, enabled_function_tools
 from workspace_app.resources import AgentConfig
 from workspace_app.tooling.registry import CommandInfo, PackageInfo
 
@@ -60,7 +60,7 @@ async def test_a_fresh_turn_is_sent_the_catalog_not_the_schemas():
 
     assert "data-fetch" in sent
     # One line of what it is, and no parameters: the expensive half is absent.
-    assert sent["data-fetch"].description == "Fetch a lot's history."
+    assert sent["data-fetch"].description == "Fetch a lot's history. [rca-tools]"
     assert sent["data-fetch"].params_json_schema["properties"] == {}
     # …and the way to ask for the usage up front is there.
     assert "load_tool" in sent
@@ -278,3 +278,95 @@ class _FakeStreamed:
     async def stream_events(self):
         for ev in self._events:
             yield ev
+
+
+# ── the sync readers that are not the SDK's run loop ────────────────────
+
+
+async def test_the_sync_reader_agrees_with_the_sdk_in_every_state():
+    """`enabled_function_tools` exists because `replay` and the trace line run
+    with no event loop and cannot await `get_all_tools`. It mirrors one rule of
+    the SDK's, so the SDK is the oracle: a parity test, not two implementations
+    kept alike by hand (every state that matters, both answers compared)."""
+    agent = _agent()
+    fresh = AgentToolContext(investigation_id="i")
+    partly = AgentToolContext(investigation_id="i")
+    partly.mark_tool_loaded("data-fetch")
+    allloaded = AgentToolContext(investigation_id="i")
+    allloaded.mark_tool_loaded("data-fetch")
+    allloaded.mark_tool_loaded("plot-trend")
+
+    for ctx in (fresh, partly, allloaded):
+        from agents import RunContextWrapper
+
+        oracle = [
+            t.name for t in await agent.get_all_tools(RunContextWrapper(ctx)) if hasattr(t, "name")
+        ]
+        assert [t.name for t in enabled_function_tools(agent, ctx)] == oracle, ctx.loaded_tools
+
+
+async def test_the_sync_reader_never_answers_with_a_name_twice():
+    """What the raw registry does, and why neither caller may read it: the
+    payload would carry two definitions of one name, which `dedupe_tools`'
+    docstring calls a payload the provider rejects wholesale."""
+    agent = _agent()
+    registered = [t.name for t in agent.tools]
+    assert registered.count("data-fetch") == 2  # the twins ARE both registered
+
+    sent = [t.name for t in enabled_function_tools(agent, AgentToolContext(investigation_id="i"))]
+
+    assert len(sent) == len(set(sent)), sent
+
+
+async def test_load_tool_is_not_granted_to_a_turn_that_holds_no_package_command():
+    """`load_tool` was gated on the ITEM having a bundle installed, not on this
+    turn being granted any command — so every sub-agent with a narrowed
+    `allowed_tools` (every `ask_knowledge_base` child, every workflow node with
+    its own `tools:`) got one whose only possible answer was "there is no tool
+    called that. Tools you can load: ." (round 1 A6).
+    """
+    agent = _agent_for(
+        AgentConfig(name="ws", system_prompt="anchor", allowed_tools=["read_file"]),
+        packages=_packages(),
+    )
+    sent = await _sent(agent, AgentToolContext(investigation_id="i"))
+
+    assert "read_file" in sent
+    assert "load_tool" not in sent
+    assert "data-fetch" not in sent
+
+
+async def test_load_tool_is_granted_when_one_command_is():
+    """The control: the gate is the granted commands, so granting one brings it
+    back. A mutation that drops `load_tool` wholesale reddens here."""
+    agent = _agent_for(
+        AgentConfig(
+            name="ws", system_prompt="anchor", allowed_tools=["read_file", "rca-tools:data-fetch"]
+        ),
+        packages=_packages(),
+    )
+    sent = await _sent(agent, AgentToolContext(investigation_id="i"))
+
+    assert "load_tool" in sent
+    assert "data-fetch" in sent
+    assert "plot-trend" not in sent  # …and only the command that was granted
+
+
+async def test_one_call_loading_a_bundle_and_one_of_its_commands_says_each_name_once():
+    """The names go into a sentence a PERSON reads (the chat card and, before
+    round 1 A1, the stored message). `load_tool(["rca-tools", "data-fetch"])`
+    resolves `data-fetch` twice, and it read
+    `載入 \u0060data-fetch\u0060、\u0060plot-trend\u0060、\u0060data-fetch\u0060 的用法`
+    (round 1 F6)."""
+    agent = _agent()
+    ctx = AgentToolContext(investigation_id="i")
+    load = (await _sent(agent, ctx))["load_tool"]
+
+    await load.on_invoke_tool(
+        _tool_ctx(ctx, "load_tool", call_id="c1"), '{"names": ["rca-tools", "data-fetch"]}'
+    )
+
+    assert ctx.catalog_calls["c1"] == ["data-fetch", "plot-trend"]
+    event = _map_event(_output_event("c1", "…schema…"), ctx)
+    assert isinstance(event, ToolEnd)
+    assert event.output.count("data-fetch") == 1

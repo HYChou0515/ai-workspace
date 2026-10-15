@@ -103,6 +103,13 @@ def build_ask_kb_context(spec: AskKbSpec, base: AgentToolContext) -> AgentToolCo
         kb_search_budget=KbSearchBudget(max_calls=spec.kb_search_max),
         wiki_search_budget=WikiSearchBudget(max_calls=spec.wiki_search_max),
         kb_grep_budget=KbGrepBudget(max_calls=spec.kb_grep_max),
+        # The sub-agent's own, not the caller's — same reason as
+        # `_child_context`'s reset list (`docs/plan-tool-on-demand-loading.md`,
+        # review round 1 A11): `replace` would otherwise hand over the parent's
+        # very `set` and `dict`, so what the KB child loads would be sent with
+        # its full schema for the rest of the parent's turn.
+        loaded_tools=set(),
+        catalog_calls={},
     )
 
 

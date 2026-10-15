@@ -79,7 +79,7 @@ callable、可以 async）。
 同一時間只有一個會被送出。
 
 - 不需要 mutate `agent.tools`，不需要自己攔 provider 的未知工具呼叫。
-- 同名不會踩 SDK 的檢查：`_validate_codex_tool_name_collisions`（`agent.py:95-113`）只對
+- 同名不會踩 SDK 的檢查：`_validate_codex_tool_name_collisions`（`agent.py:95-118`）只對
   `_is_codex_tool` 生效，而且跑在 `is_enabled` 過濾**之後**。
 - **模型呼叫未載入的 command 一定會發生**（目錄已經把真名字給它了），這不是要防的誤用。
   stub 的 handler 就是那個落點：載入 → 回 schema → 要它再呼叫一次。寫成「拒絕」是
@@ -104,16 +104,20 @@ token）。留進歷史就等於把省下的塞回去，走幾輪回到原點；
   看起來像模型一直叫錯工具。
 - **聊天 UI 不為它畫工具卡**，最多一行「載入 `<command>` 的用法」，schema 不進卡片。
 
-### 上界
+### 上界 —— 不需要，故沒做（P2）
 
-同一輪內，同一個 command **最多自動載入一次**；第二次仍缺參數就把錯誤連同 schema 一起
-交給模型，不再重載。沒有這條，一輪裡會原地繞（「迴圈要有結構性上界」）。
+原本寫的是「同一輪內同一個 command 最多自動載入一次」。雙胞胎設計讓那個迴圈**結構上
+不可能**發生：載入後 stub 立刻失效、同名的完整工具接手，第二次呼叫打到的是真工具;
+參數再錯是 command 自己的 dispatcher 回友善錯誤，不會再經過載入。一輪裡同時發出兩個
+對同一個未載入 command 的呼叫也安全（兩個都拿到 schema，`mark_tool_loaded` 對集合是
+idempotent）。加一個永遠跑不到的守衛只會是死碼，所以 P2 沒有做。
+（釘住它的是 `test_calling_an_unloaded_command_loads_it_and_asks_for_a_retry`。）
 
-### 預算要量真的那一份
+### 預算要量真的那一份 —— 不做（user 決定）
 
-`_tools_tokens` 改成量**實際會送出的那一份**：常駐 + `load_tool` + 目錄 stub（＋本輪已載入
-的完整 schema，若在估算當下已知）。這是把假數字改成真的，不改行為；但它同時讓
-「超出窗口」從靜默變成系統知道的事實（`history_budget` 才有意義）。
+這一段原本要求 `_tools_tokens` 改成量實際送出的那一份。**user 否決了**（「不需要預算吧
+他自然會在 litellm 那邊死掉」、「ollama 那個就算了」），理由與代價寫在上面的決策表與
+「Deliberately not doing」。保留這個標題只為了讓讀到舊版的人找得到它被推翻的地方。
 
 ## Deliberately not doing
 
@@ -130,9 +134,11 @@ token）。留進歷史就等於把省下的塞回去，走幾輪回到原點；
   **已知的代價**：對**不拒絕、直接砍掉請求前段**的 endpoint（Ollama、部分 proxy），這條路不會
   報錯，而被砍掉的前段正是 `base = config.system_prompt`；靜默截斷偵測器也會繼續因為低估而
   不觸發（`_sent_estimate` 用同一個數字）。user 判斷那種 endpoint 不用管（2026-10-15）。
-- **釘選延後**。這一輪完全不碰前端：目錄與載入都在模型那一側，工具 modal 顯示的語意沒變；
-  `load_tool` 與自動載入**不發 `ToolStart`/`ToolEnd`/`ToolLog`**（`api/events.py:33-60`），所以
-  不會冒出一張裝著 schema 的工具卡——那是後端一個判斷，不是前端特例。
+- **釘選延後**。這一輪完全不碰前端：目錄與載入都在模型那一側，工具 modal 顯示的語意沒變。
+  目錄那一次**仍然會畫一張工具卡**（`ToolStart` 比工具執行早，壓掉它要靠狀態推論、有競態），
+  但卡片與**存下來的訊息**都不帶 schema：`ToolEnd` 的輸出換成「載入 `<名字>` 的用法」，而
+  那一則訊息根本不寫進對話記錄（round 1 A1）。這段原本寫「不發
+  `ToolStart`/`ToolEnd`/`ToolLog`」，與 Design 段自己的敘述矛盾，已更正為實際行為。
 
 ## Phases（一個 commit 一段）
 
@@ -187,7 +193,7 @@ token）。留進歷史就等於把省下的塞回去，走幾輪回到原點；
 - `tooling/registry.py:265 build_function_tools`；`CommandInfo`（`:51`）有
   `name` / `description` / `params_json_schema`。
 - `api/litellm_runner.py:482` `base = config.system_prompt`；`:541`
-  `tools.extend(build_function_tools(...))`；`:546` `dedupe_tools`（first-wins）；
+  `tools.extend(build_function_tools(...))`；`:547` `dedupe_tools`（first-wins）；
   `:558` `tools_section = format_tools_for_prompt(tools)`；`:560` 接在 base 之後；
   `:840` `instructions=base`。
 - `agent/tool_prompt.py:32 format_tools_for_prompt`（`indent=2` 的完整 schema）；
@@ -196,7 +202,58 @@ token）。留進歷史就等於把省下的塞回去，走幾輪回到原點；
   `:767 history_items(max_tokens=…)`；`context_budget.py:345 history_budget`。
 - SDK：`agents/run.py:766` `while True`、`:1028` `get_all_tools`、`:1055`
   `current_turn += 1`；`agents/agent.py:246 get_all_tools`、`:254` `is_enabled`、
-  `:95-113` 同名檢查只對 codex 工具。
+  `:95-118` 同名檢查只對 codex 工具（`:101-102` 的早退、`:113` 的判斷、`:114-118` 的 raise）。
 - 本機量測（`.workspace-tools`）：內建 14 個工具 schema 4,538 tok / prompt 複本 9,397 tok；
   5 個套件 14 個 command schema 8,413 tok / 複本 11,471 tok；合計 33,746 tok vs 預算扣 4,538。
   腳本：`llmlog_audit.py`（讀 LLM 呼叫記錄）＋ 以真 record builder/writer 產的樣本一筆。
+
+## Review round 1 — 決策表（缺陷鏡頭 + 回歸鏡頭，2026-10-15，對 `b9e793d5`）
+
+兩把鏡頭各自獨立跑，發現高度重疊。去重後 18 條；先列完整張表再動手，測試從表導出。
+（真實性/符合度鏡頭的結果回來後追加在表尾。）
+
+| # | 發現 | 真因 | 修法 | 怎麼證明 |
+|---|---|---|---|---|
+| **A1** | **「載入＋重試」那一對仍然寫進對話記錄**，而且帶模型憑空編的參數（`lot_number`），下一輪被 replay 回窗口 | P5 只改了 `ToolEnd.output`；`api/turns.py:439` 的 reducer 照樣用 `ToolStart` 的 `tool_name`/`tool_args` 產生一則 `role="tool"` | reducer 收 `ToolEnd` 時，若 call id 是目錄那次就**不產生訊息**。兩個建構點都看得到 `ctx`（`turns.py:1101` 在 `_drive`、`:1454` 在 `gen()`），所以把 `ctx.catalog_calls` 傳給 reducer。**直播的卡片留著**（`ToolStart` 比執行早，壓掉會有競態），但存下來的 thread 沒有那一則 | 探針：真 turn 跑完讀回 thread，`role="tool"` 只有一則；突變（拿掉跳過）要紅 |
+| **A2** | **replay 送出重複的 function 名字＋完整 schema**，比這個 PR 之前還大（55,910 vs 22,118 字元） | `health/replay.py:227-239`、`:284` 直接走 `agent.tools`，不經 `is_enabled`；`load_tool` 也沒有 `is_enabled` | 新增**一個** sync helper `enabled_function_tools(agent, ctx)`（replay 跑在 `asyncio.to_thread` 裡、沒有 running loop，但測試會同步呼叫，所以不用 `asyncio.run`），replay 與 `_emit_llm_trace` 共用它 | **parity 測試以 SDK 為 oracle**：對多個 context，helper 的結果 == `await agent.get_all_tools(...)` 濾掉非 FunctionTool；replay 測試改成斷言 **list**（既有測試比的是 set，重名看不到） |
+| **A3** | `tests/agent/test_tool_alias_model.py::test_the_system_prompt_lists_third_party_commands_by_their_new_names` 紅（CI 的 `tests/agent` 會紅） | P4 刪了 prompt 裡的清單，這條 #888 守衛沒跟著搬 | 斷言改讀 `{t.name for t in agent.tools}`——#888 的性質（模型看到的是 `<本地名>__<cmd>`）還在，只是搬了家 | 測試綠；突變（把 `model_tool_name` 改回扁平名）要紅 |
+| **A4** | 用 5 個不同 command 的一輪會撞 `runner.max_turns`（預設 10），**活做完了但使用者收到 error** | 每個 command 第一次用多一步；而 `_TOOLS_NOTE` **完全沒提 `load_tool`**，所以模型不知道可以一次載多個 | `_TOOLS_NOTE` 加一句：可以用 `load_tool` 一次載好幾個、也可以給整個套件名。加上 A5 之後 1+K+1 這條路才真的存在。**不改 `max_turns` 預設**（那是運營方的旋鈕），但 runbook 要寫明它是出口 | 探針：K=5 的腳本在修法後步數 = K+2；runbook 有那一段 |
+| **A5** | **模型從來不知道任何套件名字**，所以 `load_tool` 自己廣告的「給套件名就載入整包」是死路 | 目錄那行只用 `cmd.description` 的第一句，`describe_command` 的 bundle 那段不見了 | 目錄那行補上套件名（第三方的名字已經含了就不重複）。版本/作者/「不是最新」那句仍然只在載入後出現——那是刻意的，寫進文件 | 測試：真 bundle 的名字出現在送出的工具清單裡 |
+| **A6** | `load_tool` 在**沒有任何 command 被授權**時也掛上去，而且回「Tools you can load: .」這種壞句子。每個 `ask_knowledge_base` 子代理、每個窄 `tools:` 的 workflow 節點都中 | 閘是 `if packages:`（item 裝了什麼），不是 `allowed_command_names(packages, allowed)`（這一輪授權了什麼）——而旁邊註解宣稱是後者 | 照 `request_env_granted` 的同一個判準；`_unknown_name_reply` 在授權清單為空時換一句話 | 測試：只授權 `read_file` 的 preset 沒有 `load_tool`；KB 子代理也沒有 |
+| **A7** | `load_tool` 的回覆**沒有上限**：5 個套件名 → 36,054 字元；`["sci-plot"]*20` → 261,238（超過 200k 的 cap，因為 cap 只套在 `build_tools` 裡）；3000 個亂名 → 928,888 | 目錄與 `load_tool` 是在 `_agent_for` 裡接上的，繞過 `cap_tool_outputs`；`names` 不去重、不限數量；`by_name` 把 `model_tool_name`、`pkg.name`、`pkg:cmd` 塞進同一個 dict 不去重，所以 bundle 與 command 同名的 `data-fetch` 會回兩次 | `names` 去重＋數量上限；回覆走同一個輸出上限；`by_name` 的命中去重 | 探針：重複名字只回一次；`["sci-plot"]*20` 的回覆長度 ≤ 上限 |
+| **A8** | command 的 description 不是字串（published manifest 允許 `null`/`42`/`["a"]`）→ **整個工具清單建構炸掉**，那個 item 的每一輪都失敗 | `catalog_description` 直接 `.strip()`；舊路徑是 f-string（醜但能跑） | `str(text or "")` | 測試：`description=None` 仍能建 agent |
+| **A9** | 縮寫讓目錄那行只剩 4 個字：`'Max. 1000 rows…'` → `'Max.'`、`'…, e.g. a trend…'` → `'Plot a chart, e.g.'`、`'etc.'`、`'vs.'`、`'U.S.'` | `.` + 空白就當句尾；而 `_SENTENCE_END_ASCII` 的註解宣稱「`e.g.` 不會」——那句是**假的** | 句尾要同時滿足：後面是空白/結尾、**下一個非空白字元是大寫或 CJK**（數字、小寫都當續句）、且 `.` 前的 token 不是縮寫（含內部點、單字母、常見縮寫表）。註解改成真的 | 參數化測試：`e.g.`/`i.e.`/`etc.`/`vs.`/`Max.`/`U.S.`/`3.5`/正常兩句 |
+| **A10** | 只有一個很早的邊界時，切點比「完全沒有邊界」的最後退路更差：`'Plot ' + 200 字` → `'Plot…'`（5/100） | 在 `first[:limit-1]` 裡取**最後一個**邊界，但那個邊界可能極早 | 邊界太早（不到上限的一半）就退回切到上限 | 測試：`'Plot ' + 200 字` 不再是 `'Plot…'` |
+| **A11** | 子代理**共用** parent 的 `loaded_tools` 與 `catalog_calls`（`_child_context`、`build_ask_kb_context` 都是 `dataclasses.replace`） | `_child_context` 的重設清單沒加這兩個欄位——而它的 docstring 正是寫「任何屬於 parent 這一輪累積的欄位都要列在這裡」 | 兩處都加進重設清單 | 測試：child 載入後 parent 的集合不變（突變：拿掉重設要紅） |
+| **A12** | `_emit_llm_trace` 讀 `agent.tools`，所以運營方看的 trace 行把每個 command 列兩次 | 同 A2 | 共用 A2 的 helper | 同 A2 的 parity 測試 + 一條 trace 測試 |
+| **A13** | `docs/subsystems/agent-runtime.md:3,35,83` 還在描述被刪掉的 inventory，而 **`docs/` 整棵會透過 `system-design` skill 餵給 app 裡的 AI**（#865） | P6 沒掃到 subsystem 參考 | 更新那三處 | grep 不再命中舊描述 |
+| **A14** | `agent/tools.py:4153-4156` 的註解現在是假的（「會透過 `format_tools_for_prompt` 再出現一次，所以一輪出現兩次」） | 同 A13 | 改掉 | grep |
+| **A15** | `_TOOLS_NOTE` 的目錄那段在**沒有套件**的 turn 也會附上（約 70 token 的死文案，講一件不會發生的事） | 固定文案 | 只有真的有目錄項目時才附那段 | 測試：沒有套件的 config，instructions 不含那段 |
+| **A16** | `catalog_description(limit=0)` 回幾乎整串 + `…`；`limit=-5` 砍 5 個字；切點可能落在組合字元/ZWJ 中間（60,000 次模糊測試有 916 次） | `first[:limit-1]` 對小 limit 失去意義；邊界沒考慮組合字元 | limit 下限保護；收尾時退到不是組合字元/ZWJ 的位置 | 測試：`limit=0/1/-5`；emoji ZWJ 與組合字元的案例 |
+| **A17** | `build_load_tool` 的 `except ValueError` 不可達（`wrap_with_args_recovery` 會先丟 `MalformedToolArgsError`）——但 `load_tool` 其實**沒有**被那層包（它在 `builtin_names` 之前加入，會被包）。要確認 | 需查 | 確認包裝順序後，保留或移除那個 except，並把理由寫進註解 | 探針：送非 JSON 給 `load_tool` |
+| **A18** | `ty` 紅：`unresolved-import psycopg2`（`tests/api/test_tool_usage_postgres.py:95`）——**不是這個 PR 造成的**，master 已用 #953/`b5389900` 修掉，只是這條分支的 base 更早 | 分支 base 舊 | 從 master merge 進來 | `ty check` 綠 |
+
+**不做的**（留原樣，理由寫在這裡）：
+- 不改 `runner.max_turns` 的預設值（運營方的旋鈕，不是我的）。
+- 不為「直播卡片」做前端：目錄那一次仍然畫一張沒有 schema 的小卡片，壓掉 `ToolStart` 會有競態（它比工具執行早）。user 定案的是「不留在對話記錄」，那一條照做。
+- 不把版本/作者/「不是最新」那句放進目錄行（太長，而且載入後就有）。
+
+### 真實性 / 符合度鏡頭（同一輪，追加）
+
+**每一個量到的數字都精確**（14 內建 4,538 / 9,397；5 套件 14 command 8,413 + 11,471 = 19,884
+→ 663 + 148 = 811；47.36 tok/command；sci-plot 的 `chart` 8,837；合計 33,746 對預算 4,538 =
+7.436 倍、少算 29,208）。SDK 的行號與行為宣稱也全部為真。以下是它抓到的、前兩把沒看到的：
+
+| # | 發現 | 修法 |
+|---|---|---|
+| **B1** | `catalog_calls` 沒去重，所以一次 `load_tool(["rca-tools", "data-fetch"])` 讓**人讀到**「載入 `data-fetch`、`plot-trend`、`data-fetch` 的用法」 | `mark_tool_loaded` 的 per-call list 去重；測試斷言那句話與 `catalog_calls["c1"]` |
+| **B2** | **`build_load_tool` 的授權過濾沒有被釘住**：把它的 `allowed` 換成 `None`，42 條目標測試全綠；突變下，只授權一個 command 的 turn 可以載到沒被授權那個的完整 schema | parity 測試擴到**三個** builder（以 `build_function_tools` 為 oracle，問遍每個 command 的四種拼法） |
+| **B3** | 計畫裡**三條被取代的規則還活著**（「預算要量真的那一份」、「上界」、「不發 `ToolStart`/`ToolEnd`/`ToolLog`」），而且有一句宣稱「砍掉的三段」其實沒砍。程式跟著另一半 | 三段都改寫成「為什麼沒做 / 已更正為實際行為」，不留兩套規則 |
+| **B4** | `MarkLoaded = Callable[[Any, str], None]` 把型別檢查關掉了——鏡頭把 `.mark_tool_loaded` 與 `.tool_call_id` **兩個都改名**，`ty` 仍然綠 | 改成 `Callable[[ToolContext[AgentToolContext], str], None]`，`_mark_loaded` 也標上真型別 |
+| **B5** | `litellm_runner.py` 呼叫 `format_tools_for_prompt` 上面那段註解、`describe_command` 的理由段、`extending-the-platform.md` 115 行後的那段，都還在描述被刪掉的清單 | 三處改寫；`agent/tools.py` 那條在前兩把已修 |
+| **B6** | runbook 的 `ls -t <dir>/$(date +%F) \| head -1` 會抓到 `index.jsonl`（200 次實測命中 2 次），而它沒有 `request`；而且**最新那筆是那一輪的最後一通**，載入過的 command 在裡面本來就帶完整 schema | 改成 `0001-*.json`（那一輪第一通），並寫明為什麼不是最新那筆 |
+| **B7** | 「字元數應該從數十萬掉到數萬」是把投影當預期——沒有東西保證落在哪一位數 | 改成「掉一到兩個數量級；本機同組工具 83,180 → 591，絕對值取決於你們的工具數」 |
+| **B8** | 兩處 docstring 把 414,115 寫成因果（「that second copy is how…」），那個數字是運營方報的、本機無法重現 | 改成 "an operator reported…" |
+| **B9** | `load_tool` 既不在 `TOOL_VERBS` 表裡，也不在那份 docstring 的「在表外，以及為什麼」清單裡——而那份清單已經短過五次 | 加一條：它只讀 in-process 的 `PackageInfo`（部署設定，不是 item 內容）、回描述與 schema、而且碰不到沒被授權的 command |
+| **B10** | 行號兩處：`dedupe_tools` 在 `:547`（`:546` 是註解行）、`agent.py:95-113` 其實是 `95-118` | 更正 |
+| **B11** | `_map_event` 的**非串流**呼叫點沒被釘住（`# pragma: no cover`，只有 `WORKSPACE_AGENT_STREAM=0` 才走到） | 不加測試（走不到的路寫不出會紅的測試）；明記在這裡，免得以後有人以為兩扇門都守住了 |
