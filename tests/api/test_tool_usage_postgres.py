@@ -92,7 +92,8 @@ def pg_spec(tmp_path):  # noqa: ANN001, ANN201
     dsn = os.environ.get("WORKSPACE_TEST_PG_DSN")
     if not dsn:
         pytest.skip("set WORKSPACE_TEST_PG_DSN to a Postgres this test may create a database on")
-    import psycopg2
+    # not a dependency of this repo (CI has none): loaded only where a Postgres is
+    psycopg2 = pytest.importorskip("psycopg2")
     from specstar import BackendBinding, BackendConfig, ConnectionProfile
 
     name = f"usage_{uuid.uuid4().hex[:12]}"
