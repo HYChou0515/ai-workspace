@@ -55,8 +55,10 @@ prompt 再渲染一份),所以工具一多,光工具清單就能把整個窗口�
 流暢回答,只是沒看到你的指令。
 
 量到的差別(本機 5 個套件、14 個 command,同一組真 bundle):完整 schema 在 wire 上
-8,413 tok + prompt 那份複本 11,471 tok = **19,884 tok** → 目錄 663 tok + prompt
-那段固定的 206 tok = **869 tok**。每個 command 的目錄成本約 **47 tok**。
+8,413 tok + prompt 那份複本 11,471 tok = **19,884 tok** → 目錄 710 tok + `load_tool`
+自己 120 tok + prompt 那段固定的 218 tok = **1,048 tok**。每個目錄條目約 **51 tok**。
+把 14 個內建工具(不受影響,照舊完整 schema)也算進去,整輪的工具清單是 33,746 →
+**5,586 tok**。
 
 代價:一輪裡**第一次**用到某個 command 會多一次 round-trip(載入 → 再呼叫)。內建工具
 (`exec`、`read_file` 這些)不受影響,永遠帶完整 schema。

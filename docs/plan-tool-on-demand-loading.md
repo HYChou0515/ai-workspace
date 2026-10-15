@@ -320,3 +320,28 @@ replay 的 `tools` payload（`allowed_tools=[]` 連 messages 都一樣）、tool
 的目錄輸出只能靠 `""` 這個 key 命中；若同一輪還有另一個沒有 id 的真輸出、而且文字恰好相同，
 會被誤壓。兩個條件要同時成立才會發生，而代價（記錄裡的 schema 被 replay 進之後每一輪）比
 誤壓一則重複文字的訊息大。
+
+## 最終量測（交付前對 `9d32cc6b` 重量一次）
+
+每一輪 review 的表格裡那些數字，是**當時那個 sha** 的；`_TOOLS_NOTE`／`_CATALOG_NOTE`／
+目錄行的形狀在 P7–P10 又改過好幾次，所以交付前重量，並把運營方會讀的兩份文件
+（`docs/configuration.md` §工具很多的 item、`docs/migrations.md` #955）更正到這一組。
+量法：同一支腳本在**兩份 src 上各跑一次**（`PYTHONPATH` 指向 master 的 `git archive`
+展開目錄 vs 這個分支），同一組本機 bundle（`.workspace-tools`：5 個套件、14 個 command），
+`estimate_tokens` 吃的是 `_tools_tokens` 那個 compact payload。
+
+| 一輪送出去的工具清單 | master | 這個分支 |
+|---|---|---|
+| 14 個內建工具（wire schema） | 4,538 tok | 4,538 tok（不變） |
+| 內建那份 prompt 複本 | 9,397 tok | 不再有（整段移除） |
+| 14 個套件 command（wire） | 8,413 tok | 目錄 **710** tok + `load_tool` **120** tok |
+| 套件那份 prompt 複本 | 11,471 tok | 不再有 |
+| prompt 的工具段落（固定長度） | 20,795 tok／83,180 字元 | **218 tok／874 字元** |
+| **套件 command 小計** | **19,884 tok** | **1,048 tok** |
+| **整輪合計** | **33,746 tok** | **5,586 tok** |
+| 每個套件 command | 1,420 tok | **51 tok**（目錄條目） |
+
+**更正的三個數字**（第二輪 B7′ 之後又漂了）：目錄 663 → **710**、固定說明 206 → **218**、
+小計 869 → **1,048**（而且舊的那組**從來沒把 `load_tool` 自己的 120 tok 算進 after**）、
+prompt 段落 822 → **874 字元**、47 → **51 tok**／command。`19,884`／`8,413`／`11,471`／
+`33,746`／`4,538`／`9,397`／`83,180` 這幾個 before 的數字重量結果不變。
