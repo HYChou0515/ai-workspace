@@ -151,6 +151,8 @@ export type CapacitySummary = {
     binding: string | null;
     by_line: Record<string, number>;
     ceiling: boolean;
+    /** How far it looks (20× today's N): a line's count there is "this many or more". */
+    ceiling_n: number;
     /** The days the headroom drew from (workdays with data). */
     days: number;
   } | null;

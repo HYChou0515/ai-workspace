@@ -31,9 +31,15 @@ export function kneeText(t: T, summary: CapacitySummary, pair: Pair): string {
   if (pair.knee) {
     if (pair.sets) {
       const line = summary.lines.find((l) => l.id === pair.sets);
+      const label = lineLabelById(t, summary.lines, pair.sets);
+      // a line takes the lowest knee among its pairs: a higher one sets nothing
+      const used = line?.unit === "inflight" ? line.capacity : line?.threshold_source === "knee" ? line.threshold : null;
+      if (used != null && Math.abs(used - pair.knee.at) > 1e-9) {
+        return t("capacity.knee.atNotUsed", { at: fmt(pair.knee.at), line: label });
+      }
       // a model's knee is its capacity (E5), any other line's its safe threshold
       const key = line?.unit === "inflight" ? "capacity.knee.atCapacity" : "capacity.knee.at";
-      return t(key, { at: fmt(pair.knee.at), line: lineLabelById(t, summary.lines, pair.sets) });
+      return t(key, { at: fmt(pair.knee.at), line: label });
     }
     return t("capacity.knee.atShown", { at: fmt(pair.knee.at) });
   }
@@ -170,12 +176,14 @@ function Confidence({ summary, t }: { summary: CapacitySummary; t: T }) {
         )}
         {c.regressions.map((r) => (
           <li key={r.line}>
-            {t("capacity.conf.fit", {
-              line: lineLabelById(t, summary.lines, r.line),
-              r2: pct(r.r2),
-              days: r.holdout_days,
-              mape: pct(r.holdout_mape, 1),
-            })}
+            {r.holdout_days > 0 && r.holdout_mape !== null
+              ? t("capacity.conf.fit", {
+                  line: lineLabelById(t, summary.lines, r.line),
+                  r2: pct(r.r2),
+                  days: r.holdout_days,
+                  mape: pct(r.holdout_mape, 1),
+                })
+              : t("capacity.conf.fitNoHoldout", { line: lineLabelById(t, summary.lines, r.line), r2: pct(r.r2) })}
             {r.collinear.map(([a, b]) => (
               <span key={`${a}|${b}`} className="capacity-sub">
                 {t("capacity.conf.collinear", { a: columnLabel(t, a), b: columnLabel(t, b) })}

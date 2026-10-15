@@ -2554,6 +2554,7 @@
    "gpu.qwen3": 0
   },
   "ceiling": false,
+  "ceiling_n": 320,
   "days": 20
  },
  "runway": {

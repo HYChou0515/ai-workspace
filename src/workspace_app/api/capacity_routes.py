@@ -137,6 +137,8 @@ class HeadroomOut(BaseModel):
     binding: str | None
     by_line: dict[str, int]
     ceiling: bool
+    #: how far it looks (20× today's N): a line's count there is "this many or more"
+    ceiling_n: int
     #: the days the headroom drew from (workdays with data)
     days: int
 

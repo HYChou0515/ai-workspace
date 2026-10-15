@@ -3093,8 +3093,8 @@ export const messages = {
     en: "Only superusers can see this page.",
   },
   "capacity.tooMuch": {
-    "zh-TW": "這段期間的資料太多（{rows} 列，上限 {max}）。請改看較短的期間，或請系統管理者調高 capacity.max_rows。",
-    en: "This period has too much data ({rows} rows, limit {max}). Pick a shorter period, or ask an administrator to raise capacity.max_rows.",
+    "zh-TW": "這段期間的資料超過上限（{max} 列）。請改看較短的期間，或請系統管理者調高 capacity.max_rows。",
+    en: "This period has more data than allowed ({max} rows). Pick a shorter period, or ask an administrator to raise capacity.max_rows.",
   },
   "capacity.loadFailed": { "zh-TW": "讀不到容量資料：{error}", en: "Could not load capacity data: {error}" },
 
@@ -3108,8 +3108,8 @@ export const messages = {
     en: "This needs at least {need} days and this period holds {have}: pick the {suggest}-day period.",
   },
   "capacity.ready.source_missing": {
-    "zh-TW": "還沒接上資料來源：{sources}。接上之後這裡就會出現。",
-    en: "Not connected yet: {sources}. This appears once they are.",
+    "zh-TW": "還沒接上資料來源：{sources}。接上之後，資料夠了就會出現。",
+    en: "Not connected yet: {sources}. Once they are, this appears when there is enough data.",
   },
   "capacity.ready.accumulating": {
     "zh-TW": "已累積 {have} 天，需要 {need} 天。資料夠了就會自動出現，不必做任何事。",
@@ -3161,8 +3161,8 @@ export const messages = {
     en: "At today's habits, it holds more than {n} people (now {now}).",
   },
   "capacity.headline.noLimit": {
-    "zh-TW": "還算不出能撐多少人：沒有任何一項有已知的容量。",
-    en: "No headroom yet: no line has a known capacity.",
+    "zh-TW": "還算不出能撐多少人：會隨人數變的線（CPU、記憶體、GPU）都還沒有已知的容量。",
+    en: "No headroom yet: no line that grows with people (CPU, memory, GPU) has a known capacity.",
   },
   "capacity.headline.basis": {
     "zh-TW": "依據：{days} 個有紀錄的工作天、每 {minutes} 分鐘一格的尖峰，95% 的日子都放得下（p95）。格子越長，短暫的尖峰被平均得越多。",
@@ -3209,8 +3209,8 @@ export const messages = {
   "capacity.alloc.carried": { "zh-TW": "分到的基本開銷", en: "Fixed overhead carried" },
   "capacity.alloc.share": { "zh-TW": "占比", en: "Share" },
   "capacity.alloc.peakNote": {
-    "zh-TW": "尖峰時段＝這一項最忙的 5% 時段；買機器看的是它。",
-    en: "Peak hours = this line's busiest 5% of slots — what machines are bought for.",
+    "zh-TW": "尖峰時段＝這一項最忙的 5% 時段：容量要撐的是尖峰，不是平均。",
+    en: "Peak hours = this line's busiest 5% of slots: capacity has to hold the peaks, not the average.",
   },
   "capacity.row.fixed": { "zh-TW": "基本開銷（不屬於任何人）", en: "Fixed overhead (nobody's)" },
   "capacity.row.residual": { "zh-TW": "估計誤差", en: "Estimate error" },
@@ -3273,6 +3273,7 @@ export const messages = {
   "capacity.whatif.n": { "zh-TW": "人數", en: "People" },
   "capacity.whatif.profile": { "zh-TW": "新來的人像", en: "New people use it like" },
   "capacity.whatif.app": { "zh-TW": "App", en: "App" },
+  "capacity.headroom.atLeast": { "zh-TW": "{n} 以上", en: "{n} or more" },
   "capacity.whatif.profile.all": { "zh-TW": "現在的所有人", en: "everyone today" },
   "capacity.whatif.profile.heavy": { "zh-TW": "最重度的 10%", en: "the heaviest 10%" },
   "capacity.whatif.profile.app": { "zh-TW": "某個 App 的使用者", en: "one App's people" },
@@ -3395,6 +3396,10 @@ export const messages = {
     "zh-TW": "超過 {at} 就明顯變慢，這就是{line}的容量。",
     en: "Past {at} it slows down markedly — {line}'s capacity.",
   },
+  "capacity.knee.atNotUsed": {
+    "zh-TW": "超過 {at} 就明顯變慢；{line}用的是另一組更低的轉折點。",
+    en: "Past {at} it slows down markedly; {line} uses a lower knee from another pair.",
+  },
   "capacity.knee.atShown": {
     "zh-TW": "超過 {at} 就明顯變慢。",
     en: "Past {at} it slows down markedly.",
@@ -3409,8 +3414,8 @@ export const messages = {
   },
   "capacity.conf.title": { "zh-TW": "這些數字能信嗎", en: "Can these numbers be trusted?" },
   "capacity.conf.backtest": {
-    "zh-TW": "回測：用之前的日子預測最近 {days} 天每天的尖峰，平均誤差 {mape}。",
-    en: "Backtest: predicting each of the last {days} days' peaks from the days before, mean error {mape}.",
+    "zh-TW": "回測：用之前的日子，預測最近有資料的日子裡 {days} 天每天的尖峰，平均誤差 {mape}。",
+    en: "Backtest: predicting the peaks of {days} of the latest days with data from the days before, mean error {mape}.",
   },
   "capacity.conf.backtestOk": { "zh-TW": "在 {ok} 以內，可以用。", en: "Within {ok}: usable." },
   "capacity.conf.backtestBad": {
@@ -3420,6 +3425,10 @@ export const messages = {
   "capacity.conf.noBacktest": {
     "zh-TW": "還沒有足夠的日子可以回測。",
     en: "There are not enough days to backtest yet.",
+  },
+  "capacity.conf.fitNoHoldout": {
+    "zh-TW": "{line}：這個估計解釋了 {r2} 的變化；資料還不夠拿來預測最後幾天。",
+    en: "{line}: this estimate explains {r2} of the variation; too few days yet to predict the last ones.",
   },
   "capacity.conf.fit": {
     "zh-TW": "{line}：這個估計解釋了 {r2} 的變化；用之前的日子預測最後 {days} 天，誤差 {mape}。",
@@ -3444,8 +3453,8 @@ export const messages = {
     en: "Slots with pod and machine samples: {pct}.",
   },
   "capacity.conf.coverage.gpu_metrics": {
-    "zh-TW": "GPU 用量有樣本的時段：{pct}。",
-    en: "Slots with GPU samples: {pct}.",
+    "zh-TW": "GPU 有在用（使用率或記憶體不是 0）的時段：{pct}。",
+    en: "Slots with the GPUs in use (utilisation or memory above 0): {pct}.",
   },
   "capacity.conf.coverage.llm_requests": {
     "zh-TW": "有 LiteLLM 請求的時段：{pct}。",
@@ -3473,8 +3482,8 @@ export const messages = {
   },
   "capacity.conf.assumptions": { "zh-TW": "這些數字的前提", en: "What these numbers assume" },
   "capacity.conf.assume.regression": {
-    "zh-TW": "API、背景工作、資料庫的每人用量，是用每種請求的平均成本乘上次數推出來的。",
-    en: "API, background-job and database use per person is each kind of request's average cost times its count.",
+    "zh-TW": "API、背景工作、資料庫的每人用量，是用每種工作的平均成本乘上次數或秒數推出來的。",
+    en: "API, background-job and database use per person is each kind of work's average cost times its count or seconds.",
   },
   "capacity.conf.assume.fixed": {
     "zh-TW": "基本開銷不隨人數增加；認不出是誰和系統工作也當成基本開銷。",

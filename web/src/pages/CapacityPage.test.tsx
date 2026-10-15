@@ -116,7 +116,9 @@ describe("CapacityPage", () => {
     renderPage(c);
 
     const error = await screen.findByTestId("capacity-error");
-    expect(error).toHaveTextContent("6,000,000");
+    // the limit, not the count where reading stopped (always the limit + 1)
+    expect(error).toHaveTextContent("5,000,000");
+    expect(error).not.toHaveTextContent("6,000,000");
     expect(error).toHaveTextContent("capacity.max_rows");
   });
 });

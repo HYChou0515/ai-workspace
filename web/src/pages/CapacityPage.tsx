@@ -101,7 +101,7 @@ export function CapacityPage({ client = capacityApi }: { client?: CapacityClient
         {error && (
           <p role="alert" className="capacity-warning" data-testid="capacity-error">
             {error instanceof TooMuchData
-              ? t("capacity.tooMuch", { rows: error.rows.toLocaleString(), max: error.maxRows.toLocaleString() })
+              ? t("capacity.tooMuch", { max: error.maxRows.toLocaleString() })
               : t("capacity.loadFailed", { error: error.message })}
           </p>
         )}

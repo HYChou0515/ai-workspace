@@ -44,7 +44,16 @@ function summary(): CapacitySummary {
 }
 
 function room(over: Partial<NonNullable<CapacitySummary["headroom"]>> = {}): NonNullable<CapacitySummary["headroom"]> {
-  return { n_now: 16, max_n: 40, binding: "api.cpu", by_line: { "api.cpu": 40 }, ceiling: false, days: 20, ...over };
+  return {
+    n_now: 16,
+    max_n: 40,
+    binding: "api.cpu",
+    by_line: { "api.cpu": 40 },
+    ceiling: false,
+    ceiling_n: 320,
+    days: 20,
+    ...over,
+  };
 }
 
 function trend(slope: number): NonNullable<CapacitySummary["runway"]["trend"]> {
@@ -96,7 +105,7 @@ describe("what a view still needs (§9.10)", () => {
     const r = notReady({ reason: "source_missing", missing: ["usage_records", "resource_metrics"] });
 
     expect(readinessText(en, r)).toBe(
-      "Not connected yet: Platform usage records, Pod and machine use. This appears once they are.",
+      "Not connected yet: Platform usage records, Pod and machine use. Once they are, this appears when there is enough data.",
     );
   });
 });
@@ -122,7 +131,7 @@ describe("the headline (view 1)", () => {
     expect(headline(t, s)).toBe("照現在的用法，撐得住 320 人以上（現在 16 人）。");
 
     s.headroom = room({ max_n: null, binding: null, by_line: {} });
-    expect(headline(t, s)).toContain("沒有任何一項有已知的容量");
+    expect(headline(t, s)).toContain("會隨人數變的線（CPU、記憶體、GPU）都還沒有已知的容量");
   });
 
   it("says what it still needs before it can say anything", () => {
@@ -183,6 +192,28 @@ describe("the headline (view 1)", () => {
     s.sandbox_measured = null;
     render(<Overview summary={s} t={t} />);
     expect(screen.queryByTestId("capacity-sandbox-unmeasured")).toBeNull();
+  });
+
+  it("says a line holds at least as many as the what-if looks", () => {
+    const s = summary();
+    s.readiness.whatif = { ...s.readiness.whatif, ready: true, reason: null };
+    s.headroom = room({ by_line: { "api.cpu": 40, "postgres.cpu": 320 } });
+
+    render(<Overview summary={s} t={t} />);
+
+    expect(screen.getByTestId("capacity-row-postgres.cpu")).toHaveTextContent("320 以上");
+    expect(screen.getByTestId("capacity-row-api.cpu")).not.toHaveTextContent("以上");
+  });
+
+  it("does not call a default 'not seen to slow' where the kernel cannot show slowing", () => {
+    const s = summary();
+    const sandbox = s.lines.find((l) => l.id === "sandbox-host.cpu")!;
+    Object.assign(sandbox, { threshold: 0.7, threshold_source: "default" });
+    s.thresholds.find((p) => p.id === "d")!.note = "no_psi";
+
+    render(<Overview summary={s} t={t} />);
+
+    expect(screen.getByTestId("capacity-row-sandbox-host.cpu")).not.toHaveTextContent("尚未觀察到變慢");
   });
 
   it("calls a default threshold 'not seen to slow' only where a pair watches the line", () => {
@@ -558,10 +589,20 @@ describe("thresholds and confidence (views 8, 9)", () => {
     expect(kneeText(t, s, pair)).toContain("2.1 個請求");
   });
 
+  it("says when a pair's knee is not the one its line uses", () => {
+    const s = summary();
+    const a = s.thresholds.find((p) => p.id === "a")!;
+    a.knee = { at: 0.6, slope_before: 1, slope_after: 9, gain: 0.5 };
+    Object.assign(s.lines.find((l) => l.id === "api.cpu")!, { threshold: 0.35, threshold_source: "knee" });
+
+    expect(kneeText(t, s, a)).toBe("超過 60% 就明顯變慢；API CPU用的是另一組更低的轉折點。");
+  });
+
   it("calls a model's knee its capacity, not a threshold", () => {
     const s = summary();
     const pair = s.thresholds.find((p) => p.id === "gpu")!;
     pair.knee = { at: 0.7, slope_before: 0, slope_after: 3, gain: 0.9 };
+    s.lines.find((l) => l.id === "gpu.qwen3")!.capacity = 0.7; // its lowest knee
 
     expect(kneeText(t, s, pair)).toBe("超過 0.7 個請求 就明顯變慢，這就是GPU qwen3的容量。");
   });
@@ -599,6 +640,15 @@ describe("thresholds and confidence (views 8, 9)", () => {
     render(<Thresholds summary={s} t={t} />);
 
     expect(screen.getByTestId("capacity-backtest")).toHaveTextContent("超過 20%：試算和時程僅供參考。");
+  });
+
+  it("says a regression with no days held out has none, not 'the last 0 days'", () => {
+    const s = summary();
+    Object.assign(s.confidence.regressions[0], { holdout_days: 0, holdout_mape: null });
+
+    render(<Thresholds summary={s} t={t} />);
+
+    expect(screen.getByTestId("capacity-confidence")).not.toHaveTextContent("最後 0 天");
   });
 
   it("lists the gaps, the system share and each regression's held-out days", () => {

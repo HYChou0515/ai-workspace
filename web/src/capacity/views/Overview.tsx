@@ -50,7 +50,8 @@ export function Overview({ summary, t }: { summary: CapacitySummary; t: T }) {
   const room = summary.headroom;
   const option = useMemo<ChartOption>(() => utilisationChart(t, lines), [t, lines]);
   // a default threshold is "not seen to slow yet" only where something watches it slow
-  const watched = new Set(summary.thresholds.map((p) => p.sets));
+  // ... and only where that pair can show slowing at all (no PSI: it cannot)
+  const watched = new Set(summary.thresholds.filter((p) => p.note !== "no_psi").map((p) => p.sets));
   return (
     <section className="capacity-view" data-testid="capacity-overview">
       <p className="capacity-headline" data-testid="capacity-headline">
@@ -117,7 +118,13 @@ export function Overview({ summary, t }: { summary: CapacitySummary; t: T }) {
                         )}
                       </td>
                       <td>{pct(line.utilization_peak)}</td>
-                      <td>{holds === undefined ? "—" : holds}</td>
+                      <td>
+                        {holds === undefined
+                          ? "—"
+                          : room && holds >= room.ceiling_n
+                            ? t("capacity.headroom.atLeast", { n: holds })
+                            : holds}
+                      </td>
                     </tr>
                   );
                 })}

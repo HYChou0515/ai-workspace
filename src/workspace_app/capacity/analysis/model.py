@@ -341,6 +341,8 @@ class Analysis:
             "binding": room.binding,
             "by_line": room.by_line,
             "ceiling": room.max_n is not None and room.max_n >= max(1, room.n_now) * MAX_GROWTH,
+            # how far it looks: a line's count there means "this many or more"
+            "ceiling_n": max(1, room.n_now) * MAX_GROWTH,
             # what it rests on: the days it drew from
             "days": len(self.sizing_days),
         }
