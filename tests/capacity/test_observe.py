@@ -323,3 +323,43 @@ def test_a_pod_that_lived_a_day_holds_a_day_of_samples():
     rolled = _retained(World(days=7, users=4, rollout_days=1))
 
     assert rolled - static < 100_000
+
+
+class _Fresh(WorldRecords):
+    """The world's records as an ES client returns them: fresh dicts per call."""
+
+    def records(self, kind, start_ms, end_ms):  # noqa: ANN001, ANN201
+        import json
+
+        return json.loads(json.dumps(list(super().records(kind, start_ms, end_ms))))
+
+
+class _NoEvents(_Fresh):
+    def records(self, kind, start_ms, end_ms):  # noqa: ANN001, ANN201
+        return []
+
+
+def _held(sources: CapacitySources, w: World):  # noqa: ANN202
+    w.documents  # noqa: B018 — the world's own records, made before counting
+    gc.collect()
+    tracemalloc.start()
+    obs = observe(sources, _period(w))
+    gc.collect()
+    held = tracemalloc.get_traced_memory()[0]
+    tracemalloc.stop()
+    return obs, held
+
+
+def test_a_turn_or_job_record_is_kept_as_a_few_numbers():
+    """A record parsed from ES is a dict of one to two kilobytes, and a period
+    holds hundreds of thousands of them for the analysis' whole TTL: at 1,000
+    people over 90 days, gigabytes in the API pod. The analysis reads five
+    of its fields."""
+    w = _world()
+    obs, held = _held(CapacitySources(_Fresh(w)), w)
+    _, without = _held(CapacitySources(_NoEvents(w)), w)
+
+    records = len(obs.turns) + len(obs.jobs)
+    assert records > 1000
+    per_record = (held - without) / records
+    assert per_record < 100, f"{per_record:.0f} bytes a record"

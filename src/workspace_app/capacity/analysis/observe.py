@@ -181,6 +181,96 @@ class Samples(Mapping[str, np.ndarray]):
         return np.unique(np.frombuffer(at, dtype=np.int64)) if at else _NONE
 
 
+def _stamp(value: Any) -> int | None:
+    """An epoch-ms stamp off a record, or None when it has none."""
+    if isinstance(value, bool) or not isinstance(value, int | float) or not math.isfinite(value):
+        return None
+    return int(value)
+
+
+class Events:
+    """Turn or job records, as the few columns the analysis reads. A record
+    parsed from ES is a dict of one to two kilobytes, and a period holds
+    hundreds of thousands of them for the analysis' whole TTL; here one is
+    28 bytes. `at_ms`: when it began — a turn's acceptance, a job's start (−1
+    when the record has none); `wait_s`: a turn's acceptance → first output,
+    a job's enqueue → start (NaN when it lacks either stamp); `label`: a
+    turn's model, a job's type; `user`, `item`, `label` index `names`."""
+
+    def __init__(self) -> None:
+        self.names: list[str] = []
+        self._index: dict[str, int] = {}
+        self._columns: dict[str, array] | None = {
+            "user": array("i"),
+            "item": array("i"),
+            "label": array("i"),
+            "at_ms": array("q"),
+            "wait_s": array("d"),
+        }
+        self._arrays: dict[str, np.ndarray] = {}
+
+    def _name(self, value: Any) -> int:
+        key = "" if value is None else str(value)
+        found = self._index.get(key)
+        if found is None:
+            found = self._index[key] = len(self.names)
+            self.names.append(key)
+        return found
+
+    def add(
+        self, *, user: Any, item: Any, label: Any, at_ms: Any, since_ms: Any, until_ms: Any
+    ) -> None:
+        """One record: `at_ms` places it; its wait runs from `since_ms` to `until_ms`."""
+        assert self._columns is not None, "read already: add every record first"
+        at, since, until = _stamp(at_ms), _stamp(since_ms), _stamp(until_ms)
+        wait = (until - since) / 1000 if since is not None and until is not None else math.nan
+        c = self._columns
+        c["user"].append(self._name(user))
+        c["item"].append(self._name(item))
+        c["label"].append(self._name(label))
+        c["at_ms"].append(-1 if at is None else at)
+        c["wait_s"].append(wait)
+
+    def __len__(self) -> int:
+        if self._columns is not None:
+            return len(self._columns["at_ms"])
+        return len(self._arrays["at_ms"])
+
+    def _column(self, name: str) -> np.ndarray:
+        if self._columns is not None:
+            dtypes = {"user": np.intc, "item": np.intc, "label": np.intc, "at_ms": np.int64}
+            self._arrays = {
+                key: np.array(col, dtype=dtypes.get(key, np.float64))
+                for key, col in self._columns.items()
+            }
+            self._columns = None
+        return self._arrays[name]
+
+    @property
+    def user(self) -> np.ndarray:
+        return self._column("user")
+
+    @property
+    def item(self) -> np.ndarray:
+        return self._column("item")
+
+    @property
+    def label(self) -> np.ndarray:
+        return self._column("label")
+
+    @property
+    def at_ms(self) -> np.ndarray:
+        return self._column("at_ms")
+
+    @property
+    def wait_s(self) -> np.ndarray:
+        return self._column("wait_s")
+
+    def index_of(self, name: str) -> int | None:
+        """`name`'s index in `names`, or None when no record carries it."""
+        return self._index.get(name)
+
+
 class LlmSeries:
     """One model's traffic from one (person, App, purpose) — or from another system."""
 
@@ -236,8 +326,8 @@ class Observations:
     #: Whether any sandbox row carried CPU pressure. A kernel without PSI
     #: writes none, and a sum over nothing must not read as "never waited".
     psi_seen: bool = False
-    turns: list[Mapping[str, Any]] = field(default_factory=list)
-    jobs: list[Mapping[str, Any]] = field(default_factory=list)
+    turns: Events = field(default_factory=Events)
+    jobs: Events = field(default_factory=Events)
     dropped: float = 0.0
     # ② pods and machines: (component, pod) → resource → [slot] (NaN: no sample)
     pods: dict[tuple[str, str], Samples] = field(default_factory=dict)
@@ -484,10 +574,28 @@ def _records(sources: CapacitySources, obs: Observations, budget: _Budget) -> in
     first = min((t for days in obs.activity.values() for t in days), default=None)
     window = p.start_ms - LOOKBACK_DAYS * 86_400_000
     obs.recorded_since_ms = first if first is not None and first >= window else None
-    for kind, into in (("turn", obs.turns), ("job", obs.jobs)):
-        for record in src.records(kind, p.start_ms, p.end_ms):
-            budget.take()
-            into.append(record)
+    for r in src.records("turn", p.start_ms, p.end_ms):
+        budget.take()
+        accepted = r.get("accepted_ms")
+        obs.turns.add(
+            user=r.get("user"),
+            item=r.get("item"),
+            label=r.get("model"),
+            at_ms=accepted,
+            since_ms=accepted,
+            until_ms=r.get("first_output_ms"),
+        )
+    for r in src.records("job", p.start_ms, p.end_ms):
+        budget.take()
+        started = r.get("started_ms")
+        obs.jobs.add(
+            user=r.get("user"),
+            item=None,
+            label=r.get("jobtype"),
+            at_ms=started,
+            since_ms=r.get("enqueued_ms"),
+            until_ms=started,
+        )
     return rows + len(obs.turns) + len(obs.jobs)
 
 

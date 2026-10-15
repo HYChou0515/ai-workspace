@@ -644,10 +644,12 @@ class Analysis:
                 entry = items.setdefault(ident, {})
                 entry["disk_bytes"] = max(entry.get("disk_bytes", 0.0), size)
                 entry["scope"] = scope  # ty: ignore[invalid-assignment]
-        turns = [t for t in self.obs.turns if t.get("user") == user]
-        for t in turns:
-            entry = items.setdefault(str(t.get("item", "")), {})
-            entry["turns"] = entry.get("turns", 0) + 1
+        turns, jobs = self.obs.turns, self.obs.jobs
+        theirs = turns.user == (-1 if (u := turns.index_of(user)) is None else u)
+        kinds, counts = np.unique(turns.item[theirs], return_counts=True)
+        for item, count in zip(kinds.tolist(), counts.tolist(), strict=True):
+            entry = items.setdefault(turns.names[item], {})
+            entry["turns"] = entry.get("turns", 0) + count
         slots = [s.slots() for (u, _a, _c, _w), s in self.obs.work_user.items() if u == user]
         active = len(np.unique(p.day_of[np.concatenate(slots)])) if slots else 0
         return {
@@ -655,8 +657,8 @@ class Analysis:
             "lines": lines,
             "apps": sorted(apps),
             "items": [{"id": k, **v} for k, v in sorted(items.items())],
-            "turns": len(turns),
-            "jobs": sum(1 for j in self.obs.jobs if j.get("user") == user),
+            "turns": int(theirs.sum()),
+            "jobs": int((jobs.user == (-1 if (j := jobs.index_of(user)) is None else j)).sum()),
             "active_days": active,
         }
 

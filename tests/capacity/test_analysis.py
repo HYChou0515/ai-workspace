@@ -642,3 +642,53 @@ def test_no_knee_is_used_before_the_thresholds_view_can_show_it():
     assert s["readiness"]["thresholds"]["reason"] == "period_too_short"
     assert lines["api.cpu"]["threshold_source"] == "default"
     assert lines["gpu.qwen3"]["capacity"] is None
+
+
+def test_the_kept_columns_say_what_the_records_said():
+    """The pairs and a person's detail read turn and job records through five
+    kept columns. Parity with the records themselves, read as the dicts they
+    were: every wait in the same slot, and the same counts."""
+    from workspace_app.capacity.analysis.thresholds import _events
+
+    w = World(days=10, users=12)
+    p = Period(w.start_ms, w.end_ms, w.step_s, ZoneInfo(w.tz))
+    sources = CapacitySources(WorldRecords(w), WorldPods(w), WorldGpus(w), WorldLlm(w))
+    obs = observe(sources, p)
+    a = analyse(obs, now_ms=w.end_ms)
+    turns = list(WorldRecords(w).records("turn", p.start_ms, p.end_ms))
+    jobs = list(WorldRecords(w).records("job", p.start_ms, p.end_ms))
+
+    def waits(rows, at: str, since: str, until: str) -> list[tuple[int, float]]:  # noqa: ANN001
+        out = []
+        for r in rows:
+            if r.get(since) is None or r.get(until) is None:
+                continue
+            slot = p.index(int(r[at]))
+            if slot is not None:
+                out.append((slot, (int(r[until]) - int(r[since])) / 1000))
+        return sorted(out)
+
+    model = np.array([obs.turns.names[i] == w.gpu_model for i in obs.turns.label])
+    index = np.array([obs.jobs.names[i] == "index" for i in obs.jobs.label])
+    turn_waits = waits(turns, "accepted_ms", "accepted_ms", "first_output_ms")
+    assert turn_waits and sorted(_events(p, obs.turns)) == turn_waits
+    assert sorted(_events(p, obs.turns, model)) == waits(
+        [t for t in turns if t.get("model") == w.gpu_model],
+        "accepted_ms",
+        "accepted_ms",
+        "first_output_ms",
+    )
+    job_waits = waits(
+        [j for j in jobs if j.get("jobtype") == "index"], "started_ms", "enqueued_ms", "started_ms"
+    )
+    assert job_waits and sorted(_events(p, obs.jobs, index)) == job_waits
+
+    person = a.person("user01")
+    assert person is not None
+    items: dict[str, int] = {}
+    for t in turns:
+        if t.get("user") == "user01":
+            items[str(t.get("item", ""))] = items.get(str(t.get("item", "")), 0) + 1
+    assert person["turns"] == sum(1 for t in turns if t.get("user") == "user01") > 0
+    assert person["jobs"] == sum(1 for j in jobs if j.get("user") == "user01") > 0
+    assert {i["id"]: i["turns"] for i in person["items"] if "turns" in i} == items

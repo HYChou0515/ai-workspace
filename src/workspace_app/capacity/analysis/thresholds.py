@@ -35,7 +35,7 @@ import numpy as np
 from ..records import LATENCY_BOUNDS_MS
 from .knee import Knee, fit_knee
 from .lines import Line
-from .observe import Observations
+from .observe import Events, Observations
 
 #: The latency buckets' edges in ms; the last, open bucket is read as 60 s.
 _EDGES = np.array([0.0, *LATENCY_BOUNDS_MS, 60_000.0])
@@ -116,6 +116,16 @@ def same_model(asked: str, logged: str) -> bool:
     return asked == logged or asked.endswith("/" + logged) or logged.endswith("/" + asked)
 
 
+def _events(p: Any, events: Events, keep: np.ndarray | None = None) -> list[tuple[int, float]]:
+    """(slot, wait) of the records that have both stamps and begin in the period."""
+    at, wait = events.at_ms, events.wait_s
+    ok = np.isfinite(wait) & (at >= p.start_ms) & (at < p.end_ms)
+    if keep is not None:
+        ok &= keep
+    slots = (at[ok] - p.start_ms) // p.step_ms
+    return list(zip(slots.tolist(), wait[ok].tolist(), strict=True))
+
+
 def _util(line: Line | None) -> np.ndarray | None:
     if line is None or not line.capacity:
         return None
@@ -131,14 +141,7 @@ def build_pairs(obs: Observations, lines: Mapping[str, Line]) -> list[Pair]:
         if hist is None:
             hist = np.zeros((p.n, len(_EDGES) - 1))
         pairs.append(Pair("a", "api.util", "latency_p95_ms", api, hist_p95(hist), None, "api.cpu"))
-        events = []
-        for turn in obs.turns:
-            out, accepted = turn.get("first_output_ms"), turn.get("accepted_ms")
-            if out is None or accepted is None:
-                continue
-            slot = p.index(int(accepted))
-            if slot is not None:
-                events.append((slot, (int(out) - int(accepted)) / 1000))
+        events = _events(p, obs.turns)
         pairs.append(
             Pair(
                 "b",
@@ -153,16 +156,9 @@ def build_pairs(obs: Observations, lines: Mapping[str, Line]) -> list[Pair]:
     for line_id, line in lines.items():
         if line.component != "gpu" or line.unit != "inflight":
             continue
-        waits = []
-        for turn in obs.turns:
-            out, accepted = turn.get("first_output_ms"), turn.get("accepted_ms")
-            if out is None or accepted is None:
-                continue
-            if not same_model(str(turn.get("model") or ""), line.model):
-                continue
-            slot = p.index(int(accepted))
-            if slot is not None:
-                waits.append((slot, (int(out) - int(accepted)) / 1000))
+        names = obs.turns.names
+        theirs = [i for i, name in enumerate(names) if same_model(name, line.model)]
+        waits = _events(p, obs.turns, np.isin(obs.turns.label, theirs)) if theirs else []
         if waits:
             pairs.append(
                 Pair(
@@ -225,18 +221,13 @@ def build_pairs(obs: Observations, lines: Mapping[str, Line]) -> list[Pair]:
         if line.component != "worker" or line.resource != "cpu" or line.job == "other":
             continue
         worker = _util(line)
-        if worker is None or not obs.jobs:
+        if worker is None or not len(obs.jobs):
             continue
-        events = []
-        for job in obs.jobs:
-            if line.job and job.get("jobtype") != line.job:
-                continue
-            started, enqueued = job.get("started_ms"), job.get("enqueued_ms")
-            if started is None or enqueued is None:
-                continue
-            slot = p.index(int(started))
-            if slot is not None:
-                events.append((slot, (int(started) - int(enqueued)) / 1000))
+        keep = None
+        if line.job:
+            kind = obs.jobs.index_of(line.job)
+            keep = obs.jobs.label == (-1 if kind is None else kind)
+        events = _events(p, obs.jobs, keep)
         e = Pair(
             "e", "worker.util", "queue_wait_p95_s", worker, _p95_by_slot(p.n, events), None, line.id
         )
