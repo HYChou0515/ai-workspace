@@ -232,6 +232,39 @@ def test_the_sites_own_os_error_is_its_failure(error):
     assert "ai.corp.example" not in str(got.value)
 
 
+# Review round 4: every place h tells the card while the person signs in — the
+# prompt, its renewal, the clear after — and every kind of trouble on that
+# line is the server's, passed up as it is: the job stays, to be tried again.
+def _server_errors():  # noqa: ANN202
+    from ai_workspace_helper.backend import BackendError, NeedsLogin, UpdateRequired
+
+    return [OSError("reset"), NeedsLogin(), UpdateRequired(None), BackendError("404")]
+
+
+@pytest.mark.parametrize("which", [0, 1, 2], ids=["prompt", "renewal", "clear"])
+@pytest.mark.parametrize("error", _server_errors(), ids=lambda e: type(e).__name__)
+def test_trouble_telling_the_card_while_signing_in_is_the_servers(which, error):
+    from ai_workspace_helper.ext_ai import errand
+
+    def ask(page, question, h):  # noqa: ANN001, ANN202
+        # signed in after a while: long enough for one renewal of the prompt
+        signed = iter([False] * int(RENEW_S + 2) + [True])
+        h.wait_for_login(lambda: next(signed))
+        return "never"
+
+    calls = [0]
+
+    def note(_text):  # noqa: ANN001, ANN202
+        calls[0] += 1
+        if calls[0] == which + 1:
+            raise error
+
+    ctx = _ctx(_Page(), [], [0.0])
+    ctx.note = note
+    with pytest.raises(type(error)):
+        errand(_site_with(ask))(ctx, "q")
+
+
 def _site_with(ask):  # noqa: ANN001, ANN202
     return types.SimpleNamespace(URL="https://ai.corp.example/new", ask=ask)
 

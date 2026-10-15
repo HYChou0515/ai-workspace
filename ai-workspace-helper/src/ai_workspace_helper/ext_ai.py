@@ -57,7 +57,7 @@ _TEXT = "() => document.body ? document.body.innerText : ''"
 #: does, a framework comment (`<!--[-->`) allowed first. Anything else is text
 #: as it is: text can hold `#include <stdio.h>` or `List<String>`, which the
 #: converter would take for tags (review rounds 1–3). A comment is matched one
-#: way only, so a run of them is read in one pass, not tried every way.
+#: way only, so a leading run of them is read in one pass, not tried every way.
 _COMMENT = r"<!--(?:[^-]|-(?!->))*-->"
 _HTML = re.compile(
     r"\A\s*(?:" + _COMMENT + r"\s*)*<[A-Za-z][^>]*>.*"
@@ -107,7 +107,9 @@ class Helpers:
 
     def _tell(self, note: str) -> None:
         """Tell the card (and renew the claim); a failure on that line is
-        marked as the server's, whatever the site file does with it."""
+        marked as the server's. A site file that catches every exception can
+        still swallow or re-wrap the mark — then it reads as the site's
+        failure, as any error it hides would."""
         try:
             self._ctx.note(note)
         except (NeedsLogin, UpdateRequired, OSError, BackendError) as exc:
