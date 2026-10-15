@@ -188,7 +188,10 @@ async def test_calling_a_catalog_tool_loads_it_and_answers_with_the_real_schema(
 
     reply = await fetch.on_invoke_tool(tctx, '{"lot": "guessed"}')
 
-    assert loaded == [(actx, "data-fetch")]
+    # The callback is handed the whole `ToolContext`, not just `.context`: the
+    # caller also needs the call id, to keep this call's answer (a schema) out
+    # of the stored thread (`docs/plan-tool-on-demand-loading.md`).
+    assert loaded == [(tctx, "data-fetch")]
     # The full description — the catalog line was only the first sentence.
     assert describe_command(_pkg(), _pkg().commands[0]) in reply
     # The real schema, verbatim enough that the model can satisfy it.

@@ -254,6 +254,20 @@ class AgentToolContext:
     # installed into it from prebuilt_dir; the runner also exposes their
     # commands as function tools. Set by the API layer from create_app config.
     packages: list[PackageInfo] = field(default_factory=list)
+    catalog_calls: dict[str, list[str]] = field(default_factory=dict)
+    """Tool calls THIS turn that the catalog answered, `{call_id: [name, …]}`.
+
+    The answer to such a call is a parameter schema — the fattest thing in the
+    design. The model needs it (the SDK's own run history carries it to the
+    next step), but the chat card and the STORED message must not: a schema in
+    the thread is replayed into every later turn's window, which undoes the
+    saving over a few turns. `_map_event` reads this to replace that one
+    output with a line naming what was loaded.
+
+    Keyed by call id, not by tool name, because a loaded command and its
+    catalog entry share a name — and recorded by the handler that answered, so
+    nothing has to infer which half ran.
+    """
     loaded_tools: set[str] = field(default_factory=set)
     """Which package commands THIS turn has loaded the real schema for
     (`docs/plan-tool-on-demand-loading.md`), by the name the model calls them by.
@@ -723,10 +737,16 @@ class AgentToolContext:
             self._speaker_groups = groups_of(self.spec, self.acting_user)
         return self._speaker_groups
 
-    def mark_tool_loaded(self, name: str) -> None:
+    def mark_tool_loaded(self, name: str, *, call_id: str = "") -> None:
         """This turn may now be served `name`'s real schema. Idempotent: a model
-        can emit two calls to one unloaded command in a single step."""
+        can emit two calls to one unloaded command in a single step.
+
+        `call_id` records WHICH call did the loading, so its answer (a schema)
+        can be kept out of the thread; a load with no call behind it (a test, a
+        future caller) simply records nothing."""
         self.loaded_tools.add(name)
+        if call_id:
+            self.catalog_calls.setdefault(call_id, []).append(name)
 
     def is_tool_loaded(self, name: str) -> bool:
         return name in self.loaded_tools

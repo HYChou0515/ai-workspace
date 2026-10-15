@@ -46,10 +46,12 @@ from .artifact import parse_env_declaration
 
 logger = logging.getLogger(__name__)
 
-#: `(the turn's context, the model's name for the command) -> None` — what a
-#: catalog entry calls so the rest of the turn sends the real schema. A
+#: `(the tool's ToolContext, the model's name for the command) -> None` — what
+#: a catalog entry calls so the rest of the turn sends the real schema. A
 #: callback rather than a direct write so `registry` stays free of the turn
-#: machinery (and so the entry is testable without a turn).
+#: machinery (and so the entry is testable without a turn). The whole
+#: `ToolContext` goes in, not just `.context`: the caller also needs the call
+#: id, to keep this call's answer (a schema) out of the stored thread.
 MarkLoaded = Callable[[Any, str], None]
 
 
@@ -934,7 +936,7 @@ def build_load_tool(
                 parts.append(_unknown_name_reply(name, granted))
                 continue
             for pkg, cmd in found:
-                mark_loaded(ctx.context, model_tool_name(pkg, cmd))
+                mark_loaded(ctx, model_tool_name(pkg, cmd))
                 parts.append(load_reply(pkg, cmd))
         if not parts:
             return (
@@ -979,7 +981,7 @@ def _stub_function_tool(
         # has not seen the schema yet. Marking first means a model that ignores
         # the instruction and calls a third time still progresses — the real
         # tool answers that one.
-        mark_loaded(ctx.context, name)
+        mark_loaded(ctx, name)
         logger.info("registry: catalog hit %s — loading its schema for this turn", name)
         return load_reply(pkg, cmd)
 

@@ -18,7 +18,8 @@ from typing import Any
 from agents import RunContextWrapper
 
 from workspace_app.agent.context import AgentToolContext
-from workspace_app.api.litellm_runner import _agent_for
+from workspace_app.api.events import ToolEnd
+from workspace_app.api.litellm_runner import _agent_for, _map_event
 from workspace_app.resources import AgentConfig
 from workspace_app.tooling.registry import CommandInfo, PackageInfo
 
@@ -153,10 +154,127 @@ async def test_load_tool_says_what_is_there_when_the_name_is_wrong():
     assert ctx.loaded_tools == set()
 
 
-def _tool_ctx(ctx: AgentToolContext, name: str):
+def _tool_ctx(ctx: AgentToolContext, name: str, *, call_id: str = "id"):
     from agents.tool_context import ToolContext
     from agents.usage import Usage
 
     return ToolContext(
-        context=ctx, tool_name=name, tool_call_id="id", tool_arguments="{}", usage=Usage()
+        context=ctx, tool_name=name, tool_call_id=call_id, tool_arguments="{}", usage=Usage()
     )
+
+
+# ── what reaches the chat and the stored thread ──────────────────────────
+
+
+def _output_event(call_id: str, text: str):
+    """The `tool_output` stream event shape `_map_event` reads."""
+    from dataclasses import dataclass
+
+    @dataclass
+    class _Raw:
+        call_id: str
+
+    @dataclass
+    class _Item:
+        raw_item: object
+        output: object
+
+    @dataclass
+    class _Ev:
+        type: str
+        name: str
+        item: object
+
+    return _Ev(
+        type="run_item_stream_event",
+        name="tool_output",
+        item=_Item(raw_item=_Raw(call_id=call_id), output=text),
+    )
+
+
+async def test_a_catalog_hit_does_not_put_the_schema_in_the_thread():
+    """The schema is the fattest thing in this design. The model needs it for
+    the next step — the SDK's own run history carries it — but the chat card
+    and the STORED message must not, or every turn that loaded a tool drags its
+    schema into the next turn's window and the saving is undone over a few
+    turns (`docs/plan-tool-on-demand-loading.md`)."""
+    agent = _agent()
+    ctx = AgentToolContext(investigation_id="i")
+    fetch = (await _sent(agent, ctx))["data-fetch"]
+    reply = await fetch.on_invoke_tool(_tool_ctx(ctx, "data-fetch", call_id="c1"), "{}")
+    assert '"lot"' in reply  # the model did get the schema
+
+    event = _map_event(_output_event("c1", reply), ctx)
+
+    assert isinstance(event, ToolEnd)
+    assert "lot" not in event.output
+    assert "data-fetch" in event.output
+
+
+async def test_load_tool_names_what_it_loaded_instead_of_dumping_schemas():
+    agent = _agent()
+    ctx = AgentToolContext(investigation_id="i")
+    load = (await _sent(agent, ctx))["load_tool"]
+    reply = await load.on_invoke_tool(
+        _tool_ctx(ctx, "load_tool", call_id="c2"), '{"names": ["rca-tools"]}'
+    )
+
+    event = _map_event(_output_event("c2", reply), ctx)
+
+    assert isinstance(event, ToolEnd)
+    assert "data-fetch" in event.output and "plot-trend" in event.output
+    assert "properties" not in event.output
+
+
+async def test_a_real_call_of_an_already_loaded_tool_keeps_its_output():
+    """The control. It is the SAME turn, with `data-fetch` already loaded —
+    so "this turn loaded something" is true and only the CALL ID separates
+    the catalog's answer from the tool's own.
+
+    A weaker control (a turn that loaded nothing) passed a mutation keyed on
+    `loaded_tools` instead of the call id, which is the whole point of the
+    key: a loaded command and its catalog entry share a name.
+    """
+    agent = _agent()
+    ctx = AgentToolContext(investigation_id="i")
+    fetch = (await _sent(agent, ctx))["data-fetch"]
+    await fetch.on_invoke_tool(_tool_ctx(ctx, "data-fetch", call_id="c1"), "{}")
+    assert ctx.loaded_tools == {"data-fetch"}
+
+    # The real tool now runs, under a new call id.
+    event = _map_event(_output_event("c9", "exit=0\nlot A42 shipped"), ctx)
+
+    assert isinstance(event, ToolEnd)
+    assert event.output == "exit=0\nlot A42 shipped"
+
+
+async def test_the_streamed_turn_passes_its_context_to_the_mapper(monkeypatch):
+    """Through the REAL loop, not the mapper alone.
+
+    `_map_event` taking the turn is useless unless the production call site
+    hands it over, and a unit test that calls the mapper directly cannot tell:
+    dropping `ctx` at the streaming call site left every test green.
+    """
+    from tests.api.test_litellm_runner import _ctx
+    from workspace_app.api import litellm_runner as lr
+
+    ctx = _ctx()
+    ctx.mark_tool_loaded("data-fetch", call_id="c1")
+    events = [_output_event("c1", '{"properties": {"lot": {"type": "string"}}}')]
+    monkeypatch.setattr(lr.Runner, "run_streamed", lambda *a, **k: _FakeStreamed(events))
+
+    out = [ev async for ev in lr.LitellmAgentRunner().run("p", ctx) if isinstance(ev, ToolEnd)]
+
+    assert [e.output for e in out] == ["載入 `data-fetch` 的用法"]
+
+
+class _FakeStreamed:
+    """The same shape `tests/api/test_reply_provenance.py` drives the loop with."""
+
+    def __init__(self, events):
+        self._events = events
+        self.context_wrapper = type("C", (), {"usage": type("U", (), {})()})()
+
+    async def stream_events(self):
+        for ev in self._events:
+            yield ev

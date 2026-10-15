@@ -572,8 +572,8 @@ def _agent_for(
     if packages:
         from ..tooling.registry import build_catalog_tools, build_load_tool
 
-        def _mark_loaded(actx: AgentToolContext, name: str) -> None:
-            actx.mark_tool_loaded(name)
+        def _mark_loaded(tool_ctx: Any, name: str) -> None:  # noqa: ANN401 — the SDK's ToolContext
+            tool_ctx.context.mark_tool_loaded(name, call_id=tool_ctx.tool_call_id)
 
         tools.append(
             build_load_tool(packages, allowed=config.allowed_tools, mark_loaded=_mark_loaded)
@@ -1132,11 +1132,17 @@ def _call_id(raw: Any) -> str:
     return _raw_field(raw, "call_id") or _raw_field(raw, "id") or ""
 
 
-def _map_event(event: Any) -> AgentEvent | None:
+def _map_event(event: Any, ctx: AgentToolContext | None = None) -> AgentEvent | None:
     """Translate one openai-agents stream event into our AgentEvent shape.
 
     Returns None for events we deliberately drop (raw token chunks, handoffs,
     etc.) — keeps the SSE stream focused on what the UI cares about.
+
+    `ctx` is the turn, when the caller has one: a call the catalog answered has
+    a parameter schema for its output, and that must not reach the chat card or
+    the stored message (`docs/plan-tool-on-demand-loading.md`). Optional
+    because the mapping is otherwise context-free, and a caller without a turn
+    gets the output as is.
     """
     if getattr(event, "type", None) != "run_item_stream_event":
         return None
@@ -1175,8 +1181,16 @@ def _map_event(event: Any) -> AgentEvent | None:
         # base64 data URL, which would bloat the SSE stream and, worse, replay as
         # a giant text blob into the next turn's context. Surface a concise note.
         out_text = _tool_output_text(raw_out)
+        call_id = _call_id(item.raw_item)
+        # A catalog hit's answer is a schema the model needs and the thread does
+        # not. Decided by the call id the handler recorded, never by sniffing
+        # the text or by the tool's name — a loaded command and its catalog
+        # entry share a name, so a name could not tell them apart.
+        loaded = (ctx.catalog_calls.get(call_id) if ctx is not None else None) or []
+        if loaded:
+            out_text = "載入 " + "、".join(f"`{n}`" for n in loaded) + " 的用法"
         return ToolEnd(
-            call_id=_call_id(item.raw_item),
+            call_id=call_id,
             output=out_text,
         )
     # message_output_created carries the FULL assistant message; we stream
@@ -1959,7 +1973,7 @@ class LitellmAgentRunner:
                                     )
                                 )
                         continue
-                    mapped = _map_event(event)
+                    mapped = _map_event(event, ctx)
                     if mapped is not None:
                         if isinstance(mapped, ToolStart):
                             tool_calls_seen += 1
@@ -2091,7 +2105,7 @@ class LitellmAgentRunner:
         for item in result.new_items:
             itype = getattr(item, "type", "")
             if itype in _NONSTREAM_TOOL_EVENT:
-                mapped = _map_event(_ItemEvent(_NONSTREAM_TOOL_EVENT[itype], item))
+                mapped = _map_event(_ItemEvent(_NONSTREAM_TOOL_EVENT[itype], item), ctx)
                 if mapped is None:
                     continue
                 if isinstance(mapped, ToolStart):
