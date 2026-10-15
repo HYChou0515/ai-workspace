@@ -110,6 +110,7 @@ def build_ask_kb_context(spec: AskKbSpec, base: AgentToolContext) -> AgentToolCo
         # its full schema for the rest of the parent's turn.
         loaded_tools=set(),
         catalog_calls={},
+        ephemeral_outputs=[],
     )
 
 

@@ -341,3 +341,56 @@ def test_replay_turn_shows_malformed_tool_args_verbatim():
         ReplayToolCall(name="plot", arguments={"_raw": '{"x": 1}{"y"'}),
         ReplayToolCall(name="lookup", arguments={"_raw": '"just-a-string"'}),
     ]
+
+
+def test_replay_offers_each_package_command_once_and_without_its_schema():
+    """Replay promises a payload bit-identical to what the live turn saw
+    (this module's docstring), and the live turn's first step sends the tool
+    CATALOG — one entry per command, no parameter schema
+    (`docs/plan-tool-on-demand-loading.md`).
+
+    It read `agent.tools` raw, which after that change holds each command
+    twice (the catalog entry and the executable tool, one of them enabled per
+    step). So the probe sent two definitions of one name — "a payload the
+    provider rejects wholesale", in `dedupe_tools`' own words — and was bigger
+    than before the catalog existed. Nothing caught it: no replay test passed
+    `packages`, and the one that checks the offered tools compares a SET, in
+    which a doubled name is invisible (round 1 A2).
+    """
+    from workspace_app.tooling.registry import CommandInfo, PackageInfo
+
+    pkg = PackageInfo(
+        name="rca-tools",
+        install_dir="../.tools/rca-tools",
+        commands=(
+            CommandInfo("spc", "Draw an SPC chart.", {"type": "object", "properties": {"lot": {}}}),
+            CommandInfo("pareto", "Draw a Pareto chart.", {"type": "object", "properties": {}}),
+        ),
+    )
+    completion = _FakeCompletion([_chunk("ok")])
+    service = ReplayService(completion=completion)
+    messages = [
+        Message(role="user", content="hi"),
+        Message(role="assistant", content="hello"),
+    ]
+
+    result = service.replay_turn(
+        messages=messages,
+        index=1,
+        config=AgentConfig(name="rca", system_prompt="sys"),
+        packages=[pkg],
+    )
+
+    offered = completion.kwargs["tools"]
+    names = [t["function"]["name"] for t in offered]
+    # A LIST, not a set: the defect was a repeated name.
+    assert names.count("spc") == 1, names
+    assert names.count("pareto") == 1, names
+    assert len(names) == len(set(names)), names
+    # …and what the live turn's first step sends is the catalog: no schema.
+    spc = next(t for t in offered if t["function"]["name"] == "spc")
+    assert spc["function"]["parameters"]["properties"] == {}
+    assert "load_tool" in names
+    # The operator-facing list in the result matches what was sent.
+    assert result.request is not None
+    assert result.request.tools == names

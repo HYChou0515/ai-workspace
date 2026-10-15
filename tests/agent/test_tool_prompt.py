@@ -60,6 +60,12 @@ def test_the_note_explains_why_a_schema_may_be_empty():
     assert "empty" in out
     assert "again" in out
     assert "load_tool" in out and "ONCE" in out
+    # Both ways a bundle name reaches the model: the `[bundle]` suffix a
+    # first-party entry carries, and the `<bundle>__<command>` name a
+    # third-party one already has — third-party entries deliberately carry no
+    # suffix, and they are the user-installed population, so naming only the
+    # suffix pointed at a marker that is not there (verify round F8).
+    assert "[bundle]" in out and "__" in out
 
 
 def test_a_turn_with_no_catalog_is_not_told_about_one():

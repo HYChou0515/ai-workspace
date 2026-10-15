@@ -1227,9 +1227,15 @@ def _map_event(event: Any, ctx: AgentToolContext | None = None) -> AgentEvent | 
         # not. Decided by the call id the handler recorded, never by sniffing
         # the text or by the tool's name — a loaded command and its catalog
         # entry share a name, so a name could not tell them apart.
-        loaded = (ctx.catalog_calls.get(call_id) if ctx is not None else None) or []
-        if loaded:
+        #
+        # TAKEN, not read: one record answers one call. A reused call id used to
+        # rewrite every later output of the turn as well (verify round F2), and
+        # the id goes into `ephemeral_outputs` so the reducer drops THIS
+        # message and no other.
+        loaded = (ctx.catalog_calls.pop(call_id, None) if ctx is not None else None) or []
+        if loaded and ctx is not None:
             out_text = "載入 " + "、".join(f"`{n}`" for n in loaded) + " 的用法"
+            ctx.ephemeral_outputs.append(call_id)
         return ToolEnd(
             call_id=call_id,
             output=out_text,

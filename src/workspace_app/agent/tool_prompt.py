@@ -61,8 +61,9 @@ description and argument schema, and you then call it again with arguments
 matching that schema.
 
 If you expect to use several such tools, call `load_tool` ONCE with all of
-their names (or with a bundle's name, shown in each entry as `[bundle]`, to
-load every command in it) — each tool you load separately costs an extra step.
+their names — each tool you load separately costs an extra step. A bundle's
+name loads every command in it: it is shown as `[bundle]` at the end of an
+entry, or is the part before `__` in a tool's own name.
 """
 
 

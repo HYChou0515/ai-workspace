@@ -268,6 +268,21 @@ class AgentToolContext:
     catalog entry share a name — and recorded by the handler that answered, so
     nothing has to infer which half ran.
     """
+    ephemeral_outputs: list[str] = field(default_factory=list)
+    """Tool outputs the catalog answered and `_map_event` has already rewritten
+    — one entry per event, consumed by the turn reducer so that message is not
+    stored (`docs/plan-tool-on-demand-loading.md`).
+
+    A SECOND structure beside `catalog_calls`, and not a nicer version of it,
+    because the two are consumed at different moments by different readers:
+    `_map_event` takes a name list out of `catalog_calls` when it rewrites the
+    output, and the reducer — which sees the very next event — takes the id out
+    of here. Both are therefore used exactly once per call, which is what makes
+    a REUSED `tool_call_id` safe: an OpenAI-compatible endpoint passes the
+    server's id through verbatim, and matching on the id alone silenced every
+    later tool message of the turn, a `write_file` that really ran included
+    (verify round F2).
+    """
     loaded_tools: set[str] = field(default_factory=set)
     """Which package commands THIS turn has loaded the real schema for
     (`docs/plan-tool-on-demand-loading.md`), by the name the model calls them by.
@@ -749,7 +764,7 @@ class AgentToolContext:
         `load_tool(["a-bundle", "one-of-its-commands"])` resolves the same
         command twice, and the names go into a sentence a PERSON reads — it
         read `載入 \`data-fetch\`、\`plot-trend\`、\`data-fetch\` 的用法`
-        (round 1 F6)."""
+        (round 1 B1)."""
         self.loaded_tools.add(name)
         if call_id:
             seen = self.catalog_calls.setdefault(call_id, [])

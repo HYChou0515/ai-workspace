@@ -209,6 +209,11 @@ async def test_a_catalog_hit_does_not_put_the_schema_in_the_thread():
     assert isinstance(event, ToolEnd)
     assert "lot" not in event.output
     assert "data-fetch" in event.output
+    # …and it records THIS event as the one the reducer must not store, taking
+    # the record as it goes: one record answers one call, so a reused call id
+    # cannot silence a later real message (verify round F2).
+    assert ctx.ephemeral_outputs == ["c1"]
+    assert "c1" not in ctx.catalog_calls
 
 
 async def test_load_tool_names_what_it_loaded_instead_of_dumping_schemas():
@@ -357,7 +362,7 @@ async def test_one_call_loading_a_bundle_and_one_of_its_commands_says_each_name_
     round 1 A1, the stored message). `load_tool(["rca-tools", "data-fetch"])`
     resolves `data-fetch` twice, and it read
     `載入 \u0060data-fetch\u0060、\u0060plot-trend\u0060、\u0060data-fetch\u0060 的用法`
-    (round 1 F6)."""
+    (round 1 B1)."""
     agent = _agent()
     ctx = AgentToolContext(investigation_id="i")
     load = (await _sent(agent, ctx))["load_tool"]
@@ -370,3 +375,38 @@ async def test_one_call_loading_a_bundle_and_one_of_its_commands_says_each_name_
     event = _map_event(_output_event("c1", "…schema…"), ctx)
     assert isinstance(event, ToolEnd)
     assert event.output.count("data-fetch") == 1
+
+
+async def test_the_trace_line_lists_what_was_sent_not_what_is_registered(monkeypatch):
+    """`_emit_llm_trace` builds the one line an operator reads to see what went
+    out. It read `agent.tools`, so it listed every package command twice as
+    soon as the catalog registered twins (round 1 A12) — and nothing pinned it.
+    """
+    from workspace_app.api import litellm_runner as lr
+
+    seen: list[str] = []
+    monkeypatch.setattr(lr, "build_trace", _capture_tools(seen))
+
+    cfg = AgentConfig(name="ws", system_prompt="anchor")
+    ctx = AgentToolContext(investigation_id="i", packages=_packages(), agent_config=cfg)
+    lr._emit_llm_trace(
+        _agent_for(cfg, packages=_packages()),
+        ctx,
+        runner_base_url=None,
+        tool_calls=0,
+        content_text="",
+    )
+
+    assert seen, "the trace was not built"
+    assert seen.count("data-fetch") == 1, seen
+    assert len(seen) == len(set(seen)), seen
+
+
+def _capture_tools(sink: list[str]):
+    from workspace_app.api.llm_trace import build_trace as real
+
+    def fake(**kw):
+        sink.extend(kw.get("tools") or [])
+        return real(**kw)
+
+    return fake

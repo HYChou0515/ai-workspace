@@ -39,9 +39,10 @@ how five separate tools hid behind an argument that fitted two of them:
   ``PackageInfo`` list (deploy config, not item content) and hands back a
   description and a JSON schema. It cannot name a command this turn was not
   granted — it shares ``registry._granted`` with the tool builders — and the
-  commands it opens are themselves on this list, two bullets up, with their own
-  reason. Written down rather than simply absent, because this enumeration's
-  own rule is that an unwritten absence has not been judged
+  commands it opens are themselves on this list (the `tool-package commands`
+  bullet, four up), with their own reason. Written down rather than simply
+  absent, because this enumeration's own rule is that an unwritten absence has
+  not been judged
   (``docs/plan-tool-on-demand-loading.md``).
 * ``show_skill_hub_entry`` — the same again: it reads ONE entry, refused
   unless the speaker may read it (``SkillHubStore.state_for``), and declares a

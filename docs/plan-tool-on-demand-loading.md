@@ -220,7 +220,7 @@ idempotent）。加一個永遠跑不到的守衛只會是死碼，所以 P2 沒
 | **A4** | 用 5 個不同 command 的一輪會撞 `runner.max_turns`（預設 10），**活做完了但使用者收到 error** | 每個 command 第一次用多一步；而 `_TOOLS_NOTE` **完全沒提 `load_tool`**，所以模型不知道可以一次載多個 | `_TOOLS_NOTE` 加一句：可以用 `load_tool` 一次載好幾個、也可以給整個套件名。加上 A5 之後 1+K+1 這條路才真的存在。**不改 `max_turns` 預設**（那是運營方的旋鈕），但 runbook 要寫明它是出口 | 探針：K=5 的腳本在修法後步數 = K+2；runbook 有那一段 |
 | **A5** | **模型從來不知道任何套件名字**，所以 `load_tool` 自己廣告的「給套件名就載入整包」是死路 | 目錄那行只用 `cmd.description` 的第一句，`describe_command` 的 bundle 那段不見了 | 目錄那行補上套件名（第三方的名字已經含了就不重複）。版本/作者/「不是最新」那句仍然只在載入後出現——那是刻意的，寫進文件 | 測試：真 bundle 的名字出現在送出的工具清單裡 |
 | **A6** | `load_tool` 在**沒有任何 command 被授權**時也掛上去，而且回「Tools you can load: .」這種壞句子。每個 `ask_knowledge_base` 子代理、每個窄 `tools:` 的 workflow 節點都中 | 閘是 `if packages:`（item 裝了什麼），不是 `allowed_command_names(packages, allowed)`（這一輪授權了什麼）——而旁邊註解宣稱是後者 | 照 `request_env_granted` 的同一個判準；`_unknown_name_reply` 在授權清單為空時換一句話 | 測試：只授權 `read_file` 的 preset 沒有 `load_tool`；KB 子代理也沒有 |
-| **A7** | `load_tool` 的回覆**沒有上限**：5 個套件名 → 36,054 字元；`["sci-plot"]*20` → 261,238（超過 200k 的 cap，因為 cap 只套在 `build_tools` 裡）；3000 個亂名 → 928,888 | 目錄與 `load_tool` 是在 `_agent_for` 裡接上的，繞過 `cap_tool_outputs`；`names` 不去重、不限數量；`by_name` 把 `model_tool_name`、`pkg.name`、`pkg:cmd` 塞進同一個 dict 不去重，所以 bundle 與 command 同名的 `data-fetch` 會回兩次 | `names` 去重＋數量上限；回覆走同一個輸出上限；`by_name` 的命中去重 | 探針：重複名字只回一次；`["sci-plot"]*20` 的回覆長度 ≤ 上限 |
+| **A7** | `load_tool` 的回覆**沒有上限**：5 個套件名 → 36,054 字元；`["sci-plot"]*20` → 261,238（超過 200k 的 cap，因為 `cap_tool_outputs` 是由 `build_tools` 與 `build_function_tools` 呼叫的，而目錄與 `load_tool` 兩個 builder 都沒呼叫它——驗修法輪更正：關鍵是哪個 builder 呼叫 cap，不是在哪裡被接上）；3000 個亂名 → 928,888 | 目錄與 `load_tool` 是在 `_agent_for` 裡接上的，繞過 `cap_tool_outputs`；`names` 不去重、不限數量；`by_name` 把 `model_tool_name`、`pkg.name`、`pkg:cmd` 塞進同一個 dict 不去重，所以 bundle 與 command 同名的 `data-fetch` 會回兩次 | `names` 去重＋數量上限；回覆走同一個輸出上限（**驗修法輪 F4 改成上限管「載入什麼」**）；`by_name` 的命中去重 | 探針：重複名字只回一次；`["sci-plot"]*20` 的回覆長度 ≤ 上限 |
 | **A8** | command 的 description 不是字串（published manifest 允許 `null`/`42`/`["a"]`）→ **整個工具清單建構炸掉**，那個 item 的每一輪都失敗 | `catalog_description` 直接 `.strip()`；舊路徑是 f-string（醜但能跑） | `str(text or "")` | 測試：`description=None` 仍能建 agent |
 | **A9** | 縮寫讓目錄那行只剩 4 個字：`'Max. 1000 rows…'` → `'Max.'`、`'…, e.g. a trend…'` → `'Plot a chart, e.g.'`、`'etc.'`、`'vs.'`、`'U.S.'` | `.` + 空白就當句尾；而 `_SENTENCE_END_ASCII` 的註解宣稱「`e.g.` 不會」——那句是**假的** | 句尾要同時滿足：後面是空白/結尾、**下一個非空白字元是大寫或 CJK**（數字、小寫都當續句）、且 `.` 前的 token 不是縮寫（含內部點、單字母、常見縮寫表）。註解改成真的 | 參數化測試：`e.g.`/`i.e.`/`etc.`/`vs.`/`Max.`/`U.S.`/`3.5`/正常兩句 |
 | **A10** | 只有一個很早的邊界時，切點比「完全沒有邊界」的最後退路更差：`'Plot ' + 200 字` → `'Plot…'`（5/100） | 在 `first[:limit-1]` 裡取**最後一個**邊界，但那個邊界可能極早 | 邊界太早（不到上限的一半）就退回切到上限 | 測試：`'Plot ' + 200 字` 不再是 `'Plot…'` |
@@ -230,7 +230,7 @@ idempotent）。加一個永遠跑不到的守衛只會是死碼，所以 P2 沒
 | **A14** | `agent/tools.py:4153-4156` 的註解現在是假的（「會透過 `format_tools_for_prompt` 再出現一次，所以一輪出現兩次」） | 同 A13 | 改掉 | grep |
 | **A15** | `_TOOLS_NOTE` 的目錄那段在**沒有套件**的 turn 也會附上（約 70 token 的死文案，講一件不會發生的事） | 固定文案 | 只有真的有目錄項目時才附那段 | 測試：沒有套件的 config，instructions 不含那段 |
 | **A16** | `catalog_description(limit=0)` 回幾乎整串 + `…`；`limit=-5` 砍 5 個字；切點可能落在組合字元/ZWJ 中間（60,000 次模糊測試有 916 次） | `first[:limit-1]` 對小 limit 失去意義；邊界沒考慮組合字元 | limit 下限保護；收尾時退到不是組合字元/ZWJ 的位置 | 測試：`limit=0/1/-5`；emoji ZWJ 與組合字元的案例 |
-| **A17** | `build_load_tool` 的 `except ValueError` 不可達（`wrap_with_args_recovery` 會先丟 `MalformedToolArgsError`）——但 `load_tool` 其實**沒有**被那層包（它在 `builtin_names` 之前加入，會被包）。要確認 | 需查 | 確認包裝順序後，保留或移除那個 except，並把理由寫進註解 | 探針：送非 JSON 給 `load_tool` |
+| **A17** | `build_load_tool` 的 `except ValueError` 在 production 走不到 | `load_tool` 在 `builtin_names` 之前加入，所以**會**被 `wrap_with_args_recovery` 包；非 JSON 在進到 handler 之前就被 `MalformedToolArgsError` 擋掉（只有直接呼叫 `on_invoke_tool` 的測試走得到） | 保留那一行（直接呼叫的路還在，成本是一行），結論寫在這裡 | 不加走不到的測試；這一列就是記錄 |
 | **A18** | `ty` 紅：`unresolved-import psycopg2`（`tests/api/test_tool_usage_postgres.py:95`）——**不是這個 PR 造成的**，master 已用 #953/`b5389900` 修掉，只是這條分支的 base 更早 | 分支 base 舊 | 從 master merge 進來 | `ty check` 綠 |
 
 **不做的**（留原樣，理由寫在這裡）：
@@ -257,3 +257,27 @@ idempotent）。加一個永遠跑不到的守衛只會是死碼，所以 P2 沒
 | **B9** | `load_tool` 既不在 `TOOL_VERBS` 表裡，也不在那份 docstring 的「在表外，以及為什麼」清單裡——而那份清單已經短過五次 | 加一條：它只讀 in-process 的 `PackageInfo`（部署設定，不是 item 內容）、回描述與 schema、而且碰不到沒被授權的 command |
 | **B10** | 行號兩處：`dedupe_tools` 在 `:547`（`:546` 是註解行）、`agent.py:95-113` 其實是 `95-118` | 更正 |
 | **B11** | `_map_event` 的**非串流**呼叫點沒被釘住（`# pragma: no cover`，只有 `WORKSPACE_AGENT_STREAM=0` 才走到） | 不加測試（走不到的路寫不出會紅的測試）；明記在這裡，免得以後有人以為兩扇門都守住了 |
+
+## Review round 2 — 驗修法（缺陷 + 真實性，2026-10-15，對 `ce3c70cc`）
+
+兩把鏡頭打的是 **P7 的修法本身**。結論：P7 引進的一條規則讓結果比修之前更差，三個最大的
+修法沒有任何測試釘住，兩個數字是錯的。P8 全部處理。
+
+| # | 發現 | 修法 | 怎麼證明 |
+|---|---|---|---|
+| **F3** | **我在 A9 加的「下一個字必須大寫或 CJK」讓目錄行比 P7 之前更差**：`_is_cjk` 只涵蓋兩段範圍，所以韓文、泰文、阿拉伯文、希伯來文、天城文**永遠不可能滿足**它——ASCII 的 `.` 從此不再結束句子，整段變成目錄行、切在句中。全小寫英文同理。而且那條規則**什麼都沒買到**：A9 的十個案例光靠縮寫規則＋既有的空白 lookahead 就全過（鏡頭驗過） | 整條刪掉，保留縮寫規則 | 五條參數化測試（韓/泰/天城/全小寫/下一字是數字）；突變=把縮寫規則刪掉要紅那兩條只有它能擋的 |
+| **F2** | **重複的 `tool_call_id` 會把那一輪後面每一則工具訊息都刪掉**（含真的 `write_file`），因為紀錄只用 id 比對、而且從不消耗。OpenAI 相容端點會原樣轉傳 server 的 id | 紀錄**用完就取走**：`_map_event` 改寫輸出時 `pop` 掉 `catalog_calls`，並把 id 記進新的 `ephemeral_outputs`；reducer 消耗那一筆。一筆對一則 | 真 `TestClient` 一輪、三次呼叫共用 `c1`：`write_file` 與真的 `data-fetch` 都在、目錄那一則不在。測試的 runner 走**真的 `_map_event`**（替身不能繞過被測那條路） |
+| **F4** | `load_tool` 的字元上限只截**文字**：40 個 command 的 schema 照樣全被標成已載入 → 下一步的工具清單 394,560 字元，比這個 PR 要移除的 414,115 還糟 | 上限改成管「**載入什麼**」：放不下的 command 不標、不描述，回覆最前面說「這次已經滿了」 | 12 個肥 command 的 bundle：`loaded_tools` < 12、回覆裡出現的就是被載入的那些 |
+| **F5** | 被內建工具遮蔽的 command，`load_tool` 還是交出描述與 schema，並叫模型照那組參數再呼叫一次（真正跑的是內建工具，參數不同） | `build_load_tool` 收一個 `shadowed` 集合（runner 傳 `builtin_names`），那些名字不進 `by_name` | 套件 export `read_file`：`load_tool(["read_file"])` 不載入、回「沒有這個工具」 |
+| **F6** | `_first_sentence` 被我改成每個 `.` 取一次尾端切片 → 二次式；40 萬字的描述 680 ms，而它跑在 event loop 上、描述來自第三方 manifest 且沒有長度上限 | 改成用索引看下一個字元 | 形狀測試：10 倍輸入不得花 30 倍時間 |
+| **F7** | `[bundle]` 加在 100 字元上限**之外**（實測 139 字元，上限是 user 定的 100） | 後綴算進同一個上限 | 長 bundle 名 + 400 字描述 → 條目 ≤ 100 且以 `[bundle]` 結尾 |
+| **F8** | `_CATALOG_NOTE` 叫模型看 `[bundle]` 標記，但第三方條目**刻意沒有**那個標記（第三方才是使用者自己裝的那一群） | 那句話補上「或名字裡 `__` 之前的那段」 | 文案測試 |
+| **F10** | `limit=1` 讓 1 個字的描述變成 `…`；負數 limit 回傳比上限長的字串 | 「放得下就原樣」的判斷移到小 limit 守衛**之前** | 三個 limit 的測試 |
+| **B2′** | **我寫的 parity 測試是空的**：`mark_loaded=lambda *_: None` 什麼都沒寫，所以 `set() <= …` 永遠成立——它為之而生的突變仍然零條變紅 | callback 走真的 context API，並且斷言回覆**沒有描述**沒被授權的 command | 突變（`_granted(packages, None)`）要紅 |
+| **A2′/A12′** | **replay 與 trace 的修法沒有任何測試釘住**（把缺陷放回去：72 條、305 條全綠）。既有 replay 測試比的是 **set**，重名看不到，而且沒有一條帶 `packages` | 兩條新測試：replay 斷言**名字清單**無重複 + 第一步的 `properties` 是空的；trace 攔 `build_trace` 斷言名字不重複 | 兩個突變各自要紅 |
+| **A11′** | `build_ask_kb_context` 那半沒測試（刪掉重設，795 條全綠） | 補一條 | 突變要紅 |
+| **B6′** | runbook 的 `0001-*.json` **不是「那一輪的第一通」**：`_seq` 是**每個 process** 從 0 開始的，不是每輪；重啟後同一天會有兩個 `0001-`，跨午夜那天的目錄可能根本沒有 `0001-` | 改成從 `index.jsonl` 找那一輪（它有 `seq`/`ts`/`file`），開 `seq` 最小的那一筆 | 文件 |
+| **B7′** | 「83,180 → **591**」的 591 是**舊的**（`b9e793d5` 的 `_TOOLS_NOTE`）；P7 自己加了 `_CATALOG_NOTE`，實際是 **822**。連帶「固定那段 148 tok」→ **206 tok**、「811 tok」→ **869 tok** | 三處數字更正 | 重量一次 |
+| 其他 | `tool_authz` 的「two bullets up」其實是四條；三處註解寫 `round 1 F6/G1` 而表裡是 B1/B2；`agent-runtime.md` 又把 414,115 和「一半」綁在一起；`§設定一覽` 指向不存在的章節；A2 的「22,118」是 after 不是 before（before 是 52,267）；`_LOAD_REPLY_MAX_CHARS` 的理由寫錯（不是「位置」而是「哪個 builder 呼叫 cap」）；A17 的「需查」要寫出結論（已包；`except` 在 production 走不到）；A4 的「K=5 探針」其實是算術不是量測；「4,076 綠/7 紅是環境雜訊」方向寫反了（`--all-extras` 之後是 **4,083 綠 0 紅**） | 逐條更正 | grep / 重跑 |
+
+**鏡頭確認為真**（摘要）：A1 的落點與兩個建構點、A3/A5/A7/A8/A9/A10/A15/A16/B1/B4/B10 的突變各自只紅它守的那條、`MarkLoaded` 改成真型別之後「改名就會紅」（有必綠對照）、SDK 的每個行號與行為、runbook 的 `request.messages[0]`／`api_key` 明文／`index.jsonl` 寫在 record 之後（200 次命中 2 次，ext4）。

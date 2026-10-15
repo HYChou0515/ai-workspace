@@ -217,15 +217,26 @@ async def test_load_tool_can_only_reach_what_the_executable_builder_grants():
     """The third builder, against the same oracle.
 
     `build_load_tool` filters with the same `_granted`, and nothing proved it:
-    the review changed its `allowed` to `None` and all 42 targeted tests stayed
+    the review changed its `allowed` to `None` and the targeted tests stayed
     green, while a turn granted one command could then load the schema of a
-    command it was never given (round 1 G1). Parity, not an argument.
+    command it was never given (round 1 B2).
+
+    The first version of THIS test was vacuous: it passed
+    `mark_loaded=lambda *_: None`, so nothing was ever written to the context
+    and `assert ctx.loaded_tools <= executable` compared an empty set against
+    anything — the mutation it was written for still reddened nothing (verify
+    round). The callback now writes through the real context API, and what the
+    reply NAMES is checked too, because that is what the model reads.
     """
     pkgs = [_pkg(), dataclasses.replace(_pkg(third_party=True), name="other-tools")]
     for allowed in (None, [], ["rca-tools"], ["rca-tools:data-fetch"], ["other-tools"]):
         executable = {t.name for t in build_function_tools(pkgs, allowed=allowed)}
-        load = build_load_tool(pkgs, allowed=allowed, mark_loaded=lambda *_: None)
         ctx = AgentToolContext(investigation_id="i")
+        load = build_load_tool(
+            pkgs,
+            allowed=allowed,
+            mark_loaded=lambda tctx, name: tctx.context.mark_tool_loaded(name, call_id="c"),
+        )
         # Ask for EVERY command of every package, granted or not.
         every = [
             name
@@ -233,9 +244,15 @@ async def test_load_tool_can_only_reach_what_the_executable_builder_grants():
             for cmd in pkg.commands
             for name in (f"{pkg.name}__{cmd.name}", cmd.name, f"{pkg.name}:{cmd.name}", pkg.name)
         ]
-        await load.on_invoke_tool(_tool_ctx(ctx, "load_tool"), json.dumps({"names": every[:20]}))
+        reply = await load.on_invoke_tool(
+            _tool_ctx(ctx, "load_tool"), json.dumps({"names": every[:20]})
+        )
 
         assert ctx.loaded_tools <= executable, (allowed, ctx.loaded_tools - executable)
+        # …and the ungranted ones are not described either: a schema in the
+        # reply is in the window whether or not the tool was marked loaded.
+        for ungranted in {c.name for p in pkgs for c in p.commands} - executable:
+            assert f"`{ungranted}` is now loaded" not in reply, (allowed, ungranted)
 
 
 def test_the_catalog_names_exactly_what_the_executable_builder_grants():
@@ -399,12 +416,19 @@ async def test_load_tool_bounds_its_reply_and_asks_for_the_same_thing_once():
     )
     assert once.count("Call `cmd-0` again") == 1
 
-    # A bundle with twelve fat commands is cut, and says so.
+    # A bundle with twelve fat commands does not all fit. What does not fit is
+    # NOT LOADED — trimming the reply while marking everything loaded handed
+    # the next step every schema anyway (verify round F4).
+    ctx2 = AgentToolContext(investigation_id="i")
     whole = await load.on_invoke_tool(
-        _tool_ctx(ctx, "load_tool"), json.dumps({"names": ["rca-tools"]})
+        _tool_ctx(ctx2, "load_tool"), json.dumps({"names": ["rca-tools"]})
     )
     assert len(whole) < 25_000, len(whole)
-    assert "cut at" in whole
+    assert "already full" in whole
+    assert len(ctx2.loaded_tools) < 12, sorted(ctx2.loaded_tools)
+    # …and what WAS loaded is what the reply described.
+    for name in ctx2.loaded_tools:
+        assert f"`{name}` is now loaded" in whole
 
     # More names than one call may ask for: the surplus is named, not loaded.
     many = await load.on_invoke_tool(
@@ -423,3 +447,100 @@ def _tool_ctx(ctx, name: str, *, call_id: str = "id"):
     return ToolContext(
         context=ctx, tool_name=name, tool_call_id=call_id, tool_arguments="{}", usage=Usage()
     )
+
+
+# ── verify round F3 / F10: the rule must not be worse than the one it replaced
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        # Scripts with no case at all. The "next word must be capitalised" rule
+        # could never be satisfied by them — `_is_cjk` covers only two ranges —
+        # so an ASCII `.` stopped ending a sentence and the whole paragraph
+        # became the entry, cut mid-sentence (verify round F3).
+        ("로트 이력을 가져옵니다. 로트 번호와 날짜 범위를 받습니다.", "로트 이력을 가져옵니다."),
+        ("ดึงประวัติของล็อต. รับหมายเลขล็อตและช่วงวันที่.", "ดึงประวัติของล็อต."),
+        ("जानकारी लाता है. लॉट नंबर लेता है.", "जानकारी लाता है."),
+        # …and plain lower-case English, which plenty of authors write.
+        (
+            "fetch a lot's history. accepts a date range and a lot id.",
+            "fetch a lot's history.",
+        ),
+        # A sentence whose next word is a number is still a sentence.
+        ("Keeps at most 5 rows. 10 is the ceiling.", "Keeps at most 5 rows."),
+    ],
+)
+def test_a_sentence_ends_whatever_script_or_case_follows_it(text, expected):
+    assert catalog_description(text) == expected
+
+
+def test_a_description_that_fits_is_never_replaced_by_an_ellipsis():
+    # The tiny-limit guard ran BEFORE the "it fits" check, so a 1-character
+    # description became `…` and a negative limit returned something longer
+    # than the limit (verify round F10).
+    assert catalog_description("A", limit=1) == "A"
+    assert catalog_description("AB", limit=1) == "…"
+    assert len(catalog_description("A long description here", limit=-5)) <= 1
+
+
+def test_the_scan_stays_linear_in_the_description_length():
+    """A command description arrives verbatim from a third-party manifest with
+    no length cap, and this runs once per granted command inside `_agent_for`
+    — on the event loop. The tail-slice version took 680 ms for 400k
+    characters (verify round F6)."""
+    import time
+
+    def elapsed(n: int) -> float:
+        text = "3.5" * (n // 3)  # no whitespace: the scan runs to the end
+        start = time.perf_counter()
+        catalog_description(text)
+        return time.perf_counter() - start
+
+    small, large = elapsed(30_000), elapsed(300_000)
+
+    # 10x the input must not cost 50x the time (the slice version was ~15x per
+    # 4x). A generous bound: this is a shape test, not a benchmark.
+    assert large < max(small * 30, 0.05), (small, large)
+
+
+async def test_load_tool_cannot_open_a_command_a_builtin_shadows():
+    """`dedupe_tools` drops the executable half of a command whose name a
+    built-in holds, and the catalog leaves out its entry for the same reason.
+    `load_tool` handed over its description and schema anyway, telling the
+    model to call arguments the built-in does not take (verify round F5)."""
+    from workspace_app.tooling.registry import build_load_tool
+
+    pkg = dataclasses.replace(
+        _pkg(), commands=(CommandInfo("read_file", "Read a file the RCA way.", {}),)
+    )
+    ctx = AgentToolContext(investigation_id="i")
+    load = build_load_tool(
+        [pkg],
+        allowed=None,
+        mark_loaded=lambda tctx, name: tctx.context.mark_tool_loaded(name, call_id="c"),
+        shadowed={"read_file"},
+    )
+
+    reply = await load.on_invoke_tool(_tool_ctx(ctx, "load_tool"), '{"names": ["read_file"]}')
+
+    assert ctx.loaded_tools == set()
+    assert "is now loaded" not in reply
+    assert "no tool called" in reply
+
+
+def test_the_bundle_suffix_fits_inside_the_limit_not_on_top_of_it():
+    """100 is the operator's number. Appended after the cut, a long bundle name
+    made a 139-character entry (verify round F7)."""
+    from workspace_app.tooling.registry import CATALOG_DESCRIPTION_LIMIT, build_catalog_tools
+
+    pkg = dataclasses.replace(
+        _pkg(),
+        name="a-very-long-first-party-bundle-name",
+        commands=(CommandInfo("cmd", "D" * 400, {}),),
+    )
+
+    (tool,) = build_catalog_tools([pkg], allowed=None, mark_loaded=lambda *_: None)
+
+    assert len(tool.description) <= CATALOG_DESCRIPTION_LIMIT, tool.description
+    assert tool.description.endswith("[a-very-long-first-party-bundle-name]")

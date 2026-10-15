@@ -77,6 +77,27 @@ async def test_the_sub_agent_answers_from_its_own_prompt_and_tools_on_a_clean_co
     assert child.investigation_id == "inv-1"
 
 
+def test_an_ask_kb_sub_agent_does_not_share_the_turns_loaded_tools():
+    """`build_ask_kb_context` is the OTHER `dataclasses.replace` over the
+    turn's context, and it needs the same reset as `_child_context`: a `set`
+    and a `dict` handed over by reference let the child's load decide what the
+    parent's next step carries (round 1 A11). Only the `_child_context` half
+    was pinned — deleting this one reddened nothing (verify round)."""
+    from workspace_app.agent.ask_kb import AskKbSpec, build_ask_kb_context
+
+    parent = dataclasses.replace(
+        _parent(), loaded_tools={"parent-loaded"}, catalog_calls={"p1": ["parent-loaded"]}
+    )
+
+    child = build_ask_kb_context(AskKbSpec(), parent)
+
+    assert child.loaded_tools == set()
+    assert child.catalog_calls == {}
+    child.mark_tool_loaded("child-loaded", call_id="c1")
+    assert parent.loaded_tools == {"parent-loaded"}
+    assert parent.catalog_calls == {"p1": ["parent-loaded"]}
+
+
 async def test_a_sub_agent_cannot_delegate_again():
     """Non-recursion is structural, not a depth counter: the child context simply
     has no delegation seam and no definitions to name, so `run_agent` is not even

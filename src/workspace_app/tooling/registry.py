@@ -29,7 +29,7 @@ import json
 import logging
 import re
 import unicodedata
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Collection, Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -788,13 +788,21 @@ CATALOG_DESCRIPTION_LIMIT = 100
 #: Ends a sentence wherever it appears — CJK punctuation is not followed by a
 #: space, so a lookahead would make `。` end nothing in a Chinese description.
 _SENTENCE_END_CJK = "。！？"
-#: Ends a sentence only before whitespace or the end, so `3.5` does not — and
-#: only when what follows looks like a new sentence and what precedes is not an
-#: abbreviation, so `e.g.` / `etc.` / `U.S.` / `Max.` do not either. The first
-#: version of this comment claimed `e.g.` was covered by the lookahead alone;
-#: it was not, and `'Plot a chart, e.g. a trend…'` became `'Plot a chart, e.g.'`
-#: — an 18-character catalog line, which is the only thing the model reads to
-#: decide whether to reach for the command (round 1 A9).
+#: Ends a sentence only before whitespace or the end, so `3.5` does not, and
+#: only when what precedes is not an abbreviation, so `e.g.` / `etc.` /
+#: `U.S.` / `Max.` do not either. The first version of this comment claimed
+#: `e.g.` was covered by the lookahead alone; it was not, and
+#: `'Plot a chart, e.g. a trend…'` became `'Plot a chart, e.g.'` — an
+#: 18-character catalog line, which is the only thing the model reads to decide
+#: whether to reach for the command (round 1 A9).
+#:
+#: It does NOT also require the next word to be capitalised. That rule was
+#: tried (round 1 A9) and removed in the verify round: `_is_cjk` can only cover
+#: the ranges it lists, so Hangul, Thai, Arabic, Hebrew and Devanagari could
+#: never satisfy it — an ASCII `.` stopped ending a sentence at all and the
+#: catalog line became a mid-sentence truncation of the whole paragraph, worse
+#: than before any of this. It bought nothing either: every case above is
+#: already decided by the abbreviation rule or the whitespace lookahead.
 _SENTENCE_END_ASCII = ".!?"
 
 #: Words that end in `.` without ending a sentence. Lower-cased, dots stripped,
@@ -862,11 +870,16 @@ def _first_sentence(said: str) -> str:
     """The author's first sentence. A newline ends one too — plenty of
     descriptions are a title line followed by a paragraph.
 
-    An ASCII `.` `!` `?` ends a sentence only when all three hold: whitespace
-    (or the end) follows, the next non-space character starts something new
-    (upper case or CJK — a digit or a lower-case word means the sentence
-    continues: `Max. 1000`, `e.g. a trend`), and the word before the dot is not
-    an abbreviation."""
+    An ASCII `.` `!` `?` ends a sentence only when whitespace (or the end)
+    follows — so `3.5` does not — and, for `.`, when the word before it is not
+    an abbreviation (`Max. 1000`, `e.g. a trend`).
+
+    The next character is read BY INDEX, not by slicing the tail: the slice
+    made this quadratic in the description's length, and a command description
+    arrives verbatim from a third-party manifest with no length cap, on a path
+    that runs once per granted command inside `_agent_for` — i.e. on the event
+    loop (measured 680 ms for a 400,000-character description, 20x the old
+    rule; verify round F6)."""
     for i, ch in enumerate(said):
         if ch in _SENTENCE_END_CJK:
             return said[: i + 1]
@@ -874,20 +887,12 @@ def _first_sentence(said: str) -> str:
             return said[:i].rstrip()
         if ch not in _SENTENCE_END_ASCII:
             continue
-        rest = said[i + 1 :]
-        if rest and not rest[0].isspace():
+        if i + 1 < len(said) and not said[i + 1].isspace():
             continue  # `3.5`
-        nxt = rest.lstrip()
-        if ch == "." and nxt and not (nxt[0].isupper() or _is_cjk(nxt[0])):
-            continue
         if ch == "." and _looks_like_an_abbreviation(said, i):
             continue
         return said[: i + 1]
     return said
-
-
-def _is_cjk(ch: str) -> bool:
-    return "\u2e80" <= ch <= "\u9fff" or "\uff00" <= ch <= "\uffef"
 
 
 def catalog_description(text: str, *, limit: int = CATALOG_DESCRIPTION_LIMIT) -> str:
@@ -919,13 +924,15 @@ def catalog_description(text: str, *, limit: int = CATALOG_DESCRIPTION_LIMIT) ->
     if not said:
         return ""
     first = _first_sentence(said)
+    # "It fits" comes first: `catalog_description("A", limit=1)` returned `…`
+    # and `limit=-5` returned something LONGER than the limit (verify round F10).
+    if len(first) <= limit:
+        return first
     # A limit too small to hold a boundary cut is not a limit to honour with
     # one: `first[: limit - 1]` turned `limit=0` into "keep everything but the
     # last character" and `limit=-5` into "drop five" (round 1 A16).
     if limit < 2:
-        return "…" if said else ""
-    if len(first) <= limit:
-        return first
+        return "…"
     kept = first[: limit - 1]
     cut = max(
         (i for i, ch in enumerate(kept) if ch.isspace() or ch in _CLAUSE_END),
@@ -1010,13 +1017,19 @@ def build_catalog_tools(
     return [_stub_function_tool(pkg, cmd, mark_loaded) for pkg, cmd in _granted(packages, allowed)]
 
 
-#: What one `load_tool` call may answer with. The catalog's whole point is
-#: that schemas are not in the window until they are needed; a single call
+#: What one `load_tool` call may put back in the window. The catalog's whole
+#: point is that schemas are not there until they are needed; a single call
 #: naming every bundle put 36,054 characters back (and `["sci-plot"] * 20` put
-#: 261,238), in the tool result AND in the next step's tool list at once. The
-#: built-ins' own ceiling (`cap_tool_outputs`, 200,000) does not reach here,
-#: because the catalog tools are appended in `_agent_for` outside `build_tools`
-#: (round 1 A7).
+#: 261,238). The built-ins' own ceiling does not reach here: `cap_tool_outputs`
+#: is applied by `build_tools` and by `build_function_tools`, and neither the
+#: catalog nor this tool calls it (round 1 A7; the reason corrected in the
+#: verify round — it is which builder calls the cap, not where the tool is
+#: appended).
+#:
+#: It bounds what is LOADED, not just the text of the reply: trimming the reply
+#: while marking every resolved command loaded handed the NEXT step 394,560
+#: characters of schema — worse than the prompt this whole change removes
+#: (verify round F4). A command only loads if its own schema fits what is left.
 _LOAD_REPLY_MAX_CHARS = 20_000
 
 #: How many names one call may ask for. 3,000 unknown names answered with
@@ -1050,6 +1063,7 @@ def build_load_tool(
     *,
     allowed: list[str] | None,
     mark_loaded: MarkLoaded,
+    shadowed: Collection[str] = (),
 ) -> FunctionTool:
     """`load_tool`: ask for a command's real arguments before calling it.
 
@@ -1059,7 +1073,16 @@ def build_load_tool(
     the executable tools, so it can never reach a command this turn was not
     granted.
     """
-    granted = _granted(packages, allowed)
+    # `shadowed`: names a built-in already holds. `dedupe_tools` drops the
+    # package command's executable half (first-wins), and the catalog leaves
+    # out its entry for the same reason — so handing the model its description
+    # and schema would describe something that can never run, and tell it to
+    # call arguments the built-in does not take (verify round F5).
+    granted = [
+        (pkg, cmd)
+        for pkg, cmd in _granted(packages, allowed)
+        if model_tool_name(pkg, cmd) not in shadowed
+    ]
     by_name: dict[str, list[tuple[PackageInfo, CommandInfo]]] = {}
     for pkg, cmd in granted:
         by_name.setdefault(model_tool_name(pkg, cmd), []).append((pkg, cmd))
@@ -1084,6 +1107,8 @@ def build_load_tool(
         wanted = wanted[:_LOAD_MAX_NAMES]
         parts: list[str] = []
         done: set[str] = set()
+        left = _LOAD_REPLY_MAX_CHARS
+        skipped: list[str] = []
         for name in wanted:
             found = by_name.get(name)
             if not found:
@@ -1091,13 +1116,29 @@ def build_load_tool(
                 continue
             for pkg, cmd in found:
                 model_name = model_tool_name(pkg, cmd)
-                mark_loaded(ctx, model_name)
                 # A bundle and one of its commands can share a name (the
                 # shipped `data-fetch` does), and both keys point at the same
                 # command — answering twice doubled the schema for nothing.
-                if model_name not in done:
-                    done.add(model_name)
-                    parts.append(load_reply(pkg, cmd))
+                if model_name in done:
+                    continue
+                said = load_reply(pkg, cmd)
+                # The budget decides whether it LOADS, not just whether its
+                # text is printed: marking it loaded puts its schema in every
+                # later step of this turn (verify round F4).
+                if len(said) > left and done:
+                    skipped.append(model_name)
+                    continue
+                done.add(model_name)
+                left -= len(said)
+                mark_loaded(ctx, model_name)
+                parts.append(said)
+        if skipped:
+            parts.insert(
+                0,
+                "Not loaded, this call was already full: "
+                + ", ".join(f"`{n}`" for n in skipped[:_UNKNOWN_NAMES_SHOWN])
+                + ". Ask for them in another call.",
+            )
         if over:
             # FIRST, not last: the length cap below trims the tail, and the one
             # sentence that must survive is the one saying why the model did
@@ -1166,10 +1207,16 @@ def _catalog_entry(pkg: PackageInfo, cmd: CommandInfo, name: str) -> str:
     (review round 1 A5). Version, author and the "not the latest release"
     notice stay in `describe_command`, which arrives when the command loads.
     """
-    said = catalog_description(cmd.description)
     if name.startswith(f"{pkg.name}{THIRD_PARTY_SEP}"):
-        return said  # the name already says it
-    return f"{said} [{pkg.name}]" if said else f"[{pkg.name}]"
+        return catalog_description(cmd.description)  # the name already says it
+    # The suffix counts against the SAME limit, not on top of it: appended
+    # after the cut, a long bundle name made a 139-character entry against a
+    # limit of 100 — and 100 is the operator's number (verify round F7).
+    suffix = f" [{pkg.name}]"
+    said = catalog_description(
+        cmd.description, limit=max(2, CATALOG_DESCRIPTION_LIMIT - len(suffix))
+    )
+    return f"{said}{suffix}" if said else f"[{pkg.name}]"
 
 
 def _stub_function_tool(
