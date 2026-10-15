@@ -839,7 +839,7 @@ function TestConnection({ client, defaults, draft }: { client: Client; defaults:
           style={WRAP}
         >
           {test.data.ok ? (
-            t("modelSettings.testOk", { model: test.data.model, ms: String(test.data.ms), reply: test.data.reply })
+            t("modelSettings.testOk", { model: test.data.model, ms: String(test.data.ms) })
           ) : (
             // A plain sentence first, then the reason as given — often the
             // page's own refusal, sometimes the provider's words (NN/g

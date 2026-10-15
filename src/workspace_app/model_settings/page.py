@@ -187,12 +187,12 @@ def key_path_problem(path: str) -> str | None:
 
 
 class Connection(Struct, frozen=True):
-    """One test call's outcome. `error` never carries the key."""
+    """One test call's outcome: `ms` is how long the model took to start
+    answering. `error` never carries the key."""
 
     ok: bool
     model: str = ""
     ms: int = 0
-    reply: str = ""
     error: str = ""
 
 
@@ -220,8 +220,12 @@ def try_connection(
     timeout_s: float = 30.0,
 ) -> Connection:
     """Call `preset`'s first endpoint once with `settings` (the draft, keys
-    included). Never part of Apply (M8): a provider that is down must not stop
-    a rollback."""
+    included), and stop at its first token. Never part of Apply (M8): a
+    provider that is down must not stop a rollback.
+
+    The first token — thinking included — already shows the endpoint answers,
+    the key is taken and the model exists (M24): waiting for the whole reply
+    cost a thinking model on CPU ~35 s, where its first token came in ~1-3 s."""
     from ..config.schema import RetrievalLlmRef
     from ..factories import resolve_llm_chain
     from ..kb.llm import LitellmLlm
@@ -240,16 +244,20 @@ def try_connection(
         return Connection(ok=False, error=f"preset {preset!r} resolves to no endpoint")
     head = chain[0]
     started = time.monotonic()
+    chunks = None
     try:
-        reply = LitellmLlm(
+        chunks = LitellmLlm(
             head.model, base_url=head.base_url, api_key=head.api_key, timeout=timeout_s
-        ).collect(PING)
+        ).stream(PING)
+        answered = any(text for text, _reasoning in chunks)
     except Exception as exc:  # any provider failure is the answer this button gives
         error = _scrub(str(exc), head.api_key)
         return Connection(ok=False, model=head.model, error=error[:500])
-    return Connection(
-        ok=True,
-        model=head.model,
-        ms=int((time.monotonic() - started) * 1000),
-        reply=reply.strip()[:200],
-    )
+    finally:
+        # Hang up: the provider stops generating the rest of the reply.
+        close = getattr(chunks, "close", None)
+        if close is not None:
+            close()
+    if not answered:
+        return Connection(ok=False, model=head.model, error="the model answered nothing")
+    return Connection(ok=True, model=head.model, ms=int((time.monotonic() - started) * 1000))

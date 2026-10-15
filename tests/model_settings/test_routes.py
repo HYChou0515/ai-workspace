@@ -196,7 +196,6 @@ def test_test_connection_calls_the_draft_not_what_is_in_force(page, monkeypatch)
         "ok": True,
         "model": "openai/kb-2",
         "ms": result["ms"],
-        "reply": "openai/kb-2",
         "error": "",
     }
 

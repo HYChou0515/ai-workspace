@@ -95,7 +95,6 @@ function fakeClient(page: Partial<PageData> = {}) {
       ok: true,
       model: `${preset}-model`,
       ms: 12,
-      reply: "OK",
       error: "",
     })),
   };
@@ -816,7 +815,11 @@ describe("ModelSettingsPage", () => {
     fireEvent.change(screen.getByLabelText("要測試的 preset"), { target: { value: "openai-mini" } });
     fireEvent.click(screen.getByTestId("model-settings-test"));
 
-    expect(await screen.findByTestId("model-settings-test-result")).toHaveTextContent("openai-mini-model");
+    // M24: the test stops at the first token, so it says when the model began
+    // to answer — there is no reply to show.
+    expect(await screen.findByTestId("model-settings-test-result")).toHaveTextContent(
+      "連得上 openai-mini-model：12 ms 後開始回覆",
+    );
     expect(client.testConnection).toHaveBeenCalledWith("openai-mini");
   });
 
@@ -1010,7 +1013,6 @@ describe("ModelSettingsPage", () => {
       ok: false,
       model: "openai/x",
       ms: 0,
-      reply: "",
       error: "litellm.InternalServerError: OpenAIException - Missing credentials",
     });
     renderWithQuery(<ModelSettingsPage client={client} />);

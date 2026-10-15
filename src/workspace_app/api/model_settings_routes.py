@@ -142,7 +142,6 @@ class _ConnectionOut(BaseModel):
     ok: bool
     model: str = ""
     ms: int = 0
-    reply: str = ""
     error: str = ""
 
 
@@ -368,7 +367,6 @@ def register_model_settings_routes(
                 ok=result.ok,
                 model=result.model,
                 ms=result.ms,
-                reply=result.reply,
                 error=redact(result.error, store.key_values()),
             )
 

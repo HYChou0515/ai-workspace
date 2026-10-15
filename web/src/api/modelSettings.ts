@@ -54,7 +54,8 @@ export type Applied = {
   keys_changed: string[];
 };
 
-export type Connection = { ok: boolean; model: string; ms: number; reply: string; error: string };
+/** One test call: `ms` is how long the model took to start answering (M24). */
+export type Connection = { ok: boolean; model: string; ms: number; error: string };
 
 const BASE = "/admin/model-settings";
 const JSON_HEADERS = { "Content-Type": "application/json" };

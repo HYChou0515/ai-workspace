@@ -2995,10 +2995,13 @@ export const messages = {
   "modelSettings.test": { "zh-TW": "測試連線", en: "Test connection" },
   "modelSettings.testPreset": { "zh-TW": "要測試的 preset", en: "Preset to test" },
   "modelSettings.testHint": {
-    "zh-TW": "用已儲存的草稿（含金鑰）對這個 preset 的模型送一次很短的請求。不影響套用。",
-    en: "Sends one short request to this preset's model using the saved draft (keys included). It never blocks Apply.",
+    "zh-TW": "用已儲存的草稿（含金鑰）對這個 preset 的模型送一次很短的請求，模型一開始回覆就停。不影響套用。",
+    en: "Sends one short request to this preset's model using the saved draft (keys included), and stops as soon as the model starts answering. It never blocks Apply.",
   },
-  "modelSettings.testOk": { "zh-TW": "連得上 {model}（{ms} ms）：{reply}", en: "{model} answered in {ms} ms: {reply}" },
+  "modelSettings.testOk": {
+    "zh-TW": "連得上 {model}：{ms} ms 後開始回覆",
+    en: "{model} started answering after {ms} ms",
+  },
   "modelSettings.testFailed": { "zh-TW": "連不上：{error}", en: "Failed: {error}" },
   "modelSettings.testFailedLead": {
     "zh-TW": "測試 {preset} 沒有成功：",

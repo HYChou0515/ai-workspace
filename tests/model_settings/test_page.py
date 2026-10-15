@@ -86,14 +86,44 @@ def test_only_a_live_secret_takes_a_key(path, fine):
     assert (key_path_problem(path) is None) is fine
 
 
-def test_a_connection_test_reports_the_reply(settings, monkeypatch):
+def test_a_connection_test_stops_at_the_first_token(settings, monkeypatch):
+    # M24 (user: 為什麼那麼久): the first token — thinking included — already
+    # shows the endpoint, key and model all work; waiting for the whole answer
+    # cost a thinking model on CPU ~35 s where the first token took ~1-3 s.
     from workspace_app.kb.llm import LitellmLlm
 
-    monkeypatch.setattr(LitellmLlm, "stream", lambda self, prompt: iter([(" OK ", False)]))
+    pulled: list[str] = []
+    closed: list[bool] = []
+    held = []  # the provider's own reference: no garbage collector hangs up for us
+
+    def chunks():
+        try:
+            yield "Okay", True
+            pulled.append("second")
+            yield "OK", False
+        finally:
+            closed.append(True)
+
+    def stream(self, prompt):
+        held.append(chunks())
+        return held[-1]
+
+    monkeypatch.setattr(LitellmLlm, "stream", stream)
 
     result = try_connection(settings, "openai-mini", config_dir=None)
 
-    assert result.ok and result.reply == "OK" and result.model
+    assert result.ok and result.model and result.ms >= 0
+    assert pulled == [] and closed == [True]
+
+
+def test_a_connection_that_streams_nothing_did_not_succeed(settings, monkeypatch):
+    from workspace_app.kb.llm import LitellmLlm
+
+    monkeypatch.setattr(LitellmLlm, "stream", lambda self, prompt: iter([("", False)]))
+
+    result = try_connection(settings, "openai-mini", config_dir=None)
+
+    assert not result.ok and "nothing" in result.error and result.model
 
 
 def test_a_failed_connection_says_why_without_the_key(settings, monkeypatch):
