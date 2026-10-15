@@ -408,8 +408,9 @@ def test_handing_over_a_job_under_way_does_not_restart_it():
     assert _claim(client).status_code == 204
 
 
-# The typed-keywords check (D13) guards only a job that would START: a reloaded
-# card's box is empty again, and its 「查」 on a job under way still gets that job.
+# The typed-keywords check (D13) guards only a job that would START: asked again
+# with nothing typed (the card itself refuses that, but the server is the guard),
+# a job under way is still returned, not refused.
 def test_a_job_under_way_is_returned_even_with_an_empty_box():
     client, _spec, iid = _asked()
     _beat(client)

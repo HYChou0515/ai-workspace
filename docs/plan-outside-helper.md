@@ -33,7 +33,7 @@
 | D1 | 要省的是搬運,不是讓 AI 變聰明 | 〔user〕「對 人當搬運工太累」「不是智商問題」 |
 | D2 | 使用者電腦上跑一支 Python 小程式(小幫手)代替人上外網 | 〔user〕「一個python小工具」 |
 | D3 | 因為只有瀏覽器能上網,小幫手用 Playwright 開公司裝好的 **Chrome**(`channel="chrome"`)代為操作;不裝擴充功能 | 〔user〕「只能用瀏覽器上網」「我們是chrome」 |
-| D4 | **搜尋**送出去前,人在卡片上點頭(看得到查詢、可以改;plan-outside-lookup D13 起搜尋框是空的、由人填)按「查」。抓回來的內容**都直接送給 AI**,不再經人 | 〔user〕先選 B(兩個點),後改「直接送」——每頁只回一頁(D10),第二個點只剩「按送出」的搬運 |
+| D4 | 〔被 plan-outside-lookup D13 改:搜尋框是空的、由人填〕**搜尋**送出去前,人在卡片上點頭(看得到查詢、可以改)按「查」。抓回來的內容**都直接送給 AI**,不再經人 | 〔user〕先選 B(兩個點),後改「直接送」——每頁只回一頁(D10),第二個點只剩「按送出」的搬運 |
 | D13 | **怎麼開**:雙擊桌面捷徑 `AI Workspace Helper`(由安裝建立,D16;檔名用英文),開一個小視窗(Python 內建 tkinter),三個分頁:**狀態**(已連線/正在搜尋（Google）/正在開啟/請登入/登入已過期)與「登入」「暫停/繼續」「結束」、可勾「開機時自動啟動」(在 Windows「啟動」資料夾放捷徑);**查詢紀錄**(最近 200 筆,只存本機 `history.jsonl`);**記錄檔**(`helper.log` 尾端、開啟記錄資料夾)。關掉視窗 = 關掉小幫手 | 〔user〕「你如果能安裝好我也是可以」;呼應最初「一個簡單的gui代勞」;2026-10-13 跑過真視窗後〔user〕「Wording有點醜」「在那邊應該要有搜尋紀錄和log」 |
 | D14 | 〔Python 下限被 D23 改成 3.9〕**打包在 dev server**(連得到 PyPI):`pip download --platform win_amd64 --only-binary=:all:` 抓 Windows 用的套件(Playwright 本身不分 Python 版本;`greenlet` 依版本,一次放 CPython 3.10–3.14 各一份〔施工〕),加上小幫手自己的 wheel 和 `.pyw`,組成離線安裝包;放在 **AI Workspace 網頁**的「小幫手」頁下載。沒有 Windows CI——Windows 上的驗證是 user 在公司筆電裝起來跑一次 | 〔user〕「只能是我在dev server打包 或是在公司筆電打包」「可以 甚至可以在ai workspace網頁下載」 |
 | D15 | **〔被 D21 取代〕更新**:一般更新由小幫手在背景下載、裝好,**下次開啟時生效**,使用者不用做任何事;只有後端說「低於最低可用版本」時,才跳視窗要求立刻更新 | 〔user〕「要放給使用者的東西 要有好的update流程」;選「一般自動、低於最低版本才強制」 |
@@ -78,7 +78,7 @@ AI 呼叫 ask_outside ──► 卡片(D7:沒連線 = 今天的手動流程)
 ### 3.2 後端:對外工作(`OutsideJob`)〔施工:名稱、欄位、路由路徑〕
 
 一筆 specstar resource(跨 pod 共用,不放記憶體):`owner`(按「查」的人)、`item_id`、`chat_id`、
-`tool_call_id`、`kind`(`search` | `open_url`)、`args`(實際要查的字或網址——人改過的版本)、`state`
+`tool_call_id`、`kind`(`search` | `open_url`)、`args`(實際要查的字或網址——搜尋是人在框裡填的字,plan-outside-lookup D13)、`state`
 (`queued` → `claimed` → `done` | `failed` | `cancelled`)、`claimed_at`、`error`。抓回來的內容不存在這裡(D4:直接送)。
 
 - **卡片的路由**:建立工作、取消(權限同送訊息,`converse`);讀工作狀態用 `read_chat`〔施工〕——只能讀這個聊天的人
@@ -329,7 +329,7 @@ D15 時代的 `pending`、`pending_attempts`、`bad`、`failures`、`update` 不
    按「登入」開 Chrome 登入 app,視窗顯示「已連線，等待查詢」。這一步是 Windows 上唯一的驗證(D14):裝不裝得起來、`.pyw` 能不能雙擊、
    捷徑開不開得起來、Chrome 開不開得出來、公司代理與 SSO。
 2. 在聊天問一個需要外部資料的問題;卡片上方顯示小幫手已連線,主要按鈕是「查」。
-3. 把建議的關鍵字貼進搜尋框(或自己打)、按「查」:小幫手的 Chrome 搜尋框裡的字;不用再按別的,`lookups/` 多一個檔(搜尋結果頁),AI 接著讀。
+3. 把建議的關鍵字貼進搜尋框(或自己打)、按「查」:小幫手的 Chrome 搜尋的是框裡的字;不用再按別的,`lookups/` 多一個檔(搜尋結果頁),AI 接著讀。
 4. AI 想看結果頁上的其中一頁時出「開網址」卡片;不用按,小幫手直接開那一頁送給 AI,AI 引用它作答。
 5. 叫 AI 開一個它自己寫的網址(不在先前的結果裡):卡片等你按「查」。
 6. 關掉小幫手再問一次:卡片回到手動流程(Google 按鈕 + 貼上區)。
