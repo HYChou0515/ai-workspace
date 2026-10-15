@@ -443,6 +443,56 @@ def test_the_helper_is_wired_to_report_what_it_runs_on(tmp_path):
     assert ctl.snapshot()[0] == "connected"
     seen = client.app.state.outside_jobs.presence("u")
     assert (seen.chrome, seen.python) == ("141.0.7390.55", platform.python_version())
+    # packed without the company's site file: it cannot ask the external AI
+    assert seen.ext_ai == ""
+
+
+def _wired(tmp_path, load_site):  # noqa: ANN001, ANN202
+    from ai_workspace_helper.app import make_controller
+
+    from tests.ai_workspace_helper.test_worker import _backend
+    from tests.api.test_outside_answers import _asked
+
+    client, _spec, _iid = _asked()
+    transport = _backend(client)
+
+    class _Chrome:
+        def send(self, *a):
+            return transport._send(*a)
+
+        def version(self) -> str:
+            return "141"
+
+        def close(self) -> None:
+            pass
+
+    ctl = make_controller(tmp_path, "http://app", _Chrome, load_site=load_site)
+    ctl.open()
+    ctl.step()
+    return client, ctl
+
+
+# docs/plan-ext-ai.md D9: a helper packed with the company's site file says so
+# when it checks in — that is how the card knows it may offer 「問外部AI」.
+def test_a_helper_packed_with_a_site_file_reports_it(tmp_path):
+    import types
+
+    site = types.SimpleNamespace(URL="https://ai.example", NAME="公司 AI", ask=lambda *a: "x")
+    client, ctl = _wired(tmp_path, lambda: site)
+
+    assert ctl.snapshot()[0] == "connected"
+    assert client.app.state.outside_jobs.presence("u").ext_ai == "公司 AI"
+
+
+def test_a_broken_site_file_leaves_the_rest_of_the_helper_working(tmp_path, caplog):
+    def broken():
+        raise ValueError("the external AI's site file needs URL")
+
+    client, ctl = _wired(tmp_path, broken)
+
+    assert ctl.snapshot()[0] == "connected"
+    assert client.app.state.outside_jobs.presence("u").ext_ai == ""
+    assert "needs URL" in caplog.text
 
 
 # D13: while it fetches, the window says what — 「正在查:…」 — DURING the

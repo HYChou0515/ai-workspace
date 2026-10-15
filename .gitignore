@@ -43,3 +43,8 @@ config.resolved.yaml
 
 # mkdocs build output
 /site/
+
+# docs/plan-ext-ai.md D7: the company's site file — packed into the helper with
+# `--ext-ai-site`, never committed (its URL is the company's own)
+ai-workspace-helper/src/ai_workspace_helper/ext_ai_site.py
+ext_ai_site.py

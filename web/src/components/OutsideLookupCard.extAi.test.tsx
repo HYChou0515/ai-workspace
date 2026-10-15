@@ -115,6 +115,16 @@ describe("asking the external AI", () => {
     await waitFor(() => expect(client.cancel).toHaveBeenCalled());
   });
 
+  // D4: the external AI's page may first ask the person to sign in, in the
+  // helper's Chrome window — the card says where.
+  it("says where to sign in when the helper waits on it", async () => {
+    draw({ current: async () => job({ state: "claimed", note: "login" }) });
+    fireEvent.click(await screen.findByRole("button", { name: "問外部AI" }));
+
+    expect(await screen.findByText("請在小幫手的 Chrome 視窗裡登入外部AI")).toBeInTheDocument();
+    expect(screen.queryByText("小幫手正在問外部AI…")).not.toBeInTheDocument();
+  });
+
   it("says why it failed, and asks again with the question kept", async () => {
     const client = draw({ current: async () => job({ state: "failed", error: "沒有回應" }) });
     fireEvent.change(screen.getByLabelText("要問的問題"), { target: { value: "kept?" } });

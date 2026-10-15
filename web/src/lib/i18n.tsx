@@ -1939,6 +1939,10 @@ export const messages = {
     "zh-TW": "小幫手正在問外部AI…",
     en: "The helper is asking the external AI…",
   },
+  "lookup.extLogin": {
+    "zh-TW": "請在小幫手的 Chrome 視窗裡登入外部AI",
+    en: "Sign in to the external AI in the helper's Chrome window",
+  },
   "lookup.waited": { "zh-TW": "(已等 {n} 秒)", en: "({n} s so far)" },
   "lookup.extFailed": {
     "zh-TW": "小幫手沒問到:{reason}",

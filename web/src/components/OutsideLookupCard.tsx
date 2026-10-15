@@ -334,7 +334,9 @@ export function OutsideLookupCard({
                 {t(
                   jobState === "claimed" && job.data?.note === "captcha"
                     ? "lookup.helperCaptcha"
-                    : isQuestion
+                    : jobState === "claimed" && job.data?.note === "login"
+                      ? "lookup.extLogin"
+                      : isQuestion
                       ? "lookup.extAsking"
                       : isSearch
                         ? "lookup.helperSearching"

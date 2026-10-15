@@ -44,7 +44,8 @@ export type HelperJob = {
   args: string;
   state: "queued" | "claimed" | "done" | "failed" | "cancelled";
   error: string;
-  /** What the helper waits on while it holds the job: `captcha`, or "". */
+  /** What the helper waits on while it holds the job: `captcha`, `login`
+   * (the external AI's sign-in, docs/plan-ext-ai.md D4), or "". */
   note: string;
   /** Opened with no nod — a link an earlier lookup brought back (D12). */
   auto: boolean;

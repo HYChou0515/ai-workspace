@@ -2,6 +2,7 @@
 (docs/plan-outside-helper.md D14, §3.6, §3.7.2).
 
     python3 scripts/pack_ai_workspace_helper.py --version 0.3.0 [--min-version 0.2.0] [--out DIR]
+        [--ext-ai-site ext_ai_site.py]
 
 Run on the dev server (it reaches PyPI; the PCs do not). Needs `pnpm` (builds
 the card's converter into the helper, D11), `uv` (builds the helper's wheel)
@@ -12,6 +13,10 @@ and a Python with pip (downloads the Windows wheels). Writes into DIR (default
   and `wheelhouse/`: the helper's wheel plus every package it needs as
   win_amd64 wheels for CPython 3.9–3.14, each pinned with `==`;
 - `ai-workspace-helper.json` — `{version, min_version, file, sha256}`.
+
+`--ext-ai-site` packs the company's site file into the helper as
+`ai_workspace_helper/ext_ai_site.py` (docs/plan-ext-ai.md D7) — checked first
+with the helper's own loader, so a file it could not load is refused here.
 
 Put both in `server.ai_workspace_helper_dir` (§3.7.2); no redeploy. Before writing
 the zip it checks that pip, given nothing but the wheelhouse, resolves the
@@ -123,11 +128,26 @@ def verify_command(
     ]
 
 
-def _stamped_copy(version: str, into: Path) -> Path:
-    """The helper's source with `version` stamped in — a copy, so the source
-    tree never carries a release's number."""
+def _check_site(site: Path) -> None:
+    """Load `site` the way the installed helper will (`ext_ai.load_site`):
+    ValueError when it lacks its `URL` or its `ask`."""
+    src = str(HELPER / "src")
+    sys.path.insert(0, src)
+    try:
+        from ai_workspace_helper.ext_ai import load_site
+    finally:
+        sys.path.remove(src)
+    load_site(site)
+
+
+def _stamped_copy(version: str, into: Path, site: Path | None = None) -> Path:
+    """The helper's source with `version` stamped in — and the company's site
+    file, when there is one — a copy, so the source tree never carries a
+    release's number or a company's address."""
     copy = into / "ai-workspace-helper"
     shutil.copytree(HELPER, copy, ignore=shutil.ignore_patterns("__pycache__", "parity", "*.pyc"))
+    if site is not None:
+        shutil.copyfile(site, copy / "src" / "ai_workspace_helper" / "ext_ai_site.py")
     version_py = copy / "src" / "ai_workspace_helper" / "version.py"
     text = version_py.read_text(encoding="utf-8")
     version_py.write_text(
@@ -143,10 +163,13 @@ def pack(
     min_version: str = "0.0.0",
     pip: list[str] | None = None,
     run: Run = _run,
+    ext_ai_site: Path | None = None,
 ) -> tuple[Path, Path]:
     for v in (version, min_version):
         if not _VERSION.match(v):
             raise ValueError(f"a version is three numbers, like 1.4.0 — not {v!r}")
+    if ext_ai_site is not None:
+        _check_site(ext_ai_site)
     pip = pip or [sys.executable, "-m", "pip"]
     out.mkdir(parents=True, exist_ok=True)
     zip_path = out / f"ai-workspace-helper-{version}.zip"
@@ -156,7 +179,7 @@ def pack(
         wheelhouse.mkdir()
         # the card's converter, built from the frontend source into the package
         run(["pnpm", "run", "build:ai-workspace-helper"], cwd=ROOT / "web")
-        source = _stamped_copy(version, work)
+        source = _stamped_copy(version, work, ext_ai_site)
         run(["uv", "build", "--wheel", "-o", str(wheelhouse), str(source)])
         for python in PYTHONS:
             run(download_command(pip, python, wheelhouse))
@@ -198,8 +221,16 @@ def main(argv: list[str] | None = None) -> int:  # pragma: no cover — argument
     parser.add_argument("--version", required=True)
     parser.add_argument("--min-version", default="0.0.0")
     parser.add_argument("--out", type=Path, default=ROOT / "dist" / "ai-workspace-helper")
+    parser.add_argument(
+        "--ext-ai-site",
+        type=Path,
+        default=None,
+        help="the company's site file for 問外部AI (docs/plan-ext-ai.md D7)",
+    )
     args = parser.parse_args(argv)
-    zip_path, manifest = pack(args.version, args.out, min_version=args.min_version)
+    zip_path, manifest = pack(
+        args.version, args.out, min_version=args.min_version, ext_ai_site=args.ext_ai_site
+    )
     print(f"wrote {zip_path}\nwrote {manifest}")
     return 0
 
