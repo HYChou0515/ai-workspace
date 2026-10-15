@@ -2471,7 +2471,7 @@ rollout、HPA 擴張可能會在當天多出新的行程名稱。API 與 worker 
 - 非 superuser 開 Diagnostics：沒有「使用統計」分頁。
 - 沒部署到這一版的症狀：Diagnostics 沒有「使用統計」分頁；`GET /api/admin/tool-usage` 是 404。
 
-### 2026-10-15 · #945 WUI 頁面可以問 subagent，工具與 subagent 都能「等結果」或「起成工作」 {#pr-945}
+### 2026-10-15 · 254ffaf8 · #945 WUI 頁面可以問 subagent，工具與 subagent 都能「等結果」或「起成工作」 {#pr-945}
 
 **設定** — 兩個新 key，都有預設值，不設也能開機（`docs/configuration.md`「頁面同時能跑幾件工作、每件最多多久」）：
 
