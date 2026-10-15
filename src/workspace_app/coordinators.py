@@ -380,7 +380,12 @@ def build_coordinators(
         # None for no store, no live window, or a store without usage
         # accounting: the runner then FAILS the job rather than booking 0s.
         disk_ledger_pass=(
-            make_disk_ledger_pass(spec, filestore, live_window_ms=disk_live_window_ms)
+            make_disk_ledger_pass(
+                spec,
+                filestore,
+                live_window_ms=disk_live_window_ms,
+                usage_recorder=usage_recorder,
+            )
             if filestore is not None and disk_live_window_ms > 0
             else None
         ),
