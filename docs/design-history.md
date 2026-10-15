@@ -38,6 +38,7 @@
 | [plan-pptx-preview.md](plan-pptx-preview.md) | workspace 裡的簡報(pptx/ppt/odp)在沙盒轉 PDF、以內容 hash 快取在沙盒旁,用 PDF 檢視器看 |
 | [plan-outside-lookup.md](plan-outside-lookup.md) | 斷網部署：AI 出「請幫我查」卡片，使用者在瀏覽器查網路或開網址，貼回結果存成檔案 |
 | [plan-outside-helper.md](plan-outside-helper.md) | 小幫手：使用者電腦上的 Python 小程式用 Playwright 開 Chrome 代為查網路，搜尋與 AI 自己寫的網址出去前人點頭、先前查到的連結直接開，抓回的整頁（像全選貼上）直接送給 AI；沒連線退回手動流程 |
+| [plan-ext-ai.md](plan-ext-ai.md) | 問外部AI：AI 起草問題、人按「問外部AI」，小幫手在使用者的 Chrome 裡打開公司的網頁 AI、貼上、送出、等回答寫完帶回；網頁怎麼操作由公司寫的一個 Python 檔決定，打包進小幫手 |
 | [plan-tool-usage-stats.md](plan-tool-usage-stats.md) | 工具使用統計：管理者在 Diagnostics 看 AI 用了哪些工具、誰用、在哪個場合、失敗幾次、平均多久 |
 | [plan-tools-picker-groups.md](plan-tools-picker-groups.md) | 工具挑選器依套件摺疊、內建工具一組、每組三態 |
 | [plan-user-env-exec-injection.md](plan-user-env-exec-injection.md) | 使用者環境變數改由 exec 注入（取代 `.userenv` 檔） |
