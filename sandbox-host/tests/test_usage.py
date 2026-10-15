@@ -92,3 +92,23 @@ async def test_the_sampler_runs_on_its_timer_and_writes_the_rest_when_stopped():
 
     assert sampler.samples >= 2
     assert sampler.closed
+
+
+async def test_listing_targets_survives_a_sandbox_made_while_it_runs():
+    """The sampler lists the targets in a thread while the event loop creates
+    and kills sandboxes. A create landing mid-list must not end the sample
+    with "dictionary changed size during iteration"."""
+    app = make_host_app(MockSandbox(), advertise_url="http://h")
+    async with _client(app) as c:
+        await c.post("/sandboxes", json={"item_id": "i1"})
+        await c.post("/sandboxes", json={"item_id": "i2"})
+    controller = app.state.controller
+
+    class _CreatesOnLookup(dict):
+        def get(self, key, default=None):  # a create arrives while the list is walked
+            controller._last_active[f"new-{len(controller._last_active)}"] = 0.0
+            return super().get(key, default)
+
+    controller._labels_of = _CreatesOnLookup(controller._labels_of)
+
+    assert len(controller.usage_targets()) == 2

@@ -307,10 +307,12 @@ class IsolatedProcessSandbox(LocalProcessSandbox):
 
     def usage_targets(self) -> list[Target]:
         """The sandboxes this process created and has not killed, each named for
-        its usage rows. The item IS the handle id under `kind: local`."""
+        its usage rows. The item IS the handle id under `kind: local`. Called
+        from the sampler's thread while the event loop creates and kills
+        sandboxes, so it walks a snapshot (`list()` copies in one step)."""
         return [
             Target(sandbox=sid, item=sid, user=labels.get("user", ""), app=labels.get("app", ""))
-            for sid, labels in self._usage_labels.items()
+            for sid, labels in list(self._usage_labels.items())
         ]
 
     def _uid_for(self, handle_id: str) -> int:

@@ -476,9 +476,11 @@ class _HostController:
     def usage_targets(self) -> list[Target]:
         """Every live sandbox, named for its usage rows (docs/plan-capacity-usage.md
         §6.5). Driven by `_last_active`, like `live`, so the sampler measures
-        exactly the sandboxes the reaper can see."""
+        exactly the sandboxes the reaper can see. Called from the sampler's
+        thread while the event loop creates and kills sandboxes, so it walks a
+        snapshot (`list()` copies the keys in one step)."""
         out = []
-        for rid in self._last_active:
+        for rid in list(self._last_active):
             labels = self._labels_of.get(rid, {})
             out.append(
                 Target(

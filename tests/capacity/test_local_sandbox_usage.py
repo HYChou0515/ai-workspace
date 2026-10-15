@@ -36,6 +36,23 @@ async def test_a_sandbox_this_process_made_is_a_target_until_it_is_killed(tmp_pa
     assert sb.usage_targets() == []
 
 
+async def test_listing_targets_survives_a_sandbox_made_while_it_runs(tmp_path):
+    """The sampler lists the targets in a thread while the event loop creates
+    and kills sandboxes; a create landing mid-list must not end the sample."""
+    sb = _isolated(tmp_path)
+    await sb.create(SandboxSpec(labels={"user": "alice"}), sandbox_id="i-1")
+    await sb.create(SandboxSpec(labels={"user": "bob"}), sandbox_id="i-2")
+
+    class _CreatesOnLookup(dict):
+        def get(self, key, default=None):  # a create arrives while the list is walked
+            sb._usage_labels[f"new-{len(sb._usage_labels)}"] = {}  # noqa: SLF001
+            return super().get(key, default)
+
+    sb._usage_labels = {k: _CreatesOnLookup(v) for k, v in sb._usage_labels.items()}  # noqa: SLF001
+
+    assert len(sb.usage_targets()) == 2
+
+
 class _ListSink(UsageSink):
     def __init__(self) -> None:
         self.docs: list[dict] = []
