@@ -11,9 +11,14 @@ fixed part, other systems, `unknown`/`system`). Repeated `draws` times.
 
 Every N reuses the same random draws — nested: the people drawn for N are the
 first N − N(day) of one fixed sequence — so a larger N can never need less.
-The sequence stretches when an N needs more of it, in blocks whose numbers
-depend only on the seed and where they sit, so what was asked before changes
-nothing. The cost is a matrix product per day, whatever N is.
+Each draw's sequence is its own random stream (seeded by the draw), read as
+far as an N needs: what was asked before changes nothing. The cost is a matrix
+product per day, whatever N is.
+
+Nothing is copied ahead: a run takes each day's demand of the day's people
+from the lines as it goes, and the random numbers as far as it needs them. A
+copy per simulator — and the page keeps one per profile — held the period's
+people several times over, and twenty times today's N of random numbers each.
 """
 
 from __future__ import annotations
@@ -30,8 +35,6 @@ from .period import Period
 DRAWS = 400
 #: How far beyond today's N the what-if and the headroom look.
 MAX_GROWTH = 20
-#: Columns the draw sequence stretches by at a time.
-_BLOCK = 256
 
 
 @dataclass
@@ -40,8 +43,8 @@ class _Day:
     #: positions in `users` of the day's N who appear in the period
     present: np.ndarray
     absent: int
-    #: line → [person, slot of day] demand of `present`
-    demand: dict[str, np.ndarray]
+    #: the day's slots, in time-of-day order
+    slots: np.ndarray
     #: line → [slot of day] what nobody's N drives
     base: dict[str, np.ndarray]
 
@@ -49,6 +52,13 @@ class _Day:
 def _slots_of_day(period: Period, d: int) -> np.ndarray:
     idx = np.flatnonzero(period.day_of == d)
     return idx[np.argsort(period.tod[idx], kind="stable")]
+
+
+def _row_of(line: Line) -> np.ndarray:
+    """[person] the person's row in `line.per_user`, −1 for none."""
+    out = np.full(len(line.users), -1, dtype=np.int64)
+    out[line.rows] = np.arange(len(line.rows))
+    return out
 
 
 class Simulator:
@@ -66,48 +76,41 @@ class Simulator:
         """`pool(present)` picks, from a day's present N (their indices into
         `people.users`), whom extra people are drawn like — as POSITIONS within
         `present` (None: everyone, absent people included)."""
-        self.lines = [line for line in lines if line.per_user.size and line.resource != "disk"]
+        self.lines = [line for line in lines if line.method != "fixed" and line.resource != "disk"]
         self.fixed_lines = [
-            line for line in lines if line not in self.lines and line.resource != "disk"
+            line for line in lines if line.method == "fixed" and line.resource != "disk"
         ]
         self._pool = pool
-        not_people = [i for i, u in enumerate(people.users) if u in NOT_PEOPLE]
+        self._row_of = {line.id: _row_of(line) for line in self.lines}
+        not_people = np.array(
+            [i for i, u in enumerate(people.users) if u in NOT_PEOPLE], dtype=np.int64
+        )
         self._days: list[_Day] = []
         for d in days:
             slots = _slots_of_day(period, d)
-            present = people.pool[d]
-            demand, base = {}, {}
+            base = {}
             for line in self.lines:
-                demand[line.id] = line.per_user[present][:, slots]
                 extra = line.fixed[slots] + (line.other[slots] if line.other is not None else 0.0)
-                if not_people:
-                    extra = extra + line.per_user[not_people][:, slots].sum(axis=0)
+                rows = self._row_of[line.id][not_people]
+                if len(rows := rows[rows >= 0]):
+                    extra = extra + line.per_user[rows][:, slots].sum(axis=0, dtype=np.float64)
                 base[line.id] = extra
             for line in self.fixed_lines:
                 base[line.id] = np.nan_to_num(line.total[slots])
-            self._days.append(_Day(d, present, int(people.absent[d]), demand, base))
+            self._days.append(_Day(d, people.pool[d], int(people.absent[d]), slots, base))
         self.n_now = int(people.active_30d[days[-1]]) if days else 0
         self._seed = seed
         rng = np.random.default_rng(seed)
         self._which = rng.integers(0, len(self._days), draws) if self._days else np.zeros(0, int)
-        longest = max((len(day.present) + day.absent for day in self._days), default=0)
-        self._seq = rng.random((draws, max(1, MAX_GROWTH * max(longest, 1))))
-        self._perm = [
-            rng.permutation(len(self._days[w].present) + self._days[w].absent) for w in self._which
-        ]
 
     @property
     def usable(self) -> bool:
         return bool(self._days)
 
-    def _stretch(self, length: int) -> None:
-        """Make the draw sequence at least `length` long. A block's numbers
-        depend on the seed and the column it starts at, never on when it was
-        added, so a stretched sequence is the same whatever was asked first."""
-        while self._seq.shape[1] < length:
-            at = self._seq.shape[1]
-            block = np.random.default_rng([self._seed, at]).random((self._seq.shape[0], _BLOCK))
-            self._seq = np.hstack([self._seq, block])
+    def _stream(self, draw: int, purpose: int) -> np.random.Generator:
+        """Draw `draw`'s own random stream: the same numbers, in the same
+        order, however far it is read — what makes the draws nested."""
+        return np.random.default_rng([self._seed, draw, purpose])
 
     def run(self, n: int) -> dict[str, np.ndarray]:
         """line → [draw] the day's peak with N = n."""
@@ -119,26 +122,28 @@ class Simulator:
             size = len(day.present)
             everyone = size + day.absent
             counts = np.zeros((len(draws), size))
+            chosen = self._pool(day.present) if self._pool is not None and n >= everyone else None
             for row, b in enumerate(draws):
                 if n >= everyone:
                     counts[row] = 1.0
-                    chosen = self._pool(day.present) if self._pool is not None else None
                     extra = n - everyone
-                    if extra > self._seq.shape[1]:
-                        self._stretch(extra)
+                    draw = self._stream(int(b), 1).random(extra)
                     if chosen is None:
-                        picks = (self._seq[b, :extra] * everyone).astype(np.int64)
+                        picks = (draw * everyone).astype(np.int64)
                         picks = picks[picks < size]  # an absent person adds nothing
                     elif len(chosen):
-                        picks = chosen[(self._seq[b, :extra] * len(chosen)).astype(np.int64)]
+                        picks = chosen[(draw * len(chosen)).astype(np.int64)]
                     else:
                         picks = np.zeros(0, np.int64)
                     counts[row] += np.bincount(picks, minlength=size)
                 else:
-                    keep = self._perm[b][:n]
+                    keep = self._stream(int(b), 0).permutation(everyone)[:n]
                     counts[row, keep[keep < size]] = 1.0
             for line in self.lines:
-                total = counts @ day.demand[line.id] + day.base[line.id]
+                rows = self._row_of[line.id][day.present]
+                has = rows >= 0
+                demand = line.per_user[rows[has]][:, day.slots]
+                total = counts[:, has] @ demand + day.base[line.id]
                 peaks[line.id][draws] = total.max(axis=1)
             for line in self.fixed_lines:
                 peaks[line.id][draws] = day.base[line.id].max()

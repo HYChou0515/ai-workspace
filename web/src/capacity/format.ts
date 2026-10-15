@@ -38,6 +38,13 @@ export function formatValue(t: T, value: number | null | undefined, unit: Unit):
   return t("capacity.unit.inflight", { v: round(value, 2) });
 }
 
+/** Machines: a whole count as it is; a share of shared machines (a worker
+ * job type's part of the worker pool) to one decimal. */
+export function machineCount(n: number): string {
+  if (Number.isInteger(n)) return String(n);
+  return n < 0.05 ? "<0.1" : (Math.round(n * 10) / 10).toFixed(1);
+}
+
 export function pct(x: number | null | undefined, digits = 0): string {
   if (x === null || x === undefined || !Number.isFinite(x)) return "—";
   return `${(x * 100).toFixed(digits)}%`;

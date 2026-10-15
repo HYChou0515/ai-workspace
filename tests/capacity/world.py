@@ -86,6 +86,9 @@ class World:
     #: The last `joining` people start partway through, one after another, so the
     #: number of people grows (what the runway view extrapolates).
     joining: int = 0
+    #: Every this many days a rollout renames the API pods (0: never) — a
+    #: month of daily rollouts is dozens of pod names, each alive a day.
+    rollout_days: int = 0
 
     @cached_property
     def zone(self) -> ZoneInfo:
@@ -220,6 +223,12 @@ class World:
     def _at(self, slot: int) -> int:
         return self.start_ms + slot * self.step_s * 1000
 
+    def pod(self, p: int, slot: int) -> str:
+        """API pod `p`'s name in `slot`: renamed by every rollout."""
+        if not self.rollout_days:
+            return self.api_pods[p]
+        return f"{self.api_pods[p]}-r{slot * self.step_s // 86_400 // self.rollout_days}"
+
     @cached_property
     def documents(self) -> list[dict]:
         docs: list[dict] = []
@@ -228,7 +237,7 @@ class World:
             app = self.apps[u]
             for s in np.flatnonzero(self.active[u]):
                 at = self._at(int(s))
-                pod = self.api_pods[int(self.pod_of[u, s])]
+                pod = self.pod(int(self.pod_of[u, s]), int(s))
                 util = self.api_util[s]
                 for work in (FILES, SEND, KB):
                     n = int(self.counts[work][u, s])
@@ -432,7 +441,8 @@ class World:
         files = self.counts[FILES].sum(axis=0)
         for s in range(self.slots):
             at = self._at(s)
-            for p, pod in enumerate(self.api_pods):
+            for p in range(len(self.api_pods)):
+                pod = self.pod(p, s)
                 streams = (
                     float((self.counts[STREAM][:, s] * (self.pod_of[:, s] == p)).sum())
                     / self.step_s

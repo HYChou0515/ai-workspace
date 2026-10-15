@@ -357,7 +357,9 @@ function PersonDetail({
                 <li key={l.id}>
                   <span>{line ? lineLabel(t, line) : l.id}</span>
                   <span>{formatValue(t, l.avg, l.unit)}</span>
-                  <span className="capacity-sub">{t("capacity.person.rank", { pct: pct(l.rank) })}</span>
+                  {l.rank != null && (
+                    <span className="capacity-sub">{t("capacity.person.rank", { pct: pct(l.rank) })}</span>
+                  )}
                 </li>
               );
             })}

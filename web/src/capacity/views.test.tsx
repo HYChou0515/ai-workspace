@@ -386,6 +386,20 @@ describe("what-if and runway (views 6, 7)", () => {
     const table = await screen.findByTestId("capacity-whatif-table");
     expect(table).toHaveTextContent("4 張（現在 2）");
   });
+
+  it("gives a job type's share of the worker machines one decimal", async () => {
+    const s = summary();
+    const c = client();
+    const data = structuredClone(whatifFixture) as unknown as WhatIfData;
+    const api = data.lines.find((l) => l.id === "api.cpu")!;
+    api.machines_needed = { p50: 2, p95: 2 };
+    api.machines_now = 2 / 3;
+    c.whatif = vi.fn(async () => data);
+    renderWithQuery(<WhatIf summary={s} days={28} client={c} t={t} />);
+
+    const table = await screen.findByTestId("capacity-whatif-table");
+    expect(table).toHaveTextContent("2 台（現在 0.7）");
+  });
 });
 
 describe("thresholds and confidence (views 8, 9)", () => {

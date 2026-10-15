@@ -35,6 +35,7 @@ def _line(per_user: np.ndarray, fixed: float = 0.0, line_id: str = "api.cpu") ->
         total=total,
         fixed=np.full(n, fixed),
         users=[f"u{i}" for i in range(per_user.shape[0])],
+        rows=np.arange(per_user.shape[0]),
         per_user=per_user.astype(np.float32),
     )
 

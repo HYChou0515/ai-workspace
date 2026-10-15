@@ -4,6 +4,8 @@ the shares add up to what was measured, and direct lines are exactly measured.""
 
 from __future__ import annotations
 
+import gc
+import tracemalloc
 from functools import cache
 from zoneinfo import ZoneInfo
 
@@ -11,9 +13,16 @@ import numpy as np
 import pytest
 
 from workspace_app.capacity.analysis.lines import build_lines
-from workspace_app.capacity.analysis.observe import observe
+from workspace_app.capacity.analysis.observe import (
+    Measures,
+    Observations,
+    Samples,
+    SourceStatus,
+    WorkSeries,
+    observe,
+)
 from workspace_app.capacity.analysis.period import Period
-from workspace_app.capacity.sources import CapacitySources
+from workspace_app.capacity.sources import CapacityEntry, CapacitySources
 
 from .world import (
     EVENTS,
@@ -298,3 +307,88 @@ def test_each_job_type_has_its_own_queue_wait_pair():
     # each queue is its own: index jobs wait a second, wiki jobs a minute
     waits = {p.job: float(np.nanmax(p.y)) for p in pairs}
     assert waits == {"index": pytest.approx(1.0), "wiki": pytest.approx(60.0)}
+
+
+def test_a_line_holds_a_row_only_for_each_person_it_costs():
+    """Every line is per person per slot. A row for everyone any record names
+    made a job type three people ran as large as the API's own line — and a
+    deployment has a line per job type and per model."""
+    t0 = 1_760_400_000_000 - 1_760_400_000_000 % 86_400_000
+    p = Period(t0, t0 + 86_400_000, 3600, ZoneInfo("UTC"))
+    obs = Observations(p, status={"usage_records": SourceStatus(connected=True)})
+    for user in ("alice", "bob", "carol"):
+        work = WorkSeries(p.n)
+        work.add(10, 5.0, 0.1)
+        obs.work_user[(user, "", "api", "req:GET /api/x")] = work
+    used = Measures(p.n, ("cpu_s", "mem_bs", "thr_s", "cpu_psi_s", "oom"))
+    used.add(10, {"cpu_s": 360.0})
+    obs.sandbox_user[("bob", "")] = used
+
+    line = {line.id: line for line in build_lines(obs)}["sandbox-host.cpu"]
+
+    assert line.per_user.shape == (1, p.n)
+    assert line.of(line.users.index("bob"))[10] == pytest.approx(0.1)
+    assert not line.of(line.users.index("alice")).any()
+
+
+def _build_peak(w: World) -> int:
+    """The most memory `build_lines` holds at once for `w`'s API."""
+    sources = CapacitySources(WorldRecords(w), WorldPods(w))
+    obs = observe(sources, Period(w.start_ms, w.end_ms, w.step_s, ZoneInfo(w.tz)))
+    gc.collect()
+    tracemalloc.start()
+    build_lines(obs)
+    peak = tracemalloc.get_traced_memory()[1]
+    tracemalloc.stop()
+    return peak
+
+
+def test_a_pod_that_lived_a_day_costs_the_regression_a_day():
+    """Every rollout renames the pods. The regression's columns were a whole
+    period per pod: dozens of pod names a month, each alive a day, each held
+    a period of zeros per column."""
+    static = _build_peak(World(days=7, users=6))
+    rolled = _build_peak(World(days=7, users=6, rollout_days=1))
+
+    assert rolled < 1.2 * static
+
+
+def _workers(alive: dict[str, tuple[str, int]]) -> dict[str, float | None]:
+    """Worker pods `pod → (job type, slots it lived)` sharing one `worker`
+    entry of 8 cores on 2 machines: each job type's line's capacity."""
+    t0 = 1_760_400_000_000 - 1_760_400_000_000 % 86_400_000
+    p = Period(t0, t0 + 86_400_000, 3600, ZoneInfo("UTC"))
+    connected = SourceStatus(connected=True)
+    obs = Observations(p, status={"usage_records": connected, "resource_metrics": connected})
+    rng = np.random.default_rng(0)
+    for pod, (job, lived) in alive.items():
+        samples = obs.pods[("worker", pod)] = Samples(p.n, ("cpu", "memory", "disk"))
+        work = obs.work_pod[(pod, "worker", f"job:{job}")] = WorkSeries(p.n)
+        for i in range(lived):
+            busy = float(rng.uniform(100, 3000))
+            work.add(i, 1, busy)
+            samples.set(i, "cpu", 0.1 + busy / 3600)
+            samples.set(i, "memory", 1e9)
+    obs.capacity = [CapacityEntry("worker", 8.0, 16e9, None, 2, "pod 4 cores")]
+    lines = build_lines(obs)
+    return {line.job: line.capacity for line in lines if line.id.endswith(".cpu")}
+
+
+def test_job_types_sharing_the_worker_entry_share_it_by_their_pods():
+    """Three worker pods on two machines: pods are not machines, and each job
+    type's share of the entry was its pods ÷ the machines — 1/2 and 2/2, half
+    as much again as the entry holds."""
+    got = _workers({"w1": ("index", 24), "w2": ("wiki", 24), "w3": ("wiki", 24)})
+
+    assert got["index"] == pytest.approx(8.0 / 3)
+    assert got["wiki"] == pytest.approx(16.0 / 3)
+
+
+def test_a_job_type_whose_pods_all_stopped_gets_no_share():
+    """Each job type was counted at its own last slot: the wiki workers that
+    scaled to zero at noon still claimed the whole entry beside the indexer
+    running now."""
+    got = _workers({"w1": ("index", 24), "w2": ("wiki", 12), "w3": ("wiki", 12)})
+
+    assert got["index"] == pytest.approx(8.0)
+    assert got["wiki"] is None

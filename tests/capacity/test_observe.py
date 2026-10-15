@@ -4,6 +4,8 @@ and with a source that fails — which fails only itself."""
 
 from __future__ import annotations
 
+import gc
+import tracemalloc
 from functools import cache
 from zoneinfo import ZoneInfo
 
@@ -283,3 +285,27 @@ def test_a_days_disk_is_its_last_figure_not_its_largest():
     obs = observe(CapacitySources(_Shrinking(w.start_ms)), period)
 
     assert list(obs.disk.values()) == [8e9]
+
+
+def _retained(w: World) -> int:
+    """Bytes an observation of `w`'s pods holds once observed."""
+    sources = CapacitySources(resource_metrics=WorldPods(w))
+    w.pod_samples()  # the world's own arrays, made before counting
+    gc.collect()
+    tracemalloc.start()
+    obs = observe(sources, _period(w))
+    gc.collect()
+    held = tracemalloc.get_traced_memory()[0]
+    tracemalloc.stop()
+    assert obs.pods
+    return held
+
+
+def test_a_pod_that_lived_a_day_holds_a_day_of_samples():
+    """Every rollout renames the pods: a month of daily rollouts is dozens of
+    pod names, each alive a day. A whole period of slots per name made each
+    rollout cost another period of memory, for the same samples."""
+    static = _retained(World(days=7, users=4))
+    rolled = _retained(World(days=7, users=4, rollout_days=1))
+
+    assert rolled - static < 100_000

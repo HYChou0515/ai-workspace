@@ -186,7 +186,8 @@ export type Person = {
     daily_avg: (number | null)[];
     daily_peak: (number | null)[];
     share: number;
-    rank: number;
+    /** among people; null for the `unknown` and `system` rows */
+    rank: number | null;
   }[];
   apps: string[];
   items: {

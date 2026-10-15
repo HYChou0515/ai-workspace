@@ -113,7 +113,7 @@ class LineOut(BaseModel):
     #: regression | direct | fixed
     method: str
     capacity: float | None
-    machines: int | None
+    machines: float | None
     machine_label: str
     threshold: float | None
     #: knee | default
@@ -244,7 +244,8 @@ class PersonLineOut(BaseModel):
     daily_avg: list[float | None]
     daily_peak: list[float | None]
     share: float
-    rank: float
+    #: among people; None for the `unknown` and `system` rows, which are none
+    rank: float | None
 
 
 class PersonItemOut(BaseModel):
@@ -279,7 +280,7 @@ class WhatIfLineOut(BaseModel):
     threshold: float | None
     needed_p50: float | None
     needed_p95: float | None
-    machines_now: int | None
+    machines_now: float | None
     machine_label: str
     machines_needed: dict[str, int | None]
     fits: dict[str, bool | None]

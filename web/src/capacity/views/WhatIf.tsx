@@ -11,7 +11,7 @@ import { qk } from "../../api/queryKeys";
 import type { CapacityClient, CapacityDays, CapacitySummary, WhatIfProfile } from "../api";
 import { Chart } from "../Chart";
 import type { ChartOption } from "../echarts";
-import { bytes, dayLabel, formatValue, lineLabelById, pct, type T } from "../format";
+import { bytes, dayLabel, formatValue, lineLabelById, machineCount, pct, type T } from "../format";
 import { NotReady } from "../Readiness";
 import { Segmented } from "./Allocation";
 import { PeopleCaveat } from "./Overview";
@@ -218,7 +218,7 @@ export function WhatIf({
                               ? "—"
                               : t(r.unit === "inflight" ? "capacity.whatif.cardsValue" : "capacity.whatif.machinesValue", {
                                   n: machines,
-                                  now: r.machines_now ?? "—",
+                                  now: r.machines_now == null ? "—" : machineCount(r.machines_now),
                                 })}
                             {r.machine_label && <span className="capacity-sub">{r.machine_label}</span>}
                           </td>

@@ -45,6 +45,28 @@ def test_nnls_handles_a_column_that_never_moves():
     assert coef[1] == 0.0
 
 
+@pytest.mark.parametrize("seed", range(20))
+def test_nnls_agrees_with_scipys(seed: int):
+    """The solver works on XᵀX and Xᵀy (the regression never lays its rows
+    out); scipy's works on X itself — the oracle, on problems with costs at
+    zero, collinear columns and columns that never move."""
+    optimize = pytest.importorskip("scipy.optimize")
+    rng = np.random.default_rng(seed)
+    rows, cols = int(rng.integers(40, 400)), int(rng.integers(2, 12))
+    x = rng.poisson(rng.uniform(0.5, 50, cols), (rows, cols)).astype(float)
+    if cols > 3:
+        x[:, 1] = 260 * x[:, 0] + rng.poisson(5, rows)  # moves with column 0
+        x[:, 2] = 0.0
+    truth = np.where(rng.random(cols) < 0.3, 0.0, rng.uniform(0, 3, cols))
+    y = x @ truth + rng.normal(0, rng.uniform(0.1, 5), rows)
+
+    ours = nnls(x, y)
+    theirs, _ = optimize.nnls(x, y)
+
+    assert (ours >= 0).all()
+    assert np.linalg.norm(x @ ours - y) == pytest.approx(np.linalg.norm(x @ theirs - y), rel=1e-6)
+
+
 def test_a_hinge_is_found_where_it_was_put():
     rng = np.random.default_rng(3)
     x = rng.uniform(0, 1, 2000)

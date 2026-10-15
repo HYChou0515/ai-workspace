@@ -25,7 +25,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from .nnls import nnls
+from .nnls import nnls_normal
 from .observe import Observations, WorkSeries
 
 #: Kept as a column of its own when a route template has at least this many
@@ -61,16 +61,23 @@ class FitStats:
     holdout_days: int = 0
 
 
-def _collinear(x: np.ndarray, columns: list[str]) -> list[tuple[str, str]]:
+def _collinear(
+    g: np.ndarray, sums: np.ndarray, rows: int, columns: list[str]
+) -> list[tuple[str, str]]:
+    """Column pairs whose correlation over the rows is at least `COLLINEAR`,
+    from the columns' cross-products and sums."""
+    if rows < 2:
+        return []
+    mean = sums / rows
+    cov = (g - rows * np.outer(mean, mean)) / (rows - 1)
+    var = np.diag(cov)
+    scale = np.diag(g) / rows
+    moving = [i for i in range(len(columns)) if var[i] > 1e-12 * max(scale[i], 1e-300)]
     out = []
-    moving = [i for i in range(len(columns)) if np.std(x[:, i]) > 0]
-    if len(moving) < 2:
-        return out
-    corr = np.corrcoef(x[:, moving], rowvar=False)
-    for a in range(len(moving)):
-        for b in range(a + 1, len(moving)):
-            if abs(corr[a, b]) >= COLLINEAR:
-                out.append((columns[moving[a]], columns[moving[b]]))
+    for a, i in enumerate(moving):
+        for j in moving[a + 1 :]:
+            if abs(cov[i, j]) / np.sqrt(var[i] * var[j]) >= COLLINEAR:
+                out.append((columns[i], columns[j]))
     return out
 
 
@@ -83,13 +90,21 @@ class Line:
     method: str  # "regression" | "direct" | "fixed"
     total: np.ndarray
     fixed: np.ndarray
+    #: Everyone any record names — the same list on every line.
     users: list[str] = field(default_factory=list)
+    #: The people this line costs, as positions in `users` (ascending), one
+    #: row of `per_user` each. Someone it costs nothing has no row: a job
+    #: type three people ran is three rows, not one per person ever seen.
+    rows: np.ndarray = field(default_factory=lambda: np.zeros(0, dtype=np.int64))
+    #: [row, slot] what each of `rows` drove (float32)
     per_user: np.ndarray = field(default_factory=lambda: np.zeros((0, 0), dtype=np.float32))
     by_app: dict[str, np.ndarray] = field(default_factory=dict)
     by_purpose: dict[str, np.ndarray] = field(default_factory=dict)
     other: np.ndarray | None = None
     capacity: float | None = None
-    machines: int | None = None
+    #: Machines of `capacity` — a worker line's share of a shared entry's
+    #: machines is fractional.
+    machines: float | None = None
     machine_label: str = ""
     fit: FitStats | None = None
     model: str = ""
@@ -100,15 +115,33 @@ class Line:
     #: A worker line's job type (§9.1: one line per job type); "other" for
     #: pods that ran none in the period; empty for every other line.
     job: str = ""
-    #: A worker line's pods running at the period's end — its share of the
-    #: `worker` capacity entry when no `worker:<job>` entry names it.
+    #: A worker line's pods in the last slot any worker pod reported — its
+    #: share of the `worker` capacity entry when no `worker:<job>` names it.
     pods_now: int = 0
+
+    def __post_init__(self) -> None:
+        if len(self.rows) != self.per_user.shape[0]:
+            raise ValueError(f"{self.id}: {len(self.rows)} rows for {self.per_user.shape[0]}")
 
     @property
     def variable(self) -> np.ndarray:
         if self.per_user.size == 0:
             return np.zeros_like(self.fixed)
         return self.per_user.sum(axis=0, dtype=np.float64)
+
+    def of(self, person: int) -> np.ndarray:
+        """[slot] what `users[person]` drove — zeros when the line costs them nothing."""
+        at = int(np.searchsorted(self.rows, person))
+        if at < len(self.rows) and self.rows[at] == person:
+            return self.per_user[at].astype(np.float64)
+        return np.zeros(len(self.total))
+
+    def person_totals(self) -> np.ndarray:
+        """[person] what each of `users` drove over the period."""
+        out = np.zeros(len(self.users))
+        if self.per_user.size:
+            out[self.rows] = self.per_user.sum(axis=1, dtype=np.float64)
+        return out
 
     @property
     def residual(self) -> np.ndarray:
@@ -119,20 +152,36 @@ class Line:
 
 
 class _Split:
-    """Accumulates one line's per-person, per-App and per-purpose series."""
+    """Accumulates one line's per-person, per-App and per-purpose series — a
+    row only for each person something is added for."""
 
     def __init__(self, users: list[str], n: int) -> None:
         self.users = users
+        self._n = n
         self._row = {u: i for i, u in enumerate(users)}
-        self.per_user = np.zeros((len(users), n), dtype=np.float32)
+        self._acc: dict[int, np.ndarray] = {}
         self.by_app: dict[str, np.ndarray] = {}
         self.by_purpose: dict[str, np.ndarray] = {}
 
     def add(self, user: str, app: str, purpose: str, values: np.ndarray) -> None:
-        self.per_user[self._row[user]] += values.astype(np.float32)
+        if not values.any():
+            return
+        person = self._row[user]
+        acc = self._acc.get(person)
+        if acc is None:
+            acc = self._acc[person] = np.zeros(self._n, dtype=np.float32)
+        acc += values.astype(np.float32)
         app = app or "(none)"
         self.by_app[app] = self.by_app.get(app, 0.0) + values
         self.by_purpose[purpose] = self.by_purpose.get(purpose, 0.0) + values
+
+    def rows(self) -> tuple[np.ndarray, np.ndarray]:
+        """(positions in `users`, [row, slot] demand), in `users` order."""
+        order = sorted(self._acc)
+        if not order:
+            return np.zeros(0, dtype=np.int64), np.zeros((0, self._n), dtype=np.float32)
+        per_user = np.vstack([self._acc.pop(person) for person in order])
+        return np.array(order, dtype=np.int64), per_user
 
 
 def everyone(obs: Observations) -> list[str]:
@@ -194,74 +243,101 @@ def memory_column(work: str, _kept: set[str]) -> tuple[str, str, str] | None:
 Column = Callable[[str, set[str]], tuple[str, str, str] | None]
 
 
+class _Normal:
+    """The cross-products the solver needs (`nnls_normal`), summed one pod's
+    block at a time: the regression's columns and one intercept per pod."""
+
+    def __init__(self, columns: int, pods: int) -> None:
+        self.c = columns
+        k = columns + pods
+        self.g = np.zeros((k, k))
+        self.b = np.zeros(k)
+
+    def add(self, x: np.ndarray, y: np.ndarray, pod: int) -> None:
+        c, j = self.c, self.c + pod
+        self.g[:c, :c] += x.T @ x
+        sums = x.sum(axis=0)
+        self.g[:c, j] += sums
+        self.g[j, :c] += sums
+        self.g[j, j] += len(y)
+        self.b[:c] += x.T @ y
+        self.b[j] += y.sum()
+
+
 def _fit(
-    ys: dict[str, np.ndarray],
-    xs: dict[str, dict[str, np.ndarray]],
+    ys: dict[str, tuple[np.ndarray, np.ndarray]],
+    block: Callable[[str, np.ndarray], np.ndarray],
     columns: list[str],
     day_of: np.ndarray,
 ) -> tuple[dict[str, float], dict[str, float], FitStats]:
     """NNLS over every (pod, slot) with a measurement; one intercept per pod.
-    Returns (cost per column, idle per pod, fit statistics)."""
-    pods = sorted(ys)
-    rows_x, rows_y, rows_day = [], [], []
-    for p_i, pod in enumerate(pods):
-        y = ys[pod]
-        ok = np.isfinite(y)
-        if not ok.any():
-            continue
-        cols = [xs.get(pod, {}).get(c, np.zeros_like(y))[ok] for c in columns]
-        onehot = np.zeros((int(ok.sum()), len(pods)))
-        onehot[:, p_i] = 1.0
-        rows_x.append(np.column_stack([*cols, onehot]) if cols else onehot)
-        rows_y.append(y[ok])
-        rows_day.append(day_of[ok])
-    if not rows_y:
+    `ys[pod]` is (slots, figure) where the pod was measured, `block(pod, at)`
+    its columns there. The rows are never laid out together — every rollout
+    names new pods, each another intercept column, and rows × columns of a
+    90-day period grew past what the API pod should hold — so memory follows
+    columns², not rows. Returns (cost per column, idle per pod, statistics).
+
+    §9.9: the error predicting each of the last `HOLDOUT_DAYS` days from the
+    ones before (at least `MIN_TRAIN_DAYS` of them). A pod the training days
+    never saw is not scored: one born after the cut — every rollout renames
+    them — has no idle cost to predict from."""
+    pods = [pod for pod in sorted(ys) if len(ys[pod][0])]
+    if not pods:
         return {}, {}, FitStats(None, None, 0, [])
-    x = np.vstack(rows_x)
-    y = np.concatenate(rows_y)
-    days = np.concatenate(rows_day)
-    coef = nnls(x, y)
-    fitted = x @ coef
-    ss_tot = float(((y - y.mean()) ** 2).sum())
-    r2 = 1.0 - float(((y - fitted) ** 2).sum()) / ss_tot if ss_tot > 0 else None
-    mape, held = _holdout_mape(x, y, days, len(columns))
-    costs = dict(zip(columns, (float(c) for c in coef[: len(columns)]), strict=True))
-    idle = {pod: float(coef[len(columns) + i]) for i, pod in enumerate(pods)}
+    c = len(columns)
+    distinct = np.unique(np.concatenate([day_of[ys[pod][0]] for pod in pods]))
+    held = max(0, min(HOLDOUT_DAYS, len(distinct) - MIN_TRAIN_DAYS))
+    cut = distinct[-held] if held else None
+    whole, train = _Normal(c, len(pods)), _Normal(c, len(pods))
+    # each held-out day: its scored rows' column sums, and their figure
+    day_x = {int(d): np.zeros(c + len(pods)) for d in distinct[len(distinct) - held :]}
+    day_y = dict.fromkeys(day_x, 0.0)
+    yy = sy = 0.0
+    rows = 0
+    for i, pod in enumerate(pods):
+        at, y = ys[pod]
+        x = block(pod, at)
+        whole.add(x, y, i)
+        yy += float(y @ y)
+        sy += float(y.sum())
+        rows += len(y)
+        if cut is None:
+            continue
+        days = day_of[at]
+        before = days < cut
+        if not before.any():
+            continue
+        train.add(x[before], y[before], i)
+        for d in np.unique(days[~before]):
+            here = days == d
+            day_x[int(d)][:c] += x[here].sum(axis=0)
+            day_x[int(d)][c + i] += here.sum()
+            day_y[int(d)] += float(y[here].sum())
+    coef = nnls_normal(whole.g, whole.b)
+    ss_tot = yy - sy * sy / rows
+    ss_res = max(0.0, yy - 2.0 * float(coef @ whole.b) + float(coef @ whole.g @ coef))
+    r2 = 1.0 - ss_res / ss_tot if ss_tot > 0 else None
+    mape = None
+    if cut is not None:
+        held_coef = nnls_normal(train.g, train.b)
+        errors = [
+            abs(float(day_x[d] @ held_coef) - actual) / actual
+            for d, actual in day_y.items()
+            if actual > 0
+        ]
+        mape = float(np.mean(errors)) if errors else None
+    costs = dict(zip(columns, (float(v) for v in coef[:c]), strict=True))
+    idle = {pod: float(coef[c + i]) for i, pod in enumerate(pods)}
+    sums = whole.g[:c, c:].sum(axis=1)
     stats = FitStats(
         r2=r2,
         holdout_mape=mape,
-        rows=len(y),
+        rows=rows,
         columns=sorted(costs.items()),
-        collinear=_collinear(x[:, : len(columns)], columns),
+        collinear=_collinear(whole.g[:c, :c], sums, rows, columns),
         holdout_days=held,
     )
     return costs, idle, stats
-
-
-def _holdout_mape(
-    x: np.ndarray, y: np.ndarray, days: np.ndarray, n_columns: int
-) -> tuple[float | None, int]:
-    """Fit on the days before the last `HOLDOUT_DAYS` (at least `MIN_TRAIN_DAYS`
-    of them), predict each held-out day's total: the mean absolute percentage
-    error of those days (§9.9, view 9), and how many days it held out. A row
-    of a pod the training days never saw is not scored: a pod born after the
-    cut — every rollout renames them — has no idle cost to predict from."""
-    distinct = np.unique(days)
-    held = min(HOLDOUT_DAYS, len(distinct) - MIN_TRAIN_DAYS)
-    if held < 1:
-        return None, 0
-    cut = distinct[-held]
-    train, test = days < cut, days >= cut
-    coef = nnls(x[train], y[train])
-    seen = x[train, n_columns:].any(axis=0)
-    scored = test & x[:, n_columns:][:, seen].any(axis=1)
-    errors = []
-    for d in np.unique(days[test]):
-        here = scored & (days == d)
-        actual = float(y[here].sum())
-        if actual > 0:
-            errors.append(abs(float((x[here] @ coef).sum()) - actual) / actual)
-    return (float(np.mean(errors)) if errors else None), held
 
 
 def _regression_line(
@@ -294,34 +370,44 @@ def _regression_line(
         values = series.count if which == "count" else series.seconds
         return values if cpu else values / step
 
-    xs: dict[str, dict[str, np.ndarray]] = {}
-    ys: dict[str, np.ndarray] = {}
+    # Each pod's figure where it was measured: (slots, values).
+    ys: dict[str, tuple[np.ndarray, np.ndarray]] = {}
     for comp_pod in pods:
-        series = obs.pods[(component, comp_pod)][measure]
-        y = series * step if cpu else series.copy()
-        if cpu and (local := obs.sandbox_pod.get((comp_pod, component))) is not None:
-            y = y - local["cpu_s"]  # sandboxes run inside this pod (`kind: local`)
-        elif not cpu and (local := obs.sandbox_pod.get((comp_pod, component))) is not None:
-            y = y - local["mem_bs"] / step
-        ys[comp_pod] = y
+        samples = obs.pods[(component, comp_pod)]
+        at = samples.slots(measure)
+        y = samples[measure][at] * step if cpu else samples[measure][at]
+        if (local := obs.sandbox_pod.get((comp_pod, component))) is not None:
+            # sandboxes run inside this pod (`kind: local`)
+            y = y - (local["cpu_s"][at] if cpu else local["mem_bs"][at] / step)
+        ys[comp_pod] = (at, y)
+    if pooled:
+        total_y, has = np.zeros(p.n), np.zeros(p.n, dtype=bool)
+        for at, y in ys.values():
+            total_y[at] += y
+            has[at] = True
+        at = np.flatnonzero(has)
+        ys = {"*": (at, total_y[at])}
+    # What feeds each column of each pod: the series, not dense copies of them.
+    feeds: dict[str, list[tuple[str, WorkSeries, str]]] = {}
     for (pod, comp, work), series in obs.work_pod.items():
         if comp not in work_components:
             continue
         col = column(work, kept)
         if col is None:
             continue
-        name, which, _purpose = col
         target = "*" if pooled else pod
-        if not pooled and pod not in ys:
-            continue
-        acc = xs.setdefault(target, {})
-        acc[name] = acc.get(name, 0.0) + feed(series, which)
-    if pooled:
-        total_y = np.nansum(np.vstack(list(ys.values())), axis=0)
-        has = np.any(np.isfinite(np.vstack(list(ys.values()))), axis=0)
-        ys = {"*": np.where(has, total_y, np.nan)}
-    columns = sorted({c for per_pod in xs.values() for c in per_pod})
-    costs, idle, stats = _fit(ys, xs, columns, p.day_of)
+        if target in ys:
+            feeds.setdefault(target, []).append((col[0], series, col[1]))
+    columns = sorted({name for fed in feeds.values() for name, _s, _w in fed})
+    where = {name: i for i, name in enumerate(columns)}
+
+    def block(target: str, at: np.ndarray) -> np.ndarray:
+        x = np.zeros((len(at), len(columns)))
+        for name, series, which in feeds.get(target, ()):
+            x[:, where[name]] += feed(series, which)[at]
+        return x
+
+    costs, idle, stats = _fit(ys, block, columns, p.day_of)
     if not idle:
         return None
     split = _Split(users, p.n)
@@ -334,12 +420,16 @@ def _regression_line(
         name, which, purpose = col
         values = costs[name] * feed(series, which)
         split.add(user, app, purpose, values / step if cpu else values)
-    measured = np.vstack([ys[k] for k in ys])
-    have = np.isfinite(measured)
-    total = np.where(have.any(axis=0), np.nansum(measured, axis=0), np.nan)
-    fixed = sum(np.where(have[i], idle[k], 0.0) for i, k in enumerate(ys))
+    total, fixed = np.zeros(p.n), np.zeros(p.n)
+    have = np.zeros(p.n, dtype=bool)
+    for target, (at, y) in ys.items():
+        total[at] += y
+        fixed[at] += idle.get(target, 0.0)
+        have[at] = True
+    total[~have] = np.nan
     if cpu:
-        total, fixed = total / step, np.asarray(fixed) / step
+        total, fixed = total / step, fixed / step
+    rows, per_user = split.rows()
     return Line(
         id=line_id,
         component=component,
@@ -347,9 +437,10 @@ def _regression_line(
         unit=unit,
         method="regression",
         total=total,
-        fixed=np.asarray(fixed, dtype=float),
+        fixed=fixed,
         users=users,
-        per_user=split.per_user,
+        rows=rows,
+        per_user=per_user,
         by_app=split.by_app,
         by_purpose=split.by_purpose,
         fit=stats,
@@ -358,9 +449,7 @@ def _regression_line(
 
 def _pods_of(obs: Observations, component: str, measure: str) -> list[str]:
     return [
-        pod
-        for (comp, pod), m in obs.pods.items()
-        if comp == component and np.isfinite(m[measure]).any()
+        pod for (comp, pod), m in obs.pods.items() if comp == component and len(m.slots(measure))
     ]
 
 
@@ -383,22 +472,31 @@ def _worker_groups(obs: Observations, measure: str) -> dict[str, list[str]]:
     return groups
 
 
-def _pods_now(obs: Observations, component: str, pods: list[str], measure: str) -> int:
-    """How many of `pods` were running in the last slot any of them reported."""
-    series = [obs.pods[(component, pod)][measure] for pod in pods]
-    if not series:
-        return 0
-    seen = np.isfinite(np.vstack(series))
-    last = np.flatnonzero(seen.any(axis=0))
-    return int(seen[:, last[-1]].sum()) if len(last) else 0
+def _last_slot(obs: Observations, component: str, measure: str) -> int | None:
+    """The last slot any of the component's pods reported."""
+    last = [
+        int(at[-1])
+        for (comp, _p), m in obs.pods.items()
+        if comp == component
+        if len(at := m.slots(measure))
+    ]
+    return max(last) if last else None
+
+
+def _pods_at(obs: Observations, component: str, pods: list[str], measure: str, at: int) -> int:
+    """How many of `pods` reported in slot `at`."""
+    return sum(1 for pod in pods if at in obs.pods[(component, pod)].slots(measure))
 
 
 def _summed(obs: Observations, component: str, measure: str) -> np.ndarray:
-    arrays = [m[measure] for (comp, _pod), m in obs.pods.items() if comp == component]
-    if not arrays:
-        return np.full(obs.period.n, np.nan)
-    stack = np.vstack(arrays)
-    return np.where(np.isfinite(stack).any(axis=0), np.nansum(stack, axis=0), np.nan)
+    """[slot] the component's pods summed; NaN where none of them reported."""
+    total, have = np.zeros(obs.period.n), np.zeros(obs.period.n, dtype=bool)
+    for (comp, _pod), m in obs.pods.items():
+        if comp == component and len(at := m.slots(measure)):
+            total[at] += m[measure][at]
+            have[at] = True
+    total[~have] = np.nan
+    return total
 
 
 def _direct_line(
@@ -414,7 +512,8 @@ def _direct_line(
 ) -> Line:
     """Measured per person; the component's total, when ② reports it, minus
     their sum is the component's own overhead (fixed)."""
-    variable = split.per_user.sum(axis=0, dtype=np.float64)
+    rows, per_user = split.rows()
+    variable = per_user.sum(axis=0, dtype=np.float64) if len(rows) else np.zeros(obs.period.n)
     total = np.where(np.isfinite(measured), measured, variable)
     fixed = np.clip(total - variable, 0.0, None)
     return Line(
@@ -426,7 +525,8 @@ def _direct_line(
         total=total,
         fixed=fixed,
         users=users,
-        per_user=split.per_user,
+        rows=rows,
+        per_user=per_user,
         by_app=split.by_app,
         by_purpose=split.by_purpose,
     )
@@ -458,6 +558,8 @@ def build_lines(obs: Observations) -> list[Line]:
         ):
             groups = [("", "api", _pods_of(obs, "api", measure))]
             groups += [(job, "worker", pods) for job, pods in _worker_groups(obs, measure).items()]
+            # One slot for every worker line, so their shares of the pool add up.
+            last = _last_slot(obs, "worker", measure)
             for job, component, pods in groups:
                 line = _regression_line(
                     obs,
@@ -473,7 +575,8 @@ def build_lines(obs: Observations) -> list[Line]:
                 )
                 if line is not None:
                     line.job = job
-                    line.pods_now = _pods_now(obs, component, pods, measure)
+                    if component == "worker" and last is not None:
+                        line.pods_now = _pods_at(obs, component, pods, measure, last)
                     lines.append(line)
         pg = _regression_line(
             obs,
@@ -547,7 +650,8 @@ def build_lines(obs: Observations) -> list[Line]:
                     split.add(s.user, s.app, s.purpose or "request", s.busy / step)
                 else:
                     other += s.busy / step
-            variable = split.per_user.sum(axis=0, dtype=np.float64)
+            rows, per_user = split.rows()
+            variable = per_user.sum(axis=0, dtype=np.float64) if len(rows) else np.zeros(p.n)
             lines.append(
                 Line(
                     id=f"gpu.{model}",
@@ -558,7 +662,8 @@ def build_lines(obs: Observations) -> list[Line]:
                     total=variable + other,
                     fixed=np.zeros(p.n),
                     users=users,
-                    per_user=split.per_user,
+                    rows=rows,
+                    per_user=per_user,
                     by_app=split.by_app,
                     by_purpose=split.by_purpose,
                     other=other,
@@ -580,20 +685,29 @@ def build_lines(obs: Observations) -> list[Line]:
 def _attach_capacity(obs: Observations, lines: list[Line]) -> None:
     """② says what each component may use, and what one more machine is. A
     worker line of one job type takes the `worker:<job>` entry when ② names
-    one; otherwise its share of the `worker` entry — the pods it runs on, of
-    the entry's machines (each Deployment's pods taken as alike)."""
+    one. Otherwise it takes its share of the `worker` entry: its pods, of all
+    the pods of the worker lines sharing that entry, in the last slot any
+    worker pod reported (each Deployment's pods taken as alike) — so the
+    shares add up to the entry, and `machines` is that share of the entry's
+    machines, fractional."""
     entries = {entry.component: entry for entry in obs.capacity}
+    sharing: dict[str, int] = {}
+    for line in lines:
+        if line.job and f"{line.component}:{line.job}" not in entries:
+            sharing[line.resource] = sharing.get(line.resource, 0) + line.pods_now
     for line in lines:
         own = entries.get(f"{line.component}:{line.job}") if line.job else None
         pooled = entries.get(line.component)
+        machines: float | None
         if own is not None:
             entry, share, machines = own, 1.0, own.machines
         elif pooled is None:
             continue
         elif line.job:
-            if not pooled.machines or not line.pods_now:
+            if not line.pods_now:
                 continue
-            entry, share, machines = pooled, line.pods_now / pooled.machines, line.pods_now
+            share = line.pods_now / sharing[line.resource]
+            entry, machines = pooled, (pooled.machines * share if pooled.machines else None)
         else:
             entry, share, machines = pooled, 1.0, pooled.machines
         value = {

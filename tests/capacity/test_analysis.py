@@ -5,7 +5,9 @@ whether it is ready and why not."""
 
 from __future__ import annotations
 
+import gc
 import json
+import tracemalloc
 from functools import cache
 from zoneinfo import ZoneInfo
 
@@ -410,7 +412,7 @@ def test_the_headroom_says_how_many_days_it_sized_on():
 
 def test_a_persons_rank_is_among_people_not_the_unknown_and_system_rows():
     """ "Uses more than x% of people": the system row is not a person, so it is
-    no part of anyone's rank."""
+    no part of anyone's rank — and has no rank among people itself."""
     w = _world()
 
     class OneIsSystem(WorldRecords):
@@ -428,7 +430,7 @@ def test_a_persons_rank_is_among_people_not_the_unknown_and_system_rows():
     )
     line = a.by_id["sandbox-host.cpu"]
     people = [u for u in a.people.users if u not in ("unknown", "system", "")]
-    totals = {u: float(line.per_user[a.people.users.index(u)].sum()) for u in people}
+    totals = {u: float(line.of(a.people.users.index(u)).sum()) for u in people}
 
     for u in people:
         detail = a.person(u)
@@ -436,6 +438,9 @@ def test_a_persons_rank_is_among_people_not_the_unknown_and_system_rows():
         (mine,) = [x for x in detail["lines"] if x["id"] == "sandbox-host.cpu"]
         below = sum(1 for v in totals.values() if v < totals[u])
         assert mine["rank"] == pytest.approx(below / (len(people) - 1)), u
+    system = a.person("system")
+    assert system is not None
+    assert {x["rank"] for x in system["lines"]} == {None}
 
 
 @cache
@@ -473,3 +478,21 @@ def test_a_line_that_does_not_grow_with_people_is_not_judged_by_the_what_if():
         assert r["needed_p95"] == pytest.approx(r["p95"])
         assert r["fits"] == {"p50": None, "p95": None}
         assert r["machines_needed"] == {"p50": None, "p95": None}
+
+
+def test_asking_every_what_if_profile_copies_nobodys_demand():
+    """The page asks for the heaviest tenth and for one App's people beside
+    everyone. A simulator per profile that copied the people's day demand,
+    and drew its random numbers ahead for twenty times today's N, held the
+    period several times over in the API process."""
+    a = _analysis(days=21)  # fresh: nothing asked of it yet
+    held = sum(line.per_user.nbytes for line in a.lines)
+    gc.collect()
+    tracemalloc.start()
+    for profile, app in (("all", ""), ("heavy", ""), ("app", "pm"), ("app", "rca")):
+        a.whatif(80, profile, app)
+    gc.collect()
+    grown = tracemalloc.get_traced_memory()[0]
+    tracemalloc.stop()
+
+    assert grown < 0.25 * held

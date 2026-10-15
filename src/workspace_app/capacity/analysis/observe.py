@@ -143,6 +143,41 @@ class Measures(Mapping[str, np.ndarray]):
         return self._series[name].slots()
 
 
+class Samples(Mapping[str, np.ndarray]):
+    """One pod's sampled figures per slot (cores, bytes), kept as the samples
+    the source returned. Unlike a sum, a slot with no sample is no zero: it
+    reads NaN. A whole period of slots per pod made every rollout — each pod
+    name a new key — three more arrays of the whole period, though the pod
+    lived a day of it."""
+
+    def __init__(self, n: int, names: Iterable[str]) -> None:
+        self.n = n
+        self._at = {name: array("q") for name in names}
+        self._v = {name: array("d") for name in names}
+
+    def set(self, i: int, name: str, value: float | None) -> None:
+        if value is not None and math.isfinite(value):
+            self._at[name].append(i)
+            self._v[name].append(value)
+
+    def __getitem__(self, name: str) -> np.ndarray:
+        out = np.full(self.n, np.nan)
+        if self._at[name]:
+            out[np.frombuffer(self._at[name], dtype=np.int64)] = np.frombuffer(self._v[name])
+        return out
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self._at)
+
+    def __len__(self) -> int:
+        return len(self._at)
+
+    def slots(self, name: str) -> np.ndarray:
+        """The slots with a sample of `name`."""
+        at = self._at[name]
+        return np.unique(np.frombuffer(at, dtype=np.int64)) if at else _NONE
+
+
 class LlmSeries:
     """One model's traffic from one (person, App, purpose) — or from another system."""
 
@@ -202,7 +237,7 @@ class Observations:
     jobs: list[Mapping[str, Any]] = field(default_factory=list)
     dropped: float = 0.0
     # ② pods and machines: (component, pod) → resource → [slot] (NaN: no sample)
-    pods: dict[tuple[str, str], dict[str, np.ndarray]] = field(default_factory=dict)
+    pods: dict[tuple[str, str], Samples] = field(default_factory=dict)
     capacity: list[CapacityEntry] = field(default_factory=list)
     # ③ cards: model → util summed over its cards, memory used; cards per model
     gpu: dict[str, dict[str, np.ndarray]] = field(default_factory=dict)
@@ -229,7 +264,8 @@ class Observations:
                 slots[m.slots("cpu_s")] = True
         elif source == "resource_metrics":
             for m in self.pods.values():
-                slots |= np.isfinite(m["cpu"]) | np.isfinite(m["memory"])
+                slots[m.slots("cpu")] = True
+                slots[m.slots("memory")] = True
         elif source == "gpu_metrics":
             for m in self.gpu.values():
                 slots |= (m["util"] > 0) | (m["memory"] > 0)
@@ -453,16 +489,13 @@ def _pods(sources: CapacitySources, obs: Observations, budget: _Budget) -> int:
         if i is None:
             continue
         rows += 1
-        acc = obs.pods.setdefault(
-            (sample.component, sample.pod), {r: _nans(p) for r in ("cpu", "memory", "disk")}
-        )
-        for name, value in (
-            ("cpu", sample.cpu_cores),
-            ("memory", sample.memory_bytes),
-            ("disk", sample.disk_bytes),
-        ):
-            if value is not None:
-                acc[name][i] = value
+        key = (sample.component, sample.pod)
+        acc = obs.pods.get(key)
+        if acc is None:
+            acc = obs.pods[key] = Samples(p.n, ("cpu", "memory", "disk"))
+        acc.set(i, "cpu", sample.cpu_cores)
+        acc.set(i, "memory", sample.memory_bytes)
+        acc.set(i, "disk", sample.disk_bytes)
     for entry in src.capacity():
         budget.take()
         obs.capacity.append(entry)

@@ -267,11 +267,11 @@ class Analysis:
             peak = (
                 line.per_user[:, busy].mean(axis=1, dtype=np.float64)
                 if len(busy)
-                else np.zeros(len(line.users))
+                else np.zeros(len(line.rows))
             )
             groups["person"] = [
-                {"key": u, "avg": float(a), "peak": float(k)}
-                for u, a, k in zip(line.users, avg, peak, strict=True)
+                {"key": line.users[r], "avg": float(a), "peak": float(k)}
+                for r, a, k in zip(line.rows, avg, peak, strict=True)
                 if a > 0 or k > 0
             ]
             for name, by in (("app", line.by_app), ("purpose", line.by_purpose)):
@@ -451,7 +451,7 @@ class Analysis:
         for line in self.lines:
             if not line.per_user.size or line.resource == "disk":
                 continue
-            totals = line.per_user.sum(axis=1, dtype=np.float64)
+            totals = line.person_totals()
             whole = totals.sum()
             if whole > 0:
                 score += totals / whole
@@ -494,7 +494,7 @@ class Analysis:
         out = {}
         for line in self.lines:
             threshold = self.thresholds.get(line.id, (None, None))[0]
-            if line.capacity and threshold and line.per_user.size and line.resource != "disk":
+            if line.capacity and threshold and line.method != "fixed" and line.resource != "disk":
                 out[line.id] = line.capacity * threshold
         return out
 
@@ -579,15 +579,20 @@ class Analysis:
         p = self.obs.period
         row = self.people.users.index(user)
         lines = []
+        people = np.array([u not in NOT_PEOPLE for u in self.people.users])
         for line in self.lines:
-            if not line.per_user.size:
+            if not line.users:
                 continue
-            mine = line.per_user[row].astype(np.float64)
-            totals = line.per_user.sum(axis=1, dtype=np.float64)
-            # ranked among people: the unknown and system rows are not people
-            people = np.array([u not in NOT_PEOPLE for u in self.people.users])
+            mine = line.of(row)
+            totals = line.person_totals()
+            # ranked among people: the unknown and system rows are not people,
+            # and have no rank among them
             ranked = totals[people]
-            rank = float((ranked < totals[row]).sum() / max(1, len(ranked) - 1))
+            rank = (
+                None
+                if user in NOT_PEOPLE
+                else float((ranked < totals[row]).sum() / max(1, len(ranked) - 1))
+            )
             lines.append(
                 {
                     "id": line.id,
