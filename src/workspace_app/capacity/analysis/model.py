@@ -22,7 +22,7 @@ import numpy as np
 from .lines import Line, build_lines, everyone
 from .observe import Observations
 from .people import NOT_PEOPLE, People, count_people
-from .period import Period
+from .period import GAP_SLOTS, Period
 from .runway import fit_trend, reach
 from .thresholds import Pair, build_pairs, pair_json
 from .whatif import DRAWS, MAX_GROWTH, Headroom, Simulator, headroom
@@ -663,8 +663,6 @@ class Analysis:
         }
 
 
-#: A run of this many slots with nothing is a gap (15 minutes at 5-minute slots).
-GAP_SLOTS = 3
 #: The longest gaps listed per source.
 MAX_GAPS = 5
 

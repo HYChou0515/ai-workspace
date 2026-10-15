@@ -353,9 +353,12 @@ def test_a_pod_that_lived_a_day_costs_the_regression_a_day():
     assert rolled < 1.2 * static
 
 
-def _workers(alive: dict[str, tuple[str, int]]) -> dict[str, float | None]:
+def _workers(
+    alive: dict[str, tuple[str, int]], missing: frozenset[tuple[str, int]] = frozenset()
+) -> dict[str, float | None]:
     """Worker pods `pod → (job type, slots it lived)` sharing one `worker`
-    entry of 8 cores on 2 machines: each job type's line's capacity."""
+    entry of 8 cores on 2 machines, less the `(pod, slot)` samples missing:
+    each job type's line's capacity."""
     t0 = 1_760_400_000_000 - 1_760_400_000_000 % 86_400_000
     p = Period(t0, t0 + 86_400_000, 3600, ZoneInfo("UTC"))
     connected = SourceStatus(connected=True)
@@ -367,8 +370,9 @@ def _workers(alive: dict[str, tuple[str, int]]) -> dict[str, float | None]:
         for i in range(lived):
             busy = float(rng.uniform(100, 3000))
             work.add(i, 1, busy)
-            samples.set(i, "cpu", 0.1 + busy / 3600)
-            samples.set(i, "memory", 1e9)
+            if (pod, i) not in missing:
+                samples.set(i, "cpu", 0.1 + busy / 3600)
+                samples.set(i, "memory", 1e9)
     obs.capacity = [CapacityEntry("worker", 8.0, 16e9, None, 2, "pod 4 cores")]
     lines = build_lines(obs)
     return {line.job: line.capacity for line in lines if line.id.endswith(".cpu")}
@@ -428,3 +432,15 @@ def test_probes_leave_the_apis_idle_cost_where_it_is():
 
     assert np.median(api.fixed) == pytest.approx(w.api_idle_cores * len(w.api_pods), rel=0.15)
     assert not api.of(api.users.index("system")).any()
+
+
+def test_one_sample_missed_in_the_last_slot_moves_no_capacity():
+    """Counted only in the last slot any worker pod reported, a pod whose one
+    scrape there failed was no pod: its job type lost its whole share to the
+    others — and, with no capacity, dropped out of the headroom."""
+    alive = {"w1": ("index", 24), "w2": ("wiki", 24), "w3": ("wiki", 24)}
+
+    got = _workers(alive, missing=frozenset({("w1", 23)}))
+
+    assert got["index"] == pytest.approx(8.0 / 3)
+    assert got["wiki"] == pytest.approx(16.0 / 3)

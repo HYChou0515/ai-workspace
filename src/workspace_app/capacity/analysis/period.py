@@ -16,6 +16,10 @@ from zoneinfo import ZoneInfo
 
 import numpy as np
 
+#: A run of this many slots with nothing from a source is a gap (15 minutes at
+#: 5-minute slots); one slot missing is a missed sample.
+GAP_SLOTS = 3
+
 
 @dataclass(frozen=True)
 class Period:

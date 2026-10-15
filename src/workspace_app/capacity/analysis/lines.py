@@ -27,6 +27,7 @@ import numpy as np
 
 from .nnls import nnls_normal
 from .observe import Observations, WorkSeries
+from .period import GAP_SLOTS
 
 #: Kept as a column of its own when a route template has at least this many
 #: requests in the period and appears in at least `MIN_PRESENCE` of its slots;
@@ -115,8 +116,8 @@ class Line:
     #: A worker line's job type (§9.1: one line per job type); "other" for
     #: pods that ran none in the period; empty for every other line.
     job: str = ""
-    #: A worker line's pods in the last slot any worker pod reported — its
-    #: share of the `worker` capacity entry when no `worker:<job>` names it.
+    #: A worker line's pods now (`_pods_now`) — its share of the `worker`
+    #: capacity entry when no `worker:<job>` names it.
     pods_now: int = 0
 
     def __post_init__(self) -> None:
@@ -483,9 +484,16 @@ def _last_slot(obs: Observations, component: str, measure: str) -> int | None:
     return max(last) if last else None
 
 
-def _pods_at(obs: Observations, component: str, pods: list[str], measure: str, at: int) -> int:
-    """How many of `pods` reported in slot `at`."""
-    return sum(1 for pod in pods if at in obs.pods[(component, pod)].slots(measure))
+def _pods_now(obs: Observations, component: str, pods: list[str], measure: str, last: int) -> int:
+    """The most of `pods` that reported in any one of the `GAP_SLOTS` slots up
+    to `last`: one scrape missed in the last slot is no pod gone — counted
+    there alone, its job type lost its whole share to the others."""
+    counts = np.zeros(GAP_SLOTS, dtype=np.int64)
+    first = last - GAP_SLOTS + 1
+    for pod in pods:
+        at = obs.pods[(component, pod)].slots(measure)
+        counts[at[(at >= first) & (at <= last)] - first] += 1
+    return int(counts.max())
 
 
 def _summed(obs: Observations, component: str, measure: str) -> np.ndarray:
@@ -578,7 +586,7 @@ def build_lines(obs: Observations) -> list[Line]:
                 if line is not None:
                     line.job = job
                     if component == "worker" and last is not None:
-                        line.pods_now = _pods_at(obs, component, pods, measure, last)
+                        line.pods_now = _pods_now(obs, component, pods, measure, last)
                     lines.append(line)
         pg = _regression_line(
             obs,
@@ -688,11 +696,11 @@ def build_lines(obs: Observations) -> list[Line]:
 def _attach_capacity(obs: Observations, lines: list[Line]) -> None:
     """② says what each component may use, and what one more machine is. A
     worker line of one job type takes the `worker:<job>` entry when ② names
-    one. Otherwise it takes its share of the `worker` entry: its pods, of all
-    the pods of the worker lines sharing that entry, in the last slot any
-    worker pod reported (each Deployment's pods taken as alike) — so the
-    shares add up to the entry, and `machines` is that share of the entry's
-    machines, fractional."""
+    one. Otherwise it takes its share of the `worker` entry: its pods now, of
+    all the pods of the worker lines sharing that entry (each Deployment's
+    pods taken as alike) — so the shares add up to the entry, and `machines`
+    is that share of the entry's machines, fractional. "Now" is the last slot
+    any worker pod reported, and the two before it (`_pods_now`)."""
     entries = {entry.component: entry for entry in obs.capacity}
     sharing: dict[str, int] = {}
     for line in lines:

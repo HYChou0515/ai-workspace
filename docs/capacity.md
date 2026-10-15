@@ -195,8 +195,9 @@ POST workspace-usage-*/_search
   machine_label)`——它總共能用多少、由幾台組成、多買一台是什麼（`"node 32 cores / 128 GiB"`）。
   背景工作是**每種 job type 一條線**（index、wiki、graph……各自的 Deployment 各自擴縮）：一個 worker pod 跑哪種
   job，是從它的 `work` 紀錄看出來的。要給某一種 job 自己的容量，加一筆 `component="worker:<jobtype>"`
-  （例如 `worker:graph`）；沒有的話，共用 `worker` 那一筆：在「任何 worker pod 回報的最後一個時段」，這種 job
-  的 pod 數占所有共用這一筆的 job 的 pod 數的比例——加起來剛好是那一筆；那個時段沒有 pod 的 job（縮到 0）
+  （例如 `worker:graph`）；沒有的話，共用 `worker` 那一筆：這種 job 現在的 pod 數占所有共用這一筆的 job 現在的
+  pod 數的比例——加起來剛好是那一筆。「現在」是「任何 worker pod 回報的最後一個時段」和它前面兩個時段，取其中
+  一個時段裡最多的 pod 數（最後一個時段漏了一筆樣本，不算 pod 不見了）；這三個時段都沒有 pod 的 job（縮到 0）
   分不到。這種線的「幾台」是它分到的比例 × 那一筆的 `machines`，可以是小數（畫面寫到小數一位）。
 
 Prometheus 的寫法（`query_range`，`step=300s`）。**注意時間**：`rate(x[5m])` 在時間 t 算的是 (t−5m, t]，
