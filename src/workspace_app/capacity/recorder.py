@@ -22,6 +22,7 @@ import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from typing import Any
 
 from .records import BUCKETS, MetaRow, UsageRecord, WorkRow, latency_bucket, to_document
 from .sink import UsageSink, UsageWriter
@@ -117,6 +118,11 @@ class UsageRecorder:
             running.charged_to_s = now
 
     # ── writing ───────────────────────────────────────────────────────────
+    def write_documents(self, documents: list[dict[str, Any]]) -> None:
+        """Write records another component already built (a cgroup sampler)."""
+        for doc in documents:
+            self._writer.put(doc)
+
     def emit(self, record: UsageRecord, *, at_ms: int) -> None:
         """Write an event record now (`at_ms`: when the event began)."""
         self._writer.put(to_document(record, at_ms, pod=self.pod, component=self.component))

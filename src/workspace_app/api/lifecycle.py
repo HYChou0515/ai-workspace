@@ -390,6 +390,29 @@ def build_lifespan(
         except asyncio.CancelledError:
             return
 
+    async def sandbox_usage_sampler(app: FastAPI) -> None:
+        """Pod-local: under `kind: local` with isolation the sandboxes run in
+        this pod, in cgroups it made, so this pod measures them
+        (docs/plan-capacity-usage.md §6.5). Nothing to do elsewhere."""
+        from ..capacity.local_usage import SAMPLE_S, local_sandbox_sampler
+
+        recorder = getattr(app.state, "usage_recorder", None)
+        sampler = (
+            local_sandbox_sampler(registry.sandbox, recorder) if recorder is not None else None
+        )
+        if sampler is None:
+            return
+        try:
+            while True:
+                await asyncio.sleep(SAMPLE_S)
+                try:
+                    await asyncio.to_thread(sampler.sample)
+                except Exception:  # noqa: BLE001 — measuring must never stop the pod
+                    logger.exception("usage: sandbox sampling failed")
+        except asyncio.CancelledError:
+            sampler.close()
+            return
+
     async def usage_flusher(app: FastAPI) -> None:
         """Pod-local: writes this process's usage counts each time a window
         closes (docs/plan-capacity-usage.md §6.7)."""
@@ -702,6 +725,7 @@ def build_lifespan(
         bg.append(asyncio.create_task(skill_hub_usage_flusher(app)))  # skill hub counts (U4)
         bg.append(asyncio.create_task(tool_usage_flusher(app)))  # tool-call counts
         bg.append(asyncio.create_task(usage_flusher(app)))  # capacity usage records
+        bg.append(asyncio.create_task(sandbox_usage_sampler(app)))  # local cgroups
         bg.append(asyncio.create_task(cluster_sweeper(app)))  # #506 P8 review-inbox cluster fold
         if turn_reclaim_interval is not None:
             bg.append(asyncio.create_task(turn_reclaim_sweeper(app)))  # plan-graceful-shutdown P3

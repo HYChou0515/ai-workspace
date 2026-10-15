@@ -32,6 +32,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
 from .artifact import ArtifactError
+from .cgroup_usage import Target
 from .config import SandboxHostSettings
 from .nfs_archive import NfsArchive
 from .protocol import (
@@ -110,6 +111,9 @@ class _CreateBody(BaseModel):
     # older app (sending neither field) gets.
     cpu_cores: float | None = None
     memory_bytes: int | None = None
+    # docs/plan-capacity-usage.md §6.5: whose sandbox this is (`user`, `app`),
+    # echoed on its usage rows. Absent (an older app) ⇒ measured, unnamed.
+    labels: dict[str, str] | None = None
     pids_max: int | None = None
     # #674: this turn's third-party bundles, {local name: bundle sha}.
     tools: dict[str, str] | None = None
@@ -397,6 +401,9 @@ class _HostController:
         # know which archive dir to write.
         self._archive = archive
         self._item_of: dict[str, str] = {}
+        # docs/plan-capacity-usage.md §6.5: whose each live sandbox is, as the
+        # app labelled it at create — what its usage rows are attributed to.
+        self._labels_of: dict[str, dict[str, str]] = {}
         # Requests to each sandbox that have STARTED and not FINISHED — counted
         # by `_InFlight` around the whole ASGI call, so a streaming `exec` stays
         # counted until its last byte, not until its handler returns. The pack
@@ -418,9 +425,17 @@ class _HostController:
         if rid in self._last_active:
             self._last_active[rid] = self.clock()
 
-    async def create(self, spec: SandboxSpec, item_id: str | None = None) -> SandboxHandle:
+    async def create(
+        self,
+        spec: SandboxSpec,
+        item_id: str | None = None,
+        *,
+        labels: dict[str, str] | None = None,
+    ) -> SandboxHandle:
         handle = await self.sandbox.create(spec, item_id=item_id)
         self._last_active[handle.id] = self.clock()
+        if labels:
+            self._labels_of[handle.id] = dict(labels)
         # Recorded whether or not an archive is wired. It began as `persist`'s
         # private lookup, so it was only filled on the archive path — but it is
         # also the only name the APP knows a sandbox by, and `GET /sandboxes`
@@ -457,6 +472,23 @@ class _HostController:
         # which is process-relative and means nothing to another service. A
         # field a reader cannot interpret is worse than an absent one.
         return [{"remote_id": rid, "item_id": self._item_of.get(rid)} for rid in self._last_active]
+
+    def usage_targets(self) -> list[Target]:
+        """Every live sandbox, named for its usage rows (docs/plan-capacity-usage.md
+        §6.5). Driven by `_last_active`, like `live`, so the sampler measures
+        exactly the sandboxes the reaper can see."""
+        out = []
+        for rid in self._last_active:
+            labels = self._labels_of.get(rid, {})
+            out.append(
+                Target(
+                    sandbox=rid,
+                    item=self._item_of.get(rid) or "",
+                    user=labels.get("user", ""),
+                    app=labels.get("app", ""),
+                )
+            )
+        return out
 
     async def persist(self, rid: str, *, delete: bool, pack: bool = False) -> None:
         """#492: rsync the sandbox's live working dir → its durable NFS archive.
@@ -518,6 +550,7 @@ class _HostController:
             self.pack_on_kill.discard(rid)
         self._last_active.pop(rid, None)
         self._item_of.pop(rid, None)
+        self._labels_of.pop(rid, None)
 
     async def _pack(self, rid: str, handle: SandboxHandle, own: int) -> None:
         """Best effort: the reap is the sandbox going away, the pack only makes
@@ -779,7 +812,7 @@ def make_host_app(
             memory_bytes=body.memory_bytes,
             pids_max=body.pids_max,
         )
-        handle = await controller.create(spec, body.item_id)
+        handle = await controller.create(spec, body.item_id, labels=body.labels)
         return JSONResponse(_CreateReply(pod_url=advertise_url, remote_id=handle.id).model_dump())
 
     @app.post("/sandboxes/{rid}/persist", status_code=204)

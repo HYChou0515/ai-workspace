@@ -61,6 +61,12 @@ class SandboxHostSettings:
     # of an item the pack is for walks every path on NFS — about a minute for
     # ~89k paths — and several pods may be walking it at once.
     pack_drain_s: float = 300.0
+    # docs/plan-capacity-usage.md §6.5: how often each live sandbox's cgroup is
+    # read (0 = off), and the window its `sandbox` rows sum over — one JSON line
+    # per sandbox per window on stdout, for the deploy's collector. The window
+    # divides 3600 so windows tile the hour, as the app's own do.
+    usage_sample_s: float = 60.0
+    usage_window_s: int = 300
 
 
 def load_settings(env: Mapping[str, str]) -> SandboxHostSettings:
@@ -115,4 +121,15 @@ def load_settings(env: Mapping[str, str]) -> SandboxHostSettings:
         nfs_root=opt("SANDBOX_HOST_NFS_ROOT"),
         archive_pack=b("SANDBOX_HOST_ARCHIVE_PACK", True),
         pack_drain_s=f("SANDBOX_HOST_PACK_DRAIN_S", 300.0),
+        usage_sample_s=f("SANDBOX_HOST_USAGE_SAMPLE_S", 60.0),
+        usage_window_s=_window(i("SANDBOX_HOST_USAGE_WINDOW_S", 300)),
     )
+
+
+def _window(seconds: int) -> int:
+    """A usage window must tile the hour, or it straddles the app's slots."""
+    if seconds < 1 or 3600 % seconds:
+        raise ValueError(
+            f"SANDBOX_HOST_USAGE_WINDOW_S={seconds}: must divide 3600 (60, 300, 600, …)"
+        )
+    return seconds

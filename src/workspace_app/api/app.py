@@ -1134,7 +1134,13 @@ def create_app(
             return "app" if final == after_app_v else "quota"
 
         return (
-            SandboxSpec(cpu_cores=final_cpu, memory_bytes=final_mem),
+            SandboxSpec(
+                cpu_cores=final_cpu,
+                memory_bytes=final_mem,
+                # docs/plan-capacity-usage.md §6.5: whose sandbox this is — the
+                # same owner the budget above was read for.
+                labels={"user": owner or "", "app": _slug or ""},
+            ),
             _who(cpu, after_app, final_cpu),
             _who(mem, after_app_mem, final_mem),
         )
