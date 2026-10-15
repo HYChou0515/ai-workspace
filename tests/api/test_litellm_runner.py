@@ -648,18 +648,24 @@ def test_emit_llm_trace_swallows_extraction_errors(caplog):
 
 
 def test_agent_for_without_system_prompt():
-    """No base + default workspace tool set still yields a non-None
-    prompt — the tool inventory section is always there when tools are
-    registered (B.10). The pre-B.10 expectation of `is None` was stale."""
+    """No base + default workspace tool set still yields a non-None prompt —
+    the how-to-call-tools note is always there when tools are registered
+    (B.10). The pre-B.10 expectation of `is None` was stale.
+
+    What the note no longer does is list the tools: that second copy of the
+    inventory is gone (`docs/plan-tool-on-demand-loading.md`). The tools
+    themselves are registered on the agent, which is what the assertion on
+    `agent.tools` below checks."""
     from workspace_app.api.litellm_runner import _agent_for
 
     cfg = AgentConfig(name="ws")
     agent = _agent_for(cfg)
     assert isinstance(agent.instructions, str)
     assert agent.instructions.startswith("## Tools available")
-    # The 9 default workspace tools all appear under the inventory.
+    registered = {t.name for t in agent.tools}
     for name in ("exec", "read_file", "write_file", "ask_knowledge_base"):
-        assert f"### `{name}`" in agent.instructions
+        assert name in registered
+        assert f"### `{name}`" not in agent.instructions
 
 
 def test_agent_for_with_explicit_empty_allowed_tools_registers_zero_tools():
@@ -789,26 +795,30 @@ def test_agent_for_extra_instructions_with_no_base_prompt():
     assert "## Tools available" in agent.instructions
 
 
-def test_agent_for_appends_tool_inventory_section_to_instructions():
-    """B.10 regression: every tool registered on the agent appears in
-    the auto-rendered `## Tools available` section the LLM sees in its
-    system prompt — name, description, JSON args schema. Small models
-    misread function tools as shell binaries without this; large
-    models can rely on the tool_choice payload alone, but we still
-    want it for parity + debugging."""
+def test_agent_for_appends_the_tool_note_after_the_operators_prompt():
+    """B.10's rule survives: the system prompt carries the "these are function
+    tools, do NOT exec them" warning, which is what stops a small model
+    reaching for `exec(['wafer-history', ...])`.
+
+    B.10's *listing* does not survive — rendering every tool's name,
+    description and schema a second time is what put 414,115 characters in one
+    system prompt (`docs/plan-tool-on-demand-loading.md`). So the note is a
+    fixed size, and the operator's own prompt still comes FIRST: it is the
+    part an endpoint that truncates the front drops first, and burying it
+    under an inventory made that worse."""
     from workspace_app.api.litellm_runner import _agent_for
 
     cfg = AgentConfig(name="ws", system_prompt="anchor")
     agent = _agent_for(cfg)
     instructions = agent.instructions
     assert isinstance(instructions, str)
-    # the section header includes the "DO NOT exec a tool name" warning
-    # that's the whole point of B.10.
-    assert "Each entry below is a **function tool**" in instructions
+    assert instructions.startswith("anchor")
     assert "Do NOT" in instructions
-    # every registered tool's name + JSON schema block is there
+    assert "exit 127" in instructions
+    # The inventory is NOT repeated here — one representation, in the payload.
+    assert "```json" not in instructions
     for t in agent.tools:
-        assert f"### `{t.name}`" in instructions, f"tool {t.name} missing from prompt"
+        assert f"### `{t.name}`" not in instructions
 
 
 # ---- diagnose_error ----

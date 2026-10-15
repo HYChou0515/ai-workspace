@@ -29,6 +29,7 @@ from workspace_app.tooling.registry import (
     build_function_tools,
     catalog_description,
     describe_command,
+    load_reply,
 )
 
 
@@ -214,3 +215,29 @@ def test_the_catalog_names_exactly_what_the_executable_builder_grants():
         }
         executable = {t.name for t in build_function_tools(pkgs, allowed=allowed)}
         assert catalog == executable, allowed
+
+
+def test_a_complex_schema_reaches_the_model_verbatim_when_loaded():
+    """Moved from `test_tool_prompt.py`, where it guarded the same thing in the
+    place the schema used to be rendered: an enum constraint, a nested object
+    and a default must survive to the model, not be flattened by something
+    being clever on the way. The schema now travels in the load reply, so the
+    guard lives here.
+    """
+    schema = {
+        "type": "object",
+        "properties": {
+            "name": {"type": "string", "enum": ["alloy-batches", "sensor-telemetry"]},
+            "rows": {"type": "integer", "default": 25000},
+            "nested": {"type": "object", "properties": {"deep": {"type": "boolean"}}},
+        },
+        "required": ["name"],
+    }
+    pkg = dataclasses.replace(
+        _pkg(), commands=(CommandInfo("data-fetch", "Fetch a dataset.", schema),)
+    )
+
+    reply = load_reply(pkg, pkg.commands[0])
+
+    start = reply.index("{")
+    assert json.loads(reply[start : reply.rindex("}") + 1]) == schema

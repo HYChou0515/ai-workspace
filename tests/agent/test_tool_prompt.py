@@ -4,8 +4,6 @@ tools with shell binaries."""
 
 from __future__ import annotations
 
-import json
-
 from agents import FunctionTool
 
 from workspace_app.agent.tool_prompt import (
@@ -47,10 +45,21 @@ def test_includes_section_header_and_invariant_warning():
     assert "exit 127" in out  # explicit failure-mode reminder
 
 
-def test_each_tool_gets_name_description_and_schema_block():
-    """For every tool, the prompt carries name + description + the
-    pydantic-derived JSON args schema (verbatim from
-    `params_json_schema`)."""
+def test_the_note_explains_why_a_schema_may_be_empty():
+    """A catalog entry carries an empty argument schema
+    (`docs/plan-tool-on-demand-loading.md`). Unexplained, that reads as "takes
+    no arguments" — and the model would call it, get the schema back, and have
+    no idea it was supposed to call again."""
+    out = format_tools_for_prompt([_ft("wafer-history", "fetch", {})])
+
+    assert "empty" in out
+    assert "again" in out
+
+
+def test_the_note_does_not_grow_with_the_tool_list():
+    """The section no longer repeats the inventory — that second copy is what
+    put six figures of characters in one system prompt. Three tools and three
+    hundred cost the same here; the tools themselves are in the API payload."""
     schema = {
         "type": "object",
         "properties": {
@@ -59,39 +68,20 @@ def test_each_tool_gets_name_description_and_schema_block():
         },
         "required": ["wafer_ids"],
     }
-    tools = [_ft("wafer-history", "Materialise wafer history into a CSV.", schema)]
-    out = format_tools_for_prompt(tools)
-    # Name + description
-    assert "### `wafer-history`" in out
-    assert "Materialise wafer history into a CSV." in out
-    # Schema appears as a JSON code block
-    assert "```json" in out
-    # Round-trip: the dumped schema is recoverable from the prompt.
-    fence_start = out.index("```json") + len("```json")
-    fence_end = out.index("```", fence_start)
-    recovered = json.loads(out[fence_start:fence_end])
-    assert recovered == schema
-
-
-def test_multiple_tools_listed_in_order():
-    """Order is preserved (caller picked it: built-ins first, then
-    provisioned). Helps the LLM reason about which to reach for first."""
-    tools = [
+    three = [
         _ft("exec", "run a shell command", {"type": "object", "properties": {"cmd": {}}}),
         _ft("read_file", "read a file", {"type": "object", "properties": {"path": {}}}),
-        _ft("wafer-history", "fetch wafer history", {"type": "object", "properties": {}}),
+        _ft("wafer-history", "Materialise wafer history into a CSV.", schema),
     ]
-    out = format_tools_for_prompt(tools)
-    assert out.index("`exec`") < out.index("`read_file`") < out.index("`wafer-history`")
+    many = three + [_ft(f"cmd-{i}", "d" * 200, schema) for i in range(300)]
 
+    out = format_tools_for_prompt(three)
 
-def test_tool_without_description_still_renders():
-    """A tool with empty description doesn't crash — placeholder text
-    keeps the structure consistent."""
-    tools = [_ft("foo", "", {"type": "object", "properties": {}})]
-    out = format_tools_for_prompt(tools)
-    assert "### `foo`" in out
-    assert "_(no description)_" in out
+    assert out == format_tools_for_prompt(many)
+    # Neither the names nor the schemas are in it any more.
+    assert "wafer-history" not in out
+    assert "```json" not in out
+    assert "wafer_ids" not in out
 
 
 def _tm(name: str, description: str) -> ToolMeta:
@@ -143,32 +133,6 @@ def test_disabled_meta_without_description_renders_bare_name():
     out = format_disabled_tools_for_prompt([_tm("mystery-pkg", "")])
     assert "- `mystery-pkg`" in out
     assert "`mystery-pkg` —" not in out  # no dangling em-dash
-
-
-def test_complex_schema_with_enum_and_nested_objects_round_trips():
-    """A real schema (enum constraint, nested objects, optional fields)
-    survives the markdown round-trip — guards against an over-clever
-    formatter that flattens / strips schema features the LLM needs."""
-    schema = {
-        "type": "object",
-        "properties": {
-            "name": {
-                "type": "string",
-                "enum": ["alloy-batches", "sensor-telemetry"],
-            },
-            "rows": {"type": "integer", "default": 25000},
-            "nested": {
-                "type": "object",
-                "properties": {"deep": {"type": "boolean"}},
-            },
-        },
-        "required": ["name"],
-    }
-    tools = [_ft("data-fetch", "fetch dataset", schema)]
-    out = format_tools_for_prompt(tools)
-    fence_start = out.index("```json") + len("```json")
-    fence_end = out.index("```", fence_start)
-    assert json.loads(out[fence_start:fence_end]) == schema
 
 
 def test_unavailable_tools_say_what_went_wrong_not_just_that_they_are_gone():
