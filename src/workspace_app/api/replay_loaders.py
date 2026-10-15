@@ -15,6 +15,7 @@ from specstar import QB, SpecStar
 from specstar.types import ResourceIDNotFoundError
 
 from ..apps.catalog import finalize_tool_grants
+from ..live_value import Live, now
 from ..resources import AgentConfig, Conversation
 from ..resources.kb import KbChat, SourceDoc
 from ..tooling.registry import PackageInfo
@@ -30,7 +31,7 @@ class ReplayLoaders:
         spec: SpecStar,
         locator: ItemLocator,
         packages: list[PackageInfo] | None,
-        default_kb_agent_config: AgentConfig,
+        default_kb_agent_config: Live[AgentConfig],
     ) -> None:
         self._spec = spec
         self._locator = locator
@@ -72,7 +73,7 @@ class ReplayLoaders:
         except ResourceIDNotFoundError:
             return None
         assert isinstance(chat, KbChat)
-        return list(chat.messages), self._default_kb_agent_config, None, None
+        return list(chat.messages), now(self._default_kb_agent_config), None, None
 
     def load_doc(self, document_id: str) -> tuple[str, str, bytes] | None:
         doc_rm = self._spec.get_resource_manager(SourceDoc)

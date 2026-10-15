@@ -16,6 +16,7 @@ import { SkillHubPage } from "./pages/SkillHubPage";
 import { SchedulesOverviewPage } from "./pages/SchedulesOverviewPage";
 import { WuiOverviewPage } from "./pages/WuiOverviewPage";
 import { WorkCalendarPage } from "./pages/WorkCalendarPage";
+import { ModelSettingsPage } from "./pages/ModelSettingsPage";
 import { HelpPage } from "./pages/HelpPage";
 import { KbDocPage } from "./pages/kb/KbDocPage";
 import { kbRoutes } from "./pages/kb/kbRoutes";
@@ -73,6 +74,8 @@ export function AppRoutes() {
             superusers + anyone who belongs to a group. */}
         <Route path="/groups" element={<GroupsPage />} />
         <Route path="/work-calendar" element={<WorkCalendarPage />} />
+        {/* docs/plan-model-settings.md: superuser-only; the page says so to anyone else. */}
+        <Route path="/settings/models" element={<ModelSettingsPage />} />
         {/* What I am holding vs what I may hold. The limits refuse rather
             than evict, so this is where a refused person goes to free
             something up — without it, being at your limit is a dead end. */}

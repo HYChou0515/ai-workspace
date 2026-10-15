@@ -1,7 +1,7 @@
 """ILlm.collect: drains the stream, forwards every chunk (live thinking), and
 returns only the non-reasoning content."""
 
-from collections.abc import Iterator
+from collections.abc import Generator, Iterator
 from types import SimpleNamespace
 
 import litellm
@@ -127,3 +127,32 @@ def test_stream_yields_content_and_reasoning(monkeypatch):
 
     monkeypatch.setattr(litellm, "completion", fake_completion)
     assert list(LitellmLlm("ollama_chat/qwen3:14b").stream("p")) == [("th", True), ("hi", False)]
+
+
+def test_a_stream_left_early_closes_the_provider_response(monkeypatch):
+    # review 17: Test connection stops at the first token (M24), but closing
+    # this generator left litellm's response open — an OpenAI-compatible server
+    # sent the whole reply to a reader long gone. The response litellm wraps is
+    # what holds the connection; closing it is the hang-up.
+    closed: list[bool] = []
+
+    class _Response:  # what litellm's stream wrapper holds: `completion_stream`
+        def close(self) -> None:
+            closed.append(True)
+
+    class _Wrapper:
+        completion_stream = _Response()
+
+        def __iter__(self):
+            delta = SimpleNamespace(content="OK", reasoning_content=None)
+            for _ in range(3):
+                yield SimpleNamespace(choices=[SimpleNamespace(delta=delta)])
+
+    monkeypatch.setattr(litellm, "completion", lambda **_kw: _Wrapper())
+    chunks = LitellmLlm("openai/m", base_url="http://x", api_key="k").stream("p")
+    assert isinstance(chunks, Generator)
+
+    assert next(chunks) == ("OK", False)
+    chunks.close()
+
+    assert closed == [True]

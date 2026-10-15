@@ -13,7 +13,7 @@ from __future__ import annotations
 from pathlib import Path
 from textwrap import dedent
 
-from workspace_app.config.dump import emit_config_dump, render
+from workspace_app.config.dump import emit_config_dump, is_secret, render
 from workspace_app.config.loader import load_with_provenance
 
 
@@ -51,7 +51,7 @@ def test_render_masks_secret_on_stdout_reveals_in_file(tmp_path: Path):
     masked = render(settings, prov, reveal_secrets=False)
     revealed = render(settings, prov, reveal_secrets=True)
     assert "sk-secretvalue123" not in masked
-    assert "api_key: *** set (17 chars) via ${OPENAI_KEY} ***  # ← env" in masked
+    assert 'api_key: "*** set (17 chars) via ${OPENAI_KEY} ***"  # ← env' in masked
     assert "sk-secretvalue123" in revealed
 
 
@@ -59,7 +59,36 @@ def test_render_masks_unset_secret(tmp_path: Path):
     """An unset secret reports `*** unset ***`, not a fake length."""
     settings, prov = _resolved(tmp_path, "server:\n  port: 9090\n")
     masked = render(settings, prov, reveal_secrets=False)
-    assert "api_key: *** unset ***  # ← default" in masked
+    assert 'api_key: "*** unset ***"  # ← default' in masked
+
+
+def test_every_value_of_a_presets_env_is_masked(tmp_path: Path):
+    """docs/plan-model-settings.md M7: a preset's `env` holds tokens under names
+    nothing can recognise (HF_HUB_URL may carry one too), so all of it is
+    secret — on stdout here, and on the settings page, which asks the same
+    rule."""
+    settings, prov = _resolved(
+        tmp_path,
+        """
+        agents:
+          presets:
+            local:
+              model: ollama_chat/qwen3
+              env:
+                HF_HUB_URL: https://user:hunter2@hub.example
+        """,
+    )
+    masked = render(settings, prov, reveal_secrets=False)
+    assert "hunter2" not in masked
+    assert 'HF_HUB_URL: "*** set' in masked
+
+
+def test_a_token_named_in_capitals_is_masked():
+    """Environment variable names are upper case: `HF_TOKEN` is as much a
+    token as `hf_token`."""
+    assert is_secret("server.HF_TOKEN")
+    assert is_secret("agents.presets.local.llm.api_key")
+    assert not is_secret("agents.presets.local.llm.base_url")
 
 
 def test_render_base_url_is_not_masked(tmp_path: Path):
@@ -190,3 +219,89 @@ def test_a_tuple_field_the_operator_set_is_not_labelled_default(tmp_path: Path):
     plain, plain_prov = _resolved(tmp_path, "server: { port: 9090 }\n")
     plain_out = render(plain, plain_prov, reveal_secrets=True)
     assert "subagent_models: []  # ← default" in plain_out
+
+
+def test_a_dotted_preset_names_env_values_are_secret():
+    from workspace_app.config.dump import is_secret
+
+    assert is_secret("agents.presets.qwen2.5.env.HF_HOME")
+
+
+def test_a_usage_entrys_env_values_stay_plain():
+    # A key cannot sit inside a list, so a secret usage-entry env could be
+    # neither typed nor set as a key — an edit of that list had to drop it
+    # (confirmation-round delta review). It stays plain; known cost in the plan.
+    from workspace_app.config.dump import is_secret
+
+    assert not is_secret("agents.kb_chat[0].env.OLLAMA_NUM_CTX")
+    assert is_secret("agents.presets.qwen2.5.env.HF_HOME")
+
+
+def test_the_dump_masks_a_preset_env_value_whose_name_holds_a_dot(tmp_path):
+    # final review 9: `parts[-2] == "env"` on a re-split path missed `my.secret`.
+    from workspace_app.config.loader import load_with_provenance
+
+    config = tmp_path / "config.yaml"
+    config.write_text(
+        "agents:\n  presets:\n    p:\n      model: openai/x\n"
+        "      env:\n        my.secret: hunter2-value\n",
+        encoding="utf-8",
+    )
+    settings, provenance = load_with_provenance(config_path=config, env={})
+
+    assert "hunter2-value" not in render(settings, provenance, reveal_secrets=False)
+
+
+def test_the_masked_dump_is_yaml_that_can_be_pasted(tmp_path):
+    # M23: `pg_dsn: *** unset ***` unquoted is a YAML alias error — the dump
+    # could not be pasted into the settings page at all.
+    import yaml
+
+    from workspace_app.config.loader import load_with_provenance
+
+    config = tmp_path / "config.yaml"
+    config.write_text("llm:\n  api_key: sk-0000-0000-0000-0001\n", encoding="utf-8")
+    settings, provenance = load_with_provenance(config_path=config, env={})
+
+    tree = yaml.safe_load(render(settings, provenance, reveal_secrets=False))
+
+    assert tree["llm"]["api_key"].startswith("*** set (")
+
+
+def test_the_dump_spells_the_usage_lists_as_config_yaml_does(tmp_path):
+    # M23, found pasting a real dump into the page: the dump wrote the loaded
+    # `agents.sub_agents`, config.yaml and the page write `agents.kb_chat`.
+    import yaml
+
+    from workspace_app.config.loader import load_with_provenance
+
+    config = tmp_path / "config.yaml"
+    config.write_text("server:\n  port: 9090\n", encoding="utf-8")
+    settings, provenance = load_with_provenance(config_path=config, env={})
+
+    agents = yaml.safe_load(render(settings, provenance, reveal_secrets=False))["agents"]
+
+    assert "sub_agents" not in agents
+    assert agents["kb_chat"][0]["preset"]
+
+
+def test_a_usage_list_entry_keeps_its_source(tmp_path: Path):
+    # review 17: the dump spells the usage lists as config.yaml does
+    # (`agents.kb_chat`), but the sources are recorded under the loader's
+    # `agents.sub_agents.kb_chat` — every leaf there read `# ← default`, and a
+    # key set from the environment lost its `via ${…}`.
+    settings, prov = _resolved(
+        tmp_path,
+        """
+        agents:
+          kb_chat:
+            - name: mine
+              model: ollama_chat/qwen3:8b
+              llm: {api_key: "${MY_KEY}"}
+        """,
+        env={"MY_KEY": "sk-abc"},
+    )
+    out = render(settings, prov, reveal_secrets=False)
+
+    assert "name: mine  # ← config.yaml" in out
+    assert 'api_key: "*** set (6 chars) via ${MY_KEY} ***"  # ← env' in out

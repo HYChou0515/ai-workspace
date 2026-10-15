@@ -31,6 +31,9 @@ export const qk = {
   // Who is above the deploy default (superuser only). Separate from
   // `myResources`: it answers a different question, for a different person.
   userOverrides: ["userOverrides"] as const,
+  // docs/plan-model-settings.md: invalidating `modelSettings` clears the history too.
+  modelSettings: ["model-settings"] as const,
+  modelSettingsHistory: ["model-settings", "history"] as const,
 
   investigations: ["investigations"] as const,
   investigation: (id: string) => ["investigation", id] as const,

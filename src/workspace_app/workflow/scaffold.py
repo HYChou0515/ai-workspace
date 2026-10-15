@@ -20,6 +20,8 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
+from .discovery import PLAIN_ID
+
 # The docstring of each generated run.py carries the workflow's id at this token (a plain
 # str.replace, so the template's own ``{...}`` / f-strings are left untouched).
 _ID_TOKEN = "__WF_ID__"
@@ -217,14 +219,17 @@ def scaffold_workflow(
     """Write a ``<recipe>`` workflow into ``apps_dir/<slug>/profiles/<profile>/`` and
     register it in ``_profile.json``. Returns the files written (run.py + _profile.json).
 
-    Refuses (``ValueError``) to: use an unknown recipe; use an empty / ``/``-bearing id;
+    Refuses (``ValueError``) to: use an unknown recipe; use an id that is not a plain
+    name (``discovery.PLAIN_ID`` — boot's rule);
     overwrite an existing workflow of the same id unless ``force``; or target a profile
     that uses the legacy singular ``workflow`` block (adding a ``workflows`` list would
     shadow it — convert that profile first)."""
     if recipe not in RECIPES:
         raise ValueError(f"unknown recipe {recipe!r}; choose one of {sorted(RECIPES)}")
-    if not workflow_id or "/" in workflow_id:
-        raise ValueError(f"workflow id {workflow_id!r} must be non-empty and contain no '/'")
+    if not PLAIN_ID.fullmatch(workflow_id):
+        raise ValueError(
+            f"workflow id {workflow_id!r} must be a plain name (letters, digits, '-' and '_')"
+        )
     spec = RECIPES[recipe]
 
     profile_dir = apps_dir / slug / "profiles" / profile

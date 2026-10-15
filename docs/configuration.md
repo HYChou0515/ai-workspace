@@ -26,6 +26,18 @@
 --config / -c 旗標  >  $WORKSPACE_APP_CONFIG  >  ./config.yaml  >  內建預設（無檔也能跑）
 ```
 
+**第四層：superuser 的「模型設定」頁**（`plan-model-settings.md`）。頁面上套用的改動存在資料庫，
+**蓋在上面三層之上**，只限模型相關的值：`llm`、`agents` 底下全部（preset、`kb_chat` 等用途清單、
+`subagent_models`）、各角色的模型（`kb.retrieval_llm`、`kb.vlm_llm`、`kb.vlm_format_llm`、`kb.deck_vlm`、
+`kb.card_drafter`、`kb.quality_judge`、`kb.wiki.llm`、`health.judge_llm`、`goal.checker`），外加每個 App 的
+`app.json` 與 profile。三件事要知道：
+
+- **頁面改過的值，`config.yaml` 再改不會生效**——頁面贏。要讓 `config.yaml` 回來，到頁面上「重設」那個值、儲存草稿，再套用。
+  「改了沒生效」先看頁面有沒有改過它。
+- 頁面的文字**照字面使用**，不展開 `${ENV_VAR}`（config 部分寫了會被拒絕；App 文字裡的 `${` 就是字）：秘密請用頁面的「API 金鑰」分頁。
+- 套用後一秒內所有行程（API、每個 worker）就改用新值，不用重啟。只在開機時讀的值（其他 key、角色的開／關、
+  `infer_modules` 的跑法旋鈕、App 的 `resources`）頁面不收，照舊改 `config.yaml` 並重啟。
+
 > 範例檔放在 `configs/`，所以正式跑通常是 `uv run python -m workspace_app -c configs/config.yaml`
 > （或設 `WORKSPACE_APP_CONFIG=configs/config.yaml`）。**注意預設只看 `./config.yaml`（當前目錄）**，
 > 不是 `configs/config.yaml`——「改了沒生效」十之八九是讀到別的檔（開機 log 會印出實際讀的路徑）。

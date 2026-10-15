@@ -2860,6 +2860,216 @@ export const messages = {
     en: "No worker is answering ({n} s without a heartbeat): there may be no chat-video worker running. Cancel clears this one.",
   },
   "video.progress.dismiss": { "zh-TW": "關閉", en: "Dismiss" },
+  // docs/plan-model-settings.md P8 — the superuser's model settings page.
+  "modelSettings.title": { "zh-TW": "模型設定", en: "Model settings" },
+  "modelSettings.desc": {
+    "zh-TW":
+      "改 preset、每個 App 的 app.json 與 profile、平台用的模型。編輯器裡是整份設定（部署預設加上你的草稿），直接改要改的值；刪掉的值會回到部署預設（config.yaml、app.json）。先存草稿，按「套用」才生效——所有服務在一秒內改用新設定，不用重啟。",
+    en: "Change presets, each App's app.json and profiles, and the models the platform uses. The editor holds the whole settings — the deploy defaults with your draft over them; change values in place, and anything you delete goes back to the deploy default (config.yaml, app.json). Save a draft; nothing changes until Apply — then every service uses it within a second, with no restart.",
+  },
+  "modelSettings.notAllowed": {
+    "zh-TW": "只有系統管理員能使用模型設定。",
+    en: "Only a superuser can use model settings.",
+  },
+  "modelSettings.loadFailed": { "zh-TW": "讀不到模型設定。", en: "Could not load the model settings." },
+  "modelSettings.tab.edit": { "zh-TW": "編輯", en: "Edit" },
+  "modelSettings.tab.editUnsaved": { "zh-TW": "編輯（未儲存）", en: "Edit (unsaved)" },
+  "modelSettings.tab.history": { "zh-TW": "版本紀錄", en: "History" },
+  "modelSettings.tab.keys": { "zh-TW": "API 金鑰", en: "API keys" },
+  "modelSettings.tabs": { "zh-TW": "模型設定的區塊", en: "Model settings sections" },
+  // The whole settings (M23), not the draft: the draft is only what differs.
+  "modelSettings.editor": { "zh-TW": "設定（YAML）", en: "Settings (YAML)" },
+  "modelSettings.inForce": { "zh-TW": "目前生效：版本 {version}", en: "In force: version {version}" },
+  "modelSettings.inForceNone": {
+    "zh-TW": "目前生效：部署預設（還沒套用過）",
+    en: "In force: the deploy defaults (nothing applied yet)",
+  },
+  "modelSettings.notJson": { "zh-TW": "不是合法的 YAML：{error}", en: "Not valid YAML: {error}" },
+  "modelSettings.notObject": {
+    "zh-TW": "最外層要是「名稱: 值」，不能是一串清單或單一個值",
+    en: "The top level must be “name: value” lines, not a list or a single value",
+  },
+  "modelSettings.checking": { "zh-TW": "檢查中…", en: "Checking…" },
+  "modelSettings.checkFailed": {
+    "zh-TW": "沒辦法檢查這份草稿（{error}）；檢查通過前不能套用。",
+    en: "Could not check this draft ({error}); it cannot be applied until a check passes.",
+  },
+  "modelSettings.saveFailed": { "zh-TW": "草稿沒有存成：{error}", en: "The draft was not saved: {error}" },
+  "modelSettings.noProblems": { "zh-TW": "沒有問題", en: "No problems found" },
+  "modelSettings.nothingToApply": {
+    "zh-TW": "草稿和目前生效的相同，沒有要套用的改動",
+    en: "The draft matches what is in force; nothing to apply",
+  },
+  "modelSettings.readyToApply": {
+    "zh-TW": "可以套用：改變 {values} 個值、{keys} 個金鑰",
+    en: "Ready to apply — values changed: {values}, keys changed: {keys}",
+  },
+  "modelSettings.applyBlockedProblems": {
+    "zh-TW": "先修正上面列出的問題才能套用",
+    en: "Fix the problems listed above to apply",
+  },
+  "modelSettings.keyChangeSet": { "zh-TW": "金鑰設定", en: "Key set" },
+  "modelSettings.keyIsSet": { "zh-TW": "已設定", en: "set" },
+  "modelSettings.goEdit": { "zh-TW": "前往編輯", en: "Go to Edit" },
+  "modelSettings.keysBlockedDirty": {
+    "zh-TW": "編輯分頁有沒儲存的改動：先在那裡儲存或按「放棄改動」，才能套用",
+    en: "The Edit tab has unsaved edits: save them or press \"Discard edits\" there to apply",
+  },
+  "modelSettings.keysBlockedJson": {
+    "zh-TW": "編輯分頁的內容不是合法的 YAML：先在那裡修正或按「放棄改動」，才能套用",
+    en: "The Edit tab's text is not valid YAML: fix it or press \"Discard edits\" there to apply",
+  },
+  "modelSettings.keysBlockedCheck": {
+    "zh-TW": "沒辦法檢查編輯分頁的草稿：檢查通過前不能套用",
+    en: "The draft on the Edit tab could not be checked: it cannot be applied until a check passes",
+  },
+  "modelSettings.applyBlockedCheck": {
+    "zh-TW": "檢查通過前不能套用",
+    en: "It cannot be applied until a check passes",
+  },
+  "modelSettings.keysBlockedProblems": {
+    "zh-TW": "編輯分頁的草稿有問題：先在那裡修正，才能套用",
+    en: "The draft on the Edit tab has problems: fix them there to apply",
+  },
+  "modelSettings.rollbackBlockedDirty": {
+    "zh-TW": "編輯分頁有沒儲存的改動，而回復會換掉草稿：先在那裡按「放棄改動」（存起來也會被換掉）",
+    en: "The Edit tab has unsaved edits and a rollback replaces the draft: press \"Discard edits\" there first (saving them would not keep them either)",
+  },
+  "modelSettings.rolledBack": {
+    "zh-TW": "已回復到版本 {from} 的設定；目前生效：版本 {now}（金鑰維持目前生效的值）",
+    en: "Rolled back to version {from}'s settings; now in force: version {now} (keys as they were in force)",
+  },
+  "modelSettings.keyPendingSet": { "zh-TW": "等待套用", en: "Waiting for Apply" },
+  "modelSettings.keyPendingCleared": { "zh-TW": "已清除，等待套用", en: "Cleared, waiting for Apply" },
+  "modelSettings.keysWaiting": {
+    "zh-TW": "等待套用的金鑰改動：{n}",
+    en: "Key changes waiting for Apply: {n}",
+  },
+  "modelSettings.fixJsonFirst": {
+    "zh-TW": "先修正 YAML 才能儲存或套用",
+    en: "Fix the YAML to save or apply",
+  },
+  "modelSettings.keyChangeCleared": { "zh-TW": "金鑰清除", en: "Key cleared" },
+  "modelSettings.problems": { "zh-TW": "套用前要先修正：", en: "Fix before applying:" },
+  "modelSettings.save": { "zh-TW": "儲存草稿", en: "Save draft" },
+  "modelSettings.discard": { "zh-TW": "放棄改動", en: "Discard edits" },
+  "modelSettings.versionChangesNone": {
+    "zh-TW": "設定值和前一版相同（只換了金鑰，或回復到相同的值）",
+    en: "Same values as the version before (keys changed, or a rollback to the same values)",
+  },
+  "modelSettings.versionChangesNoneFirst": {
+    "zh-TW": "設定值和部署預設相同（只套用了金鑰）",
+    en: "Same values as the deploy defaults (only keys were applied)",
+  },
+  "modelSettings.versionChangesUnknown": {
+    "zh-TW": "前一版不在這份清單裡，無法比較",
+    en: "The version before is not in this list, so it cannot be compared",
+  },
+  "modelSettings.saved": { "zh-TW": "草稿已儲存（還沒生效）", en: "Draft saved (not in force yet)" },
+  "modelSettings.apply": { "zh-TW": "套用…", en: "Apply…" },
+  "modelSettings.saveFirst": {
+    "zh-TW": "有沒儲存的改動：先儲存草稿再套用。",
+    en: "There are unsaved edits: save the draft before applying.",
+  },
+  "modelSettings.applyTitle": { "zh-TW": "套用這些改動？", en: "Apply these changes?" },
+  "modelSettings.applyBody": {
+    "zh-TW": "所有服務在一秒內改用新設定。已經開始的一次模型呼叫用舊設定跑完；之後的每次呼叫都用新的——進行中的聊天回合保留它開始時的模型，但回合裡的重試可能走新的端點。",
+    en: "Every service uses the new settings within a second. A model call already under way finishes on the old settings; every call after it uses the new ones — a chat turn under way keeps the model it started with, but a retry within it may go to the new endpoint.",
+  },
+  "modelSettings.applyConfirm": { "zh-TW": "套用", en: "Apply" },
+  "modelSettings.testRunning": {
+    "zh-TW": "正在測試 {preset}…已等 {s} 秒（慢的模型可能要幾十秒）",
+    en: "Testing {preset}… {s} s so far (a slow model can take tens of seconds)",
+  },
+  "modelSettings.applyFailed": { "zh-TW": "沒有套用：{error}", en: "Not applied: {error}" },
+  "modelSettings.refreshFailed": {
+    "zh-TW": "重新讀取設定失敗；畫面上是上一次讀到的內容。",
+    en: "Could not reload the settings; this is what was last read.",
+  },
+  "modelSettings.cancel": { "zh-TW": "取消", en: "Cancel" },
+  "modelSettings.applied": { "zh-TW": "已套用：版本 {version}", en: "Applied: version {version}" },
+  "modelSettings.added": { "zh-TW": "新增", en: "Added" },
+  "modelSettings.removed": { "zh-TW": "移除", en: "Removed" },
+  "modelSettings.changed": { "zh-TW": "改變", en: "Changed" },
+  "modelSettings.changes": { "zh-TW": "這頁改過的值", en: "Values changed here" },
+  "modelSettings.changesUnknown": {
+    "zh-TW": "先修正 YAML，才看得到這份草稿改了哪些值",
+    en: "Fix the YAML to see which values this draft changes",
+  },
+  "modelSettings.changesNone": {
+    "zh-TW": "草稿沒有改任何值：全部是部署預設。",
+    en: "The draft changes nothing: everything is the deploy default.",
+  },
+  "modelSettings.default": { "zh-TW": "預設：{value}", en: "Default: {value}" },
+  "modelSettings.defaultNone": { "zh-TW": "預設沒有這個值", en: "Not in the defaults" },
+  "modelSettings.reset": { "zh-TW": "重設為預設", en: "Reset to default" },
+  "modelSettings.test": { "zh-TW": "測試連線", en: "Test connection" },
+  "modelSettings.testPreset": { "zh-TW": "要測試的 preset", en: "Preset to test" },
+  "modelSettings.testHint": {
+    "zh-TW": "用已儲存的草稿（含金鑰）對這個 preset 的模型送一次很短的請求，模型一開始回覆就停。不影響套用。",
+    en: "Sends one short request to this preset's model using the saved draft (keys included), and stops as soon as the model starts answering. It never blocks Apply.",
+  },
+  "modelSettings.testOk": {
+    "zh-TW": "連得上 {model}：{s} 秒後開始回覆",
+    en: "{model} started answering after {s} s",
+  },
+  "modelSettings.testFailed": { "zh-TW": "連不上：{error}", en: "Failed: {error}" },
+  "modelSettings.testFailedLead": {
+    "zh-TW": "測試 {preset} 沒有成功：",
+    en: "Testing {preset} did not succeed:",
+  },
+  "modelSettings.restored": {
+    "zh-TW": "這是你上次離開時沒儲存的改動，已經放回來；不要的話按「放棄改動」。",
+    en: "These are the unsaved edits you left behind, put back; press Discard edits if you do not want them.",
+  },
+  "modelSettings.historyEmpty": { "zh-TW": "還沒有套用過任何版本。", en: "Nothing has been applied yet." },
+  "modelSettings.historyRow": { "zh-TW": "{when}・版本 {version}", en: "{when} · version {version}" },
+  "modelSettings.current": { "zh-TW": "目前", en: "Current" },
+  "modelSettings.keysChanged": { "zh-TW": "改了金鑰：{paths}", en: "Keys changed: {paths}" },
+  "modelSettings.rollback": { "zh-TW": "回復到這一版…", en: "Roll back to this…" },
+  "modelSettings.rollbackTitle": { "zh-TW": "回復到版本 {version}？", en: "Roll back to version {version}?" },
+  "modelSettings.rollbackBody": {
+    "zh-TW": "這一版的設定會重新生效，草稿也改成這一版。金鑰維持目前生效的值（歷史不存金鑰）；還沒套用的金鑰改動繼續等下一次套用。",
+    en: "This version's settings take effect again and the draft becomes this version. Keys keep the values in force (history never holds a key); key changes not yet applied keep waiting for the next Apply.",
+  },
+  "modelSettings.rollbackConfirm": { "zh-TW": "回復", en: "Roll back" },
+  "modelSettings.keysDesc": {
+    "zh-TW":
+      "金鑰只寫不讀：存了之後長的只顯示最後四碼、短的只顯示「已設定」，不出現在草稿、差異或歷史裡。改了金鑰要再按一次「套用」才生效。",
+    en: "Keys are write-only: once saved a long one shows only its last four characters and a short one only that it is set — never in the draft, a diff or the history. A changed key takes effect at the next Apply.",
+  },
+  "modelSettings.keyValue": { "zh-TW": "金鑰", en: "Key" },
+  "modelSettings.keySet": { "zh-TW": "設定金鑰", en: "Set key" },
+  "modelSettings.keyClear": { "zh-TW": "清除", en: "Clear" },
+  "modelSettings.keySetOpen": { "zh-TW": "設定…", en: "Set…" },
+  "modelSettings.keyNotSet": { "zh-TW": "未設定", en: "Not set" },
+  "modelSettings.keyNew": { "zh-TW": "新的金鑰", en: "New key" },
+  "modelSettings.slotDefault": { "zh-TW": "預設（llm）", en: "Default (llm)" },
+  "modelSettings.slotApiKey": { "zh-TW": "API 金鑰", en: "API key" },
+  "modelSettings.envNameHint": {
+    "zh-TW": "英文字母、數字和底線，不能以數字開頭",
+    en: "Letters, digits and _, not starting with a digit",
+  },
+  "modelSettings.envNameBad": {
+    "zh-TW": "「{name}」不能當變數名稱：只能有英文字母、數字和底線，不能以數字開頭",
+    en: "“{name}” cannot be a variable name: letters, digits and _ only, not starting with a digit",
+  },
+  "modelSettings.envTitle": {
+    "zh-TW": "加一個環境變數的秘密值",
+    en: "Add a secret environment variable",
+  },
+  "modelSettings.envPreset": { "zh-TW": "Preset", en: "Preset" },
+  "modelSettings.envName": { "zh-TW": "變數名稱", en: "Variable name" },
+  "modelSettings.envAdd": { "zh-TW": "加入", en: "Add" },
+  "modelSettings.keyClearTitle": { "zh-TW": "清除 {path}？", en: "Clear {path}?" },
+  "modelSettings.keyClearBody": {
+    "zh-TW": "清除和設定一樣，下次套用才生效；清掉的金鑰拿不回來。",
+    en: "Clearing takes effect at the next Apply, like setting one; a cleared key cannot be recovered.",
+  },
+  "modelSettings.keyClearUnappliedBody": {
+    "zh-TW": "這把金鑰目前沒有生效，清除會立刻撤回它，正在用的設定不受影響；清掉的金鑰拿不回來。",
+    en: "This key is not in force: clearing withdraws it at once, and the settings in use are unaffected. A cleared key cannot be recovered.",
+  },
 } satisfies Record<string, Entry>;
 
 export type MsgKey = keyof typeof messages;

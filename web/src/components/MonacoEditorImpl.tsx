@@ -9,7 +9,7 @@ import * as monaco from "monaco-editor";
 import editorWorker from "monaco-editor/esm/vs/editor/editor.worker?worker";
 import jsonWorker from "monaco-editor/esm/vs/language/json/json.worker?worker";
 import tsWorker from "monaco-editor/esm/vs/language/typescript/ts.worker?worker";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { useMonacoFontSize } from "../hooks/fontScale";
 import type { MonacoEditorProps } from "./MonacoEditor";
@@ -35,8 +35,29 @@ export default function MonacoEditorImpl({
   autoHeight = false,
   minHeight = 120,
   ariaLabel,
+  markers,
 }: MonacoEditorProps) {
   const [height, setHeight] = useState(minHeight);
+  const [model, setModel] = useState<monaco.editor.ITextModel | null>(null);
+  const owner = useRef(`markers-${Math.random().toString(36).slice(2)}`);
+  useEffect(() => {
+    if (!model || model.isDisposed()) return;
+    const lines = model.getLineCount();
+    monaco.editor.setModelMarkers(
+      model,
+      owner.current,
+      (markers ?? [])
+        .filter((m) => m.line >= 1 && m.line <= lines)
+        .map((m) => ({
+          severity: monaco.MarkerSeverity.Error,
+          message: m.message,
+          startLineNumber: m.line,
+          endLineNumber: m.line,
+          startColumn: model.getLineFirstNonWhitespaceColumn(m.line) || 1,
+          endColumn: model.getLineMaxColumn(m.line),
+        })),
+    );
+  }, [model, markers]);
   const fontSize = useMonacoFontSize(13);
   const dark =
     typeof document !== "undefined" && document.documentElement.dataset.theme === "dark";
@@ -57,6 +78,7 @@ export default function MonacoEditorImpl({
         theme={dark ? "vs-dark" : "vs"}
         onChange={(v) => onChange?.(v ?? "")}
         onMount={(editor) => {
+          setModel(editor.getModel());
           if (!autoHeight) return;
           const apply = () =>
             setHeight(Math.max(minHeight, editor.getContentHeight() + 8));

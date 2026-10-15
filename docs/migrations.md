@@ -2543,6 +2543,65 @@ AI 讀 `wui` skill 時會看到「這個 item 能讓頁面問的 subagent」清�
 **確認做完**(`rollout 後`):請 AI 查一個要搜尋的問題:卡片上搜尋框是空的、上方有 AI 建議的關鍵字;框空著按「查」會提示要先填;
 按「複製建議」、貼進框、再按「查」,搜尋用的就是框裡的字。
 
+### 2026-10-15 · #928 superuser 在網頁上改模型設定：草稿、套用、版本、回復 {#pr-928}
+
+**設定** — 沒有新 key，沒有要做的事。**行為改變，沒有開關**：
+
+- 新增只有 superuser 看得到的「模型設定」頁（`/api/admin/model-settings`，其他人一律 404）。頁面改的是
+  preset、每個 App 的 `app.json`、profile、平台自己的模型選擇（完整清單見 `docs/configuration.md` §1 第四層）；改動存在資料庫，**蓋過** `config.yaml` / `app.json`。
+  沒有人按過「套用」時，每個行程跑的就是 `config.yaml` —— 和這一版之前一模一樣。
+- **頁面改過的值，之後在 `config.yaml` 再改不會生效**（頁面的值贏）；要讓 `config.yaml` 的值回來，在頁面上把那個值
+  「重設」、儲存草稿，再套用。頁面沒碰過的值，`config.yaml` 照舊說了算（照舊要重啟）。
+  為什麼：頁面只存跟預設不同的部分（JSON Merge Patch），預設仍是部署帶的檔案。
+- 套用後，API 與每個 worker 在**一秒內**改用新設定，不用重啟：每個行程每秒最多讀一次「目前版本」（一筆小資料），
+  版本變了才重建；讀不到資料庫或新版本建不起來，就繼續用上一個好的版本並記 log
+  （`model settings: could not read the version` / `does not build`）。已經開始的一次模型呼叫用舊設定跑完；之後的每次呼叫都用新的。一個進行中的 agent 回合（聊天、wiki 維護的一輪）保留它開始時的模型，但回合裡的重試（等 rate limit、修壞掉的 tool call、超出 context 縮短）會重讀端點與備援鏈，所以可能換到新的端點；一個正在跑的 job 下一次呼叫或下一輪就換，所以同一個 job 可能前後用到兩版。
+- 頁面**不收**只在開機時讀的值：其他 config key、角色的開／關（例如把 `health.judge_llm` 從 null 改成某個 preset）、
+  `infer_modules` 的 `enhancements` / `reasoning_effort` / `parallelism` / `collection`、App 的 `resources` / `slug`
+  —— 套用時直接拒絕並說「去改 config.yaml」，不存一個重啟前不生效的值。同樣拒絕：沒有出貨的 App 或 profile
+  （頁面只能改，不能新增；profile 是 App 裡的資料夾）、`apps` / `profiles` 底下的 `null`、config 部分裡的 `${…}`
+  （頁面的文字照字面使用，不讀伺服器的環境變數；App 文字裡的 `${` 就是字）、
+  用途清單（例如 `kb_chat`）裡開機會拒絕的條目，以及會把 `config.yaml` 的金鑰送到別的端點的改動（端點＝模型名稱的提供者、`base_url`、模型名稱裡帶的網址；同一個提供者換模型照常可以；
+  preset、角色、用途條目都算；要換端點，到 API 金鑰分頁替新端點設一把金鑰），
+  以及指向別的檔案的 `prompt_file`（只收 `pkg:…` 或 `config.yaml` 本來就寫過的值——其他路徑會把伺服器上的檔案讀進
+  聊天的 system prompt）。
+- **金鑰保護只認 `config.yaml` 寫出來的金鑰**（`rollout 前` 決定）：preset 沒寫 `api_key`、靠伺服器環境變數
+  （例如 `OPENAI_API_KEY`）的，superuser 在頁面改它的 `base_url` 時，那把環境變數金鑰會跟著送到新位址，頁面擋不住
+  （分不出環境變數裡哪個是金鑰）。要它也受保護：rollout 前在 `config.yaml` 寫明 `llm.api_key: ${OPENAI_API_KEY}`。
+  不做的症狀：沒有——直到有人把這種 preset 指到別的位址。
+- 頁面上設定或清除的 API key **按下套用才生效**：在那之前，連新起來的 pod 也照舊用上一次套用的 key；
+  「回復」只帶回那一版的值，金鑰維持目前生效的，還沒套用的金鑰改動繼續等。
+- **開機時印出的設定（config dump）多遮了一些值**：每個 preset 的 `env` 值、任何大小寫的 `*_token`，以及 `event_bus.url`（amqp 網址裡帶帳密，和早就遮的 `message_queue.rabbitmq.url` 同一類），
+  現在都印成 `"*** set (N chars) ***"`（遮罩加上引號，讓整份 dump 是合法的 YAML，可以直接貼進模型設定頁）；用途清單也改照 `config.yaml` 的寫法印在 `agents.kb_chat` 等底下，不再是 `agents.sub_agents`——在 log 裡找 `sub_agents` 的，改找 `kb_chat`。為什麼：頁面和開機 dump 用同一個判斷哪些是秘密的規則（M7），
+  token 常放在 env 裡、名字又認不出來。症狀：升級後在開機 log 裡找 preset 的 env 值，看到的是遮罩。
+- 診斷頁的模型檢查（`/health/checks`）照舊在開機時建好，套用後要重啟才會檢查新模型；它是診斷，不在對話的路徑上。
+- **`kb.quality_judge` 開始生效**：以前 loader 檢查了這個值卻沒建出來，文件品質評分永遠用 `kb.retrieval_llm`。
+  升級後，`config.yaml` 裡設了 `kb.quality_judge` 的部署，評分改用它指的模型（成本與結果可能跟著變）。
+  沒設的部署不變。不想換：rollout 前把它從 `config.yaml` 拿掉。
+- **workflow id 只能是一般名稱**（英數字、`-`、`_`）：id 就是路徑（`workflows/<id>/run.py`），
+  開機會拒絕其他寫法（例如 `daily.v2`、`../x`），`workflow check` 與 `workflow new` 用同一條規則先擋。
+  出貨的 App 都符合；自己寫的 profile 在 rollout 前跑 `uv run python -m workspace_app.workflow check`，
+  症狀是開機失敗並說 `workflow id '…' must be a plain name`。
+
+**資料** — 新增五個 specstar model（`_SettingsDraft` / `_SettingsVersion` / `_SettingsCurrent` / `_SettingsKey` /
+`_SettingsAppliedKey`），
+在 `spec.apply` 之後註冊（沒有 CRUD 路由）；沒有要回填、沒有要打的 migrate。**頁面上輸入的 API key 以明碼存在資料庫**
+（和既有的 Private 環境變數一樣），只有 superuser 能寫、任何路由都讀不回來，歷史只記「哪個 key 改了」。
+
+**k8s · CI 側** — 沒有新的 manifest、env、probe 或 JobType；照常重 build、照常部署，**API 與所有 worker 一起換**：
+
+- `blob-gc` worker 以 API 的組合建起（`__main__.build_app`），兩邊都註冊這五個 model。滾動更新途中，新的 API
+  問到舊的 `blob-gc` worker 時，worker 會拒絕那一輪（`blob-gc` job FAILED，log 列出這五個 model 名稱）——這是
+  `_check_registry` 該做的事，worker 換完就好；舊的 worker 不會刪任何東西。
+- 還沒換的 worker 不會跟著頁面的套用走（它跑的是開機時的 `config.yaml`）。全部換完之前不要套用。
+
+**確認做完**（`rollout 後`）：
+
+- superuser：`curl -s -o /dev/null -w '%{http_code}' -b '<cookie>' '<網址>/api/admin/model-settings'` 回 200；一般使用者回 404。
+- 在頁面上把一個 KB 聊天用的 preset 換成另一個模型、套用：一秒後
+  `curl -s -b '<cookie>' '<網址>/api/kb/agent'` 的 `model` 欄位是新模型，不用重啟任何 pod
+  （聊天畫面的模型選單只列名稱，不列模型，看不出差別）。再按「回復」到前一版，`model` 回到原本的模型。沒部署到這一版的症狀：`/api/admin/model-settings` 回 404 給 superuser。
+
 ## 附錄 A：資料回填的機制（specstar 為什麼不會自己補）
 
 有些升版會改變「資料在資料庫裡的儲存形狀」，但 **specstar 只在寫入當下**把一列的 `indexed_data`

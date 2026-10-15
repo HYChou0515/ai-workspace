@@ -20,6 +20,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import re
+from collections.abc import Sequence
 from pathlib import Path
 from typing import IO, Any
 
@@ -67,34 +68,63 @@ def emit_config_dump(
     return target
 
 
+def config_tree(settings: Settings) -> dict[str, Any]:
+    """`settings` as config.yaml spells it: the usage lists back under
+    `agents.<purpose>` (the loader packs them into `sub_agents`). The dump and
+    the model settings page both write it this way, so a dump pastes into the
+    page — and back into config.yaml (M23)."""
+    tree = dataclasses.asdict(settings)
+    agents = tree.get("agents") or {}
+    sub_agents = agents.pop("sub_agents", None) or {}
+    agents.update(sub_agents)
+    return tree
+
+
 def render(settings: Settings, provenance: Provenance, *, reveal_secrets: bool) -> str:
     """Annotated YAML for the whole resolved tree. One line per leaf with a
     `# ← <source>` comment; secrets masked unless `reveal_secrets`."""
     lines: list[str] = []
-    _render_node(dataclasses.asdict(settings), "", "", provenance, reveal_secrets, lines)
+    # The sources are recorded where the loader keeps the usage lists
+    # (`agents.sub_agents.kb_chat…`); the tree spells them as config.yaml does
+    # (`agents.kb_chat…`) — so must the lookup (review 17: every usage-list
+    # leaf read `# ← default`).
+    written = {_as_written(path): src for path, src in provenance.items()}
+    _render_node(config_tree(settings), "", (), "", written, reveal_secrets, lines)
     return "\n".join(lines) + "\n"
 
 
 def _render_node(
-    node: Any, path: str, indent: str, prov: Provenance, reveal: bool, lines: list[str]
+    node: Any,
+    path: str,
+    parts: tuple[str | int, ...],
+    indent: str,
+    prov: Provenance,
+    reveal: bool,
+    lines: list[str],
 ) -> None:
     """Emit `node` (always a non-empty dict or list — `render` feeds asdict and
     only recurses on branches). Dict entries render as `key: …`, list entries as
     `- …`."""
     if isinstance(node, dict):
-        entries = [(_join(path, str(k)), v, f"{k}:") for k, v in node.items()]
+        entries = [(_join(path, str(k)), (*parts, str(k)), v, f"{k}:") for k, v in node.items()]
     else:
-        entries = [(f"{path}[{i}]", v, "-") for i, v in enumerate(node)]
-    for child, value, label in entries:
+        entries = [(f"{path}[{i}]", (*parts, i), v, "-") for i, v in enumerate(node)]
+    for child, at, value, label in entries:
         if _is_branch(value):
             lines.append(f"{indent}{label}")
-            _render_node(value, child, indent + "  ", prov, reveal, lines)
+            _render_node(value, child, at, indent + "  ", prov, reveal, lines)
         else:
             src = prov.get(child, _DEFAULT)
-            lines.append(f"{indent}{label} {_value(child, value, src, reveal)}  # ← {src.kind}")
+            lines.append(f"{indent}{label} {_value(at, value, src, reveal)}  # ← {src.kind}")
 
 
 _DEFAULT = Source("default")
+_SUB_AGENTS = "agents.sub_agents."
+
+
+def _as_written(path: str) -> str:
+    """A provenance path as `config_tree` spells it."""
+    return "agents." + path[len(_SUB_AGENTS) :] if path.startswith(_SUB_AGENTS) else path
 
 
 def _is_branch(value: Any) -> bool:
@@ -106,20 +136,51 @@ def _is_branch(value: Any) -> bool:
     return bool(value) and isinstance(value, dict | list | tuple)
 
 
-def _value(path: str, value: Any, src: Source, reveal: bool) -> str:
-    if _is_secret(path) and not reveal:
-        return _mask(value, src)
+def _value(parts: tuple[str | int, ...], value: Any, src: Source, reveal: bool) -> str:
+    if is_secret_at(parts) and not reveal:
+        # Quoted: `*** set ***` bare is a YAML alias, and the dump is pasted
+        # into the model settings page (M23).
+        return json.dumps(_mask(value, src), ensure_ascii=False)
     return _scalar(value)
 
 
-def _is_secret(path: str) -> bool:
-    """Leaves that must be masked on stdout. By leaf name (`api_key`, `pg_dsn`,
-    any `*_token`) plus the rabbitmq URL (may embed amqp credentials).
-    `base_url` is intentionally excluded."""
-    leaf = path.rsplit(".", 1)[-1].split("[", 1)[0]
-    if leaf in ("api_key", "pg_dsn") or leaf.endswith("_token"):
+def is_secret_at(parts: Sequence[str | int]) -> bool:
+    """Whether the setting at `parts` (the walked keys; an int is a list index)
+    must never be shown. The one rule: the boot-time dump and the model
+    settings page both ask it (docs/plan-model-settings.md M7), so they cannot
+    disagree. Walkers pass the keys they walked — a preset name and an env name
+    may both hold a dot, which a joined path cannot say (final review 9).
+
+    By leaf name — `api_key`, `pg_dsn`, any `*_token` in either case (variable
+    names are upper case) — plus the two broker URLs, the message queue's
+    and the event bus's (an amqp URL embeds its credentials), and every value
+    of a preset's `env`, where tokens sit under names nothing can recognise.
+    `base_url` is intentionally excluded. A usage entry's `env`
+    (`agents.kb_chat[0].env`) is not secret BY PLACE: a key cannot sit inside
+    a list, so that left no way to keep it through an edit (known cost, plan);
+    a value whose NAME is a secret's still is."""
+    names = [p for p in parts if isinstance(p, str)]
+    if not names:
+        return False
+    leaf = names[-1]
+    if leaf in ("api_key", "pg_dsn") or leaf.lower().endswith("_token"):
         return True
-    return path.endswith("rabbitmq.url")
+    if len(parts) == 5 and parts[0] == "agents" and parts[1] == "presets" and parts[3] == "env":
+        return True
+    return names[-2:] in (["rabbitmq", "url"], ["event_bus", "url"])
+
+
+def is_secret(path: str) -> bool:
+    """`is_secret_at` for a caller holding only a joined path. A preset's name
+    may hold a dot (`qwen2.5`) and is put back together; an env name with a
+    dot cannot be told from it — walkers use `is_secret_at`."""
+    parts: list[str | int] = []
+    for segment in path.split("."):
+        name, *indexes = segment.split("[")
+        parts += [name, *(int(i.rstrip("]")) for i in indexes)]
+    if parts[:2] == ["agents", "presets"] and len(parts) >= 5 and parts[-2] in ("llm", "env"):
+        parts = [*parts[:2], ".".join(map(str, parts[2:-2])), *parts[-2:]]
+    return is_secret_at(parts)
 
 
 def _mask(value: Any, src: Source) -> str:

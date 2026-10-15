@@ -11,6 +11,7 @@ to a subset (``tools`` ⊆ app.tools, ``presets`` ⊆ app.picker) plus per-profi
 from __future__ import annotations
 
 from importlib import resources
+from typing import Any
 
 import msgspec
 from msgspec import UNSET, Struct, UnsetType, field
@@ -79,14 +80,39 @@ def list_profiles(app_slug: str) -> list[str]:
     return sorted(c.name for c in children if c.is_dir() and c.name not in _NON_PROFILE)
 
 
-def load_profile(app_slug: str, name: str) -> ProfileManifest:
-    """The profile's declared overrides (``_profile.json``), or all-defaults
-    (inherit the App ceiling) when it ships none."""
+def read_profile_raw(app_slug: str, name: str) -> dict[str, Any]:
+    """The profile's ``_profile.json`` as shipped, untyped — ``{}`` when it ships
+    none. What the settings page's patch is applied to."""
     try:
         raw = (_profiles_root(app_slug) / name / _PROFILE_FILE).read_bytes()
     except (FileNotFoundError, IsADirectoryError, NotADirectoryError, OSError):
-        return ProfileManifest()
-    return msgspec.json.decode(raw, type=ProfileManifest)
+        return {}
+    return msgspec.json.decode(raw)
+
+
+def load_profile(app_slug: str, name: str) -> ProfileManifest:
+    """The profile's declared overrides (``_profile.json``), or all-defaults
+    (inherit the App ceiling) when it ships none — with the settings page's
+    published patch over it, when the process has one (``apps/overlay.py``)."""
+    from . import overlay
+
+    published = overlay.current()
+    if published is None:
+        return patched_profile(app_slug, name, {})
+    version, document = published
+    return overlay.memoised(
+        ("profile", app_slug, name), version, lambda: patched_profile(app_slug, name, document)
+    )
+
+
+def patched_profile(app_slug: str, name: str, document: dict[str, Any]) -> ProfileManifest:
+    """The shipped _profile.json with `document`'s `profiles.<slug>.<name>`
+    merge patch over it — the one place that is done (see `patched_app`)."""
+    from ..config.merge import apply_merge_patch
+
+    raw = read_profile_raw(app_slug, name)
+    patch = ((document.get("profiles") or {}).get(app_slug) or {}).get(name)
+    return msgspec.convert(apply_merge_patch(raw, patch) if patch else raw, type=ProfileManifest)
 
 
 def load_workflow_manifest(app_slug: str, name: str) -> WorkflowManifest | None:
