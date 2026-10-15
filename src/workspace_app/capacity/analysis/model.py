@@ -567,7 +567,10 @@ class Analysis:
                 continue
             mine = line.per_user[row].astype(np.float64)
             totals = line.per_user.sum(axis=1, dtype=np.float64)
-            rank = float((totals < totals[row]).sum() / max(1, len(totals) - 1))
+            # ranked among people: the unknown and system rows are not people
+            people = np.array([u not in NOT_PEOPLE for u in self.people.users])
+            ranked = totals[people]
+            rank = float((ranked < totals[row]).sum() / max(1, len(ranked) - 1))
             lines.append(
                 {
                     "id": line.id,

@@ -406,3 +406,31 @@ def test_the_headroom_says_how_many_days_it_sized_on():
 
     workdays = [d for d in s["period"]["full_days"] if d in s["period"]["workdays"]]
     assert s["headroom"]["days"] == len(workdays)
+
+
+def test_a_persons_rank_is_among_people_not_the_unknown_and_system_rows():
+    """ "Uses more than x% of people": the system row is not a person, so it is
+    no part of anyone's rank."""
+    w = _world()
+
+    class OneIsSystem(WorldRecords):
+        def _kinds(self):  # noqa: ANN202
+            return {
+                k: [
+                    (at, {**u, "user": "system"} if u.get("user") == "user00" else u) for at, u in v
+                ]
+                for k, v in super()._kinds().items()
+            }
+
+    sources = CapacitySources(OneIsSystem(w), WorldPods(w), WorldGpus(w), WorldLlm(w))
+    a = analyse(
+        observe(sources, Period(w.start_ms, w.end_ms, w.step_s, ZoneInfo(w.tz))), now_ms=w.end_ms
+    )
+    line = a.by_id["sandbox-host.cpu"]
+    people = [u for u in a.people.users if u not in ("unknown", "system", "")]
+    totals = {u: float(line.per_user[a.people.users.index(u)].sum()) for u in people}
+
+    for u in people:
+        (mine,) = [x for x in a.person(u)["lines"] if x["id"] == "sandbox-host.cpu"]
+        below = sum(1 for v in totals.values() if v < totals[u])
+        assert mine["rank"] == pytest.approx(below / (len(people) - 1)), u
