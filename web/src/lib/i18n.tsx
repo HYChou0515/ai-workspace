@@ -3098,6 +3098,15 @@ export const messages = {
   },
   "capacity.loadFailed": { "zh-TW": "讀不到容量資料：{error}", en: "Could not load capacity data: {error}" },
 
+  "capacity.sep.list": { "zh-TW": "、", en: ", " },
+  "capacity.ready.source_error": {
+    "zh-TW": "讀不到資料來源：{sources}（{error}）。請檢查它的設定或連線。",
+    en: "Could not read {sources} ({error}). Check its settings or connection.",
+  },
+  "capacity.ready.period_too_short": {
+    "zh-TW": "這裡需要至少 {need} 天，這段期間只有 {have} 天：請改看 {suggest} 天。",
+    en: "This needs at least {need} days and this period holds {have}: pick the {suggest}-day period.",
+  },
   "capacity.ready.source_missing": {
     "zh-TW": "還沒接上資料來源：{sources}。接上之後這裡就會出現。",
     en: "Not connected yet: {sources}. This appears once they are.",
@@ -3129,6 +3138,8 @@ export const messages = {
   "capacity.component.sandbox-host": { "zh-TW": "沙盒", en: "Sandboxes" },
   "capacity.component.filestore": { "zh-TW": "檔案儲存", en: "File storage" },
   "capacity.component.gpu": { "zh-TW": "GPU", en: "GPU" },
+  "capacity.component.scratch": { "zh-TW": "沙盒暫存", en: "Sandbox scratch" },
+  "capacity.component.withJob": { "zh-TW": "{component}（{job}）", en: "{component} ({job})" },
   "capacity.resource.cpu": { "zh-TW": "CPU", en: "CPU" },
   "capacity.resource.memory": { "zh-TW": "記憶體", en: "memory" },
   "capacity.resource.disk": { "zh-TW": "磁碟", en: "disk" },
@@ -3154,8 +3165,16 @@ export const messages = {
     en: "No headroom yet: no line has a known capacity.",
   },
   "capacity.headline.basis": {
-    "zh-TW": "依據：最近 {days} 天、95% 的日子都放得下（p95）。",
-    en: "Based on the last {days} days, fitting on 95% of days (p95).",
+    "zh-TW": "依據：{days} 個有紀錄的工作天，95% 的日子都放得下（p95）。",
+    en: "Based on {days} recorded workdays, fitting on 95% of days (p95).",
+  },
+  "capacity.people.incomplete": {
+    "zh-TW": "開始記錄才 {days} 天：「最近 30 天用過的人」要記滿 30 天才完整，在那之前人數會偏少，試算也一樣。",
+    en: "Records began {days} days ago: \"used in the last 30 days\" is whole only after 30 recorded days; until then the count, and the what-if, read low.",
+  },
+  "capacity.sandbox.unmeasured": {
+    "zh-TW": "這種沙盒沒有各自的 cgroup，量不到每個沙盒的用量：沙盒的 CPU 和記憶體算在 API 裡。",
+    en: "These sandboxes have no cgroup each, so their use is not measured one by one: their CPU and memory count as the API's.",
   },
   "capacity.col.line": { "zh-TW": "元件與資源", en: "Component and resource" },
   "capacity.col.peak": { "zh-TW": "尖峰用量", en: "Peak use" },
@@ -3164,7 +3183,8 @@ export const messages = {
   "capacity.col.utilization": { "zh-TW": "尖峰使用率", en: "Peak utilisation" },
   "capacity.col.people": { "zh-TW": "能撐幾人", en: "Holds" },
   "capacity.threshold.knee": { "zh-TW": "量到的轉折點", en: "measured knee" },
-  "capacity.threshold.default": {
+  "capacity.threshold.default": { "zh-TW": "預設值", en: "default" },
+  "capacity.threshold.defaultUnseen": {
     "zh-TW": "預設值（尚未觀察到變慢）",
     en: "default (no slow-down seen yet)",
   },
@@ -3184,6 +3204,7 @@ export const messages = {
   "capacity.alloc.fixed.proportional": { "zh-TW": "依用量分攤", en: "By use" },
   "capacity.alloc.fixed.even": { "zh-TW": "平均分攤", en: "Evenly" },
   "capacity.alloc.use": { "zh-TW": "用量", en: "Use" },
+  "capacity.alloc.carried": { "zh-TW": "分到的基本開銷", en: "Fixed overhead carried" },
   "capacity.alloc.share": { "zh-TW": "占比", en: "Share" },
   "capacity.alloc.peakNote": {
     "zh-TW": "尖峰時段＝這一項最忙的 5% 時段；買機器看的是它。",
@@ -3194,6 +3215,10 @@ export const messages = {
   "capacity.row.other": { "zh-TW": "其他系統", en: "Other systems" },
   "capacity.row.unknown": { "zh-TW": "認不出是誰", en: "Unidentified" },
   "capacity.row.system": { "zh-TW": "系統工作", en: "System work" },
+  "capacity.row.restOfPeople": {
+    "zh-TW": "其他 {n} 位活躍的人（這一項沒有用量）",
+    en: "{n} other active people (no use of this)",
+  },
   "capacity.purpose.requests": { "zh-TW": "一般操作", en: "Requests" },
   "capacity.purpose.streams": { "zh-TW": "即時連線", en: "Live streams" },
   "capacity.purpose.sandbox": { "zh-TW": "沙盒", en: "Sandbox" },
@@ -3201,12 +3226,23 @@ export const messages = {
   "capacity.purpose.kb": { "zh-TW": "知識庫", en: "Knowledge base" },
   "capacity.purpose.chat": { "zh-TW": "對話", en: "Chat" },
   "capacity.purpose.workflow": { "zh-TW": "Workflow", en: "Workflow" },
+  "capacity.purpose.request": { "zh-TW": "一般操作", en: "Requests" },
+  "capacity.purpose.index": { "zh-TW": "文件索引", en: "Indexing" },
+  "capacity.purpose.wiki": { "zh-TW": "Wiki 整理", en: "Wiki" },
+  "capacity.purpose.card-gen": { "zh-TW": "產生知識卡", en: "Knowledge cards" },
+  "capacity.purpose.kb-import": { "zh-TW": "知識庫匯入", en: "KB import" },
+  "capacity.purpose.sanity": { "zh-TW": "健康檢查", en: "Health checks" },
+  "capacity.purpose.eval": { "zh-TW": "評測", en: "Evaluation" },
+  "capacity.purpose.graph": { "zh-TW": "知識圖譜", en: "Knowledge graph" },
+  "capacity.purpose.blob-gc": { "zh-TW": "儲存清理", en: "Storage cleanup" },
+  "capacity.purpose.chat-video": { "zh-TW": "對話影片", en: "Chat video" },
+  "capacity.purpose.other": { "zh-TW": "其他", en: "Other" },
   "capacity.person.title": { "zh-TW": "{user} 的用量", en: "{user}'s use" },
   "capacity.person.rank": {
     "zh-TW": "比 {pct} 的人用得多",
     en: "Uses more than {pct} of people",
   },
-  "capacity.person.apps": { "zh-TW": "用在哪些 App", en: "Apps used" },
+  "capacity.person.apps": { "zh-TW": "用在哪些 App：{apps}", en: "Apps used: {apps}" },
   "capacity.person.items": { "zh-TW": "用在哪些 item", en: "Items" },
   "capacity.person.sandbox": { "zh-TW": "沙盒 CPU 秒數", en: "Sandbox CPU seconds" },
   "capacity.person.disk": { "zh-TW": "磁碟", en: "Disk" },
@@ -3249,6 +3285,11 @@ export const messages = {
   "capacity.whatif.yes": { "zh-TW": "放得下", en: "Fits" },
   "capacity.whatif.no": { "zh-TW": "不夠", en: "Short" },
   "capacity.whatif.machinesValue": { "zh-TW": "{n} 台（現在 {now}）", en: "{n} (now {now})" },
+  "capacity.whatif.cardsValue": { "zh-TW": "{n} 張（現在 {now}）", en: "{n} cards (now {now})" },
+  "capacity.whatif.capped": {
+    "zh-TW": "{asked} 人超出試算的範圍：試算最多看到現在人數的 20 倍，這裡算的是 {n} 人。",
+    en: "{asked} is beyond the what-if's reach — it looks at most 20× today's people; this is for {n}.",
+  },
   "capacity.whatif.advisory": {
     "zh-TW": "回測誤差 {mape}，超過 {ok}：以下的數字僅供參考。",
     en: "Backtest error {mape} exceeds {ok}: treat these numbers as indicative only.",
@@ -3256,9 +3297,15 @@ export const messages = {
   "capacity.runway.title": { "zh-TW": "什麼時候會不夠", en: "When it runs short" },
   "capacity.runway.lead": { "zh-TW": "採購需要幾天", en: "Purchase lead time (days)" },
   "capacity.runway.date": {
-    "zh-TW": "照最近的成長（每天 {slope} 人），大約 {date} 會到 {n} 人，就是能撐的上限。最晚 {order} 要下單。",
-    en: "At recent growth ({slope} people a day), about {date} reaches {n} people — the limit. Order by {order}.",
+    "zh-TW": "照最近的成長（每天 {slope} 人），大約 {date}（80% 落在 {early}～{late}）會到 {n} 人，就是能撐的上限。最晚 {order} 要下單。",
+    en: "At recent growth ({slope} people a day), about {date} (80%: {early}–{late}) reaches {n} people — the limit. Order by {order}.",
   },
+  "capacity.runway.beyond": {
+    "zh-TW": "照最近的成長（每天 {slope} 人），至少到 {date} 都撐得住：試算最多看到 {n} 人，還沒看到上限。",
+    en: "At recent growth ({slope} people a day), it holds at least until {date}: the what-if looks up to {n} people and saw no limit.",
+  },
+  "capacity.runway.trend": { "zh-TW": "趨勢", en: "Trend" },
+  "capacity.runway.band": { "zh-TW": "80% 範圍", en: "80% band" },
   "capacity.runway.flat": {
     "zh-TW": "活躍人數沒有在成長；照這個速度，人數不會撞到上限。",
     en: "Active people are not growing; at this pace the limit is never reached.",
@@ -3270,6 +3317,10 @@ export const messages = {
   "capacity.runway.disk": {
     "zh-TW": "{line} 每天增加 {rate}，大約 {date} 會到安全門檻（{limit}）。",
     en: "{line} grows {rate} a day and reaches its safe threshold ({limit}) about {date}.",
+  },
+  "capacity.runway.diskPerPerson": {
+    "zh-TW": "每多一個人，每月多 {size}。",
+    en: "Each more person adds {size} a month.",
   },
   "capacity.runway.diskFlat": {
     "zh-TW": "{line} 沒有在增加。",
@@ -3296,6 +3347,20 @@ export const messages = {
     "zh-TW": "背景工作排隊時間（p95） vs 背景工作 CPU 使用率",
     en: "Background job queue wait (p95) vs worker CPU",
   },
+  "capacity.pair.bModel": {
+    "zh-TW": "送出到 AI 開始回覆（p95） vs 同時處理的請求（{model}）",
+    en: "Send to first reply (p95) vs requests in flight ({model})",
+  },
+  "capacity.pair.eJob": {
+    "zh-TW": "背景工作排隊時間（p95） vs 背景工作 CPU 使用率（{job}）",
+    en: "Background job queue wait (p95) vs worker CPU ({job})",
+  },
+  "capacity.pair.noPsi": {
+    "zh-TW": "這個核心沒有提供 CPU 壓力（PSI），看不到沙盒在等機器；圖上只有沙盒被自己的上限卡住的時間。",
+    en: "This kernel offers no CPU pressure (PSI), so sandboxes waiting for the machine cannot be seen; the chart shows only time held at their own limit.",
+  },
+  "capacity.pair.d.waited": { "zh-TW": "等機器", en: "Waiting for the machine" },
+  "capacity.pair.d.held": { "zh-TW": "被自己的上限卡住", en: "Held at its own limit" },
   "capacity.pair.gpu": {
     "zh-TW": "AI 第一個字的等待（p95） vs 同時處理的請求（{model}）",
     en: "Time to first token (p95) vs requests in flight ({model})",
@@ -3304,6 +3369,10 @@ export const messages = {
   "capacity.knee.at": {
     "zh-TW": "超過 {at} 就明顯變慢，這就是{line}的安全門檻。",
     en: "Past {at} it slows down markedly — {line}'s safe threshold.",
+  },
+  "capacity.knee.atCapacity": {
+    "zh-TW": "超過 {at} 就明顯變慢，這就是{line}的容量。",
+    en: "Past {at} it slows down markedly — {line}'s capacity.",
   },
   "capacity.knee.atShown": {
     "zh-TW": "超過 {at} 就明顯變慢。",
@@ -3328,18 +3397,47 @@ export const messages = {
     en: "Above {ok}: the what-if and runway are indicative only.",
   },
   "capacity.conf.noBacktest": {
-    "zh-TW": "回測要 21 天以上的資料。",
-    en: "A backtest needs at least 21 days of data.",
+    "zh-TW": "還沒有足夠的日子可以回測。",
+    en: "There are not enough days to backtest yet.",
   },
   "capacity.conf.fit": {
-    "zh-TW": "{line}：這個估計解釋了 {r2} 的變化；用前面的日子預測後面幾天，誤差 {mape}。",
-    en: "{line}: this estimate explains {r2} of the variation; predicting later days from earlier ones is off by {mape}.",
+    "zh-TW": "{line}：這個估計解釋了 {r2} 的變化；用之前的日子預測最後 {days} 天，誤差 {mape}。",
+    en: "{line}: this estimate explains {r2} of the variation; predicting the last {days} days from the ones before is off by {mape}.",
   },
+  "capacity.column.request": { "zh-TW": "{method} …/{path}", en: "{method} …/{path}" },
+  "capacity.column.otherRequests": { "zh-TW": "其他 {method} 請求", en: "Other {method} requests" },
+  "capacity.column.turnEvents": { "zh-TW": "{surface}的回覆事件", en: "{surface} reply events" },
+  "capacity.column.turns": { "zh-TW": "進行中的{surface}", en: "{surface} in progress" },
+  "capacity.column.jobs": { "zh-TW": "{job}工作", en: "{job} jobs" },
   "capacity.conf.collinear": {
     "zh-TW": "{a} 和 {b} 總是一起出現，分不開各自的成本（兩者合計仍準）。",
     en: "{a} and {b} always come together; their separate costs cannot be told apart (their sum is still right).",
   },
   "capacity.conf.coverage": { "zh-TW": "資料覆蓋率：{source} {pct}", en: "Coverage: {source} {pct}" },
+  "capacity.conf.coverage.usage_records": {
+    "zh-TW": "有活動的時段：{pct}（平台只在有人用時寫紀錄，夜裡本來就少）。",
+    en: "Slots with activity: {pct} (the platform writes records only when something happens; nights are low by nature).",
+  },
+  "capacity.conf.coverage.resource_metrics": {
+    "zh-TW": "pod 與機器用量有樣本的時段：{pct}。",
+    en: "Slots with pod and machine samples: {pct}.",
+  },
+  "capacity.conf.coverage.gpu_metrics": {
+    "zh-TW": "GPU 用量有樣本的時段：{pct}。",
+    en: "Slots with GPU samples: {pct}.",
+  },
+  "capacity.conf.coverage.llm_requests": {
+    "zh-TW": "有 LiteLLM 請求的時段：{pct}。",
+    en: "Slots with LiteLLM requests: {pct}.",
+  },
+  "capacity.conf.gap": {
+    "zh-TW": "{source}：{start}～{end} 沒有資料。",
+    en: "{source}: no data from {start} to {end}.",
+  },
+  "capacity.conf.system": {
+    "zh-TW": "{pct} 的請求是系統工作，算在「系統工作」那一列。",
+    en: "{pct} of requests are system work; they are the 'System work' row.",
+  },
   "capacity.conf.unknown": {
     "zh-TW": "{pct} 的請求認不出是誰，算在「認不出是誰」那一列。",
     en: "{pct} of requests could not be attributed; they are the 'Unidentified' row.",

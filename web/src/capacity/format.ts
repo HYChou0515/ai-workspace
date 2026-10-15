@@ -48,9 +48,18 @@ function named(t: T, prefix: string, key: string): string {
   return isMsgKey(id) ? t(id) : key;
 }
 
-/** "API CPU", "沙盒 記憶體", "GPU qwen3". */
-export function lineLabel(t: T, line: Pick<Line, "component" | "resource" | "model">): string {
-  const component = named(t, "capacity.component", line.component);
+/** Items in the language's list form ("a、b" / "a, b"). */
+export function list(t: T, items: string[]): string {
+  return items.join(t("capacity.sep.list"));
+}
+
+/** "API CPU", "沙盒 記憶體", "GPU qwen3", "背景工作（索引） CPU". */
+export function lineLabel(
+  t: T,
+  line: Pick<Line, "component" | "resource" | "model"> & { job?: string },
+): string {
+  let component = named(t, "capacity.component", line.component);
+  if (line.job) component = t("capacity.component.withJob", { component, job: purposeLabel(t, line.job) });
   if (line.component === "gpu") {
     const base = line.model ? `${component} ${line.model}` : component;
     return line.resource === "memory" ? `${base} ${named(t, "capacity.resource", "memory")}` : base;

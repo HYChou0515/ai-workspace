@@ -51,7 +51,7 @@ export function CapacityPage({ client = capacityApi }: { client?: CapacityClient
   const refresh = useMutation({
     meta: { silentError: true },
     mutationFn: () => client.refresh(days),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["capacity", days] }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: qk.capacity(days) }),
   });
 
   if (ready && !isSuperuser) {

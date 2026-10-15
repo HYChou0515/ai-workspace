@@ -3,22 +3,24 @@
  * each resource, where; one person's detail; how different people are.
  *
  * Fixed overhead is a toggle, as Kubecost and OpenCost draw it: its own row
- * (the default), spread by use, or spread evenly — the same numbers three ways.
- * "Peak hours" is each line's busiest 5% of slots (E8): what machines are
- * bought for.
+ * (the default), spread by use, or spread evenly over the people active in the
+ * last 30 days (§9.4) — the same whole three ways; each bar stacks a group's
+ * own use and the overhead it carries. "Peak hours" is each line's busiest 5%
+ * of slots (E8): what machines are bought for.
  */
 import { useQuery } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 
 import { qk } from "../../api/queryKeys";
 import { useUsers } from "../../hooks/useUsers";
-import type { CapacityClient, CapacityDays, CapacitySummary, Line } from "../api";
+import type { CapacityClient, CapacityDays, CapacitySummary, Line, Unit } from "../api";
 import { Chart } from "../Chart";
 import type { ChartOption } from "../echarts";
 import {
   dayLabel,
   formatValue,
   lineLabel,
+  list,
   NOT_PEOPLE,
   pct,
   personLabel,
@@ -31,9 +33,24 @@ export type GroupBy = "person" | "component" | "app" | "purpose";
 export type Stat = "avg" | "peak";
 export type FixedMode = "separate" | "proportional" | "even";
 
-export type Row = { key: string; label: string; value: number; kind: "group" | "fixed" | "residual" | "other" };
+/** `value` = `own` + `carried`: a group's own use and the fixed overhead it carries. */
+export type Row = {
+  key: string;
+  label: string;
+  value: number;
+  own: number;
+  carried: number;
+  kind: "group" | "fixed" | "residual" | "other";
+};
 
-/** The table for one line, grouping, statistic and fixed-overhead mode. */
+/** Whether `mode` applies to `by`: evenly is per person (§9.4), and an App or
+ * a purpose is not a head to count. */
+export function modeApplies(by: GroupBy, mode: FixedMode): boolean {
+  return by !== "component" && (mode !== "even" || by === "person");
+}
+
+/** The table for one line, grouping, statistic and fixed-overhead mode. Every
+ * mode adds up to the same whole. */
 export function allocationRows(
   t: T,
   summary: CapacitySummary,
@@ -43,33 +60,45 @@ export function allocationRows(
   mode: FixedMode,
   name: (id: string) => string,
 ): Row[] {
+  const row = (key: string, label: string, own: number, kind: Row["kind"], carried = 0): Row => ({
+    key,
+    label,
+    own,
+    carried,
+    value: own + carried,
+    kind,
+  });
   if (by === "component") {
     return summary.lines
       .filter((l) => l.resource === line.resource && l.unit === line.unit && l.total !== null)
-      .map((l) => ({ key: l.id, label: lineLabel(t, l), value: l.total?.[stat] ?? 0, kind: "group" as const }))
+      .map((l) => row(l.id, lineLabel(t, l), l.total?.[stat] ?? 0, "group"))
       .sort((a, b) => b.value - a.value);
   }
-  const groups = line.groups[by];
   const label = (key: string) =>
     by === "person" ? personLabel(t, key, name) : by === "purpose" ? purposeLabel(t, key) : key;
-  let rows: Row[] = groups.map((g) => ({ key: g.key, label: label(g.key), value: g[stat], kind: "group" }));
+  let rows: Row[] = line.groups[by].map((g) => row(g.key, label(g.key), g[stat], "group"));
   const fixed = line.fixed?.[stat] ?? 0;
-  if (mode === "separate" || fixed === 0) {
-    if (fixed) rows.push({ key: "__fixed", label: t("capacity.row.fixed"), value: fixed, kind: "fixed" });
-  } else if (mode === "proportional") {
-    const whole = rows.reduce((sum, r) => sum + r.value, 0);
-    rows = rows.map((r) => ({ ...r, value: whole ? r.value + (fixed * r.value) / whole : r.value }));
-  } else {
-    const shares = rows.filter((r) => by !== "person" || !NOT_PEOPLE.has(r.key));
-    const each = shares.length ? fixed / shares.length : 0;
-    rows = rows.map((r) => (shares.includes(r) ? { ...r, value: r.value + each } : r));
+  const spread = modeApplies(by, mode) ? mode : "separate";
+  const whole = rows.reduce((sum, r) => sum + r.own, 0);
+  if (fixed && spread === "proportional" && whole) {
+    rows = rows.map((r) => row(r.key, r.label, r.own, r.kind, (fixed * r.own) / whole));
+  } else if (fixed && spread === "even") {
+    // over the people active in the last 30 days: those with no use of this
+    // line carry their part too, in a row of their own
+    const people = rows.filter((r) => !NOT_PEOPLE.has(r.key));
+    const heads = Math.max(summary.people.n_now, people.length);
+    const each = heads ? fixed / heads : 0;
+    rows = rows.map((r) => (people.includes(r) ? row(r.key, r.label, r.own, r.kind, each) : r));
+    const rest = heads - people.length;
+    if (rest > 0) rows.push(row("__rest", t("capacity.row.restOfPeople", { n: rest }), 0, "fixed", each * rest));
+    if (!heads) rows.push(row("__fixed", t("capacity.row.fixed"), fixed, "fixed"));
+  } else if (fixed) {
+    rows.push(row("__fixed", t("capacity.row.fixed"), fixed, "fixed"));
   }
   const other = line.other?.[stat] ?? 0;
-  if (other) rows.push({ key: "__other", label: t("capacity.row.other"), value: other, kind: "other" });
+  if (other) rows.push(row("__other", t("capacity.row.other"), other, "other"));
   const residual = line.residual?.[stat] ?? 0;
-  if (Math.abs(residual) > 1e-9) {
-    rows.push({ key: "__residual", label: t("capacity.row.residual"), value: residual, kind: "residual" });
-  }
+  if (Math.abs(residual) > 1e-9) rows.push(row("__residual", t("capacity.row.residual"), residual, "residual"));
   return rows.sort((a, b) => (a.kind === "group") === (b.kind === "group") ? b.value - a.value : a.kind === "group" ? -1 : 1);
 }
 
@@ -131,7 +160,9 @@ export function Allocation({
     [t, summary, line, by, stat, mode, users],
   );
   const total = rows.reduce((sum, r) => sum + r.value, 0);
-  const option = useMemo<ChartOption>(() => barChart(rows.slice(0, 15), line?.unit === "bytes"), [rows, line]);
+  const option = useMemo<ChartOption>(() => barChart(t, rows.slice(0, 15), line?.unit === "bytes"), [t, rows, line]);
+  // a split by regression is shown once three days of both sources fit it (§9.10)
+  const splitting = line?.method === "regression" && !summary.readiness.regression.ready;
 
   return (
     <section className="capacity-view" data-testid="capacity-allocation">
@@ -179,14 +210,14 @@ export function Allocation({
               options={(["separate", "proportional", "even"] as const).map((v) => ({
                 value: v,
                 label: t(`capacity.alloc.fixed.${v}`),
-                disabled: by === "component",
+                disabled: !modeApplies(by, v),
               }))}
             />
           </div>
           {stat === "peak" && <p className="capacity-note">{t("capacity.alloc.peakNote")}</p>}
-          <Chart option={option} label={lineLabel(t, line)} height={Math.max(160, 26 * Math.min(rows.length, 15) + 50)} testId="capacity-alloc-chart" />
-          <div className="capacity-scroll">
-            <table className="capacity-table" data-testid="capacity-alloc-table">
+          {splitting && <NotReady readiness={summary.readiness.regression} t={t} />}
+          {!splitting && <Chart option={option} label={lineLabel(t, line)} height={Math.max(160, 26 * Math.min(rows.length, 15) + 50)} testId="capacity-alloc-chart" />}
+          {!splitting && <div className="capacity-scroll">            <table className="capacity-table" data-testid="capacity-alloc-table">
               <thead>
                 <tr>
                   <th scope="col">{t(`capacity.alloc.by.${by}`)}</th>
@@ -212,7 +243,7 @@ export function Allocation({
                 ))}
               </tbody>
             </table>
-          </div>
+          </div>}
           {person && (
             <PersonDetail
               user={person}
@@ -231,23 +262,31 @@ export function Allocation({
   );
 }
 
-function barChart(rows: Row[], isBytes: boolean): ChartOption {
+/** One bar per row, stacked: its own use, and the fixed overhead it carries. */
+function barChart(t: T, rows: Row[], isBytes: boolean): ChartOption {
+  const carrying = rows.some((r) => r.carried > 0);
+  const own = {
+    type: "bar" as const,
+    name: t("capacity.alloc.use"),
+    stack: "row",
+    data: rows.map((r) => ({ value: r.own, itemStyle: r.kind === "group" ? undefined : { opacity: 0.45 } })),
+    barMaxWidth: 14,
+  };
+  const carried = {
+    type: "bar" as const,
+    name: t("capacity.alloc.carried"),
+    stack: "row",
+    data: rows.map((r) => ({ value: r.carried, itemStyle: { opacity: 0.45 } })),
+    barMaxWidth: 14,
+  };
   return {
     animation: false,
-    grid: { left: 8, right: 24, top: 8, bottom: 24, containLabel: true },
+    grid: { left: 8, right: 24, top: carrying ? 28 : 8, bottom: 24, containLabel: true },
+    legend: carrying ? { top: 0 } : undefined,
     tooltip: { trigger: "axis" },
     xAxis: { type: "value", axisLabel: isBytes ? { formatter: (v: number) => `${(v / 1024 ** 3).toFixed(1)}G` } : {} },
     yAxis: { type: "category", data: rows.map((r) => r.label), inverse: true },
-    series: [
-      {
-        type: "bar",
-        data: rows.map((r) => ({
-          value: r.value,
-          itemStyle: r.kind === "group" ? undefined : { opacity: 0.45 },
-        })),
-        barMaxWidth: 14,
-      },
-    ],
+    series: carrying ? [own, carried] : [own],
   };
 }
 
@@ -273,23 +312,30 @@ function PersonDetail({
     queryKey: qk.capacityPerson(user, days),
     queryFn: () => client.person(user, days),
   });
-  const option = useMemo<ChartOption | null>(() => {
-    if (!data) return null;
-    const shown = data.lines.filter((l) => l.unit === "cores");
-    return {
-      animation: false,
-      grid: { left: 8, right: 16, top: 28, bottom: 24, containLabel: true },
-      legend: { top: 0 },
-      tooltip: { trigger: "axis" },
-      xAxis: { type: "category", data: summary.period.days.map(dayLabel) },
-      yAxis: { type: "value" },
-      series: shown.map((l) => ({
-        type: "line",
-        name: lineLabel(t, summary.lines.find((x) => x.id === l.id) ?? { component: l.id, resource: "", model: "" }),
-        data: l.daily_peak,
-        showSymbol: false,
-      })),
-    };
+  // one chart per unit: cores, bytes and requests in flight share no axis
+  const charts = useMemo<{ unit: Unit; option: ChartOption }[]>(() => {
+    if (!data) return [];
+    const units: Unit[] = ["cores", "bytes", "inflight"];
+    return units
+      .map((unit) => ({ unit, shown: data.lines.filter((l) => l.unit === unit) }))
+      .filter(({ shown }) => shown.length > 0)
+      .map(({ unit, shown }) => ({
+        unit,
+        option: {
+          animation: false,
+          grid: { left: 8, right: 16, top: 28, bottom: 24, containLabel: true },
+          legend: { top: 0 },
+          tooltip: { trigger: "axis", valueFormatter: (v: unknown) => formatValue(t, Number(v), unit) },
+          xAxis: { type: "category", data: summary.period.days.map(dayLabel) },
+          yAxis: { type: "value", axisLabel: { formatter: (v: number) => formatValue(t, v, unit) } },
+          series: shown.map((l) => ({
+            type: "line",
+            name: lineLabel(t, summary.lines.find((x) => x.id === l.id) ?? { component: l.id, resource: "", model: "" }),
+            data: l.daily_peak,
+            showSymbol: false,
+          })),
+        },
+      }));
   }, [data, summary, t]);
   return (
     <aside className="capacity-person" data-testid="capacity-person" aria-label={t("capacity.person.title", { user: label })}>
@@ -316,12 +362,10 @@ function PersonDetail({
               );
             })}
           </ul>
-          {option && <Chart option={option} label={t("capacity.person.title", { user: label })} height={200} />}
-          {data.apps.length > 0 && (
-            <p className="capacity-note">
-              {t("capacity.person.apps")}：{data.apps.join("、")}
-            </p>
-          )}
+          {charts.map(({ unit, option }) => (
+            <Chart key={unit} option={option} label={t("capacity.person.title", { user: label })} height={200} />
+          ))}
+          {data.apps.length > 0 && <p className="capacity-note">{t("capacity.person.apps", { apps: list(t, data.apps) })}</p>}
           {data.items.length > 0 && (
             <table className="capacity-table">
               <thead>

@@ -14,10 +14,22 @@ export type Unit = "cores" | "bytes" | "inflight";
 
 export type Readiness = {
   ready: boolean;
-  reason: "source_missing" | "accumulating" | "too_few_people" | "no_regression" | null;
+  reason:
+    | "source_error"
+    | "source_missing"
+    | "period_too_short"
+    | "accumulating"
+    | "too_few_people"
+    | "no_regression"
+    | null;
+  /** The sources failing (source_error) or not connected (source_missing). */
   missing: string[];
+  /** What the first failing source raised. */
+  error: string | null;
   have_days: number;
   need_days: number;
+  /** The whole days this period holds; fewer than need_days → period_too_short. */
+  period_days: number;
 };
 
 export type Stat = { avg: number; peak: number };
@@ -29,6 +41,8 @@ export type Line = {
   resource: string;
   unit: Unit;
   model: string;
+  /** A worker line's job type ("other": pods that ran none); empty otherwise. */
+  job: string;
   method: "regression" | "direct" | "fixed";
   capacity: number | null;
   machines: number | null;
@@ -47,6 +61,8 @@ export type Line = {
   fit: {
     r2: number | null;
     holdout_mape: number | null;
+    /** How many of the last days `holdout_mape` predicted. */
+    holdout_days: number;
     rows: number;
     columns: [string, number][];
     collinear: string[][];
@@ -69,6 +85,12 @@ export type Pair = {
   y: string;
   sets: string | null;
   points: [number, number][];
+  /** (d) only: the share of sandbox time held at the sandbox's own limit. */
+  throttled: [number, number][] | null;
+  /** Why there is nothing to show, when that is not "it never slowed". */
+  note: "no_psi" | null;
+  /** (e) only: the job type whose queue it is. */
+  job: string;
   x_max: number | null;
   span: number;
   knee: { at: number; slope_before: number; slope_after: number; gain: number } | null;
@@ -90,6 +112,7 @@ export type CapacitySummary = {
     | "overview"
     | "allocation"
     | "person"
+    | "regression"
     | "distribution"
     | "trends"
     | "whatif"
@@ -98,7 +121,14 @@ export type CapacitySummary = {
     | "confidence",
     Readiness
   >;
-  people: { n_now: number; active_30d: number[]; active_today: number[] };
+  people: {
+    n_now: number;
+    active_30d: number[];
+    active_today: number[];
+    /** Whether today's N rests on 30 recorded days; false: it reads low. */
+    complete: boolean;
+    recorded_since_ms: number | null;
+  };
   lines: Line[];
   headroom: {
     n_now: number;
@@ -106,12 +136,21 @@ export type CapacitySummary = {
     binding: string | null;
     by_line: Record<string, number>;
     ceiling: boolean;
+    /** The days the headroom drew from (workdays with data). */
+    days: number;
   } | null;
   runway: {
     days: number[];
     n: number[];
     trend: Trend | null;
-    disk: { line: string; trend: Trend | null; limit: number; now: number | null }[];
+    disk: {
+      line: string;
+      trend: Trend | null;
+      limit: number;
+      now: number | null;
+      /** The trend's growth a month ÷ today's N: one more person's disk a month. */
+      per_person_month: number | null;
+    }[];
   };
   thresholds: Pair[];
   confidence: {
@@ -119,16 +158,23 @@ export type CapacitySummary = {
       line: string;
       r2: number | null;
       holdout_mape: number | null;
+      holdout_days: number;
       columns: number;
       collinear: string[][];
     }[];
     backtest: { mape: number; days: number[]; by_line: Record<string, number> } | null;
     coverage: Record<string, number | null>;
     unknown_share: number | null;
+    system_share: number | null;
+    /** source → [start_ms, end_ms] runs with nothing (pods and cards). */
+    gaps: Record<string, [number, number][]>;
     untagged_gpu_share: Record<string, number>;
     dropped: number;
     mape_ok: number;
   };
+  /** Whether anything measures sandboxes one by one: false — nothing does on
+   * this backend; null — sandbox-host decides. */
+  sandbox_measured: boolean | null;
 };
 
 export type Person = {
@@ -158,7 +204,11 @@ export type Person = {
 export type WhatIfProfile = "all" | "heavy" | "app";
 
 export type WhatIf = {
+  /** The N answered: the one asked, up to n_max. */
   n: number;
+  n_asked: number;
+  /** The furthest the what-if looks (20× today's N); null when not ready. */
+  n_max: number | null;
   n_now?: number | null;
   profile: string;
   app: string;

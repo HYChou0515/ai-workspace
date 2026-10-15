@@ -1,8 +1,9 @@
 /**
  * One chart of the capacity dashboard. ECharts arrives on first draw through
  * `import("./echarts")` — its own chunk — so no other page pays for it (D15).
- * Every chart is a picture of numbers the view also lists in a table: the
- * `aria-label` says what it shows, the table is what a screen reader reads.
+ * The `aria-label` says what a chart shows. The answers a decision rests on are
+ * also in words or a table beside it — the overview, allocation and what-if
+ * tables, the knee sentences, the runway's dates — so a screen reader loses none.
  */
 import { useEffect, useRef, useState } from "react";
 

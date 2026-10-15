@@ -1,7 +1,8 @@
 /**
  * View 5 — 趨勢 (docs/plan-capacity-usage.md §10): is use growing, how fast —
  * each line's daily peak and average against its capacity and safe threshold,
- * and how many people there are.
+ * with the people active in the last 30 days overlaid on their own axis, and
+ * how many people there are.
  */
 import { useMemo, useState } from "react";
 
@@ -10,6 +11,7 @@ import { Chart } from "../Chart";
 import type { ChartOption } from "../echarts";
 import { dayLabel, formatValue, lineLabel, type T } from "../format";
 import { NotReady } from "../Readiness";
+import { PeopleCaveat } from "./Overview";
 
 export function Trends({ summary, t }: { summary: CapacitySummary; t: T }) {
   const lines = summary.lines.filter((l) => l.daily.peak.some((v) => v !== null));
@@ -30,7 +32,10 @@ export function Trends({ summary, t }: { summary: CapacitySummary; t: T }) {
       legend: { top: 0 },
       tooltip: { trigger: "axis", valueFormatter: (v: unknown) => formatValue(t, Number(v), line.unit) },
       xAxis: { type: "category", data: days },
-      yAxis: { type: "value", axisLabel: { formatter: (v: number) => formatValue(t, v, line.unit) } },
+      yAxis: [
+        { type: "value", axisLabel: { formatter: (v: number) => formatValue(t, v, line.unit) } },
+        { type: "value", minInterval: 1, splitLine: { show: false } },
+      ],
       series: [
         {
           type: "line",
@@ -40,9 +45,18 @@ export function Trends({ summary, t }: { summary: CapacitySummary; t: T }) {
           markLine: { symbol: "none", data: marks, label: { formatter: "{b}" } },
         },
         { type: "line", name: t("capacity.trends.avg"), data: line.daily.avg, showSymbol: false },
+        {
+          type: "line",
+          name: t("capacity.trends.active30"),
+          yAxisIndex: 1,
+          data: summary.people.active_30d,
+          showSymbol: false,
+          lineStyle: { type: "dashed" },
+          tooltip: { valueFormatter: (v: unknown) => String(v) },
+        },
       ],
     };
-  }, [line, days, t]);
+  }, [line, days, summary, t]);
 
   const peopleOption = useMemo<ChartOption>(
     () => ({
@@ -85,6 +99,7 @@ export function Trends({ summary, t }: { summary: CapacitySummary; t: T }) {
         </>
       )}
       <h3 className="capacity-h3">{t("capacity.trends.people")}</h3>
+      <PeopleCaveat summary={summary} t={t} />
       <Chart option={peopleOption} label={t("capacity.trends.people")} height={200} testId="capacity-people-chart" />
     </section>
   );

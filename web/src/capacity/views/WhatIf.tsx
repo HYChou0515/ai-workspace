@@ -1,7 +1,8 @@
 /**
  * Views 6–7 — 試算與時程 (docs/plan-capacity-usage.md §10): what N people would
  * need, whose habits they bring, and — at the current growth — when the limit
- * arrives and by when to order, given how long a purchase takes (E12).
+ * arrives, within an 80% band (§9.7), and by when to order, given how long a
+ * purchase takes (E12): by the band's early end.
  */
 import { useQuery } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
@@ -13,33 +14,50 @@ import type { ChartOption } from "../echarts";
 import { bytes, dayLabel, formatValue, lineLabelById, pct, type T } from "../format";
 import { NotReady } from "../Readiness";
 import { Segmented } from "./Allocation";
+import { PeopleCaveat } from "./Overview";
 
 export type Level = "p50" | "p95";
 /** E12: until someone types theirs. */
 export const DEFAULT_LEAD_DAYS = 90;
+/** §9.7: an 80% band — 1.28 residual standard deviations either side. */
+const BAND_Z = 1.2816;
 
 export function advisory(summary: CapacitySummary): number | null {
   const bt = summary.confidence.backtest;
   return bt && bt.mape > summary.confidence.mape_ok ? bt.mape : null;
 }
 
-/** The date (in ms) a straight-line trend reaches `target`, or what stops it. */
+/** When a straight-line trend of people reaches the headroom — with the 80%
+ * band's early and late ends — or what stops it: no growth, already past, or a
+ * headroom that is only "at least" (the what-if looked no further), which has
+ * no date to order by. */
 export function runwayDate(
   summary: CapacitySummary,
 ):
   | { kind: "flat" }
   | { kind: "past" }
   | { kind: "none" }
-  | { kind: "date"; atMs: number; slope: number; target: number } {
+  | { kind: "beyond"; atMs: number; slope: number; target: number }
+  | { kind: "date"; atMs: number; earlyMs: number; lateMs: number; slope: number; target: number } {
   const trend = summary.runway.trend;
   const room = summary.headroom;
   if (!trend || !room || room.max_n === null) return { kind: "none" };
-  if (room.max_n <= room.n_now) return { kind: "past" };
+  if (room.max_n < room.n_now) return { kind: "past" };
   if (trend.slope <= 0) return { kind: "flat" };
-  const lastDay = summary.runway.days[summary.runway.days.length - 1] ?? 0;
-  const nowFit = trend.intercept + trend.slope * lastDay;
-  const daysToGo = (room.max_n - nowFit) / trend.slope;
-  return { kind: "date", atMs: summary.period.end_ms + daysToGo * 86_400_000, slope: trend.slope, target: room.max_n };
+  const today = summary.period.days.length - 1;
+  const fit = trend.intercept + trend.slope * today;
+  const when = (level: number) =>
+    summary.period.end_ms + Math.max(0, (room.max_n! - level) / trend.slope) * 86_400_000;
+  if (room.ceiling) return { kind: "beyond", atMs: when(fit), slope: trend.slope, target: room.max_n };
+  const band = BAND_Z * trend.residual_sd;
+  return {
+    kind: "date",
+    atMs: when(fit),
+    earlyMs: when(fit + band),
+    lateMs: when(fit - band),
+    slope: trend.slope,
+    target: room.max_n,
+  };
 }
 
 function dateText(ms: number): string {
@@ -154,9 +172,15 @@ export function WhatIf({
               {t("capacity.whatif.run")}
             </button>
           </form>
+          <PeopleCaveat summary={summary} t={t} />
           {warn !== null && (
             <p role="note" className="capacity-warning" data-testid="capacity-advisory">
               {t("capacity.whatif.advisory", { mape: pct(warn), ok: pct(summary.confidence.mape_ok) })}
+            </p>
+          )}
+          {data && data.n !== data.n_asked && (
+            <p role="note" className="capacity-warning" data-testid="capacity-whatif-capped">
+              {t("capacity.whatif.capped", { n: data.n, asked: data.n_asked })}
             </p>
           )}
           {rows.length > 0 && (
@@ -189,7 +213,10 @@ export function WhatIf({
                           <td>
                             {machines == null
                               ? "—"
-                              : t("capacity.whatif.machinesValue", { n: machines, now: r.machines_now ?? "—" })}
+                              : t(r.unit === "inflight" ? "capacity.whatif.cardsValue" : "capacity.whatif.machinesValue", {
+                                  n: machines,
+                                  now: r.machines_now ?? "—",
+                                })}
                             {r.machine_label && <span className="capacity-sub">{r.machine_label}</span>}
                           </td>
                           <td>{fits === null ? "—" : t(fits ? "capacity.whatif.yes" : "capacity.whatif.no")}</td>
@@ -217,6 +244,15 @@ function Runway({ summary, t }: { summary: CapacitySummary; t: T }) {
     const { trend, days, n } = summary.runway;
     if (!trend || days.length === 0) return null;
     const labels = days.map((d) => dayLabel(summary.period.days[d]));
+    const fit = (d: number, off = 0) => Math.round((trend.intercept + trend.slope * d + off) * 10) / 10;
+    const band = BAND_Z * trend.residual_sd;
+    const edge = (off: number) => ({
+      type: "line" as const,
+      name: t("capacity.runway.band"),
+      data: days.map((d) => fit(d, off)),
+      showSymbol: false,
+      lineStyle: { type: "dotted" as const, opacity: 0.6 },
+    });
     return {
       animation: false,
       grid: { left: 8, right: 16, top: 28, bottom: 24, containLabel: true },
@@ -228,8 +264,8 @@ function Runway({ summary, t }: { summary: CapacitySummary; t: T }) {
         { type: "line", name: t("capacity.trends.active30"), data: n, showSymbol: false },
         {
           type: "line",
-          name: "trend",
-          data: days.map((d) => Math.round((trend.intercept + trend.slope * d) * 10) / 10),
+          name: t("capacity.runway.trend"),
+          data: days.map((d) => fit(d)),
           showSymbol: false,
           lineStyle: { type: "dashed" },
           markLine:
@@ -237,6 +273,8 @@ function Runway({ summary, t }: { summary: CapacitySummary; t: T }) {
               ? { symbol: "none", data: [{ yAxis: summary.headroom.max_n }], label: { formatter: "{c}" } }
               : undefined,
         },
+        edge(band),
+        edge(-band),
       ],
     };
   }, [summary, t]);
@@ -261,12 +299,20 @@ function Runway({ summary, t }: { summary: CapacitySummary; t: T }) {
           <p className="capacity-headline" data-testid="capacity-runway-text">
             {at.kind === "flat" && t("capacity.runway.flat")}
             {at.kind === "past" && t("capacity.runway.past")}
+            {at.kind === "beyond" &&
+              t("capacity.runway.beyond", {
+                slope: Math.round(at.slope * 100) / 100,
+                date: dateText(at.atMs),
+                n: at.target,
+              })}
             {at.kind === "date" &&
               t("capacity.runway.date", {
                 slope: Math.round(at.slope * 100) / 100,
                 date: dateText(at.atMs),
+                early: dateText(at.earlyMs),
+                late: dateText(at.lateMs),
                 n: at.target,
-                order: dateText(at.atMs - leadDays * 86_400_000),
+                order: dateText(at.earlyMs - leadDays * 86_400_000),
               })}
           </p>
           {option && <Chart option={option} label={t("capacity.runway.title")} height={220} testId="capacity-runway-chart" />}
@@ -285,6 +331,9 @@ function Runway({ summary, t }: { summary: CapacitySummary; t: T }) {
                     date: dateText(summary.period.end_ms + Math.max(0, daysLeft) * 86_400_000),
                     limit: bytes(d.limit),
                   })}
+                  {d.per_person_month !== null &&
+                    d.per_person_month > 0 &&
+                    ` ${t("capacity.runway.diskPerPerson", { size: bytes(d.per_person_month) })}`}
                 </li>
               );
             })}

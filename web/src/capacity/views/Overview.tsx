@@ -28,17 +28,42 @@ export function overviewLines(s: CapacitySummary): Line[] {
   return s.lines.filter((l) => l.peak !== null);
 }
 
+/** How many days the records cover, while that is under 30 (N reads low). */
+export function recordedDays(s: CapacitySummary): number | null {
+  if (s.people.complete || s.people.recorded_since_ms === null) return null;
+  return Math.max(0, Math.floor((s.period.end_ms - s.people.recorded_since_ms) / 86_400_000));
+}
+
+/** A caveat under a figure built on N while N is still filling up. */
+export function PeopleCaveat({ summary, t }: { summary: CapacitySummary; t: T }) {
+  const days = recordedDays(summary);
+  if (days === null) return null;
+  return (
+    <p className="capacity-note" data-testid="capacity-people-incomplete">
+      {t("capacity.people.incomplete", { days })}
+    </p>
+  );
+}
+
 export function Overview({ summary, t }: { summary: CapacitySummary; t: T }) {
   const lines = overviewLines(summary);
   const room = summary.headroom;
   const option = useMemo<ChartOption>(() => utilisationChart(t, lines), [t, lines]);
+  // a default threshold is "not seen to slow yet" only where something watches it slow
+  const watched = new Set(summary.thresholds.map((p) => p.sets));
   return (
     <section className="capacity-view" data-testid="capacity-overview">
       <p className="capacity-headline" data-testid="capacity-headline">
         {headline(t, summary)}
       </p>
-      {summary.readiness.whatif.ready && room?.max_n !== null && (
-        <p className="capacity-note">{t("capacity.headline.basis", { days: summary.period.days.length })}</p>
+      {summary.readiness.whatif.ready && room !== null && room.max_n !== null && (
+        <p className="capacity-note">{t("capacity.headline.basis", { days: room.days })}</p>
+      )}
+      <PeopleCaveat summary={summary} t={t} />
+      {summary.sandbox_measured === false && (
+        <p className="capacity-note" data-testid="capacity-sandbox-unmeasured">
+          {t("capacity.sandbox.unmeasured")}
+        </p>
       )}
       <NotReady readiness={summary.readiness.overview} t={t} />
       {lines.length > 0 && (
@@ -75,7 +100,13 @@ export function Overview({ summary, t }: { summary: CapacitySummary; t: T }) {
                         {line.threshold === null ? "—" : line.unit === "inflight" ? "—" : pct(line.threshold)}
                         {line.threshold_source && (
                           <span className="capacity-sub">
-                            {t(line.threshold_source === "knee" ? "capacity.threshold.knee" : "capacity.threshold.default")}
+                            {t(
+                              line.threshold_source === "knee"
+                                ? "capacity.threshold.knee"
+                                : watched.has(line.id)
+                                  ? "capacity.threshold.defaultUnseen"
+                                  : "capacity.threshold.default",
+                            )}
                           </span>
                         )}
                       </td>
