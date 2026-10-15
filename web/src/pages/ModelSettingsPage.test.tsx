@@ -104,7 +104,7 @@ function fakeClient(page: Partial<PageData> = {}) {
   return client;
 }
 
-const editor = () => screen.getByRole("textbox", { name: "草稿（YAML）" }) as HTMLTextAreaElement;
+const editor = () => screen.getByRole("textbox", { name: "設定（YAML）" }) as HTMLTextAreaElement;
 /** The draft the editor holds, read as the page reads it: YAML (M9) holding
  * the whole settings, stored as what differs from the defaults (M23). */
 const draftNow = (defaults: Record<string, unknown> = DEFAULTS) => {
@@ -147,7 +147,7 @@ describe("ModelSettingsPage", () => {
   it("names a YAML mistake once typing pauses, and saves nothing", async () => {
     const client = fakeClient();
     renderWithQuery(<ModelSettingsPage client={client} />);
-    await screen.findByRole("textbox", { name: "草稿（YAML）" });
+    await screen.findByRole("textbox", { name: "設定（YAML）" });
 
     type("{ not json");
 
@@ -161,7 +161,7 @@ describe("ModelSettingsPage", () => {
       "server" in ((patch.config as Record<string, unknown>) ?? {}) ? ["config.server: change it in config.yaml"] : [],
     );
     renderWithQuery(<ModelSettingsPage client={client} />);
-    await screen.findByRole("textbox", { name: "草稿（YAML）" });
+    await screen.findByRole("textbox", { name: "設定（YAML）" });
 
     type('{"config": {"server": {"port": 1}}}');
 
@@ -173,7 +173,7 @@ describe("ModelSettingsPage", () => {
   it("saves a draft, then applies it after showing every value it changes", async () => {
     const client = fakeClient();
     renderWithQuery(<ModelSettingsPage client={client} />);
-    await screen.findByRole("textbox", { name: "草稿（YAML）" });
+    await screen.findByRole("textbox", { name: "設定（YAML）" });
 
     type(JSON.stringify(KB_2));
     expect(screen.getByTestId("model-settings-apply")).toBeDisabled(); // unsaved: save first
@@ -239,7 +239,7 @@ describe("ModelSettingsPage", () => {
     const path = "config.agents.presets.kb-default.llm.api_key";
     const client = fakeClient({ keys: { [path]: "…4321" }, pending_keys: [path] });
     renderWithQuery(<ModelSettingsPage client={client} />);
-    await screen.findByRole("textbox", { name: "草稿（YAML）" });
+    await screen.findByRole("textbox", { name: "設定（YAML）" });
 
     await waitFor(() => expect(screen.getByTestId("model-settings-status")).toHaveTextContent("1 個金鑰"));
     fireEvent.click(screen.getByTestId("model-settings-apply"));
@@ -280,7 +280,7 @@ describe("ModelSettingsPage", () => {
     // "load failed", and the text being typed went with it.
     const client = fakeClient();
     const { client: queryClient } = renderWithQuery(<ModelSettingsPage client={client} />);
-    await screen.findByRole("textbox", { name: "草稿（YAML）" });
+    await screen.findByRole("textbox", { name: "設定（YAML）" });
     type('{"config": {"llm": {"base_url": "http://mine"}}}');
 
     client.get.mockRejectedValue(new HttpError(503, "down"));
@@ -320,7 +320,7 @@ describe("ModelSettingsPage", () => {
     const client = fakeClient();
     client.saveDraft.mockRejectedValue(new HttpError(500, "saving the draft failed: 500"));
     renderWithQuery(<ModelSettingsPage client={client} />);
-    await screen.findByRole("textbox", { name: "草稿（YAML）" });
+    await screen.findByRole("textbox", { name: "設定（YAML）" });
 
     type(JSON.stringify(KB_2));
     fireEvent.click(screen.getByTestId("model-settings-save"));
@@ -352,7 +352,7 @@ describe("ModelSettingsPage", () => {
 
   it("says to fix the YAML, not to save, when the text does not parse", async () => {
     renderWithQuery(<ModelSettingsPage client={fakeClient()} />);
-    await screen.findByRole("textbox", { name: "草稿（YAML）" });
+    await screen.findByRole("textbox", { name: "設定（YAML）" });
 
     type("{ not json");
 
@@ -362,7 +362,7 @@ describe("ModelSettingsPage", () => {
   it("waits for a pause in typing before calling the YAML wrong", async () => {
     // review r2 (ux): the banner came at every keystroke (NN/g: not too early).
     renderWithQuery(<ModelSettingsPage client={fakeClient()} />);
-    await screen.findByRole("textbox", { name: "草稿（YAML）" });
+    await screen.findByRole("textbox", { name: "設定（YAML）" });
 
     type('{"config": ');
 
@@ -374,13 +374,25 @@ describe("ModelSettingsPage", () => {
     // review r2 (ux): the editor's text lived in the Edit tab, so looking at
     // the keys and coming back threw it away without a word.
     renderWithQuery(<ModelSettingsPage client={fakeClient()} />);
-    await screen.findByRole("textbox", { name: "草稿（YAML）" });
+    await screen.findByRole("textbox", { name: "設定（YAML）" });
     type(JSON.stringify(KB_2));
 
     fireEvent.click(screen.getByRole("tab", { name: "API 金鑰" }));
     fireEvent.click(screen.getByRole("tab", { name: "編輯（未儲存）" }));
 
     expect(draftNow()).toEqual(KB_2);
+  });
+
+  it("puts the keys tab's Apply above the list of places, where it is seen", async () => {
+    // review 18 (UX): with every place listed (M22) the list runs ~16 rows, and
+    // the Apply under it sat below the fold after a key was set.
+    const client = fakeClient({ keys: { [SLOT]: "…4321" }, pending_keys: [SLOT] });
+    renderWithQuery(<ModelSettingsPage client={client} />);
+    fireEvent.click(await screen.findByRole("tab", { name: "API 金鑰" }));
+
+    const apply = await screen.findByTestId("model-settings-keys-apply");
+    const list = screen.getByTestId("model-settings-keys");
+    expect(list.compareDocumentPosition(apply) & Node.DOCUMENT_POSITION_PRECEDING).toBeTruthy();
   });
 
   it("shows which keys wait for Apply, and applies them from the keys tab", async () => {
@@ -438,7 +450,7 @@ describe("ModelSettingsPage", () => {
     const path = "config.llm.api_key";
     const client = fakeClient({ keys: { [path]: "…4321" }, pending_keys: [path] });
     renderWithQuery(<ModelSettingsPage client={client} />);
-    await screen.findByRole("textbox", { name: "草稿（YAML）" });
+    await screen.findByRole("textbox", { name: "設定（YAML）" });
     type(JSON.stringify(KB_2));
 
     fireEvent.click(screen.getByRole("tab", { name: "API 金鑰" }));
@@ -446,7 +458,7 @@ describe("ModelSettingsPage", () => {
     expect(screen.getByRole("tab", { name: "編輯（未儲存）" })).toBeInTheDocument();
     expect(screen.getByTestId("model-settings-keys-apply-why")).toHaveTextContent("編輯分頁有沒儲存的改動");
     fireEvent.click(screen.getByTestId("model-settings-go-edit"));
-    expect(screen.getByRole("textbox", { name: "草稿（YAML）" })).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "設定（YAML）" })).toBeInTheDocument();
   });
 
   it("from the keys tab, does not point at a list of problems it does not show", async () => {
@@ -465,7 +477,7 @@ describe("ModelSettingsPage", () => {
 
   it("does not call the YAML wrong beside Apply before typing pauses", async () => {
     renderWithQuery(<ModelSettingsPage client={fakeClient()} />);
-    await screen.findByRole("textbox", { name: "草稿（YAML）" });
+    await screen.findByRole("textbox", { name: "設定（YAML）" });
 
     type('{"config": ');
 
@@ -478,7 +490,7 @@ describe("ModelSettingsPage", () => {
     const client = fakeClient({ published: KB_2, version: "v2v2v2v2v2" });
     client.history.mockResolvedValue([applied("v2v2v2v2v2", KB_2, 2), applied("v1v1v1v1v1", {}, 1)]);
     renderWithQuery(<ModelSettingsPage client={client} />);
-    await screen.findByRole("textbox", { name: "草稿（YAML）" });
+    await screen.findByRole("textbox", { name: "設定（YAML）" });
     type('{"config": {"llm": {"base_url": "http://mine"}}}');
 
     fireEvent.click(screen.getByRole("tab", { name: "版本紀錄" }));
@@ -511,7 +523,7 @@ describe("ModelSettingsPage", () => {
     // the text being typed, without a word.
     const client = fakeClient();
     const { client: queryClient } = renderWithQuery(<ModelSettingsPage client={client} />);
-    await screen.findByRole("textbox", { name: "草稿（YAML）" });
+    await screen.findByRole("textbox", { name: "設定（YAML）" });
     type('{"config": {"llm": {"base_url": "http://mine"}}}');
 
     const theirs = { config: { llm: { base_url: "http://theirs" } } };
@@ -538,7 +550,7 @@ describe("ModelSettingsPage", () => {
     const client = fakeClient({ published: KB_2, version: "v2v2v2v2v2" });
     client.history.mockResolvedValue([applied("v2v2v2v2v2", KB_2, 2), applied("v1v1v1v1v1", {}, 1)]);
     renderWithQuery(<ModelSettingsPage client={client} />);
-    await screen.findByRole("textbox", { name: "草稿（YAML）" });
+    await screen.findByRole("textbox", { name: "設定（YAML）" });
     type('{"config": {"llm": {"base_url": "http://mine"}}}');
 
     fireEvent.click(screen.getByRole("tab", { name: "版本紀錄" }));
@@ -563,7 +575,7 @@ describe("ModelSettingsPage", () => {
   it("from the keys tab, says the Edit tab's text is not YAML instead of asking to save it", async () => {
     const path = "config.llm.api_key";
     renderWithQuery(<ModelSettingsPage client={fakeClient({ keys: { [path]: "…4321" }, pending_keys: [path] })} />);
-    await screen.findByRole("textbox", { name: "草稿（YAML）" });
+    await screen.findByRole("textbox", { name: "設定（YAML）" });
     type("{ not json");
     await screen.findByTestId("model-settings-parse");
 
@@ -698,6 +710,20 @@ describe("ModelSettingsPage", () => {
     expect(screen.queryByTestId("model-settings-key-refused")).toBeNull();
     expect(screen.getByLabelText("變數名稱")).toHaveValue("GH_TOKEN");
     expect(screen.getByTestId("model-settings-env-value")).toHaveValue("ghp-0000");
+  });
+
+  it("says what a variable name may hold, and says it at the field when one cannot be used", async () => {
+    // review 18 (UX): a bad name greyed Add out with no word of why.
+    renderWithQuery(<ModelSettingsPage client={fakeClient()} />);
+    fireEvent.click(await screen.findByRole("tab", { name: "API 金鑰" }));
+    const name = screen.getByLabelText("變數名稱");
+    expect(name).toHaveAccessibleDescription(/英文字母、數字和底線/);
+    expect(name).not.toHaveAttribute("aria-invalid", "true");
+
+    fireEvent.change(name, { target: { value: "MY-KEY" } });
+
+    expect(name).toHaveAttribute("aria-invalid", "true");
+    expect(screen.getByTestId("model-settings-env-name-invalid")).toHaveTextContent("MY-KEY");
   });
 
   it("empties the env form once its secret is taken", async () => {
@@ -848,16 +874,18 @@ describe("ModelSettingsPage", () => {
 
   it("tests a preset's connection", async () => {
     const client = fakeClient();
+    client.testConnection.mockResolvedValue({ ok: true, model: "openai-mini-model", ms: 11855, error: "" });
     renderWithQuery(<ModelSettingsPage client={client} />);
-    await screen.findByRole("textbox", { name: "草稿（YAML）" });
+    await screen.findByRole("textbox", { name: "設定（YAML）" });
 
     fireEvent.change(screen.getByLabelText("要測試的 preset"), { target: { value: "openai-mini" } });
     fireEvent.click(screen.getByTestId("model-settings-test"));
 
     // M24: the test stops at the first token, so it says when the model began
-    // to answer — there is no reply to show.
+    // to answer — there is no reply to show. In seconds, like the running line
+    // above it (review 18; NN/g heuristic #4, consistency).
     expect(await screen.findByTestId("model-settings-test-result")).toHaveTextContent(
-      "連得上 openai-mini-model：12 ms 後開始回覆",
+      "連得上 openai-mini-model：11.9 秒後開始回覆",
     );
     expect(client.testConnection).toHaveBeenCalledWith("openai-mini");
   });
@@ -969,7 +997,7 @@ describe("ModelSettingsPage", () => {
     // draft was silently replaced.
     const client = fakeClient({ draft: KB_2 });
     const { client: queryClient } = renderWithQuery(<ModelSettingsPage client={client} />);
-    await screen.findByRole("textbox", { name: "草稿（YAML）" });
+    await screen.findByRole("textbox", { name: "設定（YAML）" });
     type('{"config": {"llm": {"base_url": "http://mine"}}}');
     const theirs = { config: { llm: { base_url: "http://theirs" } } };
     const base = client.get.getMockImplementation();
@@ -1008,7 +1036,7 @@ describe("ModelSettingsPage", () => {
     // final review 9: Discard threw away hand-written text at once, no undo
     // (NN/g "Confirmation Dialogs"; M3's own example is "Discard draft?").
     renderWithQuery(<ModelSettingsPage client={fakeClient()} />);
-    await screen.findByRole("textbox", { name: "草稿（YAML）" });
+    await screen.findByRole("textbox", { name: "設定（YAML）" });
     type('{"config": {"llm": {"base_url": "http://mine"}}}');
 
     fireEvent.click(screen.getByTestId("model-settings-discard"));
@@ -1024,7 +1052,7 @@ describe("ModelSettingsPage", () => {
     // final review 9: leaving the page (a link, a reload) lost the edits with
     // no question and no undo; the router here cannot block a navigation.
     const first = renderWithQuery(<ModelSettingsPage client={fakeClient()} />);
-    await screen.findByRole("textbox", { name: "草稿（YAML）" });
+    await screen.findByRole("textbox", { name: "設定（YAML）" });
     type('{"config": {"llm": {"base_url": "http://mine"}}}');
     first.unmount();
 
@@ -1036,7 +1064,7 @@ describe("ModelSettingsPage", () => {
 
   it("asks before the tab closes while there are unsaved edits", async () => {
     renderWithQuery(<ModelSettingsPage client={fakeClient()} />);
-    await screen.findByRole("textbox", { name: "草稿（YAML）" });
+    await screen.findByRole("textbox", { name: "設定（YAML）" });
     type('{"config": {"llm": {"base_url": "http://mine"}}}');
 
     const event = new Event("beforeunload", { cancelable: true });
@@ -1087,7 +1115,7 @@ describe("ModelSettingsPage", () => {
 
   it("announces a saved draft", async () => {
     renderWithQuery(<ModelSettingsPage client={fakeClient()} />);
-    await screen.findByRole("textbox", { name: "草稿（YAML）" });
+    await screen.findByRole("textbox", { name: "設定（YAML）" });
     type('{"config": {"llm": {"base_url": "http://mine"}}}');
 
     fireEvent.click(screen.getByTestId("model-settings-save"));
@@ -1110,7 +1138,7 @@ describe("ModelSettingsPage", () => {
     // the draft before — the next Save got a false "someone else saved".
     const client = fakeClient();
     renderWithQuery(<ModelSettingsPage client={client} />);
-    await screen.findByRole("textbox", { name: "草稿（YAML）" });
+    await screen.findByRole("textbox", { name: "設定（YAML）" });
     const t1 = { config: { llm: { base_url: "http://one" } } };
     const t2 = { config: { llm: { base_url: "http://two" } } };
     let release: () => void = () => {};
@@ -1219,7 +1247,7 @@ describe("ModelSettingsPage", () => {
     const same = fakeClient({ version: "v1v1v1v1v1v1v1v1", published: {} });
     same.history.mockResolvedValue([applied("v1v1v1v1v1v1v1v1", {}, 1)]);
     const first = renderWithQuery(<ModelSettingsPage client={same} />);
-    await screen.findByRole("textbox", { name: "草稿（YAML）" });
+    await screen.findByRole("textbox", { name: "設定（YAML）" });
     type('{"config": {"llm": {"base_url": "http://mine"}}}');
     fireEvent.click(screen.getByRole("tab", { name: "版本紀錄" }));
     await screen.findByTestId("model-settings-version-changes-0");
@@ -1230,14 +1258,14 @@ describe("ModelSettingsPage", () => {
     const client = fakeClient({ version: "v2v2v2v2v2v2v2v2", published: KB_2 });
     client.history.mockResolvedValue([applied("v2v2v2v2v2v2v2v2", KB_2, 2), applied("v1v1v1v1v1v1v1v1", {}, 1)]);
     renderWithQuery(<ModelSettingsPage client={client} />);
-    await screen.findByRole("textbox", { name: "草稿（YAML）" });
+    await screen.findByRole("textbox", { name: "設定（YAML）" });
     type('{"config": {"llm": {"base_url": "http://mine"}}}');
     fireEvent.click(screen.getByRole("tab", { name: "版本紀錄" }));
     await screen.findByTestId("model-settings-rollback-why");
 
     fireEvent.click(screen.getByTestId("model-settings-go-edit"));
 
-    expect(await screen.findByRole("textbox", { name: "草稿（YAML）" })).toBeInTheDocument();
+    expect(await screen.findByRole("textbox", { name: "設定（YAML）" })).toBeInTheDocument();
   });
 
   it("saves only the line changed in a pasted copy of the whole settings", async () => {
@@ -1248,7 +1276,7 @@ describe("ModelSettingsPage", () => {
       boot_config: { ...DEFAULTS.config, server: { port: 9090 } },
     });
     renderWithQuery(<ModelSettingsPage client={client} />);
-    await screen.findByRole("textbox", { name: "草稿（YAML）" });
+    await screen.findByRole("textbox", { name: "設定（YAML）" });
     type(
       [
         "config:",
@@ -1281,10 +1309,35 @@ describe("ModelSettingsPage", () => {
     // review 17 (UX): grown to its content — the whole settings, ~1000 lines
     // since M23 — the editor was 18,016 px tall and Save sat below all of it.
     renderWithQuery(<ModelSettingsPage client={fakeClient()} />);
-    await screen.findByRole("textbox", { name: "草稿（YAML）" });
+    await screen.findByRole("textbox", { name: "設定（YAML）" });
 
     expect(editor().dataset.autoHeight).toBe("false");
     expect(screen.getByTestId("model-settings-editor-box").style.height).toMatch(/vh/);
+  });
+
+  it("offers to save a reordered list — order is what a fallback chain means", async () => {
+    // review 18: the page compared lists as sets, so reordering a saved chain
+    // read as no unsaved edit, and Save was not offered.
+    const chain = (order: string[]) => ({ config: { agents: { presets: { "kb-default": { fallbacks: order } } } } });
+    const client = fakeClient({ draft: chain(["b", "c", "x"]) });
+    renderWithQuery(<ModelSettingsPage client={client} />);
+    await waitFor(() => expect(editor().value).toContain("fallbacks"));
+    expect(screen.getByTestId("model-settings-save")).toBeDisabled();
+
+    type(editor().value.replace(/- b\n(\s+)- c\n(\s+)- x/, "- x\n$1- c\n$2- b"));
+
+    expect(draftNow()).toEqual(chain(["x", "c", "b"]));
+    expect(screen.getByTestId("model-settings-save")).toBeEnabled();
+  });
+
+  it("says in YAML's own terms that the settings must be keys, not a list", async () => {
+    // review 18: the message spoke JSON (an object {…}) of a YAML text.
+    renderWithQuery(<ModelSettingsPage client={fakeClient()} />);
+    await screen.findByRole("textbox", { name: "設定（YAML）" });
+
+    type("- a\n- b\n");
+
+    expect(await screen.findByTestId("model-settings-parse")).toHaveTextContent("最外層要是「名稱: 值」");
   });
 
   it("gives a value read only at boot the default the deploy booted with", async () => {
@@ -1293,7 +1346,7 @@ describe("ModelSettingsPage", () => {
     renderWithQuery(
       <ModelSettingsPage client={fakeClient({ boot_config: { ...DEFAULTS.config, server: { port: 9090 } } })} />,
     );
-    await screen.findByRole("textbox", { name: "草稿（YAML）" });
+    await screen.findByRole("textbox", { name: "設定（YAML）" });
     type("config:\n  server:\n    port: 1\n");
 
     const row = await screen.findByTestId("model-settings-changes");
@@ -1307,7 +1360,7 @@ describe("ModelSettingsPage", () => {
     // until a reload — M23 says the editor holds the whole settings.
     const client = fakeClient();
     renderWithQuery(<ModelSettingsPage client={client} />);
-    await screen.findByRole("textbox", { name: "草稿（YAML）" });
+    await screen.findByRole("textbox", { name: "設定（YAML）" });
     type("config:\n  agents:\n    presets:\n      kb-default:\n        model: openai/gpt-4.1\n");
 
     fireEvent.click(screen.getByTestId("model-settings-save"));

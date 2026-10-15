@@ -38,7 +38,6 @@ import { useBreadcrumbs } from "../hooks/breadcrumbs";
 import { useDirtyClose } from "../hooks/useDirtyClose";
 import { useIsSuperuserState } from "../hooks/useIsSuperuser";
 import { useT } from "../lib/i18n";
-import { sameShape } from "../lib/sameShape";
 import { blockMaskedCopy } from "../lib/maskedSecret";
 import { pxToRem } from "../lib/pxToRem";
 import {
@@ -49,6 +48,7 @@ import {
   lineOfPath,
   parsePatch,
   patchOf,
+  samePatch,
   valueAt,
   withoutPath,
   type Change,
@@ -275,8 +275,8 @@ function useDraft(client: Client, data: PageData) {
     // Saying what the last saved draft said, or what the new one says (a fragment
     // just saved — demo 2026-10-13): either way nothing unsaved is in the text,
     // and the editor shows the whole settings again (M23).
-    if (now.ok && (sameShape(now.patch, was) || sameShape(now.patch, draft))) setText(saved);
-    if (now.ok && (sameShape(now.patch, was) || sameShape(now.patch, draft))) {
+    if (now.ok && (samePatch(now.patch, was) || samePatch(now.patch, draft))) setText(saved);
+    if (now.ok && (samePatch(now.patch, was) || samePatch(now.patch, draft))) {
       base.current = draft;
       told.current = false;
     }
@@ -295,9 +295,9 @@ function useDraft(client: Client, data: PageData) {
     queryFn: () => client.check(settled.ok ? settled.patch : {}),
     enabled: settled.ok,
   });
-  // By shape, never by text (CLAUDE.md `sameShape`; review r2: the same content
-  // in other spacing stayed "unsaved" for good).
-  const dirty = !parsed.ok || !sameShape(parsed.patch, draft);
+  // By shape, never by text (review r2: the same content in other spacing
+  // stayed "unsaved" for good) — and lists in order (`samePatch`, review 18).
+  const dirty = !parsed.ok || !samePatch(parsed.patch, draft);
   const checking = text !== checkedText || check.isFetching;
 
   const save = useMutation({
@@ -626,7 +626,7 @@ function EditTab({
           />
         </div>
         {/* Polite, not an alert: it is re-evaluated at every pause in typing, and
-            an interrupting announcement mid-brace is the "too early" error NN/g
+            an interrupting announcement mid-line is the "too early" error NN/g
             warns against. */}
         <div aria-live="polite">
           {!settled.ok ? (
@@ -845,7 +845,7 @@ function TestConnection({ client, defaults, draft }: { client: Client; defaults:
           style={WRAP}
         >
           {test.data.ok ? (
-            t("modelSettings.testOk", { model: test.data.model, ms: String(test.data.ms) })
+            t("modelSettings.testOk", { model: test.data.model, s: (test.data.ms / 1000).toFixed(1) })
           ) : (
             // A plain sentence first, then the reason as given — often the
             // page's own refusal, sometimes the provider's words (NN/g
@@ -1183,6 +1183,22 @@ function KeysTab({
   return (
     <div style={{ display: "grid", gap: 12 }}>
       <p style={{ ...MUTED, margin: 0 }}>{t("modelSettings.keysDesc")}</p>
+      {/* Above the list, not under it: the list holds every place a key can go
+          (M22, ~16 rows), and an Apply under it was below the fold once a key
+          was set (review 18; NN/g "Scrolling and Attention"). */}
+      {draft.pendingKeys.length > 0 && (
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          <span style={STATUS}>{t("modelSettings.keysWaiting", { n: String(draft.pendingKeys.length) })}</span>
+          <ApplyButton draft={draft} testId="model-settings-keys-apply" explain where="keys" goEdit={goEdit} />
+        </div>
+      )}
+      {/* An Apply empties the pending row it sits in; its result stays said here
+          (NN/g heuristic #1 — feedback where the person acted). */}
+      {draft.pendingKeys.length === 0 && draft.notice && (
+        <p role="status" data-testid="model-settings-notice" style={{ ...STATUS, margin: 0 }}>
+          {draft.notice}
+        </p>
+      )}
       {/* Each place listed, picked rather than typed: NN/g heuristic #6,
           recognition rather than recall (M22). */}
       <ul
@@ -1310,19 +1326,6 @@ function KeysTab({
           );
         })}
       </ul>
-      {draft.pendingKeys.length > 0 && (
-        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-          <span style={STATUS}>{t("modelSettings.keysWaiting", { n: String(draft.pendingKeys.length) })}</span>
-          <ApplyButton draft={draft} testId="model-settings-keys-apply" explain where="keys" goEdit={goEdit} />
-        </div>
-      )}
-      {/* An Apply empties the pending row it sits in; its result stays said here
-          (NN/g heuristic #1 — feedback where the person acted). */}
-      {draft.pendingKeys.length === 0 && draft.notice && (
-        <p role="status" data-testid="model-settings-notice" style={{ ...STATUS, margin: 0 }}>
-          {draft.notice}
-        </p>
-      )}
       {presets.length > 0 && (
         <EnvSecretForm presets={presets} set={set} refused={refused?.at === ENV_FORM ? refused.problems : []} />
       )}
@@ -1350,7 +1353,11 @@ function EnvSecretForm({
   const [preset, setPreset] = useState(presets[0]);
   const [name, setName] = useState("");
   const [secret, setSecret] = useState("");
-  const ready = Boolean(preset && /^[A-Za-z_][A-Za-z0-9_]*$/.test(name) && secret) && !set.isPending;
+  const nameOk = /^[A-Za-z_][A-Za-z0-9_]*$/.test(name);
+  // Said at the field, not only by a greyed-out Add (review 18; NN/g "Reporting
+  // Errors in Forms": say what is wrong and how to fix it, beside the field).
+  const nameBad = name !== "" && !nameOk;
+  const ready = Boolean(preset && nameOk && secret) && !set.isPending;
   return (
     <form
       onSubmit={(e) => {
@@ -1381,17 +1388,30 @@ function EnvSecretForm({
             ))}
           </select>
         </label>
-        <label style={{ display: "grid", gap: 4, flex: "1 1 10rem", minWidth: 0 }}>
-          <span style={LABEL}>{t("modelSettings.envName")}</span>
-          <input
-            className="input"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            autoComplete="off"
-            spellCheck={false}
-            style={MONO}
-          />
-        </label>
+        {/* The hint sits beside the label, not in it: inside, it would be read
+            as part of the field's name. */}
+        <div style={{ display: "grid", gap: 4, flex: "1 1 10rem", minWidth: 0 }}>
+          <label style={{ display: "grid", gap: 4 }}>
+            <span style={LABEL}>{t("modelSettings.envName")}</span>
+            <input
+              className="input"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              autoComplete="off"
+              spellCheck={false}
+              aria-invalid={nameBad}
+              aria-describedby="model-settings-env-name-hint"
+              style={MONO}
+            />
+          </label>
+          <span
+            id="model-settings-env-name-hint"
+            data-testid={nameBad ? "model-settings-env-name-invalid" : undefined}
+            style={{ ...MUTED, ...(nameBad ? { color: "var(--err)" } : {}) }}
+          >
+            {nameBad ? t("modelSettings.envNameBad", { name }) : t("modelSettings.envNameHint")}
+          </span>
+        </div>
         <label style={{ display: "grid", gap: 4, flex: "1 1 12rem", minWidth: 0 }}>
           <span style={LABEL}>{t("modelSettings.keyValue")}</span>
           <input

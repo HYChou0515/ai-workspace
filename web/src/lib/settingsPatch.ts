@@ -11,7 +11,6 @@
 
 import { CORE_SCHEMA, dump as dumpYaml, load as loadYaml } from "js-yaml";
 
-import { sameShape } from "./sameShape";
 
 export type Patch = Record<string, unknown>;
 
@@ -41,9 +40,32 @@ export type Change =
   | { path: string; kind: "removed"; before: unknown }
   | { path: string; kind: "changed"; before: unknown; after: unknown };
 
-// By shape, never by text (CLAUDE.md `sameShape`): a pasted list entry
-// reorders its keys and is still the same entry (M23).
-const same = sameShape;
+/** A secret's mask, the page's (`*** set ***`) or the boot dump's
+ * (`*** set (17 chars) via ${X} ***`): pasted back, it changes nothing. */
+const MASK = /^\*\*\* (?:set|unset)(?: \(\d+ chars\))?(?: via \S+)? \*\*\*$/;
+const isMask = (value: unknown) => typeof value === "string" && MASK.test(value);
+
+/** The page's one comparison: by shape, never by text — an object's keys in
+ * any order (a pasted entry reorders them, M23) — but a LIST in order, unlike
+ * `sameShape`: every list here is ordered on purpose (a preset's `fallbacks`
+ * is its failover chain, `subagent_models` and the usage lists are display
+ * order), and the patch stores a reorder — compared as sets, the page then
+ * said a stored reorder was nothing, so it could be saved and never applied
+ * (review 18). A secret's mask matches any mask: the page's and the boot
+ * dump's are the same secret (review 17). */
+export function samePatch(a: unknown, b: unknown): boolean {
+  if (isMask(a) && isMask(b)) return true;
+  if (Array.isArray(a) || Array.isArray(b)) {
+    return Array.isArray(a) && Array.isArray(b) && a.length === b.length && a.every((x, i) => samePatch(x, b[i]));
+  }
+  if (isObject(a) || isObject(b)) {
+    if (!isObject(a) || !isObject(b)) return false;
+    const keys = Object.keys(a);
+    return keys.length === Object.keys(b).length && keys.every((k) => k in b && samePatch(a[k], b[k]));
+  }
+  return Object.is(a, b);
+}
+const same = samePatch;
 
 /** What publishing `after` in place of `before` changes, value by value. */
 export function diffPatches(before: Patch, after: Patch): Change[] {
@@ -146,23 +168,7 @@ export function effectiveOf(defaults: Patch, patch: Patch): Patch {
   return show(defaults, patch) as Patch;
 }
 
-/** A secret's mask, the page's (`*** set ***`) or the boot dump's
- * (`*** set (17 chars) via ${X} ***`): pasted back, it changes nothing. */
-const MASK = /^\*\*\* (?:set|unset)(?: \(\d+ chars\))?(?: via \S+)? \*\*\*$/;
-const isMask = (value: unknown) => typeof value === "string" && MASK.test(value);
 const UNCHANGED = Symbol("unchanged");
-
-/** Equal, a mask matching any mask — for a list, which is stored whole: an
- * entry's key masked by the page and by the boot dump is the same key (review 17). */
-function alike(a: unknown, b: unknown): boolean {
-  if (isMask(a) && isMask(b)) return true;
-  if (Array.isArray(a) && Array.isArray(b)) return a.length === b.length && a.every((x, i) => alike(x, b[i]));
-  if (isObject(a) && isObject(b)) {
-    const keys = Object.keys(a);
-    return keys.length === Object.keys(b).length && keys.every((k) => k in b && alike(a[k], b[k]));
-  }
-  return same(a, b);
-}
 
 /** What is stored for an edited text (M23): only what differs from `base` —
  * the whole boot config and every App — so the person edits the settings as
@@ -181,8 +187,6 @@ export function patchOf(base: Patch, edited: Patch): Patch {
       }
       return Object.keys(out).length ? out : UNCHANGED;
     }
-    if (Array.isArray(was) && Array.isArray(now)) return alike(was, now) ? UNCHANGED : now;
-    if (isMask(was) && isMask(now)) return UNCHANGED;
     return same(was, now) ? UNCHANGED : now;
   };
   const out = diff(base, edited);

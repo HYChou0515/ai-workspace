@@ -2867,7 +2867,8 @@ export const messages = {
   "modelSettings.tab.history": { "zh-TW": "版本紀錄", en: "History" },
   "modelSettings.tab.keys": { "zh-TW": "API 金鑰", en: "API keys" },
   "modelSettings.tabs": { "zh-TW": "模型設定的區塊", en: "Model settings sections" },
-  "modelSettings.editor": { "zh-TW": "草稿（YAML）", en: "Draft (YAML)" },
+  // The whole settings (M23), not the draft: the draft is only what differs.
+  "modelSettings.editor": { "zh-TW": "設定（YAML）", en: "Settings (YAML)" },
   "modelSettings.inForce": { "zh-TW": "目前生效：版本 {version}", en: "In force: version {version}" },
   "modelSettings.inForceNone": {
     "zh-TW": "目前生效：部署預設（還沒套用過）",
@@ -2875,8 +2876,8 @@ export const messages = {
   },
   "modelSettings.notJson": { "zh-TW": "不是合法的 YAML：{error}", en: "Not valid YAML: {error}" },
   "modelSettings.notObject": {
-    "zh-TW": "最外層要是一個物件 {…}",
-    en: "The outermost value must be an object {…}",
+    "zh-TW": "最外層要是「名稱: 值」，不能是一串清單或單一個值",
+    en: "The top level must be “name: value” lines, not a list or a single value",
   },
   "modelSettings.checking": { "zh-TW": "檢查中…", en: "Checking…" },
   "modelSettings.checkFailed": {
@@ -2999,8 +3000,8 @@ export const messages = {
     en: "Sends one short request to this preset's model using the saved draft (keys included), and stops as soon as the model starts answering. It never blocks Apply.",
   },
   "modelSettings.testOk": {
-    "zh-TW": "連得上 {model}：{ms} ms 後開始回覆",
-    en: "{model} started answering after {ms} ms",
+    "zh-TW": "連得上 {model}：{s} 秒後開始回覆",
+    en: "{model} started answering after {s} s",
   },
   "modelSettings.testFailed": { "zh-TW": "連不上：{error}", en: "Failed: {error}" },
   "modelSettings.testFailedLead": {
@@ -3035,6 +3036,14 @@ export const messages = {
   "modelSettings.keyNew": { "zh-TW": "新的金鑰", en: "New key" },
   "modelSettings.slotDefault": { "zh-TW": "預設（llm）", en: "Default (llm)" },
   "modelSettings.slotApiKey": { "zh-TW": "API 金鑰", en: "API key" },
+  "modelSettings.envNameHint": {
+    "zh-TW": "英文字母、數字和底線，不能以數字開頭",
+    en: "Letters, digits and _, not starting with a digit",
+  },
+  "modelSettings.envNameBad": {
+    "zh-TW": "「{name}」不能當變數名稱：只能有英文字母、數字和底線，不能以數字開頭",
+    en: "“{name}” cannot be a variable name: letters, digits and _ only, not starting with a digit",
+  },
   "modelSettings.envTitle": {
     "zh-TW": "加一個環境變數的秘密值",
     en: "Add a secret environment variable",

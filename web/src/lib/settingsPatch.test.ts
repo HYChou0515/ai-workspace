@@ -135,6 +135,19 @@ describe("diffEffective", () => {
     ]);
   });
 
+  it("names a reordered list as changed — fallbacks are a priority chain", () => {
+    // review 18: lists were compared as sets, so a reorder was stored but said
+    // nothing — and with nothing to say, Apply was not offered.
+    const withChain = { config: { agents: { presets: { a: { fallbacks: ["b", "c"] } } } } };
+    const after = { config: { agents: { presets: { a: { fallbacks: ["c", "b"] } } } } };
+
+    expect(diffEffective(withChain, {}, after)).toEqual([
+      { path: "config.agents.presets.a.fallbacks", kind: "changed", before: ["b", "c"], after: ["c", "b"] },
+    ]);
+    expect(diffPatches({}, after)).toHaveLength(1);
+    expect(diffPatches(after, { config: { agents: { presets: { a: { fallbacks: ["b", "c"] } } } } })).toHaveLength(1);
+  });
+
   it("names a value back to its default as changed, to the default", () => {
     const before = { config: { agents: { presets: { a: { model: "new-a" } } } } };
 
