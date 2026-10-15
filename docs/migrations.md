@@ -2500,7 +2500,7 @@ AI 讀 `wui` skill 時會看到「這個 item 能讓頁面問的 subagent」清�
 - 同一個頁面連按五次會跑很久的 `startAgent`：第五次被拒，訊息寫「already has 4 page jobs running」。沒部署到這一版
   的症狀同上一條（`workspace.startAgent is not a function`）；部署了但設定值沒生效的症狀是數字不是你設的那個。
 
-### 2026-10-15 · #951 使用統計在 Postgres 上不再 500 {#pr-951}
+### 2026-10-15 · 462774ef · #951 使用統計在 Postgres 上不再 500 {#pr-951}
 
 **設定** — 無。
 
