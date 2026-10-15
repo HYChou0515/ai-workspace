@@ -19,12 +19,12 @@ from __future__ import annotations
 
 import dataclasses
 import os
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any, cast
 
 from .interpolate import expand_env, has_env_reference
-from .merge import merge_layered
+from .merge import apply_merge_patch, merge_layered
 from .schema import (
     AgentsSettings,
     ChatVideoSettings,
@@ -113,6 +113,8 @@ def load_with_provenance(
     *,
     config_path: Path | None = None,
     env: Mapping[str, str] | None = None,
+    overlay: dict[str, Any] | None = None,
+    keys: Sequence[tuple[Sequence[str], str]] | None = None,
 ) -> tuple[Settings, Provenance]:
     """`load` plus a per-leaf provenance map (observability feature A): for
     every dotted path in `asdict(settings)`, whether the value came from the
@@ -142,6 +144,37 @@ def load_with_provenance(
     bundled = dataclasses.asdict(Settings())
     _flatten_bundled_sub_agents(bundled)
     merged = merge_layered(bundled, yaml_d)
+
+    # 4b — the settings page's published changes (docs/plan-model-settings.md):
+    # a JSON Merge Patch over the merged defaults, so it wins over both layers
+    # and `null` can hide even a bundled preset (M12). Applied BEFORE
+    # validation, so an Apply is refused by exactly what refuses a boot (M8).
+    # Taken LITERALLY — never `${VAR}`-expanded: the page's text expanded from
+    # the server's environment handed any variable back to whoever typed its
+    # name (a DSN, a provider key) in a refusal or a test call (final review).
+    if overlay:
+        merged = apply_merge_patch(merged, overlay)
+    # 4c — the page's write-only keys, by parts: each lands only where the
+    # setting's OWNER exists after the merge (a preset, a role reference); the
+    # level that holds the value (`llm`, `env`) may be created. A key whose
+    # owner this version does not have (a hidden preset, a rollback to before
+    # it was added, a role turned off) is unused — writing it would make a half
+    # preset the checks then refuse.
+    for parts, value in keys or ():
+        owner, holder, leaf = list(parts[:-2]), list(parts[-2:-1]), parts[-1]
+        node: Any = merged
+        for part in owner:
+            node = node.get(part) if isinstance(node, dict) else None
+        if not isinstance(node, dict):
+            continue
+        for part in holder:
+            # `llm: null` is a valid role reference (no per-ref creds): the key
+            # makes that level, as for a level not written at all (final review 10).
+            if node.get(part) is None:
+                node[part] = {}
+            node = node[part]
+        if isinstance(node, dict):
+            node[leaf] = value
 
     # 5 — strict validation
     _validate(merged, source=str(path) if path else "<bundled defaults>")
@@ -1123,6 +1156,7 @@ def _settings_from_dict(d: dict[str, Any]) -> Settings:
             git=_build(GitSettings, d["kb"]["git"]),
             vlm_llm=_build_retrieval_llm(d["kb"]["vlm_llm"]),
             vlm_format_llm=_build_retrieval_llm(d["kb"].get("vlm_format_llm")),
+            quality_judge=_build_retrieval_llm(d["kb"].get("quality_judge")),
             deck_vlm=_build_retrieval_llm(d["kb"].get("deck_vlm")),
             wiki=_build_wiki(d["kb"]["wiki"]),
             parsers=list(d["kb"].get("parsers", [])),

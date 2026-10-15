@@ -180,6 +180,9 @@ def build_coordinators(
     wiki_model: str = "",
     wiki_llm_base_url: str = "",
     wiki_llm_api_key: str = "",
+    # plan-model-settings P5: (model, base_url, api_key) of `kb.wiki.llm` from the
+    # published settings, asked per job. None ⇒ the three strings above, fixed.
+    wiki_endpoint: Callable[[], tuple[str | None, str | None, str | None]] | None = None,
     # #245: blob-GC grace periods (filestore.gc_t1 / gc_t2) and the telemetry
     # sinks — the reconcile's `blob_gc` event and the `ws_census` snapshot the
     # consuming process records (the API's sweeper used to; now the job does).
@@ -205,11 +208,37 @@ def build_coordinators(
     # maintainer agent uses (kb.wiki.llm). Empty model ⇒ None ⇒ code-wiki off.
     from .kb.llm import LitellmLlm
 
-    code_wiki_llm = (
+    code_wiki_llm: ILlm | None = (
         LitellmLlm(wiki_model, wiki_llm_base_url or None, wiki_llm_api_key or None)
         if wiki_model
         else None
     )
+    if wiki_endpoint is not None and code_wiki_llm is not None:
+        from .model_settings.consumers import LiveClient, LiveLlm
+
+        code_wiki_llm = LiveLlm(
+            LiveClient(
+                "kb.wiki.llm",
+                wiki_endpoint,
+                lambda e: LitellmLlm(e[0], e[1], e[2]) if e[0] else None,
+            )
+        )
+
+    def maintainer_config() -> AgentConfig:
+        model, base_url, api_key = (
+            (wiki_model, wiki_llm_base_url, wiki_llm_api_key)
+            if wiki_endpoint is None
+            else wiki_endpoint()
+        )
+        return resolve_wiki_config(
+            catalog,
+            "wiki_maintainer",
+            default_wiki_maintainer_config,
+            wiki_model=model or "",
+            wiki_llm_base_url=base_url or "",
+            wiki_llm_api_key=api_key or "",
+        )
+
     # #355: the code_sync job clones a code collection's git_url + ingests it on
     # the wiki worker (off the API), so the wiki coordinator owns the CodeRepoIngestor.
     from .kb.code_repo import CodeRepoIngestor
@@ -217,14 +246,7 @@ def build_coordinators(
     wiki = WikiMaintenanceCoordinator(
         spec,
         runner,
-        agent_config=resolve_wiki_config(
-            catalog,
-            "wiki_maintainer",
-            default_wiki_maintainer_config,
-            wiki_model=wiki_model,
-            wiki_llm_base_url=wiki_llm_base_url,
-            wiki_llm_api_key=wiki_llm_api_key,
-        ),
+        agent_config=maintainer_config,
         maintainer_max_turns=wiki_maintainer_max_turns,
         message_queue_factory=message_queue_factory,
         get_user_id=get_user_id,
