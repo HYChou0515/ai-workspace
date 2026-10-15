@@ -877,6 +877,98 @@ def build_catalog_tools(
     return [_stub_function_tool(pkg, cmd, mark_loaded) for pkg, cmd in _granted(packages, allowed)]
 
 
+#: How many names an unknown-name answer lists before it stops. A deployment
+#: with hundreds of commands must not get its whole catalog pasted back into
+#: the turn as an error message — but silence would leave the model guessing,
+#: which is what this answers (`docs/plan-tool-on-demand-loading.md`).
+_UNKNOWN_NAMES_SHOWN = 30
+
+_LOAD_TOOL_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "names": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": (
+                "Tool names to load, as they appear in your tool list. A bundle's "
+                "own name loads every command in it."
+            ),
+        }
+    },
+    "required": ["names"],
+}
+
+
+def build_load_tool(
+    packages: Sequence[PackageInfo],
+    *,
+    allowed: list[str] | None,
+    mark_loaded: MarkLoaded,
+) -> FunctionTool:
+    """`load_tool`: ask for a command's real arguments before calling it.
+
+    Calling an unloaded command already loads it and answers with its schema,
+    so this is not the only way in — it is the way to look first, and to load
+    a whole bundle in one step. Reads the SAME `_granted` as the catalog and
+    the executable tools, so it can never reach a command this turn was not
+    granted.
+    """
+    granted = _granted(packages, allowed)
+    by_name: dict[str, list[tuple[PackageInfo, CommandInfo]]] = {}
+    for pkg, cmd in granted:
+        by_name.setdefault(model_tool_name(pkg, cmd), []).append((pkg, cmd))
+        by_name.setdefault(pkg.name, []).append((pkg, cmd))
+        by_name.setdefault(f"{pkg.name}:{cmd.name}", []).append((pkg, cmd))
+
+    async def on_invoke(ctx: ToolContext[AgentToolContext], args_json: str) -> str:
+        try:
+            asked = json.loads(args_json or "{}").get("names") or []
+        except ValueError:
+            asked = []
+        if isinstance(asked, str):  # a model that sent one name, not a list
+            asked = [asked]
+        parts: list[str] = []
+        for name in [str(a) for a in asked]:
+            found = by_name.get(name)
+            if not found:
+                parts.append(_unknown_name_reply(name, granted))
+                continue
+            for pkg, cmd in found:
+                mark_loaded(ctx.context, model_tool_name(pkg, cmd))
+                parts.append(load_reply(pkg, cmd))
+        if not parts:
+            return (
+                "Nothing to load: `names` was empty. Give the name of a tool from "
+                "your tool list, or a bundle's name to load all of its commands."
+            )
+        return "\n\n".join(parts)
+
+    return FunctionTool(
+        name="load_tool",
+        description=(
+            "Get a tool's usage (its argument schema) before calling it. Pass the "
+            "names as they appear in your tool list; a bundle's name loads every "
+            "command in it. Calling a tool directly also loads it."
+        ),
+        params_json_schema=_LOAD_TOOL_SCHEMA,
+        on_invoke_tool=on_invoke,
+        strict_json_schema=False,
+    )
+
+
+def _unknown_name_reply(name: str, granted: list[tuple[PackageInfo, CommandInfo]]) -> str:
+    """Say what IS there. Silence here reads as "that tool is gone" and the
+    model stops looking for the one it actually wanted."""
+    names = sorted({model_tool_name(pkg, cmd) for pkg, cmd in granted})
+    shown = ", ".join(f"`{n}`" for n in names[:_UNKNOWN_NAMES_SHOWN])
+    more = (
+        f" (and {len(names) - _UNKNOWN_NAMES_SHOWN} more in your tool list)"
+        if len(names) > _UNKNOWN_NAMES_SHOWN
+        else ""
+    )
+    return f"There is no tool called `{name}`. Tools you can load: {shown}{more}."
+
+
 def _stub_function_tool(
     pkg: PackageInfo, cmd: CommandInfo, mark_loaded: MarkLoaded
 ) -> FunctionTool:

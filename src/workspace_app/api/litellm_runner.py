@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import dataclasses
 import json
 import logging
 import os
@@ -138,6 +139,37 @@ _WIKI_TRACE_NAMES = {
     "Wiki Reader": "Wiki reader",
     "Wiki Merge": "Wiki merge",
 }
+
+
+def _loaded_this_turn(name: str) -> Callable[[RunContextWrapper[Any], Any], bool]:
+    """Enable the executable half of `name`'s pair once this turn has loaded it
+    (`docs/plan-tool-on-demand-loading.md`).
+
+    Evaluated by the SDK on EVERY step, which is what makes "load it, then call
+    it" work inside one turn rather than next turn.
+
+    A context that cannot answer counts as loaded: every turn in this app
+    carries an `AgentToolContext`, so this is the shape a future caller would
+    arrive in, and the honest default is the behaviour from before the
+    catalog — the full schema, sent.
+    """
+
+    def check(ctx: RunContextWrapper[Any], _agent: Any) -> bool:  # noqa: ANN401 — the SDK hands the agent; unused
+        answer = getattr(ctx.context, "is_tool_loaded", None)
+        return True if answer is None else bool(answer(name))
+
+    return check
+
+
+def _not_loaded_this_turn(name: str) -> Callable[[RunContextWrapper[Any], Any], bool]:
+    """Enable the catalog half until the turn loads it — the exact complement
+    of `_loaded_this_turn`, so one of the pair is always sent and never both."""
+
+    def check(ctx: RunContextWrapper[Any], _agent: Any) -> bool:  # noqa: ANN401 — the SDK hands the agent; unused
+        answer = getattr(ctx.context, "is_tool_loaded", None)
+        return False if answer is None else not bool(answer(name))
+
+    return check
 
 
 def _trace_workflow_name(ctx: AgentToolContext) -> str:
@@ -532,13 +564,38 @@ def _agent_for(
 
     if in_chat and ask_outside_granted(config):
         tools.append(ask_outside_tool())
+    # plan-tool-on-demand-loading: `load_tool` is ours, not a package's, so it
+    # goes in BEFORE `builtin_names` is read — the usage report would otherwise
+    # file it under `first_party`, beside the commands it exists to open.
+    # Granted by the same rule as the cards above: only when there is a package
+    # command whose schema could need loading.
+    if packages:
+        from ..tooling.registry import build_catalog_tools, build_load_tool
+
+        def _mark_loaded(actx: AgentToolContext, name: str) -> None:
+            actx.mark_tool_loaded(name)
+
+        tools.append(
+            build_load_tool(packages, allowed=config.allowed_tools, mark_loaded=_mark_loaded)
+        )
     # plan-tool-usage-stats D6: what is in the list BEFORE the package commands
     # is ours — built-ins and the rule-granted cards. The last point every
     # source is still a list of its own, so the source is read here, not
     # guessed later from a name a first-party command shares with a built-in.
     builtin_names = {t.name for t in tools}
     if packages:
-        tools.extend(build_function_tools(packages, allowed=config.allowed_tools))
+        # plan-tool-on-demand-loading: each granted command is registered TWICE
+        # under one name — the executable tool, enabled once this turn has
+        # loaded it, and the catalog entry (one line, no schema), enabled until
+        # then. The SDK re-resolves `is_enabled` on every step
+        # (`agents/run.py:1028` → `agent.py:254`), so exactly one of the pair
+        # reaches the provider and the payload never carries a duplicate name.
+        # Same-name registration is safe: the SDK's own duplicate check is
+        # codex-tools-only and runs AFTER that filter (`agent.py:95-113`).
+        tools.extend(
+            dataclasses.replace(t, is_enabled=_loaded_this_turn(t.name))
+            for t in build_function_tools(packages, allowed=config.allowed_tools)
+        )
     # Last stop before the model sees them, and the only place every source is in
     # one list: built-ins, the conditional grants, and the package commands —
     # which `build_function_tools` rejects collisions AMONG, but not against
@@ -618,6 +675,24 @@ def _agent_for(
     tools = [
         wrap_with_usage(wrap_with_args_recovery(t), source(t.name), package(t.name)) for t in tools
     ]
+    # The catalog entries go on AFTER the wrapping, and deliberately without
+    # it: a catalog hit is the model asking what a tool takes, not the tool
+    # running, so counting it would add a call to every command's row in the
+    # usage report (plan-tool-usage-stats) and move its average; and argument
+    # recovery has nothing to recover — the entry reads no arguments at all.
+    # They also go on after `dedupe_tools`, which drops repeats of a name and
+    # would otherwise take one twin of each pair and warn about it every turn.
+    # A command a built-in shadows is left out here too, because dedupe just
+    # dropped its executable half — a catalog entry for it would advertise
+    # something that can never run.
+    if packages:
+        tools.extend(
+            dataclasses.replace(stub, is_enabled=_not_loaded_this_turn(stub.name))
+            for stub in build_catalog_tools(
+                packages, allowed=config.allowed_tools, mark_loaded=_mark_loaded
+            )
+            if stub.name not in builtin_names
+        )
     # Per-message reasoning effort (the UI selector). Only set when chosen —
     # absent leaves the model's default. drop_params (above) drops it on models
     # that don't support it, so it's safe to send to any model.
