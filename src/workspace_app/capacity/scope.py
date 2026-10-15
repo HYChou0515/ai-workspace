@@ -41,11 +41,19 @@ class RequestIdentity:
     """Who one request is for — filled in by the first `get_user_id` answer
     given while the request runs, and closed when it ends."""
 
-    def __init__(self, app: str = "", *, tags: bool = True) -> None:
-        self.app = app
+    def __init__(
+        self, app: str = "", *, tags: bool = True, app_of: Callable[[], str] | None = None
+    ) -> None:
+        self._app = app
+        #: read when asked: a request's App is known only once a route matched
+        self._app_of = app_of
         self.tags = tags
         self.user: str | None = None
         self.closed = False
+
+    @property
+    def app(self) -> str:
+        return self._app_of() if self._app_of is not None else self._app
 
     def close(self) -> None:
         self.closed = True

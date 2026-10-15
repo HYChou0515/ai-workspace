@@ -10,16 +10,21 @@ and this app streams SSE. For each HTTP request it records one `work` count:
 - **A stream or a request**: a response whose content type is
   `text/event-stream` is a stream, in flight from its first header to its
   end — no list of long-lived routes to keep current.
+- **Which App**: the `slug` of the route that matched, and only when the
+  response did not refuse it (< 400). Read off the raw path, any URL —
+  `/api/a/<anything>/…`, signed in or not — minted an App: a row per window
+  each, and a series in the analysis.
 - **Who**: the request carries a `RequestIdentity`; the `get_user_id` its
   routes call is `recording_reader`-wrapped, so the first answer a route gets
-  is the request's person at no extra cost. A request whose routes never asked
-  gets one call of the deploy's reader; an exception there is `unknown`.
+  is the request's person at no extra cost. An API request whose route never
+  asked (auto-CRUD routes, probes) gets one call of the deploy's reader after
+  its response; an exception there is `unknown`. A request no route answered
+  (a static file, a URL nothing serves) is `unknown` without asking.
 """
 
 from __future__ import annotations
 
 import logging
-import re
 import time
 from collections.abc import Callable
 from typing import Any
@@ -34,13 +39,14 @@ Message = dict[str, Any]
 Receive = Callable[[], Any]
 Send = Callable[[Message], Any]
 
-_APP_SLUG = re.compile(r"^/api/a/([^/]+)/")
 _EVENT_STREAM = b"text/event-stream"
 
 
-def _slug(path: str) -> str:
-    m = _APP_SLUG.match(path)
-    return m.group(1) if m else ""
+def _slug(scope: Scope) -> str:
+    """The App the matched route was called with — never read off the raw path
+    (`path_params` exist only once something matched)."""
+    slug = scope.get("path_params", {}).get("slug", "")
+    return slug if isinstance(slug, str) else ""
 
 
 def _work(scope: Scope) -> str:
@@ -69,8 +75,10 @@ class UsageMiddleware:
         self._recorder = recorder
         self._get_user_id = get_user_id
 
-    def _who(self, holder: RequestIdentity) -> str:
+    def _who(self, holder: RequestIdentity, scope: Scope) -> str:
         if holder.user is None:
+            if scope.get("route") is None:
+                return UNKNOWN
             try:
                 holder.user = self._get_user_id()
             except Exception:
@@ -82,15 +90,21 @@ class UsageMiddleware:
             await self.app(scope, receive, send)
             return
         started = time.monotonic()
-        holder = RequestIdentity(app=_slug(scope.get("path", "")), tags=self._recorder.llm_tags)
+        holder = RequestIdentity(tags=self._recorder.llm_tags, app_of=lambda: _slug(scope))
         stream: Running | None = None
+        status = 0
+
+        def app() -> str:
+            return holder.app if status < 400 else ""
 
         async def counted_send(message: Message) -> None:
-            nonlocal stream
+            nonlocal stream, status
             starting = message["type"] == "http.response.start"
+            if starting:
+                status = int(message.get("status", 0))
             if starting and stream is None and _is_stream(message):
                 work = "stream:" + _template(scope)
-                stream = self._recorder.begin(self._who(holder), holder.app, work)
+                stream = self._recorder.begin(self._who(holder, scope), app(), work)
             await send(message)
 
         try:
@@ -103,8 +117,8 @@ class UsageMiddleware:
                 else:
                     elapsed = time.monotonic() - started
                     self._recorder.add(
-                        self._who(holder),
-                        holder.app,
+                        self._who(holder, scope),
+                        app(),
                         "req:" + _work(scope),
                         seconds=elapsed,
                         latency_ms=elapsed * 1000,

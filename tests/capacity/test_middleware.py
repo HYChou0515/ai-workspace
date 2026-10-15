@@ -54,6 +54,11 @@ def _app(recorder: UsageRecorder, reader: _Reader) -> tuple[FastAPI, list]:
     def public():
         return {"ok": True}
 
+    @api.get("/a/{slug}/gone")
+    def gone(slug: str):
+        ask()
+        raise HTTPException(status_code=404, detail="no such App")
+
     @api.get("/boom")
     def boom():
         ask()
@@ -139,3 +144,25 @@ def test_an_event_stream_is_counted_as_a_stream_with_its_connection_time():
     assert (row["user"], row["app"], row["count"]) == ("erin", "pm", 1)
     assert row["seconds"] >= 0.1
     assert not [k for k in row if k.startswith("h")], "a stream has no latency"
+
+
+def test_a_url_no_route_answered_names_no_app_and_asks_nobody_who():
+    """Anyone, signed in or not, can send /api/a/<anything>/…: a slug read off
+    the raw path minted an App per URL — a row per window each, and a series
+    in the analysis. And a request no route answered (a static file, a URL
+    nothing serves) is nobody's to ask the deploy's reader about."""
+    reader = _Reader("dave")
+
+    rows, _ = _run(reader, *(f"/api/a/x{i}/nope" for i in range(5)), "/assets/app.js")
+
+    assert {r["app"] for r in rows} == {""}
+    assert {r["user"] for r in rows} == {"unknown"}
+    assert reader.calls == 0
+
+
+def test_an_app_route_that_refuses_its_slug_names_no_app():
+    """A route matched, but its slug is no App: the slug is the caller's word."""
+    rows, _ = _run(_Reader("erin"), "/api/a/zz1/gone", "/api/a/zz2/gone")
+
+    assert {r["app"] for r in rows} == {""}
+    assert {r["user"] for r in rows} == {"erin"}
