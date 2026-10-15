@@ -82,7 +82,17 @@ class Period:
 
     @cached_property
     def full_days(self) -> list[int]:
-        """Indices of the days the period covers whole — a partial day's peak
-        is not a day's peak."""
-        counts = np.bincount(self.day_of, minlength=len(self.days))
-        return [i for i, c in enumerate(counts) if c >= self.slots_per_day]
+        """Indices of the days the period holds whole, from the slot holding
+        their local midnight to the next midnight — 23 or 25 hours on a day
+        the clocks change. A partial day's peak is not a day's peak."""
+        out = []
+        for i, day in enumerate(self.days):
+            start = _midnight_ms(day, self.tz)
+            end = _midnight_ms(day + dt.timedelta(days=1), self.tz)
+            if self.start_ms <= start // self.step_ms * self.step_ms and end <= self.end_ms:
+                out.append(i)
+        return out
+
+
+def _midnight_ms(day: dt.date, tz: ZoneInfo) -> int:
+    return int(dt.datetime.combine(day, dt.time(0), tzinfo=tz).timestamp() * 1000)

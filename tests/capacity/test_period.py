@@ -53,3 +53,25 @@ def test_the_long_periods_slot_is_a_whole_number_of_windows(window_s: int, step_
     step = CapacityService(CapacitySources(), settings).period(90).step_s
 
     assert step >= 900 and step % window_s == 0 and 86_400 % step == 0
+
+
+@pytest.mark.parametrize(
+    ("zone", "day"),
+    [
+        ("Europe/Berlin", dt.date(2026, 3, 29)),  # 23 hours
+        ("Europe/Berlin", dt.date(2026, 10, 25)),  # 25 hours
+        ("America/New_York", dt.date(2026, 3, 8)),
+        ("America/New_York", dt.date(2026, 11, 1)),
+    ],
+)
+def test_a_day_the_clocks_change_is_whole_when_the_period_holds_all_of_it(zone: str, day: dt.date):
+    """A day is whole when the period holds it from its midnight to the next —
+    23 hours on the day the clocks go forward. Counted against 24 hours of
+    slots, that day was never whole: never a day's peak, never sized on."""
+    tz = ZoneInfo(zone)
+    now = dt.datetime.combine(day + dt.timedelta(days=3), dt.time(10), tzinfo=tz)
+
+    p = Period.ending(_ms(now), days=7, step_s=300, lag_s=0, tz=tz)
+
+    assert len(p.full_days) == 7
+    assert day in [p.days[d] for d in p.full_days]
