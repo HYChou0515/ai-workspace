@@ -267,3 +267,18 @@ def test_the_what_if_keeps_a_few_profiles_not_every_one_asked():
         a.whatif(5, "app", f"app-{i}")
 
     assert len(a._sims) <= 4  # noqa: SLF001
+
+
+@pytest.mark.parametrize(("days", "ready"), [(2, False), (3, True)])
+def test_lines_split_by_regression_wait_for_three_days_the_direct_ones_do_not(days, ready):
+    """§9.10: direct lines after a day; a regression needs three days of both
+    sources to say what each kind of work costs."""
+    w = World(days=days, users=20)
+    sources = CapacitySources(WorldRecords(w), WorldPods(w), WorldGpus(w), WorldLlm(w))
+    obs = observe(sources, Period(w.start_ms, w.end_ms, w.step_s, ZoneInfo(w.tz)))
+
+    readiness = analyse(obs, now_ms=w.end_ms).summary()["readiness"]
+
+    assert readiness["allocation"]["ready"]
+    assert readiness["regression"]["ready"] is ready
+    assert (readiness["regression"]["have_days"], readiness["regression"]["need_days"]) == (days, 3)

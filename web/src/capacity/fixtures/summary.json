@@ -138,6 +138,15 @@
    "need_days": 1,
    "period_days": 28
   },
+  "regression": {
+   "ready": true,
+   "reason": null,
+   "missing": [],
+   "error": null,
+   "have_days": 28,
+   "need_days": 3,
+   "period_days": 28
+  },
   "distribution": {
    "ready": true,
    "reason": null,

@@ -171,6 +171,9 @@ class Analysis:
             "overview": view(NEED["overview"], ["resource_metrics"]),
             "allocation": view(NEED["allocation"], ["usage_records"]),
             "person": view(NEED["allocation"], ["usage_records"]),
+            # Lines split by regression, within views 2 and 3: what each kind
+            # of work costs needs days of both sources (§9.10).
+            "regression": view(NEED["regression"], both),
             "distribution": view(NEED["distribution"], ["usage_records"], people=True),
             "trends": view(NEED["trends"], SOURCES, any_of=True),
             "whatif": view(
