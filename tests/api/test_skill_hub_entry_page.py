@@ -212,9 +212,11 @@ async def test_installs_of_an_entry_the_viewer_cannot_read_is_404(harness: Harne
 # ── what installing would do (D6) ────────────────────────────────────────────
 
 
-async def test_targets_lists_an_apps_editable_workspaces_with_what_installing_would_do(
-    harness: Harness,
-):
+async def test_targets_lists_an_apps_editable_workspaces_by_title(harness: Harness):
+    """The picker's rows are the workspaces the viewer may edit — what
+    installing needs — and nothing about what is inside them: whether the
+    entry is already there is the side panel's where-installed, and a folder
+    in the way is the install's own refusal (plan-skill-install-picker D1)."""
     hub = _hub(harness)
     entry = await _publish(hub, "one", tools=["exec", "query_entity"])
     carols = await _publish(hub, "x", owner="carol")
@@ -222,8 +224,6 @@ async def test_targets_lists_an_apps_editable_workspaces_with_what_installing_wo
     free = _item(harness, "free", "read_content", "edit_content")
     taken = _item(harness, "taken", "read_content", "edit_content")
     await _copy(harness, taken, "triage", carols)
-    hand_written = _item(harness, "hand", "read_content", "edit_content")
-    await harness.filestore.write(hand_written, "/.skill/triage/SKILL.md", _md("mine"))
     read_only = _item(harness, "read only", "read_content")
 
     res = harness.client.get(f"/skill-hub/entries/{entry}/targets", params={"app": "rca"})
@@ -231,13 +231,31 @@ async def test_targets_lists_an_apps_editable_workspaces_with_what_installing_wo
     assert res.status_code == 200, res.text
     body = res.json()
     assert body["missing_tools"] == ["query_entity"]
-    by_id = {t["item_id"]: t for t in body["items"]}
-    assert read_only not in by_id, "only workspaces the viewer may edit"
-    assert by_id[harness.iid]["state"] == "installed"
-    assert by_id[free]["state"] == "ok"
-    assert (by_id[taken]["state"], by_id[taken]["owner"]) == ("name_taken", "carol")
-    assert (by_id[hand_written]["state"], by_id[hand_written]["owner"]) == ("name_taken", "")
-    assert by_id[free]["title"] == "free"
+    assert body["items"] == [
+        {"item_id": free, "title": "free"},
+        {"item_id": harness.iid, "title": "t"},
+        {"item_id": taken, "title": "taken"},
+    ], "only workspaces the viewer may edit, by title, and nothing about their files"
+    assert read_only not in [t["item_id"] for t in body["items"]]
+
+
+async def test_targets_reads_no_workspace_file(harness: Harness, monkeypatch):
+    """The list must open as fast as the item list does: one question to the
+    database, none to any workspace. It used to read each workspace's
+    `.skill/<name>/` (two to four sandbox round trips apiece) and answered
+    only once the slowest one had."""
+    hub = _hub(harness)
+    entry = await _publish(hub, "one")
+    other = await _publish(hub, "x", owner="carol")
+    taken = _item(harness, "taken", "read_content", "edit_content")
+    await _copy(harness, taken, "triage", other)
+    seen = _record_wakes(harness, monkeypatch)
+
+    res = harness.client.get(f"/skill-hub/entries/{entry}/targets?app=rca")
+
+    assert res.status_code == 200, res.text
+    assert len(res.json()["items"]) == 2
+    assert seen == []
 
 
 async def test_targets_for_an_unknown_app_is_an_empty_list(harness: Harness):
@@ -272,8 +290,8 @@ def _record_wakes(harness: Harness, monkeypatch) -> list[bool]:  # noqa: ANN001
     return seen
 
 
-async def test_installs_and_targets_never_wake_a_sandbox(harness: Harness, monkeypatch):
-    """They read every workspace the viewer can edit, on every skill page
+async def test_installs_never_wakes_a_sandbox(harness: Harness, monkeypatch):
+    """It reads every workspace the viewer can edit, on every skill page
     open: waking one rebuilds a reaped sandbox, so N idle workspaces cost N
     rebuilds a view. A gone sandbox has nothing newer than its durable copy."""
     hub = _hub(harness)
@@ -284,15 +302,14 @@ async def test_installs_and_targets_never_wake_a_sandbox(harness: Harness, monke
     seen = _record_wakes(harness, monkeypatch)
 
     assert harness.client.get(f"/skill-hub/entries/{entry}/installs").status_code == 200
-    assert harness.client.get(f"/skill-hub/entries/{entry}/targets?app=rca").status_code == 200
 
     assert seen and not any(seen), seen
 
 
 async def test_a_copy_with_an_unreadable_record_does_not_break_the_page(harness: Harness):
     """Someone else's hand-edited `.origin` in a workspace shared with the
-    viewer: that workspace is left out of where-installed and offered as
-    taken (a folder of that name is there), and the rest still answer."""
+    viewer: that workspace is left out of where-installed, and the rest
+    still answer."""
     hub = _hub(harness)
     entry = await _publish(hub, "one")
     broken = _item(harness, "broken", "read_content", "edit_content")
@@ -301,18 +318,14 @@ async def test_a_copy_with_an_unreadable_record_does_not_break_the_page(harness:
     harness.client.post(harness.wpath("/skills/install"), json={"entry_id": entry})
 
     installs = harness.client.get(f"/skill-hub/entries/{entry}/installs")
-    targets = harness.client.get(f"/skill-hub/entries/{entry}/targets?app=rca")
 
     assert installs.status_code == 200, installs.text
     assert [i["item_id"] for i in installs.json()["installs"]] == [harness.iid]
-    assert targets.status_code == 200, targets.text
-    by_id = {t["item_id"]: t for t in targets.json()["items"]}
-    assert by_id[broken]["state"] == "name_taken"
 
 
 async def test_a_fork_from_a_version_is_the_viewers_own_not_an_install(harness: Harness):
     """「從這一版 fork」 copies a version as a starting point of the viewer's
-    own (`.origin.forked`): not 「已經裝了」, but a folder of that name."""
+    own (`.origin.forked`): not 「已經裝了」."""
     hub = _hub(harness)
     entry = await _publish(hub, "one")
     started = _item(harness, "started", "read_content", "edit_content")
@@ -321,17 +334,13 @@ async def test_a_fork_from_a_version_is_the_viewers_own_not_an_install(harness: 
     await harness.filestore.write(started, "/.skill/triage/.origin", msgspec.json.encode(origin))
 
     installs = harness.client.get(f"/skill-hub/entries/{entry}/installs").json()["installs"]
-    targets = harness.client.get(f"/skill-hub/entries/{entry}/targets?app=rca").json()["items"]
 
     assert started not in [i["item_id"] for i in installs]
-    by_id = {t["item_id"]: t for t in targets}
-    # The viewer's own folder: no one else's name on it (round 2).
-    assert (by_id[started]["state"], by_id[started]["owner"]) == ("name_taken", "")
 
 
 async def test_a_folder_holding_only_the_record_is_not_an_install(harness: Harness):
     """The install route accepts it (nothing of the skill is there), so the
-    dialog offers it and the sidebar does not list it."""
+    sidebar does not list it."""
     hub = _hub(harness)
     entry = await _publish(hub, "one")
     hollow = _item(harness, "hollow", "read_content", "edit_content")
@@ -339,10 +348,8 @@ async def test_a_folder_holding_only_the_record_is_not_an_install(harness: Harne
     await harness.filestore.write(hollow, "/.skill/triage/.origin", msgspec.json.encode(origin))
 
     installs = harness.client.get(f"/skill-hub/entries/{entry}/installs").json()["installs"]
-    targets = harness.client.get(f"/skill-hub/entries/{entry}/targets?app=rca").json()["items"]
 
     assert hollow not in [i["item_id"] for i in installs]
-    assert {t["item_id"]: t["state"] for t in targets}[hollow] == "ok"
     res = harness.client.post(f"/a/rca/items/{hollow}/skills/install", json={"entry_id": entry})
     assert res.status_code == 200, res.text
 
@@ -382,5 +389,8 @@ async def test_a_busy_workspace_is_said_not_failed(harness: Harness, monkeypatch
     installs = harness.client.get(f"/skill-hub/entries/{entry}/installs")
     targets = harness.client.get(f"/skill-hub/entries/{entry}/targets?app=rca")
 
-    assert installs.status_code == 200 and targets.status_code == 200
-    assert {t["item_id"]: t["state"] for t in targets.json()["items"]}[busy] == "unavailable"
+    assert installs.status_code == 200, installs.text
+    assert busy not in [i["item_id"] for i in installs.json()["installs"]]
+    # The picker never asks the sandbox, so a busy one is offered like any other.
+    assert targets.status_code == 200, targets.text
+    assert busy in [t["item_id"] for t in targets.json()["items"]]

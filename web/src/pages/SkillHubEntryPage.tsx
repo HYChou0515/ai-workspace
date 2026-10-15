@@ -384,8 +384,6 @@ function InstallDialog({
   const t = useT();
   const titleId = useId();
   const apps = useApps();
-  const users = useUsers();
-  const nameOf = (id: string) => users.find((u) => u.id === id)?.name ?? id;
   const qc = useQueryClient();
   const [slug, setSlug] = useState(entry.source_app);
   const [picked, setPicked] = useState<string | null>(null);
@@ -393,6 +391,17 @@ function InstallDialog({
     queryKey: qk.skillHubTargets(entry.id, slug),
     queryFn: () => client.targets(entry.id, slug),
   });
+  // 「已經裝了」 is the side panel's where-installed — the same query, so no
+  // second read — and the list does not wait for it: that reads every
+  // workspace, the list only the database (plan-skill-install-picker D2). A
+  // folder of that name in the way is said by the install's own refusal.
+  const installs = useQuery({
+    queryKey: qk.skillHubInstalls(entry.id),
+    queryFn: () => client.installs(entry.id),
+  });
+  const installed = new Set(
+    (installs.data ?? []).filter((i) => i.app === slug).map((i) => i.item_id),
+  );
   const items = targets.data?.items ?? [];
   const install = useMutation({
     mutationFn: (itemId: string) => client.install(slug, itemId, entry.id),
@@ -447,20 +456,12 @@ function InstallDialog({
                 name={`${titleId}-item`}
                 value={it.item_id}
                 checked={picked === it.item_id}
-                disabled={it.state !== "ok"}
+                disabled={installed.has(it.item_id)}
                 onChange={() => setPicked(it.item_id)}
               />
               <span>{it.title || it.item_id}</span>
-              {it.state === "installed" ? (
+              {installed.has(it.item_id) ? (
                 <span className="muted small">{t("skillHub.install.state.installed")}</span>
-              ) : it.state === "unavailable" ? (
-                <span className="muted small">{t("skillHub.install.state.unavailable")}</span>
-              ) : it.state === "name_taken" ? (
-                <span className="muted small">
-                  {it.owner
-                    ? t("skillHub.install.state.taken", { owner: nameOf(it.owner) })
-                    : t("skillHub.install.state.takenHand")}
-                </span>
               ) : null}
             </label>
           ))

@@ -307,17 +307,12 @@ class SkillHubInstalls(BaseModel):
 
 
 class SkillHubTarget(BaseModel):
-    """One workspace the install dialog offers, and what installing would do
-    there (D6): `ok`; `installed` — a copy of this entry is already there;
-    `name_taken` — another folder of that name is, `owner` naming whose copy
-    it is when the viewer can read that entry ("" otherwise: a hand-written
-    folder, a fork's starting point, a copy of an entry gone from their view);
-    `unavailable` — the workspace's sandbox was too busy to answer."""
+    """One workspace the install dialog offers. Nothing about what is inside
+    it (plan-skill-install-picker D1): finding out meant reading every
+    workspace's `.skill/` before the list could show at all."""
 
     item_id: str
     title: str
-    state: Literal["ok", "installed", "name_taken", "unavailable"]
-    owner: str = ""
 
 
 class SkillHubTargets(BaseModel):
@@ -592,39 +587,20 @@ def register_skill_hub_routes(
 
     @app.get("/skill-hub/entries/{entry_id}/targets")
     async def skill_hub_targets(entry_id: str, app: str) -> SkillHubTargets:
-        """The workspaces of App `app` the viewer may install into, each with
-        what installing would do — the same refusal `POST …/skills/install`
-        gives (`skill_folder_in_the_way`), asked before rather than after.
-        An App the platform does not know has none."""
+        """The workspaces of App `app` the viewer may install into, by title —
+        the database alone, no workspace read, so it opens as fast as the item
+        list does (plan-skill-install-picker D1). Whether a copy is already
+        there is `…/installs`; a folder in the way is the install's own
+        refusal (`skill_folder_in_the_way`). An App the platform does not know
+        has none."""
         viewer = get_user_id()
         entry = _readable(entry_id, viewer)
         candidates = await asyncio.to_thread(_editable, viewer, [app])
-
-        def target(item_id: str, title: str) -> Callable[[], Awaitable[SkillHubTarget]]:
-            async def ask() -> SkillHubTarget:
-                held = await _holds_copy(item_id, entry_id, entry.name)
-                if held is None:
-                    return SkillHubTarget(item_id=item_id, title=title, state="unavailable")
-                if held:
-                    return SkillHubTarget(item_id=item_id, title=title, state="installed")
-                try:
-                    taken = await skill_folder_in_the_way(
-                        files, item_id, hub, entry.name, viewer, wake=False
-                    )
-                except SandboxBusy:
-                    return SkillHubTarget(item_id=item_id, title=title, state="unavailable")
-                if taken is not None:
-                    return SkillHubTarget(
-                        item_id=item_id, title=title, state="name_taken", owner=taken.owner
-                    )
-                return SkillHubTarget(item_id=item_id, title=title, state="ok")
-
-            return ask
-
-        items = await _bounded([target(item_id, title) for _s, item_id, title in candidates])
         return SkillHubTargets(
             missing_tools=missing_tools_for(entry.referenced_tools, app),
-            items=items,
+            items=[
+                SkillHubTarget(item_id=item_id, title=title) for _s, item_id, title in candidates
+            ],
         )
 
     # ── management: owner-only (plan Q7 / P7) ────────────────────────────

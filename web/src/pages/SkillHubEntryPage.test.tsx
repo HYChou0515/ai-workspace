@@ -655,7 +655,7 @@ describe("SkillHubEntryPage layout (plan-skill-hub-ux-redo D3, D5, D6, D16)", ()
     const two = detail({ id: "e-2", name: "other", forks: [] });
     const c = client(one);
     c.get.mockImplementation(async (id) => (id === "e-2" ? two : one));
-    c.targets.mockResolvedValue({ missing_tools: [], items: [{ item_id: "i-1", title: "Free one", state: "ok", owner: "" }] });
+    c.targets.mockResolvedValue({ missing_tools: [], items: [{ item_id: "i-1", title: "Free one" }] });
     c.install.mockResolvedValue({ name: "triage-reflow", missing_tools: [] });
     // B already read: the page does not pass through loading on the way —
     // the case where one EntryView would carry A's state over to B.
@@ -711,16 +711,11 @@ describe("SkillHubEntryPage layout (plan-skill-hub-ux-redo D3, D5, D6, D16)", ()
     expect(within(side).queryByText(word("skillHub.installs.none"))).toBeNull();
   });
 
-  it("installs into a workspace picked per App, saying beforehand what each would do, and stays on the page (D6)", async () => {
+  it("installs into a workspace picked per App, and stays on the page (D6)", async () => {
     const c = client(detail({}));
     c.targets.mockResolvedValue({
       missing_tools: ["read_file"],
-      items: [
-        { item_id: "i-1", title: "Free one", state: "ok", owner: "" },
-        { item_id: "i-2", title: "Has it", state: "installed", owner: "" },
-        { item_id: "i-3", title: "Clash", state: "name_taken", owner: "bob" },
-        { item_id: "i-4", title: "Busy", state: "unavailable", owner: "" },
-      ],
+      items: [{ item_id: "i-1", title: "Free one" }],
     });
     c.install.mockResolvedValue({ name: "triage-reflow", missing_tools: ["read_file"] });
     mount(c);
@@ -729,12 +724,6 @@ describe("SkillHubEntryPage layout (plan-skill-hub-ux-redo D3, D5, D6, D16)", ()
     const dialog = await screen.findByTestId("skill-hub-install");
     await waitFor(() => expect(c.targets).toHaveBeenCalledWith("e-1", "rca"));
     expect(await within(dialog).findByText(word("skillHub.install.missing", { tools: "read_file" }))).toBeInTheDocument();
-    expect(within(dialog).getByRole("radio", { name: /Has it/ })).toBeDisabled();
-    expect(within(dialog).getByText(word("skillHub.install.state.installed"))).toBeInTheDocument();
-    expect(within(dialog).getByRole("radio", { name: /Clash/ })).toBeDisabled();
-    expect(within(dialog).getByText(word("skillHub.install.state.taken", { owner: "Bob Lee" }))).toBeInTheDocument();
-    expect(within(dialog).getByRole("radio", { name: /Busy/ })).toBeDisabled();
-    expect(within(dialog).getByText(word("skillHub.install.state.unavailable"))).toBeInTheDocument();
     const go = within(dialog).getByRole("button", { name: word("skillHub.install.confirm") });
     expect(go).toBeDisabled();
 
@@ -750,6 +739,60 @@ describe("SkillHubEntryPage layout (plan-skill-hub-ux-redo D3, D5, D6, D16)", ()
     );
     expect(screen.queryByTestId("skill-hub-install")).toBeNull();
     await waitFor(() => expect(c.installs.mock.calls.length).toBeGreaterThan(1));
+  });
+
+  it("lists the workspaces without waiting for where it is installed, then marks those (plan-skill-install-picker D1, D2)", async () => {
+    const c = client(detail({}));
+    let answer: (v: Awaited<ReturnType<SkillHubApi["installs"]>>) => void = () => {};
+    c.installs.mockImplementation(() => new Promise((resolve) => (answer = resolve)));
+    c.targets.mockResolvedValue({
+      missing_tools: [],
+      items: [
+        { item_id: "i-1", title: "Free one" },
+        { item_id: "i-2", title: "Has it" },
+      ],
+    });
+    mount(c);
+
+    fireEvent.click(await screen.findByRole("button", { name: word("skillHub.install") }));
+    const dialog = await screen.findByTestId("skill-hub-install");
+    // Where-installed is still out: every row is there and pickable.
+    expect(await within(dialog).findByRole("radio", { name: /Has it/ })).toBeEnabled();
+    expect(within(dialog).getByRole("radio", { name: /Free one/ })).toBeEnabled();
+    expect(within(dialog).queryByText(word("skillHub.install.state.installed"))).toBeNull();
+
+    // A copy in the same item id of ANOTHER App is not this one.
+    answer([
+      { app: "rca", item_id: "i-2", title: "Has it" },
+      { app: "pm", item_id: "i-1", title: "Free one" },
+    ]);
+
+    await waitFor(() => expect(within(dialog).getByRole("radio", { name: /Has it/ })).toBeDisabled());
+    expect(within(dialog).getByText(word("skillHub.install.state.installed"))).toBeInTheDocument();
+    expect(within(dialog).getByRole("radio", { name: /Free one/ })).toBeEnabled();
+  });
+
+  it("says a folder of that name is in the way when the install is refused, in the dialog (plan-skill-install-picker D1)", async () => {
+    const c = client(detail({}));
+    c.targets.mockResolvedValue({ missing_tools: [], items: [{ item_id: "i-3", title: "Clash" }] });
+    c.install.mockRejectedValueOnce(
+      new HttpError(409, "install failed (409)", "folder_in_the_way", undefined, {
+        error: "folder_in_the_way",
+        owner: "bob",
+        path: ".skill/triage-reflow/",
+      }),
+    );
+    mount(c);
+
+    fireEvent.click(await screen.findByRole("button", { name: word("skillHub.install") }));
+    const dialog = await screen.findByTestId("skill-hub-install");
+    fireEvent.click(await within(dialog).findByRole("radio", { name: /Clash/ }));
+    fireEvent.click(within(dialog).getByRole("button", { name: word("skillHub.install.confirm") }));
+
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent(
+      word("skillHub.refused.folder_in_the_way.theirs", { owner: "bob", name: "triage-reflow" }),
+    );
+    expect(screen.getByTestId("skill-hub-install")).toBeInTheDocument();
   });
 
   it("says the skill is not there — no Retry — when the server says not found (D16)", async () => {

@@ -72,15 +72,9 @@ export type SkillHubFile = { path: string; size: number | null };
 /** A workspace holding a copy of the entry. */
 export type SkillHubInstall = { app: string; item_id: string; title: string };
 
-/** A workspace the install dialog offers, and what installing would do there. */
-export type SkillHubTarget = {
-  item_id: string;
-  title: string;
-  /** `unavailable`: the workspace's sandbox was too busy to answer. */
-  state: "ok" | "installed" | "name_taken" | "unavailable";
-  /** On `name_taken`: whose copy is in the way ("" for a hand-written folder). */
-  owner: string;
-};
+/** A workspace the install dialog offers — from the database alone, nothing
+ * about what is inside it (plan-skill-install-picker D1). */
+export type SkillHubTarget = { item_id: string; title: string };
 
 export type SkillHubTargets = { missing_tools: string[]; items: SkillHubTarget[] };
 
