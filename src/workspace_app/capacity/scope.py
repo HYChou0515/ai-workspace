@@ -33,14 +33,17 @@ class UsageScope:
     app: str = ""
     item: str = ""
     purpose: str = ""
+    #: Whether LLM calls in this scope carry `x-litellm-tags` (`capacity.llm_tags`).
+    tags: bool = True
 
 
 class RequestIdentity:
     """Who one request is for — filled in by the first `get_user_id` answer
     given while the request runs, and closed when it ends."""
 
-    def __init__(self, app: str = "") -> None:
+    def __init__(self, app: str = "", *, tags: bool = True) -> None:
         self.app = app
+        self.tags = tags
         self.user: str | None = None
         self.closed = False
 
@@ -60,7 +63,9 @@ def current() -> UsageScope | None:
     holder = _REQUEST.get()
     if holder is None or holder.closed:
         return None
-    return UsageScope(user=holder.user or UNKNOWN, app=holder.app, purpose="request")
+    return UsageScope(
+        user=holder.user or UNKNOWN, app=holder.app, purpose="request", tags=holder.tags
+    )
 
 
 @contextmanager

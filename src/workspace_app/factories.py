@@ -1415,7 +1415,11 @@ def build_usage_recorder(settings: CapacitySettings, *, component: str) -> Usage
         else StdoutSink()
     )
     return UsageRecorder(
-        sink, component=component, window_s=settings.window_s, queue_max=settings.queue_max
+        sink,
+        component=component,
+        window_s=settings.window_s,
+        queue_max=settings.queue_max,
+        llm_tags=settings.llm_tags,
     )
 
 

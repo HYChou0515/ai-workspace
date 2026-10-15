@@ -82,7 +82,7 @@ class UsageMiddleware:
             await self.app(scope, receive, send)
             return
         started = time.monotonic()
-        holder = RequestIdentity(app=_slug(scope.get("path", "")))
+        holder = RequestIdentity(app=_slug(scope.get("path", "")), tags=self._recorder.llm_tags)
         stream: Running | None = None
 
         async def counted_send(message: Message) -> None:

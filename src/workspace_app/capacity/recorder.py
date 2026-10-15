@@ -65,8 +65,12 @@ class UsageRecorder:
         window_s: int = 300,
         queue_max: int = 10000,
         clock: Callable[[], float] = time.time,
+        llm_tags: bool = True,
     ) -> None:
         self.component = component
+        #: `capacity.llm_tags`: whether the scopes this process's work opens
+        #: tag their LLM calls (docs/plan-capacity-usage.md §7).
+        self.llm_tags = llm_tags
         self.pod = pod or pod_name()
         self.window_s = window_s
         self._clock = clock

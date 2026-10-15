@@ -36,6 +36,8 @@ class LitellmVlm(IVlm):
     ) -> Iterator[tuple[str, bool]]:  # pragma: no cover — live model
         import litellm
 
+        from ...capacity.llm_tags import tagged
+
         content: list[dict[str, object]] = [{"type": "text", "text": prompt}]
         for raw, mime in images:
             b64 = base64.b64encode(raw).decode("ascii")
@@ -48,6 +50,8 @@ class LitellmVlm(IVlm):
             api_key=self._api_key,
             timeout=self._timeout,
             num_retries=self._num_retries,
+            # docs/plan-capacity-usage.md §7: whose call this is, for LiteLLM's log.
+            **tagged("vlm"),
         ):
             delta = chunk.choices[0].delta
             reasoning = getattr(delta, "reasoning_content", None)

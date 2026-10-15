@@ -45,7 +45,7 @@ def recorded_job(
         running = recorder.begin(user, "", f"job:{jobtype}")
         outcome = "failed"
         try:
-            with scoped(UsageScope(user=user, purpose=jobtype)):
+            with scoped(UsageScope(user=user, purpose=jobtype, tags=recorder.llm_tags)):
                 handler(job)
             outcome = "done"
         finally:

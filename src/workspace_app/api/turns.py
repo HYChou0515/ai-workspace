@@ -607,7 +607,13 @@ class _TurnUsage:
         self._recorder = recorder
         self._events = f"turn-events:{stamp.surface}"
         self._running: Running = recorder.begin(self.user, self.app, f"turn:{stamp.surface}")
-        self.scope = UsageScope(user=self.user, app=self.app, item=self.item, purpose=stamp.surface)
+        self.scope = UsageScope(
+            user=self.user,
+            app=self.app,
+            item=self.item,
+            purpose=stamp.surface,
+            tags=recorder.llm_tags,
+        )
         self.outcome = "done"
         self.first_event_ms: int | None = None
         self.first_output_ms: int | None = None
