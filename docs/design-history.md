@@ -138,6 +138,7 @@
 | [plan-stop-reliability.md](plan-stop-reliability.md) | Stop 的可靠性 |
 | [plan-archive-pack.md](plan-archive-pack.md) | 回收時把備份多存成一個 `<item>.pack.<gen>-<bytes>.tar`，再開時 NFS 只讀 1 次不讀 89k 次；樹仍是真相、名字帶 gen 自然作廢 |
 | [plan-tool-running-version.md](plan-tool-running-version.md) | 第三方工具「沙盒裡實際在跑哪一版」：建立沙盒時把掛的 `{sha, version}` 寫進共用位址列；AI 的工具說明與工具選單改說實際版本，不一致時只告知、選單一顆「關閉沙盒以更新」；查不到當最新 |
+| [plan-capacity-usage.md](plan-capacity-usage.md) | 容量規劃：每個人在每個地方（API、worker、沙盒、Postgres、GPU）用了多少 CPU、記憶體、磁碟、GPU，人更多時要買幾台機器、幾張卡、何時要下單——平台寫用量紀錄並定義四個資料來源介面（實作由運營方補），superuser 才看得到的九個視圖 |
 
 ## 前端與介面
 
