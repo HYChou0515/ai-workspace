@@ -8,6 +8,11 @@
  * pastes the keywords into and the AI's query beside it as a suggestion to copy
  * (D13); or a
  * PAGE, whose whole address is shown before the one button that opens it.
+ * A third kind comes from `ask_ext_ai` (docs/plan-ext-ai.md §3): a QUESTION for
+ * the company's web AI, drafted by the AI and editable, sent by the person's
+ * 「問外部AI」 through their helper — or, with no helper able to (D9), copied
+ * and asked by hand, the answer pasted back.
+ *
  * Either way the person brings back what they found — pasted (a web page
  * arrives as Markdown, links and tables kept), attached, with its source — or
  * says they could not find it (D7). One request saves it under `lookups/`
@@ -44,6 +49,7 @@ import {
   type OutsideAnswer,
   type OutsideLookupClient,
   outsideLookupApi,
+  pickSearchTarget,
   searchUrl,
 } from "../api/outsideLookup";
 import { qk } from "../api/queryKeys";
@@ -83,6 +89,27 @@ export function OutsideLookupCard({
   // what the person types or pastes; the AI's query is a suggestion beside it.
   const [query, setQuery] = useState("");
   const [needKeywords, setNeedKeywords] = useState(false);
+  const isQuestion = "question" in lookup;
+  /** What the AI asked for, as the record shows it. */
+  const subject = "query" in lookup ? lookup.query : "url" in lookup ? lookup.url : lookup.question;
+  // docs/plan-ext-ai.md D2: the AI drafted the question; what goes out is what
+  // the person leaves in the box.
+  const [question, setQuestion] = useState(isQuestion ? lookup.question : "");
+  const [needQuestion, setNeedQuestion] = useState(false);
+  const questionBox = useRef<HTMLTextAreaElement>(null);
+  /** `go` with a question in the box; otherwise say so and put the person there. */
+  const ifAsked = (go: () => void) => {
+    if (!question.trim()) {
+      setNeedQuestion(true);
+      questionBox.current?.focus();
+      return;
+    }
+    setNeedQuestion(false);
+    go();
+  };
+  /** What the box holds for this card: the keywords, or the question. */
+  const sent = isSearch ? query.trim() : isQuestion ? question.trim() : undefined;
+
   const queryBox = useRef<HTMLInputElement>(null);
   /** `go` with keywords in the box; otherwise say so and put the person there
    * (NN/g: a button that does nothing explains nothing — this one says why). */
@@ -129,7 +156,7 @@ export function OutsideLookupCard({
         chatId: item.chatId,
         callId,
         answer: a,
-        query: isSearch ? query.trim() : undefined,
+        query: sent,
         date: localDate(),
       });
     },
@@ -160,6 +187,9 @@ export function OutsideLookupCard({
     refetchInterval: 15_000,
   });
   const online = helper.data?.online === true;
+  // docs/plan-ext-ai.md D9: only a helper packed with the company's site file
+  // can ask the external AI.
+  const canAsk = online && helper.data?.ext_ai === true;
   // Whether there is a helper to get at all (§3.7.2): with none published,
   // the card does not point at one (D7).
   const release = useQuery({
@@ -188,7 +218,7 @@ export function OutsideLookupCard({
   });
   const hand = useMutation({
     mutationFn: (auto: boolean) =>
-      client.handOver!({ ...cardRef!, query: isSearch ? query.trim() : undefined, auto }),
+      client.handOver!({ ...cardRef!, query: sent, auto }),
     onSuccess: (j) => {
       setNeedsNod(false);
       qc.setQueryData(jobKey, j);
@@ -214,11 +244,11 @@ export function OutsideLookupCard({
   // in this chat brought that link back (D12), and answers 409 otherwise.
   const asked = useRef(false);
   useEffect(() => {
-    if (isSearch || !online || answeredAlready || asked.current || !cardRef) return;
+    if (isSearch || isQuestion || !online || answeredAlready || asked.current || !cardRef) return;
     asked.current = true;
     hand.mutate(true);
     // `hand` and `cardRef` are new each render; `asked` makes this run once.
-  }, [isSearch, online, answeredAlready]);
+  }, [isSearch, isQuestion, online, answeredAlready]);
 
   // The helper's answer went in from the helper's own browser and started the
   // AI's next turn there: this page may hear nothing of it (another pod's
@@ -232,9 +262,29 @@ export function OutsideLookupCard({
     // `item` is new each render; the job's state is what changes.
   }, [followedJob]);
 
+  // NN/g, "Progress Indicators Make a Slow System Less Insufferable": past ten
+  // seconds, say how it is going — the seconds waited are that update
+  // (docs/plan-ext-ai.md §3). Counted from when this page saw it start.
+  const jobState = job.data?.state;
+  const working = hand.isPending || jobState === "queued" || jobState === "claimed";
+  const [since, setSince] = useState<number | null>(null);
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!working) {
+      setSince(null);
+      return;
+    }
+    setSince((s) => s ?? Date.now());
+    setNow(Date.now());
+    const tick = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(tick);
+  }, [working]);
+  const waited = since === null ? 0 : Math.max(0, Math.round((now - since) / 1000));
+  const searchName = pickSearchTarget(targets.data ?? [])?.name;
+
   const head = (
     <>
-      <p className="outside-lookup-title">{t("lookup.title")}</p>
+      <p className="outside-lookup-title">{t(isQuestion ? "lookup.extTitle" : "lookup.title")}</p>
       <p className="outside-lookup-why">{lookup.why}</p>
     </>
   );
@@ -242,7 +292,7 @@ export function OutsideLookupCard({
     return (
       <div className="outside-lookup-card" data-testid="outside-lookup-card">
         {head}
-        <p className="outside-lookup-subject">{isSearch ? lookup.query : lookup.url}</p>
+        <p className="outside-lookup-subject">{subject}</p>
       </div>
     );
   }
@@ -250,7 +300,7 @@ export function OutsideLookupCard({
     return (
       <div className="outside-lookup-card" data-testid="outside-lookup-card">
         {head}
-        <p className="outside-lookup-subject">{isSearch ? lookup.query : lookup.url}</p>
+        <p className="outside-lookup-subject">{subject}</p>
         <p className="outside-lookup-note">{t("lookup.answered")}</p>
       </div>
     );
@@ -260,13 +310,12 @@ export function OutsideLookupCard({
   // Without `add_content` the server saves nothing and refuses attachments.
   const canAttach = item.canAddFiles !== false;
   const error = hint ?? (answer.error ? failure(t, answer.error) : null);
-  const jobState = job.data?.state;
   // A helper holding this card's job is helping even when its check-ins lapse:
   // it checks in between jobs, and a captcha can keep it on one for minutes.
-  const helping = online || jobState === "claimed";
+  // A question needs a helper that can ask the external AI (plan-ext-ai D9).
+  const helping = (isQuestion ? canAsk : online) || jobState === "claimed";
   // By hand: no helper, the person chose to, or the card is already sent.
   const manual = !helping || byHand || locked;
-  const working = hand.isPending || jobState === "queued" || jobState === "claimed";
   const handError =
     hand.error && hand.variables === false ? failure(t, hand.error) : null;
   const helperBlock =
@@ -280,14 +329,19 @@ export function OutsideLookupCard({
             {job.data?.auto && (
               <p className="outside-lookup-note">{t("lookup.helperFromEarlier")}</p>
             )}
-            <p className="outside-lookup-note">
-              {t(
-                jobState === "claimed" && job.data?.note === "captcha"
-                  ? "lookup.helperCaptcha"
-                  : isSearch
-                    ? "lookup.helperSearching"
-                    : "lookup.helperOpening",
-              )}
+            <p className="outside-lookup-note" role="status">
+              <span>
+                {t(
+                  jobState === "claimed" && job.data?.note === "captcha"
+                    ? "lookup.helperCaptcha"
+                    : isQuestion
+                      ? "lookup.extAsking"
+                      : isSearch
+                        ? "lookup.helperSearching"
+                        : "lookup.helperOpening",
+                )}
+              </span>{" "}
+              <span>{t("lookup.waited", { n: waited })}</span>
             </p>
             <button
               type="button"
@@ -304,7 +358,9 @@ export function OutsideLookupCard({
           <>
             {jobState === "failed" && (
               <p className="outside-lookup-error" role="alert">
-                {t("lookup.helperFailed", { reason: job.data?.error ?? "" })}
+                {t(isQuestion ? "lookup.extFailed" : "lookup.helperFailed", {
+                  reason: job.data?.error ?? "",
+                })}
               </p>
             )}
             {handError && (
@@ -312,19 +368,30 @@ export function OutsideLookupCard({
                 {handError}
               </p>
             )}
-            {(isSearch || needsNod || jobState === "failed" || jobState === "cancelled") && (
-              <div className="outside-lookup-actions">
-                <button
-                  type="button"
-                  className="btn"
-                  data-size="sm"
-                  data-variant="primary"
-                  onClick={() => (isSearch ? ifTyped(() => hand.mutate(false)) : hand.mutate(false))}
-                >
-                  {t(jobState === "failed" ? "lookup.helperRetry" : "lookup.helperGo")}
-                </button>
-              </div>
-            )}
+            {(isSearch ||
+              isQuestion ||
+              needsNod ||
+              jobState === "failed" ||
+              jobState === "cancelled") &&
+              (!isSearch || searchName) && (
+                <div className="outside-lookup-actions">
+                  <button
+                    type="button"
+                    className="btn"
+                    data-size="sm"
+                    data-variant="primary"
+                    onClick={() =>
+                      isSearch
+                        ? ifTyped(() => hand.mutate(false))
+                        : isQuestion
+                          ? ifAsked(() => hand.mutate(false))
+                          : hand.mutate(false)
+                    }
+                  >
+                    {goLabel(t, { isSearch, isQuestion, again: jobState === "failed", searchName })}
+                  </button>
+                </div>
+              )}
           </>
         )}
         {jobState !== "done" && (
@@ -339,7 +406,8 @@ export function OutsideLookupCard({
             aria-expanded={byHand}
             onClick={() => setByHand((open) => !open)}
           >
-            <Icon name={byHand ? "chev_d" : "chev_r"} size={12} /> {t("lookup.byHand")}
+            <Icon name={byHand ? "chev_d" : "chev_r"} size={12} />{" "}
+            {t(isQuestion ? "lookup.extByHand" : "lookup.byHand")}
           </button>
         )}
       </div>
@@ -372,7 +440,10 @@ export function OutsideLookupCard({
   return (
     <div className="outside-lookup-card" data-testid="outside-lookup-card">
       {head}
-      {helperAvailable && helper.isSuccess && release.data && !helping && !locked && (
+      {isQuestion && online && !canAsk && !locked && (
+        <p className="outside-lookup-hint">{t("lookup.extNoHelper")}</p>
+      )}
+      {helperAvailable && helper.isSuccess && release.data && !online && !helping && !locked && (
         <p className="outside-lookup-hint">
           {t("lookup.helperOffline")}{" "}
           <a href={`${API_BASE}/ai-workspace-helper`} target="_blank" rel="noopener noreferrer">
@@ -434,7 +505,9 @@ export function OutsideLookupCard({
                 className="btn"
                 data-size="sm"
                 data-variant="secondary"
-                aria-label={t("lookup.target", { name: tg.name })}
+                aria-label={t("lookup.target", {
+                  name: t("lookup.searchWith", { name: tg.name }),
+                })}
                 onClick={() =>
                   ifTyped(() => {
                     setTarget(tg.name);
@@ -442,12 +515,57 @@ export function OutsideLookupCard({
                   })
                 }
               >
-                {tg.name} <span aria-hidden="true">↗</span>
+                {t("lookup.searchWith", { name: tg.name })} <span aria-hidden="true">↗</span>
               </button>
             ))}
           </div>
           <p className="outside-lookup-hint">{t("lookup.newTab")}</p>
           </>
+          )}
+        </div>
+      ) : "question" in lookup ? (
+        <div className="outside-lookup-section">
+          <label className="outside-lookup-label" htmlFor={`${ids}-x`}>
+            {t("lookup.question")}
+          </label>
+          <textarea
+            ref={questionBox}
+            id={`${ids}-x`}
+            className="input outside-lookup-paste"
+            rows={5}
+            value={question}
+            readOnly={locked}
+            aria-invalid={needQuestion || undefined}
+            aria-describedby={needQuestion ? `${ids}-x-need` : undefined}
+            onChange={(e) => {
+              setQuestion(e.target.value);
+              setNeedQuestion(false);
+            }}
+          />
+          {needQuestion && (
+            <p id={`${ids}-x-need`} className="outside-lookup-error" role="alert">
+              {t("lookup.writeQuestion")}
+            </p>
+          )}
+          {manual && (
+            <>
+              <div className="outside-lookup-actions">
+                <button
+                  type="button"
+                  className="btn"
+                  data-size="sm"
+                  data-variant="ghost"
+                  onClick={() => copy(question)}
+                >
+                  {copied === "copied" ? t("lookup.copied") : t("lookup.copyQuestion")}
+                </button>
+              </div>
+              {copied === "failed" && (
+                <p className="outside-lookup-hint" role="status">
+                  {t("lookup.copyFailed")}
+                </p>
+              )}
+            </>
           )}
         </div>
       ) : (
@@ -508,10 +626,16 @@ export function OutsideLookupCard({
         <>
           <div className="outside-lookup-section">
             <label className="outside-lookup-label" htmlFor={`${ids}-c`}>
-              {t("lookup.found")}
+              {t(isQuestion ? "lookup.extAnswer" : "lookup.found")}
             </label>
             <p className="outside-lookup-hint">
-              {t(canAttach ? "lookup.foundHint" : "lookup.foundHintText")}
+              {t(
+                isQuestion
+                  ? "lookup.extAnswerHint"
+                  : canAttach
+                    ? "lookup.foundHint"
+                    : "lookup.foundHintText",
+              )}
             </p>
             <textarea
               id={`${ids}-c`}
@@ -614,20 +738,23 @@ export function OutsideLookupCard({
             </div>
           )}
 
-          <div className="outside-lookup-section">
-            <label className="outside-lookup-label" htmlFor={`${ids}-s`}>
-              {t("lookup.source")}
-            </label>
-            <input
-              autoComplete="off"
-              id={`${ids}-s`}
-              className="input"
-              type="url"
-              value={sourceUrl}
-              readOnly={locked}
-              onChange={(e) => setSourceUrl(e.target.value)}
-            />
-          </div>
+          {/* the answer's source is the external AI itself (plan-ext-ai D10) */}
+          {!isQuestion && (
+            <div className="outside-lookup-section">
+              <label className="outside-lookup-label" htmlFor={`${ids}-s`}>
+                {t("lookup.source")}
+              </label>
+              <input
+                autoComplete="off"
+                id={`${ids}-s`}
+                className="input"
+                type="url"
+                value={sourceUrl}
+                readOnly={locked}
+                onChange={(e) => setSourceUrl(e.target.value)}
+              />
+            </div>
+          )}
         </>
       )}
 
@@ -649,7 +776,7 @@ export function OutsideLookupCard({
             disabled={busy}
             onClick={() => answer.mutate({ kind: "not_found", reason: reason.trim() })}
           >
-            {t("lookup.sendNotFound")}
+            {t(isQuestion ? "lookup.extSendNotFound" : "lookup.sendNotFound")}
           </button>
           <button
             type="button"
@@ -690,12 +817,30 @@ export function OutsideLookupCard({
               answer.reset();
             }}
           >
-            {t("lookup.notFound")}
+            {t(isQuestion ? "lookup.extNotFound" : "lookup.notFound")}
           </button>
         </div>
       )}
     </div>
   );
+}
+
+/** The helper's button: the words doing it by hand uses (docs/plan-ext-ai.md
+ * D8 — NN/g heuristic #4, consistency), and the same again after a failure. */
+function goLabel(
+  t: ReturnType<typeof useT>,
+  {
+    isSearch,
+    isQuestion,
+    again,
+    searchName,
+  }: { isSearch: boolean; isQuestion: boolean; again: boolean; searchName?: string },
+): string {
+  if (isQuestion) return t(again ? "lookup.extAgain" : "lookup.extGo");
+  if (isSearch) {
+    return t(again ? "lookup.searchAgain" : "lookup.searchWith", { name: searchName ?? "" });
+  }
+  return t(again ? "lookup.openAgain" : "lookup.openUrl");
 }
 
 /** What a refused answer says: a full workspace the way a refused chat send

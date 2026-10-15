@@ -335,7 +335,8 @@ def _tour(base: str, iid: str, out: Path, check: _Check) -> Path | None:
             page.wait_for_timeout(400)
             box.press("Enter")
 
-            go = page.get_by_role("button", name="查", exact=True)
+            # the helper's button names the search (plan-ext-ai D8)
+            go = page.get_by_role("button", name="Google search", exact=True)
             go.wait_for(timeout=90_000)
             page.wait_for_timeout(1200)
             # the box starts empty: the person copies the AI's suggestion and

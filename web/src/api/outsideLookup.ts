@@ -23,6 +23,14 @@ export type OutsideAnswerSaved = { path: string | null; attachments: string[] };
 
 const enc = encodeURIComponent;
 
+/** The destination the helper searches with: Google, or — on a deploy that
+ * lists its own — the first one listed. The helper's `pick_search_target`
+ * (ai-workspace-helper/src/ai_workspace_helper/builtin_errands.py), so the
+ * card's button names the site the helper will use (docs/plan-ext-ai.md D8). */
+export function pickSearchTarget(targets: LookupTarget[]): LookupTarget | undefined {
+  return targets.find((t) => t.name === "Google") ?? targets[0];
+}
+
 /** The search address for `query` — every `{q}`, encoded. */
 export function searchUrl(target: LookupTarget, query: string): string {
   return target.url.split("{q}").join(enc(query));
@@ -32,7 +40,7 @@ export function searchUrl(target: LookupTarget, query: string): string {
  * (docs/plan-outside-helper.md §3.2). */
 export type HelperJob = {
   id: string;
-  kind: "search" | "open_url";
+  kind: "search" | "open_url" | "ask_ext_ai";
   args: string;
   state: "queued" | "claimed" | "done" | "failed" | "cancelled";
   error: string;
@@ -55,6 +63,8 @@ export type HelperRelease = {
   size: number;
 };
 
+export type HelperStatus = { online: boolean; ext_ai?: boolean };
+
 type CardArgs = { slug: string; itemId: string; chatId?: string; callId: string };
 
 function cardJobs(args: CardArgs): string {
@@ -69,11 +79,13 @@ async function refused(r: Response, fallback: string): Promise<never> {
 }
 
 export const outsideLookupApi = {
-  /** Whether the person's own helper checked in just now (D7). */
-  async helperStatus(): Promise<{ online: boolean }> {
+  /** Whether the person's own helper checked in just now (D7), and whether it
+   * can ask the external AI — packed with the company's site file
+   * (docs/plan-ext-ai.md D9). */
+  async helperStatus(): Promise<HelperStatus> {
     const r = await apiFetch("/ai-workspace-helper/status");
     if (!r.ok) return refused(r, `helper status failed: ${r.status}`);
-    return (await r.json()) as { online: boolean };
+    return (await r.json()) as HelperStatus;
   },
 
   /** Hand the card to the helper. `auto` is the card asking on its own, with
@@ -123,7 +135,8 @@ export const outsideLookupApi = {
     chatId?: string;
     callId: string;
     answer: OutsideAnswer;
-    /** What was searched — the keywords the person typed in the box (D13). */
+    /** What was searched — the keywords the person typed in the box (D13) —
+     * or the question as the person sent it (docs/plan-ext-ai.md D2). */
     query?: string;
     /** The person's own date, `YYYY-MM-DD`, for the saved file's name. */
     date?: string;
