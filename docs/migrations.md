@@ -2602,7 +2602,7 @@ AI 讀 `wui` skill 時會看到「這個 item 能讓頁面問的 subagent」清�
   `curl -s -b '<cookie>' '<網址>/api/kb/agent'` 的 `model` 欄位是新模型，不用重啟任何 pod
   （聊天畫面的模型選單只列名稱，不列模型，看不出差別）。再按「回復」到前一版，`model` 回到原本的模型。沒部署到這一版的症狀：`/api/admin/model-settings` 回 404 給 superuser。
 
-### 2026-10-15 · #959 skill 頁「安裝到 workspace…」清單不再逐一讀 workspace {#pr-959}
+### 2026-10-16 · 6a7c27ac · #959 skill 頁「安裝到 workspace…」清單先列出、每列再各自檢查 {#pr-959}
 
 **設定** — 無。
 
