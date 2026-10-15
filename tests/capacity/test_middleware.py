@@ -59,6 +59,11 @@ def _app(recorder: UsageRecorder, reader: _Reader) -> tuple[FastAPI, list]:
         ask()
         raise HTTPException(status_code=404, detail="no such App")
 
+    @api.get("/a/{slug}/crash")
+    def crash(slug: str):
+        ask()
+        raise RuntimeError("unhandled")
+
     @api.get("/boom")
     def boom():
         ask()
@@ -166,3 +171,28 @@ def test_an_app_route_that_refuses_its_slug_names_no_app():
 
     assert {r["app"] for r in rows} == {""}
     assert {r["user"] for r in rows} == {"erin"}
+
+
+def test_a_route_that_crashed_names_no_app():
+    """An unhandled exception sends no response from inside the counter (the
+    500 comes from outside it): no answer is no acceptance of the slug."""
+    rows, _ = _run(_Reader("erin"), "/api/a/zz3/crash")
+
+    assert {r["app"] for r in rows} == {""}
+
+
+def test_a_kubernetes_probe_is_system_work_and_asks_nobody_who():
+    """The readiness probe hits every API pod every few seconds: counted as
+    an unidentified person it was most of the "unknown" share on a quiet
+    deployment. It is work no person asked for."""
+    sink = _ListSink()
+    recorder = UsageRecorder(sink, component="api", pod="p", window_s=300, queue_max=1000)
+    reader = _Reader("dave")
+    app, _ = _app(recorder, reader)
+    with TestClient(app, raise_server_exceptions=False) as client:
+        client.get("/api/public", headers={"user-agent": "kube-probe/1.29"})
+    recorder.close()
+
+    rows = [d["usage"] for d in sink.docs if d["usage"]["kind"] == "work"]
+    assert [r["user"] for r in rows] == ["system"]
+    assert reader.calls == 0

@@ -19,7 +19,9 @@ and this app streams SSE. For each HTTP request it records one `work` count:
   is the request's person at no extra cost. An API request whose route never
   asked (auto-CRUD routes, probes) gets one call of the deploy's reader after
   its response; an exception there is `unknown`. A request no route answered
-  (a static file, a URL nothing serves) is `unknown` without asking.
+  (a static file, a URL nothing serves) is `unknown` without asking. A
+  Kubernetes probe (`User-Agent: kube-probe/…`) is `system`: it hits every pod
+  every few seconds, and nobody asked for it.
 """
 
 from __future__ import annotations
@@ -30,7 +32,7 @@ from collections.abc import Callable
 from typing import Any
 
 from .recorder import Running, UsageRecorder
-from .scope import UNKNOWN, RequestIdentity, request_identity
+from .scope import SYSTEM, UNKNOWN, RequestIdentity, request_identity
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +42,7 @@ Receive = Callable[[], Any]
 Send = Callable[[Message], Any]
 
 _EVENT_STREAM = b"text/event-stream"
+_KUBE_PROBE = b"kube-probe/"
 
 
 def _slug(scope: Scope) -> str:
@@ -60,6 +63,13 @@ def _work(scope: Scope) -> str:
     return f"{method} (unmatched)" if under_api else f"{method} (static)"
 
 
+def _is_probe(scope: Scope) -> bool:
+    for name, value in scope.get("headers", ()):
+        if name.lower() == b"user-agent":
+            return value.lower().startswith(_KUBE_PROBE)
+    return False
+
+
 def _is_stream(message: Message) -> bool:
     for name, value in message.get("headers", ()):
         if name.lower() == b"content-type":
@@ -76,13 +86,16 @@ class UsageMiddleware:
         self._get_user_id = get_user_id
 
     def _who(self, holder: RequestIdentity, scope: Scope) -> str:
-        if holder.user is None:
-            if scope.get("route") is None:
-                return UNKNOWN
-            try:
-                holder.user = self._get_user_id()
-            except Exception:
-                holder.user = UNKNOWN
+        if holder.user is not None:
+            return holder.user
+        if _is_probe(scope):
+            return SYSTEM
+        if scope.get("route") is None:
+            return UNKNOWN
+        try:
+            holder.user = self._get_user_id()
+        except Exception:
+            holder.user = UNKNOWN
         return holder.user
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
@@ -95,7 +108,7 @@ class UsageMiddleware:
         status = 0
 
         def app() -> str:
-            return holder.app if status < 400 else ""
+            return holder.app if 0 < status < 400 else ""
 
         async def counted_send(message: Message) -> None:
             nonlocal stream, status
