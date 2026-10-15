@@ -1,5 +1,7 @@
 # Plan — skill hub 好用、清楚：版面與資訊架構重做
 
+> 被 #959（plan-skill-install-picker.md）推翻
+
 Grilled 2026-10-08 on master `7d666c36`（含 #875 版本歷史）。每條決定標來源：**[user]** = 使用者決定；
 **[mine]** = 我定的實作細節，列出來給推翻。
 
