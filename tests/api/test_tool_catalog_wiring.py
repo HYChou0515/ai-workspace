@@ -371,7 +371,9 @@ async def test_one_call_loading_a_bundle_and_one_of_its_commands_says_each_name_
         _tool_ctx(ctx, "load_tool", call_id="c1"), '{"names": ["rca-tools", "data-fetch"]}'
     )
 
-    assert ctx.catalog_calls["c1"] == ["data-fetch", "plot-trend"]
+    # ONE hit carrying both names — the queue counts outputs to suppress, not
+    # commands (round 3 D4).
+    assert ctx.catalog_calls["c1"] == [["data-fetch", "plot-trend"]]
     event = _map_event(_output_event("c1", "…schema…"), ctx)
     assert isinstance(event, ToolEnd)
     assert event.output.count("data-fetch") == 1
@@ -410,3 +412,111 @@ def _capture_tools(sink: list[str]):
         return real(**kw)
 
     return fake
+
+
+async def test_load_tool_cannot_open_a_command_a_builtin_shadows_through_the_real_wiring():
+    """The `shadowed` parameter existed and nothing passed it (round 3 D1): the
+    unit test handed it in directly, so the production call site stayed as it
+    was and `load_tool` kept opening a command that can never run.
+
+    `builtin_names` is read before `load_tool` goes in for exactly this, and
+    shadowing is a per-TURN fact — with the built-in not granted, the package's
+    own command IS what the model gets.
+    """
+    pkg = PackageInfo(
+        name="rca-tools",
+        install_dir="../.tools/rca-tools",
+        commands=(
+            CommandInfo("exec", "Shadowed by the built-in.", {"type": "object"}),
+            CommandInfo("spc", "Draw an SPC chart.", {"type": "object"}),
+        ),
+    )
+    agent = _agent_for(AgentConfig(name="ws", system_prompt="anchor"), packages=[pkg])
+    ctx = AgentToolContext(investigation_id="i")
+    load = (await _sent(agent, ctx))["load_tool"]
+
+    reply = await load.on_invoke_tool(_tool_ctx(ctx, "load_tool"), '{"names": ["exec"]}')
+
+    assert ctx.loaded_tools == set()
+    assert "is now loaded" not in reply
+    # …and the one that is not shadowed still loads.
+    ok = await load.on_invoke_tool(_tool_ctx(ctx, "load_tool"), '{"names": ["spc"]}')
+    assert "`spc` is now loaded" in ok
+    assert ctx.loaded_tools == {"spc"}
+
+
+async def test_two_catalog_hits_sharing_a_call_id_are_both_kept_out_of_the_thread():
+    """`call_id` is the provider's, and an OpenAI-compatible endpoint passes it
+    through verbatim. Popping the whole record left the SECOND hit of a reused
+    id unrecognised, so its raw schema went into the conversation record
+    (round 3 D4) — the one thing this whole change exists to prevent."""
+    agent = _agent()
+    ctx = AgentToolContext(investigation_id="i")
+    sent = await _sent(agent, ctx)
+
+    # Two parallel calls in one step, same id: both handlers run before either
+    # output is emitted.
+    await sent["data-fetch"].on_invoke_tool(_tool_ctx(ctx, "data-fetch", call_id="c1"), "{}")
+    await sent["plot-trend"].on_invoke_tool(_tool_ctx(ctx, "plot-trend", call_id="c1"), "{}")
+
+    first = _map_event(_output_event("c1", '{"properties": {"lot": {}}}'), ctx)
+    second = _map_event(_output_event("c1", '{"properties": {"n": {}}}'), ctx)
+
+    for event in (first, second):
+        assert isinstance(event, ToolEnd)
+        assert "properties" not in event.output, event.output
+    assert ctx.ephemeral_outputs == ["c1", "c1"]
+
+
+async def test_the_non_streamed_turn_passes_its_context_to_the_mapper(monkeypatch):
+    """The second door. Round 2 said it could not be pinned because the path is
+    unreachable; it is reachable with `WORKSPACE_AGENT_STREAM=0` (round 3 D7),
+    and "a guard that exists is not a guard that is applied" applies to both
+    call sites."""
+    from tests.api.test_litellm_runner import _ctx
+    from workspace_app.api import litellm_runner as lr
+
+    monkeypatch.setenv("WORKSPACE_AGENT_STREAM", "0")
+    ctx = _ctx()
+    ctx.note_catalog_hit("c1", ["data-fetch"])
+
+    class _Result:
+        new_items = [_NonStreamOutput("c1", '{"properties": {"lot": {}}}')]
+        final_output = ""
+
+    async def _run(*_a, **_k):
+        return _Result()
+
+    monkeypatch.setattr(lr.Runner, "run", _run)
+
+    out = [ev async for ev in lr.LitellmAgentRunner().run("p", ctx) if isinstance(ev, ToolEnd)]
+
+    assert [e.output for e in out] == ["載入 `data-fetch` 的用法"]
+
+
+class _NonStreamOutput:
+    """A completed `tool_output` RunItem, as `_run_once_nonstream` walks them."""
+
+    type = "tool_call_output_item"
+
+    def __init__(self, call_id: str, output: str) -> None:
+        self.raw_item = {"call_id": call_id}
+        self.output = output
+
+
+async def test_a_catalog_hit_with_no_call_id_is_still_kept_out_of_the_thread():
+    """`_call_id` falls back to `""` for a provider that sends none, and the
+    whole mechanism joins on that key. Refusing to record the empty one left
+    the raw schema in the record (round 3 D5); suppressing that output matters
+    more than the risk of suppressing an adjacent real one, because a schema in
+    the record is replayed into every later turn."""
+    agent = _agent()
+    ctx = AgentToolContext(investigation_id="i")
+    fetch = (await _sent(agent, ctx))["data-fetch"]
+
+    await fetch.on_invoke_tool(_tool_ctx(ctx, "data-fetch", call_id=""), "{}")
+    event = _map_event(_output_event("", '{"properties": {"lot": {}}}'), ctx)
+
+    assert isinstance(event, ToolEnd)
+    assert "properties" not in event.output
+    assert ctx.ephemeral_outputs == [""]

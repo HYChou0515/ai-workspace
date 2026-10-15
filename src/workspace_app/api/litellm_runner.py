@@ -608,20 +608,39 @@ def _agent_for(
     # `packages | None` for the blocks below the way `if packages:` did.
     pkgs: list[PackageInfo] = packages or []
     grants_commands = bool(allowed_command_names(pkgs, config.allowed_tools))
+    # plan-tool-usage-stats D6: what is in the list BEFORE the package commands
+    # is ours — built-ins and the rule-granted cards. The last point every
+    # source is still a list of its own, so the source is read here, not
+    # guessed later from a name a first-party command shares with a built-in.
+    #
+    # Read BEFORE `load_tool` goes in (it used to be read after), because
+    # `load_tool` needs it: a command whose name a built-in holds must not be
+    # loadable. `load_tool` is still ours rather than a package's for the usage
+    # report, which is what this set decides — and it is not in the set itself,
+    # so adding it after changes nothing there.
+    builtin_names = {t.name for t in tools}
     if grants_commands:
         from agents.tool_context import ToolContext
 
         from ..tooling.registry import build_catalog_tools, build_load_tool
 
-        def _mark_loaded(tool_ctx: ToolContext[AgentToolContext], name: str) -> None:
-            tool_ctx.context.mark_tool_loaded(name, call_id=tool_ctx.tool_call_id)
+        def _mark_loaded(tool_ctx: ToolContext[AgentToolContext], names: Sequence[str]) -> None:
+            # One call = one hit, whatever it resolved: the queue counts the
+            # OUTPUTS to keep out of the thread, not the commands (round 3 D4).
+            tool_ctx.context.note_catalog_hit(tool_ctx.tool_call_id, names)
 
-        tools.append(build_load_tool(pkgs, allowed=config.allowed_tools, mark_loaded=_mark_loaded))
-    # plan-tool-usage-stats D6: what is in the list BEFORE the package commands
-    # is ours — built-ins and the rule-granted cards. The last point every
-    # source is still a list of its own, so the source is read here, not
-    # guessed later from a name a first-party command shares with a built-in.
-    builtin_names = {t.name for t in tools}
+        tools.append(
+            build_load_tool(
+                pkgs,
+                allowed=config.allowed_tools,
+                mark_loaded=_mark_loaded,
+                # Shadowing is a per-TURN fact: with `allowed_tools=[…:exec]`
+                # the built-in `exec` is not granted and the package's own is
+                # what the model gets, so a module-level list would be wrong
+                # (round 3 D1).
+                shadowed=builtin_names,
+            )
+        )
     if grants_commands:
         # plan-tool-on-demand-loading: each granted command is registered TWICE
         # under one name — the executable tool, enabled once this turn has
@@ -1228,11 +1247,12 @@ def _map_event(event: Any, ctx: AgentToolContext | None = None) -> AgentEvent | 
         # the text or by the tool's name — a loaded command and its catalog
         # entry share a name, so a name could not tell them apart.
         #
-        # TAKEN, not read: one record answers one call. A reused call id used to
-        # rewrite every later output of the turn as well (verify round F2), and
-        # the id goes into `ephemeral_outputs` so the reducer drops THIS
-        # message and no other.
-        loaded = (ctx.catalog_calls.pop(call_id, None) if ctx is not None else None) or []
+        # ONE HIT, one output. The record is a queue of hits per call id, so two
+        # catalog hits sharing an id consume one each: popping the whole record
+        # left the second one unrecognised and its raw schema went into the
+        # thread (round 3 D4). The id then goes into `ephemeral_outputs` so the
+        # reducer drops THIS message and no other.
+        loaded = ctx.take_catalog_hit(call_id) if ctx is not None else None
         if loaded and ctx is not None:
             out_text = "載入 " + "、".join(f"`{n}`" for n in loaded) + " 的用法"
             ctx.ephemeral_outputs.append(call_id)

@@ -268,7 +268,7 @@ idempotent）。加一個永遠跑不到的守衛只會是死碼，所以 P2 沒
 | **F3** | **我在 A9 加的「下一個字必須大寫或 CJK」讓目錄行比 P7 之前更差**：`_is_cjk` 只涵蓋兩段範圍，所以韓文、泰文、阿拉伯文、希伯來文、天城文**永遠不可能滿足**它——ASCII 的 `.` 從此不再結束句子，整段變成目錄行、切在句中。全小寫英文同理。而且那條規則**什麼都沒買到**：A9 的十個案例光靠縮寫規則＋既有的空白 lookahead 就全過（鏡頭驗過） | 整條刪掉，保留縮寫規則 | 五條參數化測試（韓/泰/天城/全小寫/下一字是數字）；突變=把縮寫規則刪掉要紅那兩條只有它能擋的 |
 | **F2** | **重複的 `tool_call_id` 會把那一輪後面每一則工具訊息都刪掉**（含真的 `write_file`），因為紀錄只用 id 比對、而且從不消耗。OpenAI 相容端點會原樣轉傳 server 的 id | 紀錄**用完就取走**：`_map_event` 改寫輸出時 `pop` 掉 `catalog_calls`，並把 id 記進新的 `ephemeral_outputs`；reducer 消耗那一筆。一筆對一則 | 真 `TestClient` 一輪、三次呼叫共用 `c1`：`write_file` 與真的 `data-fetch` 都在、目錄那一則不在。測試的 runner 走**真的 `_map_event`**（替身不能繞過被測那條路） |
 | **F4** | `load_tool` 的字元上限只截**文字**：40 個 command 的 schema 照樣全被標成已載入 → 下一步的工具清單 394,560 字元，比這個 PR 要移除的 414,115 還糟 | 上限改成管「**載入什麼**」：放不下的 command 不標、不描述，回覆最前面說「這次已經滿了」 | 12 個肥 command 的 bundle：`loaded_tools` < 12、回覆裡出現的就是被載入的那些 |
-| **F5** | 被內建工具遮蔽的 command，`load_tool` 還是交出描述與 schema，並叫模型照那組參數再呼叫一次（真正跑的是內建工具，參數不同） | `build_load_tool` 收一個 `shadowed` 集合（runner 傳 `builtin_names`），那些名字不進 `by_name` | 套件 export `read_file`：`load_tool(["read_file"])` 不載入、回「沒有這個工具」 |
+| **F5** | 被內建工具遮蔽的 command，`load_tool` 還是交出描述與 schema，並叫模型照那組參數再呼叫一次（真正跑的是內建工具，參數不同） | `build_load_tool` 收一個 `shadowed` 集合，那些名字不進 `by_name`。⚠️ **P8 當時只加了參數、runner 沒有傳**（第三輪 D1 抓到，當時那句「runner 傳 `builtin_names`」是假的）；P9 才真的接線，並把 `builtin_names` 提前到 append 之前讀 | 套件 export `read_file`：`load_tool(["read_file"])` 不載入、回「沒有這個工具」 |
 | **F6** | `_first_sentence` 被我改成每個 `.` 取一次尾端切片 → 二次式；40 萬字的描述 680 ms，而它跑在 event loop 上、描述來自第三方 manifest 且沒有長度上限 | 改成用索引看下一個字元 | 形狀測試：10 倍輸入不得花 30 倍時間 |
 | **F7** | `[bundle]` 加在 100 字元上限**之外**（實測 139 字元，上限是 user 定的 100） | 後綴算進同一個上限 | 長 bundle 名 + 400 字描述 → 條目 ≤ 100 且以 `[bundle]` 結尾 |
 | **F8** | `_CATALOG_NOTE` 叫模型看 `[bundle]` 標記，但第三方條目**刻意沒有**那個標記（第三方才是使用者自己裝的那一群） | 那句話補上「或名字裡 `__` 之前的那段」 | 文案測試 |
@@ -281,3 +281,22 @@ idempotent）。加一個永遠跑不到的守衛只會是死碼，所以 P2 沒
 | 其他 | `tool_authz` 的「two bullets up」其實是四條；三處註解寫 `round 1 F6/G1` 而表裡是 B1/B2；`agent-runtime.md` 又把 414,115 和「一半」綁在一起；`§設定一覽` 指向不存在的章節；A2 的「22,118」是 after 不是 before（before 是 52,267）；`_LOAD_REPLY_MAX_CHARS` 的理由寫錯（不是「位置」而是「哪個 builder 呼叫 cap」）；A17 的「需查」要寫出結論（已包；`except` 在 production 走不到）；A4 的「K=5 探針」其實是算術不是量測；「4,076 綠/7 紅是環境雜訊」方向寫反了（`--all-extras` 之後是 **4,083 綠 0 紅**） | 逐條更正 | grep / 重跑 |
 
 **鏡頭確認為真**（摘要）：A1 的落點與兩個建構點、A3/A5/A7/A8/A9/A10/A15/A16/B1/B4/B10 的突變各自只紅它守的那條、`MarkLoaded` 改成真型別之後「改名就會紅」（有必綠對照）、SDK 的每個行號與行為、runbook 的 `request.messages[0]`／`api_key` 明文／`index.jsonl` 寫在 record 之後（200 次命中 2 次，ext4）。
+
+## Review round 3 — 換過機制就再一輪（缺陷 + 回歸，2026-10-15，對 `2374558b`）
+
+P8 的 F2 修法**換掉了機制**（新的兩跳：`_map_event` 取紀錄、reducer 消耗），F4 也換了上限的
+語意，所以依規則再開一輪。缺陷鏡頭打新機制，回歸鏡頭打 `turns.py` 的影響面。
+
+| # | 發現 | 修法 | 怎麼證明 |
+|---|---|---|---|
+| **D1** | **BLOCKING：F5 的 `shadowed` 是死參數**——runner 從來沒傳它，只有單元測試直接傳。P8 的 commit 訊息宣稱「runner 傳 `builtin_names`」，**那句是假的**。實測：套件 export `exec` 時，`load_tool(["exec"])` 照樣交出描述與 schema，並叫模型照那組參數呼叫（真正跑的是內建的 `exec`，參數是 `cmd`） | 真的接線。`builtin_names` 原本在 append **之後**才讀，提前到之前；遮蔽是**每輪**的事實（`allowed_tools=[…:exec]` 時內建的 `exec` 沒被授權、模型拿到的是套件那個），所以不能用模組層常數 | 走真 `_agent_for` 的測試；突變（`shadowed=()`）要紅 |
+| **D2** | 上限的註解說「每個 command 都要放得下才載入」，但第一個 command 豁免（`and done`），所以單一 40 萬字元的 schema 照樣整個進下一步 | **決定：第一個豁免是刻意的**——schema 比預算大的 command，不載入就等於「看得到、被叫去呼叫、永遠呼叫不了」；而且模型直接呼叫它時走的是完全沒有上限的那條（stub 的自動載入）。所以這個預算是**批次**的上限，單一超大 schema 這裡不設限。註解改成這樣寫 | 一條測試斷言它仍然載入、且回覆長度超過上限 |
+| **D3** | 新的「已滿」通知會把同一個 command 名字列兩次（bundle 名等於 command 名時解析到同一對）——正是第一輪 B1 的同一類，在新句子裡重新打開 | `dict.fromkeys` 去重 | 測試建出 bundle 名 == command 名 + 預算填滿；突變要紅 |
+| **D4** | **同一個 `tool_call_id` 下兩次目錄命中 → 第二次的原始 schema 進了對話記錄**（`_map_event` 把整筆紀錄 pop 掉，第二次就認不出來）。平行呼叫共用 id 時更糟：真工具的輸出被當成目錄的改寫掉、目錄自己的被存下來 | 紀錄改成**每個 call id 一個 hit 佇列**（`dict[str, list[list[str]]]`）：一次命中一筆、一筆對一個 output。`load_tool` 一次載 N 個是**一筆**（帶 N 個名字），所以佇列長度等於要壓掉的 output 數，不是 command 數 | 兩次命中共用 `c1`，兩個 output 都不得帶 schema；突變（整筆取走）要紅 |
+| **D5** | `tool_output` 沒有 call id（`_call_id` 的 `or ""` 退路）時，整個壓制機制認不出來，原始 schema 進記錄 | 空字串也當成一個 key —— 壓掉那個 output 比「可能誤壓到相鄰的真訊息」重要，因為記錄裡的 schema 會被 replay 進之後每一輪 | 空 id 的測試；突變要紅 |
+| **D6** | F7 把 user 的 100 讀成「整條條目」的上限，所以 42 字元的 bundle 名會吃掉 42 個字元，只剩 54 給模型真正用來選工具的那句；而且 bundle 名接近 100 時 `max(2, …)` 的地板會讓條目仍然超過 100 | **100 還給 description**（user 的原話是「command description 最多 100 字元」），bundle 名另有自己的小上限（24） | 140 字元的 bundle 名：description ≤ 100、後綴 == 24；突變（把後綴算回去）要紅 |
+| **D7** | 第二輪說非串流那個 `_map_event` 呼叫點「走不到所以寫不出會紅的測試」——**那個理由不成立**，`WORKSPACE_AGENT_STREAM=0` 就走到了（鏡頭寫了探針並驗了突變） | 補一條測試 | 突變（那一行拿掉 `ctx`）要紅 |
+
+**鏡頭確認為真**：F3 的刪除是對的（三個版本的 `_first_sentence` 用 AST 取出來做 4,569 筆差分，**沒有一筆比 `ce3c70cc` 更差**；`sample-tools` 的 8 個真描述三個版本完全相同）；一輪只有一個 reducer（`stream()` 在 production 沒有呼叫者）；沒有「已 map 但未送達」的序列（`done` 哨兵在 `finally`、重試在上一輪事件都過了 reducer 之後才重入）；ctx 每輪新建，三個 `dataclasses.replace` 的拷貝點都處理過；`load_tool` 一次載 N 個只有一個 `remove`（正確）；被壓掉的訊息不會錯開 `[n]` 引用配對（per-name cursor）；`_finish_claim` 在 `if produced:` 之外，所以全被壓掉的一輪不會留下孤兒 claim。
+
+**留著的已知限制**（寫在這裡，不是漏掉）：`_TurnReducer` 現在會**改動** ctx 的 list，所以它不再是輸入的純讀者——同一個 ctx 上跑兩個 reducer 會靜默吃掉一則真訊息。production 只有一個（`_drain_and_persist` 收到的是同一個物件），但這條界線要寫明。

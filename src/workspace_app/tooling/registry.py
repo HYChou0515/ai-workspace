@@ -59,7 +59,7 @@ logger = logging.getLogger(__name__)
 #: `.tool_call_id`) could be renamed and `ty` stayed green — the review
 #: renamed both and measured it (round 1 C3, the
 #: `reference_kwargs_dict_loses_type_check` class).
-MarkLoaded = Callable[[ToolContext[AgentToolContext], str], None]
+MarkLoaded = Callable[[ToolContext[AgentToolContext], Sequence[str]], None]
 
 
 @dataclass(frozen=True)
@@ -781,6 +781,11 @@ def describe_command(pkg: PackageInfo, cmd: CommandInfo) -> str:
     return line
 
 
+#: How much of a bundle's name a catalog entry shows. Its own bound, so a long
+#: bundle name cannot eat the description's budget (round 3 D6); `_MODEL_NAME`
+#: allows 64 characters, and a third-party local name is user-chosen.
+_BUNDLE_NAME_SHOWN = 24
+
 #: How long one catalog entry's description may be
 #: (`docs/plan-tool-on-demand-loading.md`, decided with the operator: 100).
 CATALOG_DESCRIPTION_LIMIT = 100
@@ -1029,7 +1034,16 @@ def build_catalog_tools(
 #: It bounds what is LOADED, not just the text of the reply: trimming the reply
 #: while marking every resolved command loaded handed the NEXT step 394,560
 #: characters of schema — worse than the prompt this whole change removes
-#: (verify round F4). A command only loads if its own schema fits what is left.
+#: (verify round F4).
+#:
+#: The FIRST command of a call is exempt, deliberately (round 3 D2). A command
+#: whose schema alone exceeds this budget is unusable without it: refusing
+#: would leave the model with a tool it can see, is told to call, and can never
+#: call. The catalog still improves that case strictly — the schema goes out on
+#: the one turn that uses the command instead of on every turn — and the same
+#: schema goes out unbounded when the model calls the command directly
+#: (`_stub_function_tool` answers with the whole thing by design). So this is
+#: the bound on BATCHING; one oversized schema is bounded by nothing here.
 _LOAD_REPLY_MAX_CHARS = 20_000
 
 #: How many names one call may ask for. 3,000 unknown names answered with
@@ -1130,13 +1144,20 @@ def build_load_tool(
                     continue
                 done.add(model_name)
                 left -= len(said)
-                mark_loaded(ctx, model_name)
                 parts.append(said)
+        # ONE hit for the whole call, whatever it resolved: the queue counts
+        # outputs to suppress, not commands (round 3 D4).
+        if done:
+            mark_loaded(ctx, sorted(done))
         if skipped:
             parts.insert(
                 0,
                 "Not loaded, this call was already full: "
-                + ", ".join(f"`{n}`" for n in skipped[:_UNKNOWN_NAMES_SHOWN])
+                # Deduped: a bundle whose name equals one of its commands'
+                # resolves the same pair twice, and this is a sentence a person
+                # reads — round 1 B1's class, re-opened by this notice
+                # (round 3 D3).
+                + ", ".join(f"`{n}`" for n in dict.fromkeys(skipped[:_UNKNOWN_NAMES_SHOWN]))
                 + ". Ask for them in another call.",
             )
         if over:
@@ -1209,14 +1230,15 @@ def _catalog_entry(pkg: PackageInfo, cmd: CommandInfo, name: str) -> str:
     """
     if name.startswith(f"{pkg.name}{THIRD_PARTY_SEP}"):
         return catalog_description(cmd.description)  # the name already says it
-    # The suffix counts against the SAME limit, not on top of it: appended
-    # after the cut, a long bundle name made a 139-character entry against a
-    # limit of 100 — and 100 is the operator's number (verify round F7).
-    suffix = f" [{pkg.name}]"
-    said = catalog_description(
-        cmd.description, limit=max(2, CATALOG_DESCRIPTION_LIMIT - len(suffix))
-    )
-    return f"{said}{suffix}" if said else f"[{pkg.name}]"
+    # The operator's 100 is the DESCRIPTION's budget (their words: "command
+    # description 最多 100 字元"), so the suffix does not eat it — F7 read the
+    # number as the whole entry's, which left 54 characters for the sentence
+    # the model actually chooses by when a bundle name was long, and still
+    # overshot once the name approached 100 (round 3 D6). The suffix gets its
+    # own, small bound instead.
+    suffix = f" [{pkg.name[:_BUNDLE_NAME_SHOWN]}]"
+    said = catalog_description(cmd.description)
+    return f"{said}{suffix}" if said else suffix.strip()
 
 
 def _stub_function_tool(
@@ -1229,7 +1251,7 @@ def _stub_function_tool(
         # has not seen the schema yet. Marking first means a model that ignores
         # the instruction and calls a third time still progresses — the real
         # tool answers that one.
-        mark_loaded(ctx, name)
+        mark_loaded(ctx, [name])
         logger.info("registry: catalog hit %s — loading its schema for this turn", name)
         return load_reply(pkg, cmd)
 

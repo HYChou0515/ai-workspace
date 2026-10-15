@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -254,8 +254,9 @@ class AgentToolContext:
     # installed into it from prebuilt_dir; the runner also exposes their
     # commands as function tools. Set by the API layer from create_app config.
     packages: list[PackageInfo] = field(default_factory=list)
-    catalog_calls: dict[str, list[str]] = field(default_factory=dict)
-    """Tool calls THIS turn that the catalog answered, `{call_id: [name, …]}`.
+    catalog_calls: dict[str, list[list[str]]] = field(default_factory=dict)
+    """Tool calls THIS turn that the catalog answered, `{call_id: [[name, …], …]}`
+    — a QUEUE of hits per call id, one entry per call the catalog answered.
 
     The answer to such a call is a parameter schema — the fattest thing in the
     design. The model needs it (the SDK's own run history carries it to the
@@ -267,6 +268,18 @@ class AgentToolContext:
     Keyed by call id, not by tool name, because a loaded command and its
     catalog entry share a name — and recorded by the handler that answered, so
     nothing has to infer which half ran.
+
+    A QUEUE rather than one list because `call_id` is the provider's, and a
+    provider that reuses one inside a single step would otherwise leave the
+    second hit unrecognised, putting a raw schema in the record (round 3 D4).
+    One `load_tool` call that loads several commands is ONE hit carrying
+    several names, which is why the handler says so explicitly instead of this
+    being inferred from the count.
+
+    The empty call id is a key like any other: `_call_id` falls back to `""`
+    for a provider that sends none, and suppressing that output matters more
+    than the risk of suppressing an adjacent real one — a schema in the record
+    is replayed into every later turn (round 3 D5).
     """
     ephemeral_outputs: list[str] = field(default_factory=list)
     """Tool outputs the catalog answered and `_map_event` has already rewritten
@@ -752,6 +765,30 @@ class AgentToolContext:
             self._speaker_groups = groups_of(self.spec, self.acting_user)
         return self._speaker_groups
 
+    def note_catalog_hit(self, call_id: str, names: Sequence[str]) -> None:
+        """One call the catalog answered: mark its commands loaded, and queue
+        the hit so `_map_event` can keep that one output out of the thread.
+
+        `names` is the whole batch of one call (a `load_tool` naming several
+        commands is one hit), so the queue length is the number of OUTPUTS to
+        suppress, never the number of commands."""
+        for name in names:
+            self.mark_tool_loaded(name)
+        self.catalog_calls.setdefault(call_id, []).append(
+            list(dict.fromkeys(names))  # the names go into a sentence a person reads
+        )
+
+    def take_catalog_hit(self, call_id: str) -> list[str] | None:
+        """The next queued hit for `call_id`, consumed. `None` when this output
+        is not one the catalog answered."""
+        hits = self.catalog_calls.get(call_id)
+        if not hits:
+            return None
+        names = hits.pop(0)
+        if not hits:
+            self.catalog_calls.pop(call_id, None)
+        return names
+
     def mark_tool_loaded(self, name: str, *, call_id: str = "") -> None:
         """This turn may now be served `name`'s real schema. Idempotent: a model
         can emit two calls to one unloaded command in a single step.
@@ -767,9 +804,7 @@ class AgentToolContext:
         (round 1 B1)."""
         self.loaded_tools.add(name)
         if call_id:
-            seen = self.catalog_calls.setdefault(call_id, [])
-            if name not in seen:
-                seen.append(name)
+            self.note_catalog_hit(call_id, [name])
 
     def is_tool_loaded(self, name: str) -> bool:
         return name in self.loaded_tools

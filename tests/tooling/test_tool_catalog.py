@@ -205,7 +205,7 @@ async def test_calling_a_catalog_tool_loads_it_and_answers_with_the_real_schema(
     # The callback is handed the whole `ToolContext`, not just `.context`: the
     # caller also needs the call id, to keep this call's answer (a schema) out
     # of the stored thread (`docs/plan-tool-on-demand-loading.md`).
-    assert loaded == [(tctx, "data-fetch")]
+    assert loaded == [(tctx, ["data-fetch"])]
     # The full description — the catalog line was only the first sentence.
     assert describe_command(_pkg(), _pkg().commands[0]) in reply
     # The real schema, verbatim enough that the model can satisfy it.
@@ -235,7 +235,7 @@ async def test_load_tool_can_only_reach_what_the_executable_builder_grants():
         load = build_load_tool(
             pkgs,
             allowed=allowed,
-            mark_loaded=lambda tctx, name: tctx.context.mark_tool_loaded(name, call_id="c"),
+            mark_loaded=lambda tctx, names: tctx.context.note_catalog_hit("c", names),
         )
         # Ask for EVERY command of every package, granted or not.
         every = [
@@ -518,7 +518,7 @@ async def test_load_tool_cannot_open_a_command_a_builtin_shadows():
     load = build_load_tool(
         [pkg],
         allowed=None,
-        mark_loaded=lambda tctx, name: tctx.context.mark_tool_loaded(name, call_id="c"),
+        mark_loaded=lambda tctx, names: tctx.context.note_catalog_hit("c", names),
         shadowed={"read_file"},
     )
 
@@ -529,18 +529,85 @@ async def test_load_tool_cannot_open_a_command_a_builtin_shadows():
     assert "no tool called" in reply
 
 
-def test_the_bundle_suffix_fits_inside_the_limit_not_on_top_of_it():
-    """100 is the operator's number. Appended after the cut, a long bundle name
-    made a 139-character entry (verify round F7)."""
-    from workspace_app.tooling.registry import CATALOG_DESCRIPTION_LIMIT, build_catalog_tools
+def test_a_long_bundle_name_does_not_eat_the_descriptions_budget():
+    """The operator's 100 is the DESCRIPTION's (their words). Counting the
+    suffix against it left 54 characters for the sentence the model chooses by
+    when a bundle name was long, and still overshot once the name approached
+    100 (round 3 D6) — so the suffix has its own, small bound."""
+    from workspace_app.tooling.registry import (
+        _BUNDLE_NAME_SHOWN,
+        CATALOG_DESCRIPTION_LIMIT,
+        build_catalog_tools,
+    )
 
     pkg = dataclasses.replace(
         _pkg(),
-        name="a-very-long-first-party-bundle-name",
+        name="a" * 140,
         commands=(CommandInfo("cmd", "D" * 400, {}),),
     )
 
     (tool,) = build_catalog_tools([pkg], allowed=None, mark_loaded=lambda *_: None)
 
-    assert len(tool.description) <= CATALOG_DESCRIPTION_LIMIT, tool.description
-    assert tool.description.endswith("[a-very-long-first-party-bundle-name]")
+    said, _, bundle = tool.description.rpartition(" [")
+    assert len(said) <= CATALOG_DESCRIPTION_LIMIT, said
+    assert len(bundle.rstrip("]")) == _BUNDLE_NAME_SHOWN
+    assert len(tool.description) <= CATALOG_DESCRIPTION_LIMIT + _BUNDLE_NAME_SHOWN + 3
+
+
+async def test_the_already_full_notice_names_a_command_once():
+    """A bundle whose name equals one of its commands' (the shipped
+    `data-fetch` does) resolves the same pair twice, and this notice is a
+    sentence a PERSON reads — round 1 B1's class, re-opened by the notice the
+    budget fix added (round 3 D3)."""
+    from workspace_app.tooling.registry import build_load_tool
+
+    big = {"type": "object", "properties": {f"p{i}": {"type": "string"} for i in range(400)}}
+    pkg = dataclasses.replace(
+        _pkg(),
+        name="data-fetch",
+        commands=(
+            CommandInfo("filler", "Fills the budget.", big),
+            CommandInfo("data-fetch", "Shares its bundle's name.", big),
+        ),
+    )
+    ctx = AgentToolContext(investigation_id="i")
+    load = build_load_tool(
+        [pkg],
+        allowed=None,
+        mark_loaded=lambda tctx, names: tctx.context.note_catalog_hit("c", names),
+    )
+
+    reply = await load.on_invoke_tool(
+        _tool_ctx(ctx, "load_tool"), json.dumps({"names": ["filler", "data-fetch"]})
+    )
+
+    assert "already full" in reply
+    notice = reply.split("\n\n", 1)[0]
+    assert notice.count("`data-fetch`") == 1, notice
+
+
+async def test_one_oversized_command_still_loads_because_nothing_else_can_use_it():
+    """The budget bounds BATCHING. A command whose schema alone is bigger than
+    one call may carry is still loaded: refusing would leave the model with a
+    tool it is told to call and can never call, and the same schema goes out
+    unbounded when it calls the command directly (round 3 D2 — decided, rather
+    than left as a comment that said the opposite)."""
+    from workspace_app.tooling.registry import _LOAD_REPLY_MAX_CHARS, build_load_tool
+
+    huge = {
+        "type": "object",
+        "properties": {f"p{i}": {"type": "string", "description": "d" * 100} for i in range(400)},
+    }
+    pkg = dataclasses.replace(_pkg(), commands=(CommandInfo("huge", "One fat command.", huge),))
+    ctx = AgentToolContext(investigation_id="i")
+    load = build_load_tool(
+        [pkg],
+        allowed=None,
+        mark_loaded=lambda tctx, names: tctx.context.note_catalog_hit("c", names),
+    )
+
+    reply = await load.on_invoke_tool(_tool_ctx(ctx, "load_tool"), '{"names": ["huge"]}')
+
+    assert ctx.loaded_tools == {"huge"}
+    assert "`huge` is now loaded" in reply
+    assert len(reply) > _LOAD_REPLY_MAX_CHARS  # the cap does not apply to one command
