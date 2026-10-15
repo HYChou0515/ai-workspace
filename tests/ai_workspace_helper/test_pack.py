@@ -204,3 +204,17 @@ def test_a_broken_site_file_is_refused_before_anything_is_built(tmp_path):
         pack_mod.pack("0.3.0", tmp_path / "out", run=run, ext_ai_site=site)
 
     assert run.commands == []
+
+
+# Review round 1: the packer's own Python is newer than a person's 3.9 — a file
+# written in syntax 3.9 refuses would pass here and fail on every PC, leaving
+# every card manual. It is refused here instead.
+def test_a_site_file_in_syntax_python_39_refuses_is_refused(tmp_path):
+    site = tmp_path / "ext_ai_site.py"
+    site.write_text(_SITE + "\ndef pick(x):\n    match x:\n        case _:\n            return x\n")
+    run = _SiteRun()
+
+    with pytest.raises(ValueError, match="3.9"):
+        pack_mod.pack("0.3.0", tmp_path / "out", run=run, ext_ai_site=site)
+
+    assert run.commands == []

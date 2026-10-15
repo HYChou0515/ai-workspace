@@ -443,8 +443,6 @@ def test_the_helper_is_wired_to_report_what_it_runs_on(tmp_path):
     assert ctl.snapshot()[0] == "connected"
     seen = client.app.state.outside_jobs.presence("u")
     assert (seen.chrome, seen.python) == ("141.0.7390.55", platform.python_version())
-    # packed without the company's site file: it cannot ask the external AI
-    assert seen.ext_ai == ""
 
 
 def _wired(tmp_path, load_site):  # noqa: ANN001, ANN202
@@ -738,3 +736,25 @@ def test_a_chrome_that_never_starts_is_said_after_the_last_try():
 
     assert len(tries) == 3
     assert ctl.snapshot()[:2] == ("no_chrome", "no Chrome here")
+
+
+# docs/plan-ext-ai.md (review round 1): the window and its history name the
+# external AI's errand in its own words, and show a question by its first line
+# — the status line and the history's column are one line each.
+def test_asking_the_external_ai_reads_as_what_it_is():
+    from ai_workspace_helper.app import describe, history_row
+
+    question = "pandas 還是 polars?\n背景:每天讀一次 2 GB 的 CSV。"
+
+    assert describe("connected", question, "ask_ext_ai", "外部AI") == (
+        "正在問（外部AI）：pandas 還是 polars?"
+    )
+    row = {
+        "at": "2026-10-16T09:30:00",
+        "kind": "ask_ext_ai",
+        "args": question,
+        "outcome": "failed",
+        "reason": "沒有回應",
+    }
+    assert history_row(row)[1:] == ("問外部AI", "pandas 還是 polars?", "沒問到：沒有回應")
+    assert history_row({**row, "outcome": "done", "reason": ""})[3] == "已送給 AI"

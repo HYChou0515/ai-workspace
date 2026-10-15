@@ -46,7 +46,7 @@ _MAX_CAS_RETRIES = 100
 CLAIM_TIMEOUT_MS = 120_000
 
 #: A helper that has not checked in for this long is offline: the card offers
-#: the manual flow (D7) rather than a 「查」 nobody will act on.
+#: the manual flow (D7) rather than a button nobody will act on.
 ONLINE_WINDOW_MS = 30_000
 
 #: A job taken this many times and never finished — the workspace full, a
@@ -76,7 +76,7 @@ class OutsideJob(Struct):
     #: person solves one in the helper's Chrome window, §3.4); "" otherwise.
     note: str = ""
     #: Handed over by the card on its own — a link an earlier lookup in this
-    #: chat brought back (D12) — rather than with the person's 「查」.
+    #: chat brought back (D12) — rather than with the person's nod.
     auto: bool = False
     #: Where the page was saved once the job is done (`lookups/…`).
     saved: str = ""

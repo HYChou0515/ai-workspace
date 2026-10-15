@@ -24,7 +24,10 @@ pytestmark = pytest.mark.integration
 _ROOT = Path(__file__).resolve().parents[2]
 _TEMPLATE = _ROOT / "ai-workspace-helper" / "ext_ai_site.template.py"
 
-QUESTION = "Which is safer for a 2 GB CSV,\npandas or polars?"
+# Written the way the tool asks the AI to write: whole, and in Markdown — which
+# the page renders, so the person's own bubble no longer reads as the raw
+# question (review round 1).
+QUESTION = "Which is **safer** for a 2 GB CSV:\n- pandas\n- polars"
 
 # A chat page like the ones the template has to guess at: a sign-in first (a
 # person signs in a moment later), then a blank conversation; Enter sends; the
@@ -32,12 +35,17 @@ QUESTION = "Which is safer for a 2 GB CSV,\npandas or polars?"
 # and a pause longer than the template's quiet time in the middle of it.
 _CHAT = """<!doctype html><meta charset="utf-8"><title>Company AI</title>
 <header><nav>New chat · History · Settings</nav></header>
-<div id="login"><p>Sign in to Company AI</p><input type="password"></div>
+<div id="login"><p>Sign in to Company AI</p>
+  <input type="text" name="username" size="40"><input type="password"></div>
 <main id="chat" hidden>
   <textarea id="prompt" rows="3" cols="80" placeholder="Ask anything"></textarea></main>
 <script>
 const login = document.getElementById('login'), chat = document.getElementById('chat');
-if (document.cookie.includes('signed=1')) { login.remove(); chat.hidden = false; }
+// signed in, the page draws the conversation a moment after it loads, as a
+// single-page app does — not a sign-in to ask the person about
+if (document.cookie.includes('signed=1')) {
+  login.remove(); setTimeout(() => { chat.hidden = false; }, 1200);
+}
 else setTimeout(() => { document.cookie = 'signed=1'; location.reload(); }, 1500);
 const words = 'Polars uses less memory for a file that size'.split(' ');
 document.getElementById('prompt').addEventListener('keydown', (e) => {
@@ -48,7 +56,11 @@ document.getElementById('prompt').addEventListener('keydown', (e) => {
   // comes NEW, holding the question and the answer both
   let log = document.getElementById('log');
   if (!log) { log = document.createElement('div'); log.id = 'log'; chat.prepend(log); }
-  const me = document.createElement('div'); me.className = 'me'; me.innerText = q; log.append(me);
+  // the page renders the question's Markdown, as chat pages do
+  const me = document.createElement('div'); me.className = 'me';
+  const html = q.replace(/\\*\\*(.+?)\\*\\*/g, '<strong>$1</strong>').split('\\n')
+    .map((l) => l.startsWith('- ') ? `<li>${l.slice(2)}</li>` : `<p>${l}</p>`).join('');
+  me.innerHTML = html.replace(/(<li>.*<\\/li>)/, '<ul>$1</ul>'); log.append(me);
   const bot = document.createElement('div'); bot.className = 'bot'; log.append(bot);
   const p = document.createElement('p'); bot.append(p);
   const stop = document.createElement('button'); stop.innerText = 'Stop generating';
@@ -125,8 +137,25 @@ def test_the_template_asks_a_chat_page_it_has_never_seen(tmp_path, site):
     assert re.search(r"^-\s+lazy frames$", md, re.M)
     assert "[the guide](https://pola.example/guide)" in md
     # the answer alone: not the question, the page's furniture, or its buttons
-    assert "pandas or polars" not in md
+    assert "safer" not in md and "pandas" not in md
     assert "History" not in md and "Copy" not in md and "Stop" not in md
     # it waited for the person to sign in, and said so
     assert notes[0] == "login"
     assert (page.title, page.url) == ("外部AI", "")
+
+
+def test_signed_in_it_asks_again_without_asking_anyone_to_sign_in(tmp_path, site):
+    """A page that draws its conversation a moment after loading is not a
+    sign-in: the second question, signed in, brings no window forward and
+    tells the card nothing about signing in (review round 1)."""
+    chrome = Chrome(tmp_path / "profile", "http://unused", channel="chromium", headless=True)
+    first: list[str] = []
+    again: list[str] = []
+    try:
+        chrome.run(errand(site), QUESTION, first.append)
+        page = chrome.run(errand(site), QUESTION, again.append)
+    finally:
+        chrome.close()
+
+    assert "login" in first and "login" not in again
+    assert "Polars uses less memory" in page.markdown

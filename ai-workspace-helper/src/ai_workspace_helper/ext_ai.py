@@ -10,9 +10,11 @@ returns the answer — its HTML, or plain text. The server never sends code
 
 `h` (`Helpers`) is what the file waits with. Every wait goes through it for
 two reasons: it tells the card again every `RENEW_S` — which renews the claim
-on the job; a claim not renewed in 120 s goes back to the queue and the
-question is asked TWICE — and it stops at one limit for the whole errand
-(D11), saying what it was waiting for.
+on the job and counts as checking in; unrenewed for 120 s, the job reads as
+waiting again and the card falls back to asking by hand while the question is
+still being asked, and the person's helper on another PC may take it — and it
+stops at
+one limit for the whole errand (D11), saying what it was waiting for.
 """
 
 from __future__ import annotations
@@ -24,6 +26,7 @@ from collections.abc import Callable
 from pathlib import Path
 from types import ModuleType
 from typing import Any
+from urllib.parse import urlsplit
 
 from .errands import (
     RENEW_S,
@@ -48,8 +51,25 @@ PACKED = "ai_workspace_helper.ext_ai_site"
 #: The page's visible text — what "still changing" is judged by.
 _TEXT = "() => document.body ? document.body.innerText : ''"
 
-#: An answer is HTML when it has a tag in it; anything else is text as it is.
-_TAG = re.compile(r"<[A-Za-z][^>]*>")
+#: An answer is HTML when it IS an element — it opens with a tag and closes
+#: with one (an element's outerHTML). Anything else is text as it is: text
+#: can hold `#include <stdio.h>` or `List<String>`, which the converter would
+#: take for tags (review round 1).
+_HTML = re.compile(r"\A\s*<[A-Za-z][^>]*>.*</[A-Za-z][A-Za-z0-9-]*>\s*\Z", re.S)
+
+#: What stands in for the company's address in a failure the card shows.
+MASK = "(外部AI 的網址)"
+
+
+def _masked(text: str, url: str) -> str:
+    """`text` without the company's address (D12): a Playwright error names the
+    page it was on, and an errand's failure goes to the server and the card.
+    Every token holding the address's host goes, and the call log after it."""
+    text = text.split("\nCall log:", 1)[0].strip()
+    host = urlsplit(url).hostname or url.strip()
+    if not host:
+        return text
+    return re.sub(r"\S*" + re.escape(host) + r"\S*", MASK, text)
 
 
 class Helpers:
@@ -121,11 +141,14 @@ def errand(site: Any) -> Errand:
 
     def ask_ext_ai(ctx: ErrandContext, question: str) -> FetchedPage:
         ctx.where("外部AI")
-        answer = site.ask(ctx.page, question, Helpers(ctx))
+        try:
+            answer = site.ask(ctx.page, question, Helpers(ctx))
+        except Exception as exc:  # noqa: BLE001 — whatever failed, said without the address
+            raise ErrandFailed(_masked(str(exc) or type(exc).__name__, site.URL)) from None
         if not isinstance(answer, str) or not answer.strip():
             raise ErrandFailed("外部AI 的網站檔沒有交回回答")
         # the converter leaves the page it runs in: last (ErrandContext.convert)
-        markdown = ctx.convert(answer) if _TAG.search(answer) else answer
+        markdown = ctx.convert(answer) if _HTML.match(answer) else answer
         if not markdown.strip():
             raise ErrandFailed("外部AI 的回答轉出來沒有文字")
         return FetchedPage(title="外部AI", url="", markdown=markdown)
@@ -223,6 +246,7 @@ def _own_chrome() -> Any:  # pragma: no cover — opens the person's Chrome
 __all__ = [
     "EXT_AI_TIMEOUT_S",
     "LOGIN",
+    "MASK",
     "Helpers",
     "errand",
     "load_site",

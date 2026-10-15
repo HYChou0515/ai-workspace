@@ -34,7 +34,7 @@
  * base, a replay) the request shows without actions.
  *
  * With the person's helper connected (docs/plan-outside-helper.md
- * §3.5) the helper fetches instead: a search asks only for the nod (「查」, with
+ * §3.5) the helper fetches instead: a search asks only for the nod (「{name} search」, with
  * the keywords the person typed — D13); a URL an earlier lookup in this chat brought back
  * goes with no nod at all (D12 — the server decides, the card just asks); the
  * card then shows the errand under way, failed or done. Doing it by hand stays
@@ -208,7 +208,7 @@ export function OutsideLookupCard({
     queryKey: jobKey,
     queryFn: () => client.job!(cardRef!),
     // Read whether or not this page handed it over: after a reload the card
-    // must see a job already under way, or its 「查」 would restart it.
+    // must see a job already under way, or its button would restart it.
     enabled: cardRef !== null && helperAvailable && !answeredAlready && done === null,
     // Polled only while the helper is at it; an ended job does not change.
     refetchInterval: (q) => {
@@ -224,7 +224,7 @@ export function OutsideLookupCard({
       qc.setQueryData(jobKey, j);
       void qc.invalidateQueries({ queryKey: jobKey }); // and read back how it goes
     },
-    // Said in the card, not app-wide: a refused 「查」 shows its reason here
+    // Said in the card, not app-wide: a refused nod shows its reason here
     // (`handError`), and an automatic request refused is just the way back to
     // the nod — not a failed save to announce over the chat.
     meta: { silentError: true },
@@ -329,8 +329,10 @@ export function OutsideLookupCard({
             {job.data?.auto && (
               <p className="outside-lookup-note">{t("lookup.helperFromEarlier")}</p>
             )}
-            <p className="outside-lookup-note" role="status">
-              <span>
+            <p className="outside-lookup-note">
+              {/* the live region holds what is happening, not the seconds: a
+                  polite region changing every second is read out every second */}
+              <span role="status">
                 {t(
                   jobState === "claimed" && job.data?.note === "captcha"
                     ? "lookup.helperCaptcha"
@@ -374,8 +376,7 @@ export function OutsideLookupCard({
               isQuestion ||
               needsNod ||
               jobState === "failed" ||
-              jobState === "cancelled") &&
-              (!isSearch || searchName) && (
+              jobState === "cancelled") && (
                 <div className="outside-lookup-actions">
                   <button
                     type="button"
@@ -536,7 +537,8 @@ export function OutsideLookupCard({
             className="input outside-lookup-question"
             rows={5}
             value={question}
-            readOnly={locked}
+            // what went out is what the box shows while the helper asks it
+            readOnly={locked || working}
             aria-invalid={needQuestion || undefined}
             aria-describedby={needQuestion ? `${ids}-x-need` : undefined}
             onChange={(e) => {
@@ -840,7 +842,10 @@ function goLabel(
 ): string {
   if (isQuestion) return t(again ? "lookup.extAgain" : "lookup.extGo");
   if (isSearch) {
-    return t(again ? "lookup.searchAgain" : "lookup.searchWith", { name: searchName ?? "" });
+    // the deploy's list unread: the helper picks the destination itself, so the
+    // button still searches — it just cannot name where (review round 1)
+    if (!searchName) return t(again ? "lookup.searchAgainUnnamed" : "lookup.searchUnnamed");
+    return t(again ? "lookup.searchAgain" : "lookup.searchWith", { name: searchName });
   }
   return t(again ? "lookup.openAgain" : "lookup.openUrl");
 }

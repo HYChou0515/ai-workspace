@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 #: How long the helper waits for the person to complete a verification in its
-#: Chrome window before giving the job up (the card then offers 「重查」).
+#: Chrome window before giving the job up (the card then offers to try again).
 VERIFY_TIMEOUT_S = 300.0
 
 #: What the card shows while the helper waits on the person.

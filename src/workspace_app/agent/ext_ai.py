@@ -33,17 +33,16 @@ async def ask_ext_ai_impl(
 ) -> str:
     """Ask the external AI a question, with a card in the chat.
 
-    The external AI can reach the internet; you cannot. Use this for someone
-    else's analysis: compare approaches, explain an error, summarise the current
-    state of a topic. Its answer is the external AI's account,
-    not an original source: when you use it, say it comes from the external
-    AI. To get an original page — documentation, a release note, search
-    results — use `ask_outside` instead.
+    The external AI reaches the internet. Use it for someone else's analysis:
+    compare approaches, explain an error, summarise the current state of a
+    topic. Its answer is the external AI's account: when you use it, say it
+    comes from the external AI. For an original page — documentation, a
+    release note, search results — use `ask_outside`.
 
     Pass `why` as one short sentence the user reads first, and `question` as
-    text only — files are not sent, so put what the question needs into it.
-    Write the whole question: the external AI starts a new conversation each
-    time and knows nothing of this one. The card shows the question, and
+    text with everything it needs written into it: each question opens a new
+    conversation with the external AI, so include the background, the data and
+    the code it should look at. The card shows the question, and
     the user may edit it before it is sent.
 
     One card asks one question. Your turn ends here. The external AI's answer

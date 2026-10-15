@@ -16,7 +16,7 @@ Stand-ins, and only these:
 - the helper's Chromium runs headless here (no display); on the PC it is the
   person's Chrome, headed.
 
-The person presses 「查」 ONCE. The second lookup — a link the first one brought
+The person presses 「Google search」 ONCE. The second lookup — a link the first one brought
 back — must go to the helper with no nod (D12).
 
 Writes a demo of the browser to `<out>/ai-workspace-helper-demo.mp4` (ffmpeg).
@@ -327,7 +327,7 @@ def _tour(base: str, iid: str, out: Path, check: _Check) -> Path | None:
             _glide(page, link)
             page.wait_for_timeout(1500)
 
-            # 2. the item: ask, and press 「查」 once
+            # 2. the item: ask, and press 「Google search」 once
             page.goto(f"{base}/a/rca/{iid}", wait_until="domcontentloaded")
             page.wait_for_timeout(2500)
             for dismiss in ("Got it", "知道了", "開始使用"):
@@ -355,7 +355,7 @@ def _tour(base: str, iid: str, out: Path, check: _Check) -> Path | None:
             page.wait_for_timeout(400)
             _glide(page, go)
             go.click()
-            check("the search card offered 「查」 and took the nod", True)
+            check("the search card offered 「Google search」 and took the nod", True)
 
             # 3. nothing else: the helper searches, the AI opens the link it
             #    brought back (no second nod), and answers from the page

@@ -1925,6 +1925,8 @@ export const messages = {
   // says — the destination's own name, or 開啟這個網址.
   "lookup.searchWith": { "zh-TW": "{name} search", en: "{name} search" },
   "lookup.searchAgain": { "zh-TW": "再 {name} search 一次", en: "{name} search again" },
+  "lookup.searchUnnamed": { "zh-TW": "搜尋", en: "Search" },
+  "lookup.searchAgainUnnamed": { "zh-TW": "再搜尋一次", en: "Search again" },
   "lookup.openAgain": { "zh-TW": "再開一次", en: "Open it again" },
   // docs/plan-ext-ai.md §3 — the 問外部AI card
   "lookup.extTitle": { "zh-TW": "問外部AI", en: "Ask the external AI" },

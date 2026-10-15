@@ -110,7 +110,12 @@ describe("asking the external AI", () => {
 
     const status = await screen.findByRole("status");
     expect(status).toHaveTextContent("小幫手正在問外部AI");
-    expect(status).toHaveTextContent(/已等 \d+ 秒/);
+    expect(screen.getByText(/已等 \d+ 秒/)).toBeInTheDocument();
+    // …but outside the live region: a polite region whose text changes every
+    // second is read out every second (review round 1)
+    expect(status).not.toHaveTextContent(/已等/);
+    // what was sent is what the box shows: no editing a question already out
+    expect(screen.getByLabelText("要問的問題")).toHaveAttribute("readonly");
     fireEvent.click(screen.getByRole("button", { name: "取消" }));
     await waitFor(() => expect(client.cancel).toHaveBeenCalled());
   });

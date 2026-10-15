@@ -25,13 +25,15 @@ Chrome — https://playwright.dev/python/docs/api/class-page), the question, and
 - `h.wait_until(cond, what)` — waits until `cond()` holds;
 - `h.wait_still(seconds)` — waits until the page's text stops changing.
 
-They keep the job held while they wait (one not renewed in 120 s is handed out
-again, and the question is asked twice) and stop at the helper's limit, saying
-what they waited for. A bare `page.wait_for_timeout(…)` or a long
-`wait_for_selector` does neither.
+They tell the card the helper is still at it while they wait — waited
+without them for 120 s, the card falls back to asking by hand, though the
+helper is still asking — and they stop at the helper's
+limit, saying what they waited for. A bare `page.wait_for_timeout(…)` or a
+long `wait_for_selector` does neither; a few seconds of one is fine.
 
-Return the answer's HTML (`element.inner_html()` or `outer_html`), or its text.
-The helper turns HTML into Markdown the way a paste into the card would.
+Return the answer element's HTML (`locator.evaluate("e => e.outerHTML")`), or
+its text. The helper turns an element's HTML into Markdown the way a paste into
+the card would; text it keeps as it is.
 """
 
 #: The page that opens on a blank conversation.
@@ -40,8 +42,16 @@ URL = "https://"
 #: What the helper reports when it checks in — a label, shown to nobody yet.
 NAME = "external AI"
 
-#: Where a question can be typed.
-PROMPT = "textarea, [contenteditable='true'], [contenteditable=''], input[type='text']"
+#: Where a question can be typed. Not a one-line `input`: a sign-in page has
+#: those (its user name), and the question would go to the sign-in.
+PROMPT = "textarea, [contenteditable='true'], [contenteditable='']"
+
+#: A sign-in in the way: a visible password field — told apart from a page
+#: still drawing itself.
+SIGN_IN = "input[type='password']"
+
+#: How long a page that draws itself after loading gets to show either.
+FIRST_DRAW_SECONDS = 10
 
 #: How long the answer must stay unchanged to count as written out.
 STILL_SECONDS = 3.0
@@ -57,14 +67,16 @@ _MARK = """() => {
 # list wrapping both, hold it). Each conversation starts blank, so there is
 # little else new. `null` until something has come.
 _ANSWER = """(question) => {
-  // a page shows the question with its spaces and line breaks folded
-  const flat = (s) => s.replace(/\\s+/g, ' ').trim();
-  const q = flat(question);
+  // A page shows the question RENDERED — its Markdown drawn, links shown by
+  // their text, spaces folded — so the two are compared by their letters and
+  // digits alone.
+  const bare = (s) => s.replace(/\\]\\([^)]*\\)/g, ']').replace(/[^\\p{L}\\p{N}]+/gu, '');
+  const q = bare(question);
   let best = null, size = 0;
   for (const el of document.body.querySelectorAll('*:not([data-aiwh-old])')) {
     if (el.closest('textarea, [contenteditable], input, button, script, style')) continue;
-    const text = flat(el.innerText || '');
-    if (!text || text.includes(q)) continue;
+    const text = bare(el.innerText || '');
+    if (!text || (q && text.includes(q))) continue;
     if (text.length > size) { best = el; size = text.length; }
   }
   return best ? best.outerHTML : null;
@@ -92,9 +104,20 @@ def _prompt_box(page):
     return best
 
 
+def _signed_in(page):
+    """The blank conversation is up: there is a place to type a question."""
+    return _prompt_box(page) is not None
+
+
 def ask(page, question, h):
     page.goto(URL)
-    h.wait_for_login(lambda: _prompt_box(page) is not None)
+    # a page that draws itself after loading shows the conversation or the
+    # sign-in a moment later — not a sign-in to ask the person about
+    for _ in range(FIRST_DRAW_SECONDS):
+        if _signed_in(page) or page.locator(SIGN_IN).first.is_visible():
+            break
+        page.wait_for_timeout(1000)
+    h.wait_for_login(lambda: _signed_in(page))
     box = _prompt_box(page)
     page.evaluate(_MARK)
 

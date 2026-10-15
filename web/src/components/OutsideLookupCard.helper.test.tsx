@@ -64,6 +64,7 @@ function draw({
   follow,
   answeredLater = false,
   targets = [{ name: "Google", url: "https://www.google.com/search?q={q}" }],
+  targetsFail = false,
 }: {
   lookup?: OutsideLookup;
   online?: boolean;
@@ -84,11 +85,16 @@ function draw({
   answeredLater?: boolean;
   /** The deploy's search destinations (`server.lookup_targets`). */
   targets?: { name: string; url: string }[];
+  /** `GET /lookup-targets` failing. */
+  targetsFail?: boolean;
 } = {}) {
   // As the server answers: no job until one is handed over, then that job.
   let latest: HelperJob | null = existing;
   const client = {
-    targets: vi.fn(async () => targets),
+    targets: vi.fn(async () => {
+      if (targetsFail) throw new Error("targets failed");
+      return targets;
+    }),
     answer: vi.fn(async () => ({ path: null, attachments: [] })),
     helperStatus: vi.fn(status ?? (async () => ({ online }))),
     handOver: vi.fn(async (args: Parameters<OutsideLookupClient["handOver"] & object>[0]) => {
@@ -341,7 +347,7 @@ describe("a page, with the helper connected (D12)", () => {
       lookup: PAGE,
       queryClient: makeQueryClient(),
       handOver: async (args) => {
-        if (args.auto) throw new HttpError(409, "this lookup waits for the person's 「查」");
+        if (args.auto) throw new HttpError(409, "this lookup waits for the person's nod");
         return job({ kind: "open_url" });
       },
     });
@@ -390,7 +396,7 @@ describe("a page, with the helper connected (D12)", () => {
     const client = draw({
       lookup: PAGE,
       handOver: async (args) => {
-        if (args.auto) throw new HttpError(409, "this lookup waits for the person's 「查」");
+        if (args.auto) throw new HttpError(409, "this lookup waits for the person's nod");
         return job({ kind: "open_url" });
       },
     });
@@ -449,5 +455,19 @@ describe("one name for one action (plan-ext-ai D8)", () => {
     fireEvent.click(await screen.findByRole("button", { name: "開啟這個網址" }));
 
     expect(await screen.findByRole("button", { name: "再開一次" })).toBeInTheDocument();
+  });
+});
+
+// Review round 1: the button named the destination only once the deploy's list
+// was read — with the list unreadable a connected helper's card had no button
+// at all (before D8, 「查」 never depended on it). The helper picks its own.
+describe("with the destinations unreadable", () => {
+  it("still offers the helper's search, unnamed", async () => {
+    const client = draw({ targetsFail: true });
+    fireEvent.change(await screen.findByLabelText("搜尋關鍵字"), { target: { value: "x" } });
+
+    fireEvent.click(await screen.findByRole("button", { name: "搜尋" }));
+
+    await waitFor(() => expect(client.handOver).toHaveBeenCalled());
   });
 });

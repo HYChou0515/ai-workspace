@@ -90,7 +90,7 @@ export const outsideLookupApi = {
   },
 
   /** Hand the card to the helper. `auto` is the card asking on its own, with
-   * no 「查」 — the server allows it only for a URL an earlier lookup in this
+   * no nod — the server allows it only for a URL an earlier lookup in this
    * chat brought back (D12) and answers 409 otherwise. */
   async handOver(args: CardArgs & { query?: string; auto: boolean }): Promise<HelperJob> {
     const r = await apiFetch(cardJobs(args), {

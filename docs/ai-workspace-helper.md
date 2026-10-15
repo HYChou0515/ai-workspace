@@ -153,8 +153,8 @@ AI 起草問題,卡片上完整顯示、使用者可以改,按「問外部AI」�
    在這個 repo 裡:`PYTHONPATH=ai-workspace-helper/src uv run --no-sync python -m ai_workspace_helper try-ext-ai …`;
    裝好小幫手的電腦上,用它自己的 Python(有主控台的那個):`%LOCALAPPDATA%\AIWorkspaceHelper\versions\<版本>\venv\Scripts\python.exe -m ai_workspace_helper try-ext-ai …`。哪一步不對,就改 `ask` 裡那幾行;失敗訊息會說它在等什麼
    (例如「等了 300 秒還沒等到:外部AI 開始回答」)。等待一律用 `h.wait_until` / `h.wait_still` / `h.wait_for_login`:
-   它們會讓這件工作一直算「有人在做」,直接用 `page.wait_for_timeout` 等太久(超過 120 秒),工作會被當成沒人做、
-   **再問一次**。
+   它們會讓這件工作一直算「有人在做」;直接用 `page.wait_for_timeout` 等太久(120 秒),卡片就當這件工作
+   沒人做、退回手動,其實它還在問(同一個人在另一台電腦也開著小幫手時,那台還可能再問一次)。
 3. 打包時帶上它(其餘同「發布一版」):
 
    ```bash

@@ -313,11 +313,10 @@ def _tour(base: str, iid: str, out: Path, check: Any) -> Path | None:
             status.wait_for(timeout=30_000)
             page.wait_for_timeout(3000)
             _shoot(page, card, out / "card-asking-1280.png")
-            check(
-                "while it asks, the card says so and for how long",
-                "已等" in status.inner_text(),
-                status.inner_text(),
-            )
+            # the seconds sit beside the live region, not in it (read out every
+            # second otherwise): the line holding both
+            line = status.locator("xpath=..").inner_text()
+            check("while it asks, the card says so and for how long", "已等" in line, line)
 
             page.get_by_text(f"標著 {TOKEN}").wait_for(timeout=180_000)
             check(f"the AI's answer quotes {TOKEN} — only in the external AI's answer", True)

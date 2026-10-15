@@ -179,6 +179,19 @@ def test_a_pasted_answer_reads_the_same():
     assert msg.content.startswith("我問了外部AI:") and "不是原始出處" in msg.content
 
 
+# Review round 1: the AI is pointed at "the links below" only when there are
+# some — an answer with none, or a person who may not add files (no file, no
+# list), leaves it looking for a list that is not there.
+def test_an_answer_with_no_links_points_at_none():
+    client, spec, iid = _asked()
+
+    assert _answer(client, iid, content="Polars.", query=QUESTION).status_code == 200
+
+    [msg] = _answers(spec)
+    assert "不是原始出處" in msg.content
+    assert "ask_outside" not in msg.content
+
+
 def test_not_asking_says_so():
     client, spec, iid = _asked()
 

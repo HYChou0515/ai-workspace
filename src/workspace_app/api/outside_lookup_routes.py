@@ -583,10 +583,10 @@ def _message(
     if path:
         lines.append(f"存在 `{path}`")
     if ext_ai:
-        # docs/plan-ext-ai.md D10
+        # docs/plan-ext-ai.md D10 — and the links only when they are listed below
         lines.append(
             "這是外部AI 的回答,不是原始出處;引用時說明是外部AI 的說法。"
-            "要看它提到的原文,用 ask_outside 打開下面的連結。"
+            + ("要看它提到的原文,用 ask_outside 打開下面的連結。" if path and numbered else "")
         )
     numbered = numbered or []
     if path and numbered:

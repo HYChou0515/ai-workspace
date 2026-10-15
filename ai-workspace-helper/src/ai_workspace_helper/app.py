@@ -25,7 +25,7 @@ from collections.abc import Callable
 from typing import Any
 
 #: Seconds between polls when there is nothing to do. Short, because the card's
-#: 「查」 waits on it; a poll is one small request.
+#: the card's nod waits on it; a poll is one small request.
 POLL_S = 2.0
 #: Starting Chrome is tried this often, this far apart, before 「開不了 Chrome」:
 #: started the moment the helper it replaced let go of its lock (D21), its
@@ -47,9 +47,9 @@ _TEXT = {
 }
 
 #: What each errand is doing, as the window says it.
-_DOING = {"search": "正在搜尋", "open_url": "正在開啟"}
+_DOING = {"search": "正在搜尋", "open_url": "正在開啟", "ask_ext_ai": "正在問"}
 #: The 查詢紀錄 tab's name for each errand.
-_KIND = {"search": "搜尋", "open_url": "開啟網頁"}
+_KIND = {"search": "搜尋", "open_url": "開啟網頁", "ask_ext_ai": "問外部AI"}
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +60,8 @@ def describe(status: str, detail: str, kind: str = "", site: str = "") -> str:
     on a line of its own."""
     if status == "connected" and detail:
         doing = _DOING.get(kind, "正在查")
+        # one line: a question for the external AI can run to many
+        detail = _first_line(detail)
         return f"{doing}（{site}）：{detail}" if site else f"{doing}：{detail}"
     text = _TEXT.get(status, status)
     return f"{text}\n{detail}" if detail else text
@@ -76,8 +78,13 @@ def history_row(row: dict[str, Any]) -> tuple[str, str, str, str]:
     if row.get("outcome") == "done":
         ended = "已送給 AI"
     else:
-        ended = f"沒查到：{row.get('reason', '')}" if row.get("reason") else "沒查到"
-    return when, what, str(row.get("args", "")), ended
+        missed = "沒問到" if kind == "ask_ext_ai" else "沒查到"
+        ended = f"{missed}：{row.get('reason', '')}" if row.get("reason") else missed
+    return when, what, _first_line(str(row.get("args", ""))), ended
+
+
+def _first_line(text: str) -> str:
+    return text.strip().split("\n", 1)[0]
 
 
 def log_tail(path: Any, *, lines: int = 300, max_bytes: int = 64_000) -> str:

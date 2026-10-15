@@ -71,7 +71,7 @@ def test_the_tool_says_what_it_is_for_and_what_ask_outside_is_for() -> None:
     from workspace_app.agent.outside_lookup import ask_outside_impl
 
     mine, theirs = ask_ext_ai_impl.__doc__ or "", ask_outside_impl.__doc__ or ""
-    assert "ask_outside" in mine and "not an original source" in mine
+    assert "ask_outside" in mine and "the external AI's account" in mine
     assert "ask_ext_ai" not in theirs
     # text only (D3); what is sent is what the user leaves in the box (D2)
     assert "text" in mine and "the user may edit" in mine

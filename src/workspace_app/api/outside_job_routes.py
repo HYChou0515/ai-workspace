@@ -31,7 +31,7 @@ class HandOverIn(BaseModel):
     #: AI as they edited it (docs/plan-ext-ai.md D2). Required for both — never
     #: falls back to the AI's; ignored for a URL.
     query: str = ""
-    #: The card asking on its own, with no 「查」 (D12): allowed only for a URL
+    #: The card asking on its own, with no nod (D12): allowed only for a URL
     #: an earlier lookup in this chat brought back, and never restarts a job.
     auto: bool = False
 
@@ -192,7 +192,7 @@ def register_outside_job_routes(
         if body.auto:
             if kind != "open_url" or not await store.seen(investigation_id, rid, args):
                 raise HTTPException(
-                    status_code=409, detail="this lookup waits for the person's 「查」"
+                    status_code=409, detail="this lookup waits for the person's nod"
                 )
             if _asker(conv, body.tool_call_id) != owner:
                 # plan §3.2: opened for the person whose answer led to it — not
@@ -203,14 +203,14 @@ def register_outside_job_routes(
                 )
             if existing is not None:
                 # running, ran, or stopped by the person: the card asking again
-                # (it asks on every mount) starts nothing — 「查」 still can
+                # (it asks on every mount) starts nothing — the person's button still can
                 return _out(jid, existing, now=store.now())
         elif (
             existing is not None
             and existing.owner == owner
             and existing.state in ("queued", "claimed")
         ):
-            # under way (a reloaded card offering 「查」 again): never restarted
+            # under way (a reloaded card offering its button again): never restarted
             return _out(jid, existing, now=store.now())
         if kind == "search" and not args:
             # nothing typed, nothing searched

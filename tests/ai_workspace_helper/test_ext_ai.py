@@ -82,6 +82,55 @@ def test_a_site_file_that_brings_back_nothing_fails_the_job(answer):
         errand(_site(answer))(_ctx(_Page(), [], [0.0]), "q")
 
 
+# D12 (review round 1): the company's address must not reach the server — but a
+# Playwright error names the page it was on, and an errand's failure goes to
+# the card. It is masked, along with the call log after it.
+def test_a_failure_never_carries_the_companys_address():
+    from ai_workspace_helper.ext_ai import errand
+
+    def ask(page, question, h):  # noqa: ANN001, ANN202
+        raise RuntimeError(
+            "Page.goto: net::ERR_NAME_NOT_RESOLVED at https://ai.corp.example/new?x=1\n"
+            'Call log:\n  - navigating to "https://ai.corp.example/new?x=1"'
+        )
+
+    site = types.SimpleNamespace(URL="https://ai.corp.example/new", ask=ask)
+    with pytest.raises(ErrandFailed) as got:
+        errand(site)(_ctx(_Page(), [], [0.0]), "q")
+
+    said = str(got.value)
+    assert "ai.corp.example" not in said and "Call log" not in said
+    assert "ERR_NAME_NOT_RESOLVED" in said  # what went wrong still shows
+
+
+def test_a_failure_of_hs_own_is_passed_on_as_it_is():
+    from ai_workspace_helper.ext_ai import errand
+
+    def ask(page, question, h):  # noqa: ANN001, ANN202
+        h.wait_until(lambda: False, "外部AI 開始回答")
+
+    site = types.SimpleNamespace(URL="https://ai.corp.example/new", ask=ask)
+    with pytest.raises(ErrandFailed, match="外部AI 開始回答"):
+        errand(site)(_ctx(_Page(), [], [0.0]), "q")
+
+
+# Review round 1: text an answer was allowed to be — "or its text" — went
+# through the HTML converter whenever it held something tag-like, and code
+# like `#include <stdio.h>` lost its lines and its header.
+@pytest.mark.parametrize(
+    "answer",
+    [
+        "Use this:\n\n#include <stdio.h>\nint main() {}\n\nThen compile it.",
+        "A List<String> holds strings.",
+        "<- that arrow is not a tag",
+    ],
+)
+def test_text_with_something_tag_like_in_it_stays_text(answer):
+    from ai_workspace_helper.ext_ai import errand
+
+    assert errand(_site(answer))(_ctx(_Page(), [], [0.0]), "q").markdown == answer
+
+
 def test_the_errand_is_there_only_with_a_site_file():
     from ai_workspace_helper.builtin_errands import build
 
@@ -235,6 +284,51 @@ def test_a_helper_packed_without_one_has_none():
     from ai_workspace_helper.ext_ai import load_site
 
     assert load_site() is None
+
+
+def test_a_packed_file_whose_own_import_fails_says_so(monkeypatch):
+    """The file is there, but something IT imports is not: that is an error
+    to see (and log), not "packed without one"."""
+    import importlib
+
+    from ai_workspace_helper import ext_ai
+
+    def missing(name):  # noqa: ANN001, ANN202
+        raise ModuleNotFoundError("No module named 'requests'", name="requests")
+
+    monkeypatch.setattr(importlib, "import_module", missing)
+    with pytest.raises(ModuleNotFoundError, match="requests"):
+        ext_ai.load_site()
+
+
+def test_a_file_python_cannot_load_is_refused(tmp_path):
+    from ai_workspace_helper.ext_ai import load_site
+
+    f = tmp_path / "ext_ai_site.txt"
+    f.write_text("URL = 'x'")
+
+    with pytest.raises(ValueError, match="not a Python file"):
+        load_site(f)
+
+
+def test_an_answer_that_converts_to_nothing_fails_the_job():
+    from ai_workspace_helper.ext_ai import errand
+
+    ctx = _ctx(_Page(), [], [0.0])
+    ctx.convert = lambda _html: "  "
+
+    with pytest.raises(ErrandFailed, match="沒有文字"):
+        errand(_site("<div><img src='x'></div>"))(ctx, "q")
+
+
+def test_a_failure_with_no_address_to_hide_is_said_as_it_is():
+    from ai_workspace_helper.ext_ai import errand
+
+    def ask(page, question, h):  # noqa: ANN001, ANN202
+        raise RuntimeError("the box was not found")
+
+    with pytest.raises(ErrandFailed, match="the box was not found"):
+        errand(types.SimpleNamespace(URL="", ask=ask))(_ctx(_Page(), [], [0.0]), "q")
 
 
 def test_the_label_the_helper_reports_is_the_files_name_or_a_default():

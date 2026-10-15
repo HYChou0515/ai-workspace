@@ -26,6 +26,7 @@ helper and everything it needs on every one of those Pythons.
 from __future__ import annotations
 
 import argparse
+import ast
 import hashlib
 import importlib.util
 import json
@@ -130,7 +131,15 @@ def verify_command(
 
 def _check_site(site: Path) -> None:
     """Load `site` the way the installed helper will (`ext_ai.load_site`):
-    ValueError when it lacks its `URL` or its `ask`."""
+    ValueError when it lacks its `URL` or its `ask` — or is written in syntax
+    the people's Python 3.9 refuses, which this newer Python would load fine
+    (review round 1)."""
+    try:
+        ast.parse(site.read_text(encoding="utf-8"), str(site), feature_version=(3, 9))
+    except SyntaxError as exc:
+        raise ValueError(
+            f"{site}:{exc.lineno}: the helper runs on Python 3.9, which refuses this ({exc.msg})"
+        ) from exc
     src = str(HELPER / "src")
     sys.path.insert(0, src)
     try:

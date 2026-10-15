@@ -534,7 +534,7 @@ def _agent_for(
     if in_chat and ask_outside_granted(config):
         tools.append(ask_outside_tool())
     # docs/plan-ext-ai.md D5: the 問外部AI card goes where the 請幫我查 card
-    # goes, on a deploy that turned it on (`server.ext_ai.enabled`).
+    # goes, on a deploy that turned it on (`server.ext_ai_enabled`).
     from ..agent.ext_ai import ask_ext_ai_granted, ask_ext_ai_tool
 
     if in_chat and ask_ext_ai_granted(config, enabled=ext_ai):
