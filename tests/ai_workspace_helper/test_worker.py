@@ -61,6 +61,8 @@ def _errands(**over):
 
 
 def _hand(client, iid, **body):
+    # a search goes out with the keywords the person typed (plan-outside-lookup D13)
+    body.setdefault("query", "pandas 2.0 新功能")
     r = client.post(f"/a/rca/items/{iid}/outside-jobs", json={"tool_call_id": "c1", **body})
     assert r.status_code == 201, r.text
 

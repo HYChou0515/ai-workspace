@@ -50,8 +50,10 @@ async def ask_outside_impl(
     options instead, use `ask_user`.
 
     Pass `why` as one short sentence the user reads first, then exactly one of:
-    - `query`: what to search for. The card offers search buttons; the user may
-      edit the query before searching.
+    - `query`: the keywords you suggest searching for — keywords, not a
+      sentence: at most 10 words and at most 40 Chinese, Japanese or Korean
+      characters. The card shows them beside an empty search box; the user
+      types or pastes what is actually searched.
     - `file` and `link` together: a link a lookup brought back. A lookup saved
       as a file lists its links at the bottom, numbered `- [n] <https://…>`
       (the message that brought it back names the file and lists the first
@@ -90,6 +92,13 @@ async def ask_outside_impl(
         if listed.startswith("error:"):
             return listed
         url = listed
+    if query is not None and (too_long := _too_long(query)):
+        return (
+            "error: a search is a few keywords, not a sentence — at most "
+            f"{QUERY_MAX_WORDS} words and at most {QUERY_MAX_CJK} Chinese, Japanese or "
+            f"Korean characters; this one has {too_long}. Shorten it to the keywords that "
+            "matter and call again."
+        )
     if url is not None and not is_web_address(url):
         return (
             "error: `url` must be a web address starting with http:// or https://. "
@@ -118,6 +127,27 @@ _SPACE = (
     "\\x00-\\x20\\x7f-\\x9f\\u00a0\\u1680\\u2000-\\u200b\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff"
 )
 _WEB_ADDRESS = re.compile(f"https?://[^/?#{_SPACE}]+(?:[/?#][^{_SPACE}]*)?")
+
+
+#: A search is keywords (the person: 「Google search關鍵字字數應該限制」): a long
+#: query reads worse, and Google ignores words past its own limit (32). Both
+#: limits apply: space-separated words, and Chinese, Japanese and Korean
+#: characters — Chinese and Japanese put no spaces between words, so their
+#: characters are what can be counted (Korean, spaced, meets both). Only the
+#: AI's query: the person may edit it.
+QUERY_MAX_WORDS = 10
+QUERY_MAX_CJK = 40
+_CJK_CHARACTER = re.compile(r"[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af\uf900-\ufaff]")
+
+
+def _too_long(query: str) -> str:
+    """How `query` is too long for a search — "" when it is not."""
+    words, cjk = len(query.split()), len(_CJK_CHARACTER.findall(query))
+    if words > QUERY_MAX_WORDS:
+        return f"{words} words"
+    if cjk > QUERY_MAX_CJK:
+        return f"{cjk} characters"
+    return ""
 
 
 def is_web_address(url: str) -> bool:

@@ -73,7 +73,10 @@ def test_the_helper_answers_the_card_from_its_own_chrome(tmp_path, served):
     try:
         worker = Worker(Backend(chrome.send), chrome, errands={"search": search})
         worker.tick()  # checks in
-        r = client.post(f"/a/rca/items/{iid}/outside-jobs", json={"tool_call_id": "c1"})
+        # the keywords the person typed (plan-outside-lookup D13)
+        r = client.post(
+            f"/a/rca/items/{iid}/outside-jobs", json={"tool_call_id": "c1", "query": "pandas 2.0"}
+        )
         assert r.status_code == 201, r.text
 
         worker.tick()

@@ -4,7 +4,9 @@
  * something up.
  *
  * Two kinds (D2, D5): a SEARCH, with one button per destination the deploy
- * configured (`server.lookup_targets`) and the query editable first (D8); or a
+ * configured (`server.lookup_targets`), an empty box the person types or
+ * pastes the keywords into and the AI's query beside it as a suggestion to copy
+ * (D13); or a
  * PAGE, whose whole address is shown before the one button that opens it.
  * Either way the person brings back what they found — pasted (a web page
  * arrives as Markdown, links and tables kept), attached, with its source — or
@@ -17,7 +19,7 @@
  *   Windows and Tabs") — the chat is the person's launching point.
  * - Button emphasis follows Material 3: the one filled button completes the
  *   flow (送出); the outlined ones are the important-but-not-final actions (the
- *   searches, 開啟這個網址); the text ones are the least (複製, 查不到).
+ *   searches, 開啟這個網址); the text ones are the least (複製建議, 查不到).
  * - The attachment control follows GOV.UK's file upload: a visible label, a
  *   secondary "choose" button, a drop zone that stays visible, "no file chosen"
  *   until one is, then the names — each removable.
@@ -27,8 +29,8 @@
  * base, a replay) the request shows without actions.
  *
  * With the person's helper connected (docs/plan-outside-helper.md
- * §3.5) the helper fetches instead: a search asks only for the nod (「查」, the
- * query still editable — D4); a URL an earlier lookup in this chat brought back
+ * §3.5) the helper fetches instead: a search asks only for the nod (「查」, with
+ * the keywords the person typed — D13); a URL an earlier lookup in this chat brought back
  * goes with no nod at all (D12 — the server decides, the card just asks); the
  * card then shows the errand under way, failed or done. Doing it by hand stays
  * one press away (「自己查」). With no helper the card is the manual one above
@@ -77,12 +79,34 @@ export function OutsideLookupCard({
   const item = useChatItem();
   const ids = useId();
   const isSearch = "query" in lookup;
-  const [query, setQuery] = useState(isSearch ? lookup.query : "");
+  // plan-outside-lookup D13: the box starts empty — what goes out to search is
+  // what the person types or pastes; the AI's query is a suggestion beside it.
+  const [query, setQuery] = useState("");
+  const [needKeywords, setNeedKeywords] = useState(false);
+  const queryBox = useRef<HTMLInputElement>(null);
+  /** `go` with keywords in the box; otherwise say so and put the person there
+   * (NN/g: a button that does nothing explains nothing — this one says why). */
+  const ifTyped = (go: () => void) => {
+    if (!query.trim()) {
+      setNeedKeywords(true);
+      queryBox.current?.focus();
+      return;
+    }
+    setNeedKeywords(false);
+    go();
+  };
   const [content, setContent] = useState("");
   const [sourceUrl, setSourceUrl] = useState("");
   const [files, setFiles] = useState<File[]>([]);
   const [target, setTarget] = useState("");
-  const [copied, setCopied] = useState(false);
+  // A copy confirms only once the clipboard write resolved, reverts after a
+  // moment, and says so when it failed (Primer's copy button).
+  const [copied, setCopied] = useState<"idle" | "copied" | "failed">("idle");
+  useEffect(() => {
+    if (copied !== "copied") return;
+    const back = setTimeout(() => setCopied("idle"), 2000);
+    return () => clearTimeout(back);
+  }, [copied]);
   const [giveUp, setGiveUp] = useState(false);
   const [reason, setReason] = useState("");
   // What the card itself says is missing, before anything is sent.
@@ -295,8 +319,7 @@ export function OutsideLookupCard({
                   className="btn"
                   data-size="sm"
                   data-variant="primary"
-                  disabled={isSearch && !query.trim()}
-                  onClick={() => hand.mutate(false)}
+                  onClick={() => (isSearch ? ifTyped(() => hand.mutate(false)) : hand.mutate(false))}
                 >
                   {t(jobState === "failed" ? "lookup.helperRetry" : "lookup.helperGo")}
                 </button>
@@ -323,7 +346,11 @@ export function OutsideLookupCard({
     ) : null;
 
   const copy = (text: string) => {
-    void navigator.clipboard?.writeText(text).then(() => setCopied(true));
+    const write = navigator.clipboard?.writeText(text) ?? Promise.reject(new Error("no clipboard"));
+    write.then(
+      () => setCopied("copied"),
+      () => setCopied("failed"),
+    );
   };
   const addFiles = (list: FileList | null) => {
     if (list?.length) setFiles((f) => [...f, ...Array.from(list)]);
@@ -356,20 +383,47 @@ export function OutsideLookupCard({
 
       {isSearch ? (
         <div className="outside-lookup-section">
+          <span className="outside-lookup-label">{t("lookup.suggested")}</span>
+          <div className="outside-lookup-actions">
+            <code className="outside-lookup-url">{lookup.query}</code>
+            <button
+              type="button"
+              className="btn"
+              data-size="sm"
+              data-variant="ghost"
+              onClick={() => copy(lookup.query ?? "")}
+            >
+              {copied === "copied" ? t("lookup.copied") : t("lookup.copySuggestion")}
+            </button>
+          </div>
+          {copied === "failed" && (
+            <p className="outside-lookup-hint" role="status">
+              {t("lookup.copyFailed")}
+            </p>
+          )}
           <label className="outside-lookup-label" htmlFor={`${ids}-q`}>
             {t("lookup.query")}
           </label>
           <input
+            ref={queryBox}
             autoComplete="off"
             id={`${ids}-q`}
             className="input"
             value={query}
+            placeholder={t("lookup.queryPlaceholder")}
             readOnly={locked}
+            aria-invalid={needKeywords || undefined}
+            aria-describedby={needKeywords ? `${ids}-q-need` : undefined}
             onChange={(e) => {
               setQuery(e.target.value);
-              setCopied(false);
+              setNeedKeywords(false);
             }}
           />
+          {needKeywords && (
+            <p id={`${ids}-q-need`} className="outside-lookup-error" role="alert">
+              {t("lookup.typeKeywords")}
+            </p>
+          )}
           {manual && (
           <>
           <div className="outside-lookup-actions">
@@ -381,24 +435,16 @@ export function OutsideLookupCard({
                 data-size="sm"
                 data-variant="secondary"
                 aria-label={t("lookup.target", { name: tg.name })}
-                disabled={!query.trim()}
-                onClick={() => {
-                  setTarget(tg.name);
-                  window.open(searchUrl(tg, query.trim()), "_blank", NEW_TAB);
-                }}
+                onClick={() =>
+                  ifTyped(() => {
+                    setTarget(tg.name);
+                    window.open(searchUrl(tg, query.trim()), "_blank", NEW_TAB);
+                  })
+                }
               >
                 {tg.name} <span aria-hidden="true">↗</span>
               </button>
             ))}
-            <button
-              type="button"
-              className="btn"
-              data-size="sm"
-              data-variant="ghost"
-              onClick={() => copy(query)}
-            >
-              {copied ? t("lookup.copied") : t("lookup.copy")}
-            </button>
           </div>
           <p className="outside-lookup-hint">{t("lookup.newTab")}</p>
           </>
@@ -428,9 +474,14 @@ export function OutsideLookupCard({
               data-variant="ghost"
               onClick={() => copy(lookup.url)}
             >
-              {copied ? t("lookup.copied") : t("lookup.copyUrl")}
+              {copied === "copied" ? t("lookup.copied") : t("lookup.copyUrl")}
             </button>
           </div>
+          {copied === "failed" && (
+            <p className="outside-lookup-hint" role="status">
+              {t("lookup.copyFailed")}
+            </p>
+          )}
           <p className="outside-lookup-hint">{t("lookup.newTab")}</p>
           </>
           )}

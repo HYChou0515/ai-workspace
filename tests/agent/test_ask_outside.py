@@ -79,6 +79,54 @@ async def test_a_call_that_cannot_become_a_card_is_refused(args: dict, says: str
     assert declared_lookup(reply) is None
 
 
+#: 42 characters
+_CJK = "台積電二零二五年第三季的營收與毛利率以及法說會上提到的先進製程產能規劃與資本支出細節"
+
+
+# A search is keywords, not a sentence (the person: 「Google search關鍵字字數應
+# 該限制」): at most 10 words, and — Chinese, Japanese and Korean having no
+# spaces — at most 40 of their characters. A longer one goes back to the AI to
+# shorten; cutting it would change what it asked without saying so.
+@pytest.mark.parametrize(
+    "query",
+    [
+        "pandas 2.0 breaking changes groupby apply behaviour deprecation warning fix today",
+        _CJK[:41],
+    ],
+    ids=["eleven-words", "forty-one-cjk-characters"],
+)
+async def test_a_search_longer_than_keywords_goes_back_to_be_shortened(query: str) -> None:
+    reply = await _call(why="w", query=query)
+
+    assert reply.startswith("error:"), reply
+    assert "10 words" in reply and "40" in reply
+    assert declared_lookup(reply) is None
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "pandas 2.0 breaking changes groupby apply behaviour deprecation warning fix",
+        "台積電 2025 年報 營收 毛利率",
+        _CJK[:40],
+    ],
+    ids=["ten-words", "mixed", "forty-cjk-characters"],
+)
+async def test_a_search_of_keywords_becomes_a_card(query: str) -> None:
+    reply = await _call(why="w", query=query)
+
+    assert _card(reply) == {"why": "w", "query": query}
+
+
+async def test_the_tool_says_a_search_is_a_few_keywords() -> None:
+    from workspace_app.agent.outside_lookup import ask_outside_impl
+
+    doc = ask_outside_impl.__doc__ or ""
+    assert "keywords" in doc and "10 words" in doc
+    # …which the user, not the AI, puts in the box (plan-outside-lookup D13)
+    assert "you suggest" in doc and "types or pastes" in doc
+
+
 def test_only_a_declaration_as_the_tool_writes_it_is_a_card() -> None:
     m = OUTSIDE_LOOKUP_MARKER
     assert declared_lookup(f'x{m}{{"why":"w","query":"q"}}') == {"why": "w", "query": "q"}

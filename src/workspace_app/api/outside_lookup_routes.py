@@ -157,7 +157,8 @@ def register_outside_lookup_routes(
         _rid, conv = conversation()
         card = _open_card(conv, form.tool_call_id)
         asked = card.get("query") or card.get("url") or ""
-        # What was actually searched: the query as the person edited it (D8).
+        # What was actually searched: the keywords the person typed (D13); an
+        # empty box falls back to the AI's query as the subject.
         searched = (form.query.strip() if "query" in card else "") or asked
         written: list[str] = []
         saved: str | None = None
