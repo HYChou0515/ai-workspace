@@ -516,6 +516,16 @@ describe("what-if and runway (views 6, 7)", () => {
     expect(row.lastElementChild).toHaveTextContent("—");
   });
 
+  it("says so when the analysis behind it was recomputed and cannot answer yet", async () => {
+    const s = summary();
+    const c = client();
+    c.whatif = vi.fn(async () => ({ ...(whatifFixture as unknown as WhatIfData), lines: [], ready: false }));
+
+    renderWithQuery(<WhatIf summary={s} days={28} client={c} t={t} />);
+
+    expect(await screen.findByTestId("capacity-whatif-stale")).toHaveTextContent("剛重新計算過");
+  });
+
   it("draws its run button as a button", async () => {
     renderWithQuery(<WhatIf summary={summary()} days={28} client={client()} t={t} />);
 

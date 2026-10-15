@@ -1579,8 +1579,14 @@ def create_app(
     # reason it gives.
     app.state.usage_recorder = usage_recorder
     if usage_recorder is not None:
+        # The Apps ship with the image: their slugs are known now, for good.
+        from ..apps.catalog import discover_app_slugs
+
         app.add_middleware(
-            UsageMiddleware, recorder=usage_recorder, get_user_id=_deploy_user_reader
+            UsageMiddleware,
+            recorder=usage_recorder,
+            get_user_id=_deploy_user_reader,
+            is_app=frozenset(discover_app_slugs()).__contains__,
         )
 
     if perf_trace.enabled():

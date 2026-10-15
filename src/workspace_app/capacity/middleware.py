@@ -11,8 +11,9 @@ and this app streams SSE. For each HTTP request it records one `work` count:
   `text/event-stream` is a stream, in flight from its first header to its
   end — no list of long-lived routes to keep current.
 - **Which App**: the `slug` of the route that matched, when that route is
-  inside an App (`/api/a/{slug}/…` — the launcher's `/api/apps/{slug}/icon`
-  is not using the App) and its response did not refuse the slug (4xx). Read
+  inside an App (`/api/a/{slug}/…` — opening the launcher, which reads every
+  App's `/api/apps/{slug}`, icon and assets, is not using them), the slug is
+  an App the platform has, and its response did not refuse it (4xx). Read
   off the raw path, any URL — `/api/a/<anything>/…`, signed in or not —
   minted an App: a row per window each, and a series in the analysis. Work
   that failed (5xx, or a crash before any response) is still that App's.
@@ -51,17 +52,21 @@ _KUBE_PROBE = b"kube-probe/"
 _APP_ROUTE = "/api/a/{slug}"
 
 
-def _slug(scope: Scope) -> str:
+def _slug(scope: Scope, is_app: Callable[[str], bool] | None) -> str:
     """The App the matched route was called with — never read off the raw path
-    (`path_params` exist only once something matched), and only from a route
-    inside an App."""
+    (`path_params` exist only once something matched), only from a route
+    inside an App, and only an App the platform has (`is_app`): a route that
+    answers for any slug, or a 5xx while the database is down, would name
+    whatever the URL said."""
     template = getattr(scope.get("route"), "path", None)
     if not isinstance(template, str):
         return ""
     if template != _APP_ROUTE and not template.startswith(_APP_ROUTE + "/"):
         return ""
     slug = scope.get("path_params", {}).get("slug", "")
-    return slug if isinstance(slug, str) else ""
+    if not isinstance(slug, str) or (is_app is not None and not is_app(slug)):
+        return ""
+    return slug
 
 
 def _work(scope: Scope) -> str:
@@ -91,11 +96,17 @@ def _is_stream(message: Message) -> bool:
 
 class UsageMiddleware:
     def __init__(
-        self, app: Any, *, recorder: UsageRecorder, get_user_id: Callable[[], str]
+        self,
+        app: Any,
+        *,
+        recorder: UsageRecorder,
+        get_user_id: Callable[[], str],
+        is_app: Callable[[str], bool] | None = None,
     ) -> None:
         self.app = app
         self._recorder = recorder
         self._get_user_id = get_user_id
+        self._is_app = is_app
 
     def _who(self, holder: RequestIdentity, scope: Scope) -> str:
         if holder.user is not None:
@@ -115,7 +126,9 @@ class UsageMiddleware:
             await self.app(scope, receive, send)
             return
         started = time.monotonic()
-        holder = RequestIdentity(tags=self._recorder.llm_tags, app_of=lambda: _slug(scope))
+        holder = RequestIdentity(
+            tags=self._recorder.llm_tags, app_of=lambda: _slug(scope, self._is_app)
+        )
         stream: Running | None = None
         status = 0
 
@@ -139,10 +152,12 @@ class UsageMiddleware:
             try:
                 if stream is not None:
                     stream.end()
-                elif _is_probe(scope):
+                elif holder.user is None and _is_probe(scope):
                     # The same count every window on every pod: as a request
                     # column it moves exactly with each pod's idle cost, which
                     # is where its CPU belongs; nor is it a request's latency.
+                    # (Anyone can say kube-probe: a route that asked who the
+                    # request is knows better.)
                     elapsed = time.monotonic() - started
                     self._recorder.add(SYSTEM, "", "probe:" + _work(scope), seconds=elapsed)
                 else:

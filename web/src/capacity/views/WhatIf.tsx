@@ -4,8 +4,8 @@
  * arrives, within an 80% band (§9.7), and by when to order, given how long a
  * purchase takes (E12): by the band's early end.
  */
-import { useQuery } from "@tanstack/react-query";
-import { useMemo, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useMemo, useState } from "react";
 
 import { qk } from "../../api/queryKeys";
 import type { CapacityClient, CapacityDays, CapacitySummary, WhatIfProfile } from "../api";
@@ -104,6 +104,13 @@ export function WhatIf({
   });
   const warn = advisory(summary);
   const rows = data?.lines ?? [];
+  // The analysis behind the page was let go (its TTL, a refresh) and the new
+  // one cannot answer yet: read the page again, whose views say what they need.
+  const qc = useQueryClient();
+  const stale = data !== undefined && !data.ready;
+  useEffect(() => {
+    if (stale) void qc.invalidateQueries({ queryKey: qk.capacity(days) });
+  }, [stale, qc, days]);
   const option = useMemo<ChartOption>(
     () => ({
       animation: false,
@@ -183,6 +190,11 @@ export function WhatIf({
             </button>
           </form>
           <PeopleCaveat summary={summary} t={t} />
+          {stale && (
+            <p role="status" className="capacity-note" data-testid="capacity-whatif-stale">
+              {t("capacity.whatif.stale")}
+            </p>
+          )}
           {warn !== null && (
             <p role="note" className="capacity-warning" data-testid="capacity-advisory">
               {t("capacity.whatif.advisory", { mape: pct(warn), ok: pct(summary.confidence.mape_ok) })}

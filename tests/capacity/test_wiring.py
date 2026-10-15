@@ -108,3 +108,32 @@ def test_the_dashboard_reads_the_sources_config_names(tmp_path, monkeypatch):
     import datetime as dt
 
     assert is_workday(dt.date(2026, 10, 12)) and not is_workday(dt.date(2026, 10, 11))
+
+
+def test_only_an_app_that_exists_is_counted_as_one(tmp_path, monkeypatch):
+    """A route under /api/a/{slug} that answers for any slug — or a 5xx while
+    the database is down — named whatever the URL said as an App: a row per
+    window, a series, an entry in the what-if's App picker. Only an App the
+    platform ships is one."""
+    from workspace_app.apps.catalog import discover_app_slugs
+
+    CapturingSink.docs.clear()
+    app = _build(
+        tmp_path, monkeypatch, "capacity:\n  sink: tests.capacity.test_wiring.CapturingSink\n"
+    )
+    real = discover_app_slugs()[0]
+    client = TestClient(app)
+
+    bogus = client.delete("/api/a/zz-bogus/items/x/env/private")
+    profiles = client.get(f"/api/a/{real}/profiles")
+    app.state.usage_recorder.close()
+
+    assert bogus.status_code < 400  # it answers for any slug
+    assert profiles.status_code == 200
+    apps = {
+        d["usage"]["work"]: d["usage"]["app"]
+        for d in CapturingSink.docs
+        if d["usage"]["kind"] == "work"
+    }
+    assert apps["req:DELETE /api/a/{slug}/items/{item_id}/env/private"] == ""
+    assert apps["req:GET /api/a/{slug}/profiles"] == real

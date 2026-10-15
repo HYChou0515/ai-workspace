@@ -12,7 +12,14 @@ from zoneinfo import ZoneInfo
 import numpy as np
 import pytest
 
-from workspace_app.capacity.analysis.observe import TooManyRows, observe, parse_tags
+from workspace_app.capacity.analysis.observe import (
+    Observations,
+    SourceStatus,
+    TooManyRows,
+    WorkSeries,
+    observe,
+    parse_tags,
+)
 from workspace_app.capacity.analysis.period import Period
 from workspace_app.capacity.sources import (
     AggregateRow,
@@ -363,3 +370,24 @@ def test_a_turn_or_job_record_is_kept_as_a_few_numbers():
     assert records > 1000
     per_record = (held - without) / records
     assert per_record < 100, f"{per_record:.0f} bytes a record"
+
+
+def test_an_open_stream_is_a_record_in_every_window_it_runs_through():
+    """A stream counts once, in the window it opens; each later window it
+    runs through writes its seconds with a count of 0. Read by count alone,
+    those windows had no record in them though the recorder wrote one: a
+    day with only open pages was no day, and coverage missed them."""
+    from workspace_app.capacity.analysis.model import analyse
+
+    t0 = 1_760_400_000_000 - 1_760_400_000_000 % 86_400_000
+    p = Period(t0, t0 + 2 * 86_400_000, 300, ZoneInfo("UTC"))
+    work = WorkSeries(p.n)
+    work.add(0, 1, 300.0)
+    for i in range(1, p.n):
+        work.add(i, 0, 300.0)
+    obs = Observations(p, status={"usage_records": SourceStatus(connected=True)})
+    obs.work_pod[("api-1", "api", "stream:/api/x")] = work
+
+    assert obs.days_with("usage_records").tolist() == [True, True]
+    coverage = analyse(obs, now_ms=p.end_ms).summary()["confidence"]["coverage"]
+    assert coverage["usage_records"] == 1.0

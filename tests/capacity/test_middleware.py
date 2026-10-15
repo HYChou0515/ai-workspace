@@ -242,3 +242,21 @@ def test_a_probe_is_counted_as_a_probe_not_a_request():
     (row,) = [d["usage"] for d in sink.docs if d["usage"]["kind"] == "work"]
     assert row["work"] == "probe:GET /api/public"
     assert not [k for k in row if k.startswith("h")], "a probe has no place in the latency"
+
+
+def test_a_request_saying_it_is_a_probe_on_a_route_that_knows_who_is_that_person():
+    """Anyone can send `User-Agent: kube-probe/…`. A route that asked who the
+    request is knows: it is that person's request, not a probe's."""
+    sink = _ListSink()
+    recorder = UsageRecorder(sink, component="api", pod="p", window_s=300, queue_max=1000)
+    app, _ = _app(recorder, _Reader("erin"))
+    with TestClient(app, raise_server_exceptions=False) as client:
+        client.get("/api/a/pm/items/i1/files", headers={"user-agent": "kube-probe/1.29"})
+    recorder.close()
+
+    (row,) = [d["usage"] for d in sink.docs if d["usage"]["kind"] == "work"]
+    assert (row["work"], row["user"], row["app"]) == (
+        "req:GET /api/a/{slug}/items/{item_id}/files",
+        "erin",
+        "pm",
+    )

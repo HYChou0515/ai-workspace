@@ -112,8 +112,13 @@ class WorkSeries:
         return self._seconds.dense()
 
     def slots(self) -> np.ndarray:
-        """The slots with any count in them."""
+        """The slots with any count in them: work begun or done there."""
         return self._count.slots()
+
+    def recorded(self) -> np.ndarray:
+        """The slots with a record at all — a stream counts once, in the window
+        it opens, and writes only its seconds in each window after."""
+        return np.union1d(self._count.slots(), self._seconds.slots())
 
     def total_count(self) -> float:
         return self._count.total()
@@ -362,7 +367,7 @@ class Observations:
         slots = np.zeros(p.n, dtype=bool)
         if source == "usage_records":
             for series in self.work_pod.values():
-                slots[series.slots()] = True
+                slots[series.recorded()] = True
             for m in self.sandbox_pod.values():
                 slots[m.slots("cpu_s")] = True
         elif source == "resource_metrics":

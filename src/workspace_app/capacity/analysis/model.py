@@ -399,7 +399,7 @@ class Analysis:
         # ① has the probes every slot), so they have coverage but no gaps.
         recorded = np.zeros(p.n, dtype=bool)
         for series in self.obs.work_pod.values():
-            recorded[series.slots()] = True
+            recorded[series.recorded()] = True
         sampled = np.zeros(p.n, dtype=bool)
         for m in self.obs.pods.values():
             sampled[m.slots("cpu")] = True

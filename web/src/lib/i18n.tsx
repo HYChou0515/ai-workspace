@@ -3273,6 +3273,10 @@ export const messages = {
   "capacity.whatif.n": { "zh-TW": "人數", en: "People" },
   "capacity.whatif.profile": { "zh-TW": "新來的人像", en: "New people use it like" },
   "capacity.whatif.app": { "zh-TW": "App", en: "App" },
+  "capacity.whatif.stale": {
+    "zh-TW": "這個試算用的分析剛重新計算過，還不能回答；頁面重新讀取後會說缺什麼。",
+    en: "The analysis behind this what-if was just recomputed and cannot answer yet; the page reloads and says what it needs.",
+  },
   "capacity.headroom.atLeast": { "zh-TW": "{n} 以上", en: "{n} or more" },
   "capacity.whatif.profile.all": { "zh-TW": "現在的所有人", en: "everyone today" },
   "capacity.whatif.profile.heavy": { "zh-TW": "最重度的 10%", en: "the heaviest 10%" },
