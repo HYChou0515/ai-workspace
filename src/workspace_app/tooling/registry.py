@@ -28,7 +28,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -45,6 +45,12 @@ from ..sandbox.protocol import ExecResult, SandboxHandle, SandboxNotFound
 from .artifact import parse_env_declaration
 
 logger = logging.getLogger(__name__)
+
+#: `(the turn's context, the model's name for the command) -> None` — what a
+#: catalog entry calls so the rest of the turn sends the real schema. A
+#: callback rather than a direct write so `registry` stays free of the turn
+#: machinery (and so the entry is testable without a turn).
+MarkLoaded = Callable[[Any, str], None]
 
 
 @dataclass(frozen=True)
@@ -284,12 +290,7 @@ def build_function_tools(
     the same command name within the same selection — the flat name would
     shadow one tool, so we want the deployer to rename one. Third-party
     commands carry their local name and never collide."""
-    if allowed is None:
-        selected = [(pkg, cmd) for pkg in packages for cmd in pkg.commands]
-    else:
-        selected = _select_commands(packages, allowed)
-    selected = _callable_by_name(selected)
-    _check_collisions(selected)
+    selected = _granted(packages, allowed)
     logger.debug("registry: %d function tool(s) selected (allowed=%s)", len(selected), allowed)
     # The same ceiling the built-ins get: a package command's stdout already
     # goes through `_exec_result_text`, but nothing structurally stops a future
@@ -409,6 +410,28 @@ async def exec_package_command(
     command — a page's `startTool` job (#942) runs to its own deadline, not
     the minute a call gets. None keeps the sandbox's."""
     return await _exec_tool(actx, handle, pkg, cmd_name, args_json, exec_timeout=exec_timeout)
+
+
+def _granted(
+    packages: Sequence[PackageInfo],
+    allowed: list[str] | None,
+) -> list[tuple[PackageInfo, CommandInfo]]:
+    """The commands this allow-list grants, minus the ones a provider would
+    refuse, with collisions rejected.
+
+    ONE function because two builders read it: the executable tools and the
+    catalog stubs that advertise them. A stub for a command the executable
+    builder drops is a tool that can never run; a command the catalog omits is
+    one the model never learns to ask for. Same code, so neither can happen.
+    """
+    selected = (
+        [(pkg, cmd) for pkg in packages for cmd in pkg.commands]
+        if allowed is None
+        else _select_commands(packages, allowed)
+    )
+    selected = _callable_by_name(selected)
+    _check_collisions(selected)
+    return selected
 
 
 def _select_commands(
@@ -741,6 +764,140 @@ def describe_command(pkg: PackageInfo, cmd: CommandInfo) -> str:
             " Closing the sandbox lets the next one be set up with the latest release."
         )
     return line
+
+
+#: How long one catalog entry's description may be
+#: (`docs/plan-tool-on-demand-loading.md`, decided with the operator: 100).
+CATALOG_DESCRIPTION_LIMIT = 100
+
+#: Ends a sentence wherever it appears — CJK punctuation is not followed by a
+#: space, so a lookahead would make `。` end nothing in a Chinese description.
+_SENTENCE_END_CJK = "。！？"
+#: Ends a sentence only before whitespace or the end, so `3.5` and `e.g.` do not.
+_SENTENCE_END_ASCII = ".!?"
+#: Where a too-long sentence may be cut: a mark the AUTHOR wrote, so the cut
+#: lands between clauses instead of between two characters of one.
+_CLAUSE_END = "，、；：,;"
+
+
+def _first_sentence(said: str) -> str:
+    """The author's first sentence. A newline ends one too — plenty of
+    descriptions are a title line followed by a paragraph."""
+    for i, ch in enumerate(said):
+        if ch in _SENTENCE_END_CJK:
+            return said[: i + 1]
+        if ch == "\n":
+            return said[:i].rstrip()
+        if ch in _SENTENCE_END_ASCII and (i + 1 == len(said) or said[i + 1].isspace()):
+            return said[: i + 1]
+    return said
+
+
+def catalog_description(text: str, *, limit: int = CATALOG_DESCRIPTION_LIMIT) -> str:
+    """One catalog line's worth of what a command IS — the author's first
+    sentence, shortened only if it has to be.
+
+    A command the turn has not loaded is advertised by name + this line and NO
+    parameter schema, which is what takes a six-figure system prompt back to a
+    four-figure one. The line is what the model reads to decide whether to
+    reach for this command at all, so it is not a character cut:
+
+    - the first sentence is kept whole whenever it fits;
+    - a longer one is cut at a boundary the author wrote — a space between
+      words, or a clause mark (`，、；：,;`) — never between two characters of
+      the same word or clause, and the ellipsis says it was shortened;
+    - a run with no boundary at all inside the limit (a long unpunctuated
+      Chinese sentence, a token) is cut at the limit. That is the last resort,
+      not the rule.
+
+    Nothing is lost by shortening: loading the command hands the model the full
+    `describe_command` text and the real schema.
+    """
+    said = text.strip()
+    if not said:
+        return ""
+    first = _first_sentence(said)
+    if len(first) <= limit:
+        return first
+    kept = first[: limit - 1]
+    cut = max(
+        (i for i, ch in enumerate(kept) if ch.isspace() or ch in _CLAUSE_END),
+        default=-1,
+    )
+    if cut >= 0:
+        kept = kept[:cut].rstrip() if kept[cut].isspace() else kept[: cut + 1]
+    return f"{kept}…"
+
+
+#: The schema a catalog entry carries: none. `additionalProperties` is open
+#: because the model WILL guess arguments at this entry — the name is right
+#: there in front of it — and a provider enforcing a closed schema would reject
+#: the call before `_stub_function_tool`'s handler could answer with the real
+#: schema. The arguments are read by nothing; the answer is the schema.
+_CATALOG_SCHEMA: dict[str, Any] = {"type": "object", "properties": {}, "additionalProperties": True}
+
+#: What a catalog entry answers with when it is called. The full description
+#: (the catalog line was only its first sentence), the real schema, and what to
+#: do now — never a refusal: #537 measured that a model reads one as "stop
+#: trying" and gives up on the whole source.
+_LOAD_REPLY = (
+    "`{name}` is now loaded for this turn. What it is:\n\n{described}\n\n"
+    "Its arguments (JSON schema):\n\n{schema}\n\n"
+    "Call `{name}` again with arguments matching that schema."
+)
+
+
+def load_reply(pkg: PackageInfo, cmd: CommandInfo) -> str:
+    """The text a just-loaded command hands back. Pure, so the wording is
+    testable without a sandbox or a turn."""
+    return _LOAD_REPLY.format(
+        name=model_tool_name(pkg, cmd),
+        described=describe_command(pkg, cmd),
+        schema=json.dumps(cmd.params_json_schema, ensure_ascii=False),
+    )
+
+
+def build_catalog_tools(
+    packages: Sequence[PackageInfo],
+    *,
+    allowed: list[str] | None,
+    mark_loaded: MarkLoaded,
+) -> list[FunctionTool]:
+    """One entry per granted command: the real name, one line of what it is, and
+    no parameter schema (`docs/plan-tool-on-demand-loading.md`).
+
+    This is what a turn sends INSTEAD of every command's full schema — the
+    thing that put 414,115 characters in one system prompt. `mark_loaded` is
+    called with the turn's context and the model name when an entry is invoked,
+    so the next step of the same turn sends that command's real schema.
+
+    Granted by the SAME `_granted` the executable builder uses, so the two
+    lists name the same commands by construction.
+    """
+    return [_stub_function_tool(pkg, cmd, mark_loaded) for pkg, cmd in _granted(packages, allowed)]
+
+
+def _stub_function_tool(
+    pkg: PackageInfo, cmd: CommandInfo, mark_loaded: MarkLoaded
+) -> FunctionTool:
+    name = model_tool_name(pkg, cmd)
+
+    async def on_invoke(ctx: ToolContext[AgentToolContext], args_json: str) -> str:
+        # The arguments are deliberately unread: whatever the model guessed, it
+        # has not seen the schema yet. Marking first means a model that ignores
+        # the instruction and calls a third time still progresses — the real
+        # tool answers that one.
+        mark_loaded(ctx.context, name)
+        logger.info("registry: catalog hit %s — loading its schema for this turn", name)
+        return load_reply(pkg, cmd)
+
+    return FunctionTool(
+        name=name,
+        description=catalog_description(cmd.description),
+        params_json_schema=_CATALOG_SCHEMA,
+        on_invoke_tool=on_invoke,
+        strict_json_schema=False,
+    )
 
 
 def _to_function_tool(pkg: PackageInfo, cmd: CommandInfo) -> FunctionTool:
