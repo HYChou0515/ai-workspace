@@ -1545,6 +1545,49 @@ class SkillHubSettings:
     git_root: str = ""
 
 
+# ─── capacity (docs/plan-capacity-usage.md §12) ────────────────────────
+@dataclass(frozen=True)
+class CapacitySettings:
+    """Usage records and the capacity dashboard (docs/plan-capacity-usage.md).
+
+    Writing:
+    - ``record``: write usage records — one JSON line per record on stdout for
+      the deploy's collector to ship to ES (D3). The platform stores nothing.
+    - ``sink``: dotted path of a ``capacity.sink.UsageSink`` subclass to write
+      somewhere else; empty = stdout.
+    - ``window_s``: the window per-process counts are summed over; divides 3600
+      so windows tile the hour (and a date histogram).
+    - ``queue_max``: records buffered for the writer before new ones are
+      dropped and counted (``meta`` rows).
+    - ``llm_tags``: send ``x-litellm-tags`` (person, App, purpose) on every LLM
+      call so LiteLLM's log can be split per person (§7). Off when the deploy's
+      LiteLLM routes on tags and has no ``default`` pool.
+
+    Reading — each a dotted path of the operator's implementation (D2), empty
+    = that source is not connected and the views needing it say so:
+    ``usage_records`` (①), ``resource_metrics`` (②), ``gpu_metrics`` (③),
+    ``llm_requests`` (④).
+
+    Analysis: ``step_s`` (the slot; a multiple of ``window_s``), ``lag_s`` (the
+    newest seconds left out, for ingest lag), ``timezone`` (IANA name days are
+    cut in; empty = UTC), ``max_rows`` (an analysis that would load more rows
+    stops and says to shorten the period)."""
+
+    record: bool = True
+    sink: str = ""
+    window_s: int = 300
+    queue_max: int = 10000
+    llm_tags: bool = True
+    usage_records: str = ""
+    resource_metrics: str = ""
+    gpu_metrics: str = ""
+    llm_requests: str = ""
+    step_s: int = 300
+    lag_s: int = 600
+    timezone: str = ""
+    max_rows: int = 5_000_000
+
+
 # ─── top-level Settings ────────────────────────────────────────────────
 @dataclass(frozen=True)
 class Settings:
@@ -1575,3 +1618,4 @@ class Settings:
     chat_video: ChatVideoSettings = field(default_factory=ChatVideoSettings)
     view_plugins: ViewPluginsSettings = field(default_factory=ViewPluginsSettings)
     skill_hub: SkillHubSettings = field(default_factory=SkillHubSettings)
+    capacity: CapacitySettings = field(default_factory=CapacitySettings)
