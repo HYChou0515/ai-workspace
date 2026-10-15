@@ -367,9 +367,10 @@ function Sidebar({
 }
 
 /** 「安裝到 workspace…」 (D6): an App, then one of its workspaces the viewer
- * may edit, each saying beforehand what installing would do there — the
- * same refusal the install route gives, asked first. A pick is cheap to redo,
- * so the close is not guarded (#779); it is a form, so no backdrop close. */
+ * may edit. The list is the database alone; 「已經裝了」 comes from
+ * where-installed and a folder in the way from the install's own refusal
+ * (plan-skill-install-picker D1, D2). A pick is cheap to redo, so the close is
+ * not guarded (#779); it is a form, so no backdrop close. */
 function InstallDialog({
   entry,
   client,
@@ -384,24 +385,31 @@ function InstallDialog({
   const t = useT();
   const titleId = useId();
   const apps = useApps();
+  const users = useUsers();
+  const nameOf = (id: string) => users.find((u) => u.id === id)?.name ?? id;
   const qc = useQueryClient();
   const [slug, setSlug] = useState(entry.source_app);
-  const [picked, setPicked] = useState<string | null>(null);
+  const [chosen, setChosen] = useState<string | null>(null);
   const targets = useQuery({
     queryKey: qk.skillHubTargets(entry.id, slug),
     queryFn: () => client.targets(entry.id, slug),
   });
-  // 「已經裝了」 is the side panel's where-installed — the same query, so no
-  // second read — and the list does not wait for it: that reads every
-  // workspace, the list only the database (plan-skill-install-picker D2). A
-  // folder of that name in the way is said by the install's own refusal.
+  // 「已經裝了」 is the side panel's where-installed — the same query, and not
+  // refetched on opening, so no second read — and the list does not wait for
+  // it: that reads every workspace, the list only the database
+  // (plan-skill-install-picker D2). A folder of that name in the way is said
+  // by the install's own refusal.
   const installs = useQuery({
     queryKey: qk.skillHubInstalls(entry.id),
     queryFn: () => client.installs(entry.id),
+    refetchOnMount: false,
   });
   const installed = new Set(
     (installs.data ?? []).filter((i) => i.app === slug).map((i) => i.item_id),
   );
+  // A pick made before where-installed arrived does not survive learning it
+  // is installed: the row greys out, so the pick goes with it (review round 1).
+  const picked = chosen !== null && !installed.has(chosen) ? chosen : null;
   const items = targets.data?.items ?? [];
   const install = useMutation({
     mutationFn: (itemId: string) => client.install(slug, itemId, entry.id),
@@ -425,7 +433,7 @@ function InstallDialog({
           value={slug}
           onChange={(e) => {
             setSlug(e.target.value);
-            setPicked(null);
+            setChosen(null);
           }}
         >
           {(apps.some((a) => a.slug === slug) ? apps : [{ slug, title: slug }, ...apps]).map((a) => (
@@ -457,7 +465,7 @@ function InstallDialog({
                 value={it.item_id}
                 checked={picked === it.item_id}
                 disabled={installed.has(it.item_id)}
-                onChange={() => setPicked(it.item_id)}
+                onChange={() => setChosen(it.item_id)}
               />
               <span>{it.title || it.item_id}</span>
               {installed.has(it.item_id) ? (
@@ -469,7 +477,7 @@ function InstallDialog({
       </fieldset>
       {install.isError ? (
         <p className="error" role="alert">
-          {t("skillHub.failed", { reason: describeRefusal(install.error, t) })}
+          {t("skillHub.failed", { reason: describeRefusal(install.error, t, nameOf) })}
         </p>
       ) : null}
       <ModalActions>

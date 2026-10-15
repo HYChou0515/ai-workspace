@@ -772,6 +772,42 @@ describe("SkillHubEntryPage layout (plan-skill-hub-ux-redo D3, D5, D6, D16)", ()
     expect(within(dialog).getByRole("radio", { name: /Free one/ })).toBeEnabled();
   });
 
+  it("drops a pick that turns out to be installed once where-installed arrives (review round 1)", async () => {
+    const c = client(detail({}));
+    let answer: (v: Awaited<ReturnType<SkillHubApi["installs"]>>) => void = () => {};
+    c.installs.mockImplementation(() => new Promise((resolve) => (answer = resolve)));
+    c.targets.mockResolvedValue({ missing_tools: [], items: [{ item_id: "i-2", title: "Has it" }] });
+    mount(c);
+
+    fireEvent.click(await screen.findByRole("button", { name: word("skillHub.install") }));
+    const dialog = await screen.findByTestId("skill-hub-install");
+    fireEvent.click(await within(dialog).findByRole("radio", { name: /Has it/ }));
+    const go = within(dialog).getByRole("button", { name: word("skillHub.install.confirm") });
+    expect(go).toBeEnabled();
+
+    answer([{ app: "rca", item_id: "i-2", title: "Has it" }]);
+
+    await waitFor(() => expect(within(dialog).getByRole("radio", { name: /Has it/ })).toBeDisabled());
+    expect(within(dialog).getByRole("radio", { name: /Has it/ })).not.toBeChecked();
+    expect(go).toBeDisabled();
+  });
+
+  it("does not read where-installed again when the dialog opens — the side panel's answer is reused (plan-skill-install-picker D2)", async () => {
+    const c = client(detail({}));
+    c.targets.mockResolvedValue({ missing_tools: [], items: [{ item_id: "i-1", title: "Free one" }] });
+    // Already stale by the time the dialog opens: the case a default observer refetches.
+    const qc = makeQueryClient();
+    qc.setDefaultOptions({ queries: { ...qc.getDefaultOptions().queries, staleTime: 0 } });
+    mount(c, qc);
+    await waitFor(() => expect(c.installs).toHaveBeenCalledTimes(1));
+
+    fireEvent.click(await screen.findByRole("button", { name: word("skillHub.install") }));
+    const dialog = await screen.findByTestId("skill-hub-install");
+    await within(dialog).findByRole("radio", { name: /Free one/ });
+
+    expect(c.installs).toHaveBeenCalledTimes(1);
+  });
+
   it("says a folder of that name is in the way when the install is refused, in the dialog (plan-skill-install-picker D1)", async () => {
     const c = client(detail({}));
     c.targets.mockResolvedValue({ missing_tools: [], items: [{ item_id: "i-3", title: "Clash" }] });
@@ -790,7 +826,8 @@ describe("SkillHubEntryPage layout (plan-skill-hub-ux-redo D3, D5, D6, D16)", ()
     fireEvent.click(within(dialog).getByRole("button", { name: word("skillHub.install.confirm") }));
 
     expect(await within(dialog).findByRole("alert")).toHaveTextContent(
-      word("skillHub.refused.folder_in_the_way.theirs", { owner: "bob", name: "triage-reflow" }),
+      // By name, as the row said before the list stopped reading workspaces (review round 1).
+      word("skillHub.refused.folder_in_the_way.theirs", { owner: "Bob Lee", name: "triage-reflow" }),
     );
     expect(screen.getByTestId("skill-hub-install")).toBeInTheDocument();
   });

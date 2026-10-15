@@ -1,8 +1,8 @@
 """What the skill hub's skill page reads beyond the detail
 (docs/plan-skill-hub-ux-redo.md P2): version numbers on the timeline (D8),
 file sizes and the script count for the files tab (D12), where the viewer
-has the skill installed (D3), and what installing into each of an App's
-workspaces would do (D6)."""
+has the skill installed (D3), and which of an App's workspaces the
+install dialog offers (D6, plan-skill-install-picker D1)."""
 
 from __future__ import annotations
 
@@ -209,7 +209,7 @@ async def test_installs_of_an_entry_the_viewer_cannot_read_is_404(harness: Harne
     assert harness.client.get(f"/skill-hub/entries/{entry}/installs").status_code == 404
 
 
-# ── what installing would do (D6) ────────────────────────────────────────────
+# ── the install dialog's workspaces (D6, plan-skill-install-picker D1) ────────
 
 
 async def test_targets_lists_an_apps_editable_workspaces_by_title(harness: Harness):

@@ -24,10 +24,12 @@ const str = (v: unknown): string => (typeof v === "string" ? v : "");
 export function describeRefusal(
   e: unknown,
   t: (key: MsgKey, vars?: Vars) => string,
+  /** A user id as the page shows people; the id itself when not given. */
+  nameOf: (id: string) => string = (id) => id,
 ): string {
   if (e instanceof HttpError && e.code && Object.hasOwn(KEY, e.code)) {
     const d = e.detail ?? {};
-    const owner = str(d.owner);
+    const owner = str(d.owner) && nameOf(str(d.owner));
     if (e.code === "folder_in_the_way") {
       // Whose copy is in the way, when it is one — "already have it" and
       // "name clash" read differently. Named as the skill the person sees in

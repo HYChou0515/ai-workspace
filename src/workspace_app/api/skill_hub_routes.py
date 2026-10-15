@@ -588,11 +588,12 @@ def register_skill_hub_routes(
     @app.get("/skill-hub/entries/{entry_id}/targets")
     async def skill_hub_targets(entry_id: str, app: str) -> SkillHubTargets:
         """The workspaces of App `app` the viewer may install into, by title —
-        the database alone, no workspace read, so it opens as fast as the item
-        list does (plan-skill-install-picker D1). Whether a copy is already
-        there is `…/installs`; a folder in the way is the install's own
-        refusal (`skill_folder_in_the_way`). An App the platform does not know
-        has none."""
+        the database alone, no workspace read (plan-skill-install-picker D1).
+        It still loads every live workspace of the App and checks permission
+        here, unpaged, where the item list pushes visibility into the query.
+        Whether a copy is already there is `…/installs`; a folder in the way
+        is the install's own refusal (`skill_folder_in_the_way`). An App the
+        platform does not know has none."""
         viewer = get_user_id()
         entry = _readable(entry_id, viewer)
         candidates = await asyncio.to_thread(_editable, viewer, [app])

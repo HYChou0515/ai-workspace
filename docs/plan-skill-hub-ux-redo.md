@@ -36,7 +36,7 @@ Grilled 2026-10-08 on master `7d666c36`（含 #875 版本歷史）。每條決�
 | D4 | 排序：名稱／最常使用／**最近更新**；篩選只加 **owner**；每次載入 50 筆、「載入更多」、顯示「共 N 個」 | NN/g〈Infinite Scrolling〉：頁尾到得了、位置回得去 | [user] |
 | D5 | skill 頁：**分頁籤＋右側欄**。分頁＝說明（SKILL.md，預設）／檔案／版本紀錄／fork；右側欄＝「安裝到 workspace…」、你裝在哪、權限、次數、更新時間、用到的工具（標這個 App 沒有的）、AI 審查意見。自己的 skill 頁首多「管理 ▾」 | VS Code Marketplace（Details／Changelog）、npm（Readme／Code／Versions）；Material／HIG：次要與破壞性動作收進選單 | [user] |
 | D5a | **頁面寬度等 web demo 實際看過再定**：寬度是 CSS 變數，demo 時一起調 | — | [user] |
-| D6 | 「**安裝到 workspace…**」：對話框先選 App、再列你能編輯的 workspace；每個 workspace 先標裝下去會怎樣（已有同名 → 不能選並說原因；這個 App 缺工具 → 能選並寫缺哪些）；裝完留在原頁，顯示「已裝進 X ・ 打開 workspace」，右側欄更新 | 與 fork 對話框同一個選擇器；判準與 workspace 裡的安裝選單（ui-polish D8）同一條 | [user] |
+| D6 | （「每個 workspace 先標裝下去會怎樣」被 #959 推翻：清單只問資料庫，見 plan-skill-install-picker.md；其餘照舊）「**安裝到 workspace…**」：對話框先選 App、再列你能編輯的 workspace；每個 workspace 先標裝下去會怎樣（已有同名 → 不能選並說原因；這個 App 缺工具 → 能選並寫缺哪些）；裝完留在原頁，顯示「已裝進 X ・ 打開 workspace」，右側欄更新 | 與 fork 對話框同一個選擇器；判準與 workspace 裡的安裝選單（ui-polish D8）同一條 | [user] |
 | D7 | 全站畫面文字 **item → workspace**（17 句繁中逐句確認；意思不是 workspace 的列出來問）。程式碼與開發文件照舊用 item。**不加守衛** | item 是開發用語 | [user] |
 | D8 | 版本**系統自動編號** v1、v2…＋日期時間；只有改內容的事件（發布、回復）佔版號，權限／轉移是一行註記 | 版號用來分辨、指稱；skill 沒有相依關係，不需要 semver | [user] |
 | D9 | workspace 裡的 skill 面板：保留 modal；每列兩行（名稱＋狀態文字／說明）；右邊固定「套用」「預設／開啟／關閉」「⋯」，下載／發布／還原／更新收進「⋯」；要處理的狀態是「文字＋動作」（例「有新版 ・ 更新」）；「從 skill hub 裝」改成面板內的一頁（有返回） | NN/g〈Icon Usability〉；Material 3 overflow menu；Polaris／GOV.UK：要處理的狀態要附動作 | [user] |

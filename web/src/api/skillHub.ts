@@ -189,8 +189,8 @@ export type SkillHubApi = {
   get(entryId: string, app?: string): Promise<SkillHubDetail>;
   /** The viewer's workspaces that hold a copy of the entry. */
   installs(entryId: string): Promise<SkillHubInstall[]>;
-  /** App `app`'s workspaces the viewer may install into, each with what
-   * installing would do there. */
+  /** App `app`'s workspaces the viewer may install into, by title — nothing
+   * about what is inside them (plan-skill-install-picker D1). */
   targets(entryId: string, app: string): Promise<SkillHubTargets>;
   /** The Skills panel's install door: 409 when a folder of that name is
    * already in the item (a coded refusal naming whose copy it is), 404 when

@@ -906,8 +906,6 @@ async def skill_folder_in_the_way(
     hub: SkillHubStore,
     name: str,
     viewer: str,
-    *,
-    wake: bool = True,
 ) -> FolderInTheWay | None:
     """The refusal an install gets when ``.skill/<name>/`` already exists —
     one fact, shared by the tool and the route so the two doors refuse alike
@@ -915,14 +913,12 @@ async def skill_folder_in_the_way(
     the user's own skill, or an earlier install they have since edited. It
     says WHOSE copy it is when it is one, so "already have it" and "name
     clash" read differently (plan install step 4). Listed, not read: a
-    folder with any file of its own is in the way. ``wake`` as for
-    :func:`workspace_skill_origin` — the install dialog asks this of every
-    workspace it offers. A manifest that does not parse names no owner: the
-    folder is still in the way."""
-    if not await skill_file_paths(files, workspace_id, name, wake=wake):
+    folder with any file of its own is in the way. A manifest that does not
+    parse names no owner: the folder is still in the way."""
+    if not await skill_file_paths(files, workspace_id, name):
         return None
     try:
-        origin = await workspace_skill_origin(files, workspace_id, name, wake=wake)
+        origin = await workspace_skill_origin(files, workspace_id, name)
     except (msgspec.DecodeError, msgspec.ValidationError):
         origin = None
     owner = ""
