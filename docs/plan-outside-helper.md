@@ -1,5 +1,7 @@
 # 小幫手:使用者電腦上的 Python 小程式代替人去外網查,AI 自己寫的字出去前人點頭
 
+> 被 #963（plan-ext-ai.md）推翻
+
 **狀態:** 已施工(PR #927,P2–P10)。延伸 [plan-outside-lookup.md](plan-outside-lookup.md)(#897 的「請幫我查」卡片),不推翻它:
 手動流程原封不動留著當備援。
 **來源標記:** 〔user〕= user 的原話或明確選擇(2026-10-12 grill-me);〔查證〕= 讀 `origin/master` 程式碼確認的事實;

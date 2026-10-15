@@ -27,7 +27,8 @@ _TEMPLATE = _ROOT / "ai-workspace-helper" / "ext_ai_site.template.py"
 # Written the way the tool asks the AI to write: whole, and in Markdown — which
 # the page renders, so the person's own bubble no longer reads as the raw
 # question (review round 1).
-QUESTION = "Which is **safer** for a 2 GB CSV:\n- pandas\n- polars"
+# …and its numbered list is drawn without its numbers (review round 2)
+QUESTION = "Which is **safer** for a 2 GB CSV:\n1. pandas\n2. polars\nOne line each."
 
 # A chat page like the ones the template has to guess at: a sign-in first (a
 # person signs in a moment later), then a blank conversation; Enter sends; the
@@ -59,8 +60,9 @@ document.getElementById('prompt').addEventListener('keydown', (e) => {
   // the page renders the question's Markdown, as chat pages do
   const me = document.createElement('div'); me.className = 'me';
   const html = q.replace(/\\*\\*(.+?)\\*\\*/g, '<strong>$1</strong>').split('\\n')
-    .map((l) => l.startsWith('- ') ? `<li>${l.slice(2)}</li>` : `<p>${l}</p>`).join('');
-  me.innerHTML = html.replace(/(<li>.*<\\/li>)/, '<ul>$1</ul>'); log.append(me);
+    .map((l) => /^(- |\\d+\\. )/.test(l)
+      ? `<li>${l.replace(/^(- |\\d+\\. )/, '')}</li>` : `<p>${l}</p>`).join('');
+  me.innerHTML = html.replace(/(<li>.*<\\/li>)/, '<ol>$1</ol>'); log.append(me);
   const bot = document.createElement('div'); bot.className = 'bot'; log.append(bot);
   const p = document.createElement('p'); bot.append(p);
   const stop = document.createElement('button'); stop.innerText = 'Stop generating';

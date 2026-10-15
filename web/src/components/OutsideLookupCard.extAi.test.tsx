@@ -42,12 +42,15 @@ function draw({
   online = true,
   extAi = true,
   current,
+  existing = null,
 }: {
   online?: boolean;
   extAi?: boolean;
   current?: () => Promise<HelperJob>;
+  /** A job the card already has when it is drawn. */
+  existing?: HelperJob | null;
 } = {}) {
-  let latest: HelperJob | null = null;
+  let latest: HelperJob | null = existing;
   const client = {
     targets: vi.fn(async () => [{ name: "Google", url: "https://www.google.com/search?q={q}" }]),
     answer: vi.fn(async () => ({ path: "lookups/x.md", attachments: [] })),
@@ -199,5 +202,20 @@ describe("asking it by hand (D9)", () => {
         expect.objectContaining({ answer: expect.objectContaining({ kind: "not_found" }) }),
       ),
     );
+  });
+});
+
+// Review round 2: read-only only while the helper is at it — a job left
+// waiting by a helper that went away leaves the person to ask by hand, and
+// they may want to change the question first.
+describe("a job left waiting, the helper gone", () => {
+  it("is the manual card, with the question editable", async () => {
+    const client = draw({ online: false, existing: job({ state: "queued" }) });
+    // the card has read its job
+    await waitFor(() => expect(client.job).toHaveBeenCalled());
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(screen.getByRole("button", { name: "複製問題" })).toBeInTheDocument();
+    expect(screen.getByLabelText("要問的問題")).not.toHaveAttribute("readonly");
   });
 });

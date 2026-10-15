@@ -131,6 +131,96 @@ def test_text_with_something_tag_like_in_it_stays_text(answer):
     assert errand(_site(answer))(_ctx(_Page(), [], [0.0]), "q").markdown == answer
 
 
+# Review round 2: masked for the server — but on the company's own PC (the
+# helper's log, try-ext-ai) the original stays reachable: what failed, where.
+def test_the_masked_failure_keeps_the_original_as_its_cause():
+    from ai_workspace_helper.ext_ai import errand
+
+    boom = NameError("name 'box' is not defined")
+
+    def ask(page, question, h):  # noqa: ANN001, ANN202
+        raise boom
+
+    with pytest.raises(ErrandFailed) as got:
+        errand(types.SimpleNamespace(URL="https://ai.corp.example/new", ask=ask))(
+            _ctx(_Page(), [], [0.0]), "q"
+        )
+
+    assert got.value.__cause__ is boom
+
+
+@pytest.mark.parametrize(
+    ("url", "said", "masked", "kept"),
+    [
+        # the site file's own message, the address as the company wrote it
+        ("https://AI.Corp.Example/new", "at https://AI.Corp.Example/new/x", True, ""),
+        # a short intranet host is a host, not every word holding its letters
+        ("http://ai/new", "waiting failed at http://ai/new", True, "waiting failed"),
+        ("http://chat/", "chat page failed: http://chat:8080/x", True, "chat page failed"),
+    ],
+)
+def test_the_address_is_masked_as_a_host_whatever_its_case(url, said, masked, kept):
+    from ai_workspace_helper.ext_ai import MASK, errand
+
+    def ask(page, question, h):  # noqa: ANN001, ANN202
+        raise RuntimeError(said)
+
+    with pytest.raises(ErrandFailed) as got:
+        errand(types.SimpleNamespace(URL=url, ask=ask))(_ctx(_Page(), [], [0.0]), "q")
+
+    message = str(got.value)
+    # every address is gone — and nothing but the address
+    assert "://" not in message
+    assert (MASK in message) is masked
+    assert kept in message
+
+
+# Review round 2: a hiccup on the line to the server while h waits (the card is
+# told again and the request fails) is not the site's failure — it goes up as
+# it is, and the job stays to be tried again, as every errand's does.
+def test_trouble_reaching_the_server_is_not_failed_as_the_sites():
+    from ai_workspace_helper.backend import NeedsLogin
+    from ai_workspace_helper.ext_ai import errand
+
+    def ask(page, question, h):  # noqa: ANN001, ANN202
+        h.wait_until(lambda: False, "x")
+
+    ctx = _ctx(_Page(), [], [0.0])
+
+    def note(_text):  # noqa: ANN001, ANN202
+        raise OSError("connection reset")
+
+    ctx.note = note
+    with pytest.raises(OSError, match="connection reset"):
+        errand(_site_with(ask))(ctx, "q")
+
+    def login(_text):  # noqa: ANN001, ANN202
+        raise NeedsLogin()
+
+    ctx = _ctx(_Page(), [], [0.0])
+    ctx.note = login
+    with pytest.raises(NeedsLogin):
+        errand(_site_with(ask))(ctx, "q")
+
+
+def _site_with(ask):  # noqa: ANN001, ANN202
+    return types.SimpleNamespace(URL="https://ai.corp.example/new", ask=ask)
+
+
+# Review round 2: an element's HTML as a page's framework writes it — a comment
+# first, a line break last — is still HTML.
+@pytest.mark.parametrize(
+    "html",
+    ["<!--[--><div><p>Polars.</p></div><!--]-->", "<p>Polars.</p><br>", "  <div>a</div>\n"],
+)
+def test_an_elements_html_as_frameworks_write_it_is_converted(html):
+    from ai_workspace_helper.ext_ai import errand
+
+    got = errand(_site(html))(_ctx(_Page(), [], [0.0]), "q")
+
+    assert got.markdown == f"MD({html})"
+
+
 def test_the_errand_is_there_only_with_a_site_file():
     from ai_workspace_helper.builtin_errands import build
 
@@ -405,6 +495,21 @@ def test_try_ext_ai_says_why_it_failed(tmp_path):
 
     assert code == 1 and chrome.closed
     assert "外部AI 開始回答" in "\n".join(out)
+
+
+def test_try_ext_ai_shows_the_original_error_and_where_in_the_file(tmp_path):
+    """Review round 2: on the company's own PC the masked one-liner hid what
+    to fix — the original error, and the site file's line, are printed too."""
+    from ai_workspace_helper.ext_ai import try_main
+
+    f = _site_file(tmp_path, "def ask(page, question, h):\n    return box.click()\n")
+    out: list[str] = []
+
+    code = try_main(["--site", str(f), "q"], make_chrome=_TryChrome, out=out.append)
+
+    text = "\n".join(out)
+    assert code == 1
+    assert "NameError" in text and "ext_ai_site.py" in text and "line 3" in text
 
 
 def test_try_ext_ai_refuses_a_broken_file_before_opening_chrome(tmp_path):

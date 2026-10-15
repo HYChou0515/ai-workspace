@@ -376,7 +376,10 @@ export function OutsideLookupCard({
               isQuestion ||
               needsNod ||
               jobState === "failed" ||
-              jobState === "cancelled") && (
+              jobState === "cancelled") &&
+              // the destinations on their way: no unnamed 「搜尋」 flashing
+              // before 「Google search」 (review round 2)
+              !(isSearch && targets.isPending) && (
                 <div className="outside-lookup-actions">
                   <button
                     type="button"
@@ -537,8 +540,10 @@ export function OutsideLookupCard({
             className="input outside-lookup-question"
             rows={5}
             value={question}
-            // what went out is what the box shows while the helper asks it
-            readOnly={locked || working}
+            // what went out is what the box shows while the helper asks it —
+            // a job left waiting by a helper that went away is the person's
+            // to ask by hand, and to change first (review round 2)
+            readOnly={locked || (working && helping)}
             aria-invalid={needQuestion || undefined}
             aria-describedby={needQuestion ? `${ids}-x-need` : undefined}
             onChange={(e) => {

@@ -47,3 +47,7 @@ config.resolved.yaml
 # docs/plan-ext-ai.md D7: the company's site file — packed into the helper with
 # `--ext-ai-site`, never committed (its URL is the company's own)
 ai-workspace-helper/src/ai_workspace_helper/ext_ai_site.py
+# …and the copies the docs say to make of the template (anchored: a bare name would also
+# reach a build that runs under the repo)
+/ext_ai_site.py
+/ai-workspace-helper/ext_ai_site.py

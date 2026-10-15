@@ -65,6 +65,7 @@ function draw({
   answeredLater = false,
   targets = [{ name: "Google", url: "https://www.google.com/search?q={q}" }],
   targetsFail = false,
+  targetsPending = false,
 }: {
   lookup?: OutsideLookup;
   online?: boolean;
@@ -87,11 +88,14 @@ function draw({
   targets?: { name: string; url: string }[];
   /** `GET /lookup-targets` failing. */
   targetsFail?: boolean;
+  /** `GET /lookup-targets` not answered yet. */
+  targetsPending?: boolean;
 } = {}) {
   // As the server answers: no job until one is handed over, then that job.
   let latest: HelperJob | null = existing;
   const client = {
     targets: vi.fn(async () => {
+      if (targetsPending) await new Promise(() => {});
       if (targetsFail) throw new Error("targets failed");
       return targets;
     }),
@@ -469,5 +473,17 @@ describe("with the destinations unreadable", () => {
     fireEvent.click(await screen.findByRole("button", { name: "搜尋" }));
 
     await waitFor(() => expect(client.handOver).toHaveBeenCalled());
+  });
+});
+
+// Review round 2: the unnamed 「搜尋」 is for a list that cannot be read — not
+// a flash before 「Google search」 while it is still on its way.
+describe("with the destinations still loading", () => {
+  it("offers no unnamed search yet", async () => {
+    draw({ targetsPending: true });
+    await screen.findByLabelText("搜尋關鍵字");
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(screen.queryByRole("button", { name: "搜尋" })).not.toBeInTheDocument();
   });
 });

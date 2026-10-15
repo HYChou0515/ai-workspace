@@ -13,8 +13,7 @@ two reasons: it tells the card again every `RENEW_S` — which renews the claim
 on the job and counts as checking in; unrenewed for 120 s, the job reads as
 waiting again and the card falls back to asking by hand while the question is
 still being asked, and the person's helper on another PC may take it — and it
-stops at
-one limit for the whole errand (D11), saying what it was waiting for.
+stops at one limit for the whole errand (D11), saying what it was waiting for.
 """
 
 from __future__ import annotations
@@ -22,12 +21,14 @@ from __future__ import annotations
 import importlib
 import importlib.util
 import re
+import traceback
 from collections.abc import Callable
 from pathlib import Path
 from types import ModuleType
 from typing import Any
 from urllib.parse import urlsplit
 
+from .backend import BackendError, NeedsLogin, UpdateRequired
 from .errands import (
     RENEW_S,
     VERIFY_TIMEOUT_S,
@@ -55,7 +56,9 @@ _TEXT = "() => document.body ? document.body.innerText : ''"
 #: with one (an element's outerHTML). Anything else is text as it is: text
 #: can hold `#include <stdio.h>` or `List<String>`, which the converter would
 #: take for tags (review round 1).
-_HTML = re.compile(r"\A\s*<[A-Za-z][^>]*>.*</[A-Za-z][A-Za-z0-9-]*>\s*\Z", re.S)
+#: A framework may write a comment first (`<!--[-->`) and a void tag last
+#: (`<br>`) — still an element's HTML (review round 2).
+_HTML = re.compile(r"\A\s*(?:<!--.*?-->\s*)*<[A-Za-z][^>]*>.*>\s*\Z", re.S)
 
 #: What stands in for the company's address in a failure the card shows.
 MASK = "(外部AI 的網址)"
@@ -69,7 +72,12 @@ def _masked(text: str, url: str) -> str:
     host = urlsplit(url).hostname or url.strip()
     if not host:
         return text
-    return re.sub(r"\S*" + re.escape(host) + r"\S*", MASK, text)
+    # whatever case the company wrote it in; a host, not the letters of one —
+    # a one-word intranet host (`http://ai/`) only where an address has it
+    # (after `//` or `@`), or "waiting" and "failed" would go too (round 2)
+    found = re.escape(host) + r"(?![\w-])"
+    found = (r"(?<![\w.-])" if "." in host else r"(?:(?<=//)|(?<=@))") + found
+    return re.sub(r"\S*" + found + r"\S*", MASK, text, flags=re.I)
 
 
 class Helpers:
@@ -143,8 +151,14 @@ def errand(site: Any) -> Errand:
         ctx.where("外部AI")
         try:
             answer = site.ask(ctx.page, question, Helpers(ctx))
+        except (NeedsLogin, UpdateRequired, OSError, BackendError):
+            # the line to the server, while h tells the card: not the site's
+            # failure — the job stays, to be tried again (review round 2)
+            raise
         except Exception as exc:  # noqa: BLE001 — whatever failed, said without the address
-            raise ErrandFailed(_masked(str(exc) or type(exc).__name__, site.URL)) from None
+            # the address is masked on the way to the server; the original
+            # stays the cause, for this PC's own log and try-ext-ai (round 2)
+            raise ErrandFailed(_masked(str(exc) or type(exc).__name__, site.URL)) from exc
         if not isinstance(answer, str) or not answer.strip():
             raise ErrandFailed("外部AI 的網站檔沒有交回回答")
         # the converter leaves the page it runs in: last (ErrandContext.convert)
@@ -227,6 +241,11 @@ def try_main(
             page = chrome.run(errand(site), args.question, note)
         except ErrandFailed as exc:
             out(f"沒問到:{exc}")
+            if exc.__cause__ is not None:
+                # this PC only: what failed and where in the file, unmasked
+                cause = exc.__cause__
+                out("原始錯誤:")
+                out("".join(traceback.format_exception(type(cause), cause, cause.__traceback__)))
             return 1
         out("外部AI 的回答(卡片會收到的樣子):")
         out(page.markdown)

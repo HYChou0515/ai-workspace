@@ -26,7 +26,6 @@ helper and everything it needs on every one of those Pythons.
 from __future__ import annotations
 
 import argparse
-import ast
 import hashlib
 import importlib.util
 import json
@@ -133,13 +132,19 @@ def _check_site(site: Path) -> None:
     """Load `site` the way the installed helper will (`ext_ai.load_site`):
     ValueError when it lacks its `URL` or its `ask` — or is written in syntax
     the people's Python 3.9 refuses, which this newer Python would load fine
-    (review round 1)."""
-    try:
-        ast.parse(site.read_text(encoding="utf-8"), str(site), feature_version=(3, 9))
-    except SyntaxError as exc:
+    (review round 1) — by the helper's own 3.9 guard, the one its files are
+    held to (scripts/python39_guard.py; review round 2: the parser alone let an
+    `X | None` annotation through, which a 3.9 refuses at import)."""
+    spec = importlib.util.spec_from_file_location(
+        "_python39_guard", ROOT / "scripts" / "python39_guard.py"
+    )
+    assert spec and spec.loader
+    guard = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(guard)
+    if found := guard.problems(site):
         raise ValueError(
-            f"{site}:{exc.lineno}: the helper runs on Python 3.9, which refuses this ({exc.msg})"
-        ) from exc
+            "the helper runs on Python 3.9, which refuses this site file: " + "; ".join(found)
+        )
     src = str(HELPER / "src")
     sys.path.insert(0, src)
     try:

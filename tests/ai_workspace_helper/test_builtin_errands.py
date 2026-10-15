@@ -42,8 +42,8 @@ def test_the_shared_table_still_says_which_destination_the_helper_picks():
     this rule (`pickSearchTarget`, web/src/api/outsideLookup.ts) is held to
     (`web/tests/searchTargetParity.test.ts`): the card's button names the
     destination the helper will search (docs/plan-ext-ai.md D8). Change the rule
-    and this reddens until the table is regenerated; then the FE test reddens
-    until it follows. `null`: the helper refuses — no destination at all."""
+    and this reddens until the table (kept by hand) is updated; then the FE test
+    reddens until it follows. `null`: the helper refuses — no destination at all."""
     import json
     from pathlib import Path
 

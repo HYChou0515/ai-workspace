@@ -18,7 +18,7 @@ file is packed into the helper.
 
 `ask(page, question, h)` gets a Playwright `page` (a fresh tab in the helper's
 Chrome — https://playwright.dev/python/docs/api/class-page), the question, and
-`h`. Wait ONLY through `h`:
+`h`. Wait through `h` — anything longer than a few seconds:
 
 - `h.wait_for_login(ready)` — while `ready()` is false (a sign-in page),
   brings the window forward and waits for the person;
@@ -68,9 +68,9 @@ _MARK = """() => {
 # little else new. `null` until something has come.
 _ANSWER = """(question) => {
   // A page shows the question RENDERED — its Markdown drawn, links shown by
-  // their text, spaces folded — so the two are compared by their letters and
-  // digits alone.
-  const bare = (s) => s.replace(/\\]\\([^)]*\\)/g, ']').replace(/[^\\p{L}\\p{N}]+/gu, '');
+  // their text, a numbered list without its numbers, spaces folded — so the
+  // two are compared by their letters alone.
+  const bare = (s) => s.replace(/\\]\\([^)]*\\)/g, ']').replace(/[^\\p{L}]+/gu, '');
   const q = bare(question);
   let best = null, size = 0;
   for (const el of document.body.querySelectorAll('*:not([data-aiwh-old])')) {
