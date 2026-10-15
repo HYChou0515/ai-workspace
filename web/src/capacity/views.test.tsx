@@ -432,6 +432,21 @@ describe("allocation (view 2)", () => {
     await waitFor(() => expect(detail.contains(document.activeElement)).toBe(true));
   });
 
+  it("brings the detail's top into view, not just its edge", async () => {
+    // "nearest" scrolled only until the heading touched the bottom of the
+    // screen: the detail itself stayed below it
+    const scroll = vi.spyOn(HTMLElement.prototype, "scrollIntoView").mockImplementation(() => {});
+    renderWithQuery(<Allocation summary={summary()} days={28} client={client()} t={t} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Alice Chen 的明細" }));
+
+    const detail = await screen.findByTestId("capacity-person");
+    await waitFor(() => expect(scroll).toHaveBeenCalled());
+    expect(scroll.mock.contexts.at(-1)).toBe(detail);
+    expect(scroll.mock.calls.at(-1)?.[0]).toMatchObject({ block: "start" });
+    scroll.mockRestore();
+  });
+
   it("takes you to the detail again when you press its button again", async () => {
     renderWithQuery(<Allocation summary={summary()} days={28} client={client()} t={t} />);
     const link = await screen.findByRole("button", { name: "Alice Chen 的明細" });

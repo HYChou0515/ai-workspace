@@ -11,8 +11,8 @@ and this app streams SSE. For each HTTP request it records one `work` count:
   `text/event-stream` is a stream, in flight from its first header to its
   end — no list of long-lived routes to keep current.
 - **Which App**: the `slug` of the route that matched, when that route is
-  inside an App (`/api/a/{slug}/…` — opening the launcher, which reads every
-  App's `/api/apps/{slug}`, icon and assets, is not using them), the slug is
+  inside an App (`/api/a/{slug}/…` — `/api/apps/{slug}`, its icon and assets
+  are not using the App; the launcher loads every App's icon), the slug is
   an App the platform has, and its response did not refuse it (4xx). Read
   off the raw path, any URL — `/api/a/<anything>/…`, signed in or not —
   minted an App: a row per window each, and a series in the analysis. Work

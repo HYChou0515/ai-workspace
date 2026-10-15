@@ -5,7 +5,7 @@ read from the usage scope at the moment of the call. LiteLLM stores the list in
 its spend log's `request_tags`, which is how ④ splits GPU use per person: the
 non-agent calls share one key, so LiteLLM cannot tell whose they are otherwise.
 
-A call outside any scope (a sweeper, a health check) carries no header and
+A call outside any scope (a health check, say) carries no header and
 shows as untagged traffic; so does code inside a sandbox calling LiteLLM
 itself. A scope opts out with `tags=False` (`capacity.llm_tags: false`) — for
 a LiteLLM that routes on tags with no `default` pool, which would refuse

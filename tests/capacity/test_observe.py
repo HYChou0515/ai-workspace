@@ -360,7 +360,7 @@ def _held(sources: CapacitySources, w: World):  # noqa: ANN202
 def test_a_turn_or_job_record_is_kept_as_a_few_numbers():
     """A record parsed from ES is a dict of one to two kilobytes, and a period
     holds hundreds of thousands of them for the analysis' whole TTL: at 1,000
-    people over 90 days, gigabytes in the API pod. The analysis reads five
+    people over 90 days, a gigabyte or more in the API pod. The analysis reads five
     of its fields."""
     w = _world()
     obs, held = _held(CapacitySources(_Fresh(w)), w)

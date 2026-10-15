@@ -359,12 +359,14 @@ function PersonDetail({
     queryKey: qk.capacityPerson(user, days),
     queryFn: () => client.person(user, days),
   });
-  // Opened from a link in a table that can run past the screen: take the view
-  // and the focus to the detail, as a link to a place on the page does.
+  // Opened from a row of a table that can run past the screen: bring the
+  // detail's top into view ("nearest" stopped at the heading touching the
+  // bottom edge, the detail itself still below) and move the focus there.
+  const panel = useRef<HTMLElement>(null);
   const heading = useRef<HTMLHeadingElement>(null);
   useEffect(() => {
-    heading.current?.scrollIntoView?.({ block: "nearest" });
-    heading.current?.focus();
+    panel.current?.scrollIntoView?.({ block: "start" });
+    heading.current?.focus({ preventScroll: true });
   }, [user, opened]);
   // a line split by regression is held back here as everywhere until three
   // days of both sources fit it (§9.10)
@@ -398,6 +400,7 @@ function PersonDetail({
   }, [data, lines, summary, t]);
   return (
     <aside
+      ref={panel}
       className="capacity-person"
       data-testid="capacity-person"
       aria-label={t("capacity.person.title", { user: label })}

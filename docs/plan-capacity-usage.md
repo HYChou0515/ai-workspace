@@ -872,9 +872,9 @@ What the build changed from the plan above, each for a reason found while buildi
   sandbox-host's window is its own setting: a row longer than the slot is spread
   over the slots it covers, and `capacity check` refuses one that fits neither way.
 - **An analysis' memory is 4 bytes × slots × the people each line costs, summed over the lines, plus
-  about 50–65 bytes per row read, plus 8 bytes × slots per App and per purpose on each line** (measured on synthetic worlds of 60, 120 and 240 people, 27 days, with
+  about 45–60 bytes per row read, plus 8 bytes × slots per App and per purpose on each line** (measured on synthetic worlds of 60, 120 and 240 people, 27 days, with
   sources that return fresh records as an ES client does). A turn or job record is kept as the five
-  numbers the analysis reads (`Events`: 28 bytes of columns, 33 measured with the names table; the
+  numbers the analysis reads (`Events`: about 30 bytes, measured — 28 of them its columns; the
   dict from ES was about a kilobyte and was kept
   whole).
   The observations keep the (slot, value) pairs a source returned — ②'s pods included, so a rollout's
@@ -934,9 +934,11 @@ What the build changed from the plan above, each for a reason found while buildi
   "fits" (§9.6 divides every line by its threshold).
 - **A record's field with no value is left out, not written `null`** (§5.2): ES reads both alike.
 - **A source that lags shows a gap at the end**: gaps run to the period's end, so a metrics pipeline more
-  than `lag_s` plus about 15 minutes behind is a gap in view 9 and a `capacity check` warning.
+  than `lag_s` plus about 15 minutes behind is a gap in view 9; `capacity check`, which reads up to now
+  without waiting `lag_s`, warns from about 15 minutes behind.
 - **The page's controls follow published guidance** (CLAUDE.md's UI rule; each kind looked up, NN/g first):
-  - switching among the five views is the shared tab strip (`ShareTabs`: text and underline) — a tab bar
+  - switching among the five views is the app's shared tab strip (`Tabs` in `components/ShareTabs.tsx`:
+    text and underline) — a tab bar
     "allows users to selectively view a single panel of content … from among a list of available
     options" ([NN/g glossary](https://www.nngroup.com/articles/ui-elements-glossary/); [Tabs, Used
     Right](https://www.nngroup.com/articles/tabs-used-right/));
@@ -945,7 +947,7 @@ What the build changed from the plan above, each for a reason found while buildi
     in a horizontal row" ([NN/g glossary](https://www.nngroup.com/articles/ui-elements-glossary/)): one
     outlined row, the selected segment filled and bold, two to five short text segments, not stretched
     across a wide screen ([Material 3, segmented buttons](https://m3.material.io/components/segmented-buttons/guidelines),
-    which the expressive update calls a connected button group);
+    which the expressive update replaces with the connected button group);
   - running the what-if (filled), recomputing (secondary) and closing a person's detail are buttons — a
     button "will execute a certain action" ([NN/g glossary](https://www.nngroup.com/articles/ui-elements-glossary/));
     the close is a text button, which Material 3 keeps for the lowest-priority actions and never

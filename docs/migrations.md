@@ -2680,7 +2680,7 @@ AI 讀 `wui` skill 時會看到「這個 item 能讓頁面問的 subagent」清�
   `kubectl -n <ns> set env deployment/rca-worker-blob-gc deployment/rca-worker-chat-video --from=secret/<來源的 secret>`）。為什麼：
   沒有它們，建構就失敗。漏了的症狀：這兩種 worker 起不來（CrashLoopBackOff）。
 - **API pod 的記憶體上限**（**接上資料來源前**）：superuser 每打開一個期間，API pod 就多佔一份分析——約 4 bytes ×
-  時段數（28 天約 8,352）× 每條線花到的人數加總，加上每讀一列約 50–65 bytes，再加每條線每個 App、每種用途 8 bytes ×
+  時段數（28 天約 8,352）× 每條線花到的人數加總，加上每讀一列約 45–60 bytes，再加每條線每個 App、每種用途 8 bytes ×
   時段數；1,000 人、每人平均在 8 條線約
   270 MB，再加讀到的列（`max_rows` 的 500 萬列約 300 MB）；最多三個期間同時留著；算的時候分析自己的暫存再多約
   一到兩成，來源若把整個查詢結果做成 list 回傳還要加上那一份（細節見 [capacity.md §6](capacity.md)）。repo 附的 `kubernetes/base/deployment.yaml` 給 `rca-app` 的 `resources.limits.memory`
