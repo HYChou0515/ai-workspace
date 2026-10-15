@@ -242,6 +242,19 @@ function useDraft(client: Client, data: PageData) {
     [baseline],
   );
   const saved = useMemo(() => pretty(effectiveOf(defaults as Patch, draft)), [defaults, draft]);
+  // A draft as the text it opens as reads back: a value it holds that equals
+  // its default drops out (review 19: config.yaml later took the page's value,
+  // or a rollback brought back a patch made under other defaults). Unsaved
+  // edits are measured against THIS, what the editor opened with — against the
+  // raw draft the page opened "unsaved" and Discard could not clear it.
+  const openedAs = useCallback(
+    (p: Patch): Patch => {
+      const read = readDraft(pretty(effectiveOf(defaults as Patch, p)));
+      return read.ok ? read.patch : p;
+    },
+    [defaults, readDraft],
+  );
+  const opened = useMemo(() => openedAs(draft), [openedAs, draft]);
   // Unsaved edits outlive the page for this browser session: the router here
   // cannot hold a navigation back to ask, so leaving and coming back gives
   // them back instead — NN/g's undo in place of a confirmation (final review 9).
@@ -272,11 +285,12 @@ function useDraft(client: Client, data: PageData) {
     const was = previous.current;
     previous.current = draft;
     const now = readDraft(textNow.current);
+    const [wasOpened, isOpened] = [openedAs(was), openedAs(draft)];
     // Saying what the last saved draft said, or what the new one says (a fragment
     // just saved — demo 2026-10-13): either way nothing unsaved is in the text,
     // and the editor shows the whole settings again (M23).
-    if (now.ok && (samePatch(now.patch, was) || samePatch(now.patch, draft))) setText(saved);
-    if (now.ok && (samePatch(now.patch, was) || samePatch(now.patch, draft))) {
+    if (now.ok && (samePatch(now.patch, wasOpened) || samePatch(now.patch, isOpened))) setText(saved);
+    if (now.ok && (samePatch(now.patch, wasOpened) || samePatch(now.patch, isOpened))) {
       base.current = draft;
       told.current = false;
     }
@@ -297,7 +311,7 @@ function useDraft(client: Client, data: PageData) {
   });
   // By shape, never by text (review r2: the same content in other spacing
   // stayed "unsaved" for good) — and lists in order (`samePatch`, review 18).
-  const dirty = !parsed.ok || !samePatch(parsed.patch, draft);
+  const dirty = !parsed.ok || !samePatch(parsed.patch, opened);
   const checking = text !== checkedText || check.isFetching;
 
   const save = useMutation({
@@ -613,8 +627,8 @@ function EditTab({
         {/* Bounded by the window and scrolled inside: since M23 it holds the
             whole settings (~1000 lines), and grown to fit them it put Save and
             Apply 18,000 px down (review 17; NN/g "Scrolling and Attention" —
-            what sits far below the fold is barely seen). Half the window keeps
-            Save and Apply on screen at 390 px too, under the taller header. */}
+            what sits far below the fold is barely seen). Save and Apply under it
+            are sticky, so they stay on screen whatever the header's height. */}
         <div data-testid="model-settings-editor-box" style={{ height: "50vh", minHeight: 240 }}>
           <MonacoEditor
             ariaLabel={t("modelSettings.editor")}
@@ -671,7 +685,25 @@ function EditTab({
             </p>
           )}
         </div>
-        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+        {/* Sticky at the bottom of the view: the editor box takes a share of the
+            window, and what sits above it is taller in one language than in
+            another (review 19: at 390 px in English Save was off screen) — the
+            page's only commit actions stay in view whatever is above them
+            (NN/g "Scrolling and Attention"). */}
+        <div
+          data-testid="model-settings-actions"
+          style={{
+            display: "flex",
+            gap: 8,
+            alignItems: "center",
+            flexWrap: "wrap",
+            position: "sticky",
+            bottom: 0,
+            zIndex: 1,
+            padding: "8px 0",
+            background: "var(--paper)",
+          }}
+        >
           <button
             type="button"
             className="btn"
@@ -1377,7 +1409,10 @@ function EnvSecretForm({
       style={{ display: "grid", gap: 8 }}
     >
       <h3 style={{ ...H2, fontSize: pxToRem(14) }}>{t("modelSettings.envTitle")}</h3>
-      <div style={{ display: "flex", gap: 8, alignItems: "flex-end", flexWrap: "wrap" }}>
+      {/* Top-aligned: the name field carries a hint line under it, and bottom-
+          aligned it rose above the others (review 19; Material 3 Text fields —
+          supporting text sits under a field aligned with its neighbours). */}
+      <div style={{ display: "flex", gap: 8, alignItems: "flex-start", flexWrap: "wrap" }}>
         <label style={{ display: "grid", gap: 4, flex: "1 1 10rem", minWidth: 0 }}>
           <span style={LABEL}>{t("modelSettings.envPreset")}</span>
           <select className="input" value={preset} onChange={(e) => setPreset(e.target.value)}>
@@ -1428,9 +1463,15 @@ function EnvSecretForm({
             style={MONO}
           />
         </label>
-        <button type="submit" className="btn" data-variant="secondary" disabled={!ready}>
-          {t("modelSettings.envAdd")}
-        </button>
+        {/* A label-high spacer puts the button level with the fields. */}
+        <div style={{ display: "grid", gap: 4 }}>
+          <span aria-hidden style={{ ...LABEL, visibility: "hidden" }}>
+            {t("modelSettings.envAdd")}
+          </span>
+          <button type="submit" className="btn" data-variant="secondary" disabled={!ready}>
+            {t("modelSettings.envAdd")}
+          </button>
+        </div>
       </div>
       {refused.length > 0 && (
         <p

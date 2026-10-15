@@ -1313,6 +1313,23 @@ describe("ModelSettingsPage", () => {
 
     expect(editor().dataset.autoHeight).toBe("false");
     expect(screen.getByTestId("model-settings-editor-box").style.height).toMatch(/vh/);
+    // review 19: a share of the window still left them under the fold at 390 px
+    // in English (a longer intro); kept in view whatever is above them.
+    expect(screen.getByTestId("model-settings-actions")).toHaveStyle({ position: "sticky", bottom: "0px" });
+  });
+
+  it("opens clean when the saved draft holds a value the defaults now hold too", async () => {
+    // review 19: config.yaml later took the page's value (or a rollback brought
+    // back a patch made under other defaults). The text read back drops a value
+    // equal to its default, so it never equalled the raw draft: the page opened
+    // "unsaved", asked before leaving, and Discard could not clear it.
+    const same = { config: { agents: { presets: { "kb-default": { model: "ollama_chat/qwen3:14b" } } } } };
+    renderWithQuery(<ModelSettingsPage client={fakeClient({ draft: same })} />);
+    await screen.findByRole("textbox", { name: "設定（YAML）" });
+
+    expect(screen.getByRole("tab", { name: "編輯" })).toBeInTheDocument();
+    expect(screen.getByTestId("model-settings-save")).toBeDisabled();
+    expect(screen.getByTestId("model-settings-discard")).toBeDisabled();
   });
 
   it("offers to save a reordered list — order is what a fallback chain means", async () => {
