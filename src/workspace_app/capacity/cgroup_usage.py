@@ -5,7 +5,8 @@
 readings into `sandbox` rows — CPU seconds, memory × seconds, throttling,
 pressure, OOM kills — splitting each interval across the windows it spans, so
 a window's row describes that window and no other. One `sandbox_host` row per
-window carries the host's own pressure and how many sandboxes were alive.
+window carries the host's own pressure and the sandbox-seconds alive in it
+(how many sandboxes, times how long).
 
 Throttling and pressure answer different questions (E15): throttled time is a
 sandbox held at its OWN `cpu.max`; pressure is time it waited for a CPU the

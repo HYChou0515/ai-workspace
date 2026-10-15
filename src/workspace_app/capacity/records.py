@@ -1,9 +1,11 @@
 """The record kinds (docs/plan-capacity-usage.md §5.2).
 
-Every number in a windowed kind (`work`, `sandbox`, `sandbox_host`) is
-additive — counts, seconds, byte-seconds — so the one aggregation ES has to do
-is a sum (`mem_max` is the exception, aggregated with max). Event kinds
-(`turn`, `job`) are one record per occurrence; `disk` is a snapshot.
+Every measured number in a windowed kind (`work`, `sandbox`, `sandbox_host`)
+is additive — counts, seconds, byte-seconds — so the one aggregation ES has to
+do is a sum. The exceptions describe rather than measure: `mem_max` (taken
+with max), and `cpu_limit`, `mem_limit` and `window_s` (settings, never
+summed). Event kinds (`turn`, `job`) are one record per occurrence; `disk` is
+a snapshot.
 """
 
 from __future__ import annotations

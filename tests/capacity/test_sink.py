@@ -91,3 +91,31 @@ def test_a_sink_that_raises_loses_that_batch_and_keeps_writing():
     writer.close(timeout_s=5)
 
     assert [d["usage"]["count"] for d in sink.docs] == [2]
+
+
+def test_closing_takes_no_longer_than_its_bound_even_when_room_comes_late():
+    """The bound is the whole close: room in the queue arriving just before it
+    ends must not buy the join a second bound (shutdown counts on it)."""
+    first, stuck = threading.Event(), threading.Event()
+    calls: list[int] = []
+
+    class _Slow(UsageSink):
+        def write(self, documents):
+            calls.append(len(documents))
+            (first if len(calls) == 1 else stuck).wait(10)
+
+    writer = UsageWriter(_Slow(), queue_max=1)
+    writer.put(_doc(1))
+    deadline = time.monotonic() + 2
+    while not calls and time.monotonic() < deadline:  # the thread holds the first record
+        time.sleep(0.01)
+    writer.put(_doc(2))  # the queue is full now
+    threading.Timer(0.45, first.set).start()  # room comes just before the bound
+    try:
+        started = time.monotonic()
+        writer.close(timeout_s=0.6)
+        elapsed = time.monotonic() - started
+    finally:
+        stuck.set()
+
+    assert elapsed < 0.85

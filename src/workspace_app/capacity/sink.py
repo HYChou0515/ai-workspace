@@ -91,12 +91,14 @@ class UsageWriter:
 
     def close(self, *, timeout_s: float) -> None:
         """Deliver what is queued, then stop. Bounded: a stuck sink cannot hold
-        a shutdown longer than `timeout_s` (the thread is a daemon)."""
+        a shutdown longer than `timeout_s` all told — waiting for room in the
+        queue and for the thread share it (the thread is a daemon)."""
+        deadline = time.monotonic() + timeout_s
         try:
             self._queue.put(None, timeout=timeout_s)
         except queue.Full:
             return
-        self._thread.join(timeout_s)
+        self._thread.join(max(0.0, deadline - time.monotonic()))
 
     def _run(self) -> None:
         while True:
