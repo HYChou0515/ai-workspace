@@ -31,6 +31,7 @@ import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { posix } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { load as parseYaml } from "js-yaml";
 import ts from "typescript";
 import { describe, expect, it } from "vitest";
 
@@ -296,18 +297,22 @@ describe("view-plugins/*/web/src import boundary", () => {
 //   2. every other module reaches it only with `import()` or `import type` — a
 //      static value import would pull it into whatever chunk that module is in,
 //      the entry chunk included;
-//   3. web/'s ECharts is the chart plugin's (one range, D15);
+//   3. web/'s ECharts is the chart plugin's (one range, D15), and no package in
+//      web/'s lockfile depends on ECharts or zrender but ECharts itself — a
+//      wrapper (echarts-for-react) imported anywhere would bring it in under
+//      another name;
 //   4. no SPA module imports a runtime plugin's files (a relative path into
 //      `view-plugins/` would compile the plugin — and its ECharts — into the SPA).
 //
 // All read without a build: the imports come off the same AST scan as the rules
-// above, the ranges off the two package.json files.
+// above, the ranges off the two package.json files, the closure off the lockfile.
 
 const WEB_SRC = fileURLToPath(new URL("../", import.meta.url));
 const WEB_PACKAGE = fileURLToPath(new URL("../../package.json", import.meta.url));
 const CHART_PACKAGE = fileURLToPath(
   new URL("../../../view-plugins/chart/web/package.json", import.meta.url),
 );
+const WEB_LOCK = fileURLToPath(new URL("../../pnpm-lock.yaml", import.meta.url));
 /** The one SPA module that may import ECharts (D15). */
 export const ECHARTS_DOOR = "capacity/echarts.ts";
 
@@ -325,23 +330,17 @@ export function spaReachesAPlugin(fileRel: string, spec: string): boolean {
 
 /** The specifiers a module imports statically AS VALUES — what a bundler pulls
  * into the module's own chunk. `import type`, `export type` and `import()` are
- * left out: the first two are erased, the third is a chunk of its own. */
+ * left out: the first two are erased, the third is a chunk of its own. An
+ * import whose names are each marked `type` is NOT erased here: under
+ * `verbatimModuleSyntax` (tsconfig.json) it compiles to `import {} from …`,
+ * which still runs the module and pulls it into the chunk. */
 export function staticValueImports(text: string, fileName = "probe.tsx"): string[] {
   const kind = fileName.endsWith(".tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS;
   const src = ts.createSourceFile(fileName, text, ts.ScriptTarget.Latest, true, kind);
   const out: string[] = [];
   for (const node of src.statements) {
     if (ts.isImportDeclaration(node) && ts.isStringLiteralLike(node.moduleSpecifier)) {
-      const clause = node.importClause;
-      const typeOnly =
-        clause !== undefined &&
-        (clause.isTypeOnly ||
-          (clause.name === undefined &&
-            clause.namedBindings !== undefined &&
-            ts.isNamedImports(clause.namedBindings) &&
-            clause.namedBindings.elements.length > 0 &&
-            clause.namedBindings.elements.every((e) => e.isTypeOnly)));
-      if (!typeOnly) out.push(node.moduleSpecifier.text);
+      if (!node.importClause?.isTypeOnly) out.push(node.moduleSpecifier.text);
     }
     if (
       ts.isExportDeclaration(node) &&
@@ -355,11 +354,30 @@ export function staticValueImports(text: string, fileName = "probe.tsx"): string
   return out;
 }
 
-/** Does `spec`, written in `web/src/<fileRel>`, name the ECharts door? */
+/** Does `spec`, written in `web/src/<fileRel>`, name the ECharts door? The
+ * `.js` spelling of a `.ts` module resolves to it too. */
 export function namesTheDoor(fileRel: string, spec: string): boolean {
   if (!spec.startsWith(".")) return false;
-  const resolved = posix.normalize(posix.join(posix.dirname(fileRel), spec));
+  const resolved = posix.normalize(posix.join(posix.dirname(fileRel), spec)).replace(/\.js$/, ".ts");
   return resolved === ECHARTS_DOOR || `${resolved}.ts` === ECHARTS_DOOR;
+}
+
+const CHART_LIBRARIES = new Set(["echarts", "zrender"]);
+
+/** The packages in a pnpm lockfile, other than ECharts itself, that depend on
+ * ECharts or zrender: a wrapper that brings the library in under its own name. */
+export function wrapsAChartLibrary(lock: { snapshots?: object; packages?: object }): string[] {
+  const entries = { ...(lock.packages ?? {}), ...(lock.snapshots ?? {}) } as Record<
+    string,
+    { dependencies?: Record<string, string>; optionalDependencies?: Record<string, string> } | null
+  >;
+  return Object.entries(entries)
+    .filter(([name]) => !/^\/?(echarts|zrender)@/.test(name))
+    .filter(([, entry]) =>
+      Object.keys({ ...entry?.dependencies, ...entry?.optionalDependencies }).some((d) => CHART_LIBRARIES.has(d)),
+    )
+    .map(([name]) => name)
+    .sort();
 }
 
 describe("spaReachesAPlugin()", () => {
@@ -388,9 +406,35 @@ describe("staticValueImports() — what lands in a module's own chunk", () => {
   });
   it("leaves out what is erased or loaded on demand", () => {
     expect(staticValueImports('import type { ECharts } from "./echarts";')).toEqual([]);
-    expect(staticValueImports('import { type ECharts } from "./echarts";')).toEqual([]);
     expect(staticValueImports('export type { ECharts } from "./echarts";')).toEqual([]);
     expect(staticValueImports('const m = await import("./echarts");')).toEqual([]);
+  });
+  it("keeps an import whose names are each `type`: verbatimModuleSyntax runs the module", () => {
+    expect(staticValueImports('import { type ECharts } from "./echarts";')).toEqual(["./echarts"]);
+  });
+});
+
+describe("namesTheDoor()", () => {
+  it("knows the door by any spelling", () => {
+    expect(namesTheDoor("capacity/Chart.tsx", "./echarts")).toBe(true);
+    expect(namesTheDoor("capacity/Chart.tsx", "./echarts.ts")).toBe(true);
+    expect(namesTheDoor("capacity/Chart.tsx", "./echarts.js")).toBe(true);
+    expect(namesTheDoor("capacity/views/Overview.tsx", "../echarts")).toBe(true);
+    expect(namesTheDoor("capacity/Chart.tsx", "./echartsish")).toBe(false);
+  });
+});
+
+describe("wrapsAChartLibrary()", () => {
+  it("finds a package that brings ECharts in under its own name", () => {
+    const lock = {
+      snapshots: {
+        "echarts@5.6.0": { dependencies: { zrender: "5.6.1", tslib: "2.3.0" } },
+        "echarts-for-react@3.0.2(echarts@5.6.0)": { dependencies: { echarts: "5.6.0" } },
+        "react@19.0.0": {},
+      },
+    };
+
+    expect(wrapsAChartLibrary(lock)).toEqual(["echarts-for-react@3.0.2(echarts@5.6.0)"]);
   });
 });
 
@@ -402,7 +446,16 @@ describe("the SPA keeps ECharts out of its entry chunk", () => {
     expect(web.dependencies.echarts).toBe(chart.dependencies.echarts);
   });
 
-const WHOLE_SPA_WALK_MS = 60_000;
+  it("depends on ECharts directly, never through a wrapper", () => {
+    const lock = parseYaml(readFileSync(WEB_LOCK, "utf-8")) as { packages?: object; snapshots?: object };
+    expect(Object.keys(lock.snapshots ?? {}).length).toBeGreaterThan(100); // the lockfile was read
+    expect(wrapsAChartLibrary(lock)).toEqual([]);
+  });
+
+  // Reads every SPA source file: ~0.9 s alone, but CI runs 500+ test files in
+  // parallel and it took 7.8 s there against vitest's 5 s default (run
+  // 36237282547). The cap is a hang guard, not a speed claim.
+  const WHOLE_SPA_WALK_MS = 60_000;
   it("imports no runtime plugin's files, and ECharts only at its door, from any SPA module", () => {
     const files = sourceFiles(WEB_SRC);
     expect(files).toContain("main.tsx"); // the walk reached the entry
