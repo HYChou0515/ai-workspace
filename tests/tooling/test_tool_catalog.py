@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+from collections.abc import Sequence
 from typing import Any
 
 import pytest
@@ -185,9 +186,11 @@ async def test_calling_a_catalog_tool_loads_it_and_answers_with_the_real_schema(
     """The model calling an unloaded command is EXPECTED, not a misuse — the
     catalog handed it the name. So the entry's answer is the schema plus "call
     it again", never a refusal (#537: a refusal reads as "stop trying")."""
-    loaded: list[object] = []
+    loaded: list[tuple[object, Sequence[str], str]] = []
     (fetch, _) = build_catalog_tools(
-        [_pkg()], allowed=None, mark_loaded=lambda ctx, name: loaded.append((ctx, name))
+        [_pkg()],
+        allowed=None,
+        mark_loaded=lambda ctx, names, answer: loaded.append((ctx, names, answer)),
     )
     # The real `ToolContext` the SDK hands a tool, so the handler reads
     # `.context` exactly the way it does in production.
@@ -202,10 +205,13 @@ async def test_calling_a_catalog_tool_loads_it_and_answers_with_the_real_schema(
 
     reply = await fetch.on_invoke_tool(tctx, '{"lot": "guessed"}')
 
-    # The callback is handed the whole `ToolContext`, not just `.context`: the
-    # caller also needs the call id, to keep this call's answer (a schema) out
-    # of the stored thread (`docs/plan-tool-on-demand-loading.md`).
-    assert loaded == [(tctx, ["data-fetch"])]
+    # The callback is handed the whole `ToolContext` (the caller needs the call
+    # id), the batch of names, and the exact text the call answered with — the
+    # answer is what identifies that output later (round 3 R1).
+    got_ctx, got_names, got_answer = loaded[0]
+    assert got_ctx is tctx
+    assert got_names == ["data-fetch"]
+    assert got_answer == reply
     # The full description — the catalog line was only the first sentence.
     assert describe_command(_pkg(), _pkg().commands[0]) in reply
     # The real schema, verbatim enough that the model can satisfy it.
@@ -235,7 +241,9 @@ async def test_load_tool_can_only_reach_what_the_executable_builder_grants():
         load = build_load_tool(
             pkgs,
             allowed=allowed,
-            mark_loaded=lambda tctx, names: tctx.context.note_catalog_hit("c", names),
+            mark_loaded=lambda tctx, names, answer: tctx.context.note_catalog_hit(
+                "c", names, answer
+            ),
         )
         # Ask for EVERY command of every package, granted or not.
         every = [
@@ -518,7 +526,7 @@ async def test_load_tool_cannot_open_a_command_a_builtin_shadows():
     load = build_load_tool(
         [pkg],
         allowed=None,
-        mark_loaded=lambda tctx, names: tctx.context.note_catalog_hit("c", names),
+        mark_loaded=lambda tctx, names, answer: tctx.context.note_catalog_hit("c", names, answer),
         shadowed={"read_file"},
     )
 
@@ -574,7 +582,7 @@ async def test_the_already_full_notice_names_a_command_once():
     load = build_load_tool(
         [pkg],
         allowed=None,
-        mark_loaded=lambda tctx, names: tctx.context.note_catalog_hit("c", names),
+        mark_loaded=lambda tctx, names, answer: tctx.context.note_catalog_hit("c", names, answer),
     )
 
     reply = await load.on_invoke_tool(
@@ -603,7 +611,7 @@ async def test_one_oversized_command_still_loads_because_nothing_else_can_use_it
     load = build_load_tool(
         [pkg],
         allowed=None,
-        mark_loaded=lambda tctx, names: tctx.context.note_catalog_hit("c", names),
+        mark_loaded=lambda tctx, names, answer: tctx.context.note_catalog_hit("c", names, answer),
     )
 
     reply = await load.on_invoke_tool(_tool_ctx(ctx, "load_tool"), '{"names": ["huge"]}')

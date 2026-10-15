@@ -624,10 +624,14 @@ def _agent_for(
 
         from ..tooling.registry import build_catalog_tools, build_load_tool
 
-        def _mark_loaded(tool_ctx: ToolContext[AgentToolContext], names: Sequence[str]) -> None:
+        def _mark_loaded(
+            tool_ctx: ToolContext[AgentToolContext], names: Sequence[str], answer: str
+        ) -> None:
             # One call = one hit, whatever it resolved: the queue counts the
             # OUTPUTS to keep out of the thread, not the commands (round 3 D4).
-            tool_ctx.context.note_catalog_hit(tool_ctx.tool_call_id, names)
+            # The answer goes with it so the hit is matched by what it SAID,
+            # not only by an id a provider may reuse (round 3 R1).
+            tool_ctx.context.note_catalog_hit(tool_ctx.tool_call_id, names, answer)
 
         tools.append(
             build_load_tool(
@@ -1252,7 +1256,7 @@ def _map_event(event: Any, ctx: AgentToolContext | None = None) -> AgentEvent | 
         # left the second one unrecognised and its raw schema went into the
         # thread (round 3 D4). The id then goes into `ephemeral_outputs` so the
         # reducer drops THIS message and no other.
-        loaded = ctx.take_catalog_hit(call_id) if ctx is not None else None
+        loaded = ctx.take_catalog_hit(call_id, out_text) if ctx is not None else None
         if loaded and ctx is not None:
             out_text = "載入 " + "、".join(f"`{n}`" for n in loaded) + " 的用法"
             ctx.ephemeral_outputs.append(call_id)

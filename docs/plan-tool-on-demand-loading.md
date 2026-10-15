@@ -100,8 +100,9 @@ token）。留進歷史就等於把省下的塞回去，走幾輪回到原點；
 
 連帶兩件：
 
-- **工具使用統計**（plan-tool-usage-stats）要把它記成「載入」而不是「呼叫失敗」，否則
-  看起來像模型一直叫錯工具。
+- **工具使用統計**（plan-tool-usage-stats）不把目錄命中計入：它不是工具在做事，計進去會讓
+  每個 command 多一次呼叫、平均時間也歪。意圖是「別讓它看起來像呼叫失敗」——不計入就滿足了
+  （第三輪 N2 更正：原本寫「記成『載入』」，實作是不計，真要有那個指標是另一張票）。
 - **聊天 UI 不為它畫工具卡**，最多一行「載入 `<command>` 的用法」，schema 不進卡片。
 
 ### 上界 —— 不需要，故沒做（P2）
@@ -300,3 +301,22 @@ P8 的 F2 修法**換掉了機制**（新的兩跳：`_map_event` 取紀錄、re
 **鏡頭確認為真**：F3 的刪除是對的（三個版本的 `_first_sentence` 用 AST 取出來做 4,569 筆差分，**沒有一筆比 `ce3c70cc` 更差**；`sample-tools` 的 8 個真描述三個版本完全相同）；一輪只有一個 reducer（`stream()` 在 production 沒有呼叫者）；沒有「已 map 但未送達」的序列（`done` 哨兵在 `finally`、重試在上一輪事件都過了 reducer 之後才重入）；ctx 每輪新建，三個 `dataclasses.replace` 的拷貝點都處理過；`load_tool` 一次載 N 個只有一個 `remove`（正確）；被壓掉的訊息不會錯開 `[n]` 引用配對（per-name cursor）；`_finish_claim` 在 `if produced:` 之外，所以全被壓掉的一輪不會留下孤兒 claim。
 
 **留著的已知限制**（寫在這裡，不是漏掉）：`_TurnReducer` 現在會**改動** ctx 的 list，所以它不再是輸入的純讀者——同一個 ctx 上跑兩個 reducer 會靜默吃掉一則真訊息。production 只有一個（`_drain_and_persist` 收到的是同一個物件），但這條界線要寫明。
+
+### 回歸鏡頭（同一輪）：既有路徑零回歸，但新機制有一條順序相依的縫
+
+**零回歸**（before/after 逐項 byte-identical）：存下來的 thread（7 種情境，含 `ToolLog`、
+`#62` display、error 收尾、取消、沒有 `ToolStart` 的 `ToolEnd`、兩個真工具共用 call id）、
+KB chat（6 種，含真的 `[1]` → `Citation`）、SSE 的 14 種事件形狀、內建工具集（6 種設定）、
+replay 的 `tools` payload（`allowed_tools=[]` 連 messages 都一樣）、tool usage 的真呼叫計數、
+`ctx.tool_outputs`。兩邊完整套件 4030 → 4096 綠，**沒有任何測試在 before 綠而在 after 紅**。
+
+| # | 發現 | 修法 | 怎麼證明 |
+|---|---|---|---|
+| **R1** | **同一個 call id 下，真工具的輸出先到時，它會被當成目錄那一次改寫並丟棄，而目錄自己的 schema 被存進記錄**——P9 的 hit 佇列只用 id 比對，所以是「誰先到誰被壓」。我自己對 P9 跑探針確認過：`real rewritten = True / schema survives = True` | hit 連**它回答的那段文字**一起記，比對時比文字。那不是在嗅樣式，是比對「這一輪自己產生的值」的身分，所以與到達順序無關 | 參數化測試跑兩種順序：真輸出都要留著、兩個輸出都不得帶 schema。四個突變（改回只比 id／mapper 不傳輸出／stub 不記答案／`load_tool` 不記答案）各自要紅 |
+| **R2** | 一輪能用的不同套件 command 從 ~9 掉到 ~4（`runner.max_turns` 預設 10） | 已在 runbook 寫明並指出旋鈕 | 文件 |
+| **N2** | 目錄命中在使用統計裡**完全不計**，而計畫寫的是「記成『載入』」 | 計畫的字面改成實際行為：不計入（意圖是「別讓它看起來像呼叫失敗」，不計入就滿足了；真要有「載入」這個指標是另一張票） | 文件 |
+
+**留著的已知限制**（補充 D5）：`_map_event` 仍然是先比 call id 再比文字，所以一個**沒有 call id**
+的目錄輸出只能靠 `""` 這個 key 命中；若同一輪還有另一個沒有 id 的真輸出、而且文字恰好相同，
+會被誤壓。兩個條件要同時成立才會發生，而代價（記錄裡的 schema 被 replay 進之後每一輪）比
+誤壓一則重複文字的訊息大。

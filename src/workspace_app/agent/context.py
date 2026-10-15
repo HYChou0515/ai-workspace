@@ -254,9 +254,11 @@ class AgentToolContext:
     # installed into it from prebuilt_dir; the runner also exposes their
     # commands as function tools. Set by the API layer from create_app config.
     packages: list[PackageInfo] = field(default_factory=list)
-    catalog_calls: dict[str, list[list[str]]] = field(default_factory=dict)
-    """Tool calls THIS turn that the catalog answered, `{call_id: [[name, …], …]}`
-    — a QUEUE of hits per call id, one entry per call the catalog answered.
+    catalog_calls: dict[str, list[tuple[list[str], str]]] = field(default_factory=dict)
+    """Tool calls THIS turn that the catalog answered,
+    `{call_id: [([name, …], the answer it gave), …]}` — a QUEUE of hits per
+    call id, one entry per call the catalog answered, each carrying the exact
+    text it answered with.
 
     The answer to such a call is a parameter schema — the fattest thing in the
     design. The model needs it (the SDK's own run history carries it to the
@@ -280,6 +282,14 @@ class AgentToolContext:
     for a provider that sends none, and suppressing that output matters more
     than the risk of suppressing an adjacent real one — a schema in the record
     is replayed into every later turn (round 3 D5).
+
+    The ANSWER is stored with it, and matched exactly, because the call id
+    alone cannot say WHICH output is the catalog's when one id covers several
+    calls: a step holding a real call and a catalog hit under one id had the
+    real output rewritten (and dropped) while the catalog's own schema was
+    stored — the one thing this mechanism exists to prevent (round 3 R1). The
+    text is not a pattern being sniffed; it is the identity of a value this
+    turn produced, so the match is order-independent.
     """
     ephemeral_outputs: list[str] = field(default_factory=list)
     """Tool outputs the catalog answered and `_map_event` has already rewritten
@@ -765,9 +775,10 @@ class AgentToolContext:
             self._speaker_groups = groups_of(self.spec, self.acting_user)
         return self._speaker_groups
 
-    def note_catalog_hit(self, call_id: str, names: Sequence[str]) -> None:
+    def note_catalog_hit(self, call_id: str, names: Sequence[str], answer: str = "") -> None:
         """One call the catalog answered: mark its commands loaded, and queue
-        the hit so `_map_event` can keep that one output out of the thread.
+        the hit — with the exact text it answered with — so `_map_event` can
+        keep that one output out of the thread.
 
         `names` is the whole batch of one call (a `load_tool` naming several
         commands is one hit), so the queue length is the number of OUTPUTS to
@@ -775,22 +786,32 @@ class AgentToolContext:
         for name in names:
             self.mark_tool_loaded(name)
         self.catalog_calls.setdefault(call_id, []).append(
-            list(dict.fromkeys(names))  # the names go into a sentence a person reads
+            (list(dict.fromkeys(names)), answer)  # the names go into a sentence a person reads
         )
 
-    def take_catalog_hit(self, call_id: str) -> list[str] | None:
-        """The next queued hit for `call_id`, consumed. `None` when this output
-        is not one the catalog answered."""
+    def take_catalog_hit(self, call_id: str, output: str) -> list[str] | None:
+        """The queued hit this output IS, consumed. `None` when the output is
+        not one the catalog answered.
+
+        Matched on the answer, not just the id: one id can cover several calls
+        in a step, and matching by id alone dropped a real tool's output and
+        stored the catalog's schema in its place (round 3 R1). A hit queued
+        without an answer (a caller that did not record one) still matches by
+        id, so older callers keep working."""
         hits = self.catalog_calls.get(call_id)
         if not hits:
             return None
-        names = hits.pop(0)
-        if not hits:
-            self.catalog_calls.pop(call_id, None)
-        return names
+        for i, (names, answer) in enumerate(hits):
+            if answer and answer != output:
+                continue
+            hits.pop(i)
+            if not hits:
+                self.catalog_calls.pop(call_id, None)
+            return names
+        return None
 
     def mark_tool_loaded(self, name: str, *, call_id: str = "") -> None:
-        """This turn may now be served `name`'s real schema. Idempotent: a model
+        r"""This turn may now be served `name`'s real schema. Idempotent: a model
         can emit two calls to one unloaded command in a single step.
 
         `call_id` records WHICH call did the loading, so its answer (a schema)

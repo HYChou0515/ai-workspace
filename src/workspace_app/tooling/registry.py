@@ -59,7 +59,7 @@ logger = logging.getLogger(__name__)
 #: `.tool_call_id`) could be renamed and `ty` stayed green — the review
 #: renamed both and measured it (round 1 C3, the
 #: `reference_kwargs_dict_loses_type_check` class).
-MarkLoaded = Callable[[ToolContext[AgentToolContext], Sequence[str]], None]
+MarkLoaded = Callable[[ToolContext[AgentToolContext], Sequence[str], str], None]
 
 
 @dataclass(frozen=True)
@@ -1145,10 +1145,6 @@ def build_load_tool(
                 done.add(model_name)
                 left -= len(said)
                 parts.append(said)
-        # ONE hit for the whole call, whatever it resolved: the queue counts
-        # outputs to suppress, not commands (round 3 D4).
-        if done:
-            mark_loaded(ctx, sorted(done))
         if skipped:
             parts.insert(
                 0,
@@ -1183,6 +1179,12 @@ def build_load_tool(
                 + f"\n\n[cut at {_LOAD_REPLY_MAX_CHARS} characters — ask for fewer tools "
                 "at a time to see the rest]"
             )
+        # ONE hit for the whole call, whatever it resolved: the queue counts the
+        # outputs to suppress, not the commands (round 3 D4). Recorded with the
+        # FINAL text, because that is the output `_map_event` matches against
+        # (round 3 R1).
+        if done:
+            mark_loaded(ctx, sorted(done), reply)
         return reply
 
     return FunctionTool(
@@ -1251,9 +1253,10 @@ def _stub_function_tool(
         # has not seen the schema yet. Marking first means a model that ignores
         # the instruction and calls a third time still progresses — the real
         # tool answers that one.
-        mark_loaded(ctx, [name])
+        said = load_reply(pkg, cmd)
+        mark_loaded(ctx, [name], said)
         logger.info("registry: catalog hit %s — loading its schema for this turn", name)
-        return load_reply(pkg, cmd)
+        return said
 
     return FunctionTool(
         name=name,

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from typing import Any
 
+import pytest
 from agents import RunContextWrapper
 
 from workspace_app.agent.context import AgentToolContext
@@ -367,14 +368,18 @@ async def test_one_call_loading_a_bundle_and_one_of_its_commands_says_each_name_
     ctx = AgentToolContext(investigation_id="i")
     load = (await _sent(agent, ctx))["load_tool"]
 
-    await load.on_invoke_tool(
+    said = await load.on_invoke_tool(
         _tool_ctx(ctx, "load_tool", call_id="c1"), '{"names": ["rca-tools", "data-fetch"]}'
     )
 
-    # ONE hit carrying both names — the queue counts outputs to suppress, not
-    # commands (round 3 D4).
-    assert ctx.catalog_calls["c1"] == [["data-fetch", "plot-trend"]]
-    event = _map_event(_output_event("c1", "…schema…"), ctx)
+    # ONE hit carrying both names, and the text it answered with — the queue
+    # counts outputs to suppress, not commands (round 3 D4), and the answer is
+    # what identifies the output later (round 3 R1).
+    ((names, answer),) = ctx.catalog_calls["c1"]
+    assert names == ["data-fetch", "plot-trend"]
+    assert "is now loaded" in answer
+    # The output IS what the handler returned, as it is in production.
+    event = _map_event(_output_event("c1", said), ctx)
     assert isinstance(event, ToolEnd)
     assert event.output.count("data-fetch") == 1
 
@@ -455,12 +460,16 @@ async def test_two_catalog_hits_sharing_a_call_id_are_both_kept_out_of_the_threa
     sent = await _sent(agent, ctx)
 
     # Two parallel calls in one step, same id: both handlers run before either
-    # output is emitted.
-    await sent["data-fetch"].on_invoke_tool(_tool_ctx(ctx, "data-fetch", call_id="c1"), "{}")
-    await sent["plot-trend"].on_invoke_tool(_tool_ctx(ctx, "plot-trend", call_id="c1"), "{}")
+    # output is emitted, and each output IS what its handler returned.
+    said_a = await sent["data-fetch"].on_invoke_tool(
+        _tool_ctx(ctx, "data-fetch", call_id="c1"), "{}"
+    )
+    said_b = await sent["plot-trend"].on_invoke_tool(
+        _tool_ctx(ctx, "plot-trend", call_id="c1"), "{}"
+    )
 
-    first = _map_event(_output_event("c1", '{"properties": {"lot": {}}}'), ctx)
-    second = _map_event(_output_event("c1", '{"properties": {"n": {}}}'), ctx)
+    first = _map_event(_output_event("c1", said_a), ctx)
+    second = _map_event(_output_event("c1", said_b), ctx)
 
     for event in (first, second):
         assert isinstance(event, ToolEnd)
@@ -514,9 +523,37 @@ async def test_a_catalog_hit_with_no_call_id_is_still_kept_out_of_the_thread():
     ctx = AgentToolContext(investigation_id="i")
     fetch = (await _sent(agent, ctx))["data-fetch"]
 
-    await fetch.on_invoke_tool(_tool_ctx(ctx, "data-fetch", call_id=""), "{}")
-    event = _map_event(_output_event("", '{"properties": {"lot": {}}}'), ctx)
+    said = await fetch.on_invoke_tool(_tool_ctx(ctx, "data-fetch", call_id=""), "{}")
+    event = _map_event(_output_event("", said), ctx)
 
     assert isinstance(event, ToolEnd)
     assert "properties" not in event.output
     assert ctx.ephemeral_outputs == [""]
+
+
+@pytest.mark.parametrize("catalog_first", [True, False])
+async def test_which_output_is_the_catalogs_does_not_depend_on_arrival_order(catalog_first):
+    """Matching the hit by call id alone made the ORDER decide: a step holding
+    a real call and a catalog hit under one id had the real tool's output
+    rewritten and dropped while the catalog's own schema was stored in its
+    place — the one thing this mechanism exists to prevent (round 3 R1).
+
+    The hit now carries the text it answered with, so it is matched by what it
+    SAID. A provider's `tool_call.id` is its own and may repeat; the answer is
+    a value this turn produced."""
+    agent = _agent()
+    ctx = AgentToolContext(investigation_id="i")
+    stub = (await _sent(agent, ctx))["plot-trend"]
+    # The catalog hit happens first in the STEP (both tools run before either
+    # output is emitted when the model calls them in parallel)…
+    schema = await stub.on_invoke_tool(_tool_ctx(ctx, "plot-trend", call_id="dup"), "{}")
+
+    # …and the outputs then arrive in whichever order the provider sends them.
+    texts = [schema, "lot A42: 3 steps"] if catalog_first else ["lot A42: 3 steps", schema]
+    mapped = [_map_event(_output_event("dup", t), ctx) for t in texts]
+    assert all(isinstance(m, ToolEnd) for m in mapped)
+    kept = [m.output for m in mapped if isinstance(m, ToolEnd)]
+
+    assert "lot A42: 3 steps" in kept, kept
+    assert all("properties" not in k for k in kept), kept
+    assert ctx.ephemeral_outputs == ["dup"]
