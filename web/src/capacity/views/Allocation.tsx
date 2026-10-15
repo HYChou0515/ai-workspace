@@ -3,9 +3,10 @@
  * each resource, where; one person's detail; how different people are.
  *
  * Fixed overhead is a toggle, as Kubecost and OpenCost draw it: its own row
- * (the default), spread by use, or spread evenly over the people active in the
- * last 30 days (§9.4) — the same whole three ways; each bar stacks a group's
- * own use and the overhead it carries. "Peak hours" is each line's busiest 5%
+ * (the default), spread by use, or spread evenly over today's N, the people
+ * active in the last 30 days (§9.4) — or over the people who used the line in
+ * the period, when they are more (a 90-day period) — the same whole three
+ * ways; each bar stacks a group's own use and the overhead it carries. "Peak hours" is each line's busiest 5%
  * of slots (E8): what machines are bought for.
  */
 import { useQuery } from "@tanstack/react-query";

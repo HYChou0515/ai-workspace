@@ -60,7 +60,7 @@ export function list(t: T, items: string[]): string {
   return items.join(t("capacity.sep.list"));
 }
 
-/** "API CPU", "沙盒 記憶體", "GPU qwen3", "背景工作（索引） CPU". */
+/** "API CPU", "沙盒 記憶體", "GPU qwen3", "背景工作（文件索引） CPU". */
 export function lineLabel(
   t: T,
   line: Pick<Line, "component" | "resource" | "model"> & { job?: string },

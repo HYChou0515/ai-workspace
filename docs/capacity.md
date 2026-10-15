@@ -81,7 +81,7 @@ PUT _index_template/workspace-usage
 一個人的請求會散在幾個 API pod 上，每個 pod 各寫自己的那一列。舉例（每個數字都是假設）：同時 40 人、
 每天 10 小時、每人每 5 分鐘碰 8 種路由、3 個 API pod，`work` 最多約 40 × 8 × 3 = 960 列／時段 × 120 個時段 =
 每天 115,200 列；100 個沙盒開 10 小時再多 12,000 列。上線之後，「總覽」的資料來源清單會寫分析實際讀到幾列
-（彙總後的列，不是原始紀錄數）。要更細的解析度，要一起降 `capacity.step_s`、`capacity.window_s` 和
+（① 是彙總後的列，加上 turn／job 的原始紀錄數）。要更細的解析度，要一起降 `capacity.step_s`、`capacity.window_s` 和
 `SANDBOX_HOST_USAGE_WINDOW_S`（例如都設 60；列數約多 5 倍）——解析度是 `step_s`，只降 `window_s` 沒有用。
 
 ## 2. sandbox-host 自己量沙盒
@@ -89,8 +89,9 @@ PUT _index_template/workspace-usage
 sandbox-host 每 `SANDBOX_HOST_USAGE_SAMPLE_S` 秒（預設 60；**設 `0` 就不取樣**）讀一次每個活著的沙盒的 cgroup
 （`cpu.stat`、`memory.current`、`memory.events`、`cpu.pressure`、`memory.pressure`、`cpu.max`、`memory.max`），
 每 `SANDBOX_HOST_USAGE_WINDOW_S` 秒（預設 300）寫一筆 `sandbox`，一樣是 stdout 的 JSON 行。窗口要整除 3600
-（設 0 起不來），而且要**整除 `capacity.step_s` 或是它的整數倍**（90 天期間的時段也一樣）——放不進時段的
-窗口，分析沒辦法放到對的時段，`capacity check` 會報錯。sandbox-host 是另一個服務：`capacity.record: false`
+（不整除的值，包括 0，起不來），而且要**整除 `capacity.step_s` 或是它的整數倍，90 天期間的時段（預設 900 秒）
+也一樣**——預設 `step_s: 300` 下 600、1200 不行。放不進時段的窗口，分析沒辦法放到對的時段，`capacity check`
+會報錯。sandbox-host 是另一個服務：`capacity.record: false`
 停不了它，要停就設 `SANDBOX_HOST_USAGE_SAMPLE_S=0`。
 
 沙盒屬於誰，是 app 在建立沙盒時告訴它的（`labels: {user, app}`，user 是 item 的擁有者，與額度扣在誰身上
@@ -100,7 +101,7 @@ sandbox-host 每 `SANDBOX_HOST_USAGE_SAMPLE_S` 秒（預設 60；**設 `0` 就�
 **節流（throttled）和壓力（pressure）回答的是不同問題**：節流是沙盒撞到**自己的** `cpu.max`（它的上限太低）；
 壓力是它在等 CPU。核心把節流的時間也算進沙盒自己的壓力，所以「變慢的門檻」(d) 看的是**壓力減掉節流**——
 等的是機器（要買機器）；節流另外畫成一組點（是上限太低）。核心沒開 PSI 的話，沙盒的紀錄沒有壓力欄位，
-(d) 會寫「量不到在等機器的時間」，`capacity check` 也會警告。
+(d) 會寫「這個核心沒有提供 CPU 壓力（PSI），看不到沙盒在等機器」，`capacity check` 也會警告。
 
 ## 3. LLM 呼叫帶上標籤
 
@@ -141,6 +142,8 @@ capacity:
 - 每個方法是**同步**的，平台在 worker thread 裡呼叫，可以直接用同步的 ES／HTTP／DB client。
 - 時間一律 epoch 毫秒；每個桶的 `t_ms` 是它的**開頭**，**對齊 `step_s * 1000` 的整數倍**。
 - 寫好之後跑 `uv run python -m workspace_app.capacity check --hours 24`（見 §5）。
+- 除了 API，**blob-gc 與 chat-video 兩種 worker 開機時也會建構這些 class**（它們組出 API 的整套 model 註冊）：
+  class 建構時要的 env 或憑證，這兩個 worker 的 Deployment 也要有，否則它們起不來。
 
 ### ① 平台用量紀錄（`UsageRecordSource`）
 
@@ -188,7 +191,9 @@ POST workspace-usage-*/_search
   machine_label)`——它總共能用多少、由幾台組成、多買一台是什麼（`"node 32 cores / 128 GiB"`）。
   背景工作是**每種 job type 一條線**（index、wiki、graph……各自的 Deployment 各自擴縮）：一個 worker pod 跑哪種
   job，是從它的 `work` 紀錄看出來的。要給某一種 job 自己的容量，加一筆 `component="worker:<jobtype>"`
-  （例如 `worker:graph`）；沒有的話，用 `worker` 那一筆，按這種 job 現在的 pod 數占 `machines` 的比例分。
+  （例如 `worker:graph`）；沒有的話，共用 `worker` 那一筆：在「任何 worker pod 回報的最後一個時段」，這種 job
+  的 pod 數占所有共用這一筆的 job 的 pod 數的比例——加起來剛好是那一筆；那個時段沒有 pod 的 job（縮到 0）
+  分不到。這種線的「幾台」是它分到的比例 × 那一筆的 `machines`，可以是小數（畫面寫到小數一位）。
 
 Prometheus 的寫法（`query_range`，`step=300s`）。**注意時間**：`rate(x[5m])` 在時間 t 算的是 (t−5m, t]，
 也就是「結束在 t 的那個桶」，但這裡的桶是用開頭標時間的——所以 `start`、`end` 都加一個 step 去查，
@@ -283,7 +288,7 @@ uv run python -m workspace_app.capacity check --hours 24 [--config config.yaml]
 | 沙盒的 CPU、記憶體 | 直接量：每個沙盒的 cgroup |
 | 磁碟 | 直接量：每個 item 的工作區、每個 collection 的文件 |
 | GPU | 直接量：這個人的請求在處理中的秒數（LiteLLM 的標籤） |
-| 資料庫的記憶體與磁碟、沙盒暫存、GPU 記憶體 | 不分到人（基本開銷）；資料庫磁碟另外給「每多一個人每月多多少」 |
+| 資料庫的記憶體與磁碟、沙盒暫存、GPU 記憶體 | 不分到人（基本開銷）；有容量的磁碟（資料庫、沙盒暫存、檔案儲存）另外給「每多一個人每月多多少」 |
 
 - **期間**：「最近 N 天」是今天以前 N 個完整的日子，加上今天到目前為止（依 `capacity.timezone` 的日界）。
 - 「N 個人」是最近 30 天用過至少一次的人。**開始記錄的頭 30 天**，這個數只算得到記錄以來出現過的人，會偏少，
@@ -291,10 +296,12 @@ uv run python -m workspace_app.capacity check --hours 24 [--config config.yaml]
 - **試算**從過去的工作日抽樣（沒設工作日曆時是週一到週五），只抽各來源都有資料的日子——開始記錄之前的日子不是
   「沒人用」：抽一天，留下那天的真實的人，再從選的那一群人裡抽到 N 人，看那一天的尖峰；抽 400 次，取 p50 與
   p95。最多看到現在人數的 20 倍，問更多時畫面會寫算的是幾人。
-- **還能撐幾人**：p95 的尖峰還在每一項的安全門檻（容量 × 門檻）以下的最多人數；看到 20 倍都還放得下時，寫
+- **還能撐幾人**：p95 的尖峰還在每一條會隨人數變的線的安全門檻（容量 × 門檻）以下的最多人數（不隨人數
+  變的線——資料庫記憶體、GPU 記憶體——和磁碟不算在內，磁碟看時程）；看到 20 倍都還放得下時，寫
   「N 人以上」，時程也不給下單日。
-- **時程**：最近 30 天用過的人數的直線趨勢，走到「還能撐幾人」的日子，附 80% 的範圍；下單日 = 範圍早的那一端
-  − 採購天數。
+- **時程**：最近 30 天用過的人數的直線趨勢，走到「還能撐幾人」的日子，附 80% 的預測範圍——看得越遠範圍越寬；
+  人數的起伏比成長大時，範圍慢的那一端永遠到不了，畫面會說最晚說不準。下單日 = 範圍早的那一端 − 採購天數；
+  已經過了的話，畫面說現在就該下單。
 - **安全門檻**是「變慢的門檻」量到的轉折點（GPU 是容量）；還沒量到時用預設值（CPU 70%、記憶體 80%、磁碟 80%），
   畫面會標明。
 - **回測**：用前面的日子預測最近 14 天每天的尖峰，平均誤差超過 20% 時，試算與時程標示「僅供參考」。每條拆分線
@@ -313,9 +320,15 @@ uv run python -m workspace_app.capacity check --hours 24 [--config config.yaml]
 | 可信度 | ①、② | 回測 21 天 |
 
 分析在 API pod 上按需計算：在 thread 裡算，不卡事件迴圈；同一時間只算一個期間；結果在記憶體留 10 分鐘就放掉，
-什麼都不寫；「重新計算」會丟掉它。記憶體跟讀到的列數成正比；90 天的期間用 15 分鐘以上的時段——格子越長，
-短暫的尖峰被平均得越多，所以 90 天的「還能撐幾人」會比 28 天的寬鬆一些；總覽的「依據」會寫出格子長度。讀到的列
-（含 30 天回看、turn／job 紀錄、延遲列）超過 `capacity.max_rows` 時會停下來，畫面說「請改看較短的期間」。
+什麼都不寫；「重新計算」會丟掉它。90 天的期間用 15 分鐘以上的時段——格子越長，短暫的尖峰被平均得越多，所以 90
+天的「還能撐幾人」會比 28 天的寬鬆一些；總覽的「依據」會寫出格子長度。讀到的列（含 30 天回看、turn／job 紀錄、
+延遲列）超過 `capacity.max_rows` 時會停下來，畫面說「請改看較短的期間」。
+
+**一個期間的分析佔 API pod 多少記憶體**（量自 60、120、240 人的模擬資料）：約 4 bytes × 時段數 × 每條線花到的
+人數（加總所有的線），再加每讀一列約 50–60 bytes；算的時候峰值再多約 15%。時段數：7 天約 2,304、28 天約 8,352
+（5 分鐘），90 天約 8,736（15 分鐘）——所以 28 天、90 天都是每人每條線約 33–35 KB。舉例（人數與線數是假設）：
+1,000 人、每人平均出現在 8 條線，約 270 MB，加上讀到的列（`max_rows` 的 500 萬列約 300 MB）。`max_rows` 管的是
+後一項，不是前一項；三個期間最多同時各留 10 分鐘。
 
 ## 7. 設定
 

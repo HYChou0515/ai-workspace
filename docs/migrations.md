@@ -2627,14 +2627,22 @@ AI 讀 `wui` skill 時會看到「這個 item 能讓頁面問的 subagent」清�
   3. 模型不是經由 LiteLLM、而是直接呼叫外部供應商——標籤裡的使用者 id 會送到外部。
 
   為什麼：標籤讓 ④ 知道 GPU 的負載是誰的。漏查的症狀：1、2 是升級後**所有 AI 呼叫失敗**；3 是使用者 id 外流。
-  LiteLLM 的每日標籤彙總表會多出「人數 + App 數 + 用途數」個標籤（每個標籤 × 日期 × key × 模型……一列；不帶 item）。
+  LiteLLM 的每日標籤彙總表會多出「人數 + App 數 + 用途數 + 最多 5 個」標籤（`ws` 與 `ws.call:` 的四種；每個標籤 ×
+  日期 × key × 模型……一列；不帶 item）。
 - `capacity.timezone`（**rollout 前**建議設成你們的時區，例如 `Asia/Taipei`）：「一天」從哪裡切。空 = UTC 午夜，
   台灣的一天會被切在早上八點。
-- `capacity.step_s` 要整除一天（開機會擋）。
+- `capacity.step_s`（**rollout 前**，有改它的話）要整除一天：一天要切成整數個時段，「每天的尖峰」和跨日的試算才對得
+  齊——不整除的話 API 開機就擋下、起不來。
 - 四個資料來源（`capacity.usage_records` / `resource_metrics` / `gpu_metrics` / `llm_requests`）是 opt-in：沒設就是
-  沒接上，容量頁說缺什麼。怎麼實作見 [capacity.md §4](capacity.md)。
+  沒接上，容量頁說缺什麼。怎麼實作見 [capacity.md §4](capacity.md)。接上之後，除了 API，**blob-gc 與 chat-video
+  兩種 worker 開機時也會建構這些 class**（它們組出 API 的整套 model 註冊）：class 建構時要的 env 或憑證，這兩個
+  worker 的 Deployment 也要給（**rollout 前**）；漏了的症狀是這兩種 worker 起不來。
 
-**資料** — 沒有新的 model、沒有要回填的東西；分析算完只留在記憶體（10 分鐘）。
+**資料** — 沒有新的 model、沒有要回填的東西；分析算完只留在記憶體（10 分鐘）。接上資料來源之後，superuser 每打開
+一個期間，API pod 就多佔一份分析：約 4 bytes × 時段數（28 天約 8,352）× 每條線花到的人數加總，加上每讀一列約
+50–60 bytes——1,000 人、每人平均在 8 條線，約 270 MB，再加讀到的列（`max_rows` 的 500 萬列約 300 MB）；最多三個
+期間同時留著，算的時候峰值再多約 15%。為什麼要知道：設 API pod 的記憶體上限時要留這一份，否則打開容量頁的那顆
+pod 會被 OOM（細節見 [capacity.md §6](capacity.md)）。
 
 **k8s · CI 側**
 
@@ -2642,8 +2650,10 @@ AI 讀 `wui` skill 時會看到「這個 item 能讓頁面問的 subagent」清�
   `workspace-usage-*`），並套 [capacity.md §1](capacity.md) 的 index template。為什麼：容量頁讀的是這個 index；
   沒分出來的話，這些行混在一般 log 裡，① 的查詢找不到——症狀是容量頁「已累積 0 天」。
 - **sandbox-host 要換新映像**才會量沙盒：它每 `SANDBOX_HOST_USAGE_SAMPLE_S` 秒（預設 60；`0` = 不量）讀每個沙盒的
-  cgroup、每 `SANDBOX_HOST_USAGE_WINDOW_S` 秒（預設 300；要整除 3600，設 `0` 起不來；也要整除 `capacity.step_s`
-  或是它的倍數）寫一行 `sandbox`。app 與 sandbox-host 誰先換都可以：舊的 host 不認得建立時多送的 `labels`，照樣建；
+  cgroup、每 `SANDBOX_HOST_USAGE_WINDOW_S` 秒（預設 300）寫一行 `sandbox`。窗口要整除 3600（不整除的值，包括 `0`，
+  起不來），而且要整除 `capacity.step_s` 或是它的整數倍，90 天期間的時段（預設 900 秒）也一樣——預設 `step_s: 300`
+  下 600、1200 不行（`capacity check` 會報錯）。沒換的症狀：容量頁沙盒的 CPU／記憶體線是空的，「變慢的門檻」(d)
+  沒有點。app 與 sandbox-host 誰先換都可以：舊的 host 不認得建立時多送的 `labels`，照樣建；
   舊的 app 不送，沙盒照量但記成 `unknown`。
 - 前端：容量頁的程式和其他頁一樣在主程式裡；ECharts 是只在打開 `/capacity` 才下載的 chunk（壓縮前約 540 KB、
   gzip 約 181 KB），其他頁不會下載它。

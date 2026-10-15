@@ -175,9 +175,10 @@ class UsageRecorder:
 
     async def run(self) -> None:
         """Flush each window as it closes, until cancelled. A window is one
-        document per (person, App, work) cell — tens of thousands on a busy
-        pod — so they are built in a thread, not on the loop the pod serves
-        from; the lock is held only to take the closed windows."""
+        document per (person, App, work) cell — thousands on a busy pod, tens
+        of milliseconds to build — so they are built in a thread, not on the
+        loop the pod serves from; the counting lock is held only to take the
+        closed windows."""
         while True:
             now = self._clock()
             next_close = self._window_of(now) / 1000 + self.window_s

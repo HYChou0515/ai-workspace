@@ -23,9 +23,10 @@ SAMPLE_S = 60.0
 
 
 def sandbox_measured(sandbox: Any) -> bool | None:
-    """Whether anything measures `sandbox`'s sandboxes one by one: this
-    process does for its own isolated ones; sandbox-host decides for its own
-    (None — not this process's to say); anything else, nothing does."""
+    """Whether `sandbox`'s sandboxes can be measured one by one: this process
+    measures its own isolated ones (while it records — with `capacity.record`
+    off nothing is written at all); sandbox-host decides for its own (None —
+    not this process's to say); anything else, nothing can."""
     from ..sandbox.http_client import HttpSandbox
 
     if isinstance(sandbox, IsolatedProcessSandbox):

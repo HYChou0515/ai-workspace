@@ -799,10 +799,23 @@ What the build changed from the plan above, each for a reason found while buildi
   (d) says so instead of "no slow-down seen".
 - **Workers are one line per job type** (§9.1), each pod's type read off its `work` rows; a pod that ran
   several leaves no clean split and the workers stay one line. Capacity comes from a `worker:<job>`
-  entry in ② when there is one, else the type's share of the `worker` entry by its pods running now —
+  entry in ② when there is one, else the type's share of the `worker` entry: its pods, of all the pods of
+  the job types sharing that entry, in one slot — the last any worker pod reported — so the shares add
+  up to the entry (pods are not machines: three pods on two machines took 1/2 + 2/2 of it), and a type
+  scaled to zero has none. Such a line's `machines` is its share of the entry's machines, fractional.
   ② reports capacity per component, and a per-type entry is the operator's to give.
 - **(b) is also paired with each model's requests in flight** (its knee a candidate for the model's
-  capacity), and **(e) is one pair per job type**.
+  capacity), and **(e) is one pair per job type**. A turn names its model as the platform asked for it
+  (`openai/qwen3`), LiteLLM by the name the request reached it by (`qwen3`, its `model_group`, which ④
+  reports): they are one model when the names are equal or one is the other behind a `provider/`
+  prefix, and `capacity check` lists the turn models LiteLLM never logged.
+- **View 8 has a sixth pair, `gpu`** (p95 time to first token against a model's requests in flight),
+  which sets the model's capacity beside (b)'s per-model pair — the GPU purchase (E5) rests on it — and
+  **(c) is drawn as seconds per token** (1 ÷ tokens per second), so that slower is up in every pair.
+- **View 8 is ready per view, not per pair** (§9.10 says per pair): it waits for 7 days of ① and ②, so
+  without ② the GPU pairs, which need only ④, wait too — their knees still set the capacities the
+  overview shows. A pair whose load line has no capacity (no ② entry for it) is not drawn: its load is
+  a share of a capacity.
 - **A model's GPU capacity is its total in-flight level at the knee** with its current cards; one more
   card adds knee ÷ cards (data-parallel replicas). The headroom ignores lines N cannot push: fixed lines
   and disk (disk runs out over time, view 7).
@@ -815,16 +828,22 @@ What the build changed from the plan above, each for a reason found while buildi
 - **A period of N days is the N whole local days before today, plus today so far** (E7): `[now − N days,
   now)` held N − 1 whole days, so the runway (28) could never be ready in the default 28-day period and a
   7-day period held 6. A view that needs more days than its period holds says *period too short* and
-  names the shorter period that fits; a failing source is *source error*, with its message.
+  names the shortest period the page offers that holds it; a failing source is *source error*, with its
+  message. A day is whole when the period holds it from the slot holding its local midnight to the next
+  midnight — 23 or 25 hours on a day the clocks change; counted as 86,400 ÷ step slots, the spring day
+  was never whole.
 - **Each view counts the days of the sources it reads**, and the what-if sizes, the backtest tests and
   the headroom stands **only on days every connected source of the model (①, ②, ④) has data**: a day
   before the records began is not a day nobody worked, and drawing it diluted the peaks. A line whose
   missing data reads as zero (a model's in-flight requests, its memory) takes its peak over its own
   source's days.
-- **The simulator's draw sequence stretches on demand**, in blocks fixed by the seed and their position:
-  the backtest asks the days before a day for that day's N, which a period starting before the records,
-  or a team joining at once, put beyond 20× and the page failed. The what-if still answers at most 20×
-  today's N and says which N it answered; the headroom says "N or more" only when N itself fits.
+- **The simulator copies nothing ahead**: each run takes the day's demand of the day's people from the
+  lines, and each draw reads its own seeded random stream as far as N needs (still nested, so a larger N
+  never needs less, and no N is beyond its reach — the backtest asks the days before a day for that
+  day's N, which a team joining at once put past 20×). A simulator per profile that copied the people's
+  day demand and drew 20× today's N of numbers ahead held the period several times over. The what-if
+  still answers at most 20× today's N and says which N it answered; the headroom says "N or more" only
+  when N itself fits. Asked directly, the what-if answers only when its view is ready.
 - **E10, sizing on workdays**: with no work calendar the what-if still draws Monday–Friday, not every
   day — weekends would dilute the peaks it sizes for; a calendar refines it.
 - **The holdout is the last 7 days** (§9.9), with at least 3 to train on, scoring only the rows of pods
@@ -840,10 +859,17 @@ What the build changed from the plan above, each for a reason found while buildi
   roomier than the 28-day one; the overview's basis line names the slot length.
   sandbox-host's window is its own setting: a row longer than the slot is spread
   over the slots it covers, and `capacity check` refuses one that fits neither way.
-- **An analysis' memory follows the rows it read**: series keep the (slot, value) pairs the source
-  returned, the latency histogram is kept per component, the what-if keeps four profiles' simulators,
-  one period is built at a time, and a kept analysis is let go when its TTL ends. Every row read counts
-  against `capacity.max_rows`. A few hundred rows had held hundreds of MB in the API process (#804).
+- **An analysis' memory is 4 bytes × slots × the people each line costs, summed over the lines, plus
+  about 50–60 bytes per row read** (measured on synthetic worlds of 60, 120 and 240 people, 27 days).
+  The observations keep the (slot, value) pairs a source returned — ②'s pods included, so a rollout's
+  new pod names cost only their samples; a line keeps a row only for each person it costs (`Line.rows`);
+  the simulators copy nothing; the regression never lays its rows out but sums each pod's block into
+  XᵀX and Xᵀy, solved by Lawson–Hanson in Bro & De Jong's fast-NNLS form — rows × columns had grown with
+  every pod name, each another intercept column. Every row read counts against `capacity.max_rows`,
+  which bounds the second term, not the first. One period is built at a time, and a kept analysis is let
+  go when its TTL ends or a refresh replaces it — its timer holds only the period, and is cancelled. At
+  120 people the analysis held 81 MB after building and 171 MB once four what-if profiles were asked;
+  now 49 MB and 52 MB, with daily rollouts or without.
 - **The build belongs to no request** (a closed page does not cancel it for others), and summary,
   person and what-if run in a thread, like the build.
 - **`turn` records are stamped at acceptance, `job` records at start**, so a period selects work by when
@@ -856,6 +882,12 @@ What the build changed from the plan above, each for a reason found while buildi
   App, and the launcher's `/api/apps/{slug}/icon` made everyone who opened the home page a user of every
   App with an icon file. Work that failed (5xx, a crash) is still the App's. A request no route answered
   is `unknown` without a call to `get_user_id`; a Kubernetes probe (`kube-probe/…`) is `system`.
+- **The two shares view 9 states**: the unidentified share is of the API requests someone made (no
+  static files, no probes); the system share is of the running time of jobs and turns, the only work
+  that can have nobody behind it besides probes — a share of requests was always 0.
+- **Coverage and gaps are one question** (§9.9): a source's coverage is the share of slots with anything
+  from it, the slots its gaps do not have; gaps run to the period's end, so a source that stopped before
+  it has a gap to it.
 - **The usage flush builds its rows in a thread**, not on the event loop; a stopped turn ends on the
   record even when the epoch watcher cancels it a second time during the turn-end flush.
 - **The cgroup reader lives in `capacity/cgroup_usage.py`** (the plan said `sandbox/`): it is one file
@@ -867,8 +899,18 @@ What the build changed from the plan above, each for a reason found while buildi
   line, scatter; grid, tooltip, legend, mark line; canvas — not the plan's mark area and data zoom,
   which no view uses. The production build puts ECharts in its own chunk (539,697 bytes minified,
   measured on the #962 build); the page's own code is in the main bundle, like every page's.
-- **The middleware's cost**: `scripts/bench_usage_middleware.py` measured 12.4 µs per request on the dev
-  box (45.9 → 58.4 µs on a trivial route, median of 5 rounds × 10,000), after the round-1 changes.
-- **Commits**: P8–P9, P9–P11 and P13–P14 went in as combined commits, against "one or more per phase";
-  history is not rewritten.
+- **The middleware's cost**: `scripts/bench_usage_middleware.py` (median of 5 rounds × 10,000 requests on
+  a trivial route) measured 12.8–14.3 µs per request (+27–31%; 46.6–47.6 → 60.4–61.1 µs) on the dev box
+  across three runs, after the round-2 changes.
+- **Allocation's fixed-overhead toggle** (D11) applies where its meaning does: "evenly" is per person
+  (§9.4), so it is off for App and purpose, and all three are off for "by component", whose rows are the
+  lines themselves.
+- **Every stream is one column** of the API regression (§9.3 keeps route templates apart): a stream's
+  cost is its connection's, whatever route opened it.
+- **What one more person adds to a disk a month** is given for every disk line that has a ② capacity
+  (the database's, scratch, the file store), and shows with the runway.
+- **`capacity check` compares a pod's CPU with its component's whole capacity** (§8 said its machine's):
+  ② gives capacity per component.
+- **Commits**: P8–P9, P9–P11 and P13–P14 went in as combined commits, against "one or more per phase",
+  and the `check` command landed with P12, not P8; history is not rewritten.
 

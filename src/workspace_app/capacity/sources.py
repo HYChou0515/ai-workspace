@@ -20,7 +20,8 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
-#: The components ② reports (`ResourceSample.component`, `CapacityEntry.component`).
+#: The components ② reports (`ResourceSample.component`, `CapacityEntry.component`);
+#: a `CapacityEntry` may also name one job type's workers, `worker:<job type>`.
 COMPONENTS = ("api", "worker", "sandbox-host", "postgres", "filestore", "scratch")
 
 

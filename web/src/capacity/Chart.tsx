@@ -3,7 +3,9 @@
  * `import("./echarts")` — its own chunk — so no other page pays for it (D15).
  * The `aria-label` says what a chart shows. The answers a decision rests on are
  * also in words or a table beside it — the overview, allocation and what-if
- * tables, the knee sentences, the runway's dates — so a screen reader loses none.
+ * tables, the knee sentences, the runway's dates. The trends charts and a
+ * person's daily charts have no such equivalent: a screen reader gets their
+ * label only.
  */
 import { useEffect, useRef, useState } from "react";
 

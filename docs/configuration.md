@@ -873,14 +873,15 @@ ES；頁面讀的四個資料來源由你們實作。整套說明（紀錄格式
 | `capacity.step_s` | `300` | 分析的時段（秒），要是 `window_s` 的整數倍、而且整除一天；90 天的期間用它的倍數裡最小的、至少 900 又整除一天的那個 |
 | `capacity.lag_s` | `600` | 最新的這幾秒不算（等 ES 收進來） |
 | `capacity.timezone` | `""` | 「一天」從哪個時區的午夜切（IANA 名稱）；空 = UTC |
-| `capacity.max_rows` | `5000000` | 一次分析最多讀幾列；超過就停下並請人改看較短的期間 |
+| `capacity.max_rows` | `5000000` | 一次分析最多讀幾列；超過就停下並請人改看較短的期間。管的是讀進來的列（每列約 50–60 bytes），不是每人每條線的陣列（見 [capacity.md §6](capacity.md)） |
 
 開機會擋下用不了的值（`window_s` 不整除 3600、`step_s` 不是它的倍數或不整除一天、不存在的時區、
 `queue_max` / `max_rows` 不是正數、`lag_s` 是負數），並說是哪個 key。
 
 sandbox-host 那側（環境變數）：`SANDBOX_HOST_USAGE_SAMPLE_S`（預設 `60`，每幾秒讀一次每個沙盒的 cgroup；
-**`0` = 不量**）、`SANDBOX_HOST_USAGE_WINDOW_S`（預設 `300`，幾秒寫一筆；要整除 3600——設 `0` 起不來——
-而且要整除 `capacity.step_s` 或是它的整數倍，否則分析放不進時段，`capacity check` 會報錯）。
+**`0` = 不量**）、`SANDBOX_HOST_USAGE_WINDOW_S`（預設 `300`，幾秒寫一筆；要整除 3600——不整除的值，包括 `0`，
+起不來——而且要整除 `capacity.step_s` 或是它的整數倍，90 天期間的時段（預設 900 秒）也一樣：預設 `step_s: 300`
+下 600、1200 不行；否則分析放不進時段，`capacity check` 會報錯）。
 
 檢查四個來源的實作：`uv run python -m workspace_app.capacity check --hours 24`。
 
