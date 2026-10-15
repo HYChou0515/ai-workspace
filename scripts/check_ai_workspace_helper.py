@@ -295,7 +295,14 @@ def _tour(base: str, iid: str, out: Path, check: _Check) -> Path | None:
     # The person's browser is already signed in and the helper already running
     # when they open the page — so is it here before recording starts.
     end = time.monotonic() + 60
-    while _req("GET", f"{base}/api/ai-workspace-helper/status")[1] != {"online": True}:
+
+    # `online` alone: the status says more than that (plan-ext-ai D9 added `ext_ai`)
+    def online() -> bool:
+        return (_req("GET", f"{base}/api/ai-workspace-helper/status")[1] or {}).get(
+            "online"
+        ) is True
+
+    while not online():
         if time.monotonic() > end:
             check("the helper checked in", False, "not online after 60 s")
             return None

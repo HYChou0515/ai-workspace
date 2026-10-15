@@ -1044,6 +1044,14 @@ a.skills-row-name {
   font-family: var(--font-mono);
 }
 
+/* The question for the external AI (docs/plan-ext-ai.md §3) is prose, not a
+   pasted page: the box of the paste, in the text's own font. */
+.outside-lookup-question {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+}
+
 /* The native file input stays in the tree — its label names it for assistive
    tech, and the 選擇檔案 button clicks it — but is not drawn (GOV.UK's file
    upload: a visible label and a secondary "choose" button). */

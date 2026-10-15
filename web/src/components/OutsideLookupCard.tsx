@@ -533,7 +533,7 @@ export function OutsideLookupCard({
           <textarea
             ref={questionBox}
             id={`${ids}-x`}
-            className="input outside-lookup-paste"
+            className="input outside-lookup-question"
             rows={5}
             value={question}
             readOnly={locked}
