@@ -757,6 +757,11 @@ button.skill-hub-tree-row:hover,
 @media (prefers-reduced-motion: reduce) {
   .page .skill-hub-target-spinner { animation: none; }
 }
+/* The live region for a dropped pick stays on the page while empty (so its
+   first message is announced) but takes no room until it says something. */
+.page .skill-hub-target-dropped:empty {
+  margin: 0;
+}
 /* The list scrolls inside the dialog rather than growing it past the screen. */
 .page .skill-hub-target-list {
   max-height: min(22rem, 50vh);

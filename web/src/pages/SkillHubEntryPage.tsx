@@ -404,11 +404,12 @@ function InstallDialog({
     queryFn: () => client.targets(entry.id, slug),
   });
   const items = targets.data?.items ?? [];
-  // One question per row, each answered on its own: a busy sandbox holds back
-  // only its own row, never the list (D3). At most ROW_CHECKS_AT_ONCE are out
-  // at a time, and closing the dialog drops the rest — a slow sandbox's
-  // question can take minutes, and unbounded a few of them held every
-  // connection the browser allows, the Install press included (review round 2).
+  // One question per row, each answered on its own: a busy sandbox never holds
+  // back the list (D3), only its own row and one of ROW_CHECKS_AT_ONCE slots —
+  // so as many busy rows as there are slots make the rows queued behind them
+  // wait too (D6). Closing the dialog drops the questions still out: a slow
+  // sandbox's question can take minutes, and unbounded a few of them held
+  // every connection the browser allows, the Install press included.
   const [rowChecks] = useState(() => createLimiter(ROW_CHECKS_AT_ONCE));
   const states = useQueries({
     queries: items.map((it) => ({
@@ -470,15 +471,22 @@ function InstallDialog({
   const install = useMutation({
     mutationFn: (itemId: string) => client.install(slug, itemId, entry.id),
     onSuccess: (_res, itemId) => {
+      // This dialog knows the answer for that row now: a reopen says it at
+      // once rather than the cached 「可以安裝」 while it asks again (round 3).
+      qc.setQueryData(qk.skillHubTargetState(entry.id, slug, itemId), {
+        state: "installed",
+        owner: "",
+      } satisfies SkillInstallState);
       invalidateHubInstalls(qc);
       void qc.invalidateQueries({ queryKey: qk.itemSkills(slug, itemId) });
       onDone(slug, itemId, items.find((i) => i.item_id === itemId)?.title ?? itemId);
     },
-    // Refused: that row's answer is out of date (it said installing could go
-    // ahead, or was still checking), so it asks again rather than reading
-    // 「可以安裝」 beside the refusal (review round 2).
+    // Failed — usually refused: that row's answer (可以安裝, 檢查中…, or
+    // 現在讀不到 — every pickable one) is no longer worth showing, so it is
+    // dropped and asked again; the row reads 「檢查中…」 meanwhile, not
+    // 「可以安裝」 beside the refusal (review rounds 2, 3).
     onError: (_err, itemId) => {
-      void qc.invalidateQueries({ queryKey: qk.skillHubTargetState(entry.id, slug, itemId) });
+      void qc.resetQueries({ queryKey: qk.skillHubTargetState(entry.id, slug, itemId) });
     },
     meta: { silentError: true },
   });
@@ -563,11 +571,11 @@ function InstallDialog({
           </div>
         )}
       </fieldset>
-      {dropped ? (
-        <p className="hint" role="status">
-          {dropped}
-        </p>
-      ) : null}
+      {/* Always on the page: a screen reader announces a change IN a live
+          region, not one that appears together with its text (round 3). */}
+      <p className="hint skill-hub-target-dropped" role="status">
+        {dropped ?? ""}
+      </p>
       {install.isError ? (
         <p className="error" role="alert">
           {t("skillHub.failed", { reason: describeRefusal(install.error, t, nameOf) })}
