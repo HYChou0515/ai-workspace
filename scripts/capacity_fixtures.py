@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
+from typing import Any
 from zoneinfo import ZoneInfo
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -33,7 +34,7 @@ def fixtures() -> dict[str, object]:
     obs = observe(sources, Period(w.start_ms, w.end_ms, w.step_s, ZoneInfo(w.tz)))
     analysis = analyse(obs, now_ms=w.end_ms)
     # what the route adds to the analysis: whether sandboxes are measured
-    summary = {**analysis.summary(), "sandbox_measured": True}
+    summary: dict[str, Any] = {**analysis.summary(), "sandbox_measured": True}
     for pair in summary["thresholds"]:  # keep the fixture small: 200 points a pair
         pair["points"] = pair["points"][:: max(1, len(pair["points"]) // 200)]
     n_now = summary["people"]["n_now"]

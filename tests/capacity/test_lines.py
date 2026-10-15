@@ -154,7 +154,12 @@ def test_a_rollout_in_the_held_out_days_does_not_ruin_the_holdout():
         def _kinds(self):  # noqa: ANN202
             return {
                 k: [
-                    (at, {**u, "pod": rename.get(u.get("pod"), u.get("pod"))} if at >= roll else u)
+                    (
+                        at,
+                        {**u, "pod": rename.get(u.get("pod", ""), u.get("pod"))}
+                        if at >= roll
+                        else u,
+                    )
                     for at, u in v
                 ]
                 for k, v in super()._kinds().items()
@@ -179,10 +184,11 @@ def test_routes_too_rare_for_their_own_column_merge_by_method():
     them one cost."""
     from workspace_app.capacity.analysis.lines import cpu_column
 
-    columns = {
-        cpu_column(w, set())[0]
+    named = [
+        cpu_column(w, set())
         for w in ("req:GET /a", "req:POST /b", "req:DELETE /c", "req:PUT /d", "req:POST /e")
-    }
+    ]
+    columns = {col[0] for col in named if col is not None}
 
     assert columns == {
         "req:(other GET)",
@@ -270,7 +276,7 @@ def test_each_job_type_is_a_worker_line_of_its_own():
 
     for job in ("index", "wiki"):
         line = lines[f"worker.{job}.cpu"]
-        assert line.job == job
+        assert line.job == job and line.fit is not None
         assert dict(line.fit.columns)[f"job:{job}"] == pytest.approx(cost[job], rel=0.05)
         # the worker entry, split by the pods each type runs on
         assert (line.capacity, line.machines) == (4.0, 1)

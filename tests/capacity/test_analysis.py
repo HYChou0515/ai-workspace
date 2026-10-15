@@ -431,6 +431,8 @@ def test_a_persons_rank_is_among_people_not_the_unknown_and_system_rows():
     totals = {u: float(line.per_user[a.people.users.index(u)].sum()) for u in people}
 
     for u in people:
-        (mine,) = [x for x in a.person(u)["lines"] if x["id"] == "sandbox-host.cpu"]
+        detail = a.person(u)
+        assert detail is not None
+        (mine,) = [x for x in detail["lines"] if x["id"] == "sandbox-host.cpu"]
         below = sum(1 for v in totals.values() if v < totals[u])
         assert mine["rank"] == pytest.approx(below / (len(people) - 1)), u
