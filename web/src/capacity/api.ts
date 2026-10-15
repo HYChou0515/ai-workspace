@@ -76,7 +76,22 @@ export type Line = {
   } | null;
 };
 
-export type Trend = { intercept: number; slope: number; residual_sd: number };
+export type Trend = {
+  intercept: number;
+  slope: number;
+  /** The residual standard error (n − 2 degrees of freedom). */
+  residual_sd: number;
+  n: number;
+  x_mean: number;
+  /** Σ (x − x̄)² */
+  sxx: number;
+  /** The t quantile of the 80% band. */
+  t: number;
+};
+
+/** Days from today until the 80% band's upper edge, the trend and the band's
+ * lower edge reach `target` people: 0 already there, null never. */
+export type Reach = { target: number; early: number | null; at: number | null; late: number | null };
 
 export type Pair = {
   id: "a" | "b" | "c" | "d" | "e" | "gpu";
@@ -143,6 +158,10 @@ export type CapacitySummary = {
     days: number[];
     n: number[];
     trend: Trend | null;
+    /** [day of `days`] the 80% band's [low, high] around the trend. */
+    band: [number, number][];
+    /** When it reaches the headroom's N; null without a headroom. */
+    reach: Reach | null;
     disk: {
       line: string;
       trend: Trend | null;

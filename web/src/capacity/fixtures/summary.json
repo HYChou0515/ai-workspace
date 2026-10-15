@@ -2560,24 +2560,34 @@
   "days": [],
   "n": [],
   "trend": null,
+  "band": [],
+  "reach": null,
   "disk": [
    {
     "line": "postgres.disk",
     "trend": {
-     "intercept": 42978372959.99998,
-     "slope": 28800000.000001132,
-     "residual_sd": 9.95834361137452e-06
+     "intercept": 42978372960.0,
+     "slope": 28800000.0,
+     "residual_sd": 0.0,
+     "n": 28,
+     "x_mean": 13.5,
+     "sxx": 1827.0,
+     "t": 1.3149718584557581
     },
     "limit": 171798691840.0,
     "now": 43755972960.0,
-    "per_person_month": 54000000.00000212
+    "per_person_month": 54000000.0
    },
    {
     "line": "filestore.disk",
     "trend": {
-     "intercept": 5965909633.950736,
+     "intercept": 5965909633.950739,
      "slope": 298295483.47454846,
-     "residual_sd": 83.7922906464706
+     "residual_sd": 85.38847754358778,
+     "n": 28,
+     "x_mean": 13.5,
+     "sxx": 1827.0,
+     "t": 1.3149718584557581
     },
     "limit": 429496729600.0,
     "now": 14019887712.0,

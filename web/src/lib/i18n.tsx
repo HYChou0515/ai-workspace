@@ -3298,8 +3298,21 @@ export const messages = {
   "capacity.runway.title": { "zh-TW": "什麼時候會不夠", en: "When it runs short" },
   "capacity.runway.lead": { "zh-TW": "採購需要幾天", en: "Purchase lead time (days)" },
   "capacity.runway.date": {
-    "zh-TW": "照最近的成長（每天 {slope} 人），大約 {date}（80% 落在 {early}～{late}）會到 {n} 人，就是能撐的上限。最晚 {order} 要下單。",
-    en: "At recent growth ({slope} people a day), about {date} (80%: {early}–{late}) reaches {n} people — the limit. Order by {order}.",
+    "zh-TW": "照最近的成長（每天 {slope} 人），大約 {date}（80% 落在 {early}～{late}）會到 {n} 人，就是能撐的上限。",
+    en: "At recent growth ({slope} people a day), about {date} (80%: {early}–{late}) reaches {n} people — the limit.",
+  },
+  "capacity.runway.dateOpen": {
+    "zh-TW": "照最近的成長（每天 {slope} 人），大約 {date} 會到 {n} 人，就是能撐的上限；80% 最早 {early}，最晚說不準——人數的起伏比成長大。",
+    en: "At recent growth ({slope} people a day), about {date} reaches {n} people — the limit; 80%: from {early}, with no latest date — people vary more than they grow.",
+  },
+  "capacity.runway.order": { "zh-TW": "最晚 {order} 要下單。", en: "Order by {order}." },
+  "capacity.runway.orderPast": {
+    "zh-TW": "下單日（{order}）已經過了：現在就該下單。",
+    en: "The order-by date ({order}) has passed: order now.",
+  },
+  "capacity.runway.none": {
+    "zh-TW": "還算不出能撐的人數上限（見總覽），所以沒有日期。",
+    en: "There is no people limit yet (see the overview), so there is no date.",
   },
   "capacity.runway.beyond": {
     "zh-TW": "照最近的成長（每天 {slope} 人），至少到 {date} 都撐得住：試算最多看到 {n} 人，還沒看到上限。",

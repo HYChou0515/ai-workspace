@@ -144,7 +144,24 @@ class HeadroomOut(BaseModel):
 class TrendOut(BaseModel):
     intercept: float
     slope: float
+    #: the residual standard error (n − 2 degrees of freedom)
     residual_sd: float
+    n: int
+    x_mean: float
+    #: Σ (x − x̄)²
+    sxx: float
+    #: the t quantile of the 80% band
+    t: float
+
+
+class ReachOut(BaseModel):
+    """Days from today until the 80% band's upper edge, the trend and the
+    band's lower edge reach `target` people: 0 already there, None never."""
+
+    target: int
+    early: float | None
+    at: float | None
+    late: float | None
 
 
 class DiskRunwayOut(BaseModel):
@@ -160,6 +177,10 @@ class RunwayOut(BaseModel):
     days: list[int]
     n: list[float]
     trend: TrendOut | None
+    #: [day of `days`] the 80% band's [low, high] around the trend
+    band: list[list[float]]
+    #: when it reaches the headroom's N; None without a headroom
+    reach: ReachOut | None
     disk: list[DiskRunwayOut]
 
 

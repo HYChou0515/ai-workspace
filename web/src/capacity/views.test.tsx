@@ -46,6 +46,10 @@ function room(over: Partial<NonNullable<CapacitySummary["headroom"]>> = {}): Non
   return { n_now: 16, max_n: 40, binding: "api.cpu", by_line: { "api.cpu": 40 }, ceiling: false, days: 20, ...over };
 }
 
+function trend(slope: number): NonNullable<CapacitySummary["runway"]["trend"]> {
+  return { intercept: 16, slope, residual_sd: 1, n: 30, x_mean: 14.5, sxx: 2247.5, t: 1.31 };
+}
+
 function notReady(over: Partial<Readiness>): Readiness {
   return {
     ready: false,
@@ -293,34 +297,73 @@ describe("what-if and runway (views 6, 7)", () => {
     expect(advisory(s)).toBeNull();
   });
 
-  it("dates the limit by the people trend, within its 80% band", () => {
+  it("dates the limit where the trend and its 80% band's edges reach it", () => {
     const s = summary();
-    const today = s.period.days.length - 1;
     s.headroom = room({ max_n: 26 });
-    // 20 people today by the trend, half a person a day, ±2 people of spread
-    s.runway = { ...s.runway, trend: { intercept: 20 - 0.5 * today, slope: 0.5, residual_sd: 2 } };
+    s.runway = { ...s.runway, trend: trend(0.5), reach: { target: 26, early: 5, at: 12, late: 30 } };
 
     const at = runwayDate(s);
 
-    const band = 1.2816 * 2;
     expect(at.kind).toBe("date");
     if (at.kind !== "date") return;
-    expect(at.atMs).toBeCloseTo(s.period.end_ms + 12 * DAY, -3);
-    expect(at.earlyMs).toBeCloseTo(s.period.end_ms + ((26 - 20 - band) / 0.5) * DAY, -3);
-    expect(at.lateMs).toBeCloseTo(s.period.end_ms + ((26 - 20 + band) / 0.5) * DAY, -3);
+    expect(at.atMs).toBe(s.period.end_ms + 12 * DAY);
+    expect(at.earlyMs).toBe(s.period.end_ms + 5 * DAY);
+    expect(at.lateMs).toBe(s.period.end_ms + 30 * DAY);
+  });
+
+  it("gives no latest date when the band's slow edge never reaches the limit", () => {
+    const s = summary();
+    s.readiness.runway = { ...s.readiness.runway, ready: true, reason: null };
+    s.headroom = room({ max_n: 26 });
+    s.runway = { ...s.runway, trend: trend(0.5), reach: { target: 26, early: 5, at: 12, late: null } };
+
+    expect(runwayDate(s)).toMatchObject({ kind: "date", lateMs: null });
+    renderWithQuery(<WhatIf summary={s} days={28} client={client()} t={t} />);
+    expect(screen.getByTestId("capacity-runway-text")).toHaveTextContent("最晚說不準");
+  });
+
+  it("says to order now when the order-by date has passed", () => {
+    const s = summary();
+    s.readiness.runway = { ...s.readiness.runway, ready: true, reason: null };
+    s.headroom = room({ max_n: 26 });
+    s.runway = { ...s.runway, trend: trend(0.5), reach: { target: 26, early: 5, at: 12, late: 30 } };
+
+    renderWithQuery(<WhatIf summary={s} days={28} client={client()} t={t} />);
+
+    // 90 days of lead time before a limit 5 days away
+    expect(screen.getByTestId("capacity-runway-text")).toHaveTextContent("已經過了：現在就該下單");
+  });
+
+  it("says why there is no date when there is no people limit", () => {
+    const s = summary();
+    s.readiness.runway = { ...s.readiness.runway, ready: true, reason: null };
+    s.headroom = null;
+    s.runway = { ...s.runway, trend: trend(0.5), reach: null };
+
+    renderWithQuery(<WhatIf summary={s} days={28} client={client()} t={t} />);
+
+    expect(screen.getByTestId("capacity-runway-text")).toHaveTextContent("還算不出能撐的人數上限");
+  });
+
+  it("reads a date no calendar holds as no growth", () => {
+    const s = summary();
+    s.headroom = room({ max_n: 26 });
+    s.runway = { ...s.runway, trend: trend(1e-9), reach: { target: 26, early: 1e12, at: 1e13, late: null } };
+
+    expect(runwayDate(s).kind).toBe("flat");
   });
 
   it("gives no date to order by when the headroom is only 'at least'", () => {
     const s = summary();
     s.headroom = room({ max_n: 320, ceiling: true });
-    s.runway = { ...s.runway, trend: { intercept: 16, slope: 0.5, residual_sd: 0 } };
+    s.runway = { ...s.runway, trend: trend(0.5), reach: { target: 320, early: 500, at: 608, late: 700 } };
 
-    expect(runwayDate(s).kind).toBe("beyond");
+    expect(runwayDate(s)).toMatchObject({ kind: "beyond", atMs: s.period.end_ms + 608 * DAY });
   });
 
   it("is past the limit only when today's people exceed it, and flat when nobody joins", () => {
     const s = summary();
-    s.runway = { ...s.runway, trend: { intercept: 16, slope: 0.5, residual_sd: 0 } };
+    s.runway = { ...s.runway, trend: trend(0.5), reach: { target: 16, early: 0, at: 0, late: 3 } };
     s.headroom = room({ n_now: 16, max_n: 16 });
     expect(runwayDate(s).kind).toBe("date");
 
@@ -328,7 +371,8 @@ describe("what-if and runway (views 6, 7)", () => {
     expect(runwayDate(s).kind).toBe("past");
 
     s.headroom = room();
-    s.runway.trend = { intercept: 16, slope: 0, residual_sd: 0 };
+    s.runway.trend = trend(0);
+    s.runway.reach = { target: 40, early: null, at: null, late: null };
     expect(runwayDate(s).kind).toBe("flat");
   });
 

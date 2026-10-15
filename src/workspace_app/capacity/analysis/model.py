@@ -23,6 +23,7 @@ from .lines import Line, build_lines, everyone
 from .observe import Observations
 from .people import NOT_PEOPLE, People, count_people
 from .period import Period
+from .runway import fit_trend, reach
 from .thresholds import Pair, build_pairs, pair_json
 from .whatif import DRAWS, MAX_GROWTH, Headroom, Simulator, headroom
 
@@ -340,13 +341,27 @@ class Analysis:
     def _runway_json(self) -> dict[str, Any]:
         p = self.obs.period
         days = self.runway_days()
+        x = np.array(days, dtype=float)
         n = self.people.active_30d[days].astype(float) if days else np.zeros(0)
+        trend = fit_trend(x, n)
+        room = self.headroom
+        reached = None
+        if trend is not None and room is not None and room.max_n is not None:
+            # from today, the period's last day — the day the page dates from
+            reached = {"target": room.max_n, **reach(trend, float(len(p.days) - 1), room.max_n)}
+        band: list[list[float]] = []
+        if trend is not None:
+            fit, half = trend.intercept + trend.slope * x, trend.half(x)
+            band = np.column_stack([fit - half, fit + half]).tolist()
         out: dict[str, Any] = {
             "days": days,
             "n": n.tolist(),
-            "trend": _trend(np.array(days, dtype=float), n),
+            "trend": trend.json() if trend is not None else None,
+            "band": band,
+            "reach": reached,
             "disk": [],
         }
+        n_now = int(self.people.active_30d[-1]) if len(self.people.active_30d) else 0
         for line in self.lines:
             if line.resource != "disk" or not line.capacity:
                 continue
@@ -354,16 +369,15 @@ class Analysis:
             xs = np.array([d for d in p.full_days if daily[d] is not None], dtype=float)
             ys = np.array([daily[d] for d in p.full_days if daily[d] is not None], dtype=float)
             threshold = self.thresholds.get(line.id, (DEFAULT_THRESHOLD["disk"], "default"))[0]
-            trend = _trend(xs, ys)
-            n_now = int(self.people.active_30d[-1]) if len(self.people.active_30d) else 0
+            grows = fit_trend(xs, ys)
             out["disk"].append(
                 {
                     "line": line.id,
-                    "trend": trend,
+                    "trend": grows.json() if grows is not None else None,
                     "limit": line.capacity * threshold,
                     "now": float(ys[-1]) if len(ys) else None,
                     # §9.1 (E16): what one more person costs in disk, a month
-                    "per_person_month": trend["slope"] * 30 / n_now if trend and n_now else None,
+                    "per_person_month": grows.slope * 30 / n_now if grows and n_now else None,
                 }
             )
         return out
@@ -672,19 +686,6 @@ def _distribution(values: list[float]) -> dict[str, Any] | None:
         "p99": float(np.quantile(arr, 0.99)),
         "top10_share": float(np.sort(arr)[-top:].sum() / whole) if whole else None,
         "values": [float(v) for v in arr],
-    }
-
-
-def _trend(x: np.ndarray, y: np.ndarray) -> dict[str, float] | None:
-    """Least squares y = a + b·x, with the residual spread for an 80% band."""
-    if len(x) < 2 or np.ptp(x) == 0:
-        return None
-    b, a = np.polyfit(x, y, 1)
-    resid = y - (a + b * x)
-    return {
-        "intercept": float(a),
-        "slope": float(b),
-        "residual_sd": float(resid.std(ddof=1)) if len(x) > 2 else 0.0,
     }
 
 

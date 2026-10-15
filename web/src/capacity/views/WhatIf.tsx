@@ -19,18 +19,19 @@ import { PeopleCaveat } from "./Overview";
 export type Level = "p50" | "p95";
 /** E12: until someone types theirs. */
 export const DEFAULT_LEAD_DAYS = 90;
-/** §9.7: an 80% band — 1.28 residual standard deviations either side. */
-const BAND_Z = 1.2816;
+/** The latest instant a JS Date holds (±8.64e15 ms): a date past it is no date. */
+const LAST_DATE_MS = 8.64e15;
 
 export function advisory(summary: CapacitySummary): number | null {
   const bt = summary.confidence.backtest;
   return bt && bt.mape > summary.confidence.mape_ok ? bt.mape : null;
 }
 
-/** When a straight-line trend of people reaches the headroom — with the 80%
- * band's early and late ends — or what stops it: no growth, already past, or a
- * headroom that is only "at least" (the what-if looked no further), which has
- * no date to order by. */
+/** When the people trend reaches the headroom — with the 80% band's early
+ * and late ends, worked out by the analysis (the band widens the further
+ * ahead it looks; its slow end may never get there) — or what stops it: no
+ * limit, no growth, already past, or a headroom that is only "at least" (the
+ * what-if looked no further), which has no date to order by. */
 export function runwayDate(
   summary: CapacitySummary,
 ):
@@ -38,23 +39,24 @@ export function runwayDate(
   | { kind: "past" }
   | { kind: "none" }
   | { kind: "beyond"; atMs: number; slope: number; target: number }
-  | { kind: "date"; atMs: number; earlyMs: number; lateMs: number; slope: number; target: number } {
-  const trend = summary.runway.trend;
+  | { kind: "date"; atMs: number; earlyMs: number; lateMs: number | null; slope: number; target: number } {
+  const { trend, reach } = summary.runway;
   const room = summary.headroom;
   if (!trend || !room || room.max_n === null) return { kind: "none" };
   if (room.max_n < room.n_now) return { kind: "past" };
-  if (trend.slope <= 0) return { kind: "flat" };
-  const today = summary.period.days.length - 1;
-  const fit = trend.intercept + trend.slope * today;
-  const when = (level: number) =>
-    summary.period.end_ms + Math.max(0, (room.max_n! - level) / trend.slope) * 86_400_000;
-  if (room.ceiling) return { kind: "beyond", atMs: when(fit), slope: trend.slope, target: room.max_n };
-  const band = BAND_Z * trend.residual_sd;
+  const ms = (days: number | null | undefined) => {
+    if (days === null || days === undefined) return null;
+    const at = summary.period.end_ms + days * 86_400_000;
+    return Number.isFinite(at) && at <= LAST_DATE_MS ? at : null;
+  };
+  const atMs = ms(reach?.at);
+  if (trend.slope <= 0 || !reach || atMs === null) return { kind: "flat" };
+  if (room.ceiling) return { kind: "beyond", atMs, slope: trend.slope, target: room.max_n };
   return {
     kind: "date",
-    atMs: when(fit),
-    earlyMs: when(fit + band),
-    lateMs: when(fit - band),
+    atMs,
+    earlyMs: ms(reach.early) ?? summary.period.end_ms,
+    lateMs: ms(reach.late),
     slope: trend.slope,
     target: room.max_n,
   };
@@ -62,6 +64,13 @@ export function runwayDate(
 
 function dateText(ms: number): string {
   return new Date(ms).toLocaleDateString();
+}
+
+/** "Order by …" — or, when that day is already behind today, that it has passed. */
+function orderText(t: T, orderMs: number, todayMs: number): string {
+  return orderMs < todayMs
+    ? t("capacity.runway.orderPast", { order: dateText(orderMs) })
+    : t("capacity.runway.order", { order: dateText(orderMs) });
 }
 
 export function WhatIf({
@@ -244,15 +253,15 @@ function Runway({ summary, t }: { summary: CapacitySummary; t: T }) {
   const leadDays = Math.max(0, Number.parseInt(lead, 10) || 0);
   const at = runwayDate(summary);
   const option = useMemo<ChartOption | null>(() => {
-    const { trend, days, n } = summary.runway;
+    const { trend, days, n, band } = summary.runway;
     if (!trend || days.length === 0) return null;
     const labels = days.map((d) => dayLabel(summary.period.days[d]));
-    const fit = (d: number, off = 0) => Math.round((trend.intercept + trend.slope * d + off) * 10) / 10;
-    const band = BAND_Z * trend.residual_sd;
-    const edge = (off: number) => ({
+    const tenth = (v: number) => Math.round(v * 10) / 10;
+    const fit = (d: number) => tenth(trend.intercept + trend.slope * d);
+    const edge = (side: 0 | 1) => ({
       type: "line" as const,
       name: t("capacity.runway.band"),
-      data: days.map((d) => fit(d, off)),
+      data: band.map((b) => tenth(b[side])),
       showSymbol: false,
       lineStyle: { type: "dotted" as const, opacity: 0.6 },
     });
@@ -276,8 +285,8 @@ function Runway({ summary, t }: { summary: CapacitySummary; t: T }) {
               ? { symbol: "none", data: [{ yAxis: summary.headroom.max_n }], label: { formatter: "{c}" } }
               : undefined,
         },
-        edge(band),
-        edge(-band),
+        edge(1),
+        edge(0),
       ],
     };
   }, [summary, t]);
@@ -300,6 +309,7 @@ function Runway({ summary, t }: { summary: CapacitySummary; t: T }) {
             />
           </label>
           <p className="capacity-headline" data-testid="capacity-runway-text">
+            {at.kind === "none" && t("capacity.runway.none")}
             {at.kind === "flat" && t("capacity.runway.flat")}
             {at.kind === "past" && t("capacity.runway.past")}
             {at.kind === "beyond" &&
@@ -308,30 +318,41 @@ function Runway({ summary, t }: { summary: CapacitySummary; t: T }) {
                 date: dateText(at.atMs),
                 n: at.target,
               })}
-            {at.kind === "date" &&
-              t("capacity.runway.date", {
-                slope: Math.round(at.slope * 100) / 100,
-                date: dateText(at.atMs),
-                early: dateText(at.earlyMs),
-                late: dateText(at.lateMs),
-                n: at.target,
-                order: dateText(at.earlyMs - leadDays * 86_400_000),
-              })}
+            {at.kind === "date" && (
+              <>
+                {at.lateMs === null
+                  ? t("capacity.runway.dateOpen", {
+                      slope: Math.round(at.slope * 100) / 100,
+                      date: dateText(at.atMs),
+                      early: dateText(at.earlyMs),
+                      n: at.target,
+                    })
+                  : t("capacity.runway.date", {
+                      slope: Math.round(at.slope * 100) / 100,
+                      date: dateText(at.atMs),
+                      early: dateText(at.earlyMs),
+                      late: dateText(at.lateMs),
+                      n: at.target,
+                    })}{" "}
+                {orderText(t, at.earlyMs - leadDays * 86_400_000, summary.period.end_ms)}
+              </>
+            )}
           </p>
           {option && <Chart option={option} label={t("capacity.runway.title")} height={220} testId="capacity-runway-chart" />}
           <ul className="capacity-notes">
             {summary.runway.disk.map((d) => {
               const label = lineLabelById(t, summary.lines, d.line);
-              if (!d.trend || d.trend.slope <= 0 || d.now === null) {
+              const daysLeft = d.trend && d.now !== null ? (d.limit - d.now) / d.trend.slope : null;
+              const whenMs = daysLeft === null ? null : summary.period.end_ms + Math.max(0, daysLeft) * 86_400_000;
+              if (!d.trend || d.trend.slope <= 0 || whenMs === null || !(whenMs <= LAST_DATE_MS)) {
                 return <li key={d.line}>{t("capacity.runway.diskFlat", { line: label })}</li>;
               }
-              const daysLeft = (d.limit - d.now) / d.trend.slope;
               return (
                 <li key={d.line}>
                   {t("capacity.runway.disk", {
                     line: label,
                     rate: bytes(d.trend.slope),
-                    date: dateText(summary.period.end_ms + Math.max(0, daysLeft) * 86_400_000),
+                    date: dateText(whenMs),
                     limit: bytes(d.limit),
                   })}
                   {d.per_person_month !== null &&
