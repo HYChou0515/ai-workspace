@@ -2569,6 +2569,10 @@ export const messages = {
   // plan-skill-install-picker D3: each row asks for itself.
   "skillHub.install.state.checking": { "zh-TW": "檢查中…", en: "Checking…" },
   "skillHub.install.state.ok": { "zh-TW": "可以安裝", en: "Ready to install" },
+  "skillHub.install.dropped": {
+    "zh-TW": "「{title}」{reason}，已取消選取。",
+    en: "“{title}”: {reason} — the selection was cleared.",
+  },
   "skillHub.install.state.unavailable": {
     "zh-TW": "現在讀不到，安裝時會再檢查",
     en: "Can't be read right now — installing will check again",

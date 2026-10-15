@@ -214,9 +214,9 @@ async def test_installs_of_an_entry_the_viewer_cannot_read_is_404(harness: Harne
 
 async def test_targets_lists_an_apps_editable_workspaces_by_title(harness: Harness):
     """The picker's rows are the workspaces the viewer may edit — what
-    installing needs — and nothing about what is inside them: whether the
-    entry is already there is the side panel's where-installed, and a folder
-    in the way is the install's own refusal (plan-skill-install-picker D1)."""
+    installing needs — and nothing about what is inside them: each row asks
+    that of `…/skills/install-state` for itself (plan-skill-install-picker
+    D1, D3)."""
     hub = _hub(harness)
     entry = await _publish(hub, "one", tools=["exec", "query_entity"])
     carols = await _publish(hub, "x", owner="carol")
@@ -242,7 +242,7 @@ async def test_targets_lists_an_apps_editable_workspaces_by_title(harness: Harne
 async def test_targets_reads_no_workspace_file(harness: Harness, monkeypatch):
     """The list must open as fast as the item list does: one question to the
     database, none to any workspace. It used to read each workspace's
-    `.skill/<name>/` (two to four sandbox round trips apiece) and answered
+    `.skill/<name>/` (two to three file operations apiece) and answered
     only once the slowest one had."""
     hub = _hub(harness)
     entry = await _publish(hub, "one")
@@ -366,6 +366,21 @@ async def test_a_rows_state_is_only_for_a_workspace_the_viewer_may_edit(harness:
     )
 
     assert res.status_code == 403, res.text
+
+
+async def test_a_rows_state_for_an_entry_the_viewer_cannot_read_is_404(harness: Harness):
+    """The install route's own 404: an entry gone private says nothing about
+    any workspace, not even that it is free (review round 2)."""
+    hub = _hub(harness)
+    entry = await _publish(hub, "one")
+    await hub.set_permission(entry, Permission(visibility="private"))
+    free = _item(harness, "free", "read_content", "edit_content")
+
+    res = harness.client.get(
+        f"/a/rca/items/{free}/skills/install-state", params={"entry_id": entry}
+    )
+
+    assert res.status_code == 404, res.text
 
 
 # ── review round 1 ───────────────────────────────────────────────────────────

@@ -79,7 +79,9 @@ export type SkillHubTarget = { item_id: string; title: string };
 /** What installing would do in one workspace, asked by its row before Install
  * is pressed (D3). `unavailable`: its sandbox was too busy to answer, so the
  * install itself will tell. `owner` on `name_taken`: whose copy is in the way
- * ("" for a hand-written folder). */
+ * when it is a hub copy of an entry the viewer can read — "" otherwise (a
+ * hand-written folder, a fork's starting point, a record that does not parse,
+ * a copy of an entry gone from the viewer's view). */
 export type SkillInstallState = {
   state: "ok" | "installed" | "name_taken" | "unavailable";
   owner: string;
@@ -201,8 +203,14 @@ export type SkillHubApi = {
   /** App `app`'s workspaces the viewer may install into, by title — nothing
    * about what is inside them (plan-skill-install-picker D1). */
   targets(entryId: string, app: string): Promise<SkillHubTargets>;
-  /** What installing the entry into ONE of those workspaces would do (D3). */
-  installState(slug: string, itemId: string, entryId: string): Promise<SkillInstallState>;
+  /** What installing the entry into ONE of those workspaces would do (D3);
+   * `signal` drops the question when its row goes away. */
+  installState(
+    slug: string,
+    itemId: string,
+    entryId: string,
+    signal?: AbortSignal,
+  ): Promise<SkillInstallState>;
   /** The Skills panel's install door: 409 when a folder of that name is
    * already in the item (a coded refusal naming whose copy it is), 404 when
    * the entry cannot be read. */
@@ -238,8 +246,8 @@ function asFiles(files: unknown): SkillHubFile[] {
   );
 }
 
-async function getJson<T>(path: string, failed: string): Promise<T> {
-  const resp = await apiFetch(path);
+async function getJson<T>(path: string, failed: string, signal?: AbortSignal): Promise<T> {
+  const resp = await apiFetch(path, signal ? { signal } : undefined);
   if (!resp.ok) throw await refused(resp, failed);
   return (await resp.json()) as T;
 }
@@ -344,10 +352,11 @@ export const skillHubApi: SkillHubApi = {
       "the workspaces could not be read",
     );
   },
-  installState(slug, itemId, entryId) {
+  installState(slug, itemId, entryId, signal) {
     return getJson<SkillInstallState>(
       `/a/${encodeURIComponent(slug)}/items/${encodeURIComponent(itemId)}/skills/install-state?${new URLSearchParams({ entry_id: entryId })}`,
       "the workspace could not be read",
+      signal,
     );
   },
   async install(slug, itemId, entryId) {

@@ -12,12 +12,13 @@
  */
 
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useId, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 
 import { HttpError } from "../api/http";
 import { qk } from "../api/queryKeys";
+import { createLimiter } from "../api/concurrency";
 import { invalidateHubInstalls } from "../api/skillHubCache";
 import {
   type SkillEditTarget,
@@ -368,6 +369,11 @@ function Sidebar({
   );
 }
 
+/** How many install-dialog rows ask their question at once. Our judgement,
+ * not a sourced number: below the six connections a browser keeps per host
+ * on HTTP/1.1, so two stay free for the Install press and the page. */
+const ROW_CHECKS_AT_ONCE = 4;
+
 /** 「安裝到 workspace…」 (D6): an App, then one of its workspaces the viewer
  * may edit. The list is the database alone and shows at once; each row then
  * asks what installing would do there and says it before Install is pressed
@@ -399,11 +405,16 @@ function InstallDialog({
   });
   const items = targets.data?.items ?? [];
   // One question per row, each answered on its own: a busy sandbox holds back
-  // only its own row, never the list (D3).
+  // only its own row, never the list (D3). At most ROW_CHECKS_AT_ONCE are out
+  // at a time, and closing the dialog drops the rest — a slow sandbox's
+  // question can take minutes, and unbounded a few of them held every
+  // connection the browser allows, the Install press included (review round 2).
+  const [rowChecks] = useState(() => createLimiter(ROW_CHECKS_AT_ONCE));
   const states = useQueries({
     queries: items.map((it) => ({
       queryKey: qk.skillHubTargetState(entry.id, slug, it.item_id),
-      queryFn: () => client.installState(slug, it.item_id, entry.id),
+      queryFn: ({ signal }: { signal: AbortSignal }) =>
+        rowChecks(() => client.installState(slug, it.item_id, entry.id, signal), signal),
     })),
   });
   // A question that failed (an API pod without the route mid-rollout, the
@@ -424,12 +435,50 @@ function InstallDialog({
     return s === undefined || s === "ok" || s === "unavailable";
   };
   const picked = chosen !== null && pickable(chosen) ? chosen : null;
+  // What a row says about installing there — its status line, and the reason
+  // given when a pick is dropped.
+  const statusText = (s: SkillInstallState | undefined) =>
+    s === undefined
+      ? t("skillHub.install.state.checking")
+      : s.state === "installed"
+        ? t("skillHub.install.state.installed")
+        : s.state === "unavailable"
+          ? t("skillHub.install.state.unavailable")
+          : s.state === "name_taken"
+            ? s.owner
+              ? t("skillHub.install.state.taken", { owner: nameOf(s.owner) })
+              : t("skillHub.install.state.takenHand")
+            : t("skillHub.install.state.ok");
+  // A pick whose row turns out not to be pickable is let go for good — so it
+  // does not come back unasked if that row later turns pickable again — and
+  // that is SAID, on screen and to a screen reader, rather than the radio just
+  // emptying (review round 2).
+  const [dropped, setDropped] = useState<string | null>(null);
+  const chosenState = chosen === null ? undefined : stateOf.get(chosen);
+  useEffect(() => {
+    if (chosen === null || pickable(chosen)) return;
+    const title = items.find((i) => i.item_id === chosen)?.title || chosen;
+    setDropped(t("skillHub.install.dropped", { title, reason: statusText(chosenState) }));
+    setChosen(null);
+    // Only when the pick or its answer changes, not on every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chosen, chosenState?.state, chosenState?.owner]);
+  const pick = (id: string) => {
+    setDropped(null);
+    setChosen(id);
+  };
   const install = useMutation({
     mutationFn: (itemId: string) => client.install(slug, itemId, entry.id),
     onSuccess: (_res, itemId) => {
       invalidateHubInstalls(qc);
       void qc.invalidateQueries({ queryKey: qk.itemSkills(slug, itemId) });
       onDone(slug, itemId, items.find((i) => i.item_id === itemId)?.title ?? itemId);
+    },
+    // Refused: that row's answer is out of date (it said installing could go
+    // ahead, or was still checking), so it asks again rather than reading
+    // 「可以安裝」 beside the refusal (review round 2).
+    onError: (_err, itemId) => {
+      void qc.invalidateQueries({ queryKey: qk.skillHubTargetState(entry.id, slug, itemId) });
     },
     meta: { silentError: true },
   });
@@ -447,6 +496,7 @@ function InstallDialog({
           onChange={(e) => {
             setSlug(e.target.value);
             setChosen(null);
+            setDropped(null);
           }}
         >
           {(apps.some((a) => a.slug === slug) ? apps : [{ slug, title: slug }, ...apps]).map((a) => (
@@ -490,7 +540,7 @@ function InstallDialog({
                     value={it.item_id}
                     checked={picked === it.item_id}
                     disabled={!pickable(it.item_id)}
-                    onChange={() => setChosen(it.item_id)}
+                    onChange={() => pick(it.item_id)}
                   />
                   <span className="skill-hub-target-text">
                     <span className="skill-hub-target-title">{it.title || it.item_id}</span>
@@ -504,17 +554,7 @@ function InstallDialog({
                       ) : kind === "unavailable" ? (
                         <Icon name="clock" size={13} />
                       ) : null}
-                      {s === undefined
-                        ? t("skillHub.install.state.checking")
-                        : s.state === "installed"
-                          ? t("skillHub.install.state.installed")
-                          : s.state === "unavailable"
-                            ? t("skillHub.install.state.unavailable")
-                            : s.state === "name_taken"
-                              ? s.owner
-                                ? t("skillHub.install.state.taken", { owner: nameOf(s.owner) })
-                                : t("skillHub.install.state.takenHand")
-                              : t("skillHub.install.state.ok")}
+                      {statusText(s)}
                     </span>
                   </span>
                 </label>
@@ -523,6 +563,11 @@ function InstallDialog({
           </div>
         )}
       </fieldset>
+      {dropped ? (
+        <p className="hint" role="status">
+          {dropped}
+        </p>
+      ) : null}
       {install.isError ? (
         <p className="error" role="alert">
           {t("skillHub.failed", { reason: describeRefusal(install.error, t, nameOf) })}
