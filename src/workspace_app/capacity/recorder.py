@@ -163,12 +163,15 @@ class UsageRecorder:
                 self._writer.return_dropped(dropped)
 
     async def run(self) -> None:
-        """Flush each window as it closes, until cancelled."""
+        """Flush each window as it closes, until cancelled. A window is one
+        document per (person, App, work) cell — tens of thousands on a busy
+        pod — so they are built in a thread, not on the loop the pod serves
+        from; the lock is held only to take the closed windows."""
         while True:
             now = self._clock()
             next_close = self._window_of(now) / 1000 + self.window_s
             await asyncio.sleep(max(0.0, next_close - now) + _FLUSH_GRACE_S)
-            self.flush()
+            await asyncio.to_thread(self.flush)
 
     def run_until(self, stop: threading.Event) -> None:
         """`run` for a thread (the worker process): flush each window as it

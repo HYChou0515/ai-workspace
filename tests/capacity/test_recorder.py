@@ -223,3 +223,32 @@ async def test_the_flush_loop_writes_each_window_as_it_closes():
         rec.close()
 
     assert [r["user"] for r in _rows(sink)] == ["alice"]
+
+
+async def test_the_flush_loop_builds_its_rows_off_the_event_loop():
+    """A window's rows are one document per (person, App, work) cell — tens of
+    thousands on a busy pod — and building them on the loop stalled every
+    request that pod was serving, once a window."""
+    import threading
+
+    sink = _ListSink()
+    rec = UsageRecorder(sink, component="api", pod="p", window_s=1, queue_max=100)
+    seen: list[str] = []
+    real = rec.flush
+
+    def spy(**kw):  # noqa: ANN003, ANN202
+        seen.append(threading.current_thread().name)
+        return real(**kw)
+
+    rec.flush = spy  # ty: ignore[invalid-assignment]
+    loop = asyncio.create_task(rec.run())
+    try:
+        deadline = time.monotonic() + 10
+        while not seen and time.monotonic() < deadline:
+            await asyncio.sleep(0.05)
+        by_the_loop = list(seen)
+    finally:
+        loop.cancel()
+        rec.close()
+
+    assert by_the_loop and threading.main_thread().name not in by_the_loop
