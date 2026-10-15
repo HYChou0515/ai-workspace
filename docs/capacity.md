@@ -1,0 +1,272 @@
+# 容量規劃（capacity）
+
+這一頁回答兩個問題，給 superuser 看（`/capacity`，其他人 403）：
+
+1. **我們吃掉多少資源？**每一種資源（CPU、記憶體、磁碟、GPU），每個人在每個地方（API、背景工作、沙盒、
+   資料庫、GPU）用了多少。
+2. **人更多時需要多少？**N 個人要幾台機器、幾張 GPU，哪一項最先不夠，照現在的成長什麼時候要下單。
+
+設計與取捨在 [plan-capacity-usage.md](plan-capacity-usage.md)。這份文件寫運營方要做的事：**平台寫出用量紀錄，
+你們的收集器送進 ES；四個資料來源由你們實作，平台只定介面**。
+
+## 1. 平台寫出什麼
+
+每筆紀錄是 stdout 上一行 JSON（設定 `capacity.sink` 可以換成別的寫法）：
+
+```json
+{"@timestamp":"2026-10-15T04:05:00.000Z","event":{"dataset":"workspace.usage"},
+ "usage":{"v":1,"kind":"work","pod":"api-7f9c","component":"api","user":"alice","app":"pm",
+          "work":"req:GET /api/a/{slug}/items/{item_id}/files","count":12,"seconds":0.84,"h1":9,"h2":3,"window_s":300}}
+```
+
+- **收集器只要做一件事**：`event.dataset == "workspace.usage"` 的行送到自己的 index（例如 `workspace-usage-*`）。
+- `@timestamp` 是這筆數字涵蓋的時段的**開頭**（`work`、`sandbox`、`sandbox_host`），或事件開始的時間
+  （`turn` 是訊息被接受的時間、`job` 是開始執行的時間）。時段對齊到 epoch 的整數倍，所以 5 分鐘的
+  date histogram 每個時段只會落在一個桶。
+- 有時段的種類裡，**每個數字都可以直接加總**（次數、秒數、記憶體×秒）；唯一例外是 `sandbox.mem_max`，取最大值。
+
+| `kind` | 誰寫 | 什麼時候 | 欄位 |
+|---|---|---|---|
+| `work` | API、worker | 每個時段，每人 × App × 工作種類一筆 | `user` `app` `work` `count` `seconds` `h0`…`h9`（只有請求有，0 不寫）`window_s` |
+| `turn` | API | 每個對話回合結束 | `user` `app` `item` `surface` `outcome` `accepted_ms` `started_ms` `first_event_ms` `first_output_ms` `ended_ms` `model` `prompt_tokens` `completion_tokens` |
+| `job` | 跑 job 的行程 | 每次 job 執行結束 | `user` `jobtype` `enqueued_ms` `started_ms` `ended_ms` `outcome` `attempt` |
+| `sandbox` | sandbox-host（或 `kind: local` 隔離模式的 API） | 每個時段，每個沙盒一筆 | `item` `user` `app` `sandbox` `cpu_s` `mem_bs` `mem_max` `thr_s` `thr_n` `periods` `cpu_psi_s` `mem_psi_s` `oom` `cpu_limit` `mem_limit` `window_s` |
+| `sandbox_host` | sandbox-host | 每個時段一筆 | `live_s` `cpu_psi_s` `mem_psi_s` `window_s` |
+| `disk` | blob-gc worker 的 disk-ledger 那一輪 | 每 6 小時 | `scope`（`workspace` / `kb`）`item` 或 `collection` `user` `app` `bytes` |
+| `meta` | 任何行程 | 有紀錄因佇列滿被丟掉的時段 | `dropped` `window_s` |
+
+`work` 的種類：`req:<METHOD> <route template>`（請求；`seconds` 是牆上時間）、`stream:<route template>`
+（SSE 長連線；`seconds` 是這個時段裡連著的秒數）、`turn:<surface>`（回合在跑的秒數）、
+`turn-events:<surface>`（發出的事件數）、`job:<jobtype>`（job 在跑的秒數）。延遲桶 `h0`…`h9` 的上限是
+50、100、250、500、1000、2500、5000、10000、30000 ms，以及更慢。
+
+**認不出是誰的**請求記成 `unknown`（你們的 `get_user_id` 在那個請求答不出來）；沒有人觸發的工作記成 `system`。
+這兩種在畫面上是獨立的一列，占比寫在「可信度」。
+
+### ES 的 mapping
+
+字串一律 `keyword`，數字一律 `double`，`*_ms` 用 `long`：
+
+```json
+PUT _index_template/workspace-usage
+{
+  "index_patterns": ["workspace-usage-*"],
+  "template": {
+    "mappings": {
+      "properties": {
+        "@timestamp": {"type": "date"},
+        "event": {"properties": {"dataset": {"type": "keyword"}}}
+      },
+      "dynamic_templates": [
+        {"ms": {"path_match": "usage.*_ms", "mapping": {"type": "long"}}},
+        {"strings": {"path_match": "usage.*", "match_mapping_type": "string", "mapping": {"type": "keyword"}}},
+        {"numbers": {"path_match": "usage.*", "match_mapping_type": "long", "mapping": {"type": "double"}}}
+      ]
+    }
+  }
+}
+```
+
+### 量有多大
+
+每個時段的列數 ≈ 每個行程在那個時段裡「有在動的（人 × 工作種類）」數，加上每個活著的沙盒一列。
+舉例（每個數字都是假設）：同時 40 人、每天 10 小時、每人每 5 分鐘碰 8 種路由、3 個 API pod，
+`work` 約 40 × 8 = 320 列／時段 × 120 個時段 = 每天 38,400 列；100 個沙盒開 10 小時再多 12,000 列。
+上線第一天之後，「可信度」會列出平台用量紀錄實際的列數。要更細的解析度，把 `capacity.window_s` 降到 60
+（列數約多 5 倍）。
+
+## 2. sandbox-host 自己量沙盒
+
+sandbox-host 每 `SANDBOX_HOST_USAGE_SAMPLE_S` 秒（預設 60；`0` 關掉）讀一次每個活著的沙盒的 cgroup
+（`cpu.stat`、`memory.current`、`memory.events`、`cpu.pressure`、`memory.pressure`、`cpu.max`、`memory.max`），
+每 `SANDBOX_HOST_USAGE_WINDOW_S` 秒（預設 300，要整除 3600）寫一筆 `sandbox`，一樣是 stdout 的 JSON 行。
+沙盒屬於誰，是 app 在建立沙盒時告訴它的（`labels: {user, app}`，user 是 item 的擁有者，與額度扣在誰身上
+同一條規則）；舊版 app 沒送的話，沙盒照量，但記成 `unknown`。
+
+**節流（throttled）和壓力（pressure）回答的是不同問題**：節流是沙盒撞到**自己的** `cpu.max`（它的上限太低）；
+壓力是它在等 CPU，因為**機器**忙（要買機器）。「變慢的門檻」(d) 看的是壓力。核心沒開 PSI 的話，
+壓力欄位不寫（不是 0），(d) 就看不到。
+
+## 3. LLM 呼叫帶上標籤
+
+平台的每次 LLM 呼叫（agent、KB 的 LLM、VLM、embedding）帶 `x-litellm-tags` header：
+
+```
+x-litellm-tags: ws,ws.user:alice,ws.app:pm,ws.purpose:chat,ws.call:agent
+```
+
+- `ws` 是這個平台的記號，讓 ④ 分得出平台的流量和其他系統的；值裡的 `,` 與 `%` 會 percent-encode。
+- LiteLLM 把它存在 spend log 的 `request_tags`。沒有 item 標籤：上千個不同的 item id 會變成 LiteLLM
+  每個標籤每天一列的表。
+- 沒有人觸發的呼叫（sweeper、健康檢查）不帶標籤；沙盒裡的程式自己呼叫 LiteLLM 也不帶，記在它用的那把 key 上。
+- ⚠️ **LiteLLM 有開 tag routing（`router_settings.enable_tag_filtering`）的部署**：一個請求的標籤對不到任何
+  deployment 時，LiteLLM 會送到 `default` pool，沒有 default pool 就**拒絕**。rollout 前確認有 default pool，
+  或設 `capacity.llm_tags: false`。
+- 標籤只在平台有在記錄時才送（`capacity.record: true`）。
+
+## 4. 四個資料來源（你們實作）
+
+在 `config.yaml` 用 dotted path 指到你們的 class（零參數建構），沒指的就是沒接上，需要它的視圖會說缺什麼：
+
+```yaml
+capacity:
+  usage_records: acme_capacity.sources.EsRecords      # ①
+  resource_metrics: acme_capacity.sources.PromPods    # ②
+  gpu_metrics: acme_capacity.sources.DcgmGpus         # ③
+  llm_requests: acme_capacity.sources.LiteLlmLog      # ④
+```
+
+介面在 `src/workspace_app/capacity/sources.py`。共通的規則：
+
+- 每個方法是**同步**的，平台在 worker thread 裡呼叫，可以直接用同步的 ES／HTTP／DB client。
+- 時間一律 epoch 毫秒；每個桶的 `t_ms` 是它的開頭，**對齊 `step_s * 1000` 的整數倍**（Prometheus 的
+  `query_range` 只要 start 對齊就會對齊；ES 的 `date_histogram` 預設就對齊）。
+- 寫好之後跑 `uv run python -m workspace_app.capacity check --hours 24`（見 §5）。
+
+### ① 平台用量紀錄（`UsageRecordSource`）
+
+兩個方法：
+
+- `aggregate(q)`：在 `[q.start_ms, q.end_ms)`、`usage.kind == q.kind`、`usage.<欄位> == q.where` 的紀錄上，
+  依 `q.group_by` 的欄位（缺的當 `""`）和 `q.step_s` 的時間桶（`None` 就是整段一桶，`t_ms` 為 `None`），
+  對 `q.sums` 加總、對 `q.maxes` 取最大。同一個欄位不會同時在兩邊。
+  **語意的參考實作**是 `sources.aggregate_documents`——同樣的事，在一串紀錄上做。
+- `records(kind, start_ms, end_ms)`：那段時間所有 `kind`（`turn` 或 `job`）的 `usage` 物件。
+
+ES 的寫法是一個 composite aggregation（翻頁直到沒有 `after_key`）：
+
+```json
+POST workspace-usage-*/_search
+{
+  "size": 0,
+  "query": {"bool": {"filter": [
+    {"term": {"usage.kind": "work"}},
+    {"range": {"@timestamp": {"gte": 1760500000000, "lt": 1760586400000, "format": "epoch_millis"}}}
+  ]}},
+  "aggs": {"g": {
+    "composite": {"size": 1000, "sources": [
+      {"t": {"date_histogram": {"field": "@timestamp", "fixed_interval": "300s"}}},
+      {"user": {"terms": {"field": "usage.user", "missing_bucket": true}}},
+      {"work": {"terms": {"field": "usage.work", "missing_bucket": true}}}
+    ]},
+    "aggs": {"count": {"sum": {"field": "usage.count"}},
+             "seconds": {"sum": {"field": "usage.seconds"}}}
+  }}
+}
+```
+
+`records` 用 `sort: [{"@timestamp": "asc"}]` 加 `search_after` 把 `_source.usage` 全部取回。
+
+### ② pod 與機器（`ResourceMetricsSource`）
+
+- `usage(start_ms, end_ms, step_s)`：每個桶、每個 pod 一筆 `ResourceSample(t_ms, component, pod, cpu_cores,
+  memory_bytes, disk_bytes)`——CPU 是這個桶的平均核數，記憶體是平均位元組；volume（資料庫的、檔案儲存的、
+  沙盒暫存的）給 `disk_bytes`。`component` 只能是 `api`、`worker`、`sandbox-host`、`postgres`、
+  `filestore`、`scratch`。
+- `capacity()`：每個 component 一筆 `CapacityEntry(component, cpu_cores, memory_bytes, disk_bytes, machines,
+  machine_label)`——它總共能用多少、由幾台組成、多買一台是什麼（`"node 32 cores / 128 GiB"`）。
+
+Prometheus 的寫法（`query_range`，`step=300s`）：
+
+```promql
+# CPU：平均核數
+sum by (pod) (rate(container_cpu_usage_seconds_total{namespace="ws", container!="", pod=~"workspace-api-.*"}[5m]))
+# 記憶體
+sum by (pod) (container_memory_working_set_bytes{namespace="ws", container!="", pod=~"workspace-api-.*"})
+# volume 用量
+sum by (persistentvolumeclaim) (kubelet_volume_stats_used_bytes{namespace="ws"})
+```
+
+容量可以從 `kube_node_status_allocatable` 加總那個 component 用的 node pool，或從 pod 的 limit × replicas 算。
+
+### ③ GPU（`GpuMetricsSource`）
+
+- `usage(...)`：每個桶、每張卡一筆 `GpuSample(t_ms, card, model, util, memory_bytes)`，`util` 是 0–1；
+  `model` 是**這張卡服務的模型，用 LiteLLM 的名字**（不是 GPU 型號）。
+- `cards()`：每張卡一筆 `GpuCard(card, node, model, memory_total_bytes)`。
+
+DCGM exporter 的 `DCGM_FI_DEV_GPU_UTIL`（0–100，除以 100）與 `DCGM_FI_DEV_FB_USED`（MiB，乘 1024²）；
+卡對到模型，用 exporter 帶的 pod 標籤對你們的模型部署。**GPU 使用率不是容量指標**：一個請求在解碼時就讓
+它接近 100%（「一個以上 kernel 在跑的時間比例」），所以 GPU 的容量看的是 ④ 的「開始變慢時的同時請求數」，
+③ 用來知道每個模型有幾張卡、記憶體用多少。
+
+### ④ LiteLLM 的請求紀錄（`LlmRequestSource`）
+
+- `usage(...)`：每個桶 × 模型 × **請求的整串標籤**一筆 `LlmUsageRow(t_ms, model, tags, requests,
+  prompt_tokens, completion_tokens, busy_seconds)`；`busy_seconds` 是這個桶開始的請求的 (end − start) 總和。
+  其他系統的請求也要給（它們的標籤沒有 `ws`）——GPU 是共用的。
+- `latency(...)`：每個桶 × 模型一筆 `LlmLatencyRow(t_ms, model, requests, ttft_p50_s, ttft_p95_s,
+  tokens_per_s_p50)`；首字時間是 start → 第一個 token，生成速度是 completion tokens ÷ (end − 第一個 token)。
+
+讀 LiteLLM 的 Postgres（欄位名稱依你們的 LiteLLM 版本調整）：
+
+```sql
+-- usage
+SELECT to_timestamp(floor(extract(epoch FROM "startTime") / 300) * 300) AS t,
+       model, request_tags,
+       count(*) AS requests, sum(prompt_tokens), sum(completion_tokens),
+       sum(extract(epoch FROM "endTime" - "startTime")) AS busy_seconds
+FROM "LiteLLM_SpendLogs"
+WHERE "startTime" >= to_timestamp(:start_ms / 1000.0) AND "startTime" < to_timestamp(:end_ms / 1000.0)
+GROUP BY 1, 2, 3;
+
+-- latency
+SELECT to_timestamp(floor(extract(epoch FROM "startTime") / 300) * 300) AS t, model, count(*),
+       percentile_cont(0.5)  WITHIN GROUP (ORDER BY extract(epoch FROM "completionStartTime" - "startTime")),
+       percentile_cont(0.95) WITHIN GROUP (ORDER BY extract(epoch FROM "completionStartTime" - "startTime")),
+       percentile_cont(0.5)  WITHIN GROUP (ORDER BY completion_tokens
+           / nullif(extract(epoch FROM "endTime" - "completionStartTime"), 0))
+FROM "LiteLLM_SpendLogs"
+WHERE "startTime" >= to_timestamp(:start_ms / 1000.0) AND "startTime" < to_timestamp(:end_ms / 1000.0)
+  AND "completionStartTime" IS NOT NULL
+GROUP BY 1, 2;
+```
+
+`request_tags` 是 JSON 陣列，原樣轉成 tuple 傳回即可（平台自己解析 `ws.*`）。
+
+## 5. 檢查你們的實作
+
+```bash
+uv run python -m workspace_app.capacity check --hours 24 [--config config.yaml]
+```
+
+對每個接上的來源呼叫每個方法，回報：桶沒對齊、不認得的 component、負數或不可能的值（一個 pod 用的 CPU
+比它的 component 總共還多）、GPU 使用率不在 0–1、LiteLLM 的列沒有這個平台的標籤、方法丟錯。有 error 就
+exit 1。畫面的「資料來源」也列出每個來源接上沒、讀到幾列、最後的錯誤。
+
+## 6. 數字怎麼來（給看畫面的人）
+
+| 元件 × 資源 | 每人分到多少 |
+|---|---|
+| API、背景工作、資料庫的 CPU | 每種請求的平均成本 × 這個人的次數；成本是用很多個時段的「次數」對上「pod 的 CPU」解出來的（utilization law + 非負最小平方） |
+| API、背景工作的記憶體 | 同上，對上的是同時開著的連線、在跑的回合與 job |
+| 沙盒的 CPU、記憶體 | 直接量：每個沙盒的 cgroup |
+| 磁碟 | 直接量：每個 item 的工作區、每個 collection 的文件 |
+| GPU | 直接量：這個人的請求在處理中的秒數（LiteLLM 的標籤） |
+| 資料庫的記憶體與磁碟、GPU 記憶體 | 不分到人（基本開銷） |
+
+- 「N 個人」是最近 30 天用過至少一次的人。
+- **試算**從過去的工作日抽樣（有設工作日曆就照它）：抽一天，留下那天的真實的人，再從選的那一群人裡抽到
+  N 人，看那一天的尖峰；抽 400 次，取 p50 與 p95。
+- **安全門檻**是「變慢的門檻」量到的轉折點；還沒量到時用預設值（CPU 70%、記憶體 80%、磁碟 80%），畫面會標明。
+- **回測**：用前面的日子預測最近 14 天每天的尖峰，平均誤差超過 20% 時，試算與時程標示「僅供參考」。
+- 每個視圖需要多少資料才會出現：
+
+| 視圖 | 需要 | 多久之後 |
+|---|---|---|
+| 總覽 | ② | 1 天；「還能撐幾人」同試算 |
+| 分攤、個人明細 | ①（拆 API／背景工作／資料庫還要 ②） | 1 天；拆分 3 天 |
+| 每人用量分布 | ① | 7 天、至少 10 人 |
+| 趨勢 | 任一來源 | 2 天 |
+| 試算 | ①、②（GPU 還要 ③、④） | 14 天、至少 10 人 |
+| 時程 | 同試算 | 28 天 |
+| 變慢的門檻 | 那一組的兩個量 | 7 天，負載變化至少 20 個百分點 |
+| 可信度 | ① | 回測 21 天 |
+
+分析在 API pod 上按需計算（thread 裡，不卡事件迴圈），同一個期間同時只算一次，結果在記憶體留 10 分鐘，
+什麼都不寫；「重新計算」會丟掉它。90 天的期間用 15 分鐘的時段。資料量超過 `capacity.max_rows` 時會停下來，
+畫面說「請改看較短的期間」。
+
+## 7. 設定
+
+`capacity:` 的每個 key 在 [configuration.md](configuration.md#15-capacity容量規劃)；sandbox-host 的兩個環境變數也在那裡。

@@ -833,7 +833,8 @@ observability:
 `SANDBOX_HOST_BIND`、`SANDBOX_HOST_UID_MIN` / `_UID_MAX`、`SANDBOX_HOST_MEMORY_MAX`、
 `SANDBOX_HOST_CPU_CORES`、`SANDBOX_HOST_PIDS_MAX`、`SANDBOX_HOST_CGROUP_ROOT`、`SANDBOX_HOST_ROOT`、
 `SANDBOX_HOST_EXEC_TIMEOUT`、`SANDBOX_HOST_LOG_TIMEOUT`、`SANDBOX_HOST_TOOLS_DIR`、`SANDBOX_HOST_IDLE_TTL`、
-`SANDBOX_HOST_ARCHIVE_PACK`、`SANDBOX_HOST_PACK_DRAIN_S`（＋ host 綁定用的 `POD_IP` / `PORT`）。
+`SANDBOX_HOST_ARCHIVE_PACK`、`SANDBOX_HOST_PACK_DRAIN_S`、`SANDBOX_HOST_USAGE_SAMPLE_S`、
+`SANDBOX_HOST_USAGE_WINDOW_S`（容量規劃的沙盒用量，見 §15）（＋ host 綁定用的 `POD_IP` / `PORT`）。
 
 ---
 
@@ -848,6 +849,38 @@ observability:
 | 多 pod 檔案樹一下有一下沒 | 用了 `kind: local` 卻沒共享 `sandbox.root`，或該用 `kind: http`（見 §5-C） |
 | KB 搜不到東西 / 維度錯 | 換了嵌入模型沒對齊 `KB_EMBED_DIM` 且沒重建索引 |
 | 圖片上傳 0 chunk | `kb.vlm_llm` 沒設 / 被設成 `null` |
+
+---
+
+## 15. capacity（容量規劃）
+
+給 superuser 的容量頁（`/capacity`）。平台**不存任何東西**：用量紀錄是 stdout 的 JSON 行，由你們的收集器送進
+ES；頁面讀的四個資料來源由你們實作。整套說明（紀錄格式、ES mapping、四個介面與範例、怎麼檢查）在
+[容量規劃 capacity.md](capacity.md)。
+
+| key | 預設 | 意思 |
+|---|---|---|
+| `capacity.record` | `true` | 寫用量紀錄（每個請求、對話回合、job 的次數與時間）。`false` = 什麼都不記，LLM 標籤也不送 |
+| `capacity.sink` | `""` | 自己的 `UsageSink`（dotted path）；空 = stdout 一行一筆 JSON |
+| `capacity.window_s` | `300` | 每個行程把用量加總的時段（秒），要整除 3600 |
+| `capacity.queue_max` | `10000` | 寫出佇列能排幾筆；滿了就丟、記在 `meta` 紀錄 |
+| `capacity.llm_tags` | `true` | LLM 呼叫帶 `x-litellm-tags`（人、App、用途）。LiteLLM 開了 tag routing 又沒有 `default` pool 時要關 |
+| `capacity.usage_records` | `""` | ① 平台用量紀錄的讀取端（你們的 `UsageRecordSource`） |
+| `capacity.resource_metrics` | `""` | ② pod 與機器用量與容量（`ResourceMetricsSource`） |
+| `capacity.gpu_metrics` | `""` | ③ GPU 用量（`GpuMetricsSource`） |
+| `capacity.llm_requests` | `""` | ④ LiteLLM 請求紀錄（`LlmRequestSource`） |
+| `capacity.step_s` | `300` | 分析的時段（秒），要是 `window_s` 的整數倍；90 天的期間至少 900 |
+| `capacity.lag_s` | `600` | 最新的這幾秒不算（等 ES 收進來） |
+| `capacity.timezone` | `""` | 「一天」從哪個時區的午夜切（IANA 名稱）；空 = UTC |
+| `capacity.max_rows` | `5000000` | 一次分析最多讀幾列；超過就停下並請人改看較短的期間 |
+
+開機會擋下用不了的值（`window_s` 不整除 3600、`step_s` 不是它的倍數、不存在的時區、`queue_max` /
+`max_rows` 不是正數），並說是哪個 key。
+
+sandbox-host 那側（環境變數）：`SANDBOX_HOST_USAGE_SAMPLE_S`（預設 `60`，每幾秒讀一次每個沙盒的 cgroup；
+`0` = 不量）、`SANDBOX_HOST_USAGE_WINDOW_S`（預設 `300`，幾秒寫一筆；要整除 3600）。
+
+檢查四個來源的實作：`uv run python -m workspace_app.capacity check --hours 24`。
 
 ---
 

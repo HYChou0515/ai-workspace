@@ -46,7 +46,9 @@ def fixtures() -> dict[str, object]:
 def main() -> None:
     OUT.mkdir(parents=True, exist_ok=True)
     for name, data in fixtures().items():
-        (OUT / name).write_text(json.dumps(data, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
+        (OUT / name).write_text(
+            json.dumps(data, ensure_ascii=False, indent=1) + "\n", encoding="utf-8"
+        )
         print(f"wrote {OUT / name}")
 
 

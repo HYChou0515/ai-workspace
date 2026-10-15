@@ -2602,6 +2602,46 @@ AI 讀 `wui` skill 時會看到「這個 item 能讓頁面問的 subagent」清�
   `curl -s -b '<cookie>' '<網址>/api/kb/agent'` 的 `model` 欄位是新模型，不用重啟任何 pod
   （聊天畫面的模型選單只列名稱，不列模型，看不出差別）。再按「回復」到前一版，`model` 回到原本的模型。沒部署到這一版的症狀：`/api/admin/model-settings` 回 404 給 superuser。
 
+### 2026-10-16 · #962 容量規劃：用量紀錄，與 superuser 的容量頁 {#pr-962}
+
+**設定** — 新的 `capacity:` 區塊（每個 key 見 [configuration.md §15](configuration.md#15-capacity容量規劃)）。
+**預設就開、行為會變**：
+
+- `capacity.record: true`：每個 API 與 worker 行程開始在 **stdout** 寫用量紀錄——每 5 分鐘、每人 × 工作種類一行
+  JSON（`event.dataset: workspace.usage`），每個對話回合、每次 job 結束各一行。量的估算方式在
+  [capacity.md §1](capacity.md)。為什麼：容量頁要算「每人在每個地方用了多少」，平台不存，交給你們的 ES。
+  不要它：rollout 前設 `capacity.record: false`（連帶不送 LLM 標籤）。每個請求多一點計數（`scripts/bench_usage_middleware.py`
+  量得出你們機器上的數字）。
+- `capacity.llm_tags: true`：平台的每次 LLM 呼叫多帶 `x-litellm-tags`（`ws`、`ws.user:…`、`ws.app:…`、`ws.purpose:…`、
+  `ws.call:…`）。**rollout 前**確認你們的 LiteLLM 沒開 tag routing（`router_settings.enable_tag_filtering`），或有
+  `default` pool；否則對不到 deployment 的標籤會讓 LiteLLM **拒絕請求**——症狀是升級後所有 AI 呼叫失敗。
+  不確定就先設 `false`。LiteLLM 每個標籤每天記一列（人數 + App 數 + 用途數，不帶 item）。
+- `capacity.timezone`（**rollout 前**建議設成你們的時區，例如 `Asia/Taipei`）：「一天」從哪裡切。空 = UTC 午夜，
+  台灣的一天會被切在早上八點。
+- 四個資料來源（`capacity.usage_records` / `resource_metrics` / `gpu_metrics` / `llm_requests`）是 opt-in：沒設就是
+  沒接上，容量頁說缺什麼。怎麼實作見 [capacity.md §4](capacity.md)。
+
+**資料** — 沒有新的 model、沒有要回填的東西；分析算完只留在記憶體。
+
+**k8s · CI 側**
+
+- **收集器**（**rollout 前**）：把 `event.dataset == "workspace.usage"` 的行送到自己的 index（例如
+  `workspace-usage-*`），並套 [capacity.md §1](capacity.md) 的 index template。為什麼：容量頁讀的是這個 index；
+  沒分出來的話，這些行混在一般 log 裡，① 的查詢找不到——症狀是容量頁「已累積 0 天」。
+- **sandbox-host 要換新映像**才會量沙盒：它每 60 秒讀每個沙盒的 cgroup、每 5 分鐘寫一行 `sandbox`
+  （`SANDBOX_HOST_USAGE_SAMPLE_S` / `SANDBOX_HOST_USAGE_WINDOW_S`，預設就開；`0` 關掉）。app 與 sandbox-host
+  誰先換都可以：舊的 host 不認得建立時多送的 `labels`，照樣建；舊的 app 不送，沙盒照量但記成 `unknown`。
+- 前端多一個只在 `/capacity` 才下載的 chunk（ECharts，壓縮前約 577 KB），其他頁不受影響。
+
+**確認做完**（`rollout 後`）：
+
+- 任一 API pod：`kubectl logs <pod> | grep -m3 '"workspace.usage"'`——打開任何頁面後最多 5 分鐘（加 0.1 秒）內出現
+  `"kind":"work"` 的行；沒有的話看 `capacity.record`。
+- sandbox-host pod 開機 log 有 `→ usage: sample every 60s, window 300s`，有沙盒在跑時每 5 分鐘有 `"kind":"sandbox"` 的行。
+- LiteLLM 的 spend log 裡，這個平台的請求 `request_tags` 帶 `ws.user:…`。
+- superuser：`curl -s -o /dev/null -w '%{http_code}' -b '<cookie>' '<網址>/api/admin/capacity?days=7'` 回 200；一般使用者回 403。
+- 接上資料來源後：`uv run python -m workspace_app.capacity check --hours 24` 沒有 error（exit 0）。
+
 ## 附錄 A：資料回填的機制（specstar 為什麼不會自己補）
 
 有些升版會改變「資料在資料庫裡的儲存形狀」，但 **specstar 只在寫入當下**把一列的 `indexed_data`

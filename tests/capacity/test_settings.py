@@ -86,3 +86,32 @@ def test_an_unknown_key_refuses_to_boot(tmp_path: Path):
 def test_a_value_that_cannot_work_refuses_to_boot(tmp_path: Path, body: str, sentence: str):
     with pytest.raises(ValueError, match=re.escape(sentence)):
         _load(tmp_path, f"capacity:\n  {body}\n")
+
+
+def test_every_capacity_key_is_named_in_the_manual():
+    """A knob nothing documents is never set (the sibling of
+    tests/config/test_server_settings_are_documented.py)."""
+    import dataclasses
+
+    from workspace_app.config.schema import CapacitySettings
+
+    manual = (Path(__file__).resolve().parents[2] / "docs" / "configuration.md").read_text("utf-8")
+
+    missing = [
+        f.name for f in dataclasses.fields(CapacitySettings) if f"capacity.{f.name}" not in manual
+    ]
+    assert missing == []
+
+
+def test_the_recorder_is_built_from_every_writing_key(tmp_path: Path):
+    from workspace_app.factories import build_usage_recorder
+
+    c = _load(tmp_path, "capacity:\n  window_s: 60\n  queue_max: 7\n  llm_tags: false\n").capacity
+    rec = build_usage_recorder(c, component="api")
+    try:
+        assert rec is not None
+        assert (rec.window_s, rec.llm_tags, rec.component) == (60, False, "api")
+        assert rec._writer._queue.maxsize == 7  # noqa: SLF001
+    finally:
+        assert rec is not None
+        rec.close()

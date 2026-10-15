@@ -1,7 +1,7 @@
 # Plan — capacity: who uses how much of what, where, and what more people would need
 
-**Status:** grilled 2026-10-15 on master `15064eba`. Nothing is built yet; the phases in
-§13 ship together in one PR (D14).
+**Status:** grilled 2026-10-15 on master `15064eba`; P1–P15 built in #962 (one PR, D14).
+Where the build differs from this plan, §19 says so and why — §19 wins over the sections above.
 
 **Markers:** **[user]** = the user's words or explicit choice, quoted · **[verified]** =
 read from the code at `15064eba` · **[proposal]** = mine, overridable — say so and it
@@ -766,3 +766,41 @@ Flat; one commit or more per phase; one PR (D14).
 - LiteLLM — [Request tags](https://docs.litellm.ai/docs/proxy/request_tags), [request headers](https://docs.litellm.ai/docs/proxy/request_headers), [tag routing](https://docs.litellm.ai/docs/proxy/tag_routing).
 - NVIDIA — [nvidia-smi](https://docs.nvidia.com/deploy/nvidia-smi/index.html) (`utilization.gpu`).
 - Linux — [cgroup v2](https://docs.kernel.org/admin-guide/cgroup-v2.html), [PSI](https://docs.kernel.org/accounting/psi.html).
+
+## 19. As built (#962)
+
+What the build changed from the plan above, each for a reason found while building it:
+
+- **The request counter sits inside the perf trace**, not outermost: `PerfTraceMiddleware` stays
+  outermost for the reason its comment gives (its wall clock must include every middleware).
+- **The turn's person is `agent.tool_usage.who`** (usage_user, else speaker, else acting user) — the
+  rule the tool-usage statistics count by, so the two pages cannot disagree; `NOBODY` maps to `system`.
+- **No `ws.component` tag**: the purpose already says where (a turn surface or a job type). And a call
+  outside any usage scope carries **no tags** rather than `ws.user:system`; tags are only sent while
+  recording is on (`capacity.record`), because only a recorder opens scopes.
+- **The failover producer thread now runs in its caller's context** (`failover/core.py`): a bare thread
+  started with an empty context and dropped the tags of every KB call behind a failover chain. Found by
+  the tag test that calls each adapter the way production does.
+- **Collinear columns are reported, not guessed apart**: a chat send and its turn's events always come
+  together, so only their sum is identifiable; view 9 says so (`FitStats.collinear`).
+- **The knee search reaches the 99th percentile** (not the 95th) — knees live in peak hours — and a knee
+  must survive losing the 30 highest-load points, so a break drawn by a few far points is rejected.
+- **(d) uses the sandbox time-weighted wait share** (Σ stalled ÷ Σ alive per slot), not a p95 across
+  sandboxes: it needs no per-sandbox rows from ①.
+- **A model's GPU capacity is its total in-flight level at the knee** with its current cards; one more
+  card adds knee ÷ cards (data-parallel replicas). The headroom ignores lines N cannot push: fixed lines
+  and disk (disk runs out over time, view 7).
+- **"N people" reads 30 days before the period** (one grouped ① query by person and UTC day), so the
+  first day's N is as complete as the last's.
+- **The 90-day period is analysed at 15-minute slots** or coarser, to bound memory.
+- **`turn` records are stamped at acceptance, `job` records at start**, so a period selects work by when
+  it began.
+- **`kind: local` with isolation**: the API pod's own sandboxes are subtracted from its CPU and memory
+  before the API regression, since they run inside it.
+- **The ECharts guard** (`web/src/ext/imports.test.ts`) holds a door rule: only `capacity/echarts.ts`
+  imports ECharts, every other module reaches it with `import()` or `import type`, and web's range is the
+  chart plugin's. The production build puts ECharts in its own chunk (577,423 bytes minified, measured
+  on the #962 build); the entry chunk keeps only the `import("./echarts-….js")` call.
+- **The middleware's cost**: `scripts/bench_usage_middleware.py` measured 12.6 µs per request on the dev
+  box (47.5 → 60.1 µs on a trivial route, median of 5 rounds × 10,000).
+
