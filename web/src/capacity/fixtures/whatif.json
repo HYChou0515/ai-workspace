@@ -1,5 +1,7 @@
 {
  "n": 32,
+ "n_asked": 32,
+ "n_max": 320,
  "n_now": 16,
  "profile": "all",
  "app": "",

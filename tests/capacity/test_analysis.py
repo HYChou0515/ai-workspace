@@ -90,6 +90,18 @@ def test_a_larger_n_needs_more_and_says_how_many_machines():
     assert more["sandbox-host.cpu"]["machines_needed"]["p95"] >= 1
 
 
+def test_a_what_if_beyond_its_reach_says_which_n_it_answered():
+    """The what-if looks at most 20× today's N; asked for more, it answers for
+    that many and says so, rather than letting the page show another N's needs
+    under the number that was typed."""
+    n_now = _summary()["people"]["n_now"]
+
+    out = _full().whatif(1_000_000)
+
+    assert out["n_asked"] == 1_000_000
+    assert out["n"] == out["n_max"] == n_now * 20
+
+
 def test_the_heaviest_profile_needs_at_least_what_everyone_does():
     n = _summary()["people"]["n_now"] * 2
     everyone = {r["id"]: r["p50"] for r in _full().whatif(n)["lines"]}

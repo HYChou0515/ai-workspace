@@ -263,7 +263,11 @@ class WhatIfLineOut(BaseModel):
 
 
 class WhatIfOut(BaseModel):
+    #: the N answered — the one asked, up to n_max
     n: int
+    n_asked: int
+    #: the furthest the what-if looks: 20× today's N (None: not ready)
+    n_max: int | None
     n_now: int | None = None
     profile: str
     app: str

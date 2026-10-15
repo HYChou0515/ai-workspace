@@ -448,8 +448,19 @@ class Analysis:
     def whatif(self, n: int, profile: str = "all", app: str = "") -> dict[str, Any]:
         sim = self.simulator(profile, app)
         if sim is None:
-            return {"n": n, "profile": profile, "app": app, "lines": [], "ready": False}
-        n = max(0, min(n, max(1, sim.n_now) * MAX_GROWTH))
+            return {
+                "n": n,
+                "n_asked": n,
+                "n_max": None,
+                "profile": profile,
+                "app": app,
+                "lines": [],
+                "ready": False,
+            }
+        asked = n
+        # As far as the headroom looks (20× today); the answer says which N it is.
+        n_max = max(1, sim.n_now) * MAX_GROWTH
+        n = max(0, min(n, n_max))
         peaks = sim.run(n)
         rows = []
         for line in self.lines:
@@ -485,6 +496,8 @@ class Analysis:
             )
         return {
             "n": n,
+            "n_asked": asked,
+            "n_max": n_max,
             "n_now": sim.n_now,
             "profile": profile,
             "app": app,
