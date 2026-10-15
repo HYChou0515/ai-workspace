@@ -105,3 +105,106 @@ class Unreachable(ResourceMetricsSource):
 
     def capacity(self):
         return []
+
+
+def _findings(sources, w: World):  # noqa: ANN001, ANN202
+    return check_sources(sources, now_ms=w.end_ms, hours=24, step_s=w.step_s)
+
+
+def _said(findings, source: str, level: str) -> str:  # noqa: ANN001
+    return " | ".join(f.message for f in findings if f.source == source and f.level == level)
+
+
+def test_an_hour_without_machine_samples_is_reported_as_a_gap():
+    w = _world()
+    hole = (w.end_ms - 6 * 3_600_000, w.end_ms - 5 * 3_600_000)
+
+    class Holed(WorldPods):
+        def usage(self, start_ms, end_ms, step_s):  # noqa: ANN001, ANN201
+            return [
+                s
+                for s in super().usage(start_ms, end_ms, step_s)
+                if not hole[0] <= s.t_ms < hole[1]
+            ]
+
+    findings = _findings(CapacitySources(resource_metrics=Holed(w)), w)
+
+    assert "gap" in _said(findings, "resource_metrics", "warning")
+
+
+def test_card_and_llm_rows_off_the_slot_are_errors():
+    from workspace_app.capacity.sources import LlmLatencyRow, LlmRequestSource, LlmUsageRow
+
+    w = _world()
+
+    class OffGpu(GpuMetricsSource):
+        def usage(self, start_ms, end_ms, step_s):  # noqa: ANN001, ANN201
+            return [GpuSample(start_ms + 1234, "gpu0", "m", 0.5, 1.0)]
+
+        def cards(self):  # noqa: ANN201
+            return []
+
+    class OffLlm(LlmRequestSource):
+        def usage(self, start_ms, end_ms, step_s):  # noqa: ANN001, ANN201
+            return [LlmUsageRow(start_ms + 1234, "m", ("ws", "ws.user:u"), 1, 1, 1, 1.0)]
+
+        def latency(self, start_ms, end_ms, step_s):  # noqa: ANN001, ANN201
+            return [LlmLatencyRow(start_ms + 1234, "m", 1, 0.1, 0.2, 30.0)]
+
+    findings = _findings(CapacitySources(gpu_metrics=OffGpu(), llm_requests=OffLlm()), w)
+
+    assert "not aligned" in _said(findings, "gpu_metrics", "error")
+    assert "not aligned" in _said(findings, "llm_requests", "error")
+
+
+def test_platform_tags_that_do_not_parse_are_reported():
+    from workspace_app.capacity.sources import LlmRequestSource, LlmUsageRow
+
+    w = _world()
+
+    class Garbled(LlmRequestSource):
+        def usage(self, start_ms, end_ms, step_s):  # noqa: ANN001, ANN201
+            return [LlmUsageRow(start_ms, "m", ("ws", "ws.user", "ws.colour:red"), 1, 1, 1, 1.0)]
+
+        def latency(self, start_ms, end_ms, step_s):  # noqa: ANN001, ANN201
+            return []
+
+    findings = _findings(CapacitySources(llm_requests=Garbled()), w)
+
+    assert "malformed" in _said(findings, "llm_requests", "warning")
+
+
+def test_sandbox_rows_are_counted_and_a_window_that_cannot_fit_the_slot_is_an_error():
+    """sandbox-host's window is its own setting: one that neither divides the
+    slot nor is a whole number of slots cannot be placed in the analysis."""
+    from workspace_app.capacity.sources import aggregate_documents
+    from workspace_app.capacity.usage_wire import document
+
+    w = _world()
+    rows = [
+        document(
+            "sandbox",
+            w.end_ms - k * 420_000,
+            pod="sbh",
+            component="sandbox-host",
+            fields={"user": "u", "app": "", "cpu_s": 1.0, "window_s": 420},
+        )
+        for k in range(1, 4)
+    ]
+
+    class Odd(WorldRecords):
+        def aggregate(self, q):  # noqa: ANN001, ANN201
+            return aggregate_documents(rows, q) if q.kind == "sandbox" else super().aggregate(q)
+
+    findings = _findings(CapacitySources(Odd(w)), w)
+
+    assert "420" in _said(findings, "usage_records", "error")
+    assert "3 sandbox rows" in _said(findings, "usage_records", "info")
+
+
+def test_a_kernel_without_pressure_is_reported():
+    w = World(days=2, users=6, psi=False)
+
+    findings = _findings(CapacitySources(WorldRecords(w)), w)
+
+    assert "PSI" in _said(findings, "usage_records", "warning")

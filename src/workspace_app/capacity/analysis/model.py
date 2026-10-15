@@ -391,7 +391,7 @@ class Analysis:
         carded = np.zeros(p.n, dtype=bool)
         for m in self.obs.gpu.values():
             carded |= (m["util"] > 0) | (m["memory"] > 0)
-        gaps = {"resource_metrics": _gaps(p, sampled), "gpu_metrics": _gaps(p, carded)}
+        gaps = {"resource_metrics": find_gaps(p, sampled), "gpu_metrics": find_gaps(p, carded)}
         requests = unknown = system = 0.0
         for (user, _app, _comp, work), series in self.obs.work_user.items():
             if work.startswith("req:"):
@@ -613,7 +613,7 @@ GAP_SLOTS = 3
 MAX_GAPS = 5
 
 
-def _gaps(p: Period, present: np.ndarray) -> list[list[int]]:
+def find_gaps(p: Period, present: np.ndarray) -> list[list[int]]:
     """The longest runs of at least `GAP_SLOTS` slots with nothing, between a
     source's first and last slot with something, as [start_ms, end_ms] in time
     order (view 9)."""

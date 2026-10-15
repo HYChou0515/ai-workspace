@@ -4,9 +4,11 @@
 
 Calls every method of every configured source over the last N hours and
 reports what the dashboard would otherwise draw wrong without a word:
-buckets not aligned to the slot, components the platform does not know,
-negative or impossible values, LiteLLM rows without this platform's tags, gaps.
-Exit 1 when anything is an error.
+buckets not aligned to the slot (every source), components the platform does
+not know, negative or impossible values, sandbox rows whose window cannot be
+placed in the slots, a kernel without CPU pressure (PSI), LiteLLM rows
+without this platform's tags or with tags that do not parse, and gaps in the
+sources sampled every slot. Exit 1 when anything is an error.
 """
 
 from __future__ import annotations
@@ -16,9 +18,18 @@ import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
+import numpy as np
+
+from .analysis.model import find_gaps
 from .analysis.observe import parse_tags
+from .analysis.period import Period
+from .service import long_step
 from .sources import COMPONENTS, AggregateQuery, CapacitySources
+
+#: The keys a platform tag (`ws.<key>:<value>`) may carry (§7).
+TAG_KEYS = ("user", "app", "purpose", "call")
 
 WORK_KINDS = ("req:", "stream:", "turn:", "turn-events:", "job:")
 
@@ -52,6 +63,26 @@ def check_sources(
     def say(source: str, level: str, message: str) -> None:
         out.append(Finding(source, level, message))
 
+    def unaligned(source: str, stamps: list[int]) -> None:
+        for t in stamps:
+            if not _aligned(t, step_ms):
+                say(source, "error", f"bucket {t} not aligned to {step_s}s")
+                return
+
+    def gaps(source: str, stamps: list[int]) -> None:
+        period = Period(start, end, step_s, ZoneInfo("UTC"))
+        present = np.zeros(period.n, dtype=bool)
+        for t in stamps:
+            i = period.index(t)
+            if i is not None:
+                present[i] = True
+        found = find_gaps(period, present)
+        if found:
+            hours = sum(b - a for a, b in found) / 3_600_000
+            say(
+                source, "warning", f"{len(found)} gap(s), {hours:.1f} h with no sample: {found[:3]}"
+            )
+
     def records() -> None:
         src = sources.usage_records
         assert src is not None
@@ -84,12 +115,41 @@ def check_sources(
         sandbox = list(
             src.aggregate(AggregateQuery("sandbox", start, end, step_s, ("user",), ("cpu_s",)))
         )
+        say("usage_records", "info", f"{len(sandbox)} sandbox rows")
         if not sandbox:
             say(
                 "usage_records",
                 "warning",
                 "no sandbox rows: is sandbox-host sampling (SANDBOX_HOST_USAGE_SAMPLE_S)?",
             )
+        else:
+            windows = list(
+                src.aggregate(
+                    AggregateQuery("sandbox", start, end, None, ("window_s",), ("cpu_s",))
+                )
+            )
+            for slot in (step_s, long_step(step_s)):
+                for row in windows:
+                    window = int(float(row.keys.get("window_s") or 0))
+                    if window and slot % window and window % slot:
+                        say(
+                            "usage_records",
+                            "error",
+                            f"sandbox rows of a {window}s window cannot be placed in {slot}s "
+                            "slots: set SANDBOX_HOST_USAGE_WINDOW_S to a divisor of "
+                            f"{step_s}",
+                        )
+                        break
+            pressure = src.aggregate(
+                AggregateQuery("sandbox", start, end, None, (), maxes=("cpu_psi_s",))
+            )
+            if not any("cpu_psi_s" in r.values for r in pressure):
+                say(
+                    "usage_records",
+                    "warning",
+                    "sandbox rows carry no CPU pressure: this kernel has no PSI, and view 8 "
+                    "(d) cannot show sandboxes waiting for the machine",
+                )
         for kind, fields in (
             ("turn", ("accepted_ms", "started_ms", "ended_ms")),
             ("job", ("enqueued_ms", "started_ms", "ended_ms")),
@@ -107,10 +167,8 @@ def check_sources(
         capacity = {c.component: c for c in src.capacity()}
         say("resource_metrics", "info", f"{len(samples)} samples, capacity for {sorted(capacity)}")
         seen = set()
-        for s in samples:
-            if not _aligned(s.t_ms, step_ms):
-                say("resource_metrics", "error", f"bucket {s.t_ms} not aligned to {step_s}s")
-                break
+        unaligned("resource_metrics", [s.t_ms for s in samples])
+        gaps("resource_metrics", [s.t_ms for s in samples])
         for s in samples:
             if s.component not in COMPONENTS:
                 say(
@@ -151,6 +209,8 @@ def check_sources(
         samples = list(src.usage(start, end, step_s))
         cards = list(src.cards())
         say("gpu_metrics", "info", f"{len(samples)} samples, {len(cards)} cards")
+        unaligned("gpu_metrics", [s.t_ms for s in samples])
+        gaps("gpu_metrics", [s.t_ms for s in samples])
         for s in samples:
             if not 0.0 <= s.util <= 1.0:
                 say("gpu_metrics", "error", f"util {s.util} on {s.card} is not between 0 and 1")
@@ -164,7 +224,23 @@ def check_sources(
         src = sources.llm_requests
         assert src is not None
         rows = list(src.usage(start, end, step_s))
+        unaligned("llm_requests", [r.t_ms for r in rows])
         ours = [r for r in rows if "ws" in parse_tags(r.tags)]
+        garbled = [
+            r
+            for r in ours
+            if any(
+                t.startswith("ws.") and (":" not in t or t[3:].partition(":")[0] not in TAG_KEYS)
+                for t in r.tags
+            )
+        ]
+        if garbled:
+            bad = sorted({t for r in garbled for t in r.tags if t.startswith("ws.")})[:5]
+            say(
+                "llm_requests",
+                "warning",
+                f"{len(garbled)} rows carry malformed ws.* tags (e.g. {bad})",
+            )
         busy = sum(r.busy_seconds for r in rows)
         share = sum(r.busy_seconds for r in ours) / busy if busy else 0.0
         say(
@@ -183,6 +259,7 @@ def check_sources(
             )
         latency = list(src.latency(start, end, step_s))
         say("llm_requests", "info", f"{len(latency)} latency rows")
+        unaligned("llm_requests", [r.t_ms for r in latency])
 
     for name, run in (
         ("usage_records", records),

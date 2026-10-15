@@ -59,7 +59,7 @@ class CapacityService:
     def period(self, days: int) -> Period:
         step = self._settings.step_s
         if days > 28:
-            step = _long_step(step)
+            step = long_step(step)
         tz = ZoneInfo(self._settings.timezone) if self._settings.timezone else ZoneInfo("UTC")
         now_ms = int(self._clock() * 1000)
         return Period.ending(now_ms, days=days, step_s=step, lag_s=self._settings.lag_s, tz=tz)
@@ -108,7 +108,7 @@ class CapacityService:
         return analyse(obs, now_ms=now_ms, is_workday=is_workday)
 
 
-def _long_step(step_s: int) -> int:
+def long_step(step_s: int) -> int:
     """The 90-day period's slot: at least `LONG_STEP_S`, a whole number of
     `step_s` (so of windows — a slot holding one window and two by turn reads
     a steady load as 1.33 and 0.67 by turn), and a whole number per day."""
