@@ -70,6 +70,30 @@ async def test_without_a_recorder_the_pass_writes_nothing_and_still_reconciles()
     assert report.failed == 0
 
 
+async def test_rows_that_cannot_be_written_do_not_fail_a_pass_that_reconciled():
+    """The rows are telemetry after the pass's real work (as at blob_gc.py's
+    "telemetry runs AFTER the pass"): a recorder that fails must not turn a
+    reconciled pass into a FAILED job — the blob-gc job is not retried."""
+    spec = make_spec(default_user="alice")
+    store = SpecstarFileStore(spec)
+    register_disk_ledger(spec)
+    register_sandbox_activity(spec)
+
+    class _Broken(UsageRecorder):
+        def emit(self, record, *, at_ms):  # noqa: ANN001, ANN201
+            raise RuntimeError("the sink is gone")
+
+    spec.get_resource_manager(RcaInvestigation).create(RcaInvestigation(title="t", owner="alice"))
+    recorder = _Broken(_ListSink(), component="worker", pod="w", window_s=300, queue_max=100)
+    run = make_disk_ledger_pass(spec, store, live_window_ms=1000, usage_recorder=recorder)
+    assert run is not None
+
+    report = await run()
+    recorder.close()
+
+    assert report.failed == 0
+
+
 async def test_a_disk_ledger_job_through_the_real_queue_writes_the_rows():
     """`build_coordinators` hands the recorder to the pass the blob-gc
     coordinator runs — through its queue, as a worker runs it."""

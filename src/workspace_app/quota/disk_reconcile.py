@@ -178,15 +178,20 @@ def make_disk_ledger_pass(
         )
         if usage_recorder is not None:
             # docs/plan-capacity-usage.md §6.6: the reconciled figures, as rows.
+            # Telemetry after the pass's real work: it must not fail a pass
+            # that reconciled (the blob-gc job is not retried).
             from ..capacity.disk import emit_disk_rows, kb_collection_bytes
 
-            rows = await ledger.rows()
-            emit_disk_rows(
-                usage_recorder,
-                workspaces={item: (row.owner, row.bytes_used) for item, row in rows.items()},
-                app_of={item: slug for item, _debtor, slug in items},
-                collections=await asyncio.to_thread(kb_collection_bytes, spec),
-            )
+            try:
+                rows = await ledger.rows()
+                emit_disk_rows(
+                    usage_recorder,
+                    workspaces={item: (row.owner, row.bytes_used) for item, row in rows.items()},
+                    app_of={item: slug for item, _debtor, slug in items},
+                    collections=await asyncio.to_thread(kb_collection_bytes, spec),
+                )
+            except Exception:
+                logger.exception("disk-ledger: reconciled, but could not write the usage rows")
         return report
 
     return run
