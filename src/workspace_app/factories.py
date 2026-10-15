@@ -34,6 +34,7 @@ from .agent.tool_usage import ToolUsageRecorder
 
 if TYPE_CHECKING:
     from .capacity.recorder import UsageRecorder
+    from .capacity.sources import CapacitySources
     from .model_settings.live import LiveSettings
 from .api.env_provider import IEnvProvider
 from .api.litellm_runner import LitellmAgentRunner, RunnerEndpoints
@@ -1420,6 +1421,32 @@ def build_usage_recorder(settings: CapacitySettings, *, component: str) -> Usage
         window_s=settings.window_s,
         queue_max=settings.queue_max,
         llm_tags=settings.llm_tags,
+    )
+
+
+def get_capacity_sources(settings: CapacitySettings) -> CapacitySources:
+    """The capacity dashboard's four sources (docs/plan-capacity-usage.md §8),
+    each the operator's implementation named in `capacity:` — or absent, and
+    then the views that need it say so. A path that is not the right kind of
+    source refuses to boot, naming its key."""
+    from .capacity.sources import (
+        CapacitySources,
+        GpuMetricsSource,
+        LlmRequestSource,
+        ResourceMetricsSource,
+        UsageRecordSource,
+    )
+
+    def build(dotted: str, base: type, key: str):  # noqa: ANN202
+        return _construct_dotted(dotted, base, config_key=f"capacity.{key}") if dotted else None
+
+    return CapacitySources(
+        usage_records=build(settings.usage_records, UsageRecordSource, "usage_records"),
+        resource_metrics=build(
+            settings.resource_metrics, ResourceMetricsSource, "resource_metrics"
+        ),
+        gpu_metrics=build(settings.gpu_metrics, GpuMetricsSource, "gpu_metrics"),
+        llm_requests=build(settings.llm_requests, LlmRequestSource, "llm_requests"),
     )
 
 
