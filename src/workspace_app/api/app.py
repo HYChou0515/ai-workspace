@@ -1829,6 +1829,8 @@ def create_app(
         filestore=filestore,
         chat_video_settings=chat_video,
         disk_live_window_ms=int(idle_timeout.total_seconds() * 1000),
+        # docs/plan-capacity-usage.md §6.4: jobs this process consumes in-process.
+        usage_recorder=usage_recorder,
     )
 
     # #208: the first real backend hit — specstar materialises every model's

@@ -125,6 +125,8 @@ def build_bundle(
         # plan-chat-video-export: likewise never consumed from a slim worker
         # (chat-video is composed from `build_app`, for the API's facade).
         chat_video_settings=settings.chat_video,
+        # docs/plan-capacity-usage.md §6.4: the job attempts this worker runs.
+        usage_recorder=usage_recorder,
     )
     # #506 worker parity: build_coordinators wires the OPEN-loop one-shot drafter;
     # swap in the AGENTIC (closed-loop) one exactly like create_app, so a split-

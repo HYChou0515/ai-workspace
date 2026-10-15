@@ -41,6 +41,7 @@ if TYPE_CHECKING:
 
     from .agent.config_catalog import AgentConfigCatalog
     from .api.runner import AgentRunner
+    from .capacity.recorder import UsageRecorder
     from .config.schema import ChatVideoSettings
     from .filestore.protocol import FileStore
     from .kb.embedder import Embedder
@@ -196,6 +197,9 @@ def build_coordinators(
     # docs/plan-storage-all-items.md: a sandbox active within this window is
     # live — the disk-ledger pass leaves it to the mirror. 0 ⇒ no pass wired.
     disk_live_window_ms: int = 0,
+    # docs/plan-capacity-usage.md §6.4: every coordinator records its job
+    # attempts here (the process's own recorder). None ⇒ nothing is recorded.
+    usage_recorder: UsageRecorder | None = None,
 ) -> CoordinatorBundle:
     """Construct the background job coordinators and wire the index→wiki→quality
     chain. The returned coordinators are *not* yet consuming — the caller (API
@@ -252,6 +256,7 @@ def build_coordinators(
         get_user_id=get_user_id,
         code_wiki_llm=code_wiki_llm,
         code_repo=CodeRepoIngestor(spec, ingestor=ingestor),
+        usage_recorder=usage_recorder,
     )
     # #105: the doc-quality judge. Built only when a quality_judge model is wired;
     # otherwise None ⇒ the index coordinator skips scoring (docs stay un-scored).
@@ -294,6 +299,7 @@ def build_coordinators(
         message_queue_factory=message_queue_factory,
         get_user_id=get_user_id,
         reconciler=reconciler,
+        usage_recorder=usage_recorder,
     )
     # #82: indexing runs off the request path on a durable, cross-pod job queue.
     # It chains the index→wiki hook, so the wiki coordinator is handed in here.
@@ -305,6 +311,7 @@ def build_coordinators(
         card_gen_coordinator=card_gen,
         message_queue_factory=message_queue_factory,
         get_user_id=get_user_id,
+        usage_recorder=usage_recorder,
     )
     # #715: archive imports write their documents on a worker instead of inside the
     # request, so a large archive cannot be cut off by a gateway timeout. Built after
@@ -315,6 +322,7 @@ def build_coordinators(
         index_coordinator=index,
         message_queue_factory=message_queue_factory,
         superusers=superusers,
+        usage_recorder=usage_recorder,
     )
     # Model-sanity battery: a background consumer runs matrix cells (heavy live
     # LLM) off the request path. Only built when an LLM factory is wired.
@@ -327,6 +335,7 @@ def build_coordinators(
             sanity_llm_factory,
             judge=sanity_judge_llm,
             message_queue_factory=message_queue_factory,
+            usage_recorder=usage_recorder,
         )
         logger.info("coordinators: sanity battery coordinator wired")
     # #535: retrieval-eval fan-out. Built (registers the EvalJob model + its auto
@@ -337,7 +346,10 @@ def build_coordinators(
         from .kb.eval.coordinator import EvalCoordinator
 
         eval_coordinator = EvalCoordinator(
-            spec, eval_llm, message_queue_factory=message_queue_factory
+            spec,
+            eval_llm,
+            message_queue_factory=message_queue_factory,
+            usage_recorder=usage_recorder,
         )
         logger.info("coordinators: retrieval-eval coordinator wired")
     # #534: metric-extraction fan-out. Built (registers the GraphJob model + its
@@ -351,6 +363,7 @@ def build_coordinators(
             graph_llm,
             chunk_budget=graph_chunk_budget,
             message_queue_factory=message_queue_factory,
+            usage_recorder=usage_recorder,
         )
         logger.info("coordinators: metric-extraction (graph) coordinator wired")
     # #245: the blob-GC reconcile is a job because its live-set rescan holds every
@@ -371,6 +384,7 @@ def build_coordinators(
             if filestore is not None and disk_live_window_ms > 0
             else None
         ),
+        usage_recorder=usage_recorder,
     )
     # plan-chat-video-export: one render per job; the route's own answer to
     # "who may" is asked again by the worker, with the same superuser set.
@@ -379,6 +393,7 @@ def build_coordinators(
         limits=chat_video_settings,
         message_queue_factory=message_queue_factory,
         superusers=superusers,
+        usage_recorder=usage_recorder,
     )
     logger.info("coordinators: built wiki/index/card_gen/kb_import/blob_gc/chat_video coordinators")
     return CoordinatorBundle(

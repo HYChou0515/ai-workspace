@@ -54,6 +54,9 @@ import msgspec
 from specstar import QB, Schema, SpecStar
 from specstar.types import Job, TaskStatus
 
+from ..capacity.jobs import recorded_job
+from ..capacity.recorder import UsageRecorder
+
 if TYPE_CHECKING:
     from ..monitor import IMonitor
     from ..quota.disk_reconcile import DiskReconcileReport
@@ -112,6 +115,8 @@ class BlobGcCoordinator:
         message_queue_factory: object | None = None,
         now: Callable[[], dt.datetime] = _utcnow,
         disk_ledger_pass: Callable[[], Coroutine[Any, Any, DiskReconcileReport]] | None = None,
+        # docs/plan-capacity-usage.md §6.4: where each job attempt is recorded.
+        usage_recorder: UsageRecorder | None = None,
     ) -> None:
         self._spec = spec
         # docs/plan-storage-all-items.md: the disk-ledger reconcile, a second
@@ -127,9 +132,10 @@ class BlobGcCoordinator:
             from specstar.message_queue import SimpleMessageQueueFactory
 
             message_queue_factory = SimpleMessageQueueFactory()
+        self._usage_recorder = usage_recorder
         spec.add_model(
             Schema(BlobGcJob, "v1"),
-            job_handler=self._handle,
+            job_handler=recorded_job("blob-gc", self._handle, self._usage_recorder),
             indexed_fields=["status", "partition_key"],
             message_queue_factory=message_queue_factory,  # ty: ignore[invalid-argument-type]
         )

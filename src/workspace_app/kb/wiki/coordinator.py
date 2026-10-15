@@ -48,6 +48,8 @@ from specstar.types import (
     TaskStatus,
 )
 
+from ...capacity.jobs import recorded_job
+from ...capacity.recorder import UsageRecorder
 from ...files import rel_path
 from ...live_value import Live, now
 from ...resources import AgentConfig, CodeWikiBuildRun, Collection, SourceDoc, WikiBuildState
@@ -173,6 +175,8 @@ class WikiMaintenanceCoordinator:
         code_card_batch_chars: int = _DEFAULT_CARD_BATCH_CHARS,
         code_repo: CodeRepoIngestor | None = None,
         now: Callable[[], datetime] | None = None,
+        # docs/plan-capacity-usage.md §6.4: where each job attempt is recorded.
+        usage_recorder: UsageRecorder | None = None,
     ) -> None:
         self._spec = spec
         self._runner = runner
@@ -229,9 +233,10 @@ class WikiMaintenanceCoordinator:
             from specstar.message_queue import SimpleMessageQueueFactory
 
             message_queue_factory = SimpleMessageQueueFactory()
+        self._usage_recorder = usage_recorder
         spec.add_model(
             Schema(WikiMaintenanceJob, "v1"),
-            job_handler=self._handle,
+            job_handler=recorded_job("wiki", self._handle, self._usage_recorder),
             # `op` is indexed (#571) so the rebuild anti-mash guard is a point
             # lookup. It must NOT be expressed as a separate partition key: the
             # rebuild job has to share the collection's key, because `building`
