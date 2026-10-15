@@ -391,32 +391,30 @@ class Analysis:
 
     def _confidence_json(self) -> dict[str, Any]:
         p = self.obs.period
-        coverage: dict[str, float | None] = {}
-        has_records = np.zeros(p.n, dtype=bool)
+        # A source's coverage and its gaps are one question: the slots with
+        # anything from it. ② and ③ are sampled every slot, so a run without
+        # is a gap; ① and ④ have rows only when something happened (on k8s,
+        # ① has the probes every slot), so they have coverage but no gaps.
+        recorded = np.zeros(p.n, dtype=bool)
         for series in self.obs.work_pod.values():
-            has_records[series.slots()] = True
-        coverage["usage_records"] = (
-            float(has_records.mean()) if self.obs.connected("usage_records") else None
-        )
-        pods = [m["cpu"] for (comp, _pod), m in self.obs.pods.items() if comp == "api"]
-        coverage["resource_metrics"] = (
-            float(np.isfinite(np.vstack(pods)).any(axis=0).mean()) if pods else None
-        )
-        gpu = [m["util"] for m in self.obs.gpu.values()]
-        coverage["gpu_metrics"] = float((np.vstack(gpu) > 0).any(axis=0).mean()) if gpu else None
-        asked = np.zeros(p.n, dtype=bool)
-        for s in self.obs.llm:
-            asked[s.slots()] = True
-        coverage["llm_requests"] = float(asked.mean()) if self.obs.llm else None
-        # The sources sampled every slot (②, ③): a run with nothing is a gap.
-        # ① and ④ only have rows when something happened — a quiet night is
-        # not a gap, so they have no gaps to list.
+            recorded[series.slots()] = True
         sampled = np.zeros(p.n, dtype=bool)
-        for (_comp, _pod), m in self.obs.pods.items():
-            sampled |= np.isfinite(m["cpu"]) | np.isfinite(m["memory"])
+        for m in self.obs.pods.values():
+            sampled[m.slots("cpu")] = True
+            sampled[m.slots("memory")] = True
         carded = np.zeros(p.n, dtype=bool)
         for m in self.obs.gpu.values():
             carded |= (m["util"] > 0) | (m["memory"] > 0)
+        asked = np.zeros(p.n, dtype=bool)
+        for s in self.obs.llm:
+            asked[s.slots()] = True
+        records = self.obs.connected("usage_records")
+        coverage: dict[str, float | None] = {
+            "usage_records": float(recorded.mean()) if records else None,
+            "resource_metrics": float(sampled.mean()) if self.obs.pods else None,
+            "gpu_metrics": float(carded.mean()) if self.obs.gpu else None,
+            "llm_requests": float(asked.mean()) if self.obs.llm else None,
+        }
         gaps = {"resource_metrics": find_gaps(p, sampled), "gpu_metrics": find_gaps(p, carded)}
         # Unidentified: of the API requests someone made — a static file is
         # nobody's to identify, and a probe is system work. System: of the

@@ -3429,8 +3429,8 @@ export const messages = {
   },
   "capacity.conf.coverage": { "zh-TW": "資料覆蓋率：{source} {pct}", en: "Coverage: {source} {pct}" },
   "capacity.conf.coverage.usage_records": {
-    "zh-TW": "有活動的時段：{pct}（平台只在有人用時寫紀錄，夜裡本來就少）。",
-    en: "Slots with activity: {pct} (the platform writes records only when something happens; nights are low by nature).",
+    "zh-TW": "有任何紀錄的時段：{pct}（k8s 的探針與開著的即時連線每個時段都會寫，所以平台開著時接近 100%；低很多表示紀錄沒有進到 ES）。",
+    en: "Slots with any record: {pct} (Kubernetes probes and open live connections write one every slot, so it is near 100% while the platform runs; much lower means records are not reaching ES).",
   },
   "capacity.conf.coverage.resource_metrics": {
     "zh-TW": "pod 與機器用量有樣本的時段：{pct}。",

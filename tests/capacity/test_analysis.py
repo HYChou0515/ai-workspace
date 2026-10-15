@@ -17,7 +17,7 @@ import pytest
 from workspace_app.capacity.analysis.model import analyse
 from workspace_app.capacity.analysis.observe import observe
 from workspace_app.capacity.analysis.period import Period
-from workspace_app.capacity.sources import CapacitySources
+from workspace_app.capacity.sources import CapacitySources, GpuSample
 
 from .world import FILES, INDEX, KB, SEND, World, WorldGpus, WorldLlm, WorldPods, WorldRecords
 
@@ -591,3 +591,25 @@ def test_readiness_walks_each_sources_series_once():
     a.whatif(50)
 
     assert len(walked) == len(set(walked))
+
+
+def test_coverage_counts_the_slots_the_gaps_do_not():
+    """A source's coverage and its gaps are one question: a slot with a sample
+    is covered and no gap. An idle GPU (utilisation 0, the model still in its
+    memory) was a gap-free slot that coverage called missing."""
+    w = _world()
+
+    class Idle(WorldGpus):
+        def usage(self, start_ms, end_ms, step_s):  # noqa: ANN001, ANN201
+            return [
+                GpuSample(s.t_ms, s.card, s.model, 0.0, s.memory_bytes)
+                for s in super().usage(start_ms, end_ms, step_s)
+            ]
+
+    sources = CapacitySources(WorldRecords(w), WorldPods(w), Idle(w), WorldLlm(w))
+    s = analyse(
+        observe(sources, Period(w.start_ms, w.end_ms, w.step_s, ZoneInfo(w.tz))), now_ms=w.end_ms
+    ).summary()
+
+    assert s["confidence"]["gaps"]["gpu_metrics"] == []
+    assert s["confidence"]["coverage"]["gpu_metrics"] == 1.0
