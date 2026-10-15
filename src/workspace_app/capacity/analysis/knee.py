@@ -1,7 +1,7 @@
 """The load at which things slow down (docs/plan-capacity-usage.md §9.8).
 
 A continuous two-segment line, y = a + b·x + c·max(0, x − k), fitted with the
-break k searched over x's 10th–95th percentiles (segmented regression, Muggeo,
+break k searched over x's 10th–99th percentiles (segmented regression, Muggeo,
 *Statistics in Medicine* 22, 2003). A break counts only when it is real:
 
 - the second segment is steeper, and the two segments cut the squared error of
@@ -12,6 +12,9 @@ break k searched over x's 10th–95th percentiles (segmented regression, Muggeo,
   guess; one the data really shows is still there without them.
 
 Otherwise there is no knee: the load never reached one.
+
+The search reaches the 99th percentile because a knee is a peak-hours thing:
+in a month of 5-minute slots the busiest 1% is still some eighty slots.
 """
 
 from __future__ import annotations
@@ -47,7 +50,7 @@ def _fit(x: np.ndarray, y: np.ndarray) -> Knee | None:
     if line <= 0:
         return None
     best: tuple[float, float, np.ndarray] | None = None
-    for k in np.unique(np.quantile(x, np.linspace(0.10, 0.95, _GRID))):
+    for k in np.unique(np.quantile(x, np.linspace(0.10, 0.99, _GRID))):
         if int((x > k).sum()) < MIN_BEYOND:
             continue
         sse, coef = _sse(np.column_stack([ones, x, np.maximum(0.0, x - k)]), y)

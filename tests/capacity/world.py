@@ -33,7 +33,7 @@ from workspace_app.capacity.sources import (
     ResourceMetricsSource,
     ResourceSample,
     UsageRecordSource,
-    aggregate_documents,
+    aggregate_parsed,
 )
 from workspace_app.capacity.usage_wire import document
 
@@ -70,7 +70,7 @@ class World:
     gpu_model: str = "qwen3"
     gpu_cards: int = 2
     #: In-flight requests per card past which the GPU slows (the truth view 8 should find).
-    gpu_knee_per_card: float = 0.8
+    gpu_knee_per_card: float = 0.35
 
     @cached_property
     def zone(self) -> ZoneInfo:
@@ -185,7 +185,7 @@ class World:
     def other_busy(self) -> np.ndarray:
         """[slot] other systems' in-flight seconds on the same model."""
         rng = np.random.default_rng(self.seed + 6)
-        return np.clip(rng.normal(1.0, 0.3, self.slots), 0, None) * self.step_s
+        return np.clip(rng.normal(0.4, 0.15, self.slots), 0, None) * self.step_s
 
     @cached_property
     def gpu_inflight(self) -> np.ndarray:
@@ -513,18 +513,28 @@ class World:
 
 # ── the world as the four sources ───────────────────────────────────────────
 class WorldRecords(UsageRecordSource):
+    """The world's records, parsed once and kept by kind (a stand-in for ES)."""
+
     def __init__(self, world: World) -> None:
         self.world = world
+        self._by_kind: dict[str, list[tuple[int, dict]]] | None = None
+
+    def _kinds(self) -> dict[str, list[tuple[int, dict]]]:
+        if self._by_kind is None:
+            from workspace_app.capacity.sources import _epoch_ms
+
+            out: dict[str, list[tuple[int, dict]]] = {}
+            for doc in self.world.documents:
+                at = _epoch_ms(doc["@timestamp"])
+                out.setdefault(doc["usage"]["kind"], []).append((at, doc["usage"]))
+            self._by_kind = out
+        return self._by_kind
 
     def aggregate(self, q: AggregateQuery) -> list[AggregateRow]:
-        return aggregate_documents(self.world.documents, q)
+        return aggregate_parsed(self._kinds().get(q.kind, []), q)
 
     def records(self, kind: str, start_ms: int, end_ms: int) -> Iterable[dict]:
-        from workspace_app.capacity.sources import _epoch_ms
-
-        for doc in self.world.documents:
-            if doc["usage"]["kind"] == kind and start_ms <= _epoch_ms(doc["@timestamp"]) < end_ms:
-                yield doc["usage"]
+        return [usage for at, usage in self._kinds().get(kind, []) if start_ms <= at < end_ms]
 
 
 def _in(rows, start_ms: int, end_ms: int):  # noqa: ANN001, ANN202

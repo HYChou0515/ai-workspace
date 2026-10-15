@@ -26,6 +26,8 @@ logger = logging.getLogger(__name__)
 T = TypeVar("T")
 
 HIST = tuple(f"h{i}" for i in range(BUCKETS))
+#: "N people" = people active at least once in the last 30 days (D12).
+LOOKBACK_DAYS = 30
 
 
 @dataclass
@@ -69,6 +71,10 @@ class Observations:
     host: dict[str, dict[str, np.ndarray]] = field(default_factory=dict)
     #: (day index, scope, id, user, app) → bytes, the day's latest snapshot.
     disk: dict[tuple[int, str, str, str, str], float] = field(default_factory=dict)
+    #: person → the epoch-ms day starts (UTC days) they did anything, from 30
+    #: days before the period to its end: "N people" counts the people active
+    #: in the 30 days up to each day (D12), which needs those 30 days.
+    activity: dict[str, set[int]] = field(default_factory=dict)
     turns: list[Mapping[str, Any]] = field(default_factory=list)
     jobs: list[Mapping[str, Any]] = field(default_factory=list)
     dropped: float = 0.0
@@ -137,22 +143,20 @@ def _records(sources: CapacitySources, obs: Observations) -> int:
     rows = 0
 
     def ask(kind: str, group_by: tuple[str, ...], sums: tuple[str, ...] = (), **kw: Any):  # noqa: ANN202
+        """The source's grouped rows, one at a time (counted as they pass)."""
         nonlocal rows
-        out = list(
-            src.aggregate(
-                AggregateQuery(
-                    kind=kind,
-                    start_ms=p.start_ms,
-                    end_ms=p.end_ms,
-                    step_s=kw.pop("step_s", p.step_s),
-                    group_by=group_by,
-                    sums=sums,
-                    **kw,
-                )
-            )
+        query = AggregateQuery(
+            kind=kind,
+            start_ms=p.start_ms,
+            end_ms=p.end_ms,
+            step_s=kw.pop("step_s", p.step_s),
+            group_by=group_by,
+            sums=sums,
+            **kw,
         )
-        rows += len(out)
-        return out
+        for row in src.aggregate(query):
+            rows += 1
+            yield row
 
     for r in ask("work", ("pod", "component", "work"), ("count", "seconds", *HIST)):
         i = p.index(r.t_ms or 0)
@@ -214,6 +218,18 @@ def _records(sources: CapacitySources, obs: Observations) -> int:
         obs.disk[key] = max(obs.disk.get(key, 0.0), r.values.get("bytes", 0.0))
     for r in ask("meta", ("pod",), ("dropped",), step_s=None):
         obs.dropped += r.values.get("dropped", 0.0)
+    lookback = AggregateQuery(
+        kind="work",
+        start_ms=p.start_ms - LOOKBACK_DAYS * 86_400_000,
+        end_ms=p.end_ms,
+        step_s=86_400,
+        group_by=("user",),
+        sums=("count",),
+    )
+    for r in src.aggregate(lookback):
+        rows += 1
+        if r.t_ms is not None and r.values.get("count", 0.0) > 0:
+            obs.activity.setdefault(r.keys["user"] or "unknown", set()).add(r.t_ms)
     obs.turns = list(src.records("turn", p.start_ms, p.end_ms))
     obs.jobs = list(src.records("job", p.start_ms, p.end_ms))
     return rows + len(obs.turns) + len(obs.jobs)

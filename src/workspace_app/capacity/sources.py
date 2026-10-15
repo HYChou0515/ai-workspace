@@ -181,13 +181,20 @@ def aggregate_documents(
 ) -> list[AggregateRow]:
     """`UsageRecordSource.aggregate` over records as the sink wrote them
     (`{"@timestamp", "event", "usage"}`)."""
+    return aggregate_parsed(
+        ((_epoch_ms(doc["@timestamp"]), doc.get("usage", {})) for doc in documents), q
+    )
+
+
+def aggregate_parsed(
+    records: Iterable[tuple[int, Mapping[str, Any]]], q: AggregateQuery
+) -> list[AggregateRow]:
+    """`aggregate_documents` over `(epoch ms, usage)` pairs already parsed."""
     groups: dict[tuple[int | None, tuple[str, ...]], dict[str, float]] = {}
     step_ms = q.step_s * 1000 if q.step_s else None
-    for doc in documents:
-        usage = doc.get("usage", {})
+    for at, usage in records:
         if usage.get("kind") != q.kind:
             continue
-        at = _epoch_ms(doc["@timestamp"])
         if not q.start_ms <= at < q.end_ms:
             continue
         if any(str(usage.get(k, "")) != v for k, v in q.where.items()):
