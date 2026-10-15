@@ -23,8 +23,20 @@ import { ItemChatShell } from "./ItemChatShell";
 // stub forwards `onNewChat` (#200) so we can assert the escape hatch is threaded
 // into the chat header exactly when the shell bar is hidden.
 vi.mock("../pages/investigation/AgentPanel", () => ({
-  AgentPanel: ({ onNewChat, canAddFiles }: { onNewChat?: () => void; canAddFiles?: boolean }) => (
-    <div data-testid="agent-panel-stub" data-can-add-files={String(canAddFiles)}>
+  AgentPanel: ({
+    onNewChat,
+    canAddFiles,
+    onSteer,
+  }: {
+    onNewChat?: () => void;
+    canAddFiles?: boolean;
+    onSteer?: (text: string) => void;
+  }) => (
+    <div
+      data-testid="agent-panel-stub"
+      data-can-add-files={String(canAddFiles)}
+      data-steers={String(Boolean(onSteer))}
+    >
       {onNewChat ? (
         <button type="button" data-testid="header-new-chat" onClick={onNewChat}>
           + New chat
@@ -523,6 +535,40 @@ describe("ItemChatShell", () => {
     expect(screen.getByText("Filled in the glossary? Continue to commit?")).toBeInTheDocument();
     fireEvent.click(screen.getByText("Approve"));
     await waitFor(() => expect(decide).toHaveBeenCalledWith("topic-hub", "it", "r1", { choice: "approve" }));
+  });
+
+  it.each([
+    ["a workflow run's chat steers the run", null, true],
+    ["a page job's chat does not — it has no workflow to steer (#942)", "agent", false],
+  ])("%s", async (_name, kind, steers) => {
+    stubChatApi([
+      summary({ chat_id: "conversation:wf1", run_id: "r1", is_default: false, title: "Run" }),
+    ]);
+    const getRun = vi.spyOn(workflowApi, "getRun").mockResolvedValue({
+      run_id: "r1",
+      item_id: "it",
+      captured_user: "u",
+      status: "done",
+      current_phase: "",
+      phases: [],
+      steps: [],
+      failures: [],
+      started: 1,
+      ended: 2,
+      result: null,
+      pending_decision: null,
+      pending_steer: null,
+      workflow_id: kind ? "" : "collections",
+      page_job: kind ? { kind, name: "digger", input: "x", deadline: 9 } : null,
+    } as WorkflowRunDTO);
+    render({ chatSwitcher: "auto", showCollections: false });
+    await waitFor(() => expect(getRun).toHaveBeenCalled());
+    await waitFor(() =>
+      expect(screen.getByTestId("agent-panel-stub")).toHaveAttribute(
+        "data-steers",
+        String(steers),
+      ),
+    );
   });
 
   it("pins the steer confirm card on a pending_steer and applies it on click (#288)", async () => {

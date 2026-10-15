@@ -37,6 +37,7 @@ from ..live_value import Live
 if TYPE_CHECKING:
     # Annotation-only: `factories` composes THIS module, so a runtime import
     # here would be circular. `SubagentModel` values arrive through parameters.
+    from ..agent.tool_usage import ToolUsageRecorder
     from ..factories import SubagentModel
 from ..apps.skills import readonly_skill_path
 from ..files import ReadOnlyPath, WorkspaceFiles, WorkspaceFull, rel_path
@@ -320,6 +321,8 @@ async def start_page_schedule(
             chat_id=chat_id,
             payload=payload,
             by_hand=by_hand,
+            # Its tool calls count on the schedule surface (plan-tool-usage-stats).
+            from_schedule=True,
         )
     except Exception:
         # Take the chat down with the run that never started, so a schedule
@@ -471,6 +474,9 @@ def create_app(
     # docs/plan-outside-lookup.md D3: the "請幫我查" card's search buttons
     # (`server.lookup_targets`, validated by the loader). None ⇒ Google alone.
     lookup_targets: list[dict[str, str]] | None = None,
+    # docs/plan-outside-helper.md §3.7.2: `server.ai_workspace_helper_dir`, where the
+    # operator publishes a packed helper. None/"" ⇒ nothing published.
+    ai_workspace_helper_dir: str | None = None,
     # #262: user ids with UNRESTRICTED collection access — threaded into the
     # route-level `authorize(...)` guards (the dedicated permission endpoint +
     # content-route guards). MUST match the set passed to `make_spec(superusers=…)`
@@ -520,6 +526,11 @@ def create_app(
     # plan-skill-hub-history U4: how often this pod writes its skill hub counts
     # (also written when it stops).
     skill_hub_flush_interval: timedelta = timedelta(hours=2),
+    # plan-tool-usage-stats: where this process's runner counts tool calls (the
+    # SAME recorder `__main__` hands the runner), and how often they are written
+    # (also when it stops). None ⇒ nothing counted here is written.
+    tool_usage: ToolUsageRecorder | None = None,
+    tool_usage_flush_interval: timedelta = timedelta(minutes=5),
     # #345: soft cap (bytes) on ONE item's shared scratch dir; the idle reaper's
     # du-sweep recycles any item over it so a runaway workspace can't fill the
     # scratch volume the whole fleet shares. 0 ⇒ disabled (the lenient default).
@@ -683,6 +694,10 @@ def create_app(
     # Per-item run-history retention (manual §16): keep at most this many runs, pruning
     # the oldest terminal ones when a new run starts. 0 ⇒ keep all.
     workflow_keep_last_runs: int = 0,
+    # #942: a page's jobs — at most this many in flight per item, each at most
+    # this long (`server.wui_page_job_limit` / `wui_page_job_timeout_sec`).
+    wui_page_job_limit: int = 4,
+    wui_page_job_timeout: timedelta = timedelta(hours=1),
     # #429 P7: how often the schedule-trigger sweeper polls declared triggers.json for due
     # runs. None ⇒ the sweeper is off (the safe default — headless triggered runs are opt-in
     # per deploy). A real deploy sets a cadence (e.g. 60 s) to enable time-triggered workflows.
@@ -1461,6 +1476,7 @@ def create_app(
         uv_cache_max_bytes=uv_cache_max_bytes,
         mirror_interval=mirror_interval,
         skill_hub_flush_interval=skill_hub_flush_interval,
+        tool_usage_flush_interval=tool_usage_flush_interval,
         code_sync_check_interval=code_sync_check_interval,
         code_daily_sync=code_daily_sync,
         wiki_reflect_daily=wiki_reflect_daily,
@@ -2062,6 +2078,14 @@ def create_app(
     # the hub routes share — exposed so a test can publish through the app's own.
     app.state.skill_hub = skill_hub
     app.state.skill_hub_usage = skill_hub.usage  # flushed by the lifespan (U4)
+    # plan-tool-usage-stats §3.5: this pod's tool-call counts, flushed by the
+    # lifespan. The model is registered either way — the report reads it.
+    from .tool_usage_store import ToolUsageStore, register_tool_usage, writer_name
+
+    register_tool_usage(spec)
+    app.state.tool_usage_store = (
+        ToolUsageStore(spec, tool_usage, pod=writer_name()) if tool_usage is not None else None
+    )
     # KB chat runs through a wiki-aware runner that routes each turn across
     # chunk-RAG / wiki / both (#50 P5). It's a pure pass-through to `runner`
     # unless the query opts into the wiki AND a collection has use_wiki, so the
@@ -2243,6 +2267,13 @@ def create_app(
     # engine-key / chat-validation rules every workspace route crosses. The route
     # modules + the turn/mention/replay services call ``locator.<method>`` directly.
     locator = ItemLocator(spec, app_catalog, get_user_id=get_user_id, superusers=superusers)
+    # plan-tool-usage-stats §3.6: the administrator's report on the tool-call
+    # counts (the model is registered with the store, above).
+    from .tool_usage_routes import register_tool_usage_routes
+
+    register_tool_usage_routes(
+        api, spec=spec, locator=locator, get_user_id=get_user_id, superusers=superusers
+    )
 
     # The write side of `_item_facts`: whoever changes an item's stored facts
     # drops the entry, so the next read re-derives instead of serving a value
@@ -2328,6 +2359,8 @@ def create_app(
         # (production: `resolve_subagent_models(settings)`), stamped onto every
         # turn ctx so `_agent_kwargs` can shape the tool's schema.
         subagent_models=subagent_models,
+        # plan-tool-usage-stats §8.3: the recorder an applied skill counts into.
+        tool_usage=tool_usage,
     )
 
     # #624: let the budget consult what the RUNNER has learned about each
@@ -2426,6 +2459,10 @@ def create_app(
         ),
         concurrency=workflow_concurrency,
         keep_last_runs=workflow_keep_last_runs,
+        page_job_limit=wui_page_job_limit,
+        page_job_timeout_s=wui_page_job_timeout.total_seconds(),
+        end_page_job=workflow_executor.end_page_job,
+        stop_epoch=turn_engine.cancel_epoch,
     )
     app.state.workflow_orchestrator = workflow_orchestrator
     # Reachable by an app-level test that drives one tick, like the other
@@ -2578,10 +2615,15 @@ def create_app(
     )
     # docs/plan-outside-lookup.md D4: answering the "請幫我查" card — save under
     # `lookups/`, then the SAME send a typed message takes.
+    from .outside_jobs import OutsideJobStore, register_outside_jobs
     from .outside_lookup_routes import register_outside_lookup_routes
 
-    register_outside_lookup_routes(
+    register_outside_jobs(spec)
+    outside_jobs = OutsideJobStore(spec)
+    app.state.outside_jobs = outside_jobs
+    deliver_outside_answer = register_outside_lookup_routes(
         api,
+        on_answered=outside_jobs.remember_links,
         locator=locator,
         files=files,
         send_into=chat_send_svc.send,
@@ -2589,6 +2631,24 @@ def create_app(
         get_user_id=get_user_id,
         max_file_size=max_file_size,
     )
+
+    # docs/plan-outside-helper.md: the person's own helper takes the card's
+    # lookup instead of the person. Registered here, post-`spec.apply`, so the
+    # job model gets no CRUD routes (like _SandboxAddress).
+    from .outside_job_routes import register_outside_job_routes
+
+    register_outside_job_routes(
+        api,
+        locator=locator,
+        store=outside_jobs,
+        get_user_id=get_user_id,
+        deliver=deliver_outside_answer,
+        release_dir=ai_workspace_helper_dir,
+        max_file_size=max_file_size,
+    )
+    from .ai_workspace_helper_release import register_ai_workspace_helper_release_routes
+
+    register_ai_workspace_helper_release_routes(api, folder=ai_workspace_helper_dir)
 
     # ---- Files API (plan-backend §3.8) ----
 
@@ -2695,6 +2755,11 @@ def create_app(
         async def start(self, **kw: Any) -> str:
             return await self._get().start(**kw)
 
+        def __getattr__(self, name: str) -> Any:
+            # The page-job entrances (#942) — `start_page_job`, `page_job_state`,
+            # `cancel` — reach the same one orchestrator, looked up as late.
+            return getattr(self._get(), name)
+
     async def _workflows_for_item(item_id: str) -> Sequence[str]:
         """Which workflows this item may start — the ONE list every entrance
         consults (`workflow.offered`): the profile's workflows plus the ones
@@ -2749,6 +2814,10 @@ def create_app(
         workflow_problem_for=lambda item_id, workflow_id: unparsable_workflow(
             files.read, item_id, workflow_id
         ),
+        # #942: a page asks the item's sub-agents — the very list its chat
+        # delegates to, run as a workflow node's turn narrowed as `run_agent` is.
+        subagents_for=turn_ctx.subagents_for,
+        drive_agent=workflow_executor.drive_agent,
     )
 
     register_capability_routes(

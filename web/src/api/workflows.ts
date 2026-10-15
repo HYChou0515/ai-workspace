@@ -113,6 +113,17 @@ export type WorkflowRunDTO = {
   /** #288: a steer plan awaiting confirm (the FE renders the steer card vs. the gate
    * card by which pending field is set). Absent on runs written before #288. */
   pending_steer?: SteerPlan | null;
+  /** #942: set when a PAGE started this run as a job (a sub-agent or a tool)
+   * rather than a workflow. Absent/null on every workflow run. */
+  page_job?: PageJobDTO | null;
+};
+
+/** What a page's job was asked to do (#942) — `kind` is `tool` or `agent`. */
+export type PageJobDTO = {
+  kind: "tool" | "agent";
+  name: string;
+  input: string;
+  deadline: number;
 };
 
 /** One pre-flight checklist line in the launch dialog (#283). `severity` is

@@ -86,8 +86,9 @@ def test_a_page_is_served_from_its_pass_with_the_runtime_first_and_the_envelope_
     head = r.text.split("<head>", 1)[1]
     assert head.startswith(f"<script>{RUNTIME}</script>")
     csp = r.headers["content-security-policy"]
-    # `sandbox` makes the document opaque even when opened as a top-level page.
-    assert csp.startswith("sandbox allow-scripts;")
+    # `sandbox` makes the document opaque even when opened as a top-level page;
+    # downloads are let through (a file the page made, saved to the reader's disk).
+    assert csp.startswith("sandbox allow-scripts allow-downloads;")
     assert "default-src 'none'" in csp
     assert "connect-src 'self'" in csp
     assert "worker-src blob:" in csp
@@ -495,7 +496,8 @@ def test_the_envelope_is_exactly_the_one_documented():
     csp = client.get(f"{base}docs/site/index.html").headers["content-security-policy"]
 
     assert csp == (
-        "sandbox allow-scripts; default-src 'none'; script-src 'self' 'unsafe-inline'; "
+        "sandbox allow-scripts allow-downloads; default-src 'none'; "
+        "script-src 'self' 'unsafe-inline'; "
         "style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; "
         "media-src 'self' data:; connect-src 'self'; worker-src blob:; form-action 'none'; "
         "base-uri 'self'"

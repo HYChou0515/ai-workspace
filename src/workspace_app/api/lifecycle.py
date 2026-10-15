@@ -103,6 +103,7 @@ def build_lifespan(
     uv_cache_max_bytes: int | None,
     mirror_interval: timedelta,
     skill_hub_flush_interval: timedelta = timedelta(hours=2),
+    tool_usage_flush_interval: timedelta = timedelta(minutes=5),
     code_sync_check_interval: timedelta | None,
     code_daily_sync: str | None = None,
     wiki_reflect_daily: str | None = None,
@@ -369,6 +370,23 @@ def build_lifespan(
                     await counter.flush()
                 except Exception:  # noqa: BLE001 — kept for the next flush
                     logger.exception("skill hub usage: flush failed; kept for the next one")
+        except asyncio.CancelledError:
+            return
+
+    async def tool_usage_flusher(app: FastAPI) -> None:
+        """Pod-local: writes THIS pod's tool-call counts to its own rows
+        (plan-tool-usage-stats §3.5). A failed flush keeps the counts for the
+        next one, so it is logged, not fatal."""
+        store = getattr(app.state, "tool_usage_store", None)
+        if store is None:
+            return
+        try:
+            while True:
+                await asyncio.sleep(tool_usage_flush_interval.total_seconds())
+                try:
+                    await asyncio.to_thread(store.flush)
+                except Exception:  # noqa: BLE001 — kept for the next flush
+                    logger.exception("tool usage: flush failed; kept for the next one")
         except asyncio.CancelledError:
             return
 
@@ -671,6 +689,7 @@ def build_lifespan(
             bg.append(perf_trace.start_loop_watchdog())
         bg.append(asyncio.create_task(index_sweeper(app)))  # #227 fan-out stuck-run recovery
         bg.append(asyncio.create_task(skill_hub_usage_flusher(app)))  # skill hub counts (U4)
+        bg.append(asyncio.create_task(tool_usage_flusher(app)))  # tool-call counts
         bg.append(asyncio.create_task(cluster_sweeper(app)))  # #506 P8 review-inbox cluster fold
         if turn_reclaim_interval is not None:
             bg.append(asyncio.create_task(turn_reclaim_sweeper(app)))  # plan-graceful-shutdown P3
@@ -809,6 +828,17 @@ def build_lifespan(
                     logger.warning("lifespan: skill hub usage flush ran out of shutdown budget")
                 except Exception:  # noqa: BLE001 — one failing step must not stop the rest
                     logger.exception("lifespan: skill hub usage flush failed")
+            # Likewise this pod's tool-call counts (plan-tool-usage-stats §3.5).
+            if (store := getattr(app.state, "tool_usage_store", None)) is not None:
+                try:
+                    await asyncio.wait_for(
+                        asyncio.to_thread(store.flush),
+                        timeout=max(deadline - time.monotonic(), 1.0),
+                    )
+                except TimeoutError:
+                    logger.warning("lifespan: tool usage flush ran out of shutdown budget")
+                except Exception:  # noqa: BLE001 — one failing step must not stop the rest
+                    logger.exception("lifespan: tool usage flush failed")
             t0 = time.monotonic()
             await kernels.shutdown_all()
             t1 = time.monotonic()

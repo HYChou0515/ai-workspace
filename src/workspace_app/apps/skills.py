@@ -163,26 +163,11 @@ def _enforce_cap(name: str, body: str) -> str:
     return body
 
 
-async def load_workspace_skill(files: WorkspaceFiles, workspace_id: str, name: str) -> str | None:
-    """Body markdown of a co-created skill at ``<workspace>/.skill/<name>/SKILL.md``
-    (frontmatter stripped), or ``None`` when it doesn't exist. Read live (never
-    cached) since the workspace is hand-editable + may have just been written this
-    turn (#298 Q3a). Raises ``SkillError`` only on body-cap exceeded."""
-    from ..filestore.protocol import FileNotFound
-
-    path = f"/{WORKSPACE_SKILL_DIR}/{name}/SKILL.md"
-    try:
-        raw = await files.read(workspace_id, path)
-    except FileNotFound:
-        return None
-    _front, body = _parse_frontmatter(raw)
-    return _enforce_cap(name, body)
-
-
 async def read_workspace_skill(
     files: WorkspaceFiles, workspace_id: str, name: str
 ) -> tuple[str | None, SkillOrigin | None]:
-    """:func:`load_workspace_skill` plus the folder's ``.origin`` — read in ONE
+    """Body markdown of a co-created skill at ``<workspace>/.skill/<name>/SKILL.md``
+    (frontmatter stripped) plus the folder's ``.origin`` — read in ONE
     batch, so knowing where a copy came from costs no extra round trip
     (`read_skill` counts a use of a skill hub copy from it). ``(None, None)``
     when there is no such skill; the origin is ``None`` when the folder has no
@@ -203,6 +188,16 @@ async def read_workspace_skill(
         except msgspec.DecodeError:
             origin = None
     return _enforce_cap(name, body), origin
+
+
+def usage_source(origin: SkillOrigin | None) -> str:
+    """Where a WORKSPACE copy of a skill came from, as the usage count labels
+    it (plan-tool-usage-stats §8.2): its `.origin`'s source — except that a
+    folder with none (written here, or an `.origin` that does not decode) and a
+    hub fork (the user's own from then on) are ``workspace``."""
+    if origin is None or (origin.source == "hub" and origin.forked):
+        return "workspace"
+    return origin.source
 
 
 async def hub_entries_here(files: WorkspaceFiles, workspace_id: str) -> set[str]:
@@ -509,6 +504,29 @@ def describe_wui_tools(names: Sequence[str]) -> str:
     )
 
 
+def describe_wui_agents(names: Sequence[str]) -> str:
+    """The sub-agents a WUI in this item may ask (#942), named.
+
+    The same list the item's chat delegates to — a definition can be a file the
+    model never listed, so it is named here rather than left to be guessed."""
+    if not names:
+        return (
+            "## Sub-agents this item offers its WUIs\n\n"
+            "None. This item has no sub-agent a page could ask — leave `agents:` "
+            "out of the view file."
+        )
+    return "\n".join(
+        [
+            "## Sub-agents this item offers its WUIs",
+            "",
+            "These, and only these, may go in a view file's `agents:` and be asked",
+            "with `workspace.callAgent(...)` or `workspace.startAgent(...)`:",
+            "",
+            *(f"- `{n}`" for n in names),
+        ]
+    )
+
+
 def augment_shared_skill_body(
     name: str,
     body: str,
@@ -516,6 +534,7 @@ def augment_shared_skill_body(
     profile: str | None,
     *,
     wui_tools: Sequence[str] | None = None,
+    wui_agents: Sequence[str] | None = None,
 ) -> str:
     """Append machine-derived, always-current detail to a shared skill whose static body is
     deliberately purpose-only (plan §3). ``author-workflow`` gets the DSL grammar (derived
@@ -528,7 +547,12 @@ def augment_shared_skill_body(
     grants none" and "nobody asked" are different claims and only one of them is
     ever safe to make up."""
     if name == "wui":
-        return body if wui_tools is None else "\n\n".join([body, describe_wui_tools(wui_tools)])
+        parts = [body]
+        if wui_tools is not None:
+            parts.append(describe_wui_tools(wui_tools))
+        if wui_agents is not None:
+            parts.append(describe_wui_agents(wui_agents))
+        return "\n\n".join(parts)
     if name != "author-workflow":
         return body
     from ..agent.tools import _profile_tool_ceiling
@@ -1182,20 +1206,35 @@ async def resolve_skill_body(
     profile: str | None,
     name: str,
 ) -> str | None:
+    """:func:`resolve_skill`'s body alone."""
+    got = await resolve_skill(files, workspace_id, app_slug, profile, name)
+    return None if got is None else got[0]
+
+
+async def resolve_skill(
+    files: WorkspaceFiles,
+    workspace_id: str,
+    app_slug: str | None,
+    profile: str | None,
+    name: str,
+) -> tuple[str, str] | None:
     """A skill's body across the three sources in read_skill's precedence —
     workspace ``.skill/`` first (the user's own shadows), then a shared registry
-    skill, then the profile package skill. ``None`` when no source has it. Raises
-    ``SkillError`` only on a body over the cap. #380: the apply-this-turn preload
-    resolves the body IGNORING the enable/disable toggle (apply overrides off)."""
+    skill, then the profile package skill — and where it came from, as the
+    usage count labels it (:func:`usage_source`). ``None`` when no source has it.
+    Raises ``SkillError`` only on a body over the cap. #380: the apply-this-turn
+    preload resolves the body IGNORING the enable/disable toggle (apply
+    overrides off)."""
     from .shared_skills import load_shared_skill, shared_skill_source
 
     await materialize_skill(files, workspace_id, app_slug, profile, name)
-    body = await load_workspace_skill(files, workspace_id, name)
+    body, origin = await read_workspace_skill(files, workspace_id, name)
+    source = usage_source(origin)
     if body is None and shared_skill_source(name) is not None:
-        body = load_shared_skill(name)
+        body, source = load_shared_skill(name), "shared"
     if body is None and app_slug is not None and profile is not None:
         try:
-            body = load_skill(app_slug, profile, name)
+            body, source = load_skill(app_slug, profile, name), "profile"
         except SkillError:
             return None
     if body is None:
@@ -1209,7 +1248,7 @@ async def resolve_skill_body(
     # thing the derivation exists to prevent, so it cannot depend on provenance:
     # the AUTHORED text is what gets copied and edited, the DERIVED part is
     # recomputed every read and was never part of the body to begin with.
-    return augment_shared_skill_body(name, body, app_slug, profile)
+    return augment_shared_skill_body(name, body, app_slug, profile), source
 
 
 async def build_applied_skills_block(
@@ -1218,19 +1257,23 @@ async def build_applied_skills_block(
     app_slug: str | None,
     profile: str | None,
     names: list[str],
+    *,
+    on_loaded: Callable[[str, str], None] | None = None,
 ) -> str:
     """Render the per-turn "apply these skills now" block (#380) — each named
     skill's full body under its own heading, preceded by an instruction to apply
     them this turn. A name whose body can't be resolved (unknown, or over the cap)
     is skipped with a short note so the turn still proceeds. ``""`` when nothing
-    resolves. Injected like the workspace block: transient, never persisted."""
+    resolves. Injected like the workspace block: transient, never persisted.
+    ``on_loaded(name, source)`` hears each skill whose body was loaded — the
+    usage count's second door (plan-tool-usage-stats §8.1)."""
     from ..files import WorkspaceFull
     from ..quota.disk_ledger import UserDiskFull
 
     sections: list[str] = []
     for name in names:
         try:
-            body = await resolve_skill_body(files, workspace_id, app_slug, profile, name)
+            got = await resolve_skill(files, workspace_id, app_slug, profile, name)
         except SkillError as e:
             sections.append(f"### {name}\n\n(could not load: {e})")
             continue
@@ -1242,10 +1285,12 @@ async def build_applied_skills_block(
             # (round 3).
             sections.append(f"### {name}\n\n(could not load: {e})")
             continue
-        if body is None:
+        if got is None:
             sections.append(f"### {name}\n\n(skill not found — skipped)")
         else:
-            sections.append(f"### {name}\n\n{body}")
+            sections.append(f"### {name}\n\n{got[0]}")
+            if on_loaded is not None:
+                on_loaded(name, got[1])
     if not sections:
         return ""
     header = (

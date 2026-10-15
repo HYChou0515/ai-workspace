@@ -30,6 +30,7 @@ if TYPE_CHECKING:
     from ..tooling.registry import PackageInfo
     from ..users.protocol import User, UserDirectory
     from ..workflow.user_schedules import SchedulePolicy
+    from .tool_usage import ToolUsageRecorder
 
 
 # `review_skill_via`: (this turn's context, the folder name, its files, the tool
@@ -425,6 +426,19 @@ class AgentToolContext:
     # drawn. Set only by the chat turn builder; a workflow step or a schedule
     # leaves it False even when its tool list includes `ask_user`.
     in_chat: bool = False
+    # docs/plan-tool-usage-stats.md: where this turn's tool calls are counted
+    # (the runner sets it on every turn it drives; None counts nothing), which
+    # surface they happened on — set by the builder of each context, never
+    # inferred from other fields (§3.4) — and, when the builder names one, the
+    # person they are attributed to (a schedule's binder, a workflow's starter).
+    tool_usage: ToolUsageRecorder | None = None
+    surface: str = "background"
+    usage_user: str = ""
+    # A turn that runs INSIDE another turn's tool call and whose
+    # `investigation_id` is not an item (the wiki reader / maintainer key it by
+    # collection): its calls count on the caller's item and surface — with no
+    # caller, background work on no item.
+    usage_inside_caller: bool = False
     # #624: how many history messages this turn had to leave out because they
     # would not fit the endpoint's context window. 0 = nothing was cut (the
     # normal case, and the default when no ceiling is known — we send it all

@@ -37,7 +37,8 @@
 | [plan-env-request-card.md](plan-env-request-card.md) | 工具缺環境變數時,AI 在聊天裡出「登入 / 設定」卡片,turn 停在卡片、使用者設定後按重試 |
 | [plan-pptx-preview.md](plan-pptx-preview.md) | workspace 裡的簡報(pptx/ppt/odp)在沙盒轉 PDF、以內容 hash 快取在沙盒旁,用 PDF 檢視器看 |
 | [plan-outside-lookup.md](plan-outside-lookup.md) | 斷網部署：AI 出「請幫我查」卡片，使用者在瀏覽器查網路或開網址，貼回結果存成檔案 |
-| [plan-outside-helper.md](plan-outside-helper.md) | 外網小幫手：使用者電腦上的 Python 小程式用 Playwright 開 Chrome 代為查網路，搜尋與 AI 自己寫的網址出去前人點頭、先前查到的連結直接開，抓回的整頁（像全選貼上）直接送給 AI；沒連線退回手動流程 |
+| [plan-outside-helper.md](plan-outside-helper.md) | 小幫手：使用者電腦上的 Python 小程式用 Playwright 開 Chrome 代為查網路，搜尋與 AI 自己寫的網址出去前人點頭、先前查到的連結直接開，抓回的整頁（像全選貼上）直接送給 AI；沒連線退回手動流程 |
+| [plan-tool-usage-stats.md](plan-tool-usage-stats.md) | 工具使用統計：管理者在 Diagnostics 看 AI 用了哪些工具、誰用、在哪個場合、失敗幾次、平均多久 |
 | [plan-tools-picker-groups.md](plan-tools-picker-groups.md) | 工具挑選器依套件摺疊、內建工具一組、每組三態 |
 | [plan-user-env-exec-injection.md](plan-user-env-exec-injection.md) | 使用者環境變數改由 exec 注入（取代 `.userenv` 檔） |
 | [plan-view-plugins-pr5-finish.md](plan-view-plugins-pr5-finish.md) | #847 / #848 在 #855 分支上的收尾（PR5） |
@@ -176,6 +177,7 @@
 | [plan-wui.md](plan-wui.md) | WUI：資料夾當可互動的網頁 |
 | [plan-wui-deploy.md](plan-wui-deploy.md) | WUI「Deploy」：一個直接落在頁面上的 URL |
 | [plan-wui-overview.md](plan-wui-overview.md) | WUI 總覽：列出所有已部署 WUI 的一頁 |
+| [plan-wui-call-agent.md](plan-wui-call-agent.md) | WUI 頁面叫能力的兩種叫法：`call…` 拿結果、`start…` 拿工作（等結果／看進度／停止），每個能力都有、由 AI 自己挑；頁面能叫宣告過的 subagent；既有 `callTool`、`startRun` 不變 |
 | [plan-wui-overview-icon-favourites.md](plan-wui-overview-icon-favourites.md) | WUI 總覽：頁面自己的 icon 與瀏覽者的最愛 |
 | [plan-wui-multipage.md](plan-wui-multipage.md) | WUI 多頁（MPA）：一個資料夾多份 HTML，例如 mkdocs 站——頁面改從自己的網址載入（綁人、item、資料夾的通行證），換頁、錨點、讀自己資料夾的檔都是瀏覽器原生；外部連結經平台確認框才開；部署不放行時退回單頁組裝 |
 

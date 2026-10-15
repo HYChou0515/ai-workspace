@@ -1,0 +1,23 @@
+[project]
+name = "ai-workspace-helper"
+dynamic = ["version"]
+description = "The person's helper: drives their Chrome to fetch pages for AI Workspace's 請幫我查 card (docs/plan-outside-helper.md)."
+requires-python = ">=3.9"
+# Pinned exactly by the pack script (scripts/pack_ai_workspace_helper.py) for the
+# wheelhouse users install; this range is what the code supports.
+dependencies = ["playwright>=1.49"]
+
+[project.scripts]
+ai-workspace-helper = "ai_workspace_helper.app:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.version]
+path = "src/ai_workspace_helper/version.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ai_workspace_helper"]
+# Generated (gitignored) — hatch skips ignored files unless named here.
+artifacts = ["src/ai_workspace_helper/page_to_markdown.js"]

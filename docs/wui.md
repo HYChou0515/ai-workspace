@@ -305,11 +305,17 @@ iframe 從 `/api/wui-content/<通行證>/<資料夾>/…` 載入，瀏覽器自�
 
 ## 頁面的邊界
 
-頁面跑在一個 **null origin** 的 iframe 裡（`sandbox="allow-scripts"`，**沒有**
+頁面跑在一個 **null origin** 的 iframe 裡（`sandbox="allow-scripts allow-downloads"`，**沒有**
 `allow-same-origin`；從網址載入的頁面，伺服器回應的 CSP 還帶 `sandbox`，所以就算直接在
 分頁裡打開那個網址也一樣是 null origin），所以它拿不到 cookie、碰不到外層 DOM、也呼叫不了
 API。
-唯一的出口是 `postMessage`，而外層是關卡。平台注入的 runtime 給它 `window.workspace`，
+
+**頁面可以讓讀者下載它自己做出來的檔案。** 用 `<a download>` 指向 `blob:` 或 `data:` 網址
+（例如把表格匯出成 CSV、圖表套件的「存成 PNG」）就會存進讀者的下載資料夾。檔名和檔案類型由頁面決定，
+而且瀏覽器不要求一定要點過才能下載——頁面可以在任何時候觸發。它存進的是讀者自己的電腦，**不是**把資料往外送：指向別台主機的下載
+會變成這個 iframe 的導覽，被外層頁面 CSP 的 `frame-src` 擋下，請求根本不會送出（見下面）。
+頁面下載得到的，只有讀者自己本來就看得到的東西。
+唯一**往外**的出口是 `postMessage`，而外層是關卡。平台注入的 runtime 給它 `window.workspace`，
 動詞的完整清單如下，而這個集合只在一種情況下會變：新增一個要先寫下它為什麼不能從
 `callTool` 進來的論證。（刻意不寫數字——上一版寫「七個」而 bridge 有八個，而一個手寫的數字沒有任何守衛看得到它過期。）
 
@@ -319,6 +325,10 @@ API。
 | `writeFile` `deleteFile` | **只有頁面自己的資料夾** |
 | `whoami` | 誰在看 |
 | `callTool` | 只通這個 App 開放、且頁面在 yaml 宣告過的 tool |
+| `startTool` | 同一個 tool,**起成一個工作**(不等結果):回 `{job_id}`,頁面拿到的工作物件 `result()` 就是 `callTool` 會回的東西;命令不受一分鐘限制,改受工作總時間上限(`server.wui_page_job_timeout_sec`)。擋法同 `callTool`(yaml `tools:`) |
+| `callAgent` | 問這個 item 的一個 subagent(`.agent/<名稱>/AGENT.md` 或 App 內建)並等它回答——文字進、`{output, failed}` 出;最多等一分鐘,超過就停掉那次工作並請頁面改用 `startAgent`。只通頁面在 yaml `agents:` 宣告過的。subagent 拿到的工具跟在聊天裡被 `run_agent` 叫時一樣。不能從 `callTool` 進來的論證:subagent 不是套件命令,是平台自己在這個 item 裡跑的一個 agent turn(#942,`plan-wui-call-agent.md`) |
+| `startAgent` | 同一個 subagent,起成一個工作 |
+| `jobStatus` `stopJob` | 工作物件的 `status()` / `stop()`(頁面不直接叫這兩個動詞,由 runtime 的工作物件代叫)。只答得出**這個 item 的頁面工作**。`start…` 兩個不能是 `call…` 的論證跟 `startRun` 一樣:一個呼叫只回答一次、一分鐘內;頁面工作每個都是 item 的 run 清單裡的一筆(標題「頁面：subagent X」/「頁面：工具 X」),看得到過程、能從那裡停止;同一個 item 同時最多 `server.wui_page_job_limit` 個(預設 4) |
 | `startRun` | 起一個 workflow 並把進度串回來 |
 | `openLogin` | 請平台打開**它自己的**登入框(畫在頁面框外;頁面什麼都不交、也看不到輸入了什麼 —— `plan-wui-viewer-login.md`)。不能從 `callTool` 進來的論證:它存在的目的就是讓憑證**不經過頁面** |
 

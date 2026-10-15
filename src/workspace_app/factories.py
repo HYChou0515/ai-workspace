@@ -30,6 +30,7 @@ from specstar import BackendBinding, BackendConfig, ConnectionProfile, SpecStar
 from workspace_app.resources import make_spec
 
 from .agent.config_catalog import AgentConfigCatalog
+from .agent.tool_usage import ToolUsageRecorder
 
 if TYPE_CHECKING:
     from .model_settings.live import LiveSettings
@@ -462,7 +463,12 @@ def _runner_endpoints(settings: Settings) -> RunnerEndpoints:
     )
 
 
-def get_runner(settings: Settings, *, live: LiveSettings | None = None) -> AgentRunner:
+def get_runner(
+    settings: Settings,
+    *,
+    live: LiveSettings | None = None,
+    tool_usage: ToolUsageRecorder | None = None,
+) -> AgentRunner:
     """Production agent runner. Reads top-level `runner` / `llm`
     settings for the runner-wide defaults; per-preset endpoint overrides
     (set via `agents.presets.<name>.llm.*`) ride on each AgentConfig and
@@ -502,6 +508,9 @@ def get_runner(settings: Settings, *, live: LiveSettings | None = None) -> Agent
             settings.failover.idle_timeout_s,
         ),
         token_service=PassthroughTokenService(),
+        # plan-tool-usage-stats: where every turn this runner drives counts its
+        # tool calls — the recorder the process's flush writes.
+        tool_usage=tool_usage,
     )
 
 

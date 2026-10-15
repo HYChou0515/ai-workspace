@@ -132,6 +132,8 @@ async def run_wiki_maintainer(
     guarded = MaintainerWikiStore(wiki_store)
     ctx = AgentToolContext(
         investigation_id=collection_id,  # WikiFileStore is keyed by collection id
+        # ...so its calls count on the asking turn's item + surface (tool usage).
+        usage_inside_caller=True,
         filestore=guarded,
         files=WorkspaceFiles(guarded),
         sandbox=None,

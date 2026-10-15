@@ -238,6 +238,9 @@ def build_app(
         # (sandbox.durable.kind "") ⇒ sandbox_filestore IS api_filestore (unchanged).
         api_filestore = get_filestore(settings, spec)
         sandbox_filestore = get_sandbox_filestore(settings, spec, api_filestore)
+        from .agent.tool_usage import ToolUsageRecorder
+
+        tool_usage = ToolUsageRecorder()
         app = create_app(
             spec=spec,
             get_user_id=get_user_id,
@@ -256,6 +259,8 @@ def build_app(
             env_providers=get_env_providers(settings.server.env_providers),
             # Where the "請幫我查" card sends a search (plan-outside-lookup D3).
             lookup_targets=settings.server.lookup_targets,
+            # Where a packed helper is published (plan-outside-helper §3.7.2).
+            ai_workspace_helper_dir=settings.server.ai_workspace_helper_dir,
             # #262: same superuser set threaded into get_spec(...) above, so the
             # route-level authorize() guards agree with the storage access_scope.
             superusers=frozenset(settings.server.superusers),
@@ -309,7 +314,10 @@ def build_app(
                 if settings.server.turn_reclaim_interval_sec > 0
                 else None
             ),
-            runner=get_runner(settings, live=live),
+            # plan-tool-usage-stats: ONE recorder — the runner counts into it,
+            # the lifespan writes it.
+            runner=get_runner(settings, live=live, tool_usage=tool_usage),
+            tool_usage=tool_usage,
             # plan-model-settings P5: with `live`, the catalog follows the
             # published settings (KB chat list, sub-agent defaults, presets).
             agent_config_catalog=(
@@ -458,6 +466,9 @@ def build_app(
                 else None
             ),
             live=live,
+            # #942: a page's jobs — how many at once per item, and how long each.
+            wui_page_job_limit=settings.server.wui_page_job_limit,
+            wui_page_job_timeout=timedelta(seconds=settings.server.wui_page_job_timeout_sec),
         )
     if packages:
         names = ", ".join(f"{p.name}({','.join(c.name for c in p.commands)})" for p in packages)

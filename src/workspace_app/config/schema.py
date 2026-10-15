@@ -105,6 +105,15 @@ class ServerSettings:
     # The mechanism existed and nothing ever passed it a value, so the cap was
     # infinite in every deploy. 0 restores that.
     workflow_step_timeout_sec: int = 600
+    # #942: how many page jobs (`startTool` / `startAgent`, and a `callAgent`
+    # while it waits) ONE item may have in flight at once. A page past it is
+    # refused with a sentence naming the number, not queued: a queue would let a
+    # page that loops pile up work nobody is watching.
+    wui_page_job_limit: int = 4
+    # #942: the total time one page job may take, in seconds — the deadline its
+    # tool command is given in place of the sandbox's minute, and what tells a
+    # job lost with its pod from one still running.
+    wui_page_job_timeout_sec: int = 3600
     # #700: browser origins allowed to call this API cross-site, for outside systems
     # that hand work over from their own page (e.g. a legacy analysis site whose
     # button creates or adds to a work item). Empty (default) ⇒ no CORS layer at
@@ -172,6 +181,13 @@ class ServerSettings:
     # yourself to keep it). Every entry is `{name, url}`, `url` http(s) with a
     # `{q}`, names distinct — anything else refuses to boot, naming the entry.
     lookup_targets: list[dict[str, str]] = field(default_factory=default_lookup_targets)
+
+    # docs/plan-outside-helper.md §3.7.2 — the folder (a mounted volume) the
+    # operator drops a packed helper into: `ai-workspace-helper.json` and
+    # the zip it names (`scripts/pack_ai_workspace_helper.py`). Read per request, so
+    # publishing needs no redeploy. Unset ⇒ nothing published: the 小幫手
+    # page says so and every card stays on the manual flow.
+    ai_workspace_helper_dir: str = ""
 
 
 # ─── sandbox ────────────────────────────────────────────────────────────

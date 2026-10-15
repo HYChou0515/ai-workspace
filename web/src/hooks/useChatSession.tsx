@@ -143,6 +143,14 @@ export type ChatSession = {
   mention: (userIds: string[], note: string) => Promise<void>;
   cancel: () => void;
   undo: (turns: number) => Promise<void>;
+  /** A turn was started elsewhere by an answer to card `callId` — the helper
+   * posting a 「請幫我查」 result from its own browser, which may reach the API
+   * on another pod than this page's stream. If no message answering that
+   * card is on the page yet, the stream has said nothing of it: show the turn
+   * as running, so the #202 store-poll reads the thread until its reply is
+   * persisted (the person's report: 「要重新整理才看得到回覆」). A no-op when
+   * the answer is already drawn — the stream carried it. */
+  follow: (callId: string) => void;
 };
 
 /** Gateway/timeout statuses (and a bare network drop, 0) that mean "the request
@@ -769,5 +777,23 @@ export function useChatSession(
     [transport, currentUser],
   );
 
-  return { log, connection, send, mention, cancel, undo };
+  // `follow` asks the log as it is now, not as it was when it was made
+  const logRef = useRef(log);
+  logRef.current = log;
+  const follow = useCallback(
+    (callId: string) => {
+      const now = logRef.current;
+      const drawn = now.entries.some(
+        (e) => e.kind === "message" && e.message.answers === callId,
+      );
+      if (drawn || now.streaming) return;
+      // Not `turnInFlightRef`: that says THIS stream carried a turn, and this
+      // one reaches the page through the store — a drop of the stream can have
+      // lost nothing of it, so it must not raise the 「少了一段」 banner.
+      setLog((prev) => (prev.streaming ? prev : { ...prev, streaming: true }));
+    },
+    [setLog],
+  );
+
+  return { log, connection, send, mention, cancel, undo, follow };
 }

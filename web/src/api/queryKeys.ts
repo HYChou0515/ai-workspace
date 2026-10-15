@@ -128,6 +128,18 @@ export const qk = {
   personalEnv: () => ["personalEnv"] as const,
   /** docs/plan-outside-lookup.md D3: the deploy's search buttons. */
   lookupTargets: () => ["lookupTargets"] as const,
+  /** plan-tool-usage-stats: the administrator's report and one tool's breakdown. */
+  toolUsage: (days: number, filter: object, kind: string, group: string) =>
+    ["toolUsage", days, filter, kind, group] as const,
+  toolUsageDetail: (tool: string, days: number, kind: string, group: string, source: string) =>
+    ["toolUsageDetail", tool, days, kind, group, source] as const,
+  /** docs/plan-outside-helper.md: is the person's own helper connected. */
+  aiWorkspaceHelper: () => ["aiWorkspaceHelper"] as const,
+  /** The packed helper the operator published (§3.7.2), or null. */
+  aiWorkspaceHelperRelease: () => ["aiWorkspaceHelperRelease"] as const,
+  /** The helper job a lookup card handed over. */
+  outsideJob: (itemId: string, chatId: string | undefined, callId: string) =>
+    ["outsideJob", itemId, chatId ?? "", callId] as const,
   // The deploy's sign-ins, asked with no item (the "My environment variables" page).
   myEnvProviders: () => ["myEnvProviders"] as const,
   // The item's shared values + policy, for a page that has only its id.

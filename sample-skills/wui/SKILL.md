@@ -239,6 +239,35 @@ file in the workspace.
   `lot-tracker/`.
 - **`workspace.callTool` only reaches tools listed in `tools:`** in the yaml, and
   only ones this app grants. Declaring one you were not given fails at the call.
+- **`workspace.callAgent` only reaches sub-agents listed in `agents:`** in the
+  yaml, and only ones this item has (its `.agent/<name>/AGENT.md`, or the App's).
+
+## Every capability two ways: `call…` or `start…`
+
+A tool and a sub-agent can each be reached two ways, and **you** choose:
+
+- **`call…` — you want the answer now.** `await workspace.callTool(name, args)`,
+  `await workspace.callAgent(name, text)`. Waits at most a minute.
+- **`start…` — it may take a while.** `const job = await workspace.startTool(name, args)`,
+  `await workspace.startAgent(name, text)`. Answers at once with a job:
+  `await job.result()` waits for the same answer the `call…` would have given,
+  `await job.status()` asks once how it is going (poll it to draw progress),
+  `await job.stop()` stops it.
+- **A call that runs too long is stopped**, and the two say so differently: a
+  `callAgent` past its minute rejects with a sentence naming `startAgent`; a
+  `callTool` ends when the sandbox stops the command (a minute by default,
+  sooner if it prints nothing) and comes back with `exit_code: 124` and the
+  stdout it had printed. Either way, switch to `start…` — retrying the call
+  ends the same way.
+
+There are no callbacks. Each started job is in the item's run list, where a
+person can watch it and stop it; an item runs a handful at once (four by
+default) and refuses the next with a sentence.
+
+A sub-agent is text in, text out: `{ output, failed }`. `failed: true` means it
+failed or wrote nothing, and `output` then says why in a sentence you can show.
+If the page needs structure, the sub-agent's AGENT.md tells it to answer in
+JSON — and the page still checks before it trusts it.
 
 ## Work the page does not have to be open for
 

@@ -39,7 +39,6 @@ import contextlib
 import contextvars
 import logging
 import os
-import sys
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -205,14 +204,11 @@ def _install_own_handler() -> None:
     regardless of what does or doesn't configure logging around them. The
     timestamp is millisecond-resolution on purpose: proving that four requests
     OVERLAPPED needs their start and end times, not just their durations."""
-    if any(getattr(h, "_perf_trace", False) for h in logger.handlers):
-        return
-    handler = logging.StreamHandler(sys.stdout)
-    handler.setFormatter(logging.Formatter("%(asctime)s.%(msecs)03d %(message)s", "%H:%M:%S"))
-    handler._perf_trace = True  # ty: ignore[unresolved-attribute]
-    logger.addHandler(handler)
-    logger.setLevel(logging.INFO)
-    logger.propagate = False
+    from ..observability.stdout_log import install_own_handler
+
+    install_own_handler(
+        logger, fmt="%(asctime)s.%(msecs)03d %(message)s", datefmt="%H:%M:%S", propagate=False
+    )
 
 
 def install(spec: Any, sandbox: Any) -> None:

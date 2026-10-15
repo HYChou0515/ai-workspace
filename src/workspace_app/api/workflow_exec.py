@@ -24,7 +24,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, cast
 
 from specstar import SpecStar
-from specstar.types import ResourceIDNotFoundError
+from specstar.types import ResourceIDNotFoundError, ResourceIsDeletedError
 
 from ..agent.python_env import ProjectEnvError
 from ..resources import Conversation, Message
@@ -39,11 +39,13 @@ from .events import TurnEnded
 from .notifications import notification_sent, notify
 from .private_env import unattended_layer
 from .rca_messages import to_rca_message
+from .subagent_run import _child_context, report_of
 from .timeutil import now_ms
 from .turn_gate import admit_turn
 from .turns import CONTEXT_NOTICE_ROLE, already_noticed
 
 if TYPE_CHECKING:
+    from ..apps.subagents import SubagentDef
     from ..entity.events import EntityOrigin
     from ..files import WorkspaceFiles
     from ..kb.ingest import Ingestor
@@ -165,6 +167,65 @@ class WorkflowExecutor:
         entity_write_origin: EntityOrigin | None = None,
         run_id: str = "",
     ) -> str:
+        return _reply_text(
+            await self._turn(
+                item_id,
+                chat_key,
+                captured_user,
+                prompt,
+                tools,
+                lane=lane,
+                entity_write_origin=entity_write_origin,
+                run_id=run_id,
+            )
+        )
+
+    async def drive_agent(
+        self,
+        item_id: str,
+        chat_key: str,
+        captured_user: str,
+        prompt: str,
+        agent: SubagentDef,
+        *,
+        run_id: str,
+        stop_baseline: int | None = None,
+    ) -> tuple[str, bool]:
+        """Run ``agent`` — one of the item's sub-agents — over ``prompt`` as a
+        turn on a page job's own chat (#942), and return ``(what it said,
+        whether that is a failure)``.
+
+        The same turn a workflow node runs (quota, persistence, cross-pod stop,
+        the run's identity) narrowed exactly as the chat narrows a delegated
+        sub-agent: the definition's prompt and tools, bounded by what the item
+        holds and minus what no sub-agent may hold, an empty history and no way
+        to delegate further (`subagent_run._child_context` — one function for
+        both). What a failure or a silent ending reads as is `run_agent`'s own
+        sentence (`report_of`)."""
+        if stop_baseline is not None:
+            # The epoch as it was when the page job was accepted (#942): the
+            # turn compares against it instead of sampling one of its own, so a
+            # Stop that landed while the job waited is not absorbed.
+            self._run_baseline.setdefault(chat_key, stop_baseline)
+        produced = await self._turn(
+            item_id, chat_key, captured_user, prompt, None, run_id=run_id, agent=agent
+        )
+        failure = next((m.content for m in reversed(produced) if m.role == "error"), None)
+        return report_of(agent.name, _reply_text(produced), failure)
+
+    async def _turn(
+        self,
+        item_id: str,
+        chat_key: str,
+        captured_user: str,
+        prompt: str,
+        tools: list[str] | None,
+        *,
+        lane: str | None = None,
+        entity_write_origin: EntityOrigin | None = None,
+        run_id: str = "",
+        agent: SubagentDef | None = None,
+    ) -> list[TurnMessage]:
         """Run one agent node as a turn on the run's WORKFLOW CHAT (§3, §5.1):
         ``chat_key`` is that chat's conversation id, so turns enqueue + persist there
         (keeping the run's stream separate from the item's other chats). Builds the
@@ -224,6 +285,26 @@ class WorkflowExecutor:
             entity_write_origin=entity_write_origin,
             caller_env=await self._headless_env(captured_user, item_id, run_id),
         )
+        # plan-tool-usage-stats §3.4: a schedule's run or a person's, and who
+        # its tool calls count against — the one who bound it, else whoever the
+        # run was captured for (the item's owner for a schedule, the starter).
+        ctx.surface, ctx.usage_user = await asyncio.to_thread(
+            self._usage_identity, run_id, captured_user
+        )
+        if agent is not None:
+            surface = ctx.surface
+            ctx = _child_context(ctx, agent)
+            # A page job's sub-agent turn is counted where it was asked from —
+            # the page (#942 §3.4) — not as a sub-agent of some parent turn:
+            # `_child_context` marks every child "subagent", and this one has
+            # no parent turn at all.
+            ctx.surface = surface
+            # A page job's chat starts empty and is the job's record (D5): what
+            # was asked belongs in it, or the record shows an answer to nothing.
+            # A workflow node's prompt is the workflow's business and stays out.
+            self._append(
+                rid, captured_user, Message(role="user", content=prompt, created_at=now_ms())
+            )
         # #624: this node had to leave part of the thread out. Say so in the
         # workflow chat — it is a real conversation the user can open, and a run
         # that quietly forgot its earlier steps reads as a model gone vague.
@@ -231,10 +312,9 @@ class WorkflowExecutor:
         # skip it.
         if ctx.history_reduced_note:
             self._notice_history_reduced(rid, captured_user, ctx.history_reduced_note)
-        answer = ""
+        produced_all: list[TurnMessage] = []
 
         def persist(produced: list[TurnMessage]) -> None:
-            nonlocal answer
             if produced:
                 conv2 = self._conv_rm.get(rid).data  # re-fetch the workflow chat
                 assert isinstance(conv2, Conversation)
@@ -244,7 +324,9 @@ class WorkflowExecutor:
                     for tm in produced:
                         conv2.messages.append(to_rca_message(tm))
                     self._conv_rm.update(rid, conv2)
-            answer = _reply_text(produced)
+            # After the write, as the answer always was: a node whose turn could
+            # not be persisted answers "" rather than text nobody can find.
+            produced_all.extend(produced)
 
         enqueue_key = lane or chat_key
         logger.debug(
@@ -269,7 +351,14 @@ class WorkflowExecutor:
         # (the watcher already cancelled the turn) → abort the run, don't step on.
         if await self._turn_engine.cancel_epoch(chat_key) > baseline:
             raise asyncio.CancelledError
-        return answer
+        return produced_all
+
+    def _append(self, rid: str, acting_user: str, message: Message) -> None:
+        conv = self._conv_rm.get(rid).data
+        assert isinstance(conv, Conversation)
+        conv.messages.append(message)
+        with self._conv_rm.using(user=acting_user):
+            self._conv_rm.update(rid, conv)
 
     async def _headless_env(self, captured_user: str, item_id: str, run_id: str = "") -> PersonEnv:
         """What this node's tools get from the deploy's seam, given that no
@@ -572,6 +661,24 @@ class WorkflowExecutor:
         with contextlib.suppress(Exception):
             await self._registry.flush(item_id)
 
+    def _usage_identity(self, run_id: str, captured_user: str) -> tuple[str, str]:
+        """Where this node's tool calls happened and whom they count against
+        (plan-tool-usage-stats §3.4). Blocking reads; call off the loop."""
+        run = None
+        if run_id:
+            try:
+                run = self._spec.get_resource_manager(WorkflowRun).get(run_id).data
+            except (ResourceIDNotFoundError, ResourceIsDeletedError):
+                run = None
+        if isinstance(run, WorkflowRun) and run.page_job is not None:
+            surface = "page"  # #942: a job a page started, not a workflow
+        elif isinstance(run, WorkflowRun) and run.from_schedule:
+            surface = "schedule"
+        else:
+            surface = "workflow"
+        bound, _verb = self._run_identity(run_id)
+        return surface, bound or captured_user
+
     def _run_identity(self, run_id: str) -> tuple[str, str]:
         """Whose private values this node uses, and the right they must still
         hold (`workflow.run_identity`); ("", …) — nobody's — when none. Read per
@@ -684,6 +791,16 @@ class WorkflowExecutor:
         await self._turn_engine.forget(chat_key)
         self._run_baseline.pop(chat_key, None)
 
+    async def end_page_job(self, item_id: str, chat_key: str) -> None:
+        """A page job ended (#942): drop its chat's turn session and stop
+        baseline — and leave the item's sandbox alone. `release` closes it when
+        no other RUN is running, but a page's `callTool` and an open chat are
+        not runs, and a job finishing must not cut the sandbox out from under
+        them; the idle reaper takes it when the item is really idle."""
+        logger.info("workflow_exec: page job on %s ended (item %s)", chat_key, item_id)
+        await self._turn_engine.forget(chat_key)
+        self._run_baseline.pop(chat_key, None)
+
     def notify_failure(self, run: WorkflowRun, run_id: str) -> None:
         """In-app failure notification to the item's owner (manual §17) — and to
         the person the run ran as, when that is somebody else
@@ -700,6 +817,13 @@ class WorkflowExecutor:
         # nowhere while the bill for it went to the right person.
         recipient = debtor_of(self._spec, slug, run.item_id, item)
         phase = run.current_phase or "?"
+        # A page job (#942) has no workflow and no phase: name what was asked.
+        job = run.page_job
+        what = (
+            f"{'sub-agent' if job.kind == 'agent' else 'tool'} “{job.name}”"
+            if job is not None
+            else ""
+        )
         logger.warning(
             "workflow_exec: workflow run failed at %r on item %s, notifying owner %s",
             phase,
@@ -716,7 +840,7 @@ class WorkflowExecutor:
             self._spec,
             recipient=recipient,
             kind="status",
-            title=f"Workflow run failed at “{phase}”",
+            title=f"Page job failed: {what}" if job else f"Workflow run failed at “{phase}”",
             # The owner ran it as themselves: one notice, carrying the hint the
             # second one would have — they are the likeliest to need it.
             body=_SIGN_IN_HINT if acting == recipient else "",
@@ -735,14 +859,19 @@ class WorkflowExecutor:
         # One per person, item, workflow and UTC day: a schedule failing every
         # hour must not bury them.
         day = datetime.fromtimestamp(now_ms() / 1000, UTC).date().isoformat()
-        key = f"run-failed-as:{acting}:{run.item_id}:{run.workflow_id}:{day}"
+        bucket = f"page:{job.kind}:{job.name}" if job is not None else run.workflow_id
+        key = f"run-failed-as:{acting}:{run.item_id}:{bucket}:{day}"
         if notification_sent(self._spec, key):
             return
         notify(
             self._spec,
             recipient=acting,
             kind="status",
-            title=f"A workflow run as you failed at “{phase}”",
+            title=(
+                f"A page job as you failed: {what}"
+                if job
+                else f"A workflow run as you failed at “{phase}”"
+            ),
             body=_SIGN_IN_HINT,
             link="/my-env",
             actor=run.captured_user,
