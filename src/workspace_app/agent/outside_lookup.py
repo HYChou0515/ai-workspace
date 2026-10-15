@@ -51,8 +51,8 @@ async def ask_outside_impl(
 
     Pass `why` as one short sentence the user reads first, then exactly one of:
     - `query`: what to search for — keywords, not a sentence: at most 10 words
-      (or 40 Chinese, Japanese or Korean characters). The card offers search
-      buttons; the user may edit the query before searching.
+      and at most 40 Chinese, Japanese or Korean characters. The card offers
+      search buttons; the user may edit the query before searching.
     - `file` and `link` together: a link a lookup brought back. A lookup saved
       as a file lists its links at the bottom, numbered `- [n] <https://…>`
       (the message that brought it back names the file and lists the first
@@ -94,8 +94,8 @@ async def ask_outside_impl(
     if query is not None and (too_long := _too_long(query)):
         return (
             "error: a search is a few keywords, not a sentence — at most "
-            f"{QUERY_MAX_WORDS} words, or {QUERY_MAX_CJK} Chinese, Japanese or Korean "
-            f"characters; this one has {too_long}. Shorten it to the keywords that "
+            f"{QUERY_MAX_WORDS} words and at most {QUERY_MAX_CJK} Chinese, Japanese or "
+            f"Korean characters; this one has {too_long}. Shorten it to the keywords that "
             "matter and call again."
         )
     if url is not None and not is_web_address(url):
@@ -129,9 +129,11 @@ _WEB_ADDRESS = re.compile(f"https?://[^/?#{_SPACE}]+(?:[/?#][^{_SPACE}]*)?")
 
 
 #: A search is keywords (the person: 「Google search關鍵字字數應該限制」): a long
-#: query reads worse, and Google ignores words past its own limit (32). Words
-#: are space-separated; Chinese, Japanese and Korean have no spaces, so their
-#: characters are counted instead. Only the AI's query: the person may edit it.
+#: query reads worse, and Google ignores words past its own limit (32). Both
+#: limits apply: space-separated words, and Chinese, Japanese and Korean
+#: characters — Chinese and Japanese put no spaces between words, so their
+#: characters are what can be counted (Korean, spaced, meets both). Only the
+#: AI's query: the person may edit it.
 QUERY_MAX_WORDS = 10
 QUERY_MAX_CJK = 40
 _CJK_CHARACTER = re.compile(r"[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af\uf900-\ufaff]")
