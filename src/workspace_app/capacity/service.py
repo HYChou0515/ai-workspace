@@ -52,7 +52,8 @@ class CapacityService:
         self._workday = workday
         self._clock = clock
         self._ttl_s = ttl_s
-        self._kept: dict[int, tuple[float, Analysis]] = {}
+        #: period → (built at, analysis, the timer that lets it go)
+        self._kept: dict[int, tuple[float, Analysis, asyncio.TimerHandle]] = {}
         self._building: dict[int, asyncio.Task[Analysis]] = {}
         self._one_at_a_time = asyncio.Lock()
 
@@ -65,7 +66,11 @@ class CapacityService:
         return Period.ending(now_ms, days=days, step_s=step, lag_s=self._settings.lag_s, tz=tz)
 
     def drop(self, days: int) -> None:
-        self._kept.pop(days, None)
+        """Let go of the period's analysis, and of the timer that would have:
+        a timer holding it would keep it for the rest of its TTL."""
+        kept = self._kept.pop(days, None)
+        if kept is not None:
+            kept[2].cancel()
 
     async def analysis(self, days: int) -> Analysis:
         """This period's analysis, built if none is kept or it is older than
@@ -89,14 +94,10 @@ class CapacityService:
     async def _build_and_keep(self, days: int) -> Analysis:
         async with self._one_at_a_time:
             result = await asyncio.to_thread(self._build, days)
-        self._kept[days] = (self._clock(), result)
-        asyncio.get_running_loop().call_later(self._ttl_s, self._let_go, days, result)
+        self.drop(days)
+        timer = asyncio.get_running_loop().call_later(self._ttl_s, self.drop, days)
+        self._kept[days] = (self._clock(), result, timer)
         return result
-
-    def _let_go(self, days: int, result: Analysis) -> None:
-        kept = self._kept.get(days)
-        if kept is not None and kept[1] is result:
-            del self._kept[days]
 
     def _build(self, days: int) -> Analysis:
         period = self.period(days)

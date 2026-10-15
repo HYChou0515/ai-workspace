@@ -5,8 +5,10 @@ an analysis that would load too much stops and says so."""
 from __future__ import annotations
 
 import asyncio
+import gc
 import threading
 import time
+import weakref
 from functools import cache
 
 import pytest
@@ -206,6 +208,47 @@ async def test_a_kept_analysis_is_let_go_once_its_time_is_up():
     await asyncio.sleep(0.2)
 
     assert 28 not in service._kept  # noqa: SLF001
+
+
+class _Instant(CapacityService):
+    """Builds a stand-in at once: these tests are about keeping, not analysing."""
+
+    def _build(self, days: int):  # noqa: ANN202
+        return _Built()
+
+
+class _Built:
+    pass
+
+
+async def test_a_dropped_analysis_is_not_held_until_its_time_would_have_been_up():
+    """Each analysis holds a period's slots for every line and person. A
+    refresh lets it go; the timer that would have let it go at the end of its
+    TTL must not hold it until then — ten refreshes would be ten analyses."""
+    service = _service()
+    first = await service.analysis(28)
+    gone = weakref.ref(first)
+    del first
+
+    service.drop(28)
+    await service.analysis(28)
+    gc.collect()
+
+    assert gone() is None
+
+
+async def test_the_first_analysis_timer_does_not_let_go_of_the_second():
+    """Refreshed halfway through the first one's TTL: the second is kept for
+    its own whole TTL."""
+    service = _Instant(CapacitySources(), CapacitySettings(), clock=time.time, ttl_s=1.0)
+    await service.analysis(28)
+    await asyncio.sleep(0.5)
+    service.drop(28)
+    second = await service.analysis(28)
+
+    await asyncio.sleep(0.75)  # past the first one's TTL, within the second's
+
+    assert service._kept[28][1] is second  # noqa: SLF001
 
 
 async def test_the_answers_are_worked_out_off_the_event_loop():
