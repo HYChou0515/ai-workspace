@@ -207,6 +207,11 @@ class ConfidenceOut(BaseModel):
     backtest: BacktestOut | None
     coverage: dict[str, float | None]
     unknown_share: float | None
+    #: E4: the share of requests no person asked for
+    system_share: float | None
+    #: source → [start_ms, end_ms] runs with nothing, for the sources sampled
+    #: every slot (resource_metrics, gpu_metrics)
+    gaps: dict[str, list[list[int]]]
     untagged_gpu_share: dict[str, float]
     dropped: float
     mape_ok: float

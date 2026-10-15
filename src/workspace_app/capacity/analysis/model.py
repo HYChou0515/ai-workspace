@@ -22,6 +22,7 @@ import numpy as np
 from .lines import Line, build_lines, everyone
 from .observe import Observations
 from .people import NOT_PEOPLE, People, count_people
+from .period import Period
 from .thresholds import Pair, build_pairs, pair_json
 from .whatif import DRAWS, MAX_GROWTH, Headroom, Simulator, headroom
 
@@ -381,13 +382,25 @@ class Analysis:
         for s in self.obs.llm:
             asked[s.slots()] = True
         coverage["llm_requests"] = float(asked.mean()) if self.obs.llm else None
-        requests = unknown = 0.0
+        # The sources sampled every slot (②, ③): a run with nothing is a gap.
+        # ① and ④ only have rows when something happened — a quiet night is
+        # not a gap, so they have no gaps to list.
+        sampled = np.zeros(p.n, dtype=bool)
+        for (_comp, _pod), m in self.obs.pods.items():
+            sampled |= np.isfinite(m["cpu"]) | np.isfinite(m["memory"])
+        carded = np.zeros(p.n, dtype=bool)
+        for m in self.obs.gpu.values():
+            carded |= (m["util"] > 0) | (m["memory"] > 0)
+        gaps = {"resource_metrics": _gaps(p, sampled), "gpu_metrics": _gaps(p, carded)}
+        requests = unknown = system = 0.0
         for (user, _app, _comp, work), series in self.obs.work_user.items():
             if work.startswith("req:"):
                 total = series.total_count()
                 requests += total
                 if user == "unknown":
                     unknown += total
+                elif user == "system":
+                    system += total
         untagged: dict[str, float] = {}
         for line in self.lines:
             if line.unit == "inflight" and line.other is not None:
@@ -409,6 +422,8 @@ class Analysis:
             "backtest": self.backtest,
             "coverage": coverage,
             "unknown_share": unknown / requests if requests else None,
+            "system_share": system / requests if requests else None,
+            "gaps": gaps,
             "untagged_gpu_share": untagged,
             "dropped": self.obs.dropped,
             "mape_ok": MAPE_OK,
@@ -590,6 +605,32 @@ class Analysis:
             "jobs": sum(1 for j in self.obs.jobs if j.get("user") == user),
             "active_days": active,
         }
+
+
+#: A run of this many slots with nothing is a gap (15 minutes at 5-minute slots).
+GAP_SLOTS = 3
+#: The longest gaps listed per source.
+MAX_GAPS = 5
+
+
+def _gaps(p: Period, present: np.ndarray) -> list[list[int]]:
+    """The longest runs of at least `GAP_SLOTS` slots with nothing, between a
+    source's first and last slot with something, as [start_ms, end_ms] in time
+    order (view 9)."""
+    have = np.flatnonzero(present)
+    if not len(have):
+        return []
+    runs: list[tuple[int, int]] = []
+    start = None
+    for i in range(int(have[0]), int(have[-1]) + 1):
+        if not present[i]:
+            start = i if start is None else start
+        elif start is not None:
+            if i - start >= GAP_SLOTS:
+                runs.append((start, i))
+            start = None
+    longest = sorted(sorted(runs, key=lambda r: r[0] - r[1])[:MAX_GAPS])
+    return [[p.start_ms + a * p.step_ms, p.start_ms + b * p.step_ms] for a, b in longest]
 
 
 def _distribution(values: list[float]) -> dict[str, Any] | None:

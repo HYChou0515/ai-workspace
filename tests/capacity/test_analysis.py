@@ -17,7 +17,7 @@ from workspace_app.capacity.analysis.observe import observe
 from workspace_app.capacity.analysis.period import Period
 from workspace_app.capacity.sources import CapacitySources
 
-from .world import World, WorldGpus, WorldLlm, WorldPods, WorldRecords
+from .world import FILES, KB, SEND, World, WorldGpus, WorldLlm, WorldPods, WorldRecords
 
 
 @cache
@@ -347,3 +347,53 @@ def test_a_models_first_output_pair_takes_only_that_models_turns():
     ).summary()
 
     assert not [p for p in s["thresholds"] if p["id"] == "b" and p["model"] == w.gpu_model]
+
+
+def test_an_hour_with_no_machine_samples_is_listed_as_a_gap():
+    """§9.9: coverage, and the gaps — a missing hour of ② is an hour whose
+    peak nobody saw, so view 9 names it."""
+    w = _world()
+    hole = (
+        w.start_ms + 2 * 86_400_000 + 10 * 3_600_000,
+        w.start_ms + 2 * 86_400_000 + 11 * 3_600_000,
+    )
+
+    class Holed(WorldPods):
+        def usage(self, start_ms, end_ms, step_s):  # noqa: ANN001, ANN201
+            return [
+                s
+                for s in super().usage(start_ms, end_ms, step_s)
+                if not hole[0] <= s.t_ms < hole[1]
+            ]
+
+    sources = CapacitySources(WorldRecords(w), Holed(w), WorldGpus(w), WorldLlm(w))
+    s = analyse(
+        observe(sources, Period(w.start_ms, w.end_ms, w.step_s, ZoneInfo(w.tz))), now_ms=w.end_ms
+    ).summary()
+
+    assert s["confidence"]["gaps"]["resource_metrics"] == [list(hole)]
+    assert s["confidence"]["gaps"]["gpu_metrics"] == []
+
+
+def test_the_share_of_work_nobody_asked_for_is_reported():
+    """E4: `system` is a row of its own, and its share is in view 9."""
+    w = _world()
+
+    class OneIsSystem(WorldRecords):
+        def _kinds(self):  # noqa: ANN202
+            return {
+                k: [
+                    (at, {**u, "user": "system"} if u.get("user") == "user00" else u) for at, u in v
+                ]
+                for k, v in super()._kinds().items()
+            }
+
+    sources = CapacitySources(OneIsSystem(w), WorldPods(w), WorldGpus(w), WorldLlm(w))
+    s = analyse(
+        observe(sources, Period(w.start_ms, w.end_ms, w.step_s, ZoneInfo(w.tz))), now_ms=w.end_ms
+    ).summary()
+
+    counts = w.counts
+    mine = sum(float(counts[k][0].sum()) for k in (FILES, SEND, KB))
+    every = sum(float(counts[k].sum()) for k in (FILES, SEND, KB))
+    assert s["confidence"]["system_share"] == pytest.approx(mine / every, rel=1e-6)

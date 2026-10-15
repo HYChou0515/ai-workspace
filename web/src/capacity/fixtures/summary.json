@@ -13992,6 +13992,11 @@
    "llm_requests": 1.0
   },
   "unknown_share": 0.0,
+  "system_share": 0.0,
+  "gaps": {
+   "resource_metrics": [],
+   "gpu_metrics": []
+  },
   "untagged_gpu_share": {
    "qwen3": 0.9080376006463371
   },
