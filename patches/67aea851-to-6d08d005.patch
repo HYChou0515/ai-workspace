@@ -1,0 +1,323 @@
+diff --git a/docs/migrations.md b/docs/migrations.md
+index 6bd9f09e..1ace86c2 100644
+--- a/docs/migrations.md
++++ b/docs/migrations.md
+@@ -2500,6 +2500,21 @@ AI 讀 `wui` skill 時會看到「這個 item 能讓頁面問的 subagent」清
+ - 同一個頁面連按五次會跑很久的 `startAgent`：第五次被拒，訊息寫「already has 4 page jobs running」。沒部署到這一版
+   的症狀同上一條（`workspace.startAgent is not a function`）；部署了但設定值沒生效的症狀是數字不是你設的那個。
+ 
++### 2026-10-15 · 462774ef · #951 使用統計在 Postgres 上不再 500 {#pr-951}
++
++**設定** — 無。
++
++**資料** — 無。之前的使用次數都已經存好(寫入從沒受影響),部署後就看得到。
++
++**k8s · CI 側** — 照常重 build、部署。
++
++**行為改變,沒有開關**:Diagnostics 的「使用統計」(#932)在 Postgres 上,表格、明細、下載 CSV 都回 500
++(`invalid input syntax for type numeric`,日期字串被當成數字比大小);每天清理 90 天前的資料也一直失敗,只記一行
++`tool usage: prune failed`。現在三者都正常;清理只刪過期的日子,時鐘比較慢的 pod 不會刪到別的 pod 寫的新資料。
++
++**確認做完**(`rollout 後`):以 superuser 打開「使用統計」:表格出得來、點一列看得到明細、下載得到 CSV;隔天 API pod 的 log
++沒有 `tool usage: prune failed`。
++
+ ## 附錄 A：資料回填的機制（specstar 為什麼不會自己補）
+ 
+ 有些升版會改變「資料在資料庫裡的儲存形狀」，但 **specstar 只在寫入當下**把一列的 `indexed_data`
+diff --git a/src/workspace_app/api/tool_usage_store.py b/src/workspace_app/api/tool_usage_store.py
+index b747bc73..f0e91ac7 100644
+--- a/src/workspace_app/api/tool_usage_store.py
++++ b/src/workspace_app/api/tool_usage_store.py
+@@ -7,8 +7,11 @@ and no compare-and-swap is needed (the skill hub counter's shape). A flush runs
+ every few minutes and once more when the process stops; what a pod that dies
+ without stopping had not flushed is lost — at most one interval of counts.
+ 
+-Rows older than `KEEP_DAYS` are deleted, once a day per pod, by an indexed
+-query on `day` — never a scan of the table (#804).
++Rows older than `KEEP_DAYS` are deleted, once a day per pod, by a query on
++the indexed `day` naming the expired days (#804). On Postgres a list of more
++than 64 days (the prune, a 90-day report) is read by specstar's flat path, a
++pass over this small table's meta rather than an index probe — as the range
++it replaces was.
+ """
+ 
+ from __future__ import annotations
+@@ -60,7 +63,7 @@ class ToolUsageDay(Struct, kw_only=True):
+ 
+ def register_tool_usage(spec: SpecStar) -> None:
+     """Idempotently register the model. `day` is indexed because both the
+-    window a report asks for and the prune are ranges on it; `tool` because a
++    window a report asks for and the prune name days on it; `tool` because a
+     tool's own breakdown is read by it; `kind` because a report reads one."""
+     with contextlib.suppress(ValueError):
+         spec.add_model(ToolUsageDay, indexed_fields=["day", "tool", "kind", "package"])
+@@ -155,12 +158,18 @@ class ToolUsageStore:
+             logger.exception("tool usage: prune of %s failed", row_id)
+ 
+     def prune(self) -> None:
+-        """Delete every row older than `KEEP_DAYS` (D5) — an indexed range on
+-        `day`, so only the expired rows are read. Permanently: a soft delete
+-        keeps the row and every revision, and the table would grow anyway."""
+-        cutoff = (dt.date.fromisoformat(self._today()) - dt.timedelta(days=KEEP_DAYS)).isoformat()
++        """Delete every row older than `KEEP_DAYS` (D5): the expired days by
++        name on the indexed `day` (see `days_between` — a range there failed on
++        Postgres), the year before the cutoff, so only the expired rows are
++        read and never a newer one (a pod whose clock runs behind must not
++        delete what the others wrote since). The prune runs daily, so nothing
++        older is left to find. Permanently: a soft delete keeps the row and
++        every revision, and the table would grow anyway."""
++        cutoff = dt.date.fromisoformat(self._today()) - dt.timedelta(days=KEEP_DAYS)
++        first = (cutoff - dt.timedelta(days=_PRUNE_LOOKBACK_DAYS)).isoformat()
++        last = (cutoff - dt.timedelta(days=1)).isoformat()
+         rm = self._rm()
+-        old = QB["day"] < cutoff
++        old = QB["day"].in_(days_between(first, last))
+         for meta in rm.search_resources(query=old.build()):
+             # Another process's prune of the same day may have got there first.
+             with contextlib.suppress(ResourceIDNotFoundError):
+@@ -185,6 +194,34 @@ def run_flusher(store: ToolUsageStore | object, stop: threading.Event, interval:
+ # ── reading: what the administrator's report asks (§3.6) ───────────────────
+ 
+ 
++#: Days past today a row may carry: a pod whose clock runs ahead (or one past
++#: midnight UTC before another) writes under tomorrow.
++_AHEAD_DAYS = 2
++
++
++#: How far before the cutoff a prune looks: it runs daily, so a year covers
++#: any gap a stopped deploy could leave.
++_PRUNE_LOOKBACK_DAYS = 366
++
++
++def days_between(first: str, last: str) -> list[str]:
++    """Every day from `first` to `last`, both included, as ISO dates.
++
++    The store asks for days by name, never as a range: `day` is an ISO date
++    string, and specstar's Postgres meta store compares a range on an indexed
++    field as a NUMBER — `(indexed_data->>'day')::numeric >= '2026-09-16'` —
++    which Postgres refuses, so every report and prune failed there (the
++    person: 「Tool usage 回覆500」) while the in-memory backend compared the
++    strings and the tests passed. Membership is compared as jsonb
++    (`@>` probes, or `= ANY(…::jsonb[])` for a long list), with no cast."""
++    start, end = dt.date.fromisoformat(first), dt.date.fromisoformat(last)
++    return [(start + dt.timedelta(days=n)).isoformat() for n in range((end - start).days + 1)]
++
++
++def _ahead(today: str) -> str:
++    return (dt.date.fromisoformat(today) + dt.timedelta(days=_AHEAD_DAYS)).isoformat()
++
++
+ def since_day(days: int, today: str | None = None) -> str:
+     """The first day of a `days`-long window ending today (inclusive)."""
+     end = dt.date.fromisoformat(today or _today())
+@@ -199,9 +236,11 @@ def rows_since(
+     kind: str = "tool",
+     package: str | None = None,
+ ) -> list[ToolUsageDay]:
+-    """Every row of one `kind` from `since` on — an indexed range on `day` (and
+-    `tool` / `package` when one is named), never the whole table."""
+-    q = (QB["day"] >= since) & (QB["kind"] == kind)
++    """Every row of one `kind` from `since` on — the window's days by name on
++    the indexed `day` (see `days_between`), and `tool` / `package` when one is
++    named; never the whole table."""
++    window = days_between(since, _ahead(max(since, _today())))
++    q = QB["day"].in_(window) & (QB["kind"] == kind)
+     if tool is not None:
+         q = q & (QB["tool"] == tool)
+     if package is not None:
+diff --git a/tests/api/test_tool_usage_postgres.py b/tests/api/test_tool_usage_postgres.py
+new file mode 100644
+index 00000000..634eafab
+--- /dev/null
++++ b/tests/api/test_tool_usage_postgres.py
+@@ -0,0 +1,190 @@
++"""The usage report on Postgres (the person: 「Tool usage 回覆500」).
++
++`day` is an ISO date string, and specstar's Postgres meta store compares a
++range on an indexed field as a number — `(indexed_data->>'day')::numeric <
++'2026-07-17'` — so every report (and the daily prune) failed there with
++`invalid input syntax for type numeric`, while the in-memory backend the unit
++tests run on compared the strings and passed. The store now asks for the days
++it means by name: membership, which Postgres compares as jsonb, no cast.
++"""
++
++from __future__ import annotations
++
++import os
++import uuid
++
++import pytest
++from specstar import QB
++
++from tests.api._client import TestClient
++from workspace_app.agent.tool_usage import ToolUsageRecorder
++from workspace_app.api import ScriptedAgentRunner, create_app
++from workspace_app.api.tool_usage_store import (
++    ToolUsageDay,
++    ToolUsageStore,
++    register_tool_usage,
++    rows_since,
++)
++from workspace_app.filestore.memory import MemoryFileStore
++from workspace_app.resources import make_spec
++from workspace_app.sandbox.mock import MockSandbox
++
++_RANGE = {"gt", "gte", "lt", "lte", "between", "in_range"}
++
++
++def _conditions(node: object):  # noqa: ANN202 — walks specstar's query tree
++    for cond in getattr(node, "conditions", None) or []:
++        if hasattr(cond, "field_path"):
++            yield cond
++        yield from _conditions(cond)
++
++
++def _days(spec) -> list[str]:  # noqa: ANN001
++    out = []
++    for r in spec.get_resource_manager(ToolUsageDay).list_resources(QB.all()):
++        assert isinstance(r.data, ToolUsageDay)
++        out.append(r.data.day)
++    return sorted(out)
++
++
++class _Spy:
++    """A resource manager that records the queries it is asked."""
++
++    def __init__(self, rm: object) -> None:
++        self._rm = rm
++        self.asked: list[object] = []
++
++    def __getattr__(self, name: str):  # noqa: ANN204
++        attr = getattr(self._rm, name)
++        if name in ("list_resources", "search_resources"):
++
++            def asked(query=None, **kw):  # noqa: ANN001, ANN202, ANN003
++                self.asked.append(query)
++                return attr(query, **kw)
++
++            return asked
++        return attr
++
++
++# CI's guard (no Postgres there): what the store asks of `day` is never a
++# range — the one comparison Postgres turns into a number.
++def test_the_store_never_asks_a_range_of_the_day(monkeypatch) -> None:  # noqa: ANN001
++    spec = make_spec()
++    register_tool_usage(spec)
++    spy = _Spy(spec.get_resource_manager(ToolUsageDay))
++    monkeypatch.setattr(spec, "get_resource_manager", lambda model: spy)
++
++    rows_since(spec, "2026-09-15", kind="tool")
++    rows_since(spec, "2026-09-15", kind="skill", tool="t", package="p")
++    ToolUsageStore(spec, ToolUsageRecorder(), pod="p", today=lambda: "2026-10-15").prune()
++
++    assert spy.asked
++    on_day = [c for q in spy.asked for c in _conditions(q) if c.field_path == "day"]
++    assert on_day, "the day is what every one of these asks about"
++    assert {c.operator.value for c in on_day}.isdisjoint(_RANGE), on_day
++
++
++# ── on a real Postgres (local; CI has none) ──
++
++
++@pytest.fixture
++def pg_spec(tmp_path):  # noqa: ANN001, ANN201
++    dsn = os.environ.get("WORKSPACE_TEST_PG_DSN")
++    if not dsn:
++        pytest.skip("set WORKSPACE_TEST_PG_DSN to a Postgres this test may create a database on")
++    import psycopg2
++    from specstar import BackendBinding, BackendConfig, ConnectionProfile
++
++    name = f"usage_{uuid.uuid4().hex[:12]}"
++    admin = psycopg2.connect(dsn)
++    admin.autocommit = True
++    admin.cursor().execute(f"CREATE DATABASE {name}")
++    db = dsn.rsplit("/", 1)[0] + "/" + name
++    backend = BackendConfig(
++        connections={
++            "pg": ConnectionProfile(type="postgres", options={"connection_string": db}),
++            "local": ConnectionProfile(type="disk", options={"rootdir": str(tmp_path)}),
++        },
++        meta=BackendBinding(use="pg"),
++        resource=BackendBinding(use="local"),
++        blob=BackendBinding(use="local"),
++    )
++    try:
++        yield make_spec(default_user="admin", backend=backend, superusers=frozenset({"admin"}))
++    finally:
++        from specstar.resource_manager import _pg_pool
++
++        for close in (getattr(_pg_pool, "close_all", None),):
++            if close is not None:
++                close()
++        admin.cursor().execute(f"DROP DATABASE IF EXISTS {name} WITH (FORCE)")
++        admin.close()
++
++
++@pytest.mark.integration
++def test_the_report_answers_on_postgres(pg_spec) -> None:  # noqa: ANN001
++    app = create_app(
++        spec=pg_spec,
++        sandbox=MockSandbox(),
++        filestore=MemoryFileStore(),
++        runner=ScriptedAgentRunner([]),
++        get_user_id=lambda: "admin",
++        superusers=frozenset({"admin"}),
++    )
++    rec = ToolUsageRecorder()
++    rec.record(
++        "read_file",
++        "built-in",
++        failed=False,
++        ms=12,
++        user="admin",
++        surface="chat",
++        app="rca",
++        item="i1",
++    )
++    ToolUsageStore(pg_spec, rec, pod="p").flush()
++    client = TestClient(app)
++
++    report = client.get("/api/admin/tool-usage?days=30")
++    # 90 days is past specstar's 64-value probe list: the `= ANY` path
++    long = client.get("/api/admin/tool-usage?days=90")
++    detail = client.get("/api/admin/tool-usage/read_file?days=30")
++    csv = client.get("/api/admin/tool-usage.csv?days=30")
++
++    assert report.status_code == 200, report.text
++    assert [t["tool"] for t in report.json()["tools"]] == ["read_file"]
++    assert long.status_code == 200 and long.json()["tools"][0]["calls"] == 1, long.text
++    assert detail.status_code == 200 and detail.json()["calls"] == 1, detail.text
++    assert csv.status_code == 200 and "read_file" in csv.text
++
++
++@pytest.mark.integration
++def test_the_prune_works_on_postgres(pg_spec) -> None:  # noqa: ANN001
++    register_tool_usage(pg_spec)
++    for day in ("2026-07-15", "2026-07-16", "2026-10-14"):
++        rec = ToolUsageRecorder(day=lambda d=day: d)
++        rec.record(
++            "spc", "first_party", failed=False, ms=1, user="a", surface="chat", app="rca", item="i"
++        )
++        ToolUsageStore(pg_spec, rec, pod="p", today=lambda d=day: d).flush()
++
++    ToolUsageStore(pg_spec, ToolUsageRecorder(), pod="p", today=lambda: "2026-10-14").prune()
++
++    assert _days(pg_spec) == ["2026-07-16", "2026-10-14"]
++
++
++# A prune deletes only expired days, never a newer one: a pod whose clock runs
++# behind (here, by 40 days) must not delete what the others wrote since.
++def test_a_prune_never_deletes_a_newer_day() -> None:
++    spec = make_spec()
++    register_tool_usage(spec)
++    for day in ("2026-08-20", "2026-10-14"):
++        rec = ToolUsageRecorder(day=lambda d=day: d)
++        rec.record(
++            "spc", "first_party", failed=False, ms=1, user="a", surface="chat", app="rca", item="i"
++        )
++        ToolUsageStore(spec, rec, pod="p", today=lambda d=day: d).flush()
++
++    ToolUsageStore(spec, ToolUsageRecorder(), pod="slow", today=lambda: "2026-09-04").prune()
++
++    assert _days(spec) == ["2026-08-20", "2026-10-14"]
