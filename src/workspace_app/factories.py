@@ -33,6 +33,7 @@ from .agent.config_catalog import AgentConfigCatalog
 from .agent.tool_usage import ToolUsageRecorder
 
 if TYPE_CHECKING:
+    from .capacity.recorder import UsageRecorder
     from .model_settings.live import LiveSettings
 from .api.env_provider import IEnvProvider
 from .api.litellm_runner import LitellmAgentRunner, RunnerEndpoints
@@ -43,6 +44,7 @@ from .apps.catalog import AppCatalog, validate_all_apps
 from .config.catalog_build import build_catalog
 from .config.loader import load as load_settings
 from .config.schema import (
+    CapacitySettings,
     Preset,
     RetrievalLlmRef,
     SandboxIsolationSettings,
@@ -1395,6 +1397,26 @@ def get_notification_channel(dotted: str) -> INotificationChannel | None:
     if not dotted:
         return None
     return _construct_dotted(dotted, INotificationChannel, config_key="server.notification_channel")
+
+
+def build_usage_recorder(settings: CapacitySettings, *, component: str) -> UsageRecorder | None:
+    """This process's usage counter (docs/plan-capacity-usage.md §6.7), or None
+    when `capacity.record` is off. Its sink is `capacity.sink` when named — a
+    `UsageSink` subclass, refused at startup otherwise — else one JSON line per
+    record on stdout for the deploy's collector (D3)."""
+    from .capacity.recorder import UsageRecorder
+    from .capacity.sink import StdoutSink, UsageSink
+
+    if not settings.record:
+        return None
+    sink = (
+        _construct_dotted(settings.sink, UsageSink, config_key="capacity.sink")
+        if settings.sink
+        else StdoutSink()
+    )
+    return UsageRecorder(
+        sink, component=component, window_s=settings.window_s, queue_max=settings.queue_max
+    )
 
 
 def get_request_env(dotted: str) -> IRequestEnv | None:

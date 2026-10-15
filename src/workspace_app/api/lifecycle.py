@@ -390,6 +390,17 @@ def build_lifespan(
         except asyncio.CancelledError:
             return
 
+    async def usage_flusher(app: FastAPI) -> None:
+        """Pod-local: writes this process's usage counts each time a window
+        closes (docs/plan-capacity-usage.md §6.7)."""
+        recorder = getattr(app.state, "usage_recorder", None)
+        if recorder is None:
+            return
+        try:
+            await recorder.run()
+        except asyncio.CancelledError:
+            return
+
     async def index_sweeper(app: FastAPI) -> None:
         """Periodically make sure no doc is left claiming to be busy. Two passes,
         answering different questions:
@@ -690,6 +701,7 @@ def build_lifespan(
         bg.append(asyncio.create_task(index_sweeper(app)))  # #227 fan-out stuck-run recovery
         bg.append(asyncio.create_task(skill_hub_usage_flusher(app)))  # skill hub counts (U4)
         bg.append(asyncio.create_task(tool_usage_flusher(app)))  # tool-call counts
+        bg.append(asyncio.create_task(usage_flusher(app)))  # capacity usage records
         bg.append(asyncio.create_task(cluster_sweeper(app)))  # #506 P8 review-inbox cluster fold
         if turn_reclaim_interval is not None:
             bg.append(asyncio.create_task(turn_reclaim_sweeper(app)))  # plan-graceful-shutdown P3
@@ -839,6 +851,18 @@ def build_lifespan(
                     logger.warning("lifespan: tool usage flush ran out of shutdown budget")
                 except Exception:  # noqa: BLE001 — one failing step must not stop the rest
                     logger.exception("lifespan: tool usage flush failed")
+            # And this pod's usage counts, the window in progress included
+            # (docs/plan-capacity-usage.md §6.7).
+            if (recorder := getattr(app.state, "usage_recorder", None)) is not None:
+                budget = max(deadline - time.monotonic(), 1.0)
+                try:
+                    await asyncio.wait_for(
+                        asyncio.to_thread(recorder.close, timeout_s=budget), timeout=budget
+                    )
+                except TimeoutError:
+                    logger.warning("lifespan: usage records flush ran out of shutdown budget")
+                except Exception:  # noqa: BLE001 — one failing step must not stop the rest
+                    logger.exception("lifespan: usage records flush failed")
             t0 = time.monotonic()
             await kernels.shutdown_all()
             t1 = time.monotonic()

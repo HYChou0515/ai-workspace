@@ -83,6 +83,12 @@ class UsageWriter:
             dropped, self._dropped = self._dropped, 0
         return dropped
 
+    def return_dropped(self, n: int) -> None:
+        """Give back a count `take_dropped` handed out that could not be
+        reported, so the next report includes it."""
+        with self._lock:
+            self._dropped += n
+
     def close(self, *, timeout_s: float) -> None:
         """Deliver what is queued, then stop. Bounded: a stuck sink cannot hold
         a shutdown longer than `timeout_s` (the thread is a daemon)."""

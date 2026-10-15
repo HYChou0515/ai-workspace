@@ -24,6 +24,9 @@ from ..agent.context import AgentToolContext
 from ..apps.skill_hub import SkillHubReview, SkillHubStore, register_skill_hub
 from ..apps.skill_hub_git import SkillHubRepos, resolve_git_root
 from ..apps.subagents import SubagentDef
+from ..capacity.middleware import UsageMiddleware
+from ..capacity.recorder import UsageRecorder
+from ..capacity.scope import recording_reader
 from ..config.schema import (
     ChatVideoSettings,
     EnhancementSettings,
@@ -531,6 +534,9 @@ def create_app(
     # (also when it stops). None ⇒ nothing counted here is written.
     tool_usage: ToolUsageRecorder | None = None,
     tool_usage_flush_interval: timedelta = timedelta(minutes=5),
+    # docs/plan-capacity-usage.md: where this process counts its requests,
+    # turns and jobs for the capacity dashboard. None ⇒ nothing is counted.
+    usage_recorder: UsageRecorder | None = None,
     # #345: soft cap (bytes) on ONE item's shared scratch dir; the idle reaper's
     # du-sweep recycles any item over it so a runaway workspace can't fill the
     # scratch volume the whole fleet shares. 0 ⇒ disabled (the lenient default).
@@ -740,6 +746,13 @@ def create_app(
             get_user_id = _default_user  # a per-request callable — use it as-is
         else:  # UNSET / unexpected — fall back to the single dev tenant
             get_user_id = lambda: "default-user"  # noqa: E731
+    # docs/plan-capacity-usage.md §6.2: a request learns who it is from the
+    # first answer its routes get from `get_user_id`, so the counter never
+    # asks the deploy's reader a second time. The counter itself keeps the
+    # unwrapped reader for a request whose routes never asked.
+    _deploy_user_reader = get_user_id
+    if usage_recorder is not None:
+        get_user_id = recording_reader(get_user_id)
     if users is None:
         users = MockUserDirectory()
     # `None` catalog → build one from bundled defaults so test fixtures /
@@ -1551,6 +1564,15 @@ def create_app(
     # LAST so it wraps OUTERMOST and its wall clock covers the whole request,
     # middleware included — otherwise the residual it reports would exclude the
     # very queueing we are trying to see.
+    # docs/plan-capacity-usage.md §6.1: count every request for the capacity
+    # dashboard. Inside the perf trace (below), which stays outermost for the
+    # reason it gives.
+    app.state.usage_recorder = usage_recorder
+    if usage_recorder is not None:
+        app.add_middleware(
+            UsageMiddleware, recorder=usage_recorder, get_user_id=_deploy_user_reader
+        )
+
     if perf_trace.enabled():
         perf_trace.install(spec, sandbox)
         app.add_middleware(perf_trace.PerfTraceMiddleware)

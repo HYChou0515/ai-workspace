@@ -30,6 +30,7 @@ from workspace_app.config.dump import emit_config_dump
 from workspace_app.config.loader import load_with_provenance
 from workspace_app.factories import (
     build_message_queue_factory,
+    build_usage_recorder,
     get_agent_config_catalog,
     get_card_drafter_llm,
     get_chat_pipeline,
@@ -101,7 +102,11 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def build_app(
-    settings: Settings, *, config_dir: Path | None, live: LiveSettings | None = None
+    settings: Settings,
+    *,
+    config_dir: Path | None,
+    live: LiveSettings | None = None,
+    usage_component: str = "api",
 ) -> FastAPI:
     """The API's composition root: every model registered, every service
     wired, nothing served. ``main`` serves what this returns; the ``blob-gc``
@@ -318,6 +323,11 @@ def build_app(
             # the lifespan writes it.
             runner=get_runner(settings, live=live, tool_usage=tool_usage),
             tool_usage=tool_usage,
+            # docs/plan-capacity-usage.md §6.7: this process's usage counts
+            # (requests, turns, in-process jobs), written as JSON lines.
+            # A worker that builds this composition (`API_REGISTRY_JOBTYPES`)
+            # counts as the worker it is (`usage_component`).
+            usage_recorder=build_usage_recorder(settings.capacity, component=usage_component),
             # plan-model-settings P5: with `live`, the catalog follows the
             # published settings (KB chat list, sub-agent defaults, presets).
             agent_config_catalog=(
