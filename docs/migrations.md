@@ -2436,6 +2436,41 @@ kubectl logs <api-pod> | grep "event_bus:"
 **確認做完**(`rollout 後`,重裝後):請 AI 查一個要看 GoodInfo 的問題、按「查」:小幫手的 Chrome 停在 Cloudflare 那頁並跳到前面,
 卡片顯示「請在小幫手的 Chrome 視窗裡完成驗證」;完成驗證後,卡片拿到 GoodInfo 的內容。
 
+### 2026-10-14 · #932 管理者看得到 AI 用了哪些工具與 skill、誰用、在哪、失敗幾次、多慢 {#pr-932}
+
+**設定** — 沒有新 key，不用改任何設定。行為改變，沒有開關（`docs/plan-tool-usage-stats.md`）：升級後 AI 的**每一次
+工具呼叫都會被計數**——工具、來源（內建／第一方套件／第三方）、成功或失敗、耗時、是誰、在哪個場合（聊天、KB 聊天、
+工作流程、排程、子代理、KB 子代理、背景工作）、哪個 App、哪個 item。**每一次 skill 被載入也會被計數**——AI 用
+`read_skill` 讀到內容，或使用者在 skill 選單套用，都算一次；記 skill 名稱、來源（平台內建／App 內建／skill hub／
+自己寫的）與同樣的誰、場合、App、item，沒有失敗與耗時。superuser 在 Diagnostics 頁的新分頁「使用統計」看得到
+（同一頁上下兩區：工具與 Skill，各有橫條圖與表格；工具區可以勾選要顯示哪些、切換「每個 command／依套件」；
+兩區都能下載原始資料 CSV）；其他人看不到這個分頁，`GET /api/admin/tool-usage`（`?kind=skill` 看 skill、
+`?group=package` 依套件）與 `GET /api/admin/tool-usage.csv` 回 403。skill 的來源「item 內自建」指存在該 item
+工作區、沒有來源標記的 skill，以及從 skill hub fork 出來的那份。
+Diagnostics 頁的分頁條改成底線樣式（和分享面板同款），內容不變。
+
+**資料** — 一張新表 `ToolUsageDay`（索引 `day`、`tool`、`kind`、`package`），不用做事，但要知道它的大小：每個行程（API 和每個
+worker 各算一個，名稱是「主機名-pid」）每個被用過的工具或 skill 每天一列（同名但來源或套件不同的各算一列），所以上限是
+「（工具的「名稱＋來源＋套件」數 ＋ skill 的「名稱＋來源」數）× 每天出現過的行程數 × 91 天」——重啟、
+rollout、HPA 擴張可能會在當天多出新的行程名稱。API 與 worker 每 5 分鐘、以及正常停止時寫一次（worker 在排空完工作之後
+才寫最後一次）；行程被直接殺掉（沒收到 SIGTERM）會掉最後不到 5 分鐘的計數。**超過 90 天的列每天自動永久刪除**（依 `day` 索引，不掃
+全表）。`WorkflowRun` 多一個 `from_schedule` 欄位（有預設值，舊的 run 讀成 `false`），不用回填；升級前就開始的 run
+一律算「工作流程」。升級後，item 的排程與 profile `triggers.json` 宣告的排程都算「排程」。skill hub 的「使用 N 次」
+計數器改用同樣的「主機名-pid」當寫入者（原本用 `HOSTNAME`，同一台 VM 上多個行程會共用一列、互相蓋掉）：升級後寫的是
+新的列，總數是所有列相加，舊列照算，面板上的數字不會跳。
+
+**k8s · CI 側** — 沒有新的 manifest、env、probe 或 JobType。要知道的一點：worker 的最後一次寫入排在排空工作之後，
+所以排空要在各 worker 的 `terminationGracePeriodSeconds`（`kubernetes/base/workers.yaml`：多數 60 秒，有的 120、900 秒）內做完；超過就被 SIGKILL，
+即使收到了 SIGTERM，也會掉最後不到 5 分鐘加上排空期間的計數。只影響統計，工作本身照原本的重派機制。
+
+**確認做完**（`rollout 後`）
+
+- 用 superuser 開 Diagnostics →「使用統計」：在任一 App 聊天裡讓 AI 用過工具，約 5 分鐘內出現該工具與次數；點工具
+  看得到人、場合、item。
+- 同一頁切到「Skill」：在聊天裡套用一個 skill 送出，約 5 分鐘內出現那個 skill、它的來源與次數。
+- 非 superuser 開 Diagnostics：沒有「使用統計」分頁。
+- 沒部署到這一版的症狀：Diagnostics 沒有「使用統計」分頁；`GET /api/admin/tool-usage` 是 404。
+
 ## 附錄 A：資料回填的機制（specstar 為什麼不會自己補）
 
 有些升版會改變「資料在資料庫裡的儲存形狀」，但 **specstar 只在寫入當下**把一列的 `indexed_data`

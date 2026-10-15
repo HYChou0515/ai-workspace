@@ -190,6 +190,9 @@ async def answer_question(
         collection_ids=collection_ids,
         agent_config=agent_config,
         call_lane=lane,
+        # plan-tool-usage-stats §3.4: the KB sub-agent of `ask_knowledge_base` —
+        # counted against its caller's person, App and item (it names none).
+        surface="kb_agent",
         tool_output_max_chars=tool_output_max_chars,
         exec_output_max_chars=exec_output_max_chars,
         # #537: how this sub-agent reaches the wiki — a reader that navigates it in
@@ -941,6 +944,8 @@ def register_kb_chat_routes(
         ctx = AgentToolContext(
             tool_output_max_chars=tool_output_max_chars,
             exec_output_max_chars=exec_output_max_chars,
+            # plan-tool-usage-stats §3.4.
+            surface="kb_chat",
             retriever=retriever,
             collection_ids=[c for c in _effective if c not in _discoverable],
             discoverable_collection_ids=_probe_universe,

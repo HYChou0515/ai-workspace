@@ -24,7 +24,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, cast
 
 from specstar import SpecStar
-from specstar.types import ResourceIDNotFoundError
+from specstar.types import ResourceIDNotFoundError, ResourceIsDeletedError
 
 from ..agent.python_env import ProjectEnvError
 from ..resources import Conversation, Message
@@ -223,6 +223,12 @@ class WorkflowExecutor:
             # they fire on_event workflows AND stay inside the recursion depth cap.
             entity_write_origin=entity_write_origin,
             caller_env=await self._headless_env(captured_user, item_id, run_id),
+        )
+        # plan-tool-usage-stats §3.4: a schedule's run or a person's, and who
+        # its tool calls count against — the one who bound it, else whoever the
+        # run was captured for (the item's owner for a schedule, the starter).
+        ctx.surface, ctx.usage_user = await asyncio.to_thread(
+            self._usage_identity, run_id, captured_user
         )
         # #624: this node had to leave part of the thread out. Say so in the
         # workflow chat — it is a real conversation the user can open, and a run
@@ -571,6 +577,19 @@ class WorkflowExecutor:
         """
         with contextlib.suppress(Exception):
             await self._registry.flush(item_id)
+
+    def _usage_identity(self, run_id: str, captured_user: str) -> tuple[str, str]:
+        """Where this node's tool calls happened and whom they count against
+        (plan-tool-usage-stats §3.4). Blocking reads; call off the loop."""
+        run = None
+        if run_id:
+            try:
+                run = self._spec.get_resource_manager(WorkflowRun).get(run_id).data
+            except (ResourceIDNotFoundError, ResourceIsDeletedError):
+                run = None
+        surface = "schedule" if isinstance(run, WorkflowRun) and run.from_schedule else "workflow"
+        bound, _verb = self._run_identity(run_id)
+        return surface, bound or captured_user
 
     def _run_identity(self, run_id: str) -> tuple[str, str]:
         """Whose private values this node uses, and the right they must still

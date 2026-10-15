@@ -163,6 +163,11 @@ class WorkflowRun(Struct):
     """Started by a schedule's "run now", not by its time — what the schedules
     overview tags "手動" (`docs/plan-schedule-overview-polish.md`). Additive: a
     run written before this reads False, as a scheduled one."""
+    from_schedule: bool = False
+    """Started by a schedule — by its time or by its "run now" — not by a person
+    launching the workflow (docs/plan-tool-usage-stats.md §3.4: its tool calls
+    are counted on the schedule surface). Additive: a run written before this
+    reads False."""
     result: dict[str, Any] | None = None
     """The ``run()`` return value (a summary), persisted on terminal."""
     pending_decision: PendingDecision | None = None
