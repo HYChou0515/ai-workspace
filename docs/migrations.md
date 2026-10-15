@@ -2500,6 +2500,21 @@ AI 讀 `wui` skill 時會看到「這個 item 能讓頁面問的 subagent」清�
 - 同一個頁面連按五次會跑很久的 `startAgent`：第五次被拒，訊息寫「already has 4 page jobs running」。沒部署到這一版
   的症狀同上一條（`workspace.startAgent is not a function`）；部署了但設定值沒生效的症狀是數字不是你設的那個。
 
+### 2026-10-15 · #951 使用統計在 Postgres 上不再 500 {#pr-951}
+
+**設定** — 無。
+
+**資料** — 無。之前的使用次數都已經存好(寫入從沒受影響),部署後就看得到。
+
+**k8s · CI 側** — 照常重 build、部署。
+
+**行為改變,沒有開關**:Diagnostics 的「使用統計」(#932)在 Postgres 上,表格、明細、下載 CSV 都回 500
+(`invalid input syntax for type numeric`,日期字串被當成數字比大小);每天清理 90 天前的資料也一直失敗,只記一行
+`tool usage: prune failed`。現在三者都正常;清理只刪過期的日子,時鐘比較慢的 pod 不會刪到別的 pod 寫的新資料。
+
+**確認做完**(`rollout 後`):以 superuser 打開「使用統計」:表格出得來、點一列看得到明細、下載得到 CSV;隔天 API pod 的 log
+沒有 `tool usage: prune failed`。
+
 ## 附錄 A：資料回填的機制（specstar 為什麼不會自己補）
 
 有些升版會改變「資料在資料庫裡的儲存形狀」，但 **specstar 只在寫入當下**把一列的 `indexed_data`
