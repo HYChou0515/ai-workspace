@@ -9,7 +9,7 @@ import type { CapacitySummary, Pair } from "../api";
 import { Chart } from "../Chart";
 import type { ChartOption } from "../echarts";
 import { isMsgKey } from "../../lib/i18n";
-import { lineLabelById, pct, purposeLabel, type T } from "../format";
+import { formatValue, lineLabelById, pct, purposeLabel, type T } from "../format";
 import { NotReady, sourceName } from "../Readiness";
 
 /** D13: (a), (b), (d), (e) are felt most and come first; (c) after. */
@@ -22,7 +22,12 @@ function isShare(x: string): boolean {
 
 export function kneeText(t: T, summary: CapacitySummary, pair: Pair): string {
   if (pair.note === "no_psi") return t("capacity.pair.noPsi");
-  const fmt = (v: number) => (isShare(pair.x) ? pct(v) : String(Math.round(v * 100) / 100));
+  const fmt = (v: number) =>
+    isShare(pair.x)
+      ? pct(v)
+      : pair.x === "gpu.inflight"
+        ? formatValue(t, v, "inflight")
+        : String(Math.round(v * 100) / 100);
   if (pair.knee) {
     if (pair.sets) {
       const line = summary.lines.find((l) => l.id === pair.sets);

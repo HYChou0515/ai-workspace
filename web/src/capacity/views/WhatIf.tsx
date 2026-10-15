@@ -162,7 +162,7 @@ export function WhatIf({
               }))}
             />
             {profile === "app" && (
-              <select className="input" value={app} onChange={(e) => setApp(e.target.value)} aria-label="App">
+              <select className="input" value={app} onChange={(e) => setApp(e.target.value)} aria-label={t("capacity.whatif.app")}>
                 {apps.map((a) => (
                   <option key={a} value={a}>
                     {a}
@@ -229,7 +229,11 @@ export function WhatIf({
                                   n: machines,
                                   now: r.machines_now == null ? "—" : machineCount(r.machines_now),
                                 })}
-                            {r.machine_label && <span className="capacity-sub">{r.machine_label}</span>}
+                            {(r.unit === "inflight" || r.machine_label) && (
+                              <span className="capacity-sub">
+                                {r.unit === "inflight" ? t("capacity.machine.card") : r.machine_label}
+                              </span>
+                            )}
                           </td>
                           <td>{fits === null ? "—" : t(fits ? "capacity.whatif.yes" : "capacity.whatif.no")}</td>
                         </tr>

@@ -64,7 +64,8 @@ def test_a_models_capacity_is_its_in_flight_level_where_first_tokens_slow():
     line = next(line for line in _summary()["lines"] if line["id"] == "gpu.qwen3")
 
     assert line["capacity"] == pytest.approx(w.gpu_knee_per_card * w.gpu_cards, rel=0.15)
-    assert line["machines"] == w.gpu_cards and line["machine_label"] == "GPU card"
+    # a card, which the page names in its own language
+    assert line["machines"] == w.gpu_cards and line["machine_label"] == ""
 
 
 def test_a_line_with_no_knee_says_its_threshold_is_a_default():

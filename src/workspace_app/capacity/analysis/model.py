@@ -720,7 +720,6 @@ def _thresholds(
                 # A model's capacity is its in-flight level at the knee (E5).
                 line.capacity = min(knees)
                 line.machines = cards.get(line.model) or None
-                line.machine_label = "GPU card"
                 out[line.id] = (1.0, "knee")
             continue
         if knees:

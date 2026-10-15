@@ -17,8 +17,9 @@ import type { CapacityClient, CapacitySummary, Person, Readiness, WhatIf as What
 import personFixture from "./fixtures/person.json";
 import summaryFixture from "./fixtures/summary.json";
 import whatifFixture from "./fixtures/whatif.json";
+import { formatValue } from "./format";
 import { readinessText } from "./Readiness";
-import { Allocation, allocationRows, modeApplies } from "./views/Allocation";
+import { Allocation, allocationRows, barChart, modeApplies } from "./views/Allocation";
 import { headline, Overview } from "./views/Overview";
 import { columnLabel, kneeText, pairTitle, Thresholds } from "./views/Thresholds";
 import { advisory, runwayDate, WhatIf } from "./views/WhatIf";
@@ -269,9 +270,69 @@ describe("allocation (view 2)", () => {
 
     renderWithQuery(<Allocation summary={s} days={28} client={client()} t={t} />);
 
-    // api.cpu, the first line, is split by regression
-    expect(screen.getByText("已累積 2 天，需要 3 天。資料夠了就會自動出現，不必做任何事。")).toBeInTheDocument();
+    // api.cpu, the first line, is split by regression: its table and its distribution wait
+    expect(screen.getAllByText("已累積 2 天，需要 3 天。資料夠了就會自動出現，不必做任何事。")).toHaveLength(2);
     expect(screen.queryByTestId("capacity-alloc-table")).toBeNull();
+  });
+
+  it("holds a person's lines split by regression back with the rest of the page", async () => {
+    const s = summary();
+    s.readiness.regression = notReady({ have_days: 2, need_days: 3 });
+    renderWithQuery(<Allocation summary={s} days={28} client={client()} t={t} />);
+    fireEvent.change(screen.getByTestId("capacity-alloc-line"), { target: { value: "sandbox-host.cpu" } });
+
+    fireEvent.click(await screen.findByRole("button", { name: "Alice Chen" }));
+
+    const detail = await screen.findByTestId("capacity-person");
+    await waitFor(() => expect(within(detail).getByText("沙盒 CPU")).toBeInTheDocument());
+    expect(within(detail).queryByText("API CPU")).toBeNull();
+  });
+
+  it("holds the distribution of a line split by regression back too", () => {
+    const s = summary();
+    s.readiness.regression = notReady({ have_days: 2, need_days: 3 });
+
+    renderWithQuery(<Allocation summary={s} days={28} client={client()} t={t} />);
+
+    const dist = screen.getByTestId("capacity-distribution");
+    expect(dist).toHaveTextContent("已累積 2 天，需要 3 天");
+    expect(within(dist).queryByText(/中位數/)).toBeNull();
+  });
+
+  it("names work that belongs to no App in words", () => {
+    const s = summary();
+    // indexing runs for a collection, which is no App's
+    const line = s.lines.find((l) => l.id === "worker.index.cpu")!;
+
+    const rows = allocationRows(t, s, line, "app", "avg", "separate", (id) => id);
+
+    expect(rows.map((r) => r.label)).toContain("不屬於任何 App");
+    expect(rows.map((r) => r.label)).not.toContain("(none)");
+  });
+
+  it("formats the bars' values the way the table does", () => {
+    const s = summary();
+    const line = s.lines.find((l) => l.id === "sandbox-host.cpu")!;
+    const rows = allocationRows(t, s, line, "person", "avg", "separate", (id) => id);
+
+    const option = barChart(t, rows, line.unit) as { tooltip: { valueFormatter: (v: unknown) => string } };
+
+    expect(option.tooltip.valueFormatter(0.123456)).toBe(formatValue(t, 0.123456, "cores"));
+  });
+
+  it("gives the unidentified row no rank among people", async () => {
+    const s = summary();
+    const c = client();
+    const unknown = structuredClone(personFixture) as unknown as Person;
+    unknown.lines = unknown.lines.map((l) => ({ ...l, rank: null }));
+    c.person = vi.fn(async () => unknown);
+    renderWithQuery(<Allocation summary={s} days={28} client={c} t={t} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Alice Chen" }));
+
+    const detail = await screen.findByTestId("capacity-person");
+    await waitFor(() => expect(within(detail).getByText("API CPU")).toBeInTheDocument());
+    expect(detail).not.toHaveTextContent("的人");
   });
 
   it("opens one person's detail from their row", async () => {
@@ -417,6 +478,23 @@ describe("what-if and runway (views 6, 7)", () => {
     expect(await screen.findByTestId("capacity-whatif-run")).toHaveAttribute("data-variant", "primary");
   });
 
+  it("names a GPU's unit in the page's language", async () => {
+    const s = summary();
+    const c = client();
+    const data = structuredClone(whatifFixture) as unknown as WhatIfData;
+    const gpu = data.lines.find((l) => l.unit === "inflight")!;
+    gpu.machines_needed = { p50: 3, p95: 4 };
+    gpu.machines_now = 2;
+    gpu.machine_label = "";
+    c.whatif = vi.fn(async () => data);
+    renderWithQuery(<WhatIf summary={s} days={28} client={c} t={en} />);
+
+    const table = await screen.findByTestId("capacity-whatif-table");
+    expect(table).toHaveTextContent("GPU card");
+    fireEvent.click(within(screen.getByTestId("capacity-whatif-profile")).getByRole("button", { name: "one App's people" }));
+    expect(screen.getByRole("combobox", { name: "App" })).toBeInTheDocument();
+  });
+
   it("counts GPUs in cards", async () => {
     const s = summary();
     const c = client();
@@ -459,12 +537,20 @@ describe("thresholds and confidence (views 8, 9)", () => {
     expect(kneeText(t, s, pair)).toBe("尚未觀察到變慢（最高到 62%）。");
   });
 
+  it("gives a model's knee in requests in flight", () => {
+    const s = summary();
+    const pair = s.thresholds.find((p) => p.x === "gpu.inflight" && p.sets)!;
+    pair.knee = { at: 2.1, slope_before: 0, slope_after: 1, gain: 0.5 };
+
+    expect(kneeText(t, s, pair)).toContain("2.1 個請求");
+  });
+
   it("calls a model's knee its capacity, not a threshold", () => {
     const s = summary();
     const pair = s.thresholds.find((p) => p.id === "gpu")!;
     pair.knee = { at: 0.7, slope_before: 0, slope_after: 3, gain: 0.9 };
 
-    expect(kneeText(t, s, pair)).toBe("超過 0.7 就明顯變慢，這就是GPU qwen3的容量。");
+    expect(kneeText(t, s, pair)).toBe("超過 0.7 個請求 就明顯變慢，這就是GPU qwen3的容量。");
   });
 
   it("says a kernel without pressure cannot show sandboxes waiting", () => {

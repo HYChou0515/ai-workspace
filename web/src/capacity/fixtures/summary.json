@@ -2226,7 +2226,7 @@
    "method": "direct",
    "capacity": 0.6999860543428099,
    "machines": 2,
-   "machine_label": "GPU card",
+   "machine_label": "",
    "threshold": 1.0,
    "threshold_source": "knee",
    "peak": 1.3100481891192228,

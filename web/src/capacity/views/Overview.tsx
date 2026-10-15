@@ -96,7 +96,11 @@ export function Overview({ summary, t }: { summary: CapacitySummary; t: T }) {
                       <td>{formatValue(t, line.peak, line.unit)}</td>
                       <td>
                         {line.capacity === null ? t("capacity.unknown") : formatValue(t, line.capacity, line.unit)}
-                        {line.machine_label && <span className="capacity-sub">{line.machine_label}</span>}
+                        {(line.unit === "inflight" || line.machine_label) && (
+                          <span className="capacity-sub">
+                            {line.unit === "inflight" ? t("capacity.machine.card") : line.machine_label}
+                          </span>
+                        )}
                       </td>
                       <td>
                         {line.threshold === null ? "—" : line.unit === "inflight" ? "—" : pct(line.threshold)}

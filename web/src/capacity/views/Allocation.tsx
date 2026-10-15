@@ -75,7 +75,13 @@ export function allocationRows(
       .sort((a, b) => b.value - a.value);
   }
   const label = (key: string) =>
-    by === "person" ? personLabel(t, key, name) : by === "purpose" ? purposeLabel(t, key) : key;
+    by === "person"
+      ? personLabel(t, key, name)
+      : by === "purpose"
+        ? purposeLabel(t, key)
+        : key === "(none)"
+          ? t("capacity.app.none")
+          : key;
   let rows: Row[] = line.groups[by].map((g) => row(g.key, label(g.key), g[stat], "group"));
   const fixed = line.fixed?.[stat] ?? 0;
   const spread = modeApplies(by, mode) ? mode : "separate";
@@ -160,7 +166,7 @@ export function Allocation({
     [t, summary, line, by, stat, mode, users],
   );
   const total = rows.reduce((sum, r) => sum + r.value, 0);
-  const option = useMemo<ChartOption>(() => barChart(t, rows.slice(0, 15), line?.unit === "bytes"), [t, rows, line]);
+  const option = useMemo<ChartOption>(() => barChart(t, rows.slice(0, 15), line?.unit ?? "cores"), [t, rows, line]);
   // a split by regression is shown once three days of both sources fit it (§9.10)
   const splitting = line?.method === "regression" && !summary.readiness.regression.ready;
 
@@ -263,7 +269,8 @@ export function Allocation({
 }
 
 /** One bar per row, stacked: its own use, and the fixed overhead it carries. */
-function barChart(t: T, rows: Row[], isBytes: boolean): ChartOption {
+export function barChart(t: T, rows: Row[], unit: Unit): ChartOption {
+  const isBytes = unit === "bytes";
   const carrying = rows.some((r) => r.carried > 0);
   const own = {
     type: "bar" as const,
@@ -283,7 +290,7 @@ function barChart(t: T, rows: Row[], isBytes: boolean): ChartOption {
     animation: false,
     grid: { left: 8, right: 24, top: carrying ? 28 : 8, bottom: 24, containLabel: true },
     legend: carrying ? { top: 0 } : undefined,
-    tooltip: { trigger: "axis" },
+    tooltip: { trigger: "axis", valueFormatter: (v: unknown) => formatValue(t, Number(v), unit) },
     xAxis: { type: "value", axisLabel: isBytes ? { formatter: (v: number) => `${(v / 1024 ** 3).toFixed(1)}G` } : {} },
     yAxis: { type: "category", data: rows.map((r) => r.label), inverse: true },
     series: carrying ? [own, carried] : [own],
@@ -312,12 +319,17 @@ function PersonDetail({
     queryKey: qk.capacityPerson(user, days),
     queryFn: () => client.person(user, days),
   });
+  // a line split by regression is held back here as everywhere until three
+  // days of both sources fit it (§9.10)
+  const held = (id: string) =>
+    !summary.readiness.regression.ready && summary.lines.find((x) => x.id === id)?.method === "regression";
+  const lines = useMemo(() => (data ? data.lines.filter((l) => !held(l.id)) : []), [data, summary]);
   // one chart per unit: cores, bytes and requests in flight share no axis
   const charts = useMemo<{ unit: Unit; option: ChartOption }[]>(() => {
     if (!data) return [];
     const units: Unit[] = ["cores", "bytes", "inflight"];
     return units
-      .map((unit) => ({ unit, shown: data.lines.filter((l) => l.unit === unit) }))
+      .map((unit) => ({ unit, shown: lines.filter((l) => l.unit === unit) }))
       .filter(({ shown }) => shown.length > 0)
       .map(({ unit, shown }) => ({
         unit,
@@ -336,7 +348,7 @@ function PersonDetail({
           })),
         },
       }));
-  }, [data, summary, t]);
+  }, [data, lines, summary, t]);
   return (
     <aside className="capacity-person" data-testid="capacity-person" aria-label={t("capacity.person.title", { user: label })}>
       <header>
@@ -351,7 +363,7 @@ function PersonDetail({
             {t("capacity.person.active", { n: data.active_days, turns: data.turns, jobs: data.jobs })}
           </p>
           <ul className="capacity-ranks">
-            {data.lines.map((l) => {
+            {lines.map((l) => {
               const line = summary.lines.find((x) => x.id === l.id);
               return (
                 <li key={l.id}>
@@ -418,11 +430,16 @@ function Distribution({ summary, line, t }: { summary: CapacitySummary; line: Li
       series: [{ type: "bar", data: counts, barCategoryGap: "8%" }],
     };
   }, [dist, line, t]);
+  // a line split by regression waits for three days of both sources (§9.10)
+  const splitting = line.method === "regression" && !summary.readiness.regression.ready;
   return (
     <section className="capacity-sub-view" data-testid="capacity-distribution">
       <h3 className="capacity-h3">{t("capacity.dist.title")}</h3>
       <NotReady readiness={summary.readiness.distribution} t={t} />
-      {summary.readiness.distribution.ready && dist && (
+      {summary.readiness.distribution.ready && splitting && (
+        <NotReady readiness={summary.readiness.regression} t={t} />
+      )}
+      {summary.readiness.distribution.ready && !splitting && dist && (
         <>
           <p className="capacity-note">
             {t("capacity.dist.summary", {
