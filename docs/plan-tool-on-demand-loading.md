@@ -43,7 +43,9 @@ provider 的 400 內文命中既有字樣，proxy 改寫過就不命中。
 | 載入的有效範圍 | **這一輪**。不是選擇題——工具清單本來就是 per-turn 建的（`AgentToolContext` 每輪重建），跨輪才需要額外存狀態 | user：「應該本來就是這輪吧」 |
 | 模型直接呼叫還沒載入的 command | **自動載入它的 schema，把「這是參數 schema，請照這個再呼叫一次」當作這次呼叫的回覆**，並標為已載入 | user 答 Q4：「可以」 |
 | 那次「載入＋重試」要不要留在對話記錄裡 | **不留**，turn-local，不寫進對話記錄、replay 看不到 | user 主動提：「我覺得不要」 |
-| 釘選清單設在哪一層 | **per-item，放在現有工具 modal**；不加 App 層覆寫 | user：「不用調整」 |
+| 釘選清單設在哪一層 | per-item、工具 modal（**但這一輪不做，見下一列**） | user：「不用調整」 |
+| 釘選要不要在這一輪做 | **延後，另開票**。它存在的理由是省掉「每輪第一次用某個 command 多一跳」，而那一跳實際多痛**沒有量過**；而且它是這個計畫裡唯一需要前端的部分 | 我提議延後，user：「我覺得沒關係」 |
+| 要不要修 overhead 的估算（`_tools_tokens` 只量內建，低 7.4 倍） | **不修**。它餵兩個地方：history 預算（事前裁切——那本身就是「無腦截斷」，不做）和靜默截斷偵測器（低估所以不觸發）。偵測器針對的是 Ollama 那種「不拒絕、直接砍前段」的 endpoint；user 判斷那條路不用管 | user：「不需要預算吧 他自然會在 litellm 那邊死掉」、「ollama 那個就算了」 |
 
 ## Design
 
@@ -52,8 +54,11 @@ provider 的 400 內文命中既有字樣，proxy 改寫過就不命中。
 今天工具資訊有兩份（wire schema + prompt 複本）。改完只有一份：**wire 的 `tools` 陣列
 本身就是目錄**。
 
-- 未載入的 command → **stub 工具**：真名字、description 截到 100 字元、**空的參數 schema**。
+- 未載入的 command → **stub 工具**：真名字、description 收到 100 字元上下、**空的參數 schema**。
   一條約 30–40 token（ASCII；中文描述會到 100 出頭）。
+  **收尾不硬切**：先取第一句（句號／換行為界）；第一句超過 100 就在**詞界或標點**收尾，
+  允許小幅超出，絕不切在半字或半句中間。而且**截斷只影響「要不要選它」，不會永久丟資訊**——
+  載入後拿到的是完整 description + 完整 schema。
 - 已載入的 command → **完整工具**：原本的 `params_json_schema`。
 - `format_tools_for_prompt` 的**整段 schema 複本拿掉**，換成一小段說明（它原本要解決的是
   「別把 function tool 當 shell binary」，一句話就夠，不需要每個工具的 JSON）。既有的
@@ -120,12 +125,21 @@ token）。留進歷史就等於把省下的塞回去，走幾輪回到原點；
   刻意的（#748）。要不要在那個部署打開，是運營方的判斷。
 - **UI 不在這一輪顯示「工具清單佔窗口 X%」**。那是另一張票：這一輪先讓佔用降到不會爆。
 - **不設工具數量硬上限**。目錄成本線性且已知，硬上限會把「工具很多」這個合法用法變成錯誤。
+- **不加任何事前裁切，也不修 overhead 的估算**。超出窗口就讓請求撞上去：會拒絕的 endpoint
+  （vLLM 的 `maximum context length ...`）撞出來的訊息餵回既有的「讀出上限 → 縮 → 重送」路徑。
+  **已知的代價**：對**不拒絕、直接砍掉請求前段**的 endpoint（Ollama、部分 proxy），這條路不會
+  報錯，而被砍掉的前段正是 `base = config.system_prompt`；靜默截斷偵測器也會繼續因為低估而
+  不觸發（`_sent_estimate` 用同一個數字）。user 判斷那種 endpoint 不用管（2026-10-15）。
+- **釘選延後**。這一輪完全不碰前端：目錄與載入都在模型那一側，工具 modal 顯示的語意沒變；
+  `load_tool` 與自動載入**不發 `ToolStart`/`ToolEnd`/`ToolLog`**（`api/events.py:33-60`），所以
+  不會冒出一張裝著 schema 的工具卡——那是後端一個判斷，不是前端特例。
 
 ## Phases（一個 commit 一段）
 
 1. **目錄與 stub（純函式）** — `tooling/registry.py`：`build_function_tools` 多一個
-   stub 模式（真名字、描述截 100 字元、空 schema）；描述截斷是一個獨立純函式，
-   單元測試吃 ASCII / 中文 / 剛好 100 / 超過 100 / 空描述。
+   stub 模式（真名字、描述收到 100 上下、空 schema）；描述收尾是一個獨立純函式，
+   單元測試吃 ASCII / 中文 / 剛好 100 / 超過 100 / 空描述 / 第一句就超過 100（要在詞界收尾、
+   不得切在半字）。
 2. **每輪已載入集合** — `AgentToolContext` 上一個 per-turn 的 loaded set（含「這一輪
    自動載入過哪些」的上界計數），純資料 + 測試；不接線。
 3. **接線：雙胞胎 + `is_enabled`** — `api/litellm_runner.py` 的工具組裝改成「未載入送
@@ -137,14 +151,11 @@ token）。留進歷史就等於把省下的塞回去，走幾輪回到原點；
    連同它們的斷言一起搬（「規則搬家要把測試帶走」）。
 5. **不入歷史** — 那一對訊息標成 turn-local；`history_items` 的 replay 看不到它；
    統計記成「載入」。測試：一輪結束後讀回對話，裡面只有成功那次呼叫。
-6. **預算量真的那一份** — `_tools_tokens` 改成量實際送出的集合；加一個測試讓它在
-   「有套件」時數字明顯變大（對未修版本驗紅）。
-7. **釘選（後端）** — per-item 的釘選清單欄位 + 路由；釘選的 command 進常駐集合。
-8. **釘選（前端）** — 工具 modal 每個 command 旁邊一個釘選控制項，照 #828 的分組版面；
-   控制項長相照 NN/g + Material 3 查過再畫，計畫與 PR 註明出處。
-9. **文件 + runbook** — `docs/configuration.md`（目錄/載入的行為、釘選）、
+6. **文件 + runbook** — `docs/configuration.md`（目錄/載入的行為）、
    `docs/extending-the-platform.md`（寫套件的人要知道 description 會被截 100 字元，
    第一句要自足），以及 `docs/migrations.md` 條目：**行為改變、沒有旋鈕**。
+
+（砍掉的三段：預算量真、釘選後端、釘選前端——見上面兩節的決策與理由。）
 
 ## Test plan（紅先行，targeted）
 
@@ -155,7 +166,7 @@ token）。留進歷史就等於把省下的塞回去，走幾輪回到原點；
   不再重載而是把錯誤交回去。
 - `load_tool`：吃 command 名、吃套件名、吃多個；不存在的名字給出「有哪些」而不是沉默。
 - 不入歷史：一輪結束後 `history_items` 裡沒有 schema 那一對；成功那次在。
-- 預算：有套件時 `_tools_tokens` 顯著變大（在未修版本上驗紅）。
+- 沒有工具卡：`load_tool` 與自動載入那次不產生 `ToolStart`/`ToolEnd`/`ToolLog`。
 - 突變探針：把 `is_enabled` 的判斷改成恆真（＝全部送完整 schema）→ 組裝測試要紅；
   把「不入歷史」那一行拿掉 → 歷史測試要紅。每個突變只能讓它宣稱守的那條紅。
 
