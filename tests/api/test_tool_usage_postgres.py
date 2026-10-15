@@ -39,6 +39,14 @@ def _conditions(node: object):  # noqa: ANN202 — walks specstar's query tree
         yield from _conditions(cond)
 
 
+def _days(spec) -> list[str]:  # noqa: ANN001
+    out = []
+    for r in spec.get_resource_manager(ToolUsageDay).list_resources(QB.all()):
+        assert isinstance(r.data, ToolUsageDay)
+        out.append(r.data.day)
+    return sorted(out)
+
+
 class _Spy:
     """A resource manager that records the queries it is asked."""
 
@@ -159,9 +167,7 @@ def test_the_prune_works_on_postgres(pg_spec) -> None:  # noqa: ANN001
 
     ToolUsageStore(pg_spec, ToolUsageRecorder(), pod="p", today=lambda: "2026-10-14").prune()
 
-    rm = pg_spec.get_resource_manager(ToolUsageDay)
-    days = sorted(r.data.day for r in rm.list_resources(QB.all()))
-    assert days == ["2026-07-16", "2026-10-14"]
+    assert _days(pg_spec) == ["2026-07-16", "2026-10-14"]
 
 
 # A prune deletes only expired days, never a newer one: a pod whose clock runs
@@ -178,5 +184,4 @@ def test_a_prune_never_deletes_a_newer_day() -> None:
 
     ToolUsageStore(spec, ToolUsageRecorder(), pod="slow", today=lambda: "2026-09-04").prune()
 
-    rm = spec.get_resource_manager(ToolUsageDay)
-    assert sorted(r.data.day for r in rm.list_resources(QB.all())) == ["2026-08-20", "2026-10-14"]
+    assert _days(spec) == ["2026-08-20", "2026-10-14"]
