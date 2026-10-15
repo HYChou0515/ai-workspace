@@ -26,7 +26,9 @@ from .outside_lookup_routes import AnswerForm, Deliver, OutsideAnswerOut, _open_
 
 class HandOverIn(BaseModel):
     tool_call_id: str
-    #: The query as the person edited it on the card (D4); ignored for a URL.
+    #: The query the person typed or pasted on the card (plan-outside-lookup
+    #: D13) — required for a search, which never falls back to the AI's
+    #: suggestion; ignored for a URL.
     query: str = ""
     #: The card asking on its own, with no 「查」 (D12): allowed only for a URL
     #: an earlier lookup in this chat brought back, and never restarts a job.
@@ -170,7 +172,10 @@ def register_outside_job_routes(
         if not await store.online(owner):
             raise HTTPException(status_code=409, detail="your helper is not connected")
         if "query" in card:
-            kind, args = "search", (body.query.strip() or card["query"])
+            # plan-outside-lookup D13: what goes out is what the person typed
+            # or pasted; the AI's query is only the suggestion beside the box —
+            # never sent instead (checked below, where a new job would start).
+            kind, args = "search", body.query.strip()
         else:
             kind, args = "open_url", card["url"]
         jid = job_id(investigation_id, rid, body.tool_call_id)
@@ -198,6 +203,12 @@ def register_outside_job_routes(
         ):
             # under way (a reloaded card offering 「查」 again): never restarted
             return _out(jid, existing, now=store.now())
+        if kind == "search" and not args:
+            # nothing typed, nothing searched
+            raise HTTPException(
+                status_code=422,
+                detail="先在搜尋框輸入或貼上關鍵字 — type the search keywords first",
+            )
         job = OutsideJob(
             owner=owner,
             item_id=investigation_id,

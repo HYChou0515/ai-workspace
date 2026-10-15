@@ -123,7 +123,7 @@ export const outsideLookupApi = {
     chatId?: string;
     callId: string;
     answer: OutsideAnswer;
-    /** What was searched — the query as the person edited it (D8). */
+    /** What was searched — the keywords the person typed in the box (D13). */
     query?: string;
     /** The person's own date, `YYYY-MM-DD`, for the saved file's name. */
     date?: string;

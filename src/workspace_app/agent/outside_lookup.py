@@ -50,9 +50,10 @@ async def ask_outside_impl(
     options instead, use `ask_user`.
 
     Pass `why` as one short sentence the user reads first, then exactly one of:
-    - `query`: what to search for — keywords, not a sentence: at most 10 words
-      and at most 40 Chinese, Japanese or Korean characters. The card offers
-      search buttons; the user may edit the query before searching.
+    - `query`: the keywords you suggest searching for — keywords, not a
+      sentence: at most 10 words and at most 40 Chinese, Japanese or Korean
+      characters. The card shows them beside an empty search box; the user
+      types or pastes what is actually searched.
     - `file` and `link` together: a link a lookup brought back. A lookup saved
       as a file lists its links at the bottom, numbered `- [n] <https://…>`
       (the message that brought it back names the file and lists the first
