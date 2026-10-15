@@ -254,6 +254,21 @@ class AgentToolContext:
     # installed into it from prebuilt_dir; the runner also exposes their
     # commands as function tools. Set by the API layer from create_app config.
     packages: list[PackageInfo] = field(default_factory=list)
+    loaded_tools: set[str] = field(default_factory=set)
+    """Which package commands THIS turn has loaded the real schema for
+    (`docs/plan-tool-on-demand-loading.md`), by the name the model calls them by.
+
+    A turn starts empty — from the catalog, where every granted command is one
+    line with no parameter schema — and a command joins this set the moment the
+    model reaches for it, so the rest of the same turn is served its real
+    schema (the SDK re-resolves the tool list on every step).
+
+    It dies with the turn, deliberately. A conversation-level set would creep
+    the whole tool universe back into the window over a dozen turns, which is
+    today's six-figure prompt arriving slowly instead of at once; the history
+    still records which command was used, so the next turn re-loads it (one
+    extra step) rather than carrying every schema it ever touched.
+    """
     tool_outputs: dict[str, str] = field(default_factory=dict)
     """What each package tool said the last time it ran in this turn, by the name
     the model called it (stdout then stderr). `request_env` checks a variable
@@ -707,6 +722,14 @@ class AgentToolContext:
 
             self._speaker_groups = groups_of(self.spec, self.acting_user)
         return self._speaker_groups
+
+    def mark_tool_loaded(self, name: str) -> None:
+        """This turn may now be served `name`'s real schema. Idempotent: a model
+        can emit two calls to one unloaded command in a single step."""
+        self.loaded_tools.add(name)
+
+    def is_tool_loaded(self, name: str) -> bool:
+        return name in self.loaded_tools
 
     def _mounts(self) -> dict[str, MountedTool] | None:
         """`sandbox_spec.tools` with the release each sha is. `None` stays
