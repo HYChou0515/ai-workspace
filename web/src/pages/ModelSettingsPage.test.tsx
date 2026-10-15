@@ -286,8 +286,10 @@ describe("ModelSettingsPage", () => {
     client.get.mockRejectedValue(new HttpError(503, "down"));
     await act(async () => queryClient.invalidateQueries());
 
+    // Found, not got: on a loaded CI runner the failed refetch settled before
+    // React drew its notice (CI run 38696983119).
+    expect(await screen.findByTestId("model-settings-refresh-failed")).toBeInTheDocument();
     expect(draftNow()).toEqual({ config: { llm: { base_url: "http://mine" } } });
-    expect(screen.getByTestId("model-settings-refresh-failed")).toBeInTheDocument();
   });
 
   it("shows an empty text value as empty quotes, not as nothing", async () => {

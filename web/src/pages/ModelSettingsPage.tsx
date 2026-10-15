@@ -1457,6 +1457,8 @@ function EnvSecretForm({
             onChange={(e) => setSecret(e.target.value)}
             autoComplete="off"
             spellCheck={false}
+            autoCapitalize="off"
+            autoCorrect="off"
             onCopy={blockMaskedCopy}
             onCut={blockMaskedCopy}
             onDragStart={blockMaskedCopy}
