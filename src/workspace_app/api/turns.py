@@ -1285,15 +1285,21 @@ class ChatTurnEngine:
             # (the partial work is real). Guarded so best-effort durability never
             # turns a finished turn into a failure; on an active cancel the flush
             # may be skipped, but the periodic checkpoint + next turn still cover it.
-            if on_turn_end is not None:
-                logger.debug("turns: turn-end durable flush for %s", ctx.investigation_id)
-                # A flush failure is not a turn failure (best-effort durability).
-                with contextlib.suppress(Exception):
-                    await on_turn_end()
-            if usage is not None:
-                # Counting is never a reason for a turn to fail.
-                with contextlib.suppress(Exception):
-                    usage.end()
+            try:
+                if on_turn_end is not None:
+                    logger.debug("turns: turn-end durable flush for %s", ctx.investigation_id)
+                    # A flush failure is not a turn failure (best-effort durability).
+                    with contextlib.suppress(Exception):
+                        await on_turn_end()
+            finally:
+                # Whatever cuts the flush short — the turn's own epoch watcher
+                # cancels it a second time after a Stop — the turn still ends
+                # on the record; left running, it is charged to its person in
+                # every window until restart. Counting is never a reason for a
+                # turn to fail.
+                if usage is not None:
+                    with contextlib.suppress(Exception):
+                        usage.end()
 
     @contextlib.asynccontextmanager
     async def preparing(self, key: str, author: str = "") -> AsyncIterator[PendingTurn]:

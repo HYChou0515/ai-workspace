@@ -142,6 +142,34 @@ async def test_a_stopped_turn_is_recorded_as_cancelled():
     assert turn["outcome"] == "cancelled"
 
 
+async def test_a_stopped_turn_ends_on_the_record_even_when_the_cancel_comes_twice():
+    """Stop bumps the epoch and cancels the turn; the turn's own epoch watcher,
+    still alive while the turn runs its `finally`, sees the bump and cancels it
+    again — inside the turn-end flush. The turn must still end on the record:
+    left running, it is charged to that person in every window until restart."""
+    sink = _ListSink()
+    rec = _recorder(sink)
+    block = asyncio.Event()
+    engine = ChatTurnEngine(_Runner(block=block), usage_recorder=rec, poll_interval=0.05)  # ty: ignore[invalid-argument-type]
+
+    async def slow_flush() -> None:  # the turn-end durable flush (#492)
+        await asyncio.sleep(0.5)
+
+    fut = engine.enqueue(
+        "item-1", "hi", _ctx(), on_complete=lambda _m: None, on_turn_end=slow_flush
+    )
+    await asyncio.sleep(0.3)
+    await engine.cancel_current("item-1")
+    await asyncio.wait_for(fut, 5)
+    still_running = len(rec._running)  # noqa: SLF001
+    await engine.forget("item-1")
+    rec.close()
+
+    assert still_running == 0
+    (turn,) = _usage(sink, "turn")
+    assert turn["outcome"] == "cancelled"
+
+
 @pytest.mark.parametrize(
     ("ctx", "user"),
     [
