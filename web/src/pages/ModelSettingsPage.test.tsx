@@ -1236,6 +1236,36 @@ describe("ModelSettingsPage", () => {
     );
   });
 
+  it("gives a value read only at boot the default the deploy booted with", async () => {
+    // demo (2026-10-13): `config.server.port` said 預設沒有這個值 — the column
+    // read the live-editable defaults, not the boot config the save diffs against.
+    renderWithQuery(
+      <ModelSettingsPage client={fakeClient({ boot_config: { ...DEFAULTS.config, server: { port: 9090 } } })} />,
+    );
+    await screen.findByRole("textbox", { name: "草稿（YAML）" });
+    type("config:\n  server:\n    port: 1\n");
+
+    const row = await screen.findByTestId("model-settings-changes");
+    expect(row).toHaveTextContent("config.server.port: 1");
+    expect(row).toHaveTextContent("預設：9090");
+    expect(row).not.toHaveTextContent("預設沒有這個值");
+  });
+
+  it("shows the whole settings again once a pasted fragment is saved", async () => {
+    // demo (2026-10-13): after saving a fragment the editor kept the fragment
+    // until a reload — M23 says the editor holds the whole settings.
+    const client = fakeClient();
+    renderWithQuery(<ModelSettingsPage client={client} />);
+    await screen.findByRole("textbox", { name: "草稿（YAML）" });
+    type("config:\n  agents:\n    presets:\n      kb-default:\n        model: openai/gpt-4.1\n");
+
+    fireEvent.click(screen.getByTestId("model-settings-save"));
+
+    await waitFor(() => expect(editor().value).toContain("openai-mini:"));
+    expect(editor().value).toContain("model: openai/gpt-4.1");
+    expect(draftNow()).toEqual({ config: { agents: { presets: { "kb-default": { model: "openai/gpt-4.1" } } } } });
+  });
+
   it("shows the saved draft as YAML, as config.yaml is written", async () => {
     // M9 (user): the editor is text, YAML/JSON — built as JSON only, which
     // narrowed it; config.yaml is YAML and so is the page now.

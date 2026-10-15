@@ -272,7 +272,10 @@ function useDraft(client: Client, data: PageData) {
     const was = previous.current;
     previous.current = draft;
     const now = readDraft(textNow.current);
-    if (now.ok && sameShape(now.patch, was)) setText(saved);
+    // Saying what the last saved draft said, or what the new one says (a fragment
+    // just saved — demo 2026-10-13): either way nothing unsaved is in the text,
+    // and the editor shows the whole settings again (M23).
+    if (now.ok && (sameShape(now.patch, was) || sameShape(now.patch, draft))) setText(saved);
     if (now.ok && (sameShape(now.patch, was) || sameShape(now.patch, draft))) {
       base.current = draft;
       told.current = false;
@@ -422,6 +425,7 @@ function useDraft(client: Client, data: PageData) {
   return {
     text,
     edit,
+    baseline,
     parsed,
     settled,
     checkedText,
@@ -712,7 +716,10 @@ function EditTab({
             style={{ margin: 0, paddingLeft: 0, listStyle: "none", display: "grid", gap: 6 }}
           >
             {changed.map(({ path, parts, value }) => {
-              const fallback = valueAt(defaults, parts);
+              // The default is what the save diffs against — the boot config
+              // included, so a value read only at boot names the one the deploy
+              // booted with (demo 2026-10-13: server.port said 預設沒有這個值).
+              const fallback = valueAt(draft.baseline, parts);
               return (
                 <li key={path} style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
                   <span style={{ ...MONO, ...WRAP }}>
