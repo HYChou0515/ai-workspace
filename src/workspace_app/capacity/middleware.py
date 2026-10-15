@@ -20,12 +20,13 @@ and this app streams SSE. For each HTTP request it records one `work` count:
 - **Who**: the request carries a `RequestIdentity`; the `get_user_id` its
   routes call is `recording_reader`-wrapped, so the first answer a route gets
   is the request's person at no extra cost. An API request whose route never
-  asked (auto-CRUD routes, probes) gets one call of the deploy's reader after
-  its response; an exception there is `unknown`. A request no route answered
+  asked (auto-CRUD routes) gets one call of the deploy's reader after its
+  response; an exception there is `unknown`. A request no route answered
   (a static file, a URL nothing serves) is `unknown` without asking. A
-  Kubernetes probe (`User-Agent: kube-probe/…`) is `system` work of its own
-  kind, `probe:<METHOD> <template>`: it hits every pod every few seconds, and
-  nobody asked for it.
+  Kubernetes probe (`User-Agent: kube-probe/…`) on a route that never asked
+  who is `system` work of its own kind, `probe:<METHOD> <template>`: it hits
+  every pod every few seconds, and nobody asked for it. (Anyone can send
+  that header; a route that asked knows who the request is.)
 """
 
 from __future__ import annotations

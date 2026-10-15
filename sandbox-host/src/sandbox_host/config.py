@@ -130,6 +130,7 @@ def _window(seconds: int) -> int:
     """A usage window must tile the hour, or it straddles the app's slots."""
     if seconds < 1 or 3600 % seconds:
         raise ValueError(
-            f"SANDBOX_HOST_USAGE_WINDOW_S={seconds}: must divide 3600 (60, 300, 600, …)"
+            f"SANDBOX_HOST_USAGE_WINDOW_S={seconds}: must divide 3600 (e.g. 60 or 300) — and"
+            " fit the app's capacity.step_s and its 90-day slot (docs/capacity.md §2)"
         )
     return seconds

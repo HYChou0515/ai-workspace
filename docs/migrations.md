@@ -2627,8 +2627,8 @@ AI 讀 `wui` skill 時會看到「這個 item 能讓頁面問的 subagent」清�
   3. 模型不是經由 LiteLLM、而是直接呼叫外部供應商——標籤裡的使用者 id 會送到外部。
 
   為什麼：標籤讓 ④ 知道 GPU 的負載是誰的。漏查的症狀：1、2 是升級後**所有 AI 呼叫失敗**；3 是使用者 id 外流。
-  LiteLLM 的每日標籤彙總表會多出「人數 + App 數 + 用途數 + 最多 5 個」標籤（`ws` 與 `ws.call:` 的四種；每個標籤 ×
-  日期 × key × 模型……一列；不帶 item）。
+  LiteLLM 的每日標籤彙總表會多出「人數 + App 數 + 用途數 + 最多 7 個」標籤（`ws`、`ws.call:` 的四種、
+  `ws.user:system`、`ws.user:unknown`；每個標籤 × 日期 × key × 模型……一列；不帶 item）。
 - `capacity.timezone`（**rollout 前**建議設成你們的時區，例如 `Asia/Taipei`）：「一天」從哪裡切。空 = UTC 午夜，
   台灣的一天會被切在早上八點。
 - `capacity.step_s`（**rollout 前**，有改它的話）要整除一天：一天要切成整數個時段，「每天的尖峰」和跨日的試算才對得
@@ -2644,17 +2644,18 @@ AI 讀 `wui` skill 時會看到「這個 item 能讓頁面問的 subagent」清�
 
 - **收集器**（**rollout 前**）：把 `event.dataset == "workspace.usage"` 的行送到自己的 index（例如
   `workspace-usage-*`），並套 [capacity.md §1](capacity.md) 的 index template。為什麼：容量頁讀的是這個 index；
-  沒分出來的話，這些行混在一般 log 裡，① 的查詢找不到——症狀是容量頁「已累積 0 天」。
+  沒分出來的話，這些行混在一般 log 裡，① 的查詢找不到——症狀是容量頁每個要 ① 的視圖都寫「已累積 0 天」（只有
+  時程那格在開始記錄的頭 30 天本來就是 0，它會另外說明）。
 - **sandbox-host 要換新映像**才會量沙盒：它每 `SANDBOX_HOST_USAGE_SAMPLE_S` 秒（預設 60；`0` = 不量）讀每個沙盒的
   cgroup、每 `SANDBOX_HOST_USAGE_WINDOW_S` 秒（預設 300）寫一行 `sandbox`。窗口要整除 3600（不整除的值，包括 `0`，
   起不來），而且要整除 `capacity.step_s` 或是它的整數倍，90 天期間的時段（預設 900 秒）也一樣——預設 `step_s: 300`
-  下 600、1200 不行（`capacity check` 會報錯）。沒換的症狀：容量頁沒有沙盒的 CPU、記憶體兩條線，「變慢的門檻」
+  下只有 300 的因數（例如 60、100、150、300）和 900、1800、3600 可以（其他的 `capacity check` 會報錯）。沒換的症狀：容量頁沒有沙盒的 CPU、記憶體兩條線，「變慢的門檻」
   沒有 (d)。app 與 sandbox-host 誰先換都可以：舊的 host 不認得建立時多送的 `labels`，照樣建；
   舊的 app 不送，沙盒照量但記成 `unknown`。
 - **API pod 的記憶體上限**（**接上資料來源前**）：superuser 每打開一個期間，API pod 就多佔一份分析——約 4 bytes ×
-  時段數（28 天約 8,352）× 每條線花到的人數加總，加上每讀一列約 50–60 bytes；1,000 人、每人平均在 8 條線約
-  270 MB，再加讀到的列（`max_rows` 的 500 萬列約 300 MB）；最多三個期間同時留著，算的時候峰值再多約 15%（細節見
-  [capacity.md §6](capacity.md)）。repo 附的 `kubernetes/base/deployment.yaml` 給 `rca-app` 的 `resources.limits.memory`
+  時段數（28 天約 8,352）× 每條線花到的人數加總，加上每讀一列約 50–65 bytes；1,000 人、每人平均在 8 條線約
+  270 MB，再加讀到的列（`max_rows` 的 500 萬列約 300 MB）；最多三個期間同時留著；算的時候分析自己的暫存再多約
+  一到兩成，來源若把整個查詢結果做成 list 回傳還要加上那一份（細節見 [capacity.md §6](capacity.md)）。repo 附的 `kubernetes/base/deployment.yaml` 給 `rca-app` 的 `resources.limits.memory`
   是 `1Gi`：照你們的人數估一份、留出空間，把它調高，或把 `capacity.max_rows` 調低。為什麼：分析算在 API pod 上，
   同一顆 pod 也在服務所有人。漏了的症狀：打開容量頁（尤其是 90 天）時，那顆 API pod 被 OOMKilled。
 - 前端：容量頁的程式和其他頁一樣在主程式裡；ECharts 是只在打開 `/capacity` 才下載的 chunk（壓縮前約 540 KB、

@@ -91,7 +91,8 @@ class Line:
     method: str  # "regression" | "direct" | "fixed"
     total: np.ndarray
     fixed: np.ndarray
-    #: Everyone any record names — the same list on every line.
+    #: Everyone any record names — the same list on every line split by
+    #: person; empty on a fixed line.
     users: list[str] = field(default_factory=list)
     #: The people this line costs, as positions in `users` (ascending), one
     #: row of `per_user` each. Someone it costs nothing has no row: a job

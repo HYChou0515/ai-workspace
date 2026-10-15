@@ -47,7 +47,7 @@ def test_nnls_handles_a_column_that_never_moves():
 
 @pytest.mark.parametrize("seed", range(20))
 def test_nnls_agrees_with_scipys(seed: int):
-    """The solver works on XᵀX and Xᵀy (the regression never lays its rows
+    """The solver works on XᵀX and Xᵀy (the regression never lays all its rows
     out); scipy's works on X itself — the oracle, on problems with costs at
     zero, collinear columns and columns that never move."""
     optimize = pytest.importorskip("scipy.optimize")

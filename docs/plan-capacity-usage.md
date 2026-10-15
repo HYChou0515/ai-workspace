@@ -776,7 +776,7 @@ What the build changed from the plan above, each for a reason found while buildi
 - **The turn's person is `agent.tool_usage.who`** (usage_user, else speaker, else acting user) — the
   rule the tool-usage statistics count by, so the two pages cannot disagree; `NOBODY` maps to `system`.
 - **No `ws.component` tag**: the purpose already says where (a turn surface or a job type). A call
-  outside any usage scope carries **no tags**; work no person asked for (a job with no requester) carries
+  outside any usage scope carries **no tags**; work no person asked for (a job with no `created_by`) carries
   `ws.user:system`. Tags are only sent while recording is on (`capacity.record`), because only a recorder
   opens scopes.
 - **The failover producer thread now runs in its caller's context** (`failover/core.py`): a bare thread
@@ -868,10 +868,13 @@ What the build changed from the plan above, each for a reason found while buildi
   sandbox-host's window is its own setting: a row longer than the slot is spread
   over the slots it covers, and `capacity check` refuses one that fits neither way.
 - **An analysis' memory is 4 bytes × slots × the people each line costs, summed over the lines, plus
-  about 50–60 bytes per row read** (measured on synthetic worlds of 60, 120 and 240 people, 27 days).
+  about 50–65 bytes per row read** (measured on synthetic worlds of 60, 120 and 240 people, 27 days, with
+  sources that return fresh records as an ES client does). A turn or job record is kept as the five
+  numbers the analysis reads (`Events`, 33 bytes; the dict from ES was about a kilobyte and was kept
+  whole).
   The observations keep the (slot, value) pairs a source returned — ②'s pods included, so a rollout's
   new pod names cost only their samples; a line keeps a row only for each person it costs (`Line.rows`);
-  the simulators copy nothing; the regression never lays its rows out but sums each pod's block into
+  the simulators copy nothing; the regression never lays all its rows out at once but sums each pod's block into
   XᵀX and Xᵀy, solved by Lawson–Hanson in Bro & De Jong's fast-NNLS form — rows × columns had grown with
   every pod name, each another intercept column. Every row read counts against `capacity.max_rows`,
   which bounds the second term, not the first. One period is built at a time, and a kept analysis is let
@@ -922,6 +925,8 @@ What the build changed from the plan above, each for a reason found while buildi
   are needed as they are used, at any N — not divided by a threshold — with no machine count and no
   "fits" (§9.6 divides every line by its threshold).
 - **A record's field with no value is left out, not written `null`** (§5.2): ES reads both alike.
+- **A source that lags shows a gap at the end**: gaps run to the period's end, so a metrics pipeline more
+  than `lag_s` plus about 15 minutes behind is a gap in view 9 and a `capacity check` warning.
 - **The tabs** are the app's shared `Tabs`: the WAI-ARIA tab roles, without the pattern's arrow keys
   (§10); the shared component is not changed here.
 - **Every stream is one column** of the API regression (§9.3 keeps route templates apart): a stream's

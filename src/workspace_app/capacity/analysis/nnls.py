@@ -6,7 +6,7 @@ solves min ‖Xc − y‖ subject to c ≥ 0 — Lawson & Hanson's active-set me
 fast NNLS (*Journal of Chemometrics* 11, 1997), which needs only XᵀX and Xᵀy.
 The regression's rows are pods × slots — tens of thousands — and its columns
 grow with every pod a rollout names (one intercept each): the cross-products
-are columns², whatever the rows, and the rows are never laid out at all. On
+are columns², whatever the rows, and the rows are never laid out all at once. On
 numpy alone: scipy is only in the `process-sandbox` extra, which the API image
 does not install.
 

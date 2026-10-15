@@ -50,8 +50,8 @@ NEED = {
     "backtest": 21,
 }
 MIN_PEOPLE = 10
-#: What-if profiles whose simulator is kept: each copies every person's day
-#: demand, so one per App ever asked about would add up without end.
+#: What-if profiles whose simulator is kept: each holds its days' slots and
+#: what nobody's N drives, so one per App ever asked about still adds up.
 SIMULATORS_KEPT = 4
 SOURCES = ("usage_records", "resource_metrics", "gpu_metrics", "llm_requests")
 #: The sources the what-if rests on: it sizes only on days all those connected have.
@@ -289,8 +289,9 @@ class Analysis:
         person_peaks = sorted(g["peak"] for g in groups["person"] if g["key"] not in NOT_PEOPLE)
         daily_peak = self._daily(line.total, "max")
         own = data_days(self.obs, [line.source]) if line.source else p.full_days
-        # the days the headroom sizes on, so a row's peak, utilisation and
-        # "holds" rest on the same days; before it can size, the line's own
+        # the days the what-if sizes on that this line's own source has, so a
+        # row's peak, utilisation and "holds" rest on the same days; the
+        # line's own days when they share none
         days = [d for d in self.sizing_days if d in own] or own
         full_peaks = [v for d in days if (v := daily_peak[d]) is not None]
         threshold, source = self.thresholds.get(line.id, (None, None))

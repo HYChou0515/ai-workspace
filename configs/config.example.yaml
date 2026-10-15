@@ -546,7 +546,7 @@
 #   llm_requests: ""              # ④ e.g. acme_capacity.sources.LiteLlmLog
 #   step_s: 300                   # a multiple of window_s that divides a day
 #   lag_s: 600
-#   timezone: Asia/Taipei         # "" = UTC
+#   timezone: ""                  # "" = UTC; e.g. Asia/Taipei
 #   max_rows: 5000000
 
 # ─── chat_video (Export ▾ → 影片) ─────────────────────────────────────────

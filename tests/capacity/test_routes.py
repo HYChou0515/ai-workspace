@@ -222,7 +222,8 @@ class _Built:
 
 
 async def test_a_dropped_analysis_is_not_held_until_its_time_would_have_been_up():
-    """Each analysis holds a period's slots for every line and person. A
+    """Each analysis holds a period's slots for every line and the people it
+    costs. A
     refresh lets it go; the timer that would have let it go at the end of its
     TTL must not hold it until then — ten refreshes would be ten analyses."""
     service = _service()

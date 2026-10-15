@@ -66,8 +66,8 @@ class CapacityService:
         return Period.ending(now_ms, days=days, step_s=step, lag_s=self._settings.lag_s, tz=tz)
 
     def drop(self, days: int) -> None:
-        """Let go of the period's analysis, and of the timer that would have:
-        a timer holding it would keep it for the rest of its TTL."""
+        """Let go of the period's analysis, and cancel the timer that would
+        have — left running, it would let go of the next analysis early."""
         kept = self._kept.pop(days, None)
         if kept is not None:
             kept[2].cancel()

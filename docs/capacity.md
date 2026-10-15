@@ -44,15 +44,18 @@
 
 **這個請求是誰的**：路由自己問了 `get_user_id`，就用那個答案；`/api` 底下對到了路由、但路由沒問的（例如
 自動 CRUD），回應之後平台再問一次 `get_user_id`；問不出來，或是靜態檔、沒有任何路由接的網址，就記成
-`unknown`。沒有人觸發的工作記成 `system`，不問 `get_user_id`：沒有發起人的 job，以及 Kubernetes 的探針
-（`User-Agent: kube-probe/…`，每個 pod 每幾秒一次）。這兩種在畫面上是獨立的一列，占比都寫在「可信度」。
+`unknown`。沒有人觸發的工作記成 `system`，不問 `get_user_id`：沒有建立者（`created_by`）的 job，以及路由沒問
+是誰的 Kubernetes 探針（`User-Agent: kube-probe/…`，每個 pod 每幾秒一次——誰都能寫這個 header，所以問過是誰的
+路由照常記給那個人）。sweeper 排的 job 有建立者：是部署的 `get_user_id` 在請求之外回答的人（通常是
+`server.default_user`），會被當成一個人算進 N。`unknown` 和 `system` 在畫面上是獨立的一列，占比都寫在「可信度」。
 探針另外記成 `probe:` 而不是請求：每個 pod 每個時段的次數都一樣，當成一種請求的話，它跟 pod 的閒置成本一起
 動、分不開，回歸會把整個閒置成本算到「系統工作」頭上；它很快的回應也會把請求的延遲 p95 拉低。它的 CPU 算在
 基本開銷裡。
 
-**App** 是對到的路由的 `slug`，只在兩個條件都成立時才記：路由在 App 裡面（`/api/a/{slug}/…`；首頁載入每個
-App 的圖示 `/api/apps/{slug}/icon` 不算用了那個 App），而且回應沒有拒絕這個 slug（不是 4xx）——網址上的
-slug 在路由接受之前，只是呼叫者寫的字。做了但失敗的工作（5xx、回應前就當掉）仍然算那個 App 的。
+**App** 是對到的路由的 `slug`，三個條件都成立時才記：路由在 App 裡面（`/api/a/{slug}/…`；首頁載入每個
+App 的 `/api/apps/{slug}`、圖示與附圖不算用了那個 App）、slug 是平台帶著的 App，而且回應沒有拒絕這個 slug
+（不是 4xx）——網址上的 slug 在路由接受之前，只是呼叫者寫的字（有的路由對任何 slug 都回成功，資料庫出問題時
+也會是 5xx）。做了但失敗的工作（5xx、回應前就當掉）仍然算那個 App 的。
 
 ### ES 的 mapping
 
@@ -94,7 +97,7 @@ sandbox-host 每 `SANDBOX_HOST_USAGE_SAMPLE_S` 秒（預設 60；**設 `0` 就�
 （`cpu.stat`、`memory.current`、`memory.events`、`cpu.pressure`、`memory.pressure`、`cpu.max`、`memory.max`），
 每 `SANDBOX_HOST_USAGE_WINDOW_S` 秒（預設 300）寫一筆 `sandbox`，一樣是 stdout 的 JSON 行。窗口要整除 3600
 （不整除的值，包括 0，起不來），而且要**整除 `capacity.step_s` 或是它的整數倍，90 天期間的時段（預設 900 秒）
-也一樣**——預設 `step_s: 300` 下 600、1200 不行。放不進時段的窗口，分析沒辦法放到對的時段，`capacity check`
+也一樣**——預設 `step_s: 300` 下只有 300 的因數（例如 60、100、150、300）和 900、1800、3600 可以。放不進時段的窗口，分析沒辦法放到對的時段，`capacity check`
 會報錯。sandbox-host 是另一個服務：`capacity.record: false`
 停不了它，要停就設 `SANDBOX_HOST_USAGE_SAMPLE_S=0`。
 
@@ -118,8 +121,8 @@ x-litellm-tags: ws,ws.user:alice,ws.app:pm,ws.purpose:chat,ws.call:agent
 - `ws` 是這個平台的記號，讓 ④ 分得出平台的流量和其他系統的；值除了英數字與 `_.-~` 之外都會 percent-encode。
 - LiteLLM 把它存在 spend log 的 `request_tags`。沒有 item 標籤：上千個不同的 item id 會灌進 LiteLLM 的每日
   標籤彙總表（每個標籤 × 日期 × key × 模型……一列）。
-- 沒有發起人的 job 帶 `ws.user:system`；不在任何工作範圍裡的呼叫（sweeper、健康檢查）不帶標籤；沙盒裡的程式
-  自己呼叫 LiteLLM 也不帶，記在它用的那把 key 上。
+- 沒有建立者的 job 帶 `ws.user:system`（sweeper 排的 job 帶建立它的那個人）；不在任何工作範圍裡的呼叫
+  （健康檢查之類）不帶標籤；沙盒裡的程式自己呼叫 LiteLLM 也不帶，記在它用的那把 key 上。
 - ⚠️ **LiteLLM proxy 設了 `general_settings.reject_clientside_metadata_tags: true`**：帶標籤的請求一律被拒（400）。
   rollout 前查這個設定；有的話設 `capacity.llm_tags: false`。
 - ⚠️ **LiteLLM 有開 tag routing（`router_settings.enable_tag_filtering`）**：一個請求的標籤對不到任何
@@ -298,7 +301,7 @@ uv run python -m workspace_app.capacity check --hours 24 [--config config.yaml]
 - **期間**：「最近 N 天」是今天以前 N 個完整的日子，加上今天到目前為止（依 `capacity.timezone` 的日界）。
 - 「N 個人」是最近 30 天用過至少一次的人。**開始記錄的頭 30 天**，這個數只算得到記錄以來出現過的人，會偏少，
   試算也一樣——畫面會標明；時程的趨勢只用「30 天都已記錄」的日子，否則人數的累積會被當成成長。
-- **試算**從過去的工作日抽樣（沒設工作日曆時是週一到週五），只抽各來源都有資料的日子——開始記錄之前的日子不是
+- **試算**從過去的工作日抽樣（沒設工作日曆時是週一到週五），只抽 ①②④（有接上的）都有資料的日子——開始記錄之前的日子不是
   「沒人用」：抽一天，留下那天的真實的人，再從選的那一群人裡抽到 N 人，看那一天的尖峰；抽 400 次，取 p50 與
   p95。最多看到現在人數的 20 倍，問更多時畫面會寫算的是幾人。
 - **還能撐幾人**：p95 的尖峰還在每一條會隨人數變的線的安全門檻（容量 × 門檻）以下的最多人數（不隨人數
@@ -329,11 +332,13 @@ uv run python -m workspace_app.capacity check --hours 24 [--config config.yaml]
 天的「還能撐幾人」會比 28 天的寬鬆一些；總覽的「依據」會寫出格子長度。讀到的列（含 30 天回看、turn／job 紀錄、
 延遲列）超過 `capacity.max_rows` 時會停下來，畫面說「請改看較短的期間」。
 
-**一個期間的分析佔 API pod 多少記憶體**（量自 60、120、240 人的模擬資料）：約 4 bytes × 時段數 × 每條線花到的
-人數（加總所有的線），再加每讀一列約 50–60 bytes；算的時候峰值再多約 15%。時段數：7 天約 2,304、28 天約 8,352
-（5 分鐘），90 天約 8,736（15 分鐘）——所以 28 天、90 天都是每人每條線約 33–35 KB。舉例（人數與線數是假設）：
-1,000 人、每人平均出現在 8 條線，約 270 MB，加上讀到的列（`max_rows` 的 500 萬列約 300 MB）。`max_rows` 管的是
-後一項，不是前一項；三個期間最多同時各留 10 分鐘。
+**一個期間的分析佔 API pod 多少記憶體**（量自 60、120、240 人的模擬資料，來源每次回新的紀錄，像 ES client
+那樣）：約 4 bytes × 時段數 × 每條線花到的人數（加總所有的線），再加每讀一列約 50–65 bytes（turn／job 紀錄只留
+分析要的五個欄位，一筆約 33 bytes，也算在列數裡），再加每條線每個 App、每種用途 8 bytes × 時段數。時段數：7 天
+約 2,304、28 天約 8,352（5 分鐘），90 天約 8,736（15 分鐘）——所以 28 天、90 天都是每人每條線約 33–35 KB。舉例
+（人數與線數是假設）：1,000 人、每人平均出現在 8 條線，約 270 MB，加上讀到的列（`max_rows` 的 500 萬列約
+300 MB）。`max_rows` 管的是後一項，不是前一項；三個期間最多同時各留 10 分鐘。算的時候，分析自己的暫存再多約一到
+兩成；來源若把整個查詢結果做成一個 list 回傳，峰值還要加上那一整份——請逐頁 yield。
 
 ## 7. 設定
 
