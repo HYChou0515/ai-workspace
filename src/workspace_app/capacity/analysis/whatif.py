@@ -11,7 +11,9 @@ fixed part, other systems, `unknown`/`system`). Repeated `draws` times.
 
 Every N reuses the same random draws — nested: the people drawn for N are the
 first N − N(day) of one fixed sequence — so a larger N can never need less.
-The cost is a matrix product per day, whatever N is.
+The sequence stretches when an N needs more of it, in blocks whose numbers
+depend only on the seed and where they sit, so what was asked before changes
+nothing. The cost is a matrix product per day, whatever N is.
 """
 
 from __future__ import annotations
@@ -26,8 +28,10 @@ from .people import NOT_PEOPLE, People
 from .period import Period
 
 DRAWS = 400
-#: How far beyond today's N one simulator can draw.
+#: How far beyond today's N the what-if and the headroom look.
 MAX_GROWTH = 20
+#: Columns the draw sequence stretches by at a time.
+_BLOCK = 256
 
 
 @dataclass
@@ -83,11 +87,11 @@ class Simulator:
                 base[line.id] = np.nan_to_num(line.total[slots])
             self._days.append(_Day(d, present, int(people.absent[d]), demand, base))
         self.n_now = int(people.active_30d[days[-1]]) if days else 0
+        self._seed = seed
         rng = np.random.default_rng(seed)
         self._which = rng.integers(0, len(self._days), draws) if self._days else np.zeros(0, int)
         longest = max((len(day.present) + day.absent for day in self._days), default=0)
-        self._extra_len = max(1, MAX_GROWTH * max(longest, 1))
-        self._seq = rng.random((draws, self._extra_len))
+        self._seq = rng.random((draws, max(1, MAX_GROWTH * max(longest, 1))))
         self._perm = [
             rng.permutation(len(self._days[w].present) + self._days[w].absent) for w in self._which
         ]
@@ -95,6 +99,15 @@ class Simulator:
     @property
     def usable(self) -> bool:
         return bool(self._days)
+
+    def _stretch(self, length: int) -> None:
+        """Make the draw sequence at least `length` long. A block's numbers
+        depend on the seed and the column it starts at, never on when it was
+        added, so a stretched sequence is the same whatever was asked first."""
+        while self._seq.shape[1] < length:
+            at = self._seq.shape[1]
+            block = np.random.default_rng([self._seed, at]).random((self._seq.shape[0], _BLOCK))
+            self._seq = np.hstack([self._seq, block])
 
     def run(self, n: int) -> dict[str, np.ndarray]:
         """line → [draw] the day's peak with N = n."""
@@ -111,8 +124,8 @@ class Simulator:
                     counts[row] = 1.0
                     chosen = self._pool(day.present) if self._pool is not None else None
                     extra = n - everyone
-                    if extra > self._extra_len:
-                        raise ValueError(f"n={n} is beyond what this simulator can draw")
+                    if extra > self._seq.shape[1]:
+                        self._stretch(extra)
                     if chosen is None:
                         picks = (self._seq[b, :extra] * everyone).astype(np.int64)
                         picks = picks[picks < size]  # an absent person adds nothing

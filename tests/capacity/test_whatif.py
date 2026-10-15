@@ -77,6 +77,33 @@ def test_a_larger_n_never_needs_less():
     assert all(b >= a for a, b in zip(p95, p95[1:], strict=False))
 
 
+def test_a_simulator_of_small_days_can_still_be_asked_for_a_large_n():
+    """The backtest asks the days before a day for that day's N. When a team
+    joins at once, that N is far beyond the earlier days': the draw stretches
+    rather than failing the page — and still never needs less for more."""
+    period = _period()
+    sim = Simulator([_line(_noon_bump(2, 3))], _people(2, 3), period, days=[0, 1, 2])
+
+    small = sim.run(30)["api.cpu"]
+    large = sim.run(300)["api.cpu"]
+
+    assert np.allclose(large, 300 * 1.0)
+    assert (large >= small).all()
+
+
+def test_a_stretched_draw_does_not_depend_on_what_was_asked_before():
+    rng = np.random.default_rng(1)
+    per_user = _noon_bump(3, 3) * rng.lognormal(0, 1, (3, 1))
+    a = Simulator([_line(per_user)], _people(3, 3, absent=2), _period(), days=[0, 1, 2])
+    b = Simulator([_line(per_user)], _people(3, 3, absent=2), _period(), days=[0, 1, 2])
+
+    a.run(200)
+    first = a.run(500)["api.cpu"]
+    second = b.run(500)["api.cpu"]
+
+    assert np.array_equal(first, second)
+
+
 def test_people_who_did_nothing_that_day_are_drawn_as_nothing():
     """N counts everyone active in 30 days; a day's absent ones draw as zero, so
     doubling N with half of it absent needs less than doubling the present."""
