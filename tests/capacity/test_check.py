@@ -208,3 +208,25 @@ def test_a_kernel_without_pressure_is_reported():
     findings = _findings(CapacitySources(WorldRecords(w)), w)
 
     assert "PSI" in _said(findings, "usage_records", "warning")
+
+
+def test_the_gap_count_is_every_gap_not_the_ones_listed():
+    """Only the five longest gaps are listed; "5 gap(s)" for seven said two
+    of them were not there."""
+    w = _world()
+    holes = [
+        (w.end_ms - (2 * k + 1) * 3_600_000, w.end_ms - 2 * k * 3_600_000 - 1_800_000)
+        for k in range(1, 8)
+    ]
+
+    class Holed(WorldPods):
+        def usage(self, start_ms, end_ms, step_s):  # noqa: ANN001, ANN201
+            return [
+                s
+                for s in super().usage(start_ms, end_ms, step_s)
+                if not any(a <= s.t_ms < b for a, b in holes)
+            ]
+
+    findings = _findings(CapacitySources(resource_metrics=Holed(w)), w)
+
+    assert "7 gap(s)" in _said(findings, "resource_metrics", "warning")

@@ -496,3 +496,15 @@ def test_asking_every_what_if_profile_copies_nobodys_demand():
     tracemalloc.stop()
 
     assert grown < 0.25 * held
+
+
+def test_a_source_that_stopped_before_the_end_has_a_gap_to_the_end():
+    """A source that died two hours ago left no later slot with something in
+    it: scanning only up to its last sample, the gap it left was no gap."""
+    from workspace_app.capacity.analysis.model import find_gaps
+
+    p = Period(0, 24 * 3_600_000, 300, ZoneInfo("UTC"))
+    present = np.ones(p.n, dtype=bool)
+    present[-24:] = False
+
+    assert find_gaps(p, present) == [[p.end_ms - 2 * 3_600_000, p.end_ms]]

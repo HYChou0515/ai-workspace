@@ -22,7 +22,7 @@ from zoneinfo import ZoneInfo
 
 import numpy as np
 
-from .analysis.model import find_gaps
+from .analysis.model import find_gaps, gap_runs
 from .analysis.observe import parse_tags
 from .analysis.period import Period
 from .service import long_step
@@ -76,11 +76,15 @@ def check_sources(
             i = period.index(t)
             if i is not None:
                 present[i] = True
-        found = find_gaps(period, present)
-        if found:
-            hours = sum(b - a for a, b in found) / 3_600_000
+        runs = gap_runs(present)
+        if runs:
+            hours = sum(b - a for a, b in runs) * step_s / 3600
+            longest = find_gaps(period, present)
             say(
-                source, "warning", f"{len(found)} gap(s), {hours:.1f} h with no sample: {found[:3]}"
+                source,
+                "warning",
+                f"{len(runs)} gap(s), {hours:.1f} h with no sample; "
+                f"the {len(longest)} longest: {longest}",
             )
 
     def records() -> None:

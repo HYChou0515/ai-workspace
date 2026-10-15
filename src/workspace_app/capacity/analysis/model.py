@@ -654,23 +654,30 @@ GAP_SLOTS = 3
 MAX_GAPS = 5
 
 
-def find_gaps(p: Period, present: np.ndarray) -> list[list[int]]:
-    """The longest runs of at least `GAP_SLOTS` slots with nothing, between a
-    source's first and last slot with something, as [start_ms, end_ms] in time
-    order (view 9)."""
+def gap_runs(present: np.ndarray) -> list[tuple[int, int]]:
+    """Every run of at least `GAP_SLOTS` slots with nothing, as [start, end)
+    slot indices in time order — from the source's first slot with
+    something to the period's end: a source that stopped before the end left
+    a gap to it, though nothing follows."""
     have = np.flatnonzero(present)
     if not len(have):
         return []
     runs: list[tuple[int, int]] = []
     start = None
-    for i in range(int(have[0]), int(have[-1]) + 1):
-        if not present[i]:
+    for i in range(int(have[0]), len(present) + 1):
+        if i < len(present) and not present[i]:
             start = i if start is None else start
         elif start is not None:
             if i - start >= GAP_SLOTS:
                 runs.append((start, i))
             start = None
-    longest = sorted(sorted(runs, key=lambda r: r[0] - r[1])[:MAX_GAPS])
+    return runs
+
+
+def find_gaps(p: Period, present: np.ndarray) -> list[list[int]]:
+    """The `MAX_GAPS` longest gaps (`gap_runs`), as [start_ms, end_ms] in
+    time order (view 9)."""
+    longest = sorted(sorted(gap_runs(present), key=lambda r: r[0] - r[1])[:MAX_GAPS])
     return [[p.start_ms + a * p.step_ms, p.start_ms + b * p.step_ms] for a, b in longest]
 
 
