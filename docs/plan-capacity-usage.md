@@ -851,9 +851,11 @@ What the build changed from the plan above, each for a reason found while buildi
 - **`kind: local` with isolation**: the API pod's own sandboxes are subtracted from its CPU and memory
   before the API regression, since they run inside it. A backend with no cgroup per sandbox measures
   none, and the summary says so (`sandbox_measured`) for the page to.
-- **A request's App is its matched route's `slug`, and only when the response did not refuse it**: read
-  off the raw path, any URL minted an App. A request no route answered is `unknown` without a call to
-  `get_user_id`.
+- **A request's App is its matched route's `slug`, only on a route inside an App (`/api/a/{slug}/…`)
+  and only when the response did not refuse the slug (4xx)**: read off the raw path, any URL minted an
+  App, and the launcher's `/api/apps/{slug}/icon` made everyone who opened the home page a user of every
+  App with an icon file. Work that failed (5xx, a crash) is still the App's. A request no route answered
+  is `unknown` without a call to `get_user_id`; a Kubernetes probe (`kube-probe/…`) is `system`.
 - **The usage flush builds its rows in a thread**, not on the event loop; a stopped turn ends on the
   record even when the epoch watcher cancels it a second time during the turn-end flush.
 - **The cgroup reader lives in `capacity/cgroup_usage.py`** (the plan said `sandbox/`): it is one file

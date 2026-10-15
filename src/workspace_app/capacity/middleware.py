@@ -10,10 +10,12 @@ and this app streams SSE. For each HTTP request it records one `work` count:
 - **A stream or a request**: a response whose content type is
   `text/event-stream` is a stream, in flight from its first header to its
   end — no list of long-lived routes to keep current.
-- **Which App**: the `slug` of the route that matched, and only when the
-  response did not refuse it (< 400). Read off the raw path, any URL —
-  `/api/a/<anything>/…`, signed in or not — minted an App: a row per window
-  each, and a series in the analysis.
+- **Which App**: the `slug` of the route that matched, when that route is
+  inside an App (`/api/a/{slug}/…` — the launcher's `/api/apps/{slug}/icon`
+  is not using the App) and its response did not refuse the slug (4xx). Read
+  off the raw path, any URL — `/api/a/<anything>/…`, signed in or not —
+  minted an App: a row per window each, and a series in the analysis. Work
+  that failed (5xx, or a crash before any response) is still that App's.
 - **Who**: the request carries a `RequestIdentity`; the `get_user_id` its
   routes call is `recording_reader`-wrapped, so the first answer a route gets
   is the request's person at no extra cost. An API request whose route never
@@ -45,9 +47,18 @@ _EVENT_STREAM = b"text/event-stream"
 _KUBE_PROBE = b"kube-probe/"
 
 
+_APP_ROUTE = "/api/a/{slug}"
+
+
 def _slug(scope: Scope) -> str:
     """The App the matched route was called with — never read off the raw path
-    (`path_params` exist only once something matched)."""
+    (`path_params` exist only once something matched), and only from a route
+    inside an App."""
+    template = getattr(scope.get("route"), "path", None)
+    if not isinstance(template, str):
+        return ""
+    if template != _APP_ROUTE and not template.startswith(_APP_ROUTE + "/"):
+        return ""
     slug = scope.get("path_params", {}).get("slug", "")
     return slug if isinstance(slug, str) else ""
 
@@ -108,7 +119,7 @@ class UsageMiddleware:
         status = 0
 
         def app() -> str:
-            return holder.app if 0 < status < 400 else ""
+            return "" if 400 <= status < 500 else holder.app
 
         async def counted_send(message: Message) -> None:
             nonlocal stream, status

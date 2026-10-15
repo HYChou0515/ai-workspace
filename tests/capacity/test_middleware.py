@@ -64,6 +64,21 @@ def _app(recorder: UsageRecorder, reader: _Reader) -> tuple[FastAPI, list]:
         ask()
         raise RuntimeError("unhandled")
 
+    @api.get("/a/{slug}/full")
+    def full(slug: str):
+        ask()
+        raise HTTPException(status_code=507, detail="workspace full")
+
+    @api.get("/a/{slug}/broken")
+    def broken(slug: str):
+        ask()
+        raise HTTPException(status_code=500, detail="broken")
+
+    @api.get("/apps/{slug}/icon")
+    def icon(slug: str):
+        ask()
+        return {"ok": True}
+
     @api.get("/boom")
     def boom():
         ask()
@@ -173,12 +188,26 @@ def test_an_app_route_that_refuses_its_slug_names_no_app():
     assert {r["user"] for r in rows} == {"erin"}
 
 
-def test_a_route_that_crashed_names_no_app():
-    """An unhandled exception sends no response from inside the counter (the
-    500 comes from outside it): no answer is no acceptance of the slug."""
-    rows, _ = _run(_Reader("erin"), "/api/a/zz3/crash")
+def test_app_work_that_failed_is_still_that_apps():
+    """Only a refusal (4xx) says the slug was not an App the caller may use.
+    A workspace that is full, a route that broke, one that crashed before it
+    answered (the 500 comes from outside the counter) all did that App's
+    work — booked to no App, the App's share of a failing week shrinks."""
+    rows, _ = _run(_Reader("erin"), "/api/a/pm/full", "/api/a/pm/broken", "/api/a/pm/crash")
 
-    assert {r["app"] for r in rows} == {""}
+    assert sorted((r["work"], r["app"]) for r in rows) == [
+        ("req:GET /api/a/{slug}/broken", "pm"),
+        ("req:GET /api/a/{slug}/crash", "pm"),
+        ("req:GET /api/a/{slug}/full", "pm"),
+    ]
+
+
+def test_only_a_route_inside_an_app_names_the_app():
+    """The launcher loads every App's icon from /api/apps/{slug}/icon: opening
+    the home page is not using every App that ships an icon file."""
+    rows, _ = _run(_Reader("erin"), "/api/apps/pm/icon")
+
+    assert [(r["work"], r["app"]) for r in rows] == [("req:GET /api/apps/{slug}/icon", "")]
 
 
 def test_a_kubernetes_probe_is_system_work_and_asks_nobody_who():

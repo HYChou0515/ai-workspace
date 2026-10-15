@@ -2616,7 +2616,8 @@ AI 讀 `wui` skill 時會看到「這個 item 能讓頁面問的 subagent」清�
   紀錄要另外設 `SANDBOX_HOST_USAGE_SAMPLE_S=0`）。
 - 開著記錄時，每個行程多一條寫出用的 thread（`usage-writer`；worker 再多一條每 5 分鐘寫出的 thread）；每個請求
   多一點計數（`scripts/bench_usage_middleware.py` 量得出你們機器上的數字）；路由自己沒問使用者是誰的 `/api` 請求
-  （自動 CRUD、探針）在回應之後會多呼叫一次你們的 `get_user_id`（靜態檔與沒有路由接的網址不呼叫）；關機時先把
+  （例如自動 CRUD）在回應之後會多呼叫一次你們的 `get_user_id`（靜態檔、沒有路由接的網址、Kubernetes 探針
+  不呼叫——探針記成 `system`）；關機時先把
   已記的寫出去（有時間上限）。
 - `capacity.llm_tags: true`：平台的每次 LLM 呼叫多帶 `x-litellm-tags`（`ws`、`ws.user:…`、有 App 時 `ws.app:…`、
   `ws.purpose:…`、`ws.call:…`）。**rollout 前**查三件事，任何一件成立就先設 `capacity.llm_tags: false`：
