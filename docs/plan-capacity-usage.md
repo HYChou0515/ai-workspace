@@ -804,7 +804,9 @@ What the build changed from the plan above, each for a reason found while buildi
   three pods on two machines took 1/2 + 2/2 of it). "Now" is the median of a type's pods over the last
   three slots up to the last any worker pod reported: counted in that one slot alone, a type whose pod
   missed one scrape there lost its whole share, and at the most of the three, a rollout's surge pod was
-  one pod more; a change that lasts two slots counts, and a type scaled to zero has none. Such a line's `machines` is its share of the entry's machines, fractional.
+  one pod more; a change that lasts two slots counts, and a type scaled to zero has none. A pod seen on
+  both sides of a slot it missed counts in it too: the median forgives one slot off for the type, and
+  two pods that each missed a different scrape made a three-pod type read two. Such a line's `machines` is its share of the entry's machines, fractional.
   ② reports capacity per component, and a per-type entry is the operator's to give.
 - **(b) is also paired with each model's requests in flight** (its knee a candidate for the model's
   capacity), and **(e) is one pair per job type**. A turn names its model as the platform asked for it
@@ -821,9 +823,9 @@ What the build changed from the plan above, each for a reason found while buildi
   ② entry for it) is not drawn: its load is a share of a capacity. The GPU in-flight pairs skip the
   20-point span rule — their load is requests in flight, not a share of a capacity, and the knee's own
   tests (enough points past it, surviving the highest ones) stand in for it.
-- **Without ② there is no GPU capacity at all** (its knee is used only once view 8 is ready, and view 8
-  needs ① and ②) — though the knee's own inputs are ① and ④; what uses the capacity, the overview and the
-  what-if, needs ② anyway.
+- **Without ② no model has an in-flight capacity** (its knee is used only once view 8 is ready, and view 8
+  needs ① and ②) — though the knee's own inputs are ① and ④; what uses that capacity, the overview and
+  the what-if, needs ② anyway. A model's memory line still has its capacity, from ③.
 - **The headroom is served only when the what-if is ready** (view 1 states it as view 6, §9.10): with
   too few people or ② missing it was still computed from 14 model days, and the overview drew people per
   line and the line that binds under a headline saying it could not tell — and the runway dated an order
@@ -957,7 +959,9 @@ What the build changed from the plan above, each for a reason found while buildi
     link standing for an action needs words saying so ([NN/g, command links](https://www.nngroup.com/articles/command-links/)),
     which a name is not; it was a button drawn as a link, and then a link to a place on the page that
     existed only after the click (opened in a new tab, it showed nothing). The button takes the view and
-    the focus to the detail below the table, and the focus comes back to it when the detail closes;
+    the focus to the detail below the table; when the detail closes the focus comes back to the
+    person's button (found by whose it is: another grouping and back draws new ones), or to the line's
+    picker when their row is gone;
   - choosing a line or an App is a dropdown, "a type of picker that allows users to select one option
     from a list of options", since there are more of them than a segmented control holds; the people
     and the purchase lead time are typed, in a textbox, "an input control that allows users to type text

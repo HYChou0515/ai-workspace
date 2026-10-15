@@ -464,3 +464,15 @@ def test_a_rollouts_surge_pod_is_not_one_pod_more():
 
     assert got["index"] == pytest.approx(8.0 / 3)
     assert got["wiki"] == pytest.approx(16.0 / 3)
+
+
+def test_two_pods_each_missing_a_different_slot_are_still_two_pods():
+    """The median forgives one slot off for the whole type; two pods that
+    each missed a different scrape made a three-pod type read two. A pod
+    seen on both sides of a slot it missed was running in it."""
+    alive = {f"i{k}": ("index", 24) for k in (1, 2, 3)} | {f"w{k}": ("wiki", 24) for k in (1, 2, 3)}
+
+    got = _workers(alive, missing=frozenset({("i1", 21), ("i2", 23)}))
+
+    assert got["index"] == pytest.approx(4.0)
+    assert got["wiki"] == pytest.approx(4.0)

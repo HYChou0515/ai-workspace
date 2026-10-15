@@ -494,8 +494,12 @@ def _pods_now(obs: Observations, component: str, pods: list[str], measure: str, 
     counts = np.zeros(GAP_SLOTS, dtype=np.int64)
     first = last - GAP_SLOTS + 1
     for pod in pods:
-        at = obs.pods[(component, pod)].slots(measure)
-        counts[at[(at >= first) & (at <= last)] - first] += 1
+        seen = set(obs.pods[(component, pod)].slots(measure).tolist())
+        for k, slot in enumerate(range(first, last + 1)):
+            # a pod seen on both sides of a slot it missed was running in it:
+            # the median forgives one slot off for the type, not one per pod
+            if slot in seen or (slot - 1 in seen and slot + 1 in seen):
+                counts[k] += 1
     return int(np.median(counts))
 
 

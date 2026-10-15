@@ -164,7 +164,7 @@
 
 .capacity-table tr[data-binding] th,
 .capacity-table tr[data-fits="false"] th {
-  color: var(--danger, #b42318);
+  color: var(--err);
 }
 
 .capacity-table tr[data-kind="fixed"],
@@ -203,7 +203,7 @@
   padding: 10px 12px;
   border-radius: var(--radius-btn);
   background: rgba(180, 35, 24, 0.08);
-  color: var(--danger, #b42318);
+  color: var(--err);
   font-size: var(--text-body-sm);
 }
 
@@ -231,7 +231,7 @@
 }
 
 .capacity-sources li[data-state="error"] .capacity-sub {
-  color: var(--danger, #b42318);
+  color: var(--err);
 }
 
 .capacity-card {

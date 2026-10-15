@@ -302,6 +302,9 @@ describe("allocation (view 2)", () => {
     renderWithQuery(<WhatIf summary={summary()} days={28} client={client()} t={t} />);
     expect(await screen.findByRole("group", { name: "新來的人像" })).toBeInTheDocument();
     expect(screen.getByText("新來的人像", { selector: "span" })).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "某個 App 的使用者" }));
+    expect(screen.getByLabelText("App").tagName).toBe("SELECT");
+    expect(screen.getByLabelText("App").closest("label")).toHaveTextContent("App");
     cleanup();
 
     render(<Trends summary={summary()} t={t} />);
@@ -449,26 +452,54 @@ describe("allocation (view 2)", () => {
 
   it("takes you to the detail again when you press its button again", async () => {
     renderWithQuery(<Allocation summary={summary()} days={28} client={client()} t={t} />);
-    const link = await screen.findByRole("button", { name: "Alice Chen 的明細" });
-    fireEvent.click(link);
+    const button = await screen.findByRole("button", { name: "Alice Chen 的明細" });
+    fireEvent.click(button);
     const detail = await screen.findByTestId("capacity-person");
     await waitFor(() => expect(detail.contains(document.activeElement)).toBe(true));
 
-    link.focus();
-    fireEvent.click(link);
+    button.focus();
+    fireEvent.click(button);
 
     await waitFor(() => expect(detail.contains(document.activeElement)).toBe(true));
   });
 
   it("gives the focus back to the button when the detail closes", async () => {
     renderWithQuery(<Allocation summary={summary()} days={28} client={client()} t={t} />);
-    const link = await screen.findByRole("button", { name: "Alice Chen 的明細" });
-    fireEvent.click(link);
+    const button = await screen.findByRole("button", { name: "Alice Chen 的明細" });
+    fireEvent.click(button);
     const detail = await screen.findByTestId("capacity-person");
 
     fireEvent.click(within(detail).getByRole("button", { name: "關閉" }));
 
-    await waitFor(() => expect(document.activeElement).toBe(link));
+    await waitFor(() => expect(document.activeElement).toBe(button));
+  });
+
+  it("gives the focus back to the person's button even after the table was redrawn", async () => {
+    renderWithQuery(<Allocation summary={summary()} days={28} client={client()} t={t} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Alice Chen 的明細" }));
+    const detail = await screen.findByTestId("capacity-person");
+    const by = screen.getByTestId("capacity-alloc-by");
+
+    // grouped by component and back: the row, and its button, are new ones
+    fireEvent.click(within(by).getByRole("button", { name: "元件" }));
+    fireEvent.click(within(by).getByRole("button", { name: "人" }));
+    fireEvent.click(within(detail).getByRole("button", { name: "關閉" }));
+
+    await waitFor(() =>
+      expect(document.activeElement).toBe(screen.getByRole("button", { name: "Alice Chen 的明細" })),
+    );
+  });
+
+  it("gives the focus to the line's picker when the person's row is gone", async () => {
+    renderWithQuery(<Allocation summary={summary()} days={28} client={client()} t={t} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Alice Chen 的明細" }));
+    const detail = await screen.findByTestId("capacity-person");
+
+    // a line that costs nobody: no row for Alice to go back to
+    fireEvent.change(screen.getByTestId("capacity-alloc-line"), { target: { value: "worker.index.memory" } });
+    fireEvent.click(within(detail).getByRole("button", { name: "關閉" }));
+
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByTestId("capacity-alloc-line")));
   });
 
   it("closes a person's detail with a text button", async () => {

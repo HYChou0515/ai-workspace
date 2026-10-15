@@ -167,12 +167,18 @@ export function Allocation({
   const [stat, setStat] = useState<Stat>("peak");
   const [mode, setMode] = useState<FixedMode>("separate");
   const [person, setPerson] = useState<string | null>(null);
-  // each time the link is followed, even to the detail already open
+  // each time a person's button is pressed, even for the detail already open
   const [opened, setOpened] = useState(0);
-  // the link that opened the detail gets the focus back when it closes
-  const opener = useRef<HTMLButtonElement | null>(null);
+  // Closing gives the focus back to the person's button — found by whose it
+  // is, since a redrawn table (another grouping, and back) has new buttons —
+  // or, when their row is gone (another line), to the line's picker.
+  const opener = useRef<string | null>(null);
+  const buttons = useRef(new Map<string, HTMLButtonElement>());
+  const linePicker = useRef<HTMLSelectElement>(null);
   useEffect(() => {
-    if (person === null && opener.current) opener.current.focus();
+    if (person !== null || opener.current === null) return;
+    (buttons.current.get(opener.current) ?? linePicker.current)?.focus();
+    opener.current = null;
   }, [person]);
   const line = lines.find((l) => l.id === lineId) ?? lines[0];
   const rows = useMemo(
@@ -194,6 +200,7 @@ export function Allocation({
             <label>
               {t("capacity.alloc.resource")}
               <select
+                ref={linePicker}
                 className="input"
                 value={line.id}
                 onChange={(e) => setLineId(e.target.value)}
@@ -270,8 +277,12 @@ export function Allocation({
                             data-variant="ghost"
                             data-size="sm"
                             aria-label={t("capacity.person.openFor", { name: r.label })}
-                            onClick={(e) => {
-                              opener.current = e.currentTarget;
+                            ref={(el) => {
+                              if (el) buttons.current.set(r.key, el);
+                              else buttons.current.delete(r.key);
+                            }}
+                            onClick={() => {
+                              opener.current = r.key;
                               setPerson(r.key);
                               setOpened((n) => n + 1);
                             }}
@@ -346,7 +357,7 @@ function PersonDetail({
   onClose,
 }: {
   user: string;
-  /** bumped each time the link is followed */
+  /** bumped each time the person's button is pressed */
   opened: number;
   label: string;
   days: CapacityDays;

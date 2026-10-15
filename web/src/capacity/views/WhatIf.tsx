@@ -154,6 +154,7 @@ export function WhatIf({
                 min={0}
                 value={draft}
                 onChange={(e) => setDraft(e.target.value)}
+                autoComplete="off"
                 data-testid="capacity-whatif-n"
                 style={{ width: "7em" }}
               />
@@ -170,13 +171,16 @@ export function WhatIf({
               }))}
             />
             {profile === "app" && (
-              <select className="input" value={app} onChange={(e) => setApp(e.target.value)} aria-label={t("capacity.whatif.app")}>
-                {apps.map((a) => (
-                  <option key={a} value={a}>
-                    {a}
-                  </option>
-                ))}
-              </select>
+              <label>
+                {t("capacity.whatif.app")}
+                <select className="input" value={app} onChange={(e) => setApp(e.target.value)}>
+                  {apps.map((a) => (
+                    <option key={a} value={a}>
+                      {a}
+                    </option>
+                  ))}
+                </select>
+              </label>
             )}
             <Segmented
               label={t("capacity.whatif.level")}
@@ -328,6 +332,7 @@ function Runway({ summary, t }: { summary: CapacitySummary; t: T }) {
               min={0}
               value={lead}
               onChange={(e) => setLead(e.target.value)}
+              autoComplete="off"
               data-testid="capacity-runway-lead"
               style={{ width: "6em" }}
             />

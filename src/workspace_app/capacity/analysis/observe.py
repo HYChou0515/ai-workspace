@@ -242,8 +242,9 @@ class Events:
         return len(self._arrays["at_ms"])
 
     def freeze(self) -> None:
-        """Every record is in: the columns become arrays (`observe` calls it, so
-        no reader — some run in the routes' threads — ever has to)."""
+        """Every record is in: the columns become arrays. `observe` calls it
+        whatever the source did, so no reader — some run in the routes'
+        threads — ever has to."""
         self._column("at_ms")
 
     def _column(self, name: str) -> np.ndarray:
@@ -482,6 +483,9 @@ def observe(
     _guard(
         obs, "llm_requests", sources.llm_requests is not None, lambda: _llm(sources, obs, budget)
     )
+    # whatever ① did — ended, failed partway, or is not connected
+    obs.turns.freeze()
+    obs.jobs.freeze()
     return obs
 
 
@@ -606,8 +610,6 @@ def _records(sources: CapacitySources, obs: Observations, budget: _Budget) -> in
             since_ms=r.get("enqueued_ms"),
             until_ms=started,
         )
-    obs.turns.freeze()
-    obs.jobs.freeze()
     return rows + len(obs.turns) + len(obs.jobs)
 
 

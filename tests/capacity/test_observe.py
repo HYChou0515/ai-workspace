@@ -391,3 +391,24 @@ def test_an_open_stream_is_a_record_in_every_window_it_runs_through():
     assert obs.days_with("usage_records").tolist() == [True, True]
     coverage = analyse(obs, now_ms=p.end_ms).summary()["confidence"]["coverage"]
     assert coverage["usage_records"] == 1.0
+
+
+class _JobsFail(WorldRecords):
+    def records(self, kind, start_ms, end_ms):  # noqa: ANN001, ANN201
+        if kind == "job":
+            raise RuntimeError("ES timed out")
+        return super().records(kind, start_ms, end_ms)
+
+
+@pytest.mark.parametrize("records", ["failing", "absent"])
+def test_the_turn_and_job_columns_are_done_whatever_the_source_did(records: str):
+    """Made arrays as the records end — but a source that failed partway, or
+    is not connected, never reached that line, and the first reader (a route
+    thread asking for a person) did it instead."""
+    w = _world()
+    source = _JobsFail(w) if records == "failing" else None
+    obs = observe(CapacitySources(source), _period(w))
+
+    for events in (obs.turns, obs.jobs):
+        with pytest.raises(AssertionError, match="read already"):
+            events.add(user="u", item="", label="", at_ms=0, since_ms=None, until_ms=None)
