@@ -2854,8 +2854,8 @@ export const messages = {
   "modelSettings.title": { "zh-TW": "模型設定", en: "Model settings" },
   "modelSettings.desc": {
     "zh-TW":
-      "改 preset、每個 App 的 app.json 與 profile、平台用的模型。這裡寫的是蓋在部署預設（config.yaml、app.json）上的改動：只寫要改的值，其他照預設。先存草稿，按「套用」才生效——所有服務在一秒內改用新設定，不用重啟。",
-    en: "Change presets, each App's app.json and profiles, and the models the platform uses. What you write here sits on top of the deploy defaults (config.yaml, app.json): write only the values to change, the rest stays as deployed. Save a draft; nothing changes until Apply — then every service uses it within a second, with no restart.",
+      "改 preset、每個 App 的 app.json 與 profile、平台用的模型。編輯器裡是整份設定（部署預設加上你的草稿），直接改要改的值；刪掉的值會回到部署預設（config.yaml、app.json）。先存草稿，按「套用」才生效——所有服務在一秒內改用新設定，不用重啟。",
+    en: "Change presets, each App's app.json and profiles, and the models the platform uses. The editor holds the whole settings — the deploy defaults with your draft over them; change values in place, and anything you delete goes back to the deploy default (config.yaml, app.json). Save a draft; nothing changes until Apply — then every service uses it within a second, with no restart.",
   },
   "modelSettings.notAllowed": {
     "zh-TW": "只有系統管理員能使用模型設定。",

@@ -488,3 +488,19 @@ def test_the_page_has_the_whole_boot_config_to_diff_a_paste_against(page):
     assert boot["server"]["port"] == 9090
     assert boot["llm"]["api_key"] in (SET, UNSET)
     assert "sub_agents" not in boot["agents"]  # spelled as config.yaml spells it
+
+
+def test_a_broker_url_with_its_password_never_reaches_the_page(tmp_path):
+    # review 17: M23's boot_config sends the whole boot config; the event bus's
+    # amqp URL embeds credentials like the message queue's and went in clear.
+    page = Page(
+        tmp_path,
+        "event_bus:\n  url: amqp://user:hunter2@broker:5672/\n"
+        "message_queue:\n  rabbitmq:\n    url: amqp://user:hunter3@broker:5672/\n",
+    )
+    try:
+        body = page.client.get(BASE).text
+    finally:
+        overlay.set_source(None)
+
+    assert "hunter2" not in body and "hunter3" not in body

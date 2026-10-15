@@ -132,16 +132,18 @@ function mergePatch(target: unknown, patch: unknown): unknown {
 }
 
 /** What the editor shows (M23): the defaults with `patch` over them, as the
- * loader builds it — except a preset the patch hides, shown as `null`: left
- * out, the text would read as "back to the default" and lose the hide. */
+ * loader builds it — except that every `null` the patch holds is shown where it
+ * was written, not merged away: left out, the text reads as "back to the
+ * default", so a hidden preset lost its hide, and a null the check refuses
+ * (review 17) vanished while the draft still held it. */
 export function effectiveOf(defaults: Patch, patch: Patch): Patch {
-  const shown = mergePatch(defaults, patch) as Patch;
-  const hidden = valueAt(patch, ["config", "agents", "presets"]);
-  const presets = valueAt(shown, ["config", "agents", "presets"]);
-  if (hidden.found && isObject(hidden.value) && presets.found && isObject(presets.value)) {
-    for (const [name, value] of Object.entries(hidden.value)) if (value === null) presets.value[name] = null;
-  }
-  return shown;
+  const show = (target: unknown, over: unknown): unknown => {
+    if (!isObject(over)) return over;
+    const out: Record<string, unknown> = isObject(target) ? { ...target } : {};
+    for (const [key, value] of Object.entries(over)) out[key] = value === null ? null : show(out[key], value);
+    return out;
+  };
+  return show(defaults, patch) as Patch;
 }
 
 /** A secret's mask, the page's (`*** set ***`) or the boot dump's
@@ -149,6 +151,18 @@ export function effectiveOf(defaults: Patch, patch: Patch): Patch {
 const MASK = /^\*\*\* (?:set|unset)(?: \(\d+ chars\))?(?: via \S+)? \*\*\*$/;
 const isMask = (value: unknown) => typeof value === "string" && MASK.test(value);
 const UNCHANGED = Symbol("unchanged");
+
+/** Equal, a mask matching any mask — for a list, which is stored whole: an
+ * entry's key masked by the page and by the boot dump is the same key (review 17). */
+function alike(a: unknown, b: unknown): boolean {
+  if (isMask(a) && isMask(b)) return true;
+  if (Array.isArray(a) && Array.isArray(b)) return a.length === b.length && a.every((x, i) => alike(x, b[i]));
+  if (isObject(a) && isObject(b)) {
+    const keys = Object.keys(a);
+    return keys.length === Object.keys(b).length && keys.every((k) => k in b && alike(a[k], b[k]));
+  }
+  return same(a, b);
+}
 
 /** What is stored for an edited text (M23): only what differs from `base` —
  * the whole boot config and every App — so the person edits the settings as
@@ -167,6 +181,7 @@ export function patchOf(base: Patch, edited: Patch): Patch {
       }
       return Object.keys(out).length ? out : UNCHANGED;
     }
+    if (Array.isArray(was) && Array.isArray(now)) return alike(was, now) ? UNCHANGED : now;
     if (isMask(was) && isMask(now)) return UNCHANGED;
     return same(was, now) ? UNCHANGED : now;
   };

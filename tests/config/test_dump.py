@@ -283,3 +283,25 @@ def test_the_dump_spells_the_usage_lists_as_config_yaml_does(tmp_path):
 
     assert "sub_agents" not in agents
     assert agents["kb_chat"][0]["preset"]
+
+
+def test_a_usage_list_entry_keeps_its_source(tmp_path: Path):
+    # review 17: the dump spells the usage lists as config.yaml does
+    # (`agents.kb_chat`), but the sources are recorded under the loader's
+    # `agents.sub_agents.kb_chat` — every leaf there read `# ← default`, and a
+    # key set from the environment lost its `via ${…}`.
+    settings, prov = _resolved(
+        tmp_path,
+        """
+        agents:
+          kb_chat:
+            - name: mine
+              model: ollama_chat/qwen3:8b
+              llm: {api_key: "${MY_KEY}"}
+        """,
+        env={"MY_KEY": "sk-abc"},
+    )
+    out = render(settings, prov, reveal_secrets=False)
+
+    assert "name: mine  # ← config.yaml" in out
+    assert 'api_key: "*** set (6 chars) via ${MY_KEY} ***"  # ← env' in out

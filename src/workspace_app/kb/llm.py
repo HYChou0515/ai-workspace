@@ -113,7 +113,7 @@ class LitellmLlm(ILlm):
             extra = reasoning_off_kwargs(self._model)
         else:
             extra = {"reasoning_effort": self.reasoning_effort}
-        for chunk in litellm.completion(
+        response = litellm.completion(
             model=self._model,
             messages=[{"role": "user", "content": prompt}],
             stream=True,
@@ -122,10 +122,20 @@ class LitellmLlm(ILlm):
             timeout=self._timeout,
             num_retries=self._num_retries,
             **extra,
-        ):
-            delta = chunk.choices[0].delta
-            reasoning = getattr(delta, "reasoning_content", None)
-            if reasoning:
-                yield reasoning, True
-            if delta.content:
-                yield delta.content, False
+        )
+        try:
+            for chunk in response:
+                delta = chunk.choices[0].delta
+                reasoning = getattr(delta, "reasoning_content", None)
+                if reasoning:
+                    yield reasoning, True
+                if delta.content:
+                    yield delta.content, False
+        finally:
+            # A reader that stops early (Test connection, M24) must hang up, or
+            # the provider generates the rest for no one. Closing this generator
+            # does not reach the connection: litellm's sync wrapper has no
+            # close(), the response it wraps (`completion_stream`) holds it.
+            close = getattr(getattr(response, "completion_stream", None), "close", None)
+            if callable(close):
+                close()

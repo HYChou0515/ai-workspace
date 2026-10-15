@@ -321,6 +321,29 @@ describe("editing the whole settings (M23): what is shown, and what is stored", 
     expect(patchOf(base, shown)).toEqual(hide);
   });
 
+  it("shows any null the draft holds where it was written, so the text keeps it", () => {
+    // review 17: a null outside a preset (refused, but a draft with problems can
+    // be saved) vanished from the text — read back it was {}, never the saved
+    // draft, and the next Save dropped it in silence.
+    const draft = { config: { llm: { base_url: null } } };
+    const shown = effectiveOf(base, draft);
+
+    expect((shown.config as { llm: Record<string, unknown> }).llm.base_url).toBeNull();
+    expect(patchOf(base, shown)).toEqual(draft);
+  });
+
+  it("takes a list pasted back with its secrets masked another way as no change", () => {
+    // review 17: the page masks a usage entry's key `*** set ***`, the boot dump
+    // `*** set (N chars) via ${X} ***`; a list was compared whole, so the dump
+    // pasted back unchanged stored the list — and the check refused it.
+    const withList = { config: { agents: { kb_chat: [{ name: "k", llm: { api_key: "*** set ***" } }] } } };
+    const pasted = { config: { agents: { kb_chat: [{ name: "k", llm: { api_key: "*** set (6 chars) via ${X} ***" } }] } } };
+
+    expect(patchOf(withList, pasted)).toEqual({});
+    pasted.config.agents.kb_chat[0].name = "renamed";
+    expect(patchOf(withList, pasted)).toEqual(pasted);
+  });
+
   it("hides a preset only where null is written for it", () => {
     expect(patchOf(base, { config: { agents: { presets: { b: null } } } })).toEqual({
       config: { agents: { presets: { b: null } } },

@@ -257,6 +257,21 @@ def test_a_null_inside_agents_that_hides_no_preset_is_refused(config, document):
     assert any("null only hides a preset" in p for p in found), found
 
 
+@pytest.mark.parametrize(
+    ("document", "at"),
+    [
+        ({"config": {"kb": {"card_drafter": None}}}, "config.kb.card_drafter"),
+        ({"apps": {"playground": {"agent": None}}}, "apps.playground.agent"),
+    ],
+)
+def test_a_refused_null_says_to_delete_the_line(config, document, at):
+    # review 17: since M23 the person edits the whole settings and never sees a
+    # patch, yet the refusal said "remove it from the patch".
+    found = [p for p in problems(document, config_path=config, env={}) if p.startswith(at)]
+
+    assert found and all("delete the line" in p and "patch" not in p for p in found), found
+
+
 def test_no_problem_ever_quotes_a_key(config, monkeypatch):
     # M6, review r2: a refusal that quotes a value (`got {x!r}`) handed a key
     # back to whoever asked for the check. Every problem is scrubbed of them.

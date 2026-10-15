@@ -359,7 +359,7 @@ def _nulls(patch: Any, path: str) -> list[str]:
     if patch is None:
         return [
             f"{path}: null hides a preset and means nothing here; to return a "
-            "value to its default, remove it from the patch"
+            "value to its default, delete the line"
         ]
     if isinstance(patch, dict):
         return [p for key, value in patch.items() for p in _nulls(value, f"{path}.{key}")]
@@ -455,7 +455,7 @@ def _config_nulls(patch: Any, parts: tuple[str, ...] = ()) -> list[str]:
             if not (here[:2] == ("agents", "presets") and len(here) == 3):
                 found.append(
                     f"config.{'.'.join(here)}: null only hides a preset; to return it "
-                    "to its config.yaml value, remove it from the patch"
+                    "to its config.yaml value, delete the line"
                 )
         else:
             found += _config_nulls(value, here)

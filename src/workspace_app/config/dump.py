@@ -84,7 +84,12 @@ def render(settings: Settings, provenance: Provenance, *, reveal_secrets: bool) 
     """Annotated YAML for the whole resolved tree. One line per leaf with a
     `# ← <source>` comment; secrets masked unless `reveal_secrets`."""
     lines: list[str] = []
-    _render_node(config_tree(settings), "", (), "", provenance, reveal_secrets, lines)
+    # The sources are recorded where the loader keeps the usage lists
+    # (`agents.sub_agents.kb_chat…`); the tree spells them as config.yaml does
+    # (`agents.kb_chat…`) — so must the lookup (review 17: every usage-list
+    # leaf read `# ← default`).
+    written = {_as_written(path): src for path, src in provenance.items()}
+    _render_node(config_tree(settings), "", (), "", written, reveal_secrets, lines)
     return "\n".join(lines) + "\n"
 
 
@@ -114,6 +119,12 @@ def _render_node(
 
 
 _DEFAULT = Source("default")
+_SUB_AGENTS = "agents.sub_agents."
+
+
+def _as_written(path: str) -> str:
+    """A provenance path as `config_tree` spells it."""
+    return "agents." + path[len(_SUB_AGENTS) :] if path.startswith(_SUB_AGENTS) else path
 
 
 def _is_branch(value: Any) -> bool:
@@ -141,12 +152,13 @@ def is_secret_at(parts: Sequence[str | int]) -> bool:
     may both hold a dot, which a joined path cannot say (final review 9).
 
     By leaf name — `api_key`, `pg_dsn`, any `*_token` in either case (variable
-    names are upper case) — plus the rabbitmq URL (may embed amqp
-    credentials) and every value of a preset's `env`, where tokens sit under
-    names nothing can recognise. `base_url` is intentionally excluded. A usage
-    entry's `env` (`agents.kb_chat[0].env`) is not secret BY PLACE: a key cannot
-    sit inside a list, so that left no way to keep it through an edit (known
-    cost, plan); a value whose NAME is a secret's still is."""
+    names are upper case) — plus the two broker URLs, the message queue's
+    and the event bus's (an amqp URL embeds its credentials), and every value
+    of a preset's `env`, where tokens sit under names nothing can recognise.
+    `base_url` is intentionally excluded. A usage entry's `env`
+    (`agents.kb_chat[0].env`) is not secret BY PLACE: a key cannot sit inside
+    a list, so that left no way to keep it through an edit (known cost, plan);
+    a value whose NAME is a secret's still is."""
     names = [p for p in parts if isinstance(p, str)]
     if not names:
         return False
@@ -155,7 +167,7 @@ def is_secret_at(parts: Sequence[str | int]) -> bool:
         return True
     if len(parts) == 5 and parts[0] == "agents" and parts[1] == "presets" and parts[3] == "env":
         return True
-    return names[-2:] == ["rabbitmq", "url"]
+    return names[-2:] in (["rabbitmq", "url"], ["event_bus", "url"])
 
 
 def is_secret(path: str) -> bool:

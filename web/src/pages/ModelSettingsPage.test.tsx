@@ -23,16 +23,19 @@ vi.mock("../components/MonacoEditor", () => ({
     readOnly,
     ariaLabel,
     markers,
+    autoHeight,
   }: {
     value: string;
     onChange?: (v: string) => void;
     readOnly?: boolean;
     ariaLabel?: string;
     markers?: { line: number; message: string }[];
+    autoHeight?: boolean;
   }) => (
     <textarea
       aria-label={ariaLabel}
       data-markers={JSON.stringify(markers ?? [])}
+      data-auto-height={autoHeight ? "true" : "false"}
       value={value}
       readOnly={readOnly}
       onChange={(e) => onChange?.(e.target.value)}
@@ -674,6 +677,42 @@ describe("ModelSettingsPage", () => {
     );
   });
 
+  it("says under the env form why its secret was refused, and keeps what was typed", async () => {
+    // review 17: the form emptied itself on submit and the refusal was drawn
+    // only under an open row — so it said nothing, or named another key.
+    const client = fakeClient();
+    client.setKey.mockRejectedValue(
+      new HttpError(422, "refused", undefined, undefined, {
+        problems: ["the saved draft does not load — fix it on the Edit tab first"],
+      }),
+    );
+    renderWithQuery(<ModelSettingsPage client={client} />);
+    fireEvent.click(await screen.findByRole("tab", { name: "API 金鑰" }));
+    setOnRow(SLOT, "sk-row"); // another row's field open meanwhile
+
+    fireEvent.change(screen.getByLabelText("變數名稱"), { target: { value: "GH_TOKEN" } });
+    fireEvent.change(screen.getByTestId("model-settings-env-value"), { target: { value: "ghp-0000" } });
+    fireEvent.submit(screen.getByTestId("model-settings-env-value").closest("form")!);
+
+    expect(await screen.findByTestId("model-settings-env-refused")).toHaveTextContent("fix it on the Edit tab");
+    expect(screen.queryByTestId("model-settings-key-refused")).toBeNull();
+    expect(screen.getByLabelText("變數名稱")).toHaveValue("GH_TOKEN");
+    expect(screen.getByTestId("model-settings-env-value")).toHaveValue("ghp-0000");
+  });
+
+  it("empties the env form once its secret is taken", async () => {
+    const client = fakeClient();
+    renderWithQuery(<ModelSettingsPage client={client} />);
+    fireEvent.click(await screen.findByRole("tab", { name: "API 金鑰" }));
+
+    fireEvent.change(screen.getByLabelText("變數名稱"), { target: { value: "GH_TOKEN" } });
+    fireEvent.change(screen.getByTestId("model-settings-env-value"), { target: { value: "ghp-0000" } });
+    fireEvent.submit(screen.getByTestId("model-settings-env-value").closest("form")!);
+
+    await waitFor(() => expect(screen.getByTestId("model-settings-env-value")).toHaveValue(""));
+    expect(screen.getByLabelText("變數名稱")).toHaveValue("");
+  });
+
   it("applies what its confirmation listed, even if the page re-reads meanwhile", async () => {
     // final review: the dialog listed the draft of the moment it opened, but the
     // Apply read the draft of the latest render — a refetch in between sent another.
@@ -1236,6 +1275,16 @@ describe("ModelSettingsPage", () => {
         {},
       ),
     );
+  });
+
+  it("keeps the editor within the window, so Save and Apply stay in reach", async () => {
+    // review 17 (UX): grown to its content — the whole settings, ~1000 lines
+    // since M23 — the editor was 18,016 px tall and Save sat below all of it.
+    renderWithQuery(<ModelSettingsPage client={fakeClient()} />);
+    await screen.findByRole("textbox", { name: "草稿（YAML）" });
+
+    expect(editor().dataset.autoHeight).toBe("false");
+    expect(screen.getByTestId("model-settings-editor-box").style.height).toMatch(/vh/);
   });
 
   it("gives a value read only at boot the default the deploy booted with", async () => {

@@ -610,15 +610,20 @@ function EditTab({
             {t("modelSettings.restored")}
           </p>
         )}
-        <MonacoEditor
-          ariaLabel={t("modelSettings.editor")}
-          value={text}
-          onChange={draft.edit}
-          language="yaml"
-          autoHeight
-          minHeight={240}
-          markers={markers}
-        />
+        {/* Bounded by the window and scrolled inside: since M23 it holds the
+            whole settings (~1000 lines), and grown to fit them it put Save and
+            Apply 18,000 px down (review 17; NN/g "Scrolling and Attention" —
+            what sits far below the fold is barely seen). */}
+        <div data-testid="model-settings-editor-box" style={{ height: "55vh", minHeight: 240 }}>
+          <MonacoEditor
+            ariaLabel={t("modelSettings.editor")}
+            value={text}
+            onChange={draft.edit}
+            language="yaml"
+            minHeight={240}
+            markers={markers}
+          />
+        </div>
         {/* Polite, not an alert: it is re-evaluated at every pause in typing, and
             an interrupting announcement mid-brace is the "too early" error NN/g
             warns against. */}
@@ -1109,15 +1114,18 @@ function KeysTab({
   // The row whose field is open: one at a time, in that row (M22).
   const [editing, setEditing] = useState<string | null>(null);
   const [value, setValue] = useState("");
-  const [refused, setRefused] = useState<string[]>([]);
+  // A refusal belongs to the form that sent it — a row's path, or the env
+  // form — and is drawn under that form only (review 17: the env form's went
+  // under whichever row was open, or nowhere).
+  const [refused, setRefused] = useState<{ at: string; problems: string[] } | null>(null);
   const done = () => {
-    setRefused([]);
+    setRefused(null);
     draft.clearNotice();
     void queryClient.invalidateQueries({ queryKey: qk.modelSettings });
   };
   const set = useMutation({
     meta: { silentError: true },
-    mutationFn: ({ path, secret }: { path: string; secret: string }) => client.setKey(path, secret),
+    mutationFn: ({ path, secret }: { path: string; secret: string; at: string }) => client.setKey(path, secret),
     // An earlier result (an Apply's "Applied: version …") is not this action's:
     // left beside a refusal it read as the key applied (final review 11).
     onMutate: () => draft.clearNotice(),
@@ -1126,7 +1134,7 @@ function KeysTab({
       setValue("");
       done();
     },
-    onError: (e) => setRefused(problemsOf(e).length ? problemsOf(e) : [messageOf(e)]),
+    onError: (e, { at }) => setRefused({ at, problems: problemsOf(e).length ? problemsOf(e) : [messageOf(e)] }),
   });
   // A failed Clear is said on the key's own row (final review 6; NN/g
   // "Reporting Errors in Forms").
@@ -1160,7 +1168,7 @@ function KeysTab({
   const open = (p: string) => {
     setEditing(p);
     setValue("");
-    setRefused([]);
+    setRefused(null);
   };
 
   // Every place a key can go (the server lists them from the saved draft), and
@@ -1244,7 +1252,7 @@ function KeysTab({
                 <form
                   onSubmit={(e) => {
                     e.preventDefault();
-                    if (value && !set.isPending) set.mutate({ path: p, secret: value });
+                    if (value && !set.isPending) set.mutate({ path: p, secret: value, at: p });
                   }}
                   style={{ display: "grid", gap: 6 }}
                 >
@@ -1257,8 +1265,8 @@ function KeysTab({
                         className="input"
                         data-masked
                         data-testid="model-settings-key-value"
-                        aria-invalid={refused.length > 0}
-                        aria-describedby={refused.length > 0 ? "model-settings-key-refused" : undefined}
+                        aria-invalid={refused?.at === p}
+                        aria-describedby={refused?.at === p ? "model-settings-key-refused" : undefined}
                         value={value}
                         onChange={(e) => setValue(e.target.value)}
                         autoComplete="off"
@@ -1284,7 +1292,7 @@ function KeysTab({
                       {t("modelSettings.cancel")}
                     </button>
                   </div>
-                  {refused.length > 0 && (
+                  {refused?.at === p && (
                     <p
                       role="alert"
                       id="model-settings-key-refused"
@@ -1292,7 +1300,7 @@ function KeysTab({
                       className="ev-banner ev-banner--err"
                       style={{ ...WRAP, margin: 0 }}
                     >
-                      {refused.join(" · ")}
+                      {refused.problems.join(" · ")}
                     </p>
                   )}
                 </form>
@@ -1314,19 +1322,28 @@ function KeysTab({
           {draft.notice}
         </p>
       )}
-      {presets.length > 0 && <EnvSecretForm presets={presets} set={set} />}
+      {presets.length > 0 && (
+        <EnvSecretForm presets={presets} set={set} refused={refused?.at === ENV_FORM ? refused.problems : []} />
+      )}
     </div>
   );
 }
 
 /** A secret under an `env` name a preset does not have yet: the one thing the
  * list cannot offer, so its name is typed — the preset is still picked (M22). */
+const ENV_FORM = "env-form";
+
 function EnvSecretForm({
   presets,
   set,
+  refused,
 }: {
   presets: string[];
-  set: { mutate: (v: { path: string; secret: string }) => void; isPending: boolean };
+  set: {
+    mutate: (v: { path: string; secret: string; at: string }, opts: { onSuccess: () => void }) => void;
+    isPending: boolean;
+  };
+  refused: string[];
 }) {
   const t = useT();
   const [preset, setPreset] = useState(presets[0]);
@@ -1338,9 +1355,16 @@ function EnvSecretForm({
       onSubmit={(e) => {
         e.preventDefault();
         if (!ready) return;
-        set.mutate({ path: `config.agents.presets.${preset}.env.${name}`, secret });
-        setName("");
-        setSecret("");
+        // Emptied once taken, not on submit: a refusal keeps what was typed.
+        set.mutate(
+          { path: `config.agents.presets.${preset}.env.${name}`, secret, at: ENV_FORM },
+          {
+            onSuccess: () => {
+              setName("");
+              setSecret("");
+            },
+          },
+        );
       }}
       style={{ display: "grid", gap: 8 }}
     >
@@ -1387,6 +1411,16 @@ function EnvSecretForm({
           {t("modelSettings.envAdd")}
         </button>
       </div>
+      {refused.length > 0 && (
+        <p
+          role="alert"
+          data-testid="model-settings-env-refused"
+          className="ev-banner ev-banner--err"
+          style={{ ...WRAP, margin: 0 }}
+        >
+          {refused.join(" · ")}
+        </p>
+      )}
     </form>
   );
 }
