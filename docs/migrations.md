@@ -2637,7 +2637,8 @@ AI 讀 `wui` skill 時會看到「這個 item 能讓頁面問的 subagent」清�
 - 開著記錄時，每個行程多一條寫出用的 thread（`usage-writer`；worker 再多一條每 5 分鐘寫出的 thread）；每個請求
   多一點計數（`scripts/bench_usage_middleware.py` 量得出你們機器上的數字）；路由自己沒問使用者是誰的 `/api` 請求
   （例如自動 CRUD）在回應之後會多呼叫一次你們的 `get_user_id`（靜態檔、沒有路由接的網址、Kubernetes 探針
-  不呼叫——探針記成 `system` 的 `probe:` 列，每個 API pod 每個時段一列）；關機時先把
+  不呼叫——探針記成 `system` 的 `probe:` 列，每個 API pod 每個時段、每條探針路由一列：repo 附的 manifest 探
+  `/api/readyz` 和 `/openapi.json` 兩條）；關機時先把
   已記的寫出去（有時間上限）。
 - `capacity.llm_tags: true`：平台的每次 LLM 呼叫多帶 `x-litellm-tags`（`ws`、`ws.user:…`、有 App 時 `ws.app:…`、
   `ws.purpose:…`、`ws.call:…`）。**rollout 前**查三件事，任何一件成立就先設 `capacity.llm_tags: false`：
@@ -2654,9 +2655,7 @@ AI 讀 `wui` skill 時會看到「這個 item 能讓頁面問的 subagent」清�
 - `capacity.step_s`（**rollout 前**，有改它的話）要整除一天：一天要切成整數個時段，「每天的尖峰」和跨日的試算才對得
   齊——不整除的話 API 開機就擋下、起不來。
 - 四個資料來源（`capacity.usage_records` / `resource_metrics` / `gpu_metrics` / `llm_requests`）是 opt-in：沒設就是
-  沒接上，容量頁說缺什麼。怎麼實作見 [capacity.md §4](capacity.md)。接上之後，除了 API，**blob-gc 與 chat-video
-  兩種 worker 開機時也會建構這些 class**（它們組出 API 的整套 model 註冊）：class 建構時要的 env 或憑證，這兩個
-  worker 的 Deployment 也要給（**rollout 前**）；漏了的症狀是這兩種 worker 起不來。
+  沒接上，容量頁說缺什麼。怎麼實作見 [capacity.md §4](capacity.md)。
 
 **資料** — 沒有新的 model、沒有要回填的東西；分析算完只留在記憶體（10 分鐘）。
 
@@ -2672,11 +2671,18 @@ AI 讀 `wui` skill 時會看到「這個 item 能讓頁面問的 subagent」清�
   下只有 300 的因數（例如 60、100、150、300）和 900、1800、3600 可以（其他的 `capacity check` 會報錯）。沒換的症狀：容量頁沒有沙盒的 CPU、記憶體兩條線，「變慢的門檻」
   沒有 (d)。app 與 sandbox-host 誰先換都可以：舊的 host 不認得建立時多送的 `labels`，照樣建；
   舊的 app 不送，沙盒照量但記成 `unknown`。
+- **blob-gc 與 chat-video worker 的 env**（**接上資料來源前**）：這兩種 worker 開機時也會建構你們的資料來源 class
+  （它們組出 API 的整套 model 註冊）。class 建構時要的 env 或憑證，`kubernetes/base/workers.yaml` 的
+  `rca-worker-blob-gc` 和 `rca-worker-chat-video` 也要給（和 `rca-app` 一樣加在它們的 `env` / `envFrom`；例如
+  `kubectl -n <ns> set env deployment/rca-worker-blob-gc deployment/rca-worker-chat-video --from=secret/<來源的 secret>`）。為什麼：
+  沒有它們，建構就失敗。漏了的症狀：這兩種 worker 起不來（CrashLoopBackOff）。
 - **API pod 的記憶體上限**（**接上資料來源前**）：superuser 每打開一個期間，API pod 就多佔一份分析——約 4 bytes ×
-  時段數（28 天約 8,352）× 每條線花到的人數加總，加上每讀一列約 50–65 bytes；1,000 人、每人平均在 8 條線約
+  時段數（28 天約 8,352）× 每條線花到的人數加總，加上每讀一列約 50–65 bytes，再加每條線每個 App、每種用途 8 bytes ×
+  時段數；1,000 人、每人平均在 8 條線約
   270 MB，再加讀到的列（`max_rows` 的 500 萬列約 300 MB）；最多三個期間同時留著；算的時候分析自己的暫存再多約
   一到兩成，來源若把整個查詢結果做成 list 回傳還要加上那一份（細節見 [capacity.md §6](capacity.md)）。repo 附的 `kubernetes/base/deployment.yaml` 給 `rca-app` 的 `resources.limits.memory`
-  是 `1Gi`：照你們的人數估一份、留出空間，把它調高，或把 `capacity.max_rows` 調低。為什麼：分析算在 API pod 上，
+  是 `1Gi`：照你們的人數估一份、留出空間，把它調高（改 manifest，或
+  `kubectl -n <ns> set resources deployment/rca-app -c rca-app --limits=memory=<新上限>`），或把 `capacity.max_rows` 調低。為什麼：分析算在 API pod 上，
   同一顆 pod 也在服務所有人。漏了的症狀：打開容量頁（尤其是 90 天）時，那顆 API pod 被 OOMKilled。
 - 前端：容量頁的程式和其他頁一樣在主程式裡；ECharts 是只在打開 `/capacity` 才下載的 chunk（壓縮前約 540 KB、
   gzip 約 181 KB），其他頁不會下載它。

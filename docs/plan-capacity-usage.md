@@ -869,9 +869,10 @@ What the build changed from the plan above, each for a reason found while buildi
   sandbox-host's window is its own setting: a row longer than the slot is spread
   over the slots it covers, and `capacity check` refuses one that fits neither way.
 - **An analysis' memory is 4 bytes × slots × the people each line costs, summed over the lines, plus
-  about 50–65 bytes per row read** (measured on synthetic worlds of 60, 120 and 240 people, 27 days, with
+  about 50–65 bytes per row read, plus 8 bytes × slots per App and per purpose on each line** (measured on synthetic worlds of 60, 120 and 240 people, 27 days, with
   sources that return fresh records as an ES client does). A turn or job record is kept as the five
-  numbers the analysis reads (`Events`, 33 bytes; the dict from ES was about a kilobyte and was kept
+  numbers the analysis reads (`Events`: 28 bytes of columns, 33 measured with the names table; the
+  dict from ES was about a kilobyte and was kept
   whole).
   The observations keep the (slot, value) pairs a source returned — ②'s pods included, so a rollout's
   new pod names cost only their samples; a line keeps a row only for each person it costs (`Line.rows`);
@@ -889,8 +890,9 @@ What the build changed from the plan above, each for a reason found while buildi
 - **`kind: local` with isolation**: the API pod's own sandboxes are subtracted from its CPU and memory
   before the API regression, since they run inside it. A backend with no cgroup per sandbox measures
   none, and the summary says so (`sandbox_measured`) for the page to.
-- **A request's App is its matched route's `slug`, only on a route inside an App (`/api/a/{slug}/…`)
-  and only when the response did not refuse the slug (4xx)**: read off the raw path, any URL minted an
+- **A request's App is its matched route's `slug`, only on a route inside an App (`/api/a/{slug}/…`),
+  only for an App the platform ships (`is_app`, from the apps in the image), and only when the response
+  did not refuse the slug (4xx)**: read off the raw path, any URL minted an
   App, and the launcher's `/api/apps/{slug}/icon` made everyone who opened the home page a user of every
   App with an icon file. Work that failed (5xx, a crash) is still the App's. A request no route answered
   is `unknown` without a call to `get_user_id`. A Kubernetes probe (`kube-probe/…`) is `system` work of
@@ -944,12 +946,17 @@ What the build changed from the plan above, each for a reason found while buildi
     the close is a text button, which Material 3 keeps for the lowest-priority actions and never
     underlines ([Material 3, buttons](https://m3.material.io/components/buttons/guidelines)) — it was an
     underlined link until round 3;
-  - a person's name is a link to their detail below the table, and takes the view and the focus there —
-    a link "allows users to jump from one location to another within the same web page" ([NN/g
-    glossary](https://www.nngroup.com/articles/ui-elements-glossary/)); it was a button drawn as a link
-    that opened the detail out of sight below a long table, and a link standing for an action needs
-    words saying so ([NN/g, command links](https://www.nngroup.com/articles/command-links/)), which a
-    name is not.
+  - a person's detail opens from a text button in their row, "明細" — opening it is an action, and a
+    link standing for an action needs words saying so ([NN/g, command links](https://www.nngroup.com/articles/command-links/)),
+    which a name is not; it was a button drawn as a link, and then a link to a place on the page that
+    existed only after the click (opened in a new tab, it showed nothing). The button takes the view and
+    the focus to the detail below the table, and the focus comes back to it when the detail closes;
+  - choosing a line or an App is a dropdown, "a type of picker that allows users to select one option
+    from a list of options", since there are more of them than a segmented control holds; the people
+    and the purchase lead time are typed, in a textbox, "an input control that allows users to type text
+    within a defined rectangular area" ([NN/g glossary](https://www.nngroup.com/articles/ui-elements-glossary/));
+  - every segmented control and dropdown says what it chooses in a visible label (基本開銷, 新來的人像 …),
+    not only to a screen reader.
 - **The tabs** are the app's shared `Tabs`: the WAI-ARIA tab roles, without the pattern's arrow keys
   (§10); the shared component is not changed here.
 - **Every stream is one column** of the API regression (§9.3 keeps route templates apart): a stream's

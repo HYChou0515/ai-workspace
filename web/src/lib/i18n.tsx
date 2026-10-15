@@ -3165,7 +3165,7 @@ export const messages = {
   },
   "capacity.headline.ceiling": {
     "zh-TW": "照現在的用法，撐得住 {n} 人以上（現在 {now} 人）。",
-    en: "At today's habits, it holds more than {n} people (now {now}).",
+    en: "At today's habits, it holds {n} people or more (now {now}).",
   },
   "capacity.headline.noLimit": {
     "zh-TW": "還算不出能撐多少人：會隨人數變的線（CPU、記憶體、GPU）都還沒有已知的容量。",
@@ -3261,6 +3261,8 @@ export const messages = {
     en: "Active {n} days · {turns} turns · {jobs} background jobs",
   },
   "capacity.person.close": { "zh-TW": "關閉", en: "Close" },
+  "capacity.person.open": { "zh-TW": "明細", en: "Details" },
+  "capacity.person.openFor": { "zh-TW": "{name} 的明細", en: "{name}'s details" },
   "capacity.dist.title": { "zh-TW": "每人用量差多少", en: "How people differ" },
   "capacity.dist.summary": {
     "zh-TW": "尖峰時段每人用量：中位數 {p50}、p90 {p90}、p99 {p99}；前 10% 的人用掉 {top}。",

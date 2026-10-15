@@ -10,7 +10,7 @@
  * of slots (E8): what machines are bought for.
  */
 import { useQuery } from "@tanstack/react-query";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 
 import { qk } from "../../api/queryKeys";
 import { useUsers } from "../../hooks/useUsers";
@@ -122,20 +122,27 @@ function Segmented<V extends string>({
   onChange: (v: V) => void;
   testId: string;
 }) {
+  // the options alone never say what they choose: the label is on the screen
+  const id = useId();
   return (
-    <div className="capacity-segmented" role="group" aria-label={label} data-testid={testId}>
-      {options.map((o) => (
-        <button
-          key={o.value}
-          type="button"
-          aria-pressed={o.value === value}
-          disabled={o.disabled}
-          onClick={() => onChange(o.value)}
-        >
-          {o.label}
-        </button>
-      ))}
-    </div>
+    <span className="capacity-control">
+      <span id={id} className="capacity-control-label">
+        {label}
+      </span>
+      <span className="capacity-segmented" role="group" aria-labelledby={id} data-testid={testId}>
+        {options.map((o) => (
+          <button
+            key={o.value}
+            type="button"
+            aria-pressed={o.value === value}
+            disabled={o.disabled}
+            onClick={() => onChange(o.value)}
+          >
+            {o.label}
+          </button>
+        ))}
+      </span>
+    </span>
   );
 }
 
@@ -163,7 +170,7 @@ export function Allocation({
   // each time the link is followed, even to the detail already open
   const [opened, setOpened] = useState(0);
   // the link that opened the detail gets the focus back when it closes
-  const opener = useRef<HTMLAnchorElement | null>(null);
+  const opener = useRef<HTMLButtonElement | null>(null);
   useEffect(() => {
     if (person === null && opener.current) opener.current.focus();
   }, [person]);
@@ -216,17 +223,22 @@ export function Allocation({
               testId="capacity-alloc-stat"
               options={(["peak", "avg"] as const).map((v) => ({ value: v, label: t(`capacity.alloc.stat.${v}`) }))}
             />
-            <Segmented
-              label={t("capacity.alloc.fixed")}
-              value={mode}
-              onChange={setMode}
-              testId="capacity-alloc-fixed"
-              options={(["separate", "proportional", "even"] as const).map((v) => ({
-                value: v,
-                label: t(`capacity.alloc.fixed.${v}`),
-                disabled: !modeApplies(by, v),
-              }))}
-            />
+            {by !== "component" && (
+              // the mode the table uses: one that does not apply to this grouping
+              // shows as "separate", which is what the rows are; by component
+              // the rows are the lines themselves, and there is nothing to spread
+              <Segmented
+                label={t("capacity.alloc.fixed")}
+                value={modeApplies(by, mode) ? mode : "separate"}
+                onChange={setMode}
+                testId="capacity-alloc-fixed"
+                options={(["separate", "proportional", "even"] as const).map((v) => ({
+                  value: v,
+                  label: t(`capacity.alloc.fixed.${v}`),
+                  disabled: !modeApplies(by, v),
+                }))}
+              />
+            )}
           </div>
           {stat === "peak" && <p className="capacity-note">{t("capacity.alloc.peakNote")}</p>}
           {splitting && <NotReady readiness={summary.readiness.regression} t={t} />}
@@ -237,33 +249,38 @@ export function Allocation({
                   <th scope="col">{t(`capacity.alloc.by.${by}`)}</th>
                   <th scope="col">{t("capacity.alloc.use")}</th>
                   <th scope="col">{t("capacity.alloc.share")}</th>
+                  {by === "person" && <th scope="col" aria-label={t("capacity.person.open")} />}
                 </tr>
               </thead>
               <tbody>
                 {rows.map((r) => (
                   <tr key={r.key} data-kind={r.kind} aria-selected={person === r.key || undefined}>
-                    <th scope="row">
-                      {by === "person" && r.kind === "group" && !NOT_PEOPLE.has(r.key) ? (
-                        // a link to the person's detail below the table, which
-                        // takes the view and the focus there (PersonDetail)
-                        <a
-                          href="#capacity-person"
-                          className="capacity-link"
-                          onClick={(e) => {
-                            e.preventDefault();
-                            opener.current = e.currentTarget;
-                            setPerson(r.key);
-                            setOpened((n) => n + 1);
-                          }}
-                        >
-                          {r.label}
-                        </a>
-                      ) : (
-                        r.label
-                      )}
-                    </th>
+                    <th scope="row">{r.label}</th>
                     <td>{formatValue(t, r.value, line.unit)}</td>
                     <td>{pct(total ? r.value / total : null, 1)}</td>
+                    {by === "person" && (
+                      <td>
+                        {r.kind === "group" && !NOT_PEOPLE.has(r.key) && (
+                          // opening a detail is an action — a button whose words
+                          // say so; it takes the view and the focus to the detail
+                          // below the table (PersonDetail) and gets the focus back
+                          <button
+                            type="button"
+                            className="btn"
+                            data-variant="ghost"
+                            data-size="sm"
+                            aria-label={t("capacity.person.openFor", { name: r.label })}
+                            onClick={(e) => {
+                              opener.current = e.currentTarget;
+                              setPerson(r.key);
+                              setOpened((n) => n + 1);
+                            }}
+                          >
+                            {t("capacity.person.open")}
+                          </button>
+                        )}
+                      </td>
+                    )}
                   </tr>
                 ))}
               </tbody>
@@ -381,7 +398,6 @@ function PersonDetail({
   }, [data, lines, summary, t]);
   return (
     <aside
-      id="capacity-person"
       className="capacity-person"
       data-testid="capacity-person"
       aria-label={t("capacity.person.title", { user: label })}

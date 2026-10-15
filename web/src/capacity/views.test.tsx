@@ -22,6 +22,7 @@ import { readinessText } from "./Readiness";
 import { Allocation, allocationRows, barChart, modeApplies } from "./views/Allocation";
 import { headline, Overview } from "./views/Overview";
 import { columnLabel, kneeText, pairTitle, Thresholds } from "./views/Thresholds";
+import { Trends } from "./views/Trends";
 import { advisory, runwayDate, WhatIf } from "./views/WhatIf";
 
 vi.mock("./echarts", () => ({
@@ -288,6 +289,48 @@ describe("allocation (view 2)", () => {
     expect(sum(rows)).toBeCloseTo(sum(allocationRows(t, s, line, "person", "avg", "separate", name)), 6);
   });
 
+  it("says on the screen what each control chooses", async () => {
+    // a segmented control's options alone ("分開列｜依用量分攤｜平均分攤") never say
+    // what they split; a visible label does, for everyone, not only screen readers
+    renderWithQuery(<Allocation summary={summary()} days={28} client={client()} t={t} />);
+    for (const name of ["依", "時段", "基本開銷"]) {
+      expect(screen.getByRole("group", { name })).toBeInTheDocument();
+      expect(screen.getByText(name, { selector: "span" })).toBeVisible();
+    }
+    cleanup();
+
+    renderWithQuery(<WhatIf summary={summary()} days={28} client={client()} t={t} />);
+    expect(await screen.findByRole("group", { name: "新來的人像" })).toBeInTheDocument();
+    expect(screen.getByText("新來的人像", { selector: "span" })).toBeVisible();
+    cleanup();
+
+    render(<Trends summary={summary()} t={t} />);
+    expect(screen.getByLabelText("資源")).toBe(screen.getByTestId("capacity-trends-line"));
+    expect(screen.getByText("資源")).toBeVisible();
+  });
+
+  it("shows the fixed-overhead mode the table uses, and no choice where there is none", () => {
+    renderWithQuery(<Allocation summary={summary()} days={28} client={client()} t={t} />);
+    const fixed = screen.getByTestId("capacity-alloc-fixed");
+    const by = screen.getByTestId("capacity-alloc-by");
+    fireEvent.click(within(fixed).getByRole("button", { name: "平均分攤" }));
+
+    // evenly is per person: by App the table lists the overhead as its own row
+    fireEvent.click(within(by).getByRole("button", { name: "App" }));
+    expect(within(fixed).getByRole("button", { name: "分開列" })).toHaveAttribute("aria-pressed", "true");
+    expect(within(fixed).getByRole("button", { name: "平均分攤" })).toHaveAttribute("aria-pressed", "false");
+
+    // by component the rows are the lines themselves: nothing to spread
+    fireEvent.click(within(by).getByRole("button", { name: "元件" }));
+    expect(screen.queryByTestId("capacity-alloc-fixed")).toBeNull();
+
+    // back to people: what was chosen applies again
+    fireEvent.click(within(by).getByRole("button", { name: "人" }));
+    expect(
+      within(screen.getByTestId("capacity-alloc-fixed")).getByRole("button", { name: "平均分攤" }),
+    ).toHaveAttribute("aria-pressed", "true");
+  });
+
   it("offers evenly for people only — an App is not a head", () => {
     const s = summary();
 
@@ -323,7 +366,7 @@ describe("allocation (view 2)", () => {
     renderWithQuery(<Allocation summary={s} days={28} client={client()} t={t} />);
     fireEvent.change(screen.getByTestId("capacity-alloc-line"), { target: { value: "sandbox-host.cpu" } });
 
-    fireEvent.click(await screen.findByRole("link", { name: "Alice Chen" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Alice Chen 的明細" }));
 
     const detail = await screen.findByTestId("capacity-person");
     await waitFor(() => expect(within(detail).getByText("沙盒 CPU")).toBeInTheDocument());
@@ -370,28 +413,28 @@ describe("allocation (view 2)", () => {
     c.person = vi.fn(async () => unknown);
     renderWithQuery(<Allocation summary={s} days={28} client={c} t={t} />);
 
-    fireEvent.click(await screen.findByRole("link", { name: "Alice Chen" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Alice Chen 的明細" }));
 
     const detail = await screen.findByTestId("capacity-person");
     await waitFor(() => expect(within(detail).getByText("API CPU")).toBeInTheDocument());
     expect(detail).not.toHaveTextContent("的人");
   });
 
-  it("takes you to a person's detail: their name is a link to it", async () => {
-    // a link "allows users to jump from one location to another within the
-    // same web page" (NN/g glossary): the detail opens below a table that can
-    // run past the screen, so the link moves the view and the focus there
+  it("opens a person's detail from the button in their row, and takes you there", async () => {
+    // opening a detail is an action: a button whose words say so (NN/g,
+    // command links); the detail opens below a table that can run past the
+    // screen, so the button moves the view and the focus there
     renderWithQuery(<Allocation summary={summary()} days={28} client={client()} t={t} />);
 
-    fireEvent.click(await screen.findByRole("link", { name: "Alice Chen" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Alice Chen 的明細" }));
 
     const detail = await screen.findByTestId("capacity-person");
     await waitFor(() => expect(detail.contains(document.activeElement)).toBe(true));
   });
 
-  it("takes you to the detail again when you follow the link again", async () => {
+  it("takes you to the detail again when you press its button again", async () => {
     renderWithQuery(<Allocation summary={summary()} days={28} client={client()} t={t} />);
-    const link = await screen.findByRole("link", { name: "Alice Chen" });
+    const link = await screen.findByRole("button", { name: "Alice Chen 的明細" });
     fireEvent.click(link);
     const detail = await screen.findByTestId("capacity-person");
     await waitFor(() => expect(detail.contains(document.activeElement)).toBe(true));
@@ -402,9 +445,9 @@ describe("allocation (view 2)", () => {
     await waitFor(() => expect(detail.contains(document.activeElement)).toBe(true));
   });
 
-  it("gives the focus back to the link when the detail closes", async () => {
+  it("gives the focus back to the button when the detail closes", async () => {
     renderWithQuery(<Allocation summary={summary()} days={28} client={client()} t={t} />);
-    const link = await screen.findByRole("link", { name: "Alice Chen" });
+    const link = await screen.findByRole("button", { name: "Alice Chen 的明細" });
     fireEvent.click(link);
     const detail = await screen.findByTestId("capacity-person");
 
@@ -413,12 +456,12 @@ describe("allocation (view 2)", () => {
     await waitFor(() => expect(document.activeElement).toBe(link));
   });
 
-  it("closes a person's detail with a button, not a link", async () => {
+  it("closes a person's detail with a text button", async () => {
     // closing is an action: a button (NN/g, buttons vs links); a low-emphasis
     // one is a text button, never underlined (Material 3, buttons)
     renderWithQuery(<Allocation summary={summary()} days={28} client={client()} t={t} />);
 
-    fireEvent.click(await screen.findByRole("link", { name: "Alice Chen" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Alice Chen 的明細" }));
 
     const detail = await screen.findByTestId("capacity-person");
     expect(within(detail).getByRole("button", { name: "關閉" })).toHaveAttribute("data-variant", "ghost");
@@ -429,7 +472,7 @@ describe("allocation (view 2)", () => {
     const c = client();
     renderWithQuery(<Allocation summary={s} days={28} client={c} t={t} />);
 
-    fireEvent.click(await screen.findByRole("link", { name: "Alice Chen" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Alice Chen 的明細" }));
 
     const detail = await screen.findByTestId("capacity-person");
     await waitFor(() => expect(c.person).toHaveBeenCalledWith("user00", 28));
@@ -506,6 +549,17 @@ describe("what-if and runway (views 6, 7)", () => {
     renderWithQuery(<WhatIf summary={s} days={28} client={client()} t={t} />);
 
     expect(screen.getByTestId("capacity-runway-text")).toHaveTextContent("還算不出能撐的人數上限");
+  });
+
+  it("dates the band's early end at the line's when the band gives none", () => {
+    const s = summary();
+    s.headroom = room({ max_n: 26 });
+    s.runway = { ...s.runway, trend: trend(0.5), reach: { target: 26, early: null, at: 12, late: null } };
+
+    const at = runwayDate(s);
+
+    // never "from today": the early end is never after the line's crossing
+    expect(at).toMatchObject({ kind: "date", earlyMs: s.period.end_ms + 12 * DAY });
   });
 
   it("reads a date no calendar holds as no growth", () => {

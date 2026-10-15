@@ -51,6 +51,17 @@
   gap: 6px;
 }
 
+.capacity-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.capacity-control-label {
+  color: var(--text-paper-d);
+  font-size: var(--text-small);
+}
+
 .capacity-segmented {
   display: inline-flex;
   border: 1px solid var(--paper-3);
@@ -176,18 +187,6 @@
   color: var(--accent-h);
   font-size: var(--text-small);
   font-weight: 600;
-}
-
-.capacity-link {
-  border: none;
-  background: none;
-  padding: 0;
-  color: var(--accent-h);
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-  text-decoration: underline;
-  text-underline-offset: 2px;
 }
 
 .capacity-notready {

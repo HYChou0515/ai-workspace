@@ -121,4 +121,17 @@ describe("CapacityPage", () => {
     expect(error).not.toHaveTextContent("6,000,000");
     expect(error).toHaveTextContent("capacity.max_rows");
   });
+
+  it("reads the page again when the analysis behind a what-if was recomputed under it", async () => {
+    // the what-if says it cannot answer: the page asks again, and its views
+    // then say what they need
+    const c = client({
+      whatif: vi.fn(async () => ({ ...(whatifFixture as unknown as WhatIf), lines: [], ready: false })),
+    });
+    renderPage(c);
+
+    fireEvent.click(await screen.findByRole("tab", { name: "試算與時程" }));
+
+    await waitFor(() => expect(c.summary).toHaveBeenCalledTimes(2));
+  });
 });

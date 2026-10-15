@@ -81,19 +81,21 @@ export function Trends({ summary, t }: { summary: CapacitySummary; t: T }) {
         <>
           <h3 className="capacity-h3">{t("capacity.trends.daily")}</h3>
           <div className="capacity-controls">
-            <select
-              className="input"
-              value={line.id}
-              onChange={(e) => setLineId(e.target.value)}
-              aria-label={t("capacity.alloc.resource")}
-              data-testid="capacity-trends-line"
-            >
-              {lines.map((l) => (
-                <option key={l.id} value={l.id}>
-                  {lineLabel(t, l)}
-                </option>
-              ))}
-            </select>
+            <label>
+              {t("capacity.alloc.resource")}
+              <select
+                className="input"
+                value={line.id}
+                onChange={(e) => setLineId(e.target.value)}
+                data-testid="capacity-trends-line"
+              >
+                {lines.map((l) => (
+                  <option key={l.id} value={l.id}>
+                    {lineLabel(t, l)}
+                  </option>
+                ))}
+              </select>
+            </label>
           </div>
           <Chart option={lineOption} label={lineLabel(t, line)} testId="capacity-trends-chart" />
         </>
