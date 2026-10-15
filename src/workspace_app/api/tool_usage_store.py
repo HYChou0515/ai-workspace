@@ -155,12 +155,18 @@ class ToolUsageStore:
             logger.exception("tool usage: prune of %s failed", row_id)
 
     def prune(self) -> None:
-        """Delete every row older than `KEEP_DAYS` (D5) — an indexed range on
-        `day`, so only the expired rows are read. Permanently: a soft delete
-        keeps the row and every revision, and the table would grow anyway."""
-        cutoff = (dt.date.fromisoformat(self._today()) - dt.timedelta(days=KEEP_DAYS)).isoformat()
+        """Delete every row older than `KEEP_DAYS` (D5): the expired days by
+        name on the indexed `day` (see `days_between` — a range there failed on
+        Postgres), the year before the cutoff, so only the expired rows are
+        read and never a newer one (a pod whose clock runs behind must not
+        delete what the others wrote since). The prune runs daily, so nothing
+        older is left to find. Permanently: a soft delete keeps the row and
+        every revision, and the table would grow anyway."""
+        cutoff = dt.date.fromisoformat(self._today()) - dt.timedelta(days=KEEP_DAYS)
+        first = (cutoff - dt.timedelta(days=_PRUNE_LOOKBACK_DAYS)).isoformat()
+        last = (cutoff - dt.timedelta(days=1)).isoformat()
         rm = self._rm()
-        old = QB["day"] < cutoff
+        old = QB["day"].in_(days_between(first, last))
         for meta in rm.search_resources(query=old.build()):
             # Another process's prune of the same day may have got there first.
             with contextlib.suppress(ResourceIDNotFoundError):
@@ -185,6 +191,33 @@ def run_flusher(store: ToolUsageStore | object, stop: threading.Event, interval:
 # ── reading: what the administrator's report asks (§3.6) ───────────────────
 
 
+#: Days past today a row may carry: a pod whose clock runs ahead (or one past
+#: midnight UTC before another) writes under tomorrow.
+_AHEAD_DAYS = 2
+
+
+#: How far before the cutoff a prune looks: it runs daily, so a year covers
+#: any gap a stopped deploy could leave.
+_PRUNE_LOOKBACK_DAYS = 366
+
+
+def days_between(first: str, last: str) -> list[str]:
+    """Every day from `first` to `last`, both included, as ISO dates.
+
+    The store asks for days by name, never as a range: `day` is an ISO date
+    string, and specstar's Postgres meta store compares a range on an indexed
+    field as a NUMBER — `(indexed_data->>'day')::numeric >= '2026-09-16'` —
+    which Postgres refuses, so every report and prune failed there (the
+    person: 「Tool usage 回覆500」) while the in-memory backend compared the
+    strings and the tests passed. Membership is compared as text."""
+    start, end = dt.date.fromisoformat(first), dt.date.fromisoformat(last)
+    return [(start + dt.timedelta(days=n)).isoformat() for n in range((end - start).days + 1)]
+
+
+def _ahead(today: str) -> str:
+    return (dt.date.fromisoformat(today) + dt.timedelta(days=_AHEAD_DAYS)).isoformat()
+
+
 def since_day(days: int, today: str | None = None) -> str:
     """The first day of a `days`-long window ending today (inclusive)."""
     end = dt.date.fromisoformat(today or _today())
@@ -199,9 +232,11 @@ def rows_since(
     kind: str = "tool",
     package: str | None = None,
 ) -> list[ToolUsageDay]:
-    """Every row of one `kind` from `since` on — an indexed range on `day` (and
-    `tool` / `package` when one is named), never the whole table."""
-    q = (QB["day"] >= since) & (QB["kind"] == kind)
+    """Every row of one `kind` from `since` on — the window's days by name on
+    the indexed `day` (see `days_between`), and `tool` / `package` when one is
+    named; never the whole table."""
+    window = days_between(since, _ahead(max(since, _today())))
+    q = QB["day"].in_(window) & (QB["kind"] == kind)
     if tool is not None:
         q = q & (QB["tool"] == tool)
     if package is not None:
