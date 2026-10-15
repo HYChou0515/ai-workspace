@@ -57,7 +57,9 @@ export function Overview({ summary, t }: { summary: CapacitySummary; t: T }) {
         {headline(t, summary)}
       </p>
       {summary.readiness.whatif.ready && room !== null && room.max_n !== null && (
-        <p className="capacity-note">{t("capacity.headline.basis", { days: room.days })}</p>
+        <p className="capacity-note">
+          {t("capacity.headline.basis", { days: room.days, minutes: summary.period.step_s / 60 })}
+        </p>
       )}
       <PeopleCaveat summary={summary} t={t} />
       {summary.sandbox_measured === false && (

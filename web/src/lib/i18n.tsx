@@ -3165,8 +3165,8 @@ export const messages = {
     en: "No headroom yet: no line has a known capacity.",
   },
   "capacity.headline.basis": {
-    "zh-TW": "依據：{days} 個有紀錄的工作天，95% 的日子都放得下（p95）。",
-    en: "Based on {days} recorded workdays, fitting on 95% of days (p95).",
+    "zh-TW": "依據：{days} 個有紀錄的工作天、每 {minutes} 分鐘一格的尖峰，95% 的日子都放得下（p95）。格子越長，短暫的尖峰被平均得越多。",
+    en: "Based on {days} recorded workdays at {minutes}-minute slots, fitting on 95% of days (p95). Longer slots average short peaks away.",
   },
   "capacity.people.incomplete": {
     "zh-TW": "開始記錄才 {days} 天：「最近 30 天用過的人」要記滿 30 天才完整，在那之前人數會偏少，試算也一樣。",

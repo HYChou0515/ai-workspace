@@ -836,7 +836,9 @@ What the build changed from the plan above, each for a reason found while buildi
   what one more person adds a month** (§9.1, E16).
 - **The 90-day period is analysed at a coarser slot** to bound memory: the smallest multiple of `step_s`
   that is at least 15 minutes and divides a day (a slot holding one window and two by turn read a steady
-  load as 1.33 and 0.67). sandbox-host's window is its own setting: a row longer than the slot is spread
+  load as 1.33 and 0.67). A coarser slot averages short peaks away, so the 90-day headroom reads
+  roomier than the 28-day one; the overview's basis line names the slot length.
+  sandbox-host's window is its own setting: a row longer than the slot is spread
   over the slots it covers, and `capacity check` refuses one that fits neither way.
 - **An analysis' memory follows the rows it read**: series keep the (slot, value) pairs the source
   returned, the latency histogram is kept per component, the what-if keeps four profiles' simulators,

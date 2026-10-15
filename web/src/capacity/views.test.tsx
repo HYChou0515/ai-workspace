@@ -133,7 +133,7 @@ describe("the headline (view 1)", () => {
 
     render(<Overview summary={s} t={t} />);
 
-    expect(screen.getByText(/依據：17 個有紀錄的工作天/)).toBeInTheDocument();
+    expect(screen.getByText(/依據：17 個有紀錄的工作天、每 5 分鐘一格的尖峰/)).toBeInTheDocument();
   });
 
   it("marks the line that binds first in the table", () => {

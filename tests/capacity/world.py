@@ -581,13 +581,43 @@ def _in(rows, start_ms: int, end_ms: int):  # noqa: ANN001, ANN202
     return [r for r in rows if start_ms <= r.t_ms < end_ms]
 
 
+def _buckets(rows, step_s: int, world_step_s: int, key, merge):  # noqa: ANN001, ANN202
+    """The world's rows at a coarser step, as a source asked for one returns
+    them: one row per (bucket, key), `merge`d from the rows it holds."""
+    if step_s == world_step_s:
+        return rows
+    step_ms = step_s * 1000
+    groups: dict = {}
+    for row in rows:
+        groups.setdefault((row.t_ms - row.t_ms % step_ms, key(row)), []).append(row)
+    return [merge(bucket, group) for (bucket, _k), group in groups.items()]
+
+
+def _mean(values) -> float | None:  # noqa: ANN001
+    kept = [v for v in values if v is not None]
+    return sum(kept) / len(kept) if kept else None
+
+
 class WorldPods(ResourceMetricsSource):
     def __init__(self, world: World) -> None:
         self.world = world
 
     def usage(self, start_ms: int, end_ms: int, step_s: int) -> list[ResourceSample]:
-        assert step_s == self.world.step_s
-        return _in(self.world.pod_samples(), start_ms, end_ms)
+        rows = _in(self.world.pod_samples(), start_ms, end_ms)
+        return _buckets(
+            rows,
+            step_s,
+            self.world.step_s,
+            lambda r: (r.component, r.pod),
+            lambda t, g: ResourceSample(
+                t,
+                g[0].component,
+                g[0].pod,
+                cpu_cores=_mean(r.cpu_cores for r in g),
+                memory_bytes=_mean(r.memory_bytes for r in g),
+                disk_bytes=max((r.disk_bytes for r in g if r.disk_bytes is not None), default=None),
+            ),
+        )
 
     def capacity(self) -> list[CapacityEntry]:
         return self.world.capacity()
@@ -598,7 +628,20 @@ class WorldGpus(GpuMetricsSource):
         self.world = world
 
     def usage(self, start_ms: int, end_ms: int, step_s: int) -> list[GpuSample]:
-        return _in(self.world.gpu_samples(), start_ms, end_ms)
+        rows = _in(self.world.gpu_samples(), start_ms, end_ms)
+        return _buckets(
+            rows,
+            step_s,
+            self.world.step_s,
+            lambda r: (r.card, r.model),
+            lambda t, g: GpuSample(
+                t,
+                g[0].card,
+                g[0].model,
+                sum(r.util for r in g) / len(g),
+                sum(r.memory_bytes for r in g) / len(g),
+            ),
+        )
 
     def cards(self) -> list[GpuCard]:
         return self.world.cards()
@@ -609,10 +652,39 @@ class WorldLlm(LlmRequestSource):
         self.world = world
 
     def usage(self, start_ms: int, end_ms: int, step_s: int) -> list[LlmUsageRow]:
-        return _in(self.world.llm_rows(), start_ms, end_ms)
+        rows = _in(self.world.llm_rows(), start_ms, end_ms)
+        return _buckets(
+            rows,
+            step_s,
+            self.world.step_s,
+            lambda r: (r.model, r.tags),
+            lambda t, g: LlmUsageRow(
+                t,
+                g[0].model,
+                g[0].tags,
+                sum(r.requests for r in g),
+                sum(r.prompt_tokens for r in g),
+                sum(r.completion_tokens for r in g),
+                sum(r.busy_seconds for r in g),
+            ),
+        )
 
     def latency(self, start_ms: int, end_ms: int, step_s: int) -> list[LlmLatencyRow]:
-        return _in(self.world.latency_rows(), start_ms, end_ms)
+        rows = _in(self.world.latency_rows(), start_ms, end_ms)
+        return _buckets(
+            rows,
+            step_s,
+            self.world.step_s,
+            lambda r: r.model,
+            lambda t, g: LlmLatencyRow(
+                t,
+                g[0].model,
+                sum(r.requests for r in g),
+                _mean(r.ttft_p50_s for r in g),
+                max((r.ttft_p95_s for r in g if r.ttft_p95_s is not None), default=None),
+                _mean(r.tokens_per_s_p50 for r in g),
+            ),
+        )
 
 
 # ── zero-argument sources for a demo config ─────────────────────────────────
