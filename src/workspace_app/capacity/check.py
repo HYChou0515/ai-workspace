@@ -32,7 +32,7 @@ from .sources import COMPONENTS, AggregateQuery, CapacitySources
 #: The keys a platform tag (`ws.<key>:<value>`) may carry (§7).
 TAG_KEYS = ("user", "app", "purpose", "call")
 
-WORK_KINDS = ("req:", "stream:", "turn:", "turn-events:", "job:")
+WORK_KINDS = ("req:", "probe:", "stream:", "turn:", "turn-events:", "job:")
 
 
 @dataclass(frozen=True)

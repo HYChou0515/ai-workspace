@@ -36,7 +36,8 @@
 | `disk` | blob-gc worker 的 disk-ledger 那一輪 | 每輪對帳（`resources.disk_reconcile_interval_sec`，預設 6 小時） | `scope`（`workspace` / `kb`）`item` 或 `collection` `user` `app` `bytes` |
 | `meta` | API、worker | 有紀錄因佇列滿被丟掉的時段 | `dropped` `window_s` |
 
-`work` 的種類：`req:<METHOD> <route template>`（請求；`seconds` 是牆上時間）、`stream:<route template>`
+`work` 的種類：`req:<METHOD> <route template>`（請求；`seconds` 是牆上時間）、`probe:<METHOD> <route template>`
+（Kubernetes 的探針，記成 `system`；不算請求——見下段）、`stream:<route template>`
 （SSE 長連線；`seconds` 是這個時段裡連著的秒數——開著的分頁沒有動作也會每個時段記一筆）、`turn:<surface>`
 （回合在跑的秒數）、`turn-events:<surface>`（發出的事件數）、`job:<jobtype>`（job 在跑的秒數）。延遲桶
 `h0`…`h9` 的上限是 50、100、250、500、1000、2500、5000、10000、30000 ms，以及更慢。
@@ -45,6 +46,9 @@
 自動 CRUD），回應之後平台再問一次 `get_user_id`；問不出來，或是靜態檔、沒有任何路由接的網址，就記成
 `unknown`。沒有人觸發的工作記成 `system`，不問 `get_user_id`：沒有發起人的 job，以及 Kubernetes 的探針
 （`User-Agent: kube-probe/…`，每個 pod 每幾秒一次）。這兩種在畫面上是獨立的一列，占比都寫在「可信度」。
+探針另外記成 `probe:` 而不是請求：每個 pod 每個時段的次數都一樣，當成一種請求的話，它跟 pod 的閒置成本一起
+動、分不開，回歸會把整個閒置成本算到「系統工作」頭上；它很快的回應也會把請求的延遲 p95 拉低。它的 CPU 算在
+基本開銷裡。
 
 **App** 是對到的路由的 `slug`，只在兩個條件都成立時才記：路由在 App 裡面（`/api/a/{slug}/…`；首頁載入每個
 App 的圖示 `/api/apps/{slug}/icon` 不算用了那個 App），而且回應沒有拒絕這個 slug（不是 4xx）——網址上的

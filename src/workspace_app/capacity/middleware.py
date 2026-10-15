@@ -22,8 +22,9 @@ and this app streams SSE. For each HTTP request it records one `work` count:
   asked (auto-CRUD routes, probes) gets one call of the deploy's reader after
   its response; an exception there is `unknown`. A request no route answered
   (a static file, a URL nothing serves) is `unknown` without asking. A
-  Kubernetes probe (`User-Agent: kube-probe/…`) is `system`: it hits every pod
-  every few seconds, and nobody asked for it.
+  Kubernetes probe (`User-Agent: kube-probe/…`) is `system` work of its own
+  kind, `probe:<METHOD> <template>`: it hits every pod every few seconds, and
+  nobody asked for it.
 """
 
 from __future__ import annotations
@@ -138,6 +139,12 @@ class UsageMiddleware:
             try:
                 if stream is not None:
                     stream.end()
+                elif _is_probe(scope):
+                    # The same count every window on every pod: as a request
+                    # column it moves exactly with each pod's idle cost, which
+                    # is where its CPU belongs; nor is it a request's latency.
+                    elapsed = time.monotonic() - started
+                    self._recorder.add(SYSTEM, "", "probe:" + _work(scope), seconds=elapsed)
                 else:
                     elapsed = time.monotonic() - started
                     self._recorder.add(

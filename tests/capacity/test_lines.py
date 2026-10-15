@@ -414,3 +414,17 @@ def test_the_kept_request_templates_are_worked_out_once(monkeypatch: pytest.Monk
 
     assert sum(1 for line in built if line.method == "regression") > 1
     assert len(calls) == 1
+
+
+def test_probes_leave_the_apis_idle_cost_where_it_is():
+    """Every API pod answers the same probes every window: a column of them
+    moved exactly with the pod's idle cost, and the regression could hand all
+    of it to `system`. A probe is not a column; the idle cost stays fixed."""
+    w = World(days=10, users=20, probes=30)
+    sources = CapacitySources(WorldRecords(w), WorldPods(w), WorldGpus(w), WorldLlm(w))
+    obs = observe(sources, Period(w.start_ms, w.end_ms, w.step_s, ZoneInfo(w.tz)))
+
+    api = {line.id: line for line in build_lines(obs)}["api.cpu"]
+
+    assert np.median(api.fixed) == pytest.approx(w.api_idle_cores * len(w.api_pods), rel=0.15)
+    assert not api.of(api.users.index("system")).any()

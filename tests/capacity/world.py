@@ -89,6 +89,11 @@ class World:
     #: Every this many days a rollout renames the API pods (0: never) — a
     #: month of daily rollouts is dozens of pod names, each alive a day.
     rollout_days: int = 0
+    #: Kubernetes probes each API pod answers per window (0: none), as the
+    #: request counter records them: `system` work of kind `probe:`.
+    probes: int = 0
+    #: How the recorder labels a probe (the kind before the method).
+    probe_kind: str = "probe"
 
     @cached_property
     def zone(self) -> ZoneInfo:
@@ -394,6 +399,24 @@ class World:
                             fields=fields,
                         )
                     )
+        for s in range(self.slots if self.probes else 0):
+            for p in range(len(self.api_pods)):
+                docs.append(
+                    document(
+                        "work",
+                        self._at(s),
+                        pod=self.pod(p, s),
+                        component="api",
+                        fields={
+                            "user": "system",
+                            "app": "",
+                            "work": f"{self.probe_kind}:GET /api/readyz",
+                            "count": self.probes,
+                            "seconds": 0.002 * self.probes,
+                            "window_s": self.step_s,
+                        },
+                    )
+                )
         for s in range(self.slots):
             live = float((self.sandbox_cores[:, s] > 0).sum()) * self.step_s
             docs.append(
@@ -706,7 +729,8 @@ def demo_world() -> World:
     data, recorded long enough (70 days) for the runway: 70 people, 20 of whom
     joined along the way; a sandbox host with room to grow into, and a shared
     GPU that other systems' weekend batch pushes past its knee — so the GPU's
-    capacity is measured while the workdays still fit."""
+    capacity is measured while the workdays still fit — and the readiness
+    probe every API pod answers (every 10 s: 30 a window)."""
     global _DEMO
     if _DEMO is None:
         today = dt.datetime.now(ZoneInfo("Asia/Taipei")).date()
@@ -720,6 +744,7 @@ def demo_world() -> World:
             gpu_cards=6,
             other_busy_mean=0.3,
             other_weekend_batch=2.2,
+            probes=30,
         )
     return _DEMO
 

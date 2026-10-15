@@ -881,7 +881,11 @@ What the build changed from the plan above, each for a reason found while buildi
   and only when the response did not refuse the slug (4xx)**: read off the raw path, any URL minted an
   App, and the launcher's `/api/apps/{slug}/icon` made everyone who opened the home page a user of every
   App with an icon file. Work that failed (5xx, a crash) is still the App's. A request no route answered
-  is `unknown` without a call to `get_user_id`; a Kubernetes probe (`kube-probe/…`) is `system`.
+  is `unknown` without a call to `get_user_id`. A Kubernetes probe (`kube-probe/…`) is `system` work of
+  its own kind, `probe:<METHOD> <template>`, not a request: the same count every window on every pod
+  moves exactly with each pod's idle cost, and as a request column the regression handed that whole
+  idle cost to `system` (on a synthetic world the API's fixed part fell from 0.2 cores to 0.0001); its
+  fast answers also pulled the requests' p95 down. Its CPU stays in the fixed part.
 - **The two shares view 9 states**: the unidentified share is of the API requests someone made (no
   static files, no probes); the system share is of the running time of jobs and turns, the only work
   that can have nobody behind it besides probes — a share of requests was always 0.

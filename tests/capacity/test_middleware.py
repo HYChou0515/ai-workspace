@@ -225,3 +225,20 @@ def test_a_kubernetes_probe_is_system_work_and_asks_nobody_who():
     rows = [d["usage"] for d in sink.docs if d["usage"]["kind"] == "work"]
     assert [r["user"] for r in rows] == ["system"]
     assert reader.calls == 0
+
+
+def test_a_probe_is_counted_as_a_probe_not_a_request():
+    """A probe comes the same number of times every window on every pod: as a
+    request column it moved exactly with each pod's idle cost, and the
+    regression could hand the whole idle CPU to "system" — and its fast
+    answers pulled the requests' p95 down."""
+    sink = _ListSink()
+    recorder = UsageRecorder(sink, component="api", pod="p", window_s=300, queue_max=1000)
+    app, _ = _app(recorder, _Reader("dave"))
+    with TestClient(app, raise_server_exceptions=False) as client:
+        client.get("/api/public", headers={"user-agent": "kube-probe/1.29"})
+    recorder.close()
+
+    (row,) = [d["usage"] for d in sink.docs if d["usage"]["kind"] == "work"]
+    assert row["work"] == "probe:GET /api/public"
+    assert not [k for k in row if k.startswith("h")], "a probe has no place in the latency"
