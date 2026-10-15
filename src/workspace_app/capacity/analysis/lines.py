@@ -30,7 +30,7 @@ from .observe import Observations, WorkSeries
 
 #: Kept as a column of its own when a route template has at least this many
 #: requests in the period and appears in at least `MIN_PRESENCE` of its slots;
-#: the rest merge into one column per kind of method.
+#: the rest merge into one column per method (§9.3).
 MIN_REQUESTS = 200
 MIN_PRESENCE = 0.05
 #: §9.9: a regression's error predicting the last 7 days from the ones before,
@@ -164,8 +164,7 @@ def cpu_column(work: str, kept: set[str]) -> tuple[str, str, str] | None:
         if work in kept:
             return work, "count", "requests"
         method = work[4:].split(" ", 1)[0]
-        other = "req:(other GET)" if method in ("GET", "HEAD") else "req:(other write)"
-        return other, "count", "requests"
+        return f"req:(other {method})", "count", "requests"
     if work.startswith("stream:"):
         return "stream", "seconds", "streams"
     if work.startswith("turn-events:"):

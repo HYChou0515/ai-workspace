@@ -172,3 +172,21 @@ def test_a_rollout_in_the_held_out_days_does_not_ruin_the_holdout():
 
     assert same is not None and rolled is not None
     assert rolled < 2 * same + 0.01
+
+
+def test_routes_too_rare_for_their_own_column_merge_by_method():
+    """§9.3: a POST and a DELETE cost differently; one "write" column made
+    them one cost."""
+    from workspace_app.capacity.analysis.lines import cpu_column
+
+    columns = {
+        cpu_column(w, set())[0]
+        for w in ("req:GET /a", "req:POST /b", "req:DELETE /c", "req:PUT /d", "req:POST /e")
+    }
+
+    assert columns == {
+        "req:(other GET)",
+        "req:(other POST)",
+        "req:(other DELETE)",
+        "req:(other PUT)",
+    }
