@@ -6,6 +6,8 @@ threshold for the line whose load it is:
 - a: p95 of general requests (streams excluded), from the latency buckets,
   against API CPU ÷ capacity — sets api.cpu;
 - b: p95 of first output − acceptance, against API CPU ÷ capacity — api.cpu;
+  and, per model, its turns' wait against that model's requests in flight —
+  that model's capacity, beside its first-token pair;
 - c: seconds per generated token (1 ÷ tokens/s), against a model's requests in
   flight — shown, sets nothing;
 - d: share of sandbox time spent waiting for a CPU the machine did not have —
@@ -142,6 +144,27 @@ def build_pairs(obs: Observations, lines: Mapping[str, Line]) -> list[Pair]:
     for line_id, line in lines.items():
         if line.component != "gpu" or line.unit != "inflight":
             continue
+        waits = []
+        for turn in obs.turns:
+            out, accepted = turn.get("first_output_ms"), turn.get("accepted_ms")
+            if out is None or accepted is None or turn.get("model") != line.model:
+                continue
+            slot = p.index(int(accepted))
+            if slot is not None:
+                waits.append((slot, (int(out) - int(accepted)) / 1000))
+        if waits:
+            pairs.append(
+                Pair(
+                    "b",
+                    "gpu.inflight",
+                    "first_output_p95_s",
+                    line.total,
+                    _p95_by_slot(p.n, waits),
+                    None,
+                    line_id,
+                    line.model,
+                )
+            )
         latency = obs.latency.get(line.model)
         if latency is None:
             continue

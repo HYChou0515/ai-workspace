@@ -318,3 +318,32 @@ def test_postgres_disk_growth_is_given_per_active_person_per_month():
     (pg,) = [d for d in s["runway"]["disk"] if d["line"] == "postgres.disk"]
     # the world grows Postgres 1e5 bytes a slot: 288 slots a day
     assert pg["per_person_month"] == pytest.approx(288e5 * 30 / s["people"]["n_now"], rel=0.01)
+
+
+def test_first_output_is_also_paired_with_each_models_load():
+    """§9.8 (b): the wait for the first output against API CPU, and against
+    each model's requests in flight — where people feel a busy GPU first."""
+    w = _world()
+
+    pairs = [p for p in _summary()["thresholds"] if p["id"] == "b" and p["model"] == w.gpu_model]
+
+    (b,) = pairs
+    assert b["sets"] == f"gpu.{w.gpu_model}"
+    assert b["knee"] is not None
+    assert b["knee"]["at"] == pytest.approx(w.gpu_knee_per_card * w.gpu_cards, rel=0.15)
+
+
+def test_a_models_first_output_pair_takes_only_that_models_turns():
+    w = _world()
+
+    class OtherModel(WorldRecords):
+        def records(self, kind, start_ms, end_ms):  # noqa: ANN001, ANN201
+            rows = super().records(kind, start_ms, end_ms)
+            return [{**r, "model": "elsewhere"} for r in rows] if kind == "turn" else rows
+
+    sources = CapacitySources(OtherModel(w), WorldPods(w), WorldGpus(w), WorldLlm(w))
+    s = analyse(
+        observe(sources, Period(w.start_ms, w.end_ms, w.step_s, ZoneInfo(w.tz))), now_ms=w.end_ms
+    ).summary()
+
+    assert not [p for p in s["thresholds"] if p["id"] == "b" and p["model"] == w.gpu_model]
