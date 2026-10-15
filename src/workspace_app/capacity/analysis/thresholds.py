@@ -107,6 +107,15 @@ def _p95_by_slot(n: int, events: list[tuple[int, float]]) -> np.ndarray:
     return out
 
 
+def same_model(asked: str, logged: str) -> bool:
+    """Whether a turn's model (as the platform asked for it, `openai/qwen3`)
+    is the model LiteLLM logged (`qwen3`, the name the request reached it
+    by): the same name, or one is the other behind a `provider/` prefix."""
+    if not asked or not logged:
+        return False
+    return asked == logged or asked.endswith("/" + logged) or logged.endswith("/" + asked)
+
+
 def _util(line: Line | None) -> np.ndarray | None:
     if line is None or not line.capacity:
         return None
@@ -147,7 +156,9 @@ def build_pairs(obs: Observations, lines: Mapping[str, Line]) -> list[Pair]:
         waits = []
         for turn in obs.turns:
             out, accepted = turn.get("first_output_ms"), turn.get("accepted_ms")
-            if out is None or accepted is None or turn.get("model") != line.model:
+            if out is None or accepted is None:
+                continue
+            if not same_model(str(turn.get("model") or ""), line.model):
                 continue
             slot = p.index(int(accepted))
             if slot is not None:

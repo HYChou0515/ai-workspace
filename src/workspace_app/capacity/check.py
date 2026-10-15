@@ -25,6 +25,7 @@ import numpy as np
 from .analysis.model import find_gaps, gap_runs
 from .analysis.observe import parse_tags
 from .analysis.period import Period
+from .analysis.thresholds import same_model
 from .service import long_step
 from .sources import COMPONENTS, AggregateQuery, CapacitySources
 
@@ -201,9 +202,19 @@ def check_sources(
             if any(v is not None and v < 0 for v in (s.cpu_cores, s.memory_bytes, s.disk_bytes)):
                 say("resource_metrics", "error", f"negative value from {s.pod}")
                 break
-        for component in sorted(seen - set(capacity)):
+        # `worker:<job>` is capacity for the workers too, one job type's
+        covered = {name.partition(":")[0] for name in capacity}
+        for component in sorted(seen - covered):
             say("resource_metrics", "warning", f"no capacity for {component}: its limit is unknown")
         for c in capacity.values():
+            base, colon, job = c.component.partition(":")
+            if base not in COMPONENTS or (colon and (base != "worker" or not job)):
+                say(
+                    "resource_metrics",
+                    "error",
+                    f"capacity entry {c.component!r} names no component: one of {COMPONENTS}, "
+                    "or worker:<job type>",
+                )
             if c.machines < 1:
                 say("resource_metrics", "error", f"{c.component}: machines must be at least 1")
 
@@ -265,6 +276,24 @@ def check_sources(
         say("llm_requests", "info", f"{len(latency)} latency rows")
         unaligned("llm_requests", [r.t_ms for r in latency])
 
+    def models() -> None:
+        """A turn's model as the platform asked for it against the names
+        LiteLLM logs: view 8's per-model first-output pair (b) needs them to
+        meet (`same_model`)."""
+        turns, logs = sources.usage_records, sources.llm_requests
+        assert turns is not None and logs is not None
+        asked = {str(t.get("model") or "") for t in turns.records("turn", start, end)} - {""}
+        logged = {r.model for r in logs.usage(start, end, step_s)}
+        lost = sorted(m for m in asked if not any(same_model(m, name) for name in logged))
+        if lost:
+            say(
+                "llm_requests",
+                "warning",
+                f"turns name models LiteLLM never logged: {lost[:5]} — view 8's per-model "
+                "first-output pair needs LiteLLM to log the name the platform asks for "
+                "(its model_group)",
+            )
+
     for name, run in (
         ("usage_records", records),
         ("resource_metrics", metrics),
@@ -275,6 +304,8 @@ def check_sources(
             say(name, "info", "not connected")
         else:
             _check(name, out, run)
+    if sources.usage_records is not None and sources.llm_requests is not None:
+        _check("llm_requests", out, models)
     return out
 
 

@@ -338,6 +338,27 @@ def test_first_output_is_also_paired_with_each_models_load():
     assert b["knee"]["at"] == pytest.approx(w.gpu_knee_per_card * w.gpu_cards, rel=0.15)
 
 
+def test_a_turn_names_its_model_with_the_provider_litellm_drops():
+    """The platform asks for `openai/qwen3`; LiteLLM's logs name `qwen3`,
+    the name the request reached it by. Compared as written, no turn was
+    ever any model's, and the pair never appeared."""
+    w = _world()
+
+    class Prefixed(WorldRecords):
+        def records(self, kind, start_ms, end_ms):  # noqa: ANN001, ANN201
+            rows = super().records(kind, start_ms, end_ms)
+            if kind != "turn":
+                return rows
+            return [{**r, "model": f"openai/{r['model']}"} for r in rows]
+
+    sources = CapacitySources(Prefixed(w), WorldPods(w), WorldGpus(w), WorldLlm(w))
+    s = analyse(
+        observe(sources, Period(w.start_ms, w.end_ms, w.step_s, ZoneInfo(w.tz))), now_ms=w.end_ms
+    ).summary()
+
+    assert [p for p in s["thresholds"] if p["id"] == "b" and p["model"] == w.gpu_model]
+
+
 def test_a_models_first_output_pair_takes_only_that_models_turns():
     w = _world()
 

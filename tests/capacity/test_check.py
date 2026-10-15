@@ -230,3 +230,46 @@ def test_the_gap_count_is_every_gap_not_the_ones_listed():
     findings = _findings(CapacitySources(resource_metrics=Holed(w)), w)
 
     assert "7 gap(s)" in _said(findings, "resource_metrics", "warning")
+
+
+def test_turn_models_litellm_never_logged_are_named():
+    """The per-model first-output pair (b) matches a turn's model to the
+    names LiteLLM logs; a deployment whose names never meet has no such pair
+    and nothing said why."""
+    w = _world()
+
+    class Renamed(WorldRecords):
+        def records(self, kind, start_ms, end_ms):  # noqa: ANN001, ANN201
+            rows = super().records(kind, start_ms, end_ms)
+            return [{**r, "model": "gpt-local"} for r in rows] if kind == "turn" else rows
+
+    findings = _findings(CapacitySources(Renamed(w), llm_requests=WorldLlm(w)), w)
+
+    assert "gpt-local" in _said(findings, "llm_requests", "warning")
+
+
+def test_capacity_named_per_job_type_is_capacity_for_the_workers():
+    """② may name the workers' capacity per job type (`worker:index`); the
+    check called that "no capacity for worker"."""
+    w = _world()
+
+    class PerJob(WorldPods):
+        def capacity(self):  # noqa: ANN202
+            whole = [c for c in super().capacity() if c.component != "worker"]
+            return [*whole, CapacityEntry("worker:index", 4.0, 8e9, None, 1, "pod 4 cores")]
+
+    findings = _findings(CapacitySources(resource_metrics=PerJob(w)), w)
+
+    assert "no capacity for worker" not in _said(findings, "resource_metrics", "warning")
+
+
+def test_a_capacity_entry_for_no_component_is_an_error():
+    w = _world()
+
+    class Typo(WorldPods):
+        def capacity(self):  # noqa: ANN202
+            return [*super().capacity(), CapacityEntry("wroker:index", 4.0, 8e9, None, 1, "pod")]
+
+    findings = _findings(CapacitySources(resource_metrics=Typo(w)), w)
+
+    assert "wroker:index" in _said(findings, "resource_metrics", "error")

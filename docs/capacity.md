@@ -208,7 +208,7 @@ sum by (persistentvolumeclaim) (kubelet_volume_stats_used_bytes{namespace="ws"})
 ### ③ GPU（`GpuMetricsSource`）
 
 - `usage(...)`：每個桶、每張卡一筆 `GpuSample(t_ms, card, model, util, memory_bytes)`，`util` 是 0–1；
-  `model` 是**這張卡服務的模型，用 LiteLLM 的名字**（不是 GPU 型號）。
+  `model` 是**這張卡服務的模型，用 ④ 用的同一個名字**（LiteLLM 的 `model_group`，不是 GPU 型號）。
 - `cards()`：每張卡一筆 `GpuCard(card, node, model, memory_total_bytes)`。
 
 DCGM exporter 的 `DCGM_FI_DEV_GPU_UTIL`（0–100，除以 100）與 `DCGM_FI_DEV_FB_USED`（MiB，乘 1024²）；
@@ -221,6 +221,10 @@ DCGM exporter 的 `DCGM_FI_DEV_GPU_UTIL`（0–100，除以 100）與 `DCGM_FI_D
 - `usage(...)`：每個桶 × 模型 × **請求的整串標籤**一筆 `LlmUsageRow(t_ms, model, tags, requests,
   prompt_tokens, completion_tokens, busy_seconds)`；`busy_seconds` 是這個桶開始的請求的 (end − start) 總和。
   其他系統的請求也要給（它們的標籤沒有 `ws`）——GPU 是共用的。
+- `model` 用 **LiteLLM 的 `model_group`**：請求到 proxy 時用的名字（`model_list` 的 `model_name`），不是背後
+  deployment 的 `litellm_params.model`。對話回合記的是平台請求時寫的名字（例如 `openai/qwen3`），分析把兩邊當
+  同一個模型的條件是：名字一樣，或一邊是另一邊前面多一段 `provider/`（`openai/qwen3` 對 `qwen3`）。對不上的話
+  view 8 就沒有那個模型的「第一個輸出」配對；`capacity check` 會列出回合用了、但 LiteLLM 從沒記過的模型名。
 - `latency(...)`：每個桶 × 模型一筆 `LlmLatencyRow(t_ms, model, requests, ttft_p50_s, ttft_p95_s,
   tokens_per_s_p50)`；首字時間是 start → 第一個 token，生成速度是 completion tokens ÷ (end − 第一個 token)。
 
@@ -229,7 +233,7 @@ DCGM exporter 的 `DCGM_FI_DEV_GPU_UTIL`（0–100，除以 100）與 `DCGM_FI_D
 ```sql
 -- usage
 SELECT to_timestamp(floor(extract(epoch FROM "startTime") / 300) * 300) AS t,
-       model, request_tags,
+       model_group AS model, request_tags,
        count(*) AS requests, sum(prompt_tokens), sum(completion_tokens),
        sum(extract(epoch FROM "endTime" - "startTime")) AS busy_seconds
 FROM "LiteLLM_SpendLogs"
@@ -237,7 +241,7 @@ WHERE "startTime" >= to_timestamp(:start_ms / 1000.0) AND "startTime" < to_times
 GROUP BY 1, 2, 3;
 
 -- latency
-SELECT to_timestamp(floor(extract(epoch FROM "startTime") / 300) * 300) AS t, model, count(*),
+SELECT to_timestamp(floor(extract(epoch FROM "startTime") / 300) * 300) AS t, model_group AS model, count(*),
        percentile_cont(0.5)  WITHIN GROUP (ORDER BY extract(epoch FROM "completionStartTime" - "startTime")),
        percentile_cont(0.95) WITHIN GROUP (ORDER BY extract(epoch FROM "completionStartTime" - "startTime")),
        percentile_cont(0.5)  WITHIN GROUP (ORDER BY completion_tokens
@@ -258,12 +262,14 @@ uv run python -m workspace_app.capacity check --hours 24 [--config config.yaml]
 
 對每個接上的來源呼叫每個方法，回報：
 
-- **error**（exit 1）：任何來源的桶沒對齊（①②③④ 都查）、不認得的 component、負數或不可能的值（一個 pod 用的
-  CPU 比它的 component 總共還多、GPU 使用率不在 0–1）、`machines` 小於 1、沙盒紀錄的窗口放不進時段（或 90 天
-  期間的時段）、方法丟錯；
-- **warning**：每個時段都該有樣本的來源（②③）出現連續 3 個時段（預設 15 分鐘）以上的缺口、沒有 `work` 或沙盒紀錄、沙盒紀錄沒有 CPU
-  壓力（核心沒有 PSI）、有用量卻沒有容量的 component、LiteLLM 的列沒有這個平台的標籤或沒寫是誰、`ws.*`
-  標籤格式不對；
+- **error**（exit 1）：任何來源的桶沒對齊（①②③④ 都查）、不認得的 component（樣本的，或容量項目的——
+  容量項目可以是 component 或 `worker:<job 類型>`）、負數或不可能的值（一個 pod 用的 CPU 比它的 component
+  總共還多、GPU 使用率不在 0–1）、`machines` 小於 1、沙盒紀錄的窗口放不進時段（或 90 天期間的時段）、
+  turn／job 紀錄缺時間欄位、方法丟錯；
+- **warning**：每個時段都該有樣本的來源（②③）出現連續 3 個時段（預設 15 分鐘）以上的缺口（列出共幾個、
+  共幾小時，和最長的 5 個）、沒有 `work` 或沙盒紀錄、沙盒紀錄沒有 CPU 壓力（核心沒有 PSI）、有用量卻沒有
+  容量的 component、不認得的工作種類、③ 的樣本寫了沒有任何一張卡服務的模型、LiteLLM 的列沒有這個平台的
+  標籤或沒寫是誰、`ws.*` 標籤格式不對、對話回合用的模型名 LiteLLM 從沒記過；
 - **info**：各來源讀到幾列、幾個人、幾筆沙盒列、幾筆 turn／job 紀錄、平台占 LiteLLM 忙碌時間的比例。
 
 畫面的「資料來源」也列出每個來源接上沒、讀到幾列、最後的錯誤；讀取失敗的來源，用到它的視圖會寫出錯誤。
