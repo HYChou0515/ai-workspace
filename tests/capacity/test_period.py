@@ -39,3 +39,17 @@ def test_the_period_starts_on_the_slot_grid_in_a_half_hour_zone():
 
     assert p.start_ms % 3_600_000 == 0
     assert len(p.full_days) == 28
+
+
+@pytest.mark.parametrize(("window_s", "step_s"), [(300, 300), (600, 600), (720, 720), (240, 240)])
+def test_the_long_periods_slot_is_a_whole_number_of_windows(window_s: int, step_s: int):
+    """The 90-day period widens its slot to bound memory; a slot holding one
+    and two windows by turn read a steady load as 1.33 and 0.67 by turn."""
+    from workspace_app.capacity.service import CapacityService
+    from workspace_app.capacity.sources import CapacitySources
+    from workspace_app.config.schema import CapacitySettings
+
+    settings = CapacitySettings(window_s=window_s, step_s=step_s)
+    step = CapacityService(CapacitySources(), settings).period(90).step_s
+
+    assert step >= 900 and step % window_s == 0 and 86_400 % step == 0

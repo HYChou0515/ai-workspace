@@ -558,6 +558,11 @@ def _check_capacity(merged: dict[str, Any], *, source: str) -> None:
             f"config {source}: capacity.step_s must be a multiple of capacity.window_s "
             f"({window}), got {step!r}"
         )
+    if 86_400 % step:
+        raise ValueError(
+            f"config {source}: capacity.step_s must divide a day (86400 s) so a day is "
+            f"whole slots, got {step!r}"
+        )
     for key in ("queue_max", "max_rows"):
         if _int(key) < 1:
             raise ValueError(f"config {source}: capacity.{key} must be a positive integer")

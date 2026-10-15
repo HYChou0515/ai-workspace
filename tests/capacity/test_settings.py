@@ -77,6 +77,7 @@ def test_an_unknown_key_refuses_to_boot(tmp_path: Path):
         ("window_s: 7", "capacity.window_s must divide 3600"),
         ("window_s: 0", "capacity.window_s must divide 3600"),
         ("step_s: 450", "capacity.step_s must be a multiple of capacity.window_s"),
+        ("window_s: 60\n  step_s: 420", "capacity.step_s must divide a day"),
         ("timezone: Mars/Olympus", "capacity.timezone"),
         ("queue_max: 0", "capacity.queue_max must be a positive integer"),
         ("max_rows: -1", "capacity.max_rows must be a positive integer"),

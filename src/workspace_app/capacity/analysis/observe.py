@@ -20,7 +20,7 @@ from urllib.parse import unquote
 import numpy as np
 
 from ..records import BUCKETS
-from ..sources import AggregateQuery, CapacityEntry, CapacitySources
+from ..sources import AggregateQuery, AggregateRow, CapacityEntry, CapacitySources
 from .period import Period
 
 logger = logging.getLogger(__name__)
@@ -183,7 +183,7 @@ class Observations:
     sandbox_user: dict[tuple[str, str], Measures] = field(default_factory=dict)
     sandbox_pod: dict[tuple[str, str], Measures] = field(default_factory=dict)
     sandbox_items: dict[tuple[str, str], float] = field(default_factory=dict)
-    host: dict[str, dict[str, np.ndarray]] = field(default_factory=dict)
+    host: dict[str, Measures] = field(default_factory=dict)
     #: (day index, scope, id, user, app) → bytes, the day's latest snapshot.
     disk: dict[tuple[int, str, str, str, str], float] = field(default_factory=dict)
     #: person → the epoch-ms day starts (UTC days) they did anything, from 30
@@ -249,6 +249,25 @@ def _zeros(p: Period) -> np.ndarray:
 
 def _finite(v: float) -> float:
     return v if math.isfinite(v) else 0.0
+
+
+def _spread(p: Period, row: AggregateRow, into: Measures) -> None:
+    """A sandbox row covers its own `window_s` — sandbox-host's window is its
+    own setting. One longer than the slot, and a whole number of slots, is
+    spread evenly over the slots it covers: put all in its first, a steady
+    load reads double and zero by turn. (One that is neither a divisor nor a
+    multiple of the slot cannot be placed exactly; `capacity check` says so.)"""
+    i = p.index(row.t_ms or 0)
+    if i is None:
+        return
+    try:
+        window = int(float(row.keys.get("window_s") or 0))
+    except ValueError:
+        window = 0
+    span = window // p.step_s if window > p.step_s and window % p.step_s == 0 else 1
+    share = {k: v / span for k, v in row.values.items()} if span > 1 else row.values
+    for j in range(i, min(i + span, p.n)):
+        into.add(j, share)
 
 
 def _nans(p: Period) -> np.ndarray:
@@ -364,35 +383,27 @@ def _records(sources: CapacitySources, obs: Observations, budget: _Budget) -> in
             series = obs.work_user[key] = WorkSeries(p.n)
         series.add(i, r.values.get("count", 0.0), r.values.get("seconds", 0.0))
     measured = ("cpu_s", "mem_bs", "thr_s", "cpu_psi_s", "oom")
-    for r in ask("sandbox", ("user", "app"), measured):
-        i = p.index(r.t_ms or 0)
-        if i is None:
-            continue
+    for r in ask("sandbox", ("user", "app", "window_s"), measured):
         key = (r.keys["user"] or "unknown", r.keys["app"])
         acc = obs.sandbox_user.get(key)
         if acc is None:
             acc = obs.sandbox_user[key] = Measures(p.n, measured)
-        acc.add(i, r.values)
+        _spread(p, r, acc)
     for r in ask("sandbox", (), maxes=("cpu_psi_s",), step_s=None):
         obs.psi_seen = obs.psi_seen or "cpu_psi_s" in r.values
-    for r in ask("sandbox", ("pod", "component"), ("cpu_s", "mem_bs")):
-        i = p.index(r.t_ms or 0)
-        if i is None:
-            continue
+    for r in ask("sandbox", ("pod", "component", "window_s"), ("cpu_s", "mem_bs")):
         key = (r.keys["pod"], r.keys["component"])
         acc = obs.sandbox_pod.get(key)
         if acc is None:
             acc = obs.sandbox_pod[key] = Measures(p.n, ("cpu_s", "mem_bs"))
-        acc.add(i, r.values)
+        _spread(p, r, acc)
     for r in ask("sandbox", ("user", "item"), ("cpu_s",), step_s=None):
         obs.sandbox_items[(r.keys["user"], r.keys["item"])] = r.values.get("cpu_s", 0.0)
-    for r in ask("sandbox_host", ("pod",), ("live_s", "cpu_psi_s")):
-        i = p.index(r.t_ms or 0)
-        if i is None:
-            continue
-        acc = obs.host.setdefault(r.keys["pod"], {"live_s": _zeros(p), "cpu_psi_s": _zeros(p)})
-        acc["live_s"][i] += r.values.get("live_s", 0.0)
-        acc["cpu_psi_s"][i] += r.values.get("cpu_psi_s", 0.0)
+    for r in ask("sandbox_host", ("pod", "window_s"), ("live_s", "cpu_psi_s")):
+        host = obs.host.get(r.keys["pod"])
+        if host is None:
+            host = obs.host[r.keys["pod"]] = Measures(p.n, ("live_s", "cpu_psi_s"))
+        _spread(p, r, host)
     disk_keys = ("scope", "item", "collection", "user", "app")
     for r in ask("disk", disk_keys, maxes=("bytes",), step_s=p.step_s):
         i = p.index(r.t_ms or 0)

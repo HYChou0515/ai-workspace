@@ -170,7 +170,8 @@ class _ManyKeys(UsageRecordSource):
             }
             values = {"count": 1.0, "seconds": 0.1, "h0": 1.0, "cpu_s": 1.0, "mem_bs": 1.0}
             if q.kind in ("work", "sandbox") and q.step_s:
-                out.append(AggregateRow(self.t, {g: keys[g] for g in q.group_by}, values))
+                # a field a row lacks groups as "" (the contract)
+                out.append(AggregateRow(self.t, {g: keys.get(g, "") for g in q.group_by}, values))
         return out
 
     def records(self, kind, start_ms, end_ms):  # noqa: ANN001, ANN201
@@ -207,3 +208,42 @@ def test_memory_follows_the_rows_read_not_keys_times_slots():
 
     assert len(obs.work_pod) == len(obs.work_user) == len(obs.sandbox_user) == 300
     assert held < 30e6, f"{held / 1e6:.0f} MB for {obs.status['usage_records'].rows} rows"
+
+
+class _CoarseHost(UsageRecordSource):
+    """A sandbox-host writing 600-s windows (SANDBOX_HOST_USAGE_WINDOW_S=600)
+    for one sandbox using exactly one core all day, read at 300-s slots."""
+
+    def __init__(self, t0: int, windows: int) -> None:
+        from workspace_app.capacity.usage_wire import document
+
+        self.docs = [
+            document(
+                "sandbox",
+                t0 + k * 600_000,
+                pod="sbh",
+                component="sandbox-host",
+                fields={"user": "u", "app": "a", "item": "i", "cpu_s": 600.0, "window_s": 600},
+            )
+            for k in range(windows)
+        ]
+
+    def aggregate(self, q):  # noqa: ANN001, ANN201
+        from workspace_app.capacity.sources import aggregate_documents
+
+        return aggregate_documents(self.docs, q)
+
+    def records(self, kind, start_ms, end_ms):  # noqa: ANN001, ANN201
+        return ()
+
+
+def test_a_row_longer_than_a_slot_is_spread_over_the_slots_it_covers():
+    """One core all day is 300 core-seconds in every 300-s slot — not 600 in
+    every other one, which doubles every peak."""
+    w = _world()
+    period = Period(w.start_ms, w.start_ms + 86_400_000, 300, ZoneInfo(w.tz))
+
+    obs = observe(CapacitySources(_CoarseHost(w.start_ms, 144)), period)
+
+    cpu = obs.sandbox_user[("u", "a")]["cpu_s"]
+    assert np.allclose(cpu, 300.0)
