@@ -161,7 +161,7 @@ AI 起草問題,卡片上完整顯示、使用者可以改,按「問外部AI」�
    python3 scripts/pack_ai_workspace_helper.py --version <新版> --ext-ai-site ext_ai_site.py
    ```
 
-   打包前會用小幫手自己的載入方式檢查一次,缺 `URL` 或 `ask` 就拒絕;也用小幫手自己的 Python 3.9 檢查(和小幫手的程式碼同一套)跑一次,有 3.9 跑不了的寫法(例如沒有 `from __future__ import annotations` 卻寫了 `str | None`)也拒絕。
+   打包前會用小幫手自己的載入方式檢查一次,缺 `URL` 或 `ask` 就拒絕;也用小幫手自己的 Python 3.9 檢查(和小幫手的程式碼同一套)跑一次,有常見的 3.9 跑不了的寫法(例如沒有 `from __future__ import annotations` 卻寫了 `str | None`)也拒絕。
 4. 設 `server.ext_ai_enabled: true`([設定](configuration.md)),重新部署;大家重裝新版小幫手。
 
 使用者的小幫手沒有這個檔(舊版、或沒連線)時,卡片走手動:「複製問題」,自己去問,把回答貼回卡片。

@@ -29,7 +29,8 @@ They tell the card the helper is still at it while they wait — waited
 without them for 120 s, the card falls back to asking by hand, though the
 helper is still asking — and they stop at the helper's
 limit, saying what they waited for. A bare `page.wait_for_timeout(…)` or a
-long `wait_for_selector` does neither; a few seconds of one is fine.
+long `wait_for_selector` does neither; a short one — like the ten seconds
+`ask` below gives a page to draw itself — is fine.
 
 Return the answer element's HTML (`locator.evaluate("e => e.outerHTML")`), or
 its text. The helper turns an element's HTML into Markdown the way a paste into

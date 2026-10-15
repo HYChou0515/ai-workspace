@@ -52,13 +52,18 @@ PACKED = "ai_workspace_helper.ext_ai_site"
 #: The page's visible text — what "still changing" is judged by.
 _TEXT = "() => document.body ? document.body.innerText : ''"
 
-#: An answer is HTML when it IS an element — it opens with a tag and closes
-#: with one (an element's outerHTML). Anything else is text as it is: text
-#: can hold `#include <stdio.h>` or `List<String>`, which the converter would
-#: take for tags (review round 1).
-#: A framework may write a comment first (`<!--[-->`) and a void tag last
-#: (`<br>`) — still an element's HTML (review round 2).
-_HTML = re.compile(r"\A\s*(?:<!--.*?-->\s*)*<[A-Za-z][^>]*>.*>\s*\Z", re.S)
+#: An answer is HTML when it IS an element — it opens with a tag and ends with
+#: a closing tag, a void one (`<br>`) or a comment, as an element's outerHTML
+#: does, a framework comment (`<!--[-->`) allowed first. Anything else is text
+#: as it is: text can hold `#include <stdio.h>` or `List<String>`, which the
+#: converter would take for tags (review rounds 1–3). A comment is matched one
+#: way only, so a run of them is read in one pass, not tried every way.
+_COMMENT = r"<!--(?:[^-]|-(?!->))*-->"
+_HTML = re.compile(
+    r"\A\s*(?:" + _COMMENT + r"\s*)*<[A-Za-z][^>]*>.*"
+    r"(?:</[A-Za-z][\w-]*>|<(?:br|hr|img|wbr|input)\b[^>]*>|" + _COMMENT + r")\s*\Z",
+    re.S | re.I,
+)
 
 #: What stands in for the company's address in a failure the card shows.
 MASK = "(外部AI 的網址)"
@@ -72,12 +77,23 @@ def _masked(text: str, url: str) -> str:
     host = urlsplit(url).hostname or url.strip()
     if not host:
         return text
-    # whatever case the company wrote it in; a host, not the letters of one —
-    # a one-word intranet host (`http://ai/`) only where an address has it
-    # (after `//` or `@`), or "waiting" and "failed" would go too (round 2)
-    found = re.escape(host) + r"(?![\w-])"
-    found = (r"(?<![\w.-])" if "." in host else r"(?:(?<=//)|(?<=@))") + found
+    # whatever case the company wrote it in. A dotted host goes wherever it
+    # stands — inside another address, percent-encoded (`%2F%2Fai.corp…`) too:
+    # masking a little more costs nothing (round 3). A one-word intranet host
+    # (`http://ai/`) only where an address has it — after `//`, `@` or an
+    # encoded `/` — or "waiting" and "failed" would go too (round 2).
+    found = re.escape(host)
+    if "." not in host:
+        found = r"(?:(?<=//)|(?<=@)|(?<=%2f))" + found + r"(?![\w-])"
     return re.sub(r"\S*" + found + r"\S*", MASK, text, flags=re.I)
+
+
+class _ServerLine(Exception):
+    """The server could not be told — raised by `h` only, around the original."""
+
+    def __init__(self, original: BaseException) -> None:
+        super().__init__(str(original))
+        self.original = original
 
 
 class Helpers:
@@ -89,13 +105,21 @@ class Helpers:
         self._deadline = ctx.clock() + timeout_s
         self._renew_at = ctx.clock() + RENEW_S
 
+    def _tell(self, note: str) -> None:
+        """Tell the card (and renew the claim); a failure on that line is
+        marked as the server's, whatever the site file does with it."""
+        try:
+            self._ctx.note(note)
+        except (NeedsLogin, UpdateRequired, OSError, BackendError) as exc:
+            raise _ServerLine(exc) from exc
+
     def _tick(self, what: str) -> None:
         """One second of waiting: fail at the limit, renew the claim when due."""
         now = self._ctx.clock()
         if now >= self._deadline:
             raise ErrandFailed(f"等了 {int(self._timeout_s)} 秒還沒等到:{what}")
         if now >= self._renew_at:
-            self._ctx.note("")
+            self._tell("")
             self._renew_at = now + RENEW_S
         self._ctx.sleep(1.0)
 
@@ -127,7 +151,7 @@ class Helpers:
         if ready():
             return
         self._ctx.page.bring_to_front()
-        self._ctx.note(LOGIN)
+        self._tell(LOGIN)
         start = self._ctx.clock()
         renew_at = start + RENEW_S
         while not ready():
@@ -135,10 +159,10 @@ class Helpers:
             if now >= start + timeout_s:
                 raise ErrandFailed("沒有在小幫手的 Chrome 視窗裡登入外部AI")
             if now >= renew_at:
-                self._ctx.note(LOGIN)
+                self._tell(LOGIN)
                 renew_at = now + RENEW_S
             self._ctx.sleep(1.0)
-        self._ctx.note("")
+        self._tell("")
         # the limit is for asking and answering, not for signing in
         self._deadline += self._ctx.clock() - start
         self._renew_at = self._ctx.clock() + RENEW_S
@@ -151,10 +175,12 @@ def errand(site: Any) -> Errand:
         ctx.where("外部AI")
         try:
             answer = site.ask(ctx.page, question, Helpers(ctx))
-        except (NeedsLogin, UpdateRequired, OSError, BackendError):
-            # the line to the server, while h tells the card: not the site's
-            # failure — the job stays, to be tried again (review round 2)
-            raise
+        except _ServerLine as trouble:
+            # the line to the server failed while h told the card: not the
+            # site's failure — the job stays, to be tried again. Told apart by
+            # where it came from, not its type: the site's own TimeoutError is
+            # an OSError too, and is the site's failure (review round 3)
+            raise trouble.original from None
         except Exception as exc:  # noqa: BLE001 — whatever failed, said without the address
             # the address is masked on the way to the server; the original
             # stays the cause, for this PC's own log and try-ext-ai (round 2)

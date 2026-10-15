@@ -157,6 +157,15 @@ def test_the_masked_failure_keeps_the_original_as_its_cause():
         # a short intranet host is a host, not every word holding its letters
         ("http://ai/new", "waiting failed at http://ai/new", True, "waiting failed"),
         ("http://chat/", "chat page failed: http://chat:8080/x", True, "chat page failed"),
+        # Review round 3: an address inside another, percent-encoded (a sign-in
+        # redirect's `return=`) — masked too
+        (
+            "https://ai.corp.example/chat",
+            "interrupted by https://sso.corp.example/login?return=https%3A%2F%2Fai.corp.example%2Fchat",
+            True,
+            "interrupted by",
+        ),
+        ("http://ai/new", "to /login?return=http%3A%2F%2Fai%2Fnew", True, "to"),
     ],
 )
 def test_the_address_is_masked_as_a_host_whatever_its_case(url, said, masked, kept):
@@ -170,7 +179,7 @@ def test_the_address_is_masked_as_a_host_whatever_its_case(url, said, masked, ke
 
     message = str(got.value)
     # every address is gone — and nothing but the address
-    assert "://" not in message
+    assert "://" not in message and "%3A%2F%2F" not in message
     assert (MASK in message) is masked
     assert kept in message
 
@@ -203,6 +212,26 @@ def test_trouble_reaching_the_server_is_not_failed_as_the_sites():
         errand(_site_with(ask))(ctx, "q")
 
 
+# Review round 3: decided by where it came from, not by its type — a site
+# file's own TimeoutError or URLError is an OSError too, and passed on as one it
+# read as "the server is unreachable": the job was never failed, taken again
+# every 120 s, and the question asked again.
+@pytest.mark.parametrize(
+    "error",
+    [TimeoutError("answer never appeared"), OSError("https://ai.corp.example/x refused")],
+)
+def test_the_sites_own_os_error_is_its_failure(error):
+    from ai_workspace_helper.ext_ai import errand
+
+    def ask(page, question, h):  # noqa: ANN001, ANN202
+        raise error
+
+    with pytest.raises(ErrandFailed) as got:
+        errand(_site_with(ask))(_ctx(_Page(), [], [0.0]), "q")
+
+    assert "ai.corp.example" not in str(got.value)
+
+
 def _site_with(ask):  # noqa: ANN001, ANN202
     return types.SimpleNamespace(URL="https://ai.corp.example/new", ask=ask)
 
@@ -219,6 +248,28 @@ def test_an_elements_html_as_frameworks_write_it_is_converted(html):
     got = errand(_site(html))(_ctx(_Page(), [], [0.0]), "q")
 
     assert got.markdown == f"MD({html})"
+
+
+# Review round 3: text that only begins and ends with something tag-like stays
+# text — and a run of framework comments with no element after them is
+# answered at once, not after the regex tries every way to split them.
+def test_text_merely_ending_in_a_bracket_stays_text():
+    from ai_workspace_helper.ext_ai import errand
+
+    text = "<stdio.h> is included by #include <stdio.h>"
+
+    assert errand(_site(text))(_ctx(_Page(), [], [0.0]), "q").markdown == text
+
+
+def test_many_comments_before_text_are_read_at_once():
+    import time
+
+    from ai_workspace_helper.ext_ai import _HTML
+
+    start = time.monotonic()
+    # 24: seconds on a regex that tries every split, not hours — a red, not a hang
+    assert _HTML.match("<!--[-->" * 24 + "Hello") is None
+    assert time.monotonic() - start < 0.5
 
 
 def test_the_errand_is_there_only_with_a_site_file():
@@ -510,6 +561,19 @@ def test_try_ext_ai_shows_the_original_error_and_where_in_the_file(tmp_path):
     text = "\n".join(out)
     assert code == 1
     assert "NameError" in text and "ext_ai_site.py" in text and "line 3" in text
+
+
+def test_try_ext_ai_says_a_failure_of_its_own_in_one_line(tmp_path):
+    """No original error to show: an answer that is not there is said as it is."""
+    from ai_workspace_helper.ext_ai import try_main
+
+    f = _site_file(tmp_path, "def ask(page, question, h):\n    return ''\n")
+    out: list[str] = []
+
+    code = try_main(["--site", str(f), "q"], make_chrome=_TryChrome, out=out.append)
+
+    assert code == 1
+    assert out[-1] == "沒問到:外部AI 的網站檔沒有交回回答"
 
 
 def test_try_ext_ai_refuses_a_broken_file_before_opening_chrome(tmp_path):
