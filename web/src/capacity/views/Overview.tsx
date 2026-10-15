@@ -50,8 +50,12 @@ export function Overview({ summary, t }: { summary: CapacitySummary; t: T }) {
   const room = summary.headroom;
   const option = useMemo<ChartOption>(() => utilisationChart(t, lines), [t, lines]);
   // a default threshold is "not seen to slow yet" only where something watches it slow
-  // ... and only where that pair can show slowing at all (no PSI: it cannot)
-  const watched = new Set(summary.thresholds.filter((p) => p.note !== "no_psi").map((p) => p.sets));
+  // ... and only where that pair can show slowing at all (no PSI: it cannot), and
+  // has not: before view 8 is ready a knee is not used, but it was seen
+  const kneed = new Set(summary.thresholds.filter((p) => p.knee).map((p) => p.sets));
+  const watched = new Set(
+    summary.thresholds.filter((p) => p.note !== "no_psi" && !kneed.has(p.sets)).map((p) => p.sets),
+  );
   return (
     <section className="capacity-view" data-testid="capacity-overview">
       <p className="capacity-headline" data-testid="capacity-headline">

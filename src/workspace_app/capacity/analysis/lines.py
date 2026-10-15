@@ -486,15 +486,17 @@ def _last_slot(obs: Observations, component: str, measure: str) -> int | None:
 
 
 def _pods_now(obs: Observations, component: str, pods: list[str], measure: str, last: int) -> int:
-    """The most of `pods` that reported in any one of the `GAP_SLOTS` slots up
-    to `last`: one scrape missed in the last slot is no pod gone — counted
-    there alone, its job type lost its whole share to the others."""
+    """The middle of how many of `pods` reported in each of the `GAP_SLOTS`
+    slots up to `last`: one slot off — a scrape missed, or a rollout's old and
+    new pod side by side — moves nothing. Counted in the last slot alone, a
+    missed scrape took a job type's whole share; at the most of the slots, a
+    surge pod took one pod more. A change that lasts two slots counts."""
     counts = np.zeros(GAP_SLOTS, dtype=np.int64)
     first = last - GAP_SLOTS + 1
     for pod in pods:
         at = obs.pods[(component, pod)].slots(measure)
         counts[at[(at >= first) & (at <= last)] - first] += 1
-    return int(counts.max())
+    return int(np.median(counts))
 
 
 def _summed(obs: Observations, component: str, measure: str) -> np.ndarray:

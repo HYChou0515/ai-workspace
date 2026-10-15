@@ -205,6 +205,17 @@ describe("the headline (view 1)", () => {
     expect(screen.getByTestId("capacity-row-api.cpu")).not.toHaveTextContent("以上");
   });
 
+  it("does not call a default 'not seen to slow' where a pair saw it slow, before its view is ready", () => {
+    const s = summary();
+    s.readiness.thresholds = notReady({ reason: "period_too_short", have_days: 5, need_days: 7, period_days: 5 });
+    Object.assign(s.lines.find((l) => l.id === "api.cpu")!, { threshold: 0.7, threshold_source: "default" });
+    s.thresholds.find((p) => p.id === "a")!.knee = { at: 0.35, slope_before: 1, slope_after: 9, gain: 0.5 };
+
+    render(<Overview summary={s} t={t} />);
+
+    expect(screen.getByTestId("capacity-row-api.cpu")).not.toHaveTextContent("尚未觀察到變慢");
+  });
+
   it("does not call a default 'not seen to slow' where the kernel cannot show slowing", () => {
     const s = summary();
     const sandbox = s.lines.find((l) => l.id === "sandbox-host.cpu")!;
@@ -376,6 +387,30 @@ describe("allocation (view 2)", () => {
 
     const detail = await screen.findByTestId("capacity-person");
     await waitFor(() => expect(detail.contains(document.activeElement)).toBe(true));
+  });
+
+  it("takes you to the detail again when you follow the link again", async () => {
+    renderWithQuery(<Allocation summary={summary()} days={28} client={client()} t={t} />);
+    const link = await screen.findByRole("link", { name: "Alice Chen" });
+    fireEvent.click(link);
+    const detail = await screen.findByTestId("capacity-person");
+    await waitFor(() => expect(detail.contains(document.activeElement)).toBe(true));
+
+    link.focus();
+    fireEvent.click(link);
+
+    await waitFor(() => expect(detail.contains(document.activeElement)).toBe(true));
+  });
+
+  it("gives the focus back to the link when the detail closes", async () => {
+    renderWithQuery(<Allocation summary={summary()} days={28} client={client()} t={t} />);
+    const link = await screen.findByRole("link", { name: "Alice Chen" });
+    fireEvent.click(link);
+    const detail = await screen.findByTestId("capacity-person");
+
+    fireEvent.click(within(detail).getByRole("button", { name: "關閉" }));
+
+    await waitFor(() => expect(document.activeElement).toBe(link));
   });
 
   it("closes a person's detail with a button, not a link", async () => {

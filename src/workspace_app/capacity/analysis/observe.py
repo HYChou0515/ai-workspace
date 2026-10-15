@@ -241,6 +241,11 @@ class Events:
             return len(self._columns["at_ms"])
         return len(self._arrays["at_ms"])
 
+    def freeze(self) -> None:
+        """Every record is in: the columns become arrays (`observe` calls it, so
+        no reader — some run in the routes' threads — ever has to)."""
+        self._column("at_ms")
+
     def _column(self, name: str) -> np.ndarray:
         if self._columns is not None:
             dtypes = {"user": np.intc, "item": np.intc, "label": np.intc, "at_ms": np.int64}
@@ -601,6 +606,8 @@ def _records(sources: CapacitySources, obs: Observations, budget: _Budget) -> in
             since_ms=r.get("enqueued_ms"),
             until_ms=started,
         )
+    obs.turns.freeze()
+    obs.jobs.freeze()
     return rows + len(obs.turns) + len(obs.jobs)
 
 

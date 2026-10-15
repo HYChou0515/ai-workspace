@@ -801,9 +801,10 @@ What the build changed from the plan above, each for a reason found while buildi
   several leaves no clean split and the workers stay one line. Capacity comes from a `worker:<job>`
   entry in ② when there is one, else the type's share of the `worker` entry: its pods now, of all the
   pods of the job types sharing that entry, so the shares add up to the entry (pods are not machines:
-  three pods on two machines took 1/2 + 2/2 of it). "Now" is the most of a type's pods in any one of
-  the last three slots up to the last any worker pod reported: counted in that one slot alone, a type
-  whose pod missed one scrape there lost its whole share; a type scaled to zero has none. Such a line's `machines` is its share of the entry's machines, fractional.
+  three pods on two machines took 1/2 + 2/2 of it). "Now" is the median of a type's pods over the last
+  three slots up to the last any worker pod reported: counted in that one slot alone, a type whose pod
+  missed one scrape there lost its whole share, and at the most of the three, a rollout's surge pod was
+  one pod more; a change that lasts two slots counts, and a type scaled to zero has none. Such a line's `machines` is its share of the entry's machines, fractional.
   ② reports capacity per component, and a per-type entry is the operator's to give.
 - **(b) is also paired with each model's requests in flight** (its knee a candidate for the model's
   capacity), and **(e) is one pair per job type**. A turn names its model as the platform asked for it

@@ -160,6 +160,13 @@ export function Allocation({
   const [stat, setStat] = useState<Stat>("peak");
   const [mode, setMode] = useState<FixedMode>("separate");
   const [person, setPerson] = useState<string | null>(null);
+  // each time the link is followed, even to the detail already open
+  const [opened, setOpened] = useState(0);
+  // the link that opened the detail gets the focus back when it closes
+  const opener = useRef<HTMLAnchorElement | null>(null);
+  useEffect(() => {
+    if (person === null && opener.current) opener.current.focus();
+  }, [person]);
   const line = lines.find((l) => l.id === lineId) ?? lines[0];
   const rows = useMemo(
     () => (line ? allocationRows(t, summary, line, by, stat, mode, name) : []),
@@ -244,7 +251,9 @@ export function Allocation({
                           className="capacity-link"
                           onClick={(e) => {
                             e.preventDefault();
+                            opener.current = e.currentTarget;
                             setPerson(r.key);
+                            setOpened((n) => n + 1);
                           }}
                         >
                           {r.label}
@@ -263,6 +272,7 @@ export function Allocation({
           {person && (
             <PersonDetail
               user={person}
+              opened={opened}
               label={name(person)}
               days={days}
               client={client}
@@ -310,6 +320,7 @@ export function barChart(t: T, rows: Row[], unit: Unit): ChartOption {
 /** View 3 — one person: their lines over time, Apps, items, rank. */
 function PersonDetail({
   user,
+  opened,
   label,
   days,
   client,
@@ -318,6 +329,8 @@ function PersonDetail({
   onClose,
 }: {
   user: string;
+  /** bumped each time the link is followed */
+  opened: number;
   label: string;
   days: CapacityDays;
   client: CapacityClient;
@@ -335,7 +348,7 @@ function PersonDetail({
   useEffect(() => {
     heading.current?.scrollIntoView?.({ block: "nearest" });
     heading.current?.focus();
-  }, [user]);
+  }, [user, opened]);
   // a line split by regression is held back here as everywhere until three
   // days of both sources fit it (§9.10)
   const held = (id: string) =>
