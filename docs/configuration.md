@@ -41,6 +41,26 @@
 - `agents.kb_chat` 解析後 `allowed_tools` 不含 `kb_search` → raise（KB 聊天接到 RCA preset 卻沒補工具的經典雷）
 - `kb.retrieval_llm` 少了 `preset` → raise（要關就寫 `null`，別留半套）
 
+### 工具很多的 item：模型拿到的是目錄，不是每個工具的完整 schema
+
+**沒有旋鈕,行為是這樣**:一輪送給模型的工具清單裡,套件 command 只佔一行——名字 +
+description 的第一句(上限 100 字元)、**沒有參數 schema**。模型要用哪個,直接呼叫它就會
+拿到完整描述 + 真的 schema,然後照著再呼叫一次就執行;也可以先 `load_tool` 問用法。
+載入只在**那一輪**有效,下一輪回到目錄。
+
+為什麼:每個 command 的完整 schema 以前會在每一輪送兩次(API 的 `tools` 一份、system
+prompt 再渲染一份),所以工具一多,光工具清單就能把整個窗口吃掉——有部署量到 414,115
+字元的 system prompt。超出窗口之後,會拒絕的 endpoint 回 400(我們讀出上限、縮歷史重送),
+**不會拒絕的 endpoint 直接砍掉請求前段**,而前段正是你寫的 `system_prompt`:模型照樣
+流暢回答,只是沒看到你的指令。
+
+量到的差別(本機 5 個套件、14 個 command,同一組真 bundle):完整 schema 在 wire 上
+8,413 tok + prompt 那份複本 11,471 tok = **19,884 tok** → 目錄 663 tok + prompt
+那段固定的 148 tok = **811 tok**。每個 command 的目錄成本約 **47 tok**。
+
+代價:一輪裡**第一次**用到某個 command 會多一次 round-trip(載入 → 再呼叫)。內建工具
+(`exec`、`read_file` 這些)不受影響,永遠帶完整 schema。
+
 ### 開機還會吐兩份觀測資料（永遠開，無旋鈕）
 
 - **resolved-config dump**：把「合併後的完整設定」印出來（標註每個值的來源、密鑰遮罩），

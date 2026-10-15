@@ -2515,6 +2515,46 @@ AI 讀 `wui` skill 時會看到「這個 item 能讓頁面問的 subagent」清�
 **確認做完**(`rollout 後`):以 superuser 打開「使用統計」:表格出得來、點一列看得到明細、下載得到 CSV;隔天 API pod 的 log
 沒有 `tool usage: prune failed`。
 
+### 2026-10-15 · #955 工具很多的 item：模型拿到工具目錄，完整 schema 用到才送 {#pr-955}
+
+**設定** — 無。沒有新旋鈕,也沒有要改的 key。
+
+**資料** — 不動。
+
+**k8s · CI 側** — 照常重 build、部署。manifest 沒改。
+
+**行為改變,沒有開關**:一輪送給模型的工具清單裡,**套件 command 只佔一行**——名字 +
+description 的第一句(上限 100 字元)、**沒有參數 schema**。模型要用哪個就直接呼叫它,
+系統回完整描述 + 真的 schema,照著再呼叫一次就執行;模型也可以先 `load_tool` 問用法。
+載入只在那一輪有效。內建工具(`exec`、`read_file` 這些)不受影響,照舊帶完整 schema。
+同時,system prompt 裡那份「每個工具的名字 + 描述 + 完整 JSON schema」的複本**整段移除**,
+換成一段固定長度的說明。
+
+為什麼要動:這兩份清單以前每輪都送,所以工具一多,光工具清單就能把窗口吃掉——有部署量到
+**414,115 字元**的 system prompt。超出窗口時,會拒絕的 endpoint 回 400(我們讀出上限、縮
+歷史重送),**不會拒絕的 endpoint 直接砍掉請求前段**,而前段正是你的 `system_prompt`:
+模型照樣流暢回答,只是沒看到你的指令。量到的差別(5 個套件、14 個 command):
+19,884 tok → **811 tok**;每個 command 的目錄成本約 47 tok。
+
+**代價**:一輪裡第一次用到某個 command 會多一次 round-trip(載入 → 再呼叫)。
+
+**確認做完**(`rollout 後`):在一個工具很多的 item 送一句話,然後看那一輪的 LLM 呼叫記錄——
+路徑從 pod 自己的 `config.resolved.yaml` 讀 `observability.llm_log.dir`(開機寫在 config.yaml
+旁邊、0600),**不要照 repo 的預設值**,你們的 WORKDIR 不一定一樣:
+
+```
+printenv WORKSPACE_APP_CONFIG            # 沒設就是 cwd 的 ./config.yaml
+grep -n -A3 "llm_log" <config 所在目錄>/config.resolved.yaml
+ls -t <上面讀到的 dir>/$(date +%F) | head -1
+```
+
+那一筆裡:`request.messages[0].content`(system prompt)的字元數應該從數十萬掉到數萬;
+`request.tools` 裡的套件 command 每個只有名字 + 一行描述、`properties` 是空的。
+⚠️ 那些記錄裡 `api_key` 是明文(它設計成可重播),貼出來前先拿掉。
+
+**漏做的症狀** — 沒有「漏做」:這是單向的縮減,不需要運營方動手。但如果某個 item 的流程
+原本靠「模型一開始就看得到所有 schema」,它會變成每輪多一次載入;那是預期的代價,不是故障。
+
 ## 附錄 A：資料回填的機制（specstar 為什麼不會自己補）
 
 有些升版會改變「資料在資料庫裡的儲存形狀」，但 **specstar 只在寫入當下**把一列的 `indexed_data`

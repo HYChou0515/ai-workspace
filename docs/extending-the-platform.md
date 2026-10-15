@@ -125,6 +125,26 @@ def run(args: Args) -> None:                        # 3. 拿驗證過的 args �
 從不 introspect package。所以 command 清單住在 package 自己的 `cli.py`/`COMMANDS` 裡,
 `commands.json` 只是 prebuild 產出的**快照**——改了 command 就要重跑 prebuild 才會生效。
 
+### command 的第一句話會被當成目錄那一行
+
+模型每一輪拿到的不是每個 command 的完整參數 schema,而是一份**目錄**:名字 +
+**description 的第一句**(超過 100 字元會在詞界或標點收尾)。要用的時候才會拿到完整
+描述與 schema——模型直接呼叫它就會拿到,或是它自己呼叫 `load_tool`。細節見
+[`plan-tool-on-demand-loading.md`](plan-tool-on-demand-loading.md)。
+
+對寫工具的人,只有一件事要改做法:**`DESCRIPTION` 的第一句要自己站得住**。
+
+```python
+# 好:第一句就說清楚這個 command 做什麼,模型只看這句也能決定要不要用
+DESCRIPTION = "抓取一片晶圓的完整處理歷程。可以給批號與日期範圍,回每個站點一列。"
+
+# 不好:第一句在講前提,模型只看這句不知道它能幹嘛
+DESCRIPTION = "這個 command 需要先設好 WAFER_DB_URL。它會抓取晶圓歷程…"
+```
+
+後面幾句不會被丟掉——載入之後模型拿到的是完整的 `DESCRIPTION`(以及套件名、版本、
+作者那一段)。截短只影響「要不要選這個 command」那一步。
+
 ### 用 decorator 版 dispatcher（省掉手寫 `main()`）
 
 上面的 `cli.py` 是**手寫** dispatcher(讓契約攤在眼前)。嫌煩就用 framework 的
