@@ -86,3 +86,25 @@ def test_a_sink_named_in_config_is_the_one_written(tmp_path, monkeypatch):
 def test_a_sink_that_is_not_a_usage_sink_refuses_to_boot(tmp_path, monkeypatch):
     with pytest.raises(TypeError, match="capacity.sink"):
         _build(tmp_path, monkeypatch, "capacity:\n  sink: json.JSONDecoder\n")
+
+
+def test_the_dashboard_reads_the_sources_config_names(tmp_path, monkeypatch):
+    from .world import DemoPods, DemoRecords
+
+    app = _build(
+        tmp_path,
+        monkeypatch,
+        "capacity:\n"
+        "  usage_records: tests.capacity.world.DemoRecords\n"
+        "  resource_metrics: tests.capacity.world.DemoPods\n"
+        "  timezone: Asia/Taipei\n",
+    )
+
+    service = app.state.capacity
+    assert isinstance(service._sources.usage_records, DemoRecords)  # noqa: SLF001
+    assert isinstance(service._sources.resource_metrics, DemoPods)  # noqa: SLF001
+    assert service._sources.gpu_metrics is None  # noqa: SLF001
+    is_workday = service._workday()  # noqa: SLF001
+    import datetime as dt
+
+    assert is_workday(dt.date(2026, 10, 12)) and not is_workday(dt.date(2026, 10, 11))

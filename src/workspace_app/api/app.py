@@ -27,6 +27,7 @@ from ..apps.subagents import SubagentDef
 from ..capacity.middleware import UsageMiddleware
 from ..capacity.recorder import UsageRecorder
 from ..capacity.scope import recording_reader
+from ..capacity.service import CapacityService
 from ..config.schema import (
     ChatVideoSettings,
     EnhancementSettings,
@@ -537,6 +538,9 @@ def create_app(
     # docs/plan-capacity-usage.md: where this process counts its requests,
     # turns and jobs for the capacity dashboard. None ⇒ nothing is counted.
     usage_recorder: UsageRecorder | None = None,
+    # docs/plan-capacity-usage.md §11: the dashboard's analysis service, over
+    # the operator's four sources. None ⇒ none connected (the page says so).
+    capacity: CapacityService | None = None,
     # #345: soft cap (bytes) on ONE item's shared scratch dir; the idle reaper's
     # du-sweep recycles any item over it so a runaway workspace can't fill the
     # scratch volume the whole fleet shares. 0 ⇒ disabled (the lenient default).
@@ -2305,6 +2309,16 @@ def create_app(
 
     register_tool_usage_routes(
         api, spec=spec, locator=locator, get_user_id=get_user_id, superusers=superusers
+    )
+    # docs/plan-capacity-usage.md §11: the capacity dashboard (superusers only).
+    from ..capacity.service import CapacityService as _CapacityService
+    from ..capacity.sources import CapacitySources as _CapacitySources
+    from ..config.schema import CapacitySettings as _CapacitySettings
+    from .capacity_routes import register_capacity_routes
+
+    app.state.capacity = capacity or _CapacityService(_CapacitySources(), _CapacitySettings())
+    register_capacity_routes(
+        api, service=app.state.capacity, get_user_id=get_user_id, superusers=superusers
     )
 
     # The write side of `_item_facts`: whoever changes an item's stored facts

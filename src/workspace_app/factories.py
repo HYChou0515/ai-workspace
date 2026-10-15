@@ -1450,6 +1450,19 @@ def get_capacity_sources(settings: CapacitySettings) -> CapacitySources:
     )
 
 
+def capacity_workday(spec: SpecStar):  # noqa: ANN201
+    """Which days are workdays, as the stored work calendar says now (the what-if
+    sizes on workdays). None when this spec holds no calendar: Monday–Friday."""
+    from .resources.work_calendar import read_work_calendar
+    from .workcalendar import OffHoursCalendar
+
+    try:
+        stored = read_work_calendar(spec)
+    except Exception:  # noqa: BLE001 — a calendar that cannot be read is the default one
+        return None
+    return OffHoursCalendar(workdays=tuple(stored.workdays), overrides=stored.overrides).is_workday
+
+
 def get_request_env(dotted: str) -> IRequestEnv | None:
     """The deploy's request→env seam (#714), or None when it configured none.
 

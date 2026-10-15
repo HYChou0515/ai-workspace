@@ -30,6 +30,15 @@ HIST = tuple(f"h{i}" for i in range(BUCKETS))
 LOOKBACK_DAYS = 30
 
 
+class TooManyRows(Exception):
+    """An analysis would load more rows than `capacity.max_rows` allows."""
+
+    def __init__(self, rows: int, limit: int) -> None:
+        super().__init__(f"more than {limit} rows ({rows} so far)")
+        self.rows = rows
+        self.limit = limit
+
+
 @dataclass
 class SourceStatus:
     connected: bool
@@ -108,6 +117,8 @@ def _guard(obs: Observations, name: str, connected: bool, load: Callable[[], int
         return
     try:
         obs.status[name] = SourceStatus(connected=True, rows=load())
+    except TooManyRows:
+        raise  # the whole analysis stops: shorter period, or a larger limit
     except Exception as exc:  # noqa: BLE001 — one source failing fails only its views
         logger.exception("capacity: source %s failed", name)
         obs.status[name] = SourceStatus(connected=True, error=f"{type(exc).__name__}: {exc}")
@@ -125,18 +136,44 @@ def parse_tags(tags: Iterable[str]) -> dict[str, str]:
     return out
 
 
-def observe(sources: CapacitySources, period: Period) -> Observations:
+class _Budget:
+    """Counts rows across every source; past `limit`, stops the analysis."""
+
+    def __init__(self, limit: int | None) -> None:
+        self.limit = limit
+        self.rows = 0
+
+    def take(self, n: int = 1) -> None:
+        self.rows += n
+        if self.limit is not None and self.rows > self.limit:
+            raise TooManyRows(self.rows, self.limit)
+
+
+def observe(
+    sources: CapacitySources, period: Period, *, max_rows: int | None = None
+) -> Observations:
+    budget = _Budget(max_rows)
     obs = Observations(period)
-    _guard(obs, "usage_records", sources.usage_records is not None, lambda: _records(sources, obs))
     _guard(
-        obs, "resource_metrics", sources.resource_metrics is not None, lambda: _pods(sources, obs)
+        obs,
+        "usage_records",
+        sources.usage_records is not None,
+        lambda: _records(sources, obs, budget),
     )
-    _guard(obs, "gpu_metrics", sources.gpu_metrics is not None, lambda: _gpus(sources, obs))
-    _guard(obs, "llm_requests", sources.llm_requests is not None, lambda: _llm(sources, obs))
+    _guard(
+        obs,
+        "resource_metrics",
+        sources.resource_metrics is not None,
+        lambda: _pods(sources, obs, budget),
+    )
+    _guard(obs, "gpu_metrics", sources.gpu_metrics is not None, lambda: _gpus(sources, obs, budget))
+    _guard(
+        obs, "llm_requests", sources.llm_requests is not None, lambda: _llm(sources, obs, budget)
+    )
     return obs
 
 
-def _records(sources: CapacitySources, obs: Observations) -> int:
+def _records(sources: CapacitySources, obs: Observations, budget: _Budget) -> int:
     src = sources.usage_records
     assert src is not None
     p = obs.period
@@ -156,6 +193,7 @@ def _records(sources: CapacitySources, obs: Observations) -> int:
         )
         for row in src.aggregate(query):
             rows += 1
+            budget.take()
             yield row
 
     for r in ask("work", ("pod", "component", "work"), ("count", "seconds", *HIST)):
@@ -235,12 +273,13 @@ def _records(sources: CapacitySources, obs: Observations) -> int:
     return rows + len(obs.turns) + len(obs.jobs)
 
 
-def _pods(sources: CapacitySources, obs: Observations) -> int:
+def _pods(sources: CapacitySources, obs: Observations, budget: _Budget) -> int:
     src = sources.resource_metrics
     assert src is not None
     p = obs.period
     rows = 0
     for sample in src.usage(p.start_ms, p.end_ms, p.step_s):
+        budget.take()
         i = p.index(sample.t_ms)
         if i is None:
             continue
@@ -259,12 +298,13 @@ def _pods(sources: CapacitySources, obs: Observations) -> int:
     return rows
 
 
-def _gpus(sources: CapacitySources, obs: Observations) -> int:
+def _gpus(sources: CapacitySources, obs: Observations, budget: _Budget) -> int:
     src = sources.gpu_metrics
     assert src is not None
     p = obs.period
     rows = 0
     for sample in src.usage(p.start_ms, p.end_ms, p.step_s):
+        budget.take()
         i = p.index(sample.t_ms)
         if i is None:
             continue
@@ -280,13 +320,14 @@ def _gpus(sources: CapacitySources, obs: Observations) -> int:
     return rows
 
 
-def _llm(sources: CapacitySources, obs: Observations) -> int:
+def _llm(sources: CapacitySources, obs: Observations, budget: _Budget) -> int:
     src = sources.llm_requests
     assert src is not None
     p = obs.period
     rows = 0
     series: dict[tuple[str, bool, str, str, str], LlmSeries] = {}
     for row in src.usage(p.start_ms, p.end_ms, p.step_s):
+        budget.take()
         i = p.index(row.t_ms)
         if i is None:
             continue

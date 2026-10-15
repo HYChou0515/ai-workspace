@@ -26,12 +26,15 @@ import uvicorn
 from workspace_app.api import create_app
 from workspace_app.api.drain import DrainingServer
 from workspace_app.apps.skill_hub_git import resolve_git_root
+from workspace_app.capacity.service import CapacityService
 from workspace_app.config.dump import emit_config_dump
 from workspace_app.config.loader import load_with_provenance
 from workspace_app.factories import (
     build_message_queue_factory,
     build_usage_recorder,
+    capacity_workday,
     get_agent_config_catalog,
+    get_capacity_sources,
     get_card_drafter_llm,
     get_chat_pipeline,
     get_check_registry,
@@ -328,6 +331,13 @@ def build_app(
             # A worker that builds this composition (`API_REGISTRY_JOBTYPES`)
             # counts as the worker it is (`usage_component`).
             usage_recorder=build_usage_recorder(settings.capacity, component=usage_component),
+            # docs/plan-capacity-usage.md §11: the dashboard reads the operator's
+            # four sources; sizing days follow the stored work calendar.
+            capacity=CapacityService(
+                get_capacity_sources(settings.capacity),
+                settings.capacity,
+                workday=lambda: capacity_workday(spec),
+            ),
             # plan-model-settings P5: with `live`, the catalog follows the
             # published settings (KB chat list, sub-agent defaults, presets).
             agent_config_catalog=(
