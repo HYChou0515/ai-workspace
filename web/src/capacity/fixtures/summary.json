@@ -464,7 +464,8 @@
    },
    "fit": {
     "r2": 0.9915410675696246,
-    "holdout_mape": 0.0007407854732134757,
+    "holdout_mape": 0.0009900643627383553,
+    "holdout_days": 7,
     "rows": 16128,
     "columns": [
      [
@@ -710,7 +711,8 @@
    },
    "fit": {
     "r2": 1.0,
-    "holdout_mape": 3.104973111416281e-15,
+    "holdout_mape": 4.414075690208602e-15,
+    "holdout_days": 7,
     "rows": 8064,
     "columns": [
      [
@@ -940,7 +942,8 @@
    },
    "fit": {
     "r2": 1.0,
-    "holdout_mape": 3.0842311137348464e-15,
+    "holdout_mape": 2.569144405361387e-16,
+    "holdout_days": 7,
     "rows": 16128,
     "columns": [
      [
@@ -1084,7 +1087,8 @@
    },
    "fit": {
     "r2": -1763.0,
-    "holdout_mape": 7.730441801093683e-15,
+    "holdout_mape": 1.1184468988816393e-14,
+    "holdout_days": 7,
     "rows": 8064,
     "columns": [
      [
@@ -1311,7 +1315,8 @@
    },
    "fit": {
     "r2": 1.0,
-    "holdout_mape": 3.402176591245067e-15,
+    "holdout_mape": 4.208811131489802e-15,
+    "holdout_days": 7,
     "rows": 8064,
     "columns": [
      [
@@ -13043,7 +13048,8 @@
    {
     "line": "api.cpu",
     "r2": 0.9915410675696246,
-    "holdout_mape": 0.0007407854732134757,
+    "holdout_mape": 0.0009900643627383553,
+    "holdout_days": 7,
     "columns": 5,
     "collinear": [
      [
@@ -13055,28 +13061,32 @@
    {
     "line": "worker.cpu",
     "r2": 1.0,
-    "holdout_mape": 3.104973111416281e-15,
+    "holdout_mape": 4.414075690208602e-15,
+    "holdout_days": 7,
     "columns": 1,
     "collinear": []
    },
    {
     "line": "api.memory",
     "r2": 1.0,
-    "holdout_mape": 3.0842311137348464e-15,
+    "holdout_mape": 2.569144405361387e-16,
+    "holdout_days": 7,
     "columns": 1,
     "collinear": []
    },
    {
     "line": "worker.memory",
     "r2": -1763.0,
-    "holdout_mape": 7.730441801093683e-15,
+    "holdout_mape": 1.1184468988816393e-14,
+    "holdout_days": 7,
     "columns": 1,
     "collinear": []
    },
    {
     "line": "postgres.cpu",
     "r2": 1.0,
-    "holdout_mape": 3.402176591245067e-15,
+    "holdout_mape": 4.208811131489802e-15,
+    "holdout_days": 7,
     "columns": 6,
     "collinear": [
      [

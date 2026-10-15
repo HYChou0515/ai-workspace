@@ -308,6 +308,7 @@ class Analysis:
             else {
                 "r2": line.fit.r2,
                 "holdout_mape": line.fit.holdout_mape,
+                "holdout_days": line.fit.holdout_days,
                 "rows": line.fit.rows,
                 "columns": [[c, v] for c, v in line.fit.columns],
                 "collinear": [list(pair) for pair in line.fit.collinear],
@@ -390,6 +391,7 @@ class Analysis:
                     "line": line.id,
                     "r2": line.fit.r2,
                     "holdout_mape": line.fit.holdout_mape,
+                    "holdout_days": line.fit.holdout_days,
                     "columns": len(line.fit.columns),
                     "collinear": [list(c) for c in line.fit.collinear],
                 }

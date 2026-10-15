@@ -122,3 +122,53 @@ def test_a_line_without_its_source_is_simply_not_there():
 
     assert "api.cpu" not in ids, "a regression needs ②"
     assert {"sandbox-host.cpu", "filestore.disk"} <= ids
+
+
+def _api_fit(records, pods, w: World):  # noqa: ANN001, ANN202
+    obs = observe(
+        CapacitySources(records, pods), Period(w.start_ms, w.end_ms, w.step_s, ZoneInfo(w.tz))
+    )
+    return {line.id: line for line in build_lines(obs)}["api.cpu"].fit
+
+
+def test_the_holdout_predicts_the_last_seven_days_from_the_ones_before():
+    w = World(days=14, users=20)
+
+    fit = _api_fit(WorldRecords(w), WorldPods(w), w)
+
+    assert fit.holdout_days == 7
+
+
+def test_a_rollout_in_the_held_out_days_does_not_ruin_the_holdout():
+    """k8s renames pods on every rollout. A pod born in the held-out days had
+    no training rows, so its idle cost was predicted as nothing and the error
+    reported that, not the model: the rows of a pod training never saw are
+    not scored."""
+    import dataclasses
+
+    w = World(days=10, users=20)
+    roll = w.start_ms + 8 * 86_400_000
+    rename = {"api-1": "api-1b", "api-2": "api-2b"}
+
+    class Rolled(WorldRecords):
+        def _kinds(self):  # noqa: ANN202
+            return {
+                k: [
+                    (at, {**u, "pod": rename.get(u.get("pod"), u.get("pod"))} if at >= roll else u)
+                    for at, u in v
+                ]
+                for k, v in super()._kinds().items()
+            }
+
+    class RolledPods(WorldPods):
+        def usage(self, start_ms, end_ms, step_s):  # noqa: ANN001, ANN202
+            return [
+                dataclasses.replace(s, pod=rename.get(s.pod, s.pod)) if s.t_ms >= roll else s
+                for s in super().usage(start_ms, end_ms, step_s)
+            ]
+
+    same = _api_fit(WorldRecords(w), WorldPods(w), w).holdout_mape
+    rolled = _api_fit(Rolled(w), RolledPods(w), w).holdout_mape
+
+    assert same is not None and rolled is not None
+    assert rolled < 2 * same + 0.01

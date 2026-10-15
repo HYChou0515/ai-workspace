@@ -33,6 +33,10 @@ from .observe import Observations, WorkSeries
 #: the rest merge into one column per kind of method.
 MIN_REQUESTS = 200
 MIN_PRESENCE = 0.05
+#: §9.9: a regression's error predicting the last 7 days from the ones before,
+#: which need at least 3 (the regression lines' own readiness, §9.10).
+HOLDOUT_DAYS = 7
+MIN_TRAIN_DAYS = 3
 
 UNKNOWN = "unknown"
 
@@ -53,6 +57,8 @@ class FitStats:
     columns: list[tuple[str, float]]
     #: Column pairs that move together; each one's own cost is not separable.
     collinear: list[tuple[str, str]] = field(default_factory=list)
+    #: how many of the last days `holdout_mape` predicted (up to `HOLDOUT_DAYS`)
+    holdout_days: int = 0
 
 
 def _collinear(x: np.ndarray, columns: list[str]) -> list[tuple[str, str]]:
@@ -213,7 +219,7 @@ def _fit(
     fitted = x @ coef
     ss_tot = float(((y - y.mean()) ** 2).sum())
     r2 = 1.0 - float(((y - fitted) ** 2).sum()) / ss_tot if ss_tot > 0 else None
-    mape = _holdout_mape(x, y, days)
+    mape, held = _holdout_mape(x, y, days, len(columns))
     costs = dict(zip(columns, (float(c) for c in coef[: len(columns)]), strict=True))
     idle = {pod: float(coef[len(columns) + i]) for i, pod in enumerate(pods)}
     stats = FitStats(
@@ -222,26 +228,35 @@ def _fit(
         rows=len(y),
         columns=sorted(costs.items()),
         collinear=_collinear(x[:, : len(columns)], columns),
+        holdout_days=held,
     )
     return costs, idle, stats
 
 
-def _holdout_mape(x: np.ndarray, y: np.ndarray, days: np.ndarray) -> float | None:
-    """Fit on the first 80% of days, predict each later day's total: the mean
-    absolute percentage error of those days (view 9)."""
+def _holdout_mape(
+    x: np.ndarray, y: np.ndarray, days: np.ndarray, n_columns: int
+) -> tuple[float | None, int]:
+    """Fit on the days before the last `HOLDOUT_DAYS` (at least `MIN_TRAIN_DAYS`
+    of them), predict each held-out day's total: the mean absolute percentage
+    error of those days (§9.9, view 9), and how many days it held out. A row
+    of a pod the training days never saw is not scored: a pod born after the
+    cut — every rollout renames them — has no idle cost to predict from."""
     distinct = np.unique(days)
-    if len(distinct) < 5:
-        return None
-    cut = distinct[int(len(distinct) * 0.8)]
+    held = min(HOLDOUT_DAYS, len(distinct) - MIN_TRAIN_DAYS)
+    if held < 1:
+        return None, 0
+    cut = distinct[-held]
     train, test = days < cut, days >= cut
     coef = nnls(x[train], y[train])
+    seen = x[train, n_columns:].any(axis=0)
+    scored = test & x[:, n_columns:][:, seen].any(axis=1)
     errors = []
     for d in np.unique(days[test]):
-        here = days == d
+        here = scored & (days == d)
         actual = float(y[here].sum())
         if actual > 0:
             errors.append(abs(float((x[here] @ coef).sum()) - actual) / actual)
-    return float(np.mean(errors)) if errors else None
+    return (float(np.mean(errors)) if errors else None), held
 
 
 def _regression_line(

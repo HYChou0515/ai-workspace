@@ -86,6 +86,8 @@ class DailyOut(BaseModel):
 class FitOut(BaseModel):
     r2: float | None
     holdout_mape: float | None
+    #: how many of the last days that error predicted
+    holdout_days: int
     rows: int
     columns: list[tuple[str, float]]
     collinear: list[list[str]]
@@ -182,6 +184,8 @@ class RegressionOut(BaseModel):
     line: str
     r2: float | None
     holdout_mape: float | None
+    #: how many of the last days that error predicted
+    holdout_days: int
     columns: int
     collinear: list[list[str]]
 
