@@ -28,7 +28,12 @@ export type MonacoEditorProps = {
   /** Accessible name for the editor's textbox (a11y + lets multiple editors on
    * one screen be told apart, e.g. the record editor's YAML vs body). */
   ariaLabel?: string;
+  /** Problems drawn on their lines (squiggle + gutter + hover) — NN/g
+   * "Error-Message Guidelines": show the error close to its source. */
+  markers?: EditorMarker[];
 };
+
+export type EditorMarker = { line: number; message: string };
 
 export function MonacoEditor(props: MonacoEditorProps) {
   return (

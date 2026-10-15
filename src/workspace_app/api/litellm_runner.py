@@ -16,7 +16,7 @@ import os
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from dataclasses import replace
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, NamedTuple
 
 import litellm
 from agents import (
@@ -96,6 +96,17 @@ if TYPE_CHECKING:
     FallbackChains = dict[tuple[str, str | None], list[LlmEndpoint]]
 
 _LOGGER = logging.getLogger(__name__)
+
+
+class RunnerEndpoints(NamedTuple):
+    """The runner-wide endpoint values: the default `llm.base_url` /
+    `llm.api_key` and the per-preset failover chains. Fixed at construction, or
+    read from the published settings on each use (plan-model-settings P5)."""
+
+    base_url: str | None
+    api_key: str | None
+    fallback_chains: FallbackChains | None
+
 
 #: Window decisions already reported (see `_agent_for`), as `(model, window)`.
 #: Keyed on the DECISION rather than the model: a deploy states its window once
@@ -1322,6 +1333,7 @@ class LitellmAgentRunner:
         stream_deadlines: tuple[float, float] | None = None,
         sleep: Callable[[float], Awaitable[None]] | None = None,
         rate_limit_budget_s: float = 120.0,
+        endpoints: Callable[[], RunnerEndpoints] | None = None,
         tool_usage: ToolUsageRecorder | None = None,
     ) -> None:
         # plan-tool-usage-stats §3.1: where every turn this runner drives counts
@@ -1360,8 +1372,10 @@ class LitellmAgentRunner:
         self._max_turns = max_turns
         # Chat LLM endpoint (global; see factories.Settings). None → LiteLLM's
         # own provider env / Ollama defaults.
-        self._base_url = base_url
-        self._api_key = api_key
+        self._static = RunnerEndpoints(base_url, api_key, fallback_chains)
+        # plan-model-settings P5: when given, the three endpoint values are read
+        # from the published settings on each use instead of from boot.
+        self._endpoints = endpoints
         # Per-user token seam. There is no universal system key — each preset
         # configures its own endpoint key — so the token service resolves PER
         # ENDPOINT: given the speaker + the key that endpoint would otherwise use,
@@ -1370,7 +1384,6 @@ class LitellmAgentRunner:
         # wired → every key passes through untouched (behaviour unchanged).
         self._token_service = token_service
         # #196 busy-aware failover (None when no preset declares fallbacks).
-        self._fallback_chains = fallback_chains
         self._cooldown_registry = cooldown_registry
         # #493 (give_up_s, idle_s) for a SINGLE-endpoint turn, so a provider that
         # goes quiet ends the turn with a real error instead of hanging forever.
@@ -1425,6 +1438,21 @@ class LitellmAgentRunner:
         for key in raw_keys:
             resolved[key] = await ts.get_credential(user_id, key, ctx.call_lane)
         return lambda key: resolved.get(key, LlmCredential(key))
+
+    def _now_endpoints(self) -> RunnerEndpoints:
+        return self._static if self._endpoints is None else self._endpoints()
+
+    @property
+    def _base_url(self) -> str | None:
+        return self._now_endpoints().base_url
+
+    @property
+    def _api_key(self) -> str | None:
+        return self._now_endpoints().api_key
+
+    @property
+    def _fallback_chains(self) -> FallbackChains | None:
+        return self._now_endpoints().fallback_chains
 
     async def run(self, prompt: str, ctx: AgentToolContext) -> AsyncIterator[AgentEvent]:
         if ctx.tool_usage is None:

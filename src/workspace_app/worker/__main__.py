@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import signal
 import threading
 from dataclasses import dataclass
@@ -18,6 +19,8 @@ from typing import TYPE_CHECKING
 
 from ..config.schema import Settings
 from ..coordinators import CoordinatorBundle, build_coordinators, build_ingestor
+from ..model_settings.consumers import live_agent_config_catalog
+from ..model_settings.live import LiveSettings
 from . import _JOBTYPE_ATTR, API_REGISTRY_JOBTYPES, consume_until_stopped, select_coordinator
 
 if TYPE_CHECKING:
@@ -35,6 +38,7 @@ def build_bundle(
     spec: object,
     *,
     config_dir: Path | None = None,
+    live: LiveSettings | None = None,
     tool_usage: ToolUsageRecorder | None = None,
 ) -> CoordinatorBundle:
     """Build the coordinator bundle from settings — the worker's composition
@@ -47,20 +51,30 @@ def build_bundle(
 
     assert isinstance(spec, SpecStar)  # narrow the `object` param for ty (coverage-omitted)
     logger.info("worker: building coordinator bundle from settings")
+    # plan-model-settings P6: a job reads the settings the page last published,
+    # exactly as an API turn does — the same `follow_published` sequence.
+    if live is not None:
+        from ..model_settings.consumers import follow_published
+
+        follow_published(live, spec)
     embedder = f.get_embedder(settings)
-    kb_llm = f.get_kb_llm(settings)
+    kb_llm = f.get_kb_llm(settings, live=live)
     wiki_model, wiki_base, wiki_key = f.get_wiki_endpoint(settings)
     # plan-tool-usage-stats: this worker's agents count into the recorder `main` flushes.
-    runner = f.get_runner(settings, tool_usage=tool_usage)
-    catalog = f.get_agent_config_catalog(settings, config_dir=config_dir)
-    card_drafter_llm = f.get_card_drafter_llm(settings)
+    runner = f.get_runner(settings, live=live, tool_usage=tool_usage)
+    catalog = (
+        f.get_agent_config_catalog(settings, config_dir=config_dir)
+        if live is None
+        else live_agent_config_catalog(live, config_dir)
+    )
+    card_drafter_llm = f.get_card_drafter_llm(settings, live=live)
     ingestor = build_ingestor(
         spec,
         embedder=embedder,
         pipeline=f.get_doc_pipeline(settings, embedder),
         chat_pipeline=f.get_chat_pipeline(settings, embedder, kb_llm),
         code_embedder=f.get_code_embedder(settings),
-        parser_registry=f.get_parser_registry(settings),
+        parser_registry=f.get_parser_registry(settings, live=live),
         image_fetcher=f.get_image_fetcher(settings),
         image_embedder=f.get_image_embedder(settings),
     )
@@ -78,10 +92,10 @@ def build_bundle(
         # `add_content` check with an empty set would refuse imports the API would
         # have allowed — the two must agree or the answer depends on which pod ran.
         superusers=frozenset(settings.server.superusers),
-        quality_judge_llm=f.get_kb_quality_judge_llm(settings),
+        quality_judge_llm=f.get_kb_quality_judge_llm(settings, live=live),
         card_drafter_llm=card_drafter_llm,
-        sanity_llm_factory=f.get_sanity_llm_factory(settings),
-        sanity_judge_llm=f.get_sanity_judge_llm(settings),
+        sanity_llm_factory=f.get_sanity_llm_factory(settings, live=live),
+        sanity_judge_llm=f.get_sanity_judge_llm(settings, live=live),
         # #535: retrieval-eval question generation runs on the KB llm.
         eval_llm=kb_llm,
         # #534: metric extraction runs on the KB llm.
@@ -100,6 +114,7 @@ def build_bundle(
         wiki_model=wiki_model or "",
         wiki_llm_base_url=wiki_base or "",
         wiki_llm_api_key=wiki_key or "",
+        wiki_endpoint=None if live is None else lambda: live.derive("wiki", f.get_wiki_endpoint),
         # #245: the same grace periods the API hands its coordinator, so the one
         # `BlobGcCoordinator` a slim worker builds (never consumed there — blob-gc
         # is composed from `build_app`) cannot disagree with settings.
@@ -119,15 +134,14 @@ def build_bundle(
     if card_drafter_llm is not None:
         from ..api.card_drafter_agent import wire_agentic_card_drafter
 
-        kb_chats = catalog.kb_chats()
-        assert kb_chats, "a settings-built catalog always populates kb_chats"
+        assert catalog.kb_chats(), "a settings-built catalog always populates kb_chats"
         wire_agentic_card_drafter(
             bundle.card_gen,
             spec=spec,
             runner=runner,
             retriever=retriever,
             catalog=catalog,
-            kb_agent_config=kb_chats[0],
+            kb_agent_config=lambda: catalog.kb_chats()[0],
             max_searches=settings.kb.max_searches_per_turn,
         )
     # #535: the eval batch handler retrieves via the SAME embedder + kb_llm the
@@ -193,7 +207,13 @@ class Worker:
     usage_store: ToolUsageStore | None
 
 
-def build_worker(settings: Settings, jobtype: str, *, config_dir: Path | None) -> Worker:
+def build_worker(
+    settings: Settings,
+    jobtype: str,
+    *,
+    config_dir: Path | None,
+    live: LiveSettings | None = None,
+) -> Worker:
     """The coordinator this worker consumes, from the composition its JobType
     needs, and the writer of what its agents count. Most JobTypes come from the
     FastAPI-free ``build_bundle``; those in ``API_REGISTRY_JOBTYPES`` come from
@@ -211,7 +231,7 @@ def build_worker(settings: Settings, jobtype: str, *, config_dir: Path | None) -
     if jobtype in API_REGISTRY_JOBTYPES:
         from .. import __main__ as api_main
 
-        app = api_main.build_app(settings, config_dir=config_dir)
+        app = api_main.build_app(settings, config_dir=config_dir, live=live)
         return Worker(
             select_coordinator(app.state.coordinators, jobtype), app.state.tool_usage_store
         )
@@ -221,16 +241,23 @@ def build_worker(settings: Settings, jobtype: str, *, config_dir: Path | None) -
     spec = get_spec(settings, get_user_id=get_user_id)
     tool_usage = ToolUsageRecorder()
     coordinator = select_coordinator(
-        build_bundle(settings, spec, config_dir=config_dir, tool_usage=tool_usage), jobtype
+        build_bundle(settings, spec, config_dir=config_dir, live=live, tool_usage=tool_usage),
+        jobtype,
     )
     assert isinstance(spec, SpecStar)
     register_tool_usage(spec)
     return Worker(coordinator, ToolUsageStore(spec, tool_usage, pod=writer_name()))
 
 
-def build_coordinator(settings: Settings, jobtype: str, *, config_dir: Path | None) -> object:
+def build_coordinator(
+    settings: Settings,
+    jobtype: str,
+    *,
+    config_dir: Path | None,
+    live: LiveSettings | None = None,
+) -> object:
     """The coordinator alone — `build_worker` without the writer."""
-    return build_worker(settings, jobtype, config_dir=config_dir).coordinator
+    return build_worker(settings, jobtype, config_dir=config_dir, live=live).coordinator
 
 
 def serve(
@@ -272,7 +299,10 @@ def main(argv: list[str] | None = None) -> None:
     # Faithful LLM call log (default-on; WORKSPACE_LLM_LOG=0 to silence) so a
     # wiki/card-gen worker's LLM calls are as observable as the API's.
     install_llm_logging(settings)
-    worker = build_worker(settings, args.jobtype, config_dir=config_dir)
+    # plan-model-settings P6: the same view of the published settings the API builds.
+    live = LiveSettings(None, config_path=args.config, env=os.environ, boot=settings)
+    worker = build_worker(settings, args.jobtype, config_dir=config_dir, live=live)
+    live.start()  # P10: a job reads memory; the version is read on this thread
     logger.info(
         "worker: booted jobtype=%s coordinator=%s",
         args.jobtype,

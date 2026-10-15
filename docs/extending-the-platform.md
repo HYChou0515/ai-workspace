@@ -710,8 +710,9 @@ python -m workspace_app.skill_eval --skill ./tune/SKILL.md \
 
 **模型不用在命令列指定。** 那一輪是用 App 自己的解析路徑 `AppCatalog.resolve` 取得的——
 跟真正的 turn 同一個呼叫——所以 model、endpoint、system prompt 全部來自
-`config.yaml` + `app.json` + profile。要換模型就 `--preset <config 裡的 preset 名>`
-(也就是 App model picker 上那些名字),不給就用該 App picker 的第一個。`--config` 指向
+`config.yaml` + `app.json` + profile,**再疊上模型設定頁已套用的版本**(它會開部署的 specstar 後端去讀;
+頁面改過的值贏過 `config.yaml`,見 `plan-model-settings.md` P6)。要換模型就 `--preset <preset 名>`
+(也就是 App model picker 上那些名字,含頁面新增的),不給就用該 App picker 的第一個。`--config` 指向
 非預設位置的 config.yaml。
 
 這一點不是潔癖:自己重組 prompt 那版漏掉了 `## Available skills` 索引,於是模型從頭到尾

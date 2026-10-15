@@ -21,7 +21,12 @@ from importlib import resources
 from pathlib import Path
 from typing import Any
 
-from ..apps.profiles import load_profile, workflow_profiles
+from ..apps.profiles import (
+    ProfileManifest,
+    list_profiles,
+    load_profile,
+    normalize_workflows,
+)
 from .dsl import build_run, parse_def
 from .handle import WorkflowHandle
 from .manifest import WorkflowManifest
@@ -124,6 +129,11 @@ def _check_phase_ids(manifest: WorkflowManifest, label: str) -> None:
             )
 
 
+#: A workflow id is a path (`workflows/<id>/run.py`): boot, `workflow check`
+#: and `workflow new` all hold it to this one rule.
+PLAIN_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*")
+
+
 def _check_workflow_ids(workflows: list[WorkflowManifest], label: str) -> None:
     """Every workflow in the list form needs a non-empty, unique ``id`` — it is how a
     workflow is addressed (run.py path + the new-chat picker, manual §4)."""
@@ -134,23 +144,41 @@ def _check_workflow_ids(workflows: list[WorkflowManifest], label: str) -> None:
                 f"{label}: a workflow in 'workflows' is missing its 'id' "
                 f"(manual §4 — each workflow is addressed by a stable id)"
             )
+        if not PLAIN_ID.fullmatch(wf.id):
+            # An id is a path (`workflows/<id>/run.py`) — a `../` one could load
+            # and run a run.py from anywhere; the settings page can change ids.
+            raise ValueError(
+                f"{label}: workflow id {wf.id!r} must be a plain name "
+                "(letters, digits, '-' and '_')"
+            )
         if wf.id in seen:
             raise ValueError(f"{label}: duplicate workflow id {wf.id!r} (manual §4)")
         seen.add(wf.id)
 
 
-def validate_workflow_profiles(app_slug: str) -> None:
+def validate_workflow_profiles(
+    app_slug: str,
+    *,
+    profile_of: Callable[[str, str], ProfileManifest] = load_profile,
+    profiles: list[str] | None = None,
+) -> None:
     """Fail loud at startup if any of the App's workflow profiles is incoherent: every
     declared workflow's ``run.py`` must import + expose ``run()``, list-form workflows
-    need unique non-empty ids (manual §4), and every phase needs an ``id`` (§12)."""
-    for profile in workflow_profiles(app_slug):
-        pm = load_profile(app_slug, profile)
+    need unique non-empty ids (manual §4), and every phase needs an ``id`` (§12).
+
+    plan-model-settings: the settings page runs the SAME check on a draft before
+    Apply, handing its own ``profile_of`` (the draft's profiles) and ``profiles``
+    (the shipped ones plus any the draft names)."""
+    for profile in profiles if profiles is not None else list_profiles(app_slug):
+        pm = profile_of(app_slug, profile)
+        if not normalize_workflows(pm):  # interactive — nothing to check
+            continue
         if pm.workflows:  # new list form (manual §4)
             _check_workflow_ids(pm.workflows, f"{app_slug}/{profile}")
             for wf in pm.workflows:
                 load_run_callable(app_slug, profile, wf.id)  # raises on a bad run.py
                 _check_phase_ids(wf, f"{app_slug}/{profile}/{wf.id}")
         else:  # legacy singular form — run.py at the profile root
-            assert pm.workflow is not None  # workflow_profiles guarantees ≥1 workflow
+            assert pm.workflow is not None  # normalize_workflows above found ≥1
             load_run_callable(app_slug, profile)
             _check_phase_ids(pm.workflow, f"{app_slug}/{profile}")

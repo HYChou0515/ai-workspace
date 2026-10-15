@@ -17,8 +17,9 @@ via ``factories.get_app_catalog`` and ``validate_all_apps`` runs at startup
 
 from __future__ import annotations
 
-from collections.abc import Collection, Iterable, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from importlib import resources
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from msgspec import UNSET, structs
@@ -215,8 +216,19 @@ def validate_all_apps() -> None:
         validate_workflow_profiles(slug)
 
 
+def app_file_path(app_slug: str, rel: str) -> Path:
+    """`rel` inside the App's folder — refused when it resolves outside it.
+    The settings page can change an App's `prompt_file`; a `../` path made a
+    server file (`/proc/self/environ`) the system prompt (final review)."""
+    base = Path(str(resources.files(_APPS_PKG) / app_slug)).resolve()
+    path = (base / rel).resolve()
+    if not path.is_relative_to(base):
+        raise ValueError(f"{app_slug}: {rel!r} is outside the App's folder")
+    return path
+
+
 def _read_app_text(app_slug: str, rel: str) -> str:
-    return (resources.files(_APPS_PKG) / app_slug / rel).read_text("utf-8")
+    return app_file_path(app_slug, rel).read_text("utf-8")
 
 
 def _read_base_preamble() -> str:
@@ -309,8 +321,20 @@ def _compose_prompt(
 
 
 class AppCatalog:
-    def __init__(self, *, presets: Mapping[str, Preset]) -> None:
-        self._presets = dict(presets)
+    def __init__(
+        self, *, presets: Mapping[str, Preset] | Callable[[], Mapping[str, Preset]]
+    ) -> None:
+        # plan-model-settings P5: a function is asked on each resolve, so a
+        # preset published from the settings page is there on the next turn.
+        if isinstance(presets, Mapping):
+            fixed = dict(presets)
+            self._presets_of: Callable[[], Mapping[str, Preset]] = lambda: fixed
+        else:
+            self._presets_of = presets
+
+    @property
+    def _presets(self) -> Mapping[str, Preset]:
+        return self._presets_of()
 
     def resolve(
         self,
@@ -354,12 +378,13 @@ class AppCatalog:
             if attached_preset in allowed
             else (prof.default_preset or (allowed[0] if allowed else ""))
         )
-        if not chosen or chosen not in self._presets:
+        presets = self._presets  # once: one resolve, one published version
+        if not chosen or chosen not in presets:
             raise ValueError(
                 f"app {app_slug!r} profile {profile!r}: chosen preset {chosen!r} is "
-                f"not declared in agents.presets {sorted(self._presets)}"
+                f"not declared in agents.presets {sorted(presets)}"
             )
-        preset = self._presets[chosen]
+        preset = presets[chosen]
 
         # skills — single source: `effective_item_skills` computes each available
         # skill's default_on (the profile's `skills` gates the declared shared set)

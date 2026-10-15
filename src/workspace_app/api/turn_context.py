@@ -45,6 +45,7 @@ from ..context_budget import (
 )
 from ..entity.brief import entity_schema_brief
 from ..entity.catalog import discover_catalog
+from ..live_value import Live, now
 from ..sandbox.protocol import Sandbox, SandboxSpec
 from ..sync import SandboxSync
 from ..tokens import CallLane
@@ -212,7 +213,7 @@ class TurnContextBuilder:
         max_tokens_window_ratio: float = DEFAULT_MAX_TOKENS_WINDOW_RATIO,
         wiki_coordinator: WikiMaintenanceCoordinator | None = None,
         run_agent: RunAgent | None = None,
-        subagent_models: tuple[SubagentModel, ...] = (),
+        subagent_models: Live[tuple[SubagentModel, ...]] = (),
         skill_hub: SkillHubStore | None = None,
         review_skill: ReviewSkill | None = None,
         tool_usage: ToolUsageRecorder | None = None,
@@ -885,7 +886,7 @@ class TurnContextBuilder:
             # `build_tools` and the system-prompt index read.
             subagent_defs=subagent_defs,
             run_agent=self._run_agent,
-            subagent_models=self._subagent_models,
+            subagent_models=now(self._subagent_models),
             skill_hub=self._skill_hub,
             review_skill_via=self._review_skill,
             # #29 / §A: whether anything is loadable this turn — what decides

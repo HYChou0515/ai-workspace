@@ -64,6 +64,7 @@ from ..kb.retriever import Enhancements, Retriever
 from ..kb.vlm import VlmDescriber
 from ..kb.wiki.consult import WikiConsultant
 from ..kb.wiki.coordinator import WikiMaintenanceCoordinator
+from ..live_value import Live, now
 from ..perm import Actor, Permission, authorize
 from ..perm.model import Verb, user_subject
 from ..resources import AgentConfig
@@ -489,7 +490,7 @@ def register_kb_chat_routes(
     get_user_id: Callable[[], str],
     users: UserDirectory,
     *,
-    kb_agent_configs: list[AgentConfig],
+    kb_agent_configs: Live[list[AgentConfig]],
     # #493: how long a send waits for ITS OWN turn before detaching it and
     # answering anyway — the same knob the workspace chat uses, threaded from
     # `create_app`, because "as long as the RCA send waits" has to be one number
@@ -533,7 +534,7 @@ def register_kb_chat_routes(
     `kb_agent_configs` (issue #32) is the catalog's `kb_chats()` list —
     every entry shows up in the FE picker; the first is the default.
     """
-    if not kb_agent_configs:
+    if not now(kb_agent_configs):
         raise ValueError("kb_agent_configs must be non-empty")
     chat_rm = spec.get_resource_manager(KbChat)
 
@@ -643,7 +644,7 @@ def register_kb_chat_routes(
                 # the boundary. See #91.
                 "suggestions": [{"label": s.label, "prompt": s.prompt} for s in cfg.suggestions],
             }
-            for cfg in kb_agent_configs
+            for cfg in now(kb_agent_configs)
         ]
 
     @app.post("/kb/chats")
@@ -828,12 +829,13 @@ def register_kb_chat_routes(
 
         # Issue #32: resolve the picker selection. Default = first
         # entry; explicit unknown name → 422 (not a silent fallback).
+        configs = now(kb_agent_configs)  # once: one send, one published version
         if body.agent_name is None:
-            agent_config = kb_agent_configs[0]
+            agent_config = configs[0]
         else:
-            match = next((c for c in kb_agent_configs if c.name == body.agent_name), None)
+            match = next((c for c in configs if c.name == body.agent_name), None)
             if match is None:
-                avail = [c.name for c in kb_agent_configs]
+                avail = [c.name for c in configs]
                 raise HTTPException(
                     status_code=422,
                     detail=f"unknown agent_name={body.agent_name!r}; available: {avail}",

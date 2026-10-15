@@ -64,6 +64,7 @@ from ..kb.llm import ILlm
 from ..kb.preview import is_structured_text, preview_markdown
 from ..kb.retriever import Retriever
 from ..kb.upload_checks import UploadRejected
+from ..live_value import Live, now
 from ..perm import Actor, Permission, Verb, Visibility, authorize
 from ..resources.graph import mention_id
 from ..resources.groups import groups_of
@@ -863,7 +864,7 @@ def register_kb_routes(
     get_user_id: Callable[[], str],
     superusers: frozenset[str] = frozenset(),
     answer_llm: ILlm,
-    answer_system_prompt: str = "",
+    answer_system_prompt: Live[str] = "",
 ) -> None:
     def _collection_out(row, cited: dict[str, int]) -> CollectionOut:
         """Build a card from one ``exp_aggregate_by`` group row: the Collection
@@ -1485,7 +1486,7 @@ def register_kb_routes(
                     )
                     answer_from_passages(
                         answer_llm,
-                        system_prompt=answer_system_prompt,
+                        system_prompt=now(answer_system_prompt),
                         question=body.question,
                         passages=passages,
                         on_chunk=lambda text, reasoning: emit(

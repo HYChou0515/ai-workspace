@@ -43,6 +43,7 @@ const NOT_THE_SANDBOX = new Set([
   "myEnv.heading",
   "env.personalDesc", // names that page — the same variables
   "env.personalPage",
+  "modelSettings.envTitle", // a secret env variable a preset hands its tools
 ]);
 
 // NOT `import.meta.url`: this file runs under happy-dom, where that is a
