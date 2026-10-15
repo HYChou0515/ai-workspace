@@ -148,6 +148,8 @@ class DiskRunwayOut(BaseModel):
     trend: TrendOut | None
     limit: float
     now: float | None
+    #: the trend's growth a month ÷ today's N: one more person's disk a month
+    per_person_month: float | None
 
 
 class RunwayOut(BaseModel):

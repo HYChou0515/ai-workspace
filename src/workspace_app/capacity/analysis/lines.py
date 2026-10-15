@@ -456,6 +456,10 @@ def build_lines(obs: Observations) -> list[Line]:
             total = _summed(obs, "postgres", resource)
             if np.isfinite(total).any():
                 lines.append(_fixed_line(f"postgres.{resource}", "postgres", resource, unit, total))
+        # The sandboxes' scratch volume (§9.1): nobody's in particular.
+        scratch = _summed(obs, "scratch", "disk")
+        if np.isfinite(scratch).any():
+            lines.append(_fixed_line("scratch.disk", "scratch", "disk", "bytes", scratch))
     if obs.connected("usage_records") and obs.sandbox_user:
         for resource, field_, unit in (("cpu", "cpu_s", "cores"), ("memory", "mem_bs", "bytes")):
             split = _Split(users, p.n)

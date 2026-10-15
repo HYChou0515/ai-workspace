@@ -282,3 +282,39 @@ def test_lines_split_by_regression_wait_for_three_days_the_direct_ones_do_not(da
     assert readiness["allocation"]["ready"]
     assert readiness["regression"]["ready"] is ready
     assert (readiness["regression"]["have_days"], readiness["regression"]["need_days"]) == (days, 3)
+
+
+def test_the_sandbox_scratch_volume_is_a_disk_line_of_its_own():
+    """§9.1: filestore and scratch each get a disk line; ② reported scratch
+    and the analysis dropped it."""
+    from workspace_app.capacity.sources import CapacityEntry, ResourceSample
+
+    w = _world()
+
+    class WithScratch(WorldPods):
+        def usage(self, start_ms, end_ms, step_s):  # noqa: ANN001, ANN201
+            out = list(super().usage(start_ms, end_ms, step_s))
+            out += [ResourceSample(s.t_ms, "scratch", "nfs", disk_bytes=5e10) for s in out[::5]]
+            return out
+
+        def capacity(self):  # noqa: ANN201
+            return [*super().capacity(), CapacityEntry("scratch", None, None, 2e11, 1, "volume")]
+
+    sources = CapacitySources(WorldRecords(w), WithScratch(w))
+    s = analyse(
+        observe(sources, Period(w.start_ms, w.end_ms, w.step_s, ZoneInfo(w.tz))), now_ms=w.end_ms
+    ).summary()
+
+    (line,) = [line for line in s["lines"] if line["id"] == "scratch.disk"]
+    assert (line["capacity"], line["peak"]) == (2e11, pytest.approx(5e10))
+    assert "scratch.disk" in [d["line"] for d in s["runway"]["disk"]]
+
+
+def test_postgres_disk_growth_is_given_per_active_person_per_month():
+    """§9.1 (E16): Postgres disk is not split per person; its growth is, per
+    active person per month — what one more person costs in disk."""
+    s = _long_recorded()
+
+    (pg,) = [d for d in s["runway"]["disk"] if d["line"] == "postgres.disk"]
+    # the world grows Postgres 1e5 bytes a slot: 288 slots a day
+    assert pg["per_person_month"] == pytest.approx(288e5 * 30 / s["people"]["n_now"], rel=0.01)

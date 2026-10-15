@@ -347,12 +347,16 @@ class Analysis:
             xs = np.array([d for d in p.full_days if daily[d] is not None], dtype=float)
             ys = np.array([daily[d] for d in p.full_days if daily[d] is not None], dtype=float)
             threshold = self.thresholds.get(line.id, (DEFAULT_THRESHOLD["disk"], "default"))[0]
+            trend = _trend(xs, ys)
+            n_now = int(self.people.active_30d[-1]) if len(self.people.active_30d) else 0
             out["disk"].append(
                 {
                     "line": line.id,
-                    "trend": _trend(xs, ys),
+                    "trend": trend,
                     "limit": line.capacity * threshold,
                     "now": float(ys[-1]) if len(ys) else None,
+                    # §9.1 (E16): what one more person costs in disk, a month
+                    "per_person_month": trend["slope"] * 30 / n_now if trend and n_now else None,
                 }
             )
         return out

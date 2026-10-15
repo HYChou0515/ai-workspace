@@ -405,6 +405,7 @@ def _records(sources: CapacitySources, obs: Observations, budget: _Budget) -> in
             host = obs.host[r.keys["pod"]] = Measures(p.n, ("live_s", "cpu_psi_s"))
         _spread(p, r, host)
     disk_keys = ("scope", "item", "collection", "user", "app")
+    latest: dict[tuple[int, str, str, str, str], int] = {}
     for r in ask("disk", disk_keys, maxes=("bytes",), step_s=p.step_s):
         i = p.index(r.t_ms or 0)
         if i is None:
@@ -412,7 +413,10 @@ def _records(sources: CapacitySources, obs: Observations, budget: _Budget) -> in
         k = r.keys
         ident = k["item"] or k["collection"]
         key = (int(p.day_of[i]), k["scope"], ident, k["user"] or "unknown", k["app"])
-        obs.disk[key] = max(obs.disk.get(key, 0.0), r.values.get("bytes", 0.0))
+        # §5.2: a day's figure is its latest snapshot — not its largest
+        if i >= latest.get(key, -1):
+            latest[key] = i
+            obs.disk[key] = r.values.get("bytes", 0.0)
     for r in ask("meta", ("pod",), ("dropped",), step_s=None):
         obs.dropped += r.values.get("dropped", 0.0)
     lookback = AggregateQuery(

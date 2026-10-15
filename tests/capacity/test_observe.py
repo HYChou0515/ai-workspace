@@ -247,3 +247,39 @@ def test_a_row_longer_than_a_slot_is_spread_over_the_slots_it_covers():
 
     cpu = obs.sandbox_user[("u", "a")]["cpu_s"]
     assert np.allclose(cpu, 300.0)
+
+
+class _Shrinking(UsageRecordSource):
+    """A workspace measured at 10 GB in the morning and 8 GB in the evening."""
+
+    def __init__(self, t0: int) -> None:
+        from workspace_app.capacity.usage_wire import document
+
+        f = {"scope": "workspace", "item": "i1", "user": "u", "app": "a"}
+        self.docs = [
+            document(
+                "disk", t0 + 6 * 3_600_000, pod="w", component="worker", fields={**f, "bytes": 10e9}
+            ),
+            document(
+                "disk", t0 + 18 * 3_600_000, pod="w", component="worker", fields={**f, "bytes": 8e9}
+            ),
+        ]
+
+    def aggregate(self, q):  # noqa: ANN001, ANN201
+        from workspace_app.capacity.sources import aggregate_documents
+
+        return aggregate_documents(self.docs, q)
+
+    def records(self, kind, start_ms, end_ms):  # noqa: ANN001, ANN201
+        return ()
+
+
+def test_a_days_disk_is_its_last_figure_not_its_largest():
+    """§5.2: a day's disk is the latest snapshot — files deleted in the
+    afternoon are gone, whatever the morning said."""
+    w = _world()
+    period = Period(w.start_ms, w.start_ms + 86_400_000, 300, ZoneInfo(w.tz))
+
+    obs = observe(CapacitySources(_Shrinking(w.start_ms)), period)
+
+    assert list(obs.disk.values()) == [8e9]
