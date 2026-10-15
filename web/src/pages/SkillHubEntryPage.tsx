@@ -27,6 +27,7 @@ import {
 } from "../api/skillHub";
 import { ActionMenu } from "../components/ActionMenu";
 import { useDialog } from "../components/Dialog";
+import { Icon } from "../components/Icon";
 import { ModalActions } from "../components/ModalActions";
 import { ModalShell } from "../components/ModalShell";
 import { PageNotice, type PageNoticeContent } from "../components/PageNotice";
@@ -405,12 +406,13 @@ function InstallDialog({
     })),
   });
   const stateOf = new Map(items.map((it, i) => [it.item_id, states[i]?.data]));
-  // Pickable once its answer says installing can go ahead — `unavailable`
-  // included, the install itself checks. A pick whose row stops being
-  // pickable (a refetch found the folder) goes with it.
+  // Pickable unless its answer says installing cannot go ahead — a row still
+  // being checked included (user, 2026-10-15), as is `unavailable`: the
+  // install itself checks again. A pick whose row turns out not to be
+  // pickable goes with it.
   const pickable = (id: string) => {
     const s = stateOf.get(id)?.state;
-    return s === "ok" || s === "unavailable";
+    return s === undefined || s === "ok" || s === "unavailable";
   };
   const picked = chosen !== null && pickable(chosen) ? chosen : null;
   const install = useMutation({
@@ -448,7 +450,7 @@ function InstallDialog({
       {missing.length > 0 ? (
         <p className="hint">{t("skillHub.install.missing", { tools: missing.join(", ") })}</p>
       ) : null}
-      <fieldset className="skill-hub-fork-items">
+      <fieldset className="skill-hub-targets">
         <legend>{t("skillHub.install.items")}</legend>
         {targets.isPending ? (
           <p className="muted">{t("skillHub.loading")}</p>
@@ -459,35 +461,57 @@ function InstallDialog({
         ) : items.length === 0 ? (
           <p className="muted">{t("skillHub.install.none")}</p>
         ) : (
-          items.map((it) => {
-            const s = stateOf.get(it.item_id);
-            return (
-              <label key={it.item_id} className="skill-hub-fork-item">
-                <input
-                  type="radio"
-                  name={`${titleId}-item`}
-                  value={it.item_id}
-                  checked={picked === it.item_id}
-                  disabled={!pickable(it.item_id)}
-                  onChange={() => setChosen(it.item_id)}
-                />
-                <span>{it.title || it.item_id}</span>
-                <span className="muted small">
-                  {s === undefined
-                    ? t("skillHub.install.state.checking")
-                    : s.state === "installed"
-                      ? t("skillHub.install.state.installed")
-                      : s.state === "unavailable"
-                        ? t("skillHub.install.state.unavailable")
-                        : s.state === "name_taken"
-                          ? s.owner
-                            ? t("skillHub.install.state.taken", { owner: nameOf(s.owner) })
-                            : t("skillHub.install.state.takenHand")
-                          : null}
-                </span>
-              </label>
-            );
-          })
+          // Material 3's two-line list item: the name, and under it what
+          // installing would do there. A row that cannot be picked still says
+          // why (NN/g: a disabled option explains itself).
+          <div className="skill-hub-target-list">
+            {items.map((it) => {
+              const s = stateOf.get(it.item_id);
+              const kind = s === undefined ? "checking" : s.state;
+              return (
+                <label
+                  key={it.item_id}
+                  className="skill-hub-target"
+                  data-state={kind}
+                  data-picked={picked === it.item_id || undefined}
+                >
+                  <input
+                    type="radio"
+                    name={`${titleId}-item`}
+                    value={it.item_id}
+                    checked={picked === it.item_id}
+                    disabled={!pickable(it.item_id)}
+                    onChange={() => setChosen(it.item_id)}
+                  />
+                  <span className="skill-hub-target-text">
+                    <span className="skill-hub-target-title">{it.title || it.item_id}</span>
+                    <span className="skill-hub-target-status">
+                      {kind === "checking" ? (
+                        <span className="skill-hub-target-spinner" aria-hidden="true" />
+                      ) : kind === "installed" ? (
+                        <Icon name="check" size={13} />
+                      ) : kind === "name_taken" ? (
+                        <Icon name="folder" size={13} />
+                      ) : kind === "unavailable" ? (
+                        <Icon name="clock" size={13} />
+                      ) : null}
+                      {s === undefined
+                        ? t("skillHub.install.state.checking")
+                        : s.state === "installed"
+                          ? t("skillHub.install.state.installed")
+                          : s.state === "unavailable"
+                            ? t("skillHub.install.state.unavailable")
+                            : s.state === "name_taken"
+                              ? s.owner
+                                ? t("skillHub.install.state.taken", { owner: nameOf(s.owner) })
+                                : t("skillHub.install.state.takenHand")
+                              : t("skillHub.install.state.ok")}
+                    </span>
+                  </span>
+                </label>
+              );
+            })}
+          </div>
         )}
       </fieldset>
       {install.isError ? (

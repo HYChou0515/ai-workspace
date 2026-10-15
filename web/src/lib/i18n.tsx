@@ -2556,7 +2556,7 @@ export const messages = {
   "skillHub.install": { "zh-TW": "安裝到 workspace…", en: "Install in a workspace…" },
   "skillHub.install.title": { "zh-TW": "把「{name}」裝到哪個 workspace？", en: "Install “{name}” in which workspace?" },
   "skillHub.install.app": { "zh-TW": "App", en: "App" },
-  "skillHub.install.items": { "zh-TW": "workspace", en: "Workspace" },
+  "skillHub.install.items": { "zh-TW": "你能編輯的 workspace", en: "Workspaces you can edit" },
   "skillHub.install.none": {
     "zh-TW": "這個 App 裡沒有你能編輯的 workspace。",
     en: "You can edit no workspace in this App.",
@@ -2568,9 +2568,10 @@ export const messages = {
   "skillHub.install.state.installed": { "zh-TW": "已經裝了", en: "Already installed" },
   // plan-skill-install-picker D3: each row asks for itself.
   "skillHub.install.state.checking": { "zh-TW": "檢查中…", en: "Checking…" },
+  "skillHub.install.state.ok": { "zh-TW": "可以安裝", en: "Ready to install" },
   "skillHub.install.state.unavailable": {
-    "zh-TW": "現在讀不到這個 workspace，按安裝時會再檢查",
-    en: "This workspace cannot be read right now — installing will check again",
+    "zh-TW": "現在讀不到，安裝時會再檢查",
+    en: "Can't be read right now — installing will check again",
   },
   "skillHub.install.state.taken": {
     "zh-TW": "已有同名的 skill（{owner} 的）",
