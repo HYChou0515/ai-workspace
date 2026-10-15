@@ -613,8 +613,9 @@ function EditTab({
         {/* Bounded by the window and scrolled inside: since M23 it holds the
             whole settings (~1000 lines), and grown to fit them it put Save and
             Apply 18,000 px down (review 17; NN/g "Scrolling and Attention" —
-            what sits far below the fold is barely seen). */}
-        <div data-testid="model-settings-editor-box" style={{ height: "55vh", minHeight: 240 }}>
+            what sits far below the fold is barely seen). Half the window keeps
+            Save and Apply on screen at 390 px too, under the taller header. */}
+        <div data-testid="model-settings-editor-box" style={{ height: "50vh", minHeight: 240 }}>
           <MonacoEditor
             ariaLabel={t("modelSettings.editor")}
             value={text}
