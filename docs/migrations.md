@@ -2650,6 +2650,9 @@ AI 讀 `wui` skill 時會看到「這個 item 能讓頁面問的 subagent」清�
   為什麼：標籤讓 ④ 知道 GPU 的負載是誰的。漏查的症狀：1、2 是升級後**所有 AI 呼叫失敗**；3 是使用者 id 外流。
   LiteLLM 的每日標籤彙總表會多出「人數 + App 數 + 用途數 + 最多 7 個」標籤（`ws`、`ws.call:` 的四種、
   `ws.user:system`、`ws.user:unknown`；每個標籤 × 日期 × key × 模型……一列；不帶 item）。
+- 沒有開關的行為：sweeper 排的 job（叢集重算、磁碟對帳……）記在部署的 `get_user_id` 在請求之外回答的人身上
+  （通常是 `server.default_user`），這個人在容量頁算一個人（N 多 1，也算進「至少 10 人」）。只有沒有建立者的
+  job 記成 `system`。不用做什麼；看到這個使用者出現在名單上，就是這個原因。
 - `capacity.timezone`（**rollout 前**建議設成你們的時區，例如 `Asia/Taipei`）：「一天」從哪裡切。空 = UTC 午夜，
   台灣的一天會被切在早上八點。
 - `capacity.step_s`（**rollout 前**，有改它的話）要整除一天：一天要切成整數個時段，「每天的尖峰」和跨日的試算才對得

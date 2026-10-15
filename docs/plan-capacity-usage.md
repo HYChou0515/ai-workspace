@@ -821,6 +821,9 @@ What the build changed from the plan above, each for a reason found while buildi
   ② entry for it) is not drawn: its load is a share of a capacity. The GPU in-flight pairs skip the
   20-point span rule — their load is requests in flight, not a share of a capacity, and the knee's own
   tests (enough points past it, surviving the highest ones) stand in for it.
+- **Without ② there is no GPU capacity at all** (its knee is used only once view 8 is ready, and view 8
+  needs ① and ②) — though the knee's own inputs are ① and ④; what uses the capacity, the overview and the
+  what-if, needs ② anyway.
 - **The headroom is served only when the what-if is ready** (view 1 states it as view 6, §9.10): with
   too few people or ② missing it was still computed from 14 model days, and the overview drew people per
   line and the line that binds under a headline saying it could not tell — and the runway dated an order
@@ -894,7 +897,9 @@ What the build changed from the plan above, each for a reason found while buildi
   only for an App the platform ships (`is_app`, from the apps in the image), and only when the response
   did not refuse the slug (4xx)**: read off the raw path, any URL minted an
   App, and the launcher's `/api/apps/{slug}/icon` made everyone who opened the home page a user of every
-  App with an icon file. Work that failed (5xx, a crash) is still the App's. A request no route answered
+  App with an icon file. Work that failed (5xx, a crash) is still the App's. An App route another page
+  calls for the user still counts: the skill hub's install picker asks every listed workspace's install
+  state (`…/skills/install-state`, #959), so opening it puts the user among those Apps' people. A request no route answered
   is `unknown` without a call to `get_user_id`. A Kubernetes probe (`kube-probe/…`) is `system` work of
   its own kind, `probe:<METHOD> <template>`, not a request: the same count every window on every pod
   moves exactly with each pod's idle cost, and as a request column the regression handed that whole
