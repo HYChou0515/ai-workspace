@@ -844,6 +844,22 @@ describe("SkillHubEntryPage layout (plan-skill-hub-ux-redo D3, D5, D6, D16)", ()
     expect(go).toBeDisabled();
   });
 
+  it("says a row could not be checked when its own question failed — not 「檢查中…」 forever (plan-skill-install-picker D3)", async () => {
+    const c = client(detail({}));
+    c.installState.mockRejectedValue(new HttpError(404, "not found"));
+    c.targets.mockResolvedValue({ missing_tools: [], items: [{ item_id: "i-1", title: "Free one" }] });
+    const qc = makeQueryClient();
+    qc.setDefaultOptions({ queries: { ...qc.getDefaultOptions().queries, retry: false } });
+    mount(c, qc);
+
+    fireEvent.click(await screen.findByRole("button", { name: word("skillHub.install") }));
+    const dialog = await screen.findByTestId("skill-hub-install");
+
+    expect(await within(dialog).findByText(word("skillHub.install.state.unavailable"))).toBeInTheDocument();
+    expect(within(dialog).queryByText(word("skillHub.install.state.checking"))).toBeNull();
+    expect(within(dialog).getByRole("radio", { name: /Free one/ })).toBeEnabled();
+  });
+
   it("opening the dialog does not read where-installed — that reads every App's workspaces (plan-skill-install-picker D3)", async () => {
     const c = client(detail({}));
     c.targets.mockResolvedValue({ missing_tools: [], items: [{ item_id: "i-1", title: "Free one" }] });

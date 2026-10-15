@@ -440,7 +440,8 @@ profile/App 預設;override 上限是 `app.json` 的 `tools`,**不是** profile)
 | `GET` | `/skill-hub/entries/{id}/versions/{rev}` | 一個版本：`files`（同上）、`scripts`、`skill_md` | ✅ |
 | `GET` | `/skill-hub/entries/{id}/versions/{rev}/file?path=` | 一個檔案：`{path, text\|null, size}` | ✅ |
 | `GET` | `/skill-hub/entries/{id}/installs` | 看的人能編輯、且有這個條目副本的 workspace：`{installs:[{app,item_id,title}]}` | ✅ |
-| `GET` | `/skill-hub/entries/{id}/targets?app=` | 那個 App 裡看的人能編輯的 workspace，依標題；只問資料庫，不讀 workspace 的內容（plan-skill-install-picker D1）：`{missing_tools, items:[{item_id,title}]}`。已裝過的看 `…/installs`，同名資料夾由安裝的 409 告知 | ✅ |
+| `GET` | `/skill-hub/entries/{id}/targets?app=` | 那個 App 裡看的人能編輯的 workspace，依標題；只問資料庫，不讀 workspace 的內容（plan-skill-install-picker D1）：`{missing_tools, items:[{item_id,title}]}` | ✅ |
+| `GET` | `/a/{slug}/items/{item_id}/skills/install-state?entry_id=` | 把條目裝進這一個 workspace 會怎樣（安裝對話框每列各問一次，D3）：`{state:"ok"\|"installed"\|"name_taken"\|"unavailable", owner}`；權限同安裝（`edit_content`，只能讀 → 403）；不喚醒沙盒，太忙回 `unavailable` | ✅ |
 | `POST` | `/a/{slug}/items/{item_id}/skills/install` | 安裝：body `{entry_id}` → `{name, missing_tools}`；同名資料夾已在回 409 `folder_in_the_way` | ✅ |
 
 ---

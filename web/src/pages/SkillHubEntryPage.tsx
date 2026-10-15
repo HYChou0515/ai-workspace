@@ -23,6 +23,7 @@ import {
   type SkillEditTarget,
   type SkillHubApi,
   type SkillHubDetail,
+  type SkillInstallState,
   skillHubApi,
 } from "../api/skillHub";
 import { ActionMenu } from "../components/ActionMenu";
@@ -405,7 +406,15 @@ function InstallDialog({
       queryFn: () => client.installState(slug, it.item_id, entry.id),
     })),
   });
-  const stateOf = new Map(items.map((it, i) => [it.item_id, states[i]?.data]));
+  // A question that failed (an API pod without the route mid-rollout, the
+  // network) cannot tell either — said so, not 「檢查中…」 forever.
+  const cannotTell: SkillInstallState = { state: "unavailable", owner: "" };
+  const stateOf = new Map(
+    items.map((it, i) => {
+      const q = states[i];
+      return [it.item_id, q?.data ?? (q?.isError ? cannotTell : undefined)];
+    }),
+  );
   // Pickable unless its answer says installing cannot go ahead — a row still
   // being checked included (user, 2026-10-15), as is `unavailable`: the
   // install itself checks again. A pick whose row turns out not to be
