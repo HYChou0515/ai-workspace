@@ -564,7 +564,7 @@ def test_readiness_walks_each_sources_series_once():
         walked.append(source)
         return real(source)
 
-    a.obs._days_with = counted  # ty: ignore[invalid-assignment]
+    a.obs._days_with = counted
     a.readiness()
     a.summary()
     a.whatif(50)
