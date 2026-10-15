@@ -26,7 +26,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from .nnls import nnls
-from .observe import Observations
+from .observe import Observations, WorkSeries
 
 #: Kept as a column of its own when a route template has at least this many
 #: requests in the period and appears in at least `MIN_PRESENCE` of its slots;
@@ -135,15 +135,20 @@ def everyone(obs: Observations) -> list[str]:
 
 # ── the columns of the shared-component regressions ───────────────────────
 def _kept_templates(obs: Observations) -> set[str]:
-    totals: dict[str, np.ndarray] = {}
+    n = obs.period.n
+    totals: dict[str, float] = {}
+    seen: dict[str, np.ndarray] = {}
     for (_pod, _comp, work), series in obs.work_pod.items():
         if work.startswith("req:"):
-            totals[work] = totals.get(work, 0.0) + series.count
-    n = obs.period.n
+            totals[work] = totals.get(work, 0.0) + series.total_count()
+            slots = seen.get(work)
+            if slots is None:
+                slots = seen[work] = np.zeros(n, dtype=bool)
+            slots[series.slots()] = True
     return {
         work
-        for work, count in totals.items()
-        if count.sum() >= MIN_REQUESTS and (count > 0).sum() >= MIN_PRESENCE * n
+        for work, total in totals.items()
+        if total >= MIN_REQUESTS and seen[work].sum() >= MIN_PRESENCE * n
     }
 
 
@@ -265,8 +270,8 @@ def _regression_line(
         return None
     cpu = measure == "cpu"
 
-    def feed(series_count: np.ndarray, series_seconds: np.ndarray, which: str) -> np.ndarray:
-        values = series_count if which == "count" else series_seconds
+    def feed(series: WorkSeries, which: str) -> np.ndarray:
+        values = series.count if which == "count" else series.seconds
         return values if cpu else values / step
 
     xs: dict[str, dict[str, np.ndarray]] = {}
@@ -290,7 +295,7 @@ def _regression_line(
         if not pooled and pod not in ys:
             continue
         acc = xs.setdefault(target, {})
-        acc[name] = acc.get(name, 0.0) + feed(series.count, series.seconds, which)
+        acc[name] = acc.get(name, 0.0) + feed(series, which)
     if pooled:
         total_y = np.nansum(np.vstack(list(ys.values())), axis=0)
         has = np.any(np.isfinite(np.vstack(list(ys.values()))), axis=0)
@@ -307,7 +312,7 @@ def _regression_line(
         if col is None or col[0] not in costs:
             continue
         name, which, purpose = col
-        values = costs[name] * feed(series.count, series.seconds, which)
+        values = costs[name] * feed(series, which)
         split.add(user, app, purpose, values / step if cpu else values)
     measured = np.vstack([ys[k] for k in ys])
     have = np.isfinite(measured)

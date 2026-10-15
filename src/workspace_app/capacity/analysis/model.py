@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import datetime as dt
 import math
+import threading
+from collections import OrderedDict
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Any
@@ -46,6 +48,9 @@ NEED = {
     "backtest": 21,
 }
 MIN_PEOPLE = 10
+#: What-if profiles whose simulator is kept: each copies every person's day
+#: demand, so one per App ever asked about would add up without end.
+SIMULATORS_KEPT = 4
 SOURCES = ("usage_records", "resource_metrics", "gpu_metrics", "llm_requests")
 #: The sources the what-if rests on: it sizes only on days all those connected have.
 MODEL_SOURCES = ("usage_records", "resource_metrics", "llm_requests")
@@ -85,7 +90,10 @@ class Analysis:
     backtest: dict[str, Any] | None
     generated_ms: int
     is_workday: Callable[[dt.date], bool] = _default_workday
-    _sims: dict[str, Simulator] = field(default_factory=dict)
+    #: most recently used last; asked from the routes' threads, hence the lock
+    _sims: OrderedDict[str, Simulator] = field(default_factory=OrderedDict, repr=False)
+    _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+    _summary: dict[str, Any] | None = field(default=None, repr=False)
 
     @property
     def by_id(self) -> dict[str, Line]:
@@ -179,6 +187,13 @@ class Analysis:
 
     # ── the page ──────────────────────────────────────────────────────────
     def summary(self) -> dict[str, Any]:
+        """What the page loads — the same for as long as the analysis is kept,
+        so it is worked out once."""
+        if self._summary is None:
+            self._summary = self._build_summary()
+        return self._summary
+
+    def _build_summary(self) -> dict[str, Any]:
         p = self.obs.period
         return {
             "period": {
@@ -343,7 +358,7 @@ class Analysis:
         coverage: dict[str, float | None] = {}
         has_records = np.zeros(p.n, dtype=bool)
         for series in self.obs.work_pod.values():
-            has_records |= series.count > 0
+            has_records[series.slots()] = True
         coverage["usage_records"] = (
             float(has_records.mean()) if self.obs.connected("usage_records") else None
         )
@@ -353,12 +368,14 @@ class Analysis:
         )
         gpu = [m["util"] for m in self.obs.gpu.values()]
         coverage["gpu_metrics"] = float((np.vstack(gpu) > 0).any(axis=0).mean()) if gpu else None
-        llm = [s.requests for s in self.obs.llm]
-        coverage["llm_requests"] = float((np.vstack(llm) > 0).any(axis=0).mean()) if llm else None
+        asked = np.zeros(p.n, dtype=bool)
+        for s in self.obs.llm:
+            asked[s.slots()] = True
+        coverage["llm_requests"] = float(asked.mean()) if self.obs.llm else None
         requests = unknown = 0.0
         for (user, _app, _comp, work), series in self.obs.work_user.items():
             if work.startswith("req:"):
-                total = float(series.count.sum())
+                total = series.total_count()
                 requests += total
                 if user == "unknown":
                     unknown += total
@@ -414,8 +431,10 @@ class Analysis:
 
     def simulator(self, profile: str = "all", app: str = "") -> Simulator | None:
         key = f"{profile}:{app}"
-        if key in self._sims:
-            return self._sims[key]
+        with self._lock:
+            if key in self._sims:
+                self._sims.move_to_end(key)
+                return self._sims[key]
         if not self.sizing_days:
             return None
         if profile == "heavy":
@@ -430,7 +449,11 @@ class Analysis:
         else:
             pool = None
         sim = Simulator(self.lines, self.people, self.obs.period, days=self.sizing_days, pool=pool)
-        self._sims[key] = sim
+        with self._lock:
+            self._sims[key] = sim
+            self._sims.move_to_end(key)
+            while len(self._sims) > SIMULATORS_KEPT:
+                self._sims.popitem(last=False)
         return sim
 
     def limits(self) -> dict[str, float]:
@@ -546,15 +569,8 @@ class Analysis:
         for t in turns:
             entry = items.setdefault(str(t.get("item", "")), {})
             entry["turns"] = entry.get("turns", 0) + 1
-        active = sum(
-            1
-            for d in range(len(p.days))
-            if any(
-                s.count[p.day_of == d].sum() > 0
-                for (u, _a, _c, _w), s in self.obs.work_user.items()
-                if u == user
-            )
-        )
+        slots = [s.slots() for (u, _a, _c, _w), s in self.obs.work_user.items() if u == user]
+        active = len(np.unique(p.day_of[np.concatenate(slots)])) if slots else 0
         return {
             "user": user,
             "lines": lines,

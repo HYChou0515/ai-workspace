@@ -257,3 +257,13 @@ def test_without_pressure_on_the_kernel_the_page_is_told_it_is_not_measured():
 
     assert d["note"] == "no_psi"
     assert d["knee"] is None and d["points"] == []
+
+
+def test_the_what_if_keeps_a_few_profiles_not_every_one_asked():
+    """Each profile's simulator copies every person's day demand: kept for
+    every App asked about, they add up in the API process without end."""
+    a = _analysis()
+    for i in range(10):
+        a.whatif(5, "app", f"app-{i}")
+
+    assert len(a._sims) <= 4  # noqa: SLF001

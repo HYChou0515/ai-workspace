@@ -10,7 +10,9 @@ views that need it say so. A source not configured is simply absent.
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable, Iterable, Mapping
+import math
+from array import array
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
 from typing import Any, TypeVar
 from urllib.parse import unquote
@@ -49,24 +51,122 @@ class SourceStatus:
     rows: int = 0
 
 
-@dataclass
+class Series:
+    """One key's sums per slot, kept as the (slot, value) pairs the source
+    returned. A whole period of slots per key, mostly zeros, made memory follow
+    keys × slots — and keys multiply: every rollout renames the pods, every
+    person brings their kinds of work — so a few hundred rows held hundreds of
+    MB in the API process that serves everyone. Now it follows the rows read,
+    which `capacity.max_rows` bounds. `dense()` builds the full array for the
+    moment it is needed. A value that is not a finite number is dropped (a
+    NaN would otherwise poison every sum it joins)."""
+
+    __slots__ = ("_at", "_v", "n")
+
+    def __init__(self, n: int) -> None:
+        self.n = n
+        self._at = array("q")
+        self._v = array("d")
+
+    def add(self, i: int, v: float) -> None:
+        if v and math.isfinite(v):
+            self._at.append(i)
+            self._v.append(v)
+
+    def dense(self) -> np.ndarray:
+        if not self._at:
+            return np.zeros(self.n)
+        at = np.frombuffer(self._at, dtype=np.int64)
+        return np.bincount(at, weights=np.frombuffer(self._v), minlength=self.n)
+
+    def slots(self) -> np.ndarray:
+        """The slots with something in them."""
+        return np.unique(np.frombuffer(self._at, dtype=np.int64)) if self._at else _NONE
+
+    def total(self) -> float:
+        return float(np.frombuffer(self._v).sum()) if self._v else 0.0
+
+
+_NONE = np.zeros(0, dtype=np.int64)
+
+
 class WorkSeries:
-    count: np.ndarray
-    seconds: np.ndarray
-    hist: np.ndarray | None = None  # [slot, bucket], requests only
+    """One key's work: how many, and how many seconds, per slot."""
+
+    __slots__ = ("_count", "_seconds")
+
+    def __init__(self, n: int) -> None:
+        self._count = Series(n)
+        self._seconds = Series(n)
+
+    def add(self, i: int, count: float, seconds: float) -> None:
+        self._count.add(i, count)
+        self._seconds.add(i, seconds)
+
+    @property
+    def count(self) -> np.ndarray:
+        return self._count.dense()
+
+    @property
+    def seconds(self) -> np.ndarray:
+        return self._seconds.dense()
+
+    def slots(self) -> np.ndarray:
+        """The slots with any count in them."""
+        return self._count.slots()
+
+    def total_count(self) -> float:
+        return self._count.total()
 
 
-@dataclass
+class Measures(Mapping[str, np.ndarray]):
+    """Several sums per slot for one key, each kept as a `Series`; reading
+    one builds its array."""
+
+    def __init__(self, n: int, names: Iterable[str]) -> None:
+        self._series = {name: Series(n) for name in names}
+
+    def add(self, i: int, values: Mapping[str, float]) -> None:
+        for name, series in self._series.items():
+            series.add(i, values.get(name, 0.0))
+
+    def __getitem__(self, name: str) -> np.ndarray:
+        return self._series[name].dense()
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self._series)
+
+    def __len__(self) -> int:
+        return len(self._series)
+
+    def slots(self, name: str) -> np.ndarray:
+        return self._series[name].slots()
+
+
 class LlmSeries:
     """One model's traffic from one (person, App, purpose) — or from another system."""
 
-    model: str
-    ours: bool
-    user: str
-    app: str
-    purpose: str
-    busy: np.ndarray
-    requests: np.ndarray
+    __slots__ = ("_busy", "_requests", "app", "model", "ours", "purpose", "user")
+
+    def __init__(self, model: str, ours: bool, user: str, app: str, purpose: str, *, n: int):
+        self.model, self.ours, self.user, self.app, self.purpose = model, ours, user, app, purpose
+        self._busy = Series(n)
+        self._requests = Series(n)
+
+    def add(self, i: int, busy: float, requests: float) -> None:
+        self._busy.add(i, busy)
+        self._requests.add(i, requests)
+
+    @property
+    def busy(self) -> np.ndarray:
+        return self._busy.dense()
+
+    @property
+    def requests(self) -> np.ndarray:
+        return self._requests.dense()
+
+    def slots(self) -> np.ndarray:
+        return self._requests.slots()
 
 
 @dataclass
@@ -77,8 +177,11 @@ class Observations:
     work_pod: dict[tuple[str, str, str], WorkSeries] = field(default_factory=dict)
     #: (user, app, component, work): a job counts on the line of the process that ran it.
     work_user: dict[tuple[str, str, str, str], WorkSeries] = field(default_factory=dict)
-    sandbox_user: dict[tuple[str, str], dict[str, np.ndarray]] = field(default_factory=dict)
-    sandbox_pod: dict[tuple[str, str], dict[str, np.ndarray]] = field(default_factory=dict)
+    #: component → [slot, latency bucket] general requests (`req:` work) — per
+    #: component, not per pod: only the component's p95 is ever read (pair a).
+    hist: dict[str, np.ndarray] = field(default_factory=dict)
+    sandbox_user: dict[tuple[str, str], Measures] = field(default_factory=dict)
+    sandbox_pod: dict[tuple[str, str], Measures] = field(default_factory=dict)
     sandbox_items: dict[tuple[str, str], float] = field(default_factory=dict)
     host: dict[str, dict[str, np.ndarray]] = field(default_factory=dict)
     #: (day index, scope, id, user, app) → bytes, the day's latest snapshot.
@@ -121,9 +224,9 @@ class Observations:
         slots = np.zeros(p.n, dtype=bool)
         if source == "usage_records":
             for series in self.work_pod.values():
-                slots |= series.count > 0
+                slots[series.slots()] = True
             for m in self.sandbox_pod.values():
-                slots |= m["cpu_s"] > 0
+                slots[m.slots("cpu_s")] = True
         elif source == "resource_metrics":
             for m in self.pods.values():
                 slots |= np.isfinite(m["cpu"]) | np.isfinite(m["memory"])
@@ -132,7 +235,7 @@ class Observations:
                 slots |= (m["util"] > 0) | (m["memory"] > 0)
         elif source == "llm_requests":
             for s in self.llm:
-                slots |= s.requests > 0
+                slots[s.slots()] = True
         else:
             raise ValueError(f"unknown source {source!r}")
         days = np.zeros(len(p.days), dtype=bool)
@@ -142,6 +245,10 @@ class Observations:
 
 def _zeros(p: Period) -> np.ndarray:
     return np.zeros(p.n)
+
+
+def _finite(v: float) -> float:
+    return v if math.isfinite(v) else 0.0
 
 
 def _nans(p: Period) -> np.ndarray:
@@ -240,41 +347,43 @@ def _records(sources: CapacitySources, obs: Observations, budget: _Budget) -> in
         key = (r.keys["pod"], r.keys["component"], r.keys["work"])
         series = obs.work_pod.get(key)
         if series is None:
-            hist = np.zeros((p.n, BUCKETS)) if key[2].startswith("req:") else None
-            series = obs.work_pod[key] = WorkSeries(_zeros(p), _zeros(p), hist)
-        series.count[i] += r.values.get("count", 0.0)
-        series.seconds[i] += r.values.get("seconds", 0.0)
-        if series.hist is not None:
-            series.hist[i] += [r.values.get(h, 0.0) for h in HIST]
+            series = obs.work_pod[key] = WorkSeries(p.n)
+        series.add(i, r.values.get("count", 0.0), r.values.get("seconds", 0.0))
+        if key[2].startswith("req:"):
+            hist = obs.hist.get(key[1])
+            if hist is None:
+                hist = obs.hist[key[1]] = np.zeros((p.n, BUCKETS))
+            hist[i] += [_finite(r.values.get(h, 0.0)) for h in HIST]
     for r in ask("work", ("user", "app", "component", "work"), ("count", "seconds")):
         i = p.index(r.t_ms or 0)
         if i is None:
             continue
         key = (r.keys["user"] or "unknown", r.keys["app"], r.keys["component"], r.keys["work"])
-        series = obs.work_user.setdefault(key, WorkSeries(_zeros(p), _zeros(p)))
-        series.count[i] += r.values.get("count", 0.0)
-        series.seconds[i] += r.values.get("seconds", 0.0)
+        series = obs.work_user.get(key)
+        if series is None:
+            series = obs.work_user[key] = WorkSeries(p.n)
+        series.add(i, r.values.get("count", 0.0), r.values.get("seconds", 0.0))
     measured = ("cpu_s", "mem_bs", "thr_s", "cpu_psi_s", "oom")
     for r in ask("sandbox", ("user", "app"), measured):
         i = p.index(r.t_ms or 0)
         if i is None:
             continue
-        acc = obs.sandbox_user.setdefault(
-            (r.keys["user"] or "unknown", r.keys["app"]), {m: _zeros(p) for m in measured}
-        )
-        for m in measured:
-            acc[m][i] += r.values.get(m, 0.0)
+        key = (r.keys["user"] or "unknown", r.keys["app"])
+        acc = obs.sandbox_user.get(key)
+        if acc is None:
+            acc = obs.sandbox_user[key] = Measures(p.n, measured)
+        acc.add(i, r.values)
     for r in ask("sandbox", (), maxes=("cpu_psi_s",), step_s=None):
         obs.psi_seen = obs.psi_seen or "cpu_psi_s" in r.values
     for r in ask("sandbox", ("pod", "component"), ("cpu_s", "mem_bs")):
         i = p.index(r.t_ms or 0)
         if i is None:
             continue
-        acc = obs.sandbox_pod.setdefault(
-            (r.keys["pod"], r.keys["component"]), {m: _zeros(p) for m in ("cpu_s", "mem_bs")}
-        )
-        acc["cpu_s"][i] += r.values.get("cpu_s", 0.0)
-        acc["mem_bs"][i] += r.values.get("mem_bs", 0.0)
+        key = (r.keys["pod"], r.keys["component"])
+        acc = obs.sandbox_pod.get(key)
+        if acc is None:
+            acc = obs.sandbox_pod[key] = Measures(p.n, ("cpu_s", "mem_bs"))
+        acc.add(i, r.values)
     for r in ask("sandbox", ("user", "item"), ("cpu_s",), step_s=None):
         obs.sandbox_items[(r.keys["user"], r.keys["item"])] = r.values.get("cpu_s", 0.0)
     for r in ask("sandbox_host", ("pod",), ("live_s", "cpu_psi_s")):
@@ -391,9 +500,8 @@ def _llm(sources: CapacitySources, obs: Observations, budget: _Budget) -> int:
         )
         s = series.get(key)
         if s is None:
-            s = series[key] = LlmSeries(*key, busy=_zeros(p), requests=_zeros(p))
-        s.busy[i] += row.busy_seconds
-        s.requests[i] += row.requests
+            s = series[key] = LlmSeries(*key, n=p.n)
+        s.add(i, row.busy_seconds, row.requests)
     obs.llm = list(series.values())
     for row in src.latency(p.start_ms, p.end_ms, p.step_s):
         budget.take()

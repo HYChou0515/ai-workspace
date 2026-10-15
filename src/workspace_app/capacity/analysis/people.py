@@ -53,10 +53,10 @@ def count_people(obs: Observations, users: list[str]) -> People:
     used = np.zeros((len(users), p.n), dtype=bool)
     for (user, _app, _comp, _work), series in obs.work_user.items():
         if user in row:
-            used[row[user]] |= series.count > 0
+            used[row[user], series.slots()] = True
     for (user, _app), m in obs.sandbox_user.items():
         if user in row:
-            used[row[user]] |= m["cpu_s"] > 0
+            used[row[user], m.slots("cpu_s")] = True
     for d, day in enumerate(p.days):
         start, end = _day_bounds_ms(day, p.tz)
         since = end - LOOKBACK_DAYS * 86_400_000

@@ -113,10 +113,9 @@ def build_pairs(obs: Observations, lines: Mapping[str, Line]) -> list[Pair]:
     pairs: list[Pair] = []
     api = _util(lines.get("api.cpu"))
     if api is not None:
-        hist = np.zeros((p.n, len(_EDGES) - 1))
-        for (_pod, comp, work), series in obs.work_pod.items():
-            if comp == "api" and series.hist is not None and work.startswith("req:"):
-                hist += series.hist
+        hist = obs.hist.get("api")
+        if hist is None:
+            hist = np.zeros((p.n, len(_EDGES) - 1))
         pairs.append(Pair("a", "api.util", "latency_p95_ms", api, hist_p95(hist), None, "api.cpu"))
         events = []
         for turn in obs.turns:

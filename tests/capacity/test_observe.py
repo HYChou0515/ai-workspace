@@ -17,6 +17,7 @@ from workspace_app.capacity.sources import (
     CapacitySources,
     LlmLatencyRow,
     LlmRequestSource,
+    LlmUsageRow,
     ResourceMetricsSource,
     UsageRecordSource,
 )
@@ -148,3 +149,61 @@ def test_every_row_an_analysis_reads_counts_against_the_limit(sources):
     memory (#804): a row it does not count is a row with no bound."""
     with pytest.raises(TooManyRows):
         observe(sources, _period(_world()), max_rows=100)
+
+
+class _ManyKeys(UsageRecordSource):
+    """300 keys of every kind, one row each: a few rollouts' worth of pod names
+    × the routes each served, and as many people — 600-odd rows in all."""
+
+    def __init__(self, t_ms: int) -> None:
+        self.t = t_ms
+
+    def aggregate(self, q):  # noqa: ANN001, ANN201
+        out = []
+        for i in range(300):
+            keys = {
+                "pod": f"api-{i // 30}",
+                "component": "api",
+                "work": f"req:GET /api/r{i % 30}",
+                "user": f"u{i}",
+                "app": "a",
+            }
+            values = {"count": 1.0, "seconds": 0.1, "h0": 1.0, "cpu_s": 1.0, "mem_bs": 1.0}
+            if q.kind in ("work", "sandbox") and q.step_s:
+                out.append(AggregateRow(self.t, {g: keys[g] for g in q.group_by}, values))
+        return out
+
+    def records(self, kind, start_ms, end_ms):  # noqa: ANN001, ANN201
+        return ()
+
+
+class _ManyCallers(LlmRequestSource):
+    def __init__(self, t_ms: int) -> None:
+        self.t = t_ms
+
+    def usage(self, start_ms, end_ms, step_s):  # noqa: ANN001, ANN201
+        tags = lambda i: ("ws", f"ws.user:u{i}", "ws.app:a", "ws.purpose:chat")  # noqa: E731
+        return (LlmUsageRow(self.t, "m", tags(i), 1, 10, 10, 1.0) for i in range(300))
+
+    def latency(self, start_ms, end_ms, step_s):  # noqa: ANN001, ANN201
+        return ()
+
+
+def test_memory_follows_the_rows_read_not_keys_times_slots():
+    """Each key used to get a whole period of slots, mostly zeros — a request
+    histogram ten wide per pod and route, and arrays per person and kind of
+    work. Pods renamed by every rollout and people multiply keys, so a few
+    hundred rows held hundreds of MB in the API pod that serves everyone."""
+    import tracemalloc
+
+    w = _world()
+    period = Period(w.start_ms, w.start_ms + 28 * 86_400_000, 300, ZoneInfo(w.tz))
+    sources = CapacitySources(_ManyKeys(w.start_ms), llm_requests=_ManyCallers(w.start_ms))
+
+    tracemalloc.start()
+    obs = observe(sources, period, max_rows=5_000_000)
+    held, _peak = tracemalloc.get_traced_memory()
+    tracemalloc.stop()
+
+    assert len(obs.work_pod) == len(obs.work_user) == len(obs.sandbox_user) == 300
+    assert held < 30e6, f"{held / 1e6:.0f} MB for {obs.status['usage_records'].rows} rows"
