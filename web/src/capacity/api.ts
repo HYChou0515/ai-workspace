@@ -183,7 +183,9 @@ export type CapacitySummary = {
     }[];
     backtest: { mape: number; days: number[]; by_line: Record<string, number> } | null;
     coverage: Record<string, number | null>;
+    /** Of the API requests someone made (not static files, not probes): no one identified. */
     unknown_share: number | null;
+    /** Of the running time of jobs and turns: the share nobody started. */
     system_share: number | null;
     /** source → [start_ms, end_ms] runs with nothing (pods and cards). */
     gaps: Record<string, [number, number][]>;

@@ -118,6 +118,9 @@ class WorkSeries:
     def total_count(self) -> float:
         return self._count.total()
 
+    def total_seconds(self) -> float:
+        return self._seconds.total()
+
 
 class Measures(Mapping[str, np.ndarray]):
     """Several sums per slot for one key, each kept as a `Series`; reading

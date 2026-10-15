@@ -3449,12 +3449,12 @@ export const messages = {
     en: "{source}: no data from {start} to {end}.",
   },
   "capacity.conf.system": {
-    "zh-TW": "{pct} 的請求是系統工作，算在「系統工作」那一列。",
-    en: "{pct} of requests are system work; they are the 'System work' row.",
+    "zh-TW": "背景工作與對話回合的執行時間有 {pct} 是系統工作（沒有人觸發），算在「系統工作」那一列。",
+    en: "{pct} of background-job and turn time is system work (nobody started it); it is the 'System work' row.",
   },
   "capacity.conf.unknown": {
-    "zh-TW": "{pct} 的請求認不出是誰，算在「認不出是誰」那一列。",
-    en: "{pct} of requests could not be attributed; they are the 'Unidentified' row.",
+    "zh-TW": "{pct} 的 API 請求認不出是誰，算在「認不出是誰」那一列。",
+    en: "{pct} of API requests could not be attributed; they are the 'Unidentified' row.",
   },
   "capacity.conf.untagged": {
     "zh-TW": "{model} 有 {pct} 的負載來自其他系統或沒有標籤。",

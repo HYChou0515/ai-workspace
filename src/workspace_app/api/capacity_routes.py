@@ -229,8 +229,9 @@ class ConfidenceOut(BaseModel):
     regressions: list[RegressionOut]
     backtest: BacktestOut | None
     coverage: dict[str, float | None]
+    #: of the API requests someone made (not static files, not probes): no one identified
     unknown_share: float | None
-    #: E4: the share of requests no person asked for
+    #: E4: of the running time of jobs and turns, the share nobody started
     system_share: float | None
     #: source → [start_ms, end_ms] runs with nothing, for the sources sampled
     #: every slot (resource_metrics, gpu_metrics)

@@ -19,7 +19,7 @@ from workspace_app.capacity.analysis.observe import observe
 from workspace_app.capacity.analysis.period import Period
 from workspace_app.capacity.sources import CapacitySources
 
-from .world import FILES, KB, SEND, World, WorldGpus, WorldLlm, WorldPods, WorldRecords
+from .world import FILES, INDEX, KB, SEND, World, WorldGpus, WorldLlm, WorldPods, WorldRecords
 
 
 @cache
@@ -378,27 +378,66 @@ def test_an_hour_with_no_machine_samples_is_listed_as_a_gap():
 
 
 def test_the_share_of_work_nobody_asked_for_is_reported():
-    """E4: `system` is a row of its own, and its share is in view 9."""
+    """E4: `system` is a row of its own, and its share is in view 9. Work with
+    nobody behind it is a job or a turn no person started — the share is of
+    their running time (requests carry `system` only for probes)."""
     w = _world()
 
-    class OneIsSystem(WorldRecords):
+    class TheirIndexingIsSystem(WorldRecords):
         def _kinds(self):  # noqa: ANN202
-            return {
-                k: [
-                    (at, {**u, "user": "system"} if u.get("user") == "user00" else u) for at, u in v
-                ]
-                for k, v in super()._kinds().items()
-            }
+            def relabel(u: dict) -> dict:
+                ran = str(u.get("work", "")).startswith(("job:", "turn:"))
+                return {**u, "user": "system"} if ran and u.get("user") == "user00" else u
 
-    sources = CapacitySources(OneIsSystem(w), WorldPods(w), WorldGpus(w), WorldLlm(w))
+            return {k: [(at, relabel(u)) for at, u in v] for k, v in super()._kinds().items()}
+
+    sources = CapacitySources(TheirIndexingIsSystem(w), WorldPods(w), WorldGpus(w), WorldLlm(w))
     s = analyse(
         observe(sources, Period(w.start_ms, w.end_ms, w.step_s, ZoneInfo(w.tz))), now_ms=w.end_ms
     ).summary()
 
-    counts = w.counts
-    mine = sum(float(counts[k][0].sum()) for k in (FILES, SEND, KB))
-    every = sum(float(counts[k].sum()) for k in (FILES, SEND, KB))
-    assert s["confidence"]["system_share"] == pytest.approx(mine / every, rel=1e-6)
+    index = w.counts[INDEX]
+    assert s["confidence"]["system_share"] == pytest.approx(index[0].sum() / index.sum(), rel=1e-6)
+
+
+def test_the_unidentified_share_is_of_the_api_requests_people_made():
+    """Static files are no person's to identify, and a probe is system work:
+    with either in the count, "x% could not be attributed" moved with page
+    loads and with how many pods were probed."""
+    w = _world()
+    t0 = w.start_ms + 86_400_000 + 10 * 3_600_000
+
+    class WithStrangers(WorldRecords):
+        def _kinds(self):  # noqa: ANN202
+            kinds = super()._kinds()
+
+            def row(user: str, work: str, count: int) -> tuple[int, dict]:
+                return t0, {
+                    "kind": "work",
+                    "pod": "api-1",
+                    "component": "api",
+                    "user": user,
+                    "app": "",
+                    "work": work,
+                    "count": count,
+                    "seconds": 0.0,
+                    "window_s": w.step_s,
+                }
+
+            extra = [
+                row("unknown", "req:GET (static)", 5000),
+                row("system", "req:GET /api/readyz", 7000),
+                row("unknown", "req:GET /api/public", 300),
+            ]
+            return {**kinds, "work": [*kinds["work"], *extra]}
+
+    sources = CapacitySources(WithStrangers(w), WorldPods(w), WorldGpus(w), WorldLlm(w))
+    s = analyse(
+        observe(sources, Period(w.start_ms, w.end_ms, w.step_s, ZoneInfo(w.tz))), now_ms=w.end_ms
+    ).summary()
+
+    people = sum(float(w.counts[k].sum()) for k in (FILES, SEND, KB))
+    assert s["confidence"]["unknown_share"] == pytest.approx(300 / (people + 300), rel=1e-6)
 
 
 def test_the_headroom_says_how_many_days_it_sized_on():

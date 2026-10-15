@@ -512,7 +512,7 @@ describe("thresholds and confidence (views 8, 9)", () => {
 
     const conf = screen.getByTestId("capacity-confidence");
     expect(within(conf).getAllByTestId("capacity-gap")).toHaveLength(1);
-    expect(conf).toHaveTextContent("4.0% 的請求是系統工作");
+    expect(conf).toHaveTextContent("背景工作與對話回合的執行時間有 4.0% 是系統工作");
     expect(conf).toHaveTextContent("用之前的日子預測最後 7 天");
   });
 

@@ -411,15 +411,22 @@ class Analysis:
         for m in self.obs.gpu.values():
             carded |= (m["util"] > 0) | (m["memory"] > 0)
         gaps = {"resource_metrics": find_gaps(p, sampled), "gpu_metrics": find_gaps(p, carded)}
-        requests = unknown = system = 0.0
+        # Unidentified: of the API requests someone made — a static file is
+        # nobody's to identify, and a probe is system work. System: of the
+        # running time of jobs and turns, the work that can have nobody
+        # behind it.
+        requests = unknown = ran = system = 0.0
         for (user, _app, _comp, work), series in self.obs.work_user.items():
-            if work.startswith("req:"):
+            if work.startswith("req:") and not work.endswith(" (static)") and user != "system":
                 total = series.total_count()
                 requests += total
                 if user == "unknown":
                     unknown += total
-                elif user == "system":
-                    system += total
+            elif work.startswith(("job:", "turn:")):
+                seconds = series.total_seconds()
+                ran += seconds
+                if user == "system":
+                    system += seconds
         untagged: dict[str, float] = {}
         for line in self.lines:
             if line.unit == "inflight" and line.other is not None:
@@ -441,7 +448,7 @@ class Analysis:
             "backtest": self.backtest,
             "coverage": coverage,
             "unknown_share": unknown / requests if requests else None,
-            "system_share": system / requests if requests else None,
+            "system_share": system / ran if ran else None,
             "gaps": gaps,
             "untagged_gpu_share": untagged,
             "dropped": self.obs.dropped,
