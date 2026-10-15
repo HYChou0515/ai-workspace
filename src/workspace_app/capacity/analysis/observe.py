@@ -249,6 +249,8 @@ class Observations:
     # ④ LiteLLM
     llm: list[LlmSeries] = field(default_factory=list)
     latency: dict[str, dict[str, np.ndarray]] = field(default_factory=dict)
+    #: `days_with`, per source, once the observations are complete
+    _days: dict[str, np.ndarray] = field(default_factory=dict, repr=False)
 
     def connected(self, source: str) -> bool:
         s = self.status.get(source)
@@ -257,7 +259,15 @@ class Observations:
     def days_with(self, source: str) -> np.ndarray:
         """[day] whether `source` has anything that day. A day before a
         source began is not a quiet day — it is no day at all, and the
-        analysis must not size on it."""
+        analysis must not size on it. Worked out once per source: it walks
+        every series the source filled."""
+        cached = self._days.get(source)
+        if cached is None:
+            cached = self._days[source] = self._days_with(source)
+            cached.setflags(write=False)
+        return cached
+
+    def _days_with(self, source: str) -> np.ndarray:
         p = self.period
         slots = np.zeros(p.n, dtype=bool)
         if source == "usage_records":
@@ -301,7 +311,7 @@ def _spread(p: Period, row: AggregateRow, into: Measures) -> None:
         return
     try:
         window = int(float(row.keys.get("window_s") or 0))
-    except ValueError:
+    except (ValueError, OverflowError):  # not a number, or not a finite one
         window = 0
     span = window // p.step_s if window > p.step_s and window % p.step_s == 0 else 1
     share = {k: v / span for k, v in row.values.items()} if span > 1 else row.values

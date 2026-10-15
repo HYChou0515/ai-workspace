@@ -96,6 +96,7 @@ class Analysis:
     _sims: OrderedDict[str, Simulator] = field(default_factory=OrderedDict, repr=False)
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
     _summary: dict[str, Any] | None = field(default=None, repr=False)
+    _readiness: dict[str, dict[str, Any]] | None = field(default=None, repr=False)
 
     @property
     def by_id(self) -> dict[str, Line]:
@@ -115,7 +116,13 @@ class Analysis:
     def readiness(self) -> dict[str, dict[str, Any]]:
         """Per view: whether it can say anything yet, and if not, why — a
         source not connected or failing, a period shorter than the view needs
-        (no wait will fix that), days still accumulating, too few people."""
+        (no wait will fix that), days still accumulating, too few people.
+        The same for as long as the analysis is kept: worked out once."""
+        if self._readiness is None:
+            self._readiness = self._build_readiness()
+        return self._readiness
+
+    def _build_readiness(self) -> dict[str, dict[str, Any]]:
         holds = len(self.obs.period.full_days)
         n_now = int(self.people.active_30d[-1]) if len(self.people.active_30d) else 0
         regressions = any(line.method == "regression" for line in self.lines)
@@ -520,7 +527,8 @@ class Analysis:
         return out
 
     def whatif(self, n: int, profile: str = "all", app: str = "") -> dict[str, Any]:
-        sim = self.simulator(profile, app)
+        # Asked directly, it does not answer what the page says it cannot.
+        sim = self.simulator(profile, app) if self.readiness()["whatif"]["ready"] else None
         if sim is None:
             return {
                 "n": n,
@@ -788,8 +796,8 @@ def analyse(
         generated_ms=now_ms,
         is_workday=is_workday,
     )
-    sim = analysis.simulator()
-    if sim is not None and len(days) >= NEED["whatif"]:
+    sim = analysis.simulator() if len(days) >= NEED["whatif"] else None
+    if sim is not None:
         analysis.headroom = headroom(sim, analysis.limits())
     analysis.backtest = _backtest(lines, people, obs, is_workday, days)
     return analysis

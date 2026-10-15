@@ -251,6 +251,20 @@ def test_a_row_longer_than_a_slot_is_spread_over_the_slots_it_covers():
     assert np.allclose(cpu, 300.0)
 
 
+def test_a_window_that_is_no_number_is_read_as_one_slot():
+    """`window_s` comes from the record: an infinite one raised OverflowError,
+    and one row failed every view that needs the records."""
+    w = _world()
+    period = Period(w.start_ms, w.start_ms + 86_400_000, 300, ZoneInfo(w.tz))
+    source = _CoarseHost(w.start_ms, 2)
+    source.docs[0]["usage"]["window_s"] = float("inf")
+
+    obs = observe(CapacitySources(source), period)
+
+    assert obs.status["usage_records"].error is None
+    assert obs.sandbox_user[("u", "a")]["cpu_s"][0] == 600.0
+
+
 class _Shrinking(UsageRecordSource):
     """A workspace measured at 10 GB in the morning and 8 GB in the evening."""
 

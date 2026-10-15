@@ -392,3 +392,28 @@ def test_a_job_type_whose_pods_all_stopped_gets_no_share():
 
     assert got["index"] == pytest.approx(8.0)
     assert got["wiki"] is None
+
+
+def test_the_kept_request_templates_are_worked_out_once():
+    """Which route templates are columns of their own is one question per
+    analysis; every regression line walked every request series again."""
+    import workspace_app.capacity.analysis.lines as lines_module
+
+    w = _world()
+    sources = CapacitySources(WorldRecords(w), WorldPods(w), WorldGpus(w), WorldLlm(w))
+    obs = observe(sources, Period(w.start_ms, w.end_ms, w.step_s, ZoneInfo(w.tz)))
+    calls = []
+    real = lines_module._kept_templates
+
+    def counted(o):  # noqa: ANN001, ANN202
+        calls.append(1)
+        return real(o)
+
+    lines_module._kept_templates = counted
+    try:
+        built = build_lines(obs)
+    finally:
+        lines_module._kept_templates = real
+
+    assert sum(1 for line in built if line.method == "regression") > 1
+    assert len(calls) == 1

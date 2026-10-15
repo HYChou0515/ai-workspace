@@ -352,6 +352,7 @@ def _regression_line(
     column: Column,
     measure: str,
     work_components: tuple[str, ...],
+    kept: set[str],
     pooled: bool = False,
 ) -> Line | None:
     """A shared component split by the utilization law. `measure` is the pod
@@ -360,7 +361,6 @@ def _regression_line(
     `pooled` line (Postgres) regresses its pods' sum on every process's work."""
     p = obs.period
     step = float(p.step_s)
-    kept = _kept_templates(obs)
     pods = sorted(pods)
     if not pods:
         return None
@@ -552,6 +552,7 @@ def build_lines(obs: Observations) -> list[Line]:
     users = everyone(obs)
     lines: list[Line] = []
     if obs.connected("usage_records") and obs.connected("resource_metrics"):
+        kept = _kept_templates(obs)
         for resource, measure, unit, column in (
             ("cpu", "cpu", "cores", cpu_column),
             ("memory", "memory", "bytes", memory_column),
@@ -572,6 +573,7 @@ def build_lines(obs: Observations) -> list[Line]:
                     column=column,
                     measure=measure,
                     work_components=(component,),
+                    kept=kept,
                 )
                 if line is not None:
                     line.job = job
@@ -589,6 +591,7 @@ def build_lines(obs: Observations) -> list[Line]:
             column=cpu_column,
             measure="cpu",
             work_components=("api", "worker"),
+            kept=kept,
             pooled=True,
         )
         if pg is not None:

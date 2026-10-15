@@ -175,12 +175,15 @@ def test_without_pods_and_machines_the_views_that_need_them_say_so():
 def test_a_week_long_period_cannot_size_purchases_and_says_so():
     """However much data there is, a 7-day period holds 7 days: the what-if
     needs 14, so it asks for a longer period rather than promising to appear."""
-    ready = _analysis(days=7).summary()["readiness"]
+    week = _analysis(days=7)
+    ready = week.summary()["readiness"]
 
     assert ready["whatif"]["reason"] == "period_too_short"
     assert (ready["whatif"]["period_days"], ready["whatif"]["need_days"]) == (7, 14)
     assert ready["distribution"]["ready"]
     assert ready["allocation"]["ready"]
+    # and asked directly, it does not answer what it says it cannot
+    assert week.whatif(50)["ready"] is False
 
 
 def test_a_week_of_data_in_a_four_week_period_is_still_accumulating():
@@ -547,3 +550,23 @@ def test_a_source_that_stopped_before_the_end_has_a_gap_to_the_end():
     present[-24:] = False
 
     assert find_gaps(p, present) == [[p.end_ms - 2 * 3_600_000, p.end_ms]]
+
+
+def test_readiness_walks_each_sources_series_once():
+    """The trends view counted days by asking every source for all its days
+    again for each day of the period: the whole period's series walked once
+    a day, then again on every summary and every what-if."""
+    a = _analysis(days=28)
+    walked: list[str] = []
+    real = a.obs._days_with
+
+    def counted(source: str) -> np.ndarray:
+        walked.append(source)
+        return real(source)
+
+    a.obs._days_with = counted  # ty: ignore[invalid-assignment]
+    a.readiness()
+    a.summary()
+    a.whatif(50)
+
+    assert len(walked) == len(set(walked))
