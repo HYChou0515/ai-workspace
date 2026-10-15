@@ -504,3 +504,23 @@ def test_a_broker_url_with_its_password_never_reaches_the_page(tmp_path):
         overlay.set_source(None)
 
     assert "hunter2" not in body and "hunter3" not in body
+
+
+def test_test_connection_waits_long_enough_for_a_model_to_load(page, monkeypatch):
+    # demo 2026-10-15: since M24 nothing streams until the model is loaded, and a
+    # CPU model read back from disk took over 30 s — the test timed out twice on
+    # a model that works. The running line already says it can take tens of
+    # seconds; the bound only costs anything when the endpoint never answers.
+    from workspace_app.kb.llm import LitellmLlm
+
+    seen: list[float | None] = []
+
+    def stream(self, prompt):
+        seen.append(self._timeout)
+        return iter([("OK", False)])
+
+    monkeypatch.setattr(LitellmLlm, "stream", stream)
+
+    page.client.post(f"{BASE}/test-connection", json={"preset": "kb-default"})
+
+    assert seen and seen[0] is not None and seen[0] >= 120

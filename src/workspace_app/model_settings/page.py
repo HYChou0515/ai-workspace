@@ -217,7 +217,7 @@ def try_connection(
     deploy: Settings | None = None,
     page_keys: set[str] | frozenset[str] = frozenset(),
     config_dir: Path | None,
-    timeout_s: float = 30.0,
+    timeout_s: float = 120.0,
 ) -> Connection:
     """Call `preset`'s first endpoint once with `settings` (the draft, keys
     included), and stop at its first token. Never part of Apply (M8): a
@@ -225,7 +225,11 @@ def try_connection(
 
     The first token — thinking included — already shows the endpoint answers,
     the key is taken and the model exists (M24): waiting for the whole reply
-    cost a thinking model on CPU ~35 s, where its first token came in ~1-3 s."""
+    cost a thinking model on CPU ~35 s, where its first token came in ~1-3 s.
+
+    `timeout_s` must cover a model's load: nothing streams before it, and a CPU
+    model read back from disk took over 30 s (demo 2026-10-15 — 30 s timed out
+    twice on a model that works). It costs only when the endpoint never answers."""
     from ..config.schema import RetrievalLlmRef
     from ..factories import resolve_llm_chain
     from ..kb.llm import LitellmLlm
