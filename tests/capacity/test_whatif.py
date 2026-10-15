@@ -167,3 +167,23 @@ def test_fewer_than_todays_n_draws_from_todays_people(n):
     sim = Simulator([_line(_noon_bump(10, 3))], _people(10, 3), period, days=[0, 1, 2])
 
     assert np.allclose(sim.run(n)["api.cpu"], n * 1.0)
+
+
+def test_a_run_reads_each_day_not_the_whole_period():
+    """A run takes the day's demand of the day's people. Indexing the people
+    first copied their whole period — every run, day and line — only to keep
+    one day of it: the headroom's fifty-odd runs paid it over and over."""
+    import tracemalloc
+
+    days = 14
+    rng = np.random.default_rng(3)
+    per_user = _noon_bump(200, days) * rng.lognormal(0, 1, (200, 1))
+    line = _line(per_user)
+    sim = Simulator([line], _people(200, days), _period(days), days=list(range(days)), draws=20)
+    sim.run(250)  # anything made once, made before counting
+    tracemalloc.start()
+    sim.run(250)
+    peak = tracemalloc.get_traced_memory()[1]
+    tracemalloc.stop()
+
+    assert peak < 0.5 * line.per_user.nbytes, f"{peak} bytes at the peak of one run"

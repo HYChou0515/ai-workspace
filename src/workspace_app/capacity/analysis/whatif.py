@@ -142,7 +142,8 @@ class Simulator:
             for line in self.lines:
                 rows = self._row_of[line.id][day.present]
                 has = rows >= 0
-                demand = line.per_user[rows[has]][:, day.slots]
+                # the day's block only: indexing the people first copies their whole period
+                demand = line.per_user[np.ix_(rows[has], day.slots)]
                 total = counts[:, has] @ demand + day.base[line.id]
                 peaks[line.id][draws] = total.max(axis=1)
             for line in self.fixed_lines:
