@@ -271,6 +271,8 @@ class PersonOut(BaseModel):
 class WhatIfLineOut(BaseModel):
     id: str
     unit: str
+    #: a line N cannot push: it needs what it uses at any N, and gets no verdict
+    fixed: bool
     p50: float
     p95: float
     capacity: float | None

@@ -3286,6 +3286,7 @@ export const messages = {
   "capacity.whatif.no": { "zh-TW": "不夠", en: "Short" },
   "capacity.whatif.machinesValue": { "zh-TW": "{n} 台（現在 {now}）", en: "{n} (now {now})" },
   "capacity.whatif.cardsValue": { "zh-TW": "{n} 張（現在 {now}）", en: "{n} cards (now {now})" },
+  "capacity.whatif.fixed": { "zh-TW": "不隨人數變", en: "does not grow with people" },
   "capacity.whatif.capped": {
     "zh-TW": "{asked} 人超出試算的範圍：試算最多看到現在人數的 20 倍，這裡算的是 {n} 人。",
     en: "{asked} is beyond the what-if's reach — it looks at most 20× today's people; this is for {n}.",

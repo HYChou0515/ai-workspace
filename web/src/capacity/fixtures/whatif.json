@@ -10,6 +10,7 @@
   {
    "id": "api.cpu",
    "unit": "cores",
+   "fixed": false,
    "p50": 0.8426993968342928,
    "p95": 1.2852584033185182,
    "capacity": 1.2,
@@ -30,6 +31,7 @@
   {
    "id": "worker.index.cpu",
    "unit": "cores",
+   "fixed": false,
    "p50": 1.059999978542328,
    "p95": 2.019999957084656,
    "capacity": 4.0,
@@ -50,6 +52,7 @@
   {
    "id": "api.memory",
    "unit": "bytes",
+   "fixed": false,
    "p50": 1416490188.800007,
    "p95": 1464490188.800007,
    "capacity": 8589934592.0,
@@ -70,6 +73,7 @@
   {
    "id": "worker.index.memory",
    "unit": "bytes",
+   "fixed": false,
    "p50": 1288490188.80001,
    "p95": 1288490188.80001,
    "capacity": 8589934592.0,
@@ -90,6 +94,7 @@
   {
    "id": "postgres.cpu",
    "unit": "cores",
+   "fixed": false,
    "p50": 0.2019466666549299,
    "p95": 0.20341433323123898,
    "capacity": 4.0,
@@ -110,26 +115,28 @@
   {
    "id": "postgres.memory",
    "unit": "bytes",
+   "fixed": true,
    "p50": 4294967296.0,
    "p95": 4294967296.0,
    "capacity": 17179869184.0,
    "threshold": 0.8,
-   "needed_p50": 5368709120.0,
-   "needed_p95": 5368709120.0,
+   "needed_p50": 4294967296.0,
+   "needed_p95": 4294967296.0,
    "machines_now": 1,
    "machine_label": "node 4 cores / 16 GiB",
    "machines_needed": {
-    "p50": 1,
-    "p95": 1
+    "p50": null,
+    "p95": null
    },
    "fits": {
-    "p50": true,
-    "p95": true
+    "p50": null,
+    "p95": null
    }
   },
   {
    "id": "sandbox-host.cpu",
    "unit": "cores",
+   "fixed": false,
    "p50": 8.676747554381084,
    "p95": 22.069379195441595,
    "capacity": 8.0,
@@ -150,6 +157,7 @@
   {
    "id": "sandbox-host.memory",
    "unit": "bytes",
+   "fixed": false,
    "p50": 10750764064.236937,
    "p95": 14818323851.68764,
    "capacity": 34359738368.0,
@@ -170,6 +178,7 @@
   {
    "id": "gpu.qwen3",
    "unit": "inflight",
+   "fixed": false,
    "p50": 1.5071996134075336,
    "p95": 2.3183938479884523,
    "capacity": 0.6999860543428099,
@@ -190,12 +199,13 @@
   {
    "id": "gpu.qwen3.memory",
    "unit": "bytes",
+   "fixed": true,
    "p50": 150323855360.0,
    "p95": 150323855360.0,
    "capacity": 171798691840.0,
    "threshold": 0.8,
-   "needed_p50": 187904819200.0,
-   "needed_p95": 187904819200.0,
+   "needed_p50": 150323855360.0,
+   "needed_p95": 150323855360.0,
    "machines_now": null,
    "machine_label": "",
    "machines_needed": {
@@ -203,8 +213,8 @@
     "p95": null
    },
    "fits": {
-    "p50": false,
-    "p95": false
+    "p50": null,
+    "p95": null
    }
   }
  ],

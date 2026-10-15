@@ -82,6 +82,8 @@ export function CapacityPage({ client = capacityApi }: { client?: CapacityClient
           <button
             type="button"
             className="btn"
+            data-variant="secondary"
+            data-size="sm"
             onClick={() => refresh.mutate()}
             disabled={refresh.isPending || query.isFetching}
             data-testid="capacity-refresh"

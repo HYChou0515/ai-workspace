@@ -352,6 +352,27 @@ describe("what-if and runway (views 6, 7)", () => {
     );
   });
 
+  it("gives a line more people would not use no verdict", async () => {
+    const s = summary();
+    const c = client();
+    const data = structuredClone(whatifFixture) as unknown as WhatIfData;
+    const memory = data.lines.find((l) => l.id === "postgres.memory")!;
+    Object.assign(memory, { fixed: true, needed_p95: memory.p95, fits: { p50: null, p95: null } });
+    c.whatif = vi.fn(async () => data);
+    renderWithQuery(<WhatIf summary={s} days={28} client={c} t={t} />);
+
+    const table = await screen.findByTestId("capacity-whatif-table");
+    const row = within(table).getByText("資料庫 記憶體").closest("tr")!;
+    expect(row).toHaveTextContent("不隨人數變");
+    expect(row.lastElementChild).toHaveTextContent("—");
+  });
+
+  it("draws its run button as a button", async () => {
+    renderWithQuery(<WhatIf summary={summary()} days={28} client={client()} t={t} />);
+
+    expect(await screen.findByTestId("capacity-whatif-run")).toHaveAttribute("data-variant", "primary");
+  });
+
   it("counts GPUs in cards", async () => {
     const s = summary();
     const c = client();

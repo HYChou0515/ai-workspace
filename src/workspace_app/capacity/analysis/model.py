@@ -280,7 +280,10 @@ class Analysis:
                 ]
         person_peaks = sorted(g["peak"] for g in groups["person"] if g["key"] not in NOT_PEOPLE)
         daily_peak = self._daily(line.total, "max")
-        days = data_days(self.obs, [line.source]) if line.source else p.full_days
+        own = data_days(self.obs, [line.source]) if line.source else p.full_days
+        # the days the headroom sizes on, so a row's peak, utilisation and
+        # "holds" rest on the same days; before it can size, the line's own
+        days = [d for d in self.sizing_days if d in own] or own
         full_peaks = [v for d in days if (v := daily_peak[d]) is not None]
         threshold, source = self.thresholds.get(line.id, (None, None))
         capacity = line.capacity
@@ -513,19 +516,25 @@ class Analysis:
         n = max(0, min(n, n_max))
         peaks = sim.run(n)
         rows = []
+        fixed_ids = {line.id for line in sim.fixed_lines}
         for line in self.lines:
             if line.id not in peaks:
                 continue
             p50, p95 = (float(np.quantile(peaks[line.id], q)) for q in (0.5, 0.95))
             threshold = self.thresholds.get(line.id, (None, None))[0]
             per_machine = line.capacity / line.machines if line.capacity and line.machines else None
+            # A line N cannot push (a model's preallocated memory, the database's
+            # memory) needs what it uses at any N: no threshold, no verdict.
+            fixed = line.id in fixed_ids
             needed = {
-                q: (v / threshold if threshold else None) for q, v in (("p50", p50), ("p95", p95))
+                q: (v if fixed else v / threshold if threshold else None)
+                for q, v in (("p50", p50), ("p95", p95))
             }
             rows.append(
                 {
                     "id": line.id,
                     "unit": line.unit,
+                    "fixed": fixed,
                     "p50": p50,
                     "p95": p95,
                     "capacity": line.capacity,
@@ -535,11 +544,19 @@ class Analysis:
                     "machines_now": line.machines,
                     "machine_label": line.machine_label,
                     "machines_needed": {
-                        q: (math.ceil(v / per_machine) if (v is not None and per_machine) else None)
+                        q: (
+                            math.ceil(v / per_machine)
+                            if (not fixed and v is not None and per_machine)
+                            else None
+                        )
                         for q, v in needed.items()
                     },
                     "fits": {
-                        q: (v <= line.capacity if (v is not None and line.capacity) else None)
+                        q: (
+                            v <= line.capacity
+                            if (not fixed and v is not None and line.capacity)
+                            else None
+                        )
                         for q, v in needed.items()
                     },
                 }

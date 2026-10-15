@@ -281,9 +281,9 @@
    "machine_label": "pod 2 cores / 4 GiB",
    "threshold": 0.7,
    "threshold_source": "default",
-   "peak": 0.6470023584140651,
+   "peak": 0.6585894877932106,
    "avg": 0.23420192104551057,
-   "utilization_peak": 0.5391686320117209,
+   "utilization_peak": 0.5488245731610089,
    "fixed": {
     "avg": 0.20008395932666334,
     "peak": 0.20008395932666337
@@ -544,9 +544,9 @@
    "machine_label": "pod 4 cores / 8 GiB",
    "threshold": 0.7,
    "threshold_source": "default",
-   "peak": 0.7400000000000001,
+   "peak": 0.7480000000000002,
    "avg": 0.11615079365079366,
-   "utilization_peak": 0.18500000000000003,
+   "utilization_peak": 0.18700000000000006,
    "fixed": {
     "avg": 0.10000000000000006,
     "peak": 0.10000000000000005
@@ -1126,9 +1126,9 @@
    "machine_label": "node 4 cores / 16 GiB",
    "threshold": 0.7,
    "threshold_source": "default",
-   "peak": 0.20135633333333336,
+   "peak": 0.201388,
    "avg": 0.2001027000661376,
-   "utilization_peak": 0.05033908333333334,
+   "utilization_peak": 0.050347,
    "fixed": {
     "avg": 0.19999999999999932,
     "peak": 0.19999999999999932
@@ -1502,9 +1502,9 @@
    "machine_label": "node 4 cores / 16 GiB",
    "threshold": 0.8,
    "threshold_source": "default",
-   "peak": 43717092960.0,
+   "peak": 43671012960.0,
    "avg": 43352822960.0,
-   "utilization_peak": 0.20357357785105706,
+   "utilization_peak": 0.20335900112986566,
    "fixed": {
     "avg": 43352822960.0,
     "peak": 43735822960.0
@@ -1601,9 +1601,9 @@
    "machine_label": "node 8 cores / 32 GiB",
    "threshold": 0.5005669190811626,
    "threshold_source": "knee",
-   "peak": 7.609686371787054,
+   "peak": 7.963080087733564,
    "avg": 0.6249090656910375,
-   "utilization_peak": 0.9512107964733818,
+   "utilization_peak": 0.9953850109666955,
    "fixed": {
     "avg": 0.2999999998771939,
     "peak": 0.3000000008168429
@@ -1821,9 +1821,9 @@
    "machine_label": "node 8 cores / 32 GiB",
    "threshold": 0.8,
    "threshold_source": "default",
-   "peak": 6865930315.218018,
+   "peak": 6959981258.324729,
    "avg": 1128904402.6588247,
-   "utilization_peak": 0.19982487182185338,
+   "utilization_peak": 0.202562114524327,
    "fixed": {
     "avg": 536870911.5278723,
     "peak": 536870890.2969903
@@ -2041,9 +2041,9 @@
    "machine_label": "volume 500 GiB",
    "threshold": 0.8,
    "threshold_source": "default",
-   "peak": 13617188784.0,
+   "peak": 13139915924.0,
    "avg": 9992898660.857143,
-   "utilization_peak": 0.025363990634679794,
+   "utilization_peak": 0.02447500065714121,
    "fixed": {
     "avg": 0.0,
     "peak": 0.0
@@ -2261,9 +2261,9 @@
    "machine_label": "GPU card",
    "threshold": 1.0,
    "threshold_source": "knee",
-   "peak": 1.2953552104208155,
+   "peak": 1.3100481891192228,
    "avg": 0.4420802580102339,
-   "utilization_peak": 1.8505443106819819,
+   "utilization_peak": 1.8715346984293522,
    "fixed": {
     "avg": 0.0,
     "peak": 0.0

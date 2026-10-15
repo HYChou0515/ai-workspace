@@ -620,11 +620,25 @@ _DEMO: World | None = None
 
 
 def demo_world() -> World:
-    """One shared world ending today, so the dashboard's default period covers it."""
+    """One shared world ending today, so every period the dashboard offers has
+    data, recorded long enough (70 days) for the runway: 70 people, 20 of whom
+    joined along the way; a sandbox host with room to grow into, and a shared
+    GPU that other systems' weekend batch pushes past its knee — so the GPU's
+    capacity is measured while the workdays still fit."""
     global _DEMO
     if _DEMO is None:
         today = dt.datetime.now(ZoneInfo("Asia/Taipei")).date()
-        _DEMO = World(days=35, users=60, first_day=today - dt.timedelta(days=35))
+        _DEMO = World(
+            days=70,
+            users=70,
+            first_day=today - dt.timedelta(days=70),
+            joining=20,
+            api_cores_per_pod=2.0,
+            sandbox_host_cores=16.0,
+            gpu_cards=6,
+            other_busy_mean=0.3,
+            other_weekend_batch=2.2,
+        )
     return _DEMO
 
 

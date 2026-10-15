@@ -217,6 +217,8 @@ export type WhatIf = {
   lines: {
     id: string;
     unit: Unit;
+    /** A line N cannot push: it needs what it uses at any N, and gets no verdict. */
+    fixed: boolean;
     p50: number;
     p95: number;
     capacity: number | null;

@@ -436,3 +436,40 @@ def test_a_persons_rank_is_among_people_not_the_unknown_and_system_rows():
         (mine,) = [x for x in detail["lines"] if x["id"] == "sandbox-host.cpu"]
         below = sum(1 for v in totals.values() if v < totals[u])
         assert mine["rank"] == pytest.approx(below / (len(people) - 1)), u
+
+
+@cache
+def _weekend_batch():  # noqa: ANN202
+    """Another system's weekend batch makes the shared GPU's weekends its
+    busiest days; the platform's own load is a workday thing."""
+    w = World(days=14, users=40, gpu_cards=6, other_weekend_batch=2.2)
+    sources = CapacitySources(WorldRecords(w), WorldPods(w), WorldGpus(w), WorldLlm(w))
+    obs = observe(sources, Period(w.start_ms, w.end_ms, w.step_s, ZoneInfo(w.tz)))
+    return analyse(obs, now_ms=w.end_ms)
+
+
+def test_a_lines_peak_rests_on_the_days_the_headroom_does():
+    """The overview's peak, utilisation and "holds" sit in one row: a peak
+    taken over weekends the headroom never sizes on read 140% beside "holds
+    more people than today"."""
+    a = _weekend_batch()
+    s = a.summary()
+    gpu = next(line for line in s["lines"] if line["id"] == "gpu.qwen3")
+
+    sized = [gpu["daily"]["peak"][d] for d in a.sizing_days]
+    assert gpu["peak"] == pytest.approx(float(np.quantile(sized, 0.95)))
+
+
+def test_a_line_that_does_not_grow_with_people_is_not_judged_by_the_what_if():
+    """A model's preallocated GPU memory or the database's memory is the same
+    for any N: holding it to a safe threshold says "short" at every N, which
+    reads as "buy more" for something more people would not use."""
+    out = _full().whatif(80)
+
+    fixed = [r for r in out["lines"] if r["id"] in ("postgres.memory", "gpu.qwen3.memory")]
+    assert fixed
+    for r in fixed:
+        assert r["fixed"] is True
+        assert r["needed_p95"] == pytest.approx(r["p95"])
+        assert r["fits"] == {"p50": None, "p95": None}
+        assert r["machines_needed"] == {"p50": None, "p95": None}

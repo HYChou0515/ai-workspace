@@ -168,7 +168,7 @@ export function WhatIf({
               testId="capacity-whatif-level"
               options={(["p50", "p95"] as const).map((v) => ({ value: v, label: t(`capacity.whatif.level.${v}`) }))}
             />
-            <button type="submit" className="btn" data-testid="capacity-whatif-run">
+            <button type="submit" className="btn" data-variant="primary" data-size="md" data-testid="capacity-whatif-run">
               {t("capacity.whatif.run")}
             </button>
           </form>
@@ -207,7 +207,10 @@ export function WhatIf({
                       return (
                         <tr key={r.id} data-fits={fits === null ? undefined : String(fits)}>
                           <th scope="row">{lineLabelById(t, summary.lines, r.id)}</th>
-                          <td>{formatValue(t, needed, r.unit)}</td>
+                          <td>
+                            {formatValue(t, needed, r.unit)}
+                            {r.fixed && <span className="capacity-sub">{t("capacity.whatif.fixed")}</span>}
+                          </td>
                           <td>{r.capacity === null ? t("capacity.unknown") : formatValue(t, r.capacity, r.unit)}</td>
                           <td>{short !== null && short > 0 ? formatValue(t, short, r.unit) : "—"}</td>
                           <td>
