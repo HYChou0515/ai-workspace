@@ -307,15 +307,24 @@ class SkillHubInstalls(BaseModel):
 
 
 class SkillHubTarget(BaseModel):
-    """One workspace the install dialog offers, and what installing would do
-    there (D6): `ok`; `installed` — a copy of this entry is already there;
-    `name_taken` — another folder of that name is, `owner` naming whose copy
-    it is when the viewer can read that entry ("" otherwise: a hand-written
-    folder, a fork's starting point, a copy of an entry gone from their view);
-    `unavailable` — the workspace's sandbox was too busy to answer."""
+    """One workspace the install dialog offers. What installing would do
+    there is asked per row (`SkillInstallState`): reading every workspace's
+    `.skill/` before answering held the whole list back behind the slowest
+    sandbox (plan-skill-install-picker D1)."""
 
     item_id: str
     title: str
+
+
+class SkillInstallState(BaseModel):
+    """What installing an entry into one workspace would do, asked before
+    Install is pressed (D3): `ok`; `installed` — a copy of this entry is
+    already there; `name_taken` — another folder of that name is, `owner`
+    naming whose copy it is when the viewer can read that entry ("" otherwise:
+    a hand-written folder, a fork's starting point, a copy of an entry gone
+    from their view); `unavailable` — the workspace's sandbox was too busy to
+    answer, so the install itself will tell."""
+
     state: Literal["ok", "installed", "name_taken", "unavailable"]
     owner: str = ""
 
@@ -592,39 +601,20 @@ def register_skill_hub_routes(
 
     @app.get("/skill-hub/entries/{entry_id}/targets")
     async def skill_hub_targets(entry_id: str, app: str) -> SkillHubTargets:
-        """The workspaces of App `app` the viewer may install into, each with
-        what installing would do — the same refusal `POST …/skills/install`
-        gives (`skill_folder_in_the_way`), asked before rather than after.
-        An App the platform does not know has none."""
+        """The workspaces of App `app` the viewer may install into, by title —
+        the database alone, no workspace read (plan-skill-install-picker D1);
+        each row then asks `…/skills/install-state` for itself (D3). It still
+        loads every live workspace of the App and checks permission here,
+        unpaged, where the item list pushes visibility into the query. An App
+        the platform does not know has none."""
         viewer = get_user_id()
         entry = _readable(entry_id, viewer)
         candidates = await asyncio.to_thread(_editable, viewer, [app])
-
-        def target(item_id: str, title: str) -> Callable[[], Awaitable[SkillHubTarget]]:
-            async def ask() -> SkillHubTarget:
-                held = await _holds_copy(item_id, entry_id, entry.name)
-                if held is None:
-                    return SkillHubTarget(item_id=item_id, title=title, state="unavailable")
-                if held:
-                    return SkillHubTarget(item_id=item_id, title=title, state="installed")
-                try:
-                    taken = await skill_folder_in_the_way(
-                        files, item_id, hub, entry.name, viewer, wake=False
-                    )
-                except SandboxBusy:
-                    return SkillHubTarget(item_id=item_id, title=title, state="unavailable")
-                if taken is not None:
-                    return SkillHubTarget(
-                        item_id=item_id, title=title, state="name_taken", owner=taken.owner
-                    )
-                return SkillHubTarget(item_id=item_id, title=title, state="ok")
-
-            return ask
-
-        items = await _bounded([target(item_id, title) for _s, item_id, title in candidates])
         return SkillHubTargets(
             missing_tools=missing_tools_for(entry.referenced_tools, app),
-            items=items,
+            items=[
+                SkillHubTarget(item_id=item_id, title=title) for _s, item_id, title in candidates
+            ],
         )
 
     # ── management: owner-only (plan Q7 / P7) ────────────────────────────
@@ -843,6 +833,31 @@ def register_skill_hub_routes(
             duplicates=report.duplicates,
             gitattributes_dropped=report.gitattributes_dropped,
         )
+
+    @app.get("/a/{slug}/items/{item_id}/skills/install-state")
+    async def skill_install_state(slug: str, item_id: str, entry_id: str) -> SkillInstallState:
+        """What installing `entry_id` here would do — one row of the install
+        dialog, asked by that row so a busy sandbox holds back only itself
+        (plan-skill-install-picker D3). The install route's own gate and rule
+        (`skill_folder_in_the_way`), asked before rather than after. Never
+        wakes a sandbox: a reaped one is answered from its durable copy."""
+        viewer = get_user_id()
+        investigation_id = locator.require_access(slug, item_id, "edit_content")
+        entry = _readable(entry_id, viewer)
+        held = await _holds_copy(investigation_id, entry_id, entry.name)
+        if held is None:
+            return SkillInstallState(state="unavailable")
+        if held:
+            return SkillInstallState(state="installed")
+        try:
+            taken = await skill_folder_in_the_way(
+                files, investigation_id, hub, entry.name, viewer, wake=False
+            )
+        except SandboxBusy:
+            return SkillInstallState(state="unavailable")
+        if taken is not None:
+            return SkillInstallState(state="name_taken", owner=taken.owner)
+        return SkillInstallState(state="ok")
 
     @app.post("/a/{slug}/items/{item_id}/skills/fork")
     async def fork_skill_version_into_item(
