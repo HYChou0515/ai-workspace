@@ -330,6 +330,8 @@ class Analysis:
             "binding": room.binding,
             "by_line": room.by_line,
             "ceiling": room.max_n is not None and room.max_n >= max(1, room.n_now) * MAX_GROWTH,
+            # what it rests on: the days it drew from
+            "days": len(self.sizing_days),
         }
 
     def _runway_json(self) -> dict[str, Any]:

@@ -397,3 +397,12 @@ def test_the_share_of_work_nobody_asked_for_is_reported():
     mine = sum(float(counts[k][0].sum()) for k in (FILES, SEND, KB))
     every = sum(float(counts[k].sum()) for k in (FILES, SEND, KB))
     assert s["confidence"]["system_share"] == pytest.approx(mine / every, rel=1e-6)
+
+
+def test_the_headroom_says_how_many_days_it_sized_on():
+    """The page says what the headroom rests on: the workdays it drew from,
+    not the period's length."""
+    s = _summary()
+
+    workdays = [d for d in s["period"]["full_days"] if d in s["period"]["workdays"]]
+    assert s["headroom"]["days"] == len(workdays)

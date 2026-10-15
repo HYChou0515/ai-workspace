@@ -137,6 +137,8 @@ class HeadroomOut(BaseModel):
     binding: str | None
     by_line: dict[str, int]
     ceiling: bool
+    #: the days the headroom drew from (workdays with data)
+    days: int
 
 
 class TrendOut(BaseModel):

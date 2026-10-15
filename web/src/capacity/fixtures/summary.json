@@ -2585,7 +2585,8 @@
    "sandbox-host.memory": 60,
    "gpu.qwen3": 0
   },
-  "ceiling": false
+  "ceiling": false,
+  "days": 20
  },
  "runway": {
   "days": [],
