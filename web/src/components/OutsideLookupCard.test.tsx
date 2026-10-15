@@ -133,6 +133,41 @@ describe("asking for a search", () => {
     wrote();
     expect(await screen.findByRole("button", { name: "已複製" })).toBeInTheDocument();
   });
+
+  // Copying is now how the suggestion reaches the box, so a copy that fails
+  // must say so rather than do nothing.
+  it("says when the suggestion could not be copied", async () => {
+    const writeText = vi.fn(() => Promise.reject(new Error("denied")));
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    draw();
+
+    fireEvent.click(screen.getByRole("button", { name: "複製建議" }));
+
+    expect(await screen.findByText("沒辦法自動複製,請選取上面的字再複製")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "已複製" })).toBeNull();
+  });
+
+  it("says so too where the page cannot reach the clipboard at all", async () => {
+    Object.defineProperty(navigator, "clipboard", { value: undefined, configurable: true });
+    draw();
+
+    fireEvent.click(screen.getByRole("button", { name: "複製建議" }));
+
+    expect(await screen.findByText("沒辦法自動複製,請選取上面的字再複製")).toBeInTheDocument();
+  });
+
+  // Primer: the confirmation reverts after a moment, so a second copy can be told apart.
+  it("goes back to 複製建議 a moment after copying", async () => {
+    const writeText = vi.fn(() => Promise.resolve());
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    draw();
+    fireEvent.click(screen.getByRole("button", { name: "複製建議" }));
+    expect(await screen.findByRole("button", { name: "已複製" })).toBeInTheDocument();
+
+    await waitFor(() => expect(screen.getByRole("button", { name: "複製建議" })).toBeInTheDocument(), {
+      timeout: 3000,
+    });
+  });
 });
 
 describe("asking to open a page", () => {

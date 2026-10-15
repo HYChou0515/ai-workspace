@@ -408,6 +408,20 @@ def test_handing_over_a_job_under_way_does_not_restart_it():
     assert _claim(client).status_code == 204
 
 
+# The typed-keywords check (D13) guards only a job that would START: a reloaded
+# card's box is empty again, and its 「查」 on a job under way still gets that job.
+def test_a_job_under_way_is_returned_even_with_an_empty_box():
+    client, _spec, iid = _asked()
+    _beat(client)
+    first = _hand(client, iid).json()
+    _claim(client)
+
+    again = _hand(client, iid, query="")
+
+    assert again.status_code == 201, again.text
+    assert again.json()["id"] == first["id"]
+
+
 # A helper waiting on the person is busy, not gone: what it says while it waits
 # counts as checking in, so it still reads as connected (review round 1).
 def test_a_helper_waiting_on_the_person_still_reads_as_connected():

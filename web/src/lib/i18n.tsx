@@ -1868,6 +1868,10 @@ export const messages = {
     en: "Buttons marked ↗ open a new tab",
   },
   "lookup.target": { "zh-TW": "{name}(在新分頁開啟)", en: "{name} (opens in a new tab)" },
+  "lookup.copyFailed": {
+    "zh-TW": "沒辦法自動複製,請選取上面的字再複製",
+    en: "Couldn't copy it — select the text above and copy it yourself",
+  },
   "lookup.copied": { "zh-TW": "已複製", en: "Copied" },
   "lookup.url": { "zh-TW": "網址", en: "Address" },
   "lookup.openUrl": { "zh-TW": "開啟這個網址", en: "Open this address" },

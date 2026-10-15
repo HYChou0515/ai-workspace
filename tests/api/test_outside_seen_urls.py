@@ -124,7 +124,7 @@ def test_a_search_card_never_goes_without_the_nod():
 
 
 # …even when what it would search for is, character for character, a link a
-# lookup brought back: a search sends the AI's words out, and those wait.
+# lookup brought back: a search sends words out, and those wait for the person.
 def test_a_search_for_a_seen_link_still_waits_for_the_nod():
     client, iid = _chat(query="https://pandas.example/whatsnew")
     _beat(client)
