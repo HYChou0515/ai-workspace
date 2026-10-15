@@ -7,8 +7,11 @@ and no compare-and-swap is needed (the skill hub counter's shape). A flush runs
 every few minutes and once more when the process stops; what a pod that dies
 without stopping had not flushed is lost — at most one interval of counts.
 
-Rows older than `KEEP_DAYS` are deleted, once a day per pod, by an indexed
-query on `day` — never a scan of the table (#804).
+Rows older than `KEEP_DAYS` are deleted, once a day per pod, by a query on
+the indexed `day` naming the expired days (#804). On Postgres a list of more
+than 64 days (the prune, a 90-day report) is read by specstar's flat path, a
+pass over this small table's meta rather than an index probe — as the range
+it replaces was.
 """
 
 from __future__ import annotations
@@ -60,7 +63,7 @@ class ToolUsageDay(Struct, kw_only=True):
 
 def register_tool_usage(spec: SpecStar) -> None:
     """Idempotently register the model. `day` is indexed because both the
-    window a report asks for and the prune are ranges on it; `tool` because a
+    window a report asks for and the prune name days on it; `tool` because a
     tool's own breakdown is read by it; `kind` because a report reads one."""
     with contextlib.suppress(ValueError):
         spec.add_model(ToolUsageDay, indexed_fields=["day", "tool", "kind", "package"])
@@ -209,7 +212,8 @@ def days_between(first: str, last: str) -> list[str]:
     field as a NUMBER — `(indexed_data->>'day')::numeric >= '2026-09-16'` —
     which Postgres refuses, so every report and prune failed there (the
     person: 「Tool usage 回覆500」) while the in-memory backend compared the
-    strings and the tests passed. Membership is compared as text."""
+    strings and the tests passed. Membership is compared as jsonb
+    (`@>` probes, or `= ANY(…::jsonb[])` for a long list), with no cast."""
     start, end = dt.date.fromisoformat(first), dt.date.fromisoformat(last)
     return [(start + dt.timedelta(days=n)).isoformat() for n in range((end - start).days + 1)]
 

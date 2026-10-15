@@ -5,7 +5,7 @@ range on an indexed field as a number — `(indexed_data->>'day')::numeric <
 '2026-07-17'` — so every report (and the daily prune) failed there with
 `invalid input syntax for type numeric`, while the in-memory backend the unit
 tests run on compared the strings and passed. The store now asks for the days
-it means by name: membership, which Postgres compares as text.
+it means by name: membership, which Postgres compares as jsonb, no cast.
 """
 
 from __future__ import annotations
@@ -146,11 +146,14 @@ def test_the_report_answers_on_postgres(pg_spec) -> None:  # noqa: ANN001
     client = TestClient(app)
 
     report = client.get("/api/admin/tool-usage?days=30")
+    # 90 days is past specstar's 64-value probe list: the `= ANY` path
+    long = client.get("/api/admin/tool-usage?days=90")
     detail = client.get("/api/admin/tool-usage/read_file?days=30")
     csv = client.get("/api/admin/tool-usage.csv?days=30")
 
     assert report.status_code == 200, report.text
     assert [t["tool"] for t in report.json()["tools"]] == ["read_file"]
+    assert long.status_code == 200 and long.json()["tools"][0]["calls"] == 1, long.text
     assert detail.status_code == 200 and detail.json()["calls"] == 1, detail.text
     assert csv.status_code == 200 and "read_file" in csv.text
 
