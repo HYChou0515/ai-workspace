@@ -188,7 +188,10 @@ def headroom(sim: Simulator, limits: dict[str, float]) -> Headroom:
         while hi <= ceiling and fits(hi, which):
             lo, hi = hi, hi * 2
         if hi > ceiling:
-            return ceiling
+            # "the furthest it looks, or more" is said only when that fits
+            if fits(ceiling, which):
+                return ceiling
+            hi = ceiling
         while hi - lo > 1:
             mid = (lo + hi) // 2
             lo, hi = (mid, hi) if fits(mid, which) else (lo, mid)

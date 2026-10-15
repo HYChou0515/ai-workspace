@@ -140,6 +140,19 @@ def test_the_headroom_is_where_the_limit_is_crossed():
     assert room.n_now == 10
 
 
+def test_the_headroom_is_the_limit_even_just_below_the_furthest_it_looks():
+    """Doubling from today's 10 passes 160 and would step past 200 (20× today),
+    the furthest it looks. The limit is at 180: the answer is 180, not "200 or
+    more" — that claim is only made when 200 itself fits."""
+    period = _period()
+    sim = Simulator([_line(_noon_bump(10, 3))], _people(10, 3), period, days=[0, 1, 2])
+
+    room = headroom(sim, {"api.cpu": 180.5})
+
+    assert room.by_line["api.cpu"] == 180
+    assert headroom(sim, {"api.cpu": 1e9}).by_line["api.cpu"] == 200
+
+
 def test_no_limit_no_headroom():
     period = _period()
     sim = Simulator([_line(_noon_bump(4, 3))], _people(4, 3), period, days=[0, 1, 2])
