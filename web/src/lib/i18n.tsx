@@ -3313,6 +3313,10 @@ export const messages = {
     "zh-TW": "下單日（{order}）已經過了：現在就該下單。",
     en: "The order-by date ({order}) has passed: order now.",
   },
+  "capacity.runway.peopleIncomplete": {
+    "zh-TW": "開始記錄才 {days} 天：時程只用「30 天都已記錄」的日子——之前的人數還在累積，會被當成成長——所以要第 30 天以後才開始算，約在開始記錄後 58 天出現。",
+    en: "Records began {days} days ago: the runway uses only days whose 30 days are recorded — before that the count is still filling up and would read as growth — so it starts counting after day 30 and appears about 58 days after recording began.",
+  },
   "capacity.runway.none": {
     "zh-TW": "還算不出能撐的人數上限（見總覽），所以沒有日期。",
     en: "There is no people limit yet (see the overview), so there is no date.",

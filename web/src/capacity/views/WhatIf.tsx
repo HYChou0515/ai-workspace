@@ -14,7 +14,7 @@ import type { ChartOption } from "../echarts";
 import { bytes, dayLabel, formatValue, lineLabelById, machineCount, pct, type T } from "../format";
 import { NotReady } from "../Readiness";
 import { Segmented } from "./Allocation";
-import { PeopleCaveat } from "./Overview";
+import { PeopleCaveat, recordedDays } from "./Overview";
 
 export type Level = "p50" | "p95";
 /** E12: until someone types theirs. */
@@ -256,6 +256,8 @@ function Runway({ summary, t }: { summary: CapacitySummary; t: T }) {
   const [lead, setLead] = useState(String(DEFAULT_LEAD_DAYS));
   const leadDays = Math.max(0, Number.parseInt(lead, 10) || 0);
   const at = runwayDate(summary);
+  // while N is still filling up, the runway counts no days: say why
+  const recorded = recordedDays(summary);
   const option = useMemo<ChartOption | null>(() => {
     const { trend, days, n, band } = summary.runway;
     if (!trend || days.length === 0) return null;
@@ -297,6 +299,11 @@ function Runway({ summary, t }: { summary: CapacitySummary; t: T }) {
   return (
     <section className="capacity-sub-view" data-testid="capacity-runway">
       <h3 className="capacity-h3">{t("capacity.runway.title")}</h3>
+      {recorded !== null && (
+        <p className="capacity-note" data-testid="capacity-runway-incomplete">
+          {t("capacity.runway.peopleIncomplete", { days: recorded })}
+        </p>
+      )}
       <NotReady readiness={summary.readiness.runway} t={t} />
       {summary.readiness.runway.ready && (
         <>

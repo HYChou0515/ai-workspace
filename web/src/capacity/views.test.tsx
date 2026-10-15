@@ -395,6 +395,19 @@ describe("what-if and runway (views 6, 7)", () => {
     expect(screen.getByTestId("capacity-runway-text")).toHaveTextContent("已經過了：現在就該下單");
   });
 
+  it("says why the runway counts no days while the records are younger than 30 days", () => {
+    const s = summary();
+    s.people.complete = false;
+    s.people.recorded_since_ms = s.period.end_ms - 12 * DAY;
+    s.readiness.runway = notReady({ have_days: 0, need_days: 28 });
+
+    renderWithQuery(<WhatIf summary={s} days={28} client={client()} t={t} />);
+
+    expect(screen.getByTestId("capacity-runway")).toHaveTextContent(
+      "開始記錄才 12 天：時程只用「30 天都已記錄」的日子",
+    );
+  });
+
   it("says why there is no date when there is no people limit", () => {
     const s = summary();
     s.readiness.runway = { ...s.readiness.runway, ready: true, reason: null };

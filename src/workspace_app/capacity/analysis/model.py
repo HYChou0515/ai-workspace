@@ -775,7 +775,6 @@ def analyse(
     people = count_people(obs, users)
     by_id = {line.id: line for line in lines}
     pairs = build_pairs(obs, by_id)
-    thresholds = _thresholds(lines, pairs, obs.cards)
     p = obs.period
     days = model_days(obs)
     workdays = [d for d in days if is_workday(p.days[d])]
@@ -785,7 +784,7 @@ def analyse(
         lines=lines,
         people=people,
         pairs=pairs,
-        thresholds=thresholds,
+        thresholds={},
         model_days=days,
         sizing_days=sizing,
         headroom=None,
@@ -793,7 +792,16 @@ def analyse(
         generated_ms=now_ms,
         is_workday=is_workday,
     )
-    sim = analysis.simulator() if len(days) >= NEED["whatif"] else None
+    ready = analysis.readiness()
+    # A knee is used — a line's threshold, a model's capacity — once view 8
+    # can show the pairs it comes from; until then the defaults, said so.
+    analysis.thresholds = _thresholds(
+        lines, pairs if ready["thresholds"]["ready"] else [], obs.cards
+    )
+    # View 1 states the headroom as view 6 does (§9.10): while the what-if
+    # cannot say — too few people, a source missing — neither does it, nor
+    # does the runway date an order by it.
+    sim = analysis.simulator() if ready["whatif"]["ready"] else None
     if sim is not None:
         analysis.headroom = headroom(sim, analysis.limits())
     analysis.backtest = _backtest(lines, people, obs, is_workday, days)

@@ -2638,11 +2638,7 @@ AI 讀 `wui` skill 時會看到「這個 item 能讓頁面問的 subagent」清�
   兩種 worker 開機時也會建構這些 class**（它們組出 API 的整套 model 註冊）：class 建構時要的 env 或憑證，這兩個
   worker 的 Deployment 也要給（**rollout 前**）；漏了的症狀是這兩種 worker 起不來。
 
-**資料** — 沒有新的 model、沒有要回填的東西；分析算完只留在記憶體（10 分鐘）。接上資料來源之後，superuser 每打開
-一個期間，API pod 就多佔一份分析：約 4 bytes × 時段數（28 天約 8,352）× 每條線花到的人數加總，加上每讀一列約
-50–60 bytes——1,000 人、每人平均在 8 條線，約 270 MB，再加讀到的列（`max_rows` 的 500 萬列約 300 MB）；最多三個
-期間同時留著，算的時候峰值再多約 15%。為什麼要知道：設 API pod 的記憶體上限時要留這一份，否則打開容量頁的那顆
-pod 會被 OOM（細節見 [capacity.md §6](capacity.md)）。
+**資料** — 沒有新的 model、沒有要回填的東西；分析算完只留在記憶體（10 分鐘）。
 
 **k8s · CI 側**
 
@@ -2652,9 +2648,15 @@ pod 會被 OOM（細節見 [capacity.md §6](capacity.md)）。
 - **sandbox-host 要換新映像**才會量沙盒：它每 `SANDBOX_HOST_USAGE_SAMPLE_S` 秒（預設 60；`0` = 不量）讀每個沙盒的
   cgroup、每 `SANDBOX_HOST_USAGE_WINDOW_S` 秒（預設 300）寫一行 `sandbox`。窗口要整除 3600（不整除的值，包括 `0`，
   起不來），而且要整除 `capacity.step_s` 或是它的整數倍，90 天期間的時段（預設 900 秒）也一樣——預設 `step_s: 300`
-  下 600、1200 不行（`capacity check` 會報錯）。沒換的症狀：容量頁沙盒的 CPU／記憶體線是空的，「變慢的門檻」(d)
-  沒有點。app 與 sandbox-host 誰先換都可以：舊的 host 不認得建立時多送的 `labels`，照樣建；
+  下 600、1200 不行（`capacity check` 會報錯）。沒換的症狀：容量頁沒有沙盒的 CPU、記憶體兩條線，「變慢的門檻」
+  沒有 (d)。app 與 sandbox-host 誰先換都可以：舊的 host 不認得建立時多送的 `labels`，照樣建；
   舊的 app 不送，沙盒照量但記成 `unknown`。
+- **API pod 的記憶體上限**（**接上資料來源前**）：superuser 每打開一個期間，API pod 就多佔一份分析——約 4 bytes ×
+  時段數（28 天約 8,352）× 每條線花到的人數加總，加上每讀一列約 50–60 bytes；1,000 人、每人平均在 8 條線約
+  270 MB，再加讀到的列（`max_rows` 的 500 萬列約 300 MB）；最多三個期間同時留著，算的時候峰值再多約 15%（細節見
+  [capacity.md §6](capacity.md)）。repo 附的 `kubernetes/base/deployment.yaml` 給 `rca-app` 的 `resources.limits.memory`
+  是 `1Gi`：照你們的人數估一份、留出空間，把它調高，或把 `capacity.max_rows` 調低。為什麼：分析算在 API pod 上，
+  同一顆 pod 也在服務所有人。漏了的症狀：打開容量頁（尤其是 90 天）時，那顆 API pod 被 OOMKilled。
 - 前端：容量頁的程式和其他頁一樣在主程式裡；ECharts 是只在打開 `/capacity` 才下載的 chunk（壓縮前約 540 KB、
   gzip 約 181 KB），其他頁不會下載它。
 

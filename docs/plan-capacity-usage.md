@@ -813,9 +813,16 @@ What the build changed from the plan above, each for a reason found while buildi
   which sets the model's capacity beside (b)'s per-model pair — the GPU purchase (E5) rests on it — and
   **(c) is drawn as seconds per token** (1 ÷ tokens per second), so that slower is up in every pair.
 - **View 8 is ready per view, not per pair** (§9.10 says per pair): it waits for 7 days of ① and ②, so
-  without ② the GPU pairs, which need only ④, wait too — their knees still set the capacities the
-  overview shows. A pair whose load line has no capacity (no ② entry for it) is not drawn: its load is
-  a share of a capacity.
+  without ② the GPU pairs, which need only ④, wait too. A knee is used — as a line's threshold, as a
+  model's capacity — only once view 8 is ready: before that the overview showed thresholds and GPU
+  capacities from pairs the page said it could not show yet. A pair whose load line has no capacity (no
+  ② entry for it) is not drawn: its load is a share of a capacity. The GPU in-flight pairs skip the
+  20-point span rule — their load is requests in flight, not a share of a capacity, and the knee's own
+  tests (enough points past it, surviving the highest ones) stand in for it.
+- **The headroom is served only when the what-if is ready** (view 1 states it as view 6, §9.10): with
+  too few people or ② missing it was still computed from 14 model days, and the overview drew people per
+  line and the line that binds under a headline saying it could not tell — and the runway dated an order
+  by it.
 - **A model's GPU capacity is its total in-flight level at the knee** with its current cards; one more
   card adds knee ÷ cards (data-parallel replicas). The headroom ignores lines N cannot push: fixed lines
   and disk (disk runs out over time, view 7).
@@ -908,7 +915,14 @@ What the build changed from the plan above, each for a reason found while buildi
   across three runs, after the round-2 changes.
 - **Allocation's fixed-overhead toggle** (D11) applies where its meaning does: "evenly" is per person
   (§9.4), so it is off for App and purpose, and all three are off for "by component", whose rows are the
-  lines themselves.
+  lines themselves. "Evenly" divides by today's N, or by the people who used the line in the period when
+  they are more (a 90-day period), so the shares still add up to the whole.
+- **The what-if gives a line N does not push no verdict**: the database's memory and a model's memory
+  are needed as they are used, at any N — not divided by a threshold — with no machine count and no
+  "fits" (§9.6 divides every line by its threshold).
+- **A record's field with no value is left out, not written `null`** (§5.2): ES reads both alike.
+- **The tabs** are the app's shared `Tabs`: the WAI-ARIA tab roles, without the pattern's arrow keys
+  (§10); the shared component is not changed here.
 - **Every stream is one column** of the API regression (§9.3 keeps route templates apart): a stream's
   cost is its connection's, whatever route opened it.
 - **What one more person adds to a disk a month** is given for every disk line that has a ② capacity

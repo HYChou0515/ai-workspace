@@ -614,3 +614,31 @@ def test_coverage_counts_the_slots_the_gaps_do_not():
 
     assert s["confidence"]["gaps"]["gpu_metrics"] == []
     assert s["confidence"]["coverage"]["gpu_metrics"] == 1.0
+
+
+def test_no_headroom_is_served_while_the_what_if_cannot_say():
+    """View 1 states the headroom as view 6 does (§9.10). With too few people
+    the headline said it could not tell, while the rows under it drew people
+    per line and the line that binds first — and the runway dated an order
+    by them."""
+    w = World(days=20, users=6)
+    sources = CapacitySources(WorldRecords(w), WorldPods(w), WorldGpus(w), WorldLlm(w))
+    s = analyse(
+        observe(sources, Period(w.start_ms, w.end_ms, w.step_s, ZoneInfo(w.tz))), now_ms=w.end_ms
+    ).summary()
+
+    assert s["readiness"]["whatif"]["reason"] == "too_few_people"
+    assert s["headroom"] is None
+    assert s["runway"]["reach"] is None
+
+
+def test_no_knee_is_used_before_the_thresholds_view_can_show_it():
+    """Four days in, view 8 says it needs seven; the overview still called a
+    knee from those four days the API's measured threshold, and a model's
+    capacity."""
+    s = _analysis(days=4).summary()
+    lines = {line["id"]: line for line in s["lines"]}
+
+    assert s["readiness"]["thresholds"]["reason"] == "period_too_short"
+    assert lines["api.cpu"]["threshold_source"] == "default"
+    assert lines["gpu.qwen3"]["capacity"] is None
