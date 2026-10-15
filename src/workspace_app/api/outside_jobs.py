@@ -36,7 +36,8 @@ from specstar.types import (
 
 from ..agent.outside_lookup import LINK_LIST_MARKER, is_web_address
 
-JobKind = Literal["search", "open_url"]
+#: `ask_ext_ai`: ask the company's web AI (docs/plan-ext-ai.md).
+JobKind = Literal["search", "open_url", "ask_ext_ai"]
 JobState = Literal["queued", "claimed", "done", "failed", "cancelled"]
 
 _MAX_CAS_RETRIES = 100
@@ -98,6 +99,9 @@ class _AiWorkspaceHelperPresence(Struct):
     #: Sent only by 0.1.0 (D15's automatic update); kept — the API only adds
     #: (docs/plan-outside-helper.md D21, §3.7.3).
     update: str = ""
+    #: The company's site file packed into it (docs/plan-ext-ai.md D9) — ""
+    #: when it has none, and from every helper older than that.
+    ext_ai: str = ""
 
 
 class _OutsideSeenUrls(Struct):
@@ -344,6 +348,15 @@ class OutsideJobStore:
     def _online_sync(self, owner: str) -> bool:
         seen = self.presence(owner)
         return seen is not None and self.now() - seen.last_seen_ms <= ONLINE_WINDOW_MS
+
+    async def can_ask_ext_ai(self, owner: str) -> bool:
+        """Whether the owner's helper is online AND was packed with the
+        company's site file (docs/plan-ext-ai.md D9)."""
+        return await asyncio.to_thread(self._can_ask_ext_ai_sync, owner)
+
+    def _can_ask_ext_ai_sync(self, owner: str) -> bool:
+        seen = self.presence(owner)
+        return self._online_sync(owner) and seen is not None and bool(seen.ext_ai)
 
     def presence(self, owner: str) -> _AiWorkspaceHelperPresence | None:
         """The owner's helper as it last checked in, or None (blocking)."""

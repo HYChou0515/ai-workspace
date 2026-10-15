@@ -81,7 +81,7 @@ def test_a_helper_checked_in_too_long_ago_is_offline():
     t[0] += 31_000
 
     assert _hand(client, iid).status_code == 409
-    assert client.get("/ai-workspace-helper/status").json() == {"online": False}
+    assert client.get("/ai-workspace-helper/status").json() == {"online": False, "ext_ai": False}
 
 
 # A job belongs to the person who pressed 「查」; only their own helper takes it.
@@ -438,7 +438,7 @@ def test_a_helper_waiting_on_the_person_still_reads_as_connected():
     client.post(f"/ai-workspace-helper/jobs/{jid}/note", json={"note": "captcha"})
     t[0] += 25_000
 
-    assert client.get("/ai-workspace-helper/status").json() == {"online": True}
+    assert client.get("/ai-workspace-helper/status").json() == {"online": True, "ext_ai": False}
     # and what it last reported on its check-in is kept
     assert store.presence("u").version == "0.1.0"
 

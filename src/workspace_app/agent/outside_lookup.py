@@ -205,11 +205,17 @@ async def _listed_link(ctx: RunContextWrapper[AgentToolContext], file: str, link
     return listed[link]
 
 
+#: The kinds of card: a search, a page to open, a question for the external AI.
+_CARD_KEYS = ({"why", "query"}, {"why", "url"}, {"why", "question"})
+
+
 def declared_lookup(text: str) -> dict | None:
     """The card a reply declares, read the way the chat reads it
     (`web/src/renderers/outsideLookup.ts`): the tail after the LAST marker is
-    one JSON object with a `why` and exactly one of a `query` or an http(s)
-    `url`. `None` for anything else — a refusal quoting the marker included."""
+    one JSON object with a `why` and exactly one of a `query`, an http(s)
+    `url`, or a `question` for the external AI (`ask_ext_ai`,
+    docs/plan-ext-ai.md). `None` for anything else — a refusal quoting the
+    marker included."""
     at = text.rfind(OUTSIDE_LOOKUP_MARKER)
     if at < 0:
         return None
@@ -217,7 +223,7 @@ def declared_lookup(text: str) -> dict | None:
         card = json.loads(text[at + len(OUTSIDE_LOOKUP_MARKER) :])
     except ValueError:
         return None
-    if not isinstance(card, dict) or set(card) not in ({"why", "query"}, {"why", "url"}):
+    if not isinstance(card, dict) or set(card) not in _CARD_KEYS:
         return None
     if not all(isinstance(v, str) and v for v in card.values()):
         return None

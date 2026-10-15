@@ -216,11 +216,14 @@ class TurnContextBuilder:
         skill_hub: SkillHubStore | None = None,
         review_skill: ReviewSkill | None = None,
         tool_usage: ToolUsageRecorder | None = None,
+        ext_ai: bool = False,
     ) -> None:
         # plan-tool-usage-stats §8.3: a chat turn carries the recorder from the
         # moment it is built — the send path counts an applied skill before the
         # runner (which keeps a recorder the turn already has) starts.
         self._tool_usage = tool_usage
+        # docs/plan-ext-ai.md D5: the deploy turned on the 問外部AI card.
+        self._ext_ai = ext_ai
         self._sandbox = sandbox
         self._filestore = filestore
         self._files = files
@@ -983,6 +986,8 @@ class TurnContextBuilder:
             # A thread a person answers in: the 請幫我查 card may be drawn here
             # (plan-outside-lookup D6) — and in no workflow step.
             in_chat=True,
+            # …and the 問外部AI card, where the deploy turned it on (plan-ext-ai D5)
+            ext_ai=self._ext_ai,
             # Where this turn's tool calls are counted as happening
             # (plan-tool-usage-stats §3.4), and into which recorder (§8.3).
             surface="chat",

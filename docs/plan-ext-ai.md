@@ -28,7 +28,7 @@
 | D2 | **每次送出前都要人按「問外部AI」**。問題由 AI 起草,卡片完整顯示、可以改;送出去的是框裡的字。回答回來直接交給 AI,不再按一次(同 plan-outside-helper D4) | 〔user〕「問 改成 問外部AI」 |
 | D3 | **只送文字**,不上傳檔案;要附的資料由 AI 摘進問題 | 〔user〕「文字」 |
 | D4 | **每次都打開那個網址**,得到全新的空白對話;停在登入頁就等人登入(同 D25 的等法) | 〔user〕「可以 從某網址直接到空白對畫框的網頁」 |
-| D5 | 回答存成 `lookups/` 的檔案(問題+回答),不能加檔的人只送訊息;**只在聊天裡給**(同 plan-outside-lookup D6);部署開關 `server.ext_ai.enabled`,**預設關** | 〔施工〕 |
+| D5 | 回答存成 `lookups/` 的檔案(問題+回答),不能加檔的人只送訊息;**只在聊天裡給**(同 plan-outside-lookup D6);部署開關 `server.ext_ai_enabled`,**預設關** | 〔施工〕 |
 | D6 | **分工**:`ask_outside` 拿**原文**(一頁文件、搜尋結果);`ask_ext_ai` 拿**分析**(比較、解釋、整理)。兩個工具的說明都寫明;引用 `ask_ext_ai` 的回答要說明是外部AI 的說法 | 〔施工〕(user:「你把模子刻好…我希望我們碰的都是你無法知道的」) |
 | D7 | **交界是一個 Python 檔**:公司寫 `ext_ai_site.py`——`URL` 加一個 `ask(page, question, h) -> str`(回答的 HTML 或文字),拿到整個 Playwright 頁面、怎麼操作都行。**不是**伺服器設定裡的幾個 selector:那等於先假設網頁有一個輸入框、一個送出鈕、一個回答區,沒人能保證。打包時 `--ext-ai-site` 把它放進小幫手 | 〔user〕「不太好 因為這很大的假設了我們的網頁長相 我不清楚是不是夠用」「Ok」 |
 | D8 | **按鈕字樣:手動和小幫手一字不差**。搜尋:「**{name} search**」(手動多一個 ↗);開網址:「**開啟這個網址**」;失敗重來:「**再 {name} search 一次**」/「**再開一次**」/「**再問外部AI 一次**」。`{name}` 是小幫手會用的那個目的地(`pick_search_target`:Google,沒有就第一個),卡片和小幫手用同一條規則 | 〔user〕「查 改成 Google search (手動和自動 wording上不應該有任何區別）」「對」 |
@@ -81,7 +81,7 @@
 
 | 期 | 內容 | 驗收 |
 |---|---|---|
-| P1 | 後端:`ask_ext_ai` 工具、卡片 `{why, question}`、授權規則(聊天 + `ask_user` + `server.ext_ai.enabled`)、交給小幫手(`kind="ask_ext_ai"`,送框裡的字,空的 422)、回答存檔與訊息(D10)、報到多 `ext_ai` | 單元測試;開關關著就沒有這個工具 |
+| P1 | 後端:`ask_ext_ai` 工具、卡片 `{why, question}`、授權規則(聊天 + `ask_user` + `server.ext_ai_enabled`)、交給小幫手(`kind="ask_ext_ai"`,送框裡的字,空的 422)、回答存檔與訊息(D10)、報到多 `ext_ai` | 單元測試;開關關著就沒有這個工具 |
 | P2 | 卡片:第三種卡片(§3)、D8 字樣 | 前端測試;截圖對照 §3 引用 |
 | P3 | 小幫手:差事、`h`、載入網站檔、範本、假網站測試 | 假網站上從按「問外部AI」到 AI 拿到回答整條跑通 |
 | P4 | `try-ext-ai`、打包 `--ext-ai-site` | 打包出的 wheel 裡有網站檔;試跑印出每一步 |
@@ -92,4 +92,4 @@
 1. 複製 `ai-workspace-helper/ext_ai_site.template.py` 成自己的 `ext_ai_site.py`,填 `URL`。
 2. 在自己的電腦上 `try-ext-ai` 試跑;哪一步不對,就改 `ask` 裡那幾行。
 3. `pack_ai_workspace_helper.py --version <新版> --ext-ai-site ext_ai_site.py`,放到 `server.ai_workspace_helper_dir`。
-4. 設 `server.ext_ai.enabled: true`,重新部署;大家重裝小幫手。
+4. 設 `server.ext_ai_enabled: true`,重新部署;大家重裝小幫手。

@@ -26,9 +26,10 @@ from .outside_lookup_routes import AnswerForm, Deliver, OutsideAnswerOut, _open_
 
 class HandOverIn(BaseModel):
     tool_call_id: str
-    #: The query the person typed or pasted on the card (plan-outside-lookup
-    #: D13) — required for a search, which never falls back to the AI's
-    #: suggestion; ignored for a URL.
+    #: What the person left in the card's box: the search keywords they typed
+    #: or pasted (plan-outside-lookup D13), or the question for the external
+    #: AI as they edited it (docs/plan-ext-ai.md D2). Required for both — never
+    #: falls back to the AI's; ignored for a URL.
     query: str = ""
     #: The card asking on its own, with no 「查」 (D12): allowed only for a URL
     #: an earlier lookup in this chat brought back, and never restarts a job.
@@ -56,6 +57,8 @@ class HeartbeatIn(BaseModel):
     playwright: str = ""
     python: str = ""
     update: str = ""
+    #: The company's site file packed in, "" without one (docs/plan-ext-ai.md D9).
+    ext_ai: str = ""
 
 
 def _version(text: str) -> tuple[int, ...]:
@@ -68,6 +71,8 @@ def _version(text: str) -> tuple[int, ...]:
 
 class HelperStatusOut(BaseModel):
     online: bool
+    #: Online, and able to ask the external AI (docs/plan-ext-ai.md D9).
+    ext_ai: bool = False
 
 
 class ResultIn(BaseModel):
@@ -176,6 +181,10 @@ def register_outside_job_routes(
             # or pasted; the AI's query is only the suggestion beside the box —
             # never sent instead (checked below, where a new job would start).
             kind, args = "search", body.query.strip()
+        elif "question" in card:
+            # docs/plan-ext-ai.md D2: the question as the person left it in the
+            # box — the AI only drafted it
+            kind, args = "ask_ext_ai", body.query.strip()
         else:
             kind, args = "open_url", card["url"]
         jid = job_id(investigation_id, rid, body.tool_call_id)
@@ -209,6 +218,19 @@ def register_outside_job_routes(
                 status_code=422,
                 detail="先在搜尋框輸入或貼上關鍵字 — type the search keywords first",
             )
+        if kind == "ask_ext_ai":
+            if not args:
+                raise HTTPException(
+                    status_code=422,
+                    detail="先在框裡寫好要問的問題 — write the question first",
+                )
+            if not await store.can_ask_ext_ai(owner):
+                # D9: an older helper, or one packed without the company's
+                # site file — it would only fail the job
+                raise HTTPException(
+                    status_code=409,
+                    detail="你的小幫手沒有設定外部AI — your helper cannot ask the external AI",
+                )
         job = OutsideJob(
             owner=owner,
             item_id=investigation_id,
@@ -309,7 +331,7 @@ def register_outside_job_routes(
             job.tool_call_id,
             "found",
             body.markdown,
-            job.args if job.kind == "search" else "",
+            job.args if job.kind in ("search", "ask_ext_ai") else "",
             body.url,
             "",
             "",
@@ -358,7 +380,10 @@ def register_outside_job_routes(
 
     @app.get("/ai-workspace-helper/status", response_model=HelperStatusOut)
     async def status() -> HelperStatusOut:
-        return HelperStatusOut(online=await store.online(get_user_id()))
+        owner = get_user_id()
+        return HelperStatusOut(
+            online=await store.online(owner), ext_ai=await store.can_ask_ext_ai(owner)
+        )
 
     @app.post(
         "/ai-workspace-helper/jobs/claim", response_model=JobOut | None, dependencies=helper_only
