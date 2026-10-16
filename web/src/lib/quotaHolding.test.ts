@@ -1,7 +1,7 @@
 /**
  * What a refusal offers to do about itself.
  *
- * Defaulting an item to its App's ceiling made hitting the limit ordinary
+ * Defaulting an item to its App's size made hitting the limit ordinary
  * rather than exceptional, so the refusal is not an error path — it is the
  * feature's normal moment. Being told "you are full" and left to work out who
  * is holding it, on a page you have to know exists, turns that moment into a

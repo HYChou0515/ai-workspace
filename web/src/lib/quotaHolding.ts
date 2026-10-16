@@ -5,7 +5,7 @@
  * only useful thing to tell someone is what to close and how much it buys
  * back". The numbers answered the second half; this is the first.
  *
- * It matters more since items default to their App's ceiling: hitting the limit
+ * It matters more since items default to their App's size: hitting the limit
  * became ordinary rather than exceptional, so this is not an error path, it is
  * the feature's normal moment. Being told you are full and left to find the
  * right page turns that moment into a dead end.

@@ -1286,6 +1286,8 @@ export const messages = {
   "itemenv.size.default": { "zh-TW": "預設（依你目前的額度）", en: "Default (from your current quota)" },
   "itemenv.size.stated": { "zh-TW": "你設定的", en: "Set by you" },
   "itemenv.size.reset": { "zh-TW": "回到預設", en: "Back to default" },
+  // plan-item-size-ceiling D3: said before anything is typed, not after Save.
+  "itemenv.size.ceiling": { "zh-TW": "這個 App 最多 {value}", en: "This App allows up to {value}" },
   // Both numbers, and which limit bound — never the smaller one alone.
   "itemenv.size.clamped.quota": {
     "zh-TW": "你設定 {stated}，實際生效 {effective}（受你的額度限制）",

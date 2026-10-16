@@ -822,6 +822,81 @@ def test_a_stated_size_cannot_exceed_the_apps_ceiling():
         assert sandbox.specs[-1].cpu_cores == 4.0, "the App's ceiling binds a stated value too"
 
 
+def _reported_deploy() -> dict[str, ResourceLimits]:
+    """The deploy that was reported (2026-10-16): every App 1 core / 512M by
+    default, `per_app.max` 4 cores / 4G — resolved the way boot resolves it, so
+    the test walks the same path the config does, not a hand-built limits row."""
+    from workspace_app.apps.manifest import load_app_manifest
+    from workspace_app.config.schema import (
+        PerAppResources,
+        ResourceAmounts,
+        ResourceSettings,
+        Settings,
+    )
+    from workspace_app.quota.limits import resolve_app_limits
+
+    settings = Settings(
+        resources=ResourceSettings(
+            per_app=PerAppResources(
+                default=ResourceAmounts(cpu=1, memory="512M"),
+                max=ResourceAmounts(cpu=4, memory="4G"),
+            )
+        )
+    )
+    return {"rca": resolve_app_limits(load_app_manifest("rca"), settings)}
+
+
+def test_one_item_may_be_given_more_than_the_default_up_to_the_deploys_max():
+    """「我只是要調到 2 2gb」 (plan-item-size-ceiling D1). With default 1 / 512M
+    and max 4 / 4G, setting one item to 2 cores / 2G built a 1 / 512M sandbox:
+    the item's ceiling was the App's size, which for an App stating nothing is
+    the default."""
+    with _app(PerUserResources(), app_resources=_reported_deploy()) as (client, spec, sandbox):
+        item = _mk(spec, "alice", cpu=2.0, memory=2 * 1024**3)
+        _wake(client, item)
+
+        assert (sandbox.specs[-1].cpu_cores, sandbox.specs[-1].memory_bytes) == (2.0, 2 * 1024**3)
+
+
+def test_an_item_unset_still_starts_at_the_default():
+    """`max` is where an item MAY go, not where it goes."""
+    with _app(PerUserResources(), app_resources=_reported_deploy()) as (client, spec, sandbox):
+        item = _mk(spec, "alice")
+        _wake(client, item)
+
+        assert (sandbox.specs[-1].cpu_cores, sandbox.specs[-1].memory_bytes) == (1.0, 512 * 1024**2)
+
+
+def test_above_the_deploys_max_is_held_at_the_max_and_says_the_app_held_it():
+    with _app(PerUserResources(), app_resources=_reported_deploy()) as (client, spec, sandbox):
+        item = _mk(spec, "alice", cpu=16.0, memory=64 * 1024**3)
+        _wake(client, item)
+        body = client.get(f"/a/rca/items/{item}/environment").json()
+
+        assert (sandbox.specs[-1].cpu_cores, sandbox.specs[-1].memory_bytes) == (4.0, 4 * 1024**3)
+        assert (body["cpu_bound_by"], body["memory_bound_by"]) == ("app", "app")
+
+
+def test_the_environment_says_how_far_an_item_may_go_before_anything_is_typed():
+    """D3: the panel states the range up front (NN/g error prevention), so the
+    route hands over the same ceiling the clamp uses."""
+    with _app(PerUserResources(), app_resources=_reported_deploy()) as (client, spec, _sandbox):
+        item = _mk(spec, "alice")
+        body = client.get(f"/a/rca/items/{item}/environment").json()
+
+        assert body["cpu_ceiling"] == 4.0
+        assert body["memory_ceiling"] == 4 * 1024**3
+
+
+def test_with_no_ceiling_anywhere_the_environment_states_none():
+    """D3: no line at all rather than 「無上限」."""
+    with _app(PerUserResources(), app_resources={"rca": UNDECLARED}) as (client, spec, _sandbox):
+        item = _mk(spec, "alice")
+        body = client.get(f"/a/rca/items/{item}/environment").json()
+
+        assert (body["cpu_ceiling"], body["memory_ceiling"]) == (None, None)
+
+
 def test_memory_cannot_exceed_the_apps_ceiling_either():
     """Its own condition. cpu standing in for memory is how P1 nearly shipped a
     clamp that only worked in one dimension."""
