@@ -2,7 +2,8 @@
 
 - `workspace_skill_metas(files, workspace_id)` → sorted `SkillMeta`, skipping
   malformed / name-mismatched skills (same tolerance as the package loader).
-- `load_workspace_skill(files, workspace_id, name)` → body or None, body-cap raises.
+- `read_workspace_skill(files, workspace_id, name)` → (body, origin), or (None, None);
+  body-cap raises.
 - Both are read LIVE (never cached) — the workspace is hand-editable + may have
   just been written this turn.
 """
@@ -16,7 +17,7 @@ from workspace_app.apps.skills import (
     SKILL_BODY_CAP,
     SkillMeta,
     build_workspace_skills_block,
-    load_workspace_skill,
+    read_workspace_skill,
     workspace_skill_metas,
     workspace_skills_block,
 )
@@ -94,26 +95,27 @@ async def test_metas_is_live_not_cached():
     assert [m.name for m in await workspace_skill_metas(files, inv)] == ["fresh"]
 
 
-async def test_load_workspace_skill_returns_body_without_frontmatter():
+async def test_read_workspace_skill_returns_body_without_frontmatter():
     files, inv = _files()
     await _put(files, inv, "s", "d", "# Heading\n\ncontent")
-    body = await load_workspace_skill(files, inv, "s")
+    body, origin = await read_workspace_skill(files, inv, "s")
     assert body == "# Heading\n\ncontent"
+    assert origin is None  # written here, never published
 
 
-async def test_load_workspace_skill_none_when_absent():
+async def test_read_workspace_skill_none_when_absent():
     files, inv = _files()
-    assert await load_workspace_skill(files, inv, "nope") is None
+    assert await read_workspace_skill(files, inv, "nope") == (None, None)
 
 
-async def test_load_workspace_skill_body_cap_raises():
+async def test_read_workspace_skill_body_cap_raises():
     files, inv = _files()
     await _put(files, inv, "huge", "d", "x" * (SKILL_BODY_CAP + 1))
     # Reference SkillError through the live module: another test file reloads
     # `skills` (for its cache), which rebinds the class — a captured top-level
-    # import would no longer match what `load_workspace_skill` raises.
+    # import would no longer match what `read_workspace_skill` raises.
     with pytest.raises(skills_mod.SkillError):
-        await load_workspace_skill(files, inv, "huge")
+        await read_workspace_skill(files, inv, "huge")
 
 
 def test_block_empty_for_no_skills():

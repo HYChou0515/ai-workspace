@@ -64,6 +64,7 @@ from ..kb.retriever import Enhancements, Retriever
 from ..kb.vlm import VlmDescriber
 from ..kb.wiki.consult import WikiConsultant
 from ..kb.wiki.coordinator import WikiMaintenanceCoordinator
+from ..live_value import Live, now
 from ..perm import Actor, Permission, authorize
 from ..perm.model import Verb, user_subject
 from ..resources import AgentConfig
@@ -190,6 +191,9 @@ async def answer_question(
         collection_ids=collection_ids,
         agent_config=agent_config,
         call_lane=lane,
+        # plan-tool-usage-stats §3.4: the KB sub-agent of `ask_knowledge_base` —
+        # counted against its caller's person, App and item (it names none).
+        surface="kb_agent",
         tool_output_max_chars=tool_output_max_chars,
         exec_output_max_chars=exec_output_max_chars,
         # #537: how this sub-agent reaches the wiki — a reader that navigates it in
@@ -486,7 +490,7 @@ def register_kb_chat_routes(
     get_user_id: Callable[[], str],
     users: UserDirectory,
     *,
-    kb_agent_configs: list[AgentConfig],
+    kb_agent_configs: Live[list[AgentConfig]],
     # #493: how long a send waits for ITS OWN turn before detaching it and
     # answering anyway — the same knob the workspace chat uses, threaded from
     # `create_app`, because "as long as the RCA send waits" has to be one number
@@ -530,7 +534,7 @@ def register_kb_chat_routes(
     `kb_agent_configs` (issue #32) is the catalog's `kb_chats()` list —
     every entry shows up in the FE picker; the first is the default.
     """
-    if not kb_agent_configs:
+    if not now(kb_agent_configs):
         raise ValueError("kb_agent_configs must be non-empty")
     chat_rm = spec.get_resource_manager(KbChat)
 
@@ -640,7 +644,7 @@ def register_kb_chat_routes(
                 # the boundary. See #91.
                 "suggestions": [{"label": s.label, "prompt": s.prompt} for s in cfg.suggestions],
             }
-            for cfg in kb_agent_configs
+            for cfg in now(kb_agent_configs)
         ]
 
     @app.post("/kb/chats")
@@ -825,12 +829,13 @@ def register_kb_chat_routes(
 
         # Issue #32: resolve the picker selection. Default = first
         # entry; explicit unknown name → 422 (not a silent fallback).
+        configs = now(kb_agent_configs)  # once: one send, one published version
         if body.agent_name is None:
-            agent_config = kb_agent_configs[0]
+            agent_config = configs[0]
         else:
-            match = next((c for c in kb_agent_configs if c.name == body.agent_name), None)
+            match = next((c for c in configs if c.name == body.agent_name), None)
             if match is None:
-                avail = [c.name for c in kb_agent_configs]
+                avail = [c.name for c in configs]
                 raise HTTPException(
                     status_code=422,
                     detail=f"unknown agent_name={body.agent_name!r}; available: {avail}",
@@ -941,6 +946,8 @@ def register_kb_chat_routes(
         ctx = AgentToolContext(
             tool_output_max_chars=tool_output_max_chars,
             exec_output_max_chars=exec_output_max_chars,
+            # plan-tool-usage-stats §3.4.
+            surface="kb_chat",
             retriever=retriever,
             collection_ids=[c for c in _effective if c not in _discoverable],
             discoverable_collection_ids=_probe_universe,
@@ -1091,7 +1098,10 @@ def register_kb_chat_routes(
         engine.publish(
             chat_id, UserMessage(author=asked_by, content=body.content, created_at=asked_at)
         )
-        fut = engine.enqueue(chat_id, agent_content, ctx, on_complete=persist)
+        # docs/plan-capacity-usage.md §6.3: the question's own timestamp is the acceptance.
+        fut = engine.enqueue(
+            chat_id, agent_content, ctx, on_complete=persist, surface="kb", accepted_ms=asked_at
+        )
         # #493: await THIS turn, but only to a deadline, then DETACH it — `shield`
         # keeps the worker's future alive, so detaching is not cancelling. A fast
         # turn still returns after its reply is persisted (which is what the

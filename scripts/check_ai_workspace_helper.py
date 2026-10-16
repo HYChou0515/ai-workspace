@@ -16,7 +16,7 @@ Stand-ins, and only these:
 - the helper's Chromium runs headless here (no display); on the PC it is the
   person's Chrome, headed.
 
-The person presses 「查」 ONCE. The second lookup — a link the first one brought
+The person presses 「Google search」 ONCE. The second lookup — a link the first one brought
 back — must go to the helper with no nod (D12).
 
 Writes a demo of the browser to `<out>/ai-workspace-helper-demo.mp4` (ffmpeg).
@@ -295,7 +295,14 @@ def _tour(base: str, iid: str, out: Path, check: _Check) -> Path | None:
     # The person's browser is already signed in and the helper already running
     # when they open the page — so is it here before recording starts.
     end = time.monotonic() + 60
-    while _req("GET", f"{base}/api/ai-workspace-helper/status")[1] != {"online": True}:
+
+    # `online` alone: the status says more than that (plan-ext-ai D9 added `ext_ai`)
+    def online() -> bool:
+        return (_req("GET", f"{base}/api/ai-workspace-helper/status")[1] or {}).get(
+            "online"
+        ) is True
+
+    while not online():
         if time.monotonic() > end:
             check("the helper checked in", False, "not online after 60 s")
             return None
@@ -320,7 +327,7 @@ def _tour(base: str, iid: str, out: Path, check: _Check) -> Path | None:
             _glide(page, link)
             page.wait_for_timeout(1500)
 
-            # 2. the item: ask, and press 「查」 once
+            # 2. the item: ask, and press 「Google search」 once
             page.goto(f"{base}/a/rca/{iid}", wait_until="domcontentloaded")
             page.wait_for_timeout(2500)
             for dismiss in ("Got it", "知道了", "開始使用"):
@@ -335,12 +342,20 @@ def _tour(base: str, iid: str, out: Path, check: _Check) -> Path | None:
             page.wait_for_timeout(400)
             box.press("Enter")
 
-            go = page.get_by_role("button", name="查", exact=True)
+            # the helper's button names the search (plan-ext-ai D8)
+            go = page.get_by_role("button", name="Google search", exact=True)
             go.wait_for(timeout=90_000)
             page.wait_for_timeout(1200)
+            # the box starts empty: the person copies the AI's suggestion and
+            # pastes it (plan-outside-lookup D13)
+            keywords = page.get_by_label("搜尋關鍵字")
+            suggested = page.locator(".outside-lookup-card code").first.inner_text()
+            _glide(page, keywords)
+            keywords.fill(suggested)
+            page.wait_for_timeout(400)
             _glide(page, go)
             go.click()
-            check("the search card offered 「查」 and took the nod", True)
+            check("the search card offered 「Google search」 and took the nod", True)
 
             # 3. nothing else: the helper searches, the AI opens the link it
             #    brought back (no second nod), and answers from the page

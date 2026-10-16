@@ -338,7 +338,7 @@ def test_a_pc_that_can_run_the_helper_passes_every_check_and_keeps_nothing(tmp_p
 
     assert [c.ok for c in checks] == [True] * 6, checks
     assert [c.name for c in checks] == [
-        "Python 3.10 以上",
+        "Python 3.9 以上",
         "在使用者資料夾執行程式",
         "Playwright 的 node.exe",
         "建立桌面捷徑（PowerShell）",
@@ -354,7 +354,7 @@ def test_a_pc_that_can_run_the_helper_passes_every_check_and_keeps_nothing(tmp_p
 @pytest.mark.parametrize(
     ("breakage", "failed", "hint"),
     [
-        ({"python_version": (3, 9, 1)}, "Python 3.10 以上", "3.9.1"),
+        ({"python_version": (3, 8, 10)}, "Python 3.9 以上", "3.8.10"),
         ({"run": _PrecheckRun("-c")}, "在使用者資料夾執行程式", "%LOCALAPPDATA%"),
         ({"run": _PrecheckRun("--version")}, "Playwright 的 node.exe", "防毒"),
         ({"run": _PrecheckRun("WScript")}, "建立桌面捷徑（PowerShell）", "PowerShell"),
@@ -614,3 +614,28 @@ def test_a_helper_started_during_the_rebuild_keeps_its_version(tmp_path):
 
     assert (venv / "in-use").exists()
     assert not (home / "versions" / "0.3.0.partial").exists()
+
+
+# Some people's PCs have Python 3.9 and nothing newer (the person: 「有些人的
+# python是3.9」). The installer and the precheck share one answer to "is this
+# Python new enough" — the precheck saying yes and the installer no is the
+# one outcome worse than either.
+@pytest.mark.parametrize(
+    ("version", "too_old"),
+    [((3, 8, 10), True), ((3, 9, 0), False), ((3, 9, 13), False), ((3, 14, 0), False)],
+)
+def test_python_39_is_new_enough_and_38_is_not(version, too_old):
+    from ai_workspace_helper.setup_core import python_too_old
+
+    said = python_too_old(version)
+
+    if too_old:
+        assert said is not None and "3.9" in said and ".".join(map(str, version)) in said
+    else:
+        assert said is None
+
+
+def test_the_precheck_passes_python_39(tmp_path):
+    checks = _precheck(tmp_path, python_version=(3, 9, 13))
+
+    assert checks[0].name == "Python 3.9 以上" and checks[0].ok, checks[0]

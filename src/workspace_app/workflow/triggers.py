@@ -800,6 +800,8 @@ def build_trigger_start(start_run: OrchestratorStart) -> StartTrigger:
                 profile=t.profile,
                 captured_user=t.acting_user,
                 workflow_id=t.workflow_id,
+                # plan-tool-usage-stats §3.4: what its steps call is a schedule's.
+                from_schedule=True,
             )
         except ActiveRunExists:
             _log.info(

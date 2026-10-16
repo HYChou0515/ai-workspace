@@ -91,7 +91,8 @@ def test_a_link_a_pasted_answer_brought_back_opens_without_a_nod():
 def test_a_link_the_helper_brought_back_opens_without_a_nod():
     client, iid = _chat("https://b.example/x")
     _beat(client)
-    client.post(f"/a/rca/items/{iid}/outside-jobs", json={"tool_call_id": "c1"})
+    # the search, with the keywords the person typed (plan-outside-lookup D13)
+    client.post(f"/a/rca/items/{iid}/outside-jobs", json={"tool_call_id": "c1", "query": "pandas"})
     jid = _claim(client).json()["id"]
     r = client.post(f"/ai-workspace-helper/jobs/{jid}/result", json={"markdown": PAGE})
     assert r.status_code == 200, r.text
@@ -123,7 +124,7 @@ def test_a_search_card_never_goes_without_the_nod():
 
 
 # …even when what it would search for is, character for character, a link a
-# lookup brought back: a search sends the AI's words out, and those wait.
+# lookup brought back: a search sends words out, and those wait for the person.
 def test_a_search_for_a_seen_link_still_waits_for_the_nod():
     client, iid = _chat(query="https://pandas.example/whatsnew")
     _beat(client)
@@ -241,3 +242,27 @@ def test_a_link_is_already_seen_when_the_next_turn_starts():
     assert _answer(client, iid, call="c1", content=PAGE).status_code == 200
 
     assert runner.seen_at_start == [False, True]
+
+
+# D24: a search's results are Google redirect links. The file lists each as
+# the page it leads to, and that page — what `file` + `link` hands the card —
+# is a link the chat has seen, so the helper opens it with no nod.
+def test_the_page_a_google_redirect_leads_to_opens_without_a_nod():
+    client, iid = _chat("https://pandas.example/whatsnew")
+    _beat(client)
+    page = "- [whatsnew](https://www.google.com/url?q=https://pandas.example/whatsnew&sa=U&ved=2)"
+    assert _answer(client, iid, content=page).status_code == 200
+    _second_turn(client, iid)
+
+    assert _auto(client, iid).status_code == 201
+
+
+# …and the redirect itself, as it came back, still opens with no nod, as before.
+def test_a_google_redirect_that_came_back_still_opens_without_a_nod():
+    redirect = "https://www.google.com/url?q=https://pandas.example/whatsnew&sa=U&ved=2"
+    client, iid = _chat(redirect)
+    _beat(client)
+    assert _answer(client, iid, content=f"- [whatsnew]({redirect})").status_code == 200
+    _second_turn(client, iid)
+
+    assert _auto(client, iid).status_code == 201

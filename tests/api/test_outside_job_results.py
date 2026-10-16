@@ -47,6 +47,9 @@ def test_what_the_helper_fetched_is_saved_and_answers_the_card():
     assert "由小幫手抓取" in saved  # who fetched it
     assert "https://www.google.com/search?q=pandas" in saved  # where from
     assert "[pandas 2.0 whatsnew](https://pandas.example/whatsnew#top)" in saved
+    # …and its link, numbered, under it — the helper's answer goes through the
+    # same door a pasted one does (plan-outside-helper D24)
+    assert saved.rstrip().endswith("- [1] <https://pandas.example/whatsnew> pandas 2.0 whatsnew")
     [answer] = _answers(spec)
     assert answer.content.startswith("我在外面查了:pandas 2.0 新功能")
     assert path in answer.content

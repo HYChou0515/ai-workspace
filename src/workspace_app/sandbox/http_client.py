@@ -463,6 +463,9 @@ class HttpSandbox:
                 "cpu_cores": spec.cpu_cores,
                 "memory_bytes": spec.memory_bytes,
                 "pids_max": spec.pids_max,
+                # docs/plan-capacity-usage.md §6.5: whose sandbox this is, echoed
+                # on the usage rows the host writes. An older host ignores it.
+                "labels": spec.labels,
             },
         )
         # Before `raise_for_status`: a host that STATED its reason is answered

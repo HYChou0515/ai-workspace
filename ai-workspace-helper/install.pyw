@@ -5,7 +5,7 @@ Standard library only — nothing is installed yet. It shows which Python it wil
 use (a PC may have several; the shortcut is tied to this one by its absolute
 path), installs from the wheels in the zip with no network, and puts an
 "AI Workspace Helper" shortcut on the desktop. If that is not the Python you meant,
-cancel and run `py -3.12 install.pyw` (any 3.10–3.14) instead.
+cancel and run `py -3.12 install.pyw` (any 3.9–3.14) instead.
 """
 
 import sys
@@ -34,8 +34,9 @@ def main() -> int:
     window.withdraw()
     python = windowed_python()
     version = "%d.%d.%d" % sys.version_info[:3]
-    if sys.version_info < (3, 10):
-        messagebox.showerror("AI Workspace Helper", f"需要 Python 3.10 以上，這是 {version}：\n{python}")
+    too_old = setup_core.python_too_old(tuple(sys.version_info[:3]))
+    if too_old:
+        messagebox.showerror("AI Workspace Helper", f"{too_old}：\n{python}")
         return 1
     if not messagebox.askokcancel(
         "AI Workspace Helper",

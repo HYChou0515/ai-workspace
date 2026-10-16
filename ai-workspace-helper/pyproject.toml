@@ -2,7 +2,7 @@
 name = "ai-workspace-helper"
 dynamic = ["version"]
 description = "The person's helper: drives their Chrome to fetch pages for AI Workspace's 請幫我查 card (docs/plan-outside-helper.md)."
-requires-python = ">=3.10"
+requires-python = ">=3.9"
 # Pinned exactly by the pack script (scripts/pack_ai_workspace_helper.py) for the
 # wheelhouse users install; this range is what the code supports.
 dependencies = ["playwright>=1.49"]

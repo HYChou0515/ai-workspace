@@ -31,6 +31,9 @@ export const qk = {
   // Who is above the deploy default (superuser only). Separate from
   // `myResources`: it answers a different question, for a different person.
   userOverrides: ["userOverrides"] as const,
+  // docs/plan-model-settings.md: invalidating `modelSettings` clears the history too.
+  modelSettings: ["model-settings"] as const,
+  modelSettingsHistory: ["model-settings", "history"] as const,
 
   investigations: ["investigations"] as const,
   investigation: (id: string) => ["investigation", id] as const,
@@ -98,6 +101,9 @@ export const qk = {
     ["skillHub", "browse", q, mine, owner, sort] as const,
   skillHubInstalls: (id: string) => ["skillHub", "installs", id] as const,
   skillHubTargets: (id: string, app: string) => ["skillHub", "targets", id, app] as const,
+  // Under `targets`, so an install's invalidation reaches every row's answer too.
+  skillHubTargetState: (id: string, app: string, itemId: string) =>
+    ["skillHub", "targets", id, app, itemId] as const,
   skillHubEntry: (id: string, app: string) => ["skillHub", "entry", id, app] as const,
   skillHubHistory: (id: string) => ["skillHub", "history", id] as const,
   skillHubVersion: (id: string, revision: string) => ["skillHub", "version", id, revision] as const,
@@ -125,6 +131,16 @@ export const qk = {
   personalEnv: () => ["personalEnv"] as const,
   /** docs/plan-outside-lookup.md D3: the deploy's search buttons. */
   lookupTargets: () => ["lookupTargets"] as const,
+  /** plan-tool-usage-stats: the administrator's report and one tool's breakdown. */
+  toolUsage: (days: number, filter: object, kind: string, group: string) =>
+    ["toolUsage", days, filter, kind, group] as const,
+  toolUsageDetail: (tool: string, days: number, kind: string, group: string, source: string) =>
+    ["toolUsageDetail", tool, days, kind, group, source] as const,
+  // docs/plan-capacity-usage.md: the capacity dashboard (superusers only).
+  capacity: (days: number) => ["capacity", days] as const,
+  capacityPerson: (user: string, days: number) => ["capacity", days, "person", user] as const,
+  capacityWhatIf: (days: number, n: number, profile: string, app: string) =>
+    ["capacity", days, "whatif", n, profile, app] as const,
   /** docs/plan-outside-helper.md: is the person's own helper connected. */
   aiWorkspaceHelper: () => ["aiWorkspaceHelper"] as const,
   /** The packed helper the operator published (§3.7.2), or null. */

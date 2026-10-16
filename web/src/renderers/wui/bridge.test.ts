@@ -212,10 +212,10 @@ describe("dispatchWuiRequest", () => {
   it("names an unknown verb instead of failing silently", async () => {
     // The bridge's verb set is closed, so a page asking for something else is a
     // mistake worth reading — most likely an agent inventing an API.
-    const res = await dispatchWuiRequest(req("callAgent"), ctx());
+    const res = await dispatchWuiRequest(req("summonDragon"), ctx());
 
     expect(res).toMatchObject({ ok: false });
-    expect(res.ok === false && res.error).toContain("callAgent");
+    expect(res.ok === false && res.error).toContain("summonDragon");
   });
 
   it("reports a missing file as a refusal, not a thrown render", async () => {

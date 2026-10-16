@@ -1,0 +1,419 @@
+/* docs/plan-tool-usage-stats.md — the administrator's tool-usage tab
+   (`pages/ToolUsagePanel.tsx`). Its own classes. */
+
+.tool-usage-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--space-12);
+  margin-bottom: var(--space-12);
+}
+
+.tool-usage-controls label {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  font-size: var(--text-small);
+  color: var(--text-paper-d);
+}
+
+/* Material 3 segmented buttons: one outlined row, the chosen segment filled. */
+.tool-usage-segmented {
+  display: inline-flex;
+  border: 1px solid var(--paper-3);
+  border-radius: var(--radius-btn);
+  overflow: hidden;
+}
+
+.tool-usage-segmented button {
+  padding: 6px 14px;
+  border: none;
+  border-left: 1px solid var(--paper-3);
+  background: transparent;
+  color: var(--text-paper);
+  font-size: var(--text-small);
+  cursor: pointer;
+}
+
+.tool-usage-segmented button:first-child {
+  border-left: none;
+}
+
+.tool-usage-segmented button[aria-pressed="true"] {
+  background: var(--accent-soft);
+  color: var(--accent-h);
+  font-weight: 600;
+}
+
+/* A wide table scrolls inside itself rather than widening the page. */
+.tool-usage-scroll {
+  overflow-x: auto;
+  max-width: 100%;
+}
+
+.tool-usage-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--text-small);
+}
+
+.tool-usage-table th {
+  font-weight: 600;
+  color: var(--text-paper-d);
+  white-space: nowrap;
+}
+
+.tool-usage-table tr[aria-selected="true"] td {
+  background: var(--accent-soft);
+}
+
+/* The tool name opens its breakdown: a link-styled button, not a filled one. */
+.tool-usage-tool {
+  border: none;
+  background: none;
+  padding: 0;
+  color: var(--accent-h);
+  font-family: var(--font-mono);
+  font-size: inherit;
+  text-align: left;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+
+.tool-usage-tool:hover {
+  text-decoration: underline;
+}
+
+.tool-usage-note {
+  color: var(--text-paper-d);
+}
+
+/* A row's details (§3.6): a nonmodal side panel beside the table (NN/g, Data
+   Tables) — fixed to the right below the top bar; the full width on a phone. */
+.tool-usage-sidepanel {
+  position: fixed;
+  top: var(--nav-height);
+  right: 0;
+  bottom: 0;
+  width: min(420px, 100vw);
+  overflow-y: auto;
+  padding: var(--space-16);
+  background: var(--paper);
+  border-left: 1px solid var(--paper-3);
+  box-shadow: -8px 0 24px rgb(0 0 0 / 0.08);
+  /* The rail's band: furniture beside the page, under menus and modals. */
+  z-index: var(--z-rail);
+}
+
+.tool-usage-sidepanel-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-8);
+}
+
+/* The name can be one long unbroken identifier: it wraps, and never pushes ✕
+   out of the panel. */
+.tool-usage-detail-title {
+  margin: 0;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: var(--text-body-lg);
+  overflow-wrap: anywhere;
+}
+
+/* While a panel is open on a wide screen, the page makes room for it, so the
+   part's own controls (來源, the CSV link) and the table's right columns are
+   not under it. The page's box is inline-styled (DiagnosticsPage), hence the
+   `!important`; it widens by the panel's width and pads it back out, so the
+   content keeps its width and moves left. */
+@media (min-width: 1100px) {
+  [data-testid="page-diagnostics"] > div:has(.tool-usage-sidepanel) {
+    max-width: calc(760px + 420px) !important;
+    padding-right: calc(20px + 420px) !important;
+  }
+}
+
+.tool-usage-sidepanel-close {
+  border: none;
+  background: none;
+  cursor: pointer;
+  color: var(--text-paper-d);
+  font-size: var(--text-body);
+  padding: 2px 6px;
+}
+
+.tool-usage-detail-which {
+  display: block;
+  font-size: var(--text-small);
+  color: var(--text-paper-d);
+}
+
+.tool-usage-detail-what {
+  margin: 0;
+  font-size: var(--text-small);
+  color: var(--text-paper-d);
+}
+
+/* The totals, first and in words. */
+.tool-usage-detail-summary {
+  margin: var(--space-8) 0 0;
+  font-size: var(--text-body-lg);
+  font-weight: 600;
+}
+
+/* A count with its bar against the part's largest, as the page's charts: the
+   last column, a fixed width, the bar from its LEFT edge so every row's bar
+   starts at one x, and the number on the bar — just past a short bar's end,
+   inside a long bar's end (light on the fill). */
+.tool-usage-cellbar-col {
+  width: 140px;
+  min-width: 140px;
+}
+
+/* On a phone the panel is the screen's width: a narrower bar column keeps
+   the table (and the numbers on the bars) inside it. */
+@media (max-width: 480px) {
+  .tool-usage-cellbar-col {
+    width: 84px;
+    min-width: 84px;
+  }
+}
+
+.tool-usage-cellbar {
+  position: relative;
+  display: block;
+  height: 18px;
+}
+
+.tool-usage-cellbar [data-bar] {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  min-width: 2px;
+  border-radius: 0 2px 2px 0;
+  background: var(--accent-h);
+}
+
+.tool-usage-cellbar-num {
+  position: absolute;
+  top: 0;
+  line-height: 18px;
+  padding: 0 4px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.tool-usage-cellbar-num.is-inside {
+  color: var(--text-dark);
+}
+
+.tool-usage-detail-part {
+  margin: var(--space-16) 0 var(--space-4);
+  font-size: var(--text-small);
+  color: var(--text-paper-d);
+}
+
+/* §8.4: tools and skills, each a part of the page — its title and its own
+   source filter, its charts, its table. */
+.tool-usage-part {
+  margin-top: var(--space-24);
+}
+
+.tool-usage-part-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--space-12);
+  margin-bottom: var(--space-12);
+}
+
+.tool-usage-part-title {
+  margin: 0;
+  font-size: var(--text-body-lg);
+}
+
+/* The part's own controls together, on the right of its title. */
+.tool-usage-part-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--space-12);
+}
+
+.tool-usage-part-head label {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  font-size: var(--text-small);
+  color: var(--text-paper-d);
+}
+
+/* Charts side by side when there is room, stacked on a phone. */
+.tool-usage-charts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: var(--space-16);
+  margin-bottom: var(--space-16);
+}
+
+.tool-usage-bars {
+  margin: 0;
+  min-width: 0;
+}
+
+.tool-usage-bars-title {
+  margin-bottom: var(--space-8);
+  font-size: var(--text-small);
+  font-weight: 600;
+  color: var(--text-paper-d);
+}
+
+/* Name | plot | number. The grid lives on the PLOT and the list, each row and
+   the axis take `subgrid` (as `.live-list` in my-resources.css): a grid on the
+   row sizes its own tracks, so every bar would start at a different x and the
+   lengths could not be compared. The name column fits the longest name up to a
+   cap — long names wrap in full rather than squeezing the bars. */
+.tool-usage-bars-plot {
+  display: grid;
+  grid-template-columns: fit-content(11em) minmax(0, 1fr) auto;
+  column-gap: var(--space-8);
+}
+
+.tool-usage-bars ol {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: subgrid;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+/* No gap between rows, so the gridlines run unbroken down the plot. */
+.tool-usage-bars li {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: subgrid;
+  align-items: center;
+  min-height: 24px;
+  font-size: var(--text-small);
+}
+
+.tool-usage-bars-name {
+  font-family: var(--font-mono);
+  overflow-wrap: anywhere;
+}
+
+/* The plot: a baseline at 0 (the left edge) and a gridline at every tick —
+   one gradient stop per 1/--usage-ticks of the width, plus the last one at the end.
+   Magnitude is the bar's LENGTH; one colour for every bar (NN/g: colour must
+   not carry magnitude). */
+.tool-usage-bars-track {
+  align-self: stretch;
+  display: flex;
+  align-items: center;
+  border-left: 1px solid var(--text-paper-d);
+  background-image: linear-gradient(to right, var(--paper-3) 1px, transparent 1px);
+  background-size: calc(100% / var(--usage-ticks, 1)) 100%;
+  box-shadow: inset -1px 0 0 var(--paper-3);
+}
+
+.tool-usage-bars-track [data-bar] {
+  display: block;
+  height: 14px;
+  min-width: 2px;
+  border-radius: 0 2px 2px 0;
+  background: var(--accent-h);
+}
+
+/* The value axis under the plot: a tick label under every gridline. */
+.tool-usage-bars-axis {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: subgrid;
+}
+
+.tool-usage-bars-scale {
+  position: relative;
+  height: 1.4em;
+  border-top: 1px solid var(--text-paper-d);
+}
+
+.tool-usage-bars-scale [data-tick] {
+  position: absolute;
+  top: 2px;
+  transform: translateX(-50%);
+  font-size: var(--text-body-sm);
+  color: var(--text-paper-d);
+  font-variant-numeric: tabular-nums;
+}
+
+.tool-usage-bars-value {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+/* §9.3: the raw-data download sits with the part's own controls. */
+.tool-usage-raw {
+  font-size: var(--text-small);
+  color: var(--accent-h);
+  align-self: flex-end;
+  padding-bottom: 6px;
+}
+
+/* §9: granularity, then the tick boxes of what to show. */
+.tool-usage-pick {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-8);
+  margin-bottom: var(--space-12);
+}
+
+.tool-usage-shown {
+  width: 100%;
+  min-width: 0;
+}
+
+/* The folded picker: one line saying what is shown; it opens the panel. */
+.tool-usage-shown-summary {
+  border: 1px solid var(--paper-3);
+  border-radius: var(--radius-btn);
+  background: transparent;
+  color: var(--text-paper);
+  padding: 6px 12px;
+  font-size: var(--text-small);
+  cursor: pointer;
+}
+
+/* What is picked, outside the scrolling list (NN/g): removable tokens. */
+.tool-usage-chips {
+  list-style: none;
+  margin: var(--space-8) 0 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-4);
+}
+
+.tool-usage-chips li {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px 4px 2px 8px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  font-family: var(--font-mono);
+  font-size: var(--text-small);
+}
+
+.tool-usage-chips button {
+  border: none;
+  background: none;
+  cursor: pointer;
+  color: var(--text-paper-d);
+  padding: 0 4px;
+}
+

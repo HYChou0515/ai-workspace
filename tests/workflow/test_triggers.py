@@ -743,9 +743,9 @@ async def test_build_trigger_start_launches_the_target_workflow_as_the_acting_us
     ``profile``, under its ``acting_user`` as the captured authz scope (#429 E)."""
     from workspace_app.workflow.triggers import build_trigger_start
 
-    calls: list[dict[str, str]] = []
+    calls: list[dict[str, object]] = []
 
-    async def fake_start(**kw: str) -> str:
+    async def fake_start(**kw: object) -> str:
         calls.append(kw)
         return "run-1"
 
@@ -766,6 +766,7 @@ async def test_build_trigger_start_launches_the_target_workflow_as_the_acting_us
             "profile": "echo",
             "captured_user": "bot",
             "workflow_id": "report",
+            "from_schedule": True,
         }
     ]
 

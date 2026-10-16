@@ -55,6 +55,9 @@ export type AgentState = {
   cancel: () => void;
   /** Undo the last `turns` whole turns (#38), then re-snapshot the thread. */
   undo: (turns: number) => Promise<void>;
+  /** Follow a turn an answer to card `callId` started elsewhere
+   * (`useChatSession.follow`). */
+  follow?: (callId: string) => void;
 };
 
 const AgentContext = createContext<AgentState | null>(null);

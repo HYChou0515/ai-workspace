@@ -37,9 +37,32 @@ def test_a_search_goes_to_google_or_else_the_first_destination():
         pick_search_target([])
 
 
+def test_the_shared_table_still_says_which_destination_the_helper_picks():
+    """`tests/fixtures/search_target_cases.json` is what the card's copy of
+    this rule (`pickSearchTarget`, web/src/api/outsideLookup.ts) is held to
+    (`web/tests/searchTargetParity.test.ts`): the card's button names the
+    destination the helper will search (docs/plan-ext-ai.md D8). Change the rule
+    and this reddens until the table (kept by hand) is updated; then the FE test
+    reddens until it follows. `null`: the helper refuses — no destination at all."""
+    import json
+    from pathlib import Path
+
+    table = json.loads(
+        (Path(__file__).parents[1] / "fixtures" / "search_target_cases.json").read_text()
+    )
+    assert len(table["cases"]) >= 6
+    for case in table["cases"]:
+        try:
+            picked = pick_search_target(case["targets"])["name"]
+        except ErrandFailed:
+            picked = None
+        assert picked == case["picked"], case
+
+
 class _Response:
     def __init__(self, status: int) -> None:
         self.status = status
+        self.headers: dict[str, str] = {}
 
 
 class _Locator:
@@ -66,7 +89,13 @@ class _Page:
     def title(self) -> str:
         return "the page"
 
-    def evaluate(self, _js: str):
+    def evaluate(self, js: str):
+        from ai_workspace_helper.builtin_errands import _CLOUDFLARE_CHALLENGE
+
+        # an ordinary page, as a real one answers: no challenge on it (the
+        # html answer for everything made every page a verification)
+        if js == _CLOUDFLARE_CHALLENGE:
+            return False
         return "<p>the page's html</p>"
 
     def locator(self, _selector: str) -> _Locator:
@@ -167,11 +196,11 @@ def test_a_page_that_moves_on_while_being_read_is_read_again():
     class _Moving(_Page):
         reads = 0
 
-        def evaluate(self, _js: str):
+        def evaluate(self, js: str):
             self.reads += 1
             if self.reads == 1:
                 raise PlaywrightError("Execution context was destroyed")
-            return super().evaluate(_js)
+            return super().evaluate(js)
 
     page = _Moving()
 

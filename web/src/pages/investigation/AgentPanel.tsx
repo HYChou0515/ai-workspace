@@ -252,7 +252,7 @@ export function AgentPanel({
   const ctxAgent = useOptionalAgent();
   const agent = agentProp ?? ctxAgent;
   if (!agent) throw new Error("AgentPanel needs an agent (prop or <AgentProvider>)");
-  const { log, connection, send, mention, cancel, undo } = agent;
+  const { log, connection, send, mention, cancel, undo, follow } = agent;
   // plan-skill-hub-history A3: the item a card in this log acts on (the
   // `show_skill_hub_entry` card's install). None for a read-only viewer.
   //
@@ -282,6 +282,8 @@ export function AgentPanel({
             ...(chatId ? { chatId } : {}),
             ...(canAddFiles === false ? { canAddFiles: false } : {}),
             answered: (callId: string) => answeredCalls.has(callId),
+            // the helper's answer starts a turn this page may not hear of
+            follow,
             ...(canEnv
               ? {
                   env: {
@@ -294,7 +296,7 @@ export function AgentPanel({
                 }
               : {}),
           },
-    [readOnly, slug, investigationId, chatId, canAddFiles, canEnv, envVars, envPolicy, answeredCalls],
+    [readOnly, slug, investigationId, chatId, canAddFiles, canEnv, envVars, envPolicy, answeredCalls, follow],
   );
   // A one-line answer to "I just did something and nothing happened" — the
   // composer's own feedback channel (Enter during a turn, Stop). Cleared on the

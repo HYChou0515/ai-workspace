@@ -19,6 +19,9 @@ export type ChatItem = {
   /** Whether a message in the thread already answers this call
    * (`Message.answers`), so an answered card stays retired after a reload. */
   answered?: (callId: string) => boolean;
+  /** Follow the turn an answer to `callId` started elsewhere — the helper
+   * posts its 「請幫我查」 result from its own browser (`useChatSession.follow`). */
+  follow?: (callId: string) => void;
 };
 
 /** Where the panel opens to, from a card (docs/plan-env-request-card.md): the

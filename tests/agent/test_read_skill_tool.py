@@ -416,7 +416,7 @@ def test_build_tools_grants_a_hand_written_read_skill_with_no_profile_skills(
 
 def test_build_tools_grants_read_skill_for_workspace_skills_with_no_app_profile():
     """No App/profile, but the caller says a skill is reachable: the tool reads a
-    workspace skill from the file facade (`load_workspace_skill`) without
+    workspace skill from the file facade (`read_workspace_skill`) without
     touching a package, so it is worth granting — the "only available in an App
     workspace turn" refusal is for a turn with neither source, not for this."""
     from workspace_app.agent.tools import build_tools

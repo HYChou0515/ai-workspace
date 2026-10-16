@@ -36,10 +36,12 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from datetime import UTC, datetime
 from pathlib import PurePosixPath
 from typing import Annotated, Literal
+from urllib.parse import urlsplit
 
 from fastapi import APIRouter, FastAPI, File, Form, HTTPException, Request, UploadFile
 from pydantic import BaseModel
 
+from ..agent.ext_ai import TOOL_NAME as ASK_EXT_AI
 from ..agent.outside_lookup import TOOL_NAME, declared_lookup
 from ..files import WorkspaceFiles, abs_path
 from ..filestore.protocol import FileExists
@@ -47,6 +49,7 @@ from ..resources.conversation import Conversation
 from .chat_routes import SendInto
 from .events import FileChanged
 from .locator import ItemLocator
+from .outside_jobs import link_list, numbered_links
 from .schemas import _MessageBody
 from .turns import ChatTurnEngine
 
@@ -154,15 +157,18 @@ def register_outside_lookup_routes(
     ) -> OutsideAnswerOut:
         _rid, conv = conversation()
         card = _open_card(conv, form.tool_call_id)
-        asked = card.get("query") or card.get("url") or ""
-        # What was actually searched: the query as the person edited it (D8).
-        searched = (form.query.strip() if "query" in card else "") or asked
+        asked = _asked(card)
+        # What was actually searched: the keywords the person typed (D13), or
+        # the question as they sent it (plan-ext-ai D2); an empty box falls
+        # back to the AI's as the subject.
+        searched = (form.query.strip() if "url" not in card else "") or asked
         written: list[str] = []
         saved: str | None = None
         attached: list[str] = []
         body = ""
         if form.kind == "not_found":
-            text = f"沒有查到／不查了:{searched}" + (
+            gave_up = "沒有問外部AI／不問了" if "question" in card else "沒有查到／不查了"
+            text = f"{gave_up}:{_subject(searched)}" + (
                 f"\n原因:{form.reason.strip()}" if form.reason.strip() else ""
             )
         else:
@@ -182,12 +188,27 @@ def register_outside_lookup_routes(
                 (_safe_name(f.filename), await _read_capped(f, max_file_size))
                 for f in form.attachments
             ]
+            # D24: the links, numbered, under the answer — the AI names one by
+            # file and number rather than copying it (it copied wrong).
+            # off the loop; a search's own site's links are not its results
+            searched_page = form.source_url if "query" in card else None
+            numbered = await asyncio.to_thread(numbered_links, body, skip_site=searched_page)
             if may_add:
-                doc = _document(card, searched, body, form, get_user_id())
+                doc = _document(card, searched, body, form, get_user_id()) + link_list(numbered)
                 day = form.date if _is_date(form.date) else f"{datetime.now(UTC):%Y-%m-%d}"
-                saved, attached = await _save(files, investigation_id, day, searched, doc, blobs)
+                saved, attached = await _save(
+                    files, investigation_id, day, _subject(searched), doc, blobs
+                )
                 written = [*attached, saved]
-            text = _message(searched, body, saved, attached)
+            text = _message(
+                _subject(searched),
+                body,
+                saved,
+                attached,
+                numbered,
+                search="query" in card,
+                ext_ai="question" in card,
+            )
         try:
             rid, conv = conversation()  # the writes can wait on a cold sandbox: read it fresh
             # Answered meanwhile — another tab, another viewer: theirs stands.
@@ -353,7 +374,9 @@ def _open_card(conv: Conversation, call_id: str) -> dict:
         (
             declared_lookup(m.content)
             for m in conv.messages
-            if m.role == "tool" and m.tool_call_id == call_id and m.tool_name == TOOL_NAME
+            if m.role == "tool"
+            and m.tool_call_id == call_id
+            and m.tool_name in (TOOL_NAME, ASK_EXT_AI)
         ),
         None,
     )
@@ -427,8 +450,20 @@ def _stem(subject: str) -> str:
     return slug or "lookup"
 
 
+def _asked(card: dict) -> str:
+    """What the AI asked for: its query, the page, or its question."""
+    return card.get("query") or card.get("url") or card.get("question") or ""
+
+
+def _subject(asked: str) -> str:
+    """A one-line name for what was looked up — a question's first line."""
+    return asked.strip().split("\n", 1)[0].strip()
+
+
 def _document(card: dict, searched: str, body: str, form: AnswerForm, who: str) -> str:
-    asked = card.get("query") or card.get("url") or ""
+    if "question" in card:
+        return _ext_ai_document(card, searched, body, form, who)
+    asked = _asked(card)
     lines = [f"# 外部查詢:{searched}", "", f"- 為什麼:{card['why']}"]
     if "query" in card:
         lines.append(f"- AI 的查詢:{asked}")
@@ -444,6 +479,16 @@ def _document(card: dict, searched: str, body: str, form: AnswerForm, who: str) 
         lines.append("- 由小幫手抓取")
     lines += [f"- 查的人:{who}", f"- 時間:{datetime.now(UTC).isoformat(timespec='seconds')}"]
     return "\n".join([*lines, "", "---", "", body, ""])
+
+
+def _ext_ai_document(card: dict, asked: str, body: str, form: AnswerForm, who: str) -> str:
+    """docs/plan-ext-ai.md D5: the question as it was sent, then the external
+    AI's answer under its name (D10) — never as an original source."""
+    lines = [f"# 問外部AI:{_subject(asked)}", "", f"- 為什麼:{card['why']}"]
+    if form.by_helper:
+        lines.append("- 由小幫手問")
+    lines += [f"- 問的人:{who}", f"- 時間:{datetime.now(UTC).isoformat(timespec='seconds')}"]
+    return "\n".join([*lines, "", "## 問題", "", asked, "", "## 外部AI 的回答", "", body, ""])
 
 
 async def _save(
@@ -507,12 +552,56 @@ async def _take_back(files: WorkspaceFiles, workspace_id: str, paths: list[str])
             logger.warning("outside lookup: could not take back %s", path, exc_info=True)
 
 
-def _message(subject: str, body: str, path: str | None, attached: list[str]) -> str:
-    """What the AI reads next turn: what was looked up, where it is saved, and
-    the text — excerpted when the file holds the rest."""
-    lines = [f"我在外面查了:{subject}"]
+def _host(page: str) -> str:
+    """The site a listed page is on, as the message names it; the page itself
+    when no parser reads it (`https://[your-server]/…`)."""
+    try:
+        return urlsplit(page).hostname or page
+    except ValueError:
+        return page
+
+
+#: Most links the message itself lists; the file lists them all.
+MESSAGE_LINKS = 50
+
+
+def _message(
+    subject: str,
+    body: str,
+    path: str | None,
+    attached: list[str],
+    numbered: list[tuple[int, str, str]] | None = None,
+    *,
+    search: bool = False,
+    ext_ai: bool = False,
+) -> str:
+    """What the AI reads next turn: what was looked up, where it is saved, its
+    links by number and how to open one (D24) — before the text, so an excerpt
+    cut short still shows them — and the text, excerpted when the file holds
+    the rest."""
+    lines = [f"我問了外部AI:{subject}" if ext_ai else f"我在外面查了:{subject}"]
     if path:
         lines.append(f"存在 `{path}`")
+    if ext_ai:
+        # docs/plan-ext-ai.md D10 — and the links only when they are listed below
+        lines.append(
+            "這是外部AI 的回答,不是原始出處;引用時說明是外部AI 的說法。"
+            + ("要看它提到的原文,用 ask_outside 打開下面的連結。" if path and numbered else "")
+        )
+    numbered = numbered or []
+    if path and numbered:
+        if search:
+            lines.append(
+                "這是搜尋結果:只有標題和摘要,不是原文。"
+                "回答前,用 ask_outside 打開最相關的結果讀原文,一次開一個;"
+                "查回來過的連結,小幫手在線時會直接打開。"
+            )
+        lines.append(f"連結(要開其中一個:ask_outside(file=`{path}`, link=編號)):")
+        for n, text, page in numbered[:MESSAGE_LINKS]:
+            host = _host(page)
+            lines.append(f"[{n}] {text[:60]} — {host}" if text else f"[{n}] {page[:80]}")
+        if len(numbered) > MESSAGE_LINKS:
+            lines.append(f"…還有 {len(numbered) - MESSAGE_LINKS} 個,列在檔案最下面")
     if attached:
         lines.append("附件:" + "、".join(f"`{p}`" for p in attached))
     if body:

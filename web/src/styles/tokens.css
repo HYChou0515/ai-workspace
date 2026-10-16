@@ -138,6 +138,9 @@
    * hand-written 20 against a rail at 42. Keep menus at --z-popover rather than
    * picking a number. */
   --z-rail:      40;
+  /* The global nav bar's height (GlobalNav) — what a panel fixed below it
+     starts under (the usage tab's side panel). One number, two readers. */
+  --nav-height:  40px;
   --z-popover:   50;
   --z-modal:    100;
   --z-dialog:   150;

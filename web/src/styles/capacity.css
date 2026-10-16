@@ -1,0 +1,266 @@
+/* docs/plan-capacity-usage.md — the capacity dashboard. Its own classes: the
+   tool-usage page's live in a stylesheet this page does not load. */
+
+.capacity-page {
+  min-height: 100%;
+  background: var(--paper);
+  overflow: auto;
+}
+
+.capacity-wrap {
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 28px 20px 60px;
+}
+
+.capacity-h1 {
+  margin: 0;
+  font-size: var(--text-display-sm);
+  color: var(--text-paper);
+}
+
+.capacity-subtitle,
+.capacity-note,
+.capacity-sub {
+  color: var(--text-paper-d);
+  font-size: var(--text-body-sm);
+}
+
+.capacity-subtitle {
+  margin: 6px 0 14px;
+}
+
+.capacity-sub {
+  display: block;
+  font-size: var(--text-small);
+}
+
+.capacity-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 14px;
+  margin: 12px 0;
+  font-size: var(--text-body-sm);
+  color: var(--text-paper);
+}
+
+.capacity-controls label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.capacity-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.capacity-control-label {
+  color: var(--text-paper-d);
+  font-size: var(--text-small);
+}
+
+.capacity-segmented {
+  display: inline-flex;
+  border: 1px solid var(--paper-3);
+  border-radius: var(--radius-btn);
+  overflow: hidden;
+}
+
+.capacity-segmented button {
+  padding: 6px 14px;
+  border: none;
+  border-left: 1px solid var(--paper-3);
+  background: transparent;
+  color: var(--text-paper);
+  font-size: var(--text-small);
+  cursor: pointer;
+}
+
+.capacity-segmented button:first-child {
+  border-left: none;
+}
+
+.capacity-segmented button[aria-pressed="true"] {
+  background: var(--accent-soft);
+  color: var(--accent-h);
+  font-weight: 600;
+}
+
+.capacity-segmented button:disabled {
+  color: var(--text-paper-d);
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.capacity-view {
+  margin-top: 16px;
+}
+
+.capacity-sub-view {
+  margin-top: 28px;
+}
+
+.capacity-headline {
+  margin: 4px 0;
+  font-size: var(--text-body);
+  color: var(--text-paper);
+  font-weight: 600;
+  line-height: 1.6;
+}
+
+.capacity-h3 {
+  margin: 20px 0 6px;
+  font-size: var(--text-body);
+  color: var(--text-paper);
+}
+
+.capacity-h4 {
+  margin: 14px 0 4px;
+  font-size: var(--text-body-sm);
+  color: var(--text-paper);
+}
+
+.capacity-chart {
+  width: 100%;
+  margin: 8px 0;
+}
+
+.capacity-scroll {
+  overflow-x: auto;
+  max-width: 100%;
+}
+
+.capacity-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--text-small);
+  color: var(--text-paper);
+}
+
+.capacity-table th,
+.capacity-table td {
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--paper-3);
+  text-align: left;
+  vertical-align: top;
+}
+
+.capacity-table thead th {
+  font-weight: 600;
+  color: var(--text-paper-d);
+  white-space: nowrap;
+}
+
+.capacity-table tbody th {
+  font-weight: 500;
+}
+
+.capacity-table td {
+  font-variant-numeric: tabular-nums;
+}
+
+.capacity-table tr[data-binding] th,
+.capacity-table tr[data-fits="false"] th {
+  color: var(--err);
+}
+
+.capacity-table tr[data-kind="fixed"],
+.capacity-table tr[data-kind="residual"],
+.capacity-table tr[data-kind="other"] {
+  color: var(--text-paper-d);
+}
+
+.capacity-table tr[aria-selected="true"] th,
+.capacity-table tr[aria-selected="true"] td {
+  background: var(--accent-soft);
+}
+
+.capacity-badge {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent-h);
+  font-size: var(--text-small);
+  font-weight: 600;
+}
+
+.capacity-notready {
+  margin: 12px 0;
+  padding: 10px 12px;
+  border-radius: var(--radius-btn);
+  background: var(--paper-2);
+  color: var(--text-paper-d);
+  font-size: var(--text-body-sm);
+}
+
+/* `.ev-banner--err`'s shape (entity-views.css): the tone is the stripe and the
+ * fill, the sentence stays in body ink — `--err` as text was under 4:1 here. */
+.capacity-warning {
+  margin: 12px 0;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--err) 35%, transparent);
+  border-left: 3px solid var(--err);
+  border-radius: var(--radius-btn);
+  background: color-mix(in srgb, var(--err) 8%, var(--white));
+  color: var(--text-paper);
+  font-size: var(--text-body-sm);
+}
+
+.capacity-sources,
+.capacity-notes,
+.capacity-ranks {
+  margin: 6px 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--text-body-sm);
+  color: var(--text-paper);
+}
+
+.capacity-sources li,
+.capacity-notes li,
+.capacity-ranks li {
+  padding: 6px 0;
+  border-bottom: 1px solid var(--paper-3);
+}
+
+.capacity-ranks li {
+  display: grid;
+  grid-template-columns: minmax(8em, 1fr) minmax(6em, auto) minmax(8em, 1fr);
+  gap: 8px;
+}
+
+.capacity-sources li[data-state="error"] .capacity-sub {
+  color: var(--err);
+}
+
+.capacity-card {
+  margin: 14px 0;
+  padding: 12px 14px;
+  border: 1px solid var(--paper-3);
+  border-radius: var(--radius-card, 8px);
+}
+
+.capacity-card header,
+.capacity-person header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.capacity-card .capacity-h3 {
+  margin: 0;
+}
+
+.capacity-person {
+  margin: 16px 0;
+  padding: 12px 14px;
+  border: 1px solid var(--paper-3);
+  border-radius: var(--radius-card, 8px);
+  background: var(--paper-2);
+}

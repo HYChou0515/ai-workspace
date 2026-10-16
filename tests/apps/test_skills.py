@@ -252,6 +252,27 @@ def test_wui_skill_says_plainly_when_an_app_offers_none():
     assert "leave `tools:` out" in out
 
 
+def test_wui_skill_is_told_which_sub_agents_a_page_may_ask():
+    """#942: the item's sub-agents are per-item files the model may not have
+    listed, so the names a page may put in `agents:` are appended like tools."""
+    from workspace_app.apps.skills import augment_shared_skill_body
+
+    out = augment_shared_skill_body(
+        "wui", "BODY", "rca", "default", wui_tools=[], wui_agents=["log-digger"]
+    )
+
+    assert "`log-digger`" in out
+    assert "agents:" in out and "callAgent" in out
+
+
+def test_wui_skill_says_plainly_when_an_item_has_no_sub_agents():
+    from workspace_app.apps.skills import augment_shared_skill_body
+
+    out = augment_shared_skill_body("wui", "BODY", "rca", "default", wui_tools=[], wui_agents=[])
+
+    assert "leave `agents:` out" in out
+
+
 def test_wui_skill_omits_the_section_when_nobody_could_say():
     """ "This app grants none" and "the caller had no toolset to ask" are
     different claims, and only one of them is safe to invent."""
