@@ -427,14 +427,16 @@ def test_a_csv_field_past_the_parser_limit_still_gets_a_repair_request():
 
 @pytest.mark.parametrize(
     "reply",
-    ["Here is the table:\na,b,c\n", "Sure:\nname,n\n"],
+    ["Here is the table:\na,b,c\n", "name,age\nHope this helps!", "a,b\nnote\n1,2\nbye\n"],
 )
-def test_a_csv_preamble_is_quoted_even_when_the_table_has_one_row(reply: str):
-    """A tie between a one-cell sentence and a one-row table: the table is the rows a
-    reply ends with."""
-    text = repair_request(reply, CheckResult(False, "inconsistent", True), None, "csv")
-    preamble = reply.splitlines()[0]
-    assert f"The problem is here:\n<<<\n{preamble}\n>>>" in text
+def test_a_csv_tie_points_at_nothing_rather_than_at_the_data(reply: str):
+    """A one-cell sentence against a one-row table: which is the table cannot be told
+    from widths alone (the sentence may come first or last). Pointing at the data would
+    mislead; the request states the reason instead, and still quotes the whole reply."""
+    text = repair_request(reply, CheckResult(False, "inconsistent columns", True), None, "csv")
+    assert "The problem is here" not in text
+    assert "does not match the required format: inconsistent columns" in text
+    assert reply.strip() in text
 
 
 async def test_an_authors_check_of_another_file_is_not_repaired(wf: WorkflowHandle):

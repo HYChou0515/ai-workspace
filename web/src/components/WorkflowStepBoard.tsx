@@ -89,6 +89,13 @@ function StepRow({ step, now }: { step: StepStateDTO; now: number }) {
           ×{step.attempts}
         </span>
       )}
+      {/* plan-workflow-output-repair D7: what a repair leaves once the step is done —
+          the live label goes when the status moves on, this stays in the run record. */}
+      {step.status !== "repairing" && (step.repairs ?? 0) > 0 && (
+        <span data-testid="wf-step-repairs" style={{ opacity: 0.7 }}>
+          {t("wf.step.repaired", { n: step.repairs ?? 0 })}
+        </span>
+      )}
       {step.reason && (
         <span data-testid="wf-step-reason" style={{ color: "var(--err)", opacity: 0.9 }}>
           {step.reason}

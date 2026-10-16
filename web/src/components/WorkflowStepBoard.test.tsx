@@ -145,3 +145,25 @@ describe("the board's clock while a step is repairing", () => {
     }
   });
 });
+
+describe("a finished step that was repaired (plan-workflow-output-repair D7)", () => {
+  it("still says its format was fixed, and how many times, after it passed", () => {
+    render(
+      <WorkflowStepBoard
+        nodes={[node()]}
+        steps={[step({ status: "passed", attempts: 3, repairs: 2, started: T - 5000, ended: T })]}
+      />,
+    );
+    expect(screen.getByTestId("wf-step-repairs")).toHaveTextContent("修正過輸出格式 2 次");
+  });
+
+  it("says nothing of the kind for a step that was only re-run", () => {
+    render(
+      <WorkflowStepBoard
+        nodes={[node()]}
+        steps={[step({ status: "passed", attempts: 2, repairs: 0, started: T - 5000, ended: T })]}
+      />,
+    );
+    expect(screen.queryByTestId("wf-step-repairs")).toBeNull();
+  });
+});

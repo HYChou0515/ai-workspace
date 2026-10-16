@@ -240,11 +240,30 @@ Four lenses; what they found and what changed:
   `tools: []` to the item's tools and is unaffected.
 - **The words.** The timeline now names a repair; the board's clock ticks while one runs;
   the fold and the log line go through i18n; the missing-field reason lists at most 20
-  names; the runbook's old-image tell is now something an operator can see, and it states
-  what a repair costs.
+  names; the runbook states what a repair costs.
 - **Known, not changed.** The compaction summariser reads every role, so a repair request
   can reach a summary (notices and mentions already do). A repair request is recorded
   before the turn's Stop and workspace-full checks, so a run stopped at that moment leaves
   a request with no answer under it. The P3 commit says quoting the reply means a `map`
   element "never" repairs a sibling's answer; it makes that unlikely, not impossible —
   the repair turn still reads the shared chat.
+
+### Review round 2 (on 1a2913e5, narrowed to round 1's three mechanism changes and its docs)
+
+The three mechanisms held (a differential fuzz of `history_items` against 44589200 found
+only the intended changes). What changed:
+
+- **A repair left no trace once its step passed.** The words lived only in the
+  `repairing` status, so a finished run — a scheduled one above all — looked like a
+  re-run (`passed ×2`). The step board now keeps 「修正過輸出格式 n 次」 on a finished
+  step from `StepState.repairs`, and the runbook's check reads that and the chat entry,
+  which both stay. A `map` element's row folds into its phase's count when it ends, so
+  for those the chat entry is the trace.
+- **The CSV tie.** Taking the last row's width on a tie fixed a leading preamble and broke
+  a trailing sign-off. Widths cannot tell the two apart, so a tie now points at nothing
+  and the request states the reason (the whole reply is still quoted).
+- **An author's own `artifact_valid(out, kind)`** is not repaired: `of_reply` marks the
+  default gate. No caller in the repo does this; the authoring doc says to pass
+  `of_reply=True` to count it.
+- The runbook's cost line now grows per field, measured; its old-image tell no longer
+  rests on the model calling tools again.

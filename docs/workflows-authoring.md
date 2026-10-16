@@ -103,7 +103,8 @@ await agent_step(wf, *, prompt, phase, check, name=None, key="",
 回灌進 prompt 後重跑。`agent_write_step` 的回覆本身格式錯時不重跑,而是同一段對話多一輪、
 不給工具,只請它重新輸出,次數一樣算在 `retries` 裡
 ([`plan-workflow-output-repair.md`](plan-workflow-output-repair.md))。「格式錯」由 gate 判定:
-`out` 是 json/yaml/csv 而且沒傳 `check` 時,預設 gate 會判;宣告 `outputs` 時,Python API
+`out` 是 json/yaml/csv 而且沒傳 `check` 時,預設 gate 會判(自己傳 `check` 就是放棄這個判斷,
+連 `artifact_valid(out, kind)` 也一樣——要它算數得寫 `artifact_valid(out, kind, of_reply=True)`);宣告 `outputs` 時,Python API
 **不會**自己檢查回覆的欄位(DSL 會),要修補就得傳一個會標 `format=True` 的 `check`。
 Python API 的 `retries` 預設 `0`,也就是不修補也不重跑。`tools` 是這個 agent 被允許的 tool 子集(⊆ profile 上限)。
 

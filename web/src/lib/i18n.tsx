@@ -1832,6 +1832,7 @@ export const messages = {
   "wf.status.cancelled": { "zh-TW": "已取消", en: "cancelled" },
   // plan-workflow-output-repair D7: a step asked to re-emit its answer's format
   "wf.step.repairing": { "zh-TW": "修正輸出格式（第 {n} 次）", en: "fixing the output format (#{n})" },
+  "wf.step.repaired": { "zh-TW": "修正過輸出格式 {n} 次", en: "output format fixed {n}×" },
   // plan-workflow-output-repair §3.5: the folded repair request in the workflow chat
   "wf.repairRequest.show": { "zh-TW": "要求重新輸出格式 · 展開", en: "Asked to re-send in the required format · show" },
   "wf.repairRequest.hide": { "zh-TW": "要求重新輸出格式 · 收合", en: "Asked to re-send in the required format · hide" },
