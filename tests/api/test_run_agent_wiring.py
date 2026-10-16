@@ -148,7 +148,7 @@ async def test_the_one_switch_worth_offering_is_the_one_that_gets_offered(monkey
     assert [d.name for d in ctx.subagent_defs] == ["log-digger"]
     agent = _agent_for(
         ctx.agent_config,
-        extra_instructions=_turn_instructions(ctx, None),
+        extra_instructions=_turn_instructions(ctx),
         has_subagents=bool(ctx.subagent_defs),
     )
     assert isinstance(agent.instructions, str)
@@ -159,7 +159,7 @@ async def test_the_one_switch_worth_offering_is_the_one_that_gets_offered(monkey
     # "the string appears somewhere in a long prompt".
     with_nothing = _agent_for(
         ctx.agent_config,
-        extra_instructions=_turn_instructions(ctx, None),
+        extra_instructions=_turn_instructions(ctx),
         has_subagents=False,
     )
     assert isinstance(with_nothing.instructions, str)
@@ -282,7 +282,7 @@ async def test_both_halves_of_the_turn_are_told_there_are_sub_agents(monkeypatch
 
     assert [d.name for d in ctx.subagent_defs] == ["log-digger"]
     assert sized == [True]
-    kwargs = LitellmAgentRunner()._agent_kwargs(ctx, None, lambda _m: LlmCredential())
+    kwargs = LitellmAgentRunner()._agent_kwargs(ctx, lambda _m: LlmCredential())
     assert kwargs["has_subagents"] is True
 
 

@@ -393,6 +393,8 @@ def test_findability_answer_surfaces_llm_error_in_the_stream():
     assert r.status_code == 200
     body = r.text
     assert "error" in body and "boom" in body
+    # Named like a turn's failure, so the modal words it (review round 1).
+    assert '"kind": "unknown"' in body or '"kind":"unknown"' in body
 
 
 def test_document_guidance_write_and_render_roundtrip():
@@ -1222,6 +1224,9 @@ def test_parse_error_surfaces_status_detail_in_listing_and_render():
     body = client.get("/kb/documents", params={"id": doc_id}).json()
     assert body["status"] == "error"
     assert "invalid JSON" in body["status_detail"]
+    # docs/plan-friendly-errors.md P5: both exits carry the kind too — the
+    # listing reads it off the INDEX (#395), so it has to be indexed to arrive.
+    assert row["status_error_kind"] == body["status_error_kind"] is not None
 
 
 def test_image_upload_is_stored_as_a_renderable_sourcedoc():

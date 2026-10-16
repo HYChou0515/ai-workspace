@@ -2,6 +2,7 @@
 import { act, renderHook as rtlRenderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { HttpError } from "../api/http";
 import { mockKbApi, _resetKbMock } from "../api/kbMock";
 import type { AgentEntry } from "../pages/investigation/agentLog";
 import { QueryWrap } from "../test/queryWrapper";
@@ -261,6 +262,35 @@ describe("useKbChat — a turn that FAILS still says why", () => {
   // explanation. `agentLog`'s `message_delta` comment says this exact defect
   // must not come back; it came back through the reconnect loop instead.
   it("keeps the turn's error when `done` follows it", async () => {
+    // The store is behind (the terminal event is published before the turn is
+    // persisted), so the live notice is the only place the failure is said.
+    const client = {
+      ...mockKbApi,
+      getChat: vi.fn().mockResolvedValue({ ...failedThread, messages: failedThread.messages.slice(0, 1) }),
+      subscribeChat: async function* () {
+        yield { type: "error", message: "model exploded" } as never;
+        yield { type: "done" } as never;
+        await new Promise<void>(() => {});
+      },
+    } as unknown as typeof mockKbApi;
+
+    const { result } = renderHook(() =>
+      useKbChat({ collectionIds: ["c1"], chatId: "kb-boom", client }),
+    );
+
+    await waitFor(() => expect(result.current.log.error?.raw).toContain("model exploded"));
+    // …and it is still there once everything has settled, not just in the frame
+    // between the two events.
+    await act(async () => {
+      await new Promise<void>((r) => setTimeout(r, 50));
+    });
+    expect(result.current.log.error?.raw).toContain("model exploded");
+  });
+
+  // Once the re-read thread holds the turn's failure, its transcript entry is
+  // the notice and the live one goes — one failure, one box (the #915 demo
+  // showed the same failure twice).
+  it("shows the failure once after the thread is re-read", async () => {
     const client = {
       ...mockKbApi,
       getChat: vi.fn().mockResolvedValue(failedThread),
@@ -275,13 +305,17 @@ describe("useKbChat — a turn that FAILS still says why", () => {
       useKbChat({ collectionIds: ["c1"], chatId: "kb-boom", client }),
     );
 
-    await waitFor(() => expect(result.current.log.error).toContain("model exploded"));
-    // …and it is still there once everything has settled, not just in the frame
-    // between the two events.
+    const shown = (): string[] => [
+      ...(result.current.log.error ? [result.current.log.error.raw] : []),
+      ...result.current.log.entries.flatMap((e: AgentEntry) =>
+        e.kind === "banner" && e.failure ? [e.failure.raw] : [],
+      ),
+    ];
+    await waitFor(() => expect(shown()).toEqual(["model exploded"]));
     await act(async () => {
       await new Promise<void>((r) => setTimeout(r, 50));
     });
-    expect(result.current.log.error).toContain("model exploded");
+    expect(shown()).toEqual(["model exploded"]);
   });
 
   // The post-send safety net gates on "the turn ended". A failed, cancelled or
@@ -527,7 +561,7 @@ describe("useKbChat — send failure", () => {
     const client = {
       ...mockKbApi,
       createChat: vi.fn().mockResolvedValue({ resource_id: "kb-1" }),
-      sendMessage: vi.fn().mockRejectedValue(new Error("kb message failed: 503")),
+      sendMessage: vi.fn().mockRejectedValue(new HttpError(503, "kb message failed: 503")),
       subscribeChat: async function* () {},
     } as unknown as typeof mockKbApi;
 
@@ -536,7 +570,8 @@ describe("useKbChat — send failure", () => {
       await result.current.send("q");
     });
 
-    expect(result.current.log.error).toContain("503");
+    expect(result.current.log.error?.raw).toContain("503");
+    expect(result.current.log.error?.kind).toBe("server_error"); // P6: worded, not echoed
     expect(result.current.log.streaming).toBe(false);
     // …and the question is taken back off the screen. Nothing was stored, so no
     // broadcast will ever adopt it — left drawn it would sit there with the

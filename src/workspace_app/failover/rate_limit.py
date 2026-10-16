@@ -19,7 +19,7 @@ def _chain(exc: BaseException) -> Iterator[BaseException]:
     """``exc`` and everything under it. litellm/the agents-SDK re-raise the real
     cause wrapped in an ``APIConnectionError``, so the 429 — and the headers
     that say how long to wait — sit one or more links down. Same cycle-safe
-    walk as ``turns._is_all_busy``."""
+    walk as ``classify.classify_error``."""
     seen: set[int] = set()
     cur: BaseException | None = exc
     while cur is not None and id(cur) not in seen:

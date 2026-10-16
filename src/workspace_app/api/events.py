@@ -46,6 +46,10 @@ class ToolEnd:
     # separate display; the FE renders `output`. The exec tools record it on
     # the context and the runner attaches it here keyed by `output`.
     display: str = ""
+    #: docs/plan-friendly-errors.md P4/D10: a delegating tool whose sub-agent
+    #: failed — `{kind, params, raw}`, worded by the FE on the card while
+    #: `output` keeps the raw text the model reads. None for every other call.
+    failure: dict[str, Any] | None = None
     type: Literal["tool_end"] = "tool_end"
 
 
@@ -69,14 +73,16 @@ class RunDone:
 class RunError:
     message: str
     type: Literal["error"] = "error"
-    #: WHICH terminal failure this is, when we can tell — `rate_limited`,
-    #: `all_busy`, or None for anything else. The message alone could not carry
-    #: it: one English sentence was doing duty for two different failures with
-    #: two different remedies, in a product that speaks zh-TW. Stamped onto the
-    #: persisted message as `error_kind`, which the FE already words from
-    #: (`agentLog.persistedErrorText`), falling back to this message when it has
-    #: no wording for a kind.
+    #: WHICH failure this is — one of `failover.classify.ERROR_KINDS`, or None
+    #: when the emitter could not tell (persisted as `unknown`). The FE words
+    #: the failure from it (docs/plan-friendly-errors.md D5); `message` is the
+    #: raw text it shows under technical details (D1). Stamped onto the
+    #: persisted message as `error_kind`.
     kind: str | None = None
+    #: The numbers the kind's copy needs — `waited_s` for `rate_limited`,
+    #: `attempts` for a give-up after retries. Persisted as `error_params` so a
+    #: reloaded thread can say them too.
+    params: dict[str, int] | None = None
 
 
 @dataclass(frozen=True)
@@ -91,8 +97,11 @@ class RunCancelled:
 class ToolCallParseError:
     """The model emitted a tool call we couldn't parse — typically the
     LiteLLM Ollama chunk_parser bug where multi-tool-call streaming
-    concatenates arguments into invalid JSON. Non-terminal: a retry
-    with feedback to the model follows."""
+    concatenates arguments into invalid JSON.
+
+    Nothing emits it since docs/plan-friendly-errors.md (P2): bad tool args are
+    answered in-band by `args_recovery` and the whole-turn retry that sent
+    this is gone. Kept so an older client's handling still type-checks."""
 
     hint: str
     call_id: str = ""
@@ -257,6 +266,57 @@ class RateLimited:
 
 
 @dataclass(frozen=True)
+class ModelRetrying:
+    """A model call failed in a way a re-send can cure (a timeout, a dropped
+    connection, a 5xx, a failover chain with every model busy) and is being
+    sent again — attempt ``attempt``.
+    Ephemeral, like ``RateLimited``: a recovered retry is not a failure, so it
+    is never persisted (docs/plan-friendly-errors.md D9)."""
+
+    attempt: int
+    kind: str
+    type: Literal["model_retrying"] = "model_retrying"
+
+
+@dataclass
+class AnswerText:
+    """The answer a run's events add up to, for a caller that reads the text
+    rather than persisting the turn (a sub-agent's report, a KB answer, a
+    summary). It honours `OutputRetracted`: a re-sent call's broken half is
+    withdrawn here as it is on the transcript — five callers joined
+    `MessageDelta` text themselves and handed the model the half glued to the
+    whole (docs/plan-friendly-errors.md, review round 1).
+
+    `include_reasoning` keeps the reasoning channel too (the compaction
+    summary always did); a re-sent call's output on BOTH channels is then the
+    tail of what was gathered, so both counts come off the end."""
+
+    include_reasoning: bool = False
+    text: str = ""
+
+    def add(self, ev: object) -> None:
+        if isinstance(ev, MessageDelta):
+            if self.include_reasoning or not ev.reasoning:
+                self.text += ev.text
+        elif isinstance(ev, OutputRetracted):
+            drop = ev.text_chars + (ev.reasoning_chars if self.include_reasoning else 0)
+            self.text = self.text[: max(0, len(self.text) - drop)]
+
+
+@dataclass(frozen=True)
+class OutputRetracted:
+    """The model call that streamed the last ``text_chars`` of answer and
+    ``reasoning_chars`` of reasoning failed and is being re-sent: withdraw them
+    (docs/plan-friendly-errors.md D3). Counted from where that call began, so
+    earlier calls' text and every tool result stay. Like ``RepetitionStopped``,
+    it trims what was streamed rather than re-sending it."""
+
+    text_chars: int
+    reasoning_chars: int = 0
+    type: Literal["output_retracted"] = "output_retracted"
+
+
+@dataclass(frozen=True)
 class RestoreProgress:
     """#492 P11: the item's sandbox was cold, so before the turn can run its
     durable snapshot is being restored file-by-file. `done`/`total` count files
@@ -334,6 +394,8 @@ AgentEvent = (
     | FailoverSwitch  # #249/#131: chat model switched mid-turn (ephemeral notice)
     | RestoreProgress  # #492 P11: cold-wake snapshot restore progress (ephemeral)
     | RateLimited  # the turn is holding out a 429 before retrying (ephemeral)
+    | ModelRetrying  # a model call is being re-sent (ephemeral)
+    | OutputRetracted  # the failed call's streamed text is withdrawn before its re-send
     | TodosUpdated  # #613: the agent rewrote the conversation's todo checklist
     | ContextTrimmed  # #624: the request was too long; older history was dropped
     | Compacting  # #739: the thread outgrew the window; this turn summarises first

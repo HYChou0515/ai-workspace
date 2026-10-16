@@ -618,7 +618,30 @@ def test_run_error_is_persisted_as_an_error_message():
 
     msgs = client.get(f"/kb/chats/{cid}").json()["messages"]
     assert [m["role"] for m in msgs] == ["user", "error"]
-    assert msgs[-1]["error_kind"] == "error"
+    # docs/plan-friendly-errors.md: named by a kind the FE has copy for, with
+    # the raw text kept as the content for technical details.
+    assert msgs[-1]["error_kind"] == "unknown"
+    assert msgs[-1]["content"] == "RuntimeError: model exploded"
+
+
+class _HeldTooLongRunner:
+    async def run(self, prompt: str, ctx: AgentToolContext) -> AsyncIterator[AgentEvent]:
+        from workspace_app.api.events import RunError
+
+        yield RunError(
+            message="RateLimitError: slow down", kind="rate_limited", params={"waited_s": 120}
+        )
+
+
+def test_the_numbers_the_copy_needs_survive_a_reload():
+    """D5's copy says how long the turn waited; a reloaded thread has only what
+    was persisted, so the number has to be persisted with the kind."""
+    client = _client(_HeldTooLongRunner())
+    cid = client.post("/kb/chats", json={"collection_ids": ["c"]}).json()["resource_id"]
+    client.post(f"/kb/chats/{cid}/messages", json={"content": "q"})
+
+    err = client.get(f"/kb/chats/{cid}").json()["messages"][-1]
+    assert (err["error_kind"], err["error_params"]) == ("rate_limited", {"waited_s": 120})
 
 
 def test_send_message_persists_tool_calls_then_the_answer():

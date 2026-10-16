@@ -38,6 +38,25 @@ async def test_guard_stops_a_degenerate_content_stream_and_does_not_drain_it():
     assert not any(isinstance(e, MessageDelta) and "SHOULD_NOT_APPEAR" in e.text for e in out)
 
 
+async def test_a_withdrawn_call_is_not_counted_against_its_resend():
+    """docs/plan-friendly-errors.md D3: a call re-sent after it broke mid-answer
+    says much the same again. The withdrawn text is gone from the thread, so
+    counting it would stop a perfectly ordinary answer as a loop."""
+    from workspace_app.api.events import OutputRetracted
+
+    async def src() -> AsyncIterator:
+        for _ in range(2):
+            yield MessageDelta(text="abcdef ")
+        yield OutputRetracted(text_chars=14)
+        for _ in range(2):
+            yield MessageDelta(text="abcdef ")
+        yield RunDone()
+
+    out = await _drain(src())
+
+    assert not any(isinstance(e, RepetitionStopped) for e in out)
+
+
 async def test_production_defaults_leave_a_wide_table_stream_alone():
     # #146: with the real (generous) defaults, a model streaming a wide markdown
     # table must NOT be stopped — its rows are bounded structure, not a loop.

@@ -288,20 +288,15 @@ async def test_a_reviewer_that_says_nothing_is_a_failed_review():
 # ── the 429 wait is the runner's, inherited ──────────────────────────────────
 
 
-class _ScriptedEngine(LitellmAgentRunner):
-    """The REAL runner with its engine call scripted, so the review goes through
-    the same retry loop a turn does. Same double as test_litellm_runner's."""
+def _engine(monkeypatch: pytest.MonkeyPatch, steps: list, **kw: object) -> LitellmAgentRunner:
+    """The REAL runner over a scripted provider, so the review goes through the
+    same model-call retry a turn does (docs/plan-friendly-errors.md D2)."""
+    from workspace_app.api import litellm_runner as lr
 
-    def __init__(self, scripts: list[object], **kw: object) -> None:
-        super().__init__(**kw)  # ty: ignore[invalid-argument-type]
-        self._scripts = list(scripts)
+    from ._fake_llm import ScriptedLlm
 
-    async def _run_once(self, prompt, ctx, feedback):  # noqa: ANN001
-        script = self._scripts.pop(0)
-        if isinstance(script, Exception):
-            raise script
-        for ev in script:  # ty: ignore[not-iterable]
-            yield ev
+    monkeypatch.setattr(lr, "LitellmModel", ScriptedLlm(steps))
+    return LitellmAgentRunner(**kw)  # ty: ignore[invalid-argument-type]
 
 
 def _rate_limited(headers: dict[str, str]) -> Exception:
@@ -317,7 +312,7 @@ def _rate_limited(headers: dict[str, str]) -> Exception:
     )
 
 
-async def test_a_rate_limited_review_waits_the_stated_window_like_any_turn():
+async def test_a_rate_limited_review_waits_the_stated_window_like_any_turn(monkeypatch):
     """Q9: 429 is waited out, not treated as a failure — and it is the RUNNER's
     wait, reached by running on it, not a second implementation."""
     slept: list[float] = []
@@ -325,8 +320,11 @@ async def test_a_rate_limited_review_waits_the_stated_window_like_any_turn():
     async def sleep(seconds: float) -> None:
         slept.append(seconds)
 
-    runner = _ScriptedEngine(
-        [_rate_limited({"retry-after": "5"}), [MessageDelta(text='{"notes": []}')]],
+    from ._fake_llm import Fail, Say
+
+    runner = _engine(
+        monkeypatch,
+        [Fail(_rate_limited({"retry-after": "5"})), Say(['{"notes": []}'])],
         sleep=sleep,
     )
 
@@ -336,18 +334,23 @@ async def test_a_rate_limited_review_waits_the_stated_window_like_any_turn():
     assert review.verdict == "ok"
 
 
-async def test_a_rate_limit_that_never_clears_is_a_failed_review_not_an_unreviewed_publish():
+async def test_a_rate_limit_that_never_clears_is_a_failed_review_not_an_unreviewed_publish(
+    monkeypatch,
+):
     slept: list[float] = []
 
     async def sleep(seconds: float) -> None:
         slept.append(seconds)
 
-    runner = _ScriptedEngine(
-        [_rate_limited({"retry-after": "50"}), _rate_limited({"retry-after": "50"})],
+    from ._fake_llm import Fail
+
+    runner = _engine(
+        monkeypatch,
+        [Fail(_rate_limited({"retry-after": "50"})), Fail(_rate_limited({"retry-after": "50"}))],
         sleep=sleep,
         rate_limit_budget_s=60.0,
     )
 
-    with pytest.raises(SkillReviewUnavailable, match="請求過於頻繁"):
+    with pytest.raises(SkillReviewUnavailable, match="RateLimitError"):
         await review_skill(runner, _parent(), "s", PAYLOAD)
     assert slept == [50.0], "it waited once, the second wait would exceed the budget"

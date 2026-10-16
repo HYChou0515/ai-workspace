@@ -69,11 +69,12 @@ from ..perm import Actor, Permission, Verb, Visibility, authorize
 from ..resources.graph import mention_id
 from ..resources.groups import groups_of
 from ..resources.kb import Collection, DocChunk, IndexRun, SourceDoc
-from .events import AgentEvent, MessageDelta, RunDone, RunError, to_sse
+from .events import AgentEvent, MessageDelta, RunDone, to_sse
 from .notifications import notification_sent, notify
 from .permission_body import PermissionBody as _PermissionBody
 from .permission_body import PermissionOut, build_permission
 from .permission_body import granted_user_ids as _granted_user_ids
+from .turns import _terminal_error
 
 if TYPE_CHECKING:
     from ..kb.graph.coordinator import GraphCoordinator
@@ -443,6 +444,9 @@ class RenderedDoc(BaseModel):
     # Issue #39 Q11: short progress / error line ("VlmImageParser:
     # page 12/50", "ValueError: invalid JSON …"); empty when idle.
     status_detail: str = ""
+    # docs/plan-friendly-errors.md P5: the kind a failed doc's detail was named
+    # by, so the page words it and keeps the detail as technical details.
+    status_error_kind: str | None = None
     # Issue #39: blob id of a browser-displayable derivative a parser
     # handed back (PptxParser's soffice-converted PDF) — the FE iframes
     # `/blobs/{preview_file_id}` when set. "" = no preview.
@@ -595,6 +599,9 @@ class DocumentRow(BaseModel):
     status: str
     # Issue #39 Q11 — see RenderedDoc.status_detail.
     status_detail: str = ""
+    # docs/plan-friendly-errors.md P5: the kind a failed doc's detail was named
+    # by, so the page words it and keeps the detail as technical details.
+    status_error_kind: str | None = None
     chunks: int
     cited: int
     size: int
@@ -710,6 +717,12 @@ def _opt_int(v: object) -> int | None:
     """Narrow an `indexed_data` value to the optional int it was written as
     (`bool` is an `int` subclass — exclude it)."""
     return v if isinstance(v, int) and not isinstance(v, bool) else None
+
+
+def _opt_str(v: object) -> str | None:
+    """Narrow an `indexed_data` value to the optional str it was written as —
+    absent on a row indexed before the field existed."""
+    return v if isinstance(v, str) and v else None
 
 
 def _indexed_of(m: object) -> dict[str, object]:
@@ -1494,7 +1507,8 @@ def register_kb_routes(
                         ),
                     )
                 except Exception as exc:  # noqa: BLE001 — failures belong IN the stream
-                    emit(RunError(message=str(exc)))
+                    # Named like a turn's failure (docs/plan-friendly-errors.md D6).
+                    emit(_terminal_error(exc))
                 finally:
                     loop.call_soon_threadsafe(queue.put_nowait, None)
 
@@ -2222,6 +2236,7 @@ def register_kb_routes(
                     created_by=m.created_by,
                     status=str(status),
                     status_detail=str(indexed.get("status_detail") or ""),
+                    status_error_kind=_opt_str(indexed.get("status_error_kind")),
                     chunks=chunk_counts.get(rid, 0),
                     cited=cited.get(rid, 0),
                     size=_opt_int(indexed.get("content_size")) or 0,
@@ -2597,6 +2612,7 @@ def register_kb_routes(
             updated_at=_ms(rev.info.updated_time),
             status=doc.status,
             status_detail=doc.status_detail,
+            status_error_kind=doc.status_error_kind,
             preview_file_id=(
                 doc.preview.file_id
                 if doc.preview is not None and isinstance(doc.preview.file_id, str)

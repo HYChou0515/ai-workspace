@@ -315,7 +315,11 @@ def test_index_marks_doc_error_when_embedding_fails(
     [doc_id] = ing.store(collection_id=cid, user="u", filename="a.md", data=b"hello world")
     with caplog.at_level(logging.ERROR):
         ing.index(doc_id)  # embedding fails → recorded as error, not raised
-    assert spec.get_resource_manager(SourceDoc).get(doc_id).data.status == "error"
+    got = spec.get_resource_manager(SourceDoc).get(doc_id).data
+    assert got.status == "error"
+    # docs/plan-friendly-errors.md P5: named on this path too (the swallowing
+    # one), so the doc list can word it rather than show the raw text alone.
+    assert got.status_error_kind == "unknown"
     # the swallowed cause must be visible in the logs, not silently lost
     assert doc_id in caplog.text
     assert "model down" in caplog.text

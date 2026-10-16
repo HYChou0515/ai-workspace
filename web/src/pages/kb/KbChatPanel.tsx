@@ -11,6 +11,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { kbApi, type KbApi, type KbCitation } from "../../api/kb";
 import { qk } from "../../api/queryKeys";
 import { EntryView } from "../../components/AgentEntryView";
+import { ErrorNotice } from "../../components/ErrorNotice";
 import { Icon } from "../../components/Icon";
 import { ResizeDivider } from "../../components/ResizeDivider";
 import { usePersistentNumber } from "../../hooks/usePersistentNumber";
@@ -273,7 +274,7 @@ export function KbChatPanel({
           />
         ))}
         <TurnStatus log={log} />
-        {log.error && <div className="kb-drawer__error">{log.error}</div>}
+        {log.error && <ErrorNotice failure={log.error} live />}
       </div>
 
       <div className="kb-drawer__foot">

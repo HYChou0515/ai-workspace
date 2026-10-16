@@ -9,7 +9,7 @@ persisted the next turn starts from an even longer thread.
 
 from __future__ import annotations
 
-from workspace_app.api.events import MessageDelta, RunDone, RunError
+from workspace_app.api.events import RunDone, RunError
 from workspace_app.context_budget import (
     halve_history,
     is_context_overflow,
@@ -78,68 +78,13 @@ def test_halving_a_single_message_cannot_shrink_further():
     assert halve_history([]) == []
 
 
-# ── the retry decision (the "3 identical attempts" defect) ───────────
-
-
-def test_a_length_rejection_is_not_retried_blindly():
-    """#624: `_should_retry` looked only at "did anything stream" and "how many
-    attempts" — never at WHAT failed. A deterministic length rejection was
-    therefore re-sent unchanged up to three times. It must not be."""
-    from workspace_app.api.litellm_runner import _should_retry
-
-    assert not _should_retry(
-        progress_made=False,
-        attempt=1,
-        max_retries=2,
-        error_text="This model's maximum context length is 32768 tokens.",
-    )
-
-
-def test_an_ordinary_bad_request_is_not_retried_either():
-    """A malformed parameter fails identically every time; three attempts is
-    three times the latency for the same error."""
-    from workspace_app.api.litellm_runner import _should_retry
-
-    assert not _should_retry(
-        progress_made=False,
-        attempt=1,
-        max_retries=2,
-        error_text="invalid_request_error: unknown parameter 'foo'",
-    )
-
-
-def test_the_small_model_json_retry_still_works():
-    """The retry exists for the #76 case — a small model botching tool-call
-    JSON, where a hint genuinely helps. That must survive."""
-    from workspace_app.api.litellm_runner import _should_retry
-
-    assert _should_retry(
-        progress_made=False,
-        attempt=1,
-        max_retries=2,
-        error_text="Expecting value: line 1 column 1 (char 0)",
-    )
-
-
-def test_progress_still_beats_everything():
-    from workspace_app.api.litellm_runner import _should_retry
-
-    assert not _should_retry(
-        progress_made=True, attempt=1, max_retries=2, error_text="some transient blip"
-    )
-
-
-def test_the_length_hint_tells_the_model_something_actionable():
-    """The catch-all hint ("the previous attempt failed… try again") is appended
-    to a prompt that is ALREADY too long, so it makes the next attempt worse."""
-    from workspace_app.api.litellm_runner import diagnose_error
-
-    hint = diagnose_error(RuntimeError("This model's maximum context length is 32768 tokens."))
-    assert "try again" not in hint.lower()
-    assert "shorter" in hint.lower() or "too long" in hint.lower()
-
-
 # ── C1: the overflow branch must have a way out (adversarial review) ──
+#
+# The retry DECISION (resend / trim / give up) lives on the model call now —
+# docs/plan-friendly-errors.md D2, pinned in tests/agent/test_call_retry_model.py.
+# These drive the real runner through the real SDK run, with the provider
+# rejecting while the request is still too long: the claims are unchanged, only
+# the call that is re-sent is now the one that failed, never the whole turn.
 
 
 class _Boom(Exception):
@@ -157,204 +102,195 @@ def _ctx_with_history(n: int):
     )
 
 
-async def _drive(runner, ctx):
+def _history(sent: list) -> list:
+    """What the provider was sent, minus this turn's own message."""
+    return sent[:-1]
+
+
+async def _drive(monkeypatch, llm, ctx, runner=None):
+    from workspace_app.api import litellm_runner as lr
+
+    async def no_sleep(_s: float) -> None:
+        return None
+
+    monkeypatch.setattr(lr, "LitellmModel", llm)
+    runner = runner or lr.LitellmAgentRunner(sleep=no_sleep)
     return [ev async for ev in runner.run("go", ctx)]
 
 
-async def test_a_length_rejection_shrinks_the_history_and_retries():
+async def test_a_length_rejection_shrinks_the_history_and_retries(monkeypatch):
     """The escape hatch #624 exists for. Rejecting once and giving up leaves the
     conversation permanently stuck: the failure is persisted, so the next turn's
     history is LONGER and rejects again — forever. Shrinking is the only exit."""
-    from workspace_app.api.litellm_runner import LitellmAgentRunner
+    from .api._fake_llm import Fail, Say, ScriptedLlm
 
-    seen_sizes: list[int] = []
+    def judge(sent):
+        if len(_history(sent)) > 4:
+            return Fail(_Boom("This model's maximum context length is 32768 tokens."))
+        return Say(["ok"])
 
-    class _Runner(LitellmAgentRunner):
-        async def _run_once(self, prompt, ctx, feedback):  # type: ignore[override]
-            seen_sizes.append(len(ctx.history))
-            if len(ctx.history) > 4:
-                raise _Boom("This model's maximum context length is 32768 tokens.")
-            yield MessageDelta(text="ok")
+    llm = ScriptedLlm(judge)
+    events = await _drive(monkeypatch, llm, _ctx_with_history(32))
 
-    events = await _drive(_Runner(), _ctx_with_history(32))
-
-    assert len(seen_sizes) > 1, "a length rejection must be retried with LESS history"
-    assert seen_sizes[1] < seen_sizes[0], "the retry must send a smaller history"
+    sizes = [len(_history(s)) for s in llm.inputs]
+    assert len(sizes) > 1, "a length rejection must be retried with LESS history"
+    assert sizes[1] < sizes[0], "the retry must send a smaller history"
     assert any(isinstance(e, RunDone) for e in events)
     assert not [e for e in events if isinstance(e, RunError)], "shrinking should succeed"
 
 
-async def test_an_unshrinkable_overflow_fails_loud_and_actionably():
-    """The floor: when there is nothing left to drop, say so in words the user
-    can act on — not a raw provider string they cannot read."""
-    from workspace_app.api.litellm_runner import LitellmAgentRunner
+async def test_an_unshrinkable_overflow_ends_the_turn_named_for_what_it_is(monkeypatch):
+    """The floor: when there is nothing left to drop the turn ends — named, so
+    the FE can say what to do (D5 `context_overflow`), with the provider's own
+    text under technical details."""
+    from .api._fake_llm import Fail, ScriptedLlm
 
-    class _Runner(LitellmAgentRunner):
-        async def _run_once(self, prompt, ctx, feedback):  # type: ignore[override]
-            raise _Boom("This model's maximum context length is 8192 tokens.")
-            yield  # pragma: no cover — unreachable, keeps this an async generator
+    llm = ScriptedLlm(
+        lambda sent: Fail(_Boom("This model's maximum context length is 8192 tokens."))
+    )
+    events = await _drive(monkeypatch, llm, _ctx_with_history(1))
 
-    events = await _drive(_Runner(), _ctx_with_history(1))
-
-    errs = [e for e in events if isinstance(e, RunError)]
-    assert errs, "an unshrinkable overflow must surface an error"
-    assert "新對話" in errs[0].message or "太長" in errs[0].message
+    [err] = [e for e in events if isinstance(e, RunError)]
+    assert err.kind == "context_overflow"
+    assert "8192" in err.message
 
 
-async def test_the_ceiling_stated_in_the_rejection_is_remembered():
+async def test_the_ceiling_stated_in_the_rejection_is_remembered(monkeypatch):
     """The provider names its limit; that is the cheapest measurement we will
     ever get of an endpoint no registry knows."""
-    from workspace_app.api.litellm_runner import LitellmAgentRunner
+    from workspace_app.api import litellm_runner as lr
 
-    class _Runner(LitellmAgentRunner):
-        async def _run_once(self, prompt, ctx, feedback):  # type: ignore[override]
-            raise _Boom("This model's maximum context length is 32768 tokens.")
-            yield  # pragma: no cover
+    from .api._fake_llm import Fail, ScriptedLlm
 
-    runner = _Runner()
-    await _drive(runner, _ctx_with_history(2))
+    llm = ScriptedLlm(
+        lambda sent: Fail(_Boom("This model's maximum context length is 32768 tokens."))
+    )
+    runner = lr.LitellmAgentRunner()
+    await _drive(monkeypatch, llm, _ctx_with_history(2), runner)
 
     assert runner.learned_limit("m", None) == 32768
 
 
-async def test_the_retry_uses_the_configured_policy_when_the_limit_is_stated():
-    """#624: the 400-retry path had its own hardcoded "drop the older half" —
-    the same product decision the reduction algorithm owns, answered twice and
-    differently. When the rejection states a ceiling we know the budget, so the
-    SAME algorithm decides what to give up; a blind halving is only for the case
-    where no ceiling was stated and there is nothing to aim at."""
-    from workspace_app.api.litellm_runner import LitellmAgentRunner
-
-    seen: list[list[dict]] = []
-
-    class _Runner(LitellmAgentRunner):
-        async def _run_once(self, prompt, ctx, feedback):  # type: ignore[override]
-            seen.append(list(ctx.history))
-            # A context rejection is about SIZE. Rejecting on message count
-            # would be a premise no provider has, and one no folding policy
-            # could ever satisfy — it keeps every message by design.
-            if any(len(m["content"]) > 2_000 for m in ctx.history):
-                raise _Boom("This model's maximum context length is 5600 tokens.")
-            yield MessageDelta(text="ok")
-
-    ctx = _ctx_with_history(0)
+def _dumps_thread(ctx):
     ctx.history = [
         {"role": "user", "content": "分析這批資料並寫成報告"},
         *[{"role": "tool", "content": "x" * 6_000} for _ in range(4)],
         {"role": "user", "content": "現在呢?"},
     ]
+    return ctx
 
-    await _drive(_Runner(), ctx)
 
-    assert len(seen) > 1, "a stated ceiling must drive a retry"
+def _reject_dumps(limit: int):
+    from .api._fake_llm import Fail, Say
+
+    def judge(sent):
+        # A context rejection is about SIZE. Rejecting on message count would
+        # be a premise no provider has, and one no folding policy could ever
+        # satisfy — it keeps every message by design.
+        if any(len(str(m.get("content", ""))) > 2_000 for m in _history(sent)):
+            return Fail(_Boom(f"This model's maximum context length is {limit} tokens."))
+        return Say(["ok"])
+
+    return judge
+
+
+async def test_the_retry_uses_the_configured_policy_when_the_limit_is_stated(monkeypatch):
+    """#624: when the rejection states a ceiling we know the budget, so the SAME
+    algorithm as the pre-send path decides what to give up; a blind halving is
+    only for the case where no ceiling was stated."""
+    from .api._fake_llm import ScriptedLlm
+
+    llm = ScriptedLlm(_reject_dumps(5600))
+    await _drive(monkeypatch, llm, _dumps_thread(_ctx_with_history(0)))
+
+    assert len(llm.inputs) > 1, "a stated ceiling must drive a retry"
     # The policy folded the dumps rather than blindly dropping the front, so the
     # opening request survived into the retry.
-    assert any("分析這批資料" in m["content"] for m in seen[-1])
+    assert any("分析這批資料" in str(m.get("content")) for m in _history(llm.inputs[-1]))
 
 
-async def test_the_retry_budget_subtracts_what_is_not_history():
-    """The two paths must derive the budget the same way, not just share the
-    algorithm (§P7).
+async def test_the_retry_budget_subtracts_what_is_not_history(monkeypatch):
+    """A rejection states the model's TOTAL ceiling, but the request also carries
+    the system prompt and every tool schema. Budgeting history against the raw
+    stated figure judges an over-long thread to "fit", and the retry falls back
+    to blind halving — losing the opening task (§P7)."""
+    from .api._fake_llm import ScriptedLlm
 
-    A rejection states the model's TOTAL ceiling, but the request also carries
-    the system prompt and every tool schema — measured at 74,222 characters on a
-    real item. Budgeting history against the raw stated figure judges an
-    over-long thread to "fit", so the algorithm returns it untouched and the
-    retry falls back to blind halving: several more rejected round-trips, and an
-    error that blames the user's message for what the system prompt spent.
-    """
-    from workspace_app.api.litellm_runner import LitellmAgentRunner
-
-    seen: list[list[dict]] = []
-
-    class _Runner(LitellmAgentRunner):
-        async def _run_once(self, prompt, ctx, feedback):  # type: ignore[override]
-            seen.append(list(ctx.history))
-            if any(len(m["content"]) > 2_000 for m in ctx.history):
-                raise _Boom("This model's maximum context length is 20000 tokens.")
-            yield MessageDelta(text="ok")
-
-    ctx = _ctx_with_history(0)
-    # Comfortably inside the stated 20,000 on its own …
-    ctx.history = [
-        {"role": "user", "content": "分析這批晶圓資料,做 SPC,寫成報告"},
-        *[{"role": "tool", "content": "x" * 6_000} for _ in range(4)],
-        {"role": "user", "content": "那爐溫呢?"},
-    ]
-    # … but not once the prompt and tool schemas are counted.
+    ctx = _dumps_thread(_ctx_with_history(0))
+    # Comfortably inside the stated 20,000 on its own, but not once the prompt
+    # and tool schemas are counted.
     ctx.context_overhead_tokens = 15_000
+    llm = ScriptedLlm(_reject_dumps(20000))
+    await _drive(monkeypatch, llm, ctx)
 
-    await _drive(_Runner(), ctx)
-
-    assert len(seen) > 1, "a stated ceiling must drive a retry"
-    assert any("分析這批晶圓資料" in m["content"] for m in seen[-1]), (
+    assert len(llm.inputs) > 1, "a stated ceiling must drive a retry"
+    assert any("分析這批資料" in str(m.get("content")) for m in _history(llm.inputs[-1])), (
         "the opening task must survive — losing it is the defect this issue is about"
     )
 
 
-async def test_folding_counts_as_progress_even_though_it_drops_nothing():
-    """Progress has to be measured in tokens, not in messages.
+async def test_folding_counts_as_progress_even_though_it_drops_nothing(monkeypatch):
+    """Progress has to be measured in tokens, not in messages: the cheapest stage
+    folds bulky tool output and keeps every message, so a "fewer messages?" guard
+    would discard a fold that already freed most of the budget."""
+    from .api._fake_llm import ScriptedLlm
 
-    The cheapest stage folds bulky tool output and keeps every message, so a
-    guard that asks "are there fewer messages?" discards a fold that already
-    freed 97% of the budget — and blindly halves instead, throwing away the
-    task to keep a data dump. That is precisely the behaviour this issue exists
-    to remove, reappearing on the retry path.
-    """
-    from workspace_app.api.litellm_runner import LitellmAgentRunner
+    llm = ScriptedLlm(_reject_dumps(5600))
+    await _drive(monkeypatch, llm, _dumps_thread(_ctx_with_history(0)))
 
-    seen: list[list[dict]] = []
-
-    class _Runner(LitellmAgentRunner):
-        async def _run_once(self, prompt, ctx, feedback):  # type: ignore[override]
-            seen.append(list(ctx.history))
-            if any(len(m["content"]) > 2_000 for m in ctx.history):
-                # 5,600 leaves ~3,040 for history once the reply reserve and
-                # margin come off — under this thread's ~6,000, so folding is
-                # required and is also enough.
-                raise _Boom("This model's maximum context length is 5600 tokens.")
-            yield MessageDelta(text="ok")
-
-    ctx = _ctx_with_history(0)
-    ctx.history = [
-        {"role": "user", "content": "分析這批晶圓資料,做 SPC,寫成報告"},
-        *[{"role": "tool", "content": "x" * 6_000} for _ in range(4)],
-        {"role": "user", "content": "那爐溫呢?"},
-    ]
-
-    await _drive(_Runner(), ctx)
-
-    assert len(seen) > 1, "a stated ceiling must drive a retry"
-    assert len(seen[-1]) == len(seen[0]), "folding keeps every message — nothing to drop"
-    assert any("分析這批晶圓資料" in m["content"] for m in seen[-1])
+    assert len(llm.inputs) > 1, "a stated ceiling must drive a retry"
+    assert len(_history(llm.inputs[-1])) == len(_history(llm.inputs[0])), (
+        "folding keeps every message — nothing to drop"
+    )
+    assert any("分析這批資料" in str(m.get("content")) for m in _history(llm.inputs[-1]))
 
 
 async def test_a_retry_that_cannot_get_smaller_stops_instead_of_spinning(monkeypatch):
-    """The overflow branch deliberately bypasses the attempt counter — an
-    over-long request has a productive answer, and a fixed budget of three would
-    strand a long thread. That makes its termination depend ENTIRELY on every
-    round being smaller than the last, which is a guarantee living inside a
-    function the loop calls. Mutation testing showed what happens when that
-    guarantee lapses: no test turns red, the suite simply never finishes (577s
-    and still spinning), and in production it is an unbounded run of rejected
-    LLM calls. So the loop checks for itself.
-    """
-    from workspace_app.api import litellm_runner as mod
-    from workspace_app.api.litellm_runner import LitellmAgentRunner
+    """The overflow path deliberately bypasses the attempt counter, so its
+    termination depends ENTIRELY on every round being smaller — a guarantee
+    living inside a function the loop calls. When it lapsed, no test turned red:
+    the suite simply never finished. So the caller checks for itself."""
+    from workspace_app.api import litellm_runner as lr
 
-    monkeypatch.setattr(mod, "_shrink_history", lambda history, stated, **kw: list(history))
+    from .api._fake_llm import Fail, ScriptedLlm
 
-    attempts = 0
+    monkeypatch.setattr(lr, "_shrink_history", lambda history, stated, **kw: list(history))
+    llm = ScriptedLlm(
+        lambda sent: Fail(_Boom("This model's maximum context length is 8192 tokens."))
+    )
 
-    class _Runner(LitellmAgentRunner):
-        async def _run_once(self, prompt, ctx, feedback):  # type: ignore[override]
-            nonlocal attempts
-            attempts += 1
-            raise _Boom("This model's maximum context length is 8192 tokens.")
-            yield  # pragma: no cover — unreachable, keeps this an async generator
+    events = await _drive(monkeypatch, llm, _ctx_with_history(20))
 
-    events = await _drive(_Runner(), _ctx_with_history(20))
+    assert len(llm.inputs) < 5, "a retry that cannot shrink must stop, not spin"
+    [err] = [e for e in events if isinstance(e, RunError)]
+    assert err.kind == "context_overflow"
 
-    assert attempts < 5, "a retry that cannot shrink must stop, not spin"
-    errs = [e for e in events if isinstance(e, RunError)]
-    assert errs and ("太長" in errs[0].message or "新對話" in errs[0].message)
+
+async def test_a_trim_carries_over_to_the_turns_later_calls(monkeypatch):
+    """The SDK re-sends its ORIGINAL input on every call of the turn; a cut that
+    is forgotten after the call that earned it is relearned, one rejection per
+    tool round."""
+    from agents import function_tool
+
+    from workspace_app.api import litellm_runner as lr
+
+    from .api._fake_llm import Call, Fail, Say, ScriptedLlm
+
+    @function_tool
+    def look() -> str:
+        """Look."""
+        return "seen"
+
+    monkeypatch.setattr(lr, "build_tools", lambda *a, **k: [look])
+    calls = iter([Call("look", {}), Say(["done"])])
+
+    def judge(sent):
+        if any(len(str(m.get("content", ""))) > 2_000 for m in sent):
+            return Fail(_Boom("This model's maximum context length is 5600 tokens."))
+        return next(calls)
+
+    llm = ScriptedLlm(judge)
+    events = await _drive(monkeypatch, llm, _dumps_thread(_ctx_with_history(0)))
+
+    assert not [e for e in events if isinstance(e, RunError)]
+    assert len(llm.inputs) == 3, "one rejection, then the trimmed input on BOTH calls"

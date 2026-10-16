@@ -161,8 +161,15 @@ async def test_the_body_is_scanned_against_the_real_tool_registry():
 
 
 async def test_the_reviewer_sees_the_folder_and_relays_into_the_tool_card():
+    from workspace_app.agent.delegation import Delegation
+    from workspace_app.api.events import RateLimited
+
     reviewer = _Reviewer()
     ctx = _ctx(_hub(), reviewer)
+    card: list[bytes] = []
+    status: list[object] = []
+    ctx.context.on_exec_output = card.append
+    ctx.context.on_turn_status = status.append
     payload = {"SKILL.md": _md(), "scripts/x.py": b"print(1)\n"}
     await _put(ctx, "triage-reflow", payload)
 
@@ -172,7 +179,13 @@ async def test_the_reviewer_sees_the_folder_and_relays_into_the_tool_card():
     folder, seen, emit = reviewer.calls[0]
     assert folder == "triage-reflow"
     assert seen == payload
-    assert emit is ctx.context.on_exec_output, "the review's progress lands in this turn's card"
+    # The review's progress lands in this turn's card, and — docs/plan-friendly-
+    # errors.md P4 — a reviewer held by a rate limit is this turn waiting.
+    assert isinstance(emit, Delegation)
+    emit(b"reading SKILL.md\n")
+    emit.status(RateLimited(seconds=5))
+    assert card == [b"reading SKILL.md\n"]
+    assert status == [RateLimited(seconds=5)]
 
 
 async def test_the_origin_manifest_is_not_part_of_what_ships():

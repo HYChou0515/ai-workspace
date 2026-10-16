@@ -9,6 +9,8 @@ import {
   turnLooksSilent,
   turnPhase,
 } from "../pages/investigation/agentLog";
+import { failureWhat } from "../lib/failure";
+import { useLocale, useT } from "../lib/i18n";
 import { pxToRem } from "../lib/pxToRem";
 
 /** The trailing status of an in-flight turn — replaces the opaque "working…"
@@ -44,6 +46,8 @@ export function TurnStatus({
    * one restores the endless wait this exists to end. */
   alive?: boolean | null;
 }) {
+  const t = useT();
+  const [locale] = useLocale();
   const phase = turnPhase(log);
   const toolRunning = isToolRunning(log);
   const active = phase !== "idle";
@@ -191,6 +195,22 @@ export function TurnStatus({
     return (
       <div className={className} style={box}>
         請求過於頻繁,{Math.ceil(log.rateLimited.seconds)} 秒後自動重試…
+        {elapsedSec >= 1 && <span style={{ opacity: 0.7 }}> · {elapsedSec}s</span>}
+      </div>
+    );
+  }
+
+  // docs/plan-friendly-errors.md D9: a model call failed in a way a re-send can
+  // cure and is being sent again. Like the hold above, it explains a pause —
+  // a recovered retry is not a failure, so it is never the red box.
+  if (log.retrying != null) {
+    return (
+      <div className={className} style={box} data-testid="turn-retrying">
+        {/* D14: what failed, in the red box's own sentence for it, then the attempt. */}
+        {t("turn.retrying", {
+          what: failureWhat(log.retrying.kind, locale),
+          attempt: log.retrying.attempt,
+        })}
         {elapsedSec >= 1 && <span style={{ opacity: 0.7 }}> · {elapsedSec}s</span>}
       </div>
     );

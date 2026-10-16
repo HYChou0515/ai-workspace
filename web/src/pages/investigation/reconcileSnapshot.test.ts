@@ -56,10 +56,11 @@ describe("reconcileSnapshot", () => {
     // `logFromMessages` hard-resets `error: null`, so re-snapshotting on the
     // `error` event destroyed the very message that explained the failure —
     // the red box showed for one frame and vanished.
-    const prev = live({ entries: [msg("user", "q")], error: "provider refused the request" });
+    const failure = { kind: "bad_request", raw: "provider refused the request" };
+    const prev = live({ entries: [msg("user", "q")], error: failure });
     const next = reconcileSnapshot(prev, { messages: [{ role: "user", content: "q" }] });
 
-    expect(next.error).toBe("provider refused the request");
+    expect(next.error).toBe(failure);
   });
 
   it("keeps a live-only banner the persisted thread cannot represent", () => {
@@ -292,9 +293,14 @@ describe("reconcileSnapshot", () => {
   });
 
   it("does not duplicate a banner the persisted thread already carries", () => {
-    const prev = live({ entries: [{ kind: "banner", text: "turn failed" }] });
-    // role:"error" hydrates as the same banner.
-    const next = reconcileSnapshot(prev, { messages: [{ role: "error", content: "turn failed" }] });
+    // The pair that really occurs: a Stop's live banner, and the cancellation
+    // the turn persists for it — which hydrates as the same banner.
+    const prev = live({ entries: [{ kind: "banner", text: translate(initialLocale(), "banner.cancelled") }] });
+    const next = reconcileSnapshot(prev, {
+      messages: [
+        { role: "error", content: "The previous response was interrupted.", error_kind: "cancelled" },
+      ],
+    });
 
     expect(next.entries.filter((e) => e.kind === "banner")).toHaveLength(1);
   });

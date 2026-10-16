@@ -16,7 +16,7 @@ import logging
 import os
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, Literal, NamedTuple
 
 import litellm
@@ -39,11 +39,7 @@ from agents.extensions.models.litellm_model import LitellmModel
 from agents.tool import FunctionToolResult
 from openai.types.shared import Reasoning
 
-from ..agent.args_recovery import (
-    ConcatenatedToolCallsError,
-    MalformedToolArgsError,
-    NonObjectToolArgsError,
-)
+from ..agent.call_retry_model import CALL_RETRACTED, CALL_STARTED, InputTrim
 from ..agent.context import AgentToolContext
 from ..agent.header_model import HeaderModel
 from ..agent.repairing_model import RepairingModel
@@ -59,11 +55,10 @@ from ..context_budget import (
     estimate_tokens,
     halve_history,
     history_budget,
-    is_context_overflow,
     parse_limit_from_error,
 )
 from ..context_probe import probe_context_limit, probe_endpoint_limits
-from ..failover.rate_limit import is_rate_limited, rate_limit_wait_s
+from ..failover.classify import raw_error_text
 from ..resources import AgentConfig
 from ..tokens import ITokenService, LlmCredential
 from ..tooling.registry import PackageInfo, build_function_tools
@@ -75,17 +70,19 @@ from .events import (
     FailoverSwitch,
     MaxTurnsExceeded,
     MessageDelta,
+    ModelRetrying,
+    OutputRetracted,
     RateLimited,
     RestoreProgress,
     RunDone,
     RunError,
     TodosUpdated,
-    ToolCallParseError,
     ToolEnd,
     ToolLog,
     ToolStart,
 )
 from .llm_trace import build_trace, format_trace_line, redact_endpoint, trace_enabled
+from .turns import _terminal_error
 
 if TYPE_CHECKING:
     from ..agent.tool_usage import ToolUsageRecorder
@@ -372,6 +369,21 @@ def _exact_usage(streamed: Any) -> tuple[int, int] | None:
         return None
 
 
+@dataclass
+class _CallShown:
+    """Characters of answer / reasoning the current model call has streamed —
+    exactly what an `OutputRetracted` withdraws if the call is re-sent."""
+
+    text: int = 0
+    reasoning: int = 0
+
+    def add(self, delta: MessageDelta) -> None:
+        if delta.reasoning:
+            self.reasoning += len(delta.text)
+        else:
+            self.text += len(delta.text)
+
+
 class _GenerationClock:
     """How long the model spent GENERATING this turn (#748) — the denominator
     tok/s needs, which is not the turn's wall clock.
@@ -497,15 +509,15 @@ def _live_prompt_tokens(ctx: AgentToolContext, prompt: str) -> int:
     return _sent_estimate(ctx, prompt)
 
 
-def _turn_instructions(ctx: AgentToolContext, feedback: str | None) -> str | None:
+def _turn_instructions(ctx: AgentToolContext) -> str | None:
     """Per-turn additions to the system prompt: the #242 speaker note (who the
     agent is replying to in a shared workspace), the #537 knowledge-source
     allowance (how many times this reply may consult each source — stated up
     front so the agent budgets deliberately instead of discovering the ceiling
     by being refused), the #pm entity-schema brief (the item's record types +
     fields + status vocab, so the agent creates valid records without guessing),
-    then any retry feedback. `None` when none is present, so `_agent_for` leaves
-    the base prompt unchanged."""
+    `None` when none is present, so `_agent_for` leaves the base prompt
+    unchanged."""
     parts = [
         s
         for s in (
@@ -521,7 +533,6 @@ def _turn_instructions(ctx: AgentToolContext, feedback: str | None) -> str | Non
             else "",
             ctx.search_allowance_note,
             ctx.entity_schema_note,
-            feedback,
         )
         if s
     ]
@@ -550,6 +561,7 @@ def _agent_for(
     on_rate_limit_hold: Callable[[str, float], None] | None = None,
     resolve_credential: Callable[[str | None], LlmCredential] = LlmCredential,
     stream_deadlines: tuple[float, float] | None = None,
+    wrap_model: Callable[[Model], Model] | None = None,
 ) -> Agent[AgentToolContext]:
     base = config.system_prompt or ""
     if extra_instructions:
@@ -956,8 +968,8 @@ def _agent_for(
             on_switch=on_switch,
             # #742's visibility rule, inside the chain: the hold happens mid-turn
             # and can last minutes, so it must SAY so — the FE shows the same
-            # transient "rate limited, retrying in Ns" notice the turn loop's own
-            # holds get.
+            # transient "rate limited, retrying in Ns" notice the call wrapper's
+            # own holds get (`CallRetryModel`).
             on_hold=on_rate_limit_hold,
         )
     else:
@@ -979,6 +991,11 @@ def _agent_for(
 
             give_up_s, idle_s = stream_deadlines
             model = DeadlineModel(model, first_event_s=give_up_s, idle_s=idle_s)
+    # docs/plan-friendly-errors.md D2: a failed call is retried as THAT call,
+    # around the chain or the single endpoint alike, so a deadline that fired
+    # or a chain that came back exhausted is one more call to re-send.
+    if wrap_model is not None:
+        model = wrap_model(model)
     # plan-third-party-tool-names N2: a call by a third-party command's old
     # name (a skill or page written before the prefix) is renamed before the
     # SDK resolves it — which would otherwise end the turn. Not for a name the
@@ -1067,7 +1084,7 @@ def _rate_limit_hold_emitter(
 ) -> Callable[[str, float], None]:
     """A per-turn sink that turns a FallbackModel rate-limit hold into a live
     ``RateLimited`` event on this turn's stream — the same transient notice the
-    turn loop's own holds emit (#742: a held turn must say it is held, because a
+    call wrapper's own holds emit (#742: a held turn must say it is held, because a
     stated window can be minutes and silent minutes read as a hang).
     ``put_nowait`` is safe — the hold fires on the same event loop that drains
     the queue."""
@@ -1121,90 +1138,6 @@ def _todos_emitter(queue: asyncio.Queue[AgentEvent | object]) -> Callable[[list[
     return emit
 
 
-# Retry hints for the three ways a small model botches a tool call (#76).
-# Each addresses a DISTINCT failure so the model can actually self-correct;
-# the old code collapsed all of them into the "one tool call" hint, which
-# is only right for the concatenation case and left the model guessing for
-# malformed / wrong-shape JSON.
-_CONCAT_HINT = (
-    "Tool-call format error: your previous response combined multiple "
-    "tool calls in one turn, which the framework cannot parse. "
-    "Emit exactly ONE tool call per response and wait for its result "
-    "before issuing the next one."
-)
-_MALFORMED_HINT = (
-    "Tool-call arguments error: your previous tool call's arguments were not "
-    "valid JSON. Re-send the call with exactly one complete JSON object — put "
-    "every key and string value in double quotes, and write nothing after the "
-    "final closing brace."
-)
-_NON_OBJECT_HINT = (
-    "Tool-call arguments error: your previous tool call's arguments must be a "
-    'single JSON object (like {"path": "file.csv"}), not a list or a bare '
-    "value. Re-send one JSON object matching the tool's schema."
-)
-
-
-def diagnose_error(exc: BaseException) -> str:
-    """Translate a LiteLLM/agents-SDK exception into a hint we can hand back
-    to the model on retry.
-
-    Our own tool-arg guard (`args_recovery`) raises typed `ToolArgsError`s,
-    so route those by `isinstance` for an exact hint. Everything else is an
-    upstream LiteLLM error (which wraps the cause in APIConnectionError), so
-    fall back to substring matching: `Extra data` is specifically the
-    chunk-parser concatenation signal, a generic json+tool parse failure
-    means a malformed single object, then timeout, then a generic retry.
-    """
-    if isinstance(exc, ConcatenatedToolCallsError):
-        return _CONCAT_HINT
-    if isinstance(exc, MalformedToolArgsError):
-        return _MALFORMED_HINT
-    if isinstance(exc, NonObjectToolArgsError):
-        return _NON_OBJECT_HINT
-    msg = str(exc)
-    low = msg.lower()
-    if "extra data" in low:
-        return _CONCAT_HINT
-    if "json" in low and "tool" in low:
-        return _MALFORMED_HINT
-    if "timeout" in low or "timed out" in low:
-        return "The previous step timed out. Take a smaller step and try again."
-    # #624: a length rejection must NOT get the catch-all "try again" — that
-    # hint is appended to the very prompt that was too long, so it makes the
-    # next attempt bigger. Say what would actually help instead.
-    from ..context_budget import is_context_overflow
-
-    if is_context_overflow(low):
-        return (
-            "The previous attempt was rejected because the request was too long "
-            "for this model's context window. Work with less material at a time "
-            "and keep your answer shorter."
-        )
-    return f"The previous attempt failed: {msg[:200]}. Try again."
-
-
-def classify_retry_event(exc: BaseException, hint: str) -> AgentEvent:
-    """Decide which AgentEvent best represents this retry-able failure.
-
-    ToolCallParseError is a first-class signal — the FE can render it
-    distinctly so users know a model-format glitch is being handled,
-    not a real error. All three tool-arg failures (malformed / non-object /
-    concatenated) are model-format glitches, as is an upstream parse error.
-    Everything else stays as the generic RunError catch-all.
-    """
-    if isinstance(
-        exc, (MalformedToolArgsError, NonObjectToolArgsError, ConcatenatedToolCallsError)
-    ):
-        # Surface WHAT the model emitted (raw) + which call, so the FE can show
-        # the user the actual mistake — not just the coaching hint (#76).
-        return ToolCallParseError(hint=hint, raw=exc.raw_args, call_id=exc.call_id)
-    low = str(exc).lower()
-    if "extra data" in low or ("json" in low and "tool" in low):
-        return ToolCallParseError(hint=hint)
-    return RunError(message=f"retry: {hint}")
-
-
 def _raw_field(raw: Any, key: str) -> Any:
     """Read a field off a run item's raw_item, which may be an object
     (ResponseFunctionToolCall) OR a TypedDict (FunctionCallOutput) depending
@@ -1248,8 +1181,8 @@ def _map_event(event: Any, ctx: AgentToolContext | None = None) -> AgentEvent | 
                 # emitted garbage) → leave args empty. Fabricating a
                 # `{"_raw": <string>}` sentinel here used to leak through
                 # history into the model's NEXT prompt, where it mimicked
-                # the shape (`read_file(_raw="…")`); args_recovery already
-                # raises at invoke-time so the run retries cleanly.
+                # the shape (`read_file(_raw="…")`); args_recovery answers
+                # bad args in-band at invoke-time instead.
                 args_obj = {}
         elif isinstance(raw_args, dict):
             args_obj = raw_args
@@ -1402,6 +1335,63 @@ def _shrink_history(
     return halve_history(history)
 
 
+class _HistoryTrim(InputTrim):
+    """What a too-long model call gives up: the conversation BEFORE this turn —
+    the leading ``len(ctx.history)`` items of the input (`_build_input`), never
+    this turn's own tool calls and results, which must travel together.
+
+    The SDK re-sends its ORIGINAL input on every call of the turn, so a cut is
+    kept and applied to each later call instead of being relearned one rejection
+    per tool round. ``ctx.history`` follows it, as the whole-turn retry's did,
+    so what the turn is later measured against is what was actually sent."""
+
+    def __init__(
+        self,
+        runner: LitellmAgentRunner,
+        ctx: AgentToolContext,
+        on_trimmed: Callable[[ContextTrimmed], None] | None = None,
+    ) -> None:
+        self._runner = runner
+        self._ctx = ctx
+        self._on_trimmed = on_trimmed
+        self._original = len(ctx.history)
+        self._kept: list[Any] | None = None
+
+    def apply(self, input: Any) -> Any:
+        if self._kept is None or not isinstance(input, list):
+            return input
+        return [*self._kept, *input[self._original :]]
+
+    def shrink(self, input: Any, exc: BaseException) -> Any | None:
+        text = raw_error_text(exc)
+        stated = parse_limit_from_error(text)
+        ctx = self._ctx
+        if stated is not None and ctx.agent_config is not None:
+            self._runner._limits.learn_exact(
+                ctx.agent_config.model, self._runner._base_url, limit=stated
+            )
+        if not isinstance(input, list):
+            return None
+        held = len(self._kept) if self._kept is not None else self._original
+        history, rest = input[:held], input[held:]
+        if len(history) <= 1:
+            return None
+        shrunk = _shrink_history(history, stated, overhead_tokens=ctx.context_overhead_tokens)
+        if estimate_messages(shrunk) >= estimate_messages(history):
+            return None
+        self._kept = shrunk
+        ctx.history = shrunk
+        _LOGGER.warning(
+            "litellm_runner: request too long — re-sending the call with %d history "
+            "items (investigation=%s)",
+            len(shrunk),
+            ctx.investigation_id,
+        )
+        if self._on_trimmed is not None:
+            self._on_trimmed(ContextTrimmed(dropped=len(history) - len(shrunk), kept=len(shrunk)))
+        return [*shrunk, *rest]
+
+
 def _sent_estimate(ctx: AgentToolContext, prompt: str) -> int:
     """Roughly how many tokens this request carried: the per-turn overhead the
     context builder already measured (system prompt + tool schemas), plus the
@@ -1414,45 +1404,6 @@ def _sent_estimate(ctx: AgentToolContext, prompt: str) -> int:
     if ctx.history:
         total += estimate_tokens(str(ctx.history))
     return total + estimate_tokens(prompt or "")
-
-
-def _should_retry(
-    *, progress_made: bool, attempt: int, max_retries: int, error_text: str = ""
-) -> bool:
-    """Decide whether to restart the turn after `_run_once` raised.
-
-    Issue #26: the agents-SDK can't resume a stream mid-turn — a restart
-    re-runs the prompt from scratch, throwing away any text the user has
-    already seen + any tool calls already executed. So only retry when
-    nothing user-visible has streamed yet (the early small-model JSON-parse
-    failures we hand a hint back for). Once there's progress, showing the
-    error wins over clobbering the chat.
-
-    #624: it must also look at WHAT failed. This used to consider only
-    "did anything stream" and "how many attempts", so a deterministic
-    rejection — the prompt did not fit, a parameter was malformed — was
-    re-sent unchanged up to three times. Each attempt failed identically, and
-    the hint appended between them ("the previous attempt failed… try again")
-    was added to a prompt that was already too long. A `400` is the provider
-    telling us the request is wrong; repeating it is not a strategy.
-    """
-    if progress_made:
-        return False
-    if error_text and _is_deterministic_rejection(error_text):
-        return False
-    return attempt <= max_retries
-
-
-def _is_deterministic_rejection(message: str) -> bool:
-    """Whether this error will fail identically no matter how often we resend.
-
-    Length rejections and malformed-request errors are decided by the request
-    itself, so a retry is pure latency. Everything else (timeouts, blips,
-    small-model JSON garble) keeps the #76 retry-with-a-hint behaviour."""
-    from ..context_budget import is_context_overflow
-
-    low = (message or "").lower()
-    return is_context_overflow(low) or "invalid_request_error" in low
 
 
 # ── non-streaming escape hatch (WORKSPACE_AGENT_STREAM=0) ─────────────────────
@@ -1492,10 +1443,10 @@ _NONSTREAM_TOOL_EVENT = {
 
 
 class LitellmAgentRunner:
-    """Runs one user turn through agents-SDK + LiteLLM, retrying once on
-    recognised small-model failures and surfacing the diagnosis to the
-    model on each retry. Caps retries so a wedged turn can't loop forever.
-    """
+    """Runs one user turn through agents-SDK + LiteLLM — once. A failed model
+    call is retried as that call (`_call_retry` → `CallRetryModel`), bounded by
+    `max_retries` re-sends per call and a rate-limit budget per turn; what still
+    fails ends the turn, named (`turns._terminal_error`)."""
 
     def __init__(
         self,
@@ -1520,6 +1471,13 @@ class LitellmAgentRunner:
         # ctx.agent_config (resolved per-item via the AppCatalog / KB / wiki
         # catalogs); run() fails loud if it's missing.
         self._max_retries = max_retries
+        # docs/plan-friendly-errors.md P8 (D11): litellm's default aiohttp
+        # transport turns a stream that drops mid-answer into a normal end
+        # (`aiohttp_transport.py`: payload errors become EOF), so a turn kept a
+        # truncated answer as if it were whole and nothing re-sent it. httpx
+        # raises on the same drop. Process-wide, but this runner is the only
+        # async litellm caller; every other one is sync and already on httpx.
+        litellm.disable_aiohttp_transport = True
         # #624: what we have learned about each endpoint's real ceiling, from
         # the rejections it hands back. Per-pod and in-memory on purpose — a
         # cache that re-learns in one turn, never a durable claim that can go
@@ -1648,182 +1606,29 @@ class LitellmAgentRunner:
             )
             yield RunDone()
             return
-        feedback: str | None = None
-        attempt = 0
-        # Rate limits are held out separately from `attempt` — see the branch in
-        # the handler below for why the two budgets must not be one.
-        rate_limited = 0
-        waited_s = 0.0
-        while True:
-            # Tracks whether anything user-visible has streamed this attempt.
-            # If yes, a restart on failure would clobber it (the SDK can't
-            # resume) — see #26 + _should_retry.
-            #
-            # Reasoning-channel deltas (collapsed in the FE) are NOT visible
-            # progress — they're internal monologue. A model that thinks
-            # for 500 tokens, then emits a malformed tool_call, must still
-            # be eligible for retry: there's nothing user-visible to clobber.
-            # Without this gate the production transcript stalled on
-            # 'Extra data on `plot`' without ever retrying.
-            progress_made = False
-            try:
-                async for ev in self._run_once(prompt, ctx, feedback):
-                    visible_progress = (
-                        isinstance(ev, MessageDelta) and ev.text and not ev.reasoning
-                    ) or isinstance(ev, ToolEnd)
-                    if visible_progress:
-                        progress_made = True
-                    yield ev
-                yield RunDone()
-                return
-            except _AgentsMaxTurnsExceeded:
-                # The agent burned through its turn budget — terminal, no
-                # retry would help. The SDK exception only carries a message,
-                # so we report our own configured ceiling (never a bare 0).
-                _LOGGER.warning(
-                    "litellm_runner: turn exceeded max turns (investigation=%s) — terminal",
-                    ctx.investigation_id,
-                )
-                yield MaxTurnsExceeded(turns=ctx.max_turns or self._max_turns)
-                yield RunDone()
-                return
-            except Exception as exc:  # noqa: BLE001 — every other failure becomes a hint or final error
-                if is_rate_limited(exc) and not progress_made:
-                    # The endpoint is healthy and told us to slow down, so this is
-                    # the one failure the loop must WAIT out rather than re-send.
-                    # A single-endpoint deploy has no chain to absorb it — this is
-                    # the only guard it gets.
-                    #
-                    # It is charged to its OWN budget, not `attempt`: `max_retries`
-                    # exists for a small model garbling its tool call (#76), a
-                    # different failure on a different timescale, and spending it
-                    # here gives up on a limit that would have cleared. The bound
-                    # is total time held rather than a count, because that is what
-                    # the caller actually cares about — and `progress_made` still
-                    # blocks the retry above, since a stream already seen cannot be
-                    # restarted (#26).
-                    held = rate_limit_wait_s(exc, attempt=rate_limited + 1)
-                    if waited_s + held <= self._rate_limit_budget_s:
-                        rate_limited += 1
-                        waited_s += held
-                        _LOGGER.warning(
-                            "litellm_runner: rate-limited (hold %d) — waiting %.1fs "
-                            "before retrying the same endpoint (investigation=%s)",
-                            rate_limited,
-                            held,
-                            ctx.investigation_id,
-                        )
-                        yield RateLimited(seconds=held)
-                        await self._sleep(held)
-                        continue
-                    _LOGGER.warning(
-                        "litellm_runner: still rate-limited after %.1fs — giving up "
-                        "(investigation=%s)",
-                        waited_s,
-                        ctx.investigation_id,
-                    )
-                    yield RunError(
-                        message=(
-                            "這一輪送不出去:模型服務持續回報請求過於頻繁,"
-                            f"已等待約 {int(waited_s)} 秒仍未恢復。請稍後再試一次。"
-                        )
-                    )
-                    yield RunDone()
-                    return
-                attempt += 1
-                # #624: an over-long request is the one failure with a productive
-                # answer — send less. Repeating it unchanged cannot work, and
-                # simply giving up strands the conversation for good: the failure
-                # is persisted, so the next turn replays a LONGER thread and is
-                # rejected again, forever. Shrink, remember what it told us, and
-                # try once more.
-                text = f"{type(exc).__name__}: {exc}"
-                if is_context_overflow(text):
-                    if (stated := parse_limit_from_error(text)) is not None:
-                        self._limits.learn_exact(
-                            ctx.agent_config.model, self._base_url, limit=stated
-                        )
-                    # This branch deliberately bypasses the attempt counter — an
-                    # over-long request is the one failure with a productive
-                    # answer, and a budget of three would strand a long thread.
-                    # Its termination therefore rests ENTIRELY on every round
-                    # being smaller than the last, so that is checked HERE
-                    # rather than trusted to the callee: when the guarantee
-                    # lapsed, no test went red, the suite simply never finished
-                    # — and in production it is an unbounded run of rejected
-                    # LLM calls.
-                    #
-                    # Smaller is measured in TOKENS, not messages: the cheapest
-                    # stage folds bulky tool output and keeps every message.
-                    before = estimate_messages(ctx.history)
-                    shrunk = (
-                        _shrink_history(
-                            ctx.history,
-                            stated,
-                            # The ceiling in the rejection covers the WHOLE
-                            # request; history only gets what the prompt and
-                            # tool schemas leave behind.
-                            overhead_tokens=ctx.context_overhead_tokens,
-                        )
-                        if len(ctx.history) > 1
-                        else ctx.history
-                    )
-                    if estimate_messages(shrunk) < before:
-                        dropped = len(ctx.history) - len(shrunk)
-                        ctx.history = shrunk
-                        _LOGGER.warning(
-                            "litellm_runner: request too long — retrying with %d history "
-                            "items (investigation=%s)",
-                            len(ctx.history),
-                            ctx.investigation_id,
-                        )
-                        yield ContextTrimmed(dropped=dropped, kept=len(ctx.history))
-                        continue
-                    # Nothing got smaller — usually one message that alone
-                    # exceeds the window. Say it in words the user can act on;
-                    # a raw provider string tells them nothing about what to do.
-                    yield RunError(
-                        message=(
-                            "這一輪送不出去:內容超過模型一次能讀的範圍,而且已經沒有東西可以再省。"
-                            "請把訊息拆小,或開一個新對話重試。"
-                        )
-                    )
-                    yield RunDone()
-                    return
-                if not _should_retry(
-                    progress_made=progress_made,
-                    attempt=attempt,
-                    max_retries=self._max_retries,
-                    error_text=f"{type(exc).__name__}: {exc}",
-                ):
-                    _LOGGER.warning(
-                        "litellm_runner: turn stopped after %d attempt(s), not retrying "
-                        "(%r) (investigation=%s)",
-                        attempt,
-                        exc,
-                        ctx.investigation_id,
-                    )
-                    if progress_made:
-                        # Don't pretend "giving up after N attempts" — we
-                        # made exactly one attempt; it produced output and
-                        # then failed. The user keeps the partial output.
-                        yield RunError(message=f"{type(exc).__name__}: {exc}")
-                    else:
-                        yield RunError(
-                            message=f"giving up after {attempt} attempts: "
-                            f"{type(exc).__name__}: {exc}"
-                        )
-                    yield RunDone()
-                    return
-                _LOGGER.warning(
-                    "litellm_runner: turn attempt %d failed (%r) — retrying with hint "
-                    "(investigation=%s)",
-                    attempt,
-                    exc,
-                    ctx.investigation_id,
-                )
-                feedback = diagnose_error(exc)
-                yield classify_retry_event(exc, feedback)
+        # ONE run. A failure is retried as the model call that failed, inside the
+        # run (`_call_retry`, docs/plan-friendly-errors.md D2) — never by running
+        # the turn again, which repeated every tool already executed and so had to
+        # refuse once anything had streamed (#26). What reaches here has already
+        # had its retries.
+        try:
+            async for ev in self._run_once(prompt, ctx):
+                yield ev
+        except _AgentsMaxTurnsExceeded:
+            # The agent burned through its turn budget — terminal. The SDK
+            # exception only carries a message, so we report our own configured
+            # ceiling (never a bare 0).
+            _LOGGER.warning(
+                "litellm_runner: turn exceeded max turns (investigation=%s) — terminal",
+                ctx.investigation_id,
+            )
+            yield MaxTurnsExceeded(turns=ctx.max_turns or self._max_turns)
+        except Exception as exc:  # noqa: BLE001 — every failure ends the turn, named
+            _LOGGER.warning(
+                "litellm_runner: turn failed (%r) (investigation=%s)", exc, ctx.investigation_id
+            )
+            yield _terminal_error(exc)
+        yield RunDone()
 
     def _note_prompt_usage(
         self, ctx: AgentToolContext, *, sent_estimate: int, reported: int | None
@@ -1934,10 +1739,37 @@ class LitellmAgentRunner:
             self._endpoint_declared.pop(key, None)
             self._declared_at[key] = now
 
+    def _call_retry(
+        self,
+        ctx: AgentToolContext,
+        *,
+        on_retry: Callable[[int, str], None] | None = None,
+        on_hold: Callable[[float], None] | None = None,
+        on_trimmed: Callable[[ContextTrimmed], None] | None = None,
+    ) -> Callable[[Model], Model]:
+        """How this run's model calls are retried (docs/plan-friendly-errors.md
+        D2): a fresh `CallRetryModel` per agent, so the rate-limit budget is a
+        pool for this `run()` — a per-call allowance would reset each tool round
+        and make the hold unbounded. A delegated sub-agent or a compaction pass
+        is a `run()` of its own, with its own pool (review round 2)."""
+        from ..agent.call_retry_model import CallRetryModel
+
+        def wrap(model: Model) -> Model:
+            return CallRetryModel(
+                model,
+                max_retries=self._max_retries,
+                rate_limit_budget_s=self._rate_limit_budget_s,
+                on_retry=on_retry,
+                on_hold=on_hold,
+                trim=_HistoryTrim(self, ctx, on_trimmed),
+                sleep=self._sleep,
+            )
+
+        return wrap
+
     def _agent_kwargs(
         self,
         ctx: AgentToolContext,
-        feedback: str | None,
         resolve_credential: Callable[[str | None], LlmCredential],
     ) -> dict[str, Any]:
         """Everything both turn shapes hand `_agent_for` — the streamed turn adds
@@ -1949,7 +1781,7 @@ class LitellmAgentRunner:
         `pragma: no cover`, exercised only against a live model. The turn that
         then behaves differently is the one nobody watches."""
         return {
-            "extra_instructions": _turn_instructions(ctx, feedback),
+            "extra_instructions": _turn_instructions(ctx),
             "base_url": self._base_url,
             "api_key": self._api_key,
             "reasoning_effort": ctx.reasoning_effort,
@@ -1977,12 +1809,11 @@ class LitellmAgentRunner:
         self,
         prompt: str,
         ctx: AgentToolContext,
-        feedback: str | None,
     ) -> AsyncIterator[AgentEvent]:
         assert ctx.agent_config is not None  # run() guards None before _run_once
         # Non-streaming path: the escape hatch (WORKSPACE_AGENT_STREAM=0).
         if not _stream_enabled():
-            async for ev in self._run_once_nonstream(prompt, ctx, feedback):
+            async for ev in self._run_once_nonstream(prompt, ctx):
                 yield ev
             return
         # The SDK delivers model output via stream_events(), but a running
@@ -2004,6 +1835,9 @@ class LitellmAgentRunner:
         # #613: the update_todos tool streams its freshly-written checklist here so
         # the FE's pinned panel updates live mid-turn.
         ctx.on_todos_updated = _todos_emitter(queue)
+        # P4 (docs/plan-friendly-errors.md): a delegated sub-agent's hold or retry
+        # is this turn waiting — it goes on this turn's stream like our own.
+        ctx.on_turn_status = queue.put_nowait
         resolve_credential = await self._credential_resolver(ctx)
         agent = _agent_for(
             ctx.agent_config,
@@ -2011,7 +1845,13 @@ class LitellmAgentRunner:
             ctx.unavailable_tools,
             on_failover_switch=_failover_emitter(queue),
             on_rate_limit_hold=_rate_limit_hold_emitter(queue),
-            **self._agent_kwargs(ctx, feedback, resolve_credential),
+            wrap_model=self._call_retry(
+                ctx,
+                on_retry=lambda attempt, kind: queue.put_nowait(ModelRetrying(attempt, kind)),
+                on_hold=lambda seconds: queue.put_nowait(RateLimited(seconds=seconds)),
+                on_trimmed=queue.put_nowait,
+            ),
+            **self._agent_kwargs(ctx, resolve_credential),
         )
         t0 = time.monotonic()
         prompt_tok = _live_prompt_tokens(ctx, prompt)
@@ -2039,16 +1879,55 @@ class LitellmAgentRunner:
                 last_emit = 0.0
                 gen = _GenerationClock()
                 splitter = ThinkSplitter()
+                content_mark = 0
                 # #69 trace: accumulate the visible content + count tool
                 # starts so we can label the turn's outcome (a real tool
                 # call vs text that merely looks like one).
                 content_buf: list[str] = []
                 tool_calls_seen = 0
+                # What the CURRENT model call has shown, so a call that fails
+                # and is re-sent can withdraw exactly that (docs/plan-friendly-
+                # errors.md D3). Counted where each delta is sent, from the
+                # in-stream marker that opens the call — the same pipe as the
+                # deltas, so nothing still in flight can be miscounted.
+                shown = _CallShown()
+
+                def show(delta: MessageDelta) -> None:
+                    shown.add(delta)
+                    queue.put_nowait(delta)
+
                 async for event in streamed.stream_events():
                     if getattr(event, "type", None) == "raw_response_event":
                         data = getattr(event, "data", None)
                         delta = getattr(data, "delta", None)
                         event_type = getattr(data, "type", "") or ""
+                        if event_type == CALL_STARTED:
+                            # Whatever the previous call left buffered was its
+                            # answer — it finished, so it is shown, then the
+                            # count starts over for this call.
+                            tail_content, tail_reasoning = splitter.flush()
+                            if tail_reasoning:
+                                show(MessageDelta(text=tail_reasoning, reasoning=True))
+                            if tail_content:
+                                content_buf.append(tail_content)
+                                show(MessageDelta(text=tail_content))
+                            splitter = ThinkSplitter()
+                            shown = _CallShown()
+                            content_mark = len(content_buf)
+                            continue
+                        if event_type == CALL_RETRACTED:
+                            # The call failed and is being re-sent: withdraw what
+                            # it showed. What it left buffered was never shown.
+                            if shown.text or shown.reasoning:
+                                queue.put_nowait(
+                                    OutputRetracted(
+                                        text_chars=shown.text, reasoning_chars=shown.reasoning
+                                    )
+                                )
+                            del content_buf[content_mark:]
+                            splitter = ThinkSplitter()
+                            shown = _CallShown()
+                            continue
                         channel = _delta_channel(event_type)
                         if isinstance(delta, str) and delta and _is_generated_output(event_type):
                             # #748: the count and the clock move TOGETHER. The
@@ -2060,7 +1939,7 @@ class LitellmAgentRunner:
                             completion_chars += len(delta)
                             gen.token()
                             if channel == "reasoning":
-                                queue.put_nowait(MessageDelta(text=delta, reasoning=True))
+                                show(MessageDelta(text=delta, reasoning=True))
                             elif channel == "content":
                                 # Explicitly `content`, never a bare `else`. The
                                 # gate above answers "does the provider bill
@@ -2072,10 +1951,10 @@ class LitellmAgentRunner:
                                 # (still split any inline <think> tags)
                                 content, reasoning = splitter.feed(delta)
                                 if reasoning:
-                                    queue.put_nowait(MessageDelta(text=reasoning, reasoning=True))
+                                    show(MessageDelta(text=reasoning, reasoning=True))
                                 if content:
                                     content_buf.append(content)
-                                    queue.put_nowait(MessageDelta(text=content))
+                                    show(MessageDelta(text=content))
                             now = time.monotonic()
                             if now - last_emit >= 0.2:  # throttle live metric updates
                                 last_emit = now
@@ -2105,14 +1984,17 @@ class LitellmAgentRunner:
                             disp = ctx.tool_displays.get(mapped.output, "")
                             if disp:
                                 mapped = replace(mapped, display=disp)
+                            # P4: a delegated sub-agent's failure, for the card.
+                            if (failed := ctx.tool_failures.pop(mapped.call_id, None)) is not None:
+                                mapped = replace(mapped, failure=failed)
                         queue.put_nowait(mapped)
 
                 tail_content, tail_reasoning = splitter.flush()
                 if tail_reasoning:
-                    queue.put_nowait(MessageDelta(text=tail_reasoning, reasoning=True))
+                    show(MessageDelta(text=tail_reasoning, reasoning=True))
                 if tail_content:
                     content_buf.append(tail_content)
-                    queue.put_nowait(MessageDelta(text=tail_content))
+                    show(MessageDelta(text=tail_content))
 
                 # #69 observability: one grep-friendly line per turn — what
                 # we sent (model / endpoint / tool knobs) + what shape came
@@ -2169,12 +2051,12 @@ class LitellmAgentRunner:
             if not task.done():
                 task.cancel()
             # Re-raise producer failures (e.g. MaxTurnsExceeded) so run()'s
-            # retry/terminal handling still fires.
+            # terminal handling still fires.
             with contextlib.suppress(asyncio.CancelledError):
                 await task
 
     async def _run_once_nonstream(  # pragma: no cover — exercised only by the live Ollama test
-        self, prompt: str, ctx: AgentToolContext, feedback: str | None
+        self, prompt: str, ctx: AgentToolContext
     ) -> AsyncIterator[AgentEvent]:
         """One turn with the model NOT streaming (WORKSPACE_AGENT_STREAM=0): fetch
         the whole response in a single ``Runner.run`` (``get_response``), then emit
@@ -2182,16 +2064,18 @@ class LitellmAgentRunner:
         output (and live exec logs) for a clean structured tool_call — the streaming
         aggregator's tool_call corruption can't happen on a one-shot response.
 
-        Same retry/terminal contract as the streamed path: this raises (MaxTurns,
-        recovery errors) straight up to ``run()`` which maps them as usual. The
-        RepairingModel + args_recovery backstops still apply (``_agent_for``)."""
+        Same terminal contract as the streamed path: what its model calls'
+        retries (``_call_retry``) did not cure raises straight up to ``run()``,
+        which names it. The RepairingModel + args_recovery backstops still apply
+        (``_agent_for``)."""
         assert ctx.agent_config is not None
         resolve_credential = await self._credential_resolver(ctx)
         agent = _agent_for(
             ctx.agent_config,
             ctx.packages,
             ctx.unavailable_tools,
-            **self._agent_kwargs(ctx, feedback, resolve_credential),
+            wrap_model=self._call_retry(ctx),
+            **self._agent_kwargs(ctx, resolve_credential),
         )
         t0 = time.monotonic()
         prompt_tok = _live_prompt_tokens(ctx, prompt)
@@ -2230,6 +2114,8 @@ class LitellmAgentRunner:
                     disp = ctx.tool_displays.get(mapped.output, "")
                     if disp:
                         mapped = replace(mapped, display=disp)
+                    if (failed := ctx.tool_failures.pop(mapped.call_id, None)) is not None:
+                        mapped = replace(mapped, failure=failed)
                 yield mapped
             elif isinstance(item, MessageOutputItem):
                 content, reasoning = splitter.feed(ItemHelpers.text_message_output(item))

@@ -20,30 +20,25 @@ from collections.abc import AsyncIterator, Mapping
 from dataclasses import replace
 from typing import Any
 
-from agents.model_settings import ModelSettings
 from agents.models.interface import Model
+
+from .settings_arg import with_settings
 
 
 def merge_extra_headers(
     args: tuple[Any, ...], kwargs: dict[str, Any], headers: Mapping[str, str]
 ) -> tuple[tuple[Any, ...], dict[str, Any]]:
     """Return ``(args, kwargs)`` with the call's ModelSettings replaced by a COPY
-    whose ``extra_headers`` also carry ``headers`` (``headers`` win a clash).
-
-    The SDK's run loop does not agree with itself about how it passes them:
-    ``stream_response`` sends ``model_settings`` as the 3rd POSITIONAL argument,
-    ``get_response`` sends it by KEYWORD. Miss either and the headers silently
-    never reach the wire, which looks exactly like a gateway rejecting the
-    user's credential."""
-    if "model_settings" in kwargs:
-        settings = kwargs["model_settings"]
-        merged = replace(settings, extra_headers={**(settings.extra_headers or {}), **headers})
-        return args, {**kwargs, "model_settings": merged}
-    if len(args) > 2 and isinstance(args[2], ModelSettings):
-        settings = args[2]
-        merged = replace(settings, extra_headers={**(settings.extra_headers or {}), **headers})
-        return (*args[:2], merged, *args[3:]), kwargs
-    return args, kwargs  # pragma: no cover - the SDK always passes settings
+    whose ``extra_headers`` also carry ``headers`` (``headers`` win a clash) —
+    wherever the SDK put the settings (`settings_arg.with_settings`). Miss a
+    shape and the headers silently never reach the wire, which looks exactly
+    like a gateway rejecting the user's credential."""
+    return with_settings(
+        args,
+        kwargs,
+        lambda s: replace(s, extra_headers={**(s.extra_headers or {}), **headers}),
+        at=2,
+    )
 
 
 class HeaderModel(Model):
