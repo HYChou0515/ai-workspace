@@ -19,14 +19,15 @@ from __future__ import annotations
 
 import dataclasses
 import os
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any, cast
 
 from .interpolate import expand_env, has_env_reference
-from .merge import merge_layered
+from .merge import apply_merge_patch, merge_layered
 from .schema import (
     AgentsSettings,
+    CapacitySettings,
     ChatVideoSettings,
     ChunkerSettings,
     ClusterSettings,
@@ -113,6 +114,8 @@ def load_with_provenance(
     *,
     config_path: Path | None = None,
     env: Mapping[str, str] | None = None,
+    overlay: dict[str, Any] | None = None,
+    keys: Sequence[tuple[Sequence[str], str]] | None = None,
 ) -> tuple[Settings, Provenance]:
     """`load` plus a per-leaf provenance map (observability feature A): for
     every dotted path in `asdict(settings)`, whether the value came from the
@@ -142,6 +145,37 @@ def load_with_provenance(
     bundled = dataclasses.asdict(Settings())
     _flatten_bundled_sub_agents(bundled)
     merged = merge_layered(bundled, yaml_d)
+
+    # 4b — the settings page's published changes (docs/plan-model-settings.md):
+    # a JSON Merge Patch over the merged defaults, so it wins over both layers
+    # and `null` can hide even a bundled preset (M12). Applied BEFORE
+    # validation, so an Apply is refused by exactly what refuses a boot (M8).
+    # Taken LITERALLY — never `${VAR}`-expanded: the page's text expanded from
+    # the server's environment handed any variable back to whoever typed its
+    # name (a DSN, a provider key) in a refusal or a test call (final review).
+    if overlay:
+        merged = apply_merge_patch(merged, overlay)
+    # 4c — the page's write-only keys, by parts: each lands only where the
+    # setting's OWNER exists after the merge (a preset, a role reference); the
+    # level that holds the value (`llm`, `env`) may be created. A key whose
+    # owner this version does not have (a hidden preset, a rollback to before
+    # it was added, a role turned off) is unused — writing it would make a half
+    # preset the checks then refuse.
+    for parts, value in keys or ():
+        owner, holder, leaf = list(parts[:-2]), list(parts[-2:-1]), parts[-1]
+        node: Any = merged
+        for part in owner:
+            node = node.get(part) if isinstance(node, dict) else None
+        if not isinstance(node, dict):
+            continue
+        for part in holder:
+            # `llm: null` is a valid role reference (no per-ref creds): the key
+            # makes that level, as for a level not written at all (final review 10).
+            if node.get(part) is None:
+                node[part] = {}
+            node = node[part]
+        if isinstance(node, dict):
+            node[leaf] = value
 
     # 5 — strict validation
     _validate(merged, source=str(path) if path else "<bundled defaults>")
@@ -410,6 +444,7 @@ def _validate(merged: dict[str, Any], *, source: str) -> None:
     _check_window_ratio(merged, source=source)
     _check_chat_video(merged, source=source)
     _check_lookup_targets(merged, source=source)
+    _check_capacity(merged, source=source)
 
 
 def _check_lookup_targets(merged: dict[str, Any], *, source: str) -> None:
@@ -492,6 +527,58 @@ def _check_chat_video(merged: dict[str, Any], *, source: str) -> None:
             f"chat_video.heartbeat_seconds ({heartbeat}) — a rule no longer than the beat reads "
             "a running job as dead between two beats"
         )
+
+
+def _check_capacity(merged: dict[str, Any], *, source: str) -> None:
+    """`capacity:` values that cannot work refuse to boot, naming the key
+    (docs/plan-capacity-usage.md §12). A window that does not divide the hour
+    straddles the analysis's slots; a slot that is not a whole number of
+    windows splits a window's sums between two slots; a time zone that does
+    not exist would cut every day at a guess."""
+    if "capacity" not in merged:
+        return  # a partial dict (a caller's own `_validate`): nothing written
+    node = merged["capacity"]
+    if not isinstance(node, dict):
+        raise ValueError(f"config {source}: capacity must be a mapping, got {node!r}")
+
+    def _int(key: str) -> int:
+        value = node.get(key, getattr(CapacitySettings, key))
+        if not isinstance(value, int) or isinstance(value, bool):
+            raise ValueError(f"config {source}: capacity.{key} must be an integer, got {value!r}")
+        return value
+
+    window = _int("window_s")
+    if window < 1 or 3600 % window:
+        raise ValueError(
+            f"config {source}: capacity.window_s must divide 3600 (60, 300, 600, …), got {window!r}"
+        )
+    step = _int("step_s")
+    if step < window or step % window:
+        raise ValueError(
+            f"config {source}: capacity.step_s must be a multiple of capacity.window_s "
+            f"({window}), got {step!r}"
+        )
+    if 86_400 % step:
+        raise ValueError(
+            f"config {source}: capacity.step_s must divide a day (86400 s) so a day is "
+            f"whole slots, got {step!r}"
+        )
+    for key in ("queue_max", "max_rows"):
+        if _int(key) < 1:
+            raise ValueError(f"config {source}: capacity.{key} must be a positive integer")
+    if _int("lag_s") < 0:
+        raise ValueError(f"config {source}: capacity.lag_s must be 0 or more")
+    zone = node.get("timezone", CapacitySettings.timezone)
+    if zone:
+        from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+        try:
+            ZoneInfo(str(zone))
+        except (ZoneInfoNotFoundError, ValueError) as exc:
+            raise ValueError(
+                f"config {source}: capacity.timezone {zone!r} is not an IANA time zone "
+                "(e.g. Asia/Taipei); empty means UTC"
+            ) from exc
 
 
 def _check_window_ratio(merged: dict[str, Any], *, source: str) -> None:
@@ -785,6 +872,10 @@ _TOP_SCHEMA: dict[str, Any] = {
     "view_plugins": _dataclass_keys(ViewPluginsSettings),
     # plan-skill-hub-history G2: where the skill hub's git repos live.
     "skill_hub": _dataclass_keys(SkillHubSettings),
+    # docs/plan-capacity-usage.md §12: usage records and the dashboard's
+    # sources. Whitelisted AND built below, and range-checked in
+    # `_check_capacity`.
+    "capacity": _dataclass_keys(CapacitySettings),
 }
 
 
@@ -1123,6 +1214,7 @@ def _settings_from_dict(d: dict[str, Any]) -> Settings:
             git=_build(GitSettings, d["kb"]["git"]),
             vlm_llm=_build_retrieval_llm(d["kb"]["vlm_llm"]),
             vlm_format_llm=_build_retrieval_llm(d["kb"].get("vlm_format_llm")),
+            quality_judge=_build_retrieval_llm(d["kb"].get("quality_judge")),
             deck_vlm=_build_retrieval_llm(d["kb"].get("deck_vlm")),
             wiki=_build_wiki(d["kb"]["wiki"]),
             parsers=list(d["kb"].get("parsers", [])),
@@ -1157,6 +1249,7 @@ def _settings_from_dict(d: dict[str, Any]) -> Settings:
         chat_video=_build(ChatVideoSettings, d["chat_video"]),
         view_plugins=_build(ViewPluginsSettings, d["view_plugins"]),
         skill_hub=_build(SkillHubSettings, d["skill_hub"]),
+        capacity=_build(CapacitySettings, d["capacity"]),
     )
 
 

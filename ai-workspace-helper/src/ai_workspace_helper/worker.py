@@ -69,7 +69,7 @@ class Worker:
     def tick(self) -> None:
         if self.paused:
             # Not checking in: the card falls back to the manual flow (D7)
-            # rather than offering a 「查」 nobody will act on.
+            # rather than offering a button nobody will act on.
             self.status, self.detail = "paused", ""
             self._logged = None
             return

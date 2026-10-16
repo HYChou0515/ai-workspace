@@ -32,6 +32,7 @@ from pathlib import Path
 
 import xxhash
 
+from ..capacity.cgroup_usage import Target
 from .local_process import _HOME, LocalProcessSandbox, _validate_sandbox_id
 from .protocol import EnforcedLimits, SandboxHandle, SandboxSpec
 
@@ -296,6 +297,23 @@ class IsolatedProcessSandbox(LocalProcessSandbox):
         )
         self._acl_runner: AclRunner = acl_runner or _run_setfacl
         self._chown_runner: ChownRunner = chown_runner or _run_chown
+        # docs/plan-capacity-usage.md §6.5: whose each sandbox this process made
+        # is — its usage rows are attributed to the labels its spec carried.
+        self._usage_labels: dict[str, dict[str, str]] = {}
+
+    @property
+    def cgroup_root(self) -> Path:
+        return self._cgroup_root
+
+    def usage_targets(self) -> list[Target]:
+        """The sandboxes this process created and has not killed, each named for
+        its usage rows. The item IS the handle id under `kind: local`. Called
+        from the sampler's thread while the event loop creates and kills
+        sandboxes, so it walks a snapshot (`list()` copies in one step)."""
+        return [
+            Target(sandbox=sid, item=sid, user=labels.get("user", ""), app=labels.get("app", ""))
+            for sid, labels in list(self._usage_labels.items())
+        ]
 
     def _uid_for(self, handle_id: str) -> int:
         return _derive_uid(handle_id, uid_base=self._uid_base, uid_range=self._uid_range)
@@ -336,6 +354,7 @@ class IsolatedProcessSandbox(LocalProcessSandbox):
             )
         )
         await asyncio.to_thread(self._provision, ws, uid)
+        self._usage_labels[handle.id] = dict(spec.labels or {})
         logger.info("isolated: created sandbox %s uid=%d (uid+cgroup isolation)", handle.id, uid)
         return handle
 
@@ -427,6 +446,7 @@ class IsolatedProcessSandbox(LocalProcessSandbox):
             cg = self._cgroup_root / _validate_sandbox_id(handle.id)
             await asyncio.to_thread(self._cgroups.remove, cg)
             logger.debug("isolated: reaped cgroup for sandbox %s", handle.id)
+        self._usage_labels.pop(handle.id, None)
         await super().kill(handle)
 
     def _exec_argv(

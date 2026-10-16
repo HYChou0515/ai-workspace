@@ -573,11 +573,15 @@ def test_agent_for_wraps_model_in_repairing_model_by_default():
 
     from workspace_app.agent.repairing_model import RepairingModel
     from workspace_app.api.litellm_runner import _agent_for
+    from workspace_app.capacity.llm_tags import TaggedModel
 
     agent = _agent_for(AgentConfig(name="ws"))
     assert isinstance(agent.model, RepairingModel)
     # transparent passthrough: the real model id is still reachable for the trace
-    assert isinstance(agent.model._inner, LitellmModel)
+    # docs/plan-capacity-usage.md §7: every request is tagged with whose turn
+    # it is, one transparent layer above the LitellmModel.
+    assert isinstance(agent.model._inner, TaggedModel)
+    assert isinstance(agent.model._inner._inner, LitellmModel)
     assert agent.model.model == AgentConfig(name="ws").model
 
 

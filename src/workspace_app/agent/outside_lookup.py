@@ -50,9 +50,10 @@ async def ask_outside_impl(
     options instead, use `ask_user`.
 
     Pass `why` as one short sentence the user reads first, then exactly one of:
-    - `query`: what to search for — keywords, not a sentence: at most 10 words
-      and at most 40 Chinese, Japanese or Korean characters. The card offers
-      search buttons; the user may edit the query before searching.
+    - `query`: the keywords you suggest searching for — keywords, not a
+      sentence: at most 10 words and at most 40 Chinese, Japanese or Korean
+      characters. The card shows them beside an empty search box; the user
+      types or pastes what is actually searched.
     - `file` and `link` together: a link a lookup brought back. A lookup saved
       as a file lists its links at the bottom, numbered `- [n] <https://…>`
       (the message that brought it back names the file and lists the first
@@ -204,11 +205,17 @@ async def _listed_link(ctx: RunContextWrapper[AgentToolContext], file: str, link
     return listed[link]
 
 
+#: The kinds of card: a search, a page to open, a question for the external AI.
+_CARD_KEYS = ({"why", "query"}, {"why", "url"}, {"why", "question"})
+
+
 def declared_lookup(text: str) -> dict | None:
     """The card a reply declares, read the way the chat reads it
     (`web/src/renderers/outsideLookup.ts`): the tail after the LAST marker is
-    one JSON object with a `why` and exactly one of a `query` or an http(s)
-    `url`. `None` for anything else — a refusal quoting the marker included."""
+    one JSON object with a `why` and exactly one of a `query`, an http(s)
+    `url`, or a `question` for the external AI (`ask_ext_ai`,
+    docs/plan-ext-ai.md). `None` for anything else — a refusal quoting the
+    marker included."""
     at = text.rfind(OUTSIDE_LOOKUP_MARKER)
     if at < 0:
         return None
@@ -216,7 +223,7 @@ def declared_lookup(text: str) -> dict | None:
         card = json.loads(text[at + len(OUTSIDE_LOOKUP_MARKER) :])
     except ValueError:
         return None
-    if not isinstance(card, dict) or set(card) not in ({"why", "query"}, {"why", "url"}):
+    if not isinstance(card, dict) or set(card) not in _CARD_KEYS:
         return None
     if not all(isinstance(v, str) and v for v in card.values()):
         return None

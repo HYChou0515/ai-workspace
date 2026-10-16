@@ -17,7 +17,7 @@ import os
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from dataclasses import replace
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, NamedTuple
 
 import litellm
 from agents import (
@@ -49,6 +49,7 @@ from ..agent.header_model import HeaderModel
 from ..agent.repairing_model import RepairingModel
 from ..agent.tools import build_tools, dedupe_tools, delegation_is_available
 from ..apps.subagents import subagents_block
+from ..capacity.llm_tags import TaggedModel
 from ..context_budget import (
     ContextLimit,
     LimitLearner,
@@ -97,6 +98,17 @@ if TYPE_CHECKING:
     FallbackChains = dict[tuple[str, str | None], list[LlmEndpoint]]
 
 _LOGGER = logging.getLogger(__name__)
+
+
+class RunnerEndpoints(NamedTuple):
+    """The runner-wide endpoint values: the default `llm.base_url` /
+    `llm.api_key` and the per-preset failover chains. Fixed at construction, or
+    read from the published settings on each use (plan-model-settings P5)."""
+
+    base_url: str | None
+    api_key: str | None
+    fallback_chains: FallbackChains | None
+
 
 #: Window decisions already reported (see `_agent_for`), as `(model, window)`.
 #: Keyed on the DECISION rather than the model: a deploy states its window once
@@ -530,6 +542,7 @@ def _agent_for(
     has_subagents: bool = False,
     skills_reachable: bool | None = None,
     in_chat: bool = False,
+    ext_ai: bool = False,
     subagent_models: tuple[SubagentModel, ...] = (),
     fallback_chains: FallbackChains | None = None,
     cooldown_registry: CooldownRegistry | None = None,
@@ -591,6 +604,12 @@ def _agent_for(
 
     if in_chat and ask_outside_granted(config):
         tools.append(ask_outside_tool())
+    # docs/plan-ext-ai.md D5: the 問外部AI card goes where the 請幫我查 card
+    # goes, on a deploy that turned it on (`server.ext_ai_enabled`).
+    from ..agent.ext_ai import ask_ext_ai_granted, ask_ext_ai_tool
+
+    if in_chat and ask_ext_ai_granted(config, enabled=ext_ai):
+        tools.append(ask_ext_ai_tool())
     # plan-tool-on-demand-loading: `load_tool` is ours, not a package's, so it
     # goes in BEFORE `builtin_names` is read — the usage report would otherwise
     # file it under `first_party`, beside the commands it exists to open.
@@ -899,6 +918,9 @@ def _agent_for(
         # session cookie to another host.
         if credential.headers:
             m = HeaderModel(m, credential.headers)
+        # docs/plan-capacity-usage.md §7: whose turn each request is, for
+        # LiteLLM's log — read per call from the turn's usage scope.
+        m = TaggedModel(m)
         # #76 BACKSTOP (always on): sanitize malformed tool-call JSON at the output
         # boundary so a probabilistic small model can't crash/poison/abort the turn.
         # Leave this line on. To toggle the *self-repair* layer (recovering the
@@ -1011,6 +1033,7 @@ def ask_user_stop_behaviour(
     card, docs/plan-outside-lookup.md) follows the same rule."""
     from ..agent.env_request import TOOL_NAME as REQUEST_ENV_TOOL
     from ..agent.env_request import declared_card
+    from ..agent.ext_ai import TOOL_NAME as ASK_EXT_AI_TOOL
     from ..agent.outside_lookup import TOOL_NAME as ASK_OUTSIDE_TOOL
     from ..agent.outside_lookup import declared_lookup
 
@@ -1018,6 +1041,7 @@ def ask_user_stop_behaviour(
     cards: dict[str, Callable[[str], object]] = {
         REQUEST_ENV_TOOL: declared_card,
         ASK_OUTSIDE_TOOL: declared_lookup,
+        ASK_EXT_AI_TOOL: declared_lookup,
     }
     names = tool_names or ()
     if not any(n in cards for n in names):
@@ -1485,6 +1509,7 @@ class LitellmAgentRunner:
         stream_deadlines: tuple[float, float] | None = None,
         sleep: Callable[[float], Awaitable[None]] | None = None,
         rate_limit_budget_s: float = 120.0,
+        endpoints: Callable[[], RunnerEndpoints] | None = None,
         tool_usage: ToolUsageRecorder | None = None,
     ) -> None:
         # plan-tool-usage-stats §3.1: where every turn this runner drives counts
@@ -1523,8 +1548,10 @@ class LitellmAgentRunner:
         self._max_turns = max_turns
         # Chat LLM endpoint (global; see factories.Settings). None → LiteLLM's
         # own provider env / Ollama defaults.
-        self._base_url = base_url
-        self._api_key = api_key
+        self._static = RunnerEndpoints(base_url, api_key, fallback_chains)
+        # plan-model-settings P5: when given, the three endpoint values are read
+        # from the published settings on each use instead of from boot.
+        self._endpoints = endpoints
         # Per-user token seam. There is no universal system key — each preset
         # configures its own endpoint key — so the token service resolves PER
         # ENDPOINT: given the speaker + the key that endpoint would otherwise use,
@@ -1533,7 +1560,6 @@ class LitellmAgentRunner:
         # wired → every key passes through untouched (behaviour unchanged).
         self._token_service = token_service
         # #196 busy-aware failover (None when no preset declares fallbacks).
-        self._fallback_chains = fallback_chains
         self._cooldown_registry = cooldown_registry
         # #493 (give_up_s, idle_s) for a SINGLE-endpoint turn, so a provider that
         # goes quiet ends the turn with a real error instead of hanging forever.
@@ -1588,6 +1614,21 @@ class LitellmAgentRunner:
         for key in raw_keys:
             resolved[key] = await ts.get_credential(user_id, key, ctx.call_lane)
         return lambda key: resolved.get(key, LlmCredential(key))
+
+    def _now_endpoints(self) -> RunnerEndpoints:
+        return self._static if self._endpoints is None else self._endpoints()
+
+    @property
+    def _base_url(self) -> str | None:
+        return self._now_endpoints().base_url
+
+    @property
+    def _api_key(self) -> str | None:
+        return self._now_endpoints().api_key
+
+    @property
+    def _fallback_chains(self) -> FallbackChains | None:
+        return self._now_endpoints().fallback_chains
 
     async def run(self, prompt: str, ctx: AgentToolContext) -> AsyncIterator[AgentEvent]:
         if ctx.tool_usage is None:
@@ -1918,6 +1959,7 @@ class LitellmAgentRunner:
             "has_subagents": bool(ctx.subagent_defs),
             "skills_reachable": ctx.skills_reachable,
             "in_chat": ctx.in_chat,
+            "ext_ai": ctx.ext_ai,
             "subagent_models": ctx.subagent_models,
             "fallback_chains": self._fallback_chains,
             "cooldown_registry": self._cooldown_registry,

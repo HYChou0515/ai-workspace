@@ -41,6 +41,7 @@ from specstar import QB, SpecStar
 from .disk_ledger import DiskLedger
 
 if TYPE_CHECKING:
+    from ..capacity.recorder import UsageRecorder
     from ..filestore.protocol import FileStore
 
 logger = logging.getLogger(__name__)
@@ -99,7 +100,12 @@ async def reconcile_disk_ledger(
 
 
 def every_item(spec: SpecStar) -> list[tuple[str, str]]:
-    """``(item_id, debtor)`` for every item of every App this process registers,
+    """``(item_id, debtor)`` for every item — `every_item_with_app` without the App."""
+    return [(item, debtor) for item, debtor, _slug in every_item_with_app(spec)]
+
+
+def every_item_with_app(spec: SpecStar) -> list[tuple[str, str, str]]:
+    """``(item_id, debtor, app slug)`` for every item of every App this process registers,
     soft-deleted ones included (they still hold their files, and the gate still
     charges them) — the debtor by the quota gate's own rule
     (`apps.resolve.debtor_of`). A
@@ -109,7 +115,7 @@ def every_item(spec: SpecStar) -> list[tuple[str, str]]:
     from ..apps.registry import registered_apps
     from ..apps.resolve import debtor_of
 
-    out: list[tuple[str, str]] = []
+    out: list[tuple[str, str, str]] = []
     for slug, model in registered_apps().items():
         try:
             rm = spec.get_resource_manager(model)
@@ -121,12 +127,16 @@ def every_item(spec: SpecStar) -> list[tuple[str, str]]:
             item_id = rev.info.resource_id  # ty: ignore[unresolved-attribute]
             data = rev.data
             assert isinstance(data, WorkItemBase)  # narrow for ty
-            out.append((item_id, debtor_of(spec, slug, item_id, data)))
+            out.append((item_id, debtor_of(spec, slug, item_id, data), slug))
     return out
 
 
 def make_disk_ledger_pass(
-    spec: SpecStar, filestore: FileStore, *, live_window_ms: int
+    spec: SpecStar,
+    filestore: FileStore,
+    *,
+    live_window_ms: int,
+    usage_recorder: UsageRecorder | None = None,
 ) -> Callable[[], Coroutine[Any, Any, DiskReconcileReport]] | None:
     """The pass as the job runs it: every item, liveness from the sandbox
     heartbeat (a sandbox active within the idle window is live; a reaped one's
@@ -153,18 +163,35 @@ def make_disk_ledger_pass(
                 "disk-ledger: the durable store's tree is not reachable from this "
                 "process — mount it here (kubernetes/base/workers.yaml, blob-gc)"
             )
-        items = await asyncio.to_thread(every_item, spec)
+        items = await asyncio.to_thread(every_item_with_app, spec)
         since_ms = int(dt.datetime.now(dt.UTC).timestamp() * 1000) - live_window_ms
 
         async def is_live(item_id: str) -> bool:
             return await activity.is_live(item_id, since_ms=since_ms)
 
-        return await reconcile_disk_ledger(
-            items=items,
+        report = await reconcile_disk_ledger(
+            items=[(item, debtor) for item, debtor, _slug in items],
             is_live=is_live,
             usage=workspace_usage,
             exists=lambda item_id: find_work_item(spec, item_id, include_deleted=True) is not None,
             ledger=ledger,
         )
+        if usage_recorder is not None:
+            # docs/plan-capacity-usage.md §6.6: the reconciled figures, as rows.
+            # Telemetry after the pass's real work: it must not fail a pass
+            # that reconciled (the blob-gc job is not retried).
+            from ..capacity.disk import emit_disk_rows, kb_collection_bytes
+
+            try:
+                rows = await ledger.rows()
+                emit_disk_rows(
+                    usage_recorder,
+                    workspaces={item: (row.owner, row.bytes_used) for item, row in rows.items()},
+                    app_of={item: slug for item, _debtor, slug in items},
+                    collections=await asyncio.to_thread(kb_collection_bytes, spec),
+                )
+            except Exception:
+                logger.exception("disk-ledger: reconciled, but could not write the usage rows")
+        return report
 
     return run

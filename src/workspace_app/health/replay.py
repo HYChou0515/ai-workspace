@@ -191,13 +191,16 @@ class ReplayService:
         packages: list[Any] | None = None,
         template_profile: str | None = None,
         in_chat: bool = False,
+        ext_ai: bool = False,
     ) -> ReplayResult:
         """Replay the model interaction that produced ``messages[index]``
         (an assistant answer or a tool call): context = everything before
         it, assembled exactly as the runner would.
 
         ``in_chat``: whether the thread is an item CHAT, whose live turns held
-        the chat-only tools (`ask_outside`, plan-outside-lookup D6)."""
+        the chat-only tools (`ask_outside`, plan-outside-lookup D6).
+        ``ext_ai``: whether the deploy turned on the 問外部AI card
+        (`server.ext_ai_enabled`, docs/plan-ext-ai.md D5)."""
         if not 0 <= index < len(messages):
             raise ReplayInvalidTarget(f"message index {index} out of range")
         target = messages[index]
@@ -221,7 +224,9 @@ class ReplayService:
             enabled_function_tools,
         )
 
-        agent = _agent_for(config, packages, template_profile=template_profile, in_chat=in_chat)
+        agent = _agent_for(
+            config, packages, template_profile=template_profile, in_chat=in_chat, ext_ai=ext_ai
+        )
         logger.info("replay: replaying turn index=%d model=%s", index, config.model)
         sent: list[dict[str, Any]] = []
         if agent.instructions:

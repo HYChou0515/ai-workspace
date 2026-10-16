@@ -917,7 +917,7 @@ async def skill_folder_in_the_way(
     clash" read differently (plan install step 4). Listed, not read: a
     folder with any file of its own is in the way. ``wake`` as for
     :func:`workspace_skill_origin` — the install dialog asks this of every
-    workspace it offers. A manifest that does not parse names no owner: the
+    workspace it lists. A manifest that does not parse names no owner: the
     folder is still in the way."""
     if not await skill_file_paths(files, workspace_id, name, wake=wake):
         return None

@@ -67,6 +67,7 @@ export function fakeSkillHub(entries: SkillHubCard[] = [], since = "2026-10-07")
     get: vi.fn<SkillHubApi["get"]>(),
     installs: vi.fn<SkillHubApi["installs"]>(async () => []),
     targets: vi.fn<SkillHubApi["targets"]>(async () => ({ missing_tools: [], items: [] })),
+    installState: vi.fn<SkillHubApi["installState"]>(async () => ({ state: "ok", owner: "" })),
     install: vi.fn<SkillHubApi["install"]>(),
     unpublish: vi.fn<SkillHubApi["unpublish"]>(),
     republish: vi.fn<SkillHubApi["republish"]>(),

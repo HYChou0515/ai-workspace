@@ -158,7 +158,7 @@ def test_the_worker_process_serves_the_writer_it_built(tmp_path, monkeypatch) ->
     monkeypatch.setattr(wm, "build_worker", lambda *_a, **_kw: wm.Worker(coordinator, store))  # ty: ignore[invalid-argument-type]
     served: list = []
     monkeypatch.setattr(
-        wm, "serve", lambda c, s, stop, *, interval: served.append((c, s, interval))
+        wm, "serve", lambda c, s, stop, *, interval, **_kw: served.append((c, s, interval))
     )
     monkeypatch.setattr(wm.signal, "signal", lambda *_a: None)
 

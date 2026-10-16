@@ -445,6 +445,54 @@ def test_the_helper_is_wired_to_report_what_it_runs_on(tmp_path):
     assert (seen.chrome, seen.python) == ("141.0.7390.55", platform.python_version())
 
 
+def _wired(tmp_path, load_site):  # noqa: ANN001, ANN202
+    from ai_workspace_helper.app import make_controller
+
+    from tests.ai_workspace_helper.test_worker import _backend
+    from tests.api.test_outside_answers import _asked
+
+    client, _spec, _iid = _asked()
+    transport = _backend(client)
+
+    class _Chrome:
+        def send(self, *a):
+            return transport._send(*a)
+
+        def version(self) -> str:
+            return "141"
+
+        def close(self) -> None:
+            pass
+
+    ctl = make_controller(tmp_path, "http://app", _Chrome, load_site=load_site)
+    ctl.open()
+    ctl.step()
+    return client, ctl
+
+
+# docs/plan-ext-ai.md D9: a helper packed with the company's site file says so
+# when it checks in — that is how the card knows it may offer 「問外部AI」.
+def test_a_helper_packed_with_a_site_file_reports_it(tmp_path):
+    import types
+
+    site = types.SimpleNamespace(URL="https://ai.example", NAME="公司 AI", ask=lambda *a: "x")
+    client, ctl = _wired(tmp_path, lambda: site)
+
+    assert ctl.snapshot()[0] == "connected"
+    assert client.app.state.outside_jobs.presence("u").ext_ai == "公司 AI"
+
+
+def test_a_broken_site_file_leaves_the_rest_of_the_helper_working(tmp_path, caplog):
+    def broken():
+        raise ValueError("the external AI's site file needs URL")
+
+    client, ctl = _wired(tmp_path, broken)
+
+    assert ctl.snapshot()[0] == "connected"
+    assert client.app.state.outside_jobs.presence("u").ext_ai == ""
+    assert "needs URL" in caplog.text
+
+
 # D13: while it fetches, the window says what — 「正在查:…」 — DURING the
 # errand, not after it (the window used to read the status only once a poll
 # was over, when the detail was already cleared; found running the window).
@@ -688,3 +736,25 @@ def test_a_chrome_that_never_starts_is_said_after_the_last_try():
 
     assert len(tries) == 3
     assert ctl.snapshot()[:2] == ("no_chrome", "no Chrome here")
+
+
+# docs/plan-ext-ai.md (review round 1): the window and its history name the
+# external AI's errand in its own words, and show a question by its first line
+# — the status line and the history's column are one line each.
+def test_asking_the_external_ai_reads_as_what_it_is():
+    from ai_workspace_helper.app import describe, history_row
+
+    question = "pandas 還是 polars?\n背景:每天讀一次 2 GB 的 CSV。"
+
+    assert describe("connected", question, "ask_ext_ai", "外部AI") == (
+        "正在問（外部AI）：pandas 還是 polars?"
+    )
+    row = {
+        "at": "2026-10-16T09:30:00",
+        "kind": "ask_ext_ai",
+        "args": question,
+        "outcome": "failed",
+        "reason": "沒有回應",
+    }
+    assert history_row(row)[1:] == ("問外部AI", "pandas 還是 polars?", "沒問到：沒有回應")
+    assert history_row({**row, "outcome": "done", "reason": ""})[3] == "已送給 AI"

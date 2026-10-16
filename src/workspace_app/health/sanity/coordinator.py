@@ -18,6 +18,8 @@ from msgspec.structs import replace as struct_replace
 from specstar import QB, Schema, SpecStar
 from specstar.types import TaskStatus
 
+from ...capacity.jobs import recorded_job
+from ...capacity.recorder import UsageRecorder
 from ...kb.llm import ILlm
 from ...resources import (
     CustomSanityQuestion,
@@ -75,6 +77,8 @@ class SanityBatteryCoordinator:
         *,
         judge: ILlm | None = None,
         message_queue_factory: object | None = None,
+        # docs/plan-capacity-usage.md §6.4: where each job attempt is recorded.
+        usage_recorder: UsageRecorder | None = None,
     ) -> None:
         self._spec = spec
         self._llm_factory = llm_factory
@@ -88,9 +92,10 @@ class SanityBatteryCoordinator:
             from specstar.message_queue import SimpleMessageQueueFactory
 
             message_queue_factory = SimpleMessageQueueFactory()
+        self._usage_recorder = usage_recorder
         spec.add_model(
             Schema(SanityRun, "v1"),
-            job_handler=self._handle,
+            job_handler=recorded_job("sanity", self._handle, self._usage_recorder),
             indexed_fields=["status", "partition_key"],
             message_queue_factory=message_queue_factory,  # ty: ignore[invalid-argument-type]
         )

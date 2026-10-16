@@ -45,6 +45,7 @@ from ..context_budget import (
 )
 from ..entity.brief import entity_schema_brief
 from ..entity.catalog import discover_catalog
+from ..live_value import Live, now
 from ..sandbox.protocol import Sandbox, SandboxSpec
 from ..sync import SandboxSync
 from ..tokens import CallLane
@@ -212,15 +213,18 @@ class TurnContextBuilder:
         max_tokens_window_ratio: float = DEFAULT_MAX_TOKENS_WINDOW_RATIO,
         wiki_coordinator: WikiMaintenanceCoordinator | None = None,
         run_agent: RunAgent | None = None,
-        subagent_models: tuple[SubagentModel, ...] = (),
+        subagent_models: Live[tuple[SubagentModel, ...]] = (),
         skill_hub: SkillHubStore | None = None,
         review_skill: ReviewSkill | None = None,
         tool_usage: ToolUsageRecorder | None = None,
+        ext_ai: bool = False,
     ) -> None:
         # plan-tool-usage-stats §8.3: a chat turn carries the recorder from the
         # moment it is built — the send path counts an applied skill before the
         # runner (which keeps a recorder the turn already has) starts.
         self._tool_usage = tool_usage
+        # docs/plan-ext-ai.md D5: the deploy turned on the 問外部AI card.
+        self._ext_ai = ext_ai
         self._sandbox = sandbox
         self._filestore = filestore
         self._files = files
@@ -885,7 +889,7 @@ class TurnContextBuilder:
             # `build_tools` and the system-prompt index read.
             subagent_defs=subagent_defs,
             run_agent=self._run_agent,
-            subagent_models=self._subagent_models,
+            subagent_models=now(self._subagent_models),
             skill_hub=self._skill_hub,
             review_skill_via=self._review_skill,
             # #29 / §A: whether anything is loadable this turn — what decides
@@ -983,6 +987,8 @@ class TurnContextBuilder:
             # A thread a person answers in: the 請幫我查 card may be drawn here
             # (plan-outside-lookup D6) — and in no workflow step.
             in_chat=True,
+            # …and the 問外部AI card, where the deploy turned it on (plan-ext-ai D5)
+            ext_ai=self._ext_ai,
             # Where this turn's tool calls are counted as happening
             # (plan-tool-usage-stats §3.4), and into which recorder (§8.3).
             surface="chat",

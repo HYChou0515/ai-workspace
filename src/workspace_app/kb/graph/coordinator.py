@@ -24,6 +24,8 @@ import logging
 from specstar import QB, Count, Schema, SpecStar
 from specstar.types import TaskStatus
 
+from ...capacity.jobs import recorded_job
+from ...capacity.recorder import UsageRecorder
 from ...perm import Permission
 from ...resources import Collection, DocChunk
 from ...resources.kb import SourceDoc
@@ -52,6 +54,8 @@ class GraphCoordinator:
         *,
         chunk_budget: int = 20,
         message_queue_factory: object | None = None,
+        # docs/plan-capacity-usage.md §6.4: where each job attempt is recorded.
+        usage_recorder: UsageRecorder | None = None,
     ) -> None:
         self._spec = spec
         self._llm = llm
@@ -64,9 +68,10 @@ class GraphCoordinator:
             from specstar.message_queue import SimpleMessageQueueFactory
 
             message_queue_factory = SimpleMessageQueueFactory()
+        self._usage_recorder = usage_recorder
         spec.add_model(
             Schema(GraphJob, "v1"),
-            job_handler=self._handle,
+            job_handler=recorded_job("graph", self._handle, self._usage_recorder),
             indexed_fields=["status", "partition_key"],
             message_queue_factory=message_queue_factory,  # ty: ignore[invalid-argument-type]
         )

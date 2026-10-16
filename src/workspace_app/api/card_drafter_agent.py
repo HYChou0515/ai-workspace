@@ -31,6 +31,7 @@ from ..agent.ask_kb import AskKbSpec, RunSubagent, make_ask_knowledge_base
 from ..agent.context import AgentToolContext
 from ..kb.card_drafter import _parse_digest, drafting_prompt
 from ..kb.card_gen import DocDigest
+from ..live_value import Live, now
 from ..resources import AgentConfig
 from .events import MessageDelta, RunError
 from .runner import AgentRunner
@@ -157,7 +158,7 @@ class AgentCardDrafter:
 def drafter_context_builder(
     *,
     bridge_run: RunSubagent,
-    agent_config: AgentConfig,
+    agent_config: Live[AgentConfig],
     base_spec: AskKbSpec,
 ) -> Callable[[str], AgentToolContext]:
     """The composition seam that gives :class:`AgentCardDrafter` its per-document
@@ -175,12 +176,20 @@ def drafter_context_builder(
     def build(collection_id: str) -> AgentToolContext:
         spec = replace(base_spec, scope=[collection_id]) if collection_id else base_spec
         return AgentToolContext(
-            agent_config=agent_config,
+            agent_config=now(agent_config),
             collection_ids=[collection_id] if collection_id else [],
             run_subagent=make_ask_knowledge_base(spec, bridge_run),
         )
 
     return build
+
+
+def _drafter_config_for(kb_agent_config: AgentConfig) -> AgentConfig:
+    return default_card_drafter_config(
+        model=kb_agent_config.model,
+        llm_base_url=kb_agent_config.llm_base_url,
+        llm_api_key=kb_agent_config.llm_api_key,
+    )
 
 
 def wire_agentic_card_drafter(
@@ -190,7 +199,7 @@ def wire_agentic_card_drafter(
     runner: AgentRunner,
     retriever: Retriever,
     catalog: AgentConfigCatalog,
-    kb_agent_config: AgentConfig,
+    kb_agent_config: Live[AgentConfig],
     max_searches: int | None,
 ) -> None:
     """Swap ``coordinator``'s open-loop one-shot drafter for the agentic
@@ -220,7 +229,7 @@ def wire_agentic_card_drafter(
         runner=runner,
         retriever=retriever,
         catalog=catalog,
-        purpose_fallbacks={"kb_chat": kb_agent_config},
+        purpose_fallbacks={"kb_chat": now(kb_agent_config)},
         get_user_id=lambda: HELP_SYSTEM_USER,
         max_searches=max_searches,
         superusers=frozenset({HELP_SYSTEM_USER}),
@@ -233,11 +242,7 @@ def wire_agentic_card_drafter(
                 # The loop needs a TOOL-calling model; the card_drafter_llm is only
                 # the "drafting enabled" flag, so drive the loop with the kb_chat
                 # model + endpoint.
-                agent_config=default_card_drafter_config(
-                    model=kb_agent_config.model,
-                    llm_base_url=kb_agent_config.llm_base_url,
-                    llm_api_key=kb_agent_config.llm_api_key,
-                ),
+                agent_config=lambda: _drafter_config_for(now(kb_agent_config)),
                 # Pass the glossary-only spec UNCHANGED. `max_searches` is
                 # deliberately NOT applied here (it stays a bridge-level cap for
                 # OTHER sub-agents): re-enabling the drafter's chunk/wiki search is

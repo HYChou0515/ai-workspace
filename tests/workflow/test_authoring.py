@@ -296,3 +296,14 @@ def test_invalid_dsl_reports_validation_errors(tmp_path):
     )
     diags = check_profile_dir(tmp_path, "app/p")
     assert any("workflow.json:" in d.message and "not declared" in d.message for d in diags)
+
+
+def test_check_refuses_a_workflow_id_that_boot_refuses():
+    # final review 4: boot refuses an id that is not a plain name (it is a path);
+    # `workflow check` must catch it first, by the same rule.
+    from workspace_app.workflow.authoring import _check_workflow_ids
+    from workspace_app.workflow.manifest import WorkflowManifest
+
+    diags = _check_workflow_ids([WorkflowManifest(id="daily.v2")], "x")
+
+    assert any("plain name" in d.message for d in diags), diags

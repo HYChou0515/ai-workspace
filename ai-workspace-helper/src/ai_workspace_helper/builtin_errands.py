@@ -254,10 +254,11 @@ def fetch(ctx: ErrandContext, url: str) -> FetchedPage:
     return FetchedPage(title=title, url=where, markdown=markdown)
 
 
-def build(targets: Callable[[], list[dict[str, str]]]) -> dict[str, Errand]:
+def build(targets: Callable[[], list[dict[str, str]]], site: Any = None) -> dict[str, Errand]:
     """The errands, given where the deploy's search destinations come from
     (`GET /api/lookup-targets`, asked per search so an operator's change
-    reaches a helper that is already running)."""
+    reaches a helper that is already running) — and `ask_ext_ai` when the
+    helper was packed with the company's site file (docs/plan-ext-ai.md D7)."""
 
     def search(ctx: ErrandContext, query: str) -> FetchedPage:
         target = pick_search_target(targets())
@@ -269,7 +270,12 @@ def build(targets: Callable[[], list[dict[str, str]]]) -> dict[str, Errand]:
             raise ErrandFailed(f"not a web address: {url!r}")
         return fetch(ctx, url)
 
-    return {"search": search, "open_url": open_url}
+    errands: dict[str, Errand] = {"search": search, "open_url": open_url}
+    if site is not None:
+        from .ext_ai import errand as ext_ai_errand
+
+        errands["ask_ext_ai"] = ext_ai_errand(site)
+    return errands
 
 
 __all__ = ["build", "fetch", "looks_like_a_verification", "pick_search_target", "search_url"]

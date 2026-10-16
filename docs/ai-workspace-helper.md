@@ -2,10 +2,10 @@
 
 「請幫我查」卡片(`ask_outside`,見 [plan-outside-lookup](plan-outside-lookup.md))原本要使用者自己開瀏覽器查、
 複製、貼回來。**小幫手**(正式名稱 AI Workspace Helper,桌面捷徑也叫這個名字)是裝在使用者自己電腦上的小程式:它用使用者電腦上的 Chrome 開網頁,把整頁轉成
-Markdown 交回卡片——使用者只要在搜尋時按一下「查」。設計與取捨在 [plan-outside-helper](plan-outside-helper.md)。
+Markdown 交回卡片——使用者只要在搜尋時按一下「Google search」(按鈕寫的是部署設定的搜尋目的地)。設計與取捨在 [plan-outside-helper](plan-outside-helper.md)。
 
-- 只有**搜尋**要按「查」(查詢字可以先改);**開網址**時,若那個網址出現在這個聊天先前查回來的內容裡,
-  小幫手直接開,不再問;AI 自己寫出的網址照樣要按「查」。
+- 只有**搜尋**要按「Google search」(搜尋框裡的關鍵字由你自己打或貼上,AI 的建議在框的上方,可以複製);**開網址**時,若那個網址出現在這個聊天先前查回來的內容裡,
+  小幫手直接開,不再問;AI 自己寫出的網址照樣要按「開啟這個網址」。自己查和交給小幫手,按鈕上的字一樣(自己查的多一個 ↗,表示會開新分頁;plan-ext-ai D8)。
 - 小幫手沒開、暫停、登入過期時,卡片照以前的方式讓使用者自己查、自己貼,只多一行「小幫手未連線」和「怎麼安裝」連結(這個部署沒發布小幫手時連這行都沒有)。
   小幫手正在處理這張卡片時(例如等你完成驗證),卡片照樣顯示進度。
 - 網站要人機驗證時(Google 的「異常流量」、reCAPTCHA、hCaptcha、Cloudflare 的「Just a moment…」),小幫手把 Chrome 視窗叫到前面、卡片顯示「請在小幫手的 Chrome 視窗裡完成驗證」,最多等 5 分鐘;你完成驗證、頁面跳到內容後它才讀。Cloudflare 直接封鎖的網站(錯誤 1020 等)人也過不去,小幫手會直接說,請自己查、貼上內容(plan D25)。
@@ -56,12 +56,13 @@ Markdown 交回卡片——使用者只要在搜尋時按一下「查」。設�
 
 ## 使用者:平常
 
-- 卡片出現時,搜尋按「**查**」;開網址看卡片上的完整網址,沒查過的才要按「查」。卡片會顯示「小幫手正在查…」,
+- 卡片出現時,搜尋按「**Google search**」;開網址看卡片上的完整網址,沒查過的才要按「開啟這個網址」。卡片會顯示「小幫手正在查…」和已經等了幾秒,
   好了就收起來,AI 接著讀;存在哪個檔(`lookups/…`)寫在它送出的那則訊息裡。重新整理頁面也看得到進行中的工作,
   不會重查一次。小幫手中途被關掉(電腦闔上),兩分鐘後卡片就退回「未連線」,可以自己查。
 - 遇到「我不是機器人」之類的驗證,小幫手把它的 Chrome 視窗叫到前面,卡片顯示「請在小幫手的 Chrome 視窗裡完成驗證」。
-  在那個視窗完成驗證,它就繼續;5 分鐘沒完成,這次就算失敗,卡片可以「重查」或「自己查」。
+  在那個視窗完成驗證,它就繼續;5 分鐘沒完成,這次就算失敗,卡片可以「再 Google search 一次」(開網址是「再開一次」)或「自己查」。
 - 一次只做一件。頁面打不開(例如 404)、逾時,卡片會寫原因。
+- 「問外部AI」卡片(部署有開時):看過、需要的話改一下問題,按「**問外部AI**」。第一次小幫手會打開公司 AI 的登入頁,卡片顯示「請在小幫手的 Chrome 視窗裡登入外部AI」,在那個視窗登入就好。等待時卡片顯示已經等了幾秒,可以取消。
 
 ## 使用者:更新
 
@@ -129,6 +130,41 @@ python3 scripts/pack_ai_workspace_helper.py --version 0.1.0 [--min-version 0.1.0
 小幫手每次報到會回報它的版本、Chrome、Playwright、Python 版本,存在後端(`_AiWorkspaceHelperPresence`)。
 小幫手**不會自己更新**(plan D21):發布新版後,使用者的小視窗會在啟動後第一次連上 AI Workspace 時(以及被停用後恢復連線時)、或之後 6 小時內顯示「有新版」,由使用者自己下載重裝;
 要強迫升級就改 `min_version`,低於它的小幫手停止接工作、顯示「這個版本已停用」。
+
+## 運營方:讓 AI 能問公司的網頁 AI(問外部AI)
+
+公司有能上外網、但只有網頁介面的 AI 時,可以讓聊天裡的 AI 透過小幫手去問它([plan-ext-ai](plan-ext-ai.md))。
+AI 起草問題,卡片上完整顯示、使用者可以改,按「問外部AI」後,小幫手在使用者的 Chrome 裡打開那個網頁、貼上、送出,
+等回答寫完帶回,存進 `lookups/`。
+
+**那個網頁長什麼樣,只有公司知道**,所以怎麼操作它寫在公司自己的一個 Python 檔,打包時放進小幫手——伺服器設定裡
+沒有網址,伺服器也不會送程式碼給小幫手。步驟:
+
+1. 複製 `ai-workspace-helper/ext_ai_site.template.py` 成 `ext_ai_site.py`,把 `URL` 改成「打開就是空白對話」的那一頁。
+   範本用通用的猜法操作網頁:找最大的輸入框、貼上、按 Enter、等文字不再變動、等「Stop / 停止」按鈕消失、取送出後
+   新出現的回答。`ext_ai_site.py` 已列在 `.gitignore`,不會被 commit。
+2. 在自己電腦上對真的網頁試跑(會開一個 Chrome,第一次請在裡面登入,之後會記得;問題、等待中的提示和回答都印在
+   自己的終端機,不經過 AI Workspace 的伺服器):
+
+   ```bash
+   python -m ai_workspace_helper try-ext-ai --site ext_ai_site.py "隨便一個問題"
+   ```
+
+   在這個 repo 裡:`PYTHONPATH=ai-workspace-helper/src uv run --no-sync python -m ai_workspace_helper try-ext-ai …`;
+   裝好小幫手的電腦上,用它自己的 Python(有主控台的那個):`%LOCALAPPDATA%\AIWorkspaceHelper\versions\<版本>\venv\Scripts\python.exe -m ai_workspace_helper try-ext-ai …`。哪一步不對,就改 `ask` 裡那幾行;失敗訊息會說它在等什麼
+   (例如「等了 300 秒還沒等到:外部AI 開始回答」),其他錯誤會連原始錯誤和網站檔的哪一行一起印出來。等待一律用 `h.wait_until` / `h.wait_still` / `h.wait_for_login`:
+   它們會讓這件工作一直算「有人在做」;直接用 `page.wait_for_timeout` 等太久(120 秒),卡片就當這件工作
+   沒人做、退回手動,其實它還在問(同一個人在另一台電腦也開著小幫手時,那台還可能再問一次)。
+3. 打包時帶上它(其餘同「發布一版」):
+
+   ```bash
+   python3 scripts/pack_ai_workspace_helper.py --version <新版> --ext-ai-site ext_ai_site.py
+   ```
+
+   打包前會用小幫手自己的載入方式檢查一次,缺 `URL` 或 `ask` 就拒絕;也用小幫手自己的 Python 3.9 檢查(和小幫手的程式碼同一套)跑一次,有常見的 3.9 跑不了的寫法(例如沒有 `from __future__ import annotations` 卻寫了 `str | None`)也拒絕。
+4. 設 `server.ext_ai_enabled: true`([設定](configuration.md)),重新部署;大家重裝新版小幫手。
+
+使用者的小幫手沒有這個檔(舊版、或沒連線)時,卡片走手動:「複製問題」,自己去問,把回答貼回卡片。
 
 ## IT 要放行的
 

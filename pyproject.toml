@@ -22,6 +22,9 @@ dependencies = [
     # way of rich (litellm); declared now because we import it.
     "markdown-it-py>=3",
     "openai-agents>=0.17.3",
+    # The capacity analysis (src/workspace_app/capacity/analysis) — present
+    # anyway by way of llama-index-core, declared because it is imported.
+    "numpy>=1.26.4",
     "openpyxl>=3.1.5",
     "pypdfium2>=5.9.0",
     "pyyaml>=6.0.3",

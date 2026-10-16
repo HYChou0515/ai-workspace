@@ -123,6 +123,8 @@ async def test_the_tool_says_a_search_is_a_few_keywords() -> None:
 
     doc = ask_outside_impl.__doc__ or ""
     assert "keywords" in doc and "10 words" in doc
+    # …which the user, not the AI, puts in the box (plan-outside-lookup D13)
+    assert "you suggest" in doc and "types or pastes" in doc
 
 
 def test_only_a_declaration_as_the_tool_writes_it_is_a_card() -> None:

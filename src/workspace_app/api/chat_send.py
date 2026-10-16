@@ -1562,6 +1562,10 @@ class ChatSendService:
                     on_complete=persist,
                     on_turn_end=lambda: self._turn_ended(investigation_id, rid),
                     pending=pending,
+                    # docs/plan-capacity-usage.md §6.3: the question's own
+                    # timestamp is the acceptance (D13 (b) starts here).
+                    surface="chat",
+                    accepted_ms=created,
                 )
                 # #493 symptom 1 (504): await THIS turn's completion, but only up to a
                 # deadline — then DETACH it so a long turn can't hang the POST until the

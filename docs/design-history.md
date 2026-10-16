@@ -38,6 +38,7 @@
 | [plan-pptx-preview.md](plan-pptx-preview.md) | workspace 裡的簡報(pptx/ppt/odp)在沙盒轉 PDF、以內容 hash 快取在沙盒旁,用 PDF 檢視器看 |
 | [plan-outside-lookup.md](plan-outside-lookup.md) | 斷網部署：AI 出「請幫我查」卡片，使用者在瀏覽器查網路或開網址，貼回結果存成檔案 |
 | [plan-outside-helper.md](plan-outside-helper.md) | 小幫手：使用者電腦上的 Python 小程式用 Playwright 開 Chrome 代為查網路，搜尋與 AI 自己寫的網址出去前人點頭、先前查到的連結直接開，抓回的整頁（像全選貼上）直接送給 AI；沒連線退回手動流程 |
+| [plan-ext-ai.md](plan-ext-ai.md) | 問外部AI：AI 起草問題、人按「問外部AI」，小幫手在使用者的 Chrome 裡打開公司的網頁 AI、貼上、送出、等回答寫完帶回；網頁怎麼操作由公司寫的一個 Python 檔決定，打包進小幫手 |
 | [plan-tool-usage-stats.md](plan-tool-usage-stats.md) | 工具使用統計：管理者在 Diagnostics 看 AI 用了哪些工具、誰用、在哪個場合、失敗幾次、平均多久 |
 | [plan-tools-picker-groups.md](plan-tools-picker-groups.md) | 工具挑選器依套件摺疊、內建工具一組、每組三態 |
 | [plan-tool-on-demand-loading.md](plan-tool-on-demand-loading.md) | 工具按需載入：wire 的 tools 陣列就是目錄（名字＋100 字元描述＋空 schema），用到才載入完整 schema；載入與重試不入歷史 |
@@ -115,6 +116,7 @@
 | [plan-skill-hub-ui-polish.md](plan-skill-hub-ui-polish.md) | skill hub 的 UI 打磨（#826）：九段 demo 錄影抓到的 22 個問題，每一項對照教科書做法（Material 3 / Apple HIG / NN/g / Polaris / GOV.UK / MUI）決定 D1–D17——對話框預設留白、搜尋框不失焦、錯誤只報一次、成功提示、安裝前先標「已有同名 skill」、圖示各自專用＋tooltip、可見範圍對話框走 i18n、伺服器拒絕句改 code、工具回話分段、窄寬的頂欄與麵包屑；版面一律真 Chromium 量 1280／390 |
 | [plan-skill-hub-history.md](plan-skill-hub-history.md) | skill hub 的歷史與回溯、下載/使用次數、問 AI 該裝哪個(grill 完成,P1–P10):一個 skill 一個 bare git repo(自己的 `skill_hub.git_root`)、`master` = 目前版本、push `--force-with-lease` 搶鎖、回復 = `master` 指回舊 commit、每個 revision 打 tag `r-<revision id>`、hub 副本 `.origin` 記 commit、LFS 以路徑模式、檔案數上限 1000;使用次數記憶體累積每 2 小時寫出;只在 item 聊天問 AI、`show_skill_hub_entry` 卡片 |
 | [plan-skill-hub-ux-redo.md](plan-skill-hub-ux-redo.md) | skill hub 版面與資訊架構重做：列表改緊湊列表、只列原作（fork 數連到原作頁）、owner 篩選與「最近更新」、每次 50 筆「載入更多」；skill 頁分頁籤（說明／檔案／版本紀錄／fork）＋右側欄、「安裝到 workspace…」、你裝在哪、管理 ▾；版本自動編號；檔案樹取代膠囊；workspace 的 skill 面板重排；畫面文字 item → workspace；寬度等 web demo 再定 |
+| [plan-skill-install-picker.md](plan-skill-install-picker.md) | skill 頁「安裝到 workspace…」的清單只問資料庫、一打開就出現；每列再各自問「裝下去會怎樣」（檢查中可選、同時最多 4 列、忙碌的沙盒不再卡住整張清單），版面照 Material 3 兩行式清單（推翻 ux-redo D6 的「整張清單等每個 workspace 都標好才出現」） |
 | [plan-chat-video.md](plan-chat-video.md) | **PR #817(script 版 P1–P5 已做)**。把一段對話紀錄做成影片：吃 `.chat.json`、一條指令、不打 LLM；純 HTML/CSS 的 zoom 推進輸入框、指定長寬；核心是純函式 + msgspec options，為之後的前端按鈕 + 獨立 job / worker pod 鋪路 |
 | [plan-headless-env.md](plan-headless-env.md) | 沒有人按送出的 turn（item 排程、goal driver、event trigger、整條 workflow）也拿得到環境變數：`IRequestEnv` 多一個 `env_without_request(user_id, item_id)`，預設 `{}`，部署的 impl 決定回 service account 還是什麼都不給；平台仍不認得 service account 這個詞；改變 #714「workflow 整條不接」的定案並寫明為何原顧慮不再成立 |
 | [plan-wui-viewer-login.md](plan-wui-viewer-login.md) | 看頁面的人用自己的登入：環境變數分 shared（item 上，不動）與 private（每人每 item 一份，只有本人讀得到）兩層，每個 key 一種政策（`shared > private` 預設=今天的行為 / `private > shared` / `private only`）；callTool、聊天、頁面起的 run 用按的人，排程要本人按「用我的身分執行」才綁定、內容一改就失效；Env 面板分「只有我／所有參與者」兩分頁、tool 下拉換成可收合分段；`/w/` 在 iframe 上方加平台列（line of death） |
@@ -139,6 +141,7 @@
 | [plan-stop-reliability.md](plan-stop-reliability.md) | Stop 的可靠性 |
 | [plan-archive-pack.md](plan-archive-pack.md) | 回收時把備份多存成一個 `<item>.pack.<gen>-<bytes>.tar`，再開時 NFS 只讀 1 次不讀 89k 次；樹仍是真相、名字帶 gen 自然作廢 |
 | [plan-tool-running-version.md](plan-tool-running-version.md) | 第三方工具「沙盒裡實際在跑哪一版」：建立沙盒時把掛的 `{sha, version}` 寫進共用位址列；AI 的工具說明與工具選單改說實際版本，不一致時只告知、選單一顆「關閉沙盒以更新」；查不到當最新 |
+| [plan-capacity-usage.md](plan-capacity-usage.md) | 容量規劃：每個人在每個地方（API、worker、沙盒、Postgres、GPU）用了多少 CPU、記憶體、磁碟、GPU，人更多時要買幾台機器、幾張卡、何時要下單——平台寫用量紀錄並定義四個資料來源介面（實作由運營方補），superuser 才看得到的九個視圖 |
 
 ## 前端與介面
 

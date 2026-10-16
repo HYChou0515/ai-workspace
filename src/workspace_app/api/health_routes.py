@@ -28,6 +28,7 @@ from ..health.replay import (
     ReplayUnsupported,
 )
 from ..health.service import HealthService
+from ..live_value import Live, now
 
 
 class CheckRow(BaseModel):
@@ -184,6 +185,7 @@ def register_replay_routes(
     service: ReplayService | None,
     load_turn: LoadTurn,
     load_doc: LoadDoc,
+    ext_ai: bool = False,
 ) -> None:
     def _service() -> ReplayService:
         if service is None:
@@ -211,6 +213,8 @@ def register_replay_routes(
                 template_profile=template_profile,
                 # An item thread is a chat; a KB chat thread holds no `ask_user`.
                 in_chat=body.source == "rca",
+                # …and on a deploy with the 問外部AI card, that one (plan-ext-ai D5)
+                ext_ai=ext_ai,
             )
         except ReplayInvalidTarget as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -319,7 +323,9 @@ class CustomQuestionOut(CustomQuestionBody):
     id: str  # specstar resource id (for edit/delete)
 
 
-def register_sanity_routes(app: FastAPI | APIRouter, models: list[str], coordinator: Any) -> None:
+def register_sanity_routes(
+    app: FastAPI | APIRouter, models: Live[list[str]], coordinator: Any
+) -> None:
     """The model-sanity matrix API: GET the question/level/model metadata (the FE
     draws the empty grid), POST a run (cell or auto battery). Cell results
     themselves are a specstar resource — the FE lists ``/sanity-result`` directly
@@ -332,7 +338,7 @@ def register_sanity_routes(app: FastAPI | APIRouter, models: list[str], coordina
         # #231: built-ins ∪ enabled custom questions (the coordinator merges them),
         # so the FE matrix shows user-authored questions alongside the bundled 19.
         return SanityMetaOut(
-            models=list(models),
+            models=list(now(models)),
             levels=[SanityLevelOut(level=lvl, label=LEVEL_LABELS[lvl]) for lvl in ALL_LEVELS],
             questions=[
                 SanityQuestionOut(

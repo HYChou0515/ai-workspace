@@ -209,6 +209,8 @@ class LitellmEmbedder(_PrefixedEmbedder):
     ) -> list[list[float]]:  # pragma: no cover — live model
         import litellm
 
+        from ..capacity.llm_tags import tagged
+
         resp = litellm.embedding(
             model=self._model,
             input=texts,
@@ -216,5 +218,7 @@ class LitellmEmbedder(_PrefixedEmbedder):
             num_retries=0,  # #249: call_with_failover owns retry, not litellm
             api_base=base_url,
             api_key=self._api_key,
+            # docs/plan-capacity-usage.md §7: whose call this is, for LiteLLM's log.
+            **tagged("embed"),
         )
         return [item["embedding"] for item in resp.data]

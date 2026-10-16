@@ -56,3 +56,20 @@ def _apply(target: dict[str, Any], override: dict[str, Any]) -> None:
 
 
 _MISSING: Any = object()
+
+
+def apply_merge_patch(target: Any, patch: Any) -> Any:
+    """A fresh copy of `target` with `patch` applied as an RFC 7396 JSON Merge
+    Patch: objects merge key by key, `null` removes a key, anything else
+    replaces. The settings page stores its changes in this form
+    (docs/plan-model-settings.md M11, M12) — `merge_layered` cannot express a
+    removal, which is how a default preset is hidden."""
+    if not isinstance(patch, dict):
+        return copy.deepcopy(patch)
+    out = copy.deepcopy(target) if isinstance(target, dict) else {}
+    for key, value in patch.items():
+        if value is None:
+            out.pop(key, None)
+        else:
+            out[key] = apply_merge_patch(out.get(key), value)
+    return out

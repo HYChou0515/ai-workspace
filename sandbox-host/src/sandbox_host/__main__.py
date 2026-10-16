@@ -11,13 +11,17 @@ import asyncio
 import contextlib
 import os
 import signal
+import sys
+import time
 from collections.abc import Callable
 
 import uvicorn
 
 from .app import check_cgroup_ready
+from .cgroup_usage import UsageSampler
 from .config import load_settings
 from .service import build_host_app, resolve_cgroup_root
+from .usage_wire import line, pod_name
 
 
 async def _reaper_loop(
@@ -87,6 +91,35 @@ def _reaper_task(
     return None
 
 
+async def _usage_loop(sampler, sample_s: float) -> None:
+    """docs/plan-capacity-usage.md §6.5: read every live sandbox's cgroup each
+    `sample_s`, off the event loop; when cancelled (the host stopping), write
+    what has been measured, the open window included."""
+    try:
+        while True:
+            await asyncio.sleep(sample_s)
+            try:
+                await asyncio.to_thread(sampler.sample)
+            except Exception as exc:  # noqa: BLE001 — measuring must never stop the host
+                print(f"usage: sampling failed: {exc!r}", flush=True)
+    finally:
+        with contextlib.suppress(Exception):
+            sampler.close()
+
+
+def _usage_task(sampler, *, sample_s: float) -> asyncio.Task | None:
+    """The usage sampler, or None when `SANDBOX_HOST_USAGE_SAMPLE_S=0` switches it off."""
+    if sample_s <= 0:
+        return None
+    return asyncio.create_task(_usage_loop(sampler, sample_s))
+
+
+def _print_lines(docs: list[dict]) -> None:
+    """One JSON line per record on stdout, for the deploy's collector (D3)."""
+    sys.stdout.write("".join(line(doc) + "\n" for doc in docs))
+    sys.stdout.flush()
+
+
 async def _serve(
     app,
     controller,
@@ -95,6 +128,8 @@ async def _serve(
     *,
     tool_cache_max_bytes: int | None = None,
     uv_cache_max_bytes: int | None = None,
+    sampler=None,
+    usage_sample_s: float = 0.0,
 ) -> None:
     loop = asyncio.get_running_loop()
     # SIGTERM (scale-down/rollout) → drain so no new sandboxes land while the
@@ -106,14 +141,16 @@ async def _serve(
         tool_cache_max_bytes=tool_cache_max_bytes,
         uv_cache_max_bytes=uv_cache_max_bytes,
     )
+    usage = _usage_task(sampler, sample_s=usage_sample_s) if sampler is not None else None
     server = uvicorn.Server(uvicorn.Config(app, host=bind_host, port=bind_port))
     try:
         await server.serve()
     finally:
-        if reaper is not None:
-            reaper.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await reaper
+        for task in (reaper, usage):
+            if task is not None:
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
 
 
 def main() -> None:
@@ -140,6 +177,21 @@ def main() -> None:
     )
     check_cgroup_ready(cgroup_root)  # fail loud: isolation needs cgroup v2
     app = build_host_app(settings, pod_ip=os.environ.get("POD_IP"))
+    # docs/plan-capacity-usage.md §6.5: this host measures its own sandboxes.
+    sampler = UsageSampler(
+        cgroup_root,
+        window_s=settings.usage_window_s,
+        pod=pod_name(),
+        component="sandbox-host",
+        targets=app.state.controller.usage_targets,
+        write=_print_lines,
+        clock=time.time,
+    )
+    print(
+        f"→ usage: sample every {settings.usage_sample_s:g}s (0 = off), "
+        f"window {settings.usage_window_s}s",
+        flush=True,
+    )
     print("✓ sandbox host ready", flush=True)
     asyncio.run(
         _serve(
@@ -149,6 +201,8 @@ def main() -> None:
             int(bind_port),
             tool_cache_max_bytes=settings.tool_cache_max_bytes,
             uv_cache_max_bytes=settings.uv_cache_max_bytes,
+            sampler=sampler,
+            usage_sample_s=settings.usage_sample_s,
         )
     )
 
