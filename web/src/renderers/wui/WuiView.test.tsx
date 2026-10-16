@@ -13,11 +13,24 @@ import type { FileContent } from "../../api/types";
 import { subscribeAgentDraft } from "../../lib/agentDraftBus";
 import { publishFileChanged } from "../../lib/fileChangedBus";
 import type { QueryClient } from "@tanstack/react-query";
-import { makeTestQueryClient, QueryWrap } from "../../test/queryWrapper";
+import { makeTestQueryClient, QueryWrap as AppProviders } from "../../test/queryWrapper";
+import { LocaleScope } from "../../lib/i18n";
 import type { ViewSpec } from "../entity/types";
 import { WUI_CSP } from "./assemble";
 import { WUI_PROTOCOL } from "./protocol";
 import { MAX_REPORTS, WuiView, type WuiChrome } from "./WuiView";
+
+// These tests read the pane's English: its author strip and Deploy panel go
+// through `t()` (docs/plan-deploy-reach.md decision 7), and outside a provider
+// `t()` speaks zh-TW. The Chinese is pinned where it is decided
+// (`DeployReach.test.tsx`, the zh-TW case in `WuiView.test.tsx`).
+function QueryWrap(props: Parameters<typeof AppProviders>[0]) {
+  return (
+    <LocaleScope locale="en">
+      <AppProviders {...props} />
+    </LocaleScope>
+  );
+}
 
 // This file is the single-page way — one assembled `srcdoc` document. A page
 // served from its own address is `WuiView.served.test.tsx`'s; here the
@@ -3078,6 +3091,68 @@ describe("WuiView: Deploy", () => {
       expect(screen.queryByRole("textbox", { name: /address/i })).toBeNull();
       // Positive control for the sentence: the same page with the POST
       // answering 200 does say Deployed (the test above).
+    });
+
+    describe("says who the link opens for (docs/plan-deploy-reach.md)", () => {
+      /** The pane over a workspace whose item, manifest and identity are
+       * already read — seeded, and never refetched over by the fetch stub. */
+      function renderSeeded(permission: unknown, locale?: "zh-TW" | "en") {
+        const client = makeTestQueryClient();
+        client.setDefaultOptions({ queries: { ...client.getDefaultOptions().queries, staleTime: Infinity } });
+        client.setQueryData(qk.currentUser, "bob");
+        client.setQueryData(qk.me, { is_superuser: false, groups: [] });
+        client.setQueryData(qk.users, []);
+        client.setQueryData(qk.appManifest("rca"), {
+          slug: "rca",
+          resource_route: "/rca-investigation",
+          labels: {},
+          item: { noun: "Investigation" },
+          layout: { primary_surface: "ide" },
+        });
+        client.setQueryData(qk.appItem("rca", "item1"), {
+          resource_id: "item1",
+          title: "Item one",
+          created_by: "bob",
+          owner: "bob",
+          permission,
+        });
+        const pane = (
+          <AppProviders client={client}>
+            <WorkspaceSlugProvider value="rca">
+              <FileServiceProvider value={svc({ ...PLAIN })}>
+                <WuiView path="/sales/page.ai.yaml" spec={{ view: "wui", entity: "" } as ViewSpec} />
+              </FileServiceProvider>
+            </WorkspaceSlugProvider>
+          </AppProviders>
+        );
+        render(<LocaleScope locale={locale ?? "en"}>{pane}</LocaleScope>);
+      }
+
+      it("a private workspace: only you, under the address, in place of the rule", async () => {
+        vi.stubGlobal("fetch", vi.fn(withDeploy()));
+        renderSeeded({ visibility: "private" });
+        fireEvent.click(await screen.findByRole("button", { name: /^deploy$/i }));
+
+        await screen.findByRole("textbox", { name: /address/i });
+        expect(screen.getByText("Only you can open this link right now.")).toBeInTheDocument();
+        expect(screen.getByRole("button", { name: "Sharing…" })).toBeInTheDocument();
+        expect(screen.queryByText(/anyone who can open this item/i)).toBeNull();
+      });
+
+      it("speaks the reader's language — the strip and the panel in zh-TW", async () => {
+        vi.stubGlobal("fetch", vi.fn(withDeploy()));
+        renderSeeded({ visibility: "private" }, "zh-TW");
+        for (const word of ["重新整理", "回報問題"]) {
+          expect(screen.getByRole("button", { name: word })).toBeInTheDocument();
+        }
+        fireEvent.click(await screen.findByRole("button", { name: "Deploy" }));
+
+        expect(await screen.findByRole("textbox", { name: "頁面網址" })).toHaveValue(ADDRESS);
+        expect(screen.getByText("✓ 已 Deploy")).toBeInTheDocument();
+        expect(screen.getByRole("button", { name: "複製" })).toBeInTheDocument();
+        expect(screen.getByRole("link", { name: "開啟" })).toBeInTheDocument();
+        expect(screen.getByText("目前只有你打得開這個連結。")).toBeInTheDocument();
+      });
     });
 
     it("never POSTs a page its own read could not open", async () => {

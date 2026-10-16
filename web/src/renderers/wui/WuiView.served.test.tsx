@@ -14,11 +14,24 @@ import type { FileContent } from "../../api/types";
 import { OpenFileProvider } from "../../hooks/openFile";
 import { autoBuildScope, setWuiAutoBuild } from "../../lib/wuiAutoBuild";
 import { WorkspaceSlugProvider } from "../../hooks/useWorkspaceSlug";
-import { makeTestQueryClient, QueryWrap } from "../../test/queryWrapper";
+import { makeTestQueryClient, QueryWrap as AppProviders } from "../../test/queryWrapper";
+import { LocaleScope } from "../../lib/i18n";
 import type { ViewSpec } from "../entity/types";
 import { WUI_PROTOCOL } from "./protocol";
 import { openServedWui } from "./served";
 import { WuiView, type WuiChrome } from "./WuiView";
+
+// These tests read the pane's English: its author strip and Deploy panel go
+// through `t()` (docs/plan-deploy-reach.md decision 7), and outside a provider
+// `t()` speaks zh-TW. The Chinese is pinned where it is decided
+// (`DeployReach.test.tsx`, the zh-TW case in `WuiView.test.tsx`).
+function QueryWrap(props: Parameters<typeof AppProviders>[0]) {
+  return (
+    <LocaleScope locale="en">
+      <AppProviders {...props} />
+    </LocaleScope>
+  );
+}
 
 const served = vi.hoisted(() => ({ base: "http://localhost:3000/api/wui-content/TOK/" as string | null }));
 vi.mock("./served", () => ({ openServedWui: vi.fn(async () => served.base) }));

@@ -14,9 +14,22 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { FileServiceProvider, type FileService } from "../../api/fileService";
 import { HttpError } from "../../api/http";
 import { WorkspaceSlugProvider } from "../../hooks/useWorkspaceSlug";
-import { QueryWrap } from "../../test/queryWrapper";
+import { QueryWrap as AppProviders } from "../../test/queryWrapper";
+import { LocaleScope } from "../../lib/i18n";
 import type { ViewSpec } from "../entity/types";
 import { WuiView } from "./WuiView";
+
+// These tests read the pane's English: its author strip and Deploy panel go
+// through `t()` (docs/plan-deploy-reach.md decision 7), and outside a provider
+// `t()` speaks zh-TW. The Chinese is pinned where it is decided
+// (`DeployReach.test.tsx`, the zh-TW case in `WuiView.test.tsx`).
+function QueryWrap(props: Parameters<typeof AppProviders>[0]) {
+  return (
+    <LocaleScope locale="en">
+      <AppProviders {...props} />
+    </LocaleScope>
+  );
+}
 
 vi.mock("../../api/http", async (orig) => ({
   ...(await orig<Record<string, unknown>>()),

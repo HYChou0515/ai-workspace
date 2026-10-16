@@ -1357,6 +1357,78 @@ export const messages = {
   // 下架, the opposite of Deploy's 上架 (docs/wui.md) — not 移除, which the
   // author read as "delete the page" (「移除是什麼意思？」). The tooltip says
   // what stays.
+  // The WUI pane's author toolbar and Deploy panel (docs/plan-deploy-reach.md
+  // decision 7). "Deploy" stays the button's word in both — the WUI overview's
+  // copy already names it.
+  "wui.bar.refresh": { "zh-TW": "重新整理", en: "Refresh" },
+  "wui.bar.rebuild": { "zh-TW": "重新建置", en: "Rebuild" },
+  "wui.bar.building": { "zh-TW": "建置中…", en: "Building…" },
+  "wui.bar.autoRebuild": { "zh-TW": "自動重新建置", en: "Auto-rebuild" },
+  "wui.bar.autoRebuild.tip": {
+    "zh-TW": "每次打開這個頁面時重新建置",
+    en: "Rebuild this page whenever you open it",
+  },
+  "wui.bar.report": { "zh-TW": "回報問題", en: "Report a problem" },
+  "wui.bar.tellAgent": { "zh-TW": "告訴 AI（{n}）", en: "Tell the agent ({n})" },
+  "wui.bar.deploy": { "zh-TW": "Deploy", en: "Deploy" },
+  "wui.bar.deploying": { "zh-TW": "Deploy 中…", en: "Deploying…" },
+  "wui.bar.deployingFile": { "zh-TW": "正在 Deploy {file}…", en: "Deploying {file}…" },
+  "wui.bar.cancel": { "zh-TW": "取消", en: "Cancel" },
+  "wui.bar.cancel.tip": { "zh-TW": "停止 Deploy {file}", en: "Stop deploying {file}" },
+  "wui.deploy.done": { "zh-TW": "✓ 已 Deploy", en: "✓ Deployed" },
+  "wui.deploy.address": { "zh-TW": "頁面網址", en: "Page address" },
+  "wui.deploy.copy": { "zh-TW": "複製", en: "Copy" },
+  "wui.deploy.copied": { "zh-TW": "已複製", en: "Copied" },
+  "wui.deploy.copyFailed": { "zh-TW": "無法複製，請自行選取", en: "Copy failed — select it" },
+  "wui.deploy.open": { "zh-TW": "開啟", en: "Open" },
+  "wui.deploy.failed.build": { "zh-TW": "Deploy 失敗：請看建置輸出。", en: "Deploy failed — see the build output." },
+  "wui.deploy.failed.manifest": {
+    "zh-TW": "Deploy 失敗：無法確認這個頁面要不要建置：{why}",
+    en: "Deploy failed — could not check whether this page has a build: {why}",
+  },
+  "wui.deploy.failed.open": {
+    "zh-TW": "Deploy 失敗：頁面打不開：{why}",
+    en: "Deploy failed — the page does not open: {why}",
+  },
+  "wui.deploy.failed.list": {
+    "zh-TW": "Deploy 失敗：頁面無法列進 WUI：{why}",
+    en: "Deploy failed — the page could not be listed in WUI: {why}",
+  },
+  "wui.deploy.stopped.superseded": {
+    "zh-TW": "Deploy 已停止：回到這個頁面之前，畫面被重新整理、重新建置或又 Deploy 了一次。請再 Deploy 一次。",
+    en: "Deploy stopped — the pane was refreshed, rebuilt or deployed again before it was back on this page. Deploy again.",
+  },
+  "wui.deploy.stopped.changed": {
+    "zh-TW": "Deploy 已停止：離開這個頁面太久，結果已經過期。請再 Deploy 一次。",
+    en: "Deploy stopped — the pane was away from this page long enough for the result to expire. Deploy again.",
+  },
+  "wui.deploy.stopped.unexpected": {
+    "zh-TW": "Deploy 意外停止：請看瀏覽器的主控台。",
+    en: "Deploy stopped unexpectedly — see the browser console.",
+  },
+  // The Deploy panel says who the link opens for (docs/plan-deploy-reach.md).
+  "wui.deploy.reach.owner": {
+    "zh-TW": "目前只有你打得開這個連結。",
+    en: "Only you can open this link right now.",
+  },
+  "wui.deploy.reach.ownerAndAdmins": {
+    "zh-TW": "目前只有擁有者和管理員打得開這個連結。",
+    en: "Only the owner and admins can open this link right now.",
+  },
+  "wui.deploy.reach.shared": {
+    "zh-TW": "只有這個 workspace 的成員打得開這個連結。",
+    en: "Only this workspace's members can open this link.",
+  },
+  "wui.deploy.reach.everyone": { "zh-TW": "所有人都打得開這個連結。", en: "Everyone can open this link." },
+  "wui.deploy.reach.unknown": {
+    "zh-TW": "能打開這個 workspace 的人才能用這個連結。",
+    en: "Anyone who can open this workspace can use this link.",
+  },
+  "wui.deploy.share": { "zh-TW": "分享設定…", en: "Sharing…" },
+  "wui.deploy.askOwner": {
+    "zh-TW": "要給其他人看，請 workspace 的擁有者 {owner} 把他加進來。",
+    en: "To show it to others, ask the workspace's owner, {owner}, to add them.",
+  },
   "wui.remove": { "zh-TW": "下架", en: "Unlist" },
   "wui.remove.tip": {
     "zh-TW": "從 WUI 總覽下架；頁面和資料夾都留著",
@@ -2841,6 +2913,12 @@ export function LocaleProvider({ children }: { children: React.ReactNode }) {
     setLocaleState(next);
   }, []);
   return <LocaleContext.Provider value={{ locale, setLocale }}>{children}</LocaleContext.Provider>;
+}
+
+/** One locale for a subtree, whatever the reader picked — for a test that
+ * asserts one language's words (the default outside a provider is zh-TW). */
+export function LocaleScope({ locale, children }: { locale: Locale; children: React.ReactNode }) {
+  return <LocaleContext.Provider value={{ locale, setLocale: () => {} }}>{children}</LocaleContext.Provider>;
 }
 
 /** The active locale and a sticky setter. */
