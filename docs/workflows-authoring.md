@@ -100,7 +100,9 @@ await agent_step(wf, *, prompt, phase, check, name=None, key="",
                  tools=None, retries=0, cache=True) -> Any
 ```
 這是通用形式。`check` 是必填的 postcondition(見 [Gates](#gates));`retries` 會把失敗原因
-回灌進 prompt 後重跑。`tools` 是這個 agent 被允許的 tool 子集(⊆ profile 上限)。
+回灌進 prompt 後重跑。`agent_write_step` 宣告了 `outputs`(或 `out` 是 json/yaml/csv)時,
+回覆本身格式錯不會重跑:同一段對話多一輪、不給工具,只請它重新輸出,次數一樣算在 `retries`
+裡([`plan-workflow-output-repair.md`](plan-workflow-output-repair.md))。`tools` 是這個 agent 被允許的 tool 子集(⊆ profile 上限)。
 
 ```python
 await agent_write_step(wf, *, prompt, phase, out, name=None, key="",

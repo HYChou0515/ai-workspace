@@ -179,3 +179,31 @@ Flat integers; each phase is built with `/tdd` and committed on its own.
   Python workflow gains only the format instruction (D8) unless it asks for retries.
 - **Sandbox steps with `outputs`.** No model, nothing to repair; they keep failing as
   today.
+
+## 6. As built (#973)
+
+Where the build adds to or differs from the sections above; this section wins.
+
+- **The repair turn's tools (P4).** `tools=[]` empties `allowed_tools`, but `read_skill` is
+  granted by the item's skills, not by that list, so a repair turn on an item with a skill
+  still held it. `build_workflow_turn` now withholds it when the subset is empty; a node
+  that names any tool still follows the item's skills (the test checks both).
+- **The workflow chat lookup (P5).** The turn and the recorded request resolve the chat
+  through one function, `WorkflowExecutor._workflow_chat`, legacy fallback included, so
+  the request can never land in a different conversation from its answer.
+- **The usage bar (P5).** `context_budget._replayed` kept its own list of roles to skip,
+  so it charged every role it did not name — the new `repair_request`, and the mention
+  and goal markers before it — though the model never reads them. It and
+  `history_items` now read one rule, `turns.replays`; a parity test holds them together.
+- **The reasons carry the value (P3).** `_outputs_check` now says what it got: a wrong
+  type quotes the value, a missing field lists the fields the reply had. The repair
+  request quotes that as the faulty part, and the reason is made where the value is.
+- **The disclosure (P5).** The chat folds the request behind a text button, copying the
+  chat's existing summary fold (`CompactionSummary`), and adds what that fold lacks:
+  `aria-expanded` and `aria-controls`. Control kind: a disclosure —
+  [NN/g, *Progressive Disclosure*](https://www.nngroup.com/articles/progressive-disclosure/)
+  (show the rare, long detail on request) and
+  [W3C APG, *Disclosure (Show/Hide) Pattern*](https://www.w3.org/WAI/ARIA/apg/patterns/disclosure/)
+  (a button with `aria-expanded`, controlling the region it shows).
+- **A retry's words.** The grill called the unchanged state 「重試中」; the run log in fact
+  shows `retrying` and `↻`, and that is what stays. Only a repair has new words.
