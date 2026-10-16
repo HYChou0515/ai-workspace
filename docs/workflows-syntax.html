@@ -737,7 +737,7 @@
 
   <!-- 7 check -->
   <div class="section-head" id="s7"><span class="n">7</span><h2>驗收 check + 重試</h2><span class="gloss">節點怎麼「不合格就不放行」</span></div>
-  <p class="lead">check 是 workflow 強制力的一半：step 產出不合格就<b style="color:var(--tx)">擋下、帶回饋重試</b>，重試 <code class="i">retries</code> 次仍不過 → <code class="i">StepFailed</code>（在 map 內就 skip+collect）。沒有 <code class="i">out</code> 的 agent 一定要有 check。</p>
+  <p class="lead">check 是 workflow 強制力的一半：step 產出不合格就<b style="color:var(--tx)">擋下、帶回饋再試</b>，再試 <code class="i">retries</code> 次仍不過 → <code class="i">StepFailed</code>（在 map 內就 skip+collect）。沒有 <code class="i">out</code> 的 agent 一定要有 check。<b style="color:var(--tx)">回覆本身格式錯</b>（<code class="i">outputs</code> 不是 JSON／缺欄位／型別或 enum 不符；<code class="i">out</code> 的 json／yaml／csv 解析不出來）時，再試是<b style="color:var(--tx)">修補</b>：同一段對話、不給工具，只請它重新輸出該格式，不重跑 step（<a href="plan-workflow-output-repair.md">plan-workflow-output-repair</a>）。</p>
   <div class="grid">
     <div class="card">
       <div class="card-top"><h3>check → 重試 → 失敗</h3><span class="tg now">現行</span></div>
@@ -759,7 +759,7 @@
           <path d="M122 66 C170 82 176 85 216 85" fill="none" stroke="var(--no)" stroke-width="1.2" stroke-dasharray="3 3" opacity=".6"/>
           <circle class="tok" r="3.6" fill="var(--edge-bright)" style="offset-path:path('M60 60 H90 M122 54 C170 38 176 31 216 31')"/>
         </svg>
-        <div class="point">重點：check 不過 → 帶著失敗原因重跑 step，用盡 retries 才算失敗。</div>
+        <div class="point">重點：check 不過 → 帶著失敗原因重跑 step；回覆本身格式錯則只請它重新輸出（不給工具）。兩種共用 retries，用盡才算失敗。</div>
       </figure>
       <div class="code">
         <div class="clbl">workflow.json</div>
