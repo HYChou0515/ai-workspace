@@ -2153,7 +2153,11 @@ class LitellmAgentRunner:
             with contextlib.suppress(asyncio.CancelledError):
                 await task
 
-    async def _run_once_nonstream(  # pragma: no cover — exercised only by the live Ollama test
+    async def _run_once_nonstream(  # pragma: no cover — see the note below
+        # Driven in part by tests/api/test_interjection_runner.py (stream="0":
+        # a real SDK loop with a fake model, including the interjection cut and
+        # `_segment_events`); the rest only by the live Ollama test. Kept out of
+        # the gate like `_run_once`, for the same reason given there.
         self,
         prompt: str,
         ctx: AgentToolContext,

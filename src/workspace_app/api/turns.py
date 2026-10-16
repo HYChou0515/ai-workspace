@@ -636,7 +636,9 @@ class _TurnReducer:
             # plan-interjection Q3: the person's message goes HERE in the
             # thread — after what the turn had done, before the answer that
             # read it (which, following a non-assistant entry, starts afresh).
-            self.produced.append(TurnMessage(role=PLACE_ROLE, created_at=item.created_at))
+            self.produced.append(
+                TurnMessage(role=PLACE_ROLE, created_at=item.created_at, author=item.author)
+            )
         elif isinstance(item, RepetitionStopped):
             # #113 decision "b": the repeats already streamed live; here we
             # truncate ONLY the persisted message back to before the loop (so
