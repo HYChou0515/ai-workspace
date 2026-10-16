@@ -97,9 +97,12 @@ def artifact_valid(path: str, kind: str, requires: dict[str, Any] | None = None)
             problem = _valid_yaml(text)
         elif kind == "csv":
             problem = _valid_csv(text)
-        if not problem and requires:
-            problem = _requires_problem(text, requires)
         if problem:
+            # The reply's own format (plan-workflow-output-repair §3.1): a repair turn
+            # can rewrite it. A missing file, an empty one or a missing `requires`
+            # section is content the reply does not have, and is not flagged.
+            return CheckResult(False, f"file {path} {problem}", format=True)
+        if requires and (problem := _requires_problem(text, requires)):
             return CheckResult(False, f"file {path} {problem}")
         return CheckResult(True)
 
