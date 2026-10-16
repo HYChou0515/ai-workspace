@@ -287,3 +287,15 @@ step's prompt is persisted with the execution and the step) change three things 
   mentions and goal markers were charged. A re-run's prompt now carries the previous
   answer (#913's `_retry_prompt`), so for the cases that still re-run, the model sees
   what it answered too.
+
+### Review of the merge (on 38008439)
+
+The merge held (prompt and answer of a repair carry the step and run; `REPAIR_TURN`
+does not leak into later turns or sibling map elements; page jobs and steer asides are
+untouched; no `role == "user"` split miscounts). Fixed: the runbook's cost line still
+said the failed reply reaches the model twice — a node reads no history now, so it is
+quoted once. Known, not changed: a run stopped mid-repair keeps the step's chip at
+「修正輸出格式」 (its phase stays "Running" on master for the same reason — no event ends
+a stopped step); a `map` element's repair shows only in its expanded messages (the
+runbook says so); the execution page's own status words are English while the repair
+words follow the locale.
