@@ -285,3 +285,35 @@ async def test_the_sizing_pass_is_told_what_the_runner_will_be_told(monkeypatch)
 
     assert ctx.skills_reachable is False
     assert seen == [False]
+
+
+async def test_a_repair_turn_holds_no_tool_at_all(monkeypatch):
+    """A workflow repair turn passes `tools=[]` (plan-workflow-output-repair D1): it may
+    only rewrite its answer, so it must hold NOTHING — `read_skill` included, which a
+    node otherwise gets whenever the item has a skill. Built the way the runner builds
+    the turn's agent, from the context the workflow builder made."""
+    from workspace_app.api.litellm_runner import LitellmAgentRunner, _agent_for
+    from workspace_app.tokens.protocol import LlmCredential
+
+    _filestore, builder, item_id = _build(monkeypatch)
+    runner = LitellmAgentRunner(base_url="http://proxy/v1")
+
+    async def tools_for(subset: list[str] | None) -> list[str]:
+        ctx = await builder.build_workflow_turn(
+            item_id,
+            agent_config=AgentConfig(name="ws", system_prompt="You help."),
+            run_subagent=_dummy_subagent,
+            history_messages=[],
+            tool_subset=subset,
+        )
+        agent = _agent_for(
+            ctx.agent_config,
+            ctx.packages,
+            ctx.unavailable_tools,
+            **runner._agent_kwargs(ctx, None, LlmCredential),
+        )
+        return [t.name for t in agent.tools]
+
+    # control: a node that names a tool still follows the item's skills
+    assert "read_skill" in await tools_for(["read_file"])
+    assert await tools_for([]) == []

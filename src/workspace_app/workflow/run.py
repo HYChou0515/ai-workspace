@@ -61,8 +61,11 @@ class StepState(Struct):
     name: str
     key: str = ""
     status: str = "running"
-    """running | retrying | passed | skipped | failed."""
+    """running | retrying | repairing | passed | skipped | failed."""
     attempts: int = 1
+    repairs: int = 0
+    """How many of the attempts were repairs of the reply's format
+    (docs/plan-workflow-output-repair.md D7)."""
     reason: str = ""
     started: int | None = None
     ended: int | None = None

@@ -35,7 +35,7 @@ from ..workflow.engine import StepFailed, transcript_path
 from ..workflow.handle import WorkflowHandle, aside_lane
 from ..workflow.run import RunStatus, WorkflowRun, is_execution
 from ..workflow.run_identity import RunIdentities
-from ..workflow.steps import CURRENT_STEP, StepRef
+from ..workflow.steps import CURRENT_STEP, REPAIR_TURN, StepRef
 from .env_layers import PersonEnv
 from .events import TurnEnded
 from .notifications import notification_sent, notify
@@ -44,6 +44,7 @@ from .rca_messages import to_rca_message
 from .subagent_run import _child_context, report_of
 from .timeutil import now_ms
 from .turn_gate import admit_turn
+from .turns import REPAIR_REQUEST_ROLE
 from .workflow_transcript import render_transcript
 
 if TYPE_CHECKING:
@@ -349,6 +350,7 @@ class WorkflowExecutor:
         # the step runs (`CURRENT_STEP`, set by `agent_step` / `agent_write_step`).
         ref = step or CURRENT_STEP.get()
         step_id = ref.id if ref else None
+        repairing = REPAIR_TURN.get()
 
         def persist(produced: list[TurnMessage]) -> None:
             if not record:  # an aside (the steerer): not part of the run's record
@@ -366,7 +368,9 @@ class WorkflowExecutor:
                 if agent is not None
                 else [
                     Message(
-                        role="user",
+                        # a repair turn's prompt is the engine's request to re-emit
+                        # (plan-workflow-output-repair §3.5), never replayed, folded
+                        role=REPAIR_REQUEST_ROLE if repairing else "user",
                         content=prompt,
                         author=captured_user,
                         driven_by=WORKFLOW_DRIVER,

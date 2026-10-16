@@ -101,8 +101,10 @@ schema；`enum` 只用於純量）。
 
 `outputs` 不只是靜態 schema，它是**執行期的隱式 gate**：
 
-- agent step：模型 JSON 缺欄位 / 型別不符 / enum 越界 → 視為 check 失敗 → **回灌原因、retry**
-  （複用 `retries` 與 `_retry_prompt`）。耗盡 retries 才 `StepFailed`。
+- agent step：模型 JSON 缺欄位 / 型別不符 / enum 越界 → 視為 check 失敗 → **修補**：同一段
+  對話、不給工具，只請它重新輸出 JSON（引用錯處、附範例）；次數用 `retries`，耗盡才
+  `StepFailed`（[`plan-workflow-output-repair.md`](plan-workflow-output-repair.md)，取代原本的
+  「`_retry_prompt` 帶原因整個 step 重跑」）。
 - sandbox step：腳本寫的 json 不符 → `StepFailed`。
 
 ### 2.3 靜態檢查（`validate_def`）

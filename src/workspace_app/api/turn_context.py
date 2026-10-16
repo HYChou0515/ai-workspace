@@ -1067,7 +1067,12 @@ class TurnContextBuilder:
                 run_subagent=run_subagent,
                 facts=facts,
                 subagent_defs=await self._subagent_defs(item_id, agent_config, facts),
-                skills_reachable=await self._skills_reachable(item_id, facts, agent_config),
+                # An EMPTY subset is a turn that may hold nothing — a repair turn
+                # (plan-workflow-output-repair D1). `read_skill` is granted by the
+                # item's skills, not by the list, so it has to be withheld here.
+                skills_reachable=False
+                if tool_subset == []
+                else await self._skills_reachable(item_id, facts, agent_config),
                 history_messages=history_messages,
                 external=external,
                 caller_env=caller_env,

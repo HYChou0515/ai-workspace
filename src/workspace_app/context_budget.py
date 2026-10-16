@@ -419,18 +419,11 @@ def _replayed(messages: list[Any]) -> list[Any]:
     """The subset that actually reaches the model. A marker the FE renders but
     `history_items` never replays costs the window nothing, and charging for it
     would make the bar creep up on its own."""
-    kept: list[Any] = []
-    for m in messages:
-        role = getattr(m, "role", "")
-        if role == "notice":
-            continue
-        # #37: a terminal failure is a human-only diagnostic and never re-enters
-        # the model's context — EXCEPT a user cancellation, which is replayed as
-        # a short marker folded onto the preceding assistant turn (#199).
-        if role == "error" and getattr(m, "error_kind", None) != "cancelled":
-            continue
-        kept.append(m)
-    return kept
+    # The rule is `history_items`' own (`turns.replays`), not a second list of what to
+    # skip: a role added later was charged while the model never read it.
+    from .api.turns import replays
+
+    return [m for m in messages if replays(m)]
 
 
 def context_usage(messages: Any, *, limit: ContextLimit) -> ContextUsage:

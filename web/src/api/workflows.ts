@@ -86,8 +86,10 @@ export type StepStateDTO = {
   phase: string;
   name: string;
   key: string;
-  status: string; // running | retrying | passed | skipped | failed
+  status: string; // running | retrying | repairing | passed | skipped | failed
   attempts: number;
+  /** How many attempts were repairs of the reply's format (plan-workflow-output-repair D7). */
+  repairs?: number;
   reason: string;
   started: number | null;
   ended: number | null;

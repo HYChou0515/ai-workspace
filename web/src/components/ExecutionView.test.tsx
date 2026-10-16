@@ -629,3 +629,35 @@ function renderWithQueryView() {
     />,
   );
 }
+
+describe("a step whose reply was repaired (plan-workflow-output-repair D7)", () => {
+  const repairing = (status: string, repairs: number) =>
+    run({
+      phases: [
+        { phase: "read", status: "passed", done: 1, total: 1, failed: 0 },
+        { phase: "sort", status: "running", done: 0, total: 1, failed: 0 },
+      ],
+      steps: [
+        { phase: "read", name: "read", key: "", status: "passed", attempts: 1, reason: "", started: 1, ended: 2 },
+        {
+          phase: "sort", name: "sort", key: "", status, attempts: repairs + 1, repairs,
+          reason: status === "repairing" ? "not JSON" : "", started: 3, ended: status === "passed" ? 4 : null,
+        },
+      ],
+    });
+
+  it("says it is fixing the output format while the repair runs", async () => {
+    vi.mocked(workflowApi.getRun).mockResolvedValue(repairing("repairing", 1));
+    render();
+    const sort = await row("sort");
+    expect(sort).toHaveTextContent("修正輸出格式（第 1 次）");
+    expect(sort).not.toHaveTextContent("repairing");
+  });
+
+  it("keeps how many times its format was fixed once it is done", async () => {
+    vi.mocked(workflowApi.getRun).mockResolvedValue(repairing("passed", 2));
+    render();
+    const sort = await row("sort");
+    expect(sort).toHaveTextContent("修正過輸出格式 2 次");
+  });
+});

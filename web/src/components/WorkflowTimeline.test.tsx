@@ -58,3 +58,26 @@ describe("WorkflowTimeline", () => {
     expect(screen.queryByTestId("wf-timeline-now")).toBeNull();
   });
 });
+
+describe("a repair on the timeline (plan-workflow-output-repair D7)", () => {
+  it("names the repair, its number and the reason on the bar", () => {
+    render(
+      <WorkflowTimeline
+        live={false}
+        steps={[
+          step({ name: "judge", status: "repairing", repairs: 2, reason: "not JSON", started: 0, ended: 5_000 }),
+        ]}
+      />,
+    );
+    const title = screen.getByTestId("wf-timeline-bar").getAttribute("title") ?? "";
+    expect(title).toContain("修正輸出格式（第 2 次）");
+    expect(title).toContain("not JSON");
+  });
+
+  it("keeps a retry's bar as it was", () => {
+    render(
+      <WorkflowTimeline live={false} steps={[step({ name: "judge", status: "retrying", started: 0, ended: 5_000 })]} />,
+    );
+    expect(screen.getByTestId("wf-timeline-bar").getAttribute("title")).not.toContain("修正輸出格式");
+  });
+});

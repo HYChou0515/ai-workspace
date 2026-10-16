@@ -30,6 +30,7 @@ import {
 import { canRequestChat, publishChatRequest } from "../lib/chatRequestBus";
 import { executionName, executionPath, statusText } from "../lib/executionTab";
 import { pxToRem } from "../lib/pxToRem";
+import { useT } from "../lib/i18n";
 import { logFromMessages } from "../pages/investigation/agentLog";
 import { EntryView } from "./AgentEntryView";
 import { CardDiffReview } from "./CardDiffReview";
@@ -62,6 +63,7 @@ function chipTone(status: string) {
       return "err" as const;
     case "running":
     case "retrying":
+    case "repairing":
       return "info" as const;
     case "awaiting_human":
       return "warn" as const;
@@ -566,6 +568,11 @@ function StepRow({
   const named = steps.filter((s) => !s.key);
   const done = named.length === 1 && (named[0].status === "passed" || named[0].status === "skipped");
   const result = done ? stepFiles?.[named[0].name]?.result : undefined;
+  // plan-workflow-output-repair D7: a repair of the step's reply, named while it runs,
+  // and counted once the step is done (its phase's status says neither).
+  const t = useT();
+  const repairing = named.find((s) => s.status === "repairing");
+  const repaired = named.length === 1 && named[0].status !== "repairing" ? (named[0].repairs ?? 0) : 0;
   return (
     <li
       data-testid="execution-step"
@@ -599,8 +606,15 @@ function StepRow({
             {expanded ? "▾" : "▸"}
           </span>
           <span style={{ flex: 1, minWidth: 0 }}>{node.title}</span>
-          <span style={chipStyle(chipTone(node.status))}>
-            {(STEP_STATUS[node.status] ?? node.status) + counter}
+          {repaired > 0 && (
+            <span data-testid="execution-step-repairs" style={{ fontWeight: 400, color: "var(--text-paper-d)" }}>
+              {t("wf.step.repaired", { n: repaired })}
+            </span>
+          )}
+          <span style={chipStyle(chipTone(repairing ? "repairing" : node.status))}>
+            {(repairing
+              ? t("wf.step.repairing", { n: repairing.repairs || 1 })
+              : (STEP_STATUS[node.status] ?? node.status)) + counter}
           </span>
         </button>
       </h3>

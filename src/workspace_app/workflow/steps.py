@@ -19,9 +19,10 @@ from contextvars import ContextVar
 from typing import Any, NamedTuple
 
 from .checks import artifact_valid, exit_zero
-from .engine import Check, StepFailed, _emit, run_step
+from .engine import Check, CheckResult, StepFailed, _emit, run_step
 from .events import StepOutput
 from .handle import WorkflowHandle
+from .output_format import STRUCTURED_KINDS, instruction, repair_request
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +56,7 @@ async def reads_fingerprint(wf: WorkflowHandle, reads: list[str] | None) -> dict
 def _parse_fields(text: str) -> Any:
     """Parse an agent reply / sandbox stdout as a JSON object → ``result.fields``
     (#428 §1.2). Returns ``None`` on unparseable / non-object output so the step's
-    gate can flag it (and retry with feedback) rather than crashing the run."""
+    gate can flag it (and the step repair or re-run it) rather than crashing the run."""
     try:
         parsed = json.loads(text)
     except (json.JSONDecodeError, ValueError):
@@ -85,6 +86,22 @@ class StepRef(NamedTuple):
 #: steps running side by side (``asyncio.gather``, map elements) each hold their
 #: own copy, where one attribute would be overwritten.
 CURRENT_STEP: ContextVar[StepRef | None] = ContextVar("workflow_current_step", default=None)
+
+
+#: Set while a step's turn is a REPAIR of its reply's format
+#: (plan-workflow-output-repair §3.5): the executor records that turn's prompt under
+#: `REPAIR_REQUEST_ROLE`, not as the step's question. A ContextVar for the same reason
+#: as `CURRENT_STEP`: parallel steps each hold their own.
+REPAIR_TURN: ContextVar[bool] = ContextVar("workflow_repair_turn", default=False)
+
+
+@contextmanager
+def _as_repair() -> Iterator[None]:
+    token = REPAIR_TURN.set(True)
+    try:
+        yield
+    finally:
+        REPAIR_TURN.reset(token)
 
 
 @contextmanager
@@ -203,7 +220,9 @@ async def agent_write_step(
     is silently left unwritten. Gated by default on ``artifact_valid(out, kind)``
     (plan §2.2): the written file must exist, be non-empty, and — for a structured
     ``kind`` (json/yaml/csv) — PARSE as that format, so a reply that leaks
-    conversational text fails and retries instead of flowing downstream polluted.
+    conversational text fails instead of flowing downstream polluted, and is repaired:
+    a no-tools turn asks for the content alone (plan-workflow-output-repair). A step
+    with ``outputs`` is repaired the same way when its gate reports a format failure.
     ``kind`` defaults to ``text`` (non-empty, like the old ``file_nonempty``).
     Journaled like any step (re-run skips); the input-hash covers the prompt +
     tools + out, so editing any of them re-runs it (§9).
@@ -213,27 +232,31 @@ async def agent_write_step(
     if wf.drive_turn is None:
         raise RuntimeError("agent_write_step needs a turn driver (wired by the run driver)")
     drive_turn = wf.drive_turn
+    # D8: the shape the reply must take, told up front, from the same declaration the
+    # gate checks — so the first answer usually needs no repair at all.
+    shape = instruction(outputs, kind if out else "")
+    asked = f"{prompt}\n\n{shape}" if shape else prompt
 
-    previous: list[str] = []  # the last attempt's reply, for the retry prompt
+    # The last attempt's reply: a node reads no conversation (plan-workflow-out-of-chat
+    # D1), so a re-run's prompt carries it, and a repair quotes it in full
+    # (plan-workflow-output-repair §3.3).
+    previous: list[str] = []
 
-    async def execute(feedback: str | None) -> Any:
-        with _as_step(name or phase, key, phase):
-            return await _write(feedback)
-
-    async def _write(feedback: str | None) -> Any:
-        coro = drive_turn(_retry_prompt(prompt, feedback, next(iter(previous), None)), tools)
+    async def turn(text_in: str, held: list[str] | None) -> str:
+        coro = drive_turn(text_in, held)
         if wf.step_timeout_s is None:
-            text = await coro
-        else:
-            try:
-                text = await asyncio.wait_for(coro, wf.step_timeout_s)
-            except TimeoutError as exc:  # per-step cap (manual §17) → abort the step
-                logger.warning(
-                    "agent write step timed out after %ss (phase %s)", wf.step_timeout_s, phase
-                )
-                raise StepFailed(
-                    f"agent step {name or phase!r} timed out after {wf.step_timeout_s}s"
-                ) from exc
+            return await coro
+        try:
+            return await asyncio.wait_for(coro, wf.step_timeout_s)
+        except TimeoutError as exc:  # per-step cap (manual §17) → abort the step
+            logger.warning(
+                "agent write step timed out after %ss (phase %s)", wf.step_timeout_s, phase
+            )
+            raise StepFailed(
+                f"agent step {name or phase!r} timed out after {wf.step_timeout_s}s"
+            ) from exc
+
+    async def finish(text: str) -> dict[str, Any]:
         previous[:] = [text]
         result: dict[str, Any] = {"out": out, "bytes": len(text)}
         if out:
@@ -250,6 +273,22 @@ async def agent_write_step(
                 await wf.reconcile()
             result["fields"] = {"produces": sorted(await wf.glob(produces))}
         return result
+
+    async def execute(feedback: str | None) -> Any:
+        with _as_step(name or phase, key, phase):
+            return await finish(
+                await turn(_retry_prompt(asked, feedback, next(iter(previous), None)), tools)
+            )
+
+    async def repair(verdict: CheckResult) -> Any:
+        # D1: the answer re-emitted, not the task redone — the request alone, and no
+        # tools, so nothing the step already did can be done again. Marked as a repair
+        # so the execution's record keeps the request under its own role (§3.5).
+        asked_again = repair_request(
+            next(iter(previous), ""), verdict, outputs, kind if out else ""
+        )
+        with _as_step(name or phase, key, phase), _as_repair():
+            return await finish(await turn(asked_again, []))
 
     args: dict[str, Any] = {
         "prompt": prompt,
@@ -271,9 +310,11 @@ async def agent_write_step(
         phase=phase,
         args=args,
         execute=execute,
-        check=check or artifact_valid(out, kind, requires),
+        check=check or artifact_valid(out, kind, requires, of_reply=True),
         retries=retries,
         cache=cache,
+        # only a reply with a machine format can be repaired; `produces` writes files
+        repair=repair if outputs or (out and kind in STRUCTURED_KINDS) else None,
     )
 
 

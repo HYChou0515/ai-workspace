@@ -724,6 +724,22 @@ describe("workflow step events in the feed (#100 observability)", () => {
     }
   });
 
+  it("step_repairing marks the step as repairing, with which repair and why", () => {
+    // plan-workflow-output-repair D7: told apart from a retry.
+    const log = fold([
+      { type: "step_started", phase: "p", name: "judge", key: "" },
+      { type: "step_repairing", phase: "p", name: "judge", key: "", reason: "not JSON", repair: 2 },
+    ]);
+    const steps = log.entries.filter((e) => e.kind === "step");
+    expect(steps).toHaveLength(1);
+    const s = steps[0];
+    expect(s.kind === "step" && s.step).toMatchObject({
+      status: "repairing",
+      repair: 2,
+      reason: "not JSON",
+    });
+  });
+
   it("phase_entered renders a phase divider in the feed", () => {
     const log = fold([{ type: "phase_entered", phase: "commit" }]);
     const last = log.entries[log.entries.length - 1];
