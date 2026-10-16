@@ -93,6 +93,21 @@ export function ItemEnvironmentPanel({
   const memEnforced = env.enforcedMemoryBytes !== null;
   const memClamped = memStated !== null && memEffective !== null && memEffective < memStated;
 
+  // 「這個 App 最多 X」 (plan-item-size-ceiling D3) — beside a dial only, never
+  // for a dimension nothing caps, and never where the size in effect already
+  // says otherwise: an item nobody sized on a deploy with `max` but no default
+  // runs at the BACKEND's own default, which may be above the ceiling, and
+  // 「最多 4」 beside a running 8 is false (review round 1, F2). A stated size
+  // cannot get there — the server holds it to the ceiling — so the applied
+  // figure alone decides. An applied 0 is "unbounded" (an App stated `"max"` /
+  // `"0"`), which is above any ceiling (review round 2).
+  const ceilingLine = (enforced: boolean, applied: number | null, ceiling: number | null) =>
+    enforced && ceiling !== null && !(applied !== null && (applied === 0 || applied > ceiling));
+  const cpuCeiling = env.cpuCeiling;
+  const memCeiling = env.memoryCeiling;
+  const showCpuCeiling = ceilingLine(cpuEnforced, env.enforcedCpuCores, cpuCeiling);
+  const showMemCeiling = ceilingLine(memEnforced, env.enforcedMemoryBytes, memCeiling);
+
   const cores = (n: number) =>
     t(n === 1 ? "resources.live.cores_one" : "resources.live.cores", { n });
 
@@ -181,6 +196,13 @@ export function ItemEnvironmentPanel({
                   </>
                 )}
               </p>
+              {/* How far it may go, said before anything is typed — the server's
+                  own ceiling (plan-item-size-ceiling D3); when, see `ceilingLine`. */}
+              {showCpuCeiling && cpuCeiling !== null ? (
+                <p data-testid="cpu-ceiling" className="detail env-field__note">
+                  {t("itemenv.size.ceiling", { value: cores(cpuCeiling) })}
+                </p>
+              ) : null}
               {fault.cpu !== null ? (
                 <p id="itemenv-cpu-hint" data-testid="cpu-hint" className="detail env-field__note env-field__note--invalid">
                   {/* One key per fault type; the fault's `detail` (the
@@ -246,6 +268,11 @@ export function ItemEnvironmentPanel({
                   </>
                 )}
               </p>
+              {showMemCeiling && memCeiling !== null ? (
+                <p data-testid="memory-ceiling" className="detail env-field__note">
+                  {t("itemenv.size.ceiling", { value: formatBytes(memCeiling) })}
+                </p>
+              ) : null}
               {fault.memory !== null ? (
                 <p id="itemenv-memory-hint" data-testid="memory-hint" className="detail env-field__note env-field__note--invalid">
                   {t(

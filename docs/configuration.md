@@ -297,7 +297,7 @@ sandbox:
 resources:
   per_app:
     default: { cpu: 1.0, memory: 512M, disk: 80M }   # App 沒宣告時吃這個
-    max:     { cpu: 4.0, memory: 4G,   disk: 20G }   # App 不得超過,超過=開機失敗
+    max:     { cpu: 4.0, memory: 4G,   disk: 20G }   # App 不得超過(超過=開機失敗);也是單一 item 能調到的上限
   per_user:
     count: 3          # 同時活著的 sandbox 個數
     cpu: 6.0          # 那些活著的 sandbox 加總核心
@@ -329,12 +329,24 @@ resources:
 
 ### 使用者自己調單一 item 的環境大小
 
-App 宣告的是**天花板**;使用者可以在 item 頁面的「環境」面板把**那一個** item 調得更小,
-帳仍然記在 item 的 `owner` 上。維運面要知道的:
+使用者可以在 item 頁面的「環境」面板調**那一個** item 的 CPU 與記憶體,帳仍然記在 item 的
+`owner` 上。**App 的值是預設大小,`resources.per_app.max` 是天花板**([plan-item-size-ceiling.md](plan-item-size-ceiling.md)):
+
+| 設定 | 對單一 item 的意思 |
+|---|---|
+| app.json 的 `resources`,沒寫就是 `per_app.default` | 沒人調過時的大小 |
+| `per_app.max` | 最多能調到多大。面板在欄位下寫出「這個 App 最多 X」 |
+| 沒設 `max` 的維度(`""`/`"0"`/`"max"` 都算沒設) | 天花板就是 App 的值——只能往下調;App 也沒有值時就沒有天花板 |
+| 個人額度(`per_user`) | 最後再夾一層,`min(item 的值, 天花板, 個人額度)` |
+
+例:`per_app.default` 1 核 / `512M`、`per_app.max` 4 核 / `4G` ⇒ 沒人調的 item 是 1 核 / 512M,
+可以調到 4 核 / 4G 以內;設 16 核會存下,生效時夾成 4 核,面板寫「受這個 App 的上限限制」。
+
+維運面要知道的:
 
 - **選的是上限,不是預約。** 選了 4 核不會當下扣額度——只有 sandbox 活著才算,跟今天完全
   一樣。額度的帳是從心跳推導的,不是 create+1 / kill−1 的計數器。
-- **預設 `min(App 上限, 個人額度)`,而且不落地。** 欄位空 = 沒人指定。調整某人的額度之後,
+- **預設 `min(App 的值, 個人額度)`,而且不落地。** 欄位空 = 沒人指定。調整某人的額度之後,
   他那些沒特別設定的 item 自動跟著變。
 - **沒設 `per_user` 的部署看不到那半個面板。** 沒有額度就沒有「花費」這回事,畫 `0 / 0`
   是雜訊。但「環境在跑嗎、關掉它」那半邊**永遠都在**——那是關於機器,不是關於額度。
