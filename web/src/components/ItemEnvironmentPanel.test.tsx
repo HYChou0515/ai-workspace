@@ -279,6 +279,46 @@ describe("how far it may go is said before anything is typed (plan-item-size-cei
     expect(screen.queryByTestId("memory-ceiling")).toBeNull();
   });
 
+  it("draws no line that the size in effect already contradicts (review round 1, F2)", () => {
+    // A deploy with `max` but no default: an item nobody sized runs at the
+    // backend's own default, here above the ceiling. 「最多 4 核」 beside a
+    // running 8 would be false — so no line, until someone sets a size.
+    render(
+      <ItemEnvironmentPanel
+        draft={DRAFT}
+        onDraft={noop}
+        env={{
+          ...IDLE,
+          effectiveCpuCores: null,
+          enforcedCpuCores: 8,
+          cpuCeiling: 4,
+          effectiveMemoryBytes: null,
+          enforcedMemoryBytes: 8 * 1024 ** 3,
+          memoryCeiling: 4 * 1024 ** 3,
+        }}
+        budget={BUDGET}
+        canEdit
+      />,
+    );
+
+    expect(screen.queryByTestId("cpu-ceiling")).toBeNull();
+    expect(screen.queryByTestId("memory-ceiling")).toBeNull();
+  });
+
+  it("still draws the line once someone has set a size — the ceiling holds THAT", () => {
+    render(
+      <ItemEnvironmentPanel
+        draft={DRAFT}
+        onDraft={noop}
+        env={{ ...IDLE, statedCpuCores: 6, effectiveCpuCores: 4, enforcedCpuCores: 4, cpuCeiling: 4 }}
+        budget={BUDGET}
+        canEdit
+      />,
+    );
+
+    expect(screen.getByTestId("cpu-ceiling")).toBeTruthy();
+  });
+
   it("draws no line where there is no dial to set — the backend applies no ceiling", () => {
     render(
       <ItemEnvironmentPanel

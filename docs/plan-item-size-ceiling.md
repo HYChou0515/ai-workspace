@@ -32,6 +32,7 @@ Grilled 2026-10-16 on master `442eca8e`。每條決定標來源：**[user]** = �
 | D3 | **面板在輸入之前就寫出可調的範圍**：CPU、記憶體欄位下各一行「這個 App 最多 X」，X 就是 D1／D2 的天花板（NN/g 錯誤預防：送出前就說清楚限制，而不是存了才說被壓住）。沒有天花板的維度不顯示那一行，不寫「無上限」。 | [user] |
 | D4 | 天花板在 `resolve_app_limits` 算——就是算出 App 大小、檢查 `max` 的同一個地方——存在 `ResourceLimits` 上（`cpu_max`／`memory_max` 欄位與 `item_cpu_ceiling`／`item_memory_ceiling` 兩個屬性）；`_resolved_for` 與環境 API 都讀這兩個屬性，不各自重算。 | [mine] |
 | D5 | 環境 API（`GET /a/{slug}/items/{item_id}/environment`）多回 `cpu_ceiling`／`memory_ceiling`（`null` = 沒有天花板），面板用它畫 D3 那一行。 | [mine] |
+| D6 | **實際生效的大小已經超過天花板時，不畫 D3 那一行。** 只設 `max`、沒設 `default`、App 也沒宣告的維度，沒人調過的 item 跑的是 sandbox 主機自己的預設（例如 8 核），可能比 `max`（4 核）大；這時「這個 App 最多 4 核」跟畫面上的生效值互相矛盾。大小行為不變（要把沒人調過的 item 也夾到 `max`，得先問主機它的預設是多少，而且會改到 D1 的「預設大小」）。有人設了大小時伺服器已把它夾到天花板以下，碰不到這條。升級手冊提醒設了 `max` 就一併設 `default`。 | [mine]（review 第一輪 F2；照我給使用者的建議先做，使用者尚未回覆） |
 
 不在範圍：**硬碟**——item 層本來就不能調（舊計畫 §1.2），使用者要的是 CPU 和記憶體。
 
@@ -50,3 +51,4 @@ Grilled 2026-10-16 on master `442eca8e`。每條決定標來源：**[user]** = �
 - **P2** 前端：環境面板在 CPU、記憶體欄位下寫出天花板（D3）；沒有天花板就不顯示。
 - **P3** 文件：本計畫、舊計畫標題下的推翻標記、`docs/design-history.md`、`docs/adding-an-app.md`、`docs/configuration.md` 的規則
   說明、`docs/migrations.md` 條目。
+- **P4** review 第一輪：記憶體「無上限」不畫「最多 0 B」；config 的 `cpu` 寫成 `"max"`／`"0"`／`""` 讀成「沒設」、其他非數字開機失敗；D6；升級手冊補會變小的方向、滾動更新、在跑的環境的計費；掃掉仍寫舊規則的註解。
