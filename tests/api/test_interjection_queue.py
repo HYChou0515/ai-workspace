@@ -282,7 +282,7 @@ class _ReadsMidTurn:
         yield RunDone()
 
 
-async def test_the_running_turn_reads_its_own_authors_messages_and_no_one_elses():
+async def test_the_running_turn_reads_its_authors_message_where_it_is_sent():
     runner = _ReadsMidTurn()
     engine = ChatTurnEngine(runner)  # ty: ignore[invalid-argument-type]
     log: list[Any] = []
@@ -307,26 +307,56 @@ async def test_the_running_turn_reads_its_own_authors_messages_and_no_one_elses(
         on_complete=keep("Q2"),
         message=_message("ann", 2, log, speaker="Ann (ann)"),
     )
-    f3 = engine.enqueue(
-        "chat", "Q3", AgentToolContext(), on_complete=keep("Q3"), message=_message("bob", 3, log)
-    )
     runner.release.set()
-    await _drain(engine, f1, f2, f3)
+    await _drain(engine, f1, f2)
 
-    # Ann's message was read by her running turn, with what it carried;
-    # Bob's was not — it is another person's, and got a turn of its own.
+    # Ann's message was read by her running turn, with what it carried, and
+    # got no turn of its own.
     assert runner.read == [
         Interjection(
             content="Q2", author="ann", at=2, speaker="Ann (ann)", applied_skills=["lot-map"]
         )
     ]
-    assert runner.turns == ["Q1", "Q3"]
+    assert runner.turns == ["Q1"]
     # One reply for Q1 and Q2, with Q2 placed where it was read: after the
     # tool result, before the answer that saw it.
     assert replies["Q1"] == [("tool", "lot 1"), (PLACE_ROLE, 2), ("assistant", "answer")]
     assert "Q2" not in replies
     # Settled by that reply, not before it.
     assert ("absorbed", "ann", 2) in log
+
+
+async def test_the_reader_never_takes_another_persons_message():
+    """A running turn reads as one person. Another person's message normally
+    stops that turn on arrival (Q2), but the stop lands at the turn's next
+    await — so the reader itself must still leave such a message alone."""
+    from workspace_app.api.turns import _QueueEntry, _TurnStamp, _WorkspaceSession
+
+    session = _WorkspaceSession()
+    loop = asyncio.get_running_loop()
+
+    def entry(author: str, at: int) -> _QueueEntry:
+        return _QueueEntry(
+            content=f"Q{at}",
+            ctx=AgentToolContext(),
+            on_complete=lambda p: None,
+            on_turn_end=None,
+            fut=loop.create_future(),
+            pending=None,
+            stamp=_TurnStamp("chat", at),
+            message=QueuedMessage(author, at),
+        )
+
+    bob, ann = entry("bob", 2), entry("ann", 3)
+    session.queue.put_nowait(bob)
+    session.queue.put_nowait(ann)
+    folded: list[Any] = []
+
+    taken = ChatTurnEngine._reader(session, "ann", folded)()  # noqa: SLF001
+
+    assert [i.content for i in taken] == ["Q3"]
+    assert folded == [ann]
+    assert session.queue.take(lambda e: True) == [bob]
 
 
 async def test_a_turn_queued_with_no_message_reads_nothing():
@@ -341,6 +371,113 @@ async def test_a_turn_queued_with_no_message_reads_nothing():
     await _drain(engine, f1, f2)
     assert runner.read == []
     assert runner.turns == ["s1", "Q2"]
+
+
+class _RunsUntilStopped:
+    """Ann's turn runs a tool and then keeps going until it is cancelled; every
+    later turn answers at once. Records each turn's prompt and leading messages."""
+
+    def __init__(self) -> None:
+        self.started = asyncio.Event()
+        self.turns: list[dict[str, Any]] = []
+
+    async def run(self, content: str, ctx: AgentToolContext):
+        self.turns.append(
+            {"content": content, "leading": [i.content for i in ctx.leading_interjections]}
+        )
+        if len(self.turns) == 1:
+            yield ToolStart(call_id="c1", name="look", args={})
+            yield ToolEnd(call_id="c1", output="lot 1")
+            self.started.set()
+            await asyncio.sleep(30)
+        yield MessageDelta(text=f"answer to {content}")
+        yield RunDone()
+
+
+async def test_another_persons_message_stops_the_running_turn_and_takes_over():
+    """plan-interjection Q2: a turn runs as one person. Bob's message is not read
+    into Ann's turn — it stops it, and Bob's turn takes over with the thread as
+    it stands (Ann's partial work in it). The ending names who interrupted."""
+    runner = _RunsUntilStopped()
+    engine = ChatTurnEngine(runner)  # ty: ignore[invalid-argument-type]
+    log: list[Any] = []
+    replies: dict[str, list[Any]] = {}
+
+    def keep(name: str):
+        def on_complete(produced: list[Any]) -> None:
+            replies[name] = [(m.role, m.error_kind, m.author) for m in produced]
+
+        return on_complete
+
+    f1 = engine.enqueue(
+        "chat", "Q1", AgentToolContext(), on_complete=keep("Q1"), message=_message("ann", 1, log)
+    )
+    await asyncio.wait_for(runner.started.wait(), 3)
+    f2 = engine.enqueue(
+        "chat", "Q2", AgentToolContext(), on_complete=keep("Q2"), message=_message("bob", 2, log)
+    )
+    await _drain(engine, f1, f2)
+
+    # Ann's turn ended at once (not after its 30s), with its tool result kept and
+    # an ending that says Bob's message interrupted it.
+    assert replies["Q1"] == [("tool", None, None), ("error", "interrupted", "bob")]
+    # Bob's turn ran — rebuilt from the thread as it stands, since it waited.
+    assert [t["content"] for t in runner.turns] == ["Q1", "Q2"]
+    assert ("refresh", "bob", 2, [2]) in log
+
+
+async def test_the_interrupted_persons_unread_message_goes_to_the_turn_that_took_over():
+    """plan-interjection Q10: Ann's own follow-up, still waiting for her turn's
+    next model call when Bob interrupted, was read by no turn — so Bob's turn,
+    the next one, answers it too (as Bob: it only READS Ann's words)."""
+    runner = _RunsUntilStopped()
+    engine = ChatTurnEngine(runner)  # ty: ignore[invalid-argument-type]
+    log: list[Any] = []
+    f1 = engine.enqueue(
+        "chat",
+        "Q1",
+        AgentToolContext(),
+        on_complete=lambda p: None,
+        message=_message("ann", 1, log),
+    )
+    await asyncio.wait_for(runner.started.wait(), 3)
+    f2 = engine.enqueue(
+        "chat",
+        "Q2",
+        AgentToolContext(),
+        on_complete=lambda p: None,
+        message=_message("ann", 2, log),
+    )
+    f3 = engine.enqueue(
+        "chat",
+        "Q3",
+        AgentToolContext(),
+        on_complete=lambda p: None,
+        message=_message("bob", 3, log),
+    )
+    await _drain(engine, f1, f2, f3)
+
+    assert runner.turns[1:] == [{"content": "Q3", "leading": ["Q2"]}]
+
+
+async def test_a_message_with_no_author_does_not_stop_anything():
+    """A turn queued without a message (a workflow step) is not a person
+    speaking: it waits its turn, as before."""
+    runner = _RunsUntilStopped()
+    engine = ChatTurnEngine(runner)  # ty: ignore[invalid-argument-type]
+    log: list[Any] = []
+    f1 = engine.enqueue(
+        "chat",
+        "Q1",
+        AgentToolContext(),
+        on_complete=lambda p: None,
+        message=_message("ann", 1, log),
+    )
+    await asyncio.wait_for(runner.started.wait(), 3)
+    engine.enqueue("chat", "step", AgentToolContext(), on_complete=lambda p: None)
+    await asyncio.sleep(0.1)
+    assert not f1.done()
+    await engine.forget("chat")
 
 
 async def test_entries_without_a_message_keep_one_turn_each():

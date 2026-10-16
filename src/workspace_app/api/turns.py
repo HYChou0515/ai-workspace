@@ -209,31 +209,70 @@ def _is_person_message(m: Any, at: int) -> bool:
     return getattr(m, "role", "") == "user" and getattr(m, "created_at", None) == at
 
 
-def thread_without(messages: list[Any], ats: Iterable[int]) -> list[Any]:
-    """The thread minus the person's messages stamped `ats` — the ones a turn is
-    about to answer, which it is handed after the history rather than inside it
-    (docs/plan-interjection.md Q1/Q10). A queued question sits ABOVE the answer
-    it waited for (it was persisted first), so "the thread before it" would drop
-    exactly that answer. One message per stamp, the first."""
-    pending = list(ats)
+#: Which person's message: its `created_at` and its author. The stamp alone is
+#: not enough — two people can send in the same millisecond (§9 C14).
+MessageKey = tuple[int, str]
+
+
+def _key_of(m: Any) -> MessageKey | None:
+    if getattr(m, "role", "") != "user":
+        return None
+    return (getattr(m, "created_at", None) or 0, getattr(m, "author", None) or "")
+
+
+def thread_without(messages: list[Any], keys: Iterable[MessageKey]) -> list[Any]:
+    """The thread minus the person's messages `keys` names — the ones a turn is
+    about to answer (handed to it after the history rather than inside it) and
+    the ones nobody has answered yet (docs/plan-interjection.md Q1/Q10, §9 C8).
+    A queued question sits ABOVE the answer it waited for (it was persisted
+    first), so "the thread before it" would drop exactly that answer."""
+    leave_out = list(keys)
     out: list[Any] = []
     for m in messages:
-        at = getattr(m, "created_at", None)
-        if at in pending and getattr(m, "role", "") == "user":
-            pending.remove(at)
+        key = _key_of(m)
+        if key is not None and key in leave_out:
+            leave_out.remove(key)
             continue
         out.append(m)
     return out
 
 
-def take_person_message(messages: list[Any], at: int) -> Any | None:
-    """Remove and return the person's message stamped `at` (the first one), for a
-    `PLACE_ROLE` marker to put back where the turn read it. None when it is gone
-    (undone meanwhile): there is nothing to place."""
+def take_person_message(messages: list[Any], at: int, author: str | None = None) -> Any | None:
+    """Remove and return the person's message stamped `at` (by `author`, when
+    named — two people can send in the same millisecond), for a `PLACE_ROLE`
+    marker to put back where the turn read it. None when it is gone (undone
+    meanwhile): there is nothing to place."""
     for i, m in enumerate(messages):
-        if _is_person_message(m, at):
+        if _is_person_message(m, at) and (author is None or getattr(m, "author", None) == author):
             return messages.pop(i)
     return None
+
+
+# Written about a turn while it is prepared — not news to the question it is for.
+_ABOUT_THE_TURN = frozenset({CONTEXT_NOTICE_ROLE, SUMMARY_ROLE})
+
+
+def must_move(
+    messages: list[Any], answering: Iterable[MessageKey], unanswered: Iterable[MessageKey]
+) -> bool:
+    """Whether the messages a turn answers must move to where it reads them
+    (docs/plan-interjection.md §9 C8): something sits after the first of them
+    that it did not see when it was sent — an answer, a tool result, another
+    person's question that was already answered. Not a notice or summary
+    written about this very turn, and not another question nobody has
+    answered yet (it waits its own turn)."""
+    mine = set(answering)
+    waiting = mine | set(unanswered)
+    after = False
+    for m in messages:
+        key = _key_of(m)
+        if not after:
+            after = key in mine
+            continue
+        if getattr(m, "role", "") in _ABOUT_THE_TURN or key in waiting:
+            continue
+        return True
+    return False
 
 
 def history_items(
@@ -333,6 +372,14 @@ def history_items(
                 _fold_cancellation_marker(items)
             elif kind == "max_turns":
                 _fold_cancellation_marker(items, _STEP_LIMIT_MARKER)
+            elif kind == "interrupted":
+                # plan-interjection Q2: cut off AND by whom — the next message
+                # is that person's, and it is theirs to answer.
+                by = getattr(m, "author", None)
+                who = speaker_label(users.get(by)) if users is not None and by else "someone"
+                _fold_cancellation_marker(
+                    items, f"[Response interrupted by a new message from {who}]"
+                )
             continue
         if m.role == SUMMARY_ROLE:
             # Replayed as `user`, not `system`: a system item mid-conversation
@@ -396,12 +443,16 @@ class TurnMessage:
     tool_display: str = ""
     created_at: int = field(default_factory=_now_ms)
     metrics: MessageMetrics | None = None
-    # role=error: a `failover.classify.ERROR_KINDS` kind, `cancelled` or
-    # `max_turns` (`error` on rows persisted before docs/plan-friendly-errors.md)
+    # role=error: a `failover.classify.ERROR_KINDS` kind, `cancelled`,
+    # `interrupted` or `max_turns` (`error` on rows persisted before
+    # docs/plan-friendly-errors.md)
     error_kind: str | None = None
     error_params: dict[str, int] | None = None  # role=error: numbers for the kind's copy
     # role=tool: a delegated sub-agent's failure (P4), for the card to word
     failure: dict[str, Any] | None = None
+    # role=error, error_kind="interrupted" (docs/plan-interjection.md Q2): who sent
+    # the message that stopped this turn. Persisted on the message's own `author`.
+    author: str | None = None
     # #113: "repetition" when the turn was stopped for a degenerate loop — the
     # FE renders a notice and `content`/`reasoning` is truncated to before it.
     stopped_reason: str | None = None
@@ -419,6 +470,14 @@ def _terminal_error(exc: BaseException) -> RunError:
 def _error_message(item: RunError | RunCancelled | MaxTurnsExceeded) -> TurnMessage:
     """Render a terminal failure event as a persistable error message
     (issue #37). `error_kind` drives the next-turn history policy."""
+    if isinstance(item, RunCancelled) and item.by:
+        # plan-interjection Q2: another person's message took the turn over.
+        return TurnMessage(
+            role="error",
+            content="The previous response was interrupted by a new message.",
+            error_kind="interrupted",
+            author=item.by,
+        )
     if isinstance(item, RunCancelled):
         return TurnMessage(
             role="error", content="The previous response was interrupted.", error_kind="cancelled"
@@ -579,7 +638,9 @@ class _TurnReducer:
             # plan-interjection Q3: the person's message goes HERE in the
             # thread — after what the turn had done, before the answer that
             # read it (which, following a non-assistant entry, starts afresh).
-            self.produced.append(TurnMessage(role=PLACE_ROLE, created_at=item.created_at))
+            self.produced.append(
+                TurnMessage(role=PLACE_ROLE, created_at=item.created_at, author=item.author)
+            )
         elif isinstance(item, RepetitionStopped):
             # #113 decision "b": the repeats already streamed live; here we
             # truncate ONLY the persisted message back to before the loop (so
@@ -642,6 +703,14 @@ class PendingTurn:
     # same wrong. Empty means unattributed, and an unattributed Stop still marks
     # everything, which is what a caller that cannot say who always got.
     author: str = ""
+    # The `created_at` of the message being prepared (docs/plan-interjection.md
+    # C8): persisted, not yet answered by anyone — so no other turn's rebuilt
+    # history may include it. None for a caller that names no message.
+    at: int | None = None
+    # …and who sent it (§9 C14). Not `author`, which is deliberately empty for a
+    # goal round so anyone's Stop reaches it; the message itself is still the
+    # goal setter's.
+    sender: str = ""
 
 
 @dataclass
@@ -726,35 +795,45 @@ class QueuedMessage:
 
     Only chat surfaces pass one. A turn queued WITHOUT one — a workflow step, a
     caller that names no message — runs as its own turn, as it always did; a
-    turn queued WITH one takes part in the two rules below.
+    turn queued WITH one takes part in the rules below.
 
-    - Q10: every message no turn has seen is answered by ONE turn. When the
-      worker reaches a message, it takes every other unseen one waiting behind
-      it; the LAST is the turn (its ctx is the identity and settings — the later
-      sender is the one who stopped the turn before, plan §4.2) and the earlier
-      ones lead it as `ctx.leading_interjections`.
-    - Q1 (the edge): a message that WAITED behind another turn rebuilds its
-      history when it starts. Built at acceptance, it could only hold what was
-      in the thread then — never the answer to the turn it waited for.
+    - Q10: every message no turn has answered is answered by ONE turn. When the
+      worker reaches a message, it takes every other one waiting; the LAST is
+      the turn (its ctx is the identity and settings — the later sender is the
+      one who stopped the turn before, plan §4.2) and the earlier ones lead it
+      as `ctx.leading_interjections`.
+    - Q1: the turn is answered with the thread as it stands when it STARTS.
+      `refresh(answering, pending, ctx)` rebuilds `ctx.history` from the stored
+      thread minus `answering` (the messages this turn answers — handed to it
+      after the history) and minus `pending` (every other message persisted but
+      not yet answered: preparing, or waiting here — §9 C8), and returns whether
+      the answered messages must MOVE to where this turn reads them (something
+      now sits after them). Persisted at acceptance, a question sits above the
+      answer it waited for; built at acceptance, its history held neither.
+    - Q2: a message by someone other than the running turn's author stops that
+      turn, and its own takes over.
 
-    `refresh(ats, ctx)` rebuilds `ctx.history` from the thread as it stands,
-    minus the messages stamped `ats` — the ones this turn answers, handed to it
-    after the history (`thread_without`). `on_absorbed` settles this message
-    when ANOTHER message's turn
-    answered it — called only once that turn's reply is this pod's and in the
-    store, so a handed-over turn leaves it owed (its claim open for a peer).
-    `speaker` is the attribution label the model sees for it when it leads
-    another turn."""
+    `on_absorbed` settles this message when ANOTHER message's turn answered it —
+    called only once that turn ended normally and its reply is this pod's and in
+    the store. A turn that was cancelled (Stop, a takeover) answered nothing it
+    read: those messages go back to the queue, owed (§9 C9). A handed-over turn
+    wrote nothing, so they stay owed for the peer.
+
+    `driven` marks a round the goal driver started (#613): not a person
+    speaking, so it never takes a turn over, is never read into another turn,
+    and is never folded with people's messages — it waits its turn (§9 C10).
+
+    `speaker` is the attribution label the model sees for it when it leads or
+    is read into another turn."""
 
     author: str
     at: int
-    refresh: Callable[[list[int], AgentToolContext], Awaitable[None]] | None = None
+    refresh: (
+        Callable[[list[MessageKey], set[MessageKey], AgentToolContext], Awaitable[bool]] | None
+    ) = None
     on_absorbed: Callable[[], None] | None = None
     speaker: str = ""
-    # Rebuild at start even though nothing is queued HERE: a peer re-running a
-    # claim (plan-graceful-shutdown P3) has an empty queue, yet the question it
-    # re-runs may sit above an answer it waited for on the pod that went away.
-    rebuild: bool = False
+    driven: bool = False
 
 
 @dataclass(eq=False)
@@ -767,12 +846,19 @@ class _QueueEntry:
     pending: PendingTurn | None  # the caller's preparation token; see `enqueue`
     stamp: _TurnStamp
     message: QueuedMessage | None = None
-    # Something was running or waiting when this was queued: its history,
-    # built at acceptance, is out of date by the time it starts.
-    waited: bool = False
 
     def stopped_while_preparing(self) -> bool:
         return self.pending is not None and self.pending.cancelled
+
+    def is_persons(self) -> bool:
+        """A person's message still to be answered: one the Q10 fold and a
+        running turn's reader may take (never a goal round, never a send
+        stopped while preparing)."""
+        return (
+            self.message is not None
+            and not self.message.driven
+            and not self.stopped_while_preparing()
+        )
 
     def as_interjection(self) -> Interjection:
         assert self.message is not None
@@ -810,6 +896,18 @@ class _TurnQueue:
     def empty(self) -> bool:
         return not self._items
 
+    def put_front(self, entries: list[_QueueEntry]) -> None:
+        """Put entries back at the head, in order — messages a turn read or was
+        about to read but did not answer (plan-interjection §9 C9)."""
+        for e in reversed(entries):
+            self._items.appendleft(e)
+        if entries:
+            self._ready.set()
+
+    def message_keys(self) -> set[MessageKey]:
+        """The messages waiting here: not yet answered by anyone."""
+        return {(e.message.at, e.message.author) for e in self._items if e.message is not None}
+
     def take(self, wanted: Callable[[_QueueEntry], bool]) -> list[_QueueEntry]:
         """Remove and return every waiting entry `wanted` accepts, in order."""
         taken = [e for e in self._items if wanted(e)]
@@ -845,6 +943,11 @@ class _WorkspaceSession:
     # `enqueue`, so this holds only the ones a Stop should still be able to
     # reach — never a message already waiting its turn in the queue.
     pending_turns: set[PendingTurn] = field(default_factory=set)
+    # docs/plan-interjection.md Q2: whose message the running turn answers (None
+    # when it answers none — a workflow step), and who stopped it, if another
+    # person's message did. Both belong to `current_turn` and are reset with it.
+    running_author: str | None = None
+    interrupted_by: str = ""
     # queue → the subscriber's user id ("" for an anonymous stream, e.g. per-chat /
     # workflow streams that don't participate in presence). #455 tracks it here so
     # a join/leave can broadcast the roster. Each queue element is a `(seq, event)`
@@ -997,6 +1100,13 @@ class ChatTurnEngine:
         # cross-pod bump. Multi-pod injects a specstar-backed control.
         self._turn_control = turn_control or InMemoryTurnControl()
         self._poll_interval = poll_interval
+        # plan-interjection §9 C13: set by `aclose` once it has finished waiting,
+        # just before it cancels whatever is left — on every `aclose`, whether
+        # anything was left or not — and never reset: the engine is not used
+        # again after it (the lifespan's shutdown is the only caller). A turn
+        # cancelled then was not STOPPED — the pod is going — so what it folded
+        # is handed over, not re-queued, and no worker starts another turn here.
+        self._draining = False
 
     async def _watch_epoch(self, key: str, my_epoch: int, task: asyncio.Task) -> None:
         """Cross-pod cancel backstop (#349): poll the shared epoch and cancel
@@ -1131,11 +1241,18 @@ class ChatTurnEngine:
         message: QueuedMessage | None = None,
     ) -> asyncio.Future[None]:
         """#43: append a message to the investigation's FIFO turn queue and
-        ensure its worker is running. Unlike `stream()`, a new message does NOT
-        cancel the in-flight turn — concurrent users serialize, they don't kill
-        each other's work (Stop is the explicit `cancel_current`). Returns a
-        future that resolves when THIS message's turn ends, so the caller can
-        await its own turn while later messages queue behind it.
+        ensure its worker is running. Returns a future that resolves when the
+        turn that answers THIS message ends, so the caller can await it while
+        later messages queue behind.
+
+        Unlike `stream()`, a new message never throws away the in-flight turn's
+        work. With a `message` (docs/plan-interjection.md), what it does to the
+        running turn depends on whose it is: its author's own is read into that
+        turn at the next model call (Q1); another person's STOPS it — its
+        partial work persisted, its ending naming them — and theirs takes over
+        (Q2), because a turn runs as one person. A goal round or a send already
+        stopped while preparing stops nothing. Without a `message` (a workflow
+        step) it simply waits its turn, as before.
 
         `pending` is the token this send registered with `preparing` before it
         began preparing (compaction, a cold sandbox wake, the context build). A
@@ -1181,14 +1298,29 @@ class ChatTurnEngine:
         fut: asyncio.Future[None] = asyncio.get_running_loop().create_future()
         session.pending_turns.discard(pending) if pending is not None else None
         stamp = _TurnStamp(surface, accepted_ms if accepted_ms is not None else _now_ms())
-        waited = (
-            session.current_turn is not None and not session.current_turn.done()
-        ) or not session.queue.empty()
-        session.queue.put_nowait(
-            _QueueEntry(
-                content, ctx, on_complete, on_turn_end, fut, pending, stamp, message, waited
-            )
-        )
+        entry = _QueueEntry(content, ctx, on_complete, on_turn_end, fut, pending, stamp, message)
+        # plan-interjection Q2: a turn runs as one person. Another person's
+        # message is not read into it — it stops it, and its own turn (next in
+        # line) takes over with the thread as it stands. Only the turn being
+        # started or run: nobody's preparing send is touched, unlike a Stop. Not
+        # by a goal round, and not by a send already stopped (§9 C10).
+        if (
+            entry.is_persons()
+            and message is not None
+            and session.running_author is not None
+            and message.author != session.running_author
+        ):
+            logger.info("turns: %s's message takes over the turn on %s", message.author, key)
+            session.interrupted_by = message.author
+            turn = session.current_turn
+            if turn is not None and not turn.done():
+                # On the NEXT loop pass, not now: a task cancelled before its
+                # first step never runs its body, so it would end with nothing
+                # on the record (§9 C11). Its first step is already scheduled,
+                # so it runs first and the cancel lands inside it. A turn still
+                # being PREPARED has no task yet — the worker sees the flag.
+                asyncio.get_running_loop().call_soon(turn.cancel)
+        session.queue.put_nowait(entry)
         logger.info("turns: enqueued turn for %s", key)
         return fut
 
@@ -1199,6 +1331,15 @@ class ChatTurnEngine:
         worker proceeds to the next; its completion future is then resolved."""
         while True:
             entry = await session.queue.get()
+            # A send the drain marked while it was still preparing is declined
+            # below like any stopped send — it must end on the record (a KB
+            # chat has no claim, so nobody would answer it otherwise).
+            if self._draining and not entry.stopped_while_preparing():
+                # The pod is going (`aclose` has finished waiting): nothing new
+                # starts here. The POST is woken; a claim stays for a peer.
+                if not entry.fut.done():
+                    entry.fut.set_result(None)
+                continue
             # A Stop that landed while the caller was still PREPARING this turn
             # (see `PendingTurn`): there was nothing to cancel then, so honouring
             # it is entirely a matter of not starting now. Checked before the turn
@@ -1216,31 +1357,52 @@ class ChatTurnEngine:
                 logger.info("turns: worker %s declined a turn stopped during prep", key)
                 self._decline(session, key, entry)
                 continue
-            # plan-interjection Q10: every other unseen message waiting now is
+            # plan-interjection Q10: every other person's message waiting now is
             # answered by this same turn — the LAST one is the turn.
             folded: list[_QueueEntry] = []
-            if entry.message is not None:
-                folded = [
-                    entry,
-                    *session.queue.take(
-                        lambda e: e.message is not None and not e.stopped_while_preparing()
-                    ),
-                ]
+            if entry.is_persons():
+                folded = [entry, *session.queue.take(_QueueEntry.is_persons)]
                 entry = folded.pop()
+            group = [*folded, entry]
             content, ctx, on_complete = entry.content, entry.ctx, entry.on_complete
             on_turn_end, fut, stamp = entry.on_turn_end, entry.fut, entry.stamp
+            session.running_author = entry.message.author if entry.message else None
+            session.interrupted_by = ""
             ctx.leading_interjections = [e.as_interjection() for e in folded]
-            # A message that waited sits ABOVE the answer it waited for (it was
-            # persisted first). It is read now, after that answer — so its
-            # history is rebuilt now, and the reply puts it back where it was
-            # read: a `PLACE_ROLE` marker per message, ahead of the reply.
+            for e in folded:
+                # Q7: a skill applied with a folded message is readable too.
+                for name in e.ctx.applied_skills:
+                    if name not in ctx.applied_skills:
+                        ctx.applied_skills.append(name)
+            # The turn answers the earliest of its messages too: accepted then.
+            stamp.accepted_ms = min(e.stamp.accepted_ms for e in group)
+            # Q1: answered with the thread as it stands NOW, and the messages
+            # it answers put where it reads them when something sits after them.
             places: list[TurnMessage] = []
-            if entry.message is not None and (entry.waited or folded or entry.message.rebuild):
-                answering = [e.message.at for e in (*folded, entry) if e.message is not None]
-                await self._refresh_history(key, entry, answering)
-                places = [TurnMessage(role=PLACE_ROLE, created_at=at) for at in answering]
             if entry.message is not None:
-                on_complete = self._settling(on_complete, folded)
+                answering = [
+                    (e.message.at, e.message.author) for e in group if e.message is not None
+                ]
+                if await self._refresh_history(session, key, entry, answering):
+                    places = [
+                        TurnMessage(
+                            role=PLACE_ROLE, created_at=e.message.at, author=e.message.author
+                        )
+                        for e in group
+                        if e.message is not None
+                    ]
+            # Q2 while this turn was still being prepared: nothing has run for
+            # these messages, so nothing is stopped — they go back, and the
+            # newcomer's turn (next) answers them all (§9 C11).
+            if session.interrupted_by:
+                logger.info("turns: worker %s handing the next turn over before it ran", key)
+                session.queue.put_front(group)
+                session.running_author = None
+                session.interrupted_by = ""
+                continue
+            outcome: list[bool | None] = []
+            if entry.message is not None:
+                on_complete = self._recording(on_complete, outcome)
                 ctx.take_interjections = self._reader(session, entry.message.author, folded)
             # Make the turn cancellable BEFORE reading the epoch. `current()` awaits
             # (a specstar round-trip); a Stop landing in that window must find the
@@ -1260,6 +1422,7 @@ class ChatTurnEngine:
                         session.publish,
                         stamp=stamp,
                         places=places,
+                        interrupted_by=lambda: session.interrupted_by,
                     ),
                 )
             )
@@ -1285,22 +1448,24 @@ class ChatTurnEngine:
             # once, so the loop close then waited on it forever (CI's `api-4`
             # shard, hours, twice). Which of the two it is, the task itself
             # says.
+            closing = False
             try:
                 await turn
             except asyncio.CancelledError:
                 me = asyncio.current_task()
                 if me is not None and me.cancelling():
+                    closing = True
                     raise
             except Exception:  # noqa: BLE001 — a turn's failure is not the worker's
                 logger.exception("turns: worker %s turn raised", key)
             finally:
                 session.current_turn = None
+                session.running_author = None
+                self._after_turn(session, key, turn, folded, outcome, closing=closing)
                 # Always wake the POST awaiting this message, whatever happened —
                 # otherwise the request hangs to its detach timeout for nothing.
-                # The folded messages' POSTs too: this turn was theirs.
-                for waiting in (fut, *(e.fut for e in folded)):
-                    if not waiting.done():
-                        waiting.set_result(None)
+                if not fut.done():
+                    fut.set_result(None)
             logger.debug("turns: worker %s turn finished", key)
 
     def _decline(self, session: _WorkspaceSession, key: str, entry: _QueueEntry) -> None:
@@ -1323,37 +1488,48 @@ class ChatTurnEngine:
         if not entry.fut.done():
             entry.fut.set_result(None)
 
-    async def _refresh_history(self, key: str, entry: _QueueEntry, answering: list[int]) -> None:
-        """Rebuild the turn's history from the thread as it stands NOW, minus the
-        messages this turn answers (plan-interjection Q1/Q10). A refresh that
-        fails leaves the history the message was accepted with: an older context
-        is a worse answer, not a reason to have none."""
+    async def _refresh_history(
+        self,
+        session: _WorkspaceSession,
+        key: str,
+        entry: _QueueEntry,
+        answering: list[MessageKey],
+    ) -> bool:
+        """Rebuild the turn's history from the thread as it stands NOW
+        (plan-interjection Q1/Q10), leaving out every message nobody has
+        answered yet: the ones this turn answers, the ones still preparing
+        (`PendingTurn.at`) and the ones still waiting here (§9 C8). Returns
+        whether this turn's messages must move to where it reads them.
+
+        A refresh that fails leaves the history the message was accepted with
+        and moves nothing: an older context is a worse answer, not a reason to
+        have none."""
         assert entry.message is not None
         refresh = entry.message.refresh
         if refresh is None:
-            return
+            return False
+        pending = {
+            (p.at, p.sender) for p in session.pending_turns if p.at is not None and not p.cancelled
+        } | session.queue.message_keys()
         try:
-            await refresh(answering, entry.ctx)
+            return await refresh(answering, pending - set(answering), entry.ctx)
         except Exception:  # noqa: BLE001 — the accept-time history still stands
             logger.exception("turns: worker %s could not rebuild a queued turn's history", key)
+            return False
 
     @staticmethod
     def _reader(
         session: _WorkspaceSession, author: str, folded: list[_QueueEntry]
     ) -> Callable[[], list[Interjection]]:
         """The running turn's `take_interjections` (plan-interjection Q1): every
-        message its OWN author has queued since, not stopped while preparing —
-        taken off the queue (they get no turn of their own) and added to the
-        messages this turn answers. Another person's message is never taken:
-        a turn runs as one person (Q2)."""
+        message its OWN author has queued since, not stopped while preparing and
+        not a goal round — taken off the queue (they get no turn of their own)
+        and added to the messages this turn answers. Another person's message is
+        never taken: a turn runs as one person (Q2)."""
 
         def take() -> list[Interjection]:
             taken = session.queue.take(
-                lambda e: (
-                    e.message is not None
-                    and e.message.author == author
-                    and not e.stopped_while_preparing()
-                )
+                lambda e: e.is_persons() and e.message is not None and e.message.author == author
             )
             folded.extend(taken)
             return [e.as_interjection() for e in taken]
@@ -1361,26 +1537,50 @@ class ChatTurnEngine:
         return take
 
     @staticmethod
-    def _settling(
-        on_complete: Callable[[list[TurnMessage]], bool | None], folded: list[_QueueEntry]
+    def _recording(
+        on_complete: Callable[[list[TurnMessage]], bool | None], outcome: list[bool | None]
     ) -> Callable[[list[TurnMessage]], bool | None]:
-        """`on_complete`, then settle the messages this turn answered for others
-        — only when the reply was this pod's to write (`on_complete` did not say
-        False). A handed-over turn wrote nothing; what it folded is still owed.
-
-        `folded` is read when the reply persists, not now: a running turn keeps
-        adding the messages it reads (`_reader`)."""
+        """`on_complete`, keeping what it said (False: not this pod's reply)."""
 
         def persist(produced: list[TurnMessage]) -> bool | None:
             result = on_complete(produced)
-            if result is not False:
-                for e in folded:
-                    assert e.message is not None
-                    if e.message.on_absorbed is not None:
-                        e.message.on_absorbed()
+            outcome.append(result)
             return result
 
         return persist
+
+    def _after_turn(
+        self,
+        session: _WorkspaceSession,
+        key: str,
+        turn: asyncio.Task[Any],
+        folded: list[_QueueEntry],
+        outcome: list[bool | None],
+        *,
+        closing: bool,
+    ) -> None:
+        """Settle the messages a turn answered for others — or give them back.
+
+        - Ended normally with its reply this pod's and stored: they were
+          answered — settle each (`on_absorbed`) and wake its POST.
+        - Cancelled (a Stop, a takeover): it answered nothing it read, so they
+          go back to the head of the queue, owed — the next turn answers them
+          (§9 C9). Their POSTs keep waiting for that turn.
+        - The worker itself is closing (a drain): nothing will run here again;
+          their POSTs are woken and their claims stay owed for a peer."""
+        cancelled = turn.done() and turn.cancelled()
+        # Cancelled by a drain past its deadline is not a Stop: hand over.
+        closing = closing or self._draining
+        if cancelled and not closing and folded:
+            logger.info("turns: worker %s returns %d unanswered message(s)", key, len(folded))
+            session.queue.put_front(folded)
+            return
+        answered = not cancelled and not closing and bool(outcome) and outcome[-1] is not False
+        for e in folded:
+            if answered and e.message is not None and e.message.on_absorbed is not None:
+                e.message.on_absorbed()
+            if not e.fut.done():
+                e.fut.set_result(None)
 
     async def turn_alive(self, key: str) -> bool:
         """Whether a turn on `key` is being driven, on ANY pod.
@@ -1447,6 +1647,7 @@ class ChatTurnEngine:
         *,
         stamp: _TurnStamp | None = None,
         places: list[TurnMessage] | None = None,
+        interrupted_by: Callable[[], str] | None = None,
     ) -> None:
         """Drive one turn through the runner, reducing events into persistable
         messages AND broadcasting each raw event to the investigation's live
@@ -1462,7 +1663,14 @@ class ChatTurnEngine:
         )
         with scoped(usage.scope) if usage is not None else contextlib.nullcontext():
             await self._drive_turn(
-                content, ctx, on_complete, on_turn_end, publish, usage, list(places or [])
+                content,
+                ctx,
+                on_complete,
+                on_turn_end,
+                publish,
+                usage,
+                list(places or []),
+                interrupted_by,
             )
 
     async def _drive_turn(
@@ -1474,6 +1682,7 @@ class ChatTurnEngine:
         publish: Callable[[AgentEvent], None],
         usage: _TurnUsage | None,
         places: list[TurnMessage],
+        interrupted_by: Callable[[], str] | None = None,
     ) -> None:
         """`_run_turn`'s body, inside the turn's usage scope."""
         reducer = _TurnReducer(produced=places, ephemeral_outputs=ctx.ephemeral_outputs)
@@ -1515,7 +1724,9 @@ class ChatTurnEngine:
             # own drain released it) persists nothing, and must not broadcast
             # a cancel either: on the bus it reaches the live pod's viewers as
             # a "cancelled" banner seconds before the peer's answer starts.
-            cancelled = RunCancelled()
+            # plan-interjection Q2: who stopped it, when another person's
+            # message took the turn over; a Stop leaves it empty.
+            cancelled = RunCancelled(by=interrupted_by() if interrupted_by else "")
             reducer.add(cancelled)
             raise
         except Exception as exc:  # noqa: BLE001 — surface as a terminal error message
@@ -1565,7 +1776,9 @@ class ChatTurnEngine:
                         usage.end()
 
     @contextlib.asynccontextmanager
-    async def preparing(self, key: str, author: str = "") -> AsyncIterator[PendingTurn]:
+    async def preparing(
+        self, key: str, author: str = "", at: int | None = None, sender: str | None = None
+    ) -> AsyncIterator[PendingTurn]:
         """Own the window in which a send is preparing a turn, and yield its token.
 
         Hand the token to `enqueue`, which retires it at the right moment: from
@@ -1577,7 +1790,7 @@ class ChatTurnEngine:
 
         `author` scopes what a Stop by a named person may decline; see
         `PendingTurn`."""
-        pending = PendingTurn(author=author)
+        pending = PendingTurn(author=author, at=at, sender=author if sender is None else sender)
         session = self._ws_session(key)
         session.pending_turns.add(pending)
         # plan-graceful-shutdown P3: the turn's claim is opened before this
@@ -1621,8 +1834,11 @@ class ChatTurnEngine:
 
     async def cancel_current(self, key: str, by: str = "") -> None:
         """#43 Stop: interrupt the investigation's in-flight turn (anyone may do
-        this). Queued messages are untouched — the worker runs the next one. A
-        no-op when nothing is running.
+        this). Queued messages are untouched — the worker runs the next one —
+        and so are the messages the stopped turn had already READ: it answered
+        none of them, so they go back to the head of the queue and the next
+        turn answers them (docs/plan-interjection.md §9 C9). A no-op when
+        nothing is running.
 
         #349: bump the shared epoch first so a turn running on a PEER pod's queue
         worker (Stop didn't land on the pod holding it) aborts via its watcher;
@@ -1659,7 +1875,10 @@ class ChatTurnEngine:
                 waiting.cancelled = True
         turn = session.current_turn
         if turn is not None and not turn.done():
-            turn.cancel()
+            # On the next loop pass, as a takeover does (plan-interjection §9 C11):
+            # a task cancelled before its first step skips its body — and with it
+            # the ending every turn persists.
+            asyncio.get_running_loop().call_soon(turn.cancel)
             with contextlib.suppress(BaseException):
                 await turn
 
@@ -1945,8 +2164,9 @@ class ChatTurnEngine:
         # Three shapes: a turn running, turns queued, and a send still
         # PREPARING its turn (its claim is open, its turn does not exist yet —
         # `pending_turns`; a workspace session's — the KB chat enqueues on its
-        # own engine's workspace sessions too, but never through `preparing()`,
-        # and the `_TurnSession` shape has neither queue nor preparation).
+        # own engine's workspace sessions too, and since plan-interjection §9 C8
+        # also prepares through `preparing()`, though it opens no claim; the
+        # `_TurnSession` shape has neither queue nor preparation).
         unfinished = [
             key
             for key, session in (*self._ws_sessions.items(), *self._sessions.items())
@@ -1975,6 +2195,8 @@ class ChatTurnEngine:
         for session in self._ws_sessions.values():
             for waiting in session.pending_turns:
                 waiting.cancelled = True
+        # From here on a cancelled turn is the pod going, not a Stop (§9 C13).
+        self._draining = True
         stragglers = self._live_turns()
         for task in stragglers:
             task.cancel()

@@ -533,7 +533,9 @@ class ChatSendService:
         if self._goal_checker is None:
             return
         failure = next((m for m in produced if m.role == "error"), None)
-        if failure is not None and failure.error_kind == "cancelled":
+        # A Stop, or another person's message taking the round over (plan-interjection
+        # Q2): either way a human just intervened.
+        if failure is not None and failure.error_kind in ("cancelled", "interrupted"):
             return
         outcome = (failure.error_kind or "error") if failure is not None else "ok"
         task = asyncio.create_task(
