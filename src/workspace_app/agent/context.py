@@ -291,6 +291,10 @@ class AgentToolContext:
     # by the turn engine for a chat message's turn; None everywhere else, which
     # leaves the turn exactly as it was.
     take_interjections: Callable[[], list[Interjection]] | None = None
+    # #915 x plan-interjection §9 C19: the rate-limit wait pool of the turn being
+    # run — set by the runner when a `run()` begins, shared by every segment of
+    # it (a segment is its own SDK run, so its own `CallRetryModel`).
+    turn_wait_pool: Any = None
     # Deploy-level registry of provisionable tool packages (#21, #25). When
     # the sandbox is created, the packages that appear in
     # agent_config.allowed_tools (raw pkg name, or `pkg:cmd` colon syntax) are

@@ -149,6 +149,16 @@ def _provider_retries_off(settings: ModelSettings) -> ModelSettings:
     return settings.resolve(_PROVIDER_RETRIES_OFF)
 
 
+class WaitPool:
+    """The seconds a turn has already held for rate limits — the budget is the
+    TURN's (`CallRetryModel`). One object handed to every `CallRetryModel` the
+    turn builds, so a turn of several SDK runs (docs/plan-interjection.md: a new
+    segment per message read mid-turn) still draws on one pool."""
+
+    def __init__(self) -> None:
+        self.waited_s = 0.0
+
+
 class CallRetryModel(Model):
     def __init__(
         self,
@@ -160,6 +170,7 @@ class CallRetryModel(Model):
         on_hold: Callable[[float], None] | None = None,
         trim: InputTrim | None = None,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+        pool: WaitPool | None = None,
     ) -> None:
         self._inner = inner
         self._max_retries = max_retries
@@ -175,7 +186,17 @@ class CallRetryModel(Model):
         # instance — one per `run()` (`_call_retry`); a delegated sub-agent's run
         # has its own — never a per-call allowance: that reset every tool round,
         # so a turn of N calls could wait N times the budget (review round 1).
-        self._waited_s = 0.0
+        # `pool` is shared when the turn spans several instances (an interjection
+        # starts a new segment); otherwise this instance is the pool.
+        self._pool = pool if pool is not None else WaitPool()
+
+    @property
+    def _waited_s(self) -> float:
+        return self._pool.waited_s
+
+    @_waited_s.setter
+    def _waited_s(self, value: float) -> None:
+        self._pool.waited_s = value
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._inner, name)
