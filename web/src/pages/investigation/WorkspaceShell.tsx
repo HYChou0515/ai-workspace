@@ -38,7 +38,14 @@ import { presenceOf } from "./fileTree";
 import { useDialog } from "../../components/Dialog";
 import { useDirtyClose } from "../../hooks/useDirtyClose";
 import { useT } from "../../lib/i18n";
-import { FileServiceProvider, investigationFileService } from "../../api/fileService";
+import { FileServiceProvider, investigationFileService, useFileService } from "../../api/fileService";
+import { WorkflowsSidebar } from "../../components/WorkflowsSidebar";
+import { WaitingNotice } from "../../components/WaitingNotice";
+import { ItemProfileProvider } from "../../hooks/itemProfile";
+import { subscribeChatRequest } from "../../lib/chatRequestBus";
+import { executionFromAddress, isExecutionPath } from "../../lib/executionTab";
+import { ExecutionTitle } from "../../components/ExecutionTitle";
+import { useItemRuns } from "../../hooks/useWorkflow";
 import { WorkspaceSlugProvider, useWorkspaceSlug } from "../../hooks/useWorkspaceSlug";
 import { EditModeProvider, useEditMode } from "../../hooks/editMode";
 import {
@@ -94,7 +101,7 @@ import { pxToRem } from "../../lib/pxToRem";
 
 type OpenFileFn = (path: string, opts?: { preview?: boolean }) => void;
 
-export type ActivityMode = "evidence" | "search" | "history" | "members" | "activity";
+export type ActivityMode = "evidence" | "search" | "history" | "members" | "activity" | "workflows";
 
 /** Close a tab through the dirty-aware path (save-on-close prompt). Provided
  * by ShellBody so the deep tab strip can request closes without prop drilling. */
@@ -418,8 +425,10 @@ function ShellBody({
   // shell: the listing is a pruned preload, so a path under an unwalked folder
   // is `unknown`, not missing — a view an App keeps under `dist/` must open.
   const filePaths = useMemo(() => new Set(files.map((f) => f.path)), [files]);
+  // An execution's tab is not a file: no listing vouches for it, and none
+  // closes it (plan-workflow-out-of-chat D7).
   const presence = useCallback(
-    (p: string) => presenceOf(p, filePaths, unwalked),
+    (p: string) => (isExecutionPath(p) ? "present" : presenceOf(p, filePaths, unwalked)),
     [filePaths, unwalked],
   );
   const initialPaths = useMemo(
@@ -590,6 +599,23 @@ function ShellBody({
     [ideCollapsed, chatCollapsed, manifest.function.workspace, setIdeCollapsed],
   );
   const toggleChat = useCallback(() => applyPanels("chat"), [applyPanels]);
+  // `?open=workflow-run:<id>` — the schedules overview links a schedule's last
+  // run this way (plan-workflow-out-of-chat P11). Read once, from the address
+  // the item was opened with; the workspace unfolds so the tab is seen.
+  const [addressExecution] = useState(() => executionFromAddress(window.location.search));
+  useEffect(() => {
+    if (!addressExecution || !manifest.function.workspace) return;
+    setIdeCollapsed(false);
+    groups.openInActive(addressExecution);
+    // once, on arrival
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [addressExecution]);
+  // An execution asked for a chat about it (plan-workflow-out-of-chat D8 / D9):
+  // the chat shell opens one, and a folded chat must unfold for it to be seen.
+  useEffect(
+    () => subscribeChatRequest(item.resource_id, () => setChatCollapsed(false)),
+    [item.resource_id, setChatCollapsed],
+  );
   const toggleIde = useCallback(() => applyPanels("ide"), [applyPanels]);
 
   // Cap the chat width so the editor always keeps a usable minimum. The chat is
@@ -655,7 +681,8 @@ function ShellBody({
   const openFile = useCallback<OpenFileFn>(
     (path, opts) => {
       groups.openInActive(path, opts);
-      recentFiles.push(path);
+      // Recently opened lists files; an execution is listed in Workflows.
+      if (!isExecutionPath(path)) recentFiles.push(path);
       // Glancing at the tree is a means to this end: the file is now on screen,
       // so the peek has done its job and retracts. Same rule as pressing
       // outside — the "something else" simply started inside the panel. A
@@ -760,6 +787,7 @@ function ShellBody({
   }, []);
 
   return (
+    <ItemProfileProvider value={String(item.profile ?? manifest.default_profile)}>
     <OpenFileProvider value={openFile}>
       <OpenLayoutProvider value={openLayout}>
       <ViewPageHrefProvider value={viewHref}>
@@ -808,6 +836,20 @@ function ShellBody({
             }}
           />
         )}
+        {/* P9: an execution waiting for the person says so wherever they are in
+            the workspace — folded or not, so Open unfolds to its tab. */}
+        {manifest.function.workspace && _canSeeFiles && (
+          <WaitingNotice
+            slug={manifest.slug}
+            itemId={item.resource_id}
+            profile={String(item.profile ?? manifest.default_profile)}
+            activePath={workspaceVisible ? groups.activeFile : null}
+            onOpen={(path) => {
+              setIdeCollapsed(false);
+              openFile(path);
+            }}
+          />
+        )}
         <div style={{ flex: 1, display: "flex", minHeight: 0, position: "relative" }}>
           {/* #89: the file IDE (activity bar + file tree + editor + bottom
               panel) renders only when the App enables `function.workspace`; a
@@ -820,6 +862,8 @@ function ShellBody({
           <ActivityBar
             mode={activityMode}
             membersLabel={manifest.labels?.members ?? "Members"}
+            slug={manifest.slug}
+            itemId={item.resource_id}
             onMode={setActivityMode}
             onPanel={dispatchSidebar}
             railRef={railRef}
@@ -1007,7 +1051,6 @@ function ShellBody({
               readOnly={!_canConverse}
               slug={manifest.slug}
               itemId={item.resource_id}
-              profile={String(item.profile ?? manifest.default_profile)}
               // #198: where the composer's attach stages files — the item's profile's
               // upload_dir (default uploads/), the same folder its workflows glob.
               uploadDir={resolveUploadDir(
@@ -1085,6 +1128,7 @@ function ShellBody({
       </ViewPageHrefProvider>
       </OpenLayoutProvider>
     </OpenFileProvider>
+    </ItemProfileProvider>
   );
 }
 
@@ -1720,6 +1764,8 @@ function ActivityBar({
   onPanel,
   railRef,
   membersLabel,
+  slug,
+  itemId,
 }: {
   mode: ActivityMode;
   onMode: (m: ActivityMode) => void;
@@ -1731,17 +1777,30 @@ function ActivityBar({
    * popover use, so the icon's tooltip can't say "Reviewers" while the panel it
    * opens says "Members". */
   membersLabel: string;
+  slug: string;
+  itemId: string;
 }) {
+  // plan-workflow-out-of-chat D7: how many of this item's executions wait for a
+  // person at a gate — a count badge on the Workflows entry's icon (Material 3
+  // "Badges"). The same read the sidebar lists from (`runsPollMs` paces it).
+  const waiting = (useItemRuns(slug, itemId).data ?? []).filter(
+    // not one superseded by a newer execution of its workflow: it can only be stopped
+    (r) => r.status === "awaiting_human" && r.latest !== false,
+  ).length;
   // Which pane was on show when the current gesture began — the first click of
   // a double click has already switched `mode`, so "did you double-click the
   // icon you were already looking at?" cannot be asked of the live value.
   const gestureFrom = useRef(mode);
-  const items: { name: IconName; label: string; to: ActivityMode }[] = [
+  // `shown`: the one entry whose name is printed under its icon (NN/g "Icon
+  // Usability": an icon needs a visible label). The older entries keep their
+  // tooltip-only names; "Workflows" is new and has no icon people already know.
+  const items: { name: IconName; label: string; to: ActivityMode; shown?: boolean }[] = [
     { name: "folder", label: "Files", to: "evidence" },
     { name: "search", label: "Search files", to: "search" },
     { name: "clock", label: "History", to: "history" },
     { name: "users", label: membersLabel, to: "members" },
     { name: "bell", label: "Activity", to: "activity" },
+    { name: "workflow", label: "Workflows", to: "workflows", shown: true },
   ];
   return (
     <div
@@ -1759,11 +1818,13 @@ function ActivityBar({
     >
       {items.map((it) => {
         const active = mode === it.to;
+        const badge = it.to === "workflows" ? waiting : 0;
         return (
           <button
             key={it.label}
             type="button"
             title={it.label}
+            aria-label={badge > 0 ? `${it.label}, ${badge} waiting for you` : it.label}
             onClick={(e) => {
               if (e.detail <= 1) gestureFrom.current = mode;
               onMode(it.to);
@@ -1774,8 +1835,11 @@ function ActivityBar({
             }
             style={{
               width: 50,
-              height: 44,
+              height: it.shown ? 52 : 44,
+              position: "relative",
               display: "inline-flex",
+              flexDirection: "column",
+              gap: 2,
               alignItems: "center",
               justifyContent: "center",
               color: active ? "var(--accent)" : "var(--text-paper-d)",
@@ -1784,6 +1848,34 @@ function ActivityBar({
             }}
           >
             <Icon name={it.name} size={18} />
+            {it.shown && (
+              <span aria-hidden style={{ fontSize: pxToRem(9), lineHeight: 1 }}>
+                {it.label}
+              </span>
+            )}
+            {badge > 0 && (
+              <span
+                data-testid="workflows-waiting"
+                aria-hidden
+                style={{
+                  position: "absolute",
+                  top: 4,
+                  right: 7,
+                  minWidth: 15,
+                  height: 15,
+                  padding: "0 4px",
+                  borderRadius: 8,
+                  background: "var(--accent)",
+                  color: "var(--paper)",
+                  fontSize: pxToRem(9),
+                  fontWeight: 700,
+                  lineHeight: "15px",
+                  textAlign: "center",
+                }}
+              >
+                {badge}
+              </span>
+            )}
           </button>
         );
       })}
@@ -1829,7 +1921,37 @@ function ActivitySidebar(props: {
       return <MembersSidebar manifest={props.manifest} item={props.item} />;
     case "activity":
       return <ActivityFeed slug={props.manifest.slug} itemId={props.item.resource_id} onOpenFile={props.onOpenFile} />;
+    case "workflows":
+      return <WorkflowsPane {...props} />;
   }
+}
+
+/** The Workflows sidebar in the shell's frame — the header every pane has, over
+ * the item's workflows and executions (plan-workflow-out-of-chat D7). */
+function WorkflowsPane({
+  item,
+  manifest,
+  onOpenFile,
+}: {
+  item: AppItem;
+  manifest: AppManifest;
+  onOpenFile: OpenFileFn;
+}) {
+  const fileService = useFileService();
+  return (
+    <aside style={sidebarStyle}>
+      <div style={sidebarHeader}>
+        <span className="caps">Workflows</span>
+      </div>
+      <WorkflowsSidebar
+        slug={manifest.slug}
+        itemId={item.resource_id}
+        profile={String(item.profile ?? manifest.default_profile)}
+        fileService={fileService}
+        onOpenFile={(path) => onOpenFile(path)}
+      />
+    </aside>
+  );
 }
 
 /* ----------------------------- Evidence sidebar ----------------------------- */
@@ -2564,6 +2686,17 @@ export function Breadcrumb({
       </div>
     );
   }
+  if (isExecutionPath(activeTab)) {
+    return (
+      <div style={crumbBar}>
+        <span style={{ color: "var(--text-paper-d2)" }}>Workflows</span>
+        <Icon name="chev_r" size={10} color="var(--text-paper-d2)" />
+        <span>
+          <ExecutionTitle path={activeTab} />
+        </span>
+      </div>
+    );
+  }
   const folders = breadcrumbSegments(activeTab); // ancestor folder names
   const paths = files.map((f) => f.path);
   return (
@@ -2853,7 +2986,10 @@ function GroupTabStrip({ group, groups }: { group: EditorGroup; groups: Groups }
                 overflow: "hidden",
               }}
             >
-              <Icon name={t.pinned ? "pin" : "file"} size={12} />
+              <Icon
+                name={t.pinned ? "pin" : isExecutionPath(t.path) ? "workflow" : "file"}
+                size={12}
+              />
               <span
                 style={{
                   fontSize: pxToRem(12),
@@ -2862,7 +2998,7 @@ function GroupTabStrip({ group, groups }: { group: EditorGroup; groups: Groups }
                   textOverflow: "ellipsis",
                 }}
               >
-                {basename(t.path)}
+                {isExecutionPath(t.path) ? <ExecutionTitle path={t.path} /> : basename(t.path)}
               </span>
               <TabClose
                 path={t.path}
@@ -3582,7 +3718,8 @@ export function StatusBar({
   activeTab: string | null;
   investigationId: string;
 }) {
-  const kind = activeTab ? pickRenderer(activeTab) : null;
+  // A file's facts; an execution's tab is not a file (plan-workflow-out-of-chat D7).
+  const kind = activeTab && !isExecutionPath(activeTab) ? pickRenderer(activeTab) : null;
   const isNotebook = kind === "notebook" && activeTab != null;
   return (
     <div
@@ -3607,7 +3744,7 @@ export function StatusBar({
           notebookPath={activeTab}
         />
       )}
-      <span>UTF-8</span>
+      {kind && <span>UTF-8</span>}
       <span>default-user</span>
     </div>
   );

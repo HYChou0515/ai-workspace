@@ -90,6 +90,10 @@ memory + cards,就讓緩慢的 agentic 檢索變成例外,而不是每個 turn �
 而一個 workflow run 驅動那唯一的 conversation(workflows.md §1/§10)。Topic Hub 需要每個 item
 **多個並行 chat**。
 
+> 之後(`docs/plan-workflow-out-of-chat.md`):workflow 的執行仍是一個帶 `run_id` 的 `Conversation`,
+> 但網頁不再把它當聊天——聊天列表不列它、聊天不被接管,執行開在 workspace 的 Workflows 側欄與執行分頁
+> (workflows.md §10)。下面「workflow chat」的描述是當時的設計。
+
 - **資料模型。** `Conversation` 變成基本單位,並取得 `id`、`title` 與一個選用的 `run_id`;
   **每個 item 多個**。一個 **workflow chat** = 一個 `Conversation` 加上一個 `WorkflowRun`
   (workflows.md §13)在**驅動**它;一個 **free chat** = 一個**沒有** run 的 `Conversation`。

@@ -211,9 +211,12 @@ def test_chat_list_carries_a_name_hint_from_the_first_user_message():
 
 
 def test_chat_list_carries_the_driving_run_status_for_a_workflow_chat():
-    """A workflow chat surfaces its `WorkflowRun.status` so the list can show a
+    """A chat a run drove surfaces its `WorkflowRun.status` so the list can show a
     badge (●running / ⏸awaiting / ✓done) without polling each run (#132). A free
-    chat has no status."""
+    chat has no status. Since plan-workflow-out-of-chat D3 the list holds such a
+    chat only when a person spoke in it (one #343 took over); a run's own
+    conversation is listed by the Workflows sidebar instead."""
+    from workspace_app.resources import Message
     from workspace_app.workflow.run import RunStatus, WorkflowRun
 
     client, spec, iid = _client()
@@ -221,7 +224,13 @@ def test_chat_list_carries_the_driving_run_status_for_a_workflow_chat():
         WorkflowRun(item_id=iid, captured_user="u", status=RunStatus.RUNNING)
     )
     spec.get_resource_manager(Conversation).create(
-        Conversation(item_id=iid, run_id=run.resource_id, title="→memory", created_ms=5)
+        Conversation(
+            item_id=iid,
+            run_id=run.resource_id,
+            title="→memory",
+            created_ms=5,
+            messages=[Message(role="user", content="prepared here", created_at=4)],
+        )
     )
     free = client.post(f"/a/rca/items/{iid}/chats", json={}).json()["chat_id"]
     by_id = {c["chat_id"]: c for c in client.get(f"/a/rca/items/{iid}/chats").json()}

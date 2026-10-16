@@ -19,6 +19,8 @@ import { OpenFileProvider, OpenLayoutProvider, WorkspaceVisibleProvider } from "
 import { useEditorGroups } from "../hooks/useEditorGroups";
 import { useFiles } from "../hooks/useInvestigation";
 import { WorkspaceSlugProvider } from "../hooks/useWorkspaceSlug";
+import { ItemProfileProvider } from "../hooks/itemProfile";
+import { useAppItem, useAppManifest } from "../hooks/useResources";
 import type { FileBufferStore } from "../hooks/fileBuffer";
 import { readViewPageTarget, type ViewPageTarget } from "../lib/viewPage";
 import { EditorPanes, WorkspaceProviders } from "./investigation/WorkspaceShell";
@@ -42,12 +44,19 @@ function Loaded({ slug, id, target }: { slug: string; id: string; target: ViewPa
   const files = useFiles(id);
   const items = files.kind === "ready" ? files.items : [];
   const unwalked = files.kind === "ready" ? files.unwalked : [];
+  // An execution opened here names its workflow and steps from the item's
+  // profile, as it does in the workspace (review R1).
+  const manifest = useAppManifest(slug);
+  const item = useAppItem(slug, manifest?.resource_route, id);
+  const profile = String(item?.profile ?? manifest?.default_profile ?? "");
   return (
-    <WorkspaceProviders slug={slug} itemId={id} unwalked={unwalked}>
-      {(bufferStore) => (
-        <Panes id={id} target={target} files={items} bufferStore={bufferStore} />
-      )}
-    </WorkspaceProviders>
+    <ItemProfileProvider value={profile}>
+      <WorkspaceProviders slug={slug} itemId={id} unwalked={unwalked}>
+        {(bufferStore) => (
+          <Panes id={id} target={target} files={items} bufferStore={bufferStore} />
+        )}
+      </WorkspaceProviders>
+    </ItemProfileProvider>
   );
 }
 

@@ -67,8 +67,19 @@ def input_hash(args: Any) -> str:
     ).hexdigest()
 
 
+def journal_stem(journal_dir: str, name: str, key: str) -> str:
+    """Where a step's files live in the journal, minus the extension: its
+    artifact is ``<stem>.json``, its transcript ``<stem>.transcript.md``. One
+    rule for both, so the transcript is always beside the artifact it explains."""
+    return f"{journal_dir}/step_{name}/{key or 'main'}"
+
+
+def transcript_path(journal_dir: str, name: str, key: str) -> str:
+    return f"{journal_stem(journal_dir, name, key)}.transcript.md"
+
+
 def _artifact_path(wf: WorkflowHandle, name: str, key: str) -> str:
-    return f"{wf.journal_dir}/step_{name}/{key or 'main'}.json"
+    return f"{journal_stem(wf.journal_dir, name, key)}.json"
 
 
 def _emit(wf: WorkflowHandle, event: object) -> None:

@@ -23,7 +23,13 @@ from ..resources import Conversation
 from ..tokens import CallLane
 from ..workflow.orchestrator import WorkflowOrchestrator
 from .activity import ActivityLog
-from .chat_info import chat_info_from_resource, item_run_status
+from .chat_info import (
+    _item_runs,
+    chat_info_from_resource,
+    is_chat_resource,
+    item_run_status,
+    page_job_chats,
+)
 from .events import GoalUpdated, TodosUpdated
 from .item_conversation_perm import item_conversation_mirror
 from .locator import ItemLocator
@@ -235,19 +241,26 @@ def register_chat_routes(
 
     @app.get("/a/{slug}/items/{item_id}/chats")
     async def list_chats(slug: str, item_id: str) -> list[_ChatInfo]:
-        """List the item's chats (free + workflow), **most-recent-activity first**
-        (#132 — no "main chat" privilege). Each workflow chat carries its driving
-        run's status; every chat carries a name hint + last-activity stamp. Read-only:
+        """List the item's chats, **most-recent-activity first** (#132 — no "main
+        chat" privilege): free chats, a chat a run once took over (#343), and a
+        page job's (#942 D5, flagged `page_job`). One with a run carries its
+        status; every chat carries a name hint + last-activity stamp. Read-only:
         the implicit default chat materialises on first use, not here."""
         from .chats import _item_chats_query, find_default_conversation
 
         investigation_id = locator.require_access(slug, item_id, "read_chat")
         default = find_default_conversation(conv_rm, investigation_id)
         default_id = default[0] if default else None
-        run_status = item_run_status(spec, investigation_id)
+        runs = _item_runs(spec, investigation_id)
+        run_status = item_run_status(spec, investigation_id, runs)
+        # Not an execution's own conversation (plan-workflow-out-of-chat D3 /
+        # D4): the Workflows sidebar lists those. A chat a run took over stays,
+        # and so does a page job's, which is no execution (#942 D5).
+        page_jobs = page_job_chats(runs)
         infos = [
-            chat_info_from_resource(r, default_id, run_status)
+            chat_info_from_resource(r, default_id, run_status, page_jobs)
             for r in conv_rm.list_resources(_item_chats_query(investigation_id))
+            if is_chat_resource(r, page_jobs)
         ]
         # Most-recent activity first; chat_id breaks ties for a stable order.
         infos.sort(key=lambda c: (-(c.last_activity_ms or 0), c.chat_id))
