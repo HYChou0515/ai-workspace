@@ -900,3 +900,199 @@ async def test_a_stop_before_the_turns_first_step_still_ends_it_on_the_record():
     await asyncio.wait_for(stopping, 3)
     await _drain(engine, f1, f2)
     assert ended.get("a2") == [("error", "cancelled")]
+
+
+# ── review round 2, veracity: the claims nothing pinned ──────────────────────
+
+
+async def test_a_goal_round_is_never_read_into_its_own_setters_turn():
+    """§9 C10: the goal driver's round is stamped with the setter, so it IS a
+    candidate for the setter's running turn by author — and still must not be
+    read into it: it is not the setter speaking."""
+    runner = _ReadsMidTurn()
+    engine = ChatTurnEngine(runner)  # ty: ignore[invalid-argument-type]
+    log: list[Any] = []
+    f1 = engine.enqueue(
+        "chat",
+        "Q1",
+        AgentToolContext(),
+        on_complete=lambda p: None,
+        message=_message("ann", 1, log),
+    )
+    await asyncio.wait_for(runner.started.wait(), 3)
+    f2 = engine.enqueue(
+        "chat",
+        "[goal] continue",
+        AgentToolContext(),
+        on_complete=lambda p: None,
+        message=_message("ann", 2, log, driven=True),
+    )
+    runner.release.set()
+    await _drain(engine, f1, f2)
+    assert runner.read == []
+    assert runner.turns == ["Q1", "[goal] continue"]
+
+
+async def test_a_goal_round_and_a_persons_message_are_not_folded_together():
+    """§9 C10: queued behind a turn, a goal round and a person's message each
+    keep their own turn — the round is not the person speaking, and the person
+    is not the round's."""
+    runner = _GatedRunner()
+    engine = ChatTurnEngine(runner)  # ty: ignore[invalid-argument-type]
+    log: list[Any] = []
+    f1 = engine.enqueue(
+        "chat",
+        "Q1",
+        AgentToolContext(),
+        on_complete=lambda p: None,
+        message=_message("bob", 1, log),
+    )
+    await asyncio.wait_for(runner.started.wait(), 3)
+    f2 = engine.enqueue(
+        "chat",
+        "Q2",
+        AgentToolContext(),
+        on_complete=lambda p: None,
+        message=_message("bob", 2, log),
+    )
+    f3 = engine.enqueue(
+        "chat",
+        "[goal] continue",
+        AgentToolContext(),
+        on_complete=lambda p: None,
+        message=_message("alice", 3, log, driven=True),
+    )
+    runner.release.set()
+    await _drain(engine, f1, f2, f3)
+    assert [(t["content"], [i.content for i in t["leading"]]) for t in runner.turns] == [
+        ("Q1", []),
+        ("Q2", []),
+        ("[goal] continue", []),
+    ]
+
+
+async def test_a_send_stopped_while_preparing_is_not_folded_from_behind_the_head():
+    """A stopped send sitting BEHIND the message the worker reaches is not
+    folded into that turn: it is declined on its own (the existing test had it
+    at the head, where it is declined before any fold)."""
+    runner = _GatedRunner()
+    engine = ChatTurnEngine(runner)  # ty: ignore[invalid-argument-type]
+    log: list[Any] = []
+    f1 = engine.enqueue(
+        "chat", "Q1", AgentToolContext(), on_complete=lambda p: None, message=_message("a", 1, log)
+    )
+    await asyncio.wait_for(runner.started.wait(), 3)
+    f2 = engine.enqueue(
+        "chat", "Q2", AgentToolContext(), on_complete=lambda p: None, message=_message("a", 2, log)
+    )
+    stopped = PendingTurn(author="a")
+    stopped.cancelled = True
+    f3 = engine.enqueue(
+        "chat",
+        "Q3",
+        AgentToolContext(),
+        on_complete=lambda p: None,
+        pending=stopped,
+        message=_message("a", 3, log),
+    )
+    runner.release.set()
+    await _drain(engine, f1, f2, f3)
+    assert [(t["content"], [i.content for i in t["leading"]]) for t in runner.turns] == [
+        ("Q1", []),
+        ("Q2", []),
+    ]
+
+
+async def test_a_folded_messages_skill_is_readable_in_the_turn_that_answers_it():
+    """§9 Q7: a skill applied with a message folded into another turn is
+    readable there (its body is already in the message's content)."""
+    seen: list[list[str]] = []
+
+    class _Records(_GatedRunner):
+        async def run(self, content: str, ctx: AgentToolContext):
+            seen.append(list(ctx.applied_skills))
+            async for ev in super().run(content, ctx):
+                yield ev
+
+    runner = _Records()
+    engine = ChatTurnEngine(runner)  # ty: ignore[invalid-argument-type]
+    log: list[Any] = []
+    f1 = engine.enqueue(
+        "chat", "Q1", AgentToolContext(), on_complete=lambda p: None, message=_message("a", 1, log)
+    )
+    await asyncio.wait_for(runner.started.wait(), 3)
+    f2 = engine.enqueue(
+        "chat",
+        "Q2",
+        AgentToolContext(applied_skills=["lot-map"]),
+        on_complete=lambda p: None,
+        message=_message("a", 2, log),
+    )
+    f3 = engine.enqueue(
+        "chat", "Q3", AgentToolContext(), on_complete=lambda p: None, message=_message("a", 3, log)
+    )
+    runner.release.set()
+    await _drain(engine, f1, f2, f3)
+    assert seen[-1] == ["lot-map"]
+
+
+async def test_a_turn_answering_folded_messages_is_recorded_as_accepted_with_the_earliest():
+    """§9: the capacity record's wait (accepted → started) runs from the
+    earliest message the turn answers, not the latest."""
+    from workspace_app.capacity.recorder import UsageRecorder
+    from workspace_app.capacity.sink import UsageSink
+
+    class _ListSink(UsageSink):
+        def __init__(self) -> None:
+            self.docs: list[dict] = []
+
+        def write(self, documents):  # noqa: ANN001, ANN202
+            self.docs.extend(documents)
+
+    sink = _ListSink()
+    recorder = UsageRecorder(sink, component="api", pod="p", window_s=300, queue_max=1000)
+    runner = _GatedRunner()
+    engine = ChatTurnEngine(runner, usage_recorder=recorder)  # ty: ignore[invalid-argument-type]
+    log: list[Any] = []
+    f1 = engine.enqueue(
+        "chat",
+        "Q1",
+        AgentToolContext(),
+        on_complete=lambda p: None,
+        accepted_ms=1_000,
+        message=_message("a", 1, log),
+    )
+    await asyncio.wait_for(runner.started.wait(), 3)
+    f2 = engine.enqueue(
+        "chat",
+        "Q2",
+        AgentToolContext(),
+        on_complete=lambda p: None,
+        accepted_ms=2_000,
+        message=_message("a", 2, log),
+    )
+    f3 = engine.enqueue(
+        "chat",
+        "Q3",
+        AgentToolContext(),
+        on_complete=lambda p: None,
+        accepted_ms=3_000,
+        message=_message("a", 3, log),
+    )
+    runner.release.set()
+    await _drain(engine, f1, f2, f3)
+    recorder.flush()
+    accepted = sorted(d["usage"]["accepted_ms"] for d in sink.docs if d["usage"]["kind"] == "turn")
+    assert accepted == [1_000, 2_000]
+
+
+def test_a_message_read_mid_turn_is_placed_by_its_author_too():
+    """§9 C14 (veracity round 2): the marker an `Interjected` leaves carries the
+    author, so placing it cannot move another person's same-millisecond
+    message."""
+    from workspace_app.api.turns import _TurnReducer
+
+    reducer = _TurnReducer()
+    reducer.add(Interjected(author="ann", created_at=5))
+    (marker,) = reducer.produced
+    assert (marker.role, marker.created_at, marker.author) == (PLACE_ROLE, 5, "ann")

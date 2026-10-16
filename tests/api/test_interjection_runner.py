@@ -225,6 +225,23 @@ async def test_a_turn_that_overflows_after_reading_a_message_still_recovers(monk
     assert "".join(e.text for e in events if isinstance(e, MessageDelta)) == "both answered"
 
 
+async def test_a_chat_turn_nobody_interjects_in_still_stops_at_the_step_limit(monkeypatch):
+    """migrations.md #969: the step limit still stops a turn spinning by itself.
+    A chat turn always has a reader; one that never returns a message must not
+    restart the budget."""
+    monkeypatch.setenv("WORKSPACE_AGENT_STREAM", "1")
+    model = _Model()
+    monkeypatch.setattr(
+        lr, "_agent_for", lambda *a, **k: Agent(name="t", model=model, tools=[look])
+    )
+    ctx = _ctx()
+    ctx.max_turns = 2
+    ctx.take_interjections = list  # always: nothing was sent
+    events = [ev async for ev in lr.LitellmAgentRunner().run("Q1", ctx)]
+    assert any(isinstance(e, MaxTurnsExceeded) for e in events)
+    assert len(model.inputs) == 2
+
+
 async def test_a_turn_with_no_source_of_messages_runs_as_before(monkeypatch):
     """Every non-chat caller (a workflow step, a sub-agent, a KB probe) leaves
     `take_interjections` unset: one segment, the old step budget."""

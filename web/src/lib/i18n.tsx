@@ -582,8 +582,9 @@ export const messages = {
   },
   // docs/plan-interjection.md Q7: what a message sent mid-answer can change.
   "interject.composerNote": {
-    "zh-TW": "這一輪的推理強度與揭露設定在開始時已決定；現在送出的訊息會在 AI 做完目前這一步後被讀到。",
-    en: "This turn's reasoning effort and disclosure were set when it started; a message sent now is read after the AI's current step.",
+    "zh-TW":
+      "這一輪的推理強度與揭露設定在開始時已決定；現在送出的訊息，AI 做完目前這一步後會讀到——它已經在寫最後的回答時，就由下一輪接著回答。",
+    en: "This turn's reasoning effort and disclosure were set when it started; a message sent now is read after the AI's current step — or, if it is already writing its final answer, answered right after this turn.",
   },
 
   // App dashboard (AppDashboard) — filter strip (#172)
