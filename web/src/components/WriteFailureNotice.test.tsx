@@ -57,4 +57,16 @@ describe("WriteFailureNotice", () => {
     act(() => reportWriteFailure(new HttpError(507, "507: workspace full")));
     expect(screen.getByTestId("write-failure")).toHaveTextContent("workspace full");
   });
+
+  // docs/plan-friendly-errors.md D1: the same technical details every failure
+  // carries — collapsed, with a copy button for whoever reports it.
+  it("keeps it under collapsed technical details, copyable", () => {
+    render(<WriteFailureNotice />);
+    act(() => reportWriteFailure(new HttpError(500, "500 Internal Server Error")));
+    const details = screen.getByTestId("error-notice-details");
+    expect(details.tagName).toBe("DETAILS");
+    expect(details).not.toHaveAttribute("open");
+    expect(details).toHaveTextContent("500 Internal Server Error");
+    expect(screen.getByRole("button", { name: "複製" })).toBeInTheDocument();
+  });
 });

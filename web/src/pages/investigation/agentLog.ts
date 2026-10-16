@@ -8,11 +8,12 @@
  *  - tool_call_parse_error is shown as a transient banner under the call
  */
 
+import { describeFailure, type Failure } from "../../lib/failure";
 import type { QuotaHolder } from "../../lib/quotaHolding";
 import { isTerminal } from "../../events";
 import type { AgentEvent } from "../../events";
 import type { Message, MessageCitation, SentMarking } from "../../api/types";
-import { type MsgKey, initialLocale, translate } from "../../lib/i18n";
+import { initialLocale, translate } from "../../lib/i18n";
 
 export type ToolCallView = {
   call_id: string;
@@ -31,6 +32,10 @@ export type ToolCallView = {
    * sub-agent's citations onto the persisted tool message. Rendered as
    * clickable source cards under the tool card (same UX as KB chat). */
   citations?: MessageCitation[];
+  /** A delegating tool whose sub-agent failed (docs/plan-friendly-errors.md
+   * P4): the card says what happened while `output` keeps the raw result the
+   * model read. */
+  failure?: Failure;
 };
 
 /** Live token telemetry for the current turn (Claude-Code-style ↑/↓). */
@@ -108,7 +113,7 @@ export type AgentEntry =
   | { kind: "tool_call"; call: ToolCallView }
   | { kind: "mention"; by: string; users: string[]; note: string; at?: number }
   // #613 P3: a persisted goal marker (met / exhausted) — FE-only, never LLM history.
-  | { kind: "goal_note"; text: string; at?: number }
+  | { kind: "goal_note"; text: string; at?: number; failure?: Failure }
   // #624: a persisted system notice (history no longer reaches the model).
   | { kind: "notice"; text: string; at?: number }
   // #739: the thread outgrew its window, so this span was replaced — for the
@@ -119,7 +124,9 @@ export type AgentEntry =
   | { kind: "summary"; text: string; replaced: number; at?: number }
   | { kind: "step"; step: StepView; at?: number }
   | { kind: "phase"; phase: string; at?: number }
-  | { kind: "banner"; text: string; at?: number };
+  // `failure` when the banner IS a failure (docs/plan-friendly-errors.md D8):
+  // `text` stays its headline, so a carried banner is still recognised by it.
+  | { kind: "banner"; text: string; at?: number; failure?: Failure };
 
 export type AgentLog = {
   entries: AgentEntry[];
@@ -133,8 +140,9 @@ export type AgentLog = {
    * a UI indistinguishable from broken: a spinner they did not start and a box
    * they could not type in. Separating the two cases needs this. */
   streamingBy: string | null;
-  /** Non-null when the last terminal was an error. */
-  error: string | null;
+  /** Non-null when the last terminal was an error — what it IS, so the notice
+   *  can say what happened and keep the raw text (docs/plan-friendly-errors.md). */
+  error: Failure | null;
   /** #P5: the environments a quota refusal says are holding the budget, so the
    *  remedy is a click rather than a page the person has to know exists. Empty
    *  for every other failure, and for a collaborator the backend withheld the
@@ -165,6 +173,10 @@ export type AgentLog = {
    * same endpoint. Ephemeral, like `restore` — it explains a silence, so it is
    * cleared the moment real output arrives. */
   rateLimited: { seconds: number } | null;
+  /** Set while a model call that failed is being re-sent (D9). Ephemeral, like
+   * `rateLimited`: a recovered retry is not a failure, so it only explains the
+   * pause and is cleared the moment output arrives. */
+  retrying: { attempt: number; kind: string } | null;
   /** Stop has been asked for and the turn has not ended yet.
    *
    * Stop used to flip `streaming` straight to false, which was a claim the
@@ -188,6 +200,7 @@ export const EMPTY_LOG: AgentLog = {
   restore: null,
   compacting: null,
   rateLimited: null,
+  retrying: null,
   stopping: false,
 };
 
@@ -207,6 +220,7 @@ const TURN_OVER = {
   streamingBy: null,
   compacting: null,
   rateLimited: null,
+  retrying: null,
   restore: null,
   failover: null,
   stopping: false,
@@ -316,48 +330,14 @@ export function retractOwnAsk(log: AgentLog, ask: { author: string; content: str
  * definition — the timestamp predates the field — so it never counts as live. */
 const AWAITING_REPLY_MAX_MS = 30 * 60_000;
 
-/** Wording for a persisted terminal failure, by the `error_kind` the backend
- * stamps on it. Only kinds whose live counterpart says the same thing belong
- * here — sharing the wording is what lets the de-dupe recognise the live banner
- * and the stored message as one event instead of two. `max_turns` is absent on
- * purpose: its persisted text carries the step count inline, and digging a
- * number back out of an English sentence to re-render it is a parser nobody
- * should have to maintain.
- *
- * Translated per CALL, like the live banner beside it. Held in a module-level
- * const it froze the language at import, so switching language mid-session left
- * the stored copy in the old one — different text, de-dupe blind again, and the
- * doubled banner back in two languages at once. */
-const PERSISTED_ERROR_KEYS: Record<string, MsgKey> = {
-  cancelled: "banner.cancelled",
-  // #797: the backend now says WHICH terminal failure this was, so the two
-  // readings of an exhausted failover chain reach the reader in their own
-  // language instead of one English sentence standing in for both.
-  //
-  // These obey the precondition above rather than breaking it: `errorTextFor`
-  // words the LIVE event from the same keys, so the box a running turn shows
-  // and the message the store hands back afterwards are the same sentence. Word
-  // only one of them and one failure appears twice, in two languages — the
-  // English live box plus a zh-TW stored copy.
-  all_busy: "turn.allBusy",
-  rate_limited: "turn.rateLimited",
-};
-
-/** A terminal error's text, worded from its kind where we have wording.
- *
- * The live event and the persisted message go through the SAME table, which is
- * what keeps them one event rather than two. `message` remains the fallback: a
- * client that meets a kind it has no words for still shows what the backend
- * said, which is better than showing nothing. */
-const errorTextFor = (ev: { message: string; kind?: string | null }): string => {
-  const key = ev.kind == null ? undefined : PERSISTED_ERROR_KEYS[ev.kind];
-  return key === undefined ? ev.message : translate(initialLocale(), key);
-};
-
-const persistedErrorText = (kind: string | null | undefined): string | undefined => {
-  const key = kind == null ? undefined : PERSISTED_ERROR_KEYS[kind];
-  return key === undefined ? undefined : translate(initialLocale(), key);
-};
+/** A failure read off the live `error` event: the kind the backend named it by
+ * (`unknown` when it could not), the numbers its copy says, and the message —
+ * the raw text — for technical details. Worded at render, by `ErrorNotice`. */
+const failureOf = (ev: {
+  message: string;
+  kind?: string | null;
+  params?: Record<string, number> | null;
+}): Failure => ({ kind: ev.kind ?? "unknown", params: ev.params ?? null, raw: ev.message });
 
 const isRecent = (at: number | null | undefined): boolean =>
   at != null && Date.now() - at < AWAITING_REPLY_MAX_MS;
@@ -401,6 +381,7 @@ export function logFromMessages(messages: readonly Message[]): AgentLog {
           // tool message reloads with its reference cards. Non-ask_kb tools
           // never set this on the BE side — empty becomes undefined.
           citations: m.citations && m.citations.length > 0 ? m.citations : undefined,
+          ...(m.failure ? { failure: m.failure } : {}),
         },
       });
     } else if (m.role === "mention") {
@@ -417,24 +398,56 @@ export function logFromMessages(messages: readonly Message[]): AgentLog {
       entries.push({ kind: "notice", text: m.content, at: m.created_at ?? undefined });
     } else if (m.role === "goal") {
       // #613 P3: the goal driver's outcome marker (達成 / 額度用盡).
-      entries.push({ kind: "goal_note", text: m.content, at: m.created_at ?? undefined });
+      // Review round 1: a night that could not start carries WHY as what it
+      // is; the note's text ends on the same raw words for text-only readers
+      // (export, video), so that paragraph is taken off here — exactly that
+      // suffix, never guessed — and the notice words it instead.
+      //
+      // Only a NAMED failure, though (review round 2): the turn gate's refusals
+      // — a full workspace, a spent sandbox quota — are named `unknown` and ARE
+      // sentences for the reader, the only fact this note has; worded as
+      // "something unexpected, ask an admin" they would say less than they do.
+      const named = m.failure && m.failure.kind !== "unknown" ? m.failure : null;
+      const tail = named ? `\n\n${named.raw}` : null;
+      entries.push({
+        kind: "goal_note",
+        text: tail && m.content.endsWith(tail) ? m.content.slice(0, -tail.length) : m.content,
+        at: m.created_at ?? undefined,
+        ...(named ? { failure: named } : {}),
+      });
     } else if (m.role === "error") {
       // #37: a persisted terminal failure — rendered as a banner so a
-      // reloaded thread shows the turn died (matching the live error
-      // banners), rather than the message silently vanishing.
+      // reloaded thread shows the turn died, rather than the message silently
+      // vanishing.
       //
-      // Worded from `error_kind` where we have wording for it: the backend says
-      // WHAT happened, the UI says how to put it. Its `content` is written in
-      // English for the log, so rendering that verbatim put an English sentence
-      // in a zh-TW transcript — and, because it reads differently from the live
-      // banner for the same event, the de-dupe below never collapsed the two.
-      // One press of Stop showed the stop twice. An unknown kind still falls
-      // back to the content: better the backend's words than none.
-      entries.push({
-        kind: "banner",
-        text: persistedErrorText(m.error_kind) ?? m.content,
-        at: m.created_at ?? undefined,
-      });
+      // A cancellation is worded like the live one (one press of Stop must not
+      // read as two different events), and a step-limit stop keeps its own
+      // sentence. Anything else is a FAILURE (docs/plan-friendly-errors.md): its
+      // content is the raw text, which is technical detail — rendered verbatim
+      // it put a provider's string in front of the reader as the whole story.
+      // `text` is its headline in the reader's language, which is what a carried
+      // banner is recognised by.
+      if (m.error_kind === "cancelled") {
+        entries.push({
+          kind: "banner",
+          text: translate(initialLocale(), "banner.cancelled"),
+          at: m.created_at ?? undefined,
+        });
+      } else if (m.error_kind === "max_turns") {
+        entries.push({ kind: "banner", text: m.content, at: m.created_at ?? undefined });
+      } else {
+        const failure: Failure = {
+          kind: m.error_kind ?? "unknown",
+          params: m.error_params ?? null,
+          raw: m.content,
+        };
+        entries.push({
+          kind: "banner",
+          text: describeFailure(failure, initialLocale()).headline,
+          at: m.created_at ?? undefined,
+          failure,
+        });
+      }
     } else {
       entries.push({
         kind: "message",
@@ -475,6 +488,7 @@ export function logFromMessages(messages: readonly Message[]): AgentLog {
     restore: null,
     compacting: null,
     rateLimited: null,
+    retrying: null,
     // A snapshot holds messages, not intentions: it cannot know a Stop was
     // asked for. `reconcileSnapshot` carries the live one over the top.
     stopping: false,
@@ -516,6 +530,18 @@ const countUserMessages = (entries: readonly AgentEntry[]) =>
  * Use {@link logFromMessages} directly only where a smaller thread is the POINT
  * (initial hydration, undo).
  */
+/** The entries after the last question — what the thread has said since. */
+function tailOf(entries: readonly AgentEntry[]): readonly AgentEntry[] {
+  return entries.slice(
+    entries.map((e) => e.kind === "message" && e.message.role === "user").lastIndexOf(true) + 1,
+  );
+}
+
+/** How many failure entries in ``entries`` carry exactly ``raw``. */
+function failuresLike(raw: string, entries: readonly AgentEntry[]): number {
+  return entries.filter((e) => e.kind === "banner" && e.failure?.raw === raw).length;
+}
+
 export function reconcileSnapshot(
   prev: AgentLog,
   thread: { messages: readonly Message[] },
@@ -568,9 +594,7 @@ export function reconcileSnapshot(
   // identically worded one from an earlier turn. Since a stop now reads the same
   // live as it does once persisted, a thread with two cancelled turns had the
   // second one — the press the user is watching for — swallowed by the first.
-  const snapTail = snap.entries.slice(
-    snap.entries.map((s) => s.kind === "message" && s.message.role === "user").lastIndexOf(true) + 1,
-  );
+  const snapTail = tailOf(snap.entries);
   const carried = prev.entries.filter((e, i) => {
     if (e.kind !== "banner") return false;
     const rest = prev.entries.slice(i + 1);
@@ -587,13 +611,30 @@ export function reconcileSnapshot(
       !snapTail.some((s) => s.kind === "banner" && s.text === e.text)
     );
   });
+  // A turn's failure is persisted too, and the snapshot words it as a transcript
+  // entry: once it lands, that entry is the notice. Keeping the live one as well
+  // put the same failure on screen twice, one box under the other (found
+  // recording the #915 demo) — and a reload shows only the entry.
+  //
+  // "It landed" is the store holding MORE failures worded like it than the
+  // screen already did, counted after the last question on each side. Mere
+  // presence is not enough: queued questions persist as Q1, Q2, A1, A2, so one
+  // tail holds both turns' endings, and Q1's identical failure being stored says
+  // nothing about Q2's (review round 4). A send failure is never a turn's
+  // persisted ending, so it is left alone.
+  const live = prev.error;
+  const persisted =
+    live !== null &&
+    prev.errorFromTurn &&
+    failuresLike(live.raw, tailOf(snap.entries)) > failuresLike(live.raw, tailOf(prev.entries));
+  const error = persisted ? null : (live ?? snap.error);
   return {
     ...snap,
     entries: [...snap.entries, ...carried],
-    error: prev.error ?? snap.error,
+    error,
     // …and with it, who owns it — or a re-hydrate would hand a send failure to
     // the turn, which then retracts it on its next token.
-    errorFromTurn: prev.error !== null ? prev.errorFromTurn : snap.errorFromTurn,
+    errorFromTurn: persisted ? false : live !== null ? prev.errorFromTurn : snap.errorFromTurn,
     // A re-hydrate must not quietly cancel a Stop that is still in flight — the
     // store-poll runs every few seconds, so without this the buttons would
     // unlock themselves halfway through stopping. Carried only while the
@@ -788,6 +829,14 @@ function findStep(entries: AgentEntry[], phase: string, name: string, key?: stri
   return -1;
 }
 
+/** `s` less its last `n` CHARACTERS — code points, as the backend counted
+ *  them (`len()`); `.length` counts UTF-16 units, two for an emoji. */
+function dropChars(s: string, n: number): string {
+  if (n <= 0) return s;
+  const chars = Array.from(s);
+  return chars.slice(0, Math.max(0, chars.length - n)).join("");
+}
+
 /** The answer the RUNNING turn is writing, found by its own flag rather than by
  * where it sits. See `live` on AgentEntry for the two ways position got this
  * wrong once questions could be drawn in the middle of a turn. */
@@ -853,6 +902,7 @@ export function reduceAgent(log: AgentLog, ev: AgentEvent, now: number = Date.no
         restore: ev.phase === "up" ? null : log.restore,
         compacting: ev.phase === "up" ? null : log.compacting,
         rateLimited: ev.phase === "up" ? null : log.rateLimited,
+        retrying: ev.phase === "up" ? null : log.retrying,
         metrics: {
           phase: ev.phase,
           promptTokens: ev.prompt_tokens,
@@ -917,21 +967,44 @@ export function reduceAgent(log: AgentLog, ev: AgentEvent, now: number = Date.no
       }
       // #492 P11: the model is producing output ⇒ any cold-wake restore is over.
       //
-      // …and so is any error raised earlier in this turn. A retry notice arrives
-      // as a `RunError` mid-flight (`classify_retry_event`), and `error` is
-      // sticky, so a turn that stumbled and then answered left "all agent models
-      // failed or were cooling" standing over its own good answer until the user
-      // typed again. OUTPUT AFTER the notice is what says it recovered — not the
-      // terminal event: the runner yields `RunError` and then `RunDone` on every
-      // give-up, so clearing on `done` erased real failures instead.
+      // …and so is any error raised earlier in this turn: `error` is sticky, so a
+      // turn that stumbled and then answered would leave the failure standing
+      // over its own good answer until the user typed again. OUTPUT AFTER the
+      // error is what says it recovered — not the terminal event: the runner
+      // yields `RunError` and then `RunDone` on every give-up, so clearing on
+      // `done` erased real failures instead.
       return {
         ...log,
         entries,
         ...(log.errorFromTurn ? { error: null, errorFromTurn: false } : {}),
         restore: null,
         rateLimited: null,
+        retrying: null,
         compacting: null,
       };
+    }
+
+    case "model_retrying":
+      // D9: ephemeral — a model call is being re-sent. NOT pushed to `entries`:
+      // a recovered retry never enters the transcript. Cleared once output resumes.
+      return { ...log, retrying: { attempt: ev.attempt, kind: ev.kind } };
+
+    case "output_retracted": {
+      // D3: the call that streamed these characters failed and is being re-sent;
+      // withdraw them from the answer it was writing. A call streams into ONE
+      // answer (a tool call ends it), so they are all on the live one.
+      const idx = liveAnswerIdx(entries);
+      const last = idx >= 0 ? entries[idx] : undefined;
+      if (last && last.kind === "message") {
+        const m = last.message;
+        const content = dropChars(m.content, ev.text_chars);
+        const reasoning = dropChars(m.reasoning ?? "", ev.reasoning_chars);
+        entries[idx] = {
+          ...last,
+          message: { ...m, content, reasoning: reasoning || undefined },
+        };
+      }
+      return { ...log, entries };
     }
 
     case "tool_start":
@@ -961,12 +1034,18 @@ export function reduceAgent(log: AgentLog, ev: AgentEvent, now: number = Date.no
             // #62: prefer the full display result (success stderr kept) so the
             // card keeps the error that streamed live instead of the cleaned
             // "exit_code=0"; absent ⇒ the cleaned output.
-            call: { ...e.call, status: "done", output: ev.display || ev.output, endedAt: now },
+            call: {
+              ...e.call,
+              status: "done",
+              output: ev.display || ev.output,
+              endedAt: now,
+              ...(ev.failure ? { failure: ev.failure } : {}),
+            },
           };
         }
       }
       // #492 P11: the tool that woke the sandbox has finished ⇒ restore is over.
-      return { ...log, entries, restore: null, rateLimited: null, compacting: null };
+      return { ...log, entries, restore: null, rateLimited: null, retrying: null, compacting: null };
     }
 
     case "tool_log": {
@@ -981,7 +1060,7 @@ export function reduceAgent(log: AgentLog, ev: AgentEvent, now: number = Date.no
         }
       }
       // #492 P11: the woken tool is now streaming output ⇒ restore is over.
-      return { ...log, entries, restore: null, rateLimited: null, compacting: null };
+      return { ...log, entries, restore: null, rateLimited: null, retrying: null, compacting: null };
     }
 
     case "tool_call_parse_error": {
@@ -1036,7 +1115,7 @@ export function reduceAgent(log: AgentLog, ev: AgentEvent, now: number = Date.no
       // `TurnStatus`, so a turn that ran out of steps mid-compaction went on
       // claiming to be summarising. Sharing the reset is what stops the next
       // ephemeral state being remembered in three places and forgotten in one.
-      return { ...log, entries, ...TURN_OVER, error: text };
+      return { ...log, entries, ...TURN_OVER, error: { kind: "max_turns", headline: text, raw: "" } };
     }
 
     case "run_cancelled":
@@ -1058,7 +1137,7 @@ export function reduceAgent(log: AgentLog, ev: AgentEvent, now: number = Date.no
         ...log,
         entries,
         ...TURN_OVER,
-        error: errorTextFor(ev),
+        error: failureOf(ev),
         errorFromTurn: true,
       };
 

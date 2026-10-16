@@ -218,14 +218,13 @@ async def test_the_time_is_what_the_call_took(exec_exits) -> None:  # noqa: ANN0
 
 
 async def test_arguments_the_tool_never_saw_are_a_failed_call() -> None:
-    from workspace_app.agent.args_recovery import MalformedToolArgsError
-
     rec = ToolUsageRecorder(day=lambda: "d", clock=_Clock())
     agent = _agent()
 
-    with pytest.raises(MalformedToolArgsError):
-        await _call(agent, _ctx(rec), "ask_user", "{not json")
+    # answered in-band since docs/plan-friendly-errors.md (no turn restart)
+    reply = await _call(agent, _ctx(rec), "ask_user", "{not json")
 
+    assert reply.startswith("Error:")
     [row] = rec.drain()
     assert (row.tool, row.calls, row.fails) == ("ask_user", 1, 1)
 

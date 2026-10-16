@@ -11,8 +11,10 @@ import { useEffect, useState } from "react";
 
 import { kbApi, type KbApi, type KbProbeResult, type KbProbeSide } from "../../api/kb";
 import { qk } from "../../api/queryKeys";
+import { ErrorNotice } from "../../components/ErrorNotice";
 import { ModalShell } from "../../components/ModalShell";
 import { useDirtyClose } from "../../hooks/useDirtyClose";
+import { type Failure, failureFromError } from "../../lib/failure";
 import { useT } from "../../lib/i18n";
 import { pxToRem } from "../../lib/pxToRem";
 
@@ -24,7 +26,7 @@ function kToSlider(k: number): number {
   return Math.round((Math.log(k) / Math.log(100)) * 100);
 }
 
-type AnswerState = { text: string; status: "streaming" | "done" | "error"; error?: string };
+type AnswerState = { text: string; status: "streaming" | "done" | "error"; error?: Failure };
 
 export function TuneParsingModal({
   collectionId,
@@ -135,7 +137,12 @@ export function TuneParsingModal({
         } else if (ev.type === "error") {
           setAnswers((a) => ({
             ...a,
-            [which]: { text: a[which]?.text ?? "", status: "error", error: ev.message },
+            // Named by the backend (`_terminal_error`) — worded here, raw kept.
+            [which]: {
+              text: a[which]?.text ?? "",
+              status: "error",
+              error: { kind: ev.kind ?? "unknown", params: ev.params ?? null, raw: ev.message },
+            },
           }));
         } else if (ev.type === "done") {
           setAnswers((a) => ({
@@ -147,7 +154,7 @@ export function TuneParsingModal({
     } catch (e) {
       setAnswers((a) => ({
         ...a,
-        [which]: { text: a[which]?.text ?? "", status: "error", error: String(e) },
+        [which]: { text: a[which]?.text ?? "", status: "error", error: failureFromError(e) },
       }));
     }
   }
@@ -444,9 +451,10 @@ function ProbeBox({
                 }}
               >
                 {answer.status === "error" ? (
-                  <span role="alert" style={{ color: "var(--warn)" }}>
-                    {t("kb.tuneParsing.answerFailed")}: {answer.error}
-                  </span>
+                  <>
+                    <span style={{ color: "var(--warn)" }}>{t("kb.tuneParsing.answerFailed")}</span>
+                    {answer.error && <ErrorNotice failure={answer.error} live />}
+                  </>
                 ) : (
                   answer.text
                 )}

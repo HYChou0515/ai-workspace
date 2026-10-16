@@ -7,6 +7,7 @@
 
 import type { ChatGoal } from "./api/itemGoal";
 import type { SentMarking } from "./api/types";
+import type { Failure } from "./lib/failure";
 
 /* ------------------------------------------------------------------ */
 /* AgentEvent — POST /investigations/{id}/messages                     */
@@ -33,7 +34,14 @@ export type ToolStart = {
 // it differs from `output` (the cleaned, LLM-facing result). The FE renders
 // `display` when present so an error the user saw stream live doesn't vanish
 // from the final card; absent ⇒ render `output`.
-export type ToolEnd = { type: "tool_end"; call_id: string; output: string; display?: string };
+export type ToolEnd = {
+  type: "tool_end";
+  call_id: string;
+  output: string;
+  display?: string;
+  /** A delegated sub-agent's failure (docs/plan-friendly-errors.md P4). */
+  failure?: Failure | null;
+};
 
 /** Incremental stdout from a still-running tool (e.g. a long exec). call_id
  * may be empty — then it attaches to the latest running tool. */
@@ -41,10 +49,16 @@ export type ToolLog = { type: "tool_log"; call_id: string; text: string };
 
 export type RunDone = { type: "done" };
 
-/** `kind` names WHICH terminal failure this is when the backend could tell
- *  (`rate_limited` / `all_busy`); absent otherwise. `message` stays the
- *  fallback for kinds the FE has no wording for. */
-export type RunError = { type: "error"; message: string; kind?: string | null };
+/** `kind` names WHICH failure this is (`failover.classify.ERROR_KINDS`, or
+ *  absent when the backend could not tell); the FE words it from the kind
+ *  (docs/plan-friendly-errors.md D5) and `message` is the raw text shown under
+ *  technical details (D1). `params` are the numbers the kind's copy needs. */
+export type RunError = {
+  type: "error";
+  message: string;
+  kind?: string | null;
+  params?: Record<string, number> | null;
+};
 
 export type RunCancelled = { type: "run_cancelled" };
 
@@ -114,6 +128,24 @@ export type FailoverSwitch = {
 export type RateLimited = {
   type: "rate_limited";
   seconds: number;
+};
+
+/** A model call failed in a way a re-send can cure and is being sent again
+ * (docs/plan-friendly-errors.md D9). Ephemeral, like `rate_limited` — a
+ * recovered retry is not a failure, so it never reaches the transcript. */
+export type ModelRetrying = {
+  type: "model_retrying";
+  attempt: number;
+  kind: string;
+};
+
+/** The model call that streamed the last `text_chars` of answer and
+ * `reasoning_chars` of reasoning failed and is being re-sent: withdraw them
+ * (D3). Counted from where that call began, so earlier calls' text stays. */
+export type OutputRetracted = {
+  type: "output_retracted";
+  text_chars: number;
+  reasoning_chars: number;
 };
 
 /** #492 P11: the item's sandbox was cold, so its durable snapshot is being
@@ -290,6 +322,8 @@ export type AgentEvent =
   | FailoverSwitch
   | RestoreProgress
   | RateLimited
+  | ModelRetrying
+  | OutputRetracted
   | TodosUpdated
   | GoalUpdated
   | ContextTrimmed
@@ -329,11 +363,11 @@ export function eventId(ev: AgentEvent): string | undefined {
  * event type therefore defaults to "not turn progress": the cost of forgetting
  * to add one here is a warning we don't show, which is the cheaper mistake.
  *
- * A retry notice arrives as either `tool_call_parse_error` (in this list, so it
- * arms) or `RunError` — wire type `"error"`, which `isTerminal` treats as an
- * ending even though the turn continues. That is pre-existing and unchanged
- * here; stating it plainly because an earlier version of this comment claimed
- * the opposite. */
+ * A model call being re-sent arrives as `model_retrying`, and the text it had
+ * shown is withdrawn by `output_retracted` — both in this list, like the
+ * `rate_limited` hold (docs/plan-friendly-errors.md). A `RunError` (wire type
+ * `"error"`) is only ever the turn's ending now: the mid-turn "retry: …"
+ * notice it used to carry is gone with the whole-turn retry. */
 const TURN_PROGRESS: ReadonlySet<string> = new Set([
   // A turn is starting: broadcast only after admission and after the message is
   // persisted, so unlike `file_changed` it cannot fire without one. The window
@@ -351,6 +385,8 @@ const TURN_PROGRESS: ReadonlySet<string> = new Set([
   "failover_switch",
   "restore_progress",
   "rate_limited",
+  "model_retrying",
+  "output_retracted",
   "context_trimmed",
 ]);
 

@@ -385,6 +385,7 @@ async def test_transient_failure_retries_and_recovers_to_ready():
     got = spec.get_resource_manager(SourceDoc).get(doc_id)
     assert got.data.status == "ready"  # the re-delivered job succeeded
     assert emb.calls == 2  # one blip, one recovery — no permanent error
+    assert got.data.status_error_kind is None  # the retry note left no kind behind
 
 
 async def test_transient_failure_shows_retrying_then_errors_when_exhausted():
@@ -400,6 +401,9 @@ async def test_transient_failure_shows_retrying_then_errors_when_exhausted():
     got = spec.get_resource_manager(SourceDoc).get(doc_id)
     assert got.data.status == "error"  # only after exhausting the retries
     assert emb.calls == 3  # delivered max_retries + 1 times (retries 0,1,2)
+    # docs/plan-friendly-errors.md P5: named, so the doc list can say what
+    # happened; the raw text stays as the detail.
+    assert got.data.status_error_kind == "provider_error"
 
 
 async def test_permanent_failure_errors_at_once_without_retrying():
@@ -415,6 +419,7 @@ async def test_permanent_failure_errors_at_once_without_retrying():
     got = spec.get_resource_manager(SourceDoc).get(doc_id)
     assert got.data.status == "error"
     assert "400" in got.data.status_detail  # the cause is surfaced
+    assert got.data.status_error_kind == "bad_request"
     assert emb.calls == 1  # no retry on a permanent error
 
 

@@ -10,7 +10,7 @@
 import type { AgentEvent } from "../events";
 import type { UploadCheckHint } from "../kb/uploadChecks";
 import type { CollectionPermission } from "../lib/permission";
-import { API_PREFIX, apiFetch } from "./http";
+import { API_PREFIX, apiFetch, httpErrorFrom } from "./http";
 import { mockKbApi } from "./kbMock";
 import { parseSseStream } from "./sse";
 import type { Provenance, ReasoningEffort, WithheldSource } from "./types";
@@ -244,6 +244,9 @@ export type KbDocument = {
    * exception summary on `status="error"`. Empty while indexing (the racy
    * per-page string was dropped in #248 — use the unit counts below). */
   status_detail?: string;
+  /** docs/plan-friendly-errors.md P5: the kind a failed doc's detail was named
+   * by; absent for a row from before kinds, or a failure that was a sentence. */
+  status_error_kind?: string | null;
   /** #248: real fan-out progress — units (e.g. PDF pages) done / total. Both 0
    * (or absent) for a single-job / ready doc, which means "no progress bar".
    * Monotonic while indexing. */
@@ -325,6 +328,8 @@ export type KbRenderedDoc = {
   status: string;
   /** Issue #39 Q11 — progress / error line beside the status chip. */
   status_detail?: string;
+  /** P5: see `KbDocumentRow.status_error_kind`. */
+  status_error_kind?: string | null;
   /** Issue #39: blob id of a browser-displayable derivative a parser
    * handed back (pptx → soffice-converted PDF). The viewer iframes
    * `/blobs/{preview_file_id}` when set; "" / absent = no preview. */
@@ -385,8 +390,9 @@ export type KbChatMessage = {
   /** Permission-disclosure: read_meta-only sources surfaced for this answer,
    * rendered as "🔒 request access" chips. Absent/empty on other messages. */
   withheld?: WithheldSource[];
-  /** role=error only (#37) — error | cancelled | max_turns. */
+  /** role=error only (#37) — see `Message.error_kind` in `api/types.ts`. */
   error_kind?: string | null;
+  error_params?: Record<string, number> | null;
   /** #113 — "repetition" when the answer was stopped + truncated for a loop. */
   stopped_reason?: string | null;
 };
@@ -1633,7 +1639,7 @@ export const realKbApi: KbApi = {
     });
     // 202 = queued. The reply arrives on the subscription, whenever this turn's
     // place in the queue comes up.
-    if (!resp.ok) throw new Error(`kb message failed: ${resp.status}`);
+    if (!resp.ok) throw await httpErrorFrom(resp, `kb message failed: ${resp.status}`);
   },
   async *subscribeChat(chatId, signal, since) {
     const q = since !== undefined ? `?since=${since}` : "";

@@ -944,6 +944,26 @@ async def test_an_abandon_whose_finish_fails_writes_one_ending_not_one_per_tick(
     assert len(endings) == 1, endings
 
 
+async def test_the_give_up_is_named_so_the_reader_is_told_to_send_again():
+    """Review round 1 (docs/plan-friendly-errors.md): the give-up's remedy is
+    "send it again" — named `turn_lost` with the attempt count, it is worded
+    as that, not as "something unexpected went wrong, ask an admin"."""
+    spec = make_spec(default_user="u")
+    activity = SpecstarTurnActivityStore(spec, now_ms=lambda: 0)
+    client, _ = _pod(spec)
+    with client:
+        item_id, rid = _open_orphan(client, spec, reruns=RECLAIM_MAX_RERUNS)
+        await activity.bump(item_id)
+        await ReclaimTick.of(cast(FastAPI, client.app)).run()
+    conv = spec.get_resource_manager(Conversation).get(rid).data
+    assert isinstance(conv, Conversation)
+    [ending] = [m for m in conv.messages if m.role == "error"]
+    assert (ending.error_kind, ending.error_params) == (
+        "turn_lost",
+        {"attempts": RECLAIM_MAX_RERUNS + 1},
+    )
+
+
 async def test_giving_up_still_advances_the_epoch_on_a_stalled_owner():
     """A claim past its bound on a STALLED (not dead) owner: the give-up ends
     the thread, and the epoch is advanced all the same so the owner's copy —

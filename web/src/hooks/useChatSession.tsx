@@ -19,6 +19,7 @@ import { invalidateTree } from "./invalidateTree";
 import { holdingFromSendError } from "./useChatSessionHolding";
 import { type ChatThread, useChatLog } from "./useChatLog";
 import { useCurrentUser } from "./useCurrentUser";
+import { failureFromError, failureFromHttp } from "../lib/failure";
 import { useT } from "../lib/i18n";
 import { STORE_POLL_MS, useStorePollFallback } from "./useStorePollFallback";
 
@@ -671,22 +672,21 @@ export function useChatSession(
           ...(err as { code?: string; also?: string[]; detail?: QuotaDetail } | null),
           status,
         });
-        const msg =
-          quota ??
-          // #714: the send was refused because the backend could not establish
-          // who is asking. "messages failed: 500" is visible and useless; the
-          // one thing the person can do about it is sign in again.
-          ((err as { code?: string } | null)?.code === "request_env_failed"
-            ? t("chat.send.identityUnavailable")
-            : err instanceof Error
-              ? err.message
-              : String(err));
+        const failure =
+          quota !== null
+            ? failureFromError(err, "quota", quota)
+            : // #714: the send was refused because the backend could not establish
+              // who is asking. "messages failed: 500" is visible and useless; the
+              // one thing the person can do about it is sign in again.
+              (err as { code?: string } | null)?.code === "request_env_failed"
+              ? failureFromError(err, "identity", t("chat.send.identityUnavailable"))
+              : failureFromHttp(err);
         // Not the turn's error: no turn ran. It says which limit bound and
         // links to it, and it must survive whatever the stream does next.
         setLog((prev) => ({
           ...prev,
           streaming: false,
-          error: msg,
+          error: failure,
           errorFromTurn: false,
           // The sentence above is lossy by design; the LIST survives beside it
           // so the refusal can offer to act rather than only to explain.
@@ -727,10 +727,9 @@ export function useChatSession(
     // saying nothing means the turn runs on invisibly and the UI has already
     // told them it stopped.
     void Promise.resolve(transport.requestCancel()).catch((err: unknown) => {
-      const why = err instanceof Error ? err.message : String(err);
       setLog((prev) => ({
         ...prev,
-        error: `停止失敗,這一輪可能仍在進行:${why}`,
+        error: failureFromError(err, "stop_failed"),
         errorFromTurn: false,
         // …and stop claiming to be stopping. `stopping` means the backend has
         // been TOLD; if telling it failed, it has not been, and the state only

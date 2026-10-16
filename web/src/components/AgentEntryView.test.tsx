@@ -1305,3 +1305,55 @@ describe("EntryView — publish_skill", () => {
     expect(document.querySelector("details")).not.toBeNull();
   });
 });
+
+describe("EntryView — a failure banner (docs/plan-friendly-errors.md D8)", () => {
+  afterEach(cleanup);
+
+  it("renders a failure as a notice: worded, with the raw text kept under details", () => {
+    render(
+      <EntryView
+        entry={{
+          kind: "banner",
+          text: "所有可用的模型都在忙。",
+          failure: { kind: "all_busy", raw: "AllProvidersFailed: all agent models failed or were cooling" },
+        }}
+      />,
+    );
+
+    expect(screen.getByTestId("error-notice")).toHaveTextContent(translate("zh-TW", "failure.all_busy.do"));
+    expect(screen.getByTestId("error-notice-details")).toHaveTextContent("AllProvidersFailed");
+  });
+
+  it("leaves a banner that is not a failure as it was", () => {
+    render(<EntryView entry={{ kind: "banner", text: "已取消。" }} />);
+
+    expect(screen.getByText("已取消。")).toBeInTheDocument();
+    expect(screen.queryByTestId("error-notice")).toBeNull();
+  });
+});
+
+describe("EntryView — a delegated sub-agent's failure (docs/plan-friendly-errors.md P4)", () => {
+  afterEach(cleanup);
+
+  it("says what happened beside the card, where a collapsed card cannot hide it", () => {
+    render(
+      <EntryView
+        entry={{
+          kind: "tool_call",
+          call: {
+            call_id: "c1",
+            name: "run_agent",
+            status: "done",
+            args: {},
+            output: "sub-agent 'x' failed: RateLimitError: slow",
+            failure: { kind: "rate_limited", params: { waited_s: 120 }, raw: "RateLimitError: slow" },
+          },
+        }}
+      />,
+    );
+
+    const notice = screen.getByTestId("error-notice");
+    expect(notice).toHaveTextContent(translate("zh-TW", "failure.rate_limited.waited", { waited_s: 120 }));
+    expect(notice.closest("details:not([data-testid='error-notice-details'])")).toBeNull();
+  });
+});
