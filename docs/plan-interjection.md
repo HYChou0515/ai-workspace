@@ -207,3 +207,10 @@ CLAUDE.md「Chat turns run through one `ChatTurnEngine`」那段說 Q1, Q2, A1, 
   送出因此什麼結尾都沒有(C15 說會留「已取消」,不成立)。兩個檢查對調,測試
   `test_a_send_still_preparing_when_the_pod_drains_ends_on_a_cancelled_marker`。收攤旗標在每次 `aclose` 結束時設定、
   不會重設 —— engine 在 `aclose` 之後不再被使用(只有 lifespan 關機時呼叫)。
+- **C18〔施工〕和 #915(錯誤說人話、重試只在單次模型呼叫)合併。** #915 拿掉了 `run()` 的整輪重試與 #624 超量
+  分支,改由包住模型的 `CallRetryModel` + `_HistoryTrim` 在每次呼叫內重試、裁切。`run()` 只剩插話那一層迴圈:
+  讀到插話就用「目前的歷史 + 之後的內容」開新的一段(C12 仍然必要:`_HistoryTrim` 裁的是輸入最前面
+  `len(ctx.history)` 項,讀到插話前若已裁過一次,快照版的續跑輸入開頭是沒裁過的歷史,會一直超量到放棄 ——
+  測試 `test_a_turn_that_overflows_after_reading_a_message_still_recovers` 改成走真的 `_agent_for`)。前端:#915 把
+  不是取消、不是步數上限的錯誤一律畫成「失敗通知」,`interrupted` 有自己的分支,畫成「已被 X 的訊息中斷」而不是
+  失敗。

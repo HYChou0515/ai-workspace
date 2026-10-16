@@ -1097,7 +1097,10 @@ describe("AgentPanel — a quota refusal is reachable, not just readable (#692)"
     const agent = stubAgent();
     renderPanel("uploads", {
       ...agent,
-      log: { ...agent.log, error: translate("zh-TW", "chat.send.envFull") },
+      log: {
+        ...agent.log,
+        error: { kind: "quota", headline: translate("zh-TW", "chat.send.envFull"), raw: "" },
+      },
     });
     expect(screen.getByRole("link", { name: "我的資源" })).toHaveAttribute(
       "href",
@@ -1122,7 +1125,10 @@ describe("AgentPanel — a quota refusal is reachable, not just readable (#692)"
 
   it("leaves an ordinary failure as plain text — there is nothing to go and do", () => {
     const agent = stubAgent();
-    renderPanel("uploads", { ...agent, log: { ...agent.log, error: "stream died" } });
+    renderPanel("uploads", {
+      ...agent,
+      log: { ...agent.log, error: { kind: "unknown", raw: "stream died" } },
+    });
     expect(screen.getByText("stream died")).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "我的資源" })).not.toBeInTheDocument();
   });

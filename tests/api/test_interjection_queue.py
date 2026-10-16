@@ -1081,8 +1081,18 @@ async def test_a_turn_answering_folded_messages_is_recorded_as_accepted_with_the
     )
     runner.release.set()
     await _drain(engine, f1, f2, f3)
-    recorder.flush()
-    accepted = sorted(d["usage"]["accepted_ms"] for d in sink.docs if d["usage"]["kind"] == "turn")
+    # The recorder hands documents to a writer thread; `flush` does not wait for
+    # it. Bounded poll, as tests/capacity/test_turn_surfaces.py does (CI's
+    # api-4 shard read an empty sink right after `flush`).
+    accepted: list[int] = []
+    for _ in range(200):
+        recorder.flush()
+        accepted = sorted(
+            d["usage"]["accepted_ms"] for d in sink.docs if d["usage"]["kind"] == "turn"
+        )
+        if len(accepted) == 2:
+            break
+        await asyncio.sleep(0.05)
     assert accepted == [1_000, 2_000]
 
 

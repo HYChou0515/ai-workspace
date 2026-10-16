@@ -2891,6 +2891,78 @@ command 的完整 schema——那正是這個功能在做的事。從 `index.jso
 - 打開一個 workspace 模式的 item：左側活動列有印著「Workflows」的圖示，點開列出它的 workflow 與執行。
   沒部署到這一版的症狀：活動列沒有這個圖示，聊天標頭還有「Workflows」按鈕、「New…」選單裡列著 workflow。
 
+### 2026-10-16 · 14da4a43 · #915 錯誤說人話：發生了什麼、怎麼辦、原文收合在技術細節；重試只在單次模型呼叫 {#pr-915}
+
+**設定** — 沒有新 key，沒有要做的事。**行為改變，沒有開關**：
+
+- **重試改在單次模型呼叫裡做，不再整輪重跑**（`docs/plan-friendly-errors.md` D2）。以前失敗會把整輪重跑，為了不重複執行
+  已經跑過的工具，只要回答已經有輸出就不重試——回答到一半的 429／逾時／5xx 直接結束這一輪。現在是那一次呼叫自己等待或重送，
+  已經跑過的工具不會再跑；講到一半斷掉的那段文字會被收回、換成重送的內容。
+  - 429 的等待：**一輪共用一個等待池**，單一端點沿用 120 秒（沒有設定可調）。failover chain 先用自己的
+    `rate_limit_budget_s` 等，等不到時外層的呼叫層**還會再等最多 120 秒**（以前只在還沒有輸出時才會疊這一層）。
+  - 逾時／連線中斷／5xx／所有模型都忙：同一次呼叫最多重送 `runner.max_retries` 次，**每次呼叫各自計算**
+    （以前是整輪共用）。等待池是每次 `run()` 一個：委派出去的子 agent、壓縮摘要各有自己的池。
+  - **不再重試的**：401／403、其他認不出來的錯誤、不帶 `invalid_request_error` 字樣的 400，以及憑證解析
+    （`ITokenService`）丟出的例外——以前在還沒有輸出時會整輪重跑最多 `max_retries` 次（context 超限與帶
+    `invalid_request_error` 的 400 以前就不重試），現在第一次就結束這一輪並說明原因。自訂 `ITokenService` 的部署：每個 key 每輪只解析一次、不重試（子 agent 與壓縮摘要另算），
+    見 [configuration 的契約 3](configuration.md)。
+    送不出去的請求也算設定錯誤、不重試：`api_base` 少了 `http://`／`https://`，或 API key 帶了換行
+    （k8s secret 常見）——技術細節裡是 `UnsupportedProtocol`／`LocalProtocolError`，畫面說明是請求錯誤。
+  - 小模型送出非物件、或多個黏在一起的 tool 參數：工具回覆錯誤、模型下一次呼叫自己改正；以前是整輪重跑。
+  - **provider client 自己的重試關掉了**：agent 回合的每次模型呼叫都帶 `max_retries=0`、`num_retries=0`。以 OpenAI
+    相容端點（`openai/…`）為例，litellm 建 client 時預設 `max_retries=2`，那個 client 會自己照 `Retry-After` 等完再重送——
+    短的 429 與 5xx 因此在畫面上只是「等候模型回應」，不顯示等待、不計次數、也不算進等待池。現在由上面那一層接手：
+    429 照等待池等，逾時／連線／5xx 重送前退避（0.5 秒起、每次加倍、最多 8 秒，起點與上限和 OpenAI client 相同）。
+    **5xx 帶的 `Retry-After` 不再照做**：client 以前會照它等（60 秒內），現在照上面的退避重送；會長時間回 503 的閘道，重送用完就結束這一輪並說明原因。
+    設了 failover chain 的部署，chain 自己的快速重試與限流等待（`num_retries`、`rate_limit_budget_s`）照舊在這一層底下。
+    **409 不再重試**：OpenAI client 以前會重送 409，現在 409 算請求錯誤，第一次就結束這一輪並說明原因。
+  - **回答講到一半斷線，現在會重送**：litellm 預設的 aiohttp 連線方式會把串流途中的斷線當成正常結束，
+    使用者拿到一句沒講完的回答、沒有任何提示。agent 回合（唯一的 async litellm 呼叫）改用 httpx 連線方式
+    （`litellm.disable_aiohttp_transport = True`，寫死在 runner，不是設定），斷線變成錯誤、照上面的規則重送。
+    其他 litellm 呼叫（KB、embedding、wiki、圖片、健康檢查）本來就是同步的 httpx，不受影響；proxy 環境變數、
+    CA 憑證（`SSL_CERT_FILE`/`SSL_VERIFY`）、連線與讀取逾時的處理兩種方式相同（`docs/plan-friendly-errors.md` P8）。
+    **連線池**：httpx 一個 client 最多同時 100 條連線（aiohttp 每個 host 500 條），其中只保留 20 條閒置連線、
+    閒置 5 秒就關（aiohttp 120 秒）。`openai/…` 每個端點一個 client；`ollama_chat/…`（k8s 預設）是**整個 pod
+    共用一個**，不分端點。所以一個 pod 同時超過 100 個模型呼叫時，多出來的會排隊——症狀是負載上來時回答的
+    p95 延遲變長；**在那之前先加 pod**，litellm 沒有調連線池上限的設定。同時超過 20 個時，多出來的連線用完就關，
+    下一個呼叫要重新建立連線（走 TLS 的端點會多一次握手）。
+  - 重送時的狀態列說出是哪種錯誤，例如「連不上模型服務。正在重試（第 1 次）…」「模型太久沒有回應。正在重試…」。
+- 錯誤一律以「發生了什麼／可以怎麼做／技術細節（預設收合，可複製）」顯示，**所有使用者都看得到技術細節**（D1）。
+  技術細節是 provider 的原文，可能包含端點網址或模型名稱。
+- 子 agent（`ask_knowledge_base`、`run_agent`、skill hub 審查）被限流或重試時，**父輪**的狀態列會顯示；
+  子 agent 失敗時，工具卡旁邊顯示說人話的原因，交給模型的工具結果仍是原文。
+- 伺服器重啟、回合被接手太多次而放棄時，訊息改成「這個回覆在伺服器重新啟動時中斷…請再送一次你的訊息」。
+- 夜間 goal「今晚無法開始」的註記：認得出種類的原因（限流、模型都忙…）在畫面上改為說人話＋技術細節；
+  認不出的（工作區已滿、沙盒額度用完這類本身就是句子的）照舊直接顯示。註記文字本身（匯出、影片看到的）與通知內文照舊是原文。
+
+**資料** — 沒有 `Schema` 升版，**不需要跑 migrate**：
+
+- `Message` 多了 `error_params` 與 `failure`，`KbMessage` 多了 `error_params`，`SourceDoc` 多了 `status_error_kind`，
+  都是有預設值的新欄位。
+- `SourceDoc.status_error_kind` 加進了索引欄位（文件列表從索引 metadata 讀，#395），但**故意不升版、不回填**：
+  舊資料的 data 裡本來就沒有這個值，重抽也抽不出來；也沒有任何查詢以它過濾。舊的失敗文件在列表上照舊顯示原本的說明，
+  點進文件會看到「處理失敗」與原本的說明。
+- 失敗的 workflow run 的 `result` 多了 `error_kind`（和 `step_failed` 時的 `error_reason`）；`error` 仍是原文，
+  但從單一 `Type: message` 變成整條 cause 鏈（以 `\n← ` 串接）——和 Python traceback 顯示的層數相同，
+  程式寫了 `raise … from None` 的地方就停（部署自訂的環境來源出錯時，它的訊息因此不會進到 run 紀錄）。
+- 已經存下來的錯誤訊息（`error_kind="error"`）會以「發生了預期外的錯誤」顯示，原本的文字移到技術細節裡。
+
+**k8s · CI 側** — 沒有新的 manifest、env、probe 或 JobType；照常重 build、照常部署。API image 和前端一起換才完整
+（前端要看得懂新的 `model_retrying`／`output_retracted` 事件、`error_kind` 和 `failure`）。
+
+**確認做完**（`rollout 後`）：
+
+- 讓 agent 回答一段長文時，把模型端點前面的 proxy **程序直接停掉再起來**（連線被關閉，不是封包被丟掉）：
+  狀態列出現「連不上模型服務。正在重試…」，講到一半的那段被收回、接著出現完整回答。**沒部署到這一版的症狀**：
+  回答停在半句、沒有任何錯誤或提示。只把封包丟掉（連線沒被關）時，要等 `failover.idle_timeout_s` 才會出現
+  「模型太久沒有回應。正在重試…」——那條路由逾時保護處理，不受這次連線方式切換影響，不是這一項要驗的。
+
+- 在 app 聊天讓 agent 呼叫一次工具，而端點正在限流（或用一把額度很低的 key）：狀態列出現「請求過於頻繁,N 秒後自動重試…」，
+  等完之後回答接著出來。**沒部署到這一版的症狀**：回答到一半出現 `RateLimitError: litellm.RateLimitError: …` 原文，這一輪結束。
+- 讓 agent 用 `ask_knowledge_base` 而 KB 端被限流：**父輪**的狀態列出現等待提示。沒部署到的症狀：工具卡停住不動，看起來像當掉。
+- 上傳一份 embedding 會失敗的文件：集合頁的失敗清單寫說人話的原因（滑鼠停留看得到原文），點進文件有完整說明。
+  沒部署到的症狀：失敗清單直接列出 `RateLimitError: …` 這類原文。
+
 ### 2026-10-16 · #969 插話：AI 還在回答時送出的訊息，真的會被讀到 {#pr-969}
 
 **設定** — 無。

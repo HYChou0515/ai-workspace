@@ -314,7 +314,7 @@ describe("reduceAgent", () => {
 
   it("captures error message", () => {
     const log = fold([{ type: "error", message: "boom" }], { ...EMPTY_LOG, streaming: true });
-    expect(log.error).toBe("boom");
+    expect(log.error?.raw).toBe("boom");
   });
 
   it("attaches a parse-error hint to the running tool call", () => {
@@ -592,7 +592,9 @@ describe("logFromMessages — persisted error markers (#37)", () => {
     expect(log.entries).toHaveLength(3);
     const last = log.entries[2];
     if (last?.kind === "banner") {
-      expect(last.text).toContain("refused");
+      // Worded at render (docs/plan-friendly-errors.md); the provider's text is
+      // the technical detail the banner carries, not the banner's words.
+      expect(last.failure?.raw).toContain("refused");
     } else {
       throw new Error("expected a banner entry for the error message");
     }
@@ -903,7 +905,7 @@ describe("a new turn clears the previous turn's error (#721)", () => {
     } as AgentEvent);
 
   it("leaves the error up while nothing else has happened", () => {
-    expect(capped().error).toContain("30");
+    expect(capped().error?.headline).toContain("30");
   });
 
   it("clears it when the next turn opens", () => {
@@ -927,7 +929,12 @@ describe("a new turn clears the previous turn's error (#721)", () => {
     const rehydrated = reconcileSnapshot(continued, {
       messages: [
         { role: "user", content: "go" },
-        { role: "error", content: "The agent stopped after reaching its step limit (30)." },
+        {
+          role: "error",
+          content: "The agent stopped after reaching its step limit (30).",
+          // What `turns._error_message` stamps on every step-limit ending.
+          error_kind: "max_turns",
+        },
         { role: "user", content: "[goal] keep going" },
         { role: "assistant", content: "carrying on" },
       ] as Message[],
@@ -1085,9 +1092,11 @@ describe("a finished turn leaves no stale waiting-state (#739 review round 3)", 
 
 describe("a turn that recovers stops reporting the attempt that failed", () => {
   /**
-   * A retry notice is not the end of a turn. `classify_retry_event` sends it as
-   * a `RunError` mid-flight — "retry: … all agent models failed or were
-   * cooling" — and the turn carries on and can finish perfectly well. But the
+   * A retry notice is not the end of a turn. It USED to arrive as a `RunError`
+   * mid-flight — "retry: … all agent models failed or were cooling" — and the
+   * turn carried on and could finish perfectly well. (A re-sent model call is
+   * `model_retrying` now, docs/plan-friendly-errors.md D9; the rule below stays
+   * as the guard against any emitter that reports and then recovers.) But the
    * reducer treats every `error` as terminal, and `error` is sticky: only the
    * NEXT question cleared it (#721). So a turn that stumbled and then succeeded
    * left the red box standing over its own good answer until the user typed
@@ -1104,7 +1113,7 @@ describe("a turn that recovers stops reporting the attempt that failed", () => {
     } as AgentEvent);
 
   it("keeps the notice while the turn is still unresolved", () => {
-    expect(retried().error).toContain("retry");
+    expect(retried().error?.raw).toContain("retry");
   });
 
   it("drops it once the turn goes on producing", () => {
@@ -1129,7 +1138,7 @@ describe("a turn that recovers stops reporting the attempt that failed", () => {
     } as AgentEvent);
     const closed = reduceAgent(failed, { type: "done" } as AgentEvent);
 
-    expect(closed.error).toBe("giving up after 3 attempts: APIConnectionError: refused");
+    expect(closed.error?.raw).toBe("giving up after 3 attempts: APIConnectionError: refused");
   });
 
   it("does not clear a message the STREAM never set", () => {
@@ -1139,24 +1148,27 @@ describe("a turn that recovers stops reporting the attempt that failed", () => {
     // that failed. Only the first belongs to a turn. On a shared item another
     // participant's turn is streaming deltas at any moment, so "output arrived"
     // must not be read as "your quota refusal stopped being true".
-    const refused = { ...EMPTY_LOG, error: "workspace is full — free some space" };
+    const refused: AgentLog = {
+      ...EMPTY_LOG,
+      error: { kind: "quota", headline: "workspace is full — free some space", raw: "" },
+    };
 
     const other = reduceAgent(refused, {
       type: "message_delta",
       text: "someone else's turn, producing away",
     } as AgentEvent);
 
-    expect(other.error).toBe("workspace is full — free some space");
+    expect(other.error?.headline).toBe("workspace is full — free some space");
   });
 
   it("keeps a failure that produced partial output before dying", () => {
-    // `progress_made` — output, then the failure, then `done`. The output came
+    // Output, then the failure, then `done`. The output came
     // BEFORE the error, so it is not evidence of recovery.
     let log = reduceAgent(EMPTY_LOG, { type: "message_delta", text: "half an answer" });
     log = reduceAgent(log, { type: "error", message: "APIConnectionError: refused" });
     log = reduceAgent(log, { type: "done" } as AgentEvent);
 
-    expect(log.error).toBe("APIConnectionError: refused");
+    expect(log.error?.raw).toBe("APIConnectionError: refused");
   });
 });
 
@@ -1612,5 +1624,309 @@ describe("a broadcast answer says which call it answers", () => {
 
     const [entry] = next.entries;
     expect(entry?.kind === "message" && "answers" in entry.message).toBe(false);
+  });
+});
+
+describe("a failure is carried as what it IS, not as a sentence (docs/plan-friendly-errors.md)", () => {
+  it("keeps the kind, the numbers and the raw text of a live failure", () => {
+    const log = fold(
+      [
+        {
+          type: "error",
+          message: "RateLimitError: litellm.RateLimitError: slow down",
+          kind: "rate_limited",
+          params: { waited_s: 120 },
+        },
+      ],
+      { ...EMPTY_LOG, streaming: true },
+    );
+
+    expect(log.error).toEqual({
+      kind: "rate_limited",
+      params: { waited_s: 120 },
+      raw: "RateLimitError: litellm.RateLimitError: slow down",
+    });
+  });
+
+  it("reads a failure with no kind as unknown", () => {
+    const log = fold([{ type: "error", message: "boom" }], { ...EMPTY_LOG, streaming: true });
+    expect(log.error).toEqual({ kind: "unknown", params: null, raw: "boom" });
+  });
+
+  it("turns a persisted failure into a banner that carries it — worded, with the raw kept", () => {
+    const log = logFromMessages([
+      { role: "user", content: "q" },
+      {
+        role: "error",
+        content: "RateLimitError: slow down",
+        error_kind: "rate_limited",
+        error_params: { waited_s: 60 },
+        created_at: 5,
+      },
+    ] as Message[]);
+
+    expect(log.entries[1]).toEqual({
+      kind: "banner",
+      at: 5,
+      text: "模型服務限制了請求頻率，已自動等了約 60 秒仍未解除。",
+      failure: { kind: "rate_limited", params: { waited_s: 60 }, raw: "RateLimitError: slow down" },
+    });
+  });
+
+  it("words an old row's `error` as unknown — its text is the technical detail, not the message", () => {
+    const log = logFromMessages([
+      { role: "error", content: "giving up after 3 attempts: Boom", error_kind: "error" },
+    ] as Message[]);
+
+    expect(log.entries[0]).toMatchObject({
+      kind: "banner",
+      text: "發生了預期外的錯誤。",
+      failure: { kind: "error", raw: "giving up after 3 attempts: Boom" },
+    });
+  });
+
+  it("keeps a cancellation a plain banner — there is nothing technical to show", () => {
+    const log = logFromMessages([
+      { role: "error", content: "The previous response was interrupted.", error_kind: "cancelled" },
+    ] as Message[]);
+
+    expect(log.entries[0]).toEqual({ kind: "banner", text: "已取消。", at: undefined });
+  });
+
+  it("shows a re-sent model call as a passing status, gone once output resumes", () => {
+    const retrying = fold([{ type: "model_retrying", attempt: 2, kind: "timeout" }], {
+      ...EMPTY_LOG,
+      streaming: true,
+    });
+    expect(retrying.retrying).toEqual({ attempt: 2, kind: "timeout" });
+    expect(retrying.error).toBeNull();
+
+    const resumed = reduceAgent(retrying, { type: "message_delta", text: "ok" });
+    expect(resumed.retrying).toBeNull();
+  });
+
+  it("withdraws what the re-sent call had shown, and only that", () => {
+    const log = fold([
+      { type: "message_delta", text: "Before the tool. " },
+      { type: "tool_start", call_id: "c1", name: "look", args: {} },
+      { type: "tool_end", call_id: "c1", output: "seen" },
+      { type: "message_delta", text: "half an ans" },
+      { type: "message_delta", text: "Half a thought", reasoning: true },
+      { type: "output_retracted", text_chars: 11, reasoning_chars: 14 },
+      { type: "message_delta", text: "The whole answer." },
+    ] as AgentEvent[]);
+
+    const answers = log.entries.flatMap((e) =>
+      e.kind === "message" && e.message.role === "assistant" ? [e.message] : [],
+    );
+    expect(answers.map((m) => [m.content, m.reasoning ?? null])).toEqual([
+      ["Before the tool. ", null],
+      ["The whole answer.", null],
+    ]);
+  });
+});
+
+describe("a delegated sub-agent's failure rides its tool card (docs/plan-friendly-errors.md P4)", () => {
+  const failure = { kind: "rate_limited", params: { waited_s: 120 }, raw: "RateLimitError: slow" };
+
+  it("keeps the failure on the call when it ends live", () => {
+    const log = fold([
+      { type: "tool_start", call_id: "c1", name: "run_agent", args: {} },
+      { type: "tool_end", call_id: "c1", output: "sub-agent 'x' failed: RateLimitError: slow", failure },
+    ] as AgentEvent[]);
+
+    const [entry] = log.entries;
+    expect(entry?.kind === "tool_call" && entry.call.failure).toEqual(failure);
+  });
+
+  it("keeps it on a reloaded call", () => {
+    const log = logFromMessages([
+      {
+        role: "tool",
+        content: "sub-agent 'x' failed: RateLimitError: slow",
+        tool_call_id: "c1",
+        tool_name: "run_agent",
+        failure,
+      },
+    ] as Message[]);
+
+    const [entry] = log.entries;
+    expect(entry?.kind === "tool_call" && entry.call.failure).toEqual(failure);
+  });
+});
+
+describe("review round 1 — the retraction and the night note (docs/plan-friendly-errors.md)", () => {
+  it("withdraws by CHARACTER, as the backend counted them — an emoji is one, not two", () => {
+    const log = fold([
+      { type: "message_delta", text: "ok 🚀🚀" },
+      // Python counted 5 code points; JS `.length` would say 7.
+      { type: "output_retracted", text_chars: 5, reasoning_chars: 0 },
+      { type: "message_delta", text: "done" },
+    ] as AgentEvent[]);
+
+    const answers = log.entries.flatMap((e) =>
+      e.kind === "message" && e.message.role === "assistant" ? [e.message.content] : [],
+    );
+    expect(answers).toEqual(["done"]);
+  });
+
+  it("words a night's failure on its note, without repeating the raw text as prose", () => {
+    const raw = "AllProvidersFailed: all agent models failed or were cooling\n← RateLimitError: slow";
+    const log = logFromMessages([
+      {
+        role: "goal",
+        content: `今晚無法開始。\n\n明天會再試。\n\n${raw}`,
+        failure: { kind: "rate_limited", params: null, raw },
+      },
+    ] as Message[]);
+
+    expect(log.entries[0]).toEqual({
+      kind: "goal_note",
+      text: "今晚無法開始。\n\n明天會再試。",
+      at: undefined,
+      failure: { kind: "rate_limited", params: null, raw },
+    });
+  });
+});
+
+describe("review round 2 — an unnamed night failure keeps its own words", () => {
+  it("leaves the note as written when the failure could only be named unknown", () => {
+    // The turn gate's refusals — a full workspace, a spent sandbox quota — ARE
+    // sentences for the reader, and the only fact the note has. "Something
+    // unexpected went wrong, ask an admin" would say less than they do.
+    const raw = "WorkspaceFull: 20.0 GB of 20.0 GB used";
+    const log = logFromMessages([
+      { role: "goal", content: `今晚無法開始。\n\n${raw}`, failure: { kind: "unknown", params: null, raw } },
+    ] as Message[]);
+
+    expect(log.entries[0]).toEqual({ kind: "goal_note", text: `今晚無法開始。\n\n${raw}`, at: undefined });
+  });
+});
+
+describe("a turn's failure is shown once (found recording the #915 demo)", () => {
+  /**
+   * A failed turn raises the live notice from the `error` event, and the turn
+   * also persists it as `role="error"`, which the re-hydrate after the turn turns
+   * into a transcript entry worded the same way. `reconcileSnapshot` kept the
+   * live one too, so one failure read as two identical red boxes, one under the
+   * other. Once the thread holds THIS turn's failure, the transcript entry is
+   * the notice — the same screen a reload shows.
+   */
+  const RAW = "ModelCallFailed: gave up\n← RateLimitError: slow down";
+  const failed = (): AgentLog =>
+    reduceAgent(reduceAgent(EMPTY_LOG, { type: "user_message", content: "go" } as AgentEvent), {
+      type: "error",
+      message: RAW,
+      kind: "rate_limited",
+      params: { waited_s: 0 },
+    } as AgentEvent);
+  const notices = (log: AgentLog): number =>
+    log.entries.filter((e) => e.kind === "banner" && e.failure).length + (log.error ? 1 : 0);
+
+  it("drops the live notice once the thread holds the turn's failure", () => {
+    const rehydrated = reconcileSnapshot(failed(), {
+      messages: [
+        { role: "user", content: "go" },
+        { role: "error", content: RAW, error_kind: "rate_limited", error_params: { waited_s: 0 } },
+      ] as Message[],
+    });
+    expect(notices(rehydrated)).toBe(1);
+    expect(rehydrated.error).toBeNull();
+  });
+
+  it("keeps it while the thread does not hold the failure yet", () => {
+    const rehydrated = reconcileSnapshot(failed(), {
+      messages: [{ role: "user", content: "go" }] as Message[],
+    });
+    expect(rehydrated.error?.raw).toBe(RAW);
+  });
+
+  it("keeps a queued turn's identical failure until it is persisted too", () => {
+    // Review round 4: queued questions persist as Q1, Q2, A1, A2, so ONE tail
+    // holds both turns' endings. Q1's failure being in the store says nothing
+    // about Q2's, which ended the same way and has not landed yet.
+    let log = reduceAgent(EMPTY_LOG, { type: "user_message", content: "q1" } as AgentEvent);
+    log = reduceAgent(log, { type: "user_message", content: "q2" } as AgentEvent);
+    log = reduceAgent(log, { type: "error", message: RAW, kind: "rate_limited" } as AgentEvent);
+    const q1Stored = [
+      { role: "user", content: "q1" },
+      { role: "user", content: "q2" },
+      { role: "error", content: RAW, error_kind: "rate_limited" },
+    ] as Message[];
+    log = reconcileSnapshot(log, { messages: q1Stored });
+    expect(notices(log)).toBe(1);
+
+    log = reduceAgent(log, { type: "error", message: RAW, kind: "rate_limited" } as AgentEvent);
+    const behind = reconcileSnapshot(log, { messages: q1Stored });
+    expect(notices(behind)).toBe(2);
+
+    const both = reconcileSnapshot(behind, {
+      messages: [...q1Stored, { role: "error", content: RAW, error_kind: "rate_limited" }] as Message[],
+    });
+    expect(notices(both)).toBe(2);
+    expect(both.error).toBeNull();
+  });
+
+  it("counts only what the screen showed after its own last question", () => {
+    // Q1 failed and is on screen as an entry; Q2 is asked and fails the same
+    // way. Counting the whole screen would weigh Q1's entry against Q2's tail
+    // and keep Q2's live notice beside its stored one.
+    const q1Stored = [
+      { role: "user", content: "q1" },
+      { role: "error", content: RAW, error_kind: "rate_limited" },
+    ] as Message[];
+    let log = reconcileSnapshot(EMPTY_LOG, { messages: q1Stored });
+    log = reduceAgent(log, { type: "user_message", content: "q2" } as AgentEvent);
+    log = reduceAgent(log, { type: "error", message: RAW, kind: "rate_limited" } as AgentEvent);
+
+    const both = reconcileSnapshot(log, {
+      messages: [
+        ...q1Stored,
+        { role: "user", content: "q2" },
+        { role: "error", content: RAW, error_kind: "rate_limited" },
+      ] as Message[],
+    });
+    expect(notices(both)).toBe(2);
+    expect(both.error).toBeNull();
+  });
+
+  it("leaves a send failure alone even when the thread ends in the same words", () => {
+    // A send failure is never the turn's persisted ending — the turn did not
+    // run — so a matching entry is some other failure.
+    const sendFailed: AgentLog = {
+      ...reduceAgent(EMPTY_LOG, { type: "user_message", content: "go" } as AgentEvent),
+      error: { kind: "rate_limited", raw: RAW },
+      errorFromTurn: false,
+    };
+    const rehydrated = reconcileSnapshot(sendFailed, {
+      messages: [
+        { role: "user", content: "go" },
+        { role: "error", content: RAW, error_kind: "rate_limited" },
+      ] as Message[],
+    });
+    expect(rehydrated.error?.raw).toBe(RAW);
+  });
+
+  it("keeps it when only an EARLIER turn failed the same way", () => {
+    const earlier = reduceAgent(
+      reduceAgent(
+        reduceAgent(EMPTY_LOG, { type: "user_message", content: "first" } as AgentEvent),
+        { type: "error", message: RAW, kind: "rate_limited" } as AgentEvent,
+      ),
+      { type: "user_message", content: "again" } as AgentEvent,
+    );
+    const failedAgain = reduceAgent(earlier, {
+      type: "error",
+      message: RAW,
+      kind: "rate_limited",
+    } as AgentEvent);
+    const rehydrated = reconcileSnapshot(failedAgain, {
+      messages: [
+        { role: "user", content: "first" },
+        { role: "error", content: RAW, error_kind: "rate_limited" },
+        { role: "user", content: "again" },
+      ] as Message[],
+    });
+    expect(rehydrated.error?.raw).toBe(RAW);
   });
 });

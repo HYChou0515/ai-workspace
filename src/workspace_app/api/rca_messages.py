@@ -38,6 +38,7 @@ def to_rca_message(m: TurnMessage) -> Message:
             role="error",
             content=m.content,
             error_kind=m.error_kind,
+            error_params=m.error_params,
             created_at=m.created_at,
             # plan-interjection Q2: who took the turn over ("interrupted").
             author=m.author,
@@ -49,6 +50,7 @@ def to_rca_message(m: TurnMessage) -> Message:
         tool_name=m.tool_name,
         tool_args=m.tool_args,
         tool_display=m.tool_display,
+        failure=m.failure,
         created_at=m.created_at,
     )
 

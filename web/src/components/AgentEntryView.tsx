@@ -33,6 +33,7 @@ import { parseOutsideLookup } from "../renderers/outsideLookup";
 import { useStickToBottom } from "../hooks/useStickToBottom";
 import { useT, type MsgKey } from "../lib/i18n";
 import { AskUserCard, type AskUserAnswer } from "./AskUserCard";
+import { ErrorNotice } from "./ErrorNotice";
 import { ShownFiles } from "./ShownFiles";
 import { MarkingChips } from "./MarkingChips";
 import { ShownLayoutCard } from "./ShownLayoutCard";
@@ -290,6 +291,10 @@ export function EntryView({
   currentUser?: string;
 }) {
   if (entry.kind === "banner") {
+    // A failure says what happened, what to do, and keeps the raw text
+    // collapsed beneath (docs/plan-friendly-errors.md D8). Other banners — a
+    // cancellation, a step limit — are already a sentence.
+    if (entry.failure) return <ErrorNotice failure={entry.failure} />;
     return (
       <div
         style={{
@@ -405,7 +410,7 @@ export function EntryView({
   if (entry.kind === "goal_note") {
     // #613 P3: the goal driver's outcome marker — a quiet status line, like a
     // mention (informational, not part of the dialogue).
-    return (
+    const note = (
       <div
         data-testid="goal-note"
         style={{
@@ -418,7 +423,15 @@ export function EntryView({
           borderLeft: "2px solid var(--accent)",
         }}
       >
-        <span>{entry.text}</span>
+        <span style={{ whiteSpace: "pre-wrap" }}>{entry.text}</span>
+      </div>
+    );
+    // Review round 1: why a night could not start, worded, raw text beneath.
+    if (!entry.failure) return note;
+    return (
+      <div>
+        {note}
+        <ErrorNotice failure={entry.failure} />
       </div>
     );
   }
@@ -1133,7 +1146,7 @@ function ToolCallCard({
   // We know the tool when either source names it → show its primary arg. Only a
   // truly-unknown tool falls back to surfacing its raw name in the hint slot (#206).
   const hint = labelKey || catalogLabel ? toolArgHint(call.name, call.args) : call.name;
-  return (
+  const card = (
     <details
       open={streamingLive}
       style={{
@@ -1225,6 +1238,17 @@ function ToolCallCard({
         </div>
       )}
     </details>
+  );
+  // P4: a delegated sub-agent's failure goes BESIDE the card — collapsed, the
+  // card would hide the one thing the reader most needs to see.
+  if (!call.failure) return card;
+  return (
+    <div>
+      {card}
+      <div style={{ marginTop: 4 }}>
+        <ErrorNotice failure={call.failure} />
+      </div>
+    </div>
   );
 }
 

@@ -8,17 +8,16 @@ wrong, and the harness must (a) never crash the turn on any of them and
 tool calls", which is wrong for two of the three):
 
 1. **Malformed JSON** — the ``arguments`` string can't be parsed at all
-   (unquoted keys, unterminated string, trailing junk). →
-   ``MalformedToolArgsError``.
+   (unquoted keys, unterminated string, trailing junk).
 2. **Non-object root** — valid JSON, but the model sent a list / scalar
-   instead of an object. → ``NonObjectToolArgsError``.
+   instead of an object.
 3. **Concatenated objects** — LiteLLM / openai-agents-sdk's streaming layer
    sometimes merges two parallel ``tool_call`` deltas into a single
    tool_call whose ``arguments`` is two JSON objects concatenated::
 
        {"path": "wafer_map.csv"}{"path": "process_parameters.csv"}
 
-   → ``ConcatenatedToolCallsError``. Empirically Qwen3:14B falls into this
+   Empirically Qwen3:14B falls into this
    on its first turn — ignoring the "one tool call per response" rule.
 
 This module provides:
@@ -31,23 +30,15 @@ This module provides:
 - ``wrap_with_args_recovery(tool)`` — return a FunctionTool that classifies
   the args through ``peel_first_json`` before delegating to the original.
   **For all three failure classes the wrap REFUSES to run the underlying
-  tool and RAISES** the matching ``ToolArgsError``. Two reasons it must
-  raise (not return an error string):
-
-  * The merged/parallel tool_call's name comes from one of the parallel
-    calls, so the FIRST object's shape often belongs to a DIFFERENT tool;
-    running it produces a confusing ValidationError from a tool the model
-    didn't choose.
-  * The SDK has already appended the bad tool_call (with its unparseable
-    ``arguments`` string) to its in-flight conversation. If we returned a
-    tool result the SDK would yield ToolEnd (setting the runner's
-    ``progress_made``, blocking retry) AND send the poisoned conversation
-    back to LiteLLM, where ``ollama/chat/transformation.py`` does
-    ``json.loads(arguments)`` and dies with ``Extra data`` →
-    APIConnectionError. Raising exits ``Runner.run_streamed`` so the
-    runner's ``diagnose_error`` maps the exception to a hint and retries
-    from the CLEAN persisted history (the poisoned in-flight call is
-    discarded).
+  tool and answers IN-BAND** with the reason, so the model corrects itself
+  on its next call (docs/plan-friendly-errors.md D2). It used to raise, to
+  end the run so the whole turn could restart from a clean conversation —
+  the bad ``arguments`` would otherwise reach LiteLLM's Ollama transform,
+  which ``json.loads`` the history and dies. That is now settled where the
+  args are made: ``RepairingModel`` hands the SDK valid JSON on both the
+  streamed and the whole-response path, so there is nothing to discard and
+  no turn to restart. The first object of a merged call is still never run:
+  its shape often belongs to a DIFFERENT tool.
 
 This wrap is the SOLE defence against the concatenated-args streaming bug.
 We used to also force ``ModelSettings(parallel_tool_calls=False)`` as
@@ -72,47 +63,6 @@ from .arg_repair import AMBIGUOUS_CALL_KEY, malformed_raw
 from .context import AgentToolContext
 
 _LOGGER = logging.getLogger(__name__)
-
-
-class ToolArgsError(ValueError):
-    """The model's tool-call arguments couldn't be used.
-
-    Subclasses ``ValueError`` so it still satisfies the SDK / runner's
-    broad ``except (json.JSONDecodeError, ValueError)`` / ``except
-    Exception`` handling and propagates cleanly out of
-    ``Runner.run_streamed`` to the runner's ``diagnose_error``. The
-    message is kept clean and user-safe (it can surface in the failure
-    banner) — no raw Python json internals. Subclasses tag the *kind* of
-    failure so ``diagnose_error`` can route an accurate retry hint.
-
-    Carries the affected ``tool_name``, the model's actual ``raw_args``
-    string, and the ``call_id`` as structured attributes (NOT in the
-    message) so the runner can surface *what the model emitted* to the FE
-    via ``ToolCallParseError`` — the user has a right to see the mistake
-    (#76) — while the message itself stays clean."""
-
-    def __init__(
-        self, message: str, *, tool_name: str = "", raw_args: str = "", call_id: str = ""
-    ) -> None:
-        super().__init__(message)
-        self.tool_name = tool_name
-        self.raw_args = raw_args
-        self.call_id = call_id
-
-
-class MalformedToolArgsError(ToolArgsError):
-    """The ``arguments`` string could not be parsed as JSON at all."""
-
-
-class NonObjectToolArgsError(ToolArgsError):
-    """The args parsed as valid JSON, but the root is not an object — the
-    model sent a list / scalar instead of ``{...}``."""
-
-
-class ConcatenatedToolCallsError(ToolArgsError):
-    """The args held more than one JSON object concatenated — the streaming
-    aggregator merged parallel tool_calls into one. The model must emit
-    exactly ONE tool call per response."""
 
 
 def peel_first_json(args_json: str) -> tuple[object, str]:
@@ -199,13 +149,10 @@ def wrap_with_args_recovery(tool: FunctionTool) -> FunctionTool:
     Four input cases:
 
     - Clean single-object args → pass through to the original tool.
-    - Unparseable args → raise ``MalformedToolArgsError``.
-    - Valid JSON but a non-object root → raise ``NonObjectToolArgsError``.
-    - Concatenated objects (leftover present) → raise
-      ``ConcatenatedToolCallsError``.
+    - Unparseable args, a non-object root, or concatenated objects (leftover
+      present) → the tool is NOT run; the model is told why, in-band.
 
-    See the module docstring for why the failure cases MUST raise rather
-    than return a tool-result string.
+    See the module docstring for why in-band is safe.
     """
     original = tool.on_invoke_tool
 
@@ -232,32 +179,25 @@ def wrap_with_args_recovery(tool: FunctionTool) -> FunctionTool:
     # ARGUMENTS. Narrowing it to `str` here was a claim about other people's tools
     # that was not ours to make, and it is what turned `read_image` into an error.
     async def safer(ctx: ToolContext[AgentToolContext], args_json: str) -> Any:
-        # The model's actual emission + call id travel on the raised error so
-        # the runner can show the user WHAT went wrong (#76), without putting
-        # raw payloads into the user-safe message.
-        call_id = ctx.tool_call_id
         try:
             value, leftover = peel_first_json(args_json)
         except json.JSONDecodeError as e:
-            # Keep the raw parse error out of the message (it can reach the
-            # user banner) but log it for the operator.
+            # The parser's internals go to the log, not the reply: "line 1
+            # column 1" tells the model nothing it can act on.
             _LOGGER.info("args_recovery: unparseable args on %s: %s", tool.name, e)
-            raise MalformedToolArgsError(
-                f"The arguments for tool `{tool.name}` were not valid JSON.",
-                tool_name=tool.name,
-                raw_args=args_json,
-                call_id=call_id,
-            ) from e
+            return (
+                f"Error: the arguments you sent for `{tool.name}` were not valid JSON. "
+                "Re-send the call as exactly ONE complete, valid JSON object — quote every "
+                "key and string value, and write nothing after the closing brace."
+            )
         if not isinstance(value, dict):
             _LOGGER.info(
                 "args_recovery: non-object args on %s: %s", tool.name, type(value).__name__
             )
-            raise NonObjectToolArgsError(
-                f"The arguments for tool `{tool.name}` must be a single JSON object, "
-                f"not a {type(value).__name__}.",
-                tool_name=tool.name,
-                raw_args=args_json,
-                call_id=call_id,
+            return (
+                f"Error: the arguments for `{tool.name}` must be a single JSON object "
+                f'(like {{"path": "file.csv"}}), not a {type(value).__name__}. Re-send one '
+                "JSON object matching the tool's schema."
             )
         # An old name two third-party commands answer to (`ToolAliasModel`):
         # that call fails in-band and names the commands to call instead.
@@ -277,23 +217,20 @@ def wrap_with_args_recovery(tool: FunctionTool) -> FunctionTool:
                 f"quote every key and string value, and write nothing after the closing brace."
             )
         if leftover:
-            # The operator-facing detail (what got merged) goes to the log,
-            # NOT the exception message — the message can surface in the
-            # user banner, so it stays clean.
+            # What got merged goes to the log, not the reply: the payload may
+            # belong to a different tool, and repeating it invites a re-run.
             _LOGGER.info(
                 "args_recovery: merged parallel tool_calls on %s; first=%s leftover=%r",
                 tool.name,
                 json.dumps(value),
                 leftover,
             )
-            raise ConcatenatedToolCallsError(
-                f"Tool `{tool.name}` received more than one tool call merged into one "
-                "response. Send exactly ONE tool call per response.",
-                tool_name=tool.name,
-                raw_args=args_json,
-                call_id=call_id,
+            return (
+                f"Error: `{tool.name}` received more than one tool call merged into one "
+                "response, so none of them ran. Send exactly ONE tool call per response "
+                "and wait for its result before issuing the next one."
             )
-        # `peel_first_json` returns `object`; the non-dict case raised above, so
+        # `peel_first_json` returns `object`; the non-dict case returned above, so
         # this cast records what the control flow already guarantees.
         args = cast("dict[str, Any]", value)
         result = await original(ctx, json.dumps(args))

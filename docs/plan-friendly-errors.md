@@ -51,10 +51,10 @@ Source of each: **user** = decided by the user in the 2026-10-12 /grill-me;
 | D3 | A call whose stream **breaks after it has shown text** is re-sent; the partial text of THAT call is withdrawn and replaced. Earlier calls' text and tool results stay. | user (Q3) |
 | D4 | **Wait budgets are out of scope.** Single endpoint keeps its 120 s; chains keep `rate_limit_budget_s`. Only the place the wait happens moves. | user (Q4: "離題") |
 | D5 | The copy, per `kind` (English translates the same meaning): see the table below. | user (Q4) |
-| D6 | Backend classifies (`classify_error(exc) → kind`); `RunError` and the persisted error message carry `kind` + `raw`; `message` no longer holds the raw string. FE words it from `kind` via i18n. | proposed |
+| D6 | Backend classifies (`failover.classify.classify_error(exc) → kind`). `RunError.message` / the persisted error `content` IS the raw text (every link of the cause chain, `raw_error_text`) and is what technical details show; the FE words the failure from `kind` via i18n. The numbers the copy needs ride `RunError.params` → `error_params`. Every failure carries a kind; one the emitter could not name is `unknown`. (Amended in P1: a separate `raw` field would have duplicated `content`, which errors never replay to the model anyway.) | proposed, accepted with the plan |
 | D7 | Error rows persisted before this have no `kind`: shown as `unknown`, their old text under technical details. | proposed |
 | D8 | One FE component, `ErrorNotice`, for every surface: chat error box, persisted banner, KB chat, sub-agent tool card, workflow, document index status, our own API's non-2xx. | proposed |
-| D9 | A retry in progress is an ephemeral event (status line "連線不穩，正在重試（第 N 次）…"), never persisted — which also fixes recovered retries persisting as errors and sub-agents reported as failed. | proposed |
+| D9 | A retry in progress is an ephemeral event (status line "連線不穩，正在重試（第 N 次）…" — **wording amended by D14**), never persisted — which also fixes recovered retries persisting as errors and sub-agents reported as failed. | proposed |
 | D10 | Sub-agent holds / retries are forwarded to the parent stream. The tool card shows the worded error; the tool RESULT given to the LLM keeps the raw text (a model decides its next step better from it). | proposed |
 
 ### D5 copy
@@ -84,7 +84,321 @@ that fails after producing output keeps that output; the notice follows it.
 | P4 | Sub-agents: forward holds / retries, worded failure on the tool card. |
 | P5 | Workflow and background-job errors. |
 | P6 | Our own API's non-2xx. |
-| P7 | `docs/migrations.md`: retry behaviour changes with no knob (and a schema bump if the persisted field needs one). |
+| P7 | `docs/migrations.md`: retry behaviour changes with no knob; one new index with no backfill. |
+| P8 | A stream that drops mid-answer reaches the call wrapper (litellm's httpx transport); the classifier names a failure by its connection / timeout evidence before its status code; a failure-shape matrix test through real litellm and a real HTTP endpoint. See [P8](#p8). |
+
+## What the build changed, and why (P1–P6)
+
+Recorded as they were decided while building; each names its evidence.
+
+- **D6 amended in P1** — no separate `raw` field: the message / persisted
+  `content` is the raw text (every cause-chain link). See D6 above.
+- **The tool-arg retry moved in-band (P2).** With no whole-turn retry, a
+  non-object or concatenated tool-call argument is answered in-band by
+  `args_recovery` and the model corrects itself next call. Safe because
+  `RepairingModel` now sanitizes the whole-response path too
+  (`test_a_whole_response_is_repaired_too`).
+- **`cancelled` / `max_turns` gained no technical details (P3).** Their stored
+  text is an explanatory sentence, not something to debug from; there is
+  nothing to open.
+- **`failure.rate_limited.what` (no count) is neutral (P5).** The first draft
+  said "this reply did not finish", which is wrong for a document; the counted
+  variant (D5) is unchanged. A document's remedy is its own
+  (`kb.doc.failedAction`, re-read it), not a chat's ("send it again").
+- **P4 covers `ask_knowledge_base`, `run_agent` and the skill-hub review.**
+  They hand their sub-agent a `Delegation` (`agent/delegation.py`): the card
+  sink every wrapper already forwards, plus the turn's status line and a way
+  back to the calling tool call. `ask_wiki` (the KB agent's own wiki
+  delegation) has its own relay and is not covered.
+- **P5 covers document indexing and workflow runs.** A failed run records
+  `error_kind`; a step's own failure is `step_failed` — a workflow-only kind
+  outside `failover.classify.ERROR_KINDS` — whose `error_reason` (written for a
+  reader by a gate or `fail()`) is the headline. KB archive-import errors are
+  not covered: they already sit in a collapsed "Why (N)" list.
+- **P6 copy is proposed, not from D5.** D5 worded the MODEL service; our own
+  API's refusals needed their own: `failure.forbidden.*` (403) and
+  `failure.server_error.*` (5xx). Every other status stays `unknown` with its
+  status line as the details, rather than copy invented for statuses this app
+  has not seen.
+
+## Review round 1 (2026-10-12)
+
+Four lenses (conformance, veracity, defect, regression) on `c0dd942d`. What
+they found, and what changed — each fix built test-first, the test red on the
+unfixed code, the fixed line then mutated to prove the test guards it:
+
+- **Defect — a re-sent call's partial text survived outside the transcript.**
+  Five callers joined `MessageDelta` text themselves (`drive_subagent`,
+  `answer_question`, the wiki reader, the card drafter, compaction) and handed
+  the model "half an the whole answer". They now read through
+  `events.AnswerText`, which honours `OutputRetracted`; a source test keeps a
+  sixth from joining by hand.
+- **Defect — the rate-limit budget reset on every model call.** It is now one
+  pool per `CallRetryModel`, i.e. per turn. The re-send COUNT stays per call,
+  deliberately (a late blip is not charged against an early one; the turn is
+  bounded by max_turns).
+- **Defect — the inner stream was not closed on Stop** (`aclosing`); the FE
+  withdrew by UTF-16 unit where the backend counted code points; a document
+  failure with no kind lost its remedy; the copy button did nothing on a
+  plain-http deploy (now absent there).
+- **Regression — the reclaim give-up and the off-hours night note read worse.**
+  The give-up is `turn_lost` ("send it again"); the night note carries its
+  failure as `Message.failure` (the field `tool_failure` was renamed — it was
+  unmerged) and the thread words it, while the note's text still ends on the
+  raw words for text-only readers.
+- **Regression — a parser's reason was hidden in the doc list** behind
+  "unexpected error": an `unknown` kind falls back to the detail there.
+- **D6 everywhere** — jobs, workflow runs and the findability answer keep the
+  whole cause chain (`raw_error_text`) and a kind.
+- **Recorded rather than changed:** D3 does not re-send a call once the SDK has
+  recorded one of its items (`response.output_item.done`) — a re-send would add
+  a second copy; a failover chain's own 429 hold is followed by up to 120 s
+  more from the call wrapper (master stacked these only before output); retries
+  are narrower than the old loop's — auth, bad requests, unknown errors and a
+  failing credential resolver end the turn at once (`docs/migrations.md#pr-915`,
+  `configuration.md` contract 3); the doc list shows a headline with the raw
+  text on hover (the row is a button — no copy control fits) and
+  `WriteFailureNotice` keeps its own headline over `FailureDetails`; copy beyond
+  D5: count-less `timeout.what`, trailing 。, and the app's own kinds
+  (`turn_lost`, `stop_failed`, `stream_dropped`). D5's `rate_limited.do` and
+  `context_overflow.do` were restored to the approved wording. Chat export and
+  video render a failure's `content` verbatim, i.e. the raw text — accepted.
+- **Docs the in-app AI reads** (`subsystems/api-and-turns.md`,
+  `subsystems/agent-runtime.md`, `architecture.md`, `glossary.md`,
+  `decisions.md`) described the removed whole-turn retry and are updated.
+
+## Review round 2 (2026-10-12)
+
+Two lenses (defect + regression, veracity + conformance) on `076400a2`. The
+defect lens re-ran every round-1 failure and found each one fixed. New:
+
+- **Regression — an unnamed night failure hid its own words.** The off-hours
+  note's usual cause is the turn gate refusing (a full workspace, a spent
+  sandbox quota), named `unknown`; stripped and worded as "something
+  unexpected", it said less than the sentence it replaced. A note whose failure
+  is `unknown` now stays as written, the same rule the doc list follows.
+- **Copy said what did not happen.** `failure.timeout.tried` counted every send
+  as a RE-send ("已重試 3 次" after two re-sends): it is now "試了 N 次都沒能完成"
+  (a deviation from D5's "已重試 N 次", for accuracy). A rate limit given up
+  before any wait no longer reads "waited about 0 seconds".
+- **The findability Try-answer** now words its failure (`ErrorNotice`) instead
+  of printing the raw cause chain.
+- **Recorded rather than changed:** the rate-limit pool is per `run()` — a
+  delegated sub-agent or a compaction pass has its own (docstrings corrected);
+  `aclosing` closes the stream the wrapper iterates, the provider's own stream
+  is finalized by the loop's asyncgen hooks shortly after (comment corrected);
+  a re-sent sub-agent call's withdrawn reasoning stays in the parent tool card's
+  progress lines (cosmetic); the failover chain's `rate_limit_budget_s: 0` still
+  gets the call wrapper's 120 s (`configuration.md` corrected);
+  `ToolCallParseError` has no emitter (marked so in `events.py` and
+  `contract.md`); older plans (`plan-repetition-guard.md`, `plan-issue-624.md`)
+  mention `progress_made` as their own history and are left as written.
+
+## Found recording the demo (2026-10-12)
+
+Recording the screencast against an OpenAI-compatible stand-in, a 429 with
+`Retry-After: 4` on the call after a tool showed "waiting for the model",
+never the hold. The SSE stream carried no `rate_limited` at all, and the
+stand-in saw the 429'd call re-sent about five seconds later: litellm builds
+its OpenAI client with `max_retries=2`, and that client waited out the
+Retry-After and re-sent on its own, so `CallRetryModel` never saw the failure.
+D2 needs the wrapper to see the failure, so every call it makes now carries
+`max_retries=0` / `num_retries=0`, merged into the call's own `extra_args`
+(Ollama's `num_ctx` rides the same dict). A configured failover chain keeps its
+own quick retries and rate-limit holds beneath the wrapper; those were always
+there and are not what hid this. Re-probed after the fix: `rate_limited`
+arrives right after `tool_end`. The unit tests never saw this because they
+replace `LitellmModel`; the new runner test goes through the real one to the
+`acompletion` it calls.
+
+Review round 3 on that fix found three things. Reading the settings only where
+`stream_response` puts them (third positional) broke every non-streamed turn:
+`get_response` gets them by keyword. Both wrappers that rewrite the settings
+(`HeaderModel`, `CallRetryModel`) now go through one function,
+`agent/settings_arg.py`, and the runner test runs both shapes. Turning the
+client's retries off also turned off its backoff, so a transient re-send now
+waits 0.5 s, doubling, at most 8 s — the client's base and cap, without its
+jitter, and a 5xx's `Retry-After` is not read (the client honoured it up to
+60 s; recorded in the runbook). And a 409, which
+the client used to re-send, is a request error now (recorded in the runbook).
+
+The same recording showed a turn's failure **twice**, two identical boxes one
+under the other. The thread held it once (one `role="error"` message); the
+screen kept the live notice from the `error` event AND the transcript entry the
+re-hydrate after the turn builds from that message — `reconcileSnapshot` kept
+`prev.error` unconditionally. Now, once the re-read thread holds MORE failures
+with the live one's raw text after its last question than the screen already
+showed there, the live notice goes and the transcript entry is the notice: the
+same screen a reload shows. Counting, not presence (review round 4): queued
+questions persist as Q1, Q2, A1, A2, so one tail holds both turns' endings, and
+two queued turns failing the same way would otherwise lose the second notice
+while its turn was not yet stored. A send failure (never a turn's persisted
+ending) is left alone. The KB test that guards "the error survives `done`" again
+reads a store that is behind; the dedupe has its own test.
+
+CI on that state caught a leak the review rounds had not: the run record's
+`error` walked the whole cause chain, and the workflow executor hides a
+deployment env source's message (which may hold the token it was exchanging)
+behind fixed text RAISED FROM it — so `token=hunter2` reached a record every
+participant reads (`test_headless_env`). The technical details now show the
+links a Python traceback shows, a parity test with `traceback` as the oracle,
+and the executor's boundary is `from None` after logging the traceback.
+
+**Known, not fixed — one failure can still show twice after a reconnect**
+(final review). The reconnect path reads the thread before the stream replays
+what it missed, so the stored failure is already on screen as an entry when the
+replayed `error` raises the live notice; at the next re-read the counts tie and
+the live notice stays, until the next question clears it. Telling "that entry
+IS this failure" apart from "that entry is the queued turn before it" needs to
+know which turn produced a persisted message, which nothing on it says today
+(the same prerequisite CLAUDE.md names for re-pairing queued answers). Of the
+two errors this rule can make, it is chosen to show a failure twice rather than
+hide one; before this fix every failure showed twice once the thread was re-read.
+
+## P8 — a dropped stream must reach the wrapper (2026-10-12) {#p8}
+
+### Why, with the evidence
+
+D3 promises that a stream which breaks after it has shown text is re-sent. Every
+test of it used `ScriptedLlm`, which raises at the MODEL layer, so "a dropped
+connection arrives as an exception" was an assumption built into the double,
+never checked. Recording a second demo against an HTTP stand-in showed it false:
+the turn ended `done` with the answer cut at 「良率比上週高 0」.
+
+A failure-shape matrix — each failure made for real by a FastAPI stand-in and
+sent through real `litellm.acompletion(stream=True, max_retries=0)`, then named
+by `classify_error` — on litellm 1.85.1:
+
+| Failure | aiohttp transport (litellm's default) | httpx transport | Should be |
+|---|---|---|---|
+| 429 rate limit | rate_limited | rate_limited | ✓ |
+| 503 before the stream | provider_error | provider_error | ✓ |
+| 401 bad key | auth | auth | ✓ |
+| 400 bad request | bad_request | bad_request | ✓ |
+| 400 context too long | context_overflow | context_overflow | ✓ |
+| no response | timeout | timeout | ✓ |
+| stream stalls mid-answer | provider_error | provider_error | timeout — see note |
+| stream drops mid-answer | **ends normally, text truncated** | provider_error | **connection** |
+| nothing listening | provider_error | provider_error | **connection** |
+
+Note on the stall row: this table calls litellm alone. Through the runner, a
+stalled or silent stream is cut first by `DeadlineModel` (`stream_deadlines`,
+always set in `factories.py` from `failover.total_deadline_s` /
+`idle_timeout_s`), which raises `StreamStalled` / `TtftTimeout` — already named
+`timeout` and re-sent. Measured by the D13 matrix test, which goes through the
+runner: both stall rows passed before any fix.
+
+Two defects, in two layers:
+
+1. **litellm's aiohttp transport swallows a mid-stream drop.** It turns
+   `ClientPayloadError` / `TransferEncodingError` into a graceful EOF
+   (`litellm/llms/custom_httpx/aiohttp_transport.py:90-114`) and the stream
+   wrapper then reports `finish_reason="stop"`. The OpenAI SDK alone raises
+   `RemoteProtocolError` on the same drop; so does litellm on httpx
+   (`MidStreamFallbackError ← httpx.RemoteProtocolError`). Pre-existing on master; it
+   defeats D3 for real network drops.
+2. **Our classifier reads the status code before the evidence.** litellm wraps a
+   connection error in `MidStreamFallbackError` (a `ServiceUnavailableError`) or
+   `InternalServerError`, so `_link_kind` takes the 5xx and names it
+   `provider_error`. These kinds are re-sent anyway; what is wrong is the copy —
+   「模型服務本身出錯」 for a model that could not be reached or went silent.
+
+The same blind spot as the client's own `max_retries` (§ Found recording the
+demo): both live UNDER the double, where no unit test and no review round can
+see them.
+
+### What changes if the transport is switched (researched, measured)
+
+`litellm.disable_aiohttp_transport = True` (also honoured as env
+`DISABLE_AIOHTTP_TRANSPORT`) only changes litellm's ASYNC client. In this app
+the one async caller is the Agents SDK's `LitellmModel` → `litellm.acompletion`
+— every chat / agent turn. Every other caller (`kb/llm.py`, `kb/vlm/litellm.py`,
+`kb/embedder.py`, health checks, `skill_eval`, observability) is sync and
+already runs on httpx today. The transport was never chosen deliberately here
+(`git log -S DISABLE_AIOHTTP`: nothing; `-S aiohttp`: only incidental hits — the
+lock file and a once-committed LLM call log).
+
+| Aspect | Verdict |
+|---|---|
+| Proxy env (`HTTP(S)_PROXY`, `ALL_PROXY`, `NO_PROXY` forms) | same — measured against a fake proxy on both paths |
+| CA bundle (`SSL_CERT_FILE`, `SSL_VERIFY`, `litellm.ssl_verify`) | same — both use `get_ssl_configuration()` (`http_handler.py:279-342`) |
+| Client certificate (`SSL_CERTIFICATE`) | sent only on httpx (the aiohttp path drops it); not configured anywhere in this repo |
+| Connect / read timeouts; long streams | same; neither path has a total cap that cuts a long stream (measured) |
+| Mid-stream drop | aiohttp: graceful EOF (the defect); httpx: raises |
+| Connection pool | aiohttp 1000 total / 500 per host / 120 s keep-alive; httpx 100 / 20 kept alive / 5 s idle expiry, per client — one client per endpoint for `openai/`, ONE per pod for `ollama_chat/` (`http_handler.py:1351` keys it by provider) |
+| Error message text | same types, different strings in technical details |
+
+Concurrency, measured locally (N concurrent streamed completions through real
+litellm against the stand-in, p95 latency; N=200 was run twice, the others once):
+
+| N | aiohttp | httpx |
+|---|---|---|
+| 20 | 1.64 s | 1.71 s |
+| 50 | 1.72 s | 1.77 s |
+| 100 | 1.88 s | 1.96 s |
+| 200 | 2.38–2.44 s | 4.04–4.05 s |
+
+Up to 100 concurrent streams per client the two are within 0.1 s;
+beyond that httpx queues on its 100-connection pool. **Confirmed by the user
+(2026-10-12): no single pod runs more than 100 model calls at once — pods are
+scaled out before that.** Per pod, not per endpoint, which also covers
+`ollama_chat/`'s one shared client. If that stops holding, the symptom is p95 latency rising with load.
+litellm exposes no pool setting (no `httpx.Limits` / `max_connections` in
+`http_handler.py`, `openai/common_utils.py` or `constants.py`); raising it means
+supplying our own client, and `litellm.aclient_session` reaches only the
+`openai/` path (`openai/common_utils.py:216`), not `ollama_chat/`.
+
+### Decisions
+
+| # | Decision | Source |
+|---|---|---|
+| D11 | Agent turns use litellm's httpx transport: `litellm.disable_aiohttp_transport = True`, set where `LitellmAgentRunner` is built — the only async litellm caller. Not a config knob: the default must not truncate answers. | user (2026-10-12), on the ≤100 condition above |
+| D12 | `classify_error`, after rate_limited and all_busy, reads the network stack's own error anywhere in the chain BEFORE a status code: an `httpx.TransportError` (litellm's aiohttp path maps to the same types) is `timeout` when it is an `httpx.TimeoutException`, otherwise `connection`. Two of them never left this process — `httpx.UnsupportedProtocol` (an `api_base` with no scheme) and `httpx.LocalProtocolError` (an illegal header, e.g. an API key with a trailing newline) — and are `bad_request`, so they are not re-sent (review, P8). litellm's own `APIConnectionError` is NOT evidence (it also wraps real 429s); Python's bare `TimeoutError` / `ConnectionError` are not listed (the deadlines' `StreamStalled` / `TtftTimeout` already read `timeout`). A response the server did send ends in `httpx.HTTPStatusError`, not a transport error, so a real 429 / 503 is unaffected. Measured chains (httpx transport): drop `MidStreamFallbackError(500) ← httpx.RemoteProtocolError`; refused `InternalServerError(500) ← … ← httpx.ConnectError ← ConnectionRefusedError`; 429 `RateLimitError(429) ← … ← httpx.HTTPStatusError`; 503 `ServiceUnavailableError(503) ← … ← httpx.HTTPStatusError`. | built |
+| D13 | The failure-shape matrix becomes a test: an in-process HTTP stand-in on a free port, real `litellm.acompletion` through the same `CallRetryModel` path a turn takes, one case per row above, asserting the kind AND whether the call was re-sent. It is the gate this feature was missing; a litellm upgrade or transport change that alters a shape reddens it. | built |
+| D14 | Amends **D9** (proposed): the retry status names the failure instead of always saying 「連線不穩」 — it reuses the D5 "what happened" sentence of that kind, then 「正在重試（第 N 次）…」 (e.g. 「模型服務本身出錯。正在重試（第 1 次）…」). NN/g: an error message must precisely describe the exact problem; a generic one gives no context ([Error-Message Guidelines](https://www.nngroup.com/articles/error-message-guidelines/), [Scoring Rubric](https://www.nngroup.com/articles/error-messages-scoring-rubric/)). Material 3 governs the indicator, not the words ([Progress indicators](https://m3.material.io/components/progress-indicators/overview)). One sentence per kind, shared with the failure copy, so the two cannot drift. | user (2026-10-12) |
+
+### Work
+
+1. RED first, through the real path: the D13 matrix test. Measured red before
+   the fix on three rows — drop then answer (kept `'half an'`), drop every time
+   (no error at all), nothing listening (`provider_error`); both stall rows
+   passed (`DeadlineModel`).
+2. D11: the transport switch, pinned by the matrix's drop case (mutation: remove
+   the line, the drop case reddens).
+3. D12: the classifier, pinned by unit cases in `test_classify.py` (drop /
+   refused / read timeout under an invented 5xx; a real 503 stays
+   `provider_error`; all_busy and rate_limited outrank the network; no-scheme
+   and bad-header are `bad_request`) and by the drop / refused matrix rows.
+4. D14: `turn.retrying` takes the kind; FE test per kind; a
+   parity test that the status sentence IS the failure sentence.
+5. Live: the drop scenario in the real app — the half sentence withdrawn, the
+   status line, the full answer — and a third demo MP4.
+6. `docs/migrations.md` #915: mid-stream drops are re-sent; the pool is 100
+   connections per pod per endpoint with a 5 s idle expiry; the ≤100 assumption
+   and its symptom.
+7. One review round (D11 and D12 replace mechanisms), then CI on the final sha.
+
+### P8 review round (2026-10-12)
+
+Two lenses on `9279019e..7864924f`. Fixed:
+
+- **Settings named as the network.** `httpx.UnsupportedProtocol` (no scheme in
+  `api_base`) and `httpx.LocalProtocolError` (an API key with a trailing
+  newline) are transport errors to httpx, so D12 read them `connection` and the
+  call was re-sent for nothing. Now `bad_request`, not re-sent.
+- **Unpinned lines.** D12's order (after rate_limited / all_busy) and its two
+  stdlib members were guarded by nothing; the order is now pinned by unit cases,
+  the stdlib members are gone (redundant). One D14 test took its expected text
+  from the function under test; two literal sentences now pin the copy.
+- **Docs that said more than the evidence:** the pool's unit (per client;
+  `ollama_chat/` shares ONE per pod, and the user's ≤100 is per pod, which
+  covers it), aiohttp's per-host figure (500), the keep-alive cost above 20
+  concurrent calls, a runbook check that would have shown a different sentence
+  (only an abrupt close reads `connection`; dropped packets are a stall), the
+  runbook comparing against copy that never reached master, the drop chain, the
+  Work list's red rows, D9 without its D14 pointer, the `classify_error`
+  docstring, and D13's "one case per row" (the context-overflow row is now a
+  case).
 
 ## Risks
 

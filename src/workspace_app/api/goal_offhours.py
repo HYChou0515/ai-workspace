@@ -47,6 +47,7 @@ from ..config.schema import OffHoursSettings
 from ..resources.conversation import Conversation
 from ..resources.conversation_goal import ConversationGoal
 from ..workcalendar import OffHoursCalendar
+from .events import RunError
 from .turns import _terminal_error
 
 logger = logging.getLogger(__name__)
@@ -291,7 +292,7 @@ class OffHoursGoalSweeper:
         settings: OffHoursSettings,
         claims: SpecstarStretchClaims,
         start_round: Callable[[str], Awaitable[None]],
-        night_abandoned: Callable[[str, str], Awaitable[None]],
+        night_abandoned: Callable[[str, RunError], Awaitable[None]],
     ) -> None:
         from ..resources.work_calendar import register_work_calendar
 
@@ -364,7 +365,7 @@ class OffHoursGoalSweeper:
                         stretch,
                     )
                     try:
-                        await self._night_abandoned(cid, _terminal_error(exc).message)
+                        await self._night_abandoned(cid, _terminal_error(exc))
                     except Exception:  # noqa: BLE001 — the rule of this handler
                         # Telling is done INSIDE the handler whose whole purpose
                         # is that one chat's failure must not end the pass for

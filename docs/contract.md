@@ -467,7 +467,7 @@ profile/App 預設;override 上限是 `app.json` 的 `tools`,**不是** profile)
 | `RunError`            | `{type: "error", message: string}` | 是 | catch-all 失敗 |
 | `RunCancelled`        | `{type: "run_cancelled", by: string}` | 是 | `by` 空字串 = 使用者中斷（Stop）；有值 = **別人**的訊息接手了這一輪（[plan-interjection](plan-interjection.md) Q2），值是那個人的 id。舊的 payload 沒有 `by` 時當成 Stop |
 | `Interjected`         | `{type: "interjected", author: string, created_at: number}` | 否 | 正在跑的這一輪在這裡**讀到**了它的作者跑到一半時送的訊息（`author` + `created_at` 指那則已存的訊息）；之後串流的是看過它的回答（[plan-interjection](plan-interjection.md) Q1） |
-| `ToolCallParseError`  | `{type: "tool_call_parse_error", hint: string, call_id: string?, raw: string?}` | 否 | 接著會做 retry-with-feedback |
+| `ToolCallParseError`  | `{type: "tool_call_parse_error", hint: string, call_id: string?, raw: string?}` | 否 | **#915 起不再發送**（壞掉的 tool 參數改由工具在 in-band 回覆；整輪重試已移除）；保留型別給舊 client |
 | `MaxTurnsExceeded`    | `{type: "max_turns_exceeded", turns: number}` | 是 | agent 沒收斂;`turns` 是 runner 設定的預算 |
 | `AgentMetrics`        | `{type: "agent_metrics", phase: "up"\|"down"\|"final", prompt_tokens, completion_tokens, elapsed_ms, measured_prompt_tokens?, measured_completion_tokens?, generation_ms?, model?}` | 否 | 即時 token telemetry（↑/↓ tok/s）。前三個是**顯示**用，up/down 為近似值。#748 起，`measured_*` 是**記錄**用的另一條路——provider 自己回報的數字，沒回報就是 `null`，絕不代入估計值；`generation_ms` 是 tok/s 的分母（首 token→末 token，排除 TTFT 與 tool 間隔），`model` 是實際寫出這則回覆的 model。`generation_ms` 每個 `down` tick 都會帶(live tok/s 靠它,而且被取消的一輪就是靠它才留得下記錄);`measured_*` 與 `model` 只在 `final` 出現 |
 

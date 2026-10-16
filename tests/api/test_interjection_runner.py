@@ -174,53 +174,66 @@ async def test_a_message_sent_mid_turn_is_read_at_the_next_model_call(monkeypatc
     assert ctx.kb_grep_budget.used == 0
 
 
-@pytest.mark.parametrize("stream", ["1", "0"])
-async def test_a_turn_that_overflows_after_reading_a_message_still_recovers(monkeypatch, stream):
-    """§9 C12 (review round 1, F2): after an interjection the turn continues
-    from what it had sent so far. When that no longer fits, the #624 recovery
-    trims the HISTORY and tries again — so the history must be what the next
-    request is built from. Built from a snapshot instead, every retry re-sent
-    the identical request, and a turn that would have recovered failed."""
-    monkeypatch.setenv("WORKSPACE_AGENT_STREAM", stream)
-    model = _Model()
-    sent: list[int] = []
-    real_next = model._next
+async def test_a_turn_that_overflows_after_reading_a_message_still_recovers(monkeypatch):
+    """§9 C12 (review round 1, F2), on the model-call retry #915 brought: after
+    an interjection the turn continues from the history plus what it had done
+    plus the message it read. The #624 recovery (`_HistoryTrim`, inside
+    `CallRetryModel`) cuts the leading `len(ctx.history)` items of a call's
+    input — so a segment's input must start with the history AS IT NOW IS.
+    Here the first call is already cut before the message is read: a segment
+    resumed from a snapshot of the SDK's (uncut) input would start with all ten
+    old messages again, trim only the first few, and fail with nothing left to
+    give up.
 
-    def fussy(items: Any) -> Any:
-        size = len(json.dumps(items, default=str))
-        if "Q2" in json.dumps(items, default=str):
-            sent.append(size)
-            if size > 3000:
-                raise RuntimeError("This model's maximum context length is exceeded")
-        return real_next(items)
+    Through the real `_agent_for` (the provider is the only fake), so the
+    retry wrapper is the one production builds. Streamed only: the scripted
+    provider has no one-shot shape."""
+    from workspace_app.agent.context import AgentToolContext
+    from workspace_app.resources import AgentConfig
 
-    model._next = fussy  # ty: ignore[invalid-assignment]
-    monkeypatch.setattr(
-        lr, "_agent_for", lambda *a, **k: Agent(name="t", model=model, tools=[look])
+    from ._fake_llm import Call, Fail, Say, ScriptedLlm
+
+    class _Boom(Exception):
+        pass
+
+    calls: list[tuple[bool, int]] = []  # (the message was read, old messages sent)
+
+    def judge(sent: list) -> Say | Call | Fail:
+        # Too long while more than four old messages ride along — before the
+        # message is read (the first call) as much as after it.
+        history = [s for s in sent if "old " in json.dumps(s, default=str)]
+        calls.append(("Q2" in json.dumps(sent, default=str), len(history)))
+        if len(history) > 4:
+            return Fail(_Boom("This model's maximum context length is 32768 tokens."))
+        if "Q2" not in json.dumps(sent, default=str):
+            return Call("lookup_user", {"handle": "x"})
+        return Say(["both answered"])
+
+    async def no_sleep(_s: float) -> None:
+        return None
+
+    monkeypatch.setenv("WORKSPACE_AGENT_STREAM", "1")
+    monkeypatch.setattr(lr, "LitellmModel", ScriptedLlm(judge))
+    ctx = AgentToolContext(
+        investigation_id="i",
+        agent_config=AgentConfig(name="t", model="m", system_prompt="s"),
+        history=[{"role": "user", "content": f"old {i} " + "x" * 400} for i in range(10)],
     )
-    ctx = _ctx()
-    ctx.max_turns = 5
-    ctx.history = [
-        {"role": "user" if i % 2 == 0 else "assistant", "content": f"old {i} " + "x" * 400}
-        for i in range(10)
-    ]
     asked: list[int] = []
 
     def take() -> list[Interjection]:
-        asked.append(len(model.inputs))
-        if len(model.inputs) == 1 and len(asked) == 2:
-            return [Interjection(content="Q2", author="ann", at=2)]
-        return []
+        asked.append(1)
+        return [Interjection(content="Q2", author="ann", at=2)] if len(asked) == 2 else []
 
     ctx.take_interjections = take
 
-    events = [ev async for ev in lr.LitellmAgentRunner().run("Q1", ctx)]
+    events = [ev async for ev in lr.LitellmAgentRunner(sleep=no_sleep).run("Q1", ctx)]
 
-    # The request after each rejection was smaller than the rejected one (later
-    # calls grow again as the turn works), and the turn got through.
-    rejected = [i for i, size in enumerate(sent) if size > 3000]
-    assert rejected and rejected[-1] + 1 < len(sent)
-    assert all(sent[i + 1] < sent[i] for i in rejected)
+    # The re-send after each rejection carried less history, the segment after
+    # the message was read went out already cut, and the turn got through.
+    rejected_after_reading = [n for read, n in calls if read and n > 4]
+    assert any(n > 4 for read, n in calls if not read)  # it was cut before reading
+    assert rejected_after_reading == []
     assert not any(isinstance(e, RunError) for e in events)
     assert "".join(e.text for e in events if isinstance(e, MessageDelta)) == "both answered"
 

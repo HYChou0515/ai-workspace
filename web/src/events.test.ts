@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { AgentEvent } from "./events";
-import { isTerminal } from "./events";
+import { isTerminal, isTurnProgress } from "./events";
 
 describe("isTerminal", () => {
   const cases: { event: AgentEvent; terminal: boolean }[] = [
@@ -31,4 +31,12 @@ describe("isTerminal", () => {
       expect(isTerminal(event)).toBe(terminal);
     });
   }
+});
+
+describe("isTurnProgress — a re-sent model call is the turn moving (docs/plan-friendly-errors.md)", () => {
+  it("counts a retry and a withdrawal as progress, like a rate-limit hold", () => {
+    expect(isTurnProgress({ type: "rate_limited", seconds: 5 })).toBe(true);
+    expect(isTurnProgress({ type: "model_retrying", attempt: 1, kind: "timeout" })).toBe(true);
+    expect(isTurnProgress({ type: "output_retracted", text_chars: 3, reasoning_chars: 0 })).toBe(true);
+  });
 });

@@ -7,6 +7,7 @@ import type { BodyEnhancements } from "../lib/kbEnhancementMode";
 
 import type { AgentEvent, CellEvent } from "../events";
 import type { FileEncoding } from "./encoding";
+import type { Failure } from "../lib/failure";
 
 export type { FileEncoding };
 
@@ -124,9 +125,17 @@ export type Message = {
   withheld?: WithheldSource[];
   /** role=mention only — the user ids summoned ("@ come look"). */
   mentions?: string[];
-  /** role=error only (#37) — why the turn failed: error | cancelled | interrupted |
-   * max_turns. The thread renders the failure as a banner on reload. */
+  /** role=error only (#37) — why the turn failed: a backend error kind
+   * (docs/plan-friendly-errors.md; `error` on older rows), `cancelled`,
+   * `interrupted` (another person's message took the turn over — `author` is
+   * that person; docs/plan-interjection.md Q2) or `max_turns`. `content` is
+   * then the raw text for technical details. */
   error_kind?: string | null;
+  /** A failure this message reports (docs/plan-friendly-errors.md): role=tool — a
+   * delegated sub-agent's; role=goal — why an off-hours night could not start. */
+  failure?: Failure | null;
+  /** role=error only — the numbers the kind's copy needs (`waited_s`, `attempts`). */
+  error_params?: Record<string, number> | null;
   /** #113 — "repetition" when role=assistant was stopped mid-stream for a
    * degenerate loop and the answer was truncated to before it. The view shows
    * a notice so a reloaded thread doesn't read the truncated answer as normal. */

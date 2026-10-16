@@ -41,8 +41,7 @@ from ..capacity.recorder import Running, UsageRecorder
 from ..capacity.records import TurnRecord
 from ..capacity.scope import SYSTEM, UsageScope, scoped
 from ..context_budget import SUMMARY_ROLE, estimate_messages
-from ..failover.core import AllProvidersFailed
-from ..failover.rate_limit import is_rate_limited
+from ..failover.classify import classify_error, error_params, raw_error_text
 from ..observability.stdout_log import install_own_handler
 from ..resources.conversation import MessageMetrics
 from ..turn_control import InMemoryTurnControl, ITurnControl
@@ -56,6 +55,7 @@ from .events import (
     Interjected,
     MaxTurnsExceeded,
     MessageDelta,
+    OutputRetracted,
     Presence,
     RepetitionStopped,
     RunCancelled,
@@ -443,7 +443,13 @@ class TurnMessage:
     tool_display: str = ""
     created_at: int = field(default_factory=_now_ms)
     metrics: MessageMetrics | None = None
-    error_kind: str | None = None  # role=error: error | cancelled | interrupted | max_turns
+    # role=error: a `failover.classify.ERROR_KINDS` kind, `cancelled`,
+    # `interrupted` or `max_turns` (`error` on rows persisted before
+    # docs/plan-friendly-errors.md)
+    error_kind: str | None = None
+    error_params: dict[str, int] | None = None  # role=error: numbers for the kind's copy
+    # role=tool: a delegated sub-agent's failure (P4), for the card to word
+    failure: dict[str, Any] | None = None
     # role=error, error_kind="interrupted" (docs/plan-interjection.md Q2): who sent
     # the message that stopped this turn. Persisted on the message's own `author`.
     author: str | None = None
@@ -452,52 +458,13 @@ class TurnMessage:
     stopped_reason: str | None = None
 
 
-# #196-followup: when the failover chain is exhausted (every model busy/cooling),
-# show a human-readable "try again" instead of the raw `AllProvidersFailed: …`.
-_BUSY_MESSAGE = (
-    "All available models are busy right now, so this response couldn't be "
-    "completed. Please try again in a moment."
-)
-
-#: The same chain, exhausted for a DIFFERENT reason. `failover/model.py` raises
-#: `AllProvidersFailed ... from (rate_limited or last)` on purpose — its comment
-#: says the turn loop tells "rate limited" from "broken" by walking exactly this
-#: chain — and this is the reading it was chained for. Saying "busy" here sent
-#: an operator looking at model load for a limit that a quota page explains, and
-#: "try again in a moment" is wrong advice for a limit that is deterministic.
-_RATE_LIMITED_MESSAGE = (
-    "The model endpoint is rate-limiting us, so this response couldn't be "
-    "completed. It is not a busy model: the limit has to clear, or be raised."
-)
-
-
-def _is_all_busy(exc: BaseException) -> bool:
-    """True if ``exc`` (or anything in its cause/context chain — the SDK may wrap
-    it) is an :class:`AllProvidersFailed` from the failover loop."""
-    seen: set[int] = set()
-    cur: BaseException | None = exc
-    while cur is not None and id(cur) not in seen:
-        seen.add(id(cur))
-        if isinstance(cur, AllProvidersFailed):
-            return True
-        cur = cur.__cause__ or cur.__context__
-    return False
-
-
 def _terminal_error(exc: BaseException) -> RunError:
-    """A terminal `RunError` for a turn that died — a readable notice when the
-    failover chain was exhausted, else the raw class+message for an operator.
-
-    Two readings of the SAME exhausted chain, because they need different things
-    from the reader: a rate limit clears on its own schedule or is raised by
-    somebody, while genuinely busy models are a capacity question. `kind` is what
-    lets the FE say either in the reader's own language; the message stays as the
-    fallback for a client that has no wording for the kind."""
-    if _is_all_busy(exc):
-        if is_rate_limited(exc):
-            return RunError(message=_RATE_LIMITED_MESSAGE, kind="rate_limited")
-        return RunError(message=_BUSY_MESSAGE, kind="all_busy")
-    return RunError(message=f"{type(exc).__name__}: {exc}")
+    """A terminal `RunError` for a turn that died: the kind the FE words it from
+    (docs/plan-friendly-errors.md D5) and the raw text down the whole cause
+    chain for technical details (D1). An exhausted failover chain is told apart
+    by its cause — `failover/model.py` raises `AllProvidersFailed ... from` the
+    429 on purpose, and a limit is not a busy model."""
+    return RunError(message=raw_error_text(exc), kind=classify_error(exc), params=error_params(exc))
 
 
 def _error_message(item: RunError | RunCancelled | MaxTurnsExceeded) -> TurnMessage:
@@ -521,9 +488,14 @@ def _error_message(item: RunError | RunCancelled | MaxTurnsExceeded) -> TurnMess
             content=f"The agent stopped after reaching its step limit ({item.turns}).",
             error_kind="max_turns",
         )
-    # `kind` when the failure named itself, so the FE can word it; `error`
-    # otherwise, which is what every terminal failure carried before.
-    return TurnMessage(role="error", content=item.message, error_kind=item.kind or "error")
+    # The kind the FE words it from; `unknown` when the emitter could not tell.
+    # `content` is the raw text, shown under technical details.
+    return TurnMessage(
+        role="error",
+        content=item.message,
+        error_kind=item.kind or "unknown",
+        error_params=item.params,
+    )
 
 
 @dataclass
@@ -565,6 +537,18 @@ class _TurnReducer:
     def add(self, item: AgentEvent) -> None:
         if isinstance(item, MessageDelta):
             self._add_assistant(item.text, item.reasoning)
+        elif isinstance(item, OutputRetracted):
+            # docs/plan-friendly-errors.md D3: the call that streamed these
+            # characters failed and is being re-sent — withdraw them. A call
+            # streams into ONE assistant message (a tool call ends it), so they
+            # are all on the last one.
+            last = self.produced[-1] if self.produced else None
+            if last is not None and last.role == "assistant":
+                if item.text_chars:
+                    last.content = last.content[: max(0, len(last.content) - item.text_chars)]
+                if item.reasoning_chars and last.reasoning:
+                    kept = len(last.reasoning) - item.reasoning_chars
+                    last.reasoning = last.reasoning[: max(0, kept)] or None
         elif isinstance(item, ToolStart):
             # call_id → its ToolStart, so the persisted tool message keeps the
             # tool's name + args (ToolEnd alone carries only the output).
@@ -582,6 +566,7 @@ class _TurnReducer:
                     tool_name=start.name if start else None,
                     tool_args=dict(start.args) if start else None,
                     tool_display=item.display,
+                    failure=item.failure,
                 )
             )
         elif isinstance(item, AgentMetrics) and item.phase != "up":
