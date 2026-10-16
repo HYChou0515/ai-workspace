@@ -203,3 +203,7 @@ CLAUDE.md「Chat turns run through one `ChatTurnEngine`」那段說 Q1, Q2, A1, 
   在 KB 只認得同一顆 pod 上的(文件寫明)。輸入框那句改成「做完這一步後會讀到;已經在寫最後回答就由下一輪接著
   回答」(C7)。§4.1 描述的 `absorbed` 旗標與留在 `asyncio.Queue` 的做法沒有實作:實作是看得到內容的 `_TurnQueue`,
   被讀走或合併的項目直接從佇列取出(`take`),由負責那一輪結算或放回(C9、C13)。
+- **C17〔施工〕第三輪 review:** C13 的「收攤中不開新的一輪」原本排在「準備中被停止就拒絕」之前,收攤時還在準備的
+  送出因此什麼結尾都沒有(C15 說會留「已取消」,不成立)。兩個檢查對調,測試
+  `test_a_send_still_preparing_when_the_pod_drains_ends_on_a_cancelled_marker`。收攤旗標在每次 `aclose` 結束時設定、
+  不會重設 —— engine 在 `aclose` 之後不再被使用(只有 lifespan 關機時呼叫)。

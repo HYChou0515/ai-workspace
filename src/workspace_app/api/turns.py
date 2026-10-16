@@ -1115,10 +1115,12 @@ class ChatTurnEngine:
         # cross-pod bump. Multi-pod injects a specstar-backed control.
         self._turn_control = turn_control or InMemoryTurnControl()
         self._poll_interval = poll_interval
-        # plan-interjection §9 C13: set once `aclose` is past its deadline and
-        # cancelling what is left. A turn cancelled then was not STOPPED — the
-        # pod is going — so what it folded is handed over, not re-queued, and
-        # no worker starts another turn here.
+        # plan-interjection §9 C13: set by `aclose` once it has finished waiting,
+        # just before it cancels whatever is left — on every `aclose`, whether
+        # anything was left or not — and never reset: the engine is not used
+        # again after it (the lifespan's shutdown is the only caller). A turn
+        # cancelled then was not STOPPED — the pod is going — so what it folded
+        # is handed over, not re-queued, and no worker starts another turn here.
         self._draining = False
 
     async def _watch_epoch(self, key: str, my_epoch: int, task: asyncio.Task) -> None:
@@ -1344,9 +1346,12 @@ class ChatTurnEngine:
         worker proceeds to the next; its completion future is then resolved."""
         while True:
             entry = await session.queue.get()
-            if self._draining:
-                # The pod is going (`aclose` past its deadline): nothing starts
-                # here any more. The POST is woken; a claim stays for a peer.
+            # A send the drain marked while it was still preparing is declined
+            # below like any stopped send — it must end on the record (a KB
+            # chat has no claim, so nobody would answer it otherwise).
+            if self._draining and not entry.stopped_while_preparing():
+                # The pod is going (`aclose` has finished waiting): nothing new
+                # starts here. The POST is woken; a claim stays for a peer.
                 if not entry.fut.done():
                     entry.fut.set_result(None)
                 continue

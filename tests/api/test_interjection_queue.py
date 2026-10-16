@@ -1096,3 +1096,26 @@ def test_a_message_read_mid_turn_is_placed_by_its_author_too():
     reducer.add(Interjected(author="ann", created_at=5))
     (marker,) = reducer.produced
     assert (marker.role, marker.created_at, marker.author) == (PLACE_ROLE, 5, "ann")
+
+
+async def test_a_send_still_preparing_when_the_pod_drains_ends_on_a_cancelled_marker():
+    """§9 C15 (review round 3): a send that finishes preparing after the drain
+    marked it is declined like any send stopped while preparing — it ends on
+    the record. Skipped as "draining" first, it wrote nothing, and a KB chat
+    (no claims, so no peer re-runs it) was left on an unanswered question."""
+    runner = _GatedRunner()
+    engine = ChatTurnEngine(runner)  # ty: ignore[invalid-argument-type]
+    persisted: list[Any] = []
+    async with engine.preparing("kbchat", author="ann", at=1) as pending:
+        await engine.aclose(timeout=0.05)
+        fut = engine.enqueue(
+            "kbchat",
+            "Q1",
+            AgentToolContext(),
+            on_complete=persisted.append,
+            pending=pending,
+            message=QueuedMessage("ann", 1),
+        )
+    await asyncio.wait_for(fut, 3)
+    assert runner.turns == []
+    assert [[(m.role, m.error_kind) for m in p] for p in persisted] == [[("error", "cancelled")]]
