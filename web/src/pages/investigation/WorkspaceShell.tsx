@@ -3181,6 +3181,7 @@ function PanelBody({
 }: {
   tab: "problems" | "output" | "terminal" | "agent_log" | "run_history";
 }) {
+  const t = useT();
   const { log } = useAgent();
 
   if (tab === "problems") {
@@ -3417,8 +3418,14 @@ function PanelBody({
                   ? "⤳"
                   : e.step.status === "retrying"
                     ? "↻"
-                    : "▸";
-          const detail = `${e.step.key ? ` · ${e.step.key}` : ""}${e.step.reason ? ` — ${e.step.reason}` : ""}`;
+                    : e.step.status === "repairing"
+                      ? "✎"
+                      : "▸";
+          const repairing =
+            e.step.status === "repairing"
+              ? ` · ${t("wf.step.repairing", { n: e.step.repair ?? 1 })}`
+              : "";
+          const detail = `${e.step.key ? ` · ${e.step.key}` : ""}${repairing}${e.step.reason ? ` — ${e.step.reason}` : ""}`;
           return (
             <LogLine
               key={i}

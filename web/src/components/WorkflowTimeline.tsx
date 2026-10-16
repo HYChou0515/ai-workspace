@@ -27,6 +27,7 @@ function statusColor(status: string): string {
     case "failed":
       return "var(--err)";
     case "retrying":
+    case "repairing":
       return "var(--warn)";
     case "skipped":
       return "var(--text-paper-d2)";

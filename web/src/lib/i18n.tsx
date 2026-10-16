@@ -1694,6 +1694,8 @@ export const messages = {
   "wf.status.done": { "zh-TW": "已完成", en: "done" },
   "wf.status.error": { "zh-TW": "失敗", en: "failed" },
   "wf.status.cancelled": { "zh-TW": "已取消", en: "cancelled" },
+  // plan-workflow-output-repair D7: a step asked to re-emit its answer's format
+  "wf.step.repairing": { "zh-TW": "修正輸出格式（第 {n} 次）", en: "fixing the output format (#{n})" },
 
   // #230: the platform Help page.
   "help.title": { "zh-TW": "說明", en: "Help" },

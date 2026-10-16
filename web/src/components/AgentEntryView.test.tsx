@@ -1194,6 +1194,21 @@ describe("workflow repair request (plan-workflow-output-repair §3.5)", () => {
 });
 
 
+describe("a repairing step line (plan-workflow-output-repair D7)", () => {
+  it("names the repair and its number beside the reason", () => {
+    const entry = {
+      kind: "step",
+      step: { phase: "p", name: "judge", status: "repairing", repair: 1, reason: "not JSON" },
+    } as AgentEntry;
+    render(<EntryView entry={entry} />);
+    const line = screen.getByTestId("wf-step");
+    expect(line).toHaveAttribute("data-status", "repairing");
+    expect(line).toHaveTextContent("修正輸出格式（第 1 次）");
+    expect(line).toHaveTextContent("not JSON");
+  });
+});
+
+
 // plan-skill-hub-history A3: `show_skill_hub_entry` declares an entry and the
 // chat draws it as a live card — the card IS its rendering, like `show_file`.
 describe("EntryView — show_skill_hub_entry", () => {

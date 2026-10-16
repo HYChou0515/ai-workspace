@@ -12,6 +12,7 @@
 import { useEffect, useState } from "react";
 
 import type { ChipTone } from "../api/types";
+import { useT } from "../lib/i18n";
 import {
   fmtElapsed,
   stepBoard,
@@ -31,6 +32,7 @@ function stepTone(status: string): ChipTone {
     case "running":
       return "info";
     case "retrying":
+    case "repairing":
       return "warn";
     default: // skipped
       return "muted";
@@ -58,6 +60,7 @@ function phaseCounter(node: PhaseNode): string | null {
 }
 
 function StepRow({ step, now }: { step: StepStateDTO; now: number }) {
+  const t = useT();
   const elapsed = stepElapsedMs(step, now);
   return (
     <li
@@ -67,7 +70,11 @@ function StepRow({ step, now }: { step: StepStateDTO; now: number }) {
       data-status={step.status}
       style={{ display: "flex", alignItems: "center", gap: 8, padding: "2px 0", fontSize: pxToRem(12) }}
     >
-      <span style={chipStyle(stepTone(step.status))}>{step.status}</span>
+      <span style={chipStyle(stepTone(step.status))}>
+        {step.status === "repairing"
+          ? t("wf.step.repairing", { n: step.repairs || 1 })
+          : step.status}
+      </span>
       <span style={{ color: "var(--text-paper)", fontFamily: "var(--font-mono)" }}>
         {step.name}
         {step.key ? <span style={{ opacity: 0.6 }}> · {step.key}</span> : null}

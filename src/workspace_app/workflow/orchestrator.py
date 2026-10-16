@@ -50,6 +50,7 @@ from .events import (
     StepFailed,
     StepOutput,
     StepPassed,
+    StepRepairing,
     StepRetrying,
     StepSkipped,
     StepStarted,
@@ -1285,7 +1286,9 @@ class WorkflowOrchestrator:
         (phase, name, key). Loop elements (``key != ""``) live here only while running
         and drop on terminal (folded into the phase counter / ``failures``); distinct
         named steps (``key == ""``) persist with their final status + duration."""
-        if not isinstance(ev, (StepStarted, StepRetrying, StepPassed, StepSkipped, StepFailed)):
+        if not isinstance(
+            ev, (StepStarted, StepRetrying, StepRepairing, StepPassed, StepSkipped, StepFailed)
+        ):
             return data.steps
         phase, name, key = ev.phase, ev.name, ev.key
 
@@ -1301,6 +1304,17 @@ class WorkflowOrchestrator:
             steps.append(
                 msgspec.structs.replace(
                     base, status="retrying", attempts=base.attempts + 1, reason=ev.reason
+                )
+            )
+        elif isinstance(ev, StepRepairing):
+            base = prior or StepState(phase=phase, name=name, key=key, started=self.now())
+            steps.append(
+                msgspec.structs.replace(
+                    base,
+                    status="repairing",
+                    attempts=base.attempts + 1,
+                    repairs=ev.repair,
+                    reason=ev.reason,
                 )
             )
         elif key:
