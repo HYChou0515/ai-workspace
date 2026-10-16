@@ -552,6 +552,34 @@ export const messages = {
     en: "Reached the turn limit ({turns}); the conversation stopped.",
   },
   "banner.cancelled": { "zh-TW": "已取消。", en: "Cancelled." },
+  // docs/plan-interjection.md Q2/Q9: another person's message took the turn over.
+  "banner.interrupted": {
+    "zh-TW": "已被 {who} 的訊息中斷。",
+    en: "Interrupted by {who}'s message.",
+  },
+  // docs/plan-interjection.md Q9: what happens to a message sent mid-answer.
+  "interject.waiting": {
+    "zh-TW": "AI 做完目前這一步後會回覆",
+    en: "The AI will reply after its current step",
+  },
+  "interject.read": {
+    "zh-TW": "AI 已看到，會一併回覆",
+    en: "The AI has read this and will answer it too",
+  },
+  "interject.queued": {
+    "zh-TW": "這一輪結束後會接著回答",
+    en: "Will be answered right after this turn",
+  },
+  // docs/plan-interjection.md Q2: someone else's turn runs; sending takes it over.
+  "interject.othersNote": {
+    "zh-TW": "{who} 正在對話中。你現在送出的訊息會讓這一輪停下，改由你的訊息接手。",
+    en: "{who} is talking to the AI. Sending now stops that turn, and yours takes over.",
+  },
+  // docs/plan-interjection.md Q7: what a message sent mid-answer can change.
+  "interject.composerNote": {
+    "zh-TW": "這一輪的推理強度與揭露設定在開始時已決定；現在送出的訊息會在 AI 做完目前這一步後被讀到。",
+    en: "This turn's reasoning effort and disclosure were set when it started; a message sent now is read after the AI's current step.",
+  },
 
   // App dashboard (AppDashboard) — filter strip (#172)
   "dash.clearFilters": { "zh-TW": "清除篩選", en: "Clear filters" },

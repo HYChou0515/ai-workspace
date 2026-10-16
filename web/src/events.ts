@@ -46,7 +46,10 @@ export type RunDone = { type: "done" };
  *  fallback for kinds the FE has no wording for. */
 export type RunError = { type: "error"; message: string; kind?: string | null };
 
-export type RunCancelled = { type: "run_cancelled" };
+/** `by` (docs/plan-interjection.md Q2): set when ANOTHER person's message
+ * stopped the turn so theirs could take over — that person's id. Absent for a
+ * Stop. */
+export type RunCancelled = { type: "run_cancelled"; by?: string };
 
 /** [anticipated] — contract §3.1 deferred, not emitted yet. */
 export type SandboxKilledIdle = { type: "sandbox_killed_idle" };
@@ -137,6 +140,16 @@ export type UserMessage = {
   markings?: SentMarking[];
   /** The call it answers (`Message.answers`) — a card retires on it live. */
   answers?: string | null;
+};
+
+/** docs/plan-interjection.md Q1: the running turn has READ a message its own
+ * author sent while it ran (`author` + `created_at` name that message). Emitted
+ * where it was read — so the bubble moves here, and whatever streams next is the
+ * answer that saw it. Mirrors `Interjected` in api/events.py. */
+export type Interjected = {
+  type: "interjected";
+  author: string;
+  created_at: number;
 };
 
 /** #43: a workspace file changed (a human wrote/moved/deleted it), broadcast so
@@ -295,6 +308,7 @@ export type AgentEvent =
   | ContextTrimmed
   | Compacting
   | UserMessage
+  | Interjected
   | FileChanged
   | TurnEnded
   | Presence
