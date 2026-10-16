@@ -96,7 +96,7 @@ class InvestigationRegistry:
     # same question is how they end up disagreeing.
     #
     # Async because the answer now depends on the OWNER's own budget as well as
-    # the App's ceiling, and that is a store read. Keeping it sync would have
+    # the item ceiling, and that is a store read. Keeping it sync would have
     # meant applying the owner clamp somewhere else — which is precisely the
     # "one rule, two places" shape this comment already warns about.
     spec_for: Callable[[str], Awaitable[SandboxSpec]] = _bare_spec

@@ -63,7 +63,12 @@ from ..monitor import IMonitor, InMemoryMonitor, MonitorProcessor
 from ..observability.boot import boot_step
 from ..quota.admission import AdmissionGate, SandboxQuotaExceeded
 from ..quota.disk_ledger import DiskLedger, UserDiskFull, register_disk_ledger
-from ..quota.limits import ResourceLimits, parse_size, warn_unenforceable_dimensions
+from ..quota.limits import (
+    ResolvedSize,
+    ResourceLimits,
+    parse_size,
+    warn_unenforceable_dimensions,
+)
 from ..quota.user_limits import UserLimits, register_user_quota
 from ..resources import (
     AgentConfig,
@@ -1077,16 +1082,18 @@ def create_app(
             return want
         return min(want, ceiling)
 
-    async def _resolved_for(item_id: str) -> tuple[SandboxSpec, str | None, str | None]:
+    async def _resolved_for(item_id: str) -> ResolvedSize:
         """How big THIS item's sandbox may be — the one place that answers it.
 
         Three inputs, in this order:
 
         1. what the item itself asks for, when someone has said (`None` means
            nobody has, and that is a real answer — see `WorkItemBase`);
-        2. otherwise the App's ceiling, which is the behaviour before per-item
+        2. otherwise the App's size, which is the behaviour before per-item
            sizing existed;
-        3. and either way, clamped by the OWNER's own budget.
+        3. either way held to the item ceiling — the deploy's `per_app.max`,
+           or the App's size where no `max` was set (plan-item-size-ceiling
+           D1, D2) — and then clamped by the OWNER's own budget.
 
         The clamp is what stops a default from producing an item that can never
         run: admission refuses when `incoming > limit`, so a 4-core App under a
@@ -1110,18 +1117,20 @@ def create_app(
 
         app_cpu = limits.cpu_cores if limits else None
         app_mem = limits.memory_bytes if limits else None
+        cpu_ceiling = limits.item_cpu_ceiling if limits else None
+        mem_ceiling = limits.item_memory_ceiling if limits else None
         cpu = item_cpu if item_cpu is not None else app_cpu
         mem = item_mem if item_mem is not None else app_mem
-        # BOTH ceilings, in this order. The App's was previously only a
-        # fallback — read when the item stated nothing and ignored when it did —
-        # so "App declares 4, person types 999" resolved to 999 on any deploy
-        # with no per-user quota, which is the shipped default and therefore the
-        # common case rather than the corner. Three documents and an i18n string
-        # said otherwise, and that string was unreachable: with only a budget
-        # clamp, being clamped implied the budget was what bound it, so the
-        # panel could never name the App.
-        after_app = _clamp_cpu(cpu, app_cpu or 0.0)
-        after_app_mem = _clamp_bytes(mem, app_mem or 0)
+        # BOTH ceilings, in this order. The App's was once only a fallback —
+        # read when the item stated nothing and ignored when it did — so "App
+        # declares 4, person types 999" resolved to 999 on any deploy with no
+        # per-user quota. Then it became the App's SIZE, which for an App that
+        # states nothing is `per_app.default`: a deploy of default 1 / max 4
+        # could never give one item 2, and `max` reached no item at all. The
+        # ceiling is the deploy's `max`, or the App's size where none was set
+        # (plan-item-size-ceiling D1, D2).
+        after_app = _clamp_cpu(cpu, cpu_ceiling or 0.0)
+        after_app_mem = _clamp_bytes(mem, mem_ceiling or 0)
         final_cpu = _clamp_cpu(after_app, budget.cpu if budget else 0.0)
         final_mem = _clamp_bytes(after_app_mem, parse_size(budget.memory) if budget else 0)
 
@@ -1140,23 +1149,25 @@ def create_app(
                 return None
             return "app" if final == after_app_v else "quota"
 
-        return (
-            SandboxSpec(
+        return ResolvedSize(
+            spec=SandboxSpec(
                 cpu_cores=final_cpu,
                 memory_bytes=final_mem,
                 # docs/plan-capacity-usage.md §6.5: whose sandbox this is — the
                 # same owner the budget above was read for.
                 labels={"user": owner or "", "app": _slug or ""},
             ),
-            _who(cpu, after_app, final_cpu),
-            _who(mem, after_app_mem, final_mem),
+            cpu_bound_by=_who(cpu, after_app, final_cpu),
+            memory_bound_by=_who(mem, after_app_mem, final_mem),
+            cpu_ceiling=cpu_ceiling,
+            memory_ceiling=mem_ceiling,
         )
 
     async def _spec_for(item_id: str) -> SandboxSpec:
         """The registry's seam: just the spec. One resolver, two readers — the
         attribution is a second question about the same answer, not a second
         answer."""
-        return (await _resolved_for(item_id))[0]
+        return (await _resolved_for(item_id)).spec
 
     def _titles_of(item_ids: list[str]) -> dict[str, str]:
         """Each item's headline, for the ones this reader may see.

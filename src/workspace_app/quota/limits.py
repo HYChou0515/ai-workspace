@@ -41,7 +41,7 @@ from dataclasses import dataclass
 
 from ..apps.manifest import AppManifest, AppResources
 from ..config.schema import PerUserResources, ResourceAmounts, Settings
-from ..sandbox.protocol import EnforcedLimits
+from ..sandbox.protocol import EnforcedLimits, SandboxSpec
 
 logger = logging.getLogger(__name__)
 
@@ -111,11 +111,51 @@ class ResourceLimits:
     silently replacing it). `0` remains "explicitly unbounded".
 
     `disk_bytes` is always concrete: this app enforces it and owns the fallback.
-    `NO_LIMIT` (0) means unbounded."""
+    `NO_LIMIT` (0) means unbounded.
+
+    `cpu_max` / `memory_max` are the deploy's `resources.per_app.max`, kept
+    because one item may be given MORE than its App's size, up to that
+    (plan-item-size-ceiling D1). 0 = the deploy set none for that dimension."""
 
     cpu_cores: float | None
     memory_bytes: int | None
     disk_bytes: int
+    cpu_max: float = 0.0
+    memory_max: int = NO_LIMIT
+
+    @property
+    def item_cpu_ceiling(self) -> float | None:
+        """The most cpu one item of this App may be given: the deploy's `max`
+        when it set one, otherwise the App's own size — so a deploy with no
+        `max` keeps the rule it had, an item may only go below its App (D2).
+        None when nothing caps it (`cpu_cores` is never 0: `_pick_cpu`)."""
+        return self.cpu_max or self.cpu_cores
+
+    @property
+    def item_memory_ceiling(self) -> int | None:
+        """`item_cpu_ceiling` for memory. None when nothing caps it — never 0,
+        which is how a size spells "unbounded" (`"max"` / `"0"`) and which the
+        panel would otherwise print as 「最多 0 B」 (review round 1)."""
+        return self.memory_max or self.memory_bytes or None
+
+
+@dataclass(frozen=True)
+class ResolvedSize:
+    """How big one item's sandbox will be, and why — what `_resolved_for`
+    answers. Named fields rather than a tuple: two `str | None` and two ceilings
+    side by side are exactly what a positional unpack swaps without a type
+    error.
+
+    `cpu_bound_by` / `memory_bound_by` say which limit held a stated size down
+    (`"app"`, `"quota"`, or None). `cpu_ceiling` / `memory_ceiling` are the most
+    this item may be given before anyone types anything — the App's
+    `item_*_ceiling` (plan-item-size-ceiling D3, D5); None = no ceiling."""
+
+    spec: SandboxSpec
+    cpu_bound_by: str | None
+    memory_bound_by: str | None
+    cpu_ceiling: float | None
+    memory_ceiling: int | None
 
 
 # The dimensions a per-person cap SUMS. `count` is absent on purpose: counting
@@ -186,6 +226,8 @@ def resolve_app_limits(manifest: AppManifest, settings: Settings) -> ResourceLim
             per_app.default.disk,
             settings.filestore.workspace_quota,
         ),
+        cpu_max=per_app.max.cpu,
+        memory_max=parse_size(per_app.max.memory),
     )
     _enforce_ceiling(manifest.slug, limits, per_app.max)
     return limits
