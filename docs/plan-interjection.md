@@ -183,3 +183,17 @@ CLAUDE.md「Chat turns run through one `ChatTurnEngine`」那段說 Q1, Q2, A1, 
   的超量恢復縮的是 `ctx.history`,送出去的卻沒變,同一個請求重送到放棄(F2)。
 - 其他:合併訊息套用的 skill 也併進來;一輪的 `accepted_ms` 取它回答的最早那則;放回位置時比對作者(同一毫秒
   兩人送出)。§4.4 寫的標記名稱 `role="interjection"`,實作是 `PLACE_ROLE = "place"`,帶作者。
+
+第二輪 review(修正驗證 + regression、veracity)找到的(C13–C15):
+
+- **C13〔施工〕pod 收攤時被取消的那一輪不是「停止」。** `aclose` 先取消殘留的那幾輪、再取消 worker,worker 看到的
+  只是「這一輪被取消了」,照 C9 把合併的訊息放回佇列、開新的一輪 —— 在要關的 pod 上,`aclose` 結束後還在跑,而
+  claim 已經交給別的 pod 補跑。現在 `aclose` 過了期限要取消殘留之前先設旗標:被取消的那一輪照交接處理(不放回、
+  叫醒 POST、claim 留給補跑的 pod),worker 也不再開新的一輪。
+- **C14〔施工〕「哪一則訊息」一律用(時間、作者)認。** C12 只修了放回位置那一處;`thread_without`、`must_move`、
+  「還沒回答的」集合都還是只看時間,同一毫秒兩人送出時會漏掉、留錯。`PendingTurn` 多記 `sender`(它的
+  `author` 對目標推進輪是刻意留空的,好讓任何人的停止都碰得到)。
+- **C15〔施工〕KB 送出也走 `preparing()`**(C8 要知道哪些 KB 訊息還在準備中)。兩個附帶的行為改變:KB 的送出在
+  準備中被按停止,那個問題會被取消(寫「已取消」結尾,和 App 聊天一樣;以前照跑);pod 收攤時還在準備的 KB 送出
+  會留下「已取消」結尾(KB 沒有 claim,本來就沒有別的 pod 補跑;以前是沒有任何結尾)。成本:每一輪開跑多一次
+  對話讀取,App 聊天再多一次 open claim 列表(全表,但只有正在進行的輪數那麼多列)。

@@ -287,6 +287,47 @@ async def test_a_kb_question_still_preparing_is_in_nobody_elses_history(monkeypa
     assert not any(h.endswith("c") for h in seen["b"])
 
 
+async def test_a_kb_stop_while_the_question_is_still_preparing_cancels_it(monkeypatch) -> None:
+    """docs/plan-interjection.md §9 C15: the KB send now prepares through
+    `preparing()`, so a Stop pressed before its turn exists reaches it — as on
+    the workspace chat — and the thread ends on a cancelled marker."""
+    import threading
+
+    from workspace_app.api import kb_chat_routes
+
+    real_block = kb_chat_routes._graph_block_for  # noqa: SLF001
+    entered = threading.Event()
+    hold = threading.Event()
+
+    def held(spec, content, user):  # noqa: ANN001, ANN202
+        entered.set()
+        hold.wait(10)
+        return real_block(spec, content, user)
+
+    monkeypatch.setattr(kb_chat_routes, "_graph_block_for", held)
+    runner = _GatedRunner()
+    app = _app(runner)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
+        cid = (await c.post("/kb/chats", json={"title": "t", "collection_ids": []})).json()[
+            "resource_id"
+        ]
+        send = asyncio.create_task(c.post(f"/kb/chats/{cid}/messages", json={"content": "b"}))
+        for _ in range(400):
+            if entered.is_set():
+                break
+            await asyncio.sleep(0.01)
+        assert (await c.delete(f"/kb/chats/{cid}/messages/current")).status_code == 204
+        hold.set()
+        await asyncio.wait_for(send, 10)
+        msgs = (await c.get(f"/kb/chats/{cid}")).json()["messages"]
+
+    assert runner.finished == []
+    assert [(m["role"], m.get("error_kind")) for m in msgs] == [
+        ("user", None),
+        ("error", "cancelled"),
+    ]
+
+
 async def test_a_collaborators_message_takes_the_kb_turn_over_and_the_thread_says_who() -> None:
     """docs/plan-interjection.md Q2/Q8 on the KB chat: a collaborator with
     `converse` sends while the owner's answer runs. The owner's turn stops, its
