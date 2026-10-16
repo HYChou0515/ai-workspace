@@ -27,9 +27,9 @@ from ..kb.ingest import Ingestor
 from ..perm import Actor, Permission, Verb, authorize
 from ..perm.model import user_subject
 from ..quota.disk_ledger import DiskLedger
-from ..quota.limits import parse_size
+from ..quota.limits import ResolvedSize, parse_size
 from ..resources.groups import groups_of
-from ..sandbox.protocol import SandboxBusy, SandboxSpec
+from ..sandbox.protocol import SandboxBusy
 from .activity import ActivityLog
 from .item_authz import require_item_access
 from .item_conversation_perm import push_item_mirror_to_conversations
@@ -135,6 +135,14 @@ class _EnvironmentOut(BaseModel):
     #: that held its own `1024` would keep teaching it after this one moved.
     max_cpu_cores: float
     max_memory_bytes: int
+    #: The most THIS item may be given — the deploy's `per_app.max`, or the
+    #: App's size where none was set (plan-item-size-ceiling D1, D2) — so the
+    #: panel can say it BEFORE anything is typed (D3). The very number the
+    #: resolver clamps against, handed over rather than recomputed. Not the
+    #: `max_*` above: those are what a PUT refuses outright; this is what a
+    #: stated size is held to. None = no ceiling (no line in the panel).
+    cpu_ceiling: float | None = None
+    memory_ceiling: int | None = None
 
 
 class _ResourcesOut(BaseModel):
@@ -262,7 +270,7 @@ def register_item_routes(
     get_user_id: Callable[[], str],
     activity: ActivityLog,
     registry: InvestigationRegistry,
-    resolved_for: Callable[[str], Awaitable[tuple[SandboxSpec, str | None, str | None]]],
+    resolved_for: Callable[[str], Awaitable[ResolvedSize]],
     #: How far back a heartbeat still counts as running. Passed in rather than
     #: chosen here so it is the SAME number the admission gate uses — the
     #: reaper's idle threshold. A shorter one under-counts a live-but-idle
@@ -498,7 +506,8 @@ def register_item_routes(
         It is safe to FIND things with and never safe to conclude absence from.
         """
         item, _created_by = _authorize_item(slug, item_id, "read_chat")
-        effective, cpu_bound_by, memory_bound_by = await resolved_for(item_id)
+        resolved = await resolved_for(item_id)
+        effective = resolved.spec
         enforced = await registry.sandbox.effective_limits(effective)
         return _EnvironmentOut(
             # The SAME source the resize refusal uses. Leaving this on
@@ -514,10 +523,12 @@ def register_item_routes(
             effective_memory_bytes=effective.memory_bytes,
             enforced_cpu_cores=enforced.cpu_cores,
             enforced_memory_bytes=enforced.memory_bytes,
-            cpu_bound_by=cpu_bound_by,
-            memory_bound_by=memory_bound_by,
+            cpu_bound_by=resolved.cpu_bound_by,
+            memory_bound_by=resolved.memory_bound_by,
             max_cpu_cores=_MAX_CORES,
             max_memory_bytes=_MAX_BYTES,
+            cpu_ceiling=resolved.cpu_ceiling,
+            memory_ceiling=resolved.memory_ceiling,
         )
 
     @app.put("/a/{slug}/items/{item_id}/resources")
@@ -539,7 +550,7 @@ def register_item_routes(
 
         ``null`` in either dimension clears it, which is not the same as zero:
         cleared means "nobody has said", and the size resolves fresh from
-        ``min(App ceiling, owner budget)`` every time it is asked.
+        ``min(App size, owner budget)`` every time it is asked.
 
         Persists AS THE OWNER for the same reason the permission setter does —
         a ``change_permission`` delegate need not hold ``write_meta``, and it is

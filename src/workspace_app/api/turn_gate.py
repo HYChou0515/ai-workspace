@@ -59,7 +59,7 @@ def quota_body(
 
     `holding` says WHICH environments are using the quota, so the remedy is one
     click rather than a page the person has to know exists. Defaulting to the
-    App's ceiling made hitting the limit ordinary rather than exceptional, so
+    App's size made hitting the limit ordinary rather than exceptional, so
     this is the difference between a wall and a door.
 
     It is included ONLY for the person whose quota it is. A collaborator can hit

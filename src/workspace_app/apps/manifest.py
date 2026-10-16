@@ -33,8 +33,10 @@ class FunctionToggles(Struct):
 
 
 class AppResources(Struct):
-    """What ONE item of this App is allowed to consume — the App's own statement
-    of its appetite, the way a k8s Pod states ``requests``/``limits``.
+    """What ONE item of this App gets by default — the App's own statement of
+    its appetite, the way a k8s Pod states ``requests``/``limits``. A person
+    may give one item more, up to the deploy's ``resources.per_app.max``
+    (plan-item-size-ceiling D1).
 
     Named ``resources`` rather than ``sandbox`` in app.json for two reasons: the
     manifest already has a ``function.sandbox`` boolean (a capability gate — a
