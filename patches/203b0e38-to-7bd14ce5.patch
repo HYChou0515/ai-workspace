@@ -1,0 +1,1189 @@
+diff --git a/configs/config.example.yaml b/configs/config.example.yaml
+index 337192de..3ff8b0ec 100644
+--- a/configs/config.example.yaml
++++ b/configs/config.example.yaml
+@@ -352,8 +352,8 @@
+ #   gc_t2: 24h
+ 
+ # ─── resources (per-App + per-person limits) ───── [OPT] ────────────
+-# How much ONE item may consume, and how much ONE person may hold across
+-# every item they own. The whole section is optional: leave it out and each
++# How big ONE item is by default and may be made, and how much ONE person may
++# hold across every item they own. The whole section is optional: leave it out and each
+ # App falls through to `sandbox.isolation.*` (cpu/memory) and
+ # `filestore.workspace_quota` (disk) exactly as it does today, with no
+ # per-person limit at all.
+@@ -363,7 +363,9 @@
+ # Each dimension falls through on its own, so an App that only states memory
+ # keeps the deploy's cpu and disk.
+ #
+-# `per_app.max` is the deploy's ceiling (k8s LimitRange). An App resolving
++# `per_app.max` is the deploy's ceiling (k8s LimitRange), and the most a person
++# may give ONE item in its environment panel (a dimension with no `max` lets an
++# item only go below its App's size). An App resolving
+ # above it FAILS THE BOOT and names itself — never a silent trim, because a
+ # config that reads "4 cores" while the pod hands out 2 is a lie you only
+ # discover from a performance bug months later.
+diff --git a/docs/adding-an-app.md b/docs/adding-an-app.md
+index 3cdb3a81..79c0acf9 100644
+--- a/docs/adding-an-app.md
++++ b/docs/adding-an-app.md
+@@ -58,7 +58,7 @@ apps/<slug>/
+ | `function.workspace` | file IDE(tree + editor + file tools)。`false` → 只有 chat 的 shell |
+ | `function.sandbox` | exec + package tools。不需要 terminal;控制 exec 相關功能的開啟 |
+ | `function.terminal` | 人用的 shell 分頁。**需要 `sandbox: true`** |
+-| `resources` | 這個 App 的**一個** item 可以用多少 `{cpu, memory, disk}`。三個欄位各自可省略,見下 |
++| `resources` | 這個 App 的**一個** item 預設用多少 `{cpu, memory, disk}`(cpu／記憶體的上限是部署的 `per_app.max`)。三個欄位各自可省略,見下 |
+ | `agent.prompt_file` | base system prompt 的路徑(相對於 App 目錄) |
+ | `agent.tools` | App 的 tool **上限**;profile 可以收窄成其子集 |
+ | `agent.picker` | `[{preset, name}]`——model picker;`preset` ∈ `config.yaml` 的 `agents.presets` |
+@@ -105,22 +105,23 @@ k8s 的 Pod `requests` 對上 namespace 的 `LimitRange`。
+ - **`disk: "0"` 是「明確無上限」,會停止往下掉;`cpu: 0` 是「沒宣告」,會繼續往下掉。** 這個
+   不對稱是刻意的——零核心不是任何人的本意,零 disk 上限卻是。
+ 
+-- **這個數字現在是「天花板」,不是「固定值」。** 使用者可以在 item 頁面把**這一個** item
+-  的環境調得更小(見下),但永遠不能調得比你在這裡宣告的更大。所以宣告時想的是
+-  「這個 App 的 item **最多**可以吃多少」,不是「每個 item 都要吃多少」。
++- **這個數字是「預設大小」,天花板是部署的 `per_app.max`。** 使用者可以在 item 頁面把**這一個**
++  item 的環境調大或調小(見下),上限是 `per_app.max`;部署沒設 `max` 的維度,才以你在這裡宣告
++  的數字為上限([plan-item-size-ceiling.md](plan-item-size-ceiling.md))。所以宣告時想的是
++  「這個 App 的 item **平常**吃多少」。
+ 
+ 部署端那一半(`per_app.default` / `per_app.max`、以及**每個人**的總量與特規使用者)寫在
+ [設定指南 §6.5](configuration.md)。
+ 
+-### 使用者可以把單一 item 調小
++### 使用者可以調單一 item 的大小
+ 
+ item 頁面的「環境」面板讓人替**那一個 item** 指定 cpu / 記憶體,由 item 的 `owner` 的額度
+ 支出。三件跟 App 作者有關的事:
+ 
+-- **預設是 `min(你宣告的上限, 那個人的額度)`**,而且**不會被存起來**——欄位空著就代表
++- **預設是 `min(你宣告的大小, 那個人的額度)`**,而且**不會被存起來**——欄位空著就代表
+   「沒人指定」,每次都重新計算。所以管理員調整某人的額度之後,他那些沒特別設定的 item
+   會自己跟著變,不會停在三個月前算出來的數字。
+-- **取小的那一個是必要的,不是保守。** 只取 App 上限的話,「App 上限 4 核 + 那個人額度
++- **取小的那一個是必要的,不是保守。** 只取 App 宣告的大小的話,「App 宣告 4 核 + 那個人額度
+   2 核」會產生一個**永遠開不起來**的 item:准入控制是 `incoming > limit` 就拒絕,關掉其他
+   東西也沒用。
+ - **要調大小需要 `change_permission`**,不是 `write_meta`。因為它花的是 owner 的額度,而且
+diff --git a/docs/configuration.md b/docs/configuration.md
+index dd44dfb8..68257ce9 100644
+--- a/docs/configuration.md
++++ b/docs/configuration.md
+@@ -297,7 +297,7 @@ sandbox:
+ resources:
+   per_app:
+     default: { cpu: 1.0, memory: 512M, disk: 80M }   # App 沒宣告時吃這個
+-    max:     { cpu: 4.0, memory: 4G,   disk: 20G }   # App 不得超過,超過=開機失敗
++    max:     { cpu: 4.0, memory: 4G,   disk: 20G }   # App 不得超過(超過=開機失敗);也是單一 item 能調到的上限
+   per_user:
+     count: 3          # 同時活著的 sandbox 個數
+     cpu: 6.0          # 那些活著的 sandbox 加總核心
+@@ -329,12 +329,24 @@ resources:
+ 
+ ### 使用者自己調單一 item 的環境大小
+ 
+-App 宣告的是**天花板**;使用者可以在 item 頁面的「環境」面板把**那一個** item 調得更小,
+-帳仍然記在 item 的 `owner` 上。維運面要知道的:
++使用者可以在 item 頁面的「環境」面板調**那一個** item 的 CPU 與記憶體,帳仍然記在 item 的
++`owner` 上。**App 的值是預設大小,`resources.per_app.max` 是天花板**([plan-item-size-ceiling.md](plan-item-size-ceiling.md)):
++
++| 設定 | 對單一 item 的意思 |
++|---|---|
++| app.json 的 `resources`,沒寫就是 `per_app.default` | 沒人調過時的大小 |
++| `per_app.max` | 最多能調到多大。面板在欄位下寫出「這個 App 最多 X」 |
++| 沒設 `max` 的維度(`""`/`"0"`/`"max"` 都算沒設) | 天花板就是 App 的值——只能往下調;App 也沒有值時就沒有天花板 |
++| 個人額度(`per_user`) | 最後再夾一層,`min(item 的值, 天花板, 個人額度)` |
++
++例:`per_app.default` 1 核 / `512M`、`per_app.max` 4 核 / `4G` ⇒ 沒人調的 item 是 1 核 / 512M,
++可以調到 4 核 / 4G 以內;設 16 核會存下,生效時夾成 4 核,面板寫「受這個 App 的上限限制」。
++
++維運面要知道的:
+ 
+ - **選的是上限,不是預約。** 選了 4 核不會當下扣額度——只有 sandbox 活著才算,跟今天完全
+   一樣。額度的帳是從心跳推導的,不是 create+1 / kill−1 的計數器。
+-- **預設 `min(App 上限, 個人額度)`,而且不落地。** 欄位空 = 沒人指定。調整某人的額度之後,
++- **預設 `min(App 的值, 個人額度)`,而且不落地。** 欄位空 = 沒人指定。調整某人的額度之後,
+   他那些沒特別設定的 item 自動跟著變。
+ - **沒設 `per_user` 的部署看不到那半個面板。** 沒有額度就沒有「花費」這回事,畫 `0 / 0`
+   是雜訊。但「環境在跑嗎、關掉它」那半邊**永遠都在**——那是關於機器,不是關於額度。
+diff --git a/docs/design-history.md b/docs/design-history.md
+index ab56c647..ac0ee833 100644
+--- a/docs/design-history.md
++++ b/docs/design-history.md
+@@ -103,6 +103,7 @@
+ | [plan-sandbox-sot.md](plan-sandbox-sot.md) | sandbox 真相來源（source-of-truth）設計 |
+ | [plan-sandbox-resource-quota.md](plan-sandbox-resource-quota.md) | 依 App 設定 sandbox 資源（cpu/memory/disk）+ 每人跨 App 總量上限；債務人是 item 的 `owner`（前提見 #687） |
+ | [plan-item-sandbox-resources.md](plan-item-sandbox-resources.md) | 每個 item 自己決定環境開多大（使用者可調、由 owner 的額度支出）；狀態／用量／關閉搬到 item 頁面；閘門是 `change_permission` |
++| [plan-item-size-ceiling.md](plan-item-size-ceiling.md) | 一個 item 可以調到部署的 `resources.per_app.max`：App 的值（app.json 或 `per_app.default`）改當預設大小、`max` 才是 item 的天花板，沒設 `max` 的維度維持舊規則；面板在輸入前寫出「這個 App 最多 X」（推翻 plan-item-sandbox-resources 的「item 的天花板是 App 的值」） |
+ | [plan-llm-failover.md](plan-llm-failover.md) | LLM failover / 多供應商備援 |
+ | [plan-friendly-errors.md](plan-friendly-errors.md) | 錯誤要說人話：發生什麼、怎麼辦、原文收合在技術細節；重試只在單次 LLM 呼叫 |
+ | [plan-sanity-checks.md](plan-sanity-checks.md) | 開機健康檢查 / sanity matrix |
+diff --git a/docs/migrations.md b/docs/migrations.md
+index 0b5db8e8..f6683487 100644
+--- a/docs/migrations.md
++++ b/docs/migrations.md
+@@ -2727,6 +2727,33 @@ AI 讀 `wui` skill 時會看到「這個 item 能讓頁面問的 subagent」清
+ - superuser：`curl -s -o /dev/null -w '%{http_code}' -b '<cookie>' '<網址>/api/admin/capacity?days=7'` 回 200；一般使用者回 403。
+ - 接上資料來源後：`uv run python -m workspace_app.capacity check --hours 24` 沒有 error（exit 0）。
+ 
++### 2026-10-16 · ff67c627 · #967 單一 item 可以調到部署的 `per_app.max`,不再只能比預設小 {#pr-967}
++
++**設定** — 必要的:無。要先看一眼的(`rollout 前`):`resources.per_app.max` 的 `cpu` / `memory`。為什麼:它以前只在開機時
++檢查 App 的值有沒有超過;升級後它也是**一個 item 能調到多大**。設得比你願意給單一 item 的還大,使用者就調得到那麼大
++(仍受個人額度夾住)。沒設 `max` 的維度行為不變:item 只能調到 App 的值以下。**設了 `max` 的維度,一併設一個具體的 `default`**(不是 `"max"`/`"0"`——那也是「沒人調的 item 不設限」):
++沒設的話,沒人調過的 item 跑的是 sandbox 後端自己的預設(http 主機是 `SANDBOX_HOST_CPU_CORES` / `SANDBOX_HOST_MEMORY_MAX`,
++本機隔離是 `sandbox.isolation.*`),可能比 `max`
++大——面板這時不寫「這個 App 最多 X」(寫了會跟生效值矛盾),而有人把它設成比 `max` 大的值就會被夾到 `max`,比不設還小。
++
++**資料** — 無。item 上存的大小欄位不變。
++
++**k8s · CI 側** — 前後端都改,照常重 build、部署;sandbox-host 不用動。
++
++**行為改變,沒有開關**([plan-item-size-ceiling.md](plan-item-size-ceiling.md) D1–D3):有設 `per_app.max` 的部署,item 的天花板從
++「App 的值」(沒在 app.json 宣告時就是 `per_app.default`)變成 `per_app.max`。例:`default` 1 核 / `512M`、`max` 4 核 / `4G`,
++以前把 item 調成 2 核 / 2G 實際只拿到 1 核 / 512M,升級後就拿到 2 核 / 2G。**先前已經把 item 調得比 App 的值大的人,下一次開
++環境就會真的拿到那個大小**(以前被夾回 App 的值)——個人額度照舊會擋總量。**反方向也有**:設了 `max` 卻沒有 App 的值
++(沒設 `per_app.default`、app.json 也沒宣告)的維度,以前 App 這一層完全不夾(只有個人額度),升級後超過 `max` 的會被夾回 `max`——下一次開
++環境就變小。滾動更新途中新舊 API pod 並存時,同一個 item 由哪一顆 pod 開的環境就照哪一顆的規則,rollout 完成後一致。
++rollout 時**已經在跑**的環境:cgroup 還是開的時候的大小,但它在額度帳上的那一列,下一次被使用或喚醒時就改按新的大小記
++(「我的資源」照那一列顯示),直到環境被關掉或回收、重開後兩邊才一致——這段時間調大的會顯示得比實際占用多,被夾回 `max` 的
++會顯示得比實際少。環境面板在 CPU、記憶體欄位下多一行
++「這個 App 最多 X」。app.json 的 `resources` 從「item 最多吃多少」變成「預設吃多少」(目前內建 App 都沒有宣告)。
++
++**確認做完**(`rollout 後`):在一個有設 `per_app.max` 的 App 的 item 打開「環境」面板,CPU、記憶體欄位下寫著「這個 App 最多
++X」(X 是 `max`);把它調到預設與 `max` 之間的值、存檔、開環境,面板的生效值就是調的值,沒有「受這個 App 的上限限制」。
++
+ ## 附錄 A：資料回填的機制（specstar 為什麼不會自己補）
+ 
+ 有些升版會改變「資料在資料庫裡的儲存形狀」，但 **specstar 只在寫入當下**把一列的 `indexed_data`
+diff --git a/docs/plan-item-sandbox-resources.md b/docs/plan-item-sandbox-resources.md
+index fc9aa6da..7383a0aa 100644
+--- a/docs/plan-item-sandbox-resources.md
++++ b/docs/plan-item-sandbox-resources.md
+@@ -1,5 +1,7 @@
+ # 每個 item 自己決定要開多大的環境
+ 
++> 被 #967（plan-item-size-ceiling.md）推翻
++
+ 延續 [`plan-sandbox-resource-quota.md`](plan-sandbox-resource-quota.md)。那一份把資源綁在 **App**
+ 上（一個 App 的每個 item 都一樣大），並加上每人跨 App 的總量。這一份讓**使用者自己決定
+ 這一個 item 要開多大**，並且把「現在開著什麼、花了多少、怎麼關掉」搬到他正在看的頁面上。
+diff --git a/docs/plan-item-size-ceiling.md b/docs/plan-item-size-ceiling.md
+new file mode 100644
+index 00000000..335d06bc
+--- /dev/null
++++ b/docs/plan-item-size-ceiling.md
+@@ -0,0 +1,55 @@
++# Plan — 一個 item 可以調到部署的 `max`，不是只能比預設小
++
++Grilled 2026-10-16 on master `442eca8e`。每條決定標來源：**[user]** = 使用者決定；**[mine]** = 我定的實作細節。
++
++> 這份計畫推翻 [plan-item-sandbox-resources.md](plan-item-sandbox-resources.md) 需求第 3 條「每個 App 可以設定上限，
++> 預設就是開上限」所導出的規則——**item 的天花板是 App 的值**（`_resolved_for` 把 item 的值夾在 App 的解析值以下）。
++> 那份的其餘部分不變：選的是上限不是預約（§1.1）、只有 CPU 和記憶體（§1.2）、預設 = `min(App 的值, 個人額度)`（§1.3）、
++> 活著時唯讀（§1.4）、改大小的權限是 `change_permission`。
++
++## 為什麼
++
++使用者：「我發現我沒辦法調高 sandbox resource」「這個 item 想調高」「App 設定只有 max 和預設，我預設是 1 512m，Max 是 4 4gb」
++「我只是要調到 2 2gb」。
++
++部署設了 `resources.per_app.default`（1 核／512M）與 `resources.per_app.max`（4 核／4G）。在 item 的「環境」面板把一個 item
++設成 2 核／2G，建出來的 sandbox 仍是 1 核／512M，面板寫「受這個 App 的上限限制」。
++
++機制（master `442eca8e`）：
++
++- `quota/limits.py:resolve_app_limits` 解析每個 App 的大小：app.json 的 `resources` → `per_app.default` → 後端預設。內建的
++  4 個 App（playground、pm、rca、topic-hub；`_template` 不會被載入）的 app.json 都沒有宣告 `resources`，所以 App 的值就是 `per_app.default`。
++- `per_app.max` 只在開機時拿來檢查 App 的解析值有沒有超過（`_enforce_ceiling`，超過就開機失敗），檢查完就不再被任何東西讀。
++- `api/app.py:_resolved_for` 把 item 的值夾在 App 的解析值以下（`_clamp_cpu(cpu, app_cpu)`）。
++- 合起來：item 的天花板＝`per_app.default`，`per_app.max` 對 item 沒有作用，「預設」和「上限」被讀成同一件事。
++
++## 決定
++
++| # | 決定 | 來源 |
++|---|------|------|
++| D1 | **item 的天花板是部署的 `per_app.max`**；App 的值（app.json 的 `resources`，沒寫就是 `per_app.default`）是 item 沒有特別設定時的**預設大小**；owner 的個人額度照舊再夾一層（`min(item 的值, 天花板, 個人額度)`）。設定超過天花板照樣存下，生效時夾到天花板，面板照舊說「受這個 App 的上限限制」。 | [user] |
++| D2 | **沒設 `max` 的維度，天花板退回 App 的值**——今天的行為。逐維度判斷：只設了 cpu 的 `max`，就只有 cpu 能往上調。理由：讓沒設 `max` 的部署一升級就沒有上限，是偷偷改掉它們的行為。`max` 寫成 `""`／`"0"`／`"max"` 都當沒設（`parse_size` 本來就把三者讀成同一個「無上限」）。 | [user]；後一句 [mine] |
++| D3 | **面板在輸入之前就寫出可調的範圍**：CPU、記憶體欄位下各一行「這個 App 最多 X」，X 就是 D1／D2 的天花板（NN/g 錯誤預防：送出前就說清楚限制，而不是存了才說被壓住）。沒有天花板的維度不顯示那一行，不寫「無上限」。 | [user] |
++| D4 | 天花板在 `resolve_app_limits` 算——就是算出 App 大小、檢查 `max` 的同一個地方——存在 `ResourceLimits` 上（`cpu_max`／`memory_max` 欄位與 `item_cpu_ceiling`／`item_memory_ceiling` 兩個屬性）；`_resolved_for` 與環境 API 都讀這兩個屬性，不各自重算。 | [mine] |
++| D5 | 環境 API（`GET /a/{slug}/items/{item_id}/environment`）多回 `cpu_ceiling`／`memory_ceiling`（`null` = 沒有天花板），面板用它畫 D3 那一行。 | [mine] |
++| D6 | **實際生效的大小已經超過天花板時，不畫 D3 那一行。** 只設 `max`、沒設 `default`、App 也沒宣告的維度，沒人調過的 item 跑的是 sandbox 主機自己的預設（例如 8 核），可能比 `max`（4 核）大；這時「這個 App 最多 4 核」跟畫面上的生效值互相矛盾。大小行為不變（要把沒人調過的 item 也夾到 `max`，得先問主機它的預設是多少，而且會改到 D1 的「預設大小」）。有人設了大小時伺服器已把它夾到天花板以下，碰不到這條。升級手冊提醒設了 `max` 就一併設 `default`。 | [mine]（review 第一輪 F2；照我給使用者的建議先做，使用者尚未回覆） |
++
++不在範圍：**硬碟**——item 層本來就不能調（舊計畫 §1.2），使用者要的是 CPU 和記憶體。
++
++## 影響
++
++- **有設 `max` 的部署，行為會變**：先前在 item 上設了大於 App 值的人，下次開環境就真的拿到那個大小（以前被夾回 App 值）。
++  要寫進 `docs/migrations.md`。
++- **app.json 宣告 `resources` 的意義變了**：從「這個 App 的 item 最多吃多少」變成「預設吃多少」；最多是部署的 `max`。
++  `docs/adding-an-app.md` 與 `docs/configuration.md` 寫著舊規則，要改。目前沒有內建 App 宣告。
++- 開機檢查（App 的值超過 `max` 就開機失敗）不變。
++
++## Phases
++
++- **P1** 後端：`ResourceLimits` 帶 `per_app.max`、`_resolved_for` 夾到天花板（D1、D2、D4）；環境 API 回傳天花板（D5）。
++  測試先紅：使用者回報的那組設定（default 1／512M、max 4／4G）走真的 `resolve_app_limits`，item 設 2／2G 要建出 2／2G。
++- **P2** 前端：環境面板在 CPU、記憶體欄位下寫出天花板（D3）；沒有天花板就不顯示。
++- **P3** 文件：本計畫、舊計畫標題下的推翻標記、`docs/design-history.md`、`docs/adding-an-app.md`、`docs/configuration.md` 的規則
++  說明、`docs/migrations.md` 條目。
++- **P4** review 第一輪：記憶體「無上限」不畫「最多 0 B」；config 的 `cpu` 寫成 `"max"`／`"0"`／`""` 讀成「沒設」、其他非數字開機失敗；D6；升級手冊補會變小的方向、滾動更新、在跑的環境的計費；掃掉仍寫舊規則的註解。
++- **P5** review 第二輪：App 的值是「無上限」（`"max"`／`"0"`）時實際生效值 0 也算超過天花板、不畫那一行（D6 的同一條規則）；`per_user.cpu` 走同一個讀 cpu 的函式；cpu 只收有限、非負的數字（`nan`／`inf`／負數／`true`／清單一律開機失敗並寫出設定鍵）；升級手冊提醒 `default` 要給具體值。
+diff --git a/src/workspace_app/api/app.py b/src/workspace_app/api/app.py
+index 4f006cc2..43c1e599 100644
+--- a/src/workspace_app/api/app.py
++++ b/src/workspace_app/api/app.py
+@@ -63,7 +63,12 @@ from ..monitor import IMonitor, InMemoryMonitor, MonitorProcessor
+ from ..observability.boot import boot_step
+ from ..quota.admission import AdmissionGate, SandboxQuotaExceeded
+ from ..quota.disk_ledger import DiskLedger, UserDiskFull, register_disk_ledger
+-from ..quota.limits import ResourceLimits, parse_size, warn_unenforceable_dimensions
++from ..quota.limits import (
++    ResolvedSize,
++    ResourceLimits,
++    parse_size,
++    warn_unenforceable_dimensions,
++)
+ from ..quota.user_limits import UserLimits, register_user_quota
+ from ..resources import (
+     AgentConfig,
+@@ -1077,16 +1082,18 @@ def create_app(
+             return want
+         return min(want, ceiling)
+ 
+-    async def _resolved_for(item_id: str) -> tuple[SandboxSpec, str | None, str | None]:
++    async def _resolved_for(item_id: str) -> ResolvedSize:
+         """How big THIS item's sandbox may be — the one place that answers it.
+ 
+         Three inputs, in this order:
+ 
+         1. what the item itself asks for, when someone has said (`None` means
+            nobody has, and that is a real answer — see `WorkItemBase`);
+-        2. otherwise the App's ceiling, which is the behaviour before per-item
++        2. otherwise the App's size, which is the behaviour before per-item
+            sizing existed;
+-        3. and either way, clamped by the OWNER's own budget.
++        3. either way held to the item ceiling — the deploy's `per_app.max`,
++           or the App's size where no `max` was set (plan-item-size-ceiling
++           D1, D2) — and then clamped by the OWNER's own budget.
+ 
+         The clamp is what stops a default from producing an item that can never
+         run: admission refuses when `incoming > limit`, so a 4-core App under a
+@@ -1110,18 +1117,20 @@ def create_app(
+ 
+         app_cpu = limits.cpu_cores if limits else None
+         app_mem = limits.memory_bytes if limits else None
++        cpu_ceiling = limits.item_cpu_ceiling if limits else None
++        mem_ceiling = limits.item_memory_ceiling if limits else None
+         cpu = item_cpu if item_cpu is not None else app_cpu
+         mem = item_mem if item_mem is not None else app_mem
+-        # BOTH ceilings, in this order. The App's was previously only a
+-        # fallback — read when the item stated nothing and ignored when it did —
+-        # so "App declares 4, person types 999" resolved to 999 on any deploy
+-        # with no per-user quota, which is the shipped default and therefore the
+-        # common case rather than the corner. Three documents and an i18n string
+-        # said otherwise, and that string was unreachable: with only a budget
+-        # clamp, being clamped implied the budget was what bound it, so the
+-        # panel could never name the App.
+-        after_app = _clamp_cpu(cpu, app_cpu or 0.0)
+-        after_app_mem = _clamp_bytes(mem, app_mem or 0)
++        # BOTH ceilings, in this order. The App's was once only a fallback —
++        # read when the item stated nothing and ignored when it did — so "App
++        # declares 4, person types 999" resolved to 999 on any deploy with no
++        # per-user quota. Then it became the App's SIZE, which for an App that
++        # states nothing is `per_app.default`: a deploy of default 1 / max 4
++        # could never give one item 2, and `max` reached no item at all. The
++        # ceiling is the deploy's `max`, or the App's size where none was set
++        # (plan-item-size-ceiling D1, D2).
++        after_app = _clamp_cpu(cpu, cpu_ceiling or 0.0)
++        after_app_mem = _clamp_bytes(mem, mem_ceiling or 0)
+         final_cpu = _clamp_cpu(after_app, budget.cpu if budget else 0.0)
+         final_mem = _clamp_bytes(after_app_mem, parse_size(budget.memory) if budget else 0)
+ 
+@@ -1140,23 +1149,25 @@ def create_app(
+                 return None
+             return "app" if final == after_app_v else "quota"
+ 
+-        return (
+-            SandboxSpec(
++        return ResolvedSize(
++            spec=SandboxSpec(
+                 cpu_cores=final_cpu,
+                 memory_bytes=final_mem,
+                 # docs/plan-capacity-usage.md §6.5: whose sandbox this is — the
+                 # same owner the budget above was read for.
+                 labels={"user": owner or "", "app": _slug or ""},
+             ),
+-            _who(cpu, after_app, final_cpu),
+-            _who(mem, after_app_mem, final_mem),
++            cpu_bound_by=_who(cpu, after_app, final_cpu),
++            memory_bound_by=_who(mem, after_app_mem, final_mem),
++            cpu_ceiling=cpu_ceiling,
++            memory_ceiling=mem_ceiling,
+         )
+ 
+     async def _spec_for(item_id: str) -> SandboxSpec:
+         """The registry's seam: just the spec. One resolver, two readers — the
+         attribution is a second question about the same answer, not a second
+         answer."""
+-        return (await _resolved_for(item_id))[0]
++        return (await _resolved_for(item_id)).spec
+ 
+     def _titles_of(item_ids: list[str]) -> dict[str, str]:
+         """Each item's headline, for the ones this reader may see.
+diff --git a/src/workspace_app/api/item_routes.py b/src/workspace_app/api/item_routes.py
+index 28dcff7a..4d9ac2db 100644
+--- a/src/workspace_app/api/item_routes.py
++++ b/src/workspace_app/api/item_routes.py
+@@ -27,9 +27,9 @@ from ..kb.ingest import Ingestor
+ from ..perm import Actor, Permission, Verb, authorize
+ from ..perm.model import user_subject
+ from ..quota.disk_ledger import DiskLedger
+-from ..quota.limits import parse_size
++from ..quota.limits import ResolvedSize, parse_size
+ from ..resources.groups import groups_of
+-from ..sandbox.protocol import SandboxBusy, SandboxSpec
++from ..sandbox.protocol import SandboxBusy
+ from .activity import ActivityLog
+ from .item_authz import require_item_access
+ from .item_conversation_perm import push_item_mirror_to_conversations
+@@ -135,6 +135,14 @@ class _EnvironmentOut(BaseModel):
+     #: that held its own `1024` would keep teaching it after this one moved.
+     max_cpu_cores: float
+     max_memory_bytes: int
++    #: The most THIS item may be given — the deploy's `per_app.max`, or the
++    #: App's size where none was set (plan-item-size-ceiling D1, D2) — so the
++    #: panel can say it BEFORE anything is typed (D3). The very number the
++    #: resolver clamps against, handed over rather than recomputed. Not the
++    #: `max_*` above: those are what a PUT refuses outright; this is what a
++    #: stated size is held to. None = no ceiling (no line in the panel).
++    cpu_ceiling: float | None = None
++    memory_ceiling: int | None = None
+ 
+ 
+ class _ResourcesOut(BaseModel):
+@@ -262,7 +270,7 @@ def register_item_routes(
+     get_user_id: Callable[[], str],
+     activity: ActivityLog,
+     registry: InvestigationRegistry,
+-    resolved_for: Callable[[str], Awaitable[tuple[SandboxSpec, str | None, str | None]]],
++    resolved_for: Callable[[str], Awaitable[ResolvedSize]],
+     #: How far back a heartbeat still counts as running. Passed in rather than
+     #: chosen here so it is the SAME number the admission gate uses — the
+     #: reaper's idle threshold. A shorter one under-counts a live-but-idle
+@@ -498,7 +506,8 @@ def register_item_routes(
+         It is safe to FIND things with and never safe to conclude absence from.
+         """
+         item, _created_by = _authorize_item(slug, item_id, "read_chat")
+-        effective, cpu_bound_by, memory_bound_by = await resolved_for(item_id)
++        resolved = await resolved_for(item_id)
++        effective = resolved.spec
+         enforced = await registry.sandbox.effective_limits(effective)
+         return _EnvironmentOut(
+             # The SAME source the resize refusal uses. Leaving this on
+@@ -514,10 +523,12 @@ def register_item_routes(
+             effective_memory_bytes=effective.memory_bytes,
+             enforced_cpu_cores=enforced.cpu_cores,
+             enforced_memory_bytes=enforced.memory_bytes,
+-            cpu_bound_by=cpu_bound_by,
+-            memory_bound_by=memory_bound_by,
++            cpu_bound_by=resolved.cpu_bound_by,
++            memory_bound_by=resolved.memory_bound_by,
+             max_cpu_cores=_MAX_CORES,
+             max_memory_bytes=_MAX_BYTES,
++            cpu_ceiling=resolved.cpu_ceiling,
++            memory_ceiling=resolved.memory_ceiling,
+         )
+ 
+     @app.put("/a/{slug}/items/{item_id}/resources")
+@@ -539,7 +550,7 @@ def register_item_routes(
+ 
+         ``null`` in either dimension clears it, which is not the same as zero:
+         cleared means "nobody has said", and the size resolves fresh from
+-        ``min(App ceiling, owner budget)`` every time it is asked.
++        ``min(App size, owner budget)`` every time it is asked.
+ 
+         Persists AS THE OWNER for the same reason the permission setter does —
+         a ``change_permission`` delegate need not hold ``write_meta``, and it is
+diff --git a/src/workspace_app/api/registry.py b/src/workspace_app/api/registry.py
+index f37235da..fbefd73a 100644
+--- a/src/workspace_app/api/registry.py
++++ b/src/workspace_app/api/registry.py
+@@ -96,7 +96,7 @@ class InvestigationRegistry:
+     # same question is how they end up disagreeing.
+     #
+     # Async because the answer now depends on the OWNER's own budget as well as
+-    # the App's ceiling, and that is a store read. Keeping it sync would have
++    # the item ceiling, and that is a store read. Keeping it sync would have
+     # meant applying the owner clamp somewhere else — which is precisely the
+     # "one rule, two places" shape this comment already warns about.
+     spec_for: Callable[[str], Awaitable[SandboxSpec]] = _bare_spec
+diff --git a/src/workspace_app/api/turn_gate.py b/src/workspace_app/api/turn_gate.py
+index 933bd1a8..07b76244 100644
+--- a/src/workspace_app/api/turn_gate.py
++++ b/src/workspace_app/api/turn_gate.py
+@@ -59,7 +59,7 @@ def quota_body(
+ 
+     `holding` says WHICH environments are using the quota, so the remedy is one
+     click rather than a page the person has to know exists. Defaulting to the
+-    App's ceiling made hitting the limit ordinary rather than exceptional, so
++    App's size made hitting the limit ordinary rather than exceptional, so
+     this is the difference between a wall and a door.
+ 
+     It is included ONLY for the person whose quota it is. A collaborator can hit
+diff --git a/src/workspace_app/apps/base.py b/src/workspace_app/apps/base.py
+index 445057cf..81a6e258 100644
+--- a/src/workspace_app/apps/base.py
++++ b/src/workspace_app/apps/base.py
+@@ -181,7 +181,7 @@ class WorkItemBase(Struct):
+     """Tier 1 — how much CPU THIS item's environment may use, or None.
+ 
+     ``None`` is the whole design, not an empty slot: it means "nobody has said",
+-    and the size is then resolved fresh every time from ``min(the App's ceiling,
++    and the size is then resolved fresh every time from ``min(the App's size,
+     the owner's own budget)``. Storing that resolved number here instead would
+     make it a copy that drifts — raise the owner's quota and a three-month-old
+     item still runs at the old size, looking entirely normal. The same reason a
+diff --git a/src/workspace_app/apps/manifest.py b/src/workspace_app/apps/manifest.py
+index d38ab822..794d57f5 100644
+--- a/src/workspace_app/apps/manifest.py
++++ b/src/workspace_app/apps/manifest.py
+@@ -33,8 +33,10 @@ class FunctionToggles(Struct):
+ 
+ 
+ class AppResources(Struct):
+-    """What ONE item of this App is allowed to consume — the App's own statement
+-    of its appetite, the way a k8s Pod states ``requests``/``limits``.
++    """What ONE item of this App gets by default — the App's own statement of
++    its appetite, the way a k8s Pod states ``requests``/``limits``. A person
++    may give one item more, up to the deploy's ``resources.per_app.max``
++    (plan-item-size-ceiling D1).
+ 
+     Named ``resources`` rather than ``sandbox`` in app.json for two reasons: the
+     manifest already has a ``function.sandbox`` boolean (a capability gate — a
+diff --git a/src/workspace_app/config/loader.py b/src/workspace_app/config/loader.py
+index 5bf00e33..4f4468ce 100644
+--- a/src/workspace_app/config/loader.py
++++ b/src/workspace_app/config/loader.py
+@@ -18,6 +18,7 @@ Single entry point: ``load(config_path=None, env=None)``.
+ from __future__ import annotations
+ 
+ import dataclasses
++import math
+ import os
+ from collections.abc import Mapping, Sequence
+ from pathlib import Path
+@@ -1268,16 +1269,61 @@ def _build_resources(d: dict[str, Any]) -> ResourceSettings:
+     per_app = d.get("per_app", {})
+     return ResourceSettings(
+         per_app=PerAppResources(
+-            default=_build(ResourceAmounts, per_app.get("default", {})),
+-            max=_build(ResourceAmounts, per_app.get("max", {})),
++            default=_build_amounts(per_app.get("default", {}), "resources.per_app.default"),
++            max=_build_amounts(per_app.get("max", {}), "resources.per_app.max"),
++        ),
++        per_user=_build(
++            PerUserResources,
++            {
++                **d.get("per_user", {}),
++                "cpu": _cpu_cores(d.get("per_user", {}).get("cpu", 0), "resources.per_user"),
++            },
+         ),
+-        per_user=_build(PerUserResources, d.get("per_user", {})),
+         disk_reconcile_interval_sec=float(
+             d.get("disk_reconcile_interval_sec", ResourceSettings().disk_reconcile_interval_sec)
+         ),
+     )
+ 
+ 
++def _cpu_cores(raw: object, where: str) -> float:
++    """A cpu amount from config.yaml, as a number of cores — the ONE reader
++    for every cpu key under `resources` (per_app default / max, per_user).
++
++    `_build` converts nothing, so `cpu: max` — or any `${VAR}`, which
++    interpolation always hands over as a string — reached Settings as a str,
++    and once `per_app.max` became an item's ceiling (plan-item-size-ceiling
++    D2), `min(2.0, "max")` raised on every sized item. `""` / `"0"` / `"max"`
++    mean "not set" (0) — the backend's own default, as `_pick_cpu` reads 0 —
++    which is NOT what they mean for a size: there `"0"` / `"max"` are
++    "unbounded" (`parse_size`), cpu having no unbounded spelling. Anything that
++    is not a finite, non-negative number fails the boot naming the key:
++    `nan` made a cap a silent no-op, `inf` printed 「最多 inf 核」, `-1` held
++    every item to -1 cores, and a YAML `true` would have been one core."""
++    if isinstance(raw, str) and raw.strip() in ("", "0", "max"):
++        return 0.0
++    if raw is None:
++        return 0.0
++    value: float | None = None
++    if isinstance(raw, str):
++        try:
++            value = float(raw.strip())
++        except ValueError:
++            value = None
++    elif isinstance(raw, int | float) and not isinstance(raw, bool):
++        value = float(raw)
++    if value is None or not math.isfinite(value) or value < 0:
++        raise ValueError(
++            f"config {where}.cpu: {raw!r} is not a number of cores "
++            '(write e.g. 2 or 0.5; 0 / "max" = not set)'
++        )
++    return value
++
++
++def _build_amounts(d: dict[str, Any], where: str) -> ResourceAmounts:
++    """`_build(ResourceAmounts, …)` with `cpu` read by `_cpu_cores`."""
++    return _build(ResourceAmounts, {**d, "cpu": _cpu_cores(d.get("cpu", 0), where)})
++
++
+ def _build_sandbox(d: dict[str, Any]) -> SandboxSettings:
+     """`sandbox` has nested dataclasses (`http`, #345 `isolation`, #501 `durable`),
+     so it can't use the flat `_build`. `http` is None unless `kind: http` declares
+diff --git a/src/workspace_app/config/schema.py b/src/workspace_app/config/schema.py
+index c10aa51a..ac07eaee 100644
+--- a/src/workspace_app/config/schema.py
++++ b/src/workspace_app/config/schema.py
+@@ -382,7 +382,8 @@ class PerAppResources:
+     """The deploy's half of the per-App bargain (k8s ``LimitRange``).
+ 
+     ``default`` is what an App gets when its app.json states nothing; ``max`` is
+-    the ceiling an App may not exceed. Exceeding it is a BOOT failure, not a
++    the ceiling an App may not exceed, and the most one item may be given
++    (plan-item-size-ceiling D1). An App exceeding it is a BOOT failure, not a
+     silent trim: a config that reads "4 cores" while the pod hands out 2 is the
+     dead-knob class this codebase refuses to ship."""
+ 
+diff --git a/src/workspace_app/quota/admission.py b/src/workspace_app/quota/admission.py
+index 84a1812a..e0bfa174 100644
+--- a/src/workspace_app/quota/admission.py
++++ b/src/workspace_app/quota/admission.py
+@@ -140,8 +140,9 @@ class AdmissionGate:
+         put its owner over.
+ 
+         `incoming` is what the NEW sandbox would be allowed to consume — what
+-        the BACKEND will really cap it at, which is its App's ceilings when the
+-        App states them and the backend's own when it does not. It matters
++        the BACKEND will really cap it at — the item's resolved size (its own,
++        else its App's, held to the item ceiling) where one is stated, and the
++        backend's own when none is. It matters
+         because the question is not "are you already over?" but "does one more
+         of THIS size fit?" — with 3.5 of 4 cores live, whether another sandbox is
+         admissible depends entirely on how big it is. Defaulted from `cost_of`
+diff --git a/src/workspace_app/quota/limits.py b/src/workspace_app/quota/limits.py
+index 86abd79c..904e0b46 100644
+--- a/src/workspace_app/quota/limits.py
++++ b/src/workspace_app/quota/limits.py
+@@ -41,7 +41,7 @@ from dataclasses import dataclass
+ 
+ from ..apps.manifest import AppManifest, AppResources
+ from ..config.schema import PerUserResources, ResourceAmounts, Settings
+-from ..sandbox.protocol import EnforcedLimits
++from ..sandbox.protocol import EnforcedLimits, SandboxSpec
+ 
+ logger = logging.getLogger(__name__)
+ 
+@@ -111,11 +111,51 @@ class ResourceLimits:
+     silently replacing it). `0` remains "explicitly unbounded".
+ 
+     `disk_bytes` is always concrete: this app enforces it and owns the fallback.
+-    `NO_LIMIT` (0) means unbounded."""
++    `NO_LIMIT` (0) means unbounded.
++
++    `cpu_max` / `memory_max` are the deploy's `resources.per_app.max`, kept
++    because one item may be given MORE than its App's size, up to that
++    (plan-item-size-ceiling D1). 0 = the deploy set none for that dimension."""
+ 
+     cpu_cores: float | None
+     memory_bytes: int | None
+     disk_bytes: int
++    cpu_max: float = 0.0
++    memory_max: int = NO_LIMIT
++
++    @property
++    def item_cpu_ceiling(self) -> float | None:
++        """The most cpu one item of this App may be given: the deploy's `max`
++        when it set one, otherwise the App's own size — so a deploy with no
++        `max` keeps the rule it had, an item may only go below its App (D2).
++        None when nothing caps it (`cpu_cores` is never 0: `_pick_cpu`)."""
++        return self.cpu_max or self.cpu_cores
++
++    @property
++    def item_memory_ceiling(self) -> int | None:
++        """`item_cpu_ceiling` for memory. None when nothing caps it — never 0,
++        which is how a size spells "unbounded" (`"max"` / `"0"`) and which the
++        panel would otherwise print as 「最多 0 B」 (review round 1)."""
++        return self.memory_max or self.memory_bytes or None
++
++
++@dataclass(frozen=True)
++class ResolvedSize:
++    """How big one item's sandbox will be, and why — what `_resolved_for`
++    answers. Named fields rather than a tuple: two `str | None` and two ceilings
++    side by side are exactly what a positional unpack swaps without a type
++    error.
++
++    `cpu_bound_by` / `memory_bound_by` say which limit held a stated size down
++    (`"app"`, `"quota"`, or None). `cpu_ceiling` / `memory_ceiling` are the most
++    this item may be given before anyone types anything — the App's
++    `item_*_ceiling` (plan-item-size-ceiling D3, D5); None = no ceiling."""
++
++    spec: SandboxSpec
++    cpu_bound_by: str | None
++    memory_bound_by: str | None
++    cpu_ceiling: float | None
++    memory_ceiling: int | None
+ 
+ 
+ # The dimensions a per-person cap SUMS. `count` is absent on purpose: counting
+@@ -186,6 +226,8 @@ def resolve_app_limits(manifest: AppManifest, settings: Settings) -> ResourceLim
+             per_app.default.disk,
+             settings.filestore.workspace_quota,
+         ),
++        cpu_max=per_app.max.cpu,
++        memory_max=parse_size(per_app.max.memory),
+     )
+     _enforce_ceiling(manifest.slug, limits, per_app.max)
+     return limits
+diff --git a/tests/quota/test_boot.py b/tests/quota/test_boot.py
+index cf500326..b1bb8085 100644
+--- a/tests/quota/test_boot.py
++++ b/tests/quota/test_boot.py
+@@ -68,6 +68,59 @@ def test_absent_resources_section_is_all_unset(tmp_path: Path):
+     assert s.resources == ResourceSettings()
+ 
+ 
++@pytest.mark.parametrize(
++    ("written", "read"),
++    [("max", 0.0), ('"0"', 0.0), ('""', 0.0), ('"4"', 4.0), ("4", 4.0), ("1.5", 1.5)],
++)
++def test_a_cpu_amount_is_read_as_a_number_whatever_its_spelling(
++    tmp_path: Path, written: str, read: float
++):
++    """Review round 1 (plan-item-size-ceiling D2): `per_app.max.cpu: max` reached
++    Settings as the STRING "max" — the loader converts nothing — and, once the
++    max became an item's ceiling, `min(2.0, "max")` raised on every sized item.
++    `""` / `"0"` / `"max"` mean "not set" for cpu (the backend's default) —
++    unlike a size, where `"0"` / `"max"` mean unbounded."""
++    cfg = tmp_path / "config.yaml"
++    cfg.write_text(
++        "resources:\n  per_app:\n"
++        f"    default:\n      cpu: {written}\n"
++        f"    max:\n      cpu: {written}\n",
++        encoding="utf-8",
++    )
++    s = load(config_path=cfg, env={})
++    assert s.resources.per_app.default.cpu == read
++    assert s.resources.per_app.max.cpu == read
++
++
++@pytest.mark.parametrize("bad", ["four", "nan", "inf", "-1", "true", "[2]", "{a: 1}"])
++def test_a_cpu_amount_that_is_not_a_number_of_cores_fails_the_boot(tmp_path: Path, bad: str):
++    """Loud, naming the key — the way `parse_size` treats a size it cannot read.
++    Round 2: `nan` made the cap a silent no-op (`min(2.0, nan)` is 2.0), `inf`
++    printed 「最多 inf 核」, `-1` clamped every item to -1 cores, `true` was 1 core,
++    and a list raised a bare TypeError naming nothing."""
++    cfg = tmp_path / "config.yaml"
++    cfg.write_text(f"resources:\n  per_app:\n    max:\n      cpu: {bad}\n", encoding="utf-8")
++    with pytest.raises(ValueError, match=r"per_app\.max\.cpu"):
++        load(config_path=cfg, env={})
++
++
++@pytest.mark.parametrize(("written", "read"), [("max", 0.0), ('"2"', 2.0), ("2", 2.0)])
++def test_a_persons_cpu_budget_is_read_as_a_number_too(tmp_path: Path, written: str, read: float):
++    """Round 2: the sibling key. `per_user.cpu` reached the clamp as a string
++    (an env-interpolated `${C}` always is one), and `min(2.0, "2")` raised on
++    every sized item — the same class as `per_app.max.cpu`, left unswept."""
++    cfg = tmp_path / "config.yaml"
++    cfg.write_text(f"resources:\n  per_user:\n    cpu: {written}\n", encoding="utf-8")
++    assert load(config_path=cfg, env={}).resources.per_user.cpu == read
++
++
++def test_a_persons_cpu_budget_that_is_not_a_number_fails_the_boot(tmp_path: Path):
++    cfg = tmp_path / "config.yaml"
++    cfg.write_text("resources:\n  per_user:\n    cpu: lots\n", encoding="utf-8")
++    with pytest.raises(ValueError, match=r"per_user\.cpu"):
++        load(config_path=cfg, env={})
++
++
+ def test_unknown_key_under_resources_is_rejected(tmp_path: Path):
+     """The loader validates against a whitelist — a typo must fail the boot, not
+     be quietly ignored (`per_user.disc` would otherwise read as no quota)."""
+diff --git a/tests/quota/test_item_resources.py b/tests/quota/test_item_resources.py
+index 9bb2d576..79ced1b5 100644
+--- a/tests/quota/test_item_resources.py
++++ b/tests/quota/test_item_resources.py
+@@ -822,6 +822,81 @@ def test_a_stated_size_cannot_exceed_the_apps_ceiling():
+         assert sandbox.specs[-1].cpu_cores == 4.0, "the App's ceiling binds a stated value too"
+ 
+ 
++def _reported_deploy() -> dict[str, ResourceLimits]:
++    """The deploy that was reported (2026-10-16): every App 1 core / 512M by
++    default, `per_app.max` 4 cores / 4G — resolved the way boot resolves it, so
++    the test walks the same path the config does, not a hand-built limits row."""
++    from workspace_app.apps.manifest import load_app_manifest
++    from workspace_app.config.schema import (
++        PerAppResources,
++        ResourceAmounts,
++        ResourceSettings,
++        Settings,
++    )
++    from workspace_app.quota.limits import resolve_app_limits
++
++    settings = Settings(
++        resources=ResourceSettings(
++            per_app=PerAppResources(
++                default=ResourceAmounts(cpu=1, memory="512M"),
++                max=ResourceAmounts(cpu=4, memory="4G"),
++            )
++        )
++    )
++    return {"rca": resolve_app_limits(load_app_manifest("rca"), settings)}
++
++
++def test_one_item_may_be_given_more_than_the_default_up_to_the_deploys_max():
++    """「我只是要調到 2 2gb」 (plan-item-size-ceiling D1). With default 1 / 512M
++    and max 4 / 4G, setting one item to 2 cores / 2G built a 1 / 512M sandbox:
++    the item's ceiling was the App's size, which for an App stating nothing is
++    the default."""
++    with _app(PerUserResources(), app_resources=_reported_deploy()) as (client, spec, sandbox):
++        item = _mk(spec, "alice", cpu=2.0, memory=2 * 1024**3)
++        _wake(client, item)
++
++        assert (sandbox.specs[-1].cpu_cores, sandbox.specs[-1].memory_bytes) == (2.0, 2 * 1024**3)
++
++
++def test_an_item_unset_still_starts_at_the_default():
++    """`max` is where an item MAY go, not where it goes."""
++    with _app(PerUserResources(), app_resources=_reported_deploy()) as (client, spec, sandbox):
++        item = _mk(spec, "alice")
++        _wake(client, item)
++
++        assert (sandbox.specs[-1].cpu_cores, sandbox.specs[-1].memory_bytes) == (1.0, 512 * 1024**2)
++
++
++def test_above_the_deploys_max_is_held_at_the_max_and_says_the_app_held_it():
++    with _app(PerUserResources(), app_resources=_reported_deploy()) as (client, spec, sandbox):
++        item = _mk(spec, "alice", cpu=16.0, memory=64 * 1024**3)
++        _wake(client, item)
++        body = client.get(f"/a/rca/items/{item}/environment").json()
++
++        assert (sandbox.specs[-1].cpu_cores, sandbox.specs[-1].memory_bytes) == (4.0, 4 * 1024**3)
++        assert (body["cpu_bound_by"], body["memory_bound_by"]) == ("app", "app")
++
++
++def test_the_environment_says_how_far_an_item_may_go_before_anything_is_typed():
++    """D3: the panel states the range up front (NN/g error prevention), so the
++    route hands over the same ceiling the clamp uses."""
++    with _app(PerUserResources(), app_resources=_reported_deploy()) as (client, spec, _sandbox):
++        item = _mk(spec, "alice")
++        body = client.get(f"/a/rca/items/{item}/environment").json()
++
++        assert body["cpu_ceiling"] == 4.0
++        assert body["memory_ceiling"] == 4 * 1024**3
++
++
++def test_with_no_ceiling_anywhere_the_environment_states_none():
++    """D3: no line at all rather than 「無上限」."""
++    with _app(PerUserResources(), app_resources={"rca": UNDECLARED}) as (client, spec, _sandbox):
++        item = _mk(spec, "alice")
++        body = client.get(f"/a/rca/items/{item}/environment").json()
++
++        assert (body["cpu_ceiling"], body["memory_ceiling"]) == (None, None)
++
++
+ def test_memory_cannot_exceed_the_apps_ceiling_either():
+     """Its own condition. cpu standing in for memory is how P1 nearly shipped a
+     clamp that only worked in one dimension."""
+diff --git a/tests/quota/test_limits.py b/tests/quota/test_limits.py
+index a3d0d480..07bd2410 100644
+--- a/tests/quota/test_limits.py
++++ b/tests/quota/test_limits.py
+@@ -209,6 +209,64 @@ def test_at_the_ceiling_is_allowed():
+     assert resolve_app_limits(_manifest(cpu=2), settings).cpu_cores == 2
+ 
+ 
++def _default_and_max(**max_amounts: object) -> Settings:
++    """The reported deploy: every App 1 core / 512M by default, `max` as given."""
++    return Settings(
++        resources=ResourceSettings(
++            per_app=PerAppResources(
++                default=ResourceAmounts(cpu=1, memory="512M"),
++                max=ResourceAmounts(**max_amounts),  # ty: ignore[invalid-argument-type]
++            )
++        )
++    )
++
++
++def test_an_items_size_may_go_up_to_the_deploys_max_not_just_the_apps_default():
++    """plan-item-size-ceiling D1: `per_app.default` is the size an item STARTS
++    at, `per_app.max` the most it may be given. Before, the item's ceiling was
++    the App's resolved value — which, for an App stating nothing, IS the
++    default — so a deploy of default 1 / 512M, max 4 / 4G could never give one
++    item 2 / 2G: `max` reached no item at all."""
++    got = resolve_app_limits(_manifest(), _default_and_max(cpu=4, memory="4G"))
++
++    assert (got.cpu_cores, got.memory_bytes) == (1, 512 * 1024**2), "still the default size"
++    assert got.item_cpu_ceiling == 4
++    assert got.item_memory_ceiling == 4 * 1024**3
++
++
++def test_without_a_max_an_items_ceiling_stays_the_apps_value():
++    """D2: a deploy that set no `max` keeps today's rule — an item may only go
++    below its App — rather than an upgrade quietly lifting every limit."""
++    got = resolve_app_limits(_manifest(), _default_and_max())
++
++    assert got.item_cpu_ceiling == 1
++    assert got.item_memory_ceiling == 512 * 1024**2
++
++
++def test_the_items_ceiling_falls_back_per_dimension():
++    """A `max` stated for cpu alone lifts cpu alone."""
++    got = resolve_app_limits(_manifest(), _default_and_max(cpu=4))
++
++    assert got.item_cpu_ceiling == 4
++    assert got.item_memory_ceiling == 512 * 1024**2
++
++
++@pytest.mark.parametrize("unbounded", ["max", "0"])
++def test_an_app_stated_unbounded_has_no_item_ceiling_not_a_zero_one(unbounded):
++    """Review round 1: `"max"` / `"0"` resolve to 0 bytes — "no limit" — and the
++    ceiling handed that 0 straight on, so the panel said 「這個 App 最多 0 B」
++    where D3 says no line at all. None is how "nothing caps it" is spelled."""
++    settings = Settings(
++        resources=ResourceSettings(
++            per_app=PerAppResources(default=ResourceAmounts(memory=unbounded))
++        )
++    )
++    got = resolve_app_limits(_manifest(), settings)
++
++    assert got.memory_bytes == 0, "the App is stated unbounded"
++    assert got.item_memory_ceiling is None
++
++
+ def test_the_error_names_the_offending_app():
+     """The message has to say WHICH app.json is wrong, or an operator staring at
+     a failed boot is left bisecting their own repo."""
+diff --git a/web/src/api/itemEnvironment.test.ts b/web/src/api/itemEnvironment.test.ts
+index 10c4ef55..acba35b4 100644
+--- a/web/src/api/itemEnvironment.test.ts
++++ b/web/src/api/itemEnvironment.test.ts
+@@ -83,6 +83,31 @@ describe("itemEnvironmentApi.get", () => {
+     expect(got.maxMemoryBytes).toBe(3 * 1024 ** 3);
+   });
+ 
++  it("carries how far THIS item may go, and null where nothing caps it (plan-item-size-ceiling D5)", async () => {
++    vi.mocked(fetch).mockResolvedValueOnce(
++      ok({
++        running: false,
++        stated_cpu_cores: null,
++        stated_memory_bytes: null,
++        effective_cpu_cores: 1,
++        effective_memory_bytes: 512 * 1024 ** 2,
++        max_cpu_cores: 1024,
++        max_memory_bytes: 1024 ** 5,
++        cpu_ceiling: 4,
++        memory_ceiling: 4 * 1024 ** 3,
++      }),
++    );
++    const got = await itemEnvironmentApi.get("rca", "item-1");
++    expect([got.cpuCeiling, got.memoryCeiling]).toEqual([4, 4 * 1024 ** 3]);
++
++    // An older API pod mid-rollout sends neither: read as no line, not as 0.
++    vi.mocked(fetch).mockResolvedValueOnce(
++      ok({ running: false, stated_cpu_cores: null, stated_memory_bytes: null, effective_cpu_cores: 1, effective_memory_bytes: null }),
++    );
++    const older = await itemEnvironmentApi.get("rca", "item-1");
++    expect([older.cpuCeiling, older.memoryCeiling]).toEqual([null, null]);
++  });
++
+   it("throws on a refusal instead of resolving with nothing", async () => {
+     // The failure `myResources.closeEnvironment` was fixed for: a swallowed
+     // status resolves exactly like a success, and the panel renders an empty
+diff --git a/web/src/api/itemEnvironment.ts b/web/src/api/itemEnvironment.ts
+index de39351f..0d475e79 100644
+--- a/web/src/api/itemEnvironment.ts
++++ b/web/src/api/itemEnvironment.ts
+@@ -9,7 +9,7 @@
+  * whole working set to explain one refusal.
+  *
+  * `stated` and `effective` are kept apart all the way to the UI. They differ
+- * whenever somebody asked for more than the App's ceiling or their own budget
++ * whenever somebody asked for more than the item ceiling or their own budget
+  * allows, and showing only one of them is a choice between a panel that
+  * disagrees with what the person typed and one that lies about what runs.
+  */
+@@ -22,10 +22,10 @@ export type ItemEnvironment = {
+    *  replica took the request, so an absent item may simply be on another pod. */
+   running: boolean;
+   /** What somebody set. `null` = nobody has, and the size resolves fresh from
+-   *  `min(App ceiling, owner budget)` every time it is asked. */
++   *  `min(App size, owner budget)` every time it is asked. */
+   statedCpuCores: number | null;
+   statedMemoryBytes: number | null;
+-  /** What will actually be applied, once the App's ceiling and the owner's
++  /** What will actually be applied, once the item ceiling and the owner's
+    *  budget have both had their say. */
+   effectiveCpuCores: number | null;
+   effectiveMemoryBytes: number | null;
+@@ -48,6 +48,13 @@ export type ItemEnvironment = {
+    *  after the server moved. */
+   maxCpuCores: number;
+   maxMemoryBytes: number;
++  /** The most THIS item may be given — the deploy's `per_app.max`, or the
++   *  App's size where none was set — so the panel can say it before anything
++   *  is typed (plan-item-size-ceiling D3, D5). Not `max*` above: those are
++   *  what the server refuses outright; this is what a stated size is held to.
++   *  `null` = nothing caps it, and the panel draws no line. */
++  cpuCeiling: number | null;
++  memoryCeiling: number | null;
+ };
+ 
+ /** A size to store. `null` in either dimension CLEARS it — which is not zero,
+@@ -71,6 +78,8 @@ type Wire = {
+   memory_bound_by: "app" | "quota" | null;
+   max_cpu_cores: number;
+   max_memory_bytes: number;
++  cpu_ceiling?: number | null;
++  memory_ceiling?: number | null;
+ };
+ 
+ export type ItemEnvironmentApi = {
+@@ -101,6 +110,9 @@ export const itemEnvironmentApi: ItemEnvironmentApi = {
+       memoryBoundBy: w.memory_bound_by ?? null,
+       maxCpuCores: w.max_cpu_cores,
+       maxMemoryBytes: w.max_memory_bytes,
++      // `??`: an API pod from before the field sends nothing — no line, not 0.
++      cpuCeiling: w.cpu_ceiling ?? null,
++      memoryCeiling: w.memory_ceiling ?? null,
+     };
+   },
+   async setSize(slug, itemId, size) {
+diff --git a/web/src/components/ItemEnvironmentPanel.test.tsx b/web/src/components/ItemEnvironmentPanel.test.tsx
+index eb8470f2..8f7639b5 100644
+--- a/web/src/components/ItemEnvironmentPanel.test.tsx
++++ b/web/src/components/ItemEnvironmentPanel.test.tsx
+@@ -39,6 +39,9 @@ const IDLE = {
+   // The server's hard ceilings, carried on the record (#830).
+   maxCpuCores: 1024,
+   maxMemoryBytes: 1024 ** 5,
++  // How far THIS item may go (plan-item-size-ceiling D5); null = no line.
++  cpuCeiling: null,
++  memoryCeiling: null,
+ };
+ 
+ const BUDGET = { cpu: 4, memoryBytes: 8 * 1024 ** 3, cpuInUse: 2, memoryInUse: 2 * 1024 ** 3 };
+@@ -245,6 +248,109 @@ describe("the memory half explains itself too", () => {
+   });
+ });
+ 
++describe("how far it may go is said before anything is typed (plan-item-size-ceiling D3)", () => {
++  it("states each dimension's ceiling under its field", () => {
++    render(
++      <ItemEnvironmentPanel
++        draft={DRAFT}
++        onDraft={noop}
++        env={{ ...IDLE, cpuCeiling: 4, memoryCeiling: 4 * 1024 ** 3 }}
++        budget={BUDGET}
++        canEdit
++      />,
++    );
++
++    expect(screen.getByTestId("cpu-ceiling").textContent).toBe("這個 App 最多 4 核");
++    expect(screen.getByTestId("memory-ceiling").textContent).toBe("這個 App 最多 4.0 GB");
++  });
++
++  it("draws no line for a dimension nothing caps — never 「無上限」", () => {
++    render(
++      <ItemEnvironmentPanel
++        draft={DRAFT}
++        onDraft={noop}
++        env={{ ...IDLE, cpuCeiling: 4, memoryCeiling: null }}
++        budget={BUDGET}
++        canEdit
++      />,
++    );
++
++    expect(screen.getByTestId("cpu-ceiling")).toBeTruthy();
++    expect(screen.queryByTestId("memory-ceiling")).toBeNull();
++  });
++
++  it("draws no line that the size in effect already contradicts (review round 1, F2)", () => {
++    // A deploy with `max` but no default: an item nobody sized runs at the
++    // backend's own default, here above the ceiling. 「最多 4 核」 beside a
++    // running 8 would be false — so no line, until someone sets a size.
++    render(
++      <ItemEnvironmentPanel
++        draft={DRAFT}
++        onDraft={noop}
++        env={{
++          ...IDLE,
++          effectiveCpuCores: null,
++          enforcedCpuCores: 8,
++          cpuCeiling: 4,
++          effectiveMemoryBytes: null,
++          enforcedMemoryBytes: 8 * 1024 ** 3,
++          memoryCeiling: 4 * 1024 ** 3,
++        }}
++        budget={BUDGET}
++        canEdit
++      />,
++    );
++
++    expect(screen.queryByTestId("cpu-ceiling")).toBeNull();
++    expect(screen.queryByTestId("memory-ceiling")).toBeNull();
++  });
++
++  it("treats an unbounded size in effect (0) as above any ceiling — no line (review round 2)", () => {
++    // An App whose memory resolves to unbounded ("max" / "0") under a deploy
++    // `max` of 4G: nobody sized the item, it runs uncapped, and 「最多 4.0 GB」
++    // would claim a cap the environment does not have.
++    render(
++      <ItemEnvironmentPanel
++        draft={DRAFT}
++        onDraft={noop}
++        env={{ ...IDLE, effectiveMemoryBytes: 0, enforcedMemoryBytes: 0, memoryCeiling: 4 * 1024 ** 3 }}
++        budget={BUDGET}
++        canEdit
++      />,
++    );
++
++    expect(screen.queryByTestId("memory-ceiling")).toBeNull();
++  });
++
++  it("still draws the line once someone has set a size — the ceiling holds THAT", () => {
++    render(
++      <ItemEnvironmentPanel
++        draft={DRAFT}
++        onDraft={noop}
++        env={{ ...IDLE, statedCpuCores: 6, effectiveCpuCores: 4, enforcedCpuCores: 4, cpuCeiling: 4 }}
++        budget={BUDGET}
++        canEdit
++      />,
++    );
++
++    expect(screen.getByTestId("cpu-ceiling")).toBeTruthy();
++  });
++
++  it("draws no line where there is no dial to set — the backend applies no ceiling", () => {
++    render(
++      <ItemEnvironmentPanel
++        draft={DRAFT}
++        onDraft={noop}
++        env={{ ...IDLE, enforcedCpuCores: null, cpuCeiling: 4 }}
++        budget={BUDGET}
++        canEdit
++      />,
++    );
++
++    expect(screen.queryByTestId("cpu-ceiling")).toBeNull();
++  });
++});
++
+ describe("the shapes it borrows", () => {
+   it("draws the owner's totals as TWO named tiles — CPU and memory — with the right figures", () => {
+     render(<ItemEnvironmentPanel draft={DRAFT} onDraft={noop} env={IDLE} budget={BUDGET} canEdit />);
+diff --git a/web/src/components/ItemEnvironmentPanel.tsx b/web/src/components/ItemEnvironmentPanel.tsx
+index 6cc1111e..cbd109a0 100644
+--- a/web/src/components/ItemEnvironmentPanel.tsx
++++ b/web/src/components/ItemEnvironmentPanel.tsx
+@@ -93,6 +93,21 @@ export function ItemEnvironmentPanel({
+   const memEnforced = env.enforcedMemoryBytes !== null;
+   const memClamped = memStated !== null && memEffective !== null && memEffective < memStated;
+ 
++  // 「這個 App 最多 X」 (plan-item-size-ceiling D3) — beside a dial only, never
++  // for a dimension nothing caps, and never where the size in effect already
++  // says otherwise: an item nobody sized on a deploy with `max` but no default
++  // runs at the BACKEND's own default, which may be above the ceiling, and
++  // 「最多 4」 beside a running 8 is false (review round 1, F2). A stated size
++  // cannot get there — the server holds it to the ceiling — so the applied
++  // figure alone decides. An applied 0 is "unbounded" (an App stated `"max"` /
++  // `"0"`), which is above any ceiling (review round 2).
++  const ceilingLine = (enforced: boolean, applied: number | null, ceiling: number | null) =>
++    enforced && ceiling !== null && !(applied !== null && (applied === 0 || applied > ceiling));
++  const cpuCeiling = env.cpuCeiling;
++  const memCeiling = env.memoryCeiling;
++  const showCpuCeiling = ceilingLine(cpuEnforced, env.enforcedCpuCores, cpuCeiling);
++  const showMemCeiling = ceilingLine(memEnforced, env.enforcedMemoryBytes, memCeiling);
++
+   const cores = (n: number) =>
+     t(n === 1 ? "resources.live.cores_one" : "resources.live.cores", { n });
+ 
+@@ -181,6 +196,13 @@ export function ItemEnvironmentPanel({
+                   </>
+                 )}
+               </p>
++              {/* How far it may go, said before anything is typed — the server's
++                  own ceiling (plan-item-size-ceiling D3); when, see `ceilingLine`. */}
++              {showCpuCeiling && cpuCeiling !== null ? (
++                <p data-testid="cpu-ceiling" className="detail env-field__note">
++                  {t("itemenv.size.ceiling", { value: cores(cpuCeiling) })}
++                </p>
++              ) : null}
+               {fault.cpu !== null ? (
+                 <p id="itemenv-cpu-hint" data-testid="cpu-hint" className="detail env-field__note env-field__note--invalid">
+                   {/* One key per fault type; the fault's `detail` (the
+@@ -246,6 +268,11 @@ export function ItemEnvironmentPanel({
+                   </>
+                 )}
+               </p>
++              {showMemCeiling && memCeiling !== null ? (
++                <p data-testid="memory-ceiling" className="detail env-field__note">
++                  {t("itemenv.size.ceiling", { value: formatBytes(memCeiling) })}
++                </p>
++              ) : null}
+               {fault.memory !== null ? (
+                 <p id="itemenv-memory-hint" data-testid="memory-hint" className="detail env-field__note env-field__note--invalid">
+                   {t(
+diff --git a/web/src/components/QuotaHoldingList.tsx b/web/src/components/QuotaHoldingList.tsx
+index aba23010..063df19c 100644
+--- a/web/src/components/QuotaHoldingList.tsx
++++ b/web/src/components/QuotaHoldingList.tsx
+@@ -4,7 +4,7 @@
+  * The existing wording points at `/my-resources`, which is a page the person has
+  * to notice, navigate to, act on, and navigate back from — acceptable while
+  * hitting the limit was exceptional. It is not, since an item defaults to its
+- * App's ceiling: the wall is now an ordinary part of using the product, so its
++ * App's size: the wall is now an ordinary part of using the product, so its
+  * exit belongs where the refusal is.
+  *
+  * Renders NOTHING for an empty list, and empty has three innocent causes: the
+diff --git a/web/src/lib/i18n.tsx b/web/src/lib/i18n.tsx
+index df4b8161..71b8e2bd 100644
+--- a/web/src/lib/i18n.tsx
++++ b/web/src/lib/i18n.tsx
+@@ -1258,6 +1258,8 @@ export const messages = {
+   "itemenv.size.default": { "zh-TW": "預設（依你目前的額度）", en: "Default (from your current quota)" },
+   "itemenv.size.stated": { "zh-TW": "你設定的", en: "Set by you" },
+   "itemenv.size.reset": { "zh-TW": "回到預設", en: "Back to default" },
++  // plan-item-size-ceiling D3: said before anything is typed, not after Save.
++  "itemenv.size.ceiling": { "zh-TW": "這個 App 最多 {value}", en: "This App allows up to {value}" },
+   // Both numbers, and which limit bound — never the smaller one alone.
+   "itemenv.size.clamped.quota": {
+     "zh-TW": "你設定 {stated}，實際生效 {effective}（受你的額度限制）",
+diff --git a/web/src/lib/quotaHolding.test.ts b/web/src/lib/quotaHolding.test.ts
+index 2cdceb96..c5028485 100644
+--- a/web/src/lib/quotaHolding.test.ts
++++ b/web/src/lib/quotaHolding.test.ts
+@@ -1,7 +1,7 @@
+ /**
+  * What a refusal offers to do about itself.
+  *
+- * Defaulting an item to its App's ceiling made hitting the limit ordinary
++ * Defaulting an item to its App's size made hitting the limit ordinary
+  * rather than exceptional, so the refusal is not an error path — it is the
+  * feature's normal moment. Being told "you are full" and left to work out who
+  * is holding it, on a page you have to know exists, turns that moment into a
+diff --git a/web/src/lib/quotaHolding.ts b/web/src/lib/quotaHolding.ts
+index 2647232d..f01b8637 100644
+--- a/web/src/lib/quotaHolding.ts
++++ b/web/src/lib/quotaHolding.ts
+@@ -5,7 +5,7 @@
+  * only useful thing to tell someone is what to close and how much it buys
+  * back". The numbers answered the second half; this is the first.
+  *
+- * It matters more since items default to their App's ceiling: hitting the limit
++ * It matters more since items default to their App's size: hitting the limit
+  * became ordinary rather than exceptional, so this is not an error path, it is
+  * the feature's normal moment. Being told you are full and left to find the
+  * right page turns that moment into a dead end.
