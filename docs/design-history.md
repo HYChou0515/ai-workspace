@@ -103,6 +103,7 @@
 | [plan-sandbox-sot.md](plan-sandbox-sot.md) | sandbox 真相來源（source-of-truth）設計 |
 | [plan-sandbox-resource-quota.md](plan-sandbox-resource-quota.md) | 依 App 設定 sandbox 資源（cpu/memory/disk）+ 每人跨 App 總量上限；債務人是 item 的 `owner`（前提見 #687） |
 | [plan-item-sandbox-resources.md](plan-item-sandbox-resources.md) | 每個 item 自己決定環境開多大（使用者可調、由 owner 的額度支出）；狀態／用量／關閉搬到 item 頁面；閘門是 `change_permission` |
+| [plan-item-size-ceiling.md](plan-item-size-ceiling.md) | 一個 item 可以調到部署的 `resources.per_app.max`：App 的值（app.json 或 `per_app.default`）改當預設大小、`max` 才是 item 的天花板，沒設 `max` 的維度維持舊規則；面板在輸入前寫出「這個 App 最多 X」（推翻 plan-item-sandbox-resources 的「item 的天花板是 App 的值」） |
 | [plan-llm-failover.md](plan-llm-failover.md) | LLM failover / 多供應商備援 |
 | [plan-friendly-errors.md](plan-friendly-errors.md) | 錯誤要說人話：發生什麼、怎麼辦、原文收合在技術細節；重試只在單次 LLM 呼叫 |
 | [plan-sanity-checks.md](plan-sanity-checks.md) | 開機健康檢查 / sanity matrix |
