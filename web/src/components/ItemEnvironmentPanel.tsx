@@ -181,6 +181,15 @@ export function ItemEnvironmentPanel({
                   </>
                 )}
               </p>
+              {/* How far it may go, said before anything is typed — the server's
+                  own ceiling (plan-item-size-ceiling D3). Only beside a dial:
+                  where the backend applies none there is nothing to set. No
+                  ceiling → no line, never 「無上限」. */}
+              {cpuEnforced && env.cpuCeiling !== null ? (
+                <p data-testid="cpu-ceiling" className="detail env-field__note">
+                  {t("itemenv.size.ceiling", { value: cores(env.cpuCeiling) })}
+                </p>
+              ) : null}
               {fault.cpu !== null ? (
                 <p id="itemenv-cpu-hint" data-testid="cpu-hint" className="detail env-field__note env-field__note--invalid">
                   {/* One key per fault type; the fault's `detail` (the
@@ -246,6 +255,11 @@ export function ItemEnvironmentPanel({
                   </>
                 )}
               </p>
+              {memEnforced && env.memoryCeiling !== null ? (
+                <p data-testid="memory-ceiling" className="detail env-field__note">
+                  {t("itemenv.size.ceiling", { value: formatBytes(env.memoryCeiling) })}
+                </p>
+              ) : null}
               {fault.memory !== null ? (
                 <p id="itemenv-memory-hint" data-testid="memory-hint" className="detail env-field__note env-field__note--invalid">
                   {t(

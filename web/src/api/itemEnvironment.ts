@@ -48,6 +48,13 @@ export type ItemEnvironment = {
    *  after the server moved. */
   maxCpuCores: number;
   maxMemoryBytes: number;
+  /** The most THIS item may be given — the deploy's `per_app.max`, or the
+   *  App's size where none was set — so the panel can say it before anything
+   *  is typed (plan-item-size-ceiling D3, D5). Not `max*` above: those are
+   *  what the server refuses outright; this is what a stated size is held to.
+   *  `null` = nothing caps it, and the panel draws no line. */
+  cpuCeiling: number | null;
+  memoryCeiling: number | null;
 };
 
 /** A size to store. `null` in either dimension CLEARS it — which is not zero,
@@ -71,6 +78,8 @@ type Wire = {
   memory_bound_by: "app" | "quota" | null;
   max_cpu_cores: number;
   max_memory_bytes: number;
+  cpu_ceiling?: number | null;
+  memory_ceiling?: number | null;
 };
 
 export type ItemEnvironmentApi = {
@@ -101,6 +110,9 @@ export const itemEnvironmentApi: ItemEnvironmentApi = {
       memoryBoundBy: w.memory_bound_by ?? null,
       maxCpuCores: w.max_cpu_cores,
       maxMemoryBytes: w.max_memory_bytes,
+      // `??`: an API pod from before the field sends nothing — no line, not 0.
+      cpuCeiling: w.cpu_ceiling ?? null,
+      memoryCeiling: w.memory_ceiling ?? null,
     };
   },
   async setSize(slug, itemId, size) {

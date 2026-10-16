@@ -39,6 +39,9 @@ const IDLE = {
   // The server's hard ceilings, carried on the record (#830).
   maxCpuCores: 1024,
   maxMemoryBytes: 1024 ** 5,
+  // How far THIS item may go (plan-item-size-ceiling D5); null = no line.
+  cpuCeiling: null,
+  memoryCeiling: null,
 };
 
 const BUDGET = { cpu: 4, memoryBytes: 8 * 1024 ** 3, cpuInUse: 2, memoryInUse: 2 * 1024 ** 3 };
@@ -242,6 +245,52 @@ describe("the memory half explains itself too", () => {
     );
 
     expect(screen.getByTestId("memory-clamped").textContent ?? "").toMatch(/App/);
+  });
+});
+
+describe("how far it may go is said before anything is typed (plan-item-size-ceiling D3)", () => {
+  it("states each dimension's ceiling under its field", () => {
+    render(
+      <ItemEnvironmentPanel
+        draft={DRAFT}
+        onDraft={noop}
+        env={{ ...IDLE, cpuCeiling: 4, memoryCeiling: 4 * 1024 ** 3 }}
+        budget={BUDGET}
+        canEdit
+      />,
+    );
+
+    expect(screen.getByTestId("cpu-ceiling").textContent).toBe("這個 App 最多 4 核");
+    expect(screen.getByTestId("memory-ceiling").textContent).toBe("這個 App 最多 4.0 GB");
+  });
+
+  it("draws no line for a dimension nothing caps — never 「無上限」", () => {
+    render(
+      <ItemEnvironmentPanel
+        draft={DRAFT}
+        onDraft={noop}
+        env={{ ...IDLE, cpuCeiling: 4, memoryCeiling: null }}
+        budget={BUDGET}
+        canEdit
+      />,
+    );
+
+    expect(screen.getByTestId("cpu-ceiling")).toBeTruthy();
+    expect(screen.queryByTestId("memory-ceiling")).toBeNull();
+  });
+
+  it("draws no line where there is no dial to set — the backend applies no ceiling", () => {
+    render(
+      <ItemEnvironmentPanel
+        draft={DRAFT}
+        onDraft={noop}
+        env={{ ...IDLE, enforcedCpuCores: null, cpuCeiling: 4 }}
+        budget={BUDGET}
+        canEdit
+      />,
+    );
+
+    expect(screen.queryByTestId("cpu-ceiling")).toBeNull();
   });
 });
 
