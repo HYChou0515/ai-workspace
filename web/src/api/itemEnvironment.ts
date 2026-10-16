@@ -9,7 +9,7 @@
  * whole working set to explain one refusal.
  *
  * `stated` and `effective` are kept apart all the way to the UI. They differ
- * whenever somebody asked for more than the App's ceiling or their own budget
+ * whenever somebody asked for more than the item ceiling or their own budget
  * allows, and showing only one of them is a choice between a panel that
  * disagrees with what the person typed and one that lies about what runs.
  */
@@ -25,7 +25,7 @@ export type ItemEnvironment = {
    *  `min(App size, owner budget)` every time it is asked. */
   statedCpuCores: number | null;
   statedMemoryBytes: number | null;
-  /** What will actually be applied, once the App's ceiling and the owner's
+  /** What will actually be applied, once the item ceiling and the owner's
    *  budget have both had their say. */
   effectiveCpuCores: number | null;
   effectiveMemoryBytes: number | null;

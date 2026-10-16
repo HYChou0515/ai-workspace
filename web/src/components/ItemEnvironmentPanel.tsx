@@ -99,9 +99,10 @@ export function ItemEnvironmentPanel({
   // runs at the BACKEND's own default, which may be above the ceiling, and
   // 「最多 4」 beside a running 8 is false (review round 1, F2). A stated size
   // cannot get there — the server holds it to the ceiling — so the applied
-  // figure alone decides.
+  // figure alone decides. An applied 0 is "unbounded" (an App stated `"max"` /
+  // `"0"`), which is above any ceiling (review round 2).
   const ceilingLine = (enforced: boolean, applied: number | null, ceiling: number | null) =>
-    enforced && ceiling !== null && !(applied !== null && applied > ceiling);
+    enforced && ceiling !== null && !(applied !== null && (applied === 0 || applied > ceiling));
   const cpuCeiling = env.cpuCeiling;
   const memCeiling = env.memoryCeiling;
   const showCpuCeiling = ceilingLine(cpuEnforced, env.enforcedCpuCores, cpuCeiling);

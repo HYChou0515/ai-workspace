@@ -18,6 +18,7 @@ Single entry point: ``load(config_path=None, env=None)``.
 from __future__ import annotations
 
 import dataclasses
+import math
 import os
 from collections.abc import Mapping, Sequence
 from pathlib import Path
@@ -1271,38 +1272,54 @@ def _build_resources(d: dict[str, Any]) -> ResourceSettings:
             default=_build_amounts(per_app.get("default", {}), "resources.per_app.default"),
             max=_build_amounts(per_app.get("max", {}), "resources.per_app.max"),
         ),
-        per_user=_build(PerUserResources, d.get("per_user", {})),
+        per_user=_build(
+            PerUserResources,
+            {
+                **d.get("per_user", {}),
+                "cpu": _cpu_cores(d.get("per_user", {}).get("cpu", 0), "resources.per_user"),
+            },
+        ),
         disk_reconcile_interval_sec=float(
             d.get("disk_reconcile_interval_sec", ResourceSettings().disk_reconcile_interval_sec)
         ),
     )
 
 
-def _build_amounts(d: dict[str, Any], where: str) -> ResourceAmounts:
-    """`_build(ResourceAmounts, …)` with `cpu` read as a number.
+def _cpu_cores(raw: object, where: str) -> float:
+    """A cpu amount from config.yaml, as a number of cores — the ONE reader
+    for every cpu key under `resources` (per_app default / max, per_user).
 
-    `_build` converts nothing, so `cpu: max` reached Settings as the string
-    "max" — and once `per_app.max` became an item's ceiling
-    (plan-item-size-ceiling D2), `min(2.0, "max")` raised on every sized item.
-    `""` / `"0"` / `"max"` mean "not set" (0) here as they do for sizes
-    (`parse_size`); anything else that is not a number fails the boot, naming
-    the key."""
-    raw = d.get("cpu", 0)
+    `_build` converts nothing, so `cpu: max` — or any `${VAR}`, which
+    interpolation always hands over as a string — reached Settings as a str,
+    and once `per_app.max` became an item's ceiling (plan-item-size-ceiling
+    D2), `min(2.0, "max")` raised on every sized item. `""` / `"0"` / `"max"`
+    mean "not set" (0) here as they do for sizes (`parse_size`). Anything that
+    is not a finite, non-negative number fails the boot naming the key:
+    `nan` made a cap a silent no-op, `inf` printed 「最多 inf 核」, `-1` held
+    every item to -1 cores, and a YAML `true` would have been one core."""
+    if isinstance(raw, str) and raw.strip() in ("", "0", "max"):
+        return 0.0
+    if raw is None:
+        return 0.0
+    value: float | None = None
     if isinstance(raw, str):
-        text = raw.strip()
-        if text in ("", "0", "max"):
-            cpu = 0.0
-        else:
-            try:
-                cpu = float(text)
-            except ValueError:
-                raise ValueError(
-                    f"config {where}.cpu: {raw!r} is not a number of cores "
-                    '(write e.g. 2 or 0.5; 0 / "max" = not set)'
-                ) from None
-    else:
-        cpu = float(raw or 0)
-    return _build(ResourceAmounts, {**d, "cpu": cpu})
+        try:
+            value = float(raw.strip())
+        except ValueError:
+            value = None
+    elif isinstance(raw, int | float) and not isinstance(raw, bool):
+        value = float(raw)
+    if value is None or not math.isfinite(value) or value < 0:
+        raise ValueError(
+            f"config {where}.cpu: {raw!r} is not a number of cores "
+            '(write e.g. 2 or 0.5; 0 / "max" = not set)'
+        )
+    return value
+
+
+def _build_amounts(d: dict[str, Any], where: str) -> ResourceAmounts:
+    """`_build(ResourceAmounts, …)` with `cpu` read by `_cpu_cores`."""
+    return _build(ResourceAmounts, {**d, "cpu": _cpu_cores(d.get("cpu", 0), where)})
 
 
 def _build_sandbox(d: dict[str, Any]) -> SandboxSettings:

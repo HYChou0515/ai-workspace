@@ -91,11 +91,32 @@ def test_a_cpu_amount_is_read_as_a_number_whatever_its_spelling(
     assert s.resources.per_app.max.cpu == read
 
 
-def test_a_cpu_amount_that_is_not_a_number_fails_the_boot(tmp_path: Path):
-    """Loud, naming the key — the way `parse_size` treats a size it cannot read."""
+@pytest.mark.parametrize("bad", ["four", "nan", "inf", "-1", "true", "[2]", "{a: 1}"])
+def test_a_cpu_amount_that_is_not_a_number_of_cores_fails_the_boot(tmp_path: Path, bad: str):
+    """Loud, naming the key — the way `parse_size` treats a size it cannot read.
+    Round 2: `nan` made the cap a silent no-op (`min(2.0, nan)` is 2.0), `inf`
+    printed 「最多 inf 核」, `-1` clamped every item to -1 cores, `true` was 1 core,
+    and a list raised a bare TypeError naming nothing."""
     cfg = tmp_path / "config.yaml"
-    cfg.write_text("resources:\n  per_app:\n    max:\n      cpu: four\n", encoding="utf-8")
+    cfg.write_text(f"resources:\n  per_app:\n    max:\n      cpu: {bad}\n", encoding="utf-8")
     with pytest.raises(ValueError, match=r"per_app\.max\.cpu"):
+        load(config_path=cfg, env={})
+
+
+@pytest.mark.parametrize(("written", "read"), [("max", 0.0), ('"2"', 2.0), ("2", 2.0)])
+def test_a_persons_cpu_budget_is_read_as_a_number_too(tmp_path: Path, written: str, read: float):
+    """Round 2: the sibling key. `per_user.cpu` reached the clamp as a string
+    (an env-interpolated `${C}` always is one), and `min(2.0, "2")` raised on
+    every sized item — the same class as `per_app.max.cpu`, left unswept."""
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text(f"resources:\n  per_user:\n    cpu: {written}\n", encoding="utf-8")
+    assert load(config_path=cfg, env={}).resources.per_user.cpu == read
+
+
+def test_a_persons_cpu_budget_that_is_not_a_number_fails_the_boot(tmp_path: Path):
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text("resources:\n  per_user:\n    cpu: lots\n", encoding="utf-8")
+    with pytest.raises(ValueError, match=r"per_user\.cpu"):
         load(config_path=cfg, env={})
 
 

@@ -305,6 +305,23 @@ describe("how far it may go is said before anything is typed (plan-item-size-cei
     expect(screen.queryByTestId("memory-ceiling")).toBeNull();
   });
 
+  it("treats an unbounded size in effect (0) as above any ceiling — no line (review round 2)", () => {
+    // An App whose memory resolves to unbounded ("max" / "0") under a deploy
+    // `max` of 4G: nobody sized the item, it runs uncapped, and 「最多 4.0 GB」
+    // would claim a cap the environment does not have.
+    render(
+      <ItemEnvironmentPanel
+        draft={DRAFT}
+        onDraft={noop}
+        env={{ ...IDLE, effectiveMemoryBytes: 0, enforcedMemoryBytes: 0, memoryCeiling: 4 * 1024 ** 3 }}
+        budget={BUDGET}
+        canEdit
+      />,
+    );
+
+    expect(screen.queryByTestId("memory-ceiling")).toBeNull();
+  });
+
   it("still draws the line once someone has set a size — the ceiling holds THAT", () => {
     render(
       <ItemEnvironmentPanel

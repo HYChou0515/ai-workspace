@@ -2731,7 +2731,7 @@ AI 讀 `wui` skill 時會看到「這個 item 能讓頁面問的 subagent」清�
 
 **設定** — 必要的:無。要先看一眼的(`rollout 前`):`resources.per_app.max` 的 `cpu` / `memory`。為什麼:它以前只在開機時
 檢查 App 的值有沒有超過;升級後它也是**一個 item 能調到多大**。設得比你願意給單一 item 的還大,使用者就調得到那麼大
-(仍受個人額度夾住)。沒設 `max` 的維度行為不變:item 只能調到 App 的值以下。**設了 `max` 的維度,一併設 `default`**:
+(仍受個人額度夾住)。沒設 `max` 的維度行為不變:item 只能調到 App 的值以下。**設了 `max` 的維度,一併設一個具體的 `default`**(不是 `"max"`/`"0"`——那也是「沒人調的 item 不設限」):
 沒設的話,沒人調過的 item 跑的是 sandbox 主機自己的預設(`SANDBOX_HOST_CPU_CORES` / `SANDBOX_HOST_MEMORY_MAX`),可能比 `max`
 大——面板這時不寫「這個 App 最多 X」(寫了會跟生效值矛盾),而有人把它設成比 `max` 大的值就會被夾到 `max`,比不設還小。
 

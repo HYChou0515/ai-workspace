@@ -52,3 +52,4 @@ Grilled 2026-10-16 on master `442eca8e`。每條決定標來源：**[user]** = �
 - **P3** 文件：本計畫、舊計畫標題下的推翻標記、`docs/design-history.md`、`docs/adding-an-app.md`、`docs/configuration.md` 的規則
   說明、`docs/migrations.md` 條目。
 - **P4** review 第一輪：記憶體「無上限」不畫「最多 0 B」；config 的 `cpu` 寫成 `"max"`／`"0"`／`""` 讀成「沒設」、其他非數字開機失敗；D6；升級手冊補會變小的方向、滾動更新、在跑的環境的計費；掃掉仍寫舊規則的註解。
+- **P5** review 第二輪：App 的值是「無上限」（`"max"`／`"0"`）時實際生效值 0 也算超過天花板、不畫那一行（D6 的同一條規則）；`per_user.cpu` 走同一個讀 cpu 的函式；cpu 只收有限、非負的數字（`nan`／`inf`／負數／`true`／清單一律開機失敗並寫出設定鍵）；升級手冊提醒 `default` 要給具體值。
