@@ -536,6 +536,20 @@ class _TurnReducer:
 
     produced: list[TurnMessage] = field(default_factory=list)
     _pending_tools: dict[str, ToolStart] = field(default_factory=dict)
+    #: Outputs the catalog answered, which `_map_event` has already rewritten —
+    #: the turn's own `ctx.ephemeral_outputs`, one entry per event
+    #: (`docs/plan-tool-on-demand-loading.md`). Their answer is a parameter
+    #: schema the model needs for its next step and the record must not keep:
+    #: the stored message would carry the arguments the model invented against
+    #: an empty schema (a call that never happened, with a parameter that does
+    #: not exist) and replay it into every later turn.
+    #:
+    #: Each entry is CONSUMED here, because one record answers one call. Keying
+    #: off the call id in `catalog_calls` instead silenced every later tool
+    #: message of a turn whose provider reuses ids (verify round F2). The LIVE
+    #: event still goes out — `ToolStart` precedes the tool, so suppressing the
+    #: card would rest on a race — it just leaves nothing behind.
+    ephemeral_outputs: list[str] = field(default_factory=list)
 
     def _add_assistant(self, text: str, reasoning: bool) -> None:
         last = self.produced[-1] if self.produced else None
@@ -557,6 +571,9 @@ class _TurnReducer:
             self._pending_tools[item.call_id] = item
         elif isinstance(item, ToolEnd):
             start = self._pending_tools.pop(item.call_id, None)
+            if item.call_id in self.ephemeral_outputs:
+                self.ephemeral_outputs.remove(item.call_id)
+                return
             self.produced.append(
                 TurnMessage(
                     role="tool",
@@ -1678,7 +1695,7 @@ class ChatTurnEngine:
         interrupted_by: Callable[[], str] | None = None,
     ) -> None:
         """`_run_turn`'s body, inside the turn's usage scope."""
-        reducer = _TurnReducer(produced=places)
+        reducer = _TurnReducer(produced=places, ephemeral_outputs=ctx.ephemeral_outputs)
         cancelled: RunCancelled | None = None
         try:
             # Warm the sandbox as the turn begins (best-effort), so the cold
@@ -2057,7 +2074,7 @@ class ChatTurnEngine:
             logger.info("turns: stream turn started for %s (epoch %d)", key, my_epoch)
 
         async def gen() -> AsyncIterator[str]:
-            reducer = _TurnReducer()
+            reducer = _TurnReducer(ephemeral_outputs=ctx.ephemeral_outputs)
             finished = False
             try:
                 while True:

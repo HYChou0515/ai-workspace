@@ -42,6 +42,7 @@
 | [plan-ext-ai.md](plan-ext-ai.md) | 問外部AI：AI 起草問題、人按「問外部AI」，小幫手在使用者的 Chrome 裡打開公司的網頁 AI、貼上、送出、等回答寫完帶回；網頁怎麼操作由公司寫的一個 Python 檔決定，打包進小幫手 |
 | [plan-tool-usage-stats.md](plan-tool-usage-stats.md) | 工具使用統計：管理者在 Diagnostics 看 AI 用了哪些工具、誰用、在哪個場合、失敗幾次、平均多久 |
 | [plan-tools-picker-groups.md](plan-tools-picker-groups.md) | 工具挑選器依套件摺疊、內建工具一組、每組三態 |
+| [plan-tool-on-demand-loading.md](plan-tool-on-demand-loading.md) | 工具按需載入：wire 的 tools 陣列就是目錄（名字＋100 字元描述＋空 schema），用到才載入完整 schema；載入與重試不入歷史 |
 | [plan-user-env-exec-injection.md](plan-user-env-exec-injection.md) | 使用者環境變數改由 exec 注入（取代 `.userenv` 檔） |
 | [plan-view-plugins-pr5-finish.md](plan-view-plugins-pr5-finish.md) | #847 / #848 在 #855 分支上的收尾（PR5） |
 | [plan-marking-tuples.md](plan-marking-tuples.md) | #861 marking 記住選到的整組 key（D1–D6） |
