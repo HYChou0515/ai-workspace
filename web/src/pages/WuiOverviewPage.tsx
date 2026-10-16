@@ -32,6 +32,7 @@ import { useBreadcrumbs } from "../hooks/breadcrumbs";
 import { useCurrentUserState } from "../hooks/useCurrentUser";
 import { useUser } from "../hooks/useUsers";
 import { useT } from "../lib/i18n";
+import { pageReach } from "../lib/pageReach";
 import { useApps } from "../hooks/useResources";
 import { appTagPalette, pageColour } from "../lib/appColor";
 import { pxToRem } from "../lib/pxToRem";
@@ -470,9 +471,22 @@ function PageDetail({
     who: deployer.name,
     when: relativeTime(new Date(page.deployed_at).toISOString()),
   });
-  const sentence = withOwner ? `${item} · ${owner.name} · ${by}` : `${item} · ${by}`;
+  const reach = useReachNote(page);
+  const said = withOwner ? `${item} · ${owner.name} · ${by}` : `${item} · ${by}`;
+  const sentence = reach ? `${t(reach)} · ${said}` : said;
   return (
     <span className="detail" title={sentence}>
+      {/* FIRST, so the line's ellipsis never cuts it: who the link opens for
+          is the one part of this line someone acts on before handing the
+          link out (docs/plan-deploy-reach.md decision 6). */}
+      {reach ? (
+        <>
+          <span className="reach" title={t(`${reach}.tip`)}>
+            {t(reach)}
+          </span>
+          {" · "}
+        </>
+      ) : null}
       {withApp ? (
         <>
           <AppTag slug={page.slug} />{" "}
@@ -494,6 +508,22 @@ function PageDetail({
       <span title={exactTime(new Date(page.deployed_at).toISOString())}>{by}</span>
     </span>
   );
+}
+
+/** Who a page's link opens for, as the overview says it — nothing for a page
+ * open to everyone (no one needs telling) or one whose access this build
+ * cannot read (never a guess). "You" only once the viewer is KNOWN to be the
+ * owner: before the identity settles, the placeholder id would make the
+ * viewer's own page read "only the owner" — so it says nothing yet. */
+function useReachNote(
+  page: DeployedWui,
+): "wui.reach.you" | "wui.reach.owner" | "wui.reach.shared" | null {
+  const me = useCurrentUserState();
+  const reach = pageReach(page.item_permission);
+  if (reach === "shared") return "wui.reach.shared";
+  if (reach !== "owner") return null;
+  if (!me.ready) return null;
+  return me.id === page.item_owner ? "wui.reach.you" : "wui.reach.owner";
 }
 
 /** One Deployed page as a TABLE row: mark · title · (App) · detail · star ·

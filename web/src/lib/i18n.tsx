@@ -1429,6 +1429,22 @@ export const messages = {
     "zh-TW": "要給其他人看，請 workspace 的擁有者 {owner} 把他加進來。",
     en: "To show it to others, ask the workspace's owner, {owner}, to add them.",
   },
+  // Who an overview page's link opens for (docs/plan-deploy-reach.md decision 6).
+  "wui.reach.you": { "zh-TW": "只有你打得開", en: "Only you can open it" },
+  "wui.reach.you.tip": {
+    "zh-TW": "只有你打得開這個連結。要給其他人看，到這個 workspace 的分享設定把他加進來。",
+    en: "Only you can open this link. To show it to others, add them in this workspace's sharing settings.",
+  },
+  "wui.reach.owner": { "zh-TW": "只有擁有者打得開", en: "Only the owner can open it" },
+  "wui.reach.owner.tip": {
+    "zh-TW": "只有這個 workspace 的擁有者打得開這個連結。",
+    en: "Only this workspace's owner can open this link.",
+  },
+  "wui.reach.shared": { "zh-TW": "只有成員打得開", en: "Only members can open it" },
+  "wui.reach.shared.tip": {
+    "zh-TW": "只有這個 workspace 的成員打得開這個連結。",
+    en: "Only this workspace's members can open this link.",
+  },
   "wui.remove": { "zh-TW": "下架", en: "Unlist" },
   "wui.remove.tip": {
     "zh-TW": "從 WUI 總覽下架；頁面和資料夾都留著",
