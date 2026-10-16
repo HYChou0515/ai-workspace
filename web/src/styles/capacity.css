@@ -198,12 +198,16 @@
   font-size: var(--text-body-sm);
 }
 
+/* `.ev-banner--err`'s shape (entity-views.css): the tone is the stripe and the
+ * fill, the sentence stays in body ink — `--err` as text was under 4:1 here. */
 .capacity-warning {
   margin: 12px 0;
   padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--err) 35%, transparent);
+  border-left: 3px solid var(--err);
   border-radius: var(--radius-btn);
-  background: rgba(180, 35, 24, 0.08);
-  color: var(--err);
+  background: color-mix(in srgb, var(--err) 8%, var(--white));
+  color: var(--text-paper);
   font-size: var(--text-body-sm);
 }
 
