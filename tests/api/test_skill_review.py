@@ -296,7 +296,7 @@ class _ScriptedEngine(LitellmAgentRunner):
         super().__init__(**kw)  # ty: ignore[invalid-argument-type]
         self._scripts = list(scripts)
 
-    async def _run_once(self, prompt, ctx, feedback):  # noqa: ANN001
+    async def _run_once(self, prompt, ctx, feedback, resume=None):  # noqa: ANN001
         script = self._scripts.pop(0)
         if isinstance(script, Exception):
             raise script

@@ -170,7 +170,7 @@ async def test_a_length_rejection_shrinks_the_history_and_retries():
     seen_sizes: list[int] = []
 
     class _Runner(LitellmAgentRunner):
-        async def _run_once(self, prompt, ctx, feedback):  # type: ignore[override]
+        async def _run_once(self, prompt, ctx, feedback, resume=None):  # type: ignore[override]
             seen_sizes.append(len(ctx.history))
             if len(ctx.history) > 4:
                 raise _Boom("This model's maximum context length is 32768 tokens.")
@@ -190,7 +190,7 @@ async def test_an_unshrinkable_overflow_fails_loud_and_actionably():
     from workspace_app.api.litellm_runner import LitellmAgentRunner
 
     class _Runner(LitellmAgentRunner):
-        async def _run_once(self, prompt, ctx, feedback):  # type: ignore[override]
+        async def _run_once(self, prompt, ctx, feedback, resume=None):  # type: ignore[override]
             raise _Boom("This model's maximum context length is 8192 tokens.")
             yield  # pragma: no cover — unreachable, keeps this an async generator
 
@@ -207,7 +207,7 @@ async def test_the_ceiling_stated_in_the_rejection_is_remembered():
     from workspace_app.api.litellm_runner import LitellmAgentRunner
 
     class _Runner(LitellmAgentRunner):
-        async def _run_once(self, prompt, ctx, feedback):  # type: ignore[override]
+        async def _run_once(self, prompt, ctx, feedback, resume=None):  # type: ignore[override]
             raise _Boom("This model's maximum context length is 32768 tokens.")
             yield  # pragma: no cover
 
@@ -228,7 +228,7 @@ async def test_the_retry_uses_the_configured_policy_when_the_limit_is_stated():
     seen: list[list[dict]] = []
 
     class _Runner(LitellmAgentRunner):
-        async def _run_once(self, prompt, ctx, feedback):  # type: ignore[override]
+        async def _run_once(self, prompt, ctx, feedback, resume=None):  # type: ignore[override]
             seen.append(list(ctx.history))
             # A context rejection is about SIZE. Rejecting on message count
             # would be a premise no provider has, and one no folding policy
@@ -268,7 +268,7 @@ async def test_the_retry_budget_subtracts_what_is_not_history():
     seen: list[list[dict]] = []
 
     class _Runner(LitellmAgentRunner):
-        async def _run_once(self, prompt, ctx, feedback):  # type: ignore[override]
+        async def _run_once(self, prompt, ctx, feedback, resume=None):  # type: ignore[override]
             seen.append(list(ctx.history))
             if any(len(m["content"]) > 2_000 for m in ctx.history):
                 raise _Boom("This model's maximum context length is 20000 tokens.")
@@ -306,7 +306,7 @@ async def test_folding_counts_as_progress_even_though_it_drops_nothing():
     seen: list[list[dict]] = []
 
     class _Runner(LitellmAgentRunner):
-        async def _run_once(self, prompt, ctx, feedback):  # type: ignore[override]
+        async def _run_once(self, prompt, ctx, feedback, resume=None):  # type: ignore[override]
             seen.append(list(ctx.history))
             if any(len(m["content"]) > 2_000 for m in ctx.history):
                 # 5,600 leaves ~3,040 for history once the reply reserve and
@@ -347,7 +347,7 @@ async def test_a_retry_that_cannot_get_smaller_stops_instead_of_spinning(monkeyp
     attempts = 0
 
     class _Runner(LitellmAgentRunner):
-        async def _run_once(self, prompt, ctx, feedback):  # type: ignore[override]
+        async def _run_once(self, prompt, ctx, feedback, resume=None):  # type: ignore[override]
             nonlocal attempts
             attempts += 1
             raise _Boom("This model's maximum context length is 8192 tokens.")

@@ -53,6 +53,7 @@ from .events import (
     AgentEvent,
     AgentMetrics,
     FileChanged,
+    Interjected,
     MaxTurnsExceeded,
     MessageDelta,
     Presence,
@@ -573,6 +574,11 @@ class _TurnReducer:
                         or (prev.exact if prev else False),
                     )
                     break
+        elif isinstance(item, Interjected):
+            # plan-interjection Q3: the person's message goes HERE in the
+            # thread — after what the turn had done, before the answer that
+            # read it (which, following a non-assistant entry, starts afresh).
+            self.produced.append(TurnMessage(role=PLACE_ROLE, created_at=item.created_at))
         elif isinstance(item, RepetitionStopped):
             # #113 decision "b": the repeats already streamed live; here we
             # truncate ONLY the persisted message back to before the loop (so
@@ -775,6 +781,7 @@ class _QueueEntry:
             at=self.message.at,
             speaker=self.message.speaker,
             image_urls=list(self.ctx.turn_image_urls),
+            applied_skills=list(self.ctx.applied_skills),
         )
 
 
@@ -1231,7 +1238,9 @@ class ChatTurnEngine:
                 answering = [e.message.at for e in (*folded, entry) if e.message is not None]
                 await self._refresh_history(key, entry, answering)
                 places = [TurnMessage(role=PLACE_ROLE, created_at=at) for at in answering]
-            on_complete = self._settling(on_complete, folded)
+            if entry.message is not None:
+                on_complete = self._settling(on_complete, folded)
+                ctx.take_interjections = self._reader(session, entry.message.author, folded)
             # Make the turn cancellable BEFORE reading the epoch. `current()` awaits
             # (a specstar round-trip); a Stop landing in that window must find the
             # turn via the same-pod fast-path (`cancel_current` reads `current_turn`)
@@ -1328,14 +1337,38 @@ class ChatTurnEngine:
             logger.exception("turns: worker %s could not rebuild a queued turn's history", key)
 
     @staticmethod
+    def _reader(
+        session: _WorkspaceSession, author: str, folded: list[_QueueEntry]
+    ) -> Callable[[], list[Interjection]]:
+        """The running turn's `take_interjections` (plan-interjection Q1): every
+        message its OWN author has queued since, not stopped while preparing —
+        taken off the queue (they get no turn of their own) and added to the
+        messages this turn answers. Another person's message is never taken:
+        a turn runs as one person (Q2)."""
+
+        def take() -> list[Interjection]:
+            taken = session.queue.take(
+                lambda e: (
+                    e.message is not None
+                    and e.message.author == author
+                    and not e.stopped_while_preparing()
+                )
+            )
+            folded.extend(taken)
+            return [e.as_interjection() for e in taken]
+
+        return take
+
+    @staticmethod
     def _settling(
         on_complete: Callable[[list[TurnMessage]], bool | None], folded: list[_QueueEntry]
     ) -> Callable[[list[TurnMessage]], bool | None]:
         """`on_complete`, then settle the messages this turn answered for others
         — only when the reply was this pod's to write (`on_complete` did not say
-        False). A handed-over turn wrote nothing; what it folded is still owed."""
-        if not folded:
-            return on_complete
+        False). A handed-over turn wrote nothing; what it folded is still owed.
+
+        `folded` is read when the reply persists, not now: a running turn keeps
+        adding the messages it reads (`_reader`)."""
 
         def persist(produced: list[TurnMessage]) -> bool | None:
             result = on_complete(produced)

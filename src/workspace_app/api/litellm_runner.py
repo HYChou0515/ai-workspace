@@ -35,6 +35,7 @@ from agents import (
 from agents import MaxTurnsExceeded as _AgentsMaxTurnsExceeded
 from agents.agent import StopAtTools, ToolsToFinalOutputFunction, ToolsToFinalOutputResult
 from agents.extensions.models.litellm_model import LitellmModel
+from agents.run_config import CallModelData, ModelInputData
 from agents.tool import FunctionToolResult
 from openai.types.shared import Reasoning
 
@@ -72,6 +73,7 @@ from .events import (
     AgentMetrics,
     ContextTrimmed,
     FailoverSwitch,
+    Interjected,
     MaxTurnsExceeded,
     MessageDelta,
     RateLimited,
@@ -190,6 +192,92 @@ def interjection_item(interjection: Interjection) -> dict[str, Any]:
     if interjection.speaker:
         text = f"[{interjection.speaker}]: {text}"
     return _user_item(text, interjection.image_urls)
+
+
+class _Interjected(Exception):  # noqa: N818 — a signal, not an error
+    """Raised from the SDK's model-input hook when the turn's author has spoken
+    (docs/plan-interjection.md Q1). Carries everything the next model call was
+    about to be handed, so the turn continues from exactly there."""
+
+    def __init__(self, items: list[Any], taken: list[Interjection]) -> None:
+        super().__init__(f"{len(taken)} message(s) sent mid-turn")
+        self.items = items
+        self.taken = taken
+
+
+def _interjection_filter(
+    ctx: AgentToolContext,
+) -> Callable[[CallModelData[Any]], ModelInputData] | None:
+    """The `RunConfig.call_model_input_filter` that reads a person's messages
+    into the running turn. The SDK calls it before EVERY model call — the one
+    point between a tool result and the next answer — and re-raises what it
+    raises (`run_internal/turn_preparation.maybe_filter_model_input`). Raising
+    rather than appending is what lets the step budget start over (Q4): the
+    SDK's turn counter belongs to the `Runner.run*` call, so a fresh budget
+    needs a fresh call. None when the turn has no source of messages."""
+    take = ctx.take_interjections
+    if take is None:
+        return None
+
+    def read(data: CallModelData[Any]) -> ModelInputData:
+        taken = take()
+        if taken:
+            raise _Interjected(list(data.model_data.input), taken)
+        return data.model_data
+
+    return read
+
+
+def _field(item: Any, name: str) -> Any:
+    return item.get(name) if isinstance(item, dict) else getattr(item, name, None)
+
+
+def _segment_events(items: list[Any]) -> list[AgentEvent]:
+    """The events a non-streamed segment would have emitted, recovered from the
+    SDK input items it produced (assistant text, tool call, tool result) — for
+    a segment cut short by an interjection before `Runner.run` returned."""
+    events: list[AgentEvent] = []
+    for item in items:
+        kind = _field(item, "type")
+        if kind == "function_call":
+            try:
+                args = json.loads(_field(item, "arguments") or "{}")
+            except ValueError:
+                args = {}
+            events.append(
+                ToolStart(
+                    call_id=_field(item, "call_id") or "",
+                    name=_field(item, "name") or "",
+                    args=args if isinstance(args, dict) else {},
+                )
+            )
+        elif kind == "function_call_output":
+            output = _field(item, "output")
+            events.append(
+                ToolEnd(
+                    call_id=_field(item, "call_id") or "",
+                    output=output if isinstance(output, str) else json.dumps(output),
+                )
+            )
+        elif _field(item, "role") == "assistant":
+            for part in _field(item, "content") or []:
+                text = _field(part, "text")
+                if text:
+                    events.append(MessageDelta(text=text))
+    return events
+
+
+def _absorb(ctx: AgentToolContext, taken: list[Interjection]) -> None:
+    """What reading a person's message does to the rest of the turn (Q7): the
+    skills they applied become readable, and the search allowances are whole
+    again — someone is steering, which is the opposite of a runaway turn.
+    Reasoning effort and disclosure stay as the turn began."""
+    for i in taken:
+        for name in i.applied_skills:
+            if name not in ctx.applied_skills:
+                ctx.applied_skills.append(name)
+    for budget in (ctx.kb_search_budget, ctx.wiki_search_budget, ctx.kb_grep_budget):
+        budget.used = 0
 
 
 def _build_input(
@@ -1507,6 +1595,8 @@ class LitellmAgentRunner:
             yield RunDone()
             return
         feedback: str | None = None
+        # The input a segment after an interjection resumes from (None: the first).
+        resume: list[Any] | None = None
         attempt = 0
         # Rate limits are held out separately from `attempt` — see the branch in
         # the handler below for why the two budgets must not be one.
@@ -1525,7 +1615,7 @@ class LitellmAgentRunner:
             # 'Extra data on `plot`' without ever retrying.
             progress_made = False
             try:
-                async for ev in self._run_once(prompt, ctx, feedback):
+                async for ev in self._run_once(prompt, ctx, feedback, resume):
                     visible_progress = (
                         isinstance(ev, MessageDelta) and ev.text and not ev.reasoning
                     ) or isinstance(ev, ToolEnd)
@@ -1534,6 +1624,17 @@ class LitellmAgentRunner:
                     yield ev
                 yield RunDone()
                 return
+            except _Interjected as read:
+                # docs/plan-interjection.md Q1/Q4: the person spoke while the turn
+                # ran. Say where it was read, then carry on as a NEW segment from
+                # everything so far plus their message(s) — so the step budget is
+                # counted afresh. Not a retry: nothing failed, no attempt is spent.
+                for i in read.taken:
+                    yield Interjected(author=i.author, created_at=i.at)
+                _absorb(ctx, read.taken)
+                resume = [*read.items, *(interjection_item(i) for i in read.taken)]
+                feedback = None
+                continue
             except _AgentsMaxTurnsExceeded:
                 # The agent burned through its turn budget — terminal, no
                 # retry would help. The SDK exception only carries a message,
@@ -1836,11 +1937,12 @@ class LitellmAgentRunner:
         prompt: str,
         ctx: AgentToolContext,
         feedback: str | None,
+        resume: list[Any] | None = None,
     ) -> AsyncIterator[AgentEvent]:
         assert ctx.agent_config is not None  # run() guards None before _run_once
         # Non-streaming path: the escape hatch (WORKSPACE_AGENT_STREAM=0).
         if not _stream_enabled():
-            async for ev in self._run_once_nonstream(prompt, ctx, feedback):
+            async for ev in self._run_once_nonstream(prompt, ctx, feedback, resume):
                 yield ev
             return
         # The SDK delivers model output via stream_events(), but a running
@@ -1879,12 +1981,19 @@ class LitellmAgentRunner:
         # attribute every span to the run that produced it AND tell wiki
         # maintenance / reader / merge apart from chat and RCA turns.
         run_config = RunConfig(
-            workflow_name=_trace_workflow_name(ctx), group_id=ctx.investigation_id
+            workflow_name=_trace_workflow_name(ctx),
+            group_id=ctx.investigation_id,
+            # docs/plan-interjection.md Q1: read the author's mid-turn messages.
+            call_model_input_filter=_interjection_filter(ctx),
         )
         streamed = Runner.run_streamed(
             agent,
-            input=_build_input(  # ty: ignore[invalid-argument-type]
-                ctx.history, prompt, ctx.turn_image_urls, ctx.leading_interjections
+            input=(  # ty: ignore[invalid-argument-type]
+                resume
+                if resume is not None
+                else _build_input(
+                    ctx.history, prompt, ctx.turn_image_urls, ctx.leading_interjections
+                )
             ),
             context=ctx,
             max_turns=ctx.max_turns or self._max_turns,
@@ -2034,7 +2143,11 @@ class LitellmAgentRunner:
                 await task
 
     async def _run_once_nonstream(  # pragma: no cover — exercised only by the live Ollama test
-        self, prompt: str, ctx: AgentToolContext, feedback: str | None
+        self,
+        prompt: str,
+        ctx: AgentToolContext,
+        feedback: str | None,
+        resume: list[Any] | None = None,
     ) -> AsyncIterator[AgentEvent]:
         """One turn with the model NOT streaming (WORKSPACE_AGENT_STREAM=0): fetch
         the whole response in a single ``Runner.run`` (``get_response``), then emit
@@ -2066,17 +2179,31 @@ class LitellmAgentRunner:
         ctx.on_exec_output = None
         yield AgentMetrics(phase="up", prompt_tokens=prompt_tok, elapsed_ms=0)
         run_config = RunConfig(
-            workflow_name=_trace_workflow_name(ctx), group_id=ctx.investigation_id
+            workflow_name=_trace_workflow_name(ctx),
+            group_id=ctx.investigation_id,
+            # docs/plan-interjection.md Q1: read the author's mid-turn messages.
+            call_model_input_filter=_interjection_filter(ctx),
         )
-        result = await Runner.run(
-            agent,
-            input=_build_input(  # ty: ignore[invalid-argument-type]
-                ctx.history, prompt, ctx.turn_image_urls, ctx.leading_interjections
-            ),
-            context=ctx,
-            max_turns=ctx.max_turns or self._max_turns,
-            run_config=run_config,
+        sent = (
+            resume
+            if resume is not None
+            else _build_input(ctx.history, prompt, ctx.turn_image_urls, ctx.leading_interjections)
         )
+        try:
+            result = await Runner.run(
+                agent,
+                input=sent,  # ty: ignore[invalid-argument-type]
+                context=ctx,
+                max_turns=ctx.max_turns or self._max_turns,
+                run_config=run_config,
+            )
+        except _Interjected as read:
+            # The one-shot run is cut short before it hands back its items, so
+            # what this segment did is only in what the next call was about to
+            # be sent. Said here, or the tools it ran vanish from the turn.
+            for ev in _segment_events(read.items[1 if isinstance(sent, str) else len(sent) :]):
+                yield ev
+            raise
         content_buf: list[str] = []
         tool_calls_seen = 0
         splitter = ThinkSplitter()  # split any inline <think> out of the content

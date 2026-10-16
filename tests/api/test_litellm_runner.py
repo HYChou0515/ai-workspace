@@ -209,7 +209,7 @@ class _ScriptedOnce(LitellmAgentRunner):
         self._per_attempt = list(per_attempt)
         self._calls = 0
 
-    async def _run_once(self, prompt, ctx, feedback):  # type: ignore[override]
+    async def _run_once(self, prompt, ctx, feedback, resume=None):  # type: ignore[override]
         events = self._per_attempt[self._calls]
         self._calls += 1
         for ev in events:
@@ -928,7 +928,7 @@ class _RecordingRunner(LitellmAgentRunner):
         self._scripts = list(scripts)
         self.feedbacks: list[str | None] = []
 
-    async def _run_once(self, prompt, ctx, feedback):
+    async def _run_once(self, prompt, ctx, feedback, resume=None):
         self.feedbacks.append(feedback)
         script = self._scripts.pop(0)
         if isinstance(script, Exception):
