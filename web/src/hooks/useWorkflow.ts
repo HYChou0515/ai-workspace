@@ -42,11 +42,23 @@ export function usePreviewRun(
   });
 }
 
+/** How often to re-read an item's executions: every 2 s while any is executing,
+ * so the sidebar's progress and the waiting-for-you badge follow it (a gate is
+ * reached between reads); every 30 s otherwise, because nothing else refetches
+ * the list and an execution a schedule, a page or another person starts must
+ * still reach the badge and the notice (review R1). */
+export function runsPollMs(runs: WorkflowRunDTO[] | undefined): number {
+  // A gate waiting for a person (possibly for days) is not "going": the badge is
+  // already up, and a decision taken elsewhere shows within the slow pace.
+  return runs?.some((r) => r.status === "pending" || r.status === "running") ? 2000 : 30_000;
+}
+
 export function useItemRuns(slug: string | undefined, itemId: string | undefined) {
   return useQuery({
     queryKey: qk.workflowRuns(slug ?? "", itemId ?? ""),
     queryFn: () => workflowApi.listRuns(slug!, itemId!),
     enabled: !!slug && !!itemId,
+    refetchInterval: (q) => runsPollMs(q.state.data),
   });
 }
 
@@ -59,8 +71,16 @@ export function useRun(
     queryKey: qk.workflowRun(slug ?? "", itemId ?? "", runId ?? ""),
     queryFn: () => workflowApi.getRun(slug!, itemId!, runId!),
     enabled: !!slug && !!itemId && !!runId,
-    // Poll while the run is live; stop once it reaches a terminal status.
-    refetchInterval: (q) => (q.state.data && isRunTerminal(q.state.data.status) ? false : 1000),
+    // Poll while the run is live — every second while it moves, every 5 s while it
+    // waits at a gate (that can last days) — and stop once it ends, or when it has
+    // never been readable (a pruned run, a bad link: review R1). A failed poll of a
+    // run already shown keeps polling: a 502 during a rollout must not freeze the
+    // tab for good (review R2).
+    refetchInterval: (q) => {
+      if (q.state.data === undefined) return q.state.status === "error" ? false : 1000;
+      if (isRunTerminal(q.state.data.status)) return false;
+      return q.state.data.status === "awaiting_human" ? 5000 : 1000;
+    },
   });
 }
 
@@ -92,6 +112,22 @@ export function useDecide(slug: string, itemId: string, runId: string) {
       workflowApi.decide(slug, itemId, runId, body),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: qk.workflowRun(slug, itemId, runId) });
+      // and the item's list: a gate wait polls at the slow pace, so the badge and
+      // the sidebar would trail the action by up to 30 s (live check 3)
+      qc.invalidateQueries({ queryKey: qk.workflowRuns(slug, itemId) });
+    },
+  });
+}
+
+/** plan-workflow-out-of-chat D9: Continue from here (`rerun` "") or Re-run this
+ * step (`rerun` = its name) on a failed / stopped execution. */
+export function useRetryRun(slug: string, itemId: string, runId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (rerun: string) => workflowApi.retry(slug, itemId, runId, rerun),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: qk.workflowRun(slug, itemId, runId) });
+      qc.invalidateQueries({ queryKey: qk.workflowRuns(slug, itemId) });
     },
   });
 }
@@ -104,6 +140,9 @@ export function useSteerRun(slug: string, itemId: string, runId: string) {
     mutationFn: (instruction: string) => workflowApi.steer(slug, itemId, runId, instruction),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: qk.workflowRun(slug, itemId, runId) });
+      // and the item's list: a gate wait polls at the slow pace, so the badge and
+      // the sidebar would trail the action by up to 30 s (live check 3)
+      qc.invalidateQueries({ queryKey: qk.workflowRuns(slug, itemId) });
     },
   });
 }
@@ -115,6 +154,9 @@ export function useConfirmSteer(slug: string, itemId: string, runId: string) {
     mutationFn: (approve: boolean) => workflowApi.confirmSteer(slug, itemId, runId, approve),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: qk.workflowRun(slug, itemId, runId) });
+      // and the item's list: a gate wait polls at the slow pace, so the badge and
+      // the sidebar would trail the action by up to 30 s (live check 3)
+      qc.invalidateQueries({ queryKey: qk.workflowRuns(slug, itemId) });
     },
   });
 }

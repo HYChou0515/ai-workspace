@@ -197,6 +197,13 @@ export const qk = {
 
   // topic-hub §3: an item's chats (free + workflow) + one chat's hydrated thread.
   itemChats: (slug: string, itemId: string) => ["itemChats", slug, itemId] as const,
+  /** An execution's links (`/files`), asked again when the run moves (`version`). */
+  workflowRunFiles: (slug: string, itemId: string, runId: string, version: string) =>
+    ["workflowRunFiles", slug, itemId, runId, version] as const,
+  /** Whether a step's transcript exists — asked again when the step moves on
+   * (`version`), since it is written by the step's turn. */
+  executionTranscript: (path: string, version: string) =>
+    ["executionTranscript", path, version] as const,
   itemChat: (slug: string, itemId: string, chatId: string) =>
     ["itemChat", slug, itemId, chatId] as const,
   // #613: one chat's todo checklist (the pinned panel; live `todos_updated`

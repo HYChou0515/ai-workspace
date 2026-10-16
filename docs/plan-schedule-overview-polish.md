@@ -1,5 +1,7 @@
 # Plan — Schedules overview polish: read in your own clock, named in your own words
 
+> 被 #911（plan-workflow-out-of-chat.md）推翻
+
 ## Problem
 
 `/schedules` shipped in #879 (`docs/plan-schedule-overview.md`). Recording it

@@ -47,9 +47,9 @@ export function WorkflowsModal({
   itemId: string;
   fileService: FileService;
   onClose: () => void;
-  /** Called with the new run's chat id after a successful launch, so the parent can
-   * focus the run's chat. */
-  onRun?: (chatId: string) => void;
+  /** Called with the new run's id after a successful launch, so the parent can open
+   * its execution tab (plan-workflow-out-of-chat D7). */
+  onRun?: (runId: string) => void;
 }) {
   const t = useT();
   const clock = useViewerClock();
@@ -101,7 +101,7 @@ export function WorkflowsModal({
     setBusy(true);
     try {
       const res = await workflowApi.startRun(slug, itemId, id);
-      onRun?.(res.chat_id);
+      onRun?.(res.run_id);
       onClose();
     } finally {
       setBusy(false);
@@ -155,9 +155,10 @@ export function WorkflowsModal({
     await qc.invalidateQueries({ queryKey: qk.itemSchedules(slug, itemId) });
     await qc.invalidateQueries({ queryKey: qk.files(itemId) });
     await qc.invalidateQueries({ queryKey: qk.schedulesOverview });
-    // Run now may have just made the schedule's own chat — the chat switcher
-    // of this very item lists it (decision 9: as the overview refreshes).
-    await qc.invalidateQueries({ queryKey: qk.itemChats(slug, itemId) });
+    // Run now may have just started an execution — the Workflows sidebar of this
+    // very item lists it (plan-workflow-out-of-chat D7), so its list refreshes now
+    // rather than at the next idle poll.
+    await qc.invalidateQueries({ queryKey: qk.workflowRuns(slug, itemId) });
   };
   const failed = (row: ScheduleRow, e: unknown) =>
     setSaid({ index: row.index, ok: false, text: e instanceof ScheduleActionError ? e.message : String(e) });

@@ -33,6 +33,9 @@ export type ItemChatSummary = {
   status: string | null;
   /** Epoch ms of the chat's last write — the recency sort key (#132). */
   last_activity_ms: number | null;
+  /** The conversation of a page's job (#942): a chat, whose job it can stop
+   * while it runs (#942 D5). Absent from servers before it. */
+  page_job?: boolean;
 };
 
 /** A hydrated chat thread (persisted messages — carries resolved [n] citations). */

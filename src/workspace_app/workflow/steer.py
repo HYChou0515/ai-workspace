@@ -11,6 +11,7 @@ with retry-with-feedback, mirroring the gate's in-step retry (§6).
 
 from __future__ import annotations
 
+import glob
 import json
 import logging
 from typing import TYPE_CHECKING, Any
@@ -163,14 +164,17 @@ async def propose_steer(
     """Drive a read-only steerer turn and return its proposed ``SteerPlan`` (stamped
     with ``instruction``). Retries with the parse error fed back; raises
     ``SteerProposalFailed`` if no usable plan comes back."""
-    if wf.drive_turn is None:
+    # Not part of the run's record (D2): the steerer answers in JSON, which used to
+    # be persisted and streamed as the agent's reply. The plan becomes a confirm card.
+    turn = wf.aside_turn or wf.drive_turn
+    if turn is None:
         raise RuntimeError("propose_steer needs a turn driver (wired by the run driver)")
     context = await _workspace_context(wf)
     error = ""
     feedback: str | None = None
     use_tools = tools or READONLY_TOOLS
     for _ in range(retries + 1):
-        reply = await wf.drive_turn(_steer_prompt(instruction, context, feedback), use_tools)
+        reply = await turn(_steer_prompt(instruction, context, feedback), use_tools)
         plan, error = _coerce_plan(_extract_json(str(reply)), instruction)
         if plan is not None:
             logger.info("steer: proposal accepted for instruction %r", instruction)
@@ -203,7 +207,8 @@ async def apply_steer(wf: WorkflowHandle, plan: SteerPlan, *, decided_by: str = 
         applied.append(rel_path(edit.path))
     deleted: list[str] = []
     for name in plan.invalidate:
-        for p in await wf.glob([f"{wf.journal_dir.lstrip('/')}/step_{name}/*"]):
+        # The name is a step's, not a pattern: `pick[1]` must match itself (review R1).
+        for p in await wf.glob([f"{wf.journal_dir.lstrip('/')}/step_{glob.escape(name)}/*"]):
             await wf.delete(p)
             logger.debug("steer: invalidated step %r artifact %s", name, p)
             deleted.append(p)

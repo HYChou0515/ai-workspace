@@ -38,7 +38,7 @@ function fakeService() {
   return { svc, prepareDirDownload, dirDownloadUrl, writeFile, writes };
 }
 
-function render(svc: FileService, onRun?: (chatId: string) => void) {
+function render(svc: FileService, onRun?: (runId: string) => void) {
   return renderWithQuery(
     <DialogProvider>
       <WorkflowsModal
@@ -86,14 +86,16 @@ describe("WorkflowsModal", () => {
     expect(screen.getByTestId("workflow-run-good")).toBeInTheDocument();
   });
 
-  it("runs a workflow → startRun, then onRun + close", async () => {
+  it("runs a workflow → startRun, then onRun with the run (its tab opens) + close", async () => {
     listMock.mockResolvedValue([{ id: "filer", title: "File uploads", phases: [{ id: "a" }] }]);
     startRunMock.mockResolvedValue({ run_id: "r1", item_id: "inv1", chat_id: "c9" });
     const onRun = vi.fn();
     render(fakeService().svc, onRun);
     fireEvent.click(await screen.findByTestId("workflow-run-filer"));
     await waitFor(() => expect(startRunMock).toHaveBeenCalledWith("playground", "inv1", "filer"));
-    expect(onRun).toHaveBeenCalledWith("c9");
+    // the run, not its conversation: the execution opens as a tab, not a chat
+    // (plan-workflow-out-of-chat D3 / D7)
+    expect(onRun).toHaveBeenCalledWith("r1");
   });
 
   it("downloads the whole .workflows folder", async () => {

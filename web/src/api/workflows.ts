@@ -9,7 +9,7 @@
  * a pure function, unit-tested without the network.
  */
 
-import { apiFetch } from "./http";
+import { apiFetch, httpErrorFrom } from "./http";
 
 export type PhaseDef = { id: string; title?: string };
 
@@ -113,9 +113,33 @@ export type WorkflowRunDTO = {
   /** #288: a steer plan awaiting confirm (the FE renders the steer card vs. the gate
    * card by which pending field is set). Absent on runs written before #288. */
   pending_steer?: SteerPlan | null;
+  /** Started by a schedule (its time or its "run now"), not by a person — what
+   * the Workflows sidebar marks "Scheduled" by. Absent on runs written before it. */
+  from_schedule?: boolean;
+  /** The conversation its steps' turns are persisted in (one per execution;
+   * a schedule's executions share one) — what the execution tab reads its
+   * rows' messages from, selected by `run_id`. */
+  chat_id?: string;
+  /** In the item's run list only: whether this is the newest execution of its
+   * workflow (they share one journal; only the newest may be continued, changed
+   * or decided). Absent on `GET …/runs/{id}`. */
+  latest?: boolean;
   /** #942: set when a PAGE started this run as a job (a sub-agent or a tool)
    * rather than a workflow. Absent/null on every workflow run. */
   page_job?: PageJobDTO | null;
+};
+
+/** `GET …/runs/{id}/files` — what an execution's tab links, asked when the run
+ * moves rather than on every poll (review R2). */
+export type RunFilesDTO = {
+  /** Whether this is the newest execution of its workflow on the item: its runs
+   * share one journal, so only the newest's step files are its own, and only it
+   * may be continued, changed or decided. */
+  latest: boolean;
+  /** Per step on the board: its result and transcript in the journal (newest only). */
+  step_files: Record<string, { result: string; transcript: string }>;
+  /** The `input.json` the workflow reads now (newest only; "" when absent). */
+  inputs_path: string;
 };
 
 /** What a page's job was asked to do (#942) — `kind` is `tool` or `agent`. */
@@ -199,6 +223,20 @@ export function phaseView(
   for (const d of declared) push(d.id, d.title ?? d.id);
   for (const p of run?.phases ?? []) if (!seen.has(p.phase)) push(p.phase, p.phase);
   return nodes;
+}
+
+/** How far along an execution is, as "Step `at` of `of`" (plan-workflow-out-of-chat
+ * D7, after NN/g "Progress Indicators": say how far, not just "Running…"). The step
+ * being worked on, or waiting for a person, is the one it is on; past the last
+ * passed one otherwise; 0 before anything started. Pure, over `phaseView`. */
+export function stepOf(nodes: PhaseNode[]): { at: number; of: number } {
+  const working = nodes.findIndex((n) => n.status === "running" || n.status === "awaiting_human");
+  if (working >= 0) return { at: working + 1, of: nodes.length };
+  let passed = 0;
+  nodes.forEach((n, i) => {
+    if (n.status === "passed" || n.status === "skipped" || n.status === "failed") passed = i + 1;
+  });
+  return { at: passed, of: nodes.length };
 }
 
 /** A phase plus the steps the board shows under it (#178). */
@@ -343,15 +381,12 @@ export const workflowApi = {
     slug: string,
     itemId: string,
     workflowId = "",
-    chatId = "",
   ): Promise<{ run_id: string; item_id: string; chat_id: string }> {
-    // topic-hub §3/§4: launching opens a workflow CHAT (returns its chat_id) and
-    // `workflow_id` picks which of the profile's workflows to run. #343: with a
-    // `chatId`, the run TAKES OVER that existing chat (the one prepared in) instead
-    // of opening a fresh one — the returned chat_id is that same chat.
+    // Launching opens the execution's own conversation (returns its chat_id);
+    // `workflow_id` picks which of the profile's workflows to run. No chat is
+    // ever taken over (plan-workflow-out-of-chat D3: `chat_id` is answered 400).
     const params = new URLSearchParams();
     if (workflowId) params.set("workflow_id", workflowId);
-    if (chatId) params.set("chat_id", chatId);
     const qs = params.toString() ? `?${params}` : "";
     return jsonOrThrow(
       await apiFetch(`${base(slug, itemId)}/run${qs}`, { method: "POST" }),
@@ -435,5 +470,24 @@ export const workflowApi = {
       },
     );
     if (!r.ok) throw new Error(`steer confirm failed: ${r.status}`);
+  },
+
+  async runFiles(slug: string, itemId: string, runId: string): Promise<RunFilesDTO> {
+    return jsonOrThrow(
+      await apiFetch(`${base(slug, itemId)}/runs/${encodeURIComponent(runId)}/files`),
+      "run files",
+    ) as Promise<RunFilesDTO>;
+  },
+
+  /** plan-workflow-out-of-chat D9: drive a failed or stopped execution again.
+   * No `rerun` = Continue from here (what passed skips); a step name = Re-run
+   * this step (its results are dropped first). Throws with the server's reason. */
+  async retry(slug: string, itemId: string, runId: string, rerun = ""): Promise<void> {
+    const r = await apiFetch(`${base(slug, itemId)}/runs/${encodeURIComponent(runId)}/retry`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ rerun }),
+    });
+    if (!r.ok) throw await httpErrorFrom(r, `continue failed: ${r.status}`);
   },
 };

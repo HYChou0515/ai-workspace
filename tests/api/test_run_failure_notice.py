@@ -58,7 +58,7 @@ def test_the_person_a_failed_run_ran_as_is_told_where_to_sign_in_again():
 
     assert _inbox(spec) == [
         ("bob", "/my-env"),
-        ("owner-o", f"/a/playground/items/{item_id}"),
+        ("owner-o", f"/a/playground/{item_id}?open=run-1"),
     ]
 
 
@@ -161,6 +161,7 @@ def test_a_failed_page_job_is_named_by_what_the_page_asked_for():
             captured_user="owner-o",
             status=RunStatus.ERROR,
             page_job=PageJob(kind="agent", name=name),
+            chat_id=f"conversation:{name}",
         )
 
     _run_as(spec, "run-1", item_id, "bob", workflow_id="")
@@ -172,3 +173,7 @@ def test_a_failed_page_job_is_named_by_what_the_page_asked_for():
     assert ("owner-o", "Page job failed: sub-agent “summariser”") in titles
     assert ("bob", "A page job as you failed: sub-agent “checker”") in titles
     assert len([t for t in titles if t[0] == "bob"]) == 2
+    # A page job is no execution: its notice opens the job's own chat (where its
+    # record and Stop are), not an execution tab that would draw a workflow
+    # board for it and call it superseded.
+    assert ("owner-o", f"/a/playground/{item_id}?chat=conversation%3Asummariser") in _inbox(spec)

@@ -105,9 +105,12 @@ Four things to get right, because each one is a report that quietly never arrive
   deployment has scheduled work switched off. A new row whose time has already passed today
   first runs at its NEXT time (a daily 09:00 saved at 14:00 runs tomorrow at 09:00) — say
   so, and if the user wants a run now as well, tell them the Schedules page and the
-  Workflows panel have **Run now**.
+  Workflows panel (**Manage workflows…** in the workspace's Workflows sidebar) have
+  **Run now**.
 
 When a schedule fires, nobody is signed in: there is no request and no personal token.
-Anything the run needs comes from the item's own environment. A schedule's runs share
-one conversation in this item (named after the workflow), reused on every fire; to stop a
-schedule, save the list without its row — deleting that conversation does not stop it.
+Anything the run needs comes from the item's own environment. A schedule's runs are not
+listed among the chats: each fire is an execution listed under **Executions** in the workspace's
+Workflows sidebar (marked Scheduled), and opening one shows its steps in its own tab — point
+the user there to see what a schedule did. To stop a schedule, save the list without its
+row.
