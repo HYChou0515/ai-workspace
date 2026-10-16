@@ -40,7 +40,7 @@ from agents.run_config import CallModelData, ModelInputData
 from agents.tool import FunctionToolResult
 from openai.types.shared import Reasoning
 
-from ..agent.call_retry_model import CALL_RETRACTED, CALL_STARTED, InputTrim
+from ..agent.call_retry_model import CALL_RETRACTED, CALL_STARTED, InputTrim, WaitPool
 from ..agent.context import AgentToolContext, Interjection
 from ..agent.header_model import HeaderModel
 from ..agent.repairing_model import RepairingModel
@@ -288,7 +288,21 @@ def _field(item: Any, name: str) -> Any:
     return item.get(name) if isinstance(item, dict) else getattr(item, name, None)
 
 
-def _segment_events(items: list[Any]) -> list[AgentEvent]:
+def _finished_tool(end: ToolEnd, ctx: AgentToolContext) -> ToolEnd:
+    """A finished tool's event with what its card shows beside the output: the
+    full display (#62) and a delegated sub-agent's failure (#915 P4). ONE place
+    for the streamed path, the non-streamed one and a segment cut by an
+    interjection (plan-interjection §9 C19) — a third copy is how the cut
+    segment came to show a failed delegation with no failure on it."""
+    disp = ctx.tool_displays.get(end.output, "")
+    if disp:
+        end = replace(end, display=disp)
+    if (failed := ctx.tool_failures.pop(end.call_id, None)) is not None:
+        end = replace(end, failure=failed)
+    return end
+
+
+def _segment_events(items: list[Any], ctx: AgentToolContext) -> list[AgentEvent]:
     """The events a non-streamed segment would have emitted, recovered from the
     SDK input items it produced (assistant text, tool call, tool result) — for
     a segment cut short by an interjection before `Runner.run` returned."""
@@ -310,9 +324,12 @@ def _segment_events(items: list[Any]) -> list[AgentEvent]:
         elif kind == "function_call_output":
             output = _field(item, "output")
             events.append(
-                ToolEnd(
-                    call_id=_field(item, "call_id") or "",
-                    output=output if isinstance(output, str) else json.dumps(output),
+                _finished_tool(
+                    ToolEnd(
+                        call_id=_field(item, "call_id") or "",
+                        output=output if isinstance(output, str) else json.dumps(output),
+                    ),
+                    ctx,
                 )
             )
         elif _field(item, "role") == "assistant":
@@ -1726,6 +1743,10 @@ class LitellmAgentRunner:
         # history — everything the turn had produced plus the messages it read
         # — kept apart from the history and joined at each send (§9 C12).
         tail: list[Any] | None = None
+        # One rate-limit wait pool for the whole turn, every segment of it (#915
+        # "一輪共用一個等待池"; plan-interjection §9 C19). Fresh per `run()`: a
+        # delegated sub-agent or a compaction pass is a run of its own.
+        ctx.turn_wait_pool = WaitPool()
         while True:
             sent_history = len(ctx.history)
             resume = None if tail is None else [*ctx.history, *tail]
@@ -1898,6 +1919,9 @@ class LitellmAgentRunner:
                 on_hold=on_hold,
                 trim=_HistoryTrim(self, ctx, on_trimmed),
                 sleep=self._sleep,
+                # The turn's pool, shared by its segments (plan-interjection
+                # §9 C19); `run()` sets it, so a direct caller gets its own.
+                pool=ctx.turn_wait_pool,
             )
 
         return wrap
@@ -2126,12 +2150,8 @@ class LitellmAgentRunner:
                             # so the FE card shows the error that streamed live
                             # instead of a clean "exit_code=0". Keyed by output
                             # (RunContextWrapper tools have no call id).
-                            disp = ctx.tool_displays.get(mapped.output, "")
-                            if disp:
-                                mapped = replace(mapped, display=disp)
-                            # P4: a delegated sub-agent's failure, for the card.
-                            if (failed := ctx.tool_failures.pop(mapped.call_id, None)) is not None:
-                                mapped = replace(mapped, failure=failed)
+                            # P4: and a delegated sub-agent's failure, for the card.
+                            mapped = _finished_tool(mapped, ctx)
                         queue.put_nowait(mapped)
 
                 tail_content, tail_reasoning = splitter.flush()
@@ -2264,7 +2284,7 @@ class LitellmAgentRunner:
             # The one-shot run is cut short before it hands back its items, so
             # what this segment did is only in what the next call was about to
             # be sent. Said here, or the tools it ran vanish from the turn.
-            for ev in _segment_events(read.items[1 if isinstance(sent, str) else len(sent) :]):
+            for ev in _segment_events(read.items[1 if isinstance(sent, str) else len(sent) :], ctx):
                 yield ev
             raise
         content_buf: list[str] = []
@@ -2279,11 +2299,7 @@ class LitellmAgentRunner:
                 if isinstance(mapped, ToolStart):
                     tool_calls_seen += 1
                 if isinstance(mapped, ToolEnd):
-                    disp = ctx.tool_displays.get(mapped.output, "")
-                    if disp:
-                        mapped = replace(mapped, display=disp)
-                    if (failed := ctx.tool_failures.pop(mapped.call_id, None)) is not None:
-                        mapped = replace(mapped, failure=failed)
+                    mapped = _finished_tool(mapped, ctx)
                 yield mapped
             elif isinstance(item, MessageOutputItem):
                 content, reasoning = splitter.feed(ItemHelpers.text_message_output(item))

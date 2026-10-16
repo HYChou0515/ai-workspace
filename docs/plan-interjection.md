@@ -214,3 +214,7 @@ CLAUDE.md「Chat turns run through one `ChatTurnEngine`」那段說 Q1, Q2, A1, 
   測試 `test_a_turn_that_overflows_after_reading_a_message_still_recovers` 改成走真的 `_agent_for`)。前端:#915 把
   不是取消、不是步數上限的錯誤一律畫成「失敗通知」,`interrupted` 有自己的分支,畫成「已被 X 的訊息中斷」而不是
   失敗。
+- **C19〔施工〕合併 #915 後的審查:** (1) 一輪的 429 等待池跨插話分段共用(`WaitPool`,`run()` 開始時建立、每一段的
+  `CallRetryModel` 都用它)—— #915「一輪共用一個等待池」在插話後仍成立;步數重算(Q4)是因為有人在指揮,但有人
+  說話不會讓服務比較不限流。(2) 非串流路徑被插話切斷時補發的工具事件,也帶上子 agent 的失敗與完整輸出:三處
+  共用 `_finished_tool`。(3) 超量測試兩種呼叫形狀(串流 / 一次取回)都跑。
