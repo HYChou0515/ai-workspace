@@ -1581,14 +1581,14 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
         </div>
       )}
       {built.isPending ? (
-        <div style={{ padding: 12, color: "var(--text-paper-d)" }}>Opening…</div>
+        <div style={{ padding: 12, color: "var(--text-paper-d)" }}>{t("wui.pane.opening")}</div>
       ) : firstBuild ? (
         // Whatever the folder holds right now is about to be replaced by what
         // the build produces, and mid-restore it may not even read correctly —
         // so this waits rather than showing a page with a shelf life of
         // seconds.
         <div role="status" style={{ padding: 12, color: "var(--text-paper-d)" }}>
-          Building… the page appears when this finishes.
+          {t("wui.pane.building")}
         </div>
       ) : built.error && ((building && !deploying) || deployHere.state === "working") ? (
         // The first open of a page nobody has built yet: `dist/` really is
@@ -1602,7 +1602,7 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
         // sibling shown during A's Deploy keeps its own error rather than a
         // promise the run will not keep.
         <div role="status" style={{ padding: 12, color: "var(--text-paper-d)" }}>
-          {building ? "Building…" : "Deploying…"} the page appears when this finishes.
+          {t(building ? "wui.pane.building" : "wui.pane.deploying")}
         </div>
       ) : built.error instanceof WuiEntryMissing && built.error.kind === "absent" && !author ? (
         // A reader followed a link to a page nobody has built (or one whose
@@ -1627,9 +1627,7 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
               reader who reached this pane has already read the view file, so
               item access is established — the hedge would send them asking
               for a permission they hold. */}
-          <span>
-            This page has not been published yet — or it is still being restored. Try again in a moment.
-          </span>
+          <span>{t("wui.pane.unpublished")}</span>
           <TryAgain onClick={tryAgain} />
         </div>
       ) : built.error ? (

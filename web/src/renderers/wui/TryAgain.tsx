@@ -1,4 +1,5 @@
 import { Btn } from "../../components/Btn";
+import { useT } from "../../lib/i18n";
 
 /**
  * The reader's way back — ONE button for every sentence a reader can meet
@@ -9,9 +10,10 @@ import { Btn } from "../../components/Btn";
  * of it had already appeared by review round 6.
  */
 export function TryAgain({ onClick }: { onClick: () => void }) {
+  const t = useT();
   return (
     <Btn size="sm" onClick={onClick}>
-      Try again
+      {t("wui.page.tryAgain")}
     </Btn>
   );
 }

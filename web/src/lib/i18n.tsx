@@ -1429,6 +1429,42 @@ export const messages = {
     "zh-TW": "要給其他人看，請 workspace 的擁有者 {owner} 把他加進來。",
     en: "To show it to others, ask the workspace's owner, {owner}, to add them.",
   },
+  // The page a link opens (`/w/…`) and the reader's lines in the WUI pane
+  // (docs/plan-deploy-reach.md decisions 3 + 7).
+  "wui.page.opening": { "zh-TW": "正在開啟 {path}…", en: "Opening {path}…" },
+  "wui.page.lookingAgain": { "zh-TW": "再找一次 {path}…", en: "Looking again for {path}…" },
+  "wui.page.missing": {
+    "zh-TW":
+      "打不開這個頁面。最常見的原因是你還沒有這個 workspace 的權限，請向給你連結的人確認他已經分享給你。如果你已經有權限，可能是 {path} 不存在，或這個 workspace 正在還原中，稍後再試一次。",
+    en: "This page can't be opened. Most often that's because you don't have access to this workspace yet — check with whoever sent you the link that they shared it with you. If you do have access, {path} may not exist, or the workspace may still be restoring — try again in a moment.",
+  },
+  "wui.page.forbidden": {
+    "zh-TW": "你看得到這個 workspace，但沒有讀取 {path} 的權限。可以向擁有者申請。",
+    en: "You can see this workspace, but you don't have permission to read {path}. You can ask its owner for access.",
+  },
+  "wui.page.requestFailed": { "zh-TW": "申請沒有送出，請再試一次。", en: "The request didn't go through — try again." },
+  "wui.page.signedOut": {
+    "zh-TW": "你的登入已過期，請重新登入後再開啟 {path}。",
+    en: "Your session has ended — sign in again to read {path}.",
+  },
+  "wui.page.deleted": { "zh-TW": "存放 {path} 的 workspace 已經刪除。", en: "The workspace holding {path} has been deleted." },
+  "wui.page.status": {
+    "zh-TW": "無法讀取 {path}（workspace 回應 {status}）。",
+    en: "{path} could not be read (the workspace answered {status}).",
+  },
+  "wui.page.unreachable": {
+    "zh-TW": "連不到 workspace，無法讀取 {path}。",
+    en: "Could not reach the workspace to read {path}.",
+  },
+  "wui.page.notWui": { "zh-TW": "{path} 不是頁面。這個網址只能開啟 WUI。", en: "{path} is not a page. This address only opens a WUI." },
+  "wui.page.tryAgain": { "zh-TW": "再試一次", en: "Try again" },
+  "wui.pane.opening": { "zh-TW": "開啟中…", en: "Opening…" },
+  "wui.pane.building": { "zh-TW": "建置中…完成後就會出現頁面。", en: "Building… the page appears when this finishes." },
+  "wui.pane.deploying": { "zh-TW": "Deploy 中…完成後就會出現頁面。", en: "Deploying… the page appears when this finishes." },
+  "wui.pane.unpublished": {
+    "zh-TW": "這個頁面還沒發布，或還在還原中。請稍後再試一次。",
+    en: "This page has not been published yet — or it is still being restored. Try again in a moment.",
+  },
   // Who an overview page's link opens for (docs/plan-deploy-reach.md decision 6).
   "wui.reach.you": { "zh-TW": "只有你打得開", en: "Only you can open it" },
   "wui.reach.you.tip": {
