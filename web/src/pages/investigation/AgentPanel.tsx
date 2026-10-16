@@ -38,7 +38,7 @@ import { UserChip } from "../../components/UserChip";
 import { UserPicker } from "../../components/UserPicker";
 import { docHref } from "../kb/kbLinks";
 import { type AgentState, useOptionalAgent } from "../../hooks/useAgent";
-import { useCurrentUser } from "../../hooks/useCurrentUser";
+import { useCurrentUser, useCurrentUserState } from "../../hooks/useCurrentUser";
 import { subscribeAgentDraft } from "../../lib/agentDraftBus";
 import { chatEmptyHint } from "../../lib/chatCopy";
 import { modCombo } from "../../lib/platform";
@@ -61,6 +61,8 @@ import { useT } from "../../lib/i18n";
 import { markingRows, markingSize } from "../../lib/markings";
 import { type AttachProgress, attachPrompt, runAttach, uploadPathFor } from "./attach";
 import { extractClipboardFiles, isImage, readTransferEntries } from "./transfer";
+import { turnNote } from "./turnNote";
+import { useUser } from "../../hooks/useUsers";
 
 /** Said in two places — the composer's placeholder and the refusal every
  * control gives — so it lives once. Two copies of one sentence diverge on the
@@ -400,12 +402,11 @@ export function AgentPanel({
     void send(asked.message.content);
   };
 
-  const queueNote = othersTurn
-    ? `${log.streamingBy} 正在對話中。你現在送出的訊息會排在後面。`
-    : null;
-  // The strip under the composer says one thing at a time: what just happened to
-  // an attachment if anything did, otherwise why a send would queue.
-  const composerNote = composerHint ?? queueNote;
+  // docs/plan-interjection.md Q2/Q7: what a message sent while a turn runs will
+  // do — worded below, once `t` exists.
+  const meState = useCurrentUserState();
+  const note = turnNote(log, meState.ready ? meState.id : null);
+  const runningName = useUser(log.streamingBy ?? "").name;
   const dialog = useDialog();
 
   // #38: "undo to here" on the user prompt at entry `i` — drop that turn
@@ -442,6 +443,15 @@ export function AgentPanel({
   };
   const chatScrollRef = useStickToBottom<HTMLDivElement>(log);
   const t = useT();
+  // The strip under the composer says one thing at a time: what just happened to
+  // an attachment if anything did, otherwise what a message sent now would do.
+  const composerNote =
+    composerHint ??
+    (note?.kind === "own"
+      ? t("interject.composerNote")
+      : note?.kind === "others"
+        ? t("interject.othersNote", { who: runningName || note.who })
+        : null);
   const [draft, setDraft] = useState("");
   // A WUI hands its error/pick report over rather than making someone who
   // cannot open a console retype it. Offered into the box, never sent: what to

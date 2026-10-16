@@ -188,10 +188,13 @@ class Message(Struct):
     """Only set when role=error (issue #37) — why the turn failed: one of
     `failover.classify.ERROR_KINDS` (docs/plan-friendly-errors.md; rows
     persisted before it say `error`), `cancelled` (user interrupted),
-    `max_turns` (hit the step cap). `content` is then the raw text the FE
-    shows under technical details. Drives whether the failure re-enters
-    the next turn's LLM history (`api.turns.history_items`): `cancelled`
-    is replayed as a system note, the rest are human-only diagnostics."""
+    `interrupted` (another person's message took the turn over — `author`
+    is that person; docs/plan-interjection.md Q2), `max_turns` (hit the
+    step cap). `content` is then the raw text the FE shows under technical
+    details. Drives whether the failure re-enters the next turn's LLM
+    history (`api.turns.history_items`): `cancelled`, `interrupted` and
+    `max_turns` are replayed as a one-line note folded into the previous
+    answer; the rest are human-only diagnostics."""
 
     failure: dict[str, Any] | None = None
     """A failure this message reports, as `{kind, params, raw}` for the FE to

@@ -778,24 +778,36 @@ class TurnContextBuilder:
         # on the ctx so the runner can tell the endpoint to OPEN that much rather
         # than serve its own default and truncate the difference away in silence.
         window = self._context_window(agent_config)
+        # The token ceiling is DERIVED from what this endpoint can actually
+        # take, minus what the prompt + tool schemas already spend — not a
+        # constant. An unknown ceiling yields None ⇒ no trim (we send it all
+        # and learn the real limit from the response), unless an operator has
+        # set the legacy manual cap. None is deliberately not 0: 0 is a known
+        # ceiling with no room left, which must trim to nothing, not to all.
+        max_tokens = (
+            derived
+            if (derived := self._budget_for(agent_config, overhead_tokens=overhead)) is not None
+            else self._history_max_context_tokens
+        )
         history = history_items(
             history_messages,
             max_messages=self._history_max_messages,
-            # The token ceiling is DERIVED from what this endpoint can actually
-            # take, minus what the prompt + tool schemas already spend — not a
-            # constant. An unknown ceiling yields None ⇒ no trim (we send it all
-            # and learn the real limit from the response), unless an operator has
-            # set the legacy manual cap. None is deliberately not 0: 0 is a known
-            # ceiling with no room left, which must trim to nothing, not to all.
-            max_tokens=(
-                derived
-                if (derived := self._budget_for(agent_config, overhead_tokens=overhead)) is not None
-                else self._history_max_context_tokens
-            ),
+            max_tokens=max_tokens,
             users=self._users,
             on_trim=cut.append,
             on_reduce=said.append,
         )
+        users = self._users
+        max_messages = self._history_max_messages
+
+        def history_builder(messages: list[Any]) -> list[dict[str, Any]]:
+            # plan-interjection Q1: the same budget, for a turn that rebuilds its
+            # history when it starts. Whether that rebuild had to cut is not
+            # announced again — the #624 notice is the send's, said once.
+            return history_items(
+                messages, max_messages=max_messages, max_tokens=max_tokens, users=users
+            )
+
         return dict(
             investigation_id=item_id,
             sandbox=self._sandbox,
@@ -861,6 +873,7 @@ class TurnContextBuilder:
             exec_output_max_chars=self._exec_output_max_chars,
             schedule_policy=self._schedule_policy,
             history=history,
+            history_builder=history_builder,
             history_trimmed=cut[0] if cut else 0,
             history_reduced_note=said[0] if said else "",
             context_overhead_tokens=overhead,

@@ -712,7 +712,7 @@ class _RecordingRunner(LitellmAgentRunner):
         self._scripts = list(scripts)
         self.runs = 0
 
-    async def _run_once(self, prompt, ctx):
+    async def _run_once(self, prompt, ctx, resume=None):
         self.runs += 1
         script = self._scripts.pop(0)
         if isinstance(script, Exception):

@@ -641,9 +641,20 @@ describe("AgentPanel — a shared item queues, so a spectator is not locked out"
     await waitFor(() => expect(agent.send).toHaveBeenCalledWith("me too", expect.anything()));
   });
 
-  it("says the message will be queued rather than answered right away", async () => {
+  // docs/plan-interjection.md Q2: a turn runs as one person, so sending during
+  // someone else's stops it and yours takes over — said BEFORE the send.
+  it("says sending now takes the running turn over", async () => {
     render({ streaming: true, streamingBy: "bob" });
-    expect(await screen.findByTestId("composer-hint")).toHaveTextContent("排在");
+    const hint = await screen.findByTestId("composer-hint");
+    expect(hint).toHaveTextContent("接手");
+    expect(hint).not.toHaveTextContent("排在");
+  });
+
+  // docs/plan-interjection.md Q7: during your own turn, what a message sent now
+  // can and cannot change.
+  it("during your own turn, says the turn's settings are already set", async () => {
+    render({ streaming: true, streamingBy: "alice" });
+    expect(await screen.findByTestId("composer-hint")).toHaveTextContent("開始時已決定");
   });
 
   // …and so does your OWN turn now. It used to be the one refused, which read as

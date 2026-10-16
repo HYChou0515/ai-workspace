@@ -347,27 +347,62 @@ def test_history_items_never_emits_a_system_message():
         assert all(it.get("role") != "system" for it in items)
 
 
-def test_history_items_drops_system_and_max_turns_errors_from_context():
-    """#37 — infra/model errors and the step-limit are human-only
-    diagnostics: never replayed to the model."""
+def test_history_items_drops_system_errors_from_context():
+    """#37 — infra/model errors are human-only diagnostics: never replayed to
+    the model (a connection error re-fed only derails a small model)."""
+    msgs = [
+        _E("user", "q"),
+        _E("error", "APIConnectionError: refused", error_kind="error"),
+        _E("user", "retry please"),
+    ]
+    assert history_items(msgs, max_messages=100) == [
+        {"role": "user", "content": "q"},
+        {"role": "user", "content": "retry please"},
+    ]
 
-    class _E:
-        def __init__(self, role, content, *, error_kind=None):
-            self.role = role
-            self.content = content
-            self.error_kind = error_kind
-            self.tool_call_id = self.tool_name = self.tool_args = None
 
-    for kind in ("error", "max_turns"):
-        msgs = [
-            _E("user", "q"),
-            _E("error", "APIConnectionError: refused", error_kind=kind),
-            _E("user", "retry please"),
-        ]
-        assert history_items(msgs, max_messages=100) == [
-            {"role": "user", "content": "q"},
-            {"role": "user", "content": "retry please"},
-        ]
+def test_history_items_says_a_turn_stopped_at_the_step_limit():
+    """docs/plan-interjection.md Q5 — a turn that ran out of steps did not go
+    wrong, it did not FINISH, and the next turn has to know that to carry on
+    rather than start over or answer as if the work were done. Folded like a
+    cancellation (#199): a plain statement of fact, no instruction."""
+    msgs = [
+        _E("user", "map every lot"),
+        _E("assistant", "Read 40 of 120 lots so far"),
+        _E(
+            "error",
+            "The agent stopped after reaching its step limit (150).",
+            error_kind="max_turns",
+        ),
+        _E("user", "continue"),
+    ]
+    assert history_items(msgs, max_messages=100) == [
+        {"role": "user", "content": "map every lot"},
+        {
+            "role": "assistant",
+            "content": (
+                "Read 40 of 120 lots so far\n\n"
+                "[Response stopped at the step limit before it finished]"
+            ),
+        },
+        {"role": "user", "content": "continue"},
+    ]
+
+
+def test_history_items_says_so_after_a_tool_output_too():
+    """A turn cut off by the step limit almost always ends right after a tool
+    ran — there is no assistant text to fold into."""
+    msgs = [
+        _E("user", "map every lot"),
+        _M("assistant", ""),
+        _M("tool", "lot 40", tool_call_id="c1", tool_name="read_file", tool_args={"path": "x"}),
+        _E("error", "step limit", error_kind="max_turns"),
+    ]
+    items = history_items(msgs, max_messages=100)
+    assert items[-1] == {
+        "role": "assistant",
+        "content": "[Response stopped at the step limit before it finished]",
+    }
 
 
 def test_history_items_drops_oldest_to_fit_a_token_budget():
@@ -495,3 +530,101 @@ def test_history_replays_from_the_newest_summary_not_the_whole_thread():
         "那接下來呢",
     ]
     assert {i["role"] for i in items} == {"user"}
+
+
+def test_build_input_places_folded_messages_between_history_and_the_prompt():
+    """docs/plan-interjection.md Q10: the messages a turn answers for others go
+    in, in order, after the history and before its own — each attributed like a
+    history message on a shared thread, with the images it carried."""
+    from workspace_app.agent.context import Interjection
+
+    hist = [{"role": "user", "content": "q1"}, {"role": "assistant", "content": "a1"}]
+    leading = [
+        Interjection(content="q2", author="ann", at=2, speaker="Ann (ann)"),
+        Interjection(content="q3", author="ann", at=3, image_urls=["data:image/png;base64,AA"]),
+    ]
+    assert _build_input(hist, "q4", (), leading) == [
+        *hist,
+        {"role": "user", "content": "[Ann (ann)]: q2"},
+        {
+            "role": "user",
+            "content": [
+                {"type": "input_text", "text": "q3"},
+                {"type": "input_image", "image_url": "data:image/png;base64,AA"},
+            ],
+        },
+        {"role": "user", "content": "q4"},
+    ]
+
+
+def test_history_says_whose_message_took_the_turn_over():
+    """docs/plan-interjection.md Q2: the model learns its answer was cut off AND
+    by whom — the next message is that person's, and it is theirs to answer."""
+    interrupted = _E("error", "interrupted by a new message", error_kind="interrupted")
+    interrupted.author = "u2"  # ty: ignore[unresolved-attribute]
+    msgs = [
+        _E("user", "map every lot"),
+        _E("assistant", "Read 40 lots"),
+        interrupted,
+    ]
+    directory = _Dir(User(id="u2", name="Bob Liu", email="bob.liu@acme.test"))
+    items = history_items(msgs, max_messages=100, users=directory)
+    assert items[-1] == {
+        "role": "assistant",
+        "content": "Read 40 lots\n\n[Response interrupted by a new message from Bob Liu (bob.liu)]",
+    }
+
+
+def test_build_input_with_folded_messages_and_no_history_is_a_list():
+    from workspace_app.agent.context import Interjection
+
+    leading = [Interjection(content="q1", author="a", at=1)]
+    assert _build_input([], "q2", (), leading) == [
+        {"role": "user", "content": "q1"},
+        {"role": "user", "content": "q2"},
+    ]
+
+
+class _T:
+    def __init__(self, role: str, content: str, at: int, author: str | None = None) -> None:
+        self.role, self.content, self.created_at, self.author = role, content, at, author
+
+
+def test_a_message_moves_only_when_something_it_did_not_see_sits_after_it():
+    """docs/plan-interjection.md §9 C8: the answered message is put where its
+    turn read it — but only when that is not where it already is. A notice or a
+    summary written while it was being prepared is about it, not news to it."""
+    from workspace_app.api.turns import must_move
+
+    fresh = [_T("user", "Q1", 1, "a"), _T("notice", "older left out", 2)]
+    assert must_move(fresh, [(1, "a")], set()) is False
+    waited = [_T("user", "Q2", 2, "a"), _T("assistant", "A1", 3)]
+    assert must_move(waited, [(2, "a")], set()) is True
+    # Another unanswered question after it is not something it read past.
+    behind = [_T("user", "Q2", 2, "a"), _T("user", "Q3", 4, "b")]
+    assert must_move(behind, [(2, "a")], {(4, "b")}) is False
+    # …but one already answered (it sits with its answer) is.
+    assert must_move(behind, [(2, "a")], set()) is True
+
+
+def test_leaving_out_a_message_leaves_out_that_persons_not_anyones_same_millisecond():
+    """§9 C14 (review round 2): Ann's question is the turn's, Bob's — sent in
+    the same millisecond — is still unanswered and must stay out too, but by
+    its own key. By stamp alone the first match went, so Ann's own question
+    stayed in her history (and was her prompt too) while Bob's was dropped."""
+    from workspace_app.api.turns import thread_without
+
+    thread = [_T("user", "Bob's", 5, "bob"), _T("user", "Ann's", 5, "ann"), _T("assistant", "A", 6)]
+    assert [m.content for m in thread_without(thread, [(5, "ann")])] == ["Bob's", "A"]
+    assert [m.content for m in thread_without(thread, [(5, "ann"), (5, "bob")])] == ["A"]
+
+
+def test_placing_a_message_finds_its_author_too():
+    """Two people can send in the same millisecond; the stamp alone named the
+    wrong one."""
+    from workspace_app.api.turns import take_person_message
+
+    thread = [_T("user", "Bob's", 5, "bob"), _T("user", "Ann's", 5, "ann")]
+    placed = take_person_message(thread, 5, "ann")
+    assert placed is not None and placed.content == "Ann's"
+    assert [m.content for m in thread] == ["Bob's"]

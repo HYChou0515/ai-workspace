@@ -71,6 +71,7 @@ from ..resources import AgentConfig
 from ..resources.groups import groups_of
 from ..resources.kb import Citation, KbChat, KbMessage
 from ..tokens import CallLane
+from ..users.labels import speaker_label
 from ..users.protocol import UserDirectory
 from .chat_naming import first_user_snippet
 from .events import AgentEvent, AnswerText, RunError, ToolEnd, ToolStart, UserMessage
@@ -80,10 +81,16 @@ from .runner import AgentRunner
 from .timeutil import dt_ms
 from .turns import (
     CONTEXT_NOTICE_ROLE,
+    PLACE_ROLE,
     ChatTurnEngine,
+    MessageKey,
+    QueuedMessage,
     TurnMessage,
     already_noticed,
     history_items,
+    must_move,
+    take_person_message,
+    thread_without,
 )
 
 
@@ -827,282 +834,325 @@ def register_kb_chat_routes(
         with chat_rm.using(user=owner) as op:
             op.update(chat_id, chat)
 
-        # Issue #32: resolve the picker selection. Default = first
-        # entry; explicit unknown name → 422 (not a silent fallback).
-        configs = now(kb_agent_configs)  # once: one send, one published version
-        if body.agent_name is None:
-            agent_config = configs[0]
-        else:
-            match = next((c for c in configs if c.name == body.agent_name), None)
-            if match is None:
-                avail = [c.name for c in configs]
-                raise HTTPException(
-                    status_code=422,
-                    detail=f"unknown agent_name={body.agent_name!r}; available: {avail}",
+        # plan-interjection §9 C8: from here until it is queued, this message is
+        # persisted and unanswered — no other turn's rebuilt history may hold it.
+        async with engine.preparing(chat_id, author=asked_by, at=asked_at) as pending:
+            # Issue #32: resolve the picker selection. Default = first
+            # entry; explicit unknown name → 422 (not a silent fallback).
+            configs = now(kb_agent_configs)  # once: one send, one published version
+            if body.agent_name is None:
+                agent_config = configs[0]
+            else:
+                match = next((c for c in configs if c.name == body.agent_name), None)
+                if match is None:
+                    avail = [c.name for c in configs]
+                    raise HTTPException(
+                        status_code=422,
+                        detail=f"unknown agent_name={body.agent_name!r}; available: {avail}",
+                    )
+                agent_config = match
+
+            # Resolve the caller-level enhancement override. FE depth
+            # picker translates to this structured payload; absence =
+            # inherit operator default.
+            caller_enh = to_caller_enhancements(body.enhancements)
+
+            # Permission-disclosure: pull the read_meta-ONLY collections out of the
+            # searched scope so the probe discloses them (existence) instead of the
+            # retriever searching a collection the speaker can't read. Only genuine
+            # discoverable collections are moved — unknown/deleted ids stay in the
+            # searched scope exactly as before (the retriever just finds nothing), so
+            # this is a strict addition: the readable scope is unchanged except that a
+            # discoverable collection is redirected to the disclosure channel.
+            # Global-collection concept: the effective scope UNIONS the always-in-scope
+            # global set and drops excluded ids (unspecified ⇒ global alone) BEFORE the
+            # permission partition — so a KB chat with no collections picked searches the
+            # global baseline, and a picked set adds global on top.
+            _effective = resolve_effective_scope(
+                spec, chat.collection_ids, excluded=chat.excluded_collection_ids
+            )
+            # #537: this reply's two allowances, and the tool set they imply. A source
+            # capped at 0 is OFF — its tool isn't granted, so the model never spends a
+            # round-trip being refused and never reads a refusal as "stop searching".
+            turn_kb_budget = KbSearchBudget(
+                max_calls=resolve_max_searches(
+                    body.max_kb_searches,
+                    default=max_searches_per_turn,
+                    ceiling=max_searches_ceiling,
                 )
-            agent_config = match
-
-        # Resolve the caller-level enhancement override. FE depth
-        # picker translates to this structured payload; absence =
-        # inherit operator default.
-        caller_enh = to_caller_enhancements(body.enhancements)
-
-        # Permission-disclosure: pull the read_meta-ONLY collections out of the
-        # searched scope so the probe discloses them (existence) instead of the
-        # retriever searching a collection the speaker can't read. Only genuine
-        # discoverable collections are moved — unknown/deleted ids stay in the
-        # searched scope exactly as before (the retriever just finds nothing), so
-        # this is a strict addition: the readable scope is unchanged except that a
-        # discoverable collection is redirected to the disclosure channel.
-        # Global-collection concept: the effective scope UNIONS the always-in-scope
-        # global set and drops excluded ids (unspecified ⇒ global alone) BEFORE the
-        # permission partition — so a KB chat with no collections picked searches the
-        # global baseline, and a picked set adds global on top.
-        _effective = resolve_effective_scope(
-            spec, chat.collection_ids, excluded=chat.excluded_collection_ids
-        )
-        # #537: this reply's two allowances, and the tool set they imply. A source
-        # capped at 0 is OFF — its tool isn't granted, so the model never spends a
-        # round-trip being refused and never reads a refusal as "stop searching".
-        turn_kb_budget = KbSearchBudget(
-            max_calls=resolve_max_searches(
-                body.max_kb_searches,
-                default=max_searches_per_turn,
-                ceiling=max_searches_ceiling,
             )
-        )
-        turn_wiki_budget = WikiSearchBudget(
-            max_calls=resolve_max_searches(
-                body.max_wiki_searches,
-                default=max_searches_per_turn,
-                ceiling=max_searches_ceiling,
+            turn_wiki_budget = WikiSearchBudget(
+                max_calls=resolve_max_searches(
+                    body.max_wiki_searches,
+                    default=max_searches_per_turn,
+                    ceiling=max_searches_ceiling,
+                )
             )
-        )
-        # plan-rag-context P3: the exact search has no per-message pick and no
-        # operator cap in this phase — unlimited but counted; `max_turns` bounds it.
-        turn_grep_budget = KbGrepBudget()
-        turn_consultant = (
-            wiki_consultant_factory(list(_effective)) if wiki_consultant_factory else None
-        )
-        turn_note = allowance_note(
-            agent_config.allowed_tools,
-            kb=turn_kb_budget,
-            wiki=turn_wiki_budget,
-            has_wiki=turn_consultant is not None,
-            grep=turn_grep_budget,
-        )
-        agent_config = msgspec.structs.replace(
-            agent_config,
-            allowed_tools=tools_within_budget(
+            # plan-rag-context P3: the exact search has no per-message pick and no
+            # operator cap in this phase — unlimited but counted; `max_turns` bounds it.
+            turn_grep_budget = KbGrepBudget()
+            turn_consultant = (
+                wiki_consultant_factory(list(_effective)) if wiki_consultant_factory else None
+            )
+            turn_note = allowance_note(
                 agent_config.allowed_tools,
                 kb=turn_kb_budget,
                 wiki=turn_wiki_budget,
+                has_wiki=turn_consultant is not None,
                 grep=turn_grep_budget,
-            ),
-        )
-        _disc = partition_collection_disclosure(
-            spec, _effective, get_user_id(), superusers=superusers
-        )
-        _discoverable = set(_disc.discoverable)
-        # #605: the disclosure PROBE universe is every discoverable collection in
-        # the store — not just the picked scope ("R級要選到才會揭露" was the
-        # defect: unpicked = unprobed = undisclosable). The searched scope below
-        # still subtracts only the IN-SCOPE discoverable ids; explicit
-        # exclusions stay excluded (#551 — deliberate is deliberate).
-        # Operator default AND the per-chat toggle must both allow: False skips,
-        # None inherits, True can't override a globally-off deploy.
-        _turn_disclosure = disclosure_enabled and body.disclosure is not False
-        _probe_universe = (
-            all_discoverable_collection_ids(
-                spec,
-                get_user_id(),
-                excluded=chat.excluded_collection_ids or (),
-                superusers=superusers,
             )
-            if _turn_disclosure
-            else []
-        )
-        # Cross-turn memory: prior dialogue (excludes the user msg just added),
-        # each message attributed to its author (#242).
-        _reduced: list[str] = []
-        _history = history_items(
-            chat.messages[:-1],
-            max_messages=history_max_messages,
+            agent_config = msgspec.structs.replace(
+                agent_config,
+                allowed_tools=tools_within_budget(
+                    agent_config.allowed_tools,
+                    kb=turn_kb_budget,
+                    wiki=turn_wiki_budget,
+                    grep=turn_grep_budget,
+                ),
+            )
+            _disc = partition_collection_disclosure(
+                spec, _effective, get_user_id(), superusers=superusers
+            )
+            _discoverable = set(_disc.discoverable)
+            # #605: the disclosure PROBE universe is every discoverable collection in
+            # the store — not just the picked scope ("R級要選到才會揭露" was the
+            # defect: unpicked = unprobed = undisclosable). The searched scope below
+            # still subtracts only the IN-SCOPE discoverable ids; explicit
+            # exclusions stay excluded (#551 — deliberate is deliberate).
+            # Operator default AND the per-chat toggle must both allow: False skips,
+            # None inherits, True can't override a globally-off deploy.
+            _turn_disclosure = disclosure_enabled and body.disclosure is not False
+            _probe_universe = (
+                all_discoverable_collection_ids(
+                    spec,
+                    get_user_id(),
+                    excluded=chat.excluded_collection_ids or (),
+                    superusers=superusers,
+                )
+                if _turn_disclosure
+                else []
+            )
+            # Cross-turn memory: prior dialogue (excludes the user msg just added),
+            # each message attributed to its author (#242).
+            _reduced: list[str] = []
             # #624: derived from the endpoint's real ceiling minus this turn's
             # prompt, exactly like the app chat. Unknown ⇒ 0 ⇒ no trim (send it
             # all and learn), never a fabricated constant.
-            max_tokens=(
+            _max_tokens = (
                 _kb_history_budget(agent_config, context_limit) or history_max_context_tokens
-            ),
-            users=users,
-            on_reduce=_reduced.append,
-        )
-        # #624: announcing a reduction is unconditional — except a LOSSLESS one,
-        # which keeps every message and so has nothing to announce (#739). This
-        # is the surface most likely to need it — retrieved passages and whole
-        # wiki pages land in this thread — and it was the one cutting in silence.
-        if _reduced:
-            _note_kb_reduction(chat_id, owner, _reduced[0])
-        ctx = AgentToolContext(
-            tool_output_max_chars=tool_output_max_chars,
-            exec_output_max_chars=exec_output_max_chars,
-            # plan-tool-usage-stats §3.4.
-            surface="kb_chat",
-            retriever=retriever,
-            collection_ids=[c for c in _effective if c not in _discoverable],
-            discoverable_collection_ids=_probe_universe,
-            # #308: exclude docs whose per-doc override blocks THIS speaker's
-            # read_content, so the retriever never surfaces a doc tightened away
-            # from them (empty when no doc in scope is overridden).
-            exclude_doc_ids=denied_doc_ids(
-                spec,
-                Actor.human(get_user_id(), groups=groups_of(spec, get_user_id())),
-                chat.collection_ids,
-                "read_content",
-                superusers=superusers,
-            ),
-            agent_config=agent_config,
-            # #537: the wiki the agent's `ask_wiki` tool consults. The reader that
-            # navigates it runs in its own context, so nothing here holds wiki pages
-            # — this is just the handle that lets the tool reach a reader at all.
-            # Unset when no collection in scope keeps a wiki.
-            run_wiki_reader=turn_consultant,
-            search_allowance_note=turn_note,
-            # specstar handle so the agent's `lookup_glossary` tool (when granted)
-            # can read this collection's context cards — deterministic glossary
-            # path beside kb_search (unknown term → glossary, question → search).
-            spec=spec,
-            # Cross-turn memory: prior dialogue (excludes the user msg just added),
-            # each message attributed to its author (#242).
-            history=_history,
-            # #242: who the agent is replying to (here, always the owner — shares
-            # are read-only). Feeds the per-turn "you are replying to …" note.
-            speaker=users.get(get_user_id()),
-            # #111/#397: the acting user tools stamp on writes (context cards,
-            # wiki corrections).
-            acting_user=get_user_id(),
-            # A person is waiting on this reply — the KB chat send is the other
-            # interactive surface (see `AgentToolContext.call_lane`).
-            call_lane="interactive",
-            # #397: the request_wiki_update tool submits a wiki correction through
-            # this (None ⇒ the tool reports it's unavailable).
-            submit_wiki_correction=(
-                wiki_coordinator.submit_correction if wiki_coordinator else None
-            ),
-            # Per-message reasoning effort from the UI selector.
-            reasoning_effort=body.reasoning_effort,
-            kb_enhancements=caller_enh,
-            # #195/#334: cap how many times this reply may run kb_search — the
-            # composer's per-message pick (clamped to [0, ceiling]) or, absent
-            # one, the operator default.
-            kb_search_budget=turn_kb_budget,
-            wiki_search_budget=turn_wiki_budget,
-            kb_grep_budget=turn_grep_budget,
-        )
-
-        def persist(produced: list[TurnMessage]) -> None:
-            if not produced:
-                return
-            fresh = _load(chat_id)
-            for m in produced:
-                km = KbMessage(
-                    role=m.role,
-                    content=m.content,
-                    reasoning=m.reasoning,
-                    tool_call_id=m.tool_call_id,
-                    tool_name=m.tool_name,
-                    tool_args=m.tool_args,
-                    created_at=m.created_at,
-                    metrics=m.metrics,
-                    error_kind=m.error_kind,  # role=error (#37)
-                    error_params=m.error_params,
-                    stopped_reason=m.stopped_reason,  # #113: repetition-stop notice survives reload
-                )
-                # Resolve [n] on answers against the passages this turn searched,
-                # and log each as a CitationEvent (powers the cited counts).
-                if m.role == "assistant":
-                    km.citations = parse_citations(m.content, ctx.kb_passages)
-                    record_citations(
-                        spec,
-                        km.citations,
-                        origin_kind="kb_chat",
-                        origin_id=chat_id,
-                        cited_by=get_user_id(),
-                    )
-                    # Permission-disclosure: attach the withheld sources this turn
-                    # surfaced (read_meta-only, competitive match) so the FE renders
-                    # the lock chips beside the answer.
-                    km.withheld = resolve_withheld(spec, ctx.withheld_collection_ids)
-                fresh.messages.append(km)
-            # Same owner-acting write as the user-message append above (#304): the
-            # assistant reply persists through the write handler as the chat owner.
-            with chat_rm.using(user=owner) as op:
-                op.update(chat_id, fresh)
-
-        # #106: deterministic context-card pre-scan. Inject any cards whose keys
-        # appear in the message so a covered term is answered straight away,
-        # without a kb_search round-trip. The persisted user message (above)
-        # stays clean — only the content handed to the agent is augmented.
-        # #484: record the injected card ids in `ctx.injected_card_ids` so a later
-        # kb_search this turn doesn't define the same term a second time.
-        agent_content = body.content
-        if chat.collection_ids:
-            pairs = cards_with_ids_for_collections(spec, chat.collection_ids)
-            hits = match_with_ids(body.content, pairs)
-            cards = [card for _, card in hits]
-            block = card_context_block(cards)
-            if block:
-                agent_content = f"{block}\n\n{body.content}"
-            # Only what the block actually carried — a card the budget dropped
-            # was never defined for the model, and marking it would keep a later
-            # kb_search this turn from defining it either.
-            ctx.injected_card_ids.update(rid for rid, _ in hits[: shown_card_count(cards)])
-
-        # #633: the same idea for the knowledge graph. A 14B model decides
-        # whether to look something up by whether IT knows the word, so a
-        # question about a term it recognises ("回焊爐是什麼?") never reached the
-        # graph even with the dossier tool one call away (#630 P7, four prompt
-        # attempts). Names the question mentions are resolved here and their
-        # facts ride along. Reads AS the caller; a stale index only means a name
-        # is not offered yet — `lookup_entity` still finds it.
-        # Off the loop (measured 297 ms on a hit, 0.01 ms on a miss, plus a
-        # ~260 ms index build once per TTL): specstar reads are blocking, and a
-        # blocking call inside an async handler stalls every other request on
-        # this pod — the #569 shape. The miss path is cheap but the hit path is
-        # not, and the hit path is the one users notice.
-        graph_block = await asyncio.to_thread(_graph_block_for, spec, body.content, get_user_id())
-        if graph_block:
-            agent_content = f"{graph_block}\n\n{agent_content}"
-
-        # #513 P10: a transient image attached to this message is VLM-described and
-        # its caption folded into the query the agent searches with — the same
-        # "augment the agent's content, not the persisted message" pattern as the
-        # #106 card pre-scan above. The image itself is never stored (not a KB doc).
-        if body.image is not None:
-            agent_content, ctx.query_image = await _fold_image(
-                agent_content, body.image, vlm_describer
+            )
+            _history = history_items(
+                chat.messages[:-1],
+                max_messages=history_max_messages,
+                max_tokens=_max_tokens,
+                users=users,
+                on_reduce=_reduced.append,
             )
 
-        # QUEUE this turn; do not cancel whatever is running.
-        #
-        # `stream()` begins with `_cancel_prior_turn`, so a follow-up asked while
-        # an answer was streaming threw that answer away. The composer covered it
-        # by refusing to send at all — no bubble, no cleared box, no reason given
-        # — which reads as the whole app being dead. The workspace chat settled
-        # this in #43: messages serialize, and only Stop cancels. This is that,
-        # for the KB chat.
-        #
-        # The broadcast goes out FIRST and on the chat's own stream, so every
-        # viewer (and the sender, whose optimistic bubble adopts it) sees the
-        # question the moment it is accepted rather than whenever its turn
-        # eventually starts.
-        engine.publish(
-            chat_id, UserMessage(author=asked_by, content=body.content, created_at=asked_at)
-        )
-        # docs/plan-capacity-usage.md §6.3: the question's own timestamp is the acceptance.
-        fut = engine.enqueue(
-            chat_id, agent_content, ctx, on_complete=persist, surface="kb", accepted_ms=asked_at
-        )
+            async def refresh(
+                answering: list[MessageKey], pending: set[MessageKey], ctx: AgentToolContext
+            ) -> bool:
+                # docs/plan-interjection.md Q1: answered with the thread as it stands
+                # when the turn starts — minus every message nobody has answered yet
+                # (§9 C8) — and moved to where it is read when anything now follows it.
+                thread = _load(chat_id).messages
+                ctx.history = history_items(
+                    thread_without(thread, [*answering, *(pending - set(answering))]),
+                    max_messages=history_max_messages,
+                    max_tokens=_max_tokens,
+                    users=users,
+                )
+                return must_move(thread, answering, pending)
+
+            # #624: announcing a reduction is unconditional — except a LOSSLESS one,
+            # which keeps every message and so has nothing to announce (#739). This
+            # is the surface most likely to need it — retrieved passages and whole
+            # wiki pages land in this thread — and it was the one cutting in silence.
+            if _reduced:
+                _note_kb_reduction(chat_id, owner, _reduced[0])
+            ctx = AgentToolContext(
+                tool_output_max_chars=tool_output_max_chars,
+                exec_output_max_chars=exec_output_max_chars,
+                # plan-tool-usage-stats §3.4.
+                surface="kb_chat",
+                retriever=retriever,
+                collection_ids=[c for c in _effective if c not in _discoverable],
+                discoverable_collection_ids=_probe_universe,
+                # #308: exclude docs whose per-doc override blocks THIS speaker's
+                # read_content, so the retriever never surfaces a doc tightened away
+                # from them (empty when no doc in scope is overridden).
+                exclude_doc_ids=denied_doc_ids(
+                    spec,
+                    Actor.human(get_user_id(), groups=groups_of(spec, get_user_id())),
+                    chat.collection_ids,
+                    "read_content",
+                    superusers=superusers,
+                ),
+                agent_config=agent_config,
+                # #537: the wiki the agent's `ask_wiki` tool consults. The reader that
+                # navigates it runs in its own context, so nothing here holds wiki pages
+                # — this is just the handle that lets the tool reach a reader at all.
+                # Unset when no collection in scope keeps a wiki.
+                run_wiki_reader=turn_consultant,
+                search_allowance_note=turn_note,
+                # specstar handle so the agent's `lookup_glossary` tool (when granted)
+                # can read this collection's context cards — deterministic glossary
+                # path beside kb_search (unknown term → glossary, question → search).
+                spec=spec,
+                # Cross-turn memory: prior dialogue (excludes the user msg just added),
+                # each message attributed to its author (#242).
+                history=_history,
+                # #242: who the agent is replying to (here, always the owner — shares
+                # are read-only). Feeds the per-turn "you are replying to …" note.
+                speaker=users.get(get_user_id()),
+                # #111/#397: the acting user tools stamp on writes (context cards,
+                # wiki corrections).
+                acting_user=get_user_id(),
+                # A person is waiting on this reply — the KB chat send is the other
+                # interactive surface (see `AgentToolContext.call_lane`).
+                call_lane="interactive",
+                # #397: the request_wiki_update tool submits a wiki correction through
+                # this (None ⇒ the tool reports it's unavailable).
+                submit_wiki_correction=(
+                    wiki_coordinator.submit_correction if wiki_coordinator else None
+                ),
+                # Per-message reasoning effort from the UI selector.
+                reasoning_effort=body.reasoning_effort,
+                kb_enhancements=caller_enh,
+                # #195/#334: cap how many times this reply may run kb_search — the
+                # composer's per-message pick (clamped to [0, ceiling]) or, absent
+                # one, the operator default.
+                kb_search_budget=turn_kb_budget,
+                wiki_search_budget=turn_wiki_budget,
+                kb_grep_budget=turn_grep_budget,
+            )
+
+            def persist(produced: list[TurnMessage]) -> None:
+                if not produced:
+                    return
+                fresh = _load(chat_id)
+                for m in produced:
+                    if m.role == PLACE_ROLE:
+                        # plan-interjection Q3: the question (stored at acceptance)
+                        # moves to where this turn read it.
+                        placed = take_person_message(fresh.messages, m.created_at, m.author)
+                        if placed is not None:
+                            fresh.messages.append(placed)
+                        continue
+                    km = KbMessage(
+                        role=m.role,
+                        content=m.content,
+                        reasoning=m.reasoning,
+                        tool_call_id=m.tool_call_id,
+                        tool_name=m.tool_name,
+                        tool_args=m.tool_args,
+                        created_at=m.created_at,
+                        metrics=m.metrics,
+                        error_kind=m.error_kind,  # role=error (#37)
+                        error_params=m.error_params,
+                        author=m.author,  # plan-interjection Q2: who took the turn over
+                        # #113: the repetition-stop notice survives a reload.
+                        stopped_reason=m.stopped_reason,
+                    )
+                    # Resolve [n] on answers against the passages this turn searched,
+                    # and log each as a CitationEvent (powers the cited counts).
+                    if m.role == "assistant":
+                        km.citations = parse_citations(m.content, ctx.kb_passages)
+                        record_citations(
+                            spec,
+                            km.citations,
+                            origin_kind="kb_chat",
+                            origin_id=chat_id,
+                            cited_by=get_user_id(),
+                        )
+                        # Permission-disclosure: attach the withheld sources this turn
+                        # surfaced (read_meta-only, competitive match) so the FE renders
+                        # the lock chips beside the answer.
+                        km.withheld = resolve_withheld(spec, ctx.withheld_collection_ids)
+                    fresh.messages.append(km)
+                # Same owner-acting write as the user-message append above (#304): the
+                # assistant reply persists through the write handler as the chat owner.
+                with chat_rm.using(user=owner) as op:
+                    op.update(chat_id, fresh)
+
+            # #106: deterministic context-card pre-scan. Inject any cards whose keys
+            # appear in the message so a covered term is answered straight away,
+            # without a kb_search round-trip. The persisted user message (above)
+            # stays clean — only the content handed to the agent is augmented.
+            # #484: record the injected card ids in `ctx.injected_card_ids` so a later
+            # kb_search this turn doesn't define the same term a second time.
+            agent_content = body.content
+            if chat.collection_ids:
+                pairs = cards_with_ids_for_collections(spec, chat.collection_ids)
+                hits = match_with_ids(body.content, pairs)
+                cards = [card for _, card in hits]
+                block = card_context_block(cards)
+                if block:
+                    agent_content = f"{block}\n\n{body.content}"
+                # Only what the block actually carried — a card the budget dropped
+                # was never defined for the model, and marking it would keep a later
+                # kb_search this turn from defining it either.
+                ctx.injected_card_ids.update(rid for rid, _ in hits[: shown_card_count(cards)])
+
+            # #633: the same idea for the knowledge graph. A 14B model decides
+            # whether to look something up by whether IT knows the word, so a
+            # question about a term it recognises ("回焊爐是什麼?") never reached the
+            # graph even with the dossier tool one call away (#630 P7, four prompt
+            # attempts). Names the question mentions are resolved here and their
+            # facts ride along. Reads AS the caller; a stale index only means a name
+            # is not offered yet — `lookup_entity` still finds it.
+            # Off the loop (measured 297 ms on a hit, 0.01 ms on a miss, plus a
+            # ~260 ms index build once per TTL): specstar reads are blocking, and a
+            # blocking call inside an async handler stalls every other request on
+            # this pod — the #569 shape. The miss path is cheap but the hit path is
+            # not, and the hit path is the one users notice.
+            graph_block = await asyncio.to_thread(
+                _graph_block_for, spec, body.content, get_user_id()
+            )
+            if graph_block:
+                agent_content = f"{graph_block}\n\n{agent_content}"
+
+            # #513 P10: a transient image attached to this message is VLM-described and
+            # its caption folded into the query the agent searches with — the same
+            # "augment the agent's content, not the persisted message" pattern as the
+            # #106 card pre-scan above. The image itself is never stored (not a KB doc).
+            if body.image is not None:
+                agent_content, ctx.query_image = await _fold_image(
+                    agent_content, body.image, vlm_describer
+                )
+
+            # QUEUE this turn; do not cancel whatever is running.
+            #
+            # `stream()` begins with `_cancel_prior_turn`, so a follow-up asked while
+            # an answer was streaming threw that answer away. The composer covered it
+            # by refusing to send at all — no bubble, no cleared box, no reason given
+            # — which reads as the whole app being dead. The workspace chat settled
+            # this in #43: messages serialize, and only Stop cancels. This is that,
+            # for the KB chat.
+            #
+            # The broadcast goes out FIRST and on the chat's own stream, so every
+            # viewer (and the sender, whose optimistic bubble adopts it) sees the
+            # question the moment it is accepted rather than whenever its turn
+            # eventually starts.
+            engine.publish(
+                chat_id, UserMessage(author=asked_by, content=body.content, created_at=asked_at)
+            )
+            # docs/plan-capacity-usage.md §6.3: the question's own timestamp is the acceptance.
+            fut = engine.enqueue(
+                chat_id,
+                agent_content,
+                ctx,
+                on_complete=persist,
+                surface="kb",
+                accepted_ms=asked_at,
+                pending=pending,
+                message=QueuedMessage(
+                    author=asked_by,
+                    at=asked_at,
+                    refresh=refresh,
+                    speaker=speaker_label(users.get(asked_by)) if asked_by else "",
+                ),
+            )
         # #493: await THIS turn, but only to a deadline, then DETACH it — `shield`
         # keeps the worker's future alive, so detaching is not cancelling. A fast
         # turn still returns after its reply is persisted (which is what the
