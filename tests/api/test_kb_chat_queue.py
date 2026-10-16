@@ -126,6 +126,50 @@ async def test_both_questions_are_kept_when_one_queues_behind_the_other() -> Non
     assert [m["content"] for m in msgs if m["role"] == "user"] == ["a", "b"]
 
 
+async def test_a_queued_question_is_answered_with_the_answer_it_waited_for() -> None:
+    """docs/plan-interjection.md Q1: "b" was accepted while "a" was being answered,
+    when the thread held only "a". Its turn starts after that answer, and must be
+    handed it — and the thread must read in the order the AI read it: a, A, b, B."""
+    runner = _GatedRunner()
+    seen: list[list[str]] = []
+    inner = runner.run
+
+    async def recording(prompt: str, ctx: AgentToolContext):
+        seen.append([h["content"] for h in ctx.history])
+        async for ev in inner(prompt, ctx):
+            yield ev
+
+    runner.run = recording  # ty: ignore[invalid-assignment]
+    app = _app(runner)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
+        cid = (await c.post("/kb/chats", json={"title": "t", "collection_ids": []})).json()[
+            "resource_id"
+        ]
+
+        async def send(text: str):
+            return await c.post(f"/kb/chats/{cid}/messages", json={"content": text})
+
+        first = asyncio.create_task(send("a"))
+        for _ in range(400):
+            if runner.started:
+                break
+            await asyncio.sleep(0.01)
+        second = asyncio.create_task(send("b"))
+        await asyncio.sleep(0.05)
+        runner.release = True
+        await asyncio.wait_for(asyncio.gather(first, second), 10)
+
+        msgs = (await c.get(f"/kb/chats/{cid}")).json()["messages"]
+
+    assert seen[1][-1] == "a"  # the first answer is the last thing "b"'s turn sees
+    assert [(m["role"], m["content"]) for m in msgs] == [
+        ("user", "a"),
+        ("assistant", "a"),
+        ("user", "b"),
+        ("assistant", "b"),
+    ]
+
+
 class _ToolRunner:
     async def run(self, prompt: str, ctx: AgentToolContext) -> AsyncIterator[AgentEvent]:
         yield MessageDelta(text="Let me check. ")

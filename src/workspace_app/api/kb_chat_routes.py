@@ -71,6 +71,7 @@ from ..resources import AgentConfig
 from ..resources.groups import groups_of
 from ..resources.kb import Citation, KbChat, KbMessage
 from ..tokens import CallLane
+from ..users.labels import speaker_label
 from ..users.protocol import UserDirectory
 from .chat_naming import first_user_snippet
 from .events import AgentEvent, AnswerText, RunError, ToolEnd, ToolStart, UserMessage
@@ -80,10 +81,14 @@ from .runner import AgentRunner
 from .timeutil import dt_ms
 from .turns import (
     CONTEXT_NOTICE_ROLE,
+    PLACE_ROLE,
     ChatTurnEngine,
+    QueuedMessage,
     TurnMessage,
     already_noticed,
     history_items,
+    take_person_message,
+    thread_without,
 )
 
 
@@ -925,18 +930,28 @@ def register_kb_chat_routes(
         # Cross-turn memory: prior dialogue (excludes the user msg just added),
         # each message attributed to its author (#242).
         _reduced: list[str] = []
+        # #624: derived from the endpoint's real ceiling minus this turn's
+        # prompt, exactly like the app chat. Unknown ⇒ 0 ⇒ no trim (send it
+        # all and learn), never a fabricated constant.
+        _max_tokens = _kb_history_budget(agent_config, context_limit) or history_max_context_tokens
         _history = history_items(
             chat.messages[:-1],
             max_messages=history_max_messages,
-            # #624: derived from the endpoint's real ceiling minus this turn's
-            # prompt, exactly like the app chat. Unknown ⇒ 0 ⇒ no trim (send it
-            # all and learn), never a fabricated constant.
-            max_tokens=(
-                _kb_history_budget(agent_config, context_limit) or history_max_context_tokens
-            ),
+            max_tokens=_max_tokens,
             users=users,
             on_reduce=_reduced.append,
         )
+
+        async def refresh(answering: list[int], ctx: AgentToolContext) -> None:
+            # docs/plan-interjection.md Q1: a message that waited behind another
+            # turn is answered with the thread as it stands when its turn starts.
+            ctx.history = history_items(
+                thread_without(_load(chat_id).messages, answering),
+                max_messages=history_max_messages,
+                max_tokens=_max_tokens,
+                users=users,
+            )
+
         # #624: announcing a reduction is unconditional — except a LOSSLESS one,
         # which keeps every message and so has nothing to announce (#739). This
         # is the surface most likely to need it — retrieved passages and whole
@@ -1005,6 +1020,13 @@ def register_kb_chat_routes(
                 return
             fresh = _load(chat_id)
             for m in produced:
+                if m.role == PLACE_ROLE:
+                    # plan-interjection Q3: the question (stored at acceptance)
+                    # moves to where this turn read it.
+                    placed = take_person_message(fresh.messages, m.created_at)
+                    if placed is not None:
+                        fresh.messages.append(placed)
+                    continue
                 km = KbMessage(
                     role=m.role,
                     content=m.content,
@@ -1101,7 +1123,18 @@ def register_kb_chat_routes(
         )
         # docs/plan-capacity-usage.md §6.3: the question's own timestamp is the acceptance.
         fut = engine.enqueue(
-            chat_id, agent_content, ctx, on_complete=persist, surface="kb", accepted_ms=asked_at
+            chat_id,
+            agent_content,
+            ctx,
+            on_complete=persist,
+            surface="kb",
+            accepted_ms=asked_at,
+            message=QueuedMessage(
+                author=asked_by,
+                at=asked_at,
+                refresh=refresh,
+                speaker=speaker_label(users.get(asked_by)) if asked_by else "",
+            ),
         )
         # #493: await THIS turn, but only to a deadline, then DETACH it — `shield`
         # keeps the worker's future alive, so detaching is not cancelling. A fast

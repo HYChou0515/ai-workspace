@@ -40,7 +40,7 @@ from agents.tool import FunctionToolResult
 from openai.types.shared import Reasoning
 
 from ..agent.call_retry_model import CALL_RETRACTED, CALL_STARTED, InputTrim
-from ..agent.context import AgentToolContext
+from ..agent.context import AgentToolContext, Interjection
 from ..agent.header_model import HeaderModel
 from ..agent.repairing_model import RepairingModel
 from ..agent.tools import build_tools, dedupe_tools, delegation_is_available
@@ -226,10 +226,33 @@ def _approx_tokens(chars: int) -> int:
     return round(chars / 4)
 
 
+def _user_item(text: str, image_urls: Sequence[str] = ()) -> dict[str, Any]:
+    """One user message as an SDK input item — multimodal when it carries images."""
+    if not image_urls:
+        return {"role": "user", "content": text}
+    return {
+        "role": "user",
+        "content": [
+            {"type": "input_text", "text": text},
+            *({"type": "input_image", "image_url": url} for url in image_urls),
+        ],
+    }
+
+
+def interjection_item(interjection: Interjection) -> dict[str, Any]:
+    """A message folded into a turn that is not its own (docs/plan-interjection.md),
+    attributed the way `history_items` attributes a shared thread's messages."""
+    text = interjection.content
+    if interjection.speaker:
+        text = f"[{interjection.speaker}]: {text}"
+    return _user_item(text, interjection.image_urls)
+
+
 def _build_input(
     history: list[dict[str, str]],
     prompt: str,
     image_urls: Sequence[str] = (),
+    leading: Sequence[Interjection] = (),
 ) -> str | list[dict[str, Any]]:
     """The SDK `input` for this turn: a plain string when there's no history,
     else the prior dialogue items followed by this turn's user message — so the
@@ -240,17 +263,15 @@ def _build_input(
     directly — no `read_image` round-trip through the separate VLM. Only the
     live turn's message is multimodal; the persisted history stays text (the
     image also lives on as a workspace file the model can `read_image` later).
-    Empty ⇒ the text-only path is byte-for-byte unchanged."""
-    user_content: str | list[dict[str, Any]] = prompt
-    if image_urls:
-        user_content = [
-            {"type": "input_text", "text": prompt},
-            *({"type": "input_image", "image_url": url} for url in image_urls),
-        ]
-    if not history:
+    Empty ⇒ the text-only path is byte-for-byte unchanged.
+
+    `leading` (docs/plan-interjection.md Q10) are queued messages this turn
+    answers too; they go between the history and this turn's own message."""
+    folded = [interjection_item(i) for i in leading]
+    if not history and not folded:
         # No history + no images → keep the bare-string fast path; multimodal
         # content still needs a message list even without history.
-        return prompt if not image_urls else [{"role": "user", "content": user_content}]
+        return prompt if not image_urls else [_user_item(prompt, image_urls)]
     # #199 — the SDK prepends the system prompt itself, so the replayed history
     # must never carry a `system` item; a mid-conversation one makes providers
     # reject the call with "system message must be at the beginning". Fail loud
@@ -258,7 +279,7 @@ def _build_input(
     assert not any(m.get("role") == "system" for m in history), (
         "history must not contain a system message"
     )
-    return [*history, {"role": "user", "content": user_content}]
+    return [*history, *folded, _user_item(prompt, image_urls)]
 
 
 # #748: the deltas that ARE the model's output — what the provider counts in
@@ -1865,7 +1886,9 @@ class LitellmAgentRunner:
         )
         streamed = Runner.run_streamed(
             agent,
-            input=_build_input(ctx.history, prompt, ctx.turn_image_urls),  # ty: ignore[invalid-argument-type]
+            input=_build_input(  # ty: ignore[invalid-argument-type]
+                ctx.history, prompt, ctx.turn_image_urls, ctx.leading_interjections
+            ),
             context=ctx,
             max_turns=ctx.max_turns or self._max_turns,
             run_config=run_config,
@@ -2094,7 +2117,9 @@ class LitellmAgentRunner:
         )
         result = await Runner.run(
             agent,
-            input=_build_input(ctx.history, prompt, ctx.turn_image_urls),  # ty: ignore[invalid-argument-type]
+            input=_build_input(  # ty: ignore[invalid-argument-type]
+                ctx.history, prompt, ctx.turn_image_urls, ctx.leading_interjections
+            ),
             context=ctx,
             max_turns=ctx.max_turns or self._max_turns,
             run_config=run_config,

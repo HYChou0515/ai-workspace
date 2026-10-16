@@ -273,9 +273,11 @@ async def test_a_stale_claim_is_owed_whatever_the_thread_says_after_it():
         taken = await ReclaimTick.of(cast(FastAPI, client.app)).run()
         await _settle(_claims(client))
     assert taken == [item_id] and runner.runs == 1
+    # docs/plan-interjection.md Q3: the re-run reads the question now, after
+    # everything already in the thread, and puts it there.
     assert _thread(spec, rid) == [
-        ("user", "hi"),
         ("notice", "older messages left out"),
+        ("user", "hi"),
         ("assistant", "late, but here"),
     ]
 
@@ -313,10 +315,12 @@ async def test_two_stale_claims_on_one_key_are_taken_together_in_order():
     assert runner.runs == 2
     assert "hi" in runner.prompts[0] and "the second question" in runner.prompts[1]
     assert after == before + 1  # once, not once per claim
+    # docs/plan-interjection.md Q3: each question sits where its re-run read
+    # it — the second one after the answer it waited for.
     assert _thread(spec, rid) == [
         ("user", "hi"),
-        ("user", "the second question"),
         ("assistant", "answer"),
+        ("user", "the second question"),
         ("assistant", "answer"),
     ]
 
@@ -463,6 +467,53 @@ async def test_a_rerun_takes_its_history_from_before_the_claimed_question():
     assert "the earlier question" in history and "the earlier answer" in history
     assert "the claimed question" not in history
     assert "the claimed question" in runner.prompts[0]
+
+
+async def test_a_rerun_of_a_queued_question_is_handed_the_answer_it_waited_for():
+    """docs/plan-interjection.md Q1: a question queued behind another sits ABOVE
+    that one's answer (it was persisted first). Re-run on a peer — which has
+    nothing queued, so nothing tells it the question waited — it must still be
+    answered with the thread as it stands: the earlier answer in its history,
+    and the question moved to where it was read."""
+    spec = make_spec(default_user="u")
+    item_id, rid = _item_with_chat(spec)
+    _append(spec, rid, "user", "the earlier question", 500)
+    _append(spec, rid, "user", "the claimed question", 1_000)
+    _append(spec, rid, "assistant", "the earlier answer", 1_200)
+    client, runner = _pod(spec, reply="from the peer")
+    histories: list[str] = []
+    original = runner.run
+
+    async def spying(prompt, ctx):  # noqa: ANN001, ANN202
+        histories.append(" | ".join(h["content"] for h in ctx.history))
+        async for ev in original(prompt, ctx):
+            yield ev
+
+    runner.run = spying  # type: ignore[method-assign]  # ty: ignore[invalid-assignment]
+    with client:
+        store = _claims(client)
+        store.open(
+            TurnClaim(
+                key=item_id,
+                created_at=1_000,
+                investigation_id=item_id,
+                rid=rid,
+                author="alice",
+                body={"content": "the claimed question"},
+            )
+        )
+        (row,) = store.list_open()
+        await _service(client).rerun(row)
+        await _settle(store)
+    (history,) = histories
+    assert "the earlier answer" in history
+    assert "the claimed question" not in history
+    assert [c for _, c in _thread(spec, rid)] == [
+        "the earlier question",
+        "the earlier answer",
+        "the claimed question",
+        "from the peer",
+    ]
 
 
 async def test_a_rerun_runs_on_the_headless_env_not_on_a_stored_cookie():
@@ -1010,10 +1061,12 @@ async def test_a_stale_key_takes_its_released_and_unreleased_claims_together():
         await _settle(_claims(client))
     assert taken == [item_id] and runner.runs == 2
     assert "hi" in runner.prompts[0] and "the second question" in runner.prompts[1]
+    # docs/plan-interjection.md Q3: each question sits where its re-run read
+    # it — the second one after the answer it waited for.
     assert _thread(spec, rid) == [
         ("user", "hi"),
-        ("user", "the second question"),
         ("assistant", "answer"),
+        ("user", "the second question"),
         ("assistant", "answer"),
     ]
 
@@ -1579,10 +1632,11 @@ def test_a_pods_shutdown_waits_for_a_turn_that_started_during_the_drain(tmp_path
             ),
             "the POSTs did not detach",
         )
+    # docs/plan-interjection.md Q3: q2 waited behind q1, so it sits after A1.
     assert _thread(spec, rid) == [
         ("user", "q1"),
-        ("user", "q2"),
         ("assistant", "answer"),
+        ("user", "q2"),
         ("assistant", "answer"),
     ]
     assert _claims(a).list_open() == []
