@@ -241,9 +241,10 @@ def register_chat_routes(
 
     @app.get("/a/{slug}/items/{item_id}/chats")
     async def list_chats(slug: str, item_id: str) -> list[_ChatInfo]:
-        """List the item's chats (free + workflow), **most-recent-activity first**
-        (#132 — no "main chat" privilege). Each workflow chat carries its driving
-        run's status; every chat carries a name hint + last-activity stamp. Read-only:
+        """List the item's chats, **most-recent-activity first** (#132 — no "main
+        chat" privilege): free chats, a chat a run once took over (#343), and a
+        page job's (#942 D5, flagged `page_job`). One with a run carries its
+        status; every chat carries a name hint + last-activity stamp. Read-only:
         the implicit default chat materialises on first use, not here."""
         from .chats import _item_chats_query, find_default_conversation
 
@@ -252,8 +253,9 @@ def register_chat_routes(
         default_id = default[0] if default else None
         runs = _item_runs(spec, investigation_id)
         run_status = item_run_status(spec, investigation_id, runs)
-        # Not a run's own conversation (plan-workflow-out-of-chat D3 / D4): the
-        # Workflows sidebar lists those; a chat a run took over stays.
+        # Not an execution's own conversation (plan-workflow-out-of-chat D3 /
+        # D4): the Workflows sidebar lists those. A chat a run took over stays,
+        # and so does a page job's, which is no execution (#942 D5).
         page_jobs = page_job_chats(runs)
         infos = [
             chat_info_from_resource(r, default_id, run_status, page_jobs)

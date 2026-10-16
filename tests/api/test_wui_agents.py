@@ -195,19 +195,25 @@ def test_a_tool_jobs_empty_conversation_is_listed_too():
     from workspace_app.workflow.run import PageJob
 
     client, item_id, spec = _app(SubRunner())
-    conv_id = (
-        spec.get_resource_manager(Conversation)
-        .create(Conversation(item_id=item_id, title="頁面：工具 lot-status", run_id="r-tool"))
+    convs = spec.get_resource_manager(Conversation)
+    conv_id = convs.create(Conversation(item_id=item_id, title="頁面：工具 lot-status")).resource_id
+    run_id = (
+        spec.get_resource_manager(WorkflowRun)
+        .create(
+            WorkflowRun(
+                item_id=item_id,
+                captured_user="owner-o",
+                chat_id=conv_id,
+                page_job=PageJob(kind="tool", name="lot-status"),
+            )
+        )
         .resource_id
     )
-    spec.get_resource_manager(WorkflowRun).create(
-        WorkflowRun(
-            item_id=item_id,
-            captured_user="owner-o",
-            chat_id=conv_id,
-            page_job=PageJob(kind="tool", name="lot-status"),
-        )
-    )
+    # Linked as `settle_run_chat` links it: the conversation names its run.
+    conv = convs.get(conv_id).data
+    assert isinstance(conv, Conversation)
+    conv.run_id = run_id
+    convs.update(conv_id, conv)
     free = spec.get_resource_manager(Conversation).create(Conversation(item_id=item_id)).resource_id
     with client:
         listed = {

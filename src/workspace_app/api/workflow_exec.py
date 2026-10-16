@@ -33,7 +33,7 @@ from ..sandbox.protocol import OutputSink, Sandbox
 from ..workflow.capabilities import convert_upload, ingest_to_collection, upsert_context_card
 from ..workflow.engine import StepFailed, transcript_path
 from ..workflow.handle import WorkflowHandle, aside_lane
-from ..workflow.run import RunStatus, WorkflowRun
+from ..workflow.run import RunStatus, WorkflowRun, is_execution
 from ..workflow.run_identity import RunIdentities
 from ..workflow.steps import CURRENT_STEP, StepRef
 from .env_layers import PersonEnv
@@ -101,6 +101,12 @@ def execution_link(slug: str, item_id: str, run_id: str) -> str:
     """The web address of an execution's tab: its item, with `?open=<run id>`."""
     base = f"/a/{slug}/{item_id}"
     return f"{base}?open={quote(run_id, safe='')}" if run_id else base
+
+
+def chat_link(slug: str, item_id: str, chat_id: str) -> str:
+    """The web address of one of the item's chats: its item, with `?chat=<id>`."""
+    base = f"/a/{slug}/{item_id}"
+    return f"{base}?chat={quote(chat_id, safe='')}" if chat_id else base
 
 
 class WorkflowExecutor:
@@ -314,7 +320,7 @@ class WorkflowExecutor:
         # plan-tool-usage-stats §3.4: a schedule's run or a person's, and who
         # its tool calls count against — the one who bound it, else whoever the
         # run was captured for (the item's owner for a schedule, the starter).
-        ctx.surface, ctx.usage_user = await asyncio.to_thread(
+        ctx.surface, ctx.usage_user, of_execution = await asyncio.to_thread(
             self._usage_identity, run_id, captured_user
         )
         if agent is not None:
@@ -367,7 +373,7 @@ class WorkflowExecutor:
             turn = [*prompt_msgs, *(to_rca_message(tm) for tm in produced)]
             # A page job's chat is a chat (#942 D5): its answer is not a run's
             # message, or a person continuing it would be answered without it.
-            for m in turn if agent is None else ():
+            for m in turn if of_execution else ():
                 m.run_id = run_id or None
                 m.step = step_id
                 m.phase = (ref.phase or None) if ref else None
@@ -723,23 +729,26 @@ class WorkflowExecutor:
         with contextlib.suppress(Exception):
             await self._registry.flush(item_id)
 
-    def _usage_identity(self, run_id: str, captured_user: str) -> tuple[str, str]:
-        """Where this node's tool calls happened and whom they count against
-        (plan-tool-usage-stats §3.4). Blocking reads; call off the loop."""
+    def _usage_identity(self, run_id: str, captured_user: str) -> tuple[str, str, bool]:
+        """Where this node's tool calls happened, whom they count against
+        (plan-tool-usage-stats §3.4), and whether its run is a workflow's
+        execution (`run.is_execution`) — what decides whether its messages are
+        marked as a run's. Blocking reads; call off the loop."""
         run = None
         if run_id:
             try:
                 run = self._spec.get_resource_manager(WorkflowRun).get(run_id).data
             except (ResourceIDNotFoundError, ResourceIsDeletedError):
                 run = None
-        if isinstance(run, WorkflowRun) and run.page_job is not None:
+        execution = not isinstance(run, WorkflowRun) or is_execution(run)
+        if not execution:
             surface = "page"  # #942: a job a page started, not a workflow
         elif isinstance(run, WorkflowRun) and run.from_schedule:
             surface = "schedule"
         else:
             surface = "workflow"
         bound, _verb = self._run_identity(run_id)
-        return surface, bound or captured_user
+        return surface, bound or captured_user, execution
 
     def _run_identity(self, run_id: str) -> tuple[str, str]:
         """Whose private values this node uses, and the right they must still
@@ -921,8 +930,13 @@ class WorkflowExecutor:
             # The execution's own tab (plan-workflow-out-of-chat P11; the SPA's item
             # route is `/a/<slug>/<item>` — `/items/` matched no page). A page job
             # is no execution (`is_execution`): its tab would draw a workflow's
-            # board for it and call it superseded, so it opens the item.
-            link=execution_link(slug, run.item_id, "" if job else run_id),
+            # board for it and call it superseded, so it opens the job's chat,
+            # where its record and Stop are (#942 D5).
+            link=(
+                execution_link(slug, run.item_id, run_id)
+                if is_execution(run)
+                else chat_link(slug, run.item_id, run.chat_id)
+            ),
             actor=run.captured_user,
         )
         if identity is None or not acting or acting == recipient:
