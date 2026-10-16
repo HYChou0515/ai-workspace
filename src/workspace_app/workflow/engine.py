@@ -45,10 +45,15 @@ def fail(reason: str) -> NoReturn:
 
 class CheckResult(Struct):
     """A gate verdict: ``ok`` plus, on failure, a ``reason`` that is fed back into
-    the step's retry (manual §6)."""
+    the step's retry (manual §6). ``format`` marks a failure of the reply's own
+    format — not JSON, a field missing or mistyped, a structured artifact that does
+    not parse — which a repair turn can fix without redoing the step's work
+    (docs/plan-workflow-output-repair.md §3.1). Set by the check that made the
+    verdict, never inferred from the reason's wording."""
 
     ok: bool
     reason: str = ""
+    format: bool = False
 
 
 # A gate: given the handle + the step's result, verify the postcondition.

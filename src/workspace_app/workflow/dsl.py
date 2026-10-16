@@ -452,23 +452,30 @@ def _produces_check(glob: str) -> Check:
 def _outputs_check(outputs: dict[str, Any]) -> Check:
     """The implicit gate for a step that declares ``outputs`` (#428 §1.2/§2.2): the reply
     must parse into a JSON object whose declared fields are present and match their
-    type + optional ``enum``. A failure feeds its reason back into the step's retry."""
+    type + optional ``enum``. Every failure is the reply's format (``format=True``), so
+    an agent step repairs it rather than re-running (plan-workflow-output-repair §3.1)."""
 
     async def check(_wf: WorkflowHandle, result: Any) -> CheckResult:
         fields = result.get("fields") if isinstance(result, dict) else None
         if not isinstance(fields, dict):
-            return CheckResult(False, f"reply must be a JSON object with keys {sorted(outputs)}")
+            return CheckResult(
+                False, f"reply must be a JSON object with keys {sorted(outputs)}", format=True
+            )
         for name, spec in outputs.items():
             if name not in fields:
-                return CheckResult(False, f"reply is missing field {name!r}")
+                return CheckResult(False, f"reply is missing field {name!r}", format=True)
             tname, enum = _spec_type_enum(spec)
             value = fields[name]
             if not _field_type_ok(value, tname):
                 return CheckResult(
-                    False, f"field {name!r} must be {tname}, got {type(value).__name__}"
+                    False,
+                    f"field {name!r} must be {tname}, got {type(value).__name__}",
+                    format=True,
                 )
             if enum is not None and value not in enum:
-                return CheckResult(False, f"field {name!r} must be one of {enum}, got {value!r}")
+                return CheckResult(
+                    False, f"field {name!r} must be one of {enum}, got {value!r}", format=True
+                )
         return CheckResult(True)
 
     return check
