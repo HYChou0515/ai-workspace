@@ -265,6 +265,121 @@ async def test_another_persons_message_takes_the_turn_over_and_says_so():
     assert app.state.turn_claims.list_open() == []
 
 
+async def test_a_message_still_preparing_is_kept_out_of_other_turns_histories():
+    """docs/plan-interjection.md §9 C8 (review round 1, F1): Q1 runs, Q2 waits,
+    Q3 is persisted but still preparing (held in its context build) when Q1
+    ends. Q2's turn must not be handed Q3 — nobody has answered it — and Q3's
+    turn, which started after A1 and A2, must see both, with Q3 moved below
+    them in the thread."""
+    from workspace_app.api import create_app
+    from workspace_app.filestore.memory import MemoryFileStore
+    from workspace_app.resources import make_spec
+    from workspace_app.sandbox.mock import MockSandbox
+
+    from .conftest import register_rca_item
+
+    spec = make_spec(default_user="u")
+    iid = register_rca_item(spec)
+    runner = _FirstTurnWaits()
+    app = create_app(spec=spec, sandbox=MockSandbox(), filestore=MemoryFileStore(), runner=runner)
+    url = f"/a/rca/items/{iid}/messages"
+    engine = app.state.turn_engine
+    builder = app.state.chat_send._turn_ctx  # noqa: SLF001
+    real_build = builder.build_chat_turn
+    builds = 0
+    hold = asyncio.Event()
+
+    async def held(*a: Any, **kw: Any) -> Any:
+        nonlocal builds
+        builds += 1
+        if builds == 3:  # Q3's preparation
+            await hold.wait()
+        return await real_build(*a, **kw)
+
+    builder.build_chat_turn = held
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as client:
+        first = asyncio.create_task(client.post(url, json={"content": "Q1"}))
+        await _until(lambda: len(runner.turns) == 1)
+        second = asyncio.create_task(client.post(url, json={"content": "Q2"}))
+        await _until(lambda: not engine._ws_session(iid).queue.empty())  # noqa: SLF001
+        third = asyncio.create_task(client.post(url, json={"content": "Q3"}))
+        await _until(lambda: builds == 3)
+        runner.release.set()
+        await _until(lambda: len(runner.turns) == 2)
+        hold.set()
+        for task in (first, second, third):
+            await asyncio.wait_for(task, 5)
+
+    assert [t["prompt"][-2:] for t in runner.turns] == ["Q1", "Q2", "Q3"]
+    assert not any("Q3" in (h or "") for h in runner.turns[1]["history"])
+    assert runner.turns[2]["history"][-4:] == ["[u]: Q1", "A(Q1)", "[u]: Q2", "A(Q2)"]
+    thread = [(m.role, m.content) for m in _conversation(spec, iid).messages]
+    assert thread == [
+        ("user", "Q1"),
+        ("assistant", "A(Q1)"),
+        ("user", "Q2"),
+        ("assistant", "A(Q2)"),
+        ("user", "Q3"),
+        ("assistant", "A(Q3)"),
+    ]
+
+
+async def test_a_goal_round_waits_for_the_running_turn_instead_of_taking_it_over():
+    """§9 C10 (review round 1, R1) through the real send path: the goal
+    driver's round is stamped with whoever set the goal, but it is not that
+    person speaking — queued while Bob's turn runs, it must not stop Bob."""
+    from workspace_app.api import create_app
+    from workspace_app.api.chat_send import _MessageBody
+    from workspace_app.filestore.memory import MemoryFileStore
+    from workspace_app.resources import Conversation, make_spec
+    from workspace_app.resources.conversation_goal import GOAL_DRIVER
+    from workspace_app.sandbox.mock import MockSandbox
+
+    from .conftest import register_rca_item
+
+    spec = make_spec(default_user="u")
+    iid = register_rca_item(spec)
+    runner = _FirstTurnWaits()
+    app = create_app(spec=spec, sandbox=MockSandbox(), filestore=MemoryFileStore(), runner=runner)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as client:
+        rid = (await client.post(f"/a/rca/items/{iid}/chats", json={"title": "t"})).json()[
+            "chat_id"
+        ]
+        svc = app.state.chat_send
+
+        def conv() -> Conversation:
+            data = spec.get_resource_manager(Conversation).get(rid).data
+            assert isinstance(data, Conversation)
+            return data
+
+        bob = asyncio.create_task(
+            svc.send(iid, rid, conv(), rid, _MessageBody(content="Q1"), author="bob")
+        )
+        await _until(lambda: len(runner.turns) == 1)
+        goal = asyncio.create_task(
+            svc.send(
+                iid,
+                rid,
+                conv(),
+                rid,
+                _MessageBody(content="[goal] keep going"),
+                author="alice",
+                driven_by=GOAL_DRIVER,
+            )
+        )
+        await _until(lambda: not app.state.turn_engine._ws_session(rid).queue.empty())  # noqa: SLF001
+        await asyncio.sleep(0.1)
+        runner.release.set()
+        for task in (bob, goal):
+            await asyncio.wait_for(task, 5)
+        kinds = [m.error_kind for m in conv().messages if m.role == "error"]
+
+    assert kinds == []
+    assert [t["prompt"][-len("keep going") :] for t in runner.turns][1] == "keep going"
+
+
 def _conversation(spec, iid: str):
     from specstar import QB
 

@@ -115,7 +115,7 @@ export type Message = {
   withheld?: WithheldSource[];
   /** role=mention only — the user ids summoned ("@ come look"). */
   mentions?: string[];
-  /** role=error only (#37) — why the turn failed: error | cancelled |
+  /** role=error only (#37) — why the turn failed: error | cancelled | interrupted |
    * max_turns. The thread renders the failure as a banner on reload. */
   error_kind?: string | null;
   /** #113 — "repetition" when role=assistant was stopped mid-stream for a

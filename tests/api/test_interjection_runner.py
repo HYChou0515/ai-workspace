@@ -28,7 +28,7 @@ from openai.types.responses import (
 from openai.types.responses.response_output_text import ResponseOutputText
 
 from workspace_app.agent.context import Interjection
-from workspace_app.api import Interjected, MaxTurnsExceeded, MessageDelta, ToolEnd
+from workspace_app.api import Interjected, MaxTurnsExceeded, MessageDelta, RunError, ToolEnd
 from workspace_app.api import litellm_runner as lr
 
 from .test_litellm_runner import _ctx
@@ -131,6 +131,8 @@ async def test_a_message_sent_mid_turn_is_read_at_the_next_model_call(monkeypatc
     ctx = _ctx()
     ctx.max_turns = 2
     ctx.kb_search_budget.used = 3
+    ctx.wiki_search_budget.used = 2
+    ctx.kb_grep_budget.used = 4
     asked: list[int] = []
 
     def take() -> list[Interjection]:
@@ -168,6 +170,59 @@ async def test_a_message_sent_mid_turn_is_read_at_the_next_model_call(monkeypatc
     # Q7: what the message carried goes with it; the search allowance is whole again.
     assert "lot-map" in ctx.applied_skills
     assert ctx.kb_search_budget.used == 0
+    assert ctx.wiki_search_budget.used == 0
+    assert ctx.kb_grep_budget.used == 0
+
+
+@pytest.mark.parametrize("stream", ["1", "0"])
+async def test_a_turn_that_overflows_after_reading_a_message_still_recovers(monkeypatch, stream):
+    """§9 C12 (review round 1, F2): after an interjection the turn continues
+    from what it had sent so far. When that no longer fits, the #624 recovery
+    trims the HISTORY and tries again — so the history must be what the next
+    request is built from. Built from a snapshot instead, every retry re-sent
+    the identical request, and a turn that would have recovered failed."""
+    monkeypatch.setenv("WORKSPACE_AGENT_STREAM", stream)
+    model = _Model()
+    sent: list[int] = []
+    real_next = model._next
+
+    def fussy(items: Any) -> Any:
+        size = len(json.dumps(items, default=str))
+        if "Q2" in json.dumps(items, default=str):
+            sent.append(size)
+            if size > 3000:
+                raise RuntimeError("This model's maximum context length is exceeded")
+        return real_next(items)
+
+    model._next = fussy  # ty: ignore[invalid-assignment]
+    monkeypatch.setattr(
+        lr, "_agent_for", lambda *a, **k: Agent(name="t", model=model, tools=[look])
+    )
+    ctx = _ctx()
+    ctx.max_turns = 5
+    ctx.history = [
+        {"role": "user" if i % 2 == 0 else "assistant", "content": f"old {i} " + "x" * 400}
+        for i in range(10)
+    ]
+    asked: list[int] = []
+
+    def take() -> list[Interjection]:
+        asked.append(len(model.inputs))
+        if len(model.inputs) == 1 and len(asked) == 2:
+            return [Interjection(content="Q2", author="ann", at=2)]
+        return []
+
+    ctx.take_interjections = take
+
+    events = [ev async for ev in lr.LitellmAgentRunner().run("Q1", ctx)]
+
+    # The request after each rejection was smaller than the rejected one (later
+    # calls grow again as the turn works), and the turn got through.
+    rejected = [i for i, size in enumerate(sent) if size > 3000]
+    assert rejected and rejected[-1] + 1 < len(sent)
+    assert all(sent[i + 1] < sent[i] for i in rejected)
+    assert not any(isinstance(e, RunError) for e in events)
+    assert "".join(e.text for e in events if isinstance(e, MessageDelta)) == "both answered"
 
 
 async def test_a_turn_with_no_source_of_messages_runs_as_before(monkeypatch):

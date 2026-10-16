@@ -380,13 +380,16 @@ const interruptedText = (who: string): string =>
   translate(initialLocale(), "banner.interrupted", { who });
 
 /** plan-interjection Q9: a turn ended — what it read was answered (the note has
- * done its job), and what it did not read is the next turn's to answer. */
-function endInterjections(entries: AgentEntry[]): void {
+ * done its job), and what it did not read is the next turn's to answer. A turn
+ * that was STOPPED (a Stop, a takeover) answered nothing it read: that goes back
+ * to the queue too (§9 C9), so it says the same as what it never read. */
+function endInterjections(entries: AgentEntry[], stopped: boolean): void {
   for (let i = 0; i < entries.length; i++) {
     const e = entries[i];
     if (e?.kind !== "message" || e.interjection === undefined) continue;
     const { interjection, ...rest } = e;
-    entries[i] = interjection === "waiting" ? { ...rest, interjection: "queued" } : rest;
+    const owed = interjection === "waiting" || (stopped && interjection === "read");
+    entries[i] = owed ? { ...rest, interjection: "queued" } : rest;
   }
 }
 
@@ -890,7 +893,7 @@ export function reduceAgent(log: AgentLog, ev: AgentEvent, now: number = Date.no
   // one.
   if (isTerminal(ev)) {
     endLiveAnswer(entries);
-    endInterjections(entries);
+    endInterjections(entries, ev.type === "run_cancelled");
   }
 
   switch (ev.type) {

@@ -187,9 +187,12 @@ class Message(Struct):
     error_kind: str | None = None
     """Only set when role=error (issue #37) — why the turn failed:
     `error` (system/model failure), `cancelled` (user interrupted),
-    `max_turns` (hit the step cap). Drives whether the failure re-enters
-    the next turn's LLM history (`api.turns.history_items`): `cancelled`
-    is replayed as a system note, the rest are human-only diagnostics."""
+    `interrupted` (another person's message took the turn over —
+    `author` is that person; docs/plan-interjection.md Q2), `max_turns`
+    (hit the step cap). Drives whether the failure re-enters the next
+    turn's LLM history (`api.turns.history_items`): `cancelled`,
+    `interrupted` and `max_turns` are replayed as a one-line note folded
+    into the previous answer; `error` is a human-only diagnostic."""
 
     stopped_reason: str | None = None
     """#113: `repetition` when role=assistant was stopped mid-stream for a

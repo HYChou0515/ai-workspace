@@ -385,7 +385,7 @@ export type KbChatMessage = {
   /** Permission-disclosure: read_meta-only sources surfaced for this answer,
    * rendered as "🔒 request access" chips. Absent/empty on other messages. */
   withheld?: WithheldSource[];
-  /** role=error only (#37) — error | cancelled | max_turns. */
+  /** role=error only (#37) — error | cancelled | interrupted | max_turns. */
   error_kind?: string | null;
   /** #113 — "repetition" when the answer was stopped + truncated for a loop. */
   stopped_reason?: string | null;

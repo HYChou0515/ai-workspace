@@ -583,3 +583,36 @@ def test_build_input_with_folded_messages_and_no_history_is_a_list():
         {"role": "user", "content": "q1"},
         {"role": "user", "content": "q2"},
     ]
+
+
+class _T:
+    def __init__(self, role: str, content: str, at: int, author: str | None = None) -> None:
+        self.role, self.content, self.created_at, self.author = role, content, at, author
+
+
+def test_a_message_moves_only_when_something_it_did_not_see_sits_after_it():
+    """docs/plan-interjection.md §9 C8: the answered message is put where its
+    turn read it — but only when that is not where it already is. A notice or a
+    summary written while it was being prepared is about it, not news to it."""
+    from workspace_app.api.turns import must_move
+
+    fresh = [_T("user", "Q1", 1), _T("notice", "older left out", 2)]
+    assert must_move(fresh, [1], set()) is False
+    waited = [_T("user", "Q2", 2), _T("assistant", "A1", 3)]
+    assert must_move(waited, [2], set()) is True
+    # Another unanswered question after it is not something it read past.
+    behind = [_T("user", "Q2", 2), _T("user", "Q3", 4)]
+    assert must_move(behind, [2], {4}) is False
+    # …but one already answered (it sits with its answer) is.
+    assert must_move([_T("user", "Q2", 2), _T("user", "Q3", 4)], [2], set()) is True
+
+
+def test_placing_a_message_finds_its_author_too():
+    """Two people can send in the same millisecond; the stamp alone named the
+    wrong one."""
+    from workspace_app.api.turns import take_person_message
+
+    thread = [_T("user", "Bob's", 5, "bob"), _T("user", "Ann's", 5, "ann")]
+    placed = take_person_message(thread, 5, "ann")
+    assert placed is not None and placed.content == "Ann's"
+    assert [m.content for m in thread] == ["Bob's"]

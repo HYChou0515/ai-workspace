@@ -107,6 +107,25 @@ describe("a message its author sends while their turn runs", () => {
   });
 });
 
+describe("a turn stopped after reading a message", () => {
+  // §9 C9: a stopped turn answered nothing it read — the message goes back to
+  // the queue and the next turn answers it, which is what the note must say.
+  it.each([
+    ["Stop", { type: "run_cancelled" } as AgentEvent],
+    ["a takeover", { type: "run_cancelled", by: "bob" } as AgentEvent],
+  ])("after %s, says the next turn answers it", (_name, ending) => {
+    const log = fold(
+      [
+        { type: "user_message", author: "ann", content: "Q2", created_at: 2 },
+        { type: "interjected", author: "ann", created_at: 2 },
+        ending,
+      ],
+      annTurnRunning(),
+    );
+    expect(userEntries(log).at(-1)).toEqual({ content: "Q2", interjection: "queued" });
+  });
+});
+
 describe("another person's message", () => {
   it("is not marked as waiting: it takes the turn over", () => {
     const log = fold([{ type: "user_message", author: "bob", content: "Q2", created_at: 2 }], annTurnRunning());

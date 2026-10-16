@@ -465,7 +465,7 @@ profile/App 預設;override 上限是 `app.json` 的 `tools`,**不是** profile)
 | `ToolLog`             | `{type: "tool_log", text: string, call_id: string?}` | 否 | 執行中 tool 的即時 stdout chunk;空 `call_id` 附到最近一個執行中的 call |
 | `RunDone`             | `{type: "done"}` | **是** | 正常完成 |
 | `RunError`            | `{type: "error", message: string}` | 是 | catch-all 失敗 |
-| `RunCancelled`        | `{type: "run_cancelled", by?: string}` | 是 | 使用者中斷（Stop）；`by` 有值 = **別人**的訊息接手了這一輪（[plan-interjection](plan-interjection.md) Q2），值是那個人的 id |
+| `RunCancelled`        | `{type: "run_cancelled", by: string}` | 是 | `by` 空字串 = 使用者中斷（Stop）；有值 = **別人**的訊息接手了這一輪（[plan-interjection](plan-interjection.md) Q2），值是那個人的 id。舊的 payload 沒有 `by` 時當成 Stop |
 | `Interjected`         | `{type: "interjected", author: string, created_at: number}` | 否 | 正在跑的這一輪在這裡**讀到**了它的作者跑到一半時送的訊息（`author` + `created_at` 指那則已存的訊息）；之後串流的是看過它的回答（[plan-interjection](plan-interjection.md) Q1） |
 | `ToolCallParseError`  | `{type: "tool_call_parse_error", hint: string, call_id: string?, raw: string?}` | 否 | 接著會做 retry-with-feedback |
 | `MaxTurnsExceeded`    | `{type: "max_turns_exceeded", turns: number}` | 是 | agent 沒收斂;`turns` 是 runner 設定的預算 |

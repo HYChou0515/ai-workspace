@@ -968,9 +968,9 @@ async def test_a_driver_round_is_registered_unattributed():
     seen: list[str] = []
     real = engine.preparing
 
-    def spy(key: str, author: str = ""):  # noqa: ANN202 — passthrough
+    def spy(key: str, author: str = "", at: int | None = None):  # noqa: ANN202 — passthrough
         seen.append(author)
-        return real(key, author=author)
+        return real(key, author=author, at=at)
 
     engine.preparing = spy
     rid, conv = service._locator.conversation_for(iid)

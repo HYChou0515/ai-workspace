@@ -1595,8 +1595,12 @@ class LitellmAgentRunner:
             yield RunDone()
             return
         feedback: str | None = None
-        # The input a segment after an interjection resumes from (None: the first).
-        resume: list[Any] | None = None
+        # What a segment after an interjection carries on from, AFTER the history:
+        # everything the turn had produced plus the messages it read (None: the
+        # first segment). Kept apart from the history and joined at each send, so
+        # the #624 recovery below — which trims `ctx.history` — trims what is
+        # actually sent (plan-interjection §9 C12).
+        tail: list[Any] | None = None
         attempt = 0
         # Rate limits are held out separately from `attempt` — see the branch in
         # the handler below for why the two budgets must not be one.
@@ -1614,6 +1618,8 @@ class LitellmAgentRunner:
             # Without this gate the production transcript stalled on
             # 'Extra data on `plot`' without ever retrying.
             progress_made = False
+            sent_history = len(ctx.history)
+            resume = None if tail is None else [*ctx.history, *tail]
             try:
                 async for ev in self._run_once(prompt, ctx, feedback, resume):
                     visible_progress = (
@@ -1632,7 +1638,12 @@ class LitellmAgentRunner:
                 for i in read.taken:
                     yield Interjected(author=i.author, created_at=i.at)
                 _absorb(ctx, read.taken)
-                resume = [*read.items, *(interjection_item(i) for i in read.taken)]
+                # The SDK's input starts with exactly the history this segment
+                # sent (a bare-string first input has none), then the rest.
+                tail = [
+                    *read.items[sent_history:],
+                    *(interjection_item(i) for i in read.taken),
+                ]
                 feedback = None
                 continue
             except _AgentsMaxTurnsExceeded:

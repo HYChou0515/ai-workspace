@@ -273,11 +273,9 @@ async def test_a_stale_claim_is_owed_whatever_the_thread_says_after_it():
         taken = await ReclaimTick.of(cast(FastAPI, client.app)).run()
         await _settle(_claims(client))
     assert taken == [item_id] and runner.runs == 1
-    # docs/plan-interjection.md Q3: the re-run reads the question now, after
-    # everything already in the thread, and puts it there.
     assert _thread(spec, rid) == [
-        ("notice", "older messages left out"),
         ("user", "hi"),
+        ("notice", "older messages left out"),
         ("assistant", "late, but here"),
     ]
 
@@ -514,6 +512,42 @@ async def test_a_rerun_of_a_queued_question_is_handed_the_answer_it_waited_for()
         "the claimed question",
         "from the peer",
     ]
+
+
+async def test_a_rerun_is_not_handed_a_later_question_nobody_has_answered():
+    """docs/plan-interjection.md §9 C8 (review round 1, R3): two claims on one
+    key are re-run in order. The first must not be handed the second question
+    as if it had already been asked and dealt with — it is still owed (its
+    claim is open), so it is left out until its own re-run answers it."""
+    spec = make_spec(default_user="u")
+    activity = SpecstarTurnActivityStore(spec, now_ms=lambda: 0)
+    client, runner = _pod(spec, reply="answer")
+    histories: list[list[str]] = []
+    original = runner.run
+
+    async def spying(prompt, ctx):  # noqa: ANN001, ANN202
+        histories.append([h["content"] for h in ctx.history])
+        async for ev in original(prompt, ctx):
+            yield ev
+
+    runner.run = spying  # type: ignore[method-assign]  # ty: ignore[invalid-assignment]
+    with client:
+        item_id, rid = _open_orphan(client, spec)
+        _append(spec, rid, "user", "the second question", 2_000)
+        SpecstarTurnClaimStore(spec, pod_id="pod-a").open(
+            TurnClaim(
+                key=item_id,
+                created_at=2_000,
+                investigation_id=item_id,
+                rid=rid,
+                author="alice",
+                body={"content": "the second question"},
+            )
+        )
+        await activity.bump(item_id)
+        await ReclaimTick.of(cast(FastAPI, client.app)).run()
+        await _settle(_claims(client))
+    assert not any("the second question" in h for h in histories[0])
 
 
 async def test_a_rerun_runs_on_the_headless_env_not_on_a_stored_cookie():

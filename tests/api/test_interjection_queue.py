@@ -49,10 +49,18 @@ class _GatedRunner:
         yield RunDone()
 
 
-def _message(author: str, at: int, log: list[Any], **kw: Any) -> QueuedMessage:
-    async def refresh(answering: list[int], ctx: AgentToolContext) -> None:
+def _message(
+    author: str, at: int, log: list[Any], *, place: bool = True, **kw: Any
+) -> QueuedMessage:
+    """A chat message as a surface hands it over. Its `refresh` records what it
+    was asked to leave out and says whether the answered messages must move
+    (`place`: a real surface says so when something now sits after them)."""
+
+    async def refresh(answering: list[int], pending: set[int], ctx: AgentToolContext) -> bool:
         log.append(("refresh", author, at, answering))
+        log.append(("pending", at, sorted(pending)))
         ctx.history = [{"role": "assistant", "content": f"thread without {answering}"}]
+        return place
 
     def on_absorbed() -> None:
         log.append(("absorbed", author, at))
@@ -86,7 +94,7 @@ async def test_a_message_queued_behind_a_running_turn_rebuilds_its_history_when_
         "Q1",
         AgentToolContext(history=[{"role": "user", "content": "old"}]),
         on_complete=keep("Q1"),
-        message=_message("ann", 1, log),
+        message=_message("ann", 1, log, place=False),
     )
     await asyncio.wait_for(runner.started.wait(), 3)
     # Accepted while Q1 runs: its history, built now, can only hold [Q1].
@@ -100,13 +108,14 @@ async def test_a_message_queued_behind_a_running_turn_rebuilds_its_history_when_
     runner.release.set()
     await _drain(engine, f1, f2)
 
-    # Q1 ran with the history it was built with: nothing was waiting before it.
-    assert runner.turns[0]["history"] == [{"role": "user", "content": "old"}]
+    # Every chat message is answered with the thread as it stands when its turn
+    # starts — Q1 too (nothing changed for it, which its surface says by not
+    # asking to move it).
+    assert runner.turns[0]["history"] == [{"role": "assistant", "content": "thread without [1]"}]
     # Q2's history was rebuilt at its start — from the thread as it stands
     # after A1 persisted — not the [Q1] it was accepted with.
     assert runner.turns[1]["history"] == [{"role": "assistant", "content": "thread without [2]"}]
     assert ("refresh", "ann", 2, [2]) in log
-    assert not any(e[0] == "refresh" and e[2] == 1 for e in log)
     assert persisted == ["Q1", "Q2"]
     # Q2 was persisted above A1; its reply opens by putting it back where it
     # was read. Q1 waited for nothing and is where it was.
@@ -236,7 +245,7 @@ async def test_a_refresh_that_fails_keeps_the_history_the_message_was_accepted_w
     runner = _GatedRunner()
     engine = ChatTurnEngine(runner)  # ty: ignore[invalid-argument-type]
 
-    async def broken(answering: list[int], ctx: AgentToolContext) -> None:
+    async def broken(answering: list[int], pending: set[int], ctx: AgentToolContext) -> bool:
         raise RuntimeError("store down")
 
     f1 = engine.enqueue(
@@ -297,7 +306,11 @@ async def test_the_running_turn_reads_its_authors_message_where_it_is_sent():
         return on_complete
 
     f1 = engine.enqueue(
-        "chat", "Q1", AgentToolContext(), on_complete=keep("Q1"), message=_message("ann", 1, log)
+        "chat",
+        "Q1",
+        AgentToolContext(),
+        on_complete=keep("Q1"),
+        message=_message("ann", 1, log, place=False),
     )
     await asyncio.wait_for(runner.started.wait(), 3)
     f2 = engine.enqueue(
@@ -410,7 +423,11 @@ async def test_another_persons_message_stops_the_running_turn_and_takes_over():
         return on_complete
 
     f1 = engine.enqueue(
-        "chat", "Q1", AgentToolContext(), on_complete=keep("Q1"), message=_message("ann", 1, log)
+        "chat",
+        "Q1",
+        AgentToolContext(),
+        on_complete=keep("Q1"),
+        message=_message("ann", 1, log, place=False),
     )
     await asyncio.wait_for(runner.started.wait(), 3)
     f2 = engine.enqueue(
@@ -492,3 +509,342 @@ async def test_entries_without_a_message_keep_one_turn_each():
     runner.release.set()
     await _drain(engine, f1, f2, f3)
     assert [t["content"] for t in runner.turns] == ["s1", "s2", "s3"]
+
+
+# ── review round 1 (docs/plan-interjection.md §9 C8–C12) ─────────────────────
+
+
+async def test_a_rebuilt_history_leaves_out_every_message_no_turn_has_answered_yet():
+    """F1/R3: a message persisted but still preparing (or waiting elsewhere) is
+    not part of anyone's answered thread. A rebuilt history that kept it showed
+    the model a question nobody had answered, in the wrong place."""
+    runner = _GatedRunner()
+    engine = ChatTurnEngine(runner)  # ty: ignore[invalid-argument-type]
+    log: list[Any] = []
+    f1 = engine.enqueue(
+        "chat",
+        "Q1",
+        AgentToolContext(),
+        on_complete=lambda p: None,
+        message=_message("ann", 1, log),
+    )
+    await asyncio.wait_for(runner.started.wait(), 3)
+    f2 = engine.enqueue(
+        "chat",
+        "Q2",
+        AgentToolContext(),
+        on_complete=lambda p: None,
+        message=_message("ann", 2, log),
+    )
+    # Q3 is persisted and still preparing (a cold sandbox, compaction…).
+    async with engine.preparing("chat", author="cat", at=3):
+        runner.release.set()
+        await asyncio.wait_for(f2, 3)
+    await _drain(engine, f1)
+    assert ("pending", 2, [3]) in log
+
+
+async def test_a_goal_round_never_takes_over_or_is_read_into_a_persons_turn():
+    """R1: the goal driver's round is not a person speaking. Queued behind
+    Bob's turn it waits its turn — it does not stop Bob, and it is not read into
+    a turn of the goal's own setter either."""
+    runner = _ReadsMidTurn()
+    engine = ChatTurnEngine(runner)  # ty: ignore[invalid-argument-type]
+    log: list[Any] = []
+    ended: dict[str, list[Any]] = {}
+
+    def keep(name: str):
+        def on_complete(produced: list[Any]) -> None:
+            ended[name] = [(m.role, m.error_kind) for m in produced if m.role == "error"]
+
+        return on_complete
+
+    f1 = engine.enqueue(
+        "chat", "Q1", AgentToolContext(), on_complete=keep("bob"), message=_message("bob", 1, log)
+    )
+    await asyncio.wait_for(runner.started.wait(), 3)
+    f2 = engine.enqueue(
+        "chat",
+        "[goal] continue",
+        AgentToolContext(),
+        on_complete=keep("goal"),
+        message=_message("alice", 2, log, driven=True),
+    )
+    runner.release.set()
+    await _drain(engine, f1, f2)
+    assert ended["bob"] == []
+    assert runner.turns == ["Q1", "[goal] continue"]
+    assert runner.read == []
+
+
+async def test_a_message_stopped_while_preparing_takes_nothing_over():
+    """R4: a send already stopped during its preparation will be declined — it
+    must not stop someone else's running turn on its way to being declined."""
+    runner = _GatedRunner()
+    engine = ChatTurnEngine(runner)  # ty: ignore[invalid-argument-type]
+    log: list[Any] = []
+    ended: dict[str, list[Any]] = {}
+
+    def keep(name: str):
+        def on_complete(produced: list[Any]) -> None:
+            ended[name] = [(m.role, m.error_kind) for m in produced if m.role == "error"]
+
+        return on_complete
+
+    f1 = engine.enqueue(
+        "chat", "Q1", AgentToolContext(), on_complete=keep("bob"), message=_message("bob", 1, log)
+    )
+    await asyncio.wait_for(runner.started.wait(), 3)
+    stopped = PendingTurn(author="carol")
+    stopped.cancelled = True
+    f2 = engine.enqueue(
+        "chat",
+        "Q2",
+        AgentToolContext(),
+        on_complete=keep("carol"),
+        pending=stopped,
+        message=_message("carol", 2, log),
+    )
+    await asyncio.sleep(0.05)
+    runner.release.set()
+    await _drain(engine, f1, f2)
+    assert ended["bob"] == []
+    assert ended["carol"] == [("error", "cancelled")]
+
+
+class _ReadsThenWorks:
+    """Reads its author's messages once they are queued, then keeps working
+    (until stopped); every later turn answers at once."""
+
+    def __init__(self) -> None:
+        self.started = asyncio.Event()
+        self.queued = asyncio.Event()
+        self.read = asyncio.Event()
+        self.turns: list[dict[str, Any]] = []
+
+    async def run(self, content: str, ctx: AgentToolContext):
+        self.turns.append(
+            {"content": content, "leading": [i.content for i in ctx.leading_interjections]}
+        )
+        if len(self.turns) == 1:
+            self.started.set()
+            await self.queued.wait()
+            assert ctx.take_interjections is not None
+            for i in ctx.take_interjections():
+                yield Interjected(author=i.author, created_at=i.at)
+            self.read.set()
+            await asyncio.sleep(30)
+        yield MessageDelta(text=f"answer to {content}")
+        yield RunDone()
+
+
+async def test_a_message_the_stopped_turn_had_read_is_still_answered():
+    """R2: Stop ends the answer that was being written — it has never meant
+    "and drop what is waiting" (`cancel_current`). A message the stopped turn
+    had READ was not answered by it, so it goes back to the queue and gets the
+    next turn, and its claim stays owed until then."""
+    runner = _ReadsThenWorks()
+    engine = ChatTurnEngine(runner)  # ty: ignore[invalid-argument-type]
+    log: list[Any] = []
+    f1 = engine.enqueue(
+        "chat",
+        "Q1",
+        AgentToolContext(),
+        on_complete=lambda p: None,
+        message=_message("ann", 1, log),
+    )
+    await asyncio.wait_for(runner.started.wait(), 3)
+    f2 = engine.enqueue(
+        "chat",
+        "Q2",
+        AgentToolContext(),
+        on_complete=lambda p: None,
+        message=_message("ann", 2, log),
+    )
+    runner.queued.set()
+    await asyncio.wait_for(runner.read.wait(), 3)
+    await engine.cancel_current("chat", by="ann")
+    await _drain(engine, f1, f2)
+    assert [t["content"] for t in runner.turns] == ["Q1", "Q2"]
+    assert ("absorbed", "ann", 2) not in log
+
+
+async def test_another_persons_message_takes_over_what_the_stopped_turn_had_read():
+    """R2 with Q2/Q10: Bob's message stops Ann's turn after it read Ann's
+    follow-up. That follow-up was not answered — Bob's turn answers it too."""
+    runner = _ReadsThenWorks()
+    engine = ChatTurnEngine(runner)  # ty: ignore[invalid-argument-type]
+    log: list[Any] = []
+    f1 = engine.enqueue(
+        "chat",
+        "Q1",
+        AgentToolContext(),
+        on_complete=lambda p: None,
+        message=_message("ann", 1, log),
+    )
+    await asyncio.wait_for(runner.started.wait(), 3)
+    f2 = engine.enqueue(
+        "chat",
+        "Q2",
+        AgentToolContext(),
+        on_complete=lambda p: None,
+        message=_message("ann", 2, log),
+    )
+    runner.queued.set()
+    await asyncio.wait_for(runner.read.wait(), 3)
+    f3 = engine.enqueue(
+        "chat",
+        "Q3",
+        AgentToolContext(),
+        on_complete=lambda p: None,
+        message=_message("bob", 3, log),
+    )
+    await _drain(engine, f1, f2, f3)
+    assert runner.turns[1:] == [{"content": "Q3", "leading": ["Q2"]}]
+
+
+async def test_a_takeover_while_the_next_turn_is_still_preparing_answers_it_as_the_newcomer():
+    """F3: Ann's queued message is about to start (its history being rebuilt)
+    when Bob sends. Nothing has run for Ann yet, so there is nothing to stop:
+    her message waits for the next turn, which is Bob's, and answers both."""
+    runner = _GatedRunner()
+    engine = ChatTurnEngine(runner)  # ty: ignore[invalid-argument-type]
+    log: list[Any] = []
+    rebuilding = asyncio.Event()
+    go_on = asyncio.Event()
+
+    async def slow(answering: list[int], pending: set[int], ctx: AgentToolContext) -> bool:
+        rebuilding.set()
+        await go_on.wait()
+        return True
+
+    f1 = engine.enqueue(
+        "chat",
+        "Q1",
+        AgentToolContext(),
+        on_complete=lambda p: None,
+        message=_message("ann", 1, log),
+    )
+    await asyncio.wait_for(runner.started.wait(), 3)
+    f2 = engine.enqueue(
+        "chat",
+        "Q2",
+        AgentToolContext(),
+        on_complete=lambda p: None,
+        message=QueuedMessage("ann", 2, refresh=slow),
+    )
+    runner.release.set()
+    await asyncio.wait_for(rebuilding.wait(), 3)
+    f3 = engine.enqueue(
+        "chat",
+        "Q3",
+        AgentToolContext(),
+        on_complete=lambda p: None,
+        message=_message("bob", 3, log),
+    )
+    go_on.set()
+    await _drain(engine, f1, f2, f3)
+    assert [(t["content"], [i.content for i in t["leading"]]) for t in runner.turns] == [
+        ("Q1", []),
+        ("Q3", ["Q2"]),
+    ]
+
+
+async def test_a_takeover_before_the_turns_first_step_still_ends_it_on_the_record():
+    """F3: the turn's task exists but has not run a single step when Bob's
+    message lands. Cancelling it there skipped its body — and with it the
+    ending every turn must persist. It ends as interrupted, like any other."""
+    runner = _GatedRunner()
+    engine = ChatTurnEngine(runner)  # ty: ignore[invalid-argument-type]
+    log: list[Any] = []
+    ended: dict[str, list[Any]] = {}
+
+    def keep(name: str):
+        def on_complete(produced: list[Any]) -> None:
+            ended[name] = [(m.role, m.error_kind, m.author) for m in produced if m.role == "error"]
+
+        return on_complete
+
+    rebuilt = asyncio.Event()
+
+    async def signals(answering: list[int], pending: set[int], ctx: AgentToolContext) -> bool:
+        rebuilt.set()
+        return True
+
+    f1 = engine.enqueue(
+        "chat", "Q1", AgentToolContext(), on_complete=keep("a1"), message=_message("ann", 1, log)
+    )
+    await asyncio.wait_for(runner.started.wait(), 3)
+    f2 = engine.enqueue(
+        "chat",
+        "Q2",
+        AgentToolContext(),
+        on_complete=keep("a2"),
+        message=QueuedMessage("ann", 2, refresh=signals),
+    )
+
+    async def bob() -> asyncio.Future[None]:
+        await rebuilt.wait()
+        # Ready in the same loop pass the worker creates Ann's turn task.
+        return engine.enqueue(
+            "chat", "Q3", AgentToolContext(), on_complete=keep("b"), message=_message("bob", 3, log)
+        )
+
+    pending_bob = asyncio.create_task(bob())
+    runner.release.set()
+    f3 = await asyncio.wait_for(pending_bob, 3)
+    await _drain(engine, f1, f2, f3)
+    assert "a2" in ended, "Ann's second turn was cancelled before it began and wrote nothing"
+
+
+async def test_a_stop_before_the_turns_first_step_still_ends_it_on_the_record():
+    """§9 C11, the same window for Stop: pressed in the loop pass the turn's
+    task is created, a bare `cancel()` skipped the turn's body — no ending, no
+    broadcast, the thread left on an unanswered question."""
+
+    class _SecondTurnWorks(_GatedRunner):
+        async def run(self, content: str, ctx: AgentToolContext):
+            if self.turns:  # the second turn: still working when Stop lands
+                self.turns.append({"content": content})
+                await asyncio.sleep(30)
+            async for ev in super().run(content, ctx):
+                yield ev
+
+    runner = _SecondTurnWorks()
+    engine = ChatTurnEngine(runner)  # ty: ignore[invalid-argument-type]
+    log: list[Any] = []
+    ended: dict[str, list[Any]] = {}
+
+    def keep(name: str):
+        def on_complete(produced: list[Any]) -> None:
+            ended[name] = [(m.role, m.error_kind) for m in produced if m.role == "error"]
+
+        return on_complete
+
+    rebuilt = asyncio.Event()
+
+    async def signals(answering: list[int], pending: set[int], ctx: AgentToolContext) -> bool:
+        rebuilt.set()
+        return True
+
+    f1 = engine.enqueue(
+        "chat", "Q1", AgentToolContext(), on_complete=keep("a1"), message=_message("ann", 1, log)
+    )
+    await asyncio.wait_for(runner.started.wait(), 3)
+    f2 = engine.enqueue(
+        "chat",
+        "Q2",
+        AgentToolContext(),
+        on_complete=keep("a2"),
+        message=QueuedMessage("ann", 2, refresh=signals),
+    )
+
+    async def stop() -> None:
+        await rebuilt.wait()
+        await engine.cancel_current("chat", by="ann")
+
+    stopping = asyncio.create_task(stop())
+    runner.release.set()
+    await asyncio.wait_for(stopping, 3)
+    await _drain(engine, f1, f2)
+    assert ended.get("a2") == [("error", "cancelled")]
