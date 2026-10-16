@@ -73,3 +73,91 @@ def instruction(outputs: dict[str, Any] | None, kind: str) -> str:
             "no explanation, no code fence."
         )
     return ""
+
+
+#: how much of a failed reply a repair request quotes before it shortens it
+QUOTE_LIMIT = 16_000
+_QUOTE_HALF = 8_000
+#: characters either side of a JSON parse error's position
+_AROUND = 40
+
+
+def _quoted(reply: str) -> str:
+    if len(reply) <= QUOTE_LIMIT:
+        return reply
+    left_out = len(reply) - 2 * _QUOTE_HALF
+    return f"{reply[:_QUOTE_HALF]}\n[… {left_out} characters left out …]\n{reply[-_QUOTE_HALF:]}"
+
+
+def _json_fragment(reply: str) -> str | None:
+    """Where a reply that should be one JSON object goes wrong — the text before the
+    object when it does not start with one (the usual preamble), else the text around
+    the parser's position. None when it parses."""
+    try:
+        json.loads(reply)
+    except (json.JSONDecodeError, ValueError) as exc:
+        start = reply.find("{")
+        lead = reply[:start] if start > 0 else ""
+        if lead.strip():
+            return lead.rstrip()
+        pos = getattr(exc, "pos", 0)
+        return reply[max(0, pos - _AROUND) : pos + _AROUND]
+    return None
+
+
+def _yaml_fragment(reply: str) -> str | None:
+    import yaml
+
+    try:
+        yaml.safe_load(reply)
+    except yaml.YAMLError as exc:
+        mark = getattr(exc, "problem_mark", None)
+        lines = reply.splitlines()
+        if mark is not None and 0 <= mark.line < len(lines):
+            return lines[mark.line]
+        return lines[0] if lines else ""
+    return None
+
+
+def _csv_fragment(reply: str) -> str | None:
+    """The rows whose column count differs from the most common one — a prepended
+    sentence is a one-cell row in a wider table. Rebuilt from the parsed rows, not the
+    file's lines: a quoted field may hold a newline."""
+    import csv
+    import io
+    from collections import Counter
+
+    rows = [row for row in csv.reader(io.StringIO(reply)) if row]
+    if not rows:
+        return None
+    width = Counter(len(row) for row in rows).most_common(1)[0][0]
+    odd = [",".join(row) for row in rows if len(row) != width]
+    return "\n".join(odd) if odd else None
+
+
+_FRAGMENT = {"json": _json_fragment, "yaml": _yaml_fragment, "csv": _csv_fragment}
+
+
+def repair_request(reply: str, verdict: Any, outputs: dict[str, Any] | None, kind: str) -> str:
+    """The prompt of a repair turn (D3): that the reply is still not valid / does not
+    fit, the part that is wrong, the whole failed reply quoted (a `map` element must not
+    repair a sibling's answer from the shared history), and the format instruction."""
+    fmt = "json" if outputs else kind
+    fragment = _FRAGMENT[fmt](reply) if fmt in _FRAGMENT and reply.strip() else None
+    if not reply.strip():
+        # a turn that only called tools: nothing to quote, the answer itself is missing
+        head = f"Your reply had no answer in it. Give the answer now, as {fmt.upper()}."
+    elif fragment is not None:
+        head = f"Your reply is still not valid {fmt.upper()}."
+    else:
+        head = f"Your reply still does not match the required format: {verdict.reason}."
+    parts = [head]
+    if fragment is not None:
+        parts.append(f"The problem is here:\n<<<\n{fragment}\n>>>")
+    if reply.strip():
+        parts.append(f"Your whole reply was:\n<<<\n{_quoted(reply)}\n>>>")
+    parts.append(instruction(outputs, kind))
+    parts.append(
+        "Do not redo any work and do not call any tool; rewrite the answer you already have."
+    )
+    return "\n\n".join(p for p in parts if p)

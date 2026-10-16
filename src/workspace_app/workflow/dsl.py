@@ -463,13 +463,18 @@ def _outputs_check(outputs: dict[str, Any]) -> Check:
             )
         for name, spec in outputs.items():
             if name not in fields:
-                return CheckResult(False, f"reply is missing field {name!r}", format=True)
+                had = ", ".join(sorted(fields)) or "none"
+                return CheckResult(
+                    False, f"reply is missing field {name!r} (its fields: {had})", format=True
+                )
             tname, enum = _spec_type_enum(spec)
             value = fields[name]
             if not _field_type_ok(value, tname):
+                # the value itself, so a repair request can quote what was wrong
+                got = json.dumps(value, ensure_ascii=False)[:80]
                 return CheckResult(
                     False,
-                    f"field {name!r} must be {tname}, got {type(value).__name__}",
+                    f"field {name!r} must be {tname}, got {type(value).__name__} {got}",
                     format=True,
                 )
             if enum is not None and value not in enum:

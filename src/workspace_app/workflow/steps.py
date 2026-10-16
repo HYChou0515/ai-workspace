@@ -16,10 +16,10 @@ import logging
 from typing import Any
 
 from .checks import artifact_valid, exit_zero
-from .engine import Check, StepFailed, _emit, run_step
+from .engine import Check, CheckResult, StepFailed, _emit, run_step
 from .events import StepOutput
 from .handle import WorkflowHandle
-from .output_format import instruction
+from .output_format import STRUCTURED_KINDS, instruction, repair_request
 
 logger = logging.getLogger(__name__)
 
@@ -161,20 +161,25 @@ async def agent_write_step(
     shape = instruction(outputs, kind if out else "")
     asked = f"{prompt}\n\n{shape}" if shape else prompt
 
-    async def execute(feedback: str | None) -> Any:
-        coro = drive_turn(_retry_prompt(asked, feedback), tools)
+    async def turn(text_in: str, held: list[str] | None) -> str:
+        coro = drive_turn(text_in, held)
         if wf.step_timeout_s is None:
-            text = await coro
-        else:
-            try:
-                text = await asyncio.wait_for(coro, wf.step_timeout_s)
-            except TimeoutError as exc:  # per-step cap (manual §17) → abort the step
-                logger.warning(
-                    "agent write step timed out after %ss (phase %s)", wf.step_timeout_s, phase
-                )
-                raise StepFailed(
-                    f"agent step {name or phase!r} timed out after {wf.step_timeout_s}s"
-                ) from exc
+            return await coro
+        try:
+            return await asyncio.wait_for(coro, wf.step_timeout_s)
+        except TimeoutError as exc:  # per-step cap (manual §17) → abort the step
+            logger.warning(
+                "agent write step timed out after %ss (phase %s)", wf.step_timeout_s, phase
+            )
+            raise StepFailed(
+                f"agent step {name or phase!r} timed out after {wf.step_timeout_s}s"
+            ) from exc
+
+    # The last reply, for the repair turn to quote (plan-workflow-output-repair §3.3).
+    last: list[str] = [""]
+
+    async def finish(text: str) -> dict[str, Any]:
+        last[0] = text
         result: dict[str, Any] = {"out": out, "bytes": len(text)}
         if out:
             await wf.write(out, text)
@@ -190,6 +195,16 @@ async def agent_write_step(
                 await wf.reconcile()
             result["fields"] = {"produces": sorted(await wf.glob(produces))}
         return result
+
+    async def execute(feedback: str | None) -> Any:
+        return await finish(await turn(_retry_prompt(asked, feedback), tools))
+
+    async def repair(verdict: CheckResult) -> Any:
+        # D1: the answer re-emitted, not the task redone — the request alone, and no
+        # tools, so nothing the step already did can be done again.
+        return await finish(
+            await turn(repair_request(last[0], verdict, outputs, kind if out else ""), [])
+        )
 
     args: dict[str, Any] = {
         "prompt": prompt,
@@ -214,6 +229,8 @@ async def agent_write_step(
         check=check or artifact_valid(out, kind, requires),
         retries=retries,
         cache=cache,
+        # only a reply with a machine format can be repaired; `produces` writes files
+        repair=repair if outputs or (out and kind in STRUCTURED_KINDS) else None,
     )
 
 

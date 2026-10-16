@@ -61,6 +61,10 @@ Check = Callable[["WorkflowHandle", Any], Awaitable[CheckResult]]
 # The step body: receives the previous attempt's failure feedback (None first try),
 # returns the step's result (whatever should be journaled + handed downstream).
 Execute = Callable[[str | None], Awaitable[Any]]
+# A repair: given the verdict on a reply whose own FORMAT failed, have it re-emitted
+# without redoing the step's work, and return the step's result as `Execute` does
+# (docs/plan-workflow-output-repair.md §3.2).
+Repair = Callable[[CheckResult], Awaitable[Any]]
 
 
 def input_hash(args: Any) -> str:
@@ -94,13 +98,20 @@ async def run_step(
     check: Check | None = None,
     retries: int = 0,
     cache: bool = True,
+    repair: Repair | None = None,
 ) -> Any:
     """Run one journaled step. Skips (returns the cached result) when its artifact
     exists with a matching input-hash and ``cache`` is set; otherwise executes,
     retrying on a failing gate up to ``retries`` times (feeding the failure reason
     back each time), then journals ``{hash, result}``. Raises ``StepFailed`` if the
     gate never passes. Emits StepSkipped / StepStarted / StepRetrying / StepPassed /
-    StepFailed through the handle's ``emit`` hook (manual §12)."""
+    StepFailed through the handle's ``emit`` hook (manual §12).
+
+    With a ``repair``, a verdict that says the reply's own format failed
+    (``CheckResult.format``) is followed by ``repair(verdict)`` instead of a re-run.
+    Repairs and re-runs spend the same ``retries``; when they run out the step fails
+    with the last reason — a repair that never takes is not followed by a re-run
+    (docs/plan-workflow-output-repair.md D2, D6)."""
     path = _artifact_path(wf, name, key)
     h = input_hash(args)
 
@@ -115,9 +126,15 @@ async def run_step(
     logger.info("step: start %s/%s (phase %s)", name, key, phase)
     feedback: str | None = None
     reason = ""
+    # the verdict a repair answers, when the last attempt's format failed
+    to_repair: CheckResult | None = None
     for attempt in range(retries + 1):
         try:
-            result = await execute(feedback)
+            result = await (
+                repair(to_repair)
+                if repair is not None and to_repair is not None
+                else execute(feedback)
+            )
         except StepFailed as exc:
             # The step could not RUN, as distinct from running and failing its
             # gate. No retry — nothing about the input changed — and no journal,
@@ -150,6 +167,7 @@ async def run_step(
             return result
         reason = verdict.reason
         feedback = verdict.reason
+        to_repair = verdict if verdict.format else None
         if attempt < retries:
             logger.warning("step: retry %s/%s after failed gate: %s", name, key, reason)
             _emit(wf, StepRetrying(phase=phase, name=name, reason=reason, key=key))
