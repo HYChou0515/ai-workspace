@@ -362,7 +362,9 @@ def test_every_row_names_who_created_the_workspace_the_one_its_access_is_decided
     rm = spec.get_resource_manager(RcaInvestigation)
     with rm.using("bob"):
         iid = rm.create(
-            RcaInvestigation(title="Line 3", owner="dave", permission=Permission(visibility="private"))
+            RcaInvestigation(
+                title="Line 3", owner="dave", permission=Permission(visibility="private")
+            )
         ).resource_id
     _page(client, iid)
     assert client.post(_wp(iid, "/wui/deploy"), json={"path": PAGE}).status_code == 200

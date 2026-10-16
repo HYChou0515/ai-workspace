@@ -2727,6 +2727,33 @@ AI 讀 `wui` skill 時會看到「這個 item 能讓頁面問的 subagent」清�
 - superuser：`curl -s -o /dev/null -w '%{http_code}' -b '<cookie>' '<網址>/api/admin/capacity?days=7'` 回 200；一般使用者回 403。
 - 接上資料來源後：`uv run python -m workspace_app.capacity check --hours 24` 沒有 error（exit 0）。
 
+### 2026-10-16 · #968 Deploy 說出誰打得開這個連結 {#pr-968}
+
+**設定** — 無。
+
+**資料** — 無。
+
+**k8s · CI 側** — 前後端都改，照常重 build、部署。`GET /wui` 與 `POST …/wui/deploy` 的回應多兩個欄位
+（`item_permission`、`item_created_by`），只加不減：rollout 途中新頁面打到舊 API pod 時，總覽卡片不寫「只有…打得開」，
+其他照常；舊頁面打到新 pod 不受影響。
+
+**行為改變，沒有開關**（`docs/plan-deploy-reach.md`）：
+
+- WUI 頁面上方的工具列與 Deploy 結果面板改成跟著介面語言——中文介面是**重新整理／重新建置／自動重新建置／回報問題／
+  告訴 AI／Deploy**、「✓ 已 Deploy」、**複製／開啟**。以前不論語言都是英文；教使用者按「Refresh」的舊說明會對不上。
+- Deploy 結果面板不再只講規則，改成說**現在誰打得開這個連結**（新 workspace 預設私有，所以通常是「目前只有你打得開
+  這個連結。」），沒公開時旁邊有「分享設定…」。Deploy 本身照舊，從不擋。
+- 「WUI」總覽的卡片／表格列，連結不是人人打得開時，第二行最前面多一段「只有你打得開」「只有擁有者和管理員打得開」或
+  「只有成員打得開」。
+- 拿到連結但打不開的人：404 頁改成先講最常見的原因（還沒有權限、請向給連結的人確認），403 頁多一顆「申請存取」
+  （只看得到 workspace 存在的人按了會通知擁有者；已經能進 workspace 的人會被告知直接請擁有者調高角色）。
+
+**確認做完**（`rollout 後`）：
+
+- 在一個新的（私有）workspace 打開 WUI 頁按 Deploy：網址下方是「目前只有你打得開這個連結。」與「分享設定…」。
+- 打開「WUI」總覽：那一頁的卡片第二行開頭是「只有你打得開」；公開 workspace 的頁面沒有這段。
+- 用一個沒被加進該 workspace 的帳號開那個連結：看到「打不開這個頁面。最常見的原因是你還沒有這個 workspace 的權限…」。
+
 ## 附錄 A：資料回填的機制（specstar 為什麼不會自己補）
 
 有些升版會改變「資料在資料庫裡的儲存形狀」，但 **specstar 只在寫入當下**把一列的 `indexed_data`
