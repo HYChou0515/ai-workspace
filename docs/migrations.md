@@ -2727,7 +2727,7 @@ AI 讀 `wui` skill 時會看到「這個 item 能讓頁面問的 subagent」清�
 - superuser：`curl -s -o /dev/null -w '%{http_code}' -b '<cookie>' '<網址>/api/admin/capacity?days=7'` 回 200；一般使用者回 403。
 - 接上資料來源後：`uv run python -m workspace_app.capacity check --hours 24` 沒有 error（exit 0）。
 
-### 2026-10-16 · #967 單一 item 可以調到部署的 `per_app.max`,不再只能比預設小 {#pr-967}
+### 2026-10-16 · ff67c627 · #967 單一 item 可以調到部署的 `per_app.max`,不再只能比預設小 {#pr-967}
 
 **設定** — 必要的:無。要先看一眼的(`rollout 前`):`resources.per_app.max` 的 `cpu` / `memory`。為什麼:它以前只在開機時
 檢查 App 的值有沒有超過;升級後它也是**一個 item 能調到多大**。設得比你願意給單一 item 的還大,使用者就調得到那麼大
