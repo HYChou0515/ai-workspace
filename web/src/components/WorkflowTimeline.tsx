@@ -204,7 +204,12 @@ export function WorkflowTimeline({ steps, live }: { steps: StepStateDTO[]; live:
                 key={`${b.step.phase}:${b.step.name}:${b.step.key}`}
                 data-testid="wf-timeline-bar"
                 data-step={b.step.name}
-                title={`${b.step.name} · ${fmtElapsed(Math.max(0, elapsed))}`}
+                title={
+                  b.step.status === "repairing"
+                    ? `${b.step.name} · ${t("wf.step.repairing", { n: b.step.repairs || 1 })}` +
+                      `${b.step.reason ? ` — ${b.step.reason}` : ""} · ${fmtElapsed(Math.max(0, elapsed))}`
+                    : `${b.step.name} · ${fmtElapsed(Math.max(0, elapsed))}`
+                }
                 style={{
                   position: "absolute",
                   left,

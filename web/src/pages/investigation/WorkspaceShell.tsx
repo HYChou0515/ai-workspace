@@ -3525,7 +3525,7 @@ function PanelBody({
         if (e.kind === "repair_request") {
           // plan-workflow-output-repair §3.5: one line in the flat log; the
           // request itself is readable in the chat view.
-          return <LogLine key={i} ts={fmtTs(e.at)} kind="warn" text="要求重新輸出格式" />;
+          return <LogLine key={i} ts={fmtTs(e.at)} kind="warn" text={t("wf.repairRequest.log")} />;
         }
         if (e.kind === "summary") {
           // #739: the earlier span was summarised. The log view is a flat

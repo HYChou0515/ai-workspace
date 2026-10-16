@@ -248,6 +248,7 @@ function CompactionSummary({ text, replaced }: { text: string; replaced: number 
  * disclosure button (NN/g progressive disclosure; W3C APG disclosure pattern:
  * `aria-expanded` + `aria-controls`), the same quiet line as the summary above. */
 function RepairRequest({ text }: { text: string }) {
+  const t = useT();
   const [open, setOpen] = useState(false);
   const region = useId();
   return (
@@ -280,7 +281,7 @@ function RepairRequest({ text }: { text: string }) {
           textDecoration: "underline",
         }}
       >
-        {open ? "要求重新輸出格式 · 收合" : "要求重新輸出格式 · 展開"}
+        {open ? t("wf.repairRequest.hide") : t("wf.repairRequest.show")}
       </button>
       <div id={region} hidden={!open} style={{ whiteSpace: "pre-wrap" }}>
         {open ? text : null}

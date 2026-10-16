@@ -127,3 +127,21 @@ describe("a repair on the board (plan-workflow-output-repair D7)", () => {
     expect(row).not.toHaveTextContent("修正輸出格式");
   });
 });
+
+
+describe("the board's clock while a step is repairing", () => {
+  it("keeps ticking", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(T);
+    try {
+      render(
+        <WorkflowStepBoard nodes={[node()]} steps={[step({ status: "repairing", repairs: 1, started: T - 3000 })]} />,
+      );
+      expect(screen.getByTestId("wf-step-elapsed")).toHaveTextContent("0:03");
+      act(() => void vi.advanceTimersByTime(2000));
+      expect(screen.getByTestId("wf-step-elapsed")).toHaveTextContent("0:05");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

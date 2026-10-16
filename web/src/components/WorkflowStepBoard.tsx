@@ -105,7 +105,9 @@ export function WorkflowStepBoard({
   nodes: PhaseNode[];
   steps: StepStateDTO[];
 }) {
-  const active = steps.some((s) => s.status === "running" || s.status === "retrying");
+  const active = steps.some(
+    (s) => s.status === "running" || s.status === "retrying" || s.status === "repairing",
+  );
   const now = useNow(active);
   const groups = stepBoard(nodes, steps).filter(
     (g) => g.steps.length > 0 || g.node.total > 0 || g.node.failed > 0,
