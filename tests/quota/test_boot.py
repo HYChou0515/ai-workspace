@@ -78,7 +78,8 @@ def test_a_cpu_amount_is_read_as_a_number_whatever_its_spelling(
     """Review round 1 (plan-item-size-ceiling D2): `per_app.max.cpu: max` reached
     Settings as the STRING "max" — the loader converts nothing — and, once the
     max became an item's ceiling, `min(2.0, "max")` raised on every sized item.
-    `""` / `"0"` / `"max"` mean "not set" for cpu as they do for sizes."""
+    `""` / `"0"` / `"max"` mean "not set" for cpu (the backend's default) —
+    unlike a size, where `"0"` / `"max"` mean unbounded."""
     cfg = tmp_path / "config.yaml"
     cfg.write_text(
         "resources:\n  per_app:\n"

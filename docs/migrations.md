@@ -2732,7 +2732,8 @@ AI 讀 `wui` skill 時會看到「這個 item 能讓頁面問的 subagent」清�
 **設定** — 必要的:無。要先看一眼的(`rollout 前`):`resources.per_app.max` 的 `cpu` / `memory`。為什麼:它以前只在開機時
 檢查 App 的值有沒有超過;升級後它也是**一個 item 能調到多大**。設得比你願意給單一 item 的還大,使用者就調得到那麼大
 (仍受個人額度夾住)。沒設 `max` 的維度行為不變:item 只能調到 App 的值以下。**設了 `max` 的維度,一併設一個具體的 `default`**(不是 `"max"`/`"0"`——那也是「沒人調的 item 不設限」):
-沒設的話,沒人調過的 item 跑的是 sandbox 主機自己的預設(`SANDBOX_HOST_CPU_CORES` / `SANDBOX_HOST_MEMORY_MAX`),可能比 `max`
+沒設的話,沒人調過的 item 跑的是 sandbox 後端自己的預設(http 主機是 `SANDBOX_HOST_CPU_CORES` / `SANDBOX_HOST_MEMORY_MAX`,
+本機隔離是 `sandbox.isolation.*`),可能比 `max`
 大——面板這時不寫「這個 App 最多 X」(寫了會跟生效值矛盾),而有人把它設成比 `max` 大的值就會被夾到 `max`,比不設還小。
 
 **資料** — 無。item 上存的大小欄位不變。
@@ -2745,8 +2746,9 @@ AI 讀 `wui` skill 時會看到「這個 item 能讓頁面問的 subagent」清�
 環境就會真的拿到那個大小**(以前被夾回 App 的值)——個人額度照舊會擋總量。**反方向也有**:設了 `max` 卻沒有 App 的值
 (沒設 `per_app.default`、app.json 也沒宣告)的維度,以前 App 這一層完全不夾(只有個人額度),升級後超過 `max` 的會被夾回 `max`——下一次開
 環境就變小。滾動更新途中新舊 API pod 並存時,同一個 item 由哪一顆 pod 開的環境就照哪一顆的規則,rollout 完成後一致。
-rollout 時**已經在跑**的環境:cgroup 還是開的時候的大小,但心跳記帳與「我的資源」從這時起按新的大小算(它們每次都重新解析),
-直到那個環境被關掉或回收、重開後兩邊才一致——這段時間個人額度可能顯示得比實際占用多。環境面板在 CPU、記憶體欄位下多一行
+rollout 時**已經在跑**的環境:cgroup 還是開的時候的大小,但它在額度帳上的那一列,下一次被使用或喚醒時就改按新的大小記
+(「我的資源」照那一列顯示),直到環境被關掉或回收、重開後兩邊才一致——這段時間調大的會顯示得比實際占用多,被夾回 `max` 的
+會顯示得比實際少。環境面板在 CPU、記憶體欄位下多一行
 「這個 App 最多 X」。app.json 的 `resources` 從「item 最多吃多少」變成「預設吃多少」(目前內建 App 都沒有宣告)。
 
 **確認做完**(`rollout 後`):在一個有設 `per_app.max` 的 App 的 item 打開「環境」面板,CPU、記憶體欄位下寫著「這個 App 最多

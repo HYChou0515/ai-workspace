@@ -1293,7 +1293,9 @@ def _cpu_cores(raw: object, where: str) -> float:
     interpolation always hands over as a string — reached Settings as a str,
     and once `per_app.max` became an item's ceiling (plan-item-size-ceiling
     D2), `min(2.0, "max")` raised on every sized item. `""` / `"0"` / `"max"`
-    mean "not set" (0) here as they do for sizes (`parse_size`). Anything that
+    mean "not set" (0) — the backend's own default, as `_pick_cpu` reads 0 —
+    which is NOT what they mean for a size: there `"0"` / `"max"` are
+    "unbounded" (`parse_size`), cpu having no unbounded spelling. Anything that
     is not a finite, non-negative number fails the boot naming the key:
     `nan` made a cap a silent no-op, `inf` printed 「最多 inf 核」, `-1` held
     every item to -1 cores, and a YAML `true` would have been one core."""

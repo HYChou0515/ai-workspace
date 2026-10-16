@@ -336,7 +336,7 @@ resources:
 |---|---|
 | app.json 的 `resources`,沒寫就是 `per_app.default` | 沒人調過時的大小 |
 | `per_app.max` | 最多能調到多大。面板在欄位下寫出「這個 App 最多 X」 |
-| 沒設 `max` 的維度(`""`/`"0"`/`"max"` 都算沒設) | 天花板就是 App 的值——只能往下調 |
+| 沒設 `max` 的維度(`""`/`"0"`/`"max"` 都算沒設) | 天花板就是 App 的值——只能往下調;App 也沒有值時就沒有天花板 |
 | 個人額度(`per_user`) | 最後再夾一層,`min(item 的值, 天花板, 個人額度)` |
 
 例:`per_app.default` 1 核 / `512M`、`per_app.max` 4 核 / `4G` ⇒ 沒人調的 item 是 1 核 / 512M,
