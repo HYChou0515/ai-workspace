@@ -1,7 +1,7 @@
 # Plan — capacity: who uses how much of what, where, and what more people would need
 
-**Status:** grilled 2026-10-15 on master `15064eba`. Nothing is built yet; the phases in
-§13 ship together in one PR (D14).
+**Status:** grilled 2026-10-15 on master `15064eba`; P1–P15 built in #962 (one PR, D14).
+Where the build differs from this plan, §19 says so and why — §19 wins over the sections above.
 
 **Markers:** **[user]** = the user's words or explicit choice, quoted · **[verified]** =
 read from the code at `15064eba` · **[proposal]** = mine, overridable — say so and it
@@ -766,3 +766,216 @@ Flat; one commit or more per phase; one PR (D14).
 - LiteLLM — [Request tags](https://docs.litellm.ai/docs/proxy/request_tags), [request headers](https://docs.litellm.ai/docs/proxy/request_headers), [tag routing](https://docs.litellm.ai/docs/proxy/tag_routing).
 - NVIDIA — [nvidia-smi](https://docs.nvidia.com/deploy/nvidia-smi/index.html) (`utilization.gpu`).
 - Linux — [cgroup v2](https://docs.kernel.org/admin-guide/cgroup-v2.html), [PSI](https://docs.kernel.org/accounting/psi.html).
+
+## 19. As built (#962)
+
+What the build changed from the plan above, each for a reason found while building it:
+
+- **The request counter sits inside the perf trace**, not outermost: `PerfTraceMiddleware` stays
+  outermost for the reason its comment gives (its wall clock must include every middleware).
+- **The turn's person is `agent.tool_usage.who`** (usage_user, else speaker, else acting user) — the
+  rule the tool-usage statistics count by, so the two pages cannot disagree; `NOBODY` maps to `system`.
+- **No `ws.component` tag**: the purpose already says where (a turn surface or a job type). A call
+  outside any usage scope carries **no tags**; work no person asked for (a job with no `created_by`) carries
+  `ws.user:system`. Tags are only sent while recording is on (`capacity.record`), because only a recorder
+  opens scopes.
+- **The failover producer thread now runs in its caller's context** (`failover/core.py`): a bare thread
+  started with an empty context and dropped the tags of every KB call behind a failover chain. Found by
+  the tag test that calls each adapter the way production does.
+- **Collinear columns are reported, not guessed apart**: a chat send and its turn's events always come
+  together, so only their sum is identifiable; view 9 says so (`FitStats.collinear`).
+- **The knee is a continuous two-segment line, y = a + b·x + c·max(0, x − k)** — the plan's flat hinge
+  with a slope allowed before the break, so a load that costs a little before it slows still has its
+  knee found. k is searched over x's 10th–**99th** percentiles (knees live in peak hours) and then
+  refined between the best percentile's two neighbours: load in two clouds (a working day, another
+  system's weekend batch on a shared GPU) has no percentile in the gap between them, and the break can
+  lie there — a synthetic GPU knee of 1.75 read 1.00 before the refinement. A knee must survive losing
+  the 30 highest-load points, so a break drawn by a few far points is rejected.
+- **(d) uses the sandbox time-weighted wait share** (Σ stalled ÷ Σ alive per slot), not a p95 across
+  sandboxes: it needs no per-sandbox rows from ①. "Stalled" is **pressure minus throttled time**: the
+  kernel counts a sandbox held at its own `cpu.max` as pressure too, and E15 keeps the two apart. The
+  throttled share is drawn beside it. Whether the kernel offers PSI at all is read from a max over the
+  period (the ① contract says a max over records that all lack the field is absent, not 0); without it
+  (d) says so instead of "no slow-down seen".
+- **Workers are one line per job type** (§9.1), each pod's type read off its `work` rows; a pod that ran
+  several leaves no clean split and the workers stay one line. Capacity comes from a `worker:<job>`
+  entry in ② when there is one, else the type's share of the `worker` entry: its pods now, of all the
+  pods of the job types sharing that entry, so the shares add up to the entry (pods are not machines:
+  three pods on two machines took 1/2 + 2/2 of it). "Now" is the median of a type's pods over the last
+  three slots up to the last any worker pod reported: counted in that one slot alone, a type whose pod
+  missed one scrape there lost its whole share, and at the most of the three, a rollout's surge pod was
+  one pod more; a change that lasts two slots counts, and a type scaled to zero has none. A pod seen on
+  both sides of a slot it missed counts in it too: the median forgives one slot off for the type, and
+  two pods that each missed a different scrape made a three-pod type read two. Such a line's `machines` is its share of the entry's machines, fractional.
+  ② reports capacity per component, and a per-type entry is the operator's to give.
+- **(b) is also paired with each model's requests in flight** (its knee a candidate for the model's
+  capacity), and **(e) is one pair per job type**. A turn names its model as the platform asked for it
+  (`openai/qwen3`), LiteLLM by the name the request reached it by (`qwen3`, its `model_group`, which ④
+  reports): they are one model when the names are equal or one is the other behind a `provider/`
+  prefix, and `capacity check` lists the turn models LiteLLM never logged.
+- **View 8 has a sixth pair, `gpu`** (p95 time to first token against a model's requests in flight),
+  which sets the model's capacity beside (b)'s per-model pair — the GPU purchase (E5) rests on it — and
+  **(c) is drawn as seconds per token** (1 ÷ tokens per second), so that slower is up in every pair.
+- **View 8 is ready per view, not per pair** (§9.10 says per pair): it waits for 7 days of ① and ②, so
+  without ② the GPU pairs, which need only ④, wait too. A knee is used — as a line's threshold, as a
+  model's capacity — only once view 8 is ready: before that the overview showed thresholds and GPU
+  capacities from pairs the page said it could not show yet. A pair whose load line has no capacity (no
+  ② entry for it) is not drawn: its load is a share of a capacity. The GPU in-flight pairs skip the
+  20-point span rule — their load is requests in flight, not a share of a capacity, and the knee's own
+  tests (enough points past it, surviving the highest ones) stand in for it.
+- **Without ② no model has an in-flight capacity** (its knee is used only once view 8 is ready, and view 8
+  needs ① and ②) — though the knee's own inputs are ① and ④; what uses that capacity, the overview and
+  the what-if, needs ② anyway. A model's memory line still has its capacity, from ③.
+- **The headroom is served only when the what-if is ready** (view 1 states it as view 6, §9.10): with
+  too few people or ② missing it was still computed from 14 model days, and the overview drew people per
+  line and the line that binds under a headline saying it could not tell — and the runway dated an order
+  by it.
+- **A model's GPU capacity is its total in-flight level at the knee** with its current cards; one more
+  card adds knee ÷ cards (data-parallel replicas). The headroom ignores lines N cannot push: fixed lines
+  and disk (disk runs out over time, view 7).
+- **"N people" reads 30 days before the period** (one grouped ① query by person and UTC day), so the
+  first day's N is as complete as the last's — once the records themselves are 30 days old. Until then
+  N counts only the people seen so far and rises with no one new: the query reaches a week further, and
+  activity there shows the records predate the 30 days; otherwise the first active day is when they
+  began. The runway fits its trend only on days whose 30 days are recorded (so it is ready 58 days after
+  recording starts), and the page says when today's N is still short.
+- **A period of N days is the N whole local days before today, plus today so far** (E7): `[now − N days,
+  now)` held N − 1 whole days, so the runway (28) could never be ready in the default 28-day period and a
+  7-day period held 6. A view that needs more days than its period holds says *period too short* and
+  names the shortest period the page offers that holds it; a failing source is *source error*, with its
+  message. A day is whole when the period holds it from the slot holding its local midnight to the next
+  midnight — 23 or 25 hours on a day the clocks change; counted as 86,400 ÷ step slots, the spring day
+  was never whole.
+- **Each view counts the days of the sources it reads**, and the what-if sizes, the backtest tests and
+  the headroom stands **only on days every connected source of the model (①, ②, ④) has data**: a day
+  before the records began is not a day nobody worked, and drawing it diluted the peaks. A line whose
+  missing data reads as zero (a model's in-flight requests, its memory) takes its peak over its own
+  source's days.
+- **The simulator copies nothing ahead**: each run takes the day's demand of the day's people from the
+  lines, and each draw reads its own seeded random stream as far as N needs (still nested, so a larger N
+  never needs less, and no N is beyond its reach — the backtest asks the days before a day for that
+  day's N, which a team joining at once put past 20×). A simulator per profile that copied the people's
+  day demand and drew 20× today's N of numbers ahead held the period several times over. The what-if
+  still answers at most 20× today's N and says which N it answered; the headroom says "N or more" only
+  when N itself fits. Asked directly, the what-if answers only when its view is ready.
+- **E10, sizing on workdays**: with no work calendar the what-if still draws Monday–Friday, not every
+  day — weekends would dilute the peaks it sizes for; a calendar refines it.
+- **The holdout is the last 7 days** (§9.9), with at least 3 to train on, scoring only the rows of pods
+  the training days saw: a pod born after the cut — every rollout renames them — has no idle cost to
+  predict from.
+- **Lines split by regression wait for 3 days of both sources** (§9.10), through their own readiness
+  entry (`regression`).
+- **Scratch gets a disk line, a day's disk is its latest snapshot, and each disk line in the runway says
+  what one more person adds a month** (§9.1, E16).
+- **The 90-day period is analysed at a coarser slot** to bound memory: the smallest multiple of `step_s`
+  that is at least 15 minutes and divides a day (a slot holding one window and two by turn read a steady
+  load as 1.33 and 0.67). A coarser slot averages short peaks away, so the 90-day headroom reads
+  roomier than the 28-day one; the overview's basis line names the slot length.
+  sandbox-host's window is its own setting: a row longer than the slot is spread
+  over the slots it covers, and `capacity check` refuses one that fits neither way.
+- **An analysis' memory is 4 bytes × slots × the people each line costs, summed over the lines, plus
+  about 45–60 bytes per row read, plus 8 bytes × slots per App and per purpose on each line** (measured on synthetic worlds of 60, 120 and 240 people, 27 days, with
+  sources that return fresh records as an ES client does). A turn or job record is kept as the five
+  numbers the analysis reads (`Events`: about 30 bytes, measured — 28 of them its columns; the
+  dict from ES was about a kilobyte and was kept
+  whole).
+  The observations keep the (slot, value) pairs a source returned — ②'s pods included, so a rollout's
+  new pod names cost only their samples; a line keeps a row only for each person it costs (`Line.rows`);
+  the simulators copy nothing; the regression never lays all its rows out at once but sums each pod's block into
+  XᵀX and Xᵀy, solved by Lawson–Hanson in Bro & De Jong's fast-NNLS form — rows × columns had grown with
+  every pod name, each another intercept column. Every row read counts against `capacity.max_rows`,
+  which bounds the second term, not the first. One period is built at a time, and a kept analysis is let
+  go when its TTL ends or a refresh replaces it — its timer holds only the period, and is cancelled. At
+  120 people the analysis held 81 MB after building and 171 MB once four what-if profiles were asked;
+  now 49 MB and 52 MB, with daily rollouts or without.
+- **The build belongs to no request** (a closed page does not cancel it for others), and summary,
+  person and what-if run in a thread, like the build.
+- **`turn` records are stamped at acceptance, `job` records at start**, so a period selects work by when
+  it began.
+- **`kind: local` with isolation**: the API pod's own sandboxes are subtracted from its CPU and memory
+  before the API regression, since they run inside it. A backend with no cgroup per sandbox measures
+  none, and the summary says so (`sandbox_measured`) for the page to.
+- **A request's App is its matched route's `slug`, only on a route inside an App (`/api/a/{slug}/…`),
+  only for an App the platform ships (`is_app`, from the apps in the image), and only when the response
+  did not refuse the slug (4xx)**: read off the raw path, any URL minted an
+  App, and the launcher's `/api/apps/{slug}/icon` made everyone who opened the home page a user of every
+  App with an icon file. Work that failed (5xx, a crash) is still the App's. An App route another page
+  calls for the user still counts: the skill hub's install picker asks every listed workspace's install
+  state (`…/skills/install-state`, #959), so opening it puts the user among those Apps' people. A request no route answered
+  is `unknown` without a call to `get_user_id`. A Kubernetes probe (`kube-probe/…`) is `system` work of
+  its own kind, `probe:<METHOD> <template>`, not a request: the same count every window on every pod
+  moves exactly with each pod's idle cost, and as a request column the regression handed that whole
+  idle cost to `system` (on a synthetic world the API's fixed part fell from 0.2 cores to 0.0001); its
+  fast answers also pulled the requests' p95 down. Its CPU stays in the fixed part.
+- **The two shares view 9 states**: the unidentified share is of the API requests someone made (no
+  static files, no probes); the system share is of the running time of jobs and turns, the only work
+  that can have nobody behind it besides probes — a share of requests was always 0.
+- **Coverage and gaps are one question** (§9.9): a source's coverage is the share of slots with anything
+  from it, the slots its gaps do not have; gaps run to the period's end, so a source that stopped before
+  it has a gap to it.
+- **The usage flush builds its rows in a thread**, not on the event loop; a stopped turn ends on the
+  record even when the epoch watcher cancels it a second time during the turn-end flush.
+- **The cgroup reader lives in `capacity/cgroup_usage.py`** (the plan said `sandbox/`): it is one file
+  shared byte for byte with sandbox-host, beside the record format it writes.
+- **The ECharts guard** (`web/src/ext/imports.test.ts`) holds a door rule: only `capacity/echarts.ts`
+  imports ECharts, every other module reaches it with `import()` or `import type` (an import whose names
+  are each `type` still runs the module under `verbatimModuleSyntax`, and counts), web's range is the
+  chart plugin's, and no package in web's lockfile wraps it. The door imports what the views draw — bar,
+  line, scatter; grid, tooltip, legend, mark line; canvas — not the plan's mark area and data zoom,
+  which no view uses. The production build puts ECharts in its own chunk (539,697 bytes minified,
+  measured on the #962 build); the page's own code is in the main bundle, like every page's.
+- **The middleware's cost**: `scripts/bench_usage_middleware.py` (median of 5 rounds × 10,000 requests on
+  a trivial route) measured 12.8–14.3 µs per request (+27–31%; 46.6–47.6 → 60.4–61.1 µs) on the dev box
+  across three runs, after the round-2 changes.
+- **Allocation's fixed-overhead toggle** (D11) applies where its meaning does: "evenly" is per person
+  (§9.4), so it is off for App and purpose, and all three are off for "by component", whose rows are the
+  lines themselves. "Evenly" divides by today's N, or by the people who used the line in the period when
+  they are more (a 90-day period), so the shares still add up to the whole.
+- **The what-if gives a line N does not push no verdict**: the database's memory and a model's memory
+  are needed as they are used, at any N — not divided by a threshold — with no machine count and no
+  "fits" (§9.6 divides every line by its threshold).
+- **A record's field with no value is left out, not written `null`** (§5.2): ES reads both alike.
+- **A source that lags shows a gap at the end**: gaps run to the period's end, so a metrics pipeline more
+  than `lag_s` plus about 15 minutes behind is a gap in view 9; `capacity check`, which reads up to now
+  without waiting `lag_s`, warns from about 15 minutes behind.
+- **The page's controls follow published guidance** (CLAUDE.md's UI rule; each kind looked up, NN/g first):
+  - switching among the five views is the app's shared tab strip (`Tabs` in `components/ShareTabs.tsx`:
+    text and underline) — a tab bar
+    "allows users to selectively view a single panel of content … from among a list of available
+    options" ([NN/g glossary](https://www.nngroup.com/articles/ui-elements-glossary/); [Tabs, Used
+    Right](https://www.nngroup.com/articles/tabs-used-right/));
+  - choosing a mode of the same content — the period, a grouping, peak or average, how fixed overhead is
+    shown, a what-if profile, p50 or p95 — is a segmented control, "a group of connected buttons laid out
+    in a horizontal row" ([NN/g glossary](https://www.nngroup.com/articles/ui-elements-glossary/)): one
+    outlined row, the selected segment filled and bold, two to five short text segments, not stretched
+    across a wide screen ([Material 3, segmented buttons](https://m3.material.io/components/segmented-buttons/guidelines),
+    which the expressive update replaces with the connected button group);
+  - running the what-if (filled), recomputing (secondary) and closing a person's detail are buttons — a
+    button "will execute a certain action" ([NN/g glossary](https://www.nngroup.com/articles/ui-elements-glossary/));
+    the close is a text button, which Material 3 keeps for the lowest-priority actions and never
+    underlines ([Material 3, buttons](https://m3.material.io/components/buttons/guidelines)) — it was an
+    underlined link until round 3;
+  - a person's detail opens from a text button in their row, "明細" — opening it is an action, and a
+    link standing for an action needs words saying so ([NN/g, command links](https://www.nngroup.com/articles/command-links/)),
+    which a name is not; it was a button drawn as a link, and then a link to a place on the page that
+    existed only after the click (opened in a new tab, it showed nothing). The button takes the view and
+    the focus to the detail below the table; when the detail closes the focus comes back to the
+    person's button (found by whose it is: another grouping and back draws new ones), or to the line's
+    picker when their row is gone;
+  - choosing a line or an App is a dropdown, "a type of picker that allows users to select one option
+    from a list of options", since there are more of them than a segmented control holds; the people
+    and the purchase lead time are typed, in a textbox, "an input control that allows users to type text
+    within a defined rectangular area" ([NN/g glossary](https://www.nngroup.com/articles/ui-elements-glossary/));
+  - every segmented control and dropdown says what it chooses in a visible label (基本開銷, 新來的人像 …),
+    not only to a screen reader.
+- **The tabs** are the app's shared `Tabs`: the WAI-ARIA tab roles, without the pattern's arrow keys
+  (§10); the shared component is not changed here.
+- **Every stream is one column** of the API regression (§9.3 keeps route templates apart): a stream's
+  cost is its connection's, whatever route opened it.
+- **What one more person adds to a disk a month** is given for every disk line that has a ② capacity
+  (the database's, scratch, the file store), and shows with the runway.
+- **`capacity check` compares a pod's CPU with its component's whole capacity** (§8 said its machine's):
+  ② gives capacity per component.
+- **Commits**: P8–P9, P9–P11 and P13–P14 went in as combined commits, against "one or more per phase",
+  and the `check` command landed with P12, not P8; history is not rewritten.
+

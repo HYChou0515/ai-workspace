@@ -101,6 +101,7 @@ class LitellmLlm(ILlm):
         import litellm
 
         from ..agent.reasoning import reasoning_off_kwargs
+        from ..capacity.llm_tags import tagged
 
         # reasoning_effort: None ⇒ omit (model default); low|medium|high ⇒ pass
         # through (thinking on). "none" is the OFF signal — but the OpenAI
@@ -122,6 +123,8 @@ class LitellmLlm(ILlm):
             timeout=self._timeout,
             num_retries=self._num_retries,
             **extra,
+            # docs/plan-capacity-usage.md §7: whose call this is, for LiteLLM's log.
+            **tagged("llm"),
         )
         try:
             for chunk in response:

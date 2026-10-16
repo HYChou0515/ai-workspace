@@ -33,6 +33,8 @@ from .agent.config_catalog import AgentConfigCatalog
 from .agent.tool_usage import ToolUsageRecorder
 
 if TYPE_CHECKING:
+    from .capacity.recorder import UsageRecorder
+    from .capacity.sources import CapacitySources
     from .model_settings.live import LiveSettings
 from .api.env_provider import IEnvProvider
 from .api.litellm_runner import LitellmAgentRunner, RunnerEndpoints
@@ -43,6 +45,7 @@ from .apps.catalog import AppCatalog, validate_all_apps
 from .config.catalog_build import build_catalog
 from .config.loader import load as load_settings
 from .config.schema import (
+    CapacitySettings,
     Preset,
     RetrievalLlmRef,
     SandboxIsolationSettings,
@@ -1395,6 +1398,69 @@ def get_notification_channel(dotted: str) -> INotificationChannel | None:
     if not dotted:
         return None
     return _construct_dotted(dotted, INotificationChannel, config_key="server.notification_channel")
+
+
+def build_usage_recorder(settings: CapacitySettings, *, component: str) -> UsageRecorder | None:
+    """This process's usage counter (docs/plan-capacity-usage.md §6.7), or None
+    when `capacity.record` is off. Its sink is `capacity.sink` when named — a
+    `UsageSink` subclass, refused at startup otherwise — else one JSON line per
+    record on stdout for the deploy's collector (D3)."""
+    from .capacity.recorder import UsageRecorder
+    from .capacity.sink import StdoutSink, UsageSink
+
+    if not settings.record:
+        return None
+    sink = (
+        _construct_dotted(settings.sink, UsageSink, config_key="capacity.sink")
+        if settings.sink
+        else StdoutSink()
+    )
+    return UsageRecorder(
+        sink,
+        component=component,
+        window_s=settings.window_s,
+        queue_max=settings.queue_max,
+        llm_tags=settings.llm_tags,
+    )
+
+
+def get_capacity_sources(settings: CapacitySettings) -> CapacitySources:
+    """The capacity dashboard's four sources (docs/plan-capacity-usage.md §8),
+    each the operator's implementation named in `capacity:` — or absent, and
+    then the views that need it say so. A path that is not the right kind of
+    source refuses to boot, naming its key."""
+    from .capacity.sources import (
+        CapacitySources,
+        GpuMetricsSource,
+        LlmRequestSource,
+        ResourceMetricsSource,
+        UsageRecordSource,
+    )
+
+    def build(dotted: str, base: type, key: str):  # noqa: ANN202
+        return _construct_dotted(dotted, base, config_key=f"capacity.{key}") if dotted else None
+
+    return CapacitySources(
+        usage_records=build(settings.usage_records, UsageRecordSource, "usage_records"),
+        resource_metrics=build(
+            settings.resource_metrics, ResourceMetricsSource, "resource_metrics"
+        ),
+        gpu_metrics=build(settings.gpu_metrics, GpuMetricsSource, "gpu_metrics"),
+        llm_requests=build(settings.llm_requests, LlmRequestSource, "llm_requests"),
+    )
+
+
+def capacity_workday(spec: SpecStar):  # noqa: ANN201
+    """Which days are workdays, as the stored work calendar says now (the what-if
+    sizes on workdays). None when this spec holds no calendar: Monday–Friday."""
+    from .resources.work_calendar import read_work_calendar
+    from .workcalendar import OffHoursCalendar
+
+    try:
+        stored = read_work_calendar(spec)
+    except Exception:  # noqa: BLE001 — a calendar that cannot be read is the default one
+        return None
+    return OffHoursCalendar(workdays=tuple(stored.workdays), overrides=stored.overrides).is_workday
 
 
 def get_request_env(dotted: str) -> IRequestEnv | None:

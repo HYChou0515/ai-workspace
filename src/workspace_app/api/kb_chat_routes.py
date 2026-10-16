@@ -1098,7 +1098,10 @@ def register_kb_chat_routes(
         engine.publish(
             chat_id, UserMessage(author=asked_by, content=body.content, created_at=asked_at)
         )
-        fut = engine.enqueue(chat_id, agent_content, ctx, on_complete=persist)
+        # docs/plan-capacity-usage.md §6.3: the question's own timestamp is the acceptance.
+        fut = engine.enqueue(
+            chat_id, agent_content, ctx, on_complete=persist, surface="kb", accepted_ms=asked_at
+        )
         # #493: await THIS turn, but only to a deadline, then DETACH it — `shield`
         # keeps the worker's future alive, so detaching is not cancelling. A fast
         # turn still returns after its reply is persisted (which is what the

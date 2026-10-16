@@ -71,6 +71,8 @@ export function usePlatformDestinations(): PlatformDestination[] {
     ...(isSuperuser
       ? ([
           { to: "/work-calendar", label: "Work calendar", icon: "clock" },
+          // docs/plan-capacity-usage.md D4: the capacity dashboard, superusers only.
+          { to: "/capacity", label: t("capacity.nav"), icon: "layers" },
           // docs/plan-model-settings.md M15: presets, app.json, the platform's models.
           { to: "/settings/models", label: t("modelSettings.title"), icon: "settings" },
         ] satisfies PlatformDestination[])

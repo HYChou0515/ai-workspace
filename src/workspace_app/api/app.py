@@ -24,6 +24,10 @@ from ..agent.context import AgentToolContext
 from ..apps.skill_hub import SkillHubReview, SkillHubStore, register_skill_hub
 from ..apps.skill_hub_git import SkillHubRepos, resolve_git_root
 from ..apps.subagents import SubagentDef
+from ..capacity.middleware import UsageMiddleware
+from ..capacity.recorder import UsageRecorder
+from ..capacity.scope import recording_reader
+from ..capacity.service import CapacityService
 from ..config.schema import (
     ChatVideoSettings,
     EnhancementSettings,
@@ -539,6 +543,12 @@ def create_app(
     # (also when it stops). None ⇒ nothing counted here is written.
     tool_usage: ToolUsageRecorder | None = None,
     tool_usage_flush_interval: timedelta = timedelta(minutes=5),
+    # docs/plan-capacity-usage.md: where this process counts its requests,
+    # turns and jobs for the capacity dashboard. None ⇒ nothing is counted.
+    usage_recorder: UsageRecorder | None = None,
+    # docs/plan-capacity-usage.md §11: the dashboard's analysis service, over
+    # the operator's four sources. None ⇒ none connected (the page says so).
+    capacity: CapacityService | None = None,
     # #345: soft cap (bytes) on ONE item's shared scratch dir; the idle reaper's
     # du-sweep recycles any item over it so a runaway workspace can't fill the
     # scratch volume the whole fleet shares. 0 ⇒ disabled (the lenient default).
@@ -748,6 +758,13 @@ def create_app(
             get_user_id = _default_user  # a per-request callable — use it as-is
         else:  # UNSET / unexpected — fall back to the single dev tenant
             get_user_id = lambda: "default-user"  # noqa: E731
+    # docs/plan-capacity-usage.md §6.2: a request learns who it is from the
+    # first answer its routes get from `get_user_id`, so the counter never
+    # asks the deploy's reader a second time. The counter itself keeps the
+    # unwrapped reader for a request whose routes never asked.
+    _deploy_user_reader = get_user_id
+    if usage_recorder is not None:
+        get_user_id = recording_reader(get_user_id)
     if users is None:
         users = MockUserDirectory()
     # `None` catalog → build one from bundled defaults so test fixtures /
@@ -1133,7 +1150,13 @@ def create_app(
             return "app" if final == after_app_v else "quota"
 
         return ResolvedSize(
-            spec=SandboxSpec(cpu_cores=final_cpu, memory_bytes=final_mem),
+            spec=SandboxSpec(
+                cpu_cores=final_cpu,
+                memory_bytes=final_mem,
+                # docs/plan-capacity-usage.md §6.5: whose sandbox this is — the
+                # same owner the budget above was read for.
+                labels={"user": owner or "", "app": _slug or ""},
+            ),
             cpu_bound_by=_who(cpu, after_app, final_cpu),
             memory_bound_by=_who(mem, after_app_mem, final_mem),
             cpu_ceiling=cpu_ceiling,
@@ -1565,6 +1588,21 @@ def create_app(
     # LAST so it wraps OUTERMOST and its wall clock covers the whole request,
     # middleware included — otherwise the residual it reports would exclude the
     # very queueing we are trying to see.
+    # docs/plan-capacity-usage.md §6.1: count every request for the capacity
+    # dashboard. Inside the perf trace (below), which stays outermost for the
+    # reason it gives.
+    app.state.usage_recorder = usage_recorder
+    if usage_recorder is not None:
+        # The Apps ship with the image: their slugs are known now, for good.
+        from ..apps.catalog import discover_app_slugs
+
+        app.add_middleware(
+            UsageMiddleware,
+            recorder=usage_recorder,
+            get_user_id=_deploy_user_reader,
+            is_app=frozenset(discover_app_slugs()).__contains__,
+        )
+
     if perf_trace.enabled():
         perf_trace.install(spec, sandbox)
         app.add_middleware(perf_trace.PerfTraceMiddleware)
@@ -1821,6 +1859,8 @@ def create_app(
         filestore=filestore,
         chat_video_settings=chat_video,
         disk_live_window_ms=int(idle_timeout.total_seconds() * 1000),
+        # docs/plan-capacity-usage.md §6.4: jobs this process consumes in-process.
+        usage_recorder=usage_recorder,
     )
 
     # #208: the first real backend hit — specstar materialises every model's
@@ -2078,6 +2118,7 @@ def create_app(
         event_bus=event_bus,
         pod_id=pod_id,
         turn_activity=turn_activity,
+        usage_recorder=usage_recorder,
     )
     # The sweeper feeds the durable per-person ledger with what the mirror just
     # measured — the ONLY path by which bytes the agent produced with `exec`
@@ -2136,6 +2177,7 @@ def create_app(
 
     kb_turn_engine = ChatTurnEngine(
         runner,
+        usage_recorder=usage_recorder,
         turn_activity=turn_activity,
         turn_control=turn_control,
         poll_interval=turn_cancel_poll_seconds,
@@ -2287,6 +2329,21 @@ def create_app(
 
     register_tool_usage_routes(
         api, spec=spec, locator=locator, get_user_id=get_user_id, superusers=superusers
+    )
+    # docs/plan-capacity-usage.md §11: the capacity dashboard (superusers only).
+    from ..capacity.local_usage import sandbox_measured as _sandbox_measured
+    from ..capacity.service import CapacityService as _CapacityService
+    from ..capacity.sources import CapacitySources as _CapacitySources
+    from ..config.schema import CapacitySettings as _CapacitySettings
+    from .capacity_routes import register_capacity_routes
+
+    app.state.capacity = capacity or _CapacityService(_CapacitySources(), _CapacitySettings())
+    register_capacity_routes(
+        api,
+        service=app.state.capacity,
+        get_user_id=get_user_id,
+        superusers=superusers,
+        sandbox_measured=_sandbox_measured(sandbox),
     )
 
     # The write side of `_item_facts`: whoever changes an item's stored facts

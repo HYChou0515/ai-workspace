@@ -523,6 +523,32 @@
 # view_plugins:
 #   dir: /opt/view-plugins
 
+# ─── capacity (the capacity dashboard, /capacity — superusers only) ────────
+# docs/capacity.md. ON by default: every request, chat turn and background job
+# is counted, and the counts are written as one JSON line per record on stdout
+# (`event.dataset: workspace.usage`) for your collector to ship to ES — the
+# platform stores nothing. LLM calls carry `x-litellm-tags` (person, App,
+# purpose); turn `llm_tags` off BEFORE rollout when your LiteLLM proxy sets
+# `general_settings.reject_clientside_metadata_tags: true` (every tagged call
+# is refused), routes on tags with no `default` pool, or when models are
+# called at a hosted provider directly (the person ids would go with them).
+# The dashboard reads four sources YOU implement (dotted paths of classes in
+# your own package); an empty one is simply not connected.
+# capacity:
+#   record: true
+#   sink: ""                      # your UsageSink; "" = stdout JSON lines
+#   window_s: 300                 # divides 3600
+#   queue_max: 10000
+#   llm_tags: true
+#   usage_records: ""             # ① e.g. acme_capacity.sources.EsRecords
+#   resource_metrics: ""          # ② e.g. acme_capacity.sources.PromPods
+#   gpu_metrics: ""               # ③ e.g. acme_capacity.sources.DcgmGpus
+#   llm_requests: ""              # ④ e.g. acme_capacity.sources.LiteLlmLog
+#   step_s: 300                   # a multiple of window_s that divides a day
+#   lag_s: 600
+#   timezone: ""                  # "" = UTC; e.g. Asia/Taipei
+#   max_rows: 5000000
+
 # ─── chat_video (Export ▾ → 影片) ─────────────────────────────────────────
 # The ceilings on what a video job may ask for (docs/plan-chat-video-export.md,
 # decision 10). The form only offers values inside them; the server refuses

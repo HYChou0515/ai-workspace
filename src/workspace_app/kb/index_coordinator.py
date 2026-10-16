@@ -40,6 +40,8 @@ from specstar.types import (
     TaskStatus,
 )
 
+from ..capacity.jobs import recorded_job
+from ..capacity.recorder import UsageRecorder
 from ..failover.retry import is_transient
 from ..resources import Collection, DocChunk, IndexRun, IndexUnitText, SourceDoc
 from .index_jobs import IndexJob, IndexJobPayload
@@ -110,6 +112,8 @@ class IndexCoordinator:
         default_unit_batch: int = 8,
         get_user_id: Callable[[], str] | None = None,
         job_max_retries: int = 3,
+        # docs/plan-capacity-usage.md §6.4: where each job attempt is recorded.
+        usage_recorder: UsageRecorder | None = None,
     ) -> None:
         self._spec = spec
         self._ingestor = ingestor
@@ -155,9 +159,10 @@ class IndexCoordinator:
         # `status` is queried by the consumer (`pop`) + `_active_count`;
         # `partition_key` (= the doc id, #134) by `pop`'s per-key serialization
         # and by `_has_pending_job`'s coalesce lookup.
+        self._usage_recorder = usage_recorder
         spec.add_model(
             Schema(IndexJob, "v1"),
-            job_handler=self._handle,
+            job_handler=recorded_job("index", self._handle, self._usage_recorder),
             indexed_fields=["status", "partition_key"],
             message_queue_factory=message_queue_factory,  # ty: ignore[invalid-argument-type]
         )

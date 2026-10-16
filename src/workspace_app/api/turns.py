@@ -36,6 +36,10 @@ from typing import Any, cast
 from fastapi.responses import StreamingResponse
 
 from ..agent.context import AgentToolContext
+from ..agent.tool_usage import NOBODY, who
+from ..capacity.recorder import Running, UsageRecorder
+from ..capacity.records import TurnRecord
+from ..capacity.scope import SYSTEM, UsageScope, scoped
 from ..context_budget import SUMMARY_ROLE, estimate_messages
 from ..failover.core import AllProvidersFailed
 from ..failover.rate_limit import is_rate_limited
@@ -577,6 +581,82 @@ class PendingTurn:
     author: str = ""
 
 
+@dataclass
+class _TurnStamp:
+    """docs/plan-capacity-usage.md §6.3: which surface queued a turn and when
+    its message was accepted; `started_ms` is set when the worker starts it."""
+
+    surface: str
+    accepted_ms: int
+    started_ms: int = 0
+
+
+class _TurnUsage:
+    """One turn on the usage record: charged as `turn:<surface>` work while it
+    runs, its events counted, its moments noted, and a `turn` record written
+    when it ends. The person is `tool_usage.who` — the rule the tool-usage
+    statistics count by, so the two pages cannot disagree about whose turn it
+    was."""
+
+    def __init__(self, recorder: UsageRecorder, stamp: _TurnStamp, ctx: AgentToolContext) -> None:
+        user = who(ctx)
+        self.user = SYSTEM if user == NOBODY else user
+        self.app = ctx.app_slug or ""
+        self.item = ctx.investigation_id or ""
+        self.stamp = stamp
+        self._recorder = recorder
+        self._events = f"turn-events:{stamp.surface}"
+        self._running: Running = recorder.begin(self.user, self.app, f"turn:{stamp.surface}")
+        self.scope = UsageScope(
+            user=self.user,
+            app=self.app,
+            item=self.item,
+            purpose=stamp.surface,
+            tags=recorder.llm_tags,
+        )
+        self.outcome = "done"
+        self.first_event_ms: int | None = None
+        self.first_output_ms: int | None = None
+        self.model = ""
+        self.prompt_tokens: int | None = None
+        self.completion_tokens: int | None = None
+
+    def saw(self, ev: AgentEvent) -> None:
+        now = _now_ms()
+        if self.first_event_ms is None:
+            self.first_event_ms = now
+        if self.first_output_ms is None and isinstance(ev, MessageDelta | ToolStart):
+            self.first_output_ms = now
+        if isinstance(ev, AgentMetrics) and ev.phase == "final":
+            self.model = ev.model or ""
+            self.prompt_tokens = ev.measured_prompt_tokens
+            self.completion_tokens = ev.measured_completion_tokens
+        if isinstance(ev, RunError):
+            self.outcome = "error"
+        self._recorder.add(self.user, self.app, self._events)
+
+    def end(self) -> None:
+        self._running.end()
+        self._recorder.emit(
+            TurnRecord(
+                user=self.user,
+                app=self.app,
+                item=self.item,
+                surface=self.stamp.surface,
+                outcome=self.outcome,
+                accepted_ms=self.stamp.accepted_ms,
+                started_ms=self.stamp.started_ms,
+                first_event_ms=self.first_event_ms,
+                first_output_ms=self.first_output_ms,
+                ended_ms=_now_ms(),
+                model=self.model,
+                prompt_tokens=self.prompt_tokens,
+                completion_tokens=self.completion_tokens,
+            ),
+            at_ms=self.stamp.accepted_ms,
+        )
+
+
 _QueueItem = tuple[
     str,
     AgentToolContext,
@@ -584,6 +664,7 @@ _QueueItem = tuple[
     "OnTurnEnd | None",
     "asyncio.Future[None]",
     "PendingTurn | None",  # the caller's preparation token; see `enqueue`
+    _TurnStamp,
 ]
 
 
@@ -728,8 +809,12 @@ class ChatTurnEngine:
         pod_id: str | None = None,
         turn_activity: ITurnActivityStore | None = None,
         heartbeat_s: float = TURN_HEARTBEAT_MS / 1000,
+        usage_recorder: UsageRecorder | None = None,
     ) -> None:
         self._runner = runner
+        # docs/plan-capacity-usage.md §6.3: where each queued turn is recorded
+        # (its moments, its running time, its events). None ⇒ nothing is.
+        self._usage = usage_recorder
         # Whether anyone is driving a turn, recorded where every pod can read it.
         # `None` = no signal: single-pod deploys and tests behave exactly as
         # before, and the surfaces that ask fall back to their old guesswork.
@@ -891,6 +976,8 @@ class ChatTurnEngine:
         on_complete: Callable[[list[TurnMessage]], bool | None],
         on_turn_end: OnTurnEnd | None = None,
         pending: PendingTurn | None = None,
+        surface: str = "chat",
+        accepted_ms: int | None = None,
     ) -> asyncio.Future[None]:
         """#43: append a message to the investigation's FIFO turn queue and
         ensure its worker is running. Unlike `stream()`, a new message does NOT
@@ -929,13 +1016,18 @@ class ChatTurnEngine:
         persisted — an app chat flushes the item's live sandbox to durable
         (turn-end reconcile), and both an app chat and a workflow announce
         `TurnEnded` on the item's stream. It runs on the worker, off the POST's back, and a
-        failure is swallowed so durability best-effort never fails the turn."""
+        failure is swallowed so durability best-effort never fails the turn.
+
+        `surface` (`chat` | `kb` | `workflow`) and `accepted_ms` — when the
+        message was persisted, the acceptance; now when omitted — go on the
+        turn's usage record (docs/plan-capacity-usage.md §6.3)."""
         session = self._ws_session(key)
         if session.worker is None or session.worker.done():
             session.worker = asyncio.create_task(self._worker(session, key))
         fut: asyncio.Future[None] = asyncio.get_running_loop().create_future()
         session.pending_turns.discard(pending) if pending is not None else None
-        session.queue.put_nowait((content, ctx, on_complete, on_turn_end, fut, pending))
+        stamp = _TurnStamp(surface, accepted_ms if accepted_ms is not None else _now_ms())
+        session.queue.put_nowait((content, ctx, on_complete, on_turn_end, fut, pending, stamp))
         logger.info("turns: enqueued turn for %s", key)
         return fut
 
@@ -945,7 +1037,7 @@ class ChatTurnEngine:
         cancellable task so `cancel_current` stops only the running turn and the
         worker proceeds to the next; its completion future is then resolved."""
         while True:
-            content, ctx, on_complete, on_turn_end, fut, pending = await session.queue.get()
+            content, ctx, on_complete, on_turn_end, fut, pending, stamp = await session.queue.get()
             # A Stop that landed while the caller was still PREPARING this turn
             # (see `PendingTurn`): there was nothing to cancel then, so honouring
             # it is entirely a matter of not starting now. Checked before the turn
@@ -986,10 +1078,13 @@ class ChatTurnEngine:
             # — otherwise its `advance()` bumps the epoch, this stamp reads the
             # already-bumped value, and the watcher's `> my_epoch` never trips, so
             # the Stop is silently lost (the intermittent "Stop does nothing").
+            stamp.started_ms = _now_ms()
             turn = asyncio.create_task(
                 self._with_heartbeat(
                     key,
-                    self._run_turn(content, ctx, on_complete, on_turn_end, session.publish),
+                    self._run_turn(
+                        content, ctx, on_complete, on_turn_end, session.publish, stamp=stamp
+                    ),
                 )
             )
             session.current_turn = turn
@@ -1093,11 +1188,31 @@ class ChatTurnEngine:
         on_complete: Callable[[list[TurnMessage]], bool | None],
         on_turn_end: OnTurnEnd | None,
         publish: Callable[[AgentEvent], None],
+        *,
+        stamp: _TurnStamp | None = None,
     ) -> None:
         """Drive one turn through the runner, reducing events into persistable
         messages AND broadcasting each raw event to the investigation's live
         subscribers. Cancellation / failure is recorded as a terminal message
         (and broadcast) and the (partial) result is always persisted."""
+        usage = (
+            _TurnUsage(self._usage, stamp, ctx)
+            if self._usage is not None and stamp is not None
+            else None
+        )
+        with scoped(usage.scope) if usage is not None else contextlib.nullcontext():
+            await self._drive_turn(content, ctx, on_complete, on_turn_end, publish, usage)
+
+    async def _drive_turn(
+        self,
+        content: str,
+        ctx: AgentToolContext,
+        on_complete: Callable[[list[TurnMessage]], bool | None],
+        on_turn_end: OnTurnEnd | None,
+        publish: Callable[[AgentEvent], None],
+        usage: _TurnUsage | None,
+    ) -> None:
+        """`_run_turn`'s body, inside the turn's usage scope."""
         reducer = _TurnReducer()
         cancelled: RunCancelled | None = None
         try:
@@ -1125,8 +1240,12 @@ class ChatTurnEngine:
             async for ev in self._events(content, ctx):
                 reducer.add(ev)
                 publish(ev)
+                if usage is not None:
+                    usage.saw(ev)
         except asyncio.CancelledError:
             logger.info("turns: turn cancelled for %s", ctx.investigation_id)
+            if usage is not None:
+                usage.outcome = "cancelled"
             # Reduced now, broadcast below — AFTER `on_complete` has said
             # whether this turn was still this pod's to end. A copy a peer took
             # over (plan-graceful-shutdown P3: the epoch cancelled it, or its
@@ -1138,6 +1257,8 @@ class ChatTurnEngine:
             raise
         except Exception as exc:  # noqa: BLE001 — surface as a terminal error message
             logger.exception("turns: turn errored for %s", ctx.investigation_id)
+            if usage is not None:
+                usage.outcome = "error"
             err = _terminal_error(exc)
             reducer.add(err)
             publish(err)
@@ -1164,11 +1285,21 @@ class ChatTurnEngine:
             # (the partial work is real). Guarded so best-effort durability never
             # turns a finished turn into a failure; on an active cancel the flush
             # may be skipped, but the periodic checkpoint + next turn still cover it.
-            if on_turn_end is not None:
-                logger.debug("turns: turn-end durable flush for %s", ctx.investigation_id)
-                # A flush failure is not a turn failure (best-effort durability).
-                with contextlib.suppress(Exception):
-                    await on_turn_end()
+            try:
+                if on_turn_end is not None:
+                    logger.debug("turns: turn-end durable flush for %s", ctx.investigation_id)
+                    # A flush failure is not a turn failure (best-effort durability).
+                    with contextlib.suppress(Exception):
+                        await on_turn_end()
+            finally:
+                # Whatever cuts the flush short — the turn's own epoch watcher
+                # cancels it a second time after a Stop — the turn still ends
+                # on the record; left running, it is charged to its person in
+                # every window until restart. Counting is never a reason for a
+                # turn to fail.
+                if usage is not None:
+                    with contextlib.suppress(Exception):
+                        usage.end()
 
     @contextlib.asynccontextmanager
     async def preparing(self, key: str, author: str = "") -> AsyncIterator[PendingTurn]:

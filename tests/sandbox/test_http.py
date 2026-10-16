@@ -59,6 +59,9 @@ def _fake_host(backend: MockSandbox, advertise_url: str) -> FastAPI:
     # one regression that matters — the app and the host disagreeing about the
     # field names. These are the names `sandbox_host.app._CreateBody` declares.
     app.state.created_limits = []
+    # docs/plan-capacity-usage.md §6.5: whose sandbox it is, under the name the
+    # real host reads (`sandbox_host.app._CreateBody.labels`).
+    app.state.created_labels = []
     app.state.resolved = []  # #674: tool declarations seen by /tools/resolve
     app.state.live = {}  # remote_id -> item_id: what this pod is really running
 
@@ -81,6 +84,7 @@ def _fake_host(backend: MockSandbox, advertise_url: str) -> FastAPI:
         app.state.created_limits.append(
             (body.get("cpu_cores"), body.get("memory_bytes"), body.get("pids_max"))
         )
+        app.state.created_labels.append(body.get("labels"))
         h = await backend.create(SandboxSpec())
         app.state.live[h.id] = body.get("item_id")
         return {"pod_url": advertise_url, "remote_id": h.id}
@@ -898,6 +902,18 @@ async def test_create_sends_the_items_resource_ceilings():
         sb = HttpSandbox(base_url=_ADVERTISE, client=client)
         await sb.create(SandboxSpec(cpu_cores=2.0, memory_bytes=1024, pids_max=64))
     assert app.state.created_limits == [(2.0, 1024, 64)]
+
+
+async def test_create_sends_whose_sandbox_it_is():
+    """docs/plan-capacity-usage.md §6.5: the host echoes these on the usage rows
+    it writes, the only way a host-side measurement reaches a person."""
+    backend = MockSandbox()
+    app = _fake_host(backend, _ADVERTISE)
+    async with httpx.AsyncClient(transport=ASGITransport(app=app)) as client:
+        sb = HttpSandbox(base_url=_ADVERTISE, client=client)
+        await sb.create(SandboxSpec(labels={"user": "alice", "app": "pm"}))
+        await sb.create(SandboxSpec())
+    assert app.state.created_labels == [{"user": "alice", "app": "pm"}, None]
 
 
 async def test_create_states_nothing_when_the_app_has_no_limits():
