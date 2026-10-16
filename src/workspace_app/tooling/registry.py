@@ -28,7 +28,8 @@ from __future__ import annotations
 import json
 import logging
 import re
-from collections.abc import Iterable, Sequence
+import unicodedata
+from collections.abc import Callable, Collection, Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -45,6 +46,20 @@ from ..sandbox.protocol import ExecResult, SandboxHandle, SandboxNotFound
 from .artifact import parse_env_declaration
 
 logger = logging.getLogger(__name__)
+
+#: `(the tool's ToolContext, the model's name for the command) -> None` — what
+#: a catalog entry calls so the rest of the turn sends the real schema. A
+#: callback rather than a direct write so `registry` stays free of the turn
+#: machinery (and so the entry is testable without a turn). The whole
+#: `ToolContext` goes in, not just `.context`: the caller also needs the call
+#: id, to keep this call's answer (a schema) out of the stored thread.
+#:
+#: Spelled out rather than `Callable[[Any, str], None]`: with `Any` here, both
+#: members the only implementation touches (`.context.mark_tool_loaded` and
+#: `.tool_call_id`) could be renamed and `ty` stayed green — the review
+#: renamed both and measured it (round 1 C3, the
+#: `reference_kwargs_dict_loses_type_check` class).
+MarkLoaded = Callable[[ToolContext[AgentToolContext], Sequence[str], str], None]
 
 
 @dataclass(frozen=True)
@@ -284,12 +299,7 @@ def build_function_tools(
     the same command name within the same selection — the flat name would
     shadow one tool, so we want the deployer to rename one. Third-party
     commands carry their local name and never collide."""
-    if allowed is None:
-        selected = [(pkg, cmd) for pkg in packages for cmd in pkg.commands]
-    else:
-        selected = _select_commands(packages, allowed)
-    selected = _callable_by_name(selected)
-    _check_collisions(selected)
+    selected = _granted(packages, allowed)
     logger.debug("registry: %d function tool(s) selected (allowed=%s)", len(selected), allowed)
     # The same ceiling the built-ins get: a package command's stdout already
     # goes through `_exec_result_text`, but nothing structurally stops a future
@@ -409,6 +419,28 @@ async def exec_package_command(
     command — a page's `startTool` job (#942) runs to its own deadline, not
     the minute a call gets. None keeps the sandbox's."""
     return await _exec_tool(actx, handle, pkg, cmd_name, args_json, exec_timeout=exec_timeout)
+
+
+def _granted(
+    packages: Sequence[PackageInfo],
+    allowed: list[str] | None,
+) -> list[tuple[PackageInfo, CommandInfo]]:
+    """The commands this allow-list grants, minus the ones a provider would
+    refuse, with collisions rejected.
+
+    ONE function because two builders read it: the executable tools and the
+    catalog stubs that advertise them. A stub for a command the executable
+    builder drops is a tool that can never run; a command the catalog omits is
+    one the model never learns to ask for. Same code, so neither can happen.
+    """
+    selected = (
+        [(pkg, cmd) for pkg in packages for cmd in pkg.commands]
+        if allowed is None
+        else _select_commands(packages, allowed)
+    )
+    selected = _callable_by_name(selected)
+    _check_collisions(selected)
+    return selected
 
 
 def _select_commands(
@@ -712,10 +744,16 @@ def describe_command(pkg: PackageInfo, cmd: CommandInfo) -> str:
     command. With nothing joining them, "what is `rca-tools`?" is a question
     about a string the model has never been shown, and it can only guess.
 
-    It goes in the DESCRIPTION rather than anywhere else because that one string
-    is what both channels render: the native tool schema takes it verbatim, and
-    the prompt section renders the same field. A second home would be a second
-    thing to keep in step with the tool list, and nothing would notice it drift.
+    It goes in the DESCRIPTION rather than anywhere else because that is the one
+    string that travels with the tool: the native tool schema takes it verbatim
+    once the command is LOADED. A second home would be a second thing to keep
+    in step with the tool list, and nothing would notice it drift.
+
+    Two things it is no longer: the prompt section stopped rendering
+    descriptions, and an UNLOADED command is advertised by `_catalog_entry`
+    (the author's first sentence + the bundle name) rather than by this text —
+    both `docs/plan-tool-on-demand-loading.md`. So this is what the model reads
+    about a command it has reached for, not about every command it is offered.
 
     The author's sentence stays first. It is what the model reads to decide
     whether to call this command at all; the bundle line answers a different
@@ -741,6 +779,492 @@ def describe_command(pkg: PackageInfo, cmd: CommandInfo) -> str:
             " Closing the sandbox lets the next one be set up with the latest release."
         )
     return line
+
+
+#: How much of a bundle's name a catalog entry shows. Its own bound, so a long
+#: bundle name cannot eat the description's budget (round 3 D6); `_MODEL_NAME`
+#: allows 64 characters, and a third-party local name is user-chosen.
+_BUNDLE_NAME_SHOWN = 24
+
+#: How long one catalog entry's description may be
+#: (`docs/plan-tool-on-demand-loading.md`, decided with the operator: 100).
+CATALOG_DESCRIPTION_LIMIT = 100
+
+#: Ends a sentence wherever it appears — CJK punctuation is not followed by a
+#: space, so a lookahead would make `。` end nothing in a Chinese description.
+_SENTENCE_END_CJK = "。！？"
+#: Ends a sentence only before whitespace or the end, so `3.5` does not, and
+#: only when what precedes is not an abbreviation, so `e.g.` / `etc.` /
+#: `U.S.` / `Max.` do not either. The first version of this comment claimed
+#: `e.g.` was covered by the lookahead alone; it was not, and
+#: `'Plot a chart, e.g. a trend…'` became `'Plot a chart, e.g.'` — an
+#: 18-character catalog line, which is the only thing the model reads to decide
+#: whether to reach for the command (round 1 A9).
+#:
+#: It does NOT also require the next word to be capitalised. That rule was
+#: tried (round 1 A9) and removed in the verify round: `_is_cjk` can only cover
+#: the ranges it lists, so Hangul, Thai, Arabic, Hebrew and Devanagari could
+#: never satisfy it — an ASCII `.` stopped ending a sentence at all and the
+#: catalog line became a mid-sentence truncation of the whole paragraph, worse
+#: than before any of this. It bought nothing either: every case above is
+#: already decided by the abbreviation rule or the whitespace lookahead.
+_SENTENCE_END_ASCII = ".!?"
+
+#: Words that end in `.` without ending a sentence. Lower-cased, dots stripped,
+#: so `e.g` covers `e.g.` and `E.g.`. Anything with an internal dot (`U.S.`,
+#: `i.e.`) and any single letter (`A.`) is caught by rule, not by this list.
+_ABBREVIATIONS = frozenset(
+    [
+        "e.g",
+        "i.e",
+        "etc",
+        "vs",
+        "cf",
+        "al",
+        "approx",
+        "incl",
+        "excl",
+        "resp",
+        "fig",
+        "no",
+        "nos",
+        "vol",
+        "ca",
+        "max",
+        "min",
+        "avg",
+        "std",
+        "dept",
+        "est",
+        "dr",
+        "mr",
+        "mrs",
+        "ms",
+        "prof",
+        "inc",
+        "ltd",
+        "co",
+        "corp",
+        "jr",
+        "sr",
+        "st",
+    ]
+)
+#: Where a too-long sentence may be cut: a mark the AUTHOR wrote, so the cut
+#: lands between clauses instead of between two characters of one.
+_CLAUSE_END = "，、；：,;"
+
+
+def _looks_like_an_abbreviation(said: str, dot: int) -> bool:
+    """Whether the `.` at `dot` is part of a word that is not a sentence end.
+
+    Three rules, in the order they fire: the word already contains a dot
+    (`i.e.`, `U.S.`), it is a single letter (`A.`), or it is one of the few
+    spellings people actually write (`etc.`, `vs.`, `Max.`)."""
+    start = dot
+    while start > 0 and not said[start - 1].isspace():
+        start -= 1
+    word = said[start:dot]
+    if "." in word:
+        return True
+    bare = word.strip("(）)[]「」\"'“”").lower()
+    return len(bare) == 1 or bare in _ABBREVIATIONS
+
+
+def _first_sentence(said: str) -> str:
+    """The author's first sentence. A newline ends one too — plenty of
+    descriptions are a title line followed by a paragraph.
+
+    An ASCII `.` `!` `?` ends a sentence only when whitespace (or the end)
+    follows — so `3.5` does not — and, for `.`, when the word before it is not
+    an abbreviation (`Max. 1000`, `e.g. a trend`).
+
+    The next character is read BY INDEX, not by slicing the tail: the slice
+    made this quadratic in the description's length, and a command description
+    arrives verbatim from a third-party manifest with no length cap, on a path
+    that runs once per granted command inside `_agent_for` — i.e. on the event
+    loop (measured 680 ms for a 400,000-character description, 20x the old
+    rule; verify round F6)."""
+    for i, ch in enumerate(said):
+        if ch in _SENTENCE_END_CJK:
+            return said[: i + 1]
+        if ch == "\n":
+            return said[:i].rstrip()
+        if ch not in _SENTENCE_END_ASCII:
+            continue
+        if i + 1 < len(said) and not said[i + 1].isspace():
+            continue  # `3.5`
+        if ch == "." and _looks_like_an_abbreviation(said, i):
+            continue
+        return said[: i + 1]
+    return said
+
+
+def catalog_description(text: str, *, limit: int = CATALOG_DESCRIPTION_LIMIT) -> str:
+    """One catalog line's worth of what a command IS — the author's first
+    sentence, shortened only if it has to be.
+
+    A command the turn has not loaded is advertised by name + this line and NO
+    parameter schema, which is what takes a six-figure system prompt back to a
+    four-figure one. The line is what the model reads to decide whether to
+    reach for this command at all, so it is not a character cut:
+
+    - the first sentence is kept whole whenever it fits;
+    - a longer one is cut at a boundary the author wrote — a space between
+      words, or a clause mark (`，、；：,;`) — never between two characters of
+      the same word or clause, and the ellipsis says it was shortened;
+    - a run with no boundary at all inside the limit (a long unpunctuated
+      Chinese sentence, a token) is cut at the limit. That is the last resort,
+      not the rule.
+
+    Nothing is lost by shortening: loading the command hands the model the full
+    `describe_command` text and the real schema.
+    """
+    # `str(…)`, not a bare `.strip()`: a published manifest may carry a
+    # command description that is `null`, a number or a list (`parse_manifest`
+    # checks neither), and this is now on the path that builds the WHOLE tool
+    # list — so an odd value used to be an ugly f-string and would now take
+    # every turn on that item down with an AttributeError (round 1 A8).
+    said = str(text or "").strip()
+    if not said:
+        return ""
+    first = _first_sentence(said)
+    # "It fits" comes first: `catalog_description("A", limit=1)` returned `…`
+    # and `limit=-5` returned something LONGER than the limit (verify round F10).
+    if len(first) <= limit:
+        return first
+    # A limit too small to hold a boundary cut is not a limit to honour with
+    # one: `first[: limit - 1]` turned `limit=0` into "keep everything but the
+    # last character" and `limit=-5` into "drop five" (round 1 A16).
+    if limit < 2:
+        return "…"
+    kept = first[: limit - 1]
+    cut = max(
+        (i for i, ch in enumerate(kept) if ch.isspace() or ch in _CLAUSE_END),
+        default=-1,
+    )
+    # A boundary in the first half keeps almost nothing — worse than the
+    # no-boundary fallback, which keeps the whole budget. `'Plot ' + 200 chars`
+    # kept 5 of 100 before this (round 1 A10).
+    if cut >= 0 and cut * 2 >= limit:
+        kept = kept[:cut].rstrip() if kept[cut].isspace() else kept[: cut + 1]
+    return f"{_whole_clusters(kept)}…"
+
+
+#: Characters that must not be the last thing before the ellipsis: a combining
+#: mark or a joiner belongs to the character before it, and half a grapheme
+#: cluster is mojibake, not a shortened sentence (round 1 A16).
+_JOINERS = "\u200d\ufe0f\u20e3"
+
+
+def _whole_clusters(kept: str) -> str:
+    """`kept` with any trailing half-cluster removed."""
+    while kept and (unicodedata.combining(kept[-1]) or kept[-1] in _JOINERS):
+        kept = kept[:-1]
+    # A regional-indicator pair is a flag; one on its own is half of one.
+    if kept and "\U0001f1e6" <= kept[-1] <= "\U0001f1ff":
+        pairs = 0
+        i = len(kept) - 1
+        while i >= 0 and "\U0001f1e6" <= kept[i] <= "\U0001f1ff":
+            pairs += 1
+            i -= 1
+        if pairs % 2:
+            kept = kept[:-1]
+    return kept
+
+
+#: The schema a catalog entry carries: none. `additionalProperties` is open
+#: because the model WILL guess arguments at this entry — the name is right
+#: there in front of it — and a provider enforcing a closed schema would reject
+#: the call before `_stub_function_tool`'s handler could answer with the real
+#: schema. The arguments are read by nothing; the answer is the schema.
+_CATALOG_SCHEMA: dict[str, Any] = {"type": "object", "properties": {}, "additionalProperties": True}
+
+#: What a catalog entry answers with when it is called. The full description
+#: (the catalog line was only its first sentence), the real schema, and what to
+#: do now — never a refusal: #537 measured that a model reads one as "stop
+#: trying" and gives up on the whole source.
+_LOAD_REPLY = (
+    "`{name}` is now loaded for this turn. What it is:\n\n{described}\n\n"
+    "Its arguments (JSON schema):\n\n{schema}\n\n"
+    "Call `{name}` again with arguments matching that schema."
+)
+
+
+def load_reply(pkg: PackageInfo, cmd: CommandInfo) -> str:
+    """The text a just-loaded command hands back. Pure, so the wording is
+    testable without a sandbox or a turn."""
+    return _LOAD_REPLY.format(
+        name=model_tool_name(pkg, cmd),
+        described=describe_command(pkg, cmd),
+        schema=json.dumps(cmd.params_json_schema, ensure_ascii=False),
+    )
+
+
+def build_catalog_tools(
+    packages: Sequence[PackageInfo],
+    *,
+    allowed: list[str] | None,
+    mark_loaded: MarkLoaded,
+) -> list[FunctionTool]:
+    """One entry per granted command: the real name, one line of what it is, and
+    no parameter schema (`docs/plan-tool-on-demand-loading.md`).
+
+    This is what a turn sends INSTEAD of every command's full schema, which is
+    the half that grows without bound — an operator reported a 414,115
+    character system prompt. `mark_loaded` is
+    called with the turn's context and the model name when an entry is invoked,
+    so the next step of the same turn sends that command's real schema.
+
+    Granted by the SAME `_granted` the executable builder uses, so the two
+    lists name the same commands by construction.
+    """
+    return [_stub_function_tool(pkg, cmd, mark_loaded) for pkg, cmd in _granted(packages, allowed)]
+
+
+#: What one `load_tool` call may put back in the window. The catalog's whole
+#: point is that schemas are not there until they are needed; a single call
+#: naming every bundle put 36,054 characters back (and `["sci-plot"] * 20` put
+#: 261,238). The built-ins' own ceiling does not reach here: `cap_tool_outputs`
+#: is applied by `build_tools` and by `build_function_tools`, and neither the
+#: catalog nor this tool calls it (round 1 A7; the reason corrected in the
+#: verify round — it is which builder calls the cap, not where the tool is
+#: appended).
+#:
+#: It bounds what is LOADED, not just the text of the reply: trimming the reply
+#: while marking every resolved command loaded handed the NEXT step 394,560
+#: characters of schema — worse than the prompt this whole change removes
+#: (verify round F4).
+#:
+#: The FIRST command of a call is exempt, deliberately (round 3 D2). A command
+#: whose schema alone exceeds this budget is unusable without it: refusing
+#: would leave the model with a tool it can see, is told to call, and can never
+#: call. The catalog still improves that case strictly — the schema goes out on
+#: the one turn that uses the command instead of on every turn — and the same
+#: schema goes out unbounded when the model calls the command directly
+#: (`_stub_function_tool` answers with the whole thing by design). So this is
+#: the bound on BATCHING; one oversized schema is bounded by nothing here.
+_LOAD_REPLY_MAX_CHARS = 20_000
+
+#: How many names one call may ask for. 3,000 unknown names answered with
+#: 928,888 characters before this.
+_LOAD_MAX_NAMES = 20
+
+#: How many names an unknown-name answer lists before it stops. A deployment
+#: with hundreds of commands must not get its whole catalog pasted back into
+#: the turn as an error message — but silence would leave the model guessing,
+#: which is what this answers (`docs/plan-tool-on-demand-loading.md`).
+_UNKNOWN_NAMES_SHOWN = 30
+
+_LOAD_TOOL_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "names": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": (
+                "Tool names to load, as they appear in your tool list. A bundle's "
+                "own name loads every command in it."
+            ),
+        }
+    },
+    "required": ["names"],
+}
+
+
+def build_load_tool(
+    packages: Sequence[PackageInfo],
+    *,
+    allowed: list[str] | None,
+    mark_loaded: MarkLoaded,
+    shadowed: Collection[str] = (),
+) -> FunctionTool:
+    """`load_tool`: ask for a command's real arguments before calling it.
+
+    Calling an unloaded command already loads it and answers with its schema,
+    so this is not the only way in — it is the way to look first, and to load
+    a whole bundle in one step. Reads the SAME `_granted` as the catalog and
+    the executable tools, so it can never reach a command this turn was not
+    granted.
+    """
+    # `shadowed`: names a built-in already holds. `dedupe_tools` drops the
+    # package command's executable half (first-wins), and the catalog leaves
+    # out its entry for the same reason — so handing the model its description
+    # and schema would describe something that can never run, and tell it to
+    # call arguments the built-in does not take (verify round F5).
+    granted = [
+        (pkg, cmd)
+        for pkg, cmd in _granted(packages, allowed)
+        if model_tool_name(pkg, cmd) not in shadowed
+    ]
+    by_name: dict[str, list[tuple[PackageInfo, CommandInfo]]] = {}
+    for pkg, cmd in granted:
+        by_name.setdefault(model_tool_name(pkg, cmd), []).append((pkg, cmd))
+        by_name.setdefault(pkg.name, []).append((pkg, cmd))
+        by_name.setdefault(f"{pkg.name}:{cmd.name}", []).append((pkg, cmd))
+
+    async def on_invoke(ctx: ToolContext[AgentToolContext], args_json: str) -> str:
+        try:
+            asked = json.loads(args_json or "{}").get("names") or []
+        except ValueError:
+            asked = []
+        if isinstance(asked, str):  # a model that sent one name, not a list
+            asked = [asked]
+        # Deduped, and bounded: `["sci-plot"] * 20` is a plausible thing for a
+        # model to emit, and every repeat used to cost another full schema.
+        wanted: list[str] = []
+        for a in asked:
+            name = str(a)
+            if name not in wanted:
+                wanted.append(name)
+        over = wanted[_LOAD_MAX_NAMES:]
+        wanted = wanted[:_LOAD_MAX_NAMES]
+        parts: list[str] = []
+        done: set[str] = set()
+        left = _LOAD_REPLY_MAX_CHARS
+        skipped: list[str] = []
+        for name in wanted:
+            found = by_name.get(name)
+            if not found:
+                parts.append(_unknown_name_reply(name, granted))
+                continue
+            for pkg, cmd in found:
+                model_name = model_tool_name(pkg, cmd)
+                # A bundle and one of its commands can share a name (the
+                # shipped `data-fetch` does), and both keys point at the same
+                # command — answering twice doubled the schema for nothing.
+                if model_name in done:
+                    continue
+                said = load_reply(pkg, cmd)
+                # The budget decides whether it LOADS, not just whether its
+                # text is printed: marking it loaded puts its schema in every
+                # later step of this turn (verify round F4).
+                if len(said) > left and done:
+                    skipped.append(model_name)
+                    continue
+                done.add(model_name)
+                left -= len(said)
+                parts.append(said)
+        if skipped:
+            parts.insert(
+                0,
+                "Not loaded, this call was already full: "
+                # Deduped: a bundle whose name equals one of its commands'
+                # resolves the same pair twice, and this is a sentence a person
+                # reads — round 1 B1's class, re-opened by this notice
+                # (round 3 D3).
+                + ", ".join(f"`{n}`" for n in dict.fromkeys(skipped[:_UNKNOWN_NAMES_SHOWN]))
+                + ". Ask for them in another call.",
+            )
+        if over:
+            # FIRST, not last: the length cap below trims the tail, and the one
+            # sentence that must survive is the one saying why the model did
+            # not get what it asked for. (A test caught this: the notice was
+            # appended and then cut away.)
+            parts.insert(
+                0,
+                f"Not loaded, too many names in one call (the limit is {_LOAD_MAX_NAMES}): "
+                + ", ".join(f"`{n}`" for n in over[:_UNKNOWN_NAMES_SHOWN])
+                + ". Ask for the ones you need.",
+            )
+        if not parts:
+            return (
+                "Nothing to load: `names` was empty. Give the name of a tool from "
+                "your tool list, or a bundle's name to load all of its commands."
+            )
+        reply = "\n\n".join(parts)
+        if len(reply) > _LOAD_REPLY_MAX_CHARS:
+            reply = (
+                reply[:_LOAD_REPLY_MAX_CHARS]
+                + f"\n\n[cut at {_LOAD_REPLY_MAX_CHARS} characters — ask for fewer tools "
+                "at a time to see the rest]"
+            )
+        # ONE hit for the whole call, whatever it resolved: the queue counts the
+        # outputs to suppress, not the commands (round 3 D4). Recorded with the
+        # FINAL text, because that is the output `_map_event` matches against
+        # (round 3 R1).
+        if done:
+            mark_loaded(ctx, sorted(done), reply)
+        return reply
+
+    return FunctionTool(
+        name="load_tool",
+        description=(
+            "Get a tool's usage (its argument schema) before calling it. Pass the "
+            "names as they appear in your tool list; a bundle's name loads every "
+            "command in it. Calling a tool directly also loads it."
+        ),
+        params_json_schema=_LOAD_TOOL_SCHEMA,
+        on_invoke_tool=on_invoke,
+        strict_json_schema=False,
+    )
+
+
+def _unknown_name_reply(name: str, granted: list[tuple[PackageInfo, CommandInfo]]) -> str:
+    """Say what IS there. Silence here reads as "that tool is gone" and the
+    model stops looking for the one it actually wanted."""
+    names = sorted({model_tool_name(pkg, cmd) for pkg, cmd in granted})
+    if not names:
+        # Reachable only as a belt-and-braces: `load_tool` is no longer granted
+        # to a turn with no package command (round 1 A6). The sentence below
+        # would end in ": ." here, which is the silence this function exists to
+        # avoid.
+        return f"There is no tool called `{name}`, and this turn has no loadable tools."
+    shown = ", ".join(f"`{n}`" for n in names[:_UNKNOWN_NAMES_SHOWN])
+    more = (
+        f" (and {len(names) - _UNKNOWN_NAMES_SHOWN} more in your tool list)"
+        if len(names) > _UNKNOWN_NAMES_SHOWN
+        else ""
+    )
+    return f"There is no tool called `{name}`. Tools you can load: {shown}{more}."
+
+
+def _catalog_entry(pkg: PackageInfo, cmd: CommandInfo, name: str) -> str:
+    """One catalog line: what the command is, and which bundle it comes from.
+
+    The bundle name is there because `load_tool` advertises "a bundle's name
+    loads every command in it" — and before this the turn was never told ANY
+    bundle name (a third-party command carries it inside its own
+    `<bundle>__<command>` name; a first-party one does not), so that path, the
+    one escape from paying an extra step per command, could not be used
+    (review round 1 A5). Version, author and the "not the latest release"
+    notice stay in `describe_command`, which arrives when the command loads.
+    """
+    if name.startswith(f"{pkg.name}{THIRD_PARTY_SEP}"):
+        return catalog_description(cmd.description)  # the name already says it
+    # The operator's 100 is the DESCRIPTION's budget (their words: "command
+    # description 最多 100 字元"), so the suffix does not eat it — F7 read the
+    # number as the whole entry's, which left 54 characters for the sentence
+    # the model actually chooses by when a bundle name was long, and still
+    # overshot once the name approached 100 (round 3 D6). The suffix gets its
+    # own, small bound instead.
+    suffix = f" [{pkg.name[:_BUNDLE_NAME_SHOWN]}]"
+    said = catalog_description(cmd.description)
+    return f"{said}{suffix}" if said else suffix.strip()
+
+
+def _stub_function_tool(
+    pkg: PackageInfo, cmd: CommandInfo, mark_loaded: MarkLoaded
+) -> FunctionTool:
+    name = model_tool_name(pkg, cmd)
+
+    async def on_invoke(ctx: ToolContext[AgentToolContext], args_json: str) -> str:
+        # The arguments are deliberately unread: whatever the model guessed, it
+        # has not seen the schema yet. Marking first means a model that ignores
+        # the instruction and calls a third time still progresses — the real
+        # tool answers that one.
+        said = load_reply(pkg, cmd)
+        mark_loaded(ctx, [name], said)
+        logger.info("registry: catalog hit %s — loading its schema for this turn", name)
+        return said
+
+    return FunctionTool(
+        name=name,
+        description=_catalog_entry(pkg, cmd, name),
+        params_json_schema=_CATALOG_SCHEMA,
+        on_invoke_tool=on_invoke,
+        strict_json_schema=False,
+    )
 
 
 def _to_function_tool(pkg: PackageInfo, cmd: CommandInfo) -> FunctionTool:
