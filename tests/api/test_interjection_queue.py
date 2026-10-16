@@ -13,7 +13,7 @@ import asyncio
 from typing import Any
 
 from workspace_app.agent import AgentToolContext
-from workspace_app.api import MessageDelta, RunDone
+from workspace_app.api import Interjected, MessageDelta, RunDone, ToolEnd, ToolStart
 from workspace_app.api.turns import (
     PLACE_ROLE,
     ChatTurnEngine,
@@ -254,6 +254,93 @@ async def test_a_refresh_that_fails_keeps_the_history_the_message_was_accepted_w
     await _drain(engine, f1, f2)
 
     assert runner.turns[1]["history"] == [{"role": "user", "content": "Q1"}]
+
+
+class _ReadsMidTurn:
+    """Stands in for the runner's model-call boundary: runs one tool, waits for
+    `release`, then asks for its author's messages (as the SDK filter does),
+    says where it read each, and answers."""
+
+    def __init__(self) -> None:
+        self.release = asyncio.Event()
+        self.started = asyncio.Event()
+        self.turns: list[str] = []
+        self.read: list[Interjection] = []
+
+    async def run(self, content: str, ctx: AgentToolContext):
+        self.turns.append(content)
+        yield ToolStart(call_id="c1", name="look", args={})
+        yield ToolEnd(call_id="c1", output="lot 1")
+        if len(self.turns) == 1:
+            self.started.set()
+            await self.release.wait()
+        taken = ctx.take_interjections() if ctx.take_interjections is not None else []
+        self.read.extend(taken)
+        for i in taken:
+            yield Interjected(author=i.author, created_at=i.at)
+        yield MessageDelta(text="answer")
+        yield RunDone()
+
+
+async def test_the_running_turn_reads_its_own_authors_messages_and_no_one_elses():
+    runner = _ReadsMidTurn()
+    engine = ChatTurnEngine(runner)  # ty: ignore[invalid-argument-type]
+    log: list[Any] = []
+    replies: dict[str, list[Any]] = {}
+
+    def keep(name: str):
+        def on_complete(produced: list[Any]) -> None:
+            replies[name] = [
+                (m.role, m.created_at if m.role == PLACE_ROLE else m.content) for m in produced
+            ]
+
+        return on_complete
+
+    f1 = engine.enqueue(
+        "chat", "Q1", AgentToolContext(), on_complete=keep("Q1"), message=_message("ann", 1, log)
+    )
+    await asyncio.wait_for(runner.started.wait(), 3)
+    f2 = engine.enqueue(
+        "chat",
+        "Q2",
+        AgentToolContext(applied_skills=["lot-map"]),
+        on_complete=keep("Q2"),
+        message=_message("ann", 2, log, speaker="Ann (ann)"),
+    )
+    f3 = engine.enqueue(
+        "chat", "Q3", AgentToolContext(), on_complete=keep("Q3"), message=_message("bob", 3, log)
+    )
+    runner.release.set()
+    await _drain(engine, f1, f2, f3)
+
+    # Ann's message was read by her running turn, with what it carried;
+    # Bob's was not — it is another person's, and got a turn of its own.
+    assert runner.read == [
+        Interjection(
+            content="Q2", author="ann", at=2, speaker="Ann (ann)", applied_skills=["lot-map"]
+        )
+    ]
+    assert runner.turns == ["Q1", "Q3"]
+    # One reply for Q1 and Q2, with Q2 placed where it was read: after the
+    # tool result, before the answer that saw it.
+    assert replies["Q1"] == [("tool", "lot 1"), (PLACE_ROLE, 2), ("assistant", "answer")]
+    assert "Q2" not in replies
+    # Settled by that reply, not before it.
+    assert ("absorbed", "ann", 2) in log
+
+
+async def test_a_turn_queued_with_no_message_reads_nothing():
+    runner = _ReadsMidTurn()
+    engine = ChatTurnEngine(runner)  # ty: ignore[invalid-argument-type]
+    f1 = engine.enqueue("chat", "s1", AgentToolContext(), on_complete=lambda p: None)
+    await asyncio.wait_for(runner.started.wait(), 3)
+    f2 = engine.enqueue(
+        "chat", "Q2", AgentToolContext(), on_complete=lambda p: None, message=QueuedMessage("a", 2)
+    )
+    runner.release.set()
+    await _drain(engine, f1, f2)
+    assert runner.read == []
+    assert runner.turns == ["s1", "Q2"]
 
 
 async def test_entries_without_a_message_keep_one_turn_each():

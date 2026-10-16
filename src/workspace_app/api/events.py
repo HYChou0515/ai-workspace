@@ -150,6 +150,20 @@ class UserMessage:
 
 
 @dataclass(frozen=True)
+class Interjected:
+    """docs/plan-interjection.md Q1: the running turn has READ a message its own
+    author sent while it ran (`author`, `created_at` name that message, already
+    persisted and announced as a `UserMessage`). Emitted where the turn read it
+    — between a tool result and the next model call — so a viewer moves that
+    bubble here, and whatever streams next is the answer that saw it. The
+    reply is persisted with the message in the same place (`PLACE_ROLE`)."""
+
+    author: str
+    created_at: int
+    type: Literal["interjected"] = "interjected"
+
+
+@dataclass(frozen=True)
 class FileChanged:
     """#43: a workspace file changed (a human wrote / moved / deleted it),
     broadcast on the per-investigation stream so other viewers refetch. The
@@ -401,6 +415,7 @@ AgentEvent = (
     | Compacting  # #739: the thread outgrew the window; this turn summarises first
     | GoalUpdated  # #613 P3: the chat's goal was set / cleared / advanced
     | UserMessage  # #43: broadcast-only (a human's message on the shared stream)
+    | Interjected  # plan-interjection Q1: the running turn read a message sent meanwhile
     | FileChanged  # #43: broadcast-only (a workspace file changed)
     | TurnEnded  # broadcast-only, on the ITEM's key: a turn in any of its chats ended
     | Presence  # #455: broadcast-only (live viewer roster on the item stream)

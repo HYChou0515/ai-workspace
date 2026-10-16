@@ -153,3 +153,11 @@ CLAUDE.md「Chat turns run through one `ChatTurnEngine`」那段說 Q1, Q2, A1, 
   副作用:#624 的「較早的訊息被省略」提示若排在問題後面,補跑後順序是「提示、問題、回答」。
 - **C4〔施工〕被合併的訊息,它的 claim 在負責那一輪的回覆「確定是這顆 pod 的」並存好之後才結束**
   (`_settling`)。被交接出去的那一輪沒寫任何東西,它合併的訊息仍然欠著,留給接手的 pod。
+- **C5〔施工〕sub-agent 不繼承插話的讀取。** `_child_context` 是 `dataclasses.replace`,沒點名的欄位
+  都跟父 ctx 共用;不清掉的話,sub-agent 的模型呼叫會把插話讀走,而父那一輪不會放、也不會回答它。
+  `take_interjections` / `leading_interjections` / `history_builder` 在子 ctx 一律清空。
+- **C6〔施工〕非串流路徑(`WORKSPACE_AGENT_STREAM=0`)被插話切斷時,補發那一段做過的工具與文字。**
+  `Runner.run` 跑完才交出 items,被 `_Interjected` 打斷就什麼都沒交;那一段的東西只存在「下一次
+  呼叫原本要送出的輸入」裡,從那裡補發(`_segment_events`),不然那段跑過的工具在畫面與存檔都消失。
+- **C7〔施工〕插話只在下一次「呼叫模型之前」被讀。** 模型已經在寫最終回答(不會再呼叫模型)時到的
+  插話,這一輪讀不到,它照 P1 排隊、合併、在下一輪開跑時讀 —— Q1 的邊界情況就是這條路。

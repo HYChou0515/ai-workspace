@@ -60,6 +60,9 @@ class Interjection:
     at: int
     speaker: str = ""
     image_urls: list[str] = field(default_factory=list)
+    # Skills applied with this message (#380): their bodies are already in
+    # `content`; the turn reading it lets `read_skill` open them as well (Q7).
+    applied_skills: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -282,6 +285,12 @@ class AgentToolContext:
     # the SAME budget this turn's history was built with, so a turn that waited
     # behind another can rebuild it when it starts. Set by the turn builder.
     history_builder: Callable[[list[Any]], list[dict[str, Any]]] | None = None
+    # docs/plan-interjection.md Q1: the messages this turn's own author sent while
+    # it runs, handed over (and thereby claimed — they get no turn of their own)
+    # each time it is called. The runner calls it before every model call. Set
+    # by the turn engine for a chat message's turn; None everywhere else, which
+    # leaves the turn exactly as it was.
+    take_interjections: Callable[[], list[Interjection]] | None = None
     # Deploy-level registry of provisionable tool packages (#21, #25). When
     # the sandbox is created, the packages that appear in
     # agent_config.allowed_tools (raw pkg name, or `pkg:cmd` colon syntax) are
