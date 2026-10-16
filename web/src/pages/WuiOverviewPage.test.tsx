@@ -834,8 +834,29 @@ describe("WuiOverviewPage — who each page opens for (docs/plan-deploy-reach.md
   // alice is signed in (see `me` above): her own private page reads "you",
   // carol's private page reads "the owner".
   const REACH: DeployedWui[] = [
-    row({ title: "Mine, private", item_id: "a-1", item_owner: "alice", item_permission: { visibility: "private" } }),
-    row({ title: "Carol's, private", item_id: "c-1", item_owner: "carol", item_permission: { visibility: "private" } }),
+    row({
+      title: "Mine, private",
+      item_id: "a-1",
+      item_owner: "alice",
+      item_created_by: "alice",
+      item_permission: { visibility: "private" },
+    }),
+    // Review round 1: the `owner` FIELD is editable (#687) — alice created it,
+    // dave is named on it; it opens for alice, so it is hers.
+    row({
+      title: "Mine, renamed owner",
+      item_id: "a-2",
+      item_owner: "dave",
+      item_created_by: "alice",
+      item_permission: { visibility: "private" },
+    }),
+    row({
+      title: "Carol's, private",
+      item_id: "c-1",
+      item_owner: "carol",
+      item_created_by: "carol",
+      item_permission: { visibility: "private" },
+    }),
     row({
       title: "Shared",
       item_id: "c-2",
@@ -854,7 +875,10 @@ describe("WuiOverviewPage — who each page opens for (docs/plan-deploy-reach.md
       render(<WuiOverviewPage client={client(REACH)} />, { wrapper: Wrap });
 
       expect(await itemOf("Mine, private")).toHaveTextContent(word("wui.reach.you"));
-      expect(await itemOf("Carol's, private")).toHaveTextContent(word("wui.reach.owner"));
+      expect(await itemOf("Mine, renamed owner")).toHaveTextContent(word("wui.reach.you"));
+      // Only an admin sees someone else's owner-only page — and opens it, so
+      // the words must not leave them out (review round 1).
+      expect(await itemOf("Carol's, private")).toHaveTextContent("只有擁有者和管理員打得開");
       expect(await itemOf("Shared")).toHaveTextContent(word("wui.reach.shared"));
       for (const open of ["Open", "No permission", "Unreadable"]) {
         const li = await itemOf(open);

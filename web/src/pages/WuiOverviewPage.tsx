@@ -513,8 +513,11 @@ function PageDetail({
 /** Who a page's link opens for, as the overview says it — nothing for a page
  * open to everyone (no one needs telling) or one whose access this build
  * cannot read (never a guess). "You" only once the viewer is KNOWN to be the
- * owner: before the identity settles, the placeholder id would make the
- * viewer's own page read "only the owner" — so it says nothing yet. */
+ * creator — the person a private workspace opens for, not the editable
+ * `owner` field (#687): before the identity settles, the placeholder id would
+ * make the viewer's own page read "the owner", so it says nothing yet. Anyone
+ * else who sees an owner-only page here is an admin, who opens it too — so
+ * that sentence names admins. */
 function useReachNote(
   page: DeployedWui,
 ): "wui.reach.you" | "wui.reach.owner" | "wui.reach.shared" | null {
@@ -523,7 +526,7 @@ function useReachNote(
   if (reach === "shared") return "wui.reach.shared";
   if (reach !== "owner") return null;
   if (!me.ready) return null;
-  return me.id === page.item_owner ? "wui.reach.you" : "wui.reach.owner";
+  return me.id === (page.item_created_by ?? page.item_owner) ? "wui.reach.you" : "wui.reach.owner";
 }
 
 /** One Deployed page as a TABLE row: mark · title · (App) · detail · star ·

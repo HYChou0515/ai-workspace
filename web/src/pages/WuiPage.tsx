@@ -79,16 +79,21 @@ function Problem({
  * "Error-Message Guidelines": offer a way forward). */
 function RequestAccess({ slug, itemId }: { slug: string; itemId: string }) {
   const t = useT();
-  const [state, setState] = useState<"idle" | "sending" | "sent" | "failed">("idle");
+  const [state, setState] = useState<"idle" | "sending" | "sent" | "inside" | "failed">("idle");
   const ask = async () => {
     setState("sending");
     try {
-      await api.requestItemAccess(slug, itemId);
-      setState("sent");
+      const answer = await api.requestItemAccess(slug, itemId);
+      // The route notifies nobody when the caller can already ENTER the
+      // workspace (`read_chat` — the 「In workspace」 role, which still gets
+      // this 403) and says so with `requested: false`: there is no request
+      // to report, only who can raise their role.
+      setState(answer.requested ? "sent" : "inside");
     } catch {
       setState("failed");
     }
   };
+  if (state === "inside") return <p role="status">{t("wui.page.alreadyInside")}</p>;
   return (
     <>
       <Btn size="sm" disabled={state === "sending" || state === "sent"} onClick={() => void ask()}>

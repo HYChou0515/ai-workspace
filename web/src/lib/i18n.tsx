@@ -1354,9 +1354,6 @@ export const messages = {
   // "7 Aug" — so the sentence must read with all of them; "於 {when} Deploy" /
   // "on {when}" did not ("於 just now Deploy", "on 2 d ago").
   "wui.row.by": { "zh-TW": "{who} Deploy · {when}", en: "deployed by {who} · {when}" },
-  // 下架, the opposite of Deploy's 上架 (docs/wui.md) — not 移除, which the
-  // author read as "delete the page" (「移除是什麼意思？」). The tooltip says
-  // what stays.
   // The WUI pane's author toolbar and Deploy panel (docs/plan-deploy-reach.md
   // decision 7). "Deploy" stays the button's word in both — the WUI overview's
   // copy already names it.
@@ -1421,8 +1418,8 @@ export const messages = {
   },
   "wui.deploy.reach.everyone": { "zh-TW": "所有人都打得開這個連結。", en: "Everyone can open this link." },
   "wui.deploy.reach.unknown": {
-    "zh-TW": "能打開這個 workspace 的人才能用這個連結。",
-    en: "Anyone who can open this workspace can use this link.",
+    "zh-TW": "能讀這個 workspace 檔案的人才能用這個連結。",
+    en: "Only people who can read this workspace's files can use this link.",
   },
   "wui.deploy.share": { "zh-TW": "分享設定…", en: "Sharing…" },
   "wui.deploy.askOwner": {
@@ -1441,6 +1438,10 @@ export const messages = {
   "wui.page.forbidden": {
     "zh-TW": "你看得到這個 workspace，但沒有讀取 {path} 的權限。可以向擁有者申請。",
     en: "You can see this workspace, but you don't have permission to read {path}. You can ask its owner for access.",
+  },
+  "wui.page.alreadyInside": {
+    "zh-TW": "你已經在這個 workspace 裡，只是沒有讀檔權限；請直接請擁有者把你的角色調高。",
+    en: "You're already in this workspace, just without permission to read its files — ask its owner to raise your role.",
   },
   "wui.page.requestFailed": { "zh-TW": "申請沒有送出，請再試一次。", en: "The request didn't go through — try again." },
   "wui.page.signedOut": {
@@ -1471,16 +1472,19 @@ export const messages = {
     "zh-TW": "只有你打得開這個連結。要給其他人看，到這個 workspace 的分享設定把他加進來。",
     en: "Only you can open this link. To show it to others, add them in this workspace's sharing settings.",
   },
-  "wui.reach.owner": { "zh-TW": "只有擁有者打得開", en: "Only the owner can open it" },
+  "wui.reach.owner": { "zh-TW": "只有擁有者和管理員打得開", en: "Only the owner and admins can open it" },
   "wui.reach.owner.tip": {
-    "zh-TW": "只有這個 workspace 的擁有者打得開這個連結。",
-    en: "Only this workspace's owner can open this link.",
+    "zh-TW": "只有這個 workspace 的擁有者和管理員打得開這個連結。",
+    en: "Only this workspace's owner and admins can open this link.",
   },
   "wui.reach.shared": { "zh-TW": "只有成員打得開", en: "Only members can open it" },
   "wui.reach.shared.tip": {
     "zh-TW": "只有這個 workspace 的成員打得開這個連結。",
     en: "Only this workspace's members can open this link.",
   },
+  // 下架, the opposite of Deploy's 上架 (docs/wui.md) — not 移除, which the
+  // author read as "delete the page" (「移除是什麼意思？」). The tooltip says
+  // what stays.
   "wui.remove": { "zh-TW": "下架", en: "Unlist" },
   "wui.remove.tip": {
     "zh-TW": "從 WUI 總覽下架；頁面和資料夾都留著",

@@ -608,6 +608,33 @@ describe("WuiPage — someone the link does not open for (docs/plan-deploy-reach
     expect(String(asks[0][0])).toContain("/a/rca/items/i1/request-access");
   });
 
+  it("someone already in the workspace is told to ask the owner — not that a request went out", async () => {
+    // Review round 1: `request-access` notifies nobody when the caller can
+    // already enter (`read_chat` — the 「In workspace」 role, which still 403s
+    // here), and answers 2xx with `requested: false`. "已送出申請" over that
+    // was a request nobody received.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(JSON.stringify({ item_id: "i1", requested: false, already_readable: true }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+      ),
+    );
+    const readFile = vi.fn(async () => {
+      throw new HttpError(403, "read failed: 403");
+    });
+    renderAt("/w/rca/i1/sales/page.ai.yaml", readFile, "zh-TW");
+
+    fireEvent.click(await screen.findByRole("button", { name: "申請存取" }));
+
+    expect(await screen.findByText("你已經在這個 workspace 裡，只是沒有讀檔權限；請直接請擁有者把你的角色調高。")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "已送出申請" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "申請存取" })).toBeNull();
+  });
+
   it("a request that did not go through says so and can be sent again", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response("boom", { status: 500 })));
     const readFile = vi.fn(async () => {

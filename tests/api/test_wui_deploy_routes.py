@@ -354,6 +354,24 @@ def test_every_row_carries_its_workspaces_permission_so_the_card_can_say_who_ope
     assert perms[legacy] is None
 
 
+def test_every_row_names_who_created_the_workspace_the_one_its_access_is_decided_by():
+    """「只有你」 on a card is about the person a private workspace opens for —
+    `created_by` — not the editable `owner` field (#687)."""
+    holder = {"id": "bob"}
+    client, spec = _client_and_spec(holder)
+    rm = spec.get_resource_manager(RcaInvestigation)
+    with rm.using("bob"):
+        iid = rm.create(
+            RcaInvestigation(title="Line 3", owner="dave", permission=Permission(visibility="private"))
+        ).resource_id
+    _page(client, iid)
+    assert client.post(_wp(iid, "/wui/deploy"), json={"path": PAGE}).status_code == 200
+
+    (row,) = client.get("/wui").json()["pages"]
+
+    assert (row["item_owner"], row["item_created_by"]) == ("dave", "bob")
+
+
 def test_deploy_answers_with_the_workspaces_permission_too():
     holder = {"id": "bob"}
     client, spec = _client_and_spec(holder)

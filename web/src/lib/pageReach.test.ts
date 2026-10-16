@@ -47,6 +47,17 @@ describe("pageReach", () => {
       pageReach({ visibility: "restricted", read_meta: ["group:g1"], read_content: ["group:g2"] }),
     ).toBe("shared");
   });
+  it("a user on one verb and a group on the other — shared (the user may be in the group)", () => {
+    // Review round 1: the server matches a reader's user AND group subjects,
+    // so `user:bob` seeing it and `group:eng` reading it opens it for bob
+    // when he is in eng — which this cannot know, so it must not say "owner".
+    expect(
+      pageReach({ visibility: "restricted", read_meta: ["user:bob"], read_content: ["group:eng"] }),
+    ).toBe("shared");
+    expect(
+      pageReach({ visibility: "restricted", read_meta: ["group:eng"], read_content: ["user:bob"] }),
+    ).toBe("shared");
+  });
   it("`all` may read, someone sees it exists — shared", () => {
     expect(pageReach({ visibility: "restricted", read_meta: ["user:a"], read_content: ["all"] })).toBe("shared");
   });

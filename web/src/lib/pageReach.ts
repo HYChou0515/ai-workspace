@@ -11,7 +11,8 @@
  * - `everyone`: no permission (public, the back-compat rule), `public`, or
  *   `restricted` with `all` holding both verbs.
  * - `shared`: `restricted` and someone besides the owner may pass both.
- *   Group membership is not known here, so two group grants count as someone.
+ *   Group membership is not known here, so a group grant on one verb may
+ *   cover any grantee of the other — counted as someone.
  * - `owner`: `private`, or `restricted` with nobody else passing both — a
  *   Discoverable grant (`read_meta` only) opens nothing.
  * - `unknown`: a permission this build cannot read — never guessed (#578).
@@ -22,6 +23,8 @@
 import { parseItemPermission } from "./itemPermission";
 
 export type PageReach = "everyone" | "shared" | "owner" | "unknown";
+
+const isGroup = (subject: string) => subject.startsWith("group:");
 
 export function pageReach(raw: unknown): PageReach {
   if (raw === undefined || raw === null) return "everyone";
@@ -36,6 +39,7 @@ export function pageReach(raw: unknown): PageReach {
     (meta.includes("all") && content.length > 0) ||
     (content.includes("all") && meta.length > 0) ||
     content.some((s) => meta.includes(s)) ||
-    (content.some((s) => s.startsWith("group:")) && meta.some((s) => s.startsWith("group:")));
+    (content.some(isGroup) && meta.length > 0) ||
+    (meta.some(isGroup) && content.length > 0);
   return opens ? "shared" : "owner";
 }

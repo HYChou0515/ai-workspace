@@ -175,6 +175,10 @@ class DeployedPage(BaseModel):
     # The item's OWNER — not who pressed Deploy (`deployed_by`); the overview
     # names both, and a 「我的」 section is the owner's.
     item_owner: str
+    # Who CREATED the item — the person its access is decided for (`created_by`;
+    # `item_owner` is an editable display field, #687). The card's 「只有你」
+    # compares the viewer with this (`docs/plan-deploy-reach.md`).
+    item_created_by: str
     # The item's `Permission` as the item's own GET returns it — None when it
     # has none (public, by the back-compat rule). The card says who the link
     # opens for from it (`docs/plan-deploy-reach.md`); no new exposure, since a
@@ -262,11 +266,17 @@ def register_wui_deploy_routes(
             deployed_at=(now or now_ms)(),
         )
         pages.record(row)
-        title, owner, permission = locator.item_facts(workspace_id) or ("", "", None)
+        title, owner, created_by, permission = locator.item_facts(workspace_id) or (
+            "",
+            "",
+            "",
+            None,
+        )
         return DeployedPage(
             **{f: getattr(row, f) for f in DeployedWui.__struct_fields__},
             item_title=title,
             item_owner=owner,
+            item_created_by=created_by,
             item_permission=_permission_json(permission),
             can_remove=True,
         )
@@ -299,26 +309,28 @@ def register_wui_deploy_routes(
         `require_access` holds the facts for its window, and an item with
         several pages asks once.
         """
-        decided: dict[tuple[str, str], tuple[bool, bool, str, str, dict[str, Any] | None]] = {}
+        decided: dict[tuple[str, str], tuple[bool, bool, str, str, str, dict[str, Any] | None]] = {}
         out: list[DeployedPage] = []
         for row in pages.newest_first():
             key = (row.slug, row.item_id)
             if key not in decided:
                 readable = _may(row.slug, row.item_id, "read_content")
-                # The title, the owner and the permission are ONE store read of
-                # their own, so they are memoised with the decision — and only
-                # for an item that will be shown, so a hidden item costs
-                # nothing but its refusal.
+                # The title, owner, creator and permission come from the facts
+                # the gate above just read (`ItemLocator.item_facts`), so they
+                # cost nothing more — and only for an item that will be shown.
                 facts = locator.item_facts(row.item_id) if readable else None
-                title, owner, permission = facts or ("", "", None)
+                title, owner, created_by, permission = facts or ("", "", "", None)
                 decided[key] = (
                     readable,
                     readable and _may(row.slug, row.item_id, "edit_content"),
                     title,
                     owner,
+                    created_by,
                     _permission_json(permission),
                 )
-            readable, removable, item_title, item_owner, item_permission = decided[key]
+            readable, removable, item_title, item_owner, item_created_by, item_permission = decided[
+                key
+            ]
             if not readable:
                 continue
             out.append(
@@ -326,6 +338,7 @@ def register_wui_deploy_routes(
                     **{f: getattr(row, f) for f in DeployedWui.__struct_fields__},
                     item_title=item_title,
                     item_owner=item_owner,
+                    item_created_by=item_created_by,
                     item_permission=item_permission,
                     can_remove=removable,
                 )

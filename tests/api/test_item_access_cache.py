@@ -165,3 +165,47 @@ def test_a_miss_is_not_cached_so_an_item_created_a_moment_later_is_seen() -> Non
     made = rm.create(PmProject(title="t", owner="u"), resource_id=item_id).resource_id
 
     assert locator.require_access("pm", made, "read_content") == made
+
+
+def test_item_facts_after_the_gate_reads_nothing_more() -> None:
+    """The WUI overview gates every row and then names its title, owner and
+    permission (`docs/plan-deploy-reach.md` decision 9). Those are the facts the
+    gate just memoised — reading them again doubled the overview's cost and
+    could answer from a different moment than the decision did."""
+    spec = make_spec(default_user="u")
+    rm = spec.get_resource_manager(PmProject)
+    item_id = rm.create(PmProject(title="t", owner="u")).resource_id
+    locator = _locator(spec)
+
+    calls: list[str] = []
+    original = type(rm).get
+
+    def counting_get(self, *args, **kwargs):  # noqa: ANN001
+        calls.append(self.resource_name)
+        return original(self, *args, **kwargs)
+
+    type(rm).get = counting_get  # ty: ignore[invalid-assignment]
+    try:
+        locator.require_access("pm", item_id, "read_content")
+        facts = locator.item_facts(item_id)
+    finally:
+        type(rm).get = original
+
+    assert facts is not None and facts.title == "t"
+    assert len(calls) == 1, calls
+
+
+def test_item_facts_name_the_creator_the_gate_decides_by_not_the_editable_owner_field() -> None:
+    """`owner` is a display field anyone with write access may change (#687);
+    who a private item opens for is decided by `created_by`. The overview's
+    「只有你」 must be decided by the same person the gate lets in."""
+    spec = make_spec(default_user="alice")
+    rm = spec.get_resource_manager(PmProject)
+    with rm.using("alice"):
+        item_id = rm.create(PmProject(title="t", owner="bob")).resource_id
+    locator = _locator(spec, user="alice")
+
+    facts = locator.item_facts(item_id)
+
+    assert facts is not None
+    assert (facts.owner, facts.created_by) == ("bob", "alice")

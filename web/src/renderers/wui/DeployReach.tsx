@@ -40,8 +40,10 @@ export function DeployReach({ slug, itemId }: { slug: string; itemId: string }) 
 
   const raw = item ? (item as Record<string, unknown>).permission : undefined;
   const reach = item ? pageReach(raw) : "unknown";
-  if (!manifest || !item || reach === "unknown") {
-    // Not read yet, or written by a newer build: the rule, never a guess (#578).
+  if (!manifest || !item || reach === "unknown" || !me.ready) {
+    // Not read yet, or written by a newer build: the rule, never a guess
+    // (#578). Nor before the viewer is known — the placeholder id is not the
+    // owner, and the owner would read the non-owner's sentence.
     return <div style={{ color: "var(--text-paper-d)" }}>{t("wui.deploy.reach.unknown")}</div>;
   }
 

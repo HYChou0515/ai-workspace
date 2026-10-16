@@ -24,6 +24,7 @@ const MANIFEST = {
 
 function setup({
   me = "bob",
+  meKnown = true,
   superuser = false,
   permission,
   owner = "bob",
@@ -31,6 +32,7 @@ function setup({
   item = true,
 }: {
   me?: string;
+  meKnown?: boolean;
   superuser?: boolean;
   permission?: unknown;
   owner?: string;
@@ -41,7 +43,7 @@ function setup({
   // What is seeded is what is read: no query here may refetch on mount and
   // replace it with whatever an unstubbed `fetch` answers.
   client.setDefaultOptions({ queries: { ...client.getDefaultOptions().queries, staleTime: Infinity } });
-  client.setQueryData(qk.currentUser, me);
+  if (meKnown) client.setQueryData(qk.currentUser, me);
   client.setQueryData(qk.me, { is_superuser: superuser, groups: [] });
   client.setQueryData(qk.appManifest(SLUG), manifest);
   client.setQueryData(qk.users, []);
@@ -123,7 +125,7 @@ describe("DeployReach", () => {
     expect(screen.getByRole("dialog", { name: "Share chat" })).toBeInTheDocument();
   });
 
-  it("follows a change of access — it reads the workspace's own query, which the share dialog refreshes", async () => {
+  it("follows a change of access — it re-renders when the workspace's own query changes", async () => {
     const client = setup({ permission: { visibility: "private" } });
     expect(screen.getByText("目前只有你打得開這個連結。")).toBeInTheDocument();
 
@@ -137,14 +139,23 @@ describe("DeployReach", () => {
     expect(await screen.findByText("所有人都打得開這個連結。")).toBeInTheDocument();
   });
 
+  it("before the viewer is known: the rule — not 'the owner and admins' said to the owner", () => {
+    // Review round 1: until the identity settles the id is a placeholder, so
+    // the owner read the non-owner's sentence (and, without the right to
+    // change access, was told to ask themselves).
+    setup({ meKnown: false, permission: { visibility: "private" } });
+    expect(screen.getByText("能讀這個 workspace 檔案的人才能用這個連結。")).toBeInTheDocument();
+    expect(screen.queryByText(/擁有者/)).toBeNull();
+  });
+
   it("before the workspace is read, or when its access cannot be read: the rule, never a guess", () => {
     setup({ item: false });
-    expect(screen.getByText("能打開這個 workspace 的人才能用這個連結。")).toBeInTheDocument();
+    expect(screen.getByText("能讀這個 workspace 檔案的人才能用這個連結。")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "分享設定…" })).toBeNull();
     cleanup();
 
     setup({ permission: { visibility: "secret" } });
-    expect(screen.getByText("能打開這個 workspace 的人才能用這個連結。")).toBeInTheDocument();
+    expect(screen.getByText("能讀這個 workspace 檔案的人才能用這個連結。")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "分享設定…" })).toBeNull();
   });
 });
