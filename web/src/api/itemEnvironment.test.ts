@@ -83,6 +83,31 @@ describe("itemEnvironmentApi.get", () => {
     expect(got.maxMemoryBytes).toBe(3 * 1024 ** 3);
   });
 
+  it("carries how far THIS item may go, and null where nothing caps it (plan-item-size-ceiling D5)", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(
+      ok({
+        running: false,
+        stated_cpu_cores: null,
+        stated_memory_bytes: null,
+        effective_cpu_cores: 1,
+        effective_memory_bytes: 512 * 1024 ** 2,
+        max_cpu_cores: 1024,
+        max_memory_bytes: 1024 ** 5,
+        cpu_ceiling: 4,
+        memory_ceiling: 4 * 1024 ** 3,
+      }),
+    );
+    const got = await itemEnvironmentApi.get("rca", "item-1");
+    expect([got.cpuCeiling, got.memoryCeiling]).toEqual([4, 4 * 1024 ** 3]);
+
+    // An older API pod mid-rollout sends neither: read as no line, not as 0.
+    vi.mocked(fetch).mockResolvedValueOnce(
+      ok({ running: false, stated_cpu_cores: null, stated_memory_bytes: null, effective_cpu_cores: 1, effective_memory_bytes: null }),
+    );
+    const older = await itemEnvironmentApi.get("rca", "item-1");
+    expect([older.cpuCeiling, older.memoryCeiling]).toEqual([null, null]);
+  });
+
   it("throws on a refusal instead of resolving with nothing", async () => {
     // The failure `myResources.closeEnvironment` was fixed for: a swallowed
     // status resolves exactly like a success, and the panel renders an empty

@@ -58,7 +58,7 @@ apps/<slug>/
 | `function.workspace` | file IDE(tree + editor + file tools)。`false` → 只有 chat 的 shell |
 | `function.sandbox` | exec + package tools。不需要 terminal;控制 exec 相關功能的開啟 |
 | `function.terminal` | 人用的 shell 分頁。**需要 `sandbox: true`** |
-| `resources` | 這個 App 的**一個** item 可以用多少 `{cpu, memory, disk}`。三個欄位各自可省略,見下 |
+| `resources` | 這個 App 的**一個** item 預設用多少 `{cpu, memory, disk}`(cpu／記憶體的上限是部署的 `per_app.max`)。三個欄位各自可省略,見下 |
 | `agent.prompt_file` | base system prompt 的路徑(相對於 App 目錄) |
 | `agent.tools` | App 的 tool **上限**;profile 可以收窄成其子集 |
 | `agent.picker` | `[{preset, name}]`——model picker;`preset` ∈ `config.yaml` 的 `agents.presets` |
@@ -105,22 +105,23 @@ k8s 的 Pod `requests` 對上 namespace 的 `LimitRange`。
 - **`disk: "0"` 是「明確無上限」,會停止往下掉;`cpu: 0` 是「沒宣告」,會繼續往下掉。** 這個
   不對稱是刻意的——零核心不是任何人的本意,零 disk 上限卻是。
 
-- **這個數字現在是「天花板」,不是「固定值」。** 使用者可以在 item 頁面把**這一個** item
-  的環境調得更小(見下),但永遠不能調得比你在這裡宣告的更大。所以宣告時想的是
-  「這個 App 的 item **最多**可以吃多少」,不是「每個 item 都要吃多少」。
+- **這個數字是「預設大小」,天花板是部署的 `per_app.max`。** 使用者可以在 item 頁面把**這一個**
+  item 的環境調大或調小(見下),上限是 `per_app.max`;部署沒設 `max` 的維度,才以你在這裡宣告
+  的數字為上限([plan-item-size-ceiling.md](plan-item-size-ceiling.md))。所以宣告時想的是
+  「這個 App 的 item **平常**吃多少」。
 
 部署端那一半(`per_app.default` / `per_app.max`、以及**每個人**的總量與特規使用者)寫在
 [設定指南 §6.5](configuration.md)。
 
-### 使用者可以把單一 item 調小
+### 使用者可以調單一 item 的大小
 
 item 頁面的「環境」面板讓人替**那一個 item** 指定 cpu / 記憶體,由 item 的 `owner` 的額度
 支出。三件跟 App 作者有關的事:
 
-- **預設是 `min(你宣告的上限, 那個人的額度)`**,而且**不會被存起來**——欄位空著就代表
+- **預設是 `min(你宣告的大小, 那個人的額度)`**,而且**不會被存起來**——欄位空著就代表
   「沒人指定」,每次都重新計算。所以管理員調整某人的額度之後,他那些沒特別設定的 item
   會自己跟著變,不會停在三個月前算出來的數字。
-- **取小的那一個是必要的,不是保守。** 只取 App 上限的話,「App 上限 4 核 + 那個人額度
+- **取小的那一個是必要的,不是保守。** 只取 App 宣告的大小的話,「App 宣告 4 核 + 那個人額度
   2 核」會產生一個**永遠開不起來**的 item:准入控制是 `incoming > limit` 就拒絕,關掉其他
   東西也沒用。
 - **要調大小需要 `change_permission`**,不是 `write_meta`。因為它花的是 owner 的額度,而且

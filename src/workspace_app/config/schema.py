@@ -382,7 +382,8 @@ class PerAppResources:
     """The deploy's half of the per-App bargain (k8s ``LimitRange``).
 
     ``default`` is what an App gets when its app.json states nothing; ``max`` is
-    the ceiling an App may not exceed. Exceeding it is a BOOT failure, not a
+    the ceiling an App may not exceed, and the most one item may be given
+    (plan-item-size-ceiling D1). An App exceeding it is a BOOT failure, not a
     silent trim: a config that reads "4 cores" while the pod hands out 2 is the
     dead-knob class this codebase refuses to ship."""
 

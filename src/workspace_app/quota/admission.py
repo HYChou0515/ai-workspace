@@ -140,8 +140,9 @@ class AdmissionGate:
         put its owner over.
 
         `incoming` is what the NEW sandbox would be allowed to consume — what
-        the BACKEND will really cap it at, which is its App's ceilings when the
-        App states them and the backend's own when it does not. It matters
+        the BACKEND will really cap it at — the item's resolved size (its own,
+        else its App's, held to the item ceiling) where one is stated, and the
+        backend's own when none is. It matters
         because the question is not "are you already over?" but "does one more
         of THIS size fit?" — with 3.5 of 4 cores live, whether another sandbox is
         admissible depends entirely on how big it is. Defaulted from `cost_of`
