@@ -19,10 +19,10 @@ from contextvars import ContextVar
 from typing import Any, NamedTuple
 
 from .checks import artifact_valid, exit_zero
-from .engine import Check, StepFailed, _emit, run_step
+from .engine import Check, CheckResult, StepFailed, _emit, run_step
 from .events import StepOutput
 from .handle import WorkflowHandle
-from .output_format import instruction
+from .output_format import STRUCTURED_KINDS, instruction, repair_request
 
 logger = logging.getLogger(__name__)
 
@@ -219,26 +219,26 @@ async def agent_write_step(
     shape = instruction(outputs, kind if out else "")
     asked = f"{prompt}\n\n{shape}" if shape else prompt
 
-    previous: list[str] = []  # the last attempt's reply, for the retry prompt
+    # The last attempt's reply: a node reads no conversation (plan-workflow-out-of-chat
+    # D1), so a re-run's prompt carries it, and a repair quotes it in full
+    # (plan-workflow-output-repair §3.3).
+    previous: list[str] = []
 
-    async def execute(feedback: str | None) -> Any:
-        with _as_step(name or phase, key, phase):
-            return await _write(feedback)
-
-    async def _write(feedback: str | None) -> Any:
-        coro = drive_turn(_retry_prompt(asked, feedback, next(iter(previous), None)), tools)
+    async def turn(text_in: str, held: list[str] | None) -> str:
+        coro = drive_turn(text_in, held)
         if wf.step_timeout_s is None:
-            text = await coro
-        else:
-            try:
-                text = await asyncio.wait_for(coro, wf.step_timeout_s)
-            except TimeoutError as exc:  # per-step cap (manual §17) → abort the step
-                logger.warning(
-                    "agent write step timed out after %ss (phase %s)", wf.step_timeout_s, phase
-                )
-                raise StepFailed(
-                    f"agent step {name or phase!r} timed out after {wf.step_timeout_s}s"
-                ) from exc
+            return await coro
+        try:
+            return await asyncio.wait_for(coro, wf.step_timeout_s)
+        except TimeoutError as exc:  # per-step cap (manual §17) → abort the step
+            logger.warning(
+                "agent write step timed out after %ss (phase %s)", wf.step_timeout_s, phase
+            )
+            raise StepFailed(
+                f"agent step {name or phase!r} timed out after {wf.step_timeout_s}s"
+            ) from exc
+
+    async def finish(text: str) -> dict[str, Any]:
         previous[:] = [text]
         result: dict[str, Any] = {"out": out, "bytes": len(text)}
         if out:
@@ -255,6 +255,21 @@ async def agent_write_step(
                 await wf.reconcile()
             result["fields"] = {"produces": sorted(await wf.glob(produces))}
         return result
+
+    async def execute(feedback: str | None) -> Any:
+        with _as_step(name or phase, key, phase):
+            return await finish(
+                await turn(_retry_prompt(asked, feedback, next(iter(previous), None)), tools)
+            )
+
+    async def repair(verdict: CheckResult) -> Any:
+        # D1: the answer re-emitted, not the task redone — the request alone, and no
+        # tools, so nothing the step already did can be done again.
+        asked_again = repair_request(
+            next(iter(previous), ""), verdict, outputs, kind if out else ""
+        )
+        with _as_step(name or phase, key, phase):
+            return await finish(await turn(asked_again, []))
 
     args: dict[str, Any] = {
         "prompt": prompt,
@@ -279,6 +294,8 @@ async def agent_write_step(
         check=check or artifact_valid(out, kind, requires),
         retries=retries,
         cache=cache,
+        # only a reply with a machine format can be repaired; `produces` writes files
+        repair=repair if outputs or (out and kind in STRUCTURED_KINDS) else None,
     )
 
 

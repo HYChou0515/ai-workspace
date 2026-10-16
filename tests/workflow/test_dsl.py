@@ -1631,11 +1631,13 @@ async def test_run_outputs_all_scalar_and_container_types_validate():
     assert ran == ["use 3"]
 
 
-async def test_run_agent_outputs_type_mismatch_retries_with_feedback():
+async def test_run_agent_outputs_type_mismatch_is_repaired_with_feedback():
+    """A wrong field type is the reply's format: the next turn is a repair — no tools,
+    told what was wrong — not the task again (plan-workflow-output-repair D1)."""
     store = MemoryFileStore()
 
     async def drive_turn(prompt: str, tools: list[str] | None) -> str:
-        if "did not pass" in prompt:  # _retry_prompt fed the failure back in
+        if tools == [] and "'score' must be float" in prompt:
             return json.dumps({"score": 0.9})
         return json.dumps({"score": "high"})  # wrong: str, not float
 
