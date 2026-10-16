@@ -4,7 +4,7 @@ import asyncio
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from ..files import WorkspaceFiles
 from ..filestore.protocol import FileStore
@@ -40,6 +40,26 @@ ReviewSkill = Callable[
     ["AgentToolContext", str, Mapping[str, bytes], OutputSink | None],
     Awaitable["SkillHubReview"],
 ]
+
+
+@dataclass(frozen=True)
+class Interjection:
+    """A person's message folded into a turn other than its own
+    (docs/plan-interjection.md): queued behind a turn and answered together with
+    the message after it (Q10), or absorbed into the running turn at its next
+    model call (Q1). It is persisted already; this is what the model is handed.
+
+    `content` is what that message's own turn would have been handed (its skill
+    and marking blocks included), `speaker` the attribution label a shared
+    thread shows the model (`""` for none), `image_urls` the pixels it carried
+    for a vision model. `author` and `at` (its `created_at`) say which persisted
+    message it is."""
+
+    content: str
+    author: str
+    at: int
+    speaker: str = ""
+    image_urls: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -248,6 +268,14 @@ class AgentToolContext:
     # unchanged. The image also persists as a workspace file, so a later turn can
     # still `read_image` it — the persisted history stays text.
     turn_image_urls: list[str] = field(default_factory=list)
+    # docs/plan-interjection.md Q10: messages queued behind the previous turn that
+    # no turn saw, answered by THIS one. The runner places them, in order, between
+    # the history and this turn's own message. Set by the turn engine.
+    leading_interjections: list[Interjection] = field(default_factory=list)
+    # docs/plan-interjection.md Q1: turns a thread's messages into `history` with
+    # the SAME budget this turn's history was built with, so a turn that waited
+    # behind another can rebuild it when it starts. Set by the turn builder.
+    history_builder: Callable[[list[Any]], list[dict[str, Any]]] | None = None
     # Deploy-level registry of provisionable tool packages (#21, #25). When
     # the sandbox is created, the packages that appear in
     # agent_config.allowed_tools (raw pkg name, or `pkg:cmd` colon syntax) are

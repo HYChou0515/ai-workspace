@@ -508,7 +508,7 @@ async def test_a_stop_does_not_discard_a_queued_message_through_the_real_send_pa
             await asyncio.sleep(0.01)
         second = asyncio.create_task(client.post(url, json={"content": "fast"}))
         # Let it get all the way into the queue before the Stop lands.
-        while len(app.state.turn_engine._ws_session(iid).queue._queue) == 0:  # noqa: SLF001
+        while app.state.turn_engine._ws_session(iid).queue.empty():  # noqa: SLF001
             await asyncio.sleep(0.01)
 
         await app.state.turn_engine.cancel_current(iid)

@@ -44,6 +44,7 @@ from ..resources.conversation import SentMarking
 from ..resources.conversation_goal import GOAL_DRIVER, read_goal, upsert_goal
 from ..sandbox.protocol import OutputSink
 from ..tokens import CallLane
+from ..users.labels import speaker_label
 from ..workcalendar import OffHoursCalendar
 from .env_layers import PersonEnv
 from .events import GoalUpdated, RunError, TurnEnded, UserMessage
@@ -57,7 +58,15 @@ from .rca_messages import bubble_kb_citations, to_rca_message
 from .timeutil import now_ms
 from .turn_claims import TurnClaim
 from .turn_gate import admit_turn
-from .turns import CONTEXT_NOTICE_ROLE, _terminal_error, already_noticed
+from .turns import (
+    CONTEXT_NOTICE_ROLE,
+    PLACE_ROLE,
+    QueuedMessage,
+    _terminal_error,
+    already_noticed,
+    take_person_message,
+    thread_without,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -1001,6 +1010,33 @@ class ChatSendService:
             logger.exception("chat_send: could not open the turn claim for %s", engine_key)
             return None
 
+    def _queued_message(
+        self, rid: str, author: str, created: int, claim: str | None, *, rerun: bool
+    ) -> QueuedMessage:
+        """This send's message, as the turn engine needs to know it
+        (docs/plan-interjection.md): who and when, how to rebuild the turn's
+        history when it starts after waiting, and how to settle the message
+        when another message's turn answered it (its claim is then done)."""
+
+        async def refresh(answering: list[int], ctx: AgentToolContext) -> None:
+            if ctx.history_builder is None:
+                return
+            fresh = self._conv_rm.get(rid).data
+            assert isinstance(fresh, Conversation)
+            ctx.history = ctx.history_builder(thread_without(fresh.messages, answering))
+
+        users = self._users
+        return QueuedMessage(
+            author=author,
+            at=created,
+            refresh=refresh,
+            on_absorbed=lambda: self._finish_claim(claim),
+            speaker=speaker_label(users.get(author)) if users is not None and author else "",
+            # A re-run (no announce) answers a question that may sit above an
+            # answer it waited for on the pod that went away.
+            rebuild=rerun,
+        )
+
     def _claim_is_mine(self, claim: str | None) -> bool:
         """No store, or no claim (it could not be opened): the turn is as
         pod-bound as it always was and its result is always its own."""
@@ -1446,6 +1482,14 @@ class ChatSendService:
                         tool_idx: dict[str, int] = {}
                         seen_subagent: list[list[Citation]] = []
                         for tm in produced:
+                            if tm.role == PLACE_ROLE:
+                                # plan-interjection Q3: the person's message
+                                # (stored at acceptance) moves to where this
+                                # turn read it. Gone (undone) ⇒ nothing to place.
+                                placed = take_person_message(conv2.messages, tm.created_at)
+                                if placed is not None:
+                                    conv2.messages.append(placed)
+                                continue
                             msg = to_rca_message(tm)
                             name = tm.tool_name
                             pool = ctx.subagent_citations.get(name) if name is not None else None
@@ -1566,6 +1610,7 @@ class ChatSendService:
                     # timestamp is the acceptance (D13 (b) starts here).
                     surface="chat",
                     accepted_ms=created,
+                    message=self._queued_message(rid, author, created, claim, rerun=not announce),
                 )
                 # #493 symptom 1 (504): await THIS turn's completion, but only up to a
                 # deadline — then DETACH it so a long turn can't hang the POST until the

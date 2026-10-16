@@ -495,3 +495,38 @@ def test_history_replays_from_the_newest_summary_not_the_whole_thread():
         "那接下來呢",
     ]
     assert {i["role"] for i in items} == {"user"}
+
+
+def test_build_input_places_folded_messages_between_history_and_the_prompt():
+    """docs/plan-interjection.md Q10: the messages a turn answers for others go
+    in, in order, after the history and before its own — each attributed like a
+    history message on a shared thread, with the images it carried."""
+    from workspace_app.agent.context import Interjection
+
+    hist = [{"role": "user", "content": "q1"}, {"role": "assistant", "content": "a1"}]
+    leading = [
+        Interjection(content="q2", author="ann", at=2, speaker="Ann (ann)"),
+        Interjection(content="q3", author="ann", at=3, image_urls=["data:image/png;base64,AA"]),
+    ]
+    assert _build_input(hist, "q4", (), leading) == [
+        *hist,
+        {"role": "user", "content": "[Ann (ann)]: q2"},
+        {
+            "role": "user",
+            "content": [
+                {"type": "input_text", "text": "q3"},
+                {"type": "input_image", "image_url": "data:image/png;base64,AA"},
+            ],
+        },
+        {"role": "user", "content": "q4"},
+    ]
+
+
+def test_build_input_with_folded_messages_and_no_history_is_a_list():
+    from workspace_app.agent.context import Interjection
+
+    leading = [Interjection(content="q1", author="a", at=1)]
+    assert _build_input([], "q2", (), leading) == [
+        {"role": "user", "content": "q1"},
+        {"role": "user", "content": "q2"},
+    ]
