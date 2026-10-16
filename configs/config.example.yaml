@@ -352,8 +352,8 @@
 #   gc_t2: 24h
 
 # ─── resources (per-App + per-person limits) ───── [OPT] ────────────
-# How much ONE item may consume, and how much ONE person may hold across
-# every item they own. The whole section is optional: leave it out and each
+# How big ONE item is by default and may be made, and how much ONE person may
+# hold across every item they own. The whole section is optional: leave it out and each
 # App falls through to `sandbox.isolation.*` (cpu/memory) and
 # `filestore.workspace_quota` (disk) exactly as it does today, with no
 # per-person limit at all.
@@ -363,7 +363,9 @@
 # Each dimension falls through on its own, so an App that only states memory
 # keeps the deploy's cpu and disk.
 #
-# `per_app.max` is the deploy's ceiling (k8s LimitRange). An App resolving
+# `per_app.max` is the deploy's ceiling (k8s LimitRange), and the most a person
+# may give ONE item in its environment panel (a dimension with no `max` lets an
+# item only go below its App's size). An App resolving
 # above it FAILS THE BOOT and names itself — never a silent trim, because a
 # config that reads "4 cores" while the pod hands out 2 is a lie you only
 # discover from a performance bug months later.
@@ -522,6 +524,32 @@
 # Mounting your own dir? Build `csv-table` into it too, or that view kind is gone.
 # view_plugins:
 #   dir: /opt/view-plugins
+
+# ─── capacity (the capacity dashboard, /capacity — superusers only) ────────
+# docs/capacity.md. ON by default: every request, chat turn and background job
+# is counted, and the counts are written as one JSON line per record on stdout
+# (`event.dataset: workspace.usage`) for your collector to ship to ES — the
+# platform stores nothing. LLM calls carry `x-litellm-tags` (person, App,
+# purpose); turn `llm_tags` off BEFORE rollout when your LiteLLM proxy sets
+# `general_settings.reject_clientside_metadata_tags: true` (every tagged call
+# is refused), routes on tags with no `default` pool, or when models are
+# called at a hosted provider directly (the person ids would go with them).
+# The dashboard reads four sources YOU implement (dotted paths of classes in
+# your own package); an empty one is simply not connected.
+# capacity:
+#   record: true
+#   sink: ""                      # your UsageSink; "" = stdout JSON lines
+#   window_s: 300                 # divides 3600
+#   queue_max: 10000
+#   llm_tags: true
+#   usage_records: ""             # ① e.g. acme_capacity.sources.EsRecords
+#   resource_metrics: ""          # ② e.g. acme_capacity.sources.PromPods
+#   gpu_metrics: ""               # ③ e.g. acme_capacity.sources.DcgmGpus
+#   llm_requests: ""              # ④ e.g. acme_capacity.sources.LiteLlmLog
+#   step_s: 300                   # a multiple of window_s that divides a day
+#   lag_s: 600
+#   timezone: ""                  # "" = UTC; e.g. Asia/Taipei
+#   max_rows: 5000000
 
 # ─── chat_video (Export ▾ → 影片) ─────────────────────────────────────────
 # The ceilings on what a video job may ask for (docs/plan-chat-video-export.md,

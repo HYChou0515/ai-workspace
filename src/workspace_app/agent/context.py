@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -30,6 +30,7 @@ if TYPE_CHECKING:
     from ..tooling.registry import PackageInfo
     from ..users.protocol import User, UserDirectory
     from ..workflow.user_schedules import SchedulePolicy
+    from .tool_usage import ToolUsageRecorder
 
 
 # `review_skill_via`: (this turn's context, the folder name, its files, the tool
@@ -259,6 +260,73 @@ class AgentToolContext:
     # installed into it from prebuilt_dir; the runner also exposes their
     # commands as function tools. Set by the API layer from create_app config.
     packages: list[PackageInfo] = field(default_factory=list)
+    catalog_calls: dict[str, list[tuple[list[str], str]]] = field(default_factory=dict)
+    """Tool calls THIS turn that the catalog answered,
+    `{call_id: [([name, …], the answer it gave), …]}` — a QUEUE of hits per
+    call id, one entry per call the catalog answered, each carrying the exact
+    text it answered with.
+
+    The answer to such a call is a parameter schema — the fattest thing in the
+    design. The model needs it (the SDK's own run history carries it to the
+    next step), but the chat card and the STORED message must not: a schema in
+    the thread is replayed into every later turn's window, which undoes the
+    saving over a few turns. `_map_event` reads this to replace that one
+    output with a line naming what was loaded.
+
+    Keyed by call id, not by tool name, because a loaded command and its
+    catalog entry share a name — and recorded by the handler that answered, so
+    nothing has to infer which half ran.
+
+    A QUEUE rather than one list because `call_id` is the provider's, and a
+    provider that reuses one inside a single step would otherwise leave the
+    second hit unrecognised, putting a raw schema in the record (round 3 D4).
+    One `load_tool` call that loads several commands is ONE hit carrying
+    several names, which is why the handler says so explicitly instead of this
+    being inferred from the count.
+
+    The empty call id is a key like any other: `_call_id` falls back to `""`
+    for a provider that sends none, and suppressing that output matters more
+    than the risk of suppressing an adjacent real one — a schema in the record
+    is replayed into every later turn (round 3 D5).
+
+    The ANSWER is stored with it, and matched exactly, because the call id
+    alone cannot say WHICH output is the catalog's when one id covers several
+    calls: a step holding a real call and a catalog hit under one id had the
+    real output rewritten (and dropped) while the catalog's own schema was
+    stored — the one thing this mechanism exists to prevent (round 3 R1). The
+    text is not a pattern being sniffed; it is the identity of a value this
+    turn produced, so the match is order-independent.
+    """
+    ephemeral_outputs: list[str] = field(default_factory=list)
+    """Tool outputs the catalog answered and `_map_event` has already rewritten
+    — one entry per event, consumed by the turn reducer so that message is not
+    stored (`docs/plan-tool-on-demand-loading.md`).
+
+    A SECOND structure beside `catalog_calls`, and not a nicer version of it,
+    because the two are consumed at different moments by different readers:
+    `_map_event` takes a name list out of `catalog_calls` when it rewrites the
+    output, and the reducer — which sees the very next event — takes the id out
+    of here. Both are therefore used exactly once per call, which is what makes
+    a REUSED `tool_call_id` safe: an OpenAI-compatible endpoint passes the
+    server's id through verbatim, and matching on the id alone silenced every
+    later tool message of the turn, a `write_file` that really ran included
+    (verify round F2).
+    """
+    loaded_tools: set[str] = field(default_factory=set)
+    """Which package commands THIS turn has loaded the real schema for
+    (`docs/plan-tool-on-demand-loading.md`), by the name the model calls them by.
+
+    A turn starts empty — from the catalog, where every granted command is one
+    line with no parameter schema — and a command joins this set the moment the
+    model reaches for it, so the rest of the same turn is served its real
+    schema (the SDK re-resolves the tool list on every step).
+
+    It dies with the turn, deliberately. A conversation-level set would creep
+    the whole tool universe back into the window over a dozen turns, which is
+    today's six-figure prompt arriving slowly instead of at once; the history
+    still records which command was used, so the next turn re-loads it (one
+    extra step) rather than carrying every schema it ever touched.
+    """
     tool_outputs: dict[str, str] = field(default_factory=dict)
     """What each package tool said the last time it ran in this turn, by the name
     the model called it (stdout then stderr). `request_env` checks a variable
@@ -431,6 +499,22 @@ class AgentToolContext:
     # drawn. Set only by the chat turn builder; a workflow step or a schedule
     # leaves it False even when its tool list includes `ask_user`.
     in_chat: bool = False
+    # Whether the deploy turned on the 問外部AI card (`server.ext_ai_enabled`,
+    # docs/plan-ext-ai.md D5): granted only where `in_chat` holds too.
+    ext_ai: bool = False
+    # docs/plan-tool-usage-stats.md: where this turn's tool calls are counted
+    # (the runner sets it on every turn it drives; None counts nothing), which
+    # surface they happened on — set by the builder of each context, never
+    # inferred from other fields (§3.4) — and, when the builder names one, the
+    # person they are attributed to (a schedule's binder, a workflow's starter).
+    tool_usage: ToolUsageRecorder | None = None
+    surface: str = "background"
+    usage_user: str = ""
+    # A turn that runs INSIDE another turn's tool call and whose
+    # `investigation_id` is not an item (the wiki reader / maintainer key it by
+    # collection): its calls count on the caller's item and surface — with no
+    # caller, background work on no item.
+    usage_inside_caller: bool = False
     # #624: how many history messages this turn had to leave out because they
     # would not fit the endpoint's context window. 0 = nothing was cut (the
     # normal case, and the default when no ceiling is known — we send it all
@@ -705,6 +789,61 @@ class AgentToolContext:
 
             self._speaker_groups = groups_of(self.spec, self.acting_user)
         return self._speaker_groups
+
+    def note_catalog_hit(self, call_id: str, names: Sequence[str], answer: str = "") -> None:
+        """One call the catalog answered: mark its commands loaded, and queue
+        the hit — with the exact text it answered with — so `_map_event` can
+        keep that one output out of the thread.
+
+        `names` is the whole batch of one call (a `load_tool` naming several
+        commands is one hit), so the queue length is the number of OUTPUTS to
+        suppress, never the number of commands."""
+        for name in names:
+            self.mark_tool_loaded(name)
+        self.catalog_calls.setdefault(call_id, []).append(
+            (list(dict.fromkeys(names)), answer)  # the names go into a sentence a person reads
+        )
+
+    def take_catalog_hit(self, call_id: str, output: str) -> list[str] | None:
+        """The queued hit this output IS, consumed. `None` when the output is
+        not one the catalog answered.
+
+        Matched on the answer, not just the id: one id can cover several calls
+        in a step, and matching by id alone dropped a real tool's output and
+        stored the catalog's schema in its place (round 3 R1). A hit queued
+        without an answer (a caller that did not record one) still matches by
+        id, so older callers keep working."""
+        hits = self.catalog_calls.get(call_id)
+        if not hits:
+            return None
+        for i, (names, answer) in enumerate(hits):
+            if answer and answer != output:
+                continue
+            hits.pop(i)
+            if not hits:
+                self.catalog_calls.pop(call_id, None)
+            return names
+        return None
+
+    def mark_tool_loaded(self, name: str, *, call_id: str = "") -> None:
+        r"""This turn may now be served `name`'s real schema. Idempotent: a model
+        can emit two calls to one unloaded command in a single step.
+
+        `call_id` records WHICH call did the loading, so its answer (a schema)
+        can be kept out of the thread; a load with no call behind it (a test, a
+        future caller) simply records nothing.
+
+        The per-call list is deduped for the same reason the set is: one
+        `load_tool(["a-bundle", "one-of-its-commands"])` resolves the same
+        command twice, and the names go into a sentence a PERSON reads — it
+        read `載入 \`data-fetch\`、\`plot-trend\`、\`data-fetch\` 的用法`
+        (round 1 B1)."""
+        self.loaded_tools.add(name)
+        if call_id:
+            self.note_catalog_hit(call_id, [name])
+
+    def is_tool_loaded(self, name: str) -> bool:
+        return name in self.loaded_tools
 
     def _mounts(self) -> dict[str, MountedTool] | None:
         """`sandbox_spec.tools` with the release each sha is. `None` stays

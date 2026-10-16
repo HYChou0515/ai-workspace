@@ -126,10 +126,12 @@ nav:
       - Sandbox Host: sandbox-host.md
       - Sandbox Host 線上契約: sandbox-host-wire.md
       - sci-plot 科學繪圖: sci-plot.md
+      - 小幫手（安裝、更新、發布、IT 放行）: ai-workspace-helper.md
   - 部署與運維:
       - 設定指南: configuration.md
       - 部署與客製化: deployment.md
       - 升級手冊（Migrations）: migrations.md
+      - 容量規劃（用量紀錄、四個資料來源）: capacity.md
   - 使用者手冊: user-guide.md
   - 設計計畫與歷史: design-history.md
 

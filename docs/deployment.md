@@ -933,7 +933,7 @@ server:
 ([plan-personal-env](plan-personal-env.md)):
 
 - 在「我的環境變數」頁,或 item 環境變數面板的「Private(跨workspace)」分頁 →
-  **立刻存進「我的環境變數」**,所有把那個變數設成 Private first／Private only 的 item 都用它;token 過期時在一處重新登入就好。
+  **立刻存進「我的環境變數」**,所有 item 都會用它(Shared 的變數在共用值沒填時才用;某個 item 自己的值優先);token 過期時在一處重新登入就好。
 - 在「Private」分頁 → 填進這個 item 的個人值表單,按儲存才存,只給這個 item。
 - 在「Shared」分頁 → 填進共用值的表單,按儲存才存。
 
@@ -1391,7 +1391,7 @@ git -C <git_root>/<id>.git show master:SKILL.md                 # 讀一個檔�
 git -C <git_root>/<id>.git diff <commit-a> <commit-b> --stat    # 兩版之間改了哪些檔
 ```
 
-**計數。** 安裝與使用次數先在每個 pod 的記憶體累積，每 2 小時、以及 pod 收到 SIGTERM 時寫進
-`SkillHubUsage`（每個條目每天每個 pod 一列，只留一個 revision；pod 以 `HOSTNAME` 區分，沒有 `HOSTNAME`
-的行程一律當成 `local`，兩個這樣的行程會寫到同一列）。pod 沒收到 SIGTERM 就消失時，少掉的是上一次寫出成功之後累積的次數——
+**計數。** 安裝與使用次數先在每個行程的記憶體累積，每 2 小時、以及行程收到 SIGTERM 時寫進
+`SkillHubUsage`（每個條目每天每個寫入的行程一列，只留一個 revision；行程以「主機名-pid」區分，所以兩個行程
+從不寫同一列；重啟會在當天開一列新的，總數是各列相加）。行程沒收到 SIGTERM 就消失時，少掉的是上一次寫出成功之後累積的次數——
 平常最多 2 小時；寫出一直失敗（例如資料庫連不上）時會更多，log 每次都會記。

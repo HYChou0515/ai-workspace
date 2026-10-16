@@ -51,6 +51,10 @@ export function usePlatformDestinations(): PlatformDestination[] {
     { to: "/my-resources", label: t("resources.title"), icon: "layers" },
     // `plan-personal-env`: a person's values for every item. The Env button's icon.
     { to: "/my-env", label: t("myEnv.title"), icon: "tag" },
+    // docs/plan-outside-helper.md §3.6: where the helper is downloaded.
+    // Unconditional for the WUI entry's reason: the page says when nothing is
+    // published, and whether the person's own helper is connected.
+    { to: "/ai-workspace-helper", label: t("aiWorkspaceHelper.title"), icon: "download" },
     // The overview of Deployed pages (docs/plan-wui-overview.md). Unconditional:
     // an entrance that appears only once somebody has a page is the confusing
     // kind, and the empty state says what a WUI is. "WUI" is a proper noun.
@@ -67,6 +71,10 @@ export function usePlatformDestinations(): PlatformDestination[] {
     ...(isSuperuser
       ? ([
           { to: "/work-calendar", label: "Work calendar", icon: "clock" },
+          // docs/plan-capacity-usage.md D4: the capacity dashboard, superusers only.
+          { to: "/capacity", label: t("capacity.nav"), icon: "layers" },
+          // docs/plan-model-settings.md M15: presets, app.json, the platform's models.
+          { to: "/settings/models", label: t("modelSettings.title"), icon: "settings" },
         ] satisfies PlatformDestination[])
       : []),
     { to: "/help", label: "Help", icon: "quote" },

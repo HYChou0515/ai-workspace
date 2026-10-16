@@ -11,22 +11,25 @@
  * review. Installing happens here (D6) and in a workspace's Skills panel.
  */
 
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useId, useRef, useState } from "react";
+import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useId, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 
 import { HttpError } from "../api/http";
 import { qk } from "../api/queryKeys";
+import { createLimiter } from "../api/concurrency";
 import { invalidateHubInstalls } from "../api/skillHubCache";
 import {
   type SkillEditTarget,
   type SkillHubApi,
   type SkillHubDetail,
+  type SkillInstallState,
   skillHubApi,
 } from "../api/skillHub";
 import { ActionMenu } from "../components/ActionMenu";
 import { useDialog } from "../components/Dialog";
+import { Icon } from "../components/Icon";
 import { ModalActions } from "../components/ModalActions";
 import { ModalShell } from "../components/ModalShell";
 import { PageNotice, type PageNoticeContent } from "../components/PageNotice";
@@ -366,10 +369,17 @@ function Sidebar({
   );
 }
 
+/** How many install-dialog rows ask their question at once. Our judgement,
+ * not a sourced number: below the six connections a browser keeps per host
+ * on HTTP/1.1, so two stay free for the Install press and the page. */
+const ROW_CHECKS_AT_ONCE = 4;
+
 /** 「安裝到 workspace…」 (D6): an App, then one of its workspaces the viewer
- * may edit, each saying beforehand what installing would do there — the
- * same refusal the install route gives, asked first. A pick is cheap to redo,
- * so the close is not guarded (#779); it is a form, so no backdrop close. */
+ * may edit. The list is the database alone and shows at once; each row then
+ * asks what installing would do there and says it before Install is pressed
+ * (plan-skill-install-picker D1, D3) — NN/g's error prevention, with the
+ * row's own 「檢查中…」 as its status meanwhile. A pick is cheap to redo, so
+ * the close is not guarded (#779); it is a form, so no backdrop close. */
 function InstallDialog({
   entry,
   client,
@@ -388,18 +398,95 @@ function InstallDialog({
   const nameOf = (id: string) => users.find((u) => u.id === id)?.name ?? id;
   const qc = useQueryClient();
   const [slug, setSlug] = useState(entry.source_app);
-  const [picked, setPicked] = useState<string | null>(null);
+  const [chosen, setChosen] = useState<string | null>(null);
   const targets = useQuery({
     queryKey: qk.skillHubTargets(entry.id, slug),
     queryFn: () => client.targets(entry.id, slug),
   });
   const items = targets.data?.items ?? [];
+  // One question per row, each answered on its own: a busy sandbox never holds
+  // back the list (D3), only its own row and one of ROW_CHECKS_AT_ONCE slots —
+  // so as many busy rows as there are slots make the rows queued behind them
+  // wait too (D6). Closing the dialog drops the questions still out: a slow
+  // sandbox's question can take minutes, and unbounded a few of them held
+  // every connection the browser allows, the Install press included.
+  const [rowChecks] = useState(() => createLimiter(ROW_CHECKS_AT_ONCE));
+  const states = useQueries({
+    queries: items.map((it) => ({
+      queryKey: qk.skillHubTargetState(entry.id, slug, it.item_id),
+      queryFn: ({ signal }: { signal: AbortSignal }) =>
+        rowChecks(() => client.installState(slug, it.item_id, entry.id, signal), signal),
+    })),
+  });
+  // A question that failed (an API pod without the route mid-rollout, the
+  // network) cannot tell either — said so, not 「檢查中…」 forever.
+  const cannotTell: SkillInstallState = { state: "unavailable", owner: "" };
+  const stateOf = new Map(
+    items.map((it, i) => {
+      const q = states[i];
+      return [it.item_id, q?.data ?? (q?.isError ? cannotTell : undefined)];
+    }),
+  );
+  // Pickable unless its answer says installing cannot go ahead — a row still
+  // being checked included (user, 2026-10-15), as is `unavailable`: the
+  // install itself checks again. A pick whose row turns out not to be
+  // pickable goes with it.
+  const pickable = (id: string) => {
+    const s = stateOf.get(id)?.state;
+    return s === undefined || s === "ok" || s === "unavailable";
+  };
+  const picked = chosen !== null && pickable(chosen) ? chosen : null;
+  // What a row says about installing there — its status line, and the reason
+  // given when a pick is dropped.
+  const statusText = (s: SkillInstallState | undefined) =>
+    s === undefined
+      ? t("skillHub.install.state.checking")
+      : s.state === "installed"
+        ? t("skillHub.install.state.installed")
+        : s.state === "unavailable"
+          ? t("skillHub.install.state.unavailable")
+          : s.state === "name_taken"
+            ? s.owner
+              ? t("skillHub.install.state.taken", { owner: nameOf(s.owner) })
+              : t("skillHub.install.state.takenHand")
+            : t("skillHub.install.state.ok");
+  // A pick whose row turns out not to be pickable is let go for good — so it
+  // does not come back unasked if that row later turns pickable again — and
+  // that is SAID, on screen and to a screen reader, rather than the radio just
+  // emptying (review round 2).
+  const [dropped, setDropped] = useState<string | null>(null);
+  const chosenState = chosen === null ? undefined : stateOf.get(chosen);
+  useEffect(() => {
+    if (chosen === null || pickable(chosen)) return;
+    const title = items.find((i) => i.item_id === chosen)?.title || chosen;
+    setDropped(t("skillHub.install.dropped", { title, reason: statusText(chosenState) }));
+    setChosen(null);
+    // Only when the pick or its answer changes, not on every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chosen, chosenState?.state, chosenState?.owner]);
+  const pick = (id: string) => {
+    setDropped(null);
+    setChosen(id);
+  };
   const install = useMutation({
     mutationFn: (itemId: string) => client.install(slug, itemId, entry.id),
     onSuccess: (_res, itemId) => {
+      // This dialog knows the answer for that row now: a reopen says it at
+      // once rather than the cached 「可以安裝」 while it asks again (round 3).
+      qc.setQueryData(qk.skillHubTargetState(entry.id, slug, itemId), {
+        state: "installed",
+        owner: "",
+      } satisfies SkillInstallState);
       invalidateHubInstalls(qc);
       void qc.invalidateQueries({ queryKey: qk.itemSkills(slug, itemId) });
       onDone(slug, itemId, items.find((i) => i.item_id === itemId)?.title ?? itemId);
+    },
+    // Failed — usually refused: that row's answer (可以安裝, 檢查中…, or
+    // 現在讀不到 — every pickable one) is no longer worth showing, so it is
+    // dropped and asked again; the row reads 「檢查中…」 meanwhile, not
+    // 「可以安裝」 beside the refusal (review rounds 2, 3).
+    onError: (_err, itemId) => {
+      void qc.resetQueries({ queryKey: qk.skillHubTargetState(entry.id, slug, itemId) });
     },
     meta: { silentError: true },
   });
@@ -416,7 +503,8 @@ function InstallDialog({
           value={slug}
           onChange={(e) => {
             setSlug(e.target.value);
-            setPicked(null);
+            setChosen(null);
+            setDropped(null);
           }}
         >
           {(apps.some((a) => a.slug === slug) ? apps : [{ slug, title: slug }, ...apps]).map((a) => (
@@ -429,7 +517,7 @@ function InstallDialog({
       {missing.length > 0 ? (
         <p className="hint">{t("skillHub.install.missing", { tools: missing.join(", ") })}</p>
       ) : null}
-      <fieldset className="skill-hub-fork-items">
+      <fieldset className="skill-hub-targets">
         <legend>{t("skillHub.install.items")}</legend>
         {targets.isPending ? (
           <p className="muted">{t("skillHub.loading")}</p>
@@ -440,35 +528,57 @@ function InstallDialog({
         ) : items.length === 0 ? (
           <p className="muted">{t("skillHub.install.none")}</p>
         ) : (
-          items.map((it) => (
-            <label key={it.item_id} className="skill-hub-fork-item">
-              <input
-                type="radio"
-                name={`${titleId}-item`}
-                value={it.item_id}
-                checked={picked === it.item_id}
-                disabled={it.state !== "ok"}
-                onChange={() => setPicked(it.item_id)}
-              />
-              <span>{it.title || it.item_id}</span>
-              {it.state === "installed" ? (
-                <span className="muted small">{t("skillHub.install.state.installed")}</span>
-              ) : it.state === "unavailable" ? (
-                <span className="muted small">{t("skillHub.install.state.unavailable")}</span>
-              ) : it.state === "name_taken" ? (
-                <span className="muted small">
-                  {it.owner
-                    ? t("skillHub.install.state.taken", { owner: nameOf(it.owner) })
-                    : t("skillHub.install.state.takenHand")}
-                </span>
-              ) : null}
-            </label>
-          ))
+          // Material 3's two-line list item: the name, and under it what
+          // installing would do there. A row that cannot be picked still says
+          // why (NN/g: a disabled option explains itself).
+          <div className="skill-hub-target-list">
+            {items.map((it) => {
+              const s = stateOf.get(it.item_id);
+              const kind = s === undefined ? "checking" : s.state;
+              return (
+                <label
+                  key={it.item_id}
+                  className="skill-hub-target"
+                  data-state={kind}
+                  data-picked={picked === it.item_id || undefined}
+                >
+                  <input
+                    type="radio"
+                    name={`${titleId}-item`}
+                    value={it.item_id}
+                    checked={picked === it.item_id}
+                    disabled={!pickable(it.item_id)}
+                    onChange={() => pick(it.item_id)}
+                  />
+                  <span className="skill-hub-target-text">
+                    <span className="skill-hub-target-title">{it.title || it.item_id}</span>
+                    <span className="skill-hub-target-status">
+                      {kind === "checking" ? (
+                        <span className="skill-hub-target-spinner" aria-hidden="true" />
+                      ) : kind === "installed" ? (
+                        <Icon name="check" size={13} />
+                      ) : kind === "name_taken" ? (
+                        <Icon name="folder" size={13} />
+                      ) : kind === "unavailable" ? (
+                        <Icon name="clock" size={13} />
+                      ) : null}
+                      {statusText(s)}
+                    </span>
+                  </span>
+                </label>
+              );
+            })}
+          </div>
         )}
       </fieldset>
+      {/* Always on the page: a screen reader announces a change IN a live
+          region, not one that appears together with its text (round 3). */}
+      <p className="hint skill-hub-target-dropped" role="status">
+        {dropped ?? ""}
+      </p>
       {install.isError ? (
         <p className="error" role="alert">
-          {t("skillHub.failed", { reason: describeRefusal(install.error, t) })}
+          {t("skillHub.failed", { reason: describeRefusal(install.error, t, nameOf) })}
         </p>
       ) : null}
       <ModalActions>

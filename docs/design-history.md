@@ -29,6 +29,7 @@
 | [plan-issue-331.md](plan-issue-331.md) | #331 topic-hub 在 step 之外沒有詳細進度 |
 | [plan-issue-748.md](plan-issue-748.md) | #748 一則回答是誰、什麼時候、花多少 |
 | [plan-subagent-model-choice.md](plan-subagent-model-choice.md) | `run_agent` 的呼叫方替子 agent 選模型 |
+| [plan-model-settings.md](plan-model-settings.md) | superuser 在網頁上改模型設定：preset、整份 app.json、平台內部用的模型；疊在 config.yaml 上、先存草稿按套用才生效、版本與退回 |
 | [plan-verify-number.md](plan-verify-number.md) | `verify-number` skill：交出可以查核的數字 |
 | [plan-third-party-tools.md](plan-third-party-tools.md) | 第三方 tool 散布：作者跑自己的 CI，新 sandbox 自動帶上 |
 | [plan-third-party-tool-names.md](plan-third-party-tool-names.md) | 第三方工具同名 command:模型看到 `<本地名>__<command>`,舊的扁平名不撞名時當別名 |
@@ -36,7 +37,11 @@
 | [plan-env-request-card.md](plan-env-request-card.md) | 工具缺環境變數時,AI 在聊天裡出「登入 / 設定」卡片,turn 停在卡片、使用者設定後按重試 |
 | [plan-pptx-preview.md](plan-pptx-preview.md) | workspace 裡的簡報(pptx/ppt/odp)在沙盒轉 PDF、以內容 hash 快取在沙盒旁,用 PDF 檢視器看 |
 | [plan-outside-lookup.md](plan-outside-lookup.md) | 斷網部署：AI 出「請幫我查」卡片，使用者在瀏覽器查網路或開網址，貼回結果存成檔案 |
+| [plan-outside-helper.md](plan-outside-helper.md) | 小幫手：使用者電腦上的 Python 小程式用 Playwright 開 Chrome 代為查網路，搜尋與 AI 自己寫的網址出去前人點頭、先前查到的連結直接開，抓回的整頁（像全選貼上）直接送給 AI；沒連線退回手動流程 |
+| [plan-ext-ai.md](plan-ext-ai.md) | 問外部AI：AI 起草問題、人按「問外部AI」，小幫手在使用者的 Chrome 裡打開公司的網頁 AI、貼上、送出、等回答寫完帶回；網頁怎麼操作由公司寫的一個 Python 檔決定，打包進小幫手 |
+| [plan-tool-usage-stats.md](plan-tool-usage-stats.md) | 工具使用統計：管理者在 Diagnostics 看 AI 用了哪些工具、誰用、在哪個場合、失敗幾次、平均多久 |
 | [plan-tools-picker-groups.md](plan-tools-picker-groups.md) | 工具挑選器依套件摺疊、內建工具一組、每組三態 |
+| [plan-tool-on-demand-loading.md](plan-tool-on-demand-loading.md) | 工具按需載入：wire 的 tools 陣列就是目錄（名字＋100 字元描述＋空 schema），用到才載入完整 schema；載入與重試不入歷史 |
 | [plan-user-env-exec-injection.md](plan-user-env-exec-injection.md) | 使用者環境變數改由 exec 注入（取代 `.userenv` 檔） |
 | [plan-view-plugins-pr5-finish.md](plan-view-plugins-pr5-finish.md) | #847 / #848 在 #855 分支上的收尾（PR5） |
 | [plan-marking-tuples.md](plan-marking-tuples.md) | #861 marking 記住選到的整組 key（D1–D6） |
@@ -99,6 +104,7 @@
 | [plan-sandbox-sot.md](plan-sandbox-sot.md) | sandbox 真相來源（source-of-truth）設計 |
 | [plan-sandbox-resource-quota.md](plan-sandbox-resource-quota.md) | 依 App 設定 sandbox 資源（cpu/memory/disk）+ 每人跨 App 總量上限；債務人是 item 的 `owner`（前提見 #687） |
 | [plan-item-sandbox-resources.md](plan-item-sandbox-resources.md) | 每個 item 自己決定環境開多大（使用者可調、由 owner 的額度支出）；狀態／用量／關閉搬到 item 頁面；閘門是 `change_permission` |
+| [plan-item-size-ceiling.md](plan-item-size-ceiling.md) | 一個 item 可以調到部署的 `resources.per_app.max`：App 的值（app.json 或 `per_app.default`）改當預設大小、`max` 才是 item 的天花板，沒設 `max` 的維度維持舊規則；面板在輸入前寫出「這個 App 最多 X」（推翻 plan-item-sandbox-resources 的「item 的天花板是 App 的值」） |
 | [plan-llm-failover.md](plan-llm-failover.md) | LLM failover / 多供應商備援 |
 | [plan-friendly-errors.md](plan-friendly-errors.md) | 錯誤要說人話：發生什麼、怎麼辦、原文收合在技術細節；重試只在單次 LLM 呼叫 |
 | [plan-sanity-checks.md](plan-sanity-checks.md) | 開機健康檢查 / sanity matrix |
@@ -111,10 +117,11 @@
 | [plan-skill-hub-ui-polish.md](plan-skill-hub-ui-polish.md) | skill hub 的 UI 打磨（#826）：九段 demo 錄影抓到的 22 個問題，每一項對照教科書做法（Material 3 / Apple HIG / NN/g / Polaris / GOV.UK / MUI）決定 D1–D17——對話框預設留白、搜尋框不失焦、錯誤只報一次、成功提示、安裝前先標「已有同名 skill」、圖示各自專用＋tooltip、可見範圍對話框走 i18n、伺服器拒絕句改 code、工具回話分段、窄寬的頂欄與麵包屑；版面一律真 Chromium 量 1280／390 |
 | [plan-skill-hub-history.md](plan-skill-hub-history.md) | skill hub 的歷史與回溯、下載/使用次數、問 AI 該裝哪個(grill 完成,P1–P10):一個 skill 一個 bare git repo(自己的 `skill_hub.git_root`)、`master` = 目前版本、push `--force-with-lease` 搶鎖、回復 = `master` 指回舊 commit、每個 revision 打 tag `r-<revision id>`、hub 副本 `.origin` 記 commit、LFS 以路徑模式、檔案數上限 1000;使用次數記憶體累積每 2 小時寫出;只在 item 聊天問 AI、`show_skill_hub_entry` 卡片 |
 | [plan-skill-hub-ux-redo.md](plan-skill-hub-ux-redo.md) | skill hub 版面與資訊架構重做：列表改緊湊列表、只列原作（fork 數連到原作頁）、owner 篩選與「最近更新」、每次 50 筆「載入更多」；skill 頁分頁籤（說明／檔案／版本紀錄／fork）＋右側欄、「安裝到 workspace…」、你裝在哪、管理 ▾；版本自動編號；檔案樹取代膠囊；workspace 的 skill 面板重排；畫面文字 item → workspace；寬度等 web demo 再定 |
+| [plan-skill-install-picker.md](plan-skill-install-picker.md) | skill 頁「安裝到 workspace…」的清單只問資料庫、一打開就出現；每列再各自問「裝下去會怎樣」（檢查中可選、同時最多 4 列、忙碌的沙盒不再卡住整張清單），版面照 Material 3 兩行式清單（推翻 ux-redo D6 的「整張清單等每個 workspace 都標好才出現」） |
 | [plan-chat-video.md](plan-chat-video.md) | **PR #817(script 版 P1–P5 已做)**。把一段對話紀錄做成影片：吃 `.chat.json`、一條指令、不打 LLM；純 HTML/CSS 的 zoom 推進輸入框、指定長寬；核心是純函式 + msgspec options，為之後的前端按鈕 + 獨立 job / worker pod 鋪路 |
 | [plan-headless-env.md](plan-headless-env.md) | 沒有人按送出的 turn（item 排程、goal driver、event trigger、整條 workflow）也拿得到環境變數：`IRequestEnv` 多一個 `env_without_request(user_id, item_id)`，預設 `{}`，部署的 impl 決定回 service account 還是什麼都不給；平台仍不認得 service account 這個詞；改變 #714「workflow 整條不接」的定案並寫明為何原顧慮不再成立 |
 | [plan-wui-viewer-login.md](plan-wui-viewer-login.md) | 看頁面的人用自己的登入：環境變數分 shared（item 上，不動）與 private（每人每 item 一份，只有本人讀得到）兩層，每個 key 一種政策（`shared > private` 預設=今天的行為 / `private > shared` / `private only`）；callTool、聊天、頁面起的 run 用按的人，排程要本人按「用我的身分執行」才綁定、內容一改就失效；Env 面板分「只有我／所有參與者」兩分頁、tool 下拉換成可收合分段；`/w/` 在 iframe 上方加平台列（line of death） |
-| [plan-personal-env.md](plan-personal-env.md) | 我的環境變數：每人一份、所有 item 通用的個人值；只進到提供方式設成 Private first／Private only 的 item；Env 面板一層一個分頁（Shared／Private／Private(跨workspace)），在哪個分頁登入就寫進哪一層，在這一頁或 Private(跨workspace) 登入一處就全部更新；無人在場的執行沿用「替誰跑」、在項目個人值底下多墊一層；失敗通知也發給代理人；推翻 plan-wui-viewer-login 的「private 綁 (user, item)」 |
+| [plan-personal-env.md](plan-personal-env.md) | 我的環境變數：每人一份、所有 item 通用的個人值；照 D1，每種提供方式退到個人值時都讀它（2026-10-12 更正：Shared 也讀）；Env 面板一層一個分頁（Shared／Private／Private(跨workspace)），在哪個分頁登入就寫進哪一層，在這一頁或 Private(跨workspace) 登入一處就全部更新；無人在場的執行沿用「替誰跑」、在項目個人值底下多墊一層；失敗通知也發給代理人；推翻 plan-wui-viewer-login 的「private 綁 (user, item)」 |
 | [plan-tool-env-declaration.md](plan-tool-env-declaration.md) | #750 tool 宣告自己要哪些環境變數 + 第二方帳密換 env：手寫選填宣告跟著 package 走、沒宣告≠不需要、便民工具不是閘門；附「為何 tool 不指名方法」 |
 | [plan-profile-python-env.md](plan-profile-python-env.md) | profile 自帶 python 環境:起始 `pyproject.toml`+`uv.lock` 決定 sandbox 套件,**每輪對話**跑一次 `uv sync --frozen --inexact`(`--inexact` 才不會刪掉使用者自己裝的);附「為何 venv 不放 workspace」「共用 cache 為何必須唯讀(hardlink 別名)」與十條被實作/review 推翻的原始宣稱 |
 | [plan-sci-plot.md](plan-sci-plot.md) | #285 sci-plot 科學繪圖工具 |
@@ -135,6 +142,7 @@
 | [plan-stop-reliability.md](plan-stop-reliability.md) | Stop 的可靠性 |
 | [plan-archive-pack.md](plan-archive-pack.md) | 回收時把備份多存成一個 `<item>.pack.<gen>-<bytes>.tar`，再開時 NFS 只讀 1 次不讀 89k 次；樹仍是真相、名字帶 gen 自然作廢 |
 | [plan-tool-running-version.md](plan-tool-running-version.md) | 第三方工具「沙盒裡實際在跑哪一版」：建立沙盒時把掛的 `{sha, version}` 寫進共用位址列；AI 的工具說明與工具選單改說實際版本，不一致時只告知、選單一顆「關閉沙盒以更新」；查不到當最新 |
+| [plan-capacity-usage.md](plan-capacity-usage.md) | 容量規劃：每個人在每個地方（API、worker、沙盒、Postgres、GPU）用了多少 CPU、記憶體、磁碟、GPU，人更多時要買幾台機器、幾張卡、何時要下單——平台寫用量紀錄並定義四個資料來源介面（實作由運營方補），superuser 才看得到的九個視圖 |
 
 ## 前端與介面
 
@@ -174,6 +182,7 @@
 | [plan-wui.md](plan-wui.md) | WUI：資料夾當可互動的網頁 |
 | [plan-wui-deploy.md](plan-wui-deploy.md) | WUI「Deploy」：一個直接落在頁面上的 URL |
 | [plan-wui-overview.md](plan-wui-overview.md) | WUI 總覽：列出所有已部署 WUI 的一頁 |
+| [plan-wui-call-agent.md](plan-wui-call-agent.md) | WUI 頁面叫能力的兩種叫法：`call…` 拿結果、`start…` 拿工作（等結果／看進度／停止），每個能力都有、由 AI 自己挑；頁面能叫宣告過的 subagent；既有 `callTool`、`startRun` 不變 |
 | [plan-wui-overview-icon-favourites.md](plan-wui-overview-icon-favourites.md) | WUI 總覽：頁面自己的 icon 與瀏覽者的最愛 |
 | [plan-wui-multipage.md](plan-wui-multipage.md) | WUI 多頁（MPA）：一個資料夾多份 HTML，例如 mkdocs 站——頁面改從自己的網址載入（綁人、item、資料夾的通行證），換頁、錨點、讀自己資料夾的檔都是瀏覽器原生；外部連結經平台確認框才開；部署不放行時退回單頁組裝 |
 

@@ -16,9 +16,13 @@ between them. A name with no policy is ``shared_first`` — the merge every turn
 did before the private layer existed (`{**caller_env, **item_env}`, #714), so
 an item nobody has touched behaves exactly as it did.
 
-My environment variables are read ONLY for a name whose policy asks for a
-personal value (``private_first`` / ``private_only``): they hold the person's
-values for every item, so an item that never asked for a name does not get it.
+A private value is the person's value for this item OR their value for every
+item ("my environment variables") — D1 of `docs/plan-personal-env.md`, this
+item's winning when both hold the name (D4). So every policy that reaches the
+private layer reads both, ``shared_first`` included: it falls back to them when
+the shared copy is not set. Until 2026-10-12 ``shared_first`` read only this
+item's value, which left a name no tool declared (so nobody gave it a policy)
+unable to get my value at all (D2 as corrected).
 
 A policy decides WHERE a value comes from, never WHETHER it must exist: a name
 neither layer supplies is left out, the same as a name nobody set. Whether a
@@ -84,7 +88,7 @@ def resolve_env(
 
     | policy          | order                                              |
     |-----------------|----------------------------------------------------|
-    | ``shared_first``  | shared → private → service                       |
+    | ``shared_first``  | shared → private → personal → service            |
     | ``private_first`` | private → personal → service → shared            |
     | ``private_only``  | private → personal → service                     |
 
@@ -94,25 +98,24 @@ def resolve_env(
     PATCH-able record, and a stray value must not become a behaviour nobody
     wrote."""
     service = service or {}
-    # Not consulted by `shared_first`: that order is where "an item that never
-    # asked for a name does not get it" (D2) is decided — once, here.
     personal = personal or {}
     env: dict[str, str] = {}
     # Walked in the old merge's key order (the service account sat at the bottom
     # of the private dict): `_tool_env` joins the names into
-    # `SANDBOX_USER_ENV_KEYS`, so order is something a tool can see. Only the
-    # personal names this item could use take part in the walk — one it never
-    # asked for must not move the others, or the order would tell its tools I
-    # hold such a name (round 1, N1).
-    asked = {n: v for n, v in personal.items() if policy.get(n) in (PRIVATE_FIRST, PRIVATE_ONLY)}
-    for name in {**service, **asked, **private, **shared}:
+    # `SANDBOX_USER_ENV_KEYS`, so order is something a tool can see. A name of
+    # mine that this item also holds takes its place from the item, never from
+    # me: placed by me it would move ahead of the item's others, and the order
+    # would tell its tools I hold that name even where the item's value wins
+    # (round 1, N1). A name only I hold sits where it ranks, under this item's.
+    mine_only = {n: v for n, v in personal.items() if n not in private and n not in shared}
+    for name in {**service, **mine_only, **private, **shared}:
         rule = policy.get(name, SHARED_FIRST)
         if rule == PRIVATE_ONLY:
             order = (private, personal, service)
         elif rule == PRIVATE_FIRST:
             order = (private, personal, service, shared)
         else:
-            order = (shared, private, service)
+            order = (shared, private, personal, service)
         for layer in order:
             # A blank value is not a value: it does not hide the next layer, and
             # a name blank everywhere is not handed to the tool at all.

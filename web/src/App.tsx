@@ -9,12 +9,15 @@ import { AppWorkspace } from "./pages/AppWorkspace";
 import { DiagnosticsPage } from "./pages/DiagnosticsPage";
 import { GroupsPage } from "./pages/GroupsPage";
 import { MyEnvPage } from "./pages/MyEnvPage";
+import { AiWorkspaceHelperPage } from "./pages/AiWorkspaceHelperPage";
 import { MyResourcesPage } from "./pages/MyResourcesPage";
 import { SkillHubEntryPage } from "./pages/SkillHubEntryPage";
 import { SkillHubPage } from "./pages/SkillHubPage";
 import { SchedulesOverviewPage } from "./pages/SchedulesOverviewPage";
 import { WuiOverviewPage } from "./pages/WuiOverviewPage";
 import { WorkCalendarPage } from "./pages/WorkCalendarPage";
+import { CapacityPage } from "./pages/CapacityPage";
+import { ModelSettingsPage } from "./pages/ModelSettingsPage";
 import { HelpPage } from "./pages/HelpPage";
 import { KbDocPage } from "./pages/kb/KbDocPage";
 import { kbRoutes } from "./pages/kb/kbRoutes";
@@ -72,11 +75,16 @@ export function AppRoutes() {
             superusers + anyone who belongs to a group. */}
         <Route path="/groups" element={<GroupsPage />} />
         <Route path="/work-calendar" element={<WorkCalendarPage />} />
+        <Route path="/capacity" element={<CapacityPage />} />
+        {/* docs/plan-model-settings.md: superuser-only; the page says so to anyone else. */}
+        <Route path="/settings/models" element={<ModelSettingsPage />} />
         {/* What I am holding vs what I may hold. The limits refuse rather
             than evict, so this is where a refused person goes to free
             something up — without it, being at your limit is a dead end. */}
         <Route path="/my-resources" element={<MyResourcesPage />} />
         <Route path="/my-env" element={<MyEnvPage />} />
+        {/* Where the helper is downloaded (docs/plan-outside-helper.md §3.6). */}
+        <Route path="/ai-workspace-helper" element={<AiWorkspaceHelperPage />} />
         {/* Every Deployed WUI the viewer may open (docs/plan-wui-overview.md).
             Inside the shell: it is a place to find pages; the pages themselves
             open at `/w/` outside it. */}

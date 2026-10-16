@@ -125,6 +125,26 @@ def run(args: Args) -> None:                        # 3. 拿驗證過的 args �
 從不 introspect package。所以 command 清單住在 package 自己的 `cli.py`/`COMMANDS` 裡,
 `commands.json` 只是 prebuild 產出的**快照**——改了 command 就要重跑 prebuild 才會生效。
 
+### command 的第一句話會被當成目錄那一行
+
+模型每一輪拿到的不是每個 command 的完整參數 schema,而是一份**目錄**:名字 +
+**description 的第一句**(超過 100 字元會在詞界或標點收尾)。要用的時候才會拿到完整
+描述與 schema——模型直接呼叫它就會拿到,或是它自己呼叫 `load_tool`。細節見
+[`plan-tool-on-demand-loading.md`](plan-tool-on-demand-loading.md)。
+
+對寫工具的人,只有一件事要改做法:**`DESCRIPTION` 的第一句要自己站得住**。
+
+```python
+# 好:第一句就說清楚這個 command 做什麼,模型只看這句也能決定要不要用
+DESCRIPTION = "抓取一片晶圓的完整處理歷程。可以給批號與日期範圍,回每個站點一列。"
+
+# 不好:第一句在講前提,模型只看這句不知道它能幹嘛
+DESCRIPTION = "這個 command 需要先設好 WAFER_DB_URL。它會抓取晶圓歷程…"
+```
+
+後面幾句不會被丟掉——載入之後模型拿到的是完整的 `DESCRIPTION`(以及套件名、版本、
+作者那一段)。截短只影響「要不要選這個 command」那一步。
+
 ### 用 decorator 版 dispatcher（省掉手寫 `main()`）
 
 上面的 `cli.py` 是**手寫** dispatcher(讓契約攤在眼前)。嫌煩就用 framework 的
@@ -220,9 +240,10 @@ def main() -> None:        # pyproject.toml [project.scripts] 指向這裡
 4. **重啟** app——開機時 `tooling/registry.discover_packages` 掃 `.workspace-tools/` 建
    `PackageInfo`,`build_function_tools` 依 `allowed` 展開成 `FunctionTool`(第一方套件用扁平
    command name,兩個第一方套件撞名會 raise;第三方工具的 command 帶本地名前綴 `<本地名>__<command>`,
-   不會撞,見 `plan-third-party-tool-names.md`)。tool 的 name/description/JSON schema 也會被
-   `agent/tool_prompt.format_tools_for_prompt` render 進 system prompt 末段,免得小模型把
-   function tool 當成 PATH 上的 shell binary。
+   不會撞,見 `plan-third-party-tool-names.md`)。tool 的 name/description/JSON schema 隨 API 的
+   `tools` 一起送出;**不再**被 render 進 system prompt(那份複本已移除,見上面「command 的第一句話
+   會被當成目錄那一行」與 [`plan-tool-on-demand-loading.md`](plan-tool-on-demand-loading.md))。
+   system prompt 只留一段固定的話,免得小模型把 function tool 當成 PATH 上的 shell binary。
 
 `app.json` 是**上限**;profile 的 `_profile.json` 可再收窄成子集;per-item 的 `tool_prefs`
 再做三態覆寫(#322 的三層 resolve,見 `apps/catalog.py`)。
@@ -378,8 +399,8 @@ server:
 上面的 `env_vars` 是 **shared** 層:一個 item 一份,能打開 item 的人都讀得到。另外有一層
 **private**:只有本人讀得到(連 superuser 也不行——路由只認「我的」,沒有指定別人的參數)。
 它有兩種範圍:**這個 item 的**(每個人、每個 item 一份),以及**所有 item 通用的**「我的環境變數」
-(每個人一份,`/my-env`,[plan-personal-env](plan-personal-env.md))。後者只給把那個變數設成
-Private first／Private only 的 item;同名時這個 item 的值優先。Env 面板一層一個分頁:「Shared」「Private」(這個
+(每個人一份,`/my-env`,[plan-personal-env](plan-personal-env.md))。每一種提供方式退到個人值時兩者都讀
+(Shared 只在共用值沒填時才退到個人值);同名時這個 item 的值優先。Env 面板一層一個分頁:「Shared」「Private」(這個
 item 的)「Private(跨workspace)」(和 `/my-env` 同一份),在哪個分頁手 key 或按登入就寫進哪一層。這個 item
 的值來源有三個:本人在「Private」分頁手 key、本人在那個分頁按登入(`IEnvProvider`)、以及部署的 `IRequestEnv.env_for` 自動寫入——**只在**本人於這個 item 聊天送出
 或頁面 `callTool` 時問它(其他請求不問)。後者存在**另一列**、值變了就**整份取代**:它沒再回的名字
@@ -710,8 +731,9 @@ python -m workspace_app.skill_eval --skill ./tune/SKILL.md \
 
 **模型不用在命令列指定。** 那一輪是用 App 自己的解析路徑 `AppCatalog.resolve` 取得的——
 跟真正的 turn 同一個呼叫——所以 model、endpoint、system prompt 全部來自
-`config.yaml` + `app.json` + profile。要換模型就 `--preset <config 裡的 preset 名>`
-(也就是 App model picker 上那些名字),不給就用該 App picker 的第一個。`--config` 指向
+`config.yaml` + `app.json` + profile,**再疊上模型設定頁已套用的版本**(它會開部署的 specstar 後端去讀;
+頁面改過的值贏過 `config.yaml`,見 `plan-model-settings.md` P6)。要換模型就 `--preset <preset 名>`
+(也就是 App model picker 上那些名字,含頁面新增的),不給就用該 App picker 的第一個。`--config` 指向
 非預設位置的 config.yaml。
 
 這一點不是潔癖:自己重組 prompt 那版漏掉了 `## Available skills` 索引,於是模型從頭到尾

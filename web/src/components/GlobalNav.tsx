@@ -409,7 +409,7 @@ export function GlobalNav({ healthClient }: { healthClient?: HealthApi }) {
   return (
     <header
       style={{
-        height: 40,
+        height: "var(--nav-height)",
         flexShrink: 0,
         display: "flex",
         alignItems: "center",

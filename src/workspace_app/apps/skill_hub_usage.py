@@ -3,17 +3,17 @@
 
 An install (of the entry's current version, by the Skills panel or the
 `install_skill` tool) and a `read_skill` of a skill hub copy each add one to
-THIS pod's memory — a dict increment, so nothing on the request path waits
-for storage (U2). A flush, every two hours and when the pod stops, adds what
-accumulated to this pod's row for the day and prunes it to one revision: a
+THIS process's memory — a dict increment, so nothing on the request path
+waits for storage (U2). A flush, every two hours and when the process stops,
+adds what accumulated to this process's row for the day and prunes it to one revision: a
 counter that kept every revision would grow by one per flush (U3). The
 total is a `Sum` over the entry's rows. Who and in which item are recorded
 on the row and never shown (U5).
 
-What a pod that dies without a SIGTERM had not flushed is lost — what
+What a process that dies without a SIGTERM had not flushed is lost — what
 accumulated since its last successful flush (one interval, unless flushes were
-failing). Rows are not shared between pods: the id carries the pod's
-``HOSTNAME`` — any two processes without one are both ``local`` and share rows.
+failing). Rows are not shared between processes: the id carries
+:func:`writer_name` (host + pid).
 """
 
 from __future__ import annotations
@@ -24,6 +24,7 @@ import datetime as dt
 import logging
 import os
 import re
+import socket
 from collections.abc import Callable, Iterable
 from urllib.parse import quote
 
@@ -33,7 +34,7 @@ from specstar.types import ResourceIDNotFoundError
 
 logger = logging.getLogger(__name__)
 
-#: How often a pod writes what it counted (U4).
+#: How often a process writes what it counted (U4).
 FLUSH_INTERVAL_S = 2 * 60 * 60
 
 
@@ -43,7 +44,7 @@ class UserItemUsage(Struct, kw_only=True):
 
 
 class SkillHubUsage(Struct, kw_only=True):
-    """One pod's counts for one entry on one day."""
+    """One process's counts for one entry on one day."""
 
     entry_id: str
     day: str
@@ -62,9 +63,16 @@ def register_skill_hub_usage(spec: SpecStar) -> None:
         spec.add_model(SkillHubUsage, indexed_fields=["entry_id", "installs", "uses"])
 
 
-def pod_name() -> str:
-    """This pod's name — k8s puts it in ``HOSTNAME``."""
-    return os.environ.get("HOSTNAME") or "local"
+def writer_name() -> str:
+    """The name this process writes its counter rows under — the skill hub's
+    and the tool-usage statistics' alike: host + pid. Rows are owned by their
+    writer and written unlocked (get → add → update), so two processes must
+    never share one. The pod name alone does not do that: on a VM / in a plain
+    shell `HOSTNAME` is a shell variable, not in the environment, and an API
+    with its workers on one VM would all write `~local`, each overwriting the
+    others' counts. A restart may reuse the name — harmless, the old process is
+    gone."""
+    return f"{socket.gethostname()}-{os.getpid()}"
 
 
 #: What an entry id can be (`SkillHubRepos.path`'s rule): anything else is not one.
@@ -72,7 +80,7 @@ _ENTRY_ID = re.compile(r"[A-Za-z0-9_-]+")
 
 
 def _row_id(entry_id: str, day: str, pod: str) -> str:
-    # A specstar id holds no `/`; the pod name is the only part that is not
+    # A specstar id holds no `/`; the writer's name is the only part that is not
     # already a safe token.
     return f"{entry_id}~{day}~{quote(pod, safe='')}"
 
@@ -112,7 +120,7 @@ class UsageCounter:
         return self._spec.get_resource_manager(SkillHubUsage)
 
     async def flush(self) -> None:
-        """Add what this pod counted to its rows for today. An entry whose
+        """Add what this process counted to its rows for today. An entry whose
         write fails keeps its counts for the next flush, and the failure is
         raised once every other entry has been written.
 
@@ -186,7 +194,7 @@ class UsageCounter:
         return out
 
     def counted_since(self) -> str:
-        """The first day any pod wrote a count (`YYYY-MM-DD`), or "" before
+        """The first day any process wrote a count (`YYYY-MM-DD`), or "" before
         that. Once found it never changes, so it is asked of the store once."""
         if not self._since:
             first = QB.all().sort(QB.created_time().asc(), QB.resource_id().asc()).limit(1).build()

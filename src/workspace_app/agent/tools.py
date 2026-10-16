@@ -2476,7 +2476,8 @@ async def read_skill_impl(ctx: RunContextWrapper[AgentToolContext], name: str) -
 
     # #298: a user+AI co-created skill in this workspace shadows any package
     # skill of the same name. Read live (uncached) — it may have just been saved.
-    from ..apps.skills import augment_shared_skill_body, materialize_skill
+    from ..apps.skills import augment_shared_skill_body, materialize_skill, usage_source
+    from .tool_usage import record_skill
 
     def _wui_callable(actx: AgentToolContext) -> list[str]:
         """Which of this turn's tools a WUI may call.
@@ -2522,13 +2523,17 @@ async def read_skill_impl(ctx: RunContextWrapper[AgentToolContext], name: str) -
             # firing, freezing the workflow syntax the AI writes against on the
             # day the skill was copied. The AUTHORED text is what gets copied and
             # edited; the DERIVED part is recomputed every read.
-            return augment_shared_skill_body(
+            out = augment_shared_skill_body(
                 name,
                 body,
                 ctx.context.app_slug,
                 ctx.context.template_profile,
                 wui_tools=_wui_callable(ctx.context),
+                # #942: the sub-agents its chat delegates to, from the same list.
+                wui_agents=[d.name for d in ctx.context.subagent_defs],
             )
+            record_skill(ctx.context, name, usage_source(origin))
+            return out
 
     # #298 Q7: a built-in (shared) skill the App opted into — author-skill etc.
     from ..apps.shared_skills import load_shared_skill, shared_skill_source
@@ -2537,15 +2542,19 @@ async def read_skill_impl(ctx: RunContextWrapper[AgentToolContext], name: str) -
         try:
             # plan §3.2: author-workflow's static body is purpose-only; append the
             # machine-derived DSL grammar + this app's capability/tool boundaries.
-            return augment_shared_skill_body(
+            out = augment_shared_skill_body(
                 name,
                 load_shared_skill(name),
                 ctx.context.app_slug,
                 ctx.context.template_profile,
                 wui_tools=_wui_callable(ctx.context),
+                # #942: the sub-agents its chat delegates to, from the same list.
+                wui_agents=[d.name for d in ctx.context.subagent_defs],
             )
         except SkillError as e:
             return f"error: {e}"
+        record_skill(ctx.context, name, "shared")
+        return out
 
     slug = ctx.context.app_slug
     profile = ctx.context.template_profile
@@ -2560,7 +2569,7 @@ async def read_skill_impl(ctx: RunContextWrapper[AgentToolContext], name: str) -
             return f"error: unknown skill {name!r}. available skills: {', '.join(ws)}"
         return "error: read_skill is only available in an App workspace turn"
     try:
-        return load_skill(slug, profile, name)
+        out = load_skill(slug, profile, name)
     except SkillError as e:
         declared = _declared_shared_skills(slug)
         names = [m.name for m in merged_profile_skills(slug, profile, declared)]
@@ -2568,6 +2577,8 @@ async def read_skill_impl(ctx: RunContextWrapper[AgentToolContext], name: str) -
             names += [m.name for m in await workspace_skill_metas(files, inv)]
         avail = ", ".join(sorted(set(names))) or "(none)"
         return f"error: {e}. available skills: {avail}"
+    record_skill(ctx.context, name, "profile")
+    return out
 
 
 async def save_skill_impl(
@@ -4159,13 +4170,13 @@ def _with_absent_convention(tool: FunctionTool) -> FunctionTool:
     It is the missing sentence, derived from the schema so any tool that grows an
     optional arg is covered without anyone remembering.
 
-    It rides on the tool DESCRIPTION, which means it reaches the model through the
-    native tool definition AND through `format_tools_for_prompt`, which renders
-    descriptions verbatim into the system prompt. So it does appear twice per turn
-    — worth stating plainly rather than claiming otherwise. The cost is bounded:
-    only 6 of 31 built-ins have nullable args, so this is one short line each, and
-    the alternative (a prompt-only note) would leave the wire-level tool
-    definition silent on its own convention."""
+    It rides on the tool DESCRIPTION, so it reaches the model with the tool
+    definition itself — once. (It used to arrive twice: `format_tools_for_prompt`
+    rendered every description into the system prompt as well, until
+    `docs/plan-tool-on-demand-loading.md` removed that second copy.) The cost is
+    bounded: only 6 of 31 built-ins have nullable args, so this is one short line
+    each, and the alternative (a prompt-only note) would leave the wire-level
+    tool definition silent on its own convention."""
     names = _nullable_arg_names(tool)
     if not names:
         return tool

@@ -1,0 +1,78 @@
+{
+ "cases": [
+  {
+   "targets": [
+    {
+     "name": "Google",
+     "url": "https://0.example/?q={q}"
+    }
+   ],
+   "picked": "Google"
+  },
+  {
+   "targets": [
+    {
+     "name": "Corp search",
+     "url": "https://0.example/?q={q}"
+    },
+    {
+     "name": "Google",
+     "url": "https://1.example/?q={q}"
+    }
+   ],
+   "picked": "Google"
+  },
+  {
+   "targets": [
+    {
+     "name": "Corp search",
+     "url": "https://0.example/?q={q}"
+    }
+   ],
+   "picked": "Corp search"
+  },
+  {
+   "targets": [
+    {
+     "name": "Bing",
+     "url": "https://0.example/?q={q}"
+    },
+    {
+     "name": "DuckDuckGo",
+     "url": "https://1.example/?q={q}"
+    }
+   ],
+   "picked": "Bing"
+  },
+  {
+   "targets": [
+    {
+     "name": "google",
+     "url": "https://0.example/?q={q}"
+    },
+    {
+     "name": "Bing",
+     "url": "https://1.example/?q={q}"
+    }
+   ],
+   "picked": "google"
+  },
+  {
+   "targets": [
+    {
+     "name": "Google ",
+     "url": "https://0.example/?q={q}"
+    },
+    {
+     "name": "Bing",
+     "url": "https://1.example/?q={q}"
+    }
+   ],
+   "picked": "Google "
+  },
+  {
+   "targets": [],
+   "picked": null
+  }
+ ]
+}

@@ -283,3 +283,42 @@ def test_replay_offers_the_tools_the_turn_held_not_the_entry_level_grant():
     # (plan-outside-lookup D6), so the replay offers it too (review round 2).
     assert "ask_user" in offered
     assert "ask_outside" in offered
+
+
+def test_replay_offers_ask_ext_ai_where_the_deploy_turned_it_on():
+    """docs/plan-ext-ai.md D5: a chat turn on such a deploy held 問外部AI, so
+    its replay offers it too — the menu must match the live turn's."""
+
+    def offered(**app_kw) -> set[str]:
+        completion = _FakeCompletion([_chunk("ok")])
+        spec = make_spec()
+        app = create_app(
+            spec=spec,
+            sandbox=MockSandbox(),
+            filestore=MemoryFileStore(),
+            runner=_Runner(),
+            replay_service=ReplayService(completion=completion),
+            **app_kw,
+        )
+        rid = (
+            spec.get_resource_manager(RcaInvestigation)
+            .create(RcaInvestigation(title="t", owner="alice"))
+            .resource_id
+        )
+        spec.get_resource_manager(Conversation).create(
+            Conversation(
+                item_id=rid,
+                messages=[
+                    Message(role="user", content="hi"),
+                    Message(role="assistant", content="ok"),
+                ],
+            )
+        )
+        resp = TestClient(app).post(
+            "/health/replay/turn", json={"source": "rca", "thread_id": rid, "message_index": 1}
+        )
+        assert resp.status_code == 200, resp.text
+        return {t["function"]["name"] for t in completion.kwargs["tools"]}
+
+    assert "ask_ext_ai" in offered(ext_ai_enabled=True)
+    assert "ask_ext_ai" not in offered()

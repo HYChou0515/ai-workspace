@@ -1250,6 +1250,28 @@ describe("EntryView — ask_outside", () => {
   });
 });
 
+// docs/plan-ext-ai.md §3: `ask_ext_ai` declares the same card, its third kind.
+describe("EntryView — ask_ext_ai", () => {
+  const call = (output: string) => ({
+    kind: "tool_call" as const,
+    call: { call_id: "c1", name: "ask_ext_ai", status: "done" as const, args: {}, output },
+  });
+
+  it("draws the declared question as the card", () => {
+    render(
+      <EntryView entry={call('Asked.\n[outside-lookup]{"why":"compare them","question":"A or B?"}')} />,
+    );
+    expect(screen.getByTestId("outside-lookup-card-stub")).toHaveTextContent("compare them");
+    expect(document.querySelector("details")).toBeNull();
+  });
+
+  it("falls back to the ordinary tool card, labelled, when the call was refused", () => {
+    render(<EntryView entry={call("error: give `question`")} />);
+    expect(screen.queryByTestId("outside-lookup-card-stub")).toBeNull();
+    expect(screen.getByText(translate("zh-TW", "tool.ask_ext_ai"))).toBeInTheDocument();
+  });
+});
+
 // plan-skill-hub-ux-redo (audit #26): a publish ends with the same marker, so
 // the person gets the entry they just published as the same live card.
 describe("EntryView — publish_skill", () => {

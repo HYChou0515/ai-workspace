@@ -57,7 +57,7 @@ class _Recording(ScriptedAgentRunner):
             yield ev
 
 
-def _build(monkeypatch, prefs: dict[str, bool], profile: str = "default"):
+def _build(monkeypatch, prefs: dict[str, bool], profile: str = "default", **app_kw):
     """A real app with the two fake packages, one rca item carrying `prefs`, and
     the turn builder + workflow executor the app composed."""
     spec = make_spec()
@@ -85,6 +85,7 @@ def _build(monkeypatch, prefs: dict[str, bool], profile: str = "default"):
         filestore=filestore,
         runner=runner,
         packages=list(PACKAGES),
+        **app_kw,
     )
     item_id = (
         spec.get_resource_manager(RcaInvestigation)
@@ -183,8 +184,8 @@ async def test_a_workflow_step_naming_a_package_gets_the_commands_the_item_holds
     assert "pareto" in instr  # off by the item's preference: that IS the picker's business
 
 
-def _ask_outside_held(ctx) -> bool:
-    """Whether the runner would register `ask_outside` for `ctx` — through the
+def _ask_outside_held(ctx, tool: str = "ask_outside") -> bool:
+    """Whether the runner would register `tool` for `ctx` — through the
     runner's OWN kwargs, so the hop from the context to `_agent_for` is walked
     too, not restated here."""
     from workspace_app.api.litellm_runner import LitellmAgentRunner
@@ -192,7 +193,7 @@ def _ask_outside_held(ctx) -> bool:
 
     kw = LitellmAgentRunner()._agent_kwargs(ctx, LlmCredential)
     agent = _agent_for(ctx.agent_config, ctx.packages, ctx.unavailable_tools, **kw)
-    return "ask_outside" in {t.name for t in agent.tools}
+    return tool in {t.name for t in agent.tools}
 
 
 async def test_a_chat_turn_can_ask_the_person_to_look_outside(monkeypatch):
@@ -214,6 +215,29 @@ async def test_a_workflow_step_cannot_even_holding_ask_user(monkeypatch):
 
     assert "ask_user" in (ctx.agent_config.allowed_tools or [])
     assert not _ask_outside_held(ctx)
+
+
+async def test_a_chat_turn_can_ask_the_external_ai_where_the_deploy_turned_it_on(monkeypatch):
+    """docs/plan-ext-ai.md D5: `server.ext_ai_enabled` reaches the chat turn."""
+    spec, builder, _, _, iid = _build(monkeypatch, {}, ext_ai_enabled=True)
+    ctx = await _chat_ctx(spec, builder, iid)
+
+    assert _ask_outside_held(ctx, "ask_ext_ai")
+
+
+async def test_a_chat_turn_on_a_deploy_that_did_not_cannot(monkeypatch):
+    spec, builder, _, _, iid = _build(monkeypatch, {})
+    ctx = await _chat_ctx(spec, builder, iid)
+
+    assert not _ask_outside_held(ctx, "ask_ext_ai")
+
+
+async def test_a_workflow_step_cannot_ask_the_external_ai_even_where_it_is_on(monkeypatch):
+    """D5: nobody in a run presses 「問外部AI」."""
+    _, _, executor, runner, iid = _build(monkeypatch, {}, ext_ai_enabled=True)
+    await executor.drive_turn(iid, "no-such-chat", "u", "hello", None)
+
+    assert not _ask_outside_held(runner.ctxs[-1], "ask_ext_ai")
 
 
 async def test_a_workflow_step_with_an_empty_tools_list_holds_nothing_whatever_the_pins(

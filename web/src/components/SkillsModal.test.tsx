@@ -222,7 +222,7 @@ describe("SkillsModal (#380)", () => {
     const file = new File(["body"], "SKILL.md", { type: "text/markdown" });
     Object.defineProperty(file, "webkitRelativePath", { value: "new-skill/SKILL.md" });
     fireEvent.change(screen.getByTestId("skills-import-input"), { target: { files: [file] } });
-    await waitFor(() => expect(spy).toHaveBeenCalledWith({ queryKey: ["skillHub", "targets"] }));
+    await waitFor(() => expect(spy).toHaveBeenCalledWith({ queryKey: ["skillHub", "targets"], refetchType: "none" }));
   });
 
   it("imports a selected skill folder into `.skill/<folder>/…`", async () => {
@@ -701,7 +701,7 @@ describe("SkillsModal — the skill hub", () => {
     fireEvent.click(await screen.findByTestId("pick-install-e-1"));
 
     await waitFor(() => expect(spy).toHaveBeenCalledWith({ queryKey: ["skillHub", "installs"] }));
-    expect(spy).toHaveBeenCalledWith({ queryKey: ["skillHub", "targets"] });
+    expect(spy).toHaveBeenCalledWith({ queryKey: ["skillHub", "targets"], refetchType: "none" });
   });
 
   it("shows the server's refusal when a folder of that name is already here", async () => {

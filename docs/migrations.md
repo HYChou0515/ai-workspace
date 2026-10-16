@@ -2132,7 +2132,684 @@ agent 步驟裡 AI 的呼叫、WUI 的工具呼叫、view plugin、圖表重畫�
 - 在一個 item 開**第二個**聊天，請 AI 建一個新檔案：AI 回完話，檔案樹不用按重新整理就出現那個檔案。
   沒部署到這一版的症狀：要按重新整理才看得到。
 
-### 2026-10-12 · #915 錯誤說人話：發生了什麼、怎麼辦、原文收合在技術細節；重試只在單次模型呼叫 {#pr-915}
+### 2026-10-12 · 26cbe6c1 · #917 提供方式 Shared 也會用到「我的環境變數」 {#pr-917}
+
+**設定** — 沒有新 key。**行為改變，沒有開關**（`docs/plan-personal-env.md` D2 更正）：
+
+- 提供方式 Shared（也就是**沒設**）的變數，在 item 的共用值沒填時，會依序用：這個 item 的 Private 值 →
+  **「替誰跑」那個人在「我的環境變數」裡的值** → 服務帳號。之前到「這個 item 的 Private 值」就停了（[#878](#pr-878)
+  寫的「Shared 或沒設的 item 拿不到」不再成立）。「替誰跑」照舊：聊天是送出的人、頁面按鈕是按的人、
+  **綁定的排程是綁定的人**（沒人在場也一樣）、goal 是設定的人、workflow run 是按 Run 的人。WUI 的 build 仍然不帶任何人的值。
+- 為什麼：「個人值」的定義是這個 item 的值或「我的環境變數」的值；沒寫 `env.json` 的工具（例如 MCP），
+  面板不會為它的變數畫提供方式，變數停在 Shared，「我的環境變數」永遠進不來——使用者回報「設了沒套用」。
+- **要知道的後果**：沒設提供方式的 item，它的工具（包括別人上架的第三方工具）會拿到「替誰跑」那個人在
+  「我的環境變數」裡、這個 item 共用值沒填的那些名稱；共用值有填的名稱仍然用共用值。
+  - `rollout 前`（只在你們有這種 item 時）：在那個 item 的共用值填上同名的值（例如服務帳號的），它會一直優先。
+    為什麼：rollout 之後，第一次替某人跑的工具就會拿到他自己的 token。漏做的症狀：那個 item 的工具開始以使用者的身分呼叫外部系統。
+- 工具看到的變數**順序**（`SANDBOX_USER_ENV_KEYS`）：和 item 同名的變數位置由 item 決定；Private first 的變數順序也因此可能不同（值不變）。
+- 畫面：WUI 頁面上方的登入條、聊天的 Env 按鈕與登入卡片，會把這些值算成「已有」，不再要人重填。
+- 清理腳本（[#878](#pr-878) 的 `scripts/clear_item_sign_ins.py`）現在也會清「Shared 而共用值沒填」的 item 裡、
+  被舊登入留下、會擋住「我的環境變數」的值。`rollout 後`、想清時再跑：先 dry run 看清單，再 `--apply`。
+  為什麼：這種舊值在新規則下會蓋過使用者重新登入的值。不跑的症狀：使用者重新登入了，那個 item 的工具還是用過期的 token。
+
+**資料** — 沒有 schema 升版、沒有回填。
+
+**k8s · CI 側** — 沒有新的 manifest、env、probe 或 JobType；照常重 build、照常部署。
+
+**確認做完**（`rollout 後`）：在「我的環境變數」設一個名稱 X，找一個沒設 X 的提供方式、共用值也沒填 X 的 item，
+在它的聊天請 AI 跑一個讀 X 的工具——它拿得到你的值。再到那個 item 的共用值填上 X，同一個工具改拿共用值。
+沒部署到這一版的症狀：工具拿不到 X。
+
+### 2026-10-13 · 94771422 · #927 小幫手：使用者電腦上的小程式用自己的 Chrome 代查,「請幫我查」只剩按一下「查」 {#pr-927}
+
+**設定** — 一個新 key,**opt-in**:`server.ai_workspace_helper_dir`(預設空 = 不發布)。不設什麼都不會壞:
+「小幫手」頁寫「還沒有發布」,卡片照舊讓使用者自己查([設定](configuration.md))。
+**行為改變,沒有開關**:
+
+- 左側選單多一項「小幫手」(`/ai-workspace-helper`),永遠看得到:下載、安裝步驟、你的小幫手連線了沒。
+- 「請幫我查」卡片在**這個人自己的**小幫手連線時,搜尋改成按「查」交給它(「自己查」收在展開區);
+  開網址時,這個聊天先前查回來的內容裡出現過的網址直接交給它,不再問。小幫手沒連線時卡片和以前一樣,
+  只多一行「小幫手未連線」和一個「怎麼安裝」連結(新分頁開「小幫手」頁)——這一行只在
+  `ai_workspace_helper_dir` 有發布版本時出現,沒發布的部署卡片和以前一模一樣。
+- 小幫手的請求會帶 `X-AI-Workspace-Helper-Version` / `X-AI-Workspace-Helper-Protocol`;低於 `ai-workspace-helper.json` 的
+  `min_version`、或低於程式裡的最低協定號,回 **426** 要它更新。卡片自己的請求不受影響。
+
+**資料** — 三個新的 specstar model(`OutsideJob`、`_AiWorkspaceHelperPresence`、`_OutsideSeenUrls`),在
+`spec.apply` 之後註冊(沒有 CRUD 路由),第一次寫入時建表。沒有 `Schema` 升版,沒有回填。
+
+**k8s · CI 側** — 沒有新的 JobType、probe 或必填 env;照常重 build、照常部署。**要讓使用者下載時**(`rollout 後`,
+隨時):
+
+1. 在 dev server 打包:`python3 scripts/pack_ai_workspace_helper.py --version 0.1.0`(要 PyPI、`pnpm`、`uv`、
+   一個裝了 pip 的 Python)。它最後會對 Python 3.10–3.14 各跑一次只靠安裝包的 `pip install --dry-run`,
+   有一個解不出來就失敗、不產出檔案。
+2. 給 API pod 掛一個 volume(放得下約 40 MB 的 zip;多 pod 時每顆都要看得到同一份),設
+   `server.ai_workspace_helper_dir` 指向它,把 `dist/ai-workspace-helper/` 裡的兩個檔放進去。之後換版只換這兩個檔,
+   **不用重新部署**。為什麼要 volume:後端每個請求都重讀這個資料夾,檔案不在 image 裡。
+3. 要強迫所有人升級:改 json 的 `min_version`。
+
+小幫手走的是部署原本的登入(使用者在小幫手自己的 Chrome 設定檔裡登入一次),gateway 不用改。
+登入過期時 gateway 把請求導去 SSO(3xx),小幫手當成「要重新登入」,不會誤以為連上了。
+
+**IT 側**(每台裝的電腦,`裝之前`):安裝**不需要系統管理員權限**(只寫 `%LOCALAPPDATA%\AIWorkspaceHelper\`
+與自己的桌面捷徑),但要被允許**執行**:
+
+- `%LOCALAPPDATA%\AIWorkspaceHelper\` 底下的程式——venv 的 Python 與 Playwright 自帶的 `node.exe`。AppLocker 預設只放行
+  Program Files 與 Windows 資料夾;沒放行的症狀:安裝在「建 venv」或試跑那一步失敗,或裝好了卻「開不了 Chrome」。
+- 下載的 zip 裡包著 `node.exe`(在 Playwright 套件裡);擋 exe 的代理或防毒可能擋下載或刪掉它。
+- Chrome 政策不能停用自動化/遠端偵錯(`RemoteDebuggingAllowed`);停用的症狀:「開不了 Chrome」。
+- PowerShell 受限語言模式只會讓桌面捷徑建不起來(安裝照樣完成,改雙擊 `launch.pyw`)。
+
+**每台先跑一次 `precheck.pyw`**(zip 裡,和 `install.pyw` 並排):不安裝任何東西,把上面每一項真的試一次、列表,
+「複製結果」可以直接交給 IT。見[小幫手 §IT 要放行的](ai-workspace-helper.md#it-要放行的)。
+
+**確認做完**(`rollout 後`):
+
+- 打開「小幫手」頁:有版本號與 `ai-workspace-helper-<版本>.zip(ZIP,約 38 MB)` 的下載連結。
+  沒放檔案或 `ai_workspace_helper_dir` 沒設的症狀:頁面寫「還沒有發布小幫手」。
+- 在一台 Windows 電腦先雙擊 `precheck.pyw`:六項都 ✔(沒通過的照它寫的找 IT);再照頁面裝起來、登入,小視窗顯示「已連線，等待查詢」;在一個 item 請 AI 查外面的東西,卡片出現「查」,
+  按下去不用再經手,`lookups/` 出現存檔、AI 接著讀。這一步是 Windows 上唯一的驗證(plan D14)。
+
+
+### 2026-10-14 · 7bd8bbd8 · #933 小幫手連得上公司憑證的 AI Workspace、更新改成只通知；解壓縮資料夾裡的 launch.pyw 不再說沒有安裝 {#pr-933}
+
+**設定** — 無。
+
+**資料** — 無。
+
+**k8s · CI 側** — 後端沒有改,照常重 build、部署。**要做的是重新發布小幫手**(`rollout 後`,隨時):
+
+1. 在 dev server 打包新版:`python3 scripts/pack_ai_workspace_helper.py --version 0.1.1`,把 `dist/ai-workspace-helper/` 的兩個檔
+   換進 `server.ai_workspace_helper_dir`(不用重新部署)。為什麼:修正在小幫手那邊,不在後端。
+   沒做的症狀:「小幫手」頁還是 0.1.0,下一步重裝的人裝回同一個連不上的版本。
+2. 第 1 步之後:**小視窗第二行是憑證錯誤(`unable to verify the first certificate`)的 0.1.0 要手動重裝**——從「小幫手」頁
+   下載 0.1.1、解壓縮、雙擊 `install.pyw`。為什麼:0.1.0 檢查新版和下載新版走的也是那條驗不過的連線,這種 0.1.0 自己更新不了;
+   連得上的 0.1.0 會照它自己的舊做法在背景準備好 0.1.1(開啟時或之後每 6 小時看一次),下次開啟時換上,0.1.1 一啟動就接手。沒重裝的症狀:小視窗一直
+   「連不上 AI Workspace，會自動重試」,卡片一直「小幫手未連線」。重裝時舊的 0.1.0 還開著:它看不懂「請結束」,`install.pyw`
+   等 20 秒後會請使用者在舊視窗按「結束」。
+3. **之後每一版都一樣要使用者自己重裝**(沒有自動更新了):發布新版後,使用者的小視窗在啟動後第一次連上 AI Workspace 時(以及被停用後恢復連線時)、或之後 6 小時內
+   顯示「有新版 X」與「開啟下載頁」;要強迫升級就改 `ai-workspace-helper.json` 的 `min_version`(低於它的小幫手停止接工作)。
+   為什麼:小幫手對 AI Workspace 不驗憑證,更新若走那條連線,能攔截它的人就能讓小幫手執行別的程式,所以下載交給會驗憑證的瀏覽器、
+   安裝交給人。沒做(只放檔、不提醒)的症狀:舊版照常跑,只是一直顯示「有新版」。
+
+**行為改變,沒有開關**(plan D20、D21):
+
+- 小幫手對 AI Workspace 的請求(報到、領工作、交結果、讀版本資訊)**不驗憑證**——那些請求由 Playwright 自帶的 Node 送出,它不讀
+  Windows 憑證庫,Chrome 驗得過的公司憑證它驗不過;依這個部署的慣例 verify=false。它替使用者開的外面網頁仍由 Chrome 照常驗。
+  **代價**:能在公司網路上攔截這條連線的人,看得到登入 cookie、可以假造工作與版本資訊。
+- 所以**小幫手不再自己下載、安裝、換版**:有新版或這一版被停用時,小視窗只顯示一行說明和「開啟下載頁」(用使用者的預設瀏覽器
+  開「小幫手」頁,下載由瀏覽器驗憑證),使用者自己重跑 `install.pyw`;它會把正在跑的小幫手關掉、換成新版。假造的版本資訊最多
+  把人帶去下載頁或讓小幫手停止接工作,不會讓它執行任何東西。心跳不再送「上一次更新結果」(後端欄位留著,照 §3.7.3 只加不刪)。
+- 連不上/被拒的原因(不含 cookie)現在會寫進 `helper.log`;在解壓縮資料夾雙擊 `launch.pyw` 會開已安裝的小幫手。
+
+**確認做完**(`rollout 後`):
+
+- 「小幫手」頁顯示版本 0.1.1。
+- 一台重裝過的 Windows 電腦:小視窗「已連線，等待查詢」、頁面「小幫手已連線」,卡片出現「查」。
+- 在解壓縮資料夾雙擊 `launch.pyw`:開的是已安裝的小幫手(已開著就把它叫到前面),不再說沒有安裝。
+- 之後發布下一版(例如 0.1.2)時:開著的小幫手顯示「有新版 0.1.2」與「開啟下載頁」,按下去開的是「小幫手」頁;
+  開著小幫手時重跑 0.1.2 的 `install.pyw`、按「是」,舊視窗關掉、新版開起來(視窗標題 0.1.2)。
+
+### 2026-10-14 · 956c5f51 · #936 小幫手等網頁跳轉停下來才讀，不再把轉址途中的空白頁交給 AI {#pr-936}
+
+**設定** — 無。
+
+**資料** — 無。
+
+**k8s · CI 側** — 後端沒有改,照常重 build、部署。**要做的是發布新版小幫手**(`rollout 後`,隨時):
+
+1. 在 dev server 打包:`python3 scripts/pack_ai_workspace_helper.py --version <比目前發布的大,例如 0.1.2>`,把
+   `dist/ai-workspace-helper/` 的兩個檔換進 `server.ai_workspace_helper_dir`(不用重新部署)。為什麼:修正在小幫手那邊。
+   沒做的症狀:經過腳本跳轉或自動送出表單(例如公司登入)才到的網頁,小幫手照舊回「沒查到：nothing to send — paste or attach」。
+2. 第 1 步之後:使用者的小視窗會顯示「有新版」與「開啟下載頁」,照「小幫手」頁重裝(#933 起不會自動更新)。為什麼:更新只通知
+   (plan D21)。沒重裝的症狀同上。
+
+**行為改變,沒有開關**(plan D22):小幫手開網頁後,等頁面停下來才讀——沒有頁面正在路上、`load` 等到了(每頁最多 5 秒,和以前一樣)、
+之後網址連續 1.5 秒沒變;腳本跳轉、自動送出的登入表單、伺服器轉址都會重新計時,最多 30 秒。所以一般網頁多花約 1.5 秒;`load` 一直不來的
+網頁和以前一樣約 5 秒再加 1.5 秒;真的空白的頁面要等滿 30 秒才回報。讀到的頁面沒有任何文字時回報「這一頁轉出來沒有文字(可能還在跳轉、
+是 PDF 或內嵌框架、或要登入)」,一直跳不停時回報「這一頁一直在跳轉,30 秒內沒有停下來」,不再把空頁交給後端;訊息裡的網址不含查詢字串。
+
+**確認做完**(`rollout 後`):
+
+- 「小幫手」頁顯示新版本號;一台重裝過的電腦小視窗標題是那個版本。
+- 請 AI 開一個要經過公司登入或轉址的網址(先前回「nothing to send」的那種):卡片拿到的是最後那一頁的內容,`lookups/` 有存檔。
+
+### 2026-10-14 · db78fa2b · #934 WUI 頁面可以讓讀者下載它做出來的檔案 {#pr-934}
+
+**設定** — 沒有新 key，沒有要做的事。**行為改變，沒有開關**：
+
+- WUI 頁面的 iframe sandbox 從 `allow-scripts` 變成 `allow-scripts allow-downloads`；從網址載入的頁面，伺服器回應的
+  CSP 裡 `sandbox` 指令也一樣多了 `allow-downloads`（瀏覽器取兩者的交集，兩邊都要有）。頁面用 `<a download>` 指向
+  `blob:` / `data:` 網址（匯出 CSV、圖表的「存成 PNG」）現在會存進讀者的下載資料夾；之前 Chrome 擋下並在主控台寫
+  「the flag 'allow-downloads' is not set」。
+- 為什麼：頁面做出來的檔案沒辦法交給讀者。不需要點擊就能觸發（實測 Chromium：頁面打開 7 秒後自己下載也成立），
+  所以頁面可以在任何時候讓讀者的瀏覽器存一個檔案；它**送不出去任何東西**——沒有 `allow-same-origin`，
+  頁面 CSP 的 `connect-src 'self'`、`form-action 'none'` 都沒變，外層頁面 CSP（`SPA_CSP`）的 `frame-src` 也沒變——
+  指向別台主機的下載會被它擋下，請求送不出去（實測 Chromium）。
+
+**資料** — 沒有。
+
+**k8s · CI 側** — 沒有新的 manifest、env、probe 或 JobType；照常重 build、照常部署（只有 API image 的前端與
+回應 header 改變）。如果前面有 gateway 或 proxy 會**改寫** `Content-Security-Policy` header，要讓它保留
+`sandbox allow-scripts allow-downloads`——被改回 `sandbox allow-scripts` 的話，多頁版頁面的下載仍會被擋（症狀同上，
+單頁版不受影響，因為它的 sandbox 只寫在 iframe 上）。
+
+**確認做完**（`rollout 後`）：
+
+- 開一個 WUI 頁面，按它的匯出按鈕（或在頁面裡放一個 `<a download="x.csv" href="data:text/csv,a,b">`）：
+  瀏覽器存下檔案。沒部署到這一版的症狀：什麼都沒發生（多頁版的頁面，瀏覽器主控台會有上面那句
+  `allow-downloads`；單頁版不一定有訊息）。
+
+### 2026-10-14 · b64bd2a4 · #940 小幫手支援 Python 3.9 {#pr-940}
+
+**設定** — 無。
+
+**資料** — 無。
+
+**k8s · CI 側** — 後端沒有改,照常重 build、部署(「小幫手」頁那一行改寫成 3.9–3.14,隨前端出去)。**要做的是發布新版小幫手**
+(`rollout 後`,隨時):
+
+1. 在 dev server 打包:`python3 scripts/pack_ai_workspace_helper.py --version <比目前發布的大>`(要用有 pip 的 Python),把
+   `dist/ai-workspace-helper/` 的兩個檔換進 `server.ai_workspace_helper_dir`(不用重新部署)。為什麼:3.9 用的 wheel
+   (greenlet 3.2.4、Playwright 1.60.0)要在安裝包裡,`install.pyw` 才會接受 3.9。打包的輸出要看得到一行
+   `--python-version 3.9 … greenlet==3.2.4` 的下載,以及包括 3.9 在內每個 Python 一次 `--dry-run`。
+   沒做的症狀:只有 Python 3.9 的人雙擊 `install.pyw` 或 `precheck.pyw`,看到「需要 Python 3.10 以上」。
+2. 第 1 步之後:已經裝好的人小視窗會顯示「有新版」,照「小幫手」頁重裝(更新只通知,plan D21)。不重裝也能照常用。
+
+**行為改變,沒有開關**(plan D23):
+
+- 安裝包接受 Python 3.9–3.14(原本 3.10–3.14)。
+- 每個人重裝後,小幫手的 Playwright 從 1.63.0 換成 **1.60.0**(1.60.0 是最後一個裝得上 3.9 的版本,所有 Python 用同一版)。
+  小幫手回報的版本資訊裡 Playwright 會顯示 1.60.0。
+- Python 3.9 已在 2025-10 停止官方支援(不再有安全性更新);能用 3.10 以上的電腦還是建議用 3.10 以上。
+
+**確認做完**(`rollout 後`):
+
+- 「小幫手」頁顯示新版本號,說明那一行寫 3.9–3.14。
+- 一台只有 Python 3.9 的電腦:`precheck.pyw` 第一列「Python 3.9 以上」通過;`install.pyw` 裝得起來;卡片上按「查」拿得到內容。
+- 一台 3.10 以上的電腦重裝後:小視窗標題是新版本,按「查」照常。
+
+### 2026-10-14 · f25eabb8 · #941 「請幫我查」:AI 用檔名＋編號開連結,不再照抄網址 {#pr-941}
+
+**設定** — 無。
+
+**資料** — 無。已經存好的 `lookups/` 檔不會被改寫;新的回答才會在最下面帶編號清單。舊檔沒有清單,AI 要開那些舊連結時照舊用 `url`。
+
+**k8s · CI 側** — 只改後端,照常重 build、部署。**小幫手不用重新打包**,使用者也不用重裝。
+
+**行為改變,沒有開關**(plan-outside-helper D24):
+
+- 「請幫我查」的回答(你貼上的、小幫手抓的)存檔時**內容原樣不動**,最下面多一段「## 查到的連結」:每行 `- [n] <網址> 標題`;同一頁一個編號;
+  Google 搜尋結果的跳轉連結(`google.*/url?q=…`)列成它導向的那一頁。
+- AI 收到的那則訊息在內容摘要之前列出這些編號(最多 50 個),並寫著「ask_outside(file=…, link=編號)」;AI 給檔名和編號,
+  後端讀那個檔取網址,不必照抄。
+- **搜尋**的回答:清單不列搜尋引擎自己網站的連結(登入、圖片、地圖、下一頁),結果排在最前面;訊息和工具說明都請 AI 回答前
+  打開最相關的結果讀原文(以前它常只看搜尋結果頁的摘要就回答)。
+- 能不能不點頭就由小幫手開,規則照舊(D12:網址要是這個聊天查回來過的);記下的連結多了「跳轉連結導向的那一頁」,
+  跳轉連結本身也照舊記著;含括號的網址(例如維基百科)記的是完整的,不再在第一個 `)` 被切斷。
+
+**確認做完**(`rollout 後`):
+
+- 在聊天裡請 AI 查一個要搜尋的問題,回答之後打開存下來的 `lookups/….md`:內容和以前一樣,最下面有「查到的連結」一段,
+  列的是真正的網址(沒有 `google.com/url`)。
+- 再請 AI 打開其中一個結果:卡片上顯示的是那個網頁的真正網址;小幫手在線時不用按「查」就會開。
+
+### 2026-10-14 · b697fd67 · #938 「請幫我查」:小幫手送出後,聊天自己跟上 AI 的回答;跨 pod 即時事件斷線會重連並寫 log {#pr-938}
+
+**設定** — 無。
+
+**資料** — 無。
+
+**k8s · CI 側** — 後端沒有改,照常重 build、部署(「小幫手」頁那一行改寫成 3.9–3.14,隨前端出去)。**要做的是發布新版小幫手**
+(`rollout 後`,隨時):
+
+1. 在 dev server 打包:`python3 scripts/pack_ai_workspace_helper.py --version <比目前發布的大>`(要用有 pip 的 Python),把
+   `dist/ai-workspace-helper/` 的兩個檔換進 `server.ai_workspace_helper_dir`(不用重新部署)。為什麼:3.9 用的 wheel
+   (greenlet 3.2.4、Playwright 1.60.0)要在安裝包裡,`install.pyw` 才會接受 3.9。打包的輸出要看得到一行
+   `--python-version 3.9 … greenlet==3.2.4` 的下載,以及包括 3.9 在內每個 Python 一次 `--dry-run`。
+   沒做的症狀:只有 Python 3.9 的人雙擊 `install.pyw` 或 `precheck.pyw`,看到「需要 Python 3.10 以上」。
+2. 第 1 步之後:已經裝好的人小視窗會顯示「有新版」,照「小幫手」頁重裝(更新只通知,plan D21)。不重裝也能照常用。
+
+**行為改變,沒有開關**(plan D23):
+
+- 安裝包接受 Python 3.9–3.14(原本 3.10–3.14)。
+- 每個人重裝後,小幫手的 Playwright 從 1.63.0 換成 **1.60.0**(1.60.0 是最後一個裝得上 3.9 的版本,所有 Python 用同一版)。
+  小幫手回報的版本資訊裡 Playwright 會顯示 1.60.0。
+- Python 3.9 已在 2025-10 停止官方支援(不再有安全性更新);能用 3.10 以上的電腦還是建議用 3.10 以上。
+
+**確認做完**(`rollout 後`):
+
+- 「小幫手」頁顯示新版本號,說明那一行寫 3.9–3.14。
+- 一台只有 Python 3.9 的電腦:`precheck.pyw` 第一列「Python 3.9 以上」通過;`install.pyw` 裝得起來;卡片上按「查」拿得到內容。
+- 一台 3.10 以上的電腦重裝後:小視窗標題是新版本,按「查」照常。
+
+**k8s · CI 側** — 照常重 build、部署,沒有要另外做的事。`event_bus.kind: rabbitmq` 的部署在 `rollout 後`看每個 API pod 的 log:
+
+```
+kubectl logs <api-pod> | grep "event_bus:"
+```
+
+- 每個 API pod 都要有一行 `event_bus: connected — exchange <event_bus.exchange,預設 rca_turn_events>, this pod's queue amq.gen-…`。
+  為什麼:這條佇列是別的 pod 跑的 AI 回答送到這個 pod 上瀏覽器的唯一路。沒有這行的症狀:接在這個 pod 上的人要重新整理才看得到
+  別的 pod 跑的回答(只剩一個 pod 時正常)。(部署過 `patch-b8134d72` 的看不到這行是正常的:那一版的這些行在 INFO,而這個 app
+  沒有設定 logging,INFO 會被丟掉;這一版讓它們一定印出來。)
+- 一直出現 `event_bus: cannot reach the broker — trying again in N s` → 這個 pod 從沒連上 RabbitMQ(網址、vhost、帳密、
+  NetworkPolicy)。以前這種 pod 啟動時連一次失敗就永遠不再試,只在當下由 asyncio 印一次 `Task exception was never retrieved`;
+  現在會每 1→30 秒重試一次,連上就恢復,不用重啟。想確認舊版是不是這個原因:在換版前的 pod log 找那一行(帶 `ConnectionError` 或
+  aio_pika 的錯誤)。
+- `event_bus: lost the broker — trying again in N s`:連上之後斷了,會自己重連。`event_bus: dropping frames on send` 之後接
+  `event_bus: sending again — N frame(s) were dropped`:那段時間的即時事件沒送出(畫面靠資料庫補);一次斷線各一行,偶爾出現不用處理。
+
+**行為改變,沒有開關**:
+
+- 「請幫我查」卡片顯示「小幫手已送給 AI」,或使用者手動貼上答案送出後,若聊天裡還沒出現 AI 的回答(這一頁沒收到那一輪的即時事件),
+  聊天會自己讀資料庫直到 AI 的回答存好,不用重新整理。這條路不會跳出「連線中斷,這裡可能少了一段」。
+- 每一輪對話的開始與結束,API pod 會寫一行 `live: published <事件> key=… pod=… viewers_here=N`;收到別的 pod 的事件寫
+  `live: from bus <事件> key=… origin=… pod=… viewers_here=N`;瀏覽器接上/離開串流寫 `live: viewer joined|left key=… pod=…`。
+  只記事件種類、對話 key 與 pod,不記內容;一輪約幾行。用來追「誰跑的、誰收到、那裡有沒有人在看」。
+
+**確認做完**(`rollout 後`):
+
+- 每個 API pod 的 log 都有 `event_bus: connected`;`rabbitmqctl list_bindings -p <vhost> source_name destination_name | grep <exchange>`
+  (vhost 是 `event_bus.url` 裡的那個,預設 `/`;exchange 預設 `rca_turn_events`)列出的佇列數不少於 API pod 數。
+- 多個 pod 時:請 AI 查外面的東西、按「查」;卡片出現「小幫手已送給 AI」後**不重新整理**,幾秒內聊天出現送出的內容與 AI 的回答。
+
+### 2026-10-14 · 3e00a83d · #943 小幫手遇到 Cloudflare 驗證會等人完成,封鎖頁直接說 {#pr-943}
+
+**設定** — 無。
+
+**資料** — 無。
+
+**k8s · CI 側** — 後端沒有改,照常重 build、部署。**要做的是發布新版小幫手**(`rollout 後`,隨時):
+
+1. 在 dev server 打包:`python3 scripts/pack_ai_workspace_helper.py --version <比目前發布的大>`,把 `dist/ai-workspace-helper/`
+   的兩個檔換進 `server.ai_workspace_helper_dir`(不用重新部署)。為什麼:修正在小幫手那邊。沒做的症狀:Cloudflare 保護的網站
+   (例如 GoodInfo)照舊一開就失敗(「the page answered 403」),分頁馬上關掉。
+2. 第 1 步之後:使用者的小視窗顯示「有新版」,照「小幫手」頁重裝(更新只通知,plan D21)。沒重裝的症狀同上。
+   和 #940(Python 3.9)同一版打包就好。
+
+**行為改變,沒有開關**(plan D25):小幫手開網頁遇到 Cloudflare 的驗證頁(「Just a moment…」,回 403 帶 `cf-mitigated: challenge`,
+或頁上有 Cloudflare 的驗證標記),不再當成失敗:把 Chrome 視窗叫到前面、卡片顯示「請在小幫手的 Chrome 視窗裡完成驗證」,最多等 5 分鐘,
+驗證過了讀跳到的那一頁。Cloudflare 的封鎖頁(錯誤 1020 等,人也過不去)立刻回報「這個網站擋住了自動瀏覽(Cloudflare 封鎖),請自己開瀏覽器查,
+把內容貼到卡片上」(只認 403;同樣樣式的 522 等「網站掛了」頁照一般錯誤處理)。其他不是驗證頁的錯誤狀態照舊失敗;回 429 的 Google「異常流量」頁現在也會等人完成驗證。
+
+**確認做完**(`rollout 後`,重裝後):請 AI 查一個要看 GoodInfo 的問題、按「查」:小幫手的 Chrome 停在 Cloudflare 那頁並跳到前面,
+卡片顯示「請在小幫手的 Chrome 視窗裡完成驗證」;完成驗證後,卡片拿到 GoodInfo 的內容。
+
+### 2026-10-14 · 8a05ed63 · #932 管理者看得到 AI 用了哪些工具與 skill、誰用、在哪、失敗幾次、多慢 {#pr-932}
+
+**設定** — 沒有新 key，不用改任何設定。行為改變，沒有開關（`docs/plan-tool-usage-stats.md`）：升級後 AI 的**每一次
+工具呼叫都會被計數**——工具、來源（內建／第一方套件／第三方）、成功或失敗、耗時、是誰、在哪個場合（聊天、KB 聊天、
+工作流程、排程、子代理、KB 子代理、背景工作）、哪個 App、哪個 item。**每一次 skill 被載入也會被計數**——AI 用
+`read_skill` 讀到內容，或使用者在 skill 選單套用，都算一次；記 skill 名稱、來源（平台內建／App 內建／skill hub／
+自己寫的）與同樣的誰、場合、App、item，沒有失敗與耗時。superuser 在 Diagnostics 頁的新分頁「使用統計」看得到
+（同一頁上下兩區：工具與 Skill，各有橫條圖與表格；工具區可以勾選要顯示哪些、切換「每個 command／依套件」；
+兩區都能下載原始資料 CSV）；其他人看不到這個分頁，`GET /api/admin/tool-usage`（`?kind=skill` 看 skill、
+`?group=package` 依套件）與 `GET /api/admin/tool-usage.csv` 回 403。skill 的來源「item 內自建」指存在該 item
+工作區、沒有來源標記的 skill，以及從 skill hub fork 出來的那份。
+Diagnostics 頁的分頁條改成底線樣式（和分享面板同款），內容不變。
+
+**資料** — 一張新表 `ToolUsageDay`（索引 `day`、`tool`、`kind`、`package`），不用做事，但要知道它的大小：每個行程（API 和每個
+worker 各算一個，名稱是「主機名-pid」）每個被用過的工具或 skill 每天一列（同名但來源或套件不同的各算一列），所以上限是
+「（工具的「名稱＋來源＋套件」數 ＋ skill 的「名稱＋來源」數）× 每天出現過的行程數 × 91 天」——重啟、
+rollout、HPA 擴張可能會在當天多出新的行程名稱。API 與 worker 每 5 分鐘、以及正常停止時寫一次（worker 在排空完工作之後
+才寫最後一次）；行程被直接殺掉（沒收到 SIGTERM）會掉最後不到 5 分鐘的計數。**超過 90 天的列每天自動永久刪除**（依 `day` 索引，不掃
+全表）。`WorkflowRun` 多一個 `from_schedule` 欄位（有預設值，舊的 run 讀成 `false`），不用回填；升級前就開始的 run
+一律算「工作流程」。升級後，item 的排程與 profile `triggers.json` 宣告的排程都算「排程」。skill hub 的「使用 N 次」
+計數器改用同樣的「主機名-pid」當寫入者（原本用 `HOSTNAME`，同一台 VM 上多個行程會共用一列、互相蓋掉）：升級後寫的是
+新的列，總數是所有列相加，舊列照算，面板上的數字不會跳。
+
+**k8s · CI 側** — 沒有新的 manifest、env、probe 或 JobType。要知道的一點：worker 的最後一次寫入排在排空工作之後，
+所以排空要在各 worker 的 `terminationGracePeriodSeconds`（`kubernetes/base/workers.yaml`：多數 60 秒，有的 120、900 秒）內做完；超過就被 SIGKILL，
+即使收到了 SIGTERM，也會掉最後不到 5 分鐘加上排空期間的計數。只影響統計，工作本身照原本的重派機制。
+
+**確認做完**（`rollout 後`）
+
+- 用 superuser 開 Diagnostics →「使用統計」：在任一 App 聊天裡讓 AI 用過工具，約 5 分鐘內出現該工具與次數；點工具
+  看得到人、場合、item。
+- 同一頁切到「Skill」：在聊天裡套用一個 skill 送出，約 5 分鐘內出現那個 skill、它的來源與次數。
+- 非 superuser 開 Diagnostics：沒有「使用統計」分頁。
+- 沒部署到這一版的症狀：Diagnostics 沒有「使用統計」分頁；`GET /api/admin/tool-usage` 是 404。
+
+### 2026-10-15 · 254ffaf8 · #945 WUI 頁面可以問 subagent，工具與 subagent 都能「等結果」或「起成工作」 {#pr-945}
+
+**設定** — 兩個新 key，都有預設值，不設也能開機（`docs/configuration.md`「頁面同時能跑幾件工作、每件最多多久」）：
+
+- `server.wui_page_job_limit`（預設 `4`）：一個 item 同時進行中的頁面工作上限。超過的那一件被拒（429，訊息寫出
+  數字），不排隊。
+- `server.wui_page_job_timeout_sec`（預設 `3600`）：一件頁面工作的總時間。工具工作的命令拿它當期限，取代沙盒的
+  一分鐘；過了期限再加 60 秒還顯示進行中的紀錄，會被當成「跑它的 pod 已經不在了」，在下一次有人讀它、或這個 item 再開工作時標成失敗。
+
+**行為改變，沒有開關**：頁面多了 `callAgent` / `startAgent` / `startTool` 三個動詞（`callTool`、`startRun` 不變）。
+AI 讀 `wui` skill 時會看到「這個 item 能讓頁面問的 subagent」清單與「要馬上拿結果用 `call…`、可能跑久用 `start…`」
+的規則，所以**升級後 AI 寫的新頁面可能會叫 subagent**——每叫一次就是一個 LLM turn，算在 item 擁有者頭上
+（跟頁面按 `startRun` 一樣）；舊頁面不受影響。subagent 在頁面工作裡的工具呼叫，在「使用統計」記成新的場合「頁面」(算在點的人頭上)。每件頁面工作會在 item 的對話清單多一筆（標題「頁面：subagent X」/
+「頁面：工具 X」）；跟頁面的 `startRun` 一樣，對話還在，那筆紀錄就留著（`keep_last_runs` 不會清掉被對話指著的紀錄），要清就刪那個對話。
+
+**資料** — 沒有。`WorkflowRun` 多一個選填欄位 `page_job`（沒有版本、舊紀錄讀成空），不用回填。
+
+**k8s · CI 側** — 沒有新的 manifest、env、probe 或 JobType；照常重 build、部署。頁面工作在**接到請求的那顆 API pod**
+上跑（跟 `startRun` 一樣），不需要 worker。
+
+**確認做完**（`rollout 後`）：
+
+- 在一個有 `.agent/<名稱>/AGENT.md` 的 item，請 AI 做一個頁面「按一下就問那個 subagent」，打開頁面按下去：
+  頁面顯示 subagent 的回答，對話清單多一筆「頁面：subagent <名稱>」，點進去看得到問題與回答。沒部署到這一版的症狀：
+  AI 不會寫出 `callAgent`（舊的 `wui` skill 沒提過它）；硬寫進去的話，頁面錯誤面板寫
+  `workspace.callAgent is not a function`（字樣依瀏覽器而定）。
+- 同一個頁面連按五次會跑很久的 `startAgent`：第五次被拒，訊息寫「already has 4 page jobs running」。沒部署到這一版
+  的症狀同上一條（`workspace.startAgent is not a function`）；部署了但設定值沒生效的症狀是數字不是你設的那個。
+
+### 2026-10-15 · 462774ef · #951 使用統計在 Postgres 上不再 500 {#pr-951}
+
+**設定** — 無。
+
+**資料** — 無。之前的使用次數都已經存好(寫入從沒受影響),部署後就看得到。
+
+**k8s · CI 側** — 照常重 build、部署。
+
+**行為改變,沒有開關**:Diagnostics 的「使用統計」(#932)在 Postgres 上,表格、明細、下載 CSV 都回 500
+(`invalid input syntax for type numeric`,日期字串被當成數字比大小);每天清理 90 天前的資料也一直失敗,只記一行
+`tool usage: prune failed`。現在三者都正常;清理只刪過期的日子,時鐘比較慢的 pod 不會刪到別的 pod 寫的新資料。
+
+**確認做完**(`rollout 後`):以 superuser 打開「使用統計」:表格出得來、點一列看得到明細、下載得到 CSV;隔天 API pod 的 log
+沒有 `tool usage: prune failed`。
+
+### 2026-10-15 · 8bf7ffa4 · #954 「請幫我查」:AI 的搜尋限 10 個詞 / 40 字 {#pr-954}
+
+**設定** — 無。
+
+**資料** — 無。
+
+**k8s · CI 側** — 只改後端,照常重 build、部署。小幫手不用重新打包。
+
+**行為改變,沒有開關**(plan-outside-lookup D12):AI 送出的搜尋(`ask_outside(query=…)`)超過 10 個詞,或中日韓文字超過 40 個字,
+會被退回請 AI 精簡成關鍵字再送(不截斷)。人在卡片上自己改查詢不受限。
+
+**確認做完**(`rollout 後`):請 AI 查一個要搜尋的問題,「請幫我查」卡片上的查詢是幾個關鍵字,不是一整句話。
+
+### 2026-10-15 · 73f7c73d · #957 「請幫我查」:搜尋的關鍵字由人自己填,AI 只給建議 {#pr-957}
+
+**設定** — 無。
+
+**資料** — 無。
+
+**k8s · CI 側** — 前後端都改,照常重 build、部署。小幫手不用重新打包。`rollout 後`請使用者把開著的分頁重新整理:部署前就載入的舊頁面,卡片還是把 AI 的查詢預先填好,後端分不出那是人打的還是預填的(只擋空白)。
+
+**行為改變,沒有開關**(plan-outside-lookup D13):「請幫我查」的搜尋卡片,搜尋框一開始是空的;AI 的查詢顯示在上方「AI 建議的關鍵字」,
+旁邊有「複製建議」。框是空的時按 Google 等目的地或「查」不會送出,會說「先在搜尋框輸入或貼上關鍵字」。後端同樣把關:交給小幫手的搜尋
+一定要帶關鍵字,沒有就拒絕,不再改用 AI 的原文。新版卡片上,送到搜尋引擎的每個字都是人自己放進框裡的。開網址的卡片不變。
+
+**確認做完**(`rollout 後`):請 AI 查一個要搜尋的問題:卡片上搜尋框是空的、上方有 AI 建議的關鍵字;框空著按「查」會提示要先填;
+按「複製建議」、貼進框、再按「查」,搜尋用的就是框裡的字。
+
+### 2026-10-15 · e0c1a6f9 · #928 superuser 在網頁上改模型設定：草稿、套用、版本、回復 {#pr-928}
+
+**設定** — 沒有新 key，沒有要做的事。**行為改變，沒有開關**：
+
+- 新增只有 superuser 看得到的「模型設定」頁（`/api/admin/model-settings`，其他人一律 404）。頁面改的是
+  preset、每個 App 的 `app.json`、profile、平台自己的模型選擇（完整清單見 `docs/configuration.md` §1 第四層）；改動存在資料庫，**蓋過** `config.yaml` / `app.json`。
+  沒有人按過「套用」時，每個行程跑的就是 `config.yaml` —— 和這一版之前一模一樣。
+- **頁面改過的值，之後在 `config.yaml` 再改不會生效**（頁面的值贏）；要讓 `config.yaml` 的值回來，在頁面上把那個值
+  「重設」、儲存草稿，再套用。頁面沒碰過的值，`config.yaml` 照舊說了算（照舊要重啟）。
+  為什麼：頁面只存跟預設不同的部分（JSON Merge Patch），預設仍是部署帶的檔案。
+- 套用後，API 與每個 worker 在**一秒內**改用新設定，不用重啟：每個行程每秒最多讀一次「目前版本」（一筆小資料），
+  版本變了才重建；讀不到資料庫或新版本建不起來，就繼續用上一個好的版本並記 log
+  （`model settings: could not read the version` / `does not build`）。已經開始的一次模型呼叫用舊設定跑完；之後的每次呼叫都用新的。一個進行中的 agent 回合（聊天、wiki 維護的一輪）保留它開始時的模型，但回合裡的重試（等 rate limit、修壞掉的 tool call、超出 context 縮短）會重讀端點與備援鏈，所以可能換到新的端點；一個正在跑的 job 下一次呼叫或下一輪就換，所以同一個 job 可能前後用到兩版。
+- 頁面**不收**只在開機時讀的值：其他 config key、角色的開／關（例如把 `health.judge_llm` 從 null 改成某個 preset）、
+  `infer_modules` 的 `enhancements` / `reasoning_effort` / `parallelism` / `collection`、App 的 `resources` / `slug`
+  —— 套用時直接拒絕並說「去改 config.yaml」，不存一個重啟前不生效的值。同樣拒絕：沒有出貨的 App 或 profile
+  （頁面只能改，不能新增；profile 是 App 裡的資料夾）、`apps` / `profiles` 底下的 `null`、config 部分裡的 `${…}`
+  （頁面的文字照字面使用，不讀伺服器的環境變數；App 文字裡的 `${` 就是字）、
+  用途清單（例如 `kb_chat`）裡開機會拒絕的條目，以及會把 `config.yaml` 的金鑰送到別的端點的改動（端點＝模型名稱的提供者、`base_url`、模型名稱裡帶的網址；同一個提供者換模型照常可以；
+  preset、角色、用途條目都算；要換端點，到 API 金鑰分頁替新端點設一把金鑰），
+  以及指向別的檔案的 `prompt_file`（只收 `pkg:…` 或 `config.yaml` 本來就寫過的值——其他路徑會把伺服器上的檔案讀進
+  聊天的 system prompt）。
+- **金鑰保護只認 `config.yaml` 寫出來的金鑰**（`rollout 前` 決定）：preset 沒寫 `api_key`、靠伺服器環境變數
+  （例如 `OPENAI_API_KEY`）的，superuser 在頁面改它的 `base_url` 時，那把環境變數金鑰會跟著送到新位址，頁面擋不住
+  （分不出環境變數裡哪個是金鑰）。要它也受保護：rollout 前在 `config.yaml` 寫明 `llm.api_key: ${OPENAI_API_KEY}`。
+  不做的症狀：沒有——直到有人把這種 preset 指到別的位址。
+- 頁面上設定或清除的 API key **按下套用才生效**：在那之前，連新起來的 pod 也照舊用上一次套用的 key；
+  「回復」只帶回那一版的值，金鑰維持目前生效的，還沒套用的金鑰改動繼續等。
+- **開機時印出的設定（config dump）多遮了一些值**：每個 preset 的 `env` 值、任何大小寫的 `*_token`，以及 `event_bus.url`（amqp 網址裡帶帳密，和早就遮的 `message_queue.rabbitmq.url` 同一類），
+  現在都印成 `"*** set (N chars) ***"`（遮罩加上引號，讓整份 dump 是合法的 YAML，可以直接貼進模型設定頁）；用途清單也改照 `config.yaml` 的寫法印在 `agents.kb_chat` 等底下，不再是 `agents.sub_agents`——在 log 裡找 `sub_agents` 的，改找 `kb_chat`。為什麼：頁面和開機 dump 用同一個判斷哪些是秘密的規則（M7），
+  token 常放在 env 裡、名字又認不出來。症狀：升級後在開機 log 裡找 preset 的 env 值，看到的是遮罩。
+- 診斷頁的模型檢查（`/health/checks`）照舊在開機時建好，套用後要重啟才會檢查新模型；它是診斷，不在對話的路徑上。
+- **`kb.quality_judge` 開始生效**：以前 loader 檢查了這個值卻沒建出來，文件品質評分永遠用 `kb.retrieval_llm`。
+  升級後，`config.yaml` 裡設了 `kb.quality_judge` 的部署，評分改用它指的模型（成本與結果可能跟著變）。
+  沒設的部署不變。不想換：rollout 前把它從 `config.yaml` 拿掉。
+- **workflow id 只能是一般名稱**（英數字、`-`、`_`）：id 就是路徑（`workflows/<id>/run.py`），
+  開機會拒絕其他寫法（例如 `daily.v2`、`../x`），`workflow check` 與 `workflow new` 用同一條規則先擋。
+  出貨的 App 都符合；自己寫的 profile 在 rollout 前跑 `uv run python -m workspace_app.workflow check`，
+  症狀是開機失敗並說 `workflow id '…' must be a plain name`。
+
+**資料** — 新增五個 specstar model（`_SettingsDraft` / `_SettingsVersion` / `_SettingsCurrent` / `_SettingsKey` /
+`_SettingsAppliedKey`），
+在 `spec.apply` 之後註冊（沒有 CRUD 路由）；沒有要回填、沒有要打的 migrate。**頁面上輸入的 API key 以明碼存在資料庫**
+（和既有的 Private 環境變數一樣），只有 superuser 能寫、任何路由都讀不回來，歷史只記「哪個 key 改了」。
+
+**k8s · CI 側** — 沒有新的 manifest、env、probe 或 JobType；照常重 build、照常部署，**API 與所有 worker 一起換**：
+
+- `blob-gc` worker 以 API 的組合建起（`__main__.build_app`），兩邊都註冊這五個 model。滾動更新途中，新的 API
+  問到舊的 `blob-gc` worker 時，worker 會拒絕那一輪（`blob-gc` job FAILED，log 列出這五個 model 名稱）——這是
+  `_check_registry` 該做的事，worker 換完就好；舊的 worker 不會刪任何東西。
+- 還沒換的 worker 不會跟著頁面的套用走（它跑的是開機時的 `config.yaml`）。全部換完之前不要套用。
+
+**確認做完**（`rollout 後`）：
+
+- superuser：`curl -s -o /dev/null -w '%{http_code}' -b '<cookie>' '<網址>/api/admin/model-settings'` 回 200；一般使用者回 404。
+- 在頁面上把一個 KB 聊天用的 preset 換成另一個模型、套用：一秒後
+  `curl -s -b '<cookie>' '<網址>/api/kb/agent'` 的 `model` 欄位是新模型，不用重啟任何 pod
+  （聊天畫面的模型選單只列名稱，不列模型，看不出差別）。再按「回復」到前一版，`model` 回到原本的模型。沒部署到這一版的症狀：`/api/admin/model-settings` 回 404 給 superuser。
+
+### 2026-10-16 · 6a7c27ac · #959 skill 頁「安裝到 workspace…」清單先列出、每列再各自檢查 {#pr-959}
+
+**設定** — 無。
+
+**資料** — 無。
+
+**k8s · CI 側** — 前後端都改,照常重 build、部署。`rollout 後`請使用者把開著的 skill 頁重新整理:部署前載入的舊頁面讀不到
+每列的狀態,清單上**每一列都選不了**(圓鈕是灰的、旁邊沒有任何說明),重新整理就好。
+
+滾動更新途中,新頁面若打到還沒更新的 API pod,那一列會顯示「現在讀不到,安裝時會再檢查」(舊 pod 沒有逐列檢查的路由);仍然
+可以選、可以安裝(安裝時後端照樣檢查),rollout 完成後重新整理就正常。
+
+**行為改變,沒有開關**(plan-skill-install-picker D1、D3–D6):清單只問資料庫,不再等每個 workspace 的 `.skill/` 都讀完才出現,
+所以幾乎立即出現;以前一個忙碌的沙盒就能卡住整張清單。每一列接著各自檢查,先顯示「檢查中…」,再顯示「可以安裝」「已經裝了」
+「已有同名的 skill(誰的)」「已有同名的資料夾」或「現在讀不到,安裝時會再檢查」;同時最多 4 列在查,忙碌的沙盒不會卡住整張清單(但同時很忙的列有 4 個以上時,排在後面的列也要等)。檢查中的列可以
+直接選、直接安裝。新增唯讀路由 `GET /a/{slug}/items/{item_id}/skills/install-state`(權限同安裝)。
+
+**確認做完**(`rollout 後`):打開任一 skill 頁 →「安裝到 workspace…」:清單和打開 item 列表差不多快,每一列很快從「檢查中…」
+變成各自的狀態;已裝過的 workspace 標「已經裝了」且不能選。
+
+### 2026-10-16 · 727b6ac0 · #963 問外部AI(`ask_ext_ai`),以及小幫手的按鈕和自己查用同一個字 {#pr-963}
+
+**設定** — 必要的:無。選配(`rollout 後`,而且要等下面的打包發布了):`server.ext_ai_enabled: true` 讓聊天裡的 AI
+能「問外部AI」(預設關,見 [設定](configuration.md))。為什麼要等:大家的小幫手裡還沒有公司的網站檔時打開它,
+每張卡片都只能手動問。
+
+**資料** — 無。小幫手報到多記一個 `ext_ai` 欄位(有預設值,舊資料照讀),工作種類多一種 `ask_ext_ai`。
+
+**k8s · CI 側** — 前後端都改,照常重 build、部署。**只有要用問外部AI 時**,在打開上面的開關**之前**重新打包小幫手:
+1. 複製 `ai-workspace-helper/ext_ai_site.template.py` 成 `ext_ai_site.py`、填 `URL`,用
+   `python -m ai_workspace_helper try-ext-ai --site ext_ai_site.py "問題"` 在自己電腦上對真的網頁試過——因為那個網頁
+   長什麼樣只有公司知道,範本是猜的。
+2. `python3 scripts/pack_ai_workspace_helper.py --version <新版> --ext-ai-site ext_ai_site.py`,放進
+   `server.ai_workspace_helper_dir`,大家重裝(步驟在 [小幫手](ai-workspace-helper.md) 的「讓 AI 能問公司的網頁 AI」)。
+
+跳過的後果:開關打開了,小幫手在線時卡片說「你的小幫手沒有設定外部AI,請自己去問…」,離線時說「小幫手未連線」——
+都只能手動問。
+
+**行為改變,沒有開關**(plan-ext-ai D8,`rollout 後` 生效):「請幫我查」卡片在小幫手連線時,按鈕不再寫「查」/「重查」,
+而是和自己查一樣的字——搜尋是「{目的地} search」(有 Google 就是 Google,否則部署設定的第一個目的地;讀不到設定時寫
+「搜尋」),開網址是「開啟這個網址」,失敗後是「再 Google search 一次」/「再開一次」;自己查的按鈕多一個 ↗。教過使用者
+「按查」的說明要跟著改(`rollout 後`),不改的後果:使用者照說明找「查」找不到。
+
+**確認做完**(`rollout 後`):有小幫手的人開一張要搜尋的卡片,按鈕寫「Google search」;有開問外部AI 時,請 AI 問一個
+需要別人意見的問題,卡片標題是「問外部AI」、問題可以改,按下去之後顯示已等幾秒,回答回來存在 `lookups/`,AI 說明
+這是外部AI 的說法。
+
+### 2026-10-16 · 0fcbfc8f · #962 容量規劃：用量紀錄，與 superuser 的容量頁 {#pr-962}
+
+**設定** — 新的 `capacity:` 區塊（每個 key 見 [configuration.md §15](configuration.md#15-capacity容量規劃)）。
+**預設就開、行為會變**：
+
+- `capacity.record: true`：每個 API 與 worker 行程開始在 **stdout** 寫用量紀錄——每 5 分鐘、每個行程裡每人 × App ×
+  工作種類一行 JSON（`event.dataset: workspace.usage`），每個對話回合、每次 job 結束各一行；開著的頁面就算沒動作，
+  它的即時連線也每 5 分鐘記一行；blob-gc worker 每輪磁碟對帳（`resources.disk_reconcile_interval_sec`，預設 6 小時）
+  每個 item、每個知識庫 collection 各寫一行。`kind: local` 開隔離的 API pod 還會每 60 秒讀自己沙盒的 cgroup、寫
+  `sandbox` 行。量的估算方式在 [capacity.md §1](capacity.md)。為什麼：容量頁要算「每人在每個地方用了多少」，
+  平台不存，交給你們的 ES。不要它：rollout 前設 `capacity.record: false`（連帶不送 LLM 標籤；sandbox-host 的沙盒
+  紀錄要另外設 `SANDBOX_HOST_USAGE_SAMPLE_S=0`）。
+- 開著記錄時，每個行程多一條寫出用的 thread（`usage-writer`；worker 再多一條每 5 分鐘寫出的 thread）；每個請求
+  多一點計數（`scripts/bench_usage_middleware.py` 量得出你們機器上的數字）；路由自己沒問使用者是誰的 `/api` 請求
+  （例如自動 CRUD）在回應之後會多呼叫一次你們的 `get_user_id`（靜態檔、沒有路由接的網址、Kubernetes 探針
+  不呼叫——探針記成 `system` 的 `probe:` 列，每個 API pod 每個時段、每條探針路由一列：repo 附的 manifest 探
+  `/api/readyz` 和 `/openapi.json` 兩條）；關機時先把
+  已記的寫出去（有時間上限）。
+- `capacity.llm_tags: true`：平台的每次 LLM 呼叫多帶 `x-litellm-tags`（`ws`、`ws.user:…`、有 App 時 `ws.app:…`、
+  `ws.purpose:…`、`ws.call:…`）。**rollout 前**查三件事，任何一件成立就先設 `capacity.llm_tags: false`：
+  1. LiteLLM proxy 設了 `general_settings.reject_clientside_metadata_tags: true`——帶標籤的請求一律 400；
+  2. LiteLLM 開了 tag routing（`router_settings.enable_tag_filtering`）又沒有 `default` pool——對不到 deployment
+     的標籤會被拒；
+  3. 模型不是經由 LiteLLM、而是直接呼叫外部供應商——標籤裡的使用者 id 會送到外部。
+
+  為什麼：標籤讓 ④ 知道 GPU 的負載是誰的。漏查的症狀：1、2 是升級後**所有 AI 呼叫失敗**；3 是使用者 id 外流。
+  LiteLLM 的每日標籤彙總表會多出「人數 + App 數 + 用途數 + 最多 7 個」標籤（`ws`、`ws.call:` 的四種、
+  `ws.user:system`、`ws.user:unknown`；每個標籤 × 日期 × key × 模型……一列；不帶 item）。
+- 沒有開關的行為：sweeper 排的 job（叢集重算、磁碟對帳……）記在部署的 `get_user_id` 在請求之外回答的人身上
+  （通常是 `server.default_user`），這個人在容量頁算一個人（N 多 1，也算進「至少 10 人」）。只有沒有建立者的
+  job 記成 `system`。不用做什麼；看到這個使用者出現在名單上，就是這個原因。
+- `capacity.timezone`（**rollout 前**建議設成你們的時區，例如 `Asia/Taipei`）：「一天」從哪裡切。空 = UTC 午夜，
+  台灣的一天會被切在早上八點。
+- `capacity.step_s`（**rollout 前**，有改它的話）要整除一天：一天要切成整數個時段，「每天的尖峰」和跨日的試算才對得
+  齊——不整除的話 API 開機就擋下、起不來。
+- 四個資料來源（`capacity.usage_records` / `resource_metrics` / `gpu_metrics` / `llm_requests`）是 opt-in：沒設就是
+  沒接上，容量頁說缺什麼。怎麼實作見 [capacity.md §4](capacity.md)。
+
+**資料** — 沒有新的 model、沒有要回填的東西；分析算完只留在記憶體（10 分鐘）。
+
+**k8s · CI 側**
+
+- **收集器**（**rollout 前**）：把 `event.dataset == "workspace.usage"` 的行送到自己的 index（例如
+  `workspace-usage-*`），並套 [capacity.md §1](capacity.md) 的 index template。為什麼：容量頁讀的是這個 index；
+  沒分出來的話，這些行混在一般 log 裡，① 的查詢找不到——症狀是容量頁每個要 ① 的視圖都寫「已累積 0 天」（只有
+  時程那格在開始記錄的頭 30 天本來就是 0，它會另外說明）。
+- **sandbox-host 要換新映像**才會量沙盒：它每 `SANDBOX_HOST_USAGE_SAMPLE_S` 秒（預設 60；`0` = 不量）讀每個沙盒的
+  cgroup、每 `SANDBOX_HOST_USAGE_WINDOW_S` 秒（預設 300）寫一行 `sandbox`。窗口要整除 3600（不整除的值，包括 `0`，
+  起不來），而且要整除 `capacity.step_s` 或是它的整數倍，90 天期間的時段（預設 900 秒）也一樣——預設 `step_s: 300`
+  下只有 300 的因數（例如 60、100、150、300）和 900、1800、3600 可以（其他的 `capacity check` 會報錯）。沒換的症狀：容量頁沒有沙盒的 CPU、記憶體兩條線，「變慢的門檻」
+  沒有 (d)。app 與 sandbox-host 誰先換都可以：舊的 host 不認得建立時多送的 `labels`，照樣建；
+  舊的 app 不送，沙盒照量但記成 `unknown`。
+- **blob-gc 與 chat-video worker 的 env**（**接上資料來源前**）：這兩種 worker 開機時也會建構你們的資料來源 class
+  （它們組出 API 的整套 model 註冊）。class 建構時要的 env 或憑證，`kubernetes/base/workers.yaml` 的
+  `rca-worker-blob-gc` 和 `rca-worker-chat-video` 也要給（和 `rca-app` 一樣加在它們的 `env` / `envFrom`；例如
+  `kubectl -n <ns> set env deployment/rca-worker-blob-gc deployment/rca-worker-chat-video --from=secret/<來源的 secret>`）。為什麼：
+  沒有它們，建構就失敗。漏了的症狀：這兩種 worker 起不來（CrashLoopBackOff）。
+- **API pod 的記憶體上限**（**接上資料來源前**）：superuser 每打開一個期間，API pod 就多佔一份分析——約 4 bytes ×
+  時段數（28 天約 8,352）× 每條線花到的人數加總，加上每讀一列約 45–60 bytes，再加每條線每個 App、每種用途 8 bytes ×
+  時段數；1,000 人、每人平均在 8 條線約
+  270 MB，再加讀到的列（`max_rows` 的 500 萬列約 300 MB）；最多三個期間同時留著；算的時候分析自己的暫存再多約
+  一到兩成，來源若把整個查詢結果做成 list 回傳還要加上那一份（細節見 [capacity.md §6](capacity.md)）。repo 附的 `kubernetes/base/deployment.yaml` 給 `rca-app` 的 `resources.limits.memory`
+  是 `1Gi`：照你們的人數估一份、留出空間，把它調高（改 manifest，或
+  `kubectl -n <ns> set resources deployment/rca-app -c rca-app --limits=memory=<新上限>`），或把 `capacity.max_rows` 調低。為什麼：分析算在 API pod 上，
+  同一顆 pod 也在服務所有人。漏了的症狀：打開容量頁（尤其是 90 天）時，那顆 API pod 被 OOMKilled。
+- 前端：容量頁的程式和其他頁一樣在主程式裡；ECharts 是只在打開 `/capacity` 才下載的 chunk（壓縮前約 540 KB、
+  gzip 約 181 KB），其他頁不會下載它。
+
+**確認做完**（`rollout 後`）：
+
+- 任一 API pod：`kubectl logs <pod> | grep -m3 '"workspace.usage"'`——打開任何頁面後最多 5 分鐘（加 0.1 秒）內出現
+  `"kind":"work"` 的行；沒有的話看 `capacity.record`。
+- sandbox-host pod 開機 log 有 `→ usage: sample every 60s (0 = off), window 300s`，有沙盒在跑時每 5 分鐘有
+  `"kind":"sandbox"` 的行。
+- LiteLLM 的 spend log 裡，這個平台的請求 `request_tags` 帶 `ws.user:…`；AI 呼叫沒有因此變成 400。
+- superuser：`curl -s -o /dev/null -w '%{http_code}' -b '<cookie>' '<網址>/api/admin/capacity?days=7'` 回 200；一般使用者回 403。
+- 接上資料來源後：`uv run python -m workspace_app.capacity check --hours 24` 沒有 error（exit 0）。
+
+### 2026-10-16 · ff67c627 · #967 單一 item 可以調到部署的 `per_app.max`,不再只能比預設小 {#pr-967}
+
+**設定** — 必要的:無。要先看一眼的(`rollout 前`):`resources.per_app.max` 的 `cpu` / `memory`。為什麼:它以前只在開機時
+檢查 App 的值有沒有超過;升級後它也是**一個 item 能調到多大**。設得比你願意給單一 item 的還大,使用者就調得到那麼大
+(仍受個人額度夾住)。沒設 `max` 的維度行為不變:item 只能調到 App 的值以下。**設了 `max` 的維度,一併設一個具體的 `default`**(不是 `"max"`/`"0"`——那也是「沒人調的 item 不設限」):
+沒設的話,沒人調過的 item 跑的是 sandbox 後端自己的預設(http 主機是 `SANDBOX_HOST_CPU_CORES` / `SANDBOX_HOST_MEMORY_MAX`,
+本機隔離是 `sandbox.isolation.*`),可能比 `max`
+大——面板這時不寫「這個 App 最多 X」(寫了會跟生效值矛盾),而有人把它設成比 `max` 大的值就會被夾到 `max`,比不設還小。
+
+**資料** — 無。item 上存的大小欄位不變。
+
+**k8s · CI 側** — 前後端都改,照常重 build、部署;sandbox-host 不用動。
+
+**行為改變,沒有開關**([plan-item-size-ceiling.md](plan-item-size-ceiling.md) D1–D3):有設 `per_app.max` 的部署,item 的天花板從
+「App 的值」(沒在 app.json 宣告時就是 `per_app.default`)變成 `per_app.max`。例:`default` 1 核 / `512M`、`max` 4 核 / `4G`,
+以前把 item 調成 2 核 / 2G 實際只拿到 1 核 / 512M,升級後就拿到 2 核 / 2G。**先前已經把 item 調得比 App 的值大的人,下一次開
+環境就會真的拿到那個大小**(以前被夾回 App 的值)——個人額度照舊會擋總量。**反方向也有**:設了 `max` 卻沒有 App 的值
+(沒設 `per_app.default`、app.json 也沒宣告)的維度,以前 App 這一層完全不夾(只有個人額度),升級後超過 `max` 的會被夾回 `max`——下一次開
+環境就變小。滾動更新途中新舊 API pod 並存時,同一個 item 由哪一顆 pod 開的環境就照哪一顆的規則,rollout 完成後一致。
+rollout 時**已經在跑**的環境:cgroup 還是開的時候的大小,但它在額度帳上的那一列,下一次被使用或喚醒時就改按新的大小記
+(「我的資源」照那一列顯示),直到環境被關掉或回收、重開後兩邊才一致——這段時間調大的會顯示得比實際占用多,被夾回 `max` 的
+會顯示得比實際少。環境面板在 CPU、記憶體欄位下多一行
+「這個 App 最多 X」。app.json 的 `resources` 從「item 最多吃多少」變成「預設吃多少」(目前內建 App 都沒有宣告)。
+
+**確認做完**(`rollout 後`):在一個有設 `per_app.max` 的 App 的 item 打開「環境」面板,CPU、記憶體欄位下寫著「這個 App 最多
+X」(X 是 `max`);把它調到預設與 `max` 之間的值、存檔、開環境,面板的生效值就是調的值,沒有「受這個 App 的上限限制」。
+
+### 2026-10-16 · 5d1e49ea · #955 工具很多的 item：模型拿到工具目錄，完整 schema 用到才送 {#pr-955}
+
+**設定** — 無。沒有新旋鈕,也沒有要改的 key。
+
+**資料** — 不動。
+
+**k8s · CI 側** — 照常重 build、部署。manifest 沒改。
+
+**行為改變,沒有開關**:一輪送給模型的工具清單裡,**套件 command 只佔一行**——名字 +
+description 的第一句(上限 100 字元)、**沒有參數 schema**。模型要用哪個就直接呼叫它,
+系統回完整描述 + 真的 schema,照著再呼叫一次就執行;模型也可以先 `load_tool` 問用法。
+載入只在那一輪有效。內建工具(`exec`、`read_file` 這些)不受影響,照舊帶完整 schema。
+同時,system prompt 裡那份「每個工具的名字 + 描述 + 完整 JSON schema」的複本**整段移除**,
+換成一段固定長度的說明。
+
+為什麼要動:這兩份清單以前每輪都送,所以工具一多,光工具清單就能把窗口吃掉——有部署量到
+**414,115 字元**的 system prompt。超出窗口時,會拒絕的 endpoint 回 400(我們讀出上限、縮
+歷史重送),**不會拒絕的 endpoint 直接砍掉請求前段**,而前段正是你的 `system_prompt`:
+模型照樣流暢回答,只是沒看到你的指令。量到的差別(5 個套件、14 個 command):19,884 tok → **1,048 tok**(目錄 710 +
+`load_tool` 自己 120 + 那段固定說明 218);每個目錄條目約 51 tok。14 個內建工具不受影響、
+照舊帶完整 schema,把它們算進去的話整輪工具清單是 33,746 → **5,586 tok**。
+
+**代價**:一輪裡第一次用到某個 command 會多一次 round-trip(載入 → 再呼叫)。這會吃掉
+`runner.max_turns`(預設 `10`)的額度:一輪用到 N 個不同的 command,從前要 N+1 步,現在
+最多要 2N+1 步,所以「一輪裡最多用幾個不同的套件 command」從 ~9 掉到 ~4;超過的那一輪
+會收到「已達步數上限」而不是答案。模型被告知可以用一次 `load_tool` 載好幾個(那樣是
+N+2 步),但**如果你們的 item 常常一輪用到四個以上不同的 command,把 `runner.max_turns`
+調高**(`docs/configuration.md` §3 的設定表與 §10 的 yaml 都有這個 key)是這條的出口。
+
+**確認做完**(`rollout 後`):在一個工具很多的 item 送一句話,然後看那一輪的 LLM 呼叫記錄——
+路徑從 pod 自己的 `config.resolved.yaml` 讀 `observability.llm_log.dir`(開機寫在 config.yaml
+旁邊、0600),**不要照 repo 的預設值**,你們的 WORKDIR 不一定一樣:
+
+```
+printenv WORKSPACE_APP_CONFIG            # 沒設就是 cwd 的 ./config.yaml
+grep -n -A3 "llm_log" <config 所在目錄>/config.resolved.yaml
+tail -5 <上面讀到的 dir>/$(date +%F)/index.jsonl   # 每通呼叫一行,有 seq / ts / file
+```
+
+**要看那一輪的第一通呼叫**,不是最新的一筆:同一輪在載入之後的每一通都會帶著已載入
+command 的完整 schema——那正是這個功能在做的事。從 `index.jsonl` 認出你那一輪的幾行
+(看 `ts`),開 `seq` **最小**那一行的 `file`。
+
+⚠️ 不要用檔名猜:`0001-…` 不是「那一輪的第一通」,`seq` 是**每個 process** 從 0 開始的
+(pod 重啟後同一天會有兩個 `0001-`,跨午夜的那天可能根本沒有)。也不要用
+`ls -t … | head -1`:`index.jsonl` 寫在 record 之後,mtime 可能更新,而它沒有 `request`。
+
+那一筆裡:`request.messages[0].content` 就是 system prompt,字元數會掉**一到兩個數量級**
+(本機同一組工具量到的是 83,180 → 874 字元;你們的絕對值取決於自己的工具數與描述長度);
+`request.tools` 裡的套件 command 只有名字 + 一行描述 + `[套件名]`、`properties` 是空的。
+⚠️ 那些記錄裡 `api_key` 是明文(它設計成可重播),貼出來前先拿掉。
+
+**漏做的症狀** — 沒有「漏做」:這是單向的縮減,不需要運營方動手。但如果某個 item 的流程
+原本靠「模型一開始就看得到所有 schema」,它會變成每輪多一次載入;那是預期的代價,不是故障。
+
+### 2026-10-16 · #915 錯誤說人話：發生了什麼、怎麼辦、原文收合在技術細節；重試只在單次模型呼叫 {#pr-915}
 
 **設定** — 沒有新 key，沒有要做的事。**行為改變，沒有開關**：
 

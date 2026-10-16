@@ -17,12 +17,6 @@ export function policyOf(name: string, policy: Record<string, string>): EnvPolic
   return p === "private_first" || p === "private_only" ? p : "shared_first";
 }
 
-/** Whether any name here reads "my environment variables" — the only case
- * where it is worth asking for them (`plan-personal-env` D2). */
-export function asksPersonal(policy: Record<string, string>): boolean {
-  return Object.keys(policy).some((n) => policyOf(n, policy) !== "shared_first");
-}
-
 /** `private` = the person's value for THIS item; `personal` = their value for
  * every item ("my environment variables", `docs/plan-personal-env.md`). */
 export type Layer = "shared" | "private" | "personal" | "none";
@@ -50,8 +44,9 @@ export function layerInUse(
     case "private_first":
       return has(mine) ? "private" : has(personal) ? "personal" : has(shared) ? "shared" : "none";
     default:
-      // Shared never reads the person's values for every item (D2).
-      return has(shared) ? "shared" : has(mine) ? "private" : "none";
+      // Shared falls back to the person's values — this item's, then mine for
+      // every item (D1; D2 as corrected 2026-10-12).
+      return has(shared) ? "shared" : has(mine) ? "private" : has(personal) ? "personal" : "none";
   }
 }
 

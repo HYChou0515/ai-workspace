@@ -135,3 +135,40 @@ def test_the_same_failure_all_day_is_one_notice(monkeypatch):
 
     bob = [link for who, link in _inbox(spec) if who == "bob"]
     assert len(bob) == 3  # day one, the next day, and another workflow
+
+
+def _titles(spec) -> list[tuple[str, str]]:
+    rm = spec.get_resource_manager(Notification)
+    out = []
+    for r in rm.list_resources():
+        n = r.data
+        assert isinstance(n, Notification)
+        out.append((n.recipient, n.title))
+    return sorted(out)
+
+
+def test_a_failed_page_job_is_named_by_what_the_page_asked_for():
+    """A page job (#942) has no workflow and no phase: "failed at “?”" tells
+    nobody anything. It names the sub-agent or tool, and the once-a-day bucket
+    is per job name, not one shared "" bucket for every page job of the item."""
+    from workspace_app.workflow.run import PageJob
+
+    executor, item_id, spec, _runner, _client = _executor_app(None, owner="owner-o")
+
+    def failed(name: str) -> WorkflowRun:
+        return WorkflowRun(
+            item_id=item_id,
+            captured_user="owner-o",
+            status=RunStatus.ERROR,
+            page_job=PageJob(kind="agent", name=name),
+        )
+
+    _run_as(spec, "run-1", item_id, "bob", workflow_id="")
+    _run_as(spec, "run-2", item_id, "bob", workflow_id="")
+    executor.notify_failure(failed("summariser"), "run-1")
+    executor.notify_failure(failed("checker"), "run-2")
+
+    titles = _titles(spec)
+    assert ("owner-o", "Page job failed: sub-agent “summariser”") in titles
+    assert ("bob", "A page job as you failed: sub-agent “checker”") in titles
+    assert len([t for t in titles if t[0] == "bob"]) == 2

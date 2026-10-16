@@ -640,7 +640,11 @@ function ItemChatPanel({
         agent={agent}
         fill
         onNewChat={onNewChat}
-        onSteer={chat.run_id ? (text) => steer.mutate(text) : undefined}
+        onSteer={
+          // A page job (#942) has no workflow to steer; until the run loads the
+          // chat is taken for a workflow run, as it always was.
+          chat.run_id && !run.data?.page_job ? (text) => steer.mutate(text) : undefined
+        }
         picker={picker}
         suggestions={suggestions}
         attachedPreset={attachedPreset}

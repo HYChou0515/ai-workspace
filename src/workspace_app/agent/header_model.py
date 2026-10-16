@@ -25,6 +25,22 @@ from agents.models.interface import Model
 from .settings_arg import with_settings
 
 
+def merge_extra_headers(
+    args: tuple[Any, ...], kwargs: dict[str, Any], headers: Mapping[str, str]
+) -> tuple[tuple[Any, ...], dict[str, Any]]:
+    """Return ``(args, kwargs)`` with the call's ModelSettings replaced by a COPY
+    whose ``extra_headers`` also carry ``headers`` (``headers`` win a clash) —
+    wherever the SDK put the settings (`settings_arg.with_settings`). Miss a
+    shape and the headers silently never reach the wire, which looks exactly
+    like a gateway rejecting the user's credential."""
+    return with_settings(
+        args,
+        kwargs,
+        lambda s: replace(s, extra_headers={**(s.extra_headers or {}), **headers}),
+        at=2,
+    )
+
+
 class HeaderModel(Model):
     """Wrap ``inner`` so every request it makes carries ``headers``.
 
@@ -43,16 +59,7 @@ class HeaderModel(Model):
     def _with_headers(
         self, args: tuple[Any, ...], kwargs: dict[str, Any]
     ) -> tuple[tuple[Any, ...], dict[str, Any]]:
-        """Return ``(args, kwargs)`` with the call's ModelSettings replaced by a COPY
-        carrying our headers — wherever the SDK put them (`settings_arg`). Miss a
-        shape and the headers silently never reach the wire, which looks exactly
-        like a gateway rejecting the user's credential."""
-        return with_settings(
-            args,
-            kwargs,
-            lambda s: replace(s, extra_headers={**(s.extra_headers or {}), **self._headers}),
-            at=2,
-        )
+        return merge_extra_headers(args, kwargs, self._headers)
 
     async def get_response(self, *args: Any, **kwargs: Any) -> Any:
         args, kwargs = self._with_headers(args, kwargs)

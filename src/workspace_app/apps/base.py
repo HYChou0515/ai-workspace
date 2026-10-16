@@ -181,7 +181,7 @@ class WorkItemBase(Struct):
     """Tier 1 — how much CPU THIS item's environment may use, or None.
 
     ``None`` is the whole design, not an empty slot: it means "nobody has said",
-    and the size is then resolved fresh every time from ``min(the App's ceiling,
+    and the size is then resolved fresh every time from ``min(the App's size,
     the owner's own budget)``. Storing that resolved number here instead would
     make it a copy that drifts — raise the owner's quota and a three-month-old
     item still runs at the old size, looking entirely normal. The same reason a

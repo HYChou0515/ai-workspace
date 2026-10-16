@@ -1506,6 +1506,7 @@ class ChatSendService:
                 # the live FileStore each turn and handed ONLY to the agent. The persisted user
                 # message + the broadcast UserMessage stay clean (block never enters history),
                 # so it is idempotent + replay-safe. "" for Apps that declare no context_files.
+                from ..agent.tool_usage import record_skill
                 from ..apps.context_files import build_context_block
                 from ..apps.skills import build_applied_skills_block, build_workspace_skills_block
 
@@ -1530,6 +1531,9 @@ class ChatSendService:
                         self._locator.slug_of(investigation_id),
                         self._locator.profile_of(investigation_id),
                         body.apply_skills,
+                        # plan-tool-usage-stats §8.1: the second door a skill is
+                        # loaded through — counted like a `read_skill`.
+                        on_loaded=lambda name, source: record_skill(ctx, name, source),
                     )
                     if body.apply_skills
                     else ""
@@ -1576,6 +1580,10 @@ class ChatSendService:
                     on_complete=persist,
                     on_turn_end=lambda: self._turn_ended(investigation_id, rid),
                     pending=pending,
+                    # docs/plan-capacity-usage.md §6.3: the question's own
+                    # timestamp is the acceptance (D13 (b) starts here).
+                    surface="chat",
+                    accepted_ms=created,
                 )
                 # #493 symptom 1 (504): await THIS turn's completion, but only up to a
                 # deadline — then DETACH it so a long turn can't hang the POST until the

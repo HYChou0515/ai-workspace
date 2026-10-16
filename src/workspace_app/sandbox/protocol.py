@@ -142,6 +142,12 @@ class SandboxSpec:
     the plain local process sandbox) ignore these — the fields are a request, and
     an unenforcing backend is not lying about anything it claimed."""
 
+    labels: dict[str, str] | None = None
+    """docs/plan-capacity-usage.md §6.5: whose sandbox this is — `user` (the
+    item's owner, the person its resources are charged to) and `app` — for the
+    usage rows its measurements become. Backends that measure nothing ignore
+    it; the HTTP host echoes it on every `sandbox` row it writes."""
+
     exposed_ports: tuple[int, ...] = ()
     """In-sandbox TCP ports that must be reachable from the backend, declared
     **up front** because some backends (Docker) can't publish a port on an

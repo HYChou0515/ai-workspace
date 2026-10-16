@@ -24,6 +24,10 @@ from ..agent.context import AgentToolContext
 from ..apps.skill_hub import SkillHubReview, SkillHubStore, register_skill_hub
 from ..apps.skill_hub_git import SkillHubRepos, resolve_git_root
 from ..apps.subagents import SubagentDef
+from ..capacity.middleware import UsageMiddleware
+from ..capacity.recorder import UsageRecorder
+from ..capacity.scope import recording_reader
+from ..capacity.service import CapacityService
 from ..config.schema import (
     ChatVideoSettings,
     EnhancementSettings,
@@ -32,10 +36,12 @@ from ..config.schema import (
     RetrievalSettings,
 )
 from ..context_budget import DEFAULT_MAX_TOKENS_WINDOW_RATIO
+from ..live_value import Live
 
 if TYPE_CHECKING:
     # Annotation-only: `factories` composes THIS module, so a runtime import
     # here would be circular. `SubagentModel` values arrive through parameters.
+    from ..agent.tool_usage import ToolUsageRecorder
     from ..factories import SubagentModel
 from ..apps.skills import readonly_skill_path
 from ..files import ReadOnlyPath, WorkspaceFiles, WorkspaceFull, rel_path
@@ -50,11 +56,19 @@ from ..kb.llm import ILlm, LitellmLlm
 from ..kb.retriever import Enhancements, Retriever
 from ..kb.vlm import IVlm, VlmDescriber
 from ..kernels import KernelService
+from ..model_settings.consumers import LiveClient, LiveLlm, follow_published
+from ..model_settings.live import LiveSettings
+from ..model_settings.store import register_settings_models
 from ..monitor import IMonitor, InMemoryMonitor, MonitorProcessor
 from ..observability.boot import boot_step
 from ..quota.admission import AdmissionGate, SandboxQuotaExceeded
 from ..quota.disk_ledger import DiskLedger, UserDiskFull, register_disk_ledger
-from ..quota.limits import ResourceLimits, parse_size, warn_unenforceable_dimensions
+from ..quota.limits import (
+    ResolvedSize,
+    ResourceLimits,
+    parse_size,
+    warn_unenforceable_dimensions,
+)
 from ..quota.user_limits import UserLimits, register_user_quota
 from ..resources import (
     AgentConfig,
@@ -122,6 +136,7 @@ from .locator import ItemLocator
 from .marking_table import register_marking_table_route
 from .mention import MentionService
 from .meta_routes import register_meta_routes
+from .model_settings_routes import register_model_settings_routes
 from .notification_delivery import INotificationChannel
 from .notifications import notify, register_notification_routes
 from .private_env import PrivateEnvStore, register_private_env, register_private_env_routes
@@ -315,6 +330,8 @@ async def start_page_schedule(
             chat_id=chat_id,
             payload=payload,
             by_hand=by_hand,
+            # Its tool calls count on the schedule surface (plan-tool-usage-stats).
+            from_schedule=True,
         )
     except Exception:
         # Take the chat down with the run that never started, so a schedule
@@ -384,7 +401,7 @@ def create_app(
     # plan-subagent-model-choice: the operator's curated engines a run_agent
     # call may pick (`resolve_subagent_models(settings)` in production).
     # Empty ⇒ the tool grows no `model` argument anywhere.
-    subagent_models: tuple[SubagentModel, ...] = (),
+    subagent_models: Live[tuple[SubagentModel, ...]] = (),
     kb_embedder: Embedder | None = None,
     kb_code_embedder: Embedder | None = None,  # P3.0 code-specialised embedder
     kb_image_embedder: ImageEmbedder | None = None,  # #513 image embedder (embedding_img)
@@ -410,7 +427,7 @@ def create_app(
     # factories.get_sanity_llm_factory / get_sanity_models. The factory is the
     # SAME (model, level) -> ILlm seam kb_search runs on.
     sanity_llm_factory: object | None = None,  # Callable[[str, str], ILlm]
-    sanity_models: list[str] | None = None,
+    sanity_models: Live[list[str]] | None = None,
     # #231: LLM-as-judge for the sanity matrix (ai_grade/ai_note + per-model
     # verdict). None ⇒ AI scoring off. __main__ passes get_sanity_judge_llm.
     sanity_judge_llm: ILlm | None = None,
@@ -466,6 +483,12 @@ def create_app(
     # docs/plan-outside-lookup.md D3: the "請幫我查" card's search buttons
     # (`server.lookup_targets`, validated by the loader). None ⇒ Google alone.
     lookup_targets: list[dict[str, str]] | None = None,
+    # docs/plan-outside-helper.md §3.7.2: `server.ai_workspace_helper_dir`, where the
+    # operator publishes a packed helper. None/"" ⇒ nothing published.
+    ai_workspace_helper_dir: str | None = None,
+    # docs/plan-ext-ai.md D5: `server.ext_ai_enabled` — chat turns may draw the
+    # 問外部AI card.
+    ext_ai_enabled: bool = False,
     # #262: user ids with UNRESTRICTED collection access — threaded into the
     # route-level `authorize(...)` guards (the dedicated permission endpoint +
     # content-route guards). MUST match the set passed to `make_spec(superusers=…)`
@@ -515,6 +538,17 @@ def create_app(
     # plan-skill-hub-history U4: how often this pod writes its skill hub counts
     # (also written when it stops).
     skill_hub_flush_interval: timedelta = timedelta(hours=2),
+    # plan-tool-usage-stats: where this process's runner counts tool calls (the
+    # SAME recorder `__main__` hands the runner), and how often they are written
+    # (also when it stops). None ⇒ nothing counted here is written.
+    tool_usage: ToolUsageRecorder | None = None,
+    tool_usage_flush_interval: timedelta = timedelta(minutes=5),
+    # docs/plan-capacity-usage.md: where this process counts its requests,
+    # turns and jobs for the capacity dashboard. None ⇒ nothing is counted.
+    usage_recorder: UsageRecorder | None = None,
+    # docs/plan-capacity-usage.md §11: the dashboard's analysis service, over
+    # the operator's four sources. None ⇒ none connected (the page says so).
+    capacity: CapacityService | None = None,
     # #345: soft cap (bytes) on ONE item's shared scratch dir; the idle reaper's
     # du-sweep recycles any item over it so a runaway workspace can't fill the
     # scratch volume the whole fleet shares. 0 ⇒ disabled (the lenient default).
@@ -597,6 +631,9 @@ def create_app(
     wiki_model: str = "",
     wiki_llm_base_url: str = "",
     wiki_llm_api_key: str = "",
+    # plan-model-settings P5: `kb.wiki.llm` from the published settings, asked per
+    # use. None ⇒ the three strings above, fixed at boot.
+    wiki_endpoint: Callable[[], tuple[str | None, str | None, str | None]] | None = None,
     # #59/#82: the durable background-queue backend (a specstar message-queue
     # factory), shared by wiki maintenance AND KB indexing. None ⇒ the
     # specstar-backed Simple queue (multipod via the shared backend). __main__
@@ -669,9 +706,16 @@ def create_app(
     workflow_max_steps: int = 1000,
     workflow_run_timeout: timedelta | None = None,
     workflow_step_timeout: timedelta | None = None,
+    # plan-model-settings P5: the process's view of the published settings. None
+    # (tests, tools) ⇒ the boot values throughout, as before.
+    live: LiveSettings | None = None,
     # Per-item run-history retention (manual §16): keep at most this many runs, pruning
     # the oldest terminal ones when a new run starts. 0 ⇒ keep all.
     workflow_keep_last_runs: int = 0,
+    # #942: a page's jobs — at most this many in flight per item, each at most
+    # this long (`server.wui_page_job_limit` / `wui_page_job_timeout_sec`).
+    wui_page_job_limit: int = 4,
+    wui_page_job_timeout: timedelta = timedelta(hours=1),
     # #429 P7: how often the schedule-trigger sweeper polls declared triggers.json for due
     # runs. None ⇒ the sweeper is off (the safe default — headless triggered runs are opt-in
     # per deploy). A real deploy sets a cadence (e.g. 60 s) to enable time-triggered workflows.
@@ -714,6 +758,13 @@ def create_app(
             get_user_id = _default_user  # a per-request callable — use it as-is
         else:  # UNSET / unexpected — fall back to the single dev tenant
             get_user_id = lambda: "default-user"  # noqa: E731
+    # docs/plan-capacity-usage.md §6.2: a request learns who it is from the
+    # first answer its routes get from `get_user_id`, so the counter never
+    # asks the deploy's reader a second time. The counter itself keeps the
+    # unwrapped reader for a request whose routes never asked.
+    _deploy_user_reader = get_user_id
+    if usage_recorder is not None:
+        get_user_id = recording_reader(get_user_id)
     if users is None:
         users = MockUserDirectory()
     # `None` catalog → build one from bundled defaults so test fixtures /
@@ -734,22 +785,38 @@ def create_app(
     validate_all_apps()
     # #89 (P4d): the per-turn resolve for new per-App items (RcaInvestigation, …)
     # goes through this; presets come from the same place the agent catalog's did.
-    app_catalog = AppCatalog(presets=catalog.presets() or _bundled.presets())
+    #
+    # plan-model-settings P5: what follows is read through functions, not
+    # captured, so a catalog that follows the published settings
+    # (`model_settings.consumers.live_agent_config_catalog`) reaches each use.
+    app_catalog = AppCatalog(presets=lambda: catalog.presets() or _bundled.presets())
+
     # Issue #32: KB chat is a list. Legacy `AgentConfigCatalog([...])`
     # construction has no kb_chats — fall back to the bundled list so
     # KB chat works in every test path.
-    kb_agent_configs = catalog.kb_chats() or _bundled.kb_chats()
-    assert kb_agent_configs  # bundled always populates kb_chats
+    def kb_agent_configs() -> list[AgentConfig]:
+        return catalog.kb_chats() or _bundled.kb_chats()
+
+    assert kb_agent_configs()  # bundled always populates kb_chats
+
     # Default for the RCA→KB ask_knowledge_base bridge (no picker
     # context — the RCA agent doesn't pick a KB model per turn).
-    default_kb_agent_config = kb_agent_configs[0]
+    def default_kb_agent_config() -> AgentConfig:
+        return kb_agent_configs()[0]
+
     # #356: the Tune-parsing "Try answer" LLM — same model as the KB chat, so the
     # probe's answer mirrors production. A plain LitellmLlm (no agent tool loop):
     # it's handed a FIXED passage set, so it must NOT self-search.
-    kb_answer_llm = answer_llm or LitellmLlm(
-        default_kb_agent_config.model,
-        base_url=default_kb_agent_config.llm_base_url or None,
-        api_key=default_kb_agent_config.llm_api_key or None,
+    kb_answer_llm = answer_llm or LiveLlm(
+        LiveClient(
+            "kb_chat",
+            lambda: (
+                default_kb_agent_config().model,
+                default_kb_agent_config().llm_base_url or None,
+                default_kb_agent_config().llm_api_key or None,
+            ),
+            lambda endpoint: LitellmLlm(endpoint[0], base_url=endpoint[1], api_key=endpoint[2]),
+        )
     )
     # Same shape for infer_modules: fall back to bundled when the
     # supplied catalog didn't wire one (legacy positional-list tests).
@@ -1015,16 +1082,18 @@ def create_app(
             return want
         return min(want, ceiling)
 
-    async def _resolved_for(item_id: str) -> tuple[SandboxSpec, str | None, str | None]:
+    async def _resolved_for(item_id: str) -> ResolvedSize:
         """How big THIS item's sandbox may be — the one place that answers it.
 
         Three inputs, in this order:
 
         1. what the item itself asks for, when someone has said (`None` means
            nobody has, and that is a real answer — see `WorkItemBase`);
-        2. otherwise the App's ceiling, which is the behaviour before per-item
+        2. otherwise the App's size, which is the behaviour before per-item
            sizing existed;
-        3. and either way, clamped by the OWNER's own budget.
+        3. either way held to the item ceiling — the deploy's `per_app.max`,
+           or the App's size where no `max` was set (plan-item-size-ceiling
+           D1, D2) — and then clamped by the OWNER's own budget.
 
         The clamp is what stops a default from producing an item that can never
         run: admission refuses when `incoming > limit`, so a 4-core App under a
@@ -1048,18 +1117,20 @@ def create_app(
 
         app_cpu = limits.cpu_cores if limits else None
         app_mem = limits.memory_bytes if limits else None
+        cpu_ceiling = limits.item_cpu_ceiling if limits else None
+        mem_ceiling = limits.item_memory_ceiling if limits else None
         cpu = item_cpu if item_cpu is not None else app_cpu
         mem = item_mem if item_mem is not None else app_mem
-        # BOTH ceilings, in this order. The App's was previously only a
-        # fallback — read when the item stated nothing and ignored when it did —
-        # so "App declares 4, person types 999" resolved to 999 on any deploy
-        # with no per-user quota, which is the shipped default and therefore the
-        # common case rather than the corner. Three documents and an i18n string
-        # said otherwise, and that string was unreachable: with only a budget
-        # clamp, being clamped implied the budget was what bound it, so the
-        # panel could never name the App.
-        after_app = _clamp_cpu(cpu, app_cpu or 0.0)
-        after_app_mem = _clamp_bytes(mem, app_mem or 0)
+        # BOTH ceilings, in this order. The App's was once only a fallback —
+        # read when the item stated nothing and ignored when it did — so "App
+        # declares 4, person types 999" resolved to 999 on any deploy with no
+        # per-user quota. Then it became the App's SIZE, which for an App that
+        # states nothing is `per_app.default`: a deploy of default 1 / max 4
+        # could never give one item 2, and `max` reached no item at all. The
+        # ceiling is the deploy's `max`, or the App's size where none was set
+        # (plan-item-size-ceiling D1, D2).
+        after_app = _clamp_cpu(cpu, cpu_ceiling or 0.0)
+        after_app_mem = _clamp_bytes(mem, mem_ceiling or 0)
         final_cpu = _clamp_cpu(after_app, budget.cpu if budget else 0.0)
         final_mem = _clamp_bytes(after_app_mem, parse_size(budget.memory) if budget else 0)
 
@@ -1078,17 +1149,25 @@ def create_app(
                 return None
             return "app" if final == after_app_v else "quota"
 
-        return (
-            SandboxSpec(cpu_cores=final_cpu, memory_bytes=final_mem),
-            _who(cpu, after_app, final_cpu),
-            _who(mem, after_app_mem, final_mem),
+        return ResolvedSize(
+            spec=SandboxSpec(
+                cpu_cores=final_cpu,
+                memory_bytes=final_mem,
+                # docs/plan-capacity-usage.md §6.5: whose sandbox this is — the
+                # same owner the budget above was read for.
+                labels={"user": owner or "", "app": _slug or ""},
+            ),
+            cpu_bound_by=_who(cpu, after_app, final_cpu),
+            memory_bound_by=_who(mem, after_app_mem, final_mem),
+            cpu_ceiling=cpu_ceiling,
+            memory_ceiling=mem_ceiling,
         )
 
     async def _spec_for(item_id: str) -> SandboxSpec:
         """The registry's seam: just the spec. One resolver, two readers — the
         attribution is a second question about the same answer, not a second
         answer."""
-        return (await _resolved_for(item_id))[0]
+        return (await _resolved_for(item_id)).spec
 
     def _titles_of(item_ids: list[str]) -> dict[str, str]:
         """Each item's headline, for the ones this reader may see.
@@ -1434,6 +1513,7 @@ def create_app(
         uv_cache_max_bytes=uv_cache_max_bytes,
         mirror_interval=mirror_interval,
         skill_hub_flush_interval=skill_hub_flush_interval,
+        tool_usage_flush_interval=tool_usage_flush_interval,
         code_sync_check_interval=code_sync_check_interval,
         code_daily_sync=code_daily_sync,
         wiki_reflect_daily=wiki_reflect_daily,
@@ -1508,6 +1588,21 @@ def create_app(
     # LAST so it wraps OUTERMOST and its wall clock covers the whole request,
     # middleware included — otherwise the residual it reports would exclude the
     # very queueing we are trying to see.
+    # docs/plan-capacity-usage.md §6.1: count every request for the capacity
+    # dashboard. Inside the perf trace (below), which stays outermost for the
+    # reason it gives.
+    app.state.usage_recorder = usage_recorder
+    if usage_recorder is not None:
+        # The Apps ship with the image: their slugs are known now, for good.
+        from ..apps.catalog import discover_app_slugs
+
+        app.add_middleware(
+            UsageMiddleware,
+            recorder=usage_recorder,
+            get_user_id=_deploy_user_reader,
+            is_app=frozenset(discover_app_slugs()).__contains__,
+        )
+
     if perf_trace.enabled():
         perf_trace.install(spec, sandbox)
         app.add_middleware(perf_trace.PerfTraceMiddleware)
@@ -1754,6 +1849,7 @@ def create_app(
         wiki_model=wiki_model,
         wiki_llm_base_url=wiki_llm_base_url,
         wiki_llm_api_key=wiki_llm_api_key,
+        wiki_endpoint=wiki_endpoint,
         # #245: the blob-GC job's grace periods + the sinks its telemetry lands
         # in when THIS process consumes it (all-in-one); a pure producer only
         # asks (lifecycle `blob_gc_sweeper`, gated by `gc_interval`).
@@ -1763,6 +1859,8 @@ def create_app(
         filestore=filestore,
         chat_video_settings=chat_video,
         disk_live_window_ms=int(idle_timeout.total_seconds() * 1000),
+        # docs/plan-capacity-usage.md §6.4: jobs this process consumes in-process.
+        usage_recorder=usage_recorder,
     )
 
     # #208: the first real backend hit — specstar materialises every model's
@@ -1820,6 +1918,18 @@ def create_app(
     register_turn_activity(spec)
     register_disk_ledger(spec)
     register_user_quota(spec)
+    # plan-model-settings P2/P5: the settings page's rows, post-apply (no CRUD
+    # routes). Registered whether or not this process follows them, so the
+    # blob-gc worker composing this function holds the same registry.
+    register_settings_models(spec)
+    if live is not None:
+        register_model_settings_routes(
+            api,
+            store=follow_published(live, spec),
+            live=live,
+            get_user_id=get_user_id,
+            superusers=superusers,
+        )
     # These four used to be registered by the lifespan — two of them only when
     # their feature was on. The blob-gc worker composes THIS function and never
     # enters a lifespan, and the API's ask names every model the API holds, so
@@ -1910,7 +2020,9 @@ def create_app(
     # Model-sanity battery routes mount only when the live-LLM factory is wired.
     sanity_coordinator = coordinators.sanity
     if sanity_coordinator is not None:
-        register_sanity_routes(api, sanity_models or [], sanity_coordinator)
+        register_sanity_routes(
+            api, sanity_models if sanity_models is not None else [], sanity_coordinator
+        )
     app.state.sanity_coordinator = sanity_coordinator
     # The chat agent shares the injected runner; its retriever uses the same
     # embedder as ingestion so query and document vectors are comparable.
@@ -1958,7 +2070,7 @@ def create_app(
         get_user_id=get_user_id,
         superusers=superusers,
         answer_llm=kb_answer_llm,
-        answer_system_prompt=default_kb_agent_config.system_prompt,
+        answer_system_prompt=lambda: default_kb_agent_config().system_prompt,
     )
     # #307: logical Group management (owner-managed membership). Granting
     # `group:<id>` on a resource then covers every member (see resources.groups).
@@ -1994,6 +2106,7 @@ def create_app(
     # For the reclaim tick (`turn_reclaim.ReclaimTick.of`): what it judges by
     # and re-runs through, off `app.state` like every other lifespan sweeper.
     app.state.spec = spec
+    app.state.app_catalog = app_catalog  # what an App turn resolves through
     app.state.turn_claims = turn_claims
     app.state.turn_activity = turn_activity
     app.state.turn_control = turn_control
@@ -2005,6 +2118,7 @@ def create_app(
         event_bus=event_bus,
         pod_id=pod_id,
         turn_activity=turn_activity,
+        usage_recorder=usage_recorder,
     )
     # The sweeper feeds the durable per-person ledger with what the mirror just
     # measured — the ONLY path by which bytes the agent produced with `exec`
@@ -2019,6 +2133,14 @@ def create_app(
     # the hub routes share — exposed so a test can publish through the app's own.
     app.state.skill_hub = skill_hub
     app.state.skill_hub_usage = skill_hub.usage  # flushed by the lifespan (U4)
+    # plan-tool-usage-stats §3.5: this pod's tool-call counts, flushed by the
+    # lifespan. The model is registered either way — the report reads it.
+    from .tool_usage_store import ToolUsageStore, register_tool_usage, writer_name
+
+    register_tool_usage(spec)
+    app.state.tool_usage_store = (
+        ToolUsageStore(spec, tool_usage, pod=writer_name()) if tool_usage is not None else None
+    )
     # KB chat runs through a wiki-aware runner that routes each turn across
     # chunk-RAG / wiki / both (#50 P5). It's a pure pass-through to `runner`
     # unless the query opts into the wiki AND a collection has use_wiki, so the
@@ -2031,6 +2153,11 @@ def create_app(
         KB chat surface and every ask_knowledge_base sub-agent, so both reach the
         wiki the same way. Driven by the BASE runner — a reader must never re-enter
         the KB layer that called it."""
+        reader_endpoint = (
+            (wiki_model, wiki_llm_base_url, wiki_llm_api_key)
+            if wiki_endpoint is None
+            else wiki_endpoint()
+        )
         return make_wiki_consultant(
             runner,
             spec,
@@ -2039,9 +2166,9 @@ def create_app(
                 catalog,
                 "wiki_reader",
                 default_wiki_reader_config,
-                wiki_model=wiki_model,
-                wiki_llm_base_url=wiki_llm_base_url,
-                wiki_llm_api_key=wiki_llm_api_key,
+                wiki_model=reader_endpoint[0] or "",
+                wiki_llm_base_url=reader_endpoint[1] or "",
+                wiki_llm_api_key=reader_endpoint[2] or "",
             ),
             reader_max_turns=wiki_reader_max_turns,
             tool_output_max_chars=tool_output_max_chars,
@@ -2050,6 +2177,7 @@ def create_app(
 
     kb_turn_engine = ChatTurnEngine(
         runner,
+        usage_recorder=usage_recorder,
         turn_activity=turn_activity,
         turn_control=turn_control,
         poll_interval=turn_cancel_poll_seconds,
@@ -2101,7 +2229,7 @@ def create_app(
     # positional-list tests). Bundled always populates kb_chat /
     # infer_modules so these defaults are always available.
     _purpose_fallbacks: dict[str, AgentConfig] = {
-        "kb_chat": default_kb_agent_config,
+        "kb_chat": default_kb_agent_config(),
         "infer_modules": default_infer_modules_config,
     }
 
@@ -2187,6 +2315,28 @@ def create_app(
     # engine-key / chat-validation rules every workspace route crosses. The route
     # modules + the turn/mention/replay services call ``locator.<method>`` directly.
     locator = ItemLocator(spec, app_catalog, get_user_id=get_user_id, superusers=superusers)
+    # plan-tool-usage-stats §3.6: the administrator's report on the tool-call
+    # counts (the model is registered with the store, above).
+    from .tool_usage_routes import register_tool_usage_routes
+
+    register_tool_usage_routes(
+        api, spec=spec, locator=locator, get_user_id=get_user_id, superusers=superusers
+    )
+    # docs/plan-capacity-usage.md §11: the capacity dashboard (superusers only).
+    from ..capacity.local_usage import sandbox_measured as _sandbox_measured
+    from ..capacity.service import CapacityService as _CapacityService
+    from ..capacity.sources import CapacitySources as _CapacitySources
+    from ..config.schema import CapacitySettings as _CapacitySettings
+    from .capacity_routes import register_capacity_routes
+
+    app.state.capacity = capacity or _CapacityService(_CapacitySources(), _CapacitySettings())
+    register_capacity_routes(
+        api,
+        service=app.state.capacity,
+        get_user_id=get_user_id,
+        superusers=superusers,
+        sandbox_measured=_sandbox_measured(sandbox),
+    )
 
     # The write side of `_item_facts`: whoever changes an item's stored facts
     # drops the entry, so the next read re-derives instead of serving a value
@@ -2272,6 +2422,9 @@ def create_app(
         # (production: `resolve_subagent_models(settings)`), stamped onto every
         # turn ctx so `_agent_kwargs` can shape the tool's schema.
         subagent_models=subagent_models,
+        # plan-tool-usage-stats §8.3: the recorder an applied skill counts into.
+        tool_usage=tool_usage,
+        ext_ai=ext_ai_enabled,
     )
 
     # #624: let the budget consult what the RUNNER has learned about each
@@ -2294,7 +2447,11 @@ def create_app(
     )
 
     register_replay_routes(
-        api, service=replay_service, load_turn=replay.load_turn, load_doc=replay.load_doc
+        api,
+        service=replay_service,
+        load_turn=replay.load_turn,
+        load_doc=replay.load_doc,
+        ext_ai=ext_ai_enabled,
     )
 
     # ── Workflows (#100) ─────────────────────────────────────────────
@@ -2370,6 +2527,10 @@ def create_app(
         ),
         concurrency=workflow_concurrency,
         keep_last_runs=workflow_keep_last_runs,
+        page_job_limit=wui_page_job_limit,
+        page_job_timeout_s=wui_page_job_timeout.total_seconds(),
+        end_page_job=workflow_executor.end_page_job,
+        stop_epoch=turn_engine.cancel_epoch,
     )
     app.state.workflow_orchestrator = workflow_orchestrator
     # Reachable by an app-level test that drives one tick, like the other
@@ -2522,10 +2683,15 @@ def create_app(
     )
     # docs/plan-outside-lookup.md D4: answering the "請幫我查" card — save under
     # `lookups/`, then the SAME send a typed message takes.
+    from .outside_jobs import OutsideJobStore, register_outside_jobs
     from .outside_lookup_routes import register_outside_lookup_routes
 
-    register_outside_lookup_routes(
+    register_outside_jobs(spec)
+    outside_jobs = OutsideJobStore(spec)
+    app.state.outside_jobs = outside_jobs
+    deliver_outside_answer = register_outside_lookup_routes(
         api,
+        on_answered=outside_jobs.remember_links,
         locator=locator,
         files=files,
         send_into=chat_send_svc.send,
@@ -2533,6 +2699,24 @@ def create_app(
         get_user_id=get_user_id,
         max_file_size=max_file_size,
     )
+
+    # docs/plan-outside-helper.md: the person's own helper takes the card's
+    # lookup instead of the person. Registered here, post-`spec.apply`, so the
+    # job model gets no CRUD routes (like _SandboxAddress).
+    from .outside_job_routes import register_outside_job_routes
+
+    register_outside_job_routes(
+        api,
+        locator=locator,
+        store=outside_jobs,
+        get_user_id=get_user_id,
+        deliver=deliver_outside_answer,
+        release_dir=ai_workspace_helper_dir,
+        max_file_size=max_file_size,
+    )
+    from .ai_workspace_helper_release import register_ai_workspace_helper_release_routes
+
+    register_ai_workspace_helper_release_routes(api, folder=ai_workspace_helper_dir)
 
     # ---- Files API (plan-backend §3.8) ----
 
@@ -2639,6 +2823,11 @@ def create_app(
         async def start(self, **kw: Any) -> str:
             return await self._get().start(**kw)
 
+        def __getattr__(self, name: str) -> Any:
+            # The page-job entrances (#942) — `start_page_job`, `page_job_state`,
+            # `cancel` — reach the same one orchestrator, looked up as late.
+            return getattr(self._get(), name)
+
     async def _workflows_for_item(item_id: str) -> Sequence[str]:
         """Which workflows this item may start — the ONE list every entrance
         consults (`workflow.offered`): the profile's workflows plus the ones
@@ -2693,6 +2882,10 @@ def create_app(
         workflow_problem_for=lambda item_id, workflow_id: unparsable_workflow(
             files.read, item_id, workflow_id
         ),
+        # #942: a page asks the item's sub-agents — the very list its chat
+        # delegates to, run as a workflow node's turn narrowed as `run_agent` is.
+        subagents_for=turn_ctx.subagents_for,
+        drive_agent=workflow_executor.drive_agent,
     )
 
     register_capability_routes(

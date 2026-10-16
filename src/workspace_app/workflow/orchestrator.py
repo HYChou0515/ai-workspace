@@ -58,7 +58,7 @@ from .gate import record_decision
 from .handle import WorkflowHandle
 from .inputs import resolve_inputs
 from .manifest import WorkflowManifest
-from .run import PhaseState, RunStatus, StepState, WorkflowRun
+from .run import PageJob, PhaseState, RunStatus, StepState, WorkflowRun
 from .run_identity import RunIdentities
 from .steer import SteerProposalFailed, apply_steer, propose_steer
 
@@ -85,6 +85,41 @@ class ActiveRunExists(Exception):
         super().__init__(f"item {item_id!r} already has an active run ({run_id})")
 
 
+class TooManyPageJobs(Exception):
+    """An item already has its quota of page jobs in flight (#942 D6)."""
+
+    def __init__(self, item_id: str, limit: int) -> None:
+        super().__init__(f"item {item_id} already has {limit} page jobs running")
+        self.item_id = item_id
+        self.limit = limit
+
+
+@dataclass(frozen=True)
+class PageJobState:
+    """What a page reads back about one of its jobs (`job.status()`).
+
+    ``state`` is running | done | failed | stopped. ``output`` is the job's
+    answer — the very object the matching ``call…`` returns — once done;
+    ``error`` says why when it failed."""
+
+    state: str
+    output: dict[str, Any] | None = None
+    error: str | None = None
+
+
+# A page job's work: handed in by the API when the job starts, run on this pod
+# against the run's own handle, returning the answer `call…` would have.
+PageWork = Callable[[WorkflowHandle], Awaitable[dict[str, Any]]]
+
+# How long past its deadline a still-active page job row is believed. The
+# deadline is enforced by the pod running it, so a row past deadline + this has
+# no pod left to settle it.
+_PAGE_JOB_GRACE_MS = 60_000
+
+#: What a page reads for a job whose pod is gone (`page_job_state`).
+PAGE_JOB_LOST = "This job stopped answering — the server running it was restarted. Start it again."
+
+
 class NotAwaitingDecision(Exception):
     """A decision was posted to a run that is not paused at a gate (§10)."""
 
@@ -104,6 +139,20 @@ class WorkflowUnavailable(Exception):
             "loaded — its file does not parse or is gone. Fix it with save_workflow, then "
             "try again."
         )
+
+
+class PageJobNotSteerable(WorkflowUnavailable):
+    """A steer asked of a page job (#942), which has no workflow to steer. A
+    `WorkflowUnavailable` so every route already answers it as a 409."""
+
+    def __init__(self, run_id: str) -> None:
+        Exception.__init__(
+            self,
+            f"run {run_id} is a page job, not a workflow, so it cannot be steered — "
+            "stop it and start it again from the page.",
+        )
+        self.run_id = run_id
+        self.workflow_id = ""
 
 
 class NotAwaitingSteer(Exception):
@@ -199,6 +248,20 @@ class WorkflowOrchestrator:
     run_timeout_s: float | None = None
     step_timeout_s: float | None = None
     concurrency: int = 8
+    # #942 D6: how many page jobs (`startTool` / `startAgent` / `callAgent`) one
+    # item may have in flight at once, and the total time one may take.
+    page_job_limit: int = 4
+    page_job_timeout_s: float = 3600.0
+    # A page job's end (#942): free ITS turn session — never the item's sandbox,
+    # which the workflow `release` closes when no other run is RUNNING. A
+    # `callTool` or a chat turn is not a run, so a job finishing would take the
+    # sandbox out from under them. ``(item_id, chat_key)``; None ⇒ nothing freed.
+    end_page_job: Callable[[str, str], Awaitable[None]] | None = None
+    # The shared turn epoch of a chat key (`ChatTurnEngine.cancel_epoch`). A
+    # page job samples it when ACCEPTED, so a Stop pressed on another pod while
+    # the job still waits for a slot is not absorbed into the baseline the
+    # job's work takes once it starts. None ⇒ no cross-pod signal (tests).
+    stop_epoch: Callable[[str], Awaitable[int]] | None = None
     # Keep at most this many runs per item — older *terminal* runs are pruned when a
     # new run starts (manual §16 retention). 0 ⇒ keep all.
     keep_last_runs: int = 0
@@ -277,6 +340,11 @@ class WorkflowOrchestrator:
         data = res.data
         assert isinstance(data, WorkflowRun)
         last = data.progress_at or data.started or 0
+        if data.page_job is not None:
+            # Its work lived in its pod's memory; there is no journal to resume
+            # from, and its "" workflow id would re-drive the profile's first
+            # workflow. A lost page job is settled by its deadline instead.
+            return False
         if data.status is not RunStatus.RUNNING or self.now() - last <= grace_ms:
             logger.debug("resume: run %s declined (status=%s)", run_id, data.status)
             return False  # settled, or already fresh (a peer just claimed it) → not ours
@@ -328,7 +396,12 @@ class WorkflowOrchestrator:
         logger.warning("abandon: run %s -> error after resume budget (reason: %s)", run_id, reason)
         if self.credentials is not None:
             self.credentials.revoke(run_id)
-        await self._release(data.item_id, terminal=True, key=data.chat_id or data.item_id)
+        await self._release(
+            data.item_id,
+            terminal=True,
+            key=data.chat_id or data.item_id,
+            page_job=data.page_job is not None,
+        )
         if self.notify_failure is not None:
             self.notify_failure(self._get(run_id), run_id)
 
@@ -416,6 +489,7 @@ class WorkflowOrchestrator:
         trigger_depth: int = 0,
         payload: dict[str, Any] | None = None,
         by_hand: bool = False,
+        from_schedule: bool = False,
     ) -> str:
         """Create a ``WorkflowRun`` (capturing the user, §15) and kick the run off as
         a background task. ``workflow_id`` selects which of the profile's workflows to
@@ -465,6 +539,7 @@ class WorkflowOrchestrator:
                     origin_trigger=origin_trigger,
                     trigger_depth=trigger_depth,
                     by_hand=by_hand,
+                    from_schedule=from_schedule,
                     # Opaque, and stored rather than interpreted: what the
                     # declaration asked for travels with the run so a resume
                     # after a restart still knows it.
@@ -495,6 +570,186 @@ class WorkflowOrchestrator:
             chat_id,
         )
         return run_id
+
+    # ── page jobs (#942) ──────────────────────────────────────────────
+    def _page_job_lost(self, data: WorkflowRun) -> bool:
+        """Active on its row, but past the deadline the pod running it enforces
+        — so no pod is running it any more."""
+        job = data.page_job
+        return job is not None and self.now() > job.deadline + _PAGE_JOB_GRACE_MS
+
+    async def _settle_lost_page_jobs(self, item_id: str) -> None:
+        """Settle the item's page jobs whose pod is gone. A status read settles
+        one too, but a page closed after its pod died never reads again, and
+        the row would read RUNNING in the run history for good."""
+        lost = []
+        for r in self._rm().list_resources((QB["item_id"] == item_id).build()):
+            data = r.data
+            assert isinstance(data, WorkflowRun)
+            if data.status in _ACTIVE and self._page_job_lost(data):
+                lost.append(r.info.resource_id)
+        for run_id in lost:
+            await self.abandon(run_id, reason=PAGE_JOB_LOST)
+
+    def _live_page_jobs(self, item_id: str) -> int:
+        n = 0
+        for r in self._rm().list_resources((QB["item_id"] == item_id).build()):
+            data = r.data
+            assert isinstance(data, WorkflowRun)
+            if data.page_job is not None and data.status in _ACTIVE:
+                n += not self._page_job_lost(data)
+        return n
+
+    async def start_page_job(
+        self,
+        *,
+        item_id: str,
+        captured_user: str,
+        env_user: str,
+        chat_id: str,
+        job: PageJob,
+        work: PageWork,
+    ) -> str:
+        """Record a page job as a run and start ``work`` on it (#942 D5).
+
+        The same record, stop and retention a workflow run has; what differs is
+        that there is no manifest to resolve — the API hands in the work itself.
+        That work lives in THIS pod's memory, so nothing re-drives the job after a
+        restart: its row carries a deadline instead, and `page_job_state` reads a
+        row past it as over. Refuses with `TooManyPageJobs` when the item already
+        has ``page_job_limit`` in flight (D6)."""
+        if not captured_user:
+            raise ValueError("a page job needs a non-empty captured_user")
+        await self._settle_lost_page_jobs(item_id)
+        if self._live_page_jobs(item_id) >= self.page_job_limit:
+            raise TooManyPageJobs(item_id, self.page_job_limit)
+        deadline = self.now() + int(self.page_job_timeout_s * 1000)
+        baseline = await self.stop_epoch(chat_id or item_id) if self.stop_epoch else 0
+        run_id = (
+            self._rm()
+            .create(
+                WorkflowRun(
+                    item_id=item_id,
+                    captured_user=captured_user,
+                    chat_id=chat_id,
+                    page_job=msgspec.structs.replace(job, deadline=deadline),
+                )
+            )
+            .resource_id
+        )
+        if env_user:
+            # Billed to the owner, run with the PRESSER's private values — the
+            # same split a page's `startRun` makes (`plan-wui-viewer-login`).
+            RunIdentities(self.spec).record(
+                run_id,
+                env_user,
+                verb="execute",
+                item_id=item_id,
+                profile="",
+                workflow_id="",
+                workflow_digest="",
+            )
+        self._prune_runs(item_id, keep=run_id)
+        self._track(
+            run_id,
+            asyncio.create_task(
+                self._drive_page_job(
+                    run_id, item_id, captured_user, chat_id, deadline, baseline, work
+                )
+            ),
+        )
+        logger.info(
+            "start_page_job: run %s for item %s (%s %s)", run_id, item_id, job.kind, job.name
+        )
+        return run_id
+
+    async def _drive_page_job(
+        self,
+        run_id: str,
+        item_id: str,
+        captured_user: str,
+        chat_id: str,
+        deadline: int,
+        baseline: int,
+        work: PageWork,
+    ) -> None:
+        key = chat_id or item_id
+        try:
+            async with self._semaphore():
+                if self.stop_epoch is not None and await self.stop_epoch(key) > baseline:
+                    # Stopped on another pod while it waited for this slot.
+                    self._patch(run_id, status=RunStatus.CANCELLED, ended=self.now())
+                    await self._post_run(run_id, item_id, key)
+                    return
+                wf = self._build_handle(run_id, item_id, captured_user, None, key)
+                wf.stop_baseline = baseline
+                coro = run_workflow(
+                    self.spec,
+                    run_id=run_id,
+                    profile_run=lambda handle, _inputs: work(handle),
+                    wf=wf,
+                    inputs=None,
+                    now=self.now,
+                )
+                try:
+                    # From the deadline, not from now: time spent waiting for a
+                    # slot is part of the job's total.
+                    await asyncio.wait_for(coro, max(0.0, (deadline - self.now()) / 1000))
+                except TimeoutError:
+                    self._patch(
+                        run_id,
+                        status=RunStatus.ERROR,
+                        ended=self.now(),
+                        result={
+                            "error": f"This job ran past its {self.page_job_timeout_s:g}s "
+                            "limit and was stopped."
+                        },
+                    )
+        except asyncio.CancelledError:
+            # Stopped while still waiting for a slot: the driver never ran, so
+            # nothing moved the row off `pending` — and a pending row would hold
+            # one of the item's places until its deadline.
+            if self._get(run_id).status is RunStatus.PENDING:
+                self._patch(run_id, status=RunStatus.CANCELLED, ended=self.now())
+            # Its own cleanup, here: a Stop from ANOTHER pod reaches this job as
+            # a cancellation its work raised, and the pod that pressed Stop holds
+            # no task to clean up after. A Stop on THIS pod lands here too, and
+            # `cancel` leaves a page job's cleanup to this line.
+            with contextlib.suppress(Exception):
+                await self._post_run(run_id, item_id, key)
+            raise
+        await self._post_run(run_id, item_id, key)
+
+    def page_job_deadline(self, run_id: str) -> int:
+        """When this page job's total time runs out (epoch ms) — what a command
+        it runs is given as its own deadline."""
+        job = self._get(run_id).page_job
+        assert job is not None, f"run {run_id} is not a page job"
+        return job.deadline
+
+    async def page_job_state(self, run_id: str, item_id: str) -> PageJobState:
+        """What a page reads about its job. Not found unless ``run_id`` is a PAGE
+        JOB of ``item_id``: the id comes from the page and the item from the URL.
+
+        A row still active past its deadline is settled here as failed: the pod
+        that would have settled it is gone, and until something does, the job
+        holds one of the item's places."""
+        data = self._get_in(run_id, item_id)
+        if data.page_job is None:
+            raise ResourceIDNotFoundError(run_id)
+        if data.status in _ACTIVE:
+            if not self._page_job_lost(data):
+                return PageJobState("running")
+            await self.abandon(run_id, reason=PAGE_JOB_LOST)
+            data = self._get(run_id)
+        if data.status is RunStatus.DONE:
+            return PageJobState("done", output=dict(data.result or {}))
+        if data.status is RunStatus.CANCELLED:
+            return PageJobState("stopped")
+        result = data.result or {}
+        return PageJobState(
+            "failed", error=str(result.get("error") or result.get("reason") or "This job failed.")
+        )
 
     def _chat_referenced_runs(self, item_id: str) -> set[str]:
         """Run ids a live chat still points at (its ``run_id``). #343: with same-thread
@@ -731,12 +986,19 @@ class WorkflowOrchestrator:
             logger.info(
                 "run %s settled as %s, releasing sandbox (terminal=%s)", run_id, status, terminal
             )
-            await self._release(item_id, terminal, key)
+            await self._release(item_id, terminal, key, page_job=data.page_job is not None)
         if status is RunStatus.ERROR and self.notify_failure is not None:
             logger.warning("run %s errored, firing failure notification", run_id)
             self.notify_failure(self._get(run_id), run_id)
 
-    async def _release(self, item_id: str, terminal: bool, key: str) -> None:
+    async def _release(
+        self, item_id: str, terminal: bool, key: str, *, page_job: bool = False
+    ) -> None:
+        if page_job:
+            # Its own session, not the item's sandbox (see `end_page_job`).
+            if terminal and self.end_page_job is not None:
+                await self.end_page_job(item_id, key)
+            return
         if self.release is not None:
             await self.release(item_id, terminal, key)
 
@@ -772,7 +1034,10 @@ class WorkflowOrchestrator:
         task.cancel()
         with contextlib.suppress(BaseException):
             await task
-        await self._release(item_id, terminal=True, key=key)
+        if data.page_job is None:
+            # A page job's task frees its own session on the way out
+            # (`_drive_page_job`), which the `await` above has just seen through.
+            await self._release(item_id, terminal=True, key=key)
         logger.info("cancel: stopped run %s (item %s)", run_id, item_id)
         return True
 
@@ -832,6 +1097,11 @@ class WorkflowOrchestrator:
         plan, suspends the run ``awaiting_human`` with ``pending_steer`` set for the
         human to confirm. A failed proposal leaves the run ``cancelled``."""
         data = self._get_in(run_id, item_id)
+        if data.page_job is not None:
+            # No workflow behind it: `workflow_id` is "", which the manifest
+            # lookup reads as the profile's FIRST workflow — the steerer would
+            # plan against something this job never ran. Refused before any write.
+            raise PageJobNotSteerable(run_id)
         if data.status in (RunStatus.RUNNING, RunStatus.PENDING):
             await self.cancel(run_id, item_id)
         else:

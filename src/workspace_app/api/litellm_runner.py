@@ -10,13 +10,14 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import dataclasses
 import json
 import logging
 import os
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, NamedTuple
 
 import litellm
 from agents import (
@@ -44,6 +45,7 @@ from ..agent.header_model import HeaderModel
 from ..agent.repairing_model import RepairingModel
 from ..agent.tools import build_tools, dedupe_tools, delegation_is_available
 from ..apps.subagents import subagents_block
+from ..capacity.llm_tags import TaggedModel
 from ..context_budget import (
     ContextLimit,
     LimitLearner,
@@ -83,6 +85,7 @@ from .llm_trace import build_trace, format_trace_line, redact_endpoint, trace_en
 from .turns import _terminal_error
 
 if TYPE_CHECKING:
+    from ..agent.tool_usage import ToolUsageRecorder
     from ..factories import LlmEndpoint, SubagentModel
     from ..failover.cooldown import CooldownRegistry
 
@@ -92,6 +95,17 @@ if TYPE_CHECKING:
     FallbackChains = dict[tuple[str, str | None], list[LlmEndpoint]]
 
 _LOGGER = logging.getLogger(__name__)
+
+
+class RunnerEndpoints(NamedTuple):
+    """The runner-wide endpoint values: the default `llm.base_url` /
+    `llm.api_key` and the per-preset failover chains. Fixed at construction, or
+    read from the published settings on each use (plan-model-settings P5)."""
+
+    base_url: str | None
+    api_key: str | None
+    fallback_chains: FallbackChains | None
+
 
 #: Window decisions already reported (see `_agent_for`), as `(model, window)`.
 #: Keyed on the DECISION rather than the model: a deploy states its window once
@@ -134,6 +148,64 @@ _WIKI_TRACE_NAMES = {
     "Wiki Reader": "Wiki reader",
     "Wiki Merge": "Wiki merge",
 }
+
+
+def enabled_function_tools(agent: Any, ctx: Any) -> list[FunctionTool]:  # noqa: ANN401 — Agent/AgentToolContext, kept loose for the sync callers
+    """The tools this step would actually send, for callers that are not the
+    SDK's run loop (`docs/plan-tool-on-demand-loading.md`, round 1 A2/A12).
+
+    `agent.tools` is NOT that list any more: each package command is registered
+    twice under one name — the catalog entry and the executable tool — and
+    `is_enabled` is the only thing that keeps one of the pair off the wire. A
+    caller that reads `agent.tools` raw now sends two definitions of one name,
+    which `dedupe_tools`' docstring describes as "a payload the provider
+    rejects wholesale".
+
+    Mirrors `agents/agent.py:246 get_all_tools` for the one case our callers
+    need — synchronous, no MCP tools, `is_enabled` as a bool or a plain
+    callable — because both callers run in threads with no event loop
+    (`replay_turn` under `asyncio.to_thread`) or inside a sync trace helper.
+    Kept honest by a parity test with `get_all_tools` itself as the oracle.
+    """
+    out: list[FunctionTool] = []
+    for tool in agent.tools:
+        if not isinstance(tool, FunctionTool):
+            continue
+        flag = tool.is_enabled
+        if flag is True or flag is not False and flag(RunContextWrapper(ctx), agent):
+            out.append(tool)
+    return out
+
+
+def _loaded_this_turn(name: str) -> Callable[[RunContextWrapper[Any], Any], bool]:
+    """Enable the executable half of `name`'s pair once this turn has loaded it
+    (`docs/plan-tool-on-demand-loading.md`).
+
+    Evaluated by the SDK on EVERY step, which is what makes "load it, then call
+    it" work inside one turn rather than next turn.
+
+    A context that cannot answer counts as loaded: every turn in this app
+    carries an `AgentToolContext`, so this is the shape a future caller would
+    arrive in, and the honest default is the behaviour from before the
+    catalog — the full schema, sent.
+    """
+
+    def check(ctx: RunContextWrapper[Any], _agent: Any) -> bool:  # noqa: ANN401 — the SDK hands the agent; unused
+        answer = getattr(ctx.context, "is_tool_loaded", None)
+        return True if answer is None else bool(answer(name))
+
+    return check
+
+
+def _not_loaded_this_turn(name: str) -> Callable[[RunContextWrapper[Any], Any], bool]:
+    """Enable the catalog half until the turn loads it — the exact complement
+    of `_loaded_this_turn`, so one of the pair is always sent and never both."""
+
+    def check(ctx: RunContextWrapper[Any], _agent: Any) -> bool:  # noqa: ANN401 — the SDK hands the agent; unused
+        answer = getattr(ctx.context, "is_tool_loaded", None)
+        return False if answer is None else not bool(answer(name))
+
+    return check
 
 
 def _trace_workflow_name(ctx: AgentToolContext) -> str:
@@ -481,6 +553,7 @@ def _agent_for(
     has_subagents: bool = False,
     skills_reachable: bool | None = None,
     in_chat: bool = False,
+    ext_ai: bool = False,
     subagent_models: tuple[SubagentModel, ...] = (),
     fallback_chains: FallbackChains | None = None,
     cooldown_registry: CooldownRegistry | None = None,
@@ -543,18 +616,91 @@ def _agent_for(
 
     if in_chat and ask_outside_granted(config):
         tools.append(ask_outside_tool())
-    if packages:
-        tools.extend(build_function_tools(packages, allowed=config.allowed_tools))
+    # docs/plan-ext-ai.md D5: the 問外部AI card goes where the 請幫我查 card
+    # goes, on a deploy that turned it on (`server.ext_ai_enabled`).
+    from ..agent.ext_ai import ask_ext_ai_granted, ask_ext_ai_tool
+
+    if in_chat and ask_ext_ai_granted(config, enabled=ext_ai):
+        tools.append(ask_ext_ai_tool())
+    # plan-tool-on-demand-loading: `load_tool` is ours, not a package's, so it
+    # goes in BEFORE `builtin_names` is read — the usage report would otherwise
+    # file it under `first_party`, beside the commands it exists to open.
+    #
+    # Granted by the same rule as the cards above, and that means the same
+    # CHECK: whether this turn is granted any package command, not whether the
+    # item has a bundle installed. `if packages:` was the latter, so every
+    # sub-agent with a narrowed `allowed_tools` — every `ask_knowledge_base`
+    # child, every workflow node with its own `tools:` — got a `load_tool`
+    # whose only possible answer was "there is no tool called that. Tools you
+    # can load: ." (round 1 A6).
+    from ..tooling.registry import allowed_command_names
+
+    # Narrowed once: `grants_commands` is a bool, so it does not narrow
+    # `packages | None` for the blocks below the way `if packages:` did.
+    pkgs: list[PackageInfo] = packages or []
+    grants_commands = bool(allowed_command_names(pkgs, config.allowed_tools))
+    # plan-tool-usage-stats D6: what is in the list BEFORE the package commands
+    # is ours — built-ins and the rule-granted cards. The last point every
+    # source is still a list of its own, so the source is read here, not
+    # guessed later from a name a first-party command shares with a built-in.
+    #
+    # Read BEFORE `load_tool` goes in (it used to be read after), because
+    # `load_tool` needs it: a command whose name a built-in holds must not be
+    # loadable. `load_tool` is still ours rather than a package's for the usage
+    # report, which is what this set decides — and it is not in the set itself,
+    # so adding it after changes nothing there.
+    builtin_names = {t.name for t in tools}
+    if grants_commands:
+        from agents.tool_context import ToolContext
+
+        from ..tooling.registry import build_catalog_tools, build_load_tool
+
+        def _mark_loaded(
+            tool_ctx: ToolContext[AgentToolContext], names: Sequence[str], answer: str
+        ) -> None:
+            # One call = one hit, whatever it resolved: the queue counts the
+            # OUTPUTS to keep out of the thread, not the commands (round 3 D4).
+            # The answer goes with it so the hit is matched by what it SAID,
+            # not only by an id a provider may reuse (round 3 R1).
+            tool_ctx.context.note_catalog_hit(tool_ctx.tool_call_id, names, answer)
+
+        tools.append(
+            build_load_tool(
+                pkgs,
+                allowed=config.allowed_tools,
+                mark_loaded=_mark_loaded,
+                # Shadowing is a per-TURN fact: with `allowed_tools=[…:exec]`
+                # the built-in `exec` is not granted and the package's own is
+                # what the model gets, so a module-level list would be wrong
+                # (round 3 D1).
+                shadowed=builtin_names,
+            )
+        )
+    if grants_commands:
+        # plan-tool-on-demand-loading: each granted command is registered TWICE
+        # under one name — the executable tool, enabled once this turn has
+        # loaded it, and the catalog entry (one line, no schema), enabled until
+        # then. The SDK re-resolves `is_enabled` on every step
+        # (`agents/run.py:1028` → `agent.py:254`), so exactly one of the pair
+        # reaches the provider and the payload never carries a duplicate name.
+        # Same-name registration is safe: the SDK's own duplicate check is
+        # codex-tools-only and runs AFTER that filter (`agent.py:95-118`).
+        tools.extend(
+            dataclasses.replace(t, is_enabled=_loaded_this_turn(t.name))
+            for t in build_function_tools(pkgs, allowed=config.allowed_tools)
+        )
     # Last stop before the model sees them, and the only place every source is in
     # one list: built-ins, the conditional grants, and the package commands —
     # which `build_function_tools` rejects collisions AMONG, but not against
     # ours. Two definitions of one name is a payload the provider refuses
     # wholesale, so the turn dies for a reason nothing in it explains.
     tools = dedupe_tools(tools)  # first-wins: the built-in outranks a package's copy
-    # Append the resolved tool inventory (name + description + JSON args
-    # schema) to the system prompt so small local LLMs don't confuse
-    # provisioned function tools with shell binaries (see plan §B.10 /
-    # agent/tool_prompt.py).
+    # Append the fixed how-to-call-tools note (and, when this turn carries
+    # catalog entries, the paragraph about empty schemas and `load_tool`) so
+    # small local LLMs don't confuse function tools with shell binaries. It no
+    # longer LISTS the tools — that second copy of the inventory is what
+    # `docs/plan-tool-on-demand-loading.md` removed; the tools themselves are
+    # in this request's `tools` array (see agent/tool_prompt.py).
     from ..agent.tool_prompt import (
         format_disabled_tools_for_prompt,
         format_tools_for_prompt,
@@ -600,8 +746,48 @@ def _agent_for(
     # off the first valid JSON object, run on that, and warn the model in
     # the result string so it self-corrects instead of getting blocked.
     from ..agent.args_recovery import wrap_with_args_recovery
+    from ..agent.tool_usage import wrap_with_usage
+    from ..tooling.registry import model_tool_name
 
-    tools = [wrap_with_args_recovery(t) for t in tools]
+    # …and each tool counted (plan-tool-usage-stats §3.1), OUTSIDE the
+    # argument recovery so a call it refuses is counted as a failed call.
+    third_party = {
+        model_tool_name(p, c) for p in packages or () if p.third_party for c in p.commands
+    }
+
+    # …and the package it came from (§9.1), so a report can add a package's
+    # commands up; a built-in shadows a command of its name, so it has none.
+    package_of = {model_tool_name(p, c): p.name for p in packages or () for c in p.commands}
+
+    def source(name: str) -> str:
+        if name in builtin_names:
+            return "builtin"
+        return "third_party" if name in third_party else "first_party"
+
+    def package(name: str) -> str:
+        return "" if name in builtin_names else package_of.get(name, "")
+
+    tools = [
+        wrap_with_usage(wrap_with_args_recovery(t), source(t.name), package(t.name)) for t in tools
+    ]
+    # The catalog entries go on AFTER the wrapping, and deliberately without
+    # it: a catalog hit is the model asking what a tool takes, not the tool
+    # running, so counting it would add a call to every command's row in the
+    # usage report (plan-tool-usage-stats) and move its average; and argument
+    # recovery has nothing to recover — the entry reads no arguments at all.
+    # They also go on after `dedupe_tools`, which drops repeats of a name and
+    # would otherwise take one twin of each pair and warn about it every turn.
+    # A command a built-in shadows is left out here too, because dedupe just
+    # dropped its executable half — a catalog entry for it would advertise
+    # something that can never run.
+    if grants_commands:
+        tools.extend(
+            dataclasses.replace(stub, is_enabled=_not_loaded_this_turn(stub.name))
+            for stub in build_catalog_tools(
+                pkgs, allowed=config.allowed_tools, mark_loaded=_mark_loaded
+            )
+            if stub.name not in builtin_names
+        )
     # Per-message reasoning effort (the UI selector). Only set when chosen —
     # absent leaves the model's default. drop_params (above) drops it on models
     # that don't support it, so it's safe to send to any model.
@@ -744,6 +930,9 @@ def _agent_for(
         # session cookie to another host.
         if credential.headers:
             m = HeaderModel(m, credential.headers)
+        # docs/plan-capacity-usage.md §7: whose turn each request is, for
+        # LiteLLM's log — read per call from the turn's usage scope.
+        m = TaggedModel(m)
         # #76 BACKSTOP (always on): sanitize malformed tool-call JSON at the output
         # boundary so a probabilistic small model can't crash/poison/abort the turn.
         # Leave this line on. To toggle the *self-repair* layer (recovering the
@@ -861,6 +1050,7 @@ def ask_user_stop_behaviour(
     card, docs/plan-outside-lookup.md) follows the same rule."""
     from ..agent.env_request import TOOL_NAME as REQUEST_ENV_TOOL
     from ..agent.env_request import declared_card
+    from ..agent.ext_ai import TOOL_NAME as ASK_EXT_AI_TOOL
     from ..agent.outside_lookup import TOOL_NAME as ASK_OUTSIDE_TOOL
     from ..agent.outside_lookup import declared_lookup
 
@@ -868,6 +1058,7 @@ def ask_user_stop_behaviour(
     cards: dict[str, Callable[[str], object]] = {
         REQUEST_ENV_TOOL: declared_card,
         ASK_OUTSIDE_TOOL: declared_lookup,
+        ASK_EXT_AI_TOOL: declared_lookup,
     }
     names = tool_names or ()
     if not any(n in cards for n in names):
@@ -962,11 +1153,17 @@ def _call_id(raw: Any) -> str:
     return _raw_field(raw, "call_id") or _raw_field(raw, "id") or ""
 
 
-def _map_event(event: Any) -> AgentEvent | None:
+def _map_event(event: Any, ctx: AgentToolContext | None = None) -> AgentEvent | None:
     """Translate one openai-agents stream event into our AgentEvent shape.
 
     Returns None for events we deliberately drop (raw token chunks, handoffs,
     etc.) — keeps the SSE stream focused on what the UI cares about.
+
+    `ctx` is the turn, when the caller has one: a call the catalog answered has
+    a parameter schema for its output, and that must not reach the chat card or
+    the stored message (`docs/plan-tool-on-demand-loading.md`). Optional
+    because the mapping is otherwise context-free, and a caller without a turn
+    gets the output as is.
     """
     if getattr(event, "type", None) != "run_item_stream_event":
         return None
@@ -1005,8 +1202,23 @@ def _map_event(event: Any) -> AgentEvent | None:
         # base64 data URL, which would bloat the SSE stream and, worse, replay as
         # a giant text blob into the next turn's context. Surface a concise note.
         out_text = _tool_output_text(raw_out)
+        call_id = _call_id(item.raw_item)
+        # A catalog hit's answer is a schema the model needs and the thread does
+        # not. Decided by the call id the handler recorded, never by sniffing
+        # the text or by the tool's name — a loaded command and its catalog
+        # entry share a name, so a name could not tell them apart.
+        #
+        # ONE HIT, one output. The record is a queue of hits per call id, so two
+        # catalog hits sharing an id consume one each: popping the whole record
+        # left the second one unrecognised and its raw schema went into the
+        # thread (round 3 D4). The id then goes into `ephemeral_outputs` so the
+        # reducer drops THIS message and no other.
+        loaded = ctx.take_catalog_hit(call_id, out_text) if ctx is not None else None
+        if loaded and ctx is not None:
+            out_text = "載入 " + "、".join(f"`{n}`" for n in loaded) + " 的用法"
+            ctx.ephemeral_outputs.append(call_id)
         return ToolEnd(
-            call_id=_call_id(item.raw_item),
+            call_id=call_id,
             output=out_text,
         )
     # message_output_created carries the FULL assistant message; we stream
@@ -1059,7 +1271,10 @@ def _emit_llm_trace(
             _effective_model(getattr(agent, "model", None), cfg.model if cfg else "") or "(unknown)"
         )
         endpoint = redact_endpoint((cfg.llm_base_url if cfg else "") or runner_base_url)
-        tools = [t.name for t in agent.tools if isinstance(t, FunctionTool)]
+        # What this step SENDS, not what is registered: the catalog's twins
+        # would otherwise list every package command twice in the one line an
+        # operator reads to see what went out (round 1 A12).
+        tools = [t.name for t in enabled_function_tools(agent, ctx)]
         ms = agent.model_settings
         trace = build_trace(
             model=model,
@@ -1245,7 +1460,13 @@ class LitellmAgentRunner:
         stream_deadlines: tuple[float, float] | None = None,
         sleep: Callable[[float], Awaitable[None]] | None = None,
         rate_limit_budget_s: float = 120.0,
+        endpoints: Callable[[], RunnerEndpoints] | None = None,
+        tool_usage: ToolUsageRecorder | None = None,
     ) -> None:
+        # plan-tool-usage-stats §3.1: where every turn this runner drives counts
+        # its tool calls. Handed to the turn in `run`, the one door every surface
+        # comes through. None counts nothing.
+        self._tool_usage = tool_usage
         # #94: no runner-level default config. Every turn's config arrives on
         # ctx.agent_config (resolved per-item via the AppCatalog / KB / wiki
         # catalogs); run() fails loud if it's missing.
@@ -1285,8 +1506,10 @@ class LitellmAgentRunner:
         self._max_turns = max_turns
         # Chat LLM endpoint (global; see factories.Settings). None → LiteLLM's
         # own provider env / Ollama defaults.
-        self._base_url = base_url
-        self._api_key = api_key
+        self._static = RunnerEndpoints(base_url, api_key, fallback_chains)
+        # plan-model-settings P5: when given, the three endpoint values are read
+        # from the published settings on each use instead of from boot.
+        self._endpoints = endpoints
         # Per-user token seam. There is no universal system key — each preset
         # configures its own endpoint key — so the token service resolves PER
         # ENDPOINT: given the speaker + the key that endpoint would otherwise use,
@@ -1295,7 +1518,6 @@ class LitellmAgentRunner:
         # wired → every key passes through untouched (behaviour unchanged).
         self._token_service = token_service
         # #196 busy-aware failover (None when no preset declares fallbacks).
-        self._fallback_chains = fallback_chains
         self._cooldown_registry = cooldown_registry
         # #493 (give_up_s, idle_s) for a SINGLE-endpoint turn, so a provider that
         # goes quiet ends the turn with a real error instead of hanging forever.
@@ -1351,7 +1573,24 @@ class LitellmAgentRunner:
             resolved[key] = await ts.get_credential(user_id, key, ctx.call_lane)
         return lambda key: resolved.get(key, LlmCredential(key))
 
+    def _now_endpoints(self) -> RunnerEndpoints:
+        return self._static if self._endpoints is None else self._endpoints()
+
+    @property
+    def _base_url(self) -> str | None:
+        return self._now_endpoints().base_url
+
+    @property
+    def _api_key(self) -> str | None:
+        return self._now_endpoints().api_key
+
+    @property
+    def _fallback_chains(self) -> FallbackChains | None:
+        return self._now_endpoints().fallback_chains
+
     async def run(self, prompt: str, ctx: AgentToolContext) -> AsyncIterator[AgentEvent]:
+        if ctx.tool_usage is None:
+            ctx.tool_usage = self._tool_usage
         # #94: no silent fallback. Every turn must arrive with a resolved
         # agent_config (App items resolve via the AppCatalog; KB/wiki via their
         # catalogs). A None here means resolution failed upstream — fail loud
@@ -1552,6 +1791,7 @@ class LitellmAgentRunner:
             "has_subagents": bool(ctx.subagent_defs),
             "skills_reachable": ctx.skills_reachable,
             "in_chat": ctx.in_chat,
+            "ext_ai": ctx.ext_ai,
             "subagent_models": ctx.subagent_models,
             "fallback_chains": self._fallback_chains,
             "cooldown_registry": self._cooldown_registry,
@@ -1728,7 +1968,7 @@ class LitellmAgentRunner:
                                     )
                                 )
                         continue
-                    mapped = _map_event(event)
+                    mapped = _map_event(event, ctx)
                     if mapped is not None:
                         if isinstance(mapped, ToolStart):
                             tool_calls_seen += 1
@@ -1865,7 +2105,7 @@ class LitellmAgentRunner:
         for item in result.new_items:
             itype = getattr(item, "type", "")
             if itype in _NONSTREAM_TOOL_EVENT:
-                mapped = _map_event(_ItemEvent(_NONSTREAM_TOOL_EVENT[itype], item))
+                mapped = _map_event(_ItemEvent(_NONSTREAM_TOOL_EVENT[itype], item), ctx)
                 if mapped is None:
                     continue
                 if isinstance(mapped, ToolStart):

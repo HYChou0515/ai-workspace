@@ -26,6 +26,18 @@
 --config / -c 旗標  >  $WORKSPACE_APP_CONFIG  >  ./config.yaml  >  內建預設（無檔也能跑）
 ```
 
+**第四層：superuser 的「模型設定」頁**（`plan-model-settings.md`）。頁面上套用的改動存在資料庫，
+**蓋在上面三層之上**，只限模型相關的值：`llm`、`agents` 底下全部（preset、`kb_chat` 等用途清單、
+`subagent_models`）、各角色的模型（`kb.retrieval_llm`、`kb.vlm_llm`、`kb.vlm_format_llm`、`kb.deck_vlm`、
+`kb.card_drafter`、`kb.quality_judge`、`kb.wiki.llm`、`health.judge_llm`、`goal.checker`），外加每個 App 的
+`app.json` 與 profile。三件事要知道：
+
+- **頁面改過的值，`config.yaml` 再改不會生效**——頁面贏。要讓 `config.yaml` 回來，到頁面上「重設」那個值、儲存草稿，再套用。
+  「改了沒生效」先看頁面有沒有改過它。
+- 頁面的文字**照字面使用**，不展開 `${ENV_VAR}`（config 部分寫了會被拒絕；App 文字裡的 `${` 就是字）：秘密請用頁面的「API 金鑰」分頁。
+- 套用後一秒內所有行程（API、每個 worker）就改用新值，不用重啟。只在開機時讀的值（其他 key、角色的開／關、
+  `infer_modules` 的跑法旋鈕、App 的 `resources`）頁面不收，照舊改 `config.yaml` 並重啟。
+
 > 範例檔放在 `configs/`，所以正式跑通常是 `uv run python -m workspace_app -c configs/config.yaml`
 > （或設 `WORKSPACE_APP_CONFIG=configs/config.yaml`）。**注意預設只看 `./config.yaml`（當前目錄）**，
 > 不是 `configs/config.yaml`——「改了沒生效」十之八九是讀到別的檔（開機 log 會印出實際讀的路徑）。
@@ -40,6 +52,28 @@
 - 未設的 `${ENV_VAR}` → raise
 - `agents.kb_chat` 解析後 `allowed_tools` 不含 `kb_search` → raise（KB 聊天接到 RCA preset 卻沒補工具的經典雷）
 - `kb.retrieval_llm` 少了 `preset` → raise（要關就寫 `null`，別留半套）
+
+### 工具很多的 item：模型拿到的是目錄，不是每個工具的完整 schema
+
+**沒有旋鈕,行為是這樣**:一輪送給模型的工具清單裡,套件 command 只佔一行——名字 +
+description 的第一句(上限 100 字元)、**沒有參數 schema**。模型要用哪個,直接呼叫它就會
+拿到完整描述 + 真的 schema,然後照著再呼叫一次就執行;也可以先 `load_tool` 問用法。
+載入只在**那一輪**有效,下一輪回到目錄。
+
+為什麼:每個 command 的完整 schema 以前會在每一輪送兩次(API 的 `tools` 一份、system
+prompt 再渲染一份),所以工具一多,光工具清單就能把整個窗口吃掉——有部署量到 414,115
+字元的 system prompt。超出窗口之後,會拒絕的 endpoint 回 400(我們讀出上限、縮歷史重送),
+**不會拒絕的 endpoint 直接砍掉請求前段**,而前段正是你寫的 `system_prompt`:模型照樣
+流暢回答,只是沒看到你的指令。
+
+量到的差別(本機 5 個套件、14 個 command,同一組真 bundle):完整 schema 在 wire 上
+8,413 tok + prompt 那份複本 11,471 tok = **19,884 tok** → 目錄 710 tok + `load_tool`
+自己 120 tok + prompt 那段固定的 218 tok = **1,048 tok**。每個目錄條目約 **51 tok**。
+把 14 個內建工具(不受影響,照舊完整 schema)也算進去,整輪的工具清單是 33,746 →
+**5,586 tok**。
+
+代價:一輪裡**第一次**用到某個 command 會多一次 round-trip(載入 → 再呼叫)。內建工具
+(`exec`、`read_file` 這些)不受影響,永遠帶完整 schema。
 
 ### 開機還會吐兩份觀測資料（永遠開，無旋鈕）
 
@@ -83,10 +117,13 @@ uv run python -m workspace_app            # API + SPA 一起跑在 127.0.0.1:800
 | **設管理員（能讀所有 collection）** | `server.superusers: ["alice@example.com"]` |
 | **讓外部系統的網頁把工作交棒進來** | `server.cors_allowed_origins: ["https://legacy-rca.corp"]`；沒設的話瀏覽器會在請求送出前就擋掉（串接方式見[從外部系統交棒進來](external-handoff.md)） |
 | **讓使用者用帳號密碼換出工具要的變數** | `server.env_providers: ["你的套件.YourLogin"]`——一份 `IEnvProvider` 清單(可以有好幾個:SAP 登入、AD 登入、API key 交換)。工具只宣告變數**名字**,平台用名字比對決定給哪顆登入鈕,所以第三方工具作者無從決定你的 UI 向使用者要哪組憑證。沒設 = 沒有登入鈕,變數仍可手填。見[擴充平台](extending-the-platform.md)與[部署指南](deployment.md) §15.2 |
-| **「請幫我查」卡片上有哪些搜尋按鈕** | `server.lookup_targets`(預設只有 Google:`[{name: Google, url: "https://www.google.com/search?q={q}"}]`)。AI 需要外部資料時(不分是否斷網)會出卡片,請使用者用自己的瀏覽器查;每一筆是卡片上的一顆按鈕,按下去在新分頁開 `url`,`{q}` 換成使用者改過的查詢。**有設就整份取代預設**——還要 Google 就自己列進去。每筆都要 `name` + `url`、`url` 是 `http(s)://` 且含 `{q}`、名字不重複(前後空白不算),也不能是空清單,否則啟動失敗(錯在某一筆時說出是第幾筆)。見 [plan-outside-lookup](plan-outside-lookup.md) |
+| **讓 AI 問公司的網頁 AI(問外部AI)** | `server.ext_ai_enabled`(預設 `false`)。打開後,聊天裡的 AI 多一個 `ask_ext_ai`:它起草問題,卡片上完整顯示、可以改,使用者按「問外部AI」,小幫手在他的 Chrome 裡打開公司的 AI、貼上、送出、等回答寫完帶回(存進 `lookups/`)。小幫手怎麼操作那個網頁,寫在公司自己的 `ext_ai_site.py`,打包時用 `--ext-ai-site` 放進小幫手——伺服器設定裡沒有網址。小幫手沒有這個檔(或沒連線)時,卡片走手動:複製問題、自己去問、把回答貼回。只在聊天裡給(排程、工作流程沒有人按)。見 [plan-ext-ai](plan-ext-ai.md) |
+| **「請幫我查」卡片上有哪些搜尋按鈕** | `server.lookup_targets`(預設只有 Google:`[{name: Google, url: "https://www.google.com/search?q={q}"}]`)。AI 需要外部資料時(不分是否斷網)會出卡片,請使用者用自己的瀏覽器查;每一筆是卡片上的一顆按鈕,按下去在新分頁開 `url`,`{q}` 換成使用者在搜尋框裡打或貼上的關鍵字。**有設就整份取代預設**——還要 Google 就自己列進去。每筆都要 `name` + `url`、`url` 是 `http(s)://` 且含 `{q}`、名字不重複(前後空白不算),也不能是空清單,否則啟動失敗(錯在某一筆時說出是第幾筆)。見 [plan-outside-lookup](plan-outside-lookup.md) |
+| **讓使用者下載小幫手** | `server.ai_workspace_helper_dir`(預設空 = 不發布)。一個掛進 pod 的資料夾,放 `scripts/pack_ai_workspace_helper.py` 產出的兩個檔:`ai-workspace-helper.json` 與它寫的那個 zip。每個請求都重讀,換版**不用重新部署**——換掉這兩個檔就好;要強迫所有人升級就調高 json 裡的 `min_version`。只會提供 json 指名、而且是單純檔名的那一個 zip。沒設時「小幫手」頁寫「還沒有發布」,「請幫我查」卡片照舊讓使用者自己查。見[小幫手](ai-workspace-helper.md) |
 | **讓工具以「按下送出的那個人」的身分打外部系統** | `server.request_env: "你的套件.YourRequestEnv"`——自己寫一個 `IRequestEnv`,從該次請求的 cookie/header 組出環境變數給那一輪的工具(值不落地、只活一輪;item 自己設的環境變數會蓋過同名的)。見[擴充平台](extending-the-platform.md) |
 | **讓頁面自己排的工作真的會跑** | `server.trigger_check_interval_sec`（掃描間隔秒數，**預設 `0` = 完全不掃**）。這一顆同時管工程師寫的 `triggers.json` 和頁面寫的 `schedules.json`——**沒開的話兩者都不會動，而且不會有錯誤訊息**。這個數字就是「最晚會遲到多久」；60 是合理起點。多 pod 時它也是**掃描的 window**：每個 window 只有一顆 pod 真的去讀 `triggers.json` / `schedules.json`（同一份 window ledger 上多一列 `__scan__:*` 的 claim），其餘 pod 那一 tick 什麼都不做；贏家半路死掉只損失那個 window，下個 window 重新選——所以「最晚遲到一個 interval」的承諾不變（#804） |
 | **不讓某一步永遠轉下去** | `server.workflow_step_timeout_sec`（預設 `600` = 10 分鐘）。工作流裡**單一 agent 步驟**的上限,超過就中止那一步,而且**錯誤訊息會寫出這個數字**——「永遠轉」是唯一連使用者都描述不出來的壞法(畫面沒有錯,只是還沒好),含糊的「太久」讓人以為是隨機,寫出數字才知道那是可以改的設定。設 `0` = 沒有上限（這也是這顆選項出現前每個部署的實際行為:機制早就在,但沒有人把值傳進去）|
+| **頁面同時能跑幾件工作、每件最多多久** | `server.wui_page_job_limit`（預設 `4`）與 `server.wui_page_job_timeout_sec`（預設 `3600` = 一小時）。頁面用 `startTool` / `startAgent` 起的工作（以及 `callAgent` 等答案的那一分鐘）**每個 item 同時最多幾件**——超過的那一件直接被拒、錯誤訊息寫出這個數字，不排隊（一個寫壞成迴圈的頁面不會在沒人看的時候堆出一長串工作）。第二顆是**每件工作的總時間**:工具工作的命令拿它當期限（不受 `callTool` 的一分鐘限制）,超過就停並標成失敗(沙盒的**閒置**上限 `sandbox.log_timeout` 照舊:一個那麼久不印任何輸出的命令仍會被停);它也是判斷「跑這件工作的 pod 已經不在了」的依據——過了期限再加 60 秒還顯示進行中的紀錄會被當成中斷(下一次有人讀它、或這個 item 再開工作時標成失敗)。上限是每顆 API pod 開工作前**查一次再寫**的,不是跨 pod 的鎖:兩顆 pod 在同一瞬間各收到一次點擊,可能短暫多出一件（#945,[`plan-wui-call-agent.md`](plan-wui-call-agent.md)）|
 | **一個頁面最多能排幾件事** | `server.max_page_schedules`（預設 `1000`）。這是**失控護欄不是政策限制**:正常的頁面碰不到，碰到代表那個頁面有 bug。它擋的是耐久狀態——每個排程觸發過就在視窗帳本留一列。整個檔案超過就整份不跑，並在 log 寫出兩個數字 |
 | **把通知送出站（email / IM）** | `server.notification_channel: "你的套件.YourChannel"`——一份 `INotificationChannel`。平台**永遠**先寫站內信那一列，有指名通道才再交給它;**送信失敗不算排程失敗**（否則一次兩小時的郵件故障會變成全公司排程集體自我關閉）。平台不出貨實作:relay、寄件網域、合規都是你們的。沒設 = 行為跟今天完全一樣。見[擴充平台](extending-the-platform.md) |
 | **反向代理掛在子路徑下** | `server.root_path`（例如 `/workspace`）——FastAPI 的 `root_path`，只影響**產生出來的 URL**(OpenAPI / docs)。**SPA 自己的 base path 不在這裡**,它是 build 期的 `VITE_BASE_PATH`;只設這一顆會得到一個資源全 404 的前端,而且沒有東西會提示你去找另一顆 |
@@ -131,6 +168,7 @@ uv run python -m workspace_app            # API + SPA 一起跑在 127.0.0.1:800
 | `kb` | **KB 子系統**（見 [§9](#9-kb-子系統)） | 用 KB 就會改 |
 | `agents` | **preset 庫 ＋ picker ＋ KB 聊天**（見 [§7](#7-agents心智模型與雷區)） | 幾乎一定改 |
 | `health` | sanity matrix 的 AI 評審 | 診斷時才開 |
+| `capacity` | **容量規劃**：用量紀錄怎麼寫、LLM 標籤、頁面讀的四個資料來源（見 [§15](#15-capacity容量規劃)） | 接上資料來源時改；LiteLLM 擋 client 標籤的部署一定要關 `llm_tags` |
 
 ---
 
@@ -281,7 +319,7 @@ sandbox:
 resources:
   per_app:
     default: { cpu: 1.0, memory: 512M, disk: 80M }   # App 沒宣告時吃這個
-    max:     { cpu: 4.0, memory: 4G,   disk: 20G }   # App 不得超過,超過=開機失敗
+    max:     { cpu: 4.0, memory: 4G,   disk: 20G }   # App 不得超過(超過=開機失敗);也是單一 item 能調到的上限
   per_user:
     count: 3          # 同時活著的 sandbox 個數
     cpu: 6.0          # 那些活著的 sandbox 加總核心
@@ -313,12 +351,24 @@ resources:
 
 ### 使用者自己調單一 item 的環境大小
 
-App 宣告的是**天花板**;使用者可以在 item 頁面的「環境」面板把**那一個** item 調得更小,
-帳仍然記在 item 的 `owner` 上。維運面要知道的:
+使用者可以在 item 頁面的「環境」面板調**那一個** item 的 CPU 與記憶體,帳仍然記在 item 的
+`owner` 上。**App 的值是預設大小,`resources.per_app.max` 是天花板**([plan-item-size-ceiling.md](plan-item-size-ceiling.md)):
+
+| 設定 | 對單一 item 的意思 |
+|---|---|
+| app.json 的 `resources`,沒寫就是 `per_app.default` | 沒人調過時的大小 |
+| `per_app.max` | 最多能調到多大。面板在欄位下寫出「這個 App 最多 X」 |
+| 沒設 `max` 的維度(`""`/`"0"`/`"max"` 都算沒設) | 天花板就是 App 的值——只能往下調;App 也沒有值時就沒有天花板 |
+| 個人額度(`per_user`) | 最後再夾一層,`min(item 的值, 天花板, 個人額度)` |
+
+例:`per_app.default` 1 核 / `512M`、`per_app.max` 4 核 / `4G` ⇒ 沒人調的 item 是 1 核 / 512M,
+可以調到 4 核 / 4G 以內;設 16 核會存下,生效時夾成 4 核,面板寫「受這個 App 的上限限制」。
+
+維運面要知道的:
 
 - **選的是上限,不是預約。** 選了 4 核不會當下扣額度——只有 sandbox 活著才算,跟今天完全
   一樣。額度的帳是從心跳推導的,不是 create+1 / kill−1 的計數器。
-- **預設 `min(App 上限, 個人額度)`,而且不落地。** 欄位空 = 沒人指定。調整某人的額度之後,
+- **預設 `min(App 的值, 個人額度)`,而且不落地。** 欄位空 = 沒人指定。調整某人的額度之後,
   他那些沒特別設定的 item 自動跟著變。
 - **沒設 `per_user` 的部署看不到那半個面板。** 沒有額度就沒有「花費」這回事,畫 `0 / 0`
   是雜訊。但「環境在跑嗎、關掉它」那半邊**永遠都在**——那是關於機器,不是關於額度。
@@ -821,7 +871,8 @@ observability:
 `SANDBOX_HOST_BIND`、`SANDBOX_HOST_UID_MIN` / `_UID_MAX`、`SANDBOX_HOST_MEMORY_MAX`、
 `SANDBOX_HOST_CPU_CORES`、`SANDBOX_HOST_PIDS_MAX`、`SANDBOX_HOST_CGROUP_ROOT`、`SANDBOX_HOST_ROOT`、
 `SANDBOX_HOST_EXEC_TIMEOUT`、`SANDBOX_HOST_LOG_TIMEOUT`、`SANDBOX_HOST_TOOLS_DIR`、`SANDBOX_HOST_IDLE_TTL`、
-`SANDBOX_HOST_ARCHIVE_PACK`、`SANDBOX_HOST_PACK_DRAIN_S`（＋ host 綁定用的 `POD_IP` / `PORT`）。
+`SANDBOX_HOST_ARCHIVE_PACK`、`SANDBOX_HOST_PACK_DRAIN_S`、`SANDBOX_HOST_USAGE_SAMPLE_S`、
+`SANDBOX_HOST_USAGE_WINDOW_S`（容量規劃的沙盒用量，見 §15）（＋ host 綁定用的 `POD_IP` / `PORT`）。
 
 ---
 
@@ -836,6 +887,40 @@ observability:
 | 多 pod 檔案樹一下有一下沒 | 用了 `kind: local` 卻沒共享 `sandbox.root`，或該用 `kind: http`（見 §5-C） |
 | KB 搜不到東西 / 維度錯 | 換了嵌入模型沒對齊 `KB_EMBED_DIM` 且沒重建索引 |
 | 圖片上傳 0 chunk | `kb.vlm_llm` 沒設 / 被設成 `null` |
+
+---
+
+## 15. capacity（容量規劃）
+
+給 superuser 的容量頁（`/capacity`）。平台**不存任何東西**：用量紀錄是 stdout 的 JSON 行，由你們的收集器送進
+ES；頁面讀的四個資料來源由你們實作。整套說明（紀錄格式、ES mapping、四個介面與範例、怎麼檢查）在
+[容量規劃 capacity.md](capacity.md)。
+
+| key | 預設 | 意思 |
+|---|---|---|
+| `capacity.record` | `true` | 寫用量紀錄（每個請求、對話回合、job 的次數與時間）。`false` = 這個 app 與 worker 不記、LLM 標籤不送；sandbox-host 是另一個服務，要停它的沙盒紀錄設 `SANDBOX_HOST_USAGE_SAMPLE_S=0` |
+| `capacity.sink` | `""` | 自己的 `UsageSink`（dotted path）；空 = stdout 一行一筆 JSON |
+| `capacity.window_s` | `300` | 每個行程把用量加總的時段（秒），要整除 3600 |
+| `capacity.queue_max` | `10000` | 寫出佇列能排幾筆；滿了就丟、記在 `meta` 紀錄 |
+| `capacity.llm_tags` | `true` | LLM 呼叫帶 `x-litellm-tags`（人、App、用途）。要關的情況：LiteLLM proxy 設了 `general_settings.reject_clientside_metadata_tags: true`（帶標籤的請求全被拒）、開了 tag routing 又沒有 `default` pool、或模型直接呼叫外部供應商（標籤裡的使用者 id 會送出去） |
+| `capacity.usage_records` | `""` | ① 平台用量紀錄的讀取端（你們的 `UsageRecordSource`） |
+| `capacity.resource_metrics` | `""` | ② pod 與機器用量與容量（`ResourceMetricsSource`） |
+| `capacity.gpu_metrics` | `""` | ③ GPU 用量（`GpuMetricsSource`） |
+| `capacity.llm_requests` | `""` | ④ LiteLLM 請求紀錄（`LlmRequestSource`） |
+| `capacity.step_s` | `300` | 分析的時段（秒），要是 `window_s` 的整數倍、而且整除一天；90 天的期間用它的倍數裡最小的、至少 900 又整除一天的那個 |
+| `capacity.lag_s` | `600` | 最新的這幾秒不算（等 ES 收進來） |
+| `capacity.timezone` | `""` | 「一天」從哪個時區的午夜切（IANA 名稱）；空 = UTC |
+| `capacity.max_rows` | `5000000` | 一次分析最多讀幾列；超過就停下並請人改看較短的期間。管的是讀進來的列（每列約 45–60 bytes），不是每人每條線的陣列（見 [capacity.md §6](capacity.md)） |
+
+開機會擋下用不了的值（`window_s` 不整除 3600、`step_s` 不是它的倍數或不整除一天、不存在的時區、
+`queue_max` / `max_rows` 不是正數、`lag_s` 是負數），並說是哪個 key。
+
+sandbox-host 那側（環境變數）：`SANDBOX_HOST_USAGE_SAMPLE_S`（預設 `60`，每幾秒讀一次每個沙盒的 cgroup；
+**`0` = 不量**）、`SANDBOX_HOST_USAGE_WINDOW_S`（預設 `300`，幾秒寫一筆；要整除 3600——不整除的值，包括 `0`，
+起不來——而且要整除 `capacity.step_s` 或是它的整數倍，90 天期間的時段（預設 900 秒）也一樣：預設 `step_s: 300`
+下只有 300 的因數（例如 60、100、150、300）和 900、1800、3600 可以；否則分析放不進時段，`capacity check` 會報錯）。
+
+檢查四個來源的實作：`uv run python -m workspace_app.capacity check --hours 24`。
 
 ---
 

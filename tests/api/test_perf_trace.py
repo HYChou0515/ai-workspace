@@ -176,7 +176,9 @@ def test_emits_even_though_the_app_configures_no_logging(
     change the log level cannot silently take the instrument away again.
     """
     monkeypatch.setenv("WORKSPACE_PERF_TRACE", "1")
-    for handler in [h for h in perf_trace.logger.handlers if getattr(h, "_perf_trace", False)]:
+    from workspace_app.observability.stdout_log import OWN_HANDLER
+
+    for handler in [h for h in perf_trace.logger.handlers if getattr(h, OWN_HANDLER, False)]:
         perf_trace.logger.removeHandler(handler)  # rebind to this test's stdout
     logging.getLogger().setLevel(logging.WARNING)  # what production actually has
 

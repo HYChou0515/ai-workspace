@@ -41,6 +41,7 @@ if TYPE_CHECKING:
 
     from .agent.config_catalog import AgentConfigCatalog
     from .api.runner import AgentRunner
+    from .capacity.recorder import UsageRecorder
     from .config.schema import ChatVideoSettings
     from .filestore.protocol import FileStore
     from .kb.embedder import Embedder
@@ -180,6 +181,9 @@ def build_coordinators(
     wiki_model: str = "",
     wiki_llm_base_url: str = "",
     wiki_llm_api_key: str = "",
+    # plan-model-settings P5: (model, base_url, api_key) of `kb.wiki.llm` from the
+    # published settings, asked per job. None ⇒ the three strings above, fixed.
+    wiki_endpoint: Callable[[], tuple[str | None, str | None, str | None]] | None = None,
     # #245: blob-GC grace periods (filestore.gc_t1 / gc_t2) and the telemetry
     # sinks — the reconcile's `blob_gc` event and the `ws_census` snapshot the
     # consuming process records (the API's sweeper used to; now the job does).
@@ -193,6 +197,9 @@ def build_coordinators(
     # docs/plan-storage-all-items.md: a sandbox active within this window is
     # live — the disk-ledger pass leaves it to the mirror. 0 ⇒ no pass wired.
     disk_live_window_ms: int = 0,
+    # docs/plan-capacity-usage.md §6.4: every coordinator records its job
+    # attempts here (the process's own recorder). None ⇒ nothing is recorded.
+    usage_recorder: UsageRecorder | None = None,
 ) -> CoordinatorBundle:
     """Construct the background job coordinators and wire the index→wiki→quality
     chain. The returned coordinators are *not* yet consuming — the caller (API
@@ -205,11 +212,37 @@ def build_coordinators(
     # maintainer agent uses (kb.wiki.llm). Empty model ⇒ None ⇒ code-wiki off.
     from .kb.llm import LitellmLlm
 
-    code_wiki_llm = (
+    code_wiki_llm: ILlm | None = (
         LitellmLlm(wiki_model, wiki_llm_base_url or None, wiki_llm_api_key or None)
         if wiki_model
         else None
     )
+    if wiki_endpoint is not None and code_wiki_llm is not None:
+        from .model_settings.consumers import LiveClient, LiveLlm
+
+        code_wiki_llm = LiveLlm(
+            LiveClient(
+                "kb.wiki.llm",
+                wiki_endpoint,
+                lambda e: LitellmLlm(e[0], e[1], e[2]) if e[0] else None,
+            )
+        )
+
+    def maintainer_config() -> AgentConfig:
+        model, base_url, api_key = (
+            (wiki_model, wiki_llm_base_url, wiki_llm_api_key)
+            if wiki_endpoint is None
+            else wiki_endpoint()
+        )
+        return resolve_wiki_config(
+            catalog,
+            "wiki_maintainer",
+            default_wiki_maintainer_config,
+            wiki_model=model or "",
+            wiki_llm_base_url=base_url or "",
+            wiki_llm_api_key=api_key or "",
+        )
+
     # #355: the code_sync job clones a code collection's git_url + ingests it on
     # the wiki worker (off the API), so the wiki coordinator owns the CodeRepoIngestor.
     from .kb.code_repo import CodeRepoIngestor
@@ -217,19 +250,13 @@ def build_coordinators(
     wiki = WikiMaintenanceCoordinator(
         spec,
         runner,
-        agent_config=resolve_wiki_config(
-            catalog,
-            "wiki_maintainer",
-            default_wiki_maintainer_config,
-            wiki_model=wiki_model,
-            wiki_llm_base_url=wiki_llm_base_url,
-            wiki_llm_api_key=wiki_llm_api_key,
-        ),
+        agent_config=maintainer_config,
         maintainer_max_turns=wiki_maintainer_max_turns,
         message_queue_factory=message_queue_factory,
         get_user_id=get_user_id,
         code_wiki_llm=code_wiki_llm,
         code_repo=CodeRepoIngestor(spec, ingestor=ingestor),
+        usage_recorder=usage_recorder,
     )
     # #105: the doc-quality judge. Built only when a quality_judge model is wired;
     # otherwise None ⇒ the index coordinator skips scoring (docs stay un-scored).
@@ -272,6 +299,7 @@ def build_coordinators(
         message_queue_factory=message_queue_factory,
         get_user_id=get_user_id,
         reconciler=reconciler,
+        usage_recorder=usage_recorder,
     )
     # #82: indexing runs off the request path on a durable, cross-pod job queue.
     # It chains the index→wiki hook, so the wiki coordinator is handed in here.
@@ -283,6 +311,7 @@ def build_coordinators(
         card_gen_coordinator=card_gen,
         message_queue_factory=message_queue_factory,
         get_user_id=get_user_id,
+        usage_recorder=usage_recorder,
     )
     # #715: archive imports write their documents on a worker instead of inside the
     # request, so a large archive cannot be cut off by a gateway timeout. Built after
@@ -293,6 +322,7 @@ def build_coordinators(
         index_coordinator=index,
         message_queue_factory=message_queue_factory,
         superusers=superusers,
+        usage_recorder=usage_recorder,
     )
     # Model-sanity battery: a background consumer runs matrix cells (heavy live
     # LLM) off the request path. Only built when an LLM factory is wired.
@@ -305,6 +335,7 @@ def build_coordinators(
             sanity_llm_factory,
             judge=sanity_judge_llm,
             message_queue_factory=message_queue_factory,
+            usage_recorder=usage_recorder,
         )
         logger.info("coordinators: sanity battery coordinator wired")
     # #535: retrieval-eval fan-out. Built (registers the EvalJob model + its auto
@@ -315,7 +346,10 @@ def build_coordinators(
         from .kb.eval.coordinator import EvalCoordinator
 
         eval_coordinator = EvalCoordinator(
-            spec, eval_llm, message_queue_factory=message_queue_factory
+            spec,
+            eval_llm,
+            message_queue_factory=message_queue_factory,
+            usage_recorder=usage_recorder,
         )
         logger.info("coordinators: retrieval-eval coordinator wired")
     # #534: metric-extraction fan-out. Built (registers the GraphJob model + its
@@ -329,6 +363,7 @@ def build_coordinators(
             graph_llm,
             chunk_budget=graph_chunk_budget,
             message_queue_factory=message_queue_factory,
+            usage_recorder=usage_recorder,
         )
         logger.info("coordinators: metric-extraction (graph) coordinator wired")
     # #245: the blob-GC reconcile is a job because its live-set rescan holds every
@@ -345,10 +380,16 @@ def build_coordinators(
         # None for no store, no live window, or a store without usage
         # accounting: the runner then FAILS the job rather than booking 0s.
         disk_ledger_pass=(
-            make_disk_ledger_pass(spec, filestore, live_window_ms=disk_live_window_ms)
+            make_disk_ledger_pass(
+                spec,
+                filestore,
+                live_window_ms=disk_live_window_ms,
+                usage_recorder=usage_recorder,
+            )
             if filestore is not None and disk_live_window_ms > 0
             else None
         ),
+        usage_recorder=usage_recorder,
     )
     # plan-chat-video-export: one render per job; the route's own answer to
     # "who may" is asked again by the worker, with the same superuser set.
@@ -357,6 +398,7 @@ def build_coordinators(
         limits=chat_video_settings,
         message_queue_factory=message_queue_factory,
         superusers=superusers,
+        usage_recorder=usage_recorder,
     )
     logger.info("coordinators: built wiki/index/card_gen/kb_import/blob_gc/chat_video coordinators")
     return CoordinatorBundle(
