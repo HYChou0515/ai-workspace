@@ -29,9 +29,13 @@ vi.mock("../hooks/useUsers", () => ({
   useUsers: () => [{ id: "user00", name: "Alice Chen", section: "", email: "" }],
   useUser: (id: string) => ({ id, name: id, section: "", email: "" }),
 }));
-// ECharts itself is not under test here: the lazy module is, by Chart.test.tsx.
-vi.mock("../capacity/echarts", () => ({
-  echarts: { init: () => ({ setOption: () => {}, resize: () => {}, dispose: () => {} }) },
+// The drawing is not under test here (Chart.test.tsx covers it). Mocked as Chart,
+// not as `../capacity/echarts`: Chart reaches that by a dynamic import, which on
+// CI resolved to the real ECharts in views.test.tsx and threw on happy-dom.
+vi.mock("../capacity/Chart", () => ({
+  Chart: ({ label, testId }: { label: string; testId?: string }) => (
+    <div role="img" aria-label={label} data-testid={testId} className="capacity-chart" />
+  ),
 }));
 
 const SUMMARY = summaryFixture as unknown as CapacitySummary;

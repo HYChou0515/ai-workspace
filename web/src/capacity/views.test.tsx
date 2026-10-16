@@ -25,8 +25,15 @@ import { columnLabel, kneeText, pairTitle, Thresholds } from "./views/Thresholds
 import { Trends } from "./views/Trends";
 import { advisory, runwayDate, WhatIf } from "./views/WhatIf";
 
-vi.mock("./echarts", () => ({
-  echarts: { init: () => ({ setOption: () => {}, resize: () => {}, dispose: () => {} }) },
+// The views are under test, not the drawing (Chart.test.tsx covers that). Chart
+// loads ECharts with `import("./echarts")`, and on CI that dynamic import has
+// resolved to the real module despite a `vi.mock("./echarts")` here: happy-dom's
+// canvas has no 2D context, so it threw from zrender (`clearRect` of null). A
+// static mock of Chart itself leaves no dynamic import to resolve.
+vi.mock("./Chart", () => ({
+  Chart: ({ label, testId }: { label: string; testId?: string }) => (
+    <div role="img" aria-label={label} data-testid={testId} className="capacity-chart" />
+  ),
 }));
 vi.mock("../hooks/useUsers", () => ({
   useUsers: () => [{ id: "user00", name: "Alice Chen", section: "", email: "" }],
