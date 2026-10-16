@@ -73,7 +73,7 @@ function client(data: Partial<ScheduleOverview> = {}, over: Partial<SchedulesApi
     overview: vi.fn(async () => ({ enabled: true, rows: [row({})], files: [], ...data })),
     editTime: vi.fn(async () => {}),
     remove: vi.fn(async () => {}),
-    runNow: vi.fn(async () => "run-1"),
+    runNow: vi.fn(async () => "workflow-run:run-1"),
     ...over,
   } as SchedulesApi;
 }
@@ -125,12 +125,16 @@ describe("SchedulesOverviewPage", () => {
     expect(await screen.findByText(word("scheduleOverview.empty"))).toBeInTheDocument();
   });
 
-  it("links the last run to the schedule's own conversation", async () => {
-    const ran = row({ last_run: { run_id: "r1", status: "error", started: 1, ended: 2, by_hand: false } });
+  it("links the last run to that execution's tab in its item", async () => {
+    // plan-workflow-out-of-chat P11: an execution is no longer a chat, so the
+    // schedule's conversation is not where its runs are read.
+    const ran = row({
+      last_run: { run_id: "workflow-run:r1", status: "error", started: 1, ended: 2, by_hand: false },
+    });
     render(<SchedulesOverviewPage client={client({ rows: [ran] })} />, { wrapper: Wrap });
 
     const link = await screen.findByRole("link", { name: new RegExp(word("scheduleOverview.status.error")) });
-    expect(link).toHaveAttribute("href", "/a/rca/i-1?chat=wui%3Ai-1%3Aaaaa&from=schedules");
+    expect(link).toHaveAttribute("href", "/a/rca/i-1?open=workflow-run%3Ar1");
     expect(link).not.toHaveTextContent(word("scheduleOverview.byHand"));
   });
 
@@ -293,7 +297,7 @@ describe("SchedulesOverviewPage", () => {
       {
         runNow: vi
           .fn()
-          .mockResolvedValueOnce("run-1")
+          .mockResolvedValueOnce("workflow-run:run-1")
           .mockRejectedValueOnce(new ScheduleActionError(409, "still going")),
       },
     );
@@ -315,7 +319,7 @@ describe("SchedulesOverviewPage", () => {
     const before = { enabled: true, rows: [row({})], files: [] };
     const after = {
       ...before,
-      rows: [row({ last_run: { run_id: "run-1", status: "running", started: NOW, ended: null, by_hand: true } })],
+      rows: [row({ last_run: { run_id: "workflow-run:run-1", status: "running", started: NOW, ended: null, by_hand: true } })],
     };
     const c = client({}, { overview: vi.fn().mockResolvedValueOnce(before).mockResolvedValue(after) });
     render(<SchedulesOverviewPage client={c} />, { wrapper: Wrap });
@@ -326,7 +330,7 @@ describe("SchedulesOverviewPage", () => {
     // The refetch after the press already carries the run: the last-run cell
     // says it all, so the note goes.
     const last = await within(tr).findByRole("link", { name: new RegExp(word("scheduleOverview.status.running")) });
-    expect(last).toHaveAttribute("href", "/a/rca/i-1?chat=wui%3Ai-1%3Aaaaa&from=schedules");
+    expect(last).toHaveAttribute("href", "/a/rca/i-1?open=workflow-run%3Arun-1");
     await waitFor(() => expect(within(tr).queryByRole("status")).toBeNull());
   });
 
@@ -365,7 +369,7 @@ describe("SchedulesOverviewPage", () => {
         files: [],
         rows: [row({ last_run: { run_id, status: "done", started: NOW, ended: NOW, by_hand: false } })],
       });
-      const overview = vi.fn().mockResolvedValueOnce(at("old")).mockResolvedValueOnce(at("run-1"));
+      const overview = vi.fn().mockResolvedValueOnce(at("old")).mockResolvedValueOnce(at("workflow-run:run-1"));
       overview.mockResolvedValue(at("run-2"));
       const c = client({}, { overview });
       render(<SchedulesOverviewPage client={c} />, { wrapper: Wrap });
@@ -394,9 +398,10 @@ describe("SchedulesOverviewPage", () => {
     fireEvent.click(within(tr).getByRole("button", { name: word("schedules.runNow") }));
 
     const note = await within(tr).findByRole("status");
+    // the run the press started, by the id it answered with
     expect(within(note).getByRole("link", { name: word("scheduleOverview.seeRun") })).toHaveAttribute(
       "href",
-      "/a/rca/i-1?chat=wui%3Ai-1%3Aaaaa&from=schedules",
+      "/a/rca/i-1?open=workflow-run%3Arun-1",
     );
   });
 

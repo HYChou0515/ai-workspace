@@ -202,6 +202,9 @@ class _ChatInfo(BaseModel):
     last_activity_ms: int | None = None
     """Epoch ms of the chat's last write (specstar `updated_time`) — the recency sort
     key for the list (#132). None only if the revision time is unavailable."""
+    page_job: bool = False
+    """The conversation of a page's job (#942): no workflow execution, a chat the
+    item lists, whose job the chat can stop while it runs (#942 D5)."""
 
 
 class _TodoItemWire(BaseModel):
@@ -372,6 +375,18 @@ class _SteerConfirmOut(BaseModel):
     # #288: the plan was applied + the run resumed (approve=True), or discarded (False).
     run_id: str
     applied: bool
+
+
+class _RetryBody(BaseModel):
+    # plan-workflow-out-of-chat D9: drive a failed / stopped run again. "" =
+    # Continue from here (what passed skips); a step name = Re-run this step
+    # (its artifacts are dropped first, the steps after it follow their inputs).
+    rerun: str = ""
+
+
+class _RetryOut(BaseModel):
+    run_id: str
+    rerun: str
 
 
 class _IngestBody(BaseModel):

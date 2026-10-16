@@ -55,10 +55,18 @@ from .events import (
     StepStarted,
 )
 from .gate import record_decision
-from .handle import WorkflowHandle
+from .handle import WorkflowHandle, aside_lane
 from .inputs import resolve_inputs
 from .manifest import WorkflowManifest
-from .run import PageJob, PhaseState, RunStatus, StepState, WorkflowRun
+from .run import (
+    PageJob,
+    PhaseState,
+    RunStatus,
+    SteerPlan,
+    StepState,
+    WorkflowRun,
+    is_execution_of,
+)
 from .run_identity import RunIdentities
 from .steer import SteerProposalFailed, apply_steer, propose_steer
 
@@ -157,6 +165,31 @@ class PageJobNotSteerable(WorkflowUnavailable):
 
 class NotAwaitingSteer(Exception):
     """A steer confirm was posted to a run with no steer plan pending (#288, §10)."""
+
+
+class NotRetryable(Exception):
+    """Continue / Re-run was asked of a run that has not failed or been stopped
+    (plan-workflow-out-of-chat D9): a live one is still going, a paused one waits
+    for its gate, a finished one has nothing left to do."""
+
+
+class SupersededRun(NotRetryable):
+    """Continue / Re-run / a change was asked of an execution that is not the newest
+    of its workflow on the item. Its runs share one journal (`journal_dir_of`), so
+    the older one's step files are the newer one's now: redoing or invalidating
+    them would delete the newer execution's results (review R1 / R2)."""
+
+    def __init__(self, run_id: str) -> None:
+        super().__init__(
+            f"execution {run_id} is not the newest of its workflow: a newer one has run"
+            " since, and they share their step files"
+        )
+
+
+class UnknownStep(ValueError):
+    """Re-run named a step that is not on the run's board. The name reaches a
+    journal glob, so a typo, a wildcard or a path is refused before anything is
+    deleted."""
 
 
 class StepBudgetExceeded(Exception):
@@ -271,6 +304,9 @@ class WorkflowOrchestrator:
     # None ⇒ no event dispatch (tests / a deploy with triggers off).
     entity_write_sink: EntityWriteSink | None = None
     _tasks: dict[str, asyncio.Task[None]] = field(default_factory=dict)
+    #: Runs a `retry` on this pod has claimed (PENDING) and not yet driven: a Stop
+    #: in that window marks them cancelled, and the retry then stands down (R2).
+    _claiming: set[str] = field(default_factory=set)
     _step_counts: dict[str, int] = field(default_factory=dict)
     _sem: asyncio.Semaphore | None = None
 
@@ -292,10 +328,11 @@ class WorkflowOrchestrator:
     def _get_in(self, run_id: str, item_id: str) -> WorkflowRun:
         """The run, IF it belongs to ``item_id`` — else not found. For the entrances
         that take the item from a URL and the run from an id (`decide`, `steer`,
-        `confirm_steer`): without it a run of item A resumed INSIDE item B through
-        B's URL, gated only on B (round 6; with private values on runs it carried
-        or stripped a person's, rounds 5–6). Cancel, the run detail and the run
-        stream take the same shape and do not go through here yet (#870)."""
+        `confirm_steer`, `retry`): without it a run of item A resumed INSIDE item B
+        through B's URL, gated only on B (round 6; with private values on runs it
+        carried or stripped a person's, rounds 5–6). Cancel takes the same shape and
+        does not go through here yet (#870); the run detail and the run stream check
+        the item in the route (plan-workflow-out-of-chat P8)."""
         data = self._get(run_id)
         if data.item_id != item_id:
             raise ResourceIDNotFoundError(run_id)
@@ -418,6 +455,12 @@ class WorkflowOrchestrator:
                 return ws[1]
         return self.load_manifest(slug, profile, workflow_id)
 
+    async def manifest_of(
+        self, slug: str, profile: str, workflow_id: str, item_id: str
+    ) -> WorkflowManifest | None:
+        """The manifest a run of ``workflow_id`` in this item would be built from."""
+        return await self._resolve_manifest(slug, profile, workflow_id, item_id)
+
     async def _resolve_run(
         self, slug: str, profile: str, workflow_id: str, item_id: str
     ) -> tuple[ProfileRun, str]:
@@ -461,11 +504,44 @@ class WorkflowOrchestrator:
                 return r.info.resource_id
         return None
 
+    def newest_run_of_workflow(self, item_id: str, workflow_id: str) -> str | None:
+        """The item's most recently created run of ``workflow_id``, or None. Its runs
+        share one journal, so only this one's step files are its own (review R1).
+
+        By the RESOURCE's creation (``ResourceMeta.created_time``), never a listing's
+        ``RevisionInfo.created_time``, which is when its latest revision was written:
+        an older run whose gate was decided late read as the newest (found live)."""
+        query = (QB["item_id"] == item_id).build()
+        ours = set()
+        for r in self._rm().list_resources(query):
+            data = r.data
+            assert isinstance(data, WorkflowRun)
+            if is_execution_of(data, workflow_id):
+                ours.add(r.info.resource_id)
+        metas = [m for m in self._rm().search_resources(query) if m.resource_id in ours]
+        return max(metas, key=lambda m: m.created_time).resource_id if metas else None
+
+    def _active_run_of_workflow(self, item_id: str, workflow_id: str) -> str | None:
+        """A run of ``workflow_id`` on the item that is executing (pending or
+        running), or None. Its runs share one journal (``journal_dir_of``), so two
+        executing at once race on the same step files; another workflow's runs
+        journal elsewhere, and one paused at a gate touches no step file until it
+        is decided — which may be days away (``start`` does not wait for it either)."""
+        for r in self._rm().list_resources((QB["item_id"] == item_id).build()):
+            data = r.data
+            assert isinstance(data, WorkflowRun)
+            if data.status in (RunStatus.PENDING, RunStatus.RUNNING) and is_execution_of(
+                data, workflow_id
+            ):
+                return r.info.resource_id
+        return None
+
     def active_run_for_chat(self, item_id: str, chat_id: str) -> str | None:
-        """The active run driving ``chat_id`` (a specific thread), or None. #343: a
-        chat hosts one run at a time — a takeover launch checks this so a thread whose
-        run is still live can't start a second one (a terminal one is fine). Scoped to
-        the item via the indexed ``item_id`` query, then filtered by chat."""
+        """The active run driving ``chat_id`` (a specific thread), or None. A
+        conversation hosts one run at a time — `start` checks this, which matters for
+        a schedule's conversation, shared by its executions (no chat is taken over
+        any more, plan-workflow-out-of-chat D3). Scoped to the item via the indexed
+        ``item_id`` query, then filtered by chat."""
         for r in self._rm().list_resources((QB["item_id"] == item_id).build()):
             data = r.data
             assert isinstance(data, WorkflowRun)
@@ -493,9 +569,11 @@ class WorkflowOrchestrator:
     ) -> str:
         """Create a ``WorkflowRun`` (capturing the user, §15) and kick the run off as
         a background task. ``workflow_id`` selects which of the profile's workflows to
-        run (manual §4); ``chat_id`` is the workflow chat it drives (manual §3). With a
-        ``chat_id``, runs are **per-chat** so many may run in parallel on one item
-        (§3); without one (legacy), the one-active-run-per-item rule still holds (§14)."""
+        run (manual §4); ``chat_id`` is the conversation its turns are recorded in —
+        a fresh one per web / API launch, or a schedule's shared one (no chat is
+        taken over: plan-workflow-out-of-chat D3). With a ``chat_id``, runs are
+        guarded **per conversation**, so many may run in parallel on one item;
+        without one (legacy), the one-active-run-per-item rule still holds (§14)."""
         # #429 E (execution gate 2): a headless (triggered) run has no request user, so the
         # acting user must be threaded through explicitly. If it arrives empty — a plumbing
         # bug, a lost serialization — FAIL LOUD rather than silently run as a system/superuser
@@ -507,7 +585,7 @@ class WorkflowOrchestrator:
                 "refusing to run headless with no identity"
             )
         # Without a chat_id the one-active-run-per-item rule holds (§14); with one, runs
-        # are per-chat, so guard only the target chat (#343 takeover / topic-hub §3).
+        # are per conversation, so guard only it (a schedule's shared one matters).
         existing = (
             self.active_run_for_chat(item_id, chat_id) if chat_id else self.active_run(item_id)
         )
@@ -1024,9 +1102,18 @@ class WorkflowOrchestrator:
         if data.status not in _ACTIVE:
             return False
         key = data.chat_id or item_id
-        # The cross-pod signal (also cancels the in-flight turn locally, if any).
+        # The cross-pod signal (also cancels the in-flight turn locally, if any) —
+        # on the run's lane and on its aside lane, where a steer proposal's turn
+        # runs (review R1: Stop never reached it, and it kept running and paying).
         if self.on_stop is not None:
             await self.on_stop(key)
+            await self.on_stop(aside_lane(key))
+        if run_id in self._claiming:
+            # Claimed by a retry on this pod and not driven yet: settle it here, and
+            # the retry stands down (review R2: the Stop was answered and lost).
+            self._patch(run_id, status=RunStatus.CANCELLED, ended=self.now())
+            logger.info("cancel: run %s stopped while its continue was starting", run_id)
+            return True
         task = self._tasks.get(run_id)
         if task is None or task.done():
             logger.info("cancel: signalled run %s (item %s) — driven elsewhere", run_id, item_id)
@@ -1064,6 +1151,10 @@ class WorkflowOrchestrator:
         manifest = await self._resolve_manifest(slug, profile, data.workflow_id, item_id)
         if manifest is None:
             raise WorkflowUnavailable(run_id, data.workflow_id)
+        if self.newest_run_of_workflow(item_id, data.workflow_id) != run_id:
+            # Resuming it would drive it into the journal the newer execution owns
+            # now; an older execution waiting at a gate can only be stopped (R2).
+            raise SupersededRun(run_id)
         wf = self._build_handle(
             run_id,
             item_id,
@@ -1093,15 +1184,21 @@ class WorkflowOrchestrator:
     ) -> None:
         """Begin a conversational steer (#288): if the run is still going, **Stop** it
         first (the in-flight node re-runs on resume anyway), then run the read-only
-        steerer in the background. It streams into the run's chat and, when it has a
-        plan, suspends the run ``awaiting_human`` with ``pending_steer`` set for the
-        human to confirm. A failed proposal leaves the run ``cancelled``."""
+        steerer in the background, as an aside turn: on a lane of its own, streamed
+        to no subscriber of the run's conversation and persisted nowhere
+        (plan-workflow-out-of-chat D2). When it has a plan, the run suspends
+        ``awaiting_human`` with ``pending_steer`` set for the human to confirm. A
+        failed proposal leaves the run ``cancelled`` with ``result.steer_error``.
+        Refused (:class:`SupersededRun`) for an execution that is not the newest of
+        its workflow: its change would invalidate the newer one's step files."""
         data = self._get_in(run_id, item_id)
         if data.page_job is not None:
             # No workflow behind it: `workflow_id` is "", which the manifest
             # lookup reads as the profile's FIRST workflow — the steerer would
             # plan against something this job never ran. Refused before any write.
             raise PageJobNotSteerable(run_id)
+        if self.newest_run_of_workflow(item_id, data.workflow_id) != run_id:
+            raise SupersededRun(run_id)
         if data.status in (RunStatus.RUNNING, RunStatus.PENDING):
             await self.cancel(run_id, item_id)
         else:
@@ -1199,6 +1296,10 @@ class WorkflowOrchestrator:
             return
         if manifest is None:
             raise WorkflowUnavailable(run_id, data.workflow_id)
+        if self.newest_run_of_workflow(item_id, data.workflow_id) != run_id:
+            # Approving would invalidate step files the newer execution owns now;
+            # rejecting (above) discards the plan and touches none (review R2).
+            raise SupersededRun(run_id)
         wf = self._build_handle(
             run_id,
             item_id,
@@ -1214,6 +1315,125 @@ class WorkflowOrchestrator:
         RunIdentities(self.spec).forget(run_id)
         self._patch(run_id, status=RunStatus.RUNNING, pending_steer=None, pending_decision=None)
         logger.info("confirm_steer: run %s steer approved, resuming", run_id)
+        self._spawn(
+            run_id,
+            slug,
+            item_id,
+            profile,
+            data.captured_user,
+            manifest,
+            data.workflow_id,
+            data.chat_id,
+        )
+
+    # ── Continue from here / Re-run this step (plan-workflow-out-of-chat D9) ──
+    async def retry(
+        self,
+        *,
+        slug: str,
+        item_id: str,
+        profile: str,
+        run_id: str,
+        rerun: str = "",
+        decided_by: str = "",
+    ) -> None:
+        """Drive a failed or stopped run again, as the same run. What already passed
+        skips (§9: its journal artifact is still valid), so the run picks up where it
+        broke. ``rerun`` names one step to do over: its artifacts are dropped first
+        (``apply_steer``'s invalidation, which also leaves the audit receipt), and the
+        steps after it re-run as far as their inputs changed.
+
+        Refuses before anything is written: a run that is not ``error`` /
+        ``cancelled`` (:class:`NotRetryable`), a ``rerun`` that is not a named step
+        on the run's board (:class:`UnknownStep`), another run of the same
+        workflow on the item that is executing (:class:`ActiveRunExists` — its runs
+        share one journal), a run that is not the newest of its workflow (the same
+        journal holds the newer one's files), a workflow that no longer loads
+        (:class:`WorkflowUnavailable`). Two presses at once: the first claims the
+        run by CAS and the other is refused (:class:`NotRetryable`).
+
+        The person whose private values the run uses is kept, as a gate decision
+        keeps them: the plan is the one they pressed, run again."""
+        data = self._get_in(run_id, item_id)
+        if data.status not in (RunStatus.ERROR, RunStatus.CANCELLED):
+            raise NotRetryable(
+                f"execution {run_id} is {data.status.value}: only a failed or stopped one"
+                " can continue"
+            )
+        if rerun and rerun not in {s.name for s in data.steps if not s.key}:
+            raise UnknownStep(rerun)
+        other = self._active_run_of_workflow(item_id, data.workflow_id)
+        if other is not None:
+            raise ActiveRunExists(item_id, other)
+        if self.newest_run_of_workflow(item_id, data.workflow_id) != run_id:
+            # Its runs share one journal: an older one's files are the newer one's
+            # now, and a Re-run would delete the newer one's results (review R1).
+            raise SupersededRun(run_id)
+        # Claim it before the first await, by CAS: two presses (two tabs, two pods)
+        # both passed the checks above and both drove the run (review R1). The status
+        # is checked on THE read whose etag is claimed with (R2: a peer's claim
+        # between an earlier check and this read was CASed over). The loser is
+        # refused; `pending` also holds off another retry of this workflow.
+        res = self._rm().get(run_id)
+        assert isinstance(res.data, WorkflowRun)
+        if res.data.status not in (RunStatus.ERROR, RunStatus.CANCELLED):
+            raise NotRetryable(f"execution {run_id} is already being continued")
+        try:
+            self._rm().update(
+                run_id,
+                msgspec.structs.replace(res.data, status=RunStatus.PENDING),
+                expected_etag=res.info.etag,
+            )
+        except PreconditionFailedError as exc:
+            raise NotRetryable(f"execution {run_id} is already being continued") from exc
+        self._claiming.add(run_id)
+        try:
+            manifest = await self._resolve_manifest(slug, profile, data.workflow_id, item_id)
+            if manifest is None:
+                raise WorkflowUnavailable(run_id, data.workflow_id)
+            # A terminal status flips inside the driver, which then still tears down —
+            # the same wait `steer` makes, so that teardown cannot reach the new drive.
+            prior = self._tasks.get(run_id)
+            if prior is not None and not prior.done():
+                with contextlib.suppress(BaseException):
+                    await prior
+            if rerun:
+                wf = self._build_handle(
+                    run_id,
+                    item_id,
+                    data.captured_user,
+                    manifest,
+                    data.chat_id or item_id,
+                    data.workflow_id,
+                    self.load_upload_dir(slug, profile),
+                )
+                plan = SteerPlan(instruction=f"Re-run step {rerun}", invalidate=[rerun])
+                await apply_steer(wf, plan, decided_by=decided_by)
+        except BaseException:
+            # Nothing was driven: the run is as it was, failed or stopped — unless a
+            # Stop already settled it.
+            self._claiming.discard(run_id)
+            if self._get(run_id).status is RunStatus.PENDING:
+                self._patch(run_id, status=data.status)
+            raise
+        self._claiming.discard(run_id)
+        if self._get(run_id).status is not RunStatus.PENDING:
+            # A Stop landed while it was being claimed (`cancel` settled it): the
+            # person was told it stopped, so it does not start (review R2).
+            logger.info("retry: run %s stopped before it was driven", run_id)
+            return
+        # The board and its counters describe THIS attempt: a skipped step counts
+        # done again on the way back, so keeping the old ones double-counts it.
+        self._patch(
+            run_id,
+            status=RunStatus.RUNNING,
+            phases=[PhaseState(phase=p.id) for p in manifest.phases],
+            steps=[],
+            current_phase="",
+            ended=None,
+            result=None,
+        )
+        logger.info("retry: run %s re-driven (rerun=%r)", run_id, rerun)
         self._spawn(
             run_id,
             slug,
@@ -1272,6 +1492,10 @@ class WorkflowOrchestrator:
                 p = msgspec.structs.replace(p, status="running")
             if isinstance(ev, (StepPassed, StepSkipped)):
                 p = msgspec.structs.replace(p, done=p.done + 1)
+            if isinstance(ev, StepSkipped) and p.status == "pending":
+                # Satisfied from the journal without being entered: done already,
+                # not "not started" (the execution tab shows this phase's Result).
+                p = msgspec.structs.replace(p, status="skipped")
             elif isinstance(ev, StepFailed):
                 p = msgspec.structs.replace(p, failed=p.failed + 1, status="failed")
             phases[idx] = p

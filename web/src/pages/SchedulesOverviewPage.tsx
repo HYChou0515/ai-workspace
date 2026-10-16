@@ -13,9 +13,10 @@
  * by the names people gave them — a workflow's title, a page's title
  * (`docs/plan-schedule-overview-polish.md`).
  *
- * "Last run" opens the schedule's own conversation — every run of one schedule
- * writes there — through the item's `?chat=` deep link; `from=schedules` tells
- * that page the reader came from here.
+ * "Last run" opens that execution's tab in its item, through the item page's
+ * `?open=workflow-run:<id>` (plan-workflow-out-of-chat P11). It used to open the
+ * schedule's own conversation (`?chat=`); an execution is not a chat any more,
+ * and the chat list no longer shows that conversation.
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
@@ -37,6 +38,7 @@ import { ScheduleTimeModal } from "../components/ScheduleTimeModal";
 import { useBreadcrumbs } from "../hooks/breadcrumbs";
 import { useApps } from "../hooks/useResources";
 import { describeSchedule } from "../lib/describeSchedule";
+import { executionPath, OPEN_PARAM } from "../lib/executionTab";
 import { type MsgKey, useT } from "../lib/i18n";
 import { type ScheduleSort, useScheduleOverviewPrefs } from "../lib/scheduleOverviewPrefs";
 import { fullTime, whenText } from "../lib/scheduleTime";
@@ -300,7 +302,7 @@ function ScheduleRowView({
   // (or a fire that overtook it), and the last-run cell then says everything
   // the note would. Not "until it shows the run id the press got back": a
   // reply without one, or an overtaking fire, left the note up for good.
-  const [started, setStarted] = useState<{ before: string | null } | null>(null);
+  const [started, setStarted] = useState<{ before: string | null; runId: string } | null>(null);
   // A row the sweep refuses has no identity; Remove finds it by its value.
   const ref = {
     path: row.path,
@@ -322,8 +324,8 @@ function ScheduleRowView({
 
   const runNow = useMutation({
     mutationFn: (_before: string | null) => client.runNow(row.slug, row.item_id, ref),
-    onSuccess: (_runId, before) => {
-      setStarted({ before });
+    onSuccess: (runId, before) => {
+      setStarted({ before, runId });
       return refresh();
     },
     onError: fail,
@@ -354,7 +356,10 @@ function ScheduleRowView({
   };
 
   const itemHref = `/a/${encodeURIComponent(row.slug)}/${encodeURIComponent(row.item_id)}`;
-  const chatHref = `${itemHref}?chat=${encodeURIComponent(row.trigger_id)}&from=schedules`;
+  // An execution opens as a tab in its item (plan-workflow-out-of-chat P11);
+  // it is not a chat any more, so the schedule's conversation is not the place.
+  const runHref = (runId: string) =>
+    runId ? `${itemHref}?${OPEN_PARAM}=${encodeURIComponent(executionPath(runId))}` : itemHref;
   const folder = folderOf(row);
   // A row the sweep refuses has no identity: it has no time to move and
   // nothing that would run, so only Remove (by its value) applies.
@@ -391,7 +396,7 @@ function ScheduleRowView({
       </td>
       <td className="schedule-last">
         {last ? (
-          <Link to={chatHref} title={lastAt ? fullTime(lastAt, clock.viewer, t) : undefined}>
+          <Link to={runHref(last.run_id)} title={lastAt ? fullTime(lastAt, clock.viewer, t) : undefined}>
             <span className="schedule-status" data-status={last.status}>
               {t(`scheduleOverview.status.${last.status}` as MsgKey)}
             </span>
@@ -452,7 +457,8 @@ function ScheduleRowView({
         </div>
         {showStarted ? (
           <div className="detail" role="status">
-            {t("schedules.started")} · <Link to={chatHref}>{t("scheduleOverview.seeRun")}</Link>
+            {t("schedules.started")} ·{" "}
+            <Link to={runHref(started?.runId ?? "")}>{t("scheduleOverview.seeRun")}</Link>
           </div>
         ) : null}
         {failed ? (

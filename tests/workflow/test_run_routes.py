@@ -295,81 +295,69 @@ def test_run_drives_its_own_workflow_chat_and_persists_there():
         run_id, chat_id = resp["run_id"], resp["chat_id"]
         _poll(client, item_id, run_id, "done")
         chats = {c["chat_id"]: c for c in client.get(f"{_base(item_id)}/chats").json()}
-    assert chat_id in chats
-    assert chats[chat_id]["run_id"] == run_id  # a workflow chat, not the default
-    assert chats[chat_id]["is_default"] is False
+    # plan-workflow-out-of-chat D3 / D4: the run's conversation is not a chat — the
+    # chat list leaves it out; the Workflows sidebar lists the execution instead
+    assert chat_id not in chats
     conv = spec.get_resource_manager(Conversation).get(chat_id).data
     assert conv.run_id == run_id
     assert any(m.role == "assistant" and m.content == "ack" for m in conv.messages)
 
 
-def test_run_takes_over_the_given_chat_instead_of_opening_a_new_one():
-    """#343: launching with ``?chat_id=`` runs the workflow IN that existing chat
-    (the one the user prepared in) — it sets that Conversation's ``run_id`` rather
-    than opening a fresh workflow chat."""
-    app, spec, item_id = _app()
-    with TestClient(app) as client:
-        _put_input(client, item_id, '{"n": 3}')
-        # Keep the item's default chat separate so this exercises takeover, not the
-        # default-chat handling (P2). `prep` is the chat the user prepared in.
-        client.post(f"{_base(item_id)}/chats", json={"title": "main"})
-        prep = client.post(f"{_base(item_id)}/chats", json={"title": "prep"}).json()["chat_id"]
-        resp = client.post(f"{_base(item_id)}/run?chat_id={prep}")
-        assert resp.status_code == 202
-        body = resp.json()
-        assert body["chat_id"] == prep  # ran in the SAME chat, no new one opened
-        run_id = body["run_id"]
-        _poll(client, item_id, run_id, "done")
-        chats = {c["chat_id"]: c for c in client.get(f"{_base(item_id)}/chats").json()}
-    # Only the prepped chat became a workflow chat; no fresh chat was opened for the run.
-    assert [cid for cid, c in chats.items() if c["run_id"]] == [prep]
-    conv = spec.get_resource_manager(Conversation).get(prep).data
-    assert conv.run_id == run_id
-    assert any(m.role == "assistant" for m in conv.messages)  # the run drove THIS chat
+def test_the_chat_list_keeps_a_chat_a_run_took_over_but_not_a_runs_own_conversation():
+    """A conversation with `run_id` is a chat only when a person spoke in it —
+    a chat #343 took over holds their own words. A run's own conversation
+    (opened by the launch, or a schedule's) has none, and stays out of the chat
+    list."""
+    from workspace_app.resources import Message
+    from workspace_app.workflow.run import RunStatus, WorkflowRun
 
-
-def test_takeover_conflicts_when_the_chat_already_has_an_active_run():
-    """#343: a chat hosts one run at a time — launching in a chat whose run is still
-    live (here parked at its gate) is a 409, not a second parallel run in one thread."""
-    app, _spec, item_id = _app()
-    with TestClient(app) as client:
-        _put_input(client, item_id, '{"gate": true}')  # the run parks at the gate → active
-        prep = client.post(f"{_base(item_id)}/chats", json={"title": "prep"}).json()["chat_id"]
-        first = client.post(f"{_base(item_id)}/run?chat_id={prep}").json()
-        _poll(client, item_id, first["run_id"], "awaiting_human")
-        conflict = client.post(f"{_base(item_id)}/run?chat_id={prep}")
-        assert conflict.status_code == 409
-
-
-def test_a_conflict_leaves_the_callers_own_chat_alone():
-    """The cleanup removes the chat the ROUTE opened. A chat the CALLER handed
-    over is theirs, and this is the one case where it is holding something: a
-    live run parked at a human gate.
-
-    Deleting it would take that run's conversation with it — and
-    `workflow_exec.drive_turn` catches `ResourceIDNotFoundError` only, not
-    `ResourceIsDeletedError`, so the resume after the decision would crash rather
-    than fall back to anything.
-
-    The rule (`if ours`) was correct and entirely unpinned: mutating both
-    branches to `if True` left every neighbouring test green, which is why this
-    exists.
-    """
     app, spec, item_id = _app()
     conv_rm = spec.get_resource_manager(Conversation)
     with TestClient(app) as client:
-        _put_input(client, item_id, '{"gate": true}')  # parks at the gate → active
+        _put_input(client, item_id, '{"n": 1}')
+        free = client.post(f"{_base(item_id)}/chats", json={"title": "free"}).json()["chat_id"]
+        taken = client.post(f"{_base(item_id)}/chats", json={"title": "prep"}).json()["chat_id"]
+        conv = conv_rm.get(taken).data
+        conv.messages.append(Message(role="user", content="prepared", created_at=1_000))
+        conv.run_id = "legacy-run"
+        conv_rm.update(taken, conv)
+        spec.get_resource_manager(WorkflowRun).create(
+            WorkflowRun(
+                item_id=item_id,
+                captured_user="u",
+                chat_id=taken,
+                status=RunStatus.DONE,
+                started=2_000,
+                ended=3_000,
+            )
+        )
+        own = client.post(f"{_base(item_id)}/run").json()["chat_id"]
+        listed = {c["chat_id"] for c in client.get(f"{_base(item_id)}/chats").json()}
+
+    assert free in listed and taken in listed
+    assert own not in listed
+
+
+def test_a_launch_naming_a_chat_is_refused_and_changes_nothing():
+    """plan-workflow-out-of-chat D3: a run never takes over a chat (#343 is
+    overturned). `?chat_id=` is refused by name rather than ignored, so a caller
+    still sending it learns why instead of finding its run somewhere else. As
+    with a path that escapes the workspace, nothing is written and no run starts:
+    the upload, the chat and the item's runs are as they were."""
+    app, spec, item_id = _app()
+    with TestClient(app) as client:
         prep = client.post(f"{_base(item_id)}/chats", json={"title": "prep"}).json()["chat_id"]
-        first = client.post(f"{_base(item_id)}/run?chat_id={prep}").json()
-        _poll(client, item_id, first["run_id"], "awaiting_human")
-
-        conflict = client.post(f"{_base(item_id)}/run?chat_id={prep}")
-
-        assert conflict.status_code == 409
-        # Untouched: still there, still pointing at the run it hosts.
-        chat = conv_rm.get(prep).data
-        assert isinstance(chat, Conversation)
-        assert chat.run_id == first["run_id"]
+        r = client.post(
+            f"{_base(item_id)}/run?chat_id={prep}",
+            files={"file": ("uploads/input.json", b'{"n": 9}', "application/json")},
+        )
+        assert r.status_code == 400
+        assert "chat_id" in r.json()["detail"]
+        assert client.get(f"{_base(item_id)}/files/uploads/input.json").status_code == 404
+        assert client.get(f"{_base(item_id)}/runs").json() == []
+    chat = spec.get_resource_manager(Conversation).get(prep).data
+    assert isinstance(chat, Conversation)
+    assert chat.run_id is None
 
 
 def test_a_launch_that_fails_leaves_no_chat_behind(monkeypatch):
@@ -406,45 +394,6 @@ def test_a_launch_that_fails_leaves_no_chat_behind(monkeypatch):
 
         after = sorted(rid for rid, _ in list_item_conversations(conv_rm, item_id))
         assert after == before, "the failed launch left its chat on the item"
-
-
-def test_relaunch_in_the_same_chat_after_the_previous_run_finished():
-    """#343 (v1): once a chat's run is terminal, the same thread may host ANOTHER
-    workflow — the Conversation's run_id moves from the first run to the second."""
-    app, spec, item_id = _app()
-    with TestClient(app) as client:
-        _put_input(client, item_id, '{"n": 1}')
-        prep = client.post(f"{_base(item_id)}/chats", json={"title": "prep"}).json()["chat_id"]
-        first = client.post(f"{_base(item_id)}/run?chat_id={prep}").json()["run_id"]
-        _poll(client, item_id, first, "done")
-        second = client.post(f"{_base(item_id)}/run?chat_id={prep}")
-        assert second.status_code == 202
-        body = second.json()
-        assert body["chat_id"] == prep
-        assert body["run_id"] != first
-        _poll(client, item_id, body["run_id"], "done")
-    conv = spec.get_resource_manager(Conversation).get(prep).data
-    assert conv.run_id == body["run_id"]
-
-
-def test_takeover_of_the_default_chat_leaves_a_fresh_item_level_default():
-    """#343: taking over the item's default chat (the common case — the user prepared
-    in it) doesn't strand the item-level endpoints; the next item-level use resolves a
-    FRESH free default, and the prepared chat becomes the workflow chat."""
-    app, _spec, item_id = _app()
-    with TestClient(app) as client:
-        _put_input(client, item_id, '{"n": 5}')
-        prep = client.post(f"{_base(item_id)}/chats", json={"title": "prep"}).json()["chat_id"]
-        assert next(c for c in client.get(f"{_base(item_id)}/chats").json())["is_default"]
-        run_id = client.post(f"{_base(item_id)}/run?chat_id={prep}").json()["run_id"]
-        _poll(client, item_id, run_id, "done")
-        # Item-level send still works — it get-or-creates a fresh free default.
-        assert client.post(f"{_base(item_id)}/messages", json={"content": "hi"}).status_code == 202
-        after = {c["chat_id"]: c for c in client.get(f"{_base(item_id)}/chats").json()}
-    assert after[prep]["run_id"] == run_id  # the prepared chat is now the workflow chat
-    new_default = next(c for c in after.values() if c["is_default"])
-    assert new_default["chat_id"] != prep  # a fresh free default replaced the taken-over one
-    assert new_default["run_id"] is None
 
 
 def test_two_parallel_runs_both_complete_sharing_the_filestore():
@@ -745,6 +694,27 @@ def test_steer_proposes_a_plan_then_confirm_resumes_with_the_new_input():
     assert resumed["pending_steer"] is None
 
 
+def test_a_steer_over_http_puts_no_json_in_the_executions_thread():
+    """plan-workflow-out-of-chat D2: the steerer's JSON used to land in the run's
+    conversation as the agent's reply (up to three times on retries) while the
+    person's own words were never shown. Now the thread is untouched; the plan
+    is the confirm card, carrying the request."""
+    app, spec, item_id = _app(reply=_STEER_PLAN)
+    conv_rm = spec.get_resource_manager(Conversation)
+    with TestClient(app) as client:
+        _put_input(client, item_id, '{"n": 7}')
+        started = client.post(f"{_base(item_id)}/run").json()
+        run_id, chat_id = started["run_id"], started["chat_id"]
+        _poll(client, item_id, run_id, "done")
+        before = list(conv_rm.get(chat_id).data.messages)
+
+        client.post(f"{_base(item_id)}/runs/{run_id}/steer", json={"instruction": "use n=42"})
+        paused = _poll(client, item_id, run_id, "awaiting_human")
+
+    assert paused["pending_steer"]["instruction"] == "use n=42"
+    assert conv_rm.get(chat_id).data.messages == before
+
+
 def test_reject_steer_discards_the_plan():
     """Rejecting a proposed steer discards it (no edits applied) and leaves the run
     stopped — the operator can re-instruct or take over."""
@@ -889,3 +859,280 @@ def test_decision_and_confirm_on_an_unknown_run_are_404_like_steer():
         d = client.post(f"{_base(item_id)}/runs/nope/decisions", json={"choice": "approve"})
         c = client.post(f"{_base(item_id)}/runs/nope/steer/confirm", json={"approve": True})
     assert (d.status_code, c.status_code) == (404, 404)
+
+
+# ── plan-workflow-out-of-chat D9: Continue from here / Re-run this step ──
+
+
+def _mark(app: FastAPI, spec: SpecStar, run_id: str, status: str) -> None:
+    """Turn a finished run into a failed / stopped one — what the step that broke
+    would have left — without scripting a failure into the echo workflow.
+
+    `done` is written inside the driver, whose teardown (`_post_run`) then still
+    reads the run and writes it back with its phases greened; a mark landing
+    between that read and write would be lost. So wait for the task first."""
+    import msgspec
+
+    from workspace_app.workflow.run import RunStatus, WorkflowRun
+
+    tasks = app.state.workflow_orchestrator._tasks
+    for _ in range(200):
+        task = tasks.get(run_id)
+        if task is None or task.done():
+            break
+        time.sleep(0.02)
+    else:
+        raise AssertionError(f"run {run_id} never finished tearing down")
+    rm = spec.get_resource_manager(WorkflowRun)
+    rm.update(run_id, msgspec.structs.replace(rm.get(run_id).data, status=RunStatus(status)))
+
+
+def test_continuing_a_failed_execution_drives_it_to_done():
+    app, spec, item_id = _app()
+    with TestClient(app) as client:
+        _put_input(client, item_id, '{"n": 7}')
+        run_id = client.post(f"{_base(item_id)}/run").json()["run_id"]
+        _poll(client, item_id, run_id, "done")
+        _mark(app, spec, run_id, "error")
+
+        r = client.post(f"{_base(item_id)}/runs/{run_id}/retry", json={})
+        assert r.status_code == 202
+        assert r.json() == {"run_id": run_id, "rerun": ""}
+        assert _poll(client, item_id, run_id, "done")["result"]["n"] == 7
+
+
+def test_rerunning_a_step_over_http_redoes_it_with_the_input_as_it_is_now():
+    """The step re-reads the workspace: an input changed since it passed reaches
+    the result only because the step was done over, not skipped."""
+    app, spec, item_id = _app()
+    with TestClient(app) as client:
+        _put_input(client, item_id, '{"n": 7}')
+        run_id = client.post(f"{_base(item_id)}/run").json()["run_id"]
+        done = _poll(client, item_id, run_id, "done")
+        assert done["result"]["n"] == 7
+        assert "think" in {s["name"] for s in done["steps"] if not s["key"]}
+        _mark(app, spec, run_id, "cancelled")
+        _put_input(client, item_id, '{"n": 42}')
+
+        r = client.post(f"{_base(item_id)}/runs/{run_id}/retry", json={"rerun": "think"})
+        assert r.status_code == 202
+        assert r.json()["rerun"] == "think"
+        assert _poll(client, item_id, run_id, "done")["result"]["n"] == 42
+
+
+def test_continuing_a_finished_execution_is_409():
+    app, _spec, item_id = _app()
+    with TestClient(app) as client:
+        _put_input(client, item_id, '{"n": 1}')
+        run_id = client.post(f"{_base(item_id)}/run").json()["run_id"]
+        _poll(client, item_id, run_id, "done")
+        r = client.post(f"{_base(item_id)}/runs/{run_id}/retry", json={})
+    assert r.status_code == 409
+
+
+def test_rerunning_a_step_the_execution_does_not_have_is_400():
+    app, spec, item_id = _app()
+    with TestClient(app) as client:
+        _put_input(client, item_id, '{"n": 1}')
+        run_id = client.post(f"{_base(item_id)}/run").json()["run_id"]
+        _poll(client, item_id, run_id, "done")
+        _mark(app, spec, run_id, "error")
+        r = client.post(f"{_base(item_id)}/runs/{run_id}/retry", json={"rerun": "*"})
+    assert r.status_code == 400
+
+
+def test_continuing_an_unknown_execution_is_404():
+    app, _spec, item_id = _app()
+    with TestClient(app) as client:
+        r = client.post(f"{_base(item_id)}/runs/nope/retry", json={})
+    assert r.status_code == 404
+
+
+# ── the execution tab's reads (plan-workflow-out-of-chat P8) ──
+
+
+def test_a_run_says_where_each_steps_files_are_and_the_result_is_there():
+    """The tab links a step's result and transcript. The paths come from the
+    server's own journal layout, and the result it names is a file the run
+    actually wrote (the workspace is the oracle, not a second copy of the rule)."""
+    app, _spec, item_id = _app()
+    with TestClient(app) as client:
+        _put_input(client, item_id, '{"n": 7}')
+        run_id = client.post(f"{_base(item_id)}/run").json()["run_id"]
+        done = _poll(client, item_id, run_id, "done")
+        named = [s["name"] for s in done["steps"] if not s["key"]]
+        assert named
+        step_files = client.get(f"{_base(item_id)}/runs/{run_id}/files").json()["step_files"]
+        assert set(step_files) == set(named)
+        for name in named:
+            files = step_files[name]
+            assert files["transcript"] == files["result"].removesuffix(".json") + ".transcript.md"
+            r = client.get(f"{_base(item_id)}/files/{files['result'].lstrip('/')}")
+            assert r.status_code == 200, files["result"]
+
+
+def _second_item(spec: SpecStar) -> str:
+    return (
+        spec.get_resource_manager(PlaygroundItem)
+        .create(PlaygroundItem(title="other", owner="u", profile="echo"))
+        .resource_id
+    )
+
+
+def test_a_run_is_not_read_through_another_items_url():
+    """The run route took the item from the URL and the run from its id and
+    never checked they belong together: read access to one item read every
+    other item's runs."""
+    app, spec, item_id = _app()
+    other = _second_item(spec)
+    with TestClient(app) as client:
+        _put_input(client, item_id, '{"n": 1}')
+        run_id = client.post(f"{_base(item_id)}/run").json()["run_id"]
+        _poll(client, item_id, run_id, "done")
+        assert client.get(f"{_base(other)}/runs/{run_id}").status_code == 404
+
+
+async def test_a_runs_stream_is_not_followed_through_another_items_url():
+    """Called as a handler: its body is a never-ending event stream the
+    in-process transport would buffer forever (see the stream test above)."""
+    import pytest
+    from fastapi import HTTPException
+
+    from workspace_app.workflow.run import RunStatus, WorkflowRun
+
+    app, spec, item_id = _app()
+    other = _second_item(spec)
+    run_id = (
+        spec.get_resource_manager(WorkflowRun)
+        .create(WorkflowRun(item_id=item_id, captured_user="u", status=RunStatus.DONE))
+        .resource_id
+    )
+    stream = _route(app, "/a/{slug}/items/{item_id}/runs/{run_id}/stream")
+
+    own = await stream(slug="playground", item_id=item_id, run_id=run_id)
+    assert isinstance(own, StreamingResponse)  # its own item still follows it
+    with pytest.raises(HTTPException) as exc:
+        await stream(slug="playground", item_id=other, run_id=run_id)
+    assert exc.value.status_code == 404
+
+
+def test_only_the_newest_execution_of_a_workflow_names_its_step_files():
+    """Review R1: a workflow's executions share one journal, so an older one's
+    "Result" opened the newer one's file. Only the newest names step files; every
+    one names the inputs file the workflow reads."""
+    app, _spec, item_id = _app()
+    with TestClient(app) as client:
+        _put_input(client, item_id, '{"n": 1}')
+        older = client.post(f"{_base(item_id)}/run").json()["run_id"]
+        _poll(client, item_id, older, "done")
+        newer = client.post(f"{_base(item_id)}/run").json()["run_id"]
+        _poll(client, item_id, newer, "done")
+        _mark(app, _spec, older, "error")  # the older one written again, after the newer
+
+        old = client.get(f"{_base(item_id)}/runs/{older}/files").json()
+        new = client.get(f"{_base(item_id)}/runs/{newer}/files").json()
+        assert (old["latest"], new["latest"]) == (False, True)
+        assert old["step_files"] == {}
+        assert new["step_files"]
+        # the staging file the workflow reads now: the newest's to link, not the older's
+        assert (old["inputs_path"], new["inputs_path"]) == ("", "/uploads/input.json")
+        assert client.get(f"{_base(item_id)}/files/uploads/input.json").status_code == 200
+
+
+def test_a_workflow_with_no_input_file_links_none():
+    """Review R2: the inputs link opened a path that does not exist."""
+    app, _spec, item_id = _app()
+    with TestClient(app) as client:
+        run_id = client.post(f"{_base(item_id)}/run").json()["run_id"]  # no input.json put
+        _poll(client, item_id, run_id, "done")
+        assert client.get(f"{_base(item_id)}/runs/{run_id}/files").json()["inputs_path"] == ""
+
+
+def test_polling_a_run_reads_only_that_run():
+    """Review R2: the 1 s poll listed every run of the item and read the workspace's
+    workflow file each time; that work lives on `/files`, asked when the run moves."""
+    app, _spec, item_id = _app()
+    with TestClient(app) as client:
+        _put_input(client, item_id, '{"n": 1}')
+        run_id = client.post(f"{_base(item_id)}/run").json()["run_id"]
+        got = _poll(client, item_id, run_id, "done")
+    assert {"step_files", "latest", "inputs_path"}.isdisjoint(got)
+
+
+def _older_waiting_and_newer(spec: SpecStar, item_id: str) -> str:
+    from workspace_app.workflow.run import PendingDecision, RunStatus, SteerPlan, WorkflowRun
+
+    rm = spec.get_resource_manager(WorkflowRun)
+    older = rm.create(
+        WorkflowRun(
+            item_id=item_id,
+            captured_user="u",
+            status=RunStatus.AWAITING_HUMAN,
+            pending_decision=PendingDecision(phase="think", title="t", allow=["approve"]),
+            pending_steer=SteerPlan(instruction="x"),
+        )
+    ).resource_id
+    rm.create(WorkflowRun(item_id=item_id, captured_user="u", status=RunStatus.DONE))
+    return older
+
+
+def test_an_older_executions_decision_and_change_are_409_not_500():
+    """Review R2: deciding or approving a change on an execution that is not the
+    newest of its workflow is refused — as a 409 the page can say, not a 500."""
+    app, spec, item_id = _app()
+    older = _older_waiting_and_newer(spec, item_id)
+    with TestClient(app) as client:
+        r = client.post(f"{_base(item_id)}/runs/{older}/decisions", json={"choice": "approve"})
+        assert r.status_code == 409, r.text
+        assert "newest" in r.json()["detail"]
+        r = client.post(f"{_base(item_id)}/runs/{older}/steer/confirm", json={"approve": True})
+        assert r.status_code == 409, r.text
+        r = client.post(f"{_base(item_id)}/runs/{older}/steer", json={"instruction": "x"})
+        assert r.status_code == 409, r.text
+
+
+def test_the_runs_list_says_which_execution_is_the_newest_of_its_workflow():
+    """Review R3: the badge, the waiting banner and a tab waiting at a gate learn
+    from the list they already poll that a newer execution superseded one."""
+    app, spec, item_id = _app()
+    with TestClient(app) as client:
+        _put_input(client, item_id, '{"n": 1}')
+        older = client.post(f"{_base(item_id)}/run").json()["run_id"]
+        _poll(client, item_id, older, "done")
+        newer = client.post(f"{_base(item_id)}/run").json()["run_id"]
+        _poll(client, item_id, newer, "done")
+        _mark(app, spec, older, "error")  # written again after the newer: still older
+        listed = {r["run_id"]: r["latest"] for r in client.get(f"{_base(item_id)}/runs").json()}
+    assert listed == {older: False, newer: True}
+
+
+def test_the_runs_list_is_the_workflows_executions_not_a_pages_jobs():
+    """A page job (#942) is a `WorkflowRun` with no workflow — its `workflow_id`
+    is "", the same id a profile's first workflow runs under. The Workflows
+    sidebar lists executions, so the job is not one of them, and a job started
+    after an execution must not take "newest" from it: the execution would read
+    as superseded and could only be stopped."""
+    from workspace_app.workflow.run import PageJob, RunStatus, WorkflowRun
+
+    app, spec, item_id = _app()
+    with TestClient(app) as client:
+        _put_input(client, item_id, '{"n": 1}')
+        execution = client.post(f"{_base(item_id)}/run").json()["run_id"]
+        _poll(client, item_id, execution, "done")
+        job = (
+            spec.get_resource_manager(WorkflowRun)
+            .create(
+                WorkflowRun(
+                    item_id=item_id,
+                    captured_user="u",
+                    status=RunStatus.RUNNING,
+                    page_job=PageJob(kind="agent", name="digger", input="x"),
+                )
+            )
+            .resource_id
+        )
+        listed = {r["run_id"]: r["latest"] for r in client.get(f"{_base(item_id)}/runs").json()}
+        files = client.get(f"{_base(item_id)}/runs/{execution}/files").json()
+    assert job not in listed
+    assert listed == {execution: True}
+    assert files["latest"] is True

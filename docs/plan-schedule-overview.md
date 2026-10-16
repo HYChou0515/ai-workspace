@@ -1,5 +1,7 @@
 # Plan — Schedules overview: one page that lists every schedule you can see
 
+> 被 #911（plan-workflow-out-of-chat.md）推翻
+
 ## Problem
 
 A schedule lives in the item that declared it — the item's own

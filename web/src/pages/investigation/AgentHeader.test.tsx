@@ -246,7 +246,6 @@ describe("the header's actions step down as the column narrows", () => {
     "item-environment-button",
     "env-button",
     "skills-button",
-    "workflows-button",
     "export-button",
   ];
   function renderTier(tier: "labels" | "icons" | "menu", onNewChat = vi.fn()) {
@@ -377,7 +376,6 @@ describe("the ⋯ menu keeps a keyboard user's place", () => {
       ["environment", "item-environment"],
       ["env", "env-vars"],
       ["skills", "skills"],
-      ["workflows", "workflows"],
     ] as const) {
       open();
       fireEvent.click(screen.getByTestId(`header-more-${id}`));
