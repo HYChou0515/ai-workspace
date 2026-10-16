@@ -160,21 +160,28 @@ def _fit_token_budget(msgs: list[Any], max_tokens: int) -> list[Any]:
 # mid-conversation system item makes providers reject the next call with
 # "system message must be at the beginning".
 _INTERRUPTED_MARKER = "[Response interrupted by user]"
+# docs/plan-interjection.md Q5 — the same fold for a turn that ran out of steps:
+# a statement of fact, not an instruction, so it cannot steer a small model the
+# way "you ran out of turns, try again" would.
+_STEP_LIMIT_MARKER = "[Response stopped at the step limit before it finished]"
 
 
-def _fold_cancellation_marker(items: list[dict[str, Any]]) -> None:
+def _fold_cancellation_marker(
+    items: list[dict[str, Any]], marker: str = _INTERRUPTED_MARKER
+) -> None:
     """Record a user cancellation (issue #199) so the model knows its prior,
     possibly partial answer was cut off — without ever emitting a `system`
     item mid-conversation. Fold the marker onto the trailing assistant turn
     if there is one; otherwise (cancelled before any text, right after a tool
     output, or as the first item) emit a standalone assistant message.
-    Consecutive cancellations collapse to a single marker."""
+    Consecutive cancellations collapse to a single marker. `marker` says how
+    the answer was cut off (a Stop, or the step limit)."""
     last = items[-1] if items else None
     if last is not None and last.get("role") == "assistant":
-        if not last["content"].endswith(_INTERRUPTED_MARKER):
-            last["content"] += f"\n\n{_INTERRUPTED_MARKER}"
+        if not last["content"].endswith(marker):
+            last["content"] += f"\n\n{marker}"
     else:
-        items.append({"role": "assistant", "content": _INTERRUPTED_MARKER})
+        items.append({"role": "assistant", "content": marker})
 
 
 def _attribute(content: str, author: str | None, users: UserDirectory | None) -> str:
@@ -312,11 +319,19 @@ def history_items(
             # has no idea its prior (possibly partial) answer was cut off
             # on purpose, which is exactly what the user's next message
             # leans on — so replay a compact marker folded into the prior
-            # assistant turn (#199). System/model errors and the step-limit
-            # are NOT replayed (re-feeding a connection error / "you ran out
-            # of turns" only derails a small model).
-            if getattr(m, "error_kind", None) == "cancelled":
+            # assistant turn (#199). System/model errors are NOT replayed
+            # (re-feeding a connection error only derails a small model).
+            #
+            # The step limit is said too (docs/plan-interjection.md Q5): a
+            # turn that ran out of steps did not go wrong, it did not FINISH,
+            # and a next turn that cannot tell starts over or answers as if
+            # the work were done. Said as the same plain fact, never as "you
+            # ran out of turns" — the wording #37 kept it out for.
+            kind = getattr(m, "error_kind", None)
+            if kind == "cancelled":
                 _fold_cancellation_marker(items)
+            elif kind == "max_turns":
+                _fold_cancellation_marker(items, _STEP_LIMIT_MARKER)
             continue
         if m.role == SUMMARY_ROLE:
             # Replayed as `user`, not `system`: a system item mid-conversation

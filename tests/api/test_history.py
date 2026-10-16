@@ -347,27 +347,62 @@ def test_history_items_never_emits_a_system_message():
         assert all(it.get("role") != "system" for it in items)
 
 
-def test_history_items_drops_system_and_max_turns_errors_from_context():
-    """#37 — infra/model errors and the step-limit are human-only
-    diagnostics: never replayed to the model."""
+def test_history_items_drops_system_errors_from_context():
+    """#37 — infra/model errors are human-only diagnostics: never replayed to
+    the model (a connection error re-fed only derails a small model)."""
+    msgs = [
+        _E("user", "q"),
+        _E("error", "APIConnectionError: refused", error_kind="error"),
+        _E("user", "retry please"),
+    ]
+    assert history_items(msgs, max_messages=100) == [
+        {"role": "user", "content": "q"},
+        {"role": "user", "content": "retry please"},
+    ]
 
-    class _E:
-        def __init__(self, role, content, *, error_kind=None):
-            self.role = role
-            self.content = content
-            self.error_kind = error_kind
-            self.tool_call_id = self.tool_name = self.tool_args = None
 
-    for kind in ("error", "max_turns"):
-        msgs = [
-            _E("user", "q"),
-            _E("error", "APIConnectionError: refused", error_kind=kind),
-            _E("user", "retry please"),
-        ]
-        assert history_items(msgs, max_messages=100) == [
-            {"role": "user", "content": "q"},
-            {"role": "user", "content": "retry please"},
-        ]
+def test_history_items_says_a_turn_stopped_at_the_step_limit():
+    """docs/plan-interjection.md Q5 — a turn that ran out of steps did not go
+    wrong, it did not FINISH, and the next turn has to know that to carry on
+    rather than start over or answer as if the work were done. Folded like a
+    cancellation (#199): a plain statement of fact, no instruction."""
+    msgs = [
+        _E("user", "map every lot"),
+        _E("assistant", "Read 40 of 120 lots so far"),
+        _E(
+            "error",
+            "The agent stopped after reaching its step limit (150).",
+            error_kind="max_turns",
+        ),
+        _E("user", "continue"),
+    ]
+    assert history_items(msgs, max_messages=100) == [
+        {"role": "user", "content": "map every lot"},
+        {
+            "role": "assistant",
+            "content": (
+                "Read 40 of 120 lots so far\n\n"
+                "[Response stopped at the step limit before it finished]"
+            ),
+        },
+        {"role": "user", "content": "continue"},
+    ]
+
+
+def test_history_items_says_so_after_a_tool_output_too():
+    """A turn cut off by the step limit almost always ends right after a tool
+    ran — there is no assistant text to fold into."""
+    msgs = [
+        _E("user", "map every lot"),
+        _M("assistant", ""),
+        _M("tool", "lot 40", tool_call_id="c1", tool_name="read_file", tool_args={"path": "x"}),
+        _E("error", "step limit", error_kind="max_turns"),
+    ]
+    items = history_items(msgs, max_messages=100)
+    assert items[-1] == {
+        "role": "assistant",
+        "content": "[Response stopped at the step limit before it finished]",
+    }
 
 
 def test_history_items_drops_oldest_to_fit_a_token_budget():
