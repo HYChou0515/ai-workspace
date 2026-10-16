@@ -16,6 +16,7 @@ import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { HttpError } from "../api/http";
+import { LocaleScope, type Locale } from "../lib/i18n";
 import { WUI_PROTOCOL } from "../renderers/wui/protocol";
 import { QueryWrap } from "../test/queryWrapper";
 import { WuiPage } from "./WuiPage";
@@ -29,19 +30,24 @@ const YAML = "view: wui\ntitle: Scrap review\n";
  * tests never exercised the 404 branch production takes. */
 const notFound = (path: string) => new HttpError(404, `read ${path} failed: 404`);
 
-function renderAt(path: string, readFile: (p: string) => Promise<unknown>) {
+/** The tests below read the route's English (its sentences go through `t()`
+ * since docs/plan-deploy-reach.md, and outside a provider `t()` speaks
+ * zh-TW); the zh-TW block at the end pins the Chinese. */
+function renderAt(path: string, readFile: (p: string) => Promise<unknown>, locale: Locale = "en") {
   vi.mock("../api/fileService", async () => {
     const actual = await vi.importActual<Record<string, unknown>>("../api/fileService");
     return actual;
   });
   return render(
-    <QueryWrap>
-      <MemoryRouter initialEntries={[path]}>
-        <Routes>
-          <Route path="/w/:slug/:itemId/*" element={<WuiPage makeService={() => makeFs(readFile)} />} />
-        </Routes>
-      </MemoryRouter>
-    </QueryWrap>,
+    <LocaleScope locale={locale}>
+      <QueryWrap>
+        <MemoryRouter initialEntries={[path]}>
+          <Routes>
+            <Route path="/w/:slug/:itemId/*" element={<WuiPage makeService={() => makeFs(readFile)} />} />
+          </Routes>
+        </MemoryRouter>
+      </QueryWrap>
+    </LocaleScope>,
   );
 }
 
@@ -168,7 +174,7 @@ describe("WuiPage", () => {
     await waitFor(() => {
       const said = screen.getByRole("alert").textContent ?? "";
       expect(said).toContain("/gone/page.ai.yaml");
-      expect(said).toMatch(/no file/i);
+      expect(said).toMatch(/may not exist/i);
       expect(said).toMatch(/try again/i);
     });
 
@@ -304,7 +310,7 @@ describe("WuiPage: what a reader is handed", () => {
     // and resolves first. The sentence is `classifyReadFailure`'s — the same
     // one the pane shows for an entry a reader may not read — not a second
     // wording of the same class (review round 5).
-    const said = await screen.findByText(/do not have permission to read/i);
+    const said = await screen.findByText(/don.t have permission to read/i);
     expect(said).toHaveTextContent("/scrap-review/page.ai.yaml");
     expect(screen.queryByText(/no file at/i)).toBeNull();
     // A 403 is who the reader is, not the moment they read at: no Try again
@@ -392,7 +398,7 @@ describe("WuiPage: what a reader is handed", () => {
     renderAt("/w/rca/i1/scrap-review/page.ai.yaml", readFile);
     // The pane's Try again (no entry) re-reads the view file: now a 404.
     fireEvent.click(await screen.findByRole("button", { name: /try again/i }));
-    expect(await screen.findByText(/there is no file at/i)).toBeInTheDocument();
+    expect(await screen.findByText(/can.t be opened/i)).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: /try again/i }));
 
@@ -555,5 +561,133 @@ describe("WuiPage — the platform strip above the page (plan-wui-viewer-login Q
     await waitFor(() => expect(document.querySelector("iframe")).toBeInTheDocument());
     await new Promise((r) => setTimeout(r, 20));
     expect(screen.queryByTestId("page-identity-bar")).not.toBeInTheDocument();
+  });
+});
+
+describe("WuiPage — someone the link does not open for (docs/plan-deploy-reach.md decision 3)", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("a 404 leads with the likeliest cause — no access yet — and keeps Try again for a restore", async () => {
+    const readFile = vi.fn(async (path: string) => {
+      throw notFound(path);
+    });
+    renderAt("/w/rca/i1/sales/page.ai.yaml", readFile, "zh-TW");
+
+    const said = await screen.findByText(/打不開這個頁面/);
+    const text = said.textContent ?? "";
+    // The access cause FIRST, then absence and restore, the path named.
+    expect(text.indexOf("權限")).toBeGreaterThan(-1);
+    expect(text.indexOf("權限")).toBeLessThan(text.indexOf("還原"));
+    expect(text).toContain("請向給你連結的人確認他已經分享給你");
+    expect(text).toContain("/sales/page.ai.yaml");
+    expect(screen.getByRole("button", { name: "再試一次" })).toBeInTheDocument();
+    // A 404 never offers to ask: it does not say the workspace exists.
+    expect(screen.queryByRole("button", { name: "申請存取" })).toBeNull();
+  });
+
+  it("a 403 — sees the workspace, not its files — asks the owner for access, once", async () => {
+    const fetchMock = vi.fn(async (_url: unknown, _init?: RequestInit) =>
+      new Response(JSON.stringify({ item_id: "i1", requested: true, already_readable: false }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const readFile = vi.fn(async () => {
+      throw new HttpError(403, "read failed: 403");
+    });
+    renderAt("/w/rca/i1/sales/page.ai.yaml", readFile, "zh-TW");
+
+    expect(await screen.findByText(/沒有讀取 \/sales\/page\.ai\.yaml 的權限/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "再試一次" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "申請存取" }));
+
+    expect(await screen.findByRole("button", { name: "已送出申請" })).toBeDisabled();
+    const asks = fetchMock.mock.calls.filter(([url]) => String(url).includes("/request-access"));
+    expect(asks).toHaveLength(1);
+    expect(String(asks[0][0])).toContain("/a/rca/items/i1/request-access");
+  });
+
+  it("someone already in the workspace is told to ask the owner — not that a request went out", async () => {
+    // Review round 1: `request-access` notifies nobody when the caller can
+    // already enter (`read_chat` — the 「In workspace」 role, which still 403s
+    // here), and answers 2xx with `requested: false`. "已送出申請" over that
+    // was a request nobody received.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(JSON.stringify({ item_id: "i1", requested: false, already_readable: true }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+      ),
+    );
+    const readFile = vi.fn(async () => {
+      throw new HttpError(403, "read failed: 403");
+    });
+    renderAt("/w/rca/i1/sales/page.ai.yaml", readFile, "zh-TW");
+
+    fireEvent.click(await screen.findByRole("button", { name: "申請存取" }));
+
+    expect(await screen.findByText("你已經在這個 workspace 裡，只是沒有讀檔權限；請直接請擁有者把你的角色調高。")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "已送出申請" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "申請存取" })).toBeNull();
+  });
+
+  it("someone who already asked reads that the request is with the owner — not that they are inside", async () => {
+    // Review round 2: the route also answers `requested: false` when the same
+    // person already asked (its dedup ledger never expires — the App
+    // dashboard's 🔒 row asks under the same key). Keyed on `requested`, that
+    // read 「你已經在這個 workspace 裡」 to someone who is not.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(JSON.stringify({ item_id: "i1", requested: false, already_readable: false }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+      ),
+    );
+    const readFile = vi.fn(async () => {
+      throw new HttpError(403, "read failed: 403");
+    });
+    renderAt("/w/rca/i1/sales/page.ai.yaml", readFile, "zh-TW");
+
+    fireEvent.click(await screen.findByRole("button", { name: "申請存取" }));
+
+    expect(await screen.findByRole("button", { name: "已送出申請" })).toBeDisabled();
+    expect(screen.queryByText(/你已經在這個 workspace 裡/)).toBeNull();
+  });
+
+  it("a request that did not go through says so and can be sent again", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("boom", { status: 500 })));
+    const readFile = vi.fn(async () => {
+      throw new HttpError(403, "read failed: 403");
+    });
+    renderAt("/w/rca/i1/sales/page.ai.yaml", readFile, "zh-TW");
+
+    fireEvent.click(await screen.findByRole("button", { name: "申請存取" }));
+
+    expect(await screen.findByText("申請沒有送出，請再試一次。")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "申請存取" })).toBeEnabled();
+  });
+
+  it("speaks zh-TW for the other ways the link can be wrong", async () => {
+    const cases: [unknown, RegExp][] = [
+      [new HttpError(401, "x"), /登入已過期/],
+      [new HttpError(410, "x"), /已經刪除/],
+      [new HttpError(503, "x"), /回應 503/],
+      [new TypeError("fetch failed"), /連不到/],
+    ];
+    for (const [err, words] of cases) {
+      const readFile = vi.fn(async () => {
+        throw err;
+      });
+      const { unmount } = renderAt("/w/rca/i1/sales/page.ai.yaml", readFile, "zh-TW");
+      expect(await screen.findByText(words)).toBeInTheDocument();
+      unmount();
+    }
   });
 });

@@ -1359,6 +1359,134 @@ export const messages = {
   // "7 Aug" — so the sentence must read with all of them; "於 {when} Deploy" /
   // "on {when}" did not ("於 just now Deploy", "on 2 d ago").
   "wui.row.by": { "zh-TW": "{who} Deploy · {when}", en: "deployed by {who} · {when}" },
+  // The WUI pane's author toolbar and Deploy panel (docs/plan-deploy-reach.md
+  // decision 7). "Deploy" stays the button's word in both — the WUI overview's
+  // copy already names it.
+  "wui.bar.refresh": { "zh-TW": "重新整理", en: "Refresh" },
+  "wui.bar.rebuild": { "zh-TW": "重新建置", en: "Rebuild" },
+  "wui.bar.building": { "zh-TW": "建置中…", en: "Building…" },
+  "wui.bar.autoRebuild": { "zh-TW": "自動重新建置", en: "Auto-rebuild" },
+  "wui.bar.autoRebuild.tip": {
+    "zh-TW": "每次打開這個頁面時重新建置",
+    en: "Rebuild this page whenever you open it",
+  },
+  "wui.bar.report": { "zh-TW": "回報問題", en: "Report a problem" },
+  "wui.bar.tellAgent": { "zh-TW": "告訴 AI（{n}）", en: "Tell the agent ({n})" },
+  "wui.bar.deploy": { "zh-TW": "Deploy", en: "Deploy" },
+  "wui.bar.deploying": { "zh-TW": "Deploy 中…", en: "Deploying…" },
+  "wui.bar.deployingFile": { "zh-TW": "正在 Deploy {file}…", en: "Deploying {file}…" },
+  "wui.bar.cancel": { "zh-TW": "取消", en: "Cancel" },
+  "wui.bar.cancel.tip": { "zh-TW": "停止 Deploy {file}", en: "Stop deploying {file}" },
+  "wui.deploy.done": { "zh-TW": "✓ 已 Deploy", en: "✓ Deployed" },
+  "wui.deploy.address": { "zh-TW": "頁面網址", en: "Page address" },
+  "wui.deploy.copy": { "zh-TW": "複製", en: "Copy" },
+  "wui.deploy.copied": { "zh-TW": "已複製", en: "Copied" },
+  "wui.deploy.copyFailed": { "zh-TW": "無法複製，請自行選取", en: "Copy failed — select it" },
+  "wui.deploy.open": { "zh-TW": "開啟", en: "Open" },
+  "wui.deploy.failed.build": { "zh-TW": "Deploy 失敗：請看建置輸出。", en: "Deploy failed — see the build output." },
+  "wui.deploy.failed.manifest": {
+    "zh-TW": "Deploy 失敗：無法確認這個頁面要不要建置：{why}",
+    en: "Deploy failed — could not check whether this page has a build: {why}",
+  },
+  "wui.deploy.failed.open": {
+    "zh-TW": "Deploy 失敗：頁面打不開：{why}",
+    en: "Deploy failed — the page does not open: {why}",
+  },
+  "wui.deploy.failed.list": {
+    "zh-TW": "Deploy 失敗：頁面無法列進 WUI：{why}",
+    en: "Deploy failed — the page could not be listed in WUI: {why}",
+  },
+  "wui.deploy.stopped.superseded": {
+    "zh-TW": "Deploy 已停止：回到這個頁面之前，畫面被重新整理、重新建置或又 Deploy 了一次。請再 Deploy 一次。",
+    en: "Deploy stopped — the pane was refreshed, rebuilt or deployed again before it was back on this page. Deploy again.",
+  },
+  "wui.deploy.stopped.changed": {
+    "zh-TW": "Deploy 已停止：離開這個頁面太久，結果已經過期。請再 Deploy 一次。",
+    en: "Deploy stopped — the pane was away from this page long enough for the result to expire. Deploy again.",
+  },
+  "wui.deploy.stopped.unexpected": {
+    "zh-TW": "Deploy 意外停止：請看瀏覽器的主控台。",
+    en: "Deploy stopped unexpectedly — see the browser console.",
+  },
+  // The Deploy panel says who the link opens for (docs/plan-deploy-reach.md).
+  "wui.deploy.reach.owner": {
+    "zh-TW": "目前只有你打得開這個連結。",
+    en: "Only you can open this link right now.",
+  },
+  "wui.deploy.reach.ownerAndAdmins": {
+    "zh-TW": "目前只有擁有者和管理員打得開這個連結。",
+    en: "Only the owner and admins can open this link right now.",
+  },
+  "wui.deploy.reach.shared": {
+    "zh-TW": "只有這個 workspace 的成員打得開這個連結。",
+    en: "Only this workspace's members can open this link.",
+  },
+  "wui.deploy.reach.everyone": { "zh-TW": "所有人都打得開這個連結。", en: "Everyone can open this link." },
+  "wui.deploy.reach.unknown": {
+    "zh-TW": "能讀這個 workspace 檔案的人才能用這個連結。",
+    en: "Only people who can read this workspace's files can use this link.",
+  },
+  "wui.deploy.share": { "zh-TW": "分享設定…", en: "Sharing…" },
+  "wui.deploy.askOwner": {
+    "zh-TW": "要給其他人看，請 workspace 的擁有者 {owner} 把他加進來。",
+    en: "To show it to others, ask the workspace's owner, {owner}, to add them.",
+  },
+  // The page a link opens (`/w/…`) and the reader's lines in the WUI pane
+  // (docs/plan-deploy-reach.md decisions 3 + 7).
+  "wui.page.opening": { "zh-TW": "正在開啟 {path}…", en: "Opening {path}…" },
+  "wui.page.lookingAgain": { "zh-TW": "再找一次 {path}…", en: "Looking again for {path}…" },
+  "wui.page.missing": {
+    "zh-TW":
+      "打不開這個頁面。最常見的原因是你還沒有這個 workspace 的權限，請向給你連結的人確認他已經分享給你。如果你已經有權限，可能是 {path} 不存在，或這個 workspace 正在還原中，稍後再試一次。",
+    en: "This page can't be opened. Most often that's because you don't have access to this workspace yet — check with whoever sent you the link that they shared it with you. If you do have access, {path} may not exist, or the workspace may still be restoring — try again in a moment.",
+  },
+  "wui.page.forbidden": {
+    "zh-TW": "你看得到這個 workspace，但沒有讀取 {path} 的權限。可以向擁有者申請。",
+    en: "You can see this workspace, but you don't have permission to read {path}. You can ask its owner for access.",
+  },
+  "wui.page.alreadyInside": {
+    "zh-TW": "你已經在這個 workspace 裡，只是沒有讀檔權限；請直接請擁有者把你的角色調高。",
+    en: "You're already in this workspace, just without permission to read its files — ask its owner to raise your role.",
+  },
+  "wui.page.requestFailed": { "zh-TW": "申請沒有送出，請再試一次。", en: "The request didn't go through — try again." },
+  "wui.page.signedOut": {
+    "zh-TW": "你的登入已過期，請重新登入後再開啟 {path}。",
+    en: "Your session has ended — sign in again to read {path}.",
+  },
+  "wui.page.deleted": { "zh-TW": "存放 {path} 的 workspace 已經刪除。", en: "The workspace holding {path} has been deleted." },
+  "wui.page.status": {
+    "zh-TW": "無法讀取 {path}（workspace 回應 {status}）。",
+    en: "{path} could not be read (the workspace answered {status}).",
+  },
+  "wui.page.unreachable": {
+    "zh-TW": "連不到 workspace，無法讀取 {path}。",
+    en: "Could not reach the workspace to read {path}.",
+  },
+  "wui.page.notWui": { "zh-TW": "{path} 不是頁面。這個網址只能開啟 WUI。", en: "{path} is not a page. This address only opens a WUI." },
+  "wui.page.tryAgain": { "zh-TW": "再試一次", en: "Try again" },
+  "wui.pane.opening": { "zh-TW": "開啟中…", en: "Opening…" },
+  "wui.pane.building": { "zh-TW": "建置中…完成後就會出現頁面。", en: "Building… the page appears when this finishes." },
+  "wui.pane.deploying": { "zh-TW": "Deploy 中…完成後就會出現頁面。", en: "Deploying… the page appears when this finishes." },
+  "wui.pane.unpublished": {
+    "zh-TW": "這個頁面還沒發布，或還在還原中。請稍後再試一次。",
+    en: "This page has not been published yet — or it is still being restored. Try again in a moment.",
+  },
+  // Who an overview page's link opens for (docs/plan-deploy-reach.md decision 6).
+  "wui.reach.you": { "zh-TW": "只有你打得開", en: "Only you can open it" },
+  "wui.reach.you.tip": {
+    "zh-TW": "只有你打得開這個連結。要給其他人看，到這個 workspace 的分享設定把他加進來。",
+    en: "Only you can open this link. To show it to others, add them in this workspace's sharing settings.",
+  },
+  "wui.reach.owner": { "zh-TW": "只有擁有者打得開", en: "Only the owner can open it" },
+  "wui.reach.owner.tip": {
+    "zh-TW": "只有這個 workspace 的擁有者打得開這個連結。",
+    en: "Only this workspace's owner can open this link.",
+  },
+  "wui.reach.shared": { "zh-TW": "只有成員打得開", en: "Only members can open it" },
+  "wui.reach.shared.tip": {
+    "zh-TW": "只有這個 workspace 的成員打得開這個連結。",
+    en: "Only this workspace's members can open this link.",
+  },
   // 下架, the opposite of Deploy's 上架 (docs/wui.md) — not 移除, which the
   // author read as "delete the page" (「移除是什麼意思？」). The tooltip says
   // what stays.
@@ -3741,6 +3869,12 @@ export function LocaleProvider({ children }: { children: React.ReactNode }) {
     setLocaleState(next);
   }, []);
   return <LocaleContext.Provider value={{ locale, setLocale }}>{children}</LocaleContext.Provider>;
+}
+
+/** One locale for a subtree, whatever the reader picked — for a test that
+ * asserts one language's words (the default outside a provider is zh-TW). */
+export function LocaleScope({ locale, children }: { locale: Locale; children: React.ReactNode }) {
+  return <LocaleContext.Provider value={{ locale, setLocale: () => {} }}>{children}</LocaleContext.Provider>;
 }
 
 /** The active locale and a sticky setter. */

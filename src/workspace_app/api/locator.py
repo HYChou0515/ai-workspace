@@ -31,7 +31,7 @@ from specstar.types import (
 from ..apps.catalog import AppCatalog
 from ..apps.manifest import load_app_manifest
 from ..apps.resolve import debtor_of, find_work_item, resolve_item_agent_config
-from ..perm import Verb
+from ..perm import Permission, Verb
 from ..resources import AgentConfig, Conversation
 from ..resources.groups import groups_of
 from .chats import find_default_conversation, resolve_default_conversation
@@ -73,6 +73,19 @@ class TurnFacts(NamedTuple):
     skill_prefs: dict[str, bool]
     env_vars: dict[str, str]
     env_policy: dict[str, str]
+
+
+class ItemFacts(NamedTuple):
+    """An item's title, owner, creator and permission, read together. See
+    `ItemLocator.item_facts`."""
+
+    title: str
+    # The `owner` FIELD — a display value anyone with write access may change
+    # (#687). Who the item's access is decided for is `created_by`.
+    owner: str
+    created_by: str
+    # None = the item has no permission (public, by the back-compat rule).
+    permission: Permission | None
 
 
 class ItemEnv(NamedTuple):
@@ -152,6 +165,19 @@ class ItemLocator:
         id maps to no registered App's item."""
         found = find_work_item(self._spec, item_id)
         return (found[1].title, found[1].owner) if found is not None else None
+
+    def item_facts(self, item_id: str) -> ItemFacts | None:
+        """The item's title, owner, creator and permission — FROM THE FACTS
+        `require_access` memoises (`docs/plan-deploy-reach.md` decision 9). The
+        WUI overview gates every row and then says who its link opens for; read
+        here, that costs nothing after the gate, and the creator and permission
+        are the very ones the gate just decided by — a separate read could
+        answer from another moment. ``None`` for an unknown id."""
+        facts = self._access_facts(item_id, self._now())
+        if facts is None:
+            return None
+        item = facts.item
+        return ItemFacts(item.title, item.owner, facts.created_by, item.permission)
 
     def profile_of(self, item_id: str) -> str:
         """The App profile an item was created from — drives the §A skill index
@@ -267,26 +293,31 @@ class ItemLocator:
         if user is None:
             user = self._get_user_id()
         now = self._now()
-        cached = self._access.get(item_id)
-        if cached is None or now - cached[1] >= self._access_window:
-            facts = load_access_facts(self._spec, item_id, include_deleted=True)
-            # Cache the POSITIVE answer only. "No such item" is the one result
-            # that goes stale in the direction that breaks things: an id looked
-            # up moments before it exists — a workflow addressing the item it
-            # just created — would keep 404-ing for the rest of the window. A
-            # permission is a fact about a thing that exists; absence is not.
-            if facts is not None:
-                if len(self._access) > _ACCESS_MAX:  # bounded: a cache, not a map
-                    self._access.clear()
-                self._access[item_id] = (facts, now)
-        else:
-            facts = cached[0]
+        facts = self._access_facts(item_id, now)
         groups = self._groups_for(user, now)
         check_access(
             facts, slug, item_id, verb, user=user, groups=groups, superusers=self._superusers
         )
         refuse_if_gone(facts, item_id)
         return item_id
+
+    def _access_facts(self, item_id: str, now: float) -> ItemAccessFacts | None:
+        """The item's access facts, held for `access_window` — the one read
+        `require_access` decides by and `item_facts` reports from."""
+        cached = self._access.get(item_id)
+        if cached is not None and now - cached[1] < self._access_window:
+            return cached[0]
+        facts = load_access_facts(self._spec, item_id, include_deleted=True)
+        # Cache the POSITIVE answer only. "No such item" is the one result
+        # that goes stale in the direction that breaks things: an id looked
+        # up moments before it exists — a workflow addressing the item it
+        # just created — would keep 404-ing for the rest of the window. A
+        # permission is a fact about a thing that exists; absence is not.
+        if facts is not None:
+            if len(self._access) > _ACCESS_MAX:  # bounded: a cache, not a map
+                self._access.clear()
+            self._access[item_id] = (facts, now)
+        return facts
 
     def _groups_for(self, user: str, now: float) -> frozenset[str]:
         """The caller's groups, held for the same window. Group membership is an

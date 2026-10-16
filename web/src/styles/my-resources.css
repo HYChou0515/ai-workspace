@@ -339,6 +339,13 @@
   white-space: nowrap;
 }
 
+/* Who the link opens for, leading the detail line (docs/plan-deploy-reach.md):
+   the same muted colour as the line — an indicator, not an alarm — and the
+   weight is what sets it apart from the who/when after it. */
+.page .detail > .reach {
+  font-weight: 600;
+}
+
 .page .hint {
   margin: var(--space-16) 0 0;
   font-size: var(--text-body-sm);

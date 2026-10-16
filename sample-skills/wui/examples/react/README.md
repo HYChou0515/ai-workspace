@@ -35,19 +35,20 @@ log on screen says why. The page does not silently become wrong.
 
 ## Who rebuilds, and when
 
-**Editing `src/` does not change the page.** The page is `dist/`. Refresh
-re-reads the folder; it does not build.
+**Editing `src/` does not change the page.** The page is `dist/`. 重新整理
+(Refresh) re-reads the folder; it does not build. The toolbar follows the
+reader's language — name a button the way they see it.
 
-The pane covers the user: a built page has a **Rebuild** button beside Refresh,
-its output shows while it runs, and **Auto-rebuild** is on by
+The pane covers the user: a built page has a **重新建置** (Rebuild) button beside
+重新整理, its output shows while it runs, and **自動重新建置** (Auto-rebuild) is on by
 default — so opening the page rebuilds it first. What that does NOT cover
 is the person already looking at the page while you edit it: they will press
-Refresh and see the old build. So **rebuild in the same turn as the edit**, and
+重新整理 and see the old build. So **rebuild in the same turn as the edit**, and
 say that you did.
 
 **`node_modules` is not saved.** The mirror ignores it, deliberately. That costs
 nothing at runtime — the page is `dist/`, plain files — but the dependencies are
-gone once the sandbox has been recycled. The Rebuild button installs before it
+gone once the sandbox has been recycled. The 重新建置 button installs before it
 builds, so it heals itself; from a shell, run the install line above first. The
 lock is what makes that reproducible, which is why `--frozen-lockfile` is the
 command to use: without it two installs from one lock can resolve differently,
@@ -57,7 +58,7 @@ and then the lock was pointless.
 
 | | no build | built (this folder) |
 |---|---|---|
-| edit → see it | change a file, press Refresh | change a file, **rebuild** (or reopen the page), press Refresh |
+| edit → see it | change a file, press 重新整理 | change a file, **rebuild** (or reopen the page), press 重新整理 |
 | what ships | the files you wrote | `dist/`, derived |
 | libraries | a UMD file in the folder | `package.json` |
 | checking | none | `tsc --noEmit` before every build |

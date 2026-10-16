@@ -119,7 +119,13 @@ export type AssetRead =
   /** `permanent`: trying again cannot change the answer — a 403 is who the
    * reader is, not the moment they read at. Every other failure may be a
    * moment's, and is offered a way to look again. */
-  | { kind: "failed"; reason: string; permanent: boolean };
+  | { kind: "failed"; reason: string; permanent: boolean; code: ReadFailureCode; status?: number };
+
+/** WHICH failure, for a sentence written in the reader's language
+ * (`WuiPage`) — decided here with `reason`, so the two cannot disagree.
+ * `reason` stays the English one: it also goes to the page's own script
+ * (`bridge.ts`) and into the report the author forwards to the agent. */
+export type ReadFailureCode = "forbidden" | "signedOut" | "deleted" | "status" | "unreachable";
 
 /** Statuses whose answer is about WHO is asking or WHAT they ask for, not
  * the moment — trying again returns the same one. The one list, for every
@@ -161,6 +167,8 @@ export function classifyReadFailure(err: unknown, path: string): Exclude<AssetRe
     // internal path and a bare number shown to someone who cannot open a
     // console. True, and not a sentence they can act on.
     const permanent = isPermanentStatus(err.status);
+    const code: ReadFailureCode =
+      err.status === 403 ? "forbidden" : err.status === 401 ? "signedOut" : err.status === 410 ? "deleted" : "status";
     const reason =
       err.status === 403
         ? `You do not have permission to read ${path}.`
@@ -169,10 +177,15 @@ export function classifyReadFailure(err: unknown, path: string): Exclude<AssetRe
           : err.status === 410
             ? `The item holding ${path} has been deleted.`
             : `${path} could not be read (the workspace answered ${err.status}).`;
-    return { kind: "failed", reason, permanent };
+    return { kind: "failed", reason, permanent, code, status: err.status };
   }
   if (err instanceof TypeError) {
-    return { kind: "failed", reason: `Could not reach the workspace to read ${path}.`, permanent: false };
+    return {
+      kind: "failed",
+      reason: `Could not reach the workspace to read ${path}.`,
+      permanent: false,
+      code: "unreachable",
+    };
   }
   return { kind: "missing" };
 }
@@ -204,10 +217,17 @@ export async function readAsset(fs: FileService, path: string): Promise<AssetRea
   // exists but not what is in it; the raw route is where those bytes live.
   try {
     const resp = await fetch(fs.fileDownloadUrl(path));
-    if (!resp.ok) return { kind: "failed", reason: `could not read ${path} (${resp.status})`, permanent: isPermanentStatus(resp.status) };
+    if (!resp.ok)
+      return {
+        kind: "failed",
+        reason: `could not read ${path} (${resp.status})`,
+        permanent: isPermanentStatus(resp.status),
+        code: "status",
+        status: resp.status,
+      };
     return { kind: "asset", asset: { kind: "binary", dataUrl: await toDataUrl(await resp.blob()) } };
   } catch {
-    return { kind: "failed", reason: `could not read ${path}`, permanent: false };
+    return { kind: "failed", reason: `could not read ${path}`, permanent: false, code: "unreachable" };
   }
 }
 
