@@ -94,6 +94,7 @@
 | [plan-schedule-overview-polish.md](plan-schedule-overview-polish.md) | 排程總表整修：時間換成看的人的時區與相對說法、名稱用標題、手動執行標記、排程對話的橫幅 |
 | [plan-schedule-cron.md](plan-schedule-cron.md) | cron 排程：一列寫完原本要拆成好幾列的排程；改時間有簡單／cron 兩種模式 |
 | [plan-workflow-out-of-chat.md](plan-workflow-out-of-chat.md) | Workflow 移出聊天：每個 node 只看它引用的東西；執行在 workspace 的 Workflows 側欄與分頁；steer 不再走聊天、不顯示 JSON |
+| [plan-one-running-phase.md](plan-one-running-phase.md) | 同時只有一個 phase 是「執行中」：離開的 phase 標成完成、停止的標成「已停止」；寫入與讀出走同一條規則，已存的舊執行也顯示正確（修執行分頁「第二步的對話在第一步、收不起來」） |
 | [plan-storage-all-items.md](plan-storage-all-items.md) | 儲存空間列出你名下所有項目（含閒置、已回收、沒設上限的人），總量與上限一起變正確 |
 
 ## Sandbox 與基礎設施
