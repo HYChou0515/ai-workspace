@@ -63,7 +63,7 @@ document, so its size is paid on every open.
 one screen of static markup. Two reasons, and the second is the real one:
 
 - **A WUI cannot report the bugs that matter most.** A page that THROWS is
-  covered: the pane shows the error, with a **Tell the agent** button. What it
+  covered: the pane shows the error, with a **告訴 AI** (Tell the agent) button. What it
   cannot show is a page that renders and is quietly wrong — and its reader does
   not open a console, so all they can say is "it's broken". A mistake caught
   while building is worth far more here than in code somebody debugs.
@@ -74,8 +74,8 @@ one screen of static markup. Two reasons, and the second is the real one:
   the failure nobody can see. Copy `wui.d.ts` unchanged; it describes the
   platform, not your page.
 - **The build is no longer a cost the reader pays.** Opening a built page
-  rebuilds it, with the output on screen (Auto-rebuild, on by default, beside
-  **Rebuild**).
+  rebuilds it, with the output on screen (**自動重新建置** / Auto-rebuild, on by
+  default, beside **重新建置** / Rebuild).
 
 The other examples are still what you copy for the SHAPE of the page — reading
 in parallel, saving without thrashing, telling three refusals apart. They are
@@ -84,12 +84,12 @@ the setup from `examples/react/`.
 
 **Still rebuild in the same turn as the edit** (`pnpm build` in the page's
 folder), and say that you did. Auto-rebuild covers the person who opens the page
-LATER; it does nothing for the one watching it right now, who presses Refresh and
+LATER; it does nothing for the one watching it right now, who presses 重新整理 (Refresh) and
 sees the old one. A type error fails the build, so `dist/` stays as it was and
 the log says why — the page does not silently become wrong.
 
 **Plain files are still right for a genuinely small page** — one screen, no
-state worth naming. Then the files you wrote ARE the page: edit, press Refresh,
+state worth naming. Then the files you wrote ARE the page: edit, press 重新整理 (Refresh),
 see it. Libraries do not decide this either way: a UMD file in the folder
 (`<script src="./chart.umd.js">`) is inlined like anything else, no build needed.
 
@@ -263,13 +263,17 @@ bug. Anything a scheduled run needs comes from the item's own environment.
 
 - Edit the individual file — `app.js`, not the whole page. That is why a WUI is
   a folder.
+- The toolbar above the page speaks the person's language — name a button the
+  way they see it: **重新整理** (Refresh), **重新建置** (Rebuild), **自動重新建置**
+  (Auto-rebuild), **回報問題** (Report a problem), **告訴 AI** (Tell the agent).
+  **Deploy** is Deploy in both.
 - **The page does not reload itself.** After you change a file, tell the user to
-  press **Refresh** above the page. On a page with a build there is **Rebuild**
-  next to it, and an **Auto-rebuild** switch that is on by
-  default — but Refresh alone never builds anything, so a `src/` edit you did
+  press **重新整理** above the page. On a page with a build there is **重新建置**
+  next to it, and an **自動重新建置** switch that is on by
+  default — but 重新整理 alone never builds anything, so a `src/` edit you did
   not build is still an old page.
-- When they say it is broken, ask them to press **Report a problem** and click
-  the part that looks wrong, then **Tell the agent**. You get the markup, the
+- When they say it is broken, ask them to press **回報問題** and click
+  the part that looks wrong, then **告訴 AI**. You get the markup, the
   size and the computed styles — which is how you see a layout you cannot look
   at. Label your main sections with `data-wui="..."` so a report says which one.
 
@@ -296,4 +300,7 @@ Then tell the user which file to open, in their words: "open **Lot tracker** in
 **Deploy** in its toolbar is what puts it on the platform's **WUI** overview,
 where colleagues find it. Deploy is a person's press (someone who may edit the
 item), so say it in the same breath as the file name: a page nobody Deployed is
-one only its link can reach.
+one only its link can reach. The link opens for exactly the people who may read
+the workspace's files, and a new workspace is private — after Deploy the panel
+says who it opens for and offers **分享設定…**; colleagues who should use the page
+have to be added there first.
