@@ -477,6 +477,9 @@ def create_app(
     # docs/plan-outside-helper.md §3.7.2: `server.ai_workspace_helper_dir`, where the
     # operator publishes a packed helper. None/"" ⇒ nothing published.
     ai_workspace_helper_dir: str | None = None,
+    # docs/plan-ext-ai.md D5: `server.ext_ai_enabled` — chat turns may draw the
+    # 問外部AI card.
+    ext_ai_enabled: bool = False,
     # #262: user ids with UNRESTRICTED collection access — threaded into the
     # route-level `authorize(...)` guards (the dedicated permission endpoint +
     # content-route guards). MUST match the set passed to `make_spec(superusers=…)`
@@ -2361,6 +2364,7 @@ def create_app(
         subagent_models=subagent_models,
         # plan-tool-usage-stats §8.3: the recorder an applied skill counts into.
         tool_usage=tool_usage,
+        ext_ai=ext_ai_enabled,
     )
 
     # #624: let the budget consult what the RUNNER has learned about each
@@ -2383,7 +2387,11 @@ def create_app(
     )
 
     register_replay_routes(
-        api, service=replay_service, load_turn=replay.load_turn, load_doc=replay.load_doc
+        api,
+        service=replay_service,
+        load_turn=replay.load_turn,
+        load_doc=replay.load_doc,
+        ext_ai=ext_ai_enabled,
     )
 
     # ── Workflows (#100) ─────────────────────────────────────────────

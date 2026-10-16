@@ -25,7 +25,7 @@ from collections.abc import Callable
 from typing import Any
 
 #: Seconds between polls when there is nothing to do. Short, because the card's
-#: 「查」 waits on it; a poll is one small request.
+#: the card's nod waits on it; a poll is one small request.
 POLL_S = 2.0
 #: Starting Chrome is tried this often, this far apart, before 「開不了 Chrome」:
 #: started the moment the helper it replaced let go of its lock (D21), its
@@ -47,9 +47,9 @@ _TEXT = {
 }
 
 #: What each errand is doing, as the window says it.
-_DOING = {"search": "正在搜尋", "open_url": "正在開啟"}
+_DOING = {"search": "正在搜尋", "open_url": "正在開啟", "ask_ext_ai": "正在問"}
 #: The 查詢紀錄 tab's name for each errand.
-_KIND = {"search": "搜尋", "open_url": "開啟網頁"}
+_KIND = {"search": "搜尋", "open_url": "開啟網頁", "ask_ext_ai": "問外部AI"}
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +60,8 @@ def describe(status: str, detail: str, kind: str = "", site: str = "") -> str:
     on a line of its own."""
     if status == "connected" and detail:
         doing = _DOING.get(kind, "正在查")
+        # one line: a question for the external AI can run to many
+        detail = _first_line(detail)
         return f"{doing}（{site}）：{detail}" if site else f"{doing}：{detail}"
     text = _TEXT.get(status, status)
     return f"{text}\n{detail}" if detail else text
@@ -76,8 +78,13 @@ def history_row(row: dict[str, Any]) -> tuple[str, str, str, str]:
     if row.get("outcome") == "done":
         ended = "已送給 AI"
     else:
-        ended = f"沒查到：{row.get('reason', '')}" if row.get("reason") else "沒查到"
-    return when, what, str(row.get("args", "")), ended
+        missed = "沒問到" if kind == "ask_ext_ai" else "沒查到"
+        ended = f"{missed}：{row.get('reason', '')}" if row.get("reason") else missed
+    return when, what, _first_line(str(row.get("args", ""))), ended
+
+
+def _first_line(text: str) -> str:
+    return text.strip().split("\n", 1)[0]
 
 
 def log_tail(path: Any, *, lines: int = 300, max_bytes: int = 64_000) -> str:
@@ -318,11 +325,22 @@ class Controller:
             self._snapshot = (status, detail, kind, site)
 
 
-def make_controller(home: Any, app_url: str, make_chrome: Callable[[], Any]) -> Controller:
+def make_controller(
+    home: Any,
+    app_url: str,
+    make_chrome: Callable[[], Any],
+    *,
+    load_site: Callable[[], Any] | None = None,
+) -> Controller:
     """The helper as the window runs it: on the Chrome `make_chrome` opens, a
     Backend over its signed-in line, the job loop with the shipped errands, the
     updater, and what each check-in reports (§3.7.7). The window and the live
-    check (scripts/check_ai_workspace_helper.py) both start it from here."""
+    check (scripts/check_ai_workspace_helper.py) both start it from here.
+
+    `load_site` finds the company's site file (docs/plan-ext-ai.md D7) — by
+    default the one packed in. One that does not load is logged and left out:
+    the helper still searches and opens pages, it just cannot ask the external
+    AI, and says so when it checks in (D9)."""
     import platform
     from importlib.metadata import version as dist_version
 
@@ -344,6 +362,16 @@ def make_controller(home: Any, app_url: str, make_chrome: Callable[[], Any]) -> 
 
     updater = Updater(_Latest())
     history = History(home / "history.jsonl")
+    from .ext_ai import load_site as load_packed_site
+    from .ext_ai import site_label
+
+    try:
+        site = (load_site or load_packed_site)()
+    except Exception:  # noqa: BLE001 — a broken site file must not take the helper down
+        logging.getLogger(__name__).warning(
+            "the external AI's site file did not load", exc_info=True
+        )
+        site = None
 
     def make_worker(chrome: Any) -> Worker:
         backend = Backend(chrome.send)
@@ -360,12 +388,13 @@ def make_controller(home: Any, app_url: str, make_chrome: Callable[[], Any]) -> 
                 "chrome": chrome_version[0],
                 "playwright": dist_version("playwright"),
                 "python": platform.python_version(),
+                "ext_ai": site_label(site),
             }
 
         return Worker(
             backend,
             chrome,
-            errands=build_errands(backend.lookup_targets),
+            errands=build_errands(backend.lookup_targets, site=site),
             info=info,
             history=history,
         )
@@ -429,6 +458,13 @@ def _ask_app_url(tk_root: Any) -> str | None:  # pragma: no cover — needs a di
 def main() -> int:  # pragma: no cover — the window needs a display; verified by hand (D14)
     if "--self-test" in sys.argv[1:]:
         return self_test()
+    if sys.argv[1:2] == ["try-ext-ai"]:
+        # docs/plan-ext-ai.md P4: the company tries its site file; a Windows
+        # console that cannot show a character shows "?" rather than stopping
+        from .ext_ai import try_main
+
+        sys.stdout.reconfigure(errors="replace")  # ty: ignore[unresolved-attribute]
+        return try_main(sys.argv[2:])
     import tkinter as tk
     from tkinter import messagebox
 

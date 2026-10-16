@@ -155,3 +155,128 @@ def test_a_version_must_be_three_numbers(tmp_path, bad):
 
 def _has(argv: list[str], pair: list[str]) -> bool:
     return any(argv[i : i + 2] == pair for i in range(len(argv) - 1))
+
+
+# docs/plan-ext-ai.md D7: the company's site file goes INTO the helper's
+# package — `ai_workspace_helper/ext_ai_site.py` in the wheel it builds — and
+# nowhere else: not the repo, not the server.
+class _SiteRun(_Run):
+    def __init__(self) -> None:
+        super().__init__()
+        self.packed: str | None = None
+
+    def __call__(self, argv: list[str], cwd: Path | None = None) -> None:
+        if argv[:2] == ["uv", "build"]:
+            site = Path(argv[-1]) / "src/ai_workspace_helper/ext_ai_site.py"
+            self.packed = site.read_text() if site.exists() else None
+        super().__call__(argv, cwd)
+
+
+_SITE = 'URL = "https://ai.example/new"\n\ndef ask(page, question, h):\n    return "x"\n'
+
+
+def test_a_site_file_is_packed_into_the_helper(tmp_path):
+    site = tmp_path / "ext_ai_site.py"
+    site.write_text(_SITE)
+    run = _SiteRun()
+
+    pack_mod.pack("0.3.0", tmp_path / "out", run=run, ext_ai_site=site)
+
+    assert run.packed == _SITE
+    assert not (_ROOT / "ai-workspace-helper/src/ai_workspace_helper/ext_ai_site.py").exists()
+
+
+def test_without_one_the_helper_has_none(tmp_path):
+    run = _SiteRun()
+
+    pack_mod.pack("0.3.0", tmp_path / "out", run=run)
+
+    assert run.packed is None
+
+
+# A file the helper could not load is refused here, once — not on every PC.
+def test_a_broken_site_file_is_refused_before_anything_is_built(tmp_path):
+    site = tmp_path / "ext_ai_site.py"
+    site.write_text('URL = "https://ai.example/new"\n')  # no ask
+    run = _SiteRun()
+
+    with pytest.raises(ValueError, match="ask"):
+        pack_mod.pack("0.3.0", tmp_path / "out", run=run, ext_ai_site=site)
+
+    assert run.commands == []
+
+
+# Review round 1: the packer's own Python is newer than a person's 3.9 — a file
+# written in syntax 3.9 refuses would pass here and fail on every PC, leaving
+# every card manual. It is refused here instead.
+def test_a_site_file_in_syntax_python_39_refuses_is_refused(tmp_path):
+    site = tmp_path / "ext_ai_site.py"
+    site.write_text(_SITE + "\ndef pick(x):\n    match x:\n        case _:\n            return x\n")
+    run = _SiteRun()
+
+    with pytest.raises(ValueError, match="3.9"):
+        pack_mod.pack("0.3.0", tmp_path / "out", run=run, ext_ai_site=site)
+
+    assert run.commands == []
+
+
+# Review round 2: the parser alone let through the commonest thing a 3.9
+# refuses — an `X | None` annotation, evaluated at import without the future
+# import — so the packer runs the helper's own 3.9 guard
+# (scripts/python39_guard.py) over the file…
+def test_a_site_file_a_python_39_could_not_import_is_refused(tmp_path):
+    site = tmp_path / "ext_ai_site.py"
+    site.write_text(
+        'URL = "https://ai.example/new"\n\ndef ask(page, question, h) -> str | None:\n'
+        '    return "x"\n'
+    )
+    run = _SiteRun()
+
+    with pytest.raises(ValueError, match="X \\| Y"):
+        pack_mod.pack("0.3.0", tmp_path / "out", run=run, ext_ai_site=site)
+
+    assert run.commands == []
+
+
+# …and reads it as Python does: a file saved "UTF-8 with BOM" (Notepad, VS
+# Code) imports fine, so it is not refused.
+def test_a_site_file_saved_with_a_bom_is_packed(tmp_path):
+    site = tmp_path / "ext_ai_site.py"
+    site.write_bytes(b"\xef\xbb\xbf" + _SITE.encode())
+    run = _SiteRun()
+
+    pack_mod.pack("0.3.0", tmp_path / "out", run=run, ext_ai_site=site)
+
+    assert run.packed is not None and "def ask" in run.packed
+
+
+# Review round 2: the docs tell the company to copy the template to
+# `ext_ai_site.py` — at the repo's root or beside the template — and fill in
+# its address. Git must not take it, wherever the docs say to put it; the
+# packed copy inside the package is ignored too.
+@pytest.mark.parametrize(
+    "path",
+    [
+        "ext_ai_site.py",
+        "ai-workspace-helper/ext_ai_site.py",
+        "ai-workspace-helper/src/ai_workspace_helper/ext_ai_site.py",
+    ],
+)
+def test_the_companys_site_file_is_never_committed(path):
+    import subprocess
+
+    ignored = subprocess.run(
+        ["git", "check-ignore", "--no-index", "-q", path], cwd=_ROOT, check=False
+    )
+    assert ignored.returncode == 0, f"{path} is not ignored"
+
+
+def test_the_template_itself_is_not_ignored():
+    import subprocess
+
+    ignored = subprocess.run(
+        ["git", "check-ignore", "--no-index", "-q", "ai-workspace-helper/ext_ai_site.template.py"],
+        cwd=_ROOT,
+        check=False,
+    )
+    assert ignored.returncode == 1

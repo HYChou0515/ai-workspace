@@ -36,7 +36,8 @@ from specstar.types import (
 
 from ..agent.outside_lookup import LINK_LIST_MARKER, is_web_address
 
-JobKind = Literal["search", "open_url"]
+#: `ask_ext_ai`: ask the company's web AI (docs/plan-ext-ai.md).
+JobKind = Literal["search", "open_url", "ask_ext_ai"]
 JobState = Literal["queued", "claimed", "done", "failed", "cancelled"]
 
 _MAX_CAS_RETRIES = 100
@@ -45,7 +46,7 @@ _MAX_CAS_RETRIES = 100
 CLAIM_TIMEOUT_MS = 120_000
 
 #: A helper that has not checked in for this long is offline: the card offers
-#: the manual flow (D7) rather than a 「查」 nobody will act on.
+#: the manual flow (D7) rather than a button nobody will act on.
 ONLINE_WINDOW_MS = 30_000
 
 #: A job taken this many times and never finished — the workspace full, a
@@ -75,7 +76,7 @@ class OutsideJob(Struct):
     #: person solves one in the helper's Chrome window, §3.4); "" otherwise.
     note: str = ""
     #: Handed over by the card on its own — a link an earlier lookup in this
-    #: chat brought back (D12) — rather than with the person's 「查」.
+    #: chat brought back (D12) — rather than with the person's nod.
     auto: bool = False
     #: Where the page was saved once the job is done (`lookups/…`).
     saved: str = ""
@@ -98,6 +99,9 @@ class _AiWorkspaceHelperPresence(Struct):
     #: Sent only by 0.1.0 (D15's automatic update); kept — the API only adds
     #: (docs/plan-outside-helper.md D21, §3.7.3).
     update: str = ""
+    #: The company's site file packed into it (docs/plan-ext-ai.md D9) — ""
+    #: when it has none, and from every helper older than that.
+    ext_ai: str = ""
 
 
 class _OutsideSeenUrls(Struct):
@@ -344,6 +348,15 @@ class OutsideJobStore:
     def _online_sync(self, owner: str) -> bool:
         seen = self.presence(owner)
         return seen is not None and self.now() - seen.last_seen_ms <= ONLINE_WINDOW_MS
+
+    async def can_ask_ext_ai(self, owner: str) -> bool:
+        """Whether the owner's helper is online AND was packed with the
+        company's site file (docs/plan-ext-ai.md D9)."""
+        return await asyncio.to_thread(self._can_ask_ext_ai_sync, owner)
+
+    def _can_ask_ext_ai_sync(self, owner: str) -> bool:
+        seen = self.presence(owner)
+        return self._online_sync(owner) and seen is not None and bool(seen.ext_ai)
 
     def presence(self, owner: str) -> _AiWorkspaceHelperPresence | None:
         """The owner's helper as it last checked in, or None (blocking)."""

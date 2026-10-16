@@ -261,6 +261,8 @@ def build_app(
             lookup_targets=settings.server.lookup_targets,
             # Where a packed helper is published (plan-outside-helper §3.7.2).
             ai_workspace_helper_dir=settings.server.ai_workspace_helper_dir,
+            # The 問外部AI card (plan-ext-ai D5).
+            ext_ai_enabled=settings.server.ext_ai_enabled,
             # #262: same superuser set threaded into get_spec(...) above, so the
             # route-level authorize() guards agree with the storage access_scope.
             superusers=frozenset(settings.server.superusers),
