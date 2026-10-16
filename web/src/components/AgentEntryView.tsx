@@ -121,6 +121,7 @@ const TOOL_LABEL: Record<string, MsgKey> = {
   show_skill_hub_entry: "tool.show_skill_hub_entry",
   request_env: "tool.request_env",
   ask_outside: "tool.ask_outside",
+  ask_ext_ai: "tool.ask_ext_ai",
   write_file: "tool.write_file",
   edit_file: "tool.edit_file",
   delete_file: "tool.delete_file",
@@ -344,7 +345,11 @@ export function EntryView({
     if (envRequest) return <EnvRequestCard callId={entry.call.call_id} request={envRequest} />;
     // docs/plan-outside-lookup.md: the "請幫我查" card, by the same rule — a
     // refused call declares nothing and stays an ordinary tool card.
-    const lookup = entry.call.name === "ask_outside" ? parseOutsideLookup(entry.call.output) : null;
+    // `ask_ext_ai` draws the same card, its third kind (docs/plan-ext-ai.md §3).
+    const lookup =
+      entry.call.name === "ask_outside" || entry.call.name === "ask_ext_ai"
+        ? parseOutsideLookup(entry.call.output)
+        : null;
     if (lookup) return <OutsideLookupCard callId={entry.call.call_id} lookup={lookup} />;
     if (entry.call.name === "ask_user" && onAnswerQuestion) {
       return (

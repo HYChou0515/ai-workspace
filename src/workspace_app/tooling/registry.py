@@ -397,12 +397,18 @@ async def exec_package_command(
     pkg: PackageInfo,
     cmd_name: str,
     args_json: str,
+    *,
+    exec_timeout: float | None = None,
 ) -> ExecResult:
     """Run one package command. The public face of `_exec_tool`, so a caller
     outside a turn (a WUI's `callTool`) goes through the same launcher, the same
     item environment and the same exit-code contract as the model's call —
-    "inject at the call site" was only one place until it was two."""
-    return await _exec_tool(actx, handle, pkg, cmd_name, args_json)
+    "inject at the call site" was only one place until it was two.
+
+    ``exec_timeout`` replaces the sandbox's own wall-clock cap for this one
+    command — a page's `startTool` job (#942) runs to its own deadline, not
+    the minute a call gets. None keeps the sandbox's."""
+    return await _exec_tool(actx, handle, pkg, cmd_name, args_json, exec_timeout=exec_timeout)
 
 
 def _select_commands(
@@ -440,6 +446,11 @@ THIRD_PARTY_SEP = "__"
 _warned_names: set[str] = set()
 
 
+#: How `ambiguous_name_message` begins — what the usage count reads to tell
+#: this refusal (nothing ran) from a reply (plan-tool-usage-stats §3.3).
+COLLISION = "cross-package tool name collision:"
+
+
 def ambiguous_name_message(called: str, targets: Sequence[tuple[str, str]]) -> str:
     """What a caller is told when an old name answers to two third-party
     commands (`targets` = `(local name, model name)`): today's collision
@@ -447,10 +458,7 @@ def ambiguous_name_message(called: str, targets: Sequence[tuple[str, str]]) -> s
     call and a page's alike (docs/plan-third-party-tool-names.md N2)."""
     packages = sorted({pkg for pkg, _name in targets})
     names = " or ".join(f"`{name}`" for _pkg, name in sorted(targets))
-    return (
-        f"cross-package tool name collision: command {called!r} appears in packages "
-        f"{packages} — call {names} instead"
-    )
+    return f"{COLLISION} command {called!r} appears in packages {packages} — call {names} instead"
 
 
 def model_tool_name(pkg: PackageInfo, cmd: CommandInfo) -> str:
@@ -499,7 +507,7 @@ def _check_collisions(selected: list[tuple[PackageInfo, CommandInfo]]) -> None:
             f"command {cmd!r} appears in packages {sorted(set(pkgs))}"
             for cmd, pkgs in collisions.items()
         )
-        raise ValueError(f"cross-package tool name collision: {msg}")
+        raise ValueError(f"{COLLISION} {msg}")
 
 
 def _accepts_style(schema: dict[str, Any]) -> bool:
@@ -536,6 +544,8 @@ async def _exec_tool(
     pkg: PackageInfo,
     cmd_name: str,
     args_json: str,
+    *,
+    exec_timeout: float | None = None,
 ) -> ExecResult:
     """Run one tool command, with the item's environment variables.
 
@@ -552,8 +562,12 @@ async def _exec_tool(
     assert actx.sandbox is not None  # a provisioned tool implies a sandbox
     env = _tool_env(actx.user_env, item_id=actx.investigation_id)
     argv = [f"{pkg.install_dir}/launch", cmd_name, args_json or "{}"]
+    # Named only when given: every other caller keeps the sandbox's own cap.
+    budget = {} if exec_timeout is None else {"exec_timeout": exec_timeout}
     try:
-        return await actx.sandbox.exec(handle, argv, on_output=actx.on_exec_output, env=env or None)
+        return await actx.sandbox.exec(
+            handle, argv, on_output=actx.on_exec_output, env=env or None, **budget
+        )
     except SandboxNotFound:
         # #797: this is the funnel EVERY third-party dispatch goes through — the
         # agent's tool call, the #285 chart re-render, the WUI's `callTool` — and
@@ -569,7 +583,9 @@ async def _exec_tool(
             cmd_name,
         )
         fresh = await actx.ensure_sandbox(rebuild=True)
-        return await actx.sandbox.exec(fresh, argv, on_output=actx.on_exec_output, env=env or None)
+        return await actx.sandbox.exec(
+            fresh, argv, on_output=actx.on_exec_output, env=env or None, **budget
+        )
 
 
 #: The item a third-party command runs for, set by the platform on every

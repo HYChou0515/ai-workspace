@@ -27,7 +27,7 @@ Pure function: no I/O, no globals, no env reads.
 
 from __future__ import annotations
 
-from workspace_app.config.merge import merge_layered
+from workspace_app.config.merge import apply_merge_patch, merge_layered
 
 
 def test_empty_override_returns_a_copy_of_base():
@@ -126,3 +126,17 @@ def test_base_is_not_mutated_by_the_merge():
     over = {"a": {"b": 2, "c": 3}}
     merge_layered(base, over)
     assert base == {"a": {"b": 1}}  # untouched
+
+
+def test_a_merge_patch_deletes_with_null_and_merges_objects_recursively():
+    """RFC 7396, the settings page's overlay (docs/plan-model-settings.md M11, M12):
+    only what differs is stored, null hides a default, and neither input is
+    changed."""
+    base = {"a": {"b": 1, "c": 2}, "keep": [1, 2], "gone": {"x": 1}}
+    patch = {"a": {"b": 9}, "keep": [3], "gone": None, "new": {"y": None, "z": 1}}
+
+    out = apply_merge_patch(base, patch)
+
+    assert out == {"a": {"b": 9, "c": 2}, "keep": [3], "new": {"z": 1}}
+    assert base == {"a": {"b": 1, "c": 2}, "keep": [1, 2], "gone": {"x": 1}}
+    assert patch["gone"] is None

@@ -67,6 +67,8 @@ from specstar.types import (
     TaskStatus,
 )
 
+from ..capacity.jobs import recorded_job
+from ..capacity.recorder import UsageRecorder
 from ..perm.authorize import Actor, authorize
 from ..resources.groups import groups_of
 from ..resources.kb import Collection
@@ -215,6 +217,8 @@ class ImportCoordinator:
         index_coordinator: IndexCoordinator,
         message_queue_factory: object | None = None,
         superusers: frozenset[str] = frozenset(),
+        # docs/plan-capacity-usage.md §6.4: where each job attempt is recorded.
+        usage_recorder: UsageRecorder | None = None,
     ) -> None:
         self._spec = spec
         self._ingestor = ingestor
@@ -226,9 +230,10 @@ class ImportCoordinator:
             from specstar.message_queue import SimpleMessageQueueFactory
 
             message_queue_factory = SimpleMessageQueueFactory()
+        self._usage_recorder = usage_recorder
         spec.add_model(
             Schema(ImportJob, "v1"),
-            job_handler=self._handle,
+            job_handler=recorded_job("kb-import", self._handle, self._usage_recorder),
             indexed_fields=["status", "partition_key"],
             message_queue_factory=message_queue_factory,  # ty: ignore[invalid-argument-type]
         )

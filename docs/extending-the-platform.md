@@ -378,8 +378,8 @@ server:
 上面的 `env_vars` 是 **shared** 層:一個 item 一份,能打開 item 的人都讀得到。另外有一層
 **private**:只有本人讀得到(連 superuser 也不行——路由只認「我的」,沒有指定別人的參數)。
 它有兩種範圍:**這個 item 的**(每個人、每個 item 一份),以及**所有 item 通用的**「我的環境變數」
-(每個人一份,`/my-env`,[plan-personal-env](plan-personal-env.md))。後者只給把那個變數設成
-Private first／Private only 的 item;同名時這個 item 的值優先。Env 面板一層一個分頁:「Shared」「Private」(這個
+(每個人一份,`/my-env`,[plan-personal-env](plan-personal-env.md))。每一種提供方式退到個人值時兩者都讀
+(Shared 只在共用值沒填時才退到個人值);同名時這個 item 的值優先。Env 面板一層一個分頁:「Shared」「Private」(這個
 item 的)「Private(跨workspace)」(和 `/my-env` 同一份),在哪個分頁手 key 或按登入就寫進哪一層。這個 item
 的值來源有三個:本人在「Private」分頁手 key、本人在那個分頁按登入(`IEnvProvider`)、以及部署的 `IRequestEnv.env_for` 自動寫入——**只在**本人於這個 item 聊天送出
 或頁面 `callTool` 時問它(其他請求不問)。後者存在**另一列**、值變了就**整份取代**:它沒再回的名字
@@ -710,8 +710,9 @@ python -m workspace_app.skill_eval --skill ./tune/SKILL.md \
 
 **模型不用在命令列指定。** 那一輪是用 App 自己的解析路徑 `AppCatalog.resolve` 取得的——
 跟真正的 turn 同一個呼叫——所以 model、endpoint、system prompt 全部來自
-`config.yaml` + `app.json` + profile。要換模型就 `--preset <config 裡的 preset 名>`
-(也就是 App model picker 上那些名字),不給就用該 App picker 的第一個。`--config` 指向
+`config.yaml` + `app.json` + profile,**再疊上模型設定頁已套用的版本**(它會開部署的 specstar 後端去讀;
+頁面改過的值贏過 `config.yaml`,見 `plan-model-settings.md` P6)。要換模型就 `--preset <preset 名>`
+(也就是 App model picker 上那些名字,含頁面新增的),不給就用該 App picker 的第一個。`--config` 指向
 非預設位置的 config.yaml。
 
 這一點不是潔癖:自己重組 prompt 那版漏掉了 `## Available skills` 索引,於是模型從頭到尾

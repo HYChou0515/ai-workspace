@@ -671,3 +671,50 @@ describe("a send that was refused leaves nothing behind", () => {
     expect(result.current.log.stopping).toBe(false);
   });
 });
+
+// A turn started ELSEWHERE — the helper's answer to a 「請幫我查」 card, posted
+// from the helper's own browser — reached this page by no event (the person's
+// report: 「要重新整理才看得到回覆」). Told to follow it, the page reads the
+// store until the reply is there, with no stream event at all.
+describe("following a turn started elsewhere", () => {
+  const ASKED = { messages: [{ role: "user" as const, content: "q" }] };
+  const ANSWERED = {
+    messages: [
+      { role: "user" as const, content: "q" },
+      { role: "user" as const, content: "查到的內容", answers: "call-1" },
+      { role: "assistant" as const, content: "讀完了:答案" },
+    ],
+  };
+
+  it("reads the store until the reply is there", async () => {
+    const getThread = vi.fn().mockResolvedValueOnce(ASKED).mockResolvedValue(ANSWERED);
+    const { result } = render(fakeTransport({ getThread }), 50);
+    await waitFor(() => expect(result.current.log.entries).toHaveLength(1));
+
+    act(() => result.current.follow("call-1"));
+
+    await waitFor(() =>
+      expect(
+        result.current.log.entries.some(
+          (e) => e.kind === "message" && e.message.content === "讀完了:答案",
+        ),
+      ).toBe(true),
+    );
+    expect(result.current.log.streaming).toBe(false);
+  });
+
+  // Already on the page — the stream carried it — there is nothing to follow:
+  // no spinner, no store reads beyond the hydrate.
+  it("does nothing when the page already has the answer to that card", async () => {
+    const getThread = vi.fn().mockResolvedValue(ANSWERED);
+    const { result } = render(fakeTransport({ getThread }), 50);
+    await waitFor(() => expect(result.current.log.entries).toHaveLength(3));
+    const reads = getThread.mock.calls.length;
+
+    act(() => result.current.follow("call-1"));
+    await new Promise((r) => setTimeout(r, 200));
+
+    expect(result.current.log.streaming).toBe(false);
+    expect(getThread.mock.calls.length).toBe(reads);
+  });
+});

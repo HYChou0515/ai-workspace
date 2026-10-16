@@ -168,8 +168,11 @@ export function WorkflowProgress({
   const nodes = phaseView(declaredPhases, run);
   // A run can finish `done` having executed nothing (e.g. a precondition no-op) —
   // flag it instead of letting a bare bar look identical to a fresh run (#100).
+  // A page job (#942) is one turn or one command and has no phases to count.
   const ranNothing =
-    run.status === "done" && run.phases.every((p) => p.done === 0 && p.failed === 0);
+    run.status === "done" &&
+    !run.page_job &&
+    run.phases.every((p) => p.done === 0 && p.failed === 0);
   const message = typeof run.result?.message === "string" ? run.result.message : null;
 
   // The "current" segment for the collapsed summary: the phase the run is on, else

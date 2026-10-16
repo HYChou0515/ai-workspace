@@ -113,9 +113,9 @@ export type WorkflowRunDTO = {
   /** #288: a steer plan awaiting confirm (the FE renders the steer card vs. the gate
    * card by which pending field is set). Absent on runs written before #288. */
   pending_steer?: SteerPlan | null;
-  /** The schedule that fired it (its window-ledger key), "" or absent for any other
-   * launch — what the Workflows sidebar marks "Scheduled" by. */
-  schedule_key?: string;
+  /** Started by a schedule (its time or its "run now"), not by a person — what
+   * the Workflows sidebar marks "Scheduled" by. Absent on runs written before it. */
+  from_schedule?: boolean;
   /** The conversation its steps' turns are persisted in (one per execution;
    * a schedule's executions share one) — what the execution tab reads its
    * rows' messages from, selected by `run_id`. */
@@ -124,6 +124,9 @@ export type WorkflowRunDTO = {
    * workflow (they share one journal; only the newest may be continued, changed
    * or decided). Absent on `GET …/runs/{id}`. */
   latest?: boolean;
+  /** #942: set when a PAGE started this run as a job (a sub-agent or a tool)
+   * rather than a workflow. Absent/null on every workflow run. */
+  page_job?: PageJobDTO | null;
 };
 
 /** `GET …/runs/{id}/files` — what an execution's tab links, asked when the run
@@ -137,6 +140,14 @@ export type RunFilesDTO = {
   step_files: Record<string, { result: string; transcript: string }>;
   /** The `input.json` the workflow reads now (newest only; "" when absent). */
   inputs_path: string;
+};
+
+/** What a page's job was asked to do (#942) — `kind` is `tool` or `agent`. */
+export type PageJobDTO = {
+  kind: "tool" | "agent";
+  name: string;
+  input: string;
+  deadline: number;
 };
 
 /** One pre-flight checklist line in the launch dialog (#283). `severity` is

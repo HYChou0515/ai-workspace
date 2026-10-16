@@ -140,3 +140,32 @@ def test_applied_skill_body_is_one_shot_not_carried_into_the_next_turn():
     assert "ONESHOT-token body" in cap.prompt  # preloaded on the applying turn
     client.post(f"/a/rca/items/{iid}/messages", json={"content": "second"})
     assert "ONESHOT-token body" not in cap.prompt  # not carried into the next turn
+
+
+def test_an_applied_skill_is_counted_on_the_apps_recorder():
+    """plan-tool-usage-stats §8 (D9): applying a skill loads it without any tool
+    call, so the send path counts it — on the recorder the runner and the
+    writer share, against the sender, this item, the chat surface."""
+    from workspace_app.agent.tool_usage import SEP, ToolUsageRecorder
+
+    rec = ToolUsageRecorder(day=lambda: "d")
+    cap = _Capture()
+    spec = make_spec(default_user="u")
+    app = create_app(
+        spec=spec, sandbox=MockSandbox(), filestore=MemoryFileStore(), runner=cap, tool_usage=rec
+    )
+    client = TestClient(app)
+    iid = register_rca_item(spec)
+    _write_skill(client, iid, "my-skill", "d", "body")
+
+    client.post(
+        f"/a/rca/items/{iid}/messages",
+        json={"content": "hi", "apply_skills": ["my-skill"]},
+    )
+
+    assert cap.ctx is not None and cap.ctx.tool_usage is rec
+    [row] = [r for r in rec.drain() if r.kind == "skill"]
+    assert (row.tool, row.source, row.calls) == ("my-skill", "workspace", 1)
+    assert list(row.by_user) == ["u"]
+    assert list(row.by_surface_app) == [f"chat{SEP}rca"]
+    assert list(row.by_item) == [iid]

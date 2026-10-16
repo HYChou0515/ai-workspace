@@ -140,7 +140,7 @@ describe("WorkflowsSidebar", () => {
           { phase: "read", status: "passed", done: 1, total: 1, failed: 0 },
           { phase: "sort", status: "running", done: 0, total: 1, failed: 0 },
         ],
-        schedule_key: "wui:it:nightly",
+        from_schedule: true,
       }),
     ]);
     const onOpenFile = render();

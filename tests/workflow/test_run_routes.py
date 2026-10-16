@@ -1104,3 +1104,35 @@ def test_the_runs_list_says_which_execution_is_the_newest_of_its_workflow():
         _mark(app, spec, older, "error")  # written again after the newer: still older
         listed = {r["run_id"]: r["latest"] for r in client.get(f"{_base(item_id)}/runs").json()}
     assert listed == {older: False, newer: True}
+
+
+def test_the_runs_list_is_the_workflows_executions_not_a_pages_jobs():
+    """A page job (#942) is a `WorkflowRun` with no workflow — its `workflow_id`
+    is "", the same id a profile's first workflow runs under. The Workflows
+    sidebar lists executions, so the job is not one of them, and a job started
+    after an execution must not take "newest" from it: the execution would read
+    as superseded and could only be stopped."""
+    from workspace_app.workflow.run import PageJob, RunStatus, WorkflowRun
+
+    app, spec, item_id = _app()
+    with TestClient(app) as client:
+        _put_input(client, item_id, '{"n": 1}')
+        execution = client.post(f"{_base(item_id)}/run").json()["run_id"]
+        _poll(client, item_id, execution, "done")
+        job = (
+            spec.get_resource_manager(WorkflowRun)
+            .create(
+                WorkflowRun(
+                    item_id=item_id,
+                    captured_user="u",
+                    status=RunStatus.RUNNING,
+                    page_job=PageJob(kind="agent", name="digger", input="x"),
+                )
+            )
+            .resource_id
+        )
+        listed = {r["run_id"]: r["latest"] for r in client.get(f"{_base(item_id)}/runs").json()}
+        files = client.get(f"{_base(item_id)}/runs/{execution}/files").json()
+    assert job not in listed
+    assert listed == {execution: True}
+    assert files["latest"] is True

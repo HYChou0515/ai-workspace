@@ -41,7 +41,7 @@ from ..workflow.orchestrator import (
     WorkflowUnavailable,
 )
 from ..workflow.preflight import can_run as _preflight_can_run
-from ..workflow.run import WorkflowRun
+from ..workflow.run import WorkflowRun, is_execution
 from ..workflow.user_schedules import SchedulePolicy
 from .activity import ActivityLog
 from .events import FileChanged
@@ -589,6 +589,8 @@ def register_workflow_routes(
         newest: dict[str, tuple[Any, str]] = {}
         for r in rm.list_resources(query):
             assert isinstance(r.data, WorkflowRun)
+            if not is_execution(r.data):
+                continue  # a page's job (#942): not a workflow's execution
             rid = r.info.resource_id  # ty: ignore[unresolved-attribute]
             at = created.get(rid)
             seen = newest.get(r.data.workflow_id)

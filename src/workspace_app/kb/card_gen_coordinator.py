@@ -45,6 +45,8 @@ import msgspec
 from specstar import QB, Schema, SpecStar
 from specstar.types import ResourceNotFoundError, TaskStatus
 
+from ..capacity.jobs import recorded_job
+from ..capacity.recorder import UsageRecorder
 from ..resources import ContextCard, SourceDoc
 from .card_gen import (
     CardDraft,
@@ -124,6 +126,8 @@ class CardGenCoordinator:
         get_user_id: Callable[[], str] | None = None,
         max_questions_per_doc: int = 5,
         reconciler: Reconciler | None = None,
+        # docs/plan-capacity-usage.md §6.4: where each job attempt is recorded.
+        usage_recorder: UsageRecorder | None = None,
     ) -> None:
         self._spec = spec
         self._drafter = drafter
@@ -151,11 +155,12 @@ class CardGenCoordinator:
             from specstar.message_queue import SimpleMessageQueueFactory
 
             message_queue_factory = SimpleMessageQueueFactory()
+        self._usage_recorder = usage_recorder
         spec.add_model(
             Schema(CardGenJob, "v1"),
             # handler takes the job resource positionally (single-arg, like the
             # index coordinator); specstar adapts to the signature.
-            job_handler=self._handle,
+            job_handler=recorded_job("card-gen", self._handle, self._usage_recorder),
             indexed_fields=["status", "partition_key"],
             message_queue_factory=message_queue_factory,  # ty: ignore[invalid-argument-type]
         )

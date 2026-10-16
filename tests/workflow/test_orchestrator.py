@@ -457,15 +457,16 @@ async def test_start_refuses_an_empty_captured_user(spec_instance: SpecStar):
 
 async def test_a_run_records_the_schedule_that_started_it(spec_instance: SpecStar):
     """plan-workflow-out-of-chat P7: the Workflows sidebar marks a scheduled
-    execution by the key it was started with; any other launch has none."""
+    execution by whether a schedule started it (`from_schedule`, the same field
+    the tool-usage stats count a schedule's calls by); any other launch is not."""
     orch, _ = _orch(spec_instance, _run_noop)
     scheduled = await orch.start(
-        slug="rca", item_id="iS", profile="echo", captured_user="u", schedule_key="wui:iS:k"
+        slug="rca", item_id="iS", profile="echo", captured_user="u", from_schedule=True
     )
     by_person = await orch.start(slug="rca", item_id="iT", profile="echo", captured_user="u")
 
-    assert orch._get(scheduled).schedule_key == "wui:iS:k"
-    assert orch._get(by_person).schedule_key == ""
+    assert orch._get(scheduled).from_schedule is True
+    assert orch._get(by_person).from_schedule is False
 
 
 async def _run_noop(wf, inputs):
@@ -1803,6 +1804,29 @@ async def test_only_the_newest_execution_of_a_workflow_is_continued(spec_instanc
         await orch.retry(slug="rca", item_id="iC3", profile="echo", run_id=older)
     assert orch.newest_run_of_workflow("iC3", "w") != older
     assert orch._get(older).status is RunStatus.ERROR
+
+
+async def test_a_page_job_is_not_an_execution_of_the_workflow_it_shares_an_id_with(
+    spec_instance: SpecStar,
+):
+    """A page job (#942) is a run with no workflow: its `workflow_id` is "", the
+    id a profile's first workflow runs under too. Started after a failed
+    execution, it took "newest" from it (Continue refused as superseded), and
+    while it ran it read as that workflow's executing run (refused as active)."""
+    from workspace_app.workflow.run import PageJob
+
+    orch, _ = _orch(spec_instance, _two_step_run([]))
+    failed = _insert_run(orch, item_id="iPJ", status=RunStatus.ERROR, workflow_id="")
+    _insert_run(
+        orch,
+        item_id="iPJ",
+        status=RunStatus.RUNNING,
+        workflow_id="",
+        page_job=PageJob(kind="tool", name="t", input=""),
+    )
+
+    assert orch.newest_run_of_workflow("iPJ", "") == failed
+    assert orch._active_run_of_workflow("iPJ", "") is None
 
 
 async def test_rerunning_a_step_whose_name_looks_like_a_pattern_runs_it_again(

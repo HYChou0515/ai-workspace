@@ -23,6 +23,15 @@
  * a run reports progress for minutes before it answers. Every future addition
  * owes the same argument in writing, or this rule has quietly become nothing.
  *
+ * `callAgent`, `startTool`, `startAgent` (and the job object's `jobStatus` /
+ * `stopJob`, #942) came after `openLogin` (below), and they owe the argument too. A sub-agent is
+ * not an outside system and not a package command — it is the platform's own
+ * agent turn in this item, so it cannot be a `callTool` target; it is asked the
+ * way a tool is called so it reads as one. The `start…` forms exist for
+ * `startRun`'s reason: a call answers once, inside a minute, and some tools and
+ * sub-agents take longer. They hand back a job to ask rather than a callback,
+ * because a callback is what an agent writing a page gets wrong.
+ *
  * `openLogin` (`plan-wui-viewer-login`) is the second, and its argument is that
  * it CANNOT be a tool call either: its whole point is that the credential never
  * passes through the page. The platform draws its own sign-in outside the

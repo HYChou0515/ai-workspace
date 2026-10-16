@@ -145,7 +145,7 @@ export function WorkflowsSidebar({
               <span style={{ display: "flex", flexWrap: "wrap", gap: 6, color: "var(--text-paper-d)" }}>
                 <span>{statusText(r.status)}</span>
                 {of > 0 && r.status !== "done" && <span>{`Step ${at} of ${of}`}</span>}
-                {r.schedule_key && <span>Scheduled</span>}
+                {r.from_schedule && <span>Scheduled</span>}
               </span>
             </button>
           );

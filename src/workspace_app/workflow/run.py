@@ -111,6 +111,23 @@ class SteerPlan(Struct):
     decided_by: str = ""
 
 
+class PageJob(Struct):
+    """What a page started with `startTool` / `startAgent` / `callAgent`
+    (`docs/plan-wui-call-agent.md` D5) — set on the run INSTEAD of a workflow.
+
+    ``kind`` is ``tool`` or ``agent``; ``name`` the tool or sub-agent; ``input``
+    what the page sent (the agent's text, or the tool's args as JSON), kept so
+    the run record says what was asked. ``deadline`` (epoch ms) is the job's
+    total-time cap: the work lives in the memory of the pod that started it and
+    nothing re-drives it after a restart, so a row still active past it is over
+    whatever it says (`WorkflowOrchestrator.page_job_state`)."""
+
+    kind: str
+    name: str
+    input: str = ""
+    deadline: int = 0
+
+
 class WorkflowRun(Struct):
     item_id: str
     """Indexed — the owning item (any App's WorkItem ``resource_id``; #89). One
@@ -172,11 +189,14 @@ class WorkflowRun(Struct):
     """Started by a schedule's "run now", not by its time — what the schedules
     overview tags "手動" (`docs/plan-schedule-overview-polish.md`). Additive: a
     run written before this reads False, as a scheduled one."""
-    schedule_key: str = ""
-    """The schedule that fired this run (its window-ledger key, the one its shared
-    conversation is keyed on), or "" for any other launch. What the Workflows
-    sidebar marks an execution a schedule started by (plan-workflow-out-of-chat
-    P7). Additive: a run written before this reads "", as unscheduled."""
+    from_schedule: bool = False
+    """Started by a schedule — by its time or by its "run now" — not by a person
+    launching the workflow (docs/plan-tool-usage-stats.md §3.4: its tool calls
+    are counted on the schedule surface). Additive: a run written before this
+    reads False."""
+    page_job: PageJob | None = None
+    """Set when a PAGE started this run as a job rather than a workflow (#942).
+    Additive: every run written before it reads None, a workflow run."""
     result: dict[str, Any] | None = None
     """The ``run()`` return value (a summary), persisted on terminal."""
     pending_decision: PendingDecision | None = None
@@ -185,6 +205,21 @@ class WorkflowRun(Struct):
     """Set while ``awaiting_human`` for a steer plan awaiting confirm (#288). Mutually
     exclusive with ``pending_decision`` — the FE picks the steer card vs. the gate card by
     which is set, and ``decide()`` guards on ``pending_decision`` so they never collide."""
+
+
+def is_execution(run: WorkflowRun) -> bool:
+    """Whether ``run`` executes a workflow — what the Workflows sidebar lists and
+    what competes for "newest" of its workflow. A page job (#942) never does: it
+    has no workflow, and its ``workflow_id`` is "", the id a profile's first
+    workflow runs under too, so comparing ids alone made a page's job supersede
+    that workflow's execution (and, while it ran, read as one executing)."""
+    return run.page_job is None
+
+
+def is_execution_of(run: WorkflowRun, workflow_id: str) -> bool:
+    """Whether ``run`` is an execution of ``workflow_id`` — one of the runs that
+    share its journal (`is_execution`)."""
+    return is_execution(run) and run.workflow_id == workflow_id
 
 
 # What the platform registers: the resource + its indexes (manual §13). item_id

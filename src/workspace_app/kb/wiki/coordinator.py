@@ -48,7 +48,10 @@ from specstar.types import (
     TaskStatus,
 )
 
+from ...capacity.jobs import recorded_job
+from ...capacity.recorder import UsageRecorder
 from ...files import rel_path
+from ...live_value import Live, now
 from ...resources import AgentConfig, CodeWikiBuildRun, Collection, SourceDoc, WikiBuildState
 from ..code_repo import CodeRepoIngestor, CodeRepoSyncError
 from ..job_audit import preserve_job_creator
@@ -162,7 +165,7 @@ class WikiMaintenanceCoordinator:
         spec: SpecStar,
         runner: AgentRunner,
         *,
-        agent_config: AgentConfig | None = None,
+        agent_config: Live[AgentConfig] | None = None,
         unfolder_config: AgentConfig | None = None,
         corrector_config: AgentConfig | None = None,
         maintainer_max_turns: int = 40,
@@ -172,6 +175,8 @@ class WikiMaintenanceCoordinator:
         code_card_batch_chars: int = _DEFAULT_CARD_BATCH_CHARS,
         code_repo: CodeRepoIngestor | None = None,
         now: Callable[[], datetime] | None = None,
+        # docs/plan-capacity-usage.md §6.4: where each job attempt is recorded.
+        usage_recorder: UsageRecorder | None = None,
     ) -> None:
         self._spec = spec
         self._runner = runner
@@ -210,7 +215,8 @@ class WikiMaintenanceCoordinator:
         # (resolved off the spec default any non-job manager still carries);
         # production injects the same get_user_id.
         self._get_user_id = get_user_id or (lambda: spec.get_resource_manager(SourceDoc).user)
-        self._agent_config = agent_config or default_wiki_maintainer_config()
+        # plan-model-settings P5: read per job, so the published wiki model is used.
+        self._agent_config_of = agent_config or default_wiki_maintainer_config()
         self._unfolder_config = unfolder_config or default_wiki_unfolder_config()
         self._corrector_config = corrector_config or default_wiki_corrector_config()
         self._maintainer_max_turns = maintainer_max_turns
@@ -227,9 +233,10 @@ class WikiMaintenanceCoordinator:
             from specstar.message_queue import SimpleMessageQueueFactory
 
             message_queue_factory = SimpleMessageQueueFactory()
+        self._usage_recorder = usage_recorder
         spec.add_model(
             Schema(WikiMaintenanceJob, "v1"),
-            job_handler=self._handle,
+            job_handler=recorded_job("wiki", self._handle, self._usage_recorder),
             # `op` is indexed (#571) so the rebuild anti-mash guard is a point
             # lookup. It must NOT be expressed as a separate partition key: the
             # rebuild job has to share the collection's key, because `building`
@@ -739,6 +746,11 @@ class WikiMaintenanceCoordinator:
                 self._handle_reflect(payload, triggered_by=actor)
             else:
                 self._handle_fold(payload)
+
+    @property
+    def _agent_config(self) -> AgentConfig:
+        """The maintainer's config as of now (plan-model-settings P5)."""
+        return now(self._agent_config_of)
 
     def _maintainer_config(self, cid: str, base: AgentConfig) -> AgentConfig:
         """Append the collection's maintainer guidance (#90) onto ``base`` — the

@@ -1,6 +1,7 @@
 # Plan — WUI
 
 > 被 #904（plan-wui-multipage.md）推翻
+> 被 #942（plan-wui-call-agent.md）推翻
 
 A **WUI** is a folder in an item's workspace that renders as a live, interactive
 page. A domain expert describes what they need, the agent writes the folder, and

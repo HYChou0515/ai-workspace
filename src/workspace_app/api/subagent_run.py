@@ -55,24 +55,33 @@ async def run_agent_task(
     answer, failure = await drive_subagent(
         runner, parent_ctx, defn, prompt, model=model, on_event=on_event
     )
+    return report_of(defn.name, answer, failure)[0]
+
+
+def report_of(name: str, answer: str, failure: str | None) -> tuple[str, bool]:
+    """What a sub-agent's caller is handed, and whether it is a failure.
+
+    Shared by the agent's `run_agent` and a page's `callAgent` / `startAgent`
+    (#942), so a sub-agent that failed or wrote nothing reads the same wherever
+    it was asked from."""
     if failure is not None:
         # Told, not raised: one delegated step failing is something the main
         # agent can work around, whereas raising would end the whole turn.
-        logger.warning("sub-agent %r failed: %s", defn.name, failure)
-        return f"sub-agent {defn.name!r} failed: {failure}" + (
+        logger.warning("sub-agent %r failed: %s", name, failure)
+        return f"sub-agent {name!r} failed: {failure}" + (
             f"\n\nIt had said, before failing:\n{answer}" if answer else ""
-        )
+        ), True
     if not answer:
         # A sub-agent can end a turn without ever writing prose (it stopped on a
         # tool call, or burned its steps). Returning "" hands the caller a blank
         # tool result it cannot tell from a successful empty answer, so it says so.
-        logger.warning("sub-agent %r produced no report", defn.name)
+        logger.warning("sub-agent %r produced no report", name)
         return (
-            f"sub-agent {defn.name!r} finished without writing a report — it may have "
+            f"sub-agent {name!r} finished without writing a report — it may have "
             "run out of steps, or stopped on a tool call. Try a narrower task, or do "
             "this one yourself."
-        )
-    return answer
+        ), True
+    return answer, False
 
 
 async def drive_subagent(
@@ -150,6 +159,9 @@ def _child_context(
     )
     return dataclasses.replace(
         parent_ctx,
+        # plan-tool-usage-stats §3.4: its own surface; the person, App and item
+        # are the parent's (copied with the rest).
+        surface="subagent",
         agent_config=msgspec.structs.replace(
             parent_cfg,
             **engine,

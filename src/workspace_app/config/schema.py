@@ -105,6 +105,15 @@ class ServerSettings:
     # The mechanism existed and nothing ever passed it a value, so the cap was
     # infinite in every deploy. 0 restores that.
     workflow_step_timeout_sec: int = 600
+    # #942: how many page jobs (`startTool` / `startAgent`, and a `callAgent`
+    # while it waits) ONE item may have in flight at once. A page past it is
+    # refused with a sentence naming the number, not queued: a queue would let a
+    # page that loops pile up work nobody is watching.
+    wui_page_job_limit: int = 4
+    # #942: the total time one page job may take, in seconds — the deadline its
+    # tool command is given in place of the sandbox's minute, and what tells a
+    # job lost with its pod from one still running.
+    wui_page_job_timeout_sec: int = 3600
     # #700: browser origins allowed to call this API cross-site, for outside systems
     # that hand work over from their own page (e.g. a legacy analysis site whose
     # button creates or adds to a work item). Empty (default) ⇒ no CORS layer at
@@ -172,6 +181,21 @@ class ServerSettings:
     # yourself to keep it). Every entry is `{name, url}`, `url` http(s) with a
     # `{q}`, names distinct — anything else refuses to boot, naming the entry.
     lookup_targets: list[dict[str, str]] = field(default_factory=default_lookup_targets)
+
+    # docs/plan-outside-helper.md §3.7.2 — the folder (a mounted volume) the
+    # operator drops a packed helper into: `ai-workspace-helper.json` and
+    # the zip it names (`scripts/pack_ai_workspace_helper.py`). Read per request, so
+    # publishing needs no redeploy. Unset ⇒ nothing published: the 小幫手
+    # page says so and every card stays on the manual flow.
+    ai_workspace_helper_dir: str = ""
+
+    # docs/plan-ext-ai.md D5 — the 問外部AI card (`ask_ext_ai`): the AI drafts a
+    # question, the person presses 「問外部AI」, and their helper asks the
+    # company's web AI with the site file packed into it
+    # (`pack_ai_workspace_helper.py --ext-ai-site`). Off by default: on a deploy
+    # whose helpers carry no site file the card could only ever be answered by
+    # hand.
+    ext_ai_enabled: bool = False
 
 
 # ─── sandbox ────────────────────────────────────────────────────────────
@@ -1529,6 +1553,49 @@ class SkillHubSettings:
     git_root: str = ""
 
 
+# ─── capacity (docs/plan-capacity-usage.md §12) ────────────────────────
+@dataclass(frozen=True)
+class CapacitySettings:
+    """Usage records and the capacity dashboard (docs/plan-capacity-usage.md).
+
+    Writing:
+    - ``record``: write usage records — one JSON line per record on stdout for
+      the deploy's collector to ship to ES (D3). The platform stores nothing.
+    - ``sink``: dotted path of a ``capacity.sink.UsageSink`` subclass to write
+      somewhere else; empty = stdout.
+    - ``window_s``: the window per-process counts are summed over; divides 3600
+      so windows tile the hour (and a date histogram).
+    - ``queue_max``: records buffered for the writer before new ones are
+      dropped and counted (``meta`` rows).
+    - ``llm_tags``: send ``x-litellm-tags`` (person, App, purpose) on every LLM
+      call so LiteLLM's log can be split per person (§7). Off when the deploy's
+      LiteLLM routes on tags and has no ``default`` pool.
+
+    Reading — each a dotted path of the operator's implementation (D2), empty
+    = that source is not connected and the views needing it say so:
+    ``usage_records`` (①), ``resource_metrics`` (②), ``gpu_metrics`` (③),
+    ``llm_requests`` (④).
+
+    Analysis: ``step_s`` (the slot; a multiple of ``window_s``), ``lag_s`` (the
+    newest seconds left out, for ingest lag), ``timezone`` (IANA name days are
+    cut in; empty = UTC), ``max_rows`` (an analysis that would load more rows
+    stops and says to shorten the period)."""
+
+    record: bool = True
+    sink: str = ""
+    window_s: int = 300
+    queue_max: int = 10000
+    llm_tags: bool = True
+    usage_records: str = ""
+    resource_metrics: str = ""
+    gpu_metrics: str = ""
+    llm_requests: str = ""
+    step_s: int = 300
+    lag_s: int = 600
+    timezone: str = ""
+    max_rows: int = 5_000_000
+
+
 # ─── top-level Settings ────────────────────────────────────────────────
 @dataclass(frozen=True)
 class Settings:
@@ -1559,3 +1626,4 @@ class Settings:
     chat_video: ChatVideoSettings = field(default_factory=ChatVideoSettings)
     view_plugins: ViewPluginsSettings = field(default_factory=ViewPluginsSettings)
     skill_hub: SkillHubSettings = field(default_factory=SkillHubSettings)
+    capacity: CapacitySettings = field(default_factory=CapacitySettings)

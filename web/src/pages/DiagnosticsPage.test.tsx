@@ -183,3 +183,43 @@ describe("DiagnosticsPage", () => {
     expect(items[1].getAttribute("data-to")).toBe("");
   });
 });
+
+// docs/plan-tool-usage-stats.md: the administrator's tool-usage tab — for
+// superusers only, since the report answers anyone else 403.
+describe("DiagnosticsPage — tool usage", () => {
+  beforeEach(() => localStorage.setItem("ws.locale", "en"));
+  afterEach(() => {
+    cleanup();
+    localStorage.clear();
+    vi.restoreAllMocks();
+  });
+
+  const health: HealthApi = {
+    getChecks: async () => ({ running: false, checks: [] }),
+    runChecks: async () => ({ started: true }),
+  };
+
+  it("offers a superuser the tool-usage tab, which opens the report", async () => {
+    const { api } = await import("../api");
+    const { toolUsageApi } = await import("../api/toolUsage");
+    vi.spyOn(api, "getMe").mockResolvedValue({ id: "root", is_superuser: true, groups: [] });
+    vi.spyOn(api, "listApps").mockResolvedValue([]);
+    vi.spyOn(toolUsageApi, "report").mockResolvedValue({ days: 30, tools: [] });
+    renderPage(health);
+
+    await userEvent.click(await screen.findByRole("tab", { name: "Usage" }));
+
+    expect(await screen.findByText("No tool calls in this period")).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Usage" })).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("does not offer it to anyone else", async () => {
+    const { api } = await import("../api");
+    vi.spyOn(api, "getMe").mockResolvedValue({ id: "alice", is_superuser: false, groups: [] });
+    renderPage(health);
+
+    await screen.findByRole("tab", { name: "Health checks" });
+    await waitFor(() => expect(api.getMe).toHaveBeenCalled());
+    expect(screen.queryByRole("tab", { name: "Usage" })).not.toBeInTheDocument();
+  });
+});
