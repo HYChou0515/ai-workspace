@@ -1475,10 +1475,10 @@ export const messages = {
     "zh-TW": "只有你打得開這個連結。要給其他人看，到這個 workspace 的分享設定把他加進來。",
     en: "Only you can open this link. To show it to others, add them in this workspace's sharing settings.",
   },
-  "wui.reach.owner": { "zh-TW": "只有擁有者和管理員打得開", en: "Only the owner and admins can open it" },
+  "wui.reach.owner": { "zh-TW": "只有擁有者打得開", en: "Only the owner can open it" },
   "wui.reach.owner.tip": {
-    "zh-TW": "只有這個 workspace 的擁有者和管理員打得開這個連結。",
-    en: "Only this workspace's owner and admins can open this link.",
+    "zh-TW": "只有這個 workspace 的擁有者打得開這個連結。",
+    en: "Only this workspace's owner can open this link.",
   },
   "wui.reach.shared": { "zh-TW": "只有成員打得開", en: "Only members can open it" },
   "wui.reach.shared.tip": {

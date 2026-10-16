@@ -516,8 +516,9 @@ function PageDetail({
  * creator — the person a private workspace opens for, not the editable
  * `owner` field (#687): before the identity settles, the placeholder id would
  * make the viewer's own page read "the owner", so it says nothing yet. Anyone
- * else who sees an owner-only page here is an admin, who opens it too — so
- * that sentence names admins. */
+ * else who sees an owner-only page here is an admin; the card still says
+ * 「只有擁有者打得開」 — the user's words (docs/plan-deploy-reach.md decision 6),
+ * which name the setting, not the admins who bypass it. */
 function useReachNote(
   page: DeployedWui,
 ): "wui.reach.you" | "wui.reach.owner" | "wui.reach.shared" | null {

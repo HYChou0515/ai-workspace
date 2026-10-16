@@ -876,9 +876,10 @@ describe("WuiOverviewPage — who each page opens for (docs/plan-deploy-reach.md
 
       expect(await itemOf("Mine, private")).toHaveTextContent(word("wui.reach.you"));
       expect(await itemOf("Mine, renamed owner")).toHaveTextContent(word("wui.reach.you"));
-      // Only an admin sees someone else's owner-only page — and opens it, so
-      // the words must not leave them out (review round 1).
-      expect(await itemOf("Carol's, private")).toHaveTextContent("只有擁有者和管理員打得開");
+      // The user's words (decision 6), kept as approved: 「只有擁有者打得開」 —
+      // admins are not named on the card (asked 2026-10-16: 「就是只有擁有者打得開」).
+      expect(await itemOf("Carol's, private")).toHaveTextContent("只有擁有者打得開");
+      expect(await itemOf("Carol's, private")).not.toHaveTextContent("管理員");
       expect(await itemOf("Shared")).toHaveTextContent(word("wui.reach.shared"));
       for (const open of ["Open", "No permission", "Unreadable"]) {
         const li = await itemOf(open);
