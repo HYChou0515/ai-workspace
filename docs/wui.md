@@ -180,24 +180,34 @@ Refresh **不會** build，它只是重讀資料夾。所以 AI 改完 `src/` �
   開頁時同一條讀取路徑；讀者開頁時仍是他自己那一刻的讀取）；最後**把這一頁列上
   WUI 總覽**（見下一節）——四件都成才把網址端出來，所以網址指到的一定是剛建好、
   **當下**打得開、而且別人找得到的成品，不會是舊的 `dist/`，也不會是一個 `entry`
-  指錯地方的空頁。任一步失敗就不會出現「Deployed」，而是一句說明是哪一步：build 壞了是
-  「Deploy failed — see the build output」壓在 build 輸出上面；打不開是「Deploy failed —
-  the page does not open: …」帶頁面自己的理由；`package.json` 讀不到是「could not check
-  whether this page has a build: …」；總覽不收是「Deploy failed — the page could not be
-  listed in WUI: …」帶伺服器的理由（最常見的是沒有這個 item 的 `edit_content`——能改
-  item 內容的人才能把頁面上架）。什麼都不端出來。
+  指錯地方的空頁。任一步失敗就不會出現「✓ 已 Deploy」，而是一句說明是哪一步：build 壞了是
+  「Deploy 失敗：請看建置輸出。」壓在 build 輸出上面；打不開是「Deploy 失敗：頁面打不開：…」
+  帶頁面自己的理由；`package.json` 讀不到是「Deploy 失敗：無法確認這個頁面要不要建置：…」；
+  總覽不收是「Deploy 失敗：頁面無法列進 WUI：…」帶伺服器的理由（最常見的是沒有這個 item
+  的 `edit_content`——能改 item 內容的人才能把頁面上架）。什麼都不端出來。（工具列和這個
+  面板跟著介面語言；英文介面是「Deploy failed — …」。）
 - 跑的期間**整個 pane 是 Deploy 的**：Refresh、Rebuild、Auto-rebuild 都按不下去（同一個
   資料夾裡不能有兩個 build 在寫 `dist/`），旁邊多一顆 **Cancel**——一個永遠不結束的
   build（卡住的 `pnpm run build`、被 gateway 吊著的串流）不會把 pane 鎖到關檔為止。
   Cancel 會中止 build、在 build 輸出裡寫一行「Cancelled.」，而且那一次什麼都不會端出來。
 - 同一個資料夾裡有**兩份 view 檔**時，判定是**每一頁各自的**：在 A 按 Deploy、切到 B、
   A 跑完——B 不會被重載（設計決定 9），A 的結果等你切回 A 才套用。等的期間如果 pane
-  又讀過一次資料夾（在 B 按了 Refresh、Rebuild 或 Deploy），回到 A 看到的是
-  「Deploy stopped — the pane was refreshed, rebuilt or deployed again before it was
-  back on this page. Deploy again.」——不會假裝那個結果還算數，也不會無聲消失。
-- 面板上是網址、**Copy**、**Open**，和一句話：**能打開這個 item 的人才能用這個連結。**
-  網址是**捷徑，不是授權**——它不給任何人原本沒有的權限，API 在這裡拒絕的跟在工作區裡
-  拒絕的一模一樣。要給 item 外的人看，先把他加進 item。
+  又讀過一次資料夾（在 B 按了重新整理、重新建置或 Deploy），回到 A 看到的是
+  「Deploy 已停止：回到這個頁面之前，畫面被重新整理、重新建置或又 Deploy 了一次。請再
+  Deploy 一次。」——不會假裝那個結果還算數，也不會無聲消失。
+- 面板上是網址、**複製**、**開啟**，和一句話說**現在誰打得開這個連結**——照這個
+  workspace 的分享設定：
+    - 只有自己（新的 workspace 預設就是這樣）：「目前只有你打得開這個連結。」
+      （管理員替別人 Deploy 時是「目前只有擁有者和管理員打得開這個連結。」）
+    - 分享給特定的人或群組：「只有這個 workspace 的成員打得開這個連結。」
+    - 公開：「所有人都打得開這個連結。」
+
+    不是公開的時候，旁邊有一顆 **分享設定…**，打開的就是頂列那個存取標籤的分享對話框；
+    在那裡改完，這句話跟著變。不能改分享設定的人（例如只被給了編輯權的協作者）看不到
+    按鈕，看到的是「要給其他人看，請 workspace 的擁有者 〈名字〉 把他加進來。」
+    網址是**捷徑，不是授權**——它不給任何人原本沒有的權限，API 在這裡拒絕的跟在工作區裡
+    拒絕的一模一樣；所以 Deploy 從不擋你，只告訴你現在誰看得到。設計理由在
+    `docs/plan-deploy-reach.md`。
 
 拿到連結的人看到的是**讀者版**：
 
@@ -211,9 +221,15 @@ Refresh **不會** build，它只是重讀資料夾。所以 AI 改完 `src/` �
 - 沒有工具列、沒有 build 輸出、沒有 reports。
 - 頁上的按鈕（tool、workflow）**照常能按**——那是這頁存在的理由。sandbox 只在真的按了
   才會被叫醒。
-- 沒建過的頁面會看到「This page has not been published yet — or it is still being
-  restored.」和一顆 **Try again**（只重讀、不 build）。保守的措辭是刻意的：在這個平台上
+- 沒建過的頁面會看到「這個頁面還沒發布，或還在還原中。請稍後再試一次。」和一顆
+  **再試一次**（只重讀、不 build）。保守的措辭是刻意的：在這個平台上
   sandbox 還原到一半時讀檔會答「不存在」，一個發布過的頁面可能有幾秒鐘看起來像沒發布。
+- **打不開的人**看到的是最可能的原因：「打不開這個頁面。最常見的原因是你還沒有這個
+  workspace 的權限，請向給你連結的人確認他已經分享給你。」接著才是「可能不存在、或正在
+  還原中」，附**再試一次**。平台不會告訴一個看不到 workspace 的人它存不存在，所以這句話
+  只能說「最常見的原因」。看得到 workspace、但沒有讀檔權限的人，看到的是「你看得到這個
+  workspace，但沒有讀取 … 的權限」和一顆 **申請存取**——按一下會通知擁有者（跟 App 首頁
+  🔒 那一列的申請一樣）。
 
 所以：改了 `src/` 之後要讓拿連結的人看到新版，**再按一次 Deploy**（Rebuild 也行——
 兩者跑的是同一個 build；Deploy 多做的是確認頁面打得開、再把網址端出來）。反過來說，
@@ -260,12 +276,16 @@ Refresh **不會** build，它只是重讀資料夾。所以 AI 改完 `src/` �
 - **你看到的就是你開得了的。** 總覽按 item 的讀取權過濾，跟連結本身一樣不給任何人多的
   權限；別人的私有 item 裡的頁面在你這裡不存在。item 被刪、或你被移出 item，那幾列就
   自己消失。
+- **不是人人打得開的頁面會說出來。** 卡片（和表格的那一列）下面那行字最前面會寫「只有你
+  打得開」（你的私有 workspace）、「只有擁有者打得開」（別人的私有 workspace，例如管理員
+  看到的）或「只有成員打得開」（分享給特定的人或群組）——把連結傳出去之前就看得到。公開的
+  不寫。
 - **下架** 只有能 Deploy 的人（有 `edit_content`）看得到，按了先確認一次：它是 Deploy 那步
   「上架」的反向——頁面和資料夾都留著，只是不再列在總覽；要列回來再按一次 Deploy。
 - **資料夾被刪掉，那一列不會自己消失**——這是刻意的。這個平台上「檔案不存在」也是
   sandbox 還原到一半時的回答，靠它自動下架會讓頁面在每次閒置回收後閃一下不見、還得再
-  Deploy 一次。死掉的列點進去是讀者版那句「This page has not been published yet — or it
-  is still being restored」，由有權限的人按下架收掉。
+  Deploy 一次。死掉的列點進去是讀者版那句「這個頁面還沒發布，或還在還原中」，由有權限的
+  人按下架收掉。
 
 決策與被否決的替代方案（例如在寫入時索引每個 `view: wui` 檔）在 `docs/plan-wui-overview.md`。
 
