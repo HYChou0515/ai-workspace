@@ -4,7 +4,7 @@
  * The existing wording points at `/my-resources`, which is a page the person has
  * to notice, navigate to, act on, and navigate back from — acceptable while
  * hitting the limit was exceptional. It is not, since an item defaults to its
- * App's ceiling: the wall is now an ordinary part of using the product, so its
+ * App's size: the wall is now an ordinary part of using the product, so its
  * exit belongs where the refusal is.
  *
  * Renders NOTHING for an empty list, and empty has three innocent causes: the

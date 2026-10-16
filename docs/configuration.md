@@ -297,7 +297,7 @@ sandbox:
 resources:
   per_app:
     default: { cpu: 1.0, memory: 512M, disk: 80M }   # App 沒宣告時吃這個
-    max:     { cpu: 4.0, memory: 4G,   disk: 20G }   # App 不得超過,超過=開機失敗
+    max:     { cpu: 4.0, memory: 4G,   disk: 20G }   # App 不得超過(超過=開機失敗);也是單一 item 能調到的上限
   per_user:
     count: 3          # 同時活著的 sandbox 個數
     cpu: 6.0          # 那些活著的 sandbox 加總核心

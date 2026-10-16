@@ -251,6 +251,22 @@ def test_the_items_ceiling_falls_back_per_dimension():
     assert got.item_memory_ceiling == 512 * 1024**2
 
 
+@pytest.mark.parametrize("unbounded", ["max", "0"])
+def test_an_app_stated_unbounded_has_no_item_ceiling_not_a_zero_one(unbounded):
+    """Review round 1: `"max"` / `"0"` resolve to 0 bytes — "no limit" — and the
+    ceiling handed that 0 straight on, so the panel said 「這個 App 最多 0 B」
+    where D3 says no line at all. None is how "nothing caps it" is spelled."""
+    settings = Settings(
+        resources=ResourceSettings(
+            per_app=PerAppResources(default=ResourceAmounts(memory=unbounded))
+        )
+    )
+    got = resolve_app_limits(_manifest(), settings)
+
+    assert got.memory_bytes == 0, "the App is stated unbounded"
+    assert got.item_memory_ceiling is None
+
+
 def test_the_error_names_the_offending_app():
     """The message has to say WHICH app.json is wrong, or an operator staring at
     a failed boot is left bisecting their own repo."""

@@ -550,7 +550,7 @@ def register_item_routes(
 
         ``null`` in either dimension clears it, which is not the same as zero:
         cleared means "nobody has said", and the size resolves fresh from
-        ``min(App ceiling, owner budget)`` every time it is asked.
+        ``min(App size, owner budget)`` every time it is asked.
 
         Persists AS THE OWNER for the same reason the permission setter does —
         a ``change_permission`` delegate need not hold ``write_meta``, and it is

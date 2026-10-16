@@ -2740,7 +2740,11 @@ AI 讀 `wui` skill 時會看到「這個 item 能讓頁面問的 subagent」清�
 **行為改變,沒有開關**([plan-item-size-ceiling.md](plan-item-size-ceiling.md) D1–D3):有設 `per_app.max` 的部署,item 的天花板從
 「App 的值」(沒在 app.json 宣告時就是 `per_app.default`)變成 `per_app.max`。例:`default` 1 核 / `512M`、`max` 4 核 / `4G`,
 以前把 item 調成 2 核 / 2G 實際只拿到 1 核 / 512M,升級後就拿到 2 核 / 2G。**先前已經把 item 調得比 App 的值大的人,下一次開
-環境就會真的拿到那個大小**(以前被夾回 App 的值)——個人額度照舊會擋總量。環境面板在 CPU、記憶體欄位下多一行
+環境就會真的拿到那個大小**(以前被夾回 App 的值)——個人額度照舊會擋總量。**反方向也有**:設了 `max` 卻沒有 App 的值
+(沒設 `per_app.default`、app.json 也沒宣告)的維度,以前 App 這一層完全不夾(只有個人額度),升級後超過 `max` 的會被夾回 `max`——下一次開
+環境就變小。滾動更新途中新舊 API pod 並存時,同一個 item 由哪一顆 pod 開的環境就照哪一顆的規則,rollout 完成後一致。
+rollout 時**已經在跑**的環境:cgroup 還是開的時候的大小,但心跳記帳與「我的資源」從這時起按新的大小算(它們每次都重新解析),
+直到那個環境被關掉或回收、重開後兩邊才一致——這段時間個人額度可能顯示得比實際占用多。環境面板在 CPU、記憶體欄位下多一行
 「這個 App 最多 X」。app.json 的 `resources` 從「item 最多吃多少」變成「預設吃多少」(目前內建 App 都沒有宣告)。
 
 **確認做完**(`rollout 後`):在一個有設 `per_app.max` 的 App 的 item 打開「環境」面板,CPU、記憶體欄位下寫著「這個 App 最多

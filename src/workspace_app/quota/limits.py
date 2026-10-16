@@ -127,13 +127,17 @@ class ResourceLimits:
     def item_cpu_ceiling(self) -> float | None:
         """The most cpu one item of this App may be given: the deploy's `max`
         when it set one, otherwise the App's own size — so a deploy with no
-        `max` keeps the rule it had, an item may only go below its App (D2)."""
-        return self.cpu_max or self.cpu_cores
+        `max` keeps the rule it had, an item may only go below its App (D2).
+
+        None when nothing caps it — never 0, which is how a size spells
+        "unbounded" (`"max"` / `"0"`) and which the panel would otherwise print
+        as 「最多 0 B」 (review round 1)."""
+        return self.cpu_max or self.cpu_cores or None
 
     @property
     def item_memory_ceiling(self) -> int | None:
         """`item_cpu_ceiling` for memory."""
-        return self.memory_max or self.memory_bytes
+        return self.memory_max or self.memory_bytes or None
 
 
 @dataclass(frozen=True)

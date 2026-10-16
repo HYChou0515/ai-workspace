@@ -18,7 +18,7 @@ Grilled 2026-10-16 on master `442eca8e`。每條決定標來源：**[user]** = �
 機制（master `442eca8e`）：
 
 - `quota/limits.py:resolve_app_limits` 解析每個 App 的大小：app.json 的 `resources` → `per_app.default` → 後端預設。內建的
-  5 個 App 的 app.json 都沒有宣告 `resources`，所以 App 的值就是 `per_app.default`。
+  4 個 App（playground、pm、rca、topic-hub；`_template` 不會被載入）的 app.json 都沒有宣告 `resources`，所以 App 的值就是 `per_app.default`。
 - `per_app.max` 只在開機時拿來檢查 App 的解析值有沒有超過（`_enforce_ceiling`，超過就開機失敗），檢查完就不再被任何東西讀。
 - `api/app.py:_resolved_for` 把 item 的值夾在 App 的解析值以下（`_clamp_cpu(cpu, app_cpu)`）。
 - 合起來：item 的天花板＝`per_app.default`，`per_app.max` 對 item 沒有作用，「預設」和「上限」被讀成同一件事。

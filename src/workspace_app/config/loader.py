@@ -1268,14 +1268,41 @@ def _build_resources(d: dict[str, Any]) -> ResourceSettings:
     per_app = d.get("per_app", {})
     return ResourceSettings(
         per_app=PerAppResources(
-            default=_build(ResourceAmounts, per_app.get("default", {})),
-            max=_build(ResourceAmounts, per_app.get("max", {})),
+            default=_build_amounts(per_app.get("default", {}), "resources.per_app.default"),
+            max=_build_amounts(per_app.get("max", {}), "resources.per_app.max"),
         ),
         per_user=_build(PerUserResources, d.get("per_user", {})),
         disk_reconcile_interval_sec=float(
             d.get("disk_reconcile_interval_sec", ResourceSettings().disk_reconcile_interval_sec)
         ),
     )
+
+
+def _build_amounts(d: dict[str, Any], where: str) -> ResourceAmounts:
+    """`_build(ResourceAmounts, …)` with `cpu` read as a number.
+
+    `_build` converts nothing, so `cpu: max` reached Settings as the string
+    "max" — and once `per_app.max` became an item's ceiling
+    (plan-item-size-ceiling D2), `min(2.0, "max")` raised on every sized item.
+    `""` / `"0"` / `"max"` mean "not set" (0) here as they do for sizes
+    (`parse_size`); anything else that is not a number fails the boot, naming
+    the key."""
+    raw = d.get("cpu", 0)
+    if isinstance(raw, str):
+        text = raw.strip()
+        if text in ("", "0", "max"):
+            cpu = 0.0
+        else:
+            try:
+                cpu = float(text)
+            except ValueError:
+                raise ValueError(
+                    f"config {where}.cpu: {raw!r} is not a number of cores "
+                    '(write e.g. 2 or 0.5; 0 / "max" = not set)'
+                ) from None
+    else:
+        cpu = float(raw or 0)
+    return _build(ResourceAmounts, {**d, "cpu": cpu})
 
 
 def _build_sandbox(d: dict[str, Any]) -> SandboxSettings:

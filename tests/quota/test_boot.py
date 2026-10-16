@@ -68,6 +68,37 @@ def test_absent_resources_section_is_all_unset(tmp_path: Path):
     assert s.resources == ResourceSettings()
 
 
+@pytest.mark.parametrize(
+    ("written", "read"),
+    [("max", 0.0), ('"0"', 0.0), ('""', 0.0), ('"4"', 4.0), ("4", 4.0), ("1.5", 1.5)],
+)
+def test_a_cpu_amount_is_read_as_a_number_whatever_its_spelling(
+    tmp_path: Path, written: str, read: float
+):
+    """Review round 1 (plan-item-size-ceiling D2): `per_app.max.cpu: max` reached
+    Settings as the STRING "max" — the loader converts nothing — and, once the
+    max became an item's ceiling, `min(2.0, "max")` raised on every sized item.
+    `""` / `"0"` / `"max"` mean "not set" for cpu as they do for sizes."""
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text(
+        "resources:\n  per_app:\n"
+        f"    default:\n      cpu: {written}\n"
+        f"    max:\n      cpu: {written}\n",
+        encoding="utf-8",
+    )
+    s = load(config_path=cfg, env={})
+    assert s.resources.per_app.default.cpu == read
+    assert s.resources.per_app.max.cpu == read
+
+
+def test_a_cpu_amount_that_is_not_a_number_fails_the_boot(tmp_path: Path):
+    """Loud, naming the key — the way `parse_size` treats a size it cannot read."""
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text("resources:\n  per_app:\n    max:\n      cpu: four\n", encoding="utf-8")
+    with pytest.raises(ValueError, match=r"per_app\.max\.cpu"):
+        load(config_path=cfg, env={})
+
+
 def test_unknown_key_under_resources_is_rejected(tmp_path: Path):
     """The loader validates against a whitelist — a typo must fail the boot, not
     be quietly ignored (`per_user.disc` would otherwise read as no quota)."""

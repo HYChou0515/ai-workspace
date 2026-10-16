@@ -22,7 +22,7 @@ export type ItemEnvironment = {
    *  replica took the request, so an absent item may simply be on another pod. */
   running: boolean;
   /** What somebody set. `null` = nobody has, and the size resolves fresh from
-   *  `min(App ceiling, owner budget)` every time it is asked. */
+   *  `min(App size, owner budget)` every time it is asked. */
   statedCpuCores: number | null;
   statedMemoryBytes: number | null;
   /** What will actually be applied, once the App's ceiling and the owner's
