@@ -22,6 +22,7 @@ from .checks import artifact_valid, exit_zero
 from .engine import Check, StepFailed, _emit, run_step
 from .events import StepOutput
 from .handle import WorkflowHandle
+from .output_format import instruction
 
 logger = logging.getLogger(__name__)
 
@@ -213,6 +214,10 @@ async def agent_write_step(
     if wf.drive_turn is None:
         raise RuntimeError("agent_write_step needs a turn driver (wired by the run driver)")
     drive_turn = wf.drive_turn
+    # D8: the shape the reply must take, told up front, from the same declaration the
+    # gate checks — so the first answer usually needs no repair at all.
+    shape = instruction(outputs, kind if out else "")
+    asked = f"{prompt}\n\n{shape}" if shape else prompt
 
     previous: list[str] = []  # the last attempt's reply, for the retry prompt
 
@@ -221,7 +226,7 @@ async def agent_write_step(
             return await _write(feedback)
 
     async def _write(feedback: str | None) -> Any:
-        coro = drive_turn(_retry_prompt(prompt, feedback, next(iter(previous), None)), tools)
+        coro = drive_turn(_retry_prompt(asked, feedback, next(iter(previous), None)), tools)
         if wf.step_timeout_s is None:
             text = await coro
         else:
