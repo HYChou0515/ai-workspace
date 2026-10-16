@@ -13,7 +13,12 @@ import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 
 import type { Message, MessageCitation, WithheldSource } from "../api/types";
-import type { AgentEntry, StepView, ToolCallView } from "../pages/investigation/agentLog";
+import type {
+  AgentEntry,
+  Interjection,
+  StepView,
+  ToolCallView,
+} from "../pages/investigation/agentLog";
 import {
   buildByMarker,
   kbCiteAnchor,
@@ -300,7 +305,7 @@ export function EntryView({
           color: "var(--accent-h)",
         }}
       >
-        {entry.text}
+        {entry.by ? <InterruptedBy userId={entry.by} /> : entry.text}
       </div>
     );
   }
@@ -440,6 +445,7 @@ export function EntryView({
     <MessageBlock
       message={entry.message}
       at={entry.at}
+      interjection={entry.interjection}
       onOpenCitation={onOpenCitation}
       onRequestAccess={onRequestAccess}
       onReplay={onReplay}
@@ -737,8 +743,23 @@ function StepLine({ step }: { step: StepView }) {
   );
 }
 
+/** plan-interjection Q2/Q9: who took the turn over, by name — the banner's
+ * stored `text` keeps the id, which is what the live/stored de-dupe keys on. */
+function InterruptedBy({ userId }: { userId: string }) {
+  const t = useT();
+  const who = useUser(userId);
+  return <>{t("banner.interrupted", { who: who.name || userId })}</>;
+}
+
+const INTERJECTION_NOTE: Record<Interjection, MsgKey> = {
+  waiting: "interject.waiting",
+  read: "interject.read",
+  queued: "interject.queued",
+};
+
 function MessageBlock({
   message,
+  interjection,
   onOpenCitation,
   onRequestAccess,
   onReplay,
@@ -751,6 +772,8 @@ function MessageBlock({
   message: Message;
   /** The entry's own timestamp — what a message has before it is persisted. */
   at?: number;
+  /** plan-interjection Q9: what is happening to a message sent mid-answer. */
+  interjection?: Interjection;
   onOpenCitation?: (c: MessageCitation) => void;
   onRequestAccess?: (w: WithheldSource) => void;
   onReplay?: () => void;
@@ -864,6 +887,22 @@ function MessageBlock({
           // #847 P7: what was sent with it — the thread's record of the chips.
           <div style={{ marginLeft: mine ? 0 : 28 }}>
             <MarkingChips markings={message.markings} />
+          </div>
+        )}
+        {interjection && (
+          // plan-interjection Q9: sent while the AI was answering — say what
+          // happens to it, so a message that is not answered at once does not
+          // read as ignored.
+          <div
+            data-testid="interjection-note"
+            style={{
+              marginLeft: mine ? 0 : 28,
+              marginTop: 4,
+              fontSize: pxToRem(11),
+              color: "var(--text-paper-d)",
+            }}
+          >
+            {t(INTERJECTION_NOTE[interjection])}
           </div>
         )}
       </div>
