@@ -13,7 +13,7 @@ from typing import NamedTuple
 from specstar import QB, SpecStar
 
 from ..resources import Message
-from ..workflow.run import RunStatus, WorkflowRun
+from ..workflow.run import RunStatus, WorkflowRun, is_execution
 
 
 class RunWindow(NamedTuple):
@@ -53,7 +53,9 @@ def run_windows_of_chat(spec: SpecStar, item_id: str, chat_id: str) -> list[RunW
     for r in rm.list_resources((QB["item_id"] == item_id).build()):
         run = r.data
         assert isinstance(run, WorkflowRun)
-        if run.chat_id == chat_id and run.started is not None:
+        # A page job (#942) is no execution: its chat is a chat, not one a run
+        # took over, so its turns are the chat's own.
+        if run.chat_id == chat_id and run.started is not None and is_execution(run):
             out.append(RunWindow(started=run.started, ended=_end_of(run)))
     return out
 

@@ -2775,6 +2775,8 @@ X」(X 是 `max`);把它調到預設與 `max` 之間的值、存檔、開環境,
 - **聊天裡不再有 workflow**：聊天列表只列真正的聊天（為 run 開的對話、排程的對話不再出現，改在 workspace 的
   Workflows 側欄）；聊天標頭的「Workflows」按鈕、列表上方的「在這個聊天裡啟動」、「New…」選單裡的 workflow、
   聊天裡的進度列與確認卡片都移除，「New…」變成一顆「New chat」按鈕。被 #343 接管過、裡面有人說過話的舊聊天照樣列出。
+  頁面工作（#942 的「頁面：…」對話）**照舊**：它們不是 workflow 的執行，所以照樣列在聊天列表、跑的時候對話上方有進度和
+  停止鍵、在裡面接著問看得到工作的回答；它們不在 Workflows 側欄。
 - **chat-only 的 App（`function.workspace: false`）在網頁上不再有任何 workflow 入口**。以前它們能從聊天的
   「New…」選單或標頭的「Workflows」按鈕啟動 workflow；新的入口（Workflows 側欄、執行分頁、等待提示）只在
   workspace 模式。排程照跑，但停在關卡等人決定的執行，在 chat-only App 的網頁上沒有地方決定。

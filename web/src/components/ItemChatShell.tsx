@@ -6,6 +6,7 @@ import type { Suggestion } from "../api/types";
 import { useItemChat } from "../hooks/useItemChat";
 import { useItemChats } from "../hooks/useItemChats";
 import { useItemCollections } from "../hooks/useItemCollections";
+import { useCancelRun, useRun } from "../hooks/useWorkflow";
 import { publishAgentDraft } from "../lib/agentDraftBus";
 import { subscribeChatRequest } from "../lib/chatRequestBus";
 import { AgentPanel } from "../pages/investigation/AgentPanel";
@@ -15,6 +16,7 @@ import { CollectionsPickerModal } from "./CollectionsPickerModal";
 import { ManageChatsModal } from "./ManageChatsModal";
 import { NewItemPicker } from "./NewItemPicker";
 import { TodoPanel } from "./TodoPanel";
+import { WorkflowProgress } from "./WorkflowProgress";
 
 /** What ItemChatShell feeds straight through to each chat's AgentPanel — the
  * App-manifest-derived chat chrome (mirrors the props WorkspaceShell passes the
@@ -368,6 +370,32 @@ export function ItemChatShell({
   );
 }
 
+/** A page job's progress and Stop, in its own chat (#942 D5). A page job is no
+ * workflow execution, so the Workflows sidebar does not list it; its chat is
+ * where the item sees it run and can stop it. Asked only for a chat the list
+ * flags as a page job's — never for a chat a run once took over (D3). */
+function PageJobProgress({
+  slug,
+  itemId,
+  runId,
+}: {
+  slug: string;
+  itemId: string;
+  runId: string;
+}) {
+  const run = useRun(slug, itemId, runId);
+  const cancel = useCancelRun(slug, itemId);
+  return (
+    <WorkflowProgress
+      run={run.data}
+      declaredPhases={[]}
+      disconnected={(run.failureCount ?? 0) > 0}
+      onStop={() => cancel.mutate(runId)}
+      stopping={cancel.isPending}
+    />
+  );
+}
+
 function ItemChatPanel({
   slug,
   itemId,
@@ -410,6 +438,10 @@ function ItemChatPanel({
       data-testid="item-chat-panel"
       style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0 }}
     >
+      {chat.page_job && chat.run_id && (
+        <PageJobProgress slug={slug} itemId={itemId} runId={chat.run_id} />
+      )}
+
       {/* #613: the agent's todo checklist for THIS chat — pinned above the feed
           like the workflow progress. Locks editing while a turn streams. */}
       <TodoPanel

@@ -28,6 +28,7 @@ from .chat_info import (
     chat_info_from_resource,
     is_chat_resource,
     item_run_status,
+    page_job_chats,
 )
 from .events import GoalUpdated, TodosUpdated
 from .item_conversation_perm import item_conversation_mirror
@@ -253,10 +254,11 @@ def register_chat_routes(
         run_status = item_run_status(spec, investigation_id, runs)
         # Not a run's own conversation (plan-workflow-out-of-chat D3 / D4): the
         # Workflows sidebar lists those; a chat a run took over stays.
+        page_jobs = page_job_chats(runs)
         infos = [
-            chat_info_from_resource(r, default_id, run_status)
+            chat_info_from_resource(r, default_id, run_status, page_jobs)
             for r in conv_rm.list_resources(_item_chats_query(investigation_id))
-            if is_chat_resource(r)
+            if is_chat_resource(r, page_jobs)
         ]
         # Most-recent activity first; chat_id breaks ties for a stable order.
         infos.sort(key=lambda c: (-(c.last_activity_ms or 0), c.chat_id))

@@ -365,7 +365,9 @@ class WorkflowExecutor:
                 ]
             )
             turn = [*prompt_msgs, *(to_rca_message(tm) for tm in produced)]
-            for m in turn:
+            # A page job's chat is a chat (#942 D5): its answer is not a run's
+            # message, or a person continuing it would be answered without it.
+            for m in turn if agent is None else ():
                 m.run_id = run_id or None
                 m.step = step_id
                 m.phase = (ref.phase or None) if ref else None

@@ -228,6 +228,34 @@ describe("ItemChatShell", () => {
     expect(getRun).not.toHaveBeenCalled();
   });
 
+  it("a page job's chat offers the job's progress and Stop (#942 D5)", async () => {
+    // A page job is no workflow execution: its conversation is a chat, and while
+    // the job runs the chat is where the item can stop it (as before #913).
+    stubChatApi([
+      summary({ chat_id: "conversation:pj", run_id: "r1", is_default: true, page_job: true }),
+    ]);
+    vi.spyOn(workflowApi, "getRun").mockResolvedValue({
+      run_id: "r1",
+      item_id: "it",
+      captured_user: "u",
+      status: "running",
+      current_phase: "",
+      phases: [],
+      steps: [],
+      failures: [],
+      started: 1,
+      ended: null,
+      result: null,
+      pending_decision: null,
+      page_job: { kind: "tool", name: "lot-status", input: "{}", deadline: 9 },
+    } as WorkflowRunDTO);
+    const cancel = vi.spyOn(workflowApi, "cancelRun").mockResolvedValue();
+    render();
+    await waitFor(() => expect(screen.getByTestId("wf-progress")).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId("wf-stop"));
+    await waitFor(() => expect(cancel).toHaveBeenCalledWith("topic-hub", "it", "r1"));
+  });
+
   it("auto-opens a default free chat when the hub has none yet", async () => {
     const created = summary({ chat_id: "conversation:auto", is_default: true });
     // First load: empty hub. After createChat invalidates, the chat is listed.

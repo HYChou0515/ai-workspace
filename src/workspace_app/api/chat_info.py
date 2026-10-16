@@ -13,7 +13,7 @@ from typing import Any
 from specstar import QB, SpecStar
 
 from ..resources import Conversation
-from ..workflow.run import WorkflowRun
+from ..workflow.run import WorkflowRun, is_execution
 from .chat_naming import first_user_snippet
 from .schemas import _ChatInfo
 from .timeutil import dt_ms
@@ -32,6 +32,7 @@ def chat_info(
     *,
     status: str | None = None,
     last_activity_ms: int | None = None,
+    page_job: bool = False,
 ) -> _ChatInfo:
     return _ChatInfo(
         chat_id=chat_id,
@@ -43,14 +44,19 @@ def chat_info(
         name_hint=chat_name_hint(conv),
         status=status,
         last_activity_ms=last_activity_ms,
+        page_job=page_job,
     )
 
 
 def chat_info_from_resource(
-    r: Any, default_id: str | None, run_status: dict[str, str]
+    r: Any,
+    default_id: str | None,
+    run_status: dict[str, str],
+    page_jobs: frozenset[str] = frozenset(),
 ) -> _ChatInfo:
     """Build a `_ChatInfo` from a fetched conversation resource — fills the run
-    status + last-activity stamp the bare `chat_info` can't derive (#132)."""
+    status + last-activity stamp the bare `chat_info` can't derive (#132), and
+    whether it is a page job's (`page_job_chats`)."""
     conv = r.data
     assert isinstance(conv, Conversation)
     return chat_info(
@@ -59,6 +65,7 @@ def chat_info_from_resource(
         default_id,
         status=run_status.get(conv.run_id) if conv.run_id else None,
         last_activity_ms=dt_ms(r.info.updated_time),
+        page_job=r.info.resource_id in page_jobs,
     )
 
 
@@ -96,8 +103,17 @@ def is_chat(conv: Conversation) -> bool:
     return any(m.role == "user" and m.driven_by is None and m.run_id is None for m in conv.messages)
 
 
-def is_chat_resource(r: Any) -> bool:
-    """`is_chat` of a fetched conversation resource, as the chat list holds it."""
+def page_job_chats(runs: list[tuple[str, WorkflowRun]]) -> frozenset[str]:
+    """The conversations of the item's page jobs (#942). A page job is no
+    workflow execution (`run.is_execution`): its conversation is a chat the
+    item lists (#942 D5) — a `startTool` one holds no message at all, so "a
+    person spoke in it" could never list it."""
+    return frozenset(run.chat_id for _rid, run in runs if not is_execution(run) and run.chat_id)
+
+
+def is_chat_resource(r: Any, page_jobs: frozenset[str] = frozenset()) -> bool:
+    """`is_chat` of a fetched conversation resource, as the chat list holds it;
+    ``page_jobs`` (`page_job_chats`) are chats whatever they hold."""
     conv = r.data
     assert isinstance(conv, Conversation)
-    return is_chat(conv)
+    return r.info.resource_id in page_jobs or is_chat(conv)
