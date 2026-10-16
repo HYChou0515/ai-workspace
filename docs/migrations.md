@@ -2754,6 +2754,143 @@ rollout 時**已經在跑**的環境:cgroup 還是開的時候的大小,但它�
 **確認做完**(`rollout 後`):在一個有設 `per_app.max` 的 App 的 item 打開「環境」面板,CPU、記憶體欄位下寫著「這個 App 最多
 X」(X 是 `max`);把它調到預設與 `max` 之間的值、存檔、開環境,面板的生效值就是調的值,沒有「受這個 App 的上限限制」。
 
+### 2026-10-16 · 5d1e49ea · #955 工具很多的 item：模型拿到工具目錄，完整 schema 用到才送 {#pr-955}
+
+**設定** — 無。沒有新旋鈕,也沒有要改的 key。
+
+**資料** — 不動。
+
+**k8s · CI 側** — 照常重 build、部署。manifest 沒改。
+
+**行為改變,沒有開關**:一輪送給模型的工具清單裡,**套件 command 只佔一行**——名字 +
+description 的第一句(上限 100 字元)、**沒有參數 schema**。模型要用哪個就直接呼叫它,
+系統回完整描述 + 真的 schema,照著再呼叫一次就執行;模型也可以先 `load_tool` 問用法。
+載入只在那一輪有效。內建工具(`exec`、`read_file` 這些)不受影響,照舊帶完整 schema。
+同時,system prompt 裡那份「每個工具的名字 + 描述 + 完整 JSON schema」的複本**整段移除**,
+換成一段固定長度的說明。
+
+為什麼要動:這兩份清單以前每輪都送,所以工具一多,光工具清單就能把窗口吃掉——有部署量到
+**414,115 字元**的 system prompt。超出窗口時,會拒絕的 endpoint 回 400(我們讀出上限、縮
+歷史重送),**不會拒絕的 endpoint 直接砍掉請求前段**,而前段正是你的 `system_prompt`:
+模型照樣流暢回答,只是沒看到你的指令。量到的差別(5 個套件、14 個 command):19,884 tok → **1,048 tok**(目錄 710 +
+`load_tool` 自己 120 + 那段固定說明 218);每個目錄條目約 51 tok。14 個內建工具不受影響、
+照舊帶完整 schema,把它們算進去的話整輪工具清單是 33,746 → **5,586 tok**。
+
+**代價**:一輪裡第一次用到某個 command 會多一次 round-trip(載入 → 再呼叫)。這會吃掉
+`runner.max_turns`(預設 `10`)的額度:一輪用到 N 個不同的 command,從前要 N+1 步,現在
+最多要 2N+1 步,所以「一輪裡最多用幾個不同的套件 command」從 ~9 掉到 ~4;超過的那一輪
+會收到「已達步數上限」而不是答案。模型被告知可以用一次 `load_tool` 載好幾個(那樣是
+N+2 步),但**如果你們的 item 常常一輪用到四個以上不同的 command,把 `runner.max_turns`
+調高**(`docs/configuration.md` §3 的設定表與 §10 的 yaml 都有這個 key)是這條的出口。
+
+**確認做完**(`rollout 後`):在一個工具很多的 item 送一句話,然後看那一輪的 LLM 呼叫記錄——
+路徑從 pod 自己的 `config.resolved.yaml` 讀 `observability.llm_log.dir`(開機寫在 config.yaml
+旁邊、0600),**不要照 repo 的預設值**,你們的 WORKDIR 不一定一樣:
+
+```
+printenv WORKSPACE_APP_CONFIG            # 沒設就是 cwd 的 ./config.yaml
+grep -n -A3 "llm_log" <config 所在目錄>/config.resolved.yaml
+tail -5 <上面讀到的 dir>/$(date +%F)/index.jsonl   # 每通呼叫一行,有 seq / ts / file
+```
+
+**要看那一輪的第一通呼叫**,不是最新的一筆:同一輪在載入之後的每一通都會帶著已載入
+command 的完整 schema——那正是這個功能在做的事。從 `index.jsonl` 認出你那一輪的幾行
+(看 `ts`),開 `seq` **最小**那一行的 `file`。
+
+⚠️ 不要用檔名猜:`0001-…` 不是「那一輪的第一通」,`seq` 是**每個 process** 從 0 開始的
+(pod 重啟後同一天會有兩個 `0001-`,跨午夜的那天可能根本沒有)。也不要用
+`ls -t … | head -1`:`index.jsonl` 寫在 record 之後,mtime 可能更新,而它沒有 `request`。
+
+那一筆裡:`request.messages[0].content` 就是 system prompt,字元數會掉**一到兩個數量級**
+(本機同一組工具量到的是 83,180 → 874 字元;你們的絕對值取決於自己的工具數與描述長度);
+`request.tools` 裡的套件 command 只有名字 + 一行描述 + `[套件名]`、`properties` 是空的。
+⚠️ 那些記錄裡 `api_key` 是明文(它設計成可重播),貼出來前先拿掉。
+
+**漏做的症狀** — 沒有「漏做」:這是單向的縮減,不需要運營方動手。但如果某個 item 的流程
+原本靠「模型一開始就看得到所有 schema」,它會變成每輪多一次載入;那是預期的代價,不是故障。
+
+### 2026-10-16 · 32d97a22 · #913 Workflow 移出聊天：每個 node 只看它引用的東西，執行在 workspace 的 Workflows 側欄 {#pr-913}
+
+**設定** — 沒有新 key，沒有要做的事。**行為改變，沒有開關**：
+
+- **啟動 workflow 不再接受 `chat_id`**（`POST /a/{slug}/items/{item_id}/run?chat_id=…` 回 **400**，訊息寫明原因，
+  而且整個呼叫什麼都不做：不寫上傳的檔案、不啟動 run）。以前帶 `chat_id` 會讓 run 接管那個既有聊天（#343）；
+  現在從網頁或 API 啟動的 run 都開一個自己的對話，聊天不會被接管（`docs/plan-workflow-out-of-chat.md` D3）。
+  排程照舊：同一個排程的執行共用那個排程的一個對話（一次一個），每則訊息標著是哪個執行的。
+  **rollout 前**：如果你們有自己的腳本或外部系統會帶 `chat_id` 呼叫這支，把參數拿掉。為什麼：它現在會被明確拒絕，
+  而不是默默忽略。沒做的症狀：那支腳本每次都拿到 400，訊息裡寫著 `chat_id is no longer accepted`。
+  不帶 `chat_id` 的呼叫（包含 #197 的外部觸發、上傳輸入檔一起送的那種）完全不受影響。
+- **workflow 的 agent node 不再讀它所在對話的歷史**。node 只看得到自己的 prompt 裡明寫的東西（引用的上游 `outputs`、
+  檔案、`input.json`）；以前它會讀整串對話，包括被接管前的聊天、前面每個 step 的回覆、同一個排程對話裡之前的 run。
+  出貨的 workflow 都已確認不依賴這件事（計畫 P1）。**rollout 前**：檢查**自訂的 workflow**（workspace 的
+  `.workflows/*.json`、自己寫的 `run.py`）——若有 node 的 prompt 寫「依照上面的內容」卻沒有指名要讀哪個檔案，
+  改成在 prompt 裡指名檔案或引用上游的 `outputs`。為什麼：升版後它看不到前文。沒做的症狀：那個 node 的回答
+  像是沒看到前面的步驟（它真的沒看到）。
+  一個 agent step 沒過檢查而重試時，重試的 prompt 裡會附上它上一次的回答（最多 4000 字）——以前它是從對話歷史看到的。
+- **聊天裡不再有 workflow**：聊天列表只列真正的聊天（為 run 開的對話、排程的對話不再出現，改在 workspace 的
+  Workflows 側欄）；聊天標頭的「Workflows」按鈕、列表上方的「在這個聊天裡啟動」、「New…」選單裡的 workflow、
+  聊天裡的進度列與確認卡片都移除，「New…」變成一顆「New chat」按鈕。被 #343 接管過、裡面有人說過話的舊聊天照樣列出。
+  頁面工作（#942 的「頁面：…」對話）**照舊**：它們不是 workflow 的執行，所以照樣列在聊天列表、跑的時候對話上方有進度和
+  停止鍵、在裡面接著問看得到工作的回答；它們不在 Workflows 側欄。
+- **chat-only 的 App（`function.workspace: false`）在網頁上不再有任何 workflow 入口**。以前它們能從聊天的
+  「New…」選單或標頭的「Workflows」按鈕啟動 workflow；新的入口（Workflows 側欄、執行分頁、等待提示）只在
+  workspace 模式。排程照跑，但停在關卡等人決定的執行，在 chat-only App 的網頁上沒有地方決定。
+  **rollout 前**：若有 chat-only 的 App 的 profile 帶著 workflow（`app.json` 的 `function.workspace` 為 false、profile 有
+  `workflows`），決定它要不要改成 workspace 模式。沒做的症狀：使用者找不到原本聊天裡的 workflow 按鈕。
+- **一般聊天不再讀到 run 的內容**：run 寫下的訊息帶有標記，聊天組 context 時排除；以前被 #343 接管過的舊聊天，
+  run 那段時間內沒有標記的訊息也一併排除——人自己打的字除外，一律保留。
+- **用文字修改執行（steer）時，steer 回的 JSON 不再出現在對話裡**：以前那段 JSON 會被當成 agent 的回覆存進執行的對話、
+  也會即時串流出來（解析失敗重試時最多三次），而使用者自己寫的要求反而看不到。現在只顯示確認卡片，卡片上寫著那句要求；
+  提不出計畫時，執行分頁寫出原因。按 Stop 會連 steer 的那一輪一起停掉。
+- **workflow 改在 workspace 左側的「Workflows」**（活動列上唯一印出名字的圖示）啟動與追蹤：上半列出能啟動的 workflow，
+  下半列出這個 item 的執行（新的在上：名稱與開始時間、狀態、「Step N of M」、排程啟動的標「Scheduled」）；
+  有執行在等人決定時，圖示上有數字。
+- **執行開在編輯區的分頁**：分頁名稱是「workflow 名 · 開始時間」，列出每個階段（預設收合；跑到的、等人決定的、
+  失敗的會打開而且收不起來），等人決定的在那一列直接決定；失敗的那一列有「Continue from here」（已經做完的跳過）、
+  「Re-run this step」（那一步重做，後面的照輸入有沒有變決定要不要重做）、「Inputs」（打開它讀的 `input.json`）；
+  `⋯` 裡的「Change this execution…」是以前的 steer。新路由 `POST /a/{slug}/items/{item_id}/runs/{run_id}/retry`。
+  同一個 workflow 的執行共用一份 journal，所以**只有最新的那一次**提供結果檔、transcript、Inputs、Continue、
+  Re-run、修改與關卡決定（對較舊的執行呼叫 `…/retry`、`…/steer`、`…/steer/confirm` 的 approve、`…/decisions`
+  都回 409）；較舊的執行會寫明「有更新的執行跑過了」，還在等的只能 Stop，它自己的訊息照樣看得到。
+  兩個人同時按 Continue 只會跑一次；按 Continue 後立刻按 Stop，它就不會開始。
+- 執行的分頁有「Open a chat with these results」（執行結束後）和失敗那一列的「Ask AI why it failed」：開一個**新**聊天，
+  把執行的編號、結果檔（或那一步的錯誤與 transcript 路徑）放進輸入框，不會自動送出。聊天裡的 AI 可以用
+  `show_file` 叫出某個執行的卡片（路徑就是執行的編號 `workflow-run:<uuid>`），只限這個 item 的執行。
+- **排程總表（`/schedules`）的「上次執行」連到那個執行的分頁**（`/a/<slug>/<item>?open=<執行編號>`），
+  不再連到排程的對話（`?chat=`）。舊的 `?chat=` 書籤會打開 item，但落在最近的聊天上。
+  **workflow 失敗的通知**也改連到那個執行的分頁（以前的 `/a/<slug>/items/<item>` 對不到任何頁面），標題改成
+  「A workflow failed at “…”」。
+- 有執行在等人決定時，workspace 頂列下方會出現一條提示（哪個執行、等什麼），按 Open 到那個執行的分頁；
+  不會自己消失，可以關掉，下一個關卡會再提示；那個執行的分頁在前面時不顯示。已經有更新的執行的舊執行不算在等
+  （它只能 Stop），不出現在提示與圖示的數字裡。`GET …/runs` 的每一筆多了 `latest`（是不是那個 workflow 最新的一次），而且**不再回傳頁面工作**（#942 的 page job）：它們不是 workflow 的執行。`/wui` 底下沒有列頁面工作的路由（單一件用 `GET …/wui/jobs/{job_id}` 查）；它們在 item 的聊天列表上（「頁面：…」）。**rollout 前**：如果你們有外部腳本靠這支列出頁面工作，改用 run 的通用列表 `GET /api/workflow-run/data`，篩這個 item 的、`page_job` 不是 null 的那些。沒做的症狀：腳本列不到頁面工作。沒有執行在跑時，畫面每 30 秒重新看一次這個 item 的執行
+  （有在跑的時候每 2 秒），所以排程或別人啟動的執行也會出現。
+- 一個階段的步驟若因為之前的執行已經做過而直接沿用（journal 快取），`WorkflowRun.phases` 裡那個階段的狀態現在是
+  `skipped`（畫面上「Already done」），以前停在 `pending`（「Not started」）。
+- **`GET …/runs/{run_id}` 和 `…/runs/{run_id}/stream` 會檢查這個 run 屬於網址裡的 item**，不屬於就回 404。
+  以前不檢查：對某個 item 有讀取權，就能用它的網址讀到別的 item 的 run 和即時串流。正常的呼叫（用 run 自己的 item）不受影響；
+  **rollout 前**：若有外部腳本用錯的 item 網址去讀 run，改成用 run 自己的 item 網址。為什麼：那是一個跨 item
+  讀取的漏洞，現在被擋下。沒做的症狀：那支腳本拿到 404 `unknown run`。
+  `GET …/runs/{run_id}` 只讀那一個 run（它每秒被輪詢）；執行分頁要的結果檔、是不是最新、`input.json` 在
+  新的 `GET …/runs/{run_id}/files`。
+- 每個 agent step 會在 journal 裡、產物旁邊多寫一份 `step_<名稱>/<key 或 main>.transcript.md`（prompt、思考、
+  tool 呼叫與回覆），供「問 AI 為什麼失敗」讀取。它和產物一樣是「已經發生的事的紀錄」，不受 workspace 容量上限擋
+  （和 journal 的紀錄同一條規則，#538）；它和產物一起被 steer 作廢、被 map 清理。
+
+**資料** — 不用 migrate，沒有 `Schema` 升版。`Message` 多了三個有預設值的欄位（`run_id`、`step`、`phase`），
+舊資料照樣讀得出來。`WorkflowRun` 沒有新欄位：側欄的「Scheduled」讀 #932 加的 `from_schedule`，所以 #932 之前由排程
+啟動的執行不會標——這是預期的，不用補。
+
+**k8s · CI 側** — 沒有新的 manifest、env、probe 或 JobType；照常重 build、照常部署。
+
+**確認做完**（`rollout 後`）：
+
+- `curl -X POST '<api>/a/<slug>/items/<item>/run?chat_id=<這個 item 的一個聊天 id>'` 回 400 且訊息含
+  `chat_id is no longer accepted`。沒部署到這一版的症狀：回 202，run 接管了那個聊天（給一個不存在的 id 時，舊版回 404）。
+- 用另一個 item 的網址讀某個 run：`curl '<api>/a/<slug>/items/<另一個 item>/runs/<run>'` 回 404。
+  沒部署到這一版的症狀：回 200 和那個 run 的內容。
+- 打開一個 workspace 模式的 item：左側活動列有印著「Workflows」的圖示，點開列出它的 workflow 與執行。
+  沒部署到這一版的症狀：活動列沒有這個圖示，聊天標頭還有「Workflows」按鈕、「New…」選單裡列著 workflow。
+
 ### 2026-10-16 · #968 Deploy 說出誰打得開這個連結 {#pr-968}
 
 **設定** — 無。

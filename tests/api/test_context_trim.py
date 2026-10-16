@@ -342,59 +342,6 @@ def test_the_kb_notice_is_not_repeated_every_turn():
     assert len([m for m in _kb_thread(client, chat) if m["role"] == "notice"]) == 1
 
 
-async def test_a_workflow_turn_also_says_when_it_stops_reading_the_thread(monkeypatch):
-    """The third surface. A workflow agent node runs on a REAL conversation the
-    user can open, and `_common` already computes the note for it — it was just
-    dropped on the floor, so a run that quietly forgot its earlier steps looked
-    like a model that had gone vague.
-
-    Announcing is unconditional (§3): "nobody is watching right now" is an
-    argument for persisting it, not for skipping it.
-    """
-    import workspace_app.api.app as app_mod
-    from workspace_app.api import create_app
-    from workspace_app.api.events import MessageDelta, RunDone
-    from workspace_app.api.runner import ScriptedAgentRunner
-    from workspace_app.api.workflow_exec import WorkflowExecutor
-    from workspace_app.apps.playground.model import PlaygroundItem
-    from workspace_app.filestore.specstar_impl import SpecstarFileStore
-    from workspace_app.resources import Conversation, Message, make_spec
-    from workspace_app.sandbox.mock import MockSandbox
-
-    spec = make_spec()
-    captured: dict[str, WorkflowExecutor] = {}
-    real = app_mod.WorkflowExecutor
-    monkeypatch.setattr(
-        app_mod, "WorkflowExecutor", lambda **kw: captured.setdefault("ex", real(**kw))
-    )
-    create_app(
-        spec=spec,
-        sandbox=MockSandbox(),
-        filestore=SpecstarFileStore(spec),
-        runner=ScriptedAgentRunner([MessageDelta(text="ok"), RunDone()]),
-        context_limit=1_000,  # tiny ceiling ⇒ the thread cannot fit
-    )
-    item_id = (
-        spec.get_resource_manager(PlaygroundItem)
-        .create(PlaygroundItem(title="t", owner="u", profile="echo"))
-        .resource_id
-    )
-    conv_rm = spec.get_resource_manager(Conversation)
-    rid = conv_rm.create(
-        Conversation(
-            item_id=item_id,
-            messages=[
-                Message(role="user", content="量測資料異常" * 200 + str(i)) for i in range(6)
-            ],
-        )
-    ).resource_id
-
-    await captured["ex"].drive_turn(item_id, rid, "u", "接著做", None)
-
-    after = conv_rm.get(rid).data.messages
-    assert [m for m in after if m.role == "notice"], "a reduced workflow turn must say so"
-
-
 def test_the_notice_never_reaches_the_model():
     """The marker is persisted in the thread, so it must be provably invisible
     to the LLM. Otherwise telling the user "I can no longer read the earlier

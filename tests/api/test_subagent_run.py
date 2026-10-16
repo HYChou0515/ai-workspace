@@ -77,6 +77,27 @@ async def test_the_sub_agent_answers_from_its_own_prompt_and_tools_on_a_clean_co
     assert child.investigation_id == "inv-1"
 
 
+def test_an_ask_kb_sub_agent_does_not_share_the_turns_loaded_tools():
+    """`build_ask_kb_context` is the OTHER `dataclasses.replace` over the
+    turn's context, and it needs the same reset as `_child_context`: a `set`
+    and a `dict` handed over by reference let the child's load decide what the
+    parent's next step carries (round 1 A11). Only the `_child_context` half
+    was pinned — deleting this one reddened nothing (verify round)."""
+    from workspace_app.agent.ask_kb import AskKbSpec, build_ask_kb_context
+
+    parent = dataclasses.replace(
+        _parent(), loaded_tools={"parent-loaded"}, catalog_calls={"p1": ["parent-loaded"]}
+    )
+
+    child = build_ask_kb_context(AskKbSpec(), parent)
+
+    assert child.loaded_tools == set()
+    assert child.catalog_calls == {}
+    child.mark_tool_loaded("child-loaded", call_id="c1")
+    assert parent.loaded_tools == {"parent-loaded"}
+    assert parent.catalog_calls == {"p1": ["parent-loaded"]}
+
+
 async def test_a_sub_agent_cannot_delegate_again():
     """Non-recursion is structural, not a depth counter: the child context simply
     has no delegation seam and no definitions to name, so `run_agent` is not even
@@ -121,6 +142,8 @@ async def test_nothing_belonging_to_the_parents_conversation_or_turn_is_inherite
         kb_passages=[_passage()],
         injected_card_ids={"card-1"},
         subagent_citations={"ask_knowledge_base": [[]]},
+        loaded_tools={"parent-loaded"},
+        catalog_calls={"p1": ["parent-loaded"]},
     )
 
     await run_agent_task(runner, parent, defn, "go")
@@ -137,7 +160,14 @@ async def test_nothing_belonging_to_the_parents_conversation_or_turn_is_inherite
     assert child.kb_passages == []
     assert child.injected_card_ids == set()
     assert child.subagent_citations == {}
+    # Which commands THIS turn loaded, and which calls the catalog answered
+    # (`docs/plan-tool-on-demand-loading.md`). Shared, a child's load made the
+    # parent's next step carry that command's full schema (round 1 A11).
+    assert child.loaded_tools == set()
+    assert child.catalog_calls == {}
     # ...and none of it reached back into the parent.
+    assert parent.loaded_tools == {"parent-loaded"}
+    assert parent.catalog_calls == {"p1": ["parent-loaded"]}
     assert parent.withheld_collection_ids == ["col-x"]
     assert parent.turn_image_urls == ["data:image/png;base64,AAAA"]
     assert len(parent.kb_passages) == 1

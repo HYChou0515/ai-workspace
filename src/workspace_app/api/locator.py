@@ -412,8 +412,8 @@ class ItemLocator:
 
         A run's ``chat_id`` is not a label — `workflow_exec.drive_turn` LOOKS IT
         UP, and one that resolves to nothing falls back to the item's default
-        chat. A page-started run would then read the user's own chat history as
-        its context and append its turns there. The same id is what
+        chat. A page-started run would then append its turns to the user's own
+        chat. The same id is what
         `active_run_for_chat` matches on, so an invented one also means the
         one-run-per-item rule silently stops applying.
         """
