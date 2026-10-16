@@ -53,7 +53,7 @@ async def reads_fingerprint(wf: WorkflowHandle, reads: list[str] | None) -> dict
 def _parse_fields(text: str) -> Any:
     """Parse an agent reply / sandbox stdout as a JSON object → ``result.fields``
     (#428 §1.2). Returns ``None`` on unparseable / non-object output so the step's
-    gate can flag it (and retry with feedback) rather than crashing the run."""
+    gate can flag it (and the step repair or re-run it) rather than crashing the run."""
     try:
         parsed = json.loads(text)
     except (json.JSONDecodeError, ValueError):
@@ -146,7 +146,9 @@ async def agent_write_step(
     is silently left unwritten. Gated by default on ``artifact_valid(out, kind)``
     (plan §2.2): the written file must exist, be non-empty, and — for a structured
     ``kind`` (json/yaml/csv) — PARSE as that format, so a reply that leaks
-    conversational text fails and retries instead of flowing downstream polluted.
+    conversational text fails instead of flowing downstream polluted, and is repaired:
+    a no-tools turn asks for the content alone (plan-workflow-output-repair). A step
+    with ``outputs`` is repaired the same way when its gate reports a format failure.
     ``kind`` defaults to ``text`` (non-empty, like the old ``file_nonempty``).
     Journaled like any step (re-run skips); the input-hash covers the prompt +
     tools + out, so editing any of them re-runs it (§9).

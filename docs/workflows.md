@@ -405,7 +405,7 @@ node 保證 exactly-once。
   顯示在一個 phase node *底下*（「12/20，1 failed」），不是預先畫好的 per-element node。
 - **Live** = SSE（擴充 `api/events.py`，鏡射到 `web/src/events.ts`：
   `PhaseEntered` / `StepStarted` / `StepPassed` / `StepFailed` / `StepSkipped` /
-  `StepRetrying` / `AwaitingHuman`）。**Historical** = 查 `WorkflowRun`。
+  `StepRetrying` / `StepRepairing` / `AwaitingHuman`）。**Historical** = 查 `WorkflowRun`。
 - **Caveat（別誇大）：** 這個骨架是 *宣告* 的 phase 集合；若程式碼對某個 input 跳過/
   重排 phase，diagram 可能漂移。把 phase 維持得粗、大致線性；把沒跑到的 phase
   標成 skipped。

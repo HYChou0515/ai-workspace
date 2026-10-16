@@ -200,12 +200,13 @@ class WorkflowHandle:
         """Per-step wall-clock cap for an agent turn (manual §17); None ⇒ no cap.
         Exceeding it aborts the step (and so the run) to ``error``."""
         self.sub_turn = sub_turn
-        # plan-workflow-output-repair §3.5: record a repair request in the run's chat.
-        # Copied with the handle, so a `map` element records into the same chat.
-        self.record_note = record_note
         """#429 P5: a ``subkey → DriveTurn`` factory the driver wires so ``sub_handle``
         can bind each map element its own turn lane (real parallel agent turns). None ⇒
         sub-handles reuse the parent lane (serialized — the safe default / tests)."""
+        self.record_note = record_note
+        """plan-workflow-output-repair §3.5: record a repair request in the run's
+        workflow chat, beside the answer it asks for. Copied with the handle, so a
+        ``map`` element records into the same chat. None ⇒ nothing is recorded."""
         self.turn_concurrency = turn_concurrency
         """#429 P5: the effective parallel-turn ceiling derived from the model backend's
         concurrency (a single local model → ~1, a hosted/multi-replica pool → larger). It

@@ -104,8 +104,8 @@ async def run_step(
     exists with a matching input-hash and ``cache`` is set; otherwise executes,
     retrying on a failing gate up to ``retries`` times (feeding the failure reason
     back each time), then journals ``{hash, result}``. Raises ``StepFailed`` if the
-    gate never passes. Emits StepSkipped / StepStarted / StepRetrying / StepPassed /
-    StepFailed through the handle's ``emit`` hook (manual §12).
+    gate never passes. Emits StepSkipped / StepStarted / StepRetrying / StepRepairing /
+    StepPassed / StepFailed through the handle's ``emit`` hook (manual §12).
 
     With a ``repair``, a verdict that says the reply's own format failed
     (``CheckResult.format``) is followed by ``repair(verdict)`` instead of a re-run.

@@ -20,8 +20,9 @@ What happens today **[verified]**:
 - A failed check makes `run_step` (`workflow/engine.py:113`) call the step's `execute`
   again. For an agent step that is `drive_turn(_retry_prompt(prompt, feedback), tools)`
   (`steps.py:63`, `:160`): a brand-new turn with the **whole original prompt** plus one
-  sentence of feedback, and **every tool the step holds**. The model reads it as a new
-  task and commonly redoes its tool calls — slow and paid for again.
+  sentence of feedback, and **every tool the step holds**. Nothing stops it redoing its
+  tool calls, and a model handed the whole task again commonly does — slow and paid for
+  again (that part is model behaviour, not read from the code).
 - DSL `retries` defaults to 2 (`dsl.py:141`), so a format slip can cost three full runs
   of the step.
 - The failed reply does reach the next attempt's history (`api/workflow_exec.py`
@@ -32,8 +33,10 @@ What happens today **[verified]**:
   - A `map`'s elements run on their own lanes (`handle.py:243`, `sub_handle`) but
     persist into the **same** workflow chat. With elements in parallel, the reply just
     above in the history may be another element's.
-  - Nothing tells the model the shape it must answer in. `outputs` is used only to check
-    the reply afterwards (`dsl.py:341`). The author's prompt is all the model sees.
+  - Nothing tells the model the shape it must answer in. `outputs` checks the reply
+    afterwards (`dsl.py:452`) and feeds a `map`'s fan-in, but is never put into the
+    prompt: the author's prompt is all the model sees (`dsl.py:341` says the author has to
+    write the shape there).
 
 ## 2. Decisions
 
@@ -86,7 +89,7 @@ failed verdict, with attempts left:
 
 Both spend the same loop counter (D6). When the loop ends the step fails with the last
 reason (D2). A step with no `repair` (a sandbox step with `outputs`, the plain
-`agent_step`) behaves exactly as before.
+`agent_step`) re-runs as before; only its reasons changed (§6: they now carry the value).
 
 ### 3.3 The format instruction (D8) and the repair request (D3)
 
@@ -111,13 +114,16 @@ different shapes:
        the reply does not start with `{`, the text before the first `{` (the usual
        preamble);
      - a field problem: the field name, the value it got and what it must be;
-     - YAML: the line of the parser's `problem_mark`; CSV: the first row whose column
-       count differs from the first row's;
+     - YAML: the line of the parser's `problem_mark`; CSV: the rows whose column count
+       is not the table's (the most common width; on a tie, the last row's) — and none
+       when the parser itself gives up;
+     - an empty reply (a turn that only called tools): "Your reply had no answer in it",
+       and nothing to quote;
   3. the failed reply itself, quoted in full up to 16,000 characters, head and tail
      beyond that **[proposal]**. Quoting it, rather than pointing at "your answer
      above", is what keeps a `map` element from repairing a sibling's answer (§1);
-  4. the instruction above, including the example (D3c), and "Do not redo any work;
-     use what you already found.".
+  4. the instruction above, including the example (D3c), and "Do not redo any work and
+     do not call any tool; rewrite the answer you already have.".
 
 ### 3.4 The repair turn (D1)
 
@@ -149,11 +155,13 @@ The repair request is recorded in the workflow chat as a message with a new role
 
 ### 3.6 Events and the run log (D7)
 
-- A new event, `StepRepairing(phase, name, reason, key)`, type `step_repairing`,
-  mirrored in `web/src/events.ts`.
-- `StepState.status` gains `repairing`; `attempts` counts it like a retry.
-- The step board, timeline and log line show 「修正輸出格式（第 n 次）」 with the reason;
-  `retrying` keeps its current look and words.
+- A new event, `StepRepairing(phase, name, reason, key, repair)`, type `step_repairing`,
+  mirrored in `web/src/events.ts`; `repair` is its number, from 1.
+- `StepState.status` gains `repairing` and a `repairs` count; `attempts` counts it like a
+  retry.
+- The chat's step line, the log view and the step board show 「修正輸出格式（第 n 次）」
+  with the reason; the timeline shows it in the bar's title (its bar has room for the
+  step name only); `retrying` keeps its current look and words.
 
 ## 4. Phases
 
@@ -207,3 +215,36 @@ Where the build adds to or differs from the sections above; this section wins.
   (a button with `aria-expanded`, controlling the region it shows).
 - **A retry's words.** The grill called the unchanged state 「重試中」; the run log in fact
   shows `retrying` and `↻`, and that is what stays. Only a repair has new words.
+
+### Review round 1 (on 44589200)
+
+Four lenses; what they found and what changed:
+
+- **The history windows charged what the model never reads.** `history_items` cut by
+  count and tokens BEFORE filtering by `replays`, so a repair request (a whole quoted
+  reply) dropped real history and persisted a false #624 notice. The filter now runs
+  first: the windows and the usage bar charge the same messages.
+- **A lost write.** The request was appended from a thread, a get-then-update with no
+  etag; a parallel `map` element's persisted answer landing in between was overwritten.
+  It is appended on the loop, like every other writer to the chat.
+- **Whose check is repaired.** `artifact_valid` flagged a parse failure for any file; an
+  author's check of a file the agent wrote with its tools then got a no-tools repair that
+  could not work. Only the reply's own `out` (`of_reply`, set by `agent_write_step`'s
+  default gate) is repaired.
+- **CSV.** A field past the parser's limit made building the request raise; a tie between
+  a one-line preamble and a one-row table quoted the data row. Both fixed (§3.3).
+- **A node with `tools=[]`.** Withholding `read_skill` for an empty subset (P4) applies to
+  every node that asks for no tools, not only a repair turn — a Python `run.py` the
+  scaffold wrote with `tools=[]` (its own comment already says that means NO tools). Kept:
+  an empty list is the runner's "explicit zero"; the runbook entry says so. The DSL maps
+  `tools: []` to the item's tools and is unaffected.
+- **The words.** The timeline now names a repair; the board's clock ticks while one runs;
+  the fold and the log line go through i18n; the missing-field reason lists at most 20
+  names; the runbook's old-image tell is now something an operator can see, and it states
+  what a repair costs.
+- **Known, not changed.** The compaction summariser reads every role, so a repair request
+  can reach a summary (notices and mentions already do). A repair request is recorded
+  before the turn's Stop and workspace-full checks, so a run stopped at that moment leaves
+  a request with no answer under it. The P3 commit says quoting the reply means a `map`
+  element "never" repairs a sibling's answer; it makes that unlikely, not impossible —
+  the repair turn still reads the shared chat.
