@@ -635,6 +635,32 @@ describe("WuiPage — someone the link does not open for (docs/plan-deploy-reach
     expect(screen.queryByRole("button", { name: "申請存取" })).toBeNull();
   });
 
+  it("someone who already asked reads that the request is with the owner — not that they are inside", async () => {
+    // Review round 2: the route also answers `requested: false` when the same
+    // person already asked (its dedup ledger never expires — the App
+    // dashboard's 🔒 row asks under the same key). Keyed on `requested`, that
+    // read 「你已經在這個 workspace 裡」 to someone who is not.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(JSON.stringify({ item_id: "i1", requested: false, already_readable: false }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+      ),
+    );
+    const readFile = vi.fn(async () => {
+      throw new HttpError(403, "read failed: 403");
+    });
+    renderAt("/w/rca/i1/sales/page.ai.yaml", readFile, "zh-TW");
+
+    fireEvent.click(await screen.findByRole("button", { name: "申請存取" }));
+
+    expect(await screen.findByRole("button", { name: "已送出申請" })).toBeDisabled();
+    expect(screen.queryByText(/你已經在這個 workspace 裡/)).toBeNull();
+  });
+
   it("a request that did not go through says so and can be sent again", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response("boom", { status: 500 })));
     const readFile = vi.fn(async () => {

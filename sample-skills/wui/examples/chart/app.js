@@ -88,7 +88,7 @@ function draw(rows) {
     // below still works, so the page is useful while that is sorted out.
     $("empty").hidden = false;
     $("empty").textContent =
-      "chart.umd.js is not in this folder yet — press Rebuild above, or run the build step in README.md.";
+      "chart.umd.js is not in this folder yet — press 重新建置 (Rebuild) above, or run the build step in README.md.";
     return;
   }
 

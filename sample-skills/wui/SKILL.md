@@ -328,8 +328,9 @@ Then tell the user which file to open, in their words: "open **Lot tracker** in
 `lot-tracker/page.ai.yaml`" — and, when the page is for other people, that
 **Deploy** in its toolbar is what puts it on the platform's **WUI** overview,
 where colleagues find it. Deploy is a person's press (someone who may edit the
-item), so say it in the same breath as the file name: a page nobody Deployed is
+workspace), so say it in the same breath as the file name: a page nobody Deployed is
 one only its link can reach. The link opens for exactly the people who may read
 the workspace's files, and a new workspace is private — after Deploy the panel
-says who it opens for and offers **分享設定…**; colleagues who should use the page
+says who it opens for and offers **分享設定…** (or, to someone who may not
+change access, names the owner to ask); colleagues who should use the page
 have to be added there first.

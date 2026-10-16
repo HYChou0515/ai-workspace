@@ -30,7 +30,7 @@ rm -rf package chart.js-*.tgz
 
 So **opening the page is enough**: the pane rebuilds a page with a build step
 when you open it, the build fetches the library, and the chart draws. You can
-also press **Rebuild** above the page, and watch it happen.
+also press **重新建置** (Rebuild) above the page, and watch it happen.
 
 The sandbox has a network; the page does not. That is the whole trick.
 

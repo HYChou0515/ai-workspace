@@ -86,9 +86,12 @@ function RequestAccess({ slug, itemId }: { slug: string; itemId: string }) {
       const answer = await api.requestItemAccess(slug, itemId);
       // The route notifies nobody when the caller can already ENTER the
       // workspace (`read_chat` — the 「In workspace」 role, which still gets
-      // this 403) and says so with `requested: false`: there is no request
-      // to report, only who can raise their role.
-      setState(answer.requested ? "sent" : "inside");
+      // this 403) and says so with `already_readable`: there is no request
+      // to report, only who can raise their role. `requested: false` alone is
+      // not that — it is also a repeat of a request already with the owner
+      // (the route's dedup ledger, shared with the App dashboard's 🔒 row),
+      // which is still "requested".
+      setState(answer.already_readable ? "inside" : "sent");
     } catch {
       setState("failed");
     }
