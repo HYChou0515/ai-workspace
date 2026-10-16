@@ -209,18 +209,29 @@ def _is_person_message(m: Any, at: int) -> bool:
     return getattr(m, "role", "") == "user" and getattr(m, "created_at", None) == at
 
 
-def thread_without(messages: list[Any], ats: Iterable[int]) -> list[Any]:
-    """The thread minus the person's messages stamped `ats` — the ones a turn is
-    about to answer, which it is handed after the history rather than inside it
-    (docs/plan-interjection.md Q1/Q10). A queued question sits ABOVE the answer
-    it waited for (it was persisted first), so "the thread before it" would drop
-    exactly that answer. One message per stamp, the first."""
-    pending = list(ats)
+#: Which person's message: its `created_at` and its author. The stamp alone is
+#: not enough — two people can send in the same millisecond (§9 C14).
+MessageKey = tuple[int, str]
+
+
+def _key_of(m: Any) -> MessageKey | None:
+    if getattr(m, "role", "") != "user":
+        return None
+    return (getattr(m, "created_at", None) or 0, getattr(m, "author", None) or "")
+
+
+def thread_without(messages: list[Any], keys: Iterable[MessageKey]) -> list[Any]:
+    """The thread minus the person's messages `keys` names — the ones a turn is
+    about to answer (handed to it after the history rather than inside it) and
+    the ones nobody has answered yet (docs/plan-interjection.md Q1/Q10, §9 C8).
+    A queued question sits ABOVE the answer it waited for (it was persisted
+    first), so "the thread before it" would drop exactly that answer."""
+    leave_out = list(keys)
     out: list[Any] = []
     for m in messages:
-        at = getattr(m, "created_at", None)
-        if at in pending and getattr(m, "role", "") == "user":
-            pending.remove(at)
+        key = _key_of(m)
+        if key is not None and key in leave_out:
+            leave_out.remove(key)
             continue
         out.append(m)
     return out
@@ -241,7 +252,9 @@ def take_person_message(messages: list[Any], at: int, author: str | None = None)
 _ABOUT_THE_TURN = frozenset({CONTEXT_NOTICE_ROLE, SUMMARY_ROLE})
 
 
-def must_move(messages: list[Any], answering: Iterable[int], unanswered: Iterable[int]) -> bool:
+def must_move(
+    messages: list[Any], answering: Iterable[MessageKey], unanswered: Iterable[MessageKey]
+) -> bool:
     """Whether the messages a turn answers must move to where it reads them
     (docs/plan-interjection.md §9 C8): something sits after the first of them
     that it did not see when it was sent — an answer, a tool result, another
@@ -252,12 +265,11 @@ def must_move(messages: list[Any], answering: Iterable[int], unanswered: Iterabl
     waiting = mine | set(unanswered)
     after = False
     for m in messages:
-        role = getattr(m, "role", "")
-        at = getattr(m, "created_at", None)
+        key = _key_of(m)
         if not after:
-            after = role == "user" and at in mine
+            after = key in mine
             continue
-        if role in _ABOUT_THE_TURN or (role == "user" and at in waiting):
+        if getattr(m, "role", "") in _ABOUT_THE_TURN or key in waiting:
             continue
         return True
     return False
@@ -691,6 +703,10 @@ class PendingTurn:
     # C8): persisted, not yet answered by anyone — so no other turn's rebuilt
     # history may include it. None for a caller that names no message.
     at: int | None = None
+    # …and who sent it (§9 C14). Not `author`, which is deliberately empty for a
+    # goal round so anyone's Stop reaches it; the message itself is still the
+    # goal setter's.
+    sender: str = ""
 
 
 @dataclass
@@ -808,7 +824,9 @@ class QueuedMessage:
 
     author: str
     at: int
-    refresh: Callable[[list[int], set[int], AgentToolContext], Awaitable[bool]] | None = None
+    refresh: (
+        Callable[[list[MessageKey], set[MessageKey], AgentToolContext], Awaitable[bool]] | None
+    ) = None
     on_absorbed: Callable[[], None] | None = None
     speaker: str = ""
     driven: bool = False
@@ -882,9 +900,9 @@ class _TurnQueue:
         if entries:
             self._ready.set()
 
-    def message_ats(self) -> set[int]:
-        """The stamps of the messages waiting here: not yet answered by anyone."""
-        return {e.message.at for e in self._items if e.message is not None}
+    def message_keys(self) -> set[MessageKey]:
+        """The messages waiting here: not yet answered by anyone."""
+        return {(e.message.at, e.message.author) for e in self._items if e.message is not None}
 
     def take(self, wanted: Callable[[_QueueEntry], bool]) -> list[_QueueEntry]:
         """Remove and return every waiting entry `wanted` accepts, in order."""
@@ -1078,6 +1096,11 @@ class ChatTurnEngine:
         # cross-pod bump. Multi-pod injects a specstar-backed control.
         self._turn_control = turn_control or InMemoryTurnControl()
         self._poll_interval = poll_interval
+        # plan-interjection §9 C13: set once `aclose` is past its deadline and
+        # cancelling what is left. A turn cancelled then was not STOPPED — the
+        # pod is going — so what it folded is handed over, not re-queued, and
+        # no worker starts another turn here.
+        self._draining = False
 
     async def _watch_epoch(self, key: str, my_epoch: int, task: asyncio.Task) -> None:
         """Cross-pod cancel backstop (#349): poll the shared epoch and cancel
@@ -1302,6 +1325,12 @@ class ChatTurnEngine:
         worker proceeds to the next; its completion future is then resolved."""
         while True:
             entry = await session.queue.get()
+            if self._draining:
+                # The pod is going (`aclose` past its deadline): nothing starts
+                # here any more. The POST is woken; a claim stays for a peer.
+                if not entry.fut.done():
+                    entry.fut.set_result(None)
+                continue
             # A Stop that landed while the caller was still PREPARING this turn
             # (see `PendingTurn`): there was nothing to cancel then, so honouring
             # it is entirely a matter of not starting now. Checked before the turn
@@ -1342,7 +1371,9 @@ class ChatTurnEngine:
             # it answers put where it reads them when something sits after them.
             places: list[TurnMessage] = []
             if entry.message is not None:
-                answering = [e.message.at for e in group if e.message is not None]
+                answering = [
+                    (e.message.at, e.message.author) for e in group if e.message is not None
+                ]
                 if await self._refresh_history(session, key, entry, answering):
                     places = [
                         TurnMessage(
@@ -1449,7 +1480,11 @@ class ChatTurnEngine:
             entry.fut.set_result(None)
 
     async def _refresh_history(
-        self, session: _WorkspaceSession, key: str, entry: _QueueEntry, answering: list[int]
+        self,
+        session: _WorkspaceSession,
+        key: str,
+        entry: _QueueEntry,
+        answering: list[MessageKey],
     ) -> bool:
         """Rebuild the turn's history from the thread as it stands NOW
         (plan-interjection Q1/Q10), leaving out every message nobody has
@@ -1465,8 +1500,8 @@ class ChatTurnEngine:
         if refresh is None:
             return False
         pending = {
-            p.at for p in session.pending_turns if p.at is not None and not p.cancelled
-        } | session.queue.message_ats()
+            (p.at, p.sender) for p in session.pending_turns if p.at is not None and not p.cancelled
+        } | session.queue.message_keys()
         try:
             return await refresh(answering, pending - set(answering), entry.ctx)
         except Exception:  # noqa: BLE001 — the accept-time history still stands
@@ -1525,6 +1560,8 @@ class ChatTurnEngine:
         - The worker itself is closing (a drain): nothing will run here again;
           their POSTs are woken and their claims stay owed for a peer."""
         cancelled = turn.done() and turn.cancelled()
+        # Cancelled by a drain past its deadline is not a Stop: hand over.
+        closing = closing or self._draining
         if cancelled and not closing and folded:
             logger.info("turns: worker %s returns %d unanswered message(s)", key, len(folded))
             session.queue.put_front(folded)
@@ -1731,7 +1768,7 @@ class ChatTurnEngine:
 
     @contextlib.asynccontextmanager
     async def preparing(
-        self, key: str, author: str = "", at: int | None = None
+        self, key: str, author: str = "", at: int | None = None, sender: str | None = None
     ) -> AsyncIterator[PendingTurn]:
         """Own the window in which a send is preparing a turn, and yield its token.
 
@@ -1744,7 +1781,7 @@ class ChatTurnEngine:
 
         `author` scopes what a Stop by a named person may decline; see
         `PendingTurn`."""
-        pending = PendingTurn(author=author, at=at)
+        pending = PendingTurn(author=author, at=at, sender=author if sender is None else sender)
         session = self._ws_session(key)
         session.pending_turns.add(pending)
         # plan-graceful-shutdown P3: the turn's claim is opened before this
@@ -2118,8 +2155,9 @@ class ChatTurnEngine:
         # Three shapes: a turn running, turns queued, and a send still
         # PREPARING its turn (its claim is open, its turn does not exist yet —
         # `pending_turns`; a workspace session's — the KB chat enqueues on its
-        # own engine's workspace sessions too, but never through `preparing()`,
-        # and the `_TurnSession` shape has neither queue nor preparation).
+        # own engine's workspace sessions too, and since plan-interjection §9 C8
+        # also prepares through `preparing()`, though it opens no claim; the
+        # `_TurnSession` shape has neither queue nor preparation).
         unfinished = [
             key
             for key, session in (*self._ws_sessions.items(), *self._sessions.items())
@@ -2148,6 +2186,8 @@ class ChatTurnEngine:
         for session in self._ws_sessions.values():
             for waiting in session.pending_turns:
                 waiting.cancelled = True
+        # From here on a cancelled turn is the pod going, not a Stop (§9 C13).
+        self._draining = True
         stragglers = self._live_turns()
         for task in stragglers:
             task.cancel()

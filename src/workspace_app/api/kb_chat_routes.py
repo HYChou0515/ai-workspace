@@ -83,6 +83,7 @@ from .turns import (
     CONTEXT_NOTICE_ROLE,
     PLACE_ROLE,
     ChatTurnEngine,
+    MessageKey,
     QueuedMessage,
     TurnMessage,
     already_noticed,
@@ -949,7 +950,7 @@ def register_kb_chat_routes(
             )
 
             async def refresh(
-                answering: list[int], pending: set[int], ctx: AgentToolContext
+                answering: list[MessageKey], pending: set[MessageKey], ctx: AgentToolContext
             ) -> bool:
                 # docs/plan-interjection.md Q1: answered with the thread as it stands
                 # when the turn starts — minus every message nobody has answered yet

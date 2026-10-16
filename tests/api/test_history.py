@@ -596,15 +596,27 @@ def test_a_message_moves_only_when_something_it_did_not_see_sits_after_it():
     summary written while it was being prepared is about it, not news to it."""
     from workspace_app.api.turns import must_move
 
-    fresh = [_T("user", "Q1", 1), _T("notice", "older left out", 2)]
-    assert must_move(fresh, [1], set()) is False
-    waited = [_T("user", "Q2", 2), _T("assistant", "A1", 3)]
-    assert must_move(waited, [2], set()) is True
+    fresh = [_T("user", "Q1", 1, "a"), _T("notice", "older left out", 2)]
+    assert must_move(fresh, [(1, "a")], set()) is False
+    waited = [_T("user", "Q2", 2, "a"), _T("assistant", "A1", 3)]
+    assert must_move(waited, [(2, "a")], set()) is True
     # Another unanswered question after it is not something it read past.
-    behind = [_T("user", "Q2", 2), _T("user", "Q3", 4)]
-    assert must_move(behind, [2], {4}) is False
+    behind = [_T("user", "Q2", 2, "a"), _T("user", "Q3", 4, "b")]
+    assert must_move(behind, [(2, "a")], {(4, "b")}) is False
     # …but one already answered (it sits with its answer) is.
-    assert must_move([_T("user", "Q2", 2), _T("user", "Q3", 4)], [2], set()) is True
+    assert must_move(behind, [(2, "a")], set()) is True
+
+
+def test_leaving_out_a_message_leaves_out_that_persons_not_anyones_same_millisecond():
+    """§9 C14 (review round 2): Ann's question is the turn's, Bob's — sent in
+    the same millisecond — is still unanswered and must stay out too, but by
+    its own key. By stamp alone the first match went, so Ann's own question
+    stayed in her history (and was her prompt too) while Bob's was dropped."""
+    from workspace_app.api.turns import thread_without
+
+    thread = [_T("user", "Bob's", 5, "bob"), _T("user", "Ann's", 5, "ann"), _T("assistant", "A", 6)]
+    assert [m.content for m in thread_without(thread, [(5, "ann")])] == ["Bob's", "A"]
+    assert [m.content for m in thread_without(thread, [(5, "ann"), (5, "bob")])] == ["A"]
 
 
 def test_placing_a_message_finds_its_author_too():

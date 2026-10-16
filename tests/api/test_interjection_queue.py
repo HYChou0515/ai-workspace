@@ -56,10 +56,12 @@ def _message(
     was asked to leave out and says whether the answered messages must move
     (`place`: a real surface says so when something now sits after them)."""
 
-    async def refresh(answering: list[int], pending: set[int], ctx: AgentToolContext) -> bool:
-        log.append(("refresh", author, at, answering))
-        log.append(("pending", at, sorted(pending)))
-        ctx.history = [{"role": "assistant", "content": f"thread without {answering}"}]
+    async def refresh(answering: list[Any], pending: set[Any], ctx: AgentToolContext) -> bool:
+        log.append(("refresh", author, at, [a for a, _ in answering]))
+        log.append(("pending", at, sorted(a for a, _ in pending)))
+        ctx.history = [
+            {"role": "assistant", "content": f"thread without {[a for a, _ in answering]}"}
+        ]
         return place
 
     def on_absorbed() -> None:
@@ -245,7 +247,7 @@ async def test_a_refresh_that_fails_keeps_the_history_the_message_was_accepted_w
     runner = _GatedRunner()
     engine = ChatTurnEngine(runner)  # ty: ignore[invalid-argument-type]
 
-    async def broken(answering: list[int], pending: set[int], ctx: AgentToolContext) -> bool:
+    async def broken(answering: list[Any], pending: set[Any], ctx: AgentToolContext) -> bool:
         raise RuntimeError("store down")
 
     f1 = engine.enqueue(
@@ -713,7 +715,7 @@ async def test_a_takeover_while_the_next_turn_is_still_preparing_answers_it_as_t
     rebuilding = asyncio.Event()
     go_on = asyncio.Event()
 
-    async def slow(answering: list[int], pending: set[int], ctx: AgentToolContext) -> bool:
+    async def slow(answering: list[Any], pending: set[Any], ctx: AgentToolContext) -> bool:
         rebuilding.set()
         await go_on.wait()
         return True
@@ -767,7 +769,7 @@ async def test_a_takeover_before_the_turns_first_step_still_ends_it_on_the_recor
 
     rebuilt = asyncio.Event()
 
-    async def signals(answering: list[int], pending: set[int], ctx: AgentToolContext) -> bool:
+    async def signals(answering: list[Any], pending: set[Any], ctx: AgentToolContext) -> bool:
         rebuilt.set()
         return True
 
@@ -797,6 +799,56 @@ async def test_a_takeover_before_the_turns_first_step_still_ends_it_on_the_recor
     assert "a2" in ended, "Ann's second turn was cancelled before it began and wrote nothing"
 
 
+async def test_a_drain_does_not_restart_what_the_turn_it_cancelled_had_folded():
+    """§9 C13 (review round 2, F1): past its deadline a drain cancels the
+    running turn — that is not a Stop. Treated as one, the messages the turn
+    had folded went back to the queue and the worker started them as a new turn
+    on the pod that was shutting down, still running after `aclose` returned
+    while a peer re-ran the same question. The drain hands them over instead:
+    nothing restarts here, and every waiting POST is woken."""
+    from workspace_app.turn_control.memory import InMemoryTurnControl
+
+    class _SlowControl(InMemoryTurnControl):
+        async def current(self, key: str) -> int:  # a store round trip, as in prod
+            await asyncio.sleep(0.02)
+            return await super().current(key)
+
+    class _Blocks:
+        def __init__(self) -> None:
+            self.turns: list[str] = []
+            self.started = asyncio.Event()
+
+        async def run(self, content: str, ctx: AgentToolContext):
+            self.turns.append(content)
+            self.started.set()
+            await asyncio.sleep(30)
+            yield RunDone()
+
+    runner = _Blocks()
+    engine = ChatTurnEngine(runner, turn_control=_SlowControl())  # ty: ignore[invalid-argument-type]
+    log: list[Any] = []
+    f1 = engine.enqueue(
+        "chat",
+        "Q1",
+        AgentToolContext(),
+        on_complete=lambda p: None,
+        message=_message("ann", 1, log),
+    )
+    f2 = engine.enqueue(
+        "chat",
+        "Q2",
+        AgentToolContext(),
+        on_complete=lambda p: None,
+        message=_message("ann", 2, log),
+    )
+    await asyncio.wait_for(runner.started.wait(), 3)
+    await engine.aclose(timeout=0.1)
+    await asyncio.sleep(0.3)  # anything restarted would have begun by now
+    assert runner.turns == ["Q2"]
+    assert f1.done() and f2.done()
+    assert ("absorbed", "ann", 1) not in log  # handed over, still owed
+
+
 async def test_a_stop_before_the_turns_first_step_still_ends_it_on_the_record():
     """§9 C11, the same window for Stop: pressed in the loop pass the turn's
     task is created, a bare `cancel()` skipped the turn's body — no ending, no
@@ -823,7 +875,7 @@ async def test_a_stop_before_the_turns_first_step_still_ends_it_on_the_record():
 
     rebuilt = asyncio.Event()
 
-    async def signals(answering: list[int], pending: set[int], ctx: AgentToolContext) -> bool:
+    async def signals(answering: list[Any], pending: set[Any], ctx: AgentToolContext) -> bool:
         rebuilt.set()
         return True
 

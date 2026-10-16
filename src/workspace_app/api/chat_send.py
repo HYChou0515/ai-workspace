@@ -61,6 +61,7 @@ from .turn_gate import admit_turn
 from .turns import (
     CONTEXT_NOTICE_ROLE,
     PLACE_ROLE,
+    MessageKey,
     QueuedMessage,
     _terminal_error,
     already_noticed,
@@ -1028,7 +1029,9 @@ class ChatSendService:
         history when it starts, and how to settle the message when another
         message's turn answered it (its claim is then done)."""
 
-        async def refresh(answering: list[int], pending: set[int], ctx: AgentToolContext) -> bool:
+        async def refresh(
+            answering: list[MessageKey], pending: set[MessageKey], ctx: AgentToolContext
+        ) -> bool:
             if ctx.history_builder is None:
                 return False
             fresh = self._conv_rm.get(rid).data
@@ -1052,7 +1055,7 @@ class ChatSendService:
             driven=driven,
         )
 
-    def _owed_on(self, engine_key: str) -> set[int]:
+    def _owed_on(self, engine_key: str) -> set[MessageKey]:
         """The stamps of the messages on `engine_key` still owed a reply, on any
         pod (their claims are open). Empty when there is no claim store, or it
         cannot be read — the engine's own record still covers this pod."""
@@ -1060,7 +1063,7 @@ class ChatSendService:
             return set()
         try:
             return {
-                r.claim.created_at
+                (r.claim.created_at, r.claim.author)
                 for r in self._turn_claims.list_open()
                 if r.claim.key == engine_key
             }
@@ -1300,6 +1303,8 @@ class ChatSendService:
                 # plan-interjection §9 C8: the message this preparation is for —
                 # persisted, unanswered, so no other turn's history may hold it.
                 at=created,
+                # The message is the author's even when the round is the goal's.
+                sender=author,
             ) as pending:
                 env = await resolve_env() if resolve_env is not None else caller_env
                 # #739: compact BEFORE the turn is built — the thread is final for this
