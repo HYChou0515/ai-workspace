@@ -333,6 +333,14 @@ def history_items(
                 _fold_cancellation_marker(items)
             elif kind == "max_turns":
                 _fold_cancellation_marker(items, _STEP_LIMIT_MARKER)
+            elif kind == "interrupted":
+                # plan-interjection Q2: cut off AND by whom — the next message
+                # is that person's, and it is theirs to answer.
+                by = getattr(m, "author", None)
+                who = speaker_label(users.get(by)) if users is not None and by else "someone"
+                _fold_cancellation_marker(
+                    items, f"[Response interrupted by a new message from {who}]"
+                )
             continue
         if m.role == SUMMARY_ROLE:
             # Replayed as `user`, not `system`: a system item mid-conversation
@@ -396,7 +404,10 @@ class TurnMessage:
     tool_display: str = ""
     created_at: int = field(default_factory=_now_ms)
     metrics: MessageMetrics | None = None
-    error_kind: str | None = None  # role=error: error | cancelled | max_turns
+    error_kind: str | None = None  # role=error: error | cancelled | interrupted | max_turns
+    # role=error, error_kind="interrupted" (docs/plan-interjection.md Q2): who sent
+    # the message that stopped this turn. Persisted on the message's own `author`.
+    author: str | None = None
     # #113: "repetition" when the turn was stopped for a degenerate loop — the
     # FE renders a notice and `content`/`reasoning` is truncated to before it.
     stopped_reason: str | None = None
@@ -453,6 +464,14 @@ def _terminal_error(exc: BaseException) -> RunError:
 def _error_message(item: RunError | RunCancelled | MaxTurnsExceeded) -> TurnMessage:
     """Render a terminal failure event as a persistable error message
     (issue #37). `error_kind` drives the next-turn history policy."""
+    if isinstance(item, RunCancelled) and item.by:
+        # plan-interjection Q2: another person's message took the turn over.
+        return TurnMessage(
+            role="error",
+            content="The previous response was interrupted by a new message.",
+            error_kind="interrupted",
+            author=item.by,
+        )
     if isinstance(item, RunCancelled):
         return TurnMessage(
             role="error", content="The previous response was interrupted.", error_kind="cancelled"
@@ -844,6 +863,11 @@ class _WorkspaceSession:
     # `enqueue`, so this holds only the ones a Stop should still be able to
     # reach — never a message already waiting its turn in the queue.
     pending_turns: set[PendingTurn] = field(default_factory=set)
+    # docs/plan-interjection.md Q2: whose message the running turn answers (None
+    # when it answers none — a workflow step), and who stopped it, if another
+    # person's message did. Both belong to `current_turn` and are reset with it.
+    running_author: str | None = None
+    interrupted_by: str = ""
     # queue → the subscriber's user id ("" for an anonymous stream, e.g. per-chat /
     # workflow streams that don't participate in presence). #455 tracks it here so
     # a join/leave can broadcast the roster. Each queue element is a `(seq, event)`
@@ -1180,9 +1204,24 @@ class ChatTurnEngine:
         fut: asyncio.Future[None] = asyncio.get_running_loop().create_future()
         session.pending_turns.discard(pending) if pending is not None else None
         stamp = _TurnStamp(surface, accepted_ms if accepted_ms is not None else _now_ms())
-        waited = (
-            session.current_turn is not None and not session.current_turn.done()
-        ) or not session.queue.empty()
+        running = session.current_turn is not None and not session.current_turn.done()
+        waited = running or not session.queue.empty()
+        # plan-interjection Q2: a turn runs as one person. Another person's
+        # message is not read into it — it stops it, and its own turn (next in
+        # line) takes over with the thread as it stands. Only the RUNNING turn:
+        # nobody's preparing send is touched, unlike a Stop.
+        if (
+            running
+            and message is not None
+            and session.running_author is not None
+            and message.author != session.running_author
+        ):
+            assert session.current_turn is not None
+            logger.info(
+                "turns: %s's message takes over the running turn on %s", message.author, key
+            )
+            session.interrupted_by = message.author
+            session.current_turn.cancel()
         session.queue.put_nowait(
             _QueueEntry(
                 content, ctx, on_complete, on_turn_end, fut, pending, stamp, message, waited
@@ -1248,6 +1287,8 @@ class ChatTurnEngine:
             # already-bumped value, and the watcher's `> my_epoch` never trips, so
             # the Stop is silently lost (the intermittent "Stop does nothing").
             stamp.started_ms = _now_ms()
+            session.running_author = entry.message.author if entry.message else None
+            session.interrupted_by = ""
             turn = asyncio.create_task(
                 self._with_heartbeat(
                     key,
@@ -1259,6 +1300,7 @@ class ChatTurnEngine:
                         session.publish,
                         stamp=stamp,
                         places=places,
+                        interrupted_by=lambda: session.interrupted_by,
                     ),
                 )
             )
@@ -1294,6 +1336,7 @@ class ChatTurnEngine:
                 logger.exception("turns: worker %s turn raised", key)
             finally:
                 session.current_turn = None
+                session.running_author = None
                 # Always wake the POST awaiting this message, whatever happened —
                 # otherwise the request hangs to its detach timeout for nothing.
                 # The folded messages' POSTs too: this turn was theirs.
@@ -1446,6 +1489,7 @@ class ChatTurnEngine:
         *,
         stamp: _TurnStamp | None = None,
         places: list[TurnMessage] | None = None,
+        interrupted_by: Callable[[], str] | None = None,
     ) -> None:
         """Drive one turn through the runner, reducing events into persistable
         messages AND broadcasting each raw event to the investigation's live
@@ -1461,7 +1505,14 @@ class ChatTurnEngine:
         )
         with scoped(usage.scope) if usage is not None else contextlib.nullcontext():
             await self._drive_turn(
-                content, ctx, on_complete, on_turn_end, publish, usage, list(places or [])
+                content,
+                ctx,
+                on_complete,
+                on_turn_end,
+                publish,
+                usage,
+                list(places or []),
+                interrupted_by,
             )
 
     async def _drive_turn(
@@ -1473,6 +1524,7 @@ class ChatTurnEngine:
         publish: Callable[[AgentEvent], None],
         usage: _TurnUsage | None,
         places: list[TurnMessage],
+        interrupted_by: Callable[[], str] | None = None,
     ) -> None:
         """`_run_turn`'s body, inside the turn's usage scope."""
         reducer = _TurnReducer(produced=places)
@@ -1514,7 +1566,9 @@ class ChatTurnEngine:
             # own drain released it) persists nothing, and must not broadcast
             # a cancel either: on the bus it reaches the live pod's viewers as
             # a "cancelled" banner seconds before the peer's answer starts.
-            cancelled = RunCancelled()
+            # plan-interjection Q2: who stopped it, when another person's
+            # message took the turn over; a Stop leaves it empty.
+            cancelled = RunCancelled(by=interrupted_by() if interrupted_by else "")
             reducer.add(cancelled)
             raise
         except Exception as exc:  # noqa: BLE001 — surface as a terminal error message

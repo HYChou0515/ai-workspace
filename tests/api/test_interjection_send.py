@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -182,6 +183,84 @@ async def test_a_message_sent_mid_turn_by_its_author_is_answered_in_that_turn():
         ("tool", "lot 1"),
         ("user", "Q2"),
         ("assistant", "answer to Q1 + Q2"),
+    ]
+    assert app.state.turn_claims.list_open() == []
+
+
+class _AnnRunsUntilStopped:
+    """The first turn runs a tool and then keeps going until it is stopped;
+    later turns answer at once and record what they were handed."""
+
+    def __init__(self) -> None:
+        self.started = asyncio.Event()
+        self.turns: list[dict[str, Any]] = []
+
+    async def run(self, prompt: str, ctx: AgentToolContext) -> AsyncIterator[AgentEvent]:
+        from workspace_app.api import ToolEnd, ToolStart
+
+        self.turns.append(
+            {
+                "prompt": prompt,
+                "author": ctx.acting_user,
+                "history": list(ctx.history),
+            }
+        )
+        if len(self.turns) == 1:
+            yield ToolStart(call_id="c1", name="look", args={})
+            yield ToolEnd(call_id="c1", output="lot 1")
+            self.started.set()
+            await asyncio.sleep(30)
+        yield MessageDelta(text=f"A({prompt})")
+        yield RunDone()
+
+
+async def test_another_persons_message_takes_the_turn_over_and_says_so():
+    from workspace_app.api import create_app
+    from workspace_app.api.chat_send import _MessageBody
+    from workspace_app.filestore.memory import MemoryFileStore
+    from workspace_app.resources import Conversation, make_spec
+    from workspace_app.sandbox.mock import MockSandbox
+
+    from .conftest import register_rca_item
+
+    spec = make_spec(default_user="u")
+    iid = register_rca_item(spec)
+    runner = _AnnRunsUntilStopped()
+    app = create_app(spec=spec, sandbox=MockSandbox(), filestore=MemoryFileStore(), runner=runner)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as client:
+        rid = (await client.post(f"/a/rca/items/{iid}/chats", json={"title": "t"})).json()[
+            "chat_id"
+        ]
+        svc = app.state.chat_send
+
+        def conv() -> Conversation:
+            data = spec.get_resource_manager(Conversation).get(rid).data
+            assert isinstance(data, Conversation)
+            return data
+
+        ann = asyncio.create_task(
+            svc.send(iid, rid, conv(), rid, _MessageBody(content="Q1"), author="ann")
+        )
+        await asyncio.wait_for(runner.started.wait(), 5)
+        bob = asyncio.create_task(
+            svc.send(iid, rid, conv(), rid, _MessageBody(content="Q2"), author="bob")
+        )
+        for task in (ann, bob):
+            await asyncio.wait_for(task, 5)
+        thread = [(m.role, m.content, m.author, m.error_kind) for m in conv().messages]
+
+    # Bob's turn ran as Bob, and was handed Ann's partial work.
+    assert [(t["prompt"][-2:], t["author"]) for t in runner.turns] == [("Q1", "ann"), ("Q2", "bob")]
+    assert "lot 1" in json.dumps(runner.turns[1]["history"])
+    # Ann's turn ended at once, its ending naming Bob; Bob's question sits
+    # where his turn read it, after that ending.
+    assert [(r, c, a, k) for r, c, a, k in thread if r != "assistant" or c] == [
+        ("user", "Q1", "ann", None),
+        ("tool", "lot 1", None, None),
+        ("error", "The previous response was interrupted by a new message.", "bob", "interrupted"),
+        ("user", "Q2", "bob", None),
+        ("assistant", "A(Q2)", "RCA Agent", None),
     ]
     assert app.state.turn_claims.list_open() == []
 

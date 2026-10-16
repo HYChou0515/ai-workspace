@@ -557,6 +557,24 @@ def test_build_input_places_folded_messages_between_history_and_the_prompt():
     ]
 
 
+def test_history_says_whose_message_took_the_turn_over():
+    """docs/plan-interjection.md Q2: the model learns its answer was cut off AND
+    by whom — the next message is that person's, and it is theirs to answer."""
+    interrupted = _E("error", "interrupted by a new message", error_kind="interrupted")
+    interrupted.author = "u2"  # ty: ignore[unresolved-attribute]
+    msgs = [
+        _E("user", "map every lot"),
+        _E("assistant", "Read 40 lots"),
+        interrupted,
+    ]
+    directory = _Dir(User(id="u2", name="Bob Liu", email="bob.liu@acme.test"))
+    items = history_items(msgs, max_messages=100, users=directory)
+    assert items[-1] == {
+        "role": "assistant",
+        "content": "Read 40 lots\n\n[Response interrupted by a new message from Bob Liu (bob.liu)]",
+    }
+
+
 def test_build_input_with_folded_messages_and_no_history_is_a_list():
     from workspace_app.agent.context import Interjection
 

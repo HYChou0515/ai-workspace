@@ -82,8 +82,13 @@ class RunError:
 @dataclass(frozen=True)
 class RunCancelled:
     """User interrupted this turn — either by sending a new message or by
-    hitting Stop. Terminal: the SSE stream closes after this event."""
+    hitting Stop. Terminal: the SSE stream closes after this event.
 
+    `by` (docs/plan-interjection.md Q2): set when ANOTHER person's message
+    stopped the turn so theirs could take over — that person's id. Empty for a
+    Stop."""
+
+    by: str = ""
     type: Literal["run_cancelled"] = "run_cancelled"
 
 

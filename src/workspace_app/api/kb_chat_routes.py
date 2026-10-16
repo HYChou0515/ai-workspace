@@ -1037,6 +1037,7 @@ def register_kb_chat_routes(
                     created_at=m.created_at,
                     metrics=m.metrics,
                     error_kind=m.error_kind,  # role=error (#37)
+                    author=m.author,  # plan-interjection Q2: who took the turn over
                     stopped_reason=m.stopped_reason,  # #113: repetition-stop notice survives reload
                 )
                 # Resolve [n] on answers against the passages this turn searched,
