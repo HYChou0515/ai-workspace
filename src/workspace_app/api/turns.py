@@ -256,6 +256,10 @@ def history_items(
         if getattr(msgs[i], "role", "") == SUMMARY_ROLE:
             msgs = msgs[i:]
             break
+    # Only what is replayed may be charged: a marker the model never reads (a workflow
+    # repair request quotes a whole reply) must not take window room from real
+    # history, nor trigger a "start a new chat" notice (plan-workflow-output-repair).
+    msgs = [m for m in msgs if replays(m)]
     before = len(msgs)
     if max_messages:
         msgs = msgs[-max_messages:]
@@ -286,8 +290,6 @@ def history_items(
         on_trim(before - len(msgs))
     items: list[dict[str, Any]] = []
     for m in msgs:
-        if not replays(m):
-            continue
         if m.role == "error":
             # Issue #37 — terminal-failure markers are human-facing
             # diagnostics, kept OUT of the model's context BY KIND. The

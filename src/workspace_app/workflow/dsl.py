@@ -449,6 +449,11 @@ def _produces_check(glob: str) -> Check:
     return check
 
 
+#: how many of a reply's field names a "missing field" reason lists — the reason
+#: travels in SSE, the run record and the repair request
+_FIELDS_SHOWN = 20
+
+
 def _outputs_check(outputs: dict[str, Any]) -> Check:
     """The implicit gate for a step that declares ``outputs`` (#428 §1.2/§2.2): the reply
     must parse into a JSON object whose declared fields are present and match their
@@ -463,7 +468,10 @@ def _outputs_check(outputs: dict[str, Any]) -> Check:
             )
         for name, spec in outputs.items():
             if name not in fields:
-                had = ", ".join(sorted(fields)) or "none"
+                names = sorted(fields)
+                had = ", ".join(names[:_FIELDS_SHOWN]) or "none"
+                if len(names) > _FIELDS_SHOWN:
+                    had += f", and {len(names) - _FIELDS_SHOWN} more"
                 return CheckResult(
                     False, f"reply is missing field {name!r} (its fields: {had})", format=True
                 )

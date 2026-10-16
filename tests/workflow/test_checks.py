@@ -130,7 +130,7 @@ async def test_a_reply_that_does_not_parse_is_a_format_failure(wf: WorkflowHandl
         ("csv", "Here you go:\na,b\n1,2\n"),
     ):
         await wf.write("/out", text)
-        verdict = await artifact_valid("/out", kind)(wf, None)
+        verdict = await artifact_valid("/out", kind, of_reply=True)(wf, None)
         assert not verdict.ok and verdict.format, (kind, verdict)
 
 

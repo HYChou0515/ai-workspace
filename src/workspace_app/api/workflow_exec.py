@@ -429,9 +429,11 @@ class WorkflowExecutor:
         chat; this one is recorded because the run log names a repair, and the reader
         opening the chat should find what was asked beside what came back. Its role is
         never replayed to the model (`history_items`)."""
-        rid, _conv = await asyncio.to_thread(self._workflow_chat, item_id, chat_key)
-        await asyncio.to_thread(
-            self._append,
+        # On the loop, with no await between the chat's read and its write — as every
+        # other writer to this chat does. From a thread, a parallel `map` element's
+        # persisted answer could land in between and be overwritten.
+        rid, _conv = self._workflow_chat(item_id, chat_key)
+        self._append(
             rid,
             acting_user,
             Message(role=REPAIR_REQUEST_ROLE, content=text, created_at=now_ms()),

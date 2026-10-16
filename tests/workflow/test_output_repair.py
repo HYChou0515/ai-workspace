@@ -388,3 +388,105 @@ def test_a_repair_request_is_recorded_in_the_workflow_chat():
     assert roles.index(REPAIR_REQUEST_ROLE) < len(roles) - 1
     assert not already_noticed(conv.messages)
     assert all("still not valid JSON" not in str(i.get("content")) for i in history_items(asked))
+
+
+async def test_recording_a_repair_request_loses_no_sibling_write():
+    """The chat is read-modified-written with no etag; every other writer does it on the
+    loop with no await between read and write. A repair request written from a thread
+    let a parallel `map` element's persisted answer land in between and be overwritten."""
+    import asyncio
+    import threading
+
+    from workspace_app.api.workflow_exec import WorkflowExecutor
+    from workspace_app.resources import Conversation, Message
+
+    main = threading.get_ident()
+
+    class _Rm:
+        def __init__(self) -> None:
+            self.conv = Conversation(item_id="item", messages=[])
+
+        def get(self, _rid: str):
+            snap = Conversation(item_id="item", messages=list(self.conv.messages))
+            if threading.get_ident() != main:  # a writer off the loop is slow
+                import time
+
+                time.sleep(0.2)
+
+            class _R:
+                data = snap
+
+            return _R()
+
+        def update(self, _rid: str, conv: Conversation) -> None:
+            self.conv = conv
+
+        def using(self, user: str):
+            import contextlib
+
+            return contextlib.nullcontext()
+
+    ex = object.__new__(WorkflowExecutor)
+    ex._conv_rm = _Rm()
+
+    async def sibling() -> None:
+        # lands while the thread holds the chat between its read and its write
+        await asyncio.sleep(0.3)
+        ex._append("chat", "u", Message(role="assistant", content="sibling answer"))
+
+    await asyncio.gather(ex._record_repair_request("item", "chat", "u", "please"), sibling())
+    assert sorted(m.role for m in ex._conv_rm.conv.messages) == ["assistant", "repair_request"]
+
+
+def test_a_csv_field_past_the_parser_limit_still_gets_a_repair_request():
+    """`artifact_valid` reports such a reply as not valid CSV; building the request
+    must not then raise from the same parser."""
+    reply = 'a,b\n"' + "x" * 200_000 + "\n1,2\n"
+    text = repair_request(
+        reply, CheckResult(False, "file o.csv is not valid CSV", True), None, "csv"
+    )
+    assert "does not match the required format: file o.csv is not valid CSV" in text
+
+
+@pytest.mark.parametrize(
+    "reply",
+    ["Here is the table:\na,b,c\n", "Sure:\nname,n\n"],
+)
+def test_a_csv_preamble_is_quoted_even_when_the_table_has_one_row(reply: str):
+    """A tie between a one-cell sentence and a one-row table: the table is the rows a
+    reply ends with."""
+    text = repair_request(reply, CheckResult(False, "inconsistent", True), None, "csv")
+    preamble = reply.splitlines()[0]
+    assert f"The problem is here:\n<<<\n{preamble}\n>>>" in text
+
+
+async def test_an_authors_check_of_another_file_is_not_repaired(wf: WorkflowHandle):
+    """Only the reply's own format can be rewritten by a no-tools turn. An author's
+    `artifact_valid` on a file the agent wrote with its tools must re-run the step."""
+    held: list[list[str] | None] = []
+    writes = iter(["{", "{}"])
+
+    async def drive_turn(prompt: str, tools: list[str] | None) -> str:
+        held.append(tools)
+        if tools:
+            await wf.write("side.json", next(writes))
+        return '{"a": 1}'
+
+    wf.drive_turn = drive_turn
+    await agent_write_step(
+        wf,
+        prompt="write both",
+        phase="p",
+        out="report.json",
+        kind="json",
+        tools=["write_file"],
+        check=artifact_valid("side.json", "json"),
+        retries=1,
+    )
+    assert held == [["write_file"], ["write_file"]]
+
+
+async def test_a_missing_field_reason_lists_a_bounded_number_of_fields(wf: WorkflowHandle):
+    fields = {f"k{i}": i for i in range(500)}
+    verdict = await _outputs_check({"want": "str"})(wf, {"fields": fields})
+    assert len(verdict.reason) < 400 and "more" in verdict.reason

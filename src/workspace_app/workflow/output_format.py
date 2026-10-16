@@ -120,17 +120,26 @@ def _yaml_fragment(reply: str) -> str | None:
 
 
 def _csv_fragment(reply: str) -> str | None:
-    """The rows whose column count differs from the most common one — a prepended
-    sentence is a one-cell row in a wider table. Rebuilt from the parsed rows, not the
-    file's lines: a quoted field may hold a newline."""
+    """The rows whose column count is not the table's — a prepended sentence is a
+    one-cell row in a wider table. The table's width is the most common one; on a
+    tie, the width of the row the reply ends with (a one-row table after a one-line
+    preamble). Rebuilt from the parsed rows, not the file's lines: a quoted field may
+    hold a newline. None when the parser itself gives up (a field past its limit):
+    the request then states the reason instead of pointing."""
     import csv
     import io
     from collections import Counter
 
-    rows = [row for row in csv.reader(io.StringIO(reply)) if row]
+    try:
+        rows = [row for row in csv.reader(io.StringIO(reply)) if row]
+    except csv.Error:
+        return None
     if not rows:
         return None
-    width = Counter(len(row) for row in rows).most_common(1)[0][0]
+    counts = Counter(len(row) for row in rows)
+    top = max(counts.values())
+    widest = {n for n, c in counts.items() if c == top}
+    width = len(rows[-1]) if len(rows[-1]) in widest else next(iter(widest))
     odd = [",".join(row) for row in rows if len(row) != width]
     return "\n".join(odd) if odd else None
 
