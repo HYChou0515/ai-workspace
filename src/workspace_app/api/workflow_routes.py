@@ -800,8 +800,9 @@ def register_workflow_routes(
         slug: str, item_id: str, run_id: str, body: _SteerBody
     ) -> _SteerAck:
         """#288 (manual §10): steer a run in words. Stops it first if it is still going,
-        then runs the read-only steerer in the background — it streams into the run's
-        chat and, when it has a plan, suspends the run `awaiting_human` with
+        then runs the read-only steerer in the background — as an aside on a lane of
+        its own, streamed to no subscriber and persisted nowhere (plan-workflow-out-
+        of-chat D2) — and, when it has a plan, suspends the run `awaiting_human` with
         `pending_steer` set for the human to confirm (the FE refetches the run)."""
         # #306 PR3: stops + steers the run.
         investigation_id = locator.require_access(slug, item_id, "converse")

@@ -172,3 +172,6 @@ def test_a_failed_page_job_is_named_by_what_the_page_asked_for():
     assert ("owner-o", "Page job failed: sub-agent “summariser”") in titles
     assert ("bob", "A page job as you failed: sub-agent “checker”") in titles
     assert len([t for t in titles if t[0] == "bob"]) == 2
+    # A page job is no execution: its notice opens the item, not an execution
+    # tab that would draw a workflow board for it and call it superseded.
+    assert ("owner-o", f"/a/playground/{item_id}") in _inbox(spec)

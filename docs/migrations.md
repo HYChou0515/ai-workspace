@@ -2805,7 +2805,7 @@ X」(X 是 `max`);把它調到預設與 `max` 之間的值、存檔、開環境,
   「A workflow failed at “…”」。
 - 有執行在等人決定時，workspace 頂列下方會出現一條提示（哪個執行、等什麼），按 Open 到那個執行的分頁；
   不會自己消失，可以關掉，下一個關卡會再提示；那個執行的分頁在前面時不顯示。已經有更新的執行的舊執行不算在等
-  （它只能 Stop），不出現在提示與圖示的數字裡。`GET …/runs` 的每一筆多了 `latest`（是不是那個 workflow 最新的一次）。沒有執行在跑時，畫面每 30 秒重新看一次這個 item 的執行
+  （它只能 Stop），不出現在提示與圖示的數字裡。`GET …/runs` 的每一筆多了 `latest`（是不是那個 workflow 最新的一次），而且**不再回傳頁面工作**（#942 的 page job）：它們不是 workflow 的執行，以前還會搶走「最新」，讓那個 workflow 真正最新的一次只剩 Stop。**rollout 前**：如果你們有外部腳本靠這支列出頁面工作，改用頁面自己的 job 狀態路由。沒做的症狀：腳本列不到頁面工作。沒有執行在跑時，畫面每 30 秒重新看一次這個 item 的執行
   （有在跑的時候每 2 秒），所以排程或別人啟動的執行也會出現。
 - 一個階段的步驟若因為之前的執行已經做過而直接沿用（journal 快取），`WorkflowRun.phases` 裡那個階段的狀態現在是
   `skipped`（畫面上「Already done」），以前停在 `pending`（「Not started」）。
@@ -2820,8 +2820,8 @@ X」(X 是 `max`);把它調到預設與 `max` 之間的值、存檔、開環境,
   （和 journal 的紀錄同一條規則，#538）；它和產物一起被 steer 作廢、被 map 清理。
 
 **資料** — 不用 migrate，沒有 `Schema` 升版。`Message` 多了三個有預設值的欄位（`run_id`、`step`、`phase`），
-`WorkflowRun` 多了 `schedule_key`（預設 `""`），舊資料照樣讀得出來。升版前由排程啟動的執行沒有這個欄位，所以側欄不會標
-「Scheduled」——這是預期的，不用補。
+舊資料照樣讀得出來。`WorkflowRun` 沒有新欄位：側欄的「Scheduled」讀 #932 加的 `from_schedule`，所以 #932 之前由排程
+啟動的執行不會標——這是預期的，不用補。
 
 **k8s · CI 側** — 沒有新的 manifest、env、probe 或 JobType；照常重 build、照常部署。
 

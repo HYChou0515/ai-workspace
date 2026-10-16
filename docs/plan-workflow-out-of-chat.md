@@ -228,9 +228,11 @@ so a schedule's shared conversation shows one execution at a time.
   - Executions are sorted by `started`. Each row shows its status in words
     (Starting / Running / Waiting for you / Done / Failed / Stopped) and
     `stepOf(phaseView(...))` as "Step N of M". It is marked "Scheduled" when
-    the run carries `schedule_key`, a new `WorkflowRun` field. That field is
-    set only by `start_page_schedule`, so runs started before this version are
-    never marked.
+    the run carries `from_schedule` (#932's field, set by both schedule
+    entrances: `start_page_schedule` and the #429 trigger). This replaced a
+    `schedule_key` field of this PR's own when master was merged in, so runs
+    started before #932 are never marked. Page jobs (#942) are not executions
+    (`run.is_execution`) and are not listed.
   - `useItemRuns` polls every 2 s while any execution is pending or running,
     every 30 s otherwise (`runsPollMs`; as amended in review round 1, below).
   - The rail entry is the only one with its name printed under the icon. The

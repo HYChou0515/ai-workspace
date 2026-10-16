@@ -252,7 +252,8 @@ class WorkflowExecutor:
         ``chat_key`` is that chat's conversation id, so turns enqueue + persist there
         (keeping the run's stream separate from the item's other chats). Builds the
         ctx, narrows the tool ceiling to the step's subset, enqueues + awaits, persists
-        the produced messages under the captured user, and returns the assistant text.
+        the produced messages under the captured user, and returns them as persisted
+        (``drive_turn`` reduces them to the assistant text).
 
         #538: a workspace with no room left refuses the node before the agent
         runs, for the same reason a chat turn does — an agent that cannot write
@@ -916,8 +917,10 @@ class WorkflowExecutor:
             # second one would have — they are the likeliest to need it.
             body=_SIGN_IN_HINT if acting == recipient else "",
             # The execution's own tab (plan-workflow-out-of-chat P11; the SPA's item
-            # route is `/a/<slug>/<item>` — `/items/` matched no page).
-            link=execution_link(slug, run.item_id, run_id),
+            # route is `/a/<slug>/<item>` — `/items/` matched no page). A page job
+            # is no execution (`is_execution`): its tab would draw a workflow's
+            # board for it and call it superseded, so it opens the item.
+            link=execution_link(slug, run.item_id, "" if job else run_id),
             actor=run.captured_user,
         )
         if identity is None or not acting or acting == recipient:
