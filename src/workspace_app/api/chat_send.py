@@ -65,6 +65,7 @@ from .turns import (
     QueuedMessage,
     _terminal_error,
     already_noticed,
+    must_move,
     take_person_message,
     thread_without,
 )
@@ -1025,19 +1026,32 @@ class ChatSendService:
             return None
 
     def _queued_message(
-        self, rid: str, author: str, created: int, claim: str | None, *, rerun: bool
+        self,
+        rid: str,
+        engine_key: str,
+        author: str,
+        created: int,
+        claim: str | None,
+        *,
+        driven: bool,
     ) -> QueuedMessage:
         """This send's message, as the turn engine needs to know it
         (docs/plan-interjection.md): who and when, how to rebuild the turn's
-        history when it starts after waiting, and how to settle the message
-        when another message's turn answered it (its claim is then done)."""
+        history when it starts, and how to settle the message when another
+        message's turn answered it (its claim is then done)."""
 
-        async def refresh(answering: list[int], ctx: AgentToolContext) -> None:
+        async def refresh(answering: list[int], pending: set[int], ctx: AgentToolContext) -> bool:
             if ctx.history_builder is None:
-                return
+                return False
             fresh = self._conv_rm.get(rid).data
             assert isinstance(fresh, Conversation)
-            ctx.history = ctx.history_builder(thread_without(fresh.messages, answering))
+            # Unanswered also means owed on ANOTHER pod: an open claim is the
+            # only record of that (a re-run's sibling, a send landing there).
+            owed = pending | self._owed_on(engine_key)
+            ctx.history = ctx.history_builder(
+                thread_without(fresh.messages, [*answering, *(owed - set(answering))])
+            )
+            return must_move(fresh.messages, answering, owed)
 
         users = self._users
         return QueuedMessage(
@@ -1046,10 +1060,25 @@ class ChatSendService:
             refresh=refresh,
             on_absorbed=lambda: self._finish_claim(claim),
             speaker=speaker_label(users.get(author)) if users is not None and author else "",
-            # A re-run (no announce) answers a question that may sit above an
-            # answer it waited for on the pod that went away.
-            rebuild=rerun,
+            # #613: a round the goal driver started is not a person speaking.
+            driven=driven,
         )
+
+    def _owed_on(self, engine_key: str) -> set[int]:
+        """The stamps of the messages on `engine_key` still owed a reply, on any
+        pod (their claims are open). Empty when there is no claim store, or it
+        cannot be read — the engine's own record still covers this pod."""
+        if self._turn_claims is None:
+            return set()
+        try:
+            return {
+                r.claim.created_at
+                for r in self._turn_claims.list_open()
+                if r.claim.key == engine_key
+            }
+        except Exception:  # noqa: BLE001 — this pod's own record still applies
+            logger.exception("chat_send: could not list the open claims on %s", engine_key)
+            return set()
 
     def _claim_is_mine(self, claim: str | None) -> bool:
         """No store, or no claim (it could not be opened): the turn is as
@@ -1287,6 +1316,9 @@ class ChatSendService:
                 # agent. Left unattributed so anyone's Stop reaches it, which is
                 # what happened before Stop learned who pressed it.
                 author="" if driven_by else author,
+                # plan-interjection §9 C8: the message this preparation is for —
+                # persisted, unanswered, so no other turn's history may hold it.
+                at=created,
             ) as pending:
                 env = await resolve_env() if resolve_env is not None else caller_env
                 # #739: compact BEFORE the turn is built — the thread is final for this
@@ -1515,7 +1547,9 @@ class ChatSendService:
                                 # plan-interjection Q3: the person's message
                                 # (stored at acceptance) moves to where this
                                 # turn read it. Gone (undone) ⇒ nothing to place.
-                                placed = take_person_message(conv2.messages, tm.created_at)
+                                placed = take_person_message(
+                                    conv2.messages, tm.created_at, tm.author
+                                )
                                 if placed is not None:
                                     conv2.messages.append(placed)
                                 continue
@@ -1639,7 +1673,9 @@ class ChatSendService:
                     # timestamp is the acceptance (D13 (b) starts here).
                     surface="chat",
                     accepted_ms=created,
-                    message=self._queued_message(rid, author, created, claim, rerun=not announce),
+                    message=self._queued_message(
+                        rid, engine_key, author, created, claim, driven=driven_by is not None
+                    ),
                 )
                 # #493 symptom 1 (504): await THIS turn's completion, but only up to a
                 # deadline — then DETACH it so a long turn can't hang the POST until the

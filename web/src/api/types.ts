@@ -126,8 +126,10 @@ export type Message = {
   /** role=mention only — the user ids summoned ("@ come look"). */
   mentions?: string[];
   /** role=error only (#37) — why the turn failed: a backend error kind
-   * (docs/plan-friendly-errors.md; `error` on older rows), `cancelled` or
-   * `max_turns`. `content` is then the raw text for technical details. */
+   * (docs/plan-friendly-errors.md; `error` on older rows), `cancelled`,
+   * `interrupted` (another person's message took the turn over — `author` is
+   * that person; docs/plan-interjection.md Q2) or `max_turns`. `content` is
+   * then the raw text for technical details. */
   error_kind?: string | null;
   /** A failure this message reports (docs/plan-friendly-errors.md): role=tool — a
    * delegated sub-agent's; role=goal — why an off-hours night could not start. */
