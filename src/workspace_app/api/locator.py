@@ -31,7 +31,7 @@ from specstar.types import (
 from ..apps.catalog import AppCatalog
 from ..apps.manifest import load_app_manifest
 from ..apps.resolve import debtor_of, find_work_item, resolve_item_agent_config
-from ..perm import Verb
+from ..perm import Permission, Verb
 from ..resources import AgentConfig, Conversation
 from ..resources.groups import groups_of
 from .chats import find_default_conversation, resolve_default_conversation
@@ -73,6 +73,15 @@ class TurnFacts(NamedTuple):
     skill_prefs: dict[str, bool]
     env_vars: dict[str, str]
     env_policy: dict[str, str]
+
+
+class ItemFacts(NamedTuple):
+    """An item's title, owner and permission, read together. See `ItemLocator.item_facts`."""
+
+    title: str
+    owner: str
+    # None = the item has no permission (public, by the back-compat rule).
+    permission: Permission | None
 
 
 class ItemEnv(NamedTuple):
@@ -152,6 +161,17 @@ class ItemLocator:
         id maps to no registered App's item."""
         found = find_work_item(self._spec, item_id)
         return (found[1].title, found[1].owner) if found is not None else None
+
+    def item_facts(self, item_id: str) -> ItemFacts | None:
+        """`title_owner_of` plus the item's `permission`, from the same ONE
+        lookup — the WUI overview says on each card who the link opens for
+        (`docs/plan-deploy-reach.md`), and a second accessor would double the
+        reads it already pays per item. ``None`` as `title_owner_of`."""
+        found = find_work_item(self._spec, item_id)
+        if found is None:
+            return None
+        item = found[1]
+        return ItemFacts(item.title, item.owner, item.permission)
 
     def profile_of(self, item_id: str) -> str:
         """The App profile an item was created from — drives the §A skill index

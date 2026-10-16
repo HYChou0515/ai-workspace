@@ -332,6 +332,40 @@ def test_the_overview_lists_the_latest_deploy_first(monkeypatch: pytest.MonkeyPa
 READER = Permission(visibility="restricted", read_meta=["user:alice"], read_content=["user:alice"])
 
 
+def test_every_row_carries_its_workspaces_permission_so_the_card_can_say_who_opens_it():
+    """`docs/plan-deploy-reach.md` decisions 6 + 9: the card says who the link
+    opens for, from the item's own permission — and an item with none (public,
+    by the back-compat rule) carries null, not a guessed `public`."""
+    holder = {"id": "bob"}
+    client, spec = _client_and_spec(holder)
+    shared = _item(spec, by="bob", permission=READER)
+    private = _item(spec, by="bob", permission=Permission(visibility="private"))
+    legacy = _item(spec, by="bob")
+    for iid in (shared, private, legacy):
+        _page(client, iid)
+        deployed = client.post(_wp(iid, "/wui/deploy"), json={"path": PAGE})
+        assert deployed.status_code == 200, deployed.text
+
+    perms = {p["item_id"]: p["item_permission"] for p in client.get("/wui").json()["pages"]}
+
+    assert perms[shared]["visibility"] == "restricted"
+    assert perms[shared]["read_content"] == ["user:alice"]
+    assert perms[private]["visibility"] == "private"
+    assert perms[legacy] is None
+
+
+def test_deploy_answers_with_the_workspaces_permission_too():
+    holder = {"id": "bob"}
+    client, spec = _client_and_spec(holder)
+    iid = _item(spec, by="bob", permission=Permission(visibility="private"))
+    _page(client, iid)
+
+    r = client.post(_wp(iid, "/wui/deploy"), json={"path": PAGE})
+
+    assert r.status_code == 200, r.text
+    assert r.json()["item_permission"]["visibility"] == "private"
+
+
 def test_a_reader_may_open_the_page_but_not_list_it():
     holder = {"id": "bob"}
     client, spec = _client_and_spec(holder)

@@ -29,6 +29,7 @@ from collections.abc import Callable, Mapping
 from typing import Any
 from urllib.parse import quote
 
+import msgspec
 import yaml
 from fastapi import APIRouter, FastAPI, HTTPException, Response
 from msgspec import Struct
@@ -38,7 +39,7 @@ from specstar.types import ResourceIDNotFoundError
 
 from ..files import WorkspaceFiles
 from ..filestore.protocol import FileNotFound
-from ..perm.model import Verb
+from ..perm.model import Permission, Verb
 from ..sync.ignore import DEFAULT_IGNORES, should_ignore
 from .file_routes import _workspace_path
 from .locator import ItemLocator
@@ -174,6 +175,11 @@ class DeployedPage(BaseModel):
     # The item's OWNER — not who pressed Deploy (`deployed_by`); the overview
     # names both, and a 「我的」 section is the owner's.
     item_owner: str
+    # The item's `Permission` as the item's own GET returns it — None when it
+    # has none (public, by the back-compat rule). The card says who the link
+    # opens for from it (`docs/plan-deploy-reach.md`); no new exposure, since a
+    # row is only ever shown to someone who may read the item.
+    item_permission: dict[str, Any] | None
     path: str
     title: str
     deployed_by: str
@@ -181,6 +187,10 @@ class DeployedPage(BaseModel):
     icon: str
     color: str
     can_remove: bool
+
+
+def _permission_json(permission: Permission | None) -> dict[str, Any] | None:
+    return None if permission is None else msgspec.to_builtins(permission)
 
 
 class Overview(BaseModel):
@@ -252,11 +262,12 @@ def register_wui_deploy_routes(
             deployed_at=(now or now_ms)(),
         )
         pages.record(row)
-        title, owner = locator.title_owner_of(workspace_id) or ("", "")
+        title, owner, permission = locator.item_facts(workspace_id) or ("", "", None)
         return DeployedPage(
             **{f: getattr(row, f) for f in DeployedWui.__struct_fields__},
             item_title=title,
             item_owner=owner,
+            item_permission=_permission_json(permission),
             can_remove=True,
         )
 
@@ -288,25 +299,26 @@ def register_wui_deploy_routes(
         `require_access` holds the facts for its window, and an item with
         several pages asks once.
         """
-        decided: dict[tuple[str, str], tuple[bool, bool, str, str]] = {}
+        decided: dict[tuple[str, str], tuple[bool, bool, str, str, dict[str, Any] | None]] = {}
         out: list[DeployedPage] = []
         for row in pages.newest_first():
             key = (row.slug, row.item_id)
             if key not in decided:
                 readable = _may(row.slug, row.item_id, "read_content")
-                # The title and the owner are ONE store read of their own, so
-                # they are memoised with the decision — and only for an item
-                # that will be shown, so a hidden item costs nothing but its
-                # refusal.
-                facts = locator.title_owner_of(row.item_id) if readable else None
-                title, owner = facts or ("", "")
+                # The title, the owner and the permission are ONE store read of
+                # their own, so they are memoised with the decision — and only
+                # for an item that will be shown, so a hidden item costs
+                # nothing but its refusal.
+                facts = locator.item_facts(row.item_id) if readable else None
+                title, owner, permission = facts or ("", "", None)
                 decided[key] = (
                     readable,
                     readable and _may(row.slug, row.item_id, "edit_content"),
                     title,
                     owner,
+                    _permission_json(permission),
                 )
-            readable, removable, item_title, item_owner = decided[key]
+            readable, removable, item_title, item_owner, item_permission = decided[key]
             if not readable:
                 continue
             out.append(
@@ -314,6 +326,7 @@ def register_wui_deploy_routes(
                     **{f: getattr(row, f) for f in DeployedWui.__struct_fields__},
                     item_title=item_title,
                     item_owner=item_owner,
+                    item_permission=item_permission,
                     can_remove=removable,
                 )
             )
