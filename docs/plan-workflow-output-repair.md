@@ -267,3 +267,35 @@ only the intended changes). What changed:
   `of_reply=True` to count it.
 - The runbook's cost line now grows per field, measured; its old-image tell no longer
   rests on the model calling tools again.
+
+### Merged with #913 (workflow out of chat)
+
+#913 landed while this was in review. Its D1 (a node reads no chat history) and D6 (each
+step's prompt is persisted with the execution and the step) change three things here:
+
+- **The request is recorded where every prompt is.** `record_note` and the executor's own
+  write are gone: `persist` writes each turn's prompt into the execution's record, and a
+  repair turn's prompt now goes there under `REPAIR_REQUEST_ROLE` (a ContextVar,
+  `steps.REPAIR_TURN`, set by the repair the way `CURRENT_STEP` names the step). One
+  writer, so nothing is recorded twice and no second write can race a sibling's.
+- **Where it shows.** The execution page (`ExecutionView`) lists a step per row; its chip
+  says 「修正輸出格式（第 n 次）」 while a repair runs, its header keeps
+  「修正過輸出格式 n 次」 once it is done, and the expanded row folds the request. The
+  step's `.transcript.md` marks it "Attempt n (repair)".
+- **History.** A node no longer reads any history, so a repair request could not cost a
+  node's window anyway; the `history_items` fix (round 1) still holds for chats, where
+  mentions and goal markers were charged. A re-run's prompt now carries the previous
+  answer (#913's `_retry_prompt`), so for the cases that still re-run, the model sees
+  what it answered too.
+
+### Review of the merge (on 38008439)
+
+The merge held (prompt and answer of a repair carry the step and run; `REPAIR_TURN`
+does not leak into later turns or sibling map elements; page jobs and steer asides are
+untouched; no `role == "user"` split miscounts). Fixed: the runbook's cost line still
+said the failed reply reaches the model twice — a node reads no history now, so it is
+quoted once. Known, not changed: a run stopped mid-repair keeps the step's chip at
+「修正輸出格式」 (its phase stays "Running" on master for the same reason — no event ends
+a stopped step); a `map` element's repair shows only in its expanded messages (the
+runbook says so); the execution page's own status words are English while the repair
+words follow the locale.
