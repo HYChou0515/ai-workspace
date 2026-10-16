@@ -2649,6 +2649,25 @@ AI 讀 `wui` skill 時會看到「這個 item 能讓頁面問的 subagent」清�
 需要別人意見的問題,卡片標題是「問外部AI」、問題可以改,按下去之後顯示已等幾秒,回答回來存在 `lookups/`,AI 說明
 這是外部AI 的說法。
 
+### 2026-10-16 · #967 單一 item 可以調到部署的 `per_app.max`,不再只能比預設小 {#pr-967}
+
+**設定** — 必要的:無。要先看一眼的(`rollout 前`):`resources.per_app.max` 的 `cpu` / `memory`。為什麼:它以前只在開機時
+檢查 App 的值有沒有超過;升級後它也是**一個 item 能調到多大**。設得比你願意給單一 item 的還大,使用者就調得到那麼大
+(仍受個人額度夾住)。沒設 `max` 的維度行為不變:item 只能調到 App 的值以下。
+
+**資料** — 無。item 上存的大小欄位不變。
+
+**k8s · CI 側** — 前後端都改,照常重 build、部署;sandbox-host 不用動。
+
+**行為改變,沒有開關**([plan-item-size-ceiling.md](plan-item-size-ceiling.md) D1–D3):有設 `per_app.max` 的部署,item 的天花板從
+「App 的值」(沒在 app.json 宣告時就是 `per_app.default`)變成 `per_app.max`。例:`default` 1 核 / `512M`、`max` 4 核 / `4G`,
+以前把 item 調成 2 核 / 2G 實際只拿到 1 核 / 512M,升級後就拿到 2 核 / 2G。**先前已經把 item 調得比 App 的值大的人,下一次開
+環境就會真的拿到那個大小**(以前被夾回 App 的值)——個人額度照舊會擋總量。環境面板在 CPU、記憶體欄位下多一行
+「這個 App 最多 X」。app.json 的 `resources` 從「item 最多吃多少」變成「預設吃多少」(目前內建 App 都沒有宣告)。
+
+**確認做完**(`rollout 後`):在一個有設 `per_app.max` 的 App 的 item 打開「環境」面板,CPU、記憶體欄位下寫著「這個 App 最多
+X」(X 是 `max`);把它調到預設與 `max` 之間的值、存檔、開環境,面板的生效值就是調的值,沒有「受這個 App 的上限限制」。
+
 ## 附錄 A：資料回填的機制（specstar 為什麼不會自己補）
 
 有些升版會改變「資料在資料庫裡的儲存形狀」，但 **specstar 只在寫入當下**把一列的 `indexed_data`
