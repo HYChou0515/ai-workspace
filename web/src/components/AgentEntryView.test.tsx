@@ -1180,6 +1180,11 @@ describe("workflow repair request (plan-workflow-output-repair §3.5)", () => {
     expect(screen.queryByText(/still not valid JSON/)).toBeNull();
   });
 
+  it("speaks the reader's language", () => {
+    expect(translate("en", "wf.repairRequest.show")).not.toMatch(/[\u4e00-\u9fff]/);
+    expect(translate("zh-TW", "wf.repairRequest.show")).toContain("要求重新輸出格式");
+  });
+
   it("opens to show exactly what was asked, and tells assistive tech it did", () => {
     // W3C APG disclosure: the button carries aria-expanded and controls the region.
     render(<EntryView entry={entry} />);
