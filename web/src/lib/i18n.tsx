@@ -221,6 +221,7 @@ export const messages = {
   "tool.show_skill_hub_entry": { "zh-TW": "顯示 skill hub 上的 skill", en: "Show a skill hub skill" },
   "tool.request_env": { "zh-TW": "請你提供工具需要的變數", en: "Ask you for a tool's variables" },
   "tool.ask_outside": { "zh-TW": "請你幫忙查外部資料", en: "Ask you to look something up" },
+  "tool.ask_ext_ai": { "zh-TW": "問外部AI", en: "Ask the external AI" },
   // The affordance on a file the agent showed. "openHere" = a workspace shell is
   // present and the file opens in its viewer; "open" = the fallback link.
   "shownFile.openHere": { "zh-TW": "在工作區開啟", en: "Open in workspace" },
@@ -1920,7 +1921,48 @@ export const messages = {
   "lookup.failed": { "zh-TW": "沒有送出:{reason}", en: "Not sent — {reason}" },
   // docs/plan-outside-helper.md §3.5 — the person's own helper.
   "lookup.helperOffline": { "zh-TW": "小幫手未連線", en: "Helper not connected" },
-  "lookup.helperGo": { "zh-TW": "查", en: "Look it up" },
+  // docs/plan-ext-ai.md D8: the helper's button says what doing it by hand
+  // says — the destination's own name, or 開啟這個網址.
+  "lookup.searchWith": { "zh-TW": "{name} search", en: "{name} search" },
+  "lookup.searchAgain": { "zh-TW": "再 {name} search 一次", en: "{name} search again" },
+  "lookup.searchUnnamed": { "zh-TW": "搜尋", en: "Search" },
+  "lookup.searchAgainUnnamed": { "zh-TW": "再搜尋一次", en: "Search again" },
+  "lookup.openAgain": { "zh-TW": "再開一次", en: "Open it again" },
+  // docs/plan-ext-ai.md §3 — the 問外部AI card
+  "lookup.extTitle": { "zh-TW": "問外部AI", en: "Ask the external AI" },
+  "lookup.question": { "zh-TW": "要問的問題", en: "The question" },
+  "lookup.writeQuestion": {
+    "zh-TW": "先在框裡寫好要問的問題",
+    en: "Write the question in the box first",
+  },
+  "lookup.extGo": { "zh-TW": "問外部AI", en: "Ask the external AI" },
+  "lookup.extAgain": { "zh-TW": "再問外部AI 一次", en: "Ask the external AI again" },
+  "lookup.extAsking": {
+    "zh-TW": "小幫手正在問外部AI…",
+    en: "The helper is asking the external AI…",
+  },
+  "lookup.extLogin": {
+    "zh-TW": "請在小幫手的 Chrome 視窗裡登入外部AI",
+    en: "Sign in to the external AI in the helper's Chrome window",
+  },
+  "lookup.waited": { "zh-TW": "(已等 {n} 秒)", en: "({n} s so far)" },
+  "lookup.extFailed": {
+    "zh-TW": "小幫手沒問到:{reason}",
+    en: "The helper got no answer: {reason}",
+  },
+  "lookup.extNoHelper": {
+    "zh-TW": "你的小幫手沒有設定外部AI,請自己去問,把回答貼回來",
+    en: "Your helper has no external AI set up — ask it yourself and paste the answer back",
+  },
+  "lookup.copyQuestion": { "zh-TW": "複製問題", en: "Copy the question" },
+  "lookup.extAnswer": { "zh-TW": "外部AI 的回答", en: "The external AI's answer" },
+  "lookup.extAnswerHint": {
+    "zh-TW": "把外部AI 的回答整段貼在這裡",
+    en: "Paste the external AI's whole answer here",
+  },
+  "lookup.extByHand": { "zh-TW": "自己問", en: "Ask it myself" },
+  "lookup.extNotFound": { "zh-TW": "沒問到／不問了", en: "Didn't ask / skip" },
+  "lookup.extSendNotFound": { "zh-TW": "送出「沒問到」", en: "Send “didn't ask”" },
   "lookup.helperSearching": { "zh-TW": "小幫手正在查…", en: "The helper is looking it up…" },
   "lookup.helperOpening": { "zh-TW": "小幫手正在開…", en: "The helper is opening it…" },
   "lookup.helperFromEarlier": { "zh-TW": "來自先前查到的內容", en: "From what an earlier lookup brought back" },
@@ -1971,7 +2013,6 @@ export const messages = {
     "zh-TW": "小幫手沒查到:{reason}",
     en: "The helper couldn't — {reason}",
   },
-  "lookup.helperRetry": { "zh-TW": "重查", en: "Try again" },
   "lookup.helperDone": { "zh-TW": "小幫手已送給 AI", en: "The helper sent it to the AI" },
   "lookup.byHand": { "zh-TW": "自己查", en: "Do it myself" },
   "env.bar.set": { "zh-TW": "需要設定 {names}", en: "Set {names}" },

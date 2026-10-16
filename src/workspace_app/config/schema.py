@@ -189,6 +189,14 @@ class ServerSettings:
     # page says so and every card stays on the manual flow.
     ai_workspace_helper_dir: str = ""
 
+    # docs/plan-ext-ai.md D5 — the 問外部AI card (`ask_ext_ai`): the AI drafts a
+    # question, the person presses 「問外部AI」, and their helper asks the
+    # company's web AI with the site file packed into it
+    # (`pack_ai_workspace_helper.py --ext-ai-site`). Off by default: on a deploy
+    # whose helpers carry no site file the card could only ever be answered by
+    # hand.
+    ext_ai_enabled: bool = False
+
 
 # ─── sandbox ────────────────────────────────────────────────────────────
 @dataclass(frozen=True)

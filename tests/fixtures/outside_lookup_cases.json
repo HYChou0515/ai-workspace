@@ -157,6 +157,36 @@
   {
    "output": "x\n[outside-lookup]{\"why\":\"a\",\"query\":\"q\"}\ntrailing prose",
    "card": null
+  },
+  {
+   "output": "Asked.\n[outside-lookup]{\"why\":\"w\",\"question\":\"Which is safer?\"}",
+   "card": {
+    "why": "w",
+    "question": "Which is safer?"
+   }
+  },
+  {
+   "output": "Asked.\n[outside-lookup]{\"why\":\"w\",\"question\":\"line one\\nline two — 中文\"}",
+   "card": {
+    "why": "w",
+    "question": "line one\nline two — 中文"
+   }
+  },
+  {
+   "output": "Asked.\n[outside-lookup]{\"why\":\"w\",\"question\":\"q\",\"query\":\"k\"}",
+   "card": null
+  },
+  {
+   "output": "Asked.\n[outside-lookup]{\"why\":\"w\",\"question\":\"q\",\"url\":\"https://a.example\"}",
+   "card": null
+  },
+  {
+   "output": "Asked.\n[outside-lookup]{\"why\":\"w\",\"question\":\"\"}",
+   "card": null
+  },
+  {
+   "output": "Asked.\n[outside-lookup]{\"why\":\"w\",\"question\":[\"q\"]}",
+   "card": null
   }
  ]
 }

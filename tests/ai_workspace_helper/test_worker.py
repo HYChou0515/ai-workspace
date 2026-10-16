@@ -143,7 +143,7 @@ def test_a_paused_helper_takes_nothing_and_is_offline():
 
     worker.tick()
 
-    assert client.get("/ai-workspace-helper/status").json() == {"online": False}
+    assert client.get("/ai-workspace-helper/status").json() == {"online": False, "ext_ai": False}
     assert worker.status == "paused"
 
 

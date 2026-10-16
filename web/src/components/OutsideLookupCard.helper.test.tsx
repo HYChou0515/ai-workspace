@@ -63,6 +63,9 @@ function draw({
   status,
   follow,
   answeredLater = false,
+  targets = [{ name: "Google", url: "https://www.google.com/search?q={q}" }],
+  targetsFail = false,
+  targetsPending = false,
 }: {
   lookup?: OutsideLookup;
   online?: boolean;
@@ -81,11 +84,21 @@ function draw({
   /** Drawn unanswered, with a 「answer arrives」 button that marks it answered
    * while it stays on screen (the thread drawing the answer under it). */
   answeredLater?: boolean;
+  /** The deploy's search destinations (`server.lookup_targets`). */
+  targets?: { name: string; url: string }[];
+  /** `GET /lookup-targets` failing. */
+  targetsFail?: boolean;
+  /** `GET /lookup-targets` not answered yet. */
+  targetsPending?: boolean;
 } = {}) {
   // As the server answers: no job until one is handed over, then that job.
   let latest: HelperJob | null = existing;
   const client = {
-    targets: vi.fn(async () => [{ name: "Google", url: "https://www.google.com/search?q={q}" }]),
+    targets: vi.fn(async () => {
+      if (targetsPending) await new Promise(() => {});
+      if (targetsFail) throw new Error("targets failed");
+      return targets;
+    }),
     answer: vi.fn(async () => ({ path: null, attachments: [] })),
     helperStatus: vi.fn(status ?? (async () => ({ online }))),
     handOver: vi.fn(async (args: Parameters<OutsideLookupClient["handOver"] & object>[0]) => {
@@ -126,7 +139,7 @@ function draw({
 async function look(keywords = "pandas 2.0 breaking") {
   const box = screen.queryByLabelText("搜尋關鍵字");
   if (box) fireEvent.change(box, { target: { value: keywords } });
-  fireEvent.click(await screen.findByRole("button", { name: "查" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Google search" }));
 }
 
 describe("with no helper connected", () => {
@@ -134,8 +147,8 @@ describe("with no helper connected", () => {
     const client = draw({ online: false });
 
     expect(await screen.findByText("小幫手未連線")).toBeInTheDocument();
-    expect(await screen.findByRole("button", { name: /Google/ })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "查" })).not.toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Google search(在新分頁開啟)" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Google search" })).not.toBeInTheDocument();
     expect(client.handOver).not.toHaveBeenCalled();
   });
 
@@ -154,19 +167,19 @@ describe("a search, with the helper connected", () => {
   it("asks only for the nod; doing it by hand is one step away", async () => {
     draw();
 
-    expect(await screen.findByRole("button", { name: "查" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /Google/ })).not.toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Google search" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Google search(在新分頁開啟)" })).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "自己查" }));
 
-    expect(await screen.findByRole("button", { name: /Google/ })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Google search(在新分頁開啟)" })).toBeInTheDocument();
   });
 
   // plan-outside-lookup D13: the helper searches what the person typed.
   it("with nothing typed, 查 hands nothing over and says to type the keywords", async () => {
     const client = draw();
 
-    fireEvent.click(await screen.findByRole("button", { name: "查" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Google search" }));
 
     expect(await screen.findByText("先在搜尋框輸入或貼上關鍵字")).toBeInTheDocument();
     expect(client.handOver).not.toHaveBeenCalled();
@@ -177,7 +190,7 @@ describe("a search, with the helper connected", () => {
     const box = await screen.findByLabelText("搜尋關鍵字");
     fireEvent.change(box, { target: { value: "pandas 2.0 breaking" } });
 
-    fireEvent.click(await screen.findByRole("button", { name: "查" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Google search" }));
 
     await waitFor(() =>
       expect(client.handOver).toHaveBeenCalledWith(
@@ -201,7 +214,7 @@ describe("a search, with the helper connected", () => {
     await look();
 
     expect(await screen.findByText("小幫手沒查到:page timed out")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "重查" }));
+    fireEvent.click(screen.getByRole("button", { name: "再 Google search 一次" }));
 
     await waitFor(() => expect(client.handOver).toHaveBeenCalledTimes(2));
   });
@@ -280,7 +293,7 @@ describe("review round 1", () => {
     draw({ existing: job({ state: "claimed" }) });
 
     expect(await screen.findByText("小幫手正在查…")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "查" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Google search" })).not.toBeInTheDocument();
   });
 
   // D7: with nothing published there is no helper to get — the card is
@@ -288,7 +301,7 @@ describe("review round 1", () => {
   it("says nothing of a helper when none is published", async () => {
     const client = draw({ online: false, release: null });
 
-    expect(await screen.findByRole("button", { name: /Google/ })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Google search(在新分頁開啟)" })).toBeInTheDocument();
     await waitFor(() => expect(client.release).toHaveBeenCalled());
     expect(screen.queryByText("小幫手未連線")).not.toBeInTheDocument();
   });
@@ -302,11 +315,11 @@ describe("review round 1", () => {
 
     fireEvent.click(toggle);
     expect(toggle).toHaveAttribute("aria-expanded", "true");
-    expect(await screen.findByRole("button", { name: /Google/ })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Google search(在新分頁開啟)" })).toBeInTheDocument();
 
     fireEvent.click(toggle);
     expect(toggle).toHaveAttribute("aria-expanded", "false");
-    expect(screen.queryByRole("button", { name: /Google/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Google search(在新分頁開啟)" })).not.toBeInTheDocument();
   });
 
   // §3.5: a page opened with no nod says why.
@@ -326,7 +339,7 @@ describe("a page, with the helper connected (D12)", () => {
       expect(client.handOver).toHaveBeenCalledWith(expect.objectContaining({ auto: true })),
     );
     expect(await screen.findByText("小幫手正在開…")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "查" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "開啟這個網址" })).not.toBeInTheDocument();
   });
 
   // The card asking on its own and being told "not this one" is the ordinary
@@ -338,12 +351,12 @@ describe("a page, with the helper connected (D12)", () => {
       lookup: PAGE,
       queryClient: makeQueryClient(),
       handOver: async (args) => {
-        if (args.auto) throw new HttpError(409, "this lookup waits for the person's 「查」");
+        if (args.auto) throw new HttpError(409, "this lookup waits for the person's nod");
         return job({ kind: "open_url" });
       },
     });
 
-    expect(await screen.findByRole("button", { name: "查" })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "開啟這個網址" })).toBeInTheDocument();
     expect(currentWriteFailure()).toBeNull();
   });
 
@@ -366,7 +379,7 @@ describe("a page, with the helper connected (D12)", () => {
 
     await waitFor(() => expect(screen.queryByText("小幫手未連線")).not.toBeInTheDocument());
     expect(screen.getByText("請在小幫手的 Chrome 視窗裡完成驗證")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /Google/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Google search(在新分頁開啟)" })).not.toBeInTheDocument();
   });
 
   // Silent app-wide is not silent: a 「查」 the server refuses says why, here.
@@ -387,15 +400,90 @@ describe("a page, with the helper connected (D12)", () => {
     const client = draw({
       lookup: PAGE,
       handOver: async (args) => {
-        if (args.auto) throw new HttpError(409, "this lookup waits for the person's 「查」");
+        if (args.auto) throw new HttpError(409, "this lookup waits for the person's nod");
         return job({ kind: "open_url" });
       },
     });
 
-    await look();
+    fireEvent.click(await screen.findByRole("button", { name: "開啟這個網址" }));
 
     await waitFor(() =>
       expect(client.handOver).toHaveBeenLastCalledWith(expect.objectContaining({ auto: false })),
     );
+  });
+});
+
+// docs/plan-ext-ai.md D8: the helper's button and doing it by hand say the same
+// words (NN/g heuristic #4, consistency; NN/g UI Copy: the same label in each
+// place) — only the ↗ new-tab cue tells them apart.
+describe("one name for one action (plan-ext-ai D8)", () => {
+  it("names the search the same with the helper and by hand", async () => {
+    draw();
+
+    const helper = await screen.findByRole("button", { name: "Google search" });
+    fireEvent.click(screen.getByRole("button", { name: "自己查" }));
+    const byHand = await screen.findByRole("button", { name: "Google search(在新分頁開啟)" });
+
+    expect(helper).toHaveTextContent(/^Google search$/);
+    expect(byHand).toHaveTextContent(/^Google search ↗$/);
+  });
+
+  // The helper searches Google, or the first destination a deploy lists
+  // without it (`pick_search_target`): the button names that one.
+  it.each([
+    [["Bing", "Google"], "Google search"],
+    [["Bing", "DuckDuckGo"], "Bing search"],
+  ])("names the destination the helper will use: %j", async (names, label) => {
+    draw({ targets: names.map((name) => ({ name, url: `https://${name}.example/?q={q}` })) });
+
+    expect(await screen.findByRole("button", { name: label })).toBeInTheDocument();
+  });
+
+  it("says which search again after a failure", async () => {
+    draw({ current: async () => job({ state: "failed", error: "x" }) });
+    await look();
+
+    expect(await screen.findByRole("button", { name: "再 Google search 一次" })).toBeInTheDocument();
+  });
+
+  it("opens a page with the words doing it by hand uses, and again after a failure", async () => {
+    draw({
+      lookup: PAGE,
+      handOver: async (args) => {
+        if (args.auto) throw new HttpError(409, "waits for the nod");
+        return job({ kind: "open_url" });
+      },
+      current: async () => job({ kind: "open_url", state: "failed", error: "x" }),
+    });
+
+    fireEvent.click(await screen.findByRole("button", { name: "開啟這個網址" }));
+
+    expect(await screen.findByRole("button", { name: "再開一次" })).toBeInTheDocument();
+  });
+});
+
+// Review round 1: the button named the destination only once the deploy's list
+// was read — with the list unreadable a connected helper's card had no button
+// at all (before D8, 「查」 never depended on it). The helper picks its own.
+describe("with the destinations unreadable", () => {
+  it("still offers the helper's search, unnamed", async () => {
+    const client = draw({ targetsFail: true });
+    fireEvent.change(await screen.findByLabelText("搜尋關鍵字"), { target: { value: "x" } });
+
+    fireEvent.click(await screen.findByRole("button", { name: "搜尋" }));
+
+    await waitFor(() => expect(client.handOver).toHaveBeenCalled());
+  });
+});
+
+// Review round 2: the unnamed 「搜尋」 is for a list that cannot be read — not
+// a flash before 「Google search」 while it is still on its way.
+describe("with the destinations still loading", () => {
+  it("offers no unnamed search yet", async () => {
+    draw({ targetsPending: true });
+    await screen.findByLabelText("搜尋關鍵字");
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(screen.queryByRole("button", { name: "搜尋" })).not.toBeInTheDocument();
   });
 });

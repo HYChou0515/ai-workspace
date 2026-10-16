@@ -2622,6 +2622,33 @@ AI 讀 `wui` skill 時會看到「這個 item 能讓頁面問的 subagent」清�
 **確認做完**(`rollout 後`):打開任一 skill 頁 →「安裝到 workspace…」:清單和打開 item 列表差不多快,每一列很快從「檢查中…」
 變成各自的狀態;已裝過的 workspace 標「已經裝了」且不能選。
 
+### 2026-10-16 · 727b6ac0 · #963 問外部AI(`ask_ext_ai`),以及小幫手的按鈕和自己查用同一個字 {#pr-963}
+
+**設定** — 必要的:無。選配(`rollout 後`,而且要等下面的打包發布了):`server.ext_ai_enabled: true` 讓聊天裡的 AI
+能「問外部AI」(預設關,見 [設定](configuration.md))。為什麼要等:大家的小幫手裡還沒有公司的網站檔時打開它,
+每張卡片都只能手動問。
+
+**資料** — 無。小幫手報到多記一個 `ext_ai` 欄位(有預設值,舊資料照讀),工作種類多一種 `ask_ext_ai`。
+
+**k8s · CI 側** — 前後端都改,照常重 build、部署。**只有要用問外部AI 時**,在打開上面的開關**之前**重新打包小幫手:
+1. 複製 `ai-workspace-helper/ext_ai_site.template.py` 成 `ext_ai_site.py`、填 `URL`,用
+   `python -m ai_workspace_helper try-ext-ai --site ext_ai_site.py "問題"` 在自己電腦上對真的網頁試過——因為那個網頁
+   長什麼樣只有公司知道,範本是猜的。
+2. `python3 scripts/pack_ai_workspace_helper.py --version <新版> --ext-ai-site ext_ai_site.py`,放進
+   `server.ai_workspace_helper_dir`,大家重裝(步驟在 [小幫手](ai-workspace-helper.md) 的「讓 AI 能問公司的網頁 AI」)。
+
+跳過的後果:開關打開了,小幫手在線時卡片說「你的小幫手沒有設定外部AI,請自己去問…」,離線時說「小幫手未連線」——
+都只能手動問。
+
+**行為改變,沒有開關**(plan-ext-ai D8,`rollout 後` 生效):「請幫我查」卡片在小幫手連線時,按鈕不再寫「查」/「重查」,
+而是和自己查一樣的字——搜尋是「{目的地} search」(有 Google 就是 Google,否則部署設定的第一個目的地;讀不到設定時寫
+「搜尋」),開網址是「開啟這個網址」,失敗後是「再 Google search 一次」/「再開一次」;自己查的按鈕多一個 ↗。教過使用者
+「按查」的說明要跟著改(`rollout 後`),不改的後果:使用者照說明找「查」找不到。
+
+**確認做完**(`rollout 後`):有小幫手的人開一張要搜尋的卡片,按鈕寫「Google search」;有開問外部AI 時,請 AI 問一個
+需要別人意見的問題,卡片標題是「問外部AI」、問題可以改,按下去之後顯示已等幾秒,回答回來存在 `lookups/`,AI 說明
+這是外部AI 的說法。
+
 ### 2026-10-16 · #962 容量規劃：用量紀錄，與 superuser 的容量頁 {#pr-962}
 
 **設定** — 新的 `capacity:` 區塊（每個 key 見 [configuration.md §15](configuration.md#15-capacity容量規劃)）。

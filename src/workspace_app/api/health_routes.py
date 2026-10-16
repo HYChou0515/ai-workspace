@@ -185,6 +185,7 @@ def register_replay_routes(
     service: ReplayService | None,
     load_turn: LoadTurn,
     load_doc: LoadDoc,
+    ext_ai: bool = False,
 ) -> None:
     def _service() -> ReplayService:
         if service is None:
@@ -212,6 +213,8 @@ def register_replay_routes(
                 template_profile=template_profile,
                 # An item thread is a chat; a KB chat thread holds no `ask_user`.
                 in_chat=body.source == "rca",
+                # …and on a deploy with the 問外部AI card, that one (plan-ext-ai D5)
+                ext_ai=ext_ai,
             )
         except ReplayInvalidTarget as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
