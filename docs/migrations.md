@@ -2527,6 +2527,60 @@ AI 讀 `wui` skill 時會看到「這個 item 能讓頁面問的 subagent」清�
 會被退回請 AI 精簡成關鍵字再送(不截斷)。人在卡片上自己改查詢不受限。
 
 **確認做完**(`rollout 後`):請 AI 查一個要搜尋的問題,「請幫我查」卡片上的查詢是幾個關鍵字,不是一整句話。
+### 2026-10-15 · #955 工具很多的 item：模型拿到工具目錄，完整 schema 用到才送 {#pr-955}
+
+**設定** — 無。沒有新旋鈕,也沒有要改的 key。
+
+**資料** — 不動。
+
+**k8s · CI 側** — 照常重 build、部署。manifest 沒改。
+
+**行為改變,沒有開關**:一輪送給模型的工具清單裡,**套件 command 只佔一行**——名字 +
+description 的第一句(上限 100 字元)、**沒有參數 schema**。模型要用哪個就直接呼叫它,
+系統回完整描述 + 真的 schema,照著再呼叫一次就執行;模型也可以先 `load_tool` 問用法。
+載入只在那一輪有效。內建工具(`exec`、`read_file` 這些)不受影響,照舊帶完整 schema。
+同時,system prompt 裡那份「每個工具的名字 + 描述 + 完整 JSON schema」的複本**整段移除**,
+換成一段固定長度的說明。
+
+為什麼要動:這兩份清單以前每輪都送,所以工具一多,光工具清單就能把窗口吃掉——有部署量到
+**414,115 字元**的 system prompt。超出窗口時,會拒絕的 endpoint 回 400(我們讀出上限、縮
+歷史重送),**不會拒絕的 endpoint 直接砍掉請求前段**,而前段正是你的 `system_prompt`:
+模型照樣流暢回答,只是沒看到你的指令。量到的差別(5 個套件、14 個 command):19,884 tok → **1,048 tok**(目錄 710 +
+`load_tool` 自己 120 + 那段固定說明 218);每個目錄條目約 51 tok。14 個內建工具不受影響、
+照舊帶完整 schema,把它們算進去的話整輪工具清單是 33,746 → **5,586 tok**。
+
+**代價**:一輪裡第一次用到某個 command 會多一次 round-trip(載入 → 再呼叫)。這會吃掉
+`runner.max_turns`(預設 `10`)的額度:一輪用到 N 個不同的 command,從前要 N+1 步,現在
+最多要 2N+1 步,所以「一輪裡最多用幾個不同的套件 command」從 ~9 掉到 ~4;超過的那一輪
+會收到「已達步數上限」而不是答案。模型被告知可以用一次 `load_tool` 載好幾個(那樣是
+N+2 步),但**如果你們的 item 常常一輪用到四個以上不同的 command,把 `runner.max_turns`
+調高**(`docs/configuration.md` §3 的設定表與 §10 的 yaml 都有這個 key)是這條的出口。
+
+**確認做完**(`rollout 後`):在一個工具很多的 item 送一句話,然後看那一輪的 LLM 呼叫記錄——
+路徑從 pod 自己的 `config.resolved.yaml` 讀 `observability.llm_log.dir`(開機寫在 config.yaml
+旁邊、0600),**不要照 repo 的預設值**,你們的 WORKDIR 不一定一樣:
+
+```
+printenv WORKSPACE_APP_CONFIG            # 沒設就是 cwd 的 ./config.yaml
+grep -n -A3 "llm_log" <config 所在目錄>/config.resolved.yaml
+tail -5 <上面讀到的 dir>/$(date +%F)/index.jsonl   # 每通呼叫一行,有 seq / ts / file
+```
+
+**要看那一輪的第一通呼叫**,不是最新的一筆:同一輪在載入之後的每一通都會帶著已載入
+command 的完整 schema——那正是這個功能在做的事。從 `index.jsonl` 認出你那一輪的幾行
+(看 `ts`),開 `seq` **最小**那一行的 `file`。
+
+⚠️ 不要用檔名猜:`0001-…` 不是「那一輪的第一通」,`seq` 是**每個 process** 從 0 開始的
+(pod 重啟後同一天會有兩個 `0001-`,跨午夜的那天可能根本沒有)。也不要用
+`ls -t … | head -1`:`index.jsonl` 寫在 record 之後,mtime 可能更新,而它沒有 `request`。
+
+那一筆裡:`request.messages[0].content` 就是 system prompt,字元數會掉**一到兩個數量級**
+(本機同一組工具量到的是 83,180 → 874 字元;你們的絕對值取決於自己的工具數與描述長度);
+`request.tools` 裡的套件 command 只有名字 + 一行描述 + `[套件名]`、`properties` 是空的。
+⚠️ 那些記錄裡 `api_key` 是明文(它設計成可重播),貼出來前先拿掉。
+
+**漏做的症狀** — 沒有「漏做」:這是單向的縮減,不需要運營方動手。但如果某個 item 的流程
+原本靠「模型一開始就看得到所有 schema」,它會變成每輪多一次載入;那是預期的代價,不是故障。
 
 ### 2026-10-15 · 73f7c73d · #957 「請幫我查」:搜尋的關鍵字由人自己填,AI 只給建議 {#pr-957}
 
