@@ -23,6 +23,8 @@ from workspace_app.workflow.orchestrator import (
     ActiveRunExists,
     NotAwaitingDecision,
     NotAwaitingSteer,
+    NotRetryable,
+    UnknownStep,
     WorkflowOrchestrator,
     WorkflowUnavailable,
 )
@@ -454,6 +456,20 @@ async def test_start_refuses_an_empty_captured_user(spec_instance: SpecStar):
         await orch.start(slug="rca", item_id="iE", profile="echo", captured_user="")
 
 
+async def test_a_run_records_the_schedule_that_started_it(spec_instance: SpecStar):
+    """plan-workflow-out-of-chat P7: the Workflows sidebar marks a scheduled
+    execution by whether a schedule started it (`from_schedule`, the same field
+    the tool-usage stats count a schedule's calls by); any other launch is not."""
+    orch, _ = _orch(spec_instance, _run_noop)
+    scheduled = await orch.start(
+        slug="rca", item_id="iS", profile="echo", captured_user="u", from_schedule=True
+    )
+    by_person = await orch.start(slug="rca", item_id="iT", profile="echo", captured_user="u")
+
+    assert orch._get(scheduled).from_schedule is True
+    assert orch._get(by_person).from_schedule is False
+
+
 async def _run_noop(wf, inputs):
     return {}
 
@@ -627,7 +643,8 @@ async def test_cancel_signals_the_epoch_even_when_the_runs_task_is_on_a_peer_pod
 
     result = await orch.cancel(run_id, "i9")
 
-    assert stopped == ["c9"]  # advanced the shared epoch for the run's key
+    # advanced the shared epoch for the run's key, and for its aside lane (a steer)
+    assert stopped == ["c9", "c9#aside"]
     assert result is True  # dispatched cross-pod, not a silent no-op
 
 
@@ -1593,3 +1610,457 @@ async def test_a_repair_shows_on_the_board_as_its_own_status(spec_instance: Spec
     got = spec_instance.get_resource_manager(WorkflowRun).get(holder["run_id"]).data
     row = next(s for s in got.steps if s.name == "think")
     assert row.status == "passed" and row.repairs == 2 and row.reason == ""
+
+
+# ── Continue from here / Re-run this step (plan-workflow-out-of-chat D9) ──
+
+
+def _flaky(calls: list, name: str, fail_times: int):
+    """An execute that fails its first ``fail_times`` attempts, then passes."""
+
+    async def execute(_fb):
+        calls.append(name)
+        if calls.count(name) <= fail_times:
+            raise RuntimeError(f"{name} broke")
+        return {name: True}
+
+    return execute
+
+
+def _two_step_run(calls: list, fail_second: int = 1):
+    async def run(wf, inputs):
+        await run_step(wf, name="first", phase="think", args={"a": 1}, execute=_rec(calls, "first"))
+        await run_step(
+            wf,
+            name="second",
+            phase="review",
+            args={"b": 1},
+            execute=_flaky(calls, "second", fail_second),
+        )
+        return {"ok": True}
+
+    return run
+
+
+async def test_continuing_a_failed_run_skips_what_passed_and_reruns_the_rest(
+    spec_instance: SpecStar,
+):
+    calls: list[str] = []
+    orch, _ = _orch(spec_instance, _two_step_run(calls))
+    run_id = await orch.start(slug="rca", item_id="iR", profile="echo", captured_user="u")
+    failed = await _ran(orch, run_id, spec_instance)
+    assert failed.status is RunStatus.ERROR
+
+    await orch.retry(slug="rca", item_id="iR", profile="echo", run_id=run_id)
+    # Until the new drive ends, the page must not read the old ending as this one's.
+    going = orch._get(run_id)
+    assert (going.status, going.ended, going.result) == (RunStatus.RUNNING, None, None)
+    got = await _ran(orch, run_id, spec_instance)
+
+    assert got.status is RunStatus.DONE
+    assert got.result == {"ok": True}
+    assert got.ended is not None
+    assert calls == ["first", "second", "second"]  # first skipped on the way back
+    # The counters describe THIS attempt, not the sum of both: Step N of M reads them.
+    assert [(p.phase, p.done, p.failed) for p in got.phases] == [
+        ("think", 1, 0),
+        ("review", 1, 0),
+    ]
+
+
+async def test_rerunning_a_step_runs_it_again_even_though_it_passed(spec_instance: SpecStar):
+    calls: list[str] = []
+    orch, _ = _orch(spec_instance, _two_step_run(calls))
+    run_id = await orch.start(slug="rca", item_id="iR2", profile="echo", captured_user="u")
+    await _ran(orch, run_id, spec_instance)
+
+    await orch.retry(slug="rca", item_id="iR2", profile="echo", run_id=run_id, rerun="first")
+    got = await _ran(orch, run_id, spec_instance)
+
+    assert got.status is RunStatus.DONE
+    assert calls == ["first", "second", "first", "second"]
+
+
+async def test_a_stopped_run_can_be_continued(spec_instance: SpecStar):
+    calls: list[str] = []
+    orch, _ = _orch(spec_instance, _two_step_run(calls, fail_second=0))
+    run_id = _insert_run(orch, item_id="iR3", status=RunStatus.CANCELLED)
+
+    await orch.retry(slug="rca", item_id="iR3", profile="echo", run_id=run_id)
+
+    assert (await _ran(orch, run_id, spec_instance)).status is RunStatus.DONE
+
+
+@pytest.mark.parametrize(
+    "status", [RunStatus.RUNNING, RunStatus.PENDING, RunStatus.AWAITING_HUMAN, RunStatus.DONE]
+)
+async def test_only_a_failed_or_stopped_run_is_continued(spec_instance: SpecStar, status):
+    orch, _ = _orch(spec_instance, _two_step_run([]))
+    run_id = _insert_run(orch, item_id="iR4", status=status)
+
+    with pytest.raises(NotRetryable):
+        await orch.retry(slug="rca", item_id="iR4", profile="echo", run_id=run_id)
+    assert orch._get(run_id).status is status
+
+
+async def test_continuing_is_refused_while_another_execution_of_that_workflow_is_live(
+    spec_instance: SpecStar,
+):
+    """Every execution of a workflow on an item shares one journal
+    (`/.workflow/<workflow_id>`), so two at once would race on the same step files."""
+    orch, _ = _orch(spec_instance, _two_step_run([]))
+    old = _insert_run(orch, item_id="iR5", status=RunStatus.ERROR)
+    _insert_run(orch, item_id="iR5", status=RunStatus.RUNNING)
+
+    with pytest.raises(ActiveRunExists):
+        await orch.retry(slug="rca", item_id="iR5", profile="echo", run_id=old)
+    assert orch._get(old).status is RunStatus.ERROR
+
+
+async def test_rerun_names_a_step_of_this_execution(spec_instance: SpecStar):
+    """The name reaches a journal glob; one that is not a step on the run's board
+    (a typo, `*`, a path) is refused before anything is deleted."""
+    calls: list[str] = []
+    orch, _ = _orch(spec_instance, _two_step_run(calls))
+    run_id = await orch.start(slug="rca", item_id="iR6", profile="echo", captured_user="u")
+    await _ran(orch, run_id, spec_instance)
+
+    for bad in ("*", "../first", "nope"):
+        with pytest.raises(UnknownStep):
+            await orch.retry(slug="rca", item_id="iR6", profile="echo", run_id=run_id, rerun=bad)
+    assert orch._get(run_id).status is RunStatus.ERROR
+    assert calls == ["first", "second"]
+
+
+async def test_continuing_is_only_answered_through_its_own_item(spec_instance: SpecStar):
+    from specstar.types import ResourceIDNotFoundError
+
+    orch, _ = _orch(spec_instance, _two_step_run([]))
+    rid = _insert_run(orch, item_id="iA", status=RunStatus.ERROR)
+    with pytest.raises(ResourceIDNotFoundError):
+        await orch.retry(slug="rca", item_id="iB", profile="echo", run_id=rid)
+    assert orch._get(rid).status is RunStatus.ERROR
+
+
+async def test_continuing_is_not_held_up_by_a_live_execution_of_another_workflow(
+    spec_instance: SpecStar,
+):
+    """Another workflow journals under its own folder: nothing is shared to race on."""
+    calls: list[str] = []
+    orch, _ = _orch(spec_instance, _two_step_run(calls, fail_second=0))
+    old = _insert_run(orch, item_id="iR7", status=RunStatus.ERROR, workflow_id="classify")
+    _insert_run(orch, item_id="iR7", status=RunStatus.RUNNING, workflow_id="digest")
+
+    await orch.retry(slug="rca", item_id="iR7", profile="echo", run_id=old)
+
+    assert (await _ran(orch, old, spec_instance)).status is RunStatus.DONE
+
+
+async def test_continuing_is_not_held_up_by_a_run_of_that_workflow_waiting_at_a_gate(
+    spec_instance: SpecStar,
+):
+    """Found live: an execution paused at a gate touches no step file until someone
+    decides, which may be days away — and `start` does not wait for it either. Only
+    one that is executing (pending / running) shares the journal right now."""
+    calls: list[str] = []
+    orch, _ = _orch(spec_instance, _two_step_run(calls, fail_second=0))
+    _insert_run(orch, item_id="iR8", status=RunStatus.AWAITING_HUMAN)
+    old = _insert_run(orch, item_id="iR8", status=RunStatus.ERROR)  # the newest
+
+    await orch.retry(slug="rca", item_id="iR8", profile="echo", run_id=old)
+
+    assert (await _ran(orch, old, spec_instance)).status is RunStatus.DONE
+
+
+async def test_continuing_waits_behind_a_run_of_that_workflow_about_to_execute(
+    spec_instance: SpecStar,
+):
+    orch, _ = _orch(spec_instance, _two_step_run([]))
+    old = _insert_run(orch, item_id="iR9", status=RunStatus.ERROR)
+    _insert_run(orch, item_id="iR9", status=RunStatus.PENDING)
+
+    with pytest.raises(ActiveRunExists):
+        await orch.retry(slug="rca", item_id="iR9", profile="echo", run_id=old)
+
+
+# ── review round 1 ──
+
+
+async def test_two_continues_pressed_together_drive_the_execution_once(spec_instance: SpecStar):
+    """Review R1 (defect 1): the checks ran before awaits and the flip to running
+    after them, so two presses both passed and two drivers ran one run_id."""
+    calls: list[str] = []
+
+    async def load_workspace(_item, _wf):
+        await asyncio.sleep(0)  # what a real filestore read does
+        return None
+
+    async def settled():
+        for _ in range(100):
+            await asyncio.sleep(0)
+            if orch._get(run_id).status in (RunStatus.ERROR, RunStatus.DONE):
+                return orch._get(run_id).status
+        raise AssertionError("never settled")
+
+    orch, _ = _orch(spec_instance, _two_step_run(calls), load_workspace=load_workspace)
+    run_id = await orch.start(slug="rca", item_id="iC1", profile="echo", captured_user="u")
+    assert await settled() is RunStatus.ERROR
+    before = calls.count("second")
+
+    got = await asyncio.gather(
+        orch.retry(slug="rca", item_id="iC1", profile="echo", run_id=run_id),
+        orch.retry(slug="rca", item_id="iC1", profile="echo", run_id=run_id),
+        return_exceptions=True,
+    )
+    assert await settled() is RunStatus.DONE
+
+    assert sum(isinstance(g, NotRetryable) for g in got) == 1
+    assert calls.count("second") == before + 1  # driven once
+
+
+async def test_a_continue_that_cannot_load_its_workflow_leaves_the_run_as_it_was(
+    spec_instance: SpecStar,
+):
+    orch, _ = _orch(spec_instance, _two_step_run([]))
+    orch.load_manifest = lambda *_a: None  # the workflow no longer loads
+    run_id = _insert_run(orch, item_id="iC2", status=RunStatus.ERROR)
+
+    with pytest.raises(WorkflowUnavailable):
+        await orch.retry(slug="rca", item_id="iC2", profile="echo", run_id=run_id)
+    assert orch._get(run_id).status is RunStatus.ERROR
+
+
+async def test_only_the_newest_execution_of_a_workflow_is_continued(spec_instance: SpecStar):
+    """Review R1 (defect 2): a workflow's executions share one journal, so an older
+    one's Re-run deleted the newer one's results. Continuing it would build on
+    the newer one's files too."""
+    import msgspec
+
+    orch, _ = _orch(spec_instance, _two_step_run([]))
+    older = _insert_run(orch, item_id="iC3", status=RunStatus.DONE, workflow_id="w")
+    _insert_run(orch, item_id="iC3", status=RunStatus.DONE, workflow_id="w")
+    _insert_run(orch, item_id="iC3", status=RunStatus.DONE, workflow_id="other")
+    # Written AFTER the newer one exists (found live: a gate decided late). A
+    # revision's time is not the run's: "newest" is by when the run was created.
+    rm = orch._rm()
+    rm.update(older, msgspec.structs.replace(rm.get(older).data, status=RunStatus.ERROR))
+
+    with pytest.raises(NotRetryable, match="newer"):
+        await orch.retry(slug="rca", item_id="iC3", profile="echo", run_id=older)
+    assert orch.newest_run_of_workflow("iC3", "w") != older
+    assert orch._get(older).status is RunStatus.ERROR
+
+
+async def test_a_page_job_is_not_an_execution_of_the_workflow_it_shares_an_id_with(
+    spec_instance: SpecStar,
+):
+    """A page job (#942) is a run with no workflow: its `workflow_id` is "", the
+    id a profile's first workflow runs under too. Started after a failed
+    execution, it took "newest" from it (Continue refused as superseded), and
+    while it ran it read as that workflow's executing run (refused as active)."""
+    from workspace_app.workflow.run import PageJob
+
+    orch, _ = _orch(spec_instance, _two_step_run([]))
+    failed = _insert_run(orch, item_id="iPJ", status=RunStatus.ERROR, workflow_id="")
+    _insert_run(
+        orch,
+        item_id="iPJ",
+        status=RunStatus.RUNNING,
+        workflow_id="",
+        page_job=PageJob(kind="tool", name="t", input=""),
+    )
+
+    assert orch.newest_run_of_workflow("iPJ", "") == failed
+    assert orch._active_run_of_workflow("iPJ", "") is None
+
+
+async def test_rerunning_a_step_whose_name_looks_like_a_pattern_runs_it_again(
+    spec_instance: SpecStar,
+):
+    """Review R1 (defect 8): the name reached the journal glob as a pattern, so
+    `pick[1]` matched nothing and the step skipped instead of re-running."""
+    calls: list[str] = []
+
+    async def run(wf, inputs):
+        await run_step(
+            wf, name="pick[1]", phase="think", args={"a": 1}, execute=_rec(calls, "pick")
+        )
+        raise RuntimeError("after the step")
+
+    orch, _ = _orch(spec_instance, run)
+    run_id = await orch.start(slug="rca", item_id="iC4", profile="echo", captured_user="u")
+    await _ran(orch, run_id, spec_instance)
+
+    await orch.retry(slug="rca", item_id="iC4", profile="echo", run_id=run_id, rerun="pick[1]")
+    await _ran(orch, run_id, spec_instance)
+
+    assert calls == ["pick", "pick"]
+
+
+async def test_stop_reaches_the_steerers_turn_on_its_own_lane(spec_instance: SpecStar):
+    """Review R1: the steerer runs as an aside, on a lane of its own (P5), and Stop
+    signalled only the run's chat — the proposal's model turn kept running and
+    paying, and the next steer queued behind it."""
+    from workspace_app.workflow.handle import aside_lane
+
+    stopped: list[str] = []
+
+    async def on_stop(key: str) -> None:
+        stopped.append(key)
+
+    orch, _ = _orch(spec_instance, lambda _wf, _i: _ok(None), on_stop=on_stop)
+    run_id = _insert_run(orch, item_id="iA1", status=RunStatus.RUNNING, chat_id="conversation:c")
+
+    assert await orch.cancel(run_id, "iA1") is True
+    assert stopped == ["conversation:c", aside_lane("conversation:c")]
+
+
+async def test_a_continue_another_pod_claimed_first_is_refused(spec_instance: SpecStar):
+    """The claim is a CAS on the run's etag: a peer pod's claim that lands between
+    this pod's read and its write wins, and this one is refused rather than
+    driving the run a second time."""
+    import msgspec
+
+    orch, _ = _orch(spec_instance, _two_step_run([]))
+    run_id = _insert_run(orch, item_id="iC5", status=RunStatus.ERROR)
+    rm = orch._rm()
+    real_get = rm.get
+    reads: list[str] = []
+
+    def get_then_peer_claims(rid, *a, **k):
+        res = real_get(rid, *a, **k)
+        reads.append(rid)
+        if reads.count(run_id) == 2:  # the claim's own read; the peer writes after it
+            rm.update(rid, msgspec.structs.replace(res.data, status=RunStatus.PENDING))
+        return res
+
+    rm.get = get_then_peer_claims
+    orch._rm = lambda: rm
+    try:
+        with pytest.raises(NotRetryable, match="already being continued"):
+            await orch.retry(slug="rca", item_id="iC5", profile="echo", run_id=run_id)
+    finally:
+        rm.get = real_get
+
+
+# ── review round 2 ──
+
+
+@pytest.mark.parametrize("verb", ["steer", "confirm_steer", "decide"])
+async def test_an_older_execution_cannot_be_changed(spec_instance: SpecStar, verb: str):
+    """Review R2: round 1 closed Re-run on an older execution, but its change (the
+    steer) still applied: `apply_steer` deletes `step_<name>/*` in the journal it
+    shares with the newer execution, then re-drives the old run into it."""
+    from workspace_app.workflow.orchestrator import SupersededRun
+    from workspace_app.workflow.run import PendingDecision, SteerPlan
+
+    orch, _ = _orch(spec_instance, _two_step_run([]))
+    older = _insert_run(
+        orch,
+        item_id="iS1",
+        status=RunStatus.AWAITING_HUMAN,
+        pending_steer=SteerPlan(instruction="x", invalidate=["first"]),
+        pending_decision=PendingDecision(phase="think", title="t", allow=["approve"]),
+    )
+    _insert_run(orch, item_id="iS1", status=RunStatus.DONE)
+    common = {"slug": "rca", "item_id": "iS1", "profile": "echo", "run_id": older}
+    call = {
+        "steer": lambda: orch.steer(**common, instruction="redo first"),
+        "confirm_steer": lambda: orch.confirm_steer(**common, approve=True),
+        # a gate decided on it re-drives it into the journal the newer one owns now
+        "decide": lambda: orch.decide(**common, choice="approve"),
+    }[verb]
+
+    with pytest.raises(SupersededRun):
+        await call()
+    assert orch._get(older).status is RunStatus.AWAITING_HUMAN
+
+
+async def test_rejecting_an_older_executions_change_still_works(spec_instance: SpecStar):
+    """Discarding a plan touches no file, so an older execution can still be told no."""
+    from workspace_app.workflow.run import SteerPlan
+
+    orch, _ = _orch(spec_instance, _two_step_run([]))
+    older = _insert_run(
+        orch,
+        item_id="iS2",
+        status=RunStatus.AWAITING_HUMAN,
+        pending_steer=SteerPlan(instruction="x"),
+    )
+    _insert_run(orch, item_id="iS2", status=RunStatus.DONE)
+
+    await orch.confirm_steer(slug="rca", item_id="iS2", profile="echo", run_id=older, approve=False)
+
+    assert orch._get(older).pending_steer is None
+
+
+async def test_a_continue_checks_the_run_on_the_read_it_claims_with(spec_instance: SpecStar):
+    """Review R2: the status was checked on one read and the CAS used a later one;
+    a peer's whole claim between the two left this pod CASing the peer's PENDING
+    row successfully, and both drove the run."""
+    import msgspec
+
+    orch, _ = _orch(spec_instance, _two_step_run([]))
+    run_id = _insert_run(orch, item_id="iC6", status=RunStatus.ERROR)
+    real = orch.newest_run_of_workflow
+
+    def newest_while_a_peer_claims(item_id, workflow_id):
+        rm = orch._rm()  # the peer's claim lands between the checks and the claim
+        rm.update(run_id, msgspec.structs.replace(rm.get(run_id).data, status=RunStatus.PENDING))
+        return real(item_id, workflow_id)
+
+    orch.newest_run_of_workflow = newest_while_a_peer_claims
+    with pytest.raises(NotRetryable):
+        await orch.retry(slug="rca", item_id="iC6", profile="echo", run_id=run_id)
+
+
+async def test_a_stop_while_a_continue_is_starting_stops_it(spec_instance: SpecStar):
+    """Review R2: Stop during the claim (the run PENDING, no driver yet) answered
+    success, and the drive that followed ran to done."""
+    calls: list[str] = []
+    gate = asyncio.Event()
+
+    async def load_workspace(_item, _wf):
+        await gate.wait()
+        return None
+
+    orch, _ = _orch(
+        spec_instance, _two_step_run(calls, fail_second=0), load_workspace=load_workspace
+    )
+    run_id = _insert_run(orch, item_id="iC7", status=RunStatus.ERROR)
+
+    going = asyncio.ensure_future(
+        orch.retry(slug="rca", item_id="iC7", profile="echo", run_id=run_id)
+    )
+    await asyncio.sleep(0)
+    assert orch._get(run_id).status is RunStatus.PENDING  # claimed, not driven yet
+    assert await orch.cancel(run_id, "iC7") is True
+    gate.set()
+    await going
+    for _ in range(20):
+        await asyncio.sleep(0)
+
+    assert orch._get(run_id).status is RunStatus.CANCELLED
+    assert calls == []
+
+
+async def test_a_phase_whose_steps_were_already_done_reads_as_done(spec_instance: SpecStar):
+    """Found by the plan's Verification live check: a step skipped from the journal
+    (an earlier run of the workflow did it) counted `done` but left its phase
+    `pending`, so the execution tab said "Not started" next to that step's
+    Result."""
+    calls: list[str] = []
+
+    async def run(wf, inputs):
+        await run_step(wf, name="think", phase="think", args={"a": 1}, execute=_rec(calls, "think"))
+        return {}
+
+    orch, _ = _orch(spec_instance, run)
+    first = await orch.start(slug="rca", item_id="iK1", profile="echo", captured_user="u")
+    await _ran(orch, first, spec_instance)
+    second = await orch.start(slug="rca", item_id="iK1", profile="echo", captured_user="u")
+    got = await _ran(orch, second, spec_instance)
+
+    assert calls == ["think"]  # the second run skipped it
+    think = next(p for p in got.phases if p.phase == "think")
+    assert (think.status, think.done) == ("skipped", 1)

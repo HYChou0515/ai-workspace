@@ -8,6 +8,7 @@ import { cleanup, screen } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { useItemProfile } from "../hooks/itemProfile";
 import { useMarkingStore } from "../hooks/useMarking";
 import { viewPageHref } from "../lib/viewPage";
 import type { LayoutNode } from "./investigation/paneTree";
@@ -16,10 +17,18 @@ import { ItemViewPage } from "./ItemViewPage";
 
 vi.mock("../renderers/FileView", () => ({
   FileView: ({ path }: { path: string }) => (
-    <div data-testid="file-view" data-marking-store={useMarkingStore() ? "yes" : "no"}>
+    <div
+      data-testid="file-view"
+      data-marking-store={useMarkingStore() ? "yes" : "no"}
+      data-profile={useItemProfile()}
+    >
       {path}
     </div>
   ),
+}));
+vi.mock("../hooks/useResources", () => ({
+  useAppManifest: () => ({ default_profile: "default", resource_route: "/pm-item" }),
+  useAppItem: () => ({ profile: "fast" }),
 }));
 vi.mock("../hooks/useAgent", () => ({
   AgentProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
@@ -72,6 +81,12 @@ describe("ItemViewPage", () => {
     ]);
     // The id in the URL is decoded before it reaches the item's file service.
     expect(useFiles).toHaveBeenCalledWith("PG/1");
+  });
+
+  it("tells what it renders the item's profile, as the workspace does (review R1)", () => {
+    // An execution opened here names its workflow and steps from that profile.
+    visit(viewPageHref("pm", "PG-1", { path: "workflow-run:r1" }));
+    expect(screen.getByTestId("file-view")).toHaveAttribute("data-profile", "fast");
   });
 
   it("draws a single path as one pane", () => {

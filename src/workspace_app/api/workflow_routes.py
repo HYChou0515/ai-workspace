@@ -25,19 +25,23 @@ from starlette.datastructures import UploadFile
 from ..files import WorkspaceFiles, rel_path
 from ..perm.model import Verb
 from ..tooling.registry import PackageInfo
+from ..workflow.engine import journal_stem, transcript_path
 from ..workflow.event_backfill import backfill_trigger_lag, find_trigger_lag
 from ..workflow.event_dispatch import EventTriggerDispatcher
-from ..workflow.handle import WorkflowHandle
-from ..workflow.inputs import resolve_inputs
+from ..workflow.handle import WorkflowHandle, journal_dir_of
+from ..workflow.inputs import inputs_path, resolve_inputs
 from ..workflow.orchestrator import (
     ActiveRunExists,
     NotAwaitingDecision,
     NotAwaitingSteer,
+    NotRetryable,
+    SupersededRun,
+    UnknownStep,
     WorkflowOrchestrator,
     WorkflowUnavailable,
 )
 from ..workflow.preflight import can_run as _preflight_can_run
-from ..workflow.run import WorkflowRun
+from ..workflow.run import WorkflowRun, is_execution
 from ..workflow.user_schedules import SchedulePolicy
 from .activity import ActivityLog
 from .events import FileChanged
@@ -48,6 +52,8 @@ from .schemas import (
     _PhaseOut,
     _PreflightCheckOut,
     _PreflightPreviewOut,
+    _RetryBody,
+    _RetryOut,
     _SteerAck,
     _SteerBody,
     _SteerConfirmBody,
@@ -464,11 +470,10 @@ def register_workflow_routes(
         runs are per-chat, so several may run in parallel on one item (§3). Inputs come
         from the workspace (``MANIFEST.input_json``).
 
-        #343: with a ``chat_id`` the run instead TAKES OVER that existing chat — the one
-        the user prepared in — so the workflow's agent nodes inherit the chat's history
-        and the run streams into the same thread. The chat must have no active run
-        (else 409); once its previous run is terminal it may host another. Without a
-        ``chat_id`` the legacy behaviour holds (a fresh workflow chat is opened).
+        ``chat_id`` is refused (400): a run never takes over a chat
+        (plan-workflow-out-of-chat D3; #343's takeover is overturned). It is named
+        rather than ignored, so a caller still sending it learns why instead of
+        finding its run in a conversation of its own.
 
         #197: an external system triggers headlessly by uploading the workflow's input
         FILES in the SAME call — we communicate with workflows through the workspace, not
@@ -481,6 +486,16 @@ def register_workflow_routes(
         # #306 PR3: launching a workflow drives the agent + stages input files →
         # gate on `converse` BEFORE the upload writes anything.
         locator.require_access(slug, item_id, "converse")
+        # Before anything is staged: the call is refused whole, like an upload
+        # that escapes the workspace.
+        if chat_id:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "chat_id is no longer accepted: a workflow runs in its own "
+                    "conversation, never in a chat. Launch without chat_id."
+                ),
+            )
         workflow_id, staged = await _staged_run_uploads(request, workflow_id)
         investigation_id, profile, manifest = await _workflow_manifest_or_404(
             slug, item_id, workflow_id
@@ -506,22 +521,15 @@ def register_workflow_routes(
             turn_engine.publish(
                 investigation_id, FileChanged(path=norm, by=get_user_id(), kind="written")
             )
-        # The chat overlay (manual §3): resolve the chat, start the run on it, then link
+        # The run's own conversation (manual §3): open it, start the run on it, then link
         # the run_id back. This runs synchronously before the run task drives any turn, so
-        # the chat carries its run_id before it streams. #343: with a chat_id, take over
-        # that existing chat; otherwise open a fresh workflow chat (the legacy path).
-        if chat_id:
-            target_chat_id, _conv = locator.require_chat(slug, item_id, chat_id)
-            ours = False
-        else:
-            # ONE way to open a run's chat, shared with the page-started entrance
-            # (`wui_routes.wui_run`). Two spellings of "open a workflow chat"
-            # eventually disagree, and the half that gets the next fix is not
-            # predictable from the outside.
-            target_chat_id = locator.open_run_chat(
-                investigation_id, manifest.title or workflow_id or "Workflow"
-            )
-            ours = True
+        # the conversation carries its run_id before it streams. ONE way to open it,
+        # shared with the page-started entrance (`wui_routes.wui_run`): two spellings of
+        # "open a workflow chat" eventually disagree, and the half that gets the next fix
+        # is not predictable from the outside.
+        target_chat_id = locator.open_run_chat(
+            investigation_id, manifest.title or workflow_id or "Workflow"
+        )
         try:
             run_id = await workflow_orchestrator.start(
                 slug=slug,
@@ -536,8 +544,7 @@ def register_workflow_routes(
                 chat_id=target_chat_id,
             )
         except ActiveRunExists as exc:
-            if ours:
-                locator.settle_run_chat(target_chat_id, None)
+            locator.settle_run_chat(target_chat_id, None)
             logger.warning(
                 "workflow_routes: run rejected on item %s, active run exists: %s",
                 investigation_id,
@@ -549,10 +556,8 @@ def register_workflow_routes(
             # a chat with no `run_id` is a FREE chat — the earliest free chat is
             # what the item opens as its DEFAULT. So a failed launch that keeps
             # its chat hands everyone on the item a different default
-            # conversation, and each retry adds another one ahead of it. A chat
-            # the CALLER supplied is theirs and is left alone.
-            if ours:
-                locator.settle_run_chat(target_chat_id, None)
+            # conversation, and each retry adds another one ahead of it.
+            locator.settle_run_chat(target_chat_id, None)
             raise
         locator.settle_run_chat(target_chat_id, run_id)
         activity.record(
@@ -571,18 +576,29 @@ def register_workflow_routes(
 
     @app.get("/a/{slug}/items/{item_id}/runs")
     async def list_workflow_runs(slug: str, item_id: str) -> list[dict]:
-        """#100: the item's run history (newest first), for the run-list view."""
+        """#100: the item's run history (newest first), for the run-list view.
+        `latest`: whether a run is the newest of its workflow on the item — its runs
+        share one journal, so only that one may be continued, changed or decided.
+        Computed here, once per list poll, so the badge, the waiting banner and an
+        open tab follow it without asking per run (review R3)."""
         investigation_id = locator.require_access(slug, item_id, "read_chat")
         rm = spec.get_resource_manager(WorkflowRun)
+        query = (QB["item_id"] == investigation_id).build()
+        created = {m.resource_id: m.created_time for m in rm.search_resources(query)}
         out: list[dict] = []
-        for r in rm.list_resources((QB["item_id"] == investigation_id).build()):
+        newest: dict[str, tuple[Any, str]] = {}
+        for r in rm.list_resources(query):
             assert isinstance(r.data, WorkflowRun)
-            out.append(
-                {
-                    "run_id": r.info.resource_id,  # ty: ignore[unresolved-attribute]
-                    **msgspec.to_builtins(r.data),
-                }
-            )
+            if not is_execution(r.data):
+                continue  # a page's job (#942): not a workflow's execution
+            rid = r.info.resource_id  # ty: ignore[unresolved-attribute]
+            at = created.get(rid)
+            seen = newest.get(r.data.workflow_id)
+            if at is not None and (seen is None or at > seen[0]):
+                newest[r.data.workflow_id] = (at, rid)
+            out.append({"run_id": rid, **msgspec.to_builtins(r.data)})
+        for d in out:
+            d["latest"] = newest.get(d.get("workflow_id", ""), (None, ""))[1] == d["run_id"]
         out.sort(key=lambda d: d.get("started") or 0, reverse=True)
         return out
 
@@ -640,15 +656,68 @@ def register_workflow_routes(
 
     @app.get("/a/{slug}/items/{item_id}/runs/{run_id}")
     async def get_workflow_run(slug: str, item_id: str, run_id: str) -> dict:
-        """#100 (manual §14): poll a run — status + result + per-phase progress."""
-        locator.require_access(slug, item_id, "read_chat")
-        rm = spec.get_resource_manager(WorkflowRun)
+        """#100 (manual §14): poll a run — status + result + per-phase progress. One
+        read of the run (it is polled every second while it moves); what needs the
+        item's other runs or its workflow file is on `…/files`. A run of another
+        item is not found here."""
+        investigation_id = locator.require_access(slug, item_id, "read_chat")
+        data = _run_of(run_id, investigation_id)
+        return {"run_id": run_id, **msgspec.to_builtins(data)}
+
+    @app.get("/a/{slug}/items/{item_id}/runs/{run_id}/files")
+    async def get_workflow_run_files(slug: str, item_id: str, run_id: str) -> dict:
+        """What the execution tab links (plan-workflow-out-of-chat D6 / D9), asked
+        when the run moves rather than on every poll (review R2). `latest`: whether
+        it is the newest run of its workflow on the item — they share one journal,
+        so only the newest's `step_files` (per step on the board, its result and
+        transcript, from the journal's own layout) are its own, and only it may be
+        continued or changed. `inputs_path`: the `input.json` the workflow reads now
+        (a staging file shared by its runs), for the newest only, "" when absent."""
+        investigation_id = locator.require_access(slug, item_id, "read_chat")
+        data = _run_of(run_id, investigation_id)
+        latest = (
+            workflow_orchestrator.newest_run_of_workflow(investigation_id, data.workflow_id)
+            == run_id
+        )
+        journal = journal_dir_of(data.workflow_id)
+        step_files = (
+            {
+                s.name: {
+                    "result": journal_stem(journal, s.name, "") + ".json",
+                    "transcript": transcript_path(journal, s.name, ""),
+                }
+                for s in data.steps
+                if not s.key
+            }
+            if latest
+            else {}
+        )
+        inputs = ""
+        if latest:
+            profile = locator.profile_of(investigation_id)
+            manifest = await workflow_orchestrator.manifest_of(
+                slug, profile, data.workflow_id, investigation_id
+            )
+            if manifest is not None:
+                path = "/" + inputs_path(
+                    manifest, workflow_orchestrator.load_upload_dir(slug, profile)
+                ).lstrip("/")
+                if await files.exists(investigation_id, path):
+                    inputs = path
+        return {"latest": latest, "step_files": step_files, "inputs_path": inputs}
+
+    def _run_of(run_id: str, item_id: str) -> WorkflowRun:
+        """The run, read only through its own item: the route takes the item from
+        the URL and the run from its id, so a run of item A must not answer under
+        item B's URL (read access to B is not read access to A)."""
         try:
-            data = rm.get(run_id).data
+            data = spec.get_resource_manager(WorkflowRun).get(run_id).data
         except ResourceIDNotFoundError as exc:
             raise HTTPException(status_code=404, detail=f"unknown run: {run_id!r}") from exc
         assert isinstance(data, WorkflowRun)
-        return {"run_id": run_id, **msgspec.to_builtins(data)}
+        if data.item_id != item_id:
+            raise HTTPException(status_code=404, detail=f"unknown run: {run_id!r}")
+        return data
 
     @app.get("/a/{slug}/items/{item_id}/runs/{run_id}/stream")
     async def stream_workflow_run(slug: str, item_id: str, run_id: str) -> StreamingResponse:
@@ -659,10 +728,13 @@ def register_workflow_routes(
         key = investigation_id
         try:
             run = spec.get_resource_manager(WorkflowRun).get(run_id).data
-            if isinstance(run, WorkflowRun) and run.chat_id:
-                key = run.chat_id
         except ResourceIDNotFoundError:
-            pass
+            run = None
+        if isinstance(run, WorkflowRun):
+            if run.item_id != investigation_id:  # never another item's live stream
+                raise HTTPException(status_code=404, detail=f"unknown run: {run_id!r}")
+            if run.chat_id:
+                key = run.chat_id
         return StreamingResponse(turn_engine.subscribe_sse(key), media_type="text/event-stream")
 
     @app.post(
@@ -709,7 +781,7 @@ def register_workflow_routes(
                 "workflow_routes: decision for run %s not awaiting a gate: %s", run_id, exc
             )
             raise HTTPException(status_code=409, detail=str(exc)) from exc
-        except WorkflowUnavailable as exc:
+        except (WorkflowUnavailable, SupersededRun) as exc:
             logger.warning("workflow_routes: decision for run %s refused: %s", run_id, exc)
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         logger.info(
@@ -728,8 +800,9 @@ def register_workflow_routes(
         slug: str, item_id: str, run_id: str, body: _SteerBody
     ) -> _SteerAck:
         """#288 (manual §10): steer a run in words. Stops it first if it is still going,
-        then runs the read-only steerer in the background — it streams into the run's
-        chat and, when it has a plan, suspends the run `awaiting_human` with
+        then runs the read-only steerer in the background — as an aside on a lane of
+        its own, streamed to no subscriber and persisted nowhere (plan-workflow-out-
+        of-chat D2) — and, when it has a plan, suspends the run `awaiting_human` with
         `pending_steer` set for the human to confirm (the FE refetches the run)."""
         # #306 PR3: stops + steers the run.
         investigation_id = locator.require_access(slug, item_id, "converse")
@@ -745,7 +818,7 @@ def register_workflow_routes(
         except ResourceIDNotFoundError as exc:
             logger.warning("workflow_routes: steer for unknown run %s: %s", run_id, exc)
             raise HTTPException(status_code=404, detail=f"unknown run: {run_id!r}") from exc
-        except WorkflowUnavailable as exc:
+        except (WorkflowUnavailable, SupersededRun) as exc:
             logger.warning("workflow_routes: steer for run %s refused: %s", run_id, exc)
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         logger.info(
@@ -778,7 +851,7 @@ def register_workflow_routes(
         except ResourceIDNotFoundError as exc:
             logger.warning("workflow_routes: steer confirm for unknown run %s: %s", run_id, exc)
             raise HTTPException(status_code=404, detail=f"unknown run: {run_id!r}") from exc
-        except WorkflowUnavailable as exc:
+        except (WorkflowUnavailable, SupersededRun) as exc:
             logger.warning("workflow_routes: steer confirm for run %s refused: %s", run_id, exc)
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         except NotAwaitingSteer as exc:
@@ -790,6 +863,45 @@ def register_workflow_routes(
             "workflow_routes: steer confirmed for run %s (approve=%s)", run_id, body.approve
         )
         return _SteerConfirmOut(run_id=run_id, applied=body.approve)
+
+    @app.post(
+        "/a/{slug}/items/{item_id}/runs/{run_id}/retry",
+        status_code=status.HTTP_202_ACCEPTED,
+    )
+    async def retry_workflow_run(
+        slug: str, item_id: str, run_id: str, body: _RetryBody
+    ) -> _RetryOut:
+        """plan-workflow-out-of-chat D9: a failed or stopped execution's Continue from
+        here (`rerun` empty — what passed skips) or Re-run this step (`rerun` names
+        it — its artifacts are dropped first). Same run, same id; the FE refetches it.
+        409 when the run is not failed / stopped, is not the newest of its workflow
+        (they share step files), is already being continued, another run of its
+        workflow on the item is executing, or its workflow no longer loads; 400 for
+        a step not on the run's board."""
+        investigation_id = locator.require_access(slug, item_id, "converse")
+        profile = locator.profile_of(investigation_id)
+        try:
+            await workflow_orchestrator.retry(
+                slug=slug,
+                item_id=investigation_id,
+                profile=profile,
+                run_id=run_id,
+                rerun=body.rerun,
+                decided_by=get_user_id(),
+            )
+        except ResourceIDNotFoundError as exc:
+            logger.warning("workflow_routes: retry for unknown run %s: %s", run_id, exc)
+            raise HTTPException(status_code=404, detail=f"unknown run: {run_id!r}") from exc
+        except UnknownStep as exc:
+            logger.warning("workflow_routes: retry for run %s names no step: %s", run_id, exc)
+            raise HTTPException(
+                status_code=400, detail=f"this execution has no step named {body.rerun!r}"
+            ) from exc
+        except (NotRetryable, ActiveRunExists, WorkflowUnavailable) as exc:
+            logger.warning("workflow_routes: retry for run %s refused: %r", run_id, exc)
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        logger.info("workflow_routes: run %s re-driven (rerun=%r)", run_id, body.rerun)
+        return _RetryOut(run_id=run_id, rerun=body.rerun)
 
     @app.get("/a/{slug}/items/{item_id}/event-triggers/lag")
     async def event_trigger_lag(slug: str, item_id: str) -> list[dict]:

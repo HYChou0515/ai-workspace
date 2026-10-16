@@ -15,6 +15,15 @@ from msgspec import Struct, field
 
 from ..apps.base import IndexedFields
 
+#: How a WorkflowRun's id begins (specstar prefixes an id with its model's
+#: name). An execution's tab path in the web UI IS its run id, and `show_file`
+#: takes it as the path (plan-workflow-out-of-chat D7 / D8). Mirrors `PREFIX` in
+#: `web/src/lib/executionTab.ts`; both are pinned by tests.
+EXECUTION_PATH_PREFIX = "workflow-run:"
+#: The `mime` an execution's card is declared with (the shown-files declaration
+#: needs one); the chat picks the execution card by its path, not by this.
+EXECUTION_MIME = "application/x-workflow-execution"
+
 
 class RunStatus(StrEnum):
     """A run's lifecycle (manual §13). ``pending`` before the driver starts;
@@ -199,6 +208,21 @@ class WorkflowRun(Struct):
     """Set while ``awaiting_human`` for a steer plan awaiting confirm (#288). Mutually
     exclusive with ``pending_decision`` — the FE picks the steer card vs. the gate card by
     which is set, and ``decide()`` guards on ``pending_decision`` so they never collide."""
+
+
+def is_execution(run: WorkflowRun) -> bool:
+    """Whether ``run`` executes a workflow — what the Workflows sidebar lists and
+    what competes for "newest" of its workflow. A page job (#942) never does: it
+    has no workflow, and its ``workflow_id`` is "", the id a profile's first
+    workflow runs under too, so comparing ids alone made a page's job supersede
+    that workflow's execution (and, while it ran, read as one executing)."""
+    return run.page_job is None
+
+
+def is_execution_of(run: WorkflowRun, workflow_id: str) -> bool:
+    """Whether ``run`` is an execution of ``workflow_id`` — one of the runs that
+    share its journal (`is_execution`)."""
+    return is_execution(run) and run.workflow_id == workflow_id
 
 
 # What the platform registers: the resource + its indexes (manual §13). item_id

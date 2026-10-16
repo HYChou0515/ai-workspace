@@ -13,7 +13,10 @@ import asyncio
 import hashlib
 import json
 import logging
-from typing import Any
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
+from typing import Any, NamedTuple
 
 from .checks import artifact_valid, exit_zero
 from .engine import Check, CheckResult, StepFailed, _emit, run_step
@@ -61,11 +64,74 @@ def _parse_fields(text: str) -> Any:
     return parsed
 
 
-def _retry_prompt(prompt: str, feedback: str | None) -> str:
+class StepRef(NamedTuple):
+    """A step as the journal knows it: ``name`` plus ``key``, the loop element.
+    ``phase`` is the diagram phase it runs in — what the execution page groups
+    its rows by; not part of the journal identity (``id``)."""
+
+    name: str
+    key: str = ""
+    phase: str = ""
+
+    @property
+    def id(self) -> str:
+        """``name``, or ``name/key`` for one element of a loop: what a message
+        the step persists is marked with (``Message.step``)."""
+        return f"{self.name}/{self.key}" if self.key else self.name
+
+
+#: The step whose agent turn is running. The executor that persists the turn
+#: marks the messages with it and writes its transcript beside its artifact
+#: (plan-workflow-out-of-chat D6 / D9). A ContextVar, not a handle attribute:
+#: steps running side by side (``asyncio.gather``, map elements) each hold their
+#: own copy, where one attribute would be overwritten.
+CURRENT_STEP: ContextVar[StepRef | None] = ContextVar("workflow_current_step", default=None)
+
+
+#: Set while a step's turn is a REPAIR of its reply's format
+#: (plan-workflow-output-repair §3.5): the executor records that turn's prompt under
+#: `REPAIR_REQUEST_ROLE`, not as the step's question. A ContextVar for the same reason
+#: as `CURRENT_STEP`: parallel steps each hold their own.
+REPAIR_TURN: ContextVar[bool] = ContextVar("workflow_repair_turn", default=False)
+
+
+@contextmanager
+def _as_repair() -> Iterator[None]:
+    token = REPAIR_TURN.set(True)
+    try:
+        yield
+    finally:
+        REPAIR_TURN.reset(token)
+
+
+@contextmanager
+def _as_step(name: str, key: str, phase: str) -> Iterator[None]:
+    # Set before the turn's coroutine is created and awaited, so the turn — and
+    # any task it starts, which copies the context then — sees this step.
+    token = CURRENT_STEP.set(StepRef(name, key, phase))
+    try:
+        yield
+    finally:
+        CURRENT_STEP.reset(token)
+
+
+#: How much of the previous answer a retry prompt carries.
+_PREVIOUS_ANSWER_CHARS = 4000
+
+
+def _retry_prompt(prompt: str, feedback: str | None, previous: str | None = None) -> str:
+    """The prompt again, with why the last attempt failed — and what it answered:
+    a node reads no conversation (plan-workflow-out-of-chat D1), so the attempt
+    it is told to fix must travel in the prompt itself (review R1)."""
     if not feedback:
         return prompt
+    shown = ""
+    if previous:
+        cut = previous[:_PREVIOUS_ANSWER_CHARS]
+        more = " …(cut)" if len(previous) > _PREVIOUS_ANSWER_CHARS else ""
+        shown = f"\n\nYour previous answer was:\n{cut}{more}"
     return (
-        f"{prompt}\n\nYour previous attempt did not pass its check: {feedback}\n"
+        f"{prompt}{shown}\n\nYour previous attempt did not pass its check: {feedback}\n"
         "Fix it and try again."
     )
 
@@ -91,8 +157,16 @@ async def agent_step(
         raise RuntimeError("agent_step needs a turn driver (wired by the run driver)")
     drive_turn = wf.drive_turn
 
+    previous: list[str] = []  # the last attempt's answer, for the retry prompt
+
     async def execute(feedback: str | None) -> Any:
-        coro = drive_turn(_retry_prompt(prompt, feedback), tools)
+        with _as_step(name or phase, key, phase):
+            answer = await _turn(feedback)
+            previous[:] = [answer] if isinstance(answer, str) else []
+            return answer
+
+    async def _turn(feedback: str | None) -> Any:
+        coro = drive_turn(_retry_prompt(prompt, feedback, next(iter(previous), None)), tools)
         if wf.step_timeout_s is None:
             return await coro
         try:
@@ -163,6 +237,11 @@ async def agent_write_step(
     shape = instruction(outputs, kind if out else "")
     asked = f"{prompt}\n\n{shape}" if shape else prompt
 
+    # The last attempt's reply: a node reads no conversation (plan-workflow-out-of-chat
+    # D1), so a re-run's prompt carries it, and a repair quotes it in full
+    # (plan-workflow-output-repair §3.3).
+    previous: list[str] = []
+
     async def turn(text_in: str, held: list[str] | None) -> str:
         coro = drive_turn(text_in, held)
         if wf.step_timeout_s is None:
@@ -177,11 +256,8 @@ async def agent_write_step(
                 f"agent step {name or phase!r} timed out after {wf.step_timeout_s}s"
             ) from exc
 
-    # The last reply, for the repair turn to quote (plan-workflow-output-repair §3.3).
-    last: list[str] = [""]
-
     async def finish(text: str) -> dict[str, Any]:
-        last[0] = text
+        previous[:] = [text]
         result: dict[str, Any] = {"out": out, "bytes": len(text)}
         if out:
             await wf.write(out, text)
@@ -199,15 +275,20 @@ async def agent_write_step(
         return result
 
     async def execute(feedback: str | None) -> Any:
-        return await finish(await turn(_retry_prompt(asked, feedback), tools))
+        with _as_step(name or phase, key, phase):
+            return await finish(
+                await turn(_retry_prompt(asked, feedback, next(iter(previous), None)), tools)
+            )
 
     async def repair(verdict: CheckResult) -> Any:
         # D1: the answer re-emitted, not the task redone — the request alone, and no
-        # tools, so nothing the step already did can be done again.
-        asked_again = repair_request(last[0], verdict, outputs, kind if out else "")
-        if wf.record_note is not None:  # the question beside its answer (§3.5)
-            await wf.record_note(asked_again)
-        return await finish(await turn(asked_again, []))
+        # tools, so nothing the step already did can be done again. Marked as a repair
+        # so the execution's record keeps the request under its own role (§3.5).
+        asked_again = repair_request(
+            next(iter(previous), ""), verdict, outputs, kind if out else ""
+        )
+        with _as_step(name or phase, key, phase), _as_repair():
+            return await finish(await turn(asked_again, []))
 
     args: dict[str, Any] = {
         "prompt": prompt,

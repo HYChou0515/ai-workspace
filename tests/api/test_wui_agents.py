@@ -165,6 +165,89 @@ def test_the_ask_is_a_run_record_with_its_own_conversation():
     ]
 
 
+def test_the_asks_conversation_stays_a_chat_the_person_can_continue():
+    """#942 D5, kept when workflows left the chat (plan-workflow-out-of-chat): a
+    page job is no workflow execution (`run.is_execution`), so its conversation
+    is listed among the item's chats, and a person who continues it is answered
+    with the job's request AND answer in view — neither is a run's message that
+    a chat must not read (unmarked, and no run window covers them)."""
+    from workspace_app.api.run_windows import run_windows_of_chat, without_runs
+
+    client, item_id, spec = _app(SubRunner())
+    with client:
+        client.post(_url(item_id, "agents/log-digger/call"), json={"input": "why 500s?"})
+        (run,) = _runs(spec)
+        listed = {c["chat_id"] for c in client.get(f"/a/playground/items/{item_id}/chats").json()}
+
+    assert run.chat_id in listed
+    chat = spec.get_resource_manager(Conversation).get(run.chat_id).data
+    assert isinstance(chat, Conversation)
+    history = without_runs(chat.messages, run_windows_of_chat(spec, item_id, run.chat_id))
+    assert [(m.role, m.content) for m in history] == [
+        ("user", "why 500s?"),
+        ("assistant", "found it"),
+    ]
+
+
+def test_an_asks_answer_stays_unmarked_when_its_run_cannot_be_read(monkeypatch):
+    """Review round 3: whether a turn's messages are a run's is read from its
+    run; a page job whose run is gone mid-turn (deleted, tidied away) must not
+    be taken for an execution — its answer would be marked and a person
+    continuing the chat answered without it. The sub-agent turn is a page job's
+    whatever the store says."""
+    from workspace_app.api.workflow_exec import WorkflowExecutor
+
+    real = WorkflowExecutor._usage_identity
+
+    def run_unreadable(self, run_id, captured_user):  # noqa: ANN001, ANN202
+        return real(self, "workflow-run:gone", captured_user)
+
+    monkeypatch.setattr(WorkflowExecutor, "_usage_identity", run_unreadable)
+    client, item_id, spec = _app(SubRunner())
+    with client:
+        client.post(_url(item_id, "agents/log-digger/call"), json={"input": "why 500s?"})
+
+    (run,) = _runs(spec)
+    chat = spec.get_resource_manager(Conversation).get(run.chat_id).data
+    assert isinstance(chat, Conversation)
+    assert [(m.role, m.run_id) for m in chat.messages] == [("user", None), ("assistant", None)]
+
+
+def test_a_tool_jobs_empty_conversation_is_listed_too():
+    """A `startTool` job writes no message to its conversation, so "a person
+    spoke in it" cannot be what lists it: being a page job's is (#942 D5)."""
+    from workspace_app.workflow.run import PageJob
+
+    client, item_id, spec = _app(SubRunner())
+    convs = spec.get_resource_manager(Conversation)
+    conv_id = convs.create(Conversation(item_id=item_id, title="頁面：工具 lot-status")).resource_id
+    run_id = (
+        spec.get_resource_manager(WorkflowRun)
+        .create(
+            WorkflowRun(
+                item_id=item_id,
+                captured_user="owner-o",
+                chat_id=conv_id,
+                page_job=PageJob(kind="tool", name="lot-status"),
+            )
+        )
+        .resource_id
+    )
+    # Linked as `settle_run_chat` links it: the conversation names its run.
+    conv = convs.get(conv_id).data
+    assert isinstance(conv, Conversation)
+    conv.run_id = run_id
+    convs.update(conv_id, conv)
+    free = spec.get_resource_manager(Conversation).create(Conversation(item_id=item_id)).resource_id
+    with client:
+        listed = {
+            c["chat_id"]: c["page_job"]
+            for c in client.get(f"/a/playground/items/{item_id}/chats").json()
+        }
+    # Flagged, so the chat can offer the job's Stop without asking every chat's run.
+    assert listed == {conv_id: True, free: False}
+
+
 def test_a_sub_agent_the_item_does_not_have_is_refused_by_name():
     client, item_id, _ = _app(SubRunner())
     with client:

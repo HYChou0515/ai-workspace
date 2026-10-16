@@ -1,5 +1,7 @@
 # Plan — Issue #132: multi-chat UX (chat 一多會亂掉)
 
+> 被 #911（plan-workflow-out-of-chat.md）推翻
+
 > Status: locked via `/grill-me` (2026-06-23). Build via `/tdd`.
 
 ## Problem

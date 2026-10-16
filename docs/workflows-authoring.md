@@ -92,8 +92,8 @@ async def run(wf: WorkflowHandle, inputs: dict[str, Any]) -> dict[str, Any]:
 
 ### Agent node(LLM)
 
-一個 agent node 會在 item 上跑**一個有 gate 的 LLM turn**——它會像互動 turn 一樣 stream 進
-chat。gate 是必要的:沒有 gate 的 agent node 無法表達。
+一個 agent node 會在 item 上跑**一個有 gate 的 LLM turn**——它會像互動 turn 一樣 stream,但不是進
+chat:畫在這次執行分頁裡該 step 的那一列(展開看得到 prompt、reasoning、工具呼叫與回覆;#913)。gate 是必要的:沒有 gate 的 agent node 無法表達。
 
 ```python
 await agent_step(wf, *, prompt, phase, check, name=None, key="",

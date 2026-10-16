@@ -105,6 +105,18 @@ def _abs(path: str) -> str:
     return path if path.startswith("/") else "/" + path
 
 
+def aside_lane(chat_key: str) -> str:
+    """The turn lane an execution's aside turns (the steerer, P5) run on: off the
+    run's own stream, and the second lane Stop must reach (review R1)."""
+    return f"{chat_key}#aside"
+
+
+def journal_dir_of(workflow_id: str) -> str:
+    """Where a workflow's journal lives in the workspace (#136) — the one rule the
+    handle and the run route both read."""
+    return f"/.workflow/{workflow_id or '_default'}"
+
+
 class WorkflowHandle:
     def __init__(
         self,
@@ -136,7 +148,6 @@ class WorkflowHandle:
         trigger_depth: int = 0,
         run_id: str = "",
         run_started_at: datetime | None = None,
-        record_note: Callable[[str], Awaitable[None]] | None = None,
     ) -> None:
         self._store = store
         self._workspace_id = workspace_id
@@ -199,14 +210,15 @@ class WorkflowHandle:
         self.step_timeout_s = step_timeout_s
         """Per-step wall-clock cap for an agent turn (manual §17); None ⇒ no cap.
         Exceeding it aborts the step (and so the run) to ``error``."""
+        self.aside_turn: DriveTurn | None = None
+        """A turn that is not part of the run's record (plan-workflow-out-of-chat D2):
+        nothing persisted, nothing on the run's live stream, no transcript. The
+        steerer proposes through it, so its JSON is never shown as the agent's
+        reply. Wired by the executor; None ⇒ ``drive_turn`` (unit tests)."""
         self.sub_turn = sub_turn
         """#429 P5: a ``subkey → DriveTurn`` factory the driver wires so ``sub_handle``
         can bind each map element its own turn lane (real parallel agent turns). None ⇒
         sub-handles reuse the parent lane (serialized — the safe default / tests)."""
-        self.record_note = record_note
-        """plan-workflow-output-repair §3.5: record a repair request in the run's
-        workflow chat, beside the answer it asks for. Copied with the handle, so a
-        ``map`` element records into the same chat. None ⇒ nothing is recorded."""
         self.turn_concurrency = turn_concurrency
         """#429 P5: the effective parallel-turn ceiling derived from the model backend's
         concurrency (a single local model → ~1, a hosted/multi-replica pool → larger). It
@@ -243,7 +255,7 @@ class WorkflowHandle:
         every ``step_<name>/<key>`` artifact lives under, so the journal stops
         cluttering the workspace root. Legacy singular workflows (``workflow_id=""``)
         fall back to ``/.workflow/_default``."""
-        return f"/.workflow/{self._workflow_id or '_default'}"
+        return journal_dir_of(self._workflow_id)
 
     def sub_handle(self, subkey: str) -> WorkflowHandle:
         """A per-element child handle (#429 P5) sharing this run's workspace, journal, and

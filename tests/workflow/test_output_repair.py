@@ -339,9 +339,10 @@ def test_an_empty_reply_says_there_was_no_answer():
 
 
 def test_a_repair_request_is_recorded_in_the_workflow_chat():
-    """Through the real app: the node misses its shape, is repaired, and the workflow
-    chat shows what it was asked — as its own role, which the model is never sent and
-    which does not count as the #624 context notice."""
+    """Through the real app: the node misses its shape, is repaired, and the execution's
+    record keeps what it was asked — the repair turn's prompt, under its own role, tagged
+    with the step like the step's question; never sent to the model, and not the #624
+    context notice."""
     import time
 
     from tests.api._client import TestClient
@@ -383,59 +384,15 @@ def test_a_repair_request_is_recorded_in_the_workflow_chat():
     asked = [m for m in conv.messages if m.role == REPAIR_REQUEST_ROLE]
     assert len(asked) == 1 and "still not valid JSON" in asked[0].content
     assert "Sure! Here are the jobs." in asked[0].content
+    # recorded once, as the step's prompt for that turn — not also as a question
+    assert not [m for m in conv.messages if m.role == "user" and "still not valid" in m.content]
+    plan_q = [m for m in conv.messages if m.role == "user" and "plan the jobs" in m.content]
+    assert asked[0].step is not None and asked[0].step == plan_q[0].step
     # it precedes the answer it asked for
     roles = [m.role for m in conv.messages]
     assert roles.index(REPAIR_REQUEST_ROLE) < len(roles) - 1
     assert not already_noticed(conv.messages)
     assert all("still not valid JSON" not in str(i.get("content")) for i in history_items(asked))
-
-
-async def test_recording_a_repair_request_loses_no_sibling_write():
-    """The chat is read-modified-written with no etag; every other writer does it on the
-    loop with no await between read and write. A repair request written from a thread
-    let a parallel `map` element's persisted answer land in between and be overwritten."""
-    import asyncio
-    import threading
-
-    from workspace_app.api.workflow_exec import WorkflowExecutor
-    from workspace_app.resources import Conversation, Message
-
-    main = threading.get_ident()
-
-    class _Rm:
-        def __init__(self) -> None:
-            self.conv = Conversation(item_id="item", messages=[])
-
-        def get(self, _rid: str):
-            snap = Conversation(item_id="item", messages=list(self.conv.messages))
-            if threading.get_ident() != main:  # a writer off the loop is slow
-                import time
-
-                time.sleep(0.2)
-
-            class _R:
-                data = snap
-
-            return _R()
-
-        def update(self, _rid: str, conv: Conversation) -> None:
-            self.conv = conv
-
-        def using(self, user: str):
-            import contextlib
-
-            return contextlib.nullcontext()
-
-    ex = object.__new__(WorkflowExecutor)
-    ex._conv_rm = _Rm()
-
-    async def sibling() -> None:
-        # lands while the thread holds the chat between its read and its write
-        await asyncio.sleep(0.3)
-        ex._append("chat", "u", Message(role="assistant", content="sibling answer"))
-
-    await asyncio.gather(ex._record_repair_request("item", "chat", "u", "please"), sibling())
-    assert sorted(m.role for m in ex._conv_rm.conv.messages) == ["assistant", "repair_request"]
 
 
 def test_a_csv_field_past_the_parser_limit_still_gets_a_repair_request():
@@ -492,3 +449,23 @@ async def test_a_missing_field_reason_lists_a_bounded_number_of_fields(wf: Workf
     fields = {f"k{i}": i for i in range(500)}
     verdict = await _outputs_check({"want": "str"})(wf, {"fields": fields})
     assert len(verdict.reason) < 400 and "more" in verdict.reason
+
+
+def test_a_steps_transcript_shows_a_repair_as_its_own_attempt():
+    """The journal transcript (plan-workflow-out-of-chat D9) is what "Ask AI why it
+    failed" reads: a repair is an attempt, and its request is not the step's question."""
+    from workspace_app.api.turns import REPAIR_REQUEST_ROLE
+    from workspace_app.api.workflow_transcript import render_transcript
+    from workspace_app.resources import Message
+
+    md = render_transcript(
+        "plan",
+        [
+            Message(role="user", content="plan the jobs"),
+            Message(role="assistant", content="Sure! Here are the jobs."),
+            Message(role=REPAIR_REQUEST_ROLE, content="Your reply is still not valid JSON."),
+            Message(role="assistant", content='{"job_count": 3}'),
+        ],
+    )
+    assert "## Attempt 2 (repair)" in md and "### Repair request" in md
+    assert md.index("still not valid JSON") > md.index("Sure! Here are the jobs.")
