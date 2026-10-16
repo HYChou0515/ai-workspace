@@ -75,12 +75,15 @@ def test_every_setting_is_reachable_from_its_env_var():
     # never read would still compare equal.
     sample = {"str": "sample", "int": "424242", "float": "42.5", "bool": "0"}
     cast = {"str": str, "int": int, "float": float, "bool": lambda _raw: False}
+    # A field with a rule of its own is sampled with a value the rule accepts —
+    # still not its default, so an unread key cannot compare equal.
+    valid = {"usage_window_s": "60"}  # must divide 3600
 
     env: dict[str, str] = {}
     want: dict[str, object] = {}
     for field in dataclasses.fields(SandboxHostSettings):
         kind = str(field.type).replace(" | None", "")
-        raw = sample[kind]
+        raw = valid.get(field.name, sample[kind])
         env[f"SANDBOX_HOST_{field.name.upper()}"] = raw
         want[field.name] = cast[kind](raw)
 

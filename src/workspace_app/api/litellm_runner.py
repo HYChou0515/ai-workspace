@@ -48,6 +48,7 @@ from ..agent.header_model import HeaderModel
 from ..agent.repairing_model import RepairingModel
 from ..agent.tools import build_tools, dedupe_tools, delegation_is_available
 from ..apps.subagents import subagents_block
+from ..capacity.llm_tags import TaggedModel
 from ..context_budget import (
     ContextLimit,
     LimitLearner,
@@ -778,6 +779,9 @@ def _agent_for(
         # session cookie to another host.
         if credential.headers:
             m = HeaderModel(m, credential.headers)
+        # docs/plan-capacity-usage.md §7: whose turn each request is, for
+        # LiteLLM's log — read per call from the turn's usage scope.
+        m = TaggedModel(m)
         # #76 BACKSTOP (always on): sanitize malformed tool-call JSON at the output
         # boundary so a probabilistic small model can't crash/poison/abort the turn.
         # Leave this line on. To toggle the *self-repair* layer (recovering the

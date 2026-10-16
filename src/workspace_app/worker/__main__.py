@@ -26,6 +26,7 @@ from . import _JOBTYPE_ATTR, API_REGISTRY_JOBTYPES, consume_until_stopped, selec
 if TYPE_CHECKING:
     from ..agent.tool_usage import ToolUsageRecorder
     from ..api.tool_usage_store import ToolUsageStore
+    from ..capacity.recorder import UsageRecorder
     from ..kb.embedder import Embedder
     from ..kb.llm import ILlm
     from ..kb.retriever import Retriever
@@ -40,6 +41,7 @@ def build_bundle(
     config_dir: Path | None = None,
     live: LiveSettings | None = None,
     tool_usage: ToolUsageRecorder | None = None,
+    usage_recorder: UsageRecorder | None = None,
 ) -> CoordinatorBundle:
     """Build the coordinator bundle from settings — the worker's composition
     root, mirroring the slice of ``__main__`` that feeds ``create_app`` (minus
@@ -123,6 +125,8 @@ def build_bundle(
         # plan-chat-video-export: likewise never consumed from a slim worker
         # (chat-video is composed from `build_app`, for the API's facade).
         chat_video_settings=settings.chat_video,
+        # docs/plan-capacity-usage.md §6.4: the job attempts this worker runs.
+        usage_recorder=usage_recorder,
     )
     # #506 worker parity: build_coordinators wires the OPEN-loop one-shot drafter;
     # swap in the AGENTIC (closed-loop) one exactly like create_app, so a split-
@@ -205,6 +209,8 @@ class Worker:
 
     coordinator: object
     usage_store: ToolUsageStore | None
+    #: docs/plan-capacity-usage.md §6.7: this process's usage counts (its jobs).
+    usage_recorder: UsageRecorder | None = None
 
 
 def build_worker(
@@ -231,22 +237,38 @@ def build_worker(
     if jobtype in API_REGISTRY_JOBTYPES:
         from .. import __main__ as api_main
 
-        app = api_main.build_app(settings, config_dir=config_dir, live=live)
-        return Worker(
-            select_coordinator(app.state.coordinators, jobtype), app.state.tool_usage_store
+        app = api_main.build_app(
+            settings, config_dir=config_dir, live=live, usage_component="worker"
         )
-    from ..factories import get_spec
+        return Worker(
+            select_coordinator(app.state.coordinators, jobtype),
+            app.state.tool_usage_store,
+            usage_recorder=app.state.usage_recorder,
+        )
+    from ..factories import build_usage_recorder, get_spec
 
     get_user_id = lambda: settings.server.default_user  # noqa: E731
     spec = get_spec(settings, get_user_id=get_user_id)
     tool_usage = ToolUsageRecorder()
+    usage_recorder = build_usage_recorder(settings.capacity, component="worker")
     coordinator = select_coordinator(
-        build_bundle(settings, spec, config_dir=config_dir, live=live, tool_usage=tool_usage),
+        build_bundle(
+            settings,
+            spec,
+            config_dir=config_dir,
+            live=live,
+            tool_usage=tool_usage,
+            usage_recorder=usage_recorder,
+        ),
         jobtype,
     )
     assert isinstance(spec, SpecStar)
     register_tool_usage(spec)
-    return Worker(coordinator, ToolUsageStore(spec, tool_usage, pod=writer_name()))
+    return Worker(
+        coordinator,
+        ToolUsageStore(spec, tool_usage, pod=writer_name()),
+        usage_recorder=usage_recorder,
+    )
 
 
 def build_coordinator(
@@ -266,6 +288,7 @@ def serve(
     stop: threading.Event,
     *,
     interval: float,
+    usage_recorder: UsageRecorder | None = None,
 ) -> None:
     """Consume until ``stop`` (SIGTERM), drain, and write the tool-call counts on
     ``interval`` and once more at the end. The writer has its OWN stop, set
@@ -280,12 +303,20 @@ def serve(
             target=run_flusher, args=(usage_store, drained, interval), daemon=True
         )
         flusher.start()
+    # docs/plan-capacity-usage.md §6.7: the usage counts follow the same rule —
+    # the last write after the drain.
+    counter = None
+    if usage_recorder is not None:
+        counter = threading.Thread(target=usage_recorder.run_until, args=(drained,), daemon=True)
+        counter.start()
     try:
         consume_until_stopped(coordinator, stop)
     finally:
         drained.set()
         if flusher is not None:
             flusher.join(timeout=30)
+        if counter is not None:
+            counter.join(timeout=30)
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -314,7 +345,13 @@ def main(argv: list[str] | None = None) -> None:
         signal.signal(sig, lambda *_: stop.set())
     logger.info("worker: consuming jobtype=%s, blocking until SIGTERM/SIGINT", args.jobtype)
     print(f"worker: consuming {args.jobtype!r} — block until SIGTERM/SIGINT", flush=True)
-    serve(worker.coordinator, worker.usage_store, stop, interval=FLUSH_INTERVAL_S)
+    serve(
+        worker.coordinator,
+        worker.usage_store,
+        stop,
+        interval=FLUSH_INTERVAL_S,
+        usage_recorder=worker.usage_recorder,
+    )
     logger.info("worker: jobtype=%s drained and stopped", args.jobtype)
     print(f"worker: {args.jobtype!r} drained and stopped", flush=True)
 

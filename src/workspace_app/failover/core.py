@@ -22,6 +22,7 @@ is expected to carry its own ``timeout`` so an abandoned producer eventually die
 
 from __future__ import annotations
 
+import contextvars
 import logging
 import math
 import queue
@@ -98,7 +99,11 @@ def _drive[T](provider: Provider[T]) -> Iterator[T]:
         except BaseException as exc:  # noqa: BLE001 — relayed to the consumer
             q.put(("error", exc))
 
-    threading.Thread(target=produce, daemon=True).start()
+    # The caller's context, carried into the producer: a bare thread starts with
+    # an EMPTY one, which dropped the usage scope — and with it the LLM tags of
+    # every call behind a failover chain (docs/plan-capacity-usage.md §7).
+    context = contextvars.copy_context()
+    threading.Thread(target=context.run, args=(produce,), daemon=True).start()
 
     try:
         kind, payload = q.get(timeout=provider.ttft_s)

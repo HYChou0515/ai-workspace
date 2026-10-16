@@ -302,12 +302,16 @@ def test_agent_for_threads_base_url_and_api_key_to_the_model():
 
     from workspace_app.agent.repairing_model import RepairingModel
     from workspace_app.api.litellm_runner import _agent_for
+    from workspace_app.capacity.llm_tags import TaggedModel
 
     agent = _agent_for(AgentConfig(name="a"), base_url="https://hosted/v1", api_key="sk-1")
     # #76: the model is wrapped in RepairingModel for tool-arg self-repair; the
     # creds still thread through to the inner LitellmModel (transparent passthrough).
     assert isinstance(agent.model, RepairingModel)
-    assert isinstance(agent.model._inner, LitellmModel)
+    # docs/plan-capacity-usage.md §7: every request is tagged with whose turn
+    # it is, one transparent layer above the LitellmModel.
+    assert isinstance(agent.model._inner, TaggedModel)
+    assert isinstance(agent.model._inner._inner, LitellmModel)
     assert agent.model.base_url == "https://hosted/v1"
     assert agent.model.api_key == "sk-1"
 
