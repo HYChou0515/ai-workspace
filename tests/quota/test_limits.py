@@ -209,6 +209,48 @@ def test_at_the_ceiling_is_allowed():
     assert resolve_app_limits(_manifest(cpu=2), settings).cpu_cores == 2
 
 
+def _default_and_max(**max_amounts: object) -> Settings:
+    """The reported deploy: every App 1 core / 512M by default, `max` as given."""
+    return Settings(
+        resources=ResourceSettings(
+            per_app=PerAppResources(
+                default=ResourceAmounts(cpu=1, memory="512M"),
+                max=ResourceAmounts(**max_amounts),  # ty: ignore[invalid-argument-type]
+            )
+        )
+    )
+
+
+def test_an_items_size_may_go_up_to_the_deploys_max_not_just_the_apps_default():
+    """plan-item-size-ceiling D1: `per_app.default` is the size an item STARTS
+    at, `per_app.max` the most it may be given. Before, the item's ceiling was
+    the App's resolved value — which, for an App stating nothing, IS the
+    default — so a deploy of default 1 / 512M, max 4 / 4G could never give one
+    item 2 / 2G: `max` reached no item at all."""
+    got = resolve_app_limits(_manifest(), _default_and_max(cpu=4, memory="4G"))
+
+    assert (got.cpu_cores, got.memory_bytes) == (1, 512 * 1024**2), "still the default size"
+    assert got.item_cpu_ceiling == 4
+    assert got.item_memory_ceiling == 4 * 1024**3
+
+
+def test_without_a_max_an_items_ceiling_stays_the_apps_value():
+    """D2: a deploy that set no `max` keeps today's rule — an item may only go
+    below its App — rather than an upgrade quietly lifting every limit."""
+    got = resolve_app_limits(_manifest(), _default_and_max())
+
+    assert got.item_cpu_ceiling == 1
+    assert got.item_memory_ceiling == 512 * 1024**2
+
+
+def test_the_items_ceiling_falls_back_per_dimension():
+    """A `max` stated for cpu alone lifts cpu alone."""
+    got = resolve_app_limits(_manifest(), _default_and_max(cpu=4))
+
+    assert got.item_cpu_ceiling == 4
+    assert got.item_memory_ceiling == 512 * 1024**2
+
+
 def test_the_error_names_the_offending_app():
     """The message has to say WHICH app.json is wrong, or an operator staring at
     a failed boot is left bisecting their own repo."""
