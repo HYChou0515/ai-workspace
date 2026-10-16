@@ -105,3 +105,25 @@ describe("WorkflowStepBoard (#178)", () => {
     expect(screen.queryByTestId("wf-step-row")).toBeNull();
   });
 });
+
+
+describe("a repair on the board (plan-workflow-output-repair D7)", () => {
+  it("says it is fixing the output format, which time, and why", () => {
+    render(
+      <WorkflowStepBoard
+        nodes={[node()]}
+        steps={[step({ status: "repairing", attempts: 3, repairs: 2, reason: "not JSON" })]}
+      />,
+    );
+    const row = screen.getByTestId("wf-step-row");
+    expect(row).toHaveTextContent("修正輸出格式（第 2 次）");
+    expect(row).toHaveTextContent("not JSON");
+  });
+
+  it("leaves a retry as it was", () => {
+    render(<WorkflowStepBoard nodes={[node()]} steps={[step({ status: "retrying", attempts: 2 })]} />);
+    const row = screen.getByTestId("wf-step-row");
+    expect(row).toHaveTextContent("retrying");
+    expect(row).not.toHaveTextContent("修正輸出格式");
+  });
+});

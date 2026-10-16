@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING, Any, NoReturn
 from msgspec import Struct
 
 from .events import StepFailed as StepFailedEv
-from .events import StepPassed, StepRetrying, StepSkipped, StepStarted
+from .events import StepPassed, StepRepairing, StepRetrying, StepSkipped, StepStarted
 
 if TYPE_CHECKING:
     from .handle import WorkflowHandle
@@ -139,6 +139,7 @@ async def run_step(
     reason = ""
     # the verdict a repair answers, when the last attempt's format failed
     to_repair: CheckResult | None = None
+    repairs = 0
     for attempt in range(retries + 1):
         try:
             result = await (
@@ -180,8 +181,16 @@ async def run_step(
         feedback = verdict.reason
         to_repair = verdict if verdict.format else None
         if attempt < retries:
-            logger.warning("step: retry %s/%s after failed gate: %s", name, key, reason)
-            _emit(wf, StepRetrying(phase=phase, name=name, reason=reason, key=key))
+            if repair is not None and to_repair is not None:
+                repairs += 1
+                logger.warning("step: repair %s/%s after a format failure: %s", name, key, reason)
+                _emit(
+                    wf,
+                    StepRepairing(phase=phase, name=name, reason=reason, key=key, repair=repairs),
+                )
+            else:
+                logger.warning("step: retry %s/%s after failed gate: %s", name, key, reason)
+                _emit(wf, StepRetrying(phase=phase, name=name, reason=reason, key=key))
 
     _emit(wf, StepFailedEv(phase=phase, name=name, reason=reason, key=key))
     logger.warning("step: fail %s/%s (gate never passed): %s", name, key, reason)

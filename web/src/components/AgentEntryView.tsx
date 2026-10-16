@@ -732,6 +732,7 @@ const STEP_GLYPH: Record<StepView["status"], string> = {
   failed: "✗",
   skipped: "⤳",
   retrying: "↻",
+  repairing: "✎",
 };
 
 const STEP_COLOR: Record<StepView["status"], string> = {
@@ -740,12 +741,14 @@ const STEP_COLOR: Record<StepView["status"], string> = {
   failed: "var(--err)",
   skipped: "var(--text-paper-d2)",
   retrying: "var(--warn, var(--text-paper-d))",
+  repairing: "var(--warn, var(--text-paper-d))",
 };
 
 /** One workflow step's live line — so a deterministic phase (commit: ingest each
  * file) shows movement instead of looking frozen (#100 observability). The line
  * transitions in place as `step.status` advances (running → passed/failed/…). */
 function StepLine({ step }: { step: StepView }) {
+  const t = useT();
   const color = STEP_COLOR[step.status];
   return (
     <div data-testid="wf-step" data-status={step.status}>
@@ -765,6 +768,9 @@ function StepLine({ step }: { step: StepView }) {
         </span>
         <span style={{ color: "var(--text-paper)" }}>{step.name}</span>
         {step.key && <span style={{ color: "var(--text-paper-d)" }}>· {step.key}</span>}
+        {step.status === "repairing" && (
+          <span style={{ color }}>{t("wf.step.repairing", { n: step.repair ?? 1 })}</span>
+        )}
         {step.reason && <span style={{ color }}>— {step.reason}</span>}
       </div>
       {/* #178: live stdout from a running deterministic step, so a long command
