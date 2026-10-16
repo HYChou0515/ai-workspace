@@ -3375,6 +3375,11 @@ function PanelBody({
           // #624: the context horizon moved.
           return <LogLine key={i} ts={fmtTs(e.at)} kind="warn" text={e.text} />;
         }
+        if (e.kind === "repair_request") {
+          // plan-workflow-output-repair §3.5: one line in the flat log; the
+          // request itself is readable in the chat view.
+          return <LogLine key={i} ts={fmtTs(e.at)} kind="warn" text="要求重新輸出格式" />;
+        }
         if (e.kind === "summary") {
           // #739: the earlier span was summarised. The log view is a flat
           // transcript, so it states the fact on one line — the originals are

@@ -35,6 +35,9 @@ export type MessageRole =
   // #739: `summary` = 這一則取代了它上面那一段,送給模型的是它;原文並未刪除,
   // 使用者往上捲仍然看得到。與 `notice` 相反,這一則**會**進入模型的 context。
   | "summary"
+  // plan-workflow-output-repair §3.5: what the workflow engine asked a node to
+  // re-emit — shown beside the answer, never sent to the model.
+  | "repair_request"
   | "error";
 
 /** #847 P7 / #861: a named marking as the composer sends it — the picked

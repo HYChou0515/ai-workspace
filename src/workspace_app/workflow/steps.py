@@ -202,9 +202,10 @@ async def agent_write_step(
     async def repair(verdict: CheckResult) -> Any:
         # D1: the answer re-emitted, not the task redone — the request alone, and no
         # tools, so nothing the step already did can be done again.
-        return await finish(
-            await turn(repair_request(last[0], verdict, outputs, kind if out else ""), [])
-        )
+        asked_again = repair_request(last[0], verdict, outputs, kind if out else "")
+        if wf.record_note is not None:  # the question beside its answer (§3.5)
+            await wf.record_note(asked_again)
+        return await finish(await turn(asked_again, []))
 
     args: dict[str, Any] = {
         "prompt": prompt,

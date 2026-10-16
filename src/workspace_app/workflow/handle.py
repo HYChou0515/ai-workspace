@@ -136,6 +136,7 @@ class WorkflowHandle:
         trigger_depth: int = 0,
         run_id: str = "",
         run_started_at: datetime | None = None,
+        record_note: Callable[[str], Awaitable[None]] | None = None,
     ) -> None:
         self._store = store
         self._workspace_id = workspace_id
@@ -199,6 +200,9 @@ class WorkflowHandle:
         """Per-step wall-clock cap for an agent turn (manual §17); None ⇒ no cap.
         Exceeding it aborts the step (and so the run) to ``error``."""
         self.sub_turn = sub_turn
+        # plan-workflow-output-repair §3.5: record a repair request in the run's chat.
+        # Copied with the handle, so a `map` element records into the same chat.
+        self.record_note = record_note
         """#429 P5: a ``subkey → DriveTurn`` factory the driver wires so ``sub_handle``
         can bind each map element its own turn lane (real parallel agent turns). None ⇒
         sub-handles reuse the parent lane (serialized — the safe default / tests)."""

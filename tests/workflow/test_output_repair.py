@@ -333,3 +333,58 @@ async def test_a_csv_row_with_a_quoted_newline_does_not_shift_the_quote(wf: Work
 def test_an_empty_reply_says_there_was_no_answer():
     text = repair_request("", _not_json(""), _OUTPUTS, "")
     assert "had no answer" in text and "The problem is here" not in text
+
+
+# ── §3.5 / D7: the repair request is in the workflow chat, never in the history ──
+
+
+def test_a_repair_request_is_recorded_in_the_workflow_chat():
+    """Through the real app: the node misses its shape, is repaired, and the workflow
+    chat shows what it was asked — as its own role, which the model is never sent and
+    which does not count as the #624 context notice."""
+    import time
+
+    from tests.api._client import TestClient
+    from tests.workflow.test_agent_reply_contract import _ANSWER, _WF, _SequenceRunner
+    from workspace_app.api import MessageDelta, RunDone, create_app
+    from workspace_app.api.turns import REPAIR_REQUEST_ROLE, already_noticed, history_items
+    from workspace_app.apps.playground.model import PlaygroundItem
+    from workspace_app.filestore.specstar_impl import SpecstarFileStore
+    from workspace_app.resources import Conversation, make_spec
+    from workspace_app.sandbox.mock import MockSandbox
+
+    runner = _SequenceRunner(
+        [
+            [MessageDelta(text="Sure! Here are the jobs."), RunDone()],
+            [MessageDelta(text=_ANSWER), RunDone()],
+            [MessageDelta(text="a note"), RunDone()],
+        ]
+    )
+    spec = make_spec()
+    app = create_app(
+        spec=spec, sandbox=MockSandbox(), filestore=SpecstarFileStore(spec), runner=runner
+    )
+    item_id = (
+        spec.get_resource_manager(PlaygroundItem)
+        .create(PlaygroundItem(title="t", owner="u", profile="default"))
+        .resource_id
+    )
+    base = f"/a/playground/items/{item_id}"
+    with TestClient(app) as client:
+        assert client.put(f"{base}/files/.workflows/flow.json", content=_WF).status_code == 204
+        run_id = client.post(f"{base}/run?workflow_id=flow").json()["run_id"]
+        for _ in range(400):
+            data = client.get(f"{base}/runs/{run_id}").json()
+            if data["status"] == "done":
+                break
+            time.sleep(0.02)
+        assert data["status"] == "done", data
+    conv = spec.get_resource_manager(Conversation).get(data["chat_id"]).data
+    asked = [m for m in conv.messages if m.role == REPAIR_REQUEST_ROLE]
+    assert len(asked) == 1 and "still not valid JSON" in asked[0].content
+    assert "Sure! Here are the jobs." in asked[0].content
+    # it precedes the answer it asked for
+    roles = [m.role for m in conv.messages]
+    assert roles.index(REPAIR_REQUEST_ROLE) < len(roles) - 1
+    assert not already_noticed(conv.messages)
+    assert all("still not valid JSON" not in str(i.get("content")) for i in history_items(asked))

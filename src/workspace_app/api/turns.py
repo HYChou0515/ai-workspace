@@ -108,6 +108,12 @@ def _est_tokens(m: Any) -> int:
 #: `history_items` only folds user/assistant/tool/error — so telling the user
 #: costs the model nothing.
 CONTEXT_NOTICE_ROLE = "notice"
+#: Role of a workflow repair request in the workflow chat
+#: (plan-workflow-output-repair §3.5): what the engine asked a node to re-emit,
+#: so the reader sees the question beside the answer. Its own role, not
+#: `notice` — `already_noticed` counts any `notice` as the #624 marker — and not
+#: `user`, which `history_items` would replay to later nodes.
+REPAIR_REQUEST_ROLE = "repair_request"
 # plan-graceful-shutdown P4: what `aclose` allows past its budget — once for
 # the handover's store write, once for the cancelled turns' teardown — so an
 # engine with turns past the deadline adds up to 2 × this to the lifespan's
@@ -124,6 +130,22 @@ def context_notice_text(note: str) -> str:
     it. A reduction that gave nothing up never reaches here — see
     `history_items`."""
     return f"{note}需要它記得那些內容的話,請開一個新對話。"
+
+
+def replays(m: Any) -> bool:
+    """Whether `history_items` sends this message to the model — the one rule, also
+    read by the context-usage bar (`context_budget._replayed`), so the bar never
+    charges for a marker the model does not read. Everything not named here (a
+    notice, a mention, a goal marker, a workflow repair request, a system line) is
+    for the reader only."""
+    role = getattr(m, "role", "")
+    if role == "error":
+        return getattr(m, "error_kind", None) == "cancelled"  # folded as a marker (#199)
+    if role in ("user", "assistant", SUMMARY_ROLE):
+        return bool(getattr(m, "content", ""))
+    if role == "tool":
+        return bool(getattr(m, "tool_call_id", None) and getattr(m, "tool_name", None))
+    return False
 
 
 def already_noticed(messages: Iterable[Any]) -> bool:
@@ -264,6 +286,8 @@ def history_items(
         on_trim(before - len(msgs))
     items: list[dict[str, Any]] = []
     for m in msgs:
+        if not replays(m):
+            continue
         if m.role == "error":
             # Issue #37 — terminal-failure markers are human-facing
             # diagnostics, kept OUT of the model's context BY KIND. The

@@ -42,7 +42,7 @@ from .rca_messages import to_rca_message
 from .subagent_run import _child_context, report_of
 from .timeutil import now_ms
 from .turn_gate import admit_turn
-from .turns import CONTEXT_NOTICE_ROLE, already_noticed
+from .turns import CONTEXT_NOTICE_ROLE, REPAIR_REQUEST_ROLE, already_noticed
 
 if TYPE_CHECKING:
     from ..apps.subagents import SubagentDef
@@ -257,18 +257,7 @@ class WorkflowExecutor:
         # exemption would be a way to spend resources the limit says you do not
         # have, just by scheduling it. #9 in the plan makes the refusal visible.
         await admit_turn(self._files, self._admission, item_id)
-        try:
-            rid = chat_key
-            got = self._conv_rm.get(rid).data
-            assert isinstance(got, Conversation)
-            conv = got
-        except (ResourceIDNotFoundError, AssertionError):
-            logger.warning(
-                "workflow_exec: chat %s unresolved, using default chat for item %s",
-                chat_key,
-                item_id,
-            )
-            rid, conv = self._locator.conversation_for(item_id)  # legacy fallback (default chat)
+        rid, conv = self._workflow_chat(item_id, chat_key)
         cfg = self._locator.resolve_agent_config(item_id)
         ctx = await self._turn_ctx.build_workflow_turn(
             item_id,
@@ -414,6 +403,38 @@ class WorkflowExecutor:
             item_id=item_id,
             # The right that admitted them to start it — which they must still hold.
             verb=cast("Verb", env_verb),
+        )
+
+    def _workflow_chat(self, item_id: str, chat_key: str) -> tuple[str, Conversation]:
+        """The conversation a node's turn persists into: the run's workflow chat, or
+        the item's default chat when that cannot be resolved (legacy). One lookup for
+        the turn and for what is recorded beside it, so the two never land apart."""
+        try:
+            got = self._conv_rm.get(chat_key).data
+            assert isinstance(got, Conversation)
+            return chat_key, got
+        except (ResourceIDNotFoundError, AssertionError):
+            logger.warning(
+                "workflow_exec: chat %s unresolved, using default chat for item %s",
+                chat_key,
+                item_id,
+            )
+            return self._locator.conversation_for(item_id)  # legacy fallback (default chat)
+
+    async def _record_repair_request(
+        self, item_id: str, chat_key: str, acting_user: str, text: str
+    ) -> None:
+        """Leave a repair request in the workflow chat (plan-workflow-output-repair
+        §3.5), before the turn that answers it. A node's own prompt stays out of the
+        chat; this one is recorded because the run log names a repair, and the reader
+        opening the chat should find what was asked beside what came back. Its role is
+        never replayed to the model (`history_items`)."""
+        rid, _conv = await asyncio.to_thread(self._workflow_chat, item_id, chat_key)
+        await asyncio.to_thread(
+            self._append,
+            rid,
+            acting_user,
+            Message(role=REPAIR_REQUEST_ROLE, content=text, created_at=now_ms()),
         )
 
     def _notice_history_reduced(self, rid: str, acting_user: str, note: str) -> None:
@@ -719,6 +740,9 @@ class WorkflowExecutor:
             run_id=run_id,
         )
         wf.reconcile = lambda: self._reconcile(item_id)
+        wf.record_note = lambda text: self._record_repair_request(
+            item_id, chat_key, captured_user, text
+        )
         # #429 P5: a per-element turn-lane factory — each map element drives its own
         # enqueue lane (real parallel) but persists to the run's chat. The effective
         # parallelism is min(map concurrency, turn_concurrency).
