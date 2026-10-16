@@ -2649,7 +2649,7 @@ AI 讀 `wui` skill 時會看到「這個 item 能讓頁面問的 subagent」清�
 需要別人意見的問題,卡片標題是「問外部AI」、問題可以改,按下去之後顯示已等幾秒,回答回來存在 `lookups/`,AI 說明
 這是外部AI 的說法。
 
-### 2026-10-16 · #962 容量規劃：用量紀錄，與 superuser 的容量頁 {#pr-962}
+### 2026-10-16 · 0fcbfc8f · #962 容量規劃：用量紀錄，與 superuser 的容量頁 {#pr-962}
 
 **設定** — 新的 `capacity:` 區塊（每個 key 見 [configuration.md §15](configuration.md#15-capacity容量規劃)）。
 **預設就開、行為會變**：
