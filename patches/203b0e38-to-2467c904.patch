@@ -1,0 +1,3656 @@
+diff --git a/docs/configuration.md b/docs/configuration.md
+index dd44dfb8..1fe6ac7f 100644
+--- a/docs/configuration.md
++++ b/docs/configuration.md
+@@ -53,6 +53,28 @@
+ - `agents.kb_chat` 解析後 `allowed_tools` 不含 `kb_search` → raise（KB 聊天接到 RCA preset 卻沒補工具的經典雷）
+ - `kb.retrieval_llm` 少了 `preset` → raise（要關就寫 `null`，別留半套）
+ 
++### 工具很多的 item：模型拿到的是目錄，不是每個工具的完整 schema
++
++**沒有旋鈕,行為是這樣**:一輪送給模型的工具清單裡,套件 command 只佔一行——名字 +
++description 的第一句(上限 100 字元)、**沒有參數 schema**。模型要用哪個,直接呼叫它就會
++拿到完整描述 + 真的 schema,然後照著再呼叫一次就執行;也可以先 `load_tool` 問用法。
++載入只在**那一輪**有效,下一輪回到目錄。
++
++為什麼:每個 command 的完整 schema 以前會在每一輪送兩次(API 的 `tools` 一份、system
++prompt 再渲染一份),所以工具一多,光工具清單就能把整個窗口吃掉——有部署量到 414,115
++字元的 system prompt。超出窗口之後,會拒絕的 endpoint 回 400(我們讀出上限、縮歷史重送),
++**不會拒絕的 endpoint 直接砍掉請求前段**,而前段正是你寫的 `system_prompt`:模型照樣
++流暢回答,只是沒看到你的指令。
++
++量到的差別(本機 5 個套件、14 個 command,同一組真 bundle):完整 schema 在 wire 上
++8,413 tok + prompt 那份複本 11,471 tok = **19,884 tok** → 目錄 710 tok + `load_tool`
++自己 120 tok + prompt 那段固定的 218 tok = **1,048 tok**。每個目錄條目約 **51 tok**。
++把 14 個內建工具(不受影響,照舊完整 schema)也算進去,整輪的工具清單是 33,746 →
++**5,586 tok**。
++
++代價:一輪裡**第一次**用到某個 command 會多一次 round-trip(載入 → 再呼叫)。內建工具
++(`exec`、`read_file` 這些)不受影響,永遠帶完整 schema。
++
+ ### 開機還會吐兩份觀測資料（永遠開，無旋鈕）
+ 
+ - **resolved-config dump**：把「合併後的完整設定」印出來（標註每個值的來源、密鑰遮罩），
+diff --git a/docs/design-history.md b/docs/design-history.md
+index ab56c647..f75a2126 100644
+--- a/docs/design-history.md
++++ b/docs/design-history.md
+@@ -41,6 +41,7 @@
+ | [plan-ext-ai.md](plan-ext-ai.md) | 問外部AI：AI 起草問題、人按「問外部AI」，小幫手在使用者的 Chrome 裡打開公司的網頁 AI、貼上、送出、等回答寫完帶回；網頁怎麼操作由公司寫的一個 Python 檔決定，打包進小幫手 |
+ | [plan-tool-usage-stats.md](plan-tool-usage-stats.md) | 工具使用統計：管理者在 Diagnostics 看 AI 用了哪些工具、誰用、在哪個場合、失敗幾次、平均多久 |
+ | [plan-tools-picker-groups.md](plan-tools-picker-groups.md) | 工具挑選器依套件摺疊、內建工具一組、每組三態 |
++| [plan-tool-on-demand-loading.md](plan-tool-on-demand-loading.md) | 工具按需載入：wire 的 tools 陣列就是目錄（名字＋100 字元描述＋空 schema），用到才載入完整 schema；載入與重試不入歷史 |
+ | [plan-user-env-exec-injection.md](plan-user-env-exec-injection.md) | 使用者環境變數改由 exec 注入（取代 `.userenv` 檔） |
+ | [plan-view-plugins-pr5-finish.md](plan-view-plugins-pr5-finish.md) | #847 / #848 在 #855 分支上的收尾（PR5） |
+ | [plan-marking-tuples.md](plan-marking-tuples.md) | #861 marking 記住選到的整組 key（D1–D6） |
+diff --git a/docs/extending-the-platform.md b/docs/extending-the-platform.md
+index baeee57e..e1a5cd8d 100644
+--- a/docs/extending-the-platform.md
++++ b/docs/extending-the-platform.md
+@@ -125,6 +125,26 @@ def run(args: Args) -> None:                        # 3. 拿驗證過的 args 
+ 從不 introspect package。所以 command 清單住在 package 自己的 `cli.py`/`COMMANDS` 裡,
+ `commands.json` 只是 prebuild 產出的**快照**——改了 command 就要重跑 prebuild 才會生效。
+ 
++### command 的第一句話會被當成目錄那一行
++
++模型每一輪拿到的不是每個 command 的完整參數 schema,而是一份**目錄**:名字 +
++**description 的第一句**(超過 100 字元會在詞界或標點收尾)。要用的時候才會拿到完整
++描述與 schema——模型直接呼叫它就會拿到,或是它自己呼叫 `load_tool`。細節見
++[`plan-tool-on-demand-loading.md`](plan-tool-on-demand-loading.md)。
++
++對寫工具的人,只有一件事要改做法:**`DESCRIPTION` 的第一句要自己站得住**。
++
++```python
++# 好:第一句就說清楚這個 command 做什麼,模型只看這句也能決定要不要用
++DESCRIPTION = "抓取一片晶圓的完整處理歷程。可以給批號與日期範圍,回每個站點一列。"
++
++# 不好:第一句在講前提,模型只看這句不知道它能幹嘛
++DESCRIPTION = "這個 command 需要先設好 WAFER_DB_URL。它會抓取晶圓歷程…"
++```
++
++後面幾句不會被丟掉——載入之後模型拿到的是完整的 `DESCRIPTION`(以及套件名、版本、
++作者那一段)。截短只影響「要不要選這個 command」那一步。
++
+ ### 用 decorator 版 dispatcher（省掉手寫 `main()`）
+ 
+ 上面的 `cli.py` 是**手寫** dispatcher(讓契約攤在眼前)。嫌煩就用 framework 的
+@@ -220,9 +240,10 @@ def main() -> None:        # pyproject.toml [project.scripts] 指向這裡
+ 4. **重啟** app——開機時 `tooling/registry.discover_packages` 掃 `.workspace-tools/` 建
+    `PackageInfo`,`build_function_tools` 依 `allowed` 展開成 `FunctionTool`(第一方套件用扁平
+    command name,兩個第一方套件撞名會 raise;第三方工具的 command 帶本地名前綴 `<本地名>__<command>`,
+-   不會撞,見 `plan-third-party-tool-names.md`)。tool 的 name/description/JSON schema 也會被
+-   `agent/tool_prompt.format_tools_for_prompt` render 進 system prompt 末段,免得小模型把
+-   function tool 當成 PATH 上的 shell binary。
++   不會撞,見 `plan-third-party-tool-names.md`)。tool 的 name/description/JSON schema 隨 API 的
++   `tools` 一起送出;**不再**被 render 進 system prompt(那份複本已移除,見上面「command 的第一句話
++   會被當成目錄那一行」與 [`plan-tool-on-demand-loading.md`](plan-tool-on-demand-loading.md))。
++   system prompt 只留一段固定的話,免得小模型把 function tool 當成 PATH 上的 shell binary。
+ 
+ `app.json` 是**上限**;profile 的 `_profile.json` 可再收窄成子集;per-item 的 `tool_prefs`
+ 再做三態覆寫(#322 的三層 resolve,見 `apps/catalog.py`)。
+diff --git a/docs/migrations.md b/docs/migrations.md
+index 0b5db8e8..3e358188 100644
+--- a/docs/migrations.md
++++ b/docs/migrations.md
+@@ -2527,6 +2527,60 @@ AI 讀 `wui` skill 時會看到「這個 item 能讓頁面問的 subagent」清
+ 會被退回請 AI 精簡成關鍵字再送(不截斷)。人在卡片上自己改查詢不受限。
+ 
+ **確認做完**(`rollout 後`):請 AI 查一個要搜尋的問題,「請幫我查」卡片上的查詢是幾個關鍵字,不是一整句話。
++### 2026-10-15 · #955 工具很多的 item：模型拿到工具目錄，完整 schema 用到才送 {#pr-955}
++
++**設定** — 無。沒有新旋鈕,也沒有要改的 key。
++
++**資料** — 不動。
++
++**k8s · CI 側** — 照常重 build、部署。manifest 沒改。
++
++**行為改變,沒有開關**:一輪送給模型的工具清單裡,**套件 command 只佔一行**——名字 +
++description 的第一句(上限 100 字元)、**沒有參數 schema**。模型要用哪個就直接呼叫它,
++系統回完整描述 + 真的 schema,照著再呼叫一次就執行;模型也可以先 `load_tool` 問用法。
++載入只在那一輪有效。內建工具(`exec`、`read_file` 這些)不受影響,照舊帶完整 schema。
++同時,system prompt 裡那份「每個工具的名字 + 描述 + 完整 JSON schema」的複本**整段移除**,
++換成一段固定長度的說明。
++
++為什麼要動:這兩份清單以前每輪都送,所以工具一多,光工具清單就能把窗口吃掉——有部署量到
++**414,115 字元**的 system prompt。超出窗口時,會拒絕的 endpoint 回 400(我們讀出上限、縮
++歷史重送),**不會拒絕的 endpoint 直接砍掉請求前段**,而前段正是你的 `system_prompt`:
++模型照樣流暢回答,只是沒看到你的指令。量到的差別(5 個套件、14 個 command):19,884 tok → **1,048 tok**(目錄 710 +
++`load_tool` 自己 120 + 那段固定說明 218);每個目錄條目約 51 tok。14 個內建工具不受影響、
++照舊帶完整 schema,把它們算進去的話整輪工具清單是 33,746 → **5,586 tok**。
++
++**代價**:一輪裡第一次用到某個 command 會多一次 round-trip(載入 → 再呼叫)。這會吃掉
++`runner.max_turns`(預設 `10`)的額度:一輪用到 N 個不同的 command,從前要 N+1 步,現在
++最多要 2N+1 步,所以「一輪裡最多用幾個不同的套件 command」從 ~9 掉到 ~4;超過的那一輪
++會收到「已達步數上限」而不是答案。模型被告知可以用一次 `load_tool` 載好幾個(那樣是
++N+2 步),但**如果你們的 item 常常一輪用到四個以上不同的 command,把 `runner.max_turns`
++調高**(`docs/configuration.md` §3 的設定表與 §10 的 yaml 都有這個 key)是這條的出口。
++
++**確認做完**(`rollout 後`):在一個工具很多的 item 送一句話,然後看那一輪的 LLM 呼叫記錄——
++路徑從 pod 自己的 `config.resolved.yaml` 讀 `observability.llm_log.dir`(開機寫在 config.yaml
++旁邊、0600),**不要照 repo 的預設值**,你們的 WORKDIR 不一定一樣:
++
++```
++printenv WORKSPACE_APP_CONFIG            # 沒設就是 cwd 的 ./config.yaml
++grep -n -A3 "llm_log" <config 所在目錄>/config.resolved.yaml
++tail -5 <上面讀到的 dir>/$(date +%F)/index.jsonl   # 每通呼叫一行,有 seq / ts / file
++```
++
++**要看那一輪的第一通呼叫**,不是最新的一筆:同一輪在載入之後的每一通都會帶著已載入
++command 的完整 schema——那正是這個功能在做的事。從 `index.jsonl` 認出你那一輪的幾行
++(看 `ts`),開 `seq` **最小**那一行的 `file`。
++
++⚠️ 不要用檔名猜:`0001-…` 不是「那一輪的第一通」,`seq` 是**每個 process** 從 0 開始的
++(pod 重啟後同一天會有兩個 `0001-`,跨午夜的那天可能根本沒有)。也不要用
++`ls -t … | head -1`:`index.jsonl` 寫在 record 之後,mtime 可能更新,而它沒有 `request`。
++
++那一筆裡:`request.messages[0].content` 就是 system prompt,字元數會掉**一到兩個數量級**
++(本機同一組工具量到的是 83,180 → 874 字元;你們的絕對值取決於自己的工具數與描述長度);
++`request.tools` 裡的套件 command 只有名字 + 一行描述 + `[套件名]`、`properties` 是空的。
++⚠️ 那些記錄裡 `api_key` 是明文(它設計成可重播),貼出來前先拿掉。
++
++**漏做的症狀** — 沒有「漏做」:這是單向的縮減,不需要運營方動手。但如果某個 item 的流程
++原本靠「模型一開始就看得到所有 schema」,它會變成每輪多一次載入;那是預期的代價,不是故障。
+ 
+ ### 2026-10-15 · 73f7c73d · #957 「請幫我查」:搜尋的關鍵字由人自己填,AI 只給建議 {#pr-957}
+ 
+diff --git a/docs/plan-tool-on-demand-loading.md b/docs/plan-tool-on-demand-loading.md
+new file mode 100644
+index 00000000..14124bae
+--- /dev/null
++++ b/docs/plan-tool-on-demand-loading.md
+@@ -0,0 +1,349 @@
++# Plan — 工具按需載入：目錄常在、schema 用到才送
++
++## Problem
++
++一個 turn 把**整個工具宇宙**內嵌進請求裡，而工具數量沒有任何上界。
++
++運營方回報「第三方 tool 一多，模型就降智」，並量到他們的 system prompt 是
++**414,115 字元**（≈10 萬以上 token，中文越多越高）。對照任何實際窗口：32k 等級是
++3 倍超出，128k 等級也被工具字典吃掉大半。
++
++機制有三段，都讀過碼、量過（master `78324d33`）：
++
++1. **每個套件 command 都是一個獨立 function tool**（`tooling/registry.py:build_function_tools`），
++   全部掛在同一輪上；沒有分頁、沒有篩選、沒有上限。
++2. **同一份清單送兩次**：wire 的 `tools` schema，外加
++   `agent/tool_prompt.py:format_tools_for_prompt` 把整份清單（含
++   `json.dumps(schema, indent=2)`）渲染進 system prompt。那段是為小模型加的——讓它
++   不要把 function tool 當成 shell binary——但它帶了完整 schema。
++3. **預算算的是假數字**：`api/turn_context.py:_tools_tokens` 只量
++   `build_tools(allowed_tools)`（內建、compact json），**不量套件/第三方，也不算那份複本**。
++   本機實測（`.workspace-tools` 真 bundle，14 內建 + 5 套件共 14 command）：預算扣
++   **4,538 tok**，實際送 **33,746 tok**（**7.4 倍**，少算 29,208）。單一 command 差很大：
++   第一方的 `sci-plot` 一個 command 就 8,837 tok。
++
++超出窗口之後**系統不知道自己超了**（上面第 3 點），所以不會拒絕、不會警告；由 endpoint
++靜默砍掉請求前段——而 `base = config.system_prompt`（`api/litellm_runner.py:482`）是 system
++message 的**第一段**，工具清單接在它後面（`:560`），所以第一個被丟掉的就是運營方自己寫的
++提示詞。模型照樣流暢回答，只是沒看到指令。這就是「降智」。
++
++**而且目前的部署看不見這件事**：`truncated silently` 的判斷要
++`usage.prompt_tokens`，`include_usage` 只在 preset 設 `reports_usage: true` 才送（預設
++False，`resources/agent_config.py:95`）；`num_ctx` 那兩行被 `is_ollama` 閘住、成功那行還是
++`INFO`（這個 app 沒設 logging，`lastResort` 只收 WARNING 以上）；`request too long` 要
++provider 的 400 內文命中既有字樣，proxy 改寫過就不命中。
++
++## Locked decisions（來源：2026-10-15 與 user 的對話）
++
++| 問題 | 決定 | 來源 |
++|---|---|---|
++| 要不要改成 sub-agent 代理整個套件（`ask_<package>`，#270 的形狀） | **不做**，這一輪只做按需載入 | user：「按需載入 ok subagent 先不用」 |
++| 哪些常駐、哪些按需 | **常駐＝內建工具 + 一份可設定的釘選清單**；**按需＝所有套件 command**，第一方第三方一視同仁（第一方同樣會長大，規則分兩套一定漂） | user 答 Q1：「對」 |
++| 目錄粒度 | **扁平，列出每個 command 的完整名字 + description，描述上限 100 字元**。（我提的「先列套件、再載入該套件」被否決） | user：「先列完整 command 即可 也可以列 command description 最多 100 字元」 |
++| 載入的有效範圍 | **這一輪**。不是選擇題——工具清單本來就是 per-turn 建的（`AgentToolContext` 每輪重建），跨輪才需要額外存狀態 | user：「應該本來就是這輪吧」 |
++| 模型直接呼叫還沒載入的 command | **自動載入它的 schema，把「這是參數 schema，請照這個再呼叫一次」當作這次呼叫的回覆**，並標為已載入 | user 答 Q4：「可以」 |
++| 那次「載入＋重試」要不要留在對話記錄裡 | **不留**，turn-local，不寫進對話記錄、replay 看不到 | user 主動提：「我覺得不要」 |
++| 釘選清單設在哪一層 | per-item、工具 modal（**但這一輪不做，見下一列**） | user：「不用調整」 |
++| 釘選要不要在這一輪做 | **延後，另開票**。它存在的理由是省掉「每輪第一次用某個 command 多一跳」，而那一跳實際多痛**沒有量過**；而且它是這個計畫裡唯一需要前端的部分 | 我提議延後，user：「我覺得沒關係」 |
++| 要不要修 overhead 的估算（`_tools_tokens` 只量內建，低 7.4 倍） | **不修**。它餵兩個地方：history 預算（事前裁切——那本身就是「無腦截斷」，不做）和靜默截斷偵測器（低估所以不觸發）。偵測器針對的是 Ollama 那種「不拒絕、直接砍前段」的 endpoint；user 判斷那條路不用管 | user：「不需要預算吧 他自然會在 litellm 那邊死掉」、「ollama 那個就算了」 |
++
++## Design
++
++### 一份表示法，不是兩份
++
++今天工具資訊有兩份（wire schema + prompt 複本）。改完只有一份：**wire 的 `tools` 陣列
++本身就是目錄**。
++
++- 未載入的 command → **stub 工具**：真名字、description 收到 100 字元上下、**空的參數 schema**。
++  一條約 30–40 token（ASCII；中文描述會到 100 出頭）。
++  **收尾不硬切**：先取第一句（句號／換行為界）；第一句超過 100 就在**詞界或標點**收尾，
++  允許小幅超出，絕不切在半字或半句中間。而且**截斷只影響「要不要選它」，不會永久丟資訊**——
++  載入後拿到的是完整 description + 完整 schema。
++- 已載入的 command → **完整工具**：原本的 `params_json_schema`。
++- `format_tools_for_prompt` 的**整段 schema 複本拿掉**，換成一小段說明（它原本要解決的是
++  「別把 function tool 當 shell binary」，一句話就夠，不需要每個工具的 JSON）。既有的
++  `format_disabled_tools_for_prompt`（#480「可以請使用者開啟」那節）就是「只有名字＋一行」
++  的先例。
++
++目錄成本是 **command 數 × 約 30–100 token**，和 schema 大小脫鉤——今天的痛點（一個
++`sci-plot` command 8,837 tok）就是 schema 大小。
++
++### 切換用框架自己的 `is_enabled`，不自己攔呼叫
++
++SDK 每一步都重新解析工具清單：`agents/run.py:766` 是回合迴圈的 `while True`，
++`:1028` 的 `all_tools = await get_all_tools(...)` 在迴圈**內**（`current_turn += 1` 在 `:1055`）；
++`agents/agent.py:246 get_all_tools` 對每個 `FunctionTool` 評估 `is_enabled`（`:254`，可以是
++callable、可以 async）。
++
++所以：**同一個名字註冊兩個版本**（stub 與完整），`is_enabled` 讀「這一輪已載入的集合」，
++同一時間只有一個會被送出。
++
++- 不需要 mutate `agent.tools`，不需要自己攔 provider 的未知工具呼叫。
++- 同名不會踩 SDK 的檢查：`_validate_codex_tool_name_collisions`（`agent.py:95-118`）只對
++  `_is_codex_tool` 生效，而且跑在 `is_enabled` 過濾**之後**。
++- **模型呼叫未載入的 command 一定會發生**（目錄已經把真名字給它了），這不是要防的誤用。
++  stub 的 handler 就是那個落點：載入 → 回 schema → 要它再呼叫一次。寫成「拒絕」是
++  #537 踩過的坑——模型把拒絕讀成「別再試了」，整條來源直接啞掉。
++
++### `load_tool`
++
++一個常駐工具，吃 command 名也吃套件名（給套件名＝整包載入），一次可以給多個。
++目錄有了真名字，模型多半直接呼叫就好；`load_tool` 是給它「先看用法再決定」的路。
++
++### turn-local，不入歷史
++
++「缺參數的呼叫 + schema 回覆」這一對是**整個設計裡最肥的東西**（schema 可能上千
++token）。留進歷史就等於把省下的塞回去，走幾輪回到原點；靠 reducer 事後折疊也不行——
++那是「窗口滿了才動」的機制，平常還是一直揣著。所以**根本不寫進對話記錄**。
++
++留下來的是**成功那一次呼叫和它的結果**，那才是事實；schema 不必留，下一輪要用會再載。
++
++連帶兩件：
++
++- **工具使用統計**（plan-tool-usage-stats）不把目錄命中計入：它不是工具在做事，計進去會讓
++  每個 command 多一次呼叫、平均時間也歪。意圖是「別讓它看起來像呼叫失敗」——不計入就滿足了
++  （第三輪 N2 更正：原本寫「記成『載入』」，實作是不計，真要有那個指標是另一張票）。
++- **聊天 UI 不為它畫工具卡**，最多一行「載入 `<command>` 的用法」，schema 不進卡片。
++
++### 上界 —— 不需要，故沒做（P2）
++
++原本寫的是「同一輪內同一個 command 最多自動載入一次」。雙胞胎設計讓那個迴圈**結構上
++不可能**發生：載入後 stub 立刻失效、同名的完整工具接手，第二次呼叫打到的是真工具;
++參數再錯是 command 自己的 dispatcher 回友善錯誤，不會再經過載入。一輪裡同時發出兩個
++對同一個未載入 command 的呼叫也安全（兩個都拿到 schema，`mark_tool_loaded` 對集合是
++idempotent）。加一個永遠跑不到的守衛只會是死碼，所以 P2 沒有做。
++（釘住它的是 `test_calling_an_unloaded_command_loads_it_and_asks_for_a_retry`。）
++
++### 預算要量真的那一份 —— 不做（user 決定）
++
++這一段原本要求 `_tools_tokens` 改成量實際送出的那一份。**user 否決了**（「不需要預算吧
++他自然會在 litellm 那邊死掉」、「ollama 那個就算了」），理由與代價寫在上面的決策表與
++「Deliberately not doing」。保留這個標題只為了讓讀到舊版的人找得到它被推翻的地方。
++
++## Deliberately not doing
++
++- **不做 sub-agent 代理**（`ask_<package>`）。user 明確說先不用。
++- **不做兩層目錄**（先套件、再 command）。user 否決；扁平的代價是目錄隨 command 數成長，
++  已知並接受。
++- **不加 App 層釘選**。per-item 一層。
++- **不碰 `reports_usage`**。它只讓數字變真，不回答「有沒有被截」，而且預設值的選擇是
++  刻意的（#748）。要不要在那個部署打開，是運營方的判斷。
++- **UI 不在這一輪顯示「工具清單佔窗口 X%」**。那是另一張票：這一輪先讓佔用降到不會爆。
++- **不設工具數量硬上限**。目錄成本線性且已知，硬上限會把「工具很多」這個合法用法變成錯誤。
++- **不加任何事前裁切，也不修 overhead 的估算**。超出窗口就讓請求撞上去：會拒絕的 endpoint
++  （vLLM 的 `maximum context length ...`）撞出來的訊息餵回既有的「讀出上限 → 縮 → 重送」路徑。
++  **已知的代價**：對**不拒絕、直接砍掉請求前段**的 endpoint（Ollama、部分 proxy），這條路不會
++  報錯，而被砍掉的前段正是 `base = config.system_prompt`；靜默截斷偵測器也會繼續因為低估而
++  不觸發（`_sent_estimate` 用同一個數字）。user 判斷那種 endpoint 不用管（2026-10-15）。
++- **釘選延後**。這一輪完全不碰前端：目錄與載入都在模型那一側，工具 modal 顯示的語意沒變。
++  目錄那一次**仍然會畫一張工具卡**（`ToolStart` 比工具執行早，壓掉它要靠狀態推論、有競態），
++  但卡片與**存下來的訊息**都不帶 schema：`ToolEnd` 的輸出換成「載入 `<名字>` 的用法」，而
++  那一則訊息根本不寫進對話記錄（round 1 A1）。這段原本寫「不發
++  `ToolStart`/`ToolEnd`/`ToolLog`」，與 Design 段自己的敘述矛盾，已更正為實際行為。
++
++## Phases（一個 commit 一段）
++
++1. **目錄與 stub（純函式）** — `tooling/registry.py`：`build_function_tools` 多一個
++   stub 模式（真名字、描述收到 100 上下、空 schema）；描述收尾是一個獨立純函式，
++   單元測試吃 ASCII / 中文 / 剛好 100 / 超過 100 / 空描述 / 第一句就超過 100（要在詞界收尾、
++   不得切在半字）。
++2. **每輪已載入集合** — `AgentToolContext` 上一個 per-turn 的 loaded set（含「這一輪
++   自動載入過哪些」的上界計數），純資料 + 測試；不接線。
++3. **接線：雙胞胎 + `is_enabled`** — `api/litellm_runner.py` 的工具組裝改成「未載入送
++   stub、已載入送完整」，`load_tool` 註冊成常駐工具；stub handler 自動載入並回 schema。
++   測試用 `ScriptedAgentRunner` 走真的組裝路徑，斷言送出的 tools 陣列內容（名字集合、
++   schema 是空的還是完整的），並且第二次呼叫會真的執行。
++4. **prompt 複本換成一段說明** — 拿掉 `format_tools_for_prompt` 的整段 schema，
++   改成固定的一小段（「這些是 function tool，不是 PATH 上的執行檔」）。既有測試會紅，
++   連同它們的斷言一起搬（「規則搬家要把測試帶走」）。
++5. **不入歷史** — 那一對訊息標成 turn-local；`history_items` 的 replay 看不到它；
++   使用統計**不計入**（這一段原本寫「記成『載入』」——實作成不計入，意圖「別讓它看起來像
++   呼叫失敗」就已滿足，真要有「載入」這個指標是另一張票。見回歸鏡頭的 N2）。
++   測試：一輪結束後讀回對話，裡面只有成功那次呼叫。
++6. **文件 + runbook** — `docs/configuration.md`（目錄/載入的行為）、
++   `docs/extending-the-platform.md`（寫套件的人要知道 description 會被截 100 字元，
++   第一句要自足），以及 `docs/migrations.md` 條目：**行為改變、沒有旋鈕**。
++
++（砍掉的三段：預算量真、釘選後端、釘選前端——見上面兩節的決策與理由。）
++
++## Test plan（紅先行，targeted）
++
++- 截斷純函式：ASCII / 中文 / 邊界 100 / 空描述 / 多行描述只取第一句。
++- 組裝：同一個 command 的 stub 與完整版同名、同一時間只有一個被送出；
++  `get_all_tools` 過濾後沒有重名。
++- stub handler：第一次呼叫回 schema 並標為已載入；第二次真的執行；同一輪第三次（仍缺參數）
++  不再重載而是把錯誤交回去。
++- `load_tool`：吃 command 名、吃套件名、吃多個；不存在的名字給出「有哪些」而不是沉默。
++- 不入歷史：一輪結束後 `history_items` 裡沒有 schema 那一對；成功那次在。
++- 沒有工具卡：`load_tool` 與自動載入那次不產生 `ToolStart`/`ToolEnd`/`ToolLog`。
++- 突變探針：把 `is_enabled` 的判斷改成恆真（＝全部送完整 schema）→ 組裝測試要紅；
++  把「不入歷史」那一行拿掉 → 歷史測試要紅。每個突變只能讓它宣稱守的那條紅。
++
++## `docs/migrations.md` 條目（運營方要做什麼）
++
++**行為改變、沒有旋鈕**：模型每輪看到的不再是全部工具的完整 schema，而是目錄 + 用到才載入。
++
++- **設定**：不用改。釘選是 per-item 的新設定，預設空（＝只有內建工具常駐）。
++- **確認做完**：rollout 後在一個工具很多的 item 送一句話，看 LLM 呼叫記錄裡該輪的
++  system prompt 字元數（路徑從 pod 自己的 `config.resolved.yaml` 的
++  `observability.llm_log.dir` 讀，不要照 repo 預設值——fork 的 WORKDIR 不同）。
++  預期從數十萬字元掉到數萬。
++- **漏做的症狀**：沒有——這是單向的縮減；但如果某個 item 的工作流程原本依賴「模型一開始
++  就看得到所有 schema」，它會變成每輪多一次載入的 round-trip。釘選清單是那個情況的出口。
++
++## Verified ground truth（master `78324d33`；行號在那個 commit 上）
++
++- `tooling/registry.py:265 build_function_tools`；`CommandInfo`（`:51`）有
++  `name` / `description` / `params_json_schema`。
++- `api/litellm_runner.py:482` `base = config.system_prompt`；`:541`
++  `tools.extend(build_function_tools(...))`；`:547` `dedupe_tools`（first-wins）；
++  `:558` `tools_section = format_tools_for_prompt(tools)`；`:560` 接在 base 之後；
++  `:840` `instructions=base`。
++- `agent/tool_prompt.py:32 format_tools_for_prompt`（`indent=2` 的完整 schema）；
++  `:62 format_disabled_tools_for_prompt`（只有名字＋一行，目錄形狀的先例）。
++- `api/turn_context.py:300 _overhead_for` → `:575 _tools_tokens`（只 `build_tools`）；
++  `:767 history_items(max_tokens=…)`；`context_budget.py:345 history_budget`。
++- SDK：`agents/run.py:766` `while True`、`:1028` `get_all_tools`、`:1055`
++  `current_turn += 1`；`agents/agent.py:246 get_all_tools`、`:254` `is_enabled`、
++  `:95-118` 同名檢查只對 codex 工具（`:101-102` 的早退、`:113` 的判斷、`:114-118` 的 raise）。
++- 本機量測（`.workspace-tools`）：內建 14 個工具 schema 4,538 tok / prompt 複本 9,397 tok；
++  5 個套件 14 個 command schema 8,413 tok / 複本 11,471 tok；合計 33,746 tok vs 預算扣 4,538。
++  腳本：`llmlog_audit.py`（讀 LLM 呼叫記錄）＋ 以真 record builder/writer 產的樣本一筆。
++
++## Review round 1 — 決策表（缺陷鏡頭 + 回歸鏡頭，2026-10-15，對 `b9e793d5`）
++
++兩把鏡頭各自獨立跑，發現高度重疊。去重後 18 條；先列完整張表再動手，測試從表導出。
++（真實性/符合度鏡頭的結果回來後追加在表尾。）
++
++| # | 發現 | 真因 | 修法 | 怎麼證明 |
++|---|---|---|---|---|
++| **A1** | **「載入＋重試」那一對仍然寫進對話記錄**，而且帶模型憑空編的參數（`lot_number`），下一輪被 replay 回窗口 | P5 只改了 `ToolEnd.output`；`api/turns.py:439` 的 reducer 照樣用 `ToolStart` 的 `tool_name`/`tool_args` 產生一則 `role="tool"` | reducer 收 `ToolEnd` 時，若 call id 是目錄那次就**不產生訊息**。兩個建構點都看得到 `ctx`（`turns.py:1101` 在 `_drive`、`:1454` 在 `gen()`），所以把 `ctx.catalog_calls` 傳給 reducer。**直播的卡片留著**（`ToolStart` 比執行早，壓掉會有競態），但存下來的 thread 沒有那一則 | 探針：真 turn 跑完讀回 thread，`role="tool"` 只有一則；突變（拿掉跳過）要紅 |
++| **A2** | **replay 送出重複的 function 名字＋完整 schema**，比這個 PR 之前還大（55,910 vs 22,118 字元） | `health/replay.py:227-239`、`:284` 直接走 `agent.tools`，不經 `is_enabled`；`load_tool` 也沒有 `is_enabled` | 新增**一個** sync helper `enabled_function_tools(agent, ctx)`（replay 跑在 `asyncio.to_thread` 裡、沒有 running loop，但測試會同步呼叫，所以不用 `asyncio.run`），replay 與 `_emit_llm_trace` 共用它 | **parity 測試以 SDK 為 oracle**：對多個 context，helper 的結果 == `await agent.get_all_tools(...)` 濾掉非 FunctionTool；replay 測試改成斷言 **list**（既有測試比的是 set，重名看不到） |
++| **A3** | `tests/agent/test_tool_alias_model.py::test_the_system_prompt_lists_third_party_commands_by_their_new_names` 紅（CI 的 `tests/agent` 會紅） | P4 刪了 prompt 裡的清單，這條 #888 守衛沒跟著搬 | 斷言改讀 `{t.name for t in agent.tools}`——#888 的性質（模型看到的是 `<本地名>__<cmd>`）還在，只是搬了家 | 測試綠；突變（把 `model_tool_name` 改回扁平名）要紅 |
++| **A4** | 用 5 個不同 command 的一輪會撞 `runner.max_turns`（預設 10），**活做完了但使用者收到 error** | 每個 command 第一次用多一步；而 `_TOOLS_NOTE` **完全沒提 `load_tool`**，所以模型不知道可以一次載多個 | `_TOOLS_NOTE` 加一句：可以用 `load_tool` 一次載好幾個、也可以給整個套件名。加上 A5 之後 1+K+1 這條路才真的存在。**不改 `max_turns` 預設**（那是運營方的旋鈕），但 runbook 要寫明它是出口 | 探針：K=5 的腳本在修法後步數 = K+2；runbook 有那一段 |
++| **A5** | **模型從來不知道任何套件名字**，所以 `load_tool` 自己廣告的「給套件名就載入整包」是死路 | 目錄那行只用 `cmd.description` 的第一句，`describe_command` 的 bundle 那段不見了 | 目錄那行補上套件名（第三方的名字已經含了就不重複）。版本/作者/「不是最新」那句仍然只在載入後出現——那是刻意的，寫進文件 | 測試：真 bundle 的名字出現在送出的工具清單裡 |
++| **A6** | `load_tool` 在**沒有任何 command 被授權**時也掛上去，而且回「Tools you can load: .」這種壞句子。每個 `ask_knowledge_base` 子代理、每個窄 `tools:` 的 workflow 節點都中 | 閘是 `if packages:`（item 裝了什麼），不是 `allowed_command_names(packages, allowed)`（這一輪授權了什麼）——而旁邊註解宣稱是後者 | 照 `request_env_granted` 的同一個判準；`_unknown_name_reply` 在授權清單為空時換一句話 | 測試：只授權 `read_file` 的 preset 沒有 `load_tool`；KB 子代理也沒有 |
++| **A7** | `load_tool` 的回覆**沒有上限**：5 個套件名 → 36,054 字元；`["sci-plot"]*20` → 261,238（超過 200k 的 cap，因為 `cap_tool_outputs` 是由 `build_tools` 與 `build_function_tools` 呼叫的，而目錄與 `load_tool` 兩個 builder 都沒呼叫它——驗修法輪更正：關鍵是哪個 builder 呼叫 cap，不是在哪裡被接上）；3000 個亂名 → 928,888 | 目錄與 `load_tool` 是在 `_agent_for` 裡接上的，繞過 `cap_tool_outputs`；`names` 不去重、不限數量；`by_name` 把 `model_tool_name`、`pkg.name`、`pkg:cmd` 塞進同一個 dict 不去重，所以 bundle 與 command 同名的 `data-fetch` 會回兩次 | `names` 去重＋數量上限；回覆走同一個輸出上限（**驗修法輪 F4 改成上限管「載入什麼」**）；`by_name` 的命中去重 | 探針：重複名字只回一次；`["sci-plot"]*20` 的回覆長度 ≤ 上限 |
++| **A8** | command 的 description 不是字串（published manifest 允許 `null`/`42`/`["a"]`）→ **整個工具清單建構炸掉**，那個 item 的每一輪都失敗 | `catalog_description` 直接 `.strip()`；舊路徑是 f-string（醜但能跑） | `str(text or "")` | 測試：`description=None` 仍能建 agent |
++| **A9** | 縮寫讓目錄那行只剩 4 個字：`'Max. 1000 rows…'` → `'Max.'`、`'…, e.g. a trend…'` → `'Plot a chart, e.g.'`、`'etc.'`、`'vs.'`、`'U.S.'` | `.` + 空白就當句尾；而 `_SENTENCE_END_ASCII` 的註解宣稱「`e.g.` 不會」——那句是**假的** | 句尾要同時滿足：後面是空白/結尾、**下一個非空白字元是大寫或 CJK**（數字、小寫都當續句）、且 `.` 前的 token 不是縮寫（含內部點、單字母、常見縮寫表）。註解改成真的 | 參數化測試：`e.g.`/`i.e.`/`etc.`/`vs.`/`Max.`/`U.S.`/`3.5`/正常兩句 |
++| **A10** | 只有一個很早的邊界時，切點比「完全沒有邊界」的最後退路更差：`'Plot ' + 200 字` → `'Plot…'`（5/100） | 在 `first[:limit-1]` 裡取**最後一個**邊界，但那個邊界可能極早 | 邊界太早（不到上限的一半）就退回切到上限 | 測試：`'Plot ' + 200 字` 不再是 `'Plot…'` |
++| **A11** | 子代理**共用** parent 的 `loaded_tools` 與 `catalog_calls`（`_child_context`、`build_ask_kb_context` 都是 `dataclasses.replace`） | `_child_context` 的重設清單沒加這兩個欄位——而它的 docstring 正是寫「任何屬於 parent 這一輪累積的欄位都要列在這裡」 | 兩處都加進重設清單 | 測試：child 載入後 parent 的集合不變（突變：拿掉重設要紅） |
++| **A12** | `_emit_llm_trace` 讀 `agent.tools`，所以運營方看的 trace 行把每個 command 列兩次 | 同 A2 | 共用 A2 的 helper | 同 A2 的 parity 測試 + 一條 trace 測試 |
++| **A13** | `docs/subsystems/agent-runtime.md:3,35,83` 還在描述被刪掉的 inventory，而 **`docs/` 整棵會透過 `system-design` skill 餵給 app 裡的 AI**（#865） | P6 沒掃到 subsystem 參考 | 更新那三處 | grep 不再命中舊描述 |
++| **A14** | `agent/tools.py:4153-4156` 的註解現在是假的（「會透過 `format_tools_for_prompt` 再出現一次，所以一輪出現兩次」） | 同 A13 | 改掉 | grep |
++| **A15** | `_TOOLS_NOTE` 的目錄那段在**沒有套件**的 turn 也會附上（約 70 token 的死文案，講一件不會發生的事） | 固定文案 | 只有真的有目錄項目時才附那段 | 測試：沒有套件的 config，instructions 不含那段 |
++| **A16** | `catalog_description(limit=0)` 回幾乎整串 + `…`；`limit=-5` 砍 5 個字；切點可能落在組合字元/ZWJ 中間（60,000 次模糊測試有 916 次） | `first[:limit-1]` 對小 limit 失去意義；邊界沒考慮組合字元 | limit 下限保護；收尾時退到不是組合字元/ZWJ 的位置 | 測試：`limit=0/1/-5`；emoji ZWJ 與組合字元的案例 |
++| **A17** | `build_load_tool` 的 `except ValueError` 在 production 走不到 | `load_tool` 在 `builtin_names` 之前加入，所以**會**被 `wrap_with_args_recovery` 包；非 JSON 在進到 handler 之前就被 `MalformedToolArgsError` 擋掉（只有直接呼叫 `on_invoke_tool` 的測試走得到） | 保留那一行（直接呼叫的路還在，成本是一行），結論寫在這裡 | 不加走不到的測試；這一列就是記錄 |
++| **A18** | `ty` 紅：`unresolved-import psycopg2`（`tests/api/test_tool_usage_postgres.py:95`）——**不是這個 PR 造成的**，master 已用 #953/`b5389900` 修掉，只是這條分支的 base 更早 | 分支 base 舊 | 從 master merge 進來 | `ty check` 綠 |
++
++**不做的**（留原樣，理由寫在這裡）：
++- 不改 `runner.max_turns` 的預設值（運營方的旋鈕，不是我的）。
++- 不為「直播卡片」做前端：目錄那一次仍然畫一張沒有 schema 的小卡片，壓掉 `ToolStart` 會有競態（它比工具執行早）。user 定案的是「不留在對話記錄」，那一條照做。
++- 不把版本/作者/「不是最新」那句放進目錄行（太長，而且載入後就有）。
++
++### 真實性 / 符合度鏡頭（同一輪，追加）
++
++**每一個量到的數字都精確**（14 內建 4,538 / 9,397；5 套件 14 command 8,413 + 11,471 = 19,884
++→ 663 + 148 = 811；47.36 tok/command；sci-plot 的 `chart` 8,837；合計 33,746 對預算 4,538 =
++7.436 倍、少算 29,208）。SDK 的行號與行為宣稱也全部為真。以下是它抓到的、前兩把沒看到的：
++
++| # | 發現 | 修法 |
++|---|---|---|
++| **B1** | `catalog_calls` 沒去重，所以一次 `load_tool(["rca-tools", "data-fetch"])` 讓**人讀到**「載入 `data-fetch`、`plot-trend`、`data-fetch` 的用法」 | `mark_tool_loaded` 的 per-call list 去重；測試斷言那句話與 `catalog_calls["c1"]` |
++| **B2** | **`build_load_tool` 的授權過濾沒有被釘住**：把它的 `allowed` 換成 `None`，42 條目標測試全綠；突變下，只授權一個 command 的 turn 可以載到沒被授權那個的完整 schema | parity 測試擴到**三個** builder（以 `build_function_tools` 為 oracle，問遍每個 command 的四種拼法） |
++| **B3** | 計畫裡**三條被取代的規則還活著**（「預算要量真的那一份」、「上界」、「不發 `ToolStart`/`ToolEnd`/`ToolLog`」），而且有一句宣稱「砍掉的三段」其實沒砍。程式跟著另一半 | 三段都改寫成「為什麼沒做 / 已更正為實際行為」，不留兩套規則 |
++| **B4** | `MarkLoaded = Callable[[Any, str], None]` 把型別檢查關掉了——鏡頭把 `.mark_tool_loaded` 與 `.tool_call_id` **兩個都改名**，`ty` 仍然綠 | 改成 `Callable[[ToolContext[AgentToolContext], str], None]`，`_mark_loaded` 也標上真型別 |
++| **B5** | `litellm_runner.py` 呼叫 `format_tools_for_prompt` 上面那段註解、`describe_command` 的理由段、`extending-the-platform.md` 115 行後的那段，都還在描述被刪掉的清單 | 三處改寫；`agent/tools.py` 那條在前兩把已修 |
++| **B6** | runbook 的 `ls -t <dir>/$(date +%F) \| head -1` 會抓到 `index.jsonl`（200 次實測命中 2 次），而它沒有 `request`；而且**最新那筆是那一輪的最後一通**，載入過的 command 在裡面本來就帶完整 schema | 改成 `0001-*.json`（那一輪第一通），並寫明為什麼不是最新那筆 |
++| **B7** | 「字元數應該從數十萬掉到數萬」是把投影當預期——沒有東西保證落在哪一位數 | 改成「掉一到兩個數量級；本機同組工具 83,180 → 591，絕對值取決於你們的工具數」 |
++| **B8** | 兩處 docstring 把 414,115 寫成因果（「that second copy is how…」），那個數字是運營方報的、本機無法重現 | 改成 "an operator reported…" |
++| **B9** | `load_tool` 既不在 `TOOL_VERBS` 表裡，也不在那份 docstring 的「在表外，以及為什麼」清單裡——而那份清單已經短過五次 | 加一條：它只讀 in-process 的 `PackageInfo`（部署設定，不是 item 內容）、回描述與 schema、而且碰不到沒被授權的 command |
++| **B10** | 行號兩處：`dedupe_tools` 在 `:547`（`:546` 是註解行）、`agent.py:95-113` 其實是 `95-118` | 更正 |
++| **B11** | `_map_event` 的**非串流**呼叫點沒被釘住（`# pragma: no cover`，只有 `WORKSPACE_AGENT_STREAM=0` 才走到） | 不加測試（走不到的路寫不出會紅的測試）；明記在這裡，免得以後有人以為兩扇門都守住了 |
++
++## Review round 2 — 驗修法（缺陷 + 真實性，2026-10-15，對 `ce3c70cc`）
++
++兩把鏡頭打的是 **P7 的修法本身**。結論：P7 引進的一條規則讓結果比修之前更差，三個最大的
++修法沒有任何測試釘住，兩個數字是錯的。P8 全部處理。
++
++| # | 發現 | 修法 | 怎麼證明 |
++|---|---|---|---|
++| **F3** | **我在 A9 加的「下一個字必須大寫或 CJK」讓目錄行比 P7 之前更差**：`_is_cjk` 只涵蓋兩段範圍，所以韓文、泰文、阿拉伯文、希伯來文、天城文**永遠不可能滿足**它——ASCII 的 `.` 從此不再結束句子，整段變成目錄行、切在句中。全小寫英文同理。而且那條規則**什麼都沒買到**：A9 的十個案例光靠縮寫規則＋既有的空白 lookahead 就全過（鏡頭驗過） | 整條刪掉，保留縮寫規則 | 五條參數化測試（韓/泰/天城/全小寫/下一字是數字）；突變=把縮寫規則刪掉要紅那兩條只有它能擋的 |
++| **F2** | **重複的 `tool_call_id` 會把那一輪後面每一則工具訊息都刪掉**（含真的 `write_file`），因為紀錄只用 id 比對、而且從不消耗。OpenAI 相容端點會原樣轉傳 server 的 id | 紀錄**用完就取走**：`_map_event` 改寫輸出時 `pop` 掉 `catalog_calls`，並把 id 記進新的 `ephemeral_outputs`；reducer 消耗那一筆。一筆對一則 | 真 `TestClient` 一輪、三次呼叫共用 `c1`：`write_file` 與真的 `data-fetch` 都在、目錄那一則不在。測試的 runner 走**真的 `_map_event`**（替身不能繞過被測那條路） |
++| **F4** | `load_tool` 的字元上限只截**文字**：40 個 command 的 schema 照樣全被標成已載入 → 下一步的工具清單 394,560 字元，比這個 PR 要移除的 414,115 還糟 | 上限改成管「**載入什麼**」：放不下的 command 不標、不描述，回覆最前面說「這次已經滿了」 | 12 個肥 command 的 bundle：`loaded_tools` < 12、回覆裡出現的就是被載入的那些 |
++| **F5** | 被內建工具遮蔽的 command，`load_tool` 還是交出描述與 schema，並叫模型照那組參數再呼叫一次（真正跑的是內建工具，參數不同） | `build_load_tool` 收一個 `shadowed` 集合，那些名字不進 `by_name`。⚠️ **P8 當時只加了參數、runner 沒有傳**（第三輪 D1 抓到，當時那句「runner 傳 `builtin_names`」是假的）；P9 才真的接線，並把 `builtin_names` 提前到 append 之前讀 | 套件 export `read_file`：`load_tool(["read_file"])` 不載入、回「沒有這個工具」 |
++| **F6** | `_first_sentence` 被我改成每個 `.` 取一次尾端切片 → 二次式；40 萬字的描述 680 ms，而它跑在 event loop 上、描述來自第三方 manifest 且沒有長度上限 | 改成用索引看下一個字元 | 形狀測試：10 倍輸入不得花 30 倍時間 |
++| **F7** | `[bundle]` 加在 100 字元上限**之外**（實測 139 字元，上限是 user 定的 100） | 後綴算進同一個上限 | 長 bundle 名 + 400 字描述 → 條目 ≤ 100 且以 `[bundle]` 結尾 |
++| **F8** | `_CATALOG_NOTE` 叫模型看 `[bundle]` 標記，但第三方條目**刻意沒有**那個標記（第三方才是使用者自己裝的那一群） | 那句話補上「或名字裡 `__` 之前的那段」 | 文案測試 |
++| **F10** | `limit=1` 讓 1 個字的描述變成 `…`；負數 limit 回傳比上限長的字串 | 「放得下就原樣」的判斷移到小 limit 守衛**之前** | 三個 limit 的測試 |
++| **B2′** | **我寫的 parity 測試是空的**：`mark_loaded=lambda *_: None` 什麼都沒寫，所以 `set() <= …` 永遠成立——它為之而生的突變仍然零條變紅 | callback 走真的 context API，並且斷言回覆**沒有描述**沒被授權的 command | 突變（`_granted(packages, None)`）要紅 |
++| **A2′/A12′** | **replay 與 trace 的修法沒有任何測試釘住**（把缺陷放回去：72 條、305 條全綠）。既有 replay 測試比的是 **set**，重名看不到，而且沒有一條帶 `packages` | 兩條新測試：replay 斷言**名字清單**無重複 + 第一步的 `properties` 是空的；trace 攔 `build_trace` 斷言名字不重複 | 兩個突變各自要紅 |
++| **A11′** | `build_ask_kb_context` 那半沒測試（刪掉重設，795 條全綠） | 補一條 | 突變要紅 |
++| **B6′** | runbook 的 `0001-*.json` **不是「那一輪的第一通」**：`_seq` 是**每個 process** 從 0 開始的，不是每輪；重啟後同一天會有兩個 `0001-`，跨午夜那天的目錄可能根本沒有 `0001-` | 改成從 `index.jsonl` 找那一輪（它有 `seq`/`ts`/`file`），開 `seq` 最小的那一筆 | 文件 |
++| **B7′** | 「83,180 → **591**」的 591 是**舊的**（`b9e793d5` 的 `_TOOLS_NOTE`）；P7 自己加了 `_CATALOG_NOTE`，實際是 **822**。連帶「固定那段 148 tok」→ **206 tok**、「811 tok」→ **869 tok** | 三處數字更正 | 重量一次 |
++| 其他 | `tool_authz` 的「two bullets up」其實是四條；三處註解寫 `round 1 F6/G1` 而表裡是 B1/B2；`agent-runtime.md` 又把 414,115 和「一半」綁在一起；`§設定一覽` 指向不存在的章節；A2 的「22,118」是 after 不是 before（before 是 52,267）；`_LOAD_REPLY_MAX_CHARS` 的理由寫錯（不是「位置」而是「哪個 builder 呼叫 cap」）；A17 的「需查」要寫出結論（已包；`except` 在 production 走不到）；A4 的「K=5 探針」其實是算術不是量測；「4,076 綠/7 紅是環境雜訊」方向寫反了（`--all-extras` 之後是 **4,083 綠 0 紅**） | 逐條更正 | grep / 重跑 |
++
++**鏡頭確認為真**（摘要）：A1 的落點與兩個建構點、A3/A5/A7/A8/A9/A10/A15/A16/B1/B4/B10 的突變各自只紅它守的那條、`MarkLoaded` 改成真型別之後「改名就會紅」（有必綠對照）、SDK 的每個行號與行為、runbook 的 `request.messages[0]`／`api_key` 明文／`index.jsonl` 寫在 record 之後（200 次命中 2 次，ext4）。
++
++## Review round 3 — 換過機制就再一輪（缺陷 + 回歸，2026-10-15，對 `2374558b`）
++
++P8 的 F2 修法**換掉了機制**（新的兩跳：`_map_event` 取紀錄、reducer 消耗），F4 也換了上限的
++語意，所以依規則再開一輪。缺陷鏡頭打新機制，回歸鏡頭打 `turns.py` 的影響面。
++
++| # | 發現 | 修法 | 怎麼證明 |
++|---|---|---|---|
++| **D1** | **BLOCKING：F5 的 `shadowed` 是死參數**——runner 從來沒傳它，只有單元測試直接傳。P8 的 commit 訊息宣稱「runner 傳 `builtin_names`」，**那句是假的**。實測：套件 export `exec` 時，`load_tool(["exec"])` 照樣交出描述與 schema，並叫模型照那組參數呼叫（真正跑的是內建的 `exec`，參數是 `cmd`） | 真的接線。`builtin_names` 原本在 append **之後**才讀，提前到之前；遮蔽是**每輪**的事實（`allowed_tools=[…:exec]` 時內建的 `exec` 沒被授權、模型拿到的是套件那個），所以不能用模組層常數 | 走真 `_agent_for` 的測試；突變（`shadowed=()`）要紅 |
++| **D2** | 上限的註解說「每個 command 都要放得下才載入」，但第一個 command 豁免（`and done`），所以單一 40 萬字元的 schema 照樣整個進下一步 | **決定：第一個豁免是刻意的**——schema 比預算大的 command，不載入就等於「看得到、被叫去呼叫、永遠呼叫不了」；而且模型直接呼叫它時走的是完全沒有上限的那條（stub 的自動載入）。所以這個預算是**批次**的上限，單一超大 schema 這裡不設限。註解改成這樣寫 | 一條測試斷言它仍然載入、且回覆長度超過上限 |
++| **D3** | 新的「已滿」通知會把同一個 command 名字列兩次（bundle 名等於 command 名時解析到同一對）——正是第一輪 B1 的同一類，在新句子裡重新打開 | `dict.fromkeys` 去重 | 測試建出 bundle 名 == command 名 + 預算填滿；突變要紅 |
++| **D4** | **同一個 `tool_call_id` 下兩次目錄命中 → 第二次的原始 schema 進了對話記錄**（`_map_event` 把整筆紀錄 pop 掉，第二次就認不出來）。平行呼叫共用 id 時更糟：真工具的輸出被當成目錄的改寫掉、目錄自己的被存下來 | 紀錄改成**每個 call id 一個 hit 佇列**（`dict[str, list[list[str]]]`）：一次命中一筆、一筆對一個 output。`load_tool` 一次載 N 個是**一筆**（帶 N 個名字），所以佇列長度等於要壓掉的 output 數，不是 command 數 | 兩次命中共用 `c1`，兩個 output 都不得帶 schema；突變（整筆取走）要紅 |
++| **D5** | `tool_output` 沒有 call id（`_call_id` 的 `or ""` 退路）時，整個壓制機制認不出來，原始 schema 進記錄 | 空字串也當成一個 key —— 壓掉那個 output 比「可能誤壓到相鄰的真訊息」重要，因為記錄裡的 schema 會被 replay 進之後每一輪 | 空 id 的測試；突變要紅 |
++| **D6** | F7 把 user 的 100 讀成「整條條目」的上限，所以 42 字元的 bundle 名會吃掉 42 個字元，只剩 54 給模型真正用來選工具的那句；而且 bundle 名接近 100 時 `max(2, …)` 的地板會讓條目仍然超過 100 | **100 還給 description**（user 的原話是「command description 最多 100 字元」），bundle 名另有自己的小上限（24） | 140 字元的 bundle 名：description ≤ 100、後綴 == 24；突變（把後綴算回去）要紅 |
++| **D7** | 第二輪說非串流那個 `_map_event` 呼叫點「走不到所以寫不出會紅的測試」——**那個理由不成立**，`WORKSPACE_AGENT_STREAM=0` 就走到了（鏡頭寫了探針並驗了突變） | 補一條測試 | 突變（那一行拿掉 `ctx`）要紅 |
++
++**鏡頭確認為真**：F3 的刪除是對的（三個版本的 `_first_sentence` 用 AST 取出來做 4,569 筆差分，**沒有一筆比 `ce3c70cc` 更差**；`sample-tools` 的 8 個真描述三個版本完全相同）；一輪只有一個 reducer（`stream()` 在 production 沒有呼叫者）；沒有「已 map 但未送達」的序列（`done` 哨兵在 `finally`、重試在上一輪事件都過了 reducer 之後才重入）；ctx 每輪新建，三個 `dataclasses.replace` 的拷貝點都處理過；`load_tool` 一次載 N 個只有一個 `remove`（正確）；被壓掉的訊息不會錯開 `[n]` 引用配對（per-name cursor）；`_finish_claim` 在 `if produced:` 之外，所以全被壓掉的一輪不會留下孤兒 claim。
++
++**留著的已知限制**（寫在這裡，不是漏掉）：`_TurnReducer` 現在會**改動** ctx 的 list，所以它不再是輸入的純讀者——同一個 ctx 上跑兩個 reducer 會靜默吃掉一則真訊息。production 只有一個（`_drain_and_persist` 收到的是同一個物件），但這條界線要寫明。
++
++### 回歸鏡頭（同一輪）：既有路徑零回歸，但新機制有一條順序相依的縫
++
++**零回歸**（before/after 逐項 byte-identical）：存下來的 thread（7 種情境，含 `ToolLog`、
++`#62` display、error 收尾、取消、沒有 `ToolStart` 的 `ToolEnd`、兩個真工具共用 call id）、
++KB chat（6 種，含真的 `[1]` → `Citation`）、SSE 的 14 種事件形狀、內建工具集（6 種設定）、
++replay 的 `tools` payload（`allowed_tools=[]` 連 messages 都一樣）、tool usage 的真呼叫計數、
++`ctx.tool_outputs`。兩邊完整套件 4030 → 4096 綠，**沒有任何測試在 before 綠而在 after 紅**。
++
++| # | 發現 | 修法 | 怎麼證明 |
++|---|---|---|---|
++| **R1** | **同一個 call id 下，真工具的輸出先到時，它會被當成目錄那一次改寫並丟棄，而目錄自己的 schema 被存進記錄**——P9 的 hit 佇列只用 id 比對，所以是「誰先到誰被壓」。我自己對 P9 跑探針確認過：`real rewritten = True / schema survives = True` | hit 連**它回答的那段文字**一起記，比對時比文字。那不是在嗅樣式，是比對「這一輪自己產生的值」的身分，所以與到達順序無關 | 參數化測試跑兩種順序：真輸出都要留著、兩個輸出都不得帶 schema。四個突變（改回只比 id／mapper 不傳輸出／stub 不記答案／`load_tool` 不記答案）各自要紅 |
++| **R2** | 一輪能用的不同套件 command 從 ~9 掉到 ~4（`runner.max_turns` 預設 10） | 已在 runbook 寫明並指出旋鈕 | 文件 |
++| **N2** | 目錄命中在使用統計裡**完全不計**，而計畫寫的是「記成『載入』」 | 計畫的字面改成實際行為：不計入（意圖是「別讓它看起來像呼叫失敗」，不計入就滿足了；真要有「載入」這個指標是另一張票） | 文件 |
++
++**留著的已知限制**（補充 D5）：`_map_event` 仍然是先比 call id 再比文字，所以一個**沒有 call id**
++的目錄輸出只能靠 `""` 這個 key 命中；若同一輪還有另一個沒有 id 的真輸出、而且文字恰好相同，
++會被誤壓。兩個條件要同時成立才會發生，而代價（記錄裡的 schema 被 replay 進之後每一輪）比
++誤壓一則重複文字的訊息大。
++
++## 最終量測（交付前對 `9d32cc6b` 重量一次）
++
++每一輪 review 的表格裡那些數字，是**當時那個 sha** 的；`_TOOLS_NOTE`／`_CATALOG_NOTE`／
++目錄行的形狀在 P7–P10 又改過好幾次，所以交付前重量，並把運營方會讀的兩份文件
++（`docs/configuration.md` §工具很多的 item、`docs/migrations.md` #955）更正到這一組。
++量法：同一支腳本在**兩份 src 上各跑一次**（`PYTHONPATH` 指向 master 的 `git archive`
++展開目錄 vs 這個分支），同一組本機 bundle（`.workspace-tools`：5 個套件、14 個 command），
++`estimate_tokens` 吃的是 `_tools_tokens` 那個 compact payload。
++
++| 一輪送出去的工具清單 | master | 這個分支 |
++|---|---|---|
++| 14 個內建工具（wire schema） | 4,538 tok | 4,538 tok（不變） |
++| 內建那份 prompt 複本 | 9,397 tok | 不再有（整段移除） |
++| 14 個套件 command（wire） | 8,413 tok | 目錄 **710** tok + `load_tool` **120** tok |
++| 套件那份 prompt 複本 | 11,471 tok | 不再有 |
++| prompt 的工具段落（固定長度） | 20,795 tok／83,180 字元 | **218 tok／874 字元** |
++| **套件 command 小計** | **19,884 tok** | **1,048 tok** |
++| **整輪合計** | **33,746 tok** | **5,586 tok** |
++| 每個套件 command | 1,420 tok | **51 tok**（目錄條目） |
++
++**更正的三個數字**（第二輪 B7′ 之後又漂了）：目錄 663 → **710**、固定說明 206 → **218**、
++小計 869 → **1,048**（而且舊的那組**從來沒把 `load_tool` 自己的 120 tok 算進 after**）、
++prompt 段落 822 → **874 字元**、47 → **51 tok**／command。`19,884`／`8,413`／`11,471`／
++`33,746`／`4,538`／`9,397`／`83,180` 這幾個 before 的數字重量結果不變。
+diff --git a/docs/subsystems/agent-runtime.md b/docs/subsystems/agent-runtime.md
+index 416a9217..4ec6708f 100644
+--- a/docs/subsystems/agent-runtime.md
++++ b/docs/subsystems/agent-runtime.md
+@@ -1,6 +1,6 @@
+ # Agent 執行時（agent-runtime）
+ 
+-`agent/` 是「每一回合（per-turn）」的基底層：app 裡每一個 LLM agent 都跑在這層上。它定義了一個 `AgentToolContext` dataclass（把工具所需的一切：sandbox、filestore、retriever、sub-agent bridge、VLM、specstar handle、budgets 全裝進去）、模型可呼叫的 function tool 目錄，以及一組「讓小型本地 LLM 乖乖聽話」的輔助函式（reasoning on/off、壞掉的 tool-call args 復原、把工具清單注入 prompt）。
++`agent/` 是「每一回合（per-turn）」的基底層：app 裡每一個 LLM agent 都跑在這層上。它定義了一個 `AgentToolContext` dataclass（把工具所需的一切：sandbox、filestore、retriever、sub-agent bridge、VLM、specstar handle、budgets 全裝進去）、模型可呼叫的 function tool 目錄，以及一組「讓小型本地 LLM 乖乖聽話」的輔助函式（reasoning on/off、壞掉的 tool-call args 復原、告訴模型這些是 function tool 而不是 shell binary）。
+ 
+ > **看這篇之前**：先讀 [架構總覽](../architecture.md) 抓全貌。這層的上游是 [API 與回合引擎](api-and-turns.md)，下游接 [Sandbox、FileStore 與同步](sandbox-and-filestore.md) 與 [知識庫:檢索與 Agent](kb-retrieval-agent.md)。
+ 
+@@ -32,7 +32,7 @@
+ | `src/workspace_app/agent/context.py` | 定義 `AgentToolContext`——傳進每個 tool 的 per-run dataclass。40 多個欄位橫跨兩 flavour（RCA: `investigation_id`/`sandbox`/`filestore`/`files`/`sync`；KB: `retriever`/`collection_ids`/`kb_passages`）外加 Topic-Hub 的 `spec`/`acting_user`、wiki 欄位、`describer`/`deck_vlm` VLM、`run_subagent` bridge、各種 budget、`history`。擁有 `ensure_sandbox()` 的 lazy-create + 套件 eager provisioning。 |
+ | `src/workspace_app/agent/tools.py` | 整個 function-tool 目錄：每個 `*_impl` coroutine（含 #323 opt-in 的 `save_workflow_impl`）、`_IMPLS` 名稱→impl 註冊表、`_WORKSPACE_TOOLS`（RCA 預設集）、把 allowed-list 變成 `agents.FunctionTool` 的 `build_tools()`（含條件式 `read_skill` 注入）、`builtin_tool_descriptions()`（內建 tool 名→其 LLM-facing description，餵 #322 tool catalog 的單一來源）。也含 exec/read 格式化輔助（`_format_exec`/`_truncate_middle`）與 `infer_modules` 的 fan-out 機制。 |
+ | `src/workspace_app/agent/tool_authz.py` | #309 的 agent-tool 授權漏斗：`TOOL_VERBS`（每個 item-level tool 行使**哪些** verb——讀又寫的工具要兩個都列,ceiling 取聯集)、`ceiling_from_tools()`（由 preset 的 allowed tools 導出 AI 的 verb ceiling）、`LEGACY_TOOL_RENAMES`（stored `allowed_tools` 的舊名→現名正規化；`build_tools` 與這裡的 ceiling 走同一份,否則會發出一個註冊得到卻永遠被拒的 tool)、以及 `authorize_tool()`——**`TOOL_VERBS` 表裡的**每個 tool impl 在碰工作區之前呼叫它(表外仍有沒過閘的工具,清單見該模組 docstring),以 `Actor.ai(ceiling ∩ speaker,含 speaker 的 groups)` 對 item 的 `permission` 求值。拒絕時留下一行 WARNING（verb / item / user / owner / visibility / speaker 的 group 數(**這次判斷**沒用到就是 `n/a`——被 ceiling 擋下時不會去問) / 是否落在 ceiling 內),模型只拿到一句話。 |
+-| `src/workspace_app/agent/tool_prompt.py` | `format_tools_for_prompt()`——把 live `FunctionTool` 清單（name、description、JSON args schema）渲染成 Markdown「Tools available」system-prompt 區塊，讓小模型不會把已 provision 的 tool 誤當成 shell binary。由 `_agent_for` 在 template-time prompt 之後於 runtime 接上。 |
++| `src/workspace_app/agent/tool_prompt.py` | `format_tools_for_prompt()`——一段**固定長度**的 Markdown「Tools available」system-prompt 區塊:這些是 function tool、不是 shell binary(別 `exec` 它們),以及(只有這一輪真的有目錄項目時)空的參數 schema 代表什麼、怎麼用 `load_tool` 一次載多個。**它不再列出工具**——那份複本是 414,115 字元 system prompt 的一半([`plan-tool-on-demand-loading.md`](../plan-tool-on-demand-loading.md));工具本身在 API payload 的 `tools` 裡。由 `_agent_for` 在 template-time prompt 之後於 runtime 接上。 |
+ | `src/workspace_app/agent/config_catalog.py` | `AgentConfigCatalog`——（現只剩 KB）依 purpose（`kb_chat`、`infer_modules`）索引的 `AgentConfig` 目錄，外加被 `AppCatalog` 消費的具名 preset 註冊表。`configs_for`/`default_for`/`purposes` + 各 purpose 的薄包裝。 |
+ | `src/workspace_app/agent/reasoning.py` | provider-aware 的 reasoning-OFF kwargs。`is_ollama(model)` + `reasoning_off_kwargs(model)`：Ollama → `{"think": False}`；其他（vLLM/openai-compatible）→ `{"extra_body": {"chat_template_kwargs": {"enable_thinking": False}}}`。 |
+ | `src/workspace_app/agent/args_recovery.py` | 防衛回合不被壞掉的 tool-call args 打死。`peel_first_json()` 抽出第一個完整 JSON 值 + 剩餘字串；`wrap_with_args_recovery()` 回傳一個會分類 args、並 RAISE 三種 `ToolArgsError` 子類之一（Malformed / NonObject / Concatenated）的 `FunctionTool`，好讓 runner 的 `diagnose_error` 把它對映成 retry hint 並從乾淨 history 重啟。 |
+@@ -80,7 +80,7 @@ flowchart TD
+ 主要 runtime 路徑（散文版）：
+ 
+ 1. **每回合組裝**：某個 surface 的 turn builder（KB chat、Topic Hub、RCA 的 `_send_into`）建一個 `AgentToolContext`，只填它那個 flavour 的欄位（RCA 填 `sandbox`/`files`；KB 填 `retriever`/`collection_ids`），其餘留 `None`。同時用 `build_tools(allowed, app_slug, profile)` 把該 agent 的 allowed-list 變成 `FunctionTool` 清單。
+-2. **runner 接手**：`LitellmAgentRunner` 把每個 tool 用 `wrap_with_args_recovery` 包起來、用 `format_tools_for_prompt` 把工具清單接到 system prompt 尾端、把 `reasoning_off_kwargs` 與 `reasoning_effort` 折進 `ModelSettings`，然後組出 `Agent[AgentToolContext]` 交給 Agents SDK。
++2. **runner 接手**：`LitellmAgentRunner` 把每個 tool 用 `wrap_with_args_recovery` 包起來、用 `format_tools_for_prompt` 把那段固定說明接到 system prompt 尾端、把 `reasoning_off_kwargs` 與 `reasoning_effort` 折進 `ModelSettings`，然後組出 `Agent[AgentToolContext]` 交給 Agents SDK。套件 command 在這裡**同名註冊兩次**——目錄項目(一行、沒有 schema)與可執行的那個,靠 SDK 每一步重算的 `is_enabled` 決定送哪一個([`plan-tool-on-demand-loading.md`](../plan-tool-on-demand-loading.md))。
+ 3. **tool 呼叫**：模型決定呼叫某 tool 時，SDK 先進到包裝層 `safer()`，由 `peel_first_json` 把 args 分類：乾淨單一物件 → 透傳給原 `*_impl`；三種壞法 → raise 對應 `ToolArgsError`，runner 的 `diagnose_error` 把它對映成 retry hint，從乾淨的 persisted history 重啟回合（被污染的 in-flight call 被丟掉）。
+ 4. **impl 落地**：`exec_impl`（與 `make_deck` 的 exec_run）是唯一會喚醒 sandbox 的路徑——透過 `ctx.ensure_sandbox()`。純檔案操作走 `ctx.files`/`filestore`，**絕不**喚醒 sandbox。`kb_search_impl` 打 `ctx.retriever` 並把命中段落 append 進 `ctx.kb_passages`。`ask_knowledge_base_impl` / `infer_modules_impl` 走 `ctx.run_subagent` bridge 開 sub-agent。`lookup_glossary` / `resolve_collection` / context-card 工具直接查 `ctx.spec`（specstar）。
+ 
+diff --git a/src/workspace_app/agent/ask_kb.py b/src/workspace_app/agent/ask_kb.py
+index fbaac0d3..d86aed32 100644
+--- a/src/workspace_app/agent/ask_kb.py
++++ b/src/workspace_app/agent/ask_kb.py
+@@ -103,6 +103,14 @@ def build_ask_kb_context(spec: AskKbSpec, base: AgentToolContext) -> AgentToolCo
+         kb_search_budget=KbSearchBudget(max_calls=spec.kb_search_max),
+         wiki_search_budget=WikiSearchBudget(max_calls=spec.wiki_search_max),
+         kb_grep_budget=KbGrepBudget(max_calls=spec.kb_grep_max),
++        # The sub-agent's own, not the caller's — same reason as
++        # `_child_context`'s reset list (`docs/plan-tool-on-demand-loading.md`,
++        # review round 1 A11): `replace` would otherwise hand over the parent's
++        # very `set` and `dict`, so what the KB child loads would be sent with
++        # its full schema for the rest of the parent's turn.
++        loaded_tools=set(),
++        catalog_calls={},
++        ephemeral_outputs=[],
+     )
+ 
+ 
+diff --git a/src/workspace_app/agent/context.py b/src/workspace_app/agent/context.py
+index 36e84afa..f87e47c2 100644
+--- a/src/workspace_app/agent/context.py
++++ b/src/workspace_app/agent/context.py
+@@ -1,7 +1,7 @@
+ from __future__ import annotations
+ 
+ import asyncio
+-from collections.abc import Awaitable, Callable, Mapping
++from collections.abc import Awaitable, Callable, Mapping, Sequence
+ from dataclasses import dataclass, field
+ from pathlib import Path
+ from typing import TYPE_CHECKING
+@@ -254,6 +254,73 @@ class AgentToolContext:
+     # installed into it from prebuilt_dir; the runner also exposes their
+     # commands as function tools. Set by the API layer from create_app config.
+     packages: list[PackageInfo] = field(default_factory=list)
++    catalog_calls: dict[str, list[tuple[list[str], str]]] = field(default_factory=dict)
++    """Tool calls THIS turn that the catalog answered,
++    `{call_id: [([name, …], the answer it gave), …]}` — a QUEUE of hits per
++    call id, one entry per call the catalog answered, each carrying the exact
++    text it answered with.
++
++    The answer to such a call is a parameter schema — the fattest thing in the
++    design. The model needs it (the SDK's own run history carries it to the
++    next step), but the chat card and the STORED message must not: a schema in
++    the thread is replayed into every later turn's window, which undoes the
++    saving over a few turns. `_map_event` reads this to replace that one
++    output with a line naming what was loaded.
++
++    Keyed by call id, not by tool name, because a loaded command and its
++    catalog entry share a name — and recorded by the handler that answered, so
++    nothing has to infer which half ran.
++
++    A QUEUE rather than one list because `call_id` is the provider's, and a
++    provider that reuses one inside a single step would otherwise leave the
++    second hit unrecognised, putting a raw schema in the record (round 3 D4).
++    One `load_tool` call that loads several commands is ONE hit carrying
++    several names, which is why the handler says so explicitly instead of this
++    being inferred from the count.
++
++    The empty call id is a key like any other: `_call_id` falls back to `""`
++    for a provider that sends none, and suppressing that output matters more
++    than the risk of suppressing an adjacent real one — a schema in the record
++    is replayed into every later turn (round 3 D5).
++
++    The ANSWER is stored with it, and matched exactly, because the call id
++    alone cannot say WHICH output is the catalog's when one id covers several
++    calls: a step holding a real call and a catalog hit under one id had the
++    real output rewritten (and dropped) while the catalog's own schema was
++    stored — the one thing this mechanism exists to prevent (round 3 R1). The
++    text is not a pattern being sniffed; it is the identity of a value this
++    turn produced, so the match is order-independent.
++    """
++    ephemeral_outputs: list[str] = field(default_factory=list)
++    """Tool outputs the catalog answered and `_map_event` has already rewritten
++    — one entry per event, consumed by the turn reducer so that message is not
++    stored (`docs/plan-tool-on-demand-loading.md`).
++
++    A SECOND structure beside `catalog_calls`, and not a nicer version of it,
++    because the two are consumed at different moments by different readers:
++    `_map_event` takes a name list out of `catalog_calls` when it rewrites the
++    output, and the reducer — which sees the very next event — takes the id out
++    of here. Both are therefore used exactly once per call, which is what makes
++    a REUSED `tool_call_id` safe: an OpenAI-compatible endpoint passes the
++    server's id through verbatim, and matching on the id alone silenced every
++    later tool message of the turn, a `write_file` that really ran included
++    (verify round F2).
++    """
++    loaded_tools: set[str] = field(default_factory=set)
++    """Which package commands THIS turn has loaded the real schema for
++    (`docs/plan-tool-on-demand-loading.md`), by the name the model calls them by.
++
++    A turn starts empty — from the catalog, where every granted command is one
++    line with no parameter schema — and a command joins this set the moment the
++    model reaches for it, so the rest of the same turn is served its real
++    schema (the SDK re-resolves the tool list on every step).
++
++    It dies with the turn, deliberately. A conversation-level set would creep
++    the whole tool universe back into the window over a dozen turns, which is
++    today's six-figure prompt arriving slowly instead of at once; the history
++    still records which command was used, so the next turn re-loads it (one
++    extra step) rather than carrying every schema it ever touched.
++    """
+     tool_outputs: dict[str, str] = field(default_factory=dict)
+     """What each package tool said the last time it ran in this turn, by the name
+     the model called it (stdout then stderr). `request_env` checks a variable
+@@ -711,6 +778,61 @@ class AgentToolContext:
+             self._speaker_groups = groups_of(self.spec, self.acting_user)
+         return self._speaker_groups
+ 
++    def note_catalog_hit(self, call_id: str, names: Sequence[str], answer: str = "") -> None:
++        """One call the catalog answered: mark its commands loaded, and queue
++        the hit — with the exact text it answered with — so `_map_event` can
++        keep that one output out of the thread.
++
++        `names` is the whole batch of one call (a `load_tool` naming several
++        commands is one hit), so the queue length is the number of OUTPUTS to
++        suppress, never the number of commands."""
++        for name in names:
++            self.mark_tool_loaded(name)
++        self.catalog_calls.setdefault(call_id, []).append(
++            (list(dict.fromkeys(names)), answer)  # the names go into a sentence a person reads
++        )
++
++    def take_catalog_hit(self, call_id: str, output: str) -> list[str] | None:
++        """The queued hit this output IS, consumed. `None` when the output is
++        not one the catalog answered.
++
++        Matched on the answer, not just the id: one id can cover several calls
++        in a step, and matching by id alone dropped a real tool's output and
++        stored the catalog's schema in its place (round 3 R1). A hit queued
++        without an answer (a caller that did not record one) still matches by
++        id, so older callers keep working."""
++        hits = self.catalog_calls.get(call_id)
++        if not hits:
++            return None
++        for i, (names, answer) in enumerate(hits):
++            if answer and answer != output:
++                continue
++            hits.pop(i)
++            if not hits:
++                self.catalog_calls.pop(call_id, None)
++            return names
++        return None
++
++    def mark_tool_loaded(self, name: str, *, call_id: str = "") -> None:
++        r"""This turn may now be served `name`'s real schema. Idempotent: a model
++        can emit two calls to one unloaded command in a single step.
++
++        `call_id` records WHICH call did the loading, so its answer (a schema)
++        can be kept out of the thread; a load with no call behind it (a test, a
++        future caller) simply records nothing.
++
++        The per-call list is deduped for the same reason the set is: one
++        `load_tool(["a-bundle", "one-of-its-commands"])` resolves the same
++        command twice, and the names go into a sentence a PERSON reads — it
++        read `載入 \`data-fetch\`、\`plot-trend\`、\`data-fetch\` 的用法`
++        (round 1 B1)."""
++        self.loaded_tools.add(name)
++        if call_id:
++            self.note_catalog_hit(call_id, [name])
++
++    def is_tool_loaded(self, name: str) -> bool:
++        return name in self.loaded_tools
++
+     def _mounts(self) -> dict[str, MountedTool] | None:
+         """`sandbox_spec.tools` with the release each sha is. `None` stays
+         `None`: it means "this wake says nothing — ask the item", which an
+diff --git a/src/workspace_app/agent/tool_authz.py b/src/workspace_app/agent/tool_authz.py
+index 601918cc..72221c75 100644
+--- a/src/workspace_app/agent/tool_authz.py
++++ b/src/workspace_app/agent/tool_authz.py
+@@ -35,6 +35,15 @@ how five separate tools hid behind an argument that fitted two of them:
+   ``authorize_tool(…, "read_content")`` — without it the hits come back without
+   that line. Its two siblings that do touch the item (``publish_skill`` reads
+   ``.skill/`` out, ``install_skill`` writes it in) are in the table.
++* ``load_tool`` — it touches no workspace at all: it reads the in-process
++  ``PackageInfo`` list (deploy config, not item content) and hands back a
++  description and a JSON schema. It cannot name a command this turn was not
++  granted — it shares ``registry._granted`` with the tool builders — and the
++  commands it opens are themselves on this list (the `tool-package commands`
++  bullet, four up), with their own reason. Written down rather than simply
++  absent, because this enumeration's own rule is that an unwritten absence has
++  not been judged
++  (``docs/plan-tool-on-demand-loading.md``).
+ * ``show_skill_hub_entry`` — the same again: it reads ONE entry, refused
+   unless the speaker may read it (``SkillHubStore.state_for``), and declares a
+   card. The card's Install button is the Skills panel's own route, which
+diff --git a/src/workspace_app/agent/tool_prompt.py b/src/workspace_app/agent/tool_prompt.py
+index 0c3dbef3..469229c4 100644
+--- a/src/workspace_app/agent/tool_prompt.py
++++ b/src/workspace_app/agent/tool_prompt.py
+@@ -1,16 +1,23 @@
+ """Format the agent's tool inventory into a system-prompt section.
+ 
+-When `Agent[AgentToolContext]` runs, the LLM sees the tools via the
+-OpenAI-style tool_calls schema in the API payload. That's enough for
+-beefy models, but small local LLMs (Qwen3:14b and similar) don't
+-reliably associate ``wafer-history`` in their inventory with the right
+-calling convention — they fall back to ``exec(["wafer-history", ...])``
+-because the name *looks* like a shell command.
+-
+-Listing every tool's (name, description, JSON args schema) directly
+-in the system prompt makes the inventory inescapable: the LLM reads
+-it before generating any ``tool_calls``, so it can't confuse a
+-provisioned tool with a sandbox binary.
++The LLM sees the tools themselves via the OpenAI-style tool schemas in the API
++payload. This section does NOT repeat them: it used to render every tool's
++name, description and full JSON schema a second time. Measured locally, that
++second copy was the larger half — 14 built-ins cost 4,538 tokens as wire
++schemas and 9,397 more as this section — and an operator reported a 414,115
++character system prompt on a deployment with many third-party tools
++(`docs/plan-tool-on-demand-loading.md`).
++
++What survives is the rule the section existed for. Small local LLMs
++(Qwen3:14b and similar) don't reliably associate ``wafer-history`` in their
++inventory with the right calling convention — they fall back to
++``exec(["wafer-history", ...])`` because the name *looks* like a shell
++command. One short paragraph says so, and it costs the same whether the turn
++carries three tools or three hundred.
++
++It also explains the catalog: a command the turn has not used yet is advertised
++with an EMPTY parameter schema, which without a word of explanation reads as a
++tool that takes no arguments. Calling it returns the real schema.
+ 
+ This is appended by ``_agent_for`` after ``compose_system_prompt`` —
+ the template-time prompt assembly stays template-time, and the runtime-
+@@ -19,7 +26,6 @@ only tool inventory is composed in at runtime.
+ 
+ from __future__ import annotations
+ 
+-import json
+ from collections.abc import Mapping, Sequence
+ from typing import TYPE_CHECKING
+ 
+@@ -29,34 +35,53 @@ if TYPE_CHECKING:
+     from ..tooling.catalog import ToolMeta
+ 
+ 
++#: Fixed cost, whatever the turn carries. The tools themselves are in the API
++#: payload; this says how to call them.
++_TOOLS_NOTE = """## Tools available
++
++Your tools are the ones in this request's tool list — call one by **name**
++through `tool_calls` with a JSON args object. **Do NOT**
++`exec(['<tool-name>', ...])`: they are NOT shell binaries on PATH, and trying
++to exec one fails with `not found` (exit 127).
++"""
++
++#: Added only when the turn actually carries catalog entries. Two things the
++#: model cannot work out on its own: an empty argument schema does not mean
++#: "no arguments", and several tools can be loaded in ONE step.
++#:
++#: That second sentence is not a nicety. Each first use of a command costs an
++#: extra step, and `runner.max_turns` (default 10) bounds a turn — so a turn
++#: using five commands one at a time hits the ceiling with the work already
++#: done. One `load_tool` naming them all costs one step for all five; without
++#: this paragraph the model was never told that path existed (round 1 A4).
++_CATALOG_NOTE = """A tool you have not used yet in this turn may be listed with
++an **empty** argument schema. That does not mean it takes no arguments — it
++means its schema has not been sent yet. Call it anyway: the answer is its real
++description and argument schema, and you then call it again with arguments
++matching that schema.
++
++If you expect to use several such tools, call `load_tool` ONCE with all of
++their names — each tool you load separately costs an extra step. A bundle's
++name loads every command in it: it is shown as `[bundle]` at the end of an
++entry, or is the part before `__` in a tool's own name.
++"""
++
++
+ def format_tools_for_prompt(tools: Sequence[FunctionTool]) -> str:
+-    """Render `tools` as a Markdown "Tools available" section. Empty
+-    `tools` → empty string (caller skips concatenation)."""
++    """The one paragraph about how to call tools, plus the catalog paragraph
++    when this turn has catalog entries. Empty `tools` → empty string (caller
++    skips concatenation).
++
++    `tools` decides WHETHER each paragraph is needed, never its length: it
++    deliberately does not list them. See the module docstring."""
+     if not tools:
+         return ""
+-    lines: list[str] = [
+-        "## Tools available",
+-        "",
+-        (
+-            "Each entry below is a **function tool** — call it by **name** through "
+-            "`tool_calls` with a JSON args object matching its schema. **Do NOT** "
+-            "`exec(['<tool-name>', ...])` — these tools are NOT shell binaries on "
+-            "PATH; trying to exec one will fail with `not found` (exit 127)."
+-        ),
+-        "",
+-    ]
+-    for t in tools:
+-        lines.append(f"### `{t.name}`")
+-        lines.append("")
+-        lines.append((t.description or "_(no description)_").strip())
+-        lines.append("")
+-        lines.append("Args (JSON schema):")
+-        lines.append("")
+-        lines.append("```json")
+-        lines.append(json.dumps(t.params_json_schema or {}, indent=2, ensure_ascii=False))
+-        lines.append("```")
+-        lines.append("")
+-    return "\n".join(lines).rstrip() + "\n"
++    # A turn with no package command carries no empty schema and no
++    # `load_tool`, so the catalog paragraph would be ~70 tokens of instruction
++    # about something that cannot happen (round 1 A15).
++    if not any(t.name == "load_tool" for t in tools):
++        return _TOOLS_NOTE
++    return f"{_TOOLS_NOTE}\n{_CATALOG_NOTE}"
+ 
+ 
+ def format_disabled_tools_for_prompt(metas: Sequence[ToolMeta]) -> str:
+diff --git a/src/workspace_app/agent/tools.py b/src/workspace_app/agent/tools.py
+index c031735e..3467ea30 100644
+--- a/src/workspace_app/agent/tools.py
++++ b/src/workspace_app/agent/tools.py
+@@ -4149,13 +4149,13 @@ def _with_absent_convention(tool: FunctionTool) -> FunctionTool:
+     It is the missing sentence, derived from the schema so any tool that grows an
+     optional arg is covered without anyone remembering.
+ 
+-    It rides on the tool DESCRIPTION, which means it reaches the model through the
+-    native tool definition AND through `format_tools_for_prompt`, which renders
+-    descriptions verbatim into the system prompt. So it does appear twice per turn
+-    — worth stating plainly rather than claiming otherwise. The cost is bounded:
+-    only 6 of 31 built-ins have nullable args, so this is one short line each, and
+-    the alternative (a prompt-only note) would leave the wire-level tool
+-    definition silent on its own convention."""
++    It rides on the tool DESCRIPTION, so it reaches the model with the tool
++    definition itself — once. (It used to arrive twice: `format_tools_for_prompt`
++    rendered every description into the system prompt as well, until
++    `docs/plan-tool-on-demand-loading.md` removed that second copy.) The cost is
++    bounded: only 6 of 31 built-ins have nullable args, so this is one short line
++    each, and the alternative (a prompt-only note) would leave the wire-level
++    tool definition silent on its own convention."""
+     names = _nullable_arg_names(tool)
+     if not names:
+         return tool
+diff --git a/src/workspace_app/api/litellm_runner.py b/src/workspace_app/api/litellm_runner.py
+index 386a90bd..c6934acc 100644
+--- a/src/workspace_app/api/litellm_runner.py
++++ b/src/workspace_app/api/litellm_runner.py
+@@ -10,6 +10,7 @@ from __future__ import annotations
+ 
+ import asyncio
+ import contextlib
++import dataclasses
+ import json
+ import logging
+ import os
+@@ -152,6 +153,64 @@ _WIKI_TRACE_NAMES = {
+ }
+ 
+ 
++def enabled_function_tools(agent: Any, ctx: Any) -> list[FunctionTool]:  # noqa: ANN401 — Agent/AgentToolContext, kept loose for the sync callers
++    """The tools this step would actually send, for callers that are not the
++    SDK's run loop (`docs/plan-tool-on-demand-loading.md`, round 1 A2/A12).
++
++    `agent.tools` is NOT that list any more: each package command is registered
++    twice under one name — the catalog entry and the executable tool — and
++    `is_enabled` is the only thing that keeps one of the pair off the wire. A
++    caller that reads `agent.tools` raw now sends two definitions of one name,
++    which `dedupe_tools`' docstring describes as "a payload the provider
++    rejects wholesale".
++
++    Mirrors `agents/agent.py:246 get_all_tools` for the one case our callers
++    need — synchronous, no MCP tools, `is_enabled` as a bool or a plain
++    callable — because both callers run in threads with no event loop
++    (`replay_turn` under `asyncio.to_thread`) or inside a sync trace helper.
++    Kept honest by a parity test with `get_all_tools` itself as the oracle.
++    """
++    out: list[FunctionTool] = []
++    for tool in agent.tools:
++        if not isinstance(tool, FunctionTool):
++            continue
++        flag = tool.is_enabled
++        if flag is True or flag is not False and flag(RunContextWrapper(ctx), agent):
++            out.append(tool)
++    return out
++
++
++def _loaded_this_turn(name: str) -> Callable[[RunContextWrapper[Any], Any], bool]:
++    """Enable the executable half of `name`'s pair once this turn has loaded it
++    (`docs/plan-tool-on-demand-loading.md`).
++
++    Evaluated by the SDK on EVERY step, which is what makes "load it, then call
++    it" work inside one turn rather than next turn.
++
++    A context that cannot answer counts as loaded: every turn in this app
++    carries an `AgentToolContext`, so this is the shape a future caller would
++    arrive in, and the honest default is the behaviour from before the
++    catalog — the full schema, sent.
++    """
++
++    def check(ctx: RunContextWrapper[Any], _agent: Any) -> bool:  # noqa: ANN401 — the SDK hands the agent; unused
++        answer = getattr(ctx.context, "is_tool_loaded", None)
++        return True if answer is None else bool(answer(name))
++
++    return check
++
++
++def _not_loaded_this_turn(name: str) -> Callable[[RunContextWrapper[Any], Any], bool]:
++    """Enable the catalog half until the turn loads it — the exact complement
++    of `_loaded_this_turn`, so one of the pair is always sent and never both."""
++
++    def check(ctx: RunContextWrapper[Any], _agent: Any) -> bool:  # noqa: ANN401 — the SDK hands the agent; unused
++        answer = getattr(ctx.context, "is_tool_loaded", None)
++        return False if answer is None else not bool(answer(name))
++
++    return check
++
++
+ def _trace_workflow_name(ctx: AgentToolContext) -> str:
+     cfg_name = ctx.agent_config.name if ctx.agent_config is not None else ""
+     if cfg_name in _WIKI_TRACE_NAMES:
+@@ -551,23 +610,85 @@ def _agent_for(
+ 
+     if in_chat and ask_ext_ai_granted(config, enabled=ext_ai):
+         tools.append(ask_ext_ai_tool())
++    # plan-tool-on-demand-loading: `load_tool` is ours, not a package's, so it
++    # goes in BEFORE `builtin_names` is read — the usage report would otherwise
++    # file it under `first_party`, beside the commands it exists to open.
++    #
++    # Granted by the same rule as the cards above, and that means the same
++    # CHECK: whether this turn is granted any package command, not whether the
++    # item has a bundle installed. `if packages:` was the latter, so every
++    # sub-agent with a narrowed `allowed_tools` — every `ask_knowledge_base`
++    # child, every workflow node with its own `tools:` — got a `load_tool`
++    # whose only possible answer was "there is no tool called that. Tools you
++    # can load: ." (round 1 A6).
++    from ..tooling.registry import allowed_command_names
++
++    # Narrowed once: `grants_commands` is a bool, so it does not narrow
++    # `packages | None` for the blocks below the way `if packages:` did.
++    pkgs: list[PackageInfo] = packages or []
++    grants_commands = bool(allowed_command_names(pkgs, config.allowed_tools))
+     # plan-tool-usage-stats D6: what is in the list BEFORE the package commands
+     # is ours — built-ins and the rule-granted cards. The last point every
+     # source is still a list of its own, so the source is read here, not
+     # guessed later from a name a first-party command shares with a built-in.
++    #
++    # Read BEFORE `load_tool` goes in (it used to be read after), because
++    # `load_tool` needs it: a command whose name a built-in holds must not be
++    # loadable. `load_tool` is still ours rather than a package's for the usage
++    # report, which is what this set decides — and it is not in the set itself,
++    # so adding it after changes nothing there.
+     builtin_names = {t.name for t in tools}
+-    if packages:
+-        tools.extend(build_function_tools(packages, allowed=config.allowed_tools))
++    if grants_commands:
++        from agents.tool_context import ToolContext
++
++        from ..tooling.registry import build_catalog_tools, build_load_tool
++
++        def _mark_loaded(
++            tool_ctx: ToolContext[AgentToolContext], names: Sequence[str], answer: str
++        ) -> None:
++            # One call = one hit, whatever it resolved: the queue counts the
++            # OUTPUTS to keep out of the thread, not the commands (round 3 D4).
++            # The answer goes with it so the hit is matched by what it SAID,
++            # not only by an id a provider may reuse (round 3 R1).
++            tool_ctx.context.note_catalog_hit(tool_ctx.tool_call_id, names, answer)
++
++        tools.append(
++            build_load_tool(
++                pkgs,
++                allowed=config.allowed_tools,
++                mark_loaded=_mark_loaded,
++                # Shadowing is a per-TURN fact: with `allowed_tools=[…:exec]`
++                # the built-in `exec` is not granted and the package's own is
++                # what the model gets, so a module-level list would be wrong
++                # (round 3 D1).
++                shadowed=builtin_names,
++            )
++        )
++    if grants_commands:
++        # plan-tool-on-demand-loading: each granted command is registered TWICE
++        # under one name — the executable tool, enabled once this turn has
++        # loaded it, and the catalog entry (one line, no schema), enabled until
++        # then. The SDK re-resolves `is_enabled` on every step
++        # (`agents/run.py:1028` → `agent.py:254`), so exactly one of the pair
++        # reaches the provider and the payload never carries a duplicate name.
++        # Same-name registration is safe: the SDK's own duplicate check is
++        # codex-tools-only and runs AFTER that filter (`agent.py:95-118`).
++        tools.extend(
++            dataclasses.replace(t, is_enabled=_loaded_this_turn(t.name))
++            for t in build_function_tools(pkgs, allowed=config.allowed_tools)
++        )
+     # Last stop before the model sees them, and the only place every source is in
+     # one list: built-ins, the conditional grants, and the package commands —
+     # which `build_function_tools` rejects collisions AMONG, but not against
+     # ours. Two definitions of one name is a payload the provider refuses
+     # wholesale, so the turn dies for a reason nothing in it explains.
+     tools = dedupe_tools(tools)  # first-wins: the built-in outranks a package's copy
+-    # Append the resolved tool inventory (name + description + JSON args
+-    # schema) to the system prompt so small local LLMs don't confuse
+-    # provisioned function tools with shell binaries (see plan §B.10 /
+-    # agent/tool_prompt.py).
++    # Append the fixed how-to-call-tools note (and, when this turn carries
++    # catalog entries, the paragraph about empty schemas and `load_tool`) so
++    # small local LLMs don't confuse function tools with shell binaries. It no
++    # longer LISTS the tools — that second copy of the inventory is what
++    # `docs/plan-tool-on-demand-loading.md` removed; the tools themselves are
++    # in this request's `tools` array (see agent/tool_prompt.py).
+     from ..agent.tool_prompt import (
+         format_disabled_tools_for_prompt,
+         format_tools_for_prompt,
+@@ -637,6 +758,24 @@ def _agent_for(
+     tools = [
+         wrap_with_usage(wrap_with_args_recovery(t), source(t.name), package(t.name)) for t in tools
+     ]
++    # The catalog entries go on AFTER the wrapping, and deliberately without
++    # it: a catalog hit is the model asking what a tool takes, not the tool
++    # running, so counting it would add a call to every command's row in the
++    # usage report (plan-tool-usage-stats) and move its average; and argument
++    # recovery has nothing to recover — the entry reads no arguments at all.
++    # They also go on after `dedupe_tools`, which drops repeats of a name and
++    # would otherwise take one twin of each pair and warn about it every turn.
++    # A command a built-in shadows is left out here too, because dedupe just
++    # dropped its executable half — a catalog entry for it would advertise
++    # something that can never run.
++    if grants_commands:
++        tools.extend(
++            dataclasses.replace(stub, is_enabled=_not_loaded_this_turn(stub.name))
++            for stub in build_catalog_tools(
++                pkgs, allowed=config.allowed_tools, mark_loaded=_mark_loaded
++            )
++            if stub.name not in builtin_names
++        )
+     # Per-message reasoning effort (the UI selector). Only set when chosen —
+     # absent leaves the model's default. drop_params (above) drops it on models
+     # that don't support it, so it's safe to send to any model.
+@@ -1081,11 +1220,17 @@ def _call_id(raw: Any) -> str:
+     return _raw_field(raw, "call_id") or _raw_field(raw, "id") or ""
+ 
+ 
+-def _map_event(event: Any) -> AgentEvent | None:
++def _map_event(event: Any, ctx: AgentToolContext | None = None) -> AgentEvent | None:
+     """Translate one openai-agents stream event into our AgentEvent shape.
+ 
+     Returns None for events we deliberately drop (raw token chunks, handoffs,
+     etc.) — keeps the SSE stream focused on what the UI cares about.
++
++    `ctx` is the turn, when the caller has one: a call the catalog answered has
++    a parameter schema for its output, and that must not reach the chat card or
++    the stored message (`docs/plan-tool-on-demand-loading.md`). Optional
++    because the mapping is otherwise context-free, and a caller without a turn
++    gets the output as is.
+     """
+     if getattr(event, "type", None) != "run_item_stream_event":
+         return None
+@@ -1124,8 +1269,23 @@ def _map_event(event: Any) -> AgentEvent | None:
+         # base64 data URL, which would bloat the SSE stream and, worse, replay as
+         # a giant text blob into the next turn's context. Surface a concise note.
+         out_text = _tool_output_text(raw_out)
++        call_id = _call_id(item.raw_item)
++        # A catalog hit's answer is a schema the model needs and the thread does
++        # not. Decided by the call id the handler recorded, never by sniffing
++        # the text or by the tool's name — a loaded command and its catalog
++        # entry share a name, so a name could not tell them apart.
++        #
++        # ONE HIT, one output. The record is a queue of hits per call id, so two
++        # catalog hits sharing an id consume one each: popping the whole record
++        # left the second one unrecognised and its raw schema went into the
++        # thread (round 3 D4). The id then goes into `ephemeral_outputs` so the
++        # reducer drops THIS message and no other.
++        loaded = ctx.take_catalog_hit(call_id, out_text) if ctx is not None else None
++        if loaded and ctx is not None:
++            out_text = "載入 " + "、".join(f"`{n}`" for n in loaded) + " 的用法"
++            ctx.ephemeral_outputs.append(call_id)
+         return ToolEnd(
+-            call_id=_call_id(item.raw_item),
++            call_id=call_id,
+             output=out_text,
+         )
+     # message_output_created carries the FULL assistant message; we stream
+@@ -1178,7 +1338,10 @@ def _emit_llm_trace(
+             _effective_model(getattr(agent, "model", None), cfg.model if cfg else "") or "(unknown)"
+         )
+         endpoint = redact_endpoint((cfg.llm_base_url if cfg else "") or runner_base_url)
+-        tools = [t.name for t in agent.tools if isinstance(t, FunctionTool)]
++        # What this step SENDS, not what is registered: the catalog's twins
++        # would otherwise list every package command twice in the one line an
++        # operator reads to see what went out (round 1 A12).
++        tools = [t.name for t in enabled_function_tools(agent, ctx)]
+         ms = agent.model_settings
+         trace = build_trace(
+             model=model,
+@@ -1926,7 +2089,7 @@ class LitellmAgentRunner:
+                                     )
+                                 )
+                         continue
+-                    mapped = _map_event(event)
++                    mapped = _map_event(event, ctx)
+                     if mapped is not None:
+                         if isinstance(mapped, ToolStart):
+                             tool_calls_seen += 1
+@@ -2058,7 +2221,7 @@ class LitellmAgentRunner:
+         for item in result.new_items:
+             itype = getattr(item, "type", "")
+             if itype in _NONSTREAM_TOOL_EVENT:
+-                mapped = _map_event(_ItemEvent(_NONSTREAM_TOOL_EVENT[itype], item))
++                mapped = _map_event(_ItemEvent(_NONSTREAM_TOOL_EVENT[itype], item), ctx)
+                 if mapped is None:
+                     continue
+                 if isinstance(mapped, ToolStart):
+diff --git a/src/workspace_app/api/subagent_run.py b/src/workspace_app/api/subagent_run.py
+index 5d3f0efb..d6330fd1 100644
+--- a/src/workspace_app/api/subagent_run.py
++++ b/src/workspace_app/api/subagent_run.py
+@@ -226,6 +226,16 @@ def _child_context(
+         # checks a name against. A sub-agent's runs are not the parent's: the
+         # parent's model never saw them (plan-env-request-card, review round 1).
+         tool_outputs={},
++        # Which commands THIS turn loaded, and which calls the catalog answered
++        # (`docs/plan-tool-on-demand-loading.md`). Same rule as `tool_outputs`
++        # above: a child's load is not the parent's. Sharing them (they are a
++        # `set` and a `dict`, so `replace` hands over the same objects) made a
++        # child's load send that command's full schema for the rest of the
++        # parent's turn — the saving eroding in proportion to delegation
++        # (review round 1 A11).
++        loaded_tools=set(),
++        catalog_calls={},
++        ephemeral_outputs=[],
+         # NOT reset, and deliberately: `kb_search_budget` / `wiki_search_budget`
+         # stay shared, so a turn's search allowance is spent once however many
+         # sub-agents it delegates to. Resetting them would let an agent multiply
+diff --git a/src/workspace_app/api/turns.py b/src/workspace_app/api/turns.py
+index e2bef2db..f303fd31 100644
+--- a/src/workspace_app/api/turns.py
++++ b/src/workspace_app/api/turns.py
+@@ -421,6 +421,20 @@ class _TurnReducer:
+ 
+     produced: list[TurnMessage] = field(default_factory=list)
+     _pending_tools: dict[str, ToolStart] = field(default_factory=dict)
++    #: Outputs the catalog answered, which `_map_event` has already rewritten —
++    #: the turn's own `ctx.ephemeral_outputs`, one entry per event
++    #: (`docs/plan-tool-on-demand-loading.md`). Their answer is a parameter
++    #: schema the model needs for its next step and the record must not keep:
++    #: the stored message would carry the arguments the model invented against
++    #: an empty schema (a call that never happened, with a parameter that does
++    #: not exist) and replay it into every later turn.
++    #:
++    #: Each entry is CONSUMED here, because one record answers one call. Keying
++    #: off the call id in `catalog_calls` instead silenced every later tool
++    #: message of a turn whose provider reuses ids (verify round F2). The LIVE
++    #: event still goes out — `ToolStart` precedes the tool, so suppressing the
++    #: card would rest on a race — it just leaves nothing behind.
++    ephemeral_outputs: list[str] = field(default_factory=list)
+ 
+     def _add_assistant(self, text: str, reasoning: bool) -> None:
+         last = self.produced[-1] if self.produced else None
+@@ -442,6 +456,9 @@ class _TurnReducer:
+             self._pending_tools[item.call_id] = item
+         elif isinstance(item, ToolEnd):
+             start = self._pending_tools.pop(item.call_id, None)
++            if item.call_id in self.ephemeral_outputs:
++                self.ephemeral_outputs.remove(item.call_id)
++                return
+             self.produced.append(
+                 TurnMessage(
+                     role="tool",
+@@ -1213,7 +1230,7 @@ class ChatTurnEngine:
+         usage: _TurnUsage | None,
+     ) -> None:
+         """`_run_turn`'s body, inside the turn's usage scope."""
+-        reducer = _TurnReducer()
++        reducer = _TurnReducer(ephemeral_outputs=ctx.ephemeral_outputs)
+         cancelled: RunCancelled | None = None
+         try:
+             # Warm the sandbox as the turn begins (best-effort), so the cold
+@@ -1582,7 +1599,7 @@ class ChatTurnEngine:
+             logger.info("turns: stream turn started for %s (epoch %d)", key, my_epoch)
+ 
+         async def gen() -> AsyncIterator[str]:
+-            reducer = _TurnReducer()
++            reducer = _TurnReducer(ephemeral_outputs=ctx.ephemeral_outputs)
+             finished = False
+             try:
+                 while True:
+diff --git a/src/workspace_app/health/replay.py b/src/workspace_app/health/replay.py
+index 09109314..b3e30c2a 100644
+--- a/src/workspace_app/health/replay.py
++++ b/src/workspace_app/health/replay.py
+@@ -216,9 +216,13 @@ class ReplayService:
+         # would implicate the harness instead of the model. Lazy import:
+         # `api` imports `health` (routes) — module-load import would
+         # cycle. Same for ThinkSplitter (Qwen3 inline `<think>` tags).
+-        from agents import FunctionTool
+ 
+-        from ..api.litellm_runner import ThinkSplitter, _agent_for
++        from ..agent.context import AgentToolContext
++        from ..api.litellm_runner import (
++            ThinkSplitter,
++            _agent_for,
++            enabled_function_tools,
++        )
+ 
+         agent = _agent_for(
+             config, packages, template_profile=template_profile, in_chat=in_chat, ext_ai=ext_ai
+@@ -228,6 +232,17 @@ class ReplayService:
+         if agent.instructions:
+             sent.append({"role": "system", "content": agent.instructions})
+         sent.extend(self._history(messages[:index]))
++        # `enabled_function_tools`, never `agent.tools`: a package command is
++        # registered twice under one name (the catalog entry and the executable
++        # tool, `docs/plan-tool-on-demand-loading.md`) and only `is_enabled`
++        # keeps one of the pair off the wire. Reading the registry raw sent two
++        # definitions of one name — bigger than before the catalog existed, and
++        # a payload `dedupe_tools` exists to prevent — which would also break
++        # this module's own promise of a bit-identical replay.
++        # A fresh turn's view: a replay re-sends a turn's FIRST step, and
++        # nothing is loaded then. The real class, so the predicate is answered
++        # the way it is in production.
++        offered = enabled_function_tools(agent, AgentToolContext(investigation_id="replay"))
+         tools = [
+             {
+                 "type": "function",
+@@ -237,10 +252,7 @@ class ReplayService:
+                     "parameters": t.params_json_schema,
+                 },
+             }
+-            # Everything we build IS a FunctionTool — the isinstance is
+-            # a `ty` narrowing for the SDK's wider Tool union.
+-            for t in agent.tools
+-            if isinstance(t, FunctionTool)
++            for t in offered
+         ]
+ 
+         started = time.perf_counter()
+@@ -286,7 +298,7 @@ class ReplayService:
+         request = ReplayRequest(
+             model=config.model,
+             endpoint=redact_endpoint(config.llm_base_url or self._default_base_url),
+-            tools=[t.name for t in agent.tools if isinstance(t, FunctionTool)],
++            tools=[t.name for t in offered],
+         )
+         logger.info("replay: turn replay complete for model=%s", config.model)
+         return ReplayResult(
+diff --git a/src/workspace_app/tooling/registry.py b/src/workspace_app/tooling/registry.py
+index 68cb6725..eb080db7 100644
+--- a/src/workspace_app/tooling/registry.py
++++ b/src/workspace_app/tooling/registry.py
+@@ -28,7 +28,8 @@ from __future__ import annotations
+ import json
+ import logging
+ import re
+-from collections.abc import Iterable, Sequence
++import unicodedata
++from collections.abc import Callable, Collection, Iterable, Sequence
+ from dataclasses import dataclass
+ from pathlib import Path
+ from typing import Any
+@@ -46,6 +47,20 @@ from .artifact import parse_env_declaration
+ 
+ logger = logging.getLogger(__name__)
+ 
++#: `(the tool's ToolContext, the model's name for the command) -> None` — what
++#: a catalog entry calls so the rest of the turn sends the real schema. A
++#: callback rather than a direct write so `registry` stays free of the turn
++#: machinery (and so the entry is testable without a turn). The whole
++#: `ToolContext` goes in, not just `.context`: the caller also needs the call
++#: id, to keep this call's answer (a schema) out of the stored thread.
++#:
++#: Spelled out rather than `Callable[[Any, str], None]`: with `Any` here, both
++#: members the only implementation touches (`.context.mark_tool_loaded` and
++#: `.tool_call_id`) could be renamed and `ty` stayed green — the review
++#: renamed both and measured it (round 1 C3, the
++#: `reference_kwargs_dict_loses_type_check` class).
++MarkLoaded = Callable[[ToolContext[AgentToolContext], Sequence[str], str], None]
++
+ 
+ @dataclass(frozen=True)
+ class CommandInfo:
+@@ -284,12 +299,7 @@ def build_function_tools(
+     the same command name within the same selection — the flat name would
+     shadow one tool, so we want the deployer to rename one. Third-party
+     commands carry their local name and never collide."""
+-    if allowed is None:
+-        selected = [(pkg, cmd) for pkg in packages for cmd in pkg.commands]
+-    else:
+-        selected = _select_commands(packages, allowed)
+-    selected = _callable_by_name(selected)
+-    _check_collisions(selected)
++    selected = _granted(packages, allowed)
+     logger.debug("registry: %d function tool(s) selected (allowed=%s)", len(selected), allowed)
+     # The same ceiling the built-ins get: a package command's stdout already
+     # goes through `_exec_result_text`, but nothing structurally stops a future
+@@ -411,6 +421,28 @@ async def exec_package_command(
+     return await _exec_tool(actx, handle, pkg, cmd_name, args_json, exec_timeout=exec_timeout)
+ 
+ 
++def _granted(
++    packages: Sequence[PackageInfo],
++    allowed: list[str] | None,
++) -> list[tuple[PackageInfo, CommandInfo]]:
++    """The commands this allow-list grants, minus the ones a provider would
++    refuse, with collisions rejected.
++
++    ONE function because two builders read it: the executable tools and the
++    catalog stubs that advertise them. A stub for a command the executable
++    builder drops is a tool that can never run; a command the catalog omits is
++    one the model never learns to ask for. Same code, so neither can happen.
++    """
++    selected = (
++        [(pkg, cmd) for pkg in packages for cmd in pkg.commands]
++        if allowed is None
++        else _select_commands(packages, allowed)
++    )
++    selected = _callable_by_name(selected)
++    _check_collisions(selected)
++    return selected
++
++
+ def _select_commands(
+     packages: Sequence[PackageInfo],
+     allowed: Iterable[str],
+@@ -712,10 +744,16 @@ def describe_command(pkg: PackageInfo, cmd: CommandInfo) -> str:
+     command. With nothing joining them, "what is `rca-tools`?" is a question
+     about a string the model has never been shown, and it can only guess.
+ 
+-    It goes in the DESCRIPTION rather than anywhere else because that one string
+-    is what both channels render: the native tool schema takes it verbatim, and
+-    the prompt section renders the same field. A second home would be a second
+-    thing to keep in step with the tool list, and nothing would notice it drift.
++    It goes in the DESCRIPTION rather than anywhere else because that is the one
++    string that travels with the tool: the native tool schema takes it verbatim
++    once the command is LOADED. A second home would be a second thing to keep
++    in step with the tool list, and nothing would notice it drift.
++
++    Two things it is no longer: the prompt section stopped rendering
++    descriptions, and an UNLOADED command is advertised by `_catalog_entry`
++    (the author's first sentence + the bundle name) rather than by this text —
++    both `docs/plan-tool-on-demand-loading.md`. So this is what the model reads
++    about a command it has reached for, not about every command it is offered.
+ 
+     The author's sentence stays first. It is what the model reads to decide
+     whether to call this command at all; the bundle line answers a different
+@@ -743,6 +781,492 @@ def describe_command(pkg: PackageInfo, cmd: CommandInfo) -> str:
+     return line
+ 
+ 
++#: How much of a bundle's name a catalog entry shows. Its own bound, so a long
++#: bundle name cannot eat the description's budget (round 3 D6); `_MODEL_NAME`
++#: allows 64 characters, and a third-party local name is user-chosen.
++_BUNDLE_NAME_SHOWN = 24
++
++#: How long one catalog entry's description may be
++#: (`docs/plan-tool-on-demand-loading.md`, decided with the operator: 100).
++CATALOG_DESCRIPTION_LIMIT = 100
++
++#: Ends a sentence wherever it appears — CJK punctuation is not followed by a
++#: space, so a lookahead would make `。` end nothing in a Chinese description.
++_SENTENCE_END_CJK = "。！？"
++#: Ends a sentence only before whitespace or the end, so `3.5` does not, and
++#: only when what precedes is not an abbreviation, so `e.g.` / `etc.` /
++#: `U.S.` / `Max.` do not either. The first version of this comment claimed
++#: `e.g.` was covered by the lookahead alone; it was not, and
++#: `'Plot a chart, e.g. a trend…'` became `'Plot a chart, e.g.'` — an
++#: 18-character catalog line, which is the only thing the model reads to decide
++#: whether to reach for the command (round 1 A9).
++#:
++#: It does NOT also require the next word to be capitalised. That rule was
++#: tried (round 1 A9) and removed in the verify round: `_is_cjk` can only cover
++#: the ranges it lists, so Hangul, Thai, Arabic, Hebrew and Devanagari could
++#: never satisfy it — an ASCII `.` stopped ending a sentence at all and the
++#: catalog line became a mid-sentence truncation of the whole paragraph, worse
++#: than before any of this. It bought nothing either: every case above is
++#: already decided by the abbreviation rule or the whitespace lookahead.
++_SENTENCE_END_ASCII = ".!?"
++
++#: Words that end in `.` without ending a sentence. Lower-cased, dots stripped,
++#: so `e.g` covers `e.g.` and `E.g.`. Anything with an internal dot (`U.S.`,
++#: `i.e.`) and any single letter (`A.`) is caught by rule, not by this list.
++_ABBREVIATIONS = frozenset(
++    [
++        "e.g",
++        "i.e",
++        "etc",
++        "vs",
++        "cf",
++        "al",
++        "approx",
++        "incl",
++        "excl",
++        "resp",
++        "fig",
++        "no",
++        "nos",
++        "vol",
++        "ca",
++        "max",
++        "min",
++        "avg",
++        "std",
++        "dept",
++        "est",
++        "dr",
++        "mr",
++        "mrs",
++        "ms",
++        "prof",
++        "inc",
++        "ltd",
++        "co",
++        "corp",
++        "jr",
++        "sr",
++        "st",
++    ]
++)
++#: Where a too-long sentence may be cut: a mark the AUTHOR wrote, so the cut
++#: lands between clauses instead of between two characters of one.
++_CLAUSE_END = "，、；：,;"
++
++
++def _looks_like_an_abbreviation(said: str, dot: int) -> bool:
++    """Whether the `.` at `dot` is part of a word that is not a sentence end.
++
++    Three rules, in the order they fire: the word already contains a dot
++    (`i.e.`, `U.S.`), it is a single letter (`A.`), or it is one of the few
++    spellings people actually write (`etc.`, `vs.`, `Max.`)."""
++    start = dot
++    while start > 0 and not said[start - 1].isspace():
++        start -= 1
++    word = said[start:dot]
++    if "." in word:
++        return True
++    bare = word.strip("(）)[]「」\"'“”").lower()
++    return len(bare) == 1 or bare in _ABBREVIATIONS
++
++
++def _first_sentence(said: str) -> str:
++    """The author's first sentence. A newline ends one too — plenty of
++    descriptions are a title line followed by a paragraph.
++
++    An ASCII `.` `!` `?` ends a sentence only when whitespace (or the end)
++    follows — so `3.5` does not — and, for `.`, when the word before it is not
++    an abbreviation (`Max. 1000`, `e.g. a trend`).
++
++    The next character is read BY INDEX, not by slicing the tail: the slice
++    made this quadratic in the description's length, and a command description
++    arrives verbatim from a third-party manifest with no length cap, on a path
++    that runs once per granted command inside `_agent_for` — i.e. on the event
++    loop (measured 680 ms for a 400,000-character description, 20x the old
++    rule; verify round F6)."""
++    for i, ch in enumerate(said):
++        if ch in _SENTENCE_END_CJK:
++            return said[: i + 1]
++        if ch == "\n":
++            return said[:i].rstrip()
++        if ch not in _SENTENCE_END_ASCII:
++            continue
++        if i + 1 < len(said) and not said[i + 1].isspace():
++            continue  # `3.5`
++        if ch == "." and _looks_like_an_abbreviation(said, i):
++            continue
++        return said[: i + 1]
++    return said
++
++
++def catalog_description(text: str, *, limit: int = CATALOG_DESCRIPTION_LIMIT) -> str:
++    """One catalog line's worth of what a command IS — the author's first
++    sentence, shortened only if it has to be.
++
++    A command the turn has not loaded is advertised by name + this line and NO
++    parameter schema, which is what takes a six-figure system prompt back to a
++    four-figure one. The line is what the model reads to decide whether to
++    reach for this command at all, so it is not a character cut:
++
++    - the first sentence is kept whole whenever it fits;
++    - a longer one is cut at a boundary the author wrote — a space between
++      words, or a clause mark (`，、；：,;`) — never between two characters of
++      the same word or clause, and the ellipsis says it was shortened;
++    - a run with no boundary at all inside the limit (a long unpunctuated
++      Chinese sentence, a token) is cut at the limit. That is the last resort,
++      not the rule.
++
++    Nothing is lost by shortening: loading the command hands the model the full
++    `describe_command` text and the real schema.
++    """
++    # `str(…)`, not a bare `.strip()`: a published manifest may carry a
++    # command description that is `null`, a number or a list (`parse_manifest`
++    # checks neither), and this is now on the path that builds the WHOLE tool
++    # list — so an odd value used to be an ugly f-string and would now take
++    # every turn on that item down with an AttributeError (round 1 A8).
++    said = str(text or "").strip()
++    if not said:
++        return ""
++    first = _first_sentence(said)
++    # "It fits" comes first: `catalog_description("A", limit=1)` returned `…`
++    # and `limit=-5` returned something LONGER than the limit (verify round F10).
++    if len(first) <= limit:
++        return first
++    # A limit too small to hold a boundary cut is not a limit to honour with
++    # one: `first[: limit - 1]` turned `limit=0` into "keep everything but the
++    # last character" and `limit=-5` into "drop five" (round 1 A16).
++    if limit < 2:
++        return "…"
++    kept = first[: limit - 1]
++    cut = max(
++        (i for i, ch in enumerate(kept) if ch.isspace() or ch in _CLAUSE_END),
++        default=-1,
++    )
++    # A boundary in the first half keeps almost nothing — worse than the
++    # no-boundary fallback, which keeps the whole budget. `'Plot ' + 200 chars`
++    # kept 5 of 100 before this (round 1 A10).
++    if cut >= 0 and cut * 2 >= limit:
++        kept = kept[:cut].rstrip() if kept[cut].isspace() else kept[: cut + 1]
++    return f"{_whole_clusters(kept)}…"
++
++
++#: Characters that must not be the last thing before the ellipsis: a combining
++#: mark or a joiner belongs to the character before it, and half a grapheme
++#: cluster is mojibake, not a shortened sentence (round 1 A16).
++_JOINERS = "\u200d\ufe0f\u20e3"
++
++
++def _whole_clusters(kept: str) -> str:
++    """`kept` with any trailing half-cluster removed."""
++    while kept and (unicodedata.combining(kept[-1]) or kept[-1] in _JOINERS):
++        kept = kept[:-1]
++    # A regional-indicator pair is a flag; one on its own is half of one.
++    if kept and "\U0001f1e6" <= kept[-1] <= "\U0001f1ff":
++        pairs = 0
++        i = len(kept) - 1
++        while i >= 0 and "\U0001f1e6" <= kept[i] <= "\U0001f1ff":
++            pairs += 1
++            i -= 1
++        if pairs % 2:
++            kept = kept[:-1]
++    return kept
++
++
++#: The schema a catalog entry carries: none. `additionalProperties` is open
++#: because the model WILL guess arguments at this entry — the name is right
++#: there in front of it — and a provider enforcing a closed schema would reject
++#: the call before `_stub_function_tool`'s handler could answer with the real
++#: schema. The arguments are read by nothing; the answer is the schema.
++_CATALOG_SCHEMA: dict[str, Any] = {"type": "object", "properties": {}, "additionalProperties": True}
++
++#: What a catalog entry answers with when it is called. The full description
++#: (the catalog line was only its first sentence), the real schema, and what to
++#: do now — never a refusal: #537 measured that a model reads one as "stop
++#: trying" and gives up on the whole source.
++_LOAD_REPLY = (
++    "`{name}` is now loaded for this turn. What it is:\n\n{described}\n\n"
++    "Its arguments (JSON schema):\n\n{schema}\n\n"
++    "Call `{name}` again with arguments matching that schema."
++)
++
++
++def load_reply(pkg: PackageInfo, cmd: CommandInfo) -> str:
++    """The text a just-loaded command hands back. Pure, so the wording is
++    testable without a sandbox or a turn."""
++    return _LOAD_REPLY.format(
++        name=model_tool_name(pkg, cmd),
++        described=describe_command(pkg, cmd),
++        schema=json.dumps(cmd.params_json_schema, ensure_ascii=False),
++    )
++
++
++def build_catalog_tools(
++    packages: Sequence[PackageInfo],
++    *,
++    allowed: list[str] | None,
++    mark_loaded: MarkLoaded,
++) -> list[FunctionTool]:
++    """One entry per granted command: the real name, one line of what it is, and
++    no parameter schema (`docs/plan-tool-on-demand-loading.md`).
++
++    This is what a turn sends INSTEAD of every command's full schema, which is
++    the half that grows without bound — an operator reported a 414,115
++    character system prompt. `mark_loaded` is
++    called with the turn's context and the model name when an entry is invoked,
++    so the next step of the same turn sends that command's real schema.
++
++    Granted by the SAME `_granted` the executable builder uses, so the two
++    lists name the same commands by construction.
++    """
++    return [_stub_function_tool(pkg, cmd, mark_loaded) for pkg, cmd in _granted(packages, allowed)]
++
++
++#: What one `load_tool` call may put back in the window. The catalog's whole
++#: point is that schemas are not there until they are needed; a single call
++#: naming every bundle put 36,054 characters back (and `["sci-plot"] * 20` put
++#: 261,238). The built-ins' own ceiling does not reach here: `cap_tool_outputs`
++#: is applied by `build_tools` and by `build_function_tools`, and neither the
++#: catalog nor this tool calls it (round 1 A7; the reason corrected in the
++#: verify round — it is which builder calls the cap, not where the tool is
++#: appended).
++#:
++#: It bounds what is LOADED, not just the text of the reply: trimming the reply
++#: while marking every resolved command loaded handed the NEXT step 394,560
++#: characters of schema — worse than the prompt this whole change removes
++#: (verify round F4).
++#:
++#: The FIRST command of a call is exempt, deliberately (round 3 D2). A command
++#: whose schema alone exceeds this budget is unusable without it: refusing
++#: would leave the model with a tool it can see, is told to call, and can never
++#: call. The catalog still improves that case strictly — the schema goes out on
++#: the one turn that uses the command instead of on every turn — and the same
++#: schema goes out unbounded when the model calls the command directly
++#: (`_stub_function_tool` answers with the whole thing by design). So this is
++#: the bound on BATCHING; one oversized schema is bounded by nothing here.
++_LOAD_REPLY_MAX_CHARS = 20_000
++
++#: How many names one call may ask for. 3,000 unknown names answered with
++#: 928,888 characters before this.
++_LOAD_MAX_NAMES = 20
++
++#: How many names an unknown-name answer lists before it stops. A deployment
++#: with hundreds of commands must not get its whole catalog pasted back into
++#: the turn as an error message — but silence would leave the model guessing,
++#: which is what this answers (`docs/plan-tool-on-demand-loading.md`).
++_UNKNOWN_NAMES_SHOWN = 30
++
++_LOAD_TOOL_SCHEMA: dict[str, Any] = {
++    "type": "object",
++    "properties": {
++        "names": {
++            "type": "array",
++            "items": {"type": "string"},
++            "description": (
++                "Tool names to load, as they appear in your tool list. A bundle's "
++                "own name loads every command in it."
++            ),
++        }
++    },
++    "required": ["names"],
++}
++
++
++def build_load_tool(
++    packages: Sequence[PackageInfo],
++    *,
++    allowed: list[str] | None,
++    mark_loaded: MarkLoaded,
++    shadowed: Collection[str] = (),
++) -> FunctionTool:
++    """`load_tool`: ask for a command's real arguments before calling it.
++
++    Calling an unloaded command already loads it and answers with its schema,
++    so this is not the only way in — it is the way to look first, and to load
++    a whole bundle in one step. Reads the SAME `_granted` as the catalog and
++    the executable tools, so it can never reach a command this turn was not
++    granted.
++    """
++    # `shadowed`: names a built-in already holds. `dedupe_tools` drops the
++    # package command's executable half (first-wins), and the catalog leaves
++    # out its entry for the same reason — so handing the model its description
++    # and schema would describe something that can never run, and tell it to
++    # call arguments the built-in does not take (verify round F5).
++    granted = [
++        (pkg, cmd)
++        for pkg, cmd in _granted(packages, allowed)
++        if model_tool_name(pkg, cmd) not in shadowed
++    ]
++    by_name: dict[str, list[tuple[PackageInfo, CommandInfo]]] = {}
++    for pkg, cmd in granted:
++        by_name.setdefault(model_tool_name(pkg, cmd), []).append((pkg, cmd))
++        by_name.setdefault(pkg.name, []).append((pkg, cmd))
++        by_name.setdefault(f"{pkg.name}:{cmd.name}", []).append((pkg, cmd))
++
++    async def on_invoke(ctx: ToolContext[AgentToolContext], args_json: str) -> str:
++        try:
++            asked = json.loads(args_json or "{}").get("names") or []
++        except ValueError:
++            asked = []
++        if isinstance(asked, str):  # a model that sent one name, not a list
++            asked = [asked]
++        # Deduped, and bounded: `["sci-plot"] * 20` is a plausible thing for a
++        # model to emit, and every repeat used to cost another full schema.
++        wanted: list[str] = []
++        for a in asked:
++            name = str(a)
++            if name not in wanted:
++                wanted.append(name)
++        over = wanted[_LOAD_MAX_NAMES:]
++        wanted = wanted[:_LOAD_MAX_NAMES]
++        parts: list[str] = []
++        done: set[str] = set()
++        left = _LOAD_REPLY_MAX_CHARS
++        skipped: list[str] = []
++        for name in wanted:
++            found = by_name.get(name)
++            if not found:
++                parts.append(_unknown_name_reply(name, granted))
++                continue
++            for pkg, cmd in found:
++                model_name = model_tool_name(pkg, cmd)
++                # A bundle and one of its commands can share a name (the
++                # shipped `data-fetch` does), and both keys point at the same
++                # command — answering twice doubled the schema for nothing.
++                if model_name in done:
++                    continue
++                said = load_reply(pkg, cmd)
++                # The budget decides whether it LOADS, not just whether its
++                # text is printed: marking it loaded puts its schema in every
++                # later step of this turn (verify round F4).
++                if len(said) > left and done:
++                    skipped.append(model_name)
++                    continue
++                done.add(model_name)
++                left -= len(said)
++                parts.append(said)
++        if skipped:
++            parts.insert(
++                0,
++                "Not loaded, this call was already full: "
++                # Deduped: a bundle whose name equals one of its commands'
++                # resolves the same pair twice, and this is a sentence a person
++                # reads — round 1 B1's class, re-opened by this notice
++                # (round 3 D3).
++                + ", ".join(f"`{n}`" for n in dict.fromkeys(skipped[:_UNKNOWN_NAMES_SHOWN]))
++                + ". Ask for them in another call.",
++            )
++        if over:
++            # FIRST, not last: the length cap below trims the tail, and the one
++            # sentence that must survive is the one saying why the model did
++            # not get what it asked for. (A test caught this: the notice was
++            # appended and then cut away.)
++            parts.insert(
++                0,
++                f"Not loaded, too many names in one call (the limit is {_LOAD_MAX_NAMES}): "
++                + ", ".join(f"`{n}`" for n in over[:_UNKNOWN_NAMES_SHOWN])
++                + ". Ask for the ones you need.",
++            )
++        if not parts:
++            return (
++                "Nothing to load: `names` was empty. Give the name of a tool from "
++                "your tool list, or a bundle's name to load all of its commands."
++            )
++        reply = "\n\n".join(parts)
++        if len(reply) > _LOAD_REPLY_MAX_CHARS:
++            reply = (
++                reply[:_LOAD_REPLY_MAX_CHARS]
++                + f"\n\n[cut at {_LOAD_REPLY_MAX_CHARS} characters — ask for fewer tools "
++                "at a time to see the rest]"
++            )
++        # ONE hit for the whole call, whatever it resolved: the queue counts the
++        # outputs to suppress, not the commands (round 3 D4). Recorded with the
++        # FINAL text, because that is the output `_map_event` matches against
++        # (round 3 R1).
++        if done:
++            mark_loaded(ctx, sorted(done), reply)
++        return reply
++
++    return FunctionTool(
++        name="load_tool",
++        description=(
++            "Get a tool's usage (its argument schema) before calling it. Pass the "
++            "names as they appear in your tool list; a bundle's name loads every "
++            "command in it. Calling a tool directly also loads it."
++        ),
++        params_json_schema=_LOAD_TOOL_SCHEMA,
++        on_invoke_tool=on_invoke,
++        strict_json_schema=False,
++    )
++
++
++def _unknown_name_reply(name: str, granted: list[tuple[PackageInfo, CommandInfo]]) -> str:
++    """Say what IS there. Silence here reads as "that tool is gone" and the
++    model stops looking for the one it actually wanted."""
++    names = sorted({model_tool_name(pkg, cmd) for pkg, cmd in granted})
++    if not names:
++        # Reachable only as a belt-and-braces: `load_tool` is no longer granted
++        # to a turn with no package command (round 1 A6). The sentence below
++        # would end in ": ." here, which is the silence this function exists to
++        # avoid.
++        return f"There is no tool called `{name}`, and this turn has no loadable tools."
++    shown = ", ".join(f"`{n}`" for n in names[:_UNKNOWN_NAMES_SHOWN])
++    more = (
++        f" (and {len(names) - _UNKNOWN_NAMES_SHOWN} more in your tool list)"
++        if len(names) > _UNKNOWN_NAMES_SHOWN
++        else ""
++    )
++    return f"There is no tool called `{name}`. Tools you can load: {shown}{more}."
++
++
++def _catalog_entry(pkg: PackageInfo, cmd: CommandInfo, name: str) -> str:
++    """One catalog line: what the command is, and which bundle it comes from.
++
++    The bundle name is there because `load_tool` advertises "a bundle's name
++    loads every command in it" — and before this the turn was never told ANY
++    bundle name (a third-party command carries it inside its own
++    `<bundle>__<command>` name; a first-party one does not), so that path, the
++    one escape from paying an extra step per command, could not be used
++    (review round 1 A5). Version, author and the "not the latest release"
++    notice stay in `describe_command`, which arrives when the command loads.
++    """
++    if name.startswith(f"{pkg.name}{THIRD_PARTY_SEP}"):
++        return catalog_description(cmd.description)  # the name already says it
++    # The operator's 100 is the DESCRIPTION's budget (their words: "command
++    # description 最多 100 字元"), so the suffix does not eat it — F7 read the
++    # number as the whole entry's, which left 54 characters for the sentence
++    # the model actually chooses by when a bundle name was long, and still
++    # overshot once the name approached 100 (round 3 D6). The suffix gets its
++    # own, small bound instead.
++    suffix = f" [{pkg.name[:_BUNDLE_NAME_SHOWN]}]"
++    said = catalog_description(cmd.description)
++    return f"{said}{suffix}" if said else suffix.strip()
++
++
++def _stub_function_tool(
++    pkg: PackageInfo, cmd: CommandInfo, mark_loaded: MarkLoaded
++) -> FunctionTool:
++    name = model_tool_name(pkg, cmd)
++
++    async def on_invoke(ctx: ToolContext[AgentToolContext], args_json: str) -> str:
++        # The arguments are deliberately unread: whatever the model guessed, it
++        # has not seen the schema yet. Marking first means a model that ignores
++        # the instruction and calls a third time still progresses — the real
++        # tool answers that one.
++        said = load_reply(pkg, cmd)
++        mark_loaded(ctx, [name], said)
++        logger.info("registry: catalog hit %s — loading its schema for this turn", name)
++        return said
++
++    return FunctionTool(
++        name=name,
++        description=_catalog_entry(pkg, cmd, name),
++        params_json_schema=_CATALOG_SCHEMA,
++        on_invoke_tool=on_invoke,
++        strict_json_schema=False,
++    )
++
++
+ def _to_function_tool(pkg: PackageInfo, cmd: CommandInfo) -> FunctionTool:
+     """Wrap ``cmd`` as a FunctionTool whose on_invoke execs
+     ``[pkg.install_dir/launch, cmd.name, args_json]`` in the sandbox.
+diff --git a/tests/agent/test_loaded_tools.py b/tests/agent/test_loaded_tools.py
+new file mode 100644
+index 00000000..fefd1f94
+--- /dev/null
++++ b/tests/agent/test_loaded_tools.py
+@@ -0,0 +1,47 @@
++"""Which package commands this TURN has loaded the schema for
++(`docs/plan-tool-on-demand-loading.md` P2).
++
++The set lives on the turn's context and dies with it: a turn starts from the
++catalog, and what it loaded does not carry into the next one. That is what
++bounds the window — a conversation-level set would creep the whole tool
++universe back in over a dozen turns, which is today's state arriving slowly.
++"""
++
++from __future__ import annotations
++
++from workspace_app.agent.context import AgentToolContext
++
++
++def test_a_turn_starts_from_the_catalog():
++    assert AgentToolContext(investigation_id="i").loaded_tools == set()
++
++
++def test_marking_one_loads_only_that_one():
++    ctx = AgentToolContext(investigation_id="i")
++
++    ctx.mark_tool_loaded("data-fetch")
++
++    assert ctx.is_tool_loaded("data-fetch")
++    assert not ctx.is_tool_loaded("plot-trend")
++
++
++def test_marking_twice_is_the_same_as_once():
++    # Two calls to one unloaded command inside a single step (a model may emit
++    # several tool calls at once) must not be an error or a double entry.
++    ctx = AgentToolContext(investigation_id="i")
++
++    ctx.mark_tool_loaded("data-fetch")
++    ctx.mark_tool_loaded("data-fetch")
++
++    assert ctx.loaded_tools == {"data-fetch"}
++
++
++def test_two_turns_do_not_share_the_set():
++    # The classic mutable-default bug would make the catalog leak across every
++    # turn in the process — and it would look like the feature working.
++    first = AgentToolContext(investigation_id="i")
++    second = AgentToolContext(investigation_id="i")
++
++    first.mark_tool_loaded("data-fetch")
++
++    assert second.loaded_tools == set()
+diff --git a/tests/agent/test_tool_alias_model.py b/tests/agent/test_tool_alias_model.py
+index e491cc74..a0a905d7 100644
+--- a/tests/agent/test_tool_alias_model.py
++++ b/tests/agent/test_tool_alias_model.py
+@@ -162,8 +162,14 @@ async def test_the_failed_call_runs_nothing_and_the_model_reads_why(monkeypatch)
+     assert "cross-package tool name collision: command 'list-files'" in str(out)
+ 
+ 
+-def test_the_system_prompt_lists_third_party_commands_by_their_new_names() -> None:
+-    """P4: the inventory the model reads names what it can call."""
++def test_the_model_is_offered_third_party_commands_by_their_new_names() -> None:
++    """P4: what the model is offered names what it can call.
++
++    It used to read this off the system prompt, because the prompt carried a
++    second copy of the whole inventory. `docs/plan-tool-on-demand-loading.md`
++    removed that copy — the names now live only in the tool list itself, which
++    is where this guard belongs (the property is unchanged; its address moved).
++    """
+     from workspace_app.api.litellm_runner import _agent_for
+     from workspace_app.resources.agent_config import AgentConfig
+ 
+@@ -172,8 +178,8 @@ def test_the_system_prompt_lists_third_party_commands_by_their_new_names() -> No
+         packages=[_pkg("a", "list-files"), _pkg("b", "list-files")],
+     )
+ 
+-    assert isinstance(agent.instructions, str)
+-    assert "a__list-files" in agent.instructions and "b__list-files" in agent.instructions
++    offered = {t.name for t in agent.tools}
++    assert "a__list-files" in offered and "b__list-files" in offered
+ 
+ 
+ async def test_a_non_streamed_response_is_renamed_too() -> None:
+diff --git a/tests/agent/test_tool_prompt.py b/tests/agent/test_tool_prompt.py
+index 00ec8d00..0a34af6d 100644
+--- a/tests/agent/test_tool_prompt.py
++++ b/tests/agent/test_tool_prompt.py
+@@ -4,8 +4,6 @@ tools with shell binaries."""
+ 
+ from __future__ import annotations
+ 
+-import json
+-
+ from agents import FunctionTool
+ 
+ from workspace_app.agent.tool_prompt import (
+@@ -47,10 +45,44 @@ def test_includes_section_header_and_invariant_warning():
+     assert "exit 127" in out  # explicit failure-mode reminder
+ 
+ 
+-def test_each_tool_gets_name_description_and_schema_block():
+-    """For every tool, the prompt carries name + description + the
+-    pydantic-derived JSON args schema (verbatim from
+-    `params_json_schema`)."""
++def test_the_note_explains_why_a_schema_may_be_empty():
++    """A catalog entry carries an empty argument schema
++    (`docs/plan-tool-on-demand-loading.md`). Unexplained, that reads as "takes
++    no arguments" — and the model would call it, get the schema back, and have
++    no idea it was supposed to call again.
++
++    It also has to say that several can be loaded in ONE `load_tool` call:
++    each first use costs an extra step, and `runner.max_turns` bounds the turn,
++    so a turn using five commands one at a time hits the ceiling with the work
++    already done (round 1 A4)."""
++    out = format_tools_for_prompt([_ft("wafer-history", "fetch", {}), _ft("load_tool", "load", {})])
++
++    assert "empty" in out
++    assert "again" in out
++    assert "load_tool" in out and "ONCE" in out
++    # Both ways a bundle name reaches the model: the `[bundle]` suffix a
++    # first-party entry carries, and the `<bundle>__<command>` name a
++    # third-party one already has — third-party entries deliberately carry no
++    # suffix, and they are the user-installed population, so naming only the
++    # suffix pointed at a marker that is not there (verify round F8).
++    assert "[bundle]" in out and "__" in out
++
++
++def test_a_turn_with_no_catalog_is_not_told_about_one():
++    """The control: without `load_tool` there is no catalog entry and no empty
++    schema, so the paragraph would be an instruction about something that
++    cannot happen (round 1 A15)."""
++    out = format_tools_for_prompt([_ft("exec", "run", {"type": "object"})])
++
++    assert "exit 127" in out  # the rule that always applies
++    assert "empty" not in out
++    assert "load_tool" not in out
++
++
++def test_the_note_does_not_grow_with_the_tool_list():
++    """The section no longer repeats the inventory — that second copy is what
++    put six figures of characters in one system prompt. Three tools and three
++    hundred cost the same here; the tools themselves are in the API payload."""
+     schema = {
+         "type": "object",
+         "properties": {
+@@ -59,39 +91,20 @@ def test_each_tool_gets_name_description_and_schema_block():
+         },
+         "required": ["wafer_ids"],
+     }
+-    tools = [_ft("wafer-history", "Materialise wafer history into a CSV.", schema)]
+-    out = format_tools_for_prompt(tools)
+-    # Name + description
+-    assert "### `wafer-history`" in out
+-    assert "Materialise wafer history into a CSV." in out
+-    # Schema appears as a JSON code block
+-    assert "```json" in out
+-    # Round-trip: the dumped schema is recoverable from the prompt.
+-    fence_start = out.index("```json") + len("```json")
+-    fence_end = out.index("```", fence_start)
+-    recovered = json.loads(out[fence_start:fence_end])
+-    assert recovered == schema
+-
+-
+-def test_multiple_tools_listed_in_order():
+-    """Order is preserved (caller picked it: built-ins first, then
+-    provisioned). Helps the LLM reason about which to reach for first."""
+-    tools = [
++    three = [
+         _ft("exec", "run a shell command", {"type": "object", "properties": {"cmd": {}}}),
+         _ft("read_file", "read a file", {"type": "object", "properties": {"path": {}}}),
+-        _ft("wafer-history", "fetch wafer history", {"type": "object", "properties": {}}),
++        _ft("wafer-history", "Materialise wafer history into a CSV.", schema),
+     ]
+-    out = format_tools_for_prompt(tools)
+-    assert out.index("`exec`") < out.index("`read_file`") < out.index("`wafer-history`")
++    many = three + [_ft(f"cmd-{i}", "d" * 200, schema) for i in range(300)]
+ 
++    out = format_tools_for_prompt(three)
+ 
+-def test_tool_without_description_still_renders():
+-    """A tool with empty description doesn't crash — placeholder text
+-    keeps the structure consistent."""
+-    tools = [_ft("foo", "", {"type": "object", "properties": {}})]
+-    out = format_tools_for_prompt(tools)
+-    assert "### `foo`" in out
+-    assert "_(no description)_" in out
++    assert out == format_tools_for_prompt(many)
++    # Neither the names nor the schemas are in it any more.
++    assert "wafer-history" not in out
++    assert "```json" not in out
++    assert "wafer_ids" not in out
+ 
+ 
+ def _tm(name: str, description: str) -> ToolMeta:
+@@ -145,32 +158,6 @@ def test_disabled_meta_without_description_renders_bare_name():
+     assert "`mystery-pkg` —" not in out  # no dangling em-dash
+ 
+ 
+-def test_complex_schema_with_enum_and_nested_objects_round_trips():
+-    """A real schema (enum constraint, nested objects, optional fields)
+-    survives the markdown round-trip — guards against an over-clever
+-    formatter that flattens / strips schema features the LLM needs."""
+-    schema = {
+-        "type": "object",
+-        "properties": {
+-            "name": {
+-                "type": "string",
+-                "enum": ["alloy-batches", "sensor-telemetry"],
+-            },
+-            "rows": {"type": "integer", "default": 25000},
+-            "nested": {
+-                "type": "object",
+-                "properties": {"deep": {"type": "boolean"}},
+-            },
+-        },
+-        "required": ["name"],
+-    }
+-    tools = [_ft("data-fetch", "fetch dataset", schema)]
+-    out = format_tools_for_prompt(tools)
+-    fence_start = out.index("```json") + len("```json")
+-    fence_end = out.index("```", fence_start)
+-    assert json.loads(out[fence_start:fence_end]) == schema
+-
+-
+ def test_unavailable_tools_say_what_went_wrong_not_just_that_they_are_gone():
+     """#674: a third-party tool that could not be fetched is NOT the same as a
+     tool the user turned off. Nobody can enable it from the picker, so the
+diff --git a/tests/api/test_catalog_not_persisted.py b/tests/api/test_catalog_not_persisted.py
+new file mode 100644
+index 00000000..eb8a3c6d
+--- /dev/null
++++ b/tests/api/test_catalog_not_persisted.py
+@@ -0,0 +1,163 @@
++"""A catalog hit leaves nothing in the stored thread
++(`docs/plan-tool-on-demand-loading.md`, review round 1 A1).
++
++The decision was the user's own: the load-and-retry pair must not be in the
++conversation record. P5 only rewrote the OUTPUT, so the record still kept a
++`role="tool"` message carrying the command's real name and the arguments the
++model invented at the empty catalog schema — a call that never happened, with
++a parameter that does not exist, replayed into every later turn.
++
++The live card stays: `ToolStart` is emitted before the tool runs, so dropping
++it would rest on a race. What must not survive is the stored message.
++"""
++
++from __future__ import annotations
++
++from specstar import QB
++
++from workspace_app.api import create_app
++from workspace_app.api.events import RunDone, ToolEnd, ToolStart
++from workspace_app.filestore.memory import MemoryFileStore
++from workspace_app.resources import Conversation, make_spec
++from workspace_app.sandbox.mock import MockSandbox
++
++from ._client import TestClient
++from .conftest import register_rca_item
++
++
++def _tool_output(call_id: str, text: str):
++    """The `tool_output` stream event shape the runner's `_map_event` reads."""
++    from dataclasses import dataclass
++
++    @dataclass
++    class _Raw:
++        call_id: str
++
++    @dataclass
++    class _Item:
++        raw_item: object
++        output: object
++
++    @dataclass
++    class _Ev:
++        type: str
++        name: str
++        item: object
++
++    return _Ev(
++        type="run_item_stream_event",
++        name="tool_output",
++        item=_Item(raw_item=_Raw(call_id=call_id), output=text),
++    )
++
++
++def _catalog_end(ctx, call_id: str, schema_text: str):
++    """What the real runner emits for a catalog hit: the output mapped through
++    `_map_event`, which rewrites it to one line and records the id as
++    ephemeral. Routed through the REAL mapper so the chain under test is the
++    production one — a hand-made `ToolEnd` would skip the half that decides
++    the message is not stored."""
++    from workspace_app.api.litellm_runner import _map_event
++
++    return _map_event(_tool_output(call_id, schema_text), ctx)
++
++
++class _CatalogThenRealRunner:
++    """One turn as it really goes: the model calls an unloaded command (the
++    catalog answers with the schema), then calls it for real."""
++
++    async def run(self, prompt, ctx):
++        yield ToolStart(call_id="c1", name="data-fetch", args={"lot_number": "A42"})
++        # What the catalog entry's handler does, through the real context API.
++        ctx.mark_tool_loaded("data-fetch", call_id="c1")
++        yield _catalog_end(ctx, "c1", '{"properties": {"lot": {"type": "string"}}}')
++        yield ToolStart(call_id="c2", name="data-fetch", args={"lot": "A42"})
++        yield ToolEnd(call_id="c2", output="lot A42: 3 steps")
++        yield RunDone()
++
++
++def _thread(spec, iid):
++    rm = spec.get_resource_manager(Conversation)
++    conv = next(
++        r.data
++        for r in rm.list_resources(QB.all())
++        if isinstance(r.data, Conversation) and r.data.item_id == iid
++    )
++    return [m for m in conv.messages if m.role == "tool"]
++
++
++def test_only_the_real_call_is_stored():
++    spec = make_spec(default_user="u")
++    iid = register_rca_item(spec)
++    app = create_app(
++        spec=spec,
++        sandbox=MockSandbox(),
++        filestore=MemoryFileStore(),
++        runner=_CatalogThenRealRunner(),
++    )
++
++    TestClient(app).post(f"/a/rca/items/{iid}/messages", json={"content": "why drift?"})
++
++    tools = _thread(spec, iid)
++    assert [m.tool_call_id for m in tools] == ["c2"]
++    assert tools[0].content == "lot A42: 3 steps"
++    # The invented argument is nowhere in the record — a later turn replaying
++    # this thread must not learn a parameter name the schema does not have.
++    assert all("lot_number" not in str(m.tool_args or {}) for m in tools)
++
++
++def test_a_turn_with_no_catalog_hit_stores_every_tool_message():
++    """The control. A mutation that drops tool messages wholesale has to
++    redden here, not just in the test above."""
++
++    class _TwoRealCalls:
++        async def run(self, prompt, ctx):
++            yield ToolStart(call_id="c1", name="read_file", args={"path": "a.md"})
++            yield ToolEnd(call_id="c1", output="A")
++            yield ToolStart(call_id="c2", name="read_file", args={"path": "b.md"})
++            yield ToolEnd(call_id="c2", output="B")
++            yield RunDone()
++
++    spec = make_spec(default_user="u")
++    iid = register_rca_item(spec)
++    app = create_app(
++        spec=spec, sandbox=MockSandbox(), filestore=MemoryFileStore(), runner=_TwoRealCalls()
++    )
++
++    TestClient(app).post(f"/a/rca/items/{iid}/messages", json={"content": "read both"})
++
++    assert [m.tool_call_id for m in _thread(spec, iid)] == ["c1", "c2"]
++
++
++def test_a_reused_call_id_does_not_erase_the_turns_real_tool_messages():
++    """An OpenAI-compatible endpoint passes the server's `tool_call.id`
++    through verbatim, and small models do repeat them. Matching the catalog's
++    record on the id ALONE silenced every later tool message of the turn — a
++    `write_file` that really ran included (verify round F2)."""
++
++    class _ReusedId:
++        async def run(self, prompt, ctx):
++            yield ToolStart(call_id="c1", name="data-fetch", args={"lot_number": "A42"})
++            ctx.mark_tool_loaded("data-fetch", call_id="c1")
++            yield _catalog_end(ctx, "c1", '{"properties": {"lot": {"type": "string"}}}')
++            # The same id, now a real call of the same tool…
++            yield ToolStart(call_id="c1", name="data-fetch", args={"lot": "A42"})
++            yield ToolEnd(call_id="c1", output="lot A42: 3 steps")
++            # …and a write that really happened.
++            yield ToolStart(call_id="c1", name="write_file", args={"path": "r.md"})
++            yield ToolEnd(call_id="c1", output="written 42 bytes")
++            yield RunDone()
++
++    spec = make_spec(default_user="u")
++    iid = register_rca_item(spec)
++    app = create_app(
++        spec=spec, sandbox=MockSandbox(), filestore=MemoryFileStore(), runner=_ReusedId()
++    )
++
++    TestClient(app).post(f"/a/rca/items/{iid}/messages", json={"content": "go"})
++
++    stored = [(m.tool_name, m.content) for m in _thread(spec, iid)]
++    assert ("write_file", "written 42 bytes") in stored, stored
++    assert ("data-fetch", "lot A42: 3 steps") in stored, stored
++    # …and the catalog's own answer still did not survive.
++    assert all("的用法" not in c for _n, c in stored), stored
+diff --git a/tests/api/test_litellm_runner.py b/tests/api/test_litellm_runner.py
+index 272bce6d..eae39afe 100644
+--- a/tests/api/test_litellm_runner.py
++++ b/tests/api/test_litellm_runner.py
+@@ -652,18 +652,24 @@ def test_emit_llm_trace_swallows_extraction_errors(caplog):
+ 
+ 
+ def test_agent_for_without_system_prompt():
+-    """No base + default workspace tool set still yields a non-None
+-    prompt — the tool inventory section is always there when tools are
+-    registered (B.10). The pre-B.10 expectation of `is None` was stale."""
++    """No base + default workspace tool set still yields a non-None prompt —
++    the how-to-call-tools note is always there when tools are registered
++    (B.10). The pre-B.10 expectation of `is None` was stale.
++
++    What the note no longer does is list the tools: that second copy of the
++    inventory is gone (`docs/plan-tool-on-demand-loading.md`). The tools
++    themselves are registered on the agent, which is what the assertion on
++    `agent.tools` below checks."""
+     from workspace_app.api.litellm_runner import _agent_for
+ 
+     cfg = AgentConfig(name="ws")
+     agent = _agent_for(cfg)
+     assert isinstance(agent.instructions, str)
+     assert agent.instructions.startswith("## Tools available")
+-    # The 9 default workspace tools all appear under the inventory.
++    registered = {t.name for t in agent.tools}
+     for name in ("exec", "read_file", "write_file", "ask_knowledge_base"):
+-        assert f"### `{name}`" in agent.instructions
++        assert name in registered
++        assert f"### `{name}`" not in agent.instructions
+ 
+ 
+ def test_agent_for_with_explicit_empty_allowed_tools_registers_zero_tools():
+@@ -793,26 +799,30 @@ def test_agent_for_extra_instructions_with_no_base_prompt():
+     assert "## Tools available" in agent.instructions
+ 
+ 
+-def test_agent_for_appends_tool_inventory_section_to_instructions():
+-    """B.10 regression: every tool registered on the agent appears in
+-    the auto-rendered `## Tools available` section the LLM sees in its
+-    system prompt — name, description, JSON args schema. Small models
+-    misread function tools as shell binaries without this; large
+-    models can rely on the tool_choice payload alone, but we still
+-    want it for parity + debugging."""
++def test_agent_for_appends_the_tool_note_after_the_operators_prompt():
++    """B.10's rule survives: the system prompt carries the "these are function
++    tools, do NOT exec them" warning, which is what stops a small model
++    reaching for `exec(['wafer-history', ...])`.
++
++    B.10's *listing* does not survive — rendering every tool's name,
++    description and schema a second time is what put 414,115 characters in one
++    system prompt (`docs/plan-tool-on-demand-loading.md`). So the note is a
++    fixed size, and the operator's own prompt still comes FIRST: it is the
++    part an endpoint that truncates the front drops first, and burying it
++    under an inventory made that worse."""
+     from workspace_app.api.litellm_runner import _agent_for
+ 
+     cfg = AgentConfig(name="ws", system_prompt="anchor")
+     agent = _agent_for(cfg)
+     instructions = agent.instructions
+     assert isinstance(instructions, str)
+-    # the section header includes the "DO NOT exec a tool name" warning
+-    # that's the whole point of B.10.
+-    assert "Each entry below is a **function tool**" in instructions
++    assert instructions.startswith("anchor")
+     assert "Do NOT" in instructions
+-    # every registered tool's name + JSON schema block is there
++    assert "exit 127" in instructions
++    # The inventory is NOT repeated here — one representation, in the payload.
++    assert "```json" not in instructions
+     for t in agent.tools:
+-        assert f"### `{t.name}`" in instructions, f"tool {t.name} missing from prompt"
++        assert f"### `{t.name}`" not in instructions
+ 
+ 
+ # ---- diagnose_error ----
+diff --git a/tests/api/test_subagent_run.py b/tests/api/test_subagent_run.py
+index 4793d121..bb0c6219 100644
+--- a/tests/api/test_subagent_run.py
++++ b/tests/api/test_subagent_run.py
+@@ -77,6 +77,27 @@ async def test_the_sub_agent_answers_from_its_own_prompt_and_tools_on_a_clean_co
+     assert child.investigation_id == "inv-1"
+ 
+ 
++def test_an_ask_kb_sub_agent_does_not_share_the_turns_loaded_tools():
++    """`build_ask_kb_context` is the OTHER `dataclasses.replace` over the
++    turn's context, and it needs the same reset as `_child_context`: a `set`
++    and a `dict` handed over by reference let the child's load decide what the
++    parent's next step carries (round 1 A11). Only the `_child_context` half
++    was pinned — deleting this one reddened nothing (verify round)."""
++    from workspace_app.agent.ask_kb import AskKbSpec, build_ask_kb_context
++
++    parent = dataclasses.replace(
++        _parent(), loaded_tools={"parent-loaded"}, catalog_calls={"p1": ["parent-loaded"]}
++    )
++
++    child = build_ask_kb_context(AskKbSpec(), parent)
++
++    assert child.loaded_tools == set()
++    assert child.catalog_calls == {}
++    child.mark_tool_loaded("child-loaded", call_id="c1")
++    assert parent.loaded_tools == {"parent-loaded"}
++    assert parent.catalog_calls == {"p1": ["parent-loaded"]}
++
++
+ async def test_a_sub_agent_cannot_delegate_again():
+     """Non-recursion is structural, not a depth counter: the child context simply
+     has no delegation seam and no definitions to name, so `run_agent` is not even
+@@ -121,6 +142,8 @@ async def test_nothing_belonging_to_the_parents_conversation_or_turn_is_inherite
+         kb_passages=[_passage()],
+         injected_card_ids={"card-1"},
+         subagent_citations={"ask_knowledge_base": [[]]},
++        loaded_tools={"parent-loaded"},
++        catalog_calls={"p1": ["parent-loaded"]},
+     )
+ 
+     await run_agent_task(runner, parent, defn, "go")
+@@ -137,7 +160,14 @@ async def test_nothing_belonging_to_the_parents_conversation_or_turn_is_inherite
+     assert child.kb_passages == []
+     assert child.injected_card_ids == set()
+     assert child.subagent_citations == {}
++    # Which commands THIS turn loaded, and which calls the catalog answered
++    # (`docs/plan-tool-on-demand-loading.md`). Shared, a child's load made the
++    # parent's next step carry that command's full schema (round 1 A11).
++    assert child.loaded_tools == set()
++    assert child.catalog_calls == {}
+     # ...and none of it reached back into the parent.
++    assert parent.loaded_tools == {"parent-loaded"}
++    assert parent.catalog_calls == {"p1": ["parent-loaded"]}
+     assert parent.withheld_collection_ids == ["col-x"]
+     assert parent.turn_image_urls == ["data:image/png;base64,AAAA"]
+     assert len(parent.kb_passages) == 1
+diff --git a/tests/api/test_tool_catalog_wiring.py b/tests/api/test_tool_catalog_wiring.py
+new file mode 100644
+index 00000000..fe33ade4
+--- /dev/null
++++ b/tests/api/test_tool_catalog_wiring.py
+@@ -0,0 +1,559 @@
++"""The catalog reaches the model, and turns into real schemas as it is used
++(`docs/plan-tool-on-demand-loading.md` P3).
++
++Each granted package command is registered TWICE under one name: the catalog
++entry (one line, no schema) and the executable tool. Exactly one of the pair is
++enabled per step, so what the provider receives is one entry per name — the
++catalog before the turn reaches for it, the real schema after.
++
++The filtering is the SDK's own `is_enabled`, evaluated inside the run loop
++(`agents/run.py:1028` → `agents/agent.py:254`), so these tests ask the SDK for
++the enabled set rather than re-implementing the rule.
++"""
++
++from __future__ import annotations
++
++from typing import Any
++
++import pytest
++from agents import RunContextWrapper
++
++from workspace_app.agent.context import AgentToolContext
++from workspace_app.api.events import ToolEnd
++from workspace_app.api.litellm_runner import _agent_for, _map_event, enabled_function_tools
++from workspace_app.resources import AgentConfig
++from workspace_app.tooling.registry import CommandInfo, PackageInfo
++
++
++def _packages() -> list[PackageInfo]:
++    return [
++        PackageInfo(
++            name="rca-tools",
++            install_dir="../.tools/rca-tools",
++            commands=(
++                CommandInfo(
++                    "data-fetch",
++                    "Fetch a lot's history. Takes a lot id and a date range.",
++                    {"type": "object", "properties": {"lot": {"type": "string"}}},
++                ),
++                CommandInfo("plot-trend", "Plot a trend.", {"type": "object", "properties": {}}),
++            ),
++        )
++    ]
++
++
++def _agent(**kw: Any):
++    cfg = AgentConfig(name="ws", system_prompt="anchor", **kw)
++    return _agent_for(cfg, packages=_packages())
++
++
++async def _sent(agent, ctx: AgentToolContext) -> dict[str, Any]:
++    """What this step would actually send, by name — the SDK's own answer."""
++    tools = await agent.get_all_tools(RunContextWrapper(ctx))
++    names = [t.name for t in tools]
++    assert len(names) == len(set(names)), f"a name reached the provider twice: {names}"
++    return {t.name: t for t in tools}
++
++
++async def test_a_fresh_turn_is_sent_the_catalog_not_the_schemas():
++    agent = _agent()
++    sent = await _sent(agent, AgentToolContext(investigation_id="i"))
++
++    assert "data-fetch" in sent
++    # One line of what it is, and no parameters: the expensive half is absent.
++    assert sent["data-fetch"].description == "Fetch a lot's history. [rca-tools]"
++    assert sent["data-fetch"].params_json_schema["properties"] == {}
++    # …and the way to ask for the usage up front is there.
++    assert "load_tool" in sent
++
++
++async def test_loading_one_command_swaps_only_that_one_for_its_real_schema():
++    agent = _agent()
++    ctx = AgentToolContext(investigation_id="i")
++
++    ctx.mark_tool_loaded("data-fetch")
++    sent = await _sent(agent, ctx)
++
++    assert sent["data-fetch"].params_json_schema["properties"] == {"lot": {"type": "string"}}
++    # The full description, not the catalog line.
++    assert "rca-tools" in sent["data-fetch"].description
++    # Its neighbour is untouched — loading is per command, not per bundle.
++    assert sent["plot-trend"].params_json_schema["properties"] == {}
++
++
++async def test_both_halves_are_registered_so_the_swap_needs_no_rebuild():
++    """The pair lives on the agent; only `is_enabled` changes between steps.
++    Mutating the agent's tool list mid-turn would be the alternative, and the
++    SDK re-reads `agent.tools` per step precisely so nothing has to."""
++    agent = _agent()
++
++    registered = [t.name for t in agent.tools]
++
++    assert registered.count("data-fetch") == 2
++    assert registered.count("plot-trend") == 2
++
++
++async def test_a_command_a_builtin_shadows_gets_no_catalog_entry():
++    """`dedupe_tools` drops the executable half of a command whose name a
++    built-in already holds (first-wins). An entry for it would advertise
++    something that can never run."""
++    packages = [
++        PackageInfo(
++            name="rca-tools",
++            install_dir="../.tools/rca-tools",
++            commands=(CommandInfo("exec", "Shadowed by the built-in.", {"type": "object"}),),
++        )
++    ]
++    agent = _agent_for(AgentConfig(name="ws", system_prompt="anchor"), packages=packages)
++    sent = await _sent(agent, AgentToolContext(investigation_id="i"))
++
++    assert "exec" in sent
++    # The built-in's own schema, not a catalog stub.
++    assert sent["exec"].params_json_schema["properties"] != {}
++    assert [t.name for t in agent.tools].count("exec") == 1
++
++
++async def test_calling_an_unloaded_command_loads_it_and_asks_for_a_retry():
++    agent = _agent()
++    ctx = AgentToolContext(investigation_id="i")
++    sent = await _sent(agent, ctx)
++
++    reply = await sent["data-fetch"].on_invoke_tool(
++        _tool_ctx(ctx, "data-fetch"), '{"lot": "guessed"}'
++    )
++
++    assert ctx.is_tool_loaded("data-fetch")
++    assert "again" in reply
++    assert '"lot"' in reply  # the real schema came back
++    # …and the next step sends the executable half.
++    assert (await _sent(agent, ctx))["data-fetch"].params_json_schema["properties"] != {}
++
++
++async def test_load_tool_takes_a_command_name_and_a_bundle_name():
++    agent = _agent()
++    ctx = AgentToolContext(investigation_id="i")
++    load = (await _sent(agent, ctx))["load_tool"]
++
++    await load.on_invoke_tool(_tool_ctx(ctx, "load_tool"), '{"names": ["data-fetch"]}')
++    assert ctx.loaded_tools == {"data-fetch"}
++
++    await load.on_invoke_tool(_tool_ctx(ctx, "load_tool"), '{"names": ["rca-tools"]}')
++    assert ctx.loaded_tools == {"data-fetch", "plot-trend"}
++
++
++async def test_load_tool_says_what_is_there_when_the_name_is_wrong():
++    """Silence reads as "that tool is gone" and the model stops looking for the
++    one it actually wanted."""
++    agent = _agent()
++    ctx = AgentToolContext(investigation_id="i")
++    load = (await _sent(agent, ctx))["load_tool"]
++
++    reply = await load.on_invoke_tool(_tool_ctx(ctx, "load_tool"), '{"names": ["nope"]}')
++
++    assert "nope" in reply
++    assert "data-fetch" in reply and "plot-trend" in reply
++    assert ctx.loaded_tools == set()
++
++
++def _tool_ctx(ctx: AgentToolContext, name: str, *, call_id: str = "id"):
++    from agents.tool_context import ToolContext
++    from agents.usage import Usage
++
++    return ToolContext(
++        context=ctx, tool_name=name, tool_call_id=call_id, tool_arguments="{}", usage=Usage()
++    )
++
++
++# ── what reaches the chat and the stored thread ──────────────────────────
++
++
++def _output_event(call_id: str, text: str):
++    """The `tool_output` stream event shape `_map_event` reads."""
++    from dataclasses import dataclass
++
++    @dataclass
++    class _Raw:
++        call_id: str
++
++    @dataclass
++    class _Item:
++        raw_item: object
++        output: object
++
++    @dataclass
++    class _Ev:
++        type: str
++        name: str
++        item: object
++
++    return _Ev(
++        type="run_item_stream_event",
++        name="tool_output",
++        item=_Item(raw_item=_Raw(call_id=call_id), output=text),
++    )
++
++
++async def test_a_catalog_hit_does_not_put_the_schema_in_the_thread():
++    """The schema is the fattest thing in this design. The model needs it for
++    the next step — the SDK's own run history carries it — but the chat card
++    and the STORED message must not, or every turn that loaded a tool drags its
++    schema into the next turn's window and the saving is undone over a few
++    turns (`docs/plan-tool-on-demand-loading.md`)."""
++    agent = _agent()
++    ctx = AgentToolContext(investigation_id="i")
++    fetch = (await _sent(agent, ctx))["data-fetch"]
++    reply = await fetch.on_invoke_tool(_tool_ctx(ctx, "data-fetch", call_id="c1"), "{}")
++    assert '"lot"' in reply  # the model did get the schema
++
++    event = _map_event(_output_event("c1", reply), ctx)
++
++    assert isinstance(event, ToolEnd)
++    assert "lot" not in event.output
++    assert "data-fetch" in event.output
++    # …and it records THIS event as the one the reducer must not store, taking
++    # the record as it goes: one record answers one call, so a reused call id
++    # cannot silence a later real message (verify round F2).
++    assert ctx.ephemeral_outputs == ["c1"]
++    assert "c1" not in ctx.catalog_calls
++
++
++async def test_load_tool_names_what_it_loaded_instead_of_dumping_schemas():
++    agent = _agent()
++    ctx = AgentToolContext(investigation_id="i")
++    load = (await _sent(agent, ctx))["load_tool"]
++    reply = await load.on_invoke_tool(
++        _tool_ctx(ctx, "load_tool", call_id="c2"), '{"names": ["rca-tools"]}'
++    )
++
++    event = _map_event(_output_event("c2", reply), ctx)
++
++    assert isinstance(event, ToolEnd)
++    assert "data-fetch" in event.output and "plot-trend" in event.output
++    assert "properties" not in event.output
++
++
++async def test_a_real_call_of_an_already_loaded_tool_keeps_its_output():
++    """The control. It is the SAME turn, with `data-fetch` already loaded —
++    so "this turn loaded something" is true and only the CALL ID separates
++    the catalog's answer from the tool's own.
++
++    A weaker control (a turn that loaded nothing) passed a mutation keyed on
++    `loaded_tools` instead of the call id, which is the whole point of the
++    key: a loaded command and its catalog entry share a name.
++    """
++    agent = _agent()
++    ctx = AgentToolContext(investigation_id="i")
++    fetch = (await _sent(agent, ctx))["data-fetch"]
++    await fetch.on_invoke_tool(_tool_ctx(ctx, "data-fetch", call_id="c1"), "{}")
++    assert ctx.loaded_tools == {"data-fetch"}
++
++    # The real tool now runs, under a new call id.
++    event = _map_event(_output_event("c9", "exit=0\nlot A42 shipped"), ctx)
++
++    assert isinstance(event, ToolEnd)
++    assert event.output == "exit=0\nlot A42 shipped"
++
++
++async def test_the_streamed_turn_passes_its_context_to_the_mapper(monkeypatch):
++    """Through the REAL loop, not the mapper alone.
++
++    `_map_event` taking the turn is useless unless the production call site
++    hands it over, and a unit test that calls the mapper directly cannot tell:
++    dropping `ctx` at the streaming call site left every test green.
++    """
++    from tests.api.test_litellm_runner import _ctx
++    from workspace_app.api import litellm_runner as lr
++
++    ctx = _ctx()
++    ctx.mark_tool_loaded("data-fetch", call_id="c1")
++    events = [_output_event("c1", '{"properties": {"lot": {"type": "string"}}}')]
++    monkeypatch.setattr(lr.Runner, "run_streamed", lambda *a, **k: _FakeStreamed(events))
++
++    out = [ev async for ev in lr.LitellmAgentRunner().run("p", ctx) if isinstance(ev, ToolEnd)]
++
++    assert [e.output for e in out] == ["載入 `data-fetch` 的用法"]
++
++
++class _FakeStreamed:
++    """The same shape `tests/api/test_reply_provenance.py` drives the loop with."""
++
++    def __init__(self, events):
++        self._events = events
++        self.context_wrapper = type("C", (), {"usage": type("U", (), {})()})()
++
++    async def stream_events(self):
++        for ev in self._events:
++            yield ev
++
++
++# ── the sync readers that are not the SDK's run loop ────────────────────
++
++
++async def test_the_sync_reader_agrees_with_the_sdk_in_every_state():
++    """`enabled_function_tools` exists because `replay` and the trace line run
++    with no event loop and cannot await `get_all_tools`. It mirrors one rule of
++    the SDK's, so the SDK is the oracle: a parity test, not two implementations
++    kept alike by hand (every state that matters, both answers compared)."""
++    agent = _agent()
++    fresh = AgentToolContext(investigation_id="i")
++    partly = AgentToolContext(investigation_id="i")
++    partly.mark_tool_loaded("data-fetch")
++    allloaded = AgentToolContext(investigation_id="i")
++    allloaded.mark_tool_loaded("data-fetch")
++    allloaded.mark_tool_loaded("plot-trend")
++
++    for ctx in (fresh, partly, allloaded):
++        from agents import RunContextWrapper
++
++        oracle = [
++            t.name for t in await agent.get_all_tools(RunContextWrapper(ctx)) if hasattr(t, "name")
++        ]
++        assert [t.name for t in enabled_function_tools(agent, ctx)] == oracle, ctx.loaded_tools
++
++
++async def test_the_sync_reader_never_answers_with_a_name_twice():
++    """What the raw registry does, and why neither caller may read it: the
++    payload would carry two definitions of one name, which `dedupe_tools`'
++    docstring calls a payload the provider rejects wholesale."""
++    agent = _agent()
++    registered = [t.name for t in agent.tools]
++    assert registered.count("data-fetch") == 2  # the twins ARE both registered
++
++    sent = [t.name for t in enabled_function_tools(agent, AgentToolContext(investigation_id="i"))]
++
++    assert len(sent) == len(set(sent)), sent
++
++
++async def test_load_tool_is_not_granted_to_a_turn_that_holds_no_package_command():
++    """`load_tool` was gated on the ITEM having a bundle installed, not on this
++    turn being granted any command — so every sub-agent with a narrowed
++    `allowed_tools` (every `ask_knowledge_base` child, every workflow node with
++    its own `tools:`) got one whose only possible answer was "there is no tool
++    called that. Tools you can load: ." (round 1 A6).
++    """
++    agent = _agent_for(
++        AgentConfig(name="ws", system_prompt="anchor", allowed_tools=["read_file"]),
++        packages=_packages(),
++    )
++    sent = await _sent(agent, AgentToolContext(investigation_id="i"))
++
++    assert "read_file" in sent
++    assert "load_tool" not in sent
++    assert "data-fetch" not in sent
++
++
++async def test_load_tool_is_granted_when_one_command_is():
++    """The control: the gate is the granted commands, so granting one brings it
++    back. A mutation that drops `load_tool` wholesale reddens here."""
++    agent = _agent_for(
++        AgentConfig(
++            name="ws", system_prompt="anchor", allowed_tools=["read_file", "rca-tools:data-fetch"]
++        ),
++        packages=_packages(),
++    )
++    sent = await _sent(agent, AgentToolContext(investigation_id="i"))
++
++    assert "load_tool" in sent
++    assert "data-fetch" in sent
++    assert "plot-trend" not in sent  # …and only the command that was granted
++
++
++async def test_one_call_loading_a_bundle_and_one_of_its_commands_says_each_name_once():
++    """The names go into a sentence a PERSON reads (the chat card and, before
++    round 1 A1, the stored message). `load_tool(["rca-tools", "data-fetch"])`
++    resolves `data-fetch` twice, and it read
++    `載入 \u0060data-fetch\u0060、\u0060plot-trend\u0060、\u0060data-fetch\u0060 的用法`
++    (round 1 B1)."""
++    agent = _agent()
++    ctx = AgentToolContext(investigation_id="i")
++    load = (await _sent(agent, ctx))["load_tool"]
++
++    said = await load.on_invoke_tool(
++        _tool_ctx(ctx, "load_tool", call_id="c1"), '{"names": ["rca-tools", "data-fetch"]}'
++    )
++
++    # ONE hit carrying both names, and the text it answered with — the queue
++    # counts outputs to suppress, not commands (round 3 D4), and the answer is
++    # what identifies the output later (round 3 R1).
++    ((names, answer),) = ctx.catalog_calls["c1"]
++    assert names == ["data-fetch", "plot-trend"]
++    assert "is now loaded" in answer
++    # The output IS what the handler returned, as it is in production.
++    event = _map_event(_output_event("c1", said), ctx)
++    assert isinstance(event, ToolEnd)
++    assert event.output.count("data-fetch") == 1
++
++
++async def test_the_trace_line_lists_what_was_sent_not_what_is_registered(monkeypatch):
++    """`_emit_llm_trace` builds the one line an operator reads to see what went
++    out. It read `agent.tools`, so it listed every package command twice as
++    soon as the catalog registered twins (round 1 A12) — and nothing pinned it.
++    """
++    from workspace_app.api import litellm_runner as lr
++
++    seen: list[str] = []
++    monkeypatch.setattr(lr, "build_trace", _capture_tools(seen))
++
++    cfg = AgentConfig(name="ws", system_prompt="anchor")
++    ctx = AgentToolContext(investigation_id="i", packages=_packages(), agent_config=cfg)
++    lr._emit_llm_trace(
++        _agent_for(cfg, packages=_packages()),
++        ctx,
++        runner_base_url=None,
++        tool_calls=0,
++        content_text="",
++    )
++
++    assert seen, "the trace was not built"
++    assert seen.count("data-fetch") == 1, seen
++    assert len(seen) == len(set(seen)), seen
++
++
++def _capture_tools(sink: list[str]):
++    from workspace_app.api.llm_trace import build_trace as real
++
++    def fake(**kw):
++        sink.extend(kw.get("tools") or [])
++        return real(**kw)
++
++    return fake
++
++
++async def test_load_tool_cannot_open_a_command_a_builtin_shadows_through_the_real_wiring():
++    """The `shadowed` parameter existed and nothing passed it (round 3 D1): the
++    unit test handed it in directly, so the production call site stayed as it
++    was and `load_tool` kept opening a command that can never run.
++
++    `builtin_names` is read before `load_tool` goes in for exactly this, and
++    shadowing is a per-TURN fact — with the built-in not granted, the package's
++    own command IS what the model gets.
++    """
++    pkg = PackageInfo(
++        name="rca-tools",
++        install_dir="../.tools/rca-tools",
++        commands=(
++            CommandInfo("exec", "Shadowed by the built-in.", {"type": "object"}),
++            CommandInfo("spc", "Draw an SPC chart.", {"type": "object"}),
++        ),
++    )
++    agent = _agent_for(AgentConfig(name="ws", system_prompt="anchor"), packages=[pkg])
++    ctx = AgentToolContext(investigation_id="i")
++    load = (await _sent(agent, ctx))["load_tool"]
++
++    reply = await load.on_invoke_tool(_tool_ctx(ctx, "load_tool"), '{"names": ["exec"]}')
++
++    assert ctx.loaded_tools == set()
++    assert "is now loaded" not in reply
++    # …and the one that is not shadowed still loads.
++    ok = await load.on_invoke_tool(_tool_ctx(ctx, "load_tool"), '{"names": ["spc"]}')
++    assert "`spc` is now loaded" in ok
++    assert ctx.loaded_tools == {"spc"}
++
++
++async def test_two_catalog_hits_sharing_a_call_id_are_both_kept_out_of_the_thread():
++    """`call_id` is the provider's, and an OpenAI-compatible endpoint passes it
++    through verbatim. Popping the whole record left the SECOND hit of a reused
++    id unrecognised, so its raw schema went into the conversation record
++    (round 3 D4) — the one thing this whole change exists to prevent."""
++    agent = _agent()
++    ctx = AgentToolContext(investigation_id="i")
++    sent = await _sent(agent, ctx)
++
++    # Two parallel calls in one step, same id: both handlers run before either
++    # output is emitted, and each output IS what its handler returned.
++    said_a = await sent["data-fetch"].on_invoke_tool(
++        _tool_ctx(ctx, "data-fetch", call_id="c1"), "{}"
++    )
++    said_b = await sent["plot-trend"].on_invoke_tool(
++        _tool_ctx(ctx, "plot-trend", call_id="c1"), "{}"
++    )
++
++    first = _map_event(_output_event("c1", said_a), ctx)
++    second = _map_event(_output_event("c1", said_b), ctx)
++
++    for event in (first, second):
++        assert isinstance(event, ToolEnd)
++        assert "properties" not in event.output, event.output
++    assert ctx.ephemeral_outputs == ["c1", "c1"]
++
++
++async def test_the_non_streamed_turn_passes_its_context_to_the_mapper(monkeypatch):
++    """The second door. Round 2 said it could not be pinned because the path is
++    unreachable; it is reachable with `WORKSPACE_AGENT_STREAM=0` (round 3 D7),
++    and "a guard that exists is not a guard that is applied" applies to both
++    call sites."""
++    from tests.api.test_litellm_runner import _ctx
++    from workspace_app.api import litellm_runner as lr
++
++    monkeypatch.setenv("WORKSPACE_AGENT_STREAM", "0")
++    ctx = _ctx()
++    ctx.note_catalog_hit("c1", ["data-fetch"])
++
++    class _Result:
++        new_items = [_NonStreamOutput("c1", '{"properties": {"lot": {}}}')]
++        final_output = ""
++
++    async def _run(*_a, **_k):
++        return _Result()
++
++    monkeypatch.setattr(lr.Runner, "run", _run)
++
++    out = [ev async for ev in lr.LitellmAgentRunner().run("p", ctx) if isinstance(ev, ToolEnd)]
++
++    assert [e.output for e in out] == ["載入 `data-fetch` 的用法"]
++
++
++class _NonStreamOutput:
++    """A completed `tool_output` RunItem, as `_run_once_nonstream` walks them."""
++
++    type = "tool_call_output_item"
++
++    def __init__(self, call_id: str, output: str) -> None:
++        self.raw_item = {"call_id": call_id}
++        self.output = output
++
++
++async def test_a_catalog_hit_with_no_call_id_is_still_kept_out_of_the_thread():
++    """`_call_id` falls back to `""` for a provider that sends none, and the
++    whole mechanism joins on that key. Refusing to record the empty one left
++    the raw schema in the record (round 3 D5); suppressing that output matters
++    more than the risk of suppressing an adjacent real one, because a schema in
++    the record is replayed into every later turn."""
++    agent = _agent()
++    ctx = AgentToolContext(investigation_id="i")
++    fetch = (await _sent(agent, ctx))["data-fetch"]
++
++    said = await fetch.on_invoke_tool(_tool_ctx(ctx, "data-fetch", call_id=""), "{}")
++    event = _map_event(_output_event("", said), ctx)
++
++    assert isinstance(event, ToolEnd)
++    assert "properties" not in event.output
++    assert ctx.ephemeral_outputs == [""]
++
++
++@pytest.mark.parametrize("catalog_first", [True, False])
++async def test_which_output_is_the_catalogs_does_not_depend_on_arrival_order(catalog_first):
++    """Matching the hit by call id alone made the ORDER decide: a step holding
++    a real call and a catalog hit under one id had the real tool's output
++    rewritten and dropped while the catalog's own schema was stored in its
++    place — the one thing this mechanism exists to prevent (round 3 R1).
++
++    The hit now carries the text it answered with, so it is matched by what it
++    SAID. A provider's `tool_call.id` is its own and may repeat; the answer is
++    a value this turn produced."""
++    agent = _agent()
++    ctx = AgentToolContext(investigation_id="i")
++    stub = (await _sent(agent, ctx))["plot-trend"]
++    # The catalog hit happens first in the STEP (both tools run before either
++    # output is emitted when the model calls them in parallel)…
++    schema = await stub.on_invoke_tool(_tool_ctx(ctx, "plot-trend", call_id="dup"), "{}")
++
++    # …and the outputs then arrive in whichever order the provider sends them.
++    texts = [schema, "lot A42: 3 steps"] if catalog_first else ["lot A42: 3 steps", schema]
++    mapped = [_map_event(_output_event("dup", t), ctx) for t in texts]
++    assert all(isinstance(m, ToolEnd) for m in mapped)
++    kept = [m.output for m in mapped if isinstance(m, ToolEnd)]
++
++    assert "lot A42: 3 steps" in kept, kept
++    assert all("properties" not in k for k in kept), kept
++    assert ctx.ephemeral_outputs == ["dup"]
+diff --git a/tests/health/test_replay.py b/tests/health/test_replay.py
+index 1ea496ce..605773f7 100644
+--- a/tests/health/test_replay.py
++++ b/tests/health/test_replay.py
+@@ -341,3 +341,56 @@ def test_replay_turn_shows_malformed_tool_args_verbatim():
+         ReplayToolCall(name="plot", arguments={"_raw": '{"x": 1}{"y"'}),
+         ReplayToolCall(name="lookup", arguments={"_raw": '"just-a-string"'}),
+     ]
++
++
++def test_replay_offers_each_package_command_once_and_without_its_schema():
++    """Replay promises a payload bit-identical to what the live turn saw
++    (this module's docstring), and the live turn's first step sends the tool
++    CATALOG — one entry per command, no parameter schema
++    (`docs/plan-tool-on-demand-loading.md`).
++
++    It read `agent.tools` raw, which after that change holds each command
++    twice (the catalog entry and the executable tool, one of them enabled per
++    step). So the probe sent two definitions of one name — "a payload the
++    provider rejects wholesale", in `dedupe_tools`' own words — and was bigger
++    than before the catalog existed. Nothing caught it: no replay test passed
++    `packages`, and the one that checks the offered tools compares a SET, in
++    which a doubled name is invisible (round 1 A2).
++    """
++    from workspace_app.tooling.registry import CommandInfo, PackageInfo
++
++    pkg = PackageInfo(
++        name="rca-tools",
++        install_dir="../.tools/rca-tools",
++        commands=(
++            CommandInfo("spc", "Draw an SPC chart.", {"type": "object", "properties": {"lot": {}}}),
++            CommandInfo("pareto", "Draw a Pareto chart.", {"type": "object", "properties": {}}),
++        ),
++    )
++    completion = _FakeCompletion([_chunk("ok")])
++    service = ReplayService(completion=completion)
++    messages = [
++        Message(role="user", content="hi"),
++        Message(role="assistant", content="hello"),
++    ]
++
++    result = service.replay_turn(
++        messages=messages,
++        index=1,
++        config=AgentConfig(name="rca", system_prompt="sys"),
++        packages=[pkg],
++    )
++
++    offered = completion.kwargs["tools"]
++    names = [t["function"]["name"] for t in offered]
++    # A LIST, not a set: the defect was a repeated name.
++    assert names.count("spc") == 1, names
++    assert names.count("pareto") == 1, names
++    assert len(names) == len(set(names)), names
++    # …and what the live turn's first step sends is the catalog: no schema.
++    spc = next(t for t in offered if t["function"]["name"] == "spc")
++    assert spc["function"]["parameters"]["properties"] == {}
++    assert "load_tool" in names
++    # The operator-facing list in the result matches what was sent.
++    assert result.request is not None
++    assert result.request.tools == names
+diff --git a/tests/tooling/test_tool_catalog.py b/tests/tooling/test_tool_catalog.py
+new file mode 100644
+index 00000000..78158f68
+--- /dev/null
++++ b/tests/tooling/test_tool_catalog.py
+@@ -0,0 +1,621 @@
++"""The catalog entry for a command the turn has not loaded yet
++(`docs/plan-tool-on-demand-loading.md` P1).
++
++A turn sends every granted command's full JSON schema today, which is what puts
++a six-figure character count in one system prompt. The catalog replaces that
++with one line per command: the real name, the author's own sentence, and no
++parameter schema at all — the schema arrives when the command is actually used.
++
++The trim is deliberately NOT a character cut: a description cut mid-sentence is
++how the model stops being able to tell two commands apart. Nothing is lost
++either way — loading the command hands over the full description and schema.
++"""
++
++from __future__ import annotations
++
++import dataclasses
++import json
++from collections.abc import Sequence
++from typing import Any
++
++import pytest
++from agents.tool_context import ToolContext
++from agents.usage import Usage
++
++from workspace_app.agent.context import AgentToolContext
++from workspace_app.tooling.registry import (
++    CommandInfo,
++    PackageInfo,
++    build_catalog_tools,
++    build_function_tools,
++    build_load_tool,
++    catalog_description,
++    describe_command,
++    load_reply,
++)
++
++
++def _pkg(*, third_party: bool = False) -> PackageInfo:
++    return PackageInfo(
++        name="rca-tools",
++        install_dir="../.tools/rca-tools",
++        commands=(
++            CommandInfo(
++                "data-fetch",
++                "Fetch a lot's history. Accepts a lot id and a date range.",
++                {
++                    "type": "object",
++                    "properties": {"lot": {"type": "string"}, "days": {"type": "integer"}},
++                    "required": ["lot"],
++                },
++            ),
++            CommandInfo("plot-trend", "Plot a trend.", {"type": "object", "properties": {}}),
++        ),
++        description="SMT 產線的量測資料擷取與初步分析。",
++        third_party=third_party,
++    )
++
++
++def test_nothing_said_stays_nothing():
++    assert catalog_description("") == ""
++    assert catalog_description("   \n ") == ""
++
++
++@pytest.mark.parametrize(
++    ("text", "expected"),
++    [
++        # Short enough: verbatim, no ellipsis — an author who wrote one line
++        # gets that line.
++        ("Fetch a wafer's history.", "Fetch a wafer's history."),
++        ("抓取晶圓的歷史紀錄。", "抓取晶圓的歷史紀錄。"),
++        # Several sentences: the FIRST one is what decides whether to call this
++        # command; the rest is detail that arrives with the schema.
++        (
++            "Fetch a wafer's history. Accepts a lot id and a date range. Returns one row per step.",
++            "Fetch a wafer's history.",
++        ),
++        ("抓取晶圓的歷史紀錄。可以給批號與日期範圍。", "抓取晶圓的歷史紀錄。"),
++        # A newline ends a sentence too — plenty of descriptions are written as
++        # a title line plus a paragraph.
++        ("Summarise a CSV column\n\nUse this before plotting.", "Summarise a CSV column"),
++    ],
++)
++def test_the_first_sentence_is_the_entry(text, expected):
++    assert catalog_description(text) == expected
++
++
++def test_a_long_first_sentence_ends_at_a_word_boundary_not_mid_word():
++    text = (
++        "Fetch the complete processing history for a wafer including every step, "
++        "every tool it visited and every measurement taken along the way"
++    )
++    out = catalog_description(text)
++
++    assert len(out) <= 100
++    assert out.endswith("…")
++    # The cut lands between words: no half word before the ellipsis.
++    assert text.startswith(out[:-1].rstrip())
++    assert out[-2] != " "
++    kept = out[:-1].rstrip()
++    assert text[len(kept)] in " ", f"cut mid-word: {out!r}"
++
++
++def test_a_long_chinese_first_sentence_ends_at_punctuation():
++    text = (
++        "抓取這片晶圓從投片到出貨的完整處理歷程，包含每一個站點、每一台機台、"
++        "每一次量測的數值與時間，並附上每一步的作業員與配方版本、重工次數與原因，"
++        "最後給一份可以直接貼進報告的摘要，附上每一站的良率與缺陷分布，供後續比對與追溯"
++    )
++    assert len(text) > 100, "the fixture has to be longer than the limit to walk this path"
++    out = catalog_description(text)
++
++    assert len(out) <= 100
++    assert out.endswith("…")
++    # Chinese has no spaces, so the boundary is a punctuation mark the author
++    # wrote — cutting between two characters of a clause is the thing this
++    # avoids.
++    assert out[-2] in "，、；：", f"cut mid-clause: {out!r}"
++
++
++def test_a_run_with_no_boundary_at_all_is_cut_at_the_limit_as_a_last_resort():
++    # No space, no punctuation, longer than the limit: there is no boundary to
++    # respect, so the limit wins. The entry is a hint for choosing a command,
++    # and the full text is one `load` away.
++    text = "x" * 250
++    out = catalog_description(text)
++
++    assert len(out) == 100
++    assert out == "x" * 99 + "…"
++
++
++def test_the_limit_is_a_parameter_not_a_constant_in_the_cut():
++    text = "Fetch the complete processing history for a wafer including every step"
++    assert len(catalog_description(text, limit=30)) <= 30
++    assert catalog_description(text, limit=1000) == text
++
++
++# ── the stub a turn sends for a command it has not loaded ────────────────
++
++
++def test_a_catalog_tool_carries_the_name_and_the_line_and_no_schema():
++    """What replaces today's full schema: the real name the model must call, one
++    line of what it is, and NO parameters — the schema is the expensive half."""
++    (fetch, plot) = build_catalog_tools([_pkg()], allowed=None, mark_loaded=lambda *_: None)
++
++    assert fetch.name == "data-fetch"
++    # The author's first sentence, plus which bundle it comes from — `load_tool`
++    # advertises loading a whole bundle by name, and before round 1 A5 the turn
++    # was never told any bundle name.
++    assert fetch.description == "Fetch a lot's history. [rca-tools]"
++    # An empty object, not the command's real schema. `additionalProperties` is
++    # open on purpose: the model WILL guess arguments at this entry (the name is
++    # right there), and a provider enforcing a closed schema would reject the
++    # call before our handler could answer with the real one.
++    assert fetch.params_json_schema == {
++        "type": "object",
++        "properties": {},
++        "additionalProperties": True,
++    }
++    assert fetch.strict_json_schema is False
++    assert plot.name == "plot-trend"
++
++
++def test_a_third_party_entry_does_not_repeat_the_bundle_it_already_names():
++    """`rca-tools__data-fetch` already says the bundle; appending `[rca-tools]`
++    would spend tokens on the same word twice."""
++    (fetch, _) = build_catalog_tools(
++        [_pkg(third_party=True)], allowed=None, mark_loaded=lambda *_: None
++    )
++
++    assert fetch.description == "Fetch a lot's history."
++
++
++def test_a_third_party_catalog_tool_keeps_the_prefixed_name():
++    # #888: the model's name for a third-party command is `<local>__<cmd>`, and
++    # the catalog has to advertise the name that can actually be called.
++    names = {
++        t.name
++        for t in build_catalog_tools(
++            [_pkg(third_party=True)], allowed=None, mark_loaded=lambda *_: None
++        )
++    }
++    assert names == {"rca-tools__data-fetch", "rca-tools__plot-trend"}
++
++
++async def test_calling_a_catalog_tool_loads_it_and_answers_with_the_real_schema():
++    """The model calling an unloaded command is EXPECTED, not a misuse — the
++    catalog handed it the name. So the entry's answer is the schema plus "call
++    it again", never a refusal (#537: a refusal reads as "stop trying")."""
++    loaded: list[tuple[object, Sequence[str], str]] = []
++    (fetch, _) = build_catalog_tools(
++        [_pkg()],
++        allowed=None,
++        mark_loaded=lambda ctx, names, answer: loaded.append((ctx, names, answer)),
++    )
++    # The real `ToolContext` the SDK hands a tool, so the handler reads
++    # `.context` exactly the way it does in production.
++    actx = AgentToolContext(investigation_id="i")
++    tctx: ToolContext[Any] = ToolContext(
++        context=actx,
++        tool_name="data-fetch",
++        tool_call_id="id",
++        tool_arguments='{"lot": "guessed"}',
++        usage=Usage(),
++    )
++
++    reply = await fetch.on_invoke_tool(tctx, '{"lot": "guessed"}')
++
++    # The callback is handed the whole `ToolContext` (the caller needs the call
++    # id), the batch of names, and the exact text the call answered with — the
++    # answer is what identifies that output later (round 3 R1).
++    got_ctx, got_names, got_answer = loaded[0]
++    assert got_ctx is tctx
++    assert got_names == ["data-fetch"]
++    assert got_answer == reply
++    # The full description — the catalog line was only the first sentence.
++    assert describe_command(_pkg(), _pkg().commands[0]) in reply
++    # The real schema, verbatim enough that the model can satisfy it.
++    assert json.dumps(_pkg().commands[0].params_json_schema, ensure_ascii=False) in reply
++    assert "data-fetch" in reply
++
++
++async def test_load_tool_can_only_reach_what_the_executable_builder_grants():
++    """The third builder, against the same oracle.
++
++    `build_load_tool` filters with the same `_granted`, and nothing proved it:
++    the review changed its `allowed` to `None` and the targeted tests stayed
++    green, while a turn granted one command could then load the schema of a
++    command it was never given (round 1 B2).
++
++    The first version of THIS test was vacuous: it passed
++    `mark_loaded=lambda *_: None`, so nothing was ever written to the context
++    and `assert ctx.loaded_tools <= executable` compared an empty set against
++    anything — the mutation it was written for still reddened nothing (verify
++    round). The callback now writes through the real context API, and what the
++    reply NAMES is checked too, because that is what the model reads.
++    """
++    pkgs = [_pkg(), dataclasses.replace(_pkg(third_party=True), name="other-tools")]
++    for allowed in (None, [], ["rca-tools"], ["rca-tools:data-fetch"], ["other-tools"]):
++        executable = {t.name for t in build_function_tools(pkgs, allowed=allowed)}
++        ctx = AgentToolContext(investigation_id="i")
++        load = build_load_tool(
++            pkgs,
++            allowed=allowed,
++            mark_loaded=lambda tctx, names, answer: tctx.context.note_catalog_hit(
++                "c", names, answer
++            ),
++        )
++        # Ask for EVERY command of every package, granted or not.
++        every = [
++            name
++            for pkg in pkgs
++            for cmd in pkg.commands
++            for name in (f"{pkg.name}__{cmd.name}", cmd.name, f"{pkg.name}:{cmd.name}", pkg.name)
++        ]
++        reply = await load.on_invoke_tool(
++            _tool_ctx(ctx, "load_tool"), json.dumps({"names": every[:20]})
++        )
++
++        assert ctx.loaded_tools <= executable, (allowed, ctx.loaded_tools - executable)
++        # …and the ungranted ones are not described either: a schema in the
++        # reply is in the window whether or not the tool was marked loaded.
++        for ungranted in {c.name for p in pkgs for c in p.commands} - executable:
++            assert f"`{ungranted}` is now loaded" not in reply, (allowed, ungranted)
++
++
++def test_the_catalog_names_exactly_what_the_executable_builder_grants():
++    """Parity, with `build_function_tools` as the oracle: a stub for a command
++    the real builder would drop is a tool that can never run, and a command the
++    catalog omits is one the model will never know to ask for. Same selection
++    code, not two copies kept alike by hand."""
++    pkgs = [_pkg(), dataclasses.replace(_pkg(third_party=True), name="other-tools")]
++    for allowed in (
++        None,
++        [],
++        ["rca-tools"],
++        ["rca-tools:data-fetch"],
++        ["nope"],
++        ["rca-tools:nope"],
++    ):
++        catalog = {
++            t.name for t in build_catalog_tools(pkgs, allowed=allowed, mark_loaded=lambda *_: None)
++        }
++        executable = {t.name for t in build_function_tools(pkgs, allowed=allowed)}
++        assert catalog == executable, allowed
++
++
++def test_a_complex_schema_reaches_the_model_verbatim_when_loaded():
++    """Moved from `test_tool_prompt.py`, where it guarded the same thing in the
++    place the schema used to be rendered: an enum constraint, a nested object
++    and a default must survive to the model, not be flattened by something
++    being clever on the way. The schema now travels in the load reply, so the
++    guard lives here.
++    """
++    schema = {
++        "type": "object",
++        "properties": {
++            "name": {"type": "string", "enum": ["alloy-batches", "sensor-telemetry"]},
++            "rows": {"type": "integer", "default": 25000},
++            "nested": {"type": "object", "properties": {"deep": {"type": "boolean"}}},
++        },
++        "required": ["name"],
++    }
++    pkg = dataclasses.replace(
++        _pkg(), commands=(CommandInfo("data-fetch", "Fetch a dataset.", schema),)
++    )
++
++    reply = load_reply(pkg, pkg.commands[0])
++
++    start = reply.index("{")
++    assert json.loads(reply[start : reply.rindex("}") + 1]) == schema
++
++
++# ── round 1 A9 / A10 / A16: what the trim must NOT do ───────────────────
++
++
++@pytest.mark.parametrize(
++    ("text", "expected"),
++    [
++        # An abbreviation is not the end of a sentence. Measured before the fix:
++        # each of these became the fragment on the right of the arrow.
++        ("Max. 1000 rows per call. Fetches wafer history for a lot.", "Max. 1000 rows per call."),
++        (
++            "Plot a chart, e.g. a trend over time. Pass the csv path and a column.",
++            "Plot a chart, e.g. a trend over time.",
++        ),
++        (
++            "Normalise a wafer id, i.e. strip the lot prefix. Returns the bare id.",
++            "Normalise a wafer id, i.e. strip the lot prefix.",
++        ),
++        (
++            "Fetch SPC, CPK, yield etc. for one lot. Needs a lot id.",
++            "Fetch SPC, CPK, yield etc. for one lot.",
++        ),
++        (
++            "Compare lot A vs. lot B on every parameter. Prints a table.",
++            "Compare lot A vs. lot B on every parameter.",
++        ),
++        ("Runs the U.S. spec check. Takes a lot id.", "Runs the U.S. spec check."),
++        # Only the abbreviation rule catches these two: what follows is
++        # capitalised, so the "next word starts a sentence" rule lets them
++        # through. Deleting the abbreviation check leaves these red and
++        # everything else green — which is how we know it is not dead code.
++        (
++            "Compare lot A vs. Lot B on every parameter. Prints a table.",
++            "Compare lot A vs. Lot B on every parameter.",
++        ),
++        ("Draws a chart, e.g. Pareto by step. Takes a csv.", "Draws a chart, e.g. Pareto by step."),
++        # …and a decimal never did (the lookahead already covered it).
++        ("Keeps 3.5 digits of precision. Nothing else.", "Keeps 3.5 digits of precision."),
++        # A real two-sentence description still stops at the first.
++        ("Fetch a lot's history. Accepts a date range.", "Fetch a lot's history."),
++    ],
++)
++def test_an_abbreviation_does_not_end_the_sentence(text, expected):
++    assert catalog_description(text) == expected
++
++
++def test_a_boundary_too_early_is_not_worse_than_no_boundary_at_all():
++    """The last-resort cut keeps 99 characters; a single early boundary used to
++    keep 5. The trim must never do worse than its own fallback."""
++    long_tail = "Plot " + "x" * 200 + ". second sentence."
++    out = catalog_description(long_tail)
++
++    assert len(out) > 50, out
++    assert len(out) <= 100
++
++
++def test_a_tiny_or_silly_limit_does_not_invert_the_cut():
++    # `first[: limit - 1]` made `limit=0` keep almost everything and `limit=-5`
++    # drop five characters — the opposite of a limit.
++    text = "Fetch a lot's history including every step and every tool it visited"
++    for limit in (0, 1, -5):
++        assert len(catalog_description(text, limit=limit)) <= 2, limit
++
++
++def test_the_cut_does_not_land_inside_a_grapheme_cluster():
++    """An emoji family is one thing to a reader; half of one is mojibake. The
++    fuzz found 916 cuts ending on a combining mark or a dangling ZWJ."""
++    out = catalog_description("A" * 95 + " 👨‍👩‍👧‍👦 and more text after it")
++
++    assert "\u200d" not in out[-2:], repr(out)
++    out2 = catalog_description("B" * 97 + "e\u0301 trailing")
++    assert "\u0301" not in out2[-2:], repr(out2)
++
++
++def test_a_description_that_is_not_a_string_does_not_take_the_tool_list_down():
++    """A published manifest may carry `null`, a number or a list as a command
++    description (`parse_manifest` checks neither), and this function is now on
++    the path that builds the WHOLE tool list — so an odd value used to be an
++    ugly f-string and would now fail every turn on that item (round 1 A8)."""
++    for odd in (None, 42, ["a", "b"], {"x": 1}):
++        assert isinstance(catalog_description(odd), str)  # ty: ignore[invalid-argument-type]
++
++    # A description a published manifest can really carry, which the type says
++    # cannot happen — the point of the test is that the code survives it.
++    odd_cmd = CommandInfo("data-fetch", None, {"type": "object"})  # ty: ignore[invalid-argument-type]
++    pkg = dataclasses.replace(_pkg(), commands=(odd_cmd,))
++    (tool,) = build_catalog_tools([pkg], allowed=None, mark_loaded=lambda *_: None)
++
++    assert tool.name == "data-fetch"
++
++
++async def test_load_tool_bounds_its_reply_and_asks_for_the_same_thing_once():
++    """The catalog's whole point is that schemas are not in the window until
++    they are needed. One call naming every bundle put 36,054 characters back,
++    and `["x"] * 20` put 261,238 — past the built-ins' own 200,000 ceiling,
++    which does not reach these tools (round 1 A7)."""
++    from workspace_app.tooling.registry import build_load_tool
++
++    big = {
++        "type": "object",
++        "properties": {f"p{i}": {"type": "string", "description": "d" * 200} for i in range(40)},
++    }
++    pkg = dataclasses.replace(
++        _pkg(),
++        commands=tuple(CommandInfo(f"cmd-{i}", "Does a thing.", big) for i in range(12)),
++    )
++    load = build_load_tool([pkg], allowed=None, mark_loaded=lambda *_: None)
++    ctx = AgentToolContext(investigation_id="i")
++
++    # The same name twenty times is one load, not twenty.
++    once = await load.on_invoke_tool(
++        _tool_ctx(ctx, "load_tool"), json.dumps({"names": ["cmd-0"] * 20})
++    )
++    assert once.count("Call `cmd-0` again") == 1
++
++    # A bundle with twelve fat commands does not all fit. What does not fit is
++    # NOT LOADED — trimming the reply while marking everything loaded handed
++    # the next step every schema anyway (verify round F4).
++    ctx2 = AgentToolContext(investigation_id="i")
++    whole = await load.on_invoke_tool(
++        _tool_ctx(ctx2, "load_tool"), json.dumps({"names": ["rca-tools"]})
++    )
++    assert len(whole) < 25_000, len(whole)
++    assert "already full" in whole
++    assert len(ctx2.loaded_tools) < 12, sorted(ctx2.loaded_tools)
++    # …and what WAS loaded is what the reply described.
++    for name in ctx2.loaded_tools:
++        assert f"`{name}` is now loaded" in whole
++
++    # More names than one call may ask for: the surplus is named, not loaded.
++    many = await load.on_invoke_tool(
++        _tool_ctx(ctx, "load_tool"),
++        # 27 DISTINCT names — the cap is on distinct names, so repeats of one
++        # name (deduped above) would never reach it.
++        json.dumps({"names": [f"cmd-{i}" for i in range(12)] + [f"nope-{i}" for i in range(15)]}),
++    )
++    assert "too many names" in many
++
++
++def _tool_ctx(ctx, name: str, *, call_id: str = "id"):
++    from agents.tool_context import ToolContext
++    from agents.usage import Usage
++
++    return ToolContext(
++        context=ctx, tool_name=name, tool_call_id=call_id, tool_arguments="{}", usage=Usage()
++    )
++
++
++# ── verify round F3 / F10: the rule must not be worse than the one it replaced
++
++
++@pytest.mark.parametrize(
++    ("text", "expected"),
++    [
++        # Scripts with no case at all. The "next word must be capitalised" rule
++        # could never be satisfied by them — `_is_cjk` covers only two ranges —
++        # so an ASCII `.` stopped ending a sentence and the whole paragraph
++        # became the entry, cut mid-sentence (verify round F3).
++        ("로트 이력을 가져옵니다. 로트 번호와 날짜 범위를 받습니다.", "로트 이력을 가져옵니다."),
++        ("ดึงประวัติของล็อต. รับหมายเลขล็อตและช่วงวันที่.", "ดึงประวัติของล็อต."),
++        ("जानकारी लाता है. लॉट नंबर लेता है.", "जानकारी लाता है."),
++        # …and plain lower-case English, which plenty of authors write.
++        (
++            "fetch a lot's history. accepts a date range and a lot id.",
++            "fetch a lot's history.",
++        ),
++        # A sentence whose next word is a number is still a sentence.
++        ("Keeps at most 5 rows. 10 is the ceiling.", "Keeps at most 5 rows."),
++    ],
++)
++def test_a_sentence_ends_whatever_script_or_case_follows_it(text, expected):
++    assert catalog_description(text) == expected
++
++
++def test_a_description_that_fits_is_never_replaced_by_an_ellipsis():
++    # The tiny-limit guard ran BEFORE the "it fits" check, so a 1-character
++    # description became `…` and a negative limit returned something longer
++    # than the limit (verify round F10).
++    assert catalog_description("A", limit=1) == "A"
++    assert catalog_description("AB", limit=1) == "…"
++    assert len(catalog_description("A long description here", limit=-5)) <= 1
++
++
++def test_the_scan_stays_linear_in_the_description_length():
++    """A command description arrives verbatim from a third-party manifest with
++    no length cap, and this runs once per granted command inside `_agent_for`
++    — on the event loop. The tail-slice version took 680 ms for 400k
++    characters (verify round F6)."""
++    import time
++
++    def elapsed(n: int) -> float:
++        text = "3.5" * (n // 3)  # no whitespace: the scan runs to the end
++        start = time.perf_counter()
++        catalog_description(text)
++        return time.perf_counter() - start
++
++    small, large = elapsed(30_000), elapsed(300_000)
++
++    # 10x the input must not cost 50x the time (the slice version was ~15x per
++    # 4x). A generous bound: this is a shape test, not a benchmark.
++    assert large < max(small * 30, 0.05), (small, large)
++
++
++async def test_load_tool_cannot_open_a_command_a_builtin_shadows():
++    """`dedupe_tools` drops the executable half of a command whose name a
++    built-in holds, and the catalog leaves out its entry for the same reason.
++    `load_tool` handed over its description and schema anyway, telling the
++    model to call arguments the built-in does not take (verify round F5)."""
++    from workspace_app.tooling.registry import build_load_tool
++
++    pkg = dataclasses.replace(
++        _pkg(), commands=(CommandInfo("read_file", "Read a file the RCA way.", {}),)
++    )
++    ctx = AgentToolContext(investigation_id="i")
++    load = build_load_tool(
++        [pkg],
++        allowed=None,
++        mark_loaded=lambda tctx, names, answer: tctx.context.note_catalog_hit("c", names, answer),
++        shadowed={"read_file"},
++    )
++
++    reply = await load.on_invoke_tool(_tool_ctx(ctx, "load_tool"), '{"names": ["read_file"]}')
++
++    assert ctx.loaded_tools == set()
++    assert "is now loaded" not in reply
++    assert "no tool called" in reply
++
++
++def test_a_long_bundle_name_does_not_eat_the_descriptions_budget():
++    """The operator's 100 is the DESCRIPTION's (their words). Counting the
++    suffix against it left 54 characters for the sentence the model chooses by
++    when a bundle name was long, and still overshot once the name approached
++    100 (round 3 D6) — so the suffix has its own, small bound."""
++    from workspace_app.tooling.registry import (
++        _BUNDLE_NAME_SHOWN,
++        CATALOG_DESCRIPTION_LIMIT,
++        build_catalog_tools,
++    )
++
++    pkg = dataclasses.replace(
++        _pkg(),
++        name="a" * 140,
++        commands=(CommandInfo("cmd", "D" * 400, {}),),
++    )
++
++    (tool,) = build_catalog_tools([pkg], allowed=None, mark_loaded=lambda *_: None)
++
++    said, _, bundle = tool.description.rpartition(" [")
++    assert len(said) <= CATALOG_DESCRIPTION_LIMIT, said
++    assert len(bundle.rstrip("]")) == _BUNDLE_NAME_SHOWN
++    assert len(tool.description) <= CATALOG_DESCRIPTION_LIMIT + _BUNDLE_NAME_SHOWN + 3
++
++
++async def test_the_already_full_notice_names_a_command_once():
++    """A bundle whose name equals one of its commands' (the shipped
++    `data-fetch` does) resolves the same pair twice, and this notice is a
++    sentence a PERSON reads — round 1 B1's class, re-opened by the notice the
++    budget fix added (round 3 D3)."""
++    from workspace_app.tooling.registry import build_load_tool
++
++    big = {"type": "object", "properties": {f"p{i}": {"type": "string"} for i in range(400)}}
++    pkg = dataclasses.replace(
++        _pkg(),
++        name="data-fetch",
++        commands=(
++            CommandInfo("filler", "Fills the budget.", big),
++            CommandInfo("data-fetch", "Shares its bundle's name.", big),
++        ),
++    )
++    ctx = AgentToolContext(investigation_id="i")
++    load = build_load_tool(
++        [pkg],
++        allowed=None,
++        mark_loaded=lambda tctx, names, answer: tctx.context.note_catalog_hit("c", names, answer),
++    )
++
++    reply = await load.on_invoke_tool(
++        _tool_ctx(ctx, "load_tool"), json.dumps({"names": ["filler", "data-fetch"]})
++    )
++
++    assert "already full" in reply
++    notice = reply.split("\n\n", 1)[0]
++    assert notice.count("`data-fetch`") == 1, notice
++
++
++async def test_one_oversized_command_still_loads_because_nothing_else_can_use_it():
++    """The budget bounds BATCHING. A command whose schema alone is bigger than
++    one call may carry is still loaded: refusing would leave the model with a
++    tool it is told to call and can never call, and the same schema goes out
++    unbounded when it calls the command directly (round 3 D2 — decided, rather
++    than left as a comment that said the opposite)."""
++    from workspace_app.tooling.registry import _LOAD_REPLY_MAX_CHARS, build_load_tool
++
++    huge = {
++        "type": "object",
++        "properties": {f"p{i}": {"type": "string", "description": "d" * 100} for i in range(400)},
++    }
++    pkg = dataclasses.replace(_pkg(), commands=(CommandInfo("huge", "One fat command.", huge),))
++    ctx = AgentToolContext(investigation_id="i")
++    load = build_load_tool(
++        [pkg],
++        allowed=None,
++        mark_loaded=lambda tctx, names, answer: tctx.context.note_catalog_hit("c", names, answer),
++    )
++
++    reply = await load.on_invoke_tool(_tool_ctx(ctx, "load_tool"), '{"names": ["huge"]}')
++
++    assert ctx.loaded_tools == {"huge"}
++    assert "`huge` is now loaded" in reply
++    assert len(reply) > _LOAD_REPLY_MAX_CHARS  # the cap does not apply to one command
