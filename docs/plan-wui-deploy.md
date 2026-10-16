@@ -1,5 +1,7 @@
 # Plan — WUI "Deploy": a URL that lands on the page
 
+> 被 #968（plan-deploy-reach.md）推翻
+
 ## Problem
 
 A WUI already has its own address — `/w/{slug}/{itemId}/{path to the view

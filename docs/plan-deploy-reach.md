@@ -23,6 +23,11 @@ nobody else. Nothing says so where it matters:
 
 Reported 2026-10-16: 「按下 deploy 時如果是 private，user 會很困惑為什麼別人看不到」.
 
+Overturns `docs/plan-wui-deploy.md`'s panel line — the publisher was told the
+RULE ("Anyone who can open this item can use this link.") — and its reader's
+404 sentence; the rest of that plan (the URL is a shortcut, not a grant; the
+publisher builds, the reader never does) stands.
+
 ## Locked decisions (/grill-me, 2026-10-16)
 
 **user** = the user answered it; **mine** = an implementation choice listed for
