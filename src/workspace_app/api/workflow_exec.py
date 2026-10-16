@@ -323,6 +323,10 @@ class WorkflowExecutor:
         ctx.surface, ctx.usage_user, of_execution = await asyncio.to_thread(
             self._usage_identity, run_id, captured_user
         )
+        # A sub-agent turn is a page job's (`drive_agent`): never an execution,
+        # even when its run cannot be read (deleted mid-turn) — or its answer
+        # would be marked as a run's and a person continuing the chat lose it.
+        of_execution = of_execution and agent is None
         if agent is not None:
             surface = ctx.surface
             ctx = _child_context(ctx, agent)

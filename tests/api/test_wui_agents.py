@@ -189,6 +189,30 @@ def test_the_asks_conversation_stays_a_chat_the_person_can_continue():
     ]
 
 
+def test_an_asks_answer_stays_unmarked_when_its_run_cannot_be_read(monkeypatch):
+    """Review round 3: whether a turn's messages are a run's is read from its
+    run; a page job whose run is gone mid-turn (deleted, tidied away) must not
+    be taken for an execution — its answer would be marked and a person
+    continuing the chat answered without it. The sub-agent turn is a page job's
+    whatever the store says."""
+    from workspace_app.api.workflow_exec import WorkflowExecutor
+
+    real = WorkflowExecutor._usage_identity
+
+    def run_unreadable(self, run_id, captured_user):  # noqa: ANN001, ANN202
+        return real(self, "workflow-run:gone", captured_user)
+
+    monkeypatch.setattr(WorkflowExecutor, "_usage_identity", run_unreadable)
+    client, item_id, spec = _app(SubRunner())
+    with client:
+        client.post(_url(item_id, "agents/log-digger/call"), json={"input": "why 500s?"})
+
+    (run,) = _runs(spec)
+    chat = spec.get_resource_manager(Conversation).get(run.chat_id).data
+    assert isinstance(chat, Conversation)
+    assert [(m.role, m.run_id) for m in chat.messages] == [("user", None), ("assistant", None)]
+
+
 def test_a_tool_jobs_empty_conversation_is_listed_too():
     """A `startTool` job writes no message to its conversation, so "a person
     spoke in it" cannot be what lists it: being a page job's is (#942 D5)."""
