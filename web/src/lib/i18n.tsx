@@ -1166,6 +1166,15 @@ export const messages = {
   "resources.admin.effective": { "zh-TW": "目前有效額度", en: "Effective now" },
   "resources.admin.unlimited": { "zh-TW": "無上限", en: "unlimited" },
   "resources.admin.saved": { "zh-TW": "已套用,不需重啟。", en: "Applied — no restart needed." },
+  "resources.admin.saveFailed": { "zh-TW": "沒有儲存:{error}", en: "Not saved: {error}" },
+  "resources.admin.sizeHint": {
+    "zh-TW": "例:512MB、2G、1.5G;留空=站台預設",
+    en: "e.g. 512MB, 2G, 1.5G; blank = site default",
+  },
+  "resources.admin.sizeBad": {
+    "zh-TW": "「{text}」讀不懂:請寫數字加單位,例:512MB、2G、1.5G",
+    en: "Can't read “{text}”: write a number and a unit, e.g. 512MB, 2G, 1.5G",
+  },
   "resources.admin.defaults": { "zh-TW": "站台預設", en: "Site default" },
   "resources.admin.who": { "zh-TW": "目前有特例的人", en: "People with an exception" },
   "resources.admin.none": {

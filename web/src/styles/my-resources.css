@@ -829,6 +829,30 @@
   color: var(--text-paper-d);
 }
 
+/* A size field's hint sits UNDER its box, not beside it (NN/g "Reporting
+   Errors in Forms": the message next to its field). Beside it, the hint took
+   the row's width and squeezed the label to one character a line at 390 px. */
+.page .admin-size {
+  display: inline-grid;
+  gap: var(--space-4);
+}
+
+/* Its label lines up with the box, not with the box and hint together. */
+.page .admin-field:has(> .admin-size) {
+  align-items: flex-start;
+}
+
+.page .admin-field:has(> .admin-size) > label {
+  line-height: 28px;
+  white-space: nowrap;
+}
+
+.page .admin-size .hint {
+  margin: 0;
+  max-width: 16rem;
+  font-size: var(--text-body-sm);
+}
+
 /* Which dimensions are this person's own and which fall through to the deploy
    default — an override page that cannot show the difference makes it
    impossible to tell who actually has an exception. */

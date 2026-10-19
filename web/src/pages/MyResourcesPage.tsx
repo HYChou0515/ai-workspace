@@ -30,6 +30,7 @@ import { qk } from "../api/queryKeys";
 import { useIsSuperuser } from "../hooks/useIsSuperuser";
 import { AppTag } from "../components/AppTag";
 import { UserPicker } from "../components/UserPicker";
+import { normaliseMemory } from "../components/ItemEnvironmentSize";
 import { DeleteItemBody } from "../components/DeleteItemConfirm";
 import { DialogProvider, useDialog } from "../components/Dialog";
 import { api } from "../api";
@@ -310,6 +311,16 @@ function AdminOverrides({ client }: { client: MyResourcesApi }) {
   const [form, setForm] = useState({ count: "", cpu: "", memory: "", disk: "" });
   const [looked, setLooked] = useState<MyResources | null | undefined>(undefined);
   const [saved, setSaved] = useState(false);
+  // The server's sentence when it refused the exception — said, never a
+  // silent "Applied" (2026-10-19).
+  const [saveError, setSaveError] = useState("");
+  // Sizes are read the way the item's own size field reads them ("123GB",
+  // "1.5 G"), and sent in the server's spelling; one that cannot be read is
+  // said at its field before anything is sent (NN/g "Reporting Errors in Forms").
+  const unreadable = (text: string) => text.trim() !== "" && normaliseMemory(text) === null;
+  const sizeOf = (text: string) => (text.trim() === "" ? "" : (normaliseMemory(text) ?? text));
+  const badMemory = unreadable(form.memory);
+  const badDisk = unreadable(form.disk);
   const list = useQuery({
     queryKey: qk.userOverrides,
     queryFn: () => client.adminList(),
@@ -325,12 +336,19 @@ function AdminOverrides({ client }: { client: MyResourcesApi }) {
     setLooked(userId ? await client.adminGet(userId) : undefined);
   };
   const save = async () => {
-    await client.adminSet(userId, {
-      count: form.count ? Number(form.count) : 0,
-      cpu: form.cpu ? Number(form.cpu) : 0,
-      memory: form.memory,
-      disk: form.disk,
-    });
+    setSaveError("");
+    try {
+      await client.adminSet(userId, {
+        count: form.count ? Number(form.count) : 0,
+        cpu: form.cpu ? Number(form.cpu) : 0,
+        memory: sizeOf(form.memory),
+        disk: sizeOf(form.disk),
+      });
+    } catch (e) {
+      setSaved(false);
+      setSaveError(e instanceof Error ? e.message : String(e));
+      return;
+    }
     setSaved(true);
     setLooked(await client.adminGet(userId));
     refreshList();
@@ -422,25 +440,35 @@ function AdminOverrides({ client }: { client: MyResourcesApi }) {
         </span>
         <span className="admin-field">
           <label htmlFor="q-mem">{t("resources.admin.memory")}</label>
-          <input
-            autoComplete="off"
-            className="input"
-            id="q-mem"
-            placeholder="8G"
-            value={form.memory}
-            onChange={(e) => setForm({ ...form, memory: e.target.value })}
-          />
+          <span className="admin-size">
+            <input
+              autoComplete="off"
+              className="input"
+              id="q-mem"
+              placeholder="8G"
+              aria-invalid={badMemory}
+              aria-describedby="q-mem-hint"
+              value={form.memory}
+              onChange={(e) => setForm({ ...form, memory: e.target.value })}
+            />
+            <SizeHint id="q-mem-hint" text={form.memory} bad={badMemory} />
+          </span>
         </span>
         <span className="admin-field">
           <label htmlFor="q-disk">{t("resources.admin.disk")}</label>
-          <input
-            autoComplete="off"
-            className="input"
-            id="q-disk"
-            placeholder="50G"
-            value={form.disk}
-            onChange={(e) => setForm({ ...form, disk: e.target.value })}
-          />
+          <span className="admin-size">
+            <input
+              autoComplete="off"
+              className="input"
+              id="q-disk"
+              placeholder="50G"
+              aria-invalid={badDisk}
+              aria-describedby="q-disk-hint"
+              value={form.disk}
+              onChange={(e) => setForm({ ...form, disk: e.target.value })}
+            />
+            <SizeHint id="q-disk-hint" text={form.disk} bad={badDisk} />
+          </span>
         </span>
       </div>
 
@@ -450,7 +478,7 @@ function AdminOverrides({ client }: { client: MyResourcesApi }) {
           className="btn"
           data-variant="primary"
           data-size="sm"
-          disabled={!userId}
+          disabled={!userId || badMemory || badDisk}
           onClick={() => void save()}
         >
           {t("resources.admin.save")}
@@ -467,7 +495,22 @@ function AdminOverrides({ client }: { client: MyResourcesApi }) {
         </button>
         {saved ? <span className="detail">{t("resources.admin.saved")}</span> : null}
       </div>
+      {saveError ? (
+        <p role="alert" className="hint" style={{ color: "var(--err)" }}>
+          {t("resources.admin.saveFailed", { error: saveError })}
+        </p>
+      ) : null}
     </section>
+  );
+}
+
+/** Under a size field: how to write one, or — once typed — why this one cannot be read. */
+function SizeHint({ id, text, bad }: { id: string; text: string; bad: boolean }) {
+  const t = useT();
+  return (
+    <span id={id} className="hint" style={bad ? { color: "var(--err)" } : undefined}>
+      {bad ? t("resources.admin.sizeBad", { text: text.trim() }) : t("resources.admin.sizeHint")}
+    </span>
   );
 }
 

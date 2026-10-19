@@ -65,3 +65,25 @@ describe("closeEnvironment", () => {
     expect(seen[0]).toContain("rca-investigation%3Aab%2Fcd");
   });
 });
+
+describe("adminSet", () => {
+  it("rejects a refused override with the server's own sentence, rather than reporting it saved", async () => {
+    // 2026-10-19: an override the server refused (422) resolved as success, so
+    // the page said "Applied — no restart needed" over a value never stored.
+    respondWith(422, { detail: "disk: unreadable size '12X'" });
+    const err = await myResourcesApi
+      .adminSet("bob", { count: 0, cpu: 0, memory: "", disk: "12X" })
+      .then(() => null)
+      .catch((e: unknown) => e as HttpError);
+    expect(err).toBeInstanceOf(HttpError);
+    expect(err?.status).toBe(422);
+    expect(err?.message).toBe("disk: unreadable size '12X'");
+  });
+
+  it("resolves when the override was stored", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(null, { status: 204 })));
+    await expect(
+      myResourcesApi.adminSet("bob", { count: 1, cpu: 0, memory: "", disk: "" }),
+    ).resolves.toBeUndefined();
+  });
+});

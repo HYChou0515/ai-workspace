@@ -36,6 +36,8 @@ is what `warn_unenforceable_dimensions` reports. `count` binds regardless.
 from __future__ import annotations
 
 import logging
+import math
+import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 
@@ -46,6 +48,9 @@ from ..sandbox.protocol import EnforcedLimits, SandboxSpec
 logger = logging.getLogger(__name__)
 
 _SIZE_UNITS = {"K": 1024, "M": 1024**2, "G": 1024**3, "T": 1024**4}
+# A number, an optional space, an optional unit with an optional B — any case.
+# `\d` takes full-width digits too (a zh-TW IME slip), as the client does.
+_SIZE = re.compile(r"(\d+(?:\.\d+)?)\s*(?:([KMGT])B?)?", re.IGNORECASE)
 
 # One sentinel for "no limit" across every dimension, so callers compare the
 # same way everywhere: 0. It is what an unset knob resolves to, and what the
@@ -67,18 +72,32 @@ def parse_size(text: str) -> int:
     Three spellings collapse to one sentinel on purpose: `""` (never
     configured), `"0"` (how `filestore.workspace_quota` already spells
     unlimited) and `"max"` (how a cgroup spells it) must not become three
-    behaviours that differ only by which file the value came from."""
+    behaviours that differ only by which file the value came from.
+
+    It reads what a person writes, as the client's size fields do
+    (`normaliseMemory`): "512MB", "512 mb", "1.5G", full-width digits. They
+    disagreed once — an admin's "123GB" was taken by the page and stored, and
+    every later read of that person's limits raised. One answer sheet keeps
+    them alike: `tests/fixtures/size_spellings.json`. A fraction needs a unit
+    (a fraction of a byte is not a size) and rounds to a whole byte, half up
+    as the client's `Math.round` does; one that rounds to nothing is refused
+    rather than read as "no limit"."""
     text = text.strip()
     if text in ("", "0", "max"):
         return NO_LIMIT
-    unit = _SIZE_UNITS.get(text[-1].upper())
-    digits = text[:-1] if unit else text
-    if not digits.isdigit():
+    m = _SIZE.fullmatch(text)
+    if m is None or (m[2] is None and "." in m[1]):
         raise ResourceLimitError(
-            f"unreadable size {text!r} — want an integer with an optional "
-            f"K/M/G/T suffix (e.g. '512M', '2G'), or 'max' for no limit"
+            f"unreadable size {text!r} — want a number with an optional K/M/G/T unit "
+            f"(e.g. '512M', '2GB', '1.5G'), or 'max' for no limit"
         )
-    return int(digits) * (unit or 1)
+    unit = _SIZE_UNITS[m[2].upper()] if m[2] else 1
+    if "." not in m[1]:
+        return int(m[1]) * unit
+    size = math.floor(float(m[1]) * unit + 0.5)
+    if size <= 0:
+        raise ResourceLimitError(f"unreadable size {text!r} — it rounds to less than a byte")
+    return size
 
 
 @dataclass(frozen=True)

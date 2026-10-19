@@ -42,6 +42,7 @@ vi.mock("../api", () => ({
 
 import { api } from "../api";
 import { QueryWrap } from "../test/queryWrapper";
+import { HttpError } from "../api/http";
 import { formatAgainstLimit } from "../components/Gauge";
 import { MyResourcesPage, formatBytes } from "./MyResourcesPage";
 
@@ -459,6 +460,49 @@ describe("per-person overrides (superuser)", () => {
     await userEvent.click(screen.getByRole("button", { name: "儲存" }));
 
     expect(c.adminSet).toHaveBeenCalledWith("bob", { count: 5, cpu: 0, memory: "", disk: "" });
+  });
+
+  it("takes a size as a person writes it, and sends the server's spelling", async () => {
+    // 2026-10-19: "123GB" was sent as typed and stored; the server then could
+    // not read that person's limits at all.
+    asUser(true);
+    const c = client();
+    render(<MyResourcesPage client={c} />, { wrapper: Wrap });
+
+    await userEvent.click(await screen.findByRole("button", { name: /Bob Chen/ }));
+    await userEvent.type(screen.getByLabelText("記憶體上限"), "123GB");
+    await userEvent.type(screen.getByLabelText("儲存空間上限"), "1.5 GB");
+    await userEvent.click(screen.getByRole("button", { name: "儲存" }));
+
+    expect(c.adminSet).toHaveBeenCalledWith("bob", { count: 0, cpu: 0, memory: "123G", disk: "1536M" });
+  });
+
+  it("says at the field when a size cannot be read, and does not save it", async () => {
+    asUser(true);
+    const c = client();
+    render(<MyResourcesPage client={c} />, { wrapper: Wrap });
+
+    await userEvent.click(await screen.findByRole("button", { name: /Bob Chen/ }));
+    await userEvent.type(screen.getByLabelText("儲存空間上限"), "12X");
+
+    expect(screen.getByLabelText("儲存空間上限")).toHaveAttribute("aria-invalid", "true");
+    expect(screen.getByLabelText("儲存空間上限")).toHaveAccessibleDescription(/512MB/);
+    expect(screen.getByRole("button", { name: "儲存" })).toBeDisabled();
+    expect(c.adminSet).not.toHaveBeenCalled();
+  });
+
+  it("says why the server refused an exception, and does not claim it applied", async () => {
+    asUser(true);
+    const c = client();
+    vi.mocked(c.adminSet).mockRejectedValueOnce(new HttpError(422, "disk: unreadable size '9Q'"));
+    render(<MyResourcesPage client={c} />, { wrapper: Wrap });
+
+    await userEvent.click(await screen.findByRole("button", { name: /Bob Chen/ }));
+    await userEvent.type(screen.getByLabelText("同時開啟沙盒上限"), "5");
+    await userEvent.click(screen.getByRole("button", { name: "儲存" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("disk: unreadable size '9Q'");
+    expect(screen.queryByText(/不需重啟/)).toBeNull();
   });
 
   it("lets a superuser raise one person, and says it needs no restart", async () => {

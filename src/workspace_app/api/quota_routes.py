@@ -23,7 +23,7 @@ from specstar import SpecStar
 from ..config.schema import PerUserResources
 from ..files import WorkspaceFiles
 from ..quota.disk_ledger import DiskLedger
-from ..quota.limits import parse_size
+from ..quota.limits import ResourceLimitError, parse_size
 from ..quota.user_limits import UserLimits
 from ..resources.groups import groups_of
 from .item_authz import ANY_APP, check_access, load_access_facts, require_item_access
@@ -365,6 +365,13 @@ def register_quota_routes(
         """Grant one person an exception. Takes effect on their next check —
         the gate resolves limits per check, not at boot."""
         _require_admin(get_user_id(), superusers)
+        # Read before it is stored: an unreadable size stored here is read on
+        # every check of this person's limits, and each one would fail.
+        for name, text in (("memory", body.memory), ("disk", body.disk)):
+            try:
+                parse_size(text)
+            except ResourceLimitError as exc:
+                raise HTTPException(status_code=422, detail=f"{name}: {exc}") from exc
         await user_limits.set_for(
             user_id,
             PerUserResources(count=body.count, cpu=body.cpu, memory=body.memory, disk=body.disk),
