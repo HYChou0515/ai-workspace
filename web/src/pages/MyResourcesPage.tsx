@@ -317,10 +317,26 @@ function AdminOverrides({ client }: { client: MyResourcesApi }) {
   // Sizes are read the way the item's own size field reads them ("123GB",
   // "1.5 G"), and sent in the server's spelling; one that cannot be read is
   // said at its field before anything is sent (NN/g "Reporting Errors in Forms").
-  const unreadable = (text: string) => text.trim() !== "" && normaliseMemory(text) === null;
-  const sizeOf = (text: string) => (text.trim() === "" ? "" : (normaliseMemory(text) ?? text));
+  // `0` and `max` are no limit — how one person is given none (the item's own
+  // size field refuses them; an item cannot be unlimited, a person can).
+  const noLimit = (text: string) => ["0", "max"].includes(text.trim());
+  const unreadable = (text: string) => text.trim() !== "" && !noLimit(text) && normaliseMemory(text) === null;
+  const sizeOf = (text: string) =>
+    text.trim() === "" || noLimit(text) ? text.trim() : (normaliseMemory(text) ?? text);
   const badMemory = unreadable(form.memory);
   const badDisk = unreadable(form.disk);
+  // Said once the field is left, not while typing ("1.5" on the way to "1.5 GB"
+  // is no error); Save is held all along.
+  const [left, setLeft] = useState({ memory: false, disk: false });
+  // A size the SERVER refused, drawn on its own field like one read here.
+  const [refused, setRefused] = useState<"memory" | "disk" | null>(null);
+  const change = (patch: Partial<typeof form>) => {
+    setForm({ ...form, ...patch });
+    // What was said is about the form as it was.
+    setSaved(false);
+    setSaveError("");
+    setRefused(null);
+  };
   const list = useQuery({
     queryKey: qk.userOverrides,
     queryFn: () => client.adminList(),
@@ -346,7 +362,10 @@ function AdminOverrides({ client }: { client: MyResourcesApi }) {
       });
     } catch (e) {
       setSaved(false);
-      setSaveError(e instanceof Error ? e.message : String(e));
+      const message = e instanceof Error ? e.message : String(e);
+      const field = (["memory", "disk"] as const).find((f) => message.startsWith(`${f}:`));
+      if (field) setRefused(field);
+      else setSaveError(message);
       return;
     }
     setSaved(true);
@@ -422,7 +441,7 @@ function AdminOverrides({ client }: { client: MyResourcesApi }) {
             type="number"
             min="0"
             value={form.count}
-            onChange={(e) => setForm({ ...form, count: e.target.value })}
+            onChange={(e) => change({ count: e.target.value })}
           />
         </span>
         <span className="admin-field">
@@ -435,7 +454,7 @@ function AdminOverrides({ client }: { client: MyResourcesApi }) {
             min="0"
             step="0.5"
             value={form.cpu}
-            onChange={(e) => setForm({ ...form, cpu: e.target.value })}
+            onChange={(e) => change({ cpu: e.target.value })}
           />
         </span>
         <span className="admin-field">
@@ -446,12 +465,13 @@ function AdminOverrides({ client }: { client: MyResourcesApi }) {
               className="input"
               id="q-mem"
               placeholder="8G"
-              aria-invalid={badMemory}
+              aria-invalid={(badMemory && left.memory) || refused === "memory"}
               aria-describedby="q-mem-hint"
               value={form.memory}
-              onChange={(e) => setForm({ ...form, memory: e.target.value })}
+              onChange={(e) => change({ memory: e.target.value })}
+              onBlur={() => setLeft({ ...left, memory: true })}
             />
-            <SizeHint id="q-mem-hint" text={form.memory} bad={badMemory} />
+            <SizeHint id="q-mem-hint" text={form.memory} bad={(badMemory && left.memory) || refused === "memory"} />
           </span>
         </span>
         <span className="admin-field">
@@ -462,12 +482,13 @@ function AdminOverrides({ client }: { client: MyResourcesApi }) {
               className="input"
               id="q-disk"
               placeholder="50G"
-              aria-invalid={badDisk}
+              aria-invalid={(badDisk && left.disk) || refused === "disk"}
               aria-describedby="q-disk-hint"
               value={form.disk}
-              onChange={(e) => setForm({ ...form, disk: e.target.value })}
+              onChange={(e) => change({ disk: e.target.value })}
+              onBlur={() => setLeft({ ...left, disk: true })}
             />
-            <SizeHint id="q-disk-hint" text={form.disk} bad={badDisk} />
+            <SizeHint id="q-disk-hint" text={form.disk} bad={(badDisk && left.disk) || refused === "disk"} />
           </span>
         </span>
       </div>

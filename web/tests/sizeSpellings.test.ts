@@ -14,7 +14,10 @@ import { normaliseMemory, parseSize } from "../src/components/ItemEnvironmentSiz
 describe("the client reads sizes as the server does", () => {
   it("every row of the sheet", () => {
     for (const row of sheet.rows) {
-      expect(parseSize(normaliseMemory(row.typed)), row.typed).toBe(row.bytes);
+      // Not a size → nothing to send at all (review: a huge fraction became
+      // the literal "Infinity", which read back as null and slipped through).
+      expect(normaliseMemory(row.typed) === null, row.typed.slice(0, 40)).toBe(row.bytes === null);
+      expect(parseSize(normaliseMemory(row.typed)), row.typed.slice(0, 40)).toBe(row.bytes);
     }
   });
 });

@@ -1,27 +1,113 @@
 {
   "_about": "What a person may type as a size, and the bytes it means (null = not a size). The server's parse_size is graded against it in tests/quota/test_size_spellings.py; the client's normaliseMemory in web/tests/sizeSpellings.test.ts.",
   "rows": [
-    { "typed": "123GB", "bytes": 132070244352 },
-    { "typed": "123G", "bytes": 132070244352 },
-    { "typed": "123 gb", "bytes": 132070244352 },
-    { "typed": "512MB", "bytes": 536870912 },
-    { "typed": "512 mb", "bytes": 536870912 },
-    { "typed": "512M", "bytes": 536870912 },
-    { "typed": "64kb", "bytes": 65536 },
-    { "typed": "1T", "bytes": 1099511627776 },
-    { "typed": "1TB", "bytes": 1099511627776 },
-    { "typed": "1.5G", "bytes": 1610612736 },
-    { "typed": "1.5 GB", "bytes": 1610612736 },
-    { "typed": "５１２M", "bytes": 536870912 },
-    { "typed": "1024", "bytes": 1024 },
-    { "typed": "  2G  ", "bytes": 2147483648 },
-    { "typed": "abc", "bytes": null },
-    { "typed": "12X", "bytes": null },
-    { "typed": "-5", "bytes": null },
-    { "typed": "1.5", "bytes": null },
-    { "typed": "123B", "bytes": null },
-    { "typed": "G", "bytes": null },
-    { "typed": "1.2.3G", "bytes": null },
-    { "typed": "0.0001K", "bytes": null }
+    {
+      "typed": "123GB",
+      "bytes": 132070244352
+    },
+    {
+      "typed": "123G",
+      "bytes": 132070244352
+    },
+    {
+      "typed": "123 gb",
+      "bytes": 132070244352
+    },
+    {
+      "typed": "512MB",
+      "bytes": 536870912
+    },
+    {
+      "typed": "512 mb",
+      "bytes": 536870912
+    },
+    {
+      "typed": "512M",
+      "bytes": 536870912
+    },
+    {
+      "typed": "64kb",
+      "bytes": 65536
+    },
+    {
+      "typed": "1T",
+      "bytes": 1099511627776
+    },
+    {
+      "typed": "1TB",
+      "bytes": 1099511627776
+    },
+    {
+      "typed": "1.5G",
+      "bytes": 1610612736
+    },
+    {
+      "typed": "1.5 GB",
+      "bytes": 1610612736
+    },
+    {
+      "typed": "５１２M",
+      "bytes": 536870912
+    },
+    {
+      "typed": "1024",
+      "bytes": 1024
+    },
+    {
+      "typed": "  2G  ",
+      "bytes": 2147483648
+    },
+    {
+      "typed": "abc",
+      "bytes": null
+    },
+    {
+      "typed": "12X",
+      "bytes": null
+    },
+    {
+      "typed": "-5",
+      "bytes": null
+    },
+    {
+      "typed": "1.5",
+      "bytes": null
+    },
+    {
+      "typed": "123B",
+      "bytes": null
+    },
+    {
+      "typed": "G",
+      "bytes": null
+    },
+    {
+      "typed": "1.2.3G",
+      "bytes": null
+    },
+    {
+      "typed": "0.0001K",
+      "bytes": null
+    },
+    {
+      "typed": "5K",
+      "bytes": null
+    },
+    {
+      "typed": "٥١٢M",
+      "bytes": null
+    },
+    {
+      "typed": "9999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999.5G",
+      "bytes": null
+    },
+    {
+      "typed": "1e3",
+      "bytes": null
+    },
+    {
+      "typed": "0.5K",
+      "bytes": 512
+    }
   ]
 }

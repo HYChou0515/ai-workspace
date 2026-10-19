@@ -1168,8 +1168,8 @@ export const messages = {
   "resources.admin.saved": { "zh-TW": "已套用,不需重啟。", en: "Applied — no restart needed." },
   "resources.admin.saveFailed": { "zh-TW": "沒有儲存:{error}", en: "Not saved: {error}" },
   "resources.admin.sizeHint": {
-    "zh-TW": "例:512MB、2G、1.5G;留空=站台預設",
-    en: "e.g. 512MB, 2G, 1.5G; blank = site default",
+    "zh-TW": "例:512MB、2G、1.5G;0 或 max=無上限;留空=站台預設",
+    en: "e.g. 512MB, 2G, 1.5G; 0 or max = no limit; blank = site default",
   },
   "resources.admin.sizeBad": {
     "zh-TW": "「{text}」讀不懂:請寫數字加單位,例:512MB、2G、1.5G",

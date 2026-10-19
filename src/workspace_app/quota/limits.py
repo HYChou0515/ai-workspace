@@ -49,8 +49,11 @@ logger = logging.getLogger(__name__)
 
 _SIZE_UNITS = {"K": 1024, "M": 1024**2, "G": 1024**3, "T": 1024**4}
 # A number, an optional space, an optional unit with an optional B — any case.
-# `\d` takes full-width digits too (a zh-TW IME slip), as the client does.
-_SIZE = re.compile(r"(\d+(?:\.\d+)?)\s*(?:([KMGT])B?)?", re.IGNORECASE)
+# ASCII on purpose: `\d` and IGNORECASE also take Arabic-Indic digits and the
+# Kelvin sign, which the client refuses (and K-for-Kelvin raised KeyError).
+# Full-width digits — a zh-TW IME slip — are folded first, as the client does.
+_SIZE = re.compile(r"([0-9]+(?:\.[0-9]+)?)\s*(?:([KMGTkmgt])[Bb]?)?")
+_FULL_WIDTH_DIGITS = str.maketrans("０１２３４５６７８９", "0123456789")
 
 # One sentinel for "no limit" across every dimension, so callers compare the
 # same way everywhere: 0. It is what an unset knob resolves to, and what the
@@ -85,7 +88,7 @@ def parse_size(text: str) -> int:
     text = text.strip()
     if text in ("", "0", "max"):
         return NO_LIMIT
-    m = _SIZE.fullmatch(text)
+    m = _SIZE.fullmatch(text.translate(_FULL_WIDTH_DIGITS))
     if m is None or (m[2] is None and "." in m[1]):
         raise ResourceLimitError(
             f"unreadable size {text!r} — want a number with an optional K/M/G/T unit "
@@ -94,7 +97,10 @@ def parse_size(text: str) -> int:
     unit = _SIZE_UNITS[m[2].upper()] if m[2] else 1
     if "." not in m[1]:
         return int(m[1]) * unit
-    size = math.floor(float(m[1]) * unit + 0.5)
+    scaled = float(m[1]) * unit
+    if not math.isfinite(scaled):
+        raise ResourceLimitError(f"unreadable size {text[:40]!r}… — too large to be a size")
+    size = math.floor(scaled + 0.5)
     if size <= 0:
         raise ResourceLimitError(f"unreadable size {text!r} — it rounds to less than a byte")
     return size

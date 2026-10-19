@@ -2967,9 +2967,10 @@ command 的完整 schema——那正是這個功能在做的事。從 `index.jso
 ### 2026-10-19 · #977 大小照人寫的讀：`123GB`、`1.5G` 都認得；個人額度存不進去的會直接說 {#pr-977}
 
 **設定** — 沒有新 key，沒有要做的事。**行為改變，沒有開關**：設定裡所有走 `parse_size` 的大小
-（`resources.per_app` / `per_user` 的 `memory`、`disk`，app.json 的 `resources`，網頁上的個人額度）
-現在也接受 `512MB`、`512 mb`、`1.5G`（小數要帶單位，1024 進位）。以前這些寫法讓開機失敗或讓那個人的
-額度讀不出來；升級後照字面讀。`sandbox.isolation.memory_max` 不在此列，照舊只吃 `512M` 這種寫法。
+（`resources.per_app` / `per_user` 的 `memory`、`disk`，app.json 的 `resources`，網頁上的個人額度，
+以及直接打 API 調 item 環境大小的 `PUT …/resources`）現在也接受 `512MB`、`512 mb`、`1.5G`（小數要帶單位，
+1024 進位）。以前這些寫法讓開機失敗、讓 API 回 422，或讓那個人的額度讀不出來；升級後照字面讀。
+`sandbox.isolation.memory_max` 不在此列，照舊只吃 `512M` 這種寫法。
 
 **資料** — 無。以前從「個人額度」存進去、寫成 `123GB` 這種的值，升級後直接讀得到，不用清；
 仍然讀不懂的（例如打錯字），在頁面上對那個人按「清除覆寫」再重設。

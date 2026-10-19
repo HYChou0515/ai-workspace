@@ -484,6 +484,11 @@ describe("per-person overrides (superuser)", () => {
 
     await userEvent.click(await screen.findByRole("button", { name: /Bob Chen/ }));
     await userEvent.type(screen.getByLabelText("儲存空間上限"), "12X");
+    // Not while typing — "1.5" on the way to "1.5 GB" is no error (review of
+    // #977; NN/g: report once the field is done). Save is held meanwhile.
+    expect(screen.getByLabelText("儲存空間上限")).toHaveAttribute("aria-invalid", "false");
+    expect(screen.getByRole("button", { name: "儲存" })).toBeDisabled();
+    await userEvent.tab();
 
     expect(screen.getByLabelText("儲存空間上限")).toHaveAttribute("aria-invalid", "true");
     expect(screen.getByLabelText("儲存空間上限")).toHaveAccessibleDescription(/512MB/);
@@ -491,17 +496,71 @@ describe("per-person overrides (superuser)", () => {
     expect(c.adminSet).not.toHaveBeenCalled();
   });
 
+  it("grants no limit with 0 or max, as the server and the docs allow", async () => {
+    // review of #977: the form called "max" and "0" unreadable and held Save —
+    // the only way to give one person no limit, which the page used to send.
+    asUser(true);
+    const c = client();
+    render(<MyResourcesPage client={c} />, { wrapper: Wrap });
+
+    await userEvent.click(await screen.findByRole("button", { name: /Bob Chen/ }));
+    await userEvent.type(screen.getByLabelText("記憶體上限"), "max");
+    await userEvent.type(screen.getByLabelText("儲存空間上限"), "0");
+    await userEvent.tab();
+    expect(screen.getByLabelText("記憶體上限")).toHaveAttribute("aria-invalid", "false");
+    await userEvent.click(screen.getByRole("button", { name: "儲存" }));
+
+    expect(c.adminSet).toHaveBeenCalledWith("bob", { count: 0, cpu: 0, memory: "max", disk: "0" });
+  });
+
+  it("says a refused size under its own field, in words, not the server's key", async () => {
+    asUser(true);
+    const c = client();
+    vi.mocked(c.adminSet).mockRejectedValueOnce(new HttpError(422, "disk: unreadable size '7G' — want a number"));
+    render(<MyResourcesPage client={c} />, { wrapper: Wrap });
+
+    await userEvent.click(await screen.findByRole("button", { name: /Bob Chen/ }));
+    await userEvent.type(screen.getByLabelText("儲存空間上限"), "7G");
+    await userEvent.click(screen.getByRole("button", { name: "儲存" }));
+
+    await waitFor(() => expect(screen.getByLabelText("儲存空間上限")).toHaveAttribute("aria-invalid", "true"));
+    expect(screen.getByLabelText("儲存空間上限")).toHaveAccessibleDescription(/「7G」讀不懂/);
+    expect(screen.queryByText(/disk:/)).toBeNull();
+  });
+
+  it("takes back what it said once the form changes", async () => {
+    // review of #977: "Applied" stayed beside a new error, and a refusal stayed
+    // after the field was corrected.
+    asUser(true);
+    const c = client();
+    vi.mocked(c.adminSet).mockRejectedValueOnce(new HttpError(500, "boom"));
+    render(<MyResourcesPage client={c} />, { wrapper: Wrap });
+
+    await userEvent.click(await screen.findByRole("button", { name: /Bob Chen/ }));
+    await userEvent.type(screen.getByLabelText("同時開啟沙盒上限"), "5");
+    await userEvent.click(screen.getByRole("button", { name: "儲存" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("boom");
+    await userEvent.type(screen.getByLabelText("同時開啟沙盒上限"), "1");
+    expect(screen.queryByRole("alert")).toBeNull();
+
+    await userEvent.click(screen.getByRole("button", { name: "儲存" }));
+    expect(await screen.findByText(/不需重啟/)).toBeInTheDocument();
+    await userEvent.type(screen.getByLabelText("記憶體上限"), "2G");
+    expect(screen.queryByText(/不需重啟/)).toBeNull();
+  });
+
   it("says why the server refused an exception, and does not claim it applied", async () => {
     asUser(true);
     const c = client();
-    vi.mocked(c.adminSet).mockRejectedValueOnce(new HttpError(422, "disk: unreadable size '9Q'"));
+    // A refusal that names no size field (a size one is drawn on its field).
+    vi.mocked(c.adminSet).mockRejectedValueOnce(new HttpError(503, "the limits store is unreachable"));
     render(<MyResourcesPage client={c} />, { wrapper: Wrap });
 
     await userEvent.click(await screen.findByRole("button", { name: /Bob Chen/ }));
     await userEvent.type(screen.getByLabelText("同時開啟沙盒上限"), "5");
     await userEvent.click(screen.getByRole("button", { name: "儲存" }));
 
-    expect(await screen.findByRole("alert")).toHaveTextContent("disk: unreadable size '9Q'");
+    expect(await screen.findByRole("alert")).toHaveTextContent("the limits store is unreachable");
     expect(screen.queryByText(/不需重啟/)).toBeNull();
   });
 
