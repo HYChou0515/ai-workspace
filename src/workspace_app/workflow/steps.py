@@ -88,6 +88,22 @@ class StepRef(NamedTuple):
 CURRENT_STEP: ContextVar[StepRef | None] = ContextVar("workflow_current_step", default=None)
 
 
+#: Set while a step's turn is a REPAIR of its reply's format
+#: (plan-workflow-output-repair §3.5): the executor records that turn's prompt under
+#: `REPAIR_REQUEST_ROLE`, not as the step's question. A ContextVar for the same reason
+#: as `CURRENT_STEP`: parallel steps each hold their own.
+REPAIR_TURN: ContextVar[bool] = ContextVar("workflow_repair_turn", default=False)
+
+
+@contextmanager
+def _as_repair() -> Iterator[None]:
+    token = REPAIR_TURN.set(True)
+    try:
+        yield
+    finally:
+        REPAIR_TURN.reset(token)
+
+
 @contextmanager
 def _as_step(name: str, key: str, phase: str) -> Iterator[None]:
     # Set before the turn's coroutine is created and awaited, so the turn — and
@@ -264,11 +280,12 @@ async def agent_write_step(
 
     async def repair(verdict: CheckResult) -> Any:
         # D1: the answer re-emitted, not the task redone — the request alone, and no
-        # tools, so nothing the step already did can be done again.
+        # tools, so nothing the step already did can be done again. Marked as a repair
+        # so the execution's record keeps the request under its own role (§3.5).
         asked_again = repair_request(
             next(iter(previous), ""), verdict, outputs, kind if out else ""
         )
-        with _as_step(name or phase, key, phase):
+        with _as_step(name or phase, key, phase), _as_repair():
             return await finish(await turn(asked_again, []))
 
     args: dict[str, Any] = {

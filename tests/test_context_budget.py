@@ -555,3 +555,36 @@ def test_a_registry_entry_that_is_not_a_number_cannot_break_a_turn():
     from workspace_app.context_budget import catalog_limits
 
     assert catalog_limits("sample_spec") is None
+
+
+def test_the_window_counts_exactly_the_roles_the_model_is_sent():
+    """Parity with `history_items` as the oracle: the usage bar charges a message iff
+    the history replays it. `_replayed` kept its own list of what to skip, so a role
+    added later — a workflow repair request (plan-workflow-output-repair §3.5), the
+    mention and goal markers before it — was charged for text the model never reads,
+    and the bar crept up on its own."""
+    from workspace_app.api.turns import history_items
+    from workspace_app.context_budget import _replayed
+    from workspace_app.resources import Message
+
+    roles = [
+        "user",
+        "assistant",
+        "system",
+        "notice",
+        "summary",
+        "mention",
+        "goal",
+        "repair_request",
+        "sign_in",
+    ]
+    for role in roles:
+        m = Message(role=role, content="some text")
+        assert bool(_replayed([m])) == bool(history_items([m])), role
+    tool = Message(
+        role="tool", content="out", tool_call_id="c1", tool_name="read_file", tool_args={}
+    )
+    assert bool(_replayed([tool])) == bool(history_items([tool]))
+    # a cancellation is replayed folded onto the answer before it (#199), so it is kept
+    assert _replayed([Message(role="error", content="x", error_kind="cancelled")])
+    assert not _replayed([Message(role="error", content="x", error_kind="system")])

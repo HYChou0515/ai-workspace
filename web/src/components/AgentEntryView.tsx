@@ -6,7 +6,7 @@
  * rendered as clickable source cards.
  */
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
@@ -243,6 +243,52 @@ function CompactionSummary({ text, replaced }: { text: string; replaced: number 
   );
 }
 
+/** plan-workflow-output-repair §3.5: what the workflow engine asked a node to
+ * re-emit. Folded — the request quotes the whole failed reply — behind a
+ * disclosure button (NN/g progressive disclosure; W3C APG disclosure pattern:
+ * `aria-expanded` + `aria-controls`), the same quiet line as the summary above. */
+function RepairRequest({ text }: { text: string }) {
+  const [open, setOpen] = useState(false);
+  const region = useId();
+  return (
+    <div
+      data-testid="repair-request"
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        gap: 4,
+        padding: "4px 8px",
+        fontSize: pxToRem(12),
+        color: "var(--text-paper-d)",
+        borderLeft: "2px solid var(--warn)",
+      }}
+    >
+      <button
+        type="button"
+        data-testid="repair-request-toggle"
+        aria-expanded={open}
+        aria-controls={region}
+        onClick={() => setOpen((v) => !v)}
+        style={{
+          alignSelf: "flex-start",
+          background: "none",
+          border: "none",
+          padding: 0,
+          cursor: "pointer",
+          font: "inherit",
+          color: "inherit",
+          textDecoration: "underline",
+        }}
+      >
+        {open ? "要求重新輸出格式 · 收合" : "要求重新輸出格式 · 展開"}
+      </button>
+      <div id={region} hidden={!open} style={{ whiteSpace: "pre-wrap" }}>
+        {open ? text : null}
+      </div>
+    </div>
+  );
+}
+
 export function EntryView({
   entry,
   onOpenCitation,
@@ -403,6 +449,9 @@ export function EntryView({
         <span>{entry.text}</span>
       </div>
     );
+  }
+  if (entry.kind === "repair_request") {
+    return <RepairRequest text={entry.text} />;
   }
   if (entry.kind === "summary") {
     return <CompactionSummary text={entry.text} replaced={entry.replaced} />;
