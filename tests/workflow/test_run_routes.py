@@ -1187,7 +1187,7 @@ _RUN_ID_ROUTES = [
 
 def test_every_run_id_route_is_on_the_list():
     """The class test below is only as wide as its list. Every item route whose
-    path takes a run id is on it, so a seventh entrance cannot arrive unchecked
+    path takes a run id is on it, so a new entrance cannot arrive unchecked
     the way cancel stayed open after decide / steer / confirm were closed."""
     app, _spec, _item = _app()
     prefix = "/api/a/{slug}/items/{item_id}/"

@@ -64,7 +64,7 @@ flowchart TD
   RA --> KB[KbChat / ContextCard / WikiPage / WikiBuildState]
   RA --> IR[IndexRun / IndexUnitText]
   RA --> SAN[SanityResult / SanityVerdict / CustomSanityQuestion]
-  RA --> MISC[Notification / CitationEvent / CheckRun / WorkflowRun]
+  RA --> MISC[Notification / CitationEvent / CheckRun]
   SD -. encode_doc_id .-> DOCID[kb/doc_id.py]
   RA --> SPEC
   SPEC -->|spec.apply app| API[FastAPI auto-CRUD + 自訂路由]
@@ -74,7 +74,7 @@ flowchart TD
 主要 runtime 路徑：
 
 1. **建構**：`factories.get_spec`（prod）或測試呼叫 `make_spec(...)`，傳入 `default_user`（prod 是請求使用者的 callable）、`backend`、`superusers`。`make_spec` 先 `spec.configure(...)`，再呼叫內部的 `_register_all`。
-2. **註冊順序很重要**：`_register_all` **先** `add_route_template(MigrateRouteTemplate())`（必須在 model 之前，這樣 `spec.apply(app)` 才會為每個 model 掛 migrate 路由），**再** `register_apps(spec)`（每個 App 的 WorkItem），**再**一個個 `add_model` 把 KB 圖、Conversation、sanity、雜項資源連同各自的 `indexed_fields` 註冊上去。
+2. **註冊順序很重要**：`_register_all` **先** `add_route_template(MigrateRouteTemplate())`（必須在 model 之前，這樣 `spec.apply(app)` 才會為每個 model 掛 migrate 路由），**再** `register_apps(spec)`（每個 App 的 WorkItem），**再**一個個 `add_model` 把 KB 圖、Conversation、sanity、雜項資源連同各自的 `indexed_fields` 註冊上去。不該有 auto-CRUD 路由的 model 不在這裡：`create_app` 在 `spec.apply` **之後**才各自 `register_*`（例如 `register_workflow_run`、`register_sandbox_activity`），apply 不會替它們掛路由；不經 `create_app` 的呼叫者（測試、腳本）要自己呼叫。
 3. **App WorkItem**：`registry.register_apps` 透過 `discover_app_slugs()` 掃 `apps/`，對每個 slug 載入 `model.py`（valid identifier 用 `import_module`；含 hyphen 的 slug 如 `topic-hub` 用 `_load_model_module` 按檔案路徑 exec），取出 `MODEL`（`WorkItemBase` 子類）+ `INDEXED_FIELDS` 後 `add_model`。
 4. **runtime 查詢**：所有讀寫都走 indexed QB 查詢（`.sort`/`.limit`）、`exp_aggregate_by(query=...)` scoped 聚合、或原生向量查詢——**從不** fetch-all 再用 Python 過濾，也沒有 ORM 層。
 5. **id 規則**：`SourceDoc` 的 resource id 由 `encode_doc_id(collection_id, path)` 產生（自然鍵，`/` 換成 `∕`）；`DocChunk` 衍生且 current-only（`SourceDoc` 改變就重建）；新加的 index 經 `Schema.step` + migrate route 補回舊列。

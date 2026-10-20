@@ -3024,10 +3024,12 @@ command 的完整 schema——那正是這個功能在做的事。從 `index.jso
 
 - **`/api/workflow-run/…` 整組路由拿掉了**，全部回 404：列表（`/data`）、單筆讀取、修改、刪除、revision 等等。
   它們是 specstar 替執行紀錄自動產生的，沒有任何權限檢查，任何人都能讀、改、刪任何 item 的執行。前端從沒用過。
-  **rollout 前**：如果有外部腳本照 [#913](#pr-913) 的說明用 `GET /api/workflow-run/data` 列頁面工作，改用
+  如果有外部腳本照 [#913](#pr-913) 的說明用 `GET /api/workflow-run/data` 列頁面工作，要改用
   `GET /api/a/<slug>/items/<item>/wui/jobs`。它只回這個 item 的頁面工作，每一筆是 `job_id`、`kind`、`name`、
   `state`、`output`、`error`；呼叫的人要有那個 item 的執行權限（跟查單一件 `…/wui/jobs/<job_id>` 一樣）。
-  沒做的症狀：腳本拿到 404，列不到頁面工作。
+  新路由要新 pod 上線後才有、舊路由在新 pod 上就沒了，所以分兩步：**rollout 前**讓腳本先打新路由、拿到 404 就退回舊的
+  `/data`；**rollout 後**拿掉退回舊路由那段。只在 rollout 前直接換成新路由的話，rollout 途中打到舊 pod 會 404；
+  rollout 後才換的話，打到新 pod 會 404。沒做的症狀：腳本拿到 404，列不到頁面工作。
 - **帶執行編號的路由只認網址上那個 item 自己的執行**。用別的 item 的網址帶進來，取消回 204 但不會停掉那個執行（以前會停掉），其他都回 404，跟不存在的執行一樣。
   `…/runs/<id>/stream` 對不存在的執行也回 404 了（以前會退回訂閱 item 自己的串流）；前端不用這條，不受影響。
 

@@ -485,7 +485,7 @@ node 保證 exactly-once。
 
 - **Poll：** `GET /a/{slug}/items/{item_id}/runs/{run_id}` → 狀態 + result +
   per-phase 進度 + failures。
-- **Stream：** `GET .../runs/{run_id}/stream` → SSE（重用 `subscribe_sse`）。
+- **Stream：** `GET .../runs/{run_id}/stream` → SSE（重用 `subscribe_sse`）。不是這個 item 的 run（別的 item 的、或不存在的）回 404。
 - **Decide：** `POST .../runs/{run_id}/decisions` → `{ choice, input? }`。
 - **Discover：** `GET /a/{slug}/profiles` 列出 profile、標出哪些有 workflow、
   回傳每個 `MANIFEST`（title / phases），讓 FE 能渲染那個 Run 的操作入口。

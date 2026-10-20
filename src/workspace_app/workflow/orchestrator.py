@@ -331,8 +331,8 @@ class WorkflowOrchestrator:
         `confirm_steer`, `retry`, `cancel`): without it a run of item A resumed INSIDE
         item B through B's URL, gated only on B (round 6; with private values on runs
         it carried or stripped a person's, rounds 5–6), and was stopped through B's
-        URL (#870). The run detail and the run stream check the item in the route
-        (plan-workflow-out-of-chat P8)."""
+        URL (#870). The run detail, its files and its stream ask it too, through
+        the routes' `_run_of`: one rule for every entrance (#870)."""
         data = self._get(run_id)
         if data.item_id != item_id:
             raise ResourceIDNotFoundError(run_id)
