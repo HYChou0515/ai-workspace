@@ -148,7 +148,20 @@ also not enough; offer some potential remedies」「guess the correct action and
 | P7 | 文件：`extending-the-platform.md`（部署方怎麼寫 refresh）、**runbook 條目（內容見下方「runbook 條目必須寫的事」）**、design-history | `mkdocs build --strict`；`tests/docs/test_docs_index.py`；runbook 條目逐條對照下方清單 |
 | P8 | live check：替身 provider（token 幾十秒就過期、refresh 會 rotation）＋真 app；錄 demo（過期 → 自動換 → 工具拿到新值） | 對照 master：同一流程在 master 上工具拿到過期值 |
 
-## runbook 條目必須寫的事（P7）
+## 施工時的決定（as-built，PR #985）〔預設〕
+
+| # | 計畫寫的 | 實際 | 為什麼 |
+|---|---|---|---|
+| A1 | P6 一個 phase 做完提示 | P6 後端（通知＋對話訊息）、P7 前端（按鈕）、P8 文件、P9 live check | 照 flat 編號：拆出去的工作用下一個整數 |
+| A2 | 有人在場的提示沿用 `role="notice"` | 新 role `sign_in`，`Message` 多 `sign_in_provider`、`sign_in_layer` 兩個選填欄位（舊資料照讀，沒有 `Schema` 升版） | `already_noticed` 把任何 `notice` 當成「#624 已經提示過」，沿用會讓 context 上限的提示不再出現；`history_items` 只送 user／assistant／tool，新 role 不進模型，`_replayed` 也不算它 |
+| A3 | 「登入 X」打開 #892 的登入頁 | 依 token 原本所在的層：我的環境變數 → 登入頁存回我的環境變數（`EnvLoginModal saveTo="personal"`，走 `PERSONAL_ENV_WRITES` 佇列）；這個 item 的 Private → 登入頁存回 Private；Shared → 打開環境變數面板 | D3「從哪讀就寫回哪」：#892 的登入頁只會存進這個 item 的 Private，會讓「我的環境變數」裡失效的 token 只修好一個 item；Shared 是 item 的，改它要 `write_meta`，不該由登入頁替人寫 |
+| A4 | 有人在場＝聊天、頁面按鈕 | 頁面按鈕的工具呼叫不另外放提示 | 頁面沒有對話可以放；值被清掉後，若工具宣告這個變數為必填，頁面上方的登入列（`identityState`）本來就會出現「登入 X」 |
+| A5 | 時限、等待 | 平台的 `refresh` 上限 30 秒（`REFRESH_TIMEOUT_S`）、等別人換 30 秒（`WAIT_FOR_PEER_S`）、鎖 45 秒過期（`CLAIM_TTL_MS`）；不做成設定 | 部署方本來就要自己限時；平台的上限只防卡死 |
+| A6 | 通知 | 標題 "Sign in to {label} again"、連到 `/my-env`、每人每個登入方式每天一次（dedup key 帶 UTC 日期）；英文，和既有的 workflow 失敗通知一致 | 去重避免每輪都通知 |
+| A7 | 排程一條測試 | 排程的節點走 workflow_exec 的同一條路（`_headless_env`），由 workflow 節點的測試涵蓋 | 同一個呼叫點 |
+| A8 | 兩個並行只換一次的測試 | 以事件排序、不靠時間；鎖本身由「預先佔住鎖」的測試釘住（讓鎖永遠拿得到時它會紅） | in-memory 後端的 create-if-absent 不是原子的，靠時間的版本在負載下偶爾兩個都拿到 |
+
+## runbook 條目必須寫的事（P7；as-built 為 P8）
 
 〔user〕2026-10-20「這些要放在最後的 migration.md 喔」——部署方在這個 PR 之後要做的事，一條不漏寫進
 `docs/migrations.md` 的條目（照 CLAUDE.md：每個動作寫指令、WHEN、WHY、不做的症狀）：

@@ -3010,6 +3010,47 @@ command 的完整 schema——那正是這個功能在做的事。從 `index.jso
 - 打開「WUI」總覽：那一頁的卡片第二行開頭是「只有你打得開」；公開 workspace 的頁面沒有這段。
 - 用一個沒被加進該 workspace 的帳號開那個連結：看到「打不開這個頁面。最常見的原因是你還沒有這個 workspace 的權限…」。
 
+### 2026-10-20 · #985 token 快過期時，平台用部署方的系統登入自己換新的 {#pr-985}
+
+**設定** — 沒有新 key，`server.env_providers` 不用改。**新的可選功能，不做就一切照舊**
+（`docs/plan-env-token-refresh.md`、`docs/extending-the-platform.md`「token 快過期時由平台換新的」）：
+
+1. **在系統登入程式（`server.env_providers` 列的 `IEnvProvider` 實作）加 `needs_refresh` 和 `refresh`**
+   （`rollout 前` 寫好、隨這版一起部署）。範例見 `extending-the-platform.md`。為什麼：平台不知道你們的系統怎麼換 token，
+   只負責「什麼時候換、換完存哪」。要遵守的規定：
+   - **`produces` 要包含 refresh token 的變數名**（例如 `ERP_REFRESH_TOKEN`）。不列的症狀：平台不知道那組值歸這個登入方式管，
+     refresh token 不會被帶進 `refresh()`、也不會被換新。
+   - **`needs_refresh` 不打網路、要快**（例如讀 JWT 的 `exp`）——它在每次組工具的環境變數前都會被呼叫。
+     打網路的症狀：每一輪聊天、每個工具呼叫都多等一次。
+   - **refresh token 確定無效時一定要 `raise RefreshRejected(names)`**，其他錯誤照常丟例外。
+     不照做的症狀：平台一律當暫時失敗，不清、不提示重新登入，人要等到工具失敗才知道。
+   - **值不寫進 log 或例外訊息；自己限制等待時間**（平台另有 30 秒上限，超過當暫時失敗）。
+   - **還沒有登入程式的部署**：要先寫一個完整的（`id`、`label`、`produces`、`inputs`、`resolve`）再加這兩個方法。
+2. **拿掉工具／MCP 裡自己 refresh 的程式**（`rollout 後`，確認平台在換之後）。為什麼：工具拿到的環境變數是唯讀的，
+   自己換到的新 token 寫不回去；遇到 refresh token 用一次就作廢的系統，工具和平台都去換會互相把對方的弄失效。
+   不做的症狀：偶發的「refresh token 已被使用」錯誤。
+3. **不加這兩個方法 = 一切照舊**：沒有任何登入方式寫了 `refresh` 時，平台連 item 都不多讀一次。
+
+**要知道的後果**：
+- token 放在某個 item 的 **Shared** 共用值時，平台換到新值會**直接改寫那個 item 的共用值**，不看當下的人有沒有改設定的權限；
+  修改紀錄的寫入者是 `system:env-refresh`。
+- refresh token 被判定無效時：有人在聊天，對話裡出現「{系統} 登入已過期，請重新登入」和「登入 {系統}」按鈕（token 原本在
+  「我的環境變數」或這個 item 的 Private 時，重新登入存回那裡；在 Shared 時，按鈕打開環境變數面板）；沒人在場（goal、重跑、
+  workflow、綁定的排程）就通知替誰跑的人，每人每個登入方式每天一次。頁面按鈕的工具呼叫不在頁面上另外提示：值被清掉後，
+  若工具在 `env.json` 把這個變數標為必填，頁面上方的登入列會出現「登入 {系統}」；沒宣告的工具就只會在下次失敗時才看得出來。
+- 同時有兩個執行（或兩顆 pod）發現快過期時只換一次，另一個最多等 30 秒再用新的；等不到就用原本的值照樣跑。
+
+**資料** — 新增一個協調用的資料表（`RefreshClaim`，鎖；`spec.apply` 之後註冊，沒有 CRUD 路由），每個「層 × 擁有者 × 登入方式」
+最多一列，不用回填。對話訊息多兩個選填欄位（`sign_in_provider`、`sign_in_layer`），舊資料照讀，沒有 `Schema` 升版。
+
+**k8s · CI 側** — 沒有新的 manifest、env、probe 或 JobType；照常重 build、照常部署。
+
+**確認做完**（`rollout 後`）：
+- 讓某人的 token 快過期（或在測試環境把有效期限調短），在聊天請 AI 跑一個用到它的工具：工具拿到新 token，
+  「我的環境變數」（或 token 原本所在的那一層）的值被換新。沒部署到這一版、或登入程式沒加 `refresh` 的症狀：工具拿到過期的值。
+- 把那人的 refresh token 改成一個無效值再跑一次：對話裡出現「登入已過期」的訊息和「登入 {系統}」按鈕；
+  若是排程或 goal，替誰跑的人收到通知「Sign in to {系統} again」。
+
 ## 附錄 A：資料回填的機制（specstar 為什麼不會自己補）
 
 有些升版會改變「資料在資料庫裡的儲存形狀」，但 **specstar 只在寫入當下**把一列的 `indexed_data`

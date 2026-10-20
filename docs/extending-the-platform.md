@@ -394,6 +394,51 @@ server:
   **只屬於他自己**的去處(Env 面板「Private」與「Private(跨workspace)」分頁),換的是他自己輸入的帳密,你的 impl 也拿不到
   item 的任何資訊——所以換出來不會多給他什麼。把結果存成**共用**值仍然要 `write_meta`。
 
+### token 快過期時由平台換新的([plan-env-token-refresh](plan-env-token-refresh.md))
+
+如果你的系統發的是會過期的 access token 加 refresh token,在同一個登入方式裡多寫兩個方法,
+**平台就會在工具要用、而且快過期的時候先換好**——工具(包括 MCP)完全不用碰 refresh:
+
+```python
+from workspace_app.api.env_provider import IEnvProvider, RefreshRejected
+
+class ErpLogin(IEnvProvider):
+    @property
+    def produces(self) -> frozenset[str]:
+        return frozenset({"ERP_TOKEN", "ERP_REFRESH_TOKEN"})  # refresh token 也要列
+
+    def needs_refresh(self, values: dict[str, str]) -> bool:
+        # 不打網路、要快:例如讀 ERP_TOKEN(JWT)的 exp,剩不到 5 分鐘就回 True
+        return seconds_left(values.get("ERP_TOKEN", "")) < 300
+
+    async def refresh(self, values: dict[str, str]) -> dict[str, str]:
+        r = await my_erp_client.refresh(values["ERP_REFRESH_TOKEN"])  # 自己設逾時
+        if r.status == 401:  # refresh token 被撤銷或過期:只有重新登入能解決
+            raise RefreshRejected({"ERP_TOKEN", "ERP_REFRESH_TOKEN"})
+        r.raise_for_status()  # 其他錯誤照常丟例外
+        return {"ERP_TOKEN": r.access_token, "ERP_REFRESH_TOKEN": r.refresh_token}
+```
+
+平台只看 `refresh()` 的**結果**(這就是契約,D5):
+
+| 結果 | 意思 | 平台怎麼做 |
+|---|---|---|
+| 正常回傳 | 換成功 | 寫回值原本所在的那一層(我的環境變數／這個 item 的 Private／Shared),再交給工具 |
+| `raise RefreshRejected(names)` | refresh token 確定無效 | 清掉那一層裡你列的名稱(只認 `produces` 裡的),工具照樣跑;有人在聊天就在對話裡出現「登入 X」按鈕,沒人在場就通知替誰跑的人(每天一次) |
+| 其他例外或逾時 | 暫時失敗 | 什麼都不清,工具拿到原本的值,下次要用時再試 |
+
+- ⚠️ **確定無效時一定要 `raise RefreshRejected`。** 全部丟一般例外的話,平台一律當暫時失敗:不清、不提示,
+  人要等到工具自己失敗才知道。
+- **`needs_refresh` 每次組工具的環境變數前都會被呼叫**,所以不要打網路。它丟例外 = 當成不需要換。
+- **平台自己也設了上限**(`refresh` 30 秒):卡住的 impl 不會把每一輪都卡住。
+- **同時要換時只換一次**:兩個執行(或兩顆 pod)同時發現快過期,只有一個會呼叫 `refresh`,另一個等它換完
+  直接用新的——用一次就作廢的 refresh token(rotation)也不會把自己鎖死。
+- **值從哪一層來就寫回哪一層**;放在 **Shared** 的 token,平台會**直接改寫那個 item 的共用值**,不看當下的人
+  有沒有 `write_meta`,修改紀錄的寫入者是 `system:env-refresh`。值分散在不同層、來自自動帶入值(`IRequestEnv`)
+  或服務帳號(`env_without_request`)時不換——沒有一個屬於我們的地方可以寫回。
+- WUI 頁面的 build 以「沒有人」的身分跑,不帶任何人的值,也就不換。
+- 不寫這兩個方法 = 一切照舊。
+
 ### 兩層:所有參與者共用的值,與每個人自己的值(`plan-wui-viewer-login.md`)
 
 上面的 `env_vars` 是 **shared** 層:一個 item 一份,能打開 item 的人都讀得到。另外有一層
