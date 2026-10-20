@@ -75,3 +75,40 @@ def test_a_rejection_names_what_is_dead():
     assert err.names == frozenset({"TOKEN", "REFRESH"})
     # Never the values: what reaches a log is the names only.
     assert "TOKEN" in str(err) and "REFRESH" in str(err)
+
+
+# ─── P2: which layer a value comes from ──────────────────────────────────────
+
+
+def _cases() -> list[dict]:
+    import json
+    from pathlib import Path
+
+    path = Path(__file__).parents[1] / "fixtures" / "env_layers_cases.json"
+    return json.loads(path.read_text())["cases"]
+
+
+@pytest.mark.parametrize("case", _cases())
+def test_layer_of_names_the_layer_the_shared_table_expects(case):
+    """The write-back (D3) must land in the layer the tool's value came from.
+    `layer_of` is that answer; `env_layers_cases.json` is the table the FE's
+    `layerInUse` and `resolve_env` are already held to."""
+    from workspace_app.api.env_layers import layer_of
+
+    got = layer_of(
+        "K",
+        shared=case["shared"],
+        private=case["private"],
+        personal=case["personal"],
+        policy=case["policy"],
+    )
+    assert got == case["expected"], case
+
+
+def test_layer_of_names_the_service_account_below_the_person():
+    from workspace_app.api.env_layers import layer_of
+
+    svc = {"K": "s"}
+    assert layer_of("K", shared={}, private={}, personal={}, service=svc, policy={}) == "service"
+    mine = {"K": "v"}
+    assert layer_of("K", shared={}, private={}, personal=mine, service=svc, policy={}) == "personal"
