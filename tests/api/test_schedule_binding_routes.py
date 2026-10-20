@@ -145,8 +145,8 @@ def test_a_schedule_runs_as_whoever_wrote_it_and_only_the_rows_they_added():
 
 
 def _seed(spec, rid, raw: str) -> None:
-    """Put a schedules file in place the way a seed / an import / an agent's
-    `exec` does — past every door that knows who is writing."""
+    """Put a schedules file in place the way a seed / a zip import / an
+    agent's `exec` does — past every door that knows who is writing."""
     import asyncio
 
     asyncio.run(_SEEDS[id(spec)].write(rid, FILE, raw.encode()))

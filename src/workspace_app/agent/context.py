@@ -384,10 +384,10 @@ class AgentToolContext:
     # (`TurnContextBuilder`); None on a context without it, where the tool
     # declines rather than guessing.
     schedule_policy: SchedulePolicy | None = None
-    # plan-schedule-run-as G2: a row `save_schedules` ADDS runs as the person
-    # this turn acts for (`acting_for`) — credited here. None ⇒ nothing is
-    # credited and every row it writes runs as nobody, which is also what a
-    # context built without it must mean.
+    # plan-schedule-run-as G2: a row `save_schedules` / `write_file` /
+    # `edit_file` ADDS runs as the person this turn acts for (`acting_for`) —
+    # credited here. None ⇒ nothing new is credited (a row already bound keeps
+    # its person), and `save_schedules` then says nothing about who rows run as.
     schedule_authorship: ScheduleAuthorship | None = None
     # The PERSON this turn runs for — whose private values it carries: a chat
     # turn's author (a goal round's / a re-run's original author), a workflow

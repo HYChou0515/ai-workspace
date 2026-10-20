@@ -108,12 +108,14 @@ Four things to get right, because each one is a report that quietly never arrive
   Workflows panel (**Manage workflows…** in the workspace's Workflows sidebar) have
   **Run now**.
 
-When a schedule fires, nobody is at the keyboard — there is no request. A row you save
-runs as **the person you are talking to**: with their own sign-ins and stored values, and
-the tool's answer names them (`runs as …`). Tell them so plainly — the schedule uses their
+When a schedule fires, nobody is at the keyboard — there is no request. A row you ADD
+runs as **the person this turn is for** (the one you are talking to), with their own
+sign-ins and stored values — if they may run work in this item. The tool's answer names
+who each row runs as (`runs as …`); tell them plainly what it says: the schedule uses their
 credentials, and **Stop running as me** on the Schedules page or in the Workflows panel
-turns that off. A row that reaches the file any other way (`exec`, a copied file) runs as
-nobody, with the item's shared values only — so save schedules with `save_schedules`.
+turns that off. A row already in the file keeps whoever it ran as. A row that reaches the
+file through `exec` or a copied file runs as nobody, with the item's shared values only —
+so save schedules with `save_schedules`.
 A schedule's runs are not
 listed among the chats: each fire is an execution listed under **Executions** in the workspace's
 Workflows sidebar (marked Scheduled), and opening one shows its steps in its own tab — point

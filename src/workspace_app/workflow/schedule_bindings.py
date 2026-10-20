@@ -183,10 +183,12 @@ def file_keys(item_id: str, path: str, raw: str) -> list[tuple[str, UserSchedule
 class ScheduleAuthorship:
     """`plan-schedule-run-as` G2: a row runs as the person who WROTE it.
 
-    Called by the doors that know who is writing — `save_schedules`, the file
-    PUT route, the schedule "change time" route — with the file as it was
-    before the write and as it is after. Every other way a row can appear (an
-    agent's `exec`, a copy, an import, a seed, a row older than this feature)
+    Called by the doors that know who is writing — the agent's
+    `save_schedules` / `write_file` / `edit_file`, the file PUT route (the
+    editor, a page's `writeFile`, an upload, the panel's import), the schedule
+    "change time" route — with the file as it was before the write and as it
+    is after. Every other way a row can appear (an agent's `exec`, a copy, a
+    zip import, a seed, find-and-replace, a row older than this feature)
     passes through none of them, so it runs as nobody (G3) — no backfill.
 
     Only the rows THIS write added are credited (``after - before``). Saving

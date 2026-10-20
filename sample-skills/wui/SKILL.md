@@ -285,9 +285,10 @@ one.
 
 ⚠️ **When a schedule fires, nobody is at the keyboard.** There is no request. A
 row runs with the stored values of ONE person — whoever saved it (the person
-using the page when it wrote `schedules.json`), until they stop it or someone
-takes it over with **Run as me** — and a row nobody saved that way runs with the
-item's shared values only. A page or tool written as if someone is clicking
+using the page when it wrote `schedules.json`, or the person you were talking to
+when you wrote it with `write_file` / `edit_file`), until they stop it or
+someone takes it over with **Run as me** — and a row nobody saved that way runs
+with the item's shared values only. A page or tool written as if someone is clicking
 works while they are and fails every night — the "it worked when I tested it"
 bug. Anything a scheduled run needs is a value that person stored, or the
 item's own.

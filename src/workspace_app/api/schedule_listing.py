@@ -446,9 +446,9 @@ def register_schedule_overview_routes(
         # `\\u54c1…` — the file is read by people and agents too.
         after = json.dumps(doc, indent=2, ensure_ascii=False)
         # plan-schedule-run-as G2: a row this save ADDS — a new time is a new
-        # row — runs as the person who saved it. The file as it is now is what
-        # it replaces (the caller read it a moment ago; a write in between is
-        # the caller's 409 race, not this one's).
+        # row — runs as the person who saved it. Compared against the file as it
+        # is just before this write; a row another writer removed after the
+        # caller read `doc` counts as added here (plan: known limits).
         before = (
             (await files.read(item_id, path)).decode("utf-8", "replace") if authorship else None
         )
