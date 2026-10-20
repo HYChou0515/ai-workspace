@@ -507,6 +507,8 @@ describe("WorkflowsModal — schedules", () => {
     expect(await within(screen.getByTestId("schedule-row-0")).findByRole("alert")).toHaveTextContent(
       "This schedule has changed",
     );
+    // …and the list is read again, so it shows what the file holds NOW.
+    await waitFor(() => expect(schedulesMock.mock.calls.length).toBeGreaterThan(1));
   });
 
   it("offers a reader no way to change or run a schedule", async () => {
@@ -596,5 +598,22 @@ describe("WorkflowsModal — schedules", () => {
       word("sched.runsAsWhy", { main: word("sched.runsAs", { who: "bob" }), why: word("sched.why.author") }),
     );
     expect(within(row).getByRole("button", { name: word("sched.replaceMe") })).toBeInTheDocument();
+  });
+
+  it("a row's own state stays with that row when the one above it goes", async () => {
+    // Review round 1 (defect 8): keyed by position, "started" moved to the row
+    // that slid into the removed row's place.
+    listMock.mockResolvedValue([]);
+    const other = { ...NIGHTLY, index: 1, trigger_id: "wui:it:other", run_title: "Other" };
+    schedulesMock.mockResolvedValueOnce(schedules({ rows: [NIGHTLY, other] }));
+    schedulesMock.mockResolvedValue(schedules({ rows: [{ ...other, index: 0 }] }));
+    runNowMock.mockResolvedValue("run-1");
+    render(fakeService().svc);
+
+    const first = await screen.findByTestId("schedule-row-0");
+    fireEvent.click(within(first).getByRole("button", { name: word("schedules.runNow") }));
+
+    await waitFor(() => expect(screen.getByTestId("schedule-row-0")).toHaveTextContent("Other"));
+    expect(screen.getByTestId("schedule-row-0")).not.toHaveTextContent(word("schedules.started"));
   });
 });

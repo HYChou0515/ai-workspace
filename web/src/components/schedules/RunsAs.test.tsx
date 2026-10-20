@@ -139,8 +139,11 @@ describe("what it lets you do", () => {
     client.bind = vi.fn(async () => {
       throw Object.assign(new Error("x"), { detail: "nope" });
     });
-    draw({ client });
+    const { onChanged } = draw({ client });
     fireEvent.click(screen.getByRole("button", { name: word("sched.bindMe") }));
     expect(await screen.findByRole("alert")).toHaveTextContent("nope");
+    // Refused because the row changed meanwhile: the list is refetched, so it
+    // shows what IS there (review round 1).
+    await waitFor(() => expect(onChanged).toHaveBeenCalled());
   });
 });

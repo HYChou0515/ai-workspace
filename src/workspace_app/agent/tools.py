@@ -3520,7 +3520,7 @@ async def save_schedules_impl(ctx: RunContextWrapper[AgentToolContext], schedule
             if policy.sweep_enabled
             else " — will not run (scheduled work is switched off on this deployment)"
         )
-        + _runs_as_said(who.get(v.trigger_id, ""))
+        + (_runs_as_said(who.get(v.trigger_id, "")) if authorship is not None else "")
         for v in views
     ]
     noun = "schedule" if len(rows) == 1 else "schedules"

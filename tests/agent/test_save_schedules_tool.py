@@ -345,7 +345,7 @@ async def test_the_rows_it_adds_run_as_the_person_the_turn_is_for_and_it_says_so
     assert "runs as carol" in out
 
 
-async def test_a_pages_schedules_written_with_write_file_run_as_the_person_the_turn_is_for(clock) -> None:
+async def test_a_pages_schedules_written_with_write_file_run_as_the_turns_person(clock) -> None:
     """Review round 1 (conformance 1): the agent seeds a WUI page's own
     `schedules.json` with `write_file` — the only way it can write a PAGE's
     file. It is the same person's turn, so the row is theirs too."""
@@ -394,3 +394,15 @@ async def test_a_turn_that_acts_for_nobody_saves_rows_that_run_as_nobody(clock) 
 
     assert bindings.for_item("inv-1") == []
     assert "runs as nobody" in out
+
+
+async def test_without_anything_to_credit_the_reply_does_not_claim_who_a_row_runs_as(clock) -> None:
+    """Review round 1 (veracity 8): with no authorship wired, a row already
+    bound to someone would be reported as "runs as nobody". Say nothing."""
+    ctx = _ctx()
+    await _with_workflow(ctx)
+
+    out = await save_schedules_impl(ctx, _rows({"every": "daily", "at": "09:00", "run": "nightly"}))
+
+    assert "saved 1 schedule" in out
+    assert "runs as" not in out

@@ -82,7 +82,9 @@ export function RunsAs({
           ? client.bind(slug, itemId, path, triggerId)
           : client.unbind(slug, itemId, path, triggerId),
     onMutate: () => setProblem(null),
-    onSuccess: () => onChanged?.(),
+    // Refused or not, the list is read again: a refusal is usually "this row
+    // changed meanwhile", and the list should then show what IS there.
+    onSettled: () => onChanged?.(),
     onError: (err) => {
       const why = (err as { detail?: unknown })?.detail;
       setProblem(t("sched.failed", { why: typeof why === "string" ? why : String((err as Error).message) }));

@@ -8,10 +8,9 @@ schedules with who each runs as, bind one to the caller, and unbind one's own.
 from __future__ import annotations
 
 import json
-
-import pytest
 from typing import cast
 
+import pytest
 from fastapi import FastAPI
 
 from workspace_app.api import ScriptedAgentRunner, create_app
@@ -186,7 +185,10 @@ def test_a_file_over_the_row_cap_credits_nobody():
     grow the binding table without bound."""
     client, holder, rid, _ = _world(seeded=True)
     holder["id"] = "carol"
-    many = [{"every": "daily", "at": f"{n // 60:02d}:{n % 60:02d}", "run": "build-report"} for n in range(1001)]
+    many = [
+        {"every": "daily", "at": f"{n // 60:02d}:{n % 60:02d}", "run": "build-report"}
+        for n in range(1001)
+    ]
 
     client.put(f"/a/rca/items/{rid}/files{FILE}", content=_rows(*many))
 
@@ -584,3 +586,22 @@ def test_a_superuser_cannot_name_someone_who_may_not_run_work_here():
     assert r.status_code == 422, r.text
     assert _list(client, rid)[0]["bound_to"] == ""
     assert _notices(spec, "alice") == []
+
+
+def test_naming_the_person_it_already_runs_as_changes_nothing():
+    """Review round 1 (defect 6): carol chose it herself. A superuser picking
+    carol again — clicking the person already ticked in the picker — must not
+    relabel her choice as an administrator's, re-take her consent against the
+    workflow as it is now, or send her a notice about something she did."""
+    client, holder, rid, spec = _world(seeded=True)
+    holder["id"] = "carol"
+    (row,) = _list(client, rid)
+    assert _bind(client, rid, row["trigger_id"]).status_code == 200
+    holder["id"] = "root"
+
+    r = _assign(client, rid, row["trigger_id"], "carol")
+
+    assert r.status_code == 200, r.text
+    (after,) = _list(client, rid)
+    assert (after["bound_to"], after["reason"], after["assigned_by"]) == ("carol", "self", "")
+    assert _notices(spec, "carol") == []

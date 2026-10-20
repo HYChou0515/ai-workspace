@@ -31,6 +31,7 @@ import {
   ScheduleNext,
   ScheduleRunsAs,
   ScheduleWhere,
+  rowKey,
   workflowName,
 } from "../components/schedules/ScheduleRowParts";
 import { useBreadcrumbs } from "../hooks/breadcrumbs";
@@ -254,7 +255,7 @@ function ScheduleTable({
             ) : null}
             {rows.map((row) => (
               <ScheduleRowView
-                key={`${row.item_id}${row.path}#${row.index}`}
+                key={rowKey(row)}
                 row={row}
                 client={client}
                 clock={clock}

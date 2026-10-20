@@ -49,6 +49,13 @@ export function placeOf(row: OverviewRow, t: ReturnType<typeof useT>): string {
 /** The workflow a row runs, by the name people gave it. */
 export const workflowName = (row: Pick<OverviewRow, "run" | "run_title">) => row.run_title || row.run || "—";
 
+/** A row's React key: its identity, not its position — keyed by position, a
+ * row's own state (Run now's "started", an open editor) moved to whichever
+ * row slid into its place when one above it went (review round 1). A row the
+ * sweep refuses has no identity; its position is all there is. */
+export const rowKey = (row: Pick<OverviewRow, "item_id" | "path" | "trigger_id" | "index">) =>
+  `${row.item_id}${row.path}#${row.trigger_id || `@${row.index}`}`;
+
 const itemHrefOf = (row: OverviewRow) =>
   `/a/${encodeURIComponent(row.slug)}/${encodeURIComponent(row.item_id)}`;
 
@@ -185,8 +192,9 @@ export function ScheduleActions({
   });
   const remove = useMutation({
     mutationFn: () => client.remove(row.slug, row.item_id, ref),
-    onSuccess: refresh,
     onError: fail,
+    // Refused ("this schedule has changed") or not, show what the file holds now.
+    onSettled: refresh,
   });
   const period = describeSchedule(row, clock, t);
   const workflow = workflowName(row);
@@ -272,6 +280,7 @@ export function ScheduleActions({
           raw={row.raw}
           nextMs={row.next_ms}
           rowRef={ref}
+          runsAsEditor={row.can_run}
           onSave={(r, time) => client.editTime(row.slug, row.item_id, r, time)}
           onSaved={() => {
             setEditing(false);

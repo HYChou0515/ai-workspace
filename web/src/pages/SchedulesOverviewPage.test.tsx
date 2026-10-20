@@ -579,4 +579,10 @@ describe("who each schedule runs as (plan-schedule-run-as G8/G9)", () => {
     render(<SchedulesOverviewPage client={client({ can_assign: true })} />, { wrapper: Wrap });
     expect(await screen.findByRole("button", { name: word("sched.assign") })).toBeInTheDocument();
   });
+
+  it("does not tell someone who may edit but not run that a changed time will run as them", async () => {
+    render(<SchedulesOverviewPage client={client({ rows: [row({ can_run: false })] })} />, { wrapper: Wrap });
+    fireEvent.click(await screen.findByRole("button", { name: word("schedules.editTime") }));
+    expect(await screen.findByText(word("schedules.edit.noteNobody"))).toBeInTheDocument();
+  });
 });

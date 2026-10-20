@@ -147,6 +147,20 @@ def register_schedule_binding_routes(
             raise HTTPException(
                 status_code=404, detail="that schedule has changed — reload the page"
             )
+        if naming:
+            current = await asyncio.to_thread(bindings.get, trigger_id)
+            if current is not None and current.user_id == who:
+                # Already theirs: naming them again must not relabel their own
+                # choice as an administrator's, re-take their consent against
+                # the workflow as it is now, or notify them (review round 1).
+                return found.model_copy(
+                    update={
+                        "bound_to": who,
+                        "mine": False,
+                        "reason": current.reason,
+                        "assigned_by": current.assigned_by,
+                    }
+                )
         # Nothing to consent to while the file will not parse (round 6): the
         # consent would record "", the profile workflow's digest, and a later
         # delete would let that workflow run with this person's values.

@@ -24,6 +24,7 @@ import {
   ScheduleNext,
   ScheduleRunsAs,
   ScheduleWhere,
+  rowKey,
   workflowName,
 } from "./schedules/ScheduleRowParts";
 
@@ -266,7 +267,7 @@ export function WorkflowsModal({
             ))}
             {sched.rows.map((row, n) => (
               <ScheduleCard
-                key={`${row.path}#${row.index}`}
+                key={rowKey(row)}
                 n={n}
                 row={row}
                 clock={clock}

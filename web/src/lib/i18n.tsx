@@ -794,6 +794,11 @@ export const messages = {
       "存檔後會變成一條新的排程：從下一個時間點開始執行（不會補跑），執行紀錄從頭算，之後用你的身分執行（改的人就是它的作者）。",
     en: "Saving makes this a new schedule: it runs from the next time on (nothing is caught up), its run history starts over, and from then on it runs as you — whoever changes it is its author.",
   },
+  "schedules.edit.noteNobody": {
+    "zh-TW":
+      "存檔後會變成一條新的排程：從下一個時間點開始執行（不會補跑），執行紀錄從頭算，之後只用共用的值執行（你在這個項目不能執行工作，所以不會用你的身分）。",
+    en: "Saving makes this a new schedule: it runs from the next time on (nothing is caught up), its run history starts over, and from then on it runs with the shared values only — you cannot run work in this item, so it does not run as you.",
+  },
   "schedules.edit.save": { "zh-TW": "存檔", en: "Save" },
   "schedules.edit.saving": { "zh-TW": "存檔中…", en: "Saving…" },
   // The overview of every schedule the viewer may read.
