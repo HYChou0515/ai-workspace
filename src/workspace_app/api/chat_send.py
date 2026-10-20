@@ -1026,8 +1026,21 @@ class ChatSendService:
             logger.exception("chat_send: could not open the turn claim for %s", engine_key)
             return None
 
+    def _chat_messages_only(
+        self, investigation_id: str, rid: str, conv: Conversation, messages: list[Message]
+    ) -> list[Message]:
+        """`messages` without a run's (plan-workflow-out-of-chat P3): marked ones,
+        and in a chat #343 took over, the unmarked ones inside a run's window —
+        looked up only for such a chat. ONE place, shared by the history a send
+        builds at acceptance and the one its turn rebuilds when it starts
+        (plan-interjection Q1): two copies of this filter is how the rebuilt
+        history came to hand a chat turn a run's steps."""
+        windows = run_windows_of_chat(self._spec, investigation_id, rid) if conv.run_id else []
+        return without_runs(messages, windows)
+
     def _queued_message(
         self,
+        investigation_id: str,
         rid: str,
         engine_key: str,
         author: str,
@@ -1052,7 +1065,12 @@ class ChatSendService:
             # only record of that (a re-run's sibling, a send landing there).
             owed = pending | self._owed_on(engine_key)
             ctx.history = ctx.history_builder(
-                thread_without(fresh.messages, [*answering, *(owed - set(answering))])
+                self._chat_messages_only(
+                    investigation_id,
+                    rid,
+                    fresh,
+                    thread_without(fresh.messages, [*answering, *(owed - set(answering))]),
+                )
             )
             return must_move(fresh.messages, answering, owed)
 
@@ -1469,11 +1487,11 @@ class ChatSendService:
                     # Never a run's messages (plan-workflow-out-of-chat P3): marked
                     # ones, and in a chat #343 took over, the unmarked ones inside a
                     # run's window — looked up only for such a chat.
-                    history_messages=without_runs(
+                    history_messages=self._chat_messages_only(
+                        investigation_id,
+                        rid,
+                        conv,
                         _history_before(conv.messages, created, body.content),
-                        run_windows_of_chat(self._spec, investigation_id, rid)
-                        if conv.run_id
-                        else [],
                     ),
                     reasoning_effort=body.reasoning_effort,
                     kb_enhancements=caller_enh,
@@ -1679,7 +1697,13 @@ class ChatSendService:
                     surface="chat",
                     accepted_ms=created,
                     message=self._queued_message(
-                        rid, engine_key, author, created, claim, driven=driven_by is not None
+                        investigation_id,
+                        rid,
+                        engine_key,
+                        author,
+                        created,
+                        claim,
+                        driven=driven_by is not None,
                     ),
                 )
                 # #493 symptom 1 (504): await THIS turn's completion, but only up to a
