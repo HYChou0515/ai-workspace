@@ -176,6 +176,9 @@ _D = json.dumps(DAILY)
         f'{{"schedule": [{_D}]}}',  # JSON holding a row, under a mistyped key
         f"[{_D}]",  # JSON holding a row, but not a schedules document
         f'{{"schedules": {{"0": {_D}}}}}',  # JSON holding a row, not in a list
+        _D,  # one row with no {"schedules": [...]} around it (round 5)
+        f'{{"schedules": [], "schedule": [{_D}]}}',  # a row beside a valid list (round 5)
+        '{"schedules": "oops"}',  # content that is not a schedules list: credit nobody
     ],
 )
 def test_a_file_that_was_broken_before_the_save_hands_its_rows_to_nobody(broken):
@@ -199,11 +202,11 @@ def test_a_file_that_was_broken_before_the_save_hands_its_rows_to_nobody(broken)
         "  \n",
         "{}",
         '{"schedules": null}',
-        # Not schedules documents either, but holding no row to hide (round 4).
+        # Not schedules documents either, but nothing in them at all (round 4/5).
         "[]",
         '{"schedule": []}',
-        '{"schedules": "oops"}',
         "null",
+        "[[]]",
     ],
 )
 def test_a_file_created_empty_then_saved_credits_whoever_saved_it(empty):

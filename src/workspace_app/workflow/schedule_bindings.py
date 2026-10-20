@@ -186,29 +186,47 @@ def file_keys(item_id: str, path: str, raw: str) -> list[tuple[str, UserSchedule
 
 
 def _unreadable(raw: str) -> bool:
-    """Whether a schedules file HID rows nobody can name: rows the sweep could
-    not read — text that is not JSON, or JSON that holds a row somewhere other
-    than a `schedules` list (a mistyped key, a bare list; review round 3). A
-    file that holds no row at all hides nothing, whatever its shape: blank
-    (the file tree's New file writes "" before the first save — round 2),
-    `{}`, `{"schedules": null}`, `[]`, `{"schedule": []}`, `null` (round 4)."""
+    """Whether a schedules file may have HIDDEN rows nobody can name, so that a
+    save which makes them readable must not credit them to the saver (review
+    round 1). Decided by one table, biased to "unreadable" — a wrong answer that
+    way only leaves a row running as nobody, which its person can change with
+    "Run as me"; the other way hands someone's rows to the next saver:
+
+    ===============================================  ==========
+    blank (the file tree's New file writes "")         readable
+    not JSON                                         unreadable
+    JSON with nothing in it: ``{}``, ``[]``, ``null``,
+    ``{"schedules": null}``, ``{"schedule": []}``…     readable
+    a ``schedules`` list, every other key empty        readable
+    anything else (a bare row, a mistyped key, a row
+    beside the list, a string where the list goes)   unreadable
+    ===============================================  ==========
+
+    Rounds 2–5 of review each found one shape the previous rule misjudged;
+    this table is what they add up to."""
     if not raw.strip():
         return False
     try:
         doc = json.loads(raw)
     except ValueError:
         return True
-    if file_rows(raw) is not None:
+    if _nothing_in(doc):
         return False
-    return _holds_a_row(doc)
+    if file_rows(raw) is not None and isinstance(doc, dict):
+        return not all(_nothing_in(v) for k, v in doc.items() if k != "schedules")
+    return True
 
 
-def _holds_a_row(doc: object) -> bool:
-    """Whether decoded JSON has any non-empty list or object in it — the only
-    places a row can be. A top-level object's own keys are not rows; its values
-    may hold them."""
-    values = doc.values() if isinstance(doc, dict) else [doc]
-    return any(isinstance(v, (list, dict)) and len(v) > 0 for v in values)
+def _nothing_in(value: object) -> bool:
+    """``None``, or a list / object holding only such things — no string, no
+    number, nothing a row could be made of."""
+    if value is None:
+        return True
+    if isinstance(value, list):
+        return all(_nothing_in(v) for v in value)
+    if isinstance(value, dict):
+        return all(_nothing_in(v) for v in value.values())
+    return False
 
 
 class ScheduleAuthorship:
