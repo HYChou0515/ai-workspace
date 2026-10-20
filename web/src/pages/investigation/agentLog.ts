@@ -116,6 +116,14 @@ export type AgentEntry =
   | { kind: "goal_note"; text: string; at?: number; failure?: Failure }
   // #624: a persisted system notice (history no longer reaches the model).
   | { kind: "notice"; text: string; at?: number }
+  // plan-env-token-refresh D6: a sign-in to do again, with its button.
+  | {
+      kind: "sign_in";
+      text: string;
+      provider: string;
+      layer: "personal" | "private" | "shared";
+      at?: number;
+    }
   // #739: the thread outgrew its window, so this span was replaced — for the
   // MODEL — by a précis. `replaced` is how many messages sit behind it, derived
   // from position rather than stored: the originals are still right there above
@@ -396,6 +404,16 @@ export function logFromMessages(messages: readonly Message[]): AgentLog {
       // #624: the context horizon moved — the user needs to know the model can
       // no longer see the start of the thread.
       entries.push({ kind: "notice", text: m.content, at: m.created_at ?? undefined });
+    } else if (m.role === "sign_in") {
+      // plan-env-token-refresh D6: the deploy reported a sign-in's refresh
+      // token dead — told here, with that sign-in's button.
+      entries.push({
+        kind: "sign_in",
+        text: m.content,
+        provider: m.sign_in_provider ?? "",
+        layer: m.sign_in_layer ?? "private",
+        at: m.created_at ?? undefined,
+      });
     } else if (m.role === "goal") {
       // #613 P3: the goal driver's outcome marker (達成 / 額度用盡).
       // Review round 1: a night that could not start carries WHY as what it
@@ -498,7 +516,7 @@ export function logFromMessages(messages: readonly Message[]): AgentLog {
 /** Entries that carry the conversation itself — the ones the backend persists.
  * `step` / `phase` / live banners are stream-only chrome and are deliberately
  * NOT counted, so their presence can't disguise a store that is behind. */
-const CONTENT_KINDS = new Set(["message", "tool_call", "mention", "goal_note", "notice"]);
+const CONTENT_KINDS = new Set(["message", "tool_call", "mention", "goal_note", "notice", "sign_in"]);
 
 const contentCount = (entries: readonly AgentEntry[]) =>
   entries.filter((e) => CONTENT_KINDS.has(e.kind)).length;
