@@ -97,6 +97,19 @@ def test_a_collaborator_binds_a_schedule_to_themself():
     assert (after["bound_to"], after["mine"]) == ("carol", True)
 
 
+def test_a_binding_made_by_pressing_run_as_me_says_the_person_chose_it():
+    """`plan-schedule-run-as` G8: the row says WHY it runs as that person — here,
+    because they chose to."""
+    client, holder, rid, _ = _world()
+    holder["id"] = "carol"
+    (row,) = _list(client, rid)
+
+    _bind(client, rid, row["trigger_id"])
+
+    (after,) = _list(client, rid)
+    assert (after["bound_to"], after["reason"], after["assigned_by"]) == ("carol", "self", "")
+
+
 def test_the_sweep_finds_the_binding_the_route_made():
     """The route and the sweep must compute the SAME key for a row, or a binding
     is made that no fire ever looks up — "run as me" that silently does nothing.

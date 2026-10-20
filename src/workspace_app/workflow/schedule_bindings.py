@@ -69,6 +69,14 @@ class ScheduleBinding(Struct):
     #: covers the ROW; the workflow it names can be rewritten by anyone who edits
     #: the item, and the binder consented to it as it was (review round 1, F4).
     workflow_digest: str = ""
+    #: WHY it runs as `user_id` (`plan-schedule-run-as` G8): ``"self"`` — they
+    #: pressed "Run as me" (every binding made before this field existed);
+    #: ``"author"`` — they wrote the row (G2); ``"admin"`` — a superuser named
+    #: them (G5). Shown, never consulted by the sweep: whose values a fire
+    #: carries is `user_id` alone, whatever put it there.
+    reason: str = "self"
+    #: The superuser who named them, for ``reason == "admin"``; "" otherwise.
+    assigned_by: str = ""
 
 
 def register_schedule_bindings(spec: SpecStar) -> None:
@@ -104,6 +112,8 @@ class ScheduleBindings:
         path: str,
         user_id: str,
         workflow_digest: str = "",
+        reason: str = "self",
+        assigned_by: str = "",
     ) -> str:
         """Bind the schedule to ``user_id``, replacing whoever held it. Returns
         the replaced person ("" when there was none, or it was them already)."""
@@ -119,6 +129,8 @@ class ScheduleBindings:
             user_id=user_id,
             bound_at=now_ms(),
             workflow_digest=workflow_digest,
+            reason=reason,
+            assigned_by=assigned_by,
         )
         previous = self.get(trigger_id)
         if previous is None:

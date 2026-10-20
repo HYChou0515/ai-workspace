@@ -41,6 +41,11 @@ class BindingRow(BaseModel):
     #: Whether that is the caller — the one fact the UI needs to offer
     #: "stop running as me" rather than "run as me".
     mine: bool
+    #: Why it runs as `bound_to` (`plan-schedule-run-as` G8): "self" / "author"
+    #: / "admin"; "" when it runs as nobody.
+    reason: str = ""
+    #: The superuser who named `bound_to`, when `reason` is "admin".
+    assigned_by: str = ""
 
 
 class Bindings(BaseModel):
@@ -94,8 +99,18 @@ def register_schedule_binding_routes(
         me = get_user_id()
         rows: list[BindingRow] = []
         for key, row in await _keys(workspace_id, _schedules_path(path)):
-            who = await asyncio.to_thread(bindings.binder, key)
-            rows.append(row.model_copy(update={"bound_to": who, "mine": bool(who) and who == me}))
+            found = await asyncio.to_thread(bindings.get, key)
+            who = found.user_id if found is not None else ""
+            rows.append(
+                row.model_copy(
+                    update={
+                        "bound_to": who,
+                        "mine": bool(who) and who == me,
+                        "reason": found.reason if found is not None else "",
+                        "assigned_by": found.assigned_by if found is not None else "",
+                    }
+                )
+            )
         return Bindings(rows=rows)
 
     @app.put("/a/{slug}/items/{item_id}/schedule-bindings/{trigger_id}", response_model=BindingRow)
@@ -140,7 +155,7 @@ def register_schedule_binding_routes(
                 ),
                 actor=me,
             )
-        return found.model_copy(update={"bound_to": me, "mine": True})
+        return found.model_copy(update={"bound_to": me, "mine": True, "reason": "self"})
 
     @app.delete("/a/{slug}/items/{item_id}/schedule-bindings/{trigger_id}", status_code=204)
     async def unbind_schedule(slug: str, item_id: str, trigger_id: str, path: str) -> Response:
