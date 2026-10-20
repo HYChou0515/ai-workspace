@@ -166,20 +166,23 @@ def test_a_row_nobody_wrote_through_a_door_stays_nobodys_when_the_file_is_saved_
     assert [b for _d, b in who].count("") == 1
 
 
+_D = json.dumps(DAILY)
+
+
 @pytest.mark.parametrize(
     "broken",
     [
         '{"schedules": [',  # not JSON (a save mid-edit)
-        '{"schedule": []}',  # JSON, but the key is mistyped
-        '{"schedules": "oops"}',  # JSON, but not a list
-        "[]",  # JSON, but not a schedules document
+        f'{{"schedule": [{_D}]}}',  # JSON holding a row, under a mistyped key
+        f"[{_D}]",  # JSON holding a row, but not a schedules document
+        f'{{"schedules": {{"0": {_D}}}}}',  # JSON holding a row, not in a list
     ],
 )
 def test_a_file_that_was_broken_before_the_save_hands_its_rows_to_nobody(broken):
     """Review round 1 (defect 1): a broken save, then the fixed file — the rows
     in it are not "added" by the fix (the file just could not be read), so they
-    are not credited to whoever fixed it. Valid JSON that is not a schedules
-    document is broken the same way (review round 3)."""
+    are not credited to whoever fixed it. Valid JSON that HOLDS rows the sweep
+    cannot read (a mistyped key, a bare list) is broken the same way (round 3)."""
     client, holder, rid, _ = _world(seeded=True)
     holder["id"] = "carol"
     client.put(f"/a/rca/items/{rid}/files{FILE}", content=broken)
@@ -189,11 +192,25 @@ def test_a_file_that_was_broken_before_the_save_hands_its_rows_to_nobody(broken)
     assert {r["bound_to"] for r in _list(client, rid)} == {""}
 
 
-@pytest.mark.parametrize("empty", ["", "  \n", "{}", '{"schedules": null}'])
+@pytest.mark.parametrize(
+    "empty",
+    [
+        "",
+        "  \n",
+        "{}",
+        '{"schedules": null}',
+        # Not schedules documents either, but holding no row to hide (round 4).
+        "[]",
+        '{"schedule": []}',
+        '{"schedules": "oops"}',
+        "null",
+    ],
+)
 def test_a_file_created_empty_then_saved_credits_whoever_saved_it(empty):
     """Review round 2 (veracity 1): the file tree's "New file" writes "" first,
-    so the editor's first save arrives with an EMPTY before. Empty is "no rows",
-    not "could not be read" — the person typing them in wrote them."""
+    so the editor's first save arrives with an EMPTY before. A file that holds
+    no row is "no rows", not "could not be read" — whatever its shape — so the
+    person typing the rows in wrote them."""
     client, holder, rid, _ = _world(seeded=True)
     holder["id"] = "carol"
     client.put(f"/a/rca/items/{rid}/files/new/schedules.json", content=empty)

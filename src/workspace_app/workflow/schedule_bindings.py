@@ -186,21 +186,29 @@ def file_keys(item_id: str, path: str, raw: str) -> list[tuple[str, UserSchedule
 
 
 def _unreadable(raw: str) -> bool:
-    """Whether a schedules file held rows nobody can name: anything but a
-    schedules list. An EMPTY file, `{}` and `{"schedules": null}` hold NO rows
-    — the file tree's New file writes "" before the first save (review round
-    2) — while text that is not JSON, or JSON that is not a schedules document
-    (a mistyped key, a list, a string where the list goes), hides whatever
-    rows it was meant to hold (review round 3)."""
+    """Whether a schedules file HID rows nobody can name: rows the sweep could
+    not read — text that is not JSON, or JSON that holds a row somewhere other
+    than a `schedules` list (a mistyped key, a bare list; review round 3). A
+    file that holds no row at all hides nothing, whatever its shape: blank
+    (the file tree's New file writes "" before the first save — round 2),
+    `{}`, `{"schedules": null}`, `[]`, `{"schedule": []}`, `null` (round 4)."""
     if not raw.strip():
         return False
     try:
         doc = json.loads(raw)
     except ValueError:
         return True
-    if doc == {} or doc == {"schedules": None}:
+    if file_rows(raw) is not None:
         return False
-    return file_rows(raw) is None
+    return _holds_a_row(doc)
+
+
+def _holds_a_row(doc: object) -> bool:
+    """Whether decoded JSON has any non-empty list or object in it — the only
+    places a row can be. A top-level object's own keys are not rows; its values
+    may hold them."""
+    values = doc.values() if isinstance(doc, dict) else [doc]
+    return any(isinstance(v, (list, dict)) and len(v) > 0 for v in values)
 
 
 class ScheduleAuthorship:
