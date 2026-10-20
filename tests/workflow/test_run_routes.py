@@ -1281,3 +1281,32 @@ def test_a_run_answers_only_through_its_own_items_url(method, path, body, kind):
     else:
         assert through_b == 404
         assert through_a != 404
+
+
+def test_the_run_table_has_no_routes_of_its_own():
+    """#870: `WorkflowRun` was registered before `spec.apply`, so specstar gave it
+    the full auto-CRUD (`/api/workflow-run/…`: list, read, patch, delete,
+    revisions) with no gate at all — anyone read, changed or deleted any item's
+    run, which made checking the item on the routes above moot. Nothing called
+    it; the run's own routes are the item-scoped ones. It now has none."""
+    from workspace_app.workflow.run import WorkflowRun
+
+    app, spec, item_id = _app()
+    run_id = (
+        spec.get_resource_manager(WorkflowRun)
+        .create(WorkflowRun(item_id=item_id, captured_user="u"))
+        .resource_id
+    )
+    exposed = [
+        path
+        for route in app.routes
+        if (path := getattr(route, "path", "")).startswith("/api/workflow-run")
+    ]
+    with TestClient(app) as client:
+        listed = client.get("/api/workflow-run/data")
+        read = client.get(f"/api/workflow-run/{run_id}")
+        deleted = client.delete(f"/api/workflow-run/{run_id}")
+
+    assert exposed == []
+    assert (listed.status_code, read.status_code, deleted.status_code) == (404, 404, 404)
+    assert spec.get_resource_manager(WorkflowRun).get(run_id).data.item_id == item_id

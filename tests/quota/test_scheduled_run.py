@@ -14,7 +14,7 @@ from specstar import SpecStar
 
 from workspace_app.filestore.memory import MemoryFileStore
 from workspace_app.quota.admission import SandboxQuotaExceeded
-from workspace_app.resources import make_spec
+from workspace_app.resources import make_spec, register_workflow_run
 from workspace_app.workflow.driver import run_workflow
 from workspace_app.workflow.handle import WorkflowHandle
 from workspace_app.workflow.run import RunStatus, WorkflowRun
@@ -22,6 +22,7 @@ from workspace_app.workflow.run import RunStatus, WorkflowRun
 
 async def test_a_refused_scheduled_run_ends_visible_and_says_why():
     spec: SpecStar = make_spec()
+    register_workflow_run(spec)  # registered post-`spec.apply` in the app (#870)
     run_id = (
         spec.get_resource_manager(WorkflowRun)
         .create(WorkflowRun(item_id="rca/a/1", captured_user="alice"))

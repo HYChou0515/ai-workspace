@@ -16,7 +16,7 @@ from specstar import SpecStar
 
 from tests.api.test_wui_routes import _Locator, _Sandbox, build
 from workspace_app.filestore.memory import MemoryFileStore
-from workspace_app.resources import make_spec
+from workspace_app.resources import make_spec, register_workflow_run
 from workspace_app.sandbox.protocol import ExecResult
 from workspace_app.workflow.orchestrator import WorkflowOrchestrator
 from workspace_app.workflow.run import RunStatus, WorkflowRun
@@ -71,6 +71,7 @@ def _orchestrator(spec: SpecStar, engine: _Engine | None = None) -> WorkflowOrch
 
 def _setup(sandbox: _JobSandbox, *, allowed=None, env=None, engine=None):
     spec = make_spec(default_user="default-user")
+    register_workflow_run(spec)  # registered post-`spec.apply` in the app (#870)
     engine = engine or _Engine()
     orch = _orchestrator(spec, engine)
     kw = {} if allowed is None else {"allowed": allowed}

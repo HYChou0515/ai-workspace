@@ -11,6 +11,7 @@ asks for a resource manager (KeyError: Notification etc.).
 think you need it, you actually need ``make_spec``.
 """
 
+import contextlib
 from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
@@ -714,11 +715,7 @@ def _register_all(spec: SpecStar, superusers: frozenset[str] = frozenset()) -> N
     # recipient indexed so "my notifications" is a query, not a full scan; dedup_key
     # indexed so a workflow send_notification's "already sent?" is a query (#435 P5).
     spec.add_model(Notification, indexed_fields=["recipient", "dedup_key", "outbound"])
-    # #100: workflow runs. item_id indexed so "an item's runs" is a query; status
-    # so "active runs" (the concurrency cap) is a query, not a full scan. The
-    # filesystem is the journal (manual §9), so this resource holds status, not
-    # step results.
-    spec.add_model(WorkflowRun, indexed_fields=["item_id", "status"])
+    # #100: workflow runs are registered AFTER `spec.apply` — `register_workflow_run`.
     # document_id + collection_id indexed so the "cited N×" tallies are a
     # group-by aggregate (`exp_aggregate_by` → {key: count}) instead of a full
     # scan of the append-only log on every list call. Schema("v2") + the None
@@ -914,3 +911,21 @@ def _register_all(spec: SpecStar, superusers: frozenset[str] = frozenset()) -> N
     # in Python; auto-CRUD routes (POST/GET/PUT/DELETE /custom-sanity-question)
     # own the lifecycle. category indexed for a possible 題組 filter.
     spec.add_model(CustomSanityQuestion, indexed_fields=["category"])
+
+
+def register_workflow_run(spec: SpecStar) -> None:
+    """Register workflow runs on ``spec`` — idempotently, and (in the app) only
+    after ``spec.apply`` (#870).
+
+    ``item_id`` is indexed so "an item's runs" is a query, ``status`` so "active
+    runs" (the concurrency cap) is one, not a full scan. The filesystem is the
+    journal (manual §9), so this resource holds status, not step results.
+
+    Not in ``make_spec``: specstar gives every model registered before ``apply``
+    the full auto-CRUD, and this one's had no gate — anyone read, changed or
+    deleted any item's run through ``/api/workflow-run``. A run's routes are the
+    item-scoped ones (``/a/{slug}/items/{item_id}/runs/…``), each checking the
+    run is the URL's item's. A caller with no app (a test, a script) calls this
+    itself."""
+    with contextlib.suppress(ValueError):
+        spec.add_model(WorkflowRun, indexed_fields=["item_id", "status"])
