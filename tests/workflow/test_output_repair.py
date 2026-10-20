@@ -413,3 +413,57 @@ def test_a_steps_transcript_shows_a_repair_as_its_own_attempt():
     )
     assert "## Attempt 2 (repair)" in md and "### Repair request" in md
     assert md.index("still not valid JSON") > md.index("Sure! Here are the jobs.")
+
+
+def test_a_csv_field_past_the_parser_limit_still_gets_a_repair_request():
+    """`artifact_valid` reports such a reply as not valid CSV; building the request
+    must not then raise from the same parser."""
+    reply = 'a,b\n"' + "x" * 200_000 + "\n1,2\n"
+    text = repair_request(
+        reply, CheckResult(False, "file o.csv is not valid CSV", True), None, "csv"
+    )
+    assert "does not match the required format: file o.csv is not valid CSV" in text
+
+
+@pytest.mark.parametrize(
+    "reply",
+    ["Here is the table:\na,b,c\n", "Sure:\nname,n\n"],
+)
+def test_a_csv_preamble_is_quoted_even_when_the_table_has_one_row(reply: str):
+    """A tie between a one-cell sentence and a one-row table: the table is the rows a
+    reply ends with."""
+    text = repair_request(reply, CheckResult(False, "inconsistent", True), None, "csv")
+    preamble = reply.splitlines()[0]
+    assert f"The problem is here:\n<<<\n{preamble}\n>>>" in text
+
+
+async def test_an_authors_check_of_another_file_is_not_repaired(wf: WorkflowHandle):
+    """Only the reply's own format can be rewritten by a no-tools turn. An author's
+    `artifact_valid` on a file the agent wrote with its tools must re-run the step."""
+    held: list[list[str] | None] = []
+    writes = iter(["{", "{}"])
+
+    async def drive_turn(prompt: str, tools: list[str] | None) -> str:
+        held.append(tools)
+        if tools:
+            await wf.write("side.json", next(writes))
+        return '{"a": 1}'
+
+    wf.drive_turn = drive_turn
+    await agent_write_step(
+        wf,
+        prompt="write both",
+        phase="p",
+        out="report.json",
+        kind="json",
+        tools=["write_file"],
+        check=artifact_valid("side.json", "json"),
+        retries=1,
+    )
+    assert held == [["write_file"], ["write_file"]]
+
+
+async def test_a_missing_field_reason_lists_a_bounded_number_of_fields(wf: WorkflowHandle):
+    fields = {f"k{i}": i for i in range(500)}
+    verdict = await _outputs_check({"want": "str"})(wf, {"fields": fields})
+    assert len(verdict.reason) < 400 and "more" in verdict.reason

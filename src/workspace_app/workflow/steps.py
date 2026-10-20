@@ -308,7 +308,7 @@ async def agent_write_step(
         phase=phase,
         args=args,
         execute=execute,
-        check=check or artifact_valid(out, kind, requires),
+        check=check or artifact_valid(out, kind, requires, of_reply=True),
         retries=retries,
         cache=cache,
         # only a reply with a machine format can be repaired; `produces` writes files
