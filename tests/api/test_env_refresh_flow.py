@@ -629,3 +629,17 @@ async def test_a_rejection_that_names_nothing_held_is_a_passing_failure():
     assert out.rejected == []
     assert w.shared["i1"] == {**OLD, "HOST": "h"}
     assert writes == []
+
+
+async def test_a_rejection_naming_only_what_the_layer_no_longer_holds_is_a_passing_failure():
+    """Review round 3: a partial rejection left the expired access token
+    alone; the next run's rejection names the refresh token, which the layer
+    no longer holds — nothing to clear, so not reported dead again."""
+    w = _World()
+    w.store.replace_personal("alice", {"ERP_TOKEN": "old"})
+    erp = _Erp(outcome=RefreshRejected({"ERP_REFRESH"}))
+
+    out = await w.run([erp])
+
+    assert out.rejected == []
+    assert w.store.personal("alice") == {"ERP_TOKEN": "old"}
