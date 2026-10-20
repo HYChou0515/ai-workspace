@@ -40,7 +40,8 @@ class RunStatus(StrEnum):
 
 class PhaseState(Struct):
     """Per-phase progress for the phase-level diagram (manual §12). ``status`` is
-    one of pending/running/passed/failed/skipped/awaiting_human; the counters
+    one of pending/running/passed/failed/skipped/stopped/awaiting_human (at most
+    one running: `settle_phases`); the counters
     drive a phase's "12/20 · 1 failed" sub-progress when it loops over a batch."""
 
     phase: str

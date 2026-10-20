@@ -389,7 +389,7 @@ class WorkflowOrchestrator:
         try:
             self._rm().update(
                 run_id,
-                msgspec.structs.replace(data, progress_at=self.now()),
+                with_settled_phases(data, progress_at=self.now()),
                 expected_etag=res.info.etag,
             )
         except PreconditionFailedError:  # pragma: no cover - cross-pod CAS race
@@ -1369,7 +1369,7 @@ class WorkflowOrchestrator:
         try:
             self._rm().update(
                 run_id,
-                msgspec.structs.replace(res.data, status=RunStatus.PENDING),
+                with_settled_phases(res.data, status=RunStatus.PENDING),
                 expected_etag=res.info.etag,
             )
         except PreconditionFailedError as exc:

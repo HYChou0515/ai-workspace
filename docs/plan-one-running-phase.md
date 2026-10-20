@@ -104,6 +104,19 @@ Why, read from `b695d7db`:
   cap first cancels the driver (the phase becomes `stopped`) and then records
   `error`; that phase must end `failed`. Only `settle_phases` writes
   `stopped`, so re-reading it is safe.
+- **A steer's re-drive enters its phase again** (review R1). A mid-run steer
+  Stops the run (its phase reads `stopped`) and the approved re-drive restarts
+  that step in that phase; with `current_phase` unchanged it never "entered",
+  so it stayed `stopped` past DONE. `confirm_steer` now clears
+  `current_phase`, as `retry` does.
+- **Every write of a run settles, CAS claims included.** Besides the two
+  `_patch`es, the resume claim and the retry claim write a run directly (with
+  an etag); they go through `with_settled_phases` too.
+- **The phase diagram shows `stopped` as it shows every state**: its tooltip
+  is the raw status (`Read: passed`, `Sort: stopped`), its tone the neutral
+  one a stopped run has, and `WorkflowProgress`'s bar draws it grey like a
+  phase not reached. Only the execution tab writes "Stopped" (D5 said the
+  diagram would too; it names no state in words).
 - **P3's fixture stayed.** The old fixture (`read` passed while `sort` runs) is
   exactly what the orchestrator writes since P1.
 
