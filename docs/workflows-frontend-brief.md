@@ -122,7 +122,7 @@ broke"** at a glance.
   `current_phase`, per-phase status/progress, `failures[]`, `result`, `started`/`ended`,
   and `pending_decision` (`{ title, summary, allow: [...] }`) while `awaiting_human`.
   From `GET /a/{slug}/items/{itemId}/runs/{runId}` and the run-list endpoint.
-- **Live SSE events** (from `…/runs/{runId}/stream`): `PhaseEntered`, `StepStarted`,
+- **Live SSE events** (from `…/runs/{runId}/stream`, a 404 for a run that is not this item's): `PhaseEntered`, `StepStarted`,
   `StepPassed`, `StepFailed`, `StepSkipped`, `StepRetrying`, `AwaitingHuman`, plus the
   existing agent events (reasoning / tool calls / messages) that `AgentEntryView`
   already renders.

@@ -73,6 +73,7 @@ from ..quota.user_limits import UserLimits, register_user_quota
 from ..resources import (
     AgentConfig,
     CheckRun,
+    register_workflow_run,
 )
 from ..resources.groups import groups_of
 from ..resources.kb import EMBED_DIM, Collection
@@ -1905,6 +1906,9 @@ def create_app(
     # wired for one backend; now that it is also the per-person ledger, a
     # sandbox wake on a bare test client would hit an unregistered model.
     register_sandbox_activity(spec)
+    # Workflow runs: post-apply so the run table has no CRUD routes of its own —
+    # it had them with no gate at all (#870). Before anything reads a run.
+    register_workflow_run(spec)
     # Skill hub entries (docs/plan-skill-hub.md): post-apply like the two
     # sandbox stores, so no CRUD route can PUT an entry around the review.
     register_skill_hub(spec)

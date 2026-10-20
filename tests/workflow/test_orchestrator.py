@@ -655,6 +655,27 @@ async def test_cancel_unknown_run_is_a_noop(spec_instance: SpecStar):
     assert await orch.cancel("does-not-exist", "i") is False
 
 
+async def test_a_run_of_another_item_is_not_cancelled_through_this_one(spec_instance: SpecStar):
+    """#870: `cancel` took the item from the URL and the run from its id and never
+    checked they belong together, so a holder of `converse` on item B stopped item
+    A's run through B's URL. Another item's run is the same as no run: nothing is
+    signalled, the run keeps going, and the answer is the unknown-run one."""
+    stopped: list[str] = []
+
+    async def on_stop(key: str) -> None:
+        stopped.append(key)
+
+    async def _run(wf, inputs):  # never invoked — the run row is inserted directly
+        return {}
+
+    orch, _ = _orch(spec_instance, _run, on_stop=on_stop)
+    run_id = _insert_run(orch, item_id="iA", chat_id="chatA", status=RunStatus.RUNNING)
+
+    assert await orch.cancel(run_id, "iB") is False
+    assert stopped == []
+    assert orch._get(run_id).status is RunStatus.RUNNING
+
+
 async def test_a_decision_on_a_run_whose_workflow_no_longer_loads_is_refused_before_writing(
     spec_instance: SpecStar,
 ):

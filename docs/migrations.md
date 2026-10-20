@@ -2862,7 +2862,7 @@ command 的完整 schema——那正是這個功能在做的事。從 `index.jso
   「A workflow failed at “…”」。
 - 有執行在等人決定時，workspace 頂列下方會出現一條提示（哪個執行、等什麼），按 Open 到那個執行的分頁；
   不會自己消失，可以關掉，下一個關卡會再提示；那個執行的分頁在前面時不顯示。已經有更新的執行的舊執行不算在等
-  （它只能 Stop），不出現在提示與圖示的數字裡。`GET …/runs` 的每一筆多了 `latest`（是不是那個 workflow 最新的一次），而且**不再回傳頁面工作**（#942 的 page job）：它們不是 workflow 的執行。`/wui` 底下沒有列頁面工作的路由（單一件用 `GET …/wui/jobs/{job_id}` 查）；它們在 item 的聊天列表上（「頁面：…」）。**rollout 前**：如果你們有外部腳本靠這支列出頁面工作，改用 run 的通用列表 `GET /api/workflow-run/data`，篩這個 item 的、`page_job` 不是 null 的那些。沒做的症狀：腳本列不到頁面工作。沒有執行在跑時，畫面每 30 秒重新看一次這個 item 的執行
+  （它只能 Stop），不出現在提示與圖示的數字裡。`GET …/runs` 的每一筆多了 `latest`（是不是那個 workflow 最新的一次），而且**不再回傳頁面工作**（#942 的 page job）：它們不是 workflow 的執行。`/wui` 底下沒有列頁面工作的路由（單一件用 `GET …/wui/jobs/{job_id}` 查）；它們在 item 的聊天列表上（「頁面：…」）。**rollout 前**：如果你們有外部腳本靠這支列出頁面工作，改用 run 的通用列表 `GET /api/workflow-run/data`，篩這個 item 的、`page_job` 不是 null 的那些。沒做的症狀：腳本列不到頁面工作。（[#984](#pr-984) 起這組路由已拿掉，改用 `GET …/wui/jobs`，見該條。）沒有執行在跑時，畫面每 30 秒重新看一次這個 item 的執行
   （有在跑的時候每 2 秒），所以排程或別人啟動的執行也會出現。
 - 一個階段的步驟若因為之前的執行已經做過而直接沿用（journal 快取），`WorkflowRun.phases` 裡那個階段的狀態現在是
   `skipped`（畫面上「Already done」），以前停在 `pending`（「Not started」）。
@@ -3009,6 +3009,35 @@ command 的完整 schema——那正是這個功能在做的事。從 `index.jso
 - 在一個新的（私有）workspace 打開 WUI 頁按 Deploy：網址下方是「目前只有你打得開這個連結。」與「分享設定…」。
 - 打開「WUI」總覽：那一頁的卡片第二行開頭是「只有你打得開」；公開 workspace 的頁面沒有這段。
 - 用一個沒被加進該 workspace 的帳號開那個連結：看到「打不開這個頁面。最常見的原因是你還沒有這個 workspace 的權限…」。
+
+---
+
+### 2026-10-20 · #984 workflow 的執行只認自己 item 的網址；執行紀錄不再有自己的 CRUD 路由 {#pr-984}
+
+**設定** — 無。
+
+**資料** — 無。執行紀錄（`WorkflowRun`）的資料形狀沒變、沒有升版，不用跑 migrate。
+
+**k8s · CI 側** — 只改後端，照常重 build、部署。
+
+**行為改變，沒有開關**：
+
+- **`/api/workflow-run/…` 整組路由拿掉了**，全部回 404：列表（`/data`）、單筆讀取、修改、刪除、revision 等等。
+  它們是 specstar 替執行紀錄自動產生的，沒有任何權限檢查，任何人都能讀、改、刪任何 item 的執行。前端從沒用過。
+  如果有外部腳本照 [#913](#pr-913) 的說明用 `GET /api/workflow-run/data` 列頁面工作，要改用
+  `GET /api/a/<slug>/items/<item>/wui/jobs`。它只回這個 item 的頁面工作，每一筆是 `job_id`、`kind`、`name`、
+  `state`、`output`、`error`；呼叫的人要有那個 item 的執行權限（跟查單一件 `…/wui/jobs/<job_id>` 一樣）。
+  新路由要新 pod 上線後才有、舊路由在新 pod 上就沒了，所以分兩步：**rollout 前**讓腳本先打新路由、拿到 404 就退回舊的
+  `/data`；**rollout 後**拿掉退回舊路由那段。只在 rollout 前直接換成新路由的話，rollout 途中打到舊 pod 會 404；
+  rollout 後才換的話，打到新 pod 會 404。沒做的症狀：腳本拿到 404，列不到頁面工作。
+- **帶執行編號的路由只認網址上那個 item 自己的執行**。用別的 item 的網址帶進來，取消回 204 但不會停掉那個執行（以前會停掉），其他都回 404，跟不存在的執行一樣。
+  `…/runs/<id>/stream` 對不存在的執行也回 404 了（以前會退回訂閱 item 自己的串流）；前端不用這條，不受影響。
+
+**確認做完**（`rollout 後`）：
+
+- `curl -s -o /dev/null -w '%{http_code}\n' https://<host>/api/workflow-run/data`（帶任一個登入身分）印 `404`。
+- 用有某個 item 執行權限的帳號打 `GET /api/a/<slug>/items/<item>/wui/jobs`：回 200，內容是 JSON 陣列；
+  那個 item 沒有頁面工作時是 `[]`。
 
 ## 附錄 A：資料回填的機制（specstar 為什麼不會自己補）
 

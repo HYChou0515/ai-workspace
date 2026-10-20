@@ -182,6 +182,15 @@ class JobOut(BaseModel):
     error: str | None = None
 
 
+class JobListed(JobOut):
+    """One of an item's page jobs in `GET …/wui/jobs`: its status, as
+    `GET …/wui/jobs/{job_id}` reads it, plus which job it is (#870)."""
+
+    job_id: str
+    kind: str
+    name: str
+
+
 #: How long `callAgent` waits for its answer before stopping the job (#942 §3.1)
 #: — the same minute a tool call gets. Module-level so a test can shorten it.
 CALL_TIMEOUT_S = 60.0
@@ -876,6 +885,27 @@ def register_wui_routes(
         return JobStarted(
             job_id=await _start_tool(investigation_id, body.name, body.input, request)
         )
+
+    @app.get("/a/{slug}/items/{item_id}/wui/jobs")
+    async def wui_list_jobs(slug: str, item_id: str) -> list[JobListed]:
+        """The item's page jobs (#870): what a script read off the run table's
+        own routes, which answered anyone about every item. The same right as a
+        job's status, `execute`."""
+        investigation_id = locator.require_access(slug, item_id, "execute")
+        out = []
+        for job_id, run, state in await orchestrator.page_jobs(investigation_id):
+            assert run.page_job is not None
+            out.append(
+                JobListed(
+                    job_id=job_id,
+                    kind=run.page_job.kind,
+                    name=run.page_job.name,
+                    state=state.state,
+                    output=state.output,
+                    error=state.error,
+                )
+            )
+        return out
 
     @app.get("/a/{slug}/items/{item_id}/wui/jobs/{job_id}")
     async def wui_job_status(slug: str, item_id: str, job_id: str) -> JobOut:
