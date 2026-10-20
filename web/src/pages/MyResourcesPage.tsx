@@ -30,6 +30,7 @@ import { qk } from "../api/queryKeys";
 import { useIsSuperuser } from "../hooks/useIsSuperuser";
 import { AppTag } from "../components/AppTag";
 import { UserPicker } from "../components/UserPicker";
+import { normaliseMemory } from "../components/ItemEnvironmentSize";
 import { DeleteItemBody } from "../components/DeleteItemConfirm";
 import { DialogProvider, useDialog } from "../components/Dialog";
 import { api } from "../api";
@@ -310,6 +311,32 @@ function AdminOverrides({ client }: { client: MyResourcesApi }) {
   const [form, setForm] = useState({ count: "", cpu: "", memory: "", disk: "" });
   const [looked, setLooked] = useState<MyResources | null | undefined>(undefined);
   const [saved, setSaved] = useState(false);
+  // The server's sentence when it refused the exception — said, never a
+  // silent "Applied" (2026-10-19).
+  const [saveError, setSaveError] = useState("");
+  // Sizes are read the way the item's own size field reads them ("123GB",
+  // "1.5 G"), and sent in the server's spelling; one that cannot be read is
+  // said at its field before anything is sent (NN/g "Reporting Errors in Forms").
+  // `0` and `max` are no limit — how one person is given none (the item's own
+  // size field refuses them; an item cannot be unlimited, a person can).
+  const noLimit = (text: string) => ["0", "max"].includes(text.trim());
+  const unreadable = (text: string) => text.trim() !== "" && !noLimit(text) && normaliseMemory(text) === null;
+  const sizeOf = (text: string) =>
+    text.trim() === "" || noLimit(text) ? text.trim() : (normaliseMemory(text) ?? text);
+  const badMemory = unreadable(form.memory);
+  const badDisk = unreadable(form.disk);
+  // Said once the field is left, not while typing ("1.5" on the way to "1.5 GB"
+  // is no error); Save is held all along.
+  const [left, setLeft] = useState({ memory: false, disk: false });
+  // A size the SERVER refused, drawn on its own field like one read here.
+  const [refused, setRefused] = useState<"memory" | "disk" | null>(null);
+  const change = (patch: Partial<typeof form>) => {
+    setForm({ ...form, ...patch });
+    // What was said is about the form as it was.
+    setSaved(false);
+    setSaveError("");
+    setRefused(null);
+  };
   const list = useQuery({
     queryKey: qk.userOverrides,
     queryFn: () => client.adminList(),
@@ -325,12 +352,22 @@ function AdminOverrides({ client }: { client: MyResourcesApi }) {
     setLooked(userId ? await client.adminGet(userId) : undefined);
   };
   const save = async () => {
-    await client.adminSet(userId, {
-      count: form.count ? Number(form.count) : 0,
-      cpu: form.cpu ? Number(form.cpu) : 0,
-      memory: form.memory,
-      disk: form.disk,
-    });
+    setSaveError("");
+    try {
+      await client.adminSet(userId, {
+        count: form.count ? Number(form.count) : 0,
+        cpu: form.cpu ? Number(form.cpu) : 0,
+        memory: sizeOf(form.memory),
+        disk: sizeOf(form.disk),
+      });
+    } catch (e) {
+      setSaved(false);
+      const message = e instanceof Error ? e.message : String(e);
+      const field = (["memory", "disk"] as const).find((f) => message.startsWith(`${f}:`));
+      if (field) setRefused(field);
+      else setSaveError(message);
+      return;
+    }
     setSaved(true);
     setLooked(await client.adminGet(userId));
     refreshList();
@@ -404,7 +441,7 @@ function AdminOverrides({ client }: { client: MyResourcesApi }) {
             type="number"
             min="0"
             value={form.count}
-            onChange={(e) => setForm({ ...form, count: e.target.value })}
+            onChange={(e) => change({ count: e.target.value })}
           />
         </span>
         <span className="admin-field">
@@ -417,30 +454,42 @@ function AdminOverrides({ client }: { client: MyResourcesApi }) {
             min="0"
             step="0.5"
             value={form.cpu}
-            onChange={(e) => setForm({ ...form, cpu: e.target.value })}
+            onChange={(e) => change({ cpu: e.target.value })}
           />
         </span>
         <span className="admin-field">
           <label htmlFor="q-mem">{t("resources.admin.memory")}</label>
-          <input
-            autoComplete="off"
-            className="input"
-            id="q-mem"
-            placeholder="8G"
-            value={form.memory}
-            onChange={(e) => setForm({ ...form, memory: e.target.value })}
-          />
+          <span className="admin-size">
+            <input
+              autoComplete="off"
+              className="input"
+              id="q-mem"
+              placeholder="8G"
+              aria-invalid={(badMemory && left.memory) || refused === "memory"}
+              aria-describedby="q-mem-hint"
+              value={form.memory}
+              onChange={(e) => change({ memory: e.target.value })}
+              onBlur={() => setLeft({ ...left, memory: true })}
+            />
+            <SizeHint id="q-mem-hint" text={form.memory} bad={(badMemory && left.memory) || refused === "memory"} />
+          </span>
         </span>
         <span className="admin-field">
           <label htmlFor="q-disk">{t("resources.admin.disk")}</label>
-          <input
-            autoComplete="off"
-            className="input"
-            id="q-disk"
-            placeholder="50G"
-            value={form.disk}
-            onChange={(e) => setForm({ ...form, disk: e.target.value })}
-          />
+          <span className="admin-size">
+            <input
+              autoComplete="off"
+              className="input"
+              id="q-disk"
+              placeholder="50G"
+              aria-invalid={(badDisk && left.disk) || refused === "disk"}
+              aria-describedby="q-disk-hint"
+              value={form.disk}
+              onChange={(e) => change({ disk: e.target.value })}
+              onBlur={() => setLeft({ ...left, disk: true })}
+            />
+            <SizeHint id="q-disk-hint" text={form.disk} bad={(badDisk && left.disk) || refused === "disk"} />
+          </span>
         </span>
       </div>
 
@@ -450,7 +499,7 @@ function AdminOverrides({ client }: { client: MyResourcesApi }) {
           className="btn"
           data-variant="primary"
           data-size="sm"
-          disabled={!userId}
+          disabled={!userId || badMemory || badDisk}
           onClick={() => void save()}
         >
           {t("resources.admin.save")}
@@ -467,7 +516,22 @@ function AdminOverrides({ client }: { client: MyResourcesApi }) {
         </button>
         {saved ? <span className="detail">{t("resources.admin.saved")}</span> : null}
       </div>
+      {saveError ? (
+        <p role="alert" className="hint" style={{ color: "var(--err)" }}>
+          {t("resources.admin.saveFailed", { error: saveError })}
+        </p>
+      ) : null}
     </section>
+  );
+}
+
+/** Under a size field: how to write one, or — once typed — why this one cannot be read. */
+function SizeHint({ id, text, bad }: { id: string; text: string; bad: boolean }) {
+  const t = useT();
+  return (
+    <span id={id} className="hint" style={bad ? { color: "var(--err)" } : undefined}>
+      {bad ? t("resources.admin.sizeBad", { text: text.trim() }) : t("resources.admin.sizeHint")}
+    </span>
   );
 }
 

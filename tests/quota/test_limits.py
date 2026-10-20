@@ -64,7 +64,9 @@ def test_parse_size_treats_unset_zero_and_max_as_no_limit(text):
     assert parse_size(text) == 0
 
 
-@pytest.mark.parametrize("text", ["abc", "12X", "-5", "1.5G"])
+# "1.5G" is a size now — the client always took it (tests/fixtures/size_spellings.json);
+# a fraction WITHOUT a unit is still not one.
+@pytest.mark.parametrize("text", ["abc", "12X", "-5", "1.5"])
 def test_parse_size_rejects_junk_loudly(text):
     with pytest.raises(ResourceLimitError):
         parse_size(text)

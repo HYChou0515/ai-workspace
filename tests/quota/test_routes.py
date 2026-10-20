@@ -161,6 +161,27 @@ def test_an_override_takes_effect_without_a_restart():
         )
 
 
+def test_an_override_takes_a_size_as_a_person_writes_it():
+    # Reported 2026-10-19: "123GB" from the page was stored, and every read of
+    # that person's limits then failed "unreadable size '123GB'".
+    with _app(PerUserResources(count=1), me="root") as (client, _spec):
+        put = client.put("/admin/user-resources/alice", json={"memory": "123GB", "disk": "1.5 GB"})
+        assert put.status_code == 204
+
+        limits = client.get("/admin/user-resources/alice").json()["limits"]
+        assert (limits["memory_bytes"], limits["disk_bytes"]) == (123 * 1024**3, 1536 * 1024**2)
+        assert client.get("/admin/user-resources").status_code == 200
+
+
+def test_an_unreadable_size_is_refused_and_nothing_is_stored():
+    with _app(PerUserResources(count=1), me="root") as (client, _spec):
+        put = client.put("/admin/user-resources/alice", json={"count": 9, "disk": "12X"})
+
+        assert put.status_code == 422
+        assert "12X" in put.json()["detail"] and "disk" in put.json()["detail"]
+        assert client.get("/admin/user-resources").json()["overrides"] == []
+
+
 def test_clearing_an_override_falls_back_to_the_deploy_default():
     with _app(PerUserResources(count=1), me="root") as (client, _spec):
         client.put("/admin/user-resources/alice", json={"count": 9})
