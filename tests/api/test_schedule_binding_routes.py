@@ -179,6 +179,10 @@ _D = json.dumps(DAILY)
         _D,  # one row with no {"schedules": [...]} around it (round 5)
         f'{{"schedules": [], "schedule": [{_D}]}}',  # a row beside a valid list (round 5)
         '{"schedules": "oops"}',  # content that is not a schedules list: credit nobody
+        # A repeated key: JSON keeps the LAST value, so the first one's row is
+        # invisible to the sweep and to this check alike (round 6).
+        f'{{"schedules": [{_D}], "schedules": []}}',
+        f'{{"schedules": [{_D}], "schedules": null}}',
     ],
 )
 def test_a_file_that_was_broken_before_the_save_hands_its_rows_to_nobody(broken):
@@ -222,6 +226,22 @@ def test_a_file_created_empty_then_saved_credits_whoever_saved_it(empty):
 
     r = client.get(f"/a/rca/items/{rid}/schedule-bindings", params={"path": "/new/schedules.json"})
     assert [(row["bound_to"], row["reason"]) for row in r.json()["rows"]] == [("carol", "author")]
+
+
+def test_a_scalar_beside_the_list_hides_no_row_so_new_rows_are_still_credited():
+    """Round 6 (note c): a page may stamp `"version": 1` beside its list. A
+    number or a string can never become a row by being fixed, so it hides
+    nothing — the next save still credits the rows it adds."""
+    client, holder, rid, _ = _world(seeded=True)
+    holder["id"] = "carol"
+    stamped = json.dumps({"version": 1, "updated": "2026-10-21", "schedules": [DAILY]})
+    client.put(f"/a/rca/items/{rid}/files{FILE}", content=stamped)
+    rows = json.dumps({"version": 2, "updated": "2026-10-22", "schedules": [DAILY, EVENING]})
+
+    client.put(f"/a/rca/items/{rid}/files{FILE}", content=rows)
+
+    # DAILY was seeded (nobody's); EVENING is the row this save added.
+    assert sorted(r["bound_to"] for r in _list(client, rid)) == ["", "carol"]
 
 
 def test_a_file_over_the_row_cap_credits_nobody():

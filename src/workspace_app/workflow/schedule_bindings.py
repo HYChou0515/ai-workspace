@@ -194,27 +194,47 @@ def _unreadable(raw: str) -> bool:
 
     ===============================================  ==========
     blank (the file tree's New file writes "")         readable
-    not JSON                                         unreadable
+    not JSON, or JSON repeating a key (the decoder
+    keeps the LAST value; a row in an earlier one is
+    invisible to the sweep and to this check alike)  unreadable
     JSON with nothing in it: ``{}``, ``[]``, ``null``,
     ``{"schedules": null}``, ``{"schedule": []}``…     readable
-    a ``schedules`` list, every other key empty        readable
+    a ``schedules`` list, every other key empty or a
+    plain value (``"version": 1`` — a number or a
+    string can never become a row by being fixed)      readable
     anything else (a bare row, a mistyped key, a row
     beside the list, a string where the list goes)   unreadable
     ===============================================  ==========
 
-    Rounds 2–5 of review each found one shape the previous rule misjudged;
-    this table is what they add up to."""
+    Review rounds 2–6 each found shapes the previous rule misjudged; this
+    table is what they add up to."""
     if not raw.strip():
         return False
     try:
-        doc = json.loads(raw)
-    except ValueError:
+        doc = json.loads(raw, object_pairs_hook=_no_repeated_keys)
+    except ValueError:  # not JSON, or a repeated key (`_RepeatedKey`)
         return True
     if _nothing_in(doc):
         return False
     if file_rows(raw) is not None and isinstance(doc, dict):
-        return not all(_nothing_in(v) for k, v in doc.items() if k != "schedules")
+        return any(_holds_content(v) for k, v in doc.items() if k != "schedules")
     return True
+
+
+class _RepeatedKey(ValueError):
+    """An object that names one key twice."""
+
+
+def _no_repeated_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    keys = [k for k, _ in pairs]
+    if len(set(keys)) != len(keys):
+        raise _RepeatedKey("repeated key")
+    return dict(pairs)
+
+
+def _holds_content(value: object) -> bool:
+    """A list or object with something in it — where a row could be."""
+    return isinstance(value, (list, dict)) and not _nothing_in(value)
 
 
 def _nothing_in(value: object) -> bool:
