@@ -46,6 +46,7 @@ from ..sandbox.protocol import OutputSink
 from ..tokens import CallLane
 from ..workcalendar import OffHoursCalendar
 from .env_layers import PersonEnv
+from .env_refresh import EnvRefresher
 from .events import GoalUpdated, RunError, TurnEnded, UserMessage
 from .goal_offhours import build_offhours_calendar, owner_is_active, turn_signature
 from .goal_wrapup import headline, marker_text, night_transcript, write_summary
@@ -228,7 +229,11 @@ class ChatSendService:
         private_env: PrivateEnvStore | None = None,
         send_await_timeout: float = 25.0,
         turn_claims: ITurnClaimStore | None = None,
+        env_refresher: EnvRefresher | None = None,
     ) -> None:
+        # plan-env-token-refresh: a near-expiry token is refreshed before the
+        # turn's tools get it. None ⇒ never (a composition that wired none).
+        self._env_refresher = env_refresher
         # plan-graceful-shutdown P3: the durable claim a peer re-runs this turn
         # from if this pod goes away. None ⇒ no store (single-pod / tests):
         # turns are as pod-bound as they always were.
@@ -475,20 +480,31 @@ class ChatSendService:
                     )
                 except Exception:
                     self._request_env_failed(item_id)
-            return await unattended_layer(
+            env = await unattended_layer(
                 self._private_env,
                 headless=headless,
                 acting_for=user_id,
                 item_id=item_id,
                 verb="converse",
             )
+            return await self._refreshed(env, user_id=user_id, item_id=item_id)
         fresh: dict[str, str] | None = None
         if self._request_env is not None:
             try:
                 fresh = await self._request_env.env_for(request, user_id=user_id, item_id=item_id)
             except Exception:
                 self._request_env_failed(item_id)
-        return await private_layer(self._private_env, user_id=user_id, item_id=item_id, fresh=fresh)
+        env = await private_layer(self._private_env, user_id=user_id, item_id=item_id, fresh=fresh)
+        return await self._refreshed(env, user_id=user_id, item_id=item_id)
+
+    async def _refreshed(self, env: PersonEnv, *, user_id: str, item_id: str) -> PersonEnv:
+        """``env`` with any near-expiry token refreshed first
+        (`docs/plan-env-token-refresh.md`). The shared copy, when refreshed, is
+        written to the item, where the turn reads it next."""
+        if self._env_refresher is None:
+            return env
+        outcome = await self._env_refresher.apply(env, user_id=user_id, item_id=item_id)
+        return outcome.person
 
     @staticmethod
     def _request_env_failed(item_id: str) -> NoReturn:
@@ -1091,13 +1107,14 @@ class ChatSendService:
             # The author's own stored values (`plan-wui-viewer-login`): kept on
             # the shared backend so exactly this peer has them; the claim
             # itself still carries none.
-            return await unattended_layer(
+            env = await unattended_layer(
                 self._private_env,
                 headless=headless,
                 acting_for=claim.author,
                 item_id=claim.investigation_id,
                 verb="converse",
             )
+            return await self._refreshed(env, user_id=claim.author, item_id=claim.investigation_id)
 
         task = asyncio.create_task(
             self._start_turn(

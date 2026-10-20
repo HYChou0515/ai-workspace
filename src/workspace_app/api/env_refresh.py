@@ -32,6 +32,7 @@ from typing import Literal
 
 from .env_layers import PersonEnv, is_blank, layer_of
 from .env_provider import IEnvProvider, RefreshRejected, supports_refresh
+from .locator import ItemLocator
 from .private_env import PrivateEnvStore, own_layer
 from .refresh_claims import RefreshClaims
 
@@ -236,3 +237,50 @@ def _with(
     # private: composed exactly as the turn composes it — what they typed, with
     # the seam's answer over it — so a cleared name is gone from the tool's env.
     return replace(out, person=replace(out.person, own=own_layer(values, seam)))
+
+
+#: Who a refreshed shared copy is written as (D3): the platform, not a person.
+REFRESH_ACTOR = "system:env-refresh"
+
+
+class EnvRefresher:
+    """``refresh_if_due`` with the app's own parts — the ONE call every entry
+    point that runs a tool for a person makes, between composing the person's
+    layers and ``resolve`` (chat send, a page's tool call, a goal round, a
+    re-run, a workflow node).
+
+    The sign-ins are read at CALL time (``providers()``), the same seam the
+    env-provider routes read, so a deploy reloading them — or a test swapping
+    them — is seen. A deploy with no sign-in that refreshes costs nothing: no
+    item read, no I/O."""
+
+    def __init__(
+        self,
+        *,
+        providers: Callable[[], Sequence[IEnvProvider]],
+        store: PrivateEnvStore | None,
+        claims: RefreshClaims | None,
+        locator: ItemLocator,
+    ) -> None:
+        self._providers = providers
+        self._store = store
+        self._claims = claims
+        self._locator = locator
+
+    async def apply(self, person: PersonEnv, *, user_id: str, item_id: str) -> RefreshOutcome:
+        providers = [p for p in self._providers() if supports_refresh(p)]
+        if not providers:
+            return RefreshOutcome(person=person, shared={})
+        layers = await asyncio.to_thread(self._locator.env_layers_of, item_id)
+        return await refresh_if_due(
+            providers=providers,
+            store=self._store,
+            claims=self._claims,
+            read_shared=lambda i: self._locator.env_layers_of(i).shared,
+            write_shared=lambda i, v: self._locator.write_shared_env(i, v, actor=REFRESH_ACTOR),
+            shared=layers.shared,
+            person=person,
+            policy=layers.policy,
+            user_id=user_id,
+            item_id=item_id,
+        )

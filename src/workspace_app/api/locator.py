@@ -20,10 +20,12 @@ import time
 from collections.abc import Callable
 from typing import NamedTuple
 
+import msgspec
 from fastapi import HTTPException
 from specstar import SpecStar
 from specstar.types import (
     DuplicateResourceError,
+    PreconditionFailedError,
     ResourceIDNotFoundError,
     ResourceIsDeletedError,
 )
@@ -212,6 +214,32 @@ class ItemLocator:
         if found is None:
             return ItemEnv(shared={}, policy={})
         return ItemEnv(shared=dict(found[1].env_vars), policy=dict(found[1].env_policy))
+
+    def write_shared_env(self, item_id: str, values: dict[str, str], *, actor: str) -> None:
+        """Replace the item's SHARED layer (`env_vars`) server-side — the one
+        writer that is not a person's PATCH: a refreshed token
+        (`docs/plan-env-token-refresh.md` D3), written whoever the run is for.
+        The revision names ``actor`` so it reads as the platform's, not a
+        person's. A CAS on the row's etag, re-read on a lost race, so a
+        concurrent edit of another field is not written over."""
+        found = find_work_item(self._spec, item_id)
+        if found is None:
+            return
+        rm = self._spec.get_resource_manager(type(found[1]))
+        for _ in range(5):
+            res = rm.get(item_id)
+            item = res.data
+            try:
+                rm.update(
+                    item_id,
+                    msgspec.structs.replace(item, env_vars=dict(values)),
+                    expected_etag=res.info.etag,  # ty: ignore[unknown-argument]
+                    user=actor,
+                )
+                return
+            except PreconditionFailedError:  # pragma: no cover - cross-request race
+                continue
+        raise RuntimeError(f"shared env write lost every CAS for {item_id!r}")  # pragma: no cover
 
     def owner_of(self, item_id: str) -> str | None:
         """Who this item's resources are charged to — `owner`, falling back to

@@ -52,6 +52,7 @@ from ..workflow.offered import no_such_workflow, wont_parse
 from ..workflow.orchestrator import TooManyPageJobs
 from ..workflow.run import PageJob
 from .env_layers import PersonEnv, resolve, resolve_env
+from .env_refresh import EnvRefresher
 from .locator import ItemLocator
 from .private_env import PrivateEnvStore, private_layer
 from .request_env import IRequestEnv
@@ -241,6 +242,7 @@ def register_wui_routes(
     view_plugin_artifacts: Mapping[str, str],
     request_env: IRequestEnv | None = None,
     private_env: PrivateEnvStore | None = None,
+    env_refresher: EnvRefresher | None = None,
     get_user_id: Callable[[], str] | None = None,
     orchestrator: Any = None,
     turn_engine: Any = None,
@@ -308,7 +310,12 @@ def register_wui_routes(
                 # built that string out of the cookie it was reading.
                 detail="This page could not confirm who you are. Sign in again, then reopen it.",
             ) from None
-        return await private_layer(private_env, user_id=uid, item_id=item_id, fresh=fresh)
+        env = await private_layer(private_env, user_id=uid, item_id=item_id, fresh=fresh)
+        if env_refresher is None:
+            return env
+        # plan-env-token-refresh: a near-expiry token is refreshed before the
+        # page's tool gets it.
+        return (await env_refresher.apply(env, user_id=uid, item_id=item_id)).person
 
     async def _external(item_id: str) -> ExternalTools:
         if resolve_external is not None:
