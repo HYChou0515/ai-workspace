@@ -6,10 +6,12 @@ The run is a background task, so these use ``with TestClient(app) as client:`` �
 keeps a persistent event-loop thread alive so the run progresses while the test
 thread polls (a bare ``TestClient`` tears its loop down between requests)."""
 
+import asyncio
 import contextlib
 import time
 
-from fastapi import FastAPI
+import pytest
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
 from specstar import SpecStar
 
@@ -1160,3 +1162,122 @@ def test_the_runs_list_is_the_workflows_executions_not_a_pages_jobs():
     assert job not in listed
     assert listed == {execution: True}
     assert files["latest"] is True
+
+
+# ── #870: every route that takes a run id answers only for the URL's item ────
+
+# Every item route that takes a run (or page-job) id from its path, with a body it
+# accepts and whether the id names a workflow execution or a page job. This list is
+# the oracle the discovered routes are checked against, not derived from them: a
+# new route that takes a run id fails `test_every_run_id_route_is_on_the_list`
+# until it is added here, and then the class test below covers it.
+_RUN_ID_ROUTES = [
+    ("GET", "runs/{run_id}", None, "execution"),
+    ("GET", "runs/{run_id}/files", None, "execution"),
+    ("GET", "runs/{run_id}/stream", None, "execution"),
+    ("POST", "runs/{run_id}/cancel", None, "execution"),
+    ("POST", "runs/{run_id}/decisions", {"choice": "approve"}, "execution"),
+    ("POST", "runs/{run_id}/steer", {"instruction": "go"}, "execution"),
+    ("POST", "runs/{run_id}/steer/confirm", {"approve": True}, "execution"),
+    ("POST", "runs/{run_id}/retry", {}, "execution"),
+    ("GET", "wui/jobs/{job_id}", None, "page_job"),
+    ("POST", "wui/jobs/{job_id}/stop", None, "page_job"),
+]
+
+
+def test_every_run_id_route_is_on_the_list():
+    """The class test below is only as wide as its list. Every item route whose
+    path takes a run id is on it, so a seventh entrance cannot arrive unchecked
+    the way cancel stayed open after decide / steer / confirm were closed."""
+    app, _spec, _item = _app()
+    prefix = "/api/a/{slug}/items/{item_id}/"
+    found = {
+        (method, route.path.removeprefix(prefix))
+        for route in app.routes
+        if (path := getattr(route, "path", "")).startswith(prefix)
+        and ("{run_id}" in path or "{job_id}" in path)
+        for method in getattr(route, "methods", set()) - {"HEAD"}
+    }
+    assert found == {(m, p) for m, p, _b, _k in _RUN_ID_ROUTES}
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "body", "kind"),
+    _RUN_ID_ROUTES,
+    ids=[f"{m} {p}" for m, p, *_ in _RUN_ID_ROUTES],
+)
+def test_a_run_answers_only_through_its_own_items_url(method, path, body, kind):
+    """#870: these routes take the item from the URL and the run from its id. A
+    holder on item B must not read, follow, stop, decide, steer or continue item
+    A's run through B's URL — another item's run is a run B does not have. The
+    same request through A's own URL is NOT refused as unknown, so the refusal is
+    the item check and not a body this test got wrong."""
+    from workspace_app.workflow.run import PageJob, RunStatus, WorkflowRun
+
+    app, spec, item_a = _app()
+    item_b = _second_item(spec)
+    run_id = (
+        spec.get_resource_manager(WorkflowRun)
+        .create(
+            WorkflowRun(
+                item_id=item_a,
+                captured_user="u",
+                status=RunStatus.RUNNING,
+                page_job=PageJob(kind="agent", name="x", input="hi")
+                if kind == "page_job"
+                else None,
+            )
+        )
+        .resource_id
+    )
+    url = path.replace("{run_id}", run_id).replace("{job_id}", run_id)
+
+    def call(client: TestClient, item_id: str) -> int:
+        """The status this request gets. A stream that IS served is a never-ending
+        event stream the in-process transport would read forever — and one served
+        to B would hang this test instead of failing it — so a stream is asked of
+        its handler: 200 when it answers with a stream, its error's code otherwise."""
+        if not path.endswith("/stream"):
+            return client.request(method, f"{_base(item_id)}/{url}", json=body).status_code
+        handler = _route(app, f"/a/{{slug}}/items/{{item_id}}/{path}")
+        try:
+            resp = asyncio.run(handler(slug="playground", item_id=item_id, run_id=run_id))
+        except HTTPException as exc:
+            return exc.status_code
+        assert isinstance(resp, StreamingResponse)
+        return 200
+
+    def status_of() -> RunStatus:
+        data = spec.get_resource_manager(WorkflowRun).get(run_id).data
+        assert isinstance(data, WorkflowRun)
+        return data.status
+
+    # What a Stop does to a run driven on another pod is signal it (the shared
+    # turn epoch) — there is no status to read yet, so the signal is the evidence.
+    orch = app.state.workflow_orchestrator
+    stopped: list[str] = []
+    signal = orch.on_stop
+
+    async def on_stop(key: str) -> None:
+        stopped.append(key)
+        if signal is not None:
+            await signal(key)
+
+    orch.on_stop = on_stop
+
+    with TestClient(app) as client:
+        through_b = call(client, item_b)
+        after_b = status_of()
+        signalled_by_b = list(stopped)
+        through_a = call(client, item_a)
+
+    assert after_b is RunStatus.RUNNING  # B's request changed nothing on A's run
+    assert signalled_by_b == []  # ... and stopped nothing
+    if path.endswith("/cancel"):
+        # Stop is idempotent: an unknown run is a 204 no-op, and so is another
+        # item's. Through A's own URL the same Stop does signal the run.
+        assert through_b == 204
+        assert stopped
+    else:
+        assert through_b == 404
+        assert through_a != 404
