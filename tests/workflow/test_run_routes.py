@@ -630,10 +630,18 @@ def test_capability_context_card_rejects_a_bad_token():
 async def test_run_stream_endpoint_returns_an_sse_response():
     """The run stream reuses the item's broadcast SSE (manual §14). Invoke the
     handler directly — its body is the item's (never-ending) event stream, which the
-    in-process transport would buffer; we assert the wiring + media type."""
-    app, _spec, item_id = _app()
+    in-process transport would buffer; we assert the wiring + media type. A run of
+    this item: an unknown one is a 404 (#870)."""
+    from workspace_app.workflow.run import WorkflowRun
+
+    app, spec, item_id = _app()
+    run_id = (
+        spec.get_resource_manager(WorkflowRun)
+        .create(WorkflowRun(item_id=item_id, captured_user="u"))
+        .resource_id
+    )
     resp = await _route(app, "/a/{slug}/items/{item_id}/runs/{run_id}/stream")(
-        slug="playground", item_id=item_id, run_id="any"
+        slug="playground", item_id=item_id, run_id=run_id
     )
     assert isinstance(resp, StreamingResponse)
     assert resp.media_type == "text/event-stream"
@@ -1013,6 +1021,22 @@ async def test_a_runs_stream_is_not_followed_through_another_items_url():
     assert isinstance(own, StreamingResponse)  # its own item still follows it
     with pytest.raises(HTTPException) as exc:
         await stream(slug="playground", item_id=other, run_id=run_id)
+    assert exc.value.status_code == 404
+
+
+async def test_an_unknown_runs_stream_is_404_like_its_detail():
+    """#870: the stream and the detail answer "is this run here?" with the ONE
+    definition the orchestrator holds (`run_in`), so another item's run and no
+    run at all are the same answer on both. The stream used to fall back to the
+    item's broadcast for an id it could not find — a fallback nothing called."""
+    import pytest
+    from fastapi import HTTPException
+
+    app, _spec, item_id = _app()
+    stream = _route(app, "/a/{slug}/items/{item_id}/runs/{run_id}/stream")
+
+    with pytest.raises(HTTPException) as exc:
+        await stream(slug="playground", item_id=item_id, run_id="no-such-run")
     assert exc.value.status_code == 404
 
 

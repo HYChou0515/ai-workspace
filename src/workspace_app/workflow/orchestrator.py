@@ -325,7 +325,7 @@ class WorkflowOrchestrator:
         assert isinstance(data, WorkflowRun)
         return data
 
-    def _get_in(self, run_id: str, item_id: str) -> WorkflowRun:
+    def run_in(self, run_id: str, item_id: str) -> WorkflowRun:
         """The run, IF it belongs to ``item_id`` — else not found. For the entrances
         that take the item from a URL and the run from an id (`decide`, `steer`,
         `confirm_steer`, `retry`, `cancel`): without it a run of item A resumed INSIDE
@@ -812,7 +812,7 @@ class WorkflowOrchestrator:
         A row still active past its deadline is settled here as failed: the pod
         that would have settled it is gone, and until something does, the job
         holds one of the item's places."""
-        data = self._get_in(run_id, item_id)
+        data = self.run_in(run_id, item_id)
         if data.page_job is None:
             raise ResourceIDNotFoundError(run_id)
         if data.status in _ACTIVE:
@@ -1099,7 +1099,7 @@ class WorkflowOrchestrator:
         Another item's run is an unknown run (#870): the item comes from the URL
         and the run from its id, and a Stop through item B's URL stopped item A's."""
         try:
-            data = self._get_in(run_id, item_id)
+            data = self.run_in(run_id, item_id)
         except (ResourceIDNotFoundError, ResourceIsDeletedError):
             return False
         if data.status not in _ACTIVE:
@@ -1146,7 +1146,7 @@ class WorkflowOrchestrator:
         """Record a gate decision as an artifact and resume the run (§10). Re-running
         replays completed steps (they skip, §9); the gate finds the decision and
         continues. Rejects a decision on a run that isn't paused at a gate."""
-        data = self._get_in(run_id, item_id)
+        data = self.run_in(run_id, item_id)
         if data.status is not RunStatus.AWAITING_HUMAN or data.pending_decision is None:
             raise NotAwaitingDecision(run_id)
         phase = data.pending_decision.phase
@@ -1194,7 +1194,7 @@ class WorkflowOrchestrator:
         failed proposal leaves the run ``cancelled`` with ``result.steer_error``.
         Refused (:class:`SupersededRun`) for an execution that is not the newest of
         its workflow: its change would invalidate the newer one's step files."""
-        data = self._get_in(run_id, item_id)
+        data = self.run_in(run_id, item_id)
         if data.page_job is not None:
             # No workflow behind it: `workflow_id` is "", which the manifest
             # lookup reads as the profile's FIRST workflow — the steerer would
@@ -1283,7 +1283,7 @@ class WorkflowOrchestrator:
         the steps (deterministically), then **resume the same run** (§9 re-run skips the
         valid prefix). **Reject** → discard the plan; the run returns to its gate (if it
         was paused at one) or to a stopped state. Rejects a confirm with no plan pending."""
-        data = self._get_in(run_id, item_id)
+        data = self.run_in(run_id, item_id)
         if data.pending_steer is None:
             raise NotAwaitingSteer(run_id)
         key = data.chat_id or item_id
@@ -1357,7 +1357,7 @@ class WorkflowOrchestrator:
 
         The person whose private values the run uses is kept, as a gate decision
         keeps them: the plan is the one they pressed, run again."""
-        data = self._get_in(run_id, item_id)
+        data = self.run_in(run_id, item_id)
         if data.status not in (RunStatus.ERROR, RunStatus.CANCELLED):
             raise NotRetryable(
                 f"execution {run_id} is {data.status.value}: only a failed or stopped one"
