@@ -1291,7 +1291,17 @@ class WorkflowOrchestrator:
         # The steer rewrote the plan, and anyone who may converse can propose and
         # approve one — the presser never consented to it (round 2, D1).
         RunIdentities(self.spec).forget(run_id)
-        self._patch(run_id, status=RunStatus.RUNNING, pending_steer=None, pending_decision=None)
+        # No phase is current until the re-drive enters one (as `retry`): the
+        # step a steer's Stop interrupted restarts in the phase it was in, and
+        # must ENTER it again to read running — its phase reads `stopped` from
+        # the Stop (plan-one-running-phase review R1).
+        self._patch(
+            run_id,
+            status=RunStatus.RUNNING,
+            pending_steer=None,
+            pending_decision=None,
+            current_phase="",
+        )
         logger.info("confirm_steer: run %s steer approved, resuming", run_id)
         self._spawn(
             run_id,
