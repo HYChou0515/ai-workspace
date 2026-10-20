@@ -63,7 +63,9 @@ const UNITS: Record<string, number> = { K: 1024, M: 1024 ** 2, G: 1024 ** 3, T: 
 /**
  * What a person writes → what `parse_size` reads, or `null` when it is not a
  * size at all. People write "512MB", "512 mb", "1.5G" and the display format
- * "512.0 MB" as readily as "512M"; the server reads only `<integer>[K|M|G|T]`.
+ * "512.0 MB" as readily as "512M"; this sends the server's own spelling,
+ * `<integer>[K|M|G|T]` (the server reads the rest too — one answer sheet,
+ * `tests/fixtures/size_spellings.json`, keeps the two alike).
  * So: any case, an optional space, an optional trailing B, full-width digits,
  * a fraction WITH a unit folded into the exact smaller unit ("1.5G" →
  * "1536M"; below a whole byte it rounds), a fraction WITHOUT one refused (a
@@ -71,8 +73,7 @@ const UNITS: Record<string, number> = { K: 1024, M: 1024 ** 2, G: 1024 ** 3, T: 
  * caller sends `null` for it.
  */
 export function normaliseMemory(text: string): string | null {
-  // Full-width digits (a zh-TW IME slip) are digits; the server's
-  // `str.isdigit` reads them too.
+  // Full-width digits (a zh-TW IME slip) are digits; the server folds them too.
   const ascii = text.replace(/[０-９]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0));
   const m = /^\s*(\d+(?:\.\d+)?)\s*(?:([kmgt])b?)?\s*$/i.exec(ascii);
   if (!m) return null;
@@ -81,7 +82,8 @@ export function normaliseMemory(text: string): string | null {
   if (!m[2] && m[1].includes(".")) return null;
   const unit = m[2] ? UNITS[m[2].toUpperCase()]! : 1;
   const bytes = Math.round(Number(m[1]) * unit);
-  if (!(bytes > 0)) return null;
+  // Finite too: a huge fraction became the literal "Infinity" and was sent.
+  if (!(bytes > 0) || !Number.isFinite(bytes)) return null;
   return toSizeString(bytes) ?? null;
 }
 

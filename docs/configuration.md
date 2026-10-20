@@ -327,6 +327,11 @@ resources:
     disk: 50G         # 名下**所有 item** 的 workspace 加總
 ```
 
+大小(`memory` / `disk`)可以寫 `512M`、`512MB`、`512 mb`、`1.5G`:數字加 K/M/G/T(1024 進位,大小寫不拘,
+後面可多一個 B);小數要帶單位(`1.5G` = `1536M`)。設定檔裡 `0`、`max` 或留空是無上限。網頁上 item 環境大小與
+「個人額度」的欄位讀同一套數字寫法(對照表 `tests/fixtures/size_spellings.json`);「個人額度」另外收 `0` / `max`
+當作「這個人無上限」,留空則是沿用站台預設;item 不能設成無上限。
+
 順序是 **app.json 的 `resources` ◇ `per_app.default` ◇ 今天的舊旋鈕**
 (`sandbox.isolation.*` / `filestore.workspace_quota`),**逐維度**各自往下掉。
 App 那一半怎麼寫見 [新增一個 App](adding-an-app.md#resources這個-app-一個-item-吃多少)。
