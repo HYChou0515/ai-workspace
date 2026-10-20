@@ -19,6 +19,7 @@ token 過期之後，要嘛人去重新登入，要嘛工具自己拿 refresh to
 | D2 | **要用的時候才換**：平台在組工具的環境變數之前，發現快過期就先換；沒人用就不換 | 〔user〕選 1（推薦） |
 | D3 | 換到的新值**從哪讀到就存回哪**：我的環境變數／這個 item 的 Private（自己填的那份）／Shared。Shared 由平台代為寫入，不看當下替誰跑的人有沒有 `write_meta` | 〔user〕選 1（推薦） |
 | D4 | 換失敗**照樣執行**（工具拿到現有的值）；讓人知道要重新登入：有人在場→畫面上提示，無人在場→通知替誰跑的人。存著的 refresh token 只有在部署方的程式明確說「無效」時才清掉，網路不通、對方 5xx 都不清 | 〔user〕選 1（推薦）；「有人在場的提示」怎麼畫見 **O1** |
+| D5 | 平台是**介面**，看不到部署方怎麼實作，所以「refresh 失敗」由**介面明文規定的回報方式**決定：平台自己呼叫 `refresh()`，看它的結果——正常回傳＝成功；raise `RefreshRejected`＝refresh token 確定無效（只有人重新登入能解決）；其他任何例外或逾時＝暫時失敗。部署方沒照做（全部丟一般例外）時，平台一律當暫時失敗：不清、不提示，等工具自己失敗再走 #892 的 `request_env` 卡片 | 〔user〕「你怎麼知道登入失敗？你只是 interface…除非你要規定實做方登入失敗要怎樣」→「可以，照這樣寫進計畫」 |
 
 ## 機制
 
@@ -33,8 +34,18 @@ def needs_refresh(self, values: dict[str, str]) -> bool:
 
 async def refresh(self, values: dict[str, str]) -> dict[str, str]:
     """拿 refresh token 換新的一組值（可以包含新的 refresh token）。預設 raise NotImplementedError。
-    raise RefreshRejected → 這組 refresh token 已經無效（D4：清掉）；其他例外 → 暫時失敗（D4：不清）。"""
+    回報方式是契約（D5），平台只看這三種結果："""
 ```
+
+| `refresh()` 的結果 | 意思 | 平台怎麼做 |
+|---|---|---|
+| 正常回傳一組值 | 換成功 | 寫回原本那一層（D3），交給工具 |
+| raise `RefreshRejected` | refresh token 確定無效（被撤銷、過期），只有人重新登入能解決 | 清掉那一層裡的 refresh token，照樣執行，提示／通知重新登入（D4） |
+| raise 其他任何例外，或逾時 | 暫時失敗（網路不通、對方 5xx） | 什麼都不清，照樣執行，下次要用時再試 |
+
+平台**不知道**的是：工具拿 token 去打外部系統時有沒有被拒絕——那是工具自己的事，照舊走 #892（工具 exit 3 →
+AI 呼叫 `request_env` → 登入卡片）。`extending-the-platform.md` 要寫清楚：確定 refresh token 無效時一定要
+raise `RefreshRejected`，否則人要等到工具失敗才會被告知。
 
 - **「快過期」由部署方判斷**〔預設〕：平台不另外記過期時間——手打進去的 token、按登入拿到的 token 都適用，
   也不必在 `PersonalEnv`／`PrivateEnv` 加欄位。
@@ -84,8 +95,9 @@ async def refresh(self, values: dict[str, str]) -> dict[str, str]:
 
 ### 失敗（D4）
 
-- `RefreshRejected`：清掉那一層裡這個 provider `produces` 的名稱中的 refresh token〔預設：清 provider 回報的
-  那幾個名稱，見 P1 的介面〕，照樣執行。
+- `RefreshRejected(names)`：清掉那一層裡**部署方列出的那幾個名稱**（例如 refresh token 和隨它作廢的 access
+  token），照樣執行。名稱由部署方說，因為只有它知道哪個變數是 refresh token〔預設〕；列了 `produces` 以外的名稱
+  就不理那幾個，免得部署方的程式清掉別人的值。
 - 其他例外、逾時、等鎖逾時：什麼都不清，照樣執行。
 - 無人在場：用既有的 `notify()`（`notifications.py:23`）通知替誰跑的人，連到 `/my-env`；同一人同一 provider
   每天去重一次（同 `workflow_exec.notify_failure` 的 dedup 形狀）〔預設〕。
@@ -93,11 +105,15 @@ async def refresh(self, values: dict[str, str]) -> dict[str, str]:
 
 ## 未決
 
-- **O1（要 user 決定）**：D4 說「有人在場就在聊天裡出現重新登入的卡片，沿用 #892」。查證後：#892 的卡片是
-  **AI 呼叫 `request_env` 工具的回傳**才畫得出來（`agent/env_request.py:37`），平台自己不能插入。可行的做法：
-  (a) 在這一輪的對話裡放一則平台訊息（像 context 上限的提示那樣）「ERP 登入已過期，請重新登入」，附連到
-  `/my-env` 的連結；(b) 不在對話裡放，只靠 Env 按鈕亮起提示（`data-attention`）；(c) 讓工具照樣失敗，等 AI
-  自己決定呼叫 `request_env`。我傾向 (a)，但它改了 D4 說好的樣子，所以列在這裡等 user 定。
+- **O1（要 user 決定）**：`refresh()` 回 `RefreshRejected`、而且有人在場時，畫面上怎麼提示。#892 的登入卡片是
+  **AI 呼叫 `request_env` 工具的回傳**才畫得出來（`agent/env_request.py:37`；`plan-env-request-card.md` N1「由 AI
+  決定」），平台自己不能插入。兩個做法：
+  - (a) 平台在那一輪的對話裡放一則平台訊息「{系統} 登入已過期，請重新登入」，附連到 `/my-env` 的連結——沿用
+    現成的 `role="notice"` 訊息（#624 的「較早的訊息不再送給模型」用的就是它：`chat_send.py:697`、`turns.py:110`）。
+    一定出現，但不是那張有登入按鈕的卡片。
+  - (b) 平台在那一輪告訴 AI「{名稱} 的登入已過期，請呼叫 `request_env`」，由 AI 叫出 #892 的登入卡片（按
+    「登入 X」→ 登入頁 → 存檔 → 重試，全是現成的）。是 user 記得的那張卡片，但要 AI 照做才會出現。
+  user 先選了 (a)，接著說「印象中我們做過這個東西」，指的是 #892 的卡片——兩者不同，還沒定。
 
 ## 不做
 
@@ -111,7 +127,7 @@ async def refresh(self, values: dict[str, str]) -> dict[str, str]:
 
 | Phase | 內容 | 驗收 |
 |---|---|---|
-| P1 | `IEnvProvider.needs_refresh` / `refresh` / `RefreshRejected`，預設不改任何行為 | 沒寫的 provider：`needs_refresh` 為 False、`refresh` 從不被呼叫 |
+| P1 | `IEnvProvider.needs_refresh` / `refresh` / `RefreshRejected(names)`（D5 的回報契約），預設不改任何行為 | 沒寫的 provider：`needs_refresh` 為 False、`refresh` 從不被呼叫 |
 | P2 | 後端 `layer_of(name, …)`，與 `resolve_env` 同一份順序 | parity：`env_layers_cases.json` 每一列 `layer_of` 與 `resolve_env` 選中的層相同；突變順序表任一格會紅 |
 | P3 | `_RefreshClaim` 跨 pod 鎖（CAS + 過期） | 兩個並行搶同一把只有一個拿到；持有者不放鎖，過期後別人拿得到 |
 | P4 | `refresh_if_due`：判斷 → 拿鎖 → 重讀 → refresh → 寫回同一層 → 放鎖；失敗照 D4 | 每一層各一條寫回測試；rotation 情境兩個並行只換一次；`RefreshRejected` 清、其他例外不清 |
