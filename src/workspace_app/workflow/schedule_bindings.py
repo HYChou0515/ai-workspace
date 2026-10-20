@@ -39,7 +39,7 @@ from msgspec import Struct
 from specstar import QB, SpecStar
 from specstar.types import ResourceIDNotFoundError
 
-from .user_schedules import trigger_id_for, usable_rows
+from .user_schedules import UserSchedule, trigger_id_for, usable_rows
 from .workspace_store import load_workspace_workflow_digested
 
 
@@ -167,13 +167,14 @@ class ScheduleBindings:
         return gone
 
 
-def file_keys(item_id: str, path: str, raw: str) -> list[tuple[str, str]]:
-    """``(key, run)`` of every row of the schedules file at ``path`` the sweep
+def file_keys(item_id: str, path: str, raw: str) -> list[tuple[str, UserSchedule]]:
+    """``(key, row)`` of every row of the schedules file at ``path`` the sweep
     would fire — keyed the way the SWEEP keys it (`user_schedule_sweep._one_file`:
     folder = the file's directory), so a binding made from these is the one a
-    fire looks up."""
+    fire looks up. The one definition the binding routes and the crediting
+    both read through."""
     folder = path.rsplit("/", 1)[0]
-    return [(trigger_id_for(item_id, folder, row), row.run) for row in usable_rows(raw)[0]]
+    return [(trigger_id_for(item_id, folder, row), row) for row in usable_rows(raw)[0]]
 
 
 class ScheduleAuthorship:
@@ -219,8 +220,8 @@ class ScheduleAuthorship:
 
         if not author:
             return []
-        old = {key for key, _run in file_keys(item_id, path, before)} if before else set()
-        added = [(key, run) for key, run in file_keys(item_id, path, after) if key not in old]
+        old = {key for key, _row in file_keys(item_id, path, before)} if before else set()
+        added = [(key, row.run) for key, row in file_keys(item_id, path, after) if key not in old]
         if not added or not await asyncio.to_thread(self._may_run, author, item_id):
             return []
         credited: list[str] = []

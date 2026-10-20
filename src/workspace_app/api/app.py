@@ -2987,6 +2987,8 @@ def create_app(
         files=files,
         bindings=ScheduleBindings(spec),
         get_user_id=get_user_id,
+        may_run=lambda user, item: user_may(spec, item, user, "execute", superusers=superusers),
+        superusers=superusers,
     )
 
     # plan-chat-video-export: queue a video of a transcript; the consumer is

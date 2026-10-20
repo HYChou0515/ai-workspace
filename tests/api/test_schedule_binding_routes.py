@@ -26,6 +26,8 @@ PAGE = "/report"
 FILE = f"{PAGE}/schedules.json"
 DAILY = {"every": "daily", "at": "09:00", "run": "build-report"}
 _SEEDS: dict[int, MemoryFileStore] = {}
+#: root runs the deployment (`server.superusers`) and is no member of the item.
+SUPERUSERS = frozenset({"root"})
 
 
 def _world(*, seeded: bool = False):
@@ -33,7 +35,7 @@ def _world(*, seeded: bool = False):
     Participant (reads, talks to the agent, runs nothing); dave may edit the
     files but not run work in the item."""
     holder = {"id": "bob"}
-    spec = make_spec(default_user=lambda: holder["id"])
+    spec = make_spec(default_user=lambda: holder["id"], superusers=SUPERUSERS)
     fs = MemoryFileStore()
     _SEEDS[id(spec)] = fs
     app = create_app(
@@ -42,6 +44,7 @@ def _world(*, seeded: bool = False):
         filestore=fs,
         runner=ScriptedAgentRunner([]),
         get_user_id=lambda: holder["id"],
+        superusers=SUPERUSERS,
     )
     reader = ["user:alice", "user:carol", "user:dave"]
     rm = spec.get_resource_manager(RcaInvestigation)
@@ -444,3 +447,63 @@ def test_a_schedule_whose_workflow_will_not_parse_cannot_be_bound():
     assert r.status_code == 422, r.text
     assert "won't parse" in r.json()["detail"]
     assert ScheduleBindings(spec).get(row["trigger_id"]) is None
+
+
+def _assign(client, rid, key, user):
+    return client.put(
+        f"/a/rca/items/{rid}/schedule-bindings/{key}", params={"path": FILE, "user": user}
+    )
+
+
+def _notices(spec, recipient: str) -> list[tuple[str, str]]:
+    from workspace_app.api.notifications import Notification
+
+    return [
+        (r.data.kind, r.data.body)
+        for r in spec.get_resource_manager(Notification).list_resources()
+        if r.data.recipient == recipient
+    ]
+
+
+def test_a_superuser_names_who_a_schedule_runs_as_and_that_person_is_told():
+    """G5 + G6: a superuser may name someone else; it takes effect at once, the
+    row says an admin chose it and which one, and the person named is told."""
+    client, holder, rid, spec = _world(seeded=True)
+    holder["id"] = "root"
+    (row,) = _list(client, rid)
+
+    r = _assign(client, rid, row["trigger_id"], "carol")
+
+    assert r.status_code == 200, r.text
+    (after,) = _list(client, rid)
+    assert (after["bound_to"], after["reason"], after["assigned_by"]) == ("carol", "admin", "root")
+    ((kind, body),) = _notices(spec, "carol")
+    assert kind == "schedule_binding_assigned"
+    assert "root" in body
+
+
+def test_naming_someone_else_is_for_a_superuser_only():
+    """The owner too: "Run as me" lends ONE's own values; lending someone
+    else's is the deployment's call (G5)."""
+    client, _holder, rid, spec = _world(seeded=True)  # bob, the owner
+    (row,) = _list(client, rid)
+
+    r = _assign(client, rid, row["trigger_id"], "carol")
+
+    assert r.status_code == 403, r.text
+    assert _list(client, rid)[0]["bound_to"] == ""
+    assert _notices(spec, "carol") == []
+
+
+def test_a_superuser_cannot_name_someone_who_may_not_run_work_here():
+    """G5: the person named must hold `execute` on the item — naming them must
+    not make the item run with values of someone who could not run it."""
+    client, holder, rid, spec = _world(seeded=True)
+    holder["id"] = "root"
+    (row,) = _list(client, rid)
+
+    r = _assign(client, rid, row["trigger_id"], "alice")  # a Participant
+
+    assert r.status_code == 422, r.text
+    assert _list(client, rid)[0]["bound_to"] == ""
+    assert _notices(spec, "alice") == []
