@@ -108,8 +108,13 @@ Four things to get right, because each one is a report that quietly never arrive
   Workflows panel (**Manage workflows…** in the workspace's Workflows sidebar) have
   **Run now**.
 
-When a schedule fires, nobody is signed in: there is no request and no personal token.
-Anything the run needs comes from the item's own environment. A schedule's runs are not
+When a schedule fires, nobody is at the keyboard — there is no request. A row you save
+runs as **the person you are talking to**: with their own sign-ins and stored values, and
+the tool's answer names them (`runs as …`). Tell them so plainly — the schedule uses their
+credentials, and **Stop running as me** on the Schedules page or in the Workflows panel
+turns that off. A row that reaches the file any other way (`exec`, a copied file) runs as
+nobody, with the item's shared values only — so save schedules with `save_schedules`.
+A schedule's runs are not
 listed among the chats: each fire is an execution listed under **Executions** in the workspace's
 Workflows sidebar (marked Scheduled), and opening one shows its steps in its own tab — point
 the user there to see what a schedule did. To stop a schedule, save the list without its

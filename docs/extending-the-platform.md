@@ -431,7 +431,7 @@ turn、他按下起的 run——同名時**蓋過** `env_without_request` 給的
 | 聊天送出、WUI 頁面的 `callTool` | 送出 / 按的人 |
 | 頁面按鈕起的 `wui/run`、`POST …/run` | **按的人**(帳照舊記在 run 的 `captured_user`) |
 | goal driver 續跑、pod 死掉後被接手重跑的 turn | 那一輪的作者 |
-| 頁面排程 | **本人按了「用我的身分執行」才有**;沒人按 → 誰的都沒有(shared + `env_without_request`)。排程內容一改,綁定就失效並通知那個人 |
+| `schedules.json` 的排程(item 自己的、頁面的) | **綁定的那一個人**:預設是寫那一列的人——AI 用 `save_schedules` 存的算對話的那個人(workflow 節點存的算那個 run 代表的人)、檔案編輯器或 WUI 頁面存的算存檔的人、「改時間」算改的人(`docs/plan-schedule-run-as.md`);之後誰按了「用我的身分執行」就換成誰,superuser 也可以指定別人(並通知對方)。用 `exec` 寫、複製、匯入、升級前就在的列 → 誰的都沒有(shared + `env_without_request`)。排程內容一改就是新的一列,算改的人的 |
 | event trigger、profile 層級排程 | 誰的都沒有 |
 | WUI build | **誰的都沒有**:私人層是空的,shared 照政策解析,所以 `private_only` 的名字拿不到(`dist/` 是大家共用的成品) |
 

@@ -397,13 +397,16 @@ one row silently never fires while the others keep working. Show the file back t
 the reader so a typo is visible on the page instead of in a log they cannot see.
 
 ⚠️ **Do not assume a personal token is there.** When a schedule fires, nobody is
-signed in — there is no request. It runs with the item's SHARED values, plus
-the private values of whoever pressed **Run as me** on it (in the platform's
-bar above the page — never something your page draws). Nobody pressed it ⇒
-nobody's private values. And **changing a row drops that**: the edited row is
-a new schedule, and the person is told their name is off it. A page written as
-if a personal token is always present works while somebody is clicking and
-fails every night — the "it worked when I tested it" bug in its purest form.
+at the keyboard — there is no request. It runs with the item's SHARED values,
+plus the private values of ONE person: whoever wrote the row (the reader using
+the page when it saved `schedules.json`), or whoever pressed **Run as me** on it
+since (in the platform's bar above the page — never something your page draws).
+A row that reached the file another way runs with nobody's private values, and
+so does one whose person pressed **Stop running as me**. **Changing a row** makes
+it a new schedule, written by whoever changed it — it runs as them from then
+on. A page written as if a personal token is always present works while
+somebody is clicking and fails every night — the "it worked when I tested it"
+bug in its purest form.
 
 ## Blocked, by design
 
