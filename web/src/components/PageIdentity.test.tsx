@@ -43,6 +43,7 @@ function open({
     list: vi.fn(async () => rows),
     bind: vi.fn(async () => {}),
     unbind: vi.fn(async () => {}),
+    assign: vi.fn(async () => {}),
   };
   renderWithQuery(
     <PageIdentityBar
@@ -130,8 +131,8 @@ describe("PageIdentityBar", () => {
   it("lists the page's schedules with who each runs as", async () => {
     open({
       rows: [
-        { trigger_id: "a", run: "weekly", describe: "every Monday", bound_to: "", mine: false },
-        { trigger_id: "b", run: "nightly", describe: "daily 02:00", bound_to: "bob", mine: false },
+        { trigger_id: "a", run: "weekly", describe: "every Monday", bound_to: "", mine: false, reason: "", assigned_by: "" },
+        { trigger_id: "b", run: "nightly", describe: "daily 02:00", bound_to: "bob", mine: false, reason: "author", assigned_by: "" },
       ],
     });
 
@@ -139,11 +140,15 @@ describe("PageIdentityBar", () => {
 
     expect(screen.getByTestId("page-schedule-a")).toHaveAttribute("data-bound", "");
     expect(screen.getByTestId("page-schedule-b")).toHaveTextContent("bob");
+    // The overview's own sentence, reason included (plan-schedule-run-as G9).
+    expect(within(screen.getByTestId("page-schedule-b")).getByTestId("runs-as")).toHaveTextContent(
+      translate("zh-TW", "sched.why.author"),
+    );
   });
 
   it("binds an unbound schedule to the viewer at once", async () => {
     const { bindings } = open({
-      rows: [{ trigger_id: "a", run: "weekly", describe: "", bound_to: "", mine: false }],
+      rows: [{ trigger_id: "a", run: "weekly", describe: "", bound_to: "", mine: false, reason: "", assigned_by: "" }],
     });
     fireEvent.click(await screen.findByTestId("page-schedules"));
 
@@ -158,7 +163,7 @@ describe("PageIdentityBar", () => {
     // Q12: replacing a binding stops another person's values being used — they
     // are told afterwards, and the one replacing them is told BEFORE.
     const { bindings } = open({
-      rows: [{ trigger_id: "b", run: "nightly", describe: "", bound_to: "bob", mine: false }],
+      rows: [{ trigger_id: "b", run: "nightly", describe: "", bound_to: "bob", mine: false, reason: "", assigned_by: "" }],
     });
     fireEvent.click(await screen.findByTestId("page-schedules"));
 
@@ -178,7 +183,7 @@ describe("PageIdentityBar", () => {
 
   it("lets the viewer take their own name off", async () => {
     const { bindings } = open({
-      rows: [{ trigger_id: "c", run: "r", describe: "", bound_to: "me", mine: true }],
+      rows: [{ trigger_id: "c", run: "r", describe: "", bound_to: "me", mine: true, reason: "self", assigned_by: "" }],
     });
     fireEvent.click(await screen.findByTestId("page-schedules"));
 

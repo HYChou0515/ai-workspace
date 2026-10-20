@@ -5,6 +5,7 @@
  */
 
 import { apiFetch, httpErrorFrom } from "./http";
+import type { RunsAsReason } from "./schedules";
 
 export type BindingRow = {
   trigger_id: string;
@@ -13,6 +14,10 @@ export type BindingRow = {
   /** Who it runs as; "" = nobody (the shared layer only). */
   bound_to: string;
   mine: boolean;
+  /** Why it is them (`docs/plan-schedule-run-as.md` G8); "" for nobody. */
+  reason: RunsAsReason;
+  /** The superuser who named them, for `admin`. */
+  assigned_by: string;
 };
 
 const base = (slug: string, itemId: string) =>
@@ -31,6 +36,15 @@ export const scheduleBindingsApi = {
       method: "PUT",
     });
     if (!r.ok) throw await httpErrorFrom(r, `run as me failed: ${r.status}`);
+  },
+
+  /** A superuser names someone else (G5); they are told. */
+  async assign(slug: string, itemId: string, path: string, key: string, user: string): Promise<void> {
+    const r = await apiFetch(
+      `${base(slug, itemId)}/${encodeURIComponent(key)}${q(path)}&user=${encodeURIComponent(user)}`,
+      { method: "PUT" },
+    );
+    if (!r.ok) throw await httpErrorFrom(r, `choosing who it runs as failed: ${r.status}`);
   },
 
   async unbind(slug: string, itemId: string, path: string, key: string): Promise<void> {

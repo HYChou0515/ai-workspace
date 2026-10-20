@@ -93,6 +93,7 @@ from ..workflow.orchestrator import (
 )
 from ..workflow.run_identity import register_run_identity
 from ..workflow.schedule_bindings import (
+    ScheduleAuthorship,
     ScheduleBinding,
     ScheduleBindings,
     register_schedule_bindings,
@@ -1434,12 +1435,20 @@ def create_app(
                 f"You no longer have permission to run work in the item that holds "
                 f"{binding.path}, so its schedule stopped using your values."
             )
+        elif why == "workflow_changed":
+            title = "A schedule that ran as you now runs a changed workflow"
+            body = (
+                f"The workflow a schedule in {binding.path} runs was changed since it was "
+                "set to run as you, so it no longer runs with your values. Check the "
+                "workflow, then find the schedule on the Schedules page or in the item's "
+                "Workflows panel and choose “Run as me” again if you still want it to."
+            )
         else:
-            title = "A schedule you ran as yourself was changed"
+            title = "A schedule that ran as you was changed"
             body = (
                 f"The schedule in {binding.path} was edited or removed, so it no longer "
-                "runs with your values. Open the page and choose “Run as me” again if "
-                "you still want it to."
+                "runs with your values. Find it on the Schedules page or in the item's "
+                "Workflows panel and choose “Run as me” again if you still want it to."
             )
         notify(
             spec,
@@ -2383,6 +2392,15 @@ def create_app(
         max_rows=max_page_schedules,
         sweep_enabled=trigger_check_interval is not None,
     )
+    # plan-schedule-run-as G2: a row runs as whoever wrote it — credited by the
+    # doors that know who that is (save_schedules, the file PUT, "change time"),
+    # against the SAME `execute` rule the sweep re-checks before each fire.
+    schedule_authorship = ScheduleAuthorship(
+        ScheduleBindings(spec),
+        read=files.read,
+        may_run=lambda user, item: user_may(spec, item, user, "execute", superusers=superusers),
+        max_rows=max_page_schedules,
+    )
     turn_ctx = TurnContextBuilder(
         view_plugin_artifacts=artifact_plugins(view_plugins),
         sandbox=sandbox,
@@ -2406,6 +2424,7 @@ def create_app(
         history_max_messages=history_max_messages,
         history_max_context_tokens=history_max_context_tokens,
         schedule_policy=schedule_policy,
+        schedule_authorship=schedule_authorship,
         # #624: the operator's declared ceiling for this endpoint (the escape
         # hatch); unset ⇒ resolved per turn, and unknown ⇒ no trimming.
         context_limit=context_limit,
@@ -2960,6 +2979,9 @@ def create_app(
         deployed_pages=DeployedPages(spec).newest_first,
         durable=ScheduleSource(read=filestore.read, ls=filestore.ls),
         on_saved=_schedule_saved,
+        authorship=schedule_authorship,
+        bindings=ScheduleBindings(spec),
+        superusers=superusers,
     )
 
     register_private_env_routes(
@@ -2976,6 +2998,8 @@ def create_app(
         files=files,
         bindings=ScheduleBindings(spec),
         get_user_id=get_user_id,
+        may_run=lambda user, item: user_may(spec, item, user, "execute", superusers=superusers),
+        superusers=superusers,
     )
 
     # plan-chat-video-export: queue a video of a transcript; the consumer is
@@ -3005,6 +3029,7 @@ def create_app(
         max_file_size=max_file_size,
         admission=admission,
         skill_hub=skill_hub,
+        schedule_authorship=schedule_authorship,
     )
 
     # Skill hub (docs/plan-skill-hub.md): the page's read routes + the panel's

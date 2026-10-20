@@ -18,30 +18,27 @@
  * schedule's own conversation (`?chat=`); an execution is not a chat any more,
  * and the chat list no longer shows that conversation.
  */
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { Link } from "react-router-dom";
 
 import { qk } from "../api/queryKeys";
-import {
-  type OverviewRow,
-  type ScheduleOverview,
-  ScheduleActionError,
-  type SchedulesApi,
-  mayRunNow,
-  schedulesApi,
-} from "../api/schedules";
-import { wuiAddress } from "../api/wui";
+import { type OverviewRow, type ScheduleOverview, type SchedulesApi, schedulesApi } from "../api/schedules";
 import { AppTag } from "../components/AppTag";
-import { useDialog } from "../components/Dialog";
-import { ScheduleTimeModal } from "../components/ScheduleTimeModal";
+import {
+  ScheduleActions,
+  ScheduleLast,
+  ScheduleNext,
+  ScheduleRunsAs,
+  ScheduleWhere,
+  rowKey,
+  workflowName,
+} from "../components/schedules/ScheduleRowParts";
 import { useBreadcrumbs } from "../hooks/breadcrumbs";
 import { useApps } from "../hooks/useResources";
 import { describeSchedule } from "../lib/describeSchedule";
-import { executionPath, OPEN_PARAM } from "../lib/executionTab";
-import { type MsgKey, useT } from "../lib/i18n";
+import { useT } from "../lib/i18n";
 import { type ScheduleSort, useScheduleOverviewPrefs } from "../lib/scheduleOverviewPrefs";
-import { fullTime, whenText } from "../lib/scheduleTime";
 import { type ViewerClock, useViewerClock } from "../lib/viewerClock";
 
 /** The last-run states that need somebody: it failed, it was stopped, or it is
@@ -51,8 +48,6 @@ const ATTENTION = new Set(["error", "cancelled", "awaiting_human"]);
 /** A run that has not finished yet — while one is on the page, it refreshes
  * often enough to see it finish. */
 const IN_FLIGHT = new Set(["pending", "running"]);
-
-const ITEM_SCHEDULES = "/.workflows/schedules.json";
 
 /** How long until the page asks again: every few seconds while a run on it is
  * going (so "執行中" turns into how it went without a reload), every minute
@@ -83,18 +78,7 @@ export function orderRows(rows: OverviewRow[], sort: ScheduleSort): OverviewRow[
   });
 }
 
-/** The folder a page's schedules file sits in; "" for the item's own. */
-const folderOf = (row: Pick<OverviewRow, "path">) =>
-  row.path === ITEM_SCHEDULES ? "" : row.path.slice(0, row.path.lastIndexOf("/"));
-
-/** Where a schedule lives, in words: the item, and the page when it is a
- * page's — by the page's title, its folder only when it has none. */
-export function placeOf(row: OverviewRow, t: ReturnType<typeof useT>): string {
-  const item = row.item_title || row.item_id;
-  const folder = folderOf(row);
-  if (!folder) return item;
-  return `${item} · ${t("scheduleOverview.page", { page: row.page_title || folder })}`;
-}
+export { placeOf } from "../components/schedules/ScheduleRowParts";
 
 export function SchedulesOverviewPage({ client = schedulesApi }: { client?: SchedulesApi }) {
   const t = useT();
@@ -225,7 +209,7 @@ export function SchedulesOverviewPage({ client = schedulesApi }: { client?: Sche
           {shown.length === 0 && brokenFiles.length === 0 ? (
             <p className="empty">{t("scheduleOverview.nomatch")}</p>
           ) : null}
-          {shown.length > 0 ? <ScheduleTable groups={groups} client={client} /> : null}
+          {shown.length > 0 ? <ScheduleTable groups={groups} client={client} canAssign={data.can_assign} /> : null}
         </>
       )}
     </div>
@@ -238,9 +222,11 @@ export function SchedulesOverviewPage({ client = schedulesApi }: { client?: Sche
 function ScheduleTable({
   groups,
   client,
+  canAssign,
 }: {
   groups: Map<string, OverviewRow[]>;
   client: SchedulesApi;
+  canAssign: boolean;
 }) {
   const t = useT();
   const clock = useViewerClock();
@@ -254,6 +240,7 @@ function ScheduleTable({
             <th scope="col">{t("scheduleOverview.col.when")}</th>
             <th scope="col">{t("scheduleOverview.col.next")}</th>
             <th scope="col">{t("scheduleOverview.col.last")}</th>
+            <th scope="col">{t("scheduleOverview.col.runsAs")}</th>
             <th scope="col">{t("scheduleOverview.col.actions")}</th>
           </tr>
         </thead>
@@ -261,17 +248,18 @@ function ScheduleTable({
           <tbody key={slug || "all"}>
             {slug ? (
               <tr className="schedule-group">
-                <th scope="colgroup" colSpan={6}>
+                <th scope="colgroup" colSpan={7}>
                   <AppTag slug={slug} />
                 </th>
               </tr>
             ) : null}
             {rows.map((row) => (
               <ScheduleRowView
-                key={`${row.item_id}${row.path}#${row.index}`}
+                key={rowKey(row)}
                 row={row}
                 client={client}
                 clock={clock}
+                canAssign={canAssign}
               />
             ))}
           </tbody>
@@ -281,217 +269,42 @@ function ScheduleTable({
   );
 }
 
-/** One row and its actions — per row, so one row's pending press does not
- * hold every other row's buttons (the WUI overview's `useRemove` pattern). */
+/** One row: the shared parts (`components/schedules/ScheduleRowParts`), laid
+ * out as table cells. */
 function ScheduleRowView({
   row,
   client,
   clock,
+  canAssign,
 }: {
   row: OverviewRow;
   client: SchedulesApi;
   clock: ViewerClock;
+  canAssign: boolean;
 }) {
   const t = useT();
-  const qc = useQueryClient();
-  const dialog = useDialog();
-  const [editing, setEditing] = useState(false);
-  const [failed, setFailed] = useState<string | null>(null);
-  // After Run now: the run the row showed as its last when it was pressed.
-  // The note stays until the row shows any other run — that one is the press's
-  // (or a fire that overtook it), and the last-run cell then says everything
-  // the note would. Not "until it shows the run id the press got back": a
-  // reply without one, or an overtaking fire, left the note up for good.
-  const [started, setStarted] = useState<{ before: string | null; runId: string } | null>(null);
-  // A row the sweep refuses has no identity; Remove finds it by its value.
-  const ref = {
-    path: row.path,
-    trigger_id: row.trigger_id,
-    raw: row.trigger_id ? undefined : row.raw,
-    index: row.trigger_id ? undefined : row.index,
-  };
-  // Both entrances' caches: the item's panel lists this row too (decision 9),
-  // and the file tree shows the file just rewritten.
-  const refresh = () =>
-    Promise.all([
-      qc.invalidateQueries({ queryKey: qk.schedulesOverview }),
-      qc.invalidateQueries({ queryKey: qk.itemSchedules(row.slug, row.item_id) }),
-      qc.invalidateQueries({ queryKey: qk.files(row.item_id) }),
-      // Run now may have just made the schedule's own chat.
-      qc.invalidateQueries({ queryKey: qk.itemChats(row.slug, row.item_id) }),
-    ]);
-  const fail = (e: unknown) => setFailed(e instanceof ScheduleActionError ? e.message : String(e));
-
-  const runNow = useMutation({
-    mutationFn: (_before: string | null) => client.runNow(row.slug, row.item_id, ref),
-    onSuccess: (runId, before) => {
-      setStarted({ before, runId });
-      return refresh();
-    },
-    onError: fail,
-  });
-  const remove = useMutation({
-    mutationFn: () => client.remove(row.slug, row.item_id, ref),
-    onSuccess: refresh,
-    onError: fail,
-  });
   const period = describeSchedule(row, clock, t);
-  const workflow = row.run_title || row.run || "?";
-  const askRemove = async () => {
-    const choice = await dialog.confirm({
-      title: t("schedules.removeTitle"),
-      body: t("scheduleOverview.removeConfirm", {
-        place: placeOf(row, t),
-        period: period.text,
-        workflow,
-      }),
-      // The safe answer first: the destructive one is never what a stray
-      // Enter or the first focus lands on.
-      actions: [
-        { id: "cancel", label: t("schedules.cancel") },
-        { id: "remove", label: t("schedules.remove"), variant: "danger" },
-      ],
-    });
-    if (choice === "remove") remove.mutate();
-  };
-
-  const itemHref = `/a/${encodeURIComponent(row.slug)}/${encodeURIComponent(row.item_id)}`;
-  // An execution opens as a tab in its item (plan-workflow-out-of-chat P11);
-  // it is not a chat any more, so the schedule's conversation is not the place.
-  const runHref = (runId: string) =>
-    runId ? `${itemHref}?${OPEN_PARAM}=${encodeURIComponent(executionPath(runId))}` : itemHref;
-  const folder = folderOf(row);
-  // A row the sweep refuses has no identity: it has no time to move and
-  // nothing that would run, so only Remove (by its value) applies.
-  const identified = row.trigger_id !== "";
-  const mayRun = mayRunNow(row, row.can_run);
-  const last = row.last_run;
-  const lastAt = last ? (last.ended ?? last.started) : null;
-  const showStarted = started !== null && (last?.run_id ?? null) === started.before;
-
   return (
     <tr data-testid={`schedule-${row.item_id}${row.path}#${row.index}`}>
       <td>
-        <Link to={itemHref}>{row.item_title || row.item_id}</Link>
-        <div className="detail">
-          {folder ? (
-            row.page_path ? (
-              <a href={wuiAddress(row.slug, row.item_id, row.page_path)} target="_blank" rel="noreferrer">
-                {t("scheduleOverview.page", { page: row.page_title || folder })}
-              </a>
-            ) : (
-              t("scheduleOverview.page", { page: row.page_title || folder })
-            )
-          ) : (
-            t("scheduleOverview.itemOwn")
-          )}
-        </div>
+        <ScheduleWhere row={row} withItem />
       </td>
-      <td title={row.run_title && row.run !== row.run_title ? row.run : undefined}>{row.run_title || row.run || "—"}</td>
+      <td title={row.run_title && row.run !== row.run_title ? row.run : undefined}>{workflowName(row)}</td>
       <td className="schedule-when" title={period.set || undefined}>
         {period.text}
       </td>
       <td className={row.runnable ? "schedule-next" : "schedule-next schedule-problem"}>
-        <NextCell row={row} clock={clock} />
+        <ScheduleNext row={row} clock={clock} />
       </td>
       <td className="schedule-last">
-        {last ? (
-          <Link to={runHref(last.run_id)} title={lastAt ? fullTime(lastAt, clock.viewer, t) : undefined}>
-            <span className="schedule-status" data-status={last.status}>
-              {t(`scheduleOverview.status.${last.status}` as MsgKey)}
-            </span>
-            {last.by_hand ? <span className="schedule-tag">{t("scheduleOverview.byHand")}</span> : null}{" "}
-            {lastAt ? whenText(lastAt, clock.now, clock.viewer, t, "past") : null}
-          </Link>
-        ) : (
-          t("scheduleOverview.never")
-        )}
+        <ScheduleLast row={row} clock={clock} />
+      </td>
+      <td className="schedule-runs-as">
+        <ScheduleRunsAs row={row} canAssign={canAssign} />
       </td>
       <td>
-        <div className="schedule-actions">
-          {mayRun ? (
-            <button
-              type="button"
-              className="btn"
-              data-variant="secondary"
-              data-size="sm"
-              disabled={runNow.isPending}
-              onClick={() => {
-                setFailed(null);
-                runNow.mutate(row.last_run?.run_id ?? null);
-              }}
-            >
-              {t("schedules.runNow")}
-            </button>
-          ) : null}
-          {row.can_edit && identified ? (
-            <button
-              type="button"
-              className="btn"
-              data-variant="secondary"
-              data-size="sm"
-              onClick={() => {
-                setFailed(null);
-                setEditing(true);
-              }}
-            >
-              {t("schedules.editTime")}
-            </button>
-          ) : null}
-          {row.can_edit ? (
-            <button
-              type="button"
-              className="btn"
-              data-variant="danger"
-              data-size="sm"
-              disabled={remove.isPending}
-              aria-label={`${t("schedules.remove")} ${placeOf(row, t)} · ${period.text} → ${workflow}`}
-              onClick={() => {
-                setFailed(null);
-                void askRemove();
-              }}
-            >
-              {t("schedules.remove")}
-            </button>
-          ) : null}
-        </div>
-        {showStarted ? (
-          <div className="detail" role="status">
-            {t("schedules.started")} ·{" "}
-            <Link to={runHref(started?.runId ?? "")}>{t("scheduleOverview.seeRun")}</Link>
-          </div>
-        ) : null}
-        {failed ? (
-          <div className="detail schedule-problem" role="alert">
-            {failed}
-          </div>
-        ) : null}
-        {editing ? (
-          <ScheduleTimeModal
-            raw={row.raw}
-            nextMs={row.next_ms}
-            rowRef={ref}
-            onSave={(r, time) => client.editTime(row.slug, row.item_id, r, time)}
-            onSaved={() => {
-              setEditing(false);
-              void refresh();
-            }}
-            onClose={() => setEditing(false)}
-          />
-        ) : null}
+        <ScheduleActions row={row} client={client} clock={clock} />
       </td>
     </tr>
   );
-}
-
-/** When it runs next, or why it will not — the same reasons the item's panel
- * gives. */
-function NextCell({ row, clock }: { row: OverviewRow; clock: ViewerClock }) {
-  const t = useT();
-  if (row.problems.length > 0) return <>{`${t("schedules.invalidRow")} ${row.problems.join(" ")}`}</>;
-  if (!row.known) return <>{t("schedules.unknownWorkflow")}</>;
-  if (row.run_problem) return <>{`${t("schedules.brokenWorkflow")} ${row.run_problem}`}</>;
-  if (!row.runnable || row.next_ms === null) return <>—</>;
-  if (row.due_now) return <>{t("scheduleOverview.nextSweep")}</>;
-  return <span title={fullTime(row.next_ms, clock.viewer, t)}>{whenText(row.next_ms, clock.now, clock.viewer, t, "future")}</span>;
 }
