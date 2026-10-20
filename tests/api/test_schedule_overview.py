@@ -1185,3 +1185,51 @@ def test_an_items_own_listing_is_the_overview_narrowed_to_that_item():
     mine = r.json()["rows"]
     assert mine == [row for row in _rows(client) if row["item_id"] == iid]
     assert {row["path"] for row in mine} == {ITEM_SCHEDULES, PAGE_SCHEDULES}
+    assert r.json()["unindexed"] == []
+
+
+def test_an_items_own_file_the_index_does_not_name_is_listed_and_said_to_be_waiting():
+    """The panel always showed the item's own file, and said when the sweep's
+    index did not name it yet ("starts after the next conversation"). Narrowing
+    the overview to the item must not make such a file vanish from the panel."""
+    from workspace_app.api.schedule_index import ScheduleIndex
+
+    holder = {"id": "bob"}
+    client, spec, _ = _client_and_spec(holder)
+    iid = _item(spec, by="bob")
+    _seed(client, iid)
+    ScheduleIndex(spec).forget(iid, ITEM_SCHEDULES)
+
+    body = client.get(_wp(iid, "/schedules/overview")).json()
+
+    own = [row for row in body["rows"] if row["path"] == ITEM_SCHEDULES]
+    assert len(own) == 1
+    assert own[0]["runnable"] is False
+    assert body["unindexed"] == [ITEM_SCHEDULES]
+    # The cross-item overview lists what the sweep will act on — the index.
+    assert ITEM_SCHEDULES not in {row["path"] for row in _rows(client)}
+
+
+def test_an_items_own_file_that_cannot_be_read_is_said_not_a_500(monkeypatch):
+    from workspace_app.api import schedule_listing
+    from workspace_app.api.schedule_index import ScheduleIndex
+
+    holder = {"id": "bob"}
+    client, spec, _ = _client_and_spec(holder)
+    iid = _item(spec, by="bob")
+    _seed(client, iid)
+    ScheduleIndex(spec).forget(iid, ITEM_SCHEDULES)
+    real = schedule_listing.read_schedules_file
+
+    async def _host_down(files, durable, item_id, path):
+        if path == ITEM_SCHEDULES:
+            raise OSError("host down")
+        return await real(files, durable, item_id, path)
+
+    monkeypatch.setattr(schedule_listing, "read_schedules_file", _host_down)
+
+    r = client.get(_wp(iid, "/schedules/overview"))
+
+    assert r.status_code == 200, r.text
+    assert [f["path"] for f in r.json()["files"]] == [ITEM_SCHEDULES]
+    assert r.json()["unindexed"] == [ITEM_SCHEDULES]

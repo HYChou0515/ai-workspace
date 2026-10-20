@@ -284,6 +284,11 @@ class ScheduleOverview(BaseModel):
     can_assign: bool = False
     """Whether the viewer may choose someone ELSE to run a schedule as — the
     deployment's superusers only (`plan-schedule-run-as` G5)."""
+    unindexed: list[str] = []
+    """Schedules files listed although the sweep's index does not name them
+    yet — only an item's OWN listing has any (its `.workflows/schedules.json`,
+    which its Workflows panel always showed): the cross-item overview lists
+    what the sweep will act on, which is the index."""
 
 
 class ScheduleAction(BaseModel):
@@ -558,6 +563,15 @@ def register_schedule_overview_routes(
         the two screens cannot drift apart (NN/g, consistency)."""
         return await _overview(locator.require_access(slug, item_id, "read_meta"))
 
+    async def _present(item_id: str, path: str) -> bool:
+        """Whether there is a file to list. A read that fails other than "not
+        there" counts as present: the listing below then reports it as a file
+        it could not read, as it does every other — not a 500 for the panel."""
+        try:
+            return await read_schedules_file(files, durable, item_id, path) is not None
+        except Exception:  # noqa: BLE001 — said for that file by the listing
+            return True
+
     async def _overview(only: str | None) -> ScheduleOverview:
         rows: list[OverviewRow] = []
         problem_files: list[OverviewFile] = []
@@ -567,9 +581,18 @@ def register_schedule_overview_routes(
         pages: dict[tuple[str, str], DeployedWui] = {}
         for page in await asyncio.to_thread(deployed_pages):
             pages.setdefault((page.item_id, page.path.rsplit("/", 1)[0]), page)
-        for item_id, paths, landed in await asyncio.to_thread(index.entries):
-            if only is not None and item_id != only:
-                continue
+        entries = await asyncio.to_thread(index.entries)
+        unindexed: list[str] = []
+        if only is not None:
+            entries = [e for e in entries if e[0] == only]
+            named = entries[0][1] if entries else []
+            # The item's own file, named by no index yet (written past every
+            # hook): listed as not running yet, as its panel always did.
+            if ITEM_SCHEDULES_PATH not in named and await _present(only, ITEM_SCHEDULES_PATH):
+                unindexed.append(ITEM_SCHEDULES_PATH)
+                landed_of = entries[0][2] if entries else {}
+                entries = [(only, [*named, ITEM_SCHEDULES_PATH], landed_of)]
+        for item_id, paths, landed in entries:
             decided = await asyncio.to_thread(_decide, item_id)
             if decided is None:
                 continue
@@ -603,7 +626,7 @@ def register_schedule_overview_routes(
                         profile=profile,
                         path=path,
                         raw=data.decode("utf-8", "replace"),
-                        indexed=True,
+                        indexed=path not in unindexed,
                         landed=landed.get(path),
                     )
                     lasts = [
@@ -658,6 +681,7 @@ def register_schedule_overview_routes(
             rows=rows,
             files=problem_files,
             can_assign=get_user_id() in superusers,
+            unindexed=unindexed,
         )
 
 
