@@ -41,6 +41,7 @@ from .byte_range import UNSATISFIABLE, byte_range
 from .events import CellEvent, FileChanged, to_sse
 from .locator import ItemLocator
 from .registry import InvestigationRegistry
+from .schedule_index import is_schedule_file
 from .schemas import (
     _CellExecuteBody,
     _ExecBody,
@@ -64,6 +65,7 @@ from .turns import ChatTurnEngine
 
 if TYPE_CHECKING:
     from ..apps.skill_hub import SkillHubStore
+    from ..workflow.schedule_bindings import ScheduleAuthorship
 
 _READONLY_DIR = ".readonly"
 
@@ -233,6 +235,14 @@ async def _stream_upload_to_store(
         tmp.unlink(missing_ok=True)
 
 
+async def _text_or_none(files: WorkspaceFiles, workspace_id: str, path: str) -> str | None:
+    """A small text file as text, or None when there is none."""
+    try:
+        return (await files.read(workspace_id, path)).decode("utf-8", "replace")
+    except FileNotFound:
+        return None
+
+
 def over_upload_quota(bytes_read: int, remaining: int | None) -> bool:
     """Should a streamed upload be cut off after `bytes_read` bytes?
 
@@ -267,6 +277,7 @@ def register_file_routes(
     max_file_size: int,
     admission: AdmissionGate | None = None,
     skill_hub: SkillHubStore | None = None,
+    schedule_authorship: ScheduleAuthorship | None = None,
 ) -> None:
     """Mount the workspace file / notebook / shell routes onto ``app``.
 
@@ -549,7 +560,17 @@ def register_file_routes(
         # enforcing the single-file cap as bytes arrive, then stream it into the
         # store. `files.write_from_path` routes warm→sandbox / cold→blob.
         # #245: also gate the per-workspace total quota mid-stream.
+        # plan-schedule-run-as G2: a schedules file saved here — the editor, a
+        # page's `writeFile` — runs the rows it ADDS as the person saving it.
+        credit = schedule_authorship is not None and is_schedule_file(norm)
+        before = await _text_or_none(files, investigation_id, norm) if credit else None
         await _stream_upload_to_store(investigation_id, norm, request, files, max_file_size)
+        if credit:
+            assert schedule_authorship is not None  # narrow for ty
+            after = await _text_or_none(files, investigation_id, norm)
+            await schedule_authorship.credit(
+                investigation_id, norm, before=before, after=after or "", author=get_user_id()
+            )
         activity.record(
             "file_written",
             f"Wrote {rel_path(norm)}",

@@ -49,6 +49,7 @@ from ..workflow.offered import (
 )
 from ..workflow.orchestrator import ActiveRunExists
 from ..workflow.run import WorkflowRun
+from ..workflow.schedule_bindings import ScheduleAuthorship
 from ..workflow.user_schedules import (
     ITEM_SCHEDULES_PATH,
     SchedulePolicy,
@@ -352,6 +353,7 @@ def register_schedule_overview_routes(
     durable: Source,
     on_saved: Callable[[str, str], None],
     deployed_pages: Callable[[], list[DeployedWui]] = list,
+    authorship: ScheduleAuthorship | None = None,
 ) -> None:
     """``start_run`` is the sweep's own start (`start_page_schedule`, bound in
     `create_app`): "run now" goes through exactly what a fire goes through —
@@ -422,7 +424,17 @@ def register_schedule_overview_routes(
         # other save, so the birth rule sees the edit (no catch-up for it).
         # `ensure_ascii=False`: a neighbouring row's 品管課 stays 品管課, not
         # `\\u54c1…` — the file is read by people and agents too.
-        await files.write(item_id, path, json.dumps(doc, indent=2, ensure_ascii=False).encode())
+        after = json.dumps(doc, indent=2, ensure_ascii=False)
+        # plan-schedule-run-as G2: a row this save ADDS — a new time is a new
+        # row — runs as the person who saved it. The file as it is now is what
+        # it replaces (the caller read it a moment ago; a write in between is
+        # the caller's 409 race, not this one's).
+        before = (
+            (await files.read(item_id, path)).decode("utf-8", "replace") if authorship else None
+        )
+        await files.write(item_id, path, after.encode())
+        if authorship is not None:
+            await authorship.credit(item_id, path, before=before, after=after, author=get_user_id())
         on_saved(item_id, path)
 
     @app.post("/a/{slug}/items/{item_id}/schedules/edit", response_model=ScheduleAction)

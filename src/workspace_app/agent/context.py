@@ -29,6 +29,7 @@ if TYPE_CHECKING:
     from ..tooling.external import MountedTool
     from ..tooling.registry import PackageInfo
     from ..users.protocol import User, UserDirectory
+    from ..workflow.schedule_bindings import ScheduleAuthorship
     from ..workflow.user_schedules import SchedulePolicy
     from .tool_usage import ToolUsageRecorder
 
@@ -383,6 +384,17 @@ class AgentToolContext:
     # (`TurnContextBuilder`); None on a context without it, where the tool
     # declines rather than guessing.
     schedule_policy: SchedulePolicy | None = None
+    # plan-schedule-run-as G2: a row `save_schedules` ADDS runs as the person
+    # this turn acts for (`acting_for`) — credited here. None ⇒ nothing is
+    # credited and every row it writes runs as nobody, which is also what a
+    # context built without it must mean.
+    schedule_authorship: ScheduleAuthorship | None = None
+    # The PERSON this turn runs for — whose private values it carries: a chat
+    # turn's author (a goal round's / a re-run's original author), a workflow
+    # node's `env_user` (the presser, the schedule's binder). NOT `acting_user`,
+    # which for a scheduled run is the item's owner it is billed to — the owner
+    # never asked for that schedule. "" = nobody (an unbound schedule, a trigger).
+    acting_for: str = ""
 
     # #380: the item's per-turn tri-state skill override (`attached_skill_prefs`),
     # set by the API layer. `read_skill` refuses a skill pinned OFF here (a skill

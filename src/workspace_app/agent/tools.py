@@ -3340,6 +3340,13 @@ async def save_workflow_impl(
     )
 
 
+def _runs_as_said(user: str) -> str:
+    """How a saved row's identity reads in `save_schedules`'s reply."""
+    if user:
+        return f" — runs as {user} (with their own sign-ins and values)"
+    return " — runs as nobody (the item's shared values only)"
+
+
 async def save_schedules_impl(ctx: RunContextWrapper[AgentToolContext], schedules_json: str) -> str:
     # The docstring — what the model reads as this tool's description — is
     # assigned below, built from the vocabulary the validator accepts, so the
@@ -3357,6 +3364,7 @@ async def save_schedules_impl(ctx: RunContextWrapper[AgentToolContext], schedule
     from ..workflow.user_schedules import (
         ITEM_SCHEDULES_PATH,
         last_window_lookup,
+        schedule_key,
         schedule_views,
         usable_rows,
         utc_now,
@@ -3405,9 +3413,19 @@ async def save_schedules_impl(ctx: RunContextWrapper[AgentToolContext], schedule
             return f"error: {wont_parse(run, problem)} Then save the schedules."
 
     doc = json.loads(schedules_json)
-    await files.write(
-        inv, ITEM_SCHEDULES_PATH, json.dumps({"schedules": doc["schedules"]}, indent=2).encode()
-    )
+    authorship = ctx.context.schedule_authorship
+    before: str | None = None
+    if authorship is not None:
+        with contextlib.suppress(FileNotFound):
+            before = (await files.read(inv, ITEM_SCHEDULES_PATH)).decode("utf-8", "replace")
+    written = json.dumps({"schedules": doc["schedules"]}, indent=2)
+    await files.write(inv, ITEM_SCHEDULES_PATH, written.encode())
+    # plan-schedule-run-as G2: the rows this save ADDS run as the person the
+    # turn acts for — never the rows that were already there.
+    if authorship is not None:
+        await authorship.credit(
+            inv, ITEM_SCHEDULES_PATH, before=before, after=written, author=ctx.context.acting_for
+        )
 
     # "Next run" as the sweep will actually compute it — the same views the
     # Workflows panel lists, ledger AND landing stamp included, so an unchanged
@@ -3437,12 +3455,23 @@ async def save_schedules_impl(ctx: RunContextWrapper[AgentToolContext], schedule
         max_rows=policy.max_rows,
         enabled=policy.sweep_enabled,
         landed_ms=landed,
+        # Each row's identity — the key its binding is filed under.
+        key_of=schedule_key(inv, ITEM_SCHEDULES_PATH),
     )
     # The returns above leave the switch as the only gate a row here can fail
     # (`run` is offered, the file is within the cap, and `indexed` is left at
     # its default because the write just went through the facade, which
     # records it), so the sentence is keyed on the switch — the cause — rather
     # than on the verdict, which would attribute any other failure to it.
+    # Whose values each row will carry — said, so the agent tells the person
+    # plainly rather than leaving "set up" to mean "with your sign-in".
+    who = {
+        v.trigger_id: (
+            await asyncio.to_thread(authorship.runs_as, v.trigger_id) if authorship else ""
+        )
+        for v in views
+        if v.trigger_id
+    }
     lines = [
         f"- {v.run}: {v.describe}"
         + (f" with {json.dumps(v.payload, sort_keys=True)}" if v.payload else "")
@@ -3451,6 +3480,7 @@ async def save_schedules_impl(ctx: RunContextWrapper[AgentToolContext], schedule
             if policy.sweep_enabled
             else " — will not run (scheduled work is switched off on this deployment)"
         )
+        + _runs_as_said(who.get(v.trigger_id, ""))
         for v in views
     ]
     noun = "schedule" if len(rows) == 1 else "schedules"

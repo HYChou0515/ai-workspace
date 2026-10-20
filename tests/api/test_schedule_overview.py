@@ -1107,3 +1107,39 @@ def test_an_edit_that_is_not_one_time_is_refused_and_the_file_is_untouched(asked
     assert r.status_code == 422, r.text
     assert said in r.json()["detail"]
     assert _file_rows(client, iid, ITEM_SCHEDULES) == before
+
+
+COLLABORATOR = Permission(
+    visibility="restricted",
+    read_meta=["user:carol"],
+    read_content=["user:carol"],
+    edit_content=["user:carol"],
+    execute=["user:carol"],
+)
+
+
+def _runs_as(client, iid: str, path: str) -> list[tuple[str, str]]:
+    r = client.get(_wp(iid, "/schedule-bindings"), params={"path": path})
+    assert r.status_code == 200, r.text
+    return [(row["bound_to"], row["reason"]) for row in r.json()["rows"]]
+
+
+def test_whoever_changes_a_schedules_time_is_who_it_then_runs_as():
+    """plan-schedule-run-as G2: a new time is a new schedule, written by the
+    person who changed it — so it runs as them, not as whoever wrote the old one."""
+    holder = {"id": "bob"}
+    client, spec, _ = _client_and_spec(holder)
+    iid = _item(spec, by="bob", permission=COLLABORATOR)
+    _put(client, iid, "/.workflows/w0.json", _workflow("w0"))
+    _put(client, iid, PAGE_SCHEDULES, _schedules({"every": "daily", "at": "09:00", "run": "w0"}))
+    assert _runs_as(client, iid, PAGE_SCHEDULES) == [("bob", "author")]
+    before = _row_of(client, PAGE_SCHEDULES)
+    holder["id"] = "carol"
+
+    r = client.post(
+        _wp(iid, "/schedules/edit"),
+        json={"path": PAGE_SCHEDULES, "trigger_id": before["trigger_id"], "every": "hourly"},
+    )
+
+    assert r.status_code == 200, r.text
+    assert _runs_as(client, iid, PAGE_SCHEDULES) == [("carol", "author")]

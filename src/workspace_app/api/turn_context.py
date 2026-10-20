@@ -56,6 +56,7 @@ from ..tooling.external import (
     describe_running,
     resolve_external_tools,
 )
+from ..workflow.schedule_bindings import ScheduleAuthorship
 from ..workflow.user_schedules import SchedulePolicy
 from .env_layers import PersonEnv, resolve
 from .locator import TurnFacts
@@ -218,6 +219,7 @@ class TurnContextBuilder:
         review_skill: ReviewSkill | None = None,
         tool_usage: ToolUsageRecorder | None = None,
         ext_ai: bool = False,
+        schedule_authorship: ScheduleAuthorship | None = None,
     ) -> None:
         # plan-tool-usage-stats §8.3: a chat turn carries the recorder from the
         # moment it is built — the send path counts an applied skill before the
@@ -248,6 +250,11 @@ class TurnContextBuilder:
         # not defaulted: a default here would be a guess about the deployment,
         # and the tool's whole point is not to guess.
         self._schedule_policy = schedule_policy
+        # plan-schedule-run-as G2: credits the rows `save_schedules` adds to the
+        # person a turn acts for. One for every turn shape — the chat's and a
+        # workflow node's — so neither can save schedules that credit nobody
+        # by being built without it.
+        self._schedule_authorship = schedule_authorship
         self._infer_modules_parallelism = infer_modules_parallelism
         self._history_max_messages = history_max_messages
         self._history_max_context_tokens = history_max_context_tokens
@@ -860,6 +867,7 @@ class TurnContextBuilder:
             tool_output_max_chars=self._tool_output_max_chars,
             exec_output_max_chars=self._exec_output_max_chars,
             schedule_policy=self._schedule_policy,
+            schedule_authorship=self._schedule_authorship,
             history=history,
             history_trimmed=cut[0] if cut else 0,
             history_reduced_note=said[0] if said else "",
@@ -979,6 +987,9 @@ class TurnContextBuilder:
             collection_tiers=collection_tiers,
             # #111: card create/update agent tools stamp this user on the write.
             acting_user=acting_user,
+            # plan-schedule-run-as: the person a chat turn runs for is its
+            # author — the sender, or a goal round's / re-run's original author.
+            acting_for=acting_user,
             # #242: the resolved speaker for the per-turn "who am I replying to" note.
             speaker=speaker,
             # Is a person waiting on this turn? Decides which rate limit the
@@ -1021,6 +1032,7 @@ class TurnContextBuilder:
         tool_subset: list[str] | None = None,
         entity_write_origin: EntityOrigin | None = None,
         caller_env: PersonEnv | None = None,
+        acting_for: str = "",
     ) -> AgentToolContext:
         """The lean workflow agent-node turn context (`_wf_drive_turn`): the shared
         core only — every interactive extra stays at its ``AgentToolContext`` default.
@@ -1073,6 +1085,9 @@ class TurnContextBuilder:
                 caller_env=caller_env,
             ),
             entity_write_origin=entity_write_origin,
+            # plan-schedule-run-as: whose values the RUN carries (its
+            # `env_user`), never the user it is billed to — "" for nobody.
+            acting_for=acting_for,
         )
 
     def _finalized(

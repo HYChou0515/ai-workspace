@@ -310,3 +310,49 @@ async def test_a_workflow_cannot_take_the_schedules_files_name(clock) -> None:
 async def test_no_workspace_on_this_turn_is_an_error() -> None:
     out = await save_schedules_impl(RunContextWrapper(AgentToolContext()), _rows())
     assert out.startswith("error:")
+
+
+def _authored(ctx, *, acting_for: str, may_run: bool = True):
+    """Give the turn what crediting needs — and return the binding store."""
+    from workspace_app.resources import make_spec
+    from workspace_app.workflow.schedule_bindings import (
+        ScheduleAuthorship,
+        ScheduleBindings,
+        register_schedule_bindings,
+    )
+
+    spec = make_spec(default_user="x")
+    register_schedule_bindings(spec)
+    bindings = ScheduleBindings(spec)
+    ctx.context.acting_for = acting_for
+    ctx.context.schedule_authorship = ScheduleAuthorship(
+        bindings, read=ctx.context.files.read, may_run=lambda _user, _item: may_run
+    )
+    return bindings
+
+
+async def test_the_rows_it_adds_run_as_the_person_the_turn_is_for_and_it_says_so(clock) -> None:
+    """plan-schedule-run-as G2: the agent wrote it, on carol's behalf — so it
+    runs as carol, and the reply names her so the agent tells her plainly."""
+    ctx = _ctx()
+    bindings = _authored(ctx, acting_for="carol")
+    await _with_workflow(ctx)
+
+    out = await save_schedules_impl(ctx, _rows({"every": "daily", "at": "09:00", "run": "nightly"}))
+
+    (binding,) = bindings.for_item("inv-1")
+    assert (binding.user_id, binding.reason) == ("carol", "author")
+    assert "runs as carol" in out
+
+
+async def test_a_turn_that_acts_for_nobody_saves_rows_that_run_as_nobody(clock) -> None:
+    """A schedule's own run with no one bound, a trigger: nobody's values — and
+    the reply says the row gets the shared values only."""
+    ctx = _ctx()
+    bindings = _authored(ctx, acting_for="")
+    await _with_workflow(ctx)
+
+    out = await save_schedules_impl(ctx, _rows({"every": "daily", "at": "09:00", "run": "nightly"}))
+
+    assert bindings.for_item("inv-1") == []
+    assert "runs as nobody" in out

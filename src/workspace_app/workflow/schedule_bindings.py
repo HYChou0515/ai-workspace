@@ -31,6 +31,7 @@ Registered post-``spec.apply``: no auto-CRUD, so the routes are the only door.
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 from collections.abc import Awaitable, Callable
 
@@ -38,6 +39,7 @@ from msgspec import Struct
 from specstar import QB, SpecStar
 from specstar.types import ResourceIDNotFoundError
 
+from .user_schedules import trigger_id_for, usable_rows
 from .workspace_store import load_workspace_workflow_digested
 
 
@@ -163,3 +165,79 @@ class ScheduleBindings:
         for b in gone:
             self.unbind(b.trigger_id)
         return gone
+
+
+def file_keys(item_id: str, path: str, raw: str) -> list[tuple[str, str]]:
+    """``(key, run)`` of every row of the schedules file at ``path`` the sweep
+    would fire — keyed the way the SWEEP keys it (`user_schedule_sweep._one_file`:
+    folder = the file's directory), so a binding made from these is the one a
+    fire looks up."""
+    folder = path.rsplit("/", 1)[0]
+    return [(trigger_id_for(item_id, folder, row), row.run) for row in usable_rows(raw)[0]]
+
+
+class ScheduleAuthorship:
+    """`plan-schedule-run-as` G2: a row runs as the person who WROTE it.
+
+    Called by the doors that know who is writing — `save_schedules`, the file
+    PUT route, the schedule "change time" route — with the file as it was
+    before the write and as it is after. Every other way a row can appear (an
+    agent's `exec`, a copy, an import, a seed, a row older than this feature)
+    passes through none of them, so it runs as nobody (G3) — no backfill.
+
+    Only the rows THIS write added are credited (``after - before``). Saving
+    the whole file again — `save_schedules` always does — must not claim the
+    rows that were already there: an older row nobody wrote, or one whose
+    person chose "stop running as me", would otherwise land in the name of
+    whoever touched the file next.
+
+    A row is credited only when nobody holds it yet, the author may run work
+    in the item (``may_run`` — `execute`, the "Run as me" verb; G7), and its
+    workflow parses: the binding records the workflow as it is now, the
+    consent rule "Run as me" follows (`workflow_digest`)."""
+
+    def __init__(
+        self,
+        bindings: ScheduleBindings,
+        *,
+        read: Callable[[str, str], Awaitable[bytes]],
+        may_run: Callable[[str, str], bool],
+    ) -> None:
+        self._bindings = bindings
+        self._read = read
+        self._may_run = may_run
+
+    def runs_as(self, key: str) -> str:
+        """Who the row ``key`` runs as now, or "" for nobody. Blocking."""
+        return self._bindings.binder(key)
+
+    async def credit(
+        self, item_id: str, path: str, *, before: str | None, after: str, author: str
+    ) -> list[str]:
+        """Bind the rows ``after`` adds to ``author``; return their keys."""
+        from .offered import unparsable_workflow
+
+        if not author:
+            return []
+        old = {key for key, _run in file_keys(item_id, path, before)} if before else set()
+        added = [(key, run) for key, run in file_keys(item_id, path, after) if key not in old]
+        if not added or not await asyncio.to_thread(self._may_run, author, item_id):
+            return []
+        credited: list[str] = []
+        for key, run in added:
+            if await asyncio.to_thread(self._bindings.get, key) is not None:
+                continue
+            if await unparsable_workflow(self._read, item_id, run) is not None:
+                continue
+            digest = await workflow_digest(self._read, item_id, run)
+            await asyncio.to_thread(
+                self._bindings.bind,
+                key,
+                item_id=item_id,
+                path=path,
+                user_id=author,
+                workflow_digest=digest,
+                reason="author",
+            )
+            credited.append(key)
+        return credited
