@@ -105,6 +105,66 @@ def test_layer_of_names_the_layer_the_shared_table_expects(case):
     assert got == case["expected"], case
 
 
+# ─── P3: one refresh at a time, across pods ──────────────────────────────────
+
+
+def _claims(clock: list[int]):
+    from workspace_app.api.refresh_claims import RefreshClaims, register_refresh_claims
+    from workspace_app.resources import make_spec
+
+    spec = make_spec()
+    register_refresh_claims(spec)
+    return RefreshClaims(spec, now=lambda: clock[0])
+
+
+def test_one_taker_holds_a_key_and_a_second_is_refused():
+    """A rotating refresh token is spent once: two runs that both see it near
+    expiry must not both send it."""
+    claims = _claims([1_000])
+    first = claims.try_take("personal:alice:erp", ttl_ms=30_000)
+    assert first is not None
+    assert claims.try_take("personal:alice:erp", ttl_ms=30_000) is None
+
+
+def test_keys_are_independent():
+    claims = _claims([1_000])
+    assert claims.try_take("personal:alice:erp", ttl_ms=30_000) is not None
+    assert claims.try_take("personal:bob:erp", ttl_ms=30_000) is not None
+
+
+def test_a_holder_that_died_does_not_block_for_ever():
+    clock = [1_000]
+    claims = _claims(clock)
+    assert claims.try_take("k", ttl_ms=30_000) is not None
+    clock[0] = 1_000 + 30_001
+    assert claims.try_take("k", ttl_ms=30_000) is not None
+
+
+def test_release_frees_the_key_for_the_next_taker():
+    claims = _claims([1_000])
+    holder = claims.try_take("k", ttl_ms=30_000)
+    assert holder is not None
+    claims.release("k", holder)
+    assert claims.try_take("k", ttl_ms=30_000) is not None
+
+
+def test_releasing_a_key_nobody_took_is_harmless():
+    _claims([1_000]).release("never-taken", "anyone")
+
+
+def test_only_the_holder_can_release():
+    """A late release from a taker whose claim expired and passed to another
+    must not free the new holder's key."""
+    clock = [1_000]
+    claims = _claims(clock)
+    old = claims.try_take("k", ttl_ms=30_000)
+    clock[0] = 1_000 + 30_001
+    new = claims.try_take("k", ttl_ms=30_000)
+    assert old and new and old != new
+    claims.release("k", old)
+    assert claims.try_take("k", ttl_ms=30_000) is None
+
+
 def test_layer_of_names_the_service_account_below_the_person():
     from workspace_app.api.env_layers import layer_of
 
