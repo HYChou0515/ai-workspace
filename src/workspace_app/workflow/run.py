@@ -11,6 +11,7 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import Any
 
+import msgspec
 from msgspec import Struct, field
 
 from ..apps.base import IndexedFields
@@ -205,6 +206,53 @@ class WorkflowRun(Struct):
     """Set while ``awaiting_human`` for a steer plan awaiting confirm (#288). Mutually
     exclusive with ``pending_decision`` — the FE picks the steer card vs. the gate card by
     which is set, and ``decide()`` guards on ``pending_decision`` so they never collide."""
+
+
+#: What the phase a run ended in may read before its last status settles it.
+_ENDED_IN = ("running", "stopped")
+
+
+def settle_phases(run: WorkflowRun) -> list[PhaseState]:
+    """``run.phases`` with at most one ``running``: the phase the run is in, and
+    only while it is live (plan-one-running-phase D1 / D2). The one place a
+    phase's status follows from the run's progress — the orchestrator writes it
+    and the run routes serve it, so a row stored before this reads right too.
+
+    A phase is set ``running`` on entry and nothing else leaves it; every phase
+    walked so far used to read running at once, so the execution tab streamed
+    the next step under the first one's row and kept that row locked open — for
+    good, once an error or a Stop froze it. Here a running phase the run is no
+    longer in has passed; the one it ended in failed (ERROR) or stopped
+    (CANCELLED). At a gate the run is in the gate's phase — a gate enters it
+    (`StepStarted`) before it pauses — so that one is left as it is (#176)."""
+    status = run.status
+    live = status in (RunStatus.PENDING, RunStatus.RUNNING, RunStatus.AWAITING_HUMAN)
+    anchor = run.current_phase if live else None  # ended: none is still being worked on
+    ended_as = {RunStatus.ERROR: "failed", RunStatus.CANCELLED: "stopped"}.get(status)
+
+    def settled(p: PhaseState) -> PhaseState:
+        if p.phase == anchor:
+            return p
+        # The phase it ended in follows its LAST status: a wall-clock cap first
+        # cancels the driver (stopped) and then records the error (failed). Only
+        # this function writes `stopped`, so re-reading it is safe.
+        if ended_as is not None and p.phase == run.current_phase and p.status in _ENDED_IN:
+            return msgspec.structs.replace(p, status=ended_as)
+        if p.status == "running":
+            return msgspec.structs.replace(p, status="passed")
+        return p
+
+    return [settled(p) for p in run.phases]
+
+
+def with_settled_phases(run: Any, **changes: Any) -> WorkflowRun:
+    """``run`` with ``changes`` applied and its phases settled (`settle_phases`):
+    what every write of a run stores, so no write — a step entering a phase, a
+    gate, an error, a Stop from any of the places that record one — can leave a
+    phase running that the run is no longer in."""
+    assert isinstance(run, WorkflowRun)
+    updated = msgspec.structs.replace(run, **changes)
+    return msgspec.structs.replace(updated, phases=settle_phases(updated))
 
 
 def is_execution(run: WorkflowRun) -> bool:

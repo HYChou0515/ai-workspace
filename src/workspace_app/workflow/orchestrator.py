@@ -66,6 +66,7 @@ from .run import (
     StepState,
     WorkflowRun,
     is_execution_of,
+    with_settled_phases,
 )
 from .run_identity import RunIdentities
 from .steer import SteerProposalFailed, apply_steer, propose_steer
@@ -343,7 +344,7 @@ class WorkflowOrchestrator:
         # set it explicitly. A live run's `progress_at` advances step-by-step; a dead pod's
         # stops, which is what `is_stuck` keys on.
         changes.setdefault("progress_at", self.now())
-        self._rm().update(run_id, msgspec.structs.replace(self._get(run_id), **changes))
+        self._rm().update(run_id, with_settled_phases(self._get(run_id), **changes))
 
     def run_status(self, run_id: str) -> RunStatus | None:
         """A run's status, or None if it no longer exists (#429 P8) — the sweeper's orphan
@@ -1026,34 +1027,11 @@ class WorkflowOrchestrator:
         data = self._get(run_id)
         status = data.status
         if status is RunStatus.AWAITING_HUMAN and data.pending_decision is not None:
-            # Green the phases that finished before the gate (#176): without this they
-            # stay 'running' (blue) until the run reaches DONE, so a pause looks like
-            # work is still in flight. The gate's own phase is left untouched — it is
-            # not done yet, and the FE overlays it as the awaiting node anyway.
-            gate = data.pending_decision.phase
-            self._patch(
-                run_id,
-                phases=[
-                    msgspec.structs.replace(p, status="passed")
-                    if p.status == "running" and p.phase != gate
-                    else p
-                    for p in data.phases
-                ],
-            )
             self.publish(
                 key,
                 AwaitingHumanEvent(
                     phase=data.pending_decision.phase, title=data.pending_decision.title
                 ),
-            )
-        if status is RunStatus.DONE:
-            # Mark every entered, non-failed phase passed for the diagram (§12).
-            self._patch(
-                run_id,
-                phases=[
-                    msgspec.structs.replace(p, status="passed") if p.status == "running" else p
-                    for p in data.phases
-                ],
             )
         # Release the sandbox on terminal OR on a (possibly long) human pause (§16).
         # A pause keeps the turn session (stream) alive for the decision card.
