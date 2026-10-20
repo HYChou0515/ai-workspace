@@ -130,7 +130,7 @@ facade 的 `_landed` 不知道是誰(`files/facade.py:500`,只有 workspace_id �
 ## Review 第 2 輪(四鏡頭,兩個 agent)
 
 修了:**空檔、`{}`、`{"schedules": null}` 算「沒有列」**,不是「解析不了」——檔案樹「新增檔案」先寫空字串,
-第 1 輪的護欄讓編輯器的第一次存檔不認作者(只有非空白而且不是 JSON 的才算壞掉);AI 工具與「改時間」在寫之前／之後
+第 1 輪的護欄讓編輯器的第一次存檔不認作者(空白、`{}`、`{"schedules": null}` 算沒有列;其他讀不出排程清單的——不是 JSON、key 打錯、不是清單——仍算壞掉,第 3 輪收緊);AI 工具與「改時間」在寫之前／之後
 的讀檔失敗時只是不認、寫入照常(第 1 輪只修了檔案 PUT);自己改了自己那一列不收到「已不再用你的身分」(D7);
 workflow 被改而收綁定的通知講 workflow(新原因 `workflow_changed`);面板「匯入」先寫 workflow 檔、最後寫
 `schedules.json`(否則 workflow 還不存在,認不了);改時間的說明補上「workflow 解析不了時例外」;runbook rollout 措辭。

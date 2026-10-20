@@ -41,7 +41,7 @@ from msgspec import Struct
 from specstar import QB, SpecStar
 from specstar.types import ResourceIDNotFoundError
 
-from .user_schedules import UserSchedule, over_cap, trigger_id_for, usable_rows
+from .user_schedules import UserSchedule, file_rows, over_cap, trigger_id_for, usable_rows
 from .workspace_store import load_workspace_workflow_digested
 
 logger = logging.getLogger(__name__)
@@ -185,6 +185,24 @@ def file_keys(item_id: str, path: str, raw: str) -> list[tuple[str, UserSchedule
     return [(trigger_id_for(item_id, folder, row), row) for row in usable_rows(raw)[0]]
 
 
+def _unreadable(raw: str) -> bool:
+    """Whether a schedules file held rows nobody can name: anything but a
+    schedules list. An EMPTY file, `{}` and `{"schedules": null}` hold NO rows
+    — the file tree's New file writes "" before the first save (review round
+    2) — while text that is not JSON, or JSON that is not a schedules document
+    (a mistyped key, a list, a string where the list goes), hides whatever
+    rows it was meant to hold (review round 3)."""
+    if not raw.strip():
+        return False
+    try:
+        doc = json.loads(raw)
+    except ValueError:
+        return True
+    if doc == {} or doc == {"schedules": None}:
+        return False
+    return file_rows(raw) is None
+
+
 class ScheduleAuthorship:
     """`plan-schedule-run-as` G2: a row runs as the person who WROTE it.
 
@@ -253,14 +271,8 @@ class ScheduleAuthorship:
         # A file that was there but could not be read had rows nobody can name:
         # the fix that makes them readable did not ADD them (review round 1,
         # defect 1 — every row of a once-broken file went to whoever fixed it).
-        # Only text that is not JSON at all is that. An EMPTY file, `{}`, or
-        # `{"schedules": null}` holds no rows (review round 2): the file tree's
-        # New file writes "" before the person's first save.
-        if before is not None and before.strip():
-            try:
-                json.loads(before)
-            except ValueError:
-                return []
+        if before is not None and _unreadable(before):
+            return []
         if self._max_rows is not None and over_cap(after, self._max_rows) is not None:
             return []
         old = {key for key, _row in file_keys(item_id, path, before)} if before else set()

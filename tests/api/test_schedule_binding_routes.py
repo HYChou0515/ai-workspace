@@ -166,13 +166,23 @@ def test_a_row_nobody_wrote_through_a_door_stays_nobodys_when_the_file_is_saved_
     assert [b for _d, b in who].count("") == 1
 
 
-def test_a_file_that_was_broken_before_the_save_hands_its_rows_to_nobody():
-    """Review round 1 (defect 1): a mid-edit save of invalid JSON, then the
-    fixed file — the rows in it are not "added" by the fix (the file just
-    could not be read), so they are not credited to whoever fixed it."""
+@pytest.mark.parametrize(
+    "broken",
+    [
+        '{"schedules": [',  # not JSON (a save mid-edit)
+        '{"schedule": []}',  # JSON, but the key is mistyped
+        '{"schedules": "oops"}',  # JSON, but not a list
+        "[]",  # JSON, but not a schedules document
+    ],
+)
+def test_a_file_that_was_broken_before_the_save_hands_its_rows_to_nobody(broken):
+    """Review round 1 (defect 1): a broken save, then the fixed file — the rows
+    in it are not "added" by the fix (the file just could not be read), so they
+    are not credited to whoever fixed it. Valid JSON that is not a schedules
+    document is broken the same way (review round 3)."""
     client, holder, rid, _ = _world(seeded=True)
     holder["id"] = "carol"
-    client.put(f"/a/rca/items/{rid}/files{FILE}", content='{"schedules": [')
+    client.put(f"/a/rca/items/{rid}/files{FILE}", content=broken)
 
     client.put(f"/a/rca/items/{rid}/files{FILE}", content=_rows(DAILY, EVENING))
 
