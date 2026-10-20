@@ -145,5 +145,25 @@ also not enough; offer some potential remedies」「guess the correct action and
 | P4 | `refresh_if_due`：判斷 → 拿鎖 → 重讀 → refresh → 寫回同一層 → 放鎖；失敗照 D4 | 每一層各一條寫回測試；rotation 情境兩個並行只換一次；`RefreshRejected` 清、其他例外不清 |
 | P5 | providers 一路傳到 `ChatSendService`、`WorkflowExecutor`、wui 路由，掛在 `private_layer` / `unattended_layer` 之後 | 每個入口（聊天、callTool、goal、reclaim、workflow 節點、排程）各一條測試：快過期時工具拿到新值；WUI build 不呼叫 refresh |
 | P6 | 無人在場失敗 → `notify()`；有人在場 → D6 的平台訊息＋「登入 X」按鈕（前端：notice 帶登入方式 id 時畫按鈕，打開 #892 的登入頁） | 去重；值從不出現在通知或訊息裡；按鈕打開的是對的那個登入方式 |
-| P7 | 文件：`extending-the-platform.md`（部署方怎麼寫 refresh）、runbook 條目、plan-personal-env「不做」那條標推翻、design-history | `mkdocs build --strict`；`tests/docs/test_docs_index.py` |
+| P7 | 文件：`extending-the-platform.md`（部署方怎麼寫 refresh）、**runbook 條目（內容見下方「runbook 條目必須寫的事」）**、design-history | `mkdocs build --strict`；`tests/docs/test_docs_index.py`；runbook 條目逐條對照下方清單 |
 | P8 | live check：替身 provider（token 幾十秒就過期、refresh 會 rotation）＋真 app；錄 demo（過期 → 自動換 → 工具拿到新值） | 對照 master：同一流程在 master 上工具拿到過期值 |
+
+## runbook 條目必須寫的事（P7）
+
+〔user〕2026-10-20「這些要放在最後的 migration.md 喔」——部署方在這個 PR 之後要做的事，一條不漏寫進
+`docs/migrations.md` 的條目（照 CLAUDE.md：每個動作寫指令、WHEN、WHY、不做的症狀）：
+
+1. **在系統登入程式（`server.env_providers` 列的 `IEnvProvider` 實作）加 `needs_refresh` 和 `refresh`**，附範例：
+   - `produces` 要包含 refresh token 的變數名（例如 `ERP_REFRESH_TOKEN`），平台才知道那組值歸誰管；
+   - `needs_refresh` 不打網路、要快（例如讀 JWT 的 `exp`）；
+   - refresh token 確定無效時一定要 `raise RefreshRejected(names)`；其他錯誤照常丟例外——不照做的症狀：平台當暫時失敗，
+     不提示重新登入，人要等到工具失敗才知道（D5）；
+   - 值不寫進 log 或例外訊息；自己限制等待時間。
+   - 還沒有登入程式的部署：要先寫完整的一個（`id`、`label`、`produces`、`inputs`、`resolve`）再加這兩個方法。
+2. **拿掉工具／MCP 裡自己 refresh 的程式**，工具只讀 access token。
+3. **設定不用改**，照常 build、部署；不加這兩個方法 = 一切照舊。
+4. **確認做完**（`rollout 後`）：
+   - 讓某人的 token 快過期（或在測試環境把有效期限調短），請 AI 跑用到它的工具 → 工具拿到新 token，「我的環境變數」的值被換新；
+   - 把 refresh token 改成無效值再跑 → 對話出現「{系統} 登入已過期，請重新登入」和「登入 {系統}」按鈕；排程的話，替誰跑的人收到通知。
+5. **要知道的後果（D3）**：token 放在某個 item 的 **Shared** 共用值時，平台換到新值會**直接改寫那個 item 的共用值**，
+   不看當下的人有沒有改設定的權限；修改紀錄標成平台寫的。
