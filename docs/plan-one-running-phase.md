@@ -1,8 +1,8 @@
 # Plan — one running phase: the one the execution is in
 
 > Status: problem agreed with the user 2026-10-16; the decisions below are the
-> recommendations the user delegated ("我覺得你就把東西修正就行"). Build via
-> `/tdd`, flat phases, one commit each.
+> recommendations the user delegated ("我覺得你就把東西修正就行"). Built
+> 2026-10-20 in #982 (P1–P4, one commit each); see "As built" below.
 
 ## Problem
 
@@ -88,6 +88,24 @@ Why, read from `b695d7db`:
 - **P4 — the runbook.** `docs/migrations.md` entry: `phases[].status` gains
   `stopped`, at most one phase is `running`, stored runs read settled; no
   action, a script reading the field should expect the new value.
+
+## As built (#982)
+
+- **D4's write side moved to the two chokepoints.** A Stop cancels the
+  driver, which records `cancelled` and re-raises, so `_post_run` never runs
+  for it — settling there would have missed every Stop. Instead both places
+  that write a run apply the rule on every write: the orchestrator's `_patch`
+  and the driver's (`run.with_settled_phases`). `_apply_progress` and
+  `_post_run` no longer touch phase status; `_post_run`'s two copies are gone.
+- **A gate needs no special case.** A gate emits `StepStarted` for its phase
+  before it pauses (`workflow/gate.py`), so at a pause `current_phase` is the
+  gate's phase and "leave the current one as it is" already keeps it.
+- **The phase a run ended in is re-read from its last status.** The wall-clock
+  cap first cancels the driver (the phase becomes `stopped`) and then records
+  `error`; that phase must end `failed`. Only `settle_phases` writes
+  `stopped`, so re-reading it is safe.
+- **P3's fixture stayed.** The old fixture (`read` passed while `sort` runs) is
+  exactly what the orchestrator writes since P1.
 
 ## Verification
 
