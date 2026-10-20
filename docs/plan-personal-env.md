@@ -167,7 +167,7 @@ PersonalEnv（新，一個人一列；registered 在 spec.apply 之後，沒有 
 
 ## 不做
 
-- 過期偵測、到期前提醒（`IEnvProvider` 回報 `expires_at`；#869 D9 也沒做）。D11 的失敗通知是替代。
+- 過期偵測、到期前提醒（`IEnvProvider` 回報 `expires_at`；#869 D9 也沒做）。D11 的失敗通知是替代。**被 [plan-env-token-refresh](plan-env-token-refresh.md) 推翻**：快過期時由部署方的 refresh 步驟自動換新（2026-10-19）。
 - SSO 自動帶入值改成 per user（今天 per item；無人在場時用的是那個 item 最後一次記下的值）。
 - 終端機的 `exec`（`file_routes.py:870`）帶 env：今天 shared 和 private 都不帶，這份也不改。
 - 授權（per item 同意讀通用個人值）：D2 否決。
