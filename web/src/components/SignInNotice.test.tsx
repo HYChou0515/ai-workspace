@@ -40,7 +40,7 @@ function draw(layer: "personal" | "private" | "shared", { chat = true } = {}) {
     <SignInNotice
       provider="erp"
       layer={layer}
-      text="Your sign-in to ERP has expired. Sign in again."
+      text="The sign-in to ERP has expired. Sign in again."
       client={{
         getEnvProviders: async () => [erp],
         resolveEnvProvider: vi.fn(async () => ({ ERP_TOKEN: "t2", ERP_REFRESH: "r2" })),
@@ -70,10 +70,10 @@ describe("a sign_in entry in the thread", () => {
     const { EntryView } = await import("./AgentEntryView");
     renderWithQuery(
       <EntryView
-        entry={{ kind: "sign_in", text: "Your sign-in to ERP has expired.", provider: "erp", layer: "personal" }}
+        entry={{ kind: "sign_in", text: "The sign-in to ERP has expired.", provider: "erp", layer: "personal" }}
       />,
     );
-    expect(await screen.findByTestId("sign-in-notice")).toHaveTextContent("Your sign-in to ERP has expired.");
+    expect(await screen.findByTestId("sign-in-notice")).toHaveTextContent("The sign-in to ERP has expired.");
   });
 });
 
@@ -105,16 +105,22 @@ describe("SignInNotice", () => {
     expect(personalPut).not.toHaveBeenCalled();
   });
 
-  it("opens the panel for a shared token: it is the item's, not one person's", async () => {
-    const { host } = draw("shared");
+  it("signs in for a shared token too, into this item's Private (D6: the same login page)", async () => {
+    // Review round 1: the button says 登入 X, so it signs in — a panel the
+    // viewer may not be able to edit was a dead end. The dead names were
+    // cleared from the shared copy, so what is typed here is what tools get.
+    const { host, personalPut, privatePut } = draw("shared");
 
-    fireEvent.click(await screen.findByRole("button", { name: /登入 ERP|Sign in to ERP/ }));
+    await signIn();
 
-    expect(host.open).toHaveBeenCalledWith({ name: "ERP_TOKEN" });
-    expect(screen.queryByTestId("env-login-modal")).not.toBeInTheDocument();
+    await waitFor(() =>
+      expect(privatePut).toHaveBeenCalledWith("rca", "i1", { OTHER: "o", ERP_TOKEN: "t2", ERP_REFRESH: "r2" }),
+    );
+    expect(personalPut).not.toHaveBeenCalled();
+    expect(host.open).not.toHaveBeenCalled();
   });
 
-  it("outside a chat that can open the panel, says it without a button", async () => {
+  it("outside a chat, says it without a button", async () => {
     draw("personal", { chat: false });
     expect(await screen.findByTestId("sign-in-notice")).toBeInTheDocument();
     expect(screen.queryByRole("button")).not.toBeInTheDocument();

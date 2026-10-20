@@ -347,6 +347,28 @@ const failureOf = (ev: {
   params?: Record<string, number> | null;
 }): Failure => ({ kind: ev.kind ?? "unknown", params: ev.params ?? null, raw: ev.message });
 
+/**
+ * Roles the platform writes INTO a turn rather than as its result: the #624
+ * `notice` (persisted before the model is called) and the `sign_in` message
+ * (`docs/plan-env-token-refresh.md` D6, persisted under the question before
+ * the turn runs). They say nothing about whether the turn has ended.
+ */
+const MID_TURN_ROLES: ReadonlySet<string> = new Set(["notice", "sign_in"]);
+
+/**
+ * The message that says where the thread's turn stands: the last one that is
+ * not a platform line written mid-turn. Both "a reply is still on its way"
+ * readings — hydration and the cross-pod store poll — read THIS, so they
+ * cannot disagree about it.
+ */
+export function turnTail<M extends { role: string }>(messages: readonly M[]): M | undefined {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const m = messages[i];
+    if (m !== undefined && !MID_TURN_ROLES.has(m.role)) return m;
+  }
+  return undefined;
+}
+
 const isRecent = (at: number | null | undefined): boolean =>
   at != null && Date.now() - at < AWAITING_REPLY_MAX_MS;
 
@@ -488,7 +510,7 @@ export function logFromMessages(messages: readonly Message[]): AgentLog {
   // persisted (an answer, an error, a cancellation) whether the provider hangs,
   // the requester disconnects, the pod rolls or the store write fails — so it
   // cannot stick on forever.
-  const last = messages[messages.length - 1];
+  const last = turnTail(messages);
   const awaitingReply =
     last !== undefined && last.role === "user" && isRecent(last.created_at);
   return {

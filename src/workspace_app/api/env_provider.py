@@ -143,10 +143,13 @@ class IEnvProvider(abc.ABC):
         """Whether the values a tool is about to get should be refreshed first.
 
         ``values`` are this provider's ``produces`` names as the tool would get
-        them now, the refresh token included. Called before EVERY tool run that
-        would carry them, so it must be cheap and must not touch the network —
-        read a JWT's ``exp``, say, and answer True inside a margin you choose
-        (D2: refresh only when a value is about to be used). Default: False."""
+        them now, the refresh token included. Called each time a run is about
+        to hand them to a tool — once per chat message (when it is sent: a long
+        turn's later tool calls are not asked about again, so pick a margin
+        that covers a turn), and once per page tool call, workflow node, goal
+        round and re-run — so it must be cheap and must not touch the network:
+        read a JWT's ``exp``, say, and answer True inside that margin (D2:
+        refresh only when a value is about to be used). Default: False."""
         return False
 
     async def refresh(self, values: dict[str, str]) -> dict[str, str]:
@@ -164,6 +167,9 @@ class IEnvProvider(abc.ABC):
 
         Raise ``RefreshRejected`` whenever you KNOW the token is dead: an
         ordinary exception there means nobody hears of it until a tool fails.
+        Name EVERY variable it leaves useless — the expired access token as
+        well as the refresh token: a name left behind still reads as near
+        expiry, so each later run would ask again and be refused again.
         Bound your own latency, as for ``resolve``; never log a value or put
         one in an exception. Default: not supported."""
         raise NotImplementedError

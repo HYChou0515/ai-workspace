@@ -15,7 +15,7 @@ describe("sign-in message", () => {
       msg({ role: "user", content: "q" }),
       msg({
         role: "sign_in",
-        content: "Your sign-in to ERP has expired. Sign in again.",
+        content: "The sign-in to ERP has expired. Sign in again.",
         sign_in_provider: "erp",
         sign_in_layer: "personal",
         created_at: 5,
@@ -25,7 +25,7 @@ describe("sign-in message", () => {
     const entry = log.entries.find((e) => e.kind === "sign_in");
     expect(entry).toEqual({
       kind: "sign_in",
-      text: "Your sign-in to ERP has expired. Sign in again.",
+      text: "The sign-in to ERP has expired. Sign in again.",
       provider: "erp",
       layer: "personal",
       at: 5,

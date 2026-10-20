@@ -314,9 +314,11 @@ def register_wui_routes(
         if env_refresher is None:
             return env
         # plan-env-token-refresh: a near-expiry token is refreshed before the
-        # page's tool gets it. A dead sign-in needs no message here: its names
-        # are cleared, so the page's own bar says "Sign in to X" (identityState).
-        outcome = await env_refresher.apply(env, user_id=uid, item_id=item_id, present=True)
+        # page's tool gets it. A page has no thread to draw the sign-in notice
+        # in, so a dead sign-in is told by notification (D4) — `in_chat=False`.
+        # A shared token refreshed here is written to the item: the caller
+        # reads the item's layers AFTER this, so this call gets it.
+        outcome = await env_refresher.apply(env, user_id=uid, item_id=item_id, in_chat=False)
         return outcome.person
 
     async def _external(item_id: str) -> ExternalTools:
@@ -623,6 +625,9 @@ def register_wui_routes(
             )
         pkg, command = found
 
+        # The person first: refreshing may rewrite the item's shared copy, and
+        # the layers read after it are what this call's tool gets.
+        person = await _request_env(request, investigation_id)
         layers = locator.env_layers_of(investigation_id)
         session = await registry.session(investigation_id)
         ctx = AgentToolContext(
@@ -639,7 +644,7 @@ def register_wui_routes(
             # page cannot reach a different system from the one the agent does.
             user_env=resolve(
                 shared=layers.shared,
-                person=await _request_env(request, investigation_id),
+                person=person,
                 policy=layers.policy,
             ),
             # The registry's own wake path, so this shares the item's ONE

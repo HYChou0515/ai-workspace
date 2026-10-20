@@ -491,7 +491,7 @@ class ChatSendService:
                 verb="converse",
             )
             # Nobody at the request: a dead sign-in is notified, not shown (D4).
-            outcome = await self._refreshed(env, user_id=user_id, item_id=item_id, present=False)
+            outcome = await self._refreshed(env, user_id=user_id, item_id=item_id, in_chat=False)
             return outcome.person, []
         fresh: dict[str, str] | None = None
         if self._request_env is not None:
@@ -500,11 +500,11 @@ class ChatSendService:
             except Exception:
                 self._request_env_failed(item_id)
         env = await private_layer(self._private_env, user_id=user_id, item_id=item_id, fresh=fresh)
-        outcome = await self._refreshed(env, user_id=user_id, item_id=item_id, present=True)
+        outcome = await self._refreshed(env, user_id=user_id, item_id=item_id, in_chat=True)
         return outcome.person, outcome.rejected
 
     async def _refreshed(
-        self, env: PersonEnv, *, user_id: str, item_id: str, present: bool
+        self, env: PersonEnv, *, user_id: str, item_id: str, in_chat: bool
     ) -> RefreshOutcome:
         """``env`` with any near-expiry token refreshed first
         (`docs/plan-env-token-refresh.md`). The shared copy, when refreshed, is
@@ -512,7 +512,7 @@ class ChatSendService:
         if self._env_refresher is None:
             return RefreshOutcome(person=env, shared={})
         return await self._env_refresher.apply(
-            env, user_id=user_id, item_id=item_id, present=present
+            env, user_id=user_id, item_id=item_id, in_chat=in_chat
         )
 
     @staticmethod
@@ -990,7 +990,7 @@ class ChatSendService:
             conv.messages.append(
                 Message(
                     role=SIGN_IN_ROLE,
-                    content=f"Your sign-in to {dead.provider.label} has expired. Sign in again.",
+                    content=f"The sign-in to {dead.provider.label} has expired. Sign in again.",
                     created_at=created,
                     sign_in_provider=dead.provider.id,
                     sign_in_layer=dead.layer,
@@ -1138,7 +1138,7 @@ class ChatSendService:
                 verb="converse",
             )
             outcome = await self._refreshed(
-                env, user_id=claim.author, item_id=claim.investigation_id, present=False
+                env, user_id=claim.author, item_id=claim.investigation_id, in_chat=False
             )
             return outcome.person
 

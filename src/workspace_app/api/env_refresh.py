@@ -16,6 +16,12 @@ else, a timeout included, is a passing failure that changes nothing.
 Never blocks a run (D4): a holder that is slow costs at most ``wait_s``, a
 deploy that hangs at most ``timeout_s``, and then the tool gets what it had.
 
+The write-back is a PATCH, applied to what the layer holds when it is
+written: the refreshed names are set (or the dead ones cleared) only if they
+still hold what was sent. Anything else in the layer — an edit made while the
+deploy was refreshing — is left as it now is, and a set someone changed or
+removed meanwhile (signed out, signed in again) is theirs, not overwritten.
+
 Only one layer may be written back to: a set of values that comes from several
 layers, from the seam (the deploy's ``IRequestEnv``, rewritten on every
 request) or from the service account has no row of ours to hold a refreshed
@@ -43,6 +49,9 @@ from .refresh_claims import RefreshClaims
 logger = logging.getLogger(__name__)
 
 Writable = Literal["personal", "private", "shared"]
+#: A write-back: what the layer becomes, given what it holds now — None
+#: leaves it as it is.
+Patch = Callable[[dict[str, str]], "dict[str, str] | None"]
 
 #: The platform's own bound on a deploy's ``refresh`` — the contract asks the
 #: deploy to bound its latency, but a hung one must not hang every turn.
@@ -78,7 +87,7 @@ async def refresh_if_due(
     store: PrivateEnvStore | None,
     claims: RefreshClaims | None,
     read_shared: Callable[[str], dict[str, str]],
-    write_shared: Callable[[str, dict[str, str]], None],
+    update_shared: Callable[[str, Patch], dict[str, str]],
     shared: dict[str, str],
     person: PersonEnv,
     policy: dict[str, str],
@@ -99,7 +108,7 @@ async def refresh_if_due(
             store=store,
             claims=claims,
             read_shared=read_shared,
-            write_shared=write_shared,
+            update_shared=update_shared,
             policy=policy,
             user_id=user_id,
             item_id=item_id,
@@ -148,7 +157,7 @@ async def _one(
     store: PrivateEnvStore,
     claims: RefreshClaims,
     read_shared: Callable[[str], dict[str, str]],
-    write_shared: Callable[[str, dict[str, str]], None],
+    update_shared: Callable[[str, Patch], dict[str, str]],
     policy: dict[str, str],
     user_id: str,
     item_id: str,
@@ -179,17 +188,33 @@ async def _one(
             return store.get(user_id, item_id)
         return read_shared(item_id)
 
-    def write(new_layer: dict[str, str]) -> None:
+    def write(patch: Patch) -> tuple[dict[str, str], bool]:
+        """The layer after ``patch``, applied to what it holds NOW (for the
+        shared copy inside the item's CAS), and whether it was written."""
+        if layer == "shared":
+            applied: list[bool] = []
+
+            def tracked(now: dict[str, str]) -> dict[str, str] | None:
+                new = patch(now)
+                applied[:] = [new is not None]
+                return new
+
+            return update_shared(item_id, tracked), applied == [True]
+        now = read()
+        new = patch(now)
+        if new is None:
+            return now, False
         if layer == "personal":
-            store.replace_personal(user_id, new_layer)
-        elif layer == "private":
-            store.replace(user_id, item_id, new_layer)
+            store.replace_personal(user_id, new)
         else:
-            write_shared(item_id, new_layer)
+            store.replace(user_id, item_id, new)
+        return new, True
 
     holder = await asyncio.to_thread(claims.try_take, key, ttl_ms=CLAIM_TTL_MS)
     if holder is None:
-        return await _wait_for_peer(out, layer, read, values, wait_s, seam)
+        return await _wait_for_peer(
+            out, provider, layer, read, lambda: claims.held(key), values, wait_s, seam
+        )
     try:
         # Read again under the claim: a peer may have refreshed (and, on a
         # rotating system, spent the refresh token we read) since.
@@ -201,41 +226,67 @@ async def _one(
             fresh = await asyncio.wait_for(provider.refresh(dict(stored)), timeout_s)
         except RefreshRejected as rejected:
             dead = rejected.names & provider.produces
-            kept = {n: v for n, v in current.items() if n not in dead}
-            await asyncio.to_thread(write, kept)
+            kept, cleared = await asyncio.to_thread(
+                write,
+                _unchanged(stored, lambda now: {n: v for n, v in now.items() if n not in dead}),
+            )
+            done = _with(out, layer, kept, seam)
+            if not cleared:
+                return done  # signed in again meanwhile: those are live
             logger.info(
                 "env-refresh: %s rejected for %s; cleared %s", provider.id, layer, sorted(dead)
             )
-            done = _with(out, layer, kept, seam)
             return replace(done, rejected=[*done.rejected, DeadSignIn(provider, layer)])
         except Exception:  # noqa: BLE001 — D5: anything else is a passing failure
             logger.warning("env-refresh: %s refresh failed; tool keeps its values", provider.id)
             return out
-        merged = {**current, **fresh}
-        await asyncio.to_thread(write, merged)
-        logger.info("env-refresh: %s refreshed %s for %s", provider.id, sorted(fresh), layer)
+        merged, wrote = await asyncio.to_thread(
+            write, _unchanged(stored, lambda now: {**now, **fresh})
+        )
+        if wrote:
+            logger.info("env-refresh: %s refreshed %s for %s", provider.id, sorted(fresh), layer)
         return _with(out, layer, merged, seam)
     finally:
         await asyncio.to_thread(claims.release, key, holder)
 
 
+def _unchanged(stored: dict[str, str], change: Callable[[dict[str, str]], dict[str, str]]) -> Patch:
+    """``change``, only while the names refreshed still hold what was sent."""
+
+    def patch(now: dict[str, str]) -> dict[str, str] | None:
+        if {n: now[n] for n in stored if n in now} != stored:
+            return None
+        return change(now)
+
+    return patch
+
+
 async def _wait_for_peer(
     out: RefreshOutcome,
+    provider: IEnvProvider,
     layer: Writable,
     read: Callable[[], dict[str, str]],
+    held: Callable[[], bool],
     values: dict[str, str],
     wait_s: float,
     seam: dict[str, str],
 ) -> RefreshOutcome:
     """Someone else is refreshing these values: wait for what they write, or
-    go on with what we had (D4)."""
+    go on with what we had (D4) — as soon as they let go of the claim, not
+    only when the wait runs out. Names they cleared mean they found the
+    sign-in dead, so this run reports it too."""
     loop = asyncio.get_running_loop()
     deadline = loop.time() + wait_s
     while loop.time() < deadline:
         await asyncio.sleep(_POLL_S)
         current = await asyncio.to_thread(read)
         if {n: current.get(n) for n in values} != values:
-            return _with(out, layer, current, seam)
+            done = _with(out, layer, current, seam)
+            if all(is_blank(current.get(n, "")) for n in values):
+                return replace(done, rejected=[*done.rejected, DeadSignIn(provider, layer)])
+            return done
+        if not await asyncio.to_thread(held):
+            return out  # they gave up without writing: a passing failure
     return out
 
 
@@ -284,11 +335,12 @@ class EnvRefresher:
         self._spec = spec
 
     async def apply(
-        self, person: PersonEnv, *, user_id: str, item_id: str, present: bool
+        self, person: PersonEnv, *, user_id: str, item_id: str, in_chat: bool
     ) -> RefreshOutcome:
-        """``present``: someone is at the request (a chat send, a page's tool
-        call) — a dead sign-in is returned for the surface to show (D6).
-        Otherwise (a goal round, a re-run, a workflow node) the person the run
+        """``in_chat``: the person is in the chat thread the run answers (a
+        chat send) — a dead sign-in is returned for the thread to show (D6).
+        Otherwise (a page's tool call, which has no thread; a goal round, a
+        re-run, a workflow node, which nobody is watching) the person the run
         is for is notified here (D4)."""
         providers = [p for p in self._providers() if supports_refresh(p)]
         if not providers:
@@ -299,36 +351,52 @@ class EnvRefresher:
             store=self._store,
             claims=self._claims,
             read_shared=lambda i: self._locator.env_layers_of(i).shared,
-            write_shared=lambda i, v: self._locator.write_shared_env(i, v, actor=REFRESH_ACTOR),
+            update_shared=lambda i, p: self._locator.update_shared_env(i, p, actor=REFRESH_ACTOR),
             shared=layers.shared,
             person=person,
             policy=layers.policy,
             user_id=user_id,
             item_id=item_id,
         )
-        if not present and user_id and self._spec is not None:
+        if not in_chat and user_id and self._spec is not None:
             for dead in outcome.rejected:
-                await asyncio.to_thread(_notify_dead, self._spec, user_id, dead.provider)
+                slug = None
+                if dead.layer != "personal":
+                    slug = await asyncio.to_thread(self._locator.slug_of, item_id)
+                await asyncio.to_thread(
+                    _notify_dead, self._spec, user_id, dead, item_id=item_id, slug=slug
+                )
         return outcome
 
 
-def _notify_dead(spec: SpecStar, recipient: str, provider: IEnvProvider) -> None:
-    """Tell someone not present that a sign-in of theirs must be done again
-    (D4) — once a day per person and sign-in, however many runs find it. The
-    names and values stay out of it: what died is said by the sign-in's label."""
+def _notify_dead(
+    spec: SpecStar, recipient: str, dead: DeadSignIn, *, item_id: str, slug: str | None
+) -> None:
+    """Tell someone not present that a sign-in must be done again (D4) — once
+    a day per person and sign-in (and item, for an item's own copy), however
+    many runs find it. It leads to where the dead token lived (D3): My
+    environment variables, or the item whose Private / shared copy held it.
+    The names and values stay out of it: what died is said by the sign-in's
+    label."""
+    label = dead.provider.label
     day = time.strftime("%Y-%m-%d", time.gmtime())
-    key = f"env-refresh-dead:{recipient}:{provider.id}:{day}"
+    if dead.layer == "personal" or slug is None:
+        where, link = "under My environment variables", "/my-env"
+        key = f"env-refresh-dead:{recipient}:{dead.provider.id}:{day}"
+    else:
+        where, link = "from the item's environment variables", f"/a/{slug}/{item_id}"
+        key = f"env-refresh-dead:{recipient}:{dead.provider.id}:{item_id}:{day}"
     if notification_sent(spec, key):
         return
     notify(
         spec,
         recipient=recipient,
         kind="env_sign_in_expired",
-        title=f"Sign in to {provider.label} again",
+        title=f"Sign in to {label} again",
         body=(
-            f"Your saved sign-in to {provider.label} has expired and could not be renewed. "
-            "Sign in again under My environment variables."
+            f"The saved sign-in to {label} has expired and could not be renewed. "
+            f"Sign in again {where}."
         ),
-        link="/my-env",
+        link=link,
         dedup_key=key,
     )

@@ -165,6 +165,21 @@ def test_only_the_holder_can_release():
     assert claims.try_take("k", ttl_ms=30_000) is None
 
 
+def test_held_says_whether_a_waiter_should_keep_waiting():
+    """A holder that let go (or died) frees the waiter at once."""
+    clock = [1_000]
+    claims = _claims(clock)
+    assert not claims.held("never-taken")
+    holder = claims.try_take("k", ttl_ms=30_000)
+    assert holder is not None
+    assert claims.held("k")
+    claims.release("k", holder)
+    assert not claims.held("k")
+    assert claims.try_take("k", ttl_ms=30_000) is not None
+    clock[0] = 1_000 + 30_001
+    assert not claims.held("k")
+
+
 def test_layer_of_names_the_service_account_below_the_person():
     from workspace_app.api.env_layers import layer_of
 

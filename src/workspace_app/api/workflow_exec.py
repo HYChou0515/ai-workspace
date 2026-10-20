@@ -514,7 +514,7 @@ class WorkflowExecutor:
         if self._env_refresher is None:
             return env
         outcome = await self._env_refresher.apply(
-            env, user_id=env_user, item_id=item_id, present=False
+            env, user_id=env_user, item_id=item_id, in_chat=False
         )
         return outcome.person
 

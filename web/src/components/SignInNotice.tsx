@@ -5,10 +5,14 @@
  * pointer to go and find it (NN/g, Error-Message Guidelines: "offer some
  * potential remedies … guess the correct action and let users pick it").
  *
- * Signing in again writes back to the layer the dead token lived in (D3): my
- * environment variables, or this item's Private, through #892's own login page
- * (`EnvLoginModal`). A shared token is the item's, not one person's, so the
- * button opens the environment panel at it instead.
+ * Signing in again goes through #892's own login page (`EnvLoginModal`) and
+ * writes back to the layer the dead token lived in (D3): my environment
+ * variables, or this item's Private. A dead SHARED token signs in into this
+ * item's Private: the platform already cleared the dead names from the shared
+ * copy, and a shared value is only ever read first (shared_first, or
+ * private_first with nothing below it), so with it gone Private is the next
+ * layer a tool reads — and anyone in the chat can write their own Private,
+ * which the shared copy is not.
  *
  * No Retry: #892's is bound to the model's tool call, and this message is the
  * platform's — after signing in, the person asks again.
@@ -44,7 +48,6 @@ export function SignInNotice({
 }) {
   const t = useT();
   const chat = useChatItem();
-  const env = chat?.env;
   const providers = useQuery({
     queryKey: qk.envProviders(chat?.slug ?? "", chat?.itemId ?? ""),
     queryFn: () => client.getEnvProviders(chat?.slug ?? "", chat?.itemId ?? ""),
@@ -69,16 +72,13 @@ export function SignInNotice({
       }}
     >
       <span>{label ? t("env.signInExpired", { label }) : text}</span>
-      {chat && env && provider ? (
+      {chat && provider ? (
         <button
           type="button"
           className="btn"
           data-variant="secondary"
           data-size="sm"
-          onClick={() => {
-            if (layer === "shared") env.open({ name: provider.produces[0] ?? "" });
-            else setSigningIn(true);
-          }}
+          onClick={() => setSigningIn(true)}
         >
           {t("envreq.login", { label: provider.label })}
         </button>

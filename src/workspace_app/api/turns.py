@@ -108,7 +108,7 @@ def _est_tokens(m: Any) -> int:
 #: `history_items` only folds user/assistant/tool/error — so telling the user
 #: costs the model nothing.
 CONTEXT_NOTICE_ROLE = "notice"
-#: `docs/plan-env-token-refresh.md` D6: "your sign-in to X has expired" with that
+#: `docs/plan-env-token-refresh.md` D6: "the sign-in to X has expired" with that
 #: sign-in's button. Its own role, not `notice`: `already_noticed` reads any
 #: `notice` as "the context was told already" and would silence #624.
 SIGN_IN_ROLE = "sign_in"

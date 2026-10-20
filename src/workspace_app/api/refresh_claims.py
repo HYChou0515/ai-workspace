@@ -85,6 +85,17 @@ class RefreshClaims:
             return None  # another taker got the expired claim first
         return holder
 
+    def held(self, key: str) -> bool:
+        """Whether someone holds `key` now — a waiter's cue that the holder
+        let go without writing anything."""
+        try:
+            res = self._rm().get(quote(key, safe=""))
+        except (ResourceIDNotFoundError, ResourceIsDeletedError):
+            return False
+        current = res.data
+        assert isinstance(current, RefreshClaim)
+        return current.expires_ms > self._now()
+
     def release(self, key: str, holder: str) -> None:
         """Free `key` if `holder` still holds it; otherwise nothing."""
         rid = quote(key, safe="")

@@ -1991,7 +1991,7 @@ export const messages = {
   },
   "env.signInExpired": {
     "zh-TW": "{label} 登入已過期，請重新登入。",
-    en: "Your sign-in to {label} has expired. Sign in again.",
+    en: "The sign-in to {label} has expired. Sign in again.",
   },
   "envreq.wait": {
     "zh-TW": "設定好之後按「重試」，AI 會重新執行 {tool}。",

@@ -106,7 +106,7 @@ raise `RefreshRejected`，否則人要等到工具失敗才會被告知。
 
 ### 有人在場時的提示（D6）
 
-`refresh()` raise `RefreshRejected`、而且有人在場（聊天、頁面按鈕）時：
+`refresh()` raise `RefreshRejected`、而且有人在場（聊天、頁面按鈕；頁面按鈕實際做法見 A4）時：
 
 - 平台在那一輪的對話裡放一則**平台訊息**「{登入方式的 label} 登入已過期，請重新登入」，存進對話紀錄（重新整理後
   還在），沿用現成的 `role="notice"` 訊息（`turns.py:110`；#624 用它寫「較早的訊息不再送給模型」，
@@ -152,13 +152,16 @@ also not enough; offer some potential remedies」「guess the correct action and
 
 | # | 計畫寫的 | 實際 | 為什麼 |
 |---|---|---|---|
-| A1 | P6 一個 phase 做完提示 | P6 後端（通知＋對話訊息）、P7 前端（按鈕）、P8 文件、P9 live check | 照 flat 編號：拆出去的工作用下一個整數 |
-| A2 | 有人在場的提示沿用 `role="notice"` | 新 role `sign_in`，`Message` 多 `sign_in_provider`、`sign_in_layer` 兩個選填欄位（舊資料照讀，沒有 `Schema` 升版） | `already_noticed` 把任何 `notice` 當成「#624 已經提示過」，沿用會讓 context 上限的提示不再出現；`history_items` 只送 user／assistant／tool，新 role 不進模型，`_replayed` 也不算它 |
-| A3 | 「登入 X」打開 #892 的登入頁 | 依 token 原本所在的層：我的環境變數 → 登入頁存回我的環境變數（`EnvLoginModal saveTo="personal"`，走 `PERSONAL_ENV_WRITES` 佇列）；這個 item 的 Private → 登入頁存回 Private；Shared → 打開環境變數面板 | D3「從哪讀就寫回哪」：#892 的登入頁只會存進這個 item 的 Private，會讓「我的環境變數」裡失效的 token 只修好一個 item；Shared 是 item 的，改它要 `write_meta`，不該由登入頁替人寫 |
-| A4 | 有人在場＝聊天、頁面按鈕 | 頁面按鈕的工具呼叫不另外放提示 | 頁面沒有對話可以放；值被清掉後，若工具宣告這個變數為必填，頁面上方的登入列（`identityState`）本來就會出現「登入 X」 |
+| A1 | P6 一個 phase 做完提示 | P6 後端（通知＋對話訊息）、P7 前端（按鈕）、P8 文件、P9 第一輪 review 的修正、P10 live check | 照 flat 編號：拆出去的工作用下一個整數 |
+| A2 | 有人在場的提示沿用 `role="notice"` | 新 role `sign_in`，`Message` 多 `sign_in_provider`、`sign_in_layer` 兩個選填欄位（舊資料照讀，沒有 `Schema` 升版） | `already_noticed` 把任何 `notice` 當成「#624 已經提示過」，沿用會讓 context 上限的提示不再出現；`history_items` 只送 user／assistant／tool／summary 和使用者取消的標記，新 role 不進模型，`_replayed` 也不算它 |
+| A3 | 「登入 X」打開 #892 的登入頁 | 都打開 #892 的登入頁，存到哪依 token 原本所在的層：我的環境變數 → 存回我的環境變數（`EnvLoginModal saveTo="personal"`，走 `PERSONAL_ENV_WRITES` 佇列）；這個 item 的 Private 或 Shared → 存進這個 item 的 Private | D3「從哪讀就寫回哪」：#892 的登入頁只會存進這個 item 的 Private，會讓「我的環境變數」裡失效的 token 只修好一個 item。Shared：平台已經把失效的名稱從 Shared 清掉，而 Shared 的值只會在最先被讀時才拿得到（shared_first，或 private_first 而下面都沒有值），所以清掉後下一層就是 Private；Shared 要 `write_meta` 才能改，Private 每個人都能改。第一輪 review：原本 Shared 打開環境變數面板，標著「登入 X」卻不是登入，沒有 `write_meta` 的人會卡在改不了的面板 |
+| A4 | 有人在場＝聊天、頁面按鈕 | 頁面按鈕的工具呼叫用通知告訴按的人（和沒人在場一樣，`in_chat=False`） | 頁面沒有對話可以放提示。第一輪 review：原本什麼都不說，靠頁面的登入列（`identityState`），但那只在工具把這個變數宣告為必填時才出現 |
 | A5 | 時限、等待 | 平台的 `refresh` 上限 30 秒（`REFRESH_TIMEOUT_S`）、等別人換 30 秒（`WAIT_FOR_PEER_S`）、鎖 45 秒過期（`CLAIM_TTL_MS`）；不做成設定 | 部署方本來就要自己限時；平台的上限只防卡死 |
-| A6 | 通知 | 標題 "Sign in to {label} again"、連到 `/my-env`、每人每個登入方式每天一次（dedup key 帶 UTC 日期）；英文，和既有的 workflow 失敗通知一致 | 去重避免每輪都通知 |
+| A6 | 通知 | 標題 "Sign in to {label} again"；token 在我的環境變數 → 連到 `/my-env`，每人每個登入方式每天一次；在 item 的 Private／Shared → 連到那個 item，每人每個登入方式每個 item 每天一次（dedup key 帶 UTC 日期）；英文，和既有的 workflow 失敗通知一致 | 去重避免每輪都通知；連結照 D3 指到 token 所在的地方 |
 | A7 | 排程一條測試 | 排程的節點走 workflow_exec 的同一條路（`_headless_env`），由 workflow 節點的測試涵蓋 | 同一個呼叫點 |
+| A9 | 寫回 | 寫回是 patch：寫的當下重讀那一層，只有這次換的名稱還是送出去的那組值時，才設新值（或清掉失效的）；其他名稱照現況。Shared 在 item 的 CAS 迴圈裡做 | 第一輪 review：原本把換之前讀的整層寫回去，換的這 30 秒內別人改的值會被蓋掉，登出的值會被寫回來 |
+| A10 | 等別人換 | 對方放掉鎖卻沒寫（換失敗）就不再等；對方把名稱清掉了（登入失效）就也回報失效 | 第一輪 review：原本只看值有沒有變，對方失敗時要白等 30 秒；Shared 的 token 失效時，同時送出的其他人看不到提示 |
+| A11 | 「最後一則」的判斷 | 平台在一輪中途寫的訊息（`sign_in`、#624 的 `notice`）不算；hydration 和跨 pod 的 store poll 讀同一個 `turnTail` | 第一輪 review：`sign_in` 寫在問題下面、這輪開跑之前，重新整理或另一個 pod 的人會看到這輪「已經結束」 |
 | A8 | 兩個並行只換一次的測試 | 以事件排序、不靠時間；鎖本身由「預先佔住鎖」的測試釘住（讓鎖永遠拿得到時它會紅） | in-memory 後端的 create-if-absent 不是原子的，靠時間的版本在負載下偶爾兩個都拿到 |
 
 ## runbook 條目必須寫的事（P7；as-built 為 P8）

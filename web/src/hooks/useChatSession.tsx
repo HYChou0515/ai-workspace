@@ -10,6 +10,7 @@ import {
   logFromMessages,
   reduceAgent,
   retractOwnAsk,
+  turnTail,
 } from "../pages/investigation/agentLog";
 import { publishFileChanged } from "../lib/fileChangedBus";
 import { publishTurnEnded } from "../lib/turnEndedBus";
@@ -556,7 +557,7 @@ export function useChatSession(
     onSnapshot: (thread) => {
       if (!thread) return;
       const msgs = thread.messages;
-      const last = msgs[msgs.length - 1];
+      const last = turnTail(msgs);
       const done = last !== undefined && last.role !== "user";
       if (done) {
         // The store has told us the turn is over — for a CROSS-POD viewer the
@@ -565,10 +566,9 @@ export function useChatSession(
         // advances. So it ends the turn for the gap banner too.
         //
         // But on the STRICT reading, not this `done`. "The tail is not a user
-        // message" is true mid-turn twice over: a human `mention` lands at any
-        // moment, and the #624 `notice` is persisted before the model is even
-        // called, so it stands through the whole time-to-first-token window.
-        // Disarming there means a real hole later in that turn raises nothing —
+        // message" is still true mid-turn: a human `mention` lands at any
+        // moment (the platform's own mid-turn lines — the #624 `notice`, the
+        // `sign_in` message — are already skipped by `turnTail`). Disarming there means a real hole later in that turn raises nothing —
         // silence, which is the failure nobody reports. Only an assistant answer
         // says a turn produced its result.
         if (last.role === "assistant") turnInFlightRef.current = false;

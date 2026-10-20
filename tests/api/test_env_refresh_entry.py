@@ -184,6 +184,32 @@ async def test_a_goal_round_tells_the_person_by_notification():
     assert "sign_in" not in [m.role for m in _thread(spec)]
 
 
+async def test_a_notice_for_this_items_sign_in_leads_to_this_item():
+    """Review round 1: signing in again belongs where the dead token lived
+    (D3) — a token in this item's Private is signed in from this item, not
+    from My environment variables."""
+    client, _runner, item_id, spec = _send_app(None, user="admin")
+    _sign_ins(client, _dead())
+    PrivateEnvStore(spec).replace("alice", item_id, OLD)
+    service = cast(FastAPI, client.app).state.chat_send
+    rid, conv = _default_chat(spec, item_id)
+
+    with client:
+        await service.send(
+            item_id,
+            rid,
+            conv,
+            item_id,
+            _MessageBody(content="driven"),
+            author="alice",
+            driven_by="goal-driver",
+        )
+
+    (note,) = _notifications(spec)
+    assert note.link == f"/a/playground/{item_id}"
+    assert "My environment variables" not in note.body
+
+
 def test_a_workflow_node_tells_the_presser_by_notification():
     _executor, item_id, spec, _runner, client = _executor_app(None, user="presser-p")
     _sign_ins(client, _dead())
@@ -223,8 +249,26 @@ def _page_refresher(store, loc, *providers):  # noqa: ANN001, ANN202 — test do
     spec = store._spec
     register_refresh_claims(spec)
     return EnvRefresher(
-        providers=lambda: list(providers), store=store, claims=RefreshClaims(spec), locator=loc
+        providers=lambda: list(providers),
+        store=store,
+        claims=RefreshClaims(spec),
+        locator=loc,
+        spec=spec,
     )
+
+
+def _shared_locator(env: dict[str, str]):  # noqa: ANN202 — a test double
+    """The page tests' locator, holding a shared copy the refresher can write."""
+    from .test_wui_routes import _Locator
+
+    class _Writable(_Locator):
+        def update_shared_env(self, item_id, patch, *, actor):  # noqa: ANN001, ANN202
+            new = patch(dict(self.env))
+            if new is not None:
+                self.env = dict(new)
+            return dict(self.env)
+
+    return _Writable(["mes"], env=dict(env))
 
 
 def test_a_page_tool_call_hands_the_tool_the_refreshed_value():
@@ -247,6 +291,51 @@ def test_a_page_tool_call_hands_the_tool_the_refreshed_value():
 
     assert sandbox.envs[-1]["ERP_TOKEN"] == "new"
     assert store.personal("default-user") == NEW_ENV
+
+
+def test_a_page_tool_call_gets_the_refreshed_shared_copy_on_this_call():
+    """Review round 1: the item's layers are read AFTER the refresh, so the
+    call that refreshed a shared token is the one that uses it — not the next."""
+    from workspace_app.sandbox.protocol import ExecResult
+
+    from .test_wui_routes import URL, _private_store, _Sandbox, build
+
+    store = _private_store()
+    loc = _shared_locator(OLD)
+    sandbox = _Sandbox(ExecResult(exit_code=0, stdout=b"{}"))
+    client, _, _, _ = build(
+        sandbox=sandbox,
+        locator=loc,
+        private_env=store,
+        env_refresher=_page_refresher(store, loc, _Erp()),
+    )
+
+    assert client.post(URL, json={"args": {}}).status_code == 200
+
+    assert loc.env == NEW_ENV
+    assert sandbox.envs[-1]["ERP_TOKEN"] == "new"
+
+
+def test_a_dead_sign_in_on_a_page_is_told_by_notification():
+    """D4: a page has no thread to show the notice in, so the person who
+    pressed is told the way a person not in the chat is."""
+    from workspace_app.sandbox.protocol import ExecResult
+
+    from .test_wui_routes import URL, _Locator, _private_store, _Sandbox, build
+
+    store = _private_store()
+    store.replace_personal("default-user", OLD)
+    loc = _Locator(["mes"])
+    client, _, _, _ = build(
+        sandbox=_Sandbox(ExecResult(exit_code=0, stdout=b"{}")),
+        locator=loc,
+        private_env=store,
+        env_refresher=_page_refresher(store, loc, _dead()),
+    )
+
+    assert client.post(URL, json={"args": {}}).status_code == 200
+
+    assert [n.recipient for n in _notifications(store._spec)] == ["default-user"]
 
 
 def test_a_page_build_runs_as_nobody_and_refreshes_nothing():
@@ -275,7 +364,9 @@ def test_a_page_build_runs_as_nobody_and_refreshes_nothing():
 # ─── a re-run on a peer (plan-graceful-shutdown P3) ──────────────────────────
 
 
-async def test_a_rerun_refreshes_for_its_author():
+async def _rerun(sign_in: _Erp):  # noqa: ANN202
+    """A re-run on a peer of alice's turn, with ``sign_in`` deployed: the env
+    its tool got, and the spec."""
     from workspace_app.api import create_app
     from workspace_app.api.turn_claims import TurnClaim
     from workspace_app.filestore.memory import MemoryFileStore
@@ -308,7 +399,7 @@ async def test_a_rerun_refreshes_for_its_author():
             turn_reclaim_interval=None,
         )
     )
-    _sign_ins(client, _Erp())
+    _sign_ins(client, sign_in)
     PrivateEnvStore(spec).replace_personal("alice", OLD)
     with client:
         store = _claims(client)
@@ -325,4 +416,17 @@ async def test_a_rerun_refreshes_for_its_author():
         (row,) = store.list_open()
         await _service(client).rerun(row)
         await _settle(store)
+    return envs, spec
+
+
+async def test_a_rerun_refreshes_for_its_author():
+    envs, _spec = await _rerun(_Erp())
     assert envs == [NEW_ENV]
+
+
+async def test_a_rerun_tells_its_author_by_notification():
+    """Nobody is in the thread a re-run continues on a peer, so a dead sign-in
+    is a notification — the same as a goal round."""
+    _envs, spec = await _rerun(_dead())
+    assert [n.recipient for n in _notifications(spec)] == ["alice"]
+    assert "sign_in" not in [m.role for m in _thread(spec)]

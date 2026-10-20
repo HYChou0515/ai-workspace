@@ -85,8 +85,12 @@ class _World:
     def read_shared(self, item_id: str) -> dict[str, str]:
         return dict(self.shared.get(item_id, {}))
 
-    def write_shared(self, item_id: str, values: dict[str, str]) -> None:
-        self.shared[item_id] = dict(values)
+    def update_shared(self, item_id: str, patch) -> dict[str, str]:
+        """The locator's contract: the patch is applied to what is stored NOW."""
+        new = patch(self.read_shared(item_id))
+        if new is not None:
+            self.shared[item_id] = dict(new)
+        return self.read_shared(item_id)
 
     async def run(
         self,
@@ -111,7 +115,7 @@ class _World:
             store=self.store,
             claims=self.claims,
             read_shared=self.read_shared,
-            write_shared=self.write_shared,
+            update_shared=self.update_shared,
             shared=self.read_shared(item),
             person=person,
             policy=policy or {},
@@ -257,7 +261,7 @@ async def test_values_changed_under_the_claim_but_still_due_are_the_ones_sent():
         store=w.store,
         claims=w.claims,
         read_shared=w.read_shared,
-        write_shared=w.write_shared,
+        update_shared=w.update_shared,
         shared={},
         person=PersonEnv(personal=dict(OLD)),  # read before a peer rotated r1 → r9
         policy={},
@@ -276,7 +280,7 @@ async def test_a_composition_with_no_store_refreshes_nothing():
         store=None,
         claims=None,
         read_shared=lambda _i: {},
-        write_shared=lambda _i, _v: None,
+        update_shared=lambda _i, _p: {},
         shared={},
         person=person,
         policy={},
@@ -400,7 +404,7 @@ async def test_a_value_someone_just_refreshed_is_not_refreshed_again():
         store=w.store,
         claims=w.claims,
         read_shared=w.read_shared,
-        write_shared=w.write_shared,
+        update_shared=w.update_shared,
         shared={},
         person=typed,
         policy={},
@@ -422,3 +426,106 @@ async def test_under_a_private_policy_my_variables_are_what_gets_refreshed(polic
 
     assert w.store.personal("alice")["ERP_TOKEN"] == "new"
     assert w.shared["i1"]["ERP_TOKEN"] == "shared-fresh"
+
+
+class _EditsMeanwhile(_Erp):
+    """While the deploy is refreshing, someone else writes the same layer."""
+
+    def __init__(self, meanwhile, **kw) -> None:
+        super().__init__(**kw)
+        self._meanwhile = meanwhile
+
+    async def refresh(self, values: dict[str, str]) -> dict[str, str]:
+        self._meanwhile()
+        return await super().refresh(values)
+
+
+@pytest.mark.parametrize("layer", ["personal", "private", "shared"])
+async def test_an_edit_made_while_refreshing_is_kept(layer):
+    """Review round 1, D1: the write-back is the refreshed names only, applied
+    to what is stored when it is written — not the layer as it was read up to
+    30 s earlier, which put back an edit's old value."""
+    w = _World()
+    start = {**OLD, "OTHER": "orig"}
+    edited = {**OLD, "OTHER": "edited"}
+    put = {
+        "personal": lambda v: w.store.replace_personal("alice", v),
+        "private": lambda v: w.store.replace("alice", "i1", v),
+        "shared": lambda v: w.shared.__setitem__("i1", dict(v)),
+    }[layer]
+    get = {
+        "personal": lambda: w.store.personal("alice"),
+        "private": lambda: w.store.get("alice", "i1"),
+        "shared": lambda: w.read_shared("i1"),
+    }[layer]
+    put(start)
+
+    await w.run([_EditsMeanwhile(lambda: put(edited))])
+
+    assert get() == {"ERP_TOKEN": "new", "ERP_REFRESH": "r2", "OTHER": "edited"}
+
+
+async def test_a_sign_out_while_refreshing_is_not_undone():
+    """Review round 1, D1: values removed while the deploy was refreshing them
+    stay removed — the refresh does not bring a credential back."""
+    w = _World()
+    w.store.replace_personal("alice", {**OLD, "OTHER": "o"})
+
+    out = await w.run([_EditsMeanwhile(lambda: w.store.replace_personal("alice", {"OTHER": "o"}))])
+
+    assert w.store.personal("alice") == {"OTHER": "o"}
+    assert "ERP_TOKEN" not in out.person.personal
+
+
+async def test_a_new_sign_in_while_rejecting_is_not_cleared():
+    """The dead names are cleared only if they still hold what was sent: a
+    sign-in done meanwhile wrote live ones."""
+    w = _World()
+    w.store.replace_personal("alice", OLD)
+    fresh = {"ERP_TOKEN": "typed", "ERP_REFRESH": "rt"}
+    erp = _EditsMeanwhile(
+        lambda: w.store.replace_personal("alice", fresh),
+        outcome=RefreshRejected({"ERP_TOKEN", "ERP_REFRESH"}),
+    )
+
+    out = await w.run([erp])
+
+    assert w.store.personal("alice") == fresh
+    assert out.rejected == []
+
+
+async def test_a_waiter_stops_waiting_when_the_peer_gives_up():
+    """Review round 1, m1: a peer whose refresh failed writes nothing and
+    frees the claim — the waiter goes on then, not after its whole wait."""
+    w = _World()
+    w.store.replace_personal("alice", OLD)
+    held = w.claims.try_take("personal:alice:erp", ttl_ms=60_000)
+    assert held is not None
+    loop = asyncio.get_running_loop()
+    loop.call_later(0.1, w.claims.release, "personal:alice:erp", held)
+    t0 = loop.time()
+
+    out = await w.run([_Erp()], wait_s=5)
+
+    assert loop.time() - t0 < 2
+    assert out.person.personal == OLD
+
+
+async def test_a_waiter_learns_the_peer_found_the_sign_in_dead():
+    """Review round 1, m2: the peer cleared the names, so this run is told too
+    — for a shared token, every person sending at once needs the notice."""
+    w = _World()
+    w.shared["i1"] = {**OLD, "HOST": "h"}
+    held = w.claims.try_take("shared:i1:erp", ttl_ms=60_000)
+    assert held is not None
+
+    def peer_rejects() -> None:
+        w.shared["i1"] = {"HOST": "h"}
+        w.claims.release("shared:i1:erp", held)
+
+    asyncio.get_running_loop().call_later(0.1, peer_rejects)
+
+    out = await w.run([_Erp()], wait_s=5)
+
+    assert [(d.provider.id, d.layer) for d in out.rejected] == [("erp", "shared")]
+    assert "ERP_TOKEN" not in out.shared
