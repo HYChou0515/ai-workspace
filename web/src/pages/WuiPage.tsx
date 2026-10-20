@@ -19,6 +19,10 @@
 import { useMemo, useState } from "react";
 import { useParams } from "react-router-dom";
 
+import { api } from "../api";
+import { Btn } from "../components/Btn";
+import { useT, type MsgKey } from "../lib/i18n";
+
 import { FileServiceProvider, investigationFileService, type FileService } from "../api/fileService";
 import { classifyReadFailure } from "../renderers/wui/assets";
 import { TryAgain } from "../renderers/wui/TryAgain";
@@ -32,7 +36,16 @@ import { useQuery } from "@tanstack/react-query";
 /** A sentence, centred, for the ways this URL can be wrong — and, where the
  * wrongness may be a moment's (a read that failed, a file a restoring sandbox
  * answered "not there" for), a way to look again without reloading the tab. */
-function Problem({ children, retry }: { children: React.ReactNode; retry?: () => void }) {
+function Problem({
+  children,
+  retry,
+  action,
+}: {
+  children: React.ReactNode;
+  retry?: () => void;
+  /** A way forward that is not a re-read — asking for access. */
+  action?: React.ReactNode;
+}) {
   return (
     <div
       style={{
@@ -54,9 +67,54 @@ function Problem({ children, retry }: { children: React.ReactNode; retry?: () =>
         {children}
       </p>
       {retry && <TryAgain onClick={retry} />}
+      {action}
     </div>
   );
 }
+
+/** A 403 is a reader who may SEE the workspace (an outsider gets 404), so
+ * offering to ask its owner reveals nothing — the App dashboard's 🔒 row asks
+ * the same way (`POST …/request-access`, deduplicated server-side). One press;
+ * a request that did not go through says so and may be sent again (NN/g,
+ * "Error-Message Guidelines": offer a way forward). */
+function RequestAccess({ slug, itemId }: { slug: string; itemId: string }) {
+  const t = useT();
+  const [state, setState] = useState<"idle" | "sending" | "sent" | "inside" | "failed">("idle");
+  const ask = async () => {
+    setState("sending");
+    try {
+      const answer = await api.requestItemAccess(slug, itemId);
+      // The route notifies nobody when the caller can already ENTER the
+      // workspace (`read_chat` — the 「In workspace」 role, which still gets
+      // this 403) and says so with `already_readable`: there is no request
+      // to report, only who can raise their role. `requested: false` alone is
+      // not that — it is also a repeat of a request already with the owner
+      // (the route's dedup ledger, shared with the App dashboard's 🔒 row),
+      // which is still "requested".
+      setState(answer.already_readable ? "inside" : "sent");
+    } catch {
+      setState("failed");
+    }
+  };
+  if (state === "inside") return <p role="status">{t("wui.page.alreadyInside")}</p>;
+  return (
+    <>
+      <Btn size="sm" disabled={state === "sending" || state === "sent"} onClick={() => void ask()}>
+        {t(state === "sent" ? "entry.withheld.requested" : "entry.withheld.requestAccess")}
+      </Btn>
+      {state === "failed" && <p role="alert">{t("wui.page.requestFailed")}</p>}
+    </>
+  );
+}
+
+/** The sentence for each way the view file's read can fail — by the code
+ * `classifyReadFailure` decided, in the reader's language. */
+const FAILURE: Record<"signedOut" | "deleted" | "status" | "unreachable", MsgKey> = {
+  signedOut: "wui.page.signedOut",
+  deleted: "wui.page.deleted",
+  status: "wui.page.status",
+  unreachable: "wui.page.unreachable",
+};
 
 export function WuiPage({
   makeService = investigationFileService,
@@ -64,6 +122,7 @@ export function WuiPage({
   /** Seam for tests; production always builds the item's own service. */
   makeService?: (slug: string, itemId: string) => FileService;
 }) {
+  const t = useT();
   const { slug = "", itemId = "", "*": rest = "" } = useParams();
   const path = `/${rest}`;
   const service = useMemo(() => makeService(slug, itemId), [makeService, slug, itemId]);
@@ -90,8 +149,8 @@ export function WuiPage({
   // succeeded and a later one that did not) would otherwise leave the
   // sentence and the button exactly as they were for the whole read, and a
   // second failure would look like a press that did nothing. Both pinned.
-  if (view.isPending) return <Problem>Opening {path}…</Problem>;
-  if (view.isError && view.isFetching) return <Problem>Looking again for {path}…</Problem>;
+  if (view.isPending) return <Problem>{t("wui.page.opening", { path })}</Problem>;
+  if (view.isError && view.isFetching) return <Problem>{t("wui.page.lookingAgain", { path })}</Problem>;
   if (view.isError) {
     // Named, because the reader did not choose this path — somebody sent them
     // the link, and the path is the only thing they can forward back. What
@@ -107,27 +166,34 @@ export function WuiPage({
     const why = classifyReadFailure(view.error, path);
     const retry = () => void view.refetch();
     if (why.kind === "failed") {
-      // A permanent failure (a 403 — the reader, not the moment) offers no
-      // Try again: the same sentence every press hides the only fix.
-      return <Problem retry={why.permanent ? undefined : retry}>{why.reason}</Problem>;
+      if (why.code === "forbidden") {
+        // Sees the workspace, not its files: the fix is the owner's, so the
+        // way forward is asking them — never Try again, which returns the
+        // same sentence every press.
+        return (
+          <Problem action={<RequestAccess slug={slug} itemId={itemId} />}>{t("wui.page.forbidden", { path })}</Problem>
+        );
+      }
+      // A permanent failure (the reader, not the moment) offers no Try
+      // again: the same sentence every press hides the only fix.
+      return (
+        <Problem retry={why.permanent ? undefined : retry}>
+          {t(FAILURE[why.code], { path, status: why.status ?? "" })}
+        </Problem>
+      );
     }
-    // "Not there" names the access case too: the backend answers 404, not
-    // 403, to a reader who may not see the item at all — the colleague the
-    // author forgot to add — and a sentence about a missing file sent them
-    // to report one.
-    return (
-      <Problem retry={retry}>
-        There is no file at {path} in this item, or you may not have access to this item — or it is
-        still being restored. Try again in a moment.
-      </Problem>
-    );
+    // A 404 is "not there, or not yours to see" — the backend will not tell
+    // an outsider which. The likeliest cause leads (docs/plan-deploy-reach.md
+    // decision 3): a link handed out from a workspace nobody was added to.
+    // Absence and a restoring sandbox follow, with Try again for the restore.
+    return <Problem retry={retry}>{t("wui.page.missing", { path })}</Problem>;
   }
 
   const spec = parseViewSpec(view.data ?? "");
   if (!spec || spec.view !== VIEW_KIND.wui) {
     // Not a general file viewer. An empty frame would read as a broken page
     // rather than as a wrong link.
-    return <Problem>{path} is not a page. This address only opens a WUI.</Problem>;
+    return <Problem>{t("wui.page.notWui", { path })}</Problem>;
   }
 
   return (

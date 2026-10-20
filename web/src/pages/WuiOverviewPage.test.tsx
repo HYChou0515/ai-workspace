@@ -830,6 +830,85 @@ describe("WuiOverviewPage", () => {
   });
 });
 
+describe("WuiOverviewPage — who each page opens for (docs/plan-deploy-reach.md decision 6)", () => {
+  // alice is signed in (see `me` above): her own private page reads "you",
+  // carol's private page reads "the owner".
+  const REACH: DeployedWui[] = [
+    row({
+      title: "Mine, private",
+      item_id: "a-1",
+      item_owner: "alice",
+      item_created_by: "alice",
+      item_permission: { visibility: "private" },
+    }),
+    // Review round 1: the `owner` FIELD is editable (#687) — alice created it,
+    // dave is named on it; it opens for alice, so it is hers.
+    row({
+      title: "Mine, renamed owner",
+      item_id: "a-2",
+      item_owner: "dave",
+      item_created_by: "alice",
+      item_permission: { visibility: "private" },
+    }),
+    row({
+      title: "Carol's, private",
+      item_id: "c-1",
+      item_owner: "carol",
+      item_created_by: "carol",
+      item_permission: { visibility: "private" },
+    }),
+    row({
+      title: "Shared",
+      item_id: "c-2",
+      item_permission: { visibility: "restricted", read_meta: ["user:alice"], read_content: ["user:alice"] },
+    }),
+    row({ title: "Open", item_id: "c-3", item_permission: { visibility: "public" } }),
+    row({ title: "No permission", item_id: "c-4", item_permission: null }),
+    row({ title: "Unreadable", item_id: "c-5", item_permission: { visibility: "secret" } }),
+  ];
+  const itemOf = async (title: string) =>
+    (await screen.findByRole("link", { name: title })).closest("li") as HTMLElement;
+
+  for (const view of ["cards", "table"] as const) {
+    it(`says it on every ${view === "cards" ? "card" : "row"} whose link does not open for everyone`, async () => {
+      writeWuiView(view);
+      render(<WuiOverviewPage client={client(REACH)} />, { wrapper: Wrap });
+
+      expect(await itemOf("Mine, private")).toHaveTextContent(word("wui.reach.you"));
+      expect(await itemOf("Mine, renamed owner")).toHaveTextContent(word("wui.reach.you"));
+      // The user's words (decision 6), kept as approved: 「只有擁有者打得開」 —
+      // admins are not named on the card (asked 2026-10-16: 「就是只有擁有者打得開」).
+      expect(await itemOf("Carol's, private")).toHaveTextContent("只有擁有者打得開");
+      expect(await itemOf("Carol's, private")).not.toHaveTextContent("管理員");
+      expect(await itemOf("Shared")).toHaveTextContent(word("wui.reach.shared"));
+      for (const open of ["Open", "No permission", "Unreadable"]) {
+        const li = await itemOf(open);
+        for (const key of ["wui.reach.you", "wui.reach.owner", "wui.reach.shared"] as const) {
+          expect(li).not.toHaveTextContent(word(key));
+        }
+      }
+    });
+  }
+
+  it("says it on hover too", async () => {
+    writeWuiView("cards");
+    render(<WuiOverviewPage client={client(REACH)} />, { wrapper: Wrap });
+
+    const note = within(await itemOf("Mine, private")).getByText(word("wui.reach.you"));
+    expect(note).toHaveAttribute("title", word("wui.reach.you.tip"));
+  });
+
+  it("an identity not yet known says nothing rather than 'the owner' about the viewer's own page", async () => {
+    me = { id: "default-user", ready: false };
+    writeWuiView("cards");
+    render(<WuiOverviewPage client={client(REACH)} />, { wrapper: Wrap });
+
+    const li = await itemOf("Mine, private");
+    expect(li).not.toHaveTextContent(word("wui.reach.owner"));
+    expect(li).not.toHaveTextContent(word("wui.reach.you"));
+  });
+});
+
 /** Reads the trail the page published — the global bar's view of it. */
 function TrailProbe() {
   const trail = useBreadcrumbTrail();

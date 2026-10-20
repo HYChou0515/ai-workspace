@@ -36,6 +36,7 @@ import { Btn } from "../../components/Btn";
 import { Switch } from "../../components/Switch";
 import { useCurrentUserState } from "../../hooks/useCurrentUser";
 import { useOpenFile } from "../../hooks/openFile";
+import { useT } from "../../lib/i18n";
 import { useWorkspaceSlug } from "../../hooks/useWorkspaceSlug";
 import { ItemEnvModal } from "../../components/ItemEnvModal";
 import { PageIdentityControls } from "../../components/PageIdentity";
@@ -58,6 +59,7 @@ import { resolveInFolder, resolveReadPath, wuiFolder } from "./paths";
 import { openServedWui } from "./served";
 import { createSelfWrites } from "./selfWrites";
 import { TryAgain } from "./TryAgain";
+import { DeployReach } from "./DeployReach";
 import { WUI_PROTOCOL, isWuiRequest, refuse, type WuiEvent } from "./protocol";
 import {
   formatReportsForAgent,
@@ -334,6 +336,7 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
    * sees and costs none of it" is one fact rather than comparisons that could
    * drift apart. */
   const author = chrome === "workspace";
+  const t = useT();
 
   // Nothing reloads a WUI on its own (plan decision 9): an agent editing the
   // page while someone is halfway through using it should not yank the page out
@@ -1320,7 +1323,7 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
             bumpGeneration();
           }}
         >
-          Refresh
+          {t("wui.bar.refresh")}
         </Btn>
         {canBuild && slug && (
           <>
@@ -1329,7 +1332,7 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
                 check), and a Rebuild pressed in one of them started a second
                 `pnpm run build` in the same folder beside Deploy's. */}
             <Btn size="sm" disabled={building || deploying} onClick={() => void runBuild()}>
-              {building ? "Building…" : "Rebuild"}
+              {building ? t("wui.bar.building") : t("wui.bar.rebuild")}
             </Btn>
             {/* A switch, not a checkbox: flipping it takes effect at once, and
                 a checkbox reads as a choice that has not happened yet. Short on
@@ -1340,18 +1343,18 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
               checked={autoBuild}
               onChange={setAutoBuild}
               disabled={deploying}
-              title="Rebuild this page whenever you open it"
+              title={t("wui.bar.autoRebuild.tip")}
             >
-              Auto-rebuild
+              {t("wui.bar.autoRebuild")}
             </Switch>
           </>
         )}
         <Btn size="sm" onClick={() => toFrame({ proto: WUI_PROTOCOL, command: "pick", on: true })}>
-          Report a problem
+          {t("wui.bar.report")}
         </Btn>
         {reports.length > 0 && (
           <Btn size="sm" variant="primary" onClick={tellTheAgent}>
-            Tell the agent ({reports.length})
+            {t("wui.bar.tellAgent", { n: reports.length })}
           </Btn>
         )}
         {/* Only where there is a slug to deploy under — like `callTool`, which
@@ -1373,10 +1376,10 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
                 which page the hold is for, so the Cancel beside it is not a
                 Cancel for nothing anyone can see. */}
             {deployHere.state === "working"
-              ? "Deploying…"
+              ? t("wui.bar.deploying")
               : running
-                ? `Deploying ${running.path.split("/").pop()}…`
-                : "Deploy"}
+                ? t("wui.bar.deployingFile", { file: running.path.split("/").pop() ?? "" })
+                : t("wui.bar.deploy")}
           </Btn>
         )}
         {/* The hold's way out. A build stream that never closes — a gateway
@@ -1386,8 +1389,12 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
             one failure nothing can report. Cancel aborts the build and
             releases the pane; the run that was cancelled writes nothing more. */}
         {deploying && (
-          <Btn size="sm" onClick={cancelDeploy} title={`Stop deploying ${running?.path.split("/").pop() ?? ""}`}>
-            Cancel
+          <Btn
+            size="sm"
+            onClick={cancelDeploy}
+            title={t("wui.bar.cancel.tip", { file: running?.path.split("/").pop() ?? "" })}
+          >
+            {t("wui.bar.cancel")}
           </Btn>
         )}
         {/* The toolbar is this pane's line between the platform and the page,
@@ -1419,7 +1426,7 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
           {deployHere.state === "done" ? (
             <>
               <div role="status" style={{ fontWeight: 600 }}>
-                ✓ Deployed
+                {t("wui.deploy.done")}
               </div>
               <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
                 {/* Read-only and selectable: this IS the fallback when the
@@ -1428,39 +1435,44 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
                 <input
                   autoComplete="off"
                   className="input"
-                  aria-label="Page address"
+                  aria-label={t("wui.deploy.address")}
                   readOnly
                   value={address}
                   onFocus={(e) => e.currentTarget.select()}
                   style={{ minHeight: 28, padding: "0 6px" }}
                 />
                 <Btn size="sm" onClick={() => void copyAddress()}>
-                  {copied === "done" ? "Copied" : copied === "failed" ? "Copy failed — select it" : "Copy"}
+                  {t(
+                    copied === "done"
+                      ? "wui.deploy.copied"
+                      : copied === "failed"
+                        ? "wui.deploy.copyFailed"
+                        : "wui.deploy.copy",
+                  )}
                 </Btn>
                 <a href={address} target="_blank" rel="noreferrer">
-                  Open
+                  {t("wui.deploy.open")}
                 </a>
               </div>
               {/* P17's decision, spoken to the publisher: the address is a
-                  shortcut, not a grant. */}
-              <div style={{ color: "var(--text-paper-d)" }}>
-                Anyone who can open this item can use this link.
-              </div>
+                  shortcut, not a grant — as the FACT of who it opens for now,
+                  with the way to change it (docs/plan-deploy-reach.md). */}
+              <DeployReach slug={slug} itemId={fs.scopeId} />
             </>
           ) : deployHere.step === "build" ? (
             <div role="status" style={{ color: "var(--err)" }}>
-              Deploy failed — see the build output.
+              {t("wui.deploy.failed.build")}
             </div>
           ) : deployHere.step === "manifest" ? (
             <div role="status" style={{ color: "var(--err)" }}>
-              Deploy failed — could not check whether this page has a build: {deployHere.why}
+              {t("wui.deploy.failed.manifest", { why: deployHere.why })}
             </div>
           ) : deployHere.step === "open" ? (
             // The page's own sentence about why it does not open — the same
             // one the pane shows below — so the publisher is not sent to a
             // build log for a page that has no build.
             <div role="status" style={{ color: "var(--err)" }}>
-              Deploy failed — the page does not open: {deployHere.why}
+              {t("wui.deploy.failed.open", { why: deployHere.why })}
             </div>
           ) : deployHere.step === "list" ? (
             // The page opened; the overview did not take it. The server's
@@ -1469,21 +1481,19 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
             // the listing, and an address under "failed" would read as a
             // success with a footnote.
             <div role="status" style={{ color: "var(--err)" }}>
-              Deploy failed — the page could not be listed in WUI: {deployHere.why}
+              {t("wui.deploy.failed.list", { why: deployHere.why })}
             </div>
           ) : deployHere.step === "superseded" ? (
             <div role="status" style={{ color: "var(--err)" }}>
-              Deploy stopped — the pane was refreshed, rebuilt or deployed again before it was back on
-              this page. Deploy again.
+              {t("wui.deploy.stopped.superseded")}
             </div>
           ) : deployHere.step === "changed" ? (
             <div role="status" style={{ color: "var(--err)" }}>
-              Deploy stopped — the pane was away from this page long enough for the result to expire.
-              Deploy again.
+              {t("wui.deploy.stopped.changed")}
             </div>
           ) : (
             <div role="status" style={{ color: "var(--err)" }}>
-              Deploy stopped unexpectedly — see the browser console.
+              {t("wui.deploy.stopped.unexpected")}
             </div>
           )}
         </div>
@@ -1599,14 +1609,14 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
         </div>
       )}
       {built.isPending ? (
-        <div style={{ padding: 12, color: "var(--text-paper-d)" }}>Opening…</div>
+        <div style={{ padding: 12, color: "var(--text-paper-d)" }}>{t("wui.pane.opening")}</div>
       ) : firstBuild ? (
         // Whatever the folder holds right now is about to be replaced by what
         // the build produces, and mid-restore it may not even read correctly —
         // so this waits rather than showing a page with a shelf life of
         // seconds.
         <div role="status" style={{ padding: 12, color: "var(--text-paper-d)" }}>
-          Building… the page appears when this finishes.
+          {t("wui.pane.building")}
         </div>
       ) : built.error && ((building && !deploying) || deployHere.state === "working") ? (
         // The first open of a page nobody has built yet: `dist/` really is
@@ -1620,7 +1630,7 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
         // sibling shown during A's Deploy keeps its own error rather than a
         // promise the run will not keep.
         <div role="status" style={{ padding: 12, color: "var(--text-paper-d)" }}>
-          {building ? "Building…" : "Deploying…"} the page appears when this finishes.
+          {t(building ? "wui.pane.building" : "wui.pane.deploying")}
         </div>
       ) : built.error instanceof WuiEntryMissing && built.error.kind === "absent" && !author ? (
         // A reader followed a link to a page nobody has built (or one whose
@@ -1645,9 +1655,7 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
               reader who reached this pane has already read the view file, so
               item access is established — the hedge would send them asking
               for a permission they hold. */}
-          <span>
-            This page has not been published yet — or it is still being restored. Try again in a moment.
-          </span>
+          <span>{t("wui.pane.unpublished")}</span>
           <TryAgain onClick={tryAgain} />
         </div>
       ) : built.error ? (

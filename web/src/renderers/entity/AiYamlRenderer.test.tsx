@@ -8,7 +8,8 @@ import { EditModeProvider } from "../../hooks/editMode";
 import { FileBufferProvider, FileBufferStore } from "../../hooks/fileBuffer";
 import { type OpenFile, OpenFileProvider } from "../../hooks/openFile";
 import { WorkspaceSlugProvider } from "../../hooks/useWorkspaceSlug";
-import { QueryWrap } from "../../test/queryWrapper";
+import { QueryWrap as AppProviders } from "../../test/queryWrapper";
+import { LocaleScope } from "../../lib/i18n";
 
 // Stub only the network leaf; the hooks + view components are the real thing.
 const mock = vi.hoisted(() => ({
@@ -22,6 +23,18 @@ vi.mock("../../api/entities", () => ({ entitiesApi: mock }));
 
 import { AiYamlRenderer } from "./AiYamlRenderer";
 import { parseViewSpec } from "./shared";
+
+// These tests read the pane's English: its author strip and Deploy panel go
+// through `t()` (docs/plan-deploy-reach.md decision 7), and outside a provider
+// `t()` speaks zh-TW. The Chinese is pinned where it is decided
+// (`DeployReach.test.tsx`, the zh-TW case in `WuiView.test.tsx`).
+function QueryWrap(props: Parameters<typeof AppProviders>[0]) {
+  return (
+    <LocaleScope locale="en">
+      <AppProviders {...props} />
+    </LocaleScope>
+  );
+}
 
 const ISSUE_TYPE = {
   name: "issue",

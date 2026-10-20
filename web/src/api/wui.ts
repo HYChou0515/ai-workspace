@@ -43,6 +43,15 @@ export type DeployedWui = {
    * the page's own colour for its card; the overview uses it when it is a
    * hex it can draw (`pageColour`) and the App's colour otherwise. */
   color: string;
+  /** Who CREATED the item — the person its access is decided for;
+   * `item_owner` is an editable display field (#687). The card's 「只有你」
+   * compares the viewer with this. Optional: an older server omits it. */
+  item_created_by?: string;
+  /** The item's `permission` as its own GET returns it — `null` when it has
+   * none (public). The card says who the link opens for from it
+   * (`pageReach`, docs/plan-deploy-reach.md). Optional: a server from
+   * before it sends nothing, and nothing is said. */
+  item_permission?: unknown;
   /** Whether THIS viewer may Remove it — the server's `edit_content` answer,
    * so the button is drawn only where a press would be accepted. */
   can_remove: boolean;
