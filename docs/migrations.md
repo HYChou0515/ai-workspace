@@ -2981,7 +2981,7 @@ command 的完整 schema——那正是這個功能在做的事。從 `index.jso
 沒部署到這一版的症狀：存 `123GB` 顯示「已套用」，接著那個人的額度讀取都失敗，
 訊息是 `unreadable size '123GB' — want an integer with an optional K/M/G/T suffix`。
 
-### 2026-10-20 · #968 Deploy 說出誰打得開這個連結 {#pr-968}
+### 2026-10-20 · dd917ddf · #968 Deploy 說出誰打得開這個連結 {#pr-968}
 
 **設定** — 無。
 
