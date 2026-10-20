@@ -49,7 +49,7 @@ export type RunStatus =
 
 export type PhaseState = {
   phase: string;
-  status: string; // pending | running | passed | failed | skipped
+  status: string; // pending | running | passed | failed | skipped | stopped
   done: number;
   total: number;
   failed: number;
@@ -184,7 +184,7 @@ export function isRunTerminal(status: RunStatus): boolean {
 export type PhaseNode = {
   id: string;
   title: string;
-  status: string; // pending | running | passed | failed | skipped | awaiting_human
+  status: string; // pending | running | passed | failed | skipped | stopped | awaiting_human
   done: number;
   total: number;
   failed: number;
@@ -234,7 +234,8 @@ export function stepOf(nodes: PhaseNode[]): { at: number; of: number } {
   if (working >= 0) return { at: working + 1, of: nodes.length };
   let passed = 0;
   nodes.forEach((n, i) => {
-    if (n.status === "passed" || n.status === "skipped" || n.status === "failed") passed = i + 1;
+    // A step a Stop ended was reached too (plan-one-running-phase D5).
+    if (["passed", "skipped", "failed", "stopped"].includes(n.status)) passed = i + 1;
   });
   return { at: passed, of: nodes.length };
 }
