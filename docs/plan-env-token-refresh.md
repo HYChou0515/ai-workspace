@@ -160,8 +160,8 @@ also not enough; offer some potential remedies」「guess the correct action and
 | A6 | 通知 | 標題 "Sign in to {label} again"；token 在我的環境變數 → 連到 `/my-env`，每人每個登入方式每天一次；在 item 的 Private／Shared → 連到那個 item，每人每個登入方式每個 item 每天一次（dedup key 帶 UTC 日期）；英文，和既有的 workflow 失敗通知一致 | 去重避免每輪都通知；連結照 D3 指到 token 所在的地方 |
 | A7 | 排程一條測試 | 排程的節點走 workflow_exec 的同一條路（`_headless_env`），由 workflow 節點的測試涵蓋 | 同一個呼叫點 |
 | A9 | 寫回 | 寫回是 patch：寫的當下重讀那一層，只有這次換的名稱還是送出去的那組值時，才設新值（或清掉失效的）；其他名稱照現況。Shared 在 item 的 CAS 迴圈裡做 | 第一輪 review：原本把換之前讀的整層寫回去，換的這 30 秒內別人改的值會被蓋掉，登出的值會被寫回來 |
-| A10 | 等別人換 | 對方放掉鎖卻沒寫（換失敗）就不再等；對方把名稱清掉了（登入失效）就也回報失效 | 第一輪 review：原本只看值有沒有變，對方失敗時要白等 30 秒；Shared 的 token 失效時，同時送出的其他人看不到提示 |
-| A11 | 「最後一則」的判斷 | 平台在一輪中途寫的訊息（`sign_in`、#624 的 `notice`）不算；hydration 和跨 pod 的 store poll 讀同一個 `turnTail` | 第一輪 review：`sign_in` 寫在問題下面、這輪開跑之前，重新整理或另一個 pod 的人會看到這輪「已經結束」 |
+| A10 | 等別人換 | 對方放掉鎖就再讀一次、沒寫（換失敗）就不再等；對方清掉任一個名稱（登入失效）就也回報失效。部署方 `RefreshRejected` 列的名稱一個都不在這一層時當暫時失敗；沒列全時留下的名稱照留，並寫 warning log | 第一輪 review：原本只看值有沒有變，對方失敗時要白等 30 秒；Shared 的 token 失效時，同時送出的其他人看不到提示 |
+| A11 | 「最後一則」的判斷 | 平台在一輪中途寫的訊息（`sign_in`、#624 的 `notice`）不算（`turnTail`，在 `logFromMessages` 裡）；跨 pod 的 store poll 看到它時走 `reconcile`，也是經 `logFromMessages` 判斷，所以同一個判準 | 第一輪 review：`sign_in` 寫在問題下面、這輪開跑之前，重新整理或另一個 pod 的人會看到這輪「已經結束」 |
 | A8 | 兩個並行只換一次的測試 | 以事件排序、不靠時間；鎖本身由「預先佔住鎖」的測試釘住（讓鎖永遠拿得到時它會紅） | in-memory 後端的 create-if-absent 不是原子的，靠時間的版本在負載下偶爾兩個都拿到 |
 
 ## runbook 條目必須寫的事（P7；as-built 為 P8）

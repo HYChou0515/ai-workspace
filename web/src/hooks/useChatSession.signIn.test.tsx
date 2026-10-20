@@ -4,6 +4,13 @@
  * question BEFORE its turn runs, so a thread whose tail is that message is still
  * waiting for its reply (review round 1). The store poll — the only word a
  * cross-pod viewer gets that a turn ended — must not read it as the answer.
+ *
+ * Both are decided by ONE reading, `turnTail` in `logFromMessages`: the poll's
+ * own "the tail is not a user message" sees the notice as done, but what it
+ * does then is `reconcile`, which re-hydrates through `logFromMessages` and
+ * keeps the turn running (review round 2: making the poll's line skip the
+ * notice too changed nothing a test or a person could observe, so it was not
+ * kept).
  */
 import { renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";

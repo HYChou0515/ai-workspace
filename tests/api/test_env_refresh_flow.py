@@ -529,3 +529,103 @@ async def test_a_waiter_learns_the_peer_found_the_sign_in_dead():
 
     assert [(d.provider.id, d.layer) for d in out.rejected] == [("erp", "shared")]
     assert "ERP_TOKEN" not in out.shared
+
+
+class _PeerBetweenReads(_World):
+    """The peer writes and lets go of the claim right after the waiter's
+    first read — between that read and its look at the claim."""
+
+    def __init__(self, peer) -> None:
+        super().__init__()
+        self._peer = peer
+        self._reads = 0
+
+    def read_shared(self, item_id: str) -> dict[str, str]:
+        value = super().read_shared(item_id)
+        self._reads += 1
+        if self._reads == 2:  # 1: the run's own composition; 2: the waiter's first poll
+            self._peer()
+        return value
+
+
+def _held_shared(w: _World) -> str:
+    holder = w.claims.try_take("shared:i1:erp", ttl_ms=60_000)
+    assert holder is not None
+    return holder
+
+
+async def test_a_waiter_reads_once_more_after_the_peer_lets_go():
+    """Review round 2, F1: a peer that wrote and let go between the waiter's
+    read and its look at the claim has written the fresh values — the waiter
+    takes those, not the ones it was holding."""
+    holder: list[str] = []
+
+    def peer() -> None:
+        w.shared["i1"] = {"ERP_TOKEN": "new", "ERP_REFRESH": "r2"}
+        w.claims.release("shared:i1:erp", holder[0])
+
+    w = _PeerBetweenReads(peer)
+    w.shared["i1"] = dict(OLD)
+    holder.append(_held_shared(w))
+
+    out = await w.run([_Erp()], wait_s=5)
+
+    assert out.shared["ERP_TOKEN"] == "new"
+
+
+async def test_a_waiter_hears_of_a_dead_sign_in_the_peer_cleared_between_reads():
+    holder: list[str] = []
+
+    def peer() -> None:
+        w.shared["i1"] = {"HOST": "h"}
+        w.claims.release("shared:i1:erp", holder[0])
+
+    w = _PeerBetweenReads(peer)
+    w.shared["i1"] = {**OLD, "HOST": "h"}
+    holder.append(_held_shared(w))
+
+    out = await w.run([_Erp()], wait_s=5)
+
+    assert [(d.provider.id, d.layer) for d in out.rejected] == [("erp", "shared")]
+    assert "ERP_TOKEN" not in out.shared
+
+
+async def test_a_waiter_hears_of_a_dead_sign_in_the_peer_cleared_only_partly():
+    """Review round 2, F2: the deploy named only the refresh token; the peer
+    cleared that one — still a dead sign-in for everyone sending at once."""
+    w = _World()
+    w.shared["i1"] = {**OLD, "HOST": "h"}
+    held = _held_shared(w)
+
+    def peer_rejects() -> None:
+        w.shared["i1"] = {"ERP_TOKEN": "old", "HOST": "h"}
+        w.claims.release("shared:i1:erp", held)
+
+    asyncio.get_running_loop().call_later(0.1, peer_rejects)
+
+    out = await w.run([_Erp()], wait_s=5)
+
+    assert [(d.provider.id, d.layer) for d in out.rejected] == [("erp", "shared")]
+
+
+async def test_a_rejection_that_names_nothing_held_is_a_passing_failure():
+    """Review round 2, F3: names the sign-in does not produce (or does not
+    hold) clear nothing — reporting it dead would repeat on every run while
+    the token stays as it was."""
+    w = _World()
+    w.shared["i1"] = {**OLD, "HOST": "h"}
+    writes: list[dict[str, str]] = []
+    real = w.update_shared
+
+    def counting(item_id, patch):  # noqa: ANN001, ANN202
+        writes.append({})
+        return real(item_id, patch)
+
+    w.update_shared = counting  # type: ignore[method-assign]  # ty: ignore[invalid-assignment]
+    erp = _Erp(outcome=RefreshRejected({"SOMETHING_ELSE"}))
+
+    out = await w.run([erp])
+
+    assert out.rejected == []
+    assert w.shared["i1"] == {**OLD, "HOST": "h"}
+    assert writes == []

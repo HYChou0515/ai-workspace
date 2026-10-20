@@ -225,7 +225,25 @@ async def _one(
         try:
             fresh = await asyncio.wait_for(provider.refresh(dict(stored)), timeout_s)
         except RefreshRejected as rejected:
-            dead = rejected.names & provider.produces
+            # Only names this sign-in produces AND the layer holds: anything
+            # else clears nothing, and reporting the sign-in dead for it would
+            # repeat on every run while the token stays as it was.
+            dead = rejected.names & provider.produces & set(stored)
+            if not dead:
+                logger.warning(
+                    "env-refresh: %s rejected naming none of the values it holds; "
+                    "treated as a passing failure",
+                    provider.id,
+                )
+                return out
+            if left := sorted(set(stored) - dead):
+                # The contract asks for every name the dead token leaves useless;
+                # one left behind still reads as near expiry on the next run.
+                logger.warning(
+                    "env-refresh: %s rejected without naming %s; they are kept",
+                    provider.id,
+                    left,
+                )
             kept, cleared = await asyncio.to_thread(
                 write,
                 _unchanged(stored, lambda now: {n: v for n, v in now.items() if n not in dead}),
@@ -273,20 +291,27 @@ async def _wait_for_peer(
 ) -> RefreshOutcome:
     """Someone else is refreshing these values: wait for what they write, or
     go on with what we had (D4) — as soon as they let go of the claim, not
-    only when the wait runs out. Names they cleared mean they found the
+    only when the wait runs out. A name they cleared means they found the
     sign-in dead, so this run reports it too."""
+
+    def changed(current: dict[str, str]) -> RefreshOutcome | None:
+        if {n: current.get(n) for n in values} == values:
+            return None
+        done = _with(out, layer, current, seam)
+        if any(is_blank(current.get(n, "")) for n in values):
+            return replace(done, rejected=[*done.rejected, DeadSignIn(provider, layer)])
+        return done
+
     loop = asyncio.get_running_loop()
     deadline = loop.time() + wait_s
     while loop.time() < deadline:
         await asyncio.sleep(_POLL_S)
-        current = await asyncio.to_thread(read)
-        if {n: current.get(n) for n in values} != values:
-            done = _with(out, layer, current, seam)
-            if all(is_blank(current.get(n, "")) for n in values):
-                return replace(done, rejected=[*done.rejected, DeadSignIn(provider, layer)])
-            return done
+        if (seen := changed(await asyncio.to_thread(read))) is not None:
+            return seen
         if not await asyncio.to_thread(held):
-            return out  # they gave up without writing: a passing failure
+            # Let go — but maybe just after writing, between the read above
+            # and this look: read once more before calling it a failure.
+            return changed(await asyncio.to_thread(read)) or out
     return out
 
 

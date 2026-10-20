@@ -3057,6 +3057,8 @@ command 的完整 schema——那正是這個功能在做的事。從 `index.jso
   （token 原本在「我的環境變數」就存回那裡；在這個 item 的 Private 或 Shared 就存進這個 item 的 Private——Shared 裡失效的名稱已經清掉）；
   其他（頁面按鈕的工具呼叫、goal、重跑、workflow、綁定的排程）就通知替誰跑的人：token 在「我的環境變數」連到那裡、每人每個登入方式每天一次；
   在 item 裡就連到那個 item、每人每個登入方式每個 item 每天一次。
+- **Shared 的 token 失效後，item 的其他成員也沒有這個值了**：平台把失效的名稱從 Shared 清掉，按「登入」的人存進的是自己的 Private，
+  其他人下一次執行會看到 #892 的缺環境變數卡片，要自己登入或由有 `write_meta` 的人重新填 Shared。
 - 同時有兩個執行（或兩顆 pod）發現快過期時只換一次，另一個最多等 30 秒再用新的；等不到就用原本的值照樣跑。
 
 **資料** — 新增一個協調用的資料表（`RefreshClaim`，鎖；`spec.apply` 之後註冊，沒有 CRUD 路由），每個「層 × 擁有者 × 登入方式」
