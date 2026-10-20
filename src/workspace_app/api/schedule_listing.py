@@ -264,6 +264,8 @@ class OverviewRow(BaseModel):
     row), "admin" (a superuser named them); "" when it runs as nobody."""
     runs_as_by: str = ""
     """The superuser who named them, when `runs_as_reason` is "admin"."""
+    runs_as_mine: bool = False
+    """Whether it runs as the VIEWER — "Stop running as me" rather than "Run as me"."""
 
 
 class OverviewFile(BaseModel):
@@ -581,6 +583,7 @@ def register_schedule_overview_routes(
         pages: dict[tuple[str, str], DeployedWui] = {}
         for page in await asyncio.to_thread(deployed_pages):
             pages.setdefault((page.item_id, page.path.rsplit("/", 1)[0]), page)
+        me = get_user_id()
         entries = await asyncio.to_thread(index.entries)
         unindexed: list[str] = []
         if only is not None:
@@ -674,13 +677,14 @@ def register_schedule_overview_routes(
                             runs_as=bound.user_id if bound is not None else "",
                             runs_as_reason=bound.reason if bound is not None else "",
                             runs_as_by=bound.assigned_by if bound is not None else "",
+                            runs_as_mine=bound is not None and bound.user_id == me,
                         )
                     )
         return ScheduleOverview(
             enabled=policy.sweep_enabled,
             rows=rows,
             files=problem_files,
-            can_assign=get_user_id() in superusers,
+            can_assign=me in superusers,
             unindexed=unindexed,
         )
 

@@ -1148,7 +1148,7 @@ def test_whoever_changes_a_schedules_time_is_who_it_then_runs_as():
 def test_each_row_says_who_it_runs_as_and_why():
     """G8: the overview row names the person and the reason — here, bob wrote it."""
     holder = {"id": "bob"}
-    client, spec, _ = _client_and_spec(holder)
+    client, spec, _ = _client_and_spec(holder, superusers=frozenset({"root"}))
     iid = _item(spec, by="bob")
     _seed(client, iid)
 
@@ -1157,6 +1157,9 @@ def test_each_row_says_who_it_runs_as_and_why():
     assert {(r["runs_as"], r["runs_as_reason"], r["runs_as_by"]) for r in rows} == {
         ("bob", "author", "")
     }
+    assert {r["runs_as_mine"] for r in rows} == {True}
+    holder["id"] = "root"  # a superuser looking: bob's, not theirs
+    assert {r["runs_as_mine"] for r in _rows(client)} == {False}
 
 
 def test_the_overview_says_whether_the_viewer_may_name_someone_else():

@@ -4,18 +4,20 @@
  * put on a clock. Until this, `.workflows/schedules.json` lived in a folder the
  * IDE tree hides: the agent said "set up" and the person could only believe it.
  *
- * The rows come from the backend already interpreted (same parser and next-run
- * rule as the sweep); this file renders them and their acts — Run now, Edit
- * time, Remove — which go through the row routes the schedules overview
- * shares (docs/plan-schedule-overview.md §3).
+ * The rows are the schedules overview's, narrowed to this item — its own file
+ * and each page's (docs/plan-schedule-run-as.md G10) — drawn with the overview's
+ * own parts and words (G9), stacked; their acts — Run now, Edit time, Remove,
+ * who it runs as — go through the row routes the overview shares.
  */
 import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { FileService } from "../api/fileService";
 import { workflowTemplatesApi } from "../api/workflowTemplates";
-import type { ItemSchedules } from "../api/schedules";
+import type { OverviewRow, ScheduleOverview } from "../api/schedules";
+import { translate } from "../lib/i18n";
 import { renderWithQuery } from "../test/queryWrapper";
 import { ViewerClockPin } from "../lib/viewerClock";
 import { DialogProvider } from "./Dialog";
@@ -36,7 +38,7 @@ vi.mock("../api/schedules", async (orig) => {
   return {
     ...actual,
     schedulesApi: {
-      list: (...a: unknown[]) => schedulesMock(...a),
+      itemOverview: (...a: unknown[]) => schedulesMock(...a),
       remove: (...a: unknown[]) => removeMock(...a),
       runNow: (...a: unknown[]) => runNowMock(...a),
       editTime: (...a: unknown[]) => editTimeMock(...a),
@@ -59,23 +61,41 @@ afterEach(() => {
   editTimeMock.mockReset();
 });
 
-const NIGHTLY = {
+const word = (key: Parameters<typeof translate>[1], vars?: Record<string, string | number>) =>
+  translate("zh-TW", key, vars);
+
+const OWN = "/.workflows/schedules.json";
+
+const NIGHTLY: OverviewRow = {
+  slug: "playground",
+  item_id: "inv1",
+  item_title: "Line 3",
+  item_owner: "bob",
+  path: OWN,
   index: 0,
   raw: { every: "daily", at: "09:00", tz: "Asia/Taipei", run: "nightly" },
   problems: [],
   run: "nightly",
   describe: "daily at 09:00 Asia/Taipei",
-  next_run: "2026-09-16 09:00 Asia/Taipei",
   next_at: "2026-09-16 09:00",
   due_now: false,
   tz: "Asia/Taipei",
   known: true,
   run_problem: "",
   runnable: true,
-  payload: {},
   trigger_id: "wui:it:nightly",
   next_ms: Date.UTC(2026, 8, 16, 1, 0),
   run_title: "Nightly report",
+  last_run: null,
+  can_edit: true,
+  can_run: true,
+  can_read: true,
+  page_path: "",
+  page_title: "",
+  runs_as: "",
+  runs_as_reason: "",
+  runs_as_by: "",
+  runs_as_mine: false,
 };
 
 // The viewer reads in Taipei, on 2026-09-15 at 10:00 — pinned, because the
@@ -83,19 +103,13 @@ const NIGHTLY = {
 const VIEWER = "Asia/Taipei";
 const NOW = Date.UTC(2026, 8, 15, 2, 0);
 
-function schedules(over: Partial<ItemSchedules> = {}): ItemSchedules {
-  return {
-    enabled: true,
-    indexed: true,
-    path: ".workflows/schedules.json",
-    rows: [NIGHTLY],
-    problems: [],
-    can_edit: true,
-    can_run: true,
-    can_read: true,
-    ...over,
-  };
+function schedules(over: Partial<ScheduleOverview> = {}): ScheduleOverview {
+  return { enabled: true, rows: [NIGHTLY], files: [], can_assign: false, unindexed: [], ...over };
 }
+
+const capProblem = (problems: string[]) => [
+  { slug: "playground", item_id: "inv1", item_title: "Line 3", path: OWN, problems },
+];
 
 function fakeService() {
   const writes: { path: string; body: string }[] = [];
@@ -112,14 +126,23 @@ function fakeService() {
 }
 
 function render(svc: FileService) {
+  // Inside the item page's router in the app: "See it" and "Last run" are links.
   return renderWithQuery(
-    <ViewerClockPin viewer={VIEWER} now={NOW}>
-      <DialogProvider>
-        <WorkflowsModal slug="playground" itemId="inv1" fileService={svc} onClose={() => {}} />
-      </DialogProvider>
-    </ViewerClockPin>,
+    <MemoryRouter>
+      <ViewerClockPin viewer={VIEWER} now={NOW}>
+        <DialogProvider>
+          <WorkflowsModal slug="playground" itemId="inv1" fileService={svc} onClose={() => {}} />
+        </DialogProvider>
+      </ViewerClockPin>
+    </MemoryRouter>,
   );
 }
+
+/** The row's Remove — its name says which schedule (the overview's label). */
+const removeButton = async () =>
+  within(await screen.findByTestId("schedule-row-0")).getByRole("button", {
+    name: new RegExp(`^${word("schedules.remove")} `),
+  });
 
 describe("WorkflowsModal — schedules", () => {
   it("lists each schedule with its recurrence, the workflow it runs and when it runs next", async () => {
@@ -130,8 +153,9 @@ describe("WorkflowsModal — schedules", () => {
     const row = await screen.findByTestId("schedule-row-0");
     expect(row).toHaveTextContent("Nightly report"); // the workflow's title, not its id
     expect(row).toHaveTextContent("每天 09:00"); // zh-TW is the test locale
-    // On the viewer's clock, said the way a person says it — no zone id.
-    expect(row).toHaveTextContent("下次：明天 09:00");
+    // On the viewer's clock, said the way a person says it — no zone id —
+    // under the overview's own column name (G9).
+    expect(row).toHaveTextContent(`${word("scheduleOverview.col.next")}明天 09:00`);
     expect(row).not.toHaveTextContent("Asia/Taipei");
   });
 
@@ -147,13 +171,13 @@ describe("WorkflowsModal — schedules", () => {
   it("flags a row whose workflow no longer exists — the sweep skips it in silence", async () => {
     listMock.mockResolvedValue([]);
     schedulesMock.mockResolvedValue(
-      schedules({ rows: [{ ...NIGHTLY, run: "vanished", known: false, runnable: false, next_run: "", next_at: "" }] }),
+      schedules({ rows: [{ ...NIGHTLY, run: "vanished", run_title: "", known: false, runnable: false, next_at: "" }] }),
     );
     render(fakeService().svc);
 
     const row = await screen.findByTestId("schedule-row-0");
     expect(row).toHaveTextContent("vanished");
-    expect(screen.getByTestId("schedule-unknown-0")).toBeInTheDocument();
+    expect(row).toHaveTextContent(word("schedules.unknownWorkflow"));
   });
 
   it("shows a refused row with its problem, so the line can be fixed or removed", async () => {
@@ -179,12 +203,12 @@ describe("WorkflowsModal — schedules", () => {
   it("says a due row runs on the next sweep rather than inventing a time", async () => {
     listMock.mockResolvedValue([]);
     schedulesMock.mockResolvedValue(
-      schedules({ rows: [{ ...NIGHTLY, next_at: "", due_now: true, next_run: "on the next sweep (this period is already due and has not run yet)" }] }),
+      schedules({ rows: [{ ...NIGHTLY, next_at: "", due_now: true }] }),
     );
     render(fakeService().svc);
 
     const row = await screen.findByTestId("schedule-row-0");
-    expect(row).toHaveTextContent("下一輪");
+    expect(row).toHaveTextContent(word("scheduleOverview.nextSweep"));
     expect(row).not.toHaveTextContent("2026-09-16");
   });
 
@@ -215,15 +239,15 @@ describe("WorkflowsModal — schedules", () => {
     // a well-formed row is not "written wrong" and keeps its workflow's title.
     listMock.mockResolvedValue([{ id: "nightly", title: "Nightly report", phases: [{ id: "a" }] }]);
     const cap = "declares 3 schedules, over the limit of 2 — none will run until it is reduced";
-    const held = { ...NIGHTLY, runnable: false, next_run: "", next_at: "", due_now: false };
+    const held = { ...NIGHTLY, runnable: false, next_at: "", next_ms: null, due_now: false };
     schedulesMock.mockResolvedValue(
-      schedules({ rows: [held, { ...held, index: 1 }, { ...held, index: 2 }], problems: [cap] }),
+      schedules({ rows: [held, { ...held, index: 1 }, { ...held, index: 2 }], files: capProblem([cap]) }),
     );
     render(fakeService().svc);
 
     const row = await screen.findByTestId("schedule-row-0");
     expect(row).toHaveTextContent("Nightly report");
-    expect(row).not.toHaveTextContent("下次");
+    expect(row).not.toHaveTextContent("明天");
     expect(row).not.toHaveTextContent("寫得不對");
     // Said once, under a label that says "problems", not "could not be read".
     expect(screen.getByTestId("schedules-file-problems")).toHaveTextContent("over the limit of 2");
@@ -277,12 +301,12 @@ describe("WorkflowsModal — schedules", () => {
   it("says when the sweep has not been told about the file yet", async () => {
     listMock.mockResolvedValue([]);
     schedulesMock.mockResolvedValue(
-      schedules({ indexed: false, rows: [{ ...NIGHTLY, runnable: false, next_run: "", next_at: "" }] }),
+      schedules({ unindexed: [OWN], rows: [{ ...NIGHTLY, runnable: false, next_at: "", next_ms: null }] }),
     );
     render(fakeService().svc);
 
     expect(await screen.findByTestId("schedules-unindexed")).toBeInTheDocument();
-    expect(screen.getByTestId("schedule-row-0")).not.toHaveTextContent("下次");
+    expect(screen.getByTestId("schedule-row-0")).not.toHaveTextContent("明天");
   });
 
   it("a row whose `every` is null reads as daily, as the parser reads it", async () => {
@@ -304,7 +328,7 @@ describe("WorkflowsModal — schedules", () => {
     // not seen on a sweep-off deployment is a file that will not run, full stop.
     listMock.mockResolvedValue([]);
     schedulesMock.mockResolvedValue(
-      schedules({ enabled: false, indexed: false, rows: [{ ...NIGHTLY, runnable: false }] }),
+      schedules({ enabled: false, unindexed: [OWN], rows: [{ ...NIGHTLY, runnable: false }] }),
     );
     render(fakeService().svc);
 
@@ -375,8 +399,8 @@ describe("WorkflowsModal — schedules", () => {
           {
             ...NIGHTLY,
             runnable: false,
-            next_run: "",
             next_at: "",
+            next_ms: null,
             run_problem: "steps[0]: `cache` is required — …",
           },
         ],
@@ -384,10 +408,10 @@ describe("WorkflowsModal — schedules", () => {
     );
     render(fakeService().svc);
 
-    const note = await screen.findByTestId("schedule-broken-0");
-    expect(note).toHaveTextContent("`cache` is required");
-    expect(screen.getByTestId("schedule-row-0")).not.toHaveTextContent("下次");
-    expect(screen.queryByTestId("schedule-unknown-0")).toBeNull();
+    const row = await screen.findByTestId("schedule-row-0");
+    expect(row).toHaveTextContent("`cache` is required");
+    expect(row).not.toHaveTextContent("明天");
+    expect(row).not.toHaveTextContent(word("schedules.unknownWorkflow"));
   });
 
   // One row's acts go through the row routes (docs/plan-schedule-overview.md
@@ -400,16 +424,15 @@ describe("WorkflowsModal — schedules", () => {
     removeMock.mockResolvedValue(undefined);
     render(fakeService().svc);
 
-    const button = await screen.findByTestId("schedule-remove-0");
-    // The destructive act looks like one (the overview's Remove does too).
-    // (happy-dom drops `var()` from computed style, so read the attribute.)
-    expect(button.getAttribute("style")).toContain("color: var(--err)");
+    const button = await removeButton();
+    // The destructive act looks like one — the overview's own Remove (G9).
+    expect(button).toHaveAttribute("data-variant", "danger");
     fireEvent.click(button);
     fireEvent.click(await screen.findByRole("button", { name: "移除" }));
 
     await waitFor(() =>
       expect(removeMock).toHaveBeenCalledWith("playground", "inv1", {
-        path: ".workflows/schedules.json",
+        path: OWN,
         trigger_id: "wui:it:nightly",
         raw: undefined,
         index: undefined,
@@ -424,20 +447,20 @@ describe("WorkflowsModal — schedules", () => {
     removeMock.mockResolvedValue(undefined);
     render(fakeService().svc);
 
-    fireEvent.click(await screen.findByTestId("schedule-remove-0"));
+    fireEvent.click(await removeButton());
     fireEvent.click(await screen.findByRole("button", { name: "移除" }));
 
     await waitFor(() =>
       expect(removeMock).toHaveBeenCalledWith("playground", "inv1", {
-        path: ".workflows/schedules.json",
+        path: OWN,
         trigger_id: "",
         raw: 5,
         index: 0,
       }),
     );
     // Nothing to move or run on a row that never fires.
-    expect(screen.queryByTestId("schedule-edit-0")).toBeNull();
-    expect(screen.queryByTestId("schedule-run-0")).toBeNull();
+    expect(screen.queryByRole("button", { name: word("schedules.editTime") })).toBeNull();
+    expect(screen.queryByRole("button", { name: word("schedules.runNow") })).toBeNull();
   });
 
   it("a row removed here also refreshes the schedules overview", async () => {
@@ -450,7 +473,7 @@ describe("WorkflowsModal — schedules", () => {
     removeMock.mockResolvedValue(undefined);
     render(fakeService().svc);
 
-    fireEvent.click(await screen.findByTestId("schedule-remove-0"));
+    fireEvent.click(await removeButton());
     fireEvent.click(await screen.findByRole("button", { name: "移除" }));
 
     await waitFor(() =>
@@ -465,7 +488,7 @@ describe("WorkflowsModal — schedules", () => {
     schedulesMock.mockResolvedValue(schedules());
     render(fakeService().svc);
 
-    fireEvent.click(await screen.findByTestId("schedule-remove-0"));
+    fireEvent.click(await removeButton());
     fireEvent.click(await screen.findByRole("button", { name: "取消" }));
 
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "移除排程" })).toBeNull());
@@ -478,21 +501,22 @@ describe("WorkflowsModal — schedules", () => {
     removeMock.mockRejectedValue(new ScheduleActionError(409, "This schedule has changed"));
     render(fakeService().svc);
 
-    fireEvent.click(await screen.findByTestId("schedule-remove-0"));
+    fireEvent.click(await removeButton());
     fireEvent.click(await screen.findByRole("button", { name: "移除" }));
 
-    expect(await screen.findByTestId("schedule-said-0")).toHaveTextContent("This schedule has changed");
+    expect(await within(screen.getByTestId("schedule-row-0")).findByRole("alert")).toHaveTextContent(
+      "This schedule has changed",
+    );
   });
 
   it("offers a reader no way to change or run a schedule", async () => {
     listMock.mockResolvedValue([]);
-    schedulesMock.mockResolvedValue(schedules({ can_edit: false, can_run: false }));
+    schedulesMock.mockResolvedValue(schedules({ rows: [{ ...NIGHTLY, can_edit: false, can_run: false }] }));
     render(fakeService().svc);
 
-    await screen.findByTestId("schedule-row-0");
-    expect(screen.queryByTestId("schedule-remove-0")).toBeNull();
-    expect(screen.queryByTestId("schedule-edit-0")).toBeNull();
-    expect(screen.queryByTestId("schedule-run-0")).toBeNull();
+    const row = await screen.findByTestId("schedule-row-0");
+    // Not Remove, not Edit time, not Run now — and not "Run as me" either.
+    expect(within(row).queryByRole("button")).toBeNull();
   });
 
   it("runs a schedule now and says so", async () => {
@@ -504,9 +528,11 @@ describe("WorkflowsModal — schedules", () => {
     const { QueryClient } = await import("@tanstack/react-query");
     const { qk } = await import("../api/queryKeys");
     const spy = vi.spyOn(QueryClient.prototype, "invalidateQueries");
-    fireEvent.click(await screen.findByTestId("schedule-run-0"));
+    fireEvent.click(await screen.findByRole("button", { name: word("schedules.runNow") }));
 
-    expect(await screen.findByTestId("schedule-said-0")).toHaveTextContent("已開始執行");
+    expect(await within(screen.getByTestId("schedule-row-0")).findByRole("status")).toHaveTextContent(
+      word("schedules.started"),
+    );
     // The run is an execution: this item's Workflows sidebar list refreshes now
     // (plan-workflow-out-of-chat D7; the schedule's conversation is not a chat).
     await waitFor(() =>
@@ -515,7 +541,7 @@ describe("WorkflowsModal — schedules", () => {
       ),
     );
     expect(runNowMock).toHaveBeenCalledWith("playground", "inv1", {
-      path: ".workflows/schedules.json",
+      path: OWN,
       trigger_id: "wui:it:nightly",
       raw: undefined,
       index: undefined,
@@ -528,7 +554,7 @@ describe("WorkflowsModal — schedules", () => {
     editTimeMock.mockResolvedValue(undefined);
     render(fakeService().svc);
 
-    fireEvent.click(await screen.findByTestId("schedule-edit-0"));
+    fireEvent.click(await screen.findByRole("button", { name: word("schedules.editTime") }));
     const modal = await screen.findByTestId("schedule-time-modal");
     fireEvent.change(within(modal).getByLabelText("時"), { target: { value: "07" } });
     fireEvent.change(within(modal).getByLabelText("分"), { target: { value: "15" } });
@@ -538,8 +564,37 @@ describe("WorkflowsModal — schedules", () => {
     expect(editTimeMock).toHaveBeenCalledWith(
       "playground",
       "inv1",
-      { path: ".workflows/schedules.json", trigger_id: "wui:it:nightly", raw: undefined, index: undefined },
+      { path: OWN, trigger_id: "wui:it:nightly", raw: undefined, index: undefined },
       expect.objectContaining({ every: "daily", at: "07:15", tz: "Asia/Taipei" }),
     );
+  });
+
+  it("lists a page's schedules too, saying which page — the overview narrowed to this item (G10)", async () => {
+    listMock.mockResolvedValue([]);
+    schedulesMock.mockResolvedValue(
+      schedules({
+        rows: [NIGHTLY, { ...NIGHTLY, path: "/report/schedules.json", page_title: "Weekly report", trigger_id: "k2" }],
+      }),
+    );
+    render(fakeService().svc);
+
+    expect(await screen.findByTestId("schedule-row-0")).toHaveTextContent(word("scheduleOverview.itemOwn"));
+    expect(screen.getByTestId("schedule-row-1")).toHaveTextContent(
+      word("scheduleOverview.page", { page: "Weekly report" }),
+    );
+    expect(schedulesMock).toHaveBeenCalledWith("playground", "inv1");
+  });
+
+  it("says who each schedule runs as and why, with the overview's words (G8/G9)", async () => {
+    listMock.mockResolvedValue([]);
+    schedulesMock.mockResolvedValue(schedules({ rows: [{ ...NIGHTLY, runs_as: "bob", runs_as_reason: "author" }] }));
+    render(fakeService().svc);
+
+    const row = await screen.findByTestId("schedule-row-0");
+    expect(row).toHaveTextContent(word("scheduleOverview.col.runsAs"));
+    expect(within(row).getByTestId("runs-as")).toHaveTextContent(
+      word("sched.runsAsWhy", { main: word("sched.runsAs", { who: "bob" }), why: word("sched.why.author") }),
+    );
+    expect(within(row).getByRole("button", { name: word("sched.replaceMe") })).toBeInTheDocument();
   });
 });
