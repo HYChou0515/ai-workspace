@@ -406,3 +406,57 @@ async def test_without_anything_to_credit_the_reply_does_not_claim_who_a_row_run
 
     assert "saved 1 schedule" in out
     assert "runs as" not in out
+
+
+def _reads_fail(monkeypatch, path: str, *, on: int) -> None:
+    """The ``on``-th read of ``path`` fails (other reads pass through)."""
+    real = WorkspaceFiles.read
+    calls = {"n": 0}
+
+    async def _flaky(self, workspace_id, p):
+        if p.lstrip("/") == path.lstrip("/"):
+            calls["n"] += 1
+            if calls["n"] == on:
+                raise OSError("host hiccup")
+        return await real(self, workspace_id, p)
+
+    monkeypatch.setattr(WorkspaceFiles, "read", _flaky)
+
+
+async def test_a_read_before_save_schedules_that_fails_still_saves(clock, monkeypatch) -> None:
+    """Review round 2 (veracity 4): reading the file as it was is only for
+    crediting — failing, the save goes ahead and credits nobody."""
+    ctx = _ctx()
+    bindings = _authored(ctx, acting_for="carol")
+    await _with_workflow(ctx)
+    _reads_fail(monkeypatch, SCHEDULES, on=1)
+
+    out = await save_schedules_impl(ctx, _rows({"every": "daily", "at": "09:00", "run": "nightly"}))
+
+    assert "saved 1 schedule" in out
+    assert bindings.for_item("inv-1") == []
+
+
+@pytest.mark.parametrize("on", [1, 3])
+async def test_an_edit_file_whose_reads_fail_still_reports_the_edit(clock, monkeypatch, on) -> None:
+    """The read before (1) and the read-back after (3 — the edit itself reads
+    the file as the 2nd) are only for crediting: an edit that LANDED is
+    reported as edited, credited to nobody."""
+    from workspace_app.agent.tools import edit_file_impl
+
+    ctx = _ctx()
+    await _with_workflow(ctx)
+    first = {"every": "daily", "at": "09:00", "run": "nightly"}
+    await ctx.context.files.write("inv-1", SCHEDULES, _rows(first).encode())
+    bindings = _authored(ctx, acting_for="carol")
+    _reads_fail(monkeypatch, SCHEDULES, on=on)
+
+    out = await edit_file_impl(
+        ctx,
+        ".workflows/schedules.json",
+        _rows(first),
+        _rows(first, {"every": "daily", "at": "18:00", "run": "nightly"}),
+    )
+
+    assert out.startswith("edited"), out
+    assert bindings.for_item("inv-1") == []

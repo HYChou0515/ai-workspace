@@ -122,7 +122,12 @@ export function WorkflowsModal({
   const importFiles = async (files: FileList) => {
     setBusy(true);
     try {
-      for (const f of Array.from(files)) {
+      // schedules.json LAST: a row is credited to the importer only if the
+      // workflow it runs parses at that moment (docs/plan-schedule-run-as.md).
+      const ordered = Array.from(files).sort(
+        (a, b) => Number(a.name === "schedules.json") - Number(b.name === "schedules.json"),
+      );
+      for (const f of ordered) {
         await fileService.writeFile(`${WORKFLOWS_DIR}/${f.name}`, await f.arrayBuffer());
       }
       await qc.invalidateQueries({ queryKey: qk.workspaceWorkflows(slug, itemId) });

@@ -405,7 +405,7 @@ A row that reached the file another way runs with nobody's private values, and
 so does one whose person pressed **Stop running as me**. **Changing a row** makes
 it a new schedule, written by whoever changed it — it runs as them from then
 on, and a person who had chosen **Run as me** on the old row is told their
-name is off it. A page written as if a personal token is always present works while
+name is off it — unless they changed it themselves and the new row is theirs. A page written as if a personal token is always present works while
 somebody is clicking and fails every night — the "it worked when I tested it"
 bug in its purest form.
 

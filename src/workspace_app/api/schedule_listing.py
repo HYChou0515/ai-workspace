@@ -449,11 +449,19 @@ def register_schedule_overview_routes(
         # row — runs as the person who saved it. Compared against the file as it
         # is just before this write; a row another writer removed after the
         # caller read `doc` counts as added here (plan: known limits).
-        before = (
-            (await files.read(item_id, path)).decode("utf-8", "replace") if authorship else None
-        )
+        credit = authorship is not None
+        before: str | None = None
+        if credit:
+            # Only crediting reads it: failing, the save goes ahead and credits
+            # nobody (review round 2) — never a refused edit.
+            try:
+                before = (await files.read(item_id, path)).decode("utf-8", "replace")
+            except Exception:  # noqa: BLE001 — logged; the save stands
+                logger.exception("schedules: could not read %s %s before saving", item_id, path)
+                credit = False
         await files.write(item_id, path, after.encode())
-        if authorship is not None:
+        if credit:
+            assert authorship is not None  # narrow for ty
             await authorship.credit(item_id, path, before=before, after=after, author=get_user_id())
         on_saved(item_id, path)
 

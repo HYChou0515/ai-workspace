@@ -791,8 +791,8 @@ export const messages = {
   "schedules.edit.zoneYours": { "zh-TW": "時區：{zone}（你的時區）", en: "Time zone: {zone} (yours)" },
   "schedules.edit.note": {
     "zh-TW":
-      "存檔後會變成一條新的排程：從下一個時間點開始執行（不會補跑），執行紀錄從頭算，之後用你的身分執行（改的人就是它的作者）。",
-    en: "Saving makes this a new schedule: it runs from the next time on (nothing is caught up), its run history starts over, and from then on it runs as you — whoever changes it is its author.",
+      "存檔後會變成一條新的排程：從下一個時間點開始執行（不會補跑），執行紀錄從頭算，之後用你的身分執行（改的人就是它的作者；它要跑的 workflow 解析不了時例外，那時只用共用的值）。",
+    en: "Saving makes this a new schedule: it runs from the next time on (nothing is caught up), its run history starts over, and from then on it runs as you — whoever changes it is its author — unless the workflow it runs will not parse, in which case it runs with the shared values only.",
   },
   "schedules.edit.noteNobody": {
     "zh-TW":

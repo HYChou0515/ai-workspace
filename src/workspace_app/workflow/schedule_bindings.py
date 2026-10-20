@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import logging
 from collections.abc import Awaitable, Callable
 
@@ -40,7 +41,7 @@ from msgspec import Struct
 from specstar import QB, SpecStar
 from specstar.types import ResourceIDNotFoundError
 
-from .user_schedules import UserSchedule, file_rows, over_cap, trigger_id_for, usable_rows
+from .user_schedules import UserSchedule, over_cap, trigger_id_for, usable_rows
 from .workspace_store import load_workspace_workflow_digested
 
 logger = logging.getLogger(__name__)
@@ -156,6 +157,10 @@ class ScheduleBindings:
             rows.append(data)
         return rows
 
+    def holders(self, item_id: str, path: str) -> set[str]:
+        """Who runs some row of the schedules file ``path``."""
+        return {b.user_id for b in self.for_item(item_id) if b.path == path}
+
     def purge_item(self, item_id: str) -> None:
         """Every binding of one item — the item-delete cascade's step."""
         for b in self.for_item(item_id):
@@ -248,8 +253,14 @@ class ScheduleAuthorship:
         # A file that was there but could not be read had rows nobody can name:
         # the fix that makes them readable did not ADD them (review round 1,
         # defect 1 — every row of a once-broken file went to whoever fixed it).
-        if before is not None and file_rows(before) is None:
-            return []
+        # Only text that is not JSON at all is that. An EMPTY file, `{}`, or
+        # `{"schedules": null}` holds no rows (review round 2): the file tree's
+        # New file writes "" before the person's first save.
+        if before is not None and before.strip():
+            try:
+                json.loads(before)
+            except ValueError:
+                return []
         if self._max_rows is not None and over_cap(after, self._max_rows) is not None:
             return []
         old = {key for key, _row in file_keys(item_id, path, before)} if before else set()

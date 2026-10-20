@@ -327,7 +327,9 @@ class UserScheduleSweeper:
             return "", None
         if await self._workflow_changed(item_id, workflow_id, binding.workflow_digest):
             await asyncio.to_thread(bindings.unbind, trigger_id)
-            await self._tell(binding, "changed")
+            # The ROW is unchanged — its workflow is not: a reason of its own, so
+            # the notice says what happened (review round 2).
+            await self._tell(binding, "workflow_changed")
             return "", None
         return binding.user_id, binding.workflow_digest
 
@@ -411,11 +413,20 @@ class UserScheduleSweeper:
         except Exception:  # noqa: BLE001 — one item's bookkeeping must not cost the tick
             logger.exception("user schedules: %s %s: could not check bindings", item_id, path)
             return
+        # Who still runs a row of this file: a person who changed their own row
+        # is credited the new one, and "it no longer runs as you" would be false
+        # (review round 2). Per FILE, not per row — the new row cannot be linked
+        # to the old one, so a person holding two rows here is not told when
+        # someone else changes one of them (plan: known limits).
+        try:
+            still = await asyncio.to_thread(self._bindings.holders, item_id, path)
+        except Exception:  # noqa: BLE001 — then everyone dropped is told, as before
+            logger.exception("user schedules: %s %s: could not re-read bindings", item_id, path)
+            still = set()
         for binding in gone:
             # A row someone WROTE (plan-schedule-run-as G2) was never a "Run as
-            # me" they chose; "choose it again" would be false, and when they
-            # changed the row themselves the new one is already theirs.
-            if binding.reason == "author":
+            # me" they chose; "choose it again" would be false.
+            if binding.reason == "author" or binding.user_id in still:
                 continue
             await self._tell(binding, "changed")
 

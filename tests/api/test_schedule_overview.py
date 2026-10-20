@@ -1145,6 +1145,40 @@ def test_whoever_changes_a_schedules_time_is_who_it_then_runs_as():
     assert _runs_as(client, iid, PAGE_SCHEDULES) == [("carol", "author")]
 
 
+def test_a_change_of_time_whose_crediting_read_fails_still_changes_the_time(monkeypatch):
+    """Review round 2 (veracity 4): the read just before the write is only for
+    crediting — failing, the new time is saved and credited to nobody."""
+    from workspace_app.files import WorkspaceFiles
+
+    holder = {"id": "bob"}
+    client, spec, _ = _client_and_spec(holder)
+    iid = _item(spec, by="bob", permission=COLLABORATOR)
+    _put(client, iid, "/.workflows/w0.json", _workflow("w0"))
+    _put(client, iid, PAGE_SCHEDULES, _schedules({"every": "daily", "at": "09:00", "run": "w0"}))
+    before = _row_of(client, PAGE_SCHEDULES)
+    holder["id"] = "carol"
+    real = WorkspaceFiles.read
+    calls = {"n": 0}
+
+    async def _second_fails(self, workspace_id, path):
+        if path == PAGE_SCHEDULES:
+            calls["n"] += 1
+            if calls["n"] == 2:  # 1 = the route finding the row, 2 = crediting's
+                raise OSError("host hiccup")
+        return await real(self, workspace_id, path)
+
+    monkeypatch.setattr(WorkspaceFiles, "read", _second_fails)
+
+    r = client.post(
+        _wp(iid, "/schedules/edit"),
+        json={"path": PAGE_SCHEDULES, "trigger_id": before["trigger_id"], "every": "hourly"},
+    )
+
+    assert r.status_code == 200, r.text
+    monkeypatch.setattr(WorkspaceFiles, "read", real)
+    assert _runs_as(client, iid, PAGE_SCHEDULES) == [("", "")]
+
+
 def test_each_row_says_who_it_runs_as_and_why():
     """G8: the overview row names the person and the reason — here, bob wrote it."""
     holder = {"id": "bob"}

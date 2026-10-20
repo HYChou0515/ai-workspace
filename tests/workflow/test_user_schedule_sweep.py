@@ -2130,6 +2130,58 @@ def test_an_authors_row_that_was_edited_drops_quietly():
     assert expired == []
 
 
+def test_a_person_who_changed_their_own_row_is_not_told_it_stopped_running_as_them():
+    """Review round 2 (veracity 2): carol chose "Run as me", then changed the
+    row's time herself — the new row is credited to her. The old key expiring
+    must not tell her "no longer runs with your values"."""
+    from workspace_app.workflow.schedule_bindings import (
+        ScheduleBindings,
+        register_schedule_bindings,
+    )
+
+    spec = _spec()
+    register_schedule_bindings(spec)
+    ScheduleIndex(spec).record(ITEM, PATH)
+    bindings = ScheduleBindings(spec)
+    moved = {**DAILY, "at": "10:00"}
+    bindings.bind(_key(DAILY), item_id=ITEM, path=PATH, user_id="carol")
+    bindings.bind(_key(moved), item_id=ITEM, path=PATH, user_id="carol", reason="author")
+    started, expired = _Started(), []
+    files = _Files(**{f"{ITEM}{PATH}": _file(moved)})
+
+    asyncio.run(_bound_sweeper(spec, files, started, datetime(2026, 9, 5, 9, 30), expired).tick())
+
+    assert bindings.binder(_key(DAILY)) == ""
+    assert bindings.binder(_key(moved)) == "carol"
+    assert expired == []
+
+
+def test_bindings_that_cannot_be_re_read_after_expiring_tell_everyone_dropped(monkeypatch):
+    """The re-read that spares a person their own edit is a refinement: when it
+    fails, the dropped binders are told — the notice rather than the silence."""
+    from workspace_app.workflow.schedule_bindings import (
+        ScheduleBindings,
+        register_schedule_bindings,
+    )
+
+    spec = _spec()
+    register_schedule_bindings(spec)
+    ScheduleIndex(spec).record(ITEM, PATH)
+    bindings = ScheduleBindings(spec)
+    bindings.bind(_key(DAILY), item_id=ITEM, path=PATH, user_id="bob")
+
+    def _down(self, item_id, path):
+        raise RuntimeError("store hiccup")
+
+    monkeypatch.setattr(ScheduleBindings, "holders", _down)
+    started, expired = _Started(), []
+    files = _Files(**{f"{ITEM}{PATH}": _file({**DAILY, "at": "10:00"})})
+
+    asyncio.run(_bound_sweeper(spec, files, started, datetime(2026, 9, 5, 9, 30), expired).tick())
+
+    assert [(b.user_id, b.why) for b in expired] == [("bob", "changed")]
+
+
 def test_a_binder_who_lost_access_no_longer_lends_their_values():
     """Review round 1 (C2/F1): removed from the item, a binder's values kept
     reaching every fire — and they could not even see the schedule to take their
@@ -2272,7 +2324,7 @@ def test_swapping_the_workflow_a_bound_schedule_runs_drops_the_binding():
     asyncio.run(_bound_sweeper(spec, files, started, datetime(2026, 9, 5, 9, 30), expired).tick())
 
     assert started.env_users == [""]
-    assert [(b.user_id, b.why) for b in expired] == [("bob", "changed")]
+    assert [(b.user_id, b.why) for b in expired] == [("bob", "workflow_changed")]
     assert ScheduleBindings(spec).binder(key) == ""
 
 
@@ -2351,7 +2403,7 @@ def test_deleting_the_workflow_a_bound_schedule_runs_drops_the_binding():
     asyncio.run(_bound_sweeper(spec, files, started, datetime(2026, 9, 5, 9, 30), expired).tick())
 
     assert started.env_users == [""]
-    assert [(b.user_id, b.why) for b in expired] == [("bob", "changed")]
+    assert [(b.user_id, b.why) for b in expired] == [("bob", "workflow_changed")]
     assert ScheduleBindings(spec).binder(key) == ""
 
 

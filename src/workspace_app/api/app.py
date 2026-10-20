@@ -1435,6 +1435,14 @@ def create_app(
                 f"You no longer have permission to run work in the item that holds "
                 f"{binding.path}, so its schedule stopped using your values."
             )
+        elif why == "workflow_changed":
+            title = "A schedule that ran as you now runs a changed workflow"
+            body = (
+                f"The workflow a schedule in {binding.path} runs was changed since it was "
+                "set to run as you, so it no longer runs with your values. Check the "
+                "workflow, then find the schedule on the Schedules page or in the item's "
+                "Workflows panel and choose “Run as me” again if you still want it to."
+            )
         else:
             title = "A schedule that ran as you was changed"
             body = (

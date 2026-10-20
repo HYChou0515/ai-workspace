@@ -616,4 +616,22 @@ describe("WorkflowsModal — schedules", () => {
     await waitFor(() => expect(screen.getByTestId("schedule-row-0")).toHaveTextContent("Other"));
     expect(screen.getByTestId("schedule-row-0")).not.toHaveTextContent(word("schedules.started"));
   });
+
+  it("imports the schedules after the workflows they run (review round 2)", async () => {
+    // A row is credited to the importer only if its workflow parses at that
+    // moment — written first, schedules.json would name a workflow not there yet.
+    listMock.mockResolvedValue([]);
+    schedulesMock.mockResolvedValue(schedules());
+    const { svc, writes } = fakeService();
+    render(svc);
+    await screen.findByTestId("schedule-row-0");
+
+    const input = screen.getByTestId("workflows-import-input") as HTMLInputElement;
+    const sched = new File(['{"schedules": []}'], "schedules.json", { type: "application/json" });
+    const weekly = new File(["{}"], "weekly.json", { type: "application/json" });
+    fireEvent.change(input, { target: { files: [sched, weekly] } });
+
+    await waitFor(() => expect(writes).toHaveLength(2));
+    expect(writes.map((w) => w.path)).toEqual([".workflows/weekly.json", ".workflows/schedules.json"]);
+  });
 });

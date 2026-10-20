@@ -899,8 +899,13 @@ async def edit_file_impl(
     current = await fs.edit(inv, path, old_string, new_string)
     if current is None:
         if before is not None:
-            after = (await fs.read(inv, path)).decode("utf-8", "replace")
-            await _credit_schedules(ctx, inv, path, before=before, after=after)
+            # The edit LANDED: a failed read-back only means nobody is credited.
+            try:
+                after = (await fs.read(inv, path)).decode("utf-8", "replace")
+            except Exception:  # noqa: BLE001 — only crediting depends on it
+                _LOGGER.exception("schedules: could not read back %s", path)
+            else:
+                await _credit_schedules(ctx, inv, path, before=before, after=after)
         return f"edited {rel_path(path)}"
     # This impl required `read_content` above, so `_conflict_echo` normally
     # cannot refuse — but "normally" is not "never": `authorize_tool` re-reads
@@ -922,7 +927,8 @@ async def _schedules_before(
     ctx: RunContextWrapper[AgentToolContext], inv: str, path: str
 ) -> str | None:
     """A schedules file as it is before this turn changes it — None when the
-    path is not one, or nothing will credit the change."""
+    path is not one, nothing will credit the change, or it cannot be read (the
+    write still goes ahead; it just credits nobody — review round 2)."""
     from ..api.schedule_index import is_schedule_file
 
     if ctx.context.schedule_authorship is None or not is_schedule_file(abs_path(path)):
@@ -931,6 +937,9 @@ async def _schedules_before(
         fs, _ = _workspace(ctx)
         return (await fs.read(inv, path)).decode("utf-8", "replace")
     except FileNotFound:
+        return None
+    except Exception:  # noqa: BLE001 — only crediting depends on it
+        _LOGGER.exception("schedules: could not read %s before changing it", path)
         return None
 
 
@@ -3455,14 +3464,20 @@ async def save_schedules_impl(ctx: RunContextWrapper[AgentToolContext], schedule
     doc = json.loads(schedules_json)
     authorship = ctx.context.schedule_authorship
     before: str | None = None
+    credit = authorship is not None
     if authorship is not None:
-        with contextlib.suppress(FileNotFound):
+        try:
             before = (await files.read(inv, ITEM_SCHEDULES_PATH)).decode("utf-8", "replace")
+        except FileNotFound:
+            pass
+        except Exception:  # noqa: BLE001 — the save goes ahead, credited to nobody
+            _LOGGER.exception("save_schedules: could not read %s before saving", inv)
+            credit = False
     written = json.dumps({"schedules": doc["schedules"]}, indent=2)
     await files.write(inv, ITEM_SCHEDULES_PATH, written.encode())
     # plan-schedule-run-as G2: the rows this save ADDS run as the person the
     # turn acts for — never the rows that were already there.
-    if authorship is not None:
+    if authorship is not None and credit:
         await authorship.credit(
             inv, ITEM_SCHEDULES_PATH, before=before, after=written, author=ctx.context.acting_for
         )

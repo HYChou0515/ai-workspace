@@ -179,6 +179,21 @@ def test_a_file_that_was_broken_before_the_save_hands_its_rows_to_nobody():
     assert {r["bound_to"] for r in _list(client, rid)} == {""}
 
 
+@pytest.mark.parametrize("empty", ["", "  \n", "{}", '{"schedules": null}'])
+def test_a_file_created_empty_then_saved_credits_whoever_saved_it(empty):
+    """Review round 2 (veracity 1): the file tree's "New file" writes "" first,
+    so the editor's first save arrives with an EMPTY before. Empty is "no rows",
+    not "could not be read" — the person typing them in wrote them."""
+    client, holder, rid, _ = _world(seeded=True)
+    holder["id"] = "carol"
+    client.put(f"/a/rca/items/{rid}/files/new/schedules.json", content=empty)
+
+    client.put(f"/a/rca/items/{rid}/files/new/schedules.json", content=_rows(DAILY))
+
+    r = client.get(f"/a/rca/items/{rid}/schedule-bindings", params={"path": "/new/schedules.json"})
+    assert [(row["bound_to"], row["reason"]) for row in r.json()["rows"]] == [("carol", "author")]
+
+
 def test_a_file_over_the_row_cap_credits_nobody():
     """Review round 1 (defect 2): a file over the cap never fires, and the sweep
     does not expire bindings while it stays over — so crediting its rows would
@@ -421,6 +436,45 @@ def test_a_binding_from_another_item_cannot_be_taken_off_through_this_one():
 
     assert r.status_code == 404
     assert ScheduleBindings(spec).binder("foreign-key") == "carol"
+
+
+def test_the_app_says_the_workflow_changed_when_that_is_what_dropped_a_binding():
+    """Review round 2 (defect 4): the row is unchanged and its WORKFLOW was
+    rewritten — the notice must say that, not "the schedule was edited"."""
+    from workspace_app.api.notifications import Notification
+
+    client, holder, rid, spec = _world(seeded=True)
+    nightly = {
+        "id": "x",
+        "title": "Nightly",
+        "phases": [{"id": "p"}],
+        "steps": [{"type": "agent", "cache": True, "prompt": "hi", "phase": "p", "out": "o.md"}],
+    }
+    with client:
+        base = f"/a/rca/items/{rid}/files"
+        wf = f"{base}/.workflows/nightly.json"
+        assert client.put(wf, content=json.dumps(nightly)).status_code == 204
+        rows = json.dumps({"schedules": [{"every": "minutes", "n": 1, "run": "nightly"}]})
+        _seed(spec, rid, rows)
+        ScheduleIndex(spec).record(rid, FILE)
+        holder["id"] = "carol"
+        (row,) = _list(client, rid)
+        assert _bind(client, rid, row["trigger_id"]).status_code == 200
+        holder["id"] = "bob"
+        changed = {**nightly, "title": "Nightly (payroll)"}
+        assert client.put(wf, content=json.dumps(changed)).status_code == 204
+
+        ScheduleIndex(spec).stamp(rid, FILE, 0)
+        assert client.portal is not None
+        client.portal.call(client.app.state.user_schedule_sweeper.tick)
+
+    notices = [
+        (r.data.kind, r.data.body)
+        for r in spec.get_resource_manager(Notification).list_resources()
+        if r.data.recipient == "carol"
+    ]
+    assert [k for k, _ in notices] == ["schedule_binding_workflow_changed"]
+    assert "workflow" in notices[0][1]
 
 
 def test_the_app_drops_a_binding_whose_binder_was_removed_and_says_why():
