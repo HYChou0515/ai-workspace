@@ -156,6 +156,38 @@ def test_a_person_in_the_chat_sees_a_sign_in_message_after_their_question():
     assert runner.envs == [{}]
 
 
+def test_the_sign_in_message_is_streamed_live_under_the_question():
+    """The demo found it: the thread's persisted copy reaches a viewer only
+    when the store "catches up" with the live log, and a turn whose live log
+    holds more entries than the store (one streamed answer persisted as one
+    message) never does — so the notice is announced live too, right after the
+    question, the way #624 announces its own (`context_trimmed`)."""
+    from workspace_app.api.events import SignInExpired, UserMessage
+
+    client, _runner, item_id, spec = _send_app(None, user="alice")
+    _sign_ins(client, _dead())
+    PrivateEnvStore(spec).replace_personal("alice", OLD)
+    engine = cast(FastAPI, client.app).state.chat_send._turn_engine
+    published: list[object] = []
+    real = engine.publish
+
+    def spy(key, event):  # noqa: ANN001, ANN202
+        published.append(event)
+        return real(key, event)
+
+    engine.publish = spy
+
+    with client:
+        client.post(f"/a/playground/items/{item_id}/messages", json={"content": "hi"})
+
+    kinds = [type(e).__name__ for e in published if isinstance(e, (UserMessage, SignInExpired))]
+    assert kinds == ["UserMessage", "SignInExpired"]
+    (live,) = [e for e in published if isinstance(e, SignInExpired)]
+    assert (live.provider, live.layer) == ("erp", "personal")
+    assert live.text == _thread(spec)[1].content
+    assert live.created_at == _thread(spec)[1].created_at
+
+
 async def test_a_goal_round_tells_the_person_by_notification():
     client, _runner, item_id, spec = _send_app(None, user="admin")
     _sign_ins(client, _dead())

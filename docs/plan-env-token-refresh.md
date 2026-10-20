@@ -162,6 +162,7 @@ also not enough; offer some potential remedies」「guess the correct action and
 | A9 | 寫回 | 寫回是 patch：寫的當下重讀那一層，只有這次換的名稱還是送出去的那組值時，才設新值（或清掉失效的）；其他名稱照現況。Shared 在 item 的 CAS 迴圈裡做 | 第一輪 review：原本把換之前讀的整層寫回去，換的這 30 秒內別人改的值會被蓋掉，登出的值會被寫回來 |
 | A10 | 等別人換 | 對方放掉鎖就再讀一次、沒寫（換失敗）就不再等；對方清掉任一個名稱（登入失效）就也回報失效。部署方 `RefreshRejected` 列的名稱一個都不在這一層時當暫時失敗；沒列全時留下的名稱照留，並寫 warning log | 第一輪 review：原本只看值有沒有變，對方失敗時要白等 30 秒；Shared 的 token 失效時，同時送出的其他人看不到提示 |
 | A11 | 「最後一則」的判斷 | 平台在一輪中途寫的訊息（`sign_in`、#624 的 `notice`）不算（`turnTail`，在 `logFromMessages` 裡）；跨 pod 的 store poll 看到它時走 `reconcile`，也是經 `logFromMessages` 判斷，所以同一個判準 | 第一輪 review：`sign_in` 寫在問題下面、這輪開跑之前，重新整理或另一個 pod 的人會看到這輪「已經結束」 |
+| A12 | 對話裡的提示怎麼到畫面上 | 除了存進對話串的 `sign_in` 訊息，送出時也即時廣播一個 `sign_in_expired` 事件（在 `UserMessage` 之後），畫面以 provider＋時間去重 | 錄 demo 時發現：存進去的那則只有在 store「追上」即時畫面時才會換上；一輪裡串流出來的條目比存下來的多（例如兩段文字存成一則）時永遠追不上，提示要重新整理才看得到。照 #624 的做法（即時的 `context_trimmed`＋存下的 `notice`） |
 | A8 | 兩個並行只換一次的測試 | 以事件排序、不靠時間；鎖本身由「預先佔住鎖」的測試釘住（讓鎖永遠拿得到時它會紅） | in-memory 後端的 create-if-absent 不是原子的，靠時間的版本在負載下偶爾兩個都拿到 |
 
 ## runbook 條目必須寫的事（P7；as-built 為 P8）

@@ -47,7 +47,7 @@ from ..tokens import CallLane
 from ..workcalendar import OffHoursCalendar
 from .env_layers import PersonEnv
 from .env_refresh import DeadSignIn, EnvRefresher, RefreshOutcome
-from .events import GoalUpdated, RunError, TurnEnded, UserMessage
+from .events import GoalUpdated, RunError, SignInExpired, TurnEnded, UserMessage
 from .goal_offhours import build_offhours_calendar, owner_is_active, turn_signature
 from .goal_wrapup import headline, marker_text, night_transcript, write_summary
 from .kb_chat_routes import resolve_max_searches, to_caller_enhancements
@@ -1616,6 +1616,20 @@ class ChatSendService:
                             answers=body.answers,
                         ),
                     )
+                    # plan-env-token-refresh D6: the question's sign-in notices,
+                    # live — the persisted copy alone does not reach a viewer
+                    # whose live log is ahead of the store.
+                    for m in conv.messages:
+                        if m.role == SIGN_IN_ROLE and m.created_at == created:
+                            self._turn_engine.publish(
+                                engine_key,
+                                SignInExpired(
+                                    provider=m.sign_in_provider or "",
+                                    layer=m.sign_in_layer or "private",
+                                    text=m.content,
+                                    created_at=m.created_at,
+                                ),
+                            )
                 # #492: flush the item's live sandbox to durable when THIS turn ends, so
                 # durable lags by at most one turn (guarantee (2)). Runs on the engine's
                 # worker, off this POST's back; a flush failure never fails the turn.

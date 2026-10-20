@@ -1370,6 +1370,20 @@ export function reduceAgent(log: AgentLog, ev: AgentEvent, now: number = Date.no
       entries.push({ kind: "phase", at: now, phase: ev.phase });
       return { ...log, entries };
 
+    case "sign_in_expired": {
+      // plan-env-token-refresh D6. Persisted before it is announced, so a log
+      // hydrated from the thread may hold it already: the backend stamps the
+      // notice ONCE and hands the same value to both, so provider + stamp is
+      // the key (as `user_message` keys on author + stamp).
+      const at = ev.created_at ?? now;
+      const shown = entries.some(
+        (e) => e.kind === "sign_in" && e.provider === ev.provider && e.at === at,
+      );
+      if (shown) return log;
+      entries.push({ kind: "sign_in", text: ev.text, provider: ev.provider, layer: ev.layer, at });
+      return { ...log, entries };
+    }
+
     default:
       // Anything not folded into the feed (e.g. awaiting_human → the run
       // progress view's decision card) leaves the log unchanged.
