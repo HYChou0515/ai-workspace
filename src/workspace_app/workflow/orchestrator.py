@@ -328,11 +328,11 @@ class WorkflowOrchestrator:
     def _get_in(self, run_id: str, item_id: str) -> WorkflowRun:
         """The run, IF it belongs to ``item_id`` — else not found. For the entrances
         that take the item from a URL and the run from an id (`decide`, `steer`,
-        `confirm_steer`, `retry`): without it a run of item A resumed INSIDE item B
-        through B's URL, gated only on B (round 6; with private values on runs it
-        carried or stripped a person's, rounds 5–6). Cancel takes the same shape and
-        does not go through here yet (#870); the run detail and the run stream check
-        the item in the route (plan-workflow-out-of-chat P8)."""
+        `confirm_steer`, `retry`, `cancel`): without it a run of item A resumed INSIDE
+        item B through B's URL, gated only on B (round 6; with private values on runs
+        it carried or stripped a person's, rounds 5–6), and was stopped through B's
+        URL (#870). The run detail and the run stream check the item in the route
+        (plan-workflow-out-of-chat P8)."""
         data = self._get(run_id)
         if data.item_id != item_id:
             raise ResourceIDNotFoundError(run_id)
@@ -1094,9 +1094,12 @@ class WorkflowOrchestrator:
         Before, this returned False and did nothing whenever the task wasn't in this
         pod's `_tasks` — so a Stop routed to a non-owning replica was a silent no-op,
         and even a same-pod Stop only cancelled the DRIVER task, not the separate
-        in-flight turn task (which kept running until it finished on its own)."""
+        in-flight turn task (which kept running until it finished on its own).
+
+        Another item's run is an unknown run (#870): the item comes from the URL
+        and the run from its id, and a Stop through item B's URL stopped item A's."""
         try:
-            data = self._get(run_id)
+            data = self._get_in(run_id, item_id)
         except (ResourceIDNotFoundError, ResourceIsDeletedError):
             return False
         if data.status not in _ACTIVE:
