@@ -199,15 +199,22 @@ def _unreadable(raw: str) -> bool:
     invisible to the sweep and to this check alike)  unreadable
     JSON with nothing in it: ``{}``, ``[]``, ``null``,
     ``{"schedules": null}``, ``{"schedule": []}``…     readable
-    a ``schedules`` list, every other key empty or a
-    plain value (``"version": 1`` — a number or a
-    string can never become a row by being fixed)      readable
-    anything else (a bare row, a mistyped key, a row
-    beside the list, a string where the list goes)   unreadable
+    a ``schedules`` list of objects and nothing else
+    (every other key empty)                            readable
+    anything else: a bare row, a mistyped key, ANY
+    value beside the list (even ``"version": 1``),
+    a list element that is not an object (a row
+    turned into a string), a string where the list
+    goes                                             unreadable
     ===============================================  ==========
 
-    Review rounds 2–6 each found shapes the previous rule misjudged; this
-    table is what they add up to."""
+    Review rounds 2–7 each found shapes the previous rule misjudged; this
+    table is what they add up to — and round 7 found one that a convenience
+    exception had let through (a stringified row beside the list), so there are
+    no exceptions for convenience: a file with a stray value beside its list
+    credits nobody, and its rows' people press "Run as me". An invalid row
+    OBJECT inside a clean list is readable: fixing it changes its key, so it is
+    the fixer's new row (G2 — an edited row belongs to whoever edited it)."""
     if not raw.strip():
         return False
     try:
@@ -216,8 +223,11 @@ def _unreadable(raw: str) -> bool:
         return True
     if _nothing_in(doc):
         return False
-    if file_rows(raw) is not None and isinstance(doc, dict):
-        return any(_holds_content(v) for k, v in doc.items() if k != "schedules")
+    rows = file_rows(raw)
+    if rows is not None and isinstance(doc, dict):
+        if not all(isinstance(r, dict) for r in rows):
+            return True
+        return not all(_nothing_in(v) for k, v in doc.items() if k != "schedules")
     return True
 
 
@@ -230,11 +240,6 @@ def _no_repeated_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
     if len(set(keys)) != len(keys):
         raise _RepeatedKey("repeated key")
     return dict(pairs)
-
-
-def _holds_content(value: object) -> bool:
-    """A list or object with something in it — where a row could be."""
-    return isinstance(value, (list, dict)) and not _nothing_in(value)
 
 
 def _nothing_in(value: object) -> bool:
