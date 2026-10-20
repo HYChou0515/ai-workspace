@@ -9,10 +9,11 @@
  * writes back to the layer the dead token lived in (D3): my environment
  * variables, or this item's Private. A dead SHARED token signs in into this
  * item's Private: the platform already cleared the dead names from the shared
- * copy, and a shared value is only ever read first (shared_first, or
- * private_first with nothing below it), so with it gone Private is the next
- * layer a tool reads — and anyone in the chat can write their own Private,
- * which the shared copy is not.
+ * copy, and a shared value reaches a tool only when no layer before it holds
+ * one (`layer_of`: shared_first reads it first; private_first reads it last;
+ * private_only never), so with it gone a value in Private is what the tool
+ * gets — and anyone in the chat can write their own Private, which the shared
+ * copy is not.
  *
  * No Retry: #892's is bound to the model's tool call, and this message is the
  * platform's — after signing in, the person asks again.

@@ -144,9 +144,10 @@ class IEnvProvider(abc.ABC):
 
         ``values`` are this provider's ``produces`` names as the tool would get
         them now, the refresh token included. Called each time a run is about
-        to hand them to a tool — once per chat message (when it is sent: a long
-        turn's later tool calls are not asked about again, so pick a margin
-        that covers a turn), and once per page tool call, workflow node, goal
+        to hand them to a tool — once per chat message (when it is accepted: a
+        message queued behind a running turn waits first, and that turn's later
+        tool calls are not asked about again, so pick a margin that covers the
+        wait plus a turn), and once per page tool call, workflow node, goal
         round and re-run — so it must be cheap and must not touch the network:
         read a JWT's ``exp``, say, and answer True inside that margin (D2:
         refresh only when a value is about to be used). Default: False."""
@@ -168,8 +169,9 @@ class IEnvProvider(abc.ABC):
         Raise ``RefreshRejected`` whenever you KNOW the token is dead: an
         ordinary exception there means nobody hears of it until a tool fails.
         Name EVERY variable it leaves useless — the expired access token as
-        well as the refresh token: a name left behind still reads as near
-        expiry, so each later run would ask again and be refused again.
+        well as the refresh token. A name left behind stays: an expired access
+        token left with its refresh token cleared still reads as near expiry,
+        and your ``refresh`` is then called with no refresh token to send.
         Bound your own latency, as for ``resolve``; never log a value or put
         one in an exception. Default: not supported."""
         raise NotImplementedError

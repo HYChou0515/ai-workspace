@@ -87,7 +87,7 @@ class RefreshClaims:
 
     def held(self, key: str) -> bool:
         """Whether someone holds `key` now — a waiter's cue that the holder
-        let go without writing anything."""
+        has let go: it reads the layer once more, then stops waiting."""
         try:
             res = self._rm().get(quote(key, safe=""))
         except (ResourceIDNotFoundError, ResourceIsDeletedError):

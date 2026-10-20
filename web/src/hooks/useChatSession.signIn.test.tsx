@@ -57,7 +57,7 @@ describe("useChatSession — a sign-in notice under the question", () => {
     expect(result.current.log.streamingBy).toBe("amy");
   });
 
-  it("is not the reply the store poll is waiting for", async () => {
+  it("stays running for a cross-pod viewer whose store poll sees it (decided by hydration)", async () => {
     const getThread = vi
       .fn()
       .mockResolvedValueOnce({ messages: [question] })

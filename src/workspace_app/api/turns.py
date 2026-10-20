@@ -105,8 +105,8 @@ def _est_tokens(m: Any) -> int:
 
 #: Role of the in-thread marker that says part of a conversation no longer
 #: reaches the model (#624). It is never replayed into LLM history —
-#: `history_items` only folds user/assistant/tool/error — so telling the user
-#: costs the model nothing.
+#: `history_items` replays only user/assistant/tool/summary and a user's
+#: cancellation — so telling the user costs the model nothing.
 CONTEXT_NOTICE_ROLE = "notice"
 #: `docs/plan-env-token-refresh.md` D6: "the sign-in to X has expired" with that
 #: sign-in's button. Its own role, not `notice`: `already_noticed` reads any
