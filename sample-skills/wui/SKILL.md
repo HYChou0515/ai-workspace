@@ -283,10 +283,15 @@ page can show it, edit it and cancel a row by writing the file again. Shape,
 words and the guarantees are in **reference.md**; read it before writing either
 one.
 
-⚠️ **When a schedule fires, nobody is signed in.** There is no request and no
-personal token. A page or tool written as if one is always there works while
-somebody is clicking and fails every night — the "it worked when I tested it"
-bug. Anything a scheduled run needs comes from the item's own environment.
+⚠️ **When a schedule fires, nobody is at the keyboard.** There is no request. A
+row runs with the stored values of ONE person — whoever saved it (the person
+using the page when it wrote `schedules.json`, or the person you were talking to
+when you wrote it with `write_file` / `edit_file`), until they stop it or
+someone takes it over with **Run as me** — and a row nobody saved that way runs
+with the item's shared values only. A page or tool written as if someone is clicking
+works while they are and fails every night — the "it worked when I tested it"
+bug. Anything a scheduled run needs is a value that person stored, or the
+item's own.
 
 ## Working on one
 

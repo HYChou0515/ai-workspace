@@ -24,8 +24,8 @@ from specstar import SpecStar
 from ..files import WorkspaceFiles
 from ..filestore.protocol import FileNotFound
 from ..workflow.offered import unparsable_workflow, wont_parse
-from ..workflow.schedule_bindings import ScheduleBindings, workflow_digest
-from ..workflow.user_schedules import describe_row, trigger_id_for, usable_rows
+from ..workflow.schedule_bindings import ScheduleBindings, file_keys, workflow_digest
+from ..workflow.user_schedules import describe_row
 from ..workflow.workspace_store import SCHEDULES_FILE
 from .file_routes import _workspace_path
 from .locator import ItemLocator
@@ -41,6 +41,11 @@ class BindingRow(BaseModel):
     #: Whether that is the caller — the one fact the UI needs to offer
     #: "stop running as me" rather than "run as me".
     mine: bool
+    #: Why it runs as `bound_to` (`plan-schedule-run-as` G8): "self" / "author"
+    #: / "admin"; "" when it runs as nobody.
+    reason: str = ""
+    #: The superuser who named `bound_to`, when `reason` is "admin".
+    assigned_by: str = ""
 
 
 class Bindings(BaseModel):
@@ -55,7 +60,13 @@ def register_schedule_binding_routes(
     files: WorkspaceFiles,
     bindings: ScheduleBindings,
     get_user_id: Callable[[], str],
+    may_run: Callable[[str, str], bool] = lambda _user, _item: False,
+    superusers: frozenset[str] = frozenset(),
 ) -> None:
+    """``may_run(user, item)`` is the `execute` rule the sweep re-checks before
+    each fire — asked of the person a superuser names (G5), who is not the
+    caller and so has passed no gate of this request."""
+
     def _schedules_path(raw: str) -> str:
         path = _workspace_path(raw)
         if path.rsplit("/", 1)[-1] != SCHEDULES_FILE:
@@ -70,10 +81,8 @@ def register_schedule_binding_routes(
             raw = (await files.read(workspace_id, path)).decode("utf-8", "replace")
         except FileNotFound:
             return []
-        folder = path.rsplit("/", 1)[0]
         out: list[tuple[str, BindingRow]] = []
-        for row in usable_rows(raw)[0]:
-            key = trigger_id_for(workspace_id, folder, row)
+        for key, row in file_keys(workspace_id, path, raw):
             out.append(
                 (
                     key,
@@ -94,13 +103,42 @@ def register_schedule_binding_routes(
         me = get_user_id()
         rows: list[BindingRow] = []
         for key, row in await _keys(workspace_id, _schedules_path(path)):
-            who = await asyncio.to_thread(bindings.binder, key)
-            rows.append(row.model_copy(update={"bound_to": who, "mine": bool(who) and who == me}))
+            found = await asyncio.to_thread(bindings.get, key)
+            who = found.user_id if found is not None else ""
+            rows.append(
+                row.model_copy(
+                    update={
+                        "bound_to": who,
+                        "mine": bool(who) and who == me,
+                        "reason": found.reason if found is not None else "",
+                        "assigned_by": found.assigned_by if found is not None else "",
+                    }
+                )
+            )
         return Bindings(rows=rows)
 
     @app.put("/a/{slug}/items/{item_id}/schedule-bindings/{trigger_id}", response_model=BindingRow)
-    async def bind_schedule(slug: str, item_id: str, trigger_id: str, path: str) -> BindingRow:
+    async def bind_schedule(
+        slug: str, item_id: str, trigger_id: str, path: str, user: str = ""
+    ) -> BindingRow:
+        """Run the schedule as the CALLER ("Run as me") — or, for a superuser,
+        as ``user`` (`plan-schedule-run-as` G5): only the deployment's
+        superusers may lend someone else's values, and only someone who may
+        run work in the item; that person is told (G6)."""
         workspace_id = locator.require_access(slug, item_id, "execute")
+        me = get_user_id()
+        who = user or me
+        naming = who != me
+        if naming and me not in superusers:
+            raise HTTPException(
+                status_code=403,
+                detail="only an administrator can choose someone else to run a schedule as",
+            )
+        if naming and not await asyncio.to_thread(may_run, who, workspace_id):
+            raise HTTPException(
+                status_code=422,
+                detail=f"{who} cannot run work in this item, so it cannot run as them",
+            )
         file_path = _schedules_path(path)
         found = dict(await _keys(workspace_id, file_path)).get(trigger_id)
         if found is None:
@@ -109,13 +147,26 @@ def register_schedule_binding_routes(
             raise HTTPException(
                 status_code=404, detail="that schedule has changed — reload the page"
             )
+        if naming:
+            current = await asyncio.to_thread(bindings.get, trigger_id)
+            if current is not None and current.user_id == who:
+                # Already theirs: naming them again must not relabel their own
+                # choice as an administrator's, re-take their consent against
+                # the workflow as it is now, or notify them (review round 1).
+                return found.model_copy(
+                    update={
+                        "bound_to": who,
+                        "mine": False,
+                        "reason": current.reason,
+                        "assigned_by": current.assigned_by,
+                    }
+                )
         # Nothing to consent to while the file will not parse (round 6): the
         # consent would record "", the profile workflow's digest, and a later
         # delete would let that workflow run with this person's values.
         problem = await unparsable_workflow(files.read, workspace_id, found.run)
         if problem is not None:
             raise HTTPException(status_code=422, detail=wont_parse(found.run, problem))
-        me = get_user_id()
         # The workflow as it is NOW is part of what is consented to (F4): the
         # sweep drops the binding when that file's body changes.
         digest = await workflow_digest(files.read, workspace_id, found.run)
@@ -124,10 +175,26 @@ def register_schedule_binding_routes(
             trigger_id,
             item_id=workspace_id,
             path=file_path,
-            user_id=me,
+            user_id=who,
             workflow_digest=digest,
+            reason="admin" if naming else "self",
+            assigned_by=me if naming else "",
         )
-        if replaced:
+        if naming:
+            await asyncio.to_thread(
+                notify,
+                spec,
+                recipient=who,
+                kind="schedule_binding_assigned",
+                title="A schedule now runs as you",
+                body=(
+                    f"An administrator, {me}, chose to run “{found.run}” ({found.describe}) "
+                    f"in {file_path} with your own sign-ins and values. If you do not want "
+                    "that, open the schedule and choose “Stop running as me”."
+                ),
+                actor=me,
+            )
+        if replaced and replaced != who:
             await asyncio.to_thread(
                 notify,
                 spec,
@@ -136,11 +203,22 @@ def register_schedule_binding_routes(
                 title="A schedule no longer runs as you",
                 body=(
                     f"{me} chose to run “{found.run}” ({found.describe}) in {file_path} "
-                    "with their own values instead of yours."
+                    + (
+                        f"with {who}'s values instead of yours."
+                        if naming
+                        else "with their own values instead of yours."
+                    )
                 ),
                 actor=me,
             )
-        return found.model_copy(update={"bound_to": me, "mine": True})
+        return found.model_copy(
+            update={
+                "bound_to": who,
+                "mine": not naming,
+                "reason": "admin" if naming else "self",
+                "assigned_by": me if naming else "",
+            }
+        )
 
     @app.delete("/a/{slug}/items/{item_id}/schedule-bindings/{trigger_id}", status_code=204)
     async def unbind_schedule(slug: str, item_id: str, trigger_id: str, path: str) -> Response:

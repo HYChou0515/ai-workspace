@@ -1,7 +1,8 @@
 /**
- * An item's schedules (`.workflows/schedules.json`), read back the way the SWEEP
- * reads them — the backend interprets (same parser, same next-run rule, same
- * ledger) and this side only renders.
+ * Schedules, read back the way the SWEEP reads them — the backend interprets
+ * (same parser, same next-run rule, same ledger) and this side only renders.
+ * The overview lists every item's; an item's Workflows panel lists the same
+ * rows narrowed to that item (`docs/plan-schedule-run-as.md` G10).
  *
  * Acting on ONE row — move its time, remove it, run it now — goes through the
  * row routes (`docs/plan-schedule-overview.md` §3), keyed by the file and the
@@ -13,64 +14,6 @@
 import { apiFetch } from "./http";
 
 const enc = encodeURIComponent;
-
-export type ScheduleRow = {
-  /** Position in the file — the handle a rewrite removes by. */
-  index: number;
-  /** The row EXACTLY as written — whatever JSON value it was, an object or not —
-   * so a rewrite keeps what it did not touch, byte for byte. */
-  raw: unknown;
-  /** Why the sweep refuses this row; empty when it will fire. */
-  problems: string[];
-  run: string;
-  /** English sentence for the agent; the panel renders from `raw` instead. */
-  describe: string;
-  next_run: string;
-  /** `YYYY-MM-DD HH:MM` in the row's zone, or `""` when it is due right now. */
-  next_at: string;
-  due_now: boolean;
-  tz: string;
-  /** Whether `run` names a workflow this item offers — a deleted one is skipped
-   * by the sweep with a log line nobody reads. */
-  known: boolean;
-  /** Why the workflow `run` names will not run although the item has it — its
-   * file does not parse. Not `problems` (the ROW is wrong) and not `!known`
-   * (no such workflow): the fix is to the workflow. */
-  run_problem: string;
-  /** THE verdict: will the sweep fire this row. False for a refused row, an
-   * unknown workflow, a workflow whose file does not parse (`run_problem`), a
-   * file over the cap, a deployment with the sweep off, or a file the sweep's
-   * index does not name yet. The next-run fields are filled
-   * only when this is true. */
-  runnable: boolean;
-  payload: Record<string, unknown>;
-  /** The row's identity — what the row routes find it by. `""` for a row the
-   * sweep refuses (it has no identity because it never fires). */
-  trigger_id: string;
-  /** `next_at` as one instant (epoch ms) — written on the viewer's clock.
-   * `null` for a row that will not run. */
-  next_ms: number | null;
-  /** The workflow's title; `""` when it has none. */
-  run_title: string;
-};
-
-export type ItemSchedules = {
-  /** Whether this deployment runs scheduled work at all. */
-  enabled: boolean;
-  /** Whether the sweep's index names this file. A file that reached the store
-   * past every hook is invisible to the sweep until the next turn's reconcile. */
-  indexed: boolean;
-  path: string;
-  rows: ScheduleRow[];
-  /** File-level problems (the file itself could not be read). */
-  problems: string[];
-  /** What THIS viewer may do with a row: edit its time or remove it, and run
-   * it now — the row routes' own gates, so the panel offers only those. */
-  can_edit: boolean;
-  can_run: boolean;
-  /** May read the item's files — without it rows come without their `with`. */
-  can_read: boolean;
-};
 
 /** The newest run of a schedule — fired or run now. */
 export type LastRun = {
@@ -121,7 +64,19 @@ export type OverviewRow = {
   page_title: string;
   /** The workflow's title; `""` when it has none. */
   run_title: string;
+  /** Whose own values a fire carries (`docs/plan-schedule-run-as.md`); `""` =
+   * nobody — the item's shared values only. */
+  runs_as: string;
+  /** Why it is them: `self` (chose it), `author` (wrote the row), `admin` (a
+   * superuser named them); `""` when it runs as nobody. */
+  runs_as_reason: RunsAsReason;
+  /** The superuser who named them, for `admin`. */
+  runs_as_by: string;
+  /** Whether it runs as the viewer. */
+  runs_as_mine: boolean;
 };
+
+export type RunsAsReason = "" | "self" | "author" | "admin";
 
 /** A schedules file with problems of its own (one that does not parse has no
  * rows to carry them). */
@@ -137,6 +92,11 @@ export type ScheduleOverview = {
   enabled: boolean;
   rows: OverviewRow[];
   files: OverviewFile[];
+  /** May the viewer choose someone ELSE to run a schedule as (a superuser). */
+  can_assign: boolean;
+  /** Files listed although the sweep's index does not name them yet — they do
+   * not run until it does. Only an item's own listing has any. */
+  unindexed: string[];
 };
 
 /** Whether a row offers Run now — ONE rule for the overview and the item's
@@ -144,7 +104,7 @@ export type ScheduleOverview = {
  * identity (the sweep reads it), its workflow exists and parses. The server
  * refuses the rest anyway; this keeps the button off rows it would refuse. */
 export function mayRunNow(
-  row: Pick<ScheduleRow, "trigger_id" | "known" | "run_problem">,
+  row: Pick<OverviewRow, "trigger_id" | "known" | "run_problem">,
   canRun: boolean,
 ): boolean {
   return canRun && row.trigger_id !== "" && row.known && !row.run_problem;
@@ -197,14 +157,16 @@ async function act(slug: string, itemId: string, verb: string, body: unknown): P
 }
 
 export const schedulesApi = {
-  async list(slug: string, itemId: string): Promise<ItemSchedules> {
-    const resp = await apiFetch(`/a/${enc(slug)}/items/${enc(itemId)}/schedules`);
-    if (!resp.ok) throw new Error(`list schedules failed: ${resp.status}`);
-    return resp.json();
-  },
   /** Every schedule the viewer may read, across items. */
   async overview(): Promise<ScheduleOverview> {
     const resp = await apiFetch("/schedules");
+    if (!resp.ok) throw new Error(`list schedules failed: ${resp.status}`);
+    return resp.json();
+  },
+  /** The overview narrowed to ONE item — its own schedules and each page's —
+   * for its Workflows panel: the same rows, so the two screens agree. */
+  async itemOverview(slug: string, itemId: string): Promise<ScheduleOverview> {
+    const resp = await apiFetch(`/a/${enc(slug)}/items/${enc(itemId)}/schedules/overview`);
     if (!resp.ok) throw new Error(`list schedules failed: ${resp.status}`);
     return resp.json();
   },
@@ -229,5 +191,3 @@ export const schedulesApi = {
 
 export type SchedulesApi = typeof schedulesApi;
 
-/** Where the item's own schedules live — the same folder as its workflows. */
-export const SCHEDULES_PATH = ".workflows/schedules.json";

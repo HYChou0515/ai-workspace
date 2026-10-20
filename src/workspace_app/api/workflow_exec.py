@@ -321,6 +321,9 @@ class WorkflowExecutor:
             # they fire on_event workflows AND stay inside the recursion depth cap.
             entity_write_origin=entity_write_origin,
             caller_env=await self._headless_env(captured_user, item_id, run_id),
+            # The person whose values this run carries — the one a schedule its
+            # agent saves will run as (plan-schedule-run-as G2).
+            acting_for=(await asyncio.to_thread(self._run_identity, run_id))[0] if run_id else "",
         )
         # plan-tool-usage-stats §3.4: a schedule's run or a person's, and who
         # its tool calls count against — the one who bound it, else whoever the

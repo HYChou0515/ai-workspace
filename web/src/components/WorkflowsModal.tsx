@@ -5,27 +5,28 @@ import type { FileService } from "../api/fileService";
 import { qk } from "../api/queryKeys";
 import { TemplateConflictError, workflowTemplatesApi } from "../api/workflowTemplates";
 import { workflowApi } from "../api/workflows";
-import {
-  SCHEDULES_PATH,
-  ScheduleActionError,
-  type ScheduleRow,
-  mayRunNow,
-  schedulesApi,
-} from "../api/schedules";
+import { type OverviewRow, schedulesApi } from "../api/schedules";
 import { WORKFLOWS_DIR } from "../api/workspaceWorkflows";
 import { useItemSchedules } from "../hooks/useItemSchedules";
 import { useWorkflowTemplates } from "../hooks/useWorkflowTemplates";
 import { useWorkspaceWorkflows } from "../hooks/useWorkspaceWorkflows";
 import { useT } from "../lib/i18n";
 import { describeSchedule } from "../lib/describeSchedule";
-import { fullTime, whenText } from "../lib/scheduleTime";
-import { useViewerClock } from "../lib/viewerClock";
+import { type ViewerClock, useViewerClock } from "../lib/viewerClock";
 import { pxToRem } from "../lib/pxToRem";
 import { Icon } from "./Icon";
 import { useDirtyClose } from "../hooks/useDirtyClose";
 import { useDialog } from "./Dialog";
 import { ModalShell } from "./ModalShell";
-import { ScheduleTimeModal } from "./ScheduleTimeModal";
+import {
+  ScheduleActions,
+  ScheduleLast,
+  ScheduleNext,
+  ScheduleRunsAs,
+  ScheduleWhere,
+  rowKey,
+  workflowName,
+} from "./schedules/ScheduleRowParts";
 
 /**
  * The Workflows panel (#323) — lists the workflows the user co-created with the agent in
@@ -121,7 +122,12 @@ export function WorkflowsModal({
   const importFiles = async (files: FileList) => {
     setBusy(true);
     try {
-      for (const f of Array.from(files)) {
+      // schedules.json LAST: a row is credited to the importer only if the
+      // workflow it runs parses at that moment (docs/plan-schedule-run-as.md).
+      const ordered = Array.from(files).sort(
+        (a, b) => Number(a.name === "schedules.json") - Number(b.name === "schedules.json"),
+      );
+      for (const f of ordered) {
         await fileService.writeFile(`${WORKFLOWS_DIR}/${f.name}`, await f.arrayBuffer());
       }
       await qc.invalidateQueries({ queryKey: qk.workspaceWorkflows(slug, itemId) });
@@ -136,77 +142,9 @@ export function WorkflowsModal({
     }
   };
 
-  /** One row's acts go through the row routes (docs/plan-schedule-overview.md
-   * §3), shared with the schedules overview: the server re-reads the file and
-   * finds the row — by its identity, or for a row the sweep refuses by its
-   * value as written — so every OTHER row stays exactly as written, and a row
-   * somebody changed since this panel loaded is refused with a sentence rather
-   * than rewritten from a stale copy. */
-  const rowRef = (row: ScheduleRow) => ({
-    path: schedules.data?.path ?? SCHEDULES_PATH,
-    trigger_id: row.trigger_id,
-    raw: row.trigger_id ? undefined : row.raw,
-    index: row.trigger_id ? undefined : row.index,
-  });
-  /** What the panel last said about a row (started, or why not), by index. */
-  const [said, setSaid] = useState<{ index: number; ok: boolean; text: string } | null>(null);
-  const [editing, setEditing] = useState<ScheduleRow | null>(null);
-  const refreshSchedules = async () => {
-    await qc.invalidateQueries({ queryKey: qk.itemSchedules(slug, itemId) });
-    await qc.invalidateQueries({ queryKey: qk.files(itemId) });
-    await qc.invalidateQueries({ queryKey: qk.schedulesOverview });
-    // Run now may have just started an execution — the Workflows sidebar of this
-    // very item lists it (plan-workflow-out-of-chat D7), so its list refreshes now
-    // rather than at the next idle poll.
-    await qc.invalidateQueries({ queryKey: qk.workflowRuns(slug, itemId) });
-  };
-  const failed = (row: ScheduleRow, e: unknown) =>
-    setSaid({ index: row.index, ok: false, text: e instanceof ScheduleActionError ? e.message : String(e) });
-
-  const removeSchedule = async (row: ScheduleRow) => {
-    const choice = await dialog.confirm({
-      title: t("schedules.removeTitle"),
-      body: t("schedules.removeConfirm", {
-        what: `${describeSchedule(row, clock, t).text} → ${row.run_title || row.run || "?"}`,
-      }),
-      // The safe answer first: the destructive one is never what a stray
-      // Enter or the first focus lands on.
-      actions: [
-        { id: "cancel", label: t("schedules.cancel") },
-        { id: "remove", label: t("schedules.remove"), variant: "danger" },
-      ],
-    });
-    if (choice !== "remove") return;
-    setBusy(true);
-    setSaid(null);
-    try {
-      await schedulesApi.remove(slug, itemId, rowRef(row));
-    } catch (e) {
-      failed(row, e);
-    } finally {
-      await refreshSchedules();
-      setBusy(false);
-    }
-  };
-
-  const runScheduleNow = async (row: ScheduleRow) => {
-    setBusy(true);
-    setSaid(null);
-    try {
-      await schedulesApi.runNow(slug, itemId, rowRef(row));
-      setSaid({ index: row.index, ok: true, text: t("schedules.started") });
-      await refreshSchedules();
-    } catch (e) {
-      failed(row, e);
-    } finally {
-      setBusy(false);
-    }
-  };
-
   const list = workflows.data ?? [];
-  const titleOf = (run: string) => list.find((w) => w.id === run)?.title || run;
   const sched = schedules.data;
-  const showSchedules = !!sched && (sched.rows.length > 0 || sched.problems.length > 0);
+  const showSchedules = !!sched && (sched.rows.length > 0 || sched.files.length > 0);
 
   return (
     <ModalShell
@@ -311,7 +249,7 @@ export function WorkflowsModal({
                 {t("schedules.disabled")}
               </p>
             )}
-            {sched.enabled && !sched.indexed && (
+            {sched.enabled && sched.unindexed.length > 0 && (
               // "starts on its own after the next turn" is false beside "will
               // not run on its own": with the sweep off, the first notice says
               // all there is to say.
@@ -323,122 +261,24 @@ export function WorkflowsModal({
                 {t("schedules.unindexed")}
               </p>
             )}
-            {sched.problems.length > 0 && (
+            {sched.files.map((f) => (
               <p
+                key={f.path}
                 data-testid="schedules-file-problems"
                 style={{ margin: 0, fontSize: pxToRem(11), color: "var(--err)" }}
               >
-                {t("schedules.fileProblems")} {sched.problems.join(" ")}
+                {f.path} — {t("schedules.fileProblems")} {f.problems.join(" ")}
               </p>
-            )}
-            {sched.rows.map((row) => {
-              const invalid = row.problems.length > 0;
-              return (
-                <div
-                  key={row.index}
-                  data-testid={`schedule-row-${row.index}`}
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 8,
-                    padding: "6px 8px",
-                    border: "1px solid var(--paper-3)",
-                    borderRadius: "var(--radius-btn)",
-                  }}
-                >
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div
-                      style={{ fontWeight: 600, fontSize: "var(--text-body-sm)" }}
-                      title={describeSchedule(row, clock, t).set || undefined}
-                    >
-                      {describeSchedule(row, clock, t).text}
-                      {" → "}
-                      {invalid ? rawRun(row.raw) : titleOf(row.run)}
-                    </div>
-                    <div style={{ fontSize: pxToRem(11), color: "var(--text-paper-d)" }}>
-                      {invalid ? (
-                        <span style={{ color: "var(--err)" }}>
-                          {t("schedules.invalidRow")} {row.problems.join(" ")}
-                        </span>
-                      ) : !row.known ? (
-                        <span data-testid={`schedule-unknown-${row.index}`} style={{ color: "var(--err)" }}>
-                          {t("schedules.unknownWorkflow")}
-                        </span>
-                      ) : row.run_problem ? (
-                        <span data-testid={`schedule-broken-${row.index}`} style={{ color: "var(--err)" }}>
-                          {t("schedules.brokenWorkflow")} {row.run_problem}
-                        </span>
-                      ) : !row.runnable ? null : row.due_now ? (
-                        t("schedules.nextSweep")
-                      ) : row.next_ms !== null ? (
-                        <span title={fullTime(row.next_ms, clock.viewer, t)}>
-                          {t("schedules.next", { at: whenText(row.next_ms, clock.now, clock.viewer, t, "future") })}
-                        </span>
-                      ) : null}
-                    </div>
-                  </div>
-                  {mayRunNow(row, sched.can_run) ? (
-                    <button
-                      type="button"
-                      data-testid={`schedule-run-${row.index}`}
-                      disabled={busy}
-                      onClick={() => void runScheduleNow(row)}
-                      style={pillBtn}
-                    >
-                      <Icon name="play" size={12} /> {t("schedules.runNow")}
-                    </button>
-                  ) : null}
-                  {sched.can_edit && row.trigger_id ? (
-                    <button
-                      type="button"
-                      data-testid={`schedule-edit-${row.index}`}
-                      disabled={busy}
-                      onClick={() => {
-                        setSaid(null);
-                        setEditing(row);
-                      }}
-                      style={pillBtn}
-                    >
-                      <Icon name="clock" size={12} /> {t("schedules.editTime")}
-                    </button>
-                  ) : null}
-                  {sched.can_edit ? (
-                    <button
-                      type="button"
-                      data-testid={`schedule-remove-${row.index}`}
-                      aria-label={`${t("schedules.remove")} ${describeSchedule(row, clock, t).text}`}
-                      disabled={busy}
-                      onClick={() => void removeSchedule(row)}
-                      style={{ ...pillBtn, color: "var(--err)" }}
-                    >
-                      <Icon name="x" size={12} /> {t("schedules.remove")}
-                    </button>
-                  ) : null}
-                  {said?.index === row.index ? (
-                    <span
-                      data-testid={`schedule-said-${row.index}`}
-                      role={said.ok ? "status" : "alert"}
-                      style={{ fontSize: pxToRem(11), color: said.ok ? "var(--text-paper-d)" : "var(--err)" }}
-                    >
-                      {said.text}
-                    </span>
-                  ) : null}
-                </div>
-              );
-            })}
-            {editing ? (
-              <ScheduleTimeModal
-                raw={editing.raw}
-                nextMs={editing.next_ms}
-                rowRef={rowRef(editing)}
-                onSave={(ref, time) => schedulesApi.editTime(slug, itemId, ref, time)}
-                onSaved={() => {
-                  setEditing(null);
-                  void refreshSchedules();
-                }}
-                onClose={() => setEditing(null)}
+            ))}
+            {sched.rows.map((row, n) => (
+              <ScheduleCard
+                key={rowKey(row)}
+                n={n}
+                row={row}
+                clock={clock}
+                canAssign={sched.can_assign}
               />
-            ) : null}
+            ))}
           </div>
         )}
 
@@ -534,12 +374,67 @@ export function WorkflowsModal({
   );
 }
 
-/** What a refused row SAID it would run, for the line that shows it. */
-function rawRun(value: unknown): string {
-  if (value !== null && typeof value === "object" && "run" in value) {
-    return String((value as { run?: unknown }).run ?? "?");
-  }
-  return "?";
+/** One schedule as a card: the same parts the schedules overview lays out
+ * as a table row (`components/schedules/ScheduleRowParts`), stacked under
+ * the overview's own column names — so the two screens say the same thing
+ * the same way (`docs/plan-schedule-run-as.md` G9). */
+function ScheduleCard({
+  n,
+  row,
+  clock,
+  canAssign,
+}: {
+  n: number;
+  row: OverviewRow;
+  clock: ViewerClock;
+  canAssign: boolean;
+}) {
+  const t = useT();
+  const period = describeSchedule(row, clock, t);
+  const fact = (label: string, value: React.ReactNode, problem = false) => (
+    <>
+      <span style={{ color: "var(--text-paper-d)" }}>{label}</span>
+      <span className={problem ? "schedule-problem" : undefined} style={{ minWidth: 0 }}>
+        {value}
+      </span>
+    </>
+  );
+  return (
+    <div
+      data-testid={`schedule-row-${n}`}
+      style={{
+        display: "grid",
+        gap: 6,
+        padding: "6px 8px",
+        border: "1px solid var(--paper-3)",
+        borderRadius: "var(--radius-btn)",
+      }}
+    >
+      <div style={{ fontWeight: 600, fontSize: "var(--text-body-sm)" }} title={period.set || undefined}>
+        {period.text}
+        {" → "}
+        {workflowName(row)}
+      </div>
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "auto 1fr",
+          columnGap: 10,
+          rowGap: 4,
+          fontSize: pxToRem(12),
+          alignItems: "start",
+        }}
+      >
+        {fact(t("scheduleOverview.col.where"), <ScheduleWhere row={row} withItem={false} />)}
+        {fact(t("scheduleOverview.col.next"), <ScheduleNext row={row} clock={clock} />, !row.runnable)}
+        {fact(t("scheduleOverview.col.last"), <ScheduleLast row={row} clock={clock} />)}
+        {fact(t("scheduleOverview.col.runsAs"), <ScheduleRunsAs row={row} canAssign={canAssign} />)}
+      </div>
+      <div>
+        <ScheduleActions row={row} client={schedulesApi} clock={clock} />
+      </div>
+    </div>
+  );
 }
 
 

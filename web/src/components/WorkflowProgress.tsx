@@ -72,7 +72,7 @@ function phaseColor(status: string): string {
   if (status === "passed") return "var(--ok)";
   if (status === "running" || status === "awaiting_human") return "var(--accent)";
   if (status === "failed") return "var(--err)";
-  return "var(--paper-3)"; // pending / skipped / unknown
+  return "var(--paper-3)"; // pending / skipped / stopped / unknown
 }
 
 /** A glanceable metrics strip (#283): elapsed, finished steps, retries. */
