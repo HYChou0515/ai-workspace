@@ -314,8 +314,10 @@ def register_wui_routes(
         if env_refresher is None:
             return env
         # plan-env-token-refresh: a near-expiry token is refreshed before the
-        # page's tool gets it.
-        return (await env_refresher.apply(env, user_id=uid, item_id=item_id)).person
+        # page's tool gets it. A dead sign-in needs no message here: its names
+        # are cleared, so the page's own bar says "Sign in to X" (identityState).
+        outcome = await env_refresher.apply(env, user_id=uid, item_id=item_id, present=True)
+        return outcome.person
 
     async def _external(item_id: str) -> ExternalTools:
         if resolve_external is not None:

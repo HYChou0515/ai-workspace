@@ -228,7 +228,7 @@ async def test_a_rejected_refresh_token_clears_the_names_the_deploy_gave():
 
     # OTHER is not ERP's to clear, though the deploy named it.
     assert w.store.personal("alice") == {"OTHER": "o"}
-    assert [p.id for p in out.rejected] == ["erp"]
+    assert [(d.provider.id, d.layer) for d in out.rejected] == [("erp", "personal")]
     assert "ERP_TOKEN" not in out.person.personal
 
 
@@ -337,17 +337,34 @@ async def test_a_needs_refresh_that_raises_reads_as_not_due():
 
 
 async def test_two_runs_at_once_spend_a_rotating_refresh_token_once():
-    """The second waits for the first and uses what it wrote."""
+    """The second uses what the first wrote and does not send the refresh
+    token again.
+
+    Ordered by events, not by timing: the second run starts only once the
+    first holds the claim and is inside `refresh`, so the result does not
+    depend on how fast the machine is (the in-memory backend's create-if-absent
+    is not atomic across threads, and a race there proved nothing). What this
+    pins end to end is the re-read; the claim itself is pinned by
+    `test_a_run_that_waits_too_long_goes_on_with_what_it_had` (a claim that
+    always grants reddens it)."""
     w = _World()
     w.store.replace_personal("alice", OLD)
+    inside = asyncio.Event()
+    finish = asyncio.Event()
 
-    class _Slow(_Erp):
+    class _Held(_Erp):
         async def refresh(self, values: dict[str, str]) -> dict[str, str]:
-            await asyncio.sleep(0.05)
+            inside.set()
+            await finish.wait()
             return await super().refresh(values)
 
-    erp = _Slow()
-    first, second = await asyncio.gather(w.run([erp], wait_s=2), w.run([erp], wait_s=2))
+    erp = _Held()
+    first_run = asyncio.create_task(w.run([erp], wait_s=5))
+    await inside.wait()
+    second_run = asyncio.create_task(w.run([erp], wait_s=5))
+    await asyncio.sleep(0)  # let the second find the claim taken and start waiting
+    finish.set()
+    first, second = await asyncio.gather(first_run, second_run)
 
     assert len(erp.calls) == 1
     assert first.person.personal["ERP_TOKEN"] == "new"

@@ -106,6 +106,113 @@ def test_a_refreshed_shared_copy_is_written_as_the_platform():
     assert rm.get_meta(item_id).updated_by == "system:env-refresh"
 
 
+# ─── P6: telling the person (D4, D6) ─────────────────────────────────────────
+
+
+def _dead() -> _Erp:
+    from workspace_app.api.env_provider import RefreshRejected
+
+    return _Erp(outcome=RefreshRejected({"ERP_TOKEN", "ERP_REFRESH"}))
+
+
+def _notifications(spec) -> list:  # noqa: ANN001
+    from workspace_app.resources.notification import Notification
+
+    out = []
+    for res in spec.get_resource_manager(Notification).list_resources():
+        out.append(res.data)
+    return out
+
+
+def _thread(spec) -> list:  # noqa: ANN001
+    from workspace_app.resources import Conversation
+
+    (res,) = list(spec.get_resource_manager(Conversation).list_resources())
+    conv = res.data
+    assert isinstance(conv, Conversation)
+    return conv.messages
+
+
+def test_a_person_in_the_chat_sees_a_sign_in_message_after_their_question():
+    """D6: a platform message, always shown, carrying which sign-in to open —
+    under the question it came with, not above it — and no notification."""
+    client, runner, item_id, spec = _send_app(None, user="alice")
+    _sign_ins(client, _dead())
+    PrivateEnvStore(spec).replace_personal("alice", OLD)
+
+    with client:
+        client.post(f"/a/playground/items/{item_id}/messages", json={"content": "hi"})
+
+    roles = [m.role for m in _thread(spec)]
+    assert roles[:2] == ["user", "sign_in"]
+    notice = _thread(spec)[1]
+    assert notice.sign_in_provider == "erp"
+    # Where the dead token lived: the button signs in back into that layer.
+    assert notice.sign_in_layer == "personal"
+    assert "ERP" in notice.content
+    assert "old" not in notice.content and "r1" not in notice.content
+    assert _notifications(spec) == []
+    # The tool still ran, with the dead names gone (D4: run anyway).
+    assert runner.envs == [{}]
+
+
+async def test_a_goal_round_tells_the_person_by_notification():
+    client, _runner, item_id, spec = _send_app(None, user="admin")
+    _sign_ins(client, _dead())
+    PrivateEnvStore(spec).replace_personal("alice", OLD)
+    service = cast(FastAPI, client.app).state.chat_send
+    rid, conv = _default_chat(spec, item_id)
+
+    with client:
+        for _ in range(2):  # the same day twice: one notification
+            PrivateEnvStore(spec).replace_personal("alice", OLD)
+            await service.send(
+                item_id,
+                rid,
+                conv,
+                item_id,
+                _MessageBody(content="driven"),
+                author="alice",
+                driven_by="goal-driver",
+            )
+
+    (note,) = _notifications(spec)
+    assert note.recipient == "alice"
+    assert note.link == "/my-env"
+    assert "ERP" in note.title
+    assert "old" not in note.body and "r1" not in note.body
+    assert "sign_in" not in [m.role for m in _thread(spec)]
+
+
+def test_a_workflow_node_tells_the_presser_by_notification():
+    _executor, item_id, spec, _runner, client = _executor_app(None, user="presser-p")
+    _sign_ins(client, _dead())
+    PrivateEnvStore(spec).replace_personal("presser-p", OLD)
+
+    with client:
+        base = f"/a/playground/items/{item_id}"
+        client.put(f"{base}/files/.workflows/nightly.json", content=_ONE_AGENT_STEP)
+        assert client.post(f"{base}/wui/run", json={"workflow": "nightly"}).status_code == 200
+        runs = client.get(f"{base}/runs").json()
+        _poll_until_terminal(client, item_id, runs[0]["run_id"])
+
+    recipients = [n.recipient for n in _notifications(spec) if n.link == "/my-env"]
+    assert "presser-p" in recipients
+
+
+def test_the_sign_in_message_never_reaches_the_model():
+    from workspace_app.api.turns import history_items
+    from workspace_app.context_budget import _replayed
+    from workspace_app.resources.conversation import Message
+
+    msgs = [
+        Message(role="user", content="hi"),
+        Message(role="sign_in", content="ERP sign-in expired", sign_in_provider="erp"),
+    ]
+    assert [m.role for m in _replayed(msgs)] == ["user"]
+    assert all("ERP sign-in" not in str(item) for item in history_items(msgs))
+
+
 # ─── a page's tool call, and its build ───────────────────────────────────────
 
 

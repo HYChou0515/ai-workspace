@@ -2327,6 +2327,7 @@ def create_app(
         store=private_env_store,
         claims=RefreshClaims(spec),
         locator=locator,
+        spec=spec,
     )
     # plan-tool-usage-stats §3.6: the administrator's report on the tool-call
     # counts (the model is registered with the store, above).

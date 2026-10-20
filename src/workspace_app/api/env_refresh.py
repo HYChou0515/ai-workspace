@@ -26,13 +26,17 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Literal
 
+from specstar import SpecStar
+
 from .env_layers import PersonEnv, is_blank, layer_of
 from .env_provider import IEnvProvider, RefreshRejected, supports_refresh
 from .locator import ItemLocator
+from .notifications import notification_sent, notify
 from .private_env import PrivateEnvStore, own_layer
 from .refresh_claims import RefreshClaims
 
@@ -51,12 +55,21 @@ _POLL_S = 0.05
 
 
 @dataclass(frozen=True)
+class DeadSignIn:
+    """A sign-in whose refresh token the deploy reported dead (D5), and the
+    layer it was read from — where signing in again must write (D3)."""
+
+    provider: IEnvProvider
+    layer: Writable
+
+
+@dataclass(frozen=True)
 class RefreshOutcome:
     person: PersonEnv
     shared: dict[str, str]
     #: Sign-ins whose refresh token the deploy reported dead (D5) — the person
     #: is told to sign in again (D4 / D6).
-    rejected: list[IEnvProvider] = field(default_factory=list)
+    rejected: list[DeadSignIn] = field(default_factory=list)
 
 
 async def refresh_if_due(
@@ -194,7 +207,7 @@ async def _one(
                 "env-refresh: %s rejected for %s; cleared %s", provider.id, layer, sorted(dead)
             )
             done = _with(out, layer, kept, seam)
-            return replace(done, rejected=[*done.rejected, provider])
+            return replace(done, rejected=[*done.rejected, DeadSignIn(provider, layer)])
         except Exception:  # noqa: BLE001 — D5: anything else is a passing failure
             logger.warning("env-refresh: %s refresh failed; tool keeps its values", provider.id)
             return out
@@ -261,18 +274,27 @@ class EnvRefresher:
         store: PrivateEnvStore | None,
         claims: RefreshClaims | None,
         locator: ItemLocator,
+        spec: SpecStar | None = None,
     ) -> None:
         self._providers = providers
         self._store = store
         self._claims = claims
         self._locator = locator
+        #: Where a notice to someone not present is written (D4); None ⇒ none.
+        self._spec = spec
 
-    async def apply(self, person: PersonEnv, *, user_id: str, item_id: str) -> RefreshOutcome:
+    async def apply(
+        self, person: PersonEnv, *, user_id: str, item_id: str, present: bool
+    ) -> RefreshOutcome:
+        """``present``: someone is at the request (a chat send, a page's tool
+        call) — a dead sign-in is returned for the surface to show (D6).
+        Otherwise (a goal round, a re-run, a workflow node) the person the run
+        is for is notified here (D4)."""
         providers = [p for p in self._providers() if supports_refresh(p)]
         if not providers:
             return RefreshOutcome(person=person, shared={})
         layers = await asyncio.to_thread(self._locator.env_layers_of, item_id)
-        return await refresh_if_due(
+        outcome = await refresh_if_due(
             providers=providers,
             store=self._store,
             claims=self._claims,
@@ -284,3 +306,29 @@ class EnvRefresher:
             user_id=user_id,
             item_id=item_id,
         )
+        if not present and user_id and self._spec is not None:
+            for dead in outcome.rejected:
+                await asyncio.to_thread(_notify_dead, self._spec, user_id, dead.provider)
+        return outcome
+
+
+def _notify_dead(spec: SpecStar, recipient: str, provider: IEnvProvider) -> None:
+    """Tell someone not present that a sign-in of theirs must be done again
+    (D4) — once a day per person and sign-in, however many runs find it. The
+    names and values stay out of it: what died is said by the sign-in's label."""
+    day = time.strftime("%Y-%m-%d", time.gmtime())
+    key = f"env-refresh-dead:{recipient}:{provider.id}:{day}"
+    if notification_sent(spec, key):
+        return
+    notify(
+        spec,
+        recipient=recipient,
+        kind="env_sign_in_expired",
+        title=f"Sign in to {provider.label} again",
+        body=(
+            f"Your saved sign-in to {provider.label} has expired and could not be renewed. "
+            "Sign in again under My environment variables."
+        ),
+        link="/my-env",
+        dedup_key=key,
+    )

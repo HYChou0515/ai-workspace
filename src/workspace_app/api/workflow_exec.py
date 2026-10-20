@@ -513,7 +513,9 @@ class WorkflowExecutor:
         )
         if self._env_refresher is None:
             return env
-        outcome = await self._env_refresher.apply(env, user_id=env_user, item_id=item_id)
+        outcome = await self._env_refresher.apply(
+            env, user_id=env_user, item_id=item_id, present=False
+        )
         return outcome.person
 
     async def run_sandbox(
