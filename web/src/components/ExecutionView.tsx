@@ -129,6 +129,8 @@ const STEP_STATUS: Record<string, string> = {
   passed: "Done",
   skipped: "Already done",
   failed: "Failed",
+  // The step a Stop ended (plan-one-running-phase D2): not held open, nothing in it waits.
+  stopped: "Stopped",
   awaiting_human: "Waiting for you",
 };
 

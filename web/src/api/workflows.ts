@@ -234,7 +234,8 @@ export function stepOf(nodes: PhaseNode[]): { at: number; of: number } {
   if (working >= 0) return { at: working + 1, of: nodes.length };
   let passed = 0;
   nodes.forEach((n, i) => {
-    if (n.status === "passed" || n.status === "skipped" || n.status === "failed") passed = i + 1;
+    // A step a Stop ended was reached too (plan-one-running-phase D5).
+    if (["passed", "skipped", "failed", "stopped"].includes(n.status)) passed = i + 1;
   });
   return { at: passed, of: nodes.length };
 }
