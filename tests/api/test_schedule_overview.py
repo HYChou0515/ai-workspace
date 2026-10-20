@@ -1143,3 +1143,45 @@ def test_whoever_changes_a_schedules_time_is_who_it_then_runs_as():
 
     assert r.status_code == 200, r.text
     assert _runs_as(client, iid, PAGE_SCHEDULES) == [("carol", "author")]
+
+
+def test_each_row_says_who_it_runs_as_and_why():
+    """G8: the overview row names the person and the reason — here, bob wrote it."""
+    holder = {"id": "bob"}
+    client, spec, _ = _client_and_spec(holder)
+    iid = _item(spec, by="bob")
+    _seed(client, iid)
+
+    rows = _rows(client)
+
+    assert {(r["runs_as"], r["runs_as_reason"], r["runs_as_by"]) for r in rows} == {
+        ("bob", "author", "")
+    }
+
+
+def test_the_overview_says_whether_the_viewer_may_name_someone_else():
+    """G5: only a superuser is offered "choose who"."""
+    holder = {"id": "bob"}
+    client, spec, _ = _client_and_spec(holder, superusers=frozenset({"root"}))
+
+    assert client.get("/schedules").json()["can_assign"] is False
+    holder["id"] = "root"
+    assert client.get("/schedules").json()["can_assign"] is True
+
+
+def test_an_items_own_listing_is_the_overview_narrowed_to_that_item():
+    """G10: the Workflows panel lists EVERY schedule of the item — its own file
+    and each page's — as the overview shows them, and no other item's."""
+    holder = {"id": "bob"}
+    client, spec, _ = _client_and_spec(holder)
+    iid = _item(spec, by="bob")
+    other = _item(spec, by="bob", title="Line 4")
+    _seed(client, iid)
+    _seed(client, other)
+
+    r = client.get(_wp(iid, "/schedules/overview"))
+
+    assert r.status_code == 200, r.text
+    mine = r.json()["rows"]
+    assert mine == [row for row in _rows(client) if row["item_id"] == iid]
+    assert {row["path"] for row in mine} == {ITEM_SCHEDULES, PAGE_SCHEDULES}

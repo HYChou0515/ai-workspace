@@ -49,7 +49,7 @@ from ..workflow.offered import (
 )
 from ..workflow.orchestrator import ActiveRunExists
 from ..workflow.run import WorkflowRun
-from ..workflow.schedule_bindings import ScheduleAuthorship
+from ..workflow.schedule_bindings import ScheduleAuthorship, ScheduleBinding, ScheduleBindings
 from ..workflow.user_schedules import (
     ITEM_SCHEDULES_PATH,
     SchedulePolicy,
@@ -256,6 +256,14 @@ class OverviewRow(BaseModel):
     it has none (or there is no page): the folder names it instead."""
     run_title: str = ""
     """The title of the workflow `run` names (`ScheduleView.run_title`)."""
+    runs_as: str = ""
+    """Whose own values a fire carries (`plan-schedule-run-as`); "" = nobody —
+    the item's shared values only."""
+    runs_as_reason: str = ""
+    """Why it is them (G8): "self" (they chose it), "author" (they wrote the
+    row), "admin" (a superuser named them); "" when it runs as nobody."""
+    runs_as_by: str = ""
+    """The superuser who named them, when `runs_as_reason` is "admin"."""
 
 
 class OverviewFile(BaseModel):
@@ -273,6 +281,9 @@ class ScheduleOverview(BaseModel):
     enabled: bool
     rows: list[OverviewRow]
     files: list[OverviewFile]
+    can_assign: bool = False
+    """Whether the viewer may choose someone ELSE to run a schedule as — the
+    deployment's superusers only (`plan-schedule-run-as` G5)."""
 
 
 class ScheduleAction(BaseModel):
@@ -354,6 +365,8 @@ def register_schedule_overview_routes(
     on_saved: Callable[[str, str], None],
     deployed_pages: Callable[[], list[DeployedWui]] = list,
     authorship: ScheduleAuthorship | None = None,
+    bindings: ScheduleBindings | None = None,
+    superusers: frozenset[str] = frozenset(),
 ) -> None:
     """``start_run`` is the sweep's own start (`start_page_schedule`, bound in
     `create_app`): "run now" goes through exactly what a fire goes through —
@@ -535,6 +548,17 @@ def register_schedule_overview_routes(
         one that exists — so a file that is gone is skipped, and the sweep
         drops it from the index on its own next pass.
         """
+        return await _overview(None)
+
+    @app.get("/a/{slug}/items/{item_id}/schedules/overview", response_model=ScheduleOverview)
+    async def item_schedules_overview(slug: str, item_id: str) -> ScheduleOverview:
+        """The overview narrowed to ONE item — every schedules file it holds,
+        its own and each page's — for the item's Workflows panel
+        (`plan-schedule-run-as` G10). The same rows, built by the same code, so
+        the two screens cannot drift apart (NN/g, consistency)."""
+        return await _overview(locator.require_access(slug, item_id, "read_meta"))
+
+    async def _overview(only: str | None) -> ScheduleOverview:
         rows: list[OverviewRow] = []
         problem_files: list[OverviewFile] = []
         # Deployed pages by (item, folder): one listing for the whole page.
@@ -544,10 +568,18 @@ def register_schedule_overview_routes(
         for page in await asyncio.to_thread(deployed_pages):
             pages.setdefault((page.item_id, page.path.rsplit("/", 1)[0]), page)
         for item_id, paths, landed in await asyncio.to_thread(index.entries):
+            if only is not None and item_id != only:
+                continue
             decided = await asyncio.to_thread(_decide, item_id)
             if decided is None:
                 continue
             slug, title, owner, can_edit, can_run, can_read, profile = decided
+            # Who each row runs as: one indexed read per item, not one per row.
+            held: dict[str, ScheduleBinding] = (
+                {b.trigger_id: b for b in await asyncio.to_thread(bindings.for_item, item_id)}
+                if bindings is not None
+                else {}
+            )
 
             def _file(
                 path: str, problems: list[str], slug=slug, item_id=item_id, title=title
@@ -595,6 +627,7 @@ def register_schedule_overview_routes(
                     else None
                 )
                 for view, last in zip(views, lasts, strict=True):
+                    bound = held.get(view.trigger_id) if view.trigger_id else None
                     fields = msgspec.to_builtins(view)
                     assert isinstance(fields, dict)  # narrow for ty
                     fields.pop("next_run", None)
@@ -615,9 +648,17 @@ def register_schedule_overview_routes(
                             can_read=can_read,
                             page_path=page.path if page is not None else "",
                             page_title=page.title if page is not None else "",
+                            runs_as=bound.user_id if bound is not None else "",
+                            runs_as_reason=bound.reason if bound is not None else "",
+                            runs_as_by=bound.assigned_by if bound is not None else "",
                         )
                     )
-        return ScheduleOverview(enabled=policy.sweep_enabled, rows=rows, files=problem_files)
+        return ScheduleOverview(
+            enabled=policy.sweep_enabled,
+            rows=rows,
+            files=problem_files,
+            can_assign=get_user_id() in superusers,
+        )
 
 
 __all__ = [

@@ -2971,6 +2971,8 @@ def create_app(
         durable=ScheduleSource(read=filestore.read, ls=filestore.ls),
         on_saved=_schedule_saved,
         authorship=schedule_authorship,
+        bindings=ScheduleBindings(spec),
+        superusers=superusers,
     )
 
     register_private_env_routes(
