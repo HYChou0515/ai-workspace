@@ -1213,6 +1213,77 @@ def test_an_items_own_file_the_index_does_not_name_is_listed_and_said_to_be_wait
     assert ITEM_SCHEDULES not in {row["path"] for row in _rows(client)}
 
 
+def test_an_items_own_listing_reads_only_that_item(monkeypatch):
+    """Review round 1 (regression 2): the Workflows panel opens often; it must
+    not read every item's index row and every Deployed page to show one item."""
+    from workspace_app.api.schedule_index import ScheduleIndex
+    from workspace_app.api.wui_deploy import DeployedPages
+
+    holder = {"id": "bob"}
+    client, spec, _ = _client_and_spec(holder)
+    iid = _item(spec, by="bob")
+    _seed(client, iid)
+
+    def _whole_table(*_a, **_k):
+        raise AssertionError("read the whole table for one item")
+
+    monkeypatch.setattr(ScheduleIndex, "entries", _whole_table)
+    real_pages = DeployedPages.newest_first
+
+    def _pages(self, item_id=None):
+        if item_id is None:
+            _whole_table()
+        return real_pages(self, item_id)
+
+    monkeypatch.setattr(DeployedPages, "newest_first", _pages)
+
+    r = client.get(_wp(iid, "/schedules/overview"))
+
+    assert r.status_code == 200, r.text
+    assert {row["path"] for row in r.json()["rows"]} == {ITEM_SCHEDULES, PAGE_SCHEDULES}
+
+
+def test_an_index_that_cannot_be_read_degrades_the_panel_not_500s(monkeypatch):
+    """Review round 1 (regression 3): master's panel route read an unreadable
+    index as "not indexed"; the narrowed overview must too."""
+    from workspace_app.api.schedule_index import ScheduleIndex
+
+    holder = {"id": "bob"}
+    client, spec, _ = _client_and_spec(holder)
+    iid = _item(spec, by="bob")
+    _seed(client, iid)
+
+    def _down(*_a, **_k):
+        raise RuntimeError("index down")
+
+    monkeypatch.setattr(ScheduleIndex, "paths", _down)
+
+    r = client.get(_wp(iid, "/schedules/overview"))
+
+    assert r.status_code == 200, r.text
+    assert r.json()["unindexed"] == [ITEM_SCHEDULES]
+
+
+def test_a_binding_store_that_cannot_be_read_does_not_take_the_overview_down(monkeypatch):
+    """Review round 1 (defect 7): one item must never take the page down."""
+    from workspace_app.workflow.schedule_bindings import ScheduleBindings
+
+    holder = {"id": "bob"}
+    client, spec, _ = _client_and_spec(holder)
+    iid = _item(spec, by="bob")
+    _seed(client, iid)
+
+    def _down(*_a, **_k):
+        raise RuntimeError("bindings down")
+
+    monkeypatch.setattr(ScheduleBindings, "for_item", _down)
+
+    r = client.get("/schedules")
+
+    assert r.status_code == 200, r.text
+    assert {row["runs_as"] for row in r.json()["rows"]} == {""}
+
+
 def test_an_items_own_file_that_cannot_be_read_is_said_not_a_500(monkeypatch):
     from workspace_app.api import schedule_listing
     from workspace_app.api.schedule_index import ScheduleIndex

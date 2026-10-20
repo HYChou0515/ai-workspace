@@ -1436,11 +1436,11 @@ def create_app(
                 f"{binding.path}, so its schedule stopped using your values."
             )
         else:
-            title = "A schedule you ran as yourself was changed"
+            title = "A schedule that ran as you was changed"
             body = (
                 f"The schedule in {binding.path} was edited or removed, so it no longer "
-                "runs with your values. Open the page and choose “Run as me” again if "
-                "you still want it to."
+                "runs with your values. Find it on the Schedules page or in the item's "
+                "Workflows panel and choose “Run as me” again if you still want it to."
             )
         notify(
             spec,
@@ -2391,6 +2391,7 @@ def create_app(
         ScheduleBindings(spec),
         read=files.read,
         may_run=lambda user, item: user_may(spec, item, user, "execute", superusers=superusers),
+        max_rows=max_page_schedules,
     )
     turn_ctx = TurnContextBuilder(
         view_plugin_artifacts=artifact_plugins(view_plugins),

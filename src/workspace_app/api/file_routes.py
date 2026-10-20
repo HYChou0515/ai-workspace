@@ -243,6 +243,19 @@ async def _text_or_none(files: WorkspaceFiles, workspace_id: str, path: str) -> 
         return None
 
 
+async def _schedules_before(
+    files: WorkspaceFiles, workspace_id: str, path: str
+) -> tuple[bool, str | None]:
+    """(whether to credit, the file as it was). A read that fails other than
+    "not there" leaves nothing to compare against: the save goes ahead and
+    credits nobody — it must not fail a PUT that used to succeed."""
+    try:
+        return True, await _text_or_none(files, workspace_id, path)
+    except Exception:  # noqa: BLE001 — logged; the save stands, uncredited
+        logger.exception("file_routes: could not read %s before saving it", path)
+        return False, None
+
+
 def over_upload_quota(bytes_read: int, remaining: int | None) -> bool:
     """Should a streamed upload be cut off after `bytes_read` bytes?
 
@@ -562,15 +575,23 @@ def register_file_routes(
         # #245: also gate the per-workspace total quota mid-stream.
         # plan-schedule-run-as G2: a schedules file saved here — the editor, a
         # page's `writeFile` — runs the rows it ADDS as the person saving it.
-        credit = schedule_authorship is not None and is_schedule_file(norm)
-        before = await _text_or_none(files, investigation_id, norm) if credit else None
+        credit, before = (
+            await _schedules_before(files, investigation_id, norm)
+            if schedule_authorship is not None and is_schedule_file(norm)
+            else (False, None)
+        )
         await _stream_upload_to_store(investigation_id, norm, request, files, max_file_size)
         if credit:
             assert schedule_authorship is not None  # narrow for ty
-            after = await _text_or_none(files, investigation_id, norm)
-            await schedule_authorship.credit(
-                investigation_id, norm, before=before, after=after or "", author=get_user_id()
-            )
+            try:
+                after = await _text_or_none(files, investigation_id, norm)
+            except Exception:  # noqa: BLE001 — the save stands, uncredited
+                logger.exception("file_routes: could not read back %s", norm)
+                after = None
+            if after is not None:
+                await schedule_authorship.credit(
+                    investigation_id, norm, before=before, after=after, author=get_user_id()
+                )
         activity.record(
             "file_written",
             f"Wrote {rel_path(norm)}",

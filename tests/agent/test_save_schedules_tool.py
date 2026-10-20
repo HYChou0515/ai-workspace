@@ -345,6 +345,44 @@ async def test_the_rows_it_adds_run_as_the_person_the_turn_is_for_and_it_says_so
     assert "runs as carol" in out
 
 
+async def test_a_pages_schedules_written_with_write_file_run_as_the_person_the_turn_is_for(clock) -> None:
+    """Review round 1 (conformance 1): the agent seeds a WUI page's own
+    `schedules.json` with `write_file` — the only way it can write a PAGE's
+    file. It is the same person's turn, so the row is theirs too."""
+    from workspace_app.agent.tools import write_file_impl
+
+    ctx = _ctx()
+    bindings = _authored(ctx, acting_for="carol")
+    await _with_workflow(ctx)
+
+    out = await write_file_impl(
+        ctx, "report/schedules.json", _rows({"every": "daily", "at": "09:00", "run": "nightly"})
+    )
+
+    assert out.startswith("wrote"), out
+    (binding,) = bindings.for_item("inv-1")
+    assert (binding.user_id, binding.path) == ("carol", "/report/schedules.json")
+
+
+async def test_a_row_added_with_edit_file_is_credited_and_the_old_ones_are_not(clock) -> None:
+    from workspace_app.agent.tools import edit_file_impl
+
+    ctx = _ctx()
+    await _with_workflow(ctx)
+    first = {"every": "daily", "at": "09:00", "run": "nightly"}
+    await ctx.context.files.write("inv-1", SCHEDULES, _rows(first).encode())
+    bindings = _authored(ctx, acting_for="carol")
+    old = _rows(first)
+    new = _rows(first, {"every": "daily", "at": "18:00", "run": "nightly"})
+
+    out = await edit_file_impl(ctx, ".workflows/schedules.json", old, new)
+
+    assert out.startswith("edited"), out
+    # Two rows in the file; only the one this edit added is carol's.
+    (binding,) = bindings.for_item("inv-1")
+    assert binding.user_id == "carol"
+
+
 async def test_a_turn_that_acts_for_nobody_saves_rows_that_run_as_nobody(clock) -> None:
     """A schedule's own run with no one bound, a trigger: nobody's values — and
     the reply says the row gets the shared values only."""

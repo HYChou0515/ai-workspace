@@ -20,7 +20,7 @@ import yaml
 from agents import FunctionTool, RunContextWrapper, ToolOutputImage, ToolOutputText, function_tool
 from specstar.types import ResourceIDNotFoundError
 
-from ..files import ReadOnlyPath, WorkspaceFiles, WorkspaceFull, rel_path
+from ..files import ReadOnlyPath, WorkspaceFiles, WorkspaceFull, abs_path, rel_path
 from ..filestore.protocol import FileNotFound
 from ..kb.doc_resolve import DocResolution
 from ..quota.disk_ledger import UserDiskFull
@@ -856,6 +856,9 @@ async def write_file_impl(ctx: RunContextWrapper[AgentToolContext], path: str, c
         return denied
     fs, inv = _workspace(ctx)
     current = await fs.create(inv, path, content.encode("utf-8"))
+    if current is None:
+        # A NEW schedules file: every row in it is this turn's (plan-schedule-run-as G2).
+        await _credit_schedules(ctx, inv, path, before=None, after=content)
     # Every confirmation and every rejection below names the file RELATIVELY
     # (#549), like `list_files` does. Echoing the argument verbatim taught the
     # opposite: an agent that guessed `/notes.md` had that guess confirmed by a
@@ -892,8 +895,12 @@ async def edit_file_impl(
         if (denied := authorize_tool(ctx.context, verb)) is not None:
             return denied
     fs, inv = _workspace(ctx)
+    before = await _schedules_before(ctx, inv, path)
     current = await fs.edit(inv, path, old_string, new_string)
     if current is None:
+        if before is not None:
+            after = (await fs.read(inv, path)).decode("utf-8", "replace")
+            await _credit_schedules(ctx, inv, path, before=before, after=after)
         return f"edited {rel_path(path)}"
     # This impl required `read_content` above, so `_conflict_echo` normally
     # cannot refuse — but "normally" is not "never": `authorize_tool` re-reads
@@ -908,6 +915,39 @@ async def edit_file_impl(
     return (
         f"error: could not apply the edit to {rel_path(path)} — `old_string` was not found "
         f"exactly once (the file may have changed). Current content:\n{echo}"
+    )
+
+
+async def _schedules_before(
+    ctx: RunContextWrapper[AgentToolContext], inv: str, path: str
+) -> str | None:
+    """A schedules file as it is before this turn changes it — None when the
+    path is not one, or nothing will credit the change."""
+    from ..api.schedule_index import is_schedule_file
+
+    if ctx.context.schedule_authorship is None or not is_schedule_file(abs_path(path)):
+        return None
+    try:
+        fs, _ = _workspace(ctx)
+        return (await fs.read(inv, path)).decode("utf-8", "replace")
+    except FileNotFound:
+        return None
+
+
+async def _credit_schedules(
+    ctx: RunContextWrapper[AgentToolContext], inv: str, path: str, *, before: str | None, after: str
+) -> None:
+    """The rows a write ADDS to a schedules file run as the person this turn
+    acts for — `save_schedules`, `write_file` and `edit_file` alike: the agent
+    can only write a PAGE's schedules with the last two (plan-schedule-run-as
+    G2; review round 1, conformance 1)."""
+    from ..api.schedule_index import is_schedule_file
+
+    authorship = ctx.context.schedule_authorship
+    if authorship is None or not is_schedule_file(abs_path(path)):
+        return
+    await authorship.credit(
+        inv, abs_path(path), before=before, after=after, author=ctx.context.acting_for
     )
 
 

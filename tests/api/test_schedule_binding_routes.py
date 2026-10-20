@@ -8,6 +8,8 @@ schedules with who each runs as, bind one to the caller, and unbind one's own.
 from __future__ import annotations
 
 import json
+
+import pytest
 from typing import cast
 
 from fastapi import FastAPI
@@ -163,6 +165,81 @@ def test_a_row_nobody_wrote_through_a_door_stays_nobodys_when_the_file_is_saved_
     who = sorted((r["describe"], r["bound_to"]) for r in _list(client, rid))
     assert [b for _d, b in who].count("carol") == 1
     assert [b for _d, b in who].count("") == 1
+
+
+def test_a_file_that_was_broken_before_the_save_hands_its_rows_to_nobody():
+    """Review round 1 (defect 1): a mid-edit save of invalid JSON, then the
+    fixed file — the rows in it are not "added" by the fix (the file just
+    could not be read), so they are not credited to whoever fixed it."""
+    client, holder, rid, _ = _world(seeded=True)
+    holder["id"] = "carol"
+    client.put(f"/a/rca/items/{rid}/files{FILE}", content='{"schedules": [')
+
+    client.put(f"/a/rca/items/{rid}/files{FILE}", content=_rows(DAILY, EVENING))
+
+    assert {r["bound_to"] for r in _list(client, rid)} == {""}
+
+
+def test_a_file_over_the_row_cap_credits_nobody():
+    """Review round 1 (defect 2): a file over the cap never fires, and the sweep
+    does not expire bindings while it stays over — so crediting its rows would
+    grow the binding table without bound."""
+    client, holder, rid, _ = _world(seeded=True)
+    holder["id"] = "carol"
+    many = [{"every": "daily", "at": f"{n // 60:02d}:{n % 60:02d}", "run": "build-report"} for n in range(1001)]
+
+    client.put(f"/a/rca/items/{rid}/files{FILE}", content=_rows(*many))
+
+    from workspace_app.workflow.schedule_bindings import ScheduleBindings
+
+    assert ScheduleBindings(client.app.state.spec).for_item(rid) == []
+
+
+def test_a_save_that_landed_is_not_reported_as_failed_because_crediting_failed(monkeypatch):
+    """Review round 1 (defect 4 / regression 4): crediting runs AFTER the bytes
+    landed. A failure there must not turn a saved file into a 500 — the client
+    would retry a write that succeeded, and the retry adds nothing to credit."""
+    from workspace_app.workflow.schedule_bindings import ScheduleBindings
+
+    client, holder, rid, _ = _world(seeded=True)
+    holder["id"] = "carol"
+
+    def _down(*_a, **_k):
+        raise RuntimeError("binding store down")
+
+    monkeypatch.setattr(ScheduleBindings, "bind", _down)
+
+    put = client.put(f"/a/rca/items/{rid}/files{FILE}", content=_rows(DAILY, EVENING))
+
+    assert put.status_code == 204, put.text
+    assert len(_list(client, rid)) == 2  # the file is there
+
+
+@pytest.mark.parametrize("fails_on", [1, 2])
+def test_a_schedules_file_that_cannot_be_read_around_the_save_still_saves(monkeypatch, fails_on):
+    """The read before the save (1) and the read-back after it (2) are only for
+    crediting: either failing leaves the rows uncredited, never fails the PUT."""
+    from workspace_app.files import WorkspaceFiles
+
+    client, holder, rid, _ = _world(seeded=True)
+    holder["id"] = "carol"
+    real = WorkspaceFiles.read
+    calls = {"n": 0}
+
+    async def _flaky(self, workspace_id, path):
+        if path == FILE:
+            calls["n"] += 1
+            if calls["n"] == fails_on:
+                raise OSError("host hiccup")
+        return await real(self, workspace_id, path)
+
+    monkeypatch.setattr(WorkspaceFiles, "read", _flaky)
+
+    put = client.put(f"/a/rca/items/{rid}/files{FILE}", content=_rows(DAILY, EVENING))
+
+    assert put.status_code == 204, put.text
+    monkeypatch.setattr(WorkspaceFiles, "read", real)
+    assert {r["bound_to"] for r in _list(client, rid)} == {""}
 
 
 def test_stopping_running_as_me_is_not_undone_by_the_next_save():

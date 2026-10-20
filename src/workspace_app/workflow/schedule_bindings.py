@@ -33,14 +33,17 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 from collections.abc import Awaitable, Callable
 
 from msgspec import Struct
 from specstar import QB, SpecStar
 from specstar.types import ResourceIDNotFoundError
 
-from .user_schedules import UserSchedule, trigger_id_for, usable_rows
+from .user_schedules import UserSchedule, file_rows, over_cap, trigger_id_for, usable_rows
 from .workspace_store import load_workspace_workflow_digested
+
+logger = logging.getLogger(__name__)
 
 
 async def workflow_digest(
@@ -203,10 +206,15 @@ class ScheduleAuthorship:
         *,
         read: Callable[[str, str], Awaitable[bytes]],
         may_run: Callable[[str, str], bool],
+        max_rows: int | None = None,
     ) -> None:
         self._bindings = bindings
         self._read = read
         self._may_run = may_run
+        # The sweep's own cap: a file over it fires nothing, and the sweep does
+        # not expire bindings while it stays over — crediting its rows would
+        # only grow the table (review round 1, defect 2).
+        self._max_rows = max_rows
 
     def runs_as(self, key: str) -> str:
         """Who the row ``key`` runs as now, or "" for nobody. Blocking."""
@@ -215,10 +223,32 @@ class ScheduleAuthorship:
     async def credit(
         self, item_id: str, path: str, *, before: str | None, after: str, author: str
     ) -> list[str]:
-        """Bind the rows ``after`` adds to ``author``; return their keys."""
+        """Bind the rows ``after`` adds to ``author``; return their keys. Never
+        raises: it runs AFTER the bytes landed, and a failure here must not
+        report a saved file as failed — the caller would retry a write that
+        succeeded, and the retry adds nothing to credit (review round 1). The
+        rows then run as nobody, which is what they did before this existed."""
+        try:
+            return await self._credit(item_id, path, before=before, after=after, author=author)
+        except Exception:  # noqa: BLE001 — logged; the save stands
+            logger.exception(
+                "schedule authorship: could not credit %s %s to %s", item_id, path, author
+            )
+            return []
+
+    async def _credit(
+        self, item_id: str, path: str, *, before: str | None, after: str, author: str
+    ) -> list[str]:
         from .offered import unparsable_workflow
 
         if not author:
+            return []
+        # A file that was there but could not be read had rows nobody can name:
+        # the fix that makes them readable did not ADD them (review round 1,
+        # defect 1 — every row of a once-broken file went to whoever fixed it).
+        if before is not None and file_rows(before) is None:
+            return []
+        if self._max_rows is not None and over_cap(after, self._max_rows) is not None:
             return []
         old = {key for key, _row in file_keys(item_id, path, before)} if before else set()
         added = [(key, row.run) for key, row in file_keys(item_id, path, after) if key not in old]

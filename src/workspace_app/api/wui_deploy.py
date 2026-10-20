@@ -118,9 +118,11 @@ class DeployedPages:
         with contextlib.suppress(ResourceIDNotFoundError):
             self._rm().permanently_delete(deployed_id(item_id, path))
 
-    def newest_first(self) -> list[DeployedWui]:
+    def newest_first(self, item_id: str | None = None) -> list[DeployedWui]:
+        """Every Deployed page — or ONE item's (`item_id` is indexed)."""
         rows: list[DeployedWui] = []
-        for res in self._rm().list_resources(QB.all().sort("-deployed_at").build()):
+        query = QB.all() if item_id is None else QB["item_id"] == item_id
+        for res in self._rm().list_resources(query.sort("-deployed_at").build()):
             data = res.data
             assert isinstance(data, DeployedWui)  # narrow for ty (coverage-clean)
             rows.append(data)

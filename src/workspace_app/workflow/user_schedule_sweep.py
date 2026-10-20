@@ -412,6 +412,11 @@ class UserScheduleSweeper:
             logger.exception("user schedules: %s %s: could not check bindings", item_id, path)
             return
         for binding in gone:
+            # A row someone WROTE (plan-schedule-run-as G2) was never a "Run as
+            # me" they chose; "choose it again" would be false, and when they
+            # changed the row themselves the new one is already theirs.
+            if binding.reason == "author":
+                continue
             await self._tell(binding, "changed")
 
     async def _one_file(self, item_id: str, path: str) -> int:

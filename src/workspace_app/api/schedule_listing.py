@@ -370,7 +370,7 @@ def register_schedule_overview_routes(
     start_run: Callable[..., Awaitable[str | None]],
     durable: Source,
     on_saved: Callable[[str, str], None],
-    deployed_pages: Callable[[], list[DeployedWui]] = list,
+    deployed_pages: Callable[..., list[DeployedWui]] = lambda _item=None: [],
     authorship: ScheduleAuthorship | None = None,
     bindings: ScheduleBindings | None = None,
     superusers: frozenset[str] = frozenset(),
@@ -574,6 +574,22 @@ def register_schedule_overview_routes(
         except Exception:  # noqa: BLE001 — said for that file by the listing
             return True
 
+    async def _one_entry(item_id: str) -> tuple[str, list[str], dict[str, int]]:
+        """What the index names for ONE item, read as point lookups. An index
+        that cannot be read names nothing — the item's own file then lists as
+        "not registered yet", as master's panel route read it — not a 500."""
+
+        def _read() -> tuple[str, list[str], dict[str, int]]:
+            paths = index.paths(item_id)
+            landed = {p: at for p in paths if (at := index.landed_at(item_id, p)) is not None}
+            return item_id, paths, landed
+
+        try:
+            return await asyncio.to_thread(_read)
+        except Exception:  # noqa: BLE001 — a listing, not a run
+            logger.exception("schedules overview: %s: index unreadable", item_id)
+            return item_id, [], {}
+
     async def _overview(only: str | None) -> ScheduleOverview:
         rows: list[OverviewRow] = []
         problem_files: list[OverviewFile] = []
@@ -581,31 +597,39 @@ def register_schedule_overview_routes(
         # Newest Deploy first, so the first page seen for a folder is the one
         # kept when a folder holds two Deployed view files.
         pages: dict[tuple[str, str], DeployedWui] = {}
-        for page in await asyncio.to_thread(deployed_pages):
+        # ONE item's pages for its panel — the panel opens often, and the
+        # Deployed table grows with every page anyone ships (review round 1).
+        for page in await asyncio.to_thread(
+            deployed_pages if only is None else (lambda: deployed_pages(only))
+        ):
             pages.setdefault((page.item_id, page.path.rsplit("/", 1)[0]), page)
         me = get_user_id()
-        entries = await asyncio.to_thread(index.entries)
         unindexed: list[str] = []
-        if only is not None:
-            entries = [e for e in entries if e[0] == only]
-            named = entries[0][1] if entries else []
+        if only is None:
+            entries = await asyncio.to_thread(index.entries)
+        else:
+            entries = [await _one_entry(only)]
+            named = entries[0][1]
             # The item's own file, named by no index yet (written past every
             # hook): listed as not running yet, as its panel always did.
             if ITEM_SCHEDULES_PATH not in named and await _present(only, ITEM_SCHEDULES_PATH):
                 unindexed.append(ITEM_SCHEDULES_PATH)
-                landed_of = entries[0][2] if entries else {}
-                entries = [(only, [*named, ITEM_SCHEDULES_PATH], landed_of)]
+                entries = [(only, [*named, ITEM_SCHEDULES_PATH], entries[0][2])]
         for item_id, paths, landed in entries:
             decided = await asyncio.to_thread(_decide, item_id)
             if decided is None:
                 continue
             slug, title, owner, can_edit, can_run, can_read, profile = decided
             # Who each row runs as: one indexed read per item, not one per row.
-            held: dict[str, ScheduleBinding] = (
-                {b.trigger_id: b for b in await asyncio.to_thread(bindings.for_item, item_id)}
-                if bindings is not None
-                else {}
-            )
+            # Unreadable, the rows say "nobody" rather than the page 500ing —
+            # one item must never take the page down (review round 1).
+            held: dict[str, ScheduleBinding] = {}
+            if bindings is not None:
+                try:
+                    found = await asyncio.to_thread(bindings.for_item, item_id)
+                    held = {b.trigger_id: b for b in found}
+                except Exception:  # noqa: BLE001 — said in the log, not as a 500
+                    logger.exception("schedules overview: %s: bindings unreadable", item_id)
 
             def _file(
                 path: str, problems: list[str], slug=slug, item_id=item_id, title=title
