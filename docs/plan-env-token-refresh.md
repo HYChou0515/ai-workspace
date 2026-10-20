@@ -18,7 +18,8 @@ token 過期之後，要嘛人去重新登入，要嘛工具自己拿 refresh to
 | D1 | 換 token 的方法寫在部署方的系統登入（`IEnvProvider`）裡：多一個**可選的** refresh 步驟。平台決定「什麼時候換、換完存到哪」，怎麼換由部署方的程式決定；工具完全不碰 | 〔user〕選 1（推薦） |
 | D2 | **要用的時候才換**：平台在組工具的環境變數之前，發現快過期就先換；沒人用就不換 | 〔user〕選 1（推薦） |
 | D3 | 換到的新值**從哪讀到就存回哪**：我的環境變數／這個 item 的 Private（自己填的那份）／Shared。Shared 由平台代為寫入，不看當下替誰跑的人有沒有 `write_meta` | 〔user〕選 1（推薦） |
-| D4 | 換失敗**照樣執行**（工具拿到現有的值）；讓人知道要重新登入：有人在場→畫面上提示，無人在場→通知替誰跑的人。存著的 refresh token 只有在部署方的程式明確說「無效」時才清掉，網路不通、對方 5xx 都不清 | 〔user〕選 1（推薦）；「有人在場的提示」怎麼畫見 **O1** |
+| D4 | 換失敗**照樣執行**（工具拿到現有的值）；讓人知道要重新登入：有人在場→畫面上提示，無人在場→通知替誰跑的人。存著的 refresh token 只有在部署方的程式明確說「無效」時才清掉，網路不通、對方 5xx 都不清 | 〔user〕選 1（推薦） |
+| D6 | 有人在場時，平台在那一輪的對話裡放一則**一定會出現**的平台訊息「{系統} 登入已過期，請重新登入」，裡面直接放「登入 X」按鈕，打開 #892 的同一個登入頁；不經過 AI、不含重試按鈕（見「有人在場時的提示」） | 〔user〕「你的建議是什麼？」→ 建議 (a) 加按鈕 →「可以，照這樣寫進計畫」 |
 | D5 | 平台是**介面**，看不到部署方怎麼實作，所以「refresh 失敗」由**介面明文規定的回報方式**決定：平台自己呼叫 `refresh()`，看它的結果——正常回傳＝成功；raise `RefreshRejected`＝refresh token 確定無效（只有人重新登入能解決）；其他任何例外或逾時＝暫時失敗。部署方沒照做（全部丟一般例外）時，平台一律當暫時失敗：不清、不提示，等工具自己失敗再走 #892 的 `request_env` 卡片 | 〔user〕「你怎麼知道登入失敗？你只是 interface…除非你要規定實做方登入失敗要怎樣」→「可以，照這樣寫進計畫」 |
 
 ## 機制
@@ -101,19 +102,30 @@ raise `RefreshRejected`，否則人要等到工具失敗才會被告知。
 - 其他例外、逾時、等鎖逾時：什麼都不清，照樣執行。
 - 無人在場：用既有的 `notify()`（`notifications.py:23`）通知替誰跑的人，連到 `/my-env`；同一人同一 provider
   每天去重一次（同 `workflow_exec.notify_failure` 的 dedup 形狀）〔預設〕。
-- 有人在場：**O1**。
+- 有人在場：照 D6，在那一輪的對話裡放一則平台訊息，附「登入 X」按鈕。
 
-## 未決
+### 有人在場時的提示（D6）
 
-- **O1（要 user 決定）**：`refresh()` 回 `RefreshRejected`、而且有人在場時，畫面上怎麼提示。#892 的登入卡片是
-  **AI 呼叫 `request_env` 工具的回傳**才畫得出來（`agent/env_request.py:37`；`plan-env-request-card.md` N1「由 AI
-  決定」），平台自己不能插入。兩個做法：
-  - (a) 平台在那一輪的對話裡放一則平台訊息「{系統} 登入已過期，請重新登入」，附連到 `/my-env` 的連結——沿用
-    現成的 `role="notice"` 訊息（#624 的「較早的訊息不再送給模型」用的就是它：`chat_send.py:697`、`turns.py:110`）。
-    一定出現，但不是那張有登入按鈕的卡片。
-  - (b) 平台在那一輪告訴 AI「{名稱} 的登入已過期，請呼叫 `request_env`」，由 AI 叫出 #892 的登入卡片（按
-    「登入 X」→ 登入頁 → 存檔 → 重試，全是現成的）。是 user 記得的那張卡片，但要 AI 照做才會出現。
-  user 先選了 (a)，接著說「印象中我們做過這個東西」，指的是 #892 的卡片——兩者不同，還沒定。
+`refresh()` raise `RefreshRejected`、而且有人在場（聊天、頁面按鈕）時：
+
+- 平台在那一輪的對話裡放一則**平台訊息**「{登入方式的 label} 登入已過期，請重新登入」，存進對話紀錄（重新整理後
+  還在），沿用現成的 `role="notice"` 訊息（`turns.py:110`；#624 用它寫「較早的訊息不再送給模型」，
+  `chat_send.py:697`）。不經過 AI，一定出現。
+- 訊息裡直接放「**登入 X**」按鈕，按下去打開 #892 的同一個登入頁元件（`plan-env-request-card.md` N6），存檔照
+  #750／#892 D10 的規則（按「儲存」才存）。訊息要帶一個機器讀得到的登入方式 id，前端才知道開哪一個登入頁
+  〔預設：照 `request_env` 結果尾端的標記做法〕。
+- **沒有「重試」按鈕**：#892 卡片的重試綁在 AI 的那次工具呼叫上（D8），平台訊息沒有對應的呼叫可綁；登入存檔後
+  再跟 AI 說一次。這一輪的工具照 D4 拿到舊值，可能失敗；下一輪就是新值。
+- 同一輪、同一個登入方式只放一則。
+
+為什麼不是 #892 的卡片：那張卡片只有 **AI 呼叫 `request_env`** 才畫得出來（`agent/env_request.py:37`；
+`plan-env-request-card.md` N1「由 AI 決定」）。平台在這裡已經**確定**登入失效，再交給模型決定要不要出卡片，
+小模型可能不照做，人就什麼都看不到。
+
+依據（NN/g〈Error-Message Guidelines〉，https://www.nngroup.com/articles/error-message-guidelines/）：
+「Display the error message close to the error's source」——放在發生的那一輪；「Merely stating the problem is
+also not enough; offer some potential remedies」「guess the correct action and let users pick it」——平台已經知道是
+哪個登入方式失效，直接給那個登入按鈕，而不是一個要人自己找的連結。
 
 ## 不做
 
@@ -132,6 +144,6 @@ raise `RefreshRejected`，否則人要等到工具失敗才會被告知。
 | P3 | `_RefreshClaim` 跨 pod 鎖（CAS + 過期） | 兩個並行搶同一把只有一個拿到；持有者不放鎖，過期後別人拿得到 |
 | P4 | `refresh_if_due`：判斷 → 拿鎖 → 重讀 → refresh → 寫回同一層 → 放鎖；失敗照 D4 | 每一層各一條寫回測試；rotation 情境兩個並行只換一次；`RefreshRejected` 清、其他例外不清 |
 | P5 | providers 一路傳到 `ChatSendService`、`WorkflowExecutor`、wui 路由，掛在 `private_layer` / `unattended_layer` 之後 | 每個入口（聊天、callTool、goal、reclaim、workflow 節點、排程）各一條測試：快過期時工具拿到新值；WUI build 不呼叫 refresh |
-| P6 | 無人在場失敗 → `notify()`；有人在場 → 照 O1 | 去重；值從不出現在通知裡 |
+| P6 | 無人在場失敗 → `notify()`；有人在場 → D6 的平台訊息＋「登入 X」按鈕（前端：notice 帶登入方式 id 時畫按鈕，打開 #892 的登入頁） | 去重；值從不出現在通知或訊息裡；按鈕打開的是對的那個登入方式 |
 | P7 | 文件：`extending-the-platform.md`（部署方怎麼寫 refresh）、runbook 條目、plan-personal-env「不做」那條標推翻、design-history | `mkdocs build --strict`；`tests/docs/test_docs_index.py` |
 | P8 | live check：替身 provider（token 幾十秒就過期、refresh 會 rotation）＋真 app；錄 demo（過期 → 自動換 → 工具拿到新值） | 對照 master：同一流程在 master 上工具拿到過期值 |
