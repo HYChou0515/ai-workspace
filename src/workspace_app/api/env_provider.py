@@ -52,6 +52,24 @@ class InputField:
     that nothing stores it."""
 
 
+class RefreshRejected(Exception):  # noqa: N818 — the name is the contract a deploy writes against
+    """Raised by ``IEnvProvider.refresh`` when the refresh token is DEAD —
+    revoked or expired, so only a person signing in again can fix it
+    (`docs/plan-env-token-refresh.md` D5).
+
+    ``names`` are the stored variables that died with it (the refresh token,
+    and the access token it was minted from): only the deploy knows which
+    variable is which, so it says. The platform clears exactly those — and
+    only the ones this provider ``produces`` — and tells the person to sign in
+    again. Any OTHER exception from ``refresh`` is a passing failure (network,
+    the gateway's 5xx): the platform clears nothing and tries again the next
+    time the value is used. Names only: the message never carries a value."""
+
+    def __init__(self, names: set[str] | frozenset[str]) -> None:
+        self.names = frozenset(names)
+        super().__init__(f"refresh rejected for {', '.join(sorted(self.names))}")
+
+
 class IEnvProvider(abc.ABC):
     """One way to obtain environment variables from something a person types.
 
@@ -116,3 +134,42 @@ class IEnvProvider(abc.ABC):
         refuses such a result whole and names the variable rather than storing
         part of it. If what you mint is a PEM, this seam cannot deliver it; give
         it to the tool some other way."""
+
+    # ── refresh (`docs/plan-env-token-refresh.md`) — both optional ──────────
+    # A deploy written before these existed overrides neither and behaves
+    # exactly as before: nothing is ever judged near expiry, nothing refreshed.
+
+    def needs_refresh(self, values: dict[str, str]) -> bool:
+        """Whether the values a tool is about to get should be refreshed first.
+
+        ``values`` are this provider's ``produces`` names as the tool would get
+        them now, the refresh token included. Called before EVERY tool run that
+        would carry them, so it must be cheap and must not touch the network —
+        read a JWT's ``exp``, say, and answer True inside a margin you choose
+        (D2: refresh only when a value is about to be used). Default: False."""
+        return False
+
+    async def refresh(self, values: dict[str, str]) -> dict[str, str]:
+        """Swap the refresh token in ``values`` for a fresh set of values —
+        a new refresh token among them if your system rotates it.
+
+        The outcome is the contract (D5), and the platform reads nothing else:
+
+        * return the new values → written back to the layer they came from
+          (D3) and handed to the tool;
+        * ``raise RefreshRejected(names)`` → the refresh token is dead; the
+          named variables are cleared and the person is told to sign in again;
+        * raise anything else, or run past your own bound → a passing failure;
+          nothing is cleared and the tool gets the values it had.
+
+        Raise ``RefreshRejected`` whenever you KNOW the token is dead: an
+        ordinary exception there means nobody hears of it until a tool fails.
+        Bound your own latency, as for ``resolve``; never log a value or put
+        one in an exception. Default: not supported."""
+        raise NotImplementedError
+
+
+def supports_refresh(provider: IEnvProvider) -> bool:
+    """Whether this deploy wrote a ``refresh`` — the platform never asks one
+    that did not (asking would only raise ``NotImplementedError``)."""
+    return type(provider).refresh is not IEnvProvider.refresh
