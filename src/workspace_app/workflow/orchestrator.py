@@ -815,11 +815,30 @@ class WorkflowOrchestrator:
         data = self.run_in(run_id, item_id)
         if data.page_job is None:
             raise ResourceIDNotFoundError(run_id)
-        if data.status in _ACTIVE:
-            if not self._page_job_lost(data):
-                return PageJobState("running")
+        if data.status in _ACTIVE and self._page_job_lost(data):
             await self.abandon(run_id, reason=PAGE_JOB_LOST)
             data = self._get(run_id)
+        return self._page_job_state_of(data)
+
+    async def page_jobs(self, item_id: str) -> list[tuple[str, WorkflowRun, PageJobState]]:
+        """The item's page jobs, each as `page_job_state` reads it — the list a
+        script reads instead of the run table's own routes (#870). Lost ones are
+        settled first, as a status read would settle them."""
+        await self._settle_lost_page_jobs(item_id)
+        out = []
+        for r in self._rm().list_resources((QB["item_id"] == item_id).build()):
+            data = r.data
+            assert isinstance(data, WorkflowRun)
+            if data.page_job is not None:
+                out.append((r.info.resource_id, data, self._page_job_state_of(data)))
+        return out
+
+    @staticmethod
+    def _page_job_state_of(data: WorkflowRun) -> PageJobState:
+        """What a page job's row says it is — `running` while active (a lost one
+        is settled before it gets here)."""
+        if data.status in _ACTIVE:
+            return PageJobState("running")
         if data.status is RunStatus.DONE:
             return PageJobState("done", output=dict(data.result or {}))
         if data.status is RunStatus.CANCELLED:

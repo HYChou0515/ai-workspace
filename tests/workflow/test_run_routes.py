@@ -1192,7 +1192,7 @@ def test_every_run_id_route_is_on_the_list():
     app, _spec, _item = _app()
     prefix = "/api/a/{slug}/items/{item_id}/"
     found = {
-        (method, route.path.removeprefix(prefix))
+        (method, path.removeprefix(prefix))
         for route in app.routes
         if (path := getattr(route, "path", "")).startswith(prefix)
         and ("{run_id}" in path or "{job_id}" in path)

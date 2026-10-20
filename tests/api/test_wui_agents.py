@@ -283,7 +283,13 @@ def test_asking_a_sub_agent_or_starting_a_job_needs_the_right_to_run_things():
             _url(item_id, "jobs"), json={"kind": "agent", "name": "log-digger", "input": "x"}
         )
         status = client.get(_url(item_id, "jobs/whatever"))
-    assert (call.status_code, job.status_code, status.status_code) == (403, 403, 403)
+        listed = client.get(_url(item_id, "jobs"))
+    assert (call.status_code, job.status_code, status.status_code, listed.status_code) == (
+        403,
+        403,
+        403,
+        403,
+    )
     assert _runs(spec) == []
 
 
@@ -440,6 +446,37 @@ def test_a_job_of_another_item_is_not_found():
         _wait_state(client, item_id, job_id, "done")
         assert client.get(_url(other, f"jobs/{job_id}")).status_code == 404
         assert client.post(_url(other, f"jobs/{job_id}/stop")).status_code == 404
+
+
+def test_an_items_page_jobs_are_listed_with_their_state():
+    """#870: the list a script reads instead of `/api/workflow-run/data`, which
+    answered anyone about every item. Only THIS item's page jobs, each as its
+    status reads (`GET …/jobs/{id}`) plus what it is; a workflow's execution is
+    not a page job, and another item's jobs are not this item's."""
+    from workspace_app.workflow.run import PageJob, RunStatus
+
+    client, item_id, spec = _app(SubRunner())
+    runs = spec.get_resource_manager(WorkflowRun)
+    runs.create(WorkflowRun(item_id=item_id, captured_user="u", status=RunStatus.DONE))
+    runs.create(
+        WorkflowRun(
+            item_id="another-item",
+            captured_user="u",
+            status=RunStatus.DONE,
+            page_job=PageJob(kind="agent", name="log-digger", input="x"),
+        )
+    )
+    with client:
+        start = {"kind": "agent", "name": "log-digger", "input": "x"}
+        mine = client.post(_url(item_id, "jobs"), json=start).json()["job_id"]
+        done = _wait_state(client, item_id, mine, "done")
+        resp = client.get(_url(item_id, "jobs"))
+
+    assert resp.status_code == 200, resp.text
+    [job] = resp.json()
+    assert job["job_id"] == mine
+    assert (job["kind"], job["name"]) == ("agent", "log-digger")
+    assert {k: job[k] for k in ("state", "output", "error")} == done
 
 
 @pytest.mark.parametrize("body", [{"kind": "nope", "name": "x", "input": ""}, {"kind": "agent"}])
