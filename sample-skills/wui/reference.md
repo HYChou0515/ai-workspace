@@ -348,7 +348,7 @@ await workspace.writeFile("schedules.json", JSON.stringify({
 Write **only** the `schedules` list, each row an object — no `version`, no
 timestamp, no row turned into a string. Anything else in the file and the
 platform can no longer tell which rows the person saving just added, so the
-rows that save adds run with nobody's own values until someone presses
+rows that later saves add run with nobody's own values until someone presses
 **Run as me**.
 
 | word | means |

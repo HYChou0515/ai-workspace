@@ -213,8 +213,11 @@ def _unreadable(raw: str) -> bool:
     exception had let through (a stringified row beside the list), so there are
     no exceptions for convenience: a file with a stray value beside its list
     credits nobody, and its rows' people press "Run as me". An invalid row
-    OBJECT inside a clean list is readable: fixing it changes its key, so it is
-    the fixer's new row (G2 — an edited row belongs to whoever edited it)."""
+    OBJECT inside a clean list is readable: it has no key until it is fixed, so
+    fixing it gives it one — the fixer's new row (G2: an edited row belongs to
+    whoever edited it). Strings inside a row object — its `with` payload
+    included — are that row's data, not hidden rows: copying one out into a
+    row of its own is writing that row."""
     if not raw.strip():
         return False
     try:

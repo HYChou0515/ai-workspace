@@ -62,7 +62,7 @@ facade 的 `_landed` 不知道是誰(`files/facade.py:500`,只有 workspace_id �
 不需要 backfill:升級前的列從來不會出現在差集裡。
 
 三條護欄(review 第 1 輪起):寫之前那份檔**可能藏了 sweep 讀不到的列** → 這次什麼都不認,因為「修好」不等於「新寫」——
-怎樣算「可能藏了列」是一張偏向安全方向的表(`schedule_bindings._unreadable` 的 docstring;第 2–6 輪逐步補齊):
+怎樣算「可能藏了列」是一張偏向安全方向的表(`schedule_bindings._unreadable` 的 docstring;第 2–7 輪逐步補齊):
 空白、或只有空結構、或乾淨的 `schedules` 清單(元素全是物件、旁邊沒有任何值)照常認;其他有內容的——包括清單旁邊的
 `"version": 1`、字串化的列、重複 key——一律不認;寫之後那份**超過列數上限** → 什麼都不認(sweep 不會觸發它,也不會在超量時清綁定);
 認作者這一步**失敗了只記 log**,不讓已經寫好的檔回報失敗。
