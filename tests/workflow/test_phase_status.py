@@ -24,7 +24,7 @@ from workspace_app.apps.playground.model import PlaygroundItem
 from workspace_app.filestore.specstar_impl import SpecstarFileStore
 from workspace_app.resources import make_spec
 from workspace_app.sandbox.mock import MockSandbox
-from workspace_app.workflow.run import WorkflowRun
+from workspace_app.workflow.run import PhaseState, RunStatus, WorkflowRun
 
 FLOW = {
     "id": "flow",
@@ -169,6 +169,53 @@ def test_a_finished_run_has_every_phase_passed():
         assert item.settle(run_id) == "done"
         stored = item.stored(run_id)
     assert stored == {"first": "passed", "second": "passed"}
+
+
+def _stored_before_the_fix(item: _Item, status: RunStatus, current: str) -> str:
+    """A run as one written before this fix left it: every phase walked running."""
+    return (
+        item.spec.get_resource_manager(WorkflowRun)
+        .create(
+            WorkflowRun(
+                item_id=item.base.rsplit("/", 1)[1],
+                captured_user="u",
+                workflow_id="flow",
+                status=status,
+                current_phase=current,
+                started=1,
+                phases=[
+                    PhaseState(phase="first", status="running", done=1, total=1),
+                    PhaseState(phase="second", status="running", total=1),
+                ],
+            )
+        )
+        .resource_id
+    )
+
+
+def _served(item: _Item, payload: dict) -> dict[str, str]:
+    return {p["phase"]: p["status"] for p in payload["phases"]}
+
+
+def test_a_run_stored_before_the_fix_is_served_settled():
+    # P2: the reported execution itself, already in the database, reads right.
+    item = _Item(_HoldStepTwo())
+    with item.client:
+        stopped = _stored_before_the_fix(item, RunStatus.CANCELLED, "second")
+        one = item.client.get(f"{item.base}/runs/{stopped}").json()
+        listed = {r["run_id"]: r for r in item.client.get(f"{item.base}/runs").json()}
+    assert _served(item, one) == {"first": "passed", "second": "stopped"}
+    assert _served(item, listed[stopped]) == {"first": "passed", "second": "stopped"}
+
+
+def test_a_live_run_stored_before_the_fix_is_served_with_one_running_phase():
+    item = _Item(_HoldStepTwo())
+    with item.client:
+        live = _stored_before_the_fix(item, RunStatus.RUNNING, "second")
+        one = item.client.get(f"{item.base}/runs/{live}").json()
+        listed = {r["run_id"]: r for r in item.client.get(f"{item.base}/runs").json()}
+    assert _served(item, one) == {"first": "passed", "second": "running"}
+    assert _served(item, listed[live]) == {"first": "passed", "second": "running"}
 
 
 GATED = {
