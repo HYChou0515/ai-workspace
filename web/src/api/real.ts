@@ -19,7 +19,6 @@ import {
   apiFetch,
   detailSentence,
   HttpError,
-  errorCode,
   errorInfo,
   httpErrorFrom,
 } from "./http";

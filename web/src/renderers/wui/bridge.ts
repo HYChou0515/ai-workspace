@@ -131,7 +131,9 @@ export type BridgeContext = {
   /** Start / read / stop jobs, or `null`/absent where no backend is wired. */
   jobs?: PageJobs | null;
   /**
-   * Told of every call that failed, before the page hears the refusal — the one
+   * Told of a capability call (tool, agent, job) that failed, before the page
+   * hears the refusal; writes and runs reach the pane through the dispatch's own
+   * catch instead. With that, the one
    * place the pane recognises "this page needs the WUI User permission"
    * (docs/plan-wui-user.md D7). The capability branches answer their own
    * failures, so without this only writes and runs ever reached the pane.

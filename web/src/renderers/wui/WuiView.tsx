@@ -1007,7 +1007,7 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
     } catch (err) {
       // An abort is this pane's own doing, not something to report.
       if (stale() || control.signal.aborted) return false;
-      // A build that could not be STARTED — a viewer without `execute`, a
+      // A build that could not be STARTED — a viewer without `use_wui`, a
       // folder the server refuses — arrives as a status, not as output. Unsaid,
       // the button looks like it did nothing at all.
       note(err instanceof Error ? err.message : "The build could not be run.");

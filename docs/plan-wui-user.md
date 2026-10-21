@@ -36,7 +36,7 @@ What a page's buttons hit, and the verb each route requires:
   which calls the ordinary file service with the viewer's session. The server cannot
   tell a page's save from a save in the file tree.
 - "A page can only write inside its own folder" is checked only in the browser
-  (`resolveWritePath`, `paths.ts:141-152` at `59811856`; `bridge.ts:292` calls it).
+  (`resolveWritePath`, `paths.ts:141-152` at `59811856`; `bridge.ts:291` calls it).
 - What a page runs is authorised as the item's OWNER (`captured_user`), with the
   pressing person's private env values (`wui_routes.py:525-534`, plan-wui-viewer-login
   Q6). That does not change here.
@@ -198,8 +198,8 @@ Where the build adds to or differs from the sections above; this section wins.
   `hasItemVerb`, and so the implications D9/D10 and `use_wui ⊇ read_content`;
   `tests/fixtures/wui_page_write_cases.json` is the server's own table for
   `page_may_write` (paths compared on segments — `//` and `.` collapsed, as the sandbox
-  opens them). The browser does NOT judge the view-file check: it cannot tell who is
-  asking, and an editor's page may still write its own view file.
+  opens them). The browser leaves the view-file check to the server rather than
+  recompute who may write what; an editor's page may still write its own view file.
   Role detection in the share dialog reads what a stored set implies, so a Participant
   or Collaborator stored before `use_wui` is that role, not Custom.
 - **One reader of view files.** `api/wui_page.py` (`load_wui_view`, `page_folder`,
