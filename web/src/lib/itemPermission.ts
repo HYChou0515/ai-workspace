@@ -21,12 +21,15 @@ export type ItemVerb =
   | "converse"
   | "add_content"
   | "edit_content"
-  | "execute";
+  | "execute"
+  // docs/plan-wui-user.md D2: use the item's pages, nothing outside them
+  | "use_wui";
 
 export type ItemRoleId =
   | "discoverable"
   | "in_workspace"
   | "reader"
+  | "wui_user"
   | "participant"
   | "collaborator";
 
@@ -40,8 +43,10 @@ export const ITEM_ROLES: ItemRoleDef[] = [
   { id: "discoverable", label: "Discoverable", hint: "Sees it exists + can request access", verbs: ["read_meta"] },
   { id: "in_workspace", label: "In workspace", hint: "Can enter + watch the conversation", verbs: ["read_meta", "read_chat"] },
   { id: "reader", label: "Reader", hint: "Can also read the files", verbs: ["read_meta", "read_chat", "read_content"] },
-  { id: "participant", label: "Participant", hint: "Can also talk to the agent", verbs: ["read_meta", "read_chat", "read_content", "converse"] },
-  { id: "collaborator", label: "Collaborator", hint: "Can also edit files + run code", verbs: ["read_meta", "read_chat", "read_content", "converse", "add_content", "edit_content", "execute"] },
+  // docs/plan-wui-user.md D8: everything the item's pages do, nothing outside them.
+  { id: "wui_user", label: "WUI User", hint: "Can also use its pages", verbs: ["read_meta", "read_chat", "read_content", "use_wui"] },
+  { id: "participant", label: "Participant", hint: "Can also talk to the agent", verbs: ["read_meta", "read_chat", "read_content", "use_wui", "converse"] },
+  { id: "collaborator", label: "Collaborator", hint: "Can also edit files + run code", verbs: ["read_meta", "read_chat", "read_content", "use_wui", "converse", "add_content", "edit_content", "execute"] },
 ];
 
 /** The subset of the wire `Permission` the write gate needs. Other verbs exist
@@ -56,6 +61,7 @@ export type ItemPermission = {
   add_content?: string[];
   write_meta?: string[];
   execute?: string[];
+  use_wui?: string[];
   // unmanaged by the item UI but preserved verbatim on save
   change_permission?: string[];
   use_terminal?: string[];
@@ -211,7 +217,33 @@ export function hasItemVerb(
   if (currentUserId === ownerId) return true;
   if (!permission || permission.visibility === "public") return true;
   if (permission.visibility === "private") return false;
-  return grantsAnySubject(permission[verb], currentUserId, groups); // #608: user OR group
+  return grantsAnySubject(effectiveGrants(permission, verb), currentUserId, groups); // #608: user OR group
+}
+
+/**
+ * The grant list that admits `verb`, implications included — the backend's
+ * `_effective_grants` (`perm/authorize.py`), held to it by
+ * `web/tests/itemVerbParity.test.ts`. docs/plan-wui-user.md D9/D10: converse and
+ * execute imply use_wui; D3: an EXPLICIT use_wui implies read_content (a page
+ * must read its folder) — not chained, so a converse-only grant reads nothing.
+ */
+function effectiveGrants(permission: ItemPermission, verb: ItemVerb | "write_meta"): string[] {
+  const own = permission[verb] ?? [];
+  if (verb === "add_content") return [...own, ...(permission.edit_content ?? [])];
+  if (verb === "use_wui") return [...own, ...(permission.converse ?? []), ...(permission.execute ?? [])];
+  if (verb === "read_content") return [...own, ...(permission.use_wui ?? [])];
+  return own;
+}
+
+/** A stored verb set with what it implies (the same rules as `effectiveGrants`),
+ * so a Participant or Collaborator stored before use_wui existed reads as that
+ * role rather than falling a rung (D9/D10). */
+function withImplied(verbs: Set<string>): Set<string> {
+  const out = new Set(verbs);
+  if (out.has("edit_content")) out.add("add_content");
+  if (out.has("converse") || out.has("execute")) out.add("use_wui");
+  if (verbs.has("use_wui")) out.add("read_content");
+  return out;
 }
 
 /** #306 PR3 — who may open the sharing UI, mirroring `perm/authorize.py` step 5.
@@ -257,6 +289,15 @@ export const canConverse = (
   su: boolean,
   groups: string[] = [],
 ) => hasItemVerb(p, u, o, "converse", su, groups);
+/** docs/plan-wui-user.md D2: press a page's buttons (`use_wui`, which converse
+ * and execute imply — D9/D10). */
+export const canUseWui = (
+  p: ItemPermission | undefined,
+  u: string,
+  o: string,
+  su: boolean,
+  groups: string[] = [],
+) => hasItemVerb(p, u, o, "use_wui", su, groups);
 /** The disclosure case: sees the item exists (read_meta) but can't enter it
  * (no read_chat) — the 🔒 locked list row that offers "request access". A
  * superuser is never locked out, so this is always false for them. */
@@ -276,8 +317,9 @@ const subjectGroup = (s: string): string | null => (s.startsWith("group:") ? s.s
  * it doesn't even reach Discoverable (no read_meta), and `"custom"` conceptually
  * when a non-nested combo is held (the dialog then shows Custom). */
 export function itemRoleForVerbs(verbs: Set<string>): ItemRoleId | null {
+  const held = withImplied(verbs);
   for (let i = ITEM_ROLES.length - 1; i >= 0; i--) {
-    if (ITEM_ROLES[i].verbs.every((v) => verbs.has(v))) return ITEM_ROLES[i].id;
+    if (ITEM_ROLES[i].verbs.every((v) => held.has(v))) return ITEM_ROLES[i].id;
   }
   return null;
 }
@@ -316,8 +358,11 @@ export function itemGrantsFromPermission(perm: ItemPermission, owner: string): I
     // `verbs` is left EMPTY when the grant EXACTLY matches a ladder role (the
     // dialog then shows that role); a non-nested combo keeps its raw verb set so
     // the dialog shows Custom with those exact toggles.
+    // Compared with what the stored set IMPLIES (`withImplied`): a Participant
+    // stored before use_wui existed is exactly Participant, not Custom.
     const roleVerbs = role ? itemRoleDef(role).verbs : [];
-    const exact = role !== null && roleVerbs.length === verbs.size && roleVerbs.every((v) => verbs.has(v));
+    const held = withImplied(verbs);
+    const exact = role !== null && roleVerbs.length === held.size && roleVerbs.every((v) => held.has(v));
     grants.push({ userId, role: role ?? "discoverable", verbs: exact ? new Set<string>() : verbs });
   }
   return grants.sort((a, b) => a.userId.localeCompare(b.userId));

@@ -30,6 +30,10 @@ export type CollectionPermission = {
   converse: string[];
   execute: string[];
   use_terminal: string[];
+  /** docs/plan-wui-user.md D2 — an item verb (its pages). Collections and the
+   * skill hub have no pages, so their dialogs do not offer it; optional so a
+   * body without it stays valid. Not in `ALL_VERBS` for the same reason. */
+  use_wui?: string[];
   change_permission: string[];
 };
 
@@ -252,5 +256,5 @@ export function previewSubjects(
   if (verb === "change_permission") return perm.change_permission;
   if (visibility === "public") return [EVERYONE];
   if (visibility === "private") return [];
-  return perm[verb];
+  return perm[verb] ?? [];
 }
