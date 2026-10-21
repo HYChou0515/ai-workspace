@@ -49,7 +49,8 @@ import { subscribeFileChanged } from "../../lib/fileChangedBus";
 import { pxToRem } from "../../lib/pxToRem";
 import { autoBuildScope, useWuiAutoBuild } from "../../lib/wuiAutoBuild";
 import { viewParam, viewParamString } from "../entity/shared";
-import { itemCallAgent, itemCallTool, itemJobs } from "./api";
+import { itemCallAgent, itemCallTool, itemJobs, NEEDS_USE_WUI } from "./api";
+import { WuiUserNeeded } from "./WuiUserNeeded";
 import { cleanBuildOutput, hasBuildScript, itemBuild } from "./build";
 import { itemRun } from "./run";
 import type { ViewSpec } from "../entity/types";
@@ -594,6 +595,8 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
   const openFile = useOpenFile();
   const { id: me, ready: meReady } = useCurrentUserState();
   const [reports, setReports] = useState<WuiReport[]>([]);
+  // D7: a page route answered `needs_use_wui` — the banner above the frame.
+  const [needsWuiUser, setNeedsWuiUser] = useState(false);
   const nextReportId = useRef(0);
   const selfWrites = useRef(createSelfWrites());
 
@@ -802,9 +805,12 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
         // `await` never settles: a save button that does nothing, forever, with
         // no message. That is the one outcome this bridge exists to prevent, so
         // every path out of here posts a sentence.
-        .catch((err: unknown) =>
-          refuse(request.id, err instanceof Error ? err.message : `${request.verb} failed.`),
-        )
+        .catch((err: unknown) => {
+          // D7 (docs/plan-wui-user.md): a refusal for want of the WUI User
+          // permission is also said above the frame, by the platform.
+          if (err instanceof HttpError && err.code === NEEDS_USE_WUI) setNeedsWuiUser(true);
+          return refuse(request.id, err instanceof Error ? err.message : `${request.verb} failed.`);
+        })
         .then((res) => {
           // `"*"` because an opaque origin cannot be named as a target. What
           // bounds where this lands is not this handle — a WindowProxy keeps
@@ -1609,6 +1615,7 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
           ))}
         </div>
       )}
+      {needsWuiUser && <WuiUserNeeded slug={slug} itemId={fs.scopeId} />}
       {built.isPending ? (
         <div style={{ padding: 12, color: "var(--text-paper-d)" }}>{t("wui.pane.opening")}</div>
       ) : firstBuild ? (

@@ -70,7 +70,7 @@ def test_a_reader_is_refused_by_name_of_the_permission_they_lack(method: str, ta
     with client:
         resp = _call(client, item_id, method, tail, body)
     assert resp.status_code == 403, resp.text
-    assert "use_wui" in resp.json()["detail"]
+    assert resp.json()["detail"]["error"] == "needs_use_wui"  # D7 reads this code
 
 
 # ── D12: a page's writes — the workspace's own file routes, a page header ─────
@@ -165,7 +165,7 @@ def test_a_reader_with_the_header_still_cannot_write():
             _files(item_id, "/tracker/data.json"), content=b"{}", headers={"X-Wui-Page": _VIEW}
         )
     assert resp.status_code == 403
-    assert "use_wui" in resp.json()["detail"]
+    assert resp.json()["detail"]["error"] == "needs_use_wui"  # D7 reads this code
 
 
 def test_the_server_answers_the_page_write_table():

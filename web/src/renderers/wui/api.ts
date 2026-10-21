@@ -6,10 +6,28 @@
  * because nothing but a WUI has any business running a tool from a browser.
  */
 
-import { apiFetch, detailSentence } from "../../api/http";
+import { apiFetch, detailSentence, errorInfo, HttpError } from "../../api/http";
 import type { CallAgent, CallTool, JobState, PageJobs } from "./bridge";
 
 export type ToolResult = { output: string; exit_code: number };
+
+/** The refusal code of a page route for want of the WUI User permission
+ * (`NEEDS_USE_WUI` in `api/item_authz.py`, docs/plan-wui-user.md D7). */
+export const NEEDS_USE_WUI = "needs_use_wui";
+
+/**
+ * A page route's failure as an `HttpError` carrying the server's sentence AND
+ * its code: the sentence is what the page's error panel shows, the code is what
+ * lets the pane say "this page needs the WUI User permission" (D7). The code is
+ * read from a clone first — `detailSentence` consumes the body.
+ */
+export async function pageRefusal(resp: Response, fallback: string): Promise<HttpError> {
+  const info = await errorInfo(resp);
+  const sentence =
+    (await detailSentence(resp)) ??
+    (info.code === NEEDS_USE_WUI ? "This page needs the WUI User permission." : fallback);
+  return new HttpError(resp.status, sentence, info.code, info.also, info.detail);
+}
 
 /** Bind the tool-call route to one item. */
 export function itemCallTool(slug: string, itemId: string): CallTool {
@@ -26,8 +44,7 @@ export function itemCallTool(slug: string, itemId: string): CallTool {
       // The server's own sentence where there is one — it names the tool and
       // why it was refused, which is what the page's error panel shows and what
       // gets forwarded to the agent.
-      const detail = await detailSentence(resp);
-      throw new Error(detail ?? `${name} could not be run (${resp.status}).`);
+      throw await pageRefusal(resp, `${name} could not be run (${resp.status}).`);
     }
     return resp.json();
   };
@@ -52,8 +69,7 @@ async function wuiJson<T>(
         },
   );
   if (!resp.ok) {
-    const detail = await detailSentence(resp);
-    throw new Error(detail ?? `${fallback} (${resp.status}).`);
+    throw await pageRefusal(resp, `${fallback} (${resp.status}).`);
   }
   return resp.json();
 }

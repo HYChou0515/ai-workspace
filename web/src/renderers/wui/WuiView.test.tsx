@@ -3364,3 +3364,42 @@ describe("WuiView — sign-in in the workspace pane's toolbar (plan-wui-viewer-l
     expect(screen.queryByTestId("page-identity-key")).not.toBeInTheDocument();
   });
 });
+
+describe("a page someone may not use (docs/plan-wui-user.md D7)", () => {
+  async function pressWith(err: Error) {
+    const fs = svc({ "/sales/index.html": "<html></html>" });
+    vi.mocked(fs.writeFile).mockRejectedValue(err);
+    render(
+      <QueryWrap>
+        <FileServiceProvider value={fs}>
+          <WuiView path="/sales/page.ai.yaml" spec={{ view: "wui", entity: "" } as ViewSpec} />
+        </FileServiceProvider>
+      </QueryWrap>,
+    );
+    await waitFor(() => expect(frame()).toBeInTheDocument());
+    const win = frame()?.contentWindow as Window;
+    const replies: unknown[] = [];
+    vi.spyOn(win, "postMessage").mockImplementation((m: unknown) => replies.push(m));
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        data: { proto: WUI_PROTOCOL, id: "1", verb: "writeFile", args: { path: "d.json", text: "{}" } },
+        source: win,
+      }),
+    );
+    await waitFor(() => expect(replies).toHaveLength(1));
+    return replies;
+  }
+
+  it("says above the page that it needs the WUI User permission, and still answers the page", async () => {
+    const { HttpError } = await import("../../api/http");
+    const replies = await pressWith(new HttpError(403, "This page needs the WUI User permission.", "needs_use_wui"));
+    expect(await screen.findByTestId("wui-needs-wui-user")).toHaveTextContent("WUI User");
+    expect(replies[0]).toMatchObject({ ok: false });
+  });
+
+  it("says nothing of the kind for any other refusal", async () => {
+    const { HttpError } = await import("../../api/http");
+    await pressWith(new HttpError(403, "This app does not offer lot-status to its pages."));
+    expect(screen.queryByTestId("wui-needs-wui-user")).toBeNull();
+  });
+});

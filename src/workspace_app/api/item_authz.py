@@ -179,6 +179,10 @@ def app_matches(actual: str, wanted: str | AnyApp) -> bool:
     return isinstance(wanted, AnyApp) or actual == wanted
 
 
+#: The refusal code of a page route for want of ``use_wui`` (docs/plan-wui-user.md D7).
+NEEDS_USE_WUI = "needs_use_wui"
+
+
 def check_access(
     facts: ItemAccessFacts | None,
     slug: str | AnyApp,
@@ -215,6 +219,13 @@ def check_access(
     if not any(
         authorize(actor, v, perm, created_by=facts.created_by, superusers=superusers) for v in verbs
     ):
+        if verbs[-1] == "use_wui":
+            # docs/plan-wui-user.md D7: a page's refusal the pane can recognise
+            # and answer with "this page needs the WUI User permission".
+            raise HTTPException(
+                status_code=403,
+                detail={"error": NEEDS_USE_WUI, "message": "not authorized to use_wui"},
+            )
         raise HTTPException(status_code=403, detail=f"not authorized to {verbs[-1]}")
 
 
