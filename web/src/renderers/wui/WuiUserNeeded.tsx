@@ -37,7 +37,7 @@ export function WuiUserNeeded({ slug, itemId }: { slug: string | null; itemId: s
             slug={slug}
             itemId={itemId}
             inside="wui.needsWuiUser.inside"
-            insideVars={{ owner: ownerName || owner || "the owner" }}
+            insideVars={{ owner: ownerName || owner || t("wui.needsWuiUser.theOwner") }}
           />
         </span>
       )}

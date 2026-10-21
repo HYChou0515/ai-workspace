@@ -148,7 +148,8 @@ export const WUI_PAGE_HEADER = "X-Wui-Page";
 /** A refused file write or delete, keeping the server's sentence AND its code.
  * A page shows the sentence (why its save was refused — e.g. "never its view
  * file", docs/plan-wui-user.md D12, which only the server can now say); the pane
- * reads the code (D7). The code comes from a clone, then the sentence. */
+ * reads the code (D7). Both come from one bounded read of the body
+ * (`refusalFrom`). */
 async function fileRefusal(resp: Response, fallback: string): Promise<HttpError> {
   return refusalFrom(resp, fallback); // one bounded read of the body
 }

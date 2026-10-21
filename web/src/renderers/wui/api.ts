@@ -18,8 +18,8 @@ export const NEEDS_USE_WUI = "needs_use_wui";
 /**
  * A page route's failure as an `HttpError` carrying the server's sentence AND
  * its code: the sentence is what the page's error panel shows, the code is what
- * lets the pane say "this page needs the WUI User permission" (D7). The code is
- * read from a clone first — `detailSentence` consumes the body.
+ * lets the pane say "this page needs the WUI User permission" (D7). Both come
+ * from one bounded read of the body (`refusalFrom`).
  */
 export async function pageRefusal(resp: Response, fallback: string): Promise<HttpError> {
   const err = await refusalFrom(resp, fallback); // one bounded read of the body

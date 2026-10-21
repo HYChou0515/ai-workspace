@@ -241,7 +241,9 @@ reverse:
   for the user. `docs/wui.md` says plainly that shared values are visible.
 - **Q3 → the request button is #968's flow, as D7 says [user]; whether it should notify
   from inside is open.** The banner carries 申請存取 through `POST …/request-access`
-  (`RequestAccess`, now shared with the reader's 403 page). Anyone who sees the banner is
-  already inside the workspace, where that flow notifies nobody (`already_readable`), so
+  (`RequestAccess`, now shared with the reader's 403 page). Every role that can open a
+  page is already inside the workspace, where that flow notifies nobody (`already_readable`;
+  a Custom grant of `read_content` without `read_chat` is the exception, and its request
+  does reach the owner), so
   the banner then says to ask the owner — by name — to add them as a WUI User. A request
   that notifies the owner even from inside is the improvement put to the user.

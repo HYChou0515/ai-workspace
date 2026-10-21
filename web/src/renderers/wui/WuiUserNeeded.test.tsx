@@ -39,3 +39,18 @@ describe("WuiUserNeeded", () => {
     expect(screen.queryByText(/讀檔權限/)).toBeNull();
   });
 });
+
+describe("an owner not known yet", () => {
+  it("is named in the reader's language, not in English", async () => {
+    vi.spyOn(api, "requestItemAccess").mockResolvedValue({ item_id: "i1", requested: false, already_readable: true });
+    render(
+      <QueryWrap>
+        <WuiUserNeeded slug="playground" itemId="i1" />
+      </QueryWrap>,
+    );
+    fireEvent.click(await screen.findByRole("button", { name: /申請存取|request access/i }));
+    const banner = await screen.findByTestId("wui-needs-wui-user");
+    await screen.findByText(/已經在這個 workspace 裡|already in this workspace/);
+    expect(banner.textContent).not.toMatch(/the owner/);
+  });
+});

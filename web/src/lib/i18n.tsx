@@ -1463,9 +1463,10 @@ export const messages = {
     en: "This page needs the WUI User permission to use.",
   },
   "wui.needsWuiUser.inside": {
-    "zh-TW": "你已經在這個 workspace 裡，申請不會通知任何人；請直接請 {owner} 把你加為 WUI User。",
-    en: "You are already in this workspace, so a request notifies nobody; ask {owner} to add you as a WUI User.",
+    "zh-TW": "你已經在這個 workspace 裡，申請不會通知任何人，請直接聯絡 {owner}。",
+    en: "You are already in this workspace, so a request notifies nobody; contact {owner} directly.",
   },
+  "wui.needsWuiUser.theOwner": { "zh-TW": "擁有者", en: "the owner" },
   "wui.needsWuiUser.owner": {
     "zh-TW": "請 {owner} 把你加為 WUI User。",
     en: "Ask {owner} to add you as a WUI User.",
