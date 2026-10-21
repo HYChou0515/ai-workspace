@@ -183,7 +183,7 @@ def check_access(
     facts: ItemAccessFacts | None,
     slug: str | AnyApp,
     item_id: str,
-    verb: Verb,
+    verb: Verb | tuple[Verb, ...],
     *,
     user: str,
     groups: frozenset[str],
@@ -192,6 +192,10 @@ def check_access(
     """Raise unless ``user`` may ``verb`` this item. Pure — no I/O — so the facts
     can come from a cache without the DECISION being cached with them: a verb the
     caller has never asked for is still evaluated properly.
+
+    A tuple of verbs is ANY of them (docs/plan-wui-user.md §3.2: a page's route
+    takes its own verb or ``use_wui``). The refusal names the LAST — put the one a
+    person should ask for there, so the page can say what was missing (D7).
 
     ``slug`` is ``ANY_APP`` for a route that addresses the item by ID ALONE (see
     `AnyApp`). Passing a fabricated slug there is what made a deleted item's
@@ -207,8 +211,11 @@ def check_access(
     perm = facts.item.permission
     if not authorize(actor, "read_meta", perm, created_by=facts.created_by, superusers=superusers):
         raise HTTPException(status_code=404, detail="item not found")
-    if not authorize(actor, verb, perm, created_by=facts.created_by, superusers=superusers):
-        raise HTTPException(status_code=403, detail=f"not authorized to {verb}")
+    verbs = verb if isinstance(verb, tuple) else (verb,)
+    if not any(
+        authorize(actor, v, perm, created_by=facts.created_by, superusers=superusers) for v in verbs
+    ):
+        raise HTTPException(status_code=403, detail=f"not authorized to {verbs[-1]}")
 
 
 def require_item_access(

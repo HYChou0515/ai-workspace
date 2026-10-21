@@ -349,7 +349,7 @@ def register_wui_routes(
         The verb is `execute`: this runs a command in the item's sandbox, the
         same thing a notebook cell does.
         """
-        investigation_id = locator.require_access(slug, item_id, "execute")
+        investigation_id = locator.require_access(slug, item_id, "use_wui")
         cwd = _build_dir(body.folder)
         if cwd is None:
             raise HTTPException(status_code=400, detail=f"{body.folder} is not a page folder.")
@@ -489,7 +489,7 @@ def register_wui_routes(
 
         The verb is `execute`: this runs work in the item, like a notebook cell.
         """
-        investigation_id = locator.require_access(slug, item_id, "execute")
+        investigation_id = locator.require_access(slug, item_id, "use_wui")
 
         allowed = list(await workflows_for(investigation_id))
         if body.workflow not in allowed:
@@ -667,7 +667,7 @@ def register_wui_routes(
     ) -> CallToolOut:
         # A tool can write, so the caller needs the verb that lets them write —
         # the same authority they would need to make the change by hand.
-        investigation_id = locator.require_access(slug, item_id, "edit_content")
+        investigation_id = locator.require_access(slug, item_id, ("edit_content", "use_wui"))
 
         ctx, pkg, command = await _prepare_tool(investigation_id, name, request)
         handle = await ctx.ensure_sandbox()
@@ -854,7 +854,7 @@ def register_wui_routes(
         quota), waited on for at most `CALL_TIMEOUT_S`. Past that the job is
         stopped rather than left running behind a page that has already been
         told it failed, and the sentence names the verb to use instead."""
-        investigation_id = locator.require_access(slug, item_id, "execute")
+        investigation_id = locator.require_access(slug, item_id, "use_wui")
         run_id = await _start_agent(investigation_id, name, body.input)
         loop = asyncio.get_running_loop()
         deadline = loop.time() + CALL_TIMEOUT_S
@@ -880,7 +880,7 @@ def register_wui_routes(
     async def wui_start_job(slug: str, item_id: str, body: JobBody, request: Request) -> JobStarted:
         """`startTool` / `startAgent` (#942 D8): start the work and answer with
         its id at once; the page asks `GET …/jobs/{id}` how it is going."""
-        investigation_id = locator.require_access(slug, item_id, "execute")
+        investigation_id = locator.require_access(slug, item_id, "use_wui")
         if body.kind == "agent":
             if not isinstance(body.input, str):
                 raise HTTPException(status_code=422, detail="A sub-agent's input is text.")
@@ -894,14 +894,14 @@ def register_wui_routes(
     @app.get("/a/{slug}/items/{item_id}/wui/jobs/{job_id}")
     async def wui_job_status(slug: str, item_id: str, job_id: str) -> JobOut:
         """`job.status()` — and what `job.result()` polls."""
-        investigation_id = locator.require_access(slug, item_id, "execute")
+        investigation_id = locator.require_access(slug, item_id, "use_wui")
         state = await _job_state(job_id, investigation_id)
         return JobOut(state=state.state, output=state.output, error=state.error)
 
     @app.post("/a/{slug}/items/{item_id}/wui/jobs/{job_id}/stop")
     async def wui_stop_job(slug: str, item_id: str, job_id: str) -> JobOut:
         """`job.stop()` — the same Stop the run's own chat has."""
-        investigation_id = locator.require_access(slug, item_id, "execute")
+        investigation_id = locator.require_access(slug, item_id, "use_wui")
         await _job_state(job_id, investigation_id)  # a page job of THIS item, or 404
         await orchestrator.cancel(job_id, investigation_id)
         state = await _job_state(job_id, investigation_id)

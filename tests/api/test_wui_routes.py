@@ -95,11 +95,11 @@ class _Locator:
         self.allowed = allowed
         self.env = env or {}
         self.env_policy = env_policy or {}
-        self.asked_verb: list[str] = []
+        self.asked_verb: list[str | tuple[str, ...]] = []
         self.opened: list[tuple[str, str]] = []
         self.settled: list[tuple[str, str | None]] = []
 
-    def require_access(self, slug: str, item_id: str, verb: str) -> str:
+    def require_access(self, slug: str, item_id: str, verb: str | tuple[str, ...]) -> str:
         self.asked_verb.append(verb)
         return item_id
 
@@ -253,14 +253,15 @@ def test_reports_why_an_external_tool_could_not_be_resolved():
     assert "artifact store unreachable" in resp.json()["detail"]
 
 
-def test_needs_the_authority_to_change_the_item():
+def test_needs_the_authority_to_change_the_item_or_to_use_its_pages():
     # A tool can write, so the caller needs the verb they would have needed to
-    # make the change by hand.
+    # make the change by hand — or, through a page, use_wui
+    # (docs/plan-wui-user.md §3.2: a page's route takes its own verb or use_wui).
     client, _, _, locator = build()
 
     client.post(URL, json={})
 
-    assert locator.asked_verb == ["edit_content"]
+    assert locator.asked_verb == [("edit_content", "use_wui")]
 
 
 def test_hands_the_tool_the_items_environment_so_credentials_stay_off_the_page():
@@ -448,14 +449,15 @@ def test_build_refuses_a_folder_outside_the_workspace():
     assert sandbox.calls == []
 
 
-def test_build_needs_the_authority_to_run_things():
-    # It runs a command in the item's sandbox. That is the notebook cell's verb,
-    # not the file editor's.
+def test_build_needs_the_authority_to_use_the_items_pages():
+    # It runs a command in the item's sandbox, from the page's own source —
+    # rebuilding on open is part of using a page (docs/plan-wui-user.md D3).
+    # execute still admits it: execute implies use_wui (D10).
     client, _, _, locator = build(sandbox=_BuildSandbox([b"ok\n"]))
 
     client.post(BUILD_URL, json={"folder": "/page"})
 
-    assert locator.asked_verb == ["execute"]
+    assert locator.asked_verb == ["use_wui"]
 
 
 def test_build_provisions_the_dependencies_the_mirror_never_kept():

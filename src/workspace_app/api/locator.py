@@ -308,7 +308,7 @@ class ItemLocator:
         raise HTTPException(status_code=404, detail=f"item {item_id!r} not found in app {slug!r}")
 
     def require_access(
-        self, slug: str, item_id: str, verb: Verb, *, user: str | None = None
+        self, slug: str, item_id: str, verb: Verb | tuple[Verb, ...], *, user: str | None = None
     ) -> str:
         """#306 PR3 — the authorizing sibling of ``require_item``: validate slug↔item,
         then gate the current user for ``verb`` against the item's live Permission
