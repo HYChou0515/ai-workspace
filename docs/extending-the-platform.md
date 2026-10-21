@@ -463,14 +463,16 @@ tool 拿到哪一層,由 item 上**每個名字的政策**(`WorkItemBase.env_pol
 
 | 政策 | 畫面文字 | tool 拿到(左邊先) |
 |---|---|---|
-| `shared_first`(預設,沒設就是它) | Shared | 共用值 → 本人這個 item 的值 → 服務帳號;**不讀**「我的環境變數」 |
-| `private_first` | Private first | 本人這個 item 的值 → 我的環境變數 → 服務帳號 → 共用值 |
+| `shared_first` | Shared | 共用值 → 本人這個 item 的值 → 我的環境變數 → 服務帳號 |
+| `private_first`(預設,沒設就是它) | Private first | 本人這個 item 的值 → 我的環境變數 → 服務帳號 → 共用值 |
 | `private_only` | Private only | 本人這個 item 的值 → 我的環境變數 → 服務帳號;沒有就**不傳**(不是擋下——必不必填是 tool 的事) |
 
 「服務帳號」是部署的 `env_without_request`,只在沒有人在場的 turn 出現。
 
-預設就是 #714 那行 `{**request_env, **item_env}`:沒設政策、也**沒有人存過自己的值**的 item,
-有人在場的 turn 行為一個字都沒變。唯一的差別在**沒有人在場**的 turn(見下面 #714 那段的「寫進本人的
+預設是 `private_first`(`docs/plan-wui-user.md` D5,舊的 item 也一樣):同名時按的人自己的值
+贏過 item 的共用值。要固定用共用值(#714 那行 `{**request_env, **item_env}` 的行為),就在面板上
+把那個名字選成 Shared——選了會明確存下來,不受預設影響。沒有人在場的 turn(排程)前兩層是空的,
+所以順序是服務帳號 → 共用值:兩邊都有同名值時用服務帳號的(D11)。唯一的差別在**沒有人在場**的 turn(見下面 #714 那段的「寫進本人的
 private 層」):部署有 `IRequestEnv` 時,一個人最後一次請求帶的值會用在他自己的 goal 續跑、被接手重跑的
 turn、他按下起的 run——同名時**蓋過** `env_without_request` 給的服務帳號(那條路是替他跑的,他自己的
 憑證就是他會用的那個)。
@@ -542,8 +544,8 @@ tool 端的讀法跟上面**一模一樣**(`os.environ`),它分不出值從哪�
   `plan-wui-viewer-login` Q4(b) 刻意改掉它:值存在**那個人、那個 item** 的 private 列,
   pod 死掉後被接手重跑的 turn、他自己的 goal 續跑才拿得到。別人的值**永遠不會**被重播
   給另一個人的 turn(列是依人分的)。`env_without_request` 的值仍然**不寫**任何地方。
-- **同名時聽 item 的政策**(上一節)。沒設政策就是 `shared_first`:`env_vars` 那格贏,而且沒有
-  提示(要拿服務帳號的值壓過去做測試時就靠這個)——也就是 #714 原本的行為。
+- **同名時聽 item 的政策**(上一節)。沒設政策就是 `private_first`:請求帶來的值贏。要讓 `env_vars`
+  那格贏(拿固定的值做測試時就靠這個,#714 原本的行為),把那個名字選成 Shared。
 - **有 request 的入口問 `env_for`:聊天送出、WUI 頁面的 `callTool`。** 兩者的共同點是:
   一次請求、一個人、結果只回給問的那個人。(那個人最後一次的值會留在**他自己的** private 層,
   見下一條;不會留在 item 上。)
@@ -558,7 +560,7 @@ tool 端的讀法跟上面**一模一樣**(`os.environ`),它分不出值從哪�
     | 入口 | 誰能造成它 | `user_id` |
     |---|---|---|
     | item 排程 | 任何持 `edit_content` 的人寫 `schedules.json`(或 AI 的 `write_file`) | item owner |
-    | `wui/run` | 任何持 `execute` 的人按頁面的按鈕 | item owner |
+    | `wui/run` | 任何持「使用 WUI」(`use_wui`;能聊天、能跑程式的人也算)的人按頁面的按鈕 | item owner |
     | event trigger | 任何持 `read_content`+`edit_content` 的參與者寫一筆符合條件的 entity | profile 寫死的 acting user |
     | profile 層級的 schedule trigger(`triggers.json` 的 `type: schedule`) | 沒有人——部署宣告的時鐘 | profile 寫死的 acting user |
     | goal driver | 任何能在那個 chat 發言的人,推動下一輪 | 設目標的人 |
