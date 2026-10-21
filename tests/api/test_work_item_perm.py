@@ -209,3 +209,28 @@ def test_editing_a_field_does_not_touch_the_item_s_access():
     # The claim that actually matters: it is still not another user's to read.
     holder["id"] = "mallory"
     assert client.get(f"/rca-investigation/{rid}").status_code == 404
+
+
+def test_a_use_wui_grant_survives_the_permission_route():
+    """docs/plan-wui-user.md D2: the dialog's "使用 WUI" reaches the item — the body
+    hand-lists every verb, and one it forgets is dropped without a word."""
+    holder = {"id": "bob"}
+    client, spec = _client_and_spec(holder)
+    iid = _new_item(spec, by="bob")
+    r = client.put(
+        f"/a/rca/items/{iid}/permission",
+        json={"visibility": "restricted", "read_meta": ["user:alice"], "use_wui": ["user:alice"]},
+    )
+    assert r.status_code == 200
+    stored = spec.get_resource_manager(RcaInvestigation).get(iid).data
+    assert isinstance(stored, RcaInvestigation) and stored.permission is not None
+    assert stored.permission.use_wui == ["user:alice"]
+
+
+def test_the_permission_body_names_every_verb():
+    """Parity with the verb model as oracle: a verb the body does not name cannot be
+    granted from the UI, and nothing fails to say so."""
+    from workspace_app.api.permission_body import PermissionBody
+    from workspace_app.perm.model import VERBS
+
+    assert set(VERBS) <= set(PermissionBody.model_fields)
