@@ -169,8 +169,8 @@ def test_a_reader_with_the_header_still_cannot_write():
 
 
 def test_the_server_answers_the_page_write_table():
-    """Parity: the browser's `pageMayWrite` answers the same table
-    (`web/tests/wuiPageWriteParity.test.ts`), so the two rules cannot drift."""
+    """The server's own table for `page_may_write` (docs/plan-wui-user.md D12). The
+    browser does not judge this — it cannot tell who is asking."""
     import json
     from pathlib import Path
 

@@ -1011,6 +1011,7 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
       // folder the server refuses — arrives as a status, not as output. Unsaid,
       // the button looks like it did nothing at all.
       note(err instanceof Error ? err.message : "The build could not be run.");
+      noteRefusal(err); // the WUI User banner, for a refusal that names it (D7)
       // A 403 is permanent for this person: they may read the item and not run
       // things in it. Left on, rebuilding on open would greet them with that
       // same refusal every single time they open the page — so it turns itself

@@ -42,3 +42,22 @@ describe("the page header on file writes", () => {
     expect(sent.map((s) => s.headers.get(WUI_PAGE_HEADER))).toEqual([null, null]);
   });
 });
+
+describe("a refused page write keeps the server's sentence (docs/plan-wui-user.md D12)", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("for a write and a delete, with the code", async () => {
+    const sentence = "this page may not change /sales/page.ai.yaml: a page writes only inside its own folder, never its view file";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(JSON.stringify({ detail: sentence }), { status: 403 })),
+    );
+    const write = await realApi
+      .writeFile("rca", "inv1", "/sales/page.ai.yaml", "x", { page: "/sales/page.ai.yaml" })
+      .catch((e: unknown) => e);
+    const del = await realApi
+      .deleteFile("rca", "inv1", "/sales/page.ai.yaml", { page: "/sales/page.ai.yaml" })
+      .catch((e: unknown) => e);
+    for (const err of [write, del]) expect(String((err as Error).message)).toContain("never its view file");
+  });
+});

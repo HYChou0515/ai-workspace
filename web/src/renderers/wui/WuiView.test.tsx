@@ -587,6 +587,23 @@ describe("WuiView: rebuilding a page that has a build step", () => {
     expect(await screen.findByText(/cannot run things here/)).toBeInTheDocument();
   });
 
+  it("raises the WUI User banner when the build was refused for want of it (D7)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(JSON.stringify({ detail: { error: "needs_use_wui", message: "not authorized to use_wui" } }), {
+            status: 403,
+          }),
+      ),
+    );
+    renderIn(BUILT);
+
+    fireEvent.click(await screen.findByRole("button", { name: /rebuild/i }));
+
+    expect(await screen.findByTestId("wui-needs-wui-user")).toBeInTheDocument();
+  });
+
   it("puts a finished build's log away, because the page is the answer", async () => {
     // The log earns the top of the pane while it is running and for as long as
     // something went wrong. A build that succeeded has already said everything

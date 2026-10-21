@@ -145,6 +145,15 @@ function searchBody(opts: SearchOptions): Record<string, unknown> {
 /** docs/plan-wui-user.md D12: the header naming the page a write comes through. */
 export const WUI_PAGE_HEADER = "X-Wui-Page";
 
+/** A refused file write or delete, keeping the server's sentence AND its code.
+ * A page shows the sentence (why its save was refused — e.g. "never its view
+ * file", docs/plan-wui-user.md D12, which only the server can now say); the pane
+ * reads the code (D7). The code comes from a clone, then the sentence. */
+async function fileRefusal(resp: Response, fallback: string): Promise<HttpError> {
+  const info = await errorInfo(resp);
+  return new HttpError(resp.status, (await detailSentence(resp)) ?? fallback, info.code, info.also, info.detail);
+}
+
 function pageHeaders(opts: PageWrite | undefined): Record<string, string> | undefined {
   // Percent-encoded: a header value must be Latin-1, and a view path can hold
   // any character (a Chinese folder name threw before any request went out).
@@ -521,13 +530,7 @@ export const realApi: ApiClient = {
       `/a/${encodeURIComponent(slug)}/items/${encodeURIComponent(investigationId)}/files/${encodePath(path)}`,
       { method: "PUT", body, headers: pageHeaders(opts) },
     );
-    if (!resp.ok) {
-      throw new HttpError(
-        resp.status,
-        `write ${path} failed: ${resp.status}`,
-        await errorCode(resp),
-      );
-    }
+    if (!resp.ok) throw await fileRefusal(resp, `write ${path} failed: ${resp.status}`);
   },
 
   // #198: XHR (not fetch) so the chat attach can report upload progress — fetch has
@@ -556,9 +559,7 @@ export const realApi: ApiClient = {
       `/a/${encodeURIComponent(slug)}/items/${encodeURIComponent(investigationId)}/files/${encodePath(path)}`,
       { method: "DELETE", headers: pageHeaders(opts) },
     );
-    // The code too, as writeFile does: a page's delete refused for want of the
-    // WUI User permission is recognised by it (docs/plan-wui-user.md D7).
-    if (!resp.ok) throw new HttpError(resp.status, `delete ${path} failed: ${resp.status}`, await errorCode(resp));
+    if (!resp.ok) throw await fileRefusal(resp, `delete ${path} failed: ${resp.status}`);
   },
 
   async mkdir(slug: string, investigationId: string, path: string) {

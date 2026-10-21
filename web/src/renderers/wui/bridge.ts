@@ -352,7 +352,7 @@ export async function dispatchWuiRequest(
       try {
         return ok(id, await ctx.callTool(name, (toolArgs ?? {}) as Record<string, unknown>));
       } catch (err) {
-ctx.onRefused?.(err);
+        ctx.onRefused?.(err);
         return refuse(id, err instanceof Error ? err.message : `${name} could not be run.`);
       }
     }
@@ -368,7 +368,7 @@ ctx.onRefused?.(err);
       try {
         return ok(id, await ctx.callAgent(name, str(args, "input") ?? ""));
       } catch (err) {
-ctx.onRefused?.(err);
+        ctx.onRefused?.(err);
         return refuse(id, err instanceof Error ? err.message : `${name} could not be asked.`);
       }
     }
@@ -395,7 +395,7 @@ ctx.onRefused?.(err);
           ),
         );
       } catch (err) {
-ctx.onRefused?.(err);
+        ctx.onRefused?.(err);
         return refuse(id, err instanceof Error ? err.message : `${name} could not be started.`);
       }
     }
@@ -411,7 +411,7 @@ ctx.onRefused?.(err);
       try {
         return ok(id, verb === "jobStatus" ? await ctx.jobs.status(job) : await ctx.jobs.stop(job));
       } catch (err) {
-ctx.onRefused?.(err);
+        ctx.onRefused?.(err);
         return refuse(id, err instanceof Error ? err.message : `Job ${job} could not be read.`);
       }
     }
