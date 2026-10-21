@@ -6,7 +6,7 @@
  * rendered as clickable source cards.
  */
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
@@ -243,6 +243,53 @@ function CompactionSummary({ text, replaced }: { text: string; replaced: number 
   );
 }
 
+/** plan-workflow-output-repair §3.5: what the workflow engine asked a node to
+ * re-emit. Folded — the request quotes the whole failed reply — behind a
+ * disclosure button (NN/g progressive disclosure; W3C APG disclosure pattern:
+ * `aria-expanded` + `aria-controls`), the same quiet line as the summary above. */
+function RepairRequest({ text }: { text: string }) {
+  const t = useT();
+  const [open, setOpen] = useState(false);
+  const region = useId();
+  return (
+    <div
+      data-testid="repair-request"
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        gap: 4,
+        padding: "4px 8px",
+        fontSize: pxToRem(12),
+        color: "var(--text-paper-d)",
+        borderLeft: "2px solid var(--warn)",
+      }}
+    >
+      <button
+        type="button"
+        data-testid="repair-request-toggle"
+        aria-expanded={open}
+        aria-controls={region}
+        onClick={() => setOpen((v) => !v)}
+        style={{
+          alignSelf: "flex-start",
+          background: "none",
+          border: "none",
+          padding: 0,
+          cursor: "pointer",
+          font: "inherit",
+          color: "inherit",
+          textDecoration: "underline",
+        }}
+      >
+        {open ? t("wf.repairRequest.hide") : t("wf.repairRequest.show")}
+      </button>
+      <div id={region} hidden={!open} style={{ whiteSpace: "pre-wrap" }}>
+        {open ? text : null}
+      </div>
+    </div>
+  );
+}
+
 export function EntryView({
   entry,
   onOpenCitation,
@@ -403,6 +450,9 @@ export function EntryView({
         <span>{entry.text}</span>
       </div>
     );
+  }
+  if (entry.kind === "repair_request") {
+    return <RepairRequest text={entry.text} />;
   }
   if (entry.kind === "summary") {
     return <CompactionSummary text={entry.text} replaced={entry.replaced} />;
@@ -683,6 +733,7 @@ const STEP_GLYPH: Record<StepView["status"], string> = {
   failed: "✗",
   skipped: "⤳",
   retrying: "↻",
+  repairing: "✎",
 };
 
 const STEP_COLOR: Record<StepView["status"], string> = {
@@ -691,12 +742,14 @@ const STEP_COLOR: Record<StepView["status"], string> = {
   failed: "var(--err)",
   skipped: "var(--text-paper-d2)",
   retrying: "var(--warn, var(--text-paper-d))",
+  repairing: "var(--warn, var(--text-paper-d))",
 };
 
 /** One workflow step's live line — so a deterministic phase (commit: ingest each
  * file) shows movement instead of looking frozen (#100 observability). The line
  * transitions in place as `step.status` advances (running → passed/failed/…). */
 function StepLine({ step }: { step: StepView }) {
+  const t = useT();
   const color = STEP_COLOR[step.status];
   return (
     <div data-testid="wf-step" data-status={step.status}>
@@ -716,6 +769,9 @@ function StepLine({ step }: { step: StepView }) {
         </span>
         <span style={{ color: "var(--text-paper)" }}>{step.name}</span>
         {step.key && <span style={{ color: "var(--text-paper-d)" }}>· {step.key}</span>}
+        {step.status === "repairing" && (
+          <span style={{ color }}>{t("wf.step.repairing", { n: step.repair ?? 1 })}</span>
+        )}
         {step.reason && <span style={{ color }}>— {step.reason}</span>}
       </div>
       {/* #178: live stdout from a running deterministic step, so a long command

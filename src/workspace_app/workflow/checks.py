@@ -74,13 +74,21 @@ def _requires_problem(text: str, requires: dict[str, Any]) -> str:
     return ""
 
 
-def artifact_valid(path: str, kind: str, requires: dict[str, Any] | None = None) -> Check:
+def artifact_valid(
+    path: str, kind: str, requires: dict[str, Any] | None = None, *, of_reply: bool = False
+) -> Check:
     """The channel-P (prose ``out``) default gate: the written file exists, is non-empty,
     and — for a structured ``kind`` — PARSES as that format (L1, plan §2.3), and satisfies
     the producer-declared ``requires`` structural contract (L2). It never rewrites the file
-    (no sanitize, plan §2.4): a polluted or under-structured artifact FAILS the gate and its
-    reason is fed back into the step's retry, so the model re-produces a clean, conforming
-    artifact at the source instead of the platform silently munging it."""
+    (no sanitize, plan §2.4): a polluted or under-structured artifact FAILS the gate, so the
+    model re-produces a clean, conforming artifact at the source instead of the platform
+    silently munging it.
+
+    ``of_reply`` says the file IS the step's reply (``agent_write_step`` writes its
+    ``out``). Only then is a parse failure the reply's own format (``format=True``), which
+    a no-tools repair turn can rewrite (plan-workflow-output-repair §3.1). An author's
+    check of another file — one the agent wrote with its tools — re-runs the step, its
+    reason fed back."""
 
     async def _check(wf: WorkflowHandle, _result: Any) -> CheckResult:
         try:
@@ -97,9 +105,12 @@ def artifact_valid(path: str, kind: str, requires: dict[str, Any] | None = None)
             problem = _valid_yaml(text)
         elif kind == "csv":
             problem = _valid_csv(text)
-        if not problem and requires:
-            problem = _requires_problem(text, requires)
         if problem:
+            # The reply's own format (plan-workflow-output-repair §3.1): a repair turn
+            # can rewrite it. A missing file, an empty one or a missing `requires`
+            # section is content the reply does not have, and is not flagged.
+            return CheckResult(False, f"file {path} {problem}", format=of_reply)
+        if requires and (problem := _requires_problem(text, requires)):
             return CheckResult(False, f"file {path} {problem}")
         return CheckResult(True)
 

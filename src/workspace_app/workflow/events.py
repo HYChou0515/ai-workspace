@@ -90,6 +90,20 @@ class StepRetrying:
 
 
 @dataclass(frozen=True)
+class StepRepairing:
+    """A step's reply failed its OWN format and a repair turn will ask for it again —
+    told apart from a retry (docs/plan-workflow-output-repair.md D7). ``repair`` is
+    this repair's number, from 1."""
+
+    phase: str
+    name: str
+    reason: str = ""
+    key: str = ""
+    repair: int = 1
+    type: Literal["step_repairing"] = "step_repairing"
+
+
+@dataclass(frozen=True)
 class AwaitingHumanEvent:
     """The run suspended at a ``human_gate`` (manual §10) — the FE renders the
     decision card. Terminal for THIS run task (resumed via the decisions endpoint).
@@ -122,6 +136,7 @@ WorkflowEvent = (
     | StepFailed
     | StepSkipped
     | StepRetrying
+    | StepRepairing
     | AwaitingHumanEvent
     | SteerProposed
 )

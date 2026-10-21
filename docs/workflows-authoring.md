@@ -100,11 +100,18 @@ await agent_step(wf, *, prompt, phase, check, name=None, key="",
                  tools=None, retries=0, cache=True) -> Any
 ```
 這是通用形式。`check` 是必填的 postcondition(見 [Gates](#gates));`retries` 會把失敗原因
-回灌進 prompt 後重跑。`tools` 是這個 agent 被允許的 tool 子集(⊆ profile 上限)。
+回灌進 prompt 後重跑。`agent_write_step` 的回覆本身格式錯時不重跑,而是同一段對話多一輪、
+不給工具,只請它重新輸出,次數一樣算在 `retries` 裡
+([`plan-workflow-output-repair.md`](plan-workflow-output-repair.md))。「格式錯」由 gate 判定:
+`out` 是 json/yaml/csv 而且沒傳 `check` 時,預設 gate 會判(自己傳 `check` 就是放棄這個判斷,
+連 `artifact_valid(out, kind)` 也一樣——要它算數得寫 `artifact_valid(out, kind, of_reply=True)`);宣告 `outputs` 時,Python API
+**不會**自己檢查回覆的欄位(DSL 會),要修補就得傳一個會標 `format=True` 的 `check`。
+Python API 的 `retries` 預設 `0`,也就是不修補也不重跑。`tools` 是這個 agent 被允許的 tool 子集(⊆ profile 上限)。
 
 ```python
-await agent_write_step(wf, *, prompt, phase, out, name=None, key="",
-                       tools=None, retries=0, cache=True, check=None) -> Any
+await agent_write_step(wf, *, prompt, phase, out="", kind="text", requires=None,
+                       name=None, key="", tools=None, retries=0, cache=True,
+                       check=None, outputs=None, produces="", reads=None) -> Any
 ```
 常用的簡寫:模型**把檔案內容當成它的回覆產出**(它*不會*呼叫 `write_file`——不管小模型*還是*
 大模型,產長 tool 參數都不可靠),然後這個 step 把它寫到 `out`,預設以 `file_nonempty(out)`

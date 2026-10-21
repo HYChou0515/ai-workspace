@@ -113,3 +113,38 @@ async def test_a_step_that_could_not_run_is_emitted_like_any_other_failure():
     assert not await wf.exists("/.workflow/_default/generate.json"), (
         "and nothing journalled, or one transient failure records the step as done"
     )
+
+
+async def test_a_repair_emits_repairing_with_its_count_and_a_re_run_still_retrying():
+    """plan-workflow-output-repair D7: the event says which kind of second attempt it
+    is, and the repair's number."""
+    from workspace_app.workflow.engine import CheckResult
+    from workspace_app.workflow.events import StepRepairing
+
+    events: list = []
+    wf = _wf(events)
+    verdicts = [
+        CheckResult(False, "missing section"),
+        CheckResult(False, "not json", format=True),
+        CheckResult(False, "not json", format=True),
+        CheckResult(True),
+    ]
+
+    async def check(_wf, _result):
+        return verdicts.pop(0)
+
+    async def execute(_fb):
+        return {}
+
+    async def repair(_verdict):
+        return {}
+
+    await run_step(
+        wf, name="s", phase="p", args={}, execute=execute, repair=repair, check=check, retries=3
+    )
+    tries = [e for e in events if isinstance(e, StepRetrying | StepRepairing)]
+    assert tries == [
+        StepRetrying(phase="p", name="s", reason="missing section"),
+        StepRepairing(phase="p", name="s", reason="not json", repair=1),
+        StepRepairing(phase="p", name="s", reason="not json", repair=2),
+    ]

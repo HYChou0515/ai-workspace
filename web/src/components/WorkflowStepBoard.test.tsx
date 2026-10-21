@@ -105,3 +105,65 @@ describe("WorkflowStepBoard (#178)", () => {
     expect(screen.queryByTestId("wf-step-row")).toBeNull();
   });
 });
+
+
+describe("a repair on the board (plan-workflow-output-repair D7)", () => {
+  it("says it is fixing the output format, which time, and why", () => {
+    render(
+      <WorkflowStepBoard
+        nodes={[node()]}
+        steps={[step({ status: "repairing", attempts: 3, repairs: 2, reason: "not JSON" })]}
+      />,
+    );
+    const row = screen.getByTestId("wf-step-row");
+    expect(row).toHaveTextContent("修正輸出格式（第 2 次）");
+    expect(row).toHaveTextContent("not JSON");
+  });
+
+  it("leaves a retry as it was", () => {
+    render(<WorkflowStepBoard nodes={[node()]} steps={[step({ status: "retrying", attempts: 2 })]} />);
+    const row = screen.getByTestId("wf-step-row");
+    expect(row).toHaveTextContent("retrying");
+    expect(row).not.toHaveTextContent("修正輸出格式");
+  });
+});
+
+
+describe("the board's clock while a step is repairing", () => {
+  it("keeps ticking", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(T);
+    try {
+      render(
+        <WorkflowStepBoard nodes={[node()]} steps={[step({ status: "repairing", repairs: 1, started: T - 3000 })]} />,
+      );
+      expect(screen.getByTestId("wf-step-elapsed")).toHaveTextContent("0:03");
+      act(() => void vi.advanceTimersByTime(2000));
+      expect(screen.getByTestId("wf-step-elapsed")).toHaveTextContent("0:05");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("a finished step that was repaired (plan-workflow-output-repair D7)", () => {
+  it("still says its format was fixed, and how many times, after it passed", () => {
+    render(
+      <WorkflowStepBoard
+        nodes={[node()]}
+        steps={[step({ status: "passed", attempts: 3, repairs: 2, started: T - 5000, ended: T })]}
+      />,
+    );
+    expect(screen.getByTestId("wf-step-repairs")).toHaveTextContent("修正過輸出格式 2 次");
+  });
+
+  it("says nothing of the kind for a step that was only re-run", () => {
+    render(
+      <WorkflowStepBoard
+        nodes={[node()]}
+        steps={[step({ status: "passed", attempts: 2, repairs: 0, started: T - 5000, ended: T })]}
+      />,
+    );
+    expect(screen.queryByTestId("wf-step-repairs")).toBeNull();
+  });
+});

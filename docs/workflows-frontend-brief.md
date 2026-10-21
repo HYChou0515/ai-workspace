@@ -123,7 +123,7 @@ broke"** at a glance.
   and `pending_decision` (`{ title, summary, allow: [...] }`) while `awaiting_human`.
   From `GET /a/{slug}/items/{itemId}/runs/{runId}` and the run-list endpoint.
 - **Live SSE events** (from `…/runs/{runId}/stream`): `PhaseEntered`, `StepStarted`,
-  `StepPassed`, `StepFailed`, `StepSkipped`, `StepRetrying`, `AwaitingHuman`, plus the
+  `StepPassed`, `StepFailed`, `StepSkipped`, `StepRetrying`, `StepRepairing`, `AwaitingHuman`, plus the
   existing agent events (reasoning / tool calls / messages) that `AgentEntryView`
   already renders.
 - **Actions**: `POST …/runs` or `POST …/items/{itemId}/run` (start); `POST

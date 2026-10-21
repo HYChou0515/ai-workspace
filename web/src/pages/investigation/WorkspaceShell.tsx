@@ -3318,6 +3318,7 @@ function PanelBody({
 }: {
   tab: "problems" | "output" | "terminal" | "agent_log" | "run_history";
 }) {
+  const t = useT();
   const { log } = useAgent();
   const [locale] = useLocale();
 
@@ -3521,6 +3522,11 @@ function PanelBody({
           // button is the chat view's.
           return <LogLine key={i} ts={fmtTs(e.at)} kind="warn" text={e.text} />;
         }
+        if (e.kind === "repair_request") {
+          // plan-workflow-output-repair §3.5: one line in the flat log; the
+          // request itself is readable in the chat view.
+          return <LogLine key={i} ts={fmtTs(e.at)} kind="warn" text={t("wf.repairRequest.log")} />;
+        }
         if (e.kind === "summary") {
           // #739: the earlier span was summarised. The log view is a flat
           // transcript, so it states the fact on one line — the originals are
@@ -3558,8 +3564,14 @@ function PanelBody({
                   ? "⤳"
                   : e.step.status === "retrying"
                     ? "↻"
-                    : "▸";
-          const detail = `${e.step.key ? ` · ${e.step.key}` : ""}${e.step.reason ? ` — ${e.step.reason}` : ""}`;
+                    : e.step.status === "repairing"
+                      ? "✎"
+                      : "▸";
+          const repairing =
+            e.step.status === "repairing"
+              ? ` · ${t("wf.step.repairing", { n: e.step.repair ?? 1 })}`
+              : "";
+          const detail = `${e.step.key ? ` · ${e.step.key}` : ""}${repairing}${e.step.reason ? ` — ${e.step.reason}` : ""}`;
           return (
             <LogLine
               key={i}

@@ -14,6 +14,7 @@ from ..workflow.events import (
     StepFailed,
     StepOutput,
     StepPassed,
+    StepRepairing,
     StepRetrying,
     StepSkipped,
     StepStarted,
@@ -428,6 +429,7 @@ AgentEvent = (
     | StepFailed
     | StepSkipped
     | StepRetrying
+    | StepRepairing
     | AwaitingHumanEvent
     | SteerProposed  # #288: a steer plan is ready for review
 )
