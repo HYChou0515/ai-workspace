@@ -174,3 +174,31 @@ O1–O3 were open when this plan was first written; the user answered them the s
 - **O3 → D11.** The alternative was to move the service account last
   (private → personal → shared → service) so a schedule keeps today's value; the user chose
   to keep `private_first`'s order.
+
+## 6. As built (#994)
+
+Where the build adds to or differs from the sections above; this section wins.
+
+- **Every policy choice is stored (D5).** The plan stored only Shared explicitly. The
+  panel now stores all three, and only "never chosen" is absent (and reads Private
+  first). Storing the other two keeps "the owner asked each person" — what puts up the
+  page's identity bar and lists names in the panel's Private tab — a fact about what was
+  chosen. Counting every unset name as asking would put the bar on nearly every page
+  with a tool, which nobody decided; an unset name still resolves Private first, and a
+  WUI User fills in their own value from the env panel (D4).
+- **A page's refusal is typed (D7).** `check_access` given a tuple refuses with the LAST
+  verb; for `use_wui` the detail is `{"error": "needs_use_wui", "message": …}`
+  (`item_authz.NEEDS_USE_WUI`). Every page call in the browser raises an `HttpError`
+  carrying it (`pageRefusal`), so the pane has one place to recognise it.
+- **Two parity tables hold the browser to the server.**
+  `tests/fixtures/item_verb_cases.json` (generated from `authorize`) holds
+  `hasItemVerb`, and so the implications D9/D10 and `use_wui ⊇ read_content`;
+  `tests/fixtures/wui_page_write_cases.json` holds `pageMayWrite` to `page_may_write`.
+  Role detection in the share dialog reads what a stored set implies, so a Participant
+  or Collaborator stored before `use_wui` is that role, not Custom.
+- **One reader of view files.** `api/wui_page.py` (`load_wui_view`, `page_folder`,
+  `page_may_write`) is shared by Deploy and the D12 write check.
+- **`BridgeContext.page` is required**, so a host of the bridge that forgets to name its
+  page does not compile, rather than quietly sending writes no WUI User can make.
+- **Kept out of the collection dialogs.** `use_wui` is optional on the wire type and not
+  in `ALL_VERBS`: collections and the skill hub have no pages.
