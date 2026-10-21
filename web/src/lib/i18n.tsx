@@ -732,7 +732,6 @@ export const messages = {
   "schedules.dow.fri": { "zh-TW": "週五", en: "Fri" },
   "schedules.dow.sat": { "zh-TW": "週六", en: "Sat" },
   "schedules.dow.sun": { "zh-TW": "週日", en: "Sun" },
-  "schedules.next": { "zh-TW": "下次：{at}", en: "Next: {at}" },
   // A period that cannot be moved onto the viewer's clock keeps its own zone,
   // named the way a person says it (docs/plan-schedule-overview-polish.md).
   "schedules.inZone": { "zh-TW": "{what}（{zone}）", en: "{what} ({zone})" },
@@ -748,10 +747,6 @@ export const messages = {
   "time.yesterday": { "zh-TW": "昨天 {hm}", en: "yesterday {hm}" },
   "time.date": { "zh-TW": "{m}/{d}（{dow}）{hm}", en: "{dow} {m}/{d} {hm}" },
   "time.dateYear": { "zh-TW": "{y}/{m}/{d}（{dow}）{hm}", en: "{dow} {y}/{m}/{d} {hm}" },
-  "schedules.nextSweep": {
-    "zh-TW": "下次：下一輪掃描（這一期已到期，尚未執行）",
-    en: "Next: on the next sweep (this period is due and has not run yet)",
-  },
   "schedules.unknownWorkflow": {
     "zh-TW": "找不到這個工作流程，這一條不會執行",
     en: "No such workflow in this workspace — this one will not run",
@@ -771,10 +766,6 @@ export const messages = {
   "schedules.remove": { "zh-TW": "移除", en: "Remove" },
   "schedules.cancel": { "zh-TW": "取消", en: "Cancel" },
   "schedules.removeTitle": { "zh-TW": "移除排程", en: "Remove schedule" },
-  "schedules.removeConfirm": {
-    "zh-TW": "要移除「{what}」這條定時執行嗎？之後就不會再自動執行。",
-    en: "Remove the schedule “{what}”? It will no longer run on its own.",
-  },
   "schedules.disabled": {
     "zh-TW": "這個系統沒有開啟定時執行，以下的排程不會自動執行。請聯絡管理員。",
     en: "Scheduled runs are switched off on this system; the schedules below will not run on their own. Ask an administrator.",
@@ -829,8 +820,13 @@ export const messages = {
   "schedules.edit.zoneYours": { "zh-TW": "時區：{zone}（你的時區）", en: "Time zone: {zone} (yours)" },
   "schedules.edit.note": {
     "zh-TW":
-      "存檔後會變成一條新的排程：從下一個時間點開始執行（不會補跑），執行紀錄從頭算，「用我的身分執行」要重新按一次。",
-    en: "Saving makes this a new schedule: it runs from the next time on (nothing is caught up), its run history starts over, and “Run as me” has to be pressed again.",
+      "存檔後會變成一條新的排程：從下一個時間點開始執行（不會補跑），執行紀錄從頭算，之後用你的身分執行（改的人就是它的作者；它要跑的 workflow 解析不了時例外，那時只用共用的值）。",
+    en: "Saving makes this a new schedule: it runs from the next time on (nothing is caught up), its run history starts over, and from then on it runs as you — whoever changes it is its author — unless the workflow it runs will not parse, in which case it runs with the shared values only.",
+  },
+  "schedules.edit.noteNobody": {
+    "zh-TW":
+      "存檔後會變成一條新的排程：從下一個時間點開始執行（不會補跑），執行紀錄從頭算，之後只用共用的值執行（你在這個項目不能執行工作，所以不會用你的身分）。",
+    en: "Saving makes this a new schedule: it runs from the next time on (nothing is caught up), its run history starts over, and from then on it runs with the shared values only — you cannot run work in this item, so it does not run as you.",
   },
   "schedules.edit.save": { "zh-TW": "存檔", en: "Save" },
   "schedules.edit.saving": { "zh-TW": "存檔中…", en: "Saving…" },
@@ -856,6 +852,7 @@ export const messages = {
   "scheduleOverview.col.when": { "zh-TW": "週期", en: "Repeats" },
   "scheduleOverview.col.next": { "zh-TW": "下一次", en: "Next" },
   "scheduleOverview.col.last": { "zh-TW": "上一次", en: "Last run" },
+  "scheduleOverview.col.runsAs": { "zh-TW": "執行身分", en: "Runs as" },
   "scheduleOverview.col.actions": { "zh-TW": "動作", en: "Actions" },
   "scheduleOverview.page": { "zh-TW": "頁面「{page}」", en: "Page “{page}”" },
   "scheduleOverview.itemOwn": { "zh-TW": "項目本身的排程", en: "The item's own schedule" },
@@ -2196,9 +2193,24 @@ export const messages = {
   "env.bar.schedules": { "zh-TW": "這一頁的排程", en: "This page's schedules" },
   // Who a schedule runs as ("run as me", Q7/Q12).
   "sched.runsAsNobody": {
-    "zh-TW": "未綁定,不用任何人自己的值",
-    en: "Not bound — runs with nobody's own values",
+    "zh-TW": "未指定：只用共用的值",
+    en: "Nobody: the shared values only",
   },
+  // docs/plan-schedule-run-as.md G8: who, and WHY it is them.
+  "sched.runsAsWhy": { "zh-TW": "{main}（{why}）", en: "{main} ({why})" },
+  "sched.why.self": { "zh-TW": "自己選的", en: "chose it" },
+  "sched.why.author": { "zh-TW": "排程是他寫的", en: "wrote this schedule" },
+  "sched.why.selfYou": { "zh-TW": "你自己選的", en: "you chose it" },
+  "sched.why.authorYou": { "zh-TW": "排程是你寫的", en: "you wrote this schedule" },
+  "sched.why.admin": { "zh-TW": "管理員 {by} 指定", en: "named by administrator {by}" },
+  "sched.assign": { "zh-TW": "指定…", en: "Choose…" },
+  "sched.assignTitle": { "zh-TW": "這個排程用誰的身分執行？", en: "Who should this schedule run as?" },
+  "sched.assignBody": {
+    "zh-TW":
+      "排程會用這個人自己的登入與變數值執行，我們會通知他，他隨時可以停止。只能選在這個項目可以執行工作的人。",
+    en: "The schedule runs with this person's own sign-ins and values. They are told, and can stop it at any time. Only someone who may run work in this item can be chosen.",
+  },
+  "sched.assignSearch": { "zh-TW": "搜尋人員…", en: "Search people…" },
   "sched.runsAsYou": { "zh-TW": "用你的身分執行", en: "Runs as you" },
   "sched.runsAs": { "zh-TW": "用 {who} 的身分執行", en: "Runs as {who}" },
   "sched.bindMe": { "zh-TW": "用我的身分執行", en: "Run as me" },

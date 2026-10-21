@@ -18,26 +18,22 @@
  * whole window. In the workspace pane the toolbar already IS that line, and
  * `PageIdentityControls` sits in it.
  */
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import { api as defaultApi } from "../api";
 import { personalEnvApi, type PersonalEnvClient } from "../api/personalEnv";
 import { privateEnvApi, type PrivateEnvClient } from "../api/privateEnv";
 import { qk } from "../api/queryKeys";
-import {
-  scheduleBindingsApi,
-  type BindingRow,
-  type ScheduleBindingsClient,
-} from "../api/scheduleBindings";
+import { scheduleBindingsApi, type ScheduleBindingsClient } from "../api/scheduleBindings";
 import type { ApiClient } from "../api/types";
 import { ownLayer } from "../lib/envLayers";
 import { identityState, keyLabelParts, type Missing } from "../lib/identityState";
 import { useT } from "../lib/i18n";
 import { pxToRem } from "../lib/pxToRem";
-import { useDialog } from "./Dialog";
 import { ItemEnvModal } from "./ItemEnvModal";
 import { Icon } from "./Icon";
+import { RunsAs } from "./schedules/RunsAs";
 
 type Clients = {
   client?: Pick<ApiClient, "getItemTools" | "getEnvProviders" | "resolveEnvProvider">;
@@ -141,44 +137,13 @@ export function PageIdentityControls(props: Where & Clients) {
     bindingsClient = scheduleBindingsApi,
   } = props;
   const t = useT();
-  const dialog = useDialog();
   const queryClient = useQueryClient();
   const { settled, state, rows, path } = usePageIdentity(props);
   const key = useKeyLabel(state.missing, state.holdsOwn);
   const [envOpen, setEnvOpen] = useState(false);
-  const [problem, setProblem] = useState<string | null>(null);
 
-  const change = async (row: BindingRow) => {
-    setProblem(null);
-    if (!row.mine && row.bound_to) {
-      const choice = await dialog.confirm({
-        title: t("sched.replaceTitle"),
-        body: t("sched.replaceBody", { who: row.bound_to }),
-        actions: [
-          { id: "cancel", label: t("env.cancel") },
-          { id: "replace", label: t("sched.replaceMe"), variant: "primary" },
-        ],
-      });
-      if (choice !== "replace") return;
-    }
-    toggle.mutate(row);
-  };
-  // A mutation, not a bare await: a failure also reaches the app's one write-
-  // failure notice (MutationCache.onError), not only this panel's line.
-  const toggle = useMutation({
-    mutationFn: (row: BindingRow) =>
-      row.mine
-        ? bindingsClient.unbind(slug, itemId, path, row.trigger_id)
-        : bindingsClient.bind(slug, itemId, path, row.trigger_id),
-    onError: (err) => {
-      const why = (err as { detail?: unknown })?.detail;
-      setProblem(
-        t("sched.failed", { why: typeof why === "string" ? why : String((err as Error).message) }),
-      );
-    },
-    onSettled: () =>
-      queryClient.invalidateQueries({ queryKey: qk.scheduleBindings(slug, itemId, path) }),
-  });
+  const refresh = () =>
+    queryClient.invalidateQueries({ queryKey: qk.scheduleBindings(slug, itemId, path) });
   // Nothing to say ⇒ nothing drawn: most pages have no one to sign in.
   if (!settled || !state.show) return null;
   return (
@@ -197,36 +162,21 @@ export function PageIdentityControls(props: Where & Clients) {
                     {row.describe ? `${row.describe} · ` : ""}
                     {row.run}
                   </span>
-                  <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                    <span style={{ fontSize: pxToRem(11), color: "var(--text-paper-d)" }}>
-                      {row.mine
-                        ? t("sched.runsAsYou")
-                        : row.bound_to
-                          ? t("sched.runsAs", { who: row.bound_to })
-                          : t("sched.runsAsNobody")}
-                    </span>
-                    <button
-                      type="button"
-                      className="btn"
-                      data-variant="secondary"
-                      data-size="sm"
-                      style={{ marginLeft: "auto" }}
-                      onClick={() => void change(row)}
-                    >
-                      {row.mine
-                        ? t("sched.unbind")
-                        : row.bound_to
-                          ? t("sched.replaceMe")
-                          : t("sched.bindMe")}
-                    </button>
-                  </span>
+                  {/* The same control the schedules overview and the
+                      Workflows panel draw (plan-schedule-run-as G9). */}
+                  <RunsAs
+                    slug={slug}
+                    itemId={itemId}
+                    path={path}
+                    triggerId={row.trigger_id}
+                    runsAs={{ who: row.bound_to, reason: row.reason, by: row.assigned_by, mine: row.mine }}
+                    canRun
+                    canAssign={false}
+                    client={bindingsClient}
+                    onChanged={() => void refresh()}
+                  />
                 </div>
               ))}
-              {problem && (
-                <p role="alert" style={{ margin: 0, fontSize: pxToRem(11), color: "var(--err)" }}>
-                  {problem}
-                </p>
-              )}
             </div>
         </SchedulesButton>
       )}

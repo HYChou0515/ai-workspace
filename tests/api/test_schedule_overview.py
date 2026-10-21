@@ -1107,3 +1107,237 @@ def test_an_edit_that_is_not_one_time_is_refused_and_the_file_is_untouched(asked
     assert r.status_code == 422, r.text
     assert said in r.json()["detail"]
     assert _file_rows(client, iid, ITEM_SCHEDULES) == before
+
+
+COLLABORATOR = Permission(
+    visibility="restricted",
+    read_meta=["user:carol"],
+    read_content=["user:carol"],
+    edit_content=["user:carol"],
+    execute=["user:carol"],
+)
+
+
+def _runs_as(client, iid: str, path: str) -> list[tuple[str, str]]:
+    r = client.get(_wp(iid, "/schedule-bindings"), params={"path": path})
+    assert r.status_code == 200, r.text
+    return [(row["bound_to"], row["reason"]) for row in r.json()["rows"]]
+
+
+def test_whoever_changes_a_schedules_time_is_who_it_then_runs_as():
+    """plan-schedule-run-as G2: a new time is a new schedule, written by the
+    person who changed it — so it runs as them, not as whoever wrote the old one."""
+    holder = {"id": "bob"}
+    client, spec, _ = _client_and_spec(holder)
+    iid = _item(spec, by="bob", permission=COLLABORATOR)
+    _put(client, iid, "/.workflows/w0.json", _workflow("w0"))
+    _put(client, iid, PAGE_SCHEDULES, _schedules({"every": "daily", "at": "09:00", "run": "w0"}))
+    assert _runs_as(client, iid, PAGE_SCHEDULES) == [("bob", "author")]
+    before = _row_of(client, PAGE_SCHEDULES)
+    holder["id"] = "carol"
+
+    r = client.post(
+        _wp(iid, "/schedules/edit"),
+        json={"path": PAGE_SCHEDULES, "trigger_id": before["trigger_id"], "every": "hourly"},
+    )
+
+    assert r.status_code == 200, r.text
+    assert _runs_as(client, iid, PAGE_SCHEDULES) == [("carol", "author")]
+
+
+def test_a_change_of_time_whose_crediting_read_fails_still_changes_the_time(monkeypatch):
+    """Review round 2 (veracity 4): the read just before the write is only for
+    crediting — failing, the new time is saved and credited to nobody."""
+    from workspace_app.files import WorkspaceFiles
+
+    holder = {"id": "bob"}
+    client, spec, _ = _client_and_spec(holder)
+    iid = _item(spec, by="bob", permission=COLLABORATOR)
+    _put(client, iid, "/.workflows/w0.json", _workflow("w0"))
+    _put(client, iid, PAGE_SCHEDULES, _schedules({"every": "daily", "at": "09:00", "run": "w0"}))
+    before = _row_of(client, PAGE_SCHEDULES)
+    holder["id"] = "carol"
+    real = WorkspaceFiles.read
+    calls = {"n": 0}
+
+    async def _second_fails(self, workspace_id, path):
+        if path == PAGE_SCHEDULES:
+            calls["n"] += 1
+            if calls["n"] == 2:  # 1 = the route finding the row, 2 = crediting's
+                raise OSError("host hiccup")
+        return await real(self, workspace_id, path)
+
+    monkeypatch.setattr(WorkspaceFiles, "read", _second_fails)
+
+    r = client.post(
+        _wp(iid, "/schedules/edit"),
+        json={"path": PAGE_SCHEDULES, "trigger_id": before["trigger_id"], "every": "hourly"},
+    )
+
+    assert r.status_code == 200, r.text
+    monkeypatch.setattr(WorkspaceFiles, "read", real)
+    assert _runs_as(client, iid, PAGE_SCHEDULES) == [("", "")]
+
+
+def test_each_row_says_who_it_runs_as_and_why():
+    """G8: the overview row names the person and the reason — here, bob wrote it."""
+    holder = {"id": "bob"}
+    client, spec, _ = _client_and_spec(holder, superusers=frozenset({"root"}))
+    iid = _item(spec, by="bob")
+    _seed(client, iid)
+
+    rows = _rows(client)
+
+    assert {(r["runs_as"], r["runs_as_reason"], r["runs_as_by"]) for r in rows} == {
+        ("bob", "author", "")
+    }
+    assert {r["runs_as_mine"] for r in rows} == {True}
+    holder["id"] = "root"  # a superuser looking: bob's, not theirs
+    assert {r["runs_as_mine"] for r in _rows(client)} == {False}
+
+
+def test_the_overview_says_whether_the_viewer_may_name_someone_else():
+    """G5: only a superuser is offered "choose who"."""
+    holder = {"id": "bob"}
+    client, spec, _ = _client_and_spec(holder, superusers=frozenset({"root"}))
+
+    assert client.get("/schedules").json()["can_assign"] is False
+    holder["id"] = "root"
+    assert client.get("/schedules").json()["can_assign"] is True
+
+
+def test_an_items_own_listing_is_the_overview_narrowed_to_that_item():
+    """G10: the Workflows panel lists EVERY schedule of the item — its own file
+    and each page's — as the overview shows them, and no other item's."""
+    holder = {"id": "bob"}
+    client, spec, _ = _client_and_spec(holder)
+    iid = _item(spec, by="bob")
+    other = _item(spec, by="bob", title="Line 4")
+    _seed(client, iid)
+    _seed(client, other)
+
+    r = client.get(_wp(iid, "/schedules/overview"))
+
+    assert r.status_code == 200, r.text
+    mine = r.json()["rows"]
+    assert mine == [row for row in _rows(client) if row["item_id"] == iid]
+    assert {row["path"] for row in mine} == {ITEM_SCHEDULES, PAGE_SCHEDULES}
+    assert r.json()["unindexed"] == []
+
+
+def test_an_items_own_file_the_index_does_not_name_is_listed_and_said_to_be_waiting():
+    """The panel always showed the item's own file, and said when the sweep's
+    index did not name it yet ("starts after the next conversation"). Narrowing
+    the overview to the item must not make such a file vanish from the panel."""
+    from workspace_app.api.schedule_index import ScheduleIndex
+
+    holder = {"id": "bob"}
+    client, spec, _ = _client_and_spec(holder)
+    iid = _item(spec, by="bob")
+    _seed(client, iid)
+    ScheduleIndex(spec).forget(iid, ITEM_SCHEDULES)
+
+    body = client.get(_wp(iid, "/schedules/overview")).json()
+
+    own = [row for row in body["rows"] if row["path"] == ITEM_SCHEDULES]
+    assert len(own) == 1
+    assert own[0]["runnable"] is False
+    assert body["unindexed"] == [ITEM_SCHEDULES]
+    # The cross-item overview lists what the sweep will act on — the index.
+    assert ITEM_SCHEDULES not in {row["path"] for row in _rows(client)}
+
+
+def test_an_items_own_listing_reads_only_that_item(monkeypatch):
+    """Review round 1 (regression 2): the Workflows panel opens often; it must
+    not read every item's index row and every Deployed page to show one item."""
+    from workspace_app.api.schedule_index import ScheduleIndex
+    from workspace_app.api.wui_deploy import DeployedPages
+
+    holder = {"id": "bob"}
+    client, spec, _ = _client_and_spec(holder)
+    iid = _item(spec, by="bob")
+    _seed(client, iid)
+
+    def _whole_table(*_a, **_k):
+        raise AssertionError("read the whole table for one item")
+
+    monkeypatch.setattr(ScheduleIndex, "entries", _whole_table)
+    real_pages = DeployedPages.newest_first
+
+    def _pages(self, item_id=None):
+        if item_id is None:
+            _whole_table()
+        return real_pages(self, item_id)
+
+    monkeypatch.setattr(DeployedPages, "newest_first", _pages)
+
+    r = client.get(_wp(iid, "/schedules/overview"))
+
+    assert r.status_code == 200, r.text
+    assert {row["path"] for row in r.json()["rows"]} == {ITEM_SCHEDULES, PAGE_SCHEDULES}
+
+
+def test_an_index_that_cannot_be_read_degrades_the_panel_not_500s(monkeypatch):
+    """Review round 1 (regression 3): master's panel route read an unreadable
+    index as "not indexed"; the narrowed overview must too."""
+    from workspace_app.api.schedule_index import ScheduleIndex
+
+    holder = {"id": "bob"}
+    client, spec, _ = _client_and_spec(holder)
+    iid = _item(spec, by="bob")
+    _seed(client, iid)
+
+    def _down(*_a, **_k):
+        raise RuntimeError("index down")
+
+    monkeypatch.setattr(ScheduleIndex, "paths", _down)
+
+    r = client.get(_wp(iid, "/schedules/overview"))
+
+    assert r.status_code == 200, r.text
+    assert r.json()["unindexed"] == [ITEM_SCHEDULES]
+
+
+def test_a_binding_store_that_cannot_be_read_does_not_take_the_overview_down(monkeypatch):
+    """Review round 1 (defect 7): one item must never take the page down."""
+    from workspace_app.workflow.schedule_bindings import ScheduleBindings
+
+    holder = {"id": "bob"}
+    client, spec, _ = _client_and_spec(holder)
+    iid = _item(spec, by="bob")
+    _seed(client, iid)
+
+    def _down(*_a, **_k):
+        raise RuntimeError("bindings down")
+
+    monkeypatch.setattr(ScheduleBindings, "for_item", _down)
+
+    r = client.get("/schedules")
+
+    assert r.status_code == 200, r.text
+    assert {row["runs_as"] for row in r.json()["rows"]} == {""}
+
+
+def test_an_items_own_file_that_cannot_be_read_is_said_not_a_500(monkeypatch):
+    from workspace_app.api import schedule_listing
+    from workspace_app.api.schedule_index import ScheduleIndex
+
+    holder = {"id": "bob"}
+    client, spec, _ = _client_and_spec(holder)
+    iid = _item(spec, by="bob")
+    _seed(client, iid)
+    ScheduleIndex(spec).forget(iid, ITEM_SCHEDULES)
+    real = schedule_listing.read_schedules_file
+
+    async def _host_down(files, durable, item_id, path):
+        if path == ITEM_SCHEDULES:
+            raise OSError("host down")
+        return await real(files, durable, item_id, path)
+
+    monkeypatch.setattr(schedule_listing, "read_schedules_file", _host_down)
+
+    r = client.get(_wp(iid, "/schedules/overview"))
+
+    assert r.status_code == 200, r.text
+    assert [f["path"] for f in r.json()["files"]] == [ITEM_SCHEDULES]
+    assert r.json()["unindexed"] == [ITEM_SCHEDULES]

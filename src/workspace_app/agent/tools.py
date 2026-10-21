@@ -20,7 +20,7 @@ import yaml
 from agents import FunctionTool, RunContextWrapper, ToolOutputImage, ToolOutputText, function_tool
 from specstar.types import ResourceIDNotFoundError
 
-from ..files import ReadOnlyPath, WorkspaceFiles, WorkspaceFull, rel_path
+from ..files import ReadOnlyPath, WorkspaceFiles, WorkspaceFull, abs_path, rel_path
 from ..filestore.protocol import FileNotFound
 from ..kb.doc_resolve import DocResolution
 from ..quota.disk_ledger import UserDiskFull
@@ -856,6 +856,9 @@ async def write_file_impl(ctx: RunContextWrapper[AgentToolContext], path: str, c
         return denied
     fs, inv = _workspace(ctx)
     current = await fs.create(inv, path, content.encode("utf-8"))
+    if current is None:
+        # A NEW schedules file: every row in it is this turn's (plan-schedule-run-as G2).
+        await _credit_schedules(ctx, inv, path, before=None, after=content)
     # Every confirmation and every rejection below names the file RELATIVELY
     # (#549), like `list_files` does. Echoing the argument verbatim taught the
     # opposite: an agent that guessed `/notes.md` had that guess confirmed by a
@@ -892,8 +895,17 @@ async def edit_file_impl(
         if (denied := authorize_tool(ctx.context, verb)) is not None:
             return denied
     fs, inv = _workspace(ctx)
+    before = await _schedules_before(ctx, inv, path)
     current = await fs.edit(inv, path, old_string, new_string)
     if current is None:
+        if before is not None:
+            # The edit LANDED: a failed read-back only means nobody is credited.
+            try:
+                after = (await fs.read(inv, path)).decode("utf-8", "replace")
+            except Exception:  # noqa: BLE001 — only crediting depends on it
+                _LOGGER.exception("schedules: could not read back %s", path)
+            else:
+                await _credit_schedules(ctx, inv, path, before=before, after=after)
         return f"edited {rel_path(path)}"
     # This impl required `read_content` above, so `_conflict_echo` normally
     # cannot refuse — but "normally" is not "never": `authorize_tool` re-reads
@@ -908,6 +920,43 @@ async def edit_file_impl(
     return (
         f"error: could not apply the edit to {rel_path(path)} — `old_string` was not found "
         f"exactly once (the file may have changed). Current content:\n{echo}"
+    )
+
+
+async def _schedules_before(
+    ctx: RunContextWrapper[AgentToolContext], inv: str, path: str
+) -> str | None:
+    """A schedules file as it is before this turn changes it — None when the
+    path is not one, nothing will credit the change, or it cannot be read (the
+    write still goes ahead; it just credits nobody — review round 2)."""
+    from ..api.schedule_index import is_schedule_file
+
+    if ctx.context.schedule_authorship is None or not is_schedule_file(abs_path(path)):
+        return None
+    try:
+        fs, _ = _workspace(ctx)
+        return (await fs.read(inv, path)).decode("utf-8", "replace")
+    except FileNotFound:
+        return None
+    except Exception:  # noqa: BLE001 — only crediting depends on it
+        _LOGGER.exception("schedules: could not read %s before changing it", path)
+        return None
+
+
+async def _credit_schedules(
+    ctx: RunContextWrapper[AgentToolContext], inv: str, path: str, *, before: str | None, after: str
+) -> None:
+    """The rows a write ADDS to a schedules file run as the person this turn
+    acts for — `save_schedules`, `write_file` and `edit_file` alike: the agent
+    can only write a PAGE's schedules with the last two (plan-schedule-run-as
+    G2; review round 1, conformance 1)."""
+    from ..api.schedule_index import is_schedule_file
+
+    authorship = ctx.context.schedule_authorship
+    if authorship is None or not is_schedule_file(abs_path(path)):
+        return
+    await authorship.credit(
+        inv, abs_path(path), before=before, after=after, author=ctx.context.acting_for
     )
 
 
@@ -3340,6 +3389,13 @@ async def save_workflow_impl(
     )
 
 
+def _runs_as_said(user: str) -> str:
+    """How a saved row's identity reads in `save_schedules`'s reply."""
+    if user:
+        return f" — runs as {user} (with their own sign-ins and values)"
+    return " — runs as nobody (the item's shared values only)"
+
+
 async def save_schedules_impl(ctx: RunContextWrapper[AgentToolContext], schedules_json: str) -> str:
     # The docstring — what the model reads as this tool's description — is
     # assigned below, built from the vocabulary the validator accepts, so the
@@ -3357,6 +3413,7 @@ async def save_schedules_impl(ctx: RunContextWrapper[AgentToolContext], schedule
     from ..workflow.user_schedules import (
         ITEM_SCHEDULES_PATH,
         last_window_lookup,
+        schedule_key,
         schedule_views,
         usable_rows,
         utc_now,
@@ -3405,9 +3462,25 @@ async def save_schedules_impl(ctx: RunContextWrapper[AgentToolContext], schedule
             return f"error: {wont_parse(run, problem)} Then save the schedules."
 
     doc = json.loads(schedules_json)
-    await files.write(
-        inv, ITEM_SCHEDULES_PATH, json.dumps({"schedules": doc["schedules"]}, indent=2).encode()
-    )
+    authorship = ctx.context.schedule_authorship
+    before: str | None = None
+    credit = authorship is not None
+    if authorship is not None:
+        try:
+            before = (await files.read(inv, ITEM_SCHEDULES_PATH)).decode("utf-8", "replace")
+        except FileNotFound:
+            pass
+        except Exception:  # noqa: BLE001 — the save goes ahead, credited to nobody
+            _LOGGER.exception("save_schedules: could not read %s before saving", inv)
+            credit = False
+    written = json.dumps({"schedules": doc["schedules"]}, indent=2)
+    await files.write(inv, ITEM_SCHEDULES_PATH, written.encode())
+    # plan-schedule-run-as G2: the rows this save ADDS run as the person the
+    # turn acts for — never the rows that were already there.
+    if authorship is not None and credit:
+        await authorship.credit(
+            inv, ITEM_SCHEDULES_PATH, before=before, after=written, author=ctx.context.acting_for
+        )
 
     # "Next run" as the sweep will actually compute it — the same views the
     # Workflows panel lists, ledger AND landing stamp included, so an unchanged
@@ -3437,12 +3510,23 @@ async def save_schedules_impl(ctx: RunContextWrapper[AgentToolContext], schedule
         max_rows=policy.max_rows,
         enabled=policy.sweep_enabled,
         landed_ms=landed,
+        # Each row's identity — the key its binding is filed under.
+        key_of=schedule_key(inv, ITEM_SCHEDULES_PATH),
     )
     # The returns above leave the switch as the only gate a row here can fail
     # (`run` is offered, the file is within the cap, and `indexed` is left at
     # its default because the write just went through the facade, which
     # records it), so the sentence is keyed on the switch — the cause — rather
     # than on the verdict, which would attribute any other failure to it.
+    # Whose values each row will carry — said, so the agent tells the person
+    # plainly rather than leaving "set up" to mean "with your sign-in".
+    who = {
+        v.trigger_id: (
+            await asyncio.to_thread(authorship.runs_as, v.trigger_id) if authorship else ""
+        )
+        for v in views
+        if v.trigger_id
+    }
     lines = [
         f"- {v.run}: {v.describe}"
         + (f" with {json.dumps(v.payload, sort_keys=True)}" if v.payload else "")
@@ -3451,6 +3535,7 @@ async def save_schedules_impl(ctx: RunContextWrapper[AgentToolContext], schedule
             if policy.sweep_enabled
             else " — will not run (scheduled work is switched off on this deployment)"
         )
+        + (_runs_as_said(who.get(v.trigger_id, "")) if authorship is not None else "")
         for v in views
     ]
     noun = "schedule" if len(rows) == 1 else "schedules"

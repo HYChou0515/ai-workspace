@@ -49,6 +49,7 @@ from ..workflow.offered import (
 )
 from ..workflow.orchestrator import ActiveRunExists
 from ..workflow.run import WorkflowRun
+from ..workflow.schedule_bindings import ScheduleAuthorship, ScheduleBinding, ScheduleBindings
 from ..workflow.user_schedules import (
     ITEM_SCHEDULES_PATH,
     SchedulePolicy,
@@ -255,6 +256,16 @@ class OverviewRow(BaseModel):
     it has none (or there is no page): the folder names it instead."""
     run_title: str = ""
     """The title of the workflow `run` names (`ScheduleView.run_title`)."""
+    runs_as: str = ""
+    """Whose own values a fire carries (`plan-schedule-run-as`); "" = nobody —
+    the item's shared values only."""
+    runs_as_reason: str = ""
+    """Why it is them (G8): "self" (they chose it), "author" (they wrote the
+    row), "admin" (a superuser named them); "" when it runs as nobody."""
+    runs_as_by: str = ""
+    """The superuser who named them, when `runs_as_reason` is "admin"."""
+    runs_as_mine: bool = False
+    """Whether it runs as the VIEWER — "Stop running as me" rather than "Run as me"."""
 
 
 class OverviewFile(BaseModel):
@@ -272,6 +283,14 @@ class ScheduleOverview(BaseModel):
     enabled: bool
     rows: list[OverviewRow]
     files: list[OverviewFile]
+    can_assign: bool = False
+    """Whether the viewer may choose someone ELSE to run a schedule as — the
+    deployment's superusers only (`plan-schedule-run-as` G5)."""
+    unindexed: list[str] = []
+    """Schedules files listed although the sweep's index does not name them
+    yet — only an item's OWN listing has any (its `.workflows/schedules.json`,
+    which its Workflows panel always showed): the cross-item overview lists
+    what the sweep will act on, which is the index."""
 
 
 class ScheduleAction(BaseModel):
@@ -351,7 +370,10 @@ def register_schedule_overview_routes(
     start_run: Callable[..., Awaitable[str | None]],
     durable: Source,
     on_saved: Callable[[str, str], None],
-    deployed_pages: Callable[[], list[DeployedWui]] = list,
+    deployed_pages: Callable[..., list[DeployedWui]] = lambda _item=None: [],
+    authorship: ScheduleAuthorship | None = None,
+    bindings: ScheduleBindings | None = None,
+    superusers: frozenset[str] = frozenset(),
 ) -> None:
     """``start_run`` is the sweep's own start (`start_page_schedule`, bound in
     `create_app`): "run now" goes through exactly what a fire goes through —
@@ -422,7 +444,25 @@ def register_schedule_overview_routes(
         # other save, so the birth rule sees the edit (no catch-up for it).
         # `ensure_ascii=False`: a neighbouring row's 品管課 stays 品管課, not
         # `\\u54c1…` — the file is read by people and agents too.
-        await files.write(item_id, path, json.dumps(doc, indent=2, ensure_ascii=False).encode())
+        after = json.dumps(doc, indent=2, ensure_ascii=False)
+        # plan-schedule-run-as G2: a row this save ADDS — a new time is a new
+        # row — runs as the person who saved it. Compared against the file as it
+        # is just before this write; a row another writer removed after the
+        # caller read `doc` counts as added here (plan: known limits).
+        credit = authorship is not None
+        before: str | None = None
+        if credit:
+            # Only crediting reads it: failing, the save goes ahead and credits
+            # nobody (review round 2) — never a refused edit.
+            try:
+                before = (await files.read(item_id, path)).decode("utf-8", "replace")
+            except Exception:  # noqa: BLE001 — logged; the save stands
+                logger.exception("schedules: could not read %s %s before saving", item_id, path)
+                credit = False
+        await files.write(item_id, path, after.encode())
+        if credit:
+            assert authorship is not None  # narrow for ty
+            await authorship.credit(item_id, path, before=before, after=after, author=get_user_id())
         on_saved(item_id, path)
 
     @app.post("/a/{slug}/items/{item_id}/schedules/edit", response_model=ScheduleAction)
@@ -523,19 +563,81 @@ def register_schedule_overview_routes(
         one that exists — so a file that is gone is skipped, and the sweep
         drops it from the index on its own next pass.
         """
+        return await _overview(None)
+
+    @app.get("/a/{slug}/items/{item_id}/schedules/overview", response_model=ScheduleOverview)
+    async def item_schedules_overview(slug: str, item_id: str) -> ScheduleOverview:
+        """The overview narrowed to ONE item — every schedules file it holds,
+        its own and each page's — for the item's Workflows panel
+        (`plan-schedule-run-as` G10). The same rows, built by the same code, so
+        the two screens cannot drift apart (NN/g, consistency)."""
+        return await _overview(locator.require_access(slug, item_id, "read_meta"))
+
+    async def _present(item_id: str, path: str) -> bool:
+        """Whether there is a file to list. A read that fails other than "not
+        there" counts as present: the listing below then reports it as a file
+        it could not read, as it does every other — not a 500 for the panel."""
+        try:
+            return await read_schedules_file(files, durable, item_id, path) is not None
+        except Exception:  # noqa: BLE001 — said for that file by the listing
+            return True
+
+    async def _one_entry(item_id: str) -> tuple[str, list[str], dict[str, int]]:
+        """What the index names for ONE item, read as point lookups. An index
+        that cannot be read names nothing — the item's own file then lists as
+        "not registered yet", as master's panel route read it — not a 500."""
+
+        def _read() -> tuple[str, list[str], dict[str, int]]:
+            paths = index.paths(item_id)
+            landed = {p: at for p in paths if (at := index.landed_at(item_id, p)) is not None}
+            return item_id, paths, landed
+
+        try:
+            return await asyncio.to_thread(_read)
+        except Exception:  # noqa: BLE001 — a listing, not a run
+            logger.exception("schedules overview: %s: index unreadable", item_id)
+            return item_id, [], {}
+
+    async def _overview(only: str | None) -> ScheduleOverview:
         rows: list[OverviewRow] = []
         problem_files: list[OverviewFile] = []
         # Deployed pages by (item, folder): one listing for the whole page.
         # Newest Deploy first, so the first page seen for a folder is the one
         # kept when a folder holds two Deployed view files.
         pages: dict[tuple[str, str], DeployedWui] = {}
-        for page in await asyncio.to_thread(deployed_pages):
+        # ONE item's pages for its panel — the panel opens often, and the
+        # Deployed table grows with every page anyone ships (review round 1).
+        for page in await asyncio.to_thread(
+            deployed_pages if only is None else (lambda: deployed_pages(only))
+        ):
             pages.setdefault((page.item_id, page.path.rsplit("/", 1)[0]), page)
-        for item_id, paths, landed in await asyncio.to_thread(index.entries):
+        me = get_user_id()
+        unindexed: list[str] = []
+        if only is None:
+            entries = await asyncio.to_thread(index.entries)
+        else:
+            entries = [await _one_entry(only)]
+            named = entries[0][1]
+            # The item's own file, named by no index yet (written past every
+            # hook): listed as not running yet, as its panel always did.
+            if ITEM_SCHEDULES_PATH not in named and await _present(only, ITEM_SCHEDULES_PATH):
+                unindexed.append(ITEM_SCHEDULES_PATH)
+                entries = [(only, [*named, ITEM_SCHEDULES_PATH], entries[0][2])]
+        for item_id, paths, landed in entries:
             decided = await asyncio.to_thread(_decide, item_id)
             if decided is None:
                 continue
             slug, title, owner, can_edit, can_run, can_read, profile = decided
+            # Who each row runs as: one indexed read per item, not one per row.
+            # Unreadable, the rows say "nobody" rather than the page 500ing —
+            # one item must never take the page down (review round 1).
+            held: dict[str, ScheduleBinding] = {}
+            if bindings is not None:
+                try:
+                    found = await asyncio.to_thread(bindings.for_item, item_id)
+                    held = {b.trigger_id: b for b in found}
+                except Exception:  # noqa: BLE001 — said in the log, not as a 500
+                    logger.exception("schedules overview: %s: bindings unreadable", item_id)
 
             def _file(
                 path: str, problems: list[str], slug=slug, item_id=item_id, title=title
@@ -559,7 +661,7 @@ def register_schedule_overview_routes(
                         profile=profile,
                         path=path,
                         raw=data.decode("utf-8", "replace"),
-                        indexed=True,
+                        indexed=path not in unindexed,
                         landed=landed.get(path),
                     )
                     lasts = [
@@ -583,6 +685,7 @@ def register_schedule_overview_routes(
                     else None
                 )
                 for view, last in zip(views, lasts, strict=True):
+                    bound = held.get(view.trigger_id) if view.trigger_id else None
                     fields = msgspec.to_builtins(view)
                     assert isinstance(fields, dict)  # narrow for ty
                     fields.pop("next_run", None)
@@ -603,9 +706,19 @@ def register_schedule_overview_routes(
                             can_read=can_read,
                             page_path=page.path if page is not None else "",
                             page_title=page.title if page is not None else "",
+                            runs_as=bound.user_id if bound is not None else "",
+                            runs_as_reason=bound.reason if bound is not None else "",
+                            runs_as_by=bound.assigned_by if bound is not None else "",
+                            runs_as_mine=bound is not None and bound.user_id == me,
                         )
                     )
-        return ScheduleOverview(enabled=policy.sweep_enabled, rows=rows, files=problem_files)
+        return ScheduleOverview(
+            enabled=policy.sweep_enabled,
+            rows=rows,
+            files=problem_files,
+            can_assign=me in superusers,
+            unindexed=unindexed,
+        )
 
 
 __all__ = [

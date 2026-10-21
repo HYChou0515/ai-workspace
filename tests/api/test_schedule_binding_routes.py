@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 from typing import cast
 
+import pytest
 from fastapi import FastAPI
 
 from workspace_app.api import ScriptedAgentRunner, create_app
@@ -25,21 +26,28 @@ from ._client import TestClient
 PAGE = "/report"
 FILE = f"{PAGE}/schedules.json"
 DAILY = {"every": "daily", "at": "09:00", "run": "build-report"}
+_SEEDS: dict[int, MemoryFileStore] = {}
+#: root runs the deployment (`server.superusers`) and is no member of the item.
+SUPERUSERS = frozenset({"root"})
 
 
-def _world():
+def _world(*, seeded: bool = False):
     """bob owns the item; carol is a Collaborator (holds `execute`); alice is a
-    Participant (reads, talks to the agent, runs nothing)."""
+    Participant (reads, talks to the agent, runs nothing); dave may edit the
+    files but not run work in the item."""
     holder = {"id": "bob"}
-    spec = make_spec(default_user=lambda: holder["id"])
+    spec = make_spec(default_user=lambda: holder["id"], superusers=SUPERUSERS)
+    fs = MemoryFileStore()
+    _SEEDS[id(spec)] = fs
     app = create_app(
         spec=spec,
         sandbox=MockSandbox(),
-        filestore=MemoryFileStore(),
+        filestore=fs,
         runner=ScriptedAgentRunner([]),
         get_user_id=lambda: holder["id"],
+        superusers=SUPERUSERS,
     )
-    reader = ["user:alice", "user:carol"]
+    reader = ["user:alice", "user:carol", "user:dave"]
     rm = spec.get_resource_manager(RcaInvestigation)
     with rm.using("bob"):
         rid = rm.create(
@@ -53,12 +61,16 @@ def _world():
                     read_content=reader,
                     converse=reader,
                     add_content=["user:carol"],
-                    edit_content=["user:carol"],
+                    edit_content=["user:carol", "user:dave"],
                     execute=["user:carol"],
                 ),
             )
         ).resource_id
     client = TestClient(app)
+    if seeded:
+        # Past every door that knows who is writing: a row nobody authored (G3).
+        _seed(spec, rid, json.dumps({"schedules": [DAILY]}))
+        return client, holder, rid, spec
     put = client.put(f"/a/rca/items/{rid}/files{FILE}", content=json.dumps({"schedules": [DAILY]}))
     assert put.status_code == 204, put.text
     return client, holder, rid, spec
@@ -74,8 +86,8 @@ def _bind(client, rid, key):
     return client.put(f"/a/rca/items/{rid}/schedule-bindings/{key}", params={"path": FILE})
 
 
-def test_a_pages_schedules_are_listed_bound_to_nobody_at_first():
-    client, _holder, rid, _ = _world()
+def test_a_row_nobody_authored_is_listed_bound_to_nobody():
+    client, _holder, rid, _ = _world(seeded=True)
 
     (row,) = _list(client, rid)
 
@@ -95,6 +107,259 @@ def test_a_collaborator_binds_a_schedule_to_themself():
     assert r.status_code == 200, r.text
     (after,) = _list(client, rid)
     assert (after["bound_to"], after["mine"]) == ("carol", True)
+
+
+def test_a_binding_made_by_pressing_run_as_me_says_the_person_chose_it():
+    """`plan-schedule-run-as` G8: the row says WHY it runs as that person — here,
+    because they chose to."""
+    client, holder, rid, _ = _world()
+    holder["id"] = "carol"
+    (row,) = _list(client, rid)
+
+    _bind(client, rid, row["trigger_id"])
+
+    (after,) = _list(client, rid)
+    assert (after["bound_to"], after["reason"], after["assigned_by"]) == ("carol", "self", "")
+
+
+EVENING = {"every": "daily", "at": "18:00", "run": "build-report"}
+
+
+def _rows(*rows) -> str:
+    return json.dumps({"schedules": list(rows)})
+
+
+def test_a_schedule_runs_as_whoever_wrote_it_and_only_the_rows_they_added():
+    """`plan-schedule-run-as` G2: a row runs as the person who wrote it. Saving
+    the WHOLE file again must not claim the rows that were already there — only
+    the ones this write added (bob's row stays bob's after carol adds hers)."""
+    client, holder, rid, _ = _world()  # bob wrote DAILY
+    holder["id"] = "carol"
+
+    put = client.put(f"/a/rca/items/{rid}/files{FILE}", content=_rows(DAILY, EVENING))
+
+    assert put.status_code == 204, put.text
+    who = {(r["describe"], r["bound_to"], r["reason"]) for r in _list(client, rid)}
+    assert len(who) == 2
+    assert {(b, why) for _d, b, why in who} == {("bob", "author"), ("carol", "author")}
+
+
+def _seed(spec, rid, raw: str) -> None:
+    """Put a schedules file in place the way a seed / a zip import / an
+    agent's `exec` does — past every door that knows who is writing."""
+    import asyncio
+
+    asyncio.run(_SEEDS[id(spec)].write(rid, FILE, raw.encode()))
+
+
+def test_a_row_nobody_wrote_through_a_door_stays_nobodys_when_the_file_is_saved_again():
+    """G3: a row older than this feature (or seeded, imported, written by
+    `exec`) has no author. Saving the whole file again to add a row — what
+    `save_schedules` always does — must not hand the old row to the saver."""
+    client, holder, rid, _ = _world(seeded=True)
+    holder["id"] = "carol"
+
+    client.put(f"/a/rca/items/{rid}/files{FILE}", content=_rows(DAILY, EVENING))
+
+    who = sorted((r["describe"], r["bound_to"]) for r in _list(client, rid))
+    assert [b for _d, b in who].count("carol") == 1
+    assert [b for _d, b in who].count("") == 1
+
+
+_D = json.dumps(DAILY)
+
+
+@pytest.mark.parametrize(
+    "broken",
+    [
+        '{"schedules": [',  # not JSON (a save mid-edit)
+        f'{{"schedule": [{_D}]}}',  # JSON holding a row, under a mistyped key
+        f"[{_D}]",  # JSON holding a row, but not a schedules document
+        f'{{"schedules": {{"0": {_D}}}}}',  # JSON holding a row, not in a list
+        _D,  # one row with no {"schedules": [...]} around it (round 5)
+        f'{{"schedules": [], "schedule": [{_D}]}}',  # a row beside a valid list (round 5)
+        '{"schedules": "oops"}',  # content that is not a schedules list: credit nobody
+        # A repeated key: JSON keeps the LAST value, so the first one's row is
+        # invisible to the sweep and to this check alike (round 6).
+        f'{{"schedules": [{_D}], "schedules": []}}',
+        f'{{"schedules": [{_D}], "schedules": null}}',
+        # Rows turned into strings — beside the list, or as its elements (round 7).
+        json.dumps({"schedules": [], "backup": json.dumps([DAILY])}),
+        json.dumps({"schedules": [json.dumps(DAILY)]}),
+        # Any value beside the list, even a plain one, is not "nothing" (round 7).
+        json.dumps({"version": 1, "schedules": [DAILY]}),
+    ],
+)
+def test_a_file_that_was_broken_before_the_save_hands_its_rows_to_nobody(broken):
+    """Review round 1 (defect 1): a broken save, then the fixed file — the rows
+    in it are not "added" by the fix (the file just could not be read), so they
+    are not credited to whoever fixed it. Valid JSON that HOLDS rows the sweep
+    cannot read (a mistyped key, a bare list) is broken the same way (round 3)."""
+    client, holder, rid, _ = _world(seeded=True)
+    holder["id"] = "carol"
+    client.put(f"/a/rca/items/{rid}/files{FILE}", content=broken)
+
+    client.put(f"/a/rca/items/{rid}/files{FILE}", content=_rows(DAILY, EVENING))
+
+    assert {r["bound_to"] for r in _list(client, rid)} == {""}
+
+
+@pytest.mark.parametrize(
+    "empty",
+    [
+        "",
+        "  \n",
+        "{}",
+        '{"schedules": null}',
+        # Not schedules documents either, but nothing in them at all (round 4/5).
+        "[]",
+        '{"schedule": []}',
+        "null",
+        "[[]]",
+    ],
+)
+def test_a_file_created_empty_then_saved_credits_whoever_saved_it(empty):
+    """Review round 2 (veracity 1): the file tree's "New file" writes "" first,
+    so the editor's first save arrives with an EMPTY before. A file that holds
+    no row is "no rows", not "could not be read" — whatever its shape — so the
+    person typing the rows in wrote them."""
+    client, holder, rid, _ = _world(seeded=True)
+    holder["id"] = "carol"
+    client.put(f"/a/rca/items/{rid}/files/new/schedules.json", content=empty)
+
+    client.put(f"/a/rca/items/{rid}/files/new/schedules.json", content=_rows(DAILY))
+
+    r = client.get(f"/a/rca/items/{rid}/schedule-bindings", params={"path": "/new/schedules.json"})
+    assert [(row["bound_to"], row["reason"]) for row in r.json()["rows"]] == [("carol", "author")]
+
+
+def test_a_file_over_the_row_cap_credits_nobody():
+    """Review round 1 (defect 2): a file over the cap never fires, and the sweep
+    does not expire bindings while it stays over — so crediting its rows would
+    grow the binding table without bound."""
+    client, holder, rid, _ = _world(seeded=True)
+    holder["id"] = "carol"
+    many = [
+        {"every": "daily", "at": f"{n // 60:02d}:{n % 60:02d}", "run": "build-report"}
+        for n in range(1001)
+    ]
+
+    client.put(f"/a/rca/items/{rid}/files{FILE}", content=_rows(*many))
+
+    from workspace_app.workflow.schedule_bindings import ScheduleBindings
+
+    assert ScheduleBindings(client.app.state.spec).for_item(rid) == []
+
+
+def test_a_save_that_landed_is_not_reported_as_failed_because_crediting_failed(monkeypatch):
+    """Review round 1 (defect 4 / regression 4): crediting runs AFTER the bytes
+    landed. A failure there must not turn a saved file into a 500 — the client
+    would retry a write that succeeded, and the retry adds nothing to credit."""
+    from workspace_app.workflow.schedule_bindings import ScheduleBindings
+
+    client, holder, rid, _ = _world(seeded=True)
+    holder["id"] = "carol"
+
+    def _down(*_a, **_k):
+        raise RuntimeError("binding store down")
+
+    monkeypatch.setattr(ScheduleBindings, "bind", _down)
+
+    put = client.put(f"/a/rca/items/{rid}/files{FILE}", content=_rows(DAILY, EVENING))
+
+    assert put.status_code == 204, put.text
+    assert len(_list(client, rid)) == 2  # the file is there
+
+
+@pytest.mark.parametrize("fails_on", [1, 2])
+def test_a_schedules_file_that_cannot_be_read_around_the_save_still_saves(monkeypatch, fails_on):
+    """The read before the save (1) and the read-back after it (2) are only for
+    crediting: either failing leaves the rows uncredited, never fails the PUT."""
+    from workspace_app.files import WorkspaceFiles
+
+    client, holder, rid, _ = _world(seeded=True)
+    holder["id"] = "carol"
+    real = WorkspaceFiles.read
+    calls = {"n": 0}
+
+    async def _flaky(self, workspace_id, path):
+        if path == FILE:
+            calls["n"] += 1
+            if calls["n"] == fails_on:
+                raise OSError("host hiccup")
+        return await real(self, workspace_id, path)
+
+    monkeypatch.setattr(WorkspaceFiles, "read", _flaky)
+
+    put = client.put(f"/a/rca/items/{rid}/files{FILE}", content=_rows(DAILY, EVENING))
+
+    assert put.status_code == 204, put.text
+    monkeypatch.setattr(WorkspaceFiles, "read", real)
+    assert {r["bound_to"] for r in _list(client, rid)} == {""}
+
+
+def test_stopping_running_as_me_is_not_undone_by_the_next_save():
+    """G6: "Stop running as me" leaves the row to nobody, and a later save of
+    the same file by the same person does not put their name back on it."""
+    client, holder, rid, _ = _world()
+    holder["id"] = "carol"
+    client.put(f"/a/rca/items/{rid}/files{FILE}", content=_rows(DAILY, EVENING))
+    mine = [r for r in _list(client, rid) if r["bound_to"] == "carol"]
+    (row,) = mine
+    off = client.delete(
+        f"/a/rca/items/{rid}/schedule-bindings/{row['trigger_id']}", params={"path": FILE}
+    )
+    assert off.status_code == 204
+
+    client.put(f"/a/rca/items/{rid}/files{FILE}", content=_rows(DAILY, EVENING))
+
+    assert not [r for r in _list(client, rid) if r["bound_to"] == "carol"]
+
+
+def test_a_row_taken_out_and_put_back_keeps_the_person_who_chose_it():
+    """A row removed and written back is "new" to that write — but carol chose
+    to run it as herself, and the binding outlives the gap until the sweep
+    expires it. Writing it back must not silently move it to the writer."""
+    client, holder, rid, _ = _world()
+    holder["id"] = "carol"
+    (row,) = _list(client, rid)
+    assert _bind(client, rid, row["trigger_id"]).status_code == 200
+    holder["id"] = "bob"
+    client.put(f"/a/rca/items/{rid}/files{FILE}", content=_rows(EVENING))
+
+    client.put(f"/a/rca/items/{rid}/files{FILE}", content=_rows(DAILY, EVENING))
+
+    back = {r["trigger_id"]: r for r in _list(client, rid)}[row["trigger_id"]]
+    assert (back["bound_to"], back["reason"]) == ("carol", "self")
+
+
+def test_a_row_whose_workflow_will_not_parse_is_not_credited_to_its_writer():
+    """The consent "Run as me" refuses (round 6) is refused to the author too:
+    a binding records the workflow as it is, and a file that will not parse
+    records the PACKAGE workflow's "" — which a later delete would satisfy."""
+    client, holder, rid, _ = _world(seeded=True)
+    broken = (
+        b'{"id":"x","phases":[{"id":"p"}],"steps":[{"type":"agent","prompt":"hi","phase":"p"}]}'
+    )
+    base = f"/a/rca/items/{rid}/files"
+    assert client.put(f"{base}/.workflows/build-report.json", content=broken).status_code == 204
+    holder["id"] = "carol"
+
+    client.put(f"{base}{FILE}", content=_rows(DAILY, EVENING))
+
+    assert {r["bound_to"] for r in _list(client, rid)} == {""}
+
+
+def test_a_writer_who_cannot_run_work_here_is_not_who_the_row_runs_as():
+    """G7: someone who may edit the files but not run work in the item
+    (`execute`) writes a row — it runs as nobody, not as them."""
+    client, holder, rid, _ = _world()
+    holder["id"] = "dave"
+
+    put = client.put(f"/a/rca/items/{rid}/files{FILE}", content=_rows(DAILY, EVENING))
+
+    assert put.status_code == 204, put.text
+    assert "dave" not in {r["bound_to"] for r in _list(client, rid)}
 
 
 def test_the_sweep_finds_the_binding_the_route_made():
@@ -187,7 +452,7 @@ def test_a_page_with_no_schedules_file_lists_nothing():
 
 
 def test_unbinding_a_schedule_nobody_runs_as_is_the_state_asked_for():
-    client, holder, rid, _ = _world()
+    client, holder, rid, _ = _world(seeded=True)
     holder["id"] = "carol"
     (row,) = _list(client, rid)
     url = f"/a/rca/items/{rid}/schedule-bindings/{row['trigger_id']}"
@@ -210,6 +475,45 @@ def test_a_binding_from_another_item_cannot_be_taken_off_through_this_one():
 
     assert r.status_code == 404
     assert ScheduleBindings(spec).binder("foreign-key") == "carol"
+
+
+def test_the_app_says_the_workflow_changed_when_that_is_what_dropped_a_binding():
+    """Review round 2 (defect 4): the row is unchanged and its WORKFLOW was
+    rewritten — the notice must say that, not "the schedule was edited"."""
+    from workspace_app.api.notifications import Notification
+
+    client, holder, rid, spec = _world(seeded=True)
+    nightly = {
+        "id": "x",
+        "title": "Nightly",
+        "phases": [{"id": "p"}],
+        "steps": [{"type": "agent", "cache": True, "prompt": "hi", "phase": "p", "out": "o.md"}],
+    }
+    with client:
+        base = f"/a/rca/items/{rid}/files"
+        wf = f"{base}/.workflows/nightly.json"
+        assert client.put(wf, content=json.dumps(nightly)).status_code == 204
+        rows = json.dumps({"schedules": [{"every": "minutes", "n": 1, "run": "nightly"}]})
+        _seed(spec, rid, rows)
+        ScheduleIndex(spec).record(rid, FILE)
+        holder["id"] = "carol"
+        (row,) = _list(client, rid)
+        assert _bind(client, rid, row["trigger_id"]).status_code == 200
+        holder["id"] = "bob"
+        changed = {**nightly, "title": "Nightly (payroll)"}
+        assert client.put(wf, content=json.dumps(changed)).status_code == 204
+
+        ScheduleIndex(spec).stamp(rid, FILE, 0)
+        assert client.portal is not None
+        client.portal.call(client.app.state.user_schedule_sweeper.tick)
+
+    notices = [
+        (r.data.kind, r.data.body)
+        for r in spec.get_resource_manager(Notification).list_resources()
+        if r.data.recipient == "carol"
+    ]
+    assert [k for k, _ in notices] == ["schedule_binding_workflow_changed"]
+    assert "workflow" in notices[0][1]
 
 
 def test_the_app_drops_a_binding_whose_binder_was_removed_and_says_why():
@@ -301,7 +605,7 @@ def test_a_schedule_whose_workflow_will_not_parse_cannot_be_bound():
     with the binder's values. Nothing to consent to until the file parses."""
     from workspace_app.workflow.schedule_bindings import ScheduleBindings
 
-    client, holder, rid, spec = _world()
+    client, holder, rid, spec = _world(seeded=True)
     broken = (
         b'{"id":"x","phases":[{"id":"p"}],"steps":[{"type":"agent","prompt":"hi","phase":"p"}]}'
     )
@@ -315,3 +619,82 @@ def test_a_schedule_whose_workflow_will_not_parse_cannot_be_bound():
     assert r.status_code == 422, r.text
     assert "won't parse" in r.json()["detail"]
     assert ScheduleBindings(spec).get(row["trigger_id"]) is None
+
+
+def _assign(client, rid, key, user):
+    return client.put(
+        f"/a/rca/items/{rid}/schedule-bindings/{key}", params={"path": FILE, "user": user}
+    )
+
+
+def _notices(spec, recipient: str) -> list[tuple[str, str]]:
+    from workspace_app.api.notifications import Notification
+
+    return [
+        (r.data.kind, r.data.body)
+        for r in spec.get_resource_manager(Notification).list_resources()
+        if r.data.recipient == recipient
+    ]
+
+
+def test_a_superuser_names_who_a_schedule_runs_as_and_that_person_is_told():
+    """G5 + G6: a superuser may name someone else; it takes effect at once, the
+    row says an admin chose it and which one, and the person named is told."""
+    client, holder, rid, spec = _world(seeded=True)
+    holder["id"] = "root"
+    (row,) = _list(client, rid)
+
+    r = _assign(client, rid, row["trigger_id"], "carol")
+
+    assert r.status_code == 200, r.text
+    (after,) = _list(client, rid)
+    assert (after["bound_to"], after["reason"], after["assigned_by"]) == ("carol", "admin", "root")
+    ((kind, body),) = _notices(spec, "carol")
+    assert kind == "schedule_binding_assigned"
+    assert "root" in body
+
+
+def test_naming_someone_else_is_for_a_superuser_only():
+    """The owner too: "Run as me" lends ONE's own values; lending someone
+    else's is the deployment's call (G5)."""
+    client, _holder, rid, spec = _world(seeded=True)  # bob, the owner
+    (row,) = _list(client, rid)
+
+    r = _assign(client, rid, row["trigger_id"], "carol")
+
+    assert r.status_code == 403, r.text
+    assert _list(client, rid)[0]["bound_to"] == ""
+    assert _notices(spec, "carol") == []
+
+
+def test_a_superuser_cannot_name_someone_who_may_not_run_work_here():
+    """G5: the person named must hold `execute` on the item — naming them must
+    not make the item run with values of someone who could not run it."""
+    client, holder, rid, spec = _world(seeded=True)
+    holder["id"] = "root"
+    (row,) = _list(client, rid)
+
+    r = _assign(client, rid, row["trigger_id"], "alice")  # a Participant
+
+    assert r.status_code == 422, r.text
+    assert _list(client, rid)[0]["bound_to"] == ""
+    assert _notices(spec, "alice") == []
+
+
+def test_naming_the_person_it_already_runs_as_changes_nothing():
+    """Review round 1 (defect 6): carol chose it herself. A superuser picking
+    carol again — clicking the person already ticked in the picker — must not
+    relabel her choice as an administrator's, re-take her consent against the
+    workflow as it is now, or send her a notice about something she did."""
+    client, holder, rid, spec = _world(seeded=True)
+    holder["id"] = "carol"
+    (row,) = _list(client, rid)
+    assert _bind(client, rid, row["trigger_id"]).status_code == 200
+    holder["id"] = "root"
+
+    r = _assign(client, rid, row["trigger_id"], "carol")
+
+    assert r.status_code == 200, r.text
+    (after,) = _list(client, rid)
+    assert (after["bound_to"], after["reason"], after["assigned_by"]) == ("carol", "self", "")
+    assert _notices(spec, "carol") == []
