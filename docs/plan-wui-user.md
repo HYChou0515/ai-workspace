@@ -1,7 +1,7 @@
 # Plan — a WUI User can use a page without being able to change the item; env values default to private first
 
-**Status:** grilled 2026-10-21 on master `59811856`. Three questions are open (§5); the
-build waits for them.
+**Status:** grilled 2026-10-21 on master `59811856`; the open questions O1–O3 were
+answered the same day (D9–D11).
 
 **Markers:** **[user]** = the user's words or explicit choice · **[verified]** = read from
 the code at `59811856` · **[proposal]** = mine, overridable.
@@ -65,6 +65,9 @@ What a page's buttons hit, and the verb each route requires:
 | D6 | A WUI User who opens the item sees the whole workspace read-only, exactly as a Reader does — no separate screen **[user]** 「B這樣不用做特規」. |
 | D7 | Someone without `use_wui` who presses a page's button sees, above the page, "this page needs the WUI User permission" and "申請存取" (#968's request flow); someone who cannot change permissions sees the owner's name instead (#968 D4) **[user]** 「Ok」. |
 | D8 | The new role is called **WUI User** **[user]** 「WUI User」. |
+| D9 | Whoever may talk to the item's agent (`converse`, Participant) may also use pages: `converse` implies `use_wui`, so existing Participants keep their role name and gain page use (O1) **[user]** 「可以」. |
+| D10 | Whoever may run code (`execute`, every Collaborator) may also use pages: `execute` implies `use_wui`, so existing Collaborators do not lose page use. A Custom grant of `execute` without `edit_content` can now also save through a page, inside the page's folder (O2) **[user]** 「對」. |
+| D11 | `private_first` keeps its order (private → personal → service → shared). A run nobody presses — a schedule — therefore uses the deployment's service-account value over the item's shared value for a name both hold, where today it uses the item's. The runbook says so (O3) **[user]** 「B」. |
 
 ## 3. Mechanism
 
@@ -73,9 +76,9 @@ What a page's buttons hit, and the verb each route requires:
 - `perm/model.py`: `"use_wui"` joins `Verb`, `VERBS` and `Permission` (a grant list, like
   every other verb) **[proposal]**. Not indexed — only `read_meta` / `read_content` are
   (`resources/__init__.py:495-496`), so no backfill.
-- `perm/authorize.py` `_effective_grants`: `use_wui` also admits whoever holds `execute`
-  (see §5 O2), and `read_content` admits whoever holds `use_wui` — a page that cannot read
-  its own files cannot open (D3).
+- `perm/authorize.py` `_effective_grants`: `use_wui` also admits whoever holds `converse`
+  (D9) or `execute` (D10), and `read_content` admits whoever holds `use_wui` — a page that
+  cannot read its own files cannot open (D3).
 - `AI_FORBIDDEN` does not gain it: the item's agent never acts through a page.
 
 ### 3.2 The page's routes (D3)
@@ -95,8 +98,9 @@ Every route a page reaches through its bridge is gated on `use_wui` instead of
 
 ### 3.3 The role (D6, D8)
 
-- A preset **WUI User** = Reader + `use_wui`, placed after Reader on the ladder (see §5 O1
-  for what that means for Participant).
+- A preset **WUI User** = Reader + `use_wui`, placed after Reader on the ladder. Participant
+  and Collaborator include it by the ladder, and existing ones are read as such through
+  the implications (D9, D10).
 - The permission dialog's Custom mode offers "使用 WUI" as its own checkbox
   (`ItemVerb`, `itemPermission.ts:17-24`).
 - The workspace already shows a Reader a read-only workspace; a WUI User is shown the same
@@ -137,30 +141,20 @@ Flat integers; each built with `/tdd` and committed on its own.
 | P1 | `use_wui` in the verb model; `_effective_grants` implications; authorize tests |
 | P2 | WUI routes gated on `use_wui` (build, run, tools, agents, jobs) |
 | P3 | Page write / delete routes with the server-side folder rule; the bridge calls them |
-| P4 | WUI User preset + Custom checkbox; the ladder (O1); Env button for `use_wui` (D4) |
+| P4 | WUI User preset + Custom checkbox; the ladder (D9, D10); Env button for `use_wui` (D4) |
 | P5 | The refusal banner with request access (D7) |
 | P6 | Default `private_first`; Shared stored explicitly; parity fixture regenerated (D5) |
-| P7 | Docs: overturn line on `plan-wui-viewer-login.md`; `docs/wui.md`, `docs/extending-the-platform.md` (also its stale "shared_first does not read 我的環境變數", wrong since #917), permission docs; `docs/migrations.md` entry (behaviour changes with no knob) |
+| P7 | Docs: overturn line on `plan-wui-viewer-login.md`; `docs/wui.md`, `docs/extending-the-platform.md` (also its stale "shared_first does not read 我的環境變數", wrong since #917), permission docs; `docs/migrations.md` entry (behaviour changes with no knob — including D11: a schedule now prefers the service account over the item's shared value for a name both hold) |
 
-## 5. Open questions
+## 5. Questions answered after the grill
 
-These change what is built; the build waits for the user's answer.
+O1–O3 were open when this plan was first written; the user answered them the same day.
 
-- **O1 — does Participant include `use_wui`?** The ladder is nested, so placing WUI User
-  between Reader and Participant makes Participant (and Collaborator) include it. Existing
-  Participants' stored grants do not hold `use_wui`, so after the upgrade the dialog would
-  show them as Custom, and they still could not use pages. Alternatives: Participant
-  includes it and existing Participants are read as Participant (`converse` implies
-  `use_wui`, like `execute` in O2), or WUI User sits beside the ladder rather than in it.
-  **[proposal]**: `converse` implies `use_wui` — anyone who may drive the item's agent may
-  press a page's button that drives it.
-- **O2 — existing Collaborators.** Their stored grants hold `execute` / `edit_content`, not
-  `use_wui`. Without an implication they would lose page use on upgrade. **[proposal]**:
-  `execute` implies `use_wui`. Side effect: a Custom grant of `execute` alone (no
-  `edit_content`) can now also save through a page, inside the page's folder — today it
-  can start runs but not save.
-- **O3 — scheduled and other unattended runs.** `private_first`'s order puts the
-  deployment's service account (`service`) BEFORE the item's shared value. With D5 a
-  scheduled run, which has no person at the request, uses the service account's value for
-  any name both define, where today it uses the item's. Is that intended, or should the
-  service account stay last (private → personal → shared → service)?
+- **O1 → D9.** The ladder is nested, so WUI User between Reader and Participant puts
+  `use_wui` in Participant. Existing Participants' stored grants do not hold it; reading
+  `converse` as implying `use_wui` keeps them Participant, with page use.
+- **O2 → D10.** Existing Collaborators' grants hold `execute` / `edit_content`, not
+  `use_wui`; reading `execute` as implying it keeps their page use.
+- **O3 → D11.** The alternative was to move the service account last
+  (private → personal → shared → service) so a schedule keeps today's value; the user chose
+  to keep `private_first`'s order.
