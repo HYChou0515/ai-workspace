@@ -3081,7 +3081,7 @@ command 的完整 schema——那正是這個功能在做的事。從 `index.jso
 - 以 superuser 開總表，任一列按「指定…」選一個人：那個人的通知裡出現「A schedule now runs as you」。
 - 開一個有 WUI 頁面排程的 item 的 Workflows 面板：頁面的排程也列在裡面，「位置」寫「頁面「…」」。
 
-### 2026-10-21 · #985 token 快過期時，平台用部署方的系統登入自己換新的 {#pr-985}
+### 2026-10-21 · 5cdd95fa · #985 token 快過期時，平台用部署方的系統登入自己換新的 {#pr-985}
 
 **設定** — 沒有新 key，`server.env_providers` 不用改。**新的可選功能，不做就一切照舊**
 （`docs/plan-env-token-refresh.md`、`docs/extending-the-platform.md`「token 快過期時由平台換新的」）：
