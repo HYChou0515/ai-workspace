@@ -18,6 +18,7 @@
 | [plan-topic-hub.md](plan-topic-hub.md) | Topic Hub App：跨 collection 探究工作區、檔案記憶、多 chat |
 | [plan-item-memory.md](plan-item-memory.md) | item 記憶機制（仿 Claude Code memory）：記憶即 workspace 檔案、agent 在 turn 中自寫、全 App 預設開 |
 | [plan-collab-workspace.md](plan-collab-workspace.md) | #43 多人協作 workspace（檔案 + chat，無 notebook） |
+| [plan-interjection.md](plan-interjection.md) | 插話:同一人插話被正在跑的那一輪吸收(步數重算、照實際順序存)、別人插話停掉換人、排隊那一輪開跑時才組歷史、步數上限讓 AI 知道 |
 | [plan-permissions.md](plan-permissions.md) · [plan-permissions-pr2-handoff.md](plan-permissions-pr2-handoff.md) | 權限模型設計與分階段交接 |
 | [plan-view-plugins.md](plan-view-plugins.md) · [PR1](plan-view-plugins-pr1-platform.md) · [PR2](plan-view-plugins-pr2-chart.md) · [PR3](plan-view-plugins-pr3-marking-layout.md) · [PR4](plan-view-plugins-pr4-stack-gallery.md) | #847 + #848:`*.ai.yaml` renderer 改成 runtime plugin(前端 + 沙盒 bundle + skill 一個資料夾)、chart plugin 當範例、有名字的 marking 跨 workspace 切版連動、疊圖 / 差異 / 上千組縮圖牆(沙盒端快取 + 分頁);機制零領域知識 |
 | [plan-ai-reads-docs.md](plan-ai-reads-docs.md) | app 裡的 AI 讀我們的 docs(含沒被推翻的計畫):readonly skill 每次 `read_skill` 比對 hash、不同就重複製;子 agent 先讀索引再挑檔;被推翻的計畫帶上推翻它的計畫 id |

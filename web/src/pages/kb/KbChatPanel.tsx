@@ -17,7 +17,9 @@ import { ResizeDivider } from "../../components/ResizeDivider";
 import { usePersistentNumber } from "../../hooks/usePersistentNumber";
 import { ModelEffortPicker } from "../../components/ModelEffortPicker";
 import { ReplayDialog, type ReplayRequest } from "../../components/ReplayDialog";
-import { useCurrentUser } from "../../hooks/useCurrentUser";
+import { useCurrentUser, useCurrentUserState } from "../../hooks/useCurrentUser";
+import { useUser } from "../../hooks/useUsers";
+import { turnNote } from "../investigation/turnNote";
 import { useT } from "../../lib/i18n";
 import { useKbAgentName } from "../../lib/kbAgent";
 import { modCombo } from "../../lib/platform";
@@ -183,6 +185,16 @@ export function KbChatPanel({
     client,
     onChatCreated,
   });
+  // docs/plan-interjection.md Q2/Q7: the same note the workspace composer shows.
+  const meState = useCurrentUserState();
+  const note = turnNote(log, meState.ready ? meState.id : null);
+  const runningName = useUser(log.streamingBy ?? "").name;
+  const kbNote =
+    note?.kind === "own"
+      ? t("interject.composerNote")
+      : note?.kind === "others"
+        ? t("interject.othersNote", { who: runningName || note.who })
+        : null;
   // Follow the conversation as it streams; back off when the user scrolls up.
   const bodyRef = useStickToBottom<HTMLDivElement>(log);
 
@@ -450,6 +462,15 @@ export function KbChatPanel({
               <Icon name="arrow_r" size={13} />
             </button>
           </div>
+          {kbNote && (
+            // docs/plan-interjection.md Q2/Q7: what a message sent now would do.
+            <div
+              data-testid="kb-composer-note"
+              style={{ fontSize: "var(--text-xs, 11px)", color: "var(--text-paper-d)", padding: "4px 2px 0" }}
+            >
+              {kbNote}
+            </div>
+          )}
         </div>
       </div>
       {showPicker && pickerOpen && (

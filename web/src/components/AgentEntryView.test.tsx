@@ -1357,6 +1357,44 @@ describe("EntryView — publish_skill", () => {
   });
 });
 
+// docs/plan-interjection.md Q9: a message sent while the AI is answering says
+// what will happen to it, and a turn another person cut short says who.
+describe("EntryView — interjection notes", () => {
+  it.each([
+    ["waiting", "interject.waiting"],
+    ["read", "interject.read"],
+    ["queued", "interject.queued"],
+  ] as const)("a %s message says so under the bubble", (state, key) => {
+    render(
+      <EntryView
+        entry={{
+          kind: "message",
+          interjection: state,
+          message: { role: "user", content: "Q2", author: "hy" },
+        }}
+        currentUser="hy"
+      />,
+    );
+    expect(screen.getByText(translate("zh-TW", key))).toBeInTheDocument();
+  });
+
+  it("a message with nothing pending says nothing", () => {
+    render(
+      <EntryView entry={{ kind: "message", message: { role: "user", content: "Q1", author: "hy" } }} />,
+    );
+    for (const key of ["interject.waiting", "interject.read", "interject.queued"] as const) {
+      expect(screen.queryByText(translate("zh-TW", key))).toBeNull();
+    }
+  });
+
+  it("an interrupted turn's banner names the person, not their id", () => {
+    render(<EntryView entry={{ kind: "banner", text: "已被 hy 的訊息中斷。", by: "hy" }} />);
+    expect(
+      screen.getByText(translate("zh-TW", "banner.interrupted", { who: "Chou Hung-Yi" })),
+    ).toBeInTheDocument();
+  });
+});
+
 describe("EntryView — a failure banner (docs/plan-friendly-errors.md D8)", () => {
   afterEach(cleanup);
 

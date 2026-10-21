@@ -111,6 +111,12 @@ export type AgentEntry =
        * it. Set when the turn opens its answer, cleared by a tool call (which
        * ends the run, as before) and by the turn's terminal event. */
       live?: boolean;
+      /** docs/plan-interjection.md Q9: what is happening to a message its author
+       * sent while their own turn was still running. `waiting` until the AI's
+       * next step reads it (`read`, drawn where it was read); `queued` when the
+       * turn ended without reading it, so the next one answers it. Live-only —
+       * a reload shows the message where it was read, and nothing to wait for. */
+      interjection?: Interjection;
     }
   | { kind: "tool_call"; call: ToolCallView }
   | { kind: "mention"; by: string; users: string[]; note: string; at?: number }
@@ -139,7 +145,11 @@ export type AgentEntry =
   | { kind: "phase"; phase: string; at?: number }
   // `failure` when the banner IS a failure (docs/plan-friendly-errors.md D8):
   // `text` stays its headline, so a carried banner is still recognised by it.
-  | { kind: "banner"; text: string; at?: number; failure?: Failure };
+  // `by`: another person whose message took this turn over (plan-interjection
+  // Q2) — the view names them; `text` keeps the id for the live/stored de-dupe.
+  | { kind: "banner"; text: string; at?: number; failure?: Failure; by?: string };
+
+export type Interjection = "waiting" | "read" | "queued";
 
 export type AgentLog = {
   entries: AgentEntry[];
@@ -279,6 +289,10 @@ export function drawOwnAsk(
       {
         kind: "message",
         pending: true,
+        // Sent while their own turn runs: it waits for the AI's next step.
+        ...(log.streaming && log.streamingBy === ask.author
+          ? { interjection: "waiting" as const }
+          : {}),
         message: {
           role: "user",
           author: ask.author,
@@ -351,6 +365,38 @@ const failureOf = (ev: {
   kind?: string | null;
   params?: Record<string, number> | null;
 }): Failure => ({ kind: ev.kind ?? "unknown", params: ev.params ?? null, raw: ev.message });
+
+/** plan-interjection Q2: another person's message took the turn over. One
+ * wording for the live banner and the stored message, so the de-dupe sees one
+ * event. */
+const interruptedText = (who: string): string =>
+  translate(initialLocale(), "banner.interrupted", { who });
+
+/** plan-interjection Q9: a turn ended — what it read was answered (the note has
+ * done its job), and what it did not read is the next turn's to answer. A turn
+ * that was STOPPED (a Stop, a takeover) answered nothing it read: that goes back
+ * to the queue too (§9 C9), so it says the same as what it never read. */
+function endInterjections(entries: AgentEntry[], stopped: boolean): void {
+  for (let i = 0; i < entries.length; i++) {
+    const e = entries[i];
+    if (e?.kind !== "message" || e.interjection === undefined) continue;
+    const { interjection, ...rest } = e;
+    const owed = interjection === "waiting" || (stopped && interjection === "read");
+    entries[i] = owed ? { ...rest, interjection: "queued" } : rest;
+  }
+}
+
+/** …and once a turn is producing output again, a `queued` note has done its job:
+ * that turn is the one answering it. */
+function clearQueued(entries: AgentEntry[]): void {
+  for (let i = 0; i < entries.length; i++) {
+    const e = entries[i];
+    if (e?.kind === "message" && e.interjection === "queued") {
+      const { interjection: _done, ...rest } = e;
+      entries[i] = rest;
+    }
+  }
+}
 
 /**
  * Roles the platform writes INTO a turn rather than as its result: the #624
@@ -482,6 +528,15 @@ export function logFromMessages(messages: readonly Message[]): AgentLog {
         });
       } else if (m.error_kind === "max_turns") {
         entries.push({ kind: "banner", text: m.content, at: m.created_at ?? undefined });
+      } else if (m.error_kind === "interrupted") {
+        // plan-interjection Q2: another person's message took the turn over —
+        // not a failure. Worded like the live banner, so the two are one event.
+        entries.push({
+          kind: "banner",
+          text: interruptedText(m.author ?? ""),
+          at: m.created_at ?? undefined,
+          ...(m.author ? { by: m.author } : {}),
+        });
       } else {
         const failure: Failure = {
           kind: m.error_kind ?? "unknown",
@@ -945,7 +1000,10 @@ export function reduceAgent(log: AgentLog, ev: AgentEvent, now: number = Date.no
   // `run_cancelled` and `max_turns_exceeded` are four exits, and closing three
   // of them leaves the fourth appending a whole turn's answer onto the previous
   // one.
-  if (isTerminal(ev)) endLiveAnswer(entries);
+  if (isTerminal(ev)) {
+    endLiveAnswer(entries);
+    endInterjections(entries, ev.type === "run_cancelled");
+  }
 
   switch (ev.type) {
     case "agent_metrics":
@@ -998,6 +1056,7 @@ export function reduceAgent(log: AgentLog, ev: AgentEvent, now: number = Date.no
       return { ...log, restore: { done: ev.done, total: ev.total } };
 
     case "message_delta": {
+      clearQueued(entries);
       const idx = liveAnswerIdx(entries);
       const last = idx >= 0 ? entries[idx] : undefined;
       if (last && last.kind === "message" && last.message.role === "assistant") {
@@ -1067,6 +1126,7 @@ export function reduceAgent(log: AgentLog, ev: AgentEvent, now: number = Date.no
       // had, kept explicit: whatever the model says after the tool is a new
       // block, not a continuation of what it was saying before it.
       endLiveAnswer(entries);
+      clearQueued(entries);
       entries.push({
         kind: "tool_call",
         call: {
@@ -1174,7 +1234,13 @@ export function reduceAgent(log: AgentLog, ev: AgentEvent, now: number = Date.no
     }
 
     case "run_cancelled":
-      entries.push({ kind: "banner", at: now, text: translate(initialLocale(), "banner.cancelled") });
+      entries.push({
+        kind: "banner",
+        at: now,
+        // plan-interjection Q2: another person's message took the turn over.
+        text: ev.by ? interruptedText(ev.by) : translate(initialLocale(), "banner.cancelled"),
+        ...(ev.by ? { by: ev.by } : {}),
+      });
       // #739: an end is an end — never leave ANY waiting state standing. Each
       // of these outranks something below it in `TurnStatus`, so a stale one
       // does not merely linger, it shadows: the rate-limit hold survived its
@@ -1261,7 +1327,12 @@ export function reduceAgent(log: AgentLog, ev: AgentEvent, now: number = Date.no
         // #847 P7: the server's record of the markings replaces the draft
         // chips — it knows which were written and which were refused.
         const message = ev.markings ? { ...own.message, markings: ev.markings } : own.message;
-        entries[mine] = { kind: "message", at: askedAt, message };
+        entries[mine] = {
+          kind: "message",
+          at: askedAt,
+          message,
+          ...(own.interjection ? { interjection: own.interjection } : {}),
+        };
       } else {
         const alreadyDrawn = entries.some(
           (e) =>
@@ -1276,6 +1347,12 @@ export function reduceAgent(log: AgentLog, ev: AgentEvent, now: number = Date.no
           entries.push({
             kind: "message",
             at: askedAt,
+            // plan-interjection Q9: its author's own turn is running — it waits
+            // for the AI's next step. Another person's message takes the turn
+            // over instead, which the ending banner says.
+            ...(log.streaming && log.streamingBy === ev.author
+              ? { interjection: "waiting" as const }
+              : {}),
             message: {
               role: "user",
               author: ev.author,
@@ -1316,6 +1393,25 @@ export function reduceAgent(log: AgentLog, ev: AgentEvent, now: number = Date.no
     holding: [],
         metrics: null,
       };
+    }
+
+    case "interjected": {
+      // plan-interjection Q1/Q3: the running turn READ this message here. Move
+      // it to this point — after what the turn had done, before the answer that
+      // saw it — which is also where the stored thread puts it.
+      const at = entries.findIndex(
+        (e) =>
+          e.kind === "message" &&
+          e.message.role === "user" &&
+          e.message.author === ev.author &&
+          e.at === ev.created_at,
+      );
+      const read = at >= 0 ? entries[at] : undefined;
+      if (read === undefined || read.kind !== "message") return log;
+      entries.splice(at, 1);
+      endLiveAnswer(entries);
+      entries.push({ ...read, interjection: "read" });
+      return { ...log, entries };
     }
 
     case "file_changed":

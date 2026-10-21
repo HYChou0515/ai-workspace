@@ -166,6 +166,32 @@ def test_a_failed_turn_never_auto_continues():
         assert goal is not None and goal.state == "active" and goal.rounds_used == 0
 
 
+async def test_a_round_another_person_interrupted_never_auto_continues():
+    """docs/plan-interjection.md Q2/Q8: someone else's message stopped the
+    goal's round and took over. A human intervened — exactly the Stop case —
+    so the goal must not start another round over them. A plain error, for
+    contrast, IS handed to the follow-up to judge (the control)."""
+    import asyncio
+
+    from workspace_app.api.turns import TurnMessage
+
+    app, _spec, iid = _app(_ScriptLlm([]))
+    svc = app.state.chat_send
+    svc._maybe_continue_goal(  # noqa: SLF001
+        [TurnMessage(role="error", error_kind="interrupted", author="bob")], iid, "rid", iid, "ann"
+    )
+    interrupted = set(svc._goal_tasks)  # noqa: SLF001
+    svc._maybe_continue_goal(  # noqa: SLF001
+        [TurnMessage(role="error", error_kind="error")], iid, "rid", iid, "ann"
+    )
+    errored = set(svc._goal_tasks)  # noqa: SLF001
+    for task in errored:
+        task.cancel()
+    await asyncio.gather(*errored, return_exceptions=True)
+    assert interrupted == set()
+    assert len(errored) == 1
+
+
 # ── #615: which budget a continuation spends, and where a night ends ─────────
 #
 # The clock is not mocked; the WINDOW is moved instead, which is the same knob

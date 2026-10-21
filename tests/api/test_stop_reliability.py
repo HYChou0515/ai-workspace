@@ -508,7 +508,7 @@ async def test_a_stop_does_not_discard_a_queued_message_through_the_real_send_pa
             await asyncio.sleep(0.01)
         second = asyncio.create_task(client.post(url, json={"content": "fast"}))
         # Let it get all the way into the queue before the Stop lands.
-        while len(app.state.turn_engine._ws_session(iid).queue._queue) == 0:  # noqa: SLF001
+        while app.state.turn_engine._ws_session(iid).queue.empty():  # noqa: SLF001
             await asyncio.sleep(0.01)
 
         await app.state.turn_engine.cancel_current(iid)
@@ -1010,9 +1010,9 @@ async def test_a_driver_round_is_registered_unattributed():
     seen: list[str] = []
     real = engine.preparing
 
-    def spy(key: str, author: str = ""):  # noqa: ANN202 — passthrough
+    def spy(key: str, author: str = "", at: int | None = None, sender: str | None = None):  # noqa: ANN202
         seen.append(author)
-        return real(key, author=author)
+        return real(key, author=author, at=at, sender=sender)
 
     engine.preparing = spy
     rid, conv = service._locator.conversation_for(iid)

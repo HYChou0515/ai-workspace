@@ -89,8 +89,13 @@ class RunError:
 @dataclass(frozen=True)
 class RunCancelled:
     """User interrupted this turn — either by sending a new message or by
-    hitting Stop. Terminal: the SSE stream closes after this event."""
+    hitting Stop. Terminal: the SSE stream closes after this event.
 
+    `by` (docs/plan-interjection.md Q2): set when ANOTHER person's message
+    stopped the turn so theirs could take over — that person's id. Empty for a
+    Stop."""
+
+    by: str = ""
     type: Literal["run_cancelled"] = "run_cancelled"
 
 
@@ -148,6 +153,20 @@ class UserMessage:
     # retires when someone else answers it rather than on their next reload.
     answers: str | None = None
     type: Literal["user_message"] = "user_message"
+
+
+@dataclass(frozen=True)
+class Interjected:
+    """docs/plan-interjection.md Q1: the running turn has READ a message its own
+    author sent while it ran (`author`, `created_at` name that message, already
+    persisted and announced as a `UserMessage`). Emitted where the turn read it
+    — between a tool result and the next model call — so a viewer moves that
+    bubble here, and whatever streams next is the answer that saw it. The
+    reply is persisted with the message in the same place (`PLACE_ROLE`)."""
+
+    author: str
+    created_at: int
+    type: Literal["interjected"] = "interjected"
 
 
 @dataclass(frozen=True)
@@ -419,6 +438,7 @@ AgentEvent = (
     | Compacting  # #739: the thread outgrew the window; this turn summarises first
     | GoalUpdated  # #613 P3: the chat's goal was set / cleared / advanced
     | UserMessage  # #43: broadcast-only (a human's message on the shared stream)
+    | Interjected  # plan-interjection Q1: the running turn read a message sent meanwhile
     | FileChanged  # #43: broadcast-only (a workspace file changed)
     | TurnEnded  # broadcast-only, on the ITEM's key: a turn in any of its chats ended
     | Presence  # #455: broadcast-only (live viewer roster on the item stream)

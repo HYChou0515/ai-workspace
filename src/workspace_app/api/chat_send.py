@@ -44,6 +44,7 @@ from ..resources.conversation import SentMarking
 from ..resources.conversation_goal import GOAL_DRIVER, read_goal, upsert_goal
 from ..sandbox.protocol import OutputSink
 from ..tokens import CallLane
+from ..users.labels import speaker_label
 from ..workcalendar import OffHoursCalendar
 from .env_layers import PersonEnv
 from .env_refresh import DeadSignIn, EnvRefresher, RefreshOutcome
@@ -59,7 +60,18 @@ from .run_windows import run_windows_of_chat, without_runs
 from .timeutil import now_ms
 from .turn_claims import TurnClaim
 from .turn_gate import admit_turn
-from .turns import CONTEXT_NOTICE_ROLE, SIGN_IN_ROLE, _terminal_error, already_noticed
+from .turns import (
+    CONTEXT_NOTICE_ROLE,
+    PLACE_ROLE,
+    SIGN_IN_ROLE,
+    MessageKey,
+    QueuedMessage,
+    _terminal_error,
+    already_noticed,
+    must_move,
+    take_person_message,
+    thread_without,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -549,7 +561,9 @@ class ChatSendService:
         if self._goal_checker is None:
             return
         failure = next((m for m in produced if m.role == "error"), None)
-        if failure is not None and failure.error_kind == "cancelled":
+        # A Stop, or another person's message taking the round over (plan-interjection
+        # Q2): either way a human just intervened.
+        if failure is not None and failure.error_kind in ("cancelled", "interrupted"):
             return
         outcome = (failure.error_kind or "error") if failure is not None else "ok"
         task = asyncio.create_task(
@@ -1052,6 +1066,81 @@ class ChatSendService:
             logger.exception("chat_send: could not open the turn claim for %s", engine_key)
             return None
 
+    def _chat_messages_only(
+        self, investigation_id: str, rid: str, conv: Conversation, messages: list[Message]
+    ) -> list[Message]:
+        """`messages` without a run's (plan-workflow-out-of-chat P3): marked ones,
+        and in a chat #343 took over, the unmarked ones inside a run's window —
+        looked up only for such a chat. ONE place, shared by the history a send
+        builds at acceptance and the one its turn rebuilds when it starts
+        (plan-interjection Q1): two copies of this filter is how the rebuilt
+        history came to hand a chat turn a run's steps."""
+        windows = run_windows_of_chat(self._spec, investigation_id, rid) if conv.run_id else []
+        return without_runs(messages, windows)
+
+    def _queued_message(
+        self,
+        investigation_id: str,
+        rid: str,
+        engine_key: str,
+        author: str,
+        created: int,
+        claim: str | None,
+        *,
+        driven: bool,
+    ) -> QueuedMessage:
+        """This send's message, as the turn engine needs to know it
+        (docs/plan-interjection.md): who and when, how to rebuild the turn's
+        history when it starts, and how to settle the message when another
+        message's turn answered it (its claim is then done)."""
+
+        async def refresh(
+            answering: list[MessageKey], pending: set[MessageKey], ctx: AgentToolContext
+        ) -> bool:
+            if ctx.history_builder is None:
+                return False
+            fresh = self._conv_rm.get(rid).data
+            assert isinstance(fresh, Conversation)
+            # Unanswered also means owed on ANOTHER pod: an open claim is the
+            # only record of that (a re-run's sibling, a send landing there).
+            owed = pending | self._owed_on(engine_key)
+            ctx.history = ctx.history_builder(
+                self._chat_messages_only(
+                    investigation_id,
+                    rid,
+                    fresh,
+                    thread_without(fresh.messages, [*answering, *(owed - set(answering))]),
+                )
+            )
+            return must_move(fresh.messages, answering, owed)
+
+        users = self._users
+        return QueuedMessage(
+            author=author,
+            at=created,
+            refresh=refresh,
+            on_absorbed=lambda: self._finish_claim(claim),
+            speaker=speaker_label(users.get(author)) if users is not None and author else "",
+            # #613: a round the goal driver started is not a person speaking.
+            driven=driven,
+        )
+
+    def _owed_on(self, engine_key: str) -> set[MessageKey]:
+        """The stamps of the messages on `engine_key` still owed a reply, on any
+        pod (their claims are open). Empty when there is no claim store, or it
+        cannot be read — the engine's own record still covers this pod."""
+        if self._turn_claims is None:
+            return set()
+        try:
+            return {
+                (r.claim.created_at, r.claim.author)
+                for r in self._turn_claims.list_open()
+                if r.claim.key == engine_key
+            }
+        except Exception:  # noqa: BLE001 — this pod's own record still applies
+            logger.exception("chat_send: could not list the open claims on %s", engine_key)
+            return set()
+
     def _claim_is_mine(self, claim: str | None) -> bool:
         """No store, or no claim (it could not be opened): the turn is as
         pod-bound as it always was and its result is always its own."""
@@ -1292,6 +1381,11 @@ class ChatSendService:
                 # agent. Left unattributed so anyone's Stop reaches it, which is
                 # what happened before Stop learned who pressed it.
                 author="" if driven_by else author,
+                # plan-interjection §9 C8: the message this preparation is for —
+                # persisted, unanswered, so no other turn's history may hold it.
+                at=created,
+                # The message is the author's even when the round is the goal's.
+                sender=author,
             ) as pending:
                 env = await resolve_env() if resolve_env is not None else caller_env
                 # #739: compact BEFORE the turn is built — the thread is final for this
@@ -1437,11 +1531,11 @@ class ChatSendService:
                     # Never a run's messages (plan-workflow-out-of-chat P3): marked
                     # ones, and in a chat #343 took over, the unmarked ones inside a
                     # run's window — looked up only for such a chat.
-                    history_messages=without_runs(
+                    history_messages=self._chat_messages_only(
+                        investigation_id,
+                        rid,
+                        conv,
                         _history_before(conv.messages, created, body.content),
-                        run_windows_of_chat(self._spec, investigation_id, rid)
-                        if conv.run_id
-                        else [],
                     ),
                     reasoning_effort=body.reasoning_effort,
                     kb_enhancements=caller_enh,
@@ -1516,6 +1610,14 @@ class ChatSendService:
                         tool_idx: dict[str, int] = {}
                         seen_subagent: list[list[Citation]] = []
                         for tm in produced:
+                            if tm.role == PLACE_ROLE:
+                                # plan-interjection Q3: the person's message
+                                # (stored at acceptance) moves to where this
+                                # turn read it. Gone (undone) ⇒ nothing to place.
+                                conv2.messages.extend(
+                                    take_person_message(conv2.messages, tm.created_at, tm.author)
+                                )
+                                continue
                             msg = to_rca_message(tm)
                             name = tm.tool_name
                             pool = ctx.subagent_citations.get(name) if name is not None else None
@@ -1650,6 +1752,15 @@ class ChatSendService:
                     # timestamp is the acceptance (D13 (b) starts here).
                     surface="chat",
                     accepted_ms=created,
+                    message=self._queued_message(
+                        investigation_id,
+                        rid,
+                        engine_key,
+                        author,
+                        created,
+                        claim,
+                        driven=driven_by is not None,
+                    ),
                 )
                 # #493 symptom 1 (504): await THIS turn's completion, but only up to a
                 # deadline — then DETACH it so a long turn can't hang the POST until the
