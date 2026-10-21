@@ -21,6 +21,7 @@ import {
   HttpError,
   errorInfo,
   httpErrorFrom,
+  refusalFrom,
 } from "./http";
 import { encodePath } from "./refPath";
 import { parseSseStream } from "./sse";
@@ -149,8 +150,7 @@ export const WUI_PAGE_HEADER = "X-Wui-Page";
  * file", docs/plan-wui-user.md D12, which only the server can now say); the pane
  * reads the code (D7). The code comes from a clone, then the sentence. */
 async function fileRefusal(resp: Response, fallback: string): Promise<HttpError> {
-  const info = await errorInfo(resp);
-  return new HttpError(resp.status, (await detailSentence(resp)) ?? fallback, info.code, info.also, info.detail);
+  return refusalFrom(resp, fallback); // one bounded read of the body
 }
 
 function pageHeaders(opts: PageWrite | undefined): Record<string, string> | undefined {

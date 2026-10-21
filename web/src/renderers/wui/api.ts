@@ -6,7 +6,7 @@
  * because nothing but a WUI has any business running a tool from a browser.
  */
 
-import { apiFetch, detailSentence, errorInfo, HttpError } from "../../api/http";
+import { apiFetch, HttpError, refusalFrom } from "../../api/http";
 import type { CallAgent, CallTool, JobState, PageJobs } from "./bridge";
 
 export type ToolResult = { output: string; exit_code: number };
@@ -22,11 +22,11 @@ export const NEEDS_USE_WUI = "needs_use_wui";
  * read from a clone first — `detailSentence` consumes the body.
  */
 export async function pageRefusal(resp: Response, fallback: string): Promise<HttpError> {
-  const info = await errorInfo(resp);
-  const sentence =
-    (await detailSentence(resp)) ??
-    (info.code === NEEDS_USE_WUI ? "This page needs the WUI User permission." : fallback);
-  return new HttpError(resp.status, sentence, info.code, info.also, info.detail);
+  const err = await refusalFrom(resp, fallback); // one bounded read of the body
+  if (err.code === NEEDS_USE_WUI && err.message === fallback) {
+    return new HttpError(err.status, "This page needs the WUI User permission.", err.code, err.also, err.detail);
+  }
+  return err;
 }
 
 /** Bind the tool-call route to one item. */

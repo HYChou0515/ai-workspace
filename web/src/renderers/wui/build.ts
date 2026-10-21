@@ -42,11 +42,11 @@ export function itemBuild(slug: string, itemId: string): RunBuild {
       // with the request, and it reaches a person through the same log the
       // build's output uses.
       // `HttpError`, not a bare `Error`: the STATUS decides what the pane does
-      // next. A 403 — a viewer who may read the item but not use its pages —
-      // is permanent for that person, so rebuilding on open is switched off
-      // rather than refused again on every open, forever. `pageRefusal` keeps
-      // the server's sentence AND its code: the use_wui refusal's detail is an
-      // object, which `detailSentence` alone would print as nothing.
+      // next. A 403 — a viewer who may read the item but not run things in it
+      // (`execute`; docs/plan-wui-user.md §6, Q1) — is permanent for that
+      // person, so rebuilding on open is switched off rather than refused
+      // again on every open, forever. `pageRefusal` keeps the server's sentence
+      // and its code from one bounded read of the body.
       throw await pageRefusal(resp, `The build could not be started (${resp.status}).`);
     }
     yield* parseSseStream<BuildEvent>(resp.body);

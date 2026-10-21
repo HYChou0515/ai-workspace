@@ -188,9 +188,10 @@ Where the build adds to or differs from the sections above; this section wins.
   WUI User fills in their own value from the env panel (D4).
 - **A page's refusal is typed (D7).** `check_access` given a tuple refuses with the LAST
   verb; for `use_wui` the detail is `{"error": "needs_use_wui", "message": …}`
-  (`item_authz.NEEDS_USE_WUI`). The page's tool, agent, job, run and build calls raise an
-  `HttpError` carrying it (`pageRefusal`); writes and deletes carry it through
-  `errorCode`. The bridge hands every refusal to the pane before the page hears it
+  (`item_authz.NEEDS_USE_WUI`). The page's tool, agent, job and run calls raise an
+  `HttpError` carrying it (`pageRefusal`), and writes and deletes do too (`fileRefusal`);
+  both read the body once, under `errorInfo`'s deadline (`http.refusalFrom`). The build
+  asks `execute` (Q1 below), so its refusal does not name `use_wui`. The bridge hands every refusal to the pane before the page hears it
   (`BridgeContext.onRefused`, and the dispatch's own catch), so the pane recognises it in
   one function (`noteRefusal`).
 - **Two parity tables hold the browser to the server.**
