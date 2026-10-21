@@ -60,7 +60,7 @@ What a page's buttons hit, and the verb each route requires:
 | D1 | What must be blocked is action OUTSIDE the page — editing or deleting files in the file tree, the terminal, changing the page, deploying. Doing what the page is built to do, through the page, is allowed. This prevents mistakes; it is not a defence against someone crafting requests by hand **[user]** 「A」. |
 | D2 | The permission model gains a new verb, "use WUI" (`use_wui`) **[user]** 「要多一個權限：使用wui」. |
 | D3 | A holder of `use_wui` can do everything the page can do, and cannot leave the page to change the item: no file-tree edits or deletes, no terminal, no changing the page, no deploy **[user]** 「對」. |
-| D4 | A WUI User can enter their own values (their own sign-in, their own env values); they cannot see or change the item's shared values **[user]** 「要」. |
+| D4 | A WUI User can enter their own values (their own sign-in, their own env values); they cannot change the item's shared values **[user]** 「要」. (First written "cannot see or change"; they can see them, as every member always could — kept so, §6 Q2, **[user]** 「不要複雜化後端程式」.) |
 | D5 | The env default becomes `private_first`, for existing items too. From now on choosing Shared in the panel is stored explicitly and is not affected by the default **[user]** 「a」. |
 | D6 | A WUI User who opens the item sees the whole workspace read-only, exactly as a Reader does — no separate screen **[user]** 「B這樣不用做特規」. |
 | D7 | Someone without `use_wui` who presses a page's button sees, above the page, "this page needs the WUI User permission" and "申請存取" (#968's request flow); someone who cannot change permissions sees the owner's name instead (#968 D4) **[user]** 「Ok」. |
@@ -234,16 +234,16 @@ reverse:
   code rebuilds, and their own rebuild-on-open is refused once and switches itself off.
   The alternatives put to the user: forbid page writes to build files, or accept it as a
   crafted request under D1.
-- **Q2 → open [user].** D4 says a WUI User cannot see the item's shared values; they can —
+- **Q2 → shared values stay visible [user] 「不要複雜化後端程式」.** D4 now reads: a WUI
+  User enters their own values and cannot CHANGE the item's shared ones. They can see them,
   as every member who can see the item always could (`GET …/env/layers` and the item
-  itself return them to `read_meta`). Hiding them means redacting `env_vars` for everyone
-  without `write_meta`, which changes what Readers and Participants see too, so it waits
-  for the user. `docs/wui.md` says plainly that shared values are visible.
-- **Q3 → the request button is #968's flow, as D7 says [user]; whether it should notify
-  from inside is open.** The banner carries 申請存取 through `POST …/request-access`
+  itself return them to `read_meta`); `docs/wui.md` says so and warns against keeping
+  owner-only secrets in Shared. Hiding them would mean redacting `env_vars` for everyone
+  without `write_meta` — not done.
+- **Q3 → the request button is #968's flow, as D7 says [user] 「照現在（#968）」.** The banner carries 申請存取 through `POST …/request-access`
   (`RequestAccess`, now shared with the reader's 403 page). Every role that can open a
   page is already inside the workspace, where that flow notifies nobody (`already_readable`;
   a Custom grant of `read_content` without `read_chat` is the exception, and its request
   does reach the owner), so
   the banner then says to ask the owner — by name — to add them as a WUI User. A request
-  that notifies the owner even from inside is the improvement put to the user.
+  that notifies the owner even from inside was put to the user and declined.
