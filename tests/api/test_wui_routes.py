@@ -746,7 +746,12 @@ def test_a_tool_called_from_a_page_gets_the_request_environment():
     same tool worked from the chat and not from the page it was written for."""
     env = _Env({"MES_TOKEN": "from-request", "MES_HOST": "from-request"})
     sandbox = _Sandbox(ExecResult(exit_code=0, stdout=b"{}"))
-    client, _, _, _ = build(sandbox=sandbox, env={"MES_HOST": "from-item"}, request_env=env)
+    client, _, _, _ = build(
+        sandbox=sandbox,
+        env={"MES_HOST": "from-item"},
+        env_policy={"MES_HOST": "shared_first"},  # Shared chosen (D5: no policy = Private first)
+        request_env=env,
+    )
 
     resp = client.post(URL, json={"args": {}})
 
@@ -762,13 +767,14 @@ def test_a_tool_called_from_a_page_gets_the_request_environment():
 def test_a_page_tool_call_follows_the_items_policy_for_each_name():
     """`plan-wui-viewer-login`: the person who pressed the button is the PRIVATE
     layer. A name the item marked `private_first` takes their value over the
-    shared one; an unmarked name still resolves the way it always did."""
+    shared one; a name marked `shared_first` keeps the shared one
+    (docs/plan-wui-user.md D5: an unmarked name now reads Private first)."""
     env = _Env({"MES_TOKEN": "mine", "MES_HOST": "mine"})
     sandbox = _Sandbox(ExecResult(exit_code=0, stdout=b"{}"))
     client, _, _, _ = build(
         sandbox=sandbox,
         env={"MES_TOKEN": "shared", "MES_HOST": "shared"},
-        env_policy={"MES_TOKEN": "private_first"},
+        env_policy={"MES_TOKEN": "private_first", "MES_HOST": "shared_first"},
         request_env=env,
     )
 
