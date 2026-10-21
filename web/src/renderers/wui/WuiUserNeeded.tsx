@@ -15,6 +15,7 @@
 import { useAppItem, useAppManifest } from "../../hooks/useResources";
 import { useUser } from "../../hooks/useUsers";
 import { useT } from "../../lib/i18n";
+import { RequestAccess } from "./RequestAccess";
 
 export function WuiUserNeeded({ slug, itemId }: { slug: string | null; itemId: string }) {
   const t = useT();
@@ -30,6 +31,16 @@ export function WuiUserNeeded({ slug, itemId }: { slug: string | null; itemId: s
     >
       {t("wui.needsWuiUser")}
       {owner ? ` ${t("wui.needsWuiUser.owner", { owner: ownerName || owner })}` : ""}
+      {slug && (
+        <span style={{ marginLeft: 8 }}>
+          <RequestAccess
+            slug={slug}
+            itemId={itemId}
+            inside="wui.needsWuiUser.inside"
+            insideVars={{ owner: ownerName || owner || "the owner" }}
+          />
+        </span>
+      )}
     </div>
   );
 }
