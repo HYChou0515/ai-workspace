@@ -6,6 +6,11 @@
  *
  * Who can fix it is the owner — named, as #968's reader side does (D4 there),
  * because nobody who sees this can change the item's access.
+ *
+ * Says what happened and what fixes it, next to where it happened (NN/g,
+ * "Error-Message Guidelines": constructive advice, close to the error), as a
+ * passive, conditional indicator rather than a dialog (NN/g, "Indicators,
+ * Validations, and Notifications") — the page behind it still works for reading.
  */
 import { useAppItem, useAppManifest } from "../../hooks/useResources";
 import { useUser } from "../../hooks/useUsers";

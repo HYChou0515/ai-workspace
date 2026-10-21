@@ -28,7 +28,11 @@ describe("the page header on file writes", () => {
     const sent = fetchSpy();
     await realApi.writeFile("rca", "inv1", "/t/a.json", "{}", { page: "/t/p.ai.yaml" });
     await realApi.deleteFile("rca", "inv1", "/t/a.json", { page: "/t/p.ai.yaml" });
-    expect(sent.map((s) => s.headers.get(WUI_PAGE_HEADER))).toEqual(["/t/p.ai.yaml", "/t/p.ai.yaml"]);
+    // percent-encoded on the wire (a header value must be Latin-1)
+    expect(sent.map((s) => decodeURIComponent(s.headers.get(WUI_PAGE_HEADER) ?? ""))).toEqual([
+      "/t/p.ai.yaml",
+      "/t/p.ai.yaml",
+    ]);
   });
 
   it("is absent from every other write", async () => {

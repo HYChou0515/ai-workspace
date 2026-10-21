@@ -346,8 +346,9 @@ def register_wui_routes(
         errors are the whole value. A route that answered only at the end would
         give a spinner and no idea whether anything was happening.
 
-        The verb is `execute`: this runs a command in the item's sandbox, the
-        same thing a notebook cell does.
+        The verb is `use_wui` (docs/plan-wui-user.md D3): rebuilding a page is
+        part of using it — and `execute`, which runs the same command in a
+        notebook cell, implies it (D10).
         """
         investigation_id = locator.require_access(slug, item_id, "use_wui")
         cwd = _build_dir(body.folder)
@@ -487,7 +488,8 @@ def register_wui_routes(
         The pane's own chrome does not know which row somebody clicked, and the
         whole premise of a WUI is that its author owns the experience.
 
-        The verb is `execute`: this runs work in the item, like a notebook cell.
+        The verb is `use_wui` (docs/plan-wui-user.md D3), which `converse` and
+        `execute` imply (D9/D10): pressing a page's button is using the page.
         """
         investigation_id = locator.require_access(slug, item_id, "use_wui")
 
@@ -666,7 +668,8 @@ def register_wui_routes(
         slug: str, item_id: str, name: str, body: CallToolBody, request: Request
     ) -> CallToolOut:
         # A tool can write, so the caller needs the verb that lets them write —
-        # the same authority they would need to make the change by hand.
+        # or, through a page, use_wui: the page is built to call it, and a WUI
+        # User does through the page what the page does (docs/plan-wui-user.md D3).
         investigation_id = locator.require_access(slug, item_id, ("edit_content", "use_wui"))
 
         ctx, pkg, command = await _prepare_tool(investigation_id, name, request)

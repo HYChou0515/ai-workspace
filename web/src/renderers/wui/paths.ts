@@ -150,16 +150,3 @@ export function resolveWritePath(folder: string, path: string): string | null {
   if (abs === null) return null;
   return abs.startsWith(`${folder}/`) ? abs : null;
 }
-
-/**
- * May the page declared at `viewPath` write the workspace-absolute `path`?
- *
- * The server's `page_may_write` (`api/wui_page.py`, docs/plan-wui-user.md D12)
- * is the authority — this copy only refuses BEFORE asking, held to the same
- * table (`web/tests/wuiPageWriteParity.test.ts`). Its own folder, never the
- * view file itself: that file declares what the page may call.
- */
-export function pageMayWrite(viewPath: string, path: string): boolean {
-  if (path === viewPath) return false;
-  return resolveWritePath(wuiFolder(viewPath), path) !== null;
-}

@@ -181,3 +181,33 @@ def test_the_server_answers_the_page_write_table():
     )
     for case in table["cases"]:
         assert page_may_write(case["view"], case["path"]) is case["expected"], case
+
+
+def test_a_page_in_a_folder_with_a_chinese_name_can_still_save():
+    """A header value must be Latin-1, so the browser sends the view path
+    percent-encoded (`encodeURIComponent`); the server decodes it. Raw, every page
+    write under a Chinese folder threw in the browser before any request went out."""
+    from urllib.parse import quote
+
+    client, item_id, store = _page_app(_WUI_USER)
+    view = "/報表/page.ai.yaml"
+    asyncio.run(store.write(item_id, view, _VIEW_DOC))
+    with client:
+        resp = client.put(
+            _files(item_id, "/報表/data.json"),
+            content=b"{}",
+            headers={"X-Wui-Page": quote(view, safe="")},
+        )
+    assert resp.status_code == 204, resp.text
+
+
+@pytest.mark.parametrize("path", ["/tracker//page.ai.yaml", "/tracker/./page.ai.yaml"])
+def test_the_view_file_cannot_be_reached_by_another_spelling(path: str):
+    """The sandbox resolves `//` and `.` (pathlib), so check 4 compares segments,
+    not strings — or the view file is rewritten through `/tracker//page.ai.yaml`."""
+    client, item_id, _store = _page_app(_WUI_USER)
+    with client:
+        put = client.put(
+            _files(item_id, path), content=b"view: wui\nEVIL: 1\n", headers={"X-Wui-Page": _VIEW}
+        )
+    assert put.status_code == 403, put.text

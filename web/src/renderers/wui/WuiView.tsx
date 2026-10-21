@@ -596,7 +596,12 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
   const { id: me, ready: meReady } = useCurrentUserState();
   const [reports, setReports] = useState<WuiReport[]>([]);
   // D7: a page route answered `needs_use_wui` — the banner above the frame.
+  // Every refusal passes through `noteRefusal` (the bridge's capability branches
+  // via `onRefused`, writes and runs via the dispatch's own catch).
   const [needsWuiUser, setNeedsWuiUser] = useState(false);
+  const noteRefusal = (err: unknown) => {
+    if (err instanceof HttpError && err.code === NEEDS_USE_WUI) setNeedsWuiUser(true);
+  };
   const nextReportId = useRef(0);
   const selfWrites = useRef(createSelfWrites());
 
@@ -784,6 +789,7 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
         fs,
         folder,
         page: path,
+        onRefused: noteRefusal,
         openFile,
         me: meReady ? me : null,
         declaredTools,
@@ -806,9 +812,7 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
         // no message. That is the one outcome this bridge exists to prevent, so
         // every path out of here posts a sentence.
         .catch((err: unknown) => {
-          // D7 (docs/plan-wui-user.md): a refusal for want of the WUI User
-          // permission is also said above the frame, by the platform.
-          if (err instanceof HttpError && err.code === NEEDS_USE_WUI) setNeedsWuiUser(true);
+          noteRefusal(err);
           return refuse(request.id, err instanceof Error ? err.message : `${request.verb} failed.`);
         })
         .then((res) => {
@@ -828,6 +832,9 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
     author,
     fs,
     folder,
+    // The page names itself on every write (D12): two view files share a
+    // folder — and this pane — so switching between them must re-bind.
+    path,
     openFile,
     me,
     meReady,

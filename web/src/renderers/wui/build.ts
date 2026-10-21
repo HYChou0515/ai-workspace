@@ -9,7 +9,8 @@
  * someone is iterating, so the output is the feature and a spinner is not.
  */
 
-import { apiFetch, detailSentence, HttpError } from "../../api/http";
+import { apiFetch } from "../../api/http";
+import { pageRefusal } from "./api";
 import { parseSseStream } from "../../api/sse";
 
 export type BuildEvent =
@@ -40,15 +41,13 @@ export function itemBuild(slug: string, itemId: string): RunBuild {
       // The server's own sentence where there is one — it names what was wrong
       // with the request, and it reaches a person through the same log the
       // build's output uses.
-      const detail = await detailSentence(resp);
       // `HttpError`, not a bare `Error`: the STATUS decides what the pane does
-      // next. A 403 — a viewer who may read the item but not run things in it —
+      // next. A 403 — a viewer who may read the item but not use its pages —
       // is permanent for that person, so rebuilding on open is switched off
-      // rather than refused again on every open, forever.
-      throw new HttpError(
-        resp.status,
-        detail ?? `The build could not be started (${resp.status}).`,
-      );
+      // rather than refused again on every open, forever. `pageRefusal` keeps
+      // the server's sentence AND its code: the use_wui refusal's detail is an
+      // object, which `detailSentence` alone would print as nothing.
+      throw await pageRefusal(resp, `The build could not be started (${resp.status}).`);
     }
     yield* parseSseStream<BuildEvent>(resp.body);
   };

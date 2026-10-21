@@ -1,5 +1,5 @@
 {
-  "_note": "page_may_write (api/wui_page.py) and pageMayWrite (web/src/renderers/wui/paths.ts) both answer every row; tests/api/test_wui_user.py and web/tests/wuiPageWriteParity.test.ts hold them to it.",
+  "_note": "page_may_write (api/wui_page.py) answers every row — tests/api/test_wui_user.py. The browser does not judge this: it cannot tell who is asking, and an editor may write the view file.",
   "cases": [
     {
       "view": "/tracker/page.ai.yaml",
@@ -59,6 +59,26 @@
     {
       "view": "/root.ai.yaml",
       "path": "/root.ai.yaml",
+      "expected": false
+    },
+    {
+      "view": "/tracker/page.ai.yaml",
+      "path": "/tracker//page.ai.yaml",
+      "expected": false
+    },
+    {
+      "view": "/tracker/page.ai.yaml",
+      "path": "/tracker/./page.ai.yaml",
+      "expected": false
+    },
+    {
+      "view": "/tracker/page.ai.yaml",
+      "path": "/tracker//data.json",
+      "expected": true
+    },
+    {
+      "view": "/tracker//page.ai.yaml",
+      "path": "/tracker/page.ai.yaml",
       "expected": false
     }
   ]

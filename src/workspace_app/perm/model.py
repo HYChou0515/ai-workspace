@@ -81,7 +81,8 @@ class Permission(Struct):
     use_terminal: list[Subject] = field(default_factory=list)
     use_wui: list[Subject] = field(default_factory=list)
     """docs/plan-wui-user.md D2: use an item's pages — everything a page does, through
-    the page, and nothing outside it. Not indexed, so an older row reads as ``[]``."""
+    the page, and nothing outside it. Defaults to ``[]``, so an older row reads as
+    nobody; not indexed, so nothing needs a backfill."""
     change_permission: list[Subject] = field(default_factory=list)
 
     def grants(self, verb: Verb) -> list[Subject]:

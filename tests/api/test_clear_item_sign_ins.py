@@ -19,6 +19,8 @@ rows.
 
 from __future__ import annotations
 
+from typing import Any
+
 from fastapi import FastAPI
 
 from workspace_app.api import ScriptedAgentRunner, create_app
@@ -35,7 +37,7 @@ URL = "/admin/env/clear-item-sign-ins"
 
 
 def _world():
-    holder = {"id": "root"}
+    holder: dict[str, Any] = {"id": "root"}
     spec = make_spec(default_user=lambda: holder["id"])
     app = create_app(
         spec=spec,
@@ -57,7 +59,9 @@ def _world():
 
     a = item({"SAP_TOKEN": "private_first", "SAP_HOST": "private_only"})  # asks for mine
     b = item({})  # Shared, no shared copy: falls back to the item's value, then mine
-    c = item({}, shared={"SAP_HOST": "shared-h"})  # Shared with a shared copy: uses it
+    c = item(
+        {"SAP_HOST": "shared_first"}, shared={"SAP_HOST": "shared-h"}
+    )  # Shared, copy set: uses it
     store = PrivateEnvStore(spec)
     store.replace("alice", a, {"SAP_TOKEN": "old-a", "MY_KEY": "typed"})
     store.replace("alice", b, {"SAP_HOST": "h"})
@@ -68,6 +72,7 @@ def _world():
     store.replace_personal("alice", {"SAP_TOKEN": "fresh", "SAP_HOST": "fresh-h"})
     # Carol has not: the value in the item is the only one her tools have.
     store.replace("carol", a, {"SAP_TOKEN": "only-copy"})
+    holder["spec"] = spec  # for a test that adds an item of its own
     return TestClient(app), holder, store, a, b, c
 
 
@@ -219,3 +224,27 @@ def test_the_names_are_the_ones_this_deploy_signs_in_for():
 
     assert client.post(URL, json={"apply": True}).json()["rows"] == []
     assert store.get("alice", a)["SAP_TOKEN"] == "old-a"
+
+
+def test_a_name_with_no_policy_is_cleared_where_the_old_value_now_wins():
+    """docs/plan-wui-user.md D5: no policy reads Private first, so the item's old
+    value is what the tools get even with a shared copy set — it hides the new
+    sign-in, and this cleanup removes it. The rule is `layer_of`'s, not re-spelt."""
+    client, holder, store, _a, _b, _c = _world()
+    from workspace_app.apps.playground.model import PlaygroundItem
+
+    rm = holder["spec"].get_resource_manager(PlaygroundItem)
+    d = rm.create(
+        PlaygroundItem(
+            title="t",
+            owner="root",
+            profile="echo",
+            env_policy={},
+            env_vars={"SAP_HOST": "shared-h"},
+        )
+    ).resource_id
+    store.replace("alice", d, {"SAP_HOST": "hd"})
+
+    client.post(URL, json={"apply": True})
+
+    assert store.get("alice", d) == {}

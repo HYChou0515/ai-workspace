@@ -43,9 +43,6 @@ from .locator import ItemLocator
 from .timeutil import now_ms
 from .wui_page import VIEW_SUFFIX, NotAPage, load_wui_view
 
-#: What a view file's name ends in. The kind is inside the file (`view:`), so
-#: the suffix alone never says "WUI" — it only says "worth reading".
-
 
 class DeployedWui(Struct):
     """One Deployed page. ``resource_id`` is `deployed_id(item_id, path)`, so a

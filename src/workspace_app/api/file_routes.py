@@ -16,6 +16,7 @@ import tempfile
 from collections.abc import AsyncIterator, Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
+from urllib.parse import unquote
 
 from fastapi import APIRouter, FastAPI, HTTPException, Request, Response, status
 from fastapi.responses import FileResponse, StreamingResponse
@@ -572,7 +573,9 @@ def register_file_routes(
         (docs/plan-wui-user.md D12). The page is the server's reading of the
         named view file, never the browser's word; every other surface sends no
         header, so a WUI User's write from the file tree is refused here."""
-        page = request.headers.get(PAGE_HEADER)
+        # Percent-encoded by the browser: a header value must be Latin-1, and a
+        # view path can hold any character.
+        page = unquote(request.headers.get(PAGE_HEADER, ""))
         if not page:
             return locator.require_access(slug, item_id, "edit_content")
         investigation_id = locator.require_access(slug, item_id, ("edit_content", "use_wui"))
@@ -588,7 +591,11 @@ def register_file_routes(
             raise HTTPException(status_code=403, detail=f"not a page: {exc}") from None
         if not page_may_write(view, norm):
             raise HTTPException(
-                status_code=403, detail=f"this page may not change {norm}: outside its folder"
+                status_code=403,
+                detail=(
+                    f"this page may not change {norm}: a page writes only inside its own "
+                    "folder, never its view file, and a page at the workspace root has none"
+                ),
             )
         return investigation_id
 

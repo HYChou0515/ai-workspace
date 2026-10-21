@@ -16,7 +16,8 @@ from ..files import WorkspaceFiles
 from ..filestore.protocol import FileNotFound
 from ..sync.ignore import DEFAULT_IGNORES, should_ignore
 
-#: the view-file suffix every page's declaration carries
+#: What a view file's name ends in. The kind is inside the file (`view:`), so
+#: the suffix alone never says "WUI" — it only says "worth reading".
 VIEW_SUFFIX = ".ai.yaml"
 
 
@@ -70,7 +71,16 @@ def page_may_write(view_path: str, path: str) -> bool:
     never its own view file, which declares the workflows, tools and agents the
     page may call (D12). A page at the root owns nothing: "only its own folder"
     is then nothing, not everything (`resolveWritePath` in the browser)."""
+    # Compared on SEGMENTS: the sandbox resolves `//` and `.` (pathlib), so a raw
+    # string compare let `/tracker//page.ai.yaml` rewrite the view file. `..` never
+    # reaches here (`_workspace_path` refuses it).
+    view_path, path = _segments(view_path), _segments(path)
     folder = page_folder(view_path)
     if folder == "" or path == view_path:
         return False
     return path.startswith(folder + "/")
+
+
+def _segments(path: str) -> str:
+    """``path`` with empty and ``.`` segments dropped — what the filesystem opens."""
+    return "/" + "/".join(p for p in path.split("/") if p not in ("", "."))

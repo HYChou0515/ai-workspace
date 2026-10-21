@@ -146,7 +146,9 @@ function searchBody(opts: SearchOptions): Record<string, unknown> {
 export const WUI_PAGE_HEADER = "X-Wui-Page";
 
 function pageHeaders(opts: PageWrite | undefined): Record<string, string> | undefined {
-  return opts?.page ? { [WUI_PAGE_HEADER]: opts.page } : undefined;
+  // Percent-encoded: a header value must be Latin-1, and a view path can hold
+  // any character (a Chinese folder name threw before any request went out).
+  return opts?.page ? { [WUI_PAGE_HEADER]: encodeURIComponent(opts.page) } : undefined;
 }
 
 export const realApi: ApiClient = {
@@ -554,7 +556,9 @@ export const realApi: ApiClient = {
       `/a/${encodeURIComponent(slug)}/items/${encodeURIComponent(investigationId)}/files/${encodePath(path)}`,
       { method: "DELETE", headers: pageHeaders(opts) },
     );
-    if (!resp.ok) throw new HttpError(resp.status, `delete ${path} failed: ${resp.status}`);
+    // The code too, as writeFile does: a page's delete refused for want of the
+    // WUI User permission is recognised by it (docs/plan-wui-user.md D7).
+    if (!resp.ok) throw new HttpError(resp.status, `delete ${path} failed: ${resp.status}`, await errorCode(resp));
   },
 
   async mkdir(slug: string, investigationId: string, path: string) {

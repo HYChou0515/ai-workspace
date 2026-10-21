@@ -21,7 +21,7 @@ import type { FileService } from "../../api/fileService";
 import type { OpenFile } from "../../hooks/openFile";
 import { readAsset } from "./assets";
 import { ok, refuse, refuseExpected, type WuiRequest, type WuiResponse } from "./protocol";
-import { isOwnFile, pageMayWrite, resolveReadPath, resolveWritePath } from "./paths";
+import { isOwnFile, resolveReadPath, resolveWritePath } from "./paths";
 
 export type CallTool = (
   name: string,
@@ -130,6 +130,13 @@ export type BridgeContext = {
   callAgent?: CallAgent | null;
   /** Start / read / stop jobs, or `null`/absent where no backend is wired. */
   jobs?: PageJobs | null;
+  /**
+   * Told of every call that failed, before the page hears the refusal — the one
+   * place the pane recognises "this page needs the WUI User permission"
+   * (docs/plan-wui-user.md D7). The capability branches answer their own
+   * failures, so without this only writes and runs ever reached the pane.
+   */
+  onRefused?: (err: unknown) => void;
 };
 
 /**
@@ -139,10 +146,6 @@ export type BridgeContext = {
  * so the ordinary sentence ("only inside its own folder") is true, useless and
  * reads as unfixable. Naming the cause names the fix: move the file.
  */
-function ownViewFile(target: string): string {
-  return `${target} is this page's own view file, which says what the page may call, so a page cannot change it.`;
-}
-
 function cannotWrite(folder: string, verb: string, target: string): string {
   return folder
     ? `This page can only write inside its own folder (${folder}), so it cannot ${verb} ${target}.`
@@ -301,7 +304,9 @@ export async function dispatchWuiRequest(
       if (!fs.caps.write) return refuse(id, "This workspace is read-only, so nothing can be saved.");
       const path = resolveWritePath(folder, raw);
       if (path === null) return refuse(id, cannotWrite(folder, "save to", raw));
-      if (!pageMayWrite(ctx.page, path)) return refuse(id, ownViewFile(raw));
+      // Not the view file is the SERVER's check, and only for a write admitted
+      // through use_wui (docs/plan-wui-user.md D12) — an editor's page may still
+      // rewrite its own view file, as before.
       await fs.writeFile(path, text, { page: ctx.page });
       ctx.onWrote?.(path);
       return ok(id, { path });
@@ -313,7 +318,6 @@ export async function dispatchWuiRequest(
       if (!fs.caps.delete) return refuse(id, "This workspace is read-only, so nothing can be deleted.");
       const path = resolveWritePath(folder, raw);
       if (path === null) return refuse(id, cannotWrite(folder, "delete", raw));
-      if (!pageMayWrite(ctx.page, path)) return refuse(id, ownViewFile(raw));
       await fs.deleteFile(path, { page: ctx.page });
       ctx.onWrote?.(path);
       return ok(id, { path });
@@ -348,6 +352,7 @@ export async function dispatchWuiRequest(
       try {
         return ok(id, await ctx.callTool(name, (toolArgs ?? {}) as Record<string, unknown>));
       } catch (err) {
+ctx.onRefused?.(err);
         return refuse(id, err instanceof Error ? err.message : `${name} could not be run.`);
       }
     }
@@ -363,6 +368,7 @@ export async function dispatchWuiRequest(
       try {
         return ok(id, await ctx.callAgent(name, str(args, "input") ?? ""));
       } catch (err) {
+ctx.onRefused?.(err);
         return refuse(id, err instanceof Error ? err.message : `${name} could not be asked.`);
       }
     }
@@ -389,6 +395,7 @@ export async function dispatchWuiRequest(
           ),
         );
       } catch (err) {
+ctx.onRefused?.(err);
         return refuse(id, err instanceof Error ? err.message : `${name} could not be started.`);
       }
     }
@@ -404,6 +411,7 @@ export async function dispatchWuiRequest(
       try {
         return ok(id, verb === "jobStatus" ? await ctx.jobs.status(job) : await ctx.jobs.stop(job));
       } catch (err) {
+ctx.onRefused?.(err);
         return refuse(id, err instanceof Error ? err.message : `Job ${job} could not be read.`);
       }
     }
