@@ -68,6 +68,7 @@ What a page's buttons hit, and the verb each route requires:
 | D9 | Whoever may talk to the item's agent (`converse`, Participant) may also use pages: `converse` implies `use_wui`, so existing Participants keep their role name and gain page use (O1) **[user]** 「可以」. |
 | D10 | Whoever may run code (`execute`, every Collaborator) may also use pages: `execute` implies `use_wui`, so existing Collaborators do not lose page use. A Custom grant of `execute` without `edit_content` can now also save through a page, inside the page's folder (O2) **[user]** 「對」. |
 | D11 | `private_first` keeps its order (private → personal → service → shared). A run nobody presses — a schedule — therefore uses the deployment's service-account value over the item's shared value for a name both hold, where today it uses the item's. The runbook says so (O3) **[user]** 「B」. |
+| D12 | A page's requests carry a header naming the page (its view file's path). A route admits its own verb as today, or — through a page — `use_wui` with four checks: the view file exists, the folder is derived from it on the server, the path is inside that folder (not at the root), and the path is not the view file. Writes keep the workspace's own routes **[user]** 「或是wui放header 後段檢查細一些 這樣不至於全部人都能透過加header亂搞」, 「這樣應該是改動最少的方式」. |
 
 ## 3. Mechanism
 
@@ -81,18 +82,33 @@ What a page's buttons hit, and the verb each route requires:
   cannot read its own files cannot open (D3).
 - `AI_FORBIDDEN` does not gain it: the item's agent never acts through a page.
 
-### 3.2 The page's routes (D3)
+### 3.2 The page's routes (D3, D12)
 
-Every route a page reaches through its bridge is gated on `use_wui` instead of
-`execute` / `edit_content`:
+A route admits a request when the person holds the route's own verb, as today, **or** the
+request comes through a page and the person holds `use_wui` — a union, so nobody loses
+what they can do now.
 
-- `…/wui/build`, `…/wui/run`, `…/wui/tools/{name}/call`, `…/wui/agents/{name}/call`,
-  `…/wui/jobs` and its status / stop — `use_wui`.
-- **Writes move to page routes** **[proposal]**: `PUT` / `DELETE …/wui/pages/{page}/files/{path}`,
-  gated on `use_wui`. The server resolves the page's own folder from `{page}` and refuses a
-  path outside it — the browser's `resolveWritePath` rule becomes the server's rule. The
-  pane's bridge calls these instead of the file service. The workspace's own
-  `…/files/{path}` stays on `edit_content`, so a WUI User cannot save in the file tree.
+- **The WUI routes** (`…/wui/build`, `…/wui/run`, `…/wui/tools/{name}/call`,
+  `…/wui/agents/{name}/call`, `…/wui/jobs` and its status / stop) are only ever called by a
+  page, so each takes its current verb or `use_wui`.
+- **File writes and deletes stay on the workspace's own routes** (`PUT` / `DELETE
+  …/files/{path}`) — no new route (D12, 「這樣應該是改動最少的方式」). The pane's bridge adds a
+  header naming the page: the path of its view file. Without `edit_content`, the server
+  admits the write only when all four hold:
+  1. the person holds `use_wui`;
+  2. a view file exists at the header's path — the page's folder is derived from that file
+     on the server, never taken from what the browser sends (a pass can be minted for any
+     folder, `api/wui_content.py:401-405`, so its folder is not evidence of a page);
+  3. the written path is inside that folder (`_inside`, `wui_content.py:299-303`, compared
+     on segments); a page at the workspace root has no folder and is refused, as the
+     browser already refuses it (`bridge.ts:135-139`);
+  4. the written path is not the view file itself — it declares the workflows, tools and
+     agents the page may call, so writing it would widen what the page may do.
+- **What the header buys.** The file tree, uploads, renames and every other workspace
+  surface send no header, so a WUI User's write from any of them is refused by the server —
+  a surface someone forgets to gate fails closed. Someone crafting the header by hand can
+  at most change files in a page folder they may use, never the view file and never
+  anything outside it (D1 accepts crafted requests; D12 bounds them).
 - Deploy / undeploy (`wui_deploy.py`) stay on `edit_content`; the terminal on
   `use_terminal`.
 
@@ -140,7 +156,7 @@ Flat integers; each built with `/tdd` and committed on its own.
 |---|---|
 | P1 | `use_wui` in the verb model; `_effective_grants` implications; authorize tests |
 | P2 | WUI routes gated on `use_wui` (build, run, tools, agents, jobs) |
-| P3 | Page write / delete routes with the server-side folder rule; the bridge calls them |
+| P3 | The page header on the bridge's writes; `…/files` admits a `use_wui` write under D12's four checks |
 | P4 | WUI User preset + Custom checkbox; the ladder (D9, D10); Env button for `use_wui` (D4) |
 | P5 | The refusal banner with request access (D7) |
 | P6 | Default `private_first`; Shared stored explicitly; parity fixture regenerated (D5) |
