@@ -9,11 +9,12 @@ import json
 from pathlib import Path
 
 from workspace_app.perm import Actor, Permission, authorize
+from workspace_app.perm.model import Verb
 
 _FIXTURE = Path(__file__).parents[1] / "fixtures" / "item_verb_cases.json"
 # The verbs the browser asks `hasItemVerb` about, and the grant lists that can
 # make them true through an implication.
-_ASKED = ["read_chat", "read_content", "converse", "execute", "use_wui", "edit_content"]
+_ASKED: list[Verb] = ["read_chat", "read_content", "converse", "execute", "use_wui", "edit_content"]
 _GRANTABLE = ["read_chat", "read_content", "converse", "execute", "use_wui", "edit_content"]
 
 
