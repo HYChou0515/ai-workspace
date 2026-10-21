@@ -2,6 +2,7 @@
 (#100, manual §13–§17). Driven directly with fake collaborators (no API layer)."""
 
 import asyncio
+from typing import Any
 
 import pytest
 from specstar import SpecStar
@@ -1613,6 +1614,50 @@ async def test_an_approved_steer_drops_whose_values_the_run_uses(spec_instance: 
     )
 
     assert RunIdentities(spec_instance).env_user(run_id) == ""
+
+
+async def test_a_repair_shows_on_the_board_as_its_own_status(spec_instance: SpecStar):
+    """plan-workflow-output-repair D7: a repair is told apart from a retry — status
+    `repairing`, how many repairs so far, and why — while it is in flight."""
+    statuses: list[tuple[str, int, str]] = []
+    holder: dict[str, Any] = {}
+    seen = {"n": 0}
+
+    async def gate(_wf, _result):
+        seen["n"] += 1
+        return CheckResult(seen["n"] >= 3, "reply is not JSON", format=True)
+
+    async def repair(_verdict):
+        got = spec_instance.get_resource_manager(WorkflowRun).get(holder["run_id"]).data
+        row = next(s for s in got.steps if s.name == "think")
+        statuses.append((row.status, row.repairs, row.reason))
+        return {}
+
+    async def run(wf, inputs):
+        await run_step(
+            wf,
+            name="think",
+            phase="think",
+            args={},
+            execute=_ok,
+            check=gate,
+            repair=repair,
+            retries=2,
+        )
+        return {}
+
+    orch, _ = _orch(spec_instance, run)
+    holder["run_id"] = await orch.start(
+        slug="rca", item_id="rca/i1", profile="echo", captured_user="alice"
+    )
+    await asyncio.sleep(0)
+    assert statuses == [
+        ("repairing", 1, "reply is not JSON"),
+        ("repairing", 2, "reply is not JSON"),
+    ]
+    got = spec_instance.get_resource_manager(WorkflowRun).get(holder["run_id"]).data
+    row = next(s for s in got.steps if s.name == "think")
+    assert row.status == "passed" and row.repairs == 2 and row.reason == ""
 
 
 # ── Continue from here / Re-run this step (plan-workflow-out-of-chat D9) ──

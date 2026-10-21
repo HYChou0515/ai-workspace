@@ -224,3 +224,7 @@ CLAUDE.md「Chat turns run through one `ChatTurnEngine`」那段說 Q1, Q2, A1, 
   `test_a_person_in_the_chat_sees_a_sign_in_message_after_their_question` 在合併後的樹上就紅了。(2) 問題真的要搬時
   (排在別人後面),緊接在它下面、同一個時間戳的 `sign_in` 跟著一起搬(`take_person_message` 回傳一串);只拿
   緊鄰的,同一毫秒送出的另一個人的 `sign_in` 留給他。
+- **C21〔施工〕合併 #973(workflow 輸出修補)後:** #973 加了 `replays(m)` —— 「哪些訊息會送給模型」的唯一規則,
+  `history_items` 先用它過濾,context 用量條也讀它;它的 error 只認 `cancelled`。於是 Q5 的步數上限(`max_turns`)
+  和 Q2 的被接手(`interrupted`)在過濾時就掉了,後面摺成標記的分支再也走不到 —— 三個釘住 Q5/Q2 的測試在合併後
+  的樹上就紅了。改成 `_FOLDED_ERROR_KINDS` 一份清單:這三種結尾會摺成標記送給模型,也就該被用量條計入。

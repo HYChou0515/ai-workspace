@@ -61,9 +61,11 @@ export type StepView = {
   phase: string;
   name: string;
   key?: string;
-  status: "running" | "passed" | "failed" | "skipped" | "retrying";
+  status: "running" | "passed" | "failed" | "skipped" | "retrying" | "repairing";
   /** Why a step failed / is retrying — surfaced on the line. */
   reason?: string;
+  /** Which repair of the reply's format this is, while `repairing` (from 1). */
+  repair?: number;
   /** Live stdout streamed while a deterministic step runs (#178, step_output) —
    * accumulated chunk by chunk so a long command shows movement. */
   liveOutput?: string;
@@ -130,6 +132,9 @@ export type AgentEntry =
       layer: "personal" | "private" | "shared";
       at?: number;
     }
+  // plan-workflow-output-repair §3.5: a workflow node was asked to re-emit its
+  // answer in the required format — the request as sent, never LLM history.
+  | { kind: "repair_request"; text: string; at?: number }
   // #739: the thread outgrew its window, so this span was replaced — for the
   // MODEL — by a précis. `replaced` is how many messages sit behind it, derived
   // from position rather than stored: the originals are still right there above
@@ -482,6 +487,8 @@ export function logFromMessages(messages: readonly Message[]): AgentLog {
         layer: m.sign_in_layer ?? "private",
         at: m.created_at ?? undefined,
       });
+    } else if (m.role === "repair_request") {
+      entries.push({ kind: "repair_request", text: m.content, at: m.created_at ?? undefined });
     } else if (m.role === "goal") {
       // #613 P3: the goal driver's outcome marker (達成 / 額度用盡).
       // Review round 1: a night that could not start carries WHY as what it
@@ -593,7 +600,15 @@ export function logFromMessages(messages: readonly Message[]): AgentLog {
 /** Entries that carry the conversation itself — the ones the backend persists.
  * `step` / `phase` / live banners are stream-only chrome and are deliberately
  * NOT counted, so their presence can't disguise a store that is behind. */
-const CONTENT_KINDS = new Set(["message", "tool_call", "mention", "goal_note", "notice", "sign_in"]);
+const CONTENT_KINDS = new Set([
+  "message",
+  "tool_call",
+  "mention",
+  "goal_note",
+  "notice",
+  "sign_in",
+  "repair_request",
+]);
 
 const contentCount = (entries: readonly AgentEntry[]) =>
   entries.filter((e) => CONTENT_KINDS.has(e.kind)).length;
@@ -1414,6 +1429,23 @@ export function reduceAgent(log: AgentLog, ev: AgentEvent, now: number = Date.no
         step: { phase: ev.phase, name: ev.name, key: ev.key, status: "running" },
       });
       return { ...log, entries };
+
+    case "step_repairing": {
+      // plan-workflow-output-repair D7: a repair of the reply's format, in place.
+      const idx = findStep(entries, ev.phase, ev.name, ev.key);
+      const e = idx >= 0 ? entries[idx] : undefined;
+      const step = { status: "repairing" as const, reason: ev.reason, repair: ev.repair };
+      if (e && e.kind === "step") {
+        entries[idx] = { ...e, step: { ...e.step, ...step } };
+      } else {
+        entries.push({
+          kind: "step",
+          at: now,
+          step: { phase: ev.phase, name: ev.name, key: ev.key, ...step },
+        });
+      }
+      return { ...log, entries };
+    }
 
     case "step_passed":
     case "step_failed":

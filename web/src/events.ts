@@ -309,6 +309,17 @@ export type StepRetrying = {
   key?: string;
 };
 
+/** A step's reply failed its own format and a repair turn asks for it again —
+ * told apart from a retry (plan-workflow-output-repair D7). `repair` counts from 1. */
+export type StepRepairing = {
+  type: "step_repairing";
+  phase: string;
+  name: string;
+  reason?: string;
+  key?: string;
+  repair: number;
+};
+
 /** The run suspended at a `human_gate` (manual §10) — the FE renders the
  * decision card. Terminal for the run task (resumed via the decisions endpoint). */
 export type AwaitingHuman = { type: "awaiting_human"; phase: string; title: string };
@@ -329,6 +340,7 @@ export type WorkflowEvent =
   | StepFailed
   | StepSkipped
   | StepRetrying
+  | StepRepairing
   | AwaitingHuman
   | SteerProposed;
 

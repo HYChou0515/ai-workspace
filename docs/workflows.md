@@ -208,10 +208,17 @@ tool（§7）。
   把 LLM-judge check（另一次回傳 pass/fail 的 agent turn）保留給只能語意檢查的目標。
   一個 deterministic predicate 是硬保證；一個 LLM 去評判另一個 LLM，是一個不可靠的
   東西在檢查另一個不可靠的東西。
-- **失敗時：帶 feedback 重試 `N` 次，然後中止該 step。** check 的失敗原因會被餵回
-  *同一個 step 的* 重跑（一個 in-step loop，在同一次 run 之內）。`N` 次嘗試後該 step
-  中止；在一個 loop 裡，每個元素的預設政策是 **skip + collect**（§11）。因為一個失敗的
-  step 不寫 artifact，*之後* 的一次 run 也會重試它。
+- **失敗時：帶 feedback 再試 `N` 次，然後中止該 step。** 再試有兩種，共用同一個 `N`
+  （[`plan-workflow-output-repair.md`](plan-workflow-output-repair.md)）：
+  - **回覆本身的格式錯**（`outputs` 不是 JSON／缺欄位／型別或 enum 不符；`out` 的
+    json／yaml／csv 解析不出來）→ **修補**：同一段對話裡多一輪、**不給工具**，只請它把
+    答案改寫成「只有 JSON（或該格式）」——說明它仍然不合格、引用錯的那一段、整段失敗的
+    回覆、欄位與範例。不重做 step 的工作。修補用完仍不合格，step 直接中止，不退回重跑。
+  - **其他 check 沒過**（`requires` 缺段落、`produces` 沒有檔案、作者自己寫的 check）
+    → 失敗原因餵回 *同一個 step 的* 重跑（一個 in-step loop，在同一次 run 之內）。
+
+  `N` 次之後該 step 中止；在一個 loop 裡，每個元素的預設政策是 **skip + collect**（§11）。
+  因為一個失敗的 step 不寫 artifact，*之後* 的一次 run 也會重試它。
 - 內建 check（示意）：`check.file_nonempty(path)`、
   `check.choice_in(path, key, allowed)`、`check.collection_has(collection, path)`、
   `check.exec(cmd)`、`check.llm_judge(criteria)`。
@@ -425,7 +432,7 @@ node 保證 exactly-once。
   顯示在一個 phase node *底下*（「12/20，1 failed」），不是預先畫好的 per-element node。
 - **Live** = SSE（擴充 `api/events.py`，鏡射到 `web/src/events.ts`：
   `PhaseEntered` / `StepStarted` / `StepPassed` / `StepFailed` / `StepSkipped` /
-  `StepRetrying` / `AwaitingHuman`）。**Historical** = 查 `WorkflowRun`。
+  `StepRetrying` / `StepRepairing` / `AwaitingHuman`）。**Historical** = 查 `WorkflowRun`。
 - **Caveat（別誇大）：** 這個骨架是 *宣告* 的 phase 集合；若程式碼對某個 input 跳過/
   重排 phase，diagram 可能漂移。把 phase 維持得粗、大致線性；把沒跑到的 phase
   標成 skipped。
@@ -723,8 +730,9 @@ DSL 的界線是一條線：**流程圖的*形狀*必須事先靜態宣告**—�
 
 `outputs` 宣告一步的具名欄位（name → 型別）。型別是地基：`str` / `int` / `float` /
 `bool` / `list` / `obj`；`enum` 是選配、只限 scalar。宣告 `outputs` 的 step **自帶一個
-implicit gate**——回覆不 parse 成物件、缺欄位、型別/enum 不符 → 當 check 失敗、帶原因
-重試（`retries`）。`enum` 還讓 `switch` 的 `cases` 被靜態檢查窮盡性（§22.6）。
+implicit gate**——回覆不 parse 成物件、缺欄位、型別/enum 不符 → 當 check 失敗，在
+`retries` 次內**修補**（不給工具、只請它重新輸出 JSON，§6）。第一次送出的 prompt 最後也會
+自動附上欄位、可選值和一個範例。`enum` 還讓 `switch` 的 `cases` 被靜態檢查窮盡性（§22.6）。
 
 ```jsonc
 "outputs": {
