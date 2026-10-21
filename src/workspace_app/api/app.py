@@ -117,6 +117,7 @@ from .entity_broadcast import build_entity_write_sink
 from .entity_routes import register_entity_routes
 from .env_provider import IEnvProvider
 from .env_provider_routes import register_env_provider_routes
+from .env_refresh import EnvRefresher
 from .event_bus import IEventBus
 from .events import FileChanged
 from .file_routes import register_file_routes
@@ -142,6 +143,7 @@ from .notification_delivery import INotificationChannel
 from .notifications import notify, register_notification_routes
 from .private_env import PrivateEnvStore, register_private_env, register_private_env_routes
 from .quota_routes import may_close_environment, register_quota_routes
+from .refresh_claims import RefreshClaims, register_refresh_claims
 from .registry import InvestigationRegistry
 from .replay_loaders import ReplayLoaders
 from .request_env import IRequestEnv
@@ -1959,6 +1961,8 @@ def create_app(
     # The PRIVATE env layer (`docs/plan-wui-viewer-login.md`): no auto-CRUD —
     # its only door is the caller-scoped routes below.
     register_private_env(spec)
+    # plan-env-token-refresh: one refresh at a time per (layer, owner, sign-in).
+    register_refresh_claims(spec)
     register_schedule_bindings(spec)
     # Whose private values a run uses — off `WorkflowRun`, whose auto-CRUD is
     # writable (review round 1, R5).
@@ -2324,6 +2328,16 @@ def create_app(
     # engine-key / chat-validation rules every workspace route crosses. The route
     # modules + the turn/mention/replay services call ``locator.<method>`` directly.
     locator = ItemLocator(spec, app_catalog, get_user_id=get_user_id, superusers=superusers)
+    # plan-env-token-refresh: a near-expiry token is refreshed before a tool gets
+    # it, by the deploy's own sign-in. The sign-ins are read at call time from
+    # app.state (set below), the same seam the env-provider routes read.
+    env_refresher = EnvRefresher(
+        providers=lambda: getattr(app.state, "env_providers", ()),
+        store=private_env_store,
+        claims=RefreshClaims(spec),
+        locator=locator,
+        spec=spec,
+    )
     # plan-tool-usage-stats §3.6: the administrator's report on the tool-call
     # counts (the model is registered with the store, above).
     from .tool_usage_routes import register_tool_usage_routes
@@ -2514,6 +2528,7 @@ def create_app(
         request_env=request_env,
         # plan-wui-viewer-login: a run a person started overlays their values.
         private_env=private_env_store,
+        env_refresher=env_refresher,
     )
 
     workflow_credentials = CredentialBroker()
@@ -2666,6 +2681,7 @@ def create_app(
         request_env=request_env,
         # `plan-wui-viewer-login`: each person's private env layer per item.
         private_env=private_env_store,
+        env_refresher=env_refresher,
         # plan-graceful-shutdown P3: every app-chat send (not the KB chat's, which
         # builds its turn in its route) opens a durable claim a peer
         # can re-run the turn from.
@@ -2890,6 +2906,7 @@ def create_app(
         prebuilt_dir=prebuilt_dir,
         request_env=request_env,
         private_env=private_env_store,
+        env_refresher=env_refresher,
         get_user_id=get_user_id,
         # #WUI P18: a page can start a run and watch it live. Resolved at CALL
         # time — the orchestrator is built later than this registration, the same

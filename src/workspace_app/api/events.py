@@ -369,6 +369,22 @@ class ContextTrimmed:
 
 
 @dataclass(frozen=True)
+class SignInExpired:
+    """`docs/plan-env-token-refresh.md` D6: a sign-in whose refresh token is
+    dead, announced under the question it came with. The durable record is the
+    `sign_in` message in the thread; this is what puts it on screen WHILE the
+    turn runs — a store copy only replaces the live log once the store has
+    caught up with it, which a turn streaming more entries than it persists
+    never does. `layer` is where signing in again writes (D3)."""
+
+    provider: str
+    layer: str
+    text: str
+    created_at: int | None = None
+    type: Literal["sign_in_expired"] = "sign_in_expired"
+
+
+@dataclass(frozen=True)
 class Presence:
     """#455: the live roster of an item's stream — the distinct users currently
     subscribed to its `/stream`. Broadcast whenever a viewer joins or leaves, so
@@ -398,6 +414,7 @@ AgentEvent = (
     | OutputRetracted  # the failed call's streamed text is withdrawn before its re-send
     | TodosUpdated  # #613: the agent rewrote the conversation's todo checklist
     | ContextTrimmed  # #624: the request was too long; older history was dropped
+    | SignInExpired  # plan-env-token-refresh D6: a dead sign-in, under the question
     | Compacting  # #739: the thread outgrew the window; this turn summarises first
     | GoalUpdated  # #613 P3: the chat's goal was set / cleared / advanced
     | UserMessage  # #43: broadcast-only (a human's message on the shared stream)

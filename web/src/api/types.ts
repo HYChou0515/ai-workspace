@@ -33,6 +33,9 @@ export type MessageRole =
   | "goal"
   // #624: `notice` = 系統告知(例如較早訊息已超出模型可讀範圍)— FE-only。
   | "notice"
+  // plan-env-token-refresh D6: a sign-in whose refresh token is dead, with that
+  // sign-in's button — FE-only, never replayed to the model.
+  | "sign_in"
   // #739: `summary` = 這一則取代了它上面那一段,送給模型的是它;原文並未刪除,
   // 使用者往上捲仍然看得到。與 `notice` 相反,這一則**會**進入模型的 context。
   | "summary"
@@ -68,6 +71,10 @@ export type Message = {
   role: MessageRole;
   /** role=user only (#847 P7): the markings sent with this message. */
   markings?: SentMarking[];
+  /** role=sign_in only: the deploy's sign-in (`EnvProvider.id`) to do again. */
+  sign_in_provider?: string | null;
+  /** role=sign_in only: where the dead token lived, so signing in writes back there. */
+  sign_in_layer?: "personal" | "private" | "shared" | null;
   content: string;
   /** user id when role=user; agent name when role=assistant. */
   author?: string | null;

@@ -116,6 +116,14 @@ export type AgentEntry =
   | { kind: "goal_note"; text: string; at?: number; failure?: Failure }
   // #624: a persisted system notice (history no longer reaches the model).
   | { kind: "notice"; text: string; at?: number }
+  // plan-env-token-refresh D6: a sign-in to do again, with its button.
+  | {
+      kind: "sign_in";
+      text: string;
+      provider: string;
+      layer: "personal" | "private" | "shared";
+      at?: number;
+    }
   // #739: the thread outgrew its window, so this span was replaced — for the
   // MODEL — by a précis. `replaced` is how many messages sit behind it, derived
   // from position rather than stored: the originals are still right there above
@@ -339,6 +347,28 @@ const failureOf = (ev: {
   params?: Record<string, number> | null;
 }): Failure => ({ kind: ev.kind ?? "unknown", params: ev.params ?? null, raw: ev.message });
 
+/**
+ * Roles the platform writes INTO a turn rather than as its result: the #624
+ * `notice` (persisted before the model is called) and the `sign_in` message
+ * (`docs/plan-env-token-refresh.md` D6, persisted under the question before
+ * the turn runs). They say nothing about whether the turn has ended.
+ */
+const MID_TURN_ROLES: ReadonlySet<string> = new Set(["notice", "sign_in"]);
+
+/**
+ * The message that says where the thread's turn stands: the last one that is
+ * not a platform line written mid-turn. Both "a reply is still on its way"
+ * readings — hydration and the cross-pod store poll — read THIS, so they
+ * cannot disagree about it.
+ */
+export function turnTail<M extends { role: string }>(messages: readonly M[]): M | undefined {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const m = messages[i];
+    if (m !== undefined && !MID_TURN_ROLES.has(m.role)) return m;
+  }
+  return undefined;
+}
+
 const isRecent = (at: number | null | undefined): boolean =>
   at != null && Date.now() - at < AWAITING_REPLY_MAX_MS;
 
@@ -396,6 +426,16 @@ export function logFromMessages(messages: readonly Message[]): AgentLog {
       // #624: the context horizon moved — the user needs to know the model can
       // no longer see the start of the thread.
       entries.push({ kind: "notice", text: m.content, at: m.created_at ?? undefined });
+    } else if (m.role === "sign_in") {
+      // plan-env-token-refresh D6: the deploy reported a sign-in's refresh
+      // token dead — told here, with that sign-in's button.
+      entries.push({
+        kind: "sign_in",
+        text: m.content,
+        provider: m.sign_in_provider ?? "",
+        layer: m.sign_in_layer ?? "private",
+        at: m.created_at ?? undefined,
+      });
     } else if (m.role === "goal") {
       // #613 P3: the goal driver's outcome marker (達成 / 額度用盡).
       // Review round 1: a night that could not start carries WHY as what it
@@ -470,7 +510,7 @@ export function logFromMessages(messages: readonly Message[]): AgentLog {
   // persisted (an answer, an error, a cancellation) whether the provider hangs,
   // the requester disconnects, the pod rolls or the store write fails — so it
   // cannot stick on forever.
-  const last = messages[messages.length - 1];
+  const last = turnTail(messages);
   const awaitingReply =
     last !== undefined && last.role === "user" && isRecent(last.created_at);
   return {
@@ -498,7 +538,7 @@ export function logFromMessages(messages: readonly Message[]): AgentLog {
 /** Entries that carry the conversation itself — the ones the backend persists.
  * `step` / `phase` / live banners are stream-only chrome and are deliberately
  * NOT counted, so their presence can't disguise a store that is behind. */
-const CONTENT_KINDS = new Set(["message", "tool_call", "mention", "goal_note", "notice"]);
+const CONTENT_KINDS = new Set(["message", "tool_call", "mention", "goal_note", "notice", "sign_in"]);
 
 const contentCount = (entries: readonly AgentEntry[]) =>
   entries.filter((e) => CONTENT_KINDS.has(e.kind)).length;
@@ -1329,6 +1369,20 @@ export function reduceAgent(log: AgentLog, ev: AgentEvent, now: number = Date.no
     case "phase_entered":
       entries.push({ kind: "phase", at: now, phase: ev.phase });
       return { ...log, entries };
+
+    case "sign_in_expired": {
+      // plan-env-token-refresh D6. Persisted before it is announced, so a log
+      // hydrated from the thread may hold it already: the backend stamps the
+      // notice ONCE and hands the same value to both, so provider + stamp is
+      // the key (as `user_message` keys on author + stamp).
+      const at = ev.created_at ?? now;
+      const shown = entries.some(
+        (e) => e.kind === "sign_in" && e.provider === ev.provider && e.at === at,
+      );
+      if (shown) return log;
+      entries.push({ kind: "sign_in", text: ev.text, provider: ev.provider, layer: ev.layer, at });
+      return { ...log, entries };
+    }
 
     default:
       // Anything not folded into the feed (e.g. awaiting_human → the run

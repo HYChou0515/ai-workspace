@@ -3081,6 +3081,68 @@ command 的完整 schema——那正是這個功能在做的事。從 `index.jso
 - 以 superuser 開總表，任一列按「指定…」選一個人：那個人的通知裡出現「A schedule now runs as you」。
 - 開一個有 WUI 頁面排程的 item 的 Workflows 面板：頁面的排程也列在裡面，「位置」寫「頁面「…」」。
 
+### 2026-10-21 · #985 token 快過期時，平台用部署方的系統登入自己換新的 {#pr-985}
+
+**設定** — 沒有新 key，`server.env_providers` 不用改。**新的可選功能，不做就一切照舊**
+（`docs/plan-env-token-refresh.md`、`docs/extending-the-platform.md`「token 快過期時由平台換新的」）：
+
+1. **在系統登入程式（`server.env_providers` 列的 `IEnvProvider` 實作）加 `needs_refresh` 和 `refresh`**
+   （`rollout 前` 寫好、隨這版一起部署）。為什麼：平台不知道你們的系統怎麼換 token，
+   只負責「什麼時候換、換完存哪」。範例（完整版見 `extending-the-platform.md`）：
+
+   ```python
+   def needs_refresh(self, values):                 # 不打網路：讀 JWT 的 exp
+       return seconds_left(values.get("ERP_TOKEN", "")) < 300
+
+   async def refresh(self, values):
+       r = await erp.refresh(values["ERP_REFRESH_TOKEN"])   # 自己設逾時
+       if r.status == 401:                                  # 確定無效：列出所有因此失效的名稱
+           raise RefreshRejected({"ERP_TOKEN", "ERP_REFRESH_TOKEN"})
+       r.raise_for_status()                                 # 其他錯誤照常丟
+       return {"ERP_TOKEN": r.access_token, "ERP_REFRESH_TOKEN": r.refresh_token}
+   ```
+
+   要遵守的規定：
+   - **`produces` 要包含 refresh token 的變數名**（例如 `ERP_REFRESH_TOKEN`）。不列的症狀：平台不知道那組值歸這個登入方式管，
+     refresh token 不會被帶進 `refresh()`、也不會被換新。
+   - **`needs_refresh` 不打網路、要快**（例如讀 JWT 的 `exp`）——聊天每則訊息送出時、頁面按鈕的每次工具呼叫、
+     workflow 每個節點、goal 每回合、每次重跑都會呼叫一次。打網路的症狀：每則訊息、頁面按鈕的每次工具呼叫都多等一次。
+     **餘裕要涵蓋排隊等待加一輪聊天的長度**：訊息被收下時就判斷，排在別的回合後面的訊息要先等，同一輪後面的工具呼叫也不會再問一次。太短的症狀：長的一輪後段，工具拿到剛過期的 token。
+   - **refresh token 確定無效時一定要 `raise RefreshRejected(names)`**，其他錯誤照常丟例外。
+     不照做的症狀：平台一律當暫時失敗，不清、不提示重新登入，人要等到工具失敗才知道。
+     **`names` 要列出所有因此失效的變數**（access token 和 refresh token 都要）。漏列的症狀：留下的名稱照留——
+     過期的 access token 留著、refresh token 被清掉時，下次還是「快過期」，`refresh()` 收到的值裡沒有 refresh token。
+   - **值不寫進 log 或例外訊息；自己限制等待時間**（平台另有 30 秒上限，超過當暫時失敗）。
+     寫進 log 的症狀：token 出現在 pod 的 log 裡，看得到 log 的人都拿得到。沒限時的症狀：每次都等滿 30 秒才照舊跑。
+   - **還沒有登入程式的部署**：要先寫一個完整的（`id`、`label`、`produces`、`inputs`、`resolve`）再加這兩個方法。
+     症狀：沒有登入程式時，平台沒有可以問的對象，什麼都不會換。
+2. **拿掉工具／MCP 裡自己 refresh 的程式**（`rollout 後`，確認平台在換之後）。為什麼：工具拿到的環境變數是唯讀的，
+   自己換到的新 token 寫不回去；遇到 refresh token 用一次就作廢的系統，工具和平台都去換會互相把對方的弄失效。
+   不做的症狀：偶發的「refresh token 已被使用」錯誤。
+3. **不加這兩個方法 = 一切照舊**：沒有任何登入方式寫了 `refresh` 時，平台連 item 都不多讀一次。
+
+**要知道的後果**：
+- token 放在某個 item 的 **Shared** 共用值時，平台換到新值會**直接改寫那個 item 的共用值**，不看當下的人有沒有改設定的權限；
+  修改紀錄的寫入者是 `system:env-refresh`。只寫換掉的那幾個名稱：換的期間別人改的其他值照留，有人在這期間登出或重新登入就以他們的為準。
+- refresh token 被判定無效時：在聊天，對話裡出現「{系統} 登入已過期，請重新登入」和「登入 {系統}」按鈕，按下去是同一個登入頁
+  （token 原本在「我的環境變數」就存回那裡；在這個 item 的 Private 或 Shared 就存進這個 item 的 Private——Shared 裡失效的名稱已經清掉）；
+  其他（頁面按鈕的工具呼叫、goal、重跑、workflow、綁定的排程）就通知替誰跑的人：token 在「我的環境變數」連到那裡、每人每個登入方式每天一次；
+  在 item 裡就連到那個 item、每人每個登入方式每個 item 每天一次。
+- **Shared 的 token 失效後，item 的其他成員也沒有這個值了**：平台把失效的名稱從 Shared 清掉，按「登入」的人存進的是自己的 Private，
+  其他人下一次執行會看到 #892 的缺環境變數卡片，要自己登入或由有 `write_meta` 的人重新填 Shared。
+- 同時有兩個執行（或兩顆 pod）發現快過期時只換一次，另一個最多等 30 秒再用新的；等不到就用原本的值照樣跑。
+
+**資料** — 新增一個協調用的資料表（`RefreshClaim`，鎖；`spec.apply` 之後註冊，沒有 CRUD 路由），每個「層 × 擁有者 × 登入方式」
+最多一列，不用回填。對話訊息多兩個選填欄位（`sign_in_provider`、`sign_in_layer`），舊資料照讀，沒有 `Schema` 升版。
+
+**k8s · CI 側** — 沒有新的 manifest、env、probe 或 JobType；照常重 build、照常部署。
+
+**確認做完**（`rollout 後`）：
+- 讓某人的 token 快過期（或在測試環境把有效期限調短），在聊天請 AI 跑一個用到它的工具：工具拿到新 token，
+  「我的環境變數」（或 token 原本所在的那一層）的值被換新。沒部署到這一版、或登入程式沒加 `refresh` 的症狀：工具拿到過期的值。
+- 把那人的 refresh token 改成一個無效值再跑一次：對話裡出現「登入已過期」的訊息和「登入 {系統}」按鈕，按下去登入後
+  再問一次，工具拿到新 token；若是頁面按鈕、排程或 goal，替誰跑的人收到通知「Sign in to {系統} again」。
+
 ## 附錄 A：資料回填的機制（specstar 為什麼不會自己補）
 
 有些升版會改變「資料在資料庫裡的儲存形狀」，但 **specstar 只在寫入當下**把一列的 `indexed_data`

@@ -46,7 +46,8 @@ from ..sandbox.protocol import OutputSink
 from ..tokens import CallLane
 from ..workcalendar import OffHoursCalendar
 from .env_layers import PersonEnv
-from .events import GoalUpdated, RunError, TurnEnded, UserMessage
+from .env_refresh import DeadSignIn, EnvRefresher, RefreshOutcome
+from .events import GoalUpdated, RunError, SignInExpired, TurnEnded, UserMessage
 from .goal_offhours import build_offhours_calendar, owner_is_active, turn_signature
 from .goal_wrapup import headline, marker_text, night_transcript, write_summary
 from .kb_chat_routes import resolve_max_searches, to_caller_enhancements
@@ -58,7 +59,7 @@ from .run_windows import run_windows_of_chat, without_runs
 from .timeutil import now_ms
 from .turn_claims import TurnClaim
 from .turn_gate import admit_turn
-from .turns import CONTEXT_NOTICE_ROLE, _terminal_error, already_noticed
+from .turns import CONTEXT_NOTICE_ROLE, SIGN_IN_ROLE, _terminal_error, already_noticed
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -228,7 +229,11 @@ class ChatSendService:
         private_env: PrivateEnvStore | None = None,
         send_await_timeout: float = 25.0,
         turn_claims: ITurnClaimStore | None = None,
+        env_refresher: EnvRefresher | None = None,
     ) -> None:
+        # plan-env-token-refresh: a near-expiry token is refreshed before the
+        # turn's tools get it. None ⇒ never (a composition that wired none).
+        self._env_refresher = env_refresher
         # plan-graceful-shutdown P3: the durable claim a peer re-runs this turn
         # from if this pod goes away. None ⇒ no store (single-pod / tests):
         # turns are as pod-bound as they always were.
@@ -329,7 +334,7 @@ class ChatSendService:
         # the time a tool is dispatched this POST has long returned. After the
         # gate above, so a refused turn never pays for a credential exchange it
         # is not going to use.
-        caller_env = await self._resolve_request_env(
+        caller_env, dead_sign_ins = await self._resolve_request_env(
             request, user_id=author, item_id=investigation_id, driven_by=driven_by
         )
         task = asyncio.create_task(
@@ -343,6 +348,7 @@ class ChatSendService:
                 lane=lane,
                 driven_by=driven_by,
                 caller_env=caller_env,
+                dead_sign_ins=dead_sign_ins,
             )
         )
         self._inflight.add(task)
@@ -425,8 +431,10 @@ class ChatSendService:
         user_id: str,
         item_id: str,
         driven_by: str | None = None,
-    ) -> PersonEnv:
-        """What the caller behind this send contributes to the turn's tool env.
+    ) -> tuple[PersonEnv, list[DeadSignIn]]:
+        """What the caller behind this send contributes to the turn's tool env —
+        and the sign-ins whose refresh token was reported dead, for a person at
+        the request to be shown (`docs/plan-env-token-refresh.md` D6).
 
         Empty whenever there is no seam. With one, a send that holds a request
         asks the seam about that request; a send the PLATFORM started on its
@@ -463,7 +471,7 @@ class ChatSendService:
                 # Neither a request nor the platform's own driver: the safe
                 # side, as before this plan (review round 1, R6) — nothing of
                 # anybody's.
-                return PersonEnv()
+                return PersonEnv(), []
             # The goal driver continues ONE person's chat: the seam's
             # request-less answer, with their own values over it — if they may
             # still talk to the agent here.
@@ -475,20 +483,37 @@ class ChatSendService:
                     )
                 except Exception:
                     self._request_env_failed(item_id)
-            return await unattended_layer(
+            env = await unattended_layer(
                 self._private_env,
                 headless=headless,
                 acting_for=user_id,
                 item_id=item_id,
                 verb="converse",
             )
+            # Nobody at the request: a dead sign-in is notified, not shown (D4).
+            outcome = await self._refreshed(env, user_id=user_id, item_id=item_id, in_chat=False)
+            return outcome.person, []
         fresh: dict[str, str] | None = None
         if self._request_env is not None:
             try:
                 fresh = await self._request_env.env_for(request, user_id=user_id, item_id=item_id)
             except Exception:
                 self._request_env_failed(item_id)
-        return await private_layer(self._private_env, user_id=user_id, item_id=item_id, fresh=fresh)
+        env = await private_layer(self._private_env, user_id=user_id, item_id=item_id, fresh=fresh)
+        outcome = await self._refreshed(env, user_id=user_id, item_id=item_id, in_chat=True)
+        return outcome.person, outcome.rejected
+
+    async def _refreshed(
+        self, env: PersonEnv, *, user_id: str, item_id: str, in_chat: bool
+    ) -> RefreshOutcome:
+        """``env`` with any near-expiry token refreshed first
+        (`docs/plan-env-token-refresh.md`). The shared copy, when refreshed, is
+        written to the item, where the turn reads it next."""
+        if self._env_refresher is None:
+            return RefreshOutcome(person=env, shared={})
+        return await self._env_refresher.apply(
+            env, user_id=user_id, item_id=item_id, in_chat=in_chat
+        )
 
     @staticmethod
     def _request_env_failed(item_id: str) -> NoReturn:
@@ -902,6 +927,7 @@ class ChatSendService:
         lane: CallLane = "background",
         driven_by: str | None = None,
         caller_env: PersonEnv | None = None,
+        dead_sign_ins: list[DeadSignIn] | None = None,
     ) -> None:
         """Append the user message to conversation ``rid``, open its claim, then
         build the RCA turn ctx from ITS history and enqueue the turn on
@@ -957,6 +983,19 @@ class ChatSendService:
                 markings=sent_markings,
             )
         )
+        # plan-env-token-refresh D6: a sign-in whose refresh token is dead is
+        # told under the question it came with — a platform message with that
+        # sign-in's button, never replayed to the model.
+        for dead in dead_sign_ins or []:
+            conv.messages.append(
+                Message(
+                    role=SIGN_IN_ROLE,
+                    content=f"The sign-in to {dead.provider.label} has expired. Sign in again.",
+                    created_at=created,
+                    sign_in_provider=dead.provider.id,
+                    sign_in_layer=dead.layer,
+                )
+            )
         self._conv_rm.update(rid, conv)
         # plan-graceful-shutdown P3: from this write on, the question exists and
         # a reply is owed. The claim is what lets ANOTHER pod pay it if this one
@@ -1091,13 +1130,17 @@ class ChatSendService:
             # The author's own stored values (`plan-wui-viewer-login`): kept on
             # the shared backend so exactly this peer has them; the claim
             # itself still carries none.
-            return await unattended_layer(
+            env = await unattended_layer(
                 self._private_env,
                 headless=headless,
                 acting_for=claim.author,
                 item_id=claim.investigation_id,
                 verb="converse",
             )
+            outcome = await self._refreshed(
+                env, user_id=claim.author, item_id=claim.investigation_id, in_chat=False
+            )
+            return outcome.person
 
         task = asyncio.create_task(
             self._start_turn(
@@ -1573,6 +1616,20 @@ class ChatSendService:
                             answers=body.answers,
                         ),
                     )
+                    # plan-env-token-refresh D6: the question's sign-in notices,
+                    # live — the persisted copy alone does not reach a viewer
+                    # whose live log is ahead of the store.
+                    for m in conv.messages:
+                        if m.role == SIGN_IN_ROLE and m.created_at == created:
+                            self._turn_engine.publish(
+                                engine_key,
+                                SignInExpired(
+                                    provider=m.sign_in_provider or "",
+                                    layer=m.sign_in_layer or "private",
+                                    text=m.content,
+                                    created_at=m.created_at,
+                                ),
+                            )
                 # #492: flush the item's live sandbox to durable when THIS turn ends, so
                 # durable lags by at most one turn (guarantee (2)). Runs on the engine's
                 # worker, off this POST's back; a flush failure never fails the turn.
