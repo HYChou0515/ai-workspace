@@ -32,6 +32,7 @@ tool can run without it is the tool's own business.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Literal
 
 SHARED_FIRST = "shared_first"
 PRIVATE_FIRST = "private_first"
@@ -76,6 +77,46 @@ def is_blank(value: str) -> bool:
     return not value.strip(_BLANK)
 
 
+Layer = Literal["shared", "private", "personal", "service", "none"]
+
+
+def layer_of(
+    name: str,
+    *,
+    shared: dict[str, str],
+    private: dict[str, str],
+    policy: dict[str, str],
+    personal: dict[str, str] | None = None,
+    service: dict[str, str] | None = None,
+) -> Layer:
+    """Which layer a tool's value for ``name`` comes from — THE order table.
+
+    ``resolve_env`` reads its values through this, so the two cannot drift;
+    a refresh writes back to the layer named here
+    (`docs/plan-env-token-refresh.md` D3). ``"none"``: no layer holds a
+    non-blank value, and the name is not handed to the tool at all."""
+    layers: dict[Layer, dict[str, str]] = {
+        "shared": shared,
+        "private": private,
+        "personal": personal or {},
+        "service": service or {},
+    }
+    rule = policy.get(name, SHARED_FIRST)
+    order: tuple[Layer, ...]
+    if rule == PRIVATE_ONLY:
+        order = ("private", "personal", "service")
+    elif rule == PRIVATE_FIRST:
+        order = ("private", "personal", "service", "shared")
+    else:
+        order = ("shared", "private", "personal", "service")
+    for layer in order:
+        # A blank value is not a value: it does not hide the next layer, and
+        # a name blank everywhere is not handed to the tool at all.
+        if not is_blank(layers[layer].get(name, "")):
+            return layer
+    return "none"
+
+
 def resolve_env(
     *,
     shared: dict[str, str],
@@ -108,18 +149,11 @@ def resolve_env(
     # would tell its tools I hold that name even where the item's value wins
     # (round 1, N1). A name only I hold sits where it ranks, under this item's.
     mine_only = {n: v for n, v in personal.items() if n not in private and n not in shared}
+    layers = {"shared": shared, "private": private, "personal": personal, "service": service}
     for name in {**service, **mine_only, **private, **shared}:
-        rule = policy.get(name, SHARED_FIRST)
-        if rule == PRIVATE_ONLY:
-            order = (private, personal, service)
-        elif rule == PRIVATE_FIRST:
-            order = (private, personal, service, shared)
-        else:
-            order = (shared, private, personal, service)
-        for layer in order:
-            # A blank value is not a value: it does not hide the next layer, and
-            # a name blank everywhere is not handed to the tool at all.
-            if not is_blank(layer.get(name, "")):
-                env[name] = layer[name]
-                break
+        layer = layer_of(
+            name, shared=shared, private=private, policy=policy, personal=personal, service=service
+        )
+        if layer != "none":
+            env[name] = layers[layer][name]
     return env

@@ -34,6 +34,7 @@ import { useStickToBottom } from "../hooks/useStickToBottom";
 import { useT, type MsgKey } from "../lib/i18n";
 import { AskUserCard, type AskUserAnswer } from "./AskUserCard";
 import { ErrorNotice } from "./ErrorNotice";
+import { SignInNotice } from "./SignInNotice";
 import { ShownFiles } from "./ShownFiles";
 import { MarkingChips } from "./MarkingChips";
 import { ShownLayoutCard } from "./ShownLayoutCard";
@@ -384,6 +385,10 @@ export function EntryView({
   }
   if (entry.kind === "mention") {
     return <MentionLine by={entry.by} users={entry.users} note={entry.note} />;
+  }
+  if (entry.kind === "sign_in") {
+    // plan-env-token-refresh D6: a sign-in to do again, with its button.
+    return <SignInNotice provider={entry.provider} layer={entry.layer} text={entry.text} />;
   }
   if (entry.kind === "notice") {
     // #624: a quiet but unmissable line — the model's memory horizon moved.

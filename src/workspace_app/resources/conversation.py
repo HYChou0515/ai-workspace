@@ -292,6 +292,17 @@ class Message(Struct):
     markings: list[SentMarking] = field(default_factory=list)
     """Only set when role=user (#847 P7) — the markings sent with this message."""
 
+    sign_in_provider: str | None = None
+    """Only set when role=sign_in (`docs/plan-env-token-refresh.md` D6): the id
+    of the deploy's sign-in (`IEnvProvider.id`) whose refresh token was reported
+    dead, so the chat can draw that sign-in's button. A platform message, never
+    replayed to the model."""
+
+    sign_in_layer: str | None = None
+    """Only set when role=sign_in: where the dead token was read from —
+    ``personal`` (my environment variables), ``private`` (this item, mine) or
+    ``shared`` — so signing in again writes it back there (D3)."""
+
 
 class Conversation(Struct):
     item_id: str

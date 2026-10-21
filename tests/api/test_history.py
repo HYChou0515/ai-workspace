@@ -598,6 +598,9 @@ def test_a_message_moves_only_when_something_it_did_not_see_sits_after_it():
 
     fresh = [_T("user", "Q1", 1, "a"), _T("notice", "older left out", 2)]
     assert must_move(fresh, [(1, "a")], set()) is False
+    # The sign-in message is written under its question when it is accepted.
+    signed = [_T("user", "Q1", 1, "a"), _T("sign_in", "ERP sign-in expired", 1)]
+    assert must_move(signed, [(1, "a")], set()) is False
     waited = [_T("user", "Q2", 2, "a"), _T("assistant", "A1", 3)]
     assert must_move(waited, [(2, "a")], set()) is True
     # Another unanswered question after it is not something it read past.
@@ -626,5 +629,27 @@ def test_placing_a_message_finds_its_author_too():
 
     thread = [_T("user", "Bob's", 5, "bob"), _T("user", "Ann's", 5, "ann")]
     placed = take_person_message(thread, 5, "ann")
-    assert placed is not None and placed.content == "Ann's"
+    assert [m.content for m in placed] == ["Ann's"]
     assert [m.content for m in thread] == ["Bob's"]
+    assert take_person_message(thread, 9, "ann") == []
+
+
+def test_placing_a_message_brings_the_sign_in_message_written_under_it():
+    """env-token-refresh D6 writes "the sign-in to X has expired" under its
+    question when the question is accepted. A queued question that moves to
+    where its turn read it takes that line along — left behind, it would sit
+    above the answer the question waited for, under someone else's question.
+    Only the lines directly under THIS message: Bob's, sent the same
+    millisecond, keeps his."""
+    from workspace_app.api.turns import take_person_message
+
+    thread = [
+        _T("user", "Ann's", 5, "ann"),
+        _T("sign_in", "Ann: ERP expired", 5),
+        _T("user", "Bob's", 5, "bob"),
+        _T("sign_in", "Bob: ERP expired", 5),
+        _T("assistant", "A1", 6),
+    ]
+    placed = take_person_message(thread, 5, "ann")
+    assert [m.content for m in placed] == ["Ann's", "Ann: ERP expired"]
+    assert [m.content for m in thread] == ["Bob's", "Bob: ERP expired", "A1"]

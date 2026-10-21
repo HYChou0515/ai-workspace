@@ -226,6 +226,19 @@ export type ContextTrimmed = {
   dropped: number;
 };
 
+/** `docs/plan-env-token-refresh.md` D6: a sign-in whose refresh token is dead,
+ * announced under the question it came with. The durable record is the
+ * `sign_in` message; this puts it on screen while the turn runs, and keeps it
+ * there when the store stays "behind" the live log. Mirrors api/events.py
+ * SignInExpired. */
+export type SignInExpired = {
+  type: "sign_in_expired";
+  provider: string;
+  layer: "personal" | "private" | "shared";
+  text: string;
+  created_at?: number | null;
+};
+
 /** #739: the thread outgrew the window, so this turn first spends a round trip
  * summarising the part that no longer fits. Live-only — the durable record is
  * the `summary` message. It exists so the chat does not look frozen during the
@@ -340,6 +353,7 @@ export type AgentEvent =
   | TodosUpdated
   | GoalUpdated
   | ContextTrimmed
+  | SignInExpired
   | Compacting
   | UserMessage
   | Interjected

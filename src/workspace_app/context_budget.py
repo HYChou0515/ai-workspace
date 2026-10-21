@@ -422,7 +422,7 @@ def _replayed(messages: list[Any]) -> list[Any]:
     kept: list[Any] = []
     for m in messages:
         role = getattr(m, "role", "")
-        if role == "notice":
+        if role in ("notice", "sign_in"):  # platform messages, never replayed
             continue
         # #37: a terminal failure is a human-only diagnostic and never re-enters
         # the model's context — EXCEPT a user cancellation, which is replayed as

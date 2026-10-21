@@ -218,3 +218,9 @@ CLAUDE.md「Chat turns run through one `ChatTurnEngine`」那段說 Q1, Q2, A1, 
   `CallRetryModel` 都用它)—— #915「一輪共用一個等待池」在插話後仍成立;步數重算(Q4)是因為有人在指揮,但有人
   說話不會讓服務比較不限流。(2) 非串流路徑被插話切斷時補發的工具事件,也帶上子 agent 的失敗與完整輸出:三處
   共用 `_finished_tool`。(3) 超量測試兩種呼叫形狀(串流 / 一次取回)都跑。
+- **C20〔施工〕合併 #985(token 自動 refresh)後:** #985 在問題被接受時,把「X 的登入已過期」(`sign_in`)寫在問題
+  正下方。(1) 它和 #624 notice 一樣是「關於這個問題的」,不是問題沒看過的新東西:`must_move` 不因它搬移
+  (`_ABOUT_THE_TURN`)。少了這條,每一個帶過期登入的問題都會被搬到自己的 `sign_in` 下面 —— #985 自己的
+  `test_a_person_in_the_chat_sees_a_sign_in_message_after_their_question` 在合併後的樹上就紅了。(2) 問題真的要搬時
+  (排在別人後面),緊接在它下面、同一個時間戳的 `sign_in` 跟著一起搬(`take_person_message` 回傳一串);只拿
+  緊鄰的,同一毫秒送出的另一個人的 `sign_in` 留給他。

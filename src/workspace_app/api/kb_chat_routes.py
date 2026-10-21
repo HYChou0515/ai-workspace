@@ -1035,9 +1035,9 @@ def register_kb_chat_routes(
                     if m.role == PLACE_ROLE:
                         # plan-interjection Q3: the question (stored at acceptance)
                         # moves to where this turn read it.
-                        placed = take_person_message(fresh.messages, m.created_at, m.author)
-                        if placed is not None:
-                            fresh.messages.append(placed)
+                        fresh.messages.extend(
+                            take_person_message(fresh.messages, m.created_at, m.author)
+                        )
                         continue
                     km = KbMessage(
                         role=m.role,

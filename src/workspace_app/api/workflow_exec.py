@@ -37,6 +37,7 @@ from ..workflow.run import RunStatus, WorkflowRun, is_execution
 from ..workflow.run_identity import RunIdentities
 from ..workflow.steps import CURRENT_STEP, StepRef
 from .env_layers import PersonEnv
+from .env_refresh import EnvRefresher
 from .events import TurnEnded
 from .notifications import notification_sent, notify
 from .private_env import unattended_layer
@@ -131,8 +132,12 @@ class WorkflowExecutor:
         admission: AdmissionGate | None = None,
         request_env: IRequestEnv | None = None,
         private_env: PrivateEnvStore | None = None,
+        env_refresher: EnvRefresher | None = None,
     ) -> None:
         self._spec = spec
+        # plan-env-token-refresh: a near-expiry token is refreshed before a
+        # node's tools get it. None ⇒ never.
+        self._env_refresher = env_refresher
         # `plan-wui-viewer-login`: each person's private env values per item; a
         # run started by a person overlays theirs (`workflow.run_identity`).
         self._private_env = private_env
@@ -501,7 +506,7 @@ class WorkflowExecutor:
         # values over the seam's answer — not the captured user, who for a
         # page's run is the owner it is billed to.
         env_user, env_verb = await asyncio.to_thread(self._run_identity, run_id)
-        return await unattended_layer(
+        env = await unattended_layer(
             self._private_env,
             headless=headless,
             acting_for=env_user,
@@ -509,6 +514,12 @@ class WorkflowExecutor:
             # The right that admitted them to start it — which they must still hold.
             verb=cast("Verb", env_verb),
         )
+        if self._env_refresher is None:
+            return env
+        outcome = await self._env_refresher.apply(
+            env, user_id=env_user, item_id=item_id, in_chat=False
+        )
+        return outcome.person
 
     async def run_sandbox(
         self,

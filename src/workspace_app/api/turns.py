@@ -106,9 +106,13 @@ def _est_tokens(m: Any) -> int:
 
 #: Role of the in-thread marker that says part of a conversation no longer
 #: reaches the model (#624). It is never replayed into LLM history —
-#: `history_items` only folds user/assistant/tool/error — so telling the user
-#: costs the model nothing.
+#: `history_items` replays only user/assistant/tool/summary and a user's
+#: cancellation — so telling the user costs the model nothing.
 CONTEXT_NOTICE_ROLE = "notice"
+#: `docs/plan-env-token-refresh.md` D6: "the sign-in to X has expired" with that
+#: sign-in's button. Its own role, not `notice`: `already_noticed` reads any
+#: `notice` as "the context was told already" and would silence #624.
+SIGN_IN_ROLE = "sign_in"
 # plan-graceful-shutdown P4: what `aclose` allows past its budget — once for
 # the handover's store write, once for the cancelled turns' teardown — so an
 # engine with turns past the deadline adds up to 2 × this to the lifespan's
@@ -237,19 +241,32 @@ def thread_without(messages: list[Any], keys: Iterable[MessageKey]) -> list[Any]
     return out
 
 
-def take_person_message(messages: list[Any], at: int, author: str | None = None) -> Any | None:
+def take_person_message(messages: list[Any], at: int, author: str | None = None) -> list[Any]:
     """Remove and return the person's message stamped `at` (by `author`, when
     named — two people can send in the same millisecond), for a `PLACE_ROLE`
-    marker to put back where the turn read it. None when it is gone (undone
-    meanwhile): there is nothing to place."""
+    marker to put back where the turn read it — together with the sign-in
+    messages written directly under it when it was accepted (env-token-refresh
+    D6), which belong with it. Empty when it is gone (undone meanwhile): there
+    is nothing to place."""
     for i, m in enumerate(messages):
         if _is_person_message(m, at) and (author is None or getattr(m, "author", None) == author):
-            return messages.pop(i)
-    return None
+            end = i + 1
+            while (
+                end < len(messages)
+                and getattr(messages[end], "role", "") == SIGN_IN_ROLE
+                and getattr(messages[end], "created_at", None) == at
+            ):
+                end += 1
+            taken = messages[i:end]
+            del messages[i:end]
+            return taken
+    return []
 
 
 # Written about a turn while it is prepared — not news to the question it is for.
-_ABOUT_THE_TURN = frozenset({CONTEXT_NOTICE_ROLE, SUMMARY_ROLE})
+# The sign-in message is written under its question at acceptance (env-token-
+# refresh D6): counting it would move every such question below its own notice.
+_ABOUT_THE_TURN = frozenset({CONTEXT_NOTICE_ROLE, SUMMARY_ROLE, SIGN_IN_ROLE})
 
 
 def must_move(

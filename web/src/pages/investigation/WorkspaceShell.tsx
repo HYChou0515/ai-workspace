@@ -3516,6 +3516,11 @@ function PanelBody({
           // #624: the context horizon moved.
           return <LogLine key={i} ts={fmtTs(e.at)} kind="warn" text={e.text} />;
         }
+        if (e.kind === "sign_in") {
+          // plan-env-token-refresh D6: the flat transcript states it; the
+          // button is the chat view's.
+          return <LogLine key={i} ts={fmtTs(e.at)} kind="warn" text={e.text} />;
+        }
         if (e.kind === "summary") {
           // #739: the earlier span was summarised. The log view is a flat
           // transcript, so it states the fact on one line — the originals are

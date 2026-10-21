@@ -2011,6 +2011,14 @@ export const messages = {
     "zh-TW": "登入成功，取得以下變數。按「儲存」存進 Private（你在這個 workspace 的值）。",
     en: "Signed in and got these. Press Save to keep them in Private (your values in this workspace).",
   },
+  "envreq.loginGotPersonal": {
+    "zh-TW": "登入成功，取得以下變數。按「儲存」存進 Private(跨workspace)（你在所有 workspace 共用的值）。",
+    en: "Signed in and got these. Press Save to keep them in Private (all workspaces) (your values for every workspace).",
+  },
+  "env.signInExpired": {
+    "zh-TW": "{label} 登入已過期，請重新登入。",
+    en: "The sign-in to {label} has expired. Sign in again.",
+  },
   "envreq.wait": {
     "zh-TW": "設定好之後按「重試」，AI 會重新執行 {tool}。",
     en: "Once these are set, press Retry and the AI runs {tool} again.",
