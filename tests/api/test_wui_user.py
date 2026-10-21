@@ -212,7 +212,6 @@ def test_the_view_file_cannot_be_reached_by_another_spelling(path: str):
     assert put.status_code == 403, put.text
 
 
-
 def test_rebuilding_a_page_still_needs_the_right_to_run_code():
     """Review round 1 (H2): a WUI User may save inside the page's folder, so a
     rebuild gated on use_wui ran a build script they wrote — any command, outside
