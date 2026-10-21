@@ -33,6 +33,7 @@ function ctx(over: Partial<BridgeContext> = {}, files: Record<string, string> = 
   return {
     fs,
     folder: "/sales",
+    page: "/sales/page.ai.yaml",
     openFile: null,
     me: "alice",
     declaredTools: [],
@@ -72,7 +73,25 @@ describe("dispatchWuiRequest", () => {
     const res = await dispatchWuiRequest(req("writeFile", { path: "data.json", text: "[1]" }), c);
 
     expect(res).toMatchObject({ ok: true });
-    expect(c.fs.writeFile).toHaveBeenCalledWith("/sales/data.json", "[1]");
+    expect(c.fs.writeFile).toHaveBeenCalledWith("/sales/data.json", "[1]", { page: "/sales/page.ai.yaml" });
+  });
+
+  it("names its page on every write and delete, so the server can admit a WUI User", async () => {
+    // docs/plan-wui-user.md D12: the header is what lets a WUI User's page save
+    // while the same person's save from the file tree is refused.
+    const c = ctx();
+    await dispatchWuiRequest(req("deleteFile", { path: "old.json" }), c);
+    expect(c.fs.deleteFile).toHaveBeenCalledWith("/sales/old.json", { page: "/sales/page.ai.yaml" });
+  });
+
+  it("refuses to change its own view file, which declares what it may call", async () => {
+    for (const verb of ["writeFile", "deleteFile"]) {
+      const c = ctx();
+      const res = await dispatchWuiRequest(req(verb, { path: "page.ai.yaml", text: "view: wui" }), c);
+      expect(res).toMatchObject({ ok: false });
+      expect(c.fs.writeFile).not.toHaveBeenCalled();
+      expect(c.fs.deleteFile).not.toHaveBeenCalled();
+    }
   });
 
   it("refuses to write outside its folder, and says why in a sentence", async () => {
@@ -112,7 +131,7 @@ describe("dispatchWuiRequest", () => {
     const res = await dispatchWuiRequest(req("deleteFile", { path: "old.json" }), c);
 
     expect(res).toMatchObject({ ok: true });
-    expect(c.fs.deleteFile).toHaveBeenCalledWith("/sales/old.json");
+    expect(c.fs.deleteFile).toHaveBeenCalledWith("/sales/old.json", { page: "/sales/page.ai.yaml" });
   });
 
   it("refuses a write when the service itself cannot write", async () => {

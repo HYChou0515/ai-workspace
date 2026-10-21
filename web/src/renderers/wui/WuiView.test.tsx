@@ -2430,7 +2430,9 @@ describe("WuiView: Deploy", () => {
     act(() => publishFileChanged("item1", "/sales/package.json")); // the broadcast echo
 
     await waitFor(() => expect(screen.queryByRole("button", { name: /^rebuild$/i })).toBeNull());
-    expect(vi.mocked(fs.writeFile)).toHaveBeenCalledWith("/sales/package.json", expect.any(String));
+    expect(vi.mocked(fs.writeFile)).toHaveBeenCalledWith("/sales/package.json", expect.any(String), {
+      page: "/sales/page.ai.yaml", // the page names itself on the write (plan-wui-user D12)
+    });
   });
 
   it("Cancel after a Deploy pressed before the manifest landed — toggling Auto-rebuild is still not an open", async () => {

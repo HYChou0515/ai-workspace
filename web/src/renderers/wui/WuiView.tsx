@@ -780,6 +780,7 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
       void dispatchWuiRequest(request, {
         fs,
         folder,
+        page: path,
         openFile,
         me: meReady ? me : null,
         declaredTools,

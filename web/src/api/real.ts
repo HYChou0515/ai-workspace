@@ -26,6 +26,7 @@ import {
 import { encodePath } from "./refPath";
 import { parseSseStream } from "./sse";
 import type {
+  PageWrite,
   ActivityEntry,
   ApiClient,
   AppItem,
@@ -139,6 +140,13 @@ function searchBody(opts: SearchOptions): Record<string, unknown> {
     include: opts.include ?? "",
     exclude: opts.exclude ?? "",
   };
+}
+
+/** docs/plan-wui-user.md D12: the header naming the page a write comes through. */
+export const WUI_PAGE_HEADER = "X-Wui-Page";
+
+function pageHeaders(opts: PageWrite | undefined): Record<string, string> | undefined {
+  return opts?.page ? { [WUI_PAGE_HEADER]: opts.page } : undefined;
 }
 
 export const realApi: ApiClient = {
@@ -506,10 +514,10 @@ export const realApi: ApiClient = {
     return `${API_PREFIX}/a/${encodeURIComponent(slug)}/items/${encodeURIComponent(investigationId)}/files/${encodePath(path)}`;
   },
 
-  async writeFile(slug: string, investigationId, path, body) {
+  async writeFile(slug: string, investigationId, path, body, opts) {
     const resp = await apiFetch(
       `/a/${encodeURIComponent(slug)}/items/${encodeURIComponent(investigationId)}/files/${encodePath(path)}`,
-      { method: "PUT", body },
+      { method: "PUT", body, headers: pageHeaders(opts) },
     );
     if (!resp.ok) {
       throw new HttpError(
@@ -541,10 +549,10 @@ export const realApi: ApiClient = {
     });
   },
 
-  async deleteFile(slug: string, investigationId: string, path: string) {
+  async deleteFile(slug: string, investigationId: string, path: string, opts?: PageWrite) {
     const resp = await apiFetch(
       `/a/${encodeURIComponent(slug)}/items/${encodeURIComponent(investigationId)}/files/${encodePath(path)}`,
-      { method: "DELETE" },
+      { method: "DELETE", headers: pageHeaders(opts) },
     );
     if (!resp.ok) throw new HttpError(resp.status, `delete ${path} failed: ${resp.status}`);
   },

@@ -21,7 +21,7 @@ import type { FileService } from "../../api/fileService";
 import type { OpenFile } from "../../hooks/openFile";
 import { readAsset } from "./assets";
 import { ok, refuse, refuseExpected, type WuiRequest, type WuiResponse } from "./protocol";
-import { isOwnFile, resolveReadPath, resolveWritePath } from "./paths";
+import { isOwnFile, pageMayWrite, resolveReadPath, resolveWritePath } from "./paths";
 
 export type CallTool = (
   name: string,
@@ -64,6 +64,13 @@ export type PageJobs = {
 
 export type BridgeContext = {
   fs: FileService;
+  /**
+   * The page's view file (workspace-absolute). Every write and delete names it
+   * (docs/plan-wui-user.md D12): the server admits a WUI User's write only
+   * through a named page, inside its folder. Required, so a host that forgets
+   * it does not compile rather than quietly sending writes no WUI User can make.
+   */
+  page: string;
   /** The page's own folder — the write boundary. */
   folder: string;
   /** The workspace's file opener, or `null` outside a shell that has one. */
@@ -132,6 +139,10 @@ export type BridgeContext = {
  * so the ordinary sentence ("only inside its own folder") is true, useless and
  * reads as unfixable. Naming the cause names the fix: move the file.
  */
+function ownViewFile(target: string): string {
+  return `${target} is this page's own view file, which says what the page may call, so a page cannot change it.`;
+}
+
 function cannotWrite(folder: string, verb: string, target: string): string {
   return folder
     ? `This page can only write inside its own folder (${folder}), so it cannot ${verb} ${target}.`
@@ -290,7 +301,8 @@ export async function dispatchWuiRequest(
       if (!fs.caps.write) return refuse(id, "This workspace is read-only, so nothing can be saved.");
       const path = resolveWritePath(folder, raw);
       if (path === null) return refuse(id, cannotWrite(folder, "save to", raw));
-      await fs.writeFile(path, text);
+      if (!pageMayWrite(ctx.page, path)) return refuse(id, ownViewFile(raw));
+      await fs.writeFile(path, text, { page: ctx.page });
       ctx.onWrote?.(path);
       return ok(id, { path });
     }
@@ -301,7 +313,8 @@ export async function dispatchWuiRequest(
       if (!fs.caps.delete) return refuse(id, "This workspace is read-only, so nothing can be deleted.");
       const path = resolveWritePath(folder, raw);
       if (path === null) return refuse(id, cannotWrite(folder, "delete", raw));
-      await fs.deleteFile(path);
+      if (!pageMayWrite(ctx.page, path)) return refuse(id, ownViewFile(raw));
+      await fs.deleteFile(path, { page: ctx.page });
       ctx.onWrote?.(path);
       return ok(id, { path });
     }
