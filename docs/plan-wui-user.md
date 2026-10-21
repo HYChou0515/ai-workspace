@@ -88,7 +88,7 @@ A route admits a request when the person holds the route's own verb, as today, *
 request comes through a page and the person holds `use_wui` — a union, so nobody loses
 what they can do now.
 
-- **The WUI routes** (`…/wui/build`, `…/wui/run`, `…/wui/tools/{name}/call`,
+- **The WUI routes** (`…/wui/run`, `…/wui/tools/{name}/call`,
   `…/wui/agents/{name}/call`, `…/wui/jobs` and its status / stop) are only ever called by a
   page, so each takes its current verb or `use_wui`.
 - **File writes and deletes stay on the workspace's own routes** (`PUT` / `DELETE
@@ -219,3 +219,26 @@ Where the build adds to or differs from the sections above; this section wins.
   checkbox shows the verb's name, `use_wui`, like every other verb there.
 - **Kept out of the collection dialogs.** `use_wui` is optional on the wire type and not
   in `ALL_VERBS`: collections and the skill hub have no pages.
+
+### Decided while the user was away — proposals, pending their word (review round 1)
+
+Review round 1 found three questions only the user can settle. The PR is not merged until
+they answer; these are the interim choices, each the conservative one and each easy to
+reverse:
+
+- **Q1 → rebuild stays on `execute` [proposal].** A WUI User may save inside the page's
+  folder (D12); with rebuild on `use_wui` they could save a build script and run it —
+  any command, outside the folder too — which breaks D12's bound. So `…/wui/build` asks
+  `execute`, as before this PR: a WUI User sees a new version once someone who may run
+  code rebuilds, and their own rebuild-on-open is refused once and switches itself off.
+  The alternatives put to the user: forbid page writes to build files, or accept it as a
+  crafted request under D1.
+- **Q2 → open [user].** D4 says a WUI User cannot see the item's shared values; they can —
+  as every member who can see the item always could (`GET …/env/layers` and the item
+  itself return them to `read_meta`). Hiding them means redacting `env_vars` for everyone
+  without `write_meta`, which changes what Readers and Participants see too, so it waits
+  for the user. `docs/wui.md` says plainly that shared values are visible.
+- **Q3 → no request button [proposal].** Anyone who sees the banner is already inside the
+  workspace, where #968's request flow notifies nobody. The banner names the owner and
+  says what to ask for; a request that notifies the owner from inside is the alternative
+  put to the user.

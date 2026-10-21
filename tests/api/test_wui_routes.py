@@ -449,15 +449,15 @@ def test_build_refuses_a_folder_outside_the_workspace():
     assert sandbox.calls == []
 
 
-def test_build_needs_the_authority_to_use_the_items_pages():
-    # It runs a command in the item's sandbox, from the page's own source —
-    # rebuilding on open is part of using a page (docs/plan-wui-user.md D3).
-    # execute still admits it: execute implies use_wui (D10).
+def test_build_needs_the_authority_to_run_things():
+    # It runs a command in the item's sandbox — the build script, which a WUI
+    # User may have just written through the page (docs/plan-wui-user.md §6,
+    # review round 1). That is the notebook cell's verb.
     client, _, _, locator = build(sandbox=_BuildSandbox([b"ok\n"]))
 
     client.post(BUILD_URL, json={"folder": "/page"})
 
-    assert locator.asked_verb == ["use_wui"]
+    assert locator.asked_verb == ["execute"]
 
 
 def test_build_provisions_the_dependencies_the_mirror_never_kept():

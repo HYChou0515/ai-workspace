@@ -346,11 +346,13 @@ def register_wui_routes(
         errors are the whole value. A route that answered only at the end would
         give a spinner and no idea whether anything was happening.
 
-        The verb is `use_wui` (docs/plan-wui-user.md D3): rebuilding a page is
-        part of using it — and `execute`, which runs the same command in a
-        notebook cell, implies it (D10).
+        The verb is `execute`: this runs the folder's build script in the item's
+        sandbox, the same thing a notebook cell does. NOT `use_wui`: a WUI User
+        may save inside the page's folder (D12), so a rebuild they could start
+        would run a build script they wrote — any command, outside the folder
+        too (docs/plan-wui-user.md §6, review round 1). Pending the user's word.
         """
-        investigation_id = locator.require_access(slug, item_id, "use_wui")
+        investigation_id = locator.require_access(slug, item_id, "execute")
         cwd = _build_dir(body.folder)
         if cwd is None:
             raise HTTPException(status_code=400, detail=f"{body.folder} is not a page folder.")

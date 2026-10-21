@@ -15,7 +15,6 @@ _READER = "rd"
 # Every route a page's bridge reaches for its buttons (plan §3.2), with a body that
 # gets past validation — what is asserted is only whether the GATE lets them in.
 _PAGE_CALLS = [
-    ("post", "build", {"folder": "/page"}),
     ("post", "run", {"workflow": "nope", "inputs": {}}),
     ("post", "tools/lot-status/call", {}),
     ("post", "agents/log-digger/call", {"input": "x"}),
@@ -211,3 +210,17 @@ def test_the_view_file_cannot_be_reached_by_another_spelling(path: str):
             _files(item_id, path), content=b"view: wui\nEVIL: 1\n", headers={"X-Wui-Page": _VIEW}
         )
     assert put.status_code == 403, put.text
+
+
+
+def test_rebuilding_a_page_still_needs_the_right_to_run_code():
+    """Review round 1 (H2): a WUI User may save inside the page's folder, so a
+    rebuild gated on use_wui ran a build script they wrote — any command, outside
+    the folder too. Rebuilding stays on `execute` (a proposal pending the user's
+    word, plan §6); a WUI User is refused, by the verb they lack."""
+    client, item_id, spec = _app(SubRunner(), user=_WUI_USER, creator="bob")
+    _restricted(spec, item_id)
+    with client:
+        resp = client.post(_url(item_id, "build"), json={"folder": "/page"})
+    assert resp.status_code == 403
+    assert resp.json()["detail"] == "not authorized to execute"
