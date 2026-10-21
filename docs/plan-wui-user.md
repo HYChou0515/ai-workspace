@@ -36,7 +36,7 @@ What a page's buttons hit, and the verb each route requires:
   which calls the ordinary file service with the viewer's session. The server cannot
   tell a page's save from a save in the file tree.
 - "A page can only write inside its own folder" is checked only in the browser
-  (`resolveWritePath`, `cannotWrite`, `bridge.ts:135-139`, `:292`).
+  (`resolveWritePath`, `paths.ts:141-152` at `59811856`; `bridge.ts:292` calls it).
 - What a page runs is authorised as the item's OWNER (`captured_user`), with the
   pressing person's private env values (`wui_routes.py:525-534`, plan-wui-viewer-login
   Q6). That does not change here.
@@ -67,7 +67,7 @@ What a page's buttons hit, and the verb each route requires:
 | D8 | The new role is called **WUI User** **[user]** 「WUI User」. |
 | D9 | Whoever may talk to the item's agent (`converse`, Participant) may also use pages: `converse` implies `use_wui`, so existing Participants keep their role name and gain page use (O1) **[user]** 「可以」. |
 | D10 | Whoever may run code (`execute`, every Collaborator) may also use pages: `execute` implies `use_wui`, so existing Collaborators do not lose page use. A Custom grant of `execute` without `edit_content` can now also save through a page, inside the page's folder (O2) **[user]** 「對」. |
-| D11 | `private_first` keeps its order (private → personal → service → shared). A run nobody presses — a schedule — therefore uses the deployment's service-account value over the item's shared value for a name both hold, where today it uses the item's. The runbook says so (O3) **[user]** 「B」. |
+| D11 | `private_first` keeps its order (private → personal → service → shared). A run nobody presses — a schedule — therefore puts the deployment's service-account value over the item's shared value for a name both hold, where today it uses the item's; a schedule bound to a person (#983) puts that person's own values first of all. The runbook says so (O3) **[user]** 「B」. |
 | D12 | A page's requests carry a header naming the page (its view file's path). A route admits its own verb as today, or — through a page — `use_wui` with four checks: the view file exists, the folder is derived from it on the server, the path is inside that folder (not at the root), and the path is not the view file. Writes keep the workspace's own routes **[user]** 「或是wui放header 後段檢查細一些 這樣不至於全部人都能透過加header亂搞」, 「這樣應該是改動最少的方式」. |
 
 ## 3. Mechanism
@@ -101,7 +101,7 @@ what they can do now.
      folder, `api/wui_content.py:401-405`, so its folder is not evidence of a page);
   3. the written path is inside that folder (`_inside`, `wui_content.py:299-303`, compared
      on segments); a page at the workspace root has no folder and is refused, as the
-     browser already refuses it (`bridge.ts:135-139`);
+     browser already refuses it (`resolveWritePath`, `paths.ts`);
   4. the written path is not the view file itself — it declares the workflows, tools and
      agents the page may call, so writing it would widen what the page may do.
 - **What the header buys.** The file tree, uploads, renames and every other workspace
@@ -188,17 +188,34 @@ Where the build adds to or differs from the sections above; this section wins.
   WUI User fills in their own value from the env panel (D4).
 - **A page's refusal is typed (D7).** `check_access` given a tuple refuses with the LAST
   verb; for `use_wui` the detail is `{"error": "needs_use_wui", "message": …}`
-  (`item_authz.NEEDS_USE_WUI`). Every page call in the browser raises an `HttpError`
-  carrying it (`pageRefusal`), so the pane has one place to recognise it.
+  (`item_authz.NEEDS_USE_WUI`). The page's tool, agent, job, run and build calls raise an
+  `HttpError` carrying it (`pageRefusal`); writes and deletes carry it through
+  `errorCode`. The bridge hands every refusal to the pane before the page hears it
+  (`BridgeContext.onRefused`, and the dispatch's own catch), so the pane recognises it in
+  one function (`noteRefusal`).
 - **Two parity tables hold the browser to the server.**
   `tests/fixtures/item_verb_cases.json` (generated from `authorize`) holds
   `hasItemVerb`, and so the implications D9/D10 and `use_wui ⊇ read_content`;
-  `tests/fixtures/wui_page_write_cases.json` holds `pageMayWrite` to `page_may_write`.
+  `tests/fixtures/wui_page_write_cases.json` is the server's own table for
+  `page_may_write` (paths compared on segments — `//` and `.` collapsed, as the sandbox
+  opens them). The browser does NOT judge the view-file check: it cannot tell who is
+  asking, and an editor's page may still write its own view file.
   Role detection in the share dialog reads what a stored set implies, so a Participant
   or Collaborator stored before `use_wui` is that role, not Custom.
 - **One reader of view files.** `api/wui_page.py` (`load_wui_view`, `page_folder`,
   `page_may_write`) is shared by Deploy and the D12 write check.
 - **`BridgeContext.page` is required**, so a host of the bridge that forgets to name its
   page does not compile, rather than quietly sending writes no WUI User can make.
+- **The view path travels percent-encoded** in `X-Wui-Page` (a header value must be
+  Latin-1); the server decodes it.
+- **#917's sign-in cleanup** decides "this item's value hides mine" with `layer_of`
+  itself, so it follows the default instead of re-spelling it.
+- **The refusal banner** follows NN/g's *Error-Message Guidelines* (say what happened and
+  what fixes it, next to where it happened —
+  <https://www.nngroup.com/articles/error-message-guidelines/>) and is a passive indicator,
+  not a dialog (NN/g, *Indicators, Validations, and Notifications* —
+  <https://www.nngroup.com/articles/indicators-validations-notifications/>). The role and
+  the Custom checkbox reuse the share dialog's existing dropdown and checkboxes; the
+  checkbox shows the verb's name, `use_wui`, like every other verb there.
 - **Kept out of the collection dialogs.** `use_wui` is optional on the wire type and not
   in `ALL_VERBS`: collections and the skill hub have no pages.
