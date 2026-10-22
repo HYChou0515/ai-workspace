@@ -588,7 +588,7 @@ describe("WuiView: rebuilding a page that has a build step", () => {
   });
 
   it("raises the WUI User banner for a build refusal that names use_wui (the wiring, D7)", async () => {
-    // The server's build asks `execute` today (plan §6, Q1), so this refusal is
+    // The server's build asks `execute`, as on master (plan §6, Q1), so this refusal is
     // not sent now; it pins that a build's refusal reaches `noteRefusal` too.
     vi.stubGlobal(
       "fetch",

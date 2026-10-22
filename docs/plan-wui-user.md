@@ -191,7 +191,7 @@ Where the build adds to or differs from the sections above; this section wins.
   (`item_authz.NEEDS_USE_WUI`). The page's tool, agent, job and run calls raise an
   `HttpError` carrying it (`pageRefusal`), and writes and deletes do too (`fileRefusal`);
   both read the body once, under `errorInfo`'s deadline (`http.refusalFrom`). The build
-  asks `execute` (Q1 below), so its refusal does not name `use_wui`. The bridge hands every refusal to the pane before the page hears it
+  asks `execute`, unchanged from master (Q1 below), so its refusal does not name `use_wui`. The bridge hands every refusal to the pane before the page hears it
   (`BridgeContext.onRefused`, and the dispatch's own catch), so the pane recognises it in
   one function (`noteRefusal`).
 - **Two parity tables hold the browser to the server.**
@@ -221,19 +221,17 @@ Where the build adds to or differs from the sections above; this section wins.
 - **Kept out of the collection dialogs.** `use_wui` is optional on the wire type and not
   in `ALL_VERBS`: collections and the skill hub have no pages.
 
-### Decided while the user was away — proposals, pending their word (review round 1)
+### Questions review round 1 raised — settled
 
-Review round 1 found three questions only the user can settle. The PR is not merged until
-they answer; these are the interim choices, each the conservative one and each easy to
-reverse:
+Review round 1 raised three questions. Q2 and Q3 were put to the user and answered; Q1
+was not a question at all:
 
-- **Q1 → rebuild stays on `execute` [proposal].** A WUI User may save inside the page's
-  folder (D12); with rebuild on `use_wui` they could save a build script and run it —
-  any command, outside the folder too — which breaks D12's bound. So `…/wui/build` asks
-  `execute`, as before this PR: a WUI User sees a new version once someone who may run
-  code rebuilds, and their own rebuild-on-open is refused once and switches itself off.
-  The alternatives put to the user: forbid page writes to build files, or accept it as a
-  crafted request under D1.
+- **Q1 → rebuild is unchanged: it asks `execute`, as on master.** This plan never
+  covered rebuilding, and the user declined to widen it 「我們在前期沒有提過 為什麼要節外生枝？」.
+  `…/wui/build` keeps master's gate; only its docstring now also says why a WUI User
+  must not reach it (a save inside the page's folder, D12, could otherwise be a build
+  script). A WUI User sees a new version once someone who may run code rebuilds; their
+  own rebuild-on-open is refused once and switches itself off.
 - **Q2 → shared values stay visible [user] 「不要複雜化後端程式」.** D4 now reads: a WUI
   User enters their own values and cannot CHANGE the item's shared ones. They can see them,
   as every member who can see the item always could (`GET …/env/layers` and the item

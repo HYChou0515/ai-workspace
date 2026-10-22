@@ -215,8 +215,8 @@ def test_the_view_file_cannot_be_reached_by_another_spelling(path: str):
 def test_rebuilding_a_page_still_needs_the_right_to_run_code():
     """Review round 1 (H2): a WUI User may save inside the page's folder, so a
     rebuild gated on use_wui ran a build script they wrote — any command, outside
-    the folder too. Rebuilding stays on `execute` (a proposal pending the user's
-    word, plan §6); a WUI User is refused, by the verb they lack."""
+    the folder too. Rebuilding keeps master's `execute` (plan §6, Q1); a WUI User
+    is refused, by the verb they lack."""
     client, item_id, spec = _app(SubRunner(), user=_WUI_USER, creator="bob")
     _restricted(spec, item_id)
     with client:
