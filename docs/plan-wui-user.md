@@ -36,7 +36,7 @@ What a page's buttons hit, and the verb each route requires:
   which calls the ordinary file service with the viewer's session. The server cannot
   tell a page's save from a save in the file tree.
 - "A page can only write inside its own folder" is checked only in the browser
-  (`resolveWritePath`, `cannotWrite`, `bridge.ts:135-139`, `:292`).
+  (`resolveWritePath`, `paths.ts:141-152` at `59811856`; `bridge.ts:291` calls it).
 - What a page runs is authorised as the item's OWNER (`captured_user`), with the
   pressing person's private env values (`wui_routes.py:525-534`, plan-wui-viewer-login
   Q6). That does not change here.
@@ -60,14 +60,14 @@ What a page's buttons hit, and the verb each route requires:
 | D1 | What must be blocked is action OUTSIDE the page — editing or deleting files in the file tree, the terminal, changing the page, deploying. Doing what the page is built to do, through the page, is allowed. This prevents mistakes; it is not a defence against someone crafting requests by hand **[user]** 「A」. |
 | D2 | The permission model gains a new verb, "use WUI" (`use_wui`) **[user]** 「要多一個權限：使用wui」. |
 | D3 | A holder of `use_wui` can do everything the page can do, and cannot leave the page to change the item: no file-tree edits or deletes, no terminal, no changing the page, no deploy **[user]** 「對」. |
-| D4 | A WUI User can enter their own values (their own sign-in, their own env values); they cannot see or change the item's shared values **[user]** 「要」. |
+| D4 | A WUI User can enter their own values (their own sign-in, their own env values); they cannot change the item's shared values **[user]** 「要」. (First written "cannot see or change"; they can see them, as every member always could — kept so, §6 Q2, **[user]** 「不要複雜化後端程式」.) |
 | D5 | The env default becomes `private_first`, for existing items too. From now on choosing Shared in the panel is stored explicitly and is not affected by the default **[user]** 「a」. |
 | D6 | A WUI User who opens the item sees the whole workspace read-only, exactly as a Reader does — no separate screen **[user]** 「B這樣不用做特規」. |
 | D7 | Someone without `use_wui` who presses a page's button sees, above the page, "this page needs the WUI User permission" and "申請存取" (#968's request flow); someone who cannot change permissions sees the owner's name instead (#968 D4) **[user]** 「Ok」. |
 | D8 | The new role is called **WUI User** **[user]** 「WUI User」. |
 | D9 | Whoever may talk to the item's agent (`converse`, Participant) may also use pages: `converse` implies `use_wui`, so existing Participants keep their role name and gain page use (O1) **[user]** 「可以」. |
 | D10 | Whoever may run code (`execute`, every Collaborator) may also use pages: `execute` implies `use_wui`, so existing Collaborators do not lose page use. A Custom grant of `execute` without `edit_content` can now also save through a page, inside the page's folder (O2) **[user]** 「對」. |
-| D11 | `private_first` keeps its order (private → personal → service → shared). A run nobody presses — a schedule — therefore uses the deployment's service-account value over the item's shared value for a name both hold, where today it uses the item's. The runbook says so (O3) **[user]** 「B」. |
+| D11 | `private_first` keeps its order (private → personal → service → shared). A run nobody presses — a schedule — therefore puts the deployment's service-account value over the item's shared value for a name both hold, where today it uses the item's; a schedule bound to a person (#983) puts that person's own values first of all. The runbook says so (O3) **[user]** 「B」. |
 | D12 | A page's requests carry a header naming the page (its view file's path). A route admits its own verb as today, or — through a page — `use_wui` with four checks: the view file exists, the folder is derived from it on the server, the path is inside that folder (not at the root), and the path is not the view file. Writes keep the workspace's own routes **[user]** 「或是wui放header 後段檢查細一些 這樣不至於全部人都能透過加header亂搞」, 「這樣應該是改動最少的方式」. |
 
 ## 3. Mechanism
@@ -88,7 +88,7 @@ A route admits a request when the person holds the route's own verb, as today, *
 request comes through a page and the person holds `use_wui` — a union, so nobody loses
 what they can do now.
 
-- **The WUI routes** (`…/wui/build`, `…/wui/run`, `…/wui/tools/{name}/call`,
+- **The WUI routes** (`…/wui/run`, `…/wui/tools/{name}/call`,
   `…/wui/agents/{name}/call`, `…/wui/jobs` and its status / stop) are only ever called by a
   page, so each takes its current verb or `use_wui`.
 - **File writes and deletes stay on the workspace's own routes** (`PUT` / `DELETE
@@ -101,7 +101,7 @@ what they can do now.
      folder, `api/wui_content.py:401-405`, so its folder is not evidence of a page);
   3. the written path is inside that folder (`_inside`, `wui_content.py:299-303`, compared
      on segments); a page at the workspace root has no folder and is refused, as the
-     browser already refuses it (`bridge.ts:135-139`);
+     browser already refuses it (`resolveWritePath`, `paths.ts`);
   4. the written path is not the view file itself — it declares the workflows, tools and
      agents the page may call, so writing it would widen what the page may do.
 - **What the header buys.** The file tree, uploads, renames and every other workspace
@@ -174,3 +174,74 @@ O1–O3 were open when this plan was first written; the user answered them the s
 - **O3 → D11.** The alternative was to move the service account last
   (private → personal → shared → service) so a schedule keeps today's value; the user chose
   to keep `private_first`'s order.
+
+## 6. As built (#994)
+
+Where the build adds to or differs from the sections above; this section wins.
+
+- **Every policy choice is stored (D5).** The plan stored only Shared explicitly. The
+  panel now stores all three, and only "never chosen" is absent (and reads Private
+  first). Storing the other two keeps "the owner asked each person" — what puts up the
+  page's identity bar and lists names in the panel's Private tab — a fact about what was
+  chosen. Counting every unset name as asking would put the bar on nearly every page
+  with a tool, which nobody decided; an unset name still resolves Private first, and a
+  WUI User fills in their own value from the env panel (D4).
+- **A page's refusal is typed (D7).** `check_access` given a tuple refuses with the LAST
+  verb; for `use_wui` the detail is `{"error": "needs_use_wui", "message": …}`
+  (`item_authz.NEEDS_USE_WUI`). The page's tool, agent, job and run calls raise an
+  `HttpError` carrying it (`pageRefusal`), and writes and deletes do too (`fileRefusal`);
+  both read the body once, under `errorInfo`'s deadline (`http.refusalFrom`). The build
+  asks `execute`, unchanged from master (Q1 below), so its refusal does not name `use_wui`. The bridge hands every refusal to the pane before the page hears it
+  (`BridgeContext.onRefused`, and the dispatch's own catch), so the pane recognises it in
+  one function (`noteRefusal`).
+- **Two parity tables hold the browser to the server.**
+  `tests/fixtures/item_verb_cases.json` (generated from `authorize`) holds
+  `hasItemVerb`, and so the implications D9/D10 and `use_wui ⊇ read_content`;
+  `tests/fixtures/wui_page_write_cases.json` is the server's own table for
+  `page_may_write` (paths compared on segments — `//` and `.` collapsed, as the sandbox
+  opens them). The browser leaves the view-file check to the server rather than
+  recompute who may write what; an editor's page may still write its own view file.
+  Role detection in the share dialog reads what a stored set implies, so a Participant
+  or Collaborator stored before `use_wui` is that role, not Custom.
+- **One reader of view files.** `api/wui_page.py` (`load_wui_view`, `page_folder`,
+  `page_may_write`) is shared by Deploy and the D12 write check.
+- **`BridgeContext.page` is required**, so a host of the bridge that forgets to name its
+  page does not compile, rather than quietly sending writes no WUI User can make.
+- **The view path travels percent-encoded** in `X-Wui-Page` (a header value must be
+  Latin-1); the server decodes it.
+- **#917's sign-in cleanup** decides "this item's value hides mine" with `layer_of`
+  itself, so it follows the default instead of re-spelling it.
+- **The refusal banner** follows NN/g's *Error-Message Guidelines* (say what happened and
+  what fixes it, next to where it happened —
+  <https://www.nngroup.com/articles/error-message-guidelines/>) and is a passive indicator,
+  not a dialog (NN/g, *Indicators, Validations, and Notifications* —
+  <https://www.nngroup.com/articles/indicators-validations-notifications/>). The role and
+  the Custom checkbox reuse the share dialog's existing dropdown and checkboxes; the
+  checkbox shows the verb's name, `use_wui`, like every other verb there.
+- **Kept out of the collection dialogs.** `use_wui` is optional on the wire type and not
+  in `ALL_VERBS`: collections and the skill hub have no pages.
+
+### Questions review round 1 raised — settled
+
+Review round 1 raised three questions. Q2 and Q3 were put to the user and answered; Q1
+was not a question at all:
+
+- **Q1 → rebuild is unchanged: it asks `execute`, as on master.** This plan never
+  covered rebuilding, and the user declined to widen it 「我們在前期沒有提過 為什麼要節外生枝？」.
+  `…/wui/build` keeps master's gate; only its docstring now also says why a WUI User
+  must not reach it (a save inside the page's folder, D12, could otherwise be a build
+  script). A WUI User sees a new version once someone who may run code rebuilds; their
+  own rebuild-on-open is refused once and switches itself off.
+- **Q2 → shared values stay visible [user] 「不要複雜化後端程式」.** D4 now reads: a WUI
+  User enters their own values and cannot CHANGE the item's shared ones. They can see them,
+  as every member who can see the item always could (`GET …/env/layers` and the item
+  itself return them to `read_meta`); `docs/wui.md` says so and warns against keeping
+  owner-only secrets in Shared. Hiding them would mean redacting `env_vars` for everyone
+  without `write_meta` — not done.
+- **Q3 → the request button is #968's flow, as D7 says [user] 「照現在（#968）」.** The banner carries 申請存取 through `POST …/request-access`
+  (`RequestAccess`, now shared with the reader's 403 page). Every role that can open a
+  page is already inside the workspace, where that flow notifies nobody (`already_readable`;
+  a Custom grant of `read_content` without `read_chat` is the exception, and its request
+  does reach the owner), so
+  the banner then says to ask the owner — by name — to add them as a WUI User. A request
+  that notifies the owner even from inside was put to the user and declined.

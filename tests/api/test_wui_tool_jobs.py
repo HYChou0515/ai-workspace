@@ -108,7 +108,7 @@ def test_a_started_tool_answers_with_call_tools_own_shape():
     assert got["output"] == {"output": '{"lot":"A1"}', "exit_code": 0}
     assert sandbox.calls and sandbox.calls[-1][-1] == '{"lot": "A1"}'
     assert loc.opened == [("i1", "頁面：工具 lot-status")]
-    assert loc.asked_verb[0] == "execute"
+    assert loc.asked_verb[0] == "use_wui"  # docs/plan-wui-user.md §3.2
     (run,) = [r.data for r in spec.get_resource_manager(WorkflowRun).list_resources()]
     assert isinstance(run, WorkflowRun) and run.captured_user == "alice"
     assert run.page_job is not None and run.page_job.input == '{"lot": "A1"}'

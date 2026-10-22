@@ -34,7 +34,7 @@
 | `src/workspace_app/observability/writer.py` | `LlmLogWriter`:日期分區、`index.jsonl` 一行摘要 + 每呼叫一個 json,並丟一支 `replay.py` 重打小工具 |
 | `src/workspace_app/observability/setup.py` | `install_llm_logging` / `llm_log_enabled`:`WORKSPACE_LLM_LOG` env(prod off-switch)蓋過 config `observability.llm_log.enabled`(預設 True) |
 | `src/workspace_app/config/dump.py` | `emit_config_dump` / `render`:observability feature A——provenance 標註 YAML,stdout 遮密、`config.resolved.yaml`(0600)露真值。歸屬 [啟動與組裝根](boot-and-config.md) |
-| `src/workspace_app/perm/model.py` | `Permission`(嵌在資源上的值物件)、`Subject`(`user:`/`group:`/`all`)、`Visibility`、10 個 `Verb`、`AI_FORBIDDEN`(`change_permission`/`use_terminal`) |
+| `src/workspace_app/perm/model.py` | `Permission`(嵌在資源上的值物件)、`Subject`(`user:`/`group:`/`all`)、`Visibility`、`Verb`(每個權限一個,列在 `VERBS`)、`AI_FORBIDDEN`(`change_permission`/`use_terminal`) |
 | `src/workspace_app/perm/authorize.py` | `Actor`(human/ai 工廠;`is_ai`/`ceiling`/`groups`)+ `authorize(actor, verb, permission, *, created_by, superusers)`:唯一決策點 |
 | `src/workspace_app/perm/scope.py` | `collection_access_scope(superusers)` → 餵 specstar `access_scope` 的 row-level 讀可見性(看不到 ⇒ 404) |
 | `src/workspace_app/perm/checker.py` | `CollectionPermissionChecker(IPermissionChecker)` + `collection_permission_event_handler`:per-verb 寫 ACL(403) |

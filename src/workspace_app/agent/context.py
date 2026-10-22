@@ -188,7 +188,8 @@ class AgentToolContext:
     # `IRequestEnv` composed from THAT request (#714), with the person's own
     # PRIVATE values (`plan-wui-viewer-login` — kept per person per item,
     # readable by them alone). Which wins a name is the item's per-name policy
-    # (`api.env_layers.resolve_env`); with none set, the item's value wins.
+    # (`api.env_layers.resolve_env`); with none set, the person's own value wins
+    # (Private first — docs/plan-wui-user.md D5).
     #
     # Nothing is written anywhere: the names are set on the `exec` that
     # dispatches a tool and nowhere else (`tooling.registry._exec_tool`), so the

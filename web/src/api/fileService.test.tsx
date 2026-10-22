@@ -160,8 +160,8 @@ describe("investigationFileService", () => {
     await svc.writeFile("/a.md", "hi");
     await svc.deleteFile("/a.md");
     await svc.moveFile("/a.md", "/b.md");
-    expect(write).toHaveBeenCalledWith("rca", "inv1", "/a.md", "hi");
-    expect(del).toHaveBeenCalledWith("rca", "inv1", "/a.md");
+    expect(write).toHaveBeenCalledWith("rca", "inv1", "/a.md", "hi", undefined);
+    expect(del).toHaveBeenCalledWith("rca", "inv1", "/a.md", undefined);
     expect(move).toHaveBeenCalledWith("rca", "inv1", "/a.md", "/b.md");
   });
 });
@@ -279,5 +279,20 @@ describe("useFileList — one traversal", () => {
     expect(listTree).toHaveBeenCalledTimes(1);
     expect(listFiles).not.toHaveBeenCalled();
     expect(listDirs).not.toHaveBeenCalled();
+  });
+});
+
+describe("a page's write names the page (docs/plan-wui-user.md D12)", () => {
+  it("passes the page through to the file API, and only when given", async () => {
+    const { investigationFileService } = await import("./fileService");
+    const { api } = await import("./index");
+    const write = vi.spyOn(api, "writeFile").mockResolvedValue();
+    vi.spyOn(api, "fileExists").mockResolvedValue(true);
+    const del = vi.spyOn(api, "deleteFile").mockResolvedValue();
+    const svc = investigationFileService("rca", "inv1");
+    await svc.writeFile("/t/a.json", "{}", { page: "/t/p.ai.yaml" });
+    await svc.deleteFile("/t/a.json", { page: "/t/p.ai.yaml" });
+    expect(write).toHaveBeenCalledWith("rca", "inv1", "/t/a.json", "{}", { page: "/t/p.ai.yaml" });
+    expect(del).toHaveBeenCalledWith("rca", "inv1", "/t/a.json", { page: "/t/p.ai.yaml" });
   });
 });

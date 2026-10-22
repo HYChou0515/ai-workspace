@@ -19,8 +19,6 @@
 import { useMemo, useState } from "react";
 import { useParams } from "react-router-dom";
 
-import { api } from "../api";
-import { Btn } from "../components/Btn";
 import { useT, type MsgKey } from "../lib/i18n";
 
 import { FileServiceProvider, investigationFileService, type FileService } from "../api/fileService";
@@ -32,6 +30,7 @@ import { PageIdentityBar } from "../components/PageIdentity";
 import { WorkspaceSlugProvider } from "../hooks/useWorkspaceSlug";
 import { WuiView } from "../renderers/wui/WuiView";
 import { useQuery } from "@tanstack/react-query";
+import { RequestAccess } from "../renderers/wui/RequestAccess";
 
 /** A sentence, centred, for the ways this URL can be wrong — and, where the
  * wrongness may be a moment's (a read that failed, a file a restoring sandbox
@@ -69,41 +68,6 @@ function Problem({
       {retry && <TryAgain onClick={retry} />}
       {action}
     </div>
-  );
-}
-
-/** A 403 is a reader who may SEE the workspace (an outsider gets 404), so
- * offering to ask its owner reveals nothing — the App dashboard's 🔒 row asks
- * the same way (`POST …/request-access`, deduplicated server-side). One press;
- * a request that did not go through says so and may be sent again (NN/g,
- * "Error-Message Guidelines": offer a way forward). */
-function RequestAccess({ slug, itemId }: { slug: string; itemId: string }) {
-  const t = useT();
-  const [state, setState] = useState<"idle" | "sending" | "sent" | "inside" | "failed">("idle");
-  const ask = async () => {
-    setState("sending");
-    try {
-      const answer = await api.requestItemAccess(slug, itemId);
-      // The route notifies nobody when the caller can already ENTER the
-      // workspace (`read_chat` — the 「In workspace」 role, which still gets
-      // this 403) and says so with `already_readable`: there is no request
-      // to report, only who can raise their role. `requested: false` alone is
-      // not that — it is also a repeat of a request already with the owner
-      // (the route's dedup ledger, shared with the App dashboard's 🔒 row),
-      // which is still "requested".
-      setState(answer.already_readable ? "inside" : "sent");
-    } catch {
-      setState("failed");
-    }
-  };
-  if (state === "inside") return <p role="status">{t("wui.page.alreadyInside")}</p>;
-  return (
-    <>
-      <Btn size="sm" disabled={state === "sending" || state === "sent"} onClick={() => void ask()}>
-        {t(state === "sent" ? "entry.withheld.requested" : "entry.withheld.requestAccess")}
-      </Btn>
-      {state === "failed" && <p role="alert">{t("wui.page.requestFailed")}</p>}
-    </>
   );
 }
 
@@ -171,7 +135,7 @@ export function WuiPage({
         // way forward is asking them — never Try again, which returns the
         // same sentence every press.
         return (
-          <Problem action={<RequestAccess slug={slug} itemId={itemId} />}>{t("wui.page.forbidden", { path })}</Problem>
+          <Problem action={<RequestAccess inside="wui.page.alreadyInside" slug={slug} itemId={itemId} />}>{t("wui.page.forbidden", { path })}</Problem>
         );
       }
       // A permanent failure (the reader, not the moment) offers no Try

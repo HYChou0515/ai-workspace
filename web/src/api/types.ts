@@ -9,6 +9,11 @@ import type { AgentEvent, CellEvent } from "../events";
 import type { FileEncoding } from "./encoding";
 import type { Failure } from "../lib/failure";
 
+/** docs/plan-wui-user.md D12: a write a WUI page makes, naming the page — the
+ * workspace path of its view file. Sent as the `X-Wui-Page` header; only the
+ * pane's bridge passes it, so a WUI User's write from anywhere else is refused. */
+export type PageWrite = { page?: string };
+
 export type { FileEncoding };
 
 /* ----------------------------- Enums ----------------------------- */
@@ -770,6 +775,7 @@ export interface ApiClient {
     investigationId: string,
     path: string,
     body: string | Blob | ArrayBuffer,
+    opts?: PageWrite,
   ): Promise<void>;
   /** Like `writeFile` but streams via XHR so the caller can show upload progress
    * (#198 chat attach). `onProgress(loaded, total)` fires as bytes go out; a 413
@@ -801,7 +807,7 @@ export interface ApiClient {
   fileExists(slug: string, investigationId: string, path: string): Promise<boolean>;
   /** DELETE /a/{slug}/items/{id}/files/{path} → 204. Removes a file, or a
    * folder and its whole subtree when the path is a directory. */
-  deleteFile(slug: string, investigationId: string, path: string): Promise<void>;
+  deleteFile(slug: string, investigationId: string, path: string, opts?: PageWrite): Promise<void>;
   /** POST /a/{slug}/items/{id}/files/move — rename/move (409 if target exists). */
   moveFile(slug: string, investigationId: string, from: string, to: string): Promise<void>;
   /** POST /a/{slug}/items/{id}/files/copy — duplicate (409 if target exists). */

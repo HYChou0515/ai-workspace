@@ -95,11 +95,11 @@ class _Locator:
         self.allowed = allowed
         self.env = env or {}
         self.env_policy = env_policy or {}
-        self.asked_verb: list[str] = []
+        self.asked_verb: list[str | tuple[str, ...]] = []
         self.opened: list[tuple[str, str]] = []
         self.settled: list[tuple[str, str | None]] = []
 
-    def require_access(self, slug: str, item_id: str, verb: str) -> str:
+    def require_access(self, slug: str, item_id: str, verb: str | tuple[str, ...]) -> str:
         self.asked_verb.append(verb)
         return item_id
 
@@ -253,14 +253,15 @@ def test_reports_why_an_external_tool_could_not_be_resolved():
     assert "artifact store unreachable" in resp.json()["detail"]
 
 
-def test_needs_the_authority_to_change_the_item():
+def test_needs_the_authority_to_change_the_item_or_to_use_its_pages():
     # A tool can write, so the caller needs the verb they would have needed to
-    # make the change by hand.
+    # make the change by hand — or, through a page, use_wui
+    # (docs/plan-wui-user.md §3.2: a page's route takes its own verb or use_wui).
     client, _, _, locator = build()
 
     client.post(URL, json={})
 
-    assert locator.asked_verb == ["edit_content"]
+    assert locator.asked_verb == [("edit_content", "use_wui")]
 
 
 def test_hands_the_tool_the_items_environment_so_credentials_stay_off_the_page():
@@ -449,8 +450,9 @@ def test_build_refuses_a_folder_outside_the_workspace():
 
 
 def test_build_needs_the_authority_to_run_things():
-    # It runs a command in the item's sandbox. That is the notebook cell's verb,
-    # not the file editor's.
+    # It runs a command in the item's sandbox — the build script, which a WUI
+    # User may have just written through the page (docs/plan-wui-user.md §6,
+    # review round 1). That is the notebook cell's verb.
     client, _, _, locator = build(sandbox=_BuildSandbox([b"ok\n"]))
 
     client.post(BUILD_URL, json={"folder": "/page"})
@@ -744,7 +746,12 @@ def test_a_tool_called_from_a_page_gets_the_request_environment():
     same tool worked from the chat and not from the page it was written for."""
     env = _Env({"MES_TOKEN": "from-request", "MES_HOST": "from-request"})
     sandbox = _Sandbox(ExecResult(exit_code=0, stdout=b"{}"))
-    client, _, _, _ = build(sandbox=sandbox, env={"MES_HOST": "from-item"}, request_env=env)
+    client, _, _, _ = build(
+        sandbox=sandbox,
+        env={"MES_HOST": "from-item"},
+        env_policy={"MES_HOST": "shared_first"},  # Shared chosen (D5: no policy = Private first)
+        request_env=env,
+    )
 
     resp = client.post(URL, json={"args": {}})
 
@@ -760,13 +767,14 @@ def test_a_tool_called_from_a_page_gets_the_request_environment():
 def test_a_page_tool_call_follows_the_items_policy_for_each_name():
     """`plan-wui-viewer-login`: the person who pressed the button is the PRIVATE
     layer. A name the item marked `private_first` takes their value over the
-    shared one; an unmarked name still resolves the way it always did."""
+    shared one; a name marked `shared_first` keeps the shared one
+    (docs/plan-wui-user.md D5: an unmarked name now reads Private first)."""
     env = _Env({"MES_TOKEN": "mine", "MES_HOST": "mine"})
     sandbox = _Sandbox(ExecResult(exit_code=0, stdout=b"{}"))
     client, _, _, _ = build(
         sandbox=sandbox,
         env={"MES_TOKEN": "shared", "MES_HOST": "shared"},
-        env_policy={"MES_TOKEN": "private_first"},
+        env_policy={"MES_TOKEN": "private_first", "MES_HOST": "shared_first"},
         request_env=env,
     )
 

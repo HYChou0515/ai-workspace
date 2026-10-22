@@ -1457,6 +1457,20 @@ export const messages = {
     en: "Only this workspace's members can open this link.",
   },
   "wui.deploy.reach.everyone": { "zh-TW": "所有人都打得開這個連結。", en: "Everyone can open this link." },
+  // docs/plan-wui-user.md D7: a page someone may not use
+  "wui.needsWuiUser": {
+    "zh-TW": "這個頁面需要 WUI User 權限才能操作。",
+    en: "This page needs the WUI User permission to use.",
+  },
+  "wui.needsWuiUser.inside": {
+    "zh-TW": "你已經在這個 workspace 裡，申請不會通知任何人，請直接聯絡 {owner}。",
+    en: "You are already in this workspace, so a request notifies nobody; contact {owner} directly.",
+  },
+  "wui.needsWuiUser.theOwner": { "zh-TW": "擁有者", en: "the owner" },
+  "wui.needsWuiUser.owner": {
+    "zh-TW": "請 {owner} 把你加為 WUI User。",
+    en: "Ask {owner} to add you as a WUI User.",
+  },
   "wui.deploy.reach.unknown": {
     "zh-TW": "能讀這個 workspace 檔案的人才能用這個連結。",
     en: "Only people who can read this workspace's files can use this link.",

@@ -12,9 +12,11 @@ Two layers feed a tool's environment:
   account (``env_without_request``). Nobody else reads any of them.
 
 Each name on the item may carry a policy (``WorkItemBase.env_policy``) choosing
-between them. A name with no policy is ``shared_first`` — the merge every turn
-did before the private layer existed (`{**caller_env, **item_env}`, #714), so
-an item nobody has touched behaves exactly as it did.
+between them. A name with no policy is ``private_first`` — the person's own value
+over the item's (docs/plan-wui-user.md D5, for items stored before it too). Until
+then the default was ``shared_first``, the merge every turn did before the private
+layer existed (`{**caller_env, **item_env}`, #714); choosing Shared now stores it
+explicitly.
 
 A private value is the person's value for this item OR their value for every
 item ("my environment variables") — D1 of `docs/plan-personal-env.md`, this
@@ -39,6 +41,8 @@ PRIVATE_FIRST = "private_first"
 PRIVATE_ONLY = "private_only"
 
 POLICIES = (SHARED_FIRST, PRIVATE_FIRST, PRIVATE_ONLY)
+#: What a name with no policy (or an unknown one) means — docs/plan-wui-user.md D5.
+DEFAULT_POLICY = PRIVATE_FIRST
 
 
 @dataclass(frozen=True)
@@ -101,14 +105,14 @@ def layer_of(
         "personal": personal or {},
         "service": service or {},
     }
-    rule = policy.get(name, SHARED_FIRST)
+    rule = policy.get(name, DEFAULT_POLICY)
     order: tuple[Layer, ...]
     if rule == PRIVATE_ONLY:
         order = ("private", "personal", "service")
-    elif rule == PRIVATE_FIRST:
-        order = ("private", "personal", "service", "shared")
-    else:
+    elif rule == SHARED_FIRST:
         order = ("shared", "private", "personal", "service")
+    else:  # PRIVATE_FIRST, and the default for no policy or an unknown one
+        order = ("private", "personal", "service", "shared")
     for layer in order:
         # A blank value is not a value: it does not hide the next layer, and
         # a name blank everywhere is not handed to the tool at all.

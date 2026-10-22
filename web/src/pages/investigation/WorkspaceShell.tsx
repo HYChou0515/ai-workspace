@@ -462,6 +462,7 @@ function ShellBody({
     canWriteMeta: _canWriteMeta,
     canAddContent: _canAddContent,
     canManageAccess: _canManageAccess,
+    canOpenEnv: _canOpenEnv,
   } = useItemAccess(item);
 
   // Resizable + collapsible panels (VSCode-style). Sizes persist; ⌘B/⌘J
@@ -1086,10 +1087,9 @@ function ShellBody({
               envPolicy={
                 (item as unknown as { env_policy?: Record<string, string> }).env_policy ?? {}
               }
-              // Anyone who can make this item's tools run for them keeps their
-              // OWN values here (`plan-wui-viewer-login`) — that needs no
-              // `write_meta`; storing the SHARED ones still does.
-              canOpenEnv={_canConverse || _canWriteMeta}
+              // The rule is `useItemAccess.canOpenEnv` (who keeps their own
+              // values here, docs/plan-wui-user.md D4), not restated here.
+              canOpenEnv={_canOpenEnv}
               onSaveEnvVars={
                 _canWriteMeta
                   ? (envVars, envPolicy) =>

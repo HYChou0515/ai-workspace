@@ -587,6 +587,25 @@ describe("WuiView: rebuilding a page that has a build step", () => {
     expect(await screen.findByText(/cannot run things here/)).toBeInTheDocument();
   });
 
+  it("raises the WUI User banner for a build refusal that names use_wui (the wiring, D7)", async () => {
+    // The server's build asks `execute`, as on master (plan §6, Q1), so this refusal is
+    // not sent now; it pins that a build's refusal reaches `noteRefusal` too.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(JSON.stringify({ detail: { error: "needs_use_wui", message: "not authorized to use_wui" } }), {
+            status: 403,
+          }),
+      ),
+    );
+    renderIn(BUILT);
+
+    fireEvent.click(await screen.findByRole("button", { name: /rebuild/i }));
+
+    expect(await screen.findByTestId("wui-needs-wui-user")).toBeInTheDocument();
+  });
+
   it("puts a finished build's log away, because the page is the answer", async () => {
     // The log earns the top of the pane while it is running and for as long as
     // something went wrong. A build that succeeded has already said everything
@@ -2430,7 +2449,9 @@ describe("WuiView: Deploy", () => {
     act(() => publishFileChanged("item1", "/sales/package.json")); // the broadcast echo
 
     await waitFor(() => expect(screen.queryByRole("button", { name: /^rebuild$/i })).toBeNull());
-    expect(vi.mocked(fs.writeFile)).toHaveBeenCalledWith("/sales/package.json", expect.any(String));
+    expect(vi.mocked(fs.writeFile)).toHaveBeenCalledWith("/sales/package.json", expect.any(String), {
+      page: "/sales/page.ai.yaml", // the page names itself on the write (plan-wui-user D12)
+    });
   });
 
   it("Cancel after a Deploy pressed before the manifest landed — toggling Auto-rebuild is still not an open", async () => {
@@ -3360,5 +3381,44 @@ describe("WuiView — sign-in in the workspace pane's toolbar (plan-wui-viewer-l
     await waitFor(() => expect(frame()).toBeInTheDocument());
     await new Promise((r) => setTimeout(r, 20));
     expect(screen.queryByTestId("page-identity-key")).not.toBeInTheDocument();
+  });
+});
+
+describe("a page someone may not use (docs/plan-wui-user.md D7)", () => {
+  async function pressWith(err: Error) {
+    const fs = svc({ "/sales/index.html": "<html></html>" });
+    vi.mocked(fs.writeFile).mockRejectedValue(err);
+    render(
+      <QueryWrap>
+        <FileServiceProvider value={fs}>
+          <WuiView path="/sales/page.ai.yaml" spec={{ view: "wui", entity: "" } as ViewSpec} />
+        </FileServiceProvider>
+      </QueryWrap>,
+    );
+    await waitFor(() => expect(frame()).toBeInTheDocument());
+    const win = frame()?.contentWindow as Window;
+    const replies: unknown[] = [];
+    vi.spyOn(win, "postMessage").mockImplementation((m: unknown) => replies.push(m));
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        data: { proto: WUI_PROTOCOL, id: "1", verb: "writeFile", args: { path: "d.json", text: "{}" } },
+        source: win,
+      }),
+    );
+    await waitFor(() => expect(replies).toHaveLength(1));
+    return replies;
+  }
+
+  it("says above the page that it needs the WUI User permission, and still answers the page", async () => {
+    const { HttpError } = await import("../../api/http");
+    const replies = await pressWith(new HttpError(403, "This page needs the WUI User permission.", "needs_use_wui"));
+    expect(await screen.findByTestId("wui-needs-wui-user")).toHaveTextContent("WUI User");
+    expect(replies[0]).toMatchObject({ ok: false });
+  });
+
+  it("says nothing of the kind for any other refusal", async () => {
+    const { HttpError } = await import("../../api/http");
+    await pressWith(new HttpError(403, "This app does not offer lot-status to its pages."));
+    expect(screen.queryByTestId("wui-needs-wui-user")).toBeNull();
   });
 });

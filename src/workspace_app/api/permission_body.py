@@ -34,6 +34,7 @@ class PermissionBody(BaseModel):
     converse: list[str] = []
     execute: list[str] = []
     use_terminal: list[str] = []
+    use_wui: list[str] = []
     change_permission: list[str] = []
 
 
@@ -62,6 +63,7 @@ def build_permission(body: PermissionBody) -> Permission:
         converse=body.converse,
         execute=body.execute,
         use_terminal=body.use_terminal,
+        use_wui=body.use_wui,
         change_permission=body.change_permission,
     )
 

@@ -55,7 +55,7 @@ from specstar import QB, SpecStar
 from specstar.types import DuplicateResourceError, ResourceIDNotFoundError
 
 from ..perm import Verb
-from .env_layers import PRIVATE_FIRST, PRIVATE_ONLY, PersonEnv, is_blank
+from .env_layers import PersonEnv, is_blank, layer_of
 from .locator import ItemLocator
 from .timeutil import now_ms
 
@@ -470,8 +470,9 @@ def register_private_env_routes(
         """`plan-personal-env` D10/A9: remove, from every person's values for
         single items, the names a deploy sign-in produces — where the old value
         hides one there: the item would read the person's values for the name
-        (any policy but Shared with a shared copy set — D2 as corrected
-        2026-10-12) and the person holds it in my environment variables too.
+        (`layer_of` names this item's value as what the tools get — any policy
+        but Shared with a shared copy set) and the person holds it in my
+        environment variables too.
         Before "my environment variables" a sign-in wrote its token into that
         one item, and an item's own value wins a name (D4) — so there those old
         tokens would shadow a new sign-in. Where a shared copy wins, the item's
@@ -496,15 +497,20 @@ def register_private_env_routes(
         for user_id, item_id, held_names in held:
             layers = await asyncio.to_thread(locator.env_layers_of, item_id)
             mine = await asyncio.to_thread(store.personal, user_id)
+            own = await asyncio.to_thread(store.get, user_id, item_id)
             shadowing = [
                 n
                 for n in held_names
                 # A blank value of mine is not a value (N5): nothing to hide.
                 if not is_blank(mine.get(n, ""))
-                and (
-                    layers.policy.get(n) in (PRIVATE_FIRST, PRIVATE_ONLY)
-                    or is_blank(layers.shared.get(n, ""))
+                # It hides mine exactly when it is what the tools get — the
+                # order table's own answer (`layer_of`), so the default
+                # (Private first since docs/plan-wui-user.md D5) is not
+                # re-spelt here and cannot drift from it.
+                and layer_of(
+                    n, shared=layers.shared, private=own, policy=layers.policy, personal=mine
                 )
+                == "private"
             ]
             if shadowing:
                 found.append((user_id, item_id, shadowing))

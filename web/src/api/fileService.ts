@@ -20,7 +20,7 @@ import { API_PREFIX, apiFetch } from "./http";
 import type { DownloadPrepared } from "./kb";
 import { qk } from "./queryKeys";
 import { encodePath, isExternalRef, resolveRefPath } from "./refPath";
-import type { FileContent, FileInfo } from "./types";
+import type { FileContent, FileInfo, PageWrite } from "./types";
 
 /** What file operations a service supports — the tree hides actions it can't do
  * (KB v1 has no new-file / folders / move / copy; docs arrive by upload). */
@@ -76,8 +76,10 @@ export type FileService = {
    * a service whose listing is cheap and complete may answer from it. */
   exists(path: string): Promise<boolean>;
   readFile(path: string): Promise<FileContent>;
-  writeFile(path: string, body: string | Blob | ArrayBuffer): Promise<void>;
-  deleteFile(path: string): Promise<void>;
+  /** `opts.page` names the WUI page making the write (docs/plan-wui-user.md D12);
+   * a service with no such notion ignores it. */
+  writeFile(path: string, body: string | Blob | ArrayBuffer, opts?: PageWrite): Promise<void>;
+  deleteFile(path: string, opts?: PageWrite): Promise<void>;
   moveFile(from: string, to: string): Promise<void>;
   copyFile(from: string, to: string): Promise<void>;
   mkdir(path: string): Promise<void>;
@@ -135,15 +137,15 @@ export function investigationFileService(slug: string, investigationId: string):
     // writer (file tree, attachments, skills/workflows/collections pickers, the
     // editor's save, both KB IDEs) can get it wrong by omission.
     exists: (path) => api.fileExists(slug, investigationId, path),
-    writeFile: (path, body) =>
+    writeFile: (path, body, opts) =>
       writeVerified(
-        () => api.writeFile(slug, investigationId, path, body),
+        () => api.writeFile(slug, investigationId, path, body, opts),
         // One path, one question. Listing the whole workspace to scan for it
         // was the file tree's full walk — with `node_modules/`, tens of
         // thousands of NFS round trips — spent on a yes/no.
         () => api.fileExists(slug, investigationId, path),
       ),
-    deleteFile: (path) => api.deleteFile(slug, investigationId, path),
+    deleteFile: (path, opts) => api.deleteFile(slug, investigationId, path, opts),
     moveFile: (from, to) => api.moveFile(slug, investigationId, from, to),
     copyFile: (from, to) => api.copyFile(slug, investigationId, from, to),
     mkdir: (path) => api.mkdir(slug, investigationId, path),

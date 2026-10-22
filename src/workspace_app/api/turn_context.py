@@ -842,10 +842,10 @@ class TurnContextBuilder:
             # Which one wins is the item's per-name policy
             # (`plan-wui-viewer-login`): the caller's values are the PRIVATE
             # layer, the item's the SHARED one, and a name with no policy is
-            # `shared_first` — the stored copy overriding, unannounced, which is
-            # what #714 decided so a value can be pinned for testing. The person's
-            # values for every item (`plan-personal-env`) are read only for a
-            # name whose policy is Private first / Private only.
+            # `private_first` (docs/plan-wui-user.md D5) — the caller's own value
+            # over the stored copy. Pinning a value for testing, as #714 wanted,
+            # now means choosing Shared for that name. The person's values for
+            # every item (`plan-personal-env`) are read by every policy.
             user_env=resolve(shared=facts.env_vars, person=caller_env, policy=facts.env_policy),
             handle=session.handle,
             # Route lazy-create through the registry so session.handle is set

@@ -16,6 +16,7 @@ import tempfile
 from collections.abc import AsyncIterator, Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
+from urllib.parse import unquote
 
 from fastapi import APIRouter, FastAPI, HTTPException, Request, Response, status
 from fastapi.responses import FileResponse, StreamingResponse
@@ -62,12 +63,18 @@ from .search import InvalidQuery, compile_query, path_selected, search_text
 from .slide_preview import NeedsConfirm, NotASlideDeck, SlidePreviews
 from .turn_gate import quota_body
 from .turns import ChatTurnEngine
+from .wui_page import NotAPage, load_wui_view, page_may_write
 
 if TYPE_CHECKING:
     from ..apps.skill_hub import SkillHubStore
     from ..workflow.schedule_bindings import ScheduleAuthorship
 
 _READONLY_DIR = ".readonly"
+
+
+#: The header a WUI page's writes carry: the workspace path of the page's view
+#: file (docs/plan-wui-user.md D12). Only the pane's bridge sends it.
+PAGE_HEADER = "X-Wui-Page"
 
 logger = logging.getLogger(__name__)
 
@@ -559,13 +566,46 @@ def register_file_routes(
             raise HTTPException(status_code=404, detail="download not found")
         return stream_prepared_zip(path, _workspace_zip_name(investigation_id, prefix))
 
+    async def _require_write(slug: str, item_id: str, norm: str, request: Request) -> str:
+        """Who may change ``norm``: whoever holds ``edit_content`` — or, for a
+        request that names the page it comes through (`PAGE_HEADER`), a
+        ``use_wui`` holder writing inside that page's folder
+        (docs/plan-wui-user.md D12). The page is the server's reading of the
+        named view file, never the browser's word; every other surface sends no
+        header, so a WUI User's write from the file tree is refused here."""
+        # Percent-encoded by the browser: a header value must be Latin-1, and a
+        # view path can hold any character.
+        page = unquote(request.headers.get(PAGE_HEADER, ""))
+        if not page:
+            return locator.require_access(slug, item_id, "edit_content")
+        investigation_id = locator.require_access(slug, item_id, ("edit_content", "use_wui"))
+        try:
+            return locator.require_access(slug, item_id, "edit_content")
+        except HTTPException as exc:
+            if exc.status_code != 403:
+                raise
+        view = _workspace_path(page)
+        try:
+            await load_wui_view(files, investigation_id, view)
+        except NotAPage as exc:
+            raise HTTPException(status_code=403, detail=f"not a page: {exc}") from None
+        if not page_may_write(view, norm):
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    f"this page may not change {norm}: a page writes only inside its own "
+                    "folder, never its view file, and a page at the workspace root has none"
+                ),
+            )
+        return investigation_id
+
     @app.put(
         "/a/{slug}/items/{item_id}/files/{path:path}",
         status_code=status.HTTP_204_NO_CONTENT,
     )
     async def write_file(slug: str, item_id: str, path: str, request: Request) -> Response:
-        investigation_id = locator.require_access(slug, item_id, "edit_content")
         norm = _workspace_path(path)
+        investigation_id = await _require_write(slug, item_id, norm, request)
         if _is_readonly_path(norm):
             # #205: the `.readonly/` snapshot the human diffs against is not hand-editable.
             raise HTTPException(status_code=403, detail="this file is read-only")
@@ -823,9 +863,9 @@ def register_file_routes(
         "/a/{slug}/items/{item_id}/files/{path:path}",
         status_code=status.HTTP_204_NO_CONTENT,
     )
-    async def delete_file(slug: str, item_id: str, path: str) -> Response:
-        investigation_id = locator.require_access(slug, item_id, "edit_content")
+    async def delete_file(slug: str, item_id: str, path: str, request: Request) -> Response:
         norm = _workspace_path(path)
+        investigation_id = await _require_write(slug, item_id, norm, request)
         if await files.is_dir(investigation_id, norm):
             await files.rmdir(investigation_id, norm)
             activity.record(

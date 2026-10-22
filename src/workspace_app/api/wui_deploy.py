@@ -30,7 +30,6 @@ from typing import Any
 from urllib.parse import quote
 
 import msgspec
-import yaml
 from fastapi import APIRouter, FastAPI, HTTPException, Response
 from msgspec import Struct
 from pydantic import BaseModel
@@ -38,16 +37,11 @@ from specstar import QB, SpecStar
 from specstar.types import ResourceIDNotFoundError
 
 from ..files import WorkspaceFiles
-from ..filestore.protocol import FileNotFound
 from ..perm.model import Permission, Verb
-from ..sync.ignore import DEFAULT_IGNORES, should_ignore
 from .file_routes import _workspace_path
 from .locator import ItemLocator
 from .timeutil import now_ms
-
-#: What a view file's name ends in. The kind is inside the file (`view:`), so
-#: the suffix alone never says "WUI" — it only says "worth reading".
-VIEW_SUFFIX = ".ai.yaml"
+from .wui_page import VIEW_SUFFIX, NotAPage, load_wui_view
 
 
 class DeployedWui(Struct):
@@ -230,32 +224,10 @@ def register_wui_deploy_routes(
         """
         workspace_id = locator.require_access(slug, item_id, "edit_content")
         path = _workspace_path(body.path)
-        if not path.endswith(VIEW_SUFFIX):
-            raise HTTPException(status_code=400, detail=f"not a view file: {path}")
-        if should_ignore(path, DEFAULT_IGNORES):
-            # A vendored or unpacked copy under `node_modules/` is not a page
-            # anybody made — the schedule index refuses these for the same
-            # reason, and shares the list rather than re-spelling it.
-            raise HTTPException(status_code=400, detail=f"not a page of this item: {path}")
         try:
-            raw = await files.read(workspace_id, path)
-        except FileNotFound:
-            raise HTTPException(status_code=400, detail=f"view file not found: {path}") from None
-        try:
-            loaded = yaml.safe_load(raw.decode("utf-8", errors="replace"))
-        except (yaml.YAMLError, RecursionError) as exc:
-            # `RecursionError`: a document nested past the parser's depth
-            # (`view: [[[[…`) is not valid yaml from where this route stands,
-            # and a 500 would blame the platform for a file the caller wrote.
-            raise HTTPException(
-                status_code=400, detail=f"view file is not valid yaml: {exc}"
-            ) from None
-        # A view file is a mapping; anything else has no `view:` to read.
-        doc: dict[str, Any] = loaded if isinstance(loaded, dict) else {}
-        kind = doc.get("view")
-        if kind != "wui":
-            found = kind if isinstance(kind, str) else "none"
-            raise HTTPException(status_code=400, detail=f"not a WUI: {path} has view {found!r}")
+            doc = await load_wui_view(files, workspace_id, path)
+        except NotAPage as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from None
         row = DeployedWui(
             slug=slug,
             item_id=workspace_id,

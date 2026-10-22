@@ -34,6 +34,7 @@ import {
   canChangeItemPermission,
   canConverse,
   canReadChat,
+  canUseWui,
   canReadItemContent,
   canWriteItem,
   canWriteItemMeta,
@@ -61,6 +62,12 @@ export type ItemAccess = {
    * (`write_meta`). Narrower than {@link canWrite} on purpose: the item PATCH
    * accepts write_meta alone, so an editor who passes canWrite is still refused. */
   canWriteMeta: boolean;
+  /** Use the item's pages (`use_wui`, docs/plan-wui-user.md D2). */
+  canUseWui: boolean;
+  /** Open the env panel: anyone who can make this item's tools run for them
+   * keeps their OWN values there (`plan-wui-viewer-login`, and a WUI User per
+   * docs/plan-wui-user.md D4) — storing the SHARED ones still needs write_meta. */
+  canOpenEnv: boolean;
   /** Sees it exists but cannot enter — the 🔒 list row offering "request access". */
   isDiscoverableOnly: boolean;
   /** May rewire this item's access — and, since #P4, may resize its environment.
@@ -84,6 +91,8 @@ export function useItemAccess(item: AppItem | undefined): ItemAccess {
       canWrite: true,
       canAddContent: true,
       canWriteMeta: true,
+      canUseWui: true,
+      canOpenEnv: true,
       isDiscoverableOnly: false,
       // Optimistic like its siblings during the identity load — see the module
       // docstring. The SERVER is the gate; this only decides what to draw.
@@ -101,6 +110,11 @@ export function useItemAccess(item: AppItem | undefined): ItemAccess {
     canWrite: canWriteItem(perm, me, owner, isSuperuser, groups),
     canAddContent: canAddItemContent(perm, me, owner, isSuperuser, groups),
     canWriteMeta: canWriteItemMeta(perm, me, owner, isSuperuser, groups),
+    canUseWui: canUseWui(perm, me, owner, isSuperuser, groups),
+    canOpenEnv:
+      canConverse(perm, me, owner, isSuperuser, groups) ||
+      canWriteItemMeta(perm, me, owner, isSuperuser, groups) ||
+      canUseWui(perm, me, owner, isSuperuser, groups),
     isDiscoverableOnly: isDiscoverableOnly(perm, me, owner, isSuperuser, groups),
     canManageAccess: canChangeItemPermission(perm, me, owner, isSuperuser, groups),
   };

@@ -160,3 +160,41 @@ def test_private_stays_hidden_even_for_a_discoverable_family():
         )
         is False
     )
+
+
+# ── use_wui (docs/plan-wui-user.md) ─────────────────────────────────────────────
+
+
+def test_use_wui_is_a_verb_of_its_own():
+    """D2: a grant of use_wui alone admits use_wui and nothing that edits."""
+    perm = Permission(visibility="restricted", use_wui=["user:alice"])
+    alice = Actor.human("alice")
+    assert authorize(alice, "use_wui", perm, created_by=BOB) is True
+    for verb in ("edit_content", "add_content", "execute", "converse", "use_terminal"):
+        assert authorize(alice, verb, perm, created_by=BOB) is False, verb
+
+
+def test_use_wui_lets_its_holder_read_the_files_a_page_reads():
+    """D3: a page that cannot read its own folder cannot open."""
+    perm = Permission(visibility="restricted", use_wui=["user:alice"])
+    assert authorize(Actor.human("alice"), "read_content", perm, created_by=BOB) is True
+
+
+def test_whoever_may_talk_to_the_agent_or_run_code_may_use_pages():
+    """D9 / D10: existing Participants (converse) and Collaborators (execute) keep
+    page use on upgrade, though their stored grants never named use_wui."""
+    for verb in ("converse", "execute"):
+        perm = Permission(visibility="restricted", **{verb: ["user:alice"]})
+        assert authorize(Actor.human("alice"), "use_wui", perm, created_by=BOB) is True, verb
+
+
+def test_the_implications_do_not_chain_into_reading():
+    """converse ⊇ use_wui and use_wui ⊇ read_content must not make a converse-only
+    Custom grant able to read files it was never given."""
+    perm = Permission(visibility="restricted", converse=["user:alice"])
+    assert authorize(Actor.human("alice"), "read_content", perm, created_by=BOB) is False
+
+
+def test_use_wui_does_not_imply_its_implications_backwards():
+    perm = Permission(visibility="restricted", read_content=["user:alice"])
+    assert authorize(Actor.human("alice"), "use_wui", perm, created_by=BOB) is False

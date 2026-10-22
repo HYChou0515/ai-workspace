@@ -23,6 +23,7 @@ function ctx(over: Partial<BridgeContext> = {}): BridgeContext {
   return {
     fs: { scopeId: "item1", caps: { write: true, delete: true } } as unknown as FileService,
     folder: "/sales",
+    page: "/sales/page.ai.yaml",
     openFile: null,
     me: "alice",
     declaredTools: ["lot-status"],
