@@ -7,7 +7,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryWrap } from "../test/queryWrapper";
 
 afterEach(cleanup);
-beforeEach(() => localStorage.clear());
+beforeEach(() => {
+  localStorage.clear();
+  who.state = { id: "alice", ready: true };
+});
 
 import { Launcher } from "./Launcher";
 import { BreadcrumbProvider, useBreadcrumbTrail } from "../hooks/breadcrumbs";
@@ -26,9 +29,10 @@ function TrailProbe() {
   );
 }
 
+const who = vi.hoisted(() => ({ state: { id: "alice", ready: true } }));
 vi.mock("../hooks/useCurrentUser", () => ({
-  useCurrentUser: () => "alice",
-  useCurrentUserState: () => ({ id: "alice", ready: true }),
+  useCurrentUser: () => who.state.id,
+  useCurrentUserState: () => who.state,
 }));
 
 vi.mock("../hooks/useResources", () => ({
@@ -102,6 +106,14 @@ describe("Launcher", () => {
   it("auto-shows the platform welcome on first visit", () => {
     renderLauncher();
     expect(screen.getByRole("dialog", { name: /welcome to your workspace/i })).toBeInTheDocument();
+  });
+
+  it("shows no welcome while it does not yet know who you are (a cold load)", () => {
+    // Until the current-user query settles the id is a placeholder that never
+    // dismissed anything: judging on it re-opened a welcome people had turned off.
+    who.state = { id: "default-user", ready: false };
+    renderLauncher();
+    expect(screen.queryByRole("dialog", { name: /welcome to your workspace/i })).toBeNull();
   });
 
   it("'Don't show again' stops the auto-popup, but the ? reopens it", () => {

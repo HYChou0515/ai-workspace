@@ -8,11 +8,15 @@ import { QueryWrap } from "../test/queryWrapper";
 import { AppDashboard } from "./AppDashboard";
 
 afterEach(cleanup);
-beforeEach(() => localStorage.clear());
+beforeEach(() => {
+  localStorage.clear();
+  who.state = { id: "alice", ready: true };
+});
 
+const who = vi.hoisted(() => ({ state: { id: "alice", ready: true } }));
 vi.mock("../hooks/useCurrentUser", () => ({
-  useCurrentUser: () => "alice",
-  useCurrentUserState: () => ({ id: "alice", ready: true }),
+  useCurrentUser: () => who.state.id,
+  useCurrentUserState: () => who.state,
 }));
 vi.mock("../hooks/useUsers", () => ({
   useUsers: () => [],
@@ -70,6 +74,14 @@ describe("AppDashboard onboarding", () => {
       screen.getByRole("dialog", { name: /welcome to root cause analysis/i }),
     ).toBeInTheDocument();
     expect(screen.getByText("Add your evidence")).toBeInTheDocument();
+  });
+
+  it("shows no welcome while it does not yet know who you are (a cold load)", () => {
+    // Until the current-user query settles the id is a placeholder that never
+    // dismissed anything: judging on it re-opened a welcome people had turned off.
+    who.state = { id: "default-user", ready: false };
+    renderDash();
+    expect(screen.queryByRole("dialog", { name: /welcome to root cause analysis/i })).toBeNull();
   });
 
   it("'Don't show again' stops the auto-popup, but the ? reopens it", () => {
