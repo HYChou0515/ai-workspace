@@ -510,6 +510,55 @@ def test_a_workflow_too_big_to_follow_is_saved_and_hands_nothing_over(monkeypatc
     assert [r["bound_to"] for r in _list(client, rid)] == ["carol"]
 
 
+def test_a_save_is_followed_with_the_bytes_it_uploaded_not_what_the_store_holds_after(
+    monkeypatch,
+):
+    """Round 2 (conformance 2): the PUT hands over the staging file's bytes. A
+    rewrite landing right after this save must not ride on it — reading back
+    from the store would read the rewrite, match it, and hand it to bob."""
+    from workspace_app.files import WorkspaceFiles
+
+    client, holder, rid, _spec = _world()
+    base = f"/a/rca/items/{rid}/files"
+    assert client.put(f"{base}{WF}", content=_workflow()).status_code == 204
+    holder["id"] = "carol"
+    assert _bind(client, rid, _key_of(client, rid)).status_code == 200
+    holder["id"] = "bob"
+    real = WorkspaceFiles.write_from_path
+
+    async def then_rewritten(self, item_id, path, src, content_type=None):  # noqa: ANN001, ANN202
+        await real(self, item_id, path, src, content_type)
+        await self.write(item_id, path, _workflow("Someone else's").encode())
+
+    monkeypatch.setattr(WorkspaceFiles, "write_from_path", then_rewritten)
+
+    assert client.put(f"{base}{WF}", content=_workflow("Payroll")).status_code == 204
+
+    assert [r["bound_to"] for r in _list(client, rid)] == ["carol"]
+
+
+def test_a_file_that_is_not_a_workflow_is_not_read_back(monkeypatch):
+    """Round 2 (conformance 2): only a workflow save is followed, so only its
+    bytes are held — any other upload streams through untouched."""
+    from workspace_app.api import file_routes
+
+    kept: list[object] = []
+    real = file_routes._stream_upload_to_store
+
+    async def spy(*args, **kwargs):  # noqa: ANN002, ANN003, ANN202
+        out = await real(*args, **kwargs)
+        kept.append(out)
+        return out
+
+    monkeypatch.setattr(file_routes, "_stream_upload_to_store", spy)
+    client, _holder, rid, _spec = _world()
+
+    assert client.put(f"/a/rca/items/{rid}/files/notes.json", content="{}").status_code == 204
+    assert client.put(f"/a/rca/items/{rid}/files{WF}", content=_workflow()).status_code == 204
+
+    assert kept[-2:] == [None, _workflow().encode()]
+
+
 def test_a_workflow_copied_over_from_a_template_hands_its_schedules_to_the_copier():
     """W1's template door (#520): an overwrite rewrites the workflow."""
     from workspace_app.workflow.shared import SHARED_WORKFLOWS

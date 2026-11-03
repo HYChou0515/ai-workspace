@@ -913,7 +913,7 @@ async def edit_file_impl(
         # nothing moves (`workflow_written`).
         written = (
             workflow_before.replace(old_string, new_string, 1).encode("utf-8")
-            if workflow_before is not None and workflow_before.count(old_string) == 1
+            if workflow_before is not None
             else None
         )
         await _workflow_written(ctx, inv, path, written)

@@ -602,3 +602,32 @@ async def test_a_goal_round_rewriting_a_workflow_takes_no_schedule(clock) -> Non
     await edit_file_impl(ctx, ".workflows/nightly.json", '"Nightly"', '"Nightly 2"')
 
     assert bindings.binder(key) == "bob"
+
+
+async def test_an_edit_whose_workflow_could_not_be_read_first_hands_nothing_over(
+    clock, monkeypatch
+) -> None:
+    """Review round 2 (conformance 2): without the read before the edit, what
+    the edit wrote is unknown — the hook is not called at all, rather than
+    called with nothing and left to fail inside its own catch."""
+    from workspace_app.agent.tools import edit_file_impl
+
+    ctx = _ctx()
+    await _with_workflow(ctx)
+    bindings, key = await _bound_to(ctx, "bob")
+    calls: list[str] = []
+
+    async def spy(_item, workflow_id, *, author, written):  # noqa: ANN001, ANN202
+        calls.append(workflow_id)
+        return []
+
+    authorship = ctx.context.schedule_authorship
+    assert authorship is not None
+    monkeypatch.setattr(authorship, "workflow_written", spy)
+    _reads_fail(monkeypatch, "/.workflows/nightly.json", on=1)
+
+    out = await edit_file_impl(ctx, ".workflows/nightly.json", '"Nightly"', '"Nightly 2"')
+
+    assert out.startswith("edited"), out
+    assert calls == []
+    assert bindings.binder(key) == "bob"
