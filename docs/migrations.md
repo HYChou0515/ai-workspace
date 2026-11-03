@@ -3283,7 +3283,7 @@ Workflows 打開模型答錯格式的那次執行——執行結束後還留著�
 
 **還是舊版 image 時**:角色清單沒有 WUI User;第 4 步不管怎樣都拿到 item 的共用值。
 
-### 2026-11-03 · #998 瀏覽器帶來的 token 也會自動換新;workflow 改過,排程改用改它的人執行 {#pr-998}
+### 2026-11-04 · 6a3f330d · #998 瀏覽器帶來的 token 也會自動換新;workflow 改過,排程改用改它的人執行 {#pr-998}
 
 **設定** — config 沒有新 key。要讓瀏覽器帶來的 token(`IRequestEnv` 的值)也自動換新,部署方在自己的
 登入方式(`IEnvProvider`)上寫 `refreshes_seam = True`(預設 `False`)。
