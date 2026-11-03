@@ -440,10 +440,22 @@ class ErpLogin(IEnvProvider):
 - **只寫回換掉的名稱**:寫的當下重讀那一層,這幾個名稱還是送去換的那組值時才寫;換的期間別人改的其他值照留,
   有人在這期間登出或重新登入,就以他們的為準。
 - **值從哪一層來就寫回哪一層**;放在 **Shared** 的 token,平台會**直接改寫那個 item 的共用值**,不看當下的人
-  有沒有 `write_meta`,修改紀錄的寫入者是 `system:env-refresh`。值分散在不同層、來自自動帶入值(`IRequestEnv`)
-  或服務帳號(`env_without_request`)時不換——沒有一個屬於我們的地方可以寫回。
+  有沒有 `write_meta`,修改紀錄的寫入者是 `system:env-refresh`。值分散在不同層、或來自服務帳號
+  (`env_without_request`)時不換——沒有一個屬於我們的地方可以寫回。
+- **來自自動帶入值(`IRequestEnv`,也就是瀏覽器帶來的 token)的值,預設不換**;登入方式寫
+  `refreshes_seam = True` 才換([plan-seam-token-refresh](plan-seam-token-refresh.md))。換好的值存在那個人
+  這個 item 的自動帶入值那一列,**之後瀏覽器只要還帶著同一個舊值,就一直用換好的**(排程、goal 這些沒人在場的執行
+  也用它);瀏覽器帶來一個**沒帶過的值**(重新登入過)就改用瀏覽器的。refresh token 確定無效時清掉那些名稱,
+  「登入 X」按鈕把新值寫進這個 item 的 Private。
+  ⚠️ 會 rotation 的系統:平台一換,瀏覽器手上那顆 refresh token 就作廢了——你的瀏覽器端若自己也會換,要先想好。
 - WUI 頁面的 build 以「沒有人」的身分跑,不帶任何人的值,也就不換。
 - 不寫這兩個方法 = 一切照舊。
+
+```python
+class SsoErpLogin(IEnvProvider):
+    refreshes_seam = True  # 瀏覽器帶來的 ERP_TOKEN 也由平台換新
+    ...
+```
 
 ### 兩層:所有參與者共用的值,與每個人自己的值(`plan-wui-viewer-login.md`)
 

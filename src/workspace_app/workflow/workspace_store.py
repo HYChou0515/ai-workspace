@@ -57,6 +57,14 @@ def is_workspace_workflow_path(path: str) -> bool:
     return "/" not in rest and rest.endswith(".json") and rest != SCHEDULES_FILE
 
 
+def workflow_id_of(path: str) -> str | None:
+    """The workflow id a workspace workflow file holds (`.workflows/<id>.json`
+    → ``<id>``), or None when ``path`` is not one (`is_workspace_workflow_path`)."""
+    if not is_workspace_workflow_path(path):
+        return None
+    return path.rsplit("/", 1)[1].removesuffix(".json")
+
+
 def workspace_workflow_path(slug: str) -> str:
     return f"/{WORKSPACE_WORKFLOW_DIR}/{slug}.json"
 

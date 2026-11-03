@@ -12,7 +12,9 @@ Three rules, each for a reason:
   (`user_schedules.trigger_id_for`), so an edited row is a different schedule
   with no binding; and the binding records a digest of the item's own
   ``.workflows/<run>.json`` (`workflow_digest`), so rewriting the workflow's
-  body drops it too (review round 1, F4). The sweep compares against the LIVE
+  body drops it too (review round 1, F4) — unless it was rewritten through a
+  door that knows who wrote it, which hands the schedule to them instead
+  (`plan-seam-token-refresh` W1). The sweep compares against the LIVE
   file — the one the fire will load — before each fire (round 2, D3), drops a
   binding that no longer matches, and says so to the binder. The digest covers
   that one file only: a script the workflow calls, or a file an agent node
@@ -61,6 +63,13 @@ async def workflow_digest(
     return built[2] if built is not None else ""
 
 
+#: The consent an author's row records while its workflow will not parse
+#: (`plan-seam-token-refresh` W4): equal to no digest `workflow_digest` returns,
+#: "" included, so a broken workflow fixed, replaced or deleted is never taken
+#: as the one consented to.
+UNPARSABLE_DIGEST = "!unparsable"
+
+
 class ScheduleBinding(Struct):
     trigger_id: str
     item_id: str
@@ -71,9 +80,12 @@ class ScheduleBinding(Struct):
     bound_at: int
     #: `workflow_digest` of the row's workflow when the binder pressed "Run as
     #: me" — the digest the build would run from ("" means a profile's
-    #: workflow; a file that will not parse cannot be bound). The row's key only
+    #: workflow; "Run as me" refuses a file that will not parse, and an
+    #: author's row records ``UNPARSABLE_DIGEST`` for one). The row's key only
     #: covers the ROW; the workflow it names can be rewritten by anyone who edits
-    #: the item, and the binder consented to it as it was (review round 1, F4).
+    #: the item, and the binder consented to it as it was (review round 1, F4)
+    #: — whoever rewrites it through a door that knows them takes the binding
+    #: (`plan-seam-token-refresh` W1); any other rewrite drops it.
     workflow_digest: str = ""
     #: WHY it runs as `user_id` (`plan-schedule-run-as` G8): ``"self"`` — they
     #: pressed "Run as me" (every binding made before this field existed);
@@ -274,10 +286,15 @@ class ScheduleAuthorship:
     person chose "stop running as me", would otherwise land in the name of
     whoever touched the file next.
 
-    A row is credited only when nobody holds it yet, the author may run work
-    in the item (``may_run`` — `execute`, the "Run as me" verb; G7), and its
-    workflow parses: the binding records the workflow as it is now, the
-    consent rule "Run as me" follows (`workflow_digest`)."""
+    A row is credited only when nobody holds it yet and the author may run
+    work in the item (``may_run`` — `execute`, the "Run as me" verb; G7): the
+    binding records the workflow as it is now, the consent rule "Run as me"
+    follows (`workflow_digest`) — or, while it will not parse, a consent
+    nothing matches (W4).
+
+    The same doors call ``workflow_written`` when they rewrite a workflow:
+    the schedules running it then run as whoever wrote it
+    (`plan-seam-token-refresh` W1)."""
 
     def __init__(
         self,
@@ -286,10 +303,14 @@ class ScheduleAuthorship:
         read: Callable[[str, str], Awaitable[bytes]],
         may_run: Callable[[str, str], bool],
         max_rows: int | None = None,
+        on_replaced: Callable[[ScheduleBinding, str, str], None] | None = None,
     ) -> None:
         self._bindings = bindings
         self._read = read
         self._may_run = may_run
+        #: ``(the binding replaced, who now holds it, the workflow they rewrote)``
+        #: — the replaced person is told (W3). Blocking; None ⇒ nobody told.
+        self._on_replaced = on_replaced
         # The sweep's own cap: a file over it fires nothing, and the sweep does
         # not expire bindings while it stays over — crediting its rows would
         # only grow the table (review round 1, defect 2).
@@ -337,9 +358,16 @@ class ScheduleAuthorship:
         for key, run in added:
             if await asyncio.to_thread(self._bindings.get, key) is not None:
                 continue
+            # A workflow that will not parse yet is still the author's row
+            # (`plan-seam-token-refresh` W4): it records a consent nothing can
+            # match — NOT "", which a later delete would let the profile's
+            # workflow of that name satisfy (viewer-login round 6). It does not
+            # fire while broken; whoever fixes it through a door that knows them
+            # takes it (`workflow_written`), any other fix drops it.
             if await unparsable_workflow(self._read, item_id, run) is not None:
-                continue
-            digest = await workflow_digest(self._read, item_id, run)
+                digest = UNPARSABLE_DIGEST
+            else:
+                digest = await workflow_digest(self._read, item_id, run)
             await asyncio.to_thread(
                 self._bindings.bind,
                 key,
@@ -351,3 +379,72 @@ class ScheduleAuthorship:
             )
             credited.append(key)
         return credited
+
+    async def workflow_written(self, item_id: str, workflow_id: str, *, author: str) -> list[str]:
+        """`plan-seam-token-refresh` W1: the workflow ``workflow_id`` was just
+        rewritten by ``author`` — every schedule that runs it AS SOMEONE now runs
+        as them, the one who wrote what it will run. Returns the keys moved.
+
+        Only rows already bound (W2): a row nobody runs as — never credited, or
+        its person chose "Stop running as me" — is not taken by whoever edits
+        the workflow. An author who may not run work here (``may_run``) takes
+        nothing; the sweep then drops the binding as before. A workflow that
+        will not parse after this write moves nothing either: it does not fire,
+        and its fix will come through here or drop the binding.
+
+        The same person: only the consent is renewed, silently, and their reason
+        kept. Someone else: ``on_replaced`` tells the person replaced.
+
+        Never raises, for the reason ``credit`` gives."""
+        try:
+            return await self._workflow_written(item_id, workflow_id, author=author)
+        except Exception:  # noqa: BLE001 — logged; the save stands
+            logger.exception(
+                "schedule authorship: could not move %s %s to %s", item_id, workflow_id, author
+            )
+            return []
+
+    async def _workflow_written(self, item_id: str, workflow_id: str, *, author: str) -> list[str]:
+        from .offered import unparsable_workflow
+
+        if not author:
+            return []
+        bound = await asyncio.to_thread(self._bindings.for_item, item_id)
+        if not bound:
+            return []
+        if await unparsable_workflow(self._read, item_id, workflow_id) is not None:
+            return []
+        digest = await workflow_digest(self._read, item_id, workflow_id)
+        stale = [b for b in bound if b.workflow_digest != digest]
+        if not stale or not await asyncio.to_thread(self._may_run, author, item_id):
+            return []
+        runs: dict[str, dict[str, str]] = {}
+        moved: list[str] = []
+        for b in stale:
+            if b.path not in runs:
+                try:
+                    raw = (await self._read(item_id, b.path)).decode("utf-8", "replace")
+                except Exception:  # noqa: BLE001 — a file not read moves nothing
+                    logger.warning("schedule authorship: could not read %s", b.path, exc_info=True)
+                    raw = ""
+                runs[b.path] = {key: row.run for key, row in file_keys(item_id, b.path, raw)}
+            if runs[b.path].get(b.trigger_id) != workflow_id:
+                continue
+            same = b.user_id == author
+            await asyncio.to_thread(
+                self._bindings.bind,
+                b.trigger_id,
+                item_id=item_id,
+                path=b.path,
+                user_id=author,
+                workflow_digest=digest,
+                reason=b.reason if same else "author",
+                assigned_by=b.assigned_by if same else "",
+            )
+            moved.append(b.trigger_id)
+            if not same and self._on_replaced is not None:
+                try:
+                    await asyncio.to_thread(self._on_replaced, b, author, workflow_id)
+                except Exception:  # noqa: BLE001 — a failed notice is not a failed move
+                    logger.exception("schedule authorship: could not tell %s", b.user_id)
+        return moved

@@ -37,6 +37,7 @@ from ..filestore.protocol import FileExists, FileNotFound
 from ..kernels import KernelService
 from ..quota.admission import AdmissionGate
 from ..sandbox.protocol import PreviewFailed, Sandbox
+from ..workflow.workspace_store import workflow_id_of
 from .activity import ActivityLog
 from .byte_range import UNSATISFIABLE, byte_range
 from .events import CellEvent, FileChanged, to_sse
@@ -632,6 +633,10 @@ def register_file_routes(
                 await schedule_authorship.credit(
                     investigation_id, norm, before=before, after=after, author=get_user_id()
                 )
+        # plan-seam-token-refresh W1: a workflow saved here — the editor, the
+        # panel's import — hands the schedules running it to the person saving.
+        if schedule_authorship is not None and (wf := workflow_id_of(norm)) is not None:
+            await schedule_authorship.workflow_written(investigation_id, wf, author=get_user_id())
         activity.record(
             "file_written",
             f"Wrote {rel_path(norm)}",

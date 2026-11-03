@@ -859,6 +859,7 @@ async def write_file_impl(ctx: RunContextWrapper[AgentToolContext], path: str, c
     if current is None:
         # A NEW schedules file: every row in it is this turn's (plan-schedule-run-as G2).
         await _credit_schedules(ctx, inv, path, before=None, after=content)
+        await _workflow_written(ctx, inv, path)
     # Every confirmation and every rejection below names the file RELATIVELY
     # (#549), like `list_files` does. Echoing the argument verbatim taught the
     # opposite: an agent that guessed `/notes.md` had that guess confirmed by a
@@ -906,6 +907,7 @@ async def edit_file_impl(
                 _LOGGER.exception("schedules: could not read back %s", path)
             else:
                 await _credit_schedules(ctx, inv, path, before=before, after=after)
+        await _workflow_written(ctx, inv, path)
         return f"edited {rel_path(path)}"
     # This impl required `read_content` above, so `_conflict_echo` normally
     # cannot refuse — but "normally" is not "never": `authorize_tool` re-reads
@@ -958,6 +960,20 @@ async def _credit_schedules(
     await authorship.credit(
         inv, abs_path(path), before=before, after=after, author=ctx.context.acting_for
     )
+
+
+async def _workflow_written(ctx: RunContextWrapper[AgentToolContext], inv: str, path: str) -> None:
+    """A workflow this turn just wrote — with `save_workflow`, `write_file` or
+    `edit_file` — hands the schedules running it to the person the turn acts
+    for (`plan-seam-token-refresh` W1). Nobody (an unbound schedule's turn)
+    takes nothing, and the sweep drops those bindings as before."""
+    from ..workflow.workspace_store import workflow_id_of
+
+    authorship = ctx.context.schedule_authorship
+    workflow_id = workflow_id_of(abs_path(path))
+    if authorship is None or workflow_id is None:
+        return
+    await authorship.workflow_written(inv, workflow_id, author=ctx.context.acting_for)
 
 
 def _capped_listing(entries: list[str], cap: int, *, offset: int = 1, noun: str, hint: str) -> str:
@@ -3379,6 +3395,7 @@ async def save_workflow_impl(
             errs
         )
     path = await save_workspace_workflow(files, inv, slug, workflow)
+    await _workflow_written(ctx, inv, path)
     return (
         f"saved workflow '{slug}' to {rel_path(path)}. The user can Run it from this "
         "item, or download "

@@ -2406,14 +2406,31 @@ def create_app(
         max_rows=max_page_schedules,
         sweep_enabled=trigger_check_interval is not None,
     )
+
     # plan-schedule-run-as G2: a row runs as whoever wrote it — credited by the
     # doors that know who that is (save_schedules, the file PUT, "change time"),
     # against the SAME `execute` rule the sweep re-checks before each fire.
+    # plan-seam-token-refresh W1/W3: the same doors hand a schedule to whoever
+    # rewrites its workflow, and the person it ran as is told.
+    def _tell_schedule_replaced(previous: ScheduleBinding, author: str, workflow_id: str) -> None:
+        notify(
+            spec,
+            recipient=previous.user_id,
+            kind="schedule_binding_replaced",
+            title="A schedule no longer runs as you",
+            body=(
+                f"{author} changed the workflow “{workflow_id}”, so its schedule in "
+                f"{previous.path} now runs with their values instead of yours."
+            ),
+            actor=author,
+        )
+
     schedule_authorship = ScheduleAuthorship(
         ScheduleBindings(spec),
         read=files.read,
         may_run=lambda user, item: user_may(spec, item, user, "execute", superusers=superusers),
         max_rows=max_page_schedules,
+        on_replaced=_tell_schedule_replaced,
     )
     turn_ctx = TurnContextBuilder(
         view_plugin_artifacts=artifact_plugins(view_plugins),
@@ -2639,6 +2656,7 @@ def create_app(
         # The sweep's own copy, read when the live workspace is still restoring.
         schedules_durable=ScheduleSource(read=filestore.read, ls=filestore.ls),
         packages=packages or [],
+        schedule_authorship=schedule_authorship,
     )
 
     chat_send_svc = ChatSendService(
