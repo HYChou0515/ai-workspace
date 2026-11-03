@@ -2410,8 +2410,10 @@ def create_app(
     # plan-schedule-run-as G2: a row runs as whoever wrote it — credited by the
     # doors that know who that is (save_schedules, the file PUT, "change time"),
     # against the SAME `execute` rule the sweep re-checks before each fire.
-    # plan-seam-token-refresh W1/W3: the same doors hand a schedule to whoever
-    # rewrites its workflow, and the person it ran as is told.
+    # plan-seam-token-refresh W1/W3: the doors that write a WORKFLOW and know
+    # who wrote it (save_workflow / write_file / edit_file from a chat, the
+    # file PUT, template copy) hand its schedules to that person; both people
+    # are told.
     def _tell_schedule_moved(previous: ScheduleBinding, author: str, workflow_id: str) -> None:
         """Both people a moved schedule concerns: the one whose values it ran
         with, and the one whose values it runs with now (W3; review round 1,

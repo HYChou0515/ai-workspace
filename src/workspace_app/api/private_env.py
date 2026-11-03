@@ -450,7 +450,8 @@ class MineOut(BaseModel):
     #: What the person put there themselves — editable on the Private tab.
     values: dict[str, str]
     #: What the deploy's seam said about them at their last request — shown,
-    #: not editable: it is rewritten by their next request anyway.
+    #: not editable: their next request rewrites it (keeping a value the
+    #: platform renewed while the request repeats the old one, S4).
     auto: dict[str, str]
 
 

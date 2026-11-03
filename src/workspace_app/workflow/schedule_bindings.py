@@ -293,9 +293,10 @@ class ScheduleAuthorship:
     follows (`workflow_digest`) — or, while it will not parse, a consent
     nothing matches (W4).
 
-    The same doors call ``workflow_written`` when they rewrite a workflow:
-    the schedules running it then run as whoever wrote it
-    (`plan-seam-token-refresh` W1)."""
+    The doors that write a WORKFLOW and know who wrote it — `save_workflow` /
+    `write_file` / `edit_file` from a chat turn, the file PUT, template copy —
+    call ``workflow_written``: the schedules running it then run as whoever
+    wrote it (`plan-seam-token-refresh` W1)."""
 
     def __init__(
         self,

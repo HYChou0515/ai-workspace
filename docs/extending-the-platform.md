@@ -445,9 +445,12 @@ class ErpLogin(IEnvProvider):
 - **來自自動帶入值(`IRequestEnv`,也就是瀏覽器帶來的 token)的值,預設不換**;登入方式寫
   `refreshes_seam = True` 才換([plan-seam-token-refresh](plan-seam-token-refresh.md))。換好的值存在那個人
   這個 item 的自動帶入值那一列,**之後瀏覽器只要還帶著同一個舊值,就一直用換好的**(排程、goal 這些沒人在場的執行
-  也用它);瀏覽器帶來一個**沒帶過的值**(重新登入過)就改用瀏覽器的。refresh token 確定無效時清掉那些名稱,
-  「登入 X」按鈕把新值寫進這個 item 的 Private。
+  也用它);瀏覽器帶來一個**和上一次帶的不同的值**(重新登入過)就改用瀏覽器的。`refresh()` 多回傳的名稱
+  (瀏覽器不會帶的,例如到期時間)在瀏覽器沒帶來新東西前也一起留著。refresh token 確定無效時清掉那些名稱,
+  瀏覽器之後還帶同一個值也不會放回去;「登入 X」按鈕把新值寫進這個 item 的 Private。
   ⚠️ 會 rotation 的系統:平台一換,瀏覽器手上那顆 refresh token 就作廢了——你的瀏覽器端若自己也會換,要先想好。
+  而且這份換好的值是**每個 item 各一份**:同一個人在兩個 item 都要用、都快過期時,兩邊會各自拿瀏覽器那顆去換,
+  後換的那邊會被拒、要那個人重新登入一次。
 - WUI 頁面的 build 以「沒有人」的身分跑,不帶任何人的值,也就不換。
 - 不寫這兩個方法 = 一切照舊。
 
@@ -497,7 +500,7 @@ turn、他按下起的 run——同名時**蓋過** `env_without_request` 給的
 | 聊天送出、WUI 頁面的 `callTool` | 送出 / 按的人 |
 | 頁面按鈕起的 `wui/run`、`POST …/run` | **按的人**(帳照舊記在 run 的 `captured_user`) |
 | goal driver 續跑、pod 死掉後被接手重跑的 turn | 那一輪的作者 |
-| `schedules.json` 的排程(item 自己的、頁面的) | **綁定的那一個人**:預設是寫那一列的人——AI 用 `save_schedules`／`write_file`／`edit_file` 寫的算對話的那個人(workflow 節點寫的算那個 run 代表的人)、檔案編輯器存檔／WUI 頁面 `writeFile`／檔案樹上傳／面板匯入算存檔的人、「改時間」算改的人;寫的人在 item 沒有 `execute` 就不綁(`docs/plan-schedule-run-as.md`)。之後誰按了「用我的身分執行」就換成誰,superuser 也可以指定別人(並通知對方)。用 `exec` 寫、複製、搬移、zip 匯入、尋找取代、升級前就在的列 → 誰的都沒有(shared + `env_without_request`)。排程內容一改就是新的一列,算改的人的 |
+| `schedules.json` 的排程(item 自己的、頁面的) | **綁定的那一個人**:預設是寫那一列的人——AI 用 `save_schedules`／`write_file`／`edit_file` 寫的算對話的那個人(workflow 節點寫的算那個 run 代表的人)、檔案編輯器存檔／WUI 頁面 `writeFile`／檔案樹上傳／面板匯入算存檔的人、「改時間」算改的人;寫的人在 item 沒有 `execute` 就不綁(`docs/plan-schedule-run-as.md`);寫的時候它跑的 workflow 還解析不了也照樣綁給寫的人,修好前不觸發([plan-seam-token-refresh](plan-seam-token-refresh.md) W4)。之後誰按了「用我的身分執行」就換成誰,superuser 也可以指定別人(並通知對方)。用 `exec` 寫、複製、搬移、zip 匯入、尋找取代、升級前就在的列 → 誰的都沒有(shared + `env_without_request`)。排程內容一改就是新的一列,算改的人的 |
 | event trigger、profile 層級排程 | 誰的都沒有 |
 | WUI build | **誰的都沒有**:私人層是空的,shared 照政策解析,所以 `private_only` 的名字拿不到(`dist/` 是大家共用的成品) |
 
@@ -505,7 +508,11 @@ turn、他按下起的 run——同名時**蓋過** `env_without_request` 給的
   `execute`)。被移出 item 的人,他的值從下一個 turn 起就不再被使用;他綁定的排程會取消綁定並通知他
   「你已沒有權限」。
 - **「用我的身分執行」同意的是那一列排程,也是它要跑的 workflow 檔**(`.workflows/<run>.json` 的內容)。
-  兩者任一改了,綁定就取消並通知;排程檔整份被刪也一樣。workflow 檔每次觸發前以**即時檔案**比對
+  兩者任一改了,綁定就取消並通知;排程檔整份被刪也一樣。**例外**([plan-seam-token-refresh](plan-seam-token-refresh.md) W1):
+  workflow 檔是被一個**認得出是誰、而且在 item 有 `execute`** 的人改的——他在自己的聊天裡請 AI 改(`save_workflow`／
+  `write_file`／`edit_file`)、用檔案編輯器或面板匯入存檔、從範本複製——綁定改成他的(原因顯示「它跑的 workflow 是他改的」),
+  原本的人和他都收到通知;是同一個人就只更新同意的 digest、不通知。改完那一刻檔案已經又被別人改掉,就不轉交。
+  workflow 節點或排程自己的執行改的、`exec`、zip 匯入、檔案樹的複製／搬移、尋找取代、Run 附帶的上傳、刪除,照舊取消並通知。workflow 檔每次觸發前以**即時檔案**比對
   (run 會載入的就是它;讀取出錯或逾時就當沒變(檔案不見了則算改了),不拖住其他排程),排程列的刪除也以即時檔案再確認一次
   (持久快照會落後);檔案整份解析不了時什麼都不取消。觸發起的 run 記下的是綁定當時同意的那份 digest,
   所以檢查之後、run 組出來之前才改的檔,組的時候就對不上,run 不帶那個人的值。**只比對那一個 workflow 檔**:它呼叫的腳本、agent 節點讀的其他檔案被改不會取消綁定,
