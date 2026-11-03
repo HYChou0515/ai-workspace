@@ -9,7 +9,7 @@
  * Running as someone uses their own sign-ins and values, an act with
  * consequences for them, so it is always said, never implied (NN/g, *Visibility
  * of System Status*): who, and why it is them — they chose it, they wrote the
- * row, or an administrator named them.
+ * row, they changed the workflow it runs, or an administrator named them.
  */
 import { useMutation } from "@tanstack/react-query";
 import { useState } from "react";
@@ -41,7 +41,9 @@ export function runsAsText(r: RunsAsFacts, t: ReturnType<typeof useT>): string {
       ? t("sched.why.admin", { by: r.by })
       : r.reason === "author"
         ? t(r.mine ? "sched.why.authorYou" : "sched.why.author")
-        : t(r.mine ? "sched.why.selfYou" : "sched.why.self");
+        : r.reason === "workflow"
+          ? t(r.mine ? "sched.why.workflowYou" : "sched.why.workflow")
+          : t(r.mine ? "sched.why.selfYou" : "sched.why.self");
   return t("sched.runsAsWhy", { main, why });
 }
 

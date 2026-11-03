@@ -2231,6 +2231,8 @@ export const messages = {
   "sched.why.author": { "zh-TW": "排程是他寫的", en: "wrote this schedule" },
   "sched.why.selfYou": { "zh-TW": "你自己選的", en: "you chose it" },
   "sched.why.authorYou": { "zh-TW": "排程是你寫的", en: "you wrote this schedule" },
+  "sched.why.workflow": { "zh-TW": "它跑的 workflow 是他改的", en: "changed the workflow it runs" },
+  "sched.why.workflowYou": { "zh-TW": "它跑的 workflow 是你改的", en: "you changed the workflow it runs" },
   "sched.why.admin": { "zh-TW": "管理員 {by} 指定", en: "named by administrator {by}" },
   "sched.assign": { "zh-TW": "指定…", en: "Choose…" },
   "sched.assignTitle": { "zh-TW": "這個排程用誰的身分執行？", en: "Who should this schedule run as?" },
