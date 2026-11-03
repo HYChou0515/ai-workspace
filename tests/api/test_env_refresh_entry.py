@@ -11,9 +11,10 @@ from __future__ import annotations
 
 from typing import cast
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 
 from workspace_app.api.private_env import PrivateEnvStore
+from workspace_app.api.request_env import IRequestEnv
 from workspace_app.api.schemas import _MessageBody
 
 from .test_env_refresh_flow import OLD, _Erp
@@ -74,6 +75,52 @@ def test_a_workflow_node_refreshes_for_the_presser():
         assert _poll_until_terminal(client, item_id, runs[0]["run_id"]) == "done"
 
     assert runner.envs == [NEW_ENV]
+
+
+class _SeamErp(_Erp):
+    refreshes_seam = True
+
+
+class _BrowserSaysOld(IRequestEnv):
+    """The browser keeps bringing the token it was issued."""
+
+    async def env_for(self, request: Request, *, user_id: str, item_id: str):
+        return dict(OLD)
+
+
+def test_a_browser_issued_token_is_renewed_and_its_stale_copy_does_not_undo_it():
+    """plan-seam-token-refresh S1/S4/S5: the first send renews the seam's token;
+    the second brings the same stale copy and still gets the renewed one —
+    without spending the refresh token again."""
+    client, runner, item_id, spec = _send_app(_BrowserSaysOld(), user="alice")
+    erp = _SeamErp()
+    _sign_ins(client, erp)
+
+    with client:
+        for _ in range(2):
+            client.post(f"/a/playground/items/{item_id}/messages", json={"content": "hi"})
+
+    assert runner.envs == [NEW_ENV, NEW_ENV]
+    assert erp.calls == [OLD]
+    assert PrivateEnvStore(spec).seam("alice", item_id) == NEW_ENV
+
+
+def test_a_workflow_node_gets_the_renewed_browser_token_of_the_presser():
+    """The headless half: a run the presser started reads their seam row, and
+    renews what it holds."""
+    _executor, item_id, spec, runner, client = _executor_app(_BrowserSaysOld(), user="presser-p")
+    _sign_ins(client, _SeamErp())
+    PrivateEnvStore(spec).record_seam("presser-p", item_id, OLD)
+
+    with client:
+        base = f"/a/playground/items/{item_id}"
+        client.put(f"{base}/files/.workflows/nightly.json", content=_ONE_AGENT_STEP)
+        assert client.post(f"{base}/wui/run", json={"workflow": "nightly"}).status_code == 200
+        runs = client.get(f"{base}/runs").json()
+        assert _poll_until_terminal(client, item_id, runs[0]["run_id"]) == "done"
+
+    assert runner.envs == [NEW_ENV]
+    assert PrivateEnvStore(spec).seam("presser-p", item_id) == NEW_ENV
 
 
 def test_a_deploy_with_no_refreshing_sign_in_changes_nothing():

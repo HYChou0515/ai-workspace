@@ -643,3 +643,114 @@ async def test_a_rejection_naming_only_what_the_layer_no_longer_holds_is_a_passi
 
     assert out.rejected == []
     assert w.store.personal("alice") == {"ERP_TOKEN": "old"}
+
+
+# ─── plan-seam-token-refresh S1/S2/S6/S7: a sign-in that renews the seam's ────
+
+
+class _SeamErp(_Erp):
+    """A deploy whose browser-issued ERP token this sign-in can renew (S2)."""
+
+    refreshes_seam = True
+
+
+async def test_a_value_the_seam_wrote_is_refreshed_when_the_sign_in_opts_in():
+    """S1: written back to the seam row, and kept there when the browser brings
+    the old token again (S4)."""
+    w = _World()
+    w.store.record_seam("alice", "i1", {**OLD, "OTHER": "o"})
+    w.store.replace("alice", "i1", {"MINE": "m"})
+    erp = _SeamErp()
+
+    out = await w.run([erp])
+
+    assert erp.calls == [OLD]
+    renewed = {"ERP_TOKEN": "new", "ERP_REFRESH": "r2", "OTHER": "o"}
+    assert w.store.seam("alice", "i1") == renewed
+    assert w.store.get("alice", "i1") == {"MINE": "m"}
+    assert out.person.own == {"MINE": "m", **renewed}
+    assert w.store.record_seam("alice", "i1", {**OLD, "OTHER": "o"}) == renewed
+
+
+async def test_the_seam_wins_over_typed_values_so_the_seam_is_what_gets_refreshed():
+    """The tool gets the seam's value of a name it gives (Q5), so that is the
+    one renewed — what they typed under it is left as it is."""
+    w = _World()
+    w.store.replace("alice", "i1", {"ERP_TOKEN": "typed", "ERP_REFRESH": "typed-r"})
+    w.store.record_seam("alice", "i1", OLD)
+
+    await w.run([_SeamErp()])
+
+    assert w.store.seam("alice", "i1") == {"ERP_TOKEN": "new", "ERP_REFRESH": "r2"}
+    assert w.store.get("alice", "i1") == {"ERP_TOKEN": "typed", "ERP_REFRESH": "typed-r"}
+
+
+async def test_values_split_between_the_seam_and_typed_are_not_refreshed():
+    """S7: no single row to write the new set back to."""
+    w = _World()
+    w.store.replace("alice", "i1", {"ERP_REFRESH": "r1"})
+    w.store.record_seam("alice", "i1", {"ERP_TOKEN": "old"})
+    erp = _SeamErp()
+
+    await w.run([erp])
+
+    assert erp.calls == []
+
+
+async def test_a_dead_seam_token_is_cleared_and_reported_as_this_items_sign_in():
+    """S6: cleared from the seam row (and kept cleared while the browser brings
+    the same dead token); signing in again writes this item's Private values,
+    which the seam no longer covers."""
+    w = _World()
+    w.store.record_seam("alice", "i1", {**OLD, "OTHER": "o"})
+    erp = _SeamErp(outcome=RefreshRejected({"ERP_TOKEN", "ERP_REFRESH"}))
+
+    out = await w.run([erp])
+
+    assert w.store.seam("alice", "i1") == {"OTHER": "o"}
+    assert out.person.own == {"OTHER": "o"}
+    assert [(d.provider.id, d.layer) for d in out.rejected] == [("erp", "private")]
+    assert w.store.record_seam("alice", "i1", {**OLD, "OTHER": "o"}) == {"OTHER": "o"}
+
+
+async def test_two_runs_at_once_spend_a_seam_refresh_token_once():
+    """The claim and the re-read cover the seam row as they cover the others."""
+    w = _World()
+    w.store.record_seam("alice", "i1", OLD)
+    inside = asyncio.Event()
+    finish = asyncio.Event()
+
+    class _Held(_SeamErp):
+        async def refresh(self, values: dict[str, str]) -> dict[str, str]:
+            inside.set()
+            await finish.wait()
+            return await super().refresh(values)
+
+    erp = _Held()
+    first_run = asyncio.create_task(w.run([erp], wait_s=5))
+    # Bounded: a seam value that is never refreshed never gets here, and that
+    # must read as a failure, not a hang.
+    await asyncio.wait_for(inside.wait(), 5)
+    second_run = asyncio.create_task(w.run([erp], wait_s=5))
+    await asyncio.sleep(0)
+    finish.set()
+    first, second = await asyncio.gather(first_run, second_run)
+
+    assert len(erp.calls) == 1
+    assert first.person.own["ERP_TOKEN"] == "new"
+    assert second.person.own["ERP_TOKEN"] == "new"
+
+
+async def test_a_seam_value_changed_while_refreshing_is_not_overwritten():
+    """A new sign-in the browser brought while the deploy was refreshing the
+    old one is newer than the refresh: the write-back leaves it."""
+    w = _World()
+    w.store.record_seam("alice", "i1", OLD)
+    erp = _EditsMeanwhile(
+        lambda: w.store.record_seam("alice", "i1", {"ERP_TOKEN": "relogin", "ERP_REFRESH": "rr"})
+    )
+    erp.refreshes_seam = True
+
+    await w.run([erp])
+
+    assert w.store.seam("alice", "i1") == {"ERP_TOKEN": "relogin", "ERP_REFRESH": "rr"}

@@ -23,9 +23,11 @@ deploy was refreshing — is left as it now is, and a set someone changed or
 removed meanwhile (signed out, signed in again) is theirs, not overwritten.
 
 Only one layer may be written back to: a set of values that comes from several
-layers, from the seam (the deploy's ``IRequestEnv``, rewritten on every
-request) or from the service account has no row of ours to hold a refreshed
-one, so it is left as it is.
+layers, or from the service account, has no row of ours to hold a refreshed
+one, so it is left as it is. A set from the seam (the deploy's
+``IRequestEnv``) is renewed only for a sign-in that opts in
+(``refreshes_seam``, `docs/plan-seam-token-refresh.md`): the seam row keeps the
+renewed set while the browser keeps bringing the old one (S4).
 """
 
 from __future__ import annotations
@@ -49,6 +51,10 @@ from .refresh_claims import RefreshClaims
 logger = logging.getLogger(__name__)
 
 Writable = Literal["personal", "private", "shared"]
+#: Where a refreshed set is written: a layer, or the seam row under the private
+#: one. A dead sign-in found in the seam is reported as ``private`` — signing in
+#: again writes this item's Private values (S6).
+Target = Literal["personal", "private", "seam", "shared"]
 #: A write-back: what the layer becomes, given what it holds now — None
 #: leaves it as it is.
 Patch = Callable[[dict[str, str]], "dict[str, str] | None"]
@@ -170,15 +176,31 @@ async def _one(
     target = next(iter(sources))
     if target == "service":
         return out
-    seam: dict[str, str] = {}
+    layer: Target = target  # ty: ignore[invalid-assignment]
+    #: The other half of the private layer, which ``_with`` composes it with:
+    #: the seam's answer beside what they typed, and the other way round.
+    beside: dict[str, str] = {}
     if target == "private":
         seam = await asyncio.to_thread(store.seam, user_id, item_id)
-        if any(not is_blank(seam.get(n, "")) for n in values):
-            return out  # the seam's, rewritten on every request: not ours to refresh
+        from_seam = [n for n in values if not is_blank(seam.get(n, ""))]
+        if from_seam:
+            # The seam wins a name (Q5), so these came from the seam row. Renewed
+            # there only for a sign-in that opts in (S2), and only when the whole
+            # set is the seam's: one row to write it back to (S7).
+            if not provider.refreshes_seam or len(from_seam) != len(values):
+                return out
+            layer = "seam"
+            beside = await asyncio.to_thread(store.get, user_id, item_id)
+        else:
+            beside = seam
     if not _due(provider, values):
         return out
-    layer: Writable = target  # ty: ignore[invalid-assignment]
-    owner = {"personal": user_id, "private": f"{user_id}:{item_id}", "shared": item_id}[layer]
+    owner = {
+        "personal": user_id,
+        "private": f"{user_id}:{item_id}",
+        "seam": f"{user_id}:{item_id}",
+        "shared": item_id,
+    }[layer]
     key = f"{layer}:{owner}:{provider.id}"
 
     def read() -> dict[str, str]:
@@ -186,6 +208,8 @@ async def _one(
             return store.personal(user_id)
         if layer == "private":
             return store.get(user_id, item_id)
+        if layer == "seam":
+            return store.seam(user_id, item_id)
         return read_shared(item_id)
 
     def write(patch: Patch) -> tuple[dict[str, str], bool]:
@@ -206,6 +230,8 @@ async def _one(
             return now, False
         if layer == "personal":
             store.replace_personal(user_id, new)
+        elif layer == "seam":
+            store.replace_seam(user_id, item_id, new)
         else:
             store.replace(user_id, item_id, new)
         return new, True
@@ -213,7 +239,7 @@ async def _one(
     holder = await asyncio.to_thread(claims.try_take, key, ttl_ms=CLAIM_TTL_MS)
     if holder is None:
         return await _wait_for_peer(
-            out, provider, layer, read, lambda: claims.held(key), values, wait_s, seam
+            out, provider, layer, read, lambda: claims.held(key), values, wait_s, beside
         )
     try:
         # Read again under the claim: a peer may have refreshed (and, on a
@@ -221,7 +247,7 @@ async def _one(
         current = await asyncio.to_thread(read)
         stored = {n: current[n] for n in values if n in current}
         if stored != values and not _due(provider, stored):
-            return _with(out, layer, current, seam)  # a peer refreshed it just now
+            return _with(out, layer, current, beside)  # a peer refreshed it just now
         try:
             fresh = await asyncio.wait_for(provider.refresh(dict(stored)), timeout_s)
         except RefreshRejected as rejected:
@@ -248,13 +274,13 @@ async def _one(
                 write,
                 _unchanged(stored, lambda now: {n: v for n, v in now.items() if n not in dead}),
             )
-            done = _with(out, layer, kept, seam)
+            done = _with(out, layer, kept, beside)
             if not cleared:
                 return done  # signed in again meanwhile: those are live
             logger.info(
                 "env-refresh: %s rejected for %s; cleared %s", provider.id, layer, sorted(dead)
             )
-            return replace(done, rejected=[*done.rejected, DeadSignIn(provider, layer)])
+            return replace(done, rejected=[*done.rejected, DeadSignIn(provider, _reported(layer))])
         except Exception:  # noqa: BLE001 — D5: anything else is a passing failure
             logger.warning("env-refresh: %s refresh failed; tool keeps its values", provider.id)
             return out
@@ -263,7 +289,7 @@ async def _one(
         )
         if wrote:
             logger.info("env-refresh: %s refreshed %s for %s", provider.id, sorted(fresh), layer)
-        return _with(out, layer, merged, seam)
+        return _with(out, layer, merged, beside)
     finally:
         await asyncio.to_thread(claims.release, key, holder)
 
@@ -282,12 +308,12 @@ def _unchanged(stored: dict[str, str], change: Callable[[dict[str, str]], dict[s
 async def _wait_for_peer(
     out: RefreshOutcome,
     provider: IEnvProvider,
-    layer: Writable,
+    layer: Target,
     read: Callable[[], dict[str, str]],
     held: Callable[[], bool],
     values: dict[str, str],
     wait_s: float,
-    seam: dict[str, str],
+    beside: dict[str, str],
 ) -> RefreshOutcome:
     """Someone else is refreshing these values: wait for what they write, or
     go on with what we had (D4) — as soon as they let go of the claim, not
@@ -297,9 +323,9 @@ async def _wait_for_peer(
     def changed(current: dict[str, str]) -> RefreshOutcome | None:
         if {n: current.get(n) for n in values} == values:
             return None
-        done = _with(out, layer, current, seam)
+        done = _with(out, layer, current, beside)
         if any(is_blank(current.get(n, "")) for n in values):
-            return replace(done, rejected=[*done.rejected, DeadSignIn(provider, layer)])
+            return replace(done, rejected=[*done.rejected, DeadSignIn(provider, _reported(layer))])
         return done
 
     loop = asyncio.get_running_loop()
@@ -315,17 +341,26 @@ async def _wait_for_peer(
     return out
 
 
+def _reported(layer: Target) -> Writable:
+    """Where signing in again writes for a sign-in found dead in ``layer``: the
+    seam's own row is the browser's, so this item's Private values (S6)."""
+    return "private" if layer == "seam" else layer
+
+
 def _with(
-    out: RefreshOutcome, layer: Writable, values: dict[str, str], seam: dict[str, str]
+    out: RefreshOutcome, layer: Target, values: dict[str, str], beside: dict[str, str]
 ) -> RefreshOutcome:
     """The outcome with ``layer`` replaced by what is stored there now."""
     if layer == "shared":
         return replace(out, shared=dict(values))
     if layer == "personal":
         return replace(out, person=replace(out.person, personal=dict(values)))
-    # private: composed exactly as the turn composes it — what they typed, with
-    # the seam's answer over it — so a cleared name is gone from the tool's env.
-    return replace(out, person=replace(out.person, own=own_layer(values, seam)))
+    # private / seam: composed exactly as the turn composes it — what they
+    # typed, with the seam's answer over it — so a cleared name is gone from the
+    # tool's env.
+    if layer == "seam":
+        return replace(out, person=replace(out.person, own=own_layer(beside, values)))
+    return replace(out, person=replace(out.person, own=own_layer(values, beside)))
 
 
 #: Who a refreshed shared copy is written as (D3): the platform, not a person.
