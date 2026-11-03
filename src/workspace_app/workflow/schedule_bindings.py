@@ -463,9 +463,8 @@ class ScheduleAuthorship:
             # new holder (and tell the old one something false). Not atomic: the
             # window left is one read.
             now = await asyncio.to_thread(self._bindings.get, b.trigger_id)
-            if now is None or (now.user_id, now.workflow_digest) != (b.user_id, b.workflow_digest):
+            if now != b:  # gone (None), or re-bound in any way since
                 continue
-            b = now
             same = b.user_id == author
             await asyncio.to_thread(
                 self._bindings.bind,

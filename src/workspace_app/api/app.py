@@ -1443,7 +1443,7 @@ def create_app(
                 f"The workflow a schedule in {binding.path} runs was changed since it was "
                 "set to run as you, so it no longer runs with your values. Check the "
                 "workflow, then find the schedule on the Schedules page or in the item's "
-                "Workflows panel and choose “Run as me” again if you still want it to."
+                "Workflows panel and choose “Run as me” if you want it to run as you."
             )
         else:
             title = "A schedule that ran as you was changed"

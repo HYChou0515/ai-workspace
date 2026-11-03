@@ -537,6 +537,36 @@ def test_a_save_is_followed_with_the_bytes_it_uploaded_not_what_the_store_holds_
     assert [r["bound_to"] for r in _list(client, rid)] == ["carol"]
 
 
+def test_a_save_whose_upload_cannot_be_read_back_stands_and_hands_nothing_over(monkeypatch):
+    """Round 3 (conformance F3): reading the staging file only serves following
+    the save — when it fails, the save is still a 204 and the schedule stays."""
+    from workspace_app.api import file_routes
+
+    real = file_routes.Path.read_bytes
+    reads: dict[str, int] = {}
+
+    def staging_unreadable(self):  # noqa: ANN001, ANN202 — Path method
+        # The store copies the staging file first (one read); the read after
+        # it is the one that follows the save.
+        if self.name.startswith("ws-upload-"):
+            reads[self.name] = reads.get(self.name, 0) + 1
+            if reads[self.name] > 1:
+                raise OSError("disk hiccup")
+        return real(self)
+
+    client, holder, rid, _spec = _world()
+    base = f"/a/rca/items/{rid}/files"
+    assert client.put(f"{base}{WF}", content=_workflow()).status_code == 204
+    holder["id"] = "carol"
+    assert _bind(client, rid, _key_of(client, rid)).status_code == 200
+    holder["id"] = "bob"
+    monkeypatch.setattr(file_routes.Path, "read_bytes", staging_unreadable)
+
+    assert client.put(f"{base}{WF}", content=_workflow("Payroll")).status_code == 204
+
+    assert [r["bound_to"] for r in _list(client, rid)] == ["carol"]
+
+
 def test_a_file_that_is_not_a_workflow_is_not_read_back(monkeypatch):
     """Round 2 (conformance 2): only a workflow save is followed, so only its
     bytes are held — any other upload streams through untouched."""

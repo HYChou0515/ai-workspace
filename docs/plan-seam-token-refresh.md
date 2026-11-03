@@ -28,9 +28,9 @@
 | S5 | 有請求的那一輪也用不倒退後的值（`private_layer` 用 `record_seam` 留下的，不直接用請求的） | 〔預設〕 |
 | S6 | seam 的 refresh token 被判定失效（`RefreshRejected`）：從 seam 列清掉那些名稱，回報成 `private` 層——「登入 X」按鈕寫進 Private，seam 不再給那個名稱，Private 的值就會生效；前端不用改 | 〔預設〕 |
 | S7 | 一組值有些來自 seam、有些來自 typed：照舊不換（沒有單一一層可以寫回） | 〔預設〕（沿用 #985） |
-| W1 | **workflow 被改過，排程改用改它的人執行**——在知道是誰的門上（**那個人剛送出的聊天訊息**那一輪裡 AI 的 `save_workflow`／`write_file`／`edit_file`——pod 掛掉後被接手重跑的同一則也算；檔案 PUT：檔案編輯器、檔案樹上傳、Workflows 面板的匯入、WUI 頁面的 `writeFile`；從範本複製（#520））。改的人在 item 沒有 `execute`、或從認不出是誰的門改（goal 自動回合、workflow 節點或排程自己的執行、exec、zip 匯入、檔案樹的複製／搬移、尋找取代、Run 附帶的上傳、刪除、超過 1 MiB 的 PUT）→ 照舊：sweep 在下一次觸發時收掉綁定並通知。**只在檔案此刻還是他寫的那份時轉交**（兩個人前後存，先存的人不會接到後存的人的內容）；轉交前再讀一次綁定，這期間有人按「停止用我的身分」或被改指定就不動（review round 2） | 〔user〕+門〔預設〕 |
+| W1 | **workflow 被改過，排程改用改它的人執行**——在知道是誰的門上（**那個人剛送出的聊天訊息**那一輪裡 AI 的 `save_workflow`／`write_file`／`edit_file`——pod 掛掉後被接手重跑的同一則也算；檔案 PUT：檔案編輯器、檔案樹上傳、Workflows 面板的匯入、WUI 頁面的 `writeFile`；從範本複製（#520））。改的人在 item 沒有 `execute`、或從認不出是誰的門改（goal 自動回合、workflow 節點或排程自己的執行、exec、zip 匯入、檔案樹的複製／搬移、尋找取代、Run 附帶的上傳、刪除、超過 1 MiB 或讀不回暫存檔的 PUT）→ 照舊：sweep 在下一次觸發時收掉綁定並通知。**只在檔案此刻還是他寫的那份時轉交**（兩個人前後存，先存的人不會接到後存的人的內容）；轉交前再讀一次綁定，這期間有人按「停止用我的身分」或被改指定就不動（review round 2） | 〔user〕+門〔預設〕 |
 | W2 | 只換**已經綁定**的列；按過「停止用我的身分」的列（沒有綁定）不會因為有人改 workflow 就被接走 | 〔預設〕 |
-| W3 | 換了人 → 原因記成 `workflow`（畫面：「它跑的 workflow 是他改的」），**兩個人都通知**：原本的人（`schedule_binding_replaced`）、接手的人（`schedule_binding_assigned`，講可以「停止用我的身分」）；同一個人 → 只更新 digest、保留原因，不通知 | 〔預設〕 |
+| W3 | 換了人 → 原因記成 `workflow`（畫面：「它跑的 workflow 是他改的」），**兩個人都通知**：原本的人（`schedule_binding_replaced`）、接手的人（`schedule_binding_assigned`，講可以「停止用我的身分」）；同一個人 → 只更新 digest、保留原因，不通知。`workflow` 原因的列之後被改或刪，sweep 照 D7 對 `author` 的處理悄悄收掉、不通知（那個人沒按過「用我的身分執行」，「再按一次」是錯的）；workflow 之後又被認不出的門改掉時的通知，也不說「再按一次」（review round 2–3） | 〔預設〕 |
 | W4 | 寫排程時 workflow 解析不了：照樣認作者，digest 記一個永遠對不上的值。解析不了的列 sweep 本來就不跑；之後由 W1 的門修好就換成修的人，從認不出的門修好就照舊收掉。**不記 `""`**：那是「profile 的 workflow」，檔案一刪就會讓同名 profile workflow 帶著值跑（viewer-login round 6） | 〔預設〕 |
 
 ## 機制
@@ -42,6 +42,7 @@
 for 名稱, 值 in fresh（照 fresh 的順序）:
     上次 == 值 → 列上有就用列上的，列上沒有（被清掉）就不給
     否則      → 用 fresh 的
+有任何名稱沿用了列上的值 → 列上有、seen 沒有的名稱（refresh 多回傳的）也留著
 寫回：values = 上面的結果、seen = fresh；兩者都沒變就不寫
 ```
 

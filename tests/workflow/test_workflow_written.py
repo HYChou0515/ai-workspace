@@ -255,27 +255,41 @@ async def test_a_store_that_fails_outright_raises_nothing():
 
 async def test_a_binding_dropped_while_the_hook_runs_is_not_brought_back():
     """Review round 2 (defect claim 3): bob presses "Stop running as me" while
-    the hook is reading — the row is nobody's now, and stays so (W2)."""
+    the hook is reading — the row is nobody's now, and stays so (W2). The other
+    row still moves: the dropped one is SKIPPED, not a crash that stops the
+    loop (round 3, conformance F1)."""
     w = _World()
     await w.write("nightly", _wf("v1"))
-    (key,) = await w.schedule("nightly")
-    await w.bind(key, "bob", "nightly")
+    raw = json.dumps(
+        {
+            "schedules": [
+                {"every": "daily", "at": "09:00", "run": "nightly"},
+                {"every": "daily", "at": "12:00", "run": "nightly"},
+            ]
+        }
+    )
+    await w.files.write(ITEM, SCHED, raw.encode())
+    first, second = [key for key, _row in file_keys(ITEM, SCHED, raw)]
+    await w.bind(first, "bob", "nightly")
+    await w.bind(second, "bob", "nightly")
 
-    def may_run_while_bob_stops(_user: str, _item: str) -> bool:
-        w.bindings.unbind(key)
+    def may_run_while_bob_stops_one(_user: str, _item: str) -> bool:
+        w.bindings.unbind(first)
         return True
 
     w.authorship = ScheduleAuthorship(
         w.bindings,
         read=w.files.read,
-        may_run=may_run_while_bob_stops,
+        may_run=may_run_while_bob_stops_one,
         on_moved=lambda prev, who, wf: w.moved.append((prev.user_id, who, wf)),
     )
     written = await w.write("nightly", _wf("v2"))
-    await w.authorship.workflow_written(ITEM, "nightly", author="carol", written=written)
+    moved = await w.authorship.workflow_written(ITEM, "nightly", author="carol", written=written)
 
-    assert w.bindings.get(key) is None
-    assert w.moved == []
+    assert w.bindings.get(first) is None
+    assert w.binding(second).user_id == "carol"
+    assert moved == [second]
+    assert w.moved == [("bob", "carol", "nightly")]
 
 
 async def test_a_binding_reassigned_while_the_hook_runs_is_left_to_its_new_holder():
