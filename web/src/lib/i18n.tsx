@@ -820,8 +820,8 @@ export const messages = {
   "schedules.edit.zoneYours": { "zh-TW": "時區：{zone}（你的時區）", en: "Time zone: {zone} (yours)" },
   "schedules.edit.note": {
     "zh-TW":
-      "存檔後會變成一條新的排程：從下一個時間點開始執行（不會補跑），執行紀錄從頭算，之後用你的身分執行（改的人就是它的作者；它要跑的 workflow 解析不了時例外，那時只用共用的值）。",
-    en: "Saving makes this a new schedule: it runs from the next time on (nothing is caught up), its run history starts over, and from then on it runs as you — whoever changes it is its author — unless the workflow it runs will not parse, in which case it runs with the shared values only.",
+      "存檔後會變成一條新的排程：從下一個時間點開始執行（不會補跑），執行紀錄從頭算，之後用你的身分執行（改的人就是它的作者；它要跑的 workflow 解析不了時，修好之前不會執行）。",
+    en: "Saving makes this a new schedule: it runs from the next time on (nothing is caught up), its run history starts over, and from then on it runs as you — whoever changes it is its author. If the workflow it runs will not parse, it does not run until that is fixed.",
   },
   "schedules.edit.noteNobody": {
     "zh-TW":
@@ -2231,6 +2231,8 @@ export const messages = {
   "sched.why.author": { "zh-TW": "排程是他寫的", en: "wrote this schedule" },
   "sched.why.selfYou": { "zh-TW": "你自己選的", en: "you chose it" },
   "sched.why.authorYou": { "zh-TW": "排程是你寫的", en: "you wrote this schedule" },
+  "sched.why.workflow": { "zh-TW": "它跑的 workflow 是他改的", en: "changed the workflow it runs" },
+  "sched.why.workflowYou": { "zh-TW": "它跑的 workflow 是你改的", en: "you changed the workflow it runs" },
   "sched.why.admin": { "zh-TW": "管理員 {by} 指定", en: "named by administrator {by}" },
   "sched.assign": { "zh-TW": "指定…", en: "Choose…" },
   "sched.assignTitle": { "zh-TW": "這個排程用誰的身分執行？", en: "Who should this schedule run as?" },

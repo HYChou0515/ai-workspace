@@ -450,3 +450,188 @@ def test_the_seam_answering_the_same_names_in_a_new_order_is_kept_in_that_order(
     store.record_seam("alice", rid, {"B": "2", "Z": "1"})
 
     assert list(store.seam("alice", rid)) == ["B", "Z"]
+
+
+# ─── plan-seam-token-refresh S4/S5: the seam row does not go backwards ────────
+
+
+def test_a_request_repeating_its_last_value_keeps_the_one_the_platform_renewed():
+    """S4: the browser still holds the token the platform has since renewed —
+    bringing it again says nothing new, so the renewed one stays."""
+    from workspace_app.api.private_env import PrivateEnvStore
+
+    _client, _holder, rid, spec = _world()
+    store = PrivateEnvStore(spec)
+    store.record_seam("alice", rid, {"TOKEN": "old", "OTHER": "o"})
+    store.replace_seam("alice", rid, {"TOKEN": "renewed", "OTHER": "o"})
+
+    kept = store.record_seam("alice", rid, {"TOKEN": "old", "OTHER": "o"})
+
+    assert kept == {"TOKEN": "renewed", "OTHER": "o"}
+    assert store.seam("alice", rid) == {"TOKEN": "renewed", "OTHER": "o"}
+
+
+def test_a_request_bringing_a_new_value_wins_over_the_renewed_one():
+    """S4: a value the request has not said before is a new sign-in — newer
+    than anything the platform renewed from the old one."""
+    from workspace_app.api.private_env import PrivateEnvStore
+
+    _client, _holder, rid, spec = _world()
+    store = PrivateEnvStore(spec)
+    store.record_seam("alice", rid, {"TOKEN": "old"})
+    store.replace_seam("alice", rid, {"TOKEN": "renewed"})
+
+    assert store.record_seam("alice", rid, {"TOKEN": "signed-in-again"}) == {
+        "TOKEN": "signed-in-again"
+    }
+    # And from then on that is what "the request said last".
+    store.replace_seam("alice", rid, {"TOKEN": "renewed-2"})
+    assert store.record_seam("alice", rid, {"TOKEN": "signed-in-again"}) == {"TOKEN": "renewed-2"}
+
+
+def test_a_name_the_platform_cleared_stays_cleared_while_the_request_repeats_it():
+    """S6: a refresh token found dead is cleared from the row; the browser's copy
+    is that same dead token, so bringing it again must not put it back."""
+    from workspace_app.api.private_env import PrivateEnvStore
+
+    _client, _holder, rid, spec = _world()
+    store = PrivateEnvStore(spec)
+    store.record_seam("alice", rid, {"TOKEN": "dead", "OTHER": "o"})
+    store.replace_seam("alice", rid, {"OTHER": "o"})
+
+    assert store.record_seam("alice", rid, {"TOKEN": "dead", "OTHER": "o"}) == {"OTHER": "o"}
+    assert store.record_seam("alice", rid, {"TOKEN": "fresh", "OTHER": "o"}) == {
+        "TOKEN": "fresh",
+        "OTHER": "o",
+    }
+
+
+def test_a_name_the_request_stops_giving_is_gone_even_after_a_renewal():
+    """Signing out still takes the name away (R2), renewed or not."""
+    from workspace_app.api.private_env import PrivateEnvStore
+
+    _client, _holder, rid, spec = _world()
+    store = PrivateEnvStore(spec)
+    store.record_seam("alice", rid, {"TOKEN": "old"})
+    store.replace_seam("alice", rid, {"TOKEN": "renewed"})
+
+    assert store.record_seam("alice", rid, {}) == {}
+    assert store.seam("alice", rid) == {}
+
+
+def test_a_seam_row_written_before_this_change_reads_as_what_the_request_said():
+    """A row with no `seen` holds the request's own answer — nothing renewed."""
+    from workspace_app.api.private_env import PrivateEnvStore, PrivateSeam, private_env_id
+
+    _client, _holder, rid, spec = _world()
+    spec.get_resource_manager(PrivateSeam).create(
+        PrivateSeam(user_id="alice", item_id=rid, values={"TOKEN": "x"}, updated_at=0),
+        resource_id=private_env_id("alice", rid),
+    )
+    store = PrivateEnvStore(spec)
+
+    assert store.record_seam("alice", rid, {"TOKEN": "x"}) == {"TOKEN": "x"}
+    assert store.record_seam("alice", rid, {"TOKEN": "y"}) == {"TOKEN": "y"}
+
+
+def test_the_turn_with_the_request_gets_the_renewed_value_too():
+    """S5: the send that brings the stale token runs its own tools with the
+    renewed one — not the value the request carried."""
+    from workspace_app.api.private_env import PrivateEnvStore
+
+    client, runner, item_id, spec = _seam_app()
+    with client:
+        _send(client, item_id, "TOKEN=old")
+        PrivateEnvStore(spec).replace_seam("u", item_id, {"TOKEN": "renewed"})
+        _send(client, item_id, "TOKEN=old")
+
+    assert runner.envs == [{"TOKEN": "old"}, {"TOKEN": "renewed"}]
+
+
+def test_a_name_the_renewal_added_is_kept_while_the_request_brings_nothing_new():
+    """Review round 1 (defect F6): the deploy's refresh may return a name the
+    browser never sends (an expiry, say). Dropping it at the next request made
+    a `needs_refresh` keyed on it judge "due" every turn."""
+    from workspace_app.api.private_env import PrivateEnvStore
+
+    _client, _holder, rid, spec = _world()
+    store = PrivateEnvStore(spec)
+    store.record_seam("alice", rid, {"ACCESS": "a0", "REFRESH": "r0"})
+    store.replace_seam("alice", rid, {"ACCESS": "a1", "REFRESH": "r1", "EXPIRES_AT": "123"})
+
+    assert store.record_seam("alice", rid, {"ACCESS": "a0", "REFRESH": "r0"}) == {
+        "ACCESS": "a1",
+        "REFRESH": "r1",
+        "EXPIRES_AT": "123",
+    }
+    # A new sign-in in the browser: the renewal's leftovers go with the rest.
+    assert store.record_seam("alice", rid, {"ACCESS": "a9", "REFRESH": "r9"}) == {
+        "ACCESS": "a9",
+        "REFRESH": "r9",
+    }
+
+
+def test_what_the_request_said_last_moves_on_even_when_it_matches_the_row():
+    """Review round 1 (conformance F4): the browser catches up with the renewed
+    value; the platform renews again; the browser repeats — the second renewal
+    is kept, so `seen` must have moved to what the browser said."""
+    from workspace_app.api.private_env import PrivateEnvStore
+
+    _client, _holder, rid, spec = _world()
+    store = PrivateEnvStore(spec)
+    store.record_seam("alice", rid, {"TOKEN": "t0"})
+    store.replace_seam("alice", rid, {"TOKEN": "t1"})
+    assert store.record_seam("alice", rid, {"TOKEN": "t1"}) == {"TOKEN": "t1"}
+    store.replace_seam("alice", rid, {"TOKEN": "t2"})
+
+    assert store.record_seam("alice", rid, {"TOKEN": "t1"}) == {"TOKEN": "t2"}
+
+
+def test_a_seam_row_whose_every_value_was_found_dead_stays_cleared():
+    """Review round 1 (conformance F3): with nothing left, the row still
+    remembers what the request said — deleting it would let the browser's dead
+    token back in over the Private value signing in again wrote."""
+    from workspace_app.api.private_env import PrivateEnvStore
+
+    _client, _holder, rid, spec = _world()
+    store = PrivateEnvStore(spec)
+    store.record_seam("alice", rid, {"TOKEN": "dead"})
+    store.replace_seam("alice", rid, {})
+
+    assert store.seam("alice", rid) == {}
+    assert store.record_seam("alice", rid, {"TOKEN": "dead"}) == {}
+
+
+def test_signing_out_takes_away_what_the_platform_wrote_too():
+    """A request that brings nothing is a sign-out, whatever the row holds —
+    even a value the platform wrote where the request had said nothing (a
+    renewal landing after a sign-out, say)."""
+    from workspace_app.api.private_env import PrivateEnvStore
+
+    _client, _holder, rid, spec = _world()
+    store = PrivateEnvStore(spec)
+    store.replace_seam("alice", rid, {"TOKEN": "renewed"})
+
+    assert store.record_seam("alice", rid, {}) == {}
+    assert store.seam("alice", rid) == {}
+
+
+def test_a_name_the_renewal_added_stays_while_the_renewed_values_do():
+    """Review round 2 (defect claim 4): another seam name changing on a request
+    (a trace id, say) is not a new sign-in for THIS set — the renewed values
+    are kept, and so is what their renewal added."""
+    from workspace_app.api.private_env import PrivateEnvStore
+
+    _client, _holder, rid, spec = _world()
+    store = PrivateEnvStore(spec)
+    store.record_seam("alice", rid, {"ACCESS": "a0", "REFRESH": "r0", "TRACE": "t0"})
+    store.replace_seam(
+        "alice", rid, {"ACCESS": "a1", "REFRESH": "r1", "TRACE": "t0", "EXPIRES_AT": "123"}
+    )
+
+    assert store.record_seam("alice", rid, {"ACCESS": "a0", "REFRESH": "r0", "TRACE": "t1"}) == {
+        "ACCESS": "a1",
+        "REFRESH": "r1",
+        "TRACE": "t1",
+        "EXPIRES_AT": "123",
+    }

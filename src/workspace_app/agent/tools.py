@@ -859,6 +859,7 @@ async def write_file_impl(ctx: RunContextWrapper[AgentToolContext], path: str, c
     if current is None:
         # A NEW schedules file: every row in it is this turn's (plan-schedule-run-as G2).
         await _credit_schedules(ctx, inv, path, before=None, after=content)
+        await _workflow_written(ctx, inv, path, content.encode("utf-8"))
     # Every confirmation and every rejection below names the file RELATIVELY
     # (#549), like `list_files` does. Echoing the argument verbatim taught the
     # opposite: an agent that guessed `/notes.md` had that guess confirmed by a
@@ -896,6 +897,7 @@ async def edit_file_impl(
             return denied
     fs, inv = _workspace(ctx)
     before = await _schedules_before(ctx, inv, path)
+    workflow_before = await _workflow_before(ctx, inv, path)
     current = await fs.edit(inv, path, old_string, new_string)
     if current is None:
         if before is not None:
@@ -906,6 +908,15 @@ async def edit_file_impl(
                 _LOGGER.exception("schedules: could not read back %s", path)
             else:
                 await _credit_schedules(ctx, inv, path, before=before, after=after)
+        # What this edit wrote, if the file still read as it did just before:
+        # changed in between, the digest will not match the live file and
+        # nothing moves (`workflow_written`).
+        written = (
+            workflow_before.replace(old_string, new_string, 1).encode("utf-8")
+            if workflow_before is not None
+            else None
+        )
+        await _workflow_written(ctx, inv, path, written)
         return f"edited {rel_path(path)}"
     # This impl required `read_content` above, so `_conflict_echo` normally
     # cannot refuse — but "normally" is not "never": `authorize_tool` re-reads
@@ -958,6 +969,53 @@ async def _credit_schedules(
     await authorship.credit(
         inv, abs_path(path), before=before, after=after, author=ctx.context.acting_for
     )
+
+
+async def _workflow_written(
+    ctx: RunContextWrapper[AgentToolContext], inv: str, path: str, written: bytes | None
+) -> None:
+    """A workflow this turn just wrote as ``written`` — with `save_workflow`,
+    `write_file` or `edit_file` — hands the schedules running it to the person
+    the turn acts for (`plan-seam-token-refresh` W1).
+
+    Only a CHAT turn its person just sent (`in_chat`, the ``interactive``
+    lane — kept by a peer's re-run of that same message): they asked for the
+    change in their own thread. A workflow step or a schedule's run acts for its
+    binder with nobody there — a scheduled run rewriting its own workflow would
+    otherwise renew its binder's consent to a body they never saw (review round
+    1, defect F1) — and so does a goal round, a chat turn the platform starts
+    on its own (round 2). Those are doors that do not know who wrote it, and the
+    sweep drops the binding as before. So is a write whose bytes are unknown
+    (``None``)."""
+    from ..workflow.workspace_store import workflow_id_of
+
+    authorship = ctx.context.schedule_authorship
+    workflow_id = workflow_id_of(abs_path(path))
+    present = ctx.context.in_chat and ctx.context.call_lane == "interactive"
+    if authorship is None or workflow_id is None or written is None or not present:
+        return
+    await authorship.workflow_written(
+        inv, workflow_id, author=ctx.context.acting_for, written=written
+    )
+
+
+async def _workflow_before(
+    ctx: RunContextWrapper[AgentToolContext], inv: str, path: str
+) -> str | None:
+    """A workflow file as it is before `edit_file` changes it — what the edit's
+    result is computed from, so the hook is handed the bytes THIS edit wrote.
+    None when the path is not a workflow, nothing would follow it, or it cannot
+    be read (the edit still goes ahead; nothing moves)."""
+    from ..workflow.workspace_store import workflow_id_of
+
+    if ctx.context.schedule_authorship is None or workflow_id_of(abs_path(path)) is None:
+        return None
+    try:
+        fs, _ = _workspace(ctx)
+        return (await fs.read(inv, path)).decode("utf-8", "replace")
+    except Exception:  # noqa: BLE001 — only following the workflow depends on it
+        _LOGGER.warning("workflows: could not read %s before editing it", path, exc_info=True)
+        return None
 
 
 def _capped_listing(entries: list[str], cap: int, *, offset: int = 1, noun: str, hint: str) -> str:
@@ -3353,6 +3411,7 @@ async def save_workflow_impl(
         save_workspace_workflow,
         slugify_workflow_id,
         validate_workflow_json,
+        workspace_workflow_bytes,
     )
 
     files = ctx.context.files
@@ -3379,6 +3438,7 @@ async def save_workflow_impl(
             errs
         )
     path = await save_workspace_workflow(files, inv, slug, workflow)
+    await _workflow_written(ctx, inv, path, workspace_workflow_bytes(slug, workflow))
     return (
         f"saved workflow '{slug}' to {rel_path(path)}. The user can Run it from this "
         "item, or download "

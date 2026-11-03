@@ -76,7 +76,7 @@ export type OverviewRow = {
   runs_as_mine: boolean;
 };
 
-export type RunsAsReason = "" | "self" | "author" | "admin";
+export type RunsAsReason = "" | "self" | "author" | "workflow" | "admin";
 
 /** A schedules file with problems of its own (one that does not parse has no
  * rows to carry them). */

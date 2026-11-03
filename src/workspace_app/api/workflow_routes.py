@@ -42,6 +42,7 @@ from ..workflow.orchestrator import (
 )
 from ..workflow.preflight import can_run as _preflight_can_run
 from ..workflow.run import WorkflowRun, is_execution, settle_phases
+from ..workflow.schedule_bindings import ScheduleAuthorship
 from ..workflow.user_schedules import SchedulePolicy
 from .activity import ActivityLog
 from .events import FileChanged
@@ -172,6 +173,7 @@ def register_workflow_routes(
     schedule_landed: Callable[[str], int | None] = lambda _item_id: None,
     schedules_durable: Source,
     packages: Sequence[PackageInfo] = (),
+    schedule_authorship: ScheduleAuthorship | None = None,
 ) -> None:
     """Mount the workflow profile + run routes onto ``app``.
 
@@ -401,6 +403,7 @@ def register_workflow_routes(
         from ..workflow.workspace_store import (
             RESERVED_WORKFLOW_ID,
             save_workspace_workflow,
+            workspace_workflow_bytes,
             workspace_workflow_path,
         )
 
@@ -436,6 +439,15 @@ def register_workflow_routes(
                 detail=f"this item already has a workflow named {name!r}",
             )
         await save_workspace_workflow(files, investigation_id, name, d)
+        if schedule_authorship is not None:
+            # plan-seam-token-refresh W1: a copy writes a workflow that
+            # schedules may run — they now run as whoever copied it in.
+            await schedule_authorship.workflow_written(
+                investigation_id,
+                name,
+                author=get_user_id(),
+                written=workspace_workflow_bytes(name, d),
+            )
         return {"workflow_id": name, "path": path}
 
     @app.get("/a/{slug}/profiles")

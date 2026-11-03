@@ -122,8 +122,9 @@ export function WorkflowsModal({
   const importFiles = async (files: FileList) => {
     setBusy(true);
     try {
-      // schedules.json LAST: a row is credited to the importer only if the
-      // workflow it runs parses at that moment (docs/plan-schedule-run-as.md).
+      // schedules.json LAST: its rows are bound against the imported workflows
+      // as they will run (docs/plan-schedule-run-as.md). A workflow written
+      // after its schedule would hand it over too (plan-seam-token-refresh W1).
       const ordered = Array.from(files).sort(
         (a, b) => Number(a.name === "schedules.json") - Number(b.name === "schedules.json"),
       );

@@ -2130,6 +2130,29 @@ def test_an_authors_row_that_was_edited_drops_quietly():
     assert expired == []
 
 
+def test_a_row_handed_over_by_a_workflow_edit_that_was_edited_drops_quietly():
+    """plan-seam-token-refresh round 2 (regression F1): bob was GIVEN the row by
+    rewriting its workflow (reason "workflow") — he never pressed "Run as me",
+    so "choose Run as me again" would be false for him too."""
+    from workspace_app.workflow.schedule_bindings import (
+        ScheduleBindings,
+        register_schedule_bindings,
+    )
+
+    spec = _spec()
+    register_schedule_bindings(spec)
+    ScheduleIndex(spec).record(ITEM, PATH)
+    bindings = ScheduleBindings(spec)
+    bindings.bind(_key(DAILY), item_id=ITEM, path=PATH, user_id="bob", reason="workflow")
+    started, expired = _Started(), []
+    files = _Files(**{f"{ITEM}{PATH}": _file({**DAILY, "at": "10:00"})})
+
+    asyncio.run(_bound_sweeper(spec, files, started, datetime(2026, 9, 5, 9, 30), expired).tick())
+
+    assert bindings.binder(_key(DAILY)) == ""
+    assert expired == []
+
+
 def test_a_person_who_changed_their_own_row_is_not_told_it_stopped_running_as_them():
     """Review round 2 (veracity 2): carol chose "Run as me", then changed the
     row's time herself — the new row is credited to her. The old key expiring

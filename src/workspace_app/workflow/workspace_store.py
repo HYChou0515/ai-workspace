@@ -57,6 +57,14 @@ def is_workspace_workflow_path(path: str) -> bool:
     return "/" not in rest and rest.endswith(".json") and rest != SCHEDULES_FILE
 
 
+def workflow_id_of(path: str) -> str | None:
+    """The workflow id a workspace workflow file holds (`.workflows/<id>.json`
+    → ``<id>``), or None when ``path`` is not one (`is_workspace_workflow_path`)."""
+    if not is_workspace_workflow_path(path):
+        return None
+    return path.rsplit("/", 1)[1].removesuffix(".json")
+
+
 def workspace_workflow_path(slug: str) -> str:
     return f"/{WORKSPACE_WORKFLOW_DIR}/{slug}.json"
 
@@ -175,8 +183,16 @@ async def save_workspace_workflow(
     if slug == RESERVED_WORKFLOW_ID:
         raise ReservedWorkflowId(slug)
     path = workspace_workflow_path(slug)
-    await files.write(workspace_id, path, msgspec.json.encode(msgspec.structs.replace(d, id=slug)))
+    await files.write(workspace_id, path, workspace_workflow_bytes(slug, d))
     return path
+
+
+def workspace_workflow_bytes(slug: str, d: WorkflowDef) -> bytes:
+    """The bytes ``save_workspace_workflow`` writes for ``d`` — the one
+    definition, so a caller that must know what it wrote
+    (`ScheduleAuthorship.workflow_written`) reads it here, not back from a file
+    someone may have rewritten since."""
+    return msgspec.json.encode(msgspec.structs.replace(d, id=slug))
 
 
 async def workspace_workflow_metas(

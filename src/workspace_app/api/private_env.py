@@ -6,7 +6,9 @@ Per (person, item), two rows:
   filled by a sign-in (``IEnvProvider``). Changed only by them.
 * ``PrivateSeam`` — the deploy's ``IRequestEnv.env_for`` answer about them, as of
   their last chat send or page ``callTool`` in this item (the only two paths
-  that ask it): replaced whole every time it changes, never merged.
+  that ask it): replaced whole every time it changes, never merged — except that
+  a value the platform renewed is kept while the request keeps bringing the old
+  one (`docs/plan-seam-token-refresh.md` S4).
 
 The SHARED layer is the item's ``env_vars``; which of the two layers a tool gets
 for a given name is the item's ``env_policy`` (`env_layers`). Within the private
@@ -75,9 +77,15 @@ class PrivateEnv(Struct):
 class PrivateSeam(Struct):
     user_id: str
     item_id: str
+    #: What tools get: the request's answer, except where the platform renewed
+    #: (or found dead) a value the request has not changed since
+    #: (`plan-seam-token-refresh` S4).
     values: dict[str, str]
     updated_at: int
     names: list[str] = []
+    #: What the request said last. ``None`` — a row written before S4 — means
+    #: ``values`` is exactly that.
+    seen: dict[str, str] | None = None
 
 
 class PersonalEnv(Struct):
@@ -103,6 +111,18 @@ _SEP = "∕"
 
 def private_env_id(user_id: str, item_id: str) -> str:
     return quote(user_id, safe="") + _SEP + quote(item_id, safe="")
+
+
+def _ordered(data: PrivateEnv | PrivateSeam) -> dict[str, str]:
+    """A row's values in the order they were given."""
+    ordered = [n for n in data.names if n in data.values]
+    rest = [n for n in data.values if n not in ordered]
+    return {n: data.values[n] for n in [*ordered, *rest]}
+
+
+def _seen(row: PrivateSeam) -> dict[str, str]:
+    """What the request said last — for a row written before S4, its values."""
+    return dict(row.seen) if row.seen is not None else _ordered(row)
 
 
 def register_private_env(spec: SpecStar) -> None:
@@ -142,28 +162,38 @@ class PrivateEnvStore:
         except ResourceIDNotFoundError:
             return {}
         assert isinstance(data, PrivateEnv | PrivateSeam)
-        ordered = [n for n in data.names if n in data.values]
-        rest = [n for n in data.values if n not in ordered]
-        return {n: data.values[n] for n in [*ordered, *rest]}
+        return _ordered(data)
 
-    def _write(self, model: type, user_id: str, item_id: str, values: dict[str, str]) -> None:
+    def _write(
+        self,
+        model: type,
+        user_id: str,
+        item_id: str,
+        values: dict[str, str],
+        *,
+        seen: dict[str, str] | None = None,
+    ) -> None:
         """ONE replace, then prune the older revisions — so a reader sees the old
         value or the new one, never a moment with no row (round 2, D4: a
         delete-then-create let a goal round in between run without the
         person's credential), and no revision keeps a replaced value (R4).
-        Empty ⇒ no row at all. Concurrent writers: the last one wins."""
+        Empty ⇒ no row at all — unless the seam row still remembers what the
+        request said (``seen``): forgetting that would put a value found dead
+        back at the next request (S6). Concurrent writers: the last one wins."""
         rm = self._spec.get_resource_manager(model)
         rid = private_env_id(user_id, item_id)
-        if not values:
+        if not values and not seen:
             with contextlib.suppress(ResourceIDNotFoundError):
                 rm.permanently_delete(rid)
             return
+        extra = {"seen": dict(seen or {})} if model is PrivateSeam else {}
         row = model(
             user_id=user_id,
             item_id=item_id,
             values=values,
             updated_at=self._now(),
             names=list(values),
+            **extra,
         )
         try:
             rm.update(rid, row)
@@ -182,22 +212,71 @@ class PrivateEnvStore:
         return self._read(PrivateEnv, user_id, item_id)
 
     def seam(self, user_id: str, item_id: str) -> dict[str, str]:
-        """The deploy's ``env_for`` answer about them, as of their last request —
-        nothing when the deploy has no seam (any row is left over from one)."""
+        """The deploy's ``env_for`` answer about them, as of their last request,
+        with what the platform renewed since (S4) — nothing when the deploy has
+        no seam (any row is left over from one)."""
         if not self._seam_enabled:
             return {}
         return self._read(PrivateSeam, user_id, item_id)
 
+    def _seam_row(self, user_id: str, item_id: str) -> PrivateSeam | None:
+        if not self._seam_enabled:
+            return None
+        try:
+            data = (
+                self._spec.get_resource_manager(PrivateSeam)
+                .get(private_env_id(user_id, item_id))
+                .data
+            )
+        except ResourceIDNotFoundError:
+            return None
+        assert isinstance(data, PrivateSeam)
+        return data
+
     def replace(self, user_id: str, item_id: str, values: dict[str, str]) -> None:
         self._write(PrivateEnv, user_id, item_id, values)
 
-    def record_seam(self, user_id: str, item_id: str, fresh: dict[str, str]) -> None:
-        """Keep the seam's latest answer — whole, so a name it dropped is gone.
-        Skips the write when nothing changed — ORDER included, since tools see
-        the names in the order given (round 3, defect 4): this runs on every
-        send and every page tool call."""
-        if list(self.seam(user_id, item_id).items()) != list(fresh.items()):
-            self._write(PrivateSeam, user_id, item_id, fresh)
+    def replace_seam(self, user_id: str, item_id: str, values: dict[str, str]) -> None:
+        """The platform's write to the seam row (a renewed or a dead value,
+        `env_refresh`): what tools get changes; what the request said last does
+        not, so the request bringing that same old value again keeps this."""
+        row = self._seam_row(user_id, item_id)
+        seen = _seen(row) if row is not None else {}
+        self._write(PrivateSeam, user_id, item_id, values, seen=seen)
+
+    def record_seam(self, user_id: str, item_id: str, fresh: dict[str, str]) -> dict[str, str]:
+        """Keep the seam's latest answer, and return what tools get from it now.
+
+        Never backwards (S4): a name whose value the request has NOT changed
+        since it last said it keeps what the row holds — the platform may have
+        renewed it, or cleared it as dead, and the browser's copy is the old
+        one. A changed value is a new sign-in and wins. A name the request no
+        longer gives is gone, renewed or not, so signing out still takes it
+        away. In ``fresh``'s order, which tools see (round 3, defect 4). Skips
+        the write when nothing changed: this runs on every send and every page
+        tool call."""
+        row = self._seam_row(user_id, item_id)
+        stored = _ordered(row) if row is not None else {}
+        seen = _seen(row) if row is not None else {}
+        kept: dict[str, str] = {}
+        from_row = False
+        for name, value in fresh.items():
+            if seen.get(name) != value:
+                kept[name] = value
+            elif name in stored:
+                kept[name] = stored[name]
+                from_row = True
+        if from_row:
+            # The row's values still stand for some name: what a renewal ADDED
+            # (a name the browser never sends, an expiry say) stays with them
+            # (review rounds 1–2, defect F6 / claim 4). Only when every name
+            # the request sends differs from last time (or it sends nothing,
+            # a sign-out) does it go; a sign-in that leaves some name unchanged
+            # keeps it (plan: known limits).
+            kept.update({n: v for n, v in stored.items() if n not in seen})
+        if list(stored.items()) != list(kept.items()) or seen != fresh:
+            self._write(PrivateSeam, user_id, item_id, kept, seen=fresh)
+        return kept
 
     def clear(self, user_id: str, item_id: str) -> None:
         """Forget both rows. What the seam provides comes back at the person's
@@ -322,7 +401,9 @@ async def private_layer(
     if store is None:
         return PersonEnv(own=dict(seam))
     if fresh is not None:
-        await asyncio.to_thread(store.record_seam, user_id, item_id, fresh)
+        # What the row keeps, not what the request carried: a token the
+        # platform renewed since is used by THIS turn too (S5).
+        seam = await asyncio.to_thread(store.record_seam, user_id, item_id, fresh)
     typed = await asyncio.to_thread(store.get, user_id, item_id)
     personal = await asyncio.to_thread(store.personal, user_id)
     return PersonEnv(own=own_layer(typed, seam), personal=personal)
@@ -373,7 +454,8 @@ class MineOut(BaseModel):
     #: What the person put there themselves — editable on the Private tab.
     values: dict[str, str]
     #: What the deploy's seam said about them at their last request — shown,
-    #: not editable: it is rewritten by their next request anyway.
+    #: not editable: their next request rewrites it (keeping a value the
+    #: platform renewed while the request repeats the old one, S4).
     auto: dict[str, str]
 
 

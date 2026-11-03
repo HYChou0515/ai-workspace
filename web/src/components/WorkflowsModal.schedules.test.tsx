@@ -618,8 +618,8 @@ describe("WorkflowsModal — schedules", () => {
   });
 
   it("imports the schedules after the workflows they run (review round 2)", async () => {
-    // A row is credited to the importer only if its workflow parses at that
-    // moment — written first, schedules.json would name a workflow not there yet.
+    // Its rows are bound against the imported workflows as they will run —
+    // written first, schedules.json would name a workflow not there yet.
     listMock.mockResolvedValue([]);
     schedulesMock.mockResolvedValue(schedules());
     const { svc, writes } = fakeService();

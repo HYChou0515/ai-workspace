@@ -23,6 +23,7 @@ from workspace_app.agent.tools import save_schedules_impl
 from workspace_app.files import WorkspaceFiles
 from workspace_app.filestore.memory import MemoryFileStore
 from workspace_app.workflow import user_schedules
+from workspace_app.workflow.schedule_bindings import ScheduleBindings
 from workspace_app.workflow.user_schedules import SchedulePolicy
 
 _WORKFLOW = json.dumps(
@@ -460,3 +461,173 @@ async def test_an_edit_file_whose_reads_fail_still_reports_the_edit(clock, monke
 
     assert out.startswith("edited"), out
     assert bindings.for_item("inv-1") == []
+
+
+# ─── plan-seam-token-refresh W1: the agent's three doors into a workflow ──────
+
+
+async def _bound_to(
+    ctx, user: str, *, digest: str = "consented-before"
+) -> tuple[ScheduleBindings, str]:
+    """A row of the item's schedules running ``nightly``, bound to ``user`` with
+    a consent that no longer matches the workflow."""
+    from workspace_app.workflow.schedule_bindings import file_keys
+
+    raw = _rows({"every": "daily", "at": "09:00", "run": "nightly"})
+    await ctx.context.files.write("inv-1", SCHEDULES, raw.encode())
+    ((key, _row),) = file_keys("inv-1", SCHEDULES, raw)
+    bindings = _authored(ctx, acting_for="carol")
+    # Carol's own chat, a message she just sent: the turn a person is in
+    # (review round 1, defect F1; round 2: not a goal round).
+    ctx.context.in_chat = True
+    ctx.context.call_lane = "interactive"
+    bindings.bind(key, item_id="inv-1", path=SCHEDULES, user_id=user, workflow_digest=digest)
+    return bindings, key
+
+
+async def test_a_workflow_saved_with_save_workflow_hands_its_schedule_to_the_turns_person(
+    clock,
+) -> None:
+    from workspace_app.agent.tools import save_workflow_impl
+
+    ctx = _ctx()
+    bindings, key = await _bound_to(ctx, "bob")
+
+    out = await save_workflow_impl(ctx, "nightly", _WORKFLOW.decode())
+
+    assert out.startswith("saved"), out
+    assert bindings.binder(key) == "carol"
+
+
+async def test_a_workflow_created_with_write_file_after_its_schedule_keeps_the_schedule(
+    clock,
+) -> None:
+    """The reported root cause through the agent: schedule first (consent "",
+    no workflow yet), workflow second — still carol's, with the new consent."""
+    from workspace_app.agent.tools import write_file_impl
+
+    ctx = _ctx()
+    bindings, key = await _bound_to(ctx, "carol", digest="")
+
+    out = await write_file_impl(ctx, ".workflows/nightly.json", _WORKFLOW.decode())
+
+    assert out.startswith("wrote"), out
+    binding = bindings.get(key)
+    assert binding is not None
+    assert (binding.user_id, binding.workflow_digest != "") == ("carol", True)
+
+
+async def test_a_workflow_edited_with_edit_file_hands_its_schedule_to_the_turns_person(
+    clock,
+) -> None:
+    from workspace_app.agent.tools import edit_file_impl
+
+    ctx = _ctx()
+    await _with_workflow(ctx)
+    bindings, key = await _bound_to(ctx, "bob")
+
+    out = await edit_file_impl(ctx, ".workflows/nightly.json", '"Nightly"', '"Nightly 2"')
+
+    assert out.startswith("edited"), out
+    assert bindings.binder(key) == "carol"
+
+
+async def test_a_turn_that_acts_for_nobody_takes_no_schedule_by_editing_a_workflow(clock) -> None:
+    from workspace_app.agent.tools import edit_file_impl
+
+    ctx = _ctx()
+    await _with_workflow(ctx)
+    bindings, key = await _bound_to(ctx, "bob")
+    ctx.context.acting_for = ""
+
+    await edit_file_impl(ctx, ".workflows/nightly.json", '"Nightly"', '"Nightly 2"')
+
+    assert bindings.binder(key) == "bob"
+
+
+async def test_a_workflow_step_rewriting_a_workflow_takes_no_schedule(clock) -> None:
+    """Review round 1 (defect F1): a workflow step or a schedule's run acts for
+    its binder with nobody there — a run rewriting its own workflow must not
+    renew its binder's consent to a body they never saw."""
+    from workspace_app.agent.tools import edit_file_impl
+
+    ctx = _ctx()
+    await _with_workflow(ctx)
+    bindings, key = await _bound_to(ctx, "bob")
+    ctx.context.in_chat = False
+
+    await edit_file_impl(ctx, ".workflows/nightly.json", '"Nightly"', '"Nightly 2"')
+
+    assert bindings.binder(key) == "bob"
+
+
+async def test_an_edit_hands_over_the_bytes_it_wrote_not_what_the_file_holds_later(
+    clock, monkeypatch
+) -> None:
+    """Review round 1 (defect F2): someone rewrites the workflow between this
+    edit and its hook — the schedule is not handed over for a body this turn
+    did not write."""
+    from workspace_app.agent.tools import edit_file_impl
+
+    ctx = _ctx()
+    await _with_workflow(ctx)
+    bindings, key = await _bound_to(ctx, "bob")
+    files = ctx.context.files
+    real_edit = files.edit
+
+    async def edit_then_overwritten(inv, path, old, new):
+        result = await real_edit(inv, path, old, new)
+        await files.write(inv, "/.workflows/nightly.json", _WORKFLOW.replace(b"Nightly", b"Evil"))
+        return result
+
+    monkeypatch.setattr(files, "edit", edit_then_overwritten)
+
+    out = await edit_file_impl(ctx, ".workflows/nightly.json", '"Nightly"', '"Nightly 2"')
+
+    assert out.startswith("edited"), out
+    assert bindings.binder(key) == "bob"
+
+
+async def test_a_goal_round_rewriting_a_workflow_takes_no_schedule(clock) -> None:
+    """Review round 2 (defect claim 2): a goal round is a chat turn (in_chat)
+    that the platform starts with nobody there — its lane is "background". It
+    must not renew or take a schedule for a body its person never saw."""
+    from workspace_app.agent.tools import edit_file_impl
+
+    ctx = _ctx()
+    await _with_workflow(ctx)
+    bindings, key = await _bound_to(ctx, "bob")
+    ctx.context.call_lane = "background"
+
+    await edit_file_impl(ctx, ".workflows/nightly.json", '"Nightly"', '"Nightly 2"')
+
+    assert bindings.binder(key) == "bob"
+
+
+async def test_an_edit_whose_workflow_could_not_be_read_first_hands_nothing_over(
+    clock, monkeypatch
+) -> None:
+    """Review round 2 (conformance 2): without the read before the edit, what
+    the edit wrote is unknown — the hook is not called at all, rather than
+    called with nothing and left to fail inside its own catch."""
+    from workspace_app.agent.tools import edit_file_impl
+
+    ctx = _ctx()
+    await _with_workflow(ctx)
+    bindings, key = await _bound_to(ctx, "bob")
+    calls: list[str] = []
+
+    async def spy(_item, workflow_id, *, author, written):  # noqa: ANN001, ANN202
+        calls.append(workflow_id)
+        return []
+
+    authorship = ctx.context.schedule_authorship
+    assert authorship is not None
+    monkeypatch.setattr(authorship, "workflow_written", spy)
+    _reads_fail(monkeypatch, "/.workflows/nightly.json", on=1)
+
+    out = await edit_file_impl(ctx, ".workflows/nightly.json", '"Nightly"', '"Nightly 2"')
+
+    assert out.startswith("edited"), out
+    assert calls == []
+    assert bindings.binder(key) == "bob"

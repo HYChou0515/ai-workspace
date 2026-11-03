@@ -42,7 +42,7 @@ class BindingRow(BaseModel):
     #: "stop running as me" rather than "run as me".
     mine: bool
     #: Why it runs as `bound_to` (`plan-schedule-run-as` G8): "self" / "author"
-    #: / "admin"; "" when it runs as nobody.
+    #: / "workflow" / "admin"; "" when it runs as nobody.
     reason: str = ""
     #: The superuser who named `bound_to`, when `reason` is "admin".
     assigned_by: str = ""
