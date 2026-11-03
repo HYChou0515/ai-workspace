@@ -3300,11 +3300,11 @@ Workflows 打開模型答錯格式的那次執行——執行結束後還留著�
 **行為改變,沒有開關**:
 
 - **workflow 被改過,排程改用改它的人執行**(`docs/plan-seam-token-refresh.md` W1)。條件:改的人在 item 有 `execute`,
-  而且是從認得出是誰的地方改——他自己的聊天裡請 AI 改(`save_workflow`／`write_file`／`edit_file`)、檔案編輯器或
-  Workflows 面板的匯入、從範本複製。排程那一列的原因顯示「它跑的 workflow 是他改的」;**原本綁定的人和接手的人都收到通知**;
+  而且是從認得出是誰的地方改——他剛在聊天裡送出的訊息請 AI 改(`save_workflow`／`write_file`／`edit_file`)、
+  檔案編輯器存檔、檔案樹上傳、Workflows 面板的匯入、WUI 頁面的 `writeFile`(後四者都是檔案 PUT)、從範本複製。排程那一列的原因顯示「它跑的 workflow 是他改的」;**原本綁定的人和接手的人都收到通知**;
   同一個人改自己的 workflow 不通知。以前這種情況綁定會在下一次觸發時被收掉,排程變成「沒有人」(只拿共用值和服務帳號)。
-  沒有 `execute` 的人改,或從認不出是誰的地方改(workflow 節點或排程自己的執行、exec、zip 匯入、檔案樹的複製／搬移、
-  尋找取代、Run 附帶的上傳、刪除),照舊在下一次觸發時收掉綁定並通知 workflow 被改了。
+  沒有 `execute` 的人改,或從認不出是誰的地方改(goal 的自動回合、workflow 節點或排程自己的執行、exec、zip 匯入、
+  檔案樹的複製／搬移、尋找取代、Run 附帶的上傳、刪除、超過 1 MiB 的 PUT),照舊在下一次觸發時收掉綁定並通知 workflow 被改了。
 - **「先寫排程、後寫 workflow」的排程不再掉成沒有人**:寫 workflow 的那一刻,排程跟著寫的人走(同一個人就維持)。
   這是 AI 建排程最常見的順序,以前第一次觸發就把綁定收掉。
 - **寫排程時 workflow 還解析不了,照樣認作者**(W4)。修好前不觸發;之後由上面那些地方修好,就用修的人;從其他地方修好
@@ -3322,16 +3322,16 @@ Workflows 打開模型答錯格式的那次執行——執行結束後還留著�
 **確認做完**(`rollout 後`):
 
 1. 帳號 A(有 `execute`)在某個 item 的排程上按「用我的身分執行」;換帳號 B(也有 `execute`)在檔案樹改那個排程跑的
-   workflow 並存檔。排程那一列顯示「用 B 的身分執行（它跑的 workflow 是他改的）」;A 的通知裡有一則內文是
+   workflow 並存檔。用 A 看,排程那一列顯示「用 B 的身分執行（它跑的 workflow 是他改的）」;A 的通知裡有一則內文是
    「B changed the workflow “…”, so its schedule in … now runs with their values instead of yours.」,B 有一則
    「A schedule now runs as you」。
-2. 在聊天裡請 AI「建一個每天早上跑的 workflow 並排程」,排程那一列顯示的是你(原因「排程是你寫的」或「它跑的 workflow
-   是你改的」),不是「未指定」;隔天的執行沒有產生「workflow 被改了」的通知。
+2. 在聊天裡請 AI「建一個每天早上跑的 workflow 並排程」,排程那一列顯示「用你的身分執行（排程是你寫的）」,不是「未指定」;
+   隔天的執行沒有產生「workflow 被改了」的通知。
 3. (有寫 `refreshes_seam` 的部署)等瀏覽器帶來的 token 快過期,跑一個用到它的工具:工具成功;再送一則訊息,
    工具仍成功,部署方的 refresh 端點只被叫一次。
 
 **還是舊版 image 時**:第 1 步存檔後排程仍顯示 A,**下一次觸發後**變成「未指定」,A 收到的是 workflow 被改了的通知;
-第 3 步工具拿到過期的 token。
+第 3 步部署方的 refresh 端點一次都沒被叫到,工具拿到的是瀏覽器帶來、沒換過的那顆(過期後就失敗)。
 
 ## 附錄 A：資料回填的機制（specstar 為什麼不會自己補）
 

@@ -2411,9 +2411,9 @@ def create_app(
     # doors that know who that is (save_schedules, the file PUT, "change time"),
     # against the SAME `execute` rule the sweep re-checks before each fire.
     # plan-seam-token-refresh W1/W3: the doors that write a WORKFLOW and know
-    # who wrote it (save_workflow / write_file / edit_file from a chat, the
-    # file PUT, template copy) hand its schedules to that person; both people
-    # are told.
+    # who wrote it (save_workflow / write_file / edit_file from a message the
+    # person just sent, the file PUT, template copy) hand its schedules to that
+    # person; when it moves to someone else, both people are told.
     def _tell_schedule_moved(previous: ScheduleBinding, author: str, workflow_id: str) -> None:
         """Both people a moved schedule concerns: the one whose values it ran
         with, and the one whose values it runs with now (W3; review round 1,
