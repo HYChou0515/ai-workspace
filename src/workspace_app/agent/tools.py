@@ -978,17 +978,21 @@ async def _workflow_written(
     `write_file` or `edit_file` — hands the schedules running it to the person
     the turn acts for (`plan-seam-token-refresh` W1).
 
-    Only a CHAT turn (`in_chat`): its person asked for the change in their own
-    thread. A workflow step or a schedule's run acts for its binder with nobody
-    there — a scheduled run rewriting its own workflow would otherwise renew its
-    binder's consent to a body they never saw (review round 1, defect F1) — so
-    it is a door that does not know who wrote it, and the sweep drops the
-    binding as before. So is a write whose bytes are unknown (``None``)."""
+    Only a CHAT turn its person just sent (`in_chat`, the ``interactive``
+    lane — kept by a peer's re-run of that same message): they asked for the
+    change in their own thread. A workflow step or a schedule's run acts for its
+    binder with nobody there — a scheduled run rewriting its own workflow would
+    otherwise renew its binder's consent to a body they never saw (review round
+    1, defect F1) — and so does a goal round, a chat turn the platform starts
+    on its own (round 2). Those are doors that do not know who wrote it, and the
+    sweep drops the binding as before. So is a write whose bytes are unknown
+    (``None``)."""
     from ..workflow.workspace_store import workflow_id_of
 
     authorship = ctx.context.schedule_authorship
     workflow_id = workflow_id_of(abs_path(path))
-    if authorship is None or workflow_id is None or written is None or not ctx.context.in_chat:
+    present = ctx.context.in_chat and ctx.context.call_lane == "interactive"
+    if authorship is None or workflow_id is None or written is None or not present:
         return
     await authorship.workflow_written(
         inv, workflow_id, author=ctx.context.acting_for, written=written

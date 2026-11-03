@@ -491,6 +491,25 @@ def test_a_rewriter_who_cannot_run_work_here_takes_nothing():
     assert [r["bound_to"] for r in _list(client, rid)] == ["carol"]
 
 
+def test_a_workflow_too_big_to_follow_is_saved_and_hands_nothing_over(monkeypatch):
+    """Round 2 (regression F2): following a save holds the bytes in the API pod,
+    so a file past the bound is not read back at all — it saves as before and
+    moves nothing (the sweep drops the binding, as for any unknown door)."""
+    from workspace_app.api import file_routes
+
+    monkeypatch.setattr(file_routes, "FOLLOW_MAX_BYTES", 16)
+    client, holder, rid, _spec = _world()
+    base = f"/a/rca/items/{rid}/files"
+    assert client.put(f"{base}{WF}", content=_workflow()).status_code == 204
+    holder["id"] = "carol"
+    assert _bind(client, rid, _key_of(client, rid)).status_code == 200
+    holder["id"] = "bob"
+
+    assert client.put(f"{base}{WF}", content=_workflow("Payroll")).status_code == 204
+
+    assert [r["bound_to"] for r in _list(client, rid)] == ["carol"]
+
+
 def test_a_workflow_copied_over_from_a_template_hands_its_schedules_to_the_copier():
     """W1's template door (#520): an overwrite rewrites the workflow."""
     from workspace_app.workflow.shared import SHARED_WORKFLOWS

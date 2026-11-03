@@ -614,3 +614,24 @@ def test_signing_out_takes_away_what_the_platform_wrote_too():
 
     assert store.record_seam("alice", rid, {}) == {}
     assert store.seam("alice", rid) == {}
+
+
+def test_a_name_the_renewal_added_stays_while_the_renewed_values_do():
+    """Review round 2 (defect claim 4): another seam name changing on a request
+    (a trace id, say) is not a new sign-in for THIS set — the renewed values
+    are kept, and so is what their renewal added."""
+    from workspace_app.api.private_env import PrivateEnvStore
+
+    _client, _holder, rid, spec = _world()
+    store = PrivateEnvStore(spec)
+    store.record_seam("alice", rid, {"ACCESS": "a0", "REFRESH": "r0", "TRACE": "t0"})
+    store.replace_seam(
+        "alice", rid, {"ACCESS": "a1", "REFRESH": "r1", "TRACE": "t0", "EXPIRES_AT": "123"}
+    )
+
+    assert store.record_seam("alice", rid, {"ACCESS": "a0", "REFRESH": "r0", "TRACE": "t1"}) == {
+        "ACCESS": "a1",
+        "REFRESH": "r1",
+        "TRACE": "t1",
+        "EXPIRES_AT": "123",
+    }

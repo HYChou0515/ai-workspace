@@ -251,3 +251,53 @@ async def test_a_store_that_fails_outright_raises_nothing():
     written = await w.write("nightly", _wf("v2"))
 
     assert await w.authorship.workflow_written(ITEM, "nightly", author="bob", written=written) == []
+
+
+async def test_a_binding_dropped_while_the_hook_runs_is_not_brought_back():
+    """Review round 2 (defect claim 3): bob presses "Stop running as me" while
+    the hook is reading — the row is nobody's now, and stays so (W2)."""
+    w = _World()
+    await w.write("nightly", _wf("v1"))
+    (key,) = await w.schedule("nightly")
+    await w.bind(key, "bob", "nightly")
+
+    def may_run_while_bob_stops(_user: str, _item: str) -> bool:
+        w.bindings.unbind(key)
+        return True
+
+    w.authorship = ScheduleAuthorship(
+        w.bindings,
+        read=w.files.read,
+        may_run=may_run_while_bob_stops,
+        on_moved=lambda prev, who, wf: w.moved.append((prev.user_id, who, wf)),
+    )
+    written = await w.write("nightly", _wf("v2"))
+    await w.authorship.workflow_written(ITEM, "nightly", author="carol", written=written)
+
+    assert w.bindings.get(key) is None
+    assert w.moved == []
+
+
+async def test_a_binding_reassigned_while_the_hook_runs_is_left_to_its_new_holder():
+    """Review round 2 (defect claim 3): a superuser names dave meanwhile — the
+    hook must not replace dave silently nor tell bob something false."""
+    w = _World()
+    await w.write("nightly", _wf("v1"))
+    (key,) = await w.schedule("nightly")
+    await w.bind(key, "bob", "nightly")
+
+    def may_run_while_dave_is_named(_user: str, _item: str) -> bool:
+        w.bindings.bind(key, item_id=ITEM, path=SCHED, user_id="dave", reason="admin")
+        return True
+
+    w.authorship = ScheduleAuthorship(
+        w.bindings,
+        read=w.files.read,
+        may_run=may_run_while_dave_is_named,
+        on_moved=lambda prev, who, wf: w.moved.append((prev.user_id, who, wf)),
+    )
+    written = await w.write("nightly", _wf("v2"))
+    await w.authorship.workflow_written(ITEM, "nightly", author="carol", written=written)
+
+    assert w.binding(key).user_id == "dave"
+    assert w.moved == []

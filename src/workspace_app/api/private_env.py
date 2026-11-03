@@ -259,16 +259,18 @@ class PrivateEnvStore:
         stored = _ordered(row) if row is not None else {}
         seen = _seen(row) if row is not None else {}
         kept: dict[str, str] = {}
+        from_row = False
         for name, value in fresh.items():
             if seen.get(name) != value:
                 kept[name] = value
             elif name in stored:
                 kept[name] = stored[name]
-        if fresh and fresh == seen:
-            # Nothing new from the browser: a name the renewal ADDED (one it
-            # never sends, an expiry say) stays with the rest of what was
-            # renewed (review round 1, defect F6). A new sign-in takes it away,
-            # and so does signing out (nothing at all from the request).
+                from_row = True
+        if from_row:
+            # The row's values still stand for some name: what a renewal ADDED
+            # (a name the browser never sends, an expiry say) stays with them
+            # (review rounds 1–2, defect F6 / claim 4). A new sign-in replaces
+            # every value and takes it away; so does signing out (nothing).
             kept.update({n: v for n, v in stored.items() if n not in seen})
         if list(stored.items()) != list(kept.items()) or seen != fresh:
             self._write(PrivateSeam, user_id, item_id, kept, seen=fresh)

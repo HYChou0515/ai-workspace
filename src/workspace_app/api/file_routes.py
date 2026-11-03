@@ -181,6 +181,14 @@ def _workspace_prefix(prefix: str) -> str:
     return _workspace_path(prefix) if prefix else prefix
 
 
+#: The largest workflow file a save is followed for (`plan-seam-token-refresh`
+#: W1): following it holds the bytes in this process, so a file past this is not
+#: read back — it saves as before and hands no schedule over (the sweep drops
+#: the binding, as for any door that does not know who wrote it). A workflow is
+#: a small JSON file; this only stops a large one costing the pod its memory.
+FOLLOW_MAX_BYTES = 1024 * 1024
+
+
 async def _stream_upload_to_store(
     workspace_id: str,
     path: str,
@@ -203,8 +211,10 @@ async def _stream_upload_to_store(
 
     ``keep``: also return the bytes stored — read from the staging file, not
     back from the store, where another writer may already have replaced them
-    (`plan-seam-token-refresh` review round 1, defect F2). For small files only
-    (a workflow); otherwise None."""
+    (`plan-seam-token-refresh` review round 1, defect F2). Asked only for a
+    workflow file, and answered only up to ``FOLLOW_MAX_BYTES`` (round 2,
+    regression F2); past it, or when the read fails, None — the write has
+    landed either way and is not reported as failed."""
     # Headroom for this path, fetched once up front; an overwrite is a replace.
     # None ⇒ quota disabled. Computed against the durable store, so the sandbox
     # mirror (which writes the store directly, not via this endpoint) isn't gated.
@@ -246,7 +256,13 @@ async def _stream_upload_to_store(
                     )
                 f.write(chunk)
         await files.write_from_path(workspace_id, path, tmp, request.headers.get("content-type"))
-        return tmp.read_bytes() if keep else None
+        if not keep or size > FOLLOW_MAX_BYTES:
+            return None
+        try:
+            return tmp.read_bytes()
+        except OSError:  # only following the save depends on it
+            logger.warning("file_routes: could not read back %s to follow it", path, exc_info=True)
+            return None
     finally:
         tmp.unlink(missing_ok=True)
 

@@ -477,8 +477,10 @@ async def _bound_to(
     await ctx.context.files.write("inv-1", SCHEDULES, raw.encode())
     ((key, _row),) = file_keys("inv-1", SCHEDULES, raw)
     bindings = _authored(ctx, acting_for="carol")
-    # Carol's own chat: the turn a person is in (review round 1, defect F1).
+    # Carol's own chat, a message she just sent: the turn a person is in
+    # (review round 1, defect F1; round 2: not a goal round).
     ctx.context.in_chat = True
+    ctx.context.call_lane = "interactive"
     bindings.bind(key, item_id="inv-1", path=SCHEDULES, user_id=user, workflow_digest=digest)
     return bindings, key
 
@@ -583,4 +585,20 @@ async def test_an_edit_hands_over_the_bytes_it_wrote_not_what_the_file_holds_lat
     out = await edit_file_impl(ctx, ".workflows/nightly.json", '"Nightly"', '"Nightly 2"')
 
     assert out.startswith("edited"), out
+    assert bindings.binder(key) == "bob"
+
+
+async def test_a_goal_round_rewriting_a_workflow_takes_no_schedule(clock) -> None:
+    """Review round 2 (defect claim 2): a goal round is a chat turn (in_chat)
+    that the platform starts with nobody there — its lane is "background". It
+    must not renew or take a schedule for a body its person never saw."""
+    from workspace_app.agent.tools import edit_file_impl
+
+    ctx = _ctx()
+    await _with_workflow(ctx)
+    bindings, key = await _bound_to(ctx, "bob")
+    ctx.context.call_lane = "background"
+
+    await edit_file_impl(ctx, ".workflows/nightly.json", '"Nightly"', '"Nightly 2"')
+
     assert bindings.binder(key) == "bob"

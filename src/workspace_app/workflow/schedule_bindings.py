@@ -456,6 +456,16 @@ class ScheduleAuthorship:
                 runs[b.path] = {key: row.run for key, row in file_keys(item_id, b.path, raw)}
             if runs[b.path].get(b.trigger_id) != workflow_id:
                 continue
+            # Read again right before binding (review round 2, defect claim 3):
+            # the snapshot above is several reads old, and a "Stop running as
+            # me" or an administrator's choice landing meanwhile is newer than
+            # this hook — leave it, rather than bring a row back or replace the
+            # new holder (and tell the old one something false). Not atomic: the
+            # window left is one read.
+            now = await asyncio.to_thread(self._bindings.get, b.trigger_id)
+            if now is None or (now.user_id, now.workflow_digest) != (b.user_id, b.workflow_digest):
+                continue
+            b = now
             same = b.user_id == author
             await asyncio.to_thread(
                 self._bindings.bind,
