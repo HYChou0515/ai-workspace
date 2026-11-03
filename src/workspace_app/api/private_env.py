@@ -269,8 +269,10 @@ class PrivateEnvStore:
         if from_row:
             # The row's values still stand for some name: what a renewal ADDED
             # (a name the browser never sends, an expiry say) stays with them
-            # (review rounds 1–2, defect F6 / claim 4). A new sign-in replaces
-            # every value and takes it away; so does signing out (nothing).
+            # (review rounds 1–2, defect F6 / claim 4). Only when every name
+            # the request sends differs from last time (or it sends nothing,
+            # a sign-out) does it go; a sign-in that leaves some name unchanged
+            # keeps it (plan: known limits).
             kept.update({n: v for n, v in stored.items() if n not in seen})
         if list(stored.items()) != list(kept.items()) or seen != fresh:
             self._write(PrivateSeam, user_id, item_id, kept, seen=fresh)
