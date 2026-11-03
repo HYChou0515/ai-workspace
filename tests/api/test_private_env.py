@@ -450,3 +450,99 @@ def test_the_seam_answering_the_same_names_in_a_new_order_is_kept_in_that_order(
     store.record_seam("alice", rid, {"B": "2", "Z": "1"})
 
     assert list(store.seam("alice", rid)) == ["B", "Z"]
+
+
+# ─── plan-seam-token-refresh S4/S5: the seam row does not go backwards ────────
+
+
+def test_a_request_repeating_its_last_value_keeps_the_one_the_platform_renewed():
+    """S4: the browser still holds the token the platform has since renewed —
+    bringing it again says nothing new, so the renewed one stays."""
+    from workspace_app.api.private_env import PrivateEnvStore
+
+    _client, _holder, rid, spec = _world()
+    store = PrivateEnvStore(spec)
+    store.record_seam("alice", rid, {"TOKEN": "old", "OTHER": "o"})
+    store.replace_seam("alice", rid, {"TOKEN": "renewed", "OTHER": "o"})
+
+    kept = store.record_seam("alice", rid, {"TOKEN": "old", "OTHER": "o"})
+
+    assert kept == {"TOKEN": "renewed", "OTHER": "o"}
+    assert store.seam("alice", rid) == {"TOKEN": "renewed", "OTHER": "o"}
+
+
+def test_a_request_bringing_a_new_value_wins_over_the_renewed_one():
+    """S4: a value the request has not said before is a new sign-in — newer
+    than anything the platform renewed from the old one."""
+    from workspace_app.api.private_env import PrivateEnvStore
+
+    _client, _holder, rid, spec = _world()
+    store = PrivateEnvStore(spec)
+    store.record_seam("alice", rid, {"TOKEN": "old"})
+    store.replace_seam("alice", rid, {"TOKEN": "renewed"})
+
+    assert store.record_seam("alice", rid, {"TOKEN": "signed-in-again"}) == {
+        "TOKEN": "signed-in-again"
+    }
+    # And from then on that is what "the request said last".
+    store.replace_seam("alice", rid, {"TOKEN": "renewed-2"})
+    assert store.record_seam("alice", rid, {"TOKEN": "signed-in-again"}) == {"TOKEN": "renewed-2"}
+
+
+def test_a_name_the_platform_cleared_stays_cleared_while_the_request_repeats_it():
+    """S6: a refresh token found dead is cleared from the row; the browser's copy
+    is that same dead token, so bringing it again must not put it back."""
+    from workspace_app.api.private_env import PrivateEnvStore
+
+    _client, _holder, rid, spec = _world()
+    store = PrivateEnvStore(spec)
+    store.record_seam("alice", rid, {"TOKEN": "dead", "OTHER": "o"})
+    store.replace_seam("alice", rid, {"OTHER": "o"})
+
+    assert store.record_seam("alice", rid, {"TOKEN": "dead", "OTHER": "o"}) == {"OTHER": "o"}
+    assert store.record_seam("alice", rid, {"TOKEN": "fresh", "OTHER": "o"}) == {
+        "TOKEN": "fresh",
+        "OTHER": "o",
+    }
+
+
+def test_a_name_the_request_stops_giving_is_gone_even_after_a_renewal():
+    """Signing out still takes the name away (R2), renewed or not."""
+    from workspace_app.api.private_env import PrivateEnvStore
+
+    _client, _holder, rid, spec = _world()
+    store = PrivateEnvStore(spec)
+    store.record_seam("alice", rid, {"TOKEN": "old"})
+    store.replace_seam("alice", rid, {"TOKEN": "renewed"})
+
+    assert store.record_seam("alice", rid, {}) == {}
+    assert store.seam("alice", rid) == {}
+
+
+def test_a_seam_row_written_before_this_change_reads_as_what_the_request_said():
+    """A row with no `seen` holds the request's own answer — nothing renewed."""
+    from workspace_app.api.private_env import PrivateEnvStore, PrivateSeam, private_env_id
+
+    _client, _holder, rid, spec = _world()
+    spec.get_resource_manager(PrivateSeam).create(
+        PrivateSeam(user_id="alice", item_id=rid, values={"TOKEN": "x"}, updated_at=0),
+        resource_id=private_env_id("alice", rid),
+    )
+    store = PrivateEnvStore(spec)
+
+    assert store.record_seam("alice", rid, {"TOKEN": "x"}) == {"TOKEN": "x"}
+    assert store.record_seam("alice", rid, {"TOKEN": "y"}) == {"TOKEN": "y"}
+
+
+def test_the_turn_with_the_request_gets_the_renewed_value_too():
+    """S5: the send that brings the stale token runs its own tools with the
+    renewed one — not the value the request carried."""
+    from workspace_app.api.private_env import PrivateEnvStore
+
+    client, runner, item_id, spec = _seam_app()
+    with client:
+        _send(client, item_id, "TOKEN=old")
+        PrivateEnvStore(spec).replace_seam("u", item_id, {"TOKEN": "renewed"})
+        _send(client, item_id, "TOKEN=old")
+
+    assert runner.envs == [{"TOKEN": "old"}, {"TOKEN": "renewed"}]
