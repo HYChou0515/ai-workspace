@@ -264,6 +264,12 @@ class PrivateEnvStore:
                 kept[name] = value
             elif name in stored:
                 kept[name] = stored[name]
+        if fresh and fresh == seen:
+            # Nothing new from the browser: a name the renewal ADDED (one it
+            # never sends, an expiry say) stays with the rest of what was
+            # renewed (review round 1, defect F6). A new sign-in takes it away,
+            # and so does signing out (nothing at all from the request).
+            kept.update({n: v for n, v in stored.items() if n not in seen})
         if list(stored.items()) != list(kept.items()) or seen != fresh:
             self._write(PrivateSeam, user_id, item_id, kept, seen=fresh)
         return kept

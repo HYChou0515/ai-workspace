@@ -546,3 +546,71 @@ def test_the_turn_with_the_request_gets_the_renewed_value_too():
         _send(client, item_id, "TOKEN=old")
 
     assert runner.envs == [{"TOKEN": "old"}, {"TOKEN": "renewed"}]
+
+
+def test_a_name_the_renewal_added_is_kept_while_the_request_brings_nothing_new():
+    """Review round 1 (defect F6): the deploy's refresh may return a name the
+    browser never sends (an expiry, say). Dropping it at the next request made
+    a `needs_refresh` keyed on it judge "due" every turn."""
+    from workspace_app.api.private_env import PrivateEnvStore
+
+    _client, _holder, rid, spec = _world()
+    store = PrivateEnvStore(spec)
+    store.record_seam("alice", rid, {"ACCESS": "a0", "REFRESH": "r0"})
+    store.replace_seam("alice", rid, {"ACCESS": "a1", "REFRESH": "r1", "EXPIRES_AT": "123"})
+
+    assert store.record_seam("alice", rid, {"ACCESS": "a0", "REFRESH": "r0"}) == {
+        "ACCESS": "a1",
+        "REFRESH": "r1",
+        "EXPIRES_AT": "123",
+    }
+    # A new sign-in in the browser: the renewal's leftovers go with the rest.
+    assert store.record_seam("alice", rid, {"ACCESS": "a9", "REFRESH": "r9"}) == {
+        "ACCESS": "a9",
+        "REFRESH": "r9",
+    }
+
+
+def test_what_the_request_said_last_moves_on_even_when_it_matches_the_row():
+    """Review round 1 (conformance F4): the browser catches up with the renewed
+    value; the platform renews again; the browser repeats — the second renewal
+    is kept, so `seen` must have moved to what the browser said."""
+    from workspace_app.api.private_env import PrivateEnvStore
+
+    _client, _holder, rid, spec = _world()
+    store = PrivateEnvStore(spec)
+    store.record_seam("alice", rid, {"TOKEN": "t0"})
+    store.replace_seam("alice", rid, {"TOKEN": "t1"})
+    assert store.record_seam("alice", rid, {"TOKEN": "t1"}) == {"TOKEN": "t1"}
+    store.replace_seam("alice", rid, {"TOKEN": "t2"})
+
+    assert store.record_seam("alice", rid, {"TOKEN": "t1"}) == {"TOKEN": "t2"}
+
+
+def test_a_seam_row_whose_every_value_was_found_dead_stays_cleared():
+    """Review round 1 (conformance F3): with nothing left, the row still
+    remembers what the request said — deleting it would let the browser's dead
+    token back in over the Private value signing in again wrote."""
+    from workspace_app.api.private_env import PrivateEnvStore
+
+    _client, _holder, rid, spec = _world()
+    store = PrivateEnvStore(spec)
+    store.record_seam("alice", rid, {"TOKEN": "dead"})
+    store.replace_seam("alice", rid, {})
+
+    assert store.seam("alice", rid) == {}
+    assert store.record_seam("alice", rid, {"TOKEN": "dead"}) == {}
+
+
+def test_signing_out_takes_away_what_the_platform_wrote_too():
+    """A request that brings nothing is a sign-out, whatever the row holds —
+    even a value the platform wrote where the request had said nothing (a
+    renewal landing after a sign-out, say)."""
+    from workspace_app.api.private_env import PrivateEnvStore
+
+    _client, _holder, rid, spec = _world()
+    store = PrivateEnvStore(spec)
+    store.replace_seam("alice", rid, {"TOKEN": "renewed"})
+
+    assert store.record_seam("alice", rid, {}) == {}
+    assert store.seam("alice", rid) == {}

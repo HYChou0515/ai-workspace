@@ -679,8 +679,11 @@ async def test_the_seam_wins_over_typed_values_so_the_seam_is_what_gets_refreshe
     w.store.replace("alice", "i1", {"ERP_TOKEN": "typed", "ERP_REFRESH": "typed-r"})
     w.store.record_seam("alice", "i1", OLD)
 
-    await w.run([_SeamErp()])
+    out = await w.run([_SeamErp()])
 
+    # The tool gets the renewed value, not the typed one under it (round 1,
+    # conformance F2).
+    assert out.person.own == {"ERP_TOKEN": "new", "ERP_REFRESH": "r2"}
     assert w.store.seam("alice", "i1") == {"ERP_TOKEN": "new", "ERP_REFRESH": "r2"}
     assert w.store.get("alice", "i1") == {"ERP_TOKEN": "typed", "ERP_REFRESH": "typed-r"}
 
