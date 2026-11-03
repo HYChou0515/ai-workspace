@@ -477,6 +477,8 @@ async def _bound_to(
     await ctx.context.files.write("inv-1", SCHEDULES, raw.encode())
     ((key, _row),) = file_keys("inv-1", SCHEDULES, raw)
     bindings = _authored(ctx, acting_for="carol")
+    # Carol's own chat: the turn a person is in (review round 1, defect F1).
+    ctx.context.in_chat = True
     bindings.bind(key, item_id="inv-1", path=SCHEDULES, user_id=user, workflow_digest=digest)
     return bindings, key
 
@@ -538,4 +540,47 @@ async def test_a_turn_that_acts_for_nobody_takes_no_schedule_by_editing_a_workfl
 
     await edit_file_impl(ctx, ".workflows/nightly.json", '"Nightly"', '"Nightly 2"')
 
+    assert bindings.binder(key) == "bob"
+
+
+async def test_a_workflow_step_rewriting_a_workflow_takes_no_schedule(clock) -> None:
+    """Review round 1 (defect F1): a workflow step or a schedule's run acts for
+    its binder with nobody there — a run rewriting its own workflow must not
+    renew its binder's consent to a body they never saw."""
+    from workspace_app.agent.tools import edit_file_impl
+
+    ctx = _ctx()
+    await _with_workflow(ctx)
+    bindings, key = await _bound_to(ctx, "bob")
+    ctx.context.in_chat = False
+
+    await edit_file_impl(ctx, ".workflows/nightly.json", '"Nightly"', '"Nightly 2"')
+
+    assert bindings.binder(key) == "bob"
+
+
+async def test_an_edit_hands_over_the_bytes_it_wrote_not_what_the_file_holds_later(
+    clock, monkeypatch
+) -> None:
+    """Review round 1 (defect F2): someone rewrites the workflow between this
+    edit and its hook — the schedule is not handed over for a body this turn
+    did not write."""
+    from workspace_app.agent.tools import edit_file_impl
+
+    ctx = _ctx()
+    await _with_workflow(ctx)
+    bindings, key = await _bound_to(ctx, "bob")
+    files = ctx.context.files
+    real_edit = files.edit
+
+    async def edit_then_overwritten(inv, path, old, new):
+        result = await real_edit(inv, path, old, new)
+        await files.write(inv, "/.workflows/nightly.json", _WORKFLOW.replace(b"Nightly", b"Evil"))
+        return result
+
+    monkeypatch.setattr(files, "edit", edit_then_overwritten)
+
+    out = await edit_file_impl(ctx, ".workflows/nightly.json", '"Nightly"', '"Nightly 2"')
+
+    assert out.startswith("edited"), out
     assert bindings.binder(key) == "bob"

@@ -403,6 +403,7 @@ def register_workflow_routes(
         from ..workflow.workspace_store import (
             RESERVED_WORKFLOW_ID,
             save_workspace_workflow,
+            workspace_workflow_bytes,
             workspace_workflow_path,
         )
 
@@ -439,9 +440,14 @@ def register_workflow_routes(
             )
         await save_workspace_workflow(files, investigation_id, name, d)
         if schedule_authorship is not None:
-            # plan-seam-token-refresh W1: an overwrite rewrites a workflow that
+            # plan-seam-token-refresh W1: a copy writes a workflow that
             # schedules may run — they now run as whoever copied it in.
-            await schedule_authorship.workflow_written(investigation_id, name, author=get_user_id())
+            await schedule_authorship.workflow_written(
+                investigation_id,
+                name,
+                author=get_user_id(),
+                written=workspace_workflow_bytes(name, d),
+            )
         return {"workflow_id": name, "path": path}
 
     @app.get("/a/{slug}/profiles")

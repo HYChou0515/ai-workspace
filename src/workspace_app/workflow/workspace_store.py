@@ -183,8 +183,16 @@ async def save_workspace_workflow(
     if slug == RESERVED_WORKFLOW_ID:
         raise ReservedWorkflowId(slug)
     path = workspace_workflow_path(slug)
-    await files.write(workspace_id, path, msgspec.json.encode(msgspec.structs.replace(d, id=slug)))
+    await files.write(workspace_id, path, workspace_workflow_bytes(slug, d))
     return path
+
+
+def workspace_workflow_bytes(slug: str, d: WorkflowDef) -> bytes:
+    """The bytes ``save_workspace_workflow`` writes for ``d`` — the one
+    definition, so a caller that must know what it wrote
+    (`ScheduleAuthorship.workflow_written`) reads it here, not back from a file
+    someone may have rewritten since."""
+    return msgspec.json.encode(msgspec.structs.replace(d, id=slug))
 
 
 async def workspace_workflow_metas(

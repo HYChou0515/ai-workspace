@@ -403,10 +403,14 @@ def test_a_workflow_rewritten_by_someone_who_may_run_work_hands_them_its_schedul
         _tick(client, spec, rid)
 
     (row,) = _list(client, rid)
-    assert (row["bound_to"], row["reason"]) == ("bob", "author")
+    # Why: bob changed what it runs — not "wrote the schedule" (round 1, veracity 1).
+    assert (row["bound_to"], row["reason"]) == ("bob", "workflow")
     notices = _notices(spec, "carol")
     assert [k for k, _ in notices] == ["schedule_binding_replaced"]
     assert "build-report" in notices[0][1] and "bob" in notices[0][1]
+    # And bob is told his values now back it (round 1, regression 2). His
+    # first notice is from carol's "Run as me" replacing his author binding.
+    assert "schedule_binding_assigned" in {k for k, _ in _notices(spec, "bob")}
 
 
 def test_the_binder_rewriting_their_own_workflow_keeps_it_and_hears_nothing():
@@ -469,6 +473,7 @@ def test_a_broken_workflow_fixed_by_someone_else_runs_as_the_one_who_fixed_it():
 
     assert [r["bound_to"] for r in _list(client, rid)] == ["bob"]
     assert [k for k, _ in _notices(spec, "carol")] == ["schedule_binding_replaced"]
+    assert [k for k, _ in _notices(spec, "bob")] == ["schedule_binding_assigned"]
 
 
 def test_a_rewriter_who_cannot_run_work_here_takes_nothing():

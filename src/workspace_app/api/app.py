@@ -2412,7 +2412,10 @@ def create_app(
     # against the SAME `execute` rule the sweep re-checks before each fire.
     # plan-seam-token-refresh W1/W3: the same doors hand a schedule to whoever
     # rewrites its workflow, and the person it ran as is told.
-    def _tell_schedule_replaced(previous: ScheduleBinding, author: str, workflow_id: str) -> None:
+    def _tell_schedule_moved(previous: ScheduleBinding, author: str, workflow_id: str) -> None:
+        """Both people a moved schedule concerns: the one whose values it ran
+        with, and the one whose values it runs with now (W3; review round 1,
+        regression 2 — lending values must never be silent)."""
         notify(
             spec,
             recipient=previous.user_id,
@@ -2424,13 +2427,25 @@ def create_app(
             ),
             actor=author,
         )
+        notify(
+            spec,
+            recipient=author,
+            kind="schedule_binding_assigned",
+            title="A schedule now runs as you",
+            body=(
+                f"You changed the workflow “{workflow_id}”, so its schedule in "
+                f"{previous.path} now runs with your own sign-ins and values. If you do "
+                "not want that, open the schedule and choose “Stop running as me”."
+            ),
+            actor=author,
+        )
 
     schedule_authorship = ScheduleAuthorship(
         ScheduleBindings(spec),
         read=files.read,
         may_run=lambda user, item: user_may(spec, item, user, "execute", superusers=superusers),
         max_rows=max_page_schedules,
-        on_replaced=_tell_schedule_replaced,
+        on_moved=_tell_schedule_moved,
     )
     turn_ctx = TurnContextBuilder(
         view_plugin_artifacts=artifact_plugins(view_plugins),

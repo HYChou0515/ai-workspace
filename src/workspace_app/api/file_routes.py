@@ -187,7 +187,9 @@ async def _stream_upload_to_store(
     request: Request,
     files: WorkspaceFiles,
     max_file_size: int,
-) -> None:
+    *,
+    keep: bool = False,
+) -> bytes | None:
     """Stream the request body to a staging file on disk, enforcing the
     single-file cap (#219) and the per-workspace quota (#245) as bytes arrive,
     then hand the file to the store. The staging file means a multi-GB upload
@@ -197,7 +199,12 @@ async def _stream_upload_to_store(
     App), and 0 there disables it.
 
     The quota credits back the bytes of the file being overwritten (a replace,
-    not an add), so re-uploading a same-size file never trips it."""
+    not an add), so re-uploading a same-size file never trips it.
+
+    ``keep``: also return the bytes stored — read from the staging file, not
+    back from the store, where another writer may already have replaced them
+    (`plan-seam-token-refresh` review round 1, defect F2). For small files only
+    (a workflow); otherwise None."""
     # Headroom for this path, fetched once up front; an overwrite is a replace.
     # None ⇒ quota disabled. Computed against the durable store, so the sandbox
     # mirror (which writes the store directly, not via this endpoint) isn't gated.
@@ -239,6 +246,7 @@ async def _stream_upload_to_store(
                     )
                 f.write(chunk)
         await files.write_from_path(workspace_id, path, tmp, request.headers.get("content-type"))
+        return tmp.read_bytes() if keep else None
     finally:
         tmp.unlink(missing_ok=True)
 
@@ -621,7 +629,10 @@ def register_file_routes(
             if schedule_authorship is not None and is_schedule_file(norm)
             else (False, None)
         )
-        await _stream_upload_to_store(investigation_id, norm, request, files, max_file_size)
+        follows = schedule_authorship is not None and workflow_id_of(norm) is not None
+        written = await _stream_upload_to_store(
+            investigation_id, norm, request, files, max_file_size, keep=follows
+        )
         if credit:
             assert schedule_authorship is not None  # narrow for ty
             try:
@@ -635,8 +646,10 @@ def register_file_routes(
                 )
         # plan-seam-token-refresh W1: a workflow saved here — the editor, the
         # panel's import — hands the schedules running it to the person saving.
-        if schedule_authorship is not None and (wf := workflow_id_of(norm)) is not None:
-            await schedule_authorship.workflow_written(investigation_id, wf, author=get_user_id())
+        if schedule_authorship is not None and written is not None:
+            await schedule_authorship.workflow_written(
+                investigation_id, workflow_id_of(norm) or "", author=get_user_id(), written=written
+            )
         activity.record(
             "file_written",
             f"Wrote {rel_path(norm)}",

@@ -44,7 +44,7 @@ from specstar import QB, SpecStar
 from specstar.types import ResourceIDNotFoundError
 
 from .user_schedules import UserSchedule, file_rows, over_cap, trigger_id_for, usable_rows
-from .workspace_store import load_workspace_workflow_digested
+from .workspace_store import load_workspace_workflow_digested, workspace_workflow_path
 
 logger = logging.getLogger(__name__)
 
@@ -90,7 +90,8 @@ class ScheduleBinding(Struct):
     #: WHY it runs as `user_id` (`plan-schedule-run-as` G8): ``"self"`` — they
     #: pressed "Run as me" (every binding made before this field existed);
     #: ``"author"`` — they wrote the row (G2); ``"admin"`` — a superuser named
-    #: them (G5). Shown, never consulted by the sweep: whose values a fire
+    #: them (G5); ``"workflow"`` — they rewrote the workflow it runs
+    #: (`plan-seam-token-refresh` W1). Shown, never consulted by the sweep: whose values a fire
     #: carries is `user_id` alone, whatever put it there.
     reason: str = "self"
     #: The superuser who named them, for ``reason == "admin"``; "" otherwise.
@@ -303,14 +304,15 @@ class ScheduleAuthorship:
         read: Callable[[str, str], Awaitable[bytes]],
         may_run: Callable[[str, str], bool],
         max_rows: int | None = None,
-        on_replaced: Callable[[ScheduleBinding, str, str], None] | None = None,
+        on_moved: Callable[[ScheduleBinding, str, str], None] | None = None,
     ) -> None:
         self._bindings = bindings
         self._read = read
         self._may_run = may_run
-        #: ``(the binding replaced, who now holds it, the workflow they rewrote)``
-        #: — the replaced person is told (W3). Blocking; None ⇒ nobody told.
-        self._on_replaced = on_replaced
+        #: ``(the binding as it was, who now holds it, the workflow they
+        #: rewrote)`` when a schedule moved to someone else — both are told
+        #: (W3). Blocking; None ⇒ nobody told.
+        self._on_moved = on_moved
         # The sweep's own cap: a file over it fires nothing, and the sweep does
         # not expire bindings while it stays over — crediting its rows would
         # only grow the table (review round 1, defect 2).
@@ -380,10 +382,20 @@ class ScheduleAuthorship:
             credited.append(key)
         return credited
 
-    async def workflow_written(self, item_id: str, workflow_id: str, *, author: str) -> list[str]:
-        """`plan-seam-token-refresh` W1: the workflow ``workflow_id`` was just
-        rewritten by ``author`` — every schedule that runs it AS SOMEONE now runs
-        as them, the one who wrote what it will run. Returns the keys moved.
+    async def workflow_written(
+        self, item_id: str, workflow_id: str, *, author: str, written: bytes
+    ) -> list[str]:
+        """`plan-seam-token-refresh` W1: ``author`` just wrote ``written`` as the
+        workflow ``workflow_id`` — every bound schedule running it whose consent
+        no longer matches it now runs as them, the one who wrote what it will
+        run. Returns the keys rebound (a same-person renewal included).
+
+        Only while the workflow still IS what they wrote (review round 1, defect
+        F2): two writers racing, the first one's hook must not hand the second
+        one's body to the first one's values. The digest compared is the one
+        the build defines (`workflow_digest`), of ``written`` and of the live
+        file alike; a mismatch moves nothing, and whatever wrote last decides —
+        its own hook, or the sweep dropping the binding.
 
         Only rows already bound (W2): a row nobody runs as — never credited, or
         its person chose "Stop running as me" — is not taken by whoever edits
@@ -393,18 +405,24 @@ class ScheduleAuthorship:
         and its fix will come through here or drop the binding.
 
         The same person: only the consent is renewed, silently, and their reason
-        kept. Someone else: ``on_replaced`` tells the person replaced.
+        kept. Someone else: the reason becomes ``"workflow"`` (they changed what
+        it runs — not "wrote the schedule", review round 1 veracity 1), and
+        ``on_moved`` tells both of them.
 
         Never raises, for the reason ``credit`` gives."""
         try:
-            return await self._workflow_written(item_id, workflow_id, author=author)
+            return await self._workflow_written(
+                item_id, workflow_id, author=author, written=written
+            )
         except Exception:  # noqa: BLE001 — logged; the save stands
             logger.exception(
                 "schedule authorship: could not move %s %s to %s", item_id, workflow_id, author
             )
             return []
 
-    async def _workflow_written(self, item_id: str, workflow_id: str, *, author: str) -> list[str]:
+    async def _workflow_written(
+        self, item_id: str, workflow_id: str, *, author: str, written: bytes
+    ) -> list[str]:
         from .offered import unparsable_workflow
 
         if not author:
@@ -412,9 +430,16 @@ class ScheduleAuthorship:
         bound = await asyncio.to_thread(self._bindings.for_item, item_id)
         if not bound:
             return []
-        if await unparsable_workflow(self._read, item_id, workflow_id) is not None:
+        path = workspace_workflow_path(workflow_id)
+
+        async def as_written(item: str, at: str) -> bytes:
+            return written if at == path else await self._read(item, at)
+
+        if await unparsable_workflow(as_written, item_id, workflow_id) is not None:
             return []
-        digest = await workflow_digest(self._read, item_id, workflow_id)
+        digest = await workflow_digest(as_written, item_id, workflow_id)
+        if await workflow_digest(self._read, item_id, workflow_id) != digest:
+            return []  # rewritten again since: not what this author wrote
         stale = [b for b in bound if b.workflow_digest != digest]
         if not stale or not await asyncio.to_thread(self._may_run, author, item_id):
             return []
@@ -438,13 +463,13 @@ class ScheduleAuthorship:
                 path=b.path,
                 user_id=author,
                 workflow_digest=digest,
-                reason=b.reason if same else "author",
+                reason=b.reason if same else "workflow",
                 assigned_by=b.assigned_by if same else "",
             )
             moved.append(b.trigger_id)
-            if not same and self._on_replaced is not None:
+            if not same and self._on_moved is not None:
                 try:
-                    await asyncio.to_thread(self._on_replaced, b, author, workflow_id)
+                    await asyncio.to_thread(self._on_moved, b, author, workflow_id)
                 except Exception:  # noqa: BLE001 — a failed notice is not a failed move
                     logger.exception("schedule authorship: could not tell %s", b.user_id)
         return moved
