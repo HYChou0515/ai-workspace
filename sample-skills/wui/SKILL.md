@@ -6,8 +6,13 @@ description: Build a WUI — a folder in this item's workspace that renders as a
 # Build a WUI
 
 A **WUI** is a folder in this item's workspace whose `*.ai.yaml` file says
-`view: wui`. Opening that file runs the folder as a page. There is no publish
-step and nothing to register — write the files and it works.
+`view: wui`. Opening that file runs the folder as a page. Nothing has to be
+registered for it to work here — write the files and it runs. Putting it in
+front of other people is **Publish WUI**, at the end.
+
+This skill is about pages only. A conversation assistant other people talk to
+is an **agent** — an `agent.ai.yaml`, its own skill and its own place (Agent
+Hub); do not build one as a page.
 
 Read `reference.md` for the exact API before you write code. **Start by copying
 one of the complete, working examples in `examples/`** — they already get
@@ -202,10 +207,13 @@ title: Lot tracker
 # icon: logo.png         # a file in this folder, or an emoji ("📦"), or a platform icon name ("kanban")
 # color: "#0EA5A4"        # the card's colour on the WUI overview; the App's colour without it
 # tools: [mes__lot-status]   # only if the page calls one — see reference.md
+# publish:                # what the Publish WUI dialog opens with — see the end
+#   sharing: per_person
+#   reach: everyone
 ```
 
 `title` is what the pane is called. `entry` overrides `index.html` if you must.
-`icon` is optional: it marks the page on the WUI overview once it is Deployed;
+`icon` is optional: it marks the page on the WUI overview once it is published;
 without one the overview draws a circle with the title's first letter.
 
 ## A page can be many pages
@@ -300,7 +308,7 @@ item's own.
 - The toolbar above the page speaks the person's language — name a button the
   way they see it: **重新整理** (Refresh), **重新建置** (Rebuild), **自動重新建置**
   (Auto-rebuild), **回報問題** (Report a problem), **告訴 AI** (Tell the agent).
-  **Deploy** is Deploy in both.
+  **發布 WUI** (Publish WUI).
 - **The page does not reload itself.** After you change a file, tell the user to
   press **重新整理** above the page. On a page with a build there is **重新建置**
   next to it, and an **自動重新建置** switch that is on by
@@ -330,12 +338,47 @@ Open it yourself in your head, in this order:
    its shape? And does the page survive a non-zero exit and a non-JSON reply?
 
 Then tell the user which file to open, in their words: "open **Lot tracker** in
-`lot-tracker/page.ai.yaml`" — and, when the page is for other people, that
-**Deploy** in its toolbar is what puts it on the platform's **WUI** overview,
-where colleagues find it. Deploy is a person's press (someone who may edit the
-workspace), so say it in the same breath as the file name: a page nobody Deployed is
-one only its link can reach. The link opens for exactly the people who may read
-the workspace's files, and a new workspace is private — after Deploy the panel
-says who it opens for and offers **分享設定…** (or, to someone who may not
-change access, names the owner to ask); colleagues who should use the page
-have to be added there first.
+`lot-tracker/page.ai.yaml`".
+
+## When the page is for other people: Publish WUI
+
+**發布 WUI** (Publish WUI) in the page's toolbar puts it on the platform's
+**WUI** overview, where colleagues find it. Publishing is a person's press —
+someone who may manage this workspace's sharing — never yours. What you do is
+ask the questions the dialog will ask, **skipping whatever the user already
+told you**, write the answers into the page's `publish:` so the dialog opens
+with them, and say what pressing Publish will do.
+
+1. **How others use the page** — there is no default; the dialog will not
+   publish until one is chosen, so ask, and give each one's cost:
+   - `fresh` — every open is a new copy of this workspace. Nothing anyone
+     does is kept or seen by others; a copy is made on every open.
+   - `per_person` — each person gets their own copy, kept between visits.
+     Nobody sees anyone else's; one copy per person on their own space.
+   - `shared` — one copy everyone uses together, made now. People see each
+     other's changes; ask what they may do in it (`role`: `reader`,
+     `participant`, `collaborator`).
+   - `direct` — people use THIS workspace. Everything they do lands here, and
+     only people who may read it can open the page.
+2. **Who may use it** (not for `direct`) — `reach`: `me`, `subjects` (then the
+   people and groups, `user:<id>` / `group:<id>` in `subjects`) or `everyone`.
+3. **The copies' sandbox size** (copying ways only) — `cpu_cores` and
+   `memory_gb`, or leave them out for the platform's default.
+
+```yaml
+publish:
+  sharing: per_person
+  reach: subjects
+  subjects: [group:qa-team]
+  # role: participant      # shared only
+  # cpu_cores: 2
+  # memory_gb: 4
+```
+
+A copy is the workspace as it is when published, minus run state and
+schedules — tell them that a token pasted into the workspace's Shared values
+goes into every copy, so a personal credential belongs in each person's own
+environment instead. Then summarise the choices in one or two sentences and
+tell them to press **發布 WUI**: the dialog shows how many files a copy holds
+and how long one takes to prepare, and publishing again later updates what new
+copies start from.
