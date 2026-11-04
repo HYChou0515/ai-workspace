@@ -10,7 +10,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import { kbApi, type KbApi, type KbCitation } from "../../api/kb";
 import { qk } from "../../api/queryKeys";
-import { ChatFeedRow, type FeedActions, useStableActions } from "../../components/ChatFeedRow";
+import { ChatFeedRow, type FeedActions } from "../../components/ChatFeedRow";
+import { useStableActions } from "../../hooks/useStableActions";
 import { ErrorNotice } from "../../components/ErrorNotice";
 import { Icon } from "../../components/Icon";
 import { ResizeDivider } from "../../components/ResizeDivider";

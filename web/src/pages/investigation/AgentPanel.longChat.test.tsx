@@ -25,6 +25,23 @@ vi.mock("react-markdown", () => ({
   },
 }));
 
+// And each row drawn — the row-level guard. `AnswerMarkdown`'s memo would hide
+// a row that is redrawn for nothing (its markdown is not parsed again), so the
+// rows themselves are counted too: `ChatFeedRow`'s memo, `useStableActions`
+// and `useSameShape` each keep a finished row from being drawn at all.
+const drawn: string[] = [];
+vi.mock("../../components/AgentEntryView", async (importOriginal) => {
+  const real = await importOriginal<typeof import("../../components/AgentEntryView")>();
+  return {
+    ...real,
+    EntryView: (props: Parameters<typeof real.EntryView>[0]) => {
+      const e = props.entry as { kind: string; message?: { content?: string } };
+      drawn.push(e.kind === "message" ? String(e.message?.content) : e.kind);
+      return <real.EntryView {...props} />;
+    },
+  };
+});
+
 import { api } from "../../api";
 import { kbApi } from "../../api/kb";
 import type { AgentState } from "../../hooks/useAgent";
@@ -104,12 +121,15 @@ describe("a streamed token in a long chat", () => {
     // What `reduceAgent` hands back for the next delta: a new array, the same
     // objects for every finished entry, a new one only for the live answer.
     parsed.length = 0;
+    drawn.length = 0;
     const entries = [...before.entries];
     entries[entries.length - 1] = answer("partial", true);
     view.rerender(panel(agentWith({ ...before, entries } as AgentLog)));
 
     expect(parsed.filter((t) => t.startsWith("finished answer"))).toEqual([]);
     expect(parsed).toContain("partial");
+    // Not drawn at all: only the live answer's row is.
+    expect(drawn).toEqual(["partial"]);
   });
 
   it("re-parses no finished answer when a turn starts or ends", () => {
@@ -134,4 +154,30 @@ describe("a streamed token in a long chat", () => {
 
     expect(parsed.filter((t) => t.startsWith("finished answer"))).toEqual([]);
   });
+
+  it("re-parses no finished answer when the thread is fetched again after a turn", () => {
+    // When a turn ends the thread is fetched again and rebuilt
+    // (`reconcileSnapshot` → `logFromMessages`): every entry is a NEW object,
+    // with a new `citations` array, and the same text. Seen in the demo on the
+    // 300-turn chat as one 1.4s freeze at the end of every answer.
+    const withCitations = (e: AgentEntry): AgentEntry =>
+      e.kind === "message" ? ({ ...e, message: { ...e.message, citations: [] } } as AgentEntry) : e;
+    const finished: AgentEntry[] = [];
+    for (let i = 0; i < 20; i++) finished.push(question(`q${i}`), answer(`finished answer ${i}`));
+    const before = { entries: finished.map(withCitations), streaming: false } as unknown as AgentLog;
+    const client = makeTestQueryClient();
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <QueryWrap client={client}>
+        <MemoryRouter>{children}</MemoryRouter>
+      </QueryWrap>
+    );
+    const view = render(panel(agentWith(before)), { wrapper });
+
+    parsed.length = 0;
+    const refetched = { ...before, entries: finished.map(withCitations) } as AgentLog;
+    view.rerender(panel(agentWith(refetched)));
+
+    expect(parsed.filter((t) => t.startsWith("finished answer"))).toEqual([]);
+  });
 });
+

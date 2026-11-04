@@ -8,9 +8,9 @@
  * token: on a 300-turn chat the main thread was busy for the whole answer and
  * froze for over a second at a time. A row therefore takes only what it shows,
  * and its handlers come from ONE object whose identity does not change
- * (`useStableActions`).
+ * (`hooks/useStableActions`).
  */
-import { memo, useMemo, useRef, type ComponentProps } from "react";
+import { memo, type ComponentProps } from "react";
 
 import { EntryView } from "./AgentEntryView";
 
@@ -22,7 +22,6 @@ export type FeedActions = {
   answer?: NonNullable<EntryProps["onAnswerQuestion"]>;
   openCitation?: NonNullable<EntryProps["onOpenCitation"]>;
   requestAccess?: NonNullable<EntryProps["onRequestAccess"]>;
-  fileUrl?: (path: string) => string;
   /** #51 P6: re-run the step at this index as a diagnostic. */
   replay?: (index: number) => void;
   /** #38: undo the user turn at this index and everything after it. */
@@ -31,30 +30,6 @@ export type FeedActions = {
   reportWiki?: (index: number) => void;
 };
 
-type AnyFn = (...args: never[]) => unknown;
-
-/**
- * `impl`'s functions behind proxies whose identity holds across renders: each
- * proxy calls the LATEST `impl` at call time. The object is rebuilt only when
- * the set of present actions changes (an action offered or withdrawn), which is
- * when a row has a different affordance to draw.
- */
-export function useStableActions<T extends Record<string, AnyFn | undefined>>(impl: T): T {
-  const latest = useRef(impl);
-  latest.current = impl;
-  const present = Object.keys(impl)
-    .filter((k) => impl[k] !== undefined)
-    .sort()
-    .join(",");
-  return useMemo(() => {
-    const out: Record<string, AnyFn> = {};
-    for (const key of present ? present.split(",") : []) {
-      out[key] = (...args: never[]) => (latest.current[key] as AnyFn)(...args);
-    }
-    return out as T;
-  }, [present]);
-}
-
 export const ChatFeedRow = memo(function ChatFeedRow({
   entry,
   index,
@@ -62,6 +37,7 @@ export const ChatFeedRow = memo(function ChatFeedRow({
   me,
   answeredQuestions,
   actions,
+  fileUrl,
 }: {
   entry: EntryProps["entry"];
   /** #51 P6: hydrated entries map 1:1 onto the persisted conversation
@@ -74,6 +50,11 @@ export const ChatFeedRow = memo(function ChatFeedRow({
   me?: EntryProps["currentUser"];
   answeredQuestions?: EntryProps["answeredQuestions"];
   actions: FeedActions;
+  /** #285: resolve a workspace path for an embedded image or file link. A prop
+   * of its own, NOT one of the identity-stable `actions`: it is called while
+   * the markdown is drawn, so a new item must reach the memo'd body as a new
+   * function (review: a stable proxy kept the first item's URLs). */
+  fileUrl?: (path: string) => string;
 }) {
   const answer = entry.kind === "message" && entry.message.role === "assistant";
   const canReplay = settled && (entry.kind === "tool_call" || answer);
@@ -90,7 +71,7 @@ export const ChatFeedRow = memo(function ChatFeedRow({
       onReplay={canReplay && replay ? () => replay(index) : undefined}
       onUndo={canUndo && undo ? () => undo(index) : undefined}
       onReportWiki={settled && answer && reportWiki ? () => reportWiki(index) : undefined}
-      fileUrl={actions.fileUrl}
+      fileUrl={fileUrl}
     />
   );
 });

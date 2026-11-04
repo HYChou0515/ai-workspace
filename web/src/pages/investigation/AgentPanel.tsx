@@ -5,14 +5,14 @@
  */
 
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { api } from "../../api";
 import { investigationFileService } from "../../api/fileService";
 import { kbApi } from "../../api/kb";
 import { qk } from "../../api/queryKeys";
 import type { ChatVideoQueued } from "../../api/chatVideo";
-import { ChatFeedRow, type FeedActions, useStableActions } from "../../components/ChatFeedRow";
+import { ChatFeedRow, type FeedActions } from "../../components/ChatFeedRow";
 import { ExportDialog } from "../../components/ExportDialog";
 import { VideoProgress } from "../../components/VideoProgress";
 import { HealthDot } from "../../components/HealthDot";
@@ -44,6 +44,7 @@ import { chatEmptyHint } from "../../lib/chatCopy";
 import { modCombo } from "../../lib/platform";
 import { nameForPreset, pickerModels, presetForName } from "./agentPicker";
 import { useSameShape } from "../../hooks/useSameShape";
+import { useStableActions } from "../../hooks/useStableActions";
 import { useStickToBottom } from "../../hooks/useStickToBottom";
 import { ConnectionNotice } from "../../components/ConnectionNotice";
 import { ErrorNotice } from "../../components/ErrorNotice";
@@ -737,7 +738,7 @@ export function AgentPanel({
   // grill-me: which `ask_user` questions already have an answer, so an
   // answered card shows the answer instead of inviting a second, contradictory
   // one (two tabs, or a scroll back to an older question).
-  // Same object until a new answer arrives: every `ChatRow` receives it, so a
+  // Same object until a new answer arrives: every `ChatFeedRow` receives it, so a
   // new one per streamed token would redraw the whole feed.
   const answeredQuestions = useSameShape(
     useMemo(() => {
@@ -782,10 +783,14 @@ export function AgentPanel({
     replay: (i) =>
       setReplayReq({ kind: "turn", source: "rca", threadId: investigationId, messageIndex: i }),
     undo: (i) => void onUndoFromEntry(i),
-    // #285: resolve workspace paths so a tool card renders the charts it
-    // wrote inline (this item's files endpoint).
-    fileUrl: (p) => api.fileContentUrl(slug, investigationId, p),
   });
+  // #285: resolve workspace paths so a tool card renders the charts it wrote
+  // inline (this item's files endpoint). New when the item is, so an answer
+  // drawn for another item re-resolves its images (not a stable action).
+  const rowFileUrl = useCallback(
+    (p: string) => api.fileContentUrl(slug, investigationId, p),
+    [slug, investigationId],
+  );
 
   const onChip = (label: string) => {
     const why = sendRefusal();
@@ -887,6 +892,7 @@ export function AgentPanel({
             me={me}
             answeredQuestions={answeredQuestions}
             actions={rowActions}
+            fileUrl={rowFileUrl}
           />
         ))}
         </ChatItemProvider>

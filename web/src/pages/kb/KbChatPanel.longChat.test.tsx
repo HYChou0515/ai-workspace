@@ -17,6 +17,23 @@ vi.mock("react-markdown", () => ({
   },
 }));
 
+// And each row drawn — the row-level guard. `AnswerMarkdown`'s memo would hide
+// a row that is redrawn for nothing (its markdown is not parsed again), so the
+// rows themselves are counted too: `ChatFeedRow`'s memo, `useStableActions`
+// and `useSameShape` each keep a finished row from being drawn at all.
+const drawn: string[] = [];
+vi.mock("../../components/AgentEntryView", async (importOriginal) => {
+  const real = await importOriginal<typeof import("../../components/AgentEntryView")>();
+  return {
+    ...real,
+    EntryView: (props: Parameters<typeof real.EntryView>[0]) => {
+      const e = props.entry as { kind: string; message?: { content?: string } };
+      drawn.push(e.kind === "message" ? String(e.message?.content) : e.kind);
+      return <real.EntryView {...props} />;
+    },
+  };
+});
+
 import type { KbApi } from "../../api/kb";
 import { mockKbApi } from "../../api/kbMock";
 import { QueryWrap } from "../../test/queryWrapper";
@@ -24,6 +41,7 @@ import { KbChatPanel } from "./KbChatPanel";
 
 beforeEach(() => {
   parsed.length = 0;
+  drawn.length = 0;
 });
 
 afterEach(() => {
@@ -73,10 +91,13 @@ describe("a streamed token in a long KB chat", () => {
     await waitFor(() => expect(parsed).toContain("par"));
 
     parsed.length = 0;
+    drawn.length = 0;
     release();
     // The second delta is drawn (however the reducer joins it to the first).
     await waitFor(() => expect(parsed.some((t) => t.endsWith("tial"))).toBe(true));
 
     expect(parsed.filter((t) => t.startsWith("finished answer"))).toEqual([]);
+    // Not drawn at all: only the rows the delta touched are.
+    expect(drawn.filter((t) => t.startsWith("finished answer") || t.startsWith("q"))).toEqual([]);
   });
 });

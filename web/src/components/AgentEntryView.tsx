@@ -26,6 +26,7 @@ import {
   renderCitedText,
 } from "../renderers/kbCite";
 import { remarkKbCitation } from "../renderers/report/remarkKbCitation";
+import { useSameShape } from "../hooks/useSameShape";
 import { parseShownFiles, parseShownLayout, stripShownFiles } from "../renderers/shownFiles";
 import { parseShownSkillHubEntry, stripSkillHubEntry } from "../renderers/skillHubEntry";
 import { parseEnvRequest } from "../renderers/envRequest";
@@ -174,9 +175,8 @@ const TOOL_ARG: Record<string, string> = {
   run_agent: "agent_type",
 };
 
-/** A workspace-relative ref resolved against the item's file route, or the ref
- * unchanged when it is already a URL / fragment. `undefined` when there is no way
- * to resolve it — the caller then draws nothing instead of a dead link. */
+const NO_CITATIONS: readonly MessageCitation[] = [];
+
 /**
  * An answer's markdown body, re-parsed only when what it renders changes —
  * its text, its citations, or how links and images resolve (the long-chat perf
@@ -248,6 +248,9 @@ const AnswerMarkdown = memo(function AnswerMarkdown({
   );
 });
 
+/** A workspace-relative ref resolved against the item's file route, or the ref
+ * unchanged when it is already a URL / fragment. `undefined` when there is no way
+ * to resolve it — the caller then draws nothing instead of a dead link. */
 function workspaceUrl(
   ref: string | undefined,
   fileUrl: ((path: string) => string) | undefined,
@@ -937,7 +940,12 @@ function MessageBlock({
   // #221: resolve the answer body's `[n]` markers against this message's
   // citations so each inline marker becomes a clickable pill (same target as
   // the Sources cards below). Empty map ⇒ markers render as muted text.
-  const byMarker = useMemo(() => buildByMarker(message.citations ?? []), [message.citations]);
+  // The same citations keep the same array (`useSameShape`): when a turn ends
+  // the thread is fetched again and every message comes back as a new object
+  // with a new `citations` array, and a new map here re-parsed every answer's
+  // markdown at once — one 1.4s freeze per answer on a 300-turn chat.
+  const citations = useSameShape(message.citations ?? NO_CITATIONS);
+  const byMarker = useMemo(() => buildByMarker(citations), [citations]);
   if (message.role === "user") {
     return (
       <div
