@@ -41,8 +41,8 @@ from ..files import WorkspaceFiles
 from ..filestore.protocol import FileNotFound
 from .manifest import WorkflowManifest
 from .workspace_store import (
-    RESERVED_WORKFLOW_ID,
     WORKSPACE_WORKFLOW_DIR,
+    is_workspace_workflow_id,
     is_workspace_workflow_path,
     load_workspace_workflow,
     parse_workflow,
@@ -93,13 +93,9 @@ async def read_workflow_file(read: ReadFile, item_id: str, workflow_id: str) -> 
     such file — `unparsable_workflow`'s read, with the title kept: the schedules
     listing names a row's workflow by its title and must not read the file a
     second time to do it (`docs/plan-schedule-overview-polish.md`)."""
-    path = workspace_workflow_path(workflow_id)
-    if (
-        not workflow_id  # the loader's own refusals first …
-        or workflow_id == RESERVED_WORKFLOW_ID
-        or not is_workspace_workflow_path(path)  # … then "is this a workflow file at all"
-    ):
+    if not is_workspace_workflow_id(workflow_id):  # the loader's own rule
         return None
+    path = workspace_workflow_path(workflow_id)
     try:
         raw = await read(item_id, path)
     except (FileNotFound, FileNotFoundError):

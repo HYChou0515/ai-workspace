@@ -161,7 +161,7 @@ flowchart TD
 
 ## 與其他子系統的關係
 
-- **[資料層（specstar）](data-layer.md)**：`WorkflowRun` 是 specstar 資源(auto-CRUD + `item_id`/`status` 索引);orchestrator/driver 透過 ResourceManager patch 它,路由用 query 列出一個 item 的 run。
+- **[資料層（specstar）](data-layer.md)**：`WorkflowRun` 是 specstar 資源(`item_id`/`status` 索引),在 `spec.apply` **之後**才註冊(`register_workflow_run`),所以**沒有**自己的 auto-CRUD 路由(#984:那組路由沒有任何權限檢查);orchestrator/driver 透過 ResourceManager patch 它,路由用 query 列出一個 item 的 run。帶 run id 的路由都經 `WorkflowOrchestrator.run_in` 確認那個 run 屬於網址上的 item。
 - **[API 與回合引擎](api-and-turns.md)**：agent 節點與 steerer 透過 driver 接上的 `drive_turn` leaf 走 ChatTurnEngine(run 的 chat key 上單一可取消的 turn);orchestrator 的 `publish` 通常是 `turn_engine.publish`。
 - **[Sandbox、FileStore 與同步](sandbox-and-filestore.md)**：deterministic 節點透過接上的 `run_sandbox` 跑指令;orchestrator 在終局/暫停時透過注入的 `release` 釋放 sandbox;每個 `wf` 讀寫都走 item 的 FileStore。
 - **[知識庫:攝取與索引](kb-ingest-index.md)**：`ingest_to_collection` / `upsert_context_card` / `find_overwrite_card` 能力(`handle.py`)以 captured user 身分驅動 KB Ingestor 與 ContextCard CRUD(#111/#205,topic-hub →collections workflow)。`convert`(#324)在 filing 前先把上傳轉成文字:`WorkflowExecutor.convert`(`api/workflow_exec.py`)把 `convert_upload` 綁到 run workspace,跑 `Ingestor.convert`(沿用同一套 KB parser/VLM、只 parse、不 chunk/embed、無 SourceDoc),只存轉好的 markdown/text、不存原始 binary;此 node 以 src 路徑為 key journaled,(VLM)轉換不會重跑。
