@@ -286,7 +286,9 @@ def test_the_standing_instruction_doubles_take_the_real_tools_parameters():
     }
     for schema in schemas():
         name = schema["function"]["name"]
-        if name not in pinned:
+        # publish_skill's parameters ARE the real strict schema — pinned by
+        # parity below, which is stronger than this signature check.
+        if name not in pinned or name == "publish_skill":
             continue
         real = inspect.signature(_IMPLS[name]).parameters
         real_params = [p for p in real if p != "ctx"]
@@ -294,6 +296,26 @@ def test_the_standing_instruction_doubles_take_the_real_tools_parameters():
         double = schema["function"]["parameters"]
         assert set(double["properties"]) <= set(real_params), (name, double["properties"])
         assert sorted(double["required"]) == sorted(real_required), (name, double["required"])
+
+
+def test_the_publish_double_offers_exactly_the_real_strict_schema():
+    """Review round 1 (#1004): the double declared `required: ["name"]` while the
+    live tool is strict (`["name", "release_note"]`, the note nullable), so the
+    republish scenario scored a schema production never offers."""
+    from agents import function_tool
+
+    from workspace_app.agent.tools import publish_skill_impl
+
+    real = function_tool(publish_skill_impl, name_override="publish_skill", strict_mode=True)
+    double = next(t for t in schemas() if t["function"]["name"] == "publish_skill")
+    assert double["function"]["parameters"] == real.params_json_schema
+    assert sorted(real.params_json_schema["required"]) == ["name", "release_note"]
+
+
+def test_the_publish_double_reads_a_null_note_as_none(tmp_path):
+    (tmp_path / "published-skills.txt").write_text("log-digest\n")
+    out = run("publish_skill", {"name": "log-digest", "release_note": None}, tmp_path, [])
+    assert out.startswith("not published yet")
 
 
 def test_read_file_records_which_path_was_asked_for(tmp_path):

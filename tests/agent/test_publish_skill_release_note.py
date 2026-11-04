@@ -116,6 +116,48 @@ def test_the_change_shows_an_added_text_file_and_bounds_what_it_diffs():
     assert "too large" in big
 
 
+def test_the_model_is_offered_a_way_to_send_no_note():
+    """Review round 1 (#1004): the tool is built strict, which lists every
+    argument as required; a `str` note had no "not setting it" spelling, so a
+    model had to invent one on every call — a republish's note included,
+    skipping the ask. Nullable, it gets the platform's absent convention
+    (`null`), stated on the tool."""
+    from agents import function_tool
+
+    tool = function_tool(publish_skill_impl, strict_mode=True)
+    prop = tool.params_json_schema["properties"]["release_note"]
+    assert {"type": "null"} in prop.get("anyOf", []), prop
+
+
+async def test_a_null_note_is_no_note():
+    hub = _hub()
+    ctx = await _first(hub)
+    await _put(ctx, "s", {"SKILL.md": _md("s", "v2\n")})
+    out = await publish_skill_impl(ctx, "s", None)
+    assert out.startswith("not published yet")
+
+
+async def test_a_note_too_long_to_read_is_sent_back_to_be_shortened():
+    """Review round 1: a note is stored verbatim and returned in every history
+    read and every behind copy's skill listing, so a pasted 6000-character diff
+    would sit there for good."""
+    from workspace_app.agent.tools import RELEASE_NOTE_MAX
+
+    hub = _hub()
+    ctx = await _first(hub)
+    entry = hub.find("alice", "s")
+    assert entry is not None
+    before = hub.get(entry)
+    await _put(ctx, "s", {"SKILL.md": _md("s", "v2\n")})
+    out = await publish_skill_impl(ctx, "s", "x" * (RELEASE_NOTE_MAX + 1))
+    assert out.startswith("error:") and str(RELEASE_NOTE_MAX) in out
+    after = hub.get(entry)
+    assert before is not None and after is not None and after.commit == before.commit
+    assert "published" in await publish_skill_impl(ctx, "s", "x" * RELEASE_NOTE_MAX)
+    # The model is told the same number the tool enforces.
+    assert f"at most {RELEASE_NOTE_MAX} characters" in (publish_skill_impl.__doc__ or "")
+
+
 async def test_the_change_is_computed_off_the_event_loop(monkeypatch):
     """The same review: the diff ran inside the async tool. It goes through
     `asyncio.to_thread`, so a slow one stalls this turn and not the pod."""

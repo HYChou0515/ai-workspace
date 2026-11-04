@@ -169,17 +169,35 @@ def schemas() -> list[dict]:
             {"entry_id": s},
             ["entry_id"],
         ),
-        fn(
-            "publish_skill",
-            "Publish one of THIS workspace's skills (a `.skill/<name>/` folder) to the "
-            "skill hub, where every user of the platform can find it and install it. "
-            "Use it when the user asks to share, publish or upload a skill — and only "
-            "after they have said which one. A new version of a skill already on the "
-            "skill hub needs `release_note`: what changed, for the people who installed it.",
-            {"name": s, "release_note": s},
-            ["name"],
-        ),
+        {
+            "type": "function",
+            "function": {
+                "name": "publish_skill",
+                "description": (
+                    "Publish one of THIS workspace's skills (a `.skill/<name>/` folder) to "
+                    "the skill hub, where every user of the platform can find it and install "
+                    "it. Use it when the user asks to share, publish or upload a skill — and "
+                    "only after they have said which one. Send `release_note` as `null` "
+                    "unless the user has approved a note: a new version of a skill already on "
+                    "the skill hub then comes back with what changed, to draft one from."
+                ),
+                # The REAL tool's strict schema, not a hand copy: strict mode
+                # makes `release_note` a required (nullable) slot, and a double
+                # that let the model leave it out scored a call production never
+                # offers (review round 1 of #1004).
+                "parameters": _real_parameters("publish_skill"),
+            },
+        },
     ]
+
+
+def _real_parameters(name: str) -> dict:
+    """The parameters schema the live turn shows the model for `name`."""
+    from agents import function_tool
+
+    from workspace_app.agent.tools import _IMPLS
+
+    return function_tool(_IMPLS[name], name_override=name, strict_mode=True).params_json_schema
 
 
 def run(name: str, args: dict, work: Path, events: list[Event]) -> str:
@@ -264,7 +282,7 @@ def run(name: str, args: dict, work: Path, events: list[Event]) -> str:
         # (plan-skill-hub-release-notes P3). The words are the real tool's.
         listed = work / "published-skills.txt"
         on_hub = listed.read_text().split() if listed.is_file() else []
-        if args["name"] in on_hub and not str(args.get("release_note", "")).strip():
+        if args["name"] in on_hub and not (args.get("release_note") or "").strip():
             from workspace_app.agent.tools import _changes_since, release_note_needed
 
             return release_note_needed(args["name"], _changes_since(_SAMPLE_BEFORE, _SAMPLE_AFTER))

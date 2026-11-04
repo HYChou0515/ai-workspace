@@ -70,7 +70,8 @@ narrow that on the skill hub page), and re-publishing the same name replaces
 their earlier version — the people who installed it are then told there is a
 new one, with its release note.
 
-What comes back, and what to do with it:
+Call it with `release_note` as `null` — do not write a note before you have
+seen what changed. What comes back, and what to do with it:
 
 - **"Not published yet — this is a new version … needs a release note"**,
   with what changed since the current version. Nothing was published. Draft

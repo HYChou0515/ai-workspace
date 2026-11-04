@@ -2770,6 +2770,11 @@ async def save_skill_impl(
 #: so a large folder cannot flood the turn.
 _RELEASE_NOTE_DIFF_CAP = 6000
 
+#: The longest release note `publish_skill` stores. It is the commit message,
+#: read back in every history view and in every behind copy's skill listing,
+#: so a pasted diff would sit in all of them for good.
+RELEASE_NOTE_MAX = 2000
+
 
 def release_note_needed(name: str, change: str) -> str:
     """`publish_skill`'s reply to a new version sent without a note
@@ -2827,7 +2832,7 @@ def _changes_since(current: Mapping[str, bytes], new: Mapping[str, bytes]) -> st
 
 
 async def publish_skill_impl(
-    ctx: RunContextWrapper[AgentToolContext], name: str, release_note: str = ""
+    ctx: RunContextWrapper[AgentToolContext], name: str, release_note: str | None = None
 ) -> str:
     """Publish one of THIS workspace's skills (a `.skill/<name>/` folder) to the
     skill hub, where every user of the platform can find it and install it into
@@ -2848,11 +2853,12 @@ async def publish_skill_impl(
     The entry is public by default. Returns a confirmation or an `error:` note.
 
     `release_note` tells the people who installed the skill what this version
-    changes. A new version of an entry that already exists needs one: called
-    without it, nothing is published and the reply shows what changed since
-    the current version — draft a short note from that (what was added,
-    changed, what to watch for), confirm it with the user, then call again
-    with it. A first version needs none."""
+    changes. Send `null` unless the user has approved a note: a new version of
+    an entry that already exists then publishes nothing and the reply shows
+    what changed since the current version — draft a short note from that
+    (what was added, changed, what to watch for), confirm it with the user,
+    then call again with the text they approved (at most 2000 characters). A
+    first version needs none."""
     for verb in TOOL_VERBS["publish_skill"]:
         if (denied := authorize_tool(ctx.context, verb)) is not None:
             return denied
@@ -2937,7 +2943,14 @@ async def publish_skill_impl(
     # changes (plan-skill-hub-release-notes D2): without a note nothing is
     # published — before the room check and the review, so neither is spent —
     # and the change since the current version comes back to draft it from.
-    if existed is not None and not release_note.strip():
+    note = (release_note or "").strip()
+    if len(note) > RELEASE_NOTE_MAX:
+        return (
+            f"error: not published — the release note is {len(note)} characters; it can be "
+            f"at most {RELEASE_NOTE_MAX}. It is what the people who installed this skill read "
+            "before updating: what changed and what to watch for, not the diff."
+        )
+    if existed is not None and not note:
         before = await hub.payload_of(existed)
         return release_note_needed(name, await asyncio.to_thread(_changes_since, before, payload))
 
@@ -2988,7 +3001,7 @@ async def publish_skill_impl(
         referenced_tools=tools,
         review=review,
         forked_from=forked_from,
-        release_note=release_note,
+        release_note=note,
     )
     # The folder now tracks the entry it just became (review round 1): its
     # manifest is rewritten to the version just published, so the Skills panel
@@ -4428,7 +4441,7 @@ def _with_absent_convention(tool: FunctionTool) -> FunctionTool:
     definition itself — once. (It used to arrive twice: `format_tools_for_prompt`
     rendered every description into the system prompt as well, until
     `docs/plan-tool-on-demand-loading.md` removed that second copy.) The cost is
-    bounded: only 6 of 31 built-ins have nullable args, so this is one short line
+    bounded: only a minority of built-ins have nullable args, so this is one short line
     each, and the alternative (a prompt-only note) would leave the wire-level
     tool definition silent on its own convention."""
     names = _nullable_arg_names(tool)
