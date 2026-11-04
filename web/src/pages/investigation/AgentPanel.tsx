@@ -12,7 +12,7 @@ import { investigationFileService } from "../../api/fileService";
 import { kbApi } from "../../api/kb";
 import { qk } from "../../api/queryKeys";
 import type { ChatVideoQueued } from "../../api/chatVideo";
-import { EntryView } from "../../components/AgentEntryView";
+import { ChatFeedRow, type FeedActions, useStableActions } from "../../components/ChatFeedRow";
 import { ExportDialog } from "../../components/ExportDialog";
 import { VideoProgress } from "../../components/VideoProgress";
 import { HealthDot } from "../../components/HealthDot";
@@ -43,6 +43,7 @@ import { subscribeAgentDraft } from "../../lib/agentDraftBus";
 import { chatEmptyHint } from "../../lib/chatCopy";
 import { modCombo } from "../../lib/platform";
 import { nameForPreset, pickerModels, presetForName } from "./agentPicker";
+import { useSameShape } from "../../hooks/useSameShape";
 import { useStickToBottom } from "../../hooks/useStickToBottom";
 import { ConnectionNotice } from "../../components/ConnectionNotice";
 import { ErrorNotice } from "../../components/ErrorNotice";
@@ -259,13 +260,17 @@ export function AgentPanel({
   const retryRef = useRef<(callId: string, text: string) => boolean>(() => false);
   // The calls a message in the thread answers (`Message.answers`) — a card's
   // Retry marks its call, so a retried card stays retired after a reload.
-  const answeredCalls = useMemo(() => {
-    const out = new Set<string>();
-    for (const e of log.entries) {
-      if (e.kind === "message" && e.message.answers) out.add(e.message.answers);
-    }
-    return out;
-  }, [log.entries]);
+  // Same object until a NEW answer arrives (`useSameShape`): it feeds the
+  // chat-item context, and a new Set per streamed token redrew every card.
+  const answeredCalls = useSameShape(
+    useMemo(() => {
+      const out = new Set<string>();
+      for (const e of log.entries) {
+        if (e.kind === "message" && e.message.answers) out.add(e.message.answers);
+      }
+      return out;
+    }, [log.entries]),
+  );
   const canEnv = Boolean(canOpenEnv || onSaveEnvVars);
   const chatItem = useMemo<ChatItem | null>(
     () =>
@@ -732,15 +737,55 @@ export function AgentPanel({
   // grill-me: which `ask_user` questions already have an answer, so an
   // answered card shows the answer instead of inviting a second, contradictory
   // one (two tabs, or a scroll back to an older question).
-  const answeredQuestions = useMemo(() => {
-    const out: Record<string, string> = {};
-    for (const e of log.entries) {
-      if (e.kind === "message" && e.message.answers) {
-        out[e.message.answers] = e.message.content;
+  // Same object until a new answer arrives: every `ChatRow` receives it, so a
+  // new one per streamed token would redraw the whole feed.
+  const answeredQuestions = useSameShape(
+    useMemo(() => {
+      const out: Record<string, string> = {};
+      for (const e of log.entries) {
+        if (e.kind === "message" && e.message.answers) {
+          out[e.message.answers] = e.message.content;
+        }
       }
-    }
-    return out;
-  }, [log.entries]);
+      return out;
+    }, [log.entries]),
+  );
+
+  // What a row may do, as ONE object whose identity holds across renders: a
+  // row is redrawn only when what it shows changes, so its handlers must not
+  // be new on every render (`useStableActions`; the long-chat perf fix).
+  const rowActions = useStableActions<FeedActions>({
+    // grill-me: answering an `ask_user` question is an ordinary send
+    // that records which question it answers.
+    answer: (a) => {
+      const why = sendRefusal();
+      if (why) {
+        setComposerHint(why);
+        return;
+      }
+      void send(a.content, { answers: a.answers });
+    },
+    openCitation: (c) =>
+      window.open(docHref(c.document_id, c.snippet), "_blank", "noopener,noreferrer"),
+    // Permission-disclosure: ask the withheld collection's owner for access.
+    // Asking for access is a request to a PERSON — the one action here
+    // with a human on the other end. Firing it into the void gave no way
+    // to tell "sent" from "silently failed", so the user's only recourse
+    // was to press it again and hope.
+    requestAccess: (w) => {
+      void kbApi.requestCollectionAccess(w.collection_id).then(
+        () => setComposerHint("已送出存取申請,等待對方回覆。"),
+        (err: unknown) =>
+          setComposerHint(`申請存取失敗:${err instanceof Error ? err.message : String(err)}`),
+      );
+    },
+    replay: (i) =>
+      setReplayReq({ kind: "turn", source: "rca", threadId: investigationId, messageIndex: i }),
+    undo: (i) => void onUndoFromEntry(i),
+    // #285: resolve workspace paths so a tool card renders the charts it
+    // wrote inline (this item's files endpoint).
+    fileUrl: (p) => api.fileContentUrl(slug, investigationId, p),
+  });
 
   const onChip = (label: string) => {
     const why = sendRefusal();
@@ -834,59 +879,14 @@ export function AgentPanel({
         )}
         <ChatItemProvider value={chatItem}>
         {log.entries.map((e, i) => (
-          <EntryView
+          <ChatFeedRow
             key={i}
             entry={e}
-            // grill-me: answering an `ask_user` question is an ordinary send
-            // that records which question it answers.
-            onAnswerQuestion={(a) => {
-              const why = sendRefusal();
-              if (why) {
-                setComposerHint(why);
-                return;
-              }
-              void send(a.content, { answers: a.answers });
-            }}
+            index={i}
+            settled={!log.streaming}
+            me={me}
             answeredQuestions={answeredQuestions}
-            // #583: who is reading, so their own messages align right.
-            currentUser={me}
-            onOpenCitation={(c) =>
-              window.open(docHref(c.document_id, c.snippet), "_blank", "noopener,noreferrer")
-            }
-            // Permission-disclosure: ask the withheld collection's owner for access.
-            // Asking for access is a request to a PERSON — the one action here
-            // with a human on the other end. Firing it into the void gave no way
-            // to tell "sent" from "silently failed", so the user's only recourse
-            // was to press it again and hope.
-            onRequestAccess={(w) => {
-              void kbApi.requestCollectionAccess(w.collection_id).then(
-                () => setComposerHint("已送出存取申請,等待對方回覆。"),
-                (err: unknown) =>
-                  setComposerHint(
-                    `申請存取失敗:${err instanceof Error ? err.message : String(err)}`,
-                  ),
-              );
-            }}
-            // #51 P6: hydrated entries map 1:1 onto the persisted
-            // conversation (logFromMessages), so the entry index IS the
-            // message index. Hidden while streaming — the in-flight
-            // turn isn't persisted yet, so indexes would lie.
-            onReplay={
-              !log.streaming && (e.kind === "tool_call" || (e.kind === "message" && e.message.role === "assistant"))
-                ? () => setReplayReq({ kind: "turn", source: "rca", threadId: investigationId, messageIndex: i })
-                : undefined
-            }
-            // #38: per-turn "undo to here" on each user prompt — removes
-            // that turn and everything after it. Hidden while streaming
-            // (the in-flight turn isn't persisted yet).
-            onUndo={
-              !log.streaming && e.kind === "message" && e.message.role === "user"
-                ? () => void onUndoFromEntry(i)
-                : undefined
-            }
-            // #285: resolve workspace paths so a tool card renders the charts it
-            // wrote inline (this item's files endpoint).
-            fileUrl={(p) => api.fileContentUrl(slug, investigationId, p)}
+            actions={rowActions}
           />
         ))}
         </ChatItemProvider>
