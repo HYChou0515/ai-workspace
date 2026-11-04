@@ -19,6 +19,15 @@ import type { ViewSpec } from "../entity/types";
 import { WUI_CSP } from "./assemble";
 import { WUI_PROTOCOL } from "./protocol";
 import { MAX_REPORTS, WuiView, type WuiChrome } from "./WuiView";
+import { publishApi } from "../../api/publish";
+
+// How the page is published now (`publishApi.current`) is a read of its own,
+// tested where it matters (WuiView.test: "publishing again starts from…", "does
+// not publish from a guess…"). Everywhere else in this file the page has never
+// been published — what the server answers for it (404 → null).
+beforeEach(() => {
+  vi.spyOn(publishApi, "current").mockResolvedValue(null);
+});
 
 /** Publish WUI, then the dialog's "use my workspace directly": what a Deploy
  * did in one press before publishing asked how others use the page
@@ -2824,6 +2833,7 @@ describe("WuiView: Deploy", () => {
   });
 
   it("publishing again starts from how it is published now, not from nothing", async () => {
+    vi.mocked(publishApi.current).mockRestore();
     // Review round 1: the dialog read only the yaml, so a page published to
     // everyone reopened as "only me" — one more Publish and nobody else could
     // open it.
@@ -2858,7 +2868,30 @@ describe("WuiView: Deploy", () => {
     expect(within(dialog).getByRole("textbox", { name: /cpu cores/i })).toHaveValue("2");
   });
 
+  it("does not publish from a guess when it cannot read how the page is published now", async () => {
+    vi.mocked(publishApi.current).mockRestore();
+    // Review round 2: a failed read fell back to the yaml, which is the very
+    // reset (reach back to "only me") round 1 was for.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: unknown, init?: RequestInit) =>
+        isPublicationRead(url, init)
+          ? new Response(JSON.stringify({ detail: "boom" }), { status: 500 })
+          : withDeploy()(url, init),
+      ),
+    );
+    renderIn(PLAIN);
+
+    fireEvent.click(await screen.findByRole("button", { name: /^publish wui$/i }));
+    const dialog = await screen.findByTestId("publish-dialog");
+
+    expect(within(dialog).getByRole("alert")).toHaveTextContent(/how this page is published now/i);
+    fireEvent.click(within(dialog).getByRole("radio", { name: /use my workspace directly/i }));
+    expect(within(dialog).getByRole("button", { name: /^publish$/i })).toBeDisabled();
+  });
+
   it("published as copies, hands over the address that makes each opener's copy, and says so", async () => {
+    vi.mocked(publishApi.current).mockRestore();
     // P4 of plan-wui-publish-and-agent-hub (C12, W2): nobody works in the
     // source of a page that hands out copies, so the address it hands over is
     // the preparing page's, and the sentence beside it is about copies — not

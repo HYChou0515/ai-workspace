@@ -50,7 +50,7 @@ from ..resources.groups import groups_of
 from .file_routes import _workspace_path
 from .item_authz import user_may
 from .locator import ItemLocator
-from .publish_copy import DiskLimit, ensure_room
+from .publish_copy import DiskLimit, copy_plan, ensure_room
 from .schedule_index import is_schedule_file
 from .timeutil import now_ms
 from .wui_deploy import DeployedPages, page_color, page_icon, page_title
@@ -110,6 +110,10 @@ class Published(Struct):
     memory_bytes: int | None = None
     #: The snapshot's namespace; "" for "use my workspace directly".
     snapshot: str = ""
+    #: What one copy writes: the snapshot plus an agent's folder written again
+    #: where the root's are (A5) — what a copy is held to the cap by. 0 on rows
+    #: published before it was recorded (then the snapshot's size).
+    copy_bytes: int = 0
     files: int = 0
     bytes: int = 0
     notes: list[ReleaseNote] = []
@@ -481,16 +485,25 @@ def register_publish_routes(
         publisher = get_user_id()
         at = (now or now_ms)()
         previous = publications.get(workspace_id, path)
-        snapshot, count, size = "", 0, 0
+        snapshot, count, size, copy_bytes = "", 0, 0, 0
         if body.sharing in COPYING:
             # C8/C10: the snapshot is the publisher's — refused up front when it
             # would not fit, never written and charged after.
-            planned = estimate_of(await snapshot_paths(files, workspace_id)).bytes
+            listed = await snapshot_paths(files, workspace_id)
+            planned = estimate_of(listed).bytes
+            copy_bytes = sum(
+                dict(listed)[src] * len(dests)
+                for src, dests in copy_plan(
+                    [p for p, _ in listed], path if kind == "agent" else None
+                )
+            )
+            # The publisher holds the snapshot — and, for one shared copy, that
+            # copy too: asked together, before either is written.
             await ensure_room(
                 ledger,
                 limit_of,
                 publisher,
-                planned,
+                planned + (copy_bytes if body.sharing == "shared" else 0),
                 exclude=previous.snapshot if previous is not None else "",
             )
             snapshot = snapshot_namespace(published_id(workspace_id, path), at)
@@ -526,6 +539,7 @@ def register_publish_routes(
             snapshot=snapshot,
             files=count,
             bytes=size,
+            copy_bytes=copy_bytes,
             notes=notes,
             based_on_title=based_on_title,
             based_on_by=based_on_by,
@@ -533,8 +547,10 @@ def register_publish_routes(
         if body.sharing == "shared":
             from .publish_copy import make_copy, shared_copy_permission
 
+            # Both were checked together above; the copy's own check leaves
+            # out the old snapshot this one replaces, as that one did.
             try:
-                row.shared_copy = await make_copy(
+                row.shared_copy, _made = await make_copy(
                     spec,
                     filestore,
                     ledger,
@@ -542,6 +558,7 @@ def register_publish_routes(
                     owner=publisher,
                     permission=shared_copy_permission(row),
                     limit_of=limit_of,
+                    exclude=previous.snapshot if previous is not None else "",
                 )
             except BaseException as exc:
                 # Nothing points at the snapshot yet: it must not outlive the

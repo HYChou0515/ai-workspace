@@ -9,7 +9,7 @@
  */
 import "@testing-library/jest-dom/vitest";
 import { fireEvent, render, screen, within } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { FileServiceProvider, type FileService } from "../../api/fileService";
 import { HttpError } from "../../api/http";
@@ -18,6 +18,15 @@ import { QueryWrap as AppProviders } from "../../test/queryWrapper";
 import { LocaleScope } from "../../lib/i18n";
 import type { ViewSpec } from "../entity/types";
 import { WuiView } from "./WuiView";
+import { publishApi } from "../../api/publish";
+
+// How the page is published now (`publishApi.current`) is a read of its own,
+// tested where it matters (WuiView.test: "publishing again starts from…", "does
+// not publish from a guess…"). Everywhere else in this file the page has never
+// been published — what the server answers for it (404 → null).
+beforeEach(() => {
+  vi.spyOn(publishApi, "current").mockResolvedValue(null);
+});
 
 /** Publish WUI, then the dialog's "use my workspace directly": what a Deploy
  * did in one press before publishing asked how others use the page

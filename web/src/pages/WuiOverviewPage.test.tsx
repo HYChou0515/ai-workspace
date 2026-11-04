@@ -56,7 +56,8 @@ import { translate } from "../lib/i18n";
 import { favouriteKey, readFavourites, toggleFavourite } from "../lib/wuiFavourites";
 import { readWuiView, writeWuiView } from "../lib/wuiView";
 import { currentWriteFailure, resetWriteFailures } from "../lib/writeFailures";
-import { QueryWrap } from "../test/queryWrapper";
+import { qk } from "../api/queryKeys";
+import { makeTestQueryClient, QueryWrap } from "../test/queryWrapper";
 import { WuiOverviewPage } from "./WuiOverviewPage";
 
 const row = (over: Partial<DeployedWui>): DeployedWui => ({
@@ -1016,6 +1017,28 @@ describe("published pages (P4 of plan-wui-publish-and-agent-hub)", () => {
     const rca = await screen.findByRole("region", { name: "根因分析" });
 
     expect(within(rca).queryByTestId("wui-usage")).toBeNull();
+  });
+
+  it("unpublishing tells the pane's cached publication to read again", async () => {
+    // Review round 2: within the cache's lifetime, Publish WUI's dialog
+    // reopened with the removed publication's choices.
+    unpublish.mockClear();
+    const qc = makeTestQueryClient();
+    qc.setQueryData(qk.publication("i-1", "/pages/report/page.ai.yaml"), { sharing: "per_person" });
+    render(
+      <MemoryRouter>
+        <QueryWrap client={qc}>
+          <WuiOverviewPage client={client([copying])} />
+        </QueryWrap>
+      </MemoryRouter>,
+    );
+    const rca = await screen.findByRole("region", { name: "根因分析" });
+    fireEvent.click(within(rca).getByRole("button", { name: REMOVE() }));
+    fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: word("wui.remove") }));
+
+    await waitFor(() =>
+      expect(qc.getQueryState(qk.publication("i-1", "/pages/report/page.ai.yaml"))?.isInvalidated).toBe(true),
+    );
   });
 
   it("takes a published page down by unpublishing it, not through the old Deploy row", async () => {

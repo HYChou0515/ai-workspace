@@ -224,8 +224,10 @@ def register_wui_deploy_routes(
     async def deploy_wui(slug: str, item_id: str, body: DeployBody) -> DeployedPage:
         """List this page on the overview.
 
-        The verb is `edit_content`: the people who may change what the item
-        holds may put it up and take it down. A NEW gate — the Deploy of a page
+        The verb is `change_permission`, Publish's (plan-wui-publish-and-agent-hub
+        C9): listing a page for others is a sharing decision, and this route —
+        no longer called by the pane — must not be a way round the publish
+        dialog. (It was `edit_content` before Publish existed.) A NEW gate — the Deploy of a page
         with no build touched no server route at all before this, so a reader
         could press it and be handed the address. The address still WORKS for
         them (`/w/` is gated on `read_content` — a shortcut, not a grant); the
@@ -275,7 +277,7 @@ def register_wui_deploy_routes(
         the listing goes. Same verb as Deploy — whoever may put it up may take
         it down. 204 whether or not a row existed: Remove pressed twice is not
         an error, and a row that is already gone is the state asked for."""
-        workspace_id = locator.require_access(slug, item_id, "edit_content")
+        workspace_id = locator.require_access(slug, item_id, "change_permission")
         pages.forget(workspace_id, _workspace_path(path))
         return Response(status_code=204)
 
@@ -362,7 +364,9 @@ def register_wui_deploy_routes(
                 title, owner, created_by, permission = facts or ("", "", "", None)
                 decided[key] = (
                     readable,
-                    readable and _may(row.slug, row.item_id, "edit_content"),
+                    # Who may take an old row down: Publish's verb, as for every
+                    # write to this listing (C9).
+                    readable and _may(row.slug, row.item_id, "change_permission"),
                     title,
                     owner,
                     created_by,

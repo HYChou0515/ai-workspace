@@ -20,7 +20,6 @@ id no one has seen yet.
 
 from __future__ import annotations
 
-import contextlib
 import tempfile
 import uuid
 from collections.abc import Awaitable, Callable
@@ -158,6 +157,13 @@ async def ensure_room(
         raise UserDiskFull(owner=owner, used=used, quota=limit, attempted=size)
 
 
+def copy_size(row: Published) -> int:
+    """What a copy of ``row`` writes: its ``copy_bytes`` (the snapshot plus an
+    agent's folder written a second time where the root's are, A5), or the
+    snapshot's size for a row published before it was recorded."""
+    return row.copy_bytes or row.bytes
+
+
 async def make_copy(
     spec: SpecStar,
     store: FileStore,
@@ -168,28 +174,26 @@ async def make_copy(
     permission: Permission,
     limit_of: DiskLimit | None = None,
     item_id: str | None = None,
-) -> str:
-    """One new item seeded from ``row``'s snapshot, created as ``owner``; its id.
+    exclude: str = "",
+) -> tuple[str, bool]:
+    """One new item seeded from ``row``'s snapshot, created as ``owner``:
+    ``(its id, whether this call made it)``.
 
-    ``item_id`` — the id to create under (`open_copy` names a person's copy
-    so two opens at once land on ONE); a fresh one otherwise. Created with
-    ``if_not_exists``, so a second maker of the same id never overwrites the
-    first. A snapshot that vanishes mid-copy (unpublished meanwhile) leaves
-    nothing behind: the half-written files go, and it answers as gone."""
+    The item is created FIRST, with ``if_not_exists``: ``item_id`` names a
+    person's copy (`open_copy`), so of two opens at once one creates it and
+    the other is refused and returns it as it is — writing none of its files,
+    size or ledger row over the first's, which the person may already be
+    editing. Everything after the create belongs to the caller that made it;
+    if any of it fails, the item and its files go, so a failure leaves nothing
+    half made. A snapshot that vanished meanwhile (unpublished) answers as
+    gone. ``exclude`` — a ledger row the cap check leaves out (`ensure_room`)."""
     found = find_work_item(spec, row.item_id)
     if found is None:
         raise LookupError(f"the source of {row.path} is gone")
     _slug, source = found
-    await ensure_room(ledger, limit_of, owner, row.bytes)
+    await ensure_room(ledger, limit_of, owner, copy_size(row), exclude=exclude)
     rm = spec.get_resource_manager(app_model(row.slug))
     item_id = item_id or f"{rm.resource_name}:{uuid.uuid4()}"
-    try:
-        copied = await _copy_files(
-            store, row.snapshot, item_id, agent_path=row.path if row.kind == "agent" else None
-        )
-    except FileNotFound:
-        await store.purge(item_id)
-        raise LookupError(f"{row.path} was unpublished while the copy was made") from None
     changes: dict = {
         "title": row.title,
         "owner": owner,
@@ -212,24 +216,34 @@ async def make_copy(
         changes["members"] = []  # C3: members are not copied
     item = msgspec.structs.replace(source, **changes)
     with rm.using(owner):
-        # Two makers of one person's copy: the second's create is refused and
-        # it reads the first's (`open_copy`).
-        with contextlib.suppress(DuplicateResourceError):
+        try:
             rm.create(
                 item,
                 resource_id=item_id,
                 if_not_exists=True,  # ty: ignore[unknown-argument] — on the concrete manager
             )
-        if row.cpu_cores is not None or row.memory_bytes is not None:
-            # C10: the publisher's size for the copies — written as the copy's
-            # owner, who holds change_permission on it, the verb these fields
-            # are gated on; clamped on the way out like any item's own setting.
-            sized = msgspec.structs.replace(
-                item, sandbox_cpu_cores=row.cpu_cores, sandbox_memory_bytes=row.memory_bytes
+        except DuplicateResourceError:
+            return item_id, False
+        try:
+            copied = await _copy_files(
+                store, row.snapshot, item_id, agent_path=row.path if row.kind == "agent" else None
             )
-            rm.update(item_id, sized)
-    await ledger.record(item_id, owner, copied)
-    return item_id
+            if row.cpu_cores is not None or row.memory_bytes is not None:
+                # C10: the publisher's size for the copies — written as the copy's
+                # owner, who holds change_permission on it, the verb these fields
+                # are gated on; clamped on the way out like any item's own setting.
+                sized = msgspec.structs.replace(
+                    item, sandbox_cpu_cores=row.cpu_cores, sandbox_memory_bytes=row.memory_bytes
+                )
+                rm.update(item_id, sized)
+            await ledger.record(item_id, owner, copied)
+        except BaseException as exc:
+            rm.permanently_delete(item_id)
+            await store.purge(item_id)
+            if isinstance(exc, FileNotFound):
+                raise LookupError(f"{row.path} was unpublished while the copy was made") from None
+            raise
+    return item_id, True
 
 
 def publication_id(row: Published) -> str:
@@ -296,7 +310,7 @@ async def open_copy(
         # A copy they deleted still holds the derived id (and its files, for a
         # restore): then a fresh id, never a write over the deleted one's.
         if find_work_item(spec, named, include_deleted=True) is None:
-            item_id = await make_copy(
+            item_id, made = await make_copy(
                 spec,
                 store,
                 ledger,
@@ -306,8 +320,8 @@ async def open_copy(
                 limit_of=limit_of,
                 item_id=named,
             )
-            return Opened(row.slug, item_id, created=True)
-    item_id = await make_copy(
+            return Opened(row.slug, item_id, created=made)
+    item_id, made = await make_copy(
         spec, store, ledger, row, owner=opener, permission=private, limit_of=limit_of
     )
-    return Opened(row.slug, item_id, created=True)
+    return Opened(row.slug, item_id, created=made)

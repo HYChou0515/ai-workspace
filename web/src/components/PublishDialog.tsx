@@ -72,6 +72,7 @@ export function PublishDialog({
   path,
   initial,
   republish = false,
+  loadError,
   client = publishApi,
   onConfirm,
   onClose,
@@ -85,6 +86,9 @@ export function PublishDialog({
   initial?: Partial<PublishChoices>;
   /** Offer the release note (A9) — an agent published before. */
   republish?: boolean;
+  /** How it is published now could not be read: said, and Publish is held —
+   * publishing from a guess is how a re-publish reset who may use it. */
+  loadError?: string;
   client?: Pick<PublishApi, "estimate">;
   onConfirm: (choices: PublishChoices) => void;
   onClose: () => void;
@@ -134,8 +138,9 @@ export function PublishDialog({
   const sizeOk =
     (cpuValue === null || (Number.isFinite(cpuValue) && cpuValue > 0)) &&
     (memoryValue === null || (Number.isFinite(memoryValue) && memoryValue > 0));
-  const blocked =
-    sharing === null
+  const blocked = loadError
+    ? "publish.currentFailed.short"
+    : sharing === null
       ? "publish.pick"
       : reach === "subjects" && subjects.length === 0 && sharing !== "direct"
         ? "publish.pickPeople"
@@ -161,6 +166,12 @@ export function PublishDialog({
       <h2 id={titleId} style={{ margin: "0 0 12px", fontSize: "1.1rem" }}>
         {t(kind === "agent" ? "publish.title.agent" : "publish.title.wui")}
       </h2>
+
+      {loadError && (
+        <p role="alert" style={{ ...cost, color: "var(--err)", margin: "0 0 12px" }}>
+          {t("publish.currentFailed", { why: loadError })}
+        </p>
+      )}
 
       {kind === "wui" && (
         <fieldset style={fieldset}>

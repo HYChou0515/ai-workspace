@@ -20,6 +20,15 @@ import type { ViewSpec } from "../entity/types";
 import { WUI_PROTOCOL } from "./protocol";
 import { openServedWui } from "./served";
 import { WuiView, type WuiChrome } from "./WuiView";
+import { publishApi } from "../../api/publish";
+
+// How the page is published now (`publishApi.current`) is a read of its own,
+// tested where it matters (WuiView.test: "publishing again starts from…", "does
+// not publish from a guess…"). Everywhere else in this file the page has never
+// been published — what the server answers for it (404 → null).
+beforeEach(() => {
+  vi.spyOn(publishApi, "current").mockResolvedValue(null);
+});
 
 /** Publish WUI, then the dialog's "use my workspace directly": what a Deploy
  * did in one press before publishing asked how others use the page

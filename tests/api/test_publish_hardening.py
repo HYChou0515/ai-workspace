@@ -305,3 +305,142 @@ def test_a_copy_does_not_claim_the_sources_legacy_records():
     found = find_work_item(spec, copy)
     assert found is not None
     assert found[1].external_refs == []
+
+
+# ── review round 2 ─────────────────────────────────────────────────────────
+
+CAP = 10_000_000
+
+
+def _estimate(client, src: str, path: str = PAGE) -> int:
+    r = client.get(f"/a/rca/items/{src}/publish/estimate", params={"path": path})
+    assert r.status_code == 200, r.text
+    return r.json()["bytes"]
+
+
+def _fill(spec, who: str, to: int) -> None:
+    """Charge ``who`` a filler row so their total is ``to``."""
+    ledger = DiskLedger(spec)
+    have = asyncio.run(ledger.total_for(who))
+    asyncio.run(ledger.record(f"filler-{who}", who, to - have))
+
+
+def test_a_shared_publish_counts_the_snapshot_and_the_shared_copy_together():
+    """Both are the publisher's: checked one at a time, each fitted while the
+    two together did not (review round 2)."""
+    holder = {"id": "bob"}
+    client, spec, store, _a = _app(holder, per_user_resources=PerUserResources(disk=str(CAP)))
+    src = _source(spec)
+    _workspace(client, src)
+    size = _estimate(client, src)
+    _fill(spec, "bob", CAP - size - size // 2)
+
+    r = client.post(
+        f"/a/rca/items/{src}/publish", json={"path": PAGE, "sharing": "shared", "reach": "everyone"}
+    )
+
+    assert r.status_code == 507, r.text
+    assert asyncio.run(DiskLedger(spec).total_for("bob")) <= CAP
+    assert not [ns for ns in store._files if ns.startswith("published:")]
+
+
+def test_an_agent_copy_is_checked_for_what_it_really_writes():
+    """A copy of an agent writes its folder's skills twice (their own path and
+    the root's, A5): the check must count both."""
+    holder = {"id": "bob"}
+    client, spec, _store, _a = _app(holder, per_user_resources=PerUserResources(disk=str(CAP)))
+    src = _source(spec)
+    _workspace(client, src)
+    skill = "/agents/sales/.skill/big/SKILL.md"
+    body = b"---\nname: big\ndescription: d\n---\n" + b"x" * 4000
+    assert client.put(f"/a/rca/items/{src}/files{skill}", content=body).status_code == 204
+    _publish(client, src, AGENT, sharing="per_conversation")
+    size = _estimate(client, src, AGENT)
+    holder["id"] = "amy"
+    _fill(spec, "amy", CAP - size - 100)
+
+    r = _open(client, src, AGENT)
+
+    assert r.status_code == 507, r.text
+    assert asyncio.run(DiskLedger(spec).total_for("amy")) <= CAP
+
+
+def test_a_second_maker_of_one_copy_leaves_the_first_alone():
+    """Two opens at once: the one that loses the create returns the copy that
+    exists and writes nothing — not its files over the person's edits."""
+    from workspace_app.api.publish import Publications
+    from workspace_app.api.publish_copy import make_copy, person_copy_id
+
+    holder = {"id": "bob"}
+    client, spec, store, _a = _app(holder)
+    src = _source(spec)
+    _workspace(client, src)
+    _publish(client, src, sharing="per_person", cpu_cores=2)
+    row = Publications(spec).get(src, PAGE)
+    assert row is not None
+    named = person_copy_id(spec, row, "amy")
+    ledger = DiskLedger(spec)
+    private = Permission(visibility="private")
+
+    first, made = asyncio.run(
+        make_copy(spec, store, ledger, row, owner="amy", permission=private, item_id=named)
+    )
+    store._files[first][PAGE] = b"edited by amy"
+    again, made_again = asyncio.run(
+        make_copy(spec, store, ledger, row, owner="amy", permission=private, item_id=named)
+    )
+
+    assert made is True
+    assert again == first and made_again is False
+    assert store._files[first][PAGE] == b"edited by amy"
+
+
+def test_a_copy_that_fails_after_its_item_was_made_leaves_no_item(monkeypatch):
+    holder = {"id": "bob"}
+    client, spec, store, _a = _app(holder)
+    src = _source(spec)
+    _workspace(client, src)
+    _publish(client, src, sharing="fresh")
+    before_items = {
+        res.info.resource_id for res in spec.get_resource_manager(RcaInvestigation).list_resources()
+    }
+
+    async def broken(*_a, **_k):
+        raise FileNotFound("/data/orders.csv")
+
+    monkeypatch.setattr("workspace_app.api.publish_copy._copy_files", broken)
+    holder["id"] = "amy"
+
+    assert _open(client, src).status_code == 410
+    after = {
+        res.info.resource_id for res in spec.get_resource_manager(RcaInvestigation).list_resources()
+    }
+    assert after == before_items
+
+
+def test_taking_an_old_deploy_row_down_needs_what_listing_it_needs():
+    holder = {"id": "bob"}
+    client, spec, _s, _a = _app(holder)
+    rm = spec.get_resource_manager(RcaInvestigation)
+    with rm.using("bob"):
+        src = rm.create(
+            RcaInvestigation(
+                title="Line 3",
+                owner="bob",
+                permission=Permission(
+                    visibility="restricted",
+                    read_meta=["user:amy"],
+                    read_content=["user:amy"],
+                    edit_content=["user:amy"],
+                ),
+            )
+        ).resource_id
+    _workspace(client, src)
+    assert client.post(f"/a/rca/items/{src}/wui/deploy", json={"path": PAGE}).status_code == 200
+    holder["id"] = "amy"
+
+    r = client.delete(f"/a/rca/items/{src}/wui/deploy", params={"path": PAGE})
+    listed = client.get("/wui").json()["pages"]
+
+    assert r.status_code == 403, r.text
+    assert [p["can_remove"] for p in listed] == [False]

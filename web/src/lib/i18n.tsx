@@ -3934,6 +3934,14 @@ export const messages = {
   },
   "publish.estimate.folder": { "zh-TW": "{files} 個檔案、{size}", en: "{files} files, {size}" },
   "publish.note.legend": { "zh-TW": "這次改了什麼（選填）", en: "What changed (optional)" },
+  "publish.currentFailed": {
+    "zh-TW": "讀不到這個頁面現在的發布設定，先不要發布（不然會用錯的設定蓋掉）：{why}",
+    en: "Could not read how this page is published now, so it is not published again from a guess: {why}",
+  },
+  "publish.currentFailed.short": {
+    "zh-TW": "讀到現在的發布設定才能發布。",
+    en: "Publishing waits until it can read how it is published now.",
+  },
   "publish.pick": { "zh-TW": "先選別人怎麼用這個頁面。", en: "Pick how others use this page first." },
   "publish.pickPeople": { "zh-TW": "先選至少一個人或群組。", en: "Pick at least one person or group first." },
   "publish.cancel": { "zh-TW": "取消", en: "Cancel" },

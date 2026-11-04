@@ -1777,7 +1777,7 @@ function PublishWuiDialog({
   slug: string;
   itemId: string;
   path: string;
-  current: { isPending: boolean; data?: Published | null };
+  current: { isPending: boolean; data?: Published | null; error?: Error | null };
   fromYaml: Partial<PublishChoices>;
   onClose: () => void;
   onConfirm: (choices: PublishChoices) => void;
@@ -1791,6 +1791,7 @@ function PublishWuiDialog({
       path={path}
       initial={current.data ? choicesFromPublished(current.data) : fromYaml}
       republish={!!current.data}
+      loadError={current.error ? current.error.message : undefined}
       onClose={onClose}
       onConfirm={onConfirm}
     />

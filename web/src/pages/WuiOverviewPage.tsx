@@ -370,7 +370,11 @@ function useRemove(page: DeployedWui, client: WuiApi) {
       page.published
         ? publishApi.unpublish(page.slug, page.item_id, page.path)
         : client.remove(page.slug, page.item_id, page.path),
-    onSuccess: () => qc.invalidateQueries({ queryKey: qk.wuiOverview }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: qk.wuiOverview });
+      // What Publish WUI's dialog starts from: no longer this publication.
+      void qc.invalidateQueries({ queryKey: qk.publicationAll });
+    },
     // The element renders its own failure; without this the query client
     // ALSO routes it to the app-wide write-failure notice, so one press
     // raises two messages — and the page-level one names no page.
