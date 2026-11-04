@@ -64,6 +64,14 @@ function mount(overrides: Partial<ComponentProps<typeof SkillsModal>> = {}) {
   return client;
 }
 
+/** What another tab does: writes the shared store, and the browser tells this
+ * one with a `storage` event (no same-window event is raised for it). */
+function remindLaterElsewhere() {
+  const key = ["alice", "e1", "3"].map(encodeURIComponent).join(":");
+  localStorage.setItem("skillHub.updateReminders", JSON.stringify({ [key]: { until: T0 + 7 * DAY, snoozed: 1 } }));
+  window.dispatchEvent(new StorageEvent("storage", { key: "skillHub.updateReminders" }));
+}
+
 const row = () => screen.findByTestId("skill-row-triage");
 const notes = () => screen.findByRole("region", { name: word("skills.updates.title", { name: "triage" }) });
 
@@ -119,6 +127,18 @@ describe("SkillsModal skill hub updates", () => {
     fireEvent.click(within(await row()).getByRole("button", { name: word("skills.updates.show") }));
     fireEvent.click(within(await notes()).getByRole("button", { name: word("skills.updates.skip") }));
     expect(reminderOf("alice", "e1", 3, T0 + 30 * DAY)).toMatchObject({ skipped: true });
+  });
+
+  // Review round 2 (#1004): only the header mark listened, so with the panel
+  // open here a Later pressed in another tab left this row offering Later.
+  it("an answer given in another tab reaches an open row", async () => {
+    mount();
+    fireEvent.click(within(await row()).getByRole("button", { name: word("skills.updates.show") }));
+    expect(within(await notes()).getByRole("button", { name: word("skills.updates.later") })).toBeInTheDocument();
+    remindLaterElsewhere();
+    await waitFor(() =>
+      expect(within(screen.getByTestId("skill-row-triage")).queryByRole("button", { name: word("skills.updates.later") })).toBeNull(),
+    );
   });
 
   it("Update is offered only to someone who may edit the item; the notes are shown to everyone", async () => {

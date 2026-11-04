@@ -13,14 +13,14 @@
  * *User control and freedom* (Later / Skip), *Recognition rather than recall*
  * (the notes beside the button that acts on them).
  */
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import { Link } from "react-router-dom";
 
 import type { ItemSkillState } from "../api/types";
 import { useCurrentUserState } from "../hooks/useCurrentUser";
 import { useT } from "../lib/i18n";
-import { reminderOf, remindLater, skipVersion } from "../lib/skillUpdateReminders";
+import { onRemindersChanged, reminderOf, remindLater, skipVersion } from "../lib/skillUpdateReminders";
 
 const when = (iso: string) => {
   const d = new Date(iso);
@@ -46,8 +46,10 @@ export function SkillUpdates({
   const t = useT();
   const { id: me, ready } = useCurrentUserState();
   const [open, setOpen] = useState(false);
-  // A Later / Skip changes what this person is shown: re-read on it.
+  // A Later / Skip changes what this person is shown: re-read on it — this
+  // row's own, or one given in another tab or by another row.
   const [, setAnswered] = useState(0);
+  useEffect(() => onRemindersChanged(() => setAnswered((n) => n + 1)), []);
   const latest = latestUpdate(skill);
   if (!latest || !skill.hub_entry) return null;
   const entry = skill.hub_entry;

@@ -3344,7 +3344,7 @@ Workflows 打開模型答錯格式的那次執行——執行結束後還留著�
 
 **行為改變,沒有開關**:
 
-- **發布 skill 的新版本要附更新說明**。`publish_skill` 從第二版起少了 `release_note` 就不發布,
+- **發布 skill 的新版本要附更新說明**。`publish_skill` 從第二版起 `release_note` 是 `null` 或空白就不發布,
   而是把和目前版本的差異回給 AI,讓 AI 起草說明、問作者確認後再發布。第一版不用。
   呼叫 `publish_skill` 的自訂 skill 或 workflow 如果只傳 `name`,發布新版本時會停在「not published yet」。
   - **何時**:`rollout 後`,有這種呼叫的話改成兩步(先拿差異、再帶 `release_note` 呼叫)。

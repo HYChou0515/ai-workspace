@@ -104,8 +104,8 @@ reminder read it from the same place.
   workspace payload against the current version's files with difflib,
   following the hub's rule for what is too large to diff (`DIFF_TEXT_CAP`,
   shared, not copied), in a worker thread.
-- **`release_note` is nullable.** Every built-in is a strict tool, which makes
-  each argument a required slot; a `str` note had no "not setting it"
+- **`release_note` is nullable.** `publish_skill`, like nearly every built-in, is
+  a strict tool, which makes each argument a required slot; a `str` note had no "not setting it"
   spelling, so a model invented one on every call — a republish's included,
   which skips the ask. `str | None` gets the platform's absent convention
   (`null`), and the skill says to call with `null` first. A note is capped at

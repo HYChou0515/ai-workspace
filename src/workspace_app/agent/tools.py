@@ -2793,10 +2793,11 @@ def release_note_needed(name: str, change: str) -> str:
 def _changes_since(current: Mapping[str, bytes], new: Mapping[str, bytes]) -> str:
     """What `new` changes over `current`, per file: added / removed / changed.
     A changed or added text file comes with its diff (an added one as added
-    lines, so a note can say what it holds); a removed one, a binary one, or one
-    over the hub's `DIFF_TEXT_CAP` on either side gets its status line only, as
-    the hub's own diff does — difflib over a whole 20 MiB file is seconds of
-    CPU. The result is capped at `_RELEASE_NOTE_DIFF_CAP`. Blocking: call it
+    lines, so a note can say what it holds); a removed one gets its status line
+    only (unlike the hub's diff — a note says what is gone, not what it said),
+    and so does a binary one or one over the hub's `DIFF_TEXT_CAP` on either
+    side, as the hub's own diff does — difflib over a whole 20 MiB file is
+    seconds of CPU. The result is capped at `_RELEASE_NOTE_DIFF_CAP`. Blocking: call it
     through `asyncio.to_thread`."""
     import difflib
 
