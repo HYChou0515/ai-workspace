@@ -2,13 +2,15 @@ import pytest
 from specstar import SpecStar
 
 from workspace_app.filestore.memory import MemoryFileStore
-from workspace_app.resources import make_spec
+from workspace_app.resources import make_spec, register_workflow_run
 from workspace_app.workflow.handle import WorkflowHandle
 
 
 @pytest.fixture
 def spec_instance() -> SpecStar:
-    return make_spec(default_user="test-user")
+    spec = make_spec(default_user="test-user")
+    register_workflow_run(spec)  # registered post-`spec.apply` in the app (#870)
+    return spec
 
 
 @pytest.fixture

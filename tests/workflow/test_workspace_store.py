@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from workspace_app.files import WorkspaceFiles
 from workspace_app.filestore.memory import MemoryFileStore
 from workspace_app.workflow.dsl import parse_def
@@ -200,18 +202,22 @@ async def test_a_consent_digest_is_what_the_build_would_run_from() -> None:
         assert await workflow_digest(files.read, ws, wid) == (built[2] if built else ""), wid
 
 
-async def test_only_a_flat_file_in_the_folder_is_a_workspace_workflow() -> None:
+@pytest.mark.parametrize("wid", ["../notes", "sub/nested", "../../x"])
+async def test_only_a_flat_file_in_the_folder_is_a_workspace_workflow(tmp_path, wid) -> None:
     """Round 6: the loader read `/.workflows/<id>.json` for ANY id. On the NFS
     store `../notes` built a run from `/notes.json` outside the folder and
     `../../x` raised (a 500 on the bind route). The rule now lives in the one
     loader every reader (build, press, binding) uses.
 
-    Only `sub/nested` is pinned here: `MemoryFileStore` does not resolve `..`,
-    so the two traversal ids read nothing with or without the rule (#870)."""
+    On the NFS store itself (#870): it resolves `..` the way production does,
+    so each id here is a file the loader WOULD read, or a path it would raise
+    on, without the rule — `MemoryFileStore` does not resolve `..`, and the two
+    traversal ids read nothing there with or without it."""
+    from workspace_app.filestore.nfs_tree import NfsTreeFileStore
     from workspace_app.workflow.workspace_store import load_workspace_workflow_digested
 
-    files, ws = _files()
+    files, ws = WorkspaceFiles(NfsTreeFileStore(tmp_path)), "ws"
     await files.write(ws, "/notes.json", _VALID.encode())
     await files.write(ws, "/.workflows/sub/nested.json", _VALID.encode())
-    for wid in ("../notes", "sub/nested", "../../x"):
-        assert await load_workspace_workflow_digested(files.read, ws, wid) is None, wid
+
+    assert await load_workspace_workflow_digested(files.read, ws, wid) is None
