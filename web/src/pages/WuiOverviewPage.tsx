@@ -460,9 +460,13 @@ function PageDetail({
   page,
   withOwner,
   withApp = false,
+  withUsage = true,
 }: {
   page: DeployedWui;
   withOwner: boolean;
+  /** The usage at the end of the line — the table's; a card says it in its
+   * footer, where the line's ellipsis cannot cut it off. */
+  withUsage?: boolean;
   /** The App's tag at the start of the line — the table's way of saying the
    * App where its section heading does not. */
   withApp?: boolean;
@@ -518,14 +522,23 @@ function PageDetail({
           (`GroupsPage`), and the sentence template is written for the
           relative form ("2 d ago" / "just now" / "7 Aug"). */}
       <span title={exactTime(new Date(page.deployed_at).toISOString())}>{by}</span>
-      {page.published ? (
+      {withUsage && page.published ? (
         <>
           {" · "}
-          <span data-testid="wui-usage">
-            {t("publish.usage", { opens: page.opens ?? 0, people: page.people ?? 0 })}
-          </span>
+          <Usage page={page} />
         </>
       ) : null}
+    </span>
+  );
+}
+
+/** How often a published page was opened and by how many people — never who
+ * (W4). */
+function Usage({ page }: { page: DeployedWui }) {
+  const t = useT();
+  return (
+    <span data-testid="wui-usage">
+      {t("publish.usage", { opens: page.opens ?? 0, people: page.people ?? 0 })}
     </span>
   );
 }
@@ -636,7 +649,7 @@ function PageCard({ page, client, starred, starReady, onStar, showApp }: PagePro
           <a href={pageHref(page)} target="_blank" rel="noopener" title={page.title}>
             {page.title}
           </a>
-          <PageDetail page={page} withOwner={false} />
+          <PageDetail page={page} withOwner={false} withUsage={false} />
         </div>
       </div>
       <StarButton page={page} starred={starred} starReady={starReady} onStar={onStar} className="btn star" />
@@ -647,6 +660,7 @@ function PageCard({ page, client, starred, starReady, onStar, showApp }: PagePro
         <span className="wui-card-who">
           {showApp ? <AppTag slug={page.slug} /> : null}
           <UserChip userId={page.item_owner} size={18} />
+          {page.published ? <Usage page={page} /> : null}
         </span>
         <UnlistButton page={page} remove={remove} onRemove={ask} />
       </div>

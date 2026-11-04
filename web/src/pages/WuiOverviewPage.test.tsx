@@ -981,6 +981,19 @@ describe("published pages (P4 of plan-wui-publish-and-agent-hub)", () => {
     expect(within(rca).getByTestId("wui-usage")).toHaveTextContent("7 次打開 · 3 人");
   });
 
+  it("on a card, puts the usage in the footer, where the one-line detail cannot cut it off", async () => {
+    // Found in the demo recording: the card's detail is ONE line with an
+    // ellipsis, and the usage at its end read "… · just …".
+    writeWuiView("cards");
+    render(<WuiOverviewPage client={client([copying])} />, { wrapper: Wrap });
+    const rca = await screen.findByRole("region", { name: "根因分析" });
+
+    const usage = within(rca).getByTestId("wui-usage");
+    expect(usage).toHaveTextContent("7 次打開 · 3 人");
+    expect(usage.closest(".wui-card-foot")).not.toBeNull();
+    expect(usage.closest(".detail")).toBeNull();
+  });
+
   it("shows no usage for a page Deployed before Publish existed", async () => {
     render(<WuiOverviewPage client={client([row({})])} />, { wrapper: Wrap });
     const rca = await screen.findByRole("region", { name: "根因分析" });
