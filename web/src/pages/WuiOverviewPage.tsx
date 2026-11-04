@@ -549,6 +549,9 @@ function PageUsageLines({ page }: { page: DeployedWui }) {
         <b>{t("wui.usage.opened")}</b> {t("wui.usage.total", { value: t("wui.usage.personDays", { n: u.opened_total }) })}
         {" · "}
         {t("wui.usage.week", { value: t("wui.usage.personDays", { n: u.opened_7d }) })}
+        {" "}
+        {/* One unit: it wraps whole, never mid-phrase. */}
+        <span className="wui-usage-note">{t("wui.usage.onePerDay")}</span>
       </span>
       <span>
         <b>{t("wui.usage.used")}</b> {t("wui.usage.total", { value: uses(u.used_total, u.used_ms_total) })}

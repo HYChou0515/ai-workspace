@@ -202,7 +202,7 @@ function WuiUsageDetailPanel({
       {detail.isError && <p role="alert">{t("usage.wui.failed", { reason: (detail.error as Error).message })}</p>}
       {detail.data && (
         <div className="tool-usage-scroll">
-          <table className="tool-usage-table" aria-label={t("usage.by.user")}>
+          <table className="tool-usage-table wui-usage-people" aria-label={t("usage.by.user")}>
             <thead>
               <tr>
                 <th style={cell}>{t("usage.col.user")}</th>

@@ -934,6 +934,9 @@ describe("a page's numbers, for its owner (docs/plan-wui-usage.md U5)", () => {
     expect(usage).not.toBeNull();
     const text = usage?.textContent ?? "";
     expect(text).toContain(translate("zh-TW", "wui.usage.opened"));
+    // How an open is counted is said on the card, not left to a tooltip (NN/g,
+    // Tooltip Guidelines: "Important information should always be on the page").
+    expect(text).toContain(translate("zh-TW", "wui.usage.onePerDay"));
     expect(text).toContain(translate("zh-TW", "wui.usage.personDays", { n: 120 }));
     expect(text).toContain(translate("zh-TW", "wui.usage.personDays", { n: 18 }));
     expect(text).toContain(translate("zh-TW", "wui.usage.uses", { n: 45, time: translate("zh-TW", "wui.usage.hours", { n: "3.2" }) }));

@@ -24,7 +24,7 @@ user 要「WUI 用量統計，像 skill hub 和 MCP 那樣」。現況〔查證�
 | # | 決定 | 來源 |
 |---|---|---|
 | U1 | 統計 WUI 頁面的**打開量**和**使用量** | 〔user〕 |
-| U2 | 打開量的單位是**人天**：同一人同一天打開幾次都算一次。顯示**總共**和**過去 7 天** | 〔user〕 |
+| U2 | 打開量的單位是**人天**：同一人同一天打開幾次都算一次。顯示**總共**和**過去 7 天**。畫面上寫成「打開的人 … 人次（同一人一天只算一次）」——「人天」是內部用語（user 2026-11-04：wording 沒照 NN/g、看不懂；用詞待 user 確認） | 〔user〕 |
 | U3 | 使用量顯示**次數**和**總時間**（解讀成 AI 替人做事花的時間），總共和過去 7 天各一組；平均不當指標（不顯示） | 〔user〕 |
 | U4 | 使用量只算三類**現有**動作：workflow（`startRun`）、工具（`callTool`＋`startTool`）、agent（`callAgent`＋`startAgent`）。不算 `jobStatus`／`stopJob`（查詢、控制）、檔案類、`whoami`／`openLogin` | 〔user〕 |
 | U5 | **頁面主人**在部署總覽 `/wui` 的卡片上看自己頁面的數字；**superuser** 看全部和人名明細 | 〔user〕 |
@@ -91,7 +91,13 @@ user 要「WUI 用量統計，像 skill hub 和 MCP 那樣」。現況〔查證�
   （https://www.nngroup.com/articles/dashboards-preattentive/）——「color should not be used to communicate information about
   quantitative values or magnitude」。卡片上只放數字和單位（不用顏色分大小）；使用統計頁沿用工具統計已有的
   橫向長條（長度）。
-- 卡片文字（實作後）：「**打開** 總共 120 人天 · 近 7 天 18 人天」「**使用** 總共 45 次、3.2 小時 · 近 7 天 6 次、24 分鐘」。
+- 卡片文字：「**打開的人** 總共 120 人次 · 近 7 天 18 人次（同一人一天只算一次）」「**AI 代勞** 總共 45 次、花了 3.2 小時 ·
+  近 7 天 6 次、花了 24 分鐘」。第一版寫「打開 … 人天」「使用 … 45 次、3.2 小時」，user 看不懂。依 NN/g *Match Between
+  the System and the Real World*（https://www.nngroup.com/articles/match-system-real-world/）：「Systems should speak the
+  users' language with familiar words, phrases, and concepts rather than system-oriented terms」——「人天」換成「人次」；
+  依 *Tooltip Guidelines*（https://www.nngroup.com/articles/tooltip-guidelines/）：「Important information should always be
+  on the page」——怎麼算寫在卡片上，不放在提示裡；時間寫成「花了 …」，說出它是 AI 替人做事的時間（U3）。統計頁第三區
+  的欄位、長條標題用同一套詞。
   時間的單位四捨五入**之後**才選（59.6 秒寫「1 分鐘」，不寫「60 秒」）。
 
 ## 已知限制
