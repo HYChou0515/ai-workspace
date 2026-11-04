@@ -19,13 +19,14 @@ import {
   apiFetch,
   detailSentence,
   HttpError,
-  errorCode,
   errorInfo,
   httpErrorFrom,
+  refusalFrom,
 } from "./http";
 import { encodePath } from "./refPath";
 import { parseSseStream } from "./sse";
 import type {
+  PageWrite,
   ActivityEntry,
   ApiClient,
   AppItem,
@@ -139,6 +140,24 @@ function searchBody(opts: SearchOptions): Record<string, unknown> {
     include: opts.include ?? "",
     exclude: opts.exclude ?? "",
   };
+}
+
+/** docs/plan-wui-user.md D12: the header naming the page a write comes through. */
+export const WUI_PAGE_HEADER = "X-Wui-Page";
+
+/** A refused file write or delete, keeping the server's sentence AND its code.
+ * A page shows the sentence (why its save was refused — e.g. "never its view
+ * file", docs/plan-wui-user.md D12, which only the server can now say); the pane
+ * reads the code (D7). Both come from one bounded read of the body
+ * (`refusalFrom`). */
+async function fileRefusal(resp: Response, fallback: string): Promise<HttpError> {
+  return refusalFrom(resp, fallback); // one bounded read of the body
+}
+
+function pageHeaders(opts: PageWrite | undefined): Record<string, string> | undefined {
+  // Percent-encoded: a header value must be Latin-1, and a view path can hold
+  // any character (a Chinese folder name threw before any request went out).
+  return opts?.page ? { [WUI_PAGE_HEADER]: encodeURIComponent(opts.page) } : undefined;
 }
 
 export const realApi: ApiClient = {
@@ -506,18 +525,12 @@ export const realApi: ApiClient = {
     return `${API_PREFIX}/a/${encodeURIComponent(slug)}/items/${encodeURIComponent(investigationId)}/files/${encodePath(path)}`;
   },
 
-  async writeFile(slug: string, investigationId, path, body) {
+  async writeFile(slug: string, investigationId, path, body, opts) {
     const resp = await apiFetch(
       `/a/${encodeURIComponent(slug)}/items/${encodeURIComponent(investigationId)}/files/${encodePath(path)}`,
-      { method: "PUT", body },
+      { method: "PUT", body, headers: pageHeaders(opts) },
     );
-    if (!resp.ok) {
-      throw new HttpError(
-        resp.status,
-        `write ${path} failed: ${resp.status}`,
-        await errorCode(resp),
-      );
-    }
+    if (!resp.ok) throw await fileRefusal(resp, `write ${path} failed: ${resp.status}`);
   },
 
   // #198: XHR (not fetch) so the chat attach can report upload progress — fetch has
@@ -541,12 +554,12 @@ export const realApi: ApiClient = {
     });
   },
 
-  async deleteFile(slug: string, investigationId: string, path: string) {
+  async deleteFile(slug: string, investigationId: string, path: string, opts?: PageWrite) {
     const resp = await apiFetch(
       `/a/${encodeURIComponent(slug)}/items/${encodeURIComponent(investigationId)}/files/${encodePath(path)}`,
-      { method: "DELETE" },
+      { method: "DELETE", headers: pageHeaders(opts) },
     );
-    if (!resp.ok) throw new HttpError(resp.status, `delete ${path} failed: ${resp.status}`);
+    if (!resp.ok) throw await fileRefusal(resp, `delete ${path} failed: ${resp.status}`);
   },
 
   async mkdir(slug: string, investigationId: string, path: string) {

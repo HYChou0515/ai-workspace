@@ -195,3 +195,22 @@ export async function errorInfo(
     clearTimeout(timer);
   }
 }
+
+/**
+ * A refusal as an `HttpError` carrying the server's sentence AND its code, from
+ * ONE bounded read (`errorInfo`): the sentence is FastAPI's `detail` when it is
+ * a string, taken from the text that read already has — never by reading the
+ * response a second time, which would wait forever on a stalled error body
+ * (`execShell.test.ts`, `refusalStall.test.ts`). `fallback` when there is none.
+ */
+export async function refusalFrom(resp: Response, fallback: string): Promise<HttpError> {
+  const info = await errorInfo(resp);
+  let sentence: string | undefined;
+  try {
+    const body = info.text ? (JSON.parse(info.text) as { detail?: unknown }) : undefined;
+    if (typeof body?.detail === "string") sentence = body.detail;
+  } catch {
+    // not JSON — the status and the fallback are what there is
+  }
+  return new HttpError(resp.status, sentence ?? fallback, info.code, info.also, info.detail);
+}

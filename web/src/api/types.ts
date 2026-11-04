@@ -9,6 +9,11 @@ import type { AgentEvent, CellEvent } from "../events";
 import type { FileEncoding } from "./encoding";
 import type { Failure } from "../lib/failure";
 
+/** docs/plan-wui-user.md D12: a write a WUI page makes, naming the page — the
+ * workspace path of its view file. Sent as the `X-Wui-Page` header; only the
+ * pane's bridge passes it, so a WUI User's write from anywhere else is refused. */
+export type PageWrite = { page?: string };
+
 export type { FileEncoding };
 
 /* ----------------------------- Enums ----------------------------- */
@@ -33,9 +38,15 @@ export type MessageRole =
   | "goal"
   // #624: `notice` = 系統告知(例如較早訊息已超出模型可讀範圍)— FE-only。
   | "notice"
+  // plan-env-token-refresh D6: a sign-in whose refresh token is dead, with that
+  // sign-in's button — FE-only, never replayed to the model.
+  | "sign_in"
   // #739: `summary` = 這一則取代了它上面那一段,送給模型的是它;原文並未刪除,
   // 使用者往上捲仍然看得到。與 `notice` 相反,這一則**會**進入模型的 context。
   | "summary"
+  // plan-workflow-output-repair §3.5: what the workflow engine asked a node to
+  // re-emit — shown beside the answer, never sent to the model.
+  | "repair_request"
   | "error";
 
 /** #847 P7 / #861: a named marking as the composer sends it — the picked
@@ -68,6 +79,10 @@ export type Message = {
   role: MessageRole;
   /** role=user only (#847 P7): the markings sent with this message. */
   markings?: SentMarking[];
+  /** role=sign_in only: the deploy's sign-in (`EnvProvider.id`) to do again. */
+  sign_in_provider?: string | null;
+  /** role=sign_in only: where the dead token lived, so signing in writes back there. */
+  sign_in_layer?: "personal" | "private" | "shared" | null;
   content: string;
   /** user id when role=user; agent name when role=assistant. */
   author?: string | null;
@@ -126,8 +141,10 @@ export type Message = {
   /** role=mention only — the user ids summoned ("@ come look"). */
   mentions?: string[];
   /** role=error only (#37) — why the turn failed: a backend error kind
-   * (docs/plan-friendly-errors.md; `error` on older rows), `cancelled` or
-   * `max_turns`. `content` is then the raw text for technical details. */
+   * (docs/plan-friendly-errors.md; `error` on older rows), `cancelled`,
+   * `interrupted` (another person's message took the turn over — `author` is
+   * that person; docs/plan-interjection.md Q2) or `max_turns`. `content` is
+   * then the raw text for technical details. */
   error_kind?: string | null;
   /** A failure this message reports (docs/plan-friendly-errors.md): role=tool — a
    * delegated sub-agent's; role=goal — why an off-hours night could not start. */
@@ -758,6 +775,7 @@ export interface ApiClient {
     investigationId: string,
     path: string,
     body: string | Blob | ArrayBuffer,
+    opts?: PageWrite,
   ): Promise<void>;
   /** Like `writeFile` but streams via XHR so the caller can show upload progress
    * (#198 chat attach). `onProgress(loaded, total)` fires as bytes go out; a 413
@@ -789,7 +807,7 @@ export interface ApiClient {
   fileExists(slug: string, investigationId: string, path: string): Promise<boolean>;
   /** DELETE /a/{slug}/items/{id}/files/{path} → 204. Removes a file, or a
    * folder and its whole subtree when the path is a directory. */
-  deleteFile(slug: string, investigationId: string, path: string): Promise<void>;
+  deleteFile(slug: string, investigationId: string, path: string, opts?: PageWrite): Promise<void>;
   /** POST /a/{slug}/items/{id}/files/move — rename/move (409 if target exists). */
   moveFile(slug: string, investigationId: string, from: string, to: string): Promise<void>;
   /** POST /a/{slug}/items/{id}/files/copy — duplicate (409 if target exists). */

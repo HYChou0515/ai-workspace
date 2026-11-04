@@ -6,14 +6,19 @@
  * rendered as clickable source cards.
  */
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useId, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 
 import type { Message, MessageCitation, WithheldSource } from "../api/types";
-import type { AgentEntry, StepView, ToolCallView } from "../pages/investigation/agentLog";
+import type {
+  AgentEntry,
+  Interjection,
+  StepView,
+  ToolCallView,
+} from "../pages/investigation/agentLog";
 import {
   buildByMarker,
   kbCiteAnchor,
@@ -21,6 +26,7 @@ import {
   renderCitedText,
 } from "../renderers/kbCite";
 import { remarkKbCitation } from "../renderers/report/remarkKbCitation";
+import { useSameShape } from "../hooks/useSameShape";
 import { parseShownFiles, parseShownLayout, stripShownFiles } from "../renderers/shownFiles";
 import { parseShownSkillHubEntry, stripSkillHubEntry } from "../renderers/skillHubEntry";
 import { parseEnvRequest } from "../renderers/envRequest";
@@ -29,6 +35,7 @@ import { useStickToBottom } from "../hooks/useStickToBottom";
 import { useT, type MsgKey } from "../lib/i18n";
 import { AskUserCard, type AskUserAnswer } from "./AskUserCard";
 import { ErrorNotice } from "./ErrorNotice";
+import { SignInNotice } from "./SignInNotice";
 import { ShownFiles } from "./ShownFiles";
 import { MarkingChips } from "./MarkingChips";
 import { ShownLayoutCard } from "./ShownLayoutCard";
@@ -168,6 +175,79 @@ const TOOL_ARG: Record<string, string> = {
   run_agent: "agent_type",
 };
 
+const NO_CITATIONS: readonly MessageCitation[] = [];
+
+/**
+ * An answer's markdown body, re-parsed only when what it renders changes —
+ * its text, its citations, or how links and images resolve (the long-chat perf
+ * fix). A row is also redrawn when a turn starts or ends (replay / undo come
+ * and go with `streaming`); that changes the buttons beside the answer, not the
+ * answer, and re-parsing every answer for it cost one 1.2–2s task per turn on a
+ * 300-turn chat.
+ */
+const AnswerMarkdown = memo(function AnswerMarkdown({
+  content,
+  byMarker,
+  onOpenCitation,
+  fileUrl,
+}: {
+  content: string;
+  byMarker: Map<number, MessageCitation[]>;
+  onOpenCitation?: (c: MessageCitation) => void;
+  fileUrl?: (path: string) => string;
+}) {
+  return (
+    <ReactMarkdown
+      remarkPlugins={[remarkGfm, remarkMath, remarkKbCitation]}
+      rehypePlugins={[rehypeKatex]}
+      urlTransform={kbCiteUrlTransform}
+      components={{
+        // #221: remarkKbCitation rewrites `[N]` → `kb-cite:N`; render those
+        // as clickable inline pills (opens the cited doc via the same
+        // handler as the Sources cards). Non-citation links stay normal.
+        a: ({ href, children, ...rest }) => {
+          const cite = kbCiteAnchor({ href, children }, byMarker, onOpenCitation);
+          if (cite) return cite;
+          const resolved = workspaceUrl(href, fileUrl);
+          return (
+            <a
+              href={resolved}
+              {...rest}
+              {...(resolved !== href ? { target: "_blank", rel: "noreferrer" } : {})}
+            >
+              {children}
+            </a>
+          );
+        },
+        // A model that names a file often also embeds it. Without this the
+        // src resolves against the SPA route and renders as a broken image
+        // beside the chart `show_file` loaded fine. Same resolution the
+        // file viewer does (renderers/MarkdownRenderer); on a surface with
+        // no workspace there is nothing to resolve against, so nothing is
+        // drawn rather than a broken image.
+        img: ({ src, alt, ...rest }) => {
+          const resolved = workspaceUrl(typeof src === "string" ? src : undefined, fileUrl);
+          if (!resolved) return null;
+          // Same thumbnail treatment a declared file gets, so an embedded
+          // image and a shown one are the same size; click to open.
+          return (
+            <a href={resolved} target="_blank" rel="noreferrer">
+              <img
+                src={resolved}
+                alt={alt ?? ""}
+                {...rest}
+                style={{ display: "block", maxWidth: 260, maxHeight: 260 }}
+              />
+            </a>
+          );
+        },
+      }}
+    >
+      {content}
+    </ReactMarkdown>
+  );
+});
+
 /** A workspace-relative ref resolved against the item's file route, or the ref
  * unchanged when it is already a URL / fragment. `undefined` when there is no way
  * to resolve it — the caller then draws nothing instead of a dead link. */
@@ -242,6 +322,53 @@ function CompactionSummary({ text, replaced }: { text: string; replaced: number 
   );
 }
 
+/** plan-workflow-output-repair §3.5: what the workflow engine asked a node to
+ * re-emit. Folded — the request quotes the whole failed reply — behind a
+ * disclosure button (NN/g progressive disclosure; W3C APG disclosure pattern:
+ * `aria-expanded` + `aria-controls`), the same quiet line as the summary above. */
+function RepairRequest({ text }: { text: string }) {
+  const t = useT();
+  const [open, setOpen] = useState(false);
+  const region = useId();
+  return (
+    <div
+      data-testid="repair-request"
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        gap: 4,
+        padding: "4px 8px",
+        fontSize: pxToRem(12),
+        color: "var(--text-paper-d)",
+        borderLeft: "2px solid var(--warn)",
+      }}
+    >
+      <button
+        type="button"
+        data-testid="repair-request-toggle"
+        aria-expanded={open}
+        aria-controls={region}
+        onClick={() => setOpen((v) => !v)}
+        style={{
+          alignSelf: "flex-start",
+          background: "none",
+          border: "none",
+          padding: 0,
+          cursor: "pointer",
+          font: "inherit",
+          color: "inherit",
+          textDecoration: "underline",
+        }}
+      >
+        {open ? t("wf.repairRequest.hide") : t("wf.repairRequest.show")}
+      </button>
+      <div id={region} hidden={!open} style={{ whiteSpace: "pre-wrap" }}>
+        {open ? text : null}
+      </div>
+    </div>
+  );
+}
+
 export function EntryView({
   entry,
   onOpenCitation,
@@ -300,7 +427,7 @@ export function EntryView({
           color: "var(--accent-h)",
         }}
       >
-        {entry.text}
+        {entry.by ? <InterruptedBy userId={entry.by} /> : entry.text}
       </div>
     );
   }
@@ -380,6 +507,10 @@ export function EntryView({
   if (entry.kind === "mention") {
     return <MentionLine by={entry.by} users={entry.users} note={entry.note} />;
   }
+  if (entry.kind === "sign_in") {
+    // plan-env-token-refresh D6: a sign-in to do again, with its button.
+    return <SignInNotice provider={entry.provider} layer={entry.layer} text={entry.text} />;
+  }
   if (entry.kind === "notice") {
     // #624: a quiet but unmissable line — the model's memory horizon moved.
     return (
@@ -398,6 +529,9 @@ export function EntryView({
         <span>{entry.text}</span>
       </div>
     );
+  }
+  if (entry.kind === "repair_request") {
+    return <RepairRequest text={entry.text} />;
   }
   if (entry.kind === "summary") {
     return <CompactionSummary text={entry.text} replaced={entry.replaced} />;
@@ -440,6 +574,7 @@ export function EntryView({
     <MessageBlock
       message={entry.message}
       at={entry.at}
+      interjection={entry.interjection}
       onOpenCitation={onOpenCitation}
       onRequestAccess={onRequestAccess}
       onReplay={onReplay}
@@ -678,6 +813,7 @@ const STEP_GLYPH: Record<StepView["status"], string> = {
   failed: "✗",
   skipped: "⤳",
   retrying: "↻",
+  repairing: "✎",
 };
 
 const STEP_COLOR: Record<StepView["status"], string> = {
@@ -686,12 +822,14 @@ const STEP_COLOR: Record<StepView["status"], string> = {
   failed: "var(--err)",
   skipped: "var(--text-paper-d2)",
   retrying: "var(--warn, var(--text-paper-d))",
+  repairing: "var(--warn, var(--text-paper-d))",
 };
 
 /** One workflow step's live line — so a deterministic phase (commit: ingest each
  * file) shows movement instead of looking frozen (#100 observability). The line
  * transitions in place as `step.status` advances (running → passed/failed/…). */
 function StepLine({ step }: { step: StepView }) {
+  const t = useT();
   const color = STEP_COLOR[step.status];
   return (
     <div data-testid="wf-step" data-status={step.status}>
@@ -711,6 +849,9 @@ function StepLine({ step }: { step: StepView }) {
         </span>
         <span style={{ color: "var(--text-paper)" }}>{step.name}</span>
         {step.key && <span style={{ color: "var(--text-paper-d)" }}>· {step.key}</span>}
+        {step.status === "repairing" && (
+          <span style={{ color }}>{t("wf.step.repairing", { n: step.repair ?? 1 })}</span>
+        )}
         {step.reason && <span style={{ color }}>— {step.reason}</span>}
       </div>
       {/* #178: live stdout from a running deterministic step, so a long command
@@ -737,8 +878,23 @@ function StepLine({ step }: { step: StepView }) {
   );
 }
 
+/** plan-interjection Q2/Q9: who took the turn over, by name — the banner's
+ * stored `text` keeps the id, which is what the live/stored de-dupe keys on. */
+function InterruptedBy({ userId }: { userId: string }) {
+  const t = useT();
+  const who = useUser(userId);
+  return <>{t("banner.interrupted", { who: who.name || userId })}</>;
+}
+
+const INTERJECTION_NOTE: Record<Interjection, MsgKey> = {
+  waiting: "interject.waiting",
+  read: "interject.read",
+  queued: "interject.queued",
+};
+
 function MessageBlock({
   message,
+  interjection,
   onOpenCitation,
   onRequestAccess,
   onReplay,
@@ -751,6 +907,8 @@ function MessageBlock({
   message: Message;
   /** The entry's own timestamp — what a message has before it is persisted. */
   at?: number;
+  /** plan-interjection Q9: what is happening to a message sent mid-answer. */
+  interjection?: Interjection;
   onOpenCitation?: (c: MessageCitation) => void;
   onRequestAccess?: (w: WithheldSource) => void;
   onReplay?: () => void;
@@ -782,7 +940,12 @@ function MessageBlock({
   // #221: resolve the answer body's `[n]` markers against this message's
   // citations so each inline marker becomes a clickable pill (same target as
   // the Sources cards below). Empty map ⇒ markers render as muted text.
-  const byMarker = useMemo(() => buildByMarker(message.citations ?? []), [message.citations]);
+  // The same citations keep the same array (`useSameShape`): when a turn ends
+  // the thread is fetched again and every message comes back as a new object
+  // with a new `citations` array, and a new map here re-parsed every answer's
+  // markdown at once — one 1.4s freeze per answer on a 300-turn chat.
+  const citations = useSameShape(message.citations ?? NO_CITATIONS);
+  const byMarker = useMemo(() => buildByMarker(citations), [citations]);
   if (message.role === "user") {
     return (
       <div
@@ -866,6 +1029,22 @@ function MessageBlock({
             <MarkingChips markings={message.markings} />
           </div>
         )}
+        {interjection && (
+          // plan-interjection Q9: sent while the AI was answering — say what
+          // happens to it, so a message that is not answered at once does not
+          // read as ignored.
+          <div
+            data-testid="interjection-note"
+            style={{
+              marginLeft: mine ? 0 : 28,
+              marginTop: 4,
+              fontSize: pxToRem(11),
+              color: "var(--text-paper-d)",
+            }}
+          >
+            {t(INTERJECTION_NOTE[interjection])}
+          </div>
+        )}
       </div>
     );
   }
@@ -904,54 +1083,12 @@ function MessageBlock({
           <ReasoningBlock text={message.reasoning} answered={message.content.trim().length > 0} />
         )}
         <div className="md-body md-compact" style={{ marginLeft: 28, marginTop: 4 }}>
-          <ReactMarkdown
-            remarkPlugins={[remarkGfm, remarkMath, remarkKbCitation]}
-            rehypePlugins={[rehypeKatex]}
-            urlTransform={kbCiteUrlTransform}
-            components={{
-              // #221: remarkKbCitation rewrites `[N]` → `kb-cite:N`; render those
-              // as clickable inline pills (opens the cited doc via the same
-              // handler as the Sources cards). Non-citation links stay normal.
-              a: ({ href, children, ...rest }) => {
-                const cite = kbCiteAnchor({ href, children }, byMarker, onOpenCitation);
-                if (cite) return cite;
-                const resolved = workspaceUrl(href, fileUrl);
-                return (
-                  <a
-                    href={resolved}
-                    {...rest}
-                    {...(resolved !== href ? { target: "_blank", rel: "noreferrer" } : {})}
-                  >
-                    {children}
-                  </a>
-                );
-              },
-              // A model that names a file often also embeds it. Without this the
-              // src resolves against the SPA route and renders as a broken image
-              // beside the chart `show_file` loaded fine. Same resolution the
-              // file viewer does (renderers/MarkdownRenderer); on a surface with
-              // no workspace there is nothing to resolve against, so nothing is
-              // drawn rather than a broken image.
-              img: ({ src, alt, ...rest }) => {
-                const resolved = workspaceUrl(typeof src === "string" ? src : undefined, fileUrl);
-                if (!resolved) return null;
-                // Same thumbnail treatment a declared file gets, so an embedded
-                // image and a shown one are the same size; click to open.
-                return (
-                  <a href={resolved} target="_blank" rel="noreferrer">
-                    <img
-                      src={resolved}
-                      alt={alt ?? ""}
-                      {...rest}
-                      style={{ display: "block", maxWidth: 260, maxHeight: 260 }}
-                    />
-                  </a>
-                );
-              },
-            }}
-          >
-            {message.content}
-          </ReactMarkdown>
+          <AnswerMarkdown
+            content={message.content}
+            byMarker={byMarker}
+            onOpenCitation={onOpenCitation}
+            fileUrl={fileUrl}
+          />
         </div>
         {message.stopped_reason === "repetition" && (
           <RepetitionNotice answered={message.content.trim().length > 0} />

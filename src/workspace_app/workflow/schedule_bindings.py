@@ -12,7 +12,9 @@ Three rules, each for a reason:
   (`user_schedules.trigger_id_for`), so an edited row is a different schedule
   with no binding; and the binding records a digest of the item's own
   ``.workflows/<run>.json`` (`workflow_digest`), so rewriting the workflow's
-  body drops it too (review round 1, F4). The sweep compares against the LIVE
+  body drops it too (review round 1, F4) — unless it was rewritten through a
+  door that knows who wrote it, which hands the schedule to them instead
+  (`plan-seam-token-refresh` W1). The sweep compares against the LIVE
   file — the one the fire will load — before each fire (round 2, D3), drops a
   binding that no longer matches, and says so to the binder. The digest covers
   that one file only: a script the workflow calls, or a file an agent node
@@ -31,14 +33,20 @@ Registered post-``spec.apply``: no auto-CRUD, so the routes are the only door.
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
+import json
+import logging
 from collections.abc import Awaitable, Callable
 
 from msgspec import Struct
 from specstar import QB, SpecStar
 from specstar.types import ResourceIDNotFoundError
 
-from .workspace_store import load_workspace_workflow_digested
+from .user_schedules import UserSchedule, file_rows, over_cap, trigger_id_for, usable_rows
+from .workspace_store import load_workspace_workflow_digested, workspace_workflow_path
+
+logger = logging.getLogger(__name__)
 
 
 async def workflow_digest(
@@ -55,6 +63,13 @@ async def workflow_digest(
     return built[2] if built is not None else ""
 
 
+#: The consent an author's row records while its workflow will not parse
+#: (`plan-seam-token-refresh` W4): equal to no digest `workflow_digest` returns,
+#: "" included, so a broken workflow fixed, replaced or deleted is never taken
+#: as the one consented to.
+UNPARSABLE_DIGEST = "!unparsable"
+
+
 class ScheduleBinding(Struct):
     trigger_id: str
     item_id: str
@@ -65,10 +80,22 @@ class ScheduleBinding(Struct):
     bound_at: int
     #: `workflow_digest` of the row's workflow when the binder pressed "Run as
     #: me" — the digest the build would run from ("" means a profile's
-    #: workflow; a file that will not parse cannot be bound). The row's key only
+    #: workflow; "Run as me" refuses a file that will not parse, and an
+    #: author's row records ``UNPARSABLE_DIGEST`` for one). The row's key only
     #: covers the ROW; the workflow it names can be rewritten by anyone who edits
-    #: the item, and the binder consented to it as it was (review round 1, F4).
+    #: the item, and the binder consented to it as it was (review round 1, F4)
+    #: — whoever rewrites it through a door that knows them takes the binding
+    #: (`plan-seam-token-refresh` W1); any other rewrite drops it.
     workflow_digest: str = ""
+    #: WHY it runs as `user_id` (`plan-schedule-run-as` G8): ``"self"`` — they
+    #: pressed "Run as me" (every binding made before this field existed);
+    #: ``"author"`` — they wrote the row (G2); ``"admin"`` — a superuser named
+    #: them (G5); ``"workflow"`` — they rewrote the workflow it runs
+    #: (`plan-seam-token-refresh` W1). Shown, never consulted by the sweep: whose values a fire
+    #: carries is `user_id` alone, whatever put it there.
+    reason: str = "self"
+    #: The superuser who named them, for ``reason == "admin"``; "" otherwise.
+    assigned_by: str = ""
 
 
 def register_schedule_bindings(spec: SpecStar) -> None:
@@ -104,6 +131,8 @@ class ScheduleBindings:
         path: str,
         user_id: str,
         workflow_digest: str = "",
+        reason: str = "self",
+        assigned_by: str = "",
     ) -> str:
         """Bind the schedule to ``user_id``, replacing whoever held it. Returns
         the replaced person ("" when there was none, or it was them already)."""
@@ -119,6 +148,8 @@ class ScheduleBindings:
             user_id=user_id,
             bound_at=now_ms(),
             workflow_digest=workflow_digest,
+            reason=reason,
+            assigned_by=assigned_by,
         )
         previous = self.get(trigger_id)
         if previous is None:
@@ -139,6 +170,10 @@ class ScheduleBindings:
             rows.append(data)
         return rows
 
+    def holders(self, item_id: str, path: str) -> set[str]:
+        """Who runs some row of the schedules file ``path``."""
+        return {b.user_id for b in self.for_item(item_id) if b.path == path}
+
     def purge_item(self, item_id: str) -> None:
         """Every binding of one item — the item-delete cascade's step."""
         for b in self.for_item(item_id):
@@ -151,3 +186,300 @@ class ScheduleBindings:
         for b in gone:
             self.unbind(b.trigger_id)
         return gone
+
+
+def file_keys(item_id: str, path: str, raw: str) -> list[tuple[str, UserSchedule]]:
+    """``(key, row)`` of every row of the schedules file at ``path`` the sweep
+    would fire — keyed the way the SWEEP keys it (`user_schedule_sweep._one_file`:
+    folder = the file's directory), so a binding made from these is the one a
+    fire looks up. The one definition the binding routes and the crediting
+    both read through."""
+    folder = path.rsplit("/", 1)[0]
+    return [(trigger_id_for(item_id, folder, row), row) for row in usable_rows(raw)[0]]
+
+
+def _unreadable(raw: str) -> bool:
+    """Whether a schedules file may have HIDDEN rows nobody can name, so that a
+    save which makes them readable must not credit them to the saver (review
+    round 1). Decided by one table, biased to "unreadable" — a wrong answer that
+    way only leaves a row running as nobody, which its person can change with
+    "Run as me"; the other way hands someone's rows to the next saver:
+
+    ===============================================  ==========
+    blank (the file tree's New file writes "")         readable
+    not JSON, or JSON repeating a key (the decoder
+    keeps the LAST value; a row in an earlier one is
+    invisible to the sweep and to this check alike)  unreadable
+    JSON with nothing in it: ``{}``, ``[]``, ``null``,
+    ``{"schedules": null}``, ``{"schedule": []}``…     readable
+    a ``schedules`` list of objects and nothing else
+    (every other key empty)                            readable
+    anything else: a bare row, a mistyped key, ANY
+    value beside the list (even ``"version": 1``),
+    a list element that is not an object (a row
+    turned into a string), a string where the list
+    goes                                             unreadable
+    ===============================================  ==========
+
+    Review rounds 2–7 each found shapes the previous rule misjudged; this
+    table is what they add up to — and round 7 found one that a convenience
+    exception had let through (a stringified row beside the list), so there are
+    no exceptions for convenience: a file with a stray value beside its list
+    credits nobody, and its rows' people press "Run as me". An invalid row
+    OBJECT inside a clean list is readable: it has no key until it is fixed, so
+    fixing it gives it one — the fixer's new row (G2: an edited row belongs to
+    whoever edited it). Strings inside a row object — its `with` payload
+    included — are that row's data, not hidden rows: copying one out into a
+    row of its own is writing that row."""
+    if not raw.strip():
+        return False
+    try:
+        doc = json.loads(raw, object_pairs_hook=_no_repeated_keys)
+    except ValueError:  # not JSON, or a repeated key (`_RepeatedKey`)
+        return True
+    if _nothing_in(doc):
+        return False
+    rows = file_rows(raw)
+    if rows is not None and isinstance(doc, dict):
+        if not all(isinstance(r, dict) for r in rows):
+            return True
+        return not all(_nothing_in(v) for k, v in doc.items() if k != "schedules")
+    return True
+
+
+class _RepeatedKey(ValueError):
+    """An object that names one key twice."""
+
+
+def _no_repeated_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    keys = [k for k, _ in pairs]
+    if len(set(keys)) != len(keys):
+        raise _RepeatedKey("repeated key")
+    return dict(pairs)
+
+
+def _nothing_in(value: object) -> bool:
+    """``None``, or a list / object holding only such things — no string, no
+    number, nothing a row could be made of."""
+    if value is None:
+        return True
+    if isinstance(value, list):
+        return all(_nothing_in(v) for v in value)
+    if isinstance(value, dict):
+        return all(_nothing_in(v) for v in value.values())
+    return False
+
+
+class ScheduleAuthorship:
+    """`plan-schedule-run-as` G2: a row runs as the person who WROTE it.
+
+    Called by the doors that know who is writing — the agent's
+    `save_schedules` / `write_file` / `edit_file`, the file PUT route (the
+    editor, a page's `writeFile`, an upload, the panel's import), the schedule
+    "change time" route — with the file as it was before the write and as it
+    is after. Every other way a row can appear (an agent's `exec`, a copy, a
+    zip import, a seed, find-and-replace, a row older than this feature)
+    passes through none of them, so it runs as nobody (G3) — no backfill.
+
+    Only the rows THIS write added are credited (``after - before``). Saving
+    the whole file again — `save_schedules` always does — must not claim the
+    rows that were already there: an older row nobody wrote, or one whose
+    person chose "stop running as me", would otherwise land in the name of
+    whoever touched the file next.
+
+    A row is credited only when nobody holds it yet and the author may run
+    work in the item (``may_run`` — `execute`, the "Run as me" verb; G7): the
+    binding records the workflow as it is now, the consent rule "Run as me"
+    follows (`workflow_digest`) — or, while it will not parse, a consent
+    nothing matches (W4).
+
+    The doors that write a WORKFLOW and know who wrote it — `save_workflow` /
+    `write_file` / `edit_file` from a chat turn, the file PUT, template copy —
+    call ``workflow_written``: the schedules running it then run as whoever
+    wrote it (`plan-seam-token-refresh` W1)."""
+
+    def __init__(
+        self,
+        bindings: ScheduleBindings,
+        *,
+        read: Callable[[str, str], Awaitable[bytes]],
+        may_run: Callable[[str, str], bool],
+        max_rows: int | None = None,
+        on_moved: Callable[[ScheduleBinding, str, str], None] | None = None,
+    ) -> None:
+        self._bindings = bindings
+        self._read = read
+        self._may_run = may_run
+        #: ``(the binding as it was, who now holds it, the workflow they
+        #: rewrote)`` when a schedule moved to someone else — both are told
+        #: (W3). Blocking; None ⇒ nobody told.
+        self._on_moved = on_moved
+        # The sweep's own cap: a file over it fires nothing, and the sweep does
+        # not expire bindings while it stays over — crediting its rows would
+        # only grow the table (review round 1, defect 2).
+        self._max_rows = max_rows
+
+    def runs_as(self, key: str) -> str:
+        """Who the row ``key`` runs as now, or "" for nobody. Blocking."""
+        return self._bindings.binder(key)
+
+    async def credit(
+        self, item_id: str, path: str, *, before: str | None, after: str, author: str
+    ) -> list[str]:
+        """Bind the rows ``after`` adds to ``author``; return their keys. Never
+        raises: it runs AFTER the bytes landed, and a failure here must not
+        report a saved file as failed — the caller would retry a write that
+        succeeded, and the retry adds nothing to credit (review round 1). The
+        rows then run as nobody, which is what they did before this existed."""
+        try:
+            return await self._credit(item_id, path, before=before, after=after, author=author)
+        except Exception:  # noqa: BLE001 — logged; the save stands
+            logger.exception(
+                "schedule authorship: could not credit %s %s to %s", item_id, path, author
+            )
+            return []
+
+    async def _credit(
+        self, item_id: str, path: str, *, before: str | None, after: str, author: str
+    ) -> list[str]:
+        from .offered import unparsable_workflow
+
+        if not author:
+            return []
+        # A file that was there but could not be read had rows nobody can name:
+        # the fix that makes them readable did not ADD them (review round 1,
+        # defect 1 — every row of a once-broken file went to whoever fixed it).
+        if before is not None and _unreadable(before):
+            return []
+        if self._max_rows is not None and over_cap(after, self._max_rows) is not None:
+            return []
+        old = {key for key, _row in file_keys(item_id, path, before)} if before else set()
+        added = [(key, row.run) for key, row in file_keys(item_id, path, after) if key not in old]
+        if not added or not await asyncio.to_thread(self._may_run, author, item_id):
+            return []
+        credited: list[str] = []
+        for key, run in added:
+            if await asyncio.to_thread(self._bindings.get, key) is not None:
+                continue
+            # A workflow that will not parse yet is still the author's row
+            # (`plan-seam-token-refresh` W4): it records a consent nothing can
+            # match — NOT "", which a later delete would let the profile's
+            # workflow of that name satisfy (viewer-login round 6). It does not
+            # fire while broken; whoever fixes it through a door that knows them
+            # takes it (`workflow_written`), any other fix drops it.
+            if await unparsable_workflow(self._read, item_id, run) is not None:
+                digest = UNPARSABLE_DIGEST
+            else:
+                digest = await workflow_digest(self._read, item_id, run)
+            await asyncio.to_thread(
+                self._bindings.bind,
+                key,
+                item_id=item_id,
+                path=path,
+                user_id=author,
+                workflow_digest=digest,
+                reason="author",
+            )
+            credited.append(key)
+        return credited
+
+    async def workflow_written(
+        self, item_id: str, workflow_id: str, *, author: str, written: bytes
+    ) -> list[str]:
+        """`plan-seam-token-refresh` W1: ``author`` just wrote ``written`` as the
+        workflow ``workflow_id`` — every bound schedule running it whose consent
+        no longer matches it now runs as them, the one who wrote what it will
+        run. Returns the keys rebound (a same-person renewal included).
+
+        Only while the workflow still IS what they wrote (review round 1, defect
+        F2): two writers racing, the first one's hook must not hand the second
+        one's body to the first one's values. The digest compared is the one
+        the build defines (`workflow_digest`), of ``written`` and of the live
+        file alike; a mismatch moves nothing, and whatever wrote last decides —
+        its own hook, or the sweep dropping the binding.
+
+        Only rows already bound (W2): a row nobody runs as — never credited, or
+        its person chose "Stop running as me" — is not taken by whoever edits
+        the workflow. An author who may not run work here (``may_run``) takes
+        nothing; the sweep then drops the binding as before. A workflow that
+        will not parse after this write moves nothing either: it does not fire,
+        and its fix will come through here or drop the binding.
+
+        The same person: only the consent is renewed, silently, and their reason
+        kept. Someone else: the reason becomes ``"workflow"`` (they changed what
+        it runs — not "wrote the schedule", review round 1 veracity 1), and
+        ``on_moved`` tells both of them.
+
+        Never raises, for the reason ``credit`` gives."""
+        try:
+            return await self._workflow_written(
+                item_id, workflow_id, author=author, written=written
+            )
+        except Exception:  # noqa: BLE001 — logged; the save stands
+            logger.exception(
+                "schedule authorship: could not move %s %s to %s", item_id, workflow_id, author
+            )
+            return []
+
+    async def _workflow_written(
+        self, item_id: str, workflow_id: str, *, author: str, written: bytes
+    ) -> list[str]:
+        from .offered import unparsable_workflow
+
+        if not author:
+            return []
+        bound = await asyncio.to_thread(self._bindings.for_item, item_id)
+        if not bound:
+            return []
+        path = workspace_workflow_path(workflow_id)
+
+        async def as_written(item: str, at: str) -> bytes:
+            return written if at == path else await self._read(item, at)
+
+        if await unparsable_workflow(as_written, item_id, workflow_id) is not None:
+            return []
+        digest = await workflow_digest(as_written, item_id, workflow_id)
+        if await workflow_digest(self._read, item_id, workflow_id) != digest:
+            return []  # rewritten again since: not what this author wrote
+        stale = [b for b in bound if b.workflow_digest != digest]
+        if not stale or not await asyncio.to_thread(self._may_run, author, item_id):
+            return []
+        runs: dict[str, dict[str, str]] = {}
+        moved: list[str] = []
+        for b in stale:
+            if b.path not in runs:
+                try:
+                    raw = (await self._read(item_id, b.path)).decode("utf-8", "replace")
+                except Exception:  # noqa: BLE001 — a file not read moves nothing
+                    logger.warning("schedule authorship: could not read %s", b.path, exc_info=True)
+                    raw = ""
+                runs[b.path] = {key: row.run for key, row in file_keys(item_id, b.path, raw)}
+            if runs[b.path].get(b.trigger_id) != workflow_id:
+                continue
+            # Read again right before binding (review round 2, defect claim 3):
+            # the snapshot above is several reads old, and a "Stop running as
+            # me" or an administrator's choice landing meanwhile is newer than
+            # this hook — leave it, rather than bring a row back or replace the
+            # new holder (and tell the old one something false). Not atomic: the
+            # window left is one read.
+            now = await asyncio.to_thread(self._bindings.get, b.trigger_id)
+            if now != b:  # gone (None), or re-bound in any way since
+                continue
+            same = b.user_id == author
+            await asyncio.to_thread(
+                self._bindings.bind,
+                b.trigger_id,
+                item_id=item_id,
+                path=b.path,
+                user_id=author,
+                workflow_digest=digest,
+                reason=b.reason if same else "workflow",
+                assigned_by=b.assigned_by if same else "",
+            )
+            moved.append(b.trigger_id)
+            if not same and self._on_moved is not None:
+                try:
+                    await asyncio.to_thread(self._on_moved, b, author, workflow_id)
+                except Exception:  # noqa: BLE001 — a failed notice is not a failed move
+                    logger.exception("schedule authorship: could not tell %s", b.user_id)
+        return moved

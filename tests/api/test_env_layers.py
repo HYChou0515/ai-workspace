@@ -49,9 +49,10 @@ def test_private_only_ignores_a_shared_value_even_when_the_person_has_none():
     assert resolve_env(shared=S, private={}, policy={"K": "private_only"}) == {}
 
 
-def test_no_policy_is_the_merge_every_turn_did_before():
+def test_shared_first_is_the_merge_every_turn_did_before():
     """Parity with the old line `{**private, **shared}` as the oracle, over every
-    way three names can sit in two layers — not a hand-picked case."""
+    way three names can sit in two layers — not a hand-picked case. Since
+    docs/plan-wui-user.md D5 that is `shared_first` chosen, not the default."""
     names = ("A", "B", "C")
     for placement in itertools.product(("none", "shared", "private", "both"), repeat=3):
         where = dict(zip(names, placement, strict=True))
@@ -59,14 +60,17 @@ def test_no_policy_is_the_merge_every_turn_did_before():
         private = {n: f"p{n}" for n, w in where.items() if w in ("private", "both")}
         # ITEMS, not the dict: `_tool_env` joins the names into
         # `SANDBOX_USER_ENV_KEYS`, so the order is part of what a tool sees.
-        got = resolve_env(shared=shared, private=private, policy={})
+        got = resolve_env(
+            shared=shared, private=private, policy=dict.fromkeys(names, "shared_first")
+        )
         assert list(got.items()) == list({**private, **shared}.items())
 
 
 def test_an_unknown_policy_value_reads_as_the_default():
     """The item is a plain PATCH-able record; a stray string must not become a
-    third behaviour nobody wrote. It resolves like no policy at all."""
-    assert resolve_env(shared=S, private=P, policy={"K": "bogus"}) == {"K": "shared"}
+    third behaviour nobody wrote. It resolves like no policy at all — the
+    default, Private first (docs/plan-wui-user.md D5)."""
+    assert resolve_env(shared=S, private=P, policy={"K": "bogus"}) == {"K": "private"}
 
 
 # ─── the turn: an item's policy reaches the tools a turn dispatches ─────────
@@ -76,7 +80,8 @@ async def test_a_chat_turn_hands_its_tools_the_layer_the_items_policy_names():
     from .test_request_env import _app_with_item, _chat_turn
 
     builder, item_id = _app_with_item(
-        {"TOKEN": "shared", "HOST": "db"}, env_policy={"TOKEN": "private_first"}
+        {"TOKEN": "shared", "HOST": "db"},
+        env_policy={"TOKEN": "private_first", "HOST": "shared_first"},
     )
 
     ctx = await _chat_turn(
@@ -252,3 +257,28 @@ def test_what_counts_as_blank_is_the_table_both_sides_read():
     )
     for row in table["blanks"]:
         assert is_blank(row["value"]) is row["blank"], repr(row["value"])
+
+
+# ─── the default is private first (docs/plan-wui-user.md D5) ────────────────
+
+
+def test_a_name_with_no_policy_reads_private_first():
+    """D5: the person's own value wins over the item's shared one — for every item,
+    including those stored before this default (no entry is the default)."""
+    got = resolve_env(shared={"K": "s"}, private={"K": "p"}, policy={})
+    assert got["K"] == "p"
+    # and the shared value still fills in for a person who set nothing
+    assert resolve_env(shared={"K": "s"}, private={}, policy={})["K"] == "s"
+
+
+def test_shared_chosen_explicitly_keeps_the_old_order():
+    """D5: choosing Shared is now stored as `shared_first`, and keeps today's order."""
+    got = resolve_env(shared={"K": "s"}, private={"K": "p"}, policy={"K": "shared_first"})
+    assert got["K"] == "s"
+
+
+def test_a_schedule_prefers_the_service_account_over_the_items_value():
+    """D11: private_first keeps its order (private → personal → service → shared), so
+    a run nobody presses takes the deployment's value for a name both hold."""
+    got = resolve_env(shared={"K": "item"}, private={}, policy={}, service={"K": "svc"})
+    assert got["K"] == "svc"

@@ -22,20 +22,24 @@ const erp: EnvProvider = {
 function open({
   got = { ERP_TOKEN: "tok" } as Record<string, string>,
   stored = {} as Record<string, string>,
+  saveTo = "private" as "private" | "personal",
 } = {}) {
   const onClose = vi.fn();
   const put = vi.fn(async () => {});
+  const personalPut = vi.fn(async (values: Record<string, string>) => ({ values, updated: {} }));
   renderWithQuery(
     <EnvLoginModal
       slug="rca"
       itemId="i1"
       provider={erp}
       onClose={onClose}
+      saveTo={saveTo}
       client={{ resolveEnvProvider: vi.fn(async () => got) }}
       privateClient={{ get: vi.fn(async () => ({ values: stored, auto: {} })), put }}
+      personalClient={{ get: vi.fn(async () => ({ values: stored, updated: {} })), put: personalPut }}
     />,
   );
-  return Object.assign(onClose, { put });
+  return Object.assign(onClose, { put, personalPut });
 }
 
 async function signIn() {
@@ -116,5 +120,36 @@ describe("EnvLoginModal", () => {
     await signIn();
 
     expect(screen.getByText(/Private/)).toBeInTheDocument();
+  });
+});
+
+// plan-env-token-refresh D6: the sign-in notice reuses this page to save into
+// my environment variables — the same exits, so the same two tests (#779).
+describe("EnvLoginModal saving to my environment variables", () => {
+  it("asks before dropping a token it signed in for but has not saved", async () => {
+    const onClose = open({ saveTo: "personal" });
+    await signIn();
+
+    fireEvent.keyDown(document, { key: "Escape" });
+
+    expect(onClose).not.toHaveBeenCalled();
+    expect(await screen.findByTestId("dialog-action-keep")).toBeInTheDocument();
+  });
+
+  it("closes on Escape without asking when nothing was typed", () => {
+    const onClose = open({ saveTo: "personal" });
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(onClose).toHaveBeenCalled();
+    expect(screen.queryByTestId("dialog-action-keep")).toBeNull();
+  });
+
+  it("saves there, not into this item", async () => {
+    const onClose = open({ saveTo: "personal", stored: { MINE: "m" } });
+    await signIn();
+
+    fireEvent.click(screen.getByTestId("env-login-save"));
+
+    await waitFor(() => expect(onClose.personalPut).toHaveBeenCalledWith({ MINE: "m", ERP_TOKEN: "tok" }));
+    expect(onClose.put).not.toHaveBeenCalled();
   });
 });

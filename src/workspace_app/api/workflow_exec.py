@@ -35,8 +35,9 @@ from ..workflow.engine import StepFailed, transcript_path
 from ..workflow.handle import WorkflowHandle, aside_lane
 from ..workflow.run import RunStatus, WorkflowRun, is_execution
 from ..workflow.run_identity import RunIdentities
-from ..workflow.steps import CURRENT_STEP, StepRef
+from ..workflow.steps import CURRENT_STEP, REPAIR_TURN, StepRef
 from .env_layers import PersonEnv
+from .env_refresh import EnvRefresher
 from .events import TurnEnded
 from .notifications import notification_sent, notify
 from .private_env import unattended_layer
@@ -44,6 +45,7 @@ from .rca_messages import to_rca_message
 from .subagent_run import _child_context, report_of
 from .timeutil import now_ms
 from .turn_gate import admit_turn
+from .turns import REPAIR_REQUEST_ROLE
 from .workflow_transcript import render_transcript
 
 if TYPE_CHECKING:
@@ -131,8 +133,12 @@ class WorkflowExecutor:
         admission: AdmissionGate | None = None,
         request_env: IRequestEnv | None = None,
         private_env: PrivateEnvStore | None = None,
+        env_refresher: EnvRefresher | None = None,
     ) -> None:
         self._spec = spec
+        # plan-env-token-refresh: a near-expiry token is refreshed before a
+        # node's tools get it. None ⇒ never.
+        self._env_refresher = env_refresher
         # `plan-wui-viewer-login`: each person's private env values per item; a
         # run started by a person overlays theirs (`workflow.run_identity`).
         self._private_env = private_env
@@ -316,6 +322,9 @@ class WorkflowExecutor:
             # they fire on_event workflows AND stay inside the recursion depth cap.
             entity_write_origin=entity_write_origin,
             caller_env=await self._headless_env(captured_user, item_id, run_id),
+            # The person whose values this run carries — the one a schedule its
+            # agent saves will run as (plan-schedule-run-as G2).
+            acting_for=(await asyncio.to_thread(self._run_identity, run_id))[0] if run_id else "",
         )
         # plan-tool-usage-stats §3.4: a schedule's run or a person's, and who
         # its tool calls count against — the one who bound it, else whoever the
@@ -349,6 +358,7 @@ class WorkflowExecutor:
         # the step runs (`CURRENT_STEP`, set by `agent_step` / `agent_write_step`).
         ref = step or CURRENT_STEP.get()
         step_id = ref.id if ref else None
+        repairing = REPAIR_TURN.get()
 
         def persist(produced: list[TurnMessage]) -> None:
             if not record:  # an aside (the steerer): not part of the run's record
@@ -366,7 +376,9 @@ class WorkflowExecutor:
                 if agent is not None
                 else [
                     Message(
-                        role="user",
+                        # a repair turn's prompt is the engine's request to re-emit
+                        # (plan-workflow-output-repair §3.5), never replayed, folded
+                        role=REPAIR_REQUEST_ROLE if repairing else "user",
                         content=prompt,
                         author=captured_user,
                         driven_by=WORKFLOW_DRIVER,
@@ -498,7 +510,7 @@ class WorkflowExecutor:
         # values over the seam's answer — not the captured user, who for a
         # page's run is the owner it is billed to.
         env_user, env_verb = await asyncio.to_thread(self._run_identity, run_id)
-        return await unattended_layer(
+        env = await unattended_layer(
             self._private_env,
             headless=headless,
             acting_for=env_user,
@@ -506,6 +518,12 @@ class WorkflowExecutor:
             # The right that admitted them to start it — which they must still hold.
             verb=cast("Verb", env_verb),
         )
+        if self._env_refresher is None:
+            return env
+        outcome = await self._env_refresher.apply(
+            env, user_id=env_user, item_id=item_id, in_chat=False
+        )
+        return outcome.person
 
     async def run_sandbox(
         self,

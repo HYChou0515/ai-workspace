@@ -2,6 +2,7 @@
 (#100, manual §13–§17). Driven directly with fake collaborators (no API layer)."""
 
 import asyncio
+from typing import Any
 
 import pytest
 from specstar import SpecStar
@@ -1114,6 +1115,54 @@ async def test_steer_proposes_then_confirm_resumes_incrementally(spec_instance: 
     assert calls == ["expensive", "ingest", "ingest"]  # expensive skipped; ingest re-ran
 
 
+async def test_a_steer_mid_step_re_enters_the_phase_it_stopped(spec_instance: SpecStar):
+    """plan-one-running-phase review R1: a mid-run steer Stops the run, which
+    settles the phase it was in `stopped`. The approved re-run restarts that very
+    step, in that very phase — it must read running again while it works, and
+    passed once done, not `stopped` for good."""
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    attempts: list[int] = []
+
+    async def ingest(_fb):
+        attempts.append(1)
+        if len(attempts) == 1:
+            entered.set()
+            await asyncio.Event().wait()  # the steer's Stop lands here
+        entered.set()
+        await release.wait()
+        return {"ingest": True}
+
+    async def run(wf, inputs):
+        await run_step(wf, name="think", phase="think", args={}, execute=_rec([], "think"))
+        await run_step(wf, name="ingest", phase="review", args={}, execute=ingest)
+        return {}
+
+    orch, _ = _orch(spec_instance, run, wire=_steer_wire(_STEER_PLAN))
+    rm = spec_instance.get_resource_manager(WorkflowRun)
+    run_id = await orch.start(slug="rca", item_id="iSR", profile="echo", captured_user="u")
+    await entered.wait()
+    await orch.steer(
+        slug="rca", item_id="iSR", profile="echo", run_id=run_id, instruction="redirect"
+    )
+    assert (await _ran(orch, run_id, spec_instance)).status is RunStatus.AWAITING_HUMAN
+    entered.clear()
+    await orch.confirm_steer(
+        slug="rca", item_id="iSR", profile="echo", run_id=run_id, approve=True, decided_by="a"
+    )
+    await asyncio.wait_for(entered.wait(), 5)
+    resumed = {p.phase: p.status for p in rm.get(run_id).data.phases}
+    release.set()
+    done = await _ran(orch, run_id, spec_instance)
+    for _ in range(50):
+        if done.status is RunStatus.DONE:
+            break
+        done = await _ran(orch, run_id, spec_instance)
+    assert resumed["review"] == "running"
+    assert done.status is RunStatus.DONE
+    assert {p.phase: p.status for p in done.phases}["review"] == "passed"
+
+
 async def test_steer_auto_stops_a_running_run_first(spec_instance: SpecStar):
     """A mid-run steer Stops the live run before proposing — otherwise the run task
     still owns the item and the steerer could never suspend it."""
@@ -1586,6 +1635,50 @@ async def test_an_approved_steer_drops_whose_values_the_run_uses(spec_instance: 
     )
 
     assert RunIdentities(spec_instance).env_user(run_id) == ""
+
+
+async def test_a_repair_shows_on_the_board_as_its_own_status(spec_instance: SpecStar):
+    """plan-workflow-output-repair D7: a repair is told apart from a retry — status
+    `repairing`, how many repairs so far, and why — while it is in flight."""
+    statuses: list[tuple[str, int, str]] = []
+    holder: dict[str, Any] = {}
+    seen = {"n": 0}
+
+    async def gate(_wf, _result):
+        seen["n"] += 1
+        return CheckResult(seen["n"] >= 3, "reply is not JSON", format=True)
+
+    async def repair(_verdict):
+        got = spec_instance.get_resource_manager(WorkflowRun).get(holder["run_id"]).data
+        row = next(s for s in got.steps if s.name == "think")
+        statuses.append((row.status, row.repairs, row.reason))
+        return {}
+
+    async def run(wf, inputs):
+        await run_step(
+            wf,
+            name="think",
+            phase="think",
+            args={},
+            execute=_ok,
+            check=gate,
+            repair=repair,
+            retries=2,
+        )
+        return {}
+
+    orch, _ = _orch(spec_instance, run)
+    holder["run_id"] = await orch.start(
+        slug="rca", item_id="rca/i1", profile="echo", captured_user="alice"
+    )
+    await asyncio.sleep(0)
+    assert statuses == [
+        ("repairing", 1, "reply is not JSON"),
+        ("repairing", 2, "reply is not JSON"),
+    ]
+    got = spec_instance.get_resource_manager(WorkflowRun).get(holder["run_id"]).data
+    row = next(s for s in got.steps if s.name == "think")
+    assert row.status == "passed" and row.repairs == 2 and row.reason == ""
 
 
 # ── Continue from here / Re-run this step (plan-workflow-out-of-chat D9) ──

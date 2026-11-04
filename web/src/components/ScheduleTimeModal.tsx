@@ -184,6 +184,7 @@ export function ScheduleTimeModal({
   raw,
   nextMs,
   rowRef,
+  runsAsEditor = false,
   onSave,
   onSaved,
   onClose,
@@ -193,6 +194,10 @@ export function ScheduleTimeModal({
   /** When it runs next — which daylight saving its time is moved with. */
   nextMs?: number | null;
   rowRef: RowRef;
+  /** Whether the edited row will run as the person editing it — they may run
+   * work in the item (`docs/plan-schedule-run-as.md` G2/G7). Without it the
+   * new row runs with the shared values only, and the note says so. */
+  runsAsEditor?: boolean;
   /** Sends the new time; rejects with the server's reason. */
   onSave: (ref: RowRef, time: ScheduleTime | { cron: string; tz: string }) => Promise<void>;
   onSaved: () => void;
@@ -435,7 +440,7 @@ export function ScheduleTimeModal({
           : t("schedules.edit.zone", { zone: zoneWords })}
       </p>
       <p style={{ margin: 0, fontSize: pxToRem(12), color: "var(--text-paper-d)", lineHeight: 1.5 }}>
-        {t("schedules.edit.note")}
+        {t(runsAsEditor ? "schedules.edit.note" : "schedules.edit.noteNobody")}
       </p>
       {error ? (
         <p role="alert" data-testid="schedule-time-error" style={{ margin: 0, color: "var(--err)", fontSize: pxToRem(12) }}>

@@ -184,6 +184,24 @@ describe("Shared: tools as sections", () => {
     expect(onSave).toHaveBeenCalledWith({ DB_HOST: "db" }, { ERP_TOKEN: "private_only" });
   });
 
+  it("starts an untouched variable at Private first, the default (docs/plan-wui-user.md D5)", async () => {
+    open({ envVars: { DB_HOST: "db" } });
+    everyone();
+    await screen.findByTestId("env-section-head-erp");
+    expect(screen.getByTestId("env-policy-ERP_TOKEN-private_first")).toBeChecked();
+  });
+
+  it("stores every choice, Shared included, so a choice outlives the default", async () => {
+    // D5: choosing Shared is stored — absence now reads Private first.
+    const { onSave } = open({ envVars: { DB_HOST: "db" } });
+    everyone();
+    await screen.findByTestId("env-section-head-erp");
+
+    fireEvent.click(screen.getByTestId("env-policy-ERP_TOKEN-shared_first"));
+    fireEvent.click(screen.getByTestId("env-save"));
+    expect(onSave).toHaveBeenLastCalledWith({ DB_HOST: "db" }, { ERP_TOKEN: "shared_first" });
+  });
+
   it("links a variable two tools share: one value, one policy", async () => {
     open();
     everyone();
@@ -253,7 +271,8 @@ describe("Private", () => {
   });
 
   it("does not offer a box for a variable pinned to the shared value", async () => {
-    open({ envVars: { DB_HOST: "db" } }); // DB_HOST: no policy = shared first, and set
+    // DB_HOST: Shared chosen, and set (no policy reads Private first, D5)
+    open({ envVars: { DB_HOST: "db" }, envPolicy: { DB_HOST: "shared_first" } });
     await toolsLoaded();
     fireEvent.click(screen.getByTestId("env-section-head-maps"));
 

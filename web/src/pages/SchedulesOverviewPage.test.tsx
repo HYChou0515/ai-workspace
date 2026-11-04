@@ -64,13 +64,24 @@ const row = (over: Partial<OverviewRow>): OverviewRow => ({
   page_path: "",
   page_title: "",
   run_title: "",
+  runs_as: "",
+  runs_as_reason: "",
+  runs_as_by: "",
+  runs_as_mine: false,
   ...over,
 });
 
 function client(data: Partial<ScheduleOverview> = {}, over: Partial<SchedulesApi> = {}): SchedulesApi {
   return {
-    list: vi.fn(),
-    overview: vi.fn(async () => ({ enabled: true, rows: [row({})], files: [], ...data })),
+    itemOverview: vi.fn(),
+    overview: vi.fn(async () => ({
+      enabled: true,
+      rows: [row({})],
+      files: [],
+      can_assign: false,
+      unindexed: [],
+      ...data,
+    })),
     editTime: vi.fn(async () => {}),
     remove: vi.fn(async () => {}),
     runNow: vi.fn(async () => "workflow-run:run-1"),
@@ -425,8 +436,9 @@ describe("SchedulesOverviewPage", () => {
   it("refreshes every few seconds while a run is going, and every minute otherwise", () => {
     const going = row({ last_run: { run_id: "r", status: "running", started: 1, ended: null, by_hand: false } });
     const done = row({ last_run: { run_id: "r", status: "done", started: 1, ended: 2, by_hand: false } });
-    expect(refreshEvery({ enabled: true, rows: [done, going], files: [] })).toBe(5000);
-    expect(refreshEvery({ enabled: true, rows: [done, row({})], files: [] })).toBe(60000);
+    const base = { enabled: true, files: [], can_assign: false, unindexed: [] };
+    expect(refreshEvery({ ...base, rows: [done, going] })).toBe(5000);
+    expect(refreshEvery({ ...base, rows: [done, row({})] })).toBe(60000);
     expect(refreshEvery(undefined)).toBe(60000);
   });
 
@@ -549,5 +561,28 @@ describe("placeOf", () => {
     expect(placeOf(row({}), word)).toBe("Line 3");
     expect(placeOf(row({ path: "/r/s/schedules.json", page_title: "Board" }), word)).toBe("Line 3 · 頁面「Board」");
     expect(placeOf(row({ path: "/r/s/schedules.json" }), word)).toBe("Line 3 · 頁面「/r/s」");
+  });
+});
+
+
+describe("who each schedule runs as (plan-schedule-run-as G8/G9)", () => {
+  it("has a column saying who it runs as and why", async () => {
+    render(<SchedulesOverviewPage client={client({ rows: [row({ runs_as: "bob", runs_as_reason: "author" })] })} />, { wrapper: Wrap });
+    const header = await screen.findByRole("columnheader", { name: word("scheduleOverview.col.runsAs") });
+    expect(header).toBeInTheDocument();
+    expect(await screen.findByTestId("runs-as")).toHaveTextContent(
+      word("sched.runsAsWhy", { main: word("sched.runsAs", { who: "bob" }), why: word("sched.why.author") }),
+    );
+  });
+
+  it("offers an administrator to choose someone else", async () => {
+    render(<SchedulesOverviewPage client={client({ can_assign: true })} />, { wrapper: Wrap });
+    expect(await screen.findByRole("button", { name: word("sched.assign") })).toBeInTheDocument();
+  });
+
+  it("does not tell someone who may edit but not run that a changed time will run as them", async () => {
+    render(<SchedulesOverviewPage client={client({ rows: [row({ can_run: false })] })} />, { wrapper: Wrap });
+    fireEvent.click(await screen.findByRole("button", { name: word("schedules.editTime") }));
+    expect(await screen.findByText(word("schedules.edit.noteNobody"))).toBeInTheDocument();
   });
 });

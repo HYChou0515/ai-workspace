@@ -281,3 +281,20 @@ describe("ScheduleTimeModal — 簡單 / cron (docs/plan-schedule-cron.md decisi
     expect(cronToSimple("*/7 * * * *")).toBeNull();
   });
 });
+
+describe("whose the changed schedule becomes (plan-schedule-run-as G2/G7)", () => {
+  it("tells someone who may run work here that it will run as them", () => {
+    renderWithQuery(
+      <ViewerClockPin viewer={TPE} now={NOW}>
+        <ScheduleTimeModal raw={FRIDAY_1730_TPE} rowRef={REF} runsAsEditor onSave={vi.fn()} onSaved={vi.fn()} onClose={vi.fn()} />
+      </ViewerClockPin>,
+    );
+    expect(screen.getByText(word("schedules.edit.note"))).toBeInTheDocument();
+  });
+
+  it("does not promise that to someone who may not (review round 1)", () => {
+    open();
+    expect(screen.getByText(word("schedules.edit.noteNobody"))).toBeInTheDocument();
+    expect(screen.queryByText(word("schedules.edit.note"))).toBeNull();
+  });
+});

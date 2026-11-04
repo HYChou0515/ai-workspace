@@ -49,7 +49,8 @@ import { subscribeFileChanged } from "../../lib/fileChangedBus";
 import { pxToRem } from "../../lib/pxToRem";
 import { autoBuildScope, useWuiAutoBuild } from "../../lib/wuiAutoBuild";
 import { viewParam, viewParamString } from "../entity/shared";
-import { itemCallAgent, itemCallTool, itemJobs } from "./api";
+import { itemCallAgent, itemCallTool, itemJobs, NEEDS_USE_WUI } from "./api";
+import { WuiUserNeeded } from "./WuiUserNeeded";
 import { cleanBuildOutput, hasBuildScript, itemBuild } from "./build";
 import { itemRun } from "./run";
 import type { ViewSpec } from "../entity/types";
@@ -594,6 +595,13 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
   const openFile = useOpenFile();
   const { id: me, ready: meReady } = useCurrentUserState();
   const [reports, setReports] = useState<WuiReport[]>([]);
+  // D7: a page route answered `needs_use_wui` — the banner above the frame.
+  // Every refusal passes through `noteRefusal` (the bridge's capability branches
+  // via `onRefused`, writes and runs via the dispatch's own catch).
+  const [needsWuiUser, setNeedsWuiUser] = useState(false);
+  const noteRefusal = (err: unknown) => {
+    if (err instanceof HttpError && err.code === NEEDS_USE_WUI) setNeedsWuiUser(true);
+  };
   const nextReportId = useRef(0);
   const selfWrites = useRef(createSelfWrites());
 
@@ -780,6 +788,8 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
       void dispatchWuiRequest(request, {
         fs,
         folder,
+        page: path,
+        onRefused: noteRefusal,
         openFile,
         me: meReady ? me : null,
         declaredTools,
@@ -801,9 +811,10 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
         // `await` never settles: a save button that does nothing, forever, with
         // no message. That is the one outcome this bridge exists to prevent, so
         // every path out of here posts a sentence.
-        .catch((err: unknown) =>
-          refuse(request.id, err instanceof Error ? err.message : `${request.verb} failed.`),
-        )
+        .catch((err: unknown) => {
+          noteRefusal(err);
+          return refuse(request.id, err instanceof Error ? err.message : `${request.verb} failed.`);
+        })
         .then((res) => {
           // `"*"` because an opaque origin cannot be named as a target. What
           // bounds where this lands is not this handle — a WindowProxy keeps
@@ -821,6 +832,9 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
     author,
     fs,
     folder,
+    // The page names itself on every write (D12): two view files share a
+    // folder — and this pane — so switching between them must re-bind.
+    path,
     openFile,
     me,
     meReady,
@@ -997,6 +1011,7 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
       // folder the server refuses — arrives as a status, not as output. Unsaid,
       // the button looks like it did nothing at all.
       note(err instanceof Error ? err.message : "The build could not be run.");
+      noteRefusal(err); // the WUI User banner, for a refusal that names it (D7)
       // A 403 is permanent for this person: they may read the item and not run
       // things in it. Left on, rebuilding on open would greet them with that
       // same refusal every single time they open the page — so it turns itself
@@ -1608,6 +1623,7 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
           ))}
         </div>
       )}
+      {needsWuiUser && <WuiUserNeeded slug={slug} itemId={fs.scopeId} />}
       {built.isPending ? (
         <div style={{ padding: 12, color: "var(--text-paper-d)" }}>{t("wui.pane.opening")}</div>
       ) : firstBuild ? (

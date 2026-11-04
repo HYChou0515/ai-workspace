@@ -143,7 +143,14 @@ describe("my environment variables (`plan-personal-env`)", () => {
   });
 
   it("does not count it under Shared where the shared value wins", () => {
-    const s = identityState({ ...base, tools: [tool([req("A")])], shared: { A: "s" }, personal: { A: "v" } });
+    // Shared chosen explicitly — no policy reads Private first (docs/plan-wui-user.md D5).
+    const s = identityState({
+      ...base,
+      tools: [tool([req("A")])],
+      shared: { A: "s" },
+      personal: { A: "v" },
+      policy: { A: "shared_first" },
+    });
     expect(s.missing).toEqual([]);
     expect(s.holdsOwn).toBe(false);
   });
@@ -164,5 +171,12 @@ describe("keyLabel (review round 1, V7)", () => {
       first: ["A", "B"],
     });
     expect(keyLabelParts([login("A"), set("B")])).toEqual({ kind: "list", logins: ["A"], sets: ["B"] });
+  });
+});
+
+describe("the default (docs/plan-wui-user.md D5)", () => {
+  it("lets my value win where no policy was chosen", () => {
+    const s = identityState({ ...base, tools: [tool([req("A")])], shared: { A: "s" }, personal: { A: "v" } });
+    expect(s.holdsOwn).toBe(true);
   });
 });

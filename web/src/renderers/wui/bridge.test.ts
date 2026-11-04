@@ -33,6 +33,7 @@ function ctx(over: Partial<BridgeContext> = {}, files: Record<string, string> = 
   return {
     fs,
     folder: "/sales",
+    page: "/sales/page.ai.yaml",
     openFile: null,
     me: "alice",
     declaredTools: [],
@@ -72,7 +73,24 @@ describe("dispatchWuiRequest", () => {
     const res = await dispatchWuiRequest(req("writeFile", { path: "data.json", text: "[1]" }), c);
 
     expect(res).toMatchObject({ ok: true });
-    expect(c.fs.writeFile).toHaveBeenCalledWith("/sales/data.json", "[1]");
+    expect(c.fs.writeFile).toHaveBeenCalledWith("/sales/data.json", "[1]", { page: "/sales/page.ai.yaml" });
+  });
+
+  it("names its page on every write and delete, so the server can admit a WUI User", async () => {
+    // docs/plan-wui-user.md D12: the header is what lets a WUI User's page save
+    // while the same person's save from the file tree is refused.
+    const c = ctx();
+    await dispatchWuiRequest(req("deleteFile", { path: "old.json" }), c);
+    expect(c.fs.deleteFile).toHaveBeenCalledWith("/sales/old.json", { page: "/sales/page.ai.yaml" });
+  });
+
+  it("leaves the view-file rule to the server, so an editor's page may still rewrite it", async () => {
+    // docs/plan-wui-user.md D12: refused only for a write admitted through
+    // use_wui — the browser cannot tell who is asking, so it does not decide.
+    const c = ctx();
+    const res = await dispatchWuiRequest(req("writeFile", { path: "page.ai.yaml", text: "view: wui" }), c);
+    expect(res).toMatchObject({ ok: true });
+    expect(c.fs.writeFile).toHaveBeenCalledWith("/sales/page.ai.yaml", "view: wui", { page: "/sales/page.ai.yaml" });
   });
 
   it("refuses to write outside its folder, and says why in a sentence", async () => {
@@ -112,7 +130,7 @@ describe("dispatchWuiRequest", () => {
     const res = await dispatchWuiRequest(req("deleteFile", { path: "old.json" }), c);
 
     expect(res).toMatchObject({ ok: true });
-    expect(c.fs.deleteFile).toHaveBeenCalledWith("/sales/old.json");
+    expect(c.fs.deleteFile).toHaveBeenCalledWith("/sales/old.json", { page: "/sales/page.ai.yaml" });
   });
 
   it("refuses a write when the service itself cannot write", async () => {
@@ -449,5 +467,32 @@ describe("openLogin (plan-wui-viewer-login)", () => {
     const r = await dispatchWuiRequest(req("openLogin"), ctx());
 
     expect(r).toMatchObject({ ok: false });
+  });
+});
+
+describe("a refused call is handed to the pane before the page hears it (docs/plan-wui-user.md D7)", () => {
+  it("for every capability the page can call, not only writes", async () => {
+    const err = new Error("refused");
+    const seen: unknown[] = [];
+    const fail = vi.fn(async () => {
+      throw err;
+    });
+    const c = ctx({
+      declaredTools: ["lot"],
+      declaredAgents: ["digger"],
+      callTool: fail,
+      callAgent: fail,
+      jobs: { start: fail, status: fail, stop: fail },
+      onRefused: (e) => seen.push(e),
+    });
+    const calls = [
+      req("callTool", { name: "lot" }),
+      req("callAgent", { name: "digger", input: "x" }),
+      req("startAgent", { name: "digger", input: "x" }),
+      req("jobStatus", { job: "j1" }),
+      req("stopJob", { job: "j1" }),
+    ];
+    for (const r of calls) await dispatchWuiRequest(r, c);
+    expect(seen).toEqual([err, err, err, err, err]);
   });
 });

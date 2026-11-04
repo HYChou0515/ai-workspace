@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 
 from ..resources import Message
+from .turns import REPAIR_REQUEST_ROLE
 
 #: A tool's output is the bulk of a transcript; past this it is cut, and says so.
 TOOL_OUTPUT_MAX_CHARS = 4000
@@ -33,6 +34,9 @@ def render_transcript(step_id: str, messages: list[Message]) -> str:
         if m.role == "user":
             attempt += 1
             out += [f"## Attempt {attempt}", "", "### Prompt", "", m.content, ""]
+        elif m.role == REPAIR_REQUEST_ROLE:  # plan-workflow-output-repair §3.5
+            attempt += 1
+            out += [f"## Attempt {attempt} (repair)", "", "### Repair request", "", m.content, ""]
         elif m.role == "assistant":
             if m.reasoning:
                 out += ["### Reasoning", "", m.reasoning, ""]

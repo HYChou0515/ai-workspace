@@ -29,6 +29,7 @@ if TYPE_CHECKING:
     from ..tooling.external import MountedTool
     from ..tooling.registry import PackageInfo
     from ..users.protocol import User, UserDirectory
+    from ..workflow.schedule_bindings import ScheduleAuthorship
     from ..workflow.user_schedules import SchedulePolicy
     from .tool_usage import ToolUsageRecorder
 
@@ -40,6 +41,29 @@ ReviewSkill = Callable[
     ["AgentToolContext", str, Mapping[str, bytes], OutputSink | None],
     Awaitable["SkillHubReview"],
 ]
+
+
+@dataclass(frozen=True)
+class Interjection:
+    """A person's message folded into a turn other than its own
+    (docs/plan-interjection.md): queued behind a turn and answered together with
+    the message after it (Q10), or absorbed into the running turn at its next
+    model call (Q1). It is persisted already; this is what the model is handed.
+
+    `content` is what that message's own turn would have been handed (its skill
+    and marking blocks included), `speaker` the attribution label a shared
+    thread shows the model (`""` for none), `image_urls` the pixels it carried
+    for a vision model. `author` and `at` (its `created_at`) say which persisted
+    message it is."""
+
+    content: str
+    author: str
+    at: int
+    speaker: str = ""
+    image_urls: list[str] = field(default_factory=list)
+    # Skills applied with this message (#380): their bodies are already in
+    # `content`; the turn reading it lets `read_skill` open them as well (Q7).
+    applied_skills: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -164,7 +188,8 @@ class AgentToolContext:
     # `IRequestEnv` composed from THAT request (#714), with the person's own
     # PRIVATE values (`plan-wui-viewer-login` — kept per person per item,
     # readable by them alone). Which wins a name is the item's per-name policy
-    # (`api.env_layers.resolve_env`); with none set, the item's value wins.
+    # (`api.env_layers.resolve_env`); with none set, the person's own value wins
+    # (Private first — docs/plan-wui-user.md D5).
     #
     # Nothing is written anywhere: the names are set on the `exec` that
     # dispatches a tool and nowhere else (`tooling.registry._exec_tool`), so the
@@ -254,6 +279,24 @@ class AgentToolContext:
     # unchanged. The image also persists as a workspace file, so a later turn can
     # still `read_image` it — the persisted history stays text.
     turn_image_urls: list[str] = field(default_factory=list)
+    # docs/plan-interjection.md Q10: messages queued behind the previous turn that
+    # no turn saw, answered by THIS one. The runner places them, in order, between
+    # the history and this turn's own message. Set by the turn engine.
+    leading_interjections: list[Interjection] = field(default_factory=list)
+    # docs/plan-interjection.md Q1: turns a thread's messages into `history` with
+    # the SAME budget this turn's history was built with, so a turn that waited
+    # behind another can rebuild it when it starts. Set by the turn builder.
+    history_builder: Callable[[list[Any]], list[dict[str, Any]]] | None = None
+    # docs/plan-interjection.md Q1: the messages this turn's own author sent while
+    # it runs, handed over (and thereby claimed — they get no turn of their own)
+    # each time it is called. The runner calls it before every model call. Set
+    # by the turn engine for a chat message's turn; None everywhere else, which
+    # leaves the turn exactly as it was.
+    take_interjections: Callable[[], list[Interjection]] | None = None
+    # #915 x plan-interjection §9 C19: the rate-limit wait pool of the turn being
+    # run — set by the runner when a `run()` begins, shared by every segment of
+    # it (a segment is its own SDK run, so its own `CallRetryModel`).
+    turn_wait_pool: Any = None
     # Deploy-level registry of provisionable tool packages (#21, #25). When
     # the sandbox is created, the packages that appear in
     # agent_config.allowed_tools (raw pkg name, or `pkg:cmd` colon syntax) are
@@ -383,6 +426,17 @@ class AgentToolContext:
     # (`TurnContextBuilder`); None on a context without it, where the tool
     # declines rather than guessing.
     schedule_policy: SchedulePolicy | None = None
+    # plan-schedule-run-as G2: a row `save_schedules` / `write_file` /
+    # `edit_file` ADDS runs as the person this turn acts for (`acting_for`) —
+    # credited here. None ⇒ nothing new is credited (a row already bound keeps
+    # its person), and `save_schedules` then says nothing about who rows run as.
+    schedule_authorship: ScheduleAuthorship | None = None
+    # The PERSON this turn runs for — whose private values it carries: a chat
+    # turn's author (a goal round's / a re-run's original author), a workflow
+    # node's `env_user` (the presser, the schedule's binder). NOT `acting_user`,
+    # which for a scheduled run is the item's owner it is billed to — the owner
+    # never asked for that schedule. "" = nobody (an unbound schedule, a trigger).
+    acting_for: str = ""
 
     # #380: the item's per-turn tri-state skill override (`attached_skill_prefs`),
     # set by the API layer. `read_skill` refuses a skill pinned OFF here (a skill

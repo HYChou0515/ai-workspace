@@ -10,11 +10,11 @@ export type EnvPolicy = "shared_first" | "private_first" | "private_only";
 
 export const POLICIES: EnvPolicy[] = ["shared_first", "private_first", "private_only"];
 
-/** A name with no policy — or one this build does not know — is `shared_first`,
- * the merge every turn did before policies existed. */
+/** A name with no policy — or one this build does not know — is `private_first`
+ * (docs/plan-wui-user.md D5; `DEFAULT_POLICY` in `api.env_layers`). */
 export function policyOf(name: string, policy: Record<string, string>): EnvPolicy {
   const p = policy[name];
-  return p === "private_first" || p === "private_only" ? p : "shared_first";
+  return p === "shared_first" || p === "private_only" ? p : "private_first";
 }
 
 /** `private` = the person's value for THIS item; `personal` = their value for
@@ -41,12 +41,13 @@ export function layerInUse(
   switch (policyOf(name, policy)) {
     case "private_only":
       return has(mine) ? "private" : has(personal) ? "personal" : "none";
-    case "private_first":
-      return has(mine) ? "private" : has(personal) ? "personal" : has(shared) ? "shared" : "none";
-    default:
+    case "shared_first":
       // Shared falls back to the person's values — this item's, then mine for
       // every item (D1; D2 as corrected 2026-10-12).
       return has(shared) ? "shared" : has(mine) ? "private" : has(personal) ? "personal" : "none";
+    default:
+      // private_first, the default
+      return has(mine) ? "private" : has(personal) ? "personal" : has(shared) ? "shared" : "none";
   }
 }
 

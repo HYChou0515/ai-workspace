@@ -62,3 +62,30 @@ describe("itemCallTool", () => {
     await expect(itemCallTool("rca", "i1")("lot-status", {})).rejects.not.toThrow(/object Object/);
   });
 });
+
+describe("a refusal for want of use_wui (docs/plan-wui-user.md D7)", () => {
+  const refused = () =>
+    new Response(
+      JSON.stringify({ detail: { error: "needs_use_wui", message: "not authorized to use_wui" } }),
+      { status: 403, headers: { "content-type": "application/json" } },
+    );
+
+  it("keeps the server's code on every page route, so the pane can say what is missing", async () => {
+    const { HttpError } = await import("../../api/http");
+    const { itemCallAgent, itemJobs } = await import("./api");
+    const { itemRun } = await import("./run");
+    const calls: Array<() => Promise<unknown>> = [
+      () => itemCallTool("rca", "i1")("lot-status", {}),
+      () => itemCallAgent("rca", "i1")("log-digger", "x"),
+      () => itemJobs("rca", "i1").start("agent", "log-digger", "x"),
+      () => itemRun("rca", "i1")("judge", {}).next(),
+    ];
+    for (const call of calls) {
+      stubFetch(refused());
+      const err = await call().catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(HttpError);
+      expect((err as InstanceType<typeof HttpError>).code).toBe("needs_use_wui");
+      expect(String((err as Error).message)).not.toMatch(/object Object/);
+    }
+  });
+});

@@ -195,3 +195,26 @@ describe("<ItemShareDialog /> layout — a long grant list must not eat the pick
     expect(await screen.findByTestId("dialog-action-keep")).toBeInTheDocument();
   });
 });
+
+describe("the WUI User role (docs/plan-wui-user.md D8)", () => {
+  it("is offered, and saving it grants use_wui without anything that edits", () => {
+    const onSubmit = open({ visibility: "restricted", read_meta: ["user:carol"], read_chat: ["user:carol"] });
+    const sel = screen.getByTestId("item-role-carol") as HTMLSelectElement;
+    expect(Array.from(sel.options).map((o) => o.textContent)).toContain("WUI User");
+    fireEvent.change(sel, { target: { value: "wui_user" } });
+    fireEvent.click(screen.getByTestId("item-share-save"));
+    const perm = onSubmit.mock.calls[0][0] as ItemPermission;
+    expect(perm.use_wui).toContain("user:carol");
+    expect(perm.read_content).toContain("user:carol");
+    for (const verb of ["converse", "edit_content", "execute"] as const) {
+      expect(perm[verb] ?? []).not.toContain("user:carol");
+    }
+  });
+
+  it("offers use_wui as its own Custom checkbox", () => {
+    open({ visibility: "restricted", read_meta: ["user:carol"], read_chat: ["user:carol"] });
+    fireEvent.change(screen.getByTestId("item-role-carol"), { target: { value: "custom" } });
+    const labels = Array.from(screen.getByTestId("item-custom-carol").querySelectorAll("label")).map((l) => l.textContent);
+    expect(labels).toContain("use_wui");
+  });
+});

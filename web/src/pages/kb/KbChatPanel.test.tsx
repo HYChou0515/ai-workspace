@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { KbApi, KbChatSummary, KbCollection, SendKbMessageArgs } from "../../api/kb";
 import { mockKbApi } from "../../api/kbMock";
 import { QueryWrap } from "../../test/queryWrapper";
+import { api } from "../../api";
 import { KbChatPanel } from "./KbChatPanel";
 
 const render = (ui: Parameters<typeof rtlRender>[0]) => rtlRender(ui, { wrapper: QueryWrap });
@@ -453,5 +454,39 @@ describe("KB chat — send and stop are two buttons", () => {
       <KbChatPanel chatId="c-1" collectionIds={["help-1"]} hideCollectionPicker client={panelClient(EIGHT, [], { sendMessage: async () => {} })} />,
     );
     expect(screen.getByRole("button", { name: /Stop/ })).toBeDisabled();
+  });
+});
+
+// docs/plan-interjection.md Q2/Q7: the KB composer says what a message sent
+// now would do — the same note the workspace composer shows.
+describe("KbChatPanel composer note while a turn runs", () => {
+  function running(author: string): KbApi {
+    return panelClient([coll({ resource_id: "c1", name: "C1" })], [], {
+      getChat: async () => ({
+        resource_id: "c1",
+        title: "",
+        collection_ids: ["c1"],
+        owner: "default-user",
+        shared_with: [],
+        messages: [],
+      }),
+      // A turn someone started, still running: its question and nothing after.
+      async *subscribeChat() {
+        yield { type: "user_message", author, content: "Q1", created_at: 1 } as never;
+        await new Promise(() => {});
+      },
+    });
+  }
+
+  it("during your own turn, says the turn's settings are already set", async () => {
+    vi.spyOn(api, "getCurrentUser").mockResolvedValue("ann");
+    render(<KbChatPanel chatId="c1" collectionIds={["c1"]} hideCollectionPicker client={running("ann")} />);
+    expect(await screen.findByTestId("kb-composer-note")).toHaveTextContent("開始時已決定");
+  });
+
+  it("during someone else's, says sending takes it over", async () => {
+    vi.spyOn(api, "getCurrentUser").mockResolvedValue("ann");
+    render(<KbChatPanel chatId="c1" collectionIds={["c1"]} hideCollectionPicker client={running("bob")} />);
+    expect(await screen.findByTestId("kb-composer-note")).toHaveTextContent("接手");
   });
 });

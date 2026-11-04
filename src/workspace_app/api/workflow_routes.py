@@ -41,7 +41,8 @@ from ..workflow.orchestrator import (
     WorkflowUnavailable,
 )
 from ..workflow.preflight import can_run as _preflight_can_run
-from ..workflow.run import WorkflowRun, is_execution
+from ..workflow.run import WorkflowRun, is_execution, settle_phases
+from ..workflow.schedule_bindings import ScheduleAuthorship
 from ..workflow.user_schedules import SchedulePolicy
 from .activity import ActivityLog
 from .events import FileChanged
@@ -147,6 +148,14 @@ async def _staged_run_uploads(
     return workflow_id, staged
 
 
+def _served(run: WorkflowRun) -> dict[str, Any]:
+    """A run as the routes serve it: its phases settled (`settle_phases`,
+    plan-one-running-phase D4). Every write settles them already; a run stored
+    before that did not — every phase it walked still reads running — and is
+    read right here without a migration."""
+    return {**msgspec.to_builtins(run), "phases": msgspec.to_builtins(settle_phases(run))}
+
+
 def register_workflow_routes(
     app: FastAPI | APIRouter,
     *,
@@ -164,6 +173,7 @@ def register_workflow_routes(
     schedule_landed: Callable[[str], int | None] = lambda _item_id: None,
     schedules_durable: Source,
     packages: Sequence[PackageInfo] = (),
+    schedule_authorship: ScheduleAuthorship | None = None,
 ) -> None:
     """Mount the workflow profile + run routes onto ``app``.
 
@@ -393,6 +403,7 @@ def register_workflow_routes(
         from ..workflow.workspace_store import (
             RESERVED_WORKFLOW_ID,
             save_workspace_workflow,
+            workspace_workflow_bytes,
             workspace_workflow_path,
         )
 
@@ -428,6 +439,15 @@ def register_workflow_routes(
                 detail=f"this item already has a workflow named {name!r}",
             )
         await save_workspace_workflow(files, investigation_id, name, d)
+        if schedule_authorship is not None:
+            # plan-seam-token-refresh W1: a copy writes a workflow that
+            # schedules may run — they now run as whoever copied it in.
+            await schedule_authorship.workflow_written(
+                investigation_id,
+                name,
+                author=get_user_id(),
+                written=workspace_workflow_bytes(name, d),
+            )
         return {"workflow_id": name, "path": path}
 
     @app.get("/a/{slug}/profiles")
@@ -596,7 +616,7 @@ def register_workflow_routes(
             seen = newest.get(r.data.workflow_id)
             if at is not None and (seen is None or at > seen[0]):
                 newest[r.data.workflow_id] = (at, rid)
-            out.append({"run_id": rid, **msgspec.to_builtins(r.data)})
+            out.append({"run_id": rid, **_served(r.data)})
         for d in out:
             d["latest"] = newest.get(d.get("workflow_id", ""), (None, ""))[1] == d["run_id"]
         out.sort(key=lambda d: d.get("started") or 0, reverse=True)
@@ -662,7 +682,7 @@ def register_workflow_routes(
         item is not found here."""
         investigation_id = locator.require_access(slug, item_id, "read_chat")
         data = _run_of(run_id, investigation_id)
-        return {"run_id": run_id, **msgspec.to_builtins(data)}
+        return {"run_id": run_id, **_served(data)}
 
     @app.get("/a/{slug}/items/{item_id}/runs/{run_id}/files")
     async def get_workflow_run_files(slug: str, item_id: str, run_id: str) -> dict:

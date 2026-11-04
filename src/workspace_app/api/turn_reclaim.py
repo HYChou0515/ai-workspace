@@ -50,9 +50,10 @@ is False).
 
 The claim is the ledger and the ONLY evidence: it is finished when the reply
 persists and not before. Nothing about the thread's shape says whether a
-given question was answered — a queued follow-up (Q1, Q2, A1, A2 is the
-documented order), the #624 notice, a peer's answer to a LATER question all
-sit after a question that is still unanswered, and a rule that read the
+given question was answered — a queued follow-up (persisted above the
+answer it waited for until its own turn moves it: plan-interjection), the
+#624 notice, a peer's answer to a LATER question all sit after a question
+that is still unanswered, and a rule that read the
 thread dropped the claim in every one of those shapes. The one thing such a
 rule protected against — a pod dying between the reply's write and the
 claim's delete, a millisecond apart — costs a duplicate answer; the rule cost

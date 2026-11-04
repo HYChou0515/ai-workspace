@@ -1,0 +1,1029 @@
+{
+ "_note": "generated from perm.authorize; see tests/perm/test_item_verb_parity.py",
+ "cases": [
+  {
+   "granted": [
+    "read_meta"
+   ],
+   "answers": {
+    "read_chat": false,
+    "read_content": false,
+    "converse": false,
+    "execute": false,
+    "use_wui": false,
+    "edit_content": false
+   }
+  },
+  {
+   "granted": [
+    "read_chat",
+    "read_meta"
+   ],
+   "answers": {
+    "read_chat": true,
+    "read_content": false,
+    "converse": false,
+    "execute": false,
+    "use_wui": false,
+    "edit_content": false
+   }
+  },
+  {
+   "granted": [
+    "read_content",
+    "read_meta"
+   ],
+   "answers": {
+    "read_chat": false,
+    "read_content": true,
+    "converse": false,
+    "execute": false,
+    "use_wui": false,
+    "edit_content": false
+   }
+  },
+  {
+   "granted": [
+    "converse",
+    "read_meta"
+   ],
+   "answers": {
+    "read_chat": false,
+    "read_content": false,
+    "converse": true,
+    "execute": false,
+    "use_wui": true,
+    "edit_content": false
+   }
+  },
+  {
+   "granted": [
+    "execute",
+    "read_meta"
+   ],
+   "answers": {
+    "read_chat": false,
+    "read_content": false,
+    "converse": false,
+    "execute": true,
+    "use_wui": true,
+    "edit_content": false
+   }
+  },
+  {
+   "granted": [
+    "read_meta",
+    "use_wui"
+   ],
+   "answers": {
+    "read_chat": false,
+    "read_content": true,
+    "converse": false,
+    "execute": false,
+    "use_wui": true,
+    "edit_content": false
+   }
+  },
+  {
+   "granted": [
+    "edit_content",
+    "read_meta"
+   ],
+   "answers": {
+    "read_chat": false,
+    "read_content": false,
+    "converse": false,
+    "execute": false,
+    "use_wui": false,
+    "edit_content": true
+   }
+  },
+  {
+   "granted": [
+    "read_chat",
+    "read_content",
+    "read_meta"
+   ],
+   "answers": {
+    "read_chat": true,
+    "read_content": true,
+    "converse": false,
+    "execute": false,
+    "use_wui": false,
+    "edit_content": false
+   }
+  },
+  {
+   "granted": [
+    "converse",
+    "read_chat",
+    "read_meta"
+   ],
+   "answers": {
+    "read_chat": true,
+    "read_content": false,
+    "converse": true,
+    "execute": false,
+    "use_wui": true,
+    "edit_content": false
+   }
+  },
+  {
+   "granted": [
+    "execute",
+    "read_chat",
+    "read_meta"
+   ],
+   "answers": {
+    "read_chat": true,
+    "read_content": false,
+    "converse": false,
+    "execute": true,
+    "use_wui": true,
+    "edit_content": false
+   }
+  },
+  {
+   "granted": [
+    "read_chat",
+    "read_meta",
+    "use_wui"
+   ],
+   "answers": {
+    "read_chat": true,
+    "read_content": true,
+    "converse": false,
+    "execute": false,
+    "use_wui": true,
+    "edit_content": false
+   }
+  },
+  {
+   "granted": [
+    "edit_content",
+    "read_chat",
+    "read_meta"
+   ],
+   "answers": {
+    "read_chat": true,
+    "read_content": false,
+    "converse": false,
+    "execute": false,
+    "use_wui": false,
+    "edit_content": true
+   }
+  },
+  {
+   "granted": [
+    "converse",
+    "read_content",
+    "read_meta"
+   ],
+   "answers": {
+    "read_chat": false,
+    "read_content": true,
+    "converse": true,
+    "execute": false,
+    "use_wui": true,
+    "edit_content": false
+   }
+  },
+  {
+   "granted": [
+    "execute",
+    "read_content",
+    "read_meta"
+   ],
+   "answers": {
+    "read_chat": false,
+    "read_content": true,
+    "converse": false,
+    "execute": true,
+    "use_wui": true,
+    "edit_content": false
+   }
+  },
+  {
+   "granted": [
+    "read_content",
+    "read_meta",
+    "use_wui"
+   ],
+   "answers": {
+    "read_chat": false,
+    "read_content": true,
+    "converse": false,
+    "execute": false,
+    "use_wui": true,
+    "edit_content": false
+   }
+  },
+  {
+   "granted": [
+    "edit_content",
+    "read_content",
+    "read_meta"
+   ],
+   "answers": {
+    "read_chat": false,
+    "read_content": true,
+    "converse": false,
+    "execute": false,
+    "use_wui": false,
+    "edit_content": true
+   }
+  },
+  {
+   "granted": [
+    "converse",
+    "execute",
+    "read_meta"
+   ],
+   "answers": {
+    "read_chat": false,
+    "read_content": false,
+    "converse": true,
+    "execute": true,
+    "use_wui": true,
+    "edit_content": false
+   }
+  },
+  {
+   "granted": [
+    "converse",
+    "read_meta",
+    "use_wui"
+   ],
+   "answers": {
+    "read_chat": false,
+    "read_content": true,
+    "converse": true,
+    "execute": false,
+    "use_wui": true,
+    "edit_content": false
+   }
+  },
+  {
+   "granted": [
+    "converse",
+    "edit_content",
+    "read_meta"
+   ],
+   "answers": {
+    "read_chat": false,
+    "read_content": false,
+    "converse": true,
+    "execute": false,
+    "use_wui": true,
+    "edit_content": true
+   }
+  },
+  {
+   "granted": [
+    "execute",
+    "read_meta",
+    "use_wui"
+   ],
+   "answers": {
+    "read_chat": false,
+    "read_content": true,
+    "converse": false,
+    "execute": true,
+    "use_wui": true,
+    "edit_content": false
+   }
+  },
+  {
+   "granted": [
+    "edit_content",
+    "execute",
+    "read_meta"
+   ],
+   "answers": {
+    "read_chat": false,
+    "read_content": false,
+    "converse": false,
+    "execute": true,
+    "use_wui": true,
+    "edit_content": true
+   }
+  },
+  {
+   "granted": [
+    "edit_content",
+    "read_meta",
+    "use_wui"
+   ],
+   "answers": {
+    "read_chat": false,
+    "read_content": true,
+    "converse": false,
+    "execute": false,
+    "use_wui": true,
+    "edit_content": true
+   }
+  },
+  {
+   "granted": [
+    "converse",
+    "read_chat",
+    "read_content",
+    "read_meta"
+   ],
+   "answers": {
+    "read_chat": true,
+    "read_content": true,
+    "converse": true,
+    "execute": false,
+    "use_wui": true,
+    "edit_content": false
+   }
+  },
+  {
+   "granted": [
+    "execute",
+    "read_chat",
+    "read_content",
+    "read_meta"
+   ],
+   "answers": {
+    "read_chat": true,
+    "read_content": true,
+    "converse": false,
+    "execute": true,
+    "use_wui": true,
+    "edit_content": false
+   }
+  },
+  {
+   "granted": [
+    "read_chat",
+    "read_content",
+    "read_meta",
+    "use_wui"
+   ],
+   "answers": {
+    "read_chat": true,
+    "read_content": true,
+    "converse": false,
+    "execute": false,
+    "use_wui": true,
+    "edit_content": false
+   }
+  },
+  {
+   "granted": [
+    "edit_content",
+    "read_chat",
+    "read_content",
+    "read_meta"
+   ],
+   "answers": {
+    "read_chat": true,
+    "read_content": true,
+    "converse": false,
+    "execute": false,
+    "use_wui": false,
+    "edit_content": true
+   }
+  },
+  {
+   "granted": [
+    "converse",
+    "execute",
+    "read_chat",
+    "read_meta"
+   ],
+   "answers": {
+    "read_chat": true,
+    "read_content": false,
+    "converse": true,
+    "execute": true,
+    "use_wui": true,
+    "edit_content": false
+   }
+  },
+  {
+   "granted": [
+    "converse",
+    "read_chat",
+    "read_meta",
+    "use_wui"
+   ],
+   "answers": {
+    "read_chat": true,
+    "read_content": true,
+    "converse": true,
+    "execute": false,
+    "use_wui": true,
+    "edit_content": false
+   }
+  },
+  {
+   "granted": [
+    "converse",
+    "edit_content",
+    "read_chat",
+    "read_meta"
+   ],
+   "answers": {
+    "read_chat": true,
+    "read_content": false,
+    "converse": true,
+    "execute": false,
+    "use_wui": true,
+    "edit_content": true
+   }
+  },
+  {
+   "granted": [
+    "execute",
+    "read_chat",
+    "read_meta",
+    "use_wui"
+   ],
+   "answers": {
+    "read_chat": true,
+    "read_content": true,
+    "converse": false,
+    "execute": true,
+    "use_wui": true,
+    "edit_content": false
+   }
+  },
+  {
+   "granted": [
+    "edit_content",
+    "execute",
+    "read_chat",
+    "read_meta"
+   ],
+   "answers": {
+    "read_chat": true,
+    "read_content": false,
+    "converse": false,
+    "execute": true,
+    "use_wui": true,
+    "edit_content": true
+   }
+  },
+  {
+   "granted": [
+    "edit_content",
+    "read_chat",
+    "read_meta",
+    "use_wui"
+   ],
+   "answers": {
+    "read_chat": true,
+    "read_content": true,
+    "converse": false,
+    "execute": false,
+    "use_wui": true,
+    "edit_content": true
+   }
+  },
+  {
+   "granted": [
+    "converse",
+    "execute",
+    "read_content",
+    "read_meta"
+   ],
+   "answers": {
+    "read_chat": false,
+    "read_content": true,
+    "converse": true,
+    "execute": true,
+    "use_wui": true,
+    "edit_content": false
+   }
+  },
+  {
+   "granted": [
+    "converse",
+    "read_content",
+    "read_meta",
+    "use_wui"
+   ],
+   "answers": {
+    "read_chat": false,
+    "read_content": true,
+    "converse": true,
+    "execute": false,
+    "use_wui": true,
+    "edit_content": false
+   }
+  },
+  {
+   "granted": [
+    "converse",
+    "edit_content",
+    "read_content",
+    "read_meta"
+   ],
+   "answers": {
+    "read_chat": false,
+    "read_content": true,
+    "converse": true,
+    "execute": false,
+    "use_wui": true,
+    "edit_content": true
+   }
+  },
+  {
+   "granted": [
+    "execute",
+    "read_content",
+    "read_meta",
+    "use_wui"
+   ],
+   "answers": {
+    "read_chat": false,
+    "read_content": true,
+    "converse": false,
+    "execute": true,
+    "use_wui": true,
+    "edit_content": false
+   }
+  },
+  {
+   "granted": [
+    "edit_content",
+    "execute",
+    "read_content",
+    "read_meta"
+   ],
+   "answers": {
+    "read_chat": false,
+    "read_content": true,
+    "converse": false,
+    "execute": true,
+    "use_wui": true,
+    "edit_content": true
+   }
+  },
+  {
+   "granted": [
+    "edit_content",
+    "read_content",
+    "read_meta",
+    "use_wui"
+   ],
+   "answers": {
+    "read_chat": false,
+    "read_content": true,
+    "converse": false,
+    "execute": false,
+    "use_wui": true,
+    "edit_content": true
+   }
+  },
+  {
+   "granted": [
+    "converse",
+    "execute",
+    "read_meta",
+    "use_wui"
+   ],
+   "answers": {
+    "read_chat": false,
+    "read_content": true,
+    "converse": true,
+    "execute": true,
+    "use_wui": true,
+    "edit_content": false
+   }
+  },
+  {
+   "granted": [
+    "converse",
+    "edit_content",
+    "execute",
+    "read_meta"
+   ],
+   "answers": {
+    "read_chat": false,
+    "read_content": false,
+    "converse": true,
+    "execute": true,
+    "use_wui": true,
+    "edit_content": true
+   }
+  },
+  {
+   "granted": [
+    "converse",
+    "edit_content",
+    "read_meta",
+    "use_wui"
+   ],
+   "answers": {
+    "read_chat": false,
+    "read_content": true,
+    "converse": true,
+    "execute": false,
+    "use_wui": true,
+    "edit_content": true
+   }
+  },
+  {
+   "granted": [
+    "edit_content",
+    "execute",
+    "read_meta",
+    "use_wui"
+   ],
+   "answers": {
+    "read_chat": false,
+    "read_content": true,
+    "converse": false,
+    "execute": true,
+    "use_wui": true,
+    "edit_content": true
+   }
+  },
+  {
+   "granted": [
+    "converse",
+    "execute",
+    "read_chat",
+    "read_content",
+    "read_meta"
+   ],
+   "answers": {
+    "read_chat": true,
+    "read_content": true,
+    "converse": true,
+    "execute": true,
+    "use_wui": true,
+    "edit_content": false
+   }
+  },
+  {
+   "granted": [
+    "converse",
+    "read_chat",
+    "read_content",
+    "read_meta",
+    "use_wui"
+   ],
+   "answers": {
+    "read_chat": true,
+    "read_content": true,
+    "converse": true,
+    "execute": false,
+    "use_wui": true,
+    "edit_content": false
+   }
+  },
+  {
+   "granted": [
+    "converse",
+    "edit_content",
+    "read_chat",
+    "read_content",
+    "read_meta"
+   ],
+   "answers": {
+    "read_chat": true,
+    "read_content": true,
+    "converse": true,
+    "execute": false,
+    "use_wui": true,
+    "edit_content": true
+   }
+  },
+  {
+   "granted": [
+    "execute",
+    "read_chat",
+    "read_content",
+    "read_meta",
+    "use_wui"
+   ],
+   "answers": {
+    "read_chat": true,
+    "read_content": true,
+    "converse": false,
+    "execute": true,
+    "use_wui": true,
+    "edit_content": false
+   }
+  },
+  {
+   "granted": [
+    "edit_content",
+    "execute",
+    "read_chat",
+    "read_content",
+    "read_meta"
+   ],
+   "answers": {
+    "read_chat": true,
+    "read_content": true,
+    "converse": false,
+    "execute": true,
+    "use_wui": true,
+    "edit_content": true
+   }
+  },
+  {
+   "granted": [
+    "edit_content",
+    "read_chat",
+    "read_content",
+    "read_meta",
+    "use_wui"
+   ],
+   "answers": {
+    "read_chat": true,
+    "read_content": true,
+    "converse": false,
+    "execute": false,
+    "use_wui": true,
+    "edit_content": true
+   }
+  },
+  {
+   "granted": [
+    "converse",
+    "execute",
+    "read_chat",
+    "read_meta",
+    "use_wui"
+   ],
+   "answers": {
+    "read_chat": true,
+    "read_content": true,
+    "converse": true,
+    "execute": true,
+    "use_wui": true,
+    "edit_content": false
+   }
+  },
+  {
+   "granted": [
+    "converse",
+    "edit_content",
+    "execute",
+    "read_chat",
+    "read_meta"
+   ],
+   "answers": {
+    "read_chat": true,
+    "read_content": false,
+    "converse": true,
+    "execute": true,
+    "use_wui": true,
+    "edit_content": true
+   }
+  },
+  {
+   "granted": [
+    "converse",
+    "edit_content",
+    "read_chat",
+    "read_meta",
+    "use_wui"
+   ],
+   "answers": {
+    "read_chat": true,
+    "read_content": true,
+    "converse": true,
+    "execute": false,
+    "use_wui": true,
+    "edit_content": true
+   }
+  },
+  {
+   "granted": [
+    "edit_content",
+    "execute",
+    "read_chat",
+    "read_meta",
+    "use_wui"
+   ],
+   "answers": {
+    "read_chat": true,
+    "read_content": true,
+    "converse": false,
+    "execute": true,
+    "use_wui": true,
+    "edit_content": true
+   }
+  },
+  {
+   "granted": [
+    "converse",
+    "execute",
+    "read_content",
+    "read_meta",
+    "use_wui"
+   ],
+   "answers": {
+    "read_chat": false,
+    "read_content": true,
+    "converse": true,
+    "execute": true,
+    "use_wui": true,
+    "edit_content": false
+   }
+  },
+  {
+   "granted": [
+    "converse",
+    "edit_content",
+    "execute",
+    "read_content",
+    "read_meta"
+   ],
+   "answers": {
+    "read_chat": false,
+    "read_content": true,
+    "converse": true,
+    "execute": true,
+    "use_wui": true,
+    "edit_content": true
+   }
+  },
+  {
+   "granted": [
+    "converse",
+    "edit_content",
+    "read_content",
+    "read_meta",
+    "use_wui"
+   ],
+   "answers": {
+    "read_chat": false,
+    "read_content": true,
+    "converse": true,
+    "execute": false,
+    "use_wui": true,
+    "edit_content": true
+   }
+  },
+  {
+   "granted": [
+    "edit_content",
+    "execute",
+    "read_content",
+    "read_meta",
+    "use_wui"
+   ],
+   "answers": {
+    "read_chat": false,
+    "read_content": true,
+    "converse": false,
+    "execute": true,
+    "use_wui": true,
+    "edit_content": true
+   }
+  },
+  {
+   "granted": [
+    "converse",
+    "edit_content",
+    "execute",
+    "read_meta",
+    "use_wui"
+   ],
+   "answers": {
+    "read_chat": false,
+    "read_content": true,
+    "converse": true,
+    "execute": true,
+    "use_wui": true,
+    "edit_content": true
+   }
+  },
+  {
+   "granted": [
+    "converse",
+    "execute",
+    "read_chat",
+    "read_content",
+    "read_meta",
+    "use_wui"
+   ],
+   "answers": {
+    "read_chat": true,
+    "read_content": true,
+    "converse": true,
+    "execute": true,
+    "use_wui": true,
+    "edit_content": false
+   }
+  },
+  {
+   "granted": [
+    "converse",
+    "edit_content",
+    "execute",
+    "read_chat",
+    "read_content",
+    "read_meta"
+   ],
+   "answers": {
+    "read_chat": true,
+    "read_content": true,
+    "converse": true,
+    "execute": true,
+    "use_wui": true,
+    "edit_content": true
+   }
+  },
+  {
+   "granted": [
+    "converse",
+    "edit_content",
+    "read_chat",
+    "read_content",
+    "read_meta",
+    "use_wui"
+   ],
+   "answers": {
+    "read_chat": true,
+    "read_content": true,
+    "converse": true,
+    "execute": false,
+    "use_wui": true,
+    "edit_content": true
+   }
+  },
+  {
+   "granted": [
+    "edit_content",
+    "execute",
+    "read_chat",
+    "read_content",
+    "read_meta",
+    "use_wui"
+   ],
+   "answers": {
+    "read_chat": true,
+    "read_content": true,
+    "converse": false,
+    "execute": true,
+    "use_wui": true,
+    "edit_content": true
+   }
+  },
+  {
+   "granted": [
+    "converse",
+    "edit_content",
+    "execute",
+    "read_chat",
+    "read_meta",
+    "use_wui"
+   ],
+   "answers": {
+    "read_chat": true,
+    "read_content": true,
+    "converse": true,
+    "execute": true,
+    "use_wui": true,
+    "edit_content": true
+   }
+  },
+  {
+   "granted": [
+    "converse",
+    "edit_content",
+    "execute",
+    "read_content",
+    "read_meta",
+    "use_wui"
+   ],
+   "answers": {
+    "read_chat": false,
+    "read_content": true,
+    "converse": true,
+    "execute": true,
+    "use_wui": true,
+    "edit_content": true
+   }
+  },
+  {
+   "granted": [
+    "converse",
+    "edit_content",
+    "execute",
+    "read_chat",
+    "read_content",
+    "read_meta",
+    "use_wui"
+   ],
+   "answers": {
+    "read_chat": true,
+    "read_content": true,
+    "converse": true,
+    "execute": true,
+    "use_wui": true,
+    "edit_content": true
+   }
+  }
+ ]
+}

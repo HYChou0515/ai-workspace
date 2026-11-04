@@ -116,3 +116,36 @@ async def test_artifact_valid_requires_min_length_fails_when_too_short(wf: Workf
     verdict = await artifact_valid("/report.md", "markdown", {"min_length": 100})(wf, None)
     assert not verdict.ok
     assert "100" in verdict.reason
+
+
+# ── which failures are the reply's own format (plan-workflow-output-repair §3.1) ──
+
+
+async def test_a_reply_that_does_not_parse_is_a_format_failure(wf: WorkflowHandle):
+    """A structured `out` that does not parse is the reply's format, which a repair turn
+    can fix without redoing the step's work."""
+    for kind, text in (
+        ("json", 'Sure! {"a": 1}'),
+        ("yaml", "a: [1, 2"),
+        ("csv", "Here you go:\na,b\n1,2\n"),
+    ):
+        await wf.write("/out", text)
+        verdict = await artifact_valid("/out", kind, of_reply=True)(wf, None)
+        assert not verdict.ok and verdict.format, (kind, verdict)
+
+
+async def test_missing_content_is_not_a_format_failure(wf: WorkflowHandle):
+    """A missing file, an empty one, or a missing `requires` section is content the reply
+    does not have — tidying the reply cannot produce it, so the step re-runs."""
+    absent = await artifact_valid("/none.json", "json")(wf, None)
+    await wf.write("/empty.json", "  ")
+    empty = await artifact_valid("/empty.json", "json")(wf, None)
+    await wf.write("/doc.md", "# Intro only")
+    short = await artifact_valid("/doc.md", "markdown", {"contains": ["## Findings"]})(wf, None)
+    for verdict in (absent, empty, short):
+        assert not verdict.ok and not verdict.format, verdict
+
+
+async def test_a_passing_artifact_is_not_flagged(wf: WorkflowHandle):
+    await wf.write("/plan.json", '{"collection": "notes"}')
+    assert not (await artifact_valid("/plan.json", "json")(wf, None)).format

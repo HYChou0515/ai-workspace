@@ -14,6 +14,7 @@ from ..workflow.events import (
     StepFailed,
     StepOutput,
     StepPassed,
+    StepRepairing,
     StepRetrying,
     StepSkipped,
     StepStarted,
@@ -88,8 +89,13 @@ class RunError:
 @dataclass(frozen=True)
 class RunCancelled:
     """User interrupted this turn — either by sending a new message or by
-    hitting Stop. Terminal: the SSE stream closes after this event."""
+    hitting Stop. Terminal: the SSE stream closes after this event.
 
+    `by` (docs/plan-interjection.md Q2): set when ANOTHER person's message
+    stopped the turn so theirs could take over — that person's id. Empty for a
+    Stop."""
+
+    by: str = ""
     type: Literal["run_cancelled"] = "run_cancelled"
 
 
@@ -147,6 +153,20 @@ class UserMessage:
     # retires when someone else answers it rather than on their next reload.
     answers: str | None = None
     type: Literal["user_message"] = "user_message"
+
+
+@dataclass(frozen=True)
+class Interjected:
+    """docs/plan-interjection.md Q1: the running turn has READ a message its own
+    author sent while it ran (`author`, `created_at` name that message, already
+    persisted and announced as a `UserMessage`). Emitted where the turn read it
+    — between a tool result and the next model call — so a viewer moves that
+    bubble here, and whatever streams next is the answer that saw it. The
+    reply is persisted with the message in the same place (`PLACE_ROLE`)."""
+
+    author: str
+    created_at: int
+    type: Literal["interjected"] = "interjected"
 
 
 @dataclass(frozen=True)
@@ -369,6 +389,22 @@ class ContextTrimmed:
 
 
 @dataclass(frozen=True)
+class SignInExpired:
+    """`docs/plan-env-token-refresh.md` D6: a sign-in whose refresh token is
+    dead, announced under the question it came with. The durable record is the
+    `sign_in` message in the thread; this is what puts it on screen WHILE the
+    turn runs — a store copy only replaces the live log once the store has
+    caught up with it, which a turn streaming more entries than it persists
+    never does. `layer` is where signing in again writes (D3)."""
+
+    provider: str
+    layer: str
+    text: str
+    created_at: int | None = None
+    type: Literal["sign_in_expired"] = "sign_in_expired"
+
+
+@dataclass(frozen=True)
 class Presence:
     """#455: the live roster of an item's stream — the distinct users currently
     subscribed to its `/stream`. Broadcast whenever a viewer joins or leaves, so
@@ -398,9 +434,11 @@ AgentEvent = (
     | OutputRetracted  # the failed call's streamed text is withdrawn before its re-send
     | TodosUpdated  # #613: the agent rewrote the conversation's todo checklist
     | ContextTrimmed  # #624: the request was too long; older history was dropped
+    | SignInExpired  # plan-env-token-refresh D6: a dead sign-in, under the question
     | Compacting  # #739: the thread outgrew the window; this turn summarises first
     | GoalUpdated  # #613 P3: the chat's goal was set / cleared / advanced
     | UserMessage  # #43: broadcast-only (a human's message on the shared stream)
+    | Interjected  # plan-interjection Q1: the running turn read a message sent meanwhile
     | FileChanged  # #43: broadcast-only (a workspace file changed)
     | TurnEnded  # broadcast-only, on the ITEM's key: a turn in any of its chats ended
     | Presence  # #455: broadcast-only (live viewer roster on the item stream)
@@ -411,6 +449,7 @@ AgentEvent = (
     | StepFailed
     | StepSkipped
     | StepRetrying
+    | StepRepairing
     | AwaitingHumanEvent
     | SteerProposed  # #288: a steer plan is ready for review
 )

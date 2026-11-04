@@ -94,6 +94,7 @@ from ..workflow.orchestrator import (
 )
 from ..workflow.run_identity import register_run_identity
 from ..workflow.schedule_bindings import (
+    ScheduleAuthorship,
     ScheduleBinding,
     ScheduleBindings,
     register_schedule_bindings,
@@ -117,6 +118,7 @@ from .entity_broadcast import build_entity_write_sink
 from .entity_routes import register_entity_routes
 from .env_provider import IEnvProvider
 from .env_provider_routes import register_env_provider_routes
+from .env_refresh import EnvRefresher
 from .event_bus import IEventBus
 from .events import FileChanged
 from .file_routes import register_file_routes
@@ -142,6 +144,7 @@ from .notification_delivery import INotificationChannel
 from .notifications import notify, register_notification_routes
 from .private_env import PrivateEnvStore, register_private_env, register_private_env_routes
 from .quota_routes import may_close_environment, register_quota_routes
+from .refresh_claims import RefreshClaims, register_refresh_claims
 from .registry import InvestigationRegistry
 from .replay_loaders import ReplayLoaders
 from .request_env import IRequestEnv
@@ -1435,12 +1438,20 @@ def create_app(
                 f"You no longer have permission to run work in the item that holds "
                 f"{binding.path}, so its schedule stopped using your values."
             )
+        elif why == "workflow_changed":
+            title = "A schedule that ran as you now runs a changed workflow"
+            body = (
+                f"The workflow a schedule in {binding.path} runs was changed since it was "
+                "set to run as you, so it no longer runs with your values. Check the "
+                "workflow, then find the schedule on the Schedules page or in the item's "
+                "Workflows panel and choose “Run as me” if you want it to run as you."
+            )
         else:
-            title = "A schedule you ran as yourself was changed"
+            title = "A schedule that ran as you was changed"
             body = (
                 f"The schedule in {binding.path} was edited or removed, so it no longer "
-                "runs with your values. Open the page and choose “Run as me” again if "
-                "you still want it to."
+                "runs with your values. Find it on the Schedules page or in the item's "
+                "Workflows panel and choose “Run as me” again if you still want it to."
             )
         notify(
             spec,
@@ -1954,6 +1965,8 @@ def create_app(
     # The PRIVATE env layer (`docs/plan-wui-viewer-login.md`): no auto-CRUD —
     # its only door is the caller-scoped routes below.
     register_private_env(spec)
+    # plan-env-token-refresh: one refresh at a time per (layer, owner, sign-in).
+    register_refresh_claims(spec)
     register_schedule_bindings(spec)
     # Whose private values a run uses — off `WorkflowRun`, whose auto-CRUD is
     # writable (review round 1, R5).
@@ -2319,6 +2332,16 @@ def create_app(
     # engine-key / chat-validation rules every workspace route crosses. The route
     # modules + the turn/mention/replay services call ``locator.<method>`` directly.
     locator = ItemLocator(spec, app_catalog, get_user_id=get_user_id, superusers=superusers)
+    # plan-env-token-refresh: a near-expiry token is refreshed before a tool gets
+    # it, by the deploy's own sign-in. The sign-ins are read at call time from
+    # app.state (set below), the same seam the env-provider routes read.
+    env_refresher = EnvRefresher(
+        providers=lambda: getattr(app.state, "env_providers", ()),
+        store=private_env_store,
+        claims=RefreshClaims(spec),
+        locator=locator,
+        spec=spec,
+    )
     # plan-tool-usage-stats §3.6: the administrator's report on the tool-call
     # counts (the model is registered with the store, above).
     from .tool_usage_routes import register_tool_usage_routes
@@ -2387,6 +2410,49 @@ def create_app(
         max_rows=max_page_schedules,
         sweep_enabled=trigger_check_interval is not None,
     )
+
+    # plan-schedule-run-as G2: a row runs as whoever wrote it — credited by the
+    # doors that know who that is (save_schedules, the file PUT, "change time"),
+    # against the SAME `execute` rule the sweep re-checks before each fire.
+    # plan-seam-token-refresh W1/W3: the doors that write a WORKFLOW and know
+    # who wrote it (save_workflow / write_file / edit_file from a message the
+    # person just sent, the file PUT, template copy) hand its schedules to that
+    # person; when it moves to someone else, both people are told.
+    def _tell_schedule_moved(previous: ScheduleBinding, author: str, workflow_id: str) -> None:
+        """Both people a moved schedule concerns: the one whose values it ran
+        with, and the one whose values it runs with now (W3; review round 1,
+        regression 2 — lending values must never be silent)."""
+        notify(
+            spec,
+            recipient=previous.user_id,
+            kind="schedule_binding_replaced",
+            title="A schedule no longer runs as you",
+            body=(
+                f"{author} changed the workflow “{workflow_id}”, so its schedule in "
+                f"{previous.path} now runs with their values instead of yours."
+            ),
+            actor=author,
+        )
+        notify(
+            spec,
+            recipient=author,
+            kind="schedule_binding_assigned",
+            title="A schedule now runs as you",
+            body=(
+                f"You changed the workflow “{workflow_id}”, so its schedule in "
+                f"{previous.path} now runs with your own sign-ins and values. If you do "
+                "not want that, open the schedule and choose “Stop running as me”."
+            ),
+            actor=author,
+        )
+
+    schedule_authorship = ScheduleAuthorship(
+        ScheduleBindings(spec),
+        read=files.read,
+        may_run=lambda user, item: user_may(spec, item, user, "execute", superusers=superusers),
+        max_rows=max_page_schedules,
+        on_moved=_tell_schedule_moved,
+    )
     turn_ctx = TurnContextBuilder(
         view_plugin_artifacts=artifact_plugins(view_plugins),
         sandbox=sandbox,
@@ -2410,6 +2476,7 @@ def create_app(
         history_max_messages=history_max_messages,
         history_max_context_tokens=history_max_context_tokens,
         schedule_policy=schedule_policy,
+        schedule_authorship=schedule_authorship,
         # #624: the operator's declared ceiling for this endpoint (the escape
         # hatch); unset ⇒ resolved per turn, and unknown ⇒ no trimming.
         context_limit=context_limit,
@@ -2499,6 +2566,7 @@ def create_app(
         request_env=request_env,
         # plan-wui-viewer-login: a run a person started overlays their values.
         private_env=private_env_store,
+        env_refresher=env_refresher,
     )
 
     workflow_credentials = CredentialBroker()
@@ -2609,6 +2677,7 @@ def create_app(
         # The sweep's own copy, read when the live workspace is still restoring.
         schedules_durable=ScheduleSource(read=filestore.read, ls=filestore.ls),
         packages=packages or [],
+        schedule_authorship=schedule_authorship,
     )
 
     chat_send_svc = ChatSendService(
@@ -2651,6 +2720,7 @@ def create_app(
         request_env=request_env,
         # `plan-wui-viewer-login`: each person's private env layer per item.
         private_env=private_env_store,
+        env_refresher=env_refresher,
         # plan-graceful-shutdown P3: every app-chat send (not the KB chat's, which
         # builds its turn in its route) opens a durable claim a peer
         # can re-run the turn from.
@@ -2875,6 +2945,7 @@ def create_app(
         prebuilt_dir=prebuilt_dir,
         request_env=request_env,
         private_env=private_env_store,
+        env_refresher=env_refresher,
         get_user_id=get_user_id,
         # #WUI P18: a page can start a run and watch it live. Resolved at CALL
         # time — the orchestrator is built later than this registration, the same
@@ -2964,6 +3035,9 @@ def create_app(
         deployed_pages=DeployedPages(spec).newest_first,
         durable=ScheduleSource(read=filestore.read, ls=filestore.ls),
         on_saved=_schedule_saved,
+        authorship=schedule_authorship,
+        bindings=ScheduleBindings(spec),
+        superusers=superusers,
     )
 
     register_private_env_routes(
@@ -2980,6 +3054,8 @@ def create_app(
         files=files,
         bindings=ScheduleBindings(spec),
         get_user_id=get_user_id,
+        may_run=lambda user, item: user_may(spec, item, user, "execute", superusers=superusers),
+        superusers=superusers,
     )
 
     # plan-chat-video-export: queue a video of a transcript; the consumer is
@@ -3009,6 +3085,7 @@ def create_app(
         max_file_size=max_file_size,
         admission=admission,
         skill_hub=skill_hub,
+        schedule_authorship=schedule_authorship,
     )
 
     # Skill hub (docs/plan-skill-hub.md): the page's read routes + the panel's

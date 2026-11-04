@@ -5,8 +5,9 @@
  * and nowhere else:
  *
  * * **Shared** — the item's SHARED `env_vars` plus a per-variable POLICY
- *   saying which layer a tool gets: `shared_first` (the default, and what every
- *   item did before), `private_first`, `private_only`. Written by whoever holds
+ *   saying which layer a tool gets: `private_first` (the default since
+ *   docs/plan-wui-user.md D5 — what a variable nobody chose a policy for means),
+ *   `shared_first`, `private_only`. Written by whoever holds
  *   `write_meta`; everyone else sees it read-only, with the reason.
  * * **Private** (the default tab) — the viewer's PRIVATE values for this item:
  *   typed, signed in for, or written for them by the deploy's seam. Each row
@@ -165,10 +166,12 @@ export function EnvVarsModal({
   const choosePolicy = (name: string, p: EnvPolicy) =>
     setPolicy((prev) => {
       const next = { ...prev };
-      // The default is stored as ABSENCE, so an item nobody touched stays
-      // byte-identical to one from before policies existed.
-      if (p === "shared_first") delete next[name];
-      else next[name] = p;
+      // Every CHOICE is stored (docs/plan-wui-user.md D5): absence means
+      // "never chosen", which reads as the default (Private first). Storing
+      // Shared is what lets it outlive the default changing under it, and
+      // storing the other two keeps "the owner asked each person" (the page's
+      // identity bar, the panel's lists) a fact about what was chosen.
+      next[name] = p;
       return next;
     });
 

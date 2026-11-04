@@ -258,7 +258,9 @@ def test_a_sub_agent_the_item_does_not_have_is_refused_by_name():
 
 def test_asking_a_sub_agent_or_starting_a_job_needs_the_right_to_run_things():
     """D3: `execute`, as `startRun` — a person who may edit the item but not run
-    work in it is refused at every job entrance, and nothing is recorded."""
+    work in it is refused at every job entrance, and nothing is recorded. Since
+    docs/plan-wui-user.md the gate is `use_wui`, which `execute` and `converse`
+    imply (D9/D10): so this person holds neither."""
     from workspace_app.perm import Permission
 
     client, item_id, spec = _app(SubRunner(), user="hua", creator="bob")
@@ -271,7 +273,6 @@ def test_asking_a_sub_agent_or_starting_a_job_needs_the_right_to_run_things():
         read_meta=who,
         read_chat=who,
         read_content=who,
-        converse=who,
         add_content=who,
         edit_content=who,
     )

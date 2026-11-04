@@ -61,9 +61,11 @@ export type StepView = {
   phase: string;
   name: string;
   key?: string;
-  status: "running" | "passed" | "failed" | "skipped" | "retrying";
+  status: "running" | "passed" | "failed" | "skipped" | "retrying" | "repairing";
   /** Why a step failed / is retrying — surfaced on the line. */
   reason?: string;
+  /** Which repair of the reply's format this is, while `repairing` (from 1). */
+  repair?: number;
   /** Live stdout streamed while a deterministic step runs (#178, step_output) —
    * accumulated chunk by chunk so a long command shows movement. */
   liveOutput?: string;
@@ -109,6 +111,12 @@ export type AgentEntry =
        * it. Set when the turn opens its answer, cleared by a tool call (which
        * ends the run, as before) and by the turn's terminal event. */
       live?: boolean;
+      /** docs/plan-interjection.md Q9: what is happening to a message its author
+       * sent while their own turn was still running. `waiting` until the AI's
+       * next step reads it (`read`, drawn where it was read); `queued` when the
+       * turn ended without reading it, so the next one answers it. Live-only —
+       * a reload shows the message where it was read, and nothing to wait for. */
+      interjection?: Interjection;
     }
   | { kind: "tool_call"; call: ToolCallView }
   | { kind: "mention"; by: string; users: string[]; note: string; at?: number }
@@ -116,6 +124,17 @@ export type AgentEntry =
   | { kind: "goal_note"; text: string; at?: number; failure?: Failure }
   // #624: a persisted system notice (history no longer reaches the model).
   | { kind: "notice"; text: string; at?: number }
+  // plan-env-token-refresh D6: a sign-in to do again, with its button.
+  | {
+      kind: "sign_in";
+      text: string;
+      provider: string;
+      layer: "personal" | "private" | "shared";
+      at?: number;
+    }
+  // plan-workflow-output-repair §3.5: a workflow node was asked to re-emit its
+  // answer in the required format — the request as sent, never LLM history.
+  | { kind: "repair_request"; text: string; at?: number }
   // #739: the thread outgrew its window, so this span was replaced — for the
   // MODEL — by a précis. `replaced` is how many messages sit behind it, derived
   // from position rather than stored: the originals are still right there above
@@ -126,7 +145,11 @@ export type AgentEntry =
   | { kind: "phase"; phase: string; at?: number }
   // `failure` when the banner IS a failure (docs/plan-friendly-errors.md D8):
   // `text` stays its headline, so a carried banner is still recognised by it.
-  | { kind: "banner"; text: string; at?: number; failure?: Failure };
+  // `by`: another person whose message took this turn over (plan-interjection
+  // Q2) — the view names them; `text` keeps the id for the live/stored de-dupe.
+  | { kind: "banner"; text: string; at?: number; failure?: Failure; by?: string };
+
+export type Interjection = "waiting" | "read" | "queued";
 
 export type AgentLog = {
   entries: AgentEntry[];
@@ -266,6 +289,10 @@ export function drawOwnAsk(
       {
         kind: "message",
         pending: true,
+        // Sent while their own turn runs: it waits for the AI's next step.
+        ...(log.streaming && log.streamingBy === ask.author
+          ? { interjection: "waiting" as const }
+          : {}),
         message: {
           role: "user",
           author: ask.author,
@@ -339,6 +366,60 @@ const failureOf = (ev: {
   params?: Record<string, number> | null;
 }): Failure => ({ kind: ev.kind ?? "unknown", params: ev.params ?? null, raw: ev.message });
 
+/** plan-interjection Q2: another person's message took the turn over. One
+ * wording for the live banner and the stored message, so the de-dupe sees one
+ * event. */
+const interruptedText = (who: string): string =>
+  translate(initialLocale(), "banner.interrupted", { who });
+
+/** plan-interjection Q9: a turn ended — what it read was answered (the note has
+ * done its job), and what it did not read is the next turn's to answer. A turn
+ * that was STOPPED (a Stop, a takeover) answered nothing it read: that goes back
+ * to the queue too (§9 C9), so it says the same as what it never read. */
+function endInterjections(entries: AgentEntry[], stopped: boolean): void {
+  for (let i = 0; i < entries.length; i++) {
+    const e = entries[i];
+    if (e?.kind !== "message" || e.interjection === undefined) continue;
+    const { interjection, ...rest } = e;
+    const owed = interjection === "waiting" || (stopped && interjection === "read");
+    entries[i] = owed ? { ...rest, interjection: "queued" } : rest;
+  }
+}
+
+/** …and once a turn is producing output again, a `queued` note has done its job:
+ * that turn is the one answering it. */
+function clearQueued(entries: AgentEntry[]): void {
+  for (let i = 0; i < entries.length; i++) {
+    const e = entries[i];
+    if (e?.kind === "message" && e.interjection === "queued") {
+      const { interjection: _done, ...rest } = e;
+      entries[i] = rest;
+    }
+  }
+}
+
+/**
+ * Roles the platform writes INTO a turn rather than as its result: the #624
+ * `notice` (persisted before the model is called) and the `sign_in` message
+ * (`docs/plan-env-token-refresh.md` D6, persisted under the question before
+ * the turn runs). They say nothing about whether the turn has ended.
+ */
+const MID_TURN_ROLES: ReadonlySet<string> = new Set(["notice", "sign_in"]);
+
+/**
+ * The message that says where the thread's turn stands: the last one that is
+ * not a platform line written mid-turn. Both "a reply is still on its way"
+ * readings — hydration and the cross-pod store poll — read THIS, so they
+ * cannot disagree about it.
+ */
+export function turnTail<M extends { role: string }>(messages: readonly M[]): M | undefined {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const m = messages[i];
+    if (m !== undefined && !MID_TURN_ROLES.has(m.role)) return m;
+  }
+  return undefined;
+}
+
 const isRecent = (at: number | null | undefined): boolean =>
   at != null && Date.now() - at < AWAITING_REPLY_MAX_MS;
 
@@ -396,6 +477,18 @@ export function logFromMessages(messages: readonly Message[]): AgentLog {
       // #624: the context horizon moved — the user needs to know the model can
       // no longer see the start of the thread.
       entries.push({ kind: "notice", text: m.content, at: m.created_at ?? undefined });
+    } else if (m.role === "sign_in") {
+      // plan-env-token-refresh D6: the deploy reported a sign-in's refresh
+      // token dead — told here, with that sign-in's button.
+      entries.push({
+        kind: "sign_in",
+        text: m.content,
+        provider: m.sign_in_provider ?? "",
+        layer: m.sign_in_layer ?? "private",
+        at: m.created_at ?? undefined,
+      });
+    } else if (m.role === "repair_request") {
+      entries.push({ kind: "repair_request", text: m.content, at: m.created_at ?? undefined });
     } else if (m.role === "goal") {
       // #613 P3: the goal driver's outcome marker (達成 / 額度用盡).
       // Review round 1: a night that could not start carries WHY as what it
@@ -435,6 +528,15 @@ export function logFromMessages(messages: readonly Message[]): AgentLog {
         });
       } else if (m.error_kind === "max_turns") {
         entries.push({ kind: "banner", text: m.content, at: m.created_at ?? undefined });
+      } else if (m.error_kind === "interrupted") {
+        // plan-interjection Q2: another person's message took the turn over —
+        // not a failure. Worded like the live banner, so the two are one event.
+        entries.push({
+          kind: "banner",
+          text: interruptedText(m.author ?? ""),
+          at: m.created_at ?? undefined,
+          ...(m.author ? { by: m.author } : {}),
+        });
       } else {
         const failure: Failure = {
           kind: m.error_kind ?? "unknown",
@@ -470,7 +572,7 @@ export function logFromMessages(messages: readonly Message[]): AgentLog {
   // persisted (an answer, an error, a cancellation) whether the provider hangs,
   // the requester disconnects, the pod rolls or the store write fails — so it
   // cannot stick on forever.
-  const last = messages[messages.length - 1];
+  const last = turnTail(messages);
   const awaitingReply =
     last !== undefined && last.role === "user" && isRecent(last.created_at);
   return {
@@ -498,7 +600,15 @@ export function logFromMessages(messages: readonly Message[]): AgentLog {
 /** Entries that carry the conversation itself — the ones the backend persists.
  * `step` / `phase` / live banners are stream-only chrome and are deliberately
  * NOT counted, so their presence can't disguise a store that is behind. */
-const CONTENT_KINDS = new Set(["message", "tool_call", "mention", "goal_note", "notice"]);
+const CONTENT_KINDS = new Set([
+  "message",
+  "tool_call",
+  "mention",
+  "goal_note",
+  "notice",
+  "sign_in",
+  "repair_request",
+]);
 
 const contentCount = (entries: readonly AgentEntry[]) =>
   entries.filter((e) => CONTENT_KINDS.has(e.kind)).length;
@@ -890,7 +1000,10 @@ export function reduceAgent(log: AgentLog, ev: AgentEvent, now: number = Date.no
   // `run_cancelled` and `max_turns_exceeded` are four exits, and closing three
   // of them leaves the fourth appending a whole turn's answer onto the previous
   // one.
-  if (isTerminal(ev)) endLiveAnswer(entries);
+  if (isTerminal(ev)) {
+    endLiveAnswer(entries);
+    endInterjections(entries, ev.type === "run_cancelled");
+  }
 
   switch (ev.type) {
     case "agent_metrics":
@@ -943,6 +1056,7 @@ export function reduceAgent(log: AgentLog, ev: AgentEvent, now: number = Date.no
       return { ...log, restore: { done: ev.done, total: ev.total } };
 
     case "message_delta": {
+      clearQueued(entries);
       const idx = liveAnswerIdx(entries);
       const last = idx >= 0 ? entries[idx] : undefined;
       if (last && last.kind === "message" && last.message.role === "assistant") {
@@ -1012,6 +1126,7 @@ export function reduceAgent(log: AgentLog, ev: AgentEvent, now: number = Date.no
       // had, kept explicit: whatever the model says after the tool is a new
       // block, not a continuation of what it was saying before it.
       endLiveAnswer(entries);
+      clearQueued(entries);
       entries.push({
         kind: "tool_call",
         call: {
@@ -1119,7 +1234,13 @@ export function reduceAgent(log: AgentLog, ev: AgentEvent, now: number = Date.no
     }
 
     case "run_cancelled":
-      entries.push({ kind: "banner", at: now, text: translate(initialLocale(), "banner.cancelled") });
+      entries.push({
+        kind: "banner",
+        at: now,
+        // plan-interjection Q2: another person's message took the turn over.
+        text: ev.by ? interruptedText(ev.by) : translate(initialLocale(), "banner.cancelled"),
+        ...(ev.by ? { by: ev.by } : {}),
+      });
       // #739: an end is an end — never leave ANY waiting state standing. Each
       // of these outranks something below it in `TurnStatus`, so a stale one
       // does not merely linger, it shadows: the rate-limit hold survived its
@@ -1206,7 +1327,12 @@ export function reduceAgent(log: AgentLog, ev: AgentEvent, now: number = Date.no
         // #847 P7: the server's record of the markings replaces the draft
         // chips — it knows which were written and which were refused.
         const message = ev.markings ? { ...own.message, markings: ev.markings } : own.message;
-        entries[mine] = { kind: "message", at: askedAt, message };
+        entries[mine] = {
+          kind: "message",
+          at: askedAt,
+          message,
+          ...(own.interjection ? { interjection: own.interjection } : {}),
+        };
       } else {
         const alreadyDrawn = entries.some(
           (e) =>
@@ -1221,6 +1347,12 @@ export function reduceAgent(log: AgentLog, ev: AgentEvent, now: number = Date.no
           entries.push({
             kind: "message",
             at: askedAt,
+            // plan-interjection Q9: its author's own turn is running — it waits
+            // for the AI's next step. Another person's message takes the turn
+            // over instead, which the ending banner says.
+            ...(log.streaming && log.streamingBy === ev.author
+              ? { interjection: "waiting" as const }
+              : {}),
             message: {
               role: "user",
               author: ev.author,
@@ -1263,6 +1395,25 @@ export function reduceAgent(log: AgentLog, ev: AgentEvent, now: number = Date.no
       };
     }
 
+    case "interjected": {
+      // plan-interjection Q1/Q3: the running turn READ this message here. Move
+      // it to this point — after what the turn had done, before the answer that
+      // saw it — which is also where the stored thread puts it.
+      const at = entries.findIndex(
+        (e) =>
+          e.kind === "message" &&
+          e.message.role === "user" &&
+          e.message.author === ev.author &&
+          e.at === ev.created_at,
+      );
+      const read = at >= 0 ? entries[at] : undefined;
+      if (read === undefined || read.kind !== "message") return log;
+      entries.splice(at, 1);
+      endLiveAnswer(entries);
+      entries.push({ ...read, interjection: "read" });
+      return { ...log, entries };
+    }
+
     case "file_changed":
       // #43: a workspace file changed — a side effect handled in the hook
       // (refetch the file tree), not folded into the agent log.
@@ -1278,6 +1429,23 @@ export function reduceAgent(log: AgentLog, ev: AgentEvent, now: number = Date.no
         step: { phase: ev.phase, name: ev.name, key: ev.key, status: "running" },
       });
       return { ...log, entries };
+
+    case "step_repairing": {
+      // plan-workflow-output-repair D7: a repair of the reply's format, in place.
+      const idx = findStep(entries, ev.phase, ev.name, ev.key);
+      const e = idx >= 0 ? entries[idx] : undefined;
+      const step = { status: "repairing" as const, reason: ev.reason, repair: ev.repair };
+      if (e && e.kind === "step") {
+        entries[idx] = { ...e, step: { ...e.step, ...step } };
+      } else {
+        entries.push({
+          kind: "step",
+          at: now,
+          step: { phase: ev.phase, name: ev.name, key: ev.key, ...step },
+        });
+      }
+      return { ...log, entries };
+    }
 
     case "step_passed":
     case "step_failed":
@@ -1329,6 +1497,20 @@ export function reduceAgent(log: AgentLog, ev: AgentEvent, now: number = Date.no
     case "phase_entered":
       entries.push({ kind: "phase", at: now, phase: ev.phase });
       return { ...log, entries };
+
+    case "sign_in_expired": {
+      // plan-env-token-refresh D6. Persisted before it is announced, so a log
+      // hydrated from the thread may hold it already: the backend stamps the
+      // notice ONCE and hands the same value to both, so provider + stamp is
+      // the key (as `user_message` keys on author + stamp).
+      const at = ev.created_at ?? now;
+      const shown = entries.some(
+        (e) => e.kind === "sign_in" && e.provider === ev.provider && e.at === at,
+      );
+      if (shown) return log;
+      entries.push({ kind: "sign_in", text: ev.text, provider: ev.provider, layer: ev.layer, at });
+      return { ...log, entries };
+    }
 
     default:
       // Anything not folded into the feed (e.g. awaiting_human → the run

@@ -26,7 +26,8 @@
 | --- | --- |
 | `web/src/events.ts` | SSE 事件型別聯集（`AgentEvent` / `WorkflowEvent` / `CellEvent`）+ `isTerminal` / `isCellTerminal` 守衛。**必須與後端 `src/workspace_app/api/events.py` 逐位元對齊**——這是最吃重的跨層契約。 |
 | `web/src/pages/investigation/agentLog.ts` | 純 reducer `reduceAgent(log, ev)`，把 `AgentEvent` 摺進 `AgentLog`（entries + streaming/error/metrics/failover）。也含 `logFromMessages`（持久 thread → log）、`turnPhase`（idle/prep/waiting/thinking/answering 等候態推導）、`formatMetrics`、`isToolRunning`、`turnsFromEntry`。 |
-| `web/src/components/AgentEntryView.tsx` | 單筆 agent-log entry 的共用渲染（`EntryView`）：訊息塊、可摺疊 `ReasoningBlock`（live 自動展開、「已思考 Ns」摘要）、`ToolCallCard`（本地化行為標籤 + 參數提示 + live stdout + 行內圖片 + 引用）、workflow `PhaseDivider`/`StepLine`、mention/banner。RCA 與 KB chat 共用。 |
+| `web/src/components/AgentEntryView.tsx` | 單筆 agent-log entry 的共用渲染（`EntryView`）：訊息塊、可摺疊 `ReasoningBlock`（live 自動展開、「已思考 Ns」摘要）、`ToolCallCard`（本地化行為標籤 + 參數提示 + live stdout + 行內圖片 + 引用）、workflow `PhaseDivider`/`StepLine`、mention/banner。RCA 與 KB chat 共用。答案的 markdown 本文是 memo 過的 `AnswerMarkdown`：只有文字、引用或 `fileUrl` 變了才重新解析。 |
+| `web/src/components/ChatFeedRow.tsx` | 聊天 feed 的一列（memo 過的 `ChatFeedRow`），RCA 與 KB chat 都經它畫 `EntryView`。只吃這一列要畫的東西；replay / undo / 回報有誤等 handler 來自 `hooks/useStableActions`（身分固定、呼叫時讀最新 closure），`fileUrl` 是一般 prop（繪製時就會呼叫）。長聊天室串流時，一個 token 只重畫正在串流的那一則（#1002）。 |
 | `web/src/hooks/useAgent.tsx` | RCA per-investigation agent context（`AgentProvider`/`useAgent`）。以 `useQuery` 注水 Conversation，開一條長存的 #43 broadcast 訂閱驅動所有觀看者的 log，提供 `send`/`cancel`/`undo`/`mention`。`send` 只 POST enqueue（不再自己 stream）；含 #202 跨 pod store-poll 後備。 |
 | `web/src/hooks/useKbChat.tsx` | 驅動一條 KB chat thread；重用 agentLog 機制。指令式 SSE：`for-await` 摺 `reduceAgent`；stream 結束後 refetch 持久化 thread（帶 stream 省略的 `[n]` 引用）。`client`（`KbApi`）可注入供測試。 |
 | `web/src/hooks/useItemChat.tsx` | 驅動一個 App item 的**一條**聊天（Topic Hub §3）；#913 起 workflow 不再出現在聊天裡，`ExecutionView` 用它接一次執行的即時串流；回傳與 `useAgent` 相同的 `AgentState`，讓完整的 RCA AgentPanel 能對著一條 chat 渲染。同 #43 broadcast + #202 poll 後備，鍵在 `chatId`。 |
@@ -112,7 +113,7 @@ flowchart TD
 
 **寫路徑**：`useMutation` 呼一個 api 方法，再對相關 `qk.*` 鍵（及依賴鍵）`invalidateQueries`。例如存 collections picker 會同時失效 `qk.itemCollections` 與 `qk.file(id, "/collections.json")`。
 
-**即時 agent 回合（核心路徑）**：使用者送訊息 → chat hook（`useAgent`/`useKbChat`/`useItemChat`）把 `log.streaming` 翻 true 並經 `api.sendMessage` POST（只 **enqueue**，202）。一條長存的 SSE 訂閱（`api.subscribeInvestigation` / `client.subscribeChat` → `real.ts` async-generator → `parseSseStream`）吐出型別化 `AgentEvent`。每個事件由 `reduceAgent`（`agentLog.ts`）摺進 `AgentLog`；`AgentEntryView` 渲染每筆 entry。遇到終止事件（`isTerminal`），hook 會 **refetch 持久化的 Conversation/chat 並用 `logFromMessages` 重拍快照**——因為持久 thread 帶著 SSE 流刻意省略的 `[n]` 引用。`useAgent`/`useItemChat` 還有 #202 store-poll 後備，覆蓋廣播在另一個 pod 而本機 stream 沉默的跨 pod 情況。
+**即時 agent 回合（核心路徑）**：使用者送訊息 → chat hook（`useAgent`/`useKbChat`/`useItemChat`）把 `log.streaming` 翻 true 並經 `api.sendMessage` POST（只 **enqueue**，202）。一條長存的 SSE 訂閱（`api.subscribeInvestigation` / `client.subscribeChat` → `real.ts` async-generator → `parseSseStream`）吐出型別化 `AgentEvent`。每個事件由 `reduceAgent`（`agentLog.ts`）摺進 `AgentLog`（只換掉正在串流的那筆 entry，其餘沿用原物件）；每筆 entry 經 memo 過的 `ChatFeedRow` 交給 `AgentEntryView` 渲染，所以一個 token 只重畫正在串流的那一則。遇到終止事件（`isTerminal`），hook 會 **refetch 持久化的 Conversation/chat 並用 `logFromMessages` 重拍快照**——因為持久 thread 帶著 SSE 流刻意省略的 `[n]` 引用。`useAgent`/`useItemChat` 還有 #202 store-poll 後備，覆蓋廣播在另一個 pod 而本機 stream 沉默的跨 pod 情況。
 
 **side-effect 事件不進 log**：`file_changed` 不摺進 reducer，而是在 hook 裡失效 `qk.files`。workflow 的 step/phase 事件搭同一條 per-item stream，摺成 step/phase log entry（`reduceAgent` 的 `step_*`/`phase_entered` 分支）。引用在 `Message` 渲染時經 `kbCite`/`remarkKbCitation` 成為可點的 pill，點擊開啟來源文件。
 
@@ -164,6 +165,7 @@ flowchart TD
 | 資料層 = TanStack Query（`useQuery` 讀、`useMutation`+失效 寫）；SSE 維持指令式 | GET 讀受惠於 cache/dedup/stale；串流回合是事件驅動不合 query 語義，故手刻 hook，只在初始注水 + done 時回同步快取碰 TanStack | CLAUDE.md FE 資料層慣例；`docs/plan-frontend.md` |
 | `events.ts` 鏡像 `api/events.py`，手動鎖步 | SSE schema 是 agent↔UI 契約，兩邊照同 tag 摺/渲染；無 codegen，靠慣例 + 檔頭註解強制 | CLAUDE.md SSE 慣例；`events.ts` 頭註（[contract](../contract.md) §3） |
 | 一個 `AgentEntryView` + 一個 `reduceAgent` 共用於 RCA/KB/item chat | 三表面必須一致（reasoning fold、tool card、metrics、引用）；集中渲染+摺疊避免漂移。KB phase 3 也是 agentic，端到端重用同 runner | CLAUDE.md（共用 `AgentEntryView`）；MEMORY `project_kb_phase3_agentic` |
+| feed 的每一列 memo（`ChatFeedRow` + `AnswerMarkdown`），整串照樣全部畫在 DOM 裡 | 300 輪的對話串流時，每個 token 讓每則重畫、重新解析 markdown（主執行緒 JS 6.1s）。只畫最近 N 輪或虛擬化會讓瀏覽器 Ctrl+F 找不到舊訊息，user 選擇保留整串；`content-visibility: auto` 實測讓打開更慢（排版 −1.2s、樣式 +2.5s），已撤 | PR #1002 |
 | 引用在 done 時從持久 thread refetch，不串流 | 後端在回合後把 `[n]→Citation` 掛到持久訊息；SSE 省略，FE 在終止事件重拍 `logFromMessages` | CLAUDE.md KB 攝取/引用慣例；`useKbChat`/`useAgent` 註解 |
 | #43 broadcast 模型——send 只 enqueue；長存 per-item/per-chat SSE 訂閱驅動所有觀看者；#202 加跨 pod store-poll 後備 | 多寫者協作：每個觀看者都看到每個回合即時（不論誰送）；poll 後備避免觀看者 stream 在非執行 pod 時卡 working… | MEMORY `project_collab_workspace_43`、`project_job_pod_split_acting_user`；`useAgent.tsx` 註解 |
 | 留在 react-router-dom，僅把 KB 視圖 URL 化（不遷 TanStack Router） | 遷移成本不划算；splat 接 path leaf + `?doc=` overlay 即可滿足 URL 覆蓋 | MEMORY `project_issue_93_tanstack_router`；`docs/plan-issue-93.md` |

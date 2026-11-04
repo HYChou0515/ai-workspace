@@ -56,6 +56,7 @@ from ..tooling.external import (
     describe_running,
     resolve_external_tools,
 )
+from ..workflow.schedule_bindings import ScheduleAuthorship
 from ..workflow.user_schedules import SchedulePolicy
 from .env_layers import PersonEnv, resolve
 from .locator import TurnFacts
@@ -218,6 +219,7 @@ class TurnContextBuilder:
         review_skill: ReviewSkill | None = None,
         tool_usage: ToolUsageRecorder | None = None,
         ext_ai: bool = False,
+        schedule_authorship: ScheduleAuthorship | None = None,
     ) -> None:
         # plan-tool-usage-stats §8.3: a chat turn carries the recorder from the
         # moment it is built — the send path counts an applied skill before the
@@ -248,6 +250,11 @@ class TurnContextBuilder:
         # not defaulted: a default here would be a guess about the deployment,
         # and the tool's whole point is not to guess.
         self._schedule_policy = schedule_policy
+        # plan-schedule-run-as G2: credits the rows `save_schedules` adds to the
+        # person a turn acts for. One for every turn shape — the chat's and a
+        # workflow node's — so neither can save schedules that credit nobody
+        # by being built without it.
+        self._schedule_authorship = schedule_authorship
         self._infer_modules_parallelism = infer_modules_parallelism
         self._history_max_messages = history_max_messages
         self._history_max_context_tokens = history_max_context_tokens
@@ -778,24 +785,36 @@ class TurnContextBuilder:
         # on the ctx so the runner can tell the endpoint to OPEN that much rather
         # than serve its own default and truncate the difference away in silence.
         window = self._context_window(agent_config)
+        # The token ceiling is DERIVED from what this endpoint can actually
+        # take, minus what the prompt + tool schemas already spend — not a
+        # constant. An unknown ceiling yields None ⇒ no trim (we send it all
+        # and learn the real limit from the response), unless an operator has
+        # set the legacy manual cap. None is deliberately not 0: 0 is a known
+        # ceiling with no room left, which must trim to nothing, not to all.
+        max_tokens = (
+            derived
+            if (derived := self._budget_for(agent_config, overhead_tokens=overhead)) is not None
+            else self._history_max_context_tokens
+        )
         history = history_items(
             history_messages,
             max_messages=self._history_max_messages,
-            # The token ceiling is DERIVED from what this endpoint can actually
-            # take, minus what the prompt + tool schemas already spend — not a
-            # constant. An unknown ceiling yields None ⇒ no trim (we send it all
-            # and learn the real limit from the response), unless an operator has
-            # set the legacy manual cap. None is deliberately not 0: 0 is a known
-            # ceiling with no room left, which must trim to nothing, not to all.
-            max_tokens=(
-                derived
-                if (derived := self._budget_for(agent_config, overhead_tokens=overhead)) is not None
-                else self._history_max_context_tokens
-            ),
+            max_tokens=max_tokens,
             users=self._users,
             on_trim=cut.append,
             on_reduce=said.append,
         )
+        users = self._users
+        max_messages = self._history_max_messages
+
+        def history_builder(messages: list[Any]) -> list[dict[str, Any]]:
+            # plan-interjection Q1: the same budget, for a turn that rebuilds its
+            # history when it starts. Whether that rebuild had to cut is not
+            # announced again — the #624 notice is the send's, said once.
+            return history_items(
+                messages, max_messages=max_messages, max_tokens=max_tokens, users=users
+            )
+
         return dict(
             investigation_id=item_id,
             sandbox=self._sandbox,
@@ -823,10 +842,10 @@ class TurnContextBuilder:
             # Which one wins is the item's per-name policy
             # (`plan-wui-viewer-login`): the caller's values are the PRIVATE
             # layer, the item's the SHARED one, and a name with no policy is
-            # `shared_first` — the stored copy overriding, unannounced, which is
-            # what #714 decided so a value can be pinned for testing. The person's
-            # values for every item (`plan-personal-env`) are read only for a
-            # name whose policy is Private first / Private only.
+            # `private_first` (docs/plan-wui-user.md D5) — the caller's own value
+            # over the stored copy. Pinning a value for testing, as #714 wanted,
+            # now means choosing Shared for that name. The person's values for
+            # every item (`plan-personal-env`) are read by every policy.
             user_env=resolve(shared=facts.env_vars, person=caller_env, policy=facts.env_policy),
             handle=session.handle,
             # Route lazy-create through the registry so session.handle is set
@@ -860,7 +879,9 @@ class TurnContextBuilder:
             tool_output_max_chars=self._tool_output_max_chars,
             exec_output_max_chars=self._exec_output_max_chars,
             schedule_policy=self._schedule_policy,
+            schedule_authorship=self._schedule_authorship,
             history=history,
+            history_builder=history_builder,
             history_trimmed=cut[0] if cut else 0,
             history_reduced_note=said[0] if said else "",
             context_overhead_tokens=overhead,
@@ -979,6 +1000,9 @@ class TurnContextBuilder:
             collection_tiers=collection_tiers,
             # #111: card create/update agent tools stamp this user on the write.
             acting_user=acting_user,
+            # plan-schedule-run-as: the person a chat turn runs for is its
+            # author — the sender, or a goal round's / re-run's original author.
+            acting_for=acting_user,
             # #242: the resolved speaker for the per-turn "who am I replying to" note.
             speaker=speaker,
             # Is a person waiting on this turn? Decides which rate limit the
@@ -1021,6 +1045,7 @@ class TurnContextBuilder:
         tool_subset: list[str] | None = None,
         entity_write_origin: EntityOrigin | None = None,
         caller_env: PersonEnv | None = None,
+        acting_for: str = "",
     ) -> AgentToolContext:
         """The lean workflow agent-node turn context (`_wf_drive_turn`): the shared
         core only — every interactive extra stays at its ``AgentToolContext`` default.
@@ -1067,12 +1092,20 @@ class TurnContextBuilder:
                 run_subagent=run_subagent,
                 facts=facts,
                 subagent_defs=await self._subagent_defs(item_id, agent_config, facts),
-                skills_reachable=await self._skills_reachable(item_id, facts, agent_config),
+                # An EMPTY subset is a turn that may hold nothing — a repair turn
+                # (plan-workflow-output-repair D1). `read_skill` is granted by the
+                # item's skills, not by the list, so it has to be withheld here.
+                skills_reachable=False
+                if tool_subset == []
+                else await self._skills_reachable(item_id, facts, agent_config),
                 history_messages=history_messages,
                 external=external,
                 caller_env=caller_env,
             ),
             entity_write_origin=entity_write_origin,
+            # plan-schedule-run-as: whose values the RUN carries (its
+            # `env_user`), never the user it is billed to — "" for nobody.
+            acting_for=acting_for,
         )
 
     def _finalized(

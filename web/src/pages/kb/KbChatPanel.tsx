@@ -10,14 +10,17 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import { kbApi, type KbApi, type KbCitation } from "../../api/kb";
 import { qk } from "../../api/queryKeys";
-import { EntryView } from "../../components/AgentEntryView";
+import { ChatFeedRow, type FeedActions } from "../../components/ChatFeedRow";
+import { useStableActions } from "../../hooks/useStableActions";
 import { ErrorNotice } from "../../components/ErrorNotice";
 import { Icon } from "../../components/Icon";
 import { ResizeDivider } from "../../components/ResizeDivider";
 import { usePersistentNumber } from "../../hooks/usePersistentNumber";
 import { ModelEffortPicker } from "../../components/ModelEffortPicker";
 import { ReplayDialog, type ReplayRequest } from "../../components/ReplayDialog";
-import { useCurrentUser } from "../../hooks/useCurrentUser";
+import { useCurrentUser, useCurrentUserState } from "../../hooks/useCurrentUser";
+import { useUser } from "../../hooks/useUsers";
+import { turnNote } from "../investigation/turnNote";
 import { useT } from "../../lib/i18n";
 import { useKbAgentName } from "../../lib/kbAgent";
 import { modCombo } from "../../lib/platform";
@@ -183,6 +186,16 @@ export function KbChatPanel({
     client,
     onChatCreated,
   });
+  // docs/plan-interjection.md Q2/Q7: the same note the workspace composer shows.
+  const meState = useCurrentUserState();
+  const note = turnNote(log, meState.ready ? meState.id : null);
+  const runningName = useUser(log.streamingBy ?? "").name;
+  const kbNote =
+    note?.kind === "own"
+      ? t("interject.composerNote")
+      : note?.kind === "others"
+        ? t("interject.othersNote", { who: runningName || note.who })
+        : null;
   // Follow the conversation as it streams; back off when the user scrolls up.
   const bodyRef = useStickToBottom<HTMLDivElement>(log);
 
@@ -225,6 +238,41 @@ export function KbChatPanel({
       return next;
     });
 
+  // What a row may do, as one object whose identity holds across renders, so
+  // a streamed token redraws only the answer it extends (the long-chat perf
+  // fix). An action a surface does not offer is left out, and its row then
+  // draws no affordance for it.
+  const rowActions = useStableActions<FeedActions>({
+    openCitation: onOpenCitation,
+    // Permission-disclosure: the "🔒 request access" chip asks the
+    // withheld collection's owner for read access (deduped server-side).
+    requestAccess: (w) => {
+      void client.requestCollectionAccess(w.collection_id);
+    },
+    // #51 P6: same 1:1 entry↔message mapping as the RCA panel; only for
+    // persisted threads (chatId) and never mid-stream (`settled`).
+    replay:
+      chatId != null
+        ? (i) => setReplayReq({ kind: "turn", source: "kb", threadId: chatId, messageIndex: i })
+        : undefined,
+    // #397: "回報有誤" on a completed assistant answer, only when the scope
+    // has a wiki to correct (Q13).
+    reportWiki:
+      wikiCollectionId != null
+        ? (i) => {
+            const entry = log.entries[i];
+            setReportReq({
+              collectionId: wikiCollectionId,
+              question: nearestUserQuestion(log.entries, i),
+              answer:
+                entry?.kind === "message" && entry.message.role === "assistant"
+                  ? entry.message.content
+                  : "",
+            });
+          }
+        : undefined,
+  });
+
   return (
     <div className="kb-chatpanel">
       <div className="kb-chatpanel__body" ref={bodyRef}>
@@ -234,43 +282,13 @@ export function KbChatPanel({
           </p>
         )}
         {log.entries.map((entry, i) => (
-          <EntryView
+          <ChatFeedRow
             key={i}
             entry={entry}
-            // #583: who is reading, so their own messages align right.
-            currentUser={me}
-            onOpenCitation={onOpenCitation}
-            // Permission-disclosure: the "🔒 request access" chip asks the
-            // withheld collection's owner for read access (deduped server-side).
-            onRequestAccess={(w) => {
-              void client.requestCollectionAccess(w.collection_id);
-            }}
-            // #51 P6: same 1:1 entry↔message mapping as the RCA panel;
-            // only for persisted threads (chatId) and never mid-stream.
-            onReplay={
-              chatId != null &&
-              !log.streaming &&
-              (entry.kind === "tool_call" ||
-                (entry.kind === "message" && entry.message.role === "assistant"))
-                ? () =>
-                    setReplayReq({ kind: "turn", source: "kb", threadId: chatId, messageIndex: i })
-                : undefined
-            }
-            // #397: "回報有誤" on a completed assistant answer, only when the
-            // scope has a wiki to correct (Q13).
-            onReportWiki={
-              wikiCollectionId != null &&
-              !log.streaming &&
-              entry.kind === "message" &&
-              entry.message.role === "assistant"
-                ? () =>
-                    setReportReq({
-                      collectionId: wikiCollectionId,
-                      question: nearestUserQuestion(log.entries, i),
-                      answer: entry.message.role === "assistant" ? entry.message.content : "",
-                    })
-                : undefined
-            }
+            index={i}
+            settled={!log.streaming}
+            me={me}
+            actions={rowActions}
           />
         ))}
         <TurnStatus log={log} />
@@ -450,6 +468,15 @@ export function KbChatPanel({
               <Icon name="arrow_r" size={13} />
             </button>
           </div>
+          {kbNote && (
+            // docs/plan-interjection.md Q2/Q7: what a message sent now would do.
+            <div
+              data-testid="kb-composer-note"
+              style={{ fontSize: "var(--text-xs, 11px)", color: "var(--text-paper-d)", padding: "4px 2px 0" }}
+            >
+              {kbNote}
+            </div>
+          )}
         </div>
       </div>
       {showPicker && pickerOpen && (

@@ -1,7 +1,7 @@
 /**
  * Read-only phase diagram (#100, manual §12): the run's phases drawn as an ordered
  * sequence, each with a state (pending / running / passed / failed / awaiting_human
- * / skipped) and, when it loops over a batch, dynamic sub-progress ("3 / 5 · 1
+ * / skipped / stopped) and, when it loops over a batch, dynamic sub-progress ("3 / 5 · 1
  * failed"). The current phase is emphasised. Purely prop-driven (state derived by
  * `phaseView`), so it renders identically whether fed by a poll or live events.
  */
@@ -20,7 +20,7 @@ export function phaseTone(status: string): ChipTone {
       return "info";
     case "awaiting_human":
       return "warn";
-    default: // pending | skipped
+    default: // pending | skipped | stopped (a Stop ended it: neutral, as a stopped run)
       return "muted";
   }
 }

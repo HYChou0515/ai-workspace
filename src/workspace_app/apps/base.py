@@ -114,9 +114,10 @@ class WorkItemBase(Struct):
 
     ``env_vars`` is the SHARED layer; the PRIVATE one is the person the tool runs
     for (their own values for this item, plus what the deploy's ``IRequestEnv``
-    said about them). Per name: ``shared_first`` (the default, and what a name
-    with no entry here means — the merge every turn did before), ``private_first``
-    or ``private_only``. Resolved by ``api.env_layers.resolve_env``.
+    said about them). Per name: ``private_first`` (the default, and what a name
+    with no entry here means — docs/plan-wui-user.md D5), ``shared_first`` (stored
+    explicitly when chosen) or ``private_only``. Resolved by
+    ``api.env_layers.resolve_env``.
 
     Written like ``env_vars`` — ``write_meta``, riding the item PATCH — so a page
     author (``edit_content``) cannot switch a name over to someone else's layer.

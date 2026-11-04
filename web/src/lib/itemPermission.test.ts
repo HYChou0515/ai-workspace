@@ -333,3 +333,36 @@ describe("group grants resolve for the caller's groups (#608 gating)", () => {
     expect(canChangeItemPermission(p, ME, OWN, false, [])).toBe(false);
   });
 });
+
+describe("WUI User (docs/plan-wui-user.md D8–D10)", () => {
+  it("sits between Reader and Participant, and holds use_wui on top of Reader", async () => {
+    const { ITEM_ROLES } = await import("./itemPermission");
+    const ids = ITEM_ROLES.map((r) => r.id);
+    expect(ids.indexOf("wui_user")).toBe(ids.indexOf("reader") + 1);
+    expect(ids.indexOf("participant")).toBe(ids.indexOf("wui_user") + 1);
+    const wui = ITEM_ROLES.find((r) => r.id === "wui_user")!;
+    expect(wui.label).toBe("WUI User");
+    expect(new Set(wui.verbs)).toEqual(new Set([...ITEM_ROLES.find((r) => r.id === "reader")!.verbs, "use_wui"]));
+  });
+
+  it("reads a stored Participant or Collaborator as that role, though neither named use_wui", async () => {
+    const { itemGrantsFromPermission } = await import("./itemPermission");
+    const who = ["user:alice"];
+    const participant = { visibility: "restricted" as const, read_meta: who, read_chat: who, read_content: who, converse: who };
+    expect(itemGrantsFromPermission(participant, "bob")).toEqual([{ userId: "alice", role: "participant", verbs: new Set() }]);
+    const collaborator = {
+      ...participant,
+      add_content: who,
+      edit_content: who,
+      execute: who,
+    };
+    expect(itemGrantsFromPermission(collaborator, "bob")).toEqual([{ userId: "alice", role: "collaborator", verbs: new Set() }]);
+  });
+
+  it("reads Reader + use_wui as WUI User", async () => {
+    const { itemGrantsFromPermission } = await import("./itemPermission");
+    const who = ["user:alice"];
+    const perm = { visibility: "restricted" as const, read_meta: who, read_chat: who, read_content: who, use_wui: who };
+    expect(itemGrantsFromPermission(perm, "bob")).toEqual([{ userId: "alice", role: "wui_user", verbs: new Set() }]);
+  });
+});

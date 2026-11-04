@@ -52,6 +52,7 @@ from ..workflow.offered import no_such_workflow, wont_parse
 from ..workflow.orchestrator import TooManyPageJobs
 from ..workflow.run import PageJob
 from .env_layers import PersonEnv, resolve, resolve_env
+from .env_refresh import EnvRefresher
 from .locator import ItemLocator
 from .private_env import PrivateEnvStore, private_layer
 from .request_env import IRequestEnv
@@ -250,6 +251,7 @@ def register_wui_routes(
     view_plugin_artifacts: Mapping[str, str],
     request_env: IRequestEnv | None = None,
     private_env: PrivateEnvStore | None = None,
+    env_refresher: EnvRefresher | None = None,
     get_user_id: Callable[[], str] | None = None,
     orchestrator: Any = None,
     turn_engine: Any = None,
@@ -317,7 +319,16 @@ def register_wui_routes(
                 # built that string out of the cookie it was reading.
                 detail="This page could not confirm who you are. Sign in again, then reopen it.",
             ) from None
-        return await private_layer(private_env, user_id=uid, item_id=item_id, fresh=fresh)
+        env = await private_layer(private_env, user_id=uid, item_id=item_id, fresh=fresh)
+        if env_refresher is None:
+            return env
+        # plan-env-token-refresh: a near-expiry token is refreshed before the
+        # page's tool gets it. A page has no thread to draw the sign-in notice
+        # in, so a dead sign-in is told by notification (D4) — `in_chat=False`.
+        # A shared token refreshed here is written to the item: the caller
+        # reads the item's layers AFTER this, so this call gets it.
+        outcome = await env_refresher.apply(env, user_id=uid, item_id=item_id, in_chat=False)
+        return outcome.person
 
     async def _external(item_id: str) -> ExternalTools:
         if resolve_external is not None:
@@ -344,8 +355,11 @@ def register_wui_routes(
         errors are the whole value. A route that answered only at the end would
         give a spinner and no idea whether anything was happening.
 
-        The verb is `execute`: this runs a command in the item's sandbox, the
-        same thing a notebook cell does.
+        The verb is `execute`: this runs the folder's build script in the item's
+        sandbox, the same thing a notebook cell does. NOT `use_wui`: a WUI User
+        may save inside the page's folder (D12), so a rebuild they could start
+        would run a build script they wrote — any command, outside the folder
+        too (docs/plan-wui-user.md §6, review round 1). Pending the user's word.
         """
         investigation_id = locator.require_access(slug, item_id, "execute")
         cwd = _build_dir(body.folder)
@@ -485,9 +499,10 @@ def register_wui_routes(
         The pane's own chrome does not know which row somebody clicked, and the
         whole premise of a WUI is that its author owns the experience.
 
-        The verb is `execute`: this runs work in the item, like a notebook cell.
+        The verb is `use_wui` (docs/plan-wui-user.md D3), which `converse` and
+        `execute` imply (D9/D10): pressing a page's button is using the page.
         """
-        investigation_id = locator.require_access(slug, item_id, "execute")
+        investigation_id = locator.require_access(slug, item_id, "use_wui")
 
         allowed = list(await workflows_for(investigation_id))
         if body.workflow not in allowed:
@@ -623,6 +638,9 @@ def register_wui_routes(
             )
         pkg, command = found
 
+        # The person first: refreshing may rewrite the item's shared copy, and
+        # the layers read after it are what this call's tool gets.
+        person = await _request_env(request, investigation_id)
         layers = locator.env_layers_of(investigation_id)
         session = await registry.session(investigation_id)
         ctx = AgentToolContext(
@@ -639,7 +657,7 @@ def register_wui_routes(
             # page cannot reach a different system from the one the agent does.
             user_env=resolve(
                 shared=layers.shared,
-                person=await _request_env(request, investigation_id),
+                person=person,
                 policy=layers.policy,
             ),
             # The registry's own wake path, so this shares the item's ONE
@@ -661,8 +679,9 @@ def register_wui_routes(
         slug: str, item_id: str, name: str, body: CallToolBody, request: Request
     ) -> CallToolOut:
         # A tool can write, so the caller needs the verb that lets them write —
-        # the same authority they would need to make the change by hand.
-        investigation_id = locator.require_access(slug, item_id, "edit_content")
+        # or, through a page, use_wui: the page is built to call it, and a WUI
+        # User does through the page what the page does (docs/plan-wui-user.md D3).
+        investigation_id = locator.require_access(slug, item_id, ("edit_content", "use_wui"))
 
         ctx, pkg, command = await _prepare_tool(investigation_id, name, request)
         handle = await ctx.ensure_sandbox()
@@ -849,7 +868,7 @@ def register_wui_routes(
         quota), waited on for at most `CALL_TIMEOUT_S`. Past that the job is
         stopped rather than left running behind a page that has already been
         told it failed, and the sentence names the verb to use instead."""
-        investigation_id = locator.require_access(slug, item_id, "execute")
+        investigation_id = locator.require_access(slug, item_id, "use_wui")
         run_id = await _start_agent(investigation_id, name, body.input)
         loop = asyncio.get_running_loop()
         deadline = loop.time() + CALL_TIMEOUT_S
@@ -875,7 +894,7 @@ def register_wui_routes(
     async def wui_start_job(slug: str, item_id: str, body: JobBody, request: Request) -> JobStarted:
         """`startTool` / `startAgent` (#942 D8): start the work and answer with
         its id at once; the page asks `GET …/jobs/{id}` how it is going."""
-        investigation_id = locator.require_access(slug, item_id, "execute")
+        investigation_id = locator.require_access(slug, item_id, "use_wui")
         if body.kind == "agent":
             if not isinstance(body.input, str):
                 raise HTTPException(status_code=422, detail="A sub-agent's input is text.")
@@ -910,14 +929,14 @@ def register_wui_routes(
     @app.get("/a/{slug}/items/{item_id}/wui/jobs/{job_id}")
     async def wui_job_status(slug: str, item_id: str, job_id: str) -> JobOut:
         """`job.status()` — and what `job.result()` polls."""
-        investigation_id = locator.require_access(slug, item_id, "execute")
+        investigation_id = locator.require_access(slug, item_id, "use_wui")
         state = await _job_state(job_id, investigation_id)
         return JobOut(state=state.state, output=state.output, error=state.error)
 
     @app.post("/a/{slug}/items/{item_id}/wui/jobs/{job_id}/stop")
     async def wui_stop_job(slug: str, item_id: str, job_id: str) -> JobOut:
         """`job.stop()` — the same Stop the run's own chat has."""
-        investigation_id = locator.require_access(slug, item_id, "execute")
+        investigation_id = locator.require_access(slug, item_id, "use_wui")
         await _job_state(job_id, investigation_id)  # a page job of THIS item, or 404
         await orchestrator.cancel(job_id, investigation_id)
         state = await _job_state(job_id, investigation_id)

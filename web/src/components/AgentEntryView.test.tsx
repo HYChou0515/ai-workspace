@@ -1163,6 +1163,57 @@ describe("compaction summary (#739)", () => {
 });
 
 
+describe("workflow repair request (plan-workflow-output-repair §3.5)", () => {
+  const entry = {
+    kind: "repair_request",
+    text: "Your reply is still not valid JSON.\n\nYour whole reply was: Sure!",
+    at: 1,
+  } as AgentEntry;
+
+  it("says in the user's words that the format was asked for again, folded", () => {
+    // The request quotes the whole failed reply, so open by default it would push
+    // the answer that follows it off the screen.
+    render(<EntryView entry={entry} />);
+    const toggle = screen.getByTestId("repair-request-toggle");
+    expect(toggle).toHaveTextContent("要求重新輸出格式");
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByText(/still not valid JSON/)).toBeNull();
+  });
+
+  it("speaks the reader's language", () => {
+    expect(translate("en", "wf.repairRequest.show")).not.toMatch(/[\u4e00-\u9fff]/);
+    expect(translate("zh-TW", "wf.repairRequest.show")).toContain("要求重新輸出格式");
+  });
+
+  it("opens to show exactly what was asked, and tells assistive tech it did", () => {
+    // W3C APG disclosure: the button carries aria-expanded and controls the region.
+    render(<EntryView entry={entry} />);
+    const toggle = screen.getByTestId("repair-request-toggle");
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    const region = document.getElementById(toggle.getAttribute("aria-controls") ?? "");
+    expect(region).toHaveTextContent("still not valid JSON");
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+  });
+});
+
+
+describe("a repairing step line (plan-workflow-output-repair D7)", () => {
+  it("names the repair and its number beside the reason", () => {
+    const entry = {
+      kind: "step",
+      step: { phase: "p", name: "judge", status: "repairing", repair: 1, reason: "not JSON" },
+    } as AgentEntry;
+    render(<EntryView entry={entry} />);
+    const line = screen.getByTestId("wf-step");
+    expect(line).toHaveAttribute("data-status", "repairing");
+    expect(line).toHaveTextContent("修正輸出格式（第 1 次）");
+    expect(line).toHaveTextContent("not JSON");
+  });
+});
+
+
 // plan-skill-hub-history A3: `show_skill_hub_entry` declares an entry and the
 // chat draws it as a live card — the card IS its rendering, like `show_file`.
 describe("EntryView — show_skill_hub_entry", () => {
@@ -1303,6 +1354,44 @@ describe("EntryView — publish_skill", () => {
     render(<EntryView entry={call("error: not published — too big")} />);
     expect(screen.queryByTestId("skill-hub-card-stub")).toBeNull();
     expect(document.querySelector("details")).not.toBeNull();
+  });
+});
+
+// docs/plan-interjection.md Q9: a message sent while the AI is answering says
+// what will happen to it, and a turn another person cut short says who.
+describe("EntryView — interjection notes", () => {
+  it.each([
+    ["waiting", "interject.waiting"],
+    ["read", "interject.read"],
+    ["queued", "interject.queued"],
+  ] as const)("a %s message says so under the bubble", (state, key) => {
+    render(
+      <EntryView
+        entry={{
+          kind: "message",
+          interjection: state,
+          message: { role: "user", content: "Q2", author: "hy" },
+        }}
+        currentUser="hy"
+      />,
+    );
+    expect(screen.getByText(translate("zh-TW", key))).toBeInTheDocument();
+  });
+
+  it("a message with nothing pending says nothing", () => {
+    render(
+      <EntryView entry={{ kind: "message", message: { role: "user", content: "Q1", author: "hy" } }} />,
+    );
+    for (const key of ["interject.waiting", "interject.read", "interject.queued"] as const) {
+      expect(screen.queryByText(translate("zh-TW", key))).toBeNull();
+    }
+  });
+
+  it("an interrupted turn's banner names the person, not their id", () => {
+    render(<EntryView entry={{ kind: "banner", text: "已被 hy 的訊息中斷。", by: "hy" }} />);
+    expect(
+      screen.getByText(translate("zh-TW", "banner.interrupted", { who: "Chou Hung-Yi" })),
+    ).toBeInTheDocument();
   });
 });
 

@@ -17,14 +17,13 @@ import time
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-import msgspec
 from specstar import SpecStar
 
 from ..failover.classify import classify_error, raw_error_text
 from .engine import StepFailed
 from .gate import AwaitingHuman
 from .handle import WorkflowHandle
-from .run import PendingDecision, RunStatus, WorkflowRun
+from .run import PendingDecision, RunStatus, WorkflowRun, with_settled_phases
 
 logger = logging.getLogger(__name__)
 
@@ -52,8 +51,7 @@ async def run_workflow(
     rm = spec.get_resource_manager(WorkflowRun)
 
     def _patch(**changes: Any) -> None:
-        current = rm.get(run_id).data
-        rm.update(run_id, msgspec.structs.replace(current, **changes))
+        rm.update(run_id, with_settled_phases(rm.get(run_id).data, **changes))
 
     _patch(status=RunStatus.RUNNING, started=now())
     logger.info("run %s started", run_id)

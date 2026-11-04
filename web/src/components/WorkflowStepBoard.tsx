@@ -12,6 +12,7 @@
 import { useEffect, useState } from "react";
 
 import type { ChipTone } from "../api/types";
+import { useT } from "../lib/i18n";
 import {
   fmtElapsed,
   stepBoard,
@@ -31,6 +32,7 @@ function stepTone(status: string): ChipTone {
     case "running":
       return "info";
     case "retrying":
+    case "repairing":
       return "warn";
     default: // skipped
       return "muted";
@@ -58,6 +60,7 @@ function phaseCounter(node: PhaseNode): string | null {
 }
 
 function StepRow({ step, now }: { step: StepStateDTO; now: number }) {
+  const t = useT();
   const elapsed = stepElapsedMs(step, now);
   return (
     <li
@@ -67,7 +70,11 @@ function StepRow({ step, now }: { step: StepStateDTO; now: number }) {
       data-status={step.status}
       style={{ display: "flex", alignItems: "center", gap: 8, padding: "2px 0", fontSize: pxToRem(12) }}
     >
-      <span style={chipStyle(stepTone(step.status))}>{step.status}</span>
+      <span style={chipStyle(stepTone(step.status))}>
+        {step.status === "repairing"
+          ? t("wf.step.repairing", { n: step.repairs || 1 })
+          : step.status}
+      </span>
       <span style={{ color: "var(--text-paper)", fontFamily: "var(--font-mono)" }}>
         {step.name}
         {step.key ? <span style={{ opacity: 0.6 }}> · {step.key}</span> : null}
@@ -80,6 +87,13 @@ function StepRow({ step, now }: { step: StepStateDTO; now: number }) {
       {step.attempts > 1 && (
         <span data-testid="wf-step-attempts" style={{ opacity: 0.7 }}>
           ×{step.attempts}
+        </span>
+      )}
+      {/* plan-workflow-output-repair D7: what a repair leaves once the step is done —
+          the live label goes when the status moves on, this stays in the run record. */}
+      {step.status !== "repairing" && (step.repairs ?? 0) > 0 && (
+        <span data-testid="wf-step-repairs" style={{ opacity: 0.7 }}>
+          {t("wf.step.repaired", { n: step.repairs ?? 0 })}
         </span>
       )}
       {step.reason && (
@@ -98,7 +112,9 @@ export function WorkflowStepBoard({
   nodes: PhaseNode[];
   steps: StepStateDTO[];
 }) {
-  const active = steps.some((s) => s.status === "running" || s.status === "retrying");
+  const active = steps.some(
+    (s) => s.status === "running" || s.status === "retrying" || s.status === "repairing",
+  );
   const now = useNow(active);
   const groups = stepBoard(nodes, steps).filter(
     (g) => g.steps.length > 0 || g.node.total > 0 || g.node.failed > 0,

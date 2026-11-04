@@ -36,11 +36,12 @@ from agents import (
 from agents import MaxTurnsExceeded as _AgentsMaxTurnsExceeded
 from agents.agent import StopAtTools, ToolsToFinalOutputFunction, ToolsToFinalOutputResult
 from agents.extensions.models.litellm_model import LitellmModel
+from agents.run_config import CallModelData, ModelInputData
 from agents.tool import FunctionToolResult
 from openai.types.shared import Reasoning
 
-from ..agent.call_retry_model import CALL_RETRACTED, CALL_STARTED, InputTrim
-from ..agent.context import AgentToolContext
+from ..agent.call_retry_model import CALL_RETRACTED, CALL_STARTED, InputTrim, WaitPool
+from ..agent.context import AgentToolContext, Interjection
 from ..agent.header_model import HeaderModel
 from ..agent.repairing_model import RepairingModel
 from ..agent.tools import build_tools, dedupe_tools, delegation_is_available
@@ -68,6 +69,7 @@ from .events import (
     AgentMetrics,
     ContextTrimmed,
     FailoverSwitch,
+    Interjected,
     MaxTurnsExceeded,
     MessageDelta,
     ModelRetrying,
@@ -226,10 +228,136 @@ def _approx_tokens(chars: int) -> int:
     return round(chars / 4)
 
 
+def _user_item(text: str, image_urls: Sequence[str] = ()) -> dict[str, Any]:
+    """One user message as an SDK input item — multimodal when it carries images."""
+    if not image_urls:
+        return {"role": "user", "content": text}
+    return {
+        "role": "user",
+        "content": [
+            {"type": "input_text", "text": text},
+            *({"type": "input_image", "image_url": url} for url in image_urls),
+        ],
+    }
+
+
+def interjection_item(interjection: Interjection) -> dict[str, Any]:
+    """A message folded into a turn that is not its own (docs/plan-interjection.md),
+    attributed the way `history_items` attributes a shared thread's messages."""
+    text = interjection.content
+    if interjection.speaker:
+        text = f"[{interjection.speaker}]: {text}"
+    return _user_item(text, interjection.image_urls)
+
+
+class _Interjected(Exception):  # noqa: N818 — a signal, not an error
+    """Raised from the SDK's model-input hook when the turn's author has spoken
+    (docs/plan-interjection.md Q1). Carries everything the next model call was
+    about to be handed, so the turn continues from exactly there."""
+
+    def __init__(self, items: list[Any], taken: list[Interjection]) -> None:
+        super().__init__(f"{len(taken)} message(s) sent mid-turn")
+        self.items = items
+        self.taken = taken
+
+
+def _interjection_filter(
+    ctx: AgentToolContext,
+) -> Callable[[CallModelData[Any]], ModelInputData] | None:
+    """The `RunConfig.call_model_input_filter` that reads a person's messages
+    into the running turn. The SDK calls it before EVERY model call — the one
+    point between a tool result and the next answer — and re-raises what it
+    raises (`run_internal/turn_preparation.maybe_filter_model_input`). Raising
+    rather than appending is what lets the step budget start over (Q4): the
+    SDK's turn counter belongs to the `Runner.run*` call, so a fresh budget
+    needs a fresh call. None when the turn has no source of messages."""
+    take = ctx.take_interjections
+    if take is None:
+        return None
+
+    def read(data: CallModelData[Any]) -> ModelInputData:
+        taken = take()
+        if taken:
+            raise _Interjected(list(data.model_data.input), taken)
+        return data.model_data
+
+    return read
+
+
+def _field(item: Any, name: str) -> Any:
+    return item.get(name) if isinstance(item, dict) else getattr(item, name, None)
+
+
+def _finished_tool(end: ToolEnd, ctx: AgentToolContext) -> ToolEnd:
+    """A finished tool's event with what its card shows beside the output: the
+    full display (#62) and a delegated sub-agent's failure (#915 P4). ONE place
+    for the streamed path, the non-streamed one and a segment cut by an
+    interjection (plan-interjection §9 C19) — a third copy is how the cut
+    segment came to show a failed delegation with no failure on it."""
+    disp = ctx.tool_displays.get(end.output, "")
+    if disp:
+        end = replace(end, display=disp)
+    if (failed := ctx.tool_failures.pop(end.call_id, None)) is not None:
+        end = replace(end, failure=failed)
+    return end
+
+
+def _segment_events(items: list[Any], ctx: AgentToolContext) -> list[AgentEvent]:
+    """The events a non-streamed segment would have emitted, recovered from the
+    SDK input items it produced (assistant text, tool call, tool result) — for
+    a segment cut short by an interjection before `Runner.run` returned."""
+    events: list[AgentEvent] = []
+    for item in items:
+        kind = _field(item, "type")
+        if kind == "function_call":
+            try:
+                args = json.loads(_field(item, "arguments") or "{}")
+            except ValueError:
+                args = {}
+            events.append(
+                ToolStart(
+                    call_id=_field(item, "call_id") or "",
+                    name=_field(item, "name") or "",
+                    args=args if isinstance(args, dict) else {},
+                )
+            )
+        elif kind == "function_call_output":
+            output = _field(item, "output")
+            events.append(
+                _finished_tool(
+                    ToolEnd(
+                        call_id=_field(item, "call_id") or "",
+                        output=output if isinstance(output, str) else json.dumps(output),
+                    ),
+                    ctx,
+                )
+            )
+        elif _field(item, "role") == "assistant":
+            for part in _field(item, "content") or []:
+                text = _field(part, "text")
+                if text:
+                    events.append(MessageDelta(text=text))
+    return events
+
+
+def _absorb(ctx: AgentToolContext, taken: list[Interjection]) -> None:
+    """What reading a person's message does to the rest of the turn (Q7): the
+    skills they applied become readable, and the search allowances are whole
+    again — someone is steering, which is the opposite of a runaway turn.
+    Reasoning effort and disclosure stay as the turn began."""
+    for i in taken:
+        for name in i.applied_skills:
+            if name not in ctx.applied_skills:
+                ctx.applied_skills.append(name)
+    for budget in (ctx.kb_search_budget, ctx.wiki_search_budget, ctx.kb_grep_budget):
+        budget.used = 0
+
+
 def _build_input(
     history: list[dict[str, str]],
     prompt: str,
     image_urls: Sequence[str] = (),
+    leading: Sequence[Interjection] = (),
 ) -> str | list[dict[str, Any]]:
     """The SDK `input` for this turn: a plain string when there's no history,
     else the prior dialogue items followed by this turn's user message — so the
@@ -240,17 +368,15 @@ def _build_input(
     directly — no `read_image` round-trip through the separate VLM. Only the
     live turn's message is multimodal; the persisted history stays text (the
     image also lives on as a workspace file the model can `read_image` later).
-    Empty ⇒ the text-only path is byte-for-byte unchanged."""
-    user_content: str | list[dict[str, Any]] = prompt
-    if image_urls:
-        user_content = [
-            {"type": "input_text", "text": prompt},
-            *({"type": "input_image", "image_url": url} for url in image_urls),
-        ]
-    if not history:
+    Empty ⇒ the text-only path is byte-for-byte unchanged.
+
+    `leading` (docs/plan-interjection.md Q10) are queued messages this turn
+    answers too; they go between the history and this turn's own message."""
+    folded = [interjection_item(i) for i in leading]
+    if not history and not folded:
         # No history + no images → keep the bare-string fast path; multimodal
         # content still needs a message list even without history.
-        return prompt if not image_urls else [{"role": "user", "content": user_content}]
+        return prompt if not image_urls else [_user_item(prompt, image_urls)]
     # #199 — the SDK prepends the system prompt itself, so the replayed history
     # must never carry a `system` item; a mid-conversation one makes providers
     # reject the call with "system message must be at the beginning". Fail loud
@@ -258,7 +384,7 @@ def _build_input(
     assert not any(m.get("role") == "system" for m in history), (
         "history must not contain a system message"
     )
-    return [*history, {"role": "user", "content": user_content}]
+    return [*history, *folded, _user_item(prompt, image_urls)]
 
 
 # #748: the deltas that ARE the model's output — what the provider counts in
@@ -1606,28 +1732,58 @@ class LitellmAgentRunner:
             )
             yield RunDone()
             return
-        # ONE run. A failure is retried as the model call that failed, inside the
-        # run (`_call_retry`, docs/plan-friendly-errors.md D2) — never by running
-        # the turn again, which repeated every tool already executed and so had to
-        # refuse once anything had streamed (#26). What reaches here has already
-        # had its retries.
-        try:
-            async for ev in self._run_once(prompt, ctx):
-                yield ev
-        except _AgentsMaxTurnsExceeded:
-            # The agent burned through its turn budget — terminal. The SDK
-            # exception only carries a message, so we report our own configured
-            # ceiling (never a bare 0).
-            _LOGGER.warning(
-                "litellm_runner: turn exceeded max turns (investigation=%s) — terminal",
-                ctx.investigation_id,
-            )
-            yield MaxTurnsExceeded(turns=ctx.max_turns or self._max_turns)
-        except Exception as exc:  # noqa: BLE001 — every failure ends the turn, named
-            _LOGGER.warning(
-                "litellm_runner: turn failed (%r) (investigation=%s)", exc, ctx.investigation_id
-            )
-            yield _terminal_error(exc)
+        # ONE run per segment. A failure is retried as the model call that
+        # failed, inside the run (`_call_retry`, docs/plan-friendly-errors.md
+        # D2) — never by running the turn again, which repeated every tool
+        # already executed and so had to refuse once anything had streamed
+        # (#26). What reaches here has already had its retries.
+        #
+        # A new segment starts only when the person spoke (docs/plan-
+        # interjection.md Q1/Q4): `tail` is what it carries on from AFTER the
+        # history — everything the turn had produced plus the messages it read
+        # — kept apart from the history and joined at each send (§9 C12).
+        tail: list[Any] | None = None
+        # One rate-limit wait pool for the whole turn, every segment of it (#915
+        # "一輪共用一個等待池"; plan-interjection §9 C19). Fresh per `run()`: a
+        # delegated sub-agent or a compaction pass is a run of its own.
+        ctx.turn_wait_pool = WaitPool()
+        while True:
+            sent_history = len(ctx.history)
+            resume = None if tail is None else [*ctx.history, *tail]
+            try:
+                async for ev in self._run_once(prompt, ctx, resume):
+                    yield ev
+            except _Interjected as read:
+                # Say where it was read, then carry on as a NEW segment from
+                # everything so far plus their message(s) — so the step budget
+                # is counted afresh. Not a retry: nothing failed.
+                for i in read.taken:
+                    yield Interjected(author=i.author, created_at=i.at)
+                _absorb(ctx, read.taken)
+                # The SDK's input starts with exactly the history this segment
+                # sent (a bare-string first input has none), then the rest.
+                tail = [
+                    *read.items[sent_history:],
+                    *(interjection_item(i) for i in read.taken),
+                ]
+                continue
+            except _AgentsMaxTurnsExceeded:
+                # The agent burned through its turn budget — terminal. The SDK
+                # exception only carries a message, so we report our own
+                # configured ceiling (never a bare 0).
+                _LOGGER.warning(
+                    "litellm_runner: turn exceeded max turns (investigation=%s) — terminal",
+                    ctx.investigation_id,
+                )
+                yield MaxTurnsExceeded(turns=ctx.max_turns or self._max_turns)
+            except Exception as exc:  # noqa: BLE001 — every failure ends the turn, named
+                _LOGGER.warning(
+                    "litellm_runner: turn failed (%r) (investigation=%s)",
+                    exc,
+                    ctx.investigation_id,
+                )
+                yield _terminal_error(exc)
+            break
         yield RunDone()
 
     def _note_prompt_usage(
@@ -1763,6 +1919,9 @@ class LitellmAgentRunner:
                 on_hold=on_hold,
                 trim=_HistoryTrim(self, ctx, on_trimmed),
                 sleep=self._sleep,
+                # The turn's pool, shared by its segments (plan-interjection
+                # §9 C19); `run()` sets it, so a direct caller gets its own.
+                pool=ctx.turn_wait_pool,
             )
 
         return wrap
@@ -1809,11 +1968,12 @@ class LitellmAgentRunner:
         self,
         prompt: str,
         ctx: AgentToolContext,
+        resume: list[Any] | None = None,
     ) -> AsyncIterator[AgentEvent]:
         assert ctx.agent_config is not None  # run() guards None before _run_once
         # Non-streaming path: the escape hatch (WORKSPACE_AGENT_STREAM=0).
         if not _stream_enabled():
-            async for ev in self._run_once_nonstream(prompt, ctx):
+            async for ev in self._run_once_nonstream(prompt, ctx, resume):
                 yield ev
             return
         # The SDK delivers model output via stream_events(), but a running
@@ -1861,11 +2021,20 @@ class LitellmAgentRunner:
         # attribute every span to the run that produced it AND tell wiki
         # maintenance / reader / merge apart from chat and RCA turns.
         run_config = RunConfig(
-            workflow_name=_trace_workflow_name(ctx), group_id=ctx.investigation_id
+            workflow_name=_trace_workflow_name(ctx),
+            group_id=ctx.investigation_id,
+            # docs/plan-interjection.md Q1: read the author's mid-turn messages.
+            call_model_input_filter=_interjection_filter(ctx),
         )
         streamed = Runner.run_streamed(
             agent,
-            input=_build_input(ctx.history, prompt, ctx.turn_image_urls),  # ty: ignore[invalid-argument-type]
+            input=(  # ty: ignore[invalid-argument-type]
+                resume
+                if resume is not None
+                else _build_input(
+                    ctx.history, prompt, ctx.turn_image_urls, ctx.leading_interjections
+                )
+            ),
             context=ctx,
             max_turns=ctx.max_turns or self._max_turns,
             run_config=run_config,
@@ -1981,12 +2150,8 @@ class LitellmAgentRunner:
                             # so the FE card shows the error that streamed live
                             # instead of a clean "exit_code=0". Keyed by output
                             # (RunContextWrapper tools have no call id).
-                            disp = ctx.tool_displays.get(mapped.output, "")
-                            if disp:
-                                mapped = replace(mapped, display=disp)
-                            # P4: a delegated sub-agent's failure, for the card.
-                            if (failed := ctx.tool_failures.pop(mapped.call_id, None)) is not None:
-                                mapped = replace(mapped, failure=failed)
+                            # P4: and a delegated sub-agent's failure, for the card.
+                            mapped = _finished_tool(mapped, ctx)
                         queue.put_nowait(mapped)
 
                 tail_content, tail_reasoning = splitter.flush()
@@ -2055,8 +2220,15 @@ class LitellmAgentRunner:
             with contextlib.suppress(asyncio.CancelledError):
                 await task
 
-    async def _run_once_nonstream(  # pragma: no cover — exercised only by the live Ollama test
-        self, prompt: str, ctx: AgentToolContext
+    async def _run_once_nonstream(  # pragma: no cover — see the note below
+        # Driven in part by tests/api/test_interjection_runner.py (stream="0":
+        # a real SDK loop with a fake model, including the interjection cut and
+        # `_segment_events`); the rest only by the live Ollama test. Kept out of
+        # the gate like `_run_once`, for the same reason given there.
+        self,
+        prompt: str,
+        ctx: AgentToolContext,
+        resume: list[Any] | None = None,
     ) -> AsyncIterator[AgentEvent]:
         """One turn with the model NOT streaming (WORKSPACE_AGENT_STREAM=0): fetch
         the whole response in a single ``Runner.run`` (``get_response``), then emit
@@ -2090,15 +2262,31 @@ class LitellmAgentRunner:
         ctx.on_exec_output = None
         yield AgentMetrics(phase="up", prompt_tokens=prompt_tok, elapsed_ms=0)
         run_config = RunConfig(
-            workflow_name=_trace_workflow_name(ctx), group_id=ctx.investigation_id
+            workflow_name=_trace_workflow_name(ctx),
+            group_id=ctx.investigation_id,
+            # docs/plan-interjection.md Q1: read the author's mid-turn messages.
+            call_model_input_filter=_interjection_filter(ctx),
         )
-        result = await Runner.run(
-            agent,
-            input=_build_input(ctx.history, prompt, ctx.turn_image_urls),  # ty: ignore[invalid-argument-type]
-            context=ctx,
-            max_turns=ctx.max_turns or self._max_turns,
-            run_config=run_config,
+        sent = (
+            resume
+            if resume is not None
+            else _build_input(ctx.history, prompt, ctx.turn_image_urls, ctx.leading_interjections)
         )
+        try:
+            result = await Runner.run(
+                agent,
+                input=sent,  # ty: ignore[invalid-argument-type]
+                context=ctx,
+                max_turns=ctx.max_turns or self._max_turns,
+                run_config=run_config,
+            )
+        except _Interjected as read:
+            # The one-shot run is cut short before it hands back its items, so
+            # what this segment did is only in what the next call was about to
+            # be sent. Said here, or the tools it ran vanish from the turn.
+            for ev in _segment_events(read.items[1 if isinstance(sent, str) else len(sent) :], ctx):
+                yield ev
+            raise
         content_buf: list[str] = []
         tool_calls_seen = 0
         splitter = ThinkSplitter()  # split any inline <think> out of the content
@@ -2111,11 +2299,7 @@ class LitellmAgentRunner:
                 if isinstance(mapped, ToolStart):
                     tool_calls_seen += 1
                 if isinstance(mapped, ToolEnd):
-                    disp = ctx.tool_displays.get(mapped.output, "")
-                    if disp:
-                        mapped = replace(mapped, display=disp)
-                    if (failed := ctx.tool_failures.pop(mapped.call_id, None)) is not None:
-                        mapped = replace(mapped, failure=failed)
+                    mapped = _finished_tool(mapped, ctx)
                 yield mapped
             elif isinstance(item, MessageOutputItem):
                 content, reasoning = splitter.feed(ItemHelpers.text_message_output(item))

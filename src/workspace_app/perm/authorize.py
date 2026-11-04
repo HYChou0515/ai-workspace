@@ -63,6 +63,16 @@ def _effective_grants(permission: Permission, verb: Verb) -> set[Subject]:
     grants = set(permission.grants(verb))
     if verb == "add_content":
         grants |= set(permission.grants("edit_content"))  # edit_content ⊇ add_content
+    if verb == "use_wui":
+        # docs/plan-wui-user.md D9/D10: whoever may drive the item's agent or run
+        # its code may press a page's buttons, which do exactly that — and the
+        # Participants / Collaborators stored before use_wui existed keep pages.
+        grants |= set(permission.grants("converse")) | set(permission.grants("execute"))
+    if verb == "read_content":
+        # D3: a page that cannot read its own folder cannot open. Only an EXPLICIT
+        # use_wui grant counts — the implications above must not chain a
+        # converse-only grant into reading files it was never given.
+        grants |= set(permission.grants("use_wui"))
     return grants
 
 

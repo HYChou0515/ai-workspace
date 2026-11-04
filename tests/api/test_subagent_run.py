@@ -13,7 +13,7 @@ from collections.abc import AsyncIterator
 
 import msgspec
 
-from workspace_app.agent.context import AgentToolContext
+from workspace_app.agent.context import AgentToolContext, Interjection
 from workspace_app.api.events import AgentEvent, MessageDelta, RunDone, RunError, ToolStart
 from workspace_app.api.subagent_run import run_agent_task
 from workspace_app.apps.subagents import SubagentDef
@@ -144,6 +144,12 @@ async def test_nothing_belonging_to_the_parents_conversation_or_turn_is_inherite
         subagent_citations={"ask_knowledge_base": [[]]},
         loaded_tools={"parent-loaded"},
         catalog_calls={"p1": ["parent-loaded"]},
+        # docs/plan-interjection.md: the person's messages are the PARENT
+        # turn's to read. A child that inherited the reader would take them at
+        # its own model calls, where the parent never places or answers them.
+        take_interjections=lambda: [],
+        leading_interjections=[Interjection(content="Q2", author="ann", at=2)],
+        history_builder=lambda msgs: [],
     )
 
     await run_agent_task(runner, parent, defn, "go")
@@ -155,6 +161,9 @@ async def test_nothing_belonging_to_the_parents_conversation_or_turn_is_inherite
     assert child.on_todos_updated is None
     # The parent turn's own inputs — it "cannot see this conversation".
     assert child.turn_image_urls == []
+    assert child.take_interjections is None
+    assert child.leading_interjections == []
+    assert child.history_builder is None
     # Accumulators the parent's assistant message is built from.
     assert child.withheld_collection_ids == []
     assert child.kb_passages == []

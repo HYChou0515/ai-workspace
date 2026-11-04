@@ -185,7 +185,8 @@ describe("a value of mine that no tool declared (2026-10-12)", () => {
   });
 
   it("says which value this item uses instead when the item has its own", async () => {
-    open({ tools: [], envPolicy: {}, envVars: { MCP_TOKEN: "s" }, personal: { MCP_TOKEN: "t" } });
+    // Shared chosen — with no policy (Private first, D5) my value would win.
+    open({ tools: [], envPolicy: { MCP_TOKEN: "shared_first" }, envVars: { MCP_TOKEN: "s" }, personal: { MCP_TOKEN: "t" } });
     await personalTab();
 
     const row = await screen.findByTestId("env-personal-row-MCP_TOKEN");

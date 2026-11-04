@@ -6,12 +6,15 @@
  *
  * As in the panel (#750), what the login returns is shown and stored only when
  * the person presses Save: into THEIR values for this item, the rest of that
- * layer kept.
+ * layer kept — or, with `saveTo="personal"`, into their values for every item
+ * (`docs/plan-env-token-refresh.md` D6: a dead token signs in back into the
+ * layer it lived in).
  */
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 
 import { api as defaultApi } from "../api";
+import { PERSONAL_ENV_WRITES, personalEnvApi, type PersonalEnvClient } from "../api/personalEnv";
 import { privateEnvApi, type PrivateEnvClient } from "../api/privateEnv";
 import { qk } from "../api/queryKeys";
 import type { ApiClient, EnvProvider } from "../api/types";
@@ -29,6 +32,8 @@ export function EnvLoginModal({
   onClose,
   client = defaultApi,
   privateClient = privateEnvApi,
+  personalClient = personalEnvApi,
+  saveTo = "private",
 }: {
   slug: string;
   itemId: string;
@@ -36,6 +41,10 @@ export function EnvLoginModal({
   onClose: () => void;
   client?: Pick<ApiClient, "resolveEnvProvider">;
   privateClient?: Pick<PrivateEnvClient, "get" | "put">;
+  personalClient?: Pick<PersonalEnvClient, "get" | "put">;
+  /** Which of the person's layers Save writes: this item's (the default), or
+   * their values for every item. */
+  saveTo?: "private" | "personal";
 }) {
   const t = useT();
   const queryClient = useQueryClient();
@@ -55,6 +64,20 @@ export function EnvLoginModal({
       onClose();
     },
   });
+  // My values for every item: one queue with every other writer of that row
+  // in this tab (plan-personal-env A15), so two writes do not race.
+  const savePersonal = useMutation({
+    scope: PERSONAL_ENV_WRITES,
+    mutationFn: async (env: Record<string, string>) => {
+      const now = await personalClient.get();
+      return personalClient.put({ ...now.values, ...env });
+    },
+    onSuccess: (stored) => {
+      queryClient.setQueryData(qk.personalEnv(), stored);
+      onClose();
+    },
+  });
+  const saving = saveTo === "personal" ? savePersonal : save;
   const typed = Object.values(creds).some((v) => v.trim() !== "");
   const attemptClose = useDirtyClose(typed || filled !== null, onClose);
 
@@ -95,7 +118,9 @@ export function EnvLoginModal({
         />
       ) : (
         <>
-          <p style={{ margin: 0, fontSize: pxToRem(12) }}>{t("envreq.loginGot")}</p>
+          <p style={{ margin: 0, fontSize: pxToRem(12) }}>
+            {t(saveTo === "personal" ? "envreq.loginGotPersonal" : "envreq.loginGot")}
+          </p>
           <ul style={{ margin: 0, paddingLeft: 18, fontSize: pxToRem(12) }}>
             {Object.keys(filled).map((name) => (
               <li key={name} style={{ fontFamily: "var(--font-mono)" }}>
@@ -112,8 +137,8 @@ export function EnvLoginModal({
               className="btn"
               data-variant="primary"
               data-testid="env-login-save"
-              disabled={save.isPending}
-              onClick={() => save.mutate(filled)}
+              disabled={saving.isPending}
+              onClick={() => saving.mutate(filled)}
             >
               {t("env.save")}
             </button>

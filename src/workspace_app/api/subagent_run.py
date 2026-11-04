@@ -191,6 +191,12 @@ def _child_context(
             ],
         ),
         history=[],
+        # docs/plan-interjection.md: the person's messages are the PARENT turn's
+        # to read and answer. A child holding the reader would take them at its
+        # own model calls, where the parent never places or answers them.
+        take_interjections=None,
+        leading_interjections=[],
+        history_builder=None,
         run_agent=None,
         # The skill hub reviewer is a second delegation seam; nulled for the
         # same reason as `run_agent`, and `publish_skill` — its only caller —

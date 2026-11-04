@@ -126,6 +126,50 @@ async def test_both_questions_are_kept_when_one_queues_behind_the_other() -> Non
     assert [m["content"] for m in msgs if m["role"] == "user"] == ["a", "b"]
 
 
+async def test_a_queued_question_is_answered_with_the_answer_it_waited_for() -> None:
+    """docs/plan-interjection.md Q1: "b" was accepted while "a" was being answered,
+    when the thread held only "a". Its turn starts after that answer, and must be
+    handed it — and the thread must read in the order the AI read it: a, A, b, B."""
+    runner = _GatedRunner()
+    seen: list[list[str]] = []
+    inner = runner.run
+
+    async def recording(prompt: str, ctx: AgentToolContext):
+        seen.append([h["content"] for h in ctx.history])
+        async for ev in inner(prompt, ctx):
+            yield ev
+
+    runner.run = recording  # ty: ignore[invalid-assignment]
+    app = _app(runner)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
+        cid = (await c.post("/kb/chats", json={"title": "t", "collection_ids": []})).json()[
+            "resource_id"
+        ]
+
+        async def send(text: str):
+            return await c.post(f"/kb/chats/{cid}/messages", json={"content": text})
+
+        first = asyncio.create_task(send("a"))
+        for _ in range(400):
+            if runner.started:
+                break
+            await asyncio.sleep(0.01)
+        second = asyncio.create_task(send("b"))
+        await asyncio.sleep(0.05)
+        runner.release = True
+        await asyncio.wait_for(asyncio.gather(first, second), 10)
+
+        msgs = (await c.get(f"/kb/chats/{cid}")).json()["messages"]
+
+    assert seen[1][-1] == "a"  # the first answer is the last thing "b"'s turn sees
+    assert [(m["role"], m["content"]) for m in msgs] == [
+        ("user", "a"),
+        ("assistant", "a"),
+        ("user", "b"),
+        ("assistant", "b"),
+    ]
+
+
 class _ToolRunner:
     async def run(self, prompt: str, ctx: AgentToolContext) -> AsyncIterator[AgentEvent]:
         yield MessageDelta(text="Let me check. ")
@@ -185,3 +229,158 @@ async def test_the_stream_endpoint_refuses_a_chat_you_cannot_read() -> None:
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
         r = await c.get("/kb/chats/does-not-exist/stream")
     assert r.status_code == 404
+
+
+async def test_a_kb_question_still_preparing_is_in_nobody_elses_history(monkeypatch) -> None:
+    """docs/plan-interjection.md §9 C8 on the KB chat (no claims there — the
+    engine's record of what is still preparing is the only guard): "c" is
+    persisted and still being prepared when "b"'s turn starts, so "b" must not
+    be handed "c" as if it had been asked and dealt with."""
+    import threading
+
+    from workspace_app.api import kb_chat_routes
+
+    real_block = kb_chat_routes._graph_block_for  # noqa: SLF001
+    hold = threading.Event()
+
+    def held(spec, content, user):  # noqa: ANN001, ANN202
+        if content == "c":
+            hold.wait(10)
+        return real_block(spec, content, user)
+
+    monkeypatch.setattr(kb_chat_routes, "_graph_block_for", held)
+    runner = _GatedRunner()
+    seen: dict[str, list[str]] = {}
+    inner = runner.run
+
+    async def recording(prompt: str, ctx: AgentToolContext):
+        seen[prompt.strip()[-1]] = [h.get("content", "") for h in ctx.history]
+        async for ev in inner(prompt, ctx):
+            yield ev
+
+    runner.run = recording  # ty: ignore[invalid-assignment]
+    app = _app(runner)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
+        cid = (await c.post("/kb/chats", json={"title": "t", "collection_ids": []})).json()[
+            "resource_id"
+        ]
+
+        async def send(text: str):
+            return await c.post(f"/kb/chats/{cid}/messages", json={"content": text})
+
+        first = asyncio.create_task(send("a"))
+        for _ in range(400):
+            if runner.started:
+                break
+            await asyncio.sleep(0.01)
+        second = asyncio.create_task(send("b"))
+        third = asyncio.create_task(send("c"))
+        await asyncio.sleep(0.2)  # "b" queued, "c" persisted and held in preparation
+        runner.release = True
+        for _ in range(400):
+            if "b" in seen:
+                break
+            await asyncio.sleep(0.01)
+        hold.set()
+        await asyncio.wait_for(asyncio.gather(first, second, third), 10)
+
+    assert not any(h.endswith("c") for h in seen["b"])
+
+
+async def test_a_kb_stop_while_the_question_is_still_preparing_cancels_it(monkeypatch) -> None:
+    """docs/plan-interjection.md §9 C15: the KB send now prepares through
+    `preparing()`, so a Stop pressed before its turn exists reaches it — as on
+    the workspace chat — and the thread ends on a cancelled marker."""
+    import threading
+
+    from workspace_app.api import kb_chat_routes
+
+    real_block = kb_chat_routes._graph_block_for  # noqa: SLF001
+    entered = threading.Event()
+    hold = threading.Event()
+
+    def held(spec, content, user):  # noqa: ANN001, ANN202
+        entered.set()
+        hold.wait(10)
+        return real_block(spec, content, user)
+
+    monkeypatch.setattr(kb_chat_routes, "_graph_block_for", held)
+    runner = _GatedRunner()
+    app = _app(runner)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
+        cid = (await c.post("/kb/chats", json={"title": "t", "collection_ids": []})).json()[
+            "resource_id"
+        ]
+        send = asyncio.create_task(c.post(f"/kb/chats/{cid}/messages", json={"content": "b"}))
+        for _ in range(400):
+            if entered.is_set():
+                break
+            await asyncio.sleep(0.01)
+        assert (await c.delete(f"/kb/chats/{cid}/messages/current")).status_code == 204
+        hold.set()
+        await asyncio.wait_for(send, 10)
+        msgs = (await c.get(f"/kb/chats/{cid}")).json()["messages"]
+
+    assert runner.finished == []
+    assert [(m["role"], m.get("error_kind")) for m in msgs] == [
+        ("user", None),
+        ("error", "cancelled"),
+    ]
+
+
+async def test_a_collaborators_message_takes_the_kb_turn_over_and_the_thread_says_who() -> None:
+    """docs/plan-interjection.md Q2/Q8 on the KB chat: a collaborator with
+    `converse` sends while the owner's answer runs. The owner's turn stops, its
+    ending is stored as interrupted and names the collaborator, and theirs is
+    answered."""
+
+    class _OwnersTurnRuns:
+        def __init__(self) -> None:
+            self.started = asyncio.Event()
+            self.prompts: list[str] = []
+
+        async def run(self, prompt: str, ctx: AgentToolContext) -> AsyncIterator[AgentEvent]:
+            self.prompts.append(prompt)
+            if len(self.prompts) == 1:
+                self.started.set()
+                await asyncio.sleep(30)
+            yield MessageDelta(text="answered")
+            yield RunDone()
+
+    holder = {"id": "bob"}
+    runner = _OwnersTurnRuns()
+    app = create_app(
+        spec=make_spec(default_user=lambda: holder["id"]),
+        sandbox=MockSandbox(),
+        filestore=MemoryFileStore(),
+        runner=runner,
+        kb_embedder=HashEmbedder(dim=EMBED_DIM),
+        kb_chunker=FixedTokenChunker(max_tokens=3, overlap_tokens=1),
+        get_user_id=lambda: holder["id"],
+    )
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
+        cid = (await c.post("/kb/chats", json={"title": "t", "collection_ids": []})).json()[
+            "resource_id"
+        ]
+        grant = {
+            "visibility": "restricted",
+            "read_meta": ["user:alice"],
+            "read_chat": ["user:alice"],
+            "converse": ["user:alice"],
+        }
+        assert (await c.put(f"/kb/chats/{cid}/permission", json=grant)).status_code == 200
+        owners = asyncio.create_task(c.post(f"/kb/chats/{cid}/messages", json={"content": "Q1"}))
+        await asyncio.wait_for(runner.started.wait(), 5)
+        holder["id"] = "alice"
+        collaborators = await c.post(f"/kb/chats/{cid}/messages", json={"content": "Q2"})
+        assert collaborators.status_code == 202
+        await asyncio.wait_for(owners, 5)
+        holder["id"] = "bob"
+        msgs = (await c.get(f"/kb/chats/{cid}")).json()["messages"]
+
+    assert [(m["role"], m.get("error_kind"), m.get("author")) for m in msgs] == [
+        ("user", None, "bob"),
+        ("error", "interrupted", "alice"),
+        ("user", None, "alice"),
+        ("assistant", None, None),
+    ]

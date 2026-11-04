@@ -130,14 +130,24 @@ async def test_request_values_reach_the_turn_alongside_the_items_own():
     assert ctx.user_env == {"FROM_REQUEST": "r", "FROM_ITEM": "i"}
 
 
-async def test_the_items_value_wins_a_name_collision():
-    """Decided in #714: the item's panel overrides the request-derived value,
-    with no notice — so an operator can pin a value for testing."""
-    builder, item_id = _app_with_item({"TOKEN": "from-item"})
+async def test_the_items_value_wins_a_name_collision_where_shared_was_chosen():
+    """#714: the item's panel overrides the request-derived value, with no notice,
+    so an operator can pin a value for testing — since docs/plan-wui-user.md D5
+    by choosing Shared for that name."""
+    builder, item_id = _app_with_item({"TOKEN": "from-item"}, env_policy={"TOKEN": "shared_first"})
 
     ctx = await _chat_turn(builder, item_id, caller_env=PersonEnv(own={"TOKEN": "from-request"}))
 
     assert ctx.user_env == {"TOKEN": "from-item"}
+
+
+async def test_the_request_value_wins_where_no_policy_was_chosen():
+    """D5: the default is Private first — the person's value over the item's."""
+    builder, item_id = _app_with_item({"TOKEN": "from-item"})
+
+    ctx = await _chat_turn(builder, item_id, caller_env=PersonEnv(own={"TOKEN": "from-request"}))
+
+    assert ctx.user_env == {"TOKEN": "from-request"}
 
 
 async def test_a_turn_whose_caller_resolved_nothing_sees_the_item_alone():
@@ -156,9 +166,12 @@ async def test_a_workflow_turn_carries_what_its_executor_resolved_under_the_item
     uploads, and "the first step had the person's cookie, the rest did not"
     would be a difference nothing in the UI could show. `plan-headless-env`
     keeps that and gives every node one source instead — what the executor
-    resolves for the run's captured user — merged under the item's copy the
-    same way a chat turn's is."""
-    builder, item_id = _app_with_item({"TOKEN": "from-item", "FROM_ITEM": "i"})
+    resolves for the run's captured user — merged with the item's copy the
+    same way a chat turn's is: under it where Shared was chosen, over it by
+    default (docs/plan-wui-user.md D5, D11)."""
+    builder, item_id = _app_with_item(
+        {"TOKEN": "from-item", "FROM_ITEM": "i"}, env_policy={"TOKEN": "shared_first"}
+    )
 
     ctx = await builder.build_workflow_turn(
         item_id,

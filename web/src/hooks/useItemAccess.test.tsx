@@ -196,3 +196,40 @@ describe("useItemAccess", () => {
     expect(result.current.isDiscoverableOnly).toBe(false);
   });
 });
+
+describe("a WUI User's access (docs/plan-wui-user.md)", () => {
+  const wuiItem = {
+    ...privateItem,
+    permission: {
+      visibility: "restricted",
+      read_meta: ["user:wu"],
+      read_chat: ["user:wu"],
+      read_content: ["user:wu"],
+      use_wui: ["user:wu"],
+    },
+  } as unknown as AppItem;
+
+  it("may use pages and open the env panel for their own values, and nothing that edits", async () => {
+    // D4: their own values; D3/D6: a read-only workspace — the denials prove the
+    // hook resolved identity (pre-settle it is optimistic, all true).
+    signInAs("wu", false);
+    const { result } = access(wuiItem);
+
+    await waitFor(() => expect(result.current.canConverse).toBe(false));
+    expect(result.current.canWrite).toBe(false);
+    expect(result.current.canWriteMeta).toBe(false);
+    expect(result.current.canUseWui).toBe(true);
+    expect(result.current.canOpenEnv).toBe(true);
+  });
+
+  it("does not open the env panel for a Reader, who has no page to run", async () => {
+    signInAs("rd", false);
+    const { result } = access({
+      ...privateItem,
+      permission: { visibility: "restricted", read_meta: ["user:rd"], read_chat: ["user:rd"], read_content: ["user:rd"] },
+    } as unknown as AppItem);
+
+    await waitFor(() => expect(result.current.canUseWui).toBe(false));
+    expect(result.current.canOpenEnv).toBe(false);
+  });
+});

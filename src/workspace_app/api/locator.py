@@ -20,10 +20,12 @@ import time
 from collections.abc import Callable
 from typing import NamedTuple
 
+import msgspec
 from fastapi import HTTPException
 from specstar import SpecStar
 from specstar.types import (
     DuplicateResourceError,
+    PreconditionFailedError,
     ResourceIDNotFoundError,
     ResourceIsDeletedError,
 )
@@ -213,6 +215,43 @@ class ItemLocator:
             return ItemEnv(shared={}, policy={})
         return ItemEnv(shared=dict(found[1].env_vars), policy=dict(found[1].env_policy))
 
+    def update_shared_env(
+        self,
+        item_id: str,
+        patch: Callable[[dict[str, str]], dict[str, str] | None],
+        *,
+        actor: str,
+    ) -> dict[str, str]:
+        """Change the item's SHARED layer (`env_vars`) server-side — the one
+        writer that is not a person's PATCH: a refreshed token
+        (`docs/plan-env-token-refresh.md` D3), written whoever the run is for.
+        ``patch`` maps what the row holds NOW to what it becomes (None leaves
+        it), and runs again on every lost CAS — so an edit of another variable
+        made meanwhile is kept, not written over with an old copy. The
+        revision names ``actor`` so it reads as the platform's, not a
+        person's. Returns the layer as it ends up."""
+        found = find_work_item(self._spec, item_id)
+        if found is None:
+            return {}
+        rm = self._spec.get_resource_manager(type(found[1]))
+        for _ in range(5):
+            res = rm.get(item_id)
+            item = res.data
+            new = patch(dict(item.env_vars))
+            if new is None:
+                return dict(item.env_vars)
+            try:
+                rm.update(
+                    item_id,
+                    msgspec.structs.replace(item, env_vars=dict(new)),
+                    expected_etag=res.info.etag,  # ty: ignore[unknown-argument]
+                    user=actor,
+                )
+                return dict(new)
+            except PreconditionFailedError:  # pragma: no cover - cross-request race
+                continue
+        raise RuntimeError(f"shared env write lost every CAS for {item_id!r}")  # pragma: no cover
+
     def owner_of(self, item_id: str) -> str | None:
         """Who this item's resources are charged to — `owner`, falling back to
         the creator when it is blank. The rule itself is `apps.resolve.debtor_of`,
@@ -269,7 +308,7 @@ class ItemLocator:
         raise HTTPException(status_code=404, detail=f"item {item_id!r} not found in app {slug!r}")
 
     def require_access(
-        self, slug: str, item_id: str, verb: Verb, *, user: str | None = None
+        self, slug: str, item_id: str, verb: Verb | tuple[Verb, ...], *, user: str | None = None
     ) -> str:
         """#306 PR3 — the authorizing sibling of ``require_item``: validate slug↔item,
         then gate the current user for ``verb`` against the item's live Permission

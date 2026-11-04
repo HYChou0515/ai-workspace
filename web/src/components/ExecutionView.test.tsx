@@ -395,6 +395,30 @@ const failedRun = (over: Partial<WorkflowRunDTO> = {}) =>
   } as Partial<WorkflowRunDTO>);
 
 describe("review round 1", () => {
+  it("a stopped step says Stopped and is not held open; the one before it is Done (plan-one-running-phase D3)", async () => {
+    // What the run routes serve for a Stop during `sort` (D2): nothing in that
+    // row needs the person, so it follows its header like any finished one.
+    vi.spyOn(workflowApi, "getRun").mockResolvedValue(
+      run({
+        status: "cancelled",
+        ended: STARTED + 1,
+        phases: [
+          { phase: "read", status: "passed", done: 1, total: 1, failed: 0 },
+          { phase: "sort", status: "stopped", done: 0, total: 1, failed: 0 },
+        ],
+      }),
+    );
+    render();
+    const sort = await row("sort");
+    expect(sort).toHaveTextContent("Stopped");
+    expect(await row("read")).toHaveTextContent("Done");
+    expect(toggle(sort)).not.toHaveAttribute("aria-disabled");
+    expect(toggle(sort)).toHaveAttribute("aria-expanded", "false");
+    fireEvent.click(toggle(sort));
+    expect(toggle(await row("sort"))).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByText("Step 2 of 3")).toBeInTheDocument();
+  });
+
   it("never collapses the step being worked on, even from its own header (D7)", async () => {
     render();
     const sort = await row("sort");
@@ -629,3 +653,35 @@ function renderWithQueryView() {
     />,
   );
 }
+
+describe("a step whose reply was repaired (plan-workflow-output-repair D7)", () => {
+  const repairing = (status: string, repairs: number) =>
+    run({
+      phases: [
+        { phase: "read", status: "passed", done: 1, total: 1, failed: 0 },
+        { phase: "sort", status: "running", done: 0, total: 1, failed: 0 },
+      ],
+      steps: [
+        { phase: "read", name: "read", key: "", status: "passed", attempts: 1, reason: "", started: 1, ended: 2 },
+        {
+          phase: "sort", name: "sort", key: "", status, attempts: repairs + 1, repairs,
+          reason: status === "repairing" ? "not JSON" : "", started: 3, ended: status === "passed" ? 4 : null,
+        },
+      ],
+    });
+
+  it("says it is fixing the output format while the repair runs", async () => {
+    vi.mocked(workflowApi.getRun).mockResolvedValue(repairing("repairing", 1));
+    render();
+    const sort = await row("sort");
+    expect(sort).toHaveTextContent("修正輸出格式（第 1 次）");
+    expect(sort).not.toHaveTextContent("repairing");
+  });
+
+  it("keeps how many times its format was fixed once it is done", async () => {
+    vi.mocked(workflowApi.getRun).mockResolvedValue(repairing("passed", 2));
+    render();
+    const sort = await row("sort");
+    expect(sort).toHaveTextContent("修正過輸出格式 2 次");
+  });
+});

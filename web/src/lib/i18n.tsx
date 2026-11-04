@@ -557,6 +557,35 @@ export const messages = {
     en: "Reached the turn limit ({turns}); the conversation stopped.",
   },
   "banner.cancelled": { "zh-TW": "已取消。", en: "Cancelled." },
+  // docs/plan-interjection.md Q2/Q9: another person's message took the turn over.
+  "banner.interrupted": {
+    "zh-TW": "已被 {who} 的訊息中斷。",
+    en: "Interrupted by {who}'s message.",
+  },
+  // docs/plan-interjection.md Q9: what happens to a message sent mid-answer.
+  "interject.waiting": {
+    "zh-TW": "AI 做完目前這一步後會回覆",
+    en: "The AI will reply after its current step",
+  },
+  "interject.read": {
+    "zh-TW": "AI 已看到，會一併回覆",
+    en: "The AI has read this and will answer it too",
+  },
+  "interject.queued": {
+    "zh-TW": "這一輪結束後會接著回答",
+    en: "Will be answered right after this turn",
+  },
+  // docs/plan-interjection.md Q2: someone else's turn runs; sending takes it over.
+  "interject.othersNote": {
+    "zh-TW": "{who} 正在對話中。你現在送出的訊息會讓這一輪停下，改由你的訊息接手。",
+    en: "{who} is talking to the AI. Sending now stops that turn, and yours takes over.",
+  },
+  // docs/plan-interjection.md Q7: what a message sent mid-answer can change.
+  "interject.composerNote": {
+    "zh-TW":
+      "這一輪的推理強度與揭露設定在開始時已決定；現在送出的訊息，AI 做完目前這一步後會讀到——它已經在寫最後的回答時，就由下一輪接著回答。",
+    en: "This turn's reasoning effort and disclosure were set when it started; a message sent now is read after the AI's current step — or, if it is already writing its final answer, answered right after this turn.",
+  },
 
   // App dashboard (AppDashboard) — filter strip (#172)
   "dash.clearFilters": { "zh-TW": "清除篩選", en: "Clear filters" },
@@ -703,7 +732,6 @@ export const messages = {
   "schedules.dow.fri": { "zh-TW": "週五", en: "Fri" },
   "schedules.dow.sat": { "zh-TW": "週六", en: "Sat" },
   "schedules.dow.sun": { "zh-TW": "週日", en: "Sun" },
-  "schedules.next": { "zh-TW": "下次：{at}", en: "Next: {at}" },
   // A period that cannot be moved onto the viewer's clock keeps its own zone,
   // named the way a person says it (docs/plan-schedule-overview-polish.md).
   "schedules.inZone": { "zh-TW": "{what}（{zone}）", en: "{what} ({zone})" },
@@ -719,10 +747,6 @@ export const messages = {
   "time.yesterday": { "zh-TW": "昨天 {hm}", en: "yesterday {hm}" },
   "time.date": { "zh-TW": "{m}/{d}（{dow}）{hm}", en: "{dow} {m}/{d} {hm}" },
   "time.dateYear": { "zh-TW": "{y}/{m}/{d}（{dow}）{hm}", en: "{dow} {y}/{m}/{d} {hm}" },
-  "schedules.nextSweep": {
-    "zh-TW": "下次：下一輪掃描（這一期已到期，尚未執行）",
-    en: "Next: on the next sweep (this period is due and has not run yet)",
-  },
   "schedules.unknownWorkflow": {
     "zh-TW": "找不到這個工作流程，這一條不會執行",
     en: "No such workflow in this workspace — this one will not run",
@@ -742,10 +766,6 @@ export const messages = {
   "schedules.remove": { "zh-TW": "移除", en: "Remove" },
   "schedules.cancel": { "zh-TW": "取消", en: "Cancel" },
   "schedules.removeTitle": { "zh-TW": "移除排程", en: "Remove schedule" },
-  "schedules.removeConfirm": {
-    "zh-TW": "要移除「{what}」這條定時執行嗎？之後就不會再自動執行。",
-    en: "Remove the schedule “{what}”? It will no longer run on its own.",
-  },
   "schedules.disabled": {
     "zh-TW": "這個系統沒有開啟定時執行，以下的排程不會自動執行。請聯絡管理員。",
     en: "Scheduled runs are switched off on this system; the schedules below will not run on their own. Ask an administrator.",
@@ -800,8 +820,13 @@ export const messages = {
   "schedules.edit.zoneYours": { "zh-TW": "時區：{zone}（你的時區）", en: "Time zone: {zone} (yours)" },
   "schedules.edit.note": {
     "zh-TW":
-      "存檔後會變成一條新的排程：從下一個時間點開始執行（不會補跑），執行紀錄從頭算，「用我的身分執行」要重新按一次。",
-    en: "Saving makes this a new schedule: it runs from the next time on (nothing is caught up), its run history starts over, and “Run as me” has to be pressed again.",
+      "存檔後會變成一條新的排程：從下一個時間點開始執行（不會補跑），執行紀錄從頭算，之後用你的身分執行（改的人就是它的作者；它要跑的 workflow 解析不了時，修好之前不會執行）。",
+    en: "Saving makes this a new schedule: it runs from the next time on (nothing is caught up), its run history starts over, and from then on it runs as you — whoever changes it is its author. If the workflow it runs will not parse, it does not run until that is fixed.",
+  },
+  "schedules.edit.noteNobody": {
+    "zh-TW":
+      "存檔後會變成一條新的排程：從下一個時間點開始執行（不會補跑），執行紀錄從頭算，之後只用共用的值執行（你在這個項目不能執行工作，所以不會用你的身分）。",
+    en: "Saving makes this a new schedule: it runs from the next time on (nothing is caught up), its run history starts over, and from then on it runs with the shared values only — you cannot run work in this item, so it does not run as you.",
   },
   "schedules.edit.save": { "zh-TW": "存檔", en: "Save" },
   "schedules.edit.saving": { "zh-TW": "存檔中…", en: "Saving…" },
@@ -827,6 +852,7 @@ export const messages = {
   "scheduleOverview.col.when": { "zh-TW": "週期", en: "Repeats" },
   "scheduleOverview.col.next": { "zh-TW": "下一次", en: "Next" },
   "scheduleOverview.col.last": { "zh-TW": "上一次", en: "Last run" },
+  "scheduleOverview.col.runsAs": { "zh-TW": "執行身分", en: "Runs as" },
   "scheduleOverview.col.actions": { "zh-TW": "動作", en: "Actions" },
   "scheduleOverview.page": { "zh-TW": "頁面「{page}」", en: "Page “{page}”" },
   "scheduleOverview.itemOwn": { "zh-TW": "項目本身的排程", en: "The item's own schedule" },
@@ -1431,6 +1457,20 @@ export const messages = {
     en: "Only this workspace's members can open this link.",
   },
   "wui.deploy.reach.everyone": { "zh-TW": "所有人都打得開這個連結。", en: "Everyone can open this link." },
+  // docs/plan-wui-user.md D7: a page someone may not use
+  "wui.needsWuiUser": {
+    "zh-TW": "這個頁面需要 WUI User 權限才能操作。",
+    en: "This page needs the WUI User permission to use.",
+  },
+  "wui.needsWuiUser.inside": {
+    "zh-TW": "你已經在這個 workspace 裡，申請不會通知任何人，請直接聯絡 {owner}。",
+    en: "You are already in this workspace, so a request notifies nobody; contact {owner} directly.",
+  },
+  "wui.needsWuiUser.theOwner": { "zh-TW": "擁有者", en: "the owner" },
+  "wui.needsWuiUser.owner": {
+    "zh-TW": "請 {owner} 把你加為 WUI User。",
+    en: "Ask {owner} to add you as a WUI User.",
+  },
   "wui.deploy.reach.unknown": {
     "zh-TW": "能讀這個 workspace 檔案的人才能用這個連結。",
     en: "Only people who can read this workspace's files can use this link.",
@@ -1833,6 +1873,13 @@ export const messages = {
   "wf.status.done": { "zh-TW": "已完成", en: "done" },
   "wf.status.error": { "zh-TW": "失敗", en: "failed" },
   "wf.status.cancelled": { "zh-TW": "已取消", en: "cancelled" },
+  // plan-workflow-output-repair D7: a step asked to re-emit its answer's format
+  "wf.step.repairing": { "zh-TW": "修正輸出格式（第 {n} 次）", en: "fixing the output format (#{n})" },
+  "wf.step.repaired": { "zh-TW": "修正過輸出格式 {n} 次", en: "output format fixed {n}×" },
+  // plan-workflow-output-repair §3.5: the folded repair request in the workflow chat
+  "wf.repairRequest.show": { "zh-TW": "要求重新輸出格式 · 展開", en: "Asked to re-send in the required format · show" },
+  "wf.repairRequest.hide": { "zh-TW": "要求重新輸出格式 · 收合", en: "Asked to re-send in the required format · hide" },
+  "wf.repairRequest.log": { "zh-TW": "要求重新輸出格式", en: "Asked to re-send in the required format" },
 
   // #230: the platform Help page.
   "help.title": { "zh-TW": "說明", en: "Help" },
@@ -1984,6 +2031,14 @@ export const messages = {
   "envreq.loginGot": {
     "zh-TW": "登入成功，取得以下變數。按「儲存」存進 Private（你在這個 workspace 的值）。",
     en: "Signed in and got these. Press Save to keep them in Private (your values in this workspace).",
+  },
+  "envreq.loginGotPersonal": {
+    "zh-TW": "登入成功，取得以下變數。按「儲存」存進 Private(跨workspace)（你在所有 workspace 共用的值）。",
+    en: "Signed in and got these. Press Save to keep them in Private (all workspaces) (your values for every workspace).",
+  },
+  "env.signInExpired": {
+    "zh-TW": "{label} 登入已過期，請重新登入。",
+    en: "The sign-in to {label} has expired. Sign in again.",
   },
   "envreq.wait": {
     "zh-TW": "設定好之後按「重試」，AI 會重新執行 {tool}。",
@@ -2167,9 +2222,26 @@ export const messages = {
   "env.bar.schedules": { "zh-TW": "這一頁的排程", en: "This page's schedules" },
   // Who a schedule runs as ("run as me", Q7/Q12).
   "sched.runsAsNobody": {
-    "zh-TW": "未綁定,不用任何人自己的值",
-    en: "Not bound — runs with nobody's own values",
+    "zh-TW": "未指定：只用共用的值",
+    en: "Nobody: the shared values only",
   },
+  // docs/plan-schedule-run-as.md G8: who, and WHY it is them.
+  "sched.runsAsWhy": { "zh-TW": "{main}（{why}）", en: "{main} ({why})" },
+  "sched.why.self": { "zh-TW": "自己選的", en: "chose it" },
+  "sched.why.author": { "zh-TW": "排程是他寫的", en: "wrote this schedule" },
+  "sched.why.selfYou": { "zh-TW": "你自己選的", en: "you chose it" },
+  "sched.why.authorYou": { "zh-TW": "排程是你寫的", en: "you wrote this schedule" },
+  "sched.why.workflow": { "zh-TW": "它跑的 workflow 是他改的", en: "changed the workflow it runs" },
+  "sched.why.workflowYou": { "zh-TW": "它跑的 workflow 是你改的", en: "you changed the workflow it runs" },
+  "sched.why.admin": { "zh-TW": "管理員 {by} 指定", en: "named by administrator {by}" },
+  "sched.assign": { "zh-TW": "指定…", en: "Choose…" },
+  "sched.assignTitle": { "zh-TW": "這個排程用誰的身分執行？", en: "Who should this schedule run as?" },
+  "sched.assignBody": {
+    "zh-TW":
+      "排程會用這個人自己的登入與變數值執行，我們會通知他，他隨時可以停止。只能選在這個項目可以執行工作的人。",
+    en: "The schedule runs with this person's own sign-ins and values. They are told, and can stop it at any time. Only someone who may run work in this item can be chosen.",
+  },
+  "sched.assignSearch": { "zh-TW": "搜尋人員…", en: "Search people…" },
   "sched.runsAsYou": { "zh-TW": "用你的身分執行", en: "Runs as you" },
   "sched.runsAs": { "zh-TW": "用 {who} 的身分執行", en: "Runs as {who}" },
   "sched.bindMe": { "zh-TW": "用我的身分執行", en: "Run as me" },

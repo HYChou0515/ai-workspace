@@ -2,6 +2,7 @@ from .app import create_app
 from .events import (
     AgentEvent,
     AgentMetrics,
+    Interjected,
     MaxTurnsExceeded,
     MessageDelta,
     RepetitionStopped,
@@ -18,6 +19,7 @@ __all__ = [
     "AgentEvent",
     "AgentMetrics",
     "AgentRunner",
+    "Interjected",
     "MaxTurnsExceeded",
     "MessageDelta",
     "RepetitionStopped",

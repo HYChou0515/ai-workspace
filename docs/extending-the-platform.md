@@ -394,6 +394,73 @@ server:
   **只屬於他自己**的去處(Env 面板「Private」與「Private(跨workspace)」分頁),換的是他自己輸入的帳密,你的 impl 也拿不到
   item 的任何資訊——所以換出來不會多給他什麼。把結果存成**共用**值仍然要 `write_meta`。
 
+### token 快過期時由平台換新的([plan-env-token-refresh](plan-env-token-refresh.md))
+
+如果你的系統發的是會過期的 access token 加 refresh token,在同一個登入方式裡多寫兩個方法,
+**平台就會在工具要用、而且快過期的時候先換好**——工具(包括 MCP)完全不用碰 refresh:
+
+```python
+from workspace_app.api.env_provider import IEnvProvider, RefreshRejected
+
+class ErpLogin(IEnvProvider):
+    @property
+    def produces(self) -> frozenset[str]:
+        return frozenset({"ERP_TOKEN", "ERP_REFRESH_TOKEN"})  # refresh token 也要列
+
+    def needs_refresh(self, values: dict[str, str]) -> bool:
+        # 不打網路、要快:例如讀 ERP_TOKEN(JWT)的 exp,剩不到 5 分鐘就回 True
+        return seconds_left(values.get("ERP_TOKEN", "")) < 300
+
+    async def refresh(self, values: dict[str, str]) -> dict[str, str]:
+        r = await my_erp_client.refresh(values["ERP_REFRESH_TOKEN"])  # 自己設逾時
+        if r.status == 401:  # refresh token 被撤銷或過期:只有重新登入能解決
+            raise RefreshRejected({"ERP_TOKEN", "ERP_REFRESH_TOKEN"})
+        r.raise_for_status()  # 其他錯誤照常丟例外
+        return {"ERP_TOKEN": r.access_token, "ERP_REFRESH_TOKEN": r.refresh_token}
+```
+
+平台只看 `refresh()` 的**結果**(這就是契約,D5):
+
+| 結果 | 意思 | 平台怎麼做 |
+|---|---|---|
+| 正常回傳 | 換成功 | 寫回值原本所在的那一層(我的環境變數／這個 item 的 Private／Shared),再交給工具 |
+| `raise RefreshRejected(names)` | refresh token 確定無效 | 清掉那一層裡你列的名稱(只認 `produces` 裡的),工具照樣跑;是聊天就在對話裡出現「登入 X」按鈕,其他(頁面按鈕、goal、重跑、workflow)就通知替誰跑的人(每天一次) |
+| 其他例外或逾時 | 暫時失敗 | 什麼都不清,工具拿到原本的值,下次要用時再試 |
+
+- ⚠️ **確定無效時一定要 `raise RefreshRejected`。** 全部丟一般例外的話,平台一律當暫時失敗:不清、不提示,
+  人要等到工具自己失敗才知道。
+- **`names` 要列出所有因此失效的變數**——過期的 access token 和 refresh token 都要。漏列的名稱會留下來:
+  過期的 access token 留著、refresh token 被清掉時,下一次執行還是判斷「快過期」,`refresh()` 收到的值裡卻沒有 refresh token。
+- **`needs_refresh` 在執行要把值交給工具前被呼叫**:聊天是每則訊息被收下時一次(排在別的回合後面的訊息要先等,
+  同一輪後面的工具呼叫也不再問,所以餘裕要涵蓋等待加一輪的長度),頁面按鈕的每次工具呼叫、workflow 的每個節點、每個 goal 回合、每次重跑各一次。
+  所以不要打網路。它丟例外 = 當成不需要換。
+- **平台自己也設了上限**(`refresh` 30 秒):卡住的 impl 不會把每一輪都卡住。
+- **同時要換時只換一次**:兩個執行(或兩顆 pod)同時發現快過期,只有一個會呼叫 `refresh`,另一個等它換完
+  直接用新的——用一次就作廢的 refresh token(rotation)也不會把自己鎖死。
+- **只寫回換掉的名稱**:寫的當下重讀那一層,這幾個名稱還是送去換的那組值時才寫;換的期間別人改的其他值照留,
+  有人在這期間登出或重新登入,就以他們的為準。
+- **值從哪一層來就寫回哪一層**;放在 **Shared** 的 token,平台會**直接改寫那個 item 的共用值**,不看當下的人
+  有沒有 `write_meta`,修改紀錄的寫入者是 `system:env-refresh`。值分散在不同層、或來自服務帳號
+  (`env_without_request`)時不換——沒有一個屬於我們的地方可以寫回。
+- **來自自動帶入值(`IRequestEnv`,也就是瀏覽器帶來的 token)的值,預設不換**;登入方式寫
+  `refreshes_seam = True` 才換([plan-seam-token-refresh](plan-seam-token-refresh.md))。換好的值存在那個人
+  這個 item 的自動帶入值那一列,**之後瀏覽器只要還帶著同一個舊值,就一直用換好的**(排程、goal 這些沒人在場的執行
+  也用它);瀏覽器帶來一個**和上一次帶的不同的值**(重新登入過)就改用瀏覽器的。`refresh()` 多回傳的名稱
+  (瀏覽器不會帶的,例如到期時間)只要還有名稱沿用列上的值(瀏覽器這次帶的和上次一樣)就一起留著;瀏覽器帶的每個名稱
+  都和上次不同、或什麼都不帶(登出)才拿掉——重新登入時若有名稱沒變(例如使用者 id),多回傳的名稱會留著。refresh token 確定無效時清掉那些名稱,
+  瀏覽器之後還帶同一個值也不會放回去;「登入 X」按鈕把新值寫進這個 item 的 Private。
+  ⚠️ 會 rotation 的系統:平台一換,瀏覽器手上那顆 refresh token 就作廢了——你的瀏覽器端若自己也會換,要先想好。
+  而且這份換好的值是**每個 item 各一份**:同一個人在兩個 item 都要用、都快過期時,兩邊會各自拿瀏覽器那顆去換,
+  後換的那邊會被拒、要那個人重新登入一次。
+- WUI 頁面的 build 以「沒有人」的身分跑,不帶任何人的值,也就不換。
+- 不寫這兩個方法 = 一切照舊。
+
+```python
+class SsoErpLogin(IEnvProvider):
+    refreshes_seam = True  # 瀏覽器帶來的 ERP_TOKEN 也由平台換新
+    ...
+```
+
 ### 兩層:所有參與者共用的值,與每個人自己的值(`plan-wui-viewer-login.md`)
 
 上面的 `env_vars` 是 **shared** 層:一個 item 一份,能打開 item 的人都讀得到。另外有一層
@@ -412,14 +479,17 @@ tool 拿到哪一層,由 item 上**每個名字的政策**(`WorkItemBase.env_pol
 
 | 政策 | 畫面文字 | tool 拿到(左邊先) |
 |---|---|---|
-| `shared_first`(預設,沒設就是它) | Shared | 共用值 → 本人這個 item 的值 → 服務帳號;**不讀**「我的環境變數」 |
-| `private_first` | Private first | 本人這個 item 的值 → 我的環境變數 → 服務帳號 → 共用值 |
+| `shared_first` | Shared | 共用值 → 本人這個 item 的值 → 我的環境變數 → 服務帳號 |
+| `private_first`(預設,沒設就是它) | Private first | 本人這個 item 的值 → 我的環境變數 → 服務帳號 → 共用值 |
 | `private_only` | Private only | 本人這個 item 的值 → 我的環境變數 → 服務帳號;沒有就**不傳**(不是擋下——必不必填是 tool 的事) |
 
 「服務帳號」是部署的 `env_without_request`,只在沒有人在場的 turn 出現。
 
-預設就是 #714 那行 `{**request_env, **item_env}`:沒設政策、也**沒有人存過自己的值**的 item,
-有人在場的 turn 行為一個字都沒變。唯一的差別在**沒有人在場**的 turn(見下面 #714 那段的「寫進本人的
+預設是 `private_first`(`docs/plan-wui-user.md` D5,舊的 item 也一樣):同名時按的人自己的值
+贏過 item 的共用值。要固定用共用值(#714 那行 `{**request_env, **item_env}` 的行為),就在面板上
+把那個名字選成 Shared——選了會明確存下來,不受預設影響。沒有人在場的 turn(排程)替綁定的人跑,
+他自己的值先;他沒有、或排程沒綁人時(升級前就在的、作者沒有 `execute` 的、複製或 zip 匯入的,見 #983),
+服務帳號的值也排在共用值前面(D11)。唯一的差別在**沒有人在場**的 turn(見下面 #714 那段的「寫進本人的
 private 層」):部署有 `IRequestEnv` 時,一個人最後一次請求帶的值會用在他自己的 goal 續跑、被接手重跑的
 turn、他按下起的 run——同名時**蓋過** `env_without_request` 給的服務帳號(那條路是替他跑的,他自己的
 憑證就是他會用的那個)。
@@ -431,7 +501,7 @@ turn、他按下起的 run——同名時**蓋過** `env_without_request` 給的
 | 聊天送出、WUI 頁面的 `callTool` | 送出 / 按的人 |
 | 頁面按鈕起的 `wui/run`、`POST …/run` | **按的人**(帳照舊記在 run 的 `captured_user`) |
 | goal driver 續跑、pod 死掉後被接手重跑的 turn | 那一輪的作者 |
-| 頁面排程 | **本人按了「用我的身分執行」才有**;沒人按 → 誰的都沒有(shared + `env_without_request`)。排程內容一改,綁定就失效並通知那個人 |
+| `schedules.json` 的排程(item 自己的、頁面的) | **綁定的那一個人**:預設是寫那一列的人——AI 用 `save_schedules`／`write_file`／`edit_file` 寫的算對話的那個人(workflow 節點寫的算那個 run 代表的人)、檔案編輯器存檔／WUI 頁面 `writeFile`／檔案樹上傳／面板匯入算存檔的人、「改時間」算改的人;寫的人在 item 沒有 `execute` 就不綁(`docs/plan-schedule-run-as.md`);寫的時候它跑的 workflow 還解析不了也照樣綁給寫的人,修好前不觸發([plan-seam-token-refresh](plan-seam-token-refresh.md) W4)。之後誰按了「用我的身分執行」就換成誰,superuser 也可以指定別人(並通知對方)。用 `exec` 寫、複製、搬移、zip 匯入、尋找取代、升級前就在的列 → 誰的都沒有(shared + `env_without_request`)。排程內容一改就是新的一列,算改的人的 |
 | event trigger、profile 層級排程 | 誰的都沒有 |
 | WUI build | **誰的都沒有**:私人層是空的,shared 照政策解析,所以 `private_only` 的名字拿不到(`dist/` 是大家共用的成品) |
 
@@ -439,7 +509,12 @@ turn、他按下起的 run——同名時**蓋過** `env_without_request` 給的
   `execute`)。被移出 item 的人,他的值從下一個 turn 起就不再被使用;他綁定的排程會取消綁定並通知他
   「你已沒有權限」。
 - **「用我的身分執行」同意的是那一列排程,也是它要跑的 workflow 檔**(`.workflows/<run>.json` 的內容)。
-  兩者任一改了,綁定就取消並通知;排程檔整份被刪也一樣。workflow 檔每次觸發前以**即時檔案**比對
+  兩者任一改了,綁定就取消並通知;排程檔整份被刪也一樣。**例外**([plan-seam-token-refresh](plan-seam-token-refresh.md) W1):
+  workflow 檔是被一個**認得出是誰、而且在 item 有 `execute`** 的人改的——他剛在聊天裡送出的訊息請 AI 改(`save_workflow`／
+  `write_file`／`edit_file`)、檔案編輯器存檔、檔案樹上傳、面板匯入、WUI 頁面的 `writeFile`、從範本複製——綁定改成他的(原因顯示「它跑的 workflow 是他改的」),
+  原本的人和他都收到通知;是同一個人就只更新同意的 digest、不通知。改完那一刻檔案已經又被別人改掉,就不轉交。
+  goal 的自動回合、workflow 節點或排程自己的執行改的、`exec`、zip 匯入、檔案樹的複製／搬移、尋找取代、Run 附帶的上傳、
+  刪除、超過 1 MiB 的檔案 PUT(編輯器存檔、上傳、匯入、`writeFile`),照舊取消並通知。workflow 檔每次觸發前以**即時檔案**比對
   (run 會載入的就是它;讀取出錯或逾時就當沒變(檔案不見了則算改了),不拖住其他排程),排程列的刪除也以即時檔案再確認一次
   (持久快照會落後);檔案整份解析不了時什麼都不取消。觸發起的 run 記下的是綁定當時同意的那份 digest,
   所以檢查之後、run 組出來之前才改的檔,組的時候就對不上,run 不帶那個人的值。**只比對那一個 workflow 檔**:它呼叫的腳本、agent 節點讀的其他檔案被改不會取消綁定,
@@ -491,8 +566,8 @@ tool 端的讀法跟上面**一模一樣**(`os.environ`),它分不出值從哪�
   `plan-wui-viewer-login` Q4(b) 刻意改掉它:值存在**那個人、那個 item** 的 private 列,
   pod 死掉後被接手重跑的 turn、他自己的 goal 續跑才拿得到。別人的值**永遠不會**被重播
   給另一個人的 turn(列是依人分的)。`env_without_request` 的值仍然**不寫**任何地方。
-- **同名時聽 item 的政策**(上一節)。沒設政策就是 `shared_first`:`env_vars` 那格贏,而且沒有
-  提示(要拿服務帳號的值壓過去做測試時就靠這個)——也就是 #714 原本的行為。
+- **同名時聽 item 的政策**(上一節)。沒設政策就是 `private_first`:請求帶來的值贏。要讓 `env_vars`
+  那格贏(拿固定的值做測試時就靠這個,#714 原本的行為),把那個名字選成 Shared。
 - **有 request 的入口問 `env_for`:聊天送出、WUI 頁面的 `callTool`。** 兩者的共同點是:
   一次請求、一個人、結果只回給問的那個人。(那個人最後一次的值會留在**他自己的** private 層,
   見下一條;不會留在 item 上。)
@@ -507,7 +582,7 @@ tool 端的讀法跟上面**一模一樣**(`os.environ`),它分不出值從哪�
     | 入口 | 誰能造成它 | `user_id` |
     |---|---|---|
     | item 排程 | 任何持 `edit_content` 的人寫 `schedules.json`(或 AI 的 `write_file`) | item owner |
-    | `wui/run` | 任何持 `execute` 的人按頁面的按鈕 | item owner |
+    | `wui/run` | 任何持「使用 WUI」(`use_wui`;能聊天、能跑程式的人也算)的人按頁面的按鈕 | item owner |
     | event trigger | 任何持 `read_content`+`edit_content` 的參與者寫一筆符合條件的 entity | profile 寫死的 acting user |
     | profile 層級的 schedule trigger(`triggers.json` 的 `type: schedule`) | 沒有人——部署宣告的時鐘 | profile 寫死的 acting user |
     | goal driver | 任何能在那個 chat 發言的人,推動下一輪 | 設目標的人 |
