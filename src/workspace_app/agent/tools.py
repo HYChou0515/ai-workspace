@@ -12,7 +12,7 @@ import json
 import logging
 import posixpath
 import re
-from collections.abc import Callable, Collection, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Literal, TypedDict
 
 import magic
@@ -2765,7 +2765,42 @@ async def save_skill_impl(
     )
 
 
-async def publish_skill_impl(ctx: RunContextWrapper[AgentToolContext], name: str) -> str:
+#: How much of the change since the current version a refused publish shows
+#: the model to draft a release note from: enough for a skill's text, bounded
+#: so a large folder cannot flood the turn.
+_RELEASE_NOTE_DIFF_CAP = 6000
+
+
+def _changes_since(current: Mapping[str, bytes], new: Mapping[str, bytes]) -> str:
+    """What `new` changes over `current`, per file: added / removed / changed,
+    with a unified diff for text — capped at `_RELEASE_NOTE_DIFF_CAP`."""
+    import difflib
+
+    parts: list[str] = []
+    for path in sorted(current.keys() | new.keys()):
+        old, now = current.get(path), new.get(path)
+        if old == now:
+            continue
+        status = "added" if old is None else "removed" if now is None else "changed"
+        parts.append(f"{path}: {status}")
+        try:
+            a = (old or b"").decode("utf-8").splitlines()
+            b = (now or b"").decode("utf-8").splitlines()
+        except UnicodeDecodeError:
+            continue  # not text: the status line says it
+        if status == "changed":
+            parts.extend(difflib.unified_diff(a, b, lineterm="", n=1))
+    if not parts:
+        return "No file differs from the current version."
+    text = "\n".join(parts)
+    if len(text) > _RELEASE_NOTE_DIFF_CAP:
+        text = text[:_RELEASE_NOTE_DIFF_CAP] + "\n… (the rest of the change is not shown)"
+    return text
+
+
+async def publish_skill_impl(
+    ctx: RunContextWrapper[AgentToolContext], name: str, release_note: str = ""
+) -> str:
     """Publish one of THIS workspace's skills (a `.skill/<name>/` folder) to the
     skill hub, where every user of the platform can find it and install it into
     their own items. Use it when the user asks to share, publish or upload a
@@ -2782,7 +2817,14 @@ async def publish_skill_impl(ctx: RunContextWrapper[AgentToolContext], name: str
 
     Publishing the same name again replaces your earlier version. A folder
     installed from someone else's skill hub entry publishes as a fork of theirs.
-    The entry is public by default. Returns a confirmation or an `error:` note."""
+    The entry is public by default. Returns a confirmation or an `error:` note.
+
+    `release_note` tells the people who installed the skill what this version
+    changes. A new version of an entry that already exists needs one: called
+    without it, nothing is published and the reply shows what changed since
+    the current version — draft a short note from that (what was added,
+    changed, what to watch for), confirm it with the user, then call again
+    with it. A first version needs none."""
     for verb in TOOL_VERBS["publish_skill"]:
         if (denied := authorize_tool(ctx.context, verb)) is not None:
             return denied
@@ -2863,6 +2905,21 @@ async def publish_skill_impl(ctx: RunContextWrapper[AgentToolContext], name: str
                 "or remove its `.origin` file to publish it as a new version of your own."
             )
 
+    # A new version tells the people who installed the earlier one what it
+    # changes (plan-skill-hub-release-notes D2): without a note nothing is
+    # published — before the room check and the review, so neither is spent —
+    # and the change since the current version comes back to draft it from.
+    if existed is not None and not release_note.strip():
+        change = _changes_since(await hub.payload_of(existed), payload)
+        return (
+            f"not published yet — this is a new version of your '{name}', and a new version "
+            "needs a release note telling the people who installed it what changed. Draft a "
+            "short one from the change below (what was added, what changed, what to watch "
+            "for), show it to the user and ask them to confirm or edit it, then call "
+            f"publish_skill('{name}', release_note=...) again with it.\n\nChanged since the "
+            f"current version:\n```\n{change}\n```"
+        )
+
     # After the publish the folder's manifest is rewritten to the entry it
     # just became (below) — but only where that changes nothing about what the
     # folder IS in this item: the publisher's own work (no manifest yet) or a
@@ -2910,6 +2967,7 @@ async def publish_skill_impl(ctx: RunContextWrapper[AgentToolContext], name: str
         referenced_tools=tools,
         review=review,
         forked_from=forked_from,
+        release_note=release_note,
     )
     # The folder now tracks the entry it just became (review round 1): its
     # manifest is rewritten to the version just published, so the Skills panel
