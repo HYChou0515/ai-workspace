@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { LATER_MS, reminderOf, remindLater, skipVersion } from "./skillUpdateReminders";
+import { LATER_MS, onRemindersChanged, reminderOf, remindLater, skipVersion } from "./skillUpdateReminders";
 
 // plan-skill-hub-release-notes D3 / D4: the first reminder offers Update and
 // Later; once a Later has run out, every reminder adds Skip. Later is 7 days.
@@ -39,5 +39,42 @@ describe("skill update reminders", () => {
   it("an unreadable store reminds rather than throws", () => {
     localStorage.setItem("skillHub.updateReminders", "{not json");
     expect(reminderOf("alice", "e1", 3, T0).due).toBe(true);
+  });
+
+  // Review round 1 (#1004): with storage blocked (a private window, quota
+  // full) the write was swallowed and the next read came back empty, so Later
+  // and Skip looked like buttons that do nothing. They hold for this page.
+  it("a store that refuses writes still keeps the answer for this page", () => {
+    const set = vi.spyOn(localStorage, "setItem").mockImplementation(() => {
+      throw new DOMException("blocked", "QuotaExceededError");
+    });
+    const get = vi.spyOn(localStorage, "getItem").mockImplementation(() => {
+      throw new DOMException("blocked", "SecurityError");
+    });
+    try {
+      remindLater("alice", "e1", 3, T0);
+      expect(reminderOf("alice", "e1", 3, T0 + DAY).due).toBe(false);
+      skipVersion("alice", "e1", 4);
+      expect(reminderOf("alice", "e1", 4, T0).skipped).toBe(true);
+      expect(set).toHaveBeenCalled();
+      expect(get).toHaveBeenCalled();
+    } finally {
+      set.mockRestore();
+      get.mockRestore();
+      // One write that succeeds ends the page-only fallback for the tests after.
+      skipVersion("reset", "reset", 0);
+      localStorage.clear();
+    }
+  });
+
+  // The same review: an answer given in another tab never reached this one.
+  it("an answer written by another tab is announced here", () => {
+    const heard = vi.fn();
+    const stop = onRemindersChanged(heard);
+    window.dispatchEvent(new StorageEvent("storage", { key: "skillHub.updateReminders" }));
+    window.dispatchEvent(new StorageEvent("storage", { key: "something.else" }));
+    stop();
+    window.dispatchEvent(new StorageEvent("storage", { key: "skillHub.updateReminders" }));
+    expect(heard).toHaveBeenCalledTimes(1);
   });
 });

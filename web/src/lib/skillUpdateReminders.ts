@@ -24,7 +24,13 @@ export type Reminder = {
   until: number | null;
 };
 
+// The answers of this page when the browser's store refused a write (a
+// private window, a full quota): without it Later / Skip were recorded nowhere
+// and looked like buttons that do nothing. Until the next successful write.
+let unsaved: Store | null = null;
+
 function read(): Store {
+  if (unsaved) return { ...unsaved };
   try {
     const raw = localStorage.getItem(KEY);
     const parsed: unknown = raw ? JSON.parse(raw) : null;
@@ -39,18 +45,29 @@ const CHANGED = "skillHub.updateReminders.changed";
 function write(store: Store): void {
   try {
     localStorage.setItem(KEY, JSON.stringify(store));
+    unsaved = null;
   } catch {
-    // A full or blocked store: the reminder simply comes back next time.
+    // A full or blocked store: kept for this page, so the answer holds until
+    // it is closed — and the reminder comes back on the next visit.
+    unsaved = store;
   }
   // Every reader of an answer (the panel's row, the skills button's mark)
   // re-reads at once.
   window.dispatchEvent(new Event(CHANGED));
 }
 
-/** Call `listener` whenever a Later or a Skip is recorded; returns the unsubscribe. */
+/** Call `listener` whenever a Later or a Skip is recorded — here, or in another
+ * tab of this browser (its `storage` event); returns the unsubscribe. */
 export function onRemindersChanged(listener: () => void): () => void {
+  const fromAnotherTab = (e: StorageEvent) => {
+    if (e.key === KEY || e.key === null) listener();
+  };
   window.addEventListener(CHANGED, listener);
-  return () => window.removeEventListener(CHANGED, listener);
+  window.addEventListener("storage", fromAnotherTab);
+  return () => {
+    window.removeEventListener(CHANGED, listener);
+    window.removeEventListener("storage", fromAnotherTab);
+  };
 }
 
 // encodeURIComponent so a ":" in any part can never make two keys collide.
