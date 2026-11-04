@@ -546,6 +546,7 @@ def create_app(
     # (also when it stops). None ⇒ nothing counted here is written.
     tool_usage: ToolUsageRecorder | None = None,
     tool_usage_flush_interval: timedelta = timedelta(minutes=5),
+    wui_usage_flush_interval: timedelta = timedelta(minutes=5),
     # docs/plan-capacity-usage.md: where this process counts its requests,
     # turns and jobs for the capacity dashboard. None ⇒ nothing is counted.
     usage_recorder: UsageRecorder | None = None,
@@ -1525,6 +1526,7 @@ def create_app(
         mirror_interval=mirror_interval,
         skill_hub_flush_interval=skill_hub_flush_interval,
         tool_usage_flush_interval=tool_usage_flush_interval,
+        wui_usage_flush_interval=wui_usage_flush_interval,
         code_sync_check_interval=code_sync_check_interval,
         code_daily_sync=code_daily_sync,
         wiki_reflect_daily=wiki_reflect_daily,
@@ -2154,6 +2156,13 @@ def create_app(
     app.state.tool_usage_store = (
         ToolUsageStore(spec, tool_usage, pod=writer_name()) if tool_usage is not None else None
     )
+    # docs/plan-wui-usage.md: this pod's deployed-page opens and uses, flushed
+    # by the lifespan. Always on: only the API's page routes count, in memory.
+    from .wui_usage import WuiUsageRecorder, WuiUsageStore, register_wui_usage
+
+    register_wui_usage(spec)
+    wui_usage = WuiUsageStore(spec, WuiUsageRecorder(), pod=writer_name())
+    app.state.wui_usage_store = wui_usage
     # KB chat runs through a wiki-aware runner that routes each turn across
     # chunk-RAG / wiki / both (#50 P5). It's a pure pass-through to `runner`
     # unless the query opts into the wiki AND a collection has use_wiki, so the
