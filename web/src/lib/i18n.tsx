@@ -1394,6 +1394,19 @@ export const messages = {
   // "7 Aug" — so the sentence must read with all of them; "於 {when} Deploy" /
   // "on {when}" did not ("於 just now Deploy", "on 2 d ago").
   "wui.row.by": { "zh-TW": "{who} Deploy · {when}", en: "deployed by {who} · {when}" },
+  "wui.usage.opened": { "zh-TW": "打開", en: "Opened" },
+  "wui.usage.used": { "zh-TW": "使用", en: "Used" },
+  "wui.usage.total": { "zh-TW": "總共 {value}", en: "{value} in total" },
+  "wui.usage.week": { "zh-TW": "近 7 天 {value}", en: "{value} in the last 7 days" },
+  "wui.usage.personDays": { "zh-TW": "{n} 人天", en: "{n} person-days" },
+  "wui.usage.uses": { "zh-TW": "{n} 次、{time}", en: "{n} uses, {time}" },
+  "wui.usage.seconds": { "zh-TW": "{n} 秒", en: "{n} s" },
+  "wui.usage.minutes": { "zh-TW": "{n} 分鐘", en: "{n} min" },
+  "wui.usage.hours": { "zh-TW": "{n} 小時", en: "{n} h" },
+  "wui.usage.tip": {
+    "zh-TW": "從部署的連結打開與使用的量。人天：同一人同一天打開幾次都算一次。使用：跑 workflow、呼叫工具、叫 agent 的次數與花的時間。",
+    en: "Opens and uses through the deployed link. Person-days: one person opening it on one day counts once, however many times. Uses: workflows run, tools called and agents asked, with the time they took.",
+  },
   // The WUI pane's author toolbar and Deploy panel (docs/plan-deploy-reach.md
   // decision 7). "Deploy" stays the button's word in both — the WUI overview's
   // copy already names it.

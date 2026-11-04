@@ -122,3 +122,51 @@ def test_someone_who_cannot_open_the_page_is_refused_and_not_counted():
 def deployed(path: str = PAGE) -> dict[str, str]:
     """The header a deployed page's link puts on its requests."""
     return {"X-Wui-Deployed": quote(path, safe="")}
+
+
+# ── P4: the page's owner reads its numbers on the overview (U5) ──────────
+
+
+def _card(client, iid: str) -> dict:
+    (row,) = [p for p in client.get("/wui").json()["pages"] if p["item_id"] == iid]
+    return row
+
+
+def test_the_owner_reads_the_page_s_numbers_on_its_card():
+    client, holder, iid, app = _world()
+    _deploy(client, iid)
+    holder["id"] = "alice"
+    client.post(f"/a/rca/items/{iid}/wui/opened", json={"path": PAGE})
+    holder["id"] = "bob"
+    client.post(f"/a/rca/items/{iid}/wui/opened", json={"path": PAGE})
+    app.state.wui_usage_store.recorder.used(iid, PAGE, user="alice", kind="tool", ms=1500)
+    app.state.wui_usage_store.flush()
+
+    usage = _card(client, iid)["usage"]
+
+    assert usage == {
+        "opened_total": 2,
+        "opened_7d": 2,
+        "used_total": 1,
+        "used_ms_total": 1500,
+        "used_7d": 1,
+        "used_ms_7d": 1500,
+    }
+
+
+def test_someone_who_cannot_change_the_item_gets_no_numbers():
+    """U5: the numbers are the page owner's; a viewer's card carries none."""
+    client, holder, iid, app = _world()
+    _deploy(client, iid)
+    app.state.wui_usage_store.recorder.opened(iid, PAGE, user="alice")
+    app.state.wui_usage_store.flush()
+    holder["id"] = "alice"
+
+    assert _card(client, iid)["usage"] is None
+
+
+def test_a_page_nobody_has_used_shows_zeros_to_its_owner():
+    client, _holder, iid, _app = _world()
+    _deploy(client, iid)
+
+    assert _card(client, iid)["usage"]["opened_total"] == 0

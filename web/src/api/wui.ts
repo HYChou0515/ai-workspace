@@ -55,6 +55,20 @@ export type DeployedWui = {
   /** Whether THIS viewer may Remove it — the server's `edit_content` answer,
    * so the button is drawn only where a press would be accepted. */
   can_remove: boolean;
+  /** The page's numbers (docs/plan-wui-usage.md U5) — only for someone who may
+   * change the item; `null` (or absent, from an older server) otherwise. */
+  usage?: PageUsage | null;
+};
+
+/** Opens in person-days, and uses with their milliseconds — in total and
+ * over the last seven days (docs/plan-wui-usage.md U2/U3). */
+export type PageUsage = {
+  opened_total: number;
+  opened_7d: number;
+  used_total: number;
+  used_ms_total: number;
+  used_7d: number;
+  used_ms_7d: number;
 };
 
 export type WuiApi = {

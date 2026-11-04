@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import dataclasses
 from collections.abc import Callable, Mapping
 from typing import Any
 from urllib.parse import quote
@@ -198,6 +199,21 @@ class DeployedPage(BaseModel):
     icon: str
     color: str
     can_remove: bool
+    # The page's numbers (`docs/plan-wui-usage.md` U2/U3/U5) — only for whoever
+    # may change the item (`can_remove`); None for everyone else.
+    usage: PageUsageOut | None = None
+
+
+class PageUsageOut(BaseModel):
+    """Person-days opened, and uses with their milliseconds — in total and over
+    the last seven days (U2/U3)."""
+
+    opened_total: int
+    opened_7d: int
+    used_total: int
+    used_ms_total: int
+    used_7d: int
+    used_ms_7d: int
 
 
 def _permission_json(permission: Permission | None) -> dict[str, Any] | None:
@@ -343,4 +359,11 @@ def register_wui_deploy_routes(
                     can_remove=removable,
                 )
             )
+        # docs/plan-wui-usage.md U5: the owner's pages carry their numbers —
+        # every one asked in ONE read, by the indexed `item_id`.
+        owned = [p for p in out if p.can_remove]
+        if usage is not None and owned:
+            sums = await asyncio.to_thread(usage.summary, [(p.item_id, p.path) for p in owned])
+            for p in owned:
+                p.usage = PageUsageOut(**dataclasses.asdict(sums[(p.item_id, p.path)]))
         return Overview(pages=out)

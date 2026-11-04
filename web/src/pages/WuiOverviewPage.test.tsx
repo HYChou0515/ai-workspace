@@ -909,6 +909,64 @@ describe("WuiOverviewPage — who each page opens for (docs/plan-deploy-reach.md
   });
 });
 
+describe("a page's numbers, for its owner (docs/plan-wui-usage.md U5)", () => {
+  const USAGE = {
+    opened_total: 120,
+    opened_7d: 18,
+    used_total: 45,
+    used_ms_total: 11_520_000, // 3.2 hours
+    used_7d: 6,
+    used_ms_7d: 1_440_000, // 24 minutes
+  };
+
+  async function usageOf(title: string): Promise<HTMLElement | null> {
+    const link = await screen.findByRole("link", { name: title });
+    const li = link.closest("li") as HTMLElement;
+    return li.querySelector<HTMLElement>('[data-testid="wui-usage"]');
+  }
+
+  it("says opens in person-days and uses with their time, in total and over seven days — on a card", async () => {
+    writeWuiView("cards");
+    render(<WuiOverviewPage client={client([row({ title: "Mine", usage: USAGE })])} />, { wrapper: Wrap });
+
+    const usage = await usageOf("Mine");
+
+    expect(usage).not.toBeNull();
+    const text = usage?.textContent ?? "";
+    expect(text).toContain(translate("zh-TW", "wui.usage.opened"));
+    expect(text).toContain(translate("zh-TW", "wui.usage.personDays", { n: 120 }));
+    expect(text).toContain(translate("zh-TW", "wui.usage.personDays", { n: 18 }));
+    expect(text).toContain(translate("zh-TW", "wui.usage.uses", { n: 45, time: translate("zh-TW", "wui.usage.hours", { n: "3.2" }) }));
+    expect(text).toContain(translate("zh-TW", "wui.usage.uses", { n: 6, time: translate("zh-TW", "wui.usage.minutes", { n: 24 }) }));
+  });
+
+  it("says the same in the table", async () => {
+    writeWuiView("table");
+    render(<WuiOverviewPage client={client([row({ title: "Mine", usage: USAGE })])} />, { wrapper: Wrap });
+
+    expect((await usageOf("Mine"))?.textContent).toContain(translate("zh-TW", "wui.usage.personDays", { n: 120 }));
+  });
+
+  it("says nothing on a page whose numbers are not the viewer's", async () => {
+    writeWuiView("cards");
+    render(<WuiOverviewPage client={client([row({ title: "Theirs", can_remove: false, usage: null })])} />, {
+      wrapper: Wrap,
+    });
+
+    expect(await usageOf("Theirs")).toBeNull();
+  });
+
+  it("names a short time in seconds", async () => {
+    writeWuiView("cards");
+    render(
+      <WuiOverviewPage client={client([row({ title: "Mine", usage: { ...USAGE, used_ms_7d: 4_000 } })])} />,
+      { wrapper: Wrap },
+    );
+
+    expect((await usageOf("Mine"))?.textContent).toContain(translate("zh-TW", "wui.usage.seconds", { n: 4 }));
+  });
+});
+
 /** Reads the trail the page published — the global bar's view of it. */
 function TrailProbe() {
   const trail = useBreadcrumbTrail();
