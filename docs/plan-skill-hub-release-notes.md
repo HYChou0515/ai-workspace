@@ -76,3 +76,31 @@ reminder read it from the same place.
   a base differential: publish v1 → install → publish v2 with a drafted note →
   the item shows the mark and the note; Later, then after the 7 days (clock
   injected) Skip; Update; two widths.
+
+## As built (#1004)
+
+- **The note is the commit message**, `publish <name>`, a blank line, then the
+  note (`skill_hub_git.publish_message`); history reads it back with one
+  `git show --no-walk` over the listed commits (`SkillHubRepos.release_notes`).
+- **The refusal sits after the size and structure checks** (a folder that
+  cannot load gets those errors first, so there is nothing to describe yet)
+  and **before the workspace room check and the review**, so no reviewer is
+  spent on a version that is not published. Its words are one function,
+  `release_note_needed`, shared with the `skill_eval` double.
+- **P3's scenario needed the double to change.** The `publish_skill` double
+  published every call, so the reply the guidance teaches from never
+  reached the model. A scenario now stages `published-skills.txt` (names
+  already on the hub; not `.json`, which `load_scenarios` would read as a
+  scenario). For those names the double refuses without a note, with a change
+  built by the real `_changes_since`. Scenario: `republish-drafts-a-note`.
+- **Update follows `edit_content` alone** (`useItemAccess.canEditContent`),
+  not `canWrite`: that is the union of `edit_content` / `add_content` /
+  `write_meta`, and the sync route asks `edit_content`, so the union offered a
+  button that answers 403. The flag travels WorkspaceShell → ItemChatShell →
+  AgentPanel → AgentHeader → SkillsModal (`canUpdateSkills` / `canUpdate`).
+- **The mark and the row read one query** (`qk.itemSkills`). Update's existing
+  invalidation clears both; a Later / Skip clears the mark through a window
+  event (`onRemindersChanged`), since localStorage writes in the same tab fire
+  no `storage` event.
+- **The old 「skill 已變更」 badge stays** for a behind copy with no `updates`
+  (an older pod's answer during a rollout); with `updates` the new row replaces it.
