@@ -50,8 +50,8 @@ from ..tooling.registry import (
     find_allowed_command,
 )
 from ..workflow.offered import no_such_workflow, wont_parse
-from ..workflow.orchestrator import TooManyPageJobs
-from ..workflow.run import PageJob, RunStatus
+from ..workflow.orchestrator import ACTIVE_RUN, TooManyPageJobs
+from ..workflow.run import PageJob
 from .env_layers import PersonEnv, resolve, resolve_env
 from .env_refresh import EnvRefresher
 from .locator import ItemLocator
@@ -62,10 +62,6 @@ from .turn_context import resolve_item_tools
 from .wui_usage import WuiUsage
 
 logger = logging.getLogger(__name__)
-
-#: A run still under way: tied to a page, it is counted when it leaves these
-#: (`docs/plan-wui-usage.md` U11).
-_STILL_RUNNING = (RunStatus.PENDING, RunStatus.RUNNING, RunStatus.AWAITING_HUMAN)
 
 # What a backend returns when it killed the command on its own deadline
 # (`ExecResult.exit_code`'s documented convention).
@@ -503,7 +499,7 @@ def register_wui_routes(
             await asyncio.to_thread(
                 usage.started, run_id, investigation_id, page, user=user, kind=kind
             )
-            if orchestrator.run_status(run_id) not in _STILL_RUNNING:
+            if orchestrator.run_status(run_id) not in ACTIVE_RUN:
                 await asyncio.to_thread(usage.settled, run_id)
         except Exception:  # noqa: BLE001 — a count must never fail the work it counts
             logger.exception("wui usage: could not count run %s", run_id)

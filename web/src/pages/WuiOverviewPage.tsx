@@ -31,6 +31,7 @@ import { UserChip } from "../components/UserChip";
 import { useBreadcrumbs } from "../hooks/breadcrumbs";
 import { useCurrentUserState } from "../hooks/useCurrentUser";
 import { useUser } from "../hooks/useUsers";
+import { useDuration } from "../lib/duration";
 import { useT } from "../lib/i18n";
 import { pageReach } from "../lib/pageReach";
 import { useApps } from "../hooks/useResources";
@@ -528,18 +529,6 @@ function useReachNote(
   if (reach !== "owner") return null;
   if (!me.ready) return null;
   return me.id === (page.item_created_by ?? page.item_owner) ? "wui.reach.you" : "wui.reach.owner";
-}
-
-/** How long, in the unit that reads best: seconds under a minute, minutes
- * under an hour, hours (one decimal) above. */
-function useDuration(): (ms: number) => string {
-  const t = useT();
-  return (ms) => {
-    const s = ms / 1000;
-    if (s < 60) return t("wui.usage.seconds", { n: Math.round(s) });
-    if (s < 3600) return t("wui.usage.minutes", { n: Math.round(s / 60) });
-    return t("wui.usage.hours", { n: (s / 3600).toFixed(1) });
-  };
 }
 
 /** A page's numbers for its owner (docs/plan-wui-usage.md U2/U3/U5): opens in

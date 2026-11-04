@@ -761,6 +761,30 @@ describe("the deployed link counts its opens (docs/plan-wui-usage.md U2/U7)", ()
     );
   });
 
+  it("does not count the same visit again when Try again reads the page back", async () => {
+    // Review round 1 (R19): read, then a read that fails, then Try again reads
+    // it fine — the page went away and came back on one visit, not two opens.
+    const fetchMock = stubFetch();
+    let viewReads = 0;
+    const readFile = vi.fn(async (path: string) => {
+      if (path !== "/scrap-review/page.ai.yaml") throw notFound(path);
+      viewReads += 1;
+      if (viewReads === 2) throw notFound(path);
+      return { kind: "text", path, text: YAML, size: YAML.length, encoding: "utf-8" };
+    });
+    renderAt("/w/rca/i1/scrap-review/page.ai.yaml", readFile);
+    await waitFor(() => expect(opens(fetchMock)).toHaveLength(1));
+    // The pane's Try again (no entry) re-reads the view file: now a 404.
+    fireEvent.click(await screen.findByRole("button", { name: /try again/i }));
+    expect(await screen.findByText(/can.t be opened/i)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /try again/i }));
+
+    await waitFor(() => expect(viewReads).toBe(3));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(opens(fetchMock)).toHaveLength(1);
+  });
+
   it("does not count a file that is not a page", async () => {
     const fetchMock = stubFetch();
     const readFile = vi.fn(async (path: string) => {

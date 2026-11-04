@@ -16,7 +16,7 @@
  * are for navigating a workspace; someone who followed a link to one page has
  * nowhere to navigate to and no context for the crumbs.
  */
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 
 import { useT, type MsgKey } from "../lib/i18n";
@@ -109,10 +109,16 @@ export function WuiPage({
 
   // docs/plan-wui-usage.md U2/U7: the link was opened — told once, when the
   // page is really a page (a failed read or a wrong file is not an open). Not
-  // again on Try again: the same page, the same visit.
+  // again on Try again: a read that fails and then succeeds is the same page
+  // on the same visit, so each page is told once per mount (review round 1).
   const opened = view.isSuccess && parseViewSpec(view.data ?? "")?.view === VIEW_KIND.wui;
+  const told = useRef(new Set<string>());
   useEffect(() => {
-    if (opened && slug && itemId) void reportOpened(slug, itemId, path);
+    if (!opened || !slug || !itemId) return;
+    const key = `${slug}\u0000${itemId}\u0000${path}`;
+    if (told.current.has(key)) return;
+    told.current.add(key);
+    void reportOpened(slug, itemId, path);
   }, [opened, slug, itemId, path]);
 
   // A refetch of a query that NEVER had data goes back through `pending`, so

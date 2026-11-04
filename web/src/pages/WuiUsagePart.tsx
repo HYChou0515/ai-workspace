@@ -16,6 +16,7 @@ import { Link } from "react-router-dom";
 import { qk } from "../api/queryKeys";
 import type { WuiUsageClient, WuiUsagePage } from "../api/wuiUsage";
 import { UserChip } from "../components/UserChip";
+import { useDuration } from "../lib/duration";
 import { useT } from "../lib/i18n";
 import { UsageBars } from "./ToolUsagePanel";
 
@@ -24,16 +25,6 @@ const num: React.CSSProperties = { ...cell, textAlign: "right", fontVariantNumer
 
 /** One page's key: an item and a view path. */
 export const pageKey = (p: { item_id: string; page: string }) => `${p.item_id}\u0000${p.page}`;
-
-function useDuration(): (ms: number) => string {
-  const t = useT();
-  return (ms) => {
-    const s = ms / 1000;
-    if (s < 60) return t("wui.usage.seconds", { n: Math.round(s) });
-    if (s < 3600) return t("wui.usage.minutes", { n: Math.round(s / 60) });
-    return t("wui.usage.hours", { n: (s / 3600).toFixed(1) });
-  };
-}
 
 export function WuiUsagePart({
   days,

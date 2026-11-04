@@ -11,6 +11,8 @@ from __future__ import annotations
 import asyncio
 from urllib.parse import quote
 
+import pytest
+
 from workspace_app.api.wui_deploy import DeployedPages, DeployedWui, register_deployed_wui
 from workspace_app.api.wui_usage import (
     DEPLOYED_HEADER,
@@ -384,12 +386,14 @@ def test_a_run_that_already_ended_when_it_was_tied_is_counted_by_the_route():
     assert users["default-user"][WF] == 1
 
 
-def test_a_run_still_going_when_it_was_tied_is_left_for_its_end():
+@pytest.mark.parametrize("status", ["pending", "running", "awaiting_human"])
+def test_a_run_still_going_when_it_was_tied_is_left_for_its_end(status):
+    """Waiting at a gate for a person is not over: its end counts it."""
     from workspace_app.workflow.run import RunStatus
 
     from .test_wui_routes import RUN_URL
 
-    client, store = _run_client(RunStatus.RUNNING)
+    client, store = _run_client(RunStatus(status))
 
     client.post(RUN_URL, json={"workflow": "judge"}, headers=_hdr())
 
