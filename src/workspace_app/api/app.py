@@ -3010,6 +3010,7 @@ def create_app(
         publications=Publications(spec),
         ledger=disk_ledger,
         get_user_id=get_user_id,
+        superusers=superusers,
     )
 
     if spa_dist is None:

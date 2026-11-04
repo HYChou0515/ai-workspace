@@ -39,10 +39,15 @@ from pydantic import BaseModel
 from specstar import QB, SpecStar
 from specstar.types import ResourceIDNotFoundError
 
+from ..apps.resolve import find_work_item
 from ..files import WorkspaceFiles
 from ..filestore.protocol import FileNotFound, FileStore
+from ..perm.authorize import Actor, authorize
+from ..perm.model import ALL, Permission
 from ..quota.disk_ledger import DiskLedger
+from ..resources.groups import groups_of
 from .file_routes import _workspace_path
+from .item_authz import user_may
 from .locator import ItemLocator
 from .schedule_index import is_schedule_file
 from .timeutil import now_ms
@@ -110,6 +115,10 @@ class Published(Struct):
     #: publish in the publisher's name. A re-publish makes a new one; the old
     #: stays, an ordinary workspace of theirs.
     shared_copy: str = ""
+    #: Published from a COPY of another publication (C14): what it is based on,
+    #: as that copy recorded it — "based on X (by Y)".
+    based_on_title: str = ""
+    based_on_by: str = ""
 
 
 #: `filestore/specstar_impl._fid`'s spelling, as `wui_deploy.deployed_id`.
@@ -138,6 +147,33 @@ def register_publications(spec: SpecStar) -> None:
     auto-CRUD routes — nobody may PUT a publication into existence."""
     with contextlib.suppress(ValueError):
         spec.add_model(Published, indexed_fields=["item_id", "kind", "published_at"])
+
+
+def reach_permission(row: Published) -> Permission:
+    """Who may use ``row``, spelled as a `Permission` on ``read_meta`` — so the
+    ONE rule engine (`perm.authorize`) decides it: the publisher passes as the
+    owner, a superuser passes, ``all`` is everyone signed in, and
+    ``group:<id>`` resolves the way it does on an item."""
+    if row.reach == "everyone":
+        return Permission(visibility="restricted", read_meta=[ALL])
+    if row.reach == "subjects":
+        return Permission(visibility="restricted", read_meta=list(row.subjects))
+    return Permission(visibility="private")
+
+
+def may_use(spec: SpecStar, row: Published, user: str, superusers: frozenset[str]) -> bool:
+    """May ``user`` open ``row`` (C9)? "Use my workspace directly" lands them IN
+    the source, so the source's own permission decides that one (W2)."""
+    if row.sharing == "direct":
+        return user_may(spec, row.item_id, user, "read_content")
+    actor = Actor.human(user, groups=groups_of(spec, user))
+    return authorize(
+        actor,
+        "read_meta",
+        reach_permission(row),
+        created_by=row.published_by,
+        superusers=superusers,
+    )
 
 
 class Publications:
@@ -186,6 +222,14 @@ class Publications:
             rows.append(data)
         return rows
 
+    def by_id(self, row_id: str) -> Published | None:
+        try:
+            data = self._rm().get(row_id).data
+        except ResourceIDNotFoundError:
+            return None
+        assert isinstance(data, Published)
+        return data
+
     def holds_snapshot(self, namespace: str) -> bool:
         """Is ``namespace`` the CURRENT snapshot of some row? What the disk
         ledger's reconcile asks before forgetting a row that is not an item."""
@@ -230,6 +274,20 @@ async def take_snapshot(
     return count, total
 
 
+async def unpublish_item(
+    publications: Publications, store: FileStore, ledger: DiskLedger | None, item_id: str
+) -> None:
+    """Everything ``item_id`` published goes with it (C13): the rows, their
+    snapshots and the snapshots' charge. Copies already made stay their
+    openers' — they are items of their own. Part of the item-delete cascade."""
+    for row in publications.newest_first(item_id=item_id):
+        publications.forget(row.item_id, row.path)
+        if row.snapshot:
+            await store.purge(row.snapshot)
+            if ledger is not None:
+                await ledger.forget(row.snapshot)
+
+
 class PublishBody(BaseModel):
     path: str
     #: No default (W2): a body that did not answer is refused by validation.
@@ -262,6 +320,8 @@ class PublishedOut(BaseModel):
     description: str
     files: int
     bytes: int
+    based_on_title: str
+    based_on_by: str
 
 
 def published_out(row: Published) -> PublishedOut:
@@ -283,6 +343,8 @@ def published_out(row: Published) -> PublishedOut:
         description=row.description,
         files=row.files,
         bytes=row.bytes,
+        based_on_title=row.based_on_title,
+        based_on_by=row.based_on_by,
     )
 
 
@@ -336,6 +398,7 @@ def register_publish_routes(
     publications: Publications,
     ledger: DiskLedger,
     get_user_id: Callable[[], str],
+    superusers: frozenset[str] = frozenset(),
     now: Callable[[], int] | None = None,
 ) -> None:
     async def _view(workspace_id: str, path: str) -> tuple[Kind, dict]:
@@ -372,6 +435,13 @@ def register_publish_routes(
         if body.note.strip():
             notes.append(ReleaseNote(at=at, by=publisher, text=body.note.strip()))
         description = doc.get("description")
+        based_on_title = based_on_by = ""
+        found = find_work_item(spec, workspace_id)
+        if found is not None and found[1].published_from:
+            # C14: a copy published again says what it is based on.
+            based_on_title = found[1].published_title
+            origin = publications.by_id(found[1].published_from)
+            based_on_by = origin.published_by if origin is not None else ""
         row = Published(
             kind=kind,
             slug=slug,
@@ -393,6 +463,8 @@ def register_publish_routes(
             files=count,
             bytes=size,
             notes=notes,
+            based_on_title=based_on_title,
+            based_on_by=based_on_by,
         )
         if body.sharing == "shared":
             from .publish_copy import make_copy, shared_copy_permission
@@ -434,10 +506,13 @@ def register_publish_routes(
         from .publish_copy import open_copy
 
         row = publications.get(body.item_id, _workspace_path(body.path))
-        if row is None:
+        user = get_user_id()
+        # Not usable reads as not published: whether it exists is not news for
+        # someone who may not open it.
+        if row is None or not may_use(spec, row, user, superusers):
             raise HTTPException(status_code=404, detail="not published")
         try:
-            opened = await open_copy(spec, filestore, ledger, row, opener=get_user_id())
+            opened = await open_copy(spec, filestore, ledger, row, opener=user)
         except LookupError as exc:
             raise HTTPException(status_code=410, detail=str(exc)) from None
         return OpenedOut(slug=opened.slug, item_id=opened.item_id, created=opened.created)
