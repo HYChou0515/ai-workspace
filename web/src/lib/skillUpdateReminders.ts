@@ -27,10 +27,11 @@ export type Reminder = {
 // The answers of this page when the browser's store refused a write (a
 // private window, a full quota): without it Later / Skip were recorded nowhere
 // and looked like buttons that do nothing. Until the next successful write.
+// Laid OVER a fresh read, never instead of it: another tab may still save, and
+// its answers must neither be hidden here nor erased by this page's next write.
 let unsaved: Store | null = null;
 
-function read(): Store {
-  if (unsaved) return { ...unsaved };
+function stored(): Store {
   try {
     const raw = localStorage.getItem(KEY);
     const parsed: unknown = raw ? JSON.parse(raw) : null;
@@ -38,6 +39,10 @@ function read(): Store {
   } catch {
     return {};
   }
+}
+
+function read(): Store {
+  return unsaved ? { ...stored(), ...unsaved } : stored();
 }
 
 const CHANGED = "skillHub.updateReminders.changed";

@@ -67,6 +67,25 @@ describe("skill update reminders", () => {
     }
   });
 
+  // Review round 2: once a write here failed, reads stopped looking at the
+  // store, so another tab's later answer was hidden — and the next write that
+  // succeeded here erased it. The page's unsaved answers sit over a fresh read.
+  it("answers this page could not save do not hide or erase another tab's", () => {
+    const set = vi.spyOn(localStorage, "setItem").mockImplementation(() => {
+      throw new DOMException("full", "QuotaExceededError");
+    });
+    remindLater("alice", "e1", 3, T0);
+    set.mockRestore();
+    const theirs = ["alice", "e2", "5"].map(encodeURIComponent).join(":");
+    localStorage.setItem("skillHub.updateReminders", JSON.stringify({ [theirs]: { skipped: true } }));
+
+    expect(reminderOf("alice", "e2", 5, T0).skipped).toBe(true);
+    expect(reminderOf("alice", "e1", 3, T0 + DAY).due).toBe(false);
+    skipVersion("alice", "e9", 1);
+    const stored = JSON.parse(localStorage.getItem("skillHub.updateReminders") ?? "{}");
+    expect(Object.keys(stored)).toEqual(expect.arrayContaining([theirs, "alice:e1:3", "alice:e9:1"]));
+  });
+
   // The same review: an answer given in another tab never reached this one.
   it("an answer written by another tab is announced here", () => {
     const heard = vi.fn();
