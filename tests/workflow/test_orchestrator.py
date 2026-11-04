@@ -2214,6 +2214,26 @@ async def test_a_run_that_fails_is_told_once(spec_instance: SpecStar):
     assert isinstance(got, WorkflowRun) and got.status is RunStatus.ERROR
 
 
+async def test_a_run_that_times_out_is_told_once(spec_instance: SpecStar):
+    """Review round 3: the driver, cancelled by the timeout, writes the end
+    and tells it; the orchestrator's later rewrite to `error` finds the run
+    already ended and tells nothing more."""
+    settled: list[str] = []
+
+    async def run(_wf, _inputs):
+        await asyncio.sleep(10)
+
+    orch, _fakes = _orch(spec_instance, run, run_timeout_s=0.01)
+    orch.on_settled = settled.append
+
+    run_id = await orch.start(slug="rca", item_id="i9", profile="echo", captured_user="u")
+    await asyncio.sleep(0.05)
+
+    got = spec_instance.get_resource_manager(WorkflowRun).get(run_id).data
+    assert isinstance(got, WorkflowRun) and got.status is RunStatus.ERROR
+    assert settled == [run_id]
+
+
 async def test_a_run_that_is_stopped_is_told_once(spec_instance: SpecStar):
     settled: list[str] = []
     started = asyncio.Event()

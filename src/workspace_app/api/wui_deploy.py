@@ -245,7 +245,7 @@ def register_wui_deploy_routes(
         not Deployed — or a path that names none — is not counted, so nobody
         can grow the table with names of their own; the answer is the same
         204 either way, since the page needs nothing back. A path that climbs
-        out (a `..` segment) is a 400, as for every path a client names."""
+        out (a `..` segment) is a 400, as the deploy route answers."""
         workspace_id = locator.require_access(slug, item_id, "read_content")
         path = _workspace_path(body.path)
         if usage is not None and await asyncio.to_thread(pages.has, workspace_id, path):

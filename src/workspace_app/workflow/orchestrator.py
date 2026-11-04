@@ -294,8 +294,10 @@ class WorkflowOrchestrator:
     end_page_job: Callable[[str, str], Awaitable[None]] | None = None
     # A run moved from active to ended (`docs/plan-wui-usage.md` U11), whichever
     # way it ended. Two writers end a run: the driver (`run_workflow`: done,
-    # error, cancelled — a timeout too, which cancels the driver first) and
-    # `_patch` here (a lost or abandoned page job, a Stop before it ran) — both tell it
+    # error, cancelled — a timeout too, once the driver has started, since it
+    # cancels the driver first) and `_patch` here (a lost or abandoned page job,
+    # a Stop before it ran, a page job whose deadline passed before its driver
+    # started) — both tell it
     # (`_tell_settled`), and only the first move to an end is told.
     # ``(run_id)``; a hook that raises is logged and never stops the run ending.
     on_settled: Callable[[str], None] | None = None

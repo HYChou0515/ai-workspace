@@ -223,6 +223,8 @@ class WuiUsageStore:
                         resource_id=rid,
                         # Refused, not overwritten, when another process made it
                         # first: the refusal is read again and merged (review r2).
+                        # specstar checks then writes, so two creates in the same
+                        # instant can still both pass (the plan's known limits).
                         if_not_exists=True,
                     )
                 else:
