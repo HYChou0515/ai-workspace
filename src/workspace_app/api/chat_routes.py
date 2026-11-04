@@ -290,11 +290,14 @@ def register_chat_routes(
     async def create_chat(slug: str, item_id: str, body: _CreateChatBody) -> _ChatInfo:
         """Open a new FREE chat in the item (manual §3); returns its chat_id. A
         workflow chat is opened by the run endpoint (P8), not here."""
-        from .chats import find_default_conversation
+        from .chats import find_default_conversation, list_item_conversations
 
         investigation_id = locator.require_access(slug, item_id, "converse")
-        if locator.turn_facts(investigation_id).agent_path and (
-            find_default_conversation(conv_rm, investigation_id) is not None
+        if locator.turn_facts(investigation_id).agent_path and any(
+            # ANY free chat — a test chat is not the default, and counting only
+            # the default let a copy grow one test chat after another.
+            c.run_id is None
+            for _rid, c in list_item_conversations(conv_rm, investigation_id)
         ):
             # A conversation copy of a published agent IS one conversation
             # (`docs/plan-wui-publish-and-agent-hub.md` A2/A11): a new one is a

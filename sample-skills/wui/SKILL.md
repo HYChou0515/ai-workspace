@@ -346,13 +346,15 @@ Then tell the user which file to open, in their words: "open **Lot tracker** in
 **WUI** overview, where colleagues find it. Publishing is a person's press —
 someone who may manage this workspace's sharing — never yours. What you do is
 ask the questions the dialog will ask, **skipping whatever the user already
-told you**, write the answers into the page's `publish:` so the dialog opens
-with them, and say what pressing Publish will do.
+told you** — with `ask_user` when you have it, one question at a time; without
+it, all of them in one reply — write the answers into the page's `publish:` so
+the dialog opens with them, and say what pressing Publish will do.
 
 1. **How others use the page** — there is no default; the dialog will not
    publish until one is chosen, so ask, and give each one's cost:
-   - `fresh` — every open is a new copy of this workspace. Nothing anyone
-     does is kept or seen by others; a copy is made on every open.
+   - `fresh` — every open is a new copy of this workspace, the opener's own
+     item: nobody else sees it, and each open makes another (they delete the
+     ones they are done with).
    - `per_person` — each person gets their own copy, kept between visits.
      Nobody sees anyone else's; one copy per person on their own space.
    - `shared` — one copy everyone uses together, made now. People see each
@@ -363,7 +365,7 @@ with them, and say what pressing Publish will do.
 2. **Who may use it** (not for `direct`) — `reach`: `me`, `subjects` (then the
    people and groups, `user:<id>` / `group:<id>` in `subjects`) or `everyone`.
 3. **The copies' sandbox size** (copying ways only) — `cpu_cores` and
-   `memory_gb`, or leave them out for the platform's default.
+   `memory_gb`, or leave them out for the App's size.
 
 ```yaml
 publish:

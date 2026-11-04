@@ -5,7 +5,7 @@
  * Publish there (C9) — so anything malformed is simply not pre-filled.
  */
 
-import type { PublishChoices, Reach, Role, Sharing } from "../api/publish";
+import type { Published, PublishChoices, Reach, Role, Sharing } from "../api/publish";
 
 const SHARINGS: readonly Sharing[] = ["fresh", "per_person", "shared", "direct", "per_conversation"];
 const REACHES: readonly Reach[] = ["me", "subjects", "everyone"];
@@ -41,4 +41,20 @@ export function choicesFromSpec(publish: unknown): Partial<PublishChoices> {
   const memoryGb = positive(raw.memory_gb);
   if (memoryGb !== undefined) out.memory_bytes = Math.round(memoryGb * GB);
   return out;
+}
+
+/** What a re-publish starts from: the publication as it is in effect now
+ * (C9/C10). Everything the dialog asks, so pressing Publish again changes only
+ * what the person changed — never resets who may use it or the copies' size. */
+export function choicesFromPublished(
+  row: Pick<Published, "sharing" | "reach" | "subjects" | "role" | "cpu_cores" | "memory_bytes">,
+): Partial<PublishChoices> {
+  return {
+    sharing: row.sharing,
+    reach: row.reach,
+    subjects: [...row.subjects],
+    role: row.role,
+    cpu_cores: row.cpu_cores ?? null,
+    memory_bytes: row.memory_bytes ?? null,
+  };
 }

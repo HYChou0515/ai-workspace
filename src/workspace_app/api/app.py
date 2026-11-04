@@ -951,6 +951,11 @@ def create_app(
     disk_ledger = DiskLedger(spec)
     user_limits = UserLimits(spec, per_user_resources or PerUserResources())
 
+    async def _disk_limit_of(owner: str) -> int:
+        """A person's disk cap in bytes (0 = none) — what `_person_disk_gate`
+        holds a write to, for a copy that has no item yet (`publish_copy`)."""
+        return parse_size((await user_limits.for_user(owner)).disk)
+
     async def _person_disk_gate(
         item_id: str, new_size: int, growth: int, *, record: bool = True
     ) -> None:
@@ -3017,6 +3022,9 @@ def create_app(
         ledger=disk_ledger,
         get_user_id=get_user_id,
         superusers=superusers,
+        # C8: a copy and a snapshot are held to the same per-person cap as any
+        # write — asked before they are made.
+        limit_of=_disk_limit_of,
     )
     # The agent panel's summary (plan-wui-publish-and-agent-hub A6).
     from .agent_routes import register_agent_routes

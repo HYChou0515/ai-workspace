@@ -76,6 +76,8 @@ const ROW: Published = {
   bytes: 100,
   based_on_title: "",
   based_on_by: "",
+  cpu_cores: 2,
+  memory_bytes: null,
 };
 
 function renderPanel(summary: Partial<AgentSummary> = {}) {
@@ -174,8 +176,12 @@ describe("AgentYamlPanel", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "再次發布 agent" }));
     const dialog = screen.getByTestId("publish-dialog");
-    // What is in effect now, not the yaml's first idea.
+    // What is in effect now, not the yaml's first idea — the size too.
     expect(within(dialog).getByRole("radio", { name: "指定的人或群組" })).toBeChecked();
+    expect(within(dialog).getByRole("textbox", { name: "CPU 核心數" })).toHaveValue("2");
+    // A note says who wrote it (A9) — in the note, not only the line above it.
+    const notes = within(state).getByRole("list", { name: "更新說明" });
+    expect(notes).toHaveTextContent("Bob Lin");
     fireEvent.change(within(dialog).getByRole("textbox", { name: "這次改了什麼（選填）" }), {
       target: { value: "Shorter answers." },
     });

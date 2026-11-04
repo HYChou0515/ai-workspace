@@ -211,8 +211,10 @@ def test_a_row_written_before_the_icon_field_lists_with_none():
 
 def test_the_row_names_the_person_who_pressed_deploy_not_the_owner():
     # Every other Deploy in this file is the owner's, so `deployed_by` could be
-    # a constant and nothing would notice; an editor who is not the owner tells
-    # the caller from the owner.
+    # a constant and nothing would notice; someone who is not the owner tells
+    # the caller from the owner. Listing a page for others is a sharing
+    # decision (plan-wui-publish-and-agent-hub C9), so they hold
+    # change_permission — editing alone is refused (test_publish_hardening).
     holder = {"id": "bob"}
     client, spec = _client_and_spec(holder)
     iid = _item(
@@ -223,6 +225,7 @@ def test_the_row_names_the_person_who_pressed_deploy_not_the_owner():
             read_meta=["user:alice"],
             read_content=["user:alice"],
             edit_content=["user:alice"],
+            change_permission=["user:alice"],
         ),
     )
     _page(client, iid)

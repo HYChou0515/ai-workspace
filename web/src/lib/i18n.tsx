@@ -3929,7 +3929,7 @@ export const messages = {
   },
   "publish.estimate.loading": { "zh-TW": "正在計算要複製多少…", en: "Working out what a copy will hold…" },
   "publish.estimate.many": {
-    "zh-TW": "檔案很多，打開會比較久。檔案最多的資料夾：",
+    "zh-TW": "檔案很多，打開會比較久。最大的幾個資料夾：",
     en: "That is a lot of files, so opening will be slow. The biggest folders:",
   },
   "publish.estimate.folder": { "zh-TW": "{files} 個檔案、{size}", en: "{files} files, {size}" },

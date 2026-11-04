@@ -1444,10 +1444,21 @@ describe("WuiView: Deploy", () => {
     });
   /** A fetch stub that answers the record and hands everything else to
    * `inner` (or to nobody — the `vi.fn()` stubs of a page with no build). */
+  /** How the page is published now (`GET …/publish?path=`), as the server
+   * answers it: the row, or 404 for a page never published — the read the
+   * pane makes for Publish WUI's dialog (round 1 of review). */
+  const isPublicationRead = (url: unknown, init?: RequestInit) =>
+    String(url).includes("/publish?path=") && (init?.method ?? "GET") === "GET";
   const withDeploy =
-    (inner?: (url: unknown, init?: RequestInit) => Promise<Response> | Response) =>
+    (inner?: (url: unknown, init?: RequestInit) => Promise<Response> | Response, published?: unknown) =>
     async (url: unknown, init?: RequestInit) =>
-      isDeploy(url, init) ? deployOk() : inner?.(url, init);
+      isDeploy(url, init)
+        ? deployOk()
+        : isPublicationRead(url, init)
+          ? published
+            ? new Response(JSON.stringify(published), { status: 200, headers: { "content-type": "application/json" } })
+            : new Response(JSON.stringify({ detail: "not published" }), { status: 404 })
+          : inner?.(url, init);
 
   // The manual path: rebuilding on open is on by default, and a test about the
   // button has to say it is not testing the automatic one.
@@ -2812,6 +2823,41 @@ describe("WuiView: Deploy", () => {
     expect(buildCalls()).toHaveLength(0);
   });
 
+  it("publishing again starts from how it is published now, not from nothing", async () => {
+    // Review round 1: the dialog read only the yaml, so a page published to
+    // everyone reopened as "only me" — one more Publish and nobody else could
+    // open it.
+    const row = {
+      ...DEPLOYED,
+      id: "r",
+      kind: "wui",
+      sharing: "per_person",
+      reach: "everyone",
+      subjects: [],
+      role: "participant",
+      published_by: "u",
+      published_at: 1,
+      icon: "",
+      color: "",
+      description: "",
+      files: 1,
+      bytes: 1,
+      based_on_title: "",
+      based_on_by: "",
+      cpu_cores: 2,
+      memory_bytes: null,
+    };
+    vi.stubGlobal("fetch", vi.fn(withDeploy(undefined, row)));
+    renderIn(PLAIN);
+
+    fireEvent.click(await screen.findByRole("button", { name: /^publish wui$/i }));
+    const dialog = await screen.findByTestId("publish-dialog");
+
+    expect(within(dialog).getByRole("radio", { name: /one copy per person/i })).toBeChecked();
+    expect(within(dialog).getByRole("radio", { name: /everyone signed in/i })).toBeChecked();
+    expect(within(dialog).getByRole("textbox", { name: /cpu cores/i })).toHaveValue("2");
+  });
+
   it("published as copies, hands over the address that makes each opener's copy, and says so", async () => {
     // P4 of plan-wui-publish-and-agent-hub (C12, W2): nobody works in the
     // source of a page that hands out copies, so the address it hands over is
@@ -2832,6 +2878,11 @@ describe("WuiView: Deploy", () => {
     expect(screen.getByText(translate("en", "publish.done.copies"))).toBeInTheDocument();
     const [, init] = vi.mocked(fetch).mock.calls.find(([url, i]) => isDeploy(url, i))!;
     expect(JSON.parse(String(init?.body))).toMatchObject({ sharing: "per_person", reach: "everyone" });
+    // What it is published as now is read again, so the next Publish WUI
+    // starts from it rather than from the state before this one.
+    await waitFor(() =>
+      expect(vi.mocked(fetch).mock.calls.filter(([url, i]) => isPublicationRead(url, i)).length).toBe(2),
+    );
   });
 
   /** A build whose end waits on a gate, so the moment BEFORE it finishes can

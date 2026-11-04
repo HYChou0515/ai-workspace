@@ -37,7 +37,9 @@ def test_the_agent_file_the_skill_shows_is_an_agent_with_nothing_wrong():
 
 
 def test_every_way_of_sharing_the_wui_skill_names_is_one_a_wui_takes():
-    text = (shared_skill_source("wui") / "SKILL.md").read_text()  # type: ignore[operator]
+    src = shared_skill_source("wui")
+    assert src is not None
+    text = (src / "SKILL.md").read_text()
     named = set(re.findall(r"^   - `(\w+)` —", text, re.M))
 
     assert named == SHARINGS["wui"]

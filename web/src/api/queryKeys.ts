@@ -93,6 +93,8 @@ export const qk = {
   wuiOverview: ["wuiOverview"] as const,
   /** What a publish of (item, view file) would copy (C11): the dialog asks. */
   publishEstimate: (itemId: string, path: string) => ["publishEstimate", itemId, path] as const,
+  /** How a file is published now — what a re-publish's dialog starts from. */
+  publication: (itemId: string, path: string) => ["publication", itemId, path] as const,
   /** The agent panel's summary of one agent.ai.yaml — keyed on the file's
    * text, so an edit is a fresh summary (plan-wui-publish-and-agent-hub A6). */
   agentSummary: (itemId: string, path: string, text: string) => ["agentSummary", itemId, path, text] as const,

@@ -129,6 +129,7 @@ export function AgentHubAgentPage({
             {notes.map((n) => (
               <li key={`${n.at}-${n.text}`}>
                 <span title={exactTime(new Date(n.at).toISOString())}>{relativeTime(new Date(n.at).toISOString())}</span>
+                <UserChip userId={n.by} size={18} />
                 <span>{n.text}</span>
               </li>
             ))}

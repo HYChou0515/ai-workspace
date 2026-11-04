@@ -20,23 +20,26 @@ id no one has seen yet.
 
 from __future__ import annotations
 
+import contextlib
 import tempfile
 import uuid
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import msgspec
 from specstar import QB, SpecStar
+from specstar.types import DuplicateResourceError, ResourceIsDeletedError
 
 from ..apps.agent_spec import agent_folder, overlay_destination
 from ..apps.base import WorkItemBase
 from ..apps.registry import app_model
 from ..apps.resolve import find_work_item
 from ..apps.skills import WORKSPACE_SKILL_DIR
-from ..filestore.protocol import FileStore
+from ..filestore.protocol import FileNotFound, FileStore
 from ..perm.model import ALL, Permission
-from ..quota.disk_ledger import DiskLedger
+from ..quota.disk_ledger import DiskLedger, UserDiskFull
 
 if TYPE_CHECKING:
     from .publish import Published
@@ -132,6 +135,29 @@ async def _copy_files(
     return total
 
 
+#: A person's disk cap in bytes, 0 for none — `quota.user_limits`' answer,
+#: handed in by `create_app` so a copy is held to the same rule as any write.
+DiskLimit = Callable[[str], Awaitable[int]]
+
+
+async def ensure_room(
+    ledger: DiskLedger, limit_of: DiskLimit | None, owner: str, size: int, *, exclude: str = ""
+) -> None:
+    """Refuse (`UserDiskFull`, a 507) bytes that would take ``owner`` past their
+    disk cap (C8: the existing per-person quotas bound what copies cost). Asked
+    BEFORE anything is written — a copy or a snapshot made first and charged
+    after is the over-quota state the cap exists to prevent. ``exclude`` is a
+    ledger row the new bytes replace (a re-publish's old snapshot)."""
+    if limit_of is None:
+        return
+    limit = await limit_of(owner)
+    if not limit:
+        return
+    used = await ledger.total_for(owner, exclude=exclude)
+    if used + size > limit:
+        raise UserDiskFull(owner=owner, used=used, quota=limit, attempted=size)
+
+
 async def make_copy(
     spec: SpecStar,
     store: FileStore,
@@ -140,17 +166,30 @@ async def make_copy(
     *,
     owner: str,
     permission: Permission,
+    limit_of: DiskLimit | None = None,
+    item_id: str | None = None,
 ) -> str:
-    """One new item seeded from ``row``'s snapshot, created as ``owner``; its id."""
+    """One new item seeded from ``row``'s snapshot, created as ``owner``; its id.
+
+    ``item_id`` — the id to create under (`open_copy` names a person's copy
+    so two opens at once land on ONE); a fresh one otherwise. Created with
+    ``if_not_exists``, so a second maker of the same id never overwrites the
+    first. A snapshot that vanishes mid-copy (unpublished meanwhile) leaves
+    nothing behind: the half-written files go, and it answers as gone."""
     found = find_work_item(spec, row.item_id)
     if found is None:
         raise LookupError(f"the source of {row.path} is gone")
     _slug, source = found
+    await ensure_room(ledger, limit_of, owner, row.bytes)
     rm = spec.get_resource_manager(app_model(row.slug))
-    item_id = f"{rm.resource_name}:{uuid.uuid4()}"
-    copied = await _copy_files(
-        store, row.snapshot, item_id, agent_path=row.path if row.kind == "agent" else None
-    )
+    item_id = item_id or f"{rm.resource_name}:{uuid.uuid4()}"
+    try:
+        copied = await _copy_files(
+            store, row.snapshot, item_id, agent_path=row.path if row.kind == "agent" else None
+        )
+    except FileNotFound:
+        await store.purge(item_id)
+        raise LookupError(f"{row.path} was unpublished while the copy was made") from None
     changes: dict = {
         "title": row.title,
         "owner": owner,
@@ -165,12 +204,22 @@ async def make_copy(
         "published_kind": row.kind,
         "published_path": row.path,
         "published_title": row.title,
+        # Not a setting: which legacy records the SOURCE absorbed (#700). A
+        # copy claiming them would draw a later handoff into a stranger's copy.
+        "external_refs": [],
     }
     if isinstance(source.members, list):
         changes["members"] = []  # C3: members are not copied
     item = msgspec.structs.replace(source, **changes)
     with rm.using(owner):
-        rm.create(item, resource_id=item_id)
+        # Two makers of one person's copy: the second's create is refused and
+        # it reads the first's (`open_copy`).
+        with contextlib.suppress(DuplicateResourceError):
+            rm.create(
+                item,
+                resource_id=item_id,
+                if_not_exists=True,  # ty: ignore[unknown-argument] — on the concrete manager
+            )
         if row.cpu_cores is not None or row.memory_bytes is not None:
             # C10: the publisher's size for the copies — written as the copy's
             # owner, who holds change_permission on it, the verb these fields
@@ -199,25 +248,66 @@ def copies_of(spec: SpecStar, row: Published) -> list[tuple[str, str]]:
     for res in rm.list_resources(query):
         assert isinstance(res.data, WorkItemBase)
         item_id = res.info.resource_id  # ty: ignore[unresolved-attribute]
-        out.append((item_id, rm.get_meta(item_id).created_by))
+        # A copy in the trash is not one to land in or to list: reading it
+        # answers "deleted", and a person whose copy is there must still be
+        # able to open the publication (they get a new one, `open_copy`).
+        try:
+            meta = rm.get_meta(item_id)
+        except ResourceIsDeletedError:
+            continue
+        out.append((item_id, meta.created_by))
     return out
 
 
+def person_copy_id(spec: SpecStar, row: Published, opener: str) -> str:
+    """The id ``opener``'s one copy of ``row`` is made under (W3): derived, not
+    drawn, so two opens at once — two tabs, two pods — both make THIS item and
+    the store keeps one."""
+    rm = spec.get_resource_manager(app_model(row.slug))
+    return f"{rm.resource_name}:{uuid.uuid5(uuid.NAMESPACE_URL, f'{publication_id(row)}|{opener}')}"
+
+
 async def open_copy(
-    spec: SpecStar, store: FileStore, ledger: DiskLedger, row: Published, *, opener: str
+    spec: SpecStar,
+    store: FileStore,
+    ledger: DiskLedger,
+    row: Published,
+    *,
+    opener: str,
+    limit_of: DiskLimit | None = None,
 ) -> Opened:
     """The workspace ``opener`` lands in when they open ``row``."""
     if row.sharing == "direct":
         return Opened(row.slug, row.item_id, created=False)
     if row.sharing == "shared":
+        # The one copy everyone uses: if it was deleted, the publication has
+        # nothing to hand out — gone, not a link to a missing item.
+        if not row.shared_copy or find_work_item(spec, row.shared_copy) is None:
+            raise LookupError(f"the shared copy of {row.path} is gone")
         return Opened(row.slug, row.shared_copy, created=False)
+    private = Permission(visibility="private")
     if row.sharing == "per_person":
         # Who CREATED it — the person its access is decided for — not `owner`,
         # an editable display field (#687).
         for item_id, created_by in copies_of(spec, row):
             if created_by == opener:
                 return Opened(row.slug, item_id, created=False)
+        named = person_copy_id(spec, row, opener)
+        # A copy they deleted still holds the derived id (and its files, for a
+        # restore): then a fresh id, never a write over the deleted one's.
+        if find_work_item(spec, named, include_deleted=True) is None:
+            item_id = await make_copy(
+                spec,
+                store,
+                ledger,
+                row,
+                owner=opener,
+                permission=private,
+                limit_of=limit_of,
+                item_id=named,
+            )
+            return Opened(row.slug, item_id, created=True)
     item_id = await make_copy(
-        spec, store, ledger, row, owner=opener, permission=Permission(visibility="private")
+        spec, store, ledger, row, owner=opener, permission=private, limit_of=limit_of
     )
     return Opened(row.slug, item_id, created=True)

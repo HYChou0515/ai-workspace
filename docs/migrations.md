@@ -3383,7 +3383,10 @@ Workflows 打開模型答錯格式的那次執行——執行結束後還留著�
 
 - **Deploy 改名「發布 WUI」，按下去先問別人怎麼用這一頁**（每次一份／每人一份／大家一份／直接用我的 workspace），
   沒有預設。以前 Deploy 那一下的行為就是「直接用我的 workspace」。會複製的三種，網址是 `/open/…`，打開的人拿到自己的副本。
-  發布要有那個 workspace 的 `change_permission`（以前 Deploy 是 `edit_content`）——只能改內容的協作者現在按下去會被拒。
+  發布要有那個 workspace 的 `change_permission`（以前 Deploy 是 `edit_content`）——只能改內容的協作者現在按下去會被拒；
+  舊的 `POST …/wui/deploy` 路由也改成要 `change_permission`（有腳本直接打它的，換一個有這個權限的帳號）。
+- **副本和快照算進個人磁碟額度，放不下就拒絕（507）**：打開時副本放不下打開的人的額度、發布時快照放不下發布者的額度，
+  都在寫任何檔案之前拒絕。`per_user_resources.disk` 沒設的部署不受影響。
 - **導覽列多一個入口「Agent Hub」**（`/agents`），在 WUI 旁邊。`agent.ai.yaml` 打開是 agent 面板，可以測試對話、發布。
 - **WUI skill 只講頁面**；新增 `agent` skill（跟 `wui` 一樣，有註冊但沒有任何 App 宣告，App 要用就在 `agent.skills` 加一行）。
 - **Shared 環境變數會跟著進每一份副本**（複製當下的值）。放在某個 workspace Shared 裡的個人 token，那個 workspace

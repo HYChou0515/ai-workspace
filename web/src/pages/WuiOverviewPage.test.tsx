@@ -994,6 +994,23 @@ describe("published pages (P4 of plan-wui-publish-and-agent-hub)", () => {
     expect(usage.closest(".detail")).toBeNull();
   });
 
+  it("shows no usage for a published page used directly — its link never counts an open", async () => {
+    render(
+      <WuiOverviewPage client={client([row({ published: true, sharing: "direct", opens: 0, people: 0 })])} />,
+      { wrapper: Wrap },
+    );
+    const rca = await screen.findByRole("region", { name: "根因分析" });
+
+    expect(within(rca).queryByTestId("wui-usage")).toBeNull();
+  });
+
+  it("an old Deploy row keeps its item link even when the item has no title", async () => {
+    render(<WuiOverviewPage client={client([row({ item_title: "" })])} />, { wrapper: Wrap });
+    const rca = await screen.findByRole("region", { name: "根因分析" });
+
+    expect(within(rca).getByRole("link", { name: "i-1" })).toHaveAttribute("href", "/a/rca/i-1");
+  });
+
   it("shows no usage for a page Deployed before Publish existed", async () => {
     render(<WuiOverviewPage client={client([row({})])} />, { wrapper: Wrap });
     const rca = await screen.findByRole("region", { name: "根因分析" });

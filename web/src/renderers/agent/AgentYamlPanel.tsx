@@ -30,7 +30,7 @@ import { UserChip } from "../../components/UserChip";
 import { useWorkspaceSlug } from "../../hooks/useWorkspaceSlug";
 import { canOpenAgentTestChat, publishAgentTestChat } from "../../lib/agentTestChatBus";
 import { type MsgKey, useT } from "../../lib/i18n";
-import { choicesFromSpec } from "../../lib/publishSpec";
+import { choicesFromPublished, choicesFromSpec } from "../../lib/publishSpec";
 import { parseViewSpec, viewParam } from "../entity/shared";
 
 export function AgentYamlPanel({
@@ -81,8 +81,9 @@ export function AgentYamlPanel({
   }
   const s = summary.data;
   const spec = parseViewSpec(text);
+  // A re-publish starts from what is in effect now, size included (C9/C10).
   const initial: Partial<PublishChoices> = s.published
-    ? { reach: s.published.reach, subjects: s.published.subjects }
+    ? choicesFromPublished(s.published)
     : choicesFromSpec(spec ? viewParam(spec, "publish") : undefined);
   const canTest = s.valid && canOpenAgentTestChat(itemId);
   const blockedReason = !s.valid || s.problems.length > 0 ? t("agentPanel.fixFirst") : null;
@@ -261,6 +262,8 @@ function PublishState({ summary: s }: { summary: AgentSummary }) {
           {s.notes.map((n) => (
             <li key={`${n.at}-${n.text}`}>
               <span title={exactTime(new Date(n.at).toISOString())}>{relativeTime(new Date(n.at).toISOString())}</span>
+              {" · "}
+              <UserChip userId={n.by} nameOnly />
               {" · "}
               {n.text}
             </li>

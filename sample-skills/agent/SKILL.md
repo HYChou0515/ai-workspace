@@ -58,12 +58,14 @@ use it would ask, and fix the instructions from what they see.
 ## Publishing: ask, then they press
 
 **發布 agent** (Publish agent) is the user's press — someone who may manage this
-workspace's sharing — never yours. Ask only what they have not already said:
+workspace's sharing — never yours. Ask only what they have not already said —
+with `ask_user` when you have it, one question at a time; without it, all of
+them in one reply:
 
 1. **Who may use it** — `reach`: `me`, `subjects` (with `subjects:` listing
    `user:<id>` / `group:<id>`) or `everyone`.
 2. **The sandbox size of each conversation's copy** — `cpu_cores` and
-   `memory_gb`, or leave them out for the platform's default.
+   `memory_gb`, or leave them out for the App's size.
 3. **On a re-publish, what changed** — draft a one- or two-line release note
    from what you changed since the last publish ("Answers now cite the order
    id.") and give it to them to paste or edit in the dialog; people see the

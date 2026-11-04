@@ -144,6 +144,9 @@ describe("AgentHubAgentPage", () => {
     expect(await screen.findByRole("heading", { level: 1 })).toHaveTextContent("Sales helper");
     expect(client.page).toHaveBeenCalledWith(card().id);
     expect(screen.getByText("Shorter answers.")).toBeInTheDocument();
+    // A9: date, publisher, text.
+    const notes = screen.getByRole("region", { name: "更新說明" });
+    await waitFor(() => expect(notes).toHaveTextContent("Bob Lin"));
     const mine = screen.getByRole("region", { name: "我和它的對話" });
     expect(within(mine).getByRole("link", { name: "Which orders shipped late?" })).toHaveAttribute(
       "href",

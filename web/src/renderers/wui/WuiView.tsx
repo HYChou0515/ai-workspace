@@ -44,9 +44,9 @@ import { HttpError } from "../../api/http";
 import { encodePath } from "../../api/refPath";
 import { useDialog } from "../../components/Dialog";
 import { wuiAddress } from "../../api/wui";
-import { openAddress, publishApi, type PublishChoices, type Sharing } from "../../api/publish";
+import { openAddress, type Published, publishApi, type PublishChoices, type Sharing } from "../../api/publish";
 import { PublishDialog } from "../../components/PublishDialog";
-import { choicesFromSpec } from "../../lib/publishSpec";
+import { choicesFromPublished, choicesFromSpec } from "../../lib/publishSpec";
 import { publishAgentDraft } from "../../lib/agentDraftBus";
 import { subscribeFileChanged } from "../../lib/fileChangedBus";
 import { pxToRem } from "../../lib/pxToRem";
@@ -474,6 +474,14 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
   // The publish dialog (W2): open while the author answers how others use the
   // page; the run starts only from its Publish.
   const [publishOpen, setPublishOpen] = useState(false);
+  // How the page is published now (C9/C10) — what Publish WUI's dialog starts
+  // from. Read when an author's pane opens, so the dialog opens at once.
+  const publication = useQuery({
+    queryKey: qk.publication(fs.scopeId, path),
+    queryFn: () => publishApi.current(slug ?? "", fs.scopeId, path),
+    enabled: !!slug && author,
+    retry: false,
+  });
   const setDeploy = (state: DeployState) => setDeploys((d) => ({ ...d, [state.path]: state }));
   /** The run in flight, whichever page it is for. The HOLD is the pane's,
    * whatever page it is on: a run for A is still a build in this folder
@@ -1301,6 +1309,7 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
       // a commit that moved the pane to the sibling, before the effect that
       // mirrored the path — in which the sibling was reloaded after all.
       setDeploy({ path: mine, at: next, state: "done", sharing: choices.sharing });
+      void queryClient.invalidateQueries({ queryKey: qk.publication(fs.scopeId, mine) });
     } catch (err) {
       // Nothing above is expected to throw — but a run that did would leave
       // the button on "Deploying…" for the rest of the page's life, and a
@@ -1324,12 +1333,12 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
         <ItemEnvModal slug={slug} itemId={fs.scopeId} onClose={() => setLoginOpen(false)} />
       )}
       {publishOpen && slug && (
-        <PublishDialog
-          kind="wui"
+        <PublishWuiDialog
           slug={slug}
           itemId={fs.scopeId}
           path={path}
-          initial={choicesFromSpec(viewParam(spec, "publish"))}
+          current={publication}
+          fromYaml={choicesFromSpec(viewParam(spec, "publish"))}
           onClose={() => setPublishOpen(false)}
           onConfirm={(choices) => {
             setPublishOpen(false);
@@ -1748,5 +1757,42 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
         />
       )}
     </div>
+  );
+}
+
+/** Publish WUI's dialog, started from how the page is published NOW (C9/C10)
+ * — a re-publish that began from the yaml alone reset who may use it (a page
+ * open to everyone came back as "only me") — and from the yaml's `publish:`
+ * only for a first publish, or when the publication cannot be read. Drawn once
+ * that answer is in, so the choices never change under the person. */
+function PublishWuiDialog({
+  slug,
+  itemId,
+  path,
+  current,
+  fromYaml,
+  onClose,
+  onConfirm,
+}: {
+  slug: string;
+  itemId: string;
+  path: string;
+  current: { isPending: boolean; data?: Published | null };
+  fromYaml: Partial<PublishChoices>;
+  onClose: () => void;
+  onConfirm: (choices: PublishChoices) => void;
+}) {
+  if (current.isPending) return null;
+  return (
+    <PublishDialog
+      kind="wui"
+      slug={slug}
+      itemId={itemId}
+      path={path}
+      initial={current.data ? choicesFromPublished(current.data) : fromYaml}
+      republish={!!current.data}
+      onClose={onClose}
+      onConfirm={onConfirm}
+    />
   );
 }

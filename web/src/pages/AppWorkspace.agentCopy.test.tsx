@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import "@testing-library/jest-dom/vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -43,7 +43,7 @@ function renderBar(it: AppItem) {
   render(
     <MemoryRouter>
       <QueryWrap>
-        <AgentCopyBar item={it} />
+        <AgentCopyBar item={it} slug="rca" />
       </QueryWrap>
     </MemoryRouter>,
   );
@@ -58,6 +58,7 @@ describe("AgentCopyBar", () => {
     renderBar(item({ published_from: "rca-investigation%3Asrc∕a∕agent.ai.yaml", published_title: "Sales" }));
 
     expect(screen.getByTestId("agent-copy-bar")).toHaveTextContent("Sales");
+    expect(within(screen.getByTestId("agent-copy-bar")).getByTestId("page-mark")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /回到 Agent Hub/ })).toHaveAttribute(
       "href",
       `/agents/${encodeURIComponent("rca-investigation%3Asrc∕a∕agent.ai.yaml")}`,

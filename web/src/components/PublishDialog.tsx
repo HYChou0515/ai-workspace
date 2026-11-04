@@ -38,8 +38,11 @@ import { ModalActions } from "./ModalActions";
 import { ModalShell } from "./ModalShell";
 import { UserPicker } from "./UserPicker";
 
-/** Opening a copy restores it file by file; measured on this platform at
- * about 60 s for 50 000 files, so ~1.2 ms a file (`docs/plan-archive-pack.md`). */
+/** A rough per-file cost for making a copy, borrowed from the closest thing
+ * measured on this platform — a reaped workspace restored file by file, ~60 s
+ * for 50 000 files (`docs/plan-archive-pack.md`). A copy is a store-to-store
+ * copy, not that restore, so the dialog says "about"; it is a size cue, not a
+ * promise. */
 const MS_PER_FILE = 1.2;
 /** Above this many files the dialog names the folders that hold them (C11). */
 const MANY_FILES = 20_000;

@@ -148,7 +148,7 @@ def make_disk_ledger_pass(
     workspace_usage = getattr(filestore, "workspace_usage", None)
     if workspace_usage is None:
         return None
-    from ..api.publish import Publications
+    from ..api.publish import SNAPSHOT_PREFIX, Publications
     from ..api.sandbox_activity import SpecstarActivityStore
     from ..apps.resolve import find_work_item
 
@@ -171,6 +171,17 @@ def make_disk_ledger_pass(
         async def is_live(item_id: str) -> bool:
             return await activity.is_live(item_id, since_ms=since_ms)
 
+        # The publications table read ONCE per pass, and only if some ledger
+        # row is a snapshot — not once per row (O(ledger x publications)).
+        live: list[frozenset[str]] = []
+
+        def _snapshot_is_live(namespace: str) -> bool:
+            if not namespace.startswith(SNAPSHOT_PREFIX):
+                return False
+            if not live:
+                live.append(publications.live_snapshots())
+            return namespace in live[0]
+
         report = await reconcile_disk_ledger(
             items=[(item, debtor) for item, debtor, _slug in items],
             is_live=is_live,
@@ -180,7 +191,7 @@ def make_disk_ledger_pass(
             # publication still points at it.
             exists=lambda item_id: (
                 find_work_item(spec, item_id, include_deleted=True) is not None
-                or publications.holds_snapshot(item_id)
+                or _snapshot_is_live(item_id)
             ),
             ledger=ledger,
         )

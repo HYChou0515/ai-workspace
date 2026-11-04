@@ -52,6 +52,10 @@ export type Published = {
   bytes: number;
   based_on_title: string;
   based_on_by: string;
+  /** The copies' sandbox size the publisher chose (C10); absent from servers
+   * before round 1 of review. */
+  cpu_cores?: number | null;
+  memory_bytes?: number | null;
 };
 
 export type FolderSize = { folder: string; files: number; bytes: number };
@@ -73,6 +77,9 @@ export type PublishApi = {
     signal?: AbortSignal,
   ): Promise<Published>;
   unpublish(slug: string, itemId: string, path: string): Promise<void>;
+  /** How it is published now — `null` when it is not (C9/C10: a re-publish
+   * starts from it). */
+  current(slug: string, itemId: string, path: string): Promise<Published | null>;
   estimate(slug: string, itemId: string, path: string): Promise<Estimate>;
   open(itemId: string, path: string): Promise<Opened>;
 };
@@ -99,6 +106,12 @@ export const publishApi: PublishApi = {
       method: "DELETE",
     });
     if (!resp.ok) throw await httpErrorFrom(resp, `unpublish failed: ${resp.status}`);
+  },
+  async current(slug, itemId, path) {
+    const resp = await apiFetch(`${itemBase(slug, itemId)}?path=${encodeURIComponent(path)}`);
+    if (resp.status === 404) return null;
+    if (!resp.ok) throw await httpErrorFrom(resp, `publication failed: ${resp.status}`);
+    return (await resp.json()) as Published;
   },
   async estimate(slug, itemId, path) {
     const resp = await apiFetch(`${itemBase(slug, itemId)}/estimate?path=${encodeURIComponent(path)}`);

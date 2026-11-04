@@ -21,6 +21,7 @@ import { useFiles } from "../hooks/useInvestigation";
 import { useNavChrome } from "../hooks/useNavChrome";
 import { useAppItem, useAppManifest } from "../hooks/useResources";
 import { WorkspaceSlugProvider } from "../hooks/useWorkspaceSlug";
+import { PageMark } from "../components/PageMark";
 import { useT } from "../lib/i18n";
 import { rememberLastChat } from "../lib/lastChat";
 import { agentPageHref } from "./AgentHubPage";
@@ -131,7 +132,7 @@ function WorkspaceLoaded({
   if (agentCopy) {
     return (
       <div style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
-        <AgentCopyBar item={item} />
+        <AgentCopyBar item={item} slug={slug} />
         <div style={{ flex: 1, minHeight: 0 }}>{shell}</div>
       </div>
     );
@@ -150,11 +151,12 @@ function WorkspaceLoaded({
   );
 }
 
-/** The top of a conversation with an agent (A11): its mark and name, and the
+/** The top of a conversation with an agent (A11): its mark (the title's
+ * letters) and name, and the
  * way back — to the agent's page in Agent Hub, where its other conversations
  * and a new one are (A8). NN/g, *Match between system and the real world*:
  * to the person this is a conversation with someone, not a workspace. */
-export function AgentCopyBar({ item }: { item: AppItem }) {
+export function AgentCopyBar({ item, slug }: { item: AppItem; slug: string }) {
   const t = useT();
   const title = String(item.published_title ?? "") || item.title;
   const from = String(item.published_from ?? "");
@@ -174,6 +176,17 @@ export function AgentCopyBar({ item }: { item: AppItem }) {
       <span aria-hidden="true" style={{ color: "var(--paper-3)" }}>
         |
       </span>
+      {/* The title's letters on the App's colour: the copy does not carry the
+          agent's icon file, and a mark that only sometimes appears reads as a
+          different agent. */}
+      <PageMark
+        slug={slug}
+        itemId={item.resource_id}
+        path={String(item.published_path ?? "")}
+        icon=""
+        title={title}
+        size={24}
+      />
       <span style={{ fontWeight: 600 }}>{title}</span>
     </div>
   );

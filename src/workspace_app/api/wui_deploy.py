@@ -236,7 +236,7 @@ def register_wui_deploy_routes(
         that this is a WUI with this title, so the server checks it rather than
         trusting a body the pane composed.
         """
-        workspace_id = locator.require_access(slug, item_id, "edit_content")
+        workspace_id = locator.require_access(slug, item_id, "change_permission")
         path = _workspace_path(body.path)
         try:
             doc = await load_wui_view(files, workspace_id, path)

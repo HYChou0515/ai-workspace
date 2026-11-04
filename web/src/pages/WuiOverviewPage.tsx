@@ -505,7 +505,7 @@ function PageDetail({
       {/* The workspace has no deep link to a file, so this opens the item —
           only for a viewer who may read it: a page that hands out copies is
           used without reading its source, and a link there would 404. */}
-      {page.item_title ? (
+      {page.item_title || !page.published ? (
         <Link to={`/a/${page.slug}/${page.item_id}`}>{item}</Link>
       ) : (
         <span>{t(`publish.sharing.${page.sharing ?? "direct"}` as MsgKey)}</span>
@@ -522,7 +522,7 @@ function PageDetail({
           (`GroupsPage`), and the sentence template is written for the
           relative form ("2 d ago" / "just now" / "7 Aug"). */}
       <span title={exactTime(new Date(page.deployed_at).toISOString())}>{by}</span>
-      {withUsage && page.published ? (
+      {withUsage && counted(page) ? (
         <>
           {" · "}
           <Usage page={page} />
@@ -530,6 +530,13 @@ function PageDetail({
       ) : null}
     </span>
   );
+}
+
+/** Whether a row's opens are counted: only a published page that hands out
+ * copies is opened through `/published/open` — one used directly is its own
+ * address, so its count would sit at 0 whatever happens. */
+function counted(page: DeployedWui): boolean {
+  return !!page.published && !!page.sharing && page.sharing !== "direct";
 }
 
 /** How often a published page was opened and by how many people — never who
@@ -660,7 +667,7 @@ function PageCard({ page, client, starred, starReady, onStar, showApp }: PagePro
         <span className="wui-card-who">
           {showApp ? <AppTag slug={page.slug} /> : null}
           <UserChip userId={page.item_owner} size={18} />
-          {page.published ? <Usage page={page} /> : null}
+          {counted(page) ? <Usage page={page} /> : null}
         </span>
         <UnlistButton page={page} remove={remove} onRemove={ask} />
       </div>

@@ -50,6 +50,7 @@ from ..resources.groups import groups_of
 from .file_routes import _workspace_path
 from .item_authz import user_may
 from .locator import ItemLocator
+from .publish_copy import DiskLimit, ensure_room
 from .schedule_index import is_schedule_file
 from .timeutil import now_ms
 from .wui_deploy import DeployedPages, page_color, page_icon, page_title
@@ -258,6 +259,11 @@ class Publications:
             row.openers = [*row.openers, user]
         self._rm().update(published_id(item_id, path), row)
 
+    def live_snapshots(self) -> frozenset[str]:
+        """Every row's CURRENT snapshot — read once, for a pass that asks about
+        many namespaces (`quota.disk_reconcile`)."""
+        return frozenset(row.snapshot for row in self.newest_first() if row.snapshot)
+
     def holds_snapshot(self, namespace: str) -> bool:
         """Is ``namespace`` the CURRENT snapshot of some row? What the disk
         ledger's reconcile asks before forgetting a row that is not an item."""
@@ -350,6 +356,10 @@ class PublishedOut(BaseModel):
     bytes: int
     based_on_title: str
     based_on_by: str
+    #: The copies' sandbox size the publisher chose (C10) — what a re-publish
+    #: starts from, so pressing Publish again does not reset it.
+    cpu_cores: float | None = None
+    memory_bytes: int | None = None
 
 
 def published_out(row: Published) -> PublishedOut:
@@ -373,6 +383,8 @@ def published_out(row: Published) -> PublishedOut:
         bytes=row.bytes,
         based_on_title=row.based_on_title,
         based_on_by=row.based_on_by,
+        cpu_cores=row.cpu_cores,
+        memory_bytes=row.memory_bytes,
     )
 
 
@@ -431,6 +443,7 @@ def register_publish_routes(
     get_user_id: Callable[[], str],
     superusers: frozenset[str] = frozenset(),
     now: Callable[[], int] | None = None,
+    limit_of: DiskLimit | None = None,
 ) -> None:
     async def _view(workspace_id: str, path: str) -> tuple[Kind, dict]:
         try:
@@ -470,6 +483,16 @@ def register_publish_routes(
         previous = publications.get(workspace_id, path)
         snapshot, count, size = "", 0, 0
         if body.sharing in COPYING:
+            # C8/C10: the snapshot is the publisher's — refused up front when it
+            # would not fit, never written and charged after.
+            planned = estimate_of(await snapshot_paths(files, workspace_id)).bytes
+            await ensure_room(
+                ledger,
+                limit_of,
+                publisher,
+                planned,
+                exclude=previous.snapshot if previous is not None else "",
+            )
             snapshot = snapshot_namespace(published_id(workspace_id, path), at)
             count, size = await take_snapshot(files, filestore, workspace_id, snapshot)
         notes = list(previous.notes) if previous is not None else []
@@ -510,14 +533,23 @@ def register_publish_routes(
         if body.sharing == "shared":
             from .publish_copy import make_copy, shared_copy_permission
 
-            row.shared_copy = await make_copy(
-                spec,
-                filestore,
-                ledger,
-                row,
-                owner=publisher,
-                permission=shared_copy_permission(row),
-            )
+            try:
+                row.shared_copy = await make_copy(
+                    spec,
+                    filestore,
+                    ledger,
+                    row,
+                    owner=publisher,
+                    permission=shared_copy_permission(row),
+                    limit_of=limit_of,
+                )
+            except BaseException as exc:
+                # Nothing points at the snapshot yet: it must not outlive the
+                # publish it was for.
+                await filestore.purge(snapshot)
+                if isinstance(exc, LookupError):
+                    raise HTTPException(status_code=410, detail=str(exc)) from None
+                raise
         publications.record(row)
         # A page Deployed before Publish existed: its old row goes, so the
         # overview lists the page once — as what it is now published as.
@@ -556,13 +588,24 @@ def register_publish_routes(
         if row is None or not may_use(spec, row, user, superusers):
             raise HTTPException(status_code=404, detail="not published")
         try:
-            opened = await open_copy(spec, filestore, ledger, row, opener=user)
+            opened = await open_copy(spec, filestore, ledger, row, opener=user, limit_of=limit_of)
         except LookupError as exc:
             raise HTTPException(status_code=410, detail=str(exc)) from None
         publications.note_open(row.item_id, row.path, user)
         return OpenedOut(
             slug=opened.slug, item_id=opened.item_id, created=opened.created, kind=row.kind
         )
+
+    @app.get("/a/{slug}/items/{item_id}/publish", response_model=PublishedOut)
+    async def published(slug: str, item_id: str, path: str) -> PublishedOut:
+        """How this file is published now — what the dialog starts from on a
+        re-publish (C9/C10), so pressing Publish again changes only what the
+        person changed. Asked of whoever may publish it."""
+        workspace_id = locator.require_access(slug, item_id, "change_permission")
+        row = publications.get(workspace_id, _workspace_path(path))
+        if row is None:
+            raise HTTPException(status_code=404, detail="not published")
+        return published_out(row)
 
     @app.get("/a/{slug}/items/{item_id}/publish/estimate", response_model=Estimate)
     async def estimate(slug: str, item_id: str, path: str) -> Estimate:
