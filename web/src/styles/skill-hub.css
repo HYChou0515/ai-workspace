@@ -952,6 +952,43 @@ a.skills-row-name {
   cursor: pointer;
   font: inherit;
 }
+/* plan-skill-hub-release-notes D5: what a behind copy missed, under its row.
+   The heading sits on the disclosure's own line, beside its marker. */
+.skills-row-updates {
+  margin-top: var(--space-4);
+  font-size: var(--text-small);
+}
+.skills-updates {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  margin-top: var(--space-4);
+}
+.skills-update > summary {
+  cursor: pointer;
+}
+.skills-update > summary > h4 {
+  display: inline;
+  margin: 0;
+  font-size: var(--text-small);
+  font-weight: 600;
+}
+.skills-update > .markdown {
+  margin: var(--space-4) 0 0 var(--space-12);
+}
+.skills-update > .markdown ul {
+  margin: 0;
+  padding-left: 1.2em;
+}
+.skills-update > p {
+  margin: var(--space-4) 0 0 var(--space-12);
+}
+.skills-updates-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-8);
+  margin-top: var(--space-4);
+}
 .skills-row-desc {
   margin-top: 2px;
   font-size: var(--text-small);
