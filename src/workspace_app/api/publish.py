@@ -51,7 +51,7 @@ from .item_authz import user_may
 from .locator import ItemLocator
 from .schedule_index import is_schedule_file
 from .timeutil import now_ms
-from .wui_deploy import page_color, page_icon, page_title
+from .wui_deploy import DeployedPages, page_color, page_icon, page_title
 from .wui_page import NotAPage, load_view_file
 
 Kind = Literal["wui", "agent"]
@@ -119,6 +119,10 @@ class Published(Struct):
     #: as that copy recorded it — "based on X (by Y)".
     based_on_title: str = ""
     based_on_by: str = ""
+    #: Usage (W4, A7): how many times it was opened and by how many people.
+    #: Who they are is kept to count them once and is never sent anywhere.
+    opens: int = 0
+    openers: list[str] = []
 
 
 #: `filestore/specstar_impl._fid`'s spelling, as `wui_deploy.deployed_id`.
@@ -229,6 +233,17 @@ class Publications:
             return None
         assert isinstance(data, Published)
         return data
+
+    def note_open(self, item_id: str, path: str, user: str) -> None:
+        """Count one open by ``user``. Last writer wins on a race — a usage
+        number off by one under contention is not worth a CAS loop."""
+        row = self.get(item_id, path)
+        if row is None:
+            return
+        row.opens += 1
+        if user not in row.openers:
+            row.openers = [*row.openers, user]
+        self._rm().update(published_id(item_id, path), row)
 
     def holds_snapshot(self, namespace: str) -> bool:
         """Is ``namespace`` the CURRENT snapshot of some row? What the disk
@@ -357,6 +372,9 @@ class OpenedOut(BaseModel):
     slug: str
     item_id: str
     created: bool
+    #: What was opened — where the browser goes next: a WUI's page, or an
+    #: agent's conversation.
+    kind: Kind
 
 
 class FolderSize(BaseModel):
@@ -478,6 +496,9 @@ def register_publish_routes(
                 permission=shared_copy_permission(row),
             )
         publications.record(row)
+        # A page Deployed before Publish existed: its old row goes, so the
+        # overview lists the page once — as what it is now published as.
+        DeployedPages(spec).forget(workspace_id, path)
         if snapshot:
             await ledger.record(snapshot, publisher, size)
         # Only the latest is kept (C7/C10): the old snapshot goes once nothing
@@ -515,7 +536,10 @@ def register_publish_routes(
             opened = await open_copy(spec, filestore, ledger, row, opener=user)
         except LookupError as exc:
             raise HTTPException(status_code=410, detail=str(exc)) from None
-        return OpenedOut(slug=opened.slug, item_id=opened.item_id, created=opened.created)
+        publications.note_open(row.item_id, row.path, user)
+        return OpenedOut(
+            slug=opened.slug, item_id=opened.item_id, created=opened.created, kind=row.kind
+        )
 
     @app.get("/a/{slug}/items/{item_id}/publish/estimate", response_model=Estimate)
     async def estimate(slug: str, item_id: str, path: str) -> Estimate:

@@ -25,6 +25,7 @@ import { ReviewPage } from "./pages/kb/ReviewPage";
 import { Launcher } from "./pages/Launcher";
 import { ItemViewPage } from "./pages/ItemViewPage";
 import { WuiPage } from "./pages/WuiPage";
+import { OpenPublishedPage } from "./pages/OpenPublishedPage";
 import { ReleasesPage } from "./pages/ReleasesPage";
 
 /**
@@ -53,6 +54,10 @@ export function AppRoutes() {
           address is a shortcut, not a grant, and the API refuses exactly what it
           would have refused inside the workspace. */}
       <Route path="/w/:slug/:itemId/*" element={<WuiPage />} />
+      {/* The address a published WUI or agent hands out: it makes (or finds)
+          the opener's own copy and replaces itself with it (C12). Outside the
+          shell like a WUI — one thing to wait for, nothing to navigate. */}
+      <Route path="/open/:slug/:itemId/*" element={<OpenPublishedPage />} />
       {/* An item's editor area alone (#847 Q5.3): where chat mode opens a shown
           file or layout. Outside the shell for the same reason as a WUI — it is
           one thing to look at, not a workspace to navigate. */}

@@ -3000,6 +3000,8 @@ def create_app(
         files=files,
         pages=DeployedPages(spec),
         get_user_id=get_user_id,
+        spec=spec,
+        superusers=superusers,
     )
     register_publish_routes(
         api,

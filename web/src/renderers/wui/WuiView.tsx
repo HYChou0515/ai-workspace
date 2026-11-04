@@ -43,7 +43,10 @@ import { PageIdentityControls } from "../../components/PageIdentity";
 import { HttpError } from "../../api/http";
 import { encodePath } from "../../api/refPath";
 import { useDialog } from "../../components/Dialog";
-import { wuiAddress, wuiApi } from "../../api/wui";
+import { wuiAddress } from "../../api/wui";
+import { openAddress, publishApi, type PublishChoices, type Sharing } from "../../api/publish";
+import { PublishDialog } from "../../components/PublishDialog";
+import { choicesFromSpec } from "../../lib/publishSpec";
 import { publishAgentDraft } from "../../lib/agentDraftBus";
 import { subscribeFileChanged } from "../../lib/fileChangedBus";
 import { pxToRem } from "../../lib/pxToRem";
@@ -206,7 +209,7 @@ type DeployState =
   | { path: string; state: "idle" }
   | { path: string; state: "working" }
   | ({ path: string; at: number; applied?: true } & (
-      | { state: "done" }
+      | { state: "done"; sharing: Sharing }
       | { state: "failed"; step: "build" }
       | { state: "failed"; step: "manifest"; why: string }
       | { state: "failed"; step: "open"; why: string }
@@ -468,6 +471,9 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
    * Keying replaces a reset effect and a render-time ref that tried to track
    * the same thing. */
   const [deploys, setDeploys] = useState<Record<string, DeployState>>({});
+  // The publish dialog (W2): open while the author answers how others use the
+  // page; the run starts only from its Publish.
+  const [publishOpen, setPublishOpen] = useState(false);
   const setDeploy = (state: DeployState) => setDeploys((d) => ({ ...d, [state.path]: state }));
   /** The run in flight, whichever page it is for. The HOLD is the pane's,
    * whatever page it is on: a run for A is still a build in this folder
@@ -1120,7 +1126,10 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
   // The page's own address — `wuiAddress` is the one spelling (the overview's
   // rows use it too); the origin goes in front because this one is COPIED,
   // and a copied link has to work from outside the SPA.
-  const address = `${window.location.origin}${wuiAddress(slug, fs.scopeId, path)}`;
+  const doneSharing = deployHere.state === "done" ? deployHere.sharing : "direct";
+  const address = `${window.location.origin}${
+    doneSharing === "direct" ? wuiAddress(slug, fs.scopeId, path) : openAddress(slug, fs.scopeId, path)
+  }`;
 
   const copyAddress = async () => {
     try {
@@ -1163,7 +1172,7 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
    * watches (epoch): leaving it aborts the build and every write here; moving
    * to a sibling does not, because the folder — and the build's `dist/` — are
    * still what the pane is looking at, so the reload still happens. */
-  const runDeploy = async () => {
+  const runDeploy = async (choices: PublishChoices) => {
     const started = epoch.current;
     const mine = path;
     const moved = () => epoch.current !== started;
@@ -1266,7 +1275,7 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
       const record = new AbortController();
       listing.current = record;
       try {
-        await wuiApi.deploy(slug, fs.scopeId, mine, record.signal);
+        await publishApi.publish(slug, fs.scopeId, mine, choices, record.signal);
         // The write invalidates the read, as every mutation in the app does:
         // the overview's listing keeps the default stale window, and a visit
         // to /wui a moment before this Deploy would otherwise show the page
@@ -1291,7 +1300,7 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
       // where that is read. Doing it here as well, off a ref, had a window —
       // a commit that moved the pane to the sibling, before the effect that
       // mirrored the path — in which the sibling was reloaded after all.
-      setDeploy({ path: mine, at: next, state: "done" });
+      setDeploy({ path: mine, at: next, state: "done", sharing: choices.sharing });
     } catch (err) {
       // Nothing above is expected to throw — but a run that did would leave
       // the button on "Deploying…" for the rest of the page's life, and a
@@ -1313,6 +1322,20 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
     <div style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
       {loginOpen && slug && (
         <ItemEnvModal slug={slug} itemId={fs.scopeId} onClose={() => setLoginOpen(false)} />
+      )}
+      {publishOpen && slug && (
+        <PublishDialog
+          kind="wui"
+          slug={slug}
+          itemId={fs.scopeId}
+          path={path}
+          initial={choicesFromSpec(viewParam(spec, "publish"))}
+          onClose={() => setPublishOpen(false)}
+          onConfirm={(choices) => {
+            setPublishOpen(false);
+            void runDeploy(choices);
+          }}
+        />
       )}
       {author && (
       <div
@@ -1383,7 +1406,7 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
           <Btn
             size="sm"
             disabled={building || deploying}
-            onClick={() => void runDeploy()}
+            onClick={() => setPublishOpen(true)}
             style={{ marginLeft: "auto" }}
           >
             {/* The word is the page's: on the page being deployed "Deploying…";
@@ -1472,7 +1495,13 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
               {/* P17's decision, spoken to the publisher: the address is a
                   shortcut, not a grant — as the FACT of who it opens for now,
                   with the way to change it (docs/plan-deploy-reach.md). */}
-              <DeployReach slug={slug} itemId={fs.scopeId} />
+              {deployHere.sharing === "direct" ? (
+                <DeployReach slug={slug} itemId={fs.scopeId} />
+              ) : (
+                <div style={{ color: "var(--ink-2)" }}>
+                  {t(deployHere.sharing === "shared" ? "publish.done.shared" : "publish.done.copies")}
+                </div>
+              )}
             </>
           ) : deployHere.step === "build" ? (
             <div role="status" style={{ color: "var(--err)" }}>

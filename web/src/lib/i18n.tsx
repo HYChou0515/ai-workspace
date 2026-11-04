@@ -1384,19 +1384,19 @@ export const messages = {
     en: "The WUI listing could not be read.",
   },
   "wui.retry": { "zh-TW": "再試一次", en: "Try again" },
-  "wui.empty": { "zh-TW": "還沒有任何 WUI 被 Deploy。", en: "No WUI has been deployed yet." },
+  "wui.empty": { "zh-TW": "還沒有任何 WUI 被發布。", en: "No WUI has been published yet." },
   "wui.empty.what": {
-    "zh-TW": "WUI 是 workspace 裡的一個資料夾，被當成網頁跑起來；在頁面的工具列按 Deploy，它就會出現在這裡。",
-    en: "A WUI is a folder in a workspace, run as a page; press Deploy in the page's toolbar and it appears here.",
+    "zh-TW": "WUI 是 workspace 裡的一個資料夾，被當成網頁跑起來；在頁面的工具列按「發布 WUI」，它就會出現在這裡。",
+    en: "A WUI is a folder in a workspace, run as a page; press Publish WUI in the page's toolbar and it appears here.",
   },
   "wui.empty.help": { "zh-TW": "看說明", en: "Read the help" },
   // `{when}` is `relativeTime`'s form — "just now", "3 min ago", "2 d ago",
   // "7 Aug" — so the sentence must read with all of them; "於 {when} Deploy" /
   // "on {when}" did not ("於 just now Deploy", "on 2 d ago").
-  "wui.row.by": { "zh-TW": "{who} Deploy · {when}", en: "deployed by {who} · {when}" },
-  // The WUI pane's author toolbar and Deploy panel (docs/plan-deploy-reach.md
-  // decision 7). "Deploy" stays the button's word in both — the WUI overview's
-  // copy already names it.
+  "wui.row.by": { "zh-TW": "{who} 發布 · {when}", en: "published by {who} · {when}" },
+  // The WUI pane's author toolbar and publish panel. The button is
+  // "Publish WUI" — Deploy became Publish (docs/plan-wui-publish-and-agent-hub.md
+  // W1), named with what it publishes so it is never mistaken for an agent's.
   "wui.bar.refresh": { "zh-TW": "重新整理", en: "Refresh" },
   "wui.bar.rebuild": { "zh-TW": "重新建置", en: "Rebuild" },
   "wui.bar.building": { "zh-TW": "建置中…", en: "Building…" },
@@ -1407,41 +1407,41 @@ export const messages = {
   },
   "wui.bar.report": { "zh-TW": "回報問題", en: "Report a problem" },
   "wui.bar.tellAgent": { "zh-TW": "告訴 AI（{n}）", en: "Tell the agent ({n})" },
-  "wui.bar.deploy": { "zh-TW": "Deploy", en: "Deploy" },
-  "wui.bar.deploying": { "zh-TW": "Deploy 中…", en: "Deploying…" },
-  "wui.bar.deployingFile": { "zh-TW": "正在 Deploy {file}…", en: "Deploying {file}…" },
+  "wui.bar.deploy": { "zh-TW": "發布 WUI", en: "Publish WUI" },
+  "wui.bar.deploying": { "zh-TW": "發布中…", en: "Publishing…" },
+  "wui.bar.deployingFile": { "zh-TW": "正在發布 {file}…", en: "Publishing {file}…" },
   "wui.bar.cancel": { "zh-TW": "取消", en: "Cancel" },
-  "wui.bar.cancel.tip": { "zh-TW": "停止 Deploy {file}", en: "Stop deploying {file}" },
-  "wui.deploy.done": { "zh-TW": "✓ 已 Deploy", en: "✓ Deployed" },
+  "wui.bar.cancel.tip": { "zh-TW": "停止發布 {file}", en: "Stop publishing {file}" },
+  "wui.deploy.done": { "zh-TW": "✓ 已發布", en: "✓ Published" },
   "wui.deploy.address": { "zh-TW": "頁面網址", en: "Page address" },
   "wui.deploy.copy": { "zh-TW": "複製", en: "Copy" },
   "wui.deploy.copied": { "zh-TW": "已複製", en: "Copied" },
   "wui.deploy.copyFailed": { "zh-TW": "無法複製，請自行選取", en: "Copy failed — select it" },
   "wui.deploy.open": { "zh-TW": "開啟", en: "Open" },
-  "wui.deploy.failed.build": { "zh-TW": "Deploy 失敗：請看建置輸出。", en: "Deploy failed — see the build output." },
+  "wui.deploy.failed.build": { "zh-TW": "發布失敗：請看建置輸出。", en: "Publish failed — see the build output." },
   "wui.deploy.failed.manifest": {
-    "zh-TW": "Deploy 失敗：無法確認這個頁面要不要建置：{why}",
-    en: "Deploy failed — could not check whether this page has a build: {why}",
+    "zh-TW": "發布失敗：無法確認這個頁面要不要建置：{why}",
+    en: "Publish failed — could not check whether this page has a build: {why}",
   },
   "wui.deploy.failed.open": {
-    "zh-TW": "Deploy 失敗：頁面打不開：{why}",
-    en: "Deploy failed — the page does not open: {why}",
+    "zh-TW": "發布失敗：頁面打不開：{why}",
+    en: "Publish failed — the page does not open: {why}",
   },
   "wui.deploy.failed.list": {
-    "zh-TW": "Deploy 失敗：頁面無法列進 WUI：{why}",
-    en: "Deploy failed — the page could not be listed in WUI: {why}",
+    "zh-TW": "發布失敗：頁面無法發布：{why}",
+    en: "Publish failed — the page could not be published: {why}",
   },
   "wui.deploy.stopped.superseded": {
-    "zh-TW": "Deploy 已停止：回到這個頁面之前，畫面被重新整理、重新建置或又 Deploy 了一次。請再 Deploy 一次。",
-    en: "Deploy stopped — the pane was refreshed, rebuilt or deployed again before it was back on this page. Deploy again.",
+    "zh-TW": "發布已停止：回到這個頁面之前，畫面被重新整理、重新建置或又發布了一次。請再發布一次。",
+    en: "Publish stopped — the pane was refreshed, rebuilt or published again before it was back on this page. Publish again.",
   },
   "wui.deploy.stopped.changed": {
-    "zh-TW": "Deploy 已停止：離開這個頁面太久，結果已經過期。請再 Deploy 一次。",
-    en: "Deploy stopped — the pane was away from this page long enough for the result to expire. Deploy again.",
+    "zh-TW": "發布已停止：離開這個頁面太久，結果已經過期。請再發布一次。",
+    en: "Publish stopped — the pane was away from this page long enough for the result to expire. Publish again.",
   },
   "wui.deploy.stopped.unexpected": {
-    "zh-TW": "Deploy 意外停止：請看瀏覽器的主控台。",
-    en: "Deploy stopped unexpectedly — see the browser console.",
+    "zh-TW": "發布意外停止：請看瀏覽器的主控台。",
+    en: "Publish stopped unexpectedly — see the browser console.",
   },
   // The Deploy panel says who the link opens for (docs/plan-deploy-reach.md).
   "wui.deploy.reach.owner": {
@@ -1515,7 +1515,7 @@ export const messages = {
   "wui.page.tryAgain": { "zh-TW": "再試一次", en: "Try again" },
   "wui.pane.opening": { "zh-TW": "開啟中…", en: "Opening…" },
   "wui.pane.building": { "zh-TW": "建置中…完成後就會出現頁面。", en: "Building… the page appears when this finishes." },
-  "wui.pane.deploying": { "zh-TW": "Deploy 中…完成後就會出現頁面。", en: "Deploying… the page appears when this finishes." },
+  "wui.pane.deploying": { "zh-TW": "發布中…完成後就會出現頁面。", en: "Publishing… the page appears when this finishes." },
   "wui.pane.unpublished": {
     "zh-TW": "這個頁面還沒發布，或還在還原中。請稍後再試一次。",
     en: "This page has not been published yet — or it is still being restored. Try again in a moment.",
@@ -1546,8 +1546,8 @@ export const messages = {
   },
   "wui.remove.title": { "zh-TW": "把「{title}」從 WUI 下架？", en: "Unlist “{title}” from WUI?" },
   "wui.remove.body": {
-    "zh-TW": "頁面和它的資料夾都會留著，只是不再列在這裡。要再列回來，到頁面上再按一次 Deploy。",
-    en: "The page and its folder stay; only this listing goes. To list it again, press Deploy on the page.",
+    "zh-TW": "頁面和它的資料夾都會留著，只是不再列在這裡；已經開出去的副本也照樣留在各自的人手上。要再列回來，到頁面上再按一次「發布 WUI」。",
+    en: "The page and its folder stay; only this listing goes, and copies people already opened stay theirs. To list it again, press Publish WUI on the page.",
   },
   "wui.remove.cancel": { "zh-TW": "取消", en: "Cancel" },
   "wui.remove.failed": { "zh-TW": "下架失敗，再試一次。", en: "Could not unlist it — try again." },
@@ -1568,7 +1568,7 @@ export const messages = {
   "wui.filter.all": { "zh-TW": "全部", en: "All" },
   "wui.search": { "zh-TW": "搜尋頁面或 workspace", en: "Search pages or workspaces" },
   "wui.sort": { "zh-TW": "排序", en: "Sort" },
-  "wui.sort.newest": { "zh-TW": "最新 Deploy", en: "Newest Deploy" },
+  "wui.sort.newest": { "zh-TW": "最新發布", en: "Newest published" },
   "wui.sort.title": { "zh-TW": "名稱", en: "Name" },
   "wui.nomatch": { "zh-TW": "沒有符合的頁面", en: "No page matches" },
   // The viewer's own items' pages — owner, not deployer.
@@ -3875,6 +3875,89 @@ export const messages = {
     "zh-TW": "GPU 的容量是量到開始變慢時的同時請求數；沒觀察到就是未知。",
     en: "A GPU's capacity is the number of requests in flight at which it was seen to slow; unseen means unknown.",
   },
+
+  // ── Publishing (docs/plan-wui-publish-and-agent-hub.md) ────────────────────
+  "publish.title.wui": { "zh-TW": "發布 WUI", en: "Publish WUI" },
+  "publish.title.agent": { "zh-TW": "發布 agent", en: "Publish agent" },
+  "publish.sharing.legend": { "zh-TW": "別人怎麼用這個頁面", en: "How others use this page" },
+  "publish.sharing.fresh": { "zh-TW": "每次都是新的一份", en: "A new copy every time" },
+  "publish.sharing.fresh.cost": {
+    "zh-TW": "每次打開都從你發布的版本重新開始；每一份都算在打開的人自己的額度裡。",
+    en: "Every open starts again from what you published; each copy counts against the opener's own storage.",
+  },
+  "publish.sharing.per_person": { "zh-TW": "每個人一份", en: "One copy per person" },
+  "publish.sharing.per_person.cost": {
+    "zh-TW": "每個人第一次打開拿到自己的一份，之後回到同一份；算在他自己的額度裡。",
+    en: "Each person gets their own copy the first time and comes back to it after; it counts against their own storage.",
+  },
+  "publish.sharing.shared": { "zh-TW": "大家共用一份", en: "One copy shared by everyone" },
+  "publish.sharing.shared.cost": {
+    "zh-TW": "從你的 workspace 另外開出一份給大家一起用，算在你的額度裡；你自己工作的這份不會被碰到。",
+    en: "A separate copy of your workspace that everyone uses together, on your storage; the one you work in is not touched.",
+  },
+  "publish.sharing.direct": { "zh-TW": "直接用我的 workspace", en: "Use my workspace directly" },
+  "publish.sharing.direct.cost": {
+    "zh-TW": "大家直接在你這個 workspace 裡操作（原本的做法）；能執行程式的人，可能讀到彼此的私人值。",
+    en: "Everyone works inside this workspace of yours (how it used to work); anyone who can run code may read the others' private values.",
+  },
+  "publish.reach.legend": { "zh-TW": "誰能用", en: "Who may use it" },
+  "publish.reach.me": { "zh-TW": "只有我", en: "Only me" },
+  "publish.reach.subjects": { "zh-TW": "指定的人或群組", en: "People or groups I pick" },
+  "publish.reach.everyone": { "zh-TW": "所有登入的人", en: "Everyone signed in" },
+  "publish.reach.direct": {
+    "zh-TW": "誰打得開，跟著這個 workspace 本身的權限走。",
+    en: "Who can open it follows this workspace's own permission.",
+  },
+  "publish.people": { "zh-TW": "人", en: "People" },
+  "publish.groups": { "zh-TW": "群組", en: "Groups" },
+  "publish.noGroups": { "zh-TW": "沒有可選的群組", en: "No groups available" },
+  "publish.role.legend": { "zh-TW": "大家在共用的那一份裡能做什麼", en: "What people may do in the shared copy" },
+  "publish.role.reader": { "zh-TW": "只能看", en: "Read only" },
+  "publish.role.participant": { "zh-TW": "可以聊天和使用頁面", en: "Chat and use the page" },
+  "publish.role.collaborator": { "zh-TW": "還能改檔案", en: "Also change files" },
+  "publish.size.legend": { "zh-TW": "副本的沙盒大小", en: "Sandbox size of the copies" },
+  "publish.size.default": {
+    "zh-TW": "留空就跟 App 一樣；超過 App 上限的部分會被調回上限。",
+    en: "Leave empty for the App's size; anything above the App's ceiling is brought down to it.",
+  },
+  "publish.size.cpu": { "zh-TW": "CPU 核心數", en: "CPU cores" },
+  "publish.size.memory": { "zh-TW": "記憶體（GB）", en: "Memory (GB)" },
+  "publish.size.invalid": { "zh-TW": "沙盒大小要是大於 0 的數字。", en: "A sandbox size is a number above 0." },
+  "publish.estimate": {
+    "zh-TW": "會複製 {files} 個檔案、{size}；打開一份大約要等 {seconds} 秒。",
+    en: "{files} files ({size}) will be copied; opening a copy takes about {seconds} s.",
+  },
+  "publish.estimate.loading": { "zh-TW": "正在計算要複製多少…", en: "Working out what a copy will hold…" },
+  "publish.estimate.many": {
+    "zh-TW": "檔案很多，打開會比較久。檔案最多的資料夾：",
+    en: "That is a lot of files, so opening will be slow. The biggest folders:",
+  },
+  "publish.estimate.folder": { "zh-TW": "{files} 個檔案、{size}", en: "{files} files, {size}" },
+  "publish.note.legend": { "zh-TW": "這次改了什麼（選填）", en: "What changed (optional)" },
+  "publish.pick": { "zh-TW": "先選別人怎麼用這個頁面。", en: "Pick how others use this page first." },
+  "publish.pickPeople": { "zh-TW": "先選至少一個人或群組。", en: "Pick at least one person or group first." },
+  "publish.cancel": { "zh-TW": "取消", en: "Cancel" },
+  "publish.confirm": { "zh-TW": "發布", en: "Publish" },
+  "publish.done.copies": {
+    "zh-TW": "打開這個網址的人，會各自拿到自己的一份。",
+    en: "Everyone who opens this address gets their own copy.",
+  },
+  "publish.done.shared": {
+    "zh-TW": "打開這個網址的人，會一起用同一份副本。",
+    en: "Everyone who opens this address uses the same shared copy.",
+  },
+  "publish.usage": { "zh-TW": "{opens} 次打開 · {people} 人", en: "{opens} opens · {people} people" },
+  "open.preparing": { "zh-TW": "正在準備你的副本…", en: "Preparing your copy…" },
+  "open.preparing.hint": {
+    "zh-TW": "第一次打開要先複製一份，檔案多的話會等比較久。",
+    en: "The first open copies it for you; with many files this takes a while.",
+  },
+  "open.notFound": {
+    "zh-TW": "找不到這個發布，或你沒有權限使用它。",
+    en: "This is not published, or you may not use it.",
+  },
+  "open.gone": { "zh-TW": "發布它的 workspace 已經不在了。", en: "The workspace that published it is gone." },
+  "open.failed": { "zh-TW": "沒辦法打開：{why}", en: "It could not be opened: {why}" },
 } satisfies Record<string, Entry>;
 
 export type MsgKey = keyof typeof messages;

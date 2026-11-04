@@ -29,6 +29,20 @@ vi.mock("../api", () => ({
 // The signed-in user, and whether the user query has SETTLED: until it has,
 // the id is the "default-user" placeholder — an identity, not the identity.
 let me = { id: "alice", ready: true };
+// Taking a published page down is an unpublish (P4); a page Deployed before
+// Publish existed is still removed through the overview's own client.
+const unpublish = vi.fn(async (_slug: string, _itemId: string, _path: string) => {});
+vi.mock("../api/publish", async (orig) => {
+  const real = await orig<typeof import("../api/publish")>();
+  return {
+    ...real,
+    publishApi: {
+      ...real.publishApi,
+      unpublish: (slug: string, itemId: string, path: string) => unpublish(slug, itemId, path),
+    },
+  };
+});
+
 vi.mock("../hooks/useCurrentUser", () => ({
   useCurrentUser: () => me.id,
   useCurrentUserState: () => me,
@@ -187,7 +201,7 @@ describe("WuiOverviewPage", () => {
     // reverted the template to "{who} 於 {when} Deploy" and the derived form
     // stayed green. The relative form has to come LAST, where "on 2 d ago"
     // / "於 just now Deploy" cannot be made to read.
-    expect(within(rca).getByRole("listitem")).toHaveTextContent(`bob Deploy · ${when}`);
+    expect(within(rca).getByRole("listitem")).toHaveTextContent(`bob 發布 · ${when}`);
     expect(within(rca).getByTitle(exactTime(iso))).toBeInTheDocument();
   });
 
@@ -585,7 +599,7 @@ describe("WuiOverviewPage", () => {
       // claim is "the same sentence as on screen", and the sentence's own
       // shape is pinned literally by the table test above.
       const when = relativeTime(new Date(1_700_000_000_000).toISOString());
-      expect(detail).toHaveAttribute("title", `Line 3 stoppage · bob Deploy · ${when}`);
+      expect(detail).toHaveAttribute("title", `Line 3 stoppage · bob 發布 · ${when}`);
     });
 
     it("colours the card's stripe with the page's own colour when it has one, the App's otherwise", async () => {
@@ -803,8 +817,8 @@ describe("WuiOverviewPage", () => {
       // "Carol Kao · u_1a2b Deploy". Same lookup for both.
       render(<WuiOverviewPage client={client([row({ deployed_by: "carol" })])} />, { wrapper: Wrap });
       const rca = await screen.findByRole("region", { name: "根因分析" });
-      await within(rca).findByText(/Carol Lin Deploy/);
-      expect(within(rca).getByRole("listitem")).not.toHaveTextContent(/\bcarol Deploy/);
+      await within(rca).findByText(/Carol Lin 發布/);
+      expect(within(rca).getByRole("listitem")).not.toHaveTextContent(/\bcarol 發布/);
     });
   });
 
@@ -922,3 +936,89 @@ function TrailProbe() {
     </ul>
   );
 }
+
+describe("published pages (P4 of plan-wui-publish-and-agent-hub)", () => {
+  const copying = row({
+    title: "Shipping board",
+    item_title: "",
+    sharing: "per_person",
+    reach: "everyone",
+    published: true,
+    opens: 7,
+    people: 3,
+  });
+
+  it("links a page that hands out copies through the preparing page, and one used directly to itself", async () => {
+    render(
+      <WuiOverviewPage client={client([copying, row({ title: "Scrap trend", item_id: "i-2", deployed_at: 1 })])} />,
+      { wrapper: Wrap },
+    );
+    const rca = await screen.findByRole("region", { name: "根因分析" });
+
+    expect(within(rca).getByRole("link", { name: "Shipping board" })).toHaveAttribute(
+      "href",
+      "/open/rca/i-1/pages/report/page.ai.yaml",
+    );
+    expect(within(rca).getByRole("link", { name: "Scrap trend" })).toHaveAttribute(
+      "href",
+      "/w/rca/i-2/pages/report/page.ai.yaml",
+    );
+  });
+
+  it("names the way of sharing where a viewer who may not read the source would get an item link", async () => {
+    render(<WuiOverviewPage client={client([copying])} />, { wrapper: Wrap });
+    const rca = await screen.findByRole("region", { name: "根因分析" });
+
+    const item = within(rca).getByRole("listitem");
+    expect(within(item).queryByRole("link", { name: /Line 3|i-1/ })).toBeNull();
+    expect(item).toHaveTextContent(word("publish.sharing.per_person"));
+  });
+
+  it("shows how often it was opened and by how many people — never who", async () => {
+    render(<WuiOverviewPage client={client([copying])} />, { wrapper: Wrap });
+    const rca = await screen.findByRole("region", { name: "根因分析" });
+
+    expect(within(rca).getByTestId("wui-usage")).toHaveTextContent("7 次打開 · 3 人");
+  });
+
+  it("shows no usage for a page Deployed before Publish existed", async () => {
+    render(<WuiOverviewPage client={client([row({})])} />, { wrapper: Wrap });
+    const rca = await screen.findByRole("region", { name: "根因分析" });
+
+    expect(within(rca).queryByTestId("wui-usage")).toBeNull();
+  });
+
+  it("takes a published page down by unpublishing it, not through the old Deploy row", async () => {
+    unpublish.mockClear();
+    const c = client([copying]);
+    render(<WuiOverviewPage client={c} />, { wrapper: Wrap });
+    const rca = await screen.findByRole("region", { name: "根因分析" });
+    fireEvent.click(within(rca).getByRole("button", { name: REMOVE() }));
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: word("wui.remove") }));
+
+    await waitFor(() => expect(unpublish).toHaveBeenCalledWith("rca", "i-1", "/pages/report/page.ai.yaml"));
+    expect(c.remove).not.toHaveBeenCalled();
+  });
+
+  it("says who may open a copying page by what the publisher chose, not the source's permission", async () => {
+    render(
+      <WuiOverviewPage
+        client={client([
+          row({ ...copying, title: "Mine only", reach: "me", deployed_by: "alice", deployed_at: 3 }),
+          row({ ...copying, title: "Picked", item_id: "i-2", reach: "subjects", deployed_at: 2 }),
+          row({ ...copying, title: "Open", item_id: "i-3", reach: "everyone", deployed_at: 1 }),
+        ])}
+      />,
+      { wrapper: Wrap },
+    );
+    const rca = await screen.findByRole("region", { name: "根因分析" });
+    const [mine, picked, open] = within(rca).getAllByRole("listitem");
+
+    expect(mine).toHaveTextContent(word("wui.reach.you"));
+    expect(picked).toHaveTextContent(word("wui.reach.shared"));
+    for (const key of ["wui.reach.you", "wui.reach.shared", "wui.reach.owner"] as const) {
+      expect(open).not.toHaveTextContent(word(key));
+    }
+  });
+});

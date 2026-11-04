@@ -5,7 +5,7 @@
  * answered in its own tests; here it is answered by hand, both ways.
  */
 import "@testing-library/jest-dom/vitest";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { FileServiceProvider, type FileService } from "../../api/fileService";
@@ -20,6 +20,17 @@ import type { ViewSpec } from "../entity/types";
 import { WUI_PROTOCOL } from "./protocol";
 import { openServedWui } from "./served";
 import { WuiView, type WuiChrome } from "./WuiView";
+
+/** Publish WUI, then the dialog's "use my workspace directly": what a Deploy
+ * did in one press before publishing asked how others use the page
+ * (`docs/plan-wui-publish-and-agent-hub.md` W2). The rest of the run — build,
+ * verify, record, verdict — is what these tests are about, and is unchanged. */
+function publishDirect(button?: HTMLElement): void {
+  fireEvent.click(button ?? screen.getByRole("button", { name: /^publish wui$/i }));
+  const dialog = screen.getByTestId("publish-dialog");
+  fireEvent.click(within(dialog).getByRole("radio", { name: /use my workspace directly/i }));
+  fireEvent.click(within(dialog).getByRole("button", { name: /^publish$/i }));
+}
 
 // These tests read the pane's English: its author strip and Deploy panel go
 // through `t()` (docs/plan-deploy-reach.md decision 7), and outside a provider
@@ -264,7 +275,7 @@ describe("a served WUI, deployed", () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async (url: unknown, init?: RequestInit) =>
-        String(url).includes("/wui/deploy") && init?.method === "POST"
+        String(url).includes("/publish") && init?.method === "POST"
           ? new Response(
               JSON.stringify({
                 slug: "rca",
@@ -293,7 +304,7 @@ describe("a served WUI, deployed", () => {
     const before = frame();
 
     files["/sales/index.html"] = "<html><head></head><body>home, rebuilt</body></html>";
-    fireEvent.click(screen.getByRole("button", { name: /^deploy$/i }));
+    publishDirect();
 
     await screen.findByRole("textbox", { name: /address/i });
     await waitFor(() => expect(frame()).not.toBe(before));
@@ -310,7 +321,7 @@ describe("a served WUI, deployed", () => {
     const before = frame();
 
     files["/sales/s.css"] = "body{color:blue}";
-    fireEvent.click(screen.getByRole("button", { name: /^deploy$/i }));
+    publishDirect();
 
     await screen.findByRole("textbox", { name: /address/i });
     await waitFor(() => expect(frame()).not.toBe(before));
@@ -336,7 +347,7 @@ describe("a served WUI, deployed", () => {
           });
           return new Response(body, { headers: { "content-type": "text/event-stream" } });
         }
-        if (u.includes("/wui/deploy") && init?.method === "POST")
+        if (u.includes("/publish") && init?.method === "POST")
           return new Response(
             JSON.stringify({
               slug: "rca",
@@ -356,7 +367,7 @@ describe("a served WUI, deployed", () => {
     renderPane({ files: { ...SITE, "/sales/package.json": JSON.stringify({ scripts: { build: "vite build" } }) } });
     await screen.findByRole("button", { name: /^rebuild$/i });
 
-    fireEvent.click(screen.getByRole("button", { name: /^deploy$/i }));
+    publishDirect();
     await screen.findByText(/building/);
     await settle();
     // The frame as it stands WHILE the build runs: what must be replaced is
@@ -378,7 +389,7 @@ describe("a served WUI, deployed", () => {
     say({ proto: WUI_PROTOCOL, page: `${BASE}sales/setup/` });
     const before = frame();
 
-    fireEvent.click(screen.getByRole("button", { name: /^deploy$/i }));
+    publishDirect();
 
     await screen.findByRole("textbox", { name: /address/i });
     await waitFor(() => expect(frame()).not.toBe(before));

@@ -187,6 +187,18 @@ class DeployedPage(BaseModel):
     icon: str
     color: str
     can_remove: bool
+    #: How copies are shared (`api/publish.py`, W2). A page Deployed before
+    #: Publish existed reads as "direct" — others use the workspace itself.
+    sharing: str = "direct"
+    #: Who may use a published page (C9): "me" / "subjects" / "everyone";
+    #: "" for a "direct" one, whose reach is the item's own permission.
+    reach: str = ""
+    #: Usage (W4): opens and distinct people, never who.
+    opens: int = 0
+    people: int = 0
+    #: A `Published` row (taken down with `DELETE …/publish`), as opposed to a
+    #: page Deployed before Publish existed (`DELETE …/wui/deploy`).
+    published: bool = False
 
 
 def _permission_json(permission: Permission | None) -> dict[str, Any] | None:
@@ -204,6 +216,8 @@ def register_wui_deploy_routes(
     files: WorkspaceFiles,
     pages: DeployedPages,
     get_user_id: Callable[[], str],
+    spec: SpecStar | None = None,
+    superusers: frozenset[str] = frozenset(),
     now: Callable[[], int] | None = None,
 ) -> None:
     @app.post("/a/{slug}/items/{item_id}/wui/deploy", response_model=DeployedPage)
@@ -275,17 +289,69 @@ def register_wui_deploy_routes(
             return False
         return True
 
+    def _published_rows() -> tuple[list[DeployedPage], set[tuple[str, str]]]:
+        """The published WUIs the viewer may use (`api/publish.py`, W4), and
+        every published (item, path) — so an old Deploy row of the same page
+        is not listed a second time. Agents live in Agent Hub, not here."""
+        if spec is None:
+            return [], set()
+        from .publish import Publications, may_use
+
+        user = get_user_id()
+        listed: list[DeployedPage] = []
+        published: set[tuple[str, str]] = set()
+        for row in Publications(spec).newest_first(kind="wui"):
+            published.add((row.item_id, row.path))
+            if not may_use(spec, row, user, superusers):
+                continue
+            # A copying kind is used without reading the source, so its facts
+            # are only told to someone who may read it anyway.
+            readable = _may(row.slug, row.item_id, "read_content")
+            facts = locator.item_facts(row.item_id) if readable else None
+            title, owner, created_by, permission = facts or (
+                "",
+                row.published_by,
+                row.published_by,
+                None,
+            )
+            listed.append(
+                DeployedPage(
+                    slug=row.slug,
+                    item_id=row.item_id,
+                    item_title=title,
+                    item_owner=owner,
+                    item_created_by=created_by,
+                    item_permission=_permission_json(permission),
+                    path=row.path,
+                    title=row.title,
+                    deployed_by=row.published_by,
+                    deployed_at=row.published_at,
+                    icon=row.icon,
+                    color=row.color,
+                    can_remove=_may(row.slug, row.item_id, "change_permission"),
+                    sharing=row.sharing,
+                    reach="" if row.sharing == "direct" else row.reach,
+                    opens=row.opens,
+                    people=len(row.openers),
+                    published=True,
+                )
+            )
+        return listed, published
+
     @app.get("/wui", response_model=Overview)
     async def wui_overview() -> Overview:
-        """Every Deployed page the viewer may open, newest Deploy first.
+        """Every published or Deployed page the viewer may open, newest first.
 
         One access lookup and one title read per ITEM, not per row:
         `require_access` holds the facts for its window, and an item with
         several pages asks once.
         """
+        listed, published = _published_rows()
         decided: dict[tuple[str, str], tuple[bool, bool, str, str, str, dict[str, Any] | None]] = {}
-        out: list[DeployedPage] = []
+        out: list[DeployedPage] = list(listed)
         for row in pages.newest_first():
+            if (row.item_id, row.path) in published:
+                continue
             key = (row.slug, row.item_id)
             if key not in decided:
                 readable = _may(row.slug, row.item_id, "read_content")
@@ -317,4 +383,5 @@ def register_wui_deploy_routes(
                     can_remove=removable,
                 )
             )
+        out.sort(key=lambda page: -page.deployed_at)
         return Overview(pages=out)

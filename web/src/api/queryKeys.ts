@@ -91,6 +91,8 @@ export const qk = {
   // The `/wui` overview: every Deployed page the viewer may open. One key for
   // the whole listing — it is per viewer, and Remove invalidates all of it.
   wuiOverview: ["wuiOverview"] as const,
+  /** What a publish of (item, view file) would copy (C11): the dialog asks. */
+  publishEstimate: (itemId: string, path: string) => ["publishEstimate", itemId, path] as const,
   /** Every schedule the viewer may read (docs/plan-schedule-overview.md). */
   schedulesOverview: ["schedulesOverview"] as const,
   // The skill hub (docs/plan-skill-hub.md): the listing per search + 「我的」,

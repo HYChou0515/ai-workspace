@@ -239,6 +239,7 @@ def test_an_agent_makes_a_copy_for_every_conversation():
     first, second = _open(client, src, AGENT).json(), _open(client, src, AGENT).json()
 
     assert first["item_id"] != second["item_id"]
+    assert first["kind"] == "agent"
     copy = _item(spec, first["item_id"])
     assert (copy.published_kind, copy.published_path, copy.published_title) == (
         "agent",

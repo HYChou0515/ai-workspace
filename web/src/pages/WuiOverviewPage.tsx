@@ -22,7 +22,8 @@ import { Link } from "react-router-dom";
 
 import { qk } from "../api/queryKeys";
 import { exactTime, relativeTime } from "../api/types";
-import { type DeployedWui, type WuiApi, wuiAddress, wuiApi } from "../api/wui";
+import { publishApi } from "../api/publish";
+import { type DeployedWui, pageHref, type WuiApi, wuiApi } from "../api/wui";
 import { AppTag } from "../components/AppTag";
 import { useDialog } from "../components/Dialog";
 import { Icon } from "../components/Icon";
@@ -31,7 +32,7 @@ import { UserChip } from "../components/UserChip";
 import { useBreadcrumbs } from "../hooks/breadcrumbs";
 import { useCurrentUserState } from "../hooks/useCurrentUser";
 import { useUser } from "../hooks/useUsers";
-import { useT } from "../lib/i18n";
+import { type MsgKey, useT } from "../lib/i18n";
 import { pageReach } from "../lib/pageReach";
 import { useApps } from "../hooks/useResources";
 import { appTagPalette, pageColour } from "../lib/appColor";
@@ -363,7 +364,12 @@ function useRemove(page: DeployedWui, client: WuiApi) {
   const qc = useQueryClient();
   const { confirm } = useDialog();
   const remove = useMutation({
-    mutationFn: () => client.remove(page.slug, page.item_id, page.path),
+    // A published row is taken down by unpublishing it; a page Deployed
+    // before Publish existed by removing its old row.
+    mutationFn: () =>
+      page.published
+        ? publishApi.unpublish(page.slug, page.item_id, page.path)
+        : client.remove(page.slug, page.item_id, page.path),
     onSuccess: () => qc.invalidateQueries({ queryKey: qk.wuiOverview }),
     // The element renders its own failure; without this the query client
     // ALSO routes it to the app-wide write-failure notice, so one press
@@ -492,8 +498,14 @@ function PageDetail({
           <AppTag slug={page.slug} />{" "}
         </>
       ) : null}
-      {/* The workspace has no deep link to a file, so this opens the item. */}
-      <Link to={`/a/${page.slug}/${page.item_id}`}>{item}</Link>
+      {/* The workspace has no deep link to a file, so this opens the item —
+          only for a viewer who may read it: a page that hands out copies is
+          used without reading its source, and a link there would 404. */}
+      {page.item_title ? (
+        <Link to={`/a/${page.slug}/${page.item_id}`}>{item}</Link>
+      ) : (
+        <span>{t(`publish.sharing.${page.sharing ?? "direct"}` as MsgKey)}</span>
+      )}
       {withOwner ? (
         <>
           {" · "}
@@ -506,6 +518,14 @@ function PageDetail({
           (`GroupsPage`), and the sentence template is written for the
           relative form ("2 d ago" / "just now" / "7 Aug"). */}
       <span title={exactTime(new Date(page.deployed_at).toISOString())}>{by}</span>
+      {page.published ? (
+        <>
+          {" · "}
+          <span data-testid="wui-usage">
+            {t("publish.usage", { opens: page.opens ?? 0, people: page.people ?? 0 })}
+          </span>
+        </>
+      ) : null}
     </span>
   );
 }
@@ -523,6 +543,14 @@ function useReachNote(
   page: DeployedWui,
 ): "wui.reach.you" | "wui.reach.owner" | "wui.reach.shared" | null {
   const me = useCurrentUserState();
+  if (page.sharing && page.sharing !== "direct") {
+    // Copies are handed to whoever the publisher named (C9), whatever the
+    // source workspace's own permission says.
+    if (page.reach === "subjects") return "wui.reach.shared";
+    if (page.reach !== "me") return null;
+    if (!me.ready) return null;
+    return me.id === page.deployed_by ? "wui.reach.you" : "wui.reach.owner";
+  }
   const reach = pageReach(page.item_permission);
   if (reach === "shared") return "wui.reach.shared";
   if (reach !== "owner") return null;
@@ -550,7 +578,7 @@ function PageRow({ page, client, starred, starReady, onStar, showApp }: PageProp
       />
       {/* A new tab: the reader page renders outside the shell, with no way
           back to here, so it opens beside the overview rather than over it. */}
-      <a href={wuiAddress(page.slug, page.item_id, page.path)} target="_blank" rel="noopener" title={page.title}>
+      <a href={pageHref(page)} target="_blank" rel="noopener" title={page.title}>
         {page.title}
       </a>
       <PageDetail page={page} withOwner withApp={showApp} />
@@ -605,7 +633,7 @@ function PageCard({ page, client, starred, starReady, onStar, showApp }: PagePro
           size={54}
         />
         <div className="wui-card-text">
-          <a href={wuiAddress(page.slug, page.item_id, page.path)} target="_blank" rel="noopener" title={page.title}>
+          <a href={pageHref(page)} target="_blank" rel="noopener" title={page.title}>
             {page.title}
           </a>
           <PageDetail page={page} withOwner={false} />
