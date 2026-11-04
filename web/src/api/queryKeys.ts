@@ -98,6 +98,9 @@ export const qk = {
   agentSummary: (itemId: string, path: string, text: string) => ["agentSummary", itemId, path, text] as const,
   /** Every summary of that file, whatever its text — what a publish invalidates. */
   agentSummaryOf: (itemId: string, path: string) => ["agentSummary", itemId, path] as const,
+  /** Agent Hub's listing, and one agent's page (plan-wui-publish-and-agent-hub A7/A8). */
+  agentHub: ["agentHub"] as const,
+  agentHubPage: (id: string) => ["agentHub", id] as const,
   /** Every schedule the viewer may read (docs/plan-schedule-overview.md). */
   schedulesOverview: ["schedulesOverview"] as const,
   // The skill hub (docs/plan-skill-hub.md): the listing per search + 「我的」,

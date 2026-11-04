@@ -12,7 +12,7 @@
 
 import { useQueryClient } from "@tanstack/react-query";
 import { type ReactNode, useEffect, useRef, useState } from "react";
-import { useParams } from "react-router-dom";
+import { Link, useParams } from "react-router-dom";
 
 import { qk } from "../api/queryKeys";
 import type { AppItem, AppManifest } from "../api/types";
@@ -21,7 +21,9 @@ import { useFiles } from "../hooks/useInvestigation";
 import { useNavChrome } from "../hooks/useNavChrome";
 import { useAppItem, useAppManifest } from "../hooks/useResources";
 import { WorkspaceSlugProvider } from "../hooks/useWorkspaceSlug";
+import { useT } from "../lib/i18n";
 import { rememberLastChat } from "../lib/lastChat";
+import { agentPageHref } from "./AgentHubPage";
 import { initialIdeCollapsed, WorkspaceShell } from "./investigation/WorkspaceShell";
 
 export function AppWorkspace() {
@@ -67,7 +69,10 @@ function WorkspaceLoaded({
   // #chat-private: the IDE-collapse state is NOT persisted — a new tab always
   // opens with the workspace tucked (the manifest default), not whatever a
   // previous session happened to leave expanded.
-  const [ideCollapsed, setIdeCollapsed] = useState<boolean>(initialIdeCollapsed(manifest));
+  // A conversation with an agent opens conversation-first (A11): the files
+  // are one click away, not in front.
+  const agentCopy = item.published_kind === "agent";
+  const [ideCollapsed, setIdeCollapsed] = useState<boolean>(agentCopy || initialIdeCollapsed(manifest));
   const files = useFiles(id, { enabled: !ideCollapsed });
   const chatFirst = manifest.layout.primary_surface === "chat";
   // Remember this as the App's last-opened chat, so re-entering the App resumes
@@ -120,6 +125,17 @@ function WorkspaceLoaded({
       onInvestigationChanged={() => {}}
     />
   );
+  // A conversation with an agent (A11): the agent's name and the way back to
+  // Agent Hub on top, the conversation below — no list of other chats, since
+  // a new conversation is a new copy started there.
+  if (agentCopy) {
+    return (
+      <div style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
+        <AgentCopyBar item={item} />
+        <div style={{ flex: 1, minHeight: 0 }}>{shell}</div>
+      </div>
+    );
+  }
   // Chat-first Apps get the private-chat framing: a left rail of the user's own
   // chats beside the chat itself (manifest-gated, so it stays App-agnostic).
   // Other surfaces (IDE-first / views-first) keep the plain workspace.
@@ -130,6 +146,35 @@ function WorkspaceLoaded({
     <div className="chat-workspace">
       <ChatListRail slug={slug} resourceRoute={manifest.resource_route} currentId={id} />
       <div className="chat-workspace__main">{shell}</div>
+    </div>
+  );
+}
+
+/** The top of a conversation with an agent (A11): its mark and name, and the
+ * way back — to the agent's page in Agent Hub, where its other conversations
+ * and a new one are (A8). NN/g, *Match between system and the real world*:
+ * to the person this is a conversation with someone, not a workspace. */
+export function AgentCopyBar({ item }: { item: AppItem }) {
+  const t = useT();
+  const title = String(item.published_title ?? "") || item.title;
+  const from = String(item.published_from ?? "");
+  return (
+    <div
+      data-testid="agent-copy-bar"
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 10,
+        padding: "8px 14px",
+        borderBottom: "1px solid var(--paper-3)",
+        flex: "0 0 auto",
+      }}
+    >
+      <Link to={from ? agentPageHref(from) : "/agents"}>← {t("agentHub.back")}</Link>
+      <span aria-hidden="true" style={{ color: "var(--paper-3)" }}>
+        |
+      </span>
+      <span style={{ fontWeight: 600 }}>{title}</span>
     </div>
   );
 }

@@ -108,9 +108,14 @@ export function ItemChatShell({
   canAddFiles,
   onSaveSkillPrefs,
   uploadDir,
+  oneConversation = false,
 }: {
   slug: string;
   itemId: string;
+  /** A conversation copy of a published agent IS one conversation
+   * (plan-wui-publish-and-agent-hub A2/A11): no "New chat" anywhere — a new
+   * conversation is a new copy, started from Agent Hub. */
+  oneConversation?: boolean;
   /** Permission-disclosure: forwarded to the composer — true disables it (the
    * user can read the thread but lacks `converse`). */
   readOnly?: boolean;
@@ -293,7 +298,7 @@ export function ItemChatShell({
               onManage={() => setManaging(true)}
             />
           )}
-          <NewItemPicker onFreeChat={onFreeChat} />
+          {oneConversation ? null : <NewItemPicker onFreeChat={onFreeChat} />}
           {showCollections && (
             // `margin-left: auto`, not a spacer element. A spacer is an item:
             // on a wrapped line it still costs a `gap`, and at the workspace's
@@ -329,7 +334,7 @@ export function ItemChatShell({
           // #200: when the bar is hidden the chat header carries the lone escape
           // hatch; when the bar is shown its "+ New" picker already does, so the
           // header omits it (exactly one create-entry is ever visible).
-          onNewChat={showBar ? undefined : onFreeChat}
+          onNewChat={showBar || oneConversation ? undefined : onFreeChat}
           picker={picker}
           suggestions={suggestions}
           appTitle={appTitle}

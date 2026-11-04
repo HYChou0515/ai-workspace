@@ -125,7 +125,12 @@ beforeEach(() => {
 // so the pre-#200 tests keep seeing the full chrome. #200 tests override these to
 // the single-chat-leaning shape (chatSwitcher="auto", showCollections=false).
 const render = (
-  over: { chatSwitcher?: "auto" | "always"; showCollections?: boolean; canAddFiles?: boolean } = {},
+  over: {
+    chatSwitcher?: "auto" | "always";
+    showCollections?: boolean;
+    canAddFiles?: boolean;
+    oneConversation?: boolean;
+  } = {},
 ) =>
   renderWithQuery(
     <ItemChatShell
@@ -140,6 +145,7 @@ const render = (
       chatSwitcher={over.chatSwitcher ?? "always"}
       showCollections={over.showCollections ?? true}
       canAddFiles={over.canAddFiles}
+      oneConversation={over.oneConversation}
     />,
   );
 
@@ -592,5 +598,33 @@ describe("a test chat asked for from the agent panel", () => {
       expect(screen.getByTestId("agent-panel-stub").dataset.chat).toBe("conversation:test"),
     );
     expect(create).toHaveBeenCalledWith(expect.any(String), "it", "Test: A", "/a/agent.ai.yaml");
+  });
+});
+
+// plan-wui-publish-and-agent-hub A11: a conversation with an agent IS one
+// conversation — no "New chat" in the bar, nor in the chat's header.
+describe("a conversation copy of an agent", () => {
+  it("offers no new chat anywhere", async () => {
+    stubChatApi([summary({ chat_id: "conversation:c1", is_default: true })]);
+    render({ chatSwitcher: "always", oneConversation: true });
+    await screen.findByTestId("agent-panel-stub");
+
+    expect(screen.queryByTestId("header-new-chat")).toBeNull();
+    expect(screen.queryByRole("button", { name: /new/i })).toBeNull();
+  });
+
+  it("an ordinary workspace still does", async () => {
+    stubChatApi([summary({ chat_id: "conversation:c1", is_default: true })]);
+    render({ chatSwitcher: "auto", showCollections: false });
+
+    expect(await screen.findByTestId("header-new-chat")).toBeInTheDocument();
+  });
+
+  it("nor in the header when the bar is hidden", async () => {
+    stubChatApi([summary({ chat_id: "conversation:c1", is_default: true })]);
+    render({ chatSwitcher: "auto", showCollections: false, oneConversation: true });
+    await screen.findByTestId("agent-panel-stub");
+
+    expect(screen.queryByTestId("header-new-chat")).toBeNull();
   });
 });

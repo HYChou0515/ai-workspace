@@ -31,7 +31,7 @@ import tempfile
 from collections.abc import Callable
 from pathlib import Path
 from typing import Literal
-from urllib.parse import quote
+from urllib.parse import quote, unquote
 
 from fastapi import APIRouter, FastAPI, HTTPException, Response
 from msgspec import Struct
@@ -132,6 +132,18 @@ _SLASH = "∕"
 
 def published_id(item_id: str, path: str) -> str:
     return quote(item_id, safe="") + path.replace("/", _SLASH)
+
+
+def canonical_id(token: str) -> str:
+    """The row id a link carried, however many times it was decoded on the
+    way (a browser, a router and the server each may): the item part is
+    re-encoded from its decoded form, so `published_id` and its decoded
+    spelling name the same row. Item ids hold no `%` of their own, so
+    decoding them is idempotent."""
+    cut = token.find(_SLASH)
+    if cut <= 0:
+        return token
+    return published_id(unquote(token[:cut]), token[cut:].replace(_SLASH, "/"))
 
 
 def snapshot_namespace(row_id: str, at: int) -> str:

@@ -86,6 +86,9 @@ vi.mock("../hooks/useResources", () => ({
         status: "triaging",
         product: "MX-7",
         topics: ["Reflow"],
+        // A conversation copy of a published agent (plan-wui-publish-and-agent-hub A11).
+        published_kind: "agent",
+        published_title: "Sales helper",
       },
       {
         resource_id: "rca-investigation/2",
@@ -225,6 +228,15 @@ describe("AppDashboard", () => {
     expect(within(table).getByText("P1")).toBeInTheDocument(); // severity chip
     expect(within(table).getByText("triaging")).toBeInTheDocument(); // status chip
     expect(within(table).getByText("MX-7")).toBeInTheDocument(); // product
+  });
+
+  it("marks a conversation with an agent with the agent it came from, and nothing else", () => {
+    renderDash();
+    const table = screen.getByTestId("dash-items");
+
+    const marks = within(table).getAllByTestId("item-from-agent");
+    expect(marks).toHaveLength(1);
+    expect(marks[0]).toHaveTextContent("Sales helper");
   });
 
   it("lists Topics in the sidebar derived from the items' topics", () => {

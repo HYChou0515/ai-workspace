@@ -1053,6 +1053,8 @@ function ShellBody({
               readOnly={!_canConverse}
               slug={manifest.slug}
               itemId={item.resource_id}
+              // A conversation copy of an agent is one conversation (A11).
+              oneConversation={item.published_kind === "agent"}
               // #198: where the composer's attach stages files — the item's profile's
               // upload_dir (default uploads/), the same folder its workflows glob.
               uploadDir={resolveUploadDir(

@@ -283,7 +283,7 @@ export function WuiOverviewPage({ client = wuiApi }: { client?: WuiApi }) {
  * state. The `.switch` markup and classes are `components/Switch.tsx`'s
  * (base.css draws the track and the thumb); it is not that component only
  * because that one takes a single trailing word. */
-function ViewSwitch({ view, onChange }: { view: WuiView; onChange: (v: WuiView) => void }) {
+export function ViewSwitch({ view, onChange }: { view: WuiView; onChange: (v: WuiView) => void }) {
   const t = useT();
   const table = view === "table";
   return (

@@ -3030,6 +3030,18 @@ def create_app(
         turn_ctx=turn_ctx,
         app_catalog=app_catalog,
     )
+    # Agent Hub (plan-wui-publish-and-agent-hub A1/A7/A8).
+    from .agent_hub_routes import register_agent_hub_routes
+
+    register_agent_hub_routes(
+        api,
+        spec=spec,
+        locator=locator,
+        publications=Publications(spec),
+        ledger=disk_ledger,
+        get_user_id=get_user_id,
+        superusers=superusers,
+    )
 
     if spa_dist is None:
         spa_dist = Path(__file__).resolve().parents[3] / "web" / "dist"

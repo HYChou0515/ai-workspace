@@ -15,6 +15,8 @@ import { SkillHubEntryPage } from "./pages/SkillHubEntryPage";
 import { SkillHubPage } from "./pages/SkillHubPage";
 import { SchedulesOverviewPage } from "./pages/SchedulesOverviewPage";
 import { WuiOverviewPage } from "./pages/WuiOverviewPage";
+import { AgentHubPage } from "./pages/AgentHubPage";
+import { AgentHubAgentPage } from "./pages/AgentHubAgentPage";
 import { WorkCalendarPage } from "./pages/WorkCalendarPage";
 import { CapacityPage } from "./pages/CapacityPage";
 import { ModelSettingsPage } from "./pages/ModelSettingsPage";
@@ -94,6 +96,10 @@ export function AppRoutes() {
             Inside the shell: it is a place to find pages; the pages themselves
             open at `/w/` outside it. */}
         <Route path="/wui" element={<WuiOverviewPage />} />
+        {/* Agent Hub (plan-wui-publish-and-agent-hub A1): its own place beside
+            WUI — the published agents, and one agent's page (A8). */}
+        <Route path="/agents" element={<AgentHubPage />} />
+        <Route path="/agents/:agentId" element={<AgentHubAgentPage />} />
         {/* Every schedule the viewer may read, with its last run and its next
             (docs/plan-schedule-overview.md). */}
         <Route path="/schedules" element={<SchedulesOverviewPage />} />
