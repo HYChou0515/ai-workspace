@@ -1,0 +1,25 @@
+/*
+ * One entry of a chat feed (`ChatFeedRow`) — the long-chat perf fix, P2.
+ *
+ * Opening a 300-turn chat spent 2.4s in layout and style. An entry off screen
+ * is not laid out or painted (`content-visibility: auto`) but stays in the DOM,
+ * so the browser's find-in-page still reaches every message. The intrinsic
+ * size stands in for a skipped entry so the scrollbar keeps its length; `auto`
+ * makes the browser remember the entry's real size once it has been drawn.
+ *
+ * Sizes measured on a 100-turn chat at 1440px: a question or a folded tool card
+ * is 37–60px, an answer ~900px.
+ *
+ * A flex column like the feed it sits in, so an entry's own `align-self` (your
+ * own message to the right, #583) still has a flex parent to align in.
+ */
+.chat-feed-row {
+  display: flex;
+  flex-direction: column;
+  content-visibility: auto;
+  contain-intrinsic-size: auto 48px;
+}
+
+.chat-feed-row--answer {
+  contain-intrinsic-size: auto 900px;
+}
