@@ -657,6 +657,23 @@ export const messages = {
   },
   "skills.updateAvailable": { "zh-TW": "有新版", en: "Update available" },
   "skills.updateAvailable.hub": { "zh-TW": "skill 已變更", en: "Skill changed" },
+  // plan-skill-hub-release-notes P5: a hub copy behind its entry.
+  "skills.updates.badge": { "zh-TW": "有新版本 v{version}", en: "New version v{version}" },
+  "skills.updates.mark": { "zh-TW": "{n} 個 skill 有新版本", en: "{n} skill(s) have a new version" },
+  "skills.updates.show": { "zh-TW": "看更新說明", en: "What's new" },
+  "skills.updates.title": { "zh-TW": "{name} 的更新說明", en: "What's new in {name}" },
+  "skills.updates.version": { "zh-TW": "v{version} ・ {date}", en: "v{version} ・ {date}" },
+  "skills.updates.rolledBack": {
+    "zh-TW": "v{version} ・ 作者已把這個 skill 回到 v{back}",
+    en: "v{version} ・ The author took this skill back to v{back}",
+  },
+  "skills.updates.noNote": { "zh-TW": "這一版沒有說明。", en: "No note for this version." },
+  "skills.updates.compare": { "zh-TW": "比較差異", en: "Compare" },
+  "skills.updates.update": { "zh-TW": "更新", en: "Update" },
+  "skills.updates.later": { "zh-TW": "稍後提醒", en: "Remind me later" },
+  "skills.updates.skip": { "zh-TW": "略過這個版本", en: "Skip this version" },
+  "skills.updates.snoozed": { "zh-TW": "已延後提醒", en: "Reminder snoozed" },
+  "skills.updates.skipped": { "zh-TW": "已略過這一版", en: "This version skipped" },
   "skills.refreshKept": {
     "zh-TW": "這些檔案你改過，所以保持原樣",
     en: "Edited here, so left as they are",

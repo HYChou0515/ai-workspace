@@ -129,6 +129,50 @@ describe("AgentHeader skills (#298)", () => {
   });
 });
 
+describe("AgentHeader skill updates (plan-skill-hub-release-notes D1)", () => {
+  afterEach(() => {
+    cleanup();
+    localStorage.clear();
+  });
+
+  it("marks the skills button when a skill hub copy has a new version, and says how many", async () => {
+    const { api } = await import("../../api");
+    vi.mocked(api.getItemSkills).mockResolvedValueOnce([
+      {
+        name: "triage",
+        description: "",
+        source: "workspace",
+        default_on: true,
+        is_copy: true,
+        copy_of: "hub",
+        hub_entry: "e1",
+        update_available: true,
+        upstream: "live",
+        pref: "follow",
+        effective: true,
+        updates: [{ version: 3, kind: "publish", at: "2026-11-03T12:00:00Z", release_note: "", back_to: null }],
+      },
+    ]);
+    renderWithQuery(
+      <MemoryRouter>
+        <AgentHeader streaming={false} investigationId="inv-up" chatId="chat-1" slug="rca" />
+      </MemoryRouter>,
+    );
+    await vi.waitFor(() => expect(screen.getByTestId("skills-button")).toHaveAttribute("data-attention", "true"));
+    expect(screen.getByTestId("skills-button").getAttribute("aria-label") ?? "").toContain("1");
+  });
+
+  it("carries no mark when no copy is behind", async () => {
+    renderWithQuery(
+      <MemoryRouter>
+        <AgentHeader streaming={false} investigationId="inv-none" chatId="chat-1" slug="rca" />
+      </MemoryRouter>,
+    );
+    await new Promise((r) => setTimeout(r, 20));
+    expect(screen.getByTestId("skills-button")).not.toHaveAttribute("data-attention");
+  });
+});
+
 describe("AgentHeader tool picker (#322)", () => {
   afterEach(cleanup);
 

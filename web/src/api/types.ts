@@ -499,6 +499,21 @@ export type ItemSkillState = {
   upstream?: "live" | "unpublished" | "deleted" | null;
   pref: ToolPref;
   effective: boolean;
+  /** A skill hub copy behind its entry: every version after its own, newest
+   * first, with what the author wrote (plan-skill-hub-release-notes D5).
+   * Empty or absent otherwise (an older API pod sends none). */
+  updates?: SkillUpdate[];
+};
+
+/** One version after the one a copy holds — a publish, or a rollback
+ * (`back_to`: the version it brought back). */
+export type SkillUpdate = {
+  version: number;
+  kind: "publish" | "rollback";
+  /** ISO time it was published. */
+  at: string;
+  release_note: string;
+  back_to: number | null;
 };
 
 /** Lean subset of the specstar list/count query params the dashboard uses

@@ -461,6 +461,7 @@ function ShellBody({
     canConverse: _canConverse,
     canWriteMeta: _canWriteMeta,
     canAddContent: _canAddContent,
+    canWrite: _canWrite,
     canManageAccess: _canManageAccess,
     canOpenEnv: _canOpenEnv,
   } = useItemAccess(item);
@@ -1112,6 +1113,7 @@ function ShellBody({
               // neither: it is the chat's own, gated on read_chat above.
               canExportVideo={_canSeeFiles && _canAddContent}
               canAddFiles={_canAddContent}
+              canUpdateSkills={_canWrite}
             />
             )}
           </div>
