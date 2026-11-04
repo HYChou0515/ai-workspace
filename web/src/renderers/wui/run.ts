@@ -15,7 +15,7 @@
 
 import { apiFetch } from "../../api/http";
 import { parseSseStream } from "../../api/sse";
-import { pageRefusal, useHeaders } from "./api";
+import { pageRefusal, usageHeaders } from "./api";
 
 /** Start a run for one item, yielding the platform's events as they arrive;
  * `deployed` names the page when it was opened by its deployed link
@@ -30,7 +30,7 @@ export function itemRun(slug: string, itemId: string, deployed?: string) {
       `/a/${encodeURIComponent(slug)}/items/${encodeURIComponent(itemId)}/wui/run`,
       {
         method: "POST",
-        headers: useHeaders(deployed),
+        headers: usageHeaders(deployed),
         body: JSON.stringify({ workflow, with: payload }),
         signal,
       },

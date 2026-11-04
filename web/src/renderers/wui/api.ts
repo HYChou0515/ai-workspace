@@ -38,7 +38,7 @@ export const DEPLOYED_HEADER = "X-Wui-Deployed";
 
 /** The request headers of a use, for a page opened by its deployed link
  * (`deployed` = its view path) or not (undefined). */
-export function useHeaders(deployed: string | undefined): Record<string, string> {
+export function usageHeaders(deployed: string | undefined): Record<string, string> {
   const headers: Record<string, string> = { "content-type": "application/json" };
   if (deployed) headers[DEPLOYED_HEADER] = encodeURIComponent(deployed);
   return headers;
@@ -66,7 +66,7 @@ export function itemCallTool(slug: string, itemId: string, deployed?: string): C
       `/a/${encodeURIComponent(slug)}/items/${encodeURIComponent(itemId)}/wui/tools/${encodeURIComponent(name)}/call`,
       {
         method: "POST",
-        headers: useHeaders(deployed),
+        headers: usageHeaders(deployed),
         body: JSON.stringify({ args }),
       },
     );
@@ -95,7 +95,7 @@ async function wuiJson<T>(
       ? undefined
       : {
           method: "POST",
-          headers: useHeaders(deployed),
+          headers: usageHeaders(deployed),
           body: JSON.stringify(body),
         },
   );

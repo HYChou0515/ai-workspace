@@ -761,6 +761,43 @@ describe("the deployed link counts its opens (docs/plan-wui-usage.md U2/U7)", ()
     );
   });
 
+  // Review round 1: each kind of use (U4) carries the page's name, not only
+  // callTool — the view hands the name to every client it builds.
+  it.each([
+    ["callAgent", { name: "digger", input: "why?" }, "/wui/agents/digger/call"],
+    ["startTool", { name: "lot-status", args: {} }, "/wui/jobs"],
+    ["startRun", { workflow: "judge" }, "/wui/run"],
+  ])("names the page on %s too", async (verb, args, route) => {
+    const fetchMock = vi.fn(async (_url: unknown, _init?: RequestInit) =>
+      new Response(JSON.stringify({ output: "", failed: false, job_id: "j1" }), {
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const files: Record<string, string> = {
+      "/scrap-review/page.ai.yaml": `${YAML}tools: [lot-status]\nagents: [digger]\nworkflows: [judge]\n`,
+      "/scrap-review/index.html": "<!doctype html><p>hello</p>",
+    };
+    const readFile = vi.fn(async (path: string) => {
+      const text = files[path];
+      if (text === undefined) throw notFound(path);
+      return { kind: "text", path, text, size: text.length, encoding: "utf-8" };
+    });
+
+    renderAt("/w/rca/i1/scrap-review/page.ai.yaml", readFile);
+    await waitFor(() => expect(screen.getByTitle("Scrap review")).toBeTruthy());
+    const win = (screen.getByTitle("Scrap review") as HTMLIFrameElement).contentWindow as Window;
+    window.dispatchEvent(
+      new MessageEvent("message", { data: { proto: WUI_PROTOCOL, id: "1", verb, args }, source: win }),
+    );
+
+    const use = () => fetchMock.mock.calls.find(([url]) => String(url).includes(route));
+    await waitFor(() => expect(use()).toBeTruthy());
+    expect(new Headers(use()?.[1]?.headers).get("X-Wui-Deployed")).toBe(
+      encodeURIComponent("/scrap-review/page.ai.yaml"),
+    );
+  });
+
   it("does not count the same visit again when Try again reads the page back", async () => {
     // Review round 1 (R19): read, then a read that fails, then Try again reads
     // it fine — the page went away and came back on one visit, not two opens.

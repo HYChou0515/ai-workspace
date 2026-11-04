@@ -524,7 +524,7 @@ class PersonLine:
 
 def per_person(rows: Iterable[WuiUsageDay], item_id: str, page: str) -> list[PersonLine]:
     """A page's people, most person-days first."""
-    merged = _merge_days(r for r in rows if (r.item_id, r.page) == (item_id, page))
+    merged = _merge_days(rows)
     acc: dict[str, list[int]] = {}
     for users in merged.get((item_id, page), {}).values():
         for user, cell in users.items():

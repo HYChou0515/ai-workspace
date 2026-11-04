@@ -189,3 +189,52 @@ def test_the_overview_still_lists_its_pages_when_the_numbers_cannot_be_read(monk
 
     assert r.status_code == 200, r.text
     assert _card(client, iid)["usage"] is None
+
+
+# ── the app writes what it counted on its interval (U9; on stopping: test_wui_usage) ─
+
+
+def _bare_app(**kw):  # noqa: ANN003, ANN202
+    spec = make_spec()
+    app = create_app(
+        spec=spec,
+        sandbox=MockSandbox(),
+        filestore=MemoryFileStore(),
+        runner=ScriptedAgentRunner([]),
+        **kw,
+    )
+    return app, spec
+
+
+def _written(spec) -> int:  # noqa: ANN001
+    from workspace_app.api.wui_usage import WuiUsageDay
+
+    return len(spec.get_resource_manager(WuiUsageDay).list_resources())
+
+
+def test_the_app_writes_the_page_counts_on_its_interval():
+    import threading
+    from datetime import timedelta
+
+    app, spec = _bare_app(wui_usage_flush_interval=timedelta(milliseconds=20))
+    with TestClient(app):
+        app.state.wui_usage_store.recorder.opened("i1", PAGE, user="alice")
+        for _ in range(200):
+            if _written(spec):
+                break
+            threading.Event().wait(0.01)
+        assert _written(spec) == 1
+
+
+def test_the_counts_have_no_routes_of_their_own():
+    """Review round 1 (R20): the counts, their totals and a run's tie to its
+    page are registered after `spec.apply`, so specstar gives them no
+    auto-CRUD — nobody can write a page's numbers but the counting itself."""
+    app, _spec = _bare_app()
+    paths = list(app.openapi()["paths"])
+
+    # The control: a model registered before `spec.apply` has its routes, so
+    # an absence below is not a wrong guess at the route's name.
+    assert "/api/workflow-run/data" in paths
+    for name in ("wui-usage-day", "wui-usage-total", "wui-run-use"):
+        assert not [p for p in paths if p.startswith(f"/api/{name}")], name

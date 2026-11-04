@@ -93,12 +93,29 @@ def test_each_page_is_one_line_of_person_days_and_each_kind_s_uses_and_time():
 
 def test_pages_are_listed_busiest_first():
     client, _holder, spec = _world()
-    _count(spec, days_ago=0, page="/quiet/page.ai.yaml", alice=(1, []))
-    _count(spec, days_ago=0, page="/busy/page.ai.yaml", alice=(1, []), bob=(1, []))
+    # Named so the alphabet puts them the other way round.
+    _count(spec, days_ago=0, page="/a-quiet/page.ai.yaml", alice=(1, []))
+    _count(spec, days_ago=0, page="/z-busy/page.ai.yaml", alice=(1, []), bob=(1, []))
 
     pages = client.get("/admin/wui-usage", params={"days": 7}).json()["pages"]
 
-    assert [p["page"] for p in pages] == ["/busy/page.ai.yaml", "/quiet/page.ai.yaml"]
+    assert [p["page"] for p in pages] == ["/z-busy/page.ai.yaml", "/a-quiet/page.ai.yaml"]
+
+
+def test_a_person_who_only_used_a_page_that_day_is_not_a_person_day():
+    """A person-day is an OPEN (U2); a use whose open was never told adds a
+    use, not a person."""
+    client, _holder, spec = _world()
+    _count(spec, days_ago=0, alice=(1, []), bob=(0, [("tool", 10)]))
+    _count(spec, days_ago=1, bob=(1, []))
+
+    (line,) = client.get("/admin/wui-usage", params={"days": 7}).json()["pages"]
+    people = client.get(
+        "/admin/wui-usage/detail", params={"item_id": "i1", "page": PAGE, "days": 7}
+    ).json()["people"]
+
+    assert (line["person_days"], line["tool"]) == (2, 1)
+    assert {p["user"]: p["person_days"] for p in people} == {"alice": 1, "bob": 1}
 
 
 def test_a_page_s_detail_is_its_people():
@@ -114,6 +131,34 @@ def test_a_page_s_detail_is_its_people():
     assert (people["alice"]["tool"], people["alice"]["tool_ms"]) == (1, 100)
     assert (people["bob"]["agent"], people["bob"]["agent_ms"]) == (1, 50)
     assert [p["user"] for p in r.json()["people"]] == ["alice", "bob"]
+
+
+def test_a_page_s_detail_leaves_out_the_item_s_other_pages():
+    """Review round 1 (R21): an item with two pages — one page's people are
+    that page's."""
+    client, _holder, spec = _world()
+    _count(spec, days_ago=0, alice=(1, []))
+    _count(spec, days_ago=0, page="/other/page.ai.yaml", bob=(1, [("tool", 5)]))
+
+    r = client.get("/admin/wui-usage/detail", params={"item_id": "i1", "page": PAGE, "days": 7})
+
+    assert [p["user"] for p in r.json()["people"]] == ["alice"]
+
+
+def test_a_window_is_its_days_ending_today_and_two_days_ahead_for_a_fast_clock():
+    from workspace_app.api.wui_usage import rows_in_window
+
+    _client, _holder, spec = _world()
+    today = dt.date(2026, 11, 4)
+    for offset in (-7, -6, 0, 2, 3):
+        day = (today + dt.timedelta(days=offset)).isoformat()
+        rec = WuiUsageRecorder(today=lambda day=day: day)
+        rec.opened("i1", PAGE, user="alice")
+        WuiUsageStore(spec, rec, today=lambda day=day: day).flush()
+
+    days = sorted(r.day for r in rows_in_window(spec, 7, today=today.isoformat()))
+
+    assert days == ["2026-10-29", "2026-11-04", "2026-11-06"]
 
 
 def test_the_csv_is_every_person_s_day_and_no_cell_is_a_formula():

@@ -261,17 +261,22 @@ def test_running_a_workflow_from_the_deployed_link_counts_one_workflow_use():
 # ── callTool, timed in its route (the route's own doubles) ───────────────
 
 
-def _tool_client(exit_code: int = 0):
+def _tool_client(exit_code: int = 0, takes_s: float = 0.0):
     from workspace_app.sandbox.protocol import ExecResult
 
     from .test_wui_routes import _Sandbox, build
+
+    class _Slow(_Sandbox):
+        async def exec(self, handle, cmd, on_output=None, env=None):  # noqa: ANN001, ANN202
+            await asyncio.sleep(takes_s)
+            return await super().exec(handle, cmd, on_output, env)
 
     spec = make_spec()
     register_wui_usage(spec)
     store = WuiUsageStore(spec, WuiUsageRecorder())
     usage = WuiUsage(store, spec=spec, is_deployed=lambda _i, p: p == PAGE)
     client, *_rest = build(
-        sandbox=_Sandbox(ExecResult(exit_code=exit_code, stdout=b"{}", stderr=b"")), usage=usage
+        sandbox=_Slow(ExecResult(exit_code=exit_code, stdout=b"{}", stderr=b"")), usage=usage
     )
     return client, store
 
@@ -290,6 +295,35 @@ def test_calling_a_tool_from_the_deployed_link_counts_one_tool_use():
     assert r.status_code == 200, r.text
     (users,) = store.recorder.drain().values()
     assert users["default-user"][TOOL] == 1
+
+
+def test_a_tool_s_time_is_how_long_it_ran():
+    client, store = _tool_client(takes_s=0.3)
+
+    client.post(_tool_url(), json={"args": {}}, headers=_hdr())
+
+    (users,) = store.recorder.drain().values()
+    assert 300 <= users["default-user"][TOOL + 1] < 5_000
+
+
+def test_a_page_named_without_its_leading_slash_is_the_same_page():
+    """The header is normalised the way the deploy route normalises a path, so
+    one page cannot be split in two by its spelling."""
+    client, store = _tool_client()
+
+    client.post(_tool_url(), json={"args": {}}, headers=_hdr(PAGE.lstrip("/")))
+
+    ((key, _users),) = store.recorder.drain().items()
+    assert key[1] == PAGE
+
+
+def test_a_header_that_is_no_path_is_no_page_and_the_tool_still_runs():
+    client, store = _tool_client()
+
+    r = client.post(_tool_url(), json={"args": {}}, headers=_hdr("/p/../../etc/passwd"))
+
+    assert r.status_code == 200, r.text
+    assert store.recorder.drain() == {}
 
 
 def test_a_tool_that_exits_non_zero_still_counts():

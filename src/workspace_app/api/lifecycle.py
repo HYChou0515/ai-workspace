@@ -392,9 +392,10 @@ def build_lifespan(
             return
 
     async def wui_usage_flusher(app: FastAPI) -> None:
-        """Pod-local: writes THIS pod's deployed-page opens and uses to its own
-        rows (docs/plan-wui-usage.md U9). A failed flush keeps the counts for
-        the next one, so it is logged, not fatal."""
+        """Pod-local: adds what THIS pod counted of deployed pages' opens and
+        uses into each page's day row and total (docs/plan-wui-usage.md U9). A
+        failed flush keeps the counts for the next one, so it is logged, not
+        fatal."""
         store = getattr(app.state, "wui_usage_store", None)
         if store is None:
             return

@@ -139,6 +139,37 @@ describe("WuiUsagePart", () => {
     expect(pick.mock.calls[0][0]).toMatchObject({ item_id: "i1", page: "/report/page.ai.yaml" });
   });
 
+  it("asks for the page's window and shows each page's time", async () => {
+    const c = client([page({})]);
+    renderPart(c);
+
+    const row = await screen.findByTestId("wui-usage-row");
+    expect(c.report).toHaveBeenCalledWith(30);
+    // 155 s of uses: under an hour, so minutes, rounded.
+    expect(within(row).getAllByRole("cell").map((x) => x.textContent)).toContain(
+      word("wui.usage.minutes", { n: 3 }),
+    );
+  });
+
+  it("lets go of the picked page when its name is pressed again", async () => {
+    const pick = vi.fn();
+    renderPart(client([page({})]), undefined, { picked: page({}), pick });
+    const row = await screen.findByTestId("wui-usage-row");
+
+    fireEvent.click(within(row).getByRole("button", { name: "/report/page.ai.yaml" }));
+
+    expect(pick.mock.calls[0][0]).toBeNull();
+  });
+
+  it("opens no panel for a page picked elsewhere on the usage page", async () => {
+    // The usage page has one side panel; a page this part does not list is
+    // another part's pick, not this part's to show.
+    renderPart(client([page({})]), undefined, { picked: page({ item_id: "elsewhere" }) });
+
+    await screen.findByTestId("wui-usage-row");
+    expect(screen.queryByTestId("wui-usage-detail")).toBeNull();
+  });
+
   it("shows the picked page's people in the side panel", async () => {
     const c = client([page({})]);
     renderPart(c, undefined, { picked: page({}) });
