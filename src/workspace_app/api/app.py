@@ -2506,6 +2506,9 @@ def create_app(
     # ScriptedAgentRunner (tests, replay) has nothing to learn from.
     turn_ctx.learned_limit_fn = getattr(runner, "learned_limit", None)
     turn_ctx.endpoint_limits_fn = getattr(runner, "endpoint_limits", None)
+    # What every App turn's context is built by — beside `app_catalog`, what
+    # its config resolves through.
+    app.state.turn_ctx = turn_ctx
 
     # ── replay diagnostics (#51 P4) ──────────────────────────────────
     # Read-only loaders: replay must never create/mutate anything, so

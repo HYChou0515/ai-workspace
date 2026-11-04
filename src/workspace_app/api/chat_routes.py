@@ -273,6 +273,16 @@ def register_chat_routes(
         from .chats import find_default_conversation
 
         investigation_id = locator.require_access(slug, item_id, "converse")
+        if locator.turn_facts(investigation_id).agent_path and (
+            find_default_conversation(conv_rm, investigation_id) is not None
+        ):
+            # A conversation copy of a published agent IS one conversation
+            # (`docs/plan-wui-publish-and-agent-hub.md` A2/A11): a new one is a
+            # new copy, started from Agent Hub.
+            raise HTTPException(
+                status_code=409,
+                detail="this is a conversation with an agent; start a new one from Agent Hub",
+            )
         rev = conv_rm.create(
             Conversation(
                 item_id=investigation_id,

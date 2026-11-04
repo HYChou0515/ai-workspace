@@ -39,6 +39,7 @@ from pydantic import BaseModel
 from specstar import QB, SpecStar
 from specstar.types import ResourceIDNotFoundError
 
+from ..apps.agent_spec import spec_from_doc
 from ..apps.resolve import find_work_item
 from ..files import WorkspaceFiles
 from ..filestore.protocol import FileNotFound, FileStore
@@ -429,6 +430,16 @@ def register_publish_routes(
                 status_code=400,
                 detail=f"{path} is neither a WUI nor an agent (view {kind or 'none'!r})",
             )
+        if kind == "agent":
+            # What every copy will run as (A4/A5): published only when the
+            # whole file is understood — an unknown key is most often a typo,
+            # and a copy would run without what its author meant by it.
+            _spec, problems = spec_from_doc(doc)
+            if problems:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"{path} cannot be published yet: " + "; ".join(problems),
+                )
         return kind, doc  # ty: ignore[invalid-return-type]
 
     @app.post("/a/{slug}/items/{item_id}/publish", response_model=PublishedOut)

@@ -29,9 +29,11 @@ from typing import TYPE_CHECKING
 import msgspec
 from specstar import QB, SpecStar
 
+from ..apps.agent_spec import agent_folder, overlay_destination
 from ..apps.base import WorkItemBase
 from ..apps.registry import app_model
 from ..apps.resolve import find_work_item
+from ..apps.skills import WORKSPACE_SKILL_DIR
 from ..filestore.protocol import FileStore
 from ..perm.model import ALL, Permission
 from ..quota.disk_ledger import DiskLedger
@@ -84,15 +86,49 @@ def shared_copy_permission(row: Published) -> Permission:
     return Permission(visibility="restricted", **grants)
 
 
-async def _copy_files(store: FileStore, source_ns: str, dest_ns: str) -> int:
-    """Copy every file of ``source_ns`` into ``dest_ns``; bytes written."""
+def copy_plan(paths: list[str], agent_path: str | None) -> list[tuple[str, list[str]]]:
+    """Which snapshot file lands where in a copy: ``(source, [destinations])``.
+
+    Every file at its own path. A copy of an agent also gets its folder's
+    skills and workflows where the root's are (A5, `apps.agent_spec`): a
+    root skill the agent also has is left out WHOLE — its own wins, and a
+    root file it does not have must not be left inside it — and its
+    workflow file overwrites the root's of the same id."""
+    if agent_path is None:
+        return [(path, [path]) for path in paths]
+    folder = agent_folder(agent_path)
+    over = {path: dest for path in paths if (dest := overlay_destination(path, folder))}
+    own_skills = {
+        dest.split("/")[2] for dest in over.values() if dest.startswith(f"/{WORKSPACE_SKILL_DIR}/")
+    }
+    covered = set(over.values())
+    out: list[tuple[str, list[str]]] = []
+    for path in paths:
+        parts = path.split("/")
+        shadowed = (
+            len(parts) > 3 and parts[1] == WORKSPACE_SKILL_DIR and parts[2] in own_skills
+        ) or path in covered
+        dests = [] if shadowed else [path]
+        if path in over:
+            dests.append(over[path])
+        if dests:
+            out.append((path, dests))
+    return out
+
+
+async def _copy_files(
+    store: FileStore, source_ns: str, dest_ns: str, *, agent_path: str | None = None
+) -> int:
+    """Copy every file of ``source_ns`` into ``dest_ns`` by `copy_plan`;
+    bytes written."""
     total = 0
     with tempfile.TemporaryDirectory(prefix="copy-") as tmp:
         scratch = Path(tmp) / "file"
-        for path in await store.ls(source_ns):
+        for path, dests in copy_plan(sorted(await store.ls(source_ns)), agent_path):
             await store.read_to_file(source_ns, path, scratch)
-            await store.write_from_path(dest_ns, path, scratch, None)
-            total += scratch.stat().st_size
+            for dest in dests:
+                await store.write_from_path(dest_ns, dest, scratch, None)
+                total += scratch.stat().st_size
     return total
 
 
@@ -112,7 +148,9 @@ async def make_copy(
     _slug, source = found
     rm = spec.get_resource_manager(app_model(row.slug))
     item_id = f"{rm.resource_name}:{uuid.uuid4()}"
-    copied = await _copy_files(store, row.snapshot, item_id)
+    copied = await _copy_files(
+        store, row.snapshot, item_id, agent_path=row.path if row.kind == "agent" else None
+    )
     changes: dict = {
         "title": row.title,
         "owner": owner,

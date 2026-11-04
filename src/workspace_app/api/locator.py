@@ -75,6 +75,9 @@ class TurnFacts(NamedTuple):
     skill_prefs: dict[str, bool]
     env_vars: dict[str, str]
     env_policy: dict[str, str]
+    #: The `agent.ai.yaml` a conversation copy of a published agent runs as
+    #: (`docs/plan-wui-publish-and-agent-hub.md` P5); "" for every other item.
+    agent_path: str = ""
 
 
 class ItemFacts(NamedTuple):
@@ -151,6 +154,7 @@ class ItemLocator:
             skill_prefs=dict(found[1].attached_skill_prefs),
             env_vars=dict(found[1].env_vars),
             env_policy=dict(found[1].env_policy),
+            agent_path=found[1].published_path if found[1].published_kind == "agent" else "",
         )
 
     def title_of(self, item_id: str) -> str | None:
