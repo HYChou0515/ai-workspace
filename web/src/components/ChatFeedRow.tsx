@@ -39,9 +39,7 @@ type AnyFn = (...args: never[]) => unknown;
  * the set of present actions changes (an action offered or withdrawn), which is
  * when a row has a different affordance to draw.
  */
-export function useStableActions<T extends Record<string, AnyFn | undefined>>(
-  impl: T,
-): T {
+export function useStableActions<T extends Record<string, AnyFn | undefined>>(impl: T): T {
   const latest = useRef(impl);
   latest.current = impl;
   const present = Object.keys(impl)
@@ -79,31 +77,20 @@ export const ChatFeedRow = memo(function ChatFeedRow({
 }) {
   const answer = entry.kind === "message" && entry.message.role === "assistant";
   const canReplay = settled && (entry.kind === "tool_call" || answer);
-  const canUndo =
-    settled && entry.kind === "message" && entry.message.role === "user";
+  const canUndo = settled && entry.kind === "message" && entry.message.role === "user";
   const { replay, undo, reportWiki } = actions;
   return (
-    // chat-feed.css: an off-screen entry is not laid out; an answer stands in
-    // at an answer's height until it has been drawn once.
-    <div
-      className={
-        answer ? "chat-feed-row chat-feed-row--answer" : "chat-feed-row"
-      }
-    >
-      <EntryView
-        entry={entry}
-        onAnswerQuestion={actions.answer}
-        answeredQuestions={answeredQuestions}
-        currentUser={me}
-        onOpenCitation={actions.openCitation}
-        onRequestAccess={actions.requestAccess}
-        onReplay={canReplay && replay ? () => replay(index) : undefined}
-        onUndo={canUndo && undo ? () => undo(index) : undefined}
-        onReportWiki={
-          settled && answer && reportWiki ? () => reportWiki(index) : undefined
-        }
-        fileUrl={actions.fileUrl}
-      />
-    </div>
+    <EntryView
+      entry={entry}
+      onAnswerQuestion={actions.answer}
+      answeredQuestions={answeredQuestions}
+      currentUser={me}
+      onOpenCitation={actions.openCitation}
+      onRequestAccess={actions.requestAccess}
+      onReplay={canReplay && replay ? () => replay(index) : undefined}
+      onUndo={canUndo && undo ? () => undo(index) : undefined}
+      onReportWiki={settled && answer && reportWiki ? () => reportWiki(index) : undefined}
+      fileUrl={actions.fileUrl}
+    />
   );
 });

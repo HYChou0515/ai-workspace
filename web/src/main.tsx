@@ -27,7 +27,6 @@ import "./styles/brand.css";
 import "./styles/topic-hub.css";
 import "./styles/entity-views.css";
 import "./styles/chat-rail.css";
-import "./styles/chat-feed.css";
 import "./styles/sheet.css";
 import "./styles/gauge.css";
 import "./styles/my-resources.css";
