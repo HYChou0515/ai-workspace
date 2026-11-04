@@ -111,4 +111,27 @@ describe("a streamed token in a long chat", () => {
     expect(parsed.filter((t) => t.startsWith("finished answer"))).toEqual([]);
     expect(parsed).toContain("partial");
   });
+
+  it("re-parses no finished answer when a turn starts or ends", () => {
+    // A turn starting or ending flips `streaming`, which withdraws or offers
+    // replay / undo on every row — a change to each row's buttons, not to its
+    // text. Before, that redrew every answer's markdown twice per turn: on the
+    // 300-turn chat, one main-thread task of 1.2–2s at the start of each turn.
+    const finished: AgentEntry[] = [];
+    for (let i = 0; i < 20; i++) finished.push(question(`q${i}`), answer(`finished answer ${i}`));
+    const idle = { entries: finished, streaming: false } as unknown as AgentLog;
+    const client = makeTestQueryClient();
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <QueryWrap client={client}>
+        <MemoryRouter>{children}</MemoryRouter>
+      </QueryWrap>
+    );
+    const view = render(panel(agentWith(idle)), { wrapper });
+
+    parsed.length = 0;
+    view.rerender(panel(agentWith({ ...idle, streaming: true } as AgentLog)));
+    view.rerender(panel(agentWith(idle)));
+
+    expect(parsed.filter((t) => t.startsWith("finished answer"))).toEqual([]);
+  });
 });

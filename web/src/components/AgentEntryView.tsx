@@ -6,7 +6,7 @@
  * rendered as clickable source cards.
  */
 
-import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useId, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
@@ -177,6 +177,77 @@ const TOOL_ARG: Record<string, string> = {
 /** A workspace-relative ref resolved against the item's file route, or the ref
  * unchanged when it is already a URL / fragment. `undefined` when there is no way
  * to resolve it — the caller then draws nothing instead of a dead link. */
+/**
+ * An answer's markdown body, re-parsed only when what it renders changes —
+ * its text, its citations, or how links and images resolve (the long-chat perf
+ * fix). A row is also redrawn when a turn starts or ends (replay / undo come
+ * and go with `streaming`); that changes the buttons beside the answer, not the
+ * answer, and re-parsing every answer for it cost one 1.2–2s task per turn on a
+ * 300-turn chat.
+ */
+const AnswerMarkdown = memo(function AnswerMarkdown({
+  content,
+  byMarker,
+  onOpenCitation,
+  fileUrl,
+}: {
+  content: string;
+  byMarker: Map<number, MessageCitation[]>;
+  onOpenCitation?: (c: MessageCitation) => void;
+  fileUrl?: (path: string) => string;
+}) {
+  return (
+    <ReactMarkdown
+      remarkPlugins={[remarkGfm, remarkMath, remarkKbCitation]}
+      rehypePlugins={[rehypeKatex]}
+      urlTransform={kbCiteUrlTransform}
+      components={{
+        // #221: remarkKbCitation rewrites `[N]` → `kb-cite:N`; render those
+        // as clickable inline pills (opens the cited doc via the same
+        // handler as the Sources cards). Non-citation links stay normal.
+        a: ({ href, children, ...rest }) => {
+          const cite = kbCiteAnchor({ href, children }, byMarker, onOpenCitation);
+          if (cite) return cite;
+          const resolved = workspaceUrl(href, fileUrl);
+          return (
+            <a
+              href={resolved}
+              {...rest}
+              {...(resolved !== href ? { target: "_blank", rel: "noreferrer" } : {})}
+            >
+              {children}
+            </a>
+          );
+        },
+        // A model that names a file often also embeds it. Without this the
+        // src resolves against the SPA route and renders as a broken image
+        // beside the chart `show_file` loaded fine. Same resolution the
+        // file viewer does (renderers/MarkdownRenderer); on a surface with
+        // no workspace there is nothing to resolve against, so nothing is
+        // drawn rather than a broken image.
+        img: ({ src, alt, ...rest }) => {
+          const resolved = workspaceUrl(typeof src === "string" ? src : undefined, fileUrl);
+          if (!resolved) return null;
+          // Same thumbnail treatment a declared file gets, so an embedded
+          // image and a shown one are the same size; click to open.
+          return (
+            <a href={resolved} target="_blank" rel="noreferrer">
+              <img
+                src={resolved}
+                alt={alt ?? ""}
+                {...rest}
+                style={{ display: "block", maxWidth: 260, maxHeight: 260 }}
+              />
+            </a>
+          );
+        },
+      }}
+    >
+      {content}
+    </ReactMarkdown>
+  );
+});
+
 function workspaceUrl(
   ref: string | undefined,
   fileUrl: ((path: string) => string) | undefined,
@@ -1004,54 +1075,12 @@ function MessageBlock({
           <ReasoningBlock text={message.reasoning} answered={message.content.trim().length > 0} />
         )}
         <div className="md-body md-compact" style={{ marginLeft: 28, marginTop: 4 }}>
-          <ReactMarkdown
-            remarkPlugins={[remarkGfm, remarkMath, remarkKbCitation]}
-            rehypePlugins={[rehypeKatex]}
-            urlTransform={kbCiteUrlTransform}
-            components={{
-              // #221: remarkKbCitation rewrites `[N]` → `kb-cite:N`; render those
-              // as clickable inline pills (opens the cited doc via the same
-              // handler as the Sources cards). Non-citation links stay normal.
-              a: ({ href, children, ...rest }) => {
-                const cite = kbCiteAnchor({ href, children }, byMarker, onOpenCitation);
-                if (cite) return cite;
-                const resolved = workspaceUrl(href, fileUrl);
-                return (
-                  <a
-                    href={resolved}
-                    {...rest}
-                    {...(resolved !== href ? { target: "_blank", rel: "noreferrer" } : {})}
-                  >
-                    {children}
-                  </a>
-                );
-              },
-              // A model that names a file often also embeds it. Without this the
-              // src resolves against the SPA route and renders as a broken image
-              // beside the chart `show_file` loaded fine. Same resolution the
-              // file viewer does (renderers/MarkdownRenderer); on a surface with
-              // no workspace there is nothing to resolve against, so nothing is
-              // drawn rather than a broken image.
-              img: ({ src, alt, ...rest }) => {
-                const resolved = workspaceUrl(typeof src === "string" ? src : undefined, fileUrl);
-                if (!resolved) return null;
-                // Same thumbnail treatment a declared file gets, so an embedded
-                // image and a shown one are the same size; click to open.
-                return (
-                  <a href={resolved} target="_blank" rel="noreferrer">
-                    <img
-                      src={resolved}
-                      alt={alt ?? ""}
-                      {...rest}
-                      style={{ display: "block", maxWidth: 260, maxHeight: 260 }}
-                    />
-                  </a>
-                );
-              },
-            }}
-          >
-            {message.content}
-          </ReactMarkdown>
+          <AnswerMarkdown
+            content={message.content}
+            byMarker={byMarker}
+            onOpenCitation={onOpenCitation}
+            fileUrl={fileUrl}
+          />
         </div>
         {message.stopped_reason === "repetition" && (
           <RepetitionNotice answered={message.content.trim().length > 0} />
