@@ -28,9 +28,10 @@ def _spec():
     return spec
 
 
-def _store(spec, *, pod: str = "pod-a", today: str = TODAY):
+def _store(spec, *, today: str = TODAY):
+    """A fresh recorder + store: one process. Two calls are two processes."""
     recorder = WuiUsageRecorder(today=lambda: today)
-    return recorder, WuiUsageStore(spec, recorder, pod=pod, today=lambda: today)
+    return recorder, WuiUsageStore(spec, recorder, today=lambda: today)
 
 
 def test_one_person_opening_a_page_many_times_in_a_day_is_one_person_day():
@@ -50,8 +51,8 @@ def test_the_same_person_counted_by_two_processes_is_still_one_person_day():
     """Each process writes its own row; a person-day is the people of a day
     across them all, not the sum of each process's count."""
     spec = _spec()
-    rec_a, store_a = _store(spec, pod="pod-a")
-    rec_b, store_b = _store(spec, pod="pod-b")
+    rec_a, store_a = _store(spec)
+    rec_b, store_b = _store(spec)
     rec_a.opened(*PAGE, user="alice")
     rec_b.opened(*PAGE, user="alice")
     rec_b.opened(*PAGE, user="carol")
@@ -119,7 +120,7 @@ def test_a_flush_adds_to_the_row_and_keeps_one_revision():
     rec.used(*PAGE, user="alice", kind="tool", ms=20)
     store.flush()
 
-    rid = row_id(PAGE[0], PAGE[1], TODAY, "pod-a")
+    rid = row_id(PAGE[0], PAGE[1], TODAY)
     rm = spec.get_resource_manager(WuiUsageDay)
     assert len(list(rm.list_revisions(rid))) == 1
     got = store.summary([PAGE])[PAGE]
@@ -184,3 +185,110 @@ def test_the_app_writes_what_it_counted_when_it_stops():
     rows = [r.data for r in spec.get_resource_manager(WuiUsageDay).list_resources()]
     assert all(isinstance(r, WuiUsageDay) for r in rows)
     assert [r.by_user["alice"][0] for r in rows if isinstance(r, WuiUsageDay)] == [1]
+
+
+# ─── review round 1 (defect 4 / regression 2): bounded reads ─────────────────
+
+
+def test_a_page_has_one_row_a_day_whatever_process_counted_it():
+    """U9 as the person chose it: a row per page per day. Two processes (or a
+    restart, which is a new process) merge into it rather than adding rows."""
+    spec = _spec()
+    rec_a, store_a = _store(spec)
+    rec_b, store_b = _store(spec)
+    rec_a.opened(*PAGE, user="alice")
+    rec_b.opened(*PAGE, user="bob")
+    rec_b.used(*PAGE, user="bob", kind="tool", ms=10)
+    store_a.flush()
+    store_b.flush()
+
+    rows = [r.data for r in spec.get_resource_manager(WuiUsageDay).list_resources()]
+
+    assert len(rows) == 1
+    assert sorted(rows[0].by_user) == ["alice", "bob"]
+
+
+def test_the_total_is_kept_apart_so_the_card_never_reads_every_day():
+    """The card's 「總共」 comes from one row per page, kept up to date as days
+    are written — drop every day row older than the week and it still holds."""
+    spec = _spec()
+    days = ("2026-09-01", "2026-09-02", "2026-11-03", TODAY)
+    for day in days:
+        for _process, user in (("pod-a", "alice"), ("pod-b", "alice"), ("pod-b", "bob")):
+            rec, store = _store(spec, today=day)
+            rec.opened(*PAGE, user=user)
+            rec.used(*PAGE, user=user, kind="agent", ms=100)
+            store.flush()
+    rm = spec.get_resource_manager(WuiUsageDay)
+    for res in list(rm.list_resources()):
+        if res.data.day < "2026-10-29":
+            rm.permanently_delete(res.info.resource_id)
+    _rec, store = _store(spec)
+
+    got = store.summary([PAGE])[PAGE]
+
+    assert got.opened_total == 8  # alice and bob, on four days — alice's two processes once
+    assert (got.used_total, got.used_ms_total) == (12, 1200)
+    assert (got.opened_7d, got.used_7d) == (4, 6)
+
+
+def test_a_write_that_races_another_process_is_tried_again():
+    """Two processes merge into one row: a write against a row someone else
+    changed since it was read is refused (etag) and redone, not lost."""
+    from specstar.types import PreconditionFailedError
+
+    spec = _spec()
+    rec, store = _store(spec)
+    rec.opened(*PAGE, user="alice")
+    store.flush()
+    rm = spec.get_resource_manager(WuiUsageDay)
+    real = type(rm).update
+    raced = {"n": 0}
+
+    def once_stale(self, *args, **kwargs):  # noqa: ANN001, ANN202
+        if self is rm and kwargs.get("expected_etag") is not None and raced["n"] == 0:
+            raced["n"] += 1
+            raise PreconditionFailedError(args[0], "old", "new")
+        return real(self, *args, **kwargs)
+
+    import pytest as _pytest
+
+    with _pytest.MonkeyPatch.context() as mp:
+        mp.setattr(type(rm), "update", once_stale)
+        rec.opened(*PAGE, user="bob")
+        store.flush()
+
+    assert raced["n"] == 1
+    usage = store.summary([PAGE])[PAGE]
+    assert (usage.opened_total, usage.opened_7d) == (2, 2)  # the total row, then the day row
+
+
+def test_a_total_that_races_another_process_is_tried_again():
+    """The total row is merged the same way: a refused write is redone."""
+    from specstar.types import PreconditionFailedError
+
+    from workspace_app.api.wui_usage import WuiUsageTotal
+
+    spec = _spec()
+    rec, store = _store(spec)
+    rec.opened(*PAGE, user="alice")
+    store.flush()
+    rm = spec.get_resource_manager(WuiUsageTotal)
+    real = type(rm).update
+    raced = {"n": 0}
+
+    def once_stale(self, *args, **kwargs):  # noqa: ANN001, ANN202
+        if self is rm and kwargs.get("expected_etag") is not None and raced["n"] == 0:
+            raced["n"] += 1
+            raise PreconditionFailedError(args[0], "old", "new")
+        return real(self, *args, **kwargs)
+
+    import pytest as _pytest
+
+    with _pytest.MonkeyPatch.context() as mp:
+        mp.setattr(type(rm), "update", once_stale)
+        rec.opened(*PAGE, user="bob")
+        store.flush()
+
+    assert raced["n"] == 1
+    assert store.summary([PAGE])[PAGE].opened_total == 2

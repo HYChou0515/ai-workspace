@@ -63,7 +63,7 @@ WF, TOOL, AGENT = 1, 3, 5
 def _usage(now: list[int]):
     spec = make_spec()
     register_wui_usage(spec)
-    store = WuiUsageStore(spec, WuiUsageRecorder(), pod="p")
+    store = WuiUsageStore(spec, WuiUsageRecorder())
     usage = WuiUsage(store, spec=spec, is_deployed=lambda _i, _p: True, now=lambda: now[0])
     return usage, store
 
@@ -225,7 +225,7 @@ def _tool_client(exit_code: int = 0):
 
     spec = make_spec()
     register_wui_usage(spec)
-    store = WuiUsageStore(spec, WuiUsageRecorder(), pod="p")
+    store = WuiUsageStore(spec, WuiUsageRecorder())
     usage = WuiUsage(store, spec=spec, is_deployed=lambda _i, p: p == PAGE)
     client, *_rest = build(
         sandbox=_Sandbox(ExecResult(exit_code=exit_code, stdout=b"{}", stderr=b"")), usage=usage
@@ -316,7 +316,7 @@ def _run_client(status):  # noqa: ANN001, ANN202
 
     spec = make_spec()
     register_wui_usage(spec)
-    store = WuiUsageStore(spec, WuiUsageRecorder(), pod="p")
+    store = WuiUsageStore(spec, WuiUsageRecorder())
     usage = WuiUsage(store, spec=spec, is_deployed=lambda _i, p: p == PAGE)
     client, *_rest = build(
         orchestrator=_QuickOrchestrator(status),
@@ -364,7 +364,7 @@ def test_starting_a_tool_as_a_job_counts_one_tool_use_when_it_ends():
 
     spec = make_spec(default_user="default-user")
     register_wui_usage(spec)
-    store = WuiUsageStore(spec, WuiUsageRecorder(), pod="p")
+    store = WuiUsageStore(spec, WuiUsageRecorder())
     usage = WuiUsage(store, spec=spec, is_deployed=lambda _i, p: p == PAGE)
     engine = _Engine()
     orch = _orchestrator(spec, engine)

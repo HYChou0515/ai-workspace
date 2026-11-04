@@ -2161,7 +2161,7 @@ def create_app(
     from .wui_usage import WuiUsageRecorder, WuiUsageStore, register_wui_usage
 
     register_wui_usage(spec)
-    wui_usage = WuiUsageStore(spec, WuiUsageRecorder(), pod=writer_name())
+    wui_usage = WuiUsageStore(spec, WuiUsageRecorder())
     app.state.wui_usage_store = wui_usage
     # KB chat runs through a wiki-aware runner that routes each turn across
     # chunk-RAG / wiki / both (#50 P5). It's a pure pass-through to `runner`

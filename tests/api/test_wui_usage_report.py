@@ -41,7 +41,7 @@ def _count(spec, *, days_ago: int, item: str = "i1", page: str = PAGE, **cells) 
     """Write one day's counts straight to the store, as a past flush would."""
     day = (_today() - dt.timedelta(days=days_ago)).isoformat()
     rec = WuiUsageRecorder(today=lambda: day)
-    store = WuiUsageStore(spec, rec, pod="past", today=lambda: day)
+    store = WuiUsageStore(spec, rec, today=lambda: day)
     for user, (opens, uses) in cells.items():
         for _ in range(opens):
             rec.opened(item, page, user=user)

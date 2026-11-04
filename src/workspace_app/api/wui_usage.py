@@ -5,16 +5,20 @@ page loaded — and a **use** — one of the three things a page asks the platfo
 to do (U4): run a workflow (`startRun`), call a tool (`callTool` /
 `startTool`), ask an agent (`callAgent` / `startAgent`), with the time it took.
 
-They are kept the way the tool-usage counts are (`tool_usage_store`), one row
-per page per day per process: counted in memory, written back every few
-minutes and on shutdown, each write leaving one revision — so the table grows
-with pages × days × processes, never with traffic, and no write races another
-process's. Unlike the tool counts nothing is pruned: a page's "in total" is
-every day (U9), and a row per page per day stays small.
+Counted in memory, as the tool-usage counts are (`tool_usage_store`), and
+written back every few minutes and on shutdown — into ONE row per page per day
+(U9), whichever process counted it: each process merges into it with a
+compare-and-swap on the row's etag, so the table grows with pages × days,
+never with traffic, processes or restarts (review round 1: a row per process
+multiplied with every rollout). Each write leaves one revision. Nothing is
+pruned: a page's "in total" is every day.
 
-Each row keeps, per person, the opens and the uses of each kind with their
-milliseconds, so a person-day (U2) is exact: the people with an open on a day,
-across every process's row for it.
+Each day row keeps, per person, the opens and the uses of each kind with their
+milliseconds, so a person-day (U2) is exact: the people with an open that day.
+Beside them, ONE total row per page (`WuiUsageTotal`) gains what each write
+added — new person-days, uses, milliseconds — so the overview's "in total"
+reads one row per page and the last week's days, never every day (review
+round 1: every day of every page on every overview load).
 """
 
 from __future__ import annotations
@@ -30,7 +34,11 @@ from urllib.parse import quote, unquote
 from fastapi import Request
 from msgspec import Struct, field
 from specstar import QB, SpecStar
-from specstar.types import ResourceIDNotFoundError
+from specstar.types import (
+    DuplicateResourceError,
+    PreconditionFailedError,
+    ResourceIDNotFoundError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +49,8 @@ _OPENS = 0
 _WIDTH = 1 + 2 * len(KINDS)
 #: The days a "last seven days" covers: today and the six before it.
 WEEK = 7
+#: How often a write retries against a row another process changed meanwhile.
+_TRIES = 8
 
 
 def _slot(kind: str) -> int:
@@ -54,14 +64,25 @@ def _today() -> str:
 
 
 class WuiUsageDay(Struct, kw_only=True):
-    """One process's counts for one deployed page on one day. ``by_user`` maps a
-    person to their cell: opens, then a count and milliseconds per kind."""
+    """One deployed page's counts on one day, every process's added in.
+    ``by_user`` maps a person to their cell: opens, then a count and
+    milliseconds per kind."""
 
     item_id: str
     page: str
     day: str
-    pod: str
     by_user: dict[str, list[int]] = field(default_factory=dict)
+
+
+class WuiUsageTotal(Struct, kw_only=True):
+    """One deployed page's numbers over every day: person-days, uses and their
+    milliseconds — what the overview's "in total" reads."""
+
+    item_id: str
+    page: str
+    person_days: int = 0
+    uses: int = 0
+    uses_ms: int = 0
 
 
 def register_wui_usage(spec: SpecStar) -> None:
@@ -69,13 +90,15 @@ def register_wui_usage(spec: SpecStar) -> None:
     overview shows; `day` because a report reads a window of days."""
     with contextlib.suppress(ValueError):
         spec.add_model(WuiUsageDay, indexed_fields=["item_id", "day"])
+    with contextlib.suppress(ValueError):
+        spec.add_model(WuiUsageTotal, indexed_fields=["item_id"])
 
 
-def row_id(item_id: str, page: str, day: str, pod: str) -> str:
+def row_id(item_id: str, page: str, day: str) -> str:
     """A specstar id holds no `/`; every part is quoted (a page path is a
-    workspace path, a pod name is not ours to vouch for), `~` included, since
-    `~` is the separator."""
-    return "~".join(quote(p, safe="").replace("~", "%7E") for p in (item_id, page, day, pod))
+    workspace path), `~` included, since `~` is the separator. The total row is
+    the day ``"total"``, which no ISO date spells."""
+    return "~".join(quote(p, safe="").replace("~", "%7E") for p in (item_id, page, day))
 
 
 def _add_cells(into: dict[str, list[int]], more: dict[str, list[int]]) -> None:
@@ -142,12 +165,10 @@ class WuiUsageStore:
         spec: SpecStar,
         recorder: WuiUsageRecorder,
         *,
-        pod: str,
         today: Callable[[], str] = _today,
     ) -> None:
         self._spec = spec
         self._recorder = recorder
-        self._pod = pod
         self._today = today
         # One flush at a time: the stop flush waits for a periodic one.
         self._flushing = threading.Lock()
@@ -178,18 +199,82 @@ class WuiUsageStore:
                 raise failure
 
     def _add(self, item_id: str, page: str, day: str, users: dict[str, list[int]]) -> None:
+        """Merge ``users`` into the page's row for ``day`` — against the etag
+        it was read with, so a process writing meanwhile is not overwritten:
+        a refused write reads again and redoes it — then add what it changed
+        to the page's total. Raises when the DAY row could not be written (the
+        counts go back for the next flush); a total that could not be written
+        is logged, never retried with the day's counts, which are in already."""
         rm = self._rm()
-        rid = row_id(item_id, page, day, self._pod)
-        try:
-            stored = rm.get(rid).data
-            assert isinstance(stored, WuiUsageDay)
-        except ResourceIDNotFoundError:
-            row = WuiUsageDay(item_id=item_id, page=page, day=day, pod=self._pod)
-            _add_cells(row.by_user, users)
-            rm.create(row, resource_id=rid)
+        rid = row_id(item_id, page, day)
+        for _ in range(_TRIES):
+            try:
+                res = rm.get(rid)
+            except ResourceIDNotFoundError:
+                res = None
+            before = res.data.by_user if res is not None else {}
+            assert isinstance(before, dict)
+            after = {u: list(c) for u, c in before.items()}
+            _add_cells(after, users)
+            try:
+                if res is None:
+                    rm.create(
+                        WuiUsageDay(item_id=item_id, page=page, day=day, by_user=after),
+                        resource_id=rid,
+                    )
+                else:
+                    row = res.data
+                    assert isinstance(row, WuiUsageDay)
+                    row.by_user = after
+                    rm.update(rid, row, expected_etag=res.info.etag)
+            except (PreconditionFailedError, DuplicateResourceError):
+                continue  # another process wrote it meanwhile: read it again
+            self._prune(rm, rid)
+            people = sum(
+                1
+                for u, cell in after.items()
+                if cell[_OPENS] > 0 and before.get(u, [0])[_OPENS] == 0
+            )
+            uses = sum(c[i] for c in users.values() for i in range(1, len(c), 2))
+            ms = sum(c[i] for c in users.values() for i in range(2, len(c), 2))
+            try:
+                self._add_total(item_id, page, people, uses, ms)
+            except Exception:  # noqa: BLE001 — the day is written; never add it twice
+                logger.exception("wui usage: total of %s %s not updated", item_id, page)
             return
-        _add_cells(stored.by_user, users)
-        rm.update(rid, stored)
+        raise RuntimeError(f"wui usage: {rid} kept changing under {_TRIES} writes")
+
+    def _add_total(self, item_id: str, page: str, people: int, uses: int, ms: int) -> None:
+        rm = self._spec.get_resource_manager(WuiUsageTotal)
+        rid = row_id(item_id, page, "total")
+        for _ in range(_TRIES):
+            try:
+                res = rm.get(rid)
+            except ResourceIDNotFoundError:
+                res = None
+            try:
+                if res is None:
+                    rm.create(
+                        WuiUsageTotal(
+                            item_id=item_id, page=page, person_days=people, uses=uses, uses_ms=ms
+                        ),
+                        resource_id=rid,
+                    )
+                else:
+                    row = res.data
+                    assert isinstance(row, WuiUsageTotal)
+                    row.person_days += people
+                    row.uses += uses
+                    row.uses_ms += ms
+                    rm.update(rid, row, expected_etag=res.info.etag)  # ty: ignore[unknown-argument]
+            except (PreconditionFailedError, DuplicateResourceError):
+                continue
+            self._prune(rm, rid)
+            return
+        raise RuntimeError(f"wui usage: {rid} kept changing under {_TRIES} writes")
+
+    @staticmethod
+    def _prune(rm, rid: str) -> None:  # noqa: ANN001 — specstar's manager type
         # Written: a prune that fails must not put the counts back to be added
         # twice. The next write prunes this revision too.
         try:
@@ -199,55 +284,58 @@ class WuiUsageStore:
 
     # ── reading ──────────────────────────────────────────────────────────
 
-    def rows_of(self, item_ids: Iterable[str]) -> list[WuiUsageDay]:
-        """Every row of these items (`item_id` is indexed). Blocking."""
-        ids = sorted(set(item_ids))
-        if not ids:
-            return []
-        out: list[WuiUsageDay] = []
-        for res in self._rm().list_resources(QB["item_id"].in_(ids).build()):
-            data = res.data
-            assert isinstance(data, WuiUsageDay)
-            out.append(data)
-        return out
-
     def summary(
         self, pages: Iterable[tuple[str, str]], *, today: str | None = None
     ) -> dict[tuple[str, str], PageUsage]:
-        """Each page's numbers (U2/U3), in total and over the last seven days
-        ending ``today`` (default: today, UTC). A page nobody used reads as
-        zeros. Blocking."""
+        """Each page's numbers (U2/U3): in total, from its total row; over the
+        last seven days ending ``today`` (default: today, UTC), from those
+        days' rows. Two indexed reads, bounded by pages and by the week — never
+        every day. A page nobody used reads as zeros. Blocking."""
+        from .tool_usage_store import days_between
+
         wanted = list(dict.fromkeys(pages))
+        ids = sorted({i for i, _p in wanted})
+        if not ids:
+            return {}
         end = dt.date.fromisoformat(today or self._today())
-        week_start = (end - dt.timedelta(days=WEEK - 1)).isoformat()
-        week_end = end.isoformat()
-        asked = set(wanted)
-        rows = self.rows_of(i for i, _p in wanted)
-        merged = _merge_days(r for r in rows if (r.item_id, r.page) in asked)
+        week = days_between((end - dt.timedelta(days=WEEK - 1)).isoformat(), end.isoformat())
+        totals: dict[tuple[str, str], WuiUsageTotal] = {}
+        trm = self._spec.get_resource_manager(WuiUsageTotal)
+        for res in trm.list_resources(QB["item_id"].in_(ids).build()):
+            data = res.data
+            assert isinstance(data, WuiUsageTotal)
+            totals[(data.item_id, data.page)] = data
+        recent = _merge_days(
+            res.data
+            for res in self._rm().list_resources(
+                (QB["item_id"].in_(ids) & QB["day"].in_(week)).build()
+            )
+            if isinstance(res.data, WuiUsageDay)
+        )
         out: dict[tuple[str, str], PageUsage] = {}
         for page in wanted:
-            totals = [0] * 6
-            for day, users in merged.get(page, {}).items():
-                recent = week_start <= day <= week_end
-                people = sum(1 for cell in users.values() if cell[_OPENS] > 0)
-                uses = sum(cell[i] for cell in users.values() for i in range(1, _WIDTH, 2))
-                ms = sum(cell[i] for cell in users.values() for i in range(2, _WIDTH, 2))
-                totals[0] += people
-                totals[2] += uses
-                totals[3] += ms
-                if recent:
-                    totals[1] += people
-                    totals[4] += uses
-                    totals[5] += ms
-            out[page] = PageUsage(*totals)
+            total = totals.get(page)
+            week_people = week_uses = week_ms = 0
+            for users in recent.get(page, {}).values():
+                week_people += sum(1 for cell in users.values() if cell[_OPENS] > 0)
+                week_uses += sum(c[i] for c in users.values() for i in range(1, _WIDTH, 2))
+                week_ms += sum(c[i] for c in users.values() for i in range(2, _WIDTH, 2))
+            out[page] = PageUsage(
+                opened_total=total.person_days if total else 0,
+                opened_7d=week_people,
+                used_total=total.uses if total else 0,
+                used_ms_total=total.uses_ms if total else 0,
+                used_7d=week_uses,
+                used_ms_7d=week_ms,
+            )
         return out
 
 
 def _merge_days(
     rows: Iterable[WuiUsageDay],
 ) -> dict[tuple[str, str], dict[str, dict[str, list[int]]]]:
-    """Page → day → person → cell, every process's row of a day added up — so
-    a person counted by two processes is one person that day."""
+    """Page → day → person → cell. A day has one row; adding them up still
+    keeps a person one person that day if two rows ever named the same day."""
     out: dict[tuple[str, str], dict[str, dict[str, list[int]]]] = {}
     for row in rows:
         _add_cells(out.setdefault((row.item_id, row.page), {}).setdefault(row.day, {}), row.by_user)
