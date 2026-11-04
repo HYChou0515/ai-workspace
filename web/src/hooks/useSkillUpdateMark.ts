@@ -23,7 +23,7 @@ export function useSkillUpdateMark(
 }
 
 /** The skill hub copies whose newest version this person still has to answer
- * — what the mark counts and the banner above the composer names. Empty until
+ * — what the mark counts and the banner at the top of the item names. Empty until
  * the person is known (#997). */
 export function useDueSkillUpdates(
   slug: string,

@@ -24,7 +24,6 @@ import { EnvVarsModal } from "../../components/EnvVarsModal";
 import { missingLabel, useEnvMissing } from "../../components/PageIdentity";
 import { ItemEnvironmentModal } from "../../components/ItemEnvironmentModal";
 import { ToolsPickerModal } from "../../components/ToolsPickerModal";
-import { SkillUpdateBanner } from "../../components/SkillUpdateBanner";
 import { useSkillUpdateMark } from "../../hooks/useSkillUpdateMark";
 import { useWorkspaceSlug } from "../../hooks/useWorkspaceSlug";
 import { type ChatItem, ChatItemProvider, type EnvTarget } from "../../hooks/chatItem";
@@ -983,15 +982,6 @@ export function AgentPanel({
           </div>
         </div>
       )}
-
-      {/* plan-skill-hub-release-notes D7: the reminder on the item itself. */}
-      {slug ? (
-        <div style={{ padding: "8px 12px 0" }}>
-          <div style={chatColumn}>
-            <SkillUpdateBanner slug={slug} itemId={investigationId} canUpdate={canUpdateSkills === true} />
-          </div>
-        </div>
-      ) : null}
 
       {/* The handle floats on the seam via negative margins, and the form below
           is `position: relative` (its drop overlay needs that) — a positioned

@@ -1,5 +1,5 @@
 /**
- * The skill-update reminder ON the item, above the composer — seen on opening
+ * The skill-update reminder ON the item, under its title bar — seen on opening
  * it, not three clicks into the Skills panel (the user, on the first build of
  * #1004: 「他要打開面板才看得到 -> 不會有人看到」). One banner however many
  * skills are due, worded for one or several.
@@ -9,7 +9,8 @@
  * until acted on. NN/g *Indicators, Validations, and Notifications*: a
  * non-urgent message the person should act on is a non-modal notification.
  * "看更新說明" opens the notes in place — the same rows as the panel's
- * (`SkillUpdates`), with Update / Later / Skip there.
+ * (`SkillUpdates`, bare), with Update and Skip there; the banner's own Later
+ * puts off every skill it names.
  */
 import { useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";

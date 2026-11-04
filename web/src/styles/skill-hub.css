@@ -952,14 +952,15 @@ a.skills-row-name {
   cursor: pointer;
   font: inherit;
 }
-/* plan-skill-hub-release-notes D7: the reminder on the item, above the
-   composer (Material 3 Banners: a message and at most two text buttons). */
+/* plan-skill-hub-release-notes D7: the reminder at the top of the item,
+   under its title bar — a strip in the page's flow like the waiting notice
+   (Material 3 Banners: below the top app bar; a message and at most two text
+   buttons). */
 .skill-update-banner {
-  border: 1px solid var(--paper-3);
-  border-left: 3px solid var(--info);
-  border-radius: var(--radius-btn);
-  background: var(--white);
-  padding: var(--space-4) var(--space-8);
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--info);
+  background: var(--paper-2);
+  padding: 6px 14px;
   font-size: var(--text-small);
 }
 .skill-update-banner__line {

@@ -12,7 +12,7 @@ import { SkillUpdateBanner } from "./SkillUpdateBanner";
 
 // The user, on the first build (#1004): 「他要打開面板才看得到 -> 不會有人看到」.
 // The mark sat on the skills button — folded into "⋯" at an ordinary width —
-// and the notes were three clicks away. A banner above the composer says it
+// and the notes were three clicks away. A banner at the top of the item says it
 // on opening the item (Material 3 Banners: one at a time, at most two text
 // buttons, dismissed by an action that addresses it, never a lone ×).
 const who = vi.hoisted(() => ({ state: { id: "alice", ready: true } }));

@@ -765,7 +765,7 @@ system prompt build 時**靜態**列入 index(`apps/catalog.py`),workspace skill
   沒有 `updates`(記 log),清單照常回。git store 之前裝的副本沒有 commit,沒有 `updates`,照舊寫「skill 已變更」。
   Skills 面板那一列寫「有新版本 vN」(作者回復到更舊的版本時寫「作者已把這個 skill 回到 vN」)、可展開每一版的說明
   (沒有說明的舊版給比較差異的連結);workspace 的 Skills 按鈕帶數字徽章,標題列收成「⋯」時「⋯」帶記號;
-  聊天輸入框上方有一條提示列(`SkillUpdateBanner`,打開 item 就看得到):「看更新說明」在原地展開同樣的說明列,
+  item 標題列正下方有一條提示列(`SkillUpdateBanner`,打開 item 就看得到,不論開著 IDE 還是聊天、什麼寬度):「看更新說明」在原地展開同樣的說明列,
   「稍後提醒」一次延後它列出的所有 skill。
   這個記號讓打開 item 時就會讀一次 skill 清單(30 秒快取),不再只有打開 Skills 面板才讀。按鈕:**更新**（既有的同步,
   只裝最新版;只給有 `edit_content` 的人,因為同步路由只認這個 verb）、**稍後提醒**（固定 7 天）、
