@@ -39,7 +39,7 @@ import { type ChipTone, chipStyle } from "../components/StatusChip";
 import { UserAvatar } from "../components/UserChip";
 import { useT } from "../lib/i18n";
 import { useBreadcrumbs } from "../hooks/breadcrumbs";
-import { useCurrentUser } from "../hooks/useCurrentUser";
+import { useCurrentUser, useCurrentUserState } from "../hooks/useCurrentUser";
 import { useIsNarrow } from "../hooks/useMediaQuery";
 import { useOnboarding } from "../hooks/useOnboarding";
 import { usePinned, useRecentlyViewed } from "../hooks/usePins";
@@ -77,7 +77,7 @@ export function AppDashboard() {
   const t = useT();
   const me = useCurrentUser();
   const meUser = useUser(me);
-  const ob = useOnboarding(me, slug, manifest?.onboarding);
+  const ob = useOnboarding(useCurrentUserState(), slug, manifest?.onboarding);
   const navigate = useNavigate();
   const [view, setView] = useState("all");
   const [sev, setSev] = useState("any");
