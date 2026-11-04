@@ -360,3 +360,120 @@ class WuiUsage:
             kind=data.kind,
             ms=self._now() - data.started_ms,
         )
+
+
+# ── the administrator's report (P5, U8/U12) ──────────────────────────────
+
+
+def rows_in_window(spec: SpecStar, days: int, *, today: str | None = None) -> list[WuiUsageDay]:
+    """Every row of the last ``days`` days ending today — or, for 0, of every
+    day (U12). The window's days by name on the indexed `day`, never a range
+    (`tool_usage_store.days_between`: a range there failed on Postgres), with
+    two days past today for a process whose clock runs ahead. Blocking."""
+    from .tool_usage_store import days_between
+
+    rm = spec.get_resource_manager(WuiUsageDay)
+    if days == 0:
+        query = QB.all()
+    else:
+        end = dt.date.fromisoformat(today or _today())
+        first = (end - dt.timedelta(days=days - 1)).isoformat()
+        query = QB["day"].in_(days_between(first, (end + dt.timedelta(days=2)).isoformat()))
+    out: list[WuiUsageDay] = []
+    for res in rm.list_resources(query.build()):
+        data = res.data
+        assert isinstance(data, WuiUsageDay)
+        out.append(data)
+    return out
+
+
+@dataclass(frozen=True)
+class PageLine:
+    """One page's line of the report: person-days, and each kind's uses and
+    milliseconds (`[workflow n, ms, tool n, ms, agent n, ms]`)."""
+
+    item_id: str
+    page: str
+    person_days: int
+    cells: tuple[int, ...]
+
+
+def per_page(rows: Iterable[WuiUsageDay]) -> list[PageLine]:
+    """One line per page, busiest first (person-days, then uses)."""
+    lines: list[PageLine] = []
+    for (item_id, page), days in _merge_days(rows).items():
+        people = 0
+        cells = [0] * (_WIDTH - 1)
+        for users in days.values():
+            people += sum(1 for cell in users.values() if cell[_OPENS] > 0)
+            for cell in users.values():
+                for i in range(1, _WIDTH):
+                    cells[i - 1] += cell[i]
+        lines.append(PageLine(item_id, page, people, tuple(cells)))
+    lines.sort(key=lambda x: (-x.person_days, -sum(x.cells[0::2]), x.item_id, x.page))
+    return lines
+
+
+@dataclass(frozen=True)
+class PersonLine:
+    """One person's part of a page: the days they opened it, how often, and
+    each kind's uses and milliseconds."""
+
+    user: str
+    person_days: int
+    opens: int
+    cells: tuple[int, ...]
+
+
+def per_person(rows: Iterable[WuiUsageDay], item_id: str, page: str) -> list[PersonLine]:
+    """A page's people, most person-days first."""
+    merged = _merge_days(r for r in rows if (r.item_id, r.page) == (item_id, page))
+    acc: dict[str, list[int]] = {}
+    for users in merged.get((item_id, page), {}).values():
+        for user, cell in users.items():
+            mine = acc.setdefault(user, [0] * (_WIDTH + 1))
+            mine[0] += 1 if cell[_OPENS] > 0 else 0
+            for i, n in enumerate(cell):
+                mine[i + 1] += n
+    out = [PersonLine(u, c[0], c[1], tuple(c[2:])) for u, c in acc.items()]
+    out.sort(key=lambda x: (-x.person_days, -x.opens, x.user))
+    return out
+
+
+#: The CSV's columns: one line per person per page per day, every process's
+#: row of that day added up.
+RAW_COLUMNS = (
+    "day",
+    "item_id",
+    "page",
+    "user",
+    "opens",
+    # Each kind's count and milliseconds, in `KINDS` order — as a cell holds them.
+    "workflow",
+    "workflow_ms",
+    "tool",
+    "tool_ms",
+    "agent",
+    "agent_ms",
+)
+
+
+def raw_lines(rows: Iterable[WuiUsageDay]) -> list[dict[str, str | int]]:
+    """Every person's day of every page — the raw cells behind the report."""
+    from .tool_usage_store import _as_text
+
+    out: list[dict[str, str | int]] = []
+    for (item_id, page), days in sorted(_merge_days(rows).items()):
+        for day, users in sorted(days.items()):
+            for user, cell in sorted(users.items()):
+                line: dict[str, str | int] = {
+                    "day": day,
+                    "item_id": _as_text(item_id),
+                    "page": _as_text(page),
+                    "user": _as_text(user),
+                    "opens": cell[_OPENS],
+                }
+                for i, col in enumerate(RAW_COLUMNS[5:]):
+                    line[col] = cell[1 + i]
+                out.append(line)
+    return out

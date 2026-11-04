@@ -2354,6 +2354,12 @@ def create_app(
     register_tool_usage_routes(
         api, spec=spec, locator=locator, get_user_id=get_user_id, superusers=superusers
     )
+    # docs/plan-wui-usage.md U8: the deployed pages' report (superusers only).
+    from .wui_usage_routes import register_wui_usage_routes
+
+    register_wui_usage_routes(
+        api, spec=spec, locator=locator, get_user_id=get_user_id, superusers=superusers
+    )
     # docs/plan-capacity-usage.md §11: the capacity dashboard (superusers only).
     from ..capacity.local_usage import sandbox_measured as _sandbox_measured
     from ..capacity.service import CapacityService as _CapacityService
