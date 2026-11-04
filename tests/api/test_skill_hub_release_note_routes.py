@@ -88,3 +88,53 @@ async def test_a_rollback_below_the_installed_version_is_the_update(harness: Har
 
     (update,) = _row(harness)["updates"]
     assert (update["version"], update["kind"], update["back_to"]) == (3, "rollback", 1)
+
+
+async def test_listing_reads_each_behind_copys_timeline_once(harness: Harness, monkeypatch):
+    """Review round 1 (#1004): a rollback in the list made the route read the
+    whole timeline a second time just to number it, and the header mark now
+    asks for this list on every item open. One read per behind copy."""
+    hub = _hub(harness)
+    entry = await _public(hub, "one")
+    first = harness.spec.get_resource_manager(SkillHubEntry).get(entry).info.revision_id
+    await _publish(hub, "two", "Adds step two.")
+    harness.client.post(harness.wpath("/skills/install"), json={"entry_id": entry})
+    row = hub.get(entry)
+    assert row is not None
+    await hub.rollback(entry, first, expected=row.commit)
+
+    reads: list[str] = []
+    real = hub.history
+
+    async def counted(entry_id, *, viewer):  # noqa: ANN001, ANN202
+        reads.append(entry_id)
+        return await real(entry_id, viewer=viewer)
+
+    monkeypatch.setattr(hub, "history", counted)
+    (update,) = _row(harness)["updates"]
+    assert update["back_to"] == 1
+    assert reads == [entry]
+
+
+async def test_one_entry_that_cannot_be_read_costs_only_its_own_updates(
+    harness: Harness, monkeypatch
+):
+    """The same review: a git error reading one entry's timeline 500'd the whole
+    Skills panel (and silently zeroed the header mark). That copy loses its
+    `updates`; the list, and the copy's own row, still answer."""
+    from workspace_app.apps.skill_hub_git import GitError
+
+    hub = _hub(harness)
+    entry = await _public(hub, "one")
+    harness.client.post(harness.wpath("/skills/install"), json={"entry_id": entry})
+    await _publish(hub, "two", "Adds step two.")
+
+    async def broken(entry_id, *, viewer):  # noqa: ANN001, ANN202
+        raise GitError("unreadable")
+
+    monkeypatch.setattr(hub, "history", broken)
+    res = harness.client.get(harness.wpath("/skills"))
+    assert res.status_code == 200, res.text
+    triage = next(s for s in res.json()["skills"] if s["name"] == "triage")
+    assert triage["update_available"] is True
+    assert triage["updates"] == []

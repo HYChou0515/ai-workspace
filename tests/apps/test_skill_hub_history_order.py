@@ -81,4 +81,7 @@ async def test_what_a_copy_missed_is_the_versions_after_its_own(store: SkillHubS
     await _publish(store, V3, "third")
 
     missed = await store.updates_since(entry, installed.commit, viewer="alice")
-    assert [(e.version, e.release_note) for e in missed] == [(3, "third"), (2, "second")]
+    assert [(e.version, e.release_note, back) for e, back in missed] == [
+        (3, "third", None),
+        (2, "second", None),
+    ]

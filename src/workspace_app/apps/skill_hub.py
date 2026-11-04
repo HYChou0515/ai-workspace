@@ -869,17 +869,24 @@ class SkillHubStore:
 
     async def updates_since(
         self, entry_id: str, installed: str, *, viewer: str
-    ) -> list[HistoryEvent]:
+    ) -> list[tuple[HistoryEvent, int | None]]:
         """The versions after `installed` — a copy's commit — newest first
         (plan-skill-hub-release-notes D5): every publish or rollback newer than
         the newest row whose version IS `installed`. A rollback below it is
-        one of them. A commit no row names (a copy older than the git store)
-        gets the current version alone."""
-        versions = [e for e in await self.history(entry_id, viewer=viewer) if e.version]
+        one of them. A commit no timeline row names gets the current version
+        alone. Each comes with the number of the version a rollback brought
+        back (`None` for a publish), counted on the SAME read of the timeline —
+        one read per copy, since the item's skill list asks on every open."""
+        timeline = await self.history(entry_id, viewer=viewer)
+        number = {e.revision: e.version for e in timeline if e.version}
+        versions = [e for e in timeline if e.version]
         for i, event in enumerate(versions):
             if event.commit == installed:
-                return versions[:i]
-        return versions[:1]
+                versions = versions[:i]
+                break
+        else:
+            versions = versions[:1]
+        return [(e, number.get(e.to_revision) if e.kind == "rollback" else None) for e in versions]
 
     async def version(self, entry_id: str, revision_id: str) -> SkillHubEntry:
         """The entry as it was at `revision_id`: its fields, and through
