@@ -162,6 +162,41 @@ describe("AgentHeader skill updates (plan-skill-hub-release-notes D1)", () => {
     expect(screen.getByTestId("skills-button").getAttribute("aria-label") ?? "").toContain("1");
   });
 
+  // The live demo at 1280px: the chat header had folded its actions into "⋯",
+  // and the mark lived only on the unfolded button — so nobody saw it. The
+  // trigger carries it while anything behind it does (Material 3 Badges: the
+  // badge sits on the icon that stands for the hidden items), and its name says
+  // which; the menu item names itself too.
+  it("keeps the mark visible when the actions are folded into the more-button", async () => {
+    const { api } = await import("../../api");
+    vi.mocked(api.getItemSkills).mockResolvedValueOnce([
+      {
+        name: "triage",
+        description: "",
+        source: "workspace",
+        default_on: true,
+        is_copy: true,
+        copy_of: "hub",
+        hub_entry: "e1",
+        update_available: true,
+        upstream: "live",
+        pref: "follow",
+        effective: true,
+        updates: [{ version: 3, kind: "publish", at: "2026-11-03T12:00:00Z", release_note: "", back_to: null }],
+      },
+    ]);
+    renderWithQuery(
+      <MemoryRouter>
+        <AgentHeader streaming={false} investigationId="inv-menu" chatId="chat-1" slug="rca" tier="menu" />
+      </MemoryRouter>,
+    );
+    const more = screen.getByTestId("header-more-button");
+    await vi.waitFor(() => expect(more).toHaveAttribute("data-attention", "true"));
+    expect(more.getAttribute("aria-label") ?? "").toContain("1");
+    fireEvent.click(more);
+    expect(screen.getByTestId("header-more-skills").getAttribute("aria-label") ?? "").toContain("1");
+  });
+
   it("carries no mark when no copy is behind", async () => {
     renderWithQuery(
       <MemoryRouter>

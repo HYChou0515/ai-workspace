@@ -274,20 +274,31 @@ function HeaderMoreMenu({ items }: { items: HeaderAction[] }) {
     };
   }, [open]);
 
+  // A mark on a folded action must not fold away with it: the trigger
+  // carries it while anything behind it does, and says which (Material 3
+  // Badges — the badge sits on the icon that stands for the hidden items).
+  const flagged = items.filter((a) => a.attention);
+  const moreLabel =
+    flagged.length > 0
+      ? `${t("chat.more")} (${flagged.map((a) => a.aria ?? a.label).join(", ")})`
+      : t("chat.more");
+
   return (
     <div className="hdr-more" ref={rootRef}>
       <button
         ref={triggerRef}
         type="button"
         data-testid="header-more-button"
+        data-attention={flagged.length > 0 ? "true" : undefined}
         aria-haspopup="menu"
         aria-expanded={open}
-        aria-label={t("chat.more")}
-        title={t("chat.more")}
+        aria-label={moreLabel}
+        title={moreLabel}
         onClick={() => setOpen((v) => !v)}
         style={hdrIconBtn}
       >
         <Icon name="dots_h" size={16} strokeWidth={2} />
+        {flagged.length > 0 && <Dot />}
       </button>
       {open && (
         <div role="menu" className="hdr-more__menu" data-testid="header-more-menu">
@@ -298,6 +309,7 @@ function HeaderMoreMenu({ items }: { items: HeaderAction[] }) {
               role="menuitem"
               className="hdr-more__item"
               data-testid={`header-more-${a.id}`}
+              aria-label={a.aria ?? a.label}
               title={a.tip}
               onClick={() => {
                 close();
