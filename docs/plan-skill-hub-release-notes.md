@@ -35,7 +35,7 @@ take it**. Read from `origin/master` at `091da788`:
 | D4 | Later and Skip are kept in **localStorage**, keyed by user, entry and version, and judged **only once the current user is known** (`useCurrentUserState().ready` — #997: judging on the "default-user" placeholder showed a dismissed reminder on every cold load). **Update** shows only to someone who may edit the item's content (`edit_content`), since it changes the copy for everyone in it. |
 | D5 | The reminder shows the note of **every version after the one installed**, newest first (the newest expanded). A version published before this feature reads "這一版沒有說明" with a link to compare it (the existing diff). Update installs **only the latest** (as G23). If the author rolled master back below the installed version, it reads "作者已把這個 skill 回到 vN" with Update. |
 | D6 | **Merging is out of scope.** Update is the existing sync, unchanged. |
-| D7 | (2026-11-04, after the first build; extends D1) **A banner at the top of the item, under its title bar**, seen on opening it in every layout — the user: 「他要打開面板才看得到 -> 不會有人看到」. At an ordinary width the header folds into "⋯", so the mark alone was a dot three clicks from the notes. It was first built above the composer (the user's pick); checking three widths showed a narrow IDE-first item has no chat column on screen at all (#464), and the user moved it to the top. One banner however many skills are due; two text buttons, 看更新說明 (opens the notes in place, with Update / Later / Skip) and 稍後提醒 (puts off every skill it names); no lone ×. Shown to everyone who opens the item; Update still only for `edit_content`. Material 3 Banners; NN/g *Indicators, Validations, and Notifications*. The skill-row text and the button mark stay. |
+| D7 | (2026-11-04, after the first build; extends D1) **A banner at the top of the item, under its title bar**, seen on opening it in every layout — the user: 「他要打開面板才看得到 -> 不會有人看到」. At an ordinary width the header folds into "⋯", so the mark alone was a dot three clicks from the notes. It was first built above the composer (the user's pick); checking three widths showed a narrow IDE-first item has no chat column on screen at all (#464), and the user moved it to the top. One banner however many skills are due; two text buttons, 看更新說明 (opens the notes in place, with Update and, from the second reminder, Skip) and 稍後提醒 (puts off every skill it names); no lone ×. Many skills (the user: 「如果有10個skill都有新版你怎麼顯示 — NN/g!」): one message naming the first two (NN/g, *Five Mistakes in Designing Mobile Push Notifications*: merge more than five into one); opened, an accordion with every row collapsed, its heading the name, version and the note's first line (NN/g, *Accordions on Desktop*: what decides opening it is not hidden; Expand all); and 全部更新, confirmed first because it rewrites copies everyone in the item shares (NN/g *Bulk Actions*; the user's call). Shown to everyone who opens the item; Update still only for `edit_content`. Material 3 Banners; NN/g *Indicators, Validations, and Notifications*. The skill-row text and the button mark stay. |
 
 **Where the note lives:** the version's **git commit message** — each publish is
 one commit already, so there is no new field and no `Schema` bump. History and
@@ -66,6 +66,10 @@ reminder read it from the same place.
 - **P6 — docs.** `docs/extending-the-platform.md` skill hub section;
   `docs/migrations.md` entry (publishing a new version now asks for a note; the
   tool's contract changed).
+- **P7 — the banner (D7).** `SkillUpdateBanner` at the top of the item, under
+  its title bar, in every layout: one message; one skill opens its notes, many
+  an accordion with Expand all and a confirmed Update all; what an update did
+  (files left alone, a refusal) said there.
 
 ## Verification
 
@@ -142,6 +146,15 @@ reminder read it from the same place.
   the chat header folds its actions into "⋯", and the dot was drawn only on
   unfolded buttons, so the skills mark (and the older env-missing one) was
   invisible. The trigger now carries it and names what it hides.
+- **The banner says what an update did.** The sync leaves files edited in
+  the item alone and still moves the copy to the new version, so the banner
+  went away and nobody heard that some files were still the old ones (review
+  round 3). Those files are named under the banner, as the Skills panel names
+  them; a refusal is shown the same way, and both clear on the next action.
+- **The banner's text buttons and messages are ink, not accent.** At 12px AA
+  needs 4.5:1; `--accent-h`, `--info` and `--err` on the strip are 3.3–3.9:1
+  in light and dark, `--text-paper` is 13:1 or more. Buttons are underlined;
+  an error carries a red rule beside its words.
 - **The old 「skill 已變更」 badge stays** for a behind copy with no `updates`:
   a copy installed before the git store (it records no commit, so there is
   nothing to count from — for good), one whose timeline could not be read, or

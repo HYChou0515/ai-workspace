@@ -661,7 +661,22 @@ export const messages = {
   "skills.updates.badge": { "zh-TW": "有新版本 v{version}", en: "New version v{version}" },
   "skills.banner.label": { "zh-TW": "skill 更新提醒", en: "Skill updates" },
   "skills.banner.one": { "zh-TW": "{name} 有新版本 v{version}", en: "{name} has a new version, v{version}" },
-  "skills.banner.many": { "zh-TW": "{n} 個 skill 有新版本", en: "{n} skills have a new version" },
+  "skills.banner.many": { "zh-TW": "{n} 個 skill 有新版本：{names}", en: "{n} skills have a new version: {names}" },
+  "skills.banner.sep": { "zh-TW": "、", en: ", " },
+  "skills.banner.andMore": { "zh-TW": " 等", en: ", …" },
+  "skills.banner.rolledBack": {
+    "zh-TW": "作者已把 {name} 回到 v{back}",
+    en: "The author took {name} back to v{back}",
+  },
+  "skills.banner.expandAll": { "zh-TW": "全部展開", en: "Expand all" },
+  "skills.banner.collapseAll": { "zh-TW": "全部收合", en: "Collapse all" },
+  "skills.banner.updateAll": { "zh-TW": "全部更新", en: "Update all" },
+  "skills.banner.cancel": { "zh-TW": "取消", en: "Cancel" },
+  "skills.banner.confirmTitle": { "zh-TW": "要更新這 {n} 個 skill 嗎？", en: "Update these {n} skills?" },
+  "skills.banner.confirmBody": {
+    "zh-TW": "會同步成 skill hub 上的最新版：{names}。這個 item 裡改過的檔案保持原樣。",
+    en: "Each is brought to its latest version on the skill hub: {names}. Files edited in this item are left as they are.",
+  },
   "skills.updates.rolledBackBadge": {
     "zh-TW": "作者已把這個 skill 回到 v{back}",
     en: "The author took this skill back to v{back}",

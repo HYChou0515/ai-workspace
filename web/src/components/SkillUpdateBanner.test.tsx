@@ -105,7 +105,7 @@ describe("SkillUpdateBanner", () => {
   it("Later puts off every skill it names, for this person, and the banner goes", async () => {
     mount([behind("log-digest", "e1", 2), behind("triage", "e2", 5)]);
     const b = await banner();
-    expect(b).toHaveTextContent(word("skills.banner.many", { n: 2 }));
+    expect(b).toHaveTextContent(word("skills.banner.many", { n: 2, names: "log-digest、triage" }));
     fireEvent.click(within(b).getByRole("button", { name: word("skills.updates.later") }));
     await waitFor(() => expect(screen.queryByRole("region", { name: word("skills.banner.label") })).toBeNull());
     expect(reminderOf("alice", "e1", 2, T0).due).toBe(false);
@@ -126,5 +126,107 @@ describe("SkillUpdateBanner", () => {
     mount([behind("log-digest", "e1", 2)]);
     await new Promise((r) => setTimeout(r, 20));
     expect(screen.queryByRole("region", { name: word("skills.banner.label") })).toBeNull();
+  });
+});
+
+// The user: 「如果有10個skill都有新版你怎麼顯示 — NN/g!」. NN/g, Push
+// notifications: more than five pending ones are merged into one message.
+// Accordions on desktop: many items are collapsed, the heading carries what
+// decides whether to open it (critical content not hidden), with Expand all.
+// Bulk actions: one action for the same change on many items — here Update
+// all, confirmed first (the user's call: it rewrites copies everyone shares).
+describe("SkillUpdateBanner with many skills", () => {
+  const ten = Array.from({ length: 10 }, (_, i) =>
+    behind(`skill-${i}`, `e${i}`, i + 2, `- First line of ${i}.\n- More about ${i}.`),
+  );
+
+  it("is one message naming the first two, and lists every skill collapsed with what decides opening it", async () => {
+    mount(ten);
+    const b = await banner();
+    expect(b).toHaveTextContent(word("skills.banner.many", { n: 10, names: `skill-0、skill-1${word("skills.banner.andMore")}` }));
+    fireEvent.click(within(b).getByRole("button", { name: word("skills.updates.show") }));
+    const rows = within(await banner()).getAllByRole("listitem");
+    expect(rows).toHaveLength(10);
+    // Collapsed: name, version and the note's first line in the heading; the rest hidden.
+    expect(rows[3]).toHaveTextContent("skill-3");
+    expect(rows[3]).toHaveTextContent("v5");
+    expect(rows[3]).toHaveTextContent("First line of 3.");
+    expect(rows[3]).not.toHaveTextContent("More about 3.");
+  });
+
+  it("Expand all opens every row, Collapse all closes them", async () => {
+    mount(ten);
+    fireEvent.click(within(await banner()).getByRole("button", { name: word("skills.updates.show") }));
+    fireEvent.click(within(await banner()).getByRole("button", { name: word("skills.banner.expandAll") }));
+    expect(await banner()).toHaveTextContent("More about 9.");
+    fireEvent.click(within(await banner()).getByRole("button", { name: word("skills.banner.collapseAll") }));
+    expect(await banner()).not.toHaveTextContent("More about 9.");
+  });
+
+  it("Update all asks first, naming them, and updates every listed skill only on yes", async () => {
+    const client = mount(ten.slice(0, 3));
+    fireEvent.click(within(await banner()).getByRole("button", { name: word("skills.updates.show") }));
+    fireEvent.click(within(await banner()).getByRole("button", { name: word("skills.banner.updateAll") }));
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog).toHaveTextContent("skill-0");
+    expect(dialog).toHaveTextContent("skill-2");
+    fireEvent.click(within(dialog).getByRole("button", { name: word("skills.banner.cancel") }));
+    // Let the answer settle: an update started after Cancel would be async too.
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await new Promise((r) => setTimeout(r, 30));
+    expect(client.refreshItemSkill).not.toHaveBeenCalled();
+
+    fireEvent.click(within(await banner()).getByRole("button", { name: word("skills.banner.updateAll") }));
+    fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: word("skills.banner.updateAll") }));
+    await waitFor(() => expect(client.refreshItemSkill).toHaveBeenCalledTimes(3));
+    expect(client.refreshItemSkill).toHaveBeenCalledWith("rca", "i1", "skill-2", { force: false });
+  });
+
+  it("offers no Update all to someone who may not edit", async () => {
+    mount(ten, false);
+    fireEvent.click(within(await banner()).getByRole("button", { name: word("skills.updates.show") }));
+    expect(within(await banner()).queryByRole("button", { name: word("skills.banner.updateAll") })).toBeNull();
+  });
+});
+
+// Review round 3 (#1004).
+describe("SkillUpdateBanner says what happened", () => {
+  it("names the files an update left alone because they were edited here", async () => {
+    let behindNow = true;
+    const client = {
+      getItemSkills: vi.fn(async () => (behindNow ? [behind("log-digest", "e1", 2)] : [])),
+      refreshItemSkill: vi.fn(async () => {
+        behindNow = false;
+        return { updated: [], skipped: ["SKILL.md"], removed: [] };
+      }),
+    };
+    renderWithQuery(
+      <MemoryRouter>
+        <SkillUpdateBanner slug="rca" itemId="i1" canUpdate client={client} />
+      </MemoryRouter>,
+    );
+    fireEvent.click(within(await banner()).getByRole("button", { name: word("skills.updates.show") }));
+    fireEvent.click(within(await banner()).getByRole("button", { name: new RegExp(`^${word("skills.updates.update")}$`) }));
+    const status = await screen.findByRole("status");
+    expect(status).toHaveTextContent("log-digest");
+    expect(status).toHaveTextContent("SKILL.md");
+    expect(status).toHaveTextContent(word("skills.refreshKept"));
+  });
+
+  it("an update the server refuses says why, and a Later clears it", async () => {
+    const client = mount([behind("log-digest", "e1", 2)]);
+    client.refreshItemSkill.mockRejectedValueOnce(new Error("This copy can only be reset."));
+    fireEvent.click(within(await banner()).getByRole("button", { name: word("skills.updates.show") }));
+    fireEvent.click(within(await banner()).getByRole("button", { name: new RegExp(`^${word("skills.updates.update")}$`) }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("This copy can only be reset.");
+    fireEvent.click(within(await banner()).getAllByRole("button", { name: word("skills.updates.later") })[0]);
+    await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+  });
+
+  it("a rollback says so on the banner's line (D5)", async () => {
+    mount([
+      { ...behind("log-digest", "e1", 3), updates: [{ version: 3, kind: "rollback", at: "2026-11-03T12:00:00Z", release_note: "", back_to: 1 }] },
+    ]);
+    expect(await banner()).toHaveTextContent(word("skills.banner.rolledBack", { name: "log-digest", back: 1 }));
   });
 });

@@ -974,11 +974,15 @@ a.skills-row-name {
   min-width: 0;
   color: var(--text-paper);
 }
+/* Ink, underlined: --accent-h / --info on this strip are 3.4–3.9:1 in light
+   and dark (AA wants 4.5:1 for this 12px text); --text-paper is 13:1+ in both. */
 .skill-update-banner__action {
   padding: 0;
   border: 0;
   background: none;
-  color: var(--accent-h);
+  color: var(--text-paper);
+  text-decoration: underline;
+  text-underline-offset: 2px;
   font: inherit;
   font-weight: 600;
   cursor: pointer;
@@ -987,15 +991,65 @@ a.skills-row-name {
   max-height: 40vh;
   overflow: auto;
   margin-top: var(--space-4);
-  border-top: 1px solid var(--paper-2);
+  border-top: 1px solid var(--paper-3);
   padding-top: var(--space-4);
+}
+.skill-update-banner__bulk {
+  display: flex;
+  gap: var(--space-12);
+  justify-content: flex-end;
+  margin-bottom: var(--space-4);
+}
+.skill-update-banner__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.skill-update-banner__row + .skill-update-banner__row {
+  border-top: 1px solid var(--paper-3);
+}
+.skill-update-banner__head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+  padding: var(--space-4) 0;
+}
+.skill-update-banner__toggle {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-8);
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text-paper);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.skill-update-banner__gist {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-paper);
 }
 .skill-update-banner__skill + .skill-update-banner__skill {
   margin-top: var(--space-8);
 }
+/* The text in ink (--err on this strip is 3.3–3.6:1); the red is the rule
+   beside it, so colour is not the only signal and the words stay readable. */
+.skill-update-banner__status,
 .skill-update-banner__error {
+  list-style: none;
   margin: var(--space-4) 0 0;
-  color: var(--err);
+  padding: 0 0 0 var(--space-8);
+  color: var(--text-paper);
+  border-left: 3px solid var(--info);
+}
+.skill-update-banner__error {
+  border-left-color: var(--err);
 }
 /* plan-skill-hub-release-notes D5: what a behind copy missed, under its row.
    The heading sits on the disclosure's own line, beside its marker. */
