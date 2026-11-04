@@ -354,9 +354,9 @@ DEPLOYED_HEADER = "X-Wui-Deployed"
 class WuiRunUse(Struct, kw_only=True):
     """A run a deployed page started, until it ends (U11): which page, for
     whom, which kind; its time is the run record's own. Its own model,
-    registered post-`spec.apply`, rather than a field on `WorkflowRun`, whose
-    auto-CRUD has no write gate — a field there would let anyone write a page's
-    counts."""
+    registered post-`spec.apply` (no routes), rather than a field on
+    `WorkflowRun`: the tie is deleted once counted — which is how a run is
+    counted once — and the run record's shape stays as it was."""
 
     run_id: str
     item_id: str

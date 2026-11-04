@@ -17,7 +17,7 @@ from workspace_app.api import ScriptedAgentRunner, create_app
 from workspace_app.apps.rca.model import RcaInvestigation
 from workspace_app.filestore.memory import MemoryFileStore
 from workspace_app.perm import Permission
-from workspace_app.resources import make_spec
+from workspace_app.resources import make_spec, register_workflow_run
 from workspace_app.sandbox.mock import MockSandbox
 
 from ._client import TestClient
@@ -212,6 +212,7 @@ def test_a_schedule_chat_with_no_run_linked_or_a_run_since_deleted_reads_as_neve
     from workspace_app.resources import Conversation
 
     spec = make_spec()
+    register_workflow_run(spec)  # registered post-`spec.apply` in the app (#870)
     rm = spec.get_resource_manager(Conversation)
     rm.create(Conversation(item_id="i1", run_id=""), resource_id="wui:i1:aaaa")
     rm.create(Conversation(item_id="i1", run_id="gone"), resource_id="wui:i1:bbbb")

@@ -21,7 +21,7 @@ from workspace_app.api.wui_usage import (
     WuiUsageStore,
     register_wui_usage,
 )
-from workspace_app.resources import make_spec
+from workspace_app.resources import make_spec, register_workflow_run
 
 PAGE = "/p/page.ai.yaml"
 
@@ -64,6 +64,7 @@ WF, TOOL, AGENT = 1, 3, 5
 
 def _usage():
     spec = make_spec()
+    register_workflow_run(spec)  # registered post-`spec.apply` in the app (#870)
     register_wui_usage(spec)
     store = WuiUsageStore(spec, WuiUsageRecorder())
     usage = WuiUsage(store, spec=spec, is_deployed=lambda _i, _p: True)
@@ -272,6 +273,7 @@ def _tool_client(exit_code: int = 0, takes_s: float = 0.0):
             return await super().exec(handle, cmd, on_output, env)
 
     spec = make_spec()
+    register_workflow_run(spec)  # registered post-`spec.apply` in the app (#870)
     register_wui_usage(spec)
     store = WuiUsageStore(spec, WuiUsageRecorder())
     usage = WuiUsage(store, spec=spec, is_deployed=lambda _i, p: p == PAGE)
@@ -392,6 +394,7 @@ def _run_client(status):  # noqa: ANN001, ANN202
     from .test_wui_routes import _Engine, build
 
     spec = make_spec()
+    register_workflow_run(spec)  # registered post-`spec.apply` in the app (#870)
     register_wui_usage(spec)
     store = WuiUsageStore(spec, WuiUsageRecorder())
     usage = WuiUsage(store, spec=spec, is_deployed=lambda _i, p: p == PAGE)
@@ -442,6 +445,7 @@ def test_starting_a_tool_as_a_job_counts_one_tool_use_when_it_ends():
     from .test_wui_tool_jobs import _Engine, _JobSandbox, _orchestrator, _wait
 
     spec = make_spec(default_user="default-user")
+    register_workflow_run(spec)
     register_wui_usage(spec)
     store = WuiUsageStore(spec, WuiUsageRecorder())
     usage = WuiUsage(store, spec=spec, is_deployed=lambda _i, p: p == PAGE)

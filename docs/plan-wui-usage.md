@@ -52,8 +52,8 @@ user 要「WUI 用量統計，像 skill hub 和 MCP 那樣」。現況〔查證�
 **使用**：
 - `callTool`：路由裡量工具真的執行的那段時間（被拒絕的不算，沒花任何人的時間），結束時記一筆（成功或失敗都記，U10）。
 - `startRun`／`startTool`／`startAgent`，以及 `callAgent`（它底下也是一個 run，路由只是等它跑完）：開始時把「哪個頁面、誰」
-  記在 run 旁邊的私有列 `WuiRunUse`（和 `RunIdentity` 一樣不開 auto-CRUD——`WorkflowRun` 的 auto-CRUD 沒有寫入閘），run
-  結束時記一筆，然後刪掉那列——「取出並刪除」，所以只記一次。
+  記在 run 旁邊的私有列 `WuiRunUse`（和 `RunIdentity` 一樣在 `spec.apply` 之後註冊，沒有路由；不放進 `WorkflowRun`，
+  run 紀錄的形狀不變），run 結束時記一筆，然後刪掉那列——「取出並刪除」，所以只記一次。
 - **時間取自 run 自己的紀錄**：`WorkflowRun.started` 到 `ended`（review 第 1 輪改；原本是寫下歸屬時看時鐘）。所以排隊等
   空位的時間不算（那段時間沒替任何人做事）；還沒開始就被停的 run 算一次、0 毫秒；頁面工作的時間以它的 `deadline`
   為上限——遺失的頁面工作要等有人碰它才會被結掉，那時可能早已過期限很久。逾時被停的工作（`page_job_timeout_s`）
@@ -96,8 +96,9 @@ user 要「WUI 用量統計，像 skill hub 和 MCP 那樣」。現況〔查證�
 - pod 沒收到 SIGTERM 就死掉時，最後不到 5 分鐘的計數會掉（和工具統計相同）。
 - **頁面的 `startRun` 跑到一半 pod 死掉，永遠不會被算到**〔查證〕：孤兒 run 的追蹤（#429 P8，`TriggerSweeper` 的
   `OrchestratorOrphanOps`）只處理排程觸發的 run，頁面起的 run 會停在「執行中」，`WuiRunUse` 那列也留著。
-- **遺失的頁面工作要有人碰才會被算到**〔查證〕：`_settle_lost_page_jobs` 只在同一個 item 開新的頁面工作時跑，
-  `page_job_state` 只在頁面查狀態時跑。沒人再碰就一直不算；算到時時間以期限為上限。
+- **遺失的頁面工作要有人碰才會被算到**〔查證，含 #984 之後〕：只有三個地方會把過期的頁面工作結掉——同一個 item 開新的
+  頁面工作（`start_page_job`）、頁面查那個工作的狀態（`page_job_state`）、列出 item 的頁面工作（`page_jobs`，
+  `GET …/wui/jobs`）。沒人再碰就一直不算；算到時時間以期限為上限。
 - **停在 gate 等人的時間算進去**：時間是 run 的開始到結束，`awaiting_human` 那段沒有扣掉。
 - 逾時被停的頁面工作算一次使用（U10），時間記到期限為止。
 - 頁面改名或搬資料夾後，舊數字留在舊路徑下，不會自動合併。

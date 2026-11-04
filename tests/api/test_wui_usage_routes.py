@@ -235,6 +235,6 @@ def test_the_counts_have_no_routes_of_their_own():
 
     # The control: a model registered before `spec.apply` has its routes, so
     # an absence below is not a wrong guess at the route's name.
-    assert "/api/workflow-run/data" in paths
+    assert "/api/conversation/data" in paths
     for name in ("wui-usage-day", "wui-usage-total", "wui-run-use"):
         assert not [p for p in paths if p.startswith(f"/api/{name}")], name
