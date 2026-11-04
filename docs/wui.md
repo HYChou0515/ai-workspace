@@ -310,7 +310,7 @@ Participant 和 Collaborator 也都有（能聊天、能跑程式的人本來就
   **只算從部署連結（`/w/…`）來的**：在 item 裡打開頁面、按頁面上的按鈕都不算。**人天**是同一個人同一天
   打開幾次都算一次；**使用**是頁面請平台做事的次數——跑 workflow（`startRun`）、呼叫工具（`callTool` /
   `startTool`）、叫 agent（`callAgent` / `startAgent`），失敗的也算；時間是那件事從開始到結束花的時間（排隊
-  等空位的時間不算，停在 gate 等人的時間算），非同步的（`startRun`、`startTool`、`startAgent`）等它跑完才算進去。查進度、停止、存檔、Deploy 不算。
+  等空位的時間不算；停過 gate 的只算最後一次恢復到結束），非同步的（`startRun`、`startTool`、`startAgent`）等它跑完才算進去。查進度、停止、存檔、Deploy 不算。
   作者自己打開、自己測也算。數字每幾分鐘才寫回一次，剛打開的那一下不會立刻出現；「近 7 天」是今天和前
   6 天，以 UTC 日期切；「總共」從這個功能上線那天起算。superuser 在「診斷 → 使用統計」頁的第三區看得到每一頁和每個人，也能下載原始資料
   （`docs/plan-wui-usage.md`）。

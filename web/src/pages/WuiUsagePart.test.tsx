@@ -123,6 +123,17 @@ describe("WuiUsagePart", () => {
     expect(screen.queryByTestId("wui-usage-row")).toBeNull();
   });
 
+  it("does not ask for a report it will not show", async () => {
+    // Review round 2: with another surface picked the part says so and draws
+    // no numbers, so it fetches none.
+    const c = client([page({})]);
+    renderPart(c, { surface: "chat", app: "" });
+
+    await screen.findByText(word("usage.wui.notThisSurface"));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(c.report).not.toHaveBeenCalled();
+  });
+
   it("says so when no page was used", async () => {
     renderPart(client([]));
 

@@ -1,6 +1,6 @@
 """P1 of `docs/plan-wui-usage.md`: a deployed page's opens and uses, counted in
-memory, written back as one row per page per day per process, read back as
-person-days (U2) and as counts and total time (U3).
+memory, merged by every process into one row per page per day and one total
+row per page, read back as person-days (U2) and as counts and total time (U3).
 
 The store is the real one over an in-memory spec; days are pinned.
 """
@@ -48,8 +48,8 @@ def test_one_person_opening_a_page_many_times_in_a_day_is_one_person_day():
 
 
 def test_the_same_person_counted_by_two_processes_is_still_one_person_day():
-    """Each process writes its own row; a person-day is the people of a day
-    across them all, not the sum of each process's count."""
+    """Two processes merge into the day's one row; a person-day is the people
+    of the day, not the sum of each process's count."""
     spec = _spec()
     rec_a, store_a = _store(spec)
     rec_b, store_b = _store(spec)
@@ -292,3 +292,122 @@ def test_a_total_that_races_another_process_is_tried_again():
 
     assert raced["n"] == 1
     assert store.summary([PAGE])[PAGE].opened_total == 2
+
+
+# ── review round 2 ───────────────────────────────────────────────────────
+
+
+def test_two_processes_writing_a_page_s_first_row_at_once_both_count():
+    """Review round 2: both find no row and both create it. The second create
+    must be refused (not overwrite the first) and redone as a merge — or the
+    first process's counts are gone from the day while the total kept them."""
+    from specstar.types import ResourceIDNotFoundError
+
+    spec = _spec()
+    rec_a, store_a = _store(spec)
+    rec_b, store_b = _store(spec)
+    rec_a.opened(*PAGE, user="alice")
+    rec_b.opened(*PAGE, user="bob")
+    rm = spec.get_resource_manager(WuiUsageDay)
+    real_get = type(rm).get
+    stale = {"n": 0}
+
+    def not_there_once(self, rid, *a, **k):  # noqa: ANN001, ANN002, ANN003, ANN202
+        # A reads before B's write lands: A sees no row, then B writes it.
+        if self is rm and stale["n"] == 0:
+            stale["n"] += 1
+            store_b.flush()
+            raise ResourceIDNotFoundError(rid)
+        return real_get(self, rid, *a, **k)
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(type(rm), "get", not_there_once)
+        store_a.flush()
+
+    got = store_a.summary([PAGE])[PAGE]
+    assert (got.opened_total, got.opened_7d) == (2, 2)
+
+
+def test_two_processes_writing_a_page_s_first_total_at_once_both_count():
+    """The same race on the page's total row, the first time a page is used."""
+    from specstar.types import ResourceIDNotFoundError
+
+    from workspace_app.api.wui_usage import WuiUsageTotal
+
+    spec = _spec()
+    rec_a, store_a = _store(spec)
+    rec_b, store_b = _store(spec)
+    rec_a.opened(*PAGE, user="alice")
+    rec_b.opened(*PAGE, user="bob")
+    rm = spec.get_resource_manager(WuiUsageTotal)
+    real_get = type(rm).get
+    stale = {"n": 0}
+
+    def not_there_once(self, rid, *a, **k):  # noqa: ANN001, ANN002, ANN003, ANN202
+        if self is rm and stale["n"] == 0:
+            stale["n"] += 1
+            store_b.flush()
+            raise ResourceIDNotFoundError(rid)
+        return real_get(self, rid, *a, **k)
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(type(rm), "get", not_there_once)
+        store_a.flush()
+
+    assert stale["n"] == 1
+    assert store_a.summary([PAGE])[PAGE].opened_total == 2
+
+
+def test_a_total_that_could_not_be_written_never_adds_the_day_again(monkeypatch):
+    """The day is written: a total that fails is logged, and the day's counts
+    do not go back to be written a second time."""
+    spec = _spec()
+    rec, store = _store(spec)
+    rec.opened(*PAGE, user="alice")
+
+    def boom(*_a, **_k):  # noqa: ANN002, ANN003, ANN202
+        raise OSError("db down")
+
+    monkeypatch.setattr(WuiUsageStore, "_add_total", boom)
+    store.flush()
+    monkeypatch.undo()
+
+    assert rec.drain() == {}  # nothing went back to be added again
+    assert store.summary([PAGE])[PAGE].opened_7d == 1  # the day holds alice once
+
+
+def test_the_card_s_last_week_counts_only_people_who_opened():
+    spec = _spec()
+    rec, store = _store(spec)
+    rec.opened(*PAGE, user="alice")
+    rec.used(*PAGE, user="bob", kind="tool", ms=10)  # bob's open never arrived
+    store.flush()
+
+    got = store.summary([PAGE])[PAGE]
+
+    assert (got.opened_total, got.opened_7d, got.used_7d) == (1, 1, 1)
+
+
+def test_the_total_row_keeps_one_revision_too():
+    from workspace_app.api.wui_usage import WuiUsageTotal
+
+    spec = _spec()
+    rec, store = _store(spec)
+    # A new person each time, so the total changes (an unchanged write leaves
+    # no revision to prune).
+    for user in ("alice", "bob", "carol"):
+        rec.opened(*PAGE, user=user)
+        store.flush()
+
+    rm = spec.get_resource_manager(WuiUsageTotal)
+    assert len(list(rm.list_revisions(row_id(PAGE[0], PAGE[1], "total")))) == 1
+
+
+def test_a_negative_time_counts_as_none():
+    """A clock that stepped back while a use ran gives no negative time."""
+    spec = _spec()
+    rec, store = _store(spec)
+    rec.used(*PAGE, user="alice", kind="tool", ms=-500)
+    store.flush()
+
+    assert store.summary([PAGE])[PAGE].used_ms_total == 0

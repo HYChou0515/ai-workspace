@@ -135,6 +135,9 @@ def _workspace_path(raw: str) -> str:
       (``api/schedule_binding_routes.py``) — the ``path`` query parameter
     * ``mint_wui_pass`` / ``wui_content`` (``api/wui_content.py``) — the body's
       folder and the ``{path:path}`` URL route behind a pass
+    * ``wui_opened`` (``api/wui_deploy.py``) — the body path
+    * ``WuiUsage.page_of`` (``api/wui_usage.py``) — the ``X-Wui-Deployed``
+      header; its 400 is caught there and means "not counted"
 
     Known NOT to pass through here, deliberately or otherwise:
     ``/notebooks/{notebook_path:path}`` (a kernel session key, never a store

@@ -2139,16 +2139,21 @@ async def test_a_phase_whose_steps_were_already_done_reads_as_done(spec_instance
 
 
 def test_a_run_settling_is_told_once_whatever_ends_it(spec_instance: SpecStar):
-    """The endings `_patch` writes (timeout, lost page job, abandon, stopped
-    while pending — the driver's own are the tests below): the move from active
-    to terminal is told exactly once — not a later patch of an ended run, not a
-    patch that keeps it running."""
+    """The endings `_patch` writes (a lost or abandoned page job, stopped
+    while pending — the driver's own, a timeout among them, are the tests
+    below): the move from active to terminal is told exactly once — not a later
+    patch of an ended run, not a patch that keeps it running."""
     settled: list[str] = []
     orch, _fakes = _orch(spec_instance, _ok)
     orch.on_settled = settled.append
     rid = _insert_run(orch)
 
     orch._patch(rid, current_phase="think")  # still running
+    # Review round 2: a pause at a gate and its resume move between active
+    # statuses — the run has not ended, so nothing is told (telling would
+    # count it at 0 ms and lose its real end).
+    orch._patch(rid, status=RunStatus.AWAITING_HUMAN)
+    orch._patch(rid, status=RunStatus.RUNNING)
     orch._patch(rid, status=RunStatus.CANCELLED)
     orch._patch(rid, status=RunStatus.ERROR)  # already ended: not again
 

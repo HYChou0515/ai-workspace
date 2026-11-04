@@ -86,6 +86,18 @@ def test_a_page_that_is_not_deployed_is_not_counted():
     assert _opens(app) == {}
 
 
+def test_a_path_that_climbs_out_is_refused_and_not_counted():
+    """The deploy route's rule for a path: a `..` segment is a 400."""
+    client, holder, iid, app = _world()
+    _deploy(client, iid)
+    holder["id"] = "alice"
+
+    r = client.post(f"/a/rca/items/{iid}/wui/opened", json={"path": "/pages/../x/page.ai.yaml"})
+
+    assert r.status_code == 400
+    assert _opens(app) == {}
+
+
 def test_a_made_up_path_is_not_counted():
     client, holder, iid, app = _world()
     _deploy(client, iid)

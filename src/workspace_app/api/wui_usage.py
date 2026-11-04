@@ -221,6 +221,9 @@ class WuiUsageStore:
                     rm.create(
                         WuiUsageDay(item_id=item_id, page=page, day=day, by_user=after),
                         resource_id=rid,
+                        # Refused, not overwritten, when another process made it
+                        # first: the refusal is read again and merged (review r2).
+                        if_not_exists=True,
                     )
                 else:
                     row = res.data
@@ -259,6 +262,7 @@ class WuiUsageStore:
                             item_id=item_id, page=page, person_days=people, uses=uses, uses_ms=ms
                         ),
                         resource_id=rid,
+                        if_not_exists=True,  # ty: ignore[unknown-argument]
                     )
                 else:
                     row = res.data
@@ -409,9 +413,14 @@ class WuiUsage:
             path = _workspace_path(unquote(raw))
         except HTTPException:
             return None
-        if not await asyncio.to_thread(self._is_deployed, item_id, path):
+        try:
+            deployed = await asyncio.to_thread(self._is_deployed, item_id, path)
+        except Exception:  # noqa: BLE001 — a count must never fail the work it counts
+            # The store could not say (review round 2): not counted, and the
+            # tool, run or job this request asks for goes ahead regardless.
+            logger.exception("wui usage: could not tell whether %s is deployed", path)
             return None
-        return path
+        return path if deployed else None
 
     def used(self, item_id: str, page: str, *, user: str, kind: str, ms: int) -> None:
         self._store.recorder.used(item_id, page, user=user, kind=kind, ms=ms)
@@ -462,11 +471,15 @@ class WuiUsage:
 # ── the administrator's report (P5, U8/U12) ──────────────────────────────
 
 
-def rows_in_window(spec: SpecStar, days: int, *, today: str | None = None) -> list[WuiUsageDay]:
+def rows_in_window(
+    spec: SpecStar, days: int, *, today: str | None = None, item_id: str | None = None
+) -> list[WuiUsageDay]:
     """Every row of the last ``days`` days ending today — or, for 0, of every
-    day (U12). The window's days by name on the indexed `day`, never a range
-    (`tool_usage_store.days_between`: a range there failed on Postgres), with
-    two days past today for a process whose clock runs ahead. Blocking."""
+    day (U12) — and only ``item_id``'s when given (a page's detail reads its
+    own item, not every page: review round 2). The window's days by name on the
+    indexed `day`, never a range (`tool_usage_store.days_between`: a range
+    there failed on Postgres), with two days past today for a process whose
+    clock runs ahead. Blocking."""
     from .tool_usage_store import days_between
 
     rm = spec.get_resource_manager(WuiUsageDay)
@@ -476,6 +489,8 @@ def rows_in_window(spec: SpecStar, days: int, *, today: str | None = None) -> li
         end = dt.date.fromisoformat(today or _today())
         first = (end - dt.timedelta(days=days - 1)).isoformat()
         query = QB["day"].in_(days_between(first, (end + dt.timedelta(days=2)).isoformat()))
+    if item_id is not None:
+        query = QB["item_id"] == item_id if days == 0 else query & (QB["item_id"] == item_id)
     out: list[WuiUsageDay] = []
     for res in rm.list_resources(query.build()):
         data = res.data
@@ -537,8 +552,8 @@ def per_person(rows: Iterable[WuiUsageDay], item_id: str, page: str) -> list[Per
     return out
 
 
-#: The CSV's columns: one line per person per page per day, every process's
-#: row of that day added up.
+#: The CSV's columns: one line per person per page per day (a day's one row,
+#: which every process merged into).
 RAW_COLUMNS = (
     "day",
     "item_id",

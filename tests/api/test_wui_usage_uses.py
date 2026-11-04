@@ -346,6 +346,49 @@ def test_calling_a_tool_inside_the_item_is_not_counted():
     assert store.recorder.drain() == {}
 
 
+def test_a_page_lookup_that_fails_never_fails_the_tool():
+    """Review round 2: a count must never fail the work it counts — the
+    deployed page's lookup failing (the store down) leaves the tool running."""
+    from .test_wui_routes import build
+
+    def down(_item: str, _path: str) -> bool:
+        raise OSError("db down")
+
+    spec = make_spec()
+    register_wui_usage(spec)
+    store = WuiUsageStore(spec, WuiUsageRecorder())
+    client, *_rest = build(usage=WuiUsage(store, spec=spec, is_deployed=down))
+
+    r = client.post(_tool_url(), json={"args": {}}, headers=_hdr())
+
+    assert r.status_code == 200, r.text
+    assert store.recorder.drain() == {}
+
+
+def test_a_tool_that_raises_still_counts():
+    """U10: the use is counted whatever way the tool ends — a raise too, which
+    is why the count sits in a `finally`."""
+    from .test_wui_routes import _Sandbox, build
+
+    class _Broken(_Sandbox):
+        async def exec(self, handle, cmd, on_output=None, env=None):  # noqa: ANN001, ANN202
+            raise RuntimeError("sandbox gone")
+
+    spec = make_spec()
+    register_wui_usage(spec)
+    store = WuiUsageStore(spec, WuiUsageRecorder())
+    usage = WuiUsage(store, spec=spec, is_deployed=lambda _i, p: p == PAGE)
+    from fastapi.testclient import TestClient
+
+    built, *_rest = build(sandbox=_Broken(), usage=usage)
+    client = TestClient(built.app, raise_server_exceptions=False)
+
+    client.post(_tool_url(), json={"args": {}}, headers=_hdr())
+
+    (users,) = store.recorder.drain().values()
+    assert users["default-user"][TOOL] == 1
+
+
 def test_a_refused_tool_is_not_a_use():
     """A tool that never ran (unknown here) spent no time on anyone's behalf."""
     from .test_wui_routes import URL as TOOL_URL

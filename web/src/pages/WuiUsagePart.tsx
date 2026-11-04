@@ -45,12 +45,15 @@ export function WuiUsagePart({
   const t = useT();
   const duration = useDuration();
   const headingId = useId();
+  // Every use of a page is the page surface: with another surface picked the
+  // part draws no numbers, so it asks for none.
+  const otherSurface = Boolean(shared.surface) && shared.surface !== "page";
   const report = useQuery({
     queryKey: qk.wuiUsage(days),
     queryFn: () => client.report(days),
     placeholderData: (prev) => prev,
+    enabled: !otherSurface,
   });
-  const otherSurface = Boolean(shared.surface) && shared.surface !== "page";
   const rows = useMemo(() => {
     const all = report.data?.pages ?? [];
     return shared.app ? all.filter((r) => r.slug === shared.app) : all;

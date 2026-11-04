@@ -244,7 +244,8 @@ def register_wui_deploy_routes(
         when read. The gate is the link's own (`read_content`). A page that is
         not Deployed — or a path that names none — is not counted, so nobody
         can grow the table with names of their own; the answer is the same
-        204 either way, since the page needs nothing back."""
+        204 either way, since the page needs nothing back. A path that climbs
+        out (a `..` segment) is a 400, as for every path a client names."""
         workspace_id = locator.require_access(slug, item_id, "read_content")
         path = _workspace_path(body.path)
         if usage is not None and await asyncio.to_thread(pages.has, workspace_id, path):
@@ -363,7 +364,8 @@ def register_wui_deploy_routes(
                 )
             )
         # docs/plan-wui-usage.md U5: the owner's pages carry their numbers —
-        # every one asked in ONE read, by the indexed `item_id`.
+        # every one asked in one call (two indexed reads: the totals by
+        # `item_id`, the last week's day rows by `item_id` and `day`).
         owned = [p for p in out if p.can_remove]
         if usage is not None and owned:
             try:

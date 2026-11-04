@@ -294,9 +294,10 @@ class WorkflowOrchestrator:
     end_page_job: Callable[[str, str], Awaitable[None]] | None = None
     # A run moved from active to ended (`docs/plan-wui-usage.md` U11), whichever
     # way it ended. Two writers end a run: the driver (`run_workflow`: done,
-    # error, cancelled) and `_patch` here (a timeout, a lost page job, a Stop
-    # before it ran) — both tell it (`_tell_settled`). ``(run_id)``; a hook that
-    # raises is logged and never stops the run ending.
+    # error, cancelled — a timeout too, which cancels the driver first) and
+    # `_patch` here (a lost or abandoned page job, a Stop before it ran) — both tell it
+    # (`_tell_settled`), and only the first move to an end is told.
+    # ``(run_id)``; a hook that raises is logged and never stops the run ending.
     on_settled: Callable[[str], None] | None = None
     # The shared turn epoch of a chat key (`ChatTurnEngine.cancel_epoch`). A
     # page job samples it when ACCEPTED, so a Stop pressed on another pod while

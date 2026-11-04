@@ -3367,12 +3367,16 @@ Workflows 打開模型答錯格式的那次執行——執行結束後還留著�
 **設定** — 無,config 沒有新 key。寫回間隔照工具統計,每 5 分鐘一次、關機時一次。
 
 **資料** — 新增三個 model,不用回填:`WuiUsageDay`(每頁每天一列,各 pod 寫回時合併進同一列;索引 `item_id`、`day`)、
-`WuiUsageTotal`(每頁一列,總覽卡片的「總共」讀它;索引 `item_id`)、`WuiRunUse`(頁面起的 run 跑完前的暫存列,跑完就刪)。
-三者都在 `spec.apply` 之後註冊,沒有 auto-CRUD 路由。**所有天數都保留,不會自動刪**——列數隨「部署過的頁面數 × 天數」長,
-不隨流量、pod 數或重啟次數長。沒有 `Schema` 升版。
+`WuiUsageTotal`(每頁一列,總覽卡片的「總共」讀它;索引 `item_id`)、`WuiRunUse`(頁面起的 run 跑完前的暫存列,跑完就刪;
+跑到一半 pod 死掉、沒被結掉的 run 會留下它的那一列)。
+三者都在 `spec.apply` 之後註冊,沒有 auto-CRUD 路由。**所有天數都保留,不會自動刪**——day 列的列數隨「部署過的頁面數 × 天數」
+長,不隨流量、pod 數或重啟次數長。沒有 `Schema` 升版。
 
-**k8s · CI 側** — 照常重 build、部署。manifest 沒改。
+**k8s · CI 側** — 照常重 build、部署,**API 與所有 worker 一起換**。manifest 沒改。
 
+- `blob-gc` worker 以 API 的組合建起(`__main__.build_app`),兩邊都註冊這三個新 model。滾動更新途中,新的 API 問到舊的
+  `blob-gc` worker 時,worker 會拒絕那一輪(`blob-gc` job FAILED,log 列出這三個 model 名稱)——這是 `_check_registry`
+  該做的事,worker 換完就好;舊的 worker 不會刪任何東西。
 - `rollout 前`:部署頁的請求多帶一個 header `X-Wui-Deployed`。前面的代理(nginx ingress、公司的 proxy)如果只放行列出來的
   header,要把它加進去。**為什麼**:後端靠這個 header 知道一次使用來自哪個部署頁。**沒做的症狀**:卡片上「使用」一直是
   0 次,「打開」照常增加(打開走 body,不靠 header)。

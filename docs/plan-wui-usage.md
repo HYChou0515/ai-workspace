@@ -33,13 +33,13 @@ user 要「WUI 用量統計，像 skill hub 和 MCP 那樣」。現況〔查證�
 | U8 | superuser 的統計放進 Diagnostics「使用統計」頁，成為工具、skill 之後的**第三區**，沿用同一套表格、圖表、明細側邊面板、CSV | 〔user〕 |
 | U9 | 每頁每天一列，列裡記每個人的打開次數、使用次數、使用時間（依三類分開）；每 5 分鐘與 SIGTERM 時寫回、只留一個 revision；**所有天數都保留** | 〔user〕＋記憶體累加、定時寫回照抄工具統計〔預設〕；「一列」跨 pod 合併（review 第 1 輪改，見〈存法〉） |
 | U10 | 失敗的動作也算進次數和總時間（失敗那次 AI 一樣花了時間） | 〔預設〕 |
-| U11 | 非同步動作（`startRun`／`startTool`／`startAgent`）在 run **走到結束狀態**時記時間；同步動作（`callTool`／`callAgent`）在路由裡量 | 〔預設〕 |
+| U11 | 底下是一個 run 的動作（`startRun`／`startTool`／`startAgent`，以及 `callAgent`——路由只是等它的 run 跑完）在 run **走到結束狀態**時記；只有 `callTool` 在路由裡量 | 〔預設〕（`callAgent` 實作時改，它底下就是一個 run） |
 | U12 | superuser 頁的第三區跟工具、skill 兩區**共用頁面的 7／30／90 天**（實作時改：一頁兩種時間範圍會讓人以為三區比的是同一段時間）；「總共」看主人的卡片；報表與 CSV 的 API 另接受 `days=0` 代表全部。也跟頁面的 App 篩選；選了「頁面」以外的場合時，第三區說「這一區只有頁面場合」 | 〔預設〕 |
 | U13 | 「總共」從這個功能上線那天起算，不回補 | 〔預設〕（沒有可回補的資料） |
 
 ## 機制
 
-**頁面是哪一個、是不是部署連結**〔預設〕：部署頁（`WuiPage`）在打開與每個動作請求上帶 `X-Wui-Deployed: <頁面 view 路徑>`
+**頁面是哪一個、是不是部署連結**〔預設〕：部署頁（`WuiPage`）在每個動作請求上帶 `X-Wui-Deployed: <頁面 view 路徑>`（打開不帶 header，路徑放在 body，見下）
 （percent-encoded，和 `X-Wui-Page` 同寫法）。item 裡的 `WuiView` 不帶，所以不算（U7）。後端**只在**那個 item＋路徑有部署紀錄
 （`DeployedWui`，`api/wui_deploy.py`）時才記；路徑亂填或頁面沒部署 → 不記、請求照常。列數因此以「部署過的頁面數」為上限，
 沒人能塞假頁面名稱灌爆資料。
@@ -58,9 +58,11 @@ user 要「WUI 用量統計，像 skill hub 和 MCP 那樣」。現況〔查證�
   空位的時間不算（那段時間沒替任何人做事）；還沒開始就被停的 run 算一次、0 毫秒；頁面工作的時間以它的 `deadline`
   為上限——遺失的頁面工作要等有人碰它才會被結掉，那時可能早已過期限很久。逾時被停的工作（`page_job_timeout_s`）
   照 U10 算一次，時間到期限為止。
-- **結束有兩個寫入來源**〔查證〕：driver（`workflow/driver.run_workflow`）自己寫完成／失敗／取消，orchestrator 的 `_patch`
-  寫逾時、頁面工作遺失、放棄、還沒開始就被停。兩邊都通知 `on_settled`（driver 多一個參數；`_patch` 只在「原本是進行中、
-  這次寫成結束」時通知）。只掛 `_patch` 的第一版漏掉了 driver 那邊，測試抓到。
+- **結束有兩個寫入來源**〔查證〕：driver（`workflow/driver.run_workflow`）自己寫完成／失敗／取消——逾時也是它先寫：
+  `wait_for` 逾時先取消 driver，driver 寫成取消並通知，orchestrator 之後再改寫成失敗時 run 已經不是進行中，不會再通知；
+  orchestrator 的 `_patch` 寫頁面工作遺失、放棄、還沒開始就被停。兩邊都通知 `on_settled`（driver 多一個參數；`_patch` 只在
+  「原本是進行中、這次寫成結束」時通知，gate 暫停與恢復是進行中之間的移動，不通知）。只掛 `_patch` 的第一版漏掉了
+  driver 那邊，測試抓到。
 - **路由寫下歸屬之前 run 就跑完**：那時通知找不到歸屬。路由寫完歸屬後再看一次 run 狀態，已經結束就當場記。
 - **pod 死掉**〔查證〕：歸屬存在資料庫裡，不在記憶體，但不是每種 run 都會被結掉——見〈已知限制〉。
 
@@ -82,7 +84,7 @@ user 要「WUI 用量統計，像 skill hub 和 MCP 那樣」。現況〔查證�
 ## UI〔指南〕
 
 - **卡片**：NN/g *Cards: UI-Component Definition*（https://www.nngroup.com/articles/cards-component/）——卡片是「a summary and
-  link to additional details」，次要資訊和主內容分開（範例用一條橫線隔開）。數字放在卡片底部的次要區，一行打開量、一行使用量，
+  link to additional details」，次要資訊和主內容分開（範例用一條橫線隔開）。數字放在卡片主體和底部（擁有者、下架）之間的次要區，一行打開量、一行使用量，
   不搶頁面名稱與連結。
 - **數量的表現**：NN/g *Dashboards: Making Charts and Graphs Easier to Understand*
   （https://www.nngroup.com/articles/dashboards-preattentive/）——「color should not be used to communicate information about
@@ -99,7 +101,14 @@ user 要「WUI 用量統計，像 skill hub 和 MCP 那樣」。現況〔查證�
 - **遺失的頁面工作要有人碰才會被算到**〔查證，含 #984 之後〕：只有三個地方會把過期的頁面工作結掉——同一個 item 開新的
   頁面工作（`start_page_job`）、頁面查那個工作的狀態（`page_job_state`）、列出 item 的頁面工作（`page_jobs`，
   `GET …/wui/jobs`）。沒人再碰就一直不算；算到時時間以期限為上限。
-- **停在 gate 等人的時間算進去**：時間是 run 的開始到結束，`awaiting_human` 那段沒有扣掉。
+- **停過 gate 的 run 只算最後一段**〔查證，review 第 2 輪〕：gate 會讓 driver 結束，有人回應後重跑 `run_workflow`，
+  `started` 被改成恢復的時間。所以等人的時間不算，gate 之前做的事也不算——時間是「最後一次恢復到結束」。
+- **跨 pod 同時寫同一列**：合併靠 specstar 的 etag 檢查；specstar 的 etag 檢查本身不是原子的（讀、比、寫分開），兩顆 pod
+  在同一瞬間寫同一列時，其中一方的數字可能被覆蓋。專案裡其他手寫的 compare-and-swap 也是同一個前提。
+- **「總共」可能比 day 列少**：day 列寫成功後 total 寫失敗（或 pod 正好在兩者之間死掉），那次的數字只在 day 列裡，
+  total 不會補回（重試會把同一批數字加兩次）。卡片上「總共」可能小於「近 7 天」。
+- **滾動更新時正在跑的 run 可能算不到**（推測，未重現）：關機時先寫回計數，之後才取消還在跑的 run；那時記下的使用沒有
+  下一次寫回。
 - 逾時被停的頁面工作算一次使用（U10），時間記到期限為止。
 - 頁面改名或搬資料夾後，舊數字留在舊路徑下，不會自動合併。
 - 若之後做了「每人一份頁面副本」（#996 `plan-wui-publish.md`），副本是不同 item，會分開算。

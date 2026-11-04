@@ -143,7 +143,7 @@ def register_wui_usage_routes(
     async def wui_usage_detail(item_id: str, page: str, days: int = 30) -> WuiUsageDetail:
         _require_superuser()
         days = _window(days)
-        rows = await asyncio.to_thread(rows_in_window, spec, days)
+        rows = await asyncio.to_thread(rows_in_window, spec, days, item_id=item_id)
         people = [
             WuiUsagePerson(user=p.user, person_days=p.person_days, opens=p.opens, **_kinds(p.cells))
             for p in per_person(rows, item_id, page)

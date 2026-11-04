@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import datetime as dt
 
+import pytest
+
 from workspace_app.api import ScriptedAgentRunner, create_app
 from workspace_app.api.wui_usage import WuiUsageRecorder, WuiUsageStore
 from workspace_app.filestore.memory import MemoryFileStore
@@ -173,3 +175,52 @@ def test_the_csv_is_every_person_s_day_and_no_cell_is_a_formula():
     assert lines[0].split(",")[:4] == ["day", "item_id", "page", "user"]
     assert "'=cmd()/page.ai.yaml" in lines[1]
     assert lines[1].split(",")[3] == "alice"
+
+
+# ── review round 2 ───────────────────────────────────────────────────────
+
+
+def test_every_report_route_takes_only_the_page_s_windows():
+    client, _holder, _spec = _world()
+    detail = {"item_id": "i1", "page": PAGE}
+
+    for url, extra in (
+        ("/admin/wui-usage", {}),
+        ("/admin/wui-usage.csv", {}),
+        ("/admin/wui-usage/detail", detail),
+    ):
+        for bad in (1, 14):
+            assert client.get(url, params={**extra, "days": bad}).status_code == 422, (url, bad)
+
+
+@pytest.mark.parametrize("days", [7, 0])
+def test_an_item_s_rows_are_read_alone(days):
+    """A page's detail reads its own item's rows, not every page's: bounded by
+    the item even for every day (CLAUDE.md: a page's aggregate is scoped)."""
+    from workspace_app.api.wui_usage import rows_in_window
+
+    _client, _holder, spec = _world()
+    _count(spec, days_ago=0, alice=(1, []))
+    _count(spec, days_ago=0, item="i2", bob=(1, []))
+
+    rows = rows_in_window(spec, days, item_id="i1")
+
+    assert {r.item_id for r in rows} == {"i1"}
+
+
+def test_the_detail_route_reads_only_its_item(monkeypatch):
+    from workspace_app.api import wui_usage_routes
+
+    client, _holder, _spec = _world()
+    asked: list[object] = []
+    real = wui_usage_routes.rows_in_window
+
+    def spy(*a, **k):  # noqa: ANN002, ANN003, ANN202
+        asked.append(k.get("item_id"))
+        return real(*a, **k)
+
+    monkeypatch.setattr(wui_usage_routes, "rows_in_window", spy)
+
+    client.get("/admin/wui-usage/detail", params={"item_id": "i1", "page": PAGE, "days": 7})
+
+    assert asked == ["i1"]
