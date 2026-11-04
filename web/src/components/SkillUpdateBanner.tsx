@@ -95,12 +95,13 @@ export function SkillUpdateBanner({
         <div className="skill-update-banner__notes">
           {due.map((s) => (
             <div key={s.name} className="skill-update-banner__skill">
-              <strong>{s.name}</strong>
+              {/* One skill is already named by the banner's line. */}
+              {due.length > 1 ? <strong>{s.name}</strong> : null}
               <SkillUpdates
                 skill={s}
                 canUpdate={canUpdate && !s.readonly}
                 onUpdate={() => void update(s.name)}
-                defaultOpen
+                bare
               />
             </div>
           ))}

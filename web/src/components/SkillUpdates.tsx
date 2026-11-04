@@ -37,18 +37,19 @@ export function SkillUpdates({
   skill,
   canUpdate,
   onUpdate,
-  defaultOpen = false,
+  bare = false,
 }: {
   skill: ItemSkillState;
   /** May this viewer change the item's copy (`edit_content`, D4)? */
   canUpdate: boolean;
   onUpdate: () => void;
-  /** Start with the notes shown — the banner opens them on request. */
-  defaultOpen?: boolean;
+  /** The notes alone, already open, without the row's own line or its Later —
+   * inside the banner, which says both already (plan D7). */
+  bare?: boolean;
 }) {
   const t = useT();
   const { id: me, ready } = useCurrentUserState();
-  const [open, setOpen] = useState(defaultOpen);
+  const [open, setOpen] = useState(bare);
   // A Later / Skip changes what this person is shown: re-read on it — this
   // row's own, or one given in another tab or by another row.
   const [, setAnswered] = useState(0);
@@ -61,6 +62,7 @@ export function SkillUpdates({
 
   return (
     <div className="skills-row-updates" data-testid={`skill-updates-${skill.name}`}>
+      {bare ? null : (
       <div className="skills-row-line">
         <span className="skills-row-todo">
           {latest.kind === "rollback" && latest.back_to !== null
@@ -81,6 +83,7 @@ export function SkillUpdates({
           {t("skills.updates.show")}
         </button>
       </div>
+      )}
       {open ? (
         <section className="skills-updates" aria-label={title}>
           {skill.updates?.map((u, i) => (
@@ -112,7 +115,7 @@ export function SkillUpdates({
                 {t("skills.updates.update")}
               </button>
             ) : null}
-            {reminder?.due ? (
+            {reminder?.due && !bare ? (
               <button
                 type="button"
                 className="btn"

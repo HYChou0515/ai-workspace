@@ -83,6 +83,17 @@ describe("SkillUpdateBanner", () => {
     expect(within(b).getByRole("button", { name: new RegExp(`^${word("skills.updates.update")}$`) })).toBeInTheDocument();
   });
 
+  // The live demo: opened, the banner said everything twice — its own line,
+  // then the panel row's line again with a second Later. The notes open bare.
+  it("opens the notes without repeating its own line or its Later", async () => {
+    mount([behind("log-digest", "e1", 2, "Now flags FATAL too.")]);
+    fireEvent.click(within(await banner()).getByRole("button", { name: word("skills.updates.show") }));
+    const b = await banner();
+    expect(within(b).getAllByRole("button", { name: word("skills.updates.show") })).toHaveLength(1);
+    expect(within(b).getAllByRole("button", { name: word("skills.updates.later") })).toHaveLength(1);
+    expect(within(b).getAllByText(word("skills.banner.one", { name: "log-digest", version: 2 }))).toHaveLength(1);
+  });
+
   it("offers no Update to someone who may not edit; the notes still open", async () => {
     mount([behind("log-digest", "e1", 2, "Now flags FATAL too.")], false);
     fireEvent.click(within(await banner()).getByRole("button", { name: word("skills.updates.show") }));
