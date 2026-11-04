@@ -39,6 +39,10 @@ export type HeaderAction = {
   /** Something here needs the viewer's attention (an amber dot beside the
    * label, in every tier) — what exactly is said in `tip`. */
   attention?: boolean;
+  /** HOW MANY things need it, drawn as a number in place of the dot
+   * (Material 3 Badges: a large badge carries a count). The accessible name
+   * (`aria`) must say it too — the badge itself is hidden from readers. */
+  count?: number;
   onClick: () => void;
 };
 
@@ -47,6 +51,33 @@ const Dot = () => (
     ●
   </span>
 );
+
+/** The mark an action carries: its count as a badge, else the dot. */
+const Mark = ({ count }: { count?: number }) =>
+  count && count > 0 ? (
+    <span
+      aria-hidden
+      data-badge
+      style={{
+        marginLeft: 2,
+        minWidth: pxToRem(16),
+        height: pxToRem(16),
+        padding: "0 4px",
+        borderRadius: 999,
+        background: "var(--warn)",
+        color: "var(--ink)",
+        fontSize: pxToRem(10),
+        fontWeight: 600,
+        lineHeight: pxToRem(16),
+        textAlign: "center",
+        boxSizing: "border-box",
+      }}
+    >
+      {count}
+    </span>
+  ) : (
+    <Dot />
+  );
 
 /** The header action buttons (New chat / Tools / Skills / Workflows / Export).
  * `flexShrink: 0` + `whiteSpace: nowrap` keep each button intact so the wrapping
@@ -224,12 +255,12 @@ export function HeaderActions({
             {tier === "icons" ? (
               <>
                 <Icon name={a.icon} size={16} strokeWidth={2} />
-                {a.attention && <Dot />}
+                {a.attention && <Mark count={a.count} />}
               </>
             ) : (
               <>
                 <Icon name={a.icon} size={13} /> {a.label}
-                {a.attention && <Dot />}
+                {a.attention && <Mark count={a.count} />}
               </>
             )}
           </button>
@@ -318,7 +349,7 @@ function HeaderMoreMenu({ items }: { items: HeaderAction[] }) {
             >
               <Icon name={a.icon} size={14} />
               <span>{a.label}</span>
-              {a.attention && <Dot />}
+              {a.attention && <Mark count={a.count} />}
             </button>
           ))}
         </div>

@@ -1835,6 +1835,7 @@ export function AgentHeader({
                   aria: `${t("skills.button")} — ${t("skills.updates.mark", { n: skillUpdates })}`,
                   tip: t("skills.updates.mark", { n: skillUpdates }),
                   attention: true,
+                  count: skillUpdates,
                 }
               : { tip: t("skills.tip") }),
             onClick: () => setShowSkills(true),

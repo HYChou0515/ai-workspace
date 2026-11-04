@@ -160,6 +160,9 @@ describe("AgentHeader skill updates (plan-skill-hub-release-notes D1)", () => {
     );
     await vi.waitFor(() => expect(screen.getByTestId("skills-button")).toHaveAttribute("data-attention", "true"));
     expect(screen.getByTestId("skills-button").getAttribute("aria-label") ?? "").toContain("1");
+    // D1 promised "how many", and review round 1 found it only in the tooltip:
+    // the number is drawn on the button (Material 3 large badge).
+    expect(screen.getByTestId("skills-button").querySelector("[data-badge]")?.textContent).toBe("1");
   });
 
   // The live demo at 1280px: the chat header had folded its actions into "⋯",
