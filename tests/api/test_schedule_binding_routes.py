@@ -333,21 +333,283 @@ def test_a_row_taken_out_and_put_back_keeps_the_person_who_chose_it():
     assert (back["bound_to"], back["reason"]) == ("carol", "self")
 
 
-def test_a_row_whose_workflow_will_not_parse_is_not_credited_to_its_writer():
-    """The consent "Run as me" refuses (round 6) is refused to the author too:
-    a binding records the workflow as it is, and a file that will not parse
-    records the PACKAGE workflow's "" — which a later delete would satisfy."""
-    client, holder, rid, _ = _world(seeded=True)
-    broken = (
-        b'{"id":"x","phases":[{"id":"p"}],"steps":[{"type":"agent","prompt":"hi","phase":"p"}]}'
+BROKEN = b'{"id":"x","phases":[{"id":"p"}],"steps":[{"type":"agent","prompt":"hi","phase":"p"}]}'
+
+
+def _workflow(title: str = "Build report") -> str:
+    return json.dumps(
+        {
+            "id": "build-report",
+            "title": title,
+            "phases": [{"id": "p"}],
+            "steps": [
+                {"type": "agent", "cache": True, "prompt": "hi", "phase": "p", "out": "o.md"}
+            ],
+        }
     )
+
+
+WF = "/.workflows/build-report.json"
+
+
+def _key_of(client, rid, describe_has: str = "") -> str:
+    return next(r["trigger_id"] for r in _list(client, rid) if describe_has in r["describe"])
+
+
+def test_a_row_whose_workflow_will_not_parse_yet_is_still_its_writers():
+    """plan-seam-token-refresh W4: the row is carol's — but the consent it
+    records is one nothing matches, never "" (the PACKAGE workflow's, which a
+    later delete would satisfy — viewer-login round 6)."""
+    from workspace_app.workflow.schedule_bindings import UNPARSABLE_DIGEST, ScheduleBindings
+
+    client, holder, rid, spec = _world(seeded=True)
     base = f"/a/rca/items/{rid}/files"
-    assert client.put(f"{base}/.workflows/build-report.json", content=broken).status_code == 204
+    assert client.put(f"{base}{WF}", content=BROKEN).status_code == 204
     holder["id"] = "carol"
 
     client.put(f"{base}{FILE}", content=_rows(DAILY, EVENING))
 
+    who = {r["describe"]: r["bound_to"] for r in _list(client, rid)}
+    assert sorted(who.values()) == ["", "carol"]  # DAILY was seeded: nobody's
+    (binding,) = ScheduleBindings(spec).for_item(rid)
+    assert binding.workflow_digest == UNPARSABLE_DIGEST
+
+
+# ─── plan-seam-token-refresh W1–W4: a schedule follows its workflow's writer ───
+
+
+def _tick(client, spec, rid) -> None:
+    """One pass of the app's own sweep over this item's schedules file."""
+    ScheduleIndex(spec).record(rid, FILE)
+    ScheduleIndex(spec).stamp(rid, FILE, 0)
+    assert client.portal is not None
+    client.portal.call(client.app.state.user_schedule_sweeper.tick)
+
+
+def test_a_workflow_rewritten_by_someone_who_may_run_work_hands_them_its_schedule():
+    """W1/W3: bob rewrites the workflow carol's schedule runs — it now runs as
+    bob, carol is told why, and the sweep does not drop it afterwards (bob's
+    consent is to the workflow as it now is)."""
+    client, holder, rid, spec = _world()
+    base = f"/a/rca/items/{rid}/files"
+    with client:
+        assert client.put(f"{base}{WF}", content=_workflow()).status_code == 204
+        holder["id"] = "carol"
+        key = _key_of(client, rid)
+        assert _bind(client, rid, key).status_code == 200
+        holder["id"] = "bob"
+
+        assert client.put(f"{base}{WF}", content=_workflow("Payroll")).status_code == 204
+        _tick(client, spec, rid)
+
+    (row,) = _list(client, rid)
+    # Why: bob changed what it runs — not "wrote the schedule" (round 1, veracity 1).
+    assert (row["bound_to"], row["reason"]) == ("bob", "workflow")
+    notices = _notices(spec, "carol")
+    assert [k for k, _ in notices] == ["schedule_binding_replaced"]
+    assert "build-report" in notices[0][1] and "bob" in notices[0][1]
+    # And bob is told his values now back it (round 1, regression 2). His
+    # first notice is from carol's "Run as me" replacing his author binding.
+    assert "schedule_binding_assigned" in {k for k, _ in _notices(spec, "bob")}
+
+
+def test_the_binder_rewriting_their_own_workflow_keeps_it_and_hears_nothing():
+    """W3: the same person — their consent is renewed, their reason kept."""
+    client, holder, rid, spec = _world()
+    base = f"/a/rca/items/{rid}/files"
+    with client:
+        assert client.put(f"{base}{WF}", content=_workflow()).status_code == 204
+        holder["id"] = "carol"
+        assert _bind(client, rid, _key_of(client, rid)).status_code == 200
+
+        assert client.put(f"{base}{WF}", content=_workflow("Payroll")).status_code == 204
+        _tick(client, spec, rid)
+
+    (row,) = _list(client, rid)
+    assert (row["bound_to"], row["reason"]) == ("carol", "self")
+    assert _notices(spec, "carol") == []
+
+
+def test_a_row_nobody_runs_as_is_not_taken_by_whoever_rewrites_its_workflow():
+    """W2: a row nobody runs as — never credited, or "Stop running as me" — is
+    not handed to whoever edits the workflow."""
+    client, holder, rid, _spec = _world(seeded=True)
+    base = f"/a/rca/items/{rid}/files"
+    holder["id"] = "carol"
+
+    assert client.put(f"{base}{WF}", content=_workflow("Payroll")).status_code == 204
+
     assert {r["bound_to"] for r in _list(client, rid)} == {""}
+
+
+def test_a_schedule_written_before_its_workflow_keeps_running_as_its_writer():
+    """The reported root cause: the schedule is saved first, its workflow
+    after. The first write records the PACKAGE consent (""), the second used
+    to read as "the workflow changed" and the schedule fell to nobody."""
+    client, holder, rid, spec = _world(seeded=True)
+    base = f"/a/rca/items/{rid}/files"
+    holder["id"] = "carol"
+    # Due on every tick: the sweep only judges a binding when the row fires.
+    every_minute = {"every": "minutes", "n": 1, "run": "build-report"}
+    with client:
+        client.put(f"{base}{FILE}", content=_rows(every_minute))
+        assert client.put(f"{base}{WF}", content=_workflow()).status_code == 204
+        _tick(client, spec, rid)
+
+    assert [(r["bound_to"], r["reason"]) for r in _list(client, rid)] == [("carol", "author")]
+    assert _notices(spec, "carol") == []
+
+
+def test_a_broken_workflow_fixed_by_someone_else_runs_as_the_one_who_fixed_it():
+    """W4 then W1: carol's row over a broken workflow; bob fixes the workflow."""
+    client, holder, rid, spec = _world(seeded=True)
+    base = f"/a/rca/items/{rid}/files"
+    assert client.put(f"{base}{WF}", content=BROKEN).status_code == 204
+    holder["id"] = "carol"
+    client.put(f"{base}{FILE}", content=_rows(EVENING))
+    holder["id"] = "bob"
+
+    assert client.put(f"{base}{WF}", content=_workflow()).status_code == 204
+
+    assert [r["bound_to"] for r in _list(client, rid)] == ["bob"]
+    assert [k for k, _ in _notices(spec, "carol")] == ["schedule_binding_replaced"]
+    assert [k for k, _ in _notices(spec, "bob")] == ["schedule_binding_assigned"]
+
+
+def test_a_rewriter_who_cannot_run_work_here_takes_nothing():
+    """W1: dave may edit the files but not run work — the schedule is not his,
+    and the sweep drops carol's binding as before (see the notice test)."""
+    client, holder, rid, _spec = _world()
+    base = f"/a/rca/items/{rid}/files"
+    assert client.put(f"{base}{WF}", content=_workflow()).status_code == 204
+    holder["id"] = "carol"
+    assert _bind(client, rid, _key_of(client, rid)).status_code == 200
+    holder["id"] = "dave"
+
+    assert client.put(f"{base}{WF}", content=_workflow("Payroll")).status_code == 204
+
+    assert [r["bound_to"] for r in _list(client, rid)] == ["carol"]
+
+
+def test_a_workflow_too_big_to_follow_is_saved_and_hands_nothing_over(monkeypatch):
+    """Round 2 (regression F2): following a save holds the bytes in the API pod,
+    so a file past the bound is not read back at all — it saves as before and
+    moves nothing (the sweep drops the binding, as for any unknown door)."""
+    from workspace_app.api import file_routes
+
+    monkeypatch.setattr(file_routes, "FOLLOW_MAX_BYTES", 16)
+    client, holder, rid, _spec = _world()
+    base = f"/a/rca/items/{rid}/files"
+    assert client.put(f"{base}{WF}", content=_workflow()).status_code == 204
+    holder["id"] = "carol"
+    assert _bind(client, rid, _key_of(client, rid)).status_code == 200
+    holder["id"] = "bob"
+
+    assert client.put(f"{base}{WF}", content=_workflow("Payroll")).status_code == 204
+
+    assert [r["bound_to"] for r in _list(client, rid)] == ["carol"]
+
+
+def test_a_save_is_followed_with_the_bytes_it_uploaded_not_what_the_store_holds_after(
+    monkeypatch,
+):
+    """Round 2 (conformance 2): the PUT hands over the staging file's bytes. A
+    rewrite landing right after this save must not ride on it — reading back
+    from the store would read the rewrite, match it, and hand it to bob."""
+    from workspace_app.files import WorkspaceFiles
+
+    client, holder, rid, _spec = _world()
+    base = f"/a/rca/items/{rid}/files"
+    assert client.put(f"{base}{WF}", content=_workflow()).status_code == 204
+    holder["id"] = "carol"
+    assert _bind(client, rid, _key_of(client, rid)).status_code == 200
+    holder["id"] = "bob"
+    real = WorkspaceFiles.write_from_path
+
+    async def then_rewritten(self, item_id, path, src, content_type=None):  # noqa: ANN001, ANN202
+        await real(self, item_id, path, src, content_type)
+        await self.write(item_id, path, _workflow("Someone else's").encode())
+
+    monkeypatch.setattr(WorkspaceFiles, "write_from_path", then_rewritten)
+
+    assert client.put(f"{base}{WF}", content=_workflow("Payroll")).status_code == 204
+
+    assert [r["bound_to"] for r in _list(client, rid)] == ["carol"]
+
+
+def test_a_save_whose_upload_cannot_be_read_back_stands_and_hands_nothing_over(monkeypatch):
+    """Round 3 (conformance F3): reading the staging file only serves following
+    the save — when it fails, the save is still a 204 and the schedule stays."""
+    from workspace_app.api import file_routes
+
+    real = file_routes.Path.read_bytes
+    reads: dict[str, int] = {}
+
+    def staging_unreadable(self):  # noqa: ANN001, ANN202 — Path method
+        # The store copies the staging file first (one read); the read after
+        # it is the one that follows the save.
+        if self.name.startswith("ws-upload-"):
+            reads[self.name] = reads.get(self.name, 0) + 1
+            if reads[self.name] > 1:
+                raise OSError("disk hiccup")
+        return real(self)
+
+    client, holder, rid, _spec = _world()
+    base = f"/a/rca/items/{rid}/files"
+    assert client.put(f"{base}{WF}", content=_workflow()).status_code == 204
+    holder["id"] = "carol"
+    assert _bind(client, rid, _key_of(client, rid)).status_code == 200
+    holder["id"] = "bob"
+    monkeypatch.setattr(file_routes.Path, "read_bytes", staging_unreadable)
+
+    assert client.put(f"{base}{WF}", content=_workflow("Payroll")).status_code == 204
+
+    assert [r["bound_to"] for r in _list(client, rid)] == ["carol"]
+
+
+def test_a_file_that_is_not_a_workflow_is_not_read_back(monkeypatch):
+    """Round 2 (conformance 2): only a workflow save is followed, so only its
+    bytes are held — any other upload streams through untouched."""
+    from workspace_app.api import file_routes
+
+    kept: list[object] = []
+    real = file_routes._stream_upload_to_store
+
+    async def spy(*args, **kwargs):  # noqa: ANN002, ANN003, ANN202
+        out = await real(*args, **kwargs)
+        kept.append(out)
+        return out
+
+    monkeypatch.setattr(file_routes, "_stream_upload_to_store", spy)
+    client, _holder, rid, _spec = _world()
+
+    assert client.put(f"/a/rca/items/{rid}/files/notes.json", content="{}").status_code == 204
+    assert client.put(f"/a/rca/items/{rid}/files{WF}", content=_workflow()).status_code == 204
+
+    assert kept[-2:] == [None, _workflow().encode()]
+
+
+def test_a_workflow_copied_over_from_a_template_hands_its_schedules_to_the_copier():
+    """W1's template door (#520): an overwrite rewrites the workflow."""
+    from workspace_app.workflow.shared import SHARED_WORKFLOWS
+
+    name = sorted(SHARED_WORKFLOWS)[0]
+    client, holder, rid, spec = _world(seeded=True)
+    rows = json.dumps({"schedules": [{"every": "daily", "at": "09:00", "run": name}]})
+    _seed(spec, rid, rows)
+    holder["id"] = "carol"
+    key = _key_of(client, rid)
+    from workspace_app.workflow.schedule_bindings import ScheduleBindings
+
+    ScheduleBindings(spec).bind(key, item_id=rid, path=FILE, user_id="carol", workflow_digest="old")
+    holder["id"] = "bob"
+
+    r = client.post(
+        f"/a/rca/items/{rid}/workflow-templates/{name}/copy", params={"overwrite": True}
+    )
+
+    assert r.status_code == 200, r.text
+    assert ScheduleBindings(spec).binder(key) == "bob"
 
 
 def test_a_writer_who_cannot_run_work_here_is_not_who_the_row_runs_as():
@@ -499,7 +761,9 @@ def test_the_app_says_the_workflow_changed_when_that_is_what_dropped_a_binding()
         holder["id"] = "carol"
         (row,) = _list(client, rid)
         assert _bind(client, rid, row["trigger_id"]).status_code == 200
-        holder["id"] = "bob"
+        # dave may edit files but not run work: the schedule is not handed to
+        # him (plan-seam-token-refresh W1), so the sweep drops it — and says so.
+        holder["id"] = "dave"
         changed = {**nightly, "title": "Nightly (payroll)"}
         assert client.put(wf, content=json.dumps(changed)).status_code == 204
 

@@ -42,6 +42,7 @@ from ..workflow.orchestrator import (
 )
 from ..workflow.preflight import can_run as _preflight_can_run
 from ..workflow.run import WorkflowRun, is_execution, settle_phases
+from ..workflow.schedule_bindings import ScheduleAuthorship
 from ..workflow.user_schedules import SchedulePolicy
 from .activity import ActivityLog
 from .events import FileChanged
@@ -172,6 +173,7 @@ def register_workflow_routes(
     schedule_landed: Callable[[str], int | None] = lambda _item_id: None,
     schedules_durable: Source,
     packages: Sequence[PackageInfo] = (),
+    schedule_authorship: ScheduleAuthorship | None = None,
 ) -> None:
     """Mount the workflow profile + run routes onto ``app``.
 
@@ -401,6 +403,7 @@ def register_workflow_routes(
         from ..workflow.workspace_store import (
             RESERVED_WORKFLOW_ID,
             save_workspace_workflow,
+            workspace_workflow_bytes,
             workspace_workflow_path,
         )
 
@@ -436,6 +439,15 @@ def register_workflow_routes(
                 detail=f"this item already has a workflow named {name!r}",
             )
         await save_workspace_workflow(files, investigation_id, name, d)
+        if schedule_authorship is not None:
+            # plan-seam-token-refresh W1: a copy writes a workflow that
+            # schedules may run — they now run as whoever copied it in.
+            await schedule_authorship.workflow_written(
+                investigation_id,
+                name,
+                author=get_user_id(),
+                written=workspace_workflow_bytes(name, d),
+            )
         return {"workflow_id": name, "path": path}
 
     @app.get("/a/{slug}/profiles")
@@ -717,32 +729,23 @@ def register_workflow_routes(
     def _run_of(run_id: str, item_id: str) -> WorkflowRun:
         """The run, read only through its own item: the route takes the item from
         the URL and the run from its id, so a run of item A must not answer under
-        item B's URL (read access to B is not read access to A)."""
+        item B's URL (read access to B is not read access to A). The rule is the
+        orchestrator's `run_in`, the one every run-id entrance uses (#870);
+        another item's run and no run at all are the same 404."""
         try:
-            data = spec.get_resource_manager(WorkflowRun).get(run_id).data
+            return workflow_orchestrator.run_in(run_id, item_id)
         except ResourceIDNotFoundError as exc:
             raise HTTPException(status_code=404, detail=f"unknown run: {run_id!r}") from exc
-        assert isinstance(data, WorkflowRun)
-        if data.item_id != item_id:
-            raise HTTPException(status_code=404, detail=f"unknown run: {run_id!r}")
-        return data
 
     @app.get("/a/{slug}/items/{item_id}/runs/{run_id}/stream")
     async def stream_workflow_run(slug: str, item_id: str, run_id: str) -> StreamingResponse:
         """#100 / P8 (manual §3, §14): the run's live SSE — its WORKFLOW CHAT's stream
         (agent events + phase/step events overlaid). Falls back to the item's broadcast
-        stream when the run / its chat can't be resolved (defensive)."""
+        stream when the run has no chat. A run that is not this item's — another
+        item's, or none — is a 404, the same answer as the run's detail (#870)."""
         investigation_id = locator.require_access(slug, item_id, "read_chat")
-        key = investigation_id
-        try:
-            run = spec.get_resource_manager(WorkflowRun).get(run_id).data
-        except ResourceIDNotFoundError:
-            run = None
-        if isinstance(run, WorkflowRun):
-            if run.item_id != investigation_id:  # never another item's live stream
-                raise HTTPException(status_code=404, detail=f"unknown run: {run_id!r}")
-            if run.chat_id:
-                key = run.chat_id
+        run = _run_of(run_id, investigation_id)
+        key = run.chat_id or investigation_id
         return StreamingResponse(turn_engine.subscribe_sse(key), media_type="text/event-stream")
 
     @app.post(

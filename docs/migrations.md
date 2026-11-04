@@ -2862,7 +2862,7 @@ command 的完整 schema——那正是這個功能在做的事。從 `index.jso
   「A workflow failed at “…”」。
 - 有執行在等人決定時，workspace 頂列下方會出現一條提示（哪個執行、等什麼），按 Open 到那個執行的分頁；
   不會自己消失，可以關掉，下一個關卡會再提示；那個執行的分頁在前面時不顯示。已經有更新的執行的舊執行不算在等
-  （它只能 Stop），不出現在提示與圖示的數字裡。`GET …/runs` 的每一筆多了 `latest`（是不是那個 workflow 最新的一次），而且**不再回傳頁面工作**（#942 的 page job）：它們不是 workflow 的執行。`/wui` 底下沒有列頁面工作的路由（單一件用 `GET …/wui/jobs/{job_id}` 查）；它們在 item 的聊天列表上（「頁面：…」）。**rollout 前**：如果你們有外部腳本靠這支列出頁面工作，改用 run 的通用列表 `GET /api/workflow-run/data`，篩這個 item 的、`page_job` 不是 null 的那些。沒做的症狀：腳本列不到頁面工作。沒有執行在跑時，畫面每 30 秒重新看一次這個 item 的執行
+  （它只能 Stop），不出現在提示與圖示的數字裡。`GET …/runs` 的每一筆多了 `latest`（是不是那個 workflow 最新的一次），而且**不再回傳頁面工作**（#942 的 page job）：它們不是 workflow 的執行。`/wui` 底下沒有列頁面工作的路由（單一件用 `GET …/wui/jobs/{job_id}` 查）；它們在 item 的聊天列表上（「頁面：…」）。**rollout 前**：如果你們有外部腳本靠這支列出頁面工作，改用 run 的通用列表 `GET /api/workflow-run/data`，篩這個 item 的、`page_job` 不是 null 的那些。沒做的症狀：腳本列不到頁面工作。（[#984](#pr-984) 起這組路由已拿掉，改用 `GET …/wui/jobs`，見該條。）沒有執行在跑時，畫面每 30 秒重新看一次這個 item 的執行
   （有在跑的時候每 2 秒），所以排程或別人啟動的執行也會出現。
 - 一個階段的步驟若因為之前的執行已經做過而直接沿用（journal 快取），`WorkflowRun.phases` 裡那個階段的狀態現在是
   `skipped`（畫面上「Already done」），以前停在 `pending`（「Not started」）。
@@ -3282,6 +3282,85 @@ Workflows 打開模型答錯格式的那次執行——執行結束後還留著�
    在 Shared 分頁把它選成 Shared 後,拿到的是 item 的共用值。
 
 **還是舊版 image 時**:角色清單沒有 WUI User;第 4 步不管怎樣都拿到 item 的共用值。
+
+### 2026-11-04 · 6a3f330d · #998 瀏覽器帶來的 token 也會自動換新;workflow 改過,排程改用改它的人執行 {#pr-998}
+
+**設定** — config 沒有新 key。要讓瀏覽器帶來的 token(`IRequestEnv` 的值)也自動換新,部署方在自己的
+登入方式(`IEnvProvider`)上寫 `refreshes_seam = True`(預設 `False`)。
+- **何時**:`rollout 前`,隨部署方自己的 provider 程式一起 build。
+- **為什麼**:瀏覽器帶來的 token 存在平台給沒人在場的執行(排程、goal、重跑)用,以前快過期時平台不換,過期後那些執行就一直用過期的。
+- **不做的症狀**:和以前一樣——那些執行的工具拿到過期 token、呼叫失敗,直到那個人再開一次網頁。
+寫法與 rotation 的注意事項見 [擴充平台](extending-the-platform.md)「token 快過期時由平台換新的」一節。
+
+**資料** — 不動,也不用回填。自動帶入值那一列(`PrivateSeam`)多一欄 `seen`(沒有索引),舊列讀出來是空的,
+當作「列上的值就是請求上次說的值」。沒有 `Schema` 升版。
+
+**k8s · CI 側** — 照常重 build、部署。manifest 沒改。
+
+**行為改變,沒有開關**:
+
+- **workflow 被改過,排程改用改它的人執行**(`docs/plan-seam-token-refresh.md` W1)。條件:改的人在 item 有 `execute`,
+  而且是從認得出是誰的地方改——他剛在聊天裡送出的訊息請 AI 改(`save_workflow`／`write_file`／`edit_file`)、
+  檔案編輯器存檔、檔案樹上傳、Workflows 面板的匯入、WUI 頁面的 `writeFile`(後四者都是檔案 PUT)、從範本複製。排程那一列的原因顯示「它跑的 workflow 是他改的」;**原本綁定的人和接手的人都收到通知**;
+  同一個人改自己的 workflow 不通知;這樣轉交的列之後被改或刪,和「排程是他寫的」一樣悄悄收掉、不通知。以前這種情況綁定會在下一次觸發時被收掉,排程變成「沒有人」(只拿共用值和服務帳號)。
+  沒有 `execute` 的人改,或從認不出是誰的地方改(goal 的自動回合、workflow 節點或排程自己的執行、exec、zip 匯入、
+  檔案樹的複製／搬移、尋找取代、Run 附帶的上傳、刪除、超過 1 MiB 的 PUT),照舊在下一次觸發時收掉綁定並通知 workflow 被改了。
+- **「先寫排程、後寫 workflow」的排程不再掉成沒有人**:寫 workflow 的那一刻,排程跟著寫的人走(同一個人就維持)。
+  這是 AI 建排程最常見的順序,以前第一次觸發就把綁定收掉。
+- **寫排程時 workflow 還解析不了,照樣認作者**(W4)。修好前不觸發;之後由上面那些地方修好,就用修的人;從其他地方修好
+  就收掉綁定並通知。**升級前就因為這樣沒綁人的排程不會補綁**——要它用某人的身分,那個人在排程上按「用我的身分執行」
+  (`rollout 後`;不按的症狀:照舊只拿共用值和服務帳號,`private_only` 的變數拿不到)。
+- **瀏覽器帶來的值不再倒退**(S4):只有登入方式寫了 `refreshes_seam` 才會出現「平台換過」,沒寫的部署行為和以前一樣。
+  寫了的話:瀏覽器下一次還帶同一個舊值時,工具拿到平台換好的;帶來和上一次不同的值(重新登入過)就用瀏覽器的;
+  瀏覽器不再帶某個名稱,那個名稱照舊消失。
+- **滾動更新期間**:
+  - 舊版 pod 收到的請求會把自動帶入值整列覆寫回瀏覽器的值。refresh token 不 rotation 的系統,下次快過期時新版 pod
+    會再換一次;**會 rotation 的系統這一次會被拒**,那個人會在聊天裡看到「登入 X」、或收到重新登入的通知,登入一次即可。
+  - 舊版 pod 收到的 workflow 存檔不會轉交排程,之後的觸發(不論新舊 pod)照舊收掉綁定並通知;舊版 pod 收到的排程寫入,
+    workflow 解析不了時照舊不認作者。等全部 pod 換新後再請大家改 workflow。
+
+**確認做完**(`rollout 後`):
+
+1. 帳號 A(有 `execute`)在某個 item 的排程上按「用我的身分執行」;換帳號 B(也有 `execute`)在檔案樹改那個排程跑的
+   workflow 並存檔。用 A 看,排程那一列顯示「用 B 的身分執行（它跑的 workflow 是他改的）」;A 的通知裡有一則內文是
+   「B changed the workflow “…”, so its schedule in … now runs with their values instead of yours.」,B 有一則
+   「A schedule now runs as you」。
+2. 在聊天裡請 AI「建一個每天早上跑的 workflow 並排程」,排程那一列顯示「用你的身分執行（排程是你寫的）」,不是「未指定」;
+   隔天的執行沒有產生「workflow 被改了」的通知。
+3. (有寫 `refreshes_seam` 的部署)等瀏覽器帶來的 token 快過期,跑一個用到它的工具:工具成功;再送一則訊息,
+   工具仍成功,部署方的 refresh 端點只被叫一次。
+
+**還是舊版 image 時**:第 1 步存檔後排程仍顯示 A,**下一次觸發後**變成「未指定」,A 收到的是 workflow 被改了的通知;
+第 3 步部署方的 refresh 端點一次都沒被叫到,工具拿到的是瀏覽器帶來、沒換過的那顆(過期後就失敗)。
+
+---
+
+### 2026-11-04 · bd5f895f · #984 workflow 的執行只認自己 item 的網址；執行紀錄不再有自己的 CRUD 路由 {#pr-984}
+
+**設定** — 無。
+
+**資料** — 無。執行紀錄（`WorkflowRun`）的資料形狀沒變、沒有升版，不用跑 migrate。
+
+**k8s · CI 側** — 只改後端，照常重 build、部署。
+
+**行為改變，沒有開關**：
+
+- **`/api/workflow-run/…` 整組路由拿掉了**，全部回 404：列表（`/data`）、單筆讀取、修改、刪除、revision 等等。
+  它們是 specstar 替執行紀錄自動產生的，沒有任何權限檢查，任何人都能讀、改、刪任何 item 的執行。前端從沒用過。
+  如果有外部腳本照 [#913](#pr-913) 的說明用 `GET /api/workflow-run/data` 列頁面工作，要改用
+  `GET /api/a/<slug>/items/<item>/wui/jobs`。它只回這個 item 的頁面工作，每一筆是 `job_id`、`kind`、`name`、
+  `state`、`output`、`error`；呼叫的人要有那個 item 的執行權限（跟查單一件 `…/wui/jobs/<job_id>` 一樣）。
+  新路由要新 pod 上線後才有、舊路由在新 pod 上就沒了，所以分兩步：**rollout 前**讓腳本先打新路由、拿到 404 就退回舊的
+  `/data`；**rollout 後**拿掉退回舊路由那段。只在 rollout 前直接換成新路由的話，rollout 途中打到舊 pod 會 404；
+  rollout 後才換的話，打到新 pod 會 404。沒做的症狀：腳本拿到 404，列不到頁面工作。
+- **帶執行編號的路由只認網址上那個 item 自己的執行**。用別的 item 的網址帶進來，取消回 204 但不會停掉那個執行（以前會停掉），其他都回 404，跟不存在的執行一樣。
+  `…/runs/<id>/stream` 對不存在的執行也回 404 了（以前會退回訂閱 item 自己的串流）；前端不用這條，不受影響。
+
+**確認做完**（`rollout 後`）：
+
+- `curl -s -o /dev/null -w '%{http_code}\n' https://<host>/api/workflow-run/data`（帶任一個登入身分）印 `404`。
+- 用有某個 item 執行權限的帳號打 `GET /api/a/<slug>/items/<item>/wui/jobs`：回 200，內容是 JSON 陣列；
+  那個 item 沒有頁面工作時是 `[]`。
 
 ## 附錄 A：資料回填的機制（specstar 為什麼不會自己補）
 

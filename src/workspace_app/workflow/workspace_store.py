@@ -57,6 +57,27 @@ def is_workspace_workflow_path(path: str) -> bool:
     return "/" not in rest and rest.endswith(".json") and rest != SCHEDULES_FILE
 
 
+def is_workspace_workflow_id(workflow_id: str) -> bool:
+    """Does ``workflow_id`` name a workflow FILE of the workspace — the flat
+    `.workflows/<id>.json`, and not the reserved `schedules`? The one rule the
+    loader and `offered.read_workflow_file` both apply (#870: it was written
+    twice by hand), so the two cannot disagree about which ids are read: a
+    traversal or nested id is never a read outside the folder."""
+    return (
+        bool(workflow_id)
+        and workflow_id != RESERVED_WORKFLOW_ID
+        and is_workspace_workflow_path(workspace_workflow_path(workflow_id))
+    )
+
+
+def workflow_id_of(path: str) -> str | None:
+    """The workflow id a workspace workflow file holds (`.workflows/<id>.json`
+    → ``<id>``), or None when ``path`` is not one (`is_workspace_workflow_path`)."""
+    if not is_workspace_workflow_path(path):
+        return None
+    return path.rsplit("/", 1)[1].removesuffix(".json")
+
+
 def workspace_workflow_path(slug: str) -> str:
     return f"/{WORKSPACE_WORKFLOW_DIR}/{slug}.json"
 
@@ -116,11 +137,7 @@ async def load_workspace_workflow_digested(
     Only a FLAT ``<id>.json`` in the folder is a workspace workflow — the rule
     `offered.unparsable_workflow` applies — so a traversal or nested id is the
     profile's workflow, never a read outside the folder (round 6)."""
-    if (
-        not workflow_id
-        or workflow_id == RESERVED_WORKFLOW_ID
-        or not is_workspace_workflow_path(workspace_workflow_path(workflow_id))
-    ):
+    if not is_workspace_workflow_id(workflow_id):
         # The schedules file is not a workflow, whatever body somebody wrote
         # into it — refused HERE, in the one loader the orchestrator, the panel's
         # resolver and the run route all share, so no reader can run it.
@@ -175,8 +192,16 @@ async def save_workspace_workflow(
     if slug == RESERVED_WORKFLOW_ID:
         raise ReservedWorkflowId(slug)
     path = workspace_workflow_path(slug)
-    await files.write(workspace_id, path, msgspec.json.encode(msgspec.structs.replace(d, id=slug)))
+    await files.write(workspace_id, path, workspace_workflow_bytes(slug, d))
     return path
+
+
+def workspace_workflow_bytes(slug: str, d: WorkflowDef) -> bytes:
+    """The bytes ``save_workspace_workflow`` writes for ``d`` — the one
+    definition, so a caller that must know what it wrote
+    (`ScheduleAuthorship.workflow_written`) reads it here, not back from a file
+    someone may have rewritten since."""
+    return msgspec.json.encode(msgspec.structs.replace(d, id=slug))
 
 
 async def workspace_workflow_metas(

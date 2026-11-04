@@ -139,6 +139,17 @@ class IEnvProvider(abc.ABC):
     # A deploy written before these existed overrides neither and behaves
     # exactly as before: nothing is ever judged near expiry, nothing refreshed.
 
+    #: Also renew your values when they come from your ``IRequestEnv`` — the
+    #: token the person's browser brought (`docs/plan-seam-token-refresh.md`).
+    #: The renewed set is kept for them, and used, until their browser brings a
+    #: value different from the one it brought last. Opt in only when your
+    #: ``refresh`` can renew what the browser holds: on a system that rotates
+    #: refresh tokens, the browser's own copy is spent the moment the platform
+    #: renews it — and each item keeps its own copy of the browser's answer, so
+    #: two items renewing the same token race for it (the loser is rejected
+    #: and asks the person to sign in again).
+    refreshes_seam: bool = False
+
     def needs_refresh(self, values: dict[str, str]) -> bool:
         """Whether the values a tool is about to get should be refreshed first.
 

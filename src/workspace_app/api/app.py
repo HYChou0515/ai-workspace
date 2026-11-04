@@ -73,6 +73,7 @@ from ..quota.user_limits import UserLimits, register_user_quota
 from ..resources import (
     AgentConfig,
     CheckRun,
+    register_workflow_run,
 )
 from ..resources.groups import groups_of
 from ..resources.kb import EMBED_DIM, Collection
@@ -1443,7 +1444,7 @@ def create_app(
                 f"The workflow a schedule in {binding.path} runs was changed since it was "
                 "set to run as you, so it no longer runs with your values. Check the "
                 "workflow, then find the schedule on the Schedules page or in the item's "
-                "Workflows panel and choose “Run as me” again if you still want it to."
+                "Workflows panel and choose “Run as me” if you want it to run as you."
             )
         else:
             title = "A schedule that ran as you was changed"
@@ -1916,6 +1917,9 @@ def create_app(
     # wired for one backend; now that it is also the per-person ledger, a
     # sandbox wake on a bare test client would hit an unregistered model.
     register_sandbox_activity(spec)
+    # Workflow runs: post-apply so the run table has no CRUD routes of its own —
+    # it had them with no gate at all (#870). Before anything reads a run.
+    register_workflow_run(spec)
     # Skill hub entries (docs/plan-skill-hub.md): post-apply like the two
     # sandbox stores, so no CRUD route can PUT an entry around the review.
     register_skill_hub(spec)
@@ -2406,14 +2410,48 @@ def create_app(
         max_rows=max_page_schedules,
         sweep_enabled=trigger_check_interval is not None,
     )
+
     # plan-schedule-run-as G2: a row runs as whoever wrote it — credited by the
     # doors that know who that is (save_schedules, the file PUT, "change time"),
     # against the SAME `execute` rule the sweep re-checks before each fire.
+    # plan-seam-token-refresh W1/W3: the doors that write a WORKFLOW and know
+    # who wrote it (save_workflow / write_file / edit_file from a message the
+    # person just sent, the file PUT, template copy) hand its schedules to that
+    # person; when it moves to someone else, both people are told.
+    def _tell_schedule_moved(previous: ScheduleBinding, author: str, workflow_id: str) -> None:
+        """Both people a moved schedule concerns: the one whose values it ran
+        with, and the one whose values it runs with now (W3; review round 1,
+        regression 2 — lending values must never be silent)."""
+        notify(
+            spec,
+            recipient=previous.user_id,
+            kind="schedule_binding_replaced",
+            title="A schedule no longer runs as you",
+            body=(
+                f"{author} changed the workflow “{workflow_id}”, so its schedule in "
+                f"{previous.path} now runs with their values instead of yours."
+            ),
+            actor=author,
+        )
+        notify(
+            spec,
+            recipient=author,
+            kind="schedule_binding_assigned",
+            title="A schedule now runs as you",
+            body=(
+                f"You changed the workflow “{workflow_id}”, so its schedule in "
+                f"{previous.path} now runs with your own sign-ins and values. If you do "
+                "not want that, open the schedule and choose “Stop running as me”."
+            ),
+            actor=author,
+        )
+
     schedule_authorship = ScheduleAuthorship(
         ScheduleBindings(spec),
         read=files.read,
         may_run=lambda user, item: user_may(spec, item, user, "execute", superusers=superusers),
         max_rows=max_page_schedules,
+        on_moved=_tell_schedule_moved,
     )
     turn_ctx = TurnContextBuilder(
         view_plugin_artifacts=artifact_plugins(view_plugins),
@@ -2639,6 +2677,7 @@ def create_app(
         # The sweep's own copy, read when the live workspace is still restoring.
         schedules_durable=ScheduleSource(read=filestore.read, ls=filestore.ls),
         packages=packages or [],
+        schedule_authorship=schedule_authorship,
     )
 
     chat_send_svc = ChatSendService(

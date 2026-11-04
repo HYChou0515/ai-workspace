@@ -16,7 +16,7 @@ import { Icon } from "../components/Icon";
 import { OnboardingModal } from "../components/OnboardingModal";
 import { useBreadcrumbs } from "../hooks/breadcrumbs";
 import { useApps } from "../hooks/useResources";
-import { useCurrentUser } from "../hooks/useCurrentUser";
+import { useCurrentUserState } from "../hooks/useCurrentUser";
 import { useOnboarding } from "../hooks/useOnboarding";
 import { PLATFORM_ONBOARDING, PLATFORM_SCOPE } from "../lib/platformOnboarding";
 import { useT } from "../lib/i18n";
@@ -168,8 +168,7 @@ function HelpCard() {
 export function Launcher() {
   const apps = useApps();
   const t = useT();
-  const me = useCurrentUser();
-  const ob = useOnboarding(me, PLATFORM_SCOPE, PLATFORM_ONBOARDING);
+  const ob = useOnboarding(useCurrentUserState(), PLATFORM_SCOPE, PLATFORM_ONBOARDING);
   const navigate = useNavigate();
   // The launcher is "home" — its own title bar is now redundant with the global
   // bar's brand (#158); publish a single Home crumb instead.

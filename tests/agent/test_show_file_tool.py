@@ -313,10 +313,11 @@ def test_inlining_refuses_a_recursive_schema_instead_of_leaving_a_dangling_ref()
 
 
 def _with_run(item_id: str) -> tuple[RunContextWrapper, str]:
-    from workspace_app.resources import make_spec
+    from workspace_app.resources import make_spec, register_workflow_run
     from workspace_app.workflow.run import RunStatus, WorkflowRun
 
     spec = make_spec()
+    register_workflow_run(spec)  # registered post-`spec.apply` in the app (#870)
     run_id = (
         spec.get_resource_manager(WorkflowRun)
         .create(WorkflowRun(item_id=item_id, captured_user="u", status=RunStatus.DONE))
@@ -378,12 +379,13 @@ def test_the_execution_path_is_the_one_the_web_opens_as_a_tab():
 def test_an_executions_path_is_its_run_id():
     """The FE opens an execution's tab by the run's id, and the AI passes that id
     to `show_file`: both rely on a WorkflowRun's id carrying this prefix."""
-    from workspace_app.resources import make_spec
+    from workspace_app.resources import make_spec, register_workflow_run
     from workspace_app.workflow.run import EXECUTION_PATH_PREFIX, RunStatus, WorkflowRun
 
+    spec = make_spec()
+    register_workflow_run(spec)  # registered post-`spec.apply` in the app (#870)
     rid = (
-        make_spec()
-        .get_resource_manager(WorkflowRun)
+        spec.get_resource_manager(WorkflowRun)
         .create(WorkflowRun(item_id="i", captured_user="u", status=RunStatus.DONE))
         .resource_id
     )

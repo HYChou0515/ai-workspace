@@ -424,9 +424,10 @@ class UserScheduleSweeper:
             logger.exception("user schedules: %s %s: could not re-read bindings", item_id, path)
             still = set()
         for binding in gone:
-            # A row someone WROTE (plan-schedule-run-as G2) was never a "Run as
-            # me" they chose; "choose it again" would be false.
-            if binding.reason == "author" or binding.user_id in still:
+            # A row someone WROTE (plan-schedule-run-as G2), or was handed by
+            # rewriting its workflow (plan-seam-token-refresh W1), was never a
+            # "Run as me" they chose; "choose it again" would be false.
+            if binding.reason in ("author", "workflow") or binding.user_id in still:
                 continue
             await self._tell(binding, "changed")
 

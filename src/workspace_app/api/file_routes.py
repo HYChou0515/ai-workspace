@@ -37,6 +37,7 @@ from ..filestore.protocol import FileExists, FileNotFound
 from ..kernels import KernelService
 from ..quota.admission import AdmissionGate
 from ..sandbox.protocol import PreviewFailed, Sandbox
+from ..workflow.workspace_store import workflow_id_of
 from .activity import ActivityLog
 from .byte_range import UNSATISFIABLE, byte_range
 from .events import CellEvent, FileChanged, to_sse
@@ -180,13 +181,23 @@ def _workspace_prefix(prefix: str) -> str:
     return _workspace_path(prefix) if prefix else prefix
 
 
+#: The largest workflow file a save is followed for (`plan-seam-token-refresh`
+#: W1): following it holds the bytes in this process, so a file past this is not
+#: read back — it saves as before and hands no schedule over (the sweep drops
+#: the binding, as for any door that does not know who wrote it). A workflow is
+#: a small JSON file; this only stops a large one costing the pod its memory.
+FOLLOW_MAX_BYTES = 1024 * 1024
+
+
 async def _stream_upload_to_store(
     workspace_id: str,
     path: str,
     request: Request,
     files: WorkspaceFiles,
     max_file_size: int,
-) -> None:
+    *,
+    keep: bool = False,
+) -> bytes | None:
     """Stream the request body to a staging file on disk, enforcing the
     single-file cap (#219) and the per-workspace quota (#245) as bytes arrive,
     then hand the file to the store. The staging file means a multi-GB upload
@@ -196,7 +207,14 @@ async def _stream_upload_to_store(
     App), and 0 there disables it.
 
     The quota credits back the bytes of the file being overwritten (a replace,
-    not an add), so re-uploading a same-size file never trips it."""
+    not an add), so re-uploading a same-size file never trips it.
+
+    ``keep``: also return the bytes stored — read from the staging file, not
+    back from the store, where another writer may already have replaced them
+    (`plan-seam-token-refresh` review round 1, defect F2). Asked only for a
+    workflow file, and answered only up to ``FOLLOW_MAX_BYTES`` (round 2,
+    regression F2); past it, or when the read fails, None — the write has
+    landed either way and is not reported as failed."""
     # Headroom for this path, fetched once up front; an overwrite is a replace.
     # None ⇒ quota disabled. Computed against the durable store, so the sandbox
     # mirror (which writes the store directly, not via this endpoint) isn't gated.
@@ -238,6 +256,13 @@ async def _stream_upload_to_store(
                     )
                 f.write(chunk)
         await files.write_from_path(workspace_id, path, tmp, request.headers.get("content-type"))
+        if not keep or size > FOLLOW_MAX_BYTES:
+            return None
+        try:
+            return tmp.read_bytes()
+        except OSError:  # only following the save depends on it
+            logger.warning("file_routes: could not read back %s to follow it", path, exc_info=True)
+            return None
     finally:
         tmp.unlink(missing_ok=True)
 
@@ -620,7 +645,10 @@ def register_file_routes(
             if schedule_authorship is not None and is_schedule_file(norm)
             else (False, None)
         )
-        await _stream_upload_to_store(investigation_id, norm, request, files, max_file_size)
+        follows = schedule_authorship is not None and workflow_id_of(norm) is not None
+        written = await _stream_upload_to_store(
+            investigation_id, norm, request, files, max_file_size, keep=follows
+        )
         if credit:
             assert schedule_authorship is not None  # narrow for ty
             try:
@@ -632,6 +660,12 @@ def register_file_routes(
                 await schedule_authorship.credit(
                     investigation_id, norm, before=before, after=after, author=get_user_id()
                 )
+        # plan-seam-token-refresh W1: a workflow saved here — the editor, the
+        # panel's import — hands the schedules running it to the person saving.
+        if schedule_authorship is not None and written is not None:
+            await schedule_authorship.workflow_written(
+                investigation_id, workflow_id_of(norm) or "", author=get_user_id(), written=written
+            )
         activity.record(
             "file_written",
             f"Wrote {rel_path(norm)}",

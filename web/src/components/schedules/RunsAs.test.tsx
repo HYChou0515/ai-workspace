@@ -83,6 +83,19 @@ describe("what it says", () => {
     expect(screen.getByTestId("runs-as")).toHaveTextContent(word("sched.why.authorYou"));
   });
 
+  it("says they changed the workflow when that is why it runs as them", () => {
+    // plan-seam-token-refresh W1: they rewrote what the schedule runs — saying
+    // "wrote this schedule" would state a reason that is not true.
+    draw({ who: "bob", reason: "workflow" });
+    expect(screen.getByTestId("runs-as")).toHaveTextContent(word("sched.why.workflow"));
+    expect(screen.getByTestId("runs-as")).not.toHaveTextContent(word("sched.why.author"));
+  });
+
+  it("says it is you when you changed the workflow", () => {
+    draw({ who: "me", reason: "workflow", mine: true });
+    expect(screen.getByTestId("runs-as")).toHaveTextContent(word("sched.why.workflowYou"));
+  });
+
   it("names the administrator who chose the person", () => {
     draw({ who: "carol", reason: "admin", by: "root" });
     expect(screen.getByTestId("runs-as")).toHaveTextContent(word("sched.why.admin", { by: "root" }));

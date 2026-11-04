@@ -6,6 +6,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import type { Onboarding } from "../api/types";
 import { dismiss, isDismissed } from "../lib/onboarding";
+import type { CurrentUserState } from "./useCurrentUser";
 
 export type OnboardingState = {
   /** Whether the modal should currently render. */
@@ -20,16 +21,21 @@ export type OnboardingState = {
 };
 
 export function useOnboarding(
-  userId: string,
+  user: CurrentUserState,
   scope: string,
   content: Onboarding | undefined,
 ): OnboardingState {
   const [open, setOpen] = useState(false);
   const version = content?.version;
+  const { id: userId, ready } = user;
 
+  // Judged only once we know who this is: until the current-user query
+  // settles the id is the "default-user" placeholder, which never dismissed
+  // anything — asking about it opened the modal on every cold load for people
+  // who had, and nothing closed it when their own id arrived.
   useEffect(() => {
-    if (version && !isDismissed(userId, scope, version)) setOpen(true);
-  }, [userId, scope, version]);
+    if (ready && version && !isDismissed(userId, scope, version)) setOpen(true);
+  }, [ready, userId, scope, version]);
 
   const gotIt = useCallback(() => setOpen(false), []);
 

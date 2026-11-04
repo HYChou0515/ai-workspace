@@ -11,7 +11,9 @@ everyone the item is shared with.
 So this seam exists to compose those per-request values. They are never written
 to the ITEM. Since `plan-wui-viewer-login` (Q4b) the latest answer about a person
 IS kept — in that person's own PRIVATE row for the item (`api.private_env`,
-``PrivateSeam``), replaced whole at each change and readable by them alone — so
+``PrivateSeam``), replaced whole at each change — except a value the platform
+renewed, kept while the request repeats the old one
+(`docs/plan-seam-token-refresh.md` S4) — and readable by them alone — so
 their turns with no request behind them (a re-run on another pod, their goal
 rounds, a run they started) still have it. Implementations should assume that:
 return only what that person may keep.

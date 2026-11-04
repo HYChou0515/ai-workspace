@@ -261,7 +261,8 @@ class OverviewRow(BaseModel):
     the item's shared values only."""
     runs_as_reason: str = ""
     """Why it is them (G8): "self" (they chose it), "author" (they wrote the
-    row), "admin" (a superuser named them); "" when it runs as nobody."""
+    row), "workflow" (they rewrote the workflow it runs, `plan-seam-token-refresh`
+    W1), "admin" (a superuser named them); "" when it runs as nobody."""
     runs_as_by: str = ""
     """The superuser who named them, when `runs_as_reason` is "admin"."""
     runs_as_mine: bool = False

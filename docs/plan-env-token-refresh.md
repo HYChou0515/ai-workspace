@@ -1,5 +1,7 @@
 # token 快過期時，平台自己換新的
 
+> 被 #998（plan-seam-token-refresh.md）推翻
+
 > grill 2026-10-19。每條決定標了來源：**〔user〕** = user 逐題定案；**〔預設〕** = 我自己定、列出來給推翻的
 > 實作層決定。推翻 [plan-personal-env](plan-personal-env.md)「不做」裡的「過期偵測」那一條（只有那一條）。
 
