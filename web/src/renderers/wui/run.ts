@@ -15,10 +15,12 @@
 
 import { apiFetch } from "../../api/http";
 import { parseSseStream } from "../../api/sse";
-import { pageRefusal } from "./api";
+import { pageRefusal, useHeaders } from "./api";
 
-/** Start a run for one item, yielding the platform's events as they arrive. */
-export function itemRun(slug: string, itemId: string) {
+/** Start a run for one item, yielding the platform's events as they arrive;
+ * `deployed` names the page when it was opened by its deployed link
+ * (docs/plan-wui-usage.md U7). */
+export function itemRun(slug: string, itemId: string, deployed?: string) {
   return async function* (
     workflow: string,
     payload: Record<string, unknown>,
@@ -28,7 +30,7 @@ export function itemRun(slug: string, itemId: string) {
       `/a/${encodeURIComponent(slug)}/items/${encodeURIComponent(itemId)}/wui/run`,
       {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: useHeaders(deployed),
         body: JSON.stringify({ workflow, with: payload }),
         signal,
       },

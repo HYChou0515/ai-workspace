@@ -3003,6 +3003,7 @@ def create_app(
         files=files,
         pages=DeployedPages(spec),
         get_user_id=get_user_id,
+        usage=wui_usage,
     )
 
     if spa_dist is None:

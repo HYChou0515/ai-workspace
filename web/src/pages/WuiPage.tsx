@@ -16,7 +16,7 @@
  * are for navigating a workspace; someone who followed a link to one page has
  * nowhere to navigate to and no context for the crumbs.
  */
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useParams } from "react-router-dom";
 
 import { useT, type MsgKey } from "../lib/i18n";
@@ -31,6 +31,7 @@ import { WorkspaceSlugProvider } from "../hooks/useWorkspaceSlug";
 import { WuiView } from "../renderers/wui/WuiView";
 import { useQuery } from "@tanstack/react-query";
 import { RequestAccess } from "../renderers/wui/RequestAccess";
+import { reportOpened } from "../renderers/wui/api";
 
 /** A sentence, centred, for the ways this URL can be wrong — and, where the
  * wrongness may be a moment's (a read that failed, a file a restoring sandbox
@@ -105,6 +106,14 @@ export function WuiPage({
     },
     retry: false,
   });
+
+  // docs/plan-wui-usage.md U2/U7: the link was opened — told once, when the
+  // page is really a page (a failed read or a wrong file is not an open). Not
+  // again on Try again: the same page, the same visit.
+  const opened = view.isSuccess && parseViewSpec(view.data ?? "")?.view === VIEW_KIND.wui;
+  useEffect(() => {
+    if (opened && slug && itemId) void reportOpened(slug, itemId, path);
+  }, [opened, slug, itemId, path]);
 
   // A refetch of a query that NEVER had data goes back through `pending`, so
   // the first press on Try again replaces the sentence while the read is in
@@ -188,6 +197,7 @@ export function WuiPage({
             path={path}
             spec={spec}
             chrome="viewer"
+            deployedPage={path}
             onRetry={() => void view.refetch().then(() => setAttempt((n) => n + 1))}
           />
         </div>

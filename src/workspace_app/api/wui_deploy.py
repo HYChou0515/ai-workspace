@@ -24,6 +24,7 @@ after every idle reap and need a fresh Deploy to come back.
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 from collections.abc import Callable, Mapping
 from typing import Any
@@ -34,7 +35,7 @@ from fastapi import APIRouter, FastAPI, HTTPException, Response
 from msgspec import Struct
 from pydantic import BaseModel
 from specstar import QB, SpecStar
-from specstar.types import ResourceIDNotFoundError
+from specstar.types import ResourceIDNotFoundError, ResourceIsDeletedError
 
 from ..files import WorkspaceFiles
 from ..perm.model import Permission, Verb
@@ -42,6 +43,7 @@ from .file_routes import _workspace_path
 from .locator import ItemLocator
 from .timeutil import now_ms
 from .wui_page import VIEW_SUFFIX, NotAPage, load_wui_view
+from .wui_usage import WuiUsageStore
 
 
 class DeployedWui(Struct):
@@ -104,6 +106,15 @@ class DeployedPages:
             rm.create(row, resource_id=rid)
             return
         rm.update(rid, row)
+
+    def has(self, item_id: str, path: str) -> bool:
+        """Whether this page of this item is Deployed — what a page's usage is
+        counted for (`docs/plan-wui-usage.md` U7)."""
+        try:
+            self._rm().get(deployed_id(item_id, path))
+        except (ResourceIDNotFoundError, ResourceIsDeletedError):
+            return False
+        return True
 
     def forget(self, item_id: str, path: str) -> None:
         """Hard delete — a soft-deleted row still lists, and "removed from the
@@ -205,7 +216,22 @@ def register_wui_deploy_routes(
     pages: DeployedPages,
     get_user_id: Callable[[], str],
     now: Callable[[], int] | None = None,
+    usage: WuiUsageStore | None = None,
 ) -> None:
+    @app.post("/a/{slug}/items/{item_id}/wui/opened", status_code=204)
+    async def wui_opened(slug: str, item_id: str, body: DeployBody) -> Response:
+        """A Deployed page's link was opened (`docs/plan-wui-usage.md` U2/U7):
+        counted for the viewer, once per open — person-days are made of these
+        when read. The gate is the link's own (`read_content`). A page that is
+        not Deployed — or a path that names none — is not counted, so nobody
+        can grow the table with names of their own; the answer is the same
+        204 either way, since the page needs nothing back."""
+        workspace_id = locator.require_access(slug, item_id, "read_content")
+        path = _workspace_path(body.path)
+        if usage is not None and await asyncio.to_thread(pages.has, workspace_id, path):
+            usage.recorder.opened(workspace_id, path, user=get_user_id())
+        return Response(status_code=204)
+
     @app.post("/a/{slug}/items/{item_id}/wui/deploy", response_model=DeployedPage)
     async def deploy_wui(slug: str, item_id: str, body: DeployBody) -> DeployedPage:
         """List this page on the overview.

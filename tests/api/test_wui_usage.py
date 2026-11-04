@@ -173,7 +173,10 @@ def test_the_app_writes_what_it_counted_when_it_stops():
 
     spec = make_spec()
     app = create_app(
-        spec=spec, sandbox=MockSandbox(), filestore=MemoryFileStore(), runner=ScriptedAgentRunner([])
+        spec=spec,
+        sandbox=MockSandbox(),
+        filestore=MemoryFileStore(),
+        runner=ScriptedAgentRunner([]),
     )
     with TestClient(app):
         app.state.wui_usage_store.recorder.opened(*PAGE, user="alice")

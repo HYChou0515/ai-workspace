@@ -691,3 +691,102 @@ describe("WuiPage — someone the link does not open for (docs/plan-deploy-reach
     }
   });
 });
+
+describe("the deployed link counts its opens (docs/plan-wui-usage.md U2/U7)", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  function stubFetch() {
+    const fetchMock = vi.fn(async (_url: unknown, _init?: RequestInit) => new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetchMock);
+    return fetchMock;
+  }
+
+  const opens = (fetchMock: ReturnType<typeof stubFetch>) =>
+    fetchMock.mock.calls.filter(([url]) => String(url).includes("/wui/opened"));
+
+  it("tells the server once that the page was opened, naming the page", async () => {
+    const fetchMock = stubFetch();
+    const files: Record<string, string> = {
+      "/scrap-review/page.ai.yaml": YAML,
+      "/scrap-review/index.html": "<!doctype html><p>hello</p>",
+    };
+    const readFile = vi.fn(async (path: string) => {
+      const text = files[path];
+      if (text === undefined) throw notFound(path);
+      return { kind: "text", path, text, size: text.length, encoding: "utf-8" };
+    });
+
+    renderAt("/w/rca/i1/scrap-review/page.ai.yaml", readFile);
+
+    await waitFor(() => expect(screen.getByTitle("Scrap review")).toBeTruthy());
+    await waitFor(() => expect(opens(fetchMock)).toHaveLength(1));
+    const [url, init] = opens(fetchMock)[0];
+    expect(String(url)).toContain("/a/rca/items/i1/wui/opened");
+    expect(JSON.parse(String(init?.body))).toEqual({ path: "/scrap-review/page.ai.yaml" });
+  });
+
+  it("names the page on its uses, so they are counted too", async () => {
+    // Through the real path, as the slug test above: the frame asks for a tool.
+    const fetchMock = vi.fn(async (_url: unknown, _init?: RequestInit) =>
+      new Response(JSON.stringify({ output: "", exit_code: 0 }), {
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const files: Record<string, string> = {
+      "/scrap-review/page.ai.yaml": `${YAML}tools: [lot-status]\n`,
+      "/scrap-review/index.html": "<!doctype html><p>hello</p>",
+    };
+    const readFile = vi.fn(async (path: string) => {
+      const text = files[path];
+      if (text === undefined) throw notFound(path);
+      return { kind: "text", path, text, size: text.length, encoding: "utf-8" };
+    });
+
+    renderAt("/w/rca/i1/scrap-review/page.ai.yaml", readFile);
+    await waitFor(() => expect(screen.getByTitle("Scrap review")).toBeTruthy());
+    const win = (screen.getByTitle("Scrap review") as HTMLIFrameElement).contentWindow as Window;
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        data: { proto: WUI_PROTOCOL, id: "1", verb: "callTool", args: { name: "lot-status", args: {} } },
+        source: win,
+      }),
+    );
+
+    const toolCall = () => fetchMock.mock.calls.find(([url]) => String(url).includes("/wui/tools/"));
+    await waitFor(() => expect(toolCall()).toBeTruthy());
+    const init = toolCall()?.[1];
+    expect(new Headers(init?.headers).get("X-Wui-Deployed")).toBe(
+      encodeURIComponent("/scrap-review/page.ai.yaml"),
+    );
+  });
+
+  it("does not count a file that is not a page", async () => {
+    const fetchMock = stubFetch();
+    const readFile = vi.fn(async (path: string) => {
+      const text = "view: table\n";
+      return { kind: "text", path, text, size: text.length, encoding: "utf-8" };
+    });
+
+    renderAt("/w/rca/i1/data/page.ai.yaml", readFile);
+
+    expect(await screen.findByText(/data\/page\.ai\.yaml/)).toBeInTheDocument();
+    // Effects run after the sentence is drawn: give one the chance to report.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(opens(fetchMock)).toHaveLength(0);
+  });
+
+  it("does not count a page that could not be opened", async () => {
+    const fetchMock = stubFetch();
+    const readFile = vi.fn(async (path: string) => {
+      throw notFound(path);
+    });
+
+    renderAt("/w/rca/i1/missing/page.ai.yaml", readFile);
+
+    expect(await screen.findByText(/missing\/page\.ai\.yaml/)).toBeInTheDocument();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(opens(fetchMock)).toHaveLength(0);
+  });
+});
+
