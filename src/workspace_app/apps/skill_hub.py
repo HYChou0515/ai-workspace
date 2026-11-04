@@ -784,6 +784,10 @@ class SkillHubStore:
                 res = rm.get_resource_revision(entry_id, revision_id)
                 if isinstance(res.data, SkillHubEntry):
                     out.append((revision_id, res.info.created_time, res.data))
+            # In the order they were WRITTEN: `list_revisions` promises no
+            # order — the in-memory backend answers oldest first, the disk one
+            # does not — and every number below is counted along it (#1004).
+            out.sort(key=lambda r: r[1])
             return out
 
         events: list[HistoryEvent] = []

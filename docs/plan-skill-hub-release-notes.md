@@ -102,5 +102,17 @@ reminder read it from the same place.
   invalidation clears both; a Later / Skip clears the mark through a window
   event (`onRemindersChanged`), since localStorage writes in the same tab fire
   no `storage` event.
+- **History numbers versions in the order they were written.** Recording the
+  demo on the disk backend showed the newest publish as "v1" and the first as
+  "v2 · 目前版本", with the note under the wrong number: `history()` counted
+  along `list_revisions()` as if it were oldest first, which only the
+  in-memory backend promises. It now sorts by the revision's time. The bug
+  predates this plan; it matters here because `updates_since` and the
+  reminder read the same order. Pinned on both backends
+  (`tests/apps/test_skill_hub_history_order.py`).
+- **A mark on a folded header action shows on the "⋯" button.** At 1280px
+  the chat header folds its actions into "⋯", and the dot was drawn only on
+  unfolded buttons, so the skills mark (and the older env-missing one) was
+  invisible. The trigger now carries it and names what it hides.
 - **The old 「skill 已變更」 badge stays** for a behind copy with no `updates`
   (an older pod's answer during a rollout); with `updates` the new row replaces it.
