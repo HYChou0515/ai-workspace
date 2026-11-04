@@ -174,8 +174,9 @@ def schemas() -> list[dict]:
             "Publish one of THIS workspace's skills (a `.skill/<name>/` folder) to the "
             "skill hub, where every user of the platform can find it and install it. "
             "Use it when the user asks to share, publish or upload a skill — and only "
-            "after they have said which one.",
-            {"name": s},
+            "after they have said which one. A new version of a skill already on the "
+            "skill hub needs `release_note`: what changed, for the people who installed it.",
+            {"name": s, "release_note": s},
             ["name"],
         ),
     ]
@@ -256,6 +257,17 @@ def run(name: str, args: dict, work: Path, events: list[Event]) -> str:
             "from the next turn on; load it any time with read_skill('reflow-triage')."
         )
     if name == "publish_skill":
+        # A scenario stages `published-skills.txt` (names already on the hub, one a line;
+        # not `.json`, which `load_scenarios` would read as a scenario)
+        # to make this a new version: then, as the real tool does, no note means
+        # nothing is published and the change comes back to draft one from
+        # (plan-skill-hub-release-notes P3). The words are the real tool's.
+        listed = work / "published-skills.txt"
+        on_hub = listed.read_text().split() if listed.is_file() else []
+        if args["name"] in on_hub and not str(args.get("release_note", "")).strip():
+            from workspace_app.agent.tools import _changes_since, release_note_needed
+
+            return release_note_needed(args["name"], _changes_since(_SAMPLE_BEFORE, _SAMPLE_AFTER))
         return (
             # Paragraphs, like the real reply (agent/tools.py, D15).
             f"published skill '{args['name']}' to the skill hub (new; entry "
@@ -267,6 +279,18 @@ def run(name: str, args: dict, work: Path, events: list[Event]) -> str:
             '{"entry_id": "0123456789abcdef0123456789abcdef"}'
         )
     return f"unknown tool {name!r}"
+
+
+#: The two versions of a re-published skill the double reports the change
+#: between — run through the real `_changes_since`, so the format is the tool's.
+_SAMPLE_BEFORE = {"SKILL.md": b"Flag lines with ERROR.\n"}
+_SAMPLE_AFTER = {
+    "SKILL.md": (
+        b"Flag lines with ERROR or FATAL, and group them by service.\n"
+        b"Read references/thresholds.md before judging a spike.\n"
+    ),
+    "references/thresholds.md": b"A spike is 3x the hourly median.\n",
+}
 
 
 def _exec(cmd: list[str], work: Path) -> str:

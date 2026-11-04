@@ -226,6 +226,40 @@ def test_the_standing_instruction_doubles_write_where_the_real_tools_do(tmp_path
     assert SKILL_HUB_ENTRY_MARKER + '{"entry_id": ' in published
 
 
+def test_publish_double_asks_a_republish_for_a_release_note_as_the_real_tool_does(tmp_path):
+    """plan-skill-hub-release-notes P3: the guidance under test says "a new
+    version comes back 'not published yet' with the change — draft a note from
+    it and confirm it with ask_user". A double that published every call never
+    showed the model that reply, so the scenario could not measure the draft.
+    A scenario says which skills are already on the hub by staging
+    `published-skills.txt`; a skill on it is a new version and, without a
+    note, is refused in the real reply's words — with a change to draft from."""
+
+    from workspace_app.skill_eval.tools import schemas as all_schemas
+
+    events: list[Event] = []
+    (tmp_path / "published-skills.txt").write_text("log-digest\n")
+
+    refused = run("publish_skill", {"name": "log-digest"}, tmp_path, events)
+    assert refused.startswith("not published yet — this is a new version of your 'log-digest'")
+    assert "Changed since the current version:" in refused
+    assert "published skill" not in refused
+
+    blank = run("publish_skill", {"name": "log-digest", "release_note": "  "}, tmp_path, events)
+    assert blank.startswith("not published yet")
+
+    noted = run(
+        "publish_skill", {"name": "log-digest", "release_note": "Adds X."}, tmp_path, events
+    )
+    assert "published skill 'log-digest'" in noted
+
+    # A skill not yet on the hub is v1: no note needed.
+    assert "published skill 'fresh'" in run("publish_skill", {"name": "fresh"}, tmp_path, events)
+
+    publish = next(s for s in all_schemas() if s["function"]["name"] == "publish_skill")
+    assert "release_note" in publish["function"]["parameters"]["properties"]
+
+
 def test_the_standing_instruction_doubles_take_the_real_tools_parameters():
     """Review round 2: the `save_workflow` double took `(name, body)` while the
     real tool — and the `author-workflow` guidance under test — takes

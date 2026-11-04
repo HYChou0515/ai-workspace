@@ -2771,6 +2771,20 @@ async def save_skill_impl(
 _RELEASE_NOTE_DIFF_CAP = 6000
 
 
+def release_note_needed(name: str, change: str) -> str:
+    """`publish_skill`'s reply to a new version sent without a note
+    (plan-skill-hub-release-notes D2). One function, so the `skill_eval` double
+    answers in exactly these words."""
+    return (
+        f"not published yet — this is a new version of your '{name}', and a new version "
+        "needs a release note telling the people who installed it what changed. Draft a "
+        "short one from the change below (what was added, what changed, what to watch "
+        "for), show it to the user and ask them to confirm or edit it, then call "
+        f"publish_skill('{name}', release_note=...) again with it.\n\nChanged since the "
+        f"current version:\n```\n{change}\n```"
+    )
+
+
 def _changes_since(current: Mapping[str, bytes], new: Mapping[str, bytes]) -> str:
     """What `new` changes over `current`, per file: added / removed / changed,
     with a unified diff for text — capped at `_RELEASE_NOTE_DIFF_CAP`."""
@@ -2910,15 +2924,7 @@ async def publish_skill_impl(
     # published — before the room check and the review, so neither is spent —
     # and the change since the current version comes back to draft it from.
     if existed is not None and not release_note.strip():
-        change = _changes_since(await hub.payload_of(existed), payload)
-        return (
-            f"not published yet — this is a new version of your '{name}', and a new version "
-            "needs a release note telling the people who installed it what changed. Draft a "
-            "short one from the change below (what was added, what changed, what to watch "
-            "for), show it to the user and ask them to confirm or edit it, then call "
-            f"publish_skill('{name}', release_note=...) again with it.\n\nChanged since the "
-            f"current version:\n```\n{change}\n```"
-        )
+        return release_note_needed(name, _changes_since(await hub.payload_of(existed), payload))
 
     # After the publish the folder's manifest is rewritten to the entry it
     # just became (below) — but only where that changes nothing about what the
