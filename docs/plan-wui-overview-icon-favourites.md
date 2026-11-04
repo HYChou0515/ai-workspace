@@ -4,6 +4,9 @@ Amends [`plan-wui-overview.md`](plan-wui-overview.md) (PR #811). Same PR, same
 branch, phases continue at **P11** (this plan) — the author's call (2026-09-18), taken
 knowing it reopens a PR that four review rounds had closed.
 
+Later: a page's owner also reads its usage on its card and table row — opens in
+person-days, uses and their time (#1005, [`plan-wui-usage.md`](plan-wui-usage.md) U5).
+
 ## The ask (the author's words, 2026-09-18)
 
 > 我希望 wui 可以提供 icon,在 wui 總覽頁面就可以預設使用圈圈加 title 的形式放上去。

@@ -2118,8 +2118,9 @@ async def test_a_phase_whose_steps_were_already_done_reads_as_done(spec_instance
 
 
 def test_a_run_settling_is_told_once_whatever_ends_it(spec_instance: SpecStar):
-    """Every way a run ends goes through `_patch`; the move from active to
-    terminal is told exactly once — not a later patch of an ended run, not a
+    """The endings `_patch` writes (timeout, lost page job, abandon, stopped
+    while pending — the driver's own are the tests below): the move from active
+    to terminal is told exactly once — not a later patch of an ended run, not a
     patch that keeps it running."""
     settled: list[str] = []
     orch, _fakes = _orch(spec_instance, _ok)

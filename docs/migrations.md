@@ -3337,12 +3337,16 @@ Workflows 打開模型答錯格式的那次執行——執行結束後還留著�
 
 **設定** — 無,config 沒有新 key。寫回間隔照工具統計,每 5 分鐘一次、關機時一次。
 
-**資料** — 新增兩個 model,不用回填:`WuiUsageDay`(每頁每天每顆 pod 一列,索引 `item_id`、`day`)與 `WuiRunUse`(頁面起的
-run 跑完前的暫存列,跑完就刪)。兩者都在 `spec.apply` 之後註冊,沒有 auto-CRUD 路由。**所有天數都保留,不會自動刪**——
-列數隨「部署過的頁面數 × 天數 × pod 數」長,不隨流量長。沒有 `Schema` 升版。
+**資料** — 新增三個 model,不用回填:`WuiUsageDay`(每頁每天一列,各 pod 寫回時合併進同一列;索引 `item_id`、`day`)、
+`WuiUsageTotal`(每頁一列,總覽卡片的「總共」讀它;索引 `item_id`)、`WuiRunUse`(頁面起的 run 跑完前的暫存列,跑完就刪)。
+三者都在 `spec.apply` 之後註冊,沒有 auto-CRUD 路由。**所有天數都保留,不會自動刪**——列數隨「部署過的頁面數 × 天數」長,
+不隨流量、pod 數或重啟次數長。沒有 `Schema` 升版。
 
-**k8s · CI 側** — 照常重 build、部署。manifest 沒改。部署頁的請求多帶一個 header `X-Wui-Deployed`;前面有代理會濾掉自訂
-header 的話要放行,否則使用量一直是 0(打開量照算,它不靠 header)。
+**k8s · CI 側** — 照常重 build、部署。manifest 沒改。
+
+- `rollout 前`:部署頁的請求多帶一個 header `X-Wui-Deployed`。前面的代理(nginx ingress、公司的 proxy)如果只放行列出來的
+  header,要把它加進去。**為什麼**:後端靠這個 header 知道一次使用來自哪個部署頁。**沒做的症狀**:卡片上「使用」一直是
+  0 次,「打開」照常增加(打開走 body,不靠 header)。
 
 **行為改變,沒有開關**:
 

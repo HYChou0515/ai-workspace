@@ -31,7 +31,7 @@ user 要「WUI 用量統計，像 skill hub 和 MCP 那樣」。現況〔查證�
 | U6 | 作者自己打開、自己測試**也算** | 〔user〕 |
 | U7 | 只算**部署連結**上的打開；使用量同範圍——item 裡打開頁面按的不算 | 〔user〕＋使用量同範圍〔預設〕 |
 | U8 | superuser 的統計放進 Diagnostics「使用統計」頁，成為工具、skill 之後的**第三區**，沿用同一套表格、圖表、明細側邊面板、CSV | 〔user〕 |
-| U9 | 每頁每天一列，列裡記每個人的打開次數、使用次數、使用時間（依三類分開）；每 5 分鐘與 SIGTERM 時寫回、只留一個 revision；**所有天數都保留** | 〔user〕＋寫法照抄工具統計〔預設〕 |
+| U9 | 每頁每天一列，列裡記每個人的打開次數、使用次數、使用時間（依三類分開）；每 5 分鐘與 SIGTERM 時寫回、只留一個 revision；**所有天數都保留** | 〔user〕＋記憶體累加、定時寫回照抄工具統計〔預設〕；「一列」跨 pod 合併（review 第 1 輪改，見〈存法〉） |
 | U10 | 失敗的動作也算進次數和總時間（失敗那次 AI 一樣花了時間） | 〔預設〕 |
 | U11 | 非同步動作（`startRun`／`startTool`／`startAgent`）在 run **走到結束狀態**時記時間；同步動作（`callTool`／`callAgent`）在路由裡量 | 〔預設〕 |
 | U12 | superuser 頁的第三區跟工具、skill 兩區**共用頁面的 7／30／90 天**（實作時改：一頁兩種時間範圍會讓人以為三區比的是同一段時間）；「總共」看主人的卡片；報表與 CSV 的 API 另接受 `days=0` 代表全部。也跟頁面的 App 篩選；選了「頁面」以外的場合時，第三區說「這一區只有頁面場合」 | 〔預設〕 |
@@ -44,26 +44,39 @@ user 要「WUI 用量統計，像 skill hub 和 MCP 那樣」。現況〔查證�
 （`DeployedWui`，`api/wui_deploy.py`）時才記；路徑亂填或頁面沒部署 → 不記、請求照常。列數因此以「部署過的頁面數」為上限，
 沒人能塞假頁面名稱灌爆資料。
 
-**打開**：新路由 `POST /a/{slug}/items/{item_id}/wui/opened`（body：頁面路徑），`WuiPage` 讀到頁面後打一次；要求
-`read_content`（和 `/w/` 連結本身同一個門檻）。只記，不回任何東西給頁面用（一律 204）。
+**打開**：新路由 `POST /a/{slug}/items/{item_id}/wui/opened`，頁面路徑放在 **body**（不是 header），`WuiPage` 讀到頁面後打
+一次；同一次掛載裡同一頁只報一次，讀取失敗後按「Try again」讀回來不算第二次（review 第 1 輪）。要求 `read_content`（和
+`/w/` 連結本身同一個門檻）。只記，不回任何東西給頁面用：沒部署、路徑不存在都回 204；路徑含 `..` 這種不合法的寫法回
+400（`file_routes._workspace_path` 的規則，和部署路由一樣）。
 
 **使用**：
 - `callTool`：路由裡量工具真的執行的那段時間（被拒絕的不算，沒花任何人的時間），結束時記一筆（成功或失敗都記，U10）。
 - `startRun`／`startTool`／`startAgent`，以及 `callAgent`（它底下也是一個 run，路由只是等它跑完）：開始時把「哪個頁面、誰」
   記在 run 旁邊的私有列 `WuiRunUse`（和 `RunIdentity` 一樣不開 auto-CRUD——`WorkflowRun` 的 auto-CRUD 沒有寫入閘），run
-  結束時記一筆（時間＝開始到結束），然後刪掉那列——「取出並刪除」，所以只記一次。
+  結束時記一筆，然後刪掉那列——「取出並刪除」，所以只記一次。
+- **時間取自 run 自己的紀錄**：`WorkflowRun.started` 到 `ended`（review 第 1 輪改；原本是寫下歸屬時看時鐘）。所以排隊等
+  空位的時間不算（那段時間沒替任何人做事）；還沒開始就被停的 run 算一次、0 毫秒；頁面工作的時間以它的 `deadline`
+  為上限——遺失的頁面工作要等有人碰它才會被結掉，那時可能早已過期限很久。逾時被停的工作（`page_job_timeout_s`）
+  照 U10 算一次，時間到期限為止。
 - **結束有兩個寫入來源**〔查證〕：driver（`workflow/driver.run_workflow`）自己寫完成／失敗／取消，orchestrator 的 `_patch`
   寫逾時、頁面工作遺失、放棄、還沒開始就被停。兩邊都通知 `on_settled`（driver 多一個參數；`_patch` 只在「原本是進行中、
   這次寫成結束」時通知）。只掛 `_patch` 的第一版漏掉了 driver 那邊，測試抓到。
 - **路由寫下歸屬之前 run 就跑完**：那時通知找不到歸屬。路由寫完歸屬後再看一次 run 狀態，已經結束就當場記。
-- **pod 死掉**〔查證〕：歸屬存在資料庫裡，不在記憶體。頁面工作沒有續跑，會被標成遺失、經 `_patch` 寫成失敗而被記到；
-  一般 run 由別的 pod 續跑完成時 driver 會通知，放棄時經 `_patch`。時間從開始算到結束，中間停掉的時間也算進去。
+- **pod 死掉**〔查證〕：歸屬存在資料庫裡，不在記憶體，但不是每種 run 都會被結掉——見〈已知限制〉。
 
-**存法**（U9）：model `WuiUsageDay`：`item_id`、`page`、`day`、`pod`，加上 `by_user: {人: [打開次數, workflow 次數, workflow 毫秒,
-工具次數, 工具毫秒, agent 次數, agent 毫秒]}`。索引 `item_id`、`day`。人天＝那天各 pod 列的 `by_user` 鍵的聯集大小。
+**存法**（U9，review 第 1 輪改）：
+- `WuiUsageDay`：`item_id`、`page`、`day`，加上 `by_user: {人: [打開次數, workflow 次數, workflow 毫秒, 工具次數, 工具毫秒,
+  agent 次數, agent 毫秒]}`。索引 `item_id`、`day`。**每頁每天一列，不分 pod**：每顆 pod 寫回時讀那一列、加上自己的數字、
+  帶著讀到的 etag 寫回（compare-and-swap），被別的 pod 搶先就重讀重做。第一版是「每頁每天每顆 pod 一列」（照抄工具
+  統計），列數會隨 pod 數和每次重啟倍增。
+- `WuiUsageTotal`：每頁一列，`person_days`、`uses`、`uses_ms`。寫 day 列的同一次寫回，把這次**多出來的**人天（這次讓某人
+  那天的打開從 0 變成大於 0 的人數）、次數、毫秒加上去，同樣用 compare-and-swap。day 列寫失敗 → 數字退回記憶體，下次
+  再寫；day 列寫成功但 total 寫失敗 → 只記 log，不重試（重試會把同一批數字加兩次）。
+- 人天＝那天 `by_user` 裡打開次數大於 0 的人數。只有使用、沒有打開紀錄的人（例如打開那一下沒送到）不算人天。
+- 日期是 **UTC** 的日期。
 
 **讀**：
-- `/wui` 總覽卡片：每張卡片的「總共」「過去 7 天」由後端算好放進 `DeployedPage`（只對頁面主人回傳，其他人拿不到這幾個欄位。「主人」＝能改這個 item 的人〔預設〕）。查詢按 `item_id` 索引，一次查完總覽上所有頁面。
+- `/wui` 總覽卡片：每張卡片的「總共」「過去 7 天」由後端算好放進 `DeployedPage`（只對頁面主人回傳，其他人拿不到這幾個欄位。「主人」＝能改這個 item 的人〔預設〕）。「總共」讀 `WuiUsageTotal`，「過去 7 天」讀那 7 天的 day 列——兩次按索引的查詢，筆數以「頁面數」和「7 天」為上限，不會隨上線天數變多（review 第 1 輪：第一版每次載入都讀全部歷史）。讀失敗時總覽照常列出頁面，只是沒有數字。
 - 使用統計頁第三區：每頁一列（頁面、item、人天、三類次數與總時間）；點一列在側邊面板看每個人；CSV 下載原始的每人每天列。
 
 ## UI〔指南〕
@@ -72,15 +85,21 @@ user 要「WUI 用量統計，像 skill hub 和 MCP 那樣」。現況〔查證�
   link to additional details」，次要資訊和主內容分開（範例用一條橫線隔開）。數字放在卡片底部的次要區，一行打開量、一行使用量，
   不搶頁面名稱與連結。
 - **數量的表現**：NN/g *Dashboards: Making Charts and Graphs Easier to Understand*
-  （https://www.nngroup.com/articles/dashboards-preattentive/）——長度是最好比較的編碼，「color should not be used to communicate
-  information about quantitative values or magnitude」。卡片上只放數字和單位（不用顏色分大小）；使用統計頁沿用工具統計已有的
+  （https://www.nngroup.com/articles/dashboards-preattentive/）——「color should not be used to communicate information about
+  quantitative values or magnitude」。卡片上只放數字和單位（不用顏色分大小）；使用統計頁沿用工具統計已有的
   橫向長條（長度）。
-- 卡片文字範例：「打開 · 總共 120 人天 · 過去 7 天 18 人天」「使用 · 總共 45 次、3.2 小時 · 過去 7 天 6 次、0.4 小時」；動手前
-  再對照截圖確認。
+- 卡片文字（實作後）：「**打開** 總共 120 人天 · 近 7 天 18 人天」「**使用** 總共 45 次、3.2 小時 · 近 7 天 6 次、24 分鐘」。
+  時間的單位四捨五入**之後**才選（59.6 秒寫「1 分鐘」，不寫「60 秒」）。
 
 ## 已知限制
 
 - pod 沒收到 SIGTERM 就死掉時，最後不到 5 分鐘的計數會掉（和工具統計相同）。
+- **頁面的 `startRun` 跑到一半 pod 死掉，永遠不會被算到**〔查證〕：孤兒 run 的追蹤（#429 P8，`TriggerSweeper` 的
+  `OrchestratorOrphanOps`）只處理排程觸發的 run，頁面起的 run 會停在「執行中」，`WuiRunUse` 那列也留著。
+- **遺失的頁面工作要有人碰才會被算到**〔查證〕：`_settle_lost_page_jobs` 只在同一個 item 開新的頁面工作時跑，
+  `page_job_state` 只在頁面查狀態時跑。沒人再碰就一直不算；算到時時間以期限為上限。
+- **停在 gate 等人的時間算進去**：時間是 run 的開始到結束，`awaiting_human` 那段沒有扣掉。
+- 逾時被停的頁面工作算一次使用（U10），時間記到期限為止。
 - 頁面改名或搬資料夾後，舊數字留在舊路徑下，不會自動合併。
 - 若之後做了「每人一份頁面副本」（#996 `plan-wui-publish.md`），副本是不同 item，會分開算。
 
@@ -93,4 +112,4 @@ user 要「WUI 用量統計，像 skill hub 和 MCP 那樣」。現況〔查證�
 | P3 | 三類使用的記錄：同步在路由量、非同步在 run 結束時記 | 每類各一條：次數與時間正確；失敗也記；item 裡按的不記；同一個 run 只記一次 |
 | P4 | `/wui` 卡片顯示（只給頁面主人） | 主人看得到、其他人拿不到欄位；數字與後端一致；截圖對照 NN/g |
 | P5 | 使用統計頁第三區＋明細＋CSV（superuser） | 同工具統計的元件；共用頁面的 7／30／90；整頁仍只有一個側邊面板 |
-| P6 | 文件：runbook 條目、design-history、`extending-the-platform.md`（頁面作者看得到什麼） | `tests/docs/test_docs_index.py`；`mkdocs build --strict` |
+| P6 | 文件：runbook 條目、design-history、`wui.md`（頁面作者看得到什麼：寫在 WUI 總覽那一節，作者讀的是那裡） | `tests/docs/test_docs_index.py`；`mkdocs build --strict` |

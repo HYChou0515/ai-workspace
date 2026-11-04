@@ -358,7 +358,7 @@ def test_a_refused_tool_is_not_a_use():
     assert store.recorder.drain() == {}
 
 
-def test_nothing_here_blocks_the_loop():
+def test_the_page_lookup_is_awaited_from_a_running_loop():
     """Sanity: the facade's async lookup is awaitable from a running loop."""
 
     async def go() -> str | None:
