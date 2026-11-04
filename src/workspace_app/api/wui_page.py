@@ -30,6 +30,19 @@ async def load_wui_view(files: WorkspaceFiles, workspace_id: str, path: str) -> 
 
     Read from the item itself, so the answer is the server's: a body or a header
     the browser composed only names a path to check."""
+    kind, doc = await load_view_file(files, workspace_id, path)
+    if kind != "wui":
+        raise NotAPage(f"not a WUI: {path} has view {kind or 'none'!r}")
+    return doc
+
+
+async def load_view_file(
+    files: WorkspaceFiles, workspace_id: str, path: str
+) -> tuple[str, dict[str, Any]]:
+    """The view file at workspace-absolute ``path``: its ``view:`` kind ("" when
+    it names none) and the parsed document — or ``NotAPage`` when it is not a
+    view file of this item at all. Which kinds a caller accepts is its own call
+    (a WUI page, or a published WUI / agent, `api/publish.py`)."""
     if not path.endswith(VIEW_SUFFIX):
         raise NotAPage(f"not a view file: {path}")
     if should_ignore(path, DEFAULT_IGNORES):
@@ -51,10 +64,7 @@ async def load_wui_view(files: WorkspaceFiles, workspace_id: str, path: str) -> 
     # A view file is a mapping; anything else has no `view:` to read.
     doc: dict[str, Any] = loaded if isinstance(loaded, dict) else {}
     kind = doc.get("view")
-    if kind != "wui":
-        found = kind if isinstance(kind, str) else "none"
-        raise NotAPage(f"not a WUI: {path} has view {found!r}")
-    return doc
+    return (kind if isinstance(kind, str) else ""), doc
 
 
 def page_folder(view_path: str) -> str:

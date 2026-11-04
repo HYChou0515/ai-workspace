@@ -148,10 +148,12 @@ def make_disk_ledger_pass(
     workspace_usage = getattr(filestore, "workspace_usage", None)
     if workspace_usage is None:
         return None
+    from ..api.publish import Publications
     from ..api.sandbox_activity import SpecstarActivityStore
     from ..apps.resolve import find_work_item
 
     ledger = DiskLedger(spec)
+    publications = Publications(spec)
     activity = SpecstarActivityStore(spec)
 
     async def run() -> DiskReconcileReport:
@@ -173,7 +175,13 @@ def make_disk_ledger_pass(
             items=[(item, debtor) for item, debtor, _slug in items],
             is_live=is_live,
             usage=workspace_usage,
-            exists=lambda item_id: find_work_item(spec, item_id, include_deleted=True) is not None,
+            # A published snapshot is charged to its publisher under its own
+            # namespace (`api/publish.py`, C10) — not an item, but owed while a
+            # publication still points at it.
+            exists=lambda item_id: (
+                find_work_item(spec, item_id, include_deleted=True) is not None
+                or publications.holds_snapshot(item_id)
+            ),
             ledger=ledger,
         )
         if usage_recorder is not None:

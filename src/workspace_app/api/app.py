@@ -143,6 +143,7 @@ from .model_settings_routes import register_model_settings_routes
 from .notification_delivery import INotificationChannel
 from .notifications import notify, register_notification_routes
 from .private_env import PrivateEnvStore, register_private_env, register_private_env_routes
+from .publish import Publications, register_publications, register_publish_routes
 from .quota_routes import may_close_environment, register_quota_routes
 from .refresh_claims import RefreshClaims, register_refresh_claims
 from .registry import InvestigationRegistry
@@ -1961,6 +1962,7 @@ def create_app(
     # everything above, and both reasons apply: Deploy on a bare test client
     # writes one, and the blob-gc worker must hold every model the API does.
     register_deployed_wui(spec)
+    register_publications(spec)
     register_wui_pass(spec)
     # The PRIVATE env layer (`docs/plan-wui-viewer-login.md`): no auto-CRUD —
     # its only door is the caller-scoped routes below.
@@ -2997,6 +2999,15 @@ def create_app(
         locator=locator,
         files=files,
         pages=DeployedPages(spec),
+        get_user_id=get_user_id,
+    )
+    register_publish_routes(
+        api,
+        locator=locator,
+        files=files,
+        filestore=filestore,
+        publications=Publications(spec),
+        ledger=disk_ledger,
         get_user_id=get_user_id,
     )
 
