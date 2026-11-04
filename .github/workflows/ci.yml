@@ -9,11 +9,17 @@ on:
     branches: [master]
   pull_request:
 
+# Pinned, not `ubuntu-latest`: GitHub moved `ubuntu-latest` to ubuntu-26.04
+# between 2026-10-22 and 10-29, and the same master went red there — its newer
+# glibc refuses the carrier launcher's `ld-linux … python3` start ("Security
+# violation: Requested utility `python3` does not match executable name") and
+# the kb zip / document-render tests fail with it. Move this to 26.04 when the
+# code runs there (#1000), not by letting `latest` drift.
 jobs:
   # Lint / format / type — split out of the test matrix so it runs ONCE, not
   # once per shard. It's fast (seconds), so it never gates wall-clock time.
   backend-lint:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 
@@ -84,7 +90,7 @@ jobs:
   # `backend` flag; Codecov merges the shards' partial reports for the badge.
   backend-test:
     name: backend-test (${{ matrix.name }})
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
@@ -221,7 +227,7 @@ jobs:
     # no workspace-app deps) — #251. It gets its own lean CI: lint + type + unit
     # tests. Integration tests (real subprocess / root / cgroup v2) are excluded
     # here, same as the backend job; the 100% gate is the full local suite.
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     defaults:
       run:
         working-directory: sandbox-host
@@ -262,7 +268,7 @@ jobs:
     # Its web half is type-checked and tested by frontend-test (web/ covers
     # view-plugins/*/web/src). Both read the one spec schema and spec-corpus/,
     # so a reader that drifts fails in one of the two.
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     defaults:
       run:
         working-directory: view-plugins/chart/sandbox-src
@@ -294,7 +300,7 @@ jobs:
           uv run coverage report --fail-under=100
 
   frontend-test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     defaults:
       run:
         working-directory: web
