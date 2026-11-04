@@ -102,6 +102,10 @@ def register_apps(
     perm_indexes: IndexedFields = [
         ("permission.visibility", str),
         ("permission.read_meta", list),
+        # A copy's publication (`WorkItemBase.published_from`): one per person,
+        # an agent's conversations and the usage numbers are queries on it. An
+        # item written before the field is not a copy, so it needs no backfill.
+        ("published_from", str),
     ]
     for model, indexed_fields in _app_models().values():
         spec.add_model(

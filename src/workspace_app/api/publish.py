@@ -106,6 +106,10 @@ class Published(Struct):
     files: int = 0
     bytes: int = 0
     notes: list[ReleaseNote] = []
+    #: "One shared by everyone" (W3): the copy everybody lands in, made at
+    #: publish in the publisher's name. A re-publish makes a new one; the old
+    #: stays, an ordinary workspace of theirs.
+    shared_copy: str = ""
 
 
 #: `filestore/specstar_impl._fid`'s spelling, as `wui_deploy.deployed_id`.
@@ -240,6 +244,8 @@ class PublishBody(BaseModel):
 
 
 class PublishedOut(BaseModel):
+    #: The row id (`published_id`): what a copy's `published_from` holds.
+    id: str
     kind: Kind
     slug: str
     item_id: str
@@ -260,6 +266,7 @@ class PublishedOut(BaseModel):
 
 def published_out(row: Published) -> PublishedOut:
     return PublishedOut(
+        id=published_id(row.item_id, row.path),
         kind=row.kind,
         slug=row.slug,
         item_id=row.item_id,
@@ -277,6 +284,17 @@ def published_out(row: Published) -> PublishedOut:
         files=row.files,
         bytes=row.bytes,
     )
+
+
+class OpenBody(BaseModel):
+    item_id: str
+    path: str
+
+
+class OpenedOut(BaseModel):
+    slug: str
+    item_id: str
+    created: bool
 
 
 class FolderSize(BaseModel):
@@ -311,6 +329,7 @@ def estimate_of(paths: list[tuple[str, int]]) -> Estimate:
 def register_publish_routes(
     app: FastAPI | APIRouter,
     *,
+    spec: SpecStar,
     locator: ItemLocator,
     files: WorkspaceFiles,
     filestore: FileStore,
@@ -375,6 +394,17 @@ def register_publish_routes(
             bytes=size,
             notes=notes,
         )
+        if body.sharing == "shared":
+            from .publish_copy import make_copy, shared_copy_permission
+
+            row.shared_copy = await make_copy(
+                spec,
+                filestore,
+                ledger,
+                row,
+                owner=publisher,
+                permission=shared_copy_permission(row),
+            )
         publications.record(row)
         if snapshot:
             await ledger.record(snapshot, publisher, size)
@@ -396,6 +426,21 @@ def register_publish_routes(
             await filestore.purge(row.snapshot)
             await ledger.forget(row.snapshot)
         return Response(status_code=204)
+
+    @app.post("/published/open", response_model=OpenedOut)
+    async def open_published(body: OpenBody) -> OpenedOut:
+        """The workspace the caller lands in when they open a publication —
+        theirs, made now if the way of sharing says so (P2)."""
+        from .publish_copy import open_copy
+
+        row = publications.get(body.item_id, _workspace_path(body.path))
+        if row is None:
+            raise HTTPException(status_code=404, detail="not published")
+        try:
+            opened = await open_copy(spec, filestore, ledger, row, opener=get_user_id())
+        except LookupError as exc:
+            raise HTTPException(status_code=410, detail=str(exc)) from None
+        return OpenedOut(slug=opened.slug, item_id=opened.item_id, created=opened.created)
 
     @app.get("/a/{slug}/items/{item_id}/publish/estimate", response_model=Estimate)
     async def estimate(slug: str, item_id: str, path: str) -> Estimate:

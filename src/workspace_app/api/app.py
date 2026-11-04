@@ -3003,6 +3003,7 @@ def create_app(
     )
     register_publish_routes(
         api,
+        spec=spec,
         locator=locator,
         files=files,
         filestore=filestore,
