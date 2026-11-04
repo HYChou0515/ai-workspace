@@ -156,6 +156,28 @@ def test_starting_a_sub_agent_as_a_job_counts_one_agent_use_when_it_ends():
     assert got["admin"][AGENT] == 1
 
 
+def test_a_count_that_fails_never_fails_the_job_it_counts(monkeypatch):
+    """Review round 1 (defect 1 / regression 1): the job has started — a
+    failing count must not hide its id from the page (which would then start
+    it again), so the route answers as it would with no counting at all."""
+    from .test_wui_agents import SubRunner, _app, _url, _wait_state
+
+    def boom(*_a, **_k):  # noqa: ANN002, ANN003, ANN202
+        raise RuntimeError("store down")
+
+    monkeypatch.setattr(WuiUsage, "started", boom)
+    client, item_id, spec = _app(SubRunner())
+    _deploy(spec, item_id)
+    with client:
+        r = client.post(
+            _url(item_id, "jobs"),
+            json={"kind": "agent", "name": "log-digger", "input": "x"},
+            headers=_hdr(),
+        )
+        assert r.status_code == 200, r.text
+        assert _wait_state(client, item_id, r.json()["job_id"], "done")["state"] == "done"
+
+
 def test_a_sub_agent_that_fails_still_counts():
     """U10: the time was spent whether or not it worked."""
     from workspace_app.api.events import RunError

@@ -27,6 +27,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import dataclasses
+import logging
 from collections.abc import Callable, Mapping
 from typing import Any
 from urllib.parse import quote
@@ -45,6 +46,8 @@ from .locator import ItemLocator
 from .timeutil import now_ms
 from .wui_page import VIEW_SUFFIX, NotAPage, load_wui_view
 from .wui_usage import WuiUsageStore
+
+logger = logging.getLogger(__name__)
 
 
 class DeployedWui(Struct):
@@ -363,7 +366,11 @@ def register_wui_deploy_routes(
         # every one asked in ONE read, by the indexed `item_id`.
         owned = [p for p in out if p.can_remove]
         if usage is not None and owned:
-            sums = await asyncio.to_thread(usage.summary, [(p.item_id, p.path) for p in owned])
-            for p in owned:
-                p.usage = PageUsageOut(**dataclasses.asdict(sums[(p.item_id, p.path)]))
+            try:
+                sums = await asyncio.to_thread(usage.summary, [(p.item_id, p.path) for p in owned])
+            except Exception:  # noqa: BLE001 — the numbers are extra; the listing is not
+                logger.exception("wui overview: could not read page usage")
+            else:
+                for p in owned:
+                    p.usage = PageUsageOut(**dataclasses.asdict(sums[(p.item_id, p.path)]))
         return Overview(pages=out)

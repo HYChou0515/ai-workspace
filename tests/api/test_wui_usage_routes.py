@@ -170,3 +170,22 @@ def test_a_page_nobody_has_used_shows_zeros_to_its_owner():
     _deploy(client, iid)
 
     assert _card(client, iid)["usage"]["opened_total"] == 0
+
+
+def test_the_overview_still_lists_its_pages_when_the_numbers_cannot_be_read(monkeypatch):
+    """Review round 1 (regression 2): the numbers are extra — a store that
+    fails takes them away, never the listing."""
+    from workspace_app.api.wui_usage import WuiUsageStore
+
+    client, _holder, iid, _app = _world()
+    _deploy(client, iid)
+
+    def boom(*_a, **_k):  # noqa: ANN002, ANN003, ANN202
+        raise OSError("db down")
+
+    monkeypatch.setattr(WuiUsageStore, "summary", boom)
+
+    r = client.get("/wui")
+
+    assert r.status_code == 200, r.text
+    assert _card(client, iid)["usage"] is None

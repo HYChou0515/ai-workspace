@@ -488,16 +488,25 @@ def register_wui_routes(
         to the page now and counted when it ends (`WuiUsage.settled`, through
         the orchestrator's `on_settled`). A run that already ended before the
         tie was written is counted here — `settled` counts a tie once, so the
-        hook and this cannot both count it."""
+        hook and this cannot both count it.
+
+        Never raises (review round 1): the run has STARTED. A count that fails
+        must not turn it into a refusal the page would retry — a second run —
+        nor leave a stream subscribed that no response returns."""
         if usage is None:
             return
-        page = await usage.page_of(request, investigation_id)
-        if page is None:
-            return
-        user = get_user_id() if get_user_id is not None else ""
-        await asyncio.to_thread(usage.started, run_id, investigation_id, page, user=user, kind=kind)
-        if orchestrator.run_status(run_id) not in _STILL_RUNNING:
-            await asyncio.to_thread(usage.settled, run_id)
+        try:
+            page = await usage.page_of(request, investigation_id)
+            if page is None:
+                return
+            user = get_user_id() if get_user_id is not None else ""
+            await asyncio.to_thread(
+                usage.started, run_id, investigation_id, page, user=user, kind=kind
+            )
+            if orchestrator.run_status(run_id) not in _STILL_RUNNING:
+                await asyncio.to_thread(usage.settled, run_id)
+        except Exception:  # noqa: BLE001 — a count must never fail the work it counts
+            logger.exception("wui usage: could not count run %s", run_id)
 
     @app.post("/a/{slug}/items/{item_id}/wui/run")
     async def wui_run(
