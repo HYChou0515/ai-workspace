@@ -60,19 +60,30 @@ WF, TOOL, AGENT = 1, 3, 5
 # ── the facade: a run tied to a page, counted once when it ends ───────────
 
 
-def _usage(now: list[int]):
+def _usage():
     spec = make_spec()
     register_wui_usage(spec)
     store = WuiUsageStore(spec, WuiUsageRecorder())
-    usage = WuiUsage(store, spec=spec, is_deployed=lambda _i, _p: True, now=lambda: now[0])
+    usage = WuiUsage(store, spec=spec, is_deployed=lambda _i, _p: True)
     return usage, store
 
 
-def test_a_run_tied_to_a_page_is_counted_when_it_ends_with_the_time_it_took():
-    now = [1_000]
-    usage, store = _usage(now)
+def _run(usage, run_id: str = "run-1", **fields) -> None:  # noqa: ANN001, ANN003
+    """The run's own record, as the driver leaves it."""
+    from workspace_app.workflow.run import WorkflowRun
+
+    spec = usage._spec  # noqa: SLF001 — the facade's own spec
+    spec.get_resource_manager(WorkflowRun).create(
+        WorkflowRun(item_id="item", captured_user="alice", **fields), resource_id=run_id
+    )
+
+
+def test_a_run_s_time_is_from_when_it_started_to_when_it_ended_not_its_wait():
+    """Review round 1 (R3): the time is the run record's `started → ended` — a
+    run that waited for a slot did no work for anyone while it waited."""
+    usage, store = _usage()
     usage.started("run-1", "item", PAGE, user="alice", kind="workflow")
-    now[0] = 61_000
+    _run(usage, started=10_000, ended=70_000)
 
     usage.settled("run-1")
 
@@ -80,9 +91,39 @@ def test_a_run_tied_to_a_page_is_counted_when_it_ends_with_the_time_it_took():
     assert users["alice"][WF : WF + 2] == [1, 60_000]
 
 
+def test_a_page_job_s_time_stops_at_its_deadline():
+    """A job found lost long after its deadline is ended when someone looks;
+    the time it is charged ends where its limit did."""
+    from workspace_app.workflow.run import PageJob
+
+    usage, store = _usage()
+    usage.started("run-1", "item", PAGE, user="alice", kind="agent")
+    _run(
+        usage,
+        started=0,
+        ended=500_000,
+        page_job=PageJob(kind="agent", name="a", deadline=100_000),
+    )
+
+    usage.settled("run-1")
+
+    (users,) = store.recorder.drain().values()
+    assert users["alice"][AGENT : AGENT + 2] == [1, 100_000]
+
+
+def test_a_run_cancelled_before_it_started_counts_with_no_time():
+    usage, store = _usage()
+    usage.started("run-1", "item", PAGE, user="alice", kind="workflow")
+    _run(usage, ended=5_000)
+
+    usage.settled("run-1")
+
+    (users,) = store.recorder.drain().values()
+    assert users["alice"][WF : WF + 2] == [1, 0]
+
+
 def test_a_run_ending_twice_is_counted_once():
-    now = [0]
-    usage, store = _usage(now)
+    usage, store = _usage()
     usage.started("run-1", "item", PAGE, user="alice", kind="agent")
 
     usage.settled("run-1")
@@ -93,7 +134,7 @@ def test_a_run_ending_twice_is_counted_once():
 
 
 def test_a_run_not_tied_to_a_page_is_not_counted():
-    usage, store = _usage([0])
+    usage, store = _usage()
 
     usage.settled("someone-elses-run")
 
@@ -285,7 +326,7 @@ def test_nothing_here_blocks_the_loop():
     """Sanity: the facade's async lookup is awaitable from a running loop."""
 
     async def go() -> str | None:
-        usage, _store = _usage([0])
+        usage, _store = _usage()
 
         class _Req:
             headers = _hdr()

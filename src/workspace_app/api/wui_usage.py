@@ -353,16 +353,16 @@ DEPLOYED_HEADER = "X-Wui-Deployed"
 
 class WuiRunUse(Struct, kw_only=True):
     """A run a deployed page started, until it ends (U11): which page, for
-    whom, which kind, and when. Its own model, registered post-`spec.apply`,
-    rather than a field on `WorkflowRun`, whose auto-CRUD has no write gate — a
-    field there would let anyone write a page's counts."""
+    whom, which kind; its time is the run record's own. Its own model,
+    registered post-`spec.apply`, rather than a field on `WorkflowRun`, whose
+    auto-CRUD has no write gate — a field there would let anyone write a page's
+    counts."""
 
     run_id: str
     item_id: str
     page: str
     user: str
     kind: str
-    started_ms: int
 
 
 def register_wui_run_uses(spec: SpecStar) -> None:
@@ -381,14 +381,10 @@ class WuiUsage:
         *,
         spec: SpecStar,
         is_deployed: Callable[[str, str], bool],
-        now: Callable[[], int] | None = None,
     ) -> None:
-        from .timeutil import now_ms
-
         self._store = store
         self._spec = spec
         self._is_deployed = is_deployed
-        self._now = now or now_ms
         register_wui_run_uses(spec)
 
     @property
@@ -426,14 +422,12 @@ class WuiUsage:
     def started(self, run_id: str, item_id: str, page: str, *, user: str, kind: str) -> None:
         """Tie a run to the page that started it. Blocking."""
         _slot(kind)  # an unknown kind fails here, not when the run ends
-        row = WuiRunUse(
-            run_id=run_id, item_id=item_id, page=page, user=user, kind=kind, started_ms=self._now()
-        )
+        row = WuiRunUse(run_id=run_id, item_id=item_id, page=page, user=user, kind=kind)
         self._rm().create(row, resource_id=run_id)
 
     def settled(self, run_id: str) -> None:
-        """The run ended: count it, once, with the time since it started — and
-        forget the tie. A run no page started is not counted. Blocking."""
+        """The run ended: count it, once, and forget the tie. A run no page
+        started is not counted. Blocking."""
         rm = self._rm()
         try:
             data = rm.get(run_id).data
@@ -441,13 +435,28 @@ class WuiUsage:
         except ResourceIDNotFoundError:
             return  # not a page's run, or already counted
         assert isinstance(data, WuiRunUse)
-        self.used(
-            data.item_id,
-            data.page,
-            user=data.user,
-            kind=data.kind,
-            ms=self._now() - data.started_ms,
-        )
+        self.used(data.item_id, data.page, user=data.user, kind=data.kind, ms=self._took(run_id))
+
+    def _took(self, run_id: str) -> int:
+        """The run's own `started → ended` (review round 1, R3): the wait for a
+        slot is not time spent on anyone's behalf, and a page job ends at its
+        deadline however late it was found lost. 0 for a run that never
+        started, or whose record is gone."""
+        from specstar.types import ResourceIsDeletedError
+
+        from ..workflow.run import WorkflowRun
+
+        try:
+            run = self._spec.get_resource_manager(WorkflowRun).get(run_id).data
+        except (ResourceIDNotFoundError, ResourceIsDeletedError):
+            return 0
+        assert isinstance(run, WorkflowRun)
+        if run.started is None or run.ended is None:
+            return 0
+        end = run.ended
+        if run.page_job is not None and run.page_job.deadline:
+            end = min(end, run.page_job.deadline)
+        return max(0, end - run.started)
 
 
 # ── the administrator's report (P5, U8/U12) ──────────────────────────────
