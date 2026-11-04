@@ -292,6 +292,12 @@ class WorkflowOrchestrator:
     # `callTool` or a chat turn is not a run, so a job finishing would take the
     # sandbox out from under them. ``(item_id, chat_key)``; None ⇒ nothing freed.
     end_page_job: Callable[[str, str], Awaitable[None]] | None = None
+    # A run moved from active to ended (`docs/plan-wui-usage.md` U11), whichever
+    # way it ended. Two writers end a run: the driver (`run_workflow`: done,
+    # error, cancelled) and `_patch` here (a timeout, a lost page job, a Stop
+    # before it ran) — both tell it (`_tell_settled`). ``(run_id)``; a hook that
+    # raises is logged and never stops the run ending.
+    on_settled: Callable[[str], None] | None = None
     # The shared turn epoch of a chat key (`ChatTurnEngine.cancel_epoch`). A
     # page job samples it when ACCEPTED, so a Stop pressed on another pod while
     # the job still waits for a slot is not absorbed into the baseline the
@@ -345,7 +351,20 @@ class WorkflowOrchestrator:
         # set it explicitly. A live run's `progress_at` advances step-by-step; a dead pod's
         # stops, which is what `is_stuck` keys on.
         changes.setdefault("progress_at", self.now())
-        self._rm().update(run_id, with_settled_phases(self._get(run_id), **changes))
+        before = self._get(run_id)
+        self._rm().update(run_id, with_settled_phases(before, **changes))
+        ends = changes.get("status")
+        if before.status in _ACTIVE and ends is not None and ends not in _ACTIVE:
+            self._tell_settled(run_id)
+
+    def _tell_settled(self, run_id: str) -> None:
+        """Tell `on_settled` a run ended; a failing hook never stops it ending."""
+        if self.on_settled is None:
+            return
+        try:
+            self.on_settled(run_id)
+        except Exception:  # noqa: BLE001 — a count must never stop a run ending
+            logger.exception("orchestrator: on_settled for %s failed", run_id)
 
     def run_status(self, run_id: str) -> RunStatus | None:
         """A run's status, or None if it no longer exists (#429 P8) — the sweeper's orphan
@@ -770,6 +789,7 @@ class WorkflowOrchestrator:
                     wf=wf,
                     inputs=None,
                     now=self.now,
+                    on_settled=self._tell_settled,
                 )
                 try:
                     # From the deadline, not from now: time spent waiting for a
@@ -955,6 +975,7 @@ class WorkflowOrchestrator:
             wf=wf,
             inputs=inputs,
             now=self.now,
+            on_settled=self._tell_settled,
         )
         try:
             if self.run_timeout_s is not None:

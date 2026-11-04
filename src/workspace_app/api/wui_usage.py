@@ -25,8 +25,9 @@ import logging
 import threading
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
-from urllib.parse import quote
+from urllib.parse import quote, unquote
 
+from fastapi import Request
 from msgspec import Struct, field
 from specstar import QB, SpecStar
 from specstar.types import ResourceIDNotFoundError
@@ -251,3 +252,111 @@ def _merge_days(
     for row in rows:
         _add_cells(out.setdefault((row.item_id, row.page), {}).setdefault(row.day, {}), row.by_user)
     return out
+
+
+# ── what the routes call (P2/P3) ─────────────────────────────────────────
+
+#: The header a page opened by its DEPLOYED link puts on every use, naming the
+#: page (its view file's workspace path, percent-encoded). The same page opened
+#: inside the item sends nothing, and its uses are not counted (U7). The SPA's
+#: `DEPLOYED_HEADER` (`web/src/renderers/wui/api.ts`) is the other end.
+DEPLOYED_HEADER = "X-Wui-Deployed"
+
+
+class WuiRunUse(Struct, kw_only=True):
+    """A run a deployed page started, until it ends (U11): which page, for
+    whom, which kind, and when. Its own model, registered post-`spec.apply`,
+    rather than a field on `WorkflowRun`, whose auto-CRUD has no write gate — a
+    field there would let anyone write a page's counts."""
+
+    run_id: str
+    item_id: str
+    page: str
+    user: str
+    kind: str
+    started_ms: int
+
+
+def register_wui_run_uses(spec: SpecStar) -> None:
+    with contextlib.suppress(ValueError):
+        spec.add_model(WuiRunUse)
+
+
+class WuiUsage:
+    """The routes' one way in: which deployed page a request names, a use timed
+    in the route (`callTool`), and a run tied to a page when it starts and
+    counted when it ends (`startRun`, `startTool`, `startAgent`, `callAgent`)."""
+
+    def __init__(
+        self,
+        store: WuiUsageStore,
+        *,
+        spec: SpecStar,
+        is_deployed: Callable[[str, str], bool],
+        now: Callable[[], int] | None = None,
+    ) -> None:
+        from .timeutil import now_ms
+
+        self._store = store
+        self._spec = spec
+        self._is_deployed = is_deployed
+        self._now = now or now_ms
+        register_wui_run_uses(spec)
+
+    @property
+    def store(self) -> WuiUsageStore:
+        return self._store
+
+    async def page_of(self, request: Request, item_id: str) -> str | None:
+        """The deployed page this request came from, or None — no header, a
+        path that is no path, or a page that is not Deployed (so nobody can
+        grow the table with names of their own). Normalised the way the deploy
+        route normalises it, so a spelling cannot split one page in two."""
+        import asyncio
+
+        from fastapi import HTTPException
+
+        from .file_routes import _workspace_path
+
+        raw = request.headers.get(DEPLOYED_HEADER)
+        if not raw:
+            return None
+        try:
+            path = _workspace_path(unquote(raw))
+        except HTTPException:
+            return None
+        if not await asyncio.to_thread(self._is_deployed, item_id, path):
+            return None
+        return path
+
+    def used(self, item_id: str, page: str, *, user: str, kind: str, ms: int) -> None:
+        self._store.recorder.used(item_id, page, user=user, kind=kind, ms=ms)
+
+    def _rm(self):  # noqa: ANN202 — specstar's manager type is not exported
+        return self._spec.get_resource_manager(WuiRunUse)
+
+    def started(self, run_id: str, item_id: str, page: str, *, user: str, kind: str) -> None:
+        """Tie a run to the page that started it. Blocking."""
+        _slot(kind)  # an unknown kind fails here, not when the run ends
+        row = WuiRunUse(
+            run_id=run_id, item_id=item_id, page=page, user=user, kind=kind, started_ms=self._now()
+        )
+        self._rm().create(row, resource_id=run_id)
+
+    def settled(self, run_id: str) -> None:
+        """The run ended: count it, once, with the time since it started — and
+        forget the tie. A run no page started is not counted. Blocking."""
+        rm = self._rm()
+        try:
+            data = rm.get(run_id).data
+            rm.permanently_delete(run_id)
+        except ResourceIDNotFoundError:
+            return  # not a page's run, or already counted
+        assert isinstance(data, WuiRunUse)
+        self.used(
+            data.item_id,
+            data.page,
+            user=data.user,
+            kind=data.kind,
+            ms=self._now() - data.started_ms,
+        )

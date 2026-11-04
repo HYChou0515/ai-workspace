@@ -2112,3 +2112,94 @@ async def test_a_phase_whose_steps_were_already_done_reads_as_done(spec_instance
     assert calls == ["think"]  # the second run skipped it
     think = next(p for p in got.phases if p.phase == "think")
     assert (think.status, think.done) == ("skipped", 1)
+
+
+# ─── docs/plan-wui-usage.md U11: a run's settling is told once ───────────────
+
+
+def test_a_run_settling_is_told_once_whatever_ends_it(spec_instance: SpecStar):
+    """Every way a run ends goes through `_patch`; the move from active to
+    terminal is told exactly once — not a later patch of an ended run, not a
+    patch that keeps it running."""
+    settled: list[str] = []
+    orch, _fakes = _orch(spec_instance, _ok)
+    orch.on_settled = settled.append
+    rid = _insert_run(orch)
+
+    orch._patch(rid, current_phase="think")  # still running
+    orch._patch(rid, status=RunStatus.CANCELLED)
+    orch._patch(rid, status=RunStatus.ERROR)  # already ended: not again
+
+    assert settled == [rid]
+
+
+def test_a_failing_settled_hook_does_not_stop_the_run_ending(spec_instance: SpecStar):
+    orch, _fakes = _orch(spec_instance, _ok)
+
+    def boom(_run_id: str) -> None:
+        raise RuntimeError("stats down")
+
+    orch.on_settled = boom
+    rid = _insert_run(orch)
+
+    orch._patch(rid, status=RunStatus.DONE)
+
+    got = spec_instance.get_resource_manager(WorkflowRun).get(rid).data
+    assert isinstance(got, WorkflowRun)
+    assert got.status is RunStatus.DONE
+
+
+async def test_a_run_the_driver_ends_is_told_once_too(spec_instance: SpecStar):
+    """The driver writes a run's own ending (done / error / cancelled) itself,
+    not through `_patch` — the hook must hear that one as well."""
+    settled: list[str] = []
+    orch, _fakes = _orch(spec_instance, lambda _wf, _inputs: _ok(None))
+    orch.on_settled = settled.append
+
+    run_id = await orch.start(slug="rca", item_id="rca/i1", profile="echo", captured_user="a")
+    for _ in range(50):
+        if settled:
+            break
+        await asyncio.sleep(0.01)
+
+    assert settled == [run_id]
+    got = spec_instance.get_resource_manager(WorkflowRun).get(run_id).data
+    assert isinstance(got, WorkflowRun) and got.status is RunStatus.DONE
+
+
+async def test_a_run_that_fails_is_told_once(spec_instance: SpecStar):
+    settled: list[str] = []
+
+    async def run(_wf, _inputs):
+        raise RuntimeError("broke")
+
+    orch, _fakes = _orch(spec_instance, run)
+    orch.on_settled = settled.append
+
+    run_id = await orch.start(slug="rca", item_id="rca/i1", profile="echo", captured_user="a")
+    for _ in range(50):
+        if settled:
+            break
+        await asyncio.sleep(0.01)
+
+    assert settled == [run_id]
+    got = spec_instance.get_resource_manager(WorkflowRun).get(run_id).data
+    assert isinstance(got, WorkflowRun) and got.status is RunStatus.ERROR
+
+
+async def test_a_run_that_is_stopped_is_told_once(spec_instance: SpecStar):
+    settled: list[str] = []
+    started = asyncio.Event()
+
+    async def run(_wf, _inputs):
+        started.set()
+        await asyncio.Event().wait()
+
+    orch, _fakes = _orch(spec_instance, run)
+    orch.on_settled = settled.append
+    run_id = await orch.start(slug="rca", item_id="i4", profile="echo", captured_user="u")
+    await started.wait()
+
+    assert await orch.cancel(run_id, "i4") is True
+
+    assert settled == [run_id]

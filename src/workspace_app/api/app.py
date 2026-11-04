@@ -2656,6 +2656,12 @@ def create_app(
     # file tree shows agent-created records. All three write surfaces share it.
     entity_write_sink = build_entity_write_sink(event_dispatcher.dispatch, turn_engine)
     workflow_orchestrator.entity_write_sink = entity_write_sink
+    # docs/plan-wui-usage.md U11: a run a deployed page started is counted
+    # when it ends, whichever way it ends.
+    from .wui_usage import WuiUsage
+
+    page_usage = WuiUsage(wui_usage, spec=spec, is_deployed=DeployedPages(spec).has)
+    workflow_orchestrator.on_settled = page_usage.settled
     # #429 P10: agent-tool entity writes (chat + workflow agent nodes) also fire event
     # triggers — same dispatcher, so an AI edit is indistinguishable from a UI/workflow
     # write. Set post-construction (the builder predates the dispatcher, like the
@@ -2966,6 +2972,7 @@ def create_app(
         # delegates to, run as a workflow node's turn narrowed as `run_agent` is.
         subagents_for=turn_ctx.subagents_for,
         drive_agent=workflow_executor.drive_agent,
+        usage=page_usage,
     )
 
     register_capability_routes(
