@@ -37,15 +37,18 @@ export function SkillUpdates({
   skill,
   canUpdate,
   onUpdate,
+  defaultOpen = false,
 }: {
   skill: ItemSkillState;
   /** May this viewer change the item's copy (`edit_content`, D4)? */
   canUpdate: boolean;
   onUpdate: () => void;
+  /** Start with the notes shown — the banner opens them on request. */
+  defaultOpen?: boolean;
 }) {
   const t = useT();
   const { id: me, ready } = useCurrentUserState();
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(defaultOpen);
   // A Later / Skip changes what this person is shown: re-read on it — this
   // row's own, or one given in another tab or by another row.
   const [, setAnswered] = useState(0);

@@ -659,6 +659,9 @@ export const messages = {
   "skills.updateAvailable.hub": { "zh-TW": "skill 已變更", en: "Skill changed" },
   // plan-skill-hub-release-notes P5: a hub copy behind its entry.
   "skills.updates.badge": { "zh-TW": "有新版本 v{version}", en: "New version v{version}" },
+  "skills.banner.label": { "zh-TW": "skill 更新提醒", en: "Skill updates" },
+  "skills.banner.one": { "zh-TW": "{name} 有新版本 v{version}", en: "{name} has a new version, v{version}" },
+  "skills.banner.many": { "zh-TW": "{n} 個 skill 有新版本", en: "{n} skills have a new version" },
   "skills.updates.rolledBackBadge": {
     "zh-TW": "作者已把這個 skill 回到 v{back}",
     en: "The author took this skill back to v{back}",

@@ -952,6 +952,50 @@ a.skills-row-name {
   cursor: pointer;
   font: inherit;
 }
+/* plan-skill-hub-release-notes D7: the reminder on the item, above the
+   composer (Material 3 Banners: a message and at most two text buttons). */
+.skill-update-banner {
+  border: 1px solid var(--paper-3);
+  border-left: 3px solid var(--info);
+  border-radius: var(--radius-btn);
+  background: var(--white);
+  padding: var(--space-4) var(--space-8);
+  font-size: var(--text-small);
+}
+.skill-update-banner__line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-4) var(--space-12);
+}
+.skill-update-banner__text {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--text-paper);
+}
+.skill-update-banner__action {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent-h);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.skill-update-banner__notes {
+  max-height: 40vh;
+  overflow: auto;
+  margin-top: var(--space-4);
+  border-top: 1px solid var(--paper-2);
+  padding-top: var(--space-4);
+}
+.skill-update-banner__skill + .skill-update-banner__skill {
+  margin-top: var(--space-8);
+}
+.skill-update-banner__error {
+  margin: var(--space-4) 0 0;
+  color: var(--err);
+}
 /* plan-skill-hub-release-notes D5: what a behind copy missed, under its row.
    The heading sits on the disclosure's own line, beside its marker. */
 .skills-row-updates {
