@@ -1685,7 +1685,7 @@ export function AgentHeader({
           onSaveSkillPrefs={onSaveSkillPrefs}
           appliedSkills={appliedSkills}
           onToggleApply={onToggleApplySkill}
-          canUpdate={canUpdateSkills !== false}
+          canUpdate={canUpdateSkills === true}
         />
       )}
       {showItemEnv && environment && (

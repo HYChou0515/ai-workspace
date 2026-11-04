@@ -57,7 +57,11 @@ export function SkillUpdates({
   return (
     <div className="skills-row-updates" data-testid={`skill-updates-${skill.name}`}>
       <div className="skills-row-line">
-        <span className="skills-row-todo">{t("skills.updates.badge", { version: latest.version })}</span>
+        <span className="skills-row-todo">
+          {latest.kind === "rollback" && latest.back_to !== null
+            ? t("skills.updates.rolledBackBadge", { back: latest.back_to })
+            : t("skills.updates.badge", { version: latest.version })}
+        </span>
         {reminder?.skipped ? (
           <span className="muted small">{t("skills.updates.skipped")}</span>
         ) : reminder && !reminder.due ? (

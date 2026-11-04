@@ -38,7 +38,7 @@ export function SkillsModal({
   onToggleApply,
   client = api,
   hubClient,
-  canUpdate = true,
+  canUpdate = false,
 }: {
   slug: string;
   itemId: string;

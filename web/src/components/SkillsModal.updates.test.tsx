@@ -143,4 +143,25 @@ describe("SkillsModal skill hub updates", () => {
     fireEvent.click(within(await row()).getByRole("button", { name: word("skills.updates.show") }));
     expect(within(await notes()).queryByRole("button", { name: word("skills.updates.later") })).toBeNull();
   });
+
+  // Review round 1 (#1004): D5 says a rollback below the installed version
+  // READS "作者已把這個 skill 回到 vN" — the row's own line said "有新版本".
+  it("a rollback says so on the row itself, not only inside the notes", async () => {
+    const rolled: ItemSkillState = {
+      ...BEHIND,
+      updates: [{ version: 3, kind: "rollback", at: "2026-11-03T12:00:00Z", release_note: "", back_to: 1 }],
+    };
+    mount({ canUpdate: true, client: { getItemSkills: vi.fn(async () => [rolled]), refreshItemSkill: vi.fn() } });
+    const line = await row();
+    expect(line).toHaveTextContent(word("skills.updates.rolledBackBadge", { back: 1 }));
+    expect(line).not.toHaveTextContent(word("skills.updates.badge", { version: 3 }));
+  });
+
+  // The same review: Update defaulted to SHOWN, so a caller that forgot the
+  // prop offered everyone a button the route answers 403. It fails closed.
+  it("offers no Update to a caller that does not say the viewer may edit", async () => {
+    mount();
+    fireEvent.click(within(await row()).getByRole("button", { name: word("skills.updates.show") }));
+    expect(within(await notes()).queryByRole("button", { name: new RegExp(`^${word("skills.updates.update")}$`) })).toBeNull();
+  });
 });
