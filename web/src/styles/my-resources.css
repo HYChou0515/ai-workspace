@@ -633,11 +633,6 @@
   color: var(--text-paper);
 }
 
-/* How an open is counted: wraps as one piece, never splitting mid-phrase. */
-.page .wui-usage .wui-usage-note {
-  white-space: nowrap;
-}
-
 .page .wui-list .wui-usage {
   grid-column: 2 / -1;
 }

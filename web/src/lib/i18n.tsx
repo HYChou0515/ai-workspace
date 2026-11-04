@@ -1394,19 +1394,16 @@ export const messages = {
   // "7 Aug" — so the sentence must read with all of them; "於 {when} Deploy" /
   // "on {when}" did not ("於 just now Deploy", "on 2 d ago").
   "wui.row.by": { "zh-TW": "{who} Deploy · {when}", en: "deployed by {who} · {when}" },
-  "wui.usage.opened": { "zh-TW": "打開的人", en: "People who opened it" },
-  "wui.usage.onePerDay": { "zh-TW": "（同一人一天只算一次）", en: "(one per person per day)" },
-  "wui.usage.used": { "zh-TW": "AI 代勞", en: "Work the AI did" },
-  "wui.usage.total": { "zh-TW": "總共 {value}", en: "{value} in total" },
+  "wui.usage.opened": { "zh-TW": "訪客", en: "Visitors" },
+  "wui.usage.used": { "zh-TW": "AI 代勞", en: "AI work" },
   "wui.usage.week": { "zh-TW": "近 7 天 {value}", en: "{value} in the last 7 days" },
-  "wui.usage.personDays": { "zh-TW": "{n} 人次", en: "{n} visits" },
-  "wui.usage.uses": { "zh-TW": "{n} 次、花了 {time}", en: "{n} times, {time} spent" },
+  "wui.usage.uses": { "zh-TW": "{n} 次（{time}）", en: "{n} ({time})" },
   "wui.usage.seconds": { "zh-TW": "{n} 秒", en: "{n} s" },
-  "wui.usage.minutes": { "zh-TW": "{n} 分鐘", en: "{n} min" },
+  "wui.usage.minutes": { "zh-TW": "{n} 分", en: "{n} min" },
   "wui.usage.hours": { "zh-TW": "{n} 小時", en: "{n} h" },
   "wui.usage.tip": {
-    "zh-TW": "只算從部署連結來的。AI 代勞：這頁請 AI 跑 workflow、呼叫工具、問 agent 的次數，和 AI 實際跑的時間加總。",
-    en: "Only through the deployed link. Work the AI did: the workflows, tools and agents this page had the AI run, and the time they ran in total.",
+    "zh-TW": "只算從部署連結來的。訪客：同一人一天只算一次。AI 代勞：這頁請 AI 跑 workflow、呼叫工具、問 agent 的次數，括號裡是 AI 實際跑的時間加總。",
+    en: "Only through the deployed link. Visitors: one per person per day. AI work: the workflows, tools and agents this page had the AI run; in brackets, the time they ran in total.",
   },
   // The WUI pane's author toolbar and Deploy panel (docs/plan-deploy-reach.md
   // decision 7). "Deploy" stays the button's word in both — the WUI overview's
@@ -2407,8 +2404,8 @@ export const messages = {
   "usage.part.skill": { "zh-TW": "Skill", en: "Skills" },
   "usage.part.wui": { "zh-TW": "WUI 頁面", en: "WUI pages" },
   "usage.wui.what": {
-    "zh-TW": "從每一頁的部署連結來的量。打開的人次：同一人一天只算一次。AI 代勞：這頁請 AI 跑 workflow、呼叫工具、問 agent 的次數，和 AI 實際跑的時間加總。",
-    en: "Through each page's deployed link. Visits: one per person per day. Work the AI did: the workflows, tools and agents a page had the AI run, and the time they ran in total.",
+    "zh-TW": "從每一頁的部署連結來的量。訪客：同一人一天只算一次。AI 代勞：這頁請 AI 跑 workflow、呼叫工具、問 agent 的次數，和 AI 實際跑的時間加總。",
+    en: "Through each page's deployed link. Visitors: one per person per day. AI work: the workflows, tools and agents a page had the AI run, and the time they ran in total.",
   },
   "usage.wui.notThisSurface": {
     "zh-TW": "這一區只有「頁面」場合；換回「全部」或「頁面」就看得到。",
@@ -2416,16 +2413,16 @@ export const messages = {
   },
   "usage.wui.empty": { "zh-TW": "這段期間沒有人打開或使用部署的頁面", en: "No deployed page was opened or used in this period" },
   "usage.wui.failed": { "zh-TW": "讀不到頁面使用統計:{reason}", en: "Couldn't load page usage: {reason}" },
-  "usage.wui.chart.personDays": { "zh-TW": "打開的人次", en: "Visits" },
-  "usage.wui.chart.uses": { "zh-TW": "AI 代勞次數", en: "Times the AI worked" },
+  "usage.wui.chart.personDays": { "zh-TW": "訪客", en: "Visitors" },
+  "usage.wui.chart.uses": { "zh-TW": "AI 代勞次數", en: "AI work" },
   "usage.wui.col.page": { "zh-TW": "頁面", en: "Page" },
-  "usage.wui.col.personDays": { "zh-TW": "打開的人次", en: "Visits" },
+  "usage.wui.col.personDays": { "zh-TW": "訪客", en: "Visitors" },
   "usage.wui.col.opens": { "zh-TW": "打開次數", en: "Opens" },
   "usage.wui.col.workflow": { "zh-TW": "Workflow", en: "Workflows" },
   "usage.wui.col.tool": { "zh-TW": "工具", en: "Tools" },
   "usage.wui.col.agent": { "zh-TW": "Agent", en: "Agents" },
-  "usage.wui.col.uses": { "zh-TW": "AI 代勞次數", en: "Times the AI worked" },
-  "usage.wui.col.time": { "zh-TW": "AI 花的時間", en: "Time the AI spent" },
+  "usage.wui.col.uses": { "zh-TW": "AI 代勞次數", en: "AI work" },
+  "usage.wui.col.time": { "zh-TW": "AI 時間", en: "AI time" },
   "usage.wui.detail.what": {
     "zh-TW": "{item} · 最近 {days} 天,每個人",
     en: "{item} · each person, last {days} days",

@@ -932,22 +932,19 @@ describe("a page's numbers, for its owner (docs/plan-wui-usage.md U5)", () => {
     const usage = await usageOf("Mine");
 
     expect(usage).not.toBeNull();
-    const text = usage?.textContent ?? "";
-    expect(text).toContain(translate("zh-TW", "wui.usage.opened"));
-    // How an open is counted is said on the card, not left to a tooltip (NN/g,
-    // Tooltip Guidelines: "Important information should always be on the page").
-    expect(text).toContain(translate("zh-TW", "wui.usage.onePerDay"));
-    expect(text).toContain(translate("zh-TW", "wui.usage.personDays", { n: 120 }));
-    expect(text).toContain(translate("zh-TW", "wui.usage.personDays", { n: 18 }));
-    expect(text).toContain(translate("zh-TW", "wui.usage.uses", { n: 45, time: translate("zh-TW", "wui.usage.hours", { n: "3.2" }) }));
-    expect(text).toContain(translate("zh-TW", "wui.usage.uses", { n: 6, time: translate("zh-TW", "wui.usage.minutes", { n: 24 }) }));
+    // The words the user settled on, the way GitHub's traffic page names a
+    // day's distinct people ("visitors") and nothing more: a familiar noun and
+    // the number — no 「總共」 on the plain number, no 頓號, the time in
+    // brackets after the count it belongs to.
+    const lines = [...(usage?.children ?? [])].map((el) => el.textContent?.replace(/\s+/g, " ").trim());
+    expect(lines).toEqual(["訪客 120 · 近 7 天 18", "AI 代勞 45 次（3.2 小時） · 近 7 天 6 次（24 分）"]);
   });
 
   it("says the same in the table", async () => {
     writeWuiView("table");
     render(<WuiOverviewPage client={client([row({ title: "Mine", usage: USAGE })])} />, { wrapper: Wrap });
 
-    expect((await usageOf("Mine"))?.textContent).toContain(translate("zh-TW", "wui.usage.personDays", { n: 120 }));
+    expect((await usageOf("Mine"))?.textContent).toContain("訪客 120");
   });
 
   it("says nothing on a page whose numbers are not the viewer's", async () => {
