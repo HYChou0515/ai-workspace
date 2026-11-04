@@ -25,6 +25,15 @@ from ..perm.model import Permission
 IndexedFields = list[str | tuple[str, type] | IndexableField]
 
 
+def fields_a_copy_does_not_carry() -> dict[str, object]:
+    """What a published copy of an item resets (`api/publish_copy.py`): not its
+    settings, but facts about the SOURCE. ``external_refs`` names the legacy
+    records the source absorbed (#700); a copy claiming them would draw a later
+    handoff into a stranger's copy. Spelled here, beside the field, so the
+    field's name stays in this one file (`tests/api/test_external_refs.py`)."""
+    return {"external_refs": []}
+
+
 class WorkItemBase(Struct):
     title: str
     """Tier 1 — the item headline. Required."""

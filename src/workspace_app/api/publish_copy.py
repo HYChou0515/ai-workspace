@@ -33,7 +33,7 @@ from specstar import QB, SpecStar
 from specstar.types import DuplicateResourceError, ResourceIsDeletedError
 
 from ..apps.agent_spec import agent_folder, overlay_destination
-from ..apps.base import WorkItemBase
+from ..apps.base import WorkItemBase, fields_a_copy_does_not_carry
 from ..apps.registry import app_model
 from ..apps.resolve import find_work_item
 from ..apps.skills import WORKSPACE_SKILL_DIR
@@ -225,9 +225,9 @@ async def make_copy(
         "published_kind": row.kind,
         "published_path": row.path,
         "published_title": row.title,
-        # Not a setting: which legacy records the SOURCE absorbed (#700). A
-        # copy claiming them would draw a later handoff into a stranger's copy.
-        "external_refs": [],
+        # Facts about the SOURCE, not settings (e.g. the legacy records it
+        # absorbed, #700): a copy does not carry them.
+        **fields_a_copy_does_not_carry(),
     }
     if isinstance(source.members, list):
         changes["members"] = []  # C3: members are not copied
