@@ -34,7 +34,7 @@ user 要「WUI 用量統計，像 skill hub 和 MCP 那樣」。現況〔查證�
 | U9 | 每頁每天一列，列裡記每個人的打開次數、使用次數、使用時間（依三類分開）；每 5 分鐘與 SIGTERM 時寫回、只留一個 revision；**所有天數都保留** | 〔user〕＋寫法照抄工具統計〔預設〕 |
 | U10 | 失敗的動作也算進次數和總時間（失敗那次 AI 一樣花了時間） | 〔預設〕 |
 | U11 | 非同步動作（`startRun`／`startTool`／`startAgent`）在 run **走到結束狀態**時記時間；同步動作（`callTool`／`callAgent`）在路由裡量 | 〔預設〕 |
-| U12 | superuser 頁的時間範圍：7／30／90 天，再加「全部」 | 〔預設〕 |
+| U12 | superuser 頁的第三區跟工具、skill 兩區**共用頁面的 7／30／90 天**（實作時改：一頁兩種時間範圍會讓人以為三區比的是同一段時間）；「總共」看主人的卡片；報表與 CSV 的 API 另接受 `days=0` 代表全部。也跟頁面的 App 篩選；選了「頁面」以外的場合時，第三區說「這一區只有頁面場合」 | 〔預設〕 |
 | U13 | 「總共」從這個功能上線那天起算，不回補 | 〔預設〕（沒有可回補的資料） |
 
 ## 機制
@@ -45,13 +45,19 @@ user 要「WUI 用量統計，像 skill hub 和 MCP 那樣」。現況〔查證�
 沒人能塞假頁面名稱灌爆資料。
 
 **打開**：新路由 `POST /a/{slug}/items/{item_id}/wui/opened`（body：頁面路徑），`WuiPage` 讀到頁面後打一次；要求
-`read_meta`（能看到頁面的人）。只記，不回任何東西給頁面用。
+`read_content`（和 `/w/` 連結本身同一個門檻）。只記，不回任何東西給頁面用（一律 204）。
 
 **使用**：
-- `callTool`／`callAgent`：路由裡量 `await` 前後的時間，結束時記一筆（成功或失敗都記，U10）。
-- `startRun`／`startTool`／`startAgent`：開始時把「哪個頁面、誰」記在 run 旁邊的私有列（和 `RunIdentity` 一樣不開
-  auto-CRUD——`WorkflowRun` 的 auto-CRUD 沒有寫入閘，放在它上面會被 PATCH 竄改），run 走到結束狀態時用它的開始／結束時間
-  記一筆，然後刪掉那列。run 跑到一半 pod 死掉時，這筆怎麼記要在 P3 先查 run 的續跑機制再定〔待查〕。
+- `callTool`：路由裡量工具真的執行的那段時間（被拒絕的不算，沒花任何人的時間），結束時記一筆（成功或失敗都記，U10）。
+- `startRun`／`startTool`／`startAgent`，以及 `callAgent`（它底下也是一個 run，路由只是等它跑完）：開始時把「哪個頁面、誰」
+  記在 run 旁邊的私有列 `WuiRunUse`（和 `RunIdentity` 一樣不開 auto-CRUD——`WorkflowRun` 的 auto-CRUD 沒有寫入閘），run
+  結束時記一筆（時間＝開始到結束），然後刪掉那列——「取出並刪除」，所以只記一次。
+- **結束有兩個寫入來源**〔查證〕：driver（`workflow/driver.run_workflow`）自己寫完成／失敗／取消，orchestrator 的 `_patch`
+  寫逾時、頁面工作遺失、放棄、還沒開始就被停。兩邊都通知 `on_settled`（driver 多一個參數；`_patch` 只在「原本是進行中、
+  這次寫成結束」時通知）。只掛 `_patch` 的第一版漏掉了 driver 那邊，測試抓到。
+- **路由寫下歸屬之前 run 就跑完**：那時通知找不到歸屬。路由寫完歸屬後再看一次 run 狀態，已經結束就當場記。
+- **pod 死掉**〔查證〕：歸屬存在資料庫裡，不在記憶體。頁面工作沒有續跑，會被標成遺失、經 `_patch` 寫成失敗而被記到；
+  一般 run 由別的 pod 續跑完成時 driver 會通知，放棄時經 `_patch`。時間從開始算到結束，中間停掉的時間也算進去。
 
 **存法**（U9）：model `WuiUsageDay`：`item_id`、`page`、`day`、`pod`，加上 `by_user: {人: [打開次數, workflow 次數, workflow 毫秒,
 工具次數, 工具毫秒, agent 次數, agent 毫秒]}`。索引 `item_id`、`day`。人天＝那天各 pod 列的 `by_user` 鍵的聯集大小。
@@ -86,5 +92,5 @@ user 要「WUI 用量統計，像 skill hub 和 MCP 那樣」。現況〔查證�
 | P2 | `X-Wui-Deployed` header 與部署紀錄檢查；`wui/opened` 路由 | 部署連結打開會記、item 裡打開不記；沒部署或亂填路徑不記 |
 | P3 | 三類使用的記錄：同步在路由量、非同步在 run 結束時記 | 每類各一條：次數與時間正確；失敗也記；item 裡按的不記；同一個 run 只記一次 |
 | P4 | `/wui` 卡片顯示（只給頁面主人） | 主人看得到、其他人拿不到欄位；數字與後端一致；截圖對照 NN/g |
-| P5 | 使用統計頁第三區＋明細＋CSV（superuser） | 同工具統計的元件；7／30／90／全部 |
+| P5 | 使用統計頁第三區＋明細＋CSV（superuser） | 同工具統計的元件；共用頁面的 7／30／90；整頁仍只有一個側邊面板 |
 | P6 | 文件：runbook 條目、design-history、`extending-the-platform.md`（頁面作者看得到什麼） | `tests/docs/test_docs_index.py`；`mkdocs build --strict` |
