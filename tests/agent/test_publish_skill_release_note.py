@@ -85,3 +85,55 @@ async def test_a_first_version_needs_no_note():
 
     assert "published" in out
     assert hub.find("alice", "s") is not None
+
+
+def test_the_change_shows_an_added_text_file_and_bounds_what_it_diffs():
+    """Review round 1 (#1004): an added `references/` file came back as its name
+    alone, so the note could only say "added a file"; and a large text file
+    was diffed in full — difflib on the event loop, 7.7 s for 18.8 MiB — before
+    the 6000-character cap cut the result. Added text is shown as added lines;
+    a file over the hub's own `DIFF_TEXT_CAP` (either side) gets its status line
+    only, as the hub's diff does."""
+    import time
+
+    from workspace_app.agent.tools import _changes_since
+    from workspace_app.apps.skill_hub import DIFF_TEXT_CAP
+
+    shown = _changes_since(
+        {"SKILL.md": b"a\n"}, {"SKILL.md": b"a\n", "references/t.md": b"A spike is 3x.\n"}
+    )
+    assert "references/t.md: added" in shown
+    assert "+A spike is 3x." in shown
+
+    big_old = b"".join(b"line %d\n" % i for i in range(DIFF_TEXT_CAP // 6))
+    big_new = big_old.replace(b"line 7\n", b"line seven\n")
+    assert len(big_old) > DIFF_TEXT_CAP
+    start = time.perf_counter()
+    big = _changes_since({"data.csv": big_old}, {"data.csv": big_new})
+    assert time.perf_counter() - start < 0.5
+    assert big.startswith("data.csv: changed")
+    assert "line seven" not in big
+    assert "too large" in big
+
+
+async def test_the_change_is_computed_off_the_event_loop(monkeypatch):
+    """The same review: the diff ran inside the async tool. It goes through
+    `asyncio.to_thread`, so a slow one stalls this turn and not the pod."""
+    import asyncio
+
+    import workspace_app.agent.tools as tools
+
+    hub = _hub()
+    ctx = await _first(hub)
+    await _put(ctx, "s", {"SKILL.md": _md("s", "v2\n")})
+    seen: list[object] = []
+    real = asyncio.to_thread
+
+    async def spy(fn, *a, **k):  # noqa: ANN001, ANN002, ANN003, ANN202
+        seen.append(fn)
+        return await real(fn, *a, **k)
+
+    monkeypatch.setattr(tools.asyncio, "to_thread", spy)
+    out = await publish_skill_impl(ctx, "s")
+    assert out.startswith("not published yet")
+    assert tools._changes_since in seen

@@ -2786,9 +2786,16 @@ def release_note_needed(name: str, change: str) -> str:
 
 
 def _changes_since(current: Mapping[str, bytes], new: Mapping[str, bytes]) -> str:
-    """What `new` changes over `current`, per file: added / removed / changed,
-    with a unified diff for text — capped at `_RELEASE_NOTE_DIFF_CAP`."""
+    """What `new` changes over `current`, per file: added / removed / changed.
+    A changed or added text file comes with its diff (an added one as added
+    lines, so a note can say what it holds); a removed one, a binary one, or one
+    over the hub's `DIFF_TEXT_CAP` on either side gets its status line only, as
+    the hub's own diff does — difflib over a whole 20 MiB file is seconds of
+    CPU. The result is capped at `_RELEASE_NOTE_DIFF_CAP`. Blocking: call it
+    through `asyncio.to_thread`."""
     import difflib
+
+    from ..apps.skill_hub import DIFF_TEXT_CAP
 
     parts: list[str] = []
     for path in sorted(current.keys() | new.keys()):
@@ -2796,14 +2803,21 @@ def _changes_since(current: Mapping[str, bytes], new: Mapping[str, bytes]) -> st
         if old == now:
             continue
         status = "added" if old is None else "removed" if now is None else "changed"
+        if status == "removed":
+            parts.append(f"{path}: removed")
+            continue
+        if len(old or b"") > DIFF_TEXT_CAP or len(now or b"") > DIFF_TEXT_CAP:
+            parts.append(f"{path}: {status} (too large to show)")
+            continue
         parts.append(f"{path}: {status}")
         try:
             a = (old or b"").decode("utf-8").splitlines()
             b = (now or b"").decode("utf-8").splitlines()
         except UnicodeDecodeError:
             continue  # not text: the status line says it
-        if status == "changed":
-            parts.extend(difflib.unified_diff(a, b, lineterm="", n=1))
+        parts.extend(list(difflib.unified_diff(a, b, lineterm="", n=1))[2:])
+        if sum(len(x) + 1 for x in parts) > _RELEASE_NOTE_DIFF_CAP:
+            break
     if not parts:
         return "No file differs from the current version."
     text = "\n".join(parts)
@@ -2924,7 +2938,8 @@ async def publish_skill_impl(
     # published — before the room check and the review, so neither is spent —
     # and the change since the current version comes back to draft it from.
     if existed is not None and not release_note.strip():
-        return release_note_needed(name, _changes_since(await hub.payload_of(existed), payload))
+        before = await hub.payload_of(existed)
+        return release_note_needed(name, await asyncio.to_thread(_changes_since, before, payload))
 
     # After the publish the folder's manifest is rewritten to the entry it
     # just became (below) — but only where that changes nothing about what the
