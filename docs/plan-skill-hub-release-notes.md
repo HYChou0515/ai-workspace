@@ -93,6 +93,24 @@ reminder read it from the same place.
   already on the hub; not `.json`, which `load_scenarios` would read as a
   scenario). For those names the double refuses without a note, with a change
   built by the real `_changes_since`. Scenario: `republish-drafts-a-note`.
+  What it measures is narrower than P3 asked: the scorer checks which tools
+  were called, not in what order, so it shows the model reached for
+  `publish_skill` AND `ask_user`, not that it asked before publishing; and
+  the refusal text itself says to confirm with the user, so a `--control`
+  run may pass it too — `--control` is what tells.
+- **The change to draft from is its own diff, not the hub's.** P2 said "the
+  existing diff", but `SkillHubStore.diff` compares two committed revisions,
+  and the version being refused is not committed. `_changes_since` diffs the
+  workspace payload against the current version's files with difflib,
+  following the hub's rule for what is too large to diff (`DIFF_TEXT_CAP`,
+  shared, not copied), in a worker thread.
+- **`release_note` is nullable.** Every built-in is a strict tool, which makes
+  each argument a required slot; a `str` note had no "not setting it"
+  spelling, so a model invented one on every call — a republish's included,
+  which skips the ask. `str | None` gets the platform's absent convention
+  (`null`), and the skill says to call with `null` first. A note is capped at
+  `RELEASE_NOTE_MAX` (2000 characters): it is read back in every history view
+  and every behind copy's listing.
 - **Update follows `edit_content` alone** (`useItemAccess.canEditContent`),
   not `canWrite`: that is the union of `edit_content` / `add_content` /
   `write_meta`, and the sync route asks `edit_content`, so the union offered a
@@ -101,7 +119,16 @@ reminder read it from the same place.
 - **The mark and the row read one query** (`qk.itemSkills`). Update's existing
   invalidation clears both; a Later / Skip clears the mark through a window
   event (`onRemindersChanged`), since localStorage writes in the same tab fire
-  no `storage` event.
+  no `storage` event — and the `storage` event carries another tab's. A
+  browser that refuses the write keeps the answers for the page.
+- **The mark is a count.** D1's "how many" is drawn as a number badge on the
+  skills button (Material 3 Badges), not only said in the tooltip; folded
+  into "⋯", the trigger carries a dot and its name lists what is flagged.
+- **The mark costs a skill-list read per item open** (cached 30 s), where the
+  list used to be read only when the panel opened. Each behind hub copy reads
+  its timeline once (`updates_since` returns each version's `back_to` from
+  the same read), and a copy whose timeline cannot be read loses only its own
+  `updates`.
 - **History numbers versions in the order they were written.** Recording the
   demo on the disk backend showed the newest publish as "v1" and the first as
   "v2 · 目前版本", with the note under the wrong number: `history()` counted
@@ -114,5 +141,7 @@ reminder read it from the same place.
   the chat header folds its actions into "⋯", and the dot was drawn only on
   unfolded buttons, so the skills mark (and the older env-missing one) was
   invisible. The trigger now carries it and names what it hides.
-- **The old 「skill 已變更」 badge stays** for a behind copy with no `updates`
-  (an older pod's answer during a rollout); with `updates` the new row replaces it.
+- **The old 「skill 已變更」 badge stays** for a behind copy with no `updates`:
+  a copy installed before the git store (it records no commit, so there is
+  nothing to count from — for good), one whose timeline could not be read, or
+  an older pod's answer during a rollout. With `updates` the new row replaces it.
