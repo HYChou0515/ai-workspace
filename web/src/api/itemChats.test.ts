@@ -287,3 +287,26 @@ describe("itemChatApi body fields", () => {
     expect(body.max_wiki_searches).toBe(1);
   });
 });
+
+// plan-wui-publish-and-agent-hub A6: a test chat names its agent; any other
+// chat sends exactly what it always did.
+describe("itemChatApi.createChat body", () => {
+  it("names the agent of a test chat, and nothing for an ordinary one", async () => {
+    const bodies: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_i: RequestInfo | URL, init?: RequestInit) => {
+        bodies.push(String(init?.body ?? ""));
+        return new Response(JSON.stringify({ chat_id: "c" }), { status: 201 });
+      }),
+    );
+
+    await itemChatApi.createChat("rca", "i1", "Test: A", "/a/agent.ai.yaml");
+    await itemChatApi.createChat("rca", "i1", "plain");
+
+    expect(bodies.map((b) => JSON.parse(b))).toEqual([
+      { title: "Test: A", agent_path: "/a/agent.ai.yaml" },
+      { title: "plain" },
+    ]);
+  });
+});

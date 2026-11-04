@@ -459,6 +459,13 @@ class AgentToolContext:
     # gate so apply consistently overrides a disabled skill. Empty on most turns.
     applied_skills: list[str] = field(default_factory=list)
 
+    # A test chat of an agent in its author's own workspace
+    # (`docs/plan-wui-publish-and-agent-hub.md` A6): the agent's folder, whose
+    # `.skill/` joins the root's for this turn, its own winning on a name —
+    # what a conversation copy holds at its root. "" on every other turn (a
+    # copy already has them at its root).
+    agent_folder: str = ""
+
     # #112: the VLM describer the `read_image` tool uses to read a workspace
     # image. Set by the API layer from `get_kb_vlm`/`VlmDescriber` (shared with
     # KB ingestion). None when the deployment configured no VLM (`kb.vlm_llm`

@@ -176,6 +176,8 @@ class _CreateChatBody(BaseModel):
     # #topic-hub P7 (manual §3): open a new FREE chat in an item. Title is optional;
     # a workflow chat is opened by the run endpoint (P8), not here.
     title: str = ""
+    # A test chat of the agent at this path (plan-wui-publish-and-agent-hub A6).
+    agent_path: str = ""
 
 
 class _RenameChatBody(BaseModel):
@@ -205,6 +207,8 @@ class _ChatInfo(BaseModel):
     page_job: bool = False
     """The conversation of a page's job (#942): no workflow execution, a chat the
     item lists, whose job the chat can stop while it runs (#942 D5)."""
+    agent_path: str = ""
+    """A test chat of the agent at this path (plan-wui-publish-and-agent-hub A6)."""
 
 
 class _TodoItemWire(BaseModel):

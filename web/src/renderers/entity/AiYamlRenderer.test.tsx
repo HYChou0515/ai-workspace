@@ -92,6 +92,15 @@ describe("AiYamlRenderer", () => {
     expect(await screen.findByRole("button", { name: /refresh/i })).toBeInTheDocument();
   });
 
+  // An agent (plan-wui-publish-and-agent-hub A6) is drawn as its panel, ahead
+  // of the dispatcher like a WUI — it has no entity records to draw.
+  it("renders a `view: agent` file as the agent panel", async () => {
+    renderView("/agents/sales/agent.ai.yaml", "view: agent\ntitle: Sales\ninstructions: Help.\n");
+
+    expect(await screen.findByText(/正在讀取這個 agent|讀不到這個 agent|Reading this agent|could not be read|Sales/)).toBeInTheDocument();
+    expect(screen.queryByText(/Unsupported view kind/i)).toBeNull();
+  });
+
   it("keeps the WUI pane mounted while a sibling view file in the same folder loads", async () => {
     /**
      * Found in a real browser (review round 11's fix, verified by hand):

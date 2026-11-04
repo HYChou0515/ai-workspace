@@ -11,7 +11,7 @@ they live next to ``create_app``; these routes only address chats and delegate.
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Any, Protocol, cast
+from typing import TYPE_CHECKING, Any, Protocol, cast
 
 from fastapi import APIRouter, FastAPI, HTTPException, Query, Request, Response, status
 from fastapi.responses import StreamingResponse
@@ -33,6 +33,9 @@ from .chat_info import (
 from .events import GoalUpdated, TodosUpdated
 from .item_conversation_perm import item_conversation_mirror
 from .locator import ItemLocator
+
+if TYPE_CHECKING:
+    from ..files import WorkspaceFiles
 from .promote import promote_chat_to_kb
 from .rca_messages import undo_cut_index
 from .schemas import (
@@ -117,6 +120,7 @@ def register_chat_routes(
     context_usage_for: ContextUsageFor,
     compact_into: CompactInto,
     goal_max_rounds: int = 3,
+    files: WorkspaceFiles | None = None,
     goal_checker_enabled: bool = True,
     # #615: the deployment's off-hours budget + whether a usable window is
     # configured at all. Disclosed on the wire so the opt-in checkbox is shown
@@ -266,6 +270,22 @@ def register_chat_routes(
         infos.sort(key=lambda c: (-(c.last_activity_ms or 0), c.chat_id))
         return infos
 
+    async def _require_agent_file(investigation_id: str, path: str) -> None:
+        """A test chat names an agent this item holds — or nothing runs as it."""
+        from ..apps.agent_spec import parse_agent_spec
+        from ..filestore.protocol import FileNotFound
+
+        assert files is not None, "the app wires the file facade in"
+        try:
+            raw = await files.read(investigation_id, path)
+        except FileNotFound:
+            raise HTTPException(status_code=404, detail=f"no agent at {path}") from None
+        spec, problems = parse_agent_spec(raw.decode("utf-8", errors="replace"))
+        if spec is None:
+            raise HTTPException(
+                status_code=422, detail=f"{path} is not an agent yet: " + "; ".join(problems)
+            )
+
     @app.post("/a/{slug}/items/{item_id}/chats", status_code=status.HTTP_201_CREATED)
     async def create_chat(slug: str, item_id: str, body: _CreateChatBody) -> _ChatInfo:
         """Open a new FREE chat in the item (manual §3); returns its chat_id. A
@@ -283,10 +303,13 @@ def register_chat_routes(
                 status_code=409,
                 detail="this is a conversation with an agent; start a new one from Agent Hub",
             )
+        if body.agent_path:
+            await _require_agent_file(investigation_id, body.agent_path)
         rev = conv_rm.create(
             Conversation(
                 item_id=investigation_id,
                 title=body.title,
+                agent_path=body.agent_path,
                 created_ms=now_ms(),
                 # #306 PR3: stamp the item read-chat mirror so the new chat's
                 # access_scope gates it exactly like the item.

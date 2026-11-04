@@ -2754,6 +2754,7 @@ def create_app(
         context_usage_for=turn_ctx.usage_of,
         compact_into=chat_send_svc.compact,
         goal_max_rounds=goal_max_rounds,
+        files=files,
         goal_checker_enabled=goal_checker_llm is not None,
         goal_offhours_max_rounds=offhours.max_rounds,
         goal_offhours_enabled=OffHoursCalendar(
@@ -3016,6 +3017,18 @@ def create_app(
         ledger=disk_ledger,
         get_user_id=get_user_id,
         superusers=superusers,
+    )
+    # The agent panel's summary (plan-wui-publish-and-agent-hub A6).
+    from .agent_routes import register_agent_routes
+
+    register_agent_routes(
+        api,
+        spec=spec,
+        locator=locator,
+        files=files,
+        publications=Publications(spec),
+        turn_ctx=turn_ctx,
+        app_catalog=app_catalog,
     )
 
     if spa_dist is None:

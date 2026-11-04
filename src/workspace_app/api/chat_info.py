@@ -45,6 +45,7 @@ def chat_info(
         status=status,
         last_activity_ms=last_activity_ms,
         page_job=page_job,
+        agent_path=conv.agent_path,
     )
 
 

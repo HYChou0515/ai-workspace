@@ -8,6 +8,7 @@ import { useItemChats } from "../hooks/useItemChats";
 import { useItemCollections } from "../hooks/useItemCollections";
 import { useCancelRun, useRun } from "../hooks/useWorkflow";
 import { publishAgentDraft } from "../lib/agentDraftBus";
+import { subscribeAgentTestChat } from "../lib/agentTestChatBus";
 import { subscribeChatRequest } from "../lib/chatRequestBus";
 import { AgentPanel } from "../pages/investigation/AgentPanel";
 import { ChatSwitcher } from "./ChatSwitcher";
@@ -215,6 +216,18 @@ export function ItemChatShell({
             setActiveChatId(c.chat_id);
             setHandOff({ draft });
           },
+          (err: unknown) => setOpenFailed(err instanceof Error ? err.message : String(err)),
+        );
+      }),
+    [itemId],
+  );
+  // A6: the agent panel's "Test chat" — a NEW chat that runs as the agent, put
+  // on screen; the item's default chat is never one (the server skips it).
+  useEffect(
+    () =>
+      subscribeAgentTestChat(itemId, ({ path, title }) => {
+        void createRef.current(title, path).then(
+          (c) => setActiveChatId(c.chat_id),
           (err: unknown) => setOpenFailed(err instanceof Error ? err.message : String(err)),
         );
       }),

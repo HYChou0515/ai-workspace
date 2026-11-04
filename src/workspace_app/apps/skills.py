@@ -164,7 +164,7 @@ def _enforce_cap(name: str, body: str) -> str:
 
 
 async def read_workspace_skill(
-    files: WorkspaceFiles, workspace_id: str, name: str
+    files: WorkspaceFiles, workspace_id: str, name: str, folder: str = ""
 ) -> tuple[str | None, SkillOrigin | None]:
     """Body markdown of a co-created skill at ``<workspace>/.skill/<name>/SKILL.md``
     (frontmatter stripped) plus the folder's ``.origin`` — read in ONE
@@ -172,11 +172,25 @@ async def read_workspace_skill(
     (`read_skill` counts a use of a skill hub copy from it). ``(None, None)``
     when there is no such skill; the origin is ``None`` when the folder has no
     `.origin` (written here and never published) or one that does not decode.
-    A published folder tracks its own entry, so reading it counts as a use."""
+    A published folder tracks its own entry, so reading it counts as a use.
+
+    ``folder`` — an agent's folder (`workspace_skill_metas`): its own
+    ``<folder>/.skill/<name>/`` is read first and wins (A5)."""
+    if folder:
+        own = await _read_skill_at(
+            files, workspace_id, name, f"{folder}/{WORKSPACE_SKILL_DIR}/{name}/"
+        )
+        if own[0] is not None:
+            return own
+    return await _read_skill_at(files, workspace_id, name, f"/{WORKSPACE_SKILL_DIR}/{name}/")
+
+
+async def _read_skill_at(
+    files: WorkspaceFiles, workspace_id: str, name: str, where: str
+) -> tuple[str | None, SkillOrigin | None]:
     from ..filestore.batch import read_all_existing
 
-    folder = f"/{WORKSPACE_SKILL_DIR}/{name}/"
-    md, manifest = folder + "SKILL.md", folder + ORIGIN_FILE
+    md, manifest = where + "SKILL.md", where + ORIGIN_FILE
     got = await read_all_existing(files, workspace_id, [md, manifest])
     if (raw := got.get(md)) is None:
         return None, None
@@ -255,12 +269,29 @@ async def workspace_skill_origin(
     return msgspec.json.decode(raw, type=SkillOrigin)
 
 
-async def workspace_skill_metas(files: WorkspaceFiles, workspace_id: str) -> list[SkillMeta]:
+async def workspace_skill_metas(
+    files: WorkspaceFiles, workspace_id: str, folder: str = ""
+) -> list[SkillMeta]:
     """``(name, description)`` for every well-formed skill under the workspace's
     ``.skill/`` dir, sorted by name. Unparseable / name-mismatched / nameless
     skills are skipped (logged) — same tolerance as the package loader, so one
-    bad hand-edit can't break the whole index. Empty when there's no ``.skill/``."""
-    prefix = f"/{WORKSPACE_SKILL_DIR}/"
+    bad hand-edit can't break the whole index. Empty when there's no ``.skill/``.
+
+    ``folder`` — an agent's folder, for a test chat in the author's own
+    workspace (`docs/plan-wui-publish-and-agent-hub.md` A5/A6): its
+    ``<folder>/.skill/`` joins the root's, its own winning on a name — what a
+    conversation copy holds at its root (`api/publish_copy.copy_plan`)."""
+    root = await _skill_metas_under(files, workspace_id, f"/{WORKSPACE_SKILL_DIR}/")
+    if not folder:
+        return root
+    own = await _skill_metas_under(files, workspace_id, f"{folder}/{WORKSPACE_SKILL_DIR}/")
+    mine = {m.name for m in own}
+    return sorted([*own, *(m for m in root if m.name not in mine)], key=lambda m: m.name)
+
+
+async def _skill_metas_under(
+    files: WorkspaceFiles, workspace_id: str, prefix: str
+) -> list[SkillMeta]:
     paths = await files.ls(workspace_id, prefix)
     from ..filestore.batch import read_all_existing
     from ..filestore.protocol import FileNotFound
@@ -351,7 +382,10 @@ def workspace_skills_block(metas: list[SkillMeta]) -> str:
 
 
 async def advertised_workspace_skills(
-    files: WorkspaceFiles, workspace_id: str, prefs: Mapping[str, bool] | None = None
+    files: WorkspaceFiles,
+    workspace_id: str,
+    prefs: Mapping[str, bool] | None = None,
+    folder: str = "",
 ) -> list[SkillMeta]:
     """The workspace skills this turn tells the agent about: `.skill/` read live,
     minus any the item toggled OFF (`prefs[name]` is False, #380 — workspace
@@ -364,15 +398,20 @@ async def advertised_workspace_skills(
     needs to know what the agent was told — the block below, and the
     `read_skill` grant — must ask THIS rule, or the turn advertises a skill it
     has no tool to load, or withdraws a tool for a skill it just advertised."""
-    metas = await workspace_skill_metas(files, workspace_id)
+    metas = await workspace_skill_metas(files, workspace_id, folder)
     return [m for m in metas if prefs.get(m.name) is not False] if prefs else metas
 
 
 async def build_workspace_skills_block(
-    files: WorkspaceFiles, workspace_id: str, prefs: Mapping[str, bool] | None = None
+    files: WorkspaceFiles,
+    workspace_id: str,
+    prefs: Mapping[str, bool] | None = None,
+    folder: str = "",
 ) -> str:
     """Read the workspace's `.skill/` live and render the index block (or ``""``)."""
-    return workspace_skills_block(await advertised_workspace_skills(files, workspace_id, prefs))
+    return workspace_skills_block(
+        await advertised_workspace_skills(files, workspace_id, prefs, folder)
+    )
 
 
 class SkillState(msgspec.Struct, frozen=True):

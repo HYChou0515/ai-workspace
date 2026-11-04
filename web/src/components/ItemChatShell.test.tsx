@@ -570,3 +570,27 @@ describe("a chat asked for from an execution", () => {
     stop();
   });
 });
+
+// plan-wui-publish-and-agent-hub A6: the agent panel's "Test chat" — a NEW
+// chat that runs as the agent, put on screen.
+describe("a test chat asked for from the agent panel", () => {
+  it("is a new chat naming the agent, and the one on screen", async () => {
+    const { publishAgentTestChat } = await import("../lib/agentTestChatBus");
+    stubChatApi([summary({ chat_id: "conversation:c1", is_default: true })]);
+    const created = summary({ chat_id: "conversation:test", is_default: false });
+    const create = vi.spyOn(itemChatApi, "createChat").mockResolvedValue(created);
+    render();
+    await screen.findByTestId("agent-panel-stub");
+    vi.mocked(itemChatApi.listChats).mockResolvedValue([
+      created,
+      summary({ chat_id: "conversation:c1", is_default: true }),
+    ]);
+
+    publishAgentTestChat("it", { path: "/a/agent.ai.yaml", title: "Test: A" });
+
+    await waitFor(() =>
+      expect(screen.getByTestId("agent-panel-stub").dataset.chat).toBe("conversation:test"),
+    );
+    expect(create).toHaveBeenCalledWith(expect.any(String), "it", "Test: A", "/a/agent.ai.yaml");
+  });
+});

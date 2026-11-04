@@ -36,6 +36,9 @@ export type ItemChatSummary = {
   /** The conversation of a page's job (#942): a chat, whose job it can stop
    * while it runs (#942 D5). Absent from servers before it. */
   page_job?: boolean;
+  /** A test chat of the agent at this path (plan-wui-publish-and-agent-hub
+   * A6); "" or absent for every other chat. */
+  agent_path?: string;
 };
 
 /** A hydrated chat thread (persisted messages — carries resolved [n] citations). */
@@ -61,12 +64,13 @@ export const itemChatApi = {
     return jsonOrThrow(await apiFetch(`${base(slug, itemId)}/chats`), "list chats");
   },
 
-  async createChat(slug: string, itemId: string, title = ""): Promise<ItemChatSummary> {
+  /** `agentPath` opens a TEST chat that runs as that agent (A6). */
+  async createChat(slug: string, itemId: string, title = "", agentPath = ""): Promise<ItemChatSummary> {
     return jsonOrThrow(
       await apiFetch(`${base(slug, itemId)}/chats`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ title }),
+        body: JSON.stringify(agentPath ? { title, agent_path: agentPath } : { title }),
       }),
       "create chat",
     );
