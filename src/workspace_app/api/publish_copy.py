@@ -20,6 +20,7 @@ id no one has seen yet.
 
 from __future__ import annotations
 
+import asyncio
 import tempfile
 import uuid
 from collections.abc import Awaitable, Callable
@@ -134,6 +135,18 @@ async def _copy_files(
     return total
 
 
+#: How long a second open waits for the person's copy another open is making,
+#: and how often it looks (round 3 of review: a copy is one only once it is
+#: finished). Bounded, so a maker that died mid-copy is an error, not a hang.
+READY_WAIT_S = 120.0
+READY_POLL_S = 0.2
+
+
+class CopyPreparing(Exception):
+    """The person's copy is still being made by another open, past
+    `READY_WAIT_S` — try again (a 503, `api/publish.py`)."""
+
+
 #: A person's disk cap in bytes, 0 for none — `quota.user_limits`' answer,
 #: handed in by `create_app` so a copy is held to the same rule as any write.
 DiskLimit = Callable[[str], Awaitable[int]]
@@ -179,14 +192,16 @@ async def make_copy(
     """One new item seeded from ``row``'s snapshot, created as ``owner``:
     ``(its id, whether this call made it)``.
 
-    The item is created FIRST, with ``if_not_exists``: ``item_id`` names a
-    person's copy (`open_copy`), so of two opens at once one creates it and
-    the other is refused and returns it as it is — writing none of its files,
-    size or ledger row over the first's, which the person may already be
-    editing. Everything after the create belongs to the caller that made it;
-    if any of it fails, the item and its files go, so a failure leaves nothing
-    half made. A snapshot that vanished meanwhile (unpublished) answers as
-    gone. ``exclude`` — a ledger row the cap check leaves out (`ensure_room`)."""
+    The item is created FIRST, with ``if_not_exists`` and no ``published_from``:
+    ``item_id`` names a person's copy (`open_copy`), so of two opens at once
+    one creates it and the other is refused — ``(id, False)``, having written
+    none of its files, size or ledger row — and waits in `open_copy` until
+    the copy is finished. It is finished in the LAST write, which sets
+    ``published_from``: until then nothing (`copies_of`, a second open) can
+    hand it out half made. Everything after the create belongs to the caller
+    that made it; if any of it fails, the item and its files go. A snapshot
+    that vanished meanwhile (unpublished) answers as gone. ``exclude`` — a
+    ledger row the cap check leaves out (`ensure_room`)."""
     found = find_work_item(spec, row.item_id)
     if found is None:
         raise LookupError(f"the source of {row.path} is gone")
@@ -204,7 +219,9 @@ async def make_copy(
         # may not state an environment size (`perm.checker._check_create`).
         "sandbox_cpu_cores": None,
         "sandbox_memory_bytes": None,
-        "published_from": publication_id(row),
+        # Set in the LAST write, once the files are in: until then the item
+        # is no copy of anything — `copies_of` cannot hand it out half made.
+        "published_from": "",
         "published_kind": row.kind,
         "published_path": row.path,
         "published_title": row.title,
@@ -228,15 +245,20 @@ async def make_copy(
             copied = await _copy_files(
                 store, row.snapshot, item_id, agent_path=row.path if row.kind == "agent" else None
             )
-            if row.cpu_cores is not None or row.memory_bytes is not None:
-                # C10: the publisher's size for the copies — written as the copy's
-                # owner, who holds change_permission on it, the verb these fields
-                # are gated on; clamped on the way out like any item's own setting.
-                sized = msgspec.structs.replace(
-                    item, sandbox_cpu_cores=row.cpu_cores, sandbox_memory_bytes=row.memory_bytes
-                )
-                rm.update(item_id, sized)
             await ledger.record(item_id, owner, copied)
+            # The copy is finished: it becomes one (`published_from`), with the
+            # publisher's size for the copies (C10) — written as the copy's
+            # owner, who holds change_permission on it, the verb the size is
+            # gated on; clamped on the way out like any item's own setting.
+            rm.update(
+                item_id,
+                msgspec.structs.replace(
+                    item,
+                    published_from=publication_id(row),
+                    sandbox_cpu_cores=row.cpu_cores,
+                    sandbox_memory_bytes=row.memory_bytes,
+                ),
+            )
         except BaseException as exc:
             rm.permanently_delete(item_id)
             await store.purge(item_id)
@@ -273,6 +295,31 @@ def copies_of(spec: SpecStar, row: Published) -> list[tuple[str, str]]:
     return out
 
 
+def _copy_state(spec: SpecStar, row: Published, item_id: str) -> str:
+    """``absent`` / ``deleted`` (in the trash) / ``preparing`` (made, not yet
+    finished) / ``ready`` — what the derived id of a person's copy holds."""
+    if find_work_item(spec, item_id) is None:
+        return "deleted" if find_work_item(spec, item_id, include_deleted=True) else "absent"
+    found = find_work_item(spec, item_id)
+    assert found is not None
+    return "ready" if found[1].published_from == publication_id(row) else "preparing"
+
+
+async def _await_finished(spec: SpecStar, row: Published, item_id: str) -> bool:
+    """Wait for the copy another open is making: True once it is finished,
+    False if it is gone (that maker failed). Bounded by `READY_WAIT_S`."""
+    waited = 0.0
+    while waited < READY_WAIT_S:
+        state = _copy_state(spec, row, item_id)
+        if state == "ready":
+            return True
+        if state != "preparing":
+            return False
+        await asyncio.sleep(READY_POLL_S)
+        waited += READY_POLL_S
+    raise CopyPreparing(f"the copy of {row.path} is still being made")
+
+
 def person_copy_id(spec: SpecStar, row: Published, opener: str) -> str:
     """The id ``opener``'s one copy of ``row`` is made under (W3): derived, not
     drawn, so two opens at once — two tabs, two pods — both make THIS item and
@@ -307,20 +354,25 @@ async def open_copy(
             if created_by == opener:
                 return Opened(row.slug, item_id, created=False)
         named = person_copy_id(spec, row, opener)
-        # A copy they deleted still holds the derived id (and its files, for a
-        # restore): then a fresh id, never a write over the deleted one's.
-        if find_work_item(spec, named, include_deleted=True) is None:
-            item_id, made = await make_copy(
-                spec,
-                store,
-                ledger,
-                row,
-                owner=opener,
-                permission=private,
-                limit_of=limit_of,
-                item_id=named,
-            )
-            return Opened(row.slug, item_id, created=made)
+        # Refused (`if_not_exists`) when the id is held at all — by a copy
+        # another open is making, or one in the trash.
+        item_id, made = await make_copy(
+            spec,
+            store,
+            ledger,
+            row,
+            owner=opener,
+            permission=private,
+            limit_of=limit_of,
+            item_id=named,
+        )
+        if made:
+            return Opened(row.slug, item_id, created=True)
+        # Another open is making it: the person gets it once it is whole. Not
+        # coming — its maker failed, or it is a copy they deleted, whose files
+        # stay for a restore — then a fresh copy below, never one over it.
+        if await _await_finished(spec, row, named):
+            return Opened(row.slug, named, created=False)
     item_id, made = await make_copy(
         spec, store, ledger, row, owner=opener, permission=private, limit_of=limit_of
     )

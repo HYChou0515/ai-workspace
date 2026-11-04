@@ -12,6 +12,7 @@ back (C9/C10), and the half-made things a failure left behind.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 
 import httpx
@@ -444,3 +445,74 @@ def test_taking_an_old_deploy_row_down_needs_what_listing_it_needs():
 
     assert r.status_code == 403, r.text
     assert [p["can_remove"] for p in listed] == [False]
+
+
+# ── review round 3: a copy is one only once it is finished ────────────────
+
+
+def _race(spec, store, row, monkeypatch, *, fail: bool):
+    """A second open by the same person while the first is still copying."""
+    import workspace_app.api.publish_copy as pc
+    from workspace_app.api.publish_copy import open_copy
+
+    ledger = DiskLedger(spec)
+    gate = asyncio.Event()
+    real = pc._copy_files
+
+    async def slow(*a, **k):
+        await gate.wait()
+        if fail:
+            raise RuntimeError("copy failed")
+        return await real(*a, **k)
+
+    monkeypatch.setattr(pc, "_copy_files", slow)
+    monkeypatch.setattr(pc, "READY_POLL_S", 0.01)
+
+    async def go():
+        first = asyncio.create_task(open_copy(spec, store, ledger, row, opener="amy"))
+        await asyncio.sleep(0.05)
+        second_task = asyncio.create_task(open_copy(spec, store, ledger, row, opener="amy"))
+        await asyncio.sleep(0.05)
+        # The second open must still be waiting: nothing to hand over yet.
+        waiting = not second_task.done()
+        gate.set()
+        if fail:
+            # From now on copies succeed, so the second maker can finish.
+            monkeypatch.setattr(pc, "_copy_files", real)
+        with contextlib.suppress(RuntimeError):
+            await first
+        second = await second_task
+        return waiting, second, dict(store._files.get(second.item_id, {}))
+
+    return asyncio.run(go())
+
+
+def _per_person(holder):
+    client, spec, store, _a = _app(holder)
+    src = _source(spec)
+    _workspace(client, src)
+    _publish(client, src, sharing="per_person")
+    from workspace_app.api.publish import Publications
+
+    return spec, store, Publications(spec).get(src, PAGE)
+
+
+def test_a_second_tab_waits_for_the_copy_and_gets_it_whole(monkeypatch):
+    spec, store, row = _per_person({"id": "bob"})
+
+    waiting, second, files = _race(spec, store, row, monkeypatch, fail=False)
+
+    assert waiting
+    assert PAGE in files
+    found = find_work_item(spec, second.item_id)
+    assert found is not None and found[1].published_from
+
+
+def test_a_second_tab_is_never_handed_a_copy_that_then_fails(monkeypatch):
+    spec, store, row = _per_person({"id": "bob"})
+
+    waiting, second, files = _race(spec, store, row, monkeypatch, fail=True)
+
+    assert waiting
+    assert find_work_item(spec, second.item_id) is not None
+    assert PAGE in files

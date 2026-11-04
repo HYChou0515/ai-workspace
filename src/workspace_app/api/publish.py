@@ -50,7 +50,7 @@ from ..resources.groups import groups_of
 from .file_routes import _workspace_path
 from .item_authz import user_may
 from .locator import ItemLocator
-from .publish_copy import DiskLimit, copy_plan, ensure_room
+from .publish_copy import CopyPreparing, DiskLimit, copy_plan, ensure_room
 from .schedule_index import is_schedule_file
 from .timeutil import now_ms
 from .wui_deploy import DeployedPages, page_color, page_icon, page_title
@@ -608,6 +608,8 @@ def register_publish_routes(
             opened = await open_copy(spec, filestore, ledger, row, opener=user, limit_of=limit_of)
         except LookupError as exc:
             raise HTTPException(status_code=410, detail=str(exc)) from None
+        except CopyPreparing as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from None
         publications.note_open(row.item_id, row.path, user)
         return OpenedOut(
             slug=opened.slug, item_id=opened.item_id, created=opened.created, kind=row.kind
