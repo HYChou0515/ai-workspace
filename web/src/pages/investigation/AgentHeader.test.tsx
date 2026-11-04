@@ -198,6 +198,10 @@ describe("AgentHeader skill updates (plan-skill-hub-release-notes D1)", () => {
     expect(more.getAttribute("aria-label") ?? "").toContain("1");
     fireEvent.click(more);
     expect(screen.getByTestId("header-more-skills").getAttribute("aria-label") ?? "").toContain("1");
+    // Review round 1 (WCAG 2.5.3 Label in Name): an item with nothing to flag
+    // is named by the label it shows — not by an `aria` written for its
+    // unfolded icon (Export's was the English "Export conversation").
+    expect(screen.getByTestId("header-more-export")).not.toHaveAttribute("aria-label");
   });
 
   it("carries no mark when no copy is behind", async () => {

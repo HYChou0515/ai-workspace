@@ -340,7 +340,9 @@ function HeaderMoreMenu({ items }: { items: HeaderAction[] }) {
               role="menuitem"
               className="hdr-more__item"
               data-testid={`header-more-${a.id}`}
-              aria-label={a.aria ?? a.label}
+              // Named by the label it shows (WCAG 2.5.3); a flagged item also names
+              // its mark, through an `aria` that carries the label.
+              aria-label={a.attention ? (a.aria ?? a.label) : undefined}
               title={a.tip}
               onClick={() => {
                 close();
