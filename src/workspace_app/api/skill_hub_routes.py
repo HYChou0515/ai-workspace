@@ -227,6 +227,8 @@ class SkillHubHistoryEvent(BaseModel):
     current: bool
     #: v1, v2, … on a publish or rollback; `None` on any other row (D8).
     version: int | None = None
+    #: What the author wrote about that version (plan-skill-hub-release-notes).
+    release_note: str = ""
 
 
 class SkillHubHistory(BaseModel):

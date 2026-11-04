@@ -220,6 +220,16 @@ export function SkillHubHistory({ entry, client }: { entry: SkillHubDetail; clie
                   {version && (!before || before.description !== e.description) ? (
                     <p className="skill-hub-history-desc">{e.description}</p>
                   ) : null}
+                  {version && e.release_note ? (
+                    // What the author wrote about this version, as they wrote
+                    // it (plan-skill-hub-release-notes P1).
+                    <section
+                      className="skill-hub-history-release markdown"
+                      aria-label={t("skillHub.history.releaseNote")}
+                    >
+                      <ReactMarkdown>{e.release_note}</ReactMarkdown>
+                    </section>
+                  ) : null}
                   {e.kind === "permission" && e.audience.length > 0 ? (
                     // G24: the owner sees who it was opened to, not only the word.
                     <p className="skill-hub-history-desc">

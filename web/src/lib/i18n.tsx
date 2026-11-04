@@ -3012,6 +3012,7 @@ export const messages = {
   // screen — a version is named by when it was published, never by its id.
   "skillHub.history": { "zh-TW": "版本紀錄", en: "History" },
   "skillHub.history.current": { "zh-TW": "目前版本", en: "Current" },
+  "skillHub.history.releaseNote": { "zh-TW": "更新說明", en: "Release note" },
   "skillHub.history.kind.publish": { "zh-TW": "發布", en: "Published" },
   // plan-skill-hub-ux-redo D8: a version is named `v N ・ date time`.
   "skillHub.history.kind.rollback": { "zh-TW": "回復成 {version}", en: "Rolled back to {version}" },
