@@ -161,6 +161,32 @@ describe("WorkspaceShell — who gets the IDE column", () => {
     expect(screen.queryByTestId("chat-locked")).not.toBeInTheDocument();
     expect(chatReadOnly).toHaveBeenLastCalledWith(true);
   });
+
+  // plan-skill-hub-release-notes D4: the skill hub Update rewrites the item's
+  // copy through a route gated on `edit_content` alone — an `add_content` /
+  // `write_meta` holder passes the write union and would be refused 403.
+  it("offers the skill Update only to someone who may edit the item's content", async () => {
+    const shellFor = (grants: Record<string, string[]>) =>
+      renderWithQuery(
+        <MemoryRouter>
+          <WorkspaceShell
+            manifest={manifest}
+            item={{ ...item, permission: { visibility: "restricted", read_chat: ["user:root"], ...grants } } as unknown as AppItem}
+            files={[]}
+          />
+        </MemoryRouter>,
+      );
+    const lastUpdateGate = () => (chatProps.mock.lastCall?.[0] as { canUpdateSkills?: boolean }).canUpdateSkills;
+
+    shellFor({ add_content: ["user:root"], write_meta: ["user:root"] });
+    await screen.findByTestId("chat");
+    expect(lastUpdateGate()).toBe(false);
+    cleanup();
+
+    shellFor({ edit_content: ["user:root"] });
+    await screen.findByTestId("chat");
+    expect(lastUpdateGate()).toBe(true);
+  });
 });
 
 // The item's own FIELDS (env vars, tool/skill prefs, the attached preset) are
