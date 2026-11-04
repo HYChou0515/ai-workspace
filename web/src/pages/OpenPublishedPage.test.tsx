@@ -6,7 +6,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { HttpError } from "../api/http";
 import type { Opened } from "../api/publish";
-import { renderWithQuery } from "../test/queryWrapper";
+import { qk } from "../api/queryKeys";
+import { makeTestQueryClient, renderWithQuery } from "../test/queryWrapper";
 import { copyRoute, OpenPublishedPage } from "./OpenPublishedPage";
 
 function Where() {
@@ -14,7 +15,11 @@ function Where() {
   return <div data-testid="landed">{loc.pathname}</div>;
 }
 
-function at(address: string, open: (itemId: string, path: string) => Promise<Opened>) {
+function at(
+  address: string,
+  open: (itemId: string, path: string) => Promise<Opened>,
+  qc = makeTestQueryClient(),
+) {
   const client = { open: vi.fn(open) };
   renderWithQuery(
     <MemoryRouter initialEntries={[address]}>
@@ -23,6 +28,7 @@ function at(address: string, open: (itemId: string, path: string) => Promise<Ope
         <Route path="*" element={<Where />} />
       </Routes>
     </MemoryRouter>,
+    qc,
   );
   return client;
 }
@@ -60,6 +66,26 @@ describe("OpenPublishedPage", () => {
     }));
 
     expect(await screen.findByTestId("landed")).toHaveTextContent("/a/rca/rca%3Acopy-3");
+  });
+
+  it("an open tells the lists that count opens and conversations to read again", async () => {
+    // Found in the demo recording: back on the agent's page after starting a
+    // conversation, "my conversations" still said there were none.
+    const qc = makeTestQueryClient();
+    qc.setQueryData(qk.agentHubPage("a"), { stale: true });
+    qc.setQueryData(qk.agentHub, []);
+    qc.setQueryData(qk.wuiOverview, []);
+    at("/open/rca/src-1/agents/sales/agent.ai.yaml", async () => ({
+      slug: "rca",
+      item_id: "rca:copy-3",
+      created: true,
+      kind: "agent",
+    }), qc);
+
+    await screen.findByTestId("landed");
+    for (const key of [qk.agentHubPage("a"), qk.agentHub, qk.wuiOverview]) {
+      expect(qc.getQueryState(key)?.isInvalidated).toBe(true);
+    }
   });
 
   it("says plainly when it is not published or not the opener's to use", async () => {

@@ -10,12 +10,13 @@
  * Outside the shell for the same reason as a WUI at its own URL: whoever
  * followed a link has one thing to wait for, not a workspace to navigate.
  */
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 
 import { HttpError } from "../api/http";
 import { publishApi, type PublishApi } from "../api/publish";
+import { qk } from "../api/queryKeys";
 import { encodePath } from "../api/refPath";
 import { useT } from "../lib/i18n";
 
@@ -45,10 +46,17 @@ export function OpenPublishedPage({ client = publishApi }: { client?: Pick<Publi
     refetchOnWindowFocus: false,
   });
 
+  const qc = useQueryClient();
   const data = opened.data;
   useEffect(() => {
-    if (data) navigate(copyRoute(data.kind, data.slug, data.item_id, path), { replace: true });
-  }, [data, navigate, path]);
+    if (!data) return;
+    // An open counts (opens, people) and may make a conversation the agent's
+    // page lists — so the lists that show those read again, wherever the
+    // person goes next.
+    void qc.invalidateQueries({ queryKey: qk.agentHub });
+    void qc.invalidateQueries({ queryKey: qk.wuiOverview });
+    navigate(copyRoute(data.kind, data.slug, data.item_id, path), { replace: true });
+  }, [data, navigate, path, qc]);
 
   const err = opened.error;
   const sentence = !err
