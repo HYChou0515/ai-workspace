@@ -207,7 +207,9 @@ describe("SkillUpdateBanner says what happened", () => {
     );
     fireEvent.click(within(await banner()).getByRole("button", { name: word("skills.updates.show") }));
     fireEvent.click(within(await banner()).getByRole("button", { name: new RegExp(`^${word("skills.updates.update")}$`) }));
-    const status = await screen.findByRole("status");
+    // The region is mounted with the banner (so a reader hears what is put in it): wait for the words.
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("SKILL.md"));
+    const status = screen.getByRole("status");
     expect(status).toHaveTextContent("log-digest");
     expect(status).toHaveTextContent("SKILL.md");
     expect(status).toHaveTextContent(word("skills.refreshKept"));
@@ -218,7 +220,7 @@ describe("SkillUpdateBanner says what happened", () => {
     client.refreshItemSkill.mockRejectedValueOnce(new Error("This copy can only be reset."));
     fireEvent.click(within(await banner()).getByRole("button", { name: word("skills.updates.show") }));
     fireEvent.click(within(await banner()).getByRole("button", { name: new RegExp(`^${word("skills.updates.update")}$`) }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("This copy can only be reset.");
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("This copy can only be reset."));
     fireEvent.click(within(await banner()).getAllByRole("button", { name: word("skills.updates.later") })[0]);
     await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
   });
@@ -228,5 +230,116 @@ describe("SkillUpdateBanner says what happened", () => {
       { ...behind("log-digest", "e1", 3), updates: [{ version: 3, kind: "rollback", at: "2026-11-03T12:00:00Z", release_note: "", back_to: 1 }] },
     ]);
     expect(await banner()).toHaveTextContent(word("skills.banner.rolledBack", { name: "log-digest", back: 1 }));
+  });
+});
+
+// Review of the many-skill banner (#1004).
+describe("SkillUpdateBanner while and after updating", () => {
+  /** A client whose list drops each skill once it has been refreshed. */
+  function live(skills: ItemSkillState[], refresh?: (name: string) => Promise<unknown>) {
+    let left = [...skills];
+    const client = {
+      getItemSkills: vi.fn(async () => left),
+      refreshItemSkill: vi.fn(async (_s: string, _i: string, name: string) => {
+        if (refresh) await refresh(name);
+        left = left.filter((s) => s.name !== name);
+        return { updated: ["SKILL.md"], skipped: [], removed: [] };
+      }),
+    };
+    renderWithQuery(
+      <MemoryRouter>
+        <SkillUpdateBanner slug="rca" itemId="i1" canUpdate client={client} />
+      </MemoryRouter>,
+    );
+    return client;
+  }
+  const three = () => [behind("a", "ea", 2), behind("b", "eb", 2), behind("c", "ec", 2)];
+  const exact = (key: string) => ({ name: new RegExp(`^${word(key)}$`) });
+
+  it("Expand all follows the rows on screen after one of them is updated", async () => {
+    live(three());
+    fireEvent.click(within(await banner()).getByRole("button", { name: word("skills.updates.show") }));
+    fireEvent.click(within(await banner()).getByRole("button", { name: word("skills.banner.expandAll") }));
+    fireEvent.click(within(await banner()).getAllByRole("button", exact("skills.updates.update"))[0]);
+    await waitFor(() => expect(within(screen.getByRole("region", { name: word("skills.banner.label") })).getAllByRole("listitem")).toHaveLength(2));
+    // Both remaining rows are open, so the one bulk control offers to close them.
+    expect(within(await banner()).getByRole("button", { name: word("skills.banner.collapseAll") })).toBeInTheDocument();
+  });
+
+  it("while updating, the controls are off and it says how far it got; then what was updated", async () => {
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const client = live(three(), () => gate);
+    fireEvent.click(within(await banner()).getByRole("button", { name: word("skills.updates.show") }));
+    fireEvent.click(within(await banner()).getByRole("button", { name: word("skills.banner.updateAll") }));
+    fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: word("skills.banner.updateAll") }));
+    const b = await banner();
+    await waitFor(() => expect(b).toHaveTextContent(word("skills.banner.updating", { done: 0, n: 3 })));
+    for (const btn of within(b).getAllByRole("button")) expect(btn).toBeDisabled();
+    fireEvent.click(within(b).getAllByRole("button", exact("skills.updates.update"))[0]);
+    release();
+    await waitFor(() => expect(client.refreshItemSkill).toHaveBeenCalledTimes(3));
+    expect(await banner()).toHaveTextContent(word("skills.banner.updated", { names: "a、b、c" }));
+  });
+
+  it("what is left to say after the last update can be closed", async () => {
+    let left = [behind("a", "ea", 2)];
+    const client = {
+      getItemSkills: vi.fn(async () => left),
+      refreshItemSkill: vi.fn(async () => {
+        left = [];
+        return { updated: [], skipped: ["SKILL.md"], removed: [] };
+      }),
+    };
+    renderWithQuery(
+      <MemoryRouter>
+        <SkillUpdateBanner slug="rca" itemId="i1" canUpdate client={client} />
+      </MemoryRouter>,
+    );
+    fireEvent.click(within(await banner()).getByRole("button", { name: word("skills.updates.show") }));
+    fireEvent.click(within(await banner()).getByRole("button", exact("skills.updates.update")));
+    await screen.findByText(new RegExp("SKILL.md"));
+    fireEvent.click(within(await banner()).getByRole("button", { name: word("skills.banner.dismiss") }));
+    await waitFor(() => expect(screen.queryByRole("region", { name: word("skills.banner.label") })).toBeNull());
+  });
+
+  it("one refusal among several is named; the others still update", async () => {
+    const client = live(three(), async (name) => {
+      if (name === "b") throw new Error("This copy can only be reset.");
+    });
+    fireEvent.click(within(await banner()).getByRole("button", { name: word("skills.updates.show") }));
+    fireEvent.click(within(await banner()).getByRole("button", { name: word("skills.banner.updateAll") }));
+    fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: word("skills.banner.updateAll") }));
+    await waitFor(() =>
+      expect(screen.getByRole("alert")).toHaveTextContent(
+        word("skills.banner.failedLine", { name: "b", error: "This copy can only be reset." }),
+      ),
+    );
+    expect(client.refreshItemSkill).toHaveBeenCalledTimes(3);
+  });
+
+  it("Update all leaves out a copy that cannot be changed", async () => {
+    const client = live([behind("a", "ea", 2), { ...behind("b", "eb", 2), readonly: true }]);
+    fireEvent.click(within(await banner()).getByRole("button", { name: word("skills.updates.show") }));
+    fireEvent.click(within(await banner()).getByRole("button", { name: word("skills.banner.updateAll") }));
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog).toHaveTextContent(word("skills.banner.confirmTitleOne", { name: "a" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: word("skills.banner.updateAll") }));
+    await waitFor(() => expect(client.refreshItemSkill).toHaveBeenCalledTimes(1));
+    expect(client.refreshItemSkill).toHaveBeenCalledWith("rca", "i1", "a", { force: false });
+  });
+
+  it("a row heading carries the note's words, not its markdown", async () => {
+    mount([
+      behind("a", "ea", 2, "## Fixes\n\n- more"),
+      behind("b", "eb", 2, "Adds `read_file` and __init__ support, see [docs](https://x)."),
+    ]);
+    fireEvent.click(within(await banner()).getByRole("button", { name: word("skills.updates.show") }));
+    const rows = within(await banner()).getAllByRole("listitem");
+    expect(rows[0]).toHaveTextContent(/a\s*v2\s*Fixes/);
+    expect(rows[0]).not.toHaveTextContent("##");
+    expect(rows[1]).toHaveTextContent("Adds read_file and __init__ support, see docs.");
   });
 });

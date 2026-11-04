@@ -768,7 +768,8 @@ system prompt build 時**靜態**列入 index(`apps/catalog.py`),workspace skill
   item 標題列正下方有一條提示列(`SkillUpdateBanner`,打開 item 就看得到,不論開著 IDE 還是聊天、什麼寬度):「看更新說明」在原地展開說明,
   「稍後提醒」一次延後它列出的所有 skill。多個 skill 時合成一句(點名前兩個),展開後每個 skill 一列、預設收合
   (標題是名字、版號、說明第一行),有「全部展開」和「全部更新」(先確認;只給有 `edit_content` 的人)。
-  更新後有檔案因為在這個 item 改過而保持原樣、或被拒絕時,提示列寫出來。
+  更新時按鈕暫停、寫出進度;更新後寫出更新了哪些、哪些檔案因為在這個 item 改過而保持原樣、哪些被拒絕,
+  直到下一個動作或按「關閉」。
   這個記號讓打開 item 時就會讀一次 skill 清單(30 秒快取),不再只有打開 Skills 面板才讀。按鈕:**更新**（既有的同步,
   只裝最新版;只給有 `edit_content` 的人,因為同步路由只認這個 verb）、**稍後提醒**（固定 7 天）、
   **略過這個版本**（第二次提醒起才有）。稍後／略過存在瀏覽器 localStorage(`skillHub.updateReminders`,

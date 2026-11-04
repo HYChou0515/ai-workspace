@@ -673,6 +673,12 @@ export const messages = {
   "skills.banner.updateAll": { "zh-TW": "全部更新", en: "Update all" },
   "skills.banner.cancel": { "zh-TW": "取消", en: "Cancel" },
   "skills.banner.confirmTitle": { "zh-TW": "要更新這 {n} 個 skill 嗎？", en: "Update these {n} skills?" },
+  "skills.banner.confirmTitleOne": { "zh-TW": "要更新 {name} 嗎？", en: "Update {name}?" },
+  "skills.banner.updating": { "zh-TW": "正在更新 {done}/{n}…", en: "Updating {done} of {n}…" },
+  "skills.banner.updated": { "zh-TW": "已更新：{names}", en: "Updated: {names}" },
+  "skills.banner.kept": { "zh-TW": "{name}：{label}：{files}", en: "{name}: {label}: {files}" },
+  "skills.banner.failedLine": { "zh-TW": "{name}：沒有更新（{error}）", en: "{name}: not updated ({error})" },
+  "skills.banner.dismiss": { "zh-TW": "關閉", en: "Close" },
   "skills.banner.confirmBody": {
     "zh-TW": "會同步成 skill hub 上的最新版：{names}。這個 item 裡改過的檔案保持原樣。",
     en: "Each is brought to its latest version on the skill hub: {names}. Files edited in this item are left as they are.",

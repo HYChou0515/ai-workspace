@@ -974,8 +974,9 @@ a.skills-row-name {
   min-width: 0;
   color: var(--text-paper);
 }
-/* Ink, underlined: --accent-h / --info on this strip are 3.4–3.9:1 in light
-   and dark (AA wants 4.5:1 for this 12px text); --text-paper is 13:1+ in both. */
+/* Ink, underlined: --accent-h / --info / --err on this strip are 3.1–3.9:1 in
+   light and dark (AA wants 4.5:1 for this 12px text); --text-paper is 13:1+ in
+   both. */
 .skill-update-banner__action {
   padding: 0;
   border: 0;
@@ -991,7 +992,7 @@ a.skills-row-name {
   max-height: 40vh;
   overflow: auto;
   margin-top: var(--space-4);
-  border-top: 1px solid var(--paper-3);
+  border-top: 1px solid var(--text-paper-d2);
   padding-top: var(--space-4);
 }
 .skill-update-banner__bulk {
@@ -1035,21 +1036,37 @@ a.skills-row-name {
   white-space: nowrap;
   color: var(--text-paper);
 }
-.skill-update-banner__skill + .skill-update-banner__skill {
-  margin-top: var(--space-8);
-}
-/* The text in ink (--err on this strip is 3.3–3.6:1); the red is the rule
-   beside it, so colour is not the only signal and the words stay readable. */
+/* The text in ink (--err on this strip is 3.3–3.6:1). What tells a refusal
+   from a note is its words — each says 「沒有更新」 / "not updated" — and its
+   role; the rule beside it repeats that in colour. Empty regions take no room. */
 .skill-update-banner__status,
 .skill-update-banner__error {
-  list-style: none;
   margin: var(--space-4) 0 0;
   padding: 0 0 0 var(--space-8);
   color: var(--text-paper);
   border-left: 3px solid var(--info);
 }
+.skill-update-banner__status:empty,
+.skill-update-banner__error:empty {
+  display: none;
+}
+.skill-update-banner__status p,
+.skill-update-banner__error p {
+  margin: 0;
+}
+.skill-update-banner__status ul,
+.skill-update-banner__error ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
 .skill-update-banner__error {
   border-left-color: var(--err);
+}
+.skill-update-banner__action:disabled,
+.skill-update-banner__toggle:disabled {
+  cursor: default;
+  opacity: 0.6;
 }
 /* plan-skill-hub-release-notes D5: what a behind copy missed, under its row.
    The heading sits on the disclosure's own line, beside its marker. */

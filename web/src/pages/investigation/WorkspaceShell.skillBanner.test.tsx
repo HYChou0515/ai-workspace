@@ -4,7 +4,10 @@ import { cleanup, fireEvent, screen, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { QueryClientProvider } from "@tanstack/react-query";
+
 import { api } from "../../api";
+import { DialogProvider } from "../../components/Dialog";
 import type { AppItem, AppManifest, ItemSkillState } from "../../api/types";
 import { translate } from "../../lib/i18n";
 import { renderWithQuery } from "../../test/queryWrapper";
@@ -100,6 +103,39 @@ describe("WorkspaceShell skill update banner", () => {
     expect(b).toHaveTextContent(word("skills.banner.one", { name: "log-digest", version: 2 }));
     fireEvent.click(within(b).getByRole("button", { name: word("skills.updates.show") }));
     expect(updateButton(await banner())).toBeInTheDocument();
+  });
+
+  // Review (#1004): an item already in the cache re-renders the same shell, so
+  // without a key the banner's open list (or an update still running) carried
+  // over from item A to item B.
+  it("starts over when another item is opened in the same shell", async () => {
+    const itemFor = (id: string) =>
+      ({
+        resource_id: id,
+        title: id,
+        owner: "bob",
+        created_by: "bob",
+        permission: { visibility: "restricted", read_meta: ["user:carol"], read_chat: ["user:carol"], read_content: ["user:carol"] },
+      }) as unknown as AppItem;
+    const { rerender, client } = renderWithQuery(
+      <MemoryRouter>
+        <WorkspaceShell manifest={manifest} item={itemFor("INC-1")} files={[]} />
+      </MemoryRouter>,
+    );
+    fireEvent.click(within(await banner()).getByRole("button", { name: word("skills.updates.show") }));
+    expect(await banner()).toHaveTextContent("Flags FATAL.");
+    rerender(
+      <QueryClientProvider client={client}>
+        <DialogProvider>
+          <MemoryRouter>
+            <WorkspaceShell manifest={manifest} item={itemFor("INC-2")} files={[]} />
+          </MemoryRouter>
+        </DialogProvider>
+      </QueryClientProvider>,
+    );
+    const b = await banner();
+    expect(within(b).getByRole("button", { name: word("skills.updates.show") })).toHaveAttribute("aria-expanded", "false");
+    expect(b).not.toHaveTextContent("Flags FATAL.");
   });
 
   it("shows the notes but no Update to someone who may only read", async () => {

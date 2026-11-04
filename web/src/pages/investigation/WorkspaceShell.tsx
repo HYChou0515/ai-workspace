@@ -857,7 +857,14 @@ function ShellBody({
         {/* plan-skill-hub-release-notes D7: a skill hub copy with a new version
             says so at the top of the item, in every layout — the chat column
             is not on screen in a narrow IDE-first item (#464). */}
-        <SkillUpdateBanner slug={manifest.slug} itemId={item.resource_id} canUpdate={_canEditContent} />
+        {/* Keyed by item: an open list, an outcome or an update still running
+            belongs to the item it was about, not the next one opened. */}
+        <SkillUpdateBanner
+          key={item.resource_id}
+          slug={manifest.slug}
+          itemId={item.resource_id}
+          canUpdate={_canEditContent}
+        />
         <div style={{ flex: 1, display: "flex", minHeight: 0, position: "relative" }}>
           {/* #89: the file IDE (activity bar + file tree + editor + bottom
               panel) renders only when the App enables `function.workspace`; a

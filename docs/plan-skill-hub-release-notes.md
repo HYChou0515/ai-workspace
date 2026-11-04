@@ -150,9 +150,12 @@ reminder read it from the same place.
   the item alone and still moves the copy to the new version, so the banner
   went away and nobody heard that some files were still the old ones (review
   round 3). Those files are named under the banner, as the Skills panel names
-  them; a refusal is shown the same way, and both clear on the next action.
+  them; a refusal is shown the same way, and so is what was updated. While an
+  update runs the controls are off and it says how far it got (NN/g *Bulk
+  Actions: 3 Design Guidelines* — clear feedback). All of it clears on the
+  next action or 關閉, which is there whenever something is left to say.
 - **The banner's text buttons and messages are ink, not accent.** At 12px AA
-  needs 4.5:1; `--accent-h`, `--info` and `--err` on the strip are 3.3–3.9:1
+  needs 4.5:1; `--accent-h`, `--info` and `--err` on the strip are 3.1–3.9:1
   in light and dark, `--text-paper` is 13:1 or more. Buttons are underlined;
   an error carries a red rule beside its words.
 - **The old 「skill 已變更」 badge stays** for a behind copy with no `updates`:
