@@ -57,6 +57,7 @@ from .schemas import (
     _SearchBody,
     _SkillRefreshRequest,
     _SkillRefreshResult,
+    _SkillUpdate,
     _WorkspaceTree,
     _WorkspaceUsage,
 )
@@ -402,6 +403,36 @@ def register_file_routes(
             for s in states
             if s.is_copy
         }
+        # The versions since each copy's own, only for a hub copy that is
+        # behind (plan-skill-hub-release-notes D5) — the timeline is read for
+        # those alone, not on every panel open of an up-to-date item.
+        updates: dict[str, list[_SkillUpdate]] = {}
+        if skill_hub is not None:
+            for name, up in upstreams.items():
+                if up is None or not (up.update_available and up.entry and up.installed):
+                    continue
+                since = await skill_hub.updates_since(up.entry, up.installed, viewer=viewer)
+                # A rollback names the revision that first published what it
+                # brought back; its number comes from the whole timeline.
+                number = (
+                    {
+                        x.revision: x.version
+                        for x in await skill_hub.history(up.entry, viewer=viewer)
+                    }
+                    if any(e.kind == "rollback" for e in since)
+                    else {}
+                )
+                for e in since:
+                    back_to = number.get(e.to_revision) if e.kind == "rollback" else None
+                    updates.setdefault(name, []).append(
+                        _SkillUpdate(
+                            version=e.version or 0,
+                            kind="rollback" if e.kind == "rollback" else "publish",
+                            at=e.at,
+                            release_note=e.release_note,
+                            back_to=back_to,
+                        )
+                    )
         return _ItemSkills(
             skills=[
                 _ItemSkillState(
@@ -418,6 +449,7 @@ def register_file_routes(
                     readonly=upstream_readonly(slug, profile, s.name),
                     pref=_skill_pref_state(prefs.get(s.name)),
                     effective=s.effective,
+                    updates=updates.get(s.name, []),
                 )
                 for s in states
             ]

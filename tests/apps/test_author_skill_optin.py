@@ -130,6 +130,8 @@ def test_skills_endpoint_returns_picker_state_across_sources():
         "readonly": False,
         "pref": "follow",
         "effective": True,
+        # …and no versions since its own: it has none (plan-skill-hub-release-notes D5).
+        "updates": [],
     }
     assert by["zeta"]["source"] == "workspace"
     assert "other" not in by  # malformed → skipped

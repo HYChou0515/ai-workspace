@@ -863,6 +863,20 @@ class SkillHubStore:
         events.reverse()
         return events
 
+    async def updates_since(
+        self, entry_id: str, installed: str, *, viewer: str
+    ) -> list[HistoryEvent]:
+        """The versions after `installed` — a copy's commit — newest first
+        (plan-skill-hub-release-notes D5): every publish or rollback newer than
+        the newest row whose version IS `installed`. A rollback below it is
+        one of them. A commit no row names (a copy older than the git store)
+        gets the current version alone."""
+        versions = [e for e in await self.history(entry_id, viewer=viewer) if e.version]
+        for i, event in enumerate(versions):
+            if event.commit == installed:
+                return versions[:i]
+        return versions[:1]
+
     async def version(self, entry_id: str, revision_id: str) -> SkillHubEntry:
         """The entry as it was at `revision_id`: its fields, and through
         `commit`, its files. Only revisions that name a version."""
