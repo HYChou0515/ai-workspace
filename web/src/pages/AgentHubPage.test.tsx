@@ -75,6 +75,16 @@ describe("AgentHubPage", () => {
     expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("Agent Hub");
   });
 
+  it("the introduction-and-history link stays on one line in a narrow card", async () => {
+    // A 4-character label broke into 介紹 / 與歷 / 史 beside the usage line
+    // (seen in the demo, 2026-11-05).
+    renderHub([card()]);
+
+    for (const l of await screen.findAllByRole("link", { name: "介紹與歷史" })) {
+      expect(l).toHaveStyle({ whiteSpace: "nowrap" });
+    }
+  });
+
   it("a starred agent is also listed under favourites, and the star is the viewer's", async () => {
     renderHub([card()]);
     fireEvent.click(await screen.findByRole("button", { name: /把「Sales helper」加入我的最愛/ }));

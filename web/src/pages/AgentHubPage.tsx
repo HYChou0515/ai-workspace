@@ -196,7 +196,12 @@ function Star({ agent, starred, starReady, onStar, className = "btn" }: ItemProp
  * reached the same way from here and from inside a conversation. */
 function IntroLink({ agent }: { agent: AgentCard }) {
   const t = useT();
-  return <Link to={agentPageHref(agent.id)}>{t("agentHub.intro")}</Link>;
+  // One line: beside the usage in a narrow card it otherwise breaks mid-word.
+  return (
+    <Link to={agentPageHref(agent.id)} style={{ whiteSpace: "nowrap" }}>
+      {t("agentHub.intro")}
+    </Link>
+  );
 }
 
 function Usage({ agent }: { agent: AgentCard }) {
