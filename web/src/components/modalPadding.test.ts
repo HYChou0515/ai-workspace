@@ -26,6 +26,9 @@ const TAKES_DEFAULT: Record<string, number> = {
   // A version, a comparison, the fork dialog: title + content + actions, the
   // same shape as the transfer dialog beside them (plan-skill-hub-history P7).
   "components/SkillHubHistory.tsx": 3,
+  // The publish dialog (plan-wui-publish-and-agent-hub P4): title + its
+  // questions + actions, the shape the shell's padding is for.
+  "components/PublishDialog.tsx": 1,
 };
 
 function tsxFiles(dir: string, out: string[] = []): string[] {

@@ -29,6 +29,20 @@ vi.mock("../api", () => ({
 // The signed-in user, and whether the user query has SETTLED: until it has,
 // the id is the "default-user" placeholder — an identity, not the identity.
 let me = { id: "alice", ready: true };
+// Taking a published page down is an unpublish (P4); a page Deployed before
+// Publish existed is still removed through the overview's own client.
+const unpublish = vi.fn(async (_slug: string, _itemId: string, _path: string) => {});
+vi.mock("../api/publish", async (orig) => {
+  const real = await orig<typeof import("../api/publish")>();
+  return {
+    ...real,
+    publishApi: {
+      ...real.publishApi,
+      unpublish: (slug: string, itemId: string, path: string) => unpublish(slug, itemId, path),
+    },
+  };
+});
+
 vi.mock("../hooks/useCurrentUser", () => ({
   useCurrentUser: () => me.id,
   useCurrentUserState: () => me,
@@ -42,7 +56,8 @@ import { translate } from "../lib/i18n";
 import { favouriteKey, readFavourites, toggleFavourite } from "../lib/wuiFavourites";
 import { readWuiView, writeWuiView } from "../lib/wuiView";
 import { currentWriteFailure, resetWriteFailures } from "../lib/writeFailures";
-import { QueryWrap } from "../test/queryWrapper";
+import { qk } from "../api/queryKeys";
+import { makeTestQueryClient, QueryWrap } from "../test/queryWrapper";
 import { WuiOverviewPage } from "./WuiOverviewPage";
 
 const row = (over: Partial<DeployedWui>): DeployedWui => ({
@@ -187,7 +202,7 @@ describe("WuiOverviewPage", () => {
     // reverted the template to "{who} 於 {when} Deploy" and the derived form
     // stayed green. The relative form has to come LAST, where "on 2 d ago"
     // / "於 just now Deploy" cannot be made to read.
-    expect(within(rca).getByRole("listitem")).toHaveTextContent(`bob Deploy · ${when}`);
+    expect(within(rca).getByRole("listitem")).toHaveTextContent(`bob 發布 · ${when}`);
     expect(within(rca).getByTitle(exactTime(iso))).toBeInTheDocument();
   });
 
@@ -585,7 +600,7 @@ describe("WuiOverviewPage", () => {
       // claim is "the same sentence as on screen", and the sentence's own
       // shape is pinned literally by the table test above.
       const when = relativeTime(new Date(1_700_000_000_000).toISOString());
-      expect(detail).toHaveAttribute("title", `Line 3 stoppage · bob Deploy · ${when}`);
+      expect(detail).toHaveAttribute("title", `Line 3 stoppage · bob 發布 · ${when}`);
     });
 
     it("colours the card's stripe with the page's own colour when it has one, the App's otherwise", async () => {
@@ -803,8 +818,8 @@ describe("WuiOverviewPage", () => {
       // "Carol Kao · u_1a2b Deploy". Same lookup for both.
       render(<WuiOverviewPage client={client([row({ deployed_by: "carol" })])} />, { wrapper: Wrap });
       const rca = await screen.findByRole("region", { name: "根因分析" });
-      await within(rca).findByText(/Carol Lin Deploy/);
-      expect(within(rca).getByRole("listitem")).not.toHaveTextContent(/\bcarol Deploy/);
+      await within(rca).findByText(/Carol Lin 發布/);
+      expect(within(rca).getByRole("listitem")).not.toHaveTextContent(/\bcarol 發布/);
     });
   });
 
@@ -980,3 +995,166 @@ function TrailProbe() {
     </ul>
   );
 }
+
+describe("published pages (P4 of plan-wui-publish-and-agent-hub)", () => {
+  const copying = row({
+    title: "Shipping board",
+    item_title: "",
+    sharing: "per_person",
+    reach: "everyone",
+    published: true,
+    opens: 7,
+    people: 3,
+  });
+
+  it("links a page that hands out copies through the preparing page, and one used directly to itself", async () => {
+    render(
+      <WuiOverviewPage client={client([copying, row({ title: "Scrap trend", item_id: "i-2", deployed_at: 1 })])} />,
+      { wrapper: Wrap },
+    );
+    const rca = await screen.findByRole("region", { name: "根因分析" });
+
+    expect(within(rca).getByRole("link", { name: "Shipping board" })).toHaveAttribute(
+      "href",
+      "/open/rca/i-1/pages/report/page.ai.yaml",
+    );
+    expect(within(rca).getByRole("link", { name: "Scrap trend" })).toHaveAttribute(
+      "href",
+      "/w/rca/i-2/pages/report/page.ai.yaml",
+    );
+  });
+
+  it("names the way of sharing where a viewer who may not read the source would get an item link", async () => {
+    render(<WuiOverviewPage client={client([copying])} />, { wrapper: Wrap });
+    const rca = await screen.findByRole("region", { name: "根因分析" });
+
+    const item = within(rca).getByRole("listitem");
+    expect(within(item).queryByRole("link", { name: /Line 3|i-1/ })).toBeNull();
+    expect(item).toHaveTextContent(word("publish.sharing.per_person"));
+  });
+
+  it("shows how often it was opened and by how many people — never who", async () => {
+    render(<WuiOverviewPage client={client([copying])} />, { wrapper: Wrap });
+    const rca = await screen.findByRole("region", { name: "根因分析" });
+
+    expect(within(rca).getByTestId("wui-usage")).toHaveTextContent("7 次打開 · 3 人");
+  });
+
+  it("a page that hands out copies says its opens once — not also the owner's numbers of its source", async () => {
+    // Its people use their own copies, so the source page's own numbers
+    // (docs/plan-wui-usage.md U5) would sit near 0 beside the real count.
+    for (const view of ["cards", "table"] as const) {
+      writeWuiView(view);
+      const { unmount } = render(
+        <WuiOverviewPage
+          client={client([
+            {
+              ...copying,
+              usage: { opened_total: 0, opened_7d: 0, used_total: 0, used_ms_total: 0, used_7d: 0, used_ms_7d: 0 },
+            },
+          ])}
+        />,
+        { wrapper: Wrap },
+      );
+      const rca = await screen.findByRole("region", { name: "根因分析" });
+
+      const usage = within(rca).getAllByTestId("wui-usage");
+      expect(usage).toHaveLength(1);
+      expect(usage[0]).toHaveTextContent("7 次打開 · 3 人");
+      unmount();
+    }
+  });
+
+  it("on a card, puts the usage in the footer, where the one-line detail cannot cut it off", async () => {
+    // Found in the demo recording: the card's detail is ONE line with an
+    // ellipsis, and the usage at its end read "… · just …".
+    writeWuiView("cards");
+    render(<WuiOverviewPage client={client([copying])} />, { wrapper: Wrap });
+    const rca = await screen.findByRole("region", { name: "根因分析" });
+
+    const usage = within(rca).getByTestId("wui-usage");
+    expect(usage).toHaveTextContent("7 次打開 · 3 人");
+    expect(usage.closest(".wui-card-foot")).not.toBeNull();
+    expect(usage.closest(".detail")).toBeNull();
+  });
+
+  it("shows no usage for a published page used directly — its link never counts an open", async () => {
+    render(
+      <WuiOverviewPage client={client([row({ published: true, sharing: "direct", opens: 0, people: 0 })])} />,
+      { wrapper: Wrap },
+    );
+    const rca = await screen.findByRole("region", { name: "根因分析" });
+
+    expect(within(rca).queryByTestId("wui-usage")).toBeNull();
+  });
+
+  it("an old Deploy row keeps its item link even when the item has no title", async () => {
+    render(<WuiOverviewPage client={client([row({ item_title: "" })])} />, { wrapper: Wrap });
+    const rca = await screen.findByRole("region", { name: "根因分析" });
+
+    expect(within(rca).getByRole("link", { name: "i-1" })).toHaveAttribute("href", "/a/rca/i-1");
+  });
+
+  it("shows no usage for a page Deployed before Publish existed", async () => {
+    render(<WuiOverviewPage client={client([row({})])} />, { wrapper: Wrap });
+    const rca = await screen.findByRole("region", { name: "根因分析" });
+
+    expect(within(rca).queryByTestId("wui-usage")).toBeNull();
+  });
+
+  it("unpublishing tells the pane's cached publication to read again", async () => {
+    // Review round 2: within the cache's lifetime, Publish WUI's dialog
+    // reopened with the removed publication's choices.
+    unpublish.mockClear();
+    const qc = makeTestQueryClient();
+    qc.setQueryData(qk.publication("i-1", "/pages/report/page.ai.yaml"), { sharing: "per_person" });
+    render(
+      <MemoryRouter>
+        <QueryWrap client={qc}>
+          <WuiOverviewPage client={client([copying])} />
+        </QueryWrap>
+      </MemoryRouter>,
+    );
+    const rca = await screen.findByRole("region", { name: "根因分析" });
+    fireEvent.click(within(rca).getByRole("button", { name: REMOVE() }));
+    fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: word("wui.remove") }));
+
+    await waitFor(() =>
+      expect(qc.getQueryState(qk.publication("i-1", "/pages/report/page.ai.yaml"))?.isInvalidated).toBe(true),
+    );
+  });
+
+  it("takes a published page down by unpublishing it, not through the old Deploy row", async () => {
+    unpublish.mockClear();
+    const c = client([copying]);
+    render(<WuiOverviewPage client={c} />, { wrapper: Wrap });
+    const rca = await screen.findByRole("region", { name: "根因分析" });
+    fireEvent.click(within(rca).getByRole("button", { name: REMOVE() }));
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: word("wui.remove") }));
+
+    await waitFor(() => expect(unpublish).toHaveBeenCalledWith("rca", "i-1", "/pages/report/page.ai.yaml"));
+    expect(c.remove).not.toHaveBeenCalled();
+  });
+
+  it("says who may open a copying page by what the publisher chose, not the source's permission", async () => {
+    render(
+      <WuiOverviewPage
+        client={client([
+          row({ ...copying, title: "Mine only", reach: "me", deployed_by: "alice", deployed_at: 3 }),
+          row({ ...copying, title: "Picked", item_id: "i-2", reach: "subjects", deployed_at: 2 }),
+          row({ ...copying, title: "Open", item_id: "i-3", reach: "everyone", deployed_at: 1 }),
+        ])}
+      />,
+      { wrapper: Wrap },
+    );
+    const rca = await screen.findByRole("region", { name: "根因分析" });
+    const [mine, picked, open] = within(rca).getAllByRole("listitem");
+
+    expect(mine).toHaveTextContent(word("wui.reach.you"));
+    expect(picked).toHaveTextContent(word("wui.reach.shared"));
+    for (const key of ["wui.reach.you", "wui.reach.shared", "wui.reach.owner"] as const) {
+      expect(open).not.toHaveTextContent(word(key));
+    }
+  });
+});

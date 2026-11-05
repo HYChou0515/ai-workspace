@@ -25,6 +25,15 @@ from ..perm.model import Permission
 IndexedFields = list[str | tuple[str, type] | IndexableField]
 
 
+def fields_a_copy_does_not_carry() -> dict[str, object]:
+    """What a published copy of an item resets (`api/publish_copy.py`): not its
+    settings, but facts about the SOURCE. ``external_refs`` names the legacy
+    records the source absorbed (#700); a copy claiming them would draw a later
+    handoff into a stranger's copy. Spelled here, beside the field, so the
+    field's name stays in this one file (`tests/api/test_external_refs.py`)."""
+    return {"external_refs": []}
+
+
 class WorkItemBase(Struct):
     title: str
     """Tier 1 — the item headline. Required."""
@@ -225,6 +234,23 @@ class WorkItemBase(Struct):
     grill Q4=B). Absent ≡ ``public`` (legacy items, no migration). Set via the
     per-item permission endpoint; enforced by the App WorkItem's access_scope +
     write checker (``apps.registry`` / ``perm``)."""
+
+    published_from: str = ""
+    """The publication this item is a COPY of (`api/publish.py`'s row id), or
+    "" for an item that is not one (`docs/plan-wui-publish-and-agent-hub.md`).
+    Indexed, so "my copies of X" (one per person, an agent's conversations, the
+    usage numbers) is a query, not a scan. Written once, when the copy is made."""
+
+    published_kind: str = ""
+    """``"wui"`` or ``"agent"`` for a copy — what it was opened as — else ""."""
+
+    published_path: str = ""
+    """The view file the copy was opened from, workspace-absolute (the copy
+    holds the whole workspace, so the same path names it there)."""
+
+    published_title: str = ""
+    """The publication's title when the copy was made — the "from X" a copy
+    shows even after X is renamed or taken down."""
 
     members: list[str] | UnsetType = UNSET
     """Tier 2 (opt-in) — collaborators. Redeclare as ``list[str]`` in the App's

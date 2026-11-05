@@ -51,6 +51,10 @@ SHARED_SKILLS: dict[str, Path] = {
     # whether the agent proposes one. An app opts in with a line in its
     # `agent.skills` when it is ready to have people find this.
     "wui": SHARED_SKILLS_DIR / "wui",
+    # agent (docs/plan-wui-publish-and-agent-hub.md A10): write an agent.ai.yaml,
+    # try it in the agent panel, and the publish questions. Registered and, like
+    # `wui`, declared by no app yet — an app opts in through `agent.skills`.
+    "agent": SHARED_SKILLS_DIR / "agent",
     # skill-hub (docs/plan-skill-hub.md): when to search, install or publish a
     # skill, and what to tell the user around each — the three tools' guidance.
     # Declared by the apps that grant the three tools.

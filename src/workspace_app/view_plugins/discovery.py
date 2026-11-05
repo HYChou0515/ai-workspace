@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 #: the names the container reserves (`health`, `wui`). Mirrors `VIEW_KIND` in
 #: `web/src/renderers/entity/types.ts` — `test_builtin_kinds_match_the_spa`
 #: reads that file, so the two cannot drift apart silently.
-BUILTIN_VIEW_KINDS = frozenset({"table", "board", "gantt", "health", "wui"})
+BUILTIN_VIEW_KINDS = frozenset({"table", "board", "gantt", "health", "wui", "agent"})
 
 #: A plugin's name is a URL path segment (`/api/view-plugins/{name}/…`) and a
 #: folder name, so it is a lowercase slug.

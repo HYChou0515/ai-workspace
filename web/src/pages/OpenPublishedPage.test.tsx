@@ -1,0 +1,156 @@
+// @vitest-environment happy-dom
+import "@testing-library/jest-dom/vitest";
+import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { MemoryRouter, Route, Routes, useLocation, useNavigate } from "react-router-dom";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+import { HttpError } from "../api/http";
+import type { Opened } from "../api/publish";
+import { qk } from "../api/queryKeys";
+import { makeTestQueryClient, renderWithQuery } from "../test/queryWrapper";
+import { copyRoute, OpenPublishedPage } from "./OpenPublishedPage";
+
+function Where() {
+  const loc = useLocation();
+  return <div data-testid="landed">{loc.pathname}</div>;
+}
+
+function at(
+  address: string,
+  open: (itemId: string, path: string) => Promise<Opened>,
+  qc = makeTestQueryClient(),
+) {
+  const client = { open: vi.fn(open) };
+  renderWithQuery(
+    <MemoryRouter initialEntries={[address]}>
+      <Routes>
+        <Route path="/open/:slug/:itemId/*" element={<OpenPublishedPage client={client} />} />
+        <Route path="*" element={<Where />} />
+      </Routes>
+    </MemoryRouter>,
+    qc,
+  );
+  return client;
+}
+
+afterEach(() => cleanup());
+
+describe("OpenPublishedPage", () => {
+  it("says it is preparing the copy while the open is in flight", () => {
+    at("/open/rca/src-1/pages/a/page.ai.yaml", () => new Promise(() => {}));
+
+    expect(screen.getByRole("status")).toHaveTextContent("正在準備你的副本…");
+  });
+
+  it("asks for the opener's copy of the published path, then replaces itself with the copy's WUI", async () => {
+    const client = at("/open/rca/src-1/報表/page.ai.yaml", async () => ({
+      slug: "rca",
+      item_id: "rca:copy-9",
+      created: true,
+      kind: "wui",
+    }));
+
+    expect(await screen.findByTestId("landed")).toHaveTextContent(
+      "/w/rca/rca%3Acopy-9/%E5%A0%B1%E8%A1%A8/page.ai.yaml",
+    );
+    expect(client.open).toHaveBeenCalledTimes(1);
+    expect(client.open).toHaveBeenCalledWith("src-1", "/報表/page.ai.yaml");
+  });
+
+  it("lands an agent's copy on its conversation", async () => {
+    at("/open/rca/src-1/agents/sales/agent.ai.yaml", async () => ({
+      slug: "rca",
+      item_id: "rca:copy-3",
+      created: true,
+      kind: "agent",
+    }));
+
+    expect(await screen.findByTestId("landed")).toHaveTextContent("/a/rca/rca%3Acopy-3");
+  });
+
+  it("an open tells the lists that count opens and conversations to read again", async () => {
+    // Found in the demo recording: back on the agent's page after starting a
+    // conversation, "my conversations" still said there were none.
+    const qc = makeTestQueryClient();
+    qc.setQueryData(qk.agentHubPage("a"), { stale: true });
+    qc.setQueryData(qk.agentHub, []);
+    qc.setQueryData(qk.wuiOverview, []);
+    at("/open/rca/src-1/agents/sales/agent.ai.yaml", async () => ({
+      slug: "rca",
+      item_id: "rca:copy-3",
+      created: true,
+      kind: "agent",
+    }), qc);
+
+    await screen.findByTestId("landed");
+    for (const key of [qk.agentHubPage("a"), qk.agentHub, qk.wuiOverview]) {
+      expect(qc.getQueryState(key)?.isInvalidated).toBe(true);
+    }
+  });
+
+  it("says plainly when it is not published or not the opener's to use", async () => {
+    at("/open/rca/src-1/pages/a/page.ai.yaml", async () => {
+      throw new HttpError(404, "not found");
+    });
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("找不到這個發布，或你沒有權限使用它。");
+  });
+
+  it("says the source is gone when its workspace was deleted", async () => {
+    at("/open/rca/src-1/pages/a/page.ai.yaml", async () => {
+      throw new HttpError(410, "gone");
+    });
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("發布它的 workspace 已經不在了。");
+  });
+
+  it("names any other failure", async () => {
+    at("/open/rca/src-1/pages/a/page.ai.yaml", async () => {
+      throw new HttpError(500, "disk full");
+    });
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("沒辦法打開：disk full");
+  });
+});
+
+describe("opening the same publication again", () => {
+  it("is a new open every time it is navigated to — never the first open's answer again", async () => {
+    // Found while recording a demo: a second "Start a new conversation" with
+    // the same agent in one browser session landed in the FIRST conversation,
+    // because the open's answer was cached by address for good. An agent is
+    // one copy per conversation (A2): each navigation here must ask again.
+    let n = 0;
+    const client = {
+      open: vi.fn(async () => ({ slug: "rca", item_id: `rca:copy-${++n}`, created: true, kind: "agent" as const })),
+    };
+    function Again() {
+      const navigate = useNavigate();
+      return (
+        <button type="button" onClick={() => navigate("/open/rca/src-1/agents/sales/agent.ai.yaml")}>
+          again
+        </button>
+      );
+    }
+    renderWithQuery(
+      <MemoryRouter initialEntries={["/open/rca/src-1/agents/sales/agent.ai.yaml"]}>
+        <Routes>
+          <Route path="/open/:slug/:itemId/*" element={<OpenPublishedPage client={client} />} />
+          <Route path="*" element={<><Where /><Again /></>} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    expect(await screen.findByTestId("landed")).toHaveTextContent("/a/rca/rca%3Acopy-1");
+
+    fireEvent.click(screen.getByRole("button", { name: "again" }));
+
+    await waitFor(() => expect(screen.getByTestId("landed")).toHaveTextContent("/a/rca/rca%3Acopy-2"));
+    expect(client.open).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("copyRoute", () => {
+  it("is the copy's WUI page, or the agent copy's item", () => {
+    expect(copyRoute("wui", "rca", "i 1", "/a b/page.ai.yaml")).toBe("/w/rca/i%201/a%20b/page.ai.yaml");
+    expect(copyRoute("agent", "rca", "i 1", "/x/agent.ai.yaml")).toBe("/a/rca/i%201");
+  });
+});

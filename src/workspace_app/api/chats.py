@@ -45,8 +45,14 @@ def find_default_conversation(conv_rm, item_id: str) -> tuple[str, Conversation]
     """The item's default chat (manual §3) — the earliest-born **free** chat — or
     ``None`` if the item has no free chat yet. Read-only (never creates): workflow
     chats (``run_id`` set) are skipped; unstamped legacy rows (``created_ms is None``)
-    sort first, so they stay the default."""
-    free = [(rid, c) for rid, c in list_item_conversations(conv_rm, item_id) if c.run_id is None]
+    sort first, so they stay the default. A TEST chat of an agent
+    (``agent_path`` set, plan-wui-publish-and-agent-hub A6) is skipped too: it
+    runs as the agent, and the item's own messages must not land in it."""
+    free = [
+        (rid, c)
+        for rid, c in list_item_conversations(conv_rm, item_id)
+        if c.run_id is None and not c.agent_path
+    ]
     if not free:
         return None
     free.sort(key=lambda rc: (rc[1].created_ms if rc[1].created_ms is not None else -1, rc[0]))

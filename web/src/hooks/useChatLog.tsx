@@ -104,9 +104,30 @@ export function useChatLog({
   // delete them — the same "the answer vanished" failure as any other
   // re-hydrate, just racing at mount instead of mid-turn. Reconcile whenever
   // there is anything on screen to protect.
+  //
+  // …and AGAIN whenever a newer copy of the thread arrives after that. With
+  // staleTime 0 a mount opens on the copy an EARLIER visit cached and refetches
+  // underneath it; seeding once let that stale copy win, so a chat left right
+  // after a message came back empty until a reload (found while recording the
+  // Agent Hub demo, reproduced on an ordinary item). Reconcile, not replace:
+  // it keeps whatever the live stream already put on screen.
+  //
+  // …but never while a turn is running. Other code writes this cache entry
+  // mid-turn too (the KB send's detached re-read, a share, the run view's
+  // poll), and a mid-turn copy that ties on length wins `reconcileSnapshot`
+  // and wipes the answer still streaming in. Each surface reconciles at the
+  // turn's end itself; this is only for the copy nobody is streaming over.
+  const seededWith = useRef<ChatThread | null | undefined>(undefined);
   useEffect(() => {
-    if (threadKey == null || hydrated === undefined || hydratedFor.current === threadKey) return;
+    if (threadKey == null || hydrated === undefined) return;
+    if (hydratedFor.current === threadKey) {
+      if (seededWith.current === hydrated || !hydrated) return;
+      seededWith.current = hydrated;
+      setLog((prev) => (prev.streaming ? prev : reconcileSnapshot(prev, hydrated)));
+      return;
+    }
     hydratedFor.current = threadKey;
+    seededWith.current = hydrated;
     setLog((prev) =>
       prev.entries.length === 0
         ? hydrated

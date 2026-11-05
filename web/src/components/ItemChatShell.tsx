@@ -8,6 +8,7 @@ import { useItemChats } from "../hooks/useItemChats";
 import { useItemCollections } from "../hooks/useItemCollections";
 import { useCancelRun, useRun } from "../hooks/useWorkflow";
 import { publishAgentDraft } from "../lib/agentDraftBus";
+import { subscribeAgentTestChat } from "../lib/agentTestChatBus";
 import { subscribeChatRequest } from "../lib/chatRequestBus";
 import { AgentPanel } from "../pages/investigation/AgentPanel";
 import { ChatSwitcher } from "./ChatSwitcher";
@@ -111,9 +112,14 @@ export function ItemChatShell({
   canUpdateSkills,
   onSaveSkillPrefs,
   uploadDir,
+  oneConversation = false,
 }: {
   slug: string;
   itemId: string;
+  /** A conversation copy of a published agent IS one conversation
+   * (plan-wui-publish-and-agent-hub A2/A11): no "New chat" anywhere — a new
+   * conversation is a new copy, started from Agent Hub. */
+  oneConversation?: boolean;
   /** Permission-disclosure: forwarded to the composer — true disables it (the
    * user can read the thread but lacks `converse`). */
   readOnly?: boolean;
@@ -224,6 +230,18 @@ export function ItemChatShell({
       }),
     [itemId],
   );
+  // A6: the agent panel's "Test chat" — a NEW chat that runs as the agent, put
+  // on screen; the item's default chat is never one (the server skips it).
+  useEffect(
+    () =>
+      subscribeAgentTestChat(itemId, ({ path, title }) => {
+        void createRef.current(title, path).then(
+          (c) => setActiveChatId(c.chat_id),
+          (err: unknown) => setOpenFailed(err instanceof Error ? err.message : String(err)),
+        );
+      }),
+    [itemId],
+  );
   useEffect(() => {
     if (!handOff) return;
     // Handed over from an effect, not from the create's callback: by now the
@@ -284,7 +302,7 @@ export function ItemChatShell({
               onManage={() => setManaging(true)}
             />
           )}
-          <NewItemPicker onFreeChat={onFreeChat} />
+          {oneConversation ? null : <NewItemPicker onFreeChat={onFreeChat} />}
           {showCollections && (
             // `margin-left: auto`, not a spacer element. A spacer is an item:
             // on a wrapped line it still costs a `gap`, and at the workspace's
@@ -320,7 +338,7 @@ export function ItemChatShell({
           // #200: when the bar is hidden the chat header carries the lone escape
           // hatch; when the bar is shown its "+ New" picker already does, so the
           // header omits it (exactly one create-entry is ever visible).
-          onNewChat={showBar ? undefined : onFreeChat}
+          onNewChat={showBar || oneConversation ? undefined : onFreeChat}
           picker={picker}
           suggestions={suggestions}
           appTitle={appTitle}

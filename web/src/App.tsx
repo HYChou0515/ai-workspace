@@ -15,6 +15,9 @@ import { SkillHubEntryPage } from "./pages/SkillHubEntryPage";
 import { SkillHubPage } from "./pages/SkillHubPage";
 import { SchedulesOverviewPage } from "./pages/SchedulesOverviewPage";
 import { WuiOverviewPage } from "./pages/WuiOverviewPage";
+import { AgentHubPage } from "./pages/AgentHubPage";
+import { AgentHubAgentPage } from "./pages/AgentHubAgentPage";
+import { AgentLaunchPage } from "./pages/AgentLaunchPage";
 import { WorkCalendarPage } from "./pages/WorkCalendarPage";
 import { CapacityPage } from "./pages/CapacityPage";
 import { ModelSettingsPage } from "./pages/ModelSettingsPage";
@@ -25,6 +28,7 @@ import { ReviewPage } from "./pages/kb/ReviewPage";
 import { Launcher } from "./pages/Launcher";
 import { ItemViewPage } from "./pages/ItemViewPage";
 import { WuiPage } from "./pages/WuiPage";
+import { OpenPublishedPage } from "./pages/OpenPublishedPage";
 import { ReleasesPage } from "./pages/ReleasesPage";
 
 /**
@@ -53,6 +57,10 @@ export function AppRoutes() {
           address is a shortcut, not a grant, and the API refuses exactly what it
           would have refused inside the workspace. */}
       <Route path="/w/:slug/:itemId/*" element={<WuiPage />} />
+      {/* The address a published WUI or agent hands out: it makes (or finds)
+          the opener's own copy and replaces itself with it (C12). Outside the
+          shell like a WUI — one thing to wait for, nothing to navigate. */}
+      <Route path="/open/:slug/:itemId/*" element={<OpenPublishedPage />} />
       {/* An item's editor area alone (#847 Q5.3): where chat mode opens a shown
           file or layout. Outside the shell for the same reason as a WUI — it is
           one thing to look at, not a workspace to navigate. */}
@@ -89,6 +97,12 @@ export function AppRoutes() {
             Inside the shell: it is a place to find pages; the pages themselves
             open at `/w/` outside it. */}
         <Route path="/wui" element={<WuiOverviewPage />} />
+        {/* Agent Hub (plan-wui-publish-and-agent-hub A1): its own place beside
+            WUI — the published agents, and one agent's page (A8). */}
+        <Route path="/agents" element={<AgentHubPage />} />
+        <Route path="/agents/:agentId" element={<AgentHubAgentPage />} />
+        {/* Into a conversation with an agent: its latest, or a new one. */}
+        <Route path="/agents/:agentId/go" element={<AgentLaunchPage />} />
         {/* Every schedule the viewer may read, with its last run and its next
             (docs/plan-schedule-overview.md). */}
         <Route path="/schedules" element={<SchedulesOverviewPage />} />

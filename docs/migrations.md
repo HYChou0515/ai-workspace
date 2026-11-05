@@ -3405,6 +3405,8 @@ Workflows 打開模型答錯格式的那次執行——執行結束後還留著�
 
 **還是舊版 image 時**:第 2 步 AI 直接發布、不問說明;第 3 步沒有提示列、按鈕沒有數字,Skills 面板那一列只寫「skill 已變更」。
 
+---
+
 ### 2026-11-05 · 18bb00dd · #1005 WUI 頁面用量：部署的頁面被多少人打開、被用來做了多少事 {#pr-1005}
 
 **設定** — 無,config 沒有新 key。寫回間隔照工具統計,每 5 分鐘一次、關機時一次。
@@ -3442,6 +3444,54 @@ Workflows 打開模型答錯格式的那次執行——執行結束後還留著�
 4. 從 item 的檔案樹打開同一頁再按一次:等下一次寫回後,數字沒有增加。
 
 **還是舊版 image 時**:卡片上沒有用量那兩行,使用統計頁沒有第三區。
+
+---
+
+### 2026-11-05 · #1007 發布 WUI 會先問別人怎麼用；agent 能發布到新的 Agent Hub {#pr-1007}
+
+**設定** — config 沒有新 key，也沒有改名或拿掉的 key。
+
+**資料** — 不用跑 migrate，也不用回填。
+- 新的一張表 `Published`（每個發布的 WUI 或 agent 一列）。以前 Deploy 的頁面那一列（`DeployedWui`）留著，
+  讀出來當作「直接用我的 workspace」，在總覽照舊列出；那一頁再發布一次，舊列就換成新的。
+- 每個 App 的 item 多四欄（`published_from` 有索引，`published_kind`／`published_path`／`published_title`），
+  對話（`Conversation`）多一欄 `agent_path`（沒有索引）。舊列讀出來是空的，意思就是「不是副本」「不是測試對話」——
+  查副本只看 `published_from` 等於某個發布的列，舊列本來就不該被找到，所以不用回填。沒有 `Schema` 升版。
+- **空間**：用會複製的方式發布時，發布那一刻存一份 workspace 快照，算在**發布者**的磁碟用量；每一份副本是打開的人
+  自己的 item，算在**他自己**的用量。`filestore.workspace_quota` 照樣管每一份。
+
+**k8s · CI 側** — 照常重 build、部署。manifest、worker、probe 都沒改。**有 view plugin 在 `kinds` 裡宣告 `agent`
+的部署**：`agent` 現在是平台自己的 view 種類（跟 `wui` 一樣），**新版拒絕開機**，錯誤訊息點名那個 plugin 的
+`kinds`。`rollout 前`把那個 kind 改名（連同用它的 view 檔的 `view:`）；不改的症狀：新 pod 起不來、一直 crashloop。
+
+**行為改變，沒有開關**：
+
+- **Deploy 改名「發布 WUI」，按下去先問別人怎麼用這一頁**（每次一份／每人一份／大家一份／直接用我的 workspace），
+  沒有預設。以前 Deploy 那一下的行為就是「直接用我的 workspace」。會複製的三種，網址是 `/open/…`，打開的人拿到自己的副本。
+  發布要有那個 workspace 的 `change_permission`（以前 Deploy 是 `edit_content`）——只能改內容的協作者現在按下去會被拒；
+  舊的 `POST`／`DELETE …/wui/deploy` 路由也改成要 `change_permission`，總覽上舊列的「下架」也是（有腳本直接打它的，
+  換一個有這個權限的帳號；只能改內容的協作者看不到舊列的下架按鈕了）。
+- **副本和快照算進個人磁碟額度，放不下就拒絕（507）**：打開時副本放不下打開的人的額度、發布時快照放不下發布者的額度，
+  都在寫任何檔案之前拒絕。`per_user_resources.disk` 沒設的部署不受影響。
+- **導覽列多一個入口「Agent Hub」**（`/agents`），在 WUI 旁邊。`agent.ai.yaml` 打開是 agent 面板，可以測試對話、發布。
+- **WUI skill 只講頁面**；新增 `agent` skill（跟 `wui` 一樣，有註冊但沒有任何 App 宣告，App 要用就在 `agent.skills` 加一行）。
+- **Shared 環境變數會跟著進每一份副本**（複製當下的值）。放在某個 workspace Shared 裡的個人 token，那個 workspace
+  一旦用會複製的方式發布，就等於發給每一個打開的人——請大家把個人 token 放在「我的環境」。
+
+**確認做完**（`rollout 後`）：
+
+1. 帳號 A 在某個 item 寫一個 `page.ai.yaml`（`view: wui`），按「發布 WUI」：對話框四個選項都沒選、「發布」按不下去；
+   選「每個人一份」＋「所有登入的人」發布，面板出現 `/open/…` 開頭的網址。
+2. 帳號 B 打開 `/wui`：看得到那一頁，點下去先是「正在準備你的副本…」，接著是副本裡的頁面；B 的 App 首頁多一個 item。
+   B 再點一次回到同一份（App 首頁沒有再多一個）；`/wui` 那一列顯示「2 次打開 · 1 人」。
+3. A 在同一個 item 寫一個 `agent.ai.yaml`（`view: agent`、`title`、`instructions`），打開看到 agent 面板，按「測試對話」，
+   旁邊開一個新對話、回答照 `instructions`；按「發布 agent」→「所有登入的人」→ 發布。
+4. B 打開 `/agents`：看得到那個 agent；進去按「開始新對話」，落在一個上面寫「← 回到 Agent Hub」的對話，沒有「新對話」按鈕；
+   回到那個 agent 的頁面，「我和它的對話」列著這一個和它的大小。
+
+**還是舊版 image 時**：工具列的按鈕還叫「Deploy」，按下去直接出網址、不問；打開 `/agents` 會跳回首頁；`agent.ai.yaml` 打開是「Unsupported view kind: agent」。
+
+---
 
 ## 附錄 A：資料回填的機制（specstar 為什麼不會自己補）
 

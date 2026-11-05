@@ -67,7 +67,10 @@ function WorkspaceLoaded({
   // #chat-private: the IDE-collapse state is NOT persisted — a new tab always
   // opens with the workspace tucked (the manifest default), not whatever a
   // previous session happened to leave expanded.
-  const [ideCollapsed, setIdeCollapsed] = useState<boolean>(initialIdeCollapsed(manifest));
+  // A conversation with an agent opens conversation-first (A11): the files
+  // are one click away, not in front.
+  const agentCopy = item.published_kind === "agent";
+  const [ideCollapsed, setIdeCollapsed] = useState<boolean>(agentCopy || initialIdeCollapsed(manifest));
   const files = useFiles(id, { enabled: !ideCollapsed });
   const chatFirst = manifest.layout.primary_surface === "chat";
   // Remember this as the App's last-opened chat, so re-entering the App resumes
@@ -120,6 +123,13 @@ function WorkspaceLoaded({
       onInvestigationChanged={() => {}}
     />
   );
+  // A conversation with an agent (A11): the conversation alone — no list of
+  // other chats, since a new conversation is a new copy (the top bar's
+  // 新對話). Its controls are in the shell's own top bar
+  // (`AgentCopyControls`) — one header, not a second one stacked above it.
+  if (agentCopy) {
+    return shell;
+  }
   // Chat-first Apps get the private-chat framing: a left rail of the user's own
   // chats beside the chat itself (manifest-gated, so it stays App-agnostic).
   // Other surfaces (IDE-first / views-first) keep the plain workspace.

@@ -17,7 +17,7 @@ export type UseItemChats = {
    * e.g. a schedule's, is not in it yet). */
   isFetchedAfterMount: boolean;
   /** Open a new free chat; resolves to its summary. */
-  createFreeChat: (title?: string) => Promise<ItemChatSummary>;
+  createFreeChat: (title?: string, agentPath?: string) => Promise<ItemChatSummary>;
   /** Rename a chat from the manage modal (#132). */
   renameChat: (chatId: string, title: string) => Promise<ItemChatSummary>;
   /** Delete a chat (#132) — the backend cancels a running workflow first. */
@@ -40,7 +40,8 @@ export function useItemChats(
     ...(refetchOnMount ? { refetchOnMount } : {}),
   });
   const create = useMutation({
-    mutationFn: (title: string = "") => client.createChat(slug, itemId, title),
+    mutationFn: ({ title, agentPath }: { title: string; agentPath: string }) =>
+      agentPath ? client.createChat(slug, itemId, title, agentPath) : client.createChat(slug, itemId, title),
     onSuccess: invalidate,
   });
   const rename = useMutation({
@@ -56,7 +57,7 @@ export function useItemChats(
     chats: query.data ?? [],
     isLoading: query.isLoading,
     isFetchedAfterMount: query.isFetchedAfterMount,
-    createFreeChat: (title = "") => create.mutateAsync(title),
+    createFreeChat: (title = "", agentPath = "") => create.mutateAsync({ title, agentPath }),
     renameChat: (chatId, title) => rename.mutateAsync({ chatId, title }),
     deleteChat: (chatId) => remove.mutateAsync(chatId),
   };

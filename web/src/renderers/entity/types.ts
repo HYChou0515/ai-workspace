@@ -31,6 +31,10 @@ export const VIEW_KIND = {
    * needs the view file's own path to find its folder, and it wants the pane
    * full-bleed rather than inside the entity panel's chrome. */
   wui: "wui",
+  /** An agent (`docs/plan-wui-publish-and-agent-hub.md` A4/A6): an
+   * `agent.ai.yaml`, drawn as the agent panel — its summary, Publish agent and
+   * a test chat. Rendered by the container like `wui`; no entity records. */
+  agent: "agent",
 } as const;
 
 export type ViewKind = string;

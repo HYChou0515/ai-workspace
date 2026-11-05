@@ -59,6 +59,10 @@ export function usePlatformDestinations(): PlatformDestination[] {
     // an entrance that appears only once somebody has a page is the confusing
     // kind, and the empty state says what a WUI is. "WUI" is a proper noun.
     { to: "/wui", label: "WUI", icon: "external" },
+    // Agent Hub (docs/plan-wui-publish-and-agent-hub.md A1): beside WUI, a
+    // separate place and name — always in full. Unconditional for the WUI
+    // entry's reason: the empty state says what an agent is.
+    { to: "/agents", label: "Agent Hub", icon: "sparkle" },
     // Every schedule the viewer may read (docs/plan-schedule-overview.md).
     // Unconditional for the WUI entry's reason: the empty state says what it is.
     { to: "/schedules", label: t("scheduleOverview.title"), icon: "clock" },

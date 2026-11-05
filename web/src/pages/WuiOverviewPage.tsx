@@ -22,7 +22,8 @@ import { Link } from "react-router-dom";
 
 import { qk } from "../api/queryKeys";
 import { exactTime, relativeTime } from "../api/types";
-import { type DeployedWui, type WuiApi, wuiAddress, wuiApi } from "../api/wui";
+import { publishApi } from "../api/publish";
+import { type DeployedWui, pageHref, type WuiApi, wuiApi } from "../api/wui";
 import { AppTag } from "../components/AppTag";
 import { useDialog } from "../components/Dialog";
 import { Icon } from "../components/Icon";
@@ -32,7 +33,7 @@ import { useBreadcrumbs } from "../hooks/breadcrumbs";
 import { useCurrentUserState } from "../hooks/useCurrentUser";
 import { useUser } from "../hooks/useUsers";
 import { useDuration } from "../lib/duration";
-import { useT } from "../lib/i18n";
+import { type MsgKey, useT } from "../lib/i18n";
 import { pageReach } from "../lib/pageReach";
 import { useApps } from "../hooks/useResources";
 import { appTagPalette, pageColour } from "../lib/appColor";
@@ -283,7 +284,7 @@ export function WuiOverviewPage({ client = wuiApi }: { client?: WuiApi }) {
  * state. The `.switch` markup and classes are `components/Switch.tsx`'s
  * (base.css draws the track and the thumb); it is not that component only
  * because that one takes a single trailing word. */
-function ViewSwitch({ view, onChange }: { view: WuiView; onChange: (v: WuiView) => void }) {
+export function ViewSwitch({ view, onChange }: { view: WuiView; onChange: (v: WuiView) => void }) {
   const t = useT();
   const table = view === "table";
   return (
@@ -364,8 +365,17 @@ function useRemove(page: DeployedWui, client: WuiApi) {
   const qc = useQueryClient();
   const { confirm } = useDialog();
   const remove = useMutation({
-    mutationFn: () => client.remove(page.slug, page.item_id, page.path),
-    onSuccess: () => qc.invalidateQueries({ queryKey: qk.wuiOverview }),
+    // A published row is taken down by unpublishing it; a page Deployed
+    // before Publish existed by removing its old row.
+    mutationFn: () =>
+      page.published
+        ? publishApi.unpublish(page.slug, page.item_id, page.path)
+        : client.remove(page.slug, page.item_id, page.path),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: qk.wuiOverview });
+      // What Publish WUI's dialog starts from: no longer this publication.
+      void qc.invalidateQueries({ queryKey: qk.publicationAll });
+    },
     // The element renders its own failure; without this the query client
     // ALSO routes it to the app-wide write-failure notice, so one press
     // raises two messages — and the page-level one names no page.
@@ -455,9 +465,13 @@ function PageDetail({
   page,
   withOwner,
   withApp = false,
+  withUsage = true,
 }: {
   page: DeployedWui;
   withOwner: boolean;
+  /** The usage at the end of the line — the table's; a card says it in its
+   * footer, where the line's ellipsis cannot cut it off. */
+  withUsage?: boolean;
   /** The App's tag at the start of the line — the table's way of saying the
    * App where its section heading does not. */
   withApp?: boolean;
@@ -493,8 +507,14 @@ function PageDetail({
           <AppTag slug={page.slug} />{" "}
         </>
       ) : null}
-      {/* The workspace has no deep link to a file, so this opens the item. */}
-      <Link to={`/a/${page.slug}/${page.item_id}`}>{item}</Link>
+      {/* The workspace has no deep link to a file, so this opens the item —
+          only for a viewer who may read it: a page that hands out copies is
+          used without reading its source, and a link there would 404. */}
+      {page.item_title || !page.published ? (
+        <Link to={`/a/${page.slug}/${page.item_id}`}>{item}</Link>
+      ) : (
+        <span>{t(`publish.sharing.${page.sharing ?? "direct"}` as MsgKey)}</span>
+      )}
       {withOwner ? (
         <>
           {" · "}
@@ -507,6 +527,30 @@ function PageDetail({
           (`GroupsPage`), and the sentence template is written for the
           relative form ("2 d ago" / "just now" / "7 Aug"). */}
       <span title={exactTime(new Date(page.deployed_at).toISOString())}>{by}</span>
+      {withUsage && counted(page) ? (
+        <>
+          {" · "}
+          <Usage page={page} />
+        </>
+      ) : null}
+    </span>
+  );
+}
+
+/** Whether a row's opens are counted: only a published page that hands out
+ * copies is opened through `/published/open` — one used directly is its own
+ * address, so its count would sit at 0 whatever happens. */
+function counted(page: DeployedWui): boolean {
+  return !!page.published && !!page.sharing && page.sharing !== "direct";
+}
+
+/** How often a published page was opened and by how many people — never who
+ * (W4). */
+function Usage({ page }: { page: DeployedWui }) {
+  const t = useT();
+  return (
+    <span data-testid="wui-usage">
+      {t("publish.usage", { opens: page.opens ?? 0, people: page.people ?? 0 })}
     </span>
   );
 }
@@ -524,6 +568,14 @@ function useReachNote(
   page: DeployedWui,
 ): "wui.reach.you" | "wui.reach.owner" | "wui.reach.shared" | null {
   const me = useCurrentUserState();
+  if (page.sharing && page.sharing !== "direct") {
+    // Copies are handed to whoever the publisher named (C9), whatever the
+    // source workspace's own permission says.
+    if (page.reach === "subjects") return "wui.reach.shared";
+    if (page.reach !== "me") return null;
+    if (!me.ready) return null;
+    return me.id === page.deployed_by ? "wui.reach.you" : "wui.reach.owner";
+  }
   const reach = pageReach(page.item_permission);
   if (reach === "shared") return "wui.reach.shared";
   if (reach !== "owner") return null;
@@ -541,7 +593,9 @@ function PageUsageLines({ page }: { page: DeployedWui }) {
   const t = useT();
   const duration = useDuration();
   const u = page.usage;
-  if (!u) return null;
+  // A page that hands out copies says its opens (`Usage`) instead: its people
+  // use their own copies, so its source's numbers would sit near 0 beside them.
+  if (!u || counted(page)) return null;
   const uses = (n: number, ms: number) => t("wui.usage.uses", { n, time: duration(ms) });
   return (
     <span className="wui-usage" data-testid="wui-usage" title={t("wui.usage.tip")}>
@@ -579,7 +633,7 @@ function PageRow({ page, client, starred, starReady, onStar, showApp }: PageProp
       />
       {/* A new tab: the reader page renders outside the shell, with no way
           back to here, so it opens beside the overview rather than over it. */}
-      <a href={wuiAddress(page.slug, page.item_id, page.path)} target="_blank" rel="noopener" title={page.title}>
+      <a href={pageHref(page)} target="_blank" rel="noopener" title={page.title}>
         {page.title}
       </a>
       <PageDetail page={page} withOwner withApp={showApp} />
@@ -635,10 +689,10 @@ function PageCard({ page, client, starred, starReady, onStar, showApp }: PagePro
           size={54}
         />
         <div className="wui-card-text">
-          <a href={wuiAddress(page.slug, page.item_id, page.path)} target="_blank" rel="noopener" title={page.title}>
+          <a href={pageHref(page)} target="_blank" rel="noopener" title={page.title}>
             {page.title}
           </a>
-          <PageDetail page={page} withOwner={false} />
+          <PageDetail page={page} withOwner={false} withUsage={false} />
         </div>
       </div>
       <StarButton page={page} starred={starred} starReady={starReady} onStar={onStar} className="btn star" />
@@ -650,6 +704,7 @@ function PageCard({ page, client, starred, starReady, onStar, showApp }: PagePro
         <span className="wui-card-who">
           {showApp ? <AppTag slug={page.slug} /> : null}
           <UserChip userId={page.item_owner} size={18} />
+          {counted(page) ? <Usage page={page} /> : null}
         </span>
         <UnlistButton page={page} remove={remove} onRemove={ask} />
       </div>

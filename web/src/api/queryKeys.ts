@@ -91,6 +91,20 @@ export const qk = {
   // The `/wui` overview: every Deployed page the viewer may open. One key for
   // the whole listing — it is per viewer, and Remove invalidates all of it.
   wuiOverview: ["wuiOverview"] as const,
+  /** What a publish of (item, view file) would copy (C11): the dialog asks. */
+  publishEstimate: (itemId: string, path: string) => ["publishEstimate", itemId, path] as const,
+  /** How a file is published now — what a re-publish's dialog starts from. */
+  publication: (itemId: string, path: string) => ["publication", itemId, path] as const,
+  /** Every cached publication — what an unpublish invalidates. */
+  publicationAll: ["publication"] as const,
+  /** The agent panel's summary of one agent.ai.yaml — keyed on the file's
+   * text, so an edit is a fresh summary (plan-wui-publish-and-agent-hub A6). */
+  agentSummary: (itemId: string, path: string, text: string) => ["agentSummary", itemId, path, text] as const,
+  /** Every summary of that file, whatever its text — what a publish invalidates. */
+  agentSummaryOf: (itemId: string, path: string) => ["agentSummary", itemId, path] as const,
+  /** Agent Hub's listing, and one agent's page (plan-wui-publish-and-agent-hub A7/A8). */
+  agentHub: ["agentHub"] as const,
+  agentHubPage: (id: string) => ["agentHub", id] as const,
   /** Every schedule the viewer may read (docs/plan-schedule-overview.md). */
   schedulesOverview: ["schedulesOverview"] as const,
   // The skill hub (docs/plan-skill-hub.md): the listing per search + 「我的」,

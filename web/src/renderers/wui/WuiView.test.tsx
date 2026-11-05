@@ -14,11 +14,31 @@ import { subscribeAgentDraft } from "../../lib/agentDraftBus";
 import { publishFileChanged } from "../../lib/fileChangedBus";
 import type { QueryClient } from "@tanstack/react-query";
 import { makeTestQueryClient, QueryWrap as AppProviders } from "../../test/queryWrapper";
-import { LocaleScope } from "../../lib/i18n";
+import { LocaleScope, translate } from "../../lib/i18n";
 import type { ViewSpec } from "../entity/types";
 import { WUI_CSP } from "./assemble";
 import { WUI_PROTOCOL } from "./protocol";
 import { MAX_REPORTS, WuiView, type WuiChrome } from "./WuiView";
+import { publishApi } from "../../api/publish";
+
+// How the page is published now (`publishApi.current`) is a read of its own,
+// tested where it matters (WuiView.test: "publishing again starts from…", "does
+// not publish from a guess…"). Everywhere else in this file the page has never
+// been published — what the server answers for it (404 → null).
+beforeEach(() => {
+  vi.spyOn(publishApi, "current").mockResolvedValue(null);
+});
+
+/** Publish WUI, then the dialog's "use my workspace directly": what a Deploy
+ * did in one press before publishing asked how others use the page
+ * (`docs/plan-wui-publish-and-agent-hub.md` W2). The rest of the run — build,
+ * verify, record, verdict — is what these tests are about, and is unchanged. */
+function publishDirect(button?: HTMLElement): void {
+  fireEvent.click(button ?? screen.getByRole("button", { name: /^publish wui$/i }));
+  const dialog = screen.getByTestId("publish-dialog");
+  fireEvent.click(within(dialog).getByRole("radio", { name: /use my workspace directly/i }));
+  fireEvent.click(within(dialog).getByRole("button", { name: /^publish$/i }));
+}
 
 // These tests read the pane's English: its author strip and Deploy panel go
 // through `t()` (docs/plan-deploy-reach.md decision 7), and outside a provider
@@ -1425,7 +1445,7 @@ describe("WuiView: Deploy", () => {
     can_remove: true,
   };
   const isDeploy = (url: unknown, init?: RequestInit) =>
-    String(url).includes("/wui/deploy") && init?.method === "POST";
+    String(url).includes("/publish") && init?.method === "POST";
   const deployOk = () =>
     new Response(JSON.stringify(DEPLOYED), {
       status: 200,
@@ -1433,10 +1453,21 @@ describe("WuiView: Deploy", () => {
     });
   /** A fetch stub that answers the record and hands everything else to
    * `inner` (or to nobody — the `vi.fn()` stubs of a page with no build). */
+  /** How the page is published now (`GET …/publish?path=`), as the server
+   * answers it: the row, or 404 for a page never published — the read the
+   * pane makes for Publish WUI's dialog (round 1 of review). */
+  const isPublicationRead = (url: unknown, init?: RequestInit) =>
+    String(url).includes("/publish?path=") && (init?.method ?? "GET") === "GET";
   const withDeploy =
-    (inner?: (url: unknown, init?: RequestInit) => Promise<Response> | Response) =>
+    (inner?: (url: unknown, init?: RequestInit) => Promise<Response> | Response, published?: unknown) =>
     async (url: unknown, init?: RequestInit) =>
-      isDeploy(url, init) ? deployOk() : inner?.(url, init);
+      isDeploy(url, init)
+        ? deployOk()
+        : isPublicationRead(url, init)
+          ? published
+            ? new Response(JSON.stringify(published), { status: 200, headers: { "content-type": "application/json" } })
+            : new Response(JSON.stringify({ detail: "not published" }), { status: 404 })
+          : inner?.(url, init);
 
   // The manual path: rebuilding on open is on by default, and a test about the
   // button has to say it is not testing the automatic one.
@@ -1469,7 +1500,7 @@ describe("WuiView: Deploy", () => {
     });
     await screen.findByRole("button", { name: /^rebuild$/i });
 
-    fireEvent.click(screen.getByRole("button", { name: /^deploy$/i }));
+    publishDirect();
 
     // Mid re-read: nothing is building, and still nothing else may start.
     expect(screen.getByRole("button", { name: /^rebuild$/i })).toBeDisabled();
@@ -1498,7 +1529,7 @@ describe("WuiView: Deploy", () => {
     await waitFor(() => expect(fs.readFile).toHaveBeenCalledWith("/sales/package.json"));
 
     files["/sales/package.json"] = BUILT["/sales/package.json"];
-    fireEvent.click(screen.getByRole("button", { name: /^deploy$/i }));
+    publishDirect();
     await screen.findByText(/> vite build/);
     release();
     await screen.findByRole("textbox", { name: /address/i });
@@ -1519,13 +1550,13 @@ describe("WuiView: Deploy", () => {
     const files = { ...PLAIN };
     const page = pages(svc(files), makeTestQueryClient()); // one client across the rerender
     const view = render(page("/sales/a.ai.yaml"));
-    fireEvent.click(await screen.findByRole("button", { name: /^deploy$/i }));
+    publishDirect(await screen.findByRole("button", { name: /^publish wui$/i }));
     await screen.findByRole("textbox", { name: /address/i });
 
     view.rerender(page("/sales/b.ai.yaml", "dist/index.html"));
 
     await waitFor(() => expect(screen.queryByRole("textbox", { name: /address/i })).toBeNull());
-    expect(screen.queryByText(/^✓ deployed/i)).toBeNull();
+    expect(screen.queryByText(/^✓ published/i)).toBeNull();
   });
 
   it("shows the page it verified — the pane and the verdict cannot disagree", async () => {
@@ -1544,7 +1575,7 @@ describe("WuiView: Deploy", () => {
     expect(frame()).toBeNull();
 
     files["/sales/index.html"] = PLAIN["/sales/index.html"];
-    fireEvent.click(screen.getByRole("button", { name: /^deploy$/i }));
+    publishDirect();
 
     await screen.findByRole("textbox", { name: /address/i });
     await waitFor(() => expect(frame()).toBeInTheDocument());
@@ -1590,7 +1621,7 @@ describe("WuiView: Deploy", () => {
     };
     const page = pages(svc(files), client);
     const view = render(page("/a/page.ai.yaml"));
-    fireEvent.click(await screen.findByRole("button", { name: /^deploy$/i }));
+    publishDirect(await screen.findByRole("button", { name: /^publish wui$/i }));
     await screen.findByRole("textbox", { name: /address/i });
 
     view.rerender(page("/b/page.ai.yaml"));
@@ -1600,9 +1631,9 @@ describe("WuiView: Deploy", () => {
 
     // The agent broke the page while the pane was away.
     delete files["/a/index.html"];
-    fireEvent.click(screen.getByRole("button", { name: /^deploy$/i }));
+    publishDirect();
 
-    expect(await screen.findByText(/deploy failed/i)).toHaveTextContent(/does not open/i);
+    expect(await screen.findByText(/publish failed/i)).toHaveTextContent(/does not open/i);
     expect(screen.queryByRole("textbox", { name: /address/i })).toBeNull();
   });
 
@@ -1623,13 +1654,13 @@ describe("WuiView: Deploy", () => {
       return pages(fs, client)("/sales/page.ai.yaml");
     };
     const view = render(pageIn("item1"));
-    fireEvent.click(await screen.findByRole("button", { name: /^deploy$/i }));
+    publishDirect(await screen.findByRole("button", { name: /^publish wui$/i }));
     await screen.findByRole("textbox", { name: /address/i });
 
     view.rerender(pageIn("item2"));
     await waitFor(() => expect(frame()).toBeInTheDocument());
 
-    expect(screen.queryByText(/^✓ deployed/i)).toBeNull();
+    expect(screen.queryByText(/^✓ published/i)).toBeNull();
     expect(screen.queryByRole("textbox", { name: /address/i })).toBeNull();
   });
 
@@ -1652,7 +1683,7 @@ describe("WuiView: Deploy", () => {
     const distReads = () => vi.mocked(fs.readFile).mock.calls.filter(([p]) => p === "/sales/dist/index.html").length;
     const view = render(page("/sales/a.ai.yaml", "dist/index.html"));
     await screen.findByRole("button", { name: /^rebuild$/i });
-    fireEvent.click(screen.getByRole("button", { name: /^deploy$/i }));
+    publishDirect();
     await screen.findByText(/> vite build/);
 
     view.rerender(page("/sales/b.ai.yaml", "dist/index.html"));
@@ -1667,12 +1698,12 @@ describe("WuiView: Deploy", () => {
     // B: same frame, same document, nothing re-read on its account.
     expect(frame()).toBe(bFrame);
     expect(distReads()).toBe(readsBeforeRelease + 1); // Deploy's own verify read of the folder, nothing for B
-    expect(screen.queryByText(/^✓ deployed/i)).toBeNull();
-    expect(screen.getByRole("button", { name: /^deploy$/i })).toHaveTextContent(/^deploy$/i);
+    expect(screen.queryByText(/^✓ published/i)).toBeNull();
+    expect(screen.getByRole("button", { name: /^publish wui$/i })).toHaveTextContent(/^publish wui$/i);
 
     // Back on A: the verdict, and the document it verified.
     view.rerender(page("/sales/a.ai.yaml", "dist/index.html"));
-    expect(await screen.findByText(/^✓ deployed/i)).toBeInTheDocument();
+    expect(await screen.findByText(/^✓ published/i)).toBeInTheDocument();
     expect(screen.getByRole("textbox", { name: /address/i })).toHaveValue(
       `${window.location.origin}/w/rca/item1/sales/a.ai.yaml`,
     );
@@ -1697,7 +1728,7 @@ describe("WuiView: Deploy", () => {
     act(() => publishFileChanged("item1", "/sales/package.json"));
     await waitFor(() => expect(screen.queryByRole("button", { name: /^rebuild$/i })).toBeNull());
 
-    fireEvent.click(screen.getByRole("button", { name: /^deploy$/i }));
+    publishDirect();
 
     expect(await screen.findByRole("textbox", { name: /address/i })).toHaveValue(ADDRESS);
     expect(buildCalls()).toHaveLength(0);
@@ -1722,18 +1753,18 @@ describe("WuiView: Deploy", () => {
       return real(path);
     });
     await waitFor(() => expect(frame()).toBeInTheDocument());
-    fireEvent.click(screen.getByRole("button", { name: /^deploy$/i }));
+    publishDirect();
     await screen.findByRole("button", { name: /^cancel$/i });
     fireEvent.click(screen.getByRole("button", { name: /^cancel$/i }));
-    await waitFor(() => expect(screen.getByRole("button", { name: /^deploy$/i })).toBeEnabled());
+    await waitFor(() => expect(screen.getByRole("button", { name: /^publish wui$/i })).toBeEnabled());
 
     // The page breaks; the held read then completes with the OLD document.
     delete files["/sales/index.html"];
     hold();
     await act(async () => {});
 
-    fireEvent.click(screen.getByRole("button", { name: /^deploy$/i }));
-    expect(await screen.findByText(/deploy failed/i)).toHaveTextContent(/does not open/i);
+    publishDirect();
+    expect(await screen.findByText(/publish failed/i)).toHaveTextContent(/does not open/i);
     expect(screen.queryByRole("textbox", { name: /address/i })).toBeNull();
   });
 
@@ -1769,10 +1800,10 @@ describe("WuiView: Deploy", () => {
     renderIn({ ...BUILT });
     await screen.findByRole("button", { name: /^rebuild$/i });
     await act(async () => {}); // the opening moment is spent (Auto-rebuild is off here)
-    fireEvent.click(screen.getByRole("button", { name: /^deploy$/i }));
+    publishDirect();
     await screen.findByText(/> vite build/);
     fireEvent.click(screen.getByRole("button", { name: /^cancel$/i }));
-    await waitFor(() => expect(screen.getByRole("button", { name: /^deploy$/i })).toBeEnabled());
+    await waitFor(() => expect(screen.getByRole("button", { name: /^publish wui$/i })).toBeEnabled());
     const before = buildCalls().length;
 
     fireEvent.click(screen.getByRole("switch", { name: /rebuild this page whenever/i })); // on
@@ -1806,7 +1837,7 @@ describe("WuiView: Deploy", () => {
     serveHeldBuild(0); // never released: the build hangs
     renderIn({ ...BUILT });
     await screen.findByRole("button", { name: /^rebuild$/i });
-    fireEvent.click(screen.getByRole("button", { name: /^deploy$/i }));
+    publishDirect();
     await screen.findByText(/> vite build/);
     expect(screen.getByRole("button", { name: /^refresh$/i })).toBeDisabled();
 
@@ -1814,12 +1845,12 @@ describe("WuiView: Deploy", () => {
 
     await waitFor(() => expect(screen.getByRole("button", { name: /^refresh$/i })).toBeEnabled());
     expect(screen.getByRole("button", { name: /^rebuild$/i })).toBeEnabled();
-    expect(screen.getByRole("button", { name: /^deploy$/i })).toBeEnabled();
+    expect(screen.getByRole("button", { name: /^publish wui$/i })).toBeEnabled();
     expect(screen.queryByRole("button", { name: /^cancel$/i })).toBeNull();
     // The build request was aborted, not left running on the server's side.
     const live = buildCalls().filter(([, init]) => !(init as RequestInit)?.signal?.aborted);
     expect(live).toHaveLength(0);
-    expect(screen.queryByText(/deployed|deploy failed/i)).toBeNull();
+    expect(screen.queryByText(/published|publish failed/i)).toBeNull();
   });
 
   it("does not promise a sibling page a reload that A's Deploy will not do", async () => {
@@ -1835,7 +1866,7 @@ describe("WuiView: Deploy", () => {
     const page = pages(svc(files), client);
     const view = render(page("/sales/a.ai.yaml", "dist/index.html"));
     await screen.findByRole("button", { name: /^rebuild$/i });
-    fireEvent.click(screen.getByRole("button", { name: /^deploy$/i }));
+    publishDirect();
     await screen.findByText(/> vite build/);
 
     view.rerender(page("/sales/b.ai.yaml", "dist/index.html"));
@@ -1864,7 +1895,7 @@ describe("WuiView: Deploy", () => {
     const page = pages(svc(files), client);
     const view = render(page("/sales/a.ai.yaml", "dist/index.html"));
     await screen.findByRole("button", { name: /^rebuild$/i });
-    fireEvent.click(screen.getByRole("button", { name: /^deploy$/i }));
+    publishDirect();
     await screen.findByText(/> vite build/);
     view.rerender(page("/sales/b.ai.yaml", "dist/index.html"));
     release();
@@ -1884,7 +1915,7 @@ describe("WuiView: Deploy", () => {
 
     view.rerender(page("/sales/a.ai.yaml", "dist/index.html"));
     await waitFor(() => expect(frame()).toBeInTheDocument());
-    expect(screen.queryByText(/^✓ deployed/i)).toBeNull();
+    expect(screen.queryByText(/^✓ published/i)).toBeNull();
     // And the FRAME is the rebuilt document, not Deploy's cached pre-rebuild
     // one: the Rebuild's generation must never land on the number Deploy
     // verified under (review round 9 — each run verifies under its own).
@@ -1910,7 +1941,7 @@ describe("WuiView: Deploy", () => {
     const page = pages(fs, client);
     const view = render(page("/sales/page.ai.yaml", "index.html"));
     await screen.findByRole("button", { name: /^rebuild$/i });
-    fireEvent.click(screen.getByRole("button", { name: /^deploy$/i }));
+    publishDirect();
     await screen.findByText(/> vite build/);
 
     // The author edits the view file's entry while the build runs.
@@ -1918,7 +1949,7 @@ describe("WuiView: Deploy", () => {
     const distReadsBefore = vi.mocked(fs.readFile).mock.calls.filter(([p]) => p === "/sales/dist/index.html").length;
     release();
 
-    expect(await screen.findByText(/^✓ deployed/i)).toBeInTheDocument();
+    expect(await screen.findByText(/^✓ published/i)).toBeInTheDocument();
     await act(async () => {});
     // No read of the new entry happened on the edit's account.
     expect(vi.mocked(fs.readFile).mock.calls.filter(([p]) => p === "/sales/dist/index.html")).toHaveLength(
@@ -1939,7 +1970,7 @@ describe("WuiView: Deploy", () => {
     const page = pages(svc(files), client);
     const view = render(page("/sales/a.ai.yaml", "dist/index.html"));
     await screen.findByRole("button", { name: /^rebuild$/i });
-    fireEvent.click(screen.getByRole("button", { name: /^deploy$/i }));
+    publishDirect();
     await screen.findByText(/> vite build/);
     view.rerender(page("/sales/b.ai.yaml", "dist/index.html"));
     release();
@@ -1950,11 +1981,11 @@ describe("WuiView: Deploy", () => {
 
     view.rerender(page("/sales/a.ai.yaml", "dist/index.html"));
     await waitFor(() => expect(frame()).toBeInTheDocument());
-    expect(screen.queryByText(/^✓ deployed/i)).toBeNull();
+    expect(screen.queryByText(/^✓ published/i)).toBeNull();
     expect(screen.queryByRole("textbox", { name: /address/i })).toBeNull();
     // And not in silence (review round 8): the author is told why there is
     // no address, rather than seeing a Deploy that ended with nothing.
-    expect(screen.getByText(/deploy stopped/i)).toHaveTextContent(/expire|changed/i);
+    expect(screen.getByText(/publish stopped/i)).toHaveTextContent(/expire|changed/i);
   });
 
   it("starts clean on a page in another folder while a Deploy was running", async () => {
@@ -1987,19 +2018,19 @@ describe("WuiView: Deploy", () => {
     const page = pages(fs, makeTestQueryClient());
     const view = render(page("/sales/page.ai.yaml"));
     await screen.findByRole("button", { name: /^rebuild$/i });
-    fireEvent.click(screen.getByRole("button", { name: /^deploy$/i }));
+    publishDirect();
     await screen.findByText(/> vite build/);
-    expect(screen.getByRole("button", { name: /deploying/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /publishing/i })).toBeInTheDocument();
 
     view.rerender(page("/reports/dash.ai.yaml"));
     await screen.findByRole("button", { name: /^rebuild$/i });
     await act(async () => {});
 
     // Still mid-build for /sales — and the /reports page owes it nothing.
-    expect(screen.getByRole("button", { name: /^deploy$/i })).toBeEnabled();
+    expect(screen.getByRole("button", { name: /^publish wui$/i })).toBeEnabled();
     expect(screen.getByRole("button", { name: /^refresh$/i })).toBeEnabled();
     expect(screen.getByRole("button", { name: /^rebuild$/i })).toBeEnabled();
-    expect(screen.queryByRole("button", { name: /deploying/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /publishing/i })).toBeNull();
     expect(screen.queryByText(/> vite build/)).toBeNull(); // nor its log
     release();
   });
@@ -2021,9 +2052,9 @@ describe("WuiView: Deploy", () => {
       return real(path);
     });
     await screen.findByRole("button", { name: /^rebuild$/i });
-    fireEvent.click(screen.getByRole("button", { name: /^deploy$/i }));
+    publishDirect();
 
-    const said = await screen.findByText(/deploy failed/i);
+    const said = await screen.findByText(/publish failed/i);
     expect(said).toHaveTextContent(/could not check/i);
     expect(buildCalls()).toHaveLength(0);
     expect(screen.queryByRole("textbox", { name: /address/i })).toBeNull();
@@ -2041,14 +2072,14 @@ describe("WuiView: Deploy", () => {
     vi.stubGlobal("fetch", vi.fn(withDeploy()));
     const files: Record<string, string> = { "/sales/README.md": "nothing" };
     renderInFs(files);
-    fireEvent.click(await screen.findByRole("button", { name: /^deploy$/i }));
-    await screen.findByText(/deploy failed/i);
+    publishDirect(await screen.findByRole("button", { name: /^publish wui$/i }));
+    await screen.findByText(/publish failed/i);
 
     files["/sales/index.html"] = PLAIN["/sales/index.html"];
     fireEvent.click(screen.getByRole("button", { name: /^refresh$/i }));
 
     await waitFor(() => expect(frame()).toBeInTheDocument());
-    expect(screen.queryByText(/deploy failed/i)).toBeNull();
+    expect(screen.queryByText(/publish failed/i)).toBeNull();
   });
 
   it("holds the sibling page too — the lock is the pane's, the verdict is the page's", async () => {
@@ -2075,12 +2106,12 @@ describe("WuiView: Deploy", () => {
     const page = pages(fs, makeTestQueryClient());
     const view = render(page("/sales/a.ai.yaml"));
     await screen.findByRole("button", { name: /^rebuild$/i });
-    fireEvent.click(screen.getByRole("button", { name: /^deploy$/i }));
+    publishDirect();
 
     view.rerender(page("/sales/b.ai.yaml"));
     expect(screen.getByRole("button", { name: /^rebuild$/i })).toBeDisabled();
     expect(screen.getByRole("button", { name: /^refresh$/i })).toBeDisabled();
-    expect(screen.getByRole("button", { name: /deploy/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /publish/i })).toBeDisabled();
 
     answer();
     await screen.findByText(/> vite build/);
@@ -2100,14 +2131,14 @@ describe("WuiView: Deploy", () => {
     vi.stubGlobal("fetch", vi.fn(withDeploy()));
     const files: Record<string, string> = { ...PLAIN };
     renderInFs(files);
-    fireEvent.click(await screen.findByRole("button", { name: /^deploy$/i }));
+    publishDirect(await screen.findByRole("button", { name: /^publish wui$/i }));
     await screen.findByRole("textbox", { name: /address/i });
 
     delete files["/sales/index.html"];
     fireEvent.click(screen.getByRole("button", { name: /^refresh$/i }));
 
     await screen.findByText(/no index\.html to open/);
-    expect(screen.queryByText(/^✓ deployed/i)).toBeNull();
+    expect(screen.queryByText(/^✓ published/i)).toBeNull();
     expect(screen.queryByRole("textbox", { name: /address/i })).toBeNull();
   });
 
@@ -2127,7 +2158,7 @@ describe("WuiView: Deploy", () => {
       return real(path);
     });
     await screen.findByRole("button", { name: /^rebuild$/i });
-    fireEvent.click(screen.getByRole("button", { name: /^deploy$/i }));
+    publishDirect();
 
     view.unmount();
     answer();
@@ -2152,8 +2183,8 @@ describe("WuiView: Deploy", () => {
     const reads = () => vi.mocked(fs.readFile).mock.calls.filter(([p]) => p === "/sales/index.html").length;
     const beforeDeploy = reads();
 
-    fireEvent.click(screen.getByRole("button", { name: /^deploy$/i }));
-    await screen.findByText(/deploy failed/i);
+    publishDirect();
+    await screen.findByText(/publish failed/i);
     await act(async () => {});
 
     // Exactly one read for the verdict, and none for the pane.
@@ -2201,7 +2232,7 @@ describe("WuiView: Deploy", () => {
     vi.stubGlobal("fetch", vi.fn(withDeploy()));
     const files: Record<string, string> = { ...PLAIN };
     renderInFs(files);
-    fireEvent.click(await screen.findByRole("button", { name: /^deploy$/i }));
+    publishDirect(await screen.findByRole("button", { name: /^publish wui$/i }));
     await screen.findByRole("textbox", { name: /address/i });
 
     fireEvent.click(screen.getByRole("button", { name: /^refresh$/i }));
@@ -2210,9 +2241,9 @@ describe("WuiView: Deploy", () => {
     await act(async () => {});
 
     files["/sales/index.html"] = "<html><body>v2</body></html>";
-    fireEvent.click(screen.getByRole("button", { name: /^deploy$/i }));
+    publishDirect();
 
-    expect(await screen.findByText(/^✓ deployed/i)).toBeInTheDocument();
+    expect(await screen.findByText(/^✓ published/i)).toBeInTheDocument();
     await waitFor(() => expect(frame()?.getAttribute("srcdoc")).toContain("v2"));
   });
 
@@ -2227,19 +2258,19 @@ describe("WuiView: Deploy", () => {
     const page = pages(svc({ ...BUILT }), client);
     const view = render(page("/sales/a.ai.yaml"));
     await screen.findByRole("button", { name: /^rebuild$/i });
-    fireEvent.click(screen.getByRole("button", { name: /^deploy$/i }));
+    publishDirect();
     await screen.findByText(/> vite build/);
     view.rerender(page("/sales/b.ai.yaml"));
     release(0);
-    await waitFor(() => expect(screen.getByRole("button", { name: /^deploy$/i })).toBeEnabled());
+    await waitFor(() => expect(screen.getByRole("button", { name: /^publish wui$/i })).toBeEnabled());
 
-    fireEvent.click(screen.getByRole("button", { name: /^deploy$/i }));
+    publishDirect();
     await waitFor(() => expect(buildCalls()).toHaveLength(2));
     fireEvent.click(screen.getByRole("button", { name: /^cancel$/i }));
-    await waitFor(() => expect(screen.getByRole("button", { name: /^deploy$/i })).toBeEnabled());
+    await waitFor(() => expect(screen.getByRole("button", { name: /^publish wui$/i })).toBeEnabled());
 
     view.rerender(page("/sales/a.ai.yaml"));
-    expect(await screen.findByText(/^✓ deployed/i)).toBeInTheDocument();
+    expect(await screen.findByText(/^✓ published/i)).toBeInTheDocument();
     expect(screen.getByRole("textbox", { name: /address/i })).toHaveValue(
       `${window.location.origin}/w/rca/item1/sales/a.ai.yaml`,
     );
@@ -2256,13 +2287,13 @@ describe("WuiView: Deploy", () => {
     const page = pages(svc({ ...BUILT }), client);
     const view = render(page("/sales/a.ai.yaml"));
     await screen.findByRole("button", { name: /^rebuild$/i });
-    fireEvent.click(screen.getByRole("button", { name: /^deploy$/i }));
+    publishDirect();
     await screen.findByText(/> vite build/);
     view.rerender(page("/sales/b.ai.yaml"));
     release(0);
-    await waitFor(() => expect(screen.getByRole("button", { name: /^deploy$/i })).toBeEnabled());
+    await waitFor(() => expect(screen.getByRole("button", { name: /^publish wui$/i })).toBeEnabled());
 
-    fireEvent.click(screen.getByRole("button", { name: /^deploy$/i }));
+    publishDirect();
     await waitFor(() => expect(buildCalls()).toHaveLength(2));
     release(1);
     expect(await screen.findByRole("textbox", { name: /address/i })).toHaveValue(
@@ -2270,8 +2301,8 @@ describe("WuiView: Deploy", () => {
     );
 
     view.rerender(page("/sales/a.ai.yaml"));
-    expect(await screen.findByText(/deploy stopped/i)).toHaveTextContent(/deployed again/i);
-    expect(screen.queryByText(/^✓ deployed/i)).toBeNull();
+    expect(await screen.findByText(/publish stopped/i)).toHaveTextContent(/published again/i);
+    expect(screen.queryByText(/^✓ published/i)).toBeNull();
     expect(screen.queryByRole("textbox", { name: /address/i })).toBeNull();
   });
 
@@ -2281,7 +2312,7 @@ describe("WuiView: Deploy", () => {
     serveHeldBuild(0);
     renderIn({ ...BUILT });
     await screen.findByRole("button", { name: /^rebuild$/i });
-    fireEvent.click(screen.getByRole("button", { name: /^deploy$/i }));
+    publishDirect();
     await screen.findByText(/> vite build/);
 
     fireEvent.click(screen.getByRole("button", { name: /^cancel$/i }));
@@ -2354,19 +2385,19 @@ describe("WuiView: Deploy", () => {
     await waitFor(() => expect(frame()).toBeInTheDocument());
 
     // A: Deploy; the pane moves to B mid-verify; A's verdict then WAITS.
-    fireEvent.click(screen.getByRole("button", { name: /^deploy$/i }));
+    publishDirect();
     await waitFor(() => expect(aReads).toBe(2));
     view.rerender(page("/sales/b.ai.yaml", "b.html"));
     await screen.findByText(/no b\.html to open/);
     releaseA();
-    await waitFor(() => expect(screen.getByRole("button", { name: /^deploy$/i })).toBeEnabled());
+    await waitFor(() => expect(screen.getByRole("button", { name: /^publish wui$/i })).toBeEnabled());
 
     // B: Deploy; held at its manifest read. The pane visits A: A's waiting
     // verdict applies while B's run is in flight.
-    fireEvent.click(screen.getByRole("button", { name: /^deploy$/i }));
+    publishDirect();
     await waitFor(() => expect(manifestReads).toBe(3));
     view.rerender(page("/sales/a.ai.yaml", "a.html"));
-    expect(await screen.findByText(/^✓ deployed/i)).toBeInTheDocument();
+    expect(await screen.findByText(/^✓ published/i)).toBeInTheDocument();
 
     releaseB(); // B goes on to verify: b.html is not there
     await waitFor(() => expect(screen.queryByRole("button", { name: /^cancel$/i })).toBeNull());
@@ -2374,11 +2405,11 @@ describe("WuiView: Deploy", () => {
     // A's "✓ Deployed" was about a read B's verify has now been numbered
     // after — it retires (in silence: it was seen), rather than sit over a
     // folder another run has been through.
-    expect(screen.queryByText(/^✓ deployed/i)).toBeNull();
+    expect(screen.queryByText(/^✓ published/i)).toBeNull();
 
     view.rerender(page("/sales/b.ai.yaml", "b.html"));
-    await waitFor(() => expect(screen.getByRole("button", { name: /^deploy$/i })).toBeEnabled());
-    expect(await screen.findByText(/deploy failed/i)).toHaveTextContent(/does not open/i);
+    await waitFor(() => expect(screen.getByRole("button", { name: /^publish wui$/i })).toBeEnabled());
+    expect(await screen.findByText(/publish failed/i)).toHaveTextContent(/does not open/i);
   });
 
   it("retires A's ✓ Deployed when B's Deploy rebuilds the folder while the pane is on A", async () => {
@@ -2395,23 +2426,23 @@ describe("WuiView: Deploy", () => {
     const page = pages(svc(files), client);
     const view = render(page("/sales/a.ai.yaml", "dist/index.html"));
     await screen.findByRole("button", { name: /^rebuild$/i });
-    fireEvent.click(screen.getByRole("button", { name: /^deploy$/i }));
+    publishDirect();
     await screen.findByText(/> vite build/);
     view.rerender(page("/sales/b.ai.yaml", "dist/index.html"));
     release(0);
-    await waitFor(() => expect(screen.getByRole("button", { name: /^deploy$/i })).toBeEnabled());
+    await waitFor(() => expect(screen.getByRole("button", { name: /^publish wui$/i })).toBeEnabled());
 
-    fireEvent.click(screen.getByRole("button", { name: /^deploy$/i }));
+    publishDirect();
     await waitFor(() => expect(buildCalls()).toHaveLength(2));
     view.rerender(page("/sales/a.ai.yaml", "dist/index.html"));
-    expect(await screen.findByText(/^✓ deployed/i)).toBeInTheDocument(); // applied mid-B-build
+    expect(await screen.findByText(/^✓ published/i)).toBeInTheDocument(); // applied mid-B-build
 
     files["/sales/dist/index.html"] = "<html><body>v2</body></html>";
     release(1); // B's build finishes; B's verify reads v2
     await waitFor(() => expect(screen.queryByRole("button", { name: /^cancel$/i })).toBeNull());
     await act(async () => {});
 
-    expect(screen.queryByText(/^✓ deployed/i)).toBeNull();
+    expect(screen.queryByText(/^✓ published/i)).toBeNull();
     expect(screen.queryByRole("textbox", { name: /address/i })).toBeNull();
     // And A's frame was NOT reloaded on B's account (decision 9): still v1.
     expect(frame()?.getAttribute("srcdoc")).toContain("v1");
@@ -2471,13 +2502,13 @@ describe("WuiView: Deploy", () => {
       return real(path);
     });
     await waitFor(() => expect(frame()).toBeInTheDocument());
-    fireEvent.click(screen.getByRole("button", { name: /^deploy$/i })); // before the manifest landed
+    publishDirect(); // before the manifest landed
     answer();
     await screen.findByText(/> vite build/);
     expect(buildCalls()).toHaveLength(1);
 
     fireEvent.click(screen.getByRole("button", { name: /^cancel$/i }));
-    await waitFor(() => expect(screen.getByRole("button", { name: /^deploy$/i })).toBeEnabled());
+    await waitFor(() => expect(screen.getByRole("button", { name: /^publish wui$/i })).toBeEnabled());
 
     fireEvent.click(screen.getByRole("switch", { name: /rebuild this page whenever/i })); // on
     await act(async () => {});
@@ -2494,15 +2525,15 @@ describe("WuiView: Deploy", () => {
     const page = pages(svc({ ...BUILT }), makeTestQueryClient());
     const view = render(page("/sales/a.ai.yaml"));
     await screen.findByRole("button", { name: /^rebuild$/i });
-    fireEvent.click(screen.getByRole("button", { name: /^deploy$/i }));
+    publishDirect();
     await screen.findByText(/> vite build/);
     view.rerender(page("/sales/b.ai.yaml"));
-    await screen.findByRole("button", { name: /^deploying a\.ai\.yaml…$/i });
+    await screen.findByRole("button", { name: /^publishing a\.ai\.yaml…$/i });
     fireEvent.click(screen.getByRole("button", { name: /^cancel$/i }));
-    await waitFor(() => expect(screen.getByRole("button", { name: /^deploy$/i })).toBeEnabled());
+    await waitFor(() => expect(screen.getByRole("button", { name: /^publish wui$/i })).toBeEnabled());
 
     view.rerender(page("/sales/a.ai.yaml"));
-    expect(screen.getByRole("button", { name: /^deploy$/i })).toBeEnabled();
+    expect(screen.getByRole("button", { name: /^publish wui$/i })).toBeEnabled();
     expect(screen.queryByRole("button", { name: /^cancel$/i })).toBeNull();
   });
 
@@ -2523,18 +2554,18 @@ describe("WuiView: Deploy", () => {
       return real(path);
     });
     await screen.findByRole("button", { name: /^rebuild$/i });
-    fireEvent.click(screen.getByRole("button", { name: /^deploy$/i }));
+    publishDirect();
     await screen.findByRole("button", { name: /^cancel$/i });
 
     fireEvent.click(screen.getByRole("button", { name: /^cancel$/i }));
-    await waitFor(() => expect(screen.getByRole("button", { name: /^deploy$/i })).toBeEnabled());
+    await waitFor(() => expect(screen.getByRole("button", { name: /^publish wui$/i })).toBeEnabled());
     answer(); // the held read completes after the Cancel
     await act(async () => {});
     await act(async () => {});
 
     expect(buildCalls()).toHaveLength(0);
     expect(screen.queryByRole("log", { name: "Build output" })).toBeNull(); // no "Cancelled." over nothing
-    expect(screen.queryByText(/deployed|deploy failed|deploy stopped/i)).toBeNull();
+    expect(screen.queryByText(/published|publish failed|publish stopped/i)).toBeNull();
   });
 
   it("a Cancel during the verify read lands no verdict", async () => {
@@ -2549,16 +2580,16 @@ describe("WuiView: Deploy", () => {
       return real(path);
     });
     await waitFor(() => expect(frame()).toBeInTheDocument());
-    fireEvent.click(screen.getByRole("button", { name: /^deploy$/i }));
+    publishDirect();
     await screen.findByRole("button", { name: /^cancel$/i });
     fireEvent.click(screen.getByRole("button", { name: /^cancel$/i }));
-    await waitFor(() => expect(screen.getByRole("button", { name: /^deploy$/i })).toBeEnabled());
+    await waitFor(() => expect(screen.getByRole("button", { name: /^publish wui$/i })).toBeEnabled());
 
     hold(); // the read completes, successfully, after the Cancel
     await act(async () => {});
     await act(async () => {});
 
-    expect(screen.queryByText(/✓ deployed/i)).toBeNull();
+    expect(screen.queryByText(/✓ published/i)).toBeNull();
     expect(screen.queryByRole("textbox", { name: /address/i })).toBeNull();
     // And no row was written (PR #811 regression review): since the overview,
     // the run's next act after the verify read is the POST, so this guard
@@ -2578,9 +2609,9 @@ describe("WuiView: Deploy", () => {
     fireEvent.click(screen.getByRole("button", { name: /^rebuild$/i }));
     await screen.findByText(/> vite build/);
 
-    expect(screen.getByRole("button", { name: /^deploy$/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /^publish wui$/i })).toBeDisabled();
     release();
-    await waitFor(() => expect(screen.getByRole("button", { name: /^deploy$/i })).toBeEnabled());
+    await waitFor(() => expect(screen.getByRole("button", { name: /^publish wui$/i })).toBeEnabled());
     expect(buildCalls()).toHaveLength(1);
   });
 
@@ -2590,10 +2621,10 @@ describe("WuiView: Deploy", () => {
     // address field, Copy and Open reads them out as text.
     vi.stubGlobal("fetch", vi.fn(withDeploy()));
     renderIn({ ...PLAIN });
-    fireEvent.click(await screen.findByRole("button", { name: /^deploy$/i }));
+    publishDirect(await screen.findByRole("button", { name: /^publish wui$/i }));
     await screen.findByRole("textbox", { name: /address/i });
 
-    const said = screen.getAllByRole("status").find((el) => /✓ deployed/i.test(el.textContent ?? ""));
+    const said = screen.getAllByRole("status").find((el) => /✓ published/i.test(el.textContent ?? ""));
     expect(said).toBeDefined();
     expect(within(said as HTMLElement).queryByRole("textbox")).toBeNull();
     expect(within(said as HTMLElement).queryByRole("button")).toBeNull();
@@ -2606,15 +2637,15 @@ describe("WuiView: Deploy", () => {
     // "Deploy stopped" on every Refresh after a success would be noise.
     vi.stubGlobal("fetch", vi.fn(withDeploy()));
     renderIn({ ...PLAIN });
-    fireEvent.click(await screen.findByRole("button", { name: /^deploy$/i }));
+    publishDirect(await screen.findByRole("button", { name: /^publish wui$/i }));
     await screen.findByRole("textbox", { name: /address/i });
 
     fireEvent.click(screen.getByRole("button", { name: /^refresh$/i }));
     await waitFor(() => expect(screen.queryByRole("textbox", { name: /address/i })).toBeNull());
     await act(async () => {});
 
-    expect(screen.queryByText(/deploy stopped/i)).toBeNull();
-    expect(screen.queryByText(/deploy failed/i)).toBeNull();
+    expect(screen.queryByText(/publish stopped/i)).toBeNull();
+    expect(screen.queryByText(/publish failed/i)).toBeNull();
   });
 
   it("names an unexpected throw and releases the pane, rather than a button stuck on Deploying…", async () => {
@@ -2627,10 +2658,10 @@ describe("WuiView: Deploy", () => {
     render(pages(svc({ ...BUILT }), client)("/sales/page.ai.yaml"));
     await screen.findByRole("button", { name: /^rebuild$/i });
 
-    fireEvent.click(screen.getByRole("button", { name: /^deploy$/i }));
+    publishDirect();
 
-    expect(await screen.findByText(/deploy stopped unexpectedly/i)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /^deploy$/i })).toBeEnabled();
+    expect(await screen.findByText(/publish stopped unexpectedly/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^publish wui$/i })).toBeEnabled();
     expect(screen.queryByRole("textbox", { name: /address/i })).toBeNull();
     expect(err).toHaveBeenCalled();
     spy.mockRestore();
@@ -2653,9 +2684,9 @@ describe("WuiView: Deploy", () => {
     expect(await screen.findByRole("status")).toHaveTextContent("index.html");
 
     files["/sales/index.html"] = PLAIN["/sales/index.html"];
-    fireEvent.click(screen.getByRole("button", { name: /^deploy$/i }));
+    publishDirect();
 
-    expect(await screen.findByText(/deploying… the page appears when this finishes/i)).toBeInTheDocument();
+    expect(await screen.findByText(/publishing… the page appears when this finishes/i)).toBeInTheDocument();
     expect(screen.queryByText(/no index\.html to open/)).toBeNull();
     answer();
     await screen.findByRole("textbox", { name: /address/i });
@@ -2667,7 +2698,7 @@ describe("WuiView: Deploy", () => {
     vi.stubGlobal("fetch", vi.fn(withDeploy()));
     setWuiAutoBuild(autoBuildScope("item1", "/sales/q3/reports"), false);
     render(pages(svc({ "/sales/q3/reports/index.html": "<html><body>q3</body></html>" }), makeTestQueryClient())("/sales/q3/reports/page.ai.yaml"));
-    fireEvent.click(await screen.findByRole("button", { name: /^deploy$/i }));
+    publishDirect(await screen.findByRole("button", { name: /^publish wui$/i }));
 
     expect(await screen.findByRole("textbox", { name: /address/i })).toHaveValue(
       `${window.location.origin}/w/rca/item1/sales/q3/reports/page.ai.yaml`,
@@ -2696,11 +2727,11 @@ describe("WuiView: Deploy", () => {
     });
     await waitFor(() => expect(frame()).toBeInTheDocument());
 
-    fireEvent.click(screen.getByRole("button", { name: /^deploy$/i }));
+    publishDirect();
     await screen.findByRole("button", { name: /^cancel$/i });
     fireEvent.click(screen.getByRole("button", { name: /^cancel$/i }));
-    await waitFor(() => expect(screen.getByRole("button", { name: /^deploy$/i })).toBeEnabled());
-    fireEvent.click(screen.getByRole("button", { name: /^deploy$/i }));
+    await waitFor(() => expect(screen.getByRole("button", { name: /^publish wui$/i })).toBeEnabled());
+    publishDirect();
     await screen.findByRole("button", { name: /^cancel$/i });
     expect(manifestReads).toBe(1); // both runs joined the one read in flight
 
@@ -2712,7 +2743,7 @@ describe("WuiView: Deploy", () => {
     expect(buildCalls()).toHaveLength(1);
     release(0);
     expect(await screen.findByRole("textbox", { name: /address/i })).toHaveValue(ADDRESS);
-    expect(screen.queryByText(/deploy stopped/i)).toBeNull();
+    expect(screen.queryByText(/publish stopped/i)).toBeNull();
   });
 
   it("names the page a hold is for on the sibling's button, so its Cancel is not a Cancel for nothing", async () => {
@@ -2733,15 +2764,15 @@ describe("WuiView: Deploy", () => {
     const page = pages(svc({ ...BUILT }), client);
     const view = render(page("/sales/a.ai.yaml"));
     await screen.findByRole("button", { name: /^rebuild$/i });
-    fireEvent.click(screen.getByRole("button", { name: /^deploy$/i }));
+    publishDirect();
     await screen.findByText(/> vite build/);
-    expect(screen.getByRole("button", { name: /^deploying…$/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^publishing…$/i })).toBeInTheDocument();
 
     view.rerender(page("/sales/b.ai.yaml"));
 
-    const b = screen.getByRole("button", { name: /^deploying a\.ai\.yaml…$/i });
+    const b = screen.getByRole("button", { name: /^publishing a\.ai\.yaml…$/i });
     expect(b).toBeDisabled();
-    expect(screen.getByRole("button", { name: /^cancel$/i })).toHaveAttribute("title", "Stop deploying a.ai.yaml");
+    expect(screen.getByRole("button", { name: /^cancel$/i })).toHaveAttribute("title", "Stop publishing a.ai.yaml");
     release();
   });
 
@@ -2763,7 +2794,7 @@ describe("WuiView: Deploy", () => {
     });
     await waitFor(() => expect(frame()).toBeInTheDocument());
 
-    fireEvent.click(screen.getByRole("button", { name: /^deploy$/i }));
+    publishDirect();
     expect(screen.getByRole("button", { name: /^refresh$/i })).toBeDisabled();
     answer();
     await screen.findByRole("textbox", { name: /address/i });
@@ -2781,7 +2812,7 @@ describe("WuiView: Deploy", () => {
     renderWui(PLAIN); // no WorkspaceSlugProvider
     await waitFor(() => expect(frame()).toBeInTheDocument());
 
-    expect(screen.queryByRole("button", { name: /^deploy$/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^publish wui$/i })).toBeNull();
     expect(screen.getByRole("button", { name: /^refresh$/i })).toBeInTheDocument();
   });
 
@@ -2789,16 +2820,102 @@ describe("WuiView: Deploy", () => {
     vi.stubGlobal("fetch", vi.fn(withDeploy()));
     renderIn(PLAIN);
 
-    const deploy = await screen.findByRole("button", { name: /^deploy$/i });
-    fireEvent.click(deploy);
+    const deploy = await screen.findByRole("button", { name: /^publish wui$/i });
+    publishDirect(deploy);
 
     // The address, verbatim, in a field the publisher can select by hand —
     // it must match the route WuiPage answers (`/w/:slug/:itemId/*`).
     expect(await screen.findByRole("textbox", { name: /address/i })).toHaveValue(ADDRESS);
-    expect(screen.getByText(/deployed/i)).toBeInTheDocument();
+    expect(screen.getByText(/published/i)).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /open/i })).toHaveAttribute("href", ADDRESS);
     // Count the BUILD calls, not every fetch: the pane also asks who you are.
     expect(buildCalls()).toHaveLength(0);
+  });
+
+  it("publishing again starts from how it is published now, not from nothing", async () => {
+    vi.mocked(publishApi.current).mockRestore();
+    // Review round 1: the dialog read only the yaml, so a page published to
+    // everyone reopened as "only me" — one more Publish and nobody else could
+    // open it.
+    const row = {
+      ...DEPLOYED,
+      id: "r",
+      kind: "wui",
+      sharing: "per_person",
+      reach: "everyone",
+      subjects: [],
+      role: "participant",
+      published_by: "u",
+      published_at: 1,
+      icon: "",
+      color: "",
+      description: "",
+      files: 1,
+      bytes: 1,
+      based_on_title: "",
+      based_on_by: "",
+      cpu_cores: 2,
+      memory_bytes: null,
+    };
+    vi.stubGlobal("fetch", vi.fn(withDeploy(undefined, row)));
+    renderIn(PLAIN);
+
+    fireEvent.click(await screen.findByRole("button", { name: /^publish wui$/i }));
+    const dialog = await screen.findByTestId("publish-dialog");
+
+    expect(within(dialog).getByRole("radio", { name: /one copy per person/i })).toBeChecked();
+    expect(within(dialog).getByRole("radio", { name: /everyone signed in/i })).toBeChecked();
+    expect(within(dialog).getByRole("textbox", { name: /cpu cores/i })).toHaveValue("2");
+  });
+
+  it("does not publish from a guess when it cannot read how the page is published now", async () => {
+    vi.mocked(publishApi.current).mockRestore();
+    // Review round 2: a failed read fell back to the yaml, which is the very
+    // reset (reach back to "only me") round 1 was for.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: unknown, init?: RequestInit) =>
+        isPublicationRead(url, init)
+          ? new Response(JSON.stringify({ detail: "boom" }), { status: 500 })
+          : withDeploy()(url, init),
+      ),
+    );
+    renderIn(PLAIN);
+
+    fireEvent.click(await screen.findByRole("button", { name: /^publish wui$/i }));
+    const dialog = await screen.findByTestId("publish-dialog");
+
+    expect(within(dialog).getByRole("alert")).toHaveTextContent(/how this page is published now/i);
+    fireEvent.click(within(dialog).getByRole("radio", { name: /use my workspace directly/i }));
+    expect(within(dialog).getByRole("button", { name: /^publish$/i })).toBeDisabled();
+  });
+
+  it("published as copies, hands over the address that makes each opener's copy, and says so", async () => {
+    vi.mocked(publishApi.current).mockRestore();
+    // P4 of plan-wui-publish-and-agent-hub (C12, W2): nobody works in the
+    // source of a page that hands out copies, so the address it hands over is
+    // the preparing page's, and the sentence beside it is about copies — not
+    // the source's own reach, which is a direct page's.
+    vi.stubGlobal("fetch", vi.fn(withDeploy()));
+    renderIn(PLAIN);
+
+    fireEvent.click(await screen.findByRole("button", { name: /^publish wui$/i }));
+    const dialog = screen.getByTestId("publish-dialog");
+    fireEvent.click(within(dialog).getByRole("radio", { name: /one copy per person/i }));
+    fireEvent.click(within(dialog).getByRole("radio", { name: /everyone signed in/i }));
+    fireEvent.click(within(dialog).getByRole("button", { name: /^publish$/i }));
+
+    const opens = `${window.location.origin}/open/rca/item1/sales/page.ai.yaml`;
+    expect(await screen.findByRole("textbox", { name: /address/i })).toHaveValue(opens);
+    expect(screen.getByRole("link", { name: /open/i })).toHaveAttribute("href", opens);
+    expect(screen.getByText(translate("en", "publish.done.copies"))).toBeInTheDocument();
+    const [, init] = vi.mocked(fetch).mock.calls.find(([url, i]) => isDeploy(url, i))!;
+    expect(JSON.parse(String(init?.body))).toMatchObject({ sharing: "per_person", reach: "everyone" });
+    // What it is published as now is read again, so the next Publish WUI
+    // starts from it rather than from the state before this one.
+    await waitFor(() =>
+      expect(vi.mocked(fetch).mock.calls.filter(([url, i]) => isPublicationRead(url, i)).length).toBe(2),
+    );
   });
 
   /** A build whose end waits on a gate, so the moment BEFORE it finishes can
@@ -2833,22 +2950,22 @@ describe("WuiView: Deploy", () => {
     // Rebuild appearing is the sign the manifest has been read and the page
     // is known to have a build — the moment Deploy is allowed to be pressed.
     await screen.findByRole("button", { name: /^rebuild$/i });
-    fireEvent.click(screen.getByRole("button", { name: /^deploy$/i }));
+    publishDirect();
 
     // Mid-build: the build is running, the button says so and refuses a
     // second press, and there is NO address yet — handing it over now would
     // point at the old `dist/`.
     await screen.findByText(/> vite build/);
     expect(buildCalls()).toHaveLength(1);
-    const deploying = screen.getByRole("button", { name: /deploying/i });
+    const deploying = screen.getByRole("button", { name: /publishing/i });
     expect(deploying).toBeDisabled();
     expect(screen.queryByRole("textbox", { name: /address/i })).toBeNull();
 
     release();
 
     expect(await screen.findByRole("textbox", { name: /address/i })).toHaveValue(ADDRESS);
-    expect(screen.getByText(/deployed/i)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /^deploy$/i })).toBeEnabled();
+    expect(screen.getByText(/published/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^publish wui$/i })).toBeEnabled();
   });
 
   it("names a build whose output stopped without a verdict, so 'see the build output' points at something", async () => {
@@ -2867,9 +2984,9 @@ describe("WuiView: Deploy", () => {
     );
     renderIn(BUILT);
     await screen.findByRole("button", { name: /^rebuild$/i });
-    fireEvent.click(screen.getByRole("button", { name: /^deploy$/i }));
+    publishDirect();
 
-    expect(await screen.findByText(/deploy failed/i)).toHaveTextContent(/build output/i);
+    expect(await screen.findByText(/publish failed/i)).toHaveTextContent(/build output/i);
     expect(screen.getByText(/ended without a verdict/i)).toBeInTheDocument();
     expect(screen.queryByRole("textbox", { name: /address/i })).toBeNull();
   });
@@ -2884,18 +3001,18 @@ describe("WuiView: Deploy", () => {
     const { release } = serveHeldBuild(1);
     renderIn(BUILT);
     await screen.findByRole("button", { name: /^rebuild$/i });
-    fireEvent.click(screen.getByRole("button", { name: /^deploy$/i }));
+    publishDirect();
     await screen.findByText(/> vite build/);
 
     release();
 
-    expect(await screen.findByText(/deploy failed/i)).toBeInTheDocument();
-    expect(screen.queryByText(/^✓ deployed/i)).toBeNull();
+    expect(await screen.findByText(/publish failed/i)).toBeInTheDocument();
+    expect(screen.queryByText(/^✓ published/i)).toBeNull();
     expect(screen.queryByRole("textbox", { name: /address/i })).toBeNull();
     // The build's own verdict and output are still on screen.
     expect(screen.getByText(/Build failed \(exit 1\)/)).toBeInTheDocument();
     expect(screen.getByText(/> vite build/)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /^deploy$/i })).toBeEnabled();
+    expect(screen.getByRole("button", { name: /^publish wui$/i })).toBeEnabled();
   });
 
   it("copies the address, and says so when it could not", async () => {
@@ -2907,8 +3024,8 @@ describe("WuiView: Deploy", () => {
     // alone. Restored in `afterEach` below.
     Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
     renderIn(PLAIN);
-    const deploy = await screen.findByRole("button", { name: /^deploy$/i });
-    fireEvent.click(deploy);
+    const deploy = await screen.findByRole("button", { name: /^publish wui$/i });
+    publishDirect(deploy);
     await screen.findByRole("textbox", { name: /address/i });
 
     fireEvent.click(screen.getByRole("button", { name: /^copy$/i }));
@@ -2940,8 +3057,8 @@ describe("WuiView: Deploy", () => {
         </WorkspaceSlugProvider>
       </QueryWrap>,
     );
-    const deploy = await screen.findByRole("button", { name: /^deploy$/i });
-    fireEvent.click(deploy);
+    const deploy = await screen.findByRole("button", { name: /^publish wui$/i });
+    publishDirect(deploy);
 
     expect(await screen.findByRole("textbox", { name: /address/i })).toHaveValue(
       `${window.location.origin}/w/rca/item1/%E5%A0%B1%E5%91%8A%20v2/page.ai.yaml`,
@@ -2958,13 +3075,13 @@ describe("WuiView: Deploy", () => {
      */
     vi.stubGlobal("fetch", vi.fn(withDeploy()));
     renderIn({ "/sales/README.md": "nothing to open here" });
-    const deploy = await screen.findByRole("button", { name: /^deploy$/i });
-    fireEvent.click(deploy);
+    const deploy = await screen.findByRole("button", { name: /^publish wui$/i });
+    publishDirect(deploy);
 
-    const said = await screen.findByText(/deploy failed/i);
+    const said = await screen.findByText(/publish failed/i);
     expect(said).toHaveTextContent(/does not open/i);
     expect(said).toHaveTextContent(/index\.html/);
-    expect(screen.queryByText(/^✓ deployed/i)).toBeNull();
+    expect(screen.queryByText(/^✓ published/i)).toBeNull();
     expect(screen.queryByRole("textbox", { name: /address/i })).toBeNull();
   });
 
@@ -2991,12 +3108,12 @@ describe("WuiView: Deploy", () => {
       </QueryWrap>,
     );
     await screen.findByRole("button", { name: /^rebuild$/i });
-    fireEvent.click(screen.getByRole("button", { name: /^deploy$/i }));
+    publishDirect();
 
-    const said = await screen.findByText(/deploy failed/i);
+    const said = await screen.findByText(/publish failed/i);
     expect(buildCalls()).toHaveLength(1);
     expect(said).toHaveTextContent(/does not open/i);
-    expect(screen.queryByText(/^✓ deployed/i)).toBeNull();
+    expect(screen.queryByText(/^✓ published/i)).toBeNull();
     expect(screen.queryByRole("textbox", { name: /address/i })).toBeNull();
   });
 
@@ -3018,7 +3135,7 @@ describe("WuiView: Deploy", () => {
 
     // The agent scaffolds a build under the open pane.
     files["/sales/package.json"] = BUILT["/sales/package.json"];
-    fireEvent.click(screen.getByRole("button", { name: /^deploy$/i }));
+    publishDirect();
 
     await screen.findByText(/> vite build/);
     expect(buildCalls()).toHaveLength(1);
@@ -3043,7 +3160,7 @@ describe("WuiView: Deploy", () => {
     await waitFor(() => expect(frame()).toBeInTheDocument());
     expect(fs.readFile).toHaveBeenCalledWith("/sales/package.json");
 
-    fireEvent.click(screen.getByRole("button", { name: /^deploy$/i }));
+    publishDirect();
     expect(buildCalls()).toHaveLength(0); // still waiting on the manifest
     answer();
 
@@ -3075,20 +3192,20 @@ describe("WuiView: Deploy", () => {
         }),
       );
       renderIn(PLAIN);
-      fireEvent.click(await screen.findByRole("button", { name: /^deploy$/i }));
+      publishDirect(await screen.findByRole("button", { name: /^publish wui$/i }));
 
       await waitFor(() => expect(deployCalls()).toHaveLength(1));
       // The verify read has passed and the POST is in flight: no verdict yet.
-      expect(screen.queryByText(/✓ deployed/i)).toBeNull();
+      expect(screen.queryByText(/✓ published/i)).toBeNull();
       expect(screen.queryByRole("textbox", { name: /address/i })).toBeNull();
-      expect(screen.getByRole("button", { name: /deploying…/i })).toBeDisabled();
+      expect(screen.getByRole("button", { name: /publishing…/i })).toBeDisabled();
       const [url, init] = deployCalls()[0];
-      expect(String(url)).toBe("/api/a/rca/items/item1/wui/deploy");
-      expect(JSON.parse(String(init?.body))).toEqual({ path: "/sales/page.ai.yaml" });
+      expect(String(url)).toBe("/api/a/rca/items/item1/publish");
+      expect(JSON.parse(String(init?.body))).toMatchObject({ path: "/sales/page.ai.yaml", sharing: "direct" });
 
       release();
       expect(await screen.findByRole("textbox", { name: /address/i })).toHaveValue(ADDRESS);
-      expect(screen.getByText(/✓ deployed/i)).toBeInTheDocument();
+      expect(screen.getByText(/✓ published/i)).toBeInTheDocument();
     });
 
     it("is a failed Deploy when the page could not be listed, in the server's words", async () => {
@@ -3104,12 +3221,12 @@ describe("WuiView: Deploy", () => {
         ),
       );
       renderIn(PLAIN);
-      fireEvent.click(await screen.findByRole("button", { name: /^deploy$/i }));
+      publishDirect(await screen.findByRole("button", { name: /^publish wui$/i }));
 
-      const said = await screen.findByText(/deploy failed/i);
-      expect(said).toHaveTextContent(/could not be listed in WUI/i);
+      const said = await screen.findByText(/publish failed/i);
+      expect(said).toHaveTextContent(/could not be published/i);
       expect(said).toHaveTextContent(/not authorized to edit_content/);
-      expect(screen.queryByText(/✓ deployed/i)).toBeNull();
+      expect(screen.queryByText(/✓ published/i)).toBeNull();
       expect(screen.queryByRole("textbox", { name: /address/i })).toBeNull();
       // Positive control for the sentence: the same page with the POST
       // answering 200 does say Deployed (the test above).
@@ -3153,7 +3270,7 @@ describe("WuiView: Deploy", () => {
       it("a private workspace: only you, under the address, in place of the rule", async () => {
         vi.stubGlobal("fetch", vi.fn(withDeploy()));
         renderSeeded({ visibility: "private" });
-        fireEvent.click(await screen.findByRole("button", { name: /^deploy$/i }));
+        publishDirect(await screen.findByRole("button", { name: /^publish wui$/i }));
 
         await screen.findByRole("textbox", { name: /address/i });
         expect(screen.getByText("Only you can open this link right now.")).toBeInTheDocument();
@@ -3167,10 +3284,13 @@ describe("WuiView: Deploy", () => {
         for (const word of ["重新整理", "回報問題"]) {
           expect(screen.getByRole("button", { name: word })).toBeInTheDocument();
         }
-        fireEvent.click(await screen.findByRole("button", { name: "Deploy" }));
+        fireEvent.click(await screen.findByRole("button", { name: "發布 WUI" }));
+        const dialog = screen.getByTestId("publish-dialog");
+        fireEvent.click(within(dialog).getByRole("radio", { name: /直接用我的 workspace/ }));
+        fireEvent.click(within(dialog).getByRole("button", { name: "發布" }));
 
         expect(await screen.findByRole("textbox", { name: "頁面網址" })).toHaveValue(ADDRESS);
-        expect(screen.getByText("✓ 已 Deploy")).toBeInTheDocument();
+        expect(screen.getByText("✓ 已發布")).toBeInTheDocument();
         expect(screen.getByRole("button", { name: "複製" })).toBeInTheDocument();
         expect(screen.getByRole("link", { name: "開啟" })).toBeInTheDocument();
         expect(screen.getByText("目前只有你打得開這個連結。")).toBeInTheDocument();
@@ -3180,9 +3300,9 @@ describe("WuiView: Deploy", () => {
     it("never POSTs a page its own read could not open", async () => {
       vi.stubGlobal("fetch", vi.fn(withDeploy()));
       renderIn({ "/sales/README.md": "nothing to open here" });
-      fireEvent.click(await screen.findByRole("button", { name: /^deploy$/i }));
+      publishDirect(await screen.findByRole("button", { name: /^publish wui$/i }));
 
-      await screen.findByText(/deploy failed/i);
+      await screen.findByText(/publish failed/i);
       expect(deployCalls()).toHaveLength(0);
     });
 
@@ -3195,7 +3315,7 @@ describe("WuiView: Deploy", () => {
       const qc = makeTestQueryClient();
       qc.setQueryData(qk.wuiOverview, []); // a visit to /wui a moment ago
       render(pages(svc({ ...PLAIN }), qc)("/sales/page.ai.yaml"));
-      fireEvent.click(await screen.findByRole("button", { name: /^deploy$/i }));
+      publishDirect(await screen.findByRole("button", { name: /^publish wui$/i }));
 
       await screen.findByRole("textbox", { name: /address/i });
       expect(qc.getQueryState(qk.wuiOverview)?.isInvalidated).toBe(true);
@@ -3240,10 +3360,10 @@ describe("WuiView: Deploy", () => {
       await waitFor(() => expect(frame()?.srcdoc).toContain("v1"));
       // The build rewrites dist/ under the running Deploy.
       files["/sales/dist/index.html"] = "<html><body>v2</body></html>";
-      fireEvent.click(await screen.findByRole("button", { name: /^deploy$/i }));
+      publishDirect(await screen.findByRole("button", { name: /^publish wui$/i }));
 
-      const said = await screen.findByText(/deploy failed/i);
-      expect(said).toHaveTextContent(/could not be listed in WUI/i);
+      const said = await screen.findByText(/publish failed/i);
+      expect(said).toHaveTextContent(/could not be published/i);
       await waitFor(() => expect(frame()?.srcdoc).toContain("v2"));
       expect(screen.queryByRole("textbox", { name: /address/i })).toBeNull();
     });
@@ -3265,7 +3385,7 @@ describe("WuiView: Deploy", () => {
         ),
       );
       const view = renderIn(PLAIN);
-      fireEvent.click(await screen.findByRole("button", { name: /^deploy$/i }));
+      publishDirect(await screen.findByRole("button", { name: /^publish wui$/i }));
       await waitFor(() => expect(deployCalls()).toHaveLength(1));
 
       view.unmount();
@@ -3289,7 +3409,7 @@ describe("WuiView: Deploy", () => {
         ),
       );
       renderIn(PLAIN);
-      fireEvent.click(await screen.findByRole("button", { name: /^deploy$/i }));
+      publishDirect(await screen.findByRole("button", { name: /^publish wui$/i }));
       await waitFor(() => expect(deployCalls()).toHaveLength(1));
 
       fireEvent.click(screen.getByRole("button", { name: /^cancel$/i }));
@@ -3297,9 +3417,9 @@ describe("WuiView: Deploy", () => {
       const [, init] = deployCalls()[0];
       expect(init?.signal?.aborted).toBe(true);
       // Released: Deploy is pressable again, and no verdict of either kind.
-      expect(await screen.findByRole("button", { name: /^deploy$/i })).toBeEnabled();
-      expect(screen.queryByText(/✓ deployed/i)).toBeNull();
-      expect(screen.queryByText(/deploy failed/i)).toBeNull();
+      expect(await screen.findByRole("button", { name: /^publish wui$/i })).toBeEnabled();
+      expect(screen.queryByText(/✓ published/i)).toBeNull();
+      expect(screen.queryByText(/publish failed/i)).toBeNull();
     });
   });
 });

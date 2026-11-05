@@ -18,6 +18,9 @@
 import { useCallback, useState } from "react";
 
 const KEY = "rca.wuiFavourites";
+/** Agent Hub's stars (plan-wui-publish-and-agent-hub A7) — their own store, so
+ * starring an agent never shows up as a starred page and back. */
+export const AGENT_HUB_FAVOURITES = "rca.agentHubFavourites";
 
 type Store = Record<string, string[]>;
 
@@ -34,9 +37,9 @@ function userKey(userId: string): string {
   return encodeURIComponent(userId);
 }
 
-function read(): Store {
+function read(key: string): Store {
   try {
-    const raw = localStorage.getItem(KEY);
+    const raw = localStorage.getItem(key);
     const parsed: unknown = raw ? JSON.parse(raw) : null;
     return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as Store) : {};
   } catch {
@@ -44,27 +47,27 @@ function read(): Store {
   }
 }
 
-function write(s: Store): void {
+function write(s: Store, key: string): void {
   try {
-    localStorage.setItem(KEY, JSON.stringify(s));
+    localStorage.setItem(key, JSON.stringify(s));
   } catch {
     /* localStorage unavailable — the star just isn't sticky */
   }
 }
 
 /** This user's favourite keys, in the order they were starred. */
-export function readFavourites(userId: string): string[] {
-  const list = read()[userKey(userId)];
+export function readFavourites(userId: string, store: string = KEY): string[] {
+  const list = read(store)[userKey(userId)];
   return Array.isArray(list) ? list.filter((k): k is string => typeof k === "string") : [];
 }
 
 /** Star or unstar one page for this user; returns the new list. */
-export function toggleFavourite(userId: string, key: string): string[] {
-  const s = read();
-  const before = readFavourites(userId);
+export function toggleFavourite(userId: string, key: string, store: string = KEY): string[] {
+  const s = read(store);
+  const before = readFavourites(userId, store);
   const after = before.includes(key) ? before.filter((k) => k !== key) : [...before, key];
   s[userKey(userId)] = after;
-  write(s);
+  write(s, store);
   return after;
 }
 
@@ -72,22 +75,22 @@ export function toggleFavourite(userId: string, key: string): string[] {
  * The state is DERIVED from the user (re-read when the id changes), so a page
  * that learns who is signed in after its first render does not keep showing
  * nobody's stars — the same reason `wuiAutoBuild` derives from its scope. */
-export function useWuiFavourites(userId: string): {
+export function useWuiFavourites(userId: string, store: string = KEY): {
   has: (key: string) => boolean;
   toggle: (key: string) => void;
 } {
   const [state, setState] = useState<{ user: string; keys: string[] }>(() => ({
     user: userId,
-    keys: readFavourites(userId),
+    keys: readFavourites(userId, store),
   }));
   // Derived during render, not in an effect: an effect would let one render
   // show the previous user's stars.
-  const keys = state.user === userId ? state.keys : readFavourites(userId);
+  const keys = state.user === userId ? state.keys : readFavourites(userId, store);
   if (state.user !== userId) setState({ user: userId, keys });
   const has = useCallback((key: string) => keys.includes(key), [keys]);
   const toggle = useCallback(
-    (key: string) => setState({ user: userId, keys: toggleFavourite(userId, key) }),
-    [userId],
+    (key: string) => setState({ user: userId, keys: toggleFavourite(userId, key, store) }),
+    [userId, store],
   );
   return { has, toggle };
 }

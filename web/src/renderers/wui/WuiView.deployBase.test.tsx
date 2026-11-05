@@ -8,8 +8,8 @@
  * module-wide and every other Deploy test asserts the base-less form.
  */
 import "@testing-library/jest-dom/vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { fireEvent, render, screen, within } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { FileServiceProvider, type FileService } from "../../api/fileService";
 import { HttpError } from "../../api/http";
@@ -18,6 +18,26 @@ import { QueryWrap as AppProviders } from "../../test/queryWrapper";
 import { LocaleScope } from "../../lib/i18n";
 import type { ViewSpec } from "../entity/types";
 import { WuiView } from "./WuiView";
+import { publishApi } from "../../api/publish";
+
+// How the page is published now (`publishApi.current`) is a read of its own,
+// tested where it matters (WuiView.test: "publishing again starts from…", "does
+// not publish from a guess…"). Everywhere else in this file the page has never
+// been published — what the server answers for it (404 → null).
+beforeEach(() => {
+  vi.spyOn(publishApi, "current").mockResolvedValue(null);
+});
+
+/** Publish WUI, then the dialog's "use my workspace directly": what a Deploy
+ * did in one press before publishing asked how others use the page
+ * (`docs/plan-wui-publish-and-agent-hub.md` W2). The rest of the run — build,
+ * verify, record, verdict — is what these tests are about, and is unchanged. */
+function publishDirect(button?: HTMLElement): void {
+  fireEvent.click(button ?? screen.getByRole("button", { name: /^publish wui$/i }));
+  const dialog = screen.getByTestId("publish-dialog");
+  fireEvent.click(within(dialog).getByRole("radio", { name: /use my workspace directly/i }));
+  fireEvent.click(within(dialog).getByRole("button", { name: /^publish$/i }));
+}
 
 // These tests read the pane's English: its author strip and Deploy panel go
 // through `t()` (docs/plan-deploy-reach.md decision 7), and outside a provider
@@ -45,7 +65,7 @@ describe("WuiView: Deploy under a sub-path deploy", () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async (url: unknown, init?: RequestInit) =>
-        String(url).includes("/wui/deploy") && init?.method === "POST"
+        String(url).includes("/publish") && init?.method === "POST"
           ? new Response("{}", { status: 200, headers: { "content-type": "application/json" } })
           : undefined,
       ),
@@ -69,8 +89,8 @@ describe("WuiView: Deploy under a sub-path deploy", () => {
         </WorkspaceSlugProvider>
       </QueryWrap>,
     );
-    const deploy = await screen.findByRole("button", { name: /^deploy$/i });
-    fireEvent.click(deploy);
+    const deploy = await screen.findByRole("button", { name: /^publish wui$/i });
+    publishDirect(deploy);
 
     expect(await screen.findByRole("textbox", { name: /address/i })).toHaveValue(
       `${window.location.origin}/my-svc/rca/w/rca/item1/sales/page.ai.yaml`,

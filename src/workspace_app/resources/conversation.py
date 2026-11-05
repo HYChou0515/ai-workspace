@@ -323,6 +323,12 @@ class Conversation(Struct):
     drives its turns (manual §3). None = a *free chat* (human-driven). The item's
     default chat is always a free chat; workflow chats are never the default."""
 
+    agent_path: str = ""
+    """A TEST chat of an agent (`docs/plan-wui-publish-and-agent-hub.md` A6):
+    the ``agent.ai.yaml`` its turns run as, in the author's own workspace —
+    set when the agent panel opens it, "" for every other chat. A conversation
+    copy needs none: the copy itself says which agent it is."""
+
     created_ms: int | None = None
     """App-level birth stamp (epoch ms) — the stable creation order used to pick the
     default chat (the earliest-born free chat). Distinct from specstar's per-revision

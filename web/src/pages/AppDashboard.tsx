@@ -643,8 +643,12 @@ function ItemRow({
   onTogglePin: () => void;
   onOpen: () => void;
 }) {
+  const t = useT();
   const owner = useUser(item.owner);
   const summary = typeof item.description === "string" ? summarize(item.description) : "";
+  // A conversation copy of a published agent (A11): an ordinary item here,
+  // marked with the agent it came from.
+  const fromAgent = item.published_kind === "agent" ? String(item.published_title ?? "") : "";
   const topics = topicsOf(item);
   const statusVal = String(item[statusSpec?.name ?? "status"] ?? "");
   // Permission-disclosure: an item the user may see-exist (read_meta) but not enter
@@ -673,6 +677,11 @@ function ItemRow({
           <Link to={`/a/${slug}/${encodeURIComponent(item.resource_id)}`} onClick={onOpen} style={{ color: "var(--text-paper)", textDecoration: "none", fontWeight: 600, fontSize: pxToRem(14) }}>
             {item.title}
           </Link>
+        )}
+        {fromAgent && (
+          <div data-testid="item-from-agent" style={{ fontSize: pxToRem(12), color: "var(--text-paper-d)", marginTop: 2 }}>
+            {t("agentHub.fromAgent", { title: fromAgent })}
+          </div>
         )}
         {summary && (
           <div style={{ fontSize: pxToRem(12), color: "var(--text-paper-d)", marginTop: 2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{summary}</div>

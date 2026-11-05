@@ -957,6 +957,13 @@ def register_item_routes(
             # safety net if it ever bites.)
             if disk_ledger is not None:
                 await disk_ledger.forget(item_id)
+            # What this item published goes with it (C13,
+            # `plan-wui-publish-and-agent-hub.md`): the rows, their snapshots
+            # and their charge. Copies made from it are items of their own and
+            # stay their openers'.
+            from .publish import Publications, unpublish_item
+
+            await unpublish_item(Publications(spec), filestore, disk_ledger, item_id)
         except (HTTPException, SandboxBusy):
             raise  # already an honest answer (SandboxBusy → the global 503)
         except Exception as exc:  # noqa: BLE001 — a half-swept delete must say so

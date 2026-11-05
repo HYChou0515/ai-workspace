@@ -8,6 +8,7 @@
  */
 
 import { API_BASE, apiFetch, detailSentence, HttpError, httpErrorFrom } from "./http";
+import { openAddress, type Reach, type Sharing } from "./publish";
 import { encodePath } from "./refPath";
 
 /**
@@ -23,6 +24,17 @@ import { encodePath } from "./refPath";
  */
 export function wuiAddress(slug: string, itemId: string, path: string): string {
   return `${API_BASE}/w/${encodeURIComponent(slug)}/${encodeURIComponent(itemId)}/${encodePath(path)}`;
+}
+
+/**
+ * Where a listed page's link goes: a page that hands out copies opens through
+ * the "preparing" page, which makes (or finds) the viewer's own copy (C12); a
+ * page used directly is its own address. ONE answer for the card and the row.
+ */
+export function pageHref(page: { slug: string; item_id: string; path: string; sharing?: Sharing }): string {
+  return page.sharing && page.sharing !== "direct"
+    ? openAddress(page.slug, page.item_id, page.path)
+    : wuiAddress(page.slug, page.item_id, page.path);
 }
 
 export type DeployedWui = {
@@ -55,6 +67,18 @@ export type DeployedWui = {
   /** Whether THIS viewer may Remove it — the server's `edit_content` answer,
    * so the button is drawn only where a press would be accepted. */
   can_remove: boolean;
+  /** How copies are shared (`docs/plan-wui-publish-and-agent-hub.md` W2) —
+   * "direct" for a page used in its own workspace, and for one Deployed
+   * before Publish existed. Optional: an older server sends nothing. */
+  sharing?: Sharing;
+  /** Who may use a published page that hands out copies (C9); "" otherwise. */
+  reach?: Reach | "";
+  /** Usage (W4): opens and distinct people — never who. */
+  opens?: number;
+  people?: number;
+  /** A published row (taken down with `publishApi.unpublish`), not an old
+   * Deploy row (`wuiApi.remove`). */
+  published?: boolean;
   /** The page's numbers (docs/plan-wui-usage.md U5) — only for someone who may
    * change the item; `null` (or absent, from an older server) otherwise. */
   usage?: PageUsage | null;

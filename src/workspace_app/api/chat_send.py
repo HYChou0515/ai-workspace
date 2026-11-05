@@ -1556,6 +1556,8 @@ class ChatSendService:
                     caller_env=env,
                     # #613: this thread's Conversation id — the update_todos tool's row key.
                     conversation_id=rid,
+                    # A test chat runs as the agent its conversation names (A6).
+                    agent_path=conv.agent_path,
                 )
 
                 # #624: the turn had to leave part of the thread out. Say so — once, at
@@ -1672,7 +1674,11 @@ class ChatSendService:
                 # skill saved last turn shows up now). Injected like context_files —
                 # never persisted into history.
                 skills_block = await build_workspace_skills_block(
-                    self._files, investigation_id, self._locator.skill_prefs_of(investigation_id)
+                    self._files,
+                    investigation_id,
+                    self._locator.skill_prefs_of(investigation_id),
+                    # A test chat's agent folder: the same index its copy has.
+                    ctx.agent_folder,
                 )
                 # #380: skills the user picked to APPLY this turn — hard-preload each body
                 # so the model applies it without a read_skill round-trip. One-shot: built

@@ -2636,7 +2636,7 @@ async def read_skill_impl(ctx: RunContextWrapper[AgentToolContext], name: str) -
             files, inv, ctx.context.app_slug, ctx.context.template_profile, name
         )
         try:
-            body, origin = await read_workspace_skill(files, inv, name)
+            body, origin = await read_workspace_skill(files, inv, name, ctx.context.agent_folder)
         except SkillError as e:
             return f"error: {e}"
         hub = ctx.context.skill_hub
@@ -2698,7 +2698,7 @@ async def read_skill_impl(ctx: RunContextWrapper[AgentToolContext], name: str) -
     if slug is None or profile is None:
         # No package profile, but a workspace might still hold skills to list.
         ws = (
-            [m.name for m in await workspace_skill_metas(files, inv)]
+            [m.name for m in await workspace_skill_metas(files, inv, ctx.context.agent_folder)]
             if files is not None and inv is not None
             else []
         )
@@ -2711,7 +2711,9 @@ async def read_skill_impl(ctx: RunContextWrapper[AgentToolContext], name: str) -
         declared = _declared_shared_skills(slug)
         names = [m.name for m in merged_profile_skills(slug, profile, declared)]
         if files is not None and inv is not None:
-            names += [m.name for m in await workspace_skill_metas(files, inv)]
+            names += [
+                m.name for m in await workspace_skill_metas(files, inv, ctx.context.agent_folder)
+            ]
         avail = ", ".join(sorted(set(names))) or "(none)"
         return f"error: {e}. available skills: {avail}"
     record_skill(ctx.context, name, "profile")

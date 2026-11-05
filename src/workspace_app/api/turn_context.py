@@ -32,6 +32,7 @@ from typing import TYPE_CHECKING, Any
 import msgspec
 
 from ..agent.context import AgentToolContext, ReviewSkill
+from ..apps.agent_spec import agent_folder, parse_agent_spec
 from ..apps.catalog import finalize_tool_grants
 from ..apps.manifest import load_app_manifest
 from ..apps.skills import advertised_workspace_skills, effective_item_skills
@@ -45,6 +46,7 @@ from ..context_budget import (
 )
 from ..entity.brief import entity_schema_brief
 from ..entity.catalog import discover_catalog
+from ..filestore.protocol import FileNotFound
 from ..live_value import Live, now
 from ..sandbox.protocol import Sandbox, SandboxSpec
 from ..sync import SandboxSync
@@ -680,7 +682,11 @@ class TurnContextBuilder:
         return tuple(defs)
 
     async def _skills_reachable(
-        self, item_id: str, facts: TurnFacts, agent_config: AgentConfig | None
+        self,
+        item_id: str,
+        facts: TurnFacts,
+        agent_config: AgentConfig | None,
+        folder: str = "",
     ) -> bool | None:
         """Whether this turn can load ANY skill — what `read_skill` is granted on.
 
@@ -713,7 +719,7 @@ class TurnContextBuilder:
                 s.effective for s in effective_item_skills(slug, profile, prefs, [], tools=tools)
             ):
                 return True
-            return bool(await advertised_workspace_skills(self._files, item_id, prefs))
+            return bool(await advertised_workspace_skills(self._files, item_id, prefs, folder))
         except Exception:  # noqa: BLE001 — never break a turn over a skill index
             logger.warning(
                 "turn-context: skill reachability unknown for %s", item_id, exc_info=True
@@ -950,6 +956,7 @@ class TurnContextBuilder:
         apply_skills: list[str] | None = None,
         conversation_id: str | None = None,
         caller_env: PersonEnv | None = None,
+        agent_path: str = "",
     ) -> AgentToolContext:
         """The full RCA/workspace-chat turn context (`_send_into`).
 
@@ -967,7 +974,14 @@ class TurnContextBuilder:
         facts = self._locator.turn_facts(item_id)
         logger.debug("turn-context: build chat turn for %s", item_id)
         external = await self._external_tools(item_id)
-        agent_config = self._finalized(agent_config, external)
+        # ``agent_path`` is a test chat's (A6): the conversation, not the item,
+        # names the agent. A copy's own file comes first — a copy IS its agent.
+        tested = "" if facts.agent_path else agent_path
+        if tested:
+            facts = facts._replace(agent_path=tested)
+        agent_config, agent_tools, applied = await self._as_agent(item_id, facts, agent_config)
+        agent_config = self._finalized(agent_config, external, agent_tools=agent_tools)
+        folder = agent_folder(tested) if tested and applied else ""
         return AgentToolContext(
             **self._common(
                 item_id,
@@ -976,11 +990,12 @@ class TurnContextBuilder:
                 run_subagent=run_subagent,
                 facts=facts,
                 subagent_defs=await self._subagent_defs(item_id, agent_config, facts),
-                skills_reachable=await self._skills_reachable(item_id, facts, agent_config),
+                skills_reachable=await self._skills_reachable(item_id, facts, agent_config, folder),
                 history_messages=history_messages,
                 external=external,
                 caller_env=caller_env,
             ),
+            agent_folder=folder,
             # #pm: live record-type schema so the agent creates valid issues /
             # milestones up front (field names, status vocab, timeline date-range).
             entity_schema_note=await self._entity_schema_note(item_id),
@@ -1083,7 +1098,11 @@ class TurnContextBuilder:
         facts = self._locator.turn_facts(item_id)
         logger.debug("turn-context: build workflow turn for %s", item_id)
         external = await self._external_tools(item_id)
-        agent_config = self._finalized(agent_config, external, tool_subset)
+        # A step in an agent's copy holds no tool the agent left out — the
+        # agent bounds its copy, not only its chat. Its instructions are the
+        # chat's: a step has its own prompt.
+        _, agent_tools, _ = await self._as_agent(item_id, facts, agent_config)
+        agent_config = self._finalized(agent_config, external, tool_subset, agent_tools=agent_tools)
         return AgentToolContext(
             **self._common(
                 item_id,
@@ -1108,11 +1127,65 @@ class TurnContextBuilder:
             acting_for=acting_for,
         )
 
+    async def agent_tools_of(
+        self, item_id: str, agent_config: AgentConfig | None, agent_path: str
+    ) -> tuple[list[str], list[str]]:
+        """What a conversation with the agent at ``agent_path`` would hold in
+        this item — and which names its ``tools:`` lists that the item does not
+        hold, so they are not there (A4). Asked of the SAME two steps a chat
+        turn takes (`_as_agent`, `_finalized`), so the agent panel's summary
+        cannot promise a tool the conversation will not have."""
+        facts = self._locator.turn_facts(item_id)._replace(agent_path=agent_path)
+        external = await self._external_tools(item_id)
+        cfg, agent_tools, _ = await self._as_agent(item_id, facts, agent_config)
+        before = self._finalized(cfg, external)
+        after = self._finalized(cfg, external, agent_tools=agent_tools)
+        held = list(after.allowed_tools or []) if after is not None else []
+        everything = list(before.allowed_tools or []) if before is not None else []
+        missing = [t for t in agent_tools or [] if not narrow_entries([t], everything)]
+        return held, missing
+
+    async def _as_agent(
+        self, item_id: str, facts: TurnFacts, agent_config: AgentConfig | None
+    ) -> tuple[AgentConfig | None, list[str] | None, bool]:
+        """A conversation copy of a published agent runs as that agent
+        (`docs/plan-wui-publish-and-agent-hub.md` A4/A5): its ``instructions:``
+        join the App's system prompt, and its ``tools:`` come back to be
+        intersected with what the item holds (`_finalized`) — a narrowing, so
+        a name the App does not grant adds nothing.
+
+        Read from the copy's own file each turn, the way the skill index is:
+        the copy is the person's, and what it says now is what it runs as. A
+        file that no longer defines an agent leaves the turn the App's — said
+        in the log, never a broken turn."""
+        if not facts.agent_path or agent_config is None:
+            return agent_config, None, False
+        try:
+            raw = await self._files.read(item_id, facts.agent_path)
+        except FileNotFound:  # the person deleted it: their copy, their App turn
+            logger.warning(
+                "agent copy %s: %s unreadable; runs as the App", item_id, facts.agent_path
+            )
+            return agent_config, None, False
+        spec, problems = parse_agent_spec(raw.decode("utf-8", errors="replace"))
+        if spec is None:
+            logger.warning(
+                "agent copy %s: %s — runs as the App: %s", item_id, facts.agent_path, problems
+            )
+            return agent_config, None, False
+        heading = f"## You are the agent “{spec.title}”"
+        about = f"\n\n{spec.description.strip()}" if spec.description.strip() else ""
+        block = f"{heading}{about}\n\n{spec.instructions.strip()}"
+        prompt = f"{agent_config.system_prompt}\n\n{block}" if agent_config.system_prompt else block
+        return msgspec.structs.replace(agent_config, system_prompt=prompt), spec.tools, True
+
     def _finalized(
         self,
         agent_config: AgentConfig | None,
         external: ExternalTools,
         tool_subset: list[str] | None = None,
+        *,
+        agent_tools: list[str] | None = None,
     ) -> AgentConfig | None:
         """The turn's config with its tool grant DECIDED (plan-tools-picker-groups
         part 2, P14 revision): this is the door where a resolved config first
@@ -1135,6 +1208,18 @@ class TurnContextBuilder:
         if agent_config is None:
             return None
         cfg = finalize_tool_grants(agent_config, [*(self._packages or []), *external.packages])
+        if agent_tools is not None:
+            # An agent's `tools:` (A4) — the same intersection a node's list is,
+            # applied first so a node inside an agent's copy narrows further.
+            # What the agent left out is also not "available on request" (#480):
+            # switching it on in the picker would not reach this turn, so the
+            # model must not be told to ask for it.
+            held = cfg.allowed_tools or []
+            cfg = msgspec.structs.replace(
+                cfg,
+                allowed_tools=narrow_entries(agent_tools, held),
+                disabled_tools=[t for t in cfg.disabled_tools if narrow_entries([t], agent_tools)],
+            )
         if tool_subset is not None:
             held = cfg.allowed_tools or []
             # Said, not swallowed: a node whose `tools:` names something this

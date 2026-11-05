@@ -32,6 +32,7 @@ import { useWorkspaceSlug } from "../../hooks/useWorkspaceSlug";
 import { TextRenderer } from "../TextRenderer";
 import { wuiFolder } from "../wui/paths";
 import { WuiView } from "../wui/WuiView";
+import { AgentYamlPanel } from "../agent/AgentYamlPanel";
 import { YamlTree } from "../YamlTree";
 import { EntityRecordModal } from "./EntityRecordModal";
 import { EntityViewBody, HealthView, parseViewSpec } from "./EntityViews";
@@ -165,6 +166,8 @@ export function AiYamlRenderer({ path }: { path: string }) {
   // the file's own path (which is how the folder is found) and the whole pane
   // (the entity panel's title bar and empty-state chrome mean nothing here).
   if (spec.view === VIEW_KIND.wui) return <WuiView path={path} spec={spec} />;
+  // An agent: its panel — what others will get, Publish agent, a test chat (A6).
+  if (spec.view === VIEW_KIND.agent) return <AgentYamlPanel path={path} text={entry.text} />;
 
   if (spec.view === VIEW_KIND.health) {
     // Click-to-fix: resolve the finding's type → `records_path` from the catalog

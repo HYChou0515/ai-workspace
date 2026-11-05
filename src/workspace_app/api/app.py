@@ -143,6 +143,7 @@ from .model_settings_routes import register_model_settings_routes
 from .notification_delivery import INotificationChannel
 from .notifications import notify, register_notification_routes
 from .private_env import PrivateEnvStore, register_private_env, register_private_env_routes
+from .publish import Publications, register_publications, register_publish_routes
 from .quota_routes import may_close_environment, register_quota_routes
 from .refresh_claims import RefreshClaims, register_refresh_claims
 from .registry import InvestigationRegistry
@@ -950,6 +951,11 @@ def create_app(
 
     disk_ledger = DiskLedger(spec)
     user_limits = UserLimits(spec, per_user_resources or PerUserResources())
+
+    async def _disk_limit_of(owner: str) -> int:
+        """A person's disk cap in bytes (0 = none) — what `_person_disk_gate`
+        holds a write to, for a copy that has no item yet (`publish_copy`)."""
+        return parse_size((await user_limits.for_user(owner)).disk)
 
     async def _person_disk_gate(
         item_id: str, new_size: int, growth: int, *, record: bool = True
@@ -1963,6 +1969,7 @@ def create_app(
     # everything above, and both reasons apply: Deploy on a bare test client
     # writes one, and the blob-gc worker must hold every model the API does.
     register_deployed_wui(spec)
+    register_publications(spec)
     register_wui_pass(spec)
     # The PRIVATE env layer (`docs/plan-wui-viewer-login.md`): no auto-CRUD —
     # its only door is the caller-scoped routes below.
@@ -2519,6 +2526,9 @@ def create_app(
     # ScriptedAgentRunner (tests, replay) has nothing to learn from.
     turn_ctx.learned_limit_fn = getattr(runner, "learned_limit", None)
     turn_ctx.endpoint_limits_fn = getattr(runner, "endpoint_limits", None)
+    # What every App turn's context is built by — beside `app_catalog`, what
+    # its config resolves through.
+    app.state.turn_ctx = turn_ctx
 
     # ── replay diagnostics (#51 P4) ──────────────────────────────────
     # Read-only loaders: replay must never create/mutate anything, so
@@ -2770,6 +2780,7 @@ def create_app(
         context_usage_for=turn_ctx.usage_of,
         compact_into=chat_send_svc.compact,
         goal_max_rounds=goal_max_rounds,
+        files=files,
         goal_checker_enabled=goal_checker_llm is not None,
         goal_offhours_max_rounds=offhours.max_rounds,
         goal_offhours_enabled=OffHoursCalendar(
@@ -3020,7 +3031,47 @@ def create_app(
         files=files,
         pages=DeployedPages(spec),
         get_user_id=get_user_id,
+        spec=spec,
+        superusers=superusers,
         usage=wui_usage,
+    )
+    register_publish_routes(
+        api,
+        spec=spec,
+        locator=locator,
+        files=files,
+        filestore=filestore,
+        publications=Publications(spec),
+        ledger=disk_ledger,
+        get_user_id=get_user_id,
+        superusers=superusers,
+        # C8: a copy and a snapshot are held to the same per-person cap as any
+        # write — asked before they are made.
+        limit_of=_disk_limit_of,
+    )
+    # The agent panel's summary (plan-wui-publish-and-agent-hub A6).
+    from .agent_routes import register_agent_routes
+
+    register_agent_routes(
+        api,
+        spec=spec,
+        locator=locator,
+        files=files,
+        publications=Publications(spec),
+        turn_ctx=turn_ctx,
+        app_catalog=app_catalog,
+    )
+    # Agent Hub (plan-wui-publish-and-agent-hub A1/A7/A8).
+    from .agent_hub_routes import register_agent_hub_routes
+
+    register_agent_hub_routes(
+        api,
+        spec=spec,
+        locator=locator,
+        publications=Publications(spec),
+        ledger=disk_ledger,
+        get_user_id=get_user_id,
+        superusers=superusers,
     )
 
     if spa_dist is None:
