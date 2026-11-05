@@ -87,11 +87,38 @@ function draw(tools: ToolUsageReport = TOOLS, skills: ToolUsageReport = SKILLS) 
   } satisfies ToolUsageClient;
   renderWithQuery(
     <MemoryRouter>
-      <ToolUsagePanel client={client} />
+      <ToolUsagePanel client={client} wuiClient={WUI} />
     </MemoryRouter>,
   );
   return client;
 }
+
+/** The deployed pages' part (docs/plan-wui-usage.md U8): one page. */
+const WUI = {
+  report: vi.fn(async (days: number) => ({
+    days,
+    pages: [
+      {
+        item_id: "rca-1",
+        page: "/board/page.ai.yaml",
+        title: "Line 3",
+        slug: "rca",
+        person_days: 7,
+        workflow: 1,
+        workflow_ms: 1000,
+        tool: 2,
+        tool_ms: 2000,
+        agent: 0,
+        agent_ms: 0,
+        uses: 3,
+        uses_ms: 3000,
+      },
+    ],
+  })),
+  detail: vi.fn(async (item_id: string, page: string, days: number) => ({ item_id, page, days, people: [] })),
+  rawUrl: (days: number) => `/wui-raw?days=${days}`,
+};
+const wuiPart = () => screen.getByRole("region", { name: "WUI 頁面" });
 
 const toolsPart = () => screen.getByRole("region", { name: "工具" });
 const skillsPart = () => screen.getByRole("region", { name: "Skill" });
@@ -1078,5 +1105,32 @@ describe("switching granularity never shows the other granularity's rows (review
     await waitFor(() => expect(within(toolsPart()).queryByRole("button", { name: "spc" })).toBeNull());
     release(BY_PACKAGE);
     expect(await within(toolsPart()).findByRole("button", { name: "rca-tools" })).toBeInTheDocument();
+  });
+});
+
+describe("the deployed pages' part (docs/plan-wui-usage.md U8)", () => {
+  it("is the page's third part, after tools and skills", async () => {
+    draw();
+
+    const row = await within(wuiPart()).findByTestId("wui-usage-row");
+    expect(row).toHaveTextContent("/board/page.ai.yaml");
+    const headings = [...document.querySelectorAll("h2.tool-usage-part-title")].map((h) => h.textContent);
+    expect(headings).toEqual(["工具", "Skill", "WUI 頁面"]);
+  });
+
+  it("shares the page's one side panel: opening a page closes a tool's, and back", async () => {
+    draw();
+    fireEvent.click(await within(toolsPart()).findByRole("button", { name: "exec" }));
+    await within(toolsPart()).findByTestId("tool-usage-detail");
+
+    fireEvent.click(await within(wuiPart()).findByRole("button", { name: "/board/page.ai.yaml" }));
+
+    expect(await within(wuiPart()).findByTestId("wui-usage-detail")).toBeInTheDocument();
+    expect(within(toolsPart()).queryByTestId("tool-usage-detail")).toBeNull();
+
+    fireEvent.click(within(toolsPart()).getByRole("button", { name: "exec" }));
+
+    expect(await within(toolsPart()).findByTestId("tool-usage-detail")).toBeInTheDocument();
+    expect(within(wuiPart()).queryByTestId("wui-usage-detail")).toBeNull();
   });
 });

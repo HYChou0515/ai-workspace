@@ -548,6 +548,7 @@ def create_app(
     # (also when it stops). None ⇒ nothing counted here is written.
     tool_usage: ToolUsageRecorder | None = None,
     tool_usage_flush_interval: timedelta = timedelta(minutes=5),
+    wui_usage_flush_interval: timedelta = timedelta(minutes=5),
     # docs/plan-capacity-usage.md: where this process counts its requests,
     # turns and jobs for the capacity dashboard. None ⇒ nothing is counted.
     usage_recorder: UsageRecorder | None = None,
@@ -1532,6 +1533,7 @@ def create_app(
         mirror_interval=mirror_interval,
         skill_hub_flush_interval=skill_hub_flush_interval,
         tool_usage_flush_interval=tool_usage_flush_interval,
+        wui_usage_flush_interval=wui_usage_flush_interval,
         code_sync_check_interval=code_sync_check_interval,
         code_daily_sync=code_daily_sync,
         wiki_reflect_daily=wiki_reflect_daily,
@@ -2165,6 +2167,13 @@ def create_app(
     app.state.tool_usage_store = (
         ToolUsageStore(spec, tool_usage, pod=writer_name()) if tool_usage is not None else None
     )
+    # docs/plan-wui-usage.md: this pod's deployed-page opens and uses, flushed
+    # by the lifespan. Always on: only the API's page routes count, in memory.
+    from .wui_usage import WuiUsageRecorder, WuiUsageStore, register_wui_usage
+
+    register_wui_usage(spec)
+    wui_usage = WuiUsageStore(spec, WuiUsageRecorder())
+    app.state.wui_usage_store = wui_usage
     # KB chat runs through a wiki-aware runner that routes each turn across
     # chunk-RAG / wiki / both (#50 P5). It's a pure pass-through to `runner`
     # unless the query opts into the wiki AND a collection has use_wiki, so the
@@ -2354,6 +2363,12 @@ def create_app(
     from .tool_usage_routes import register_tool_usage_routes
 
     register_tool_usage_routes(
+        api, spec=spec, locator=locator, get_user_id=get_user_id, superusers=superusers
+    )
+    # docs/plan-wui-usage.md U8: the deployed pages' report (superusers only).
+    from .wui_usage_routes import register_wui_usage_routes
+
+    register_wui_usage_routes(
         api, spec=spec, locator=locator, get_user_id=get_user_id, superusers=superusers
     )
     # docs/plan-capacity-usage.md §11: the capacity dashboard (superusers only).
@@ -2661,6 +2676,12 @@ def create_app(
     # file tree shows agent-created records. All three write surfaces share it.
     entity_write_sink = build_entity_write_sink(event_dispatcher.dispatch, turn_engine)
     workflow_orchestrator.entity_write_sink = entity_write_sink
+    # docs/plan-wui-usage.md U11: a run a deployed page started is counted
+    # when it ends, whichever way it ends.
+    from .wui_usage import WuiUsage
+
+    page_usage = WuiUsage(wui_usage, spec=spec, is_deployed=DeployedPages(spec).has)
+    workflow_orchestrator.on_settled = page_usage.settled
     # #429 P10: agent-tool entity writes (chat + workflow agent nodes) also fire event
     # triggers — same dispatcher, so an AI edit is indistinguishable from a UI/workflow
     # write. Set post-construction (the builder predates the dispatcher, like the
@@ -2972,6 +2993,7 @@ def create_app(
         # delegates to, run as a workflow node's turn narrowed as `run_agent` is.
         subagents_for=turn_ctx.subagents_for,
         drive_agent=workflow_executor.drive_agent,
+        usage=page_usage,
     )
 
     register_capability_routes(
@@ -3011,6 +3033,7 @@ def create_app(
         get_user_id=get_user_id,
         spec=spec,
         superusers=superusers,
+        usage=wui_usage,
     )
     register_publish_routes(
         api,

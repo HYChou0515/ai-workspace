@@ -924,6 +924,64 @@ describe("WuiOverviewPage — who each page opens for (docs/plan-deploy-reach.md
   });
 });
 
+describe("a page's numbers, for its owner (docs/plan-wui-usage.md U5)", () => {
+  const USAGE = {
+    opened_total: 120,
+    opened_7d: 18,
+    used_total: 45,
+    used_ms_total: 11_520_000, // 3.2 hours
+    used_7d: 6,
+    used_ms_7d: 1_440_000, // 24 minutes
+  };
+
+  async function usageOf(title: string): Promise<HTMLElement | null> {
+    const link = await screen.findByRole("link", { name: title });
+    const li = link.closest("li") as HTMLElement;
+    return li.querySelector<HTMLElement>('[data-testid="wui-usage"]');
+  }
+
+  it("says opens in person-days and uses with their time, in total and over seven days — on a card", async () => {
+    writeWuiView("cards");
+    render(<WuiOverviewPage client={client([row({ title: "Mine", usage: USAGE })])} />, { wrapper: Wrap });
+
+    const usage = await usageOf("Mine");
+
+    expect(usage).not.toBeNull();
+    // The words the user settled on, the way GitHub's traffic page names a
+    // day's distinct people ("visitors") and nothing more: a familiar noun and
+    // the number — no 「總共」 on the plain number, no 頓號, the time in
+    // brackets after the count it belongs to.
+    const lines = [...(usage?.children ?? [])].map((el) => el.textContent?.replace(/\s+/g, " ").trim());
+    expect(lines).toEqual(["訪客 120 · 近 7 天 18", "AI 代勞 45 次（3.2 小時） · 近 7 天 6 次（24 分）"]);
+  });
+
+  it("says the same in the table", async () => {
+    writeWuiView("table");
+    render(<WuiOverviewPage client={client([row({ title: "Mine", usage: USAGE })])} />, { wrapper: Wrap });
+
+    expect((await usageOf("Mine"))?.textContent).toContain("訪客 120");
+  });
+
+  it("says nothing on a page whose numbers are not the viewer's", async () => {
+    writeWuiView("cards");
+    render(<WuiOverviewPage client={client([row({ title: "Theirs", can_remove: false, usage: null })])} />, {
+      wrapper: Wrap,
+    });
+
+    expect(await usageOf("Theirs")).toBeNull();
+  });
+
+  it("names a short time in seconds", async () => {
+    writeWuiView("cards");
+    render(
+      <WuiOverviewPage client={client([row({ title: "Mine", usage: { ...USAGE, used_ms_7d: 4_000 } })])} />,
+      { wrapper: Wrap },
+    );
+
+    expect((await usageOf("Mine"))?.textContent).toContain(translate("zh-TW", "wui.usage.seconds", { n: 4 }));
+  });
+});
+
 /** Reads the trail the page published — the global bar's view of it. */
 function TrailProbe() {
   const trail = useBreadcrumbTrail();
@@ -980,6 +1038,31 @@ describe("published pages (P4 of plan-wui-publish-and-agent-hub)", () => {
     const rca = await screen.findByRole("region", { name: "根因分析" });
 
     expect(within(rca).getByTestId("wui-usage")).toHaveTextContent("7 次打開 · 3 人");
+  });
+
+  it("a page that hands out copies says its opens once — not also the owner's numbers of its source", async () => {
+    // Its people use their own copies, so the source page's own numbers
+    // (docs/plan-wui-usage.md U5) would sit near 0 beside the real count.
+    for (const view of ["cards", "table"] as const) {
+      writeWuiView(view);
+      const { unmount } = render(
+        <WuiOverviewPage
+          client={client([
+            {
+              ...copying,
+              usage: { opened_total: 0, opened_7d: 0, used_total: 0, used_ms_total: 0, used_7d: 0, used_ms_7d: 0 },
+            },
+          ])}
+        />,
+        { wrapper: Wrap },
+      );
+      const rca = await screen.findByRole("region", { name: "根因分析" });
+
+      const usage = within(rca).getAllByTestId("wui-usage");
+      expect(usage).toHaveLength(1);
+      expect(usage[0]).toHaveTextContent("7 次打開 · 3 人");
+      unmount();
+    }
   });
 
   it("on a card, puts the usage in the footer, where the one-line detail cannot cut it off", async () => {

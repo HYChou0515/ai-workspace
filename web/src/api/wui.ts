@@ -79,6 +79,20 @@ export type DeployedWui = {
   /** A published row (taken down with `publishApi.unpublish`), not an old
    * Deploy row (`wuiApi.remove`). */
   published?: boolean;
+  /** The page's numbers (docs/plan-wui-usage.md U5) — only for someone who may
+   * change the item; `null` (or absent, from an older server) otherwise. */
+  usage?: PageUsage | null;
+};
+
+/** Opens in person-days, and uses with their milliseconds — in total and
+ * over the last seven days (docs/plan-wui-usage.md U2/U3). */
+export type PageUsage = {
+  opened_total: number;
+  opened_7d: number;
+  used_total: number;
+  used_ms_total: number;
+  used_7d: number;
+  used_ms_7d: number;
 };
 
 export type WuiApi = {

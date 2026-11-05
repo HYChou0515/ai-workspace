@@ -32,6 +32,7 @@ import { UserChip } from "../components/UserChip";
 import { useBreadcrumbs } from "../hooks/breadcrumbs";
 import { useCurrentUserState } from "../hooks/useCurrentUser";
 import { useUser } from "../hooks/useUsers";
+import { useDuration } from "../lib/duration";
 import { type MsgKey, useT } from "../lib/i18n";
 import { pageReach } from "../lib/pageReach";
 import { useApps } from "../hooks/useResources";
@@ -582,6 +583,36 @@ function useReachNote(
   return me.id === (page.item_created_by ?? page.item_owner) ? "wui.reach.you" : "wui.reach.owner";
 }
 
+/** A page's numbers for its owner (docs/plan-wui-usage.md U2/U3/U5): opens in
+ * person-days and uses with their time, in total and over seven days. Its own
+ * two muted lines, apart from the page's name and link — NN/g *Cards*: a card
+ * is "a summary and link to additional details", secondary content set apart.
+ * Plain numbers, no colour for magnitude (NN/g, *Dashboards*). Nothing for a
+ * page whose numbers are not the viewer's. */
+function PageUsageLines({ page }: { page: DeployedWui }) {
+  const t = useT();
+  const duration = useDuration();
+  const u = page.usage;
+  // A page that hands out copies says its opens (`Usage`) instead: its people
+  // use their own copies, so its source's numbers would sit near 0 beside them.
+  if (!u || counted(page)) return null;
+  const uses = (n: number, ms: number) => t("wui.usage.uses", { n, time: duration(ms) });
+  return (
+    <span className="wui-usage" data-testid="wui-usage" title={t("wui.usage.tip")}>
+      <span>
+        <b>{t("wui.usage.opened")}</b> {u.opened_total}
+        {" · "}
+        {t("wui.usage.week", { value: u.opened_7d })}
+      </span>
+      <span>
+        <b>{t("wui.usage.used")}</b> {uses(u.used_total, u.used_ms_total)}
+        {" · "}
+        {t("wui.usage.week", { value: uses(u.used_7d, u.used_ms_7d) })}
+      </span>
+    </span>
+  );
+}
+
 /** One Deployed page as a TABLE row: mark · title · (App) · detail · star ·
  * 下架. */
 function PageRow({ page, client, starred, starReady, onStar, showApp }: PageProps) {
@@ -608,6 +639,7 @@ function PageRow({ page, client, starred, starReady, onStar, showApp }: PageProp
       <PageDetail page={page} withOwner withApp={showApp} />
       <StarButton page={page} starred={starred} starReady={starReady} onStar={onStar} />
       <UnlistButton page={page} remove={remove} onRemove={ask} />
+      <PageUsageLines page={page} />
       {remove.isError ? (
         <span className="error" role="alert">
           {t("wui.remove.failed")}
@@ -664,6 +696,7 @@ function PageCard({ page, client, starred, starReady, onStar, showApp }: PagePro
         </div>
       </div>
       <StarButton page={page} starred={starred} starReady={starReady} onStar={onStar} className="btn star" />
+      <PageUsageLines page={page} />
       {/* The footer: on the left the item's OWNER (the author: 「Owner 也要在
           上面」) and — only where the section heading does not say it — the
           App's tag; on the right 下架 for someone who may. */}

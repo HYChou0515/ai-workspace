@@ -616,6 +616,33 @@
   grid-column: 1 / -1;
 }
 
+/* A page's numbers for its owner (docs/plan-wui-usage.md): two muted lines,
+   apart from the name and the link — under the row's columns in the table,
+   between the body and the footer on a card. */
+.page .wui-usage {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  font-size: var(--text-small);
+  color: var(--text-paper-d);
+}
+
+.page .wui-usage b {
+  font-weight: 600;
+  color: var(--text-paper);
+}
+
+.page .wui-list .wui-usage {
+  grid-column: 2 / -1;
+}
+
+.page .wui-card > .wui-usage {
+  position: relative;
+  z-index: 1;
+  padding: 0 var(--space-16) var(--space-8);
+}
+
 /* ── narrow viewports ────────────────────────────────────────────────────
    The columns above reserve about 400px before the title gets any: 8px of dot,
    four 12px gaps, a 10rem App track, the spec, the button and the card's own

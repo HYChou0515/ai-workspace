@@ -104,6 +104,7 @@ def build_lifespan(
     mirror_interval: timedelta,
     skill_hub_flush_interval: timedelta = timedelta(hours=2),
     tool_usage_flush_interval: timedelta = timedelta(minutes=5),
+    wui_usage_flush_interval: timedelta = timedelta(minutes=5),
     code_sync_check_interval: timedelta | None,
     code_daily_sync: str | None = None,
     wiki_reflect_daily: str | None = None,
@@ -387,6 +388,24 @@ def build_lifespan(
                     await asyncio.to_thread(store.flush)
                 except Exception:  # noqa: BLE001 — kept for the next flush
                     logger.exception("tool usage: flush failed; kept for the next one")
+        except asyncio.CancelledError:
+            return
+
+    async def wui_usage_flusher(app: FastAPI) -> None:
+        """Pod-local: adds what THIS pod counted of deployed pages' opens and
+        uses into each page's day row and total (docs/plan-wui-usage.md U9). A
+        failed flush keeps the counts for the next one, so it is logged, not
+        fatal."""
+        store = getattr(app.state, "wui_usage_store", None)
+        if store is None:
+            return
+        try:
+            while True:
+                await asyncio.sleep(wui_usage_flush_interval.total_seconds())
+                try:
+                    await asyncio.to_thread(store.flush)
+                except Exception:  # noqa: BLE001 — kept for the next flush
+                    logger.exception("wui usage: flush failed; kept for the next one")
         except asyncio.CancelledError:
             return
 
@@ -724,6 +743,7 @@ def build_lifespan(
         bg.append(asyncio.create_task(index_sweeper(app)))  # #227 fan-out stuck-run recovery
         bg.append(asyncio.create_task(skill_hub_usage_flusher(app)))  # skill hub counts (U4)
         bg.append(asyncio.create_task(tool_usage_flusher(app)))  # tool-call counts
+        bg.append(asyncio.create_task(wui_usage_flusher(app)))  # deployed-page counts
         bg.append(asyncio.create_task(usage_flusher(app)))  # capacity usage records
         bg.append(asyncio.create_task(sandbox_usage_sampler(app)))  # local cgroups
         bg.append(asyncio.create_task(cluster_sweeper(app)))  # #506 P8 review-inbox cluster fold
@@ -875,6 +895,17 @@ def build_lifespan(
                     logger.warning("lifespan: tool usage flush ran out of shutdown budget")
                 except Exception:  # noqa: BLE001 — one failing step must not stop the rest
                     logger.exception("lifespan: tool usage flush failed")
+            # And this pod's deployed-page counts (docs/plan-wui-usage.md U9).
+            if (store := getattr(app.state, "wui_usage_store", None)) is not None:
+                try:
+                    await asyncio.wait_for(
+                        asyncio.to_thread(store.flush),
+                        timeout=max(deadline - time.monotonic(), 1.0),
+                    )
+                except TimeoutError:
+                    logger.warning("lifespan: wui usage flush ran out of shutdown budget")
+                except Exception:  # noqa: BLE001 — one failing step must not stop the rest
+                    logger.exception("lifespan: wui usage flush failed")
             # And this pod's usage counts, the window in progress included
             # (docs/plan-capacity-usage.md §6.7).
             if (recorder := getattr(app.state, "usage_recorder", None)) is not None:

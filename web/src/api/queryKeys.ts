@@ -150,6 +150,10 @@ export const qk = {
     ["toolUsage", days, filter, kind, group] as const,
   toolUsageDetail: (tool: string, days: number, kind: string, group: string, source: string) =>
     ["toolUsageDetail", tool, days, kind, group, source] as const,
+  /** docs/plan-wui-usage.md U8: the deployed pages' report and one page's people. */
+  wuiUsage: (days: number) => ["wuiUsage", days] as const,
+  wuiUsageDetail: (itemId: string, page: string, days: number) =>
+    ["wuiUsageDetail", itemId, page, days] as const,
   // docs/plan-capacity-usage.md: the capacity dashboard (superusers only).
   capacity: (days: number) => ["capacity", days] as const,
   capacityPerson: (user: string, days: number) => ["capacity", days, "person", user] as const,
