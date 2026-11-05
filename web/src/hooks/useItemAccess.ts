@@ -38,6 +38,7 @@ import {
   canReadItemContent,
   canWriteItem,
   canWriteItemMeta,
+  hasItemVerb,
   isDiscoverableOnly,
   parseItemPermission,
 } from "../lib/itemPermission";
@@ -58,6 +59,11 @@ export type ItemAccess = {
    * export's gate. Narrower than {@link canWrite} on purpose: the route asks
    * this verb, and a `write_meta` holder who passes the union is refused. */
   canAddContent: boolean;
+  /** Overwrite the item's content (`edit_content` alone) — the skill hub
+   * Update's gate (plan-skill-hub-release-notes D4): the sync route asks this
+   * verb, so an `add_content` / `write_meta` holder who passes the union is
+   * refused. */
+  canEditContent: boolean;
   /** Store a field ON the item — env vars, tool/skill prefs, the details form
    * (`write_meta`). Narrower than {@link canWrite} on purpose: the item PATCH
    * accepts write_meta alone, so an editor who passes canWrite is still refused. */
@@ -90,6 +96,7 @@ export function useItemAccess(item: AppItem | undefined): ItemAccess {
       canConverse: true,
       canWrite: true,
       canAddContent: true,
+      canEditContent: true,
       canWriteMeta: true,
       canUseWui: true,
       canOpenEnv: true,
@@ -109,6 +116,7 @@ export function useItemAccess(item: AppItem | undefined): ItemAccess {
     canConverse: canConverse(perm, me, owner, isSuperuser, groups),
     canWrite: canWriteItem(perm, me, owner, isSuperuser, groups),
     canAddContent: canAddItemContent(perm, me, owner, isSuperuser, groups),
+    canEditContent: hasItemVerb(perm, me, owner, "edit_content", isSuperuser, groups),
     canWriteMeta: canWriteItemMeta(perm, me, owner, isSuperuser, groups),
     canUseWui: canUseWui(perm, me, owner, isSuperuser, groups),
     canOpenEnv:

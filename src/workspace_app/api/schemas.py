@@ -7,6 +7,7 @@ place. Pure data — no behaviour.
 
 from __future__ import annotations
 
+import datetime as dt
 from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, Field, StringConstraints
@@ -107,6 +108,17 @@ class _WorkspaceTree(BaseModel):
     truncated: bool = False
 
 
+class _SkillUpdate(BaseModel):
+    """One version after the one a copy holds (plan-skill-hub-release-notes D5):
+    a publish, or a rollback (``back_to`` = the version it brought back)."""
+
+    version: int
+    kind: Literal["publish", "rollback"]
+    at: dt.datetime
+    release_note: str = ""
+    back_to: int | None = None
+
+
 class _ItemSkillState(BaseModel):
     """One available skill's per-item state in the skills picker (#380), the skill
     sibling of ``ItemToolState``. ``source`` is where it comes from (``shared`` /
@@ -148,6 +160,9 @@ class _ItemSkillState(BaseModel):
     readonly: bool = False
     pref: Literal["follow", "on", "off"]
     effective: bool
+    #: A hub copy behind its entry: every version after its own, newest first
+    #: (plan-skill-hub-release-notes D5). Empty otherwise.
+    updates: list[_SkillUpdate] = []
 
 
 class _ItemSkills(BaseModel):

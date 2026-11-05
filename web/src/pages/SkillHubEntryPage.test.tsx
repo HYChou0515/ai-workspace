@@ -117,6 +117,7 @@ const ev = (over: Partial<SkillHubHistoryEvent>): SkillHubHistoryEvent => ({
   audience: [],
   current: false,
   version: null,
+  release_note: "",
   ...over,
 });
 
@@ -1075,6 +1076,20 @@ describe("SkillHubEntryPage layout (plan-skill-hub-ux-redo D3, D5, D6, D16)", ()
 
 describe("SkillHubEntryPage history (plan-skill-hub-history §8)", () => {
   const timeline = () => screen.findByRole("list", { name: word("skillHub.history") });
+
+  it("shows each version's release note on its row, and none on a version published without one (plan-skill-hub-release-notes P1)", async () => {
+    const history = [
+      ev({ revision: "e-1:2", commit: "c2", version: 2, current: true, release_note: "**Clearer** steps." }),
+      ev({ revision: "e-1:1", commit: "c1", version: 1 }),
+    ];
+    mount(client(OWNED, OPEN, history), undefined, "/skill-hub/e-1?tab=history");
+
+    const rows = within(await timeline()).getAllByRole("listitem");
+    const note = within(rows[0]).getByRole("region", { name: word("skillHub.history.releaseNote") });
+    expect(note).toHaveTextContent("Clearer steps.");
+    expect(within(note).getByText("Clearer").tagName).toBe("STRONG"); // markdown, as the author wrote it
+    expect(within(rows[1]).queryByRole("region", { name: word("skillHub.history.releaseNote") })).toBeNull();
+  });
 
   it("says who a visibility change opened the skill to, by name (G24 「含名單」)", async () => {
     const history = [

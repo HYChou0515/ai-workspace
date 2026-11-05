@@ -57,6 +57,7 @@ from .schemas import (
     _SearchBody,
     _SkillRefreshRequest,
     _SkillRefreshResult,
+    _SkillUpdate,
     _WorkspaceTree,
     _WorkspaceUsage,
 )
@@ -395,8 +396,10 @@ def register_file_routes(
         tools = config.allowed_tools if config is not None else ()
         states = effective_item_skills(slug, profile, prefs, ws_metas, tools=tools)
         # Only a copy has an upstream, so only copies are resolved — this reads
-        # the package (or the hub) on every panel open and is deliberately kept
-        # off the turn's hot path.
+        # the package (or the hub) on every panel open, and on every item open
+        # too since the skills button's mark asks (plan-skill-hub-release-notes
+        # D1; cached 30 s per item), and is deliberately kept off the turn's hot
+        # path.
         viewer = get_user_id()
         upstreams = {
             s.name: await skill_upstream(
@@ -405,6 +408,32 @@ def register_file_routes(
             for s in states
             if s.is_copy
         }
+        # The versions since each copy's own, only for a hub copy that is
+        # behind (plan-skill-hub-release-notes D5) — one timeline read per behind
+        # copy, none for an up-to-date one.
+        updates: dict[str, list[_SkillUpdate]] = {}
+        if skill_hub is not None:
+            for name, up in upstreams.items():
+                if up is None or not (up.update_available and up.entry and up.installed):
+                    continue
+                try:
+                    since = await skill_hub.updates_since(up.entry, up.installed, viewer=viewer)
+                except Exception:
+                    # One entry whose timeline cannot be read (a git error, a
+                    # row gone mid-read) costs that copy its notes, not the
+                    # whole list — the panel and the header mark both read it.
+                    logger.exception("skill hub: no updates for %s (entry %s)", name, up.entry)
+                    continue
+                for e, back_to in since:
+                    updates.setdefault(name, []).append(
+                        _SkillUpdate(
+                            version=e.version or 0,
+                            kind="rollback" if e.kind == "rollback" else "publish",
+                            at=e.at,
+                            release_note=e.release_note,
+                            back_to=back_to,
+                        )
+                    )
         return _ItemSkills(
             skills=[
                 _ItemSkillState(
@@ -421,6 +450,7 @@ def register_file_routes(
                     readonly=upstream_readonly(slug, profile, s.name),
                     pref=_skill_pref_state(prefs.get(s.name)),
                     effective=s.effective,
+                    updates=updates.get(s.name, []),
                 )
                 for s in states
             ]
