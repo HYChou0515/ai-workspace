@@ -298,6 +298,11 @@ type WuiViewProps = {
    * of its own). Without it, a view file read while the sandbox was restoring
    * kept its stale `entry:` through every press. */
   onRetry?: () => void;
+  /** docs/plan-wui-usage.md U7: the page's path when it was opened by its
+   * DEPLOYED link (`WuiPage`), which every use then names so the server can
+   * count it. Undefined inside the item — those uses are not counted. Set
+   * explicitly by the one caller that knows, never inferred from `chrome`. */
+  deployedPage?: string;
 };
 
 /**
@@ -324,7 +329,7 @@ export function WuiView(props: WuiViewProps) {
   return <WuiPane key={`${fs.scopeId}:${wuiFolder(props.path)}`} {...props} />;
 }
 
-function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
+function WuiPane({ path, spec, chrome = "workspace", onRetry, deployedPage }: WuiViewProps) {
   const fs = useFileService();
   const queryClient = useQueryClient();
   const folder = wuiFolder(path);
@@ -613,8 +618,8 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
     return Array.isArray(raw) ? raw.filter((t): t is string => typeof t === "string") : [];
   }, [spec]);
   const callTool = useMemo(
-    () => (slug ? itemCallTool(slug, fs.scopeId) : null),
-    [slug, fs.scopeId],
+    () => (slug ? itemCallTool(slug, fs.scopeId, deployedPage) : null),
+    [slug, fs.scopeId, deployedPage],
   );
 
   /** What the view file declared it may start. Disclosure, not the gate — the
@@ -632,10 +637,13 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
     return Array.isArray(raw) ? raw.filter((a): a is string => typeof a === "string") : [];
   }, [spec]);
   const callAgent = useMemo(
-    () => (slug ? itemCallAgent(slug, fs.scopeId) : null),
-    [slug, fs.scopeId],
+    () => (slug ? itemCallAgent(slug, fs.scopeId, deployedPage) : null),
+    [slug, fs.scopeId, deployedPage],
   );
-  const jobs = useMemo(() => (slug ? itemJobs(slug, fs.scopeId) : null), [slug, fs.scopeId]);
+  const jobs = useMemo(
+    () => (slug ? itemJobs(slug, fs.scopeId, deployedPage) : null),
+    [slug, fs.scopeId, deployedPage],
+  );
 
   /** The platform's own sign-in for this item, opened at a page's request
    * (`plan-wui-viewer-login`). Drawn here, outside the frame: what is typed
@@ -645,7 +653,7 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
 
   const startRun = useMemo(() => {
     if (!slug) return null;
-    const run = itemRun(slug, fs.scopeId);
+    const run = itemRun(slug, fs.scopeId, deployedPage);
     return async (
       workflow: string,
       payload: Record<string, unknown>,
@@ -660,7 +668,7 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry }: WuiViewProps) {
       // replies with a stream and the id it discards never reaches a page.
       for await (const event of run(workflow, payload)) onEvent(event);
     };
-  }, [slug, fs.scopeId]);
+  }, [slug, fs.scopeId, deployedPage]);
 
   const { confirm } = useDialog();
   /** One question at a time: a page that asks to open a link in a loop must

@@ -42,16 +42,24 @@ async def run_workflow(
     wf: WorkflowHandle,
     inputs: Any,
     now: Callable[[], int] = _now_ms,
+    on_settled: Callable[[str], None] | None = None,
 ) -> None:
     """Drive one workflow run to a terminal ``WorkflowRun`` status. ``running`` is
     set before ``run()`` executes; on return the result is persisted as ``done``; on
     an exception, ``error`` (with the message); on cancel (Stop, §10), ``cancelled``
     is recorded and the cancellation re-raised. The run's actual work + step
-    skip/resume is the journal engine's job (manual §9)."""
+    skip/resume is the journal engine's job (manual §9).
+
+    ``on_settled(run_id)`` is told once the run is written as ended — done,
+    error or cancelled; not a pause at a gate (`docs/plan-wui-usage.md` U11)."""
     rm = spec.get_resource_manager(WorkflowRun)
 
     def _patch(**changes: Any) -> None:
         rm.update(run_id, with_settled_phases(rm.get(run_id).data, **changes))
+
+    def _ended() -> None:
+        if on_settled is not None:
+            on_settled(run_id)
 
     _patch(status=RunStatus.RUNNING, started=now())
     logger.info("run %s started", run_id)
@@ -71,10 +79,12 @@ async def run_workflow(
     except asyncio.CancelledError:
         _patch(status=RunStatus.CANCELLED, ended=now())
         logger.info("run %s cancelled", run_id)
+        _ended()
         raise
     except Exception as exc:  # noqa: BLE001 — surface any run() failure as a terminal status
         logger.exception("run %s failed", run_id)
         _patch(status=RunStatus.ERROR, ended=now(), result=_failure_result(exc))
+        _ended()
         return
     _patch(
         status=RunStatus.DONE,
@@ -82,6 +92,7 @@ async def run_workflow(
         result=result if isinstance(result, dict) else {"result": result},
     )
     logger.info("run %s done", run_id)
+    _ended()
 
 
 def _failure_result(exc: BaseException) -> dict[str, Any]:

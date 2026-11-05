@@ -34,10 +34,12 @@ import {
   toolUsageApi,
 } from "../api/toolUsage";
 import { qk } from "../api/queryKeys";
+import { wuiUsageApi, type WuiUsageClient, type WuiUsagePage } from "../api/wuiUsage";
 import { UserChip } from "../components/UserChip";
 import { useApps } from "../hooks/useResources";
 import { type MsgKey, useT } from "../lib/i18n";
 import { UsageShownModal } from "./UsageShownModal";
+import { pageKey, WuiUsagePart } from "./WuiUsagePart";
 
 const WINDOWS: UsageDays[] = [7, 30, 90];
 
@@ -88,7 +90,13 @@ const num: React.CSSProperties = { ...cell, textAlign: "right", fontVariantNumer
 
 type Shared = { surface: string; app: string };
 
-export function ToolUsagePanel({ client = toolUsageApi }: { client?: ToolUsageClient }) {
+export function ToolUsagePanel({
+  client = toolUsageApi,
+  wuiClient = wuiUsageApi,
+}: {
+  client?: ToolUsageClient;
+  wuiClient?: WuiUsageClient;
+}) {
   const t = useT();
   const apps = useApps();
   const [days, setDays] = useState<UsageDays>(30);
@@ -97,6 +105,9 @@ export function ToolUsagePanel({ client = toolUsageApi }: { client?: ToolUsageCl
   // ONE side panel for the page (review r5): which row of which part it shows.
   // Each part keeping its own put two panels on top of each other.
   const [picked, setPicked] = useState<{ kind: UsageKind; row: ToolUsageTool } | null>(null);
+  // The deployed pages' part (docs/plan-wui-usage.md U8) shares the ONE panel:
+  // opening one closes the other.
+  const [pickedPage, setPickedPage] = useState<WuiUsagePage | null>(null);
   // The button a panel was opened from, to put the keyboard back on (review r5).
   const opener = useRef<HTMLElement | null>(null);
   // The panel takes the keyboard when a person picks a row — never because it
@@ -108,6 +119,20 @@ export function ToolUsagePanel({ client = toolUsageApi }: { client?: ToolUsageCl
       wantsFocus.current = true;
     }
     setPicked(row ? { kind, row } : null);
+    if (row) setPickedPage(null);
+  };
+  const pickPage = (row: WuiUsagePage | null, from?: HTMLElement) => {
+    if (from) opener.current = from;
+    setPickedPage(row);
+    if (row) setPicked(null);
+  };
+  const closePage = () => {
+    const key = pickedPage ? pageKey(pickedPage) : null;
+    setPickedPage(null);
+    const target = opener.current?.isConnected
+      ? opener.current
+      : [...document.querySelectorAll<HTMLElement>(".tool-usage-tool")].find((b) => b.dataset.rowKey === key);
+    target?.focus();
   };
   const close = () => {
     const key = picked ? rowKey(picked.row) : null;
@@ -190,6 +215,14 @@ export function ToolUsagePanel({ client = toolUsageApi }: { client?: ToolUsageCl
         wantsFocus={wantsFocus}
         pick={(row, from) => pick("skill", row, from)}
         close={close}
+      />
+      <WuiUsagePart
+        days={days}
+        shared={shared}
+        client={wuiClient}
+        picked={pickedPage}
+        pick={pickPage}
+        close={closePage}
       />
     </div>
   );
@@ -494,7 +527,7 @@ export function countAxis(max: number): { step: number; end: number } {
  * end. The rows are a list, so a screen reader hears "name value" per bar; the
  * bars, gridlines and axis are decoration.
  */
-function UsageBars({
+export function UsageBars({
   title,
   rows,
   scale,

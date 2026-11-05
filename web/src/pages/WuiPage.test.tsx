@@ -691,3 +691,163 @@ describe("WuiPage — someone the link does not open for (docs/plan-deploy-reach
     }
   });
 });
+
+describe("the deployed link counts its opens (docs/plan-wui-usage.md U2/U7)", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  function stubFetch() {
+    const fetchMock = vi.fn(async (_url: unknown, _init?: RequestInit) => new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetchMock);
+    return fetchMock;
+  }
+
+  const opens = (fetchMock: ReturnType<typeof stubFetch>) =>
+    fetchMock.mock.calls.filter(([url]) => String(url).includes("/wui/opened"));
+
+  it("tells the server once that the page was opened, naming the page", async () => {
+    const fetchMock = stubFetch();
+    const files: Record<string, string> = {
+      "/scrap-review/page.ai.yaml": YAML,
+      "/scrap-review/index.html": "<!doctype html><p>hello</p>",
+    };
+    const readFile = vi.fn(async (path: string) => {
+      const text = files[path];
+      if (text === undefined) throw notFound(path);
+      return { kind: "text", path, text, size: text.length, encoding: "utf-8" };
+    });
+
+    renderAt("/w/rca/i1/scrap-review/page.ai.yaml", readFile);
+
+    await waitFor(() => expect(screen.getByTitle("Scrap review")).toBeTruthy());
+    await waitFor(() => expect(opens(fetchMock)).toHaveLength(1));
+    const [url, init] = opens(fetchMock)[0];
+    expect(String(url)).toContain("/a/rca/items/i1/wui/opened");
+    expect(JSON.parse(String(init?.body))).toEqual({ path: "/scrap-review/page.ai.yaml" });
+  });
+
+  it("names the page on its uses, so they are counted too", async () => {
+    // Through the real path, as the slug test above: the frame asks for a tool.
+    const fetchMock = vi.fn(async (_url: unknown, _init?: RequestInit) =>
+      new Response(JSON.stringify({ output: "", exit_code: 0 }), {
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const files: Record<string, string> = {
+      "/scrap-review/page.ai.yaml": `${YAML}tools: [lot-status]\n`,
+      "/scrap-review/index.html": "<!doctype html><p>hello</p>",
+    };
+    const readFile = vi.fn(async (path: string) => {
+      const text = files[path];
+      if (text === undefined) throw notFound(path);
+      return { kind: "text", path, text, size: text.length, encoding: "utf-8" };
+    });
+
+    renderAt("/w/rca/i1/scrap-review/page.ai.yaml", readFile);
+    await waitFor(() => expect(screen.getByTitle("Scrap review")).toBeTruthy());
+    const win = (screen.getByTitle("Scrap review") as HTMLIFrameElement).contentWindow as Window;
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        data: { proto: WUI_PROTOCOL, id: "1", verb: "callTool", args: { name: "lot-status", args: {} } },
+        source: win,
+      }),
+    );
+
+    const toolCall = () => fetchMock.mock.calls.find(([url]) => String(url).includes("/wui/tools/"));
+    await waitFor(() => expect(toolCall()).toBeTruthy());
+    const init = toolCall()?.[1];
+    expect(new Headers(init?.headers).get("X-Wui-Deployed")).toBe(
+      encodeURIComponent("/scrap-review/page.ai.yaml"),
+    );
+  });
+
+  // Review round 1: each kind of use (U4) carries the page's name, not only
+  // callTool — the view hands the name to every client it builds.
+  it.each([
+    ["callAgent", { name: "digger", input: "why?" }, "/wui/agents/digger/call"],
+    ["startTool", { name: "lot-status", args: {} }, "/wui/jobs"],
+    ["startRun", { workflow: "judge" }, "/wui/run"],
+  ])("names the page on %s too", async (verb, args, route) => {
+    const fetchMock = vi.fn(async (_url: unknown, _init?: RequestInit) =>
+      new Response(JSON.stringify({ output: "", failed: false, job_id: "j1" }), {
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const files: Record<string, string> = {
+      "/scrap-review/page.ai.yaml": `${YAML}tools: [lot-status]\nagents: [digger]\nworkflows: [judge]\n`,
+      "/scrap-review/index.html": "<!doctype html><p>hello</p>",
+    };
+    const readFile = vi.fn(async (path: string) => {
+      const text = files[path];
+      if (text === undefined) throw notFound(path);
+      return { kind: "text", path, text, size: text.length, encoding: "utf-8" };
+    });
+
+    renderAt("/w/rca/i1/scrap-review/page.ai.yaml", readFile);
+    await waitFor(() => expect(screen.getByTitle("Scrap review")).toBeTruthy());
+    const win = (screen.getByTitle("Scrap review") as HTMLIFrameElement).contentWindow as Window;
+    window.dispatchEvent(
+      new MessageEvent("message", { data: { proto: WUI_PROTOCOL, id: "1", verb, args }, source: win }),
+    );
+
+    const use = () => fetchMock.mock.calls.find(([url]) => String(url).includes(route));
+    await waitFor(() => expect(use()).toBeTruthy());
+    expect(new Headers(use()?.[1]?.headers).get("X-Wui-Deployed")).toBe(
+      encodeURIComponent("/scrap-review/page.ai.yaml"),
+    );
+  });
+
+  it("does not count the same visit again when Try again reads the page back", async () => {
+    // Review round 1 (R19): read, then a read that fails, then Try again reads
+    // it fine — the page went away and came back on one visit, not two opens.
+    const fetchMock = stubFetch();
+    let viewReads = 0;
+    const readFile = vi.fn(async (path: string) => {
+      if (path !== "/scrap-review/page.ai.yaml") throw notFound(path);
+      viewReads += 1;
+      if (viewReads === 2) throw notFound(path);
+      return { kind: "text", path, text: YAML, size: YAML.length, encoding: "utf-8" };
+    });
+    renderAt("/w/rca/i1/scrap-review/page.ai.yaml", readFile);
+    await waitFor(() => expect(opens(fetchMock)).toHaveLength(1));
+    // The pane's Try again (no entry) re-reads the view file: now a 404.
+    fireEvent.click(await screen.findByRole("button", { name: /try again/i }));
+    expect(await screen.findByText(/can.t be opened/i)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /try again/i }));
+
+    await waitFor(() => expect(viewReads).toBe(3));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(opens(fetchMock)).toHaveLength(1);
+  });
+
+  it("does not count a file that is not a page", async () => {
+    const fetchMock = stubFetch();
+    const readFile = vi.fn(async (path: string) => {
+      const text = "view: table\n";
+      return { kind: "text", path, text, size: text.length, encoding: "utf-8" };
+    });
+
+    renderAt("/w/rca/i1/data/page.ai.yaml", readFile);
+
+    expect(await screen.findByText(/data\/page\.ai\.yaml/)).toBeInTheDocument();
+    // Effects run after the sentence is drawn: give one the chance to report.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(opens(fetchMock)).toHaveLength(0);
+  });
+
+  it("does not count a page that could not be opened", async () => {
+    const fetchMock = stubFetch();
+    const readFile = vi.fn(async (path: string) => {
+      throw notFound(path);
+    });
+
+    renderAt("/w/rca/i1/missing/page.ai.yaml", readFile);
+
+    expect(await screen.findByText(/missing\/page\.ai\.yaml/)).toBeInTheDocument();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(opens(fetchMock)).toHaveLength(0);
+  });
+});
+

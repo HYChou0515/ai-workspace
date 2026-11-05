@@ -29,14 +29,44 @@ export async function pageRefusal(resp: Response, fallback: string): Promise<Htt
   return err;
 }
 
-/** Bind the tool-call route to one item. */
-export function itemCallTool(slug: string, itemId: string): CallTool {
+/** docs/plan-wui-usage.md U7: the header a page opened by its DEPLOYED link
+ * puts on every use, naming the page (its view file's workspace path,
+ * percent-encoded — a header value must be Latin-1, and a path can hold any
+ * character). The server counts a use only with it, and only for a page that
+ * is Deployed. The same page opened inside the item sends nothing. */
+export const DEPLOYED_HEADER = "X-Wui-Deployed";
+
+/** The request headers of a use, for a page opened by its deployed link
+ * (`deployed` = its view path) or not (undefined). */
+export function usageHeaders(deployed: string | undefined): Record<string, string> {
+  const headers: Record<string, string> = { "content-type": "application/json" };
+  if (deployed) headers[DEPLOYED_HEADER] = encodeURIComponent(deployed);
+  return headers;
+}
+
+/** Tell the server a deployed page's link was opened (U2). Never throws: the
+ * page opens whether or not it could be counted. */
+export async function reportOpened(slug: string, itemId: string, path: string): Promise<void> {
+  try {
+    await apiFetch(`/a/${encodeURIComponent(slug)}/items/${encodeURIComponent(itemId)}/wui/opened`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ path }),
+    });
+  } catch {
+    // Not counted — the reader loses nothing.
+  }
+}
+
+/** Bind the tool-call route to one item; `deployed` names the page when it was
+ * opened by its deployed link (U7). */
+export function itemCallTool(slug: string, itemId: string, deployed?: string): CallTool {
   return async (name: string, args: Record<string, unknown>): Promise<ToolResult> => {
     const resp = await apiFetch(
       `/a/${encodeURIComponent(slug)}/items/${encodeURIComponent(itemId)}/wui/tools/${encodeURIComponent(name)}/call`,
       {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: usageHeaders(deployed),
         body: JSON.stringify({ args }),
       },
     );
@@ -57,6 +87,7 @@ async function wuiJson<T>(
   tail: string,
   fallback: string,
   body?: unknown,
+  deployed?: string,
 ): Promise<T> {
   const resp = await apiFetch(
     `/a/${encodeURIComponent(slug)}/items/${encodeURIComponent(itemId)}/wui/${tail}`,
@@ -64,7 +95,7 @@ async function wuiJson<T>(
       ? undefined
       : {
           method: "POST",
-          headers: { "content-type": "application/json" },
+          headers: usageHeaders(deployed),
           body: JSON.stringify(body),
         },
   );
@@ -76,18 +107,24 @@ async function wuiJson<T>(
 
 /** Bind `callAgent` (#942) to one item: the sub-agent route, shaped as the
  * tool route is — `{input}` in, `{output, failed}` back. */
-export function itemCallAgent(slug: string, itemId: string): CallAgent {
+export function itemCallAgent(slug: string, itemId: string, deployed?: string): CallAgent {
   return (name, input) =>
-    wuiJson(slug, itemId, `agents/${encodeURIComponent(name)}/call`, `${name} could not be asked`, {
-      input,
-    });
+    wuiJson(
+      slug,
+      itemId,
+      `agents/${encodeURIComponent(name)}/call`,
+      `${name} could not be asked`,
+      { input },
+      deployed,
+    );
 }
 
 /** Bind the job routes (#942 `startTool` / `startAgent`) to one item. */
-export function itemJobs(slug: string, itemId: string): PageJobs {
+export function itemJobs(slug: string, itemId: string, deployed?: string): PageJobs {
   return {
+    // Only starting is a use (U4); asking how it goes, or stopping it, is not.
     start: (kind, name, input) =>
-      wuiJson(slug, itemId, "jobs", `${name} could not be started`, { kind, name, input }),
+      wuiJson(slug, itemId, "jobs", `${name} could not be started`, { kind, name, input }, deployed),
     status: (jobId) =>
       wuiJson<JobState>(slug, itemId, `jobs/${encodeURIComponent(jobId)}`, "The job could not be read"),
     stop: (jobId) =>

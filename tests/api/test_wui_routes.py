@@ -160,6 +160,7 @@ def build(
     orchestrator=None,
     turn_engine=None,
     workflows: list[str] | None = None,
+    usage=None,
 ):
     app = FastAPI()
     sb = sandbox or _Sandbox()
@@ -189,6 +190,7 @@ def build(
         orchestrator=orchestrator,
         turn_engine=turn_engine,
         workflows_for=_offers(workflows or []),
+        usage=usage,
     )
     return TestClient(app), sb, reg, loc
 

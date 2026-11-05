@@ -909,6 +909,64 @@ describe("WuiOverviewPage — who each page opens for (docs/plan-deploy-reach.md
   });
 });
 
+describe("a page's numbers, for its owner (docs/plan-wui-usage.md U5)", () => {
+  const USAGE = {
+    opened_total: 120,
+    opened_7d: 18,
+    used_total: 45,
+    used_ms_total: 11_520_000, // 3.2 hours
+    used_7d: 6,
+    used_ms_7d: 1_440_000, // 24 minutes
+  };
+
+  async function usageOf(title: string): Promise<HTMLElement | null> {
+    const link = await screen.findByRole("link", { name: title });
+    const li = link.closest("li") as HTMLElement;
+    return li.querySelector<HTMLElement>('[data-testid="wui-usage"]');
+  }
+
+  it("says opens in person-days and uses with their time, in total and over seven days — on a card", async () => {
+    writeWuiView("cards");
+    render(<WuiOverviewPage client={client([row({ title: "Mine", usage: USAGE })])} />, { wrapper: Wrap });
+
+    const usage = await usageOf("Mine");
+
+    expect(usage).not.toBeNull();
+    // The words the user settled on, the way GitHub's traffic page names a
+    // day's distinct people ("visitors") and nothing more: a familiar noun and
+    // the number — no 「總共」 on the plain number, no 頓號, the time in
+    // brackets after the count it belongs to.
+    const lines = [...(usage?.children ?? [])].map((el) => el.textContent?.replace(/\s+/g, " ").trim());
+    expect(lines).toEqual(["訪客 120 · 近 7 天 18", "AI 代勞 45 次（3.2 小時） · 近 7 天 6 次（24 分）"]);
+  });
+
+  it("says the same in the table", async () => {
+    writeWuiView("table");
+    render(<WuiOverviewPage client={client([row({ title: "Mine", usage: USAGE })])} />, { wrapper: Wrap });
+
+    expect((await usageOf("Mine"))?.textContent).toContain("訪客 120");
+  });
+
+  it("says nothing on a page whose numbers are not the viewer's", async () => {
+    writeWuiView("cards");
+    render(<WuiOverviewPage client={client([row({ title: "Theirs", can_remove: false, usage: null })])} />, {
+      wrapper: Wrap,
+    });
+
+    expect(await usageOf("Theirs")).toBeNull();
+  });
+
+  it("names a short time in seconds", async () => {
+    writeWuiView("cards");
+    render(
+      <WuiOverviewPage client={client([row({ title: "Mine", usage: { ...USAGE, used_ms_7d: 4_000 } })])} />,
+      { wrapper: Wrap },
+    );
+
+    expect((await usageOf("Mine"))?.textContent).toContain(translate("zh-TW", "wui.usage.seconds", { n: 4 }));
+  });
+});
+
 /** Reads the trail the page published — the global bar's view of it. */
 function TrailProbe() {
   const trail = useBreadcrumbTrail();

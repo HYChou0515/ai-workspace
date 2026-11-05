@@ -63,6 +63,13 @@
   white-space: nowrap;
 }
 
+/* A page's people in the 420px side panel: five columns whose names say what
+   they count (「AI 花的時間」), so a name may take two lines rather than push
+   the last column out of view. */
+.tool-usage-table.wui-usage-people th {
+  white-space: normal;
+}
+
 .tool-usage-table tr[aria-selected="true"] td {
   background: var(--accent-soft);
 }

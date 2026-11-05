@@ -74,7 +74,7 @@ from .steer import SteerProposalFailed, apply_steer, propose_steer
 
 # A run is "active" (blocks a second start, manual §14) while pending / running /
 # paused at a gate. The rest are terminal.
-_ACTIVE = (RunStatus.PENDING, RunStatus.RUNNING, RunStatus.AWAITING_HUMAN)
+ACTIVE_RUN = (RunStatus.PENDING, RunStatus.RUNNING, RunStatus.AWAITING_HUMAN)
 
 ProfileRun = Callable[[WorkflowHandle, Any], Awaitable[Any]]
 # Attach the run's leaf drivers (drive_turn / run_sandbox / ingest) to a freshly
@@ -292,6 +292,15 @@ class WorkflowOrchestrator:
     # `callTool` or a chat turn is not a run, so a job finishing would take the
     # sandbox out from under them. ``(item_id, chat_key)``; None ⇒ nothing freed.
     end_page_job: Callable[[str, str], Awaitable[None]] | None = None
+    # A run moved from active to ended (`docs/plan-wui-usage.md` U11), whichever
+    # way it ended. Two writers end a run: the driver (`run_workflow`: done,
+    # error, cancelled — a timeout too, once the driver has started, since it
+    # cancels the driver first) and `_patch` here (a lost or abandoned page job,
+    # a Stop before it ran, a page job whose deadline passed before its driver
+    # started) — both tell it
+    # (`_tell_settled`), and only the first move to an end is told.
+    # ``(run_id)``; a hook that raises is logged and never stops the run ending.
+    on_settled: Callable[[str], None] | None = None
     # The shared turn epoch of a chat key (`ChatTurnEngine.cancel_epoch`). A
     # page job samples it when ACCEPTED, so a Stop pressed on another pod while
     # the job still waits for a slot is not absorbed into the baseline the
@@ -345,7 +354,20 @@ class WorkflowOrchestrator:
         # set it explicitly. A live run's `progress_at` advances step-by-step; a dead pod's
         # stops, which is what `is_stuck` keys on.
         changes.setdefault("progress_at", self.now())
-        self._rm().update(run_id, with_settled_phases(self._get(run_id), **changes))
+        before = self._get(run_id)
+        self._rm().update(run_id, with_settled_phases(before, **changes))
+        ends = changes.get("status")
+        if before.status in ACTIVE_RUN and ends is not None and ends not in ACTIVE_RUN:
+            self._tell_settled(run_id)
+
+    def _tell_settled(self, run_id: str) -> None:
+        """Tell `on_settled` a run ended; a failing hook never stops it ending."""
+        if self.on_settled is None:
+            return
+        try:
+            self.on_settled(run_id)
+        except Exception:  # noqa: BLE001 — a count must never stop a run ending
+            logger.exception("orchestrator: on_settled for %s failed", run_id)
 
     def run_status(self, run_id: str) -> RunStatus | None:
         """A run's status, or None if it no longer exists (#429 P8) — the sweeper's orphan
@@ -502,7 +524,7 @@ class WorkflowOrchestrator:
         for r in self._rm().list_resources((QB["item_id"] == item_id).build()):
             data = r.data
             assert isinstance(data, WorkflowRun)
-            if data.status in _ACTIVE:
+            if data.status in ACTIVE_RUN:
                 return r.info.resource_id
         return None
 
@@ -547,7 +569,7 @@ class WorkflowOrchestrator:
         for r in self._rm().list_resources((QB["item_id"] == item_id).build()):
             data = r.data
             assert isinstance(data, WorkflowRun)
-            if data.chat_id == chat_id and data.status in _ACTIVE:
+            if data.chat_id == chat_id and data.status in ACTIVE_RUN:
                 return r.info.resource_id
         return None
 
@@ -666,7 +688,7 @@ class WorkflowOrchestrator:
         for r in self._rm().list_resources((QB["item_id"] == item_id).build()):
             data = r.data
             assert isinstance(data, WorkflowRun)
-            if data.status in _ACTIVE and self._page_job_lost(data):
+            if data.status in ACTIVE_RUN and self._page_job_lost(data):
                 lost.append(r.info.resource_id)
         for run_id in lost:
             await self.abandon(run_id, reason=PAGE_JOB_LOST)
@@ -676,7 +698,7 @@ class WorkflowOrchestrator:
         for r in self._rm().list_resources((QB["item_id"] == item_id).build()):
             data = r.data
             assert isinstance(data, WorkflowRun)
-            if data.page_job is not None and data.status in _ACTIVE:
+            if data.page_job is not None and data.status in ACTIVE_RUN:
                 n += not self._page_job_lost(data)
         return n
 
@@ -770,6 +792,7 @@ class WorkflowOrchestrator:
                     wf=wf,
                     inputs=None,
                     now=self.now,
+                    on_settled=self._tell_settled,
                 )
                 try:
                     # From the deadline, not from now: time spent waiting for a
@@ -817,7 +840,7 @@ class WorkflowOrchestrator:
         data = self.run_in(run_id, item_id)
         if data.page_job is None:
             raise ResourceIDNotFoundError(run_id)
-        if data.status in _ACTIVE and self._page_job_lost(data):
+        if data.status in ACTIVE_RUN and self._page_job_lost(data):
             await self.abandon(run_id, reason=PAGE_JOB_LOST)
             data = self._get(run_id)
         return self._page_job_state_of(data)
@@ -839,7 +862,7 @@ class WorkflowOrchestrator:
     def _page_job_state_of(data: WorkflowRun) -> PageJobState:
         """What a page job's row says it is — `running` while active (a lost one
         is settled before it gets here)."""
-        if data.status in _ACTIVE:
+        if data.status in ACTIVE_RUN:
             return PageJobState("running")
         if data.status is RunStatus.DONE:
             return PageJobState("done", output=dict(data.result or {}))
@@ -880,12 +903,12 @@ class WorkflowOrchestrator:
         pinned = self._chat_referenced_runs(item_id)
         # Oldest first; prune terminal, unpinned, never-keep rows until within the cap.
         rows.sort(key=lambda rd: rd[1].started or 0)
-        prunable = sum(1 for rid, d in rows if d.status not in _ACTIVE and rid not in pinned)
+        prunable = sum(1 for rid, d in rows if d.status not in ACTIVE_RUN and rid not in pinned)
         to_drop = len(rows) - self.keep_last_runs
         for rid, data in rows:
             if to_drop <= 0 or prunable <= 0:
                 break
-            if rid == keep or data.status in _ACTIVE or rid in pinned:
+            if rid == keep or data.status in ACTIVE_RUN or rid in pinned:
                 continue
             self._rm().permanently_delete(rid)
             RunIdentities(self.spec).forget(rid)
@@ -974,6 +997,7 @@ class WorkflowOrchestrator:
             wf=wf,
             inputs=inputs,
             now=self.now,
+            on_settled=self._tell_settled,
         )
         try:
             if self.run_timeout_s is not None:
@@ -1100,7 +1124,7 @@ class WorkflowOrchestrator:
             data = self.run_in(run_id, item_id)
         except (ResourceIDNotFoundError, ResourceIsDeletedError):
             return False
-        if data.status not in _ACTIVE:
+        if data.status not in ACTIVE_RUN:
             return False
         key = data.chat_id or item_id
         # The cross-pod signal (also cancels the in-flight turn locally, if any) —

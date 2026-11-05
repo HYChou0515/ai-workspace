@@ -27,6 +27,7 @@ import codecs
 import json
 import logging
 import shlex
+import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any, Literal
@@ -49,7 +50,7 @@ from ..tooling.registry import (
     find_allowed_command,
 )
 from ..workflow.offered import no_such_workflow, wont_parse
-from ..workflow.orchestrator import TooManyPageJobs
+from ..workflow.orchestrator import ACTIVE_RUN, TooManyPageJobs
 from ..workflow.run import PageJob
 from .env_layers import PersonEnv, resolve, resolve_env
 from .env_refresh import EnvRefresher
@@ -58,6 +59,7 @@ from .private_env import PrivateEnvStore, private_layer
 from .request_env import IRequestEnv
 from .timeutil import now_ms
 from .turn_context import resolve_item_tools
+from .wui_usage import WuiUsage
 
 logger = logging.getLogger(__name__)
 
@@ -259,6 +261,7 @@ def register_wui_routes(
     workflow_problem_for: Callable[[str, str], Awaitable[str | None]] = _no_problem,
     subagents_for: Callable[[str], Awaitable[Sequence[SubagentDef]]] | None = None,
     drive_agent: Callable[..., Awaitable[tuple[str, bool]]] | None = None,
+    usage: WuiUsage | None = None,
 ) -> None:
     """Mount the WUI tool-call route.
 
@@ -485,8 +488,35 @@ def register_wui_routes(
 
         return StreamingResponse(gen(), media_type="text/event-stream")
 
+    async def _count_run(request: Request, investigation_id: str, run_id: str, kind: str) -> None:
+        """docs/plan-wui-usage.md U11: a run a DEPLOYED page started is tied
+        to the page now and counted when it ends (`WuiUsage.settled`, through
+        the orchestrator's `on_settled`). A run that already ended before the
+        tie was written is counted here — `settled` counts a tie once, so the
+        hook and this cannot both count it.
+
+        Never raises (review round 1): the run has STARTED. A count that fails
+        must not turn it into a refusal the page would retry — a second run —
+        nor leave a stream subscribed that no response returns."""
+        if usage is None:
+            return
+        try:
+            page = await usage.page_of(request, investigation_id)
+            if page is None:
+                return
+            user = get_user_id() if get_user_id is not None else ""
+            await asyncio.to_thread(
+                usage.started, run_id, investigation_id, page, user=user, kind=kind
+            )
+            if orchestrator.run_status(run_id) not in ACTIVE_RUN:
+                await asyncio.to_thread(usage.settled, run_id)
+        except Exception:  # noqa: BLE001 — a count must never fail the work it counts
+            logger.exception("wui usage: could not count run %s", run_id)
+
     @app.post("/a/{slug}/items/{item_id}/wui/run")
-    async def wui_run(slug: str, item_id: str, body: RunBody) -> StreamingResponse:
+    async def wui_run(
+        slug: str, item_id: str, body: RunBody, request: Request
+    ) -> StreamingResponse:
         """Start one run from the page and stream its events back.
 
         The SAME engine a schedule uses, started now instead of when the clock
@@ -568,6 +598,7 @@ def register_wui_routes(
             ) from exc
 
         locator.settle_run_chat(key, run_id)
+        await _count_run(request, investigation_id, run_id, "workflow")
         return StreamingResponse(stream, media_type="text/event-stream")
 
     async def _prepare_tool(
@@ -684,8 +715,24 @@ def register_wui_routes(
         investigation_id = locator.require_access(slug, item_id, ("edit_content", "use_wui"))
 
         ctx, pkg, command = await _prepare_tool(investigation_id, name, request)
-        handle = await ctx.ensure_sandbox()
-        result = await exec_package_command(ctx, handle, pkg, command.name, json.dumps(body.args))
+        # docs/plan-wui-usage.md: a use is counted once the tool really runs —
+        # a refusal above spent nobody's time — failed or not (U10).
+        page = await usage.page_of(request, investigation_id) if usage is not None else None
+        began = time.monotonic()
+        try:
+            handle = await ctx.ensure_sandbox()
+            result = await exec_package_command(
+                ctx, handle, pkg, command.name, json.dumps(body.args)
+            )
+        finally:
+            if usage is not None and page is not None:
+                usage.used(
+                    investigation_id,
+                    page,
+                    user=get_user_id() if get_user_id is not None else "",
+                    kind="tool",
+                    ms=int((time.monotonic() - began) * 1000),
+                )
         logger.info(
             "wui: item %s ran %s (exit %s)", investigation_id, command.name, result.exit_code
         )
@@ -859,7 +906,7 @@ def register_wui_routes(
 
     @app.post("/a/{slug}/items/{item_id}/wui/agents/{name}/call")
     async def wui_call_agent(
-        slug: str, item_id: str, name: str, body: AgentCallBody
+        slug: str, item_id: str, name: str, body: AgentCallBody, request: Request
     ) -> AgentCallOut:
         """`callAgent` (#942 D7): ask one of the item's sub-agents and wait for
         its answer — the same shape as a tool call, `{input}` for `{args}`.
@@ -870,6 +917,7 @@ def register_wui_routes(
         told it failed, and the sentence names the verb to use instead."""
         investigation_id = locator.require_access(slug, item_id, "use_wui")
         run_id = await _start_agent(investigation_id, name, body.input)
+        await _count_run(request, investigation_id, run_id, "agent")
         loop = asyncio.get_running_loop()
         deadline = loop.time() + CALL_TIMEOUT_S
         state = await _job_state(run_id, investigation_id)
@@ -898,12 +946,14 @@ def register_wui_routes(
         if body.kind == "agent":
             if not isinstance(body.input, str):
                 raise HTTPException(status_code=422, detail="A sub-agent's input is text.")
-            return JobStarted(job_id=await _start_agent(investigation_id, body.name, body.input))
+            job_id = await _start_agent(investigation_id, body.name, body.input)
+            await _count_run(request, investigation_id, job_id, "agent")
+            return JobStarted(job_id=job_id)
         if not isinstance(body.input, dict):
             raise HTTPException(status_code=422, detail="A tool's input is an object of args.")
-        return JobStarted(
-            job_id=await _start_tool(investigation_id, body.name, body.input, request)
-        )
+        job_id = await _start_tool(investigation_id, body.name, body.input, request)
+        await _count_run(request, investigation_id, job_id, "tool")
+        return JobStarted(job_id=job_id)
 
     @app.get("/a/{slug}/items/{item_id}/wui/jobs")
     async def wui_list_jobs(slug: str, item_id: str) -> list[JobListed]:
