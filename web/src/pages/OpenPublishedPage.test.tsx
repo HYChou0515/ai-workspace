@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import "@testing-library/jest-dom/vitest";
-import { cleanup, screen } from "@testing-library/react";
-import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
+import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { MemoryRouter, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { HttpError } from "../api/http";
@@ -110,6 +110,41 @@ describe("OpenPublishedPage", () => {
     });
 
     expect(await screen.findByRole("alert")).toHaveTextContent("沒辦法打開：disk full");
+  });
+});
+
+describe("opening the same publication again", () => {
+  it("is a new open every time it is navigated to — never the first open's answer again", async () => {
+    // Found while recording a demo: a second "Start a new conversation" with
+    // the same agent in one browser session landed in the FIRST conversation,
+    // because the open's answer was cached by address for good. An agent is
+    // one copy per conversation (A2): each navigation here must ask again.
+    let n = 0;
+    const client = {
+      open: vi.fn(async () => ({ slug: "rca", item_id: `rca:copy-${++n}`, created: true, kind: "agent" as const })),
+    };
+    function Again() {
+      const navigate = useNavigate();
+      return (
+        <button type="button" onClick={() => navigate("/open/rca/src-1/agents/sales/agent.ai.yaml")}>
+          again
+        </button>
+      );
+    }
+    renderWithQuery(
+      <MemoryRouter initialEntries={["/open/rca/src-1/agents/sales/agent.ai.yaml"]}>
+        <Routes>
+          <Route path="/open/:slug/:itemId/*" element={<OpenPublishedPage client={client} />} />
+          <Route path="*" element={<><Where /><Again /></>} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    expect(await screen.findByTestId("landed")).toHaveTextContent("/a/rca/rca%3Acopy-1");
+
+    fireEvent.click(screen.getByRole("button", { name: "again" }));
+
+    await waitFor(() => expect(screen.getByTestId("landed")).toHaveTextContent("/a/rca/rca%3Acopy-2"));
+    expect(client.open).toHaveBeenCalledTimes(2);
   });
 });
 

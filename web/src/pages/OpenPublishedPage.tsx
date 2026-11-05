@@ -12,7 +12,7 @@
  */
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useLocation, useNavigate, useParams } from "react-router-dom";
 
 import { HttpError } from "../api/http";
 import { publishApi, type PublishApi } from "../api/publish";
@@ -38,8 +38,13 @@ export function OpenPublishedPage({ client = publishApi }: { client?: Pick<Publi
   // mounts (StrictMode mounts twice, and a "fresh" sharing would otherwise
   // hand the opener two copies). Never retried on its own — a second try of
   // an open that made a copy and then lost the answer would make another.
+  // Keyed by THIS navigation (`location.key`): one open however often this
+  // visit mounts, and a new open for every new visit — a second "Start a new
+  // conversation" with an agent is a new conversation (A2), never the first
+  // one's answer again.
+  const visit = useLocation().key;
   const opened = useQuery({
-    queryKey: ["published-open", itemId, path],
+    queryKey: ["published-open", itemId, path, visit],
     queryFn: () => client.open(itemId, path),
     retry: false,
     staleTime: Number.POSITIVE_INFINITY,
