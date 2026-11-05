@@ -391,6 +391,48 @@ describe("useKbChat — a thread whose tail is a #624 notice is still MID-turn",
     ).toBe(true);
     expect(result.current.log.streaming).toBe(true);
   });
+
+  it("…nor in an EXISTING chat, where the detached send's re-read lands in the thread's cache", async () => {
+    // The re-read writes the mid-turn thread into the cache unconditionally;
+    // the log must not take it from there while the turn is still running.
+    const row = (role: string, content: string, created_at: number) => ({
+      role, content, reasoning: null, tool_name: null, tool_args: null,
+      tool_call_id: null, created_at, citations: [],
+    });
+    const thread = (messages: unknown[]) => ({
+      resource_id: "kb-x", title: "", collection_ids: [], owner: "default-user", shared_with: [], messages,
+    });
+    const client = {
+      ...mockKbApi,
+      getChat: vi
+        .fn()
+        .mockResolvedValueOnce(thread([]))
+        .mockResolvedValue(thread([row("user", "問題", 1), row("notice", "較早的對話已不在模型視窗內", 2)])),
+      sendMessage: vi.fn().mockResolvedValue(undefined),
+      subscribeChat: async function* () {
+        yield { type: "message_delta", text: "已經開始回答了" } as never;
+        await new Promise<void>(() => {});
+      },
+    } as unknown as typeof mockKbApi;
+
+    const { result } = renderHook(() => useKbChat({ chatId: "kb-x", collectionIds: ["c1"], client }));
+    await act(async () => {
+      await new Promise<void>((r) => setTimeout(r, 30));
+    });
+    await act(async () => {
+      await result.current.send("問題");
+    });
+    await act(async () => {
+      await new Promise<void>((r) => setTimeout(r, 60));
+    });
+
+    expect(
+      result.current.log.entries.some(
+        (e) => e.kind === "message" && e.message.content.includes("已經開始回答了"),
+      ),
+    ).toBe(true);
+    expect(result.current.log.streaming).toBe(true);
+  });
 });
 
 describe("useKbChat — reconnecting must not eat what is on screen", () => {

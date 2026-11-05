@@ -123,12 +123,11 @@ function WorkspaceLoaded({
       onInvestigationChanged={() => {}}
     />
   );
-  // A conversation with an agent (A11): the agent's name and the way back to
-  // Agent Hub on top, the conversation below — no list of other chats, since
-  // a new conversation is a new copy started there.
+  // A conversation with an agent (A11): the conversation alone — no list of
+  // other chats, since a new conversation is a new copy (the top bar's
+  // 新對話). Its controls are in the shell's own top bar
+  // (`AgentCopyControls`) — one header, not a second one stacked above it.
   if (agentCopy) {
-    // Its controls are in the shell's own top bar (`AgentCopyControls`) —
-    // one header, not a second one stacked above it.
     return shell;
   }
   // Chat-first Apps get the private-chat framing: a left rail of the user's own
