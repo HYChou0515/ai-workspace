@@ -16,7 +16,6 @@ import { api } from "../api";
 import { type AgentHubApi, agentHubApi, type MyConversation } from "../api/agentHub";
 import { HttpError } from "../api/http";
 import { qk } from "../api/queryKeys";
-import { encodePath } from "../api/refPath";
 import { exactTime, relativeTime } from "../api/types";
 import { useDialog } from "../components/Dialog";
 import { PageMark } from "../components/PageMark";
@@ -24,7 +23,7 @@ import { UserChip } from "../components/UserChip";
 import { useBreadcrumbs } from "../hooks/breadcrumbs";
 import { formatBytes } from "../lib/bytes";
 import { useT } from "../lib/i18n";
-import { AGENT_HUB } from "./AgentHubPage";
+import { AGENT_HUB, agentOpenRoute } from "./AgentHubPage";
 
 export function AgentHubAgentPage({
   client = agentHubApi,
@@ -71,8 +70,7 @@ export function AgentHubAgentPage({
   const { agent, notes, mine } = page.data;
   const iso = new Date(agent.published_at).toISOString();
   // The preparing page makes the conversation and lands on it (C12).
-  const start = () =>
-    navigate(`/open/${encodeURIComponent(agent.slug)}/${encodeURIComponent(agent.item_id)}/${encodePath(agent.path)}`);
+  const start = () => navigate(agentOpenRoute(agent));
   const toggle = (id: string) =>
     setPicked((s) => {
       const next = new Set(s);

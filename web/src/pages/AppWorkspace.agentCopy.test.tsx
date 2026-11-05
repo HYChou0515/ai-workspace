@@ -54,15 +54,23 @@ afterEach(() => cleanup());
 // plan-wui-publish-and-agent-hub A11: a conversation with an agent shows the
 // agent's name and the way back to its page in Agent Hub.
 describe("AgentCopyBar", () => {
-  it("names the agent and goes back to its page", () => {
-    renderBar(item({ published_from: "rca-investigation%3Asrc∕a∕agent.ai.yaml", published_title: "Sales" }));
+  it("names the agent, goes back to Agent Hub, and offers a new conversation and the history", () => {
+    const from = "rca-investigation%3Asrc∕a∕agent.ai.yaml";
+    renderBar(item({ published_from: from, published_title: "Sales" }));
 
     expect(screen.getByTestId("agent-copy-bar")).toHaveTextContent("Sales");
-    expect(within(screen.getByTestId("agent-copy-bar")).getByTestId("page-mark")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /回到 Agent Hub/ })).toHaveAttribute(
+    // The user's decision (2026-11-05, overturning A11's "no New chat"): a
+    // new conversation and the history are one press away, in the bar.
+    expect(screen.getByRole("link", { name: "新對話" })).toHaveAttribute(
       "href",
-      `/agents/${encodeURIComponent("rca-investigation%3Asrc∕a∕agent.ai.yaml")}`,
+      `/agents/${encodeURIComponent(from)}/go?new=1`,
     );
+    expect(screen.getByRole("link", { name: "歷史對話" })).toHaveAttribute(
+      "href",
+      `/agents/${encodeURIComponent(from)}`,
+    );
+    expect(within(screen.getByTestId("agent-copy-bar")).getByTestId("page-mark")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /回到 Agent Hub/ })).toHaveAttribute("href", "/agents");
   });
 
   it("goes back to Agent Hub itself when the copy does not say where it came from", () => {

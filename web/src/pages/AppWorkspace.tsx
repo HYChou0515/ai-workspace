@@ -24,7 +24,7 @@ import { WorkspaceSlugProvider } from "../hooks/useWorkspaceSlug";
 import { PageMark } from "../components/PageMark";
 import { useT } from "../lib/i18n";
 import { rememberLastChat } from "../lib/lastChat";
-import { agentPageHref } from "./AgentHubPage";
+import { agentConversationHref, agentPageHref } from "./AgentHubPage";
 import { initialIdeCollapsed, WorkspaceShell } from "./investigation/WorkspaceShell";
 
 export function AppWorkspace() {
@@ -172,7 +172,7 @@ export function AgentCopyBar({ item, slug }: { item: AppItem; slug: string }) {
         flex: "0 0 auto",
       }}
     >
-      <Link to={from ? agentPageHref(from) : "/agents"}>← {t("agentHub.back")}</Link>
+      <Link to="/agents">← {t("agentHub.back")}</Link>
       <span aria-hidden="true" style={{ color: "var(--paper-3)" }}>
         |
       </span>
@@ -188,6 +188,19 @@ export function AgentCopyBar({ item, slug }: { item: AppItem; slug: string }) {
         size={24}
       />
       <span style={{ fontWeight: 600 }}>{title}</span>
+      {from ? (
+        // A new conversation and the history, a press away (the user's
+        // decision, 2026-11-05; NN/g, *progressive disclosure*). Links: both
+        // go somewhere — a new conversation is made where it lands.
+        <span style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
+          <Link className="btn" data-variant="secondary" data-size="sm" to={agentConversationHref(from, true)}>
+            {t("agentHub.newConversation")}
+          </Link>
+          <Link className="btn" data-variant="ghost" data-size="sm" to={agentPageHref(from)}>
+            {t("agentHub.history")}
+          </Link>
+        </span>
+      ) : null}
     </div>
   );
 }

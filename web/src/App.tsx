@@ -17,6 +17,7 @@ import { SchedulesOverviewPage } from "./pages/SchedulesOverviewPage";
 import { WuiOverviewPage } from "./pages/WuiOverviewPage";
 import { AgentHubPage } from "./pages/AgentHubPage";
 import { AgentHubAgentPage } from "./pages/AgentHubAgentPage";
+import { AgentLaunchPage } from "./pages/AgentLaunchPage";
 import { WorkCalendarPage } from "./pages/WorkCalendarPage";
 import { CapacityPage } from "./pages/CapacityPage";
 import { ModelSettingsPage } from "./pages/ModelSettingsPage";
@@ -100,6 +101,8 @@ export function AppRoutes() {
             WUI — the published agents, and one agent's page (A8). */}
         <Route path="/agents" element={<AgentHubPage />} />
         <Route path="/agents/:agentId" element={<AgentHubAgentPage />} />
+        {/* Into a conversation with an agent: its latest, or a new one. */}
+        <Route path="/agents/:agentId/go" element={<AgentLaunchPage />} />
         {/* Every schedule the viewer may read, with its last run and its next
             (docs/plan-schedule-overview.md). */}
         <Route path="/schedules" element={<SchedulesOverviewPage />} />

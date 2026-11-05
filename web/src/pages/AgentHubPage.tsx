@@ -17,6 +17,7 @@ import { Link } from "react-router-dom";
 
 import { type AgentCard, agentHubApi, type AgentHubApi } from "../api/agentHub";
 import { qk } from "../api/queryKeys";
+import { encodePath } from "../api/refPath";
 import { exactTime, relativeTime } from "../api/types";
 import { AppTag } from "../components/AppTag";
 import { Icon } from "../components/Icon";
@@ -33,9 +34,21 @@ import { ViewSwitch } from "./WuiOverviewPage";
 
 export const AGENT_HUB = "Agent Hub";
 
-/** An agent's page in Agent Hub (A8). */
+/** An agent's page in Agent Hub — its introduction and the person's history
+ * with it, one page (A8, as the user amended it 2026-11-05). */
 export function agentPageHref(id: string): string {
   return `/agents/${encodeURIComponent(id)}`;
+}
+
+/** Into a conversation with the agent (`AgentLaunchPage`): the person's
+ * latest, or a first one; ``fresh`` — a new one, whatever came before. */
+export function agentConversationHref(id: string, fresh = false): string {
+  return `/agents/${encodeURIComponent(id)}/go${fresh ? "?new=1" : ""}`;
+}
+
+/** The preparing page that makes a new conversation copy of ``agent`` (C12). */
+export function agentOpenRoute(agent: { slug: string; item_id: string; path: string }): string {
+  return `/open/${encodeURIComponent(agent.slug)}/${encodeURIComponent(agent.item_id)}/${encodePath(agent.path)}`;
 }
 
 export function AgentHubPage({ client = agentHubApi }: { client?: Pick<AgentHubApi, "list"> }) {
@@ -179,6 +192,13 @@ function Star({ agent, starred, starReady, onStar, className = "btn" }: ItemProp
   );
 }
 
+/** The agent's introduction and the person's history with it — one page,
+ * reached the same way from here and from inside a conversation. */
+function IntroLink({ agent }: { agent: AgentCard }) {
+  const t = useT();
+  return <Link to={agentPageHref(agent.id)}>{t("agentHub.intro")}</Link>;
+}
+
 function Usage({ agent }: { agent: AgentCard }) {
   const t = useT();
   const iso = new Date(agent.published_at).toISOString();
@@ -201,13 +221,14 @@ function AgentRow(props: ItemProps) {
         color={agent.color}
         title={agent.title}
       />
-      <Link to={agentPageHref(agent.id)} title={agent.title}>
+      <Link to={agentConversationHref(agent.id)} title={agent.title}>
         {agent.title}
       </Link>
       <span className="detail">
         {showApp ? <AppTag slug={agent.slug} /> : null} {agent.description}
       </span>
       <Usage agent={agent} />
+      <IntroLink agent={agent} />
       <Star {...props} />
     </li>
   );
@@ -241,9 +262,9 @@ function AgentCardItem(props: ItemProps) {
         />
         <div className="wui-card-text">
           {/* Stretched over the card by the sheet, like a page card's link —
-              here into Agent Hub, not a new tab: the agent's page is where a
-              conversation is started. */}
-          <Link to={agentPageHref(agent.id)} title={agent.title}>
+              straight into a conversation with the agent (the user's
+              decision, 2026-11-05): its latest, or a first one. */}
+          <Link to={agentConversationHref(agent.id)} title={agent.title}>
             {agent.title}
           </Link>
           <span className="detail" title={agent.description}>
@@ -258,6 +279,7 @@ function AgentCardItem(props: ItemProps) {
           <UserChip userId={agent.published_by} size={18} />
         </span>
         <Usage agent={agent} />
+        <IntroLink agent={agent} />
       </div>
     </li>
   );

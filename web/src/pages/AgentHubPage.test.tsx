@@ -60,11 +60,17 @@ afterEach(() => cleanup());
 beforeEach(() => localStorage.clear());
 
 describe("AgentHubPage", () => {
-  it("lists each agent as a card that opens its page, with usage and no names", async () => {
+  it("lists each agent as a card that goes straight into a conversation, with usage and no names", async () => {
     renderHub([card(), card({ id: "b", title: "Quality helper", opens: 0, people: 0 })]);
 
     const link = await screen.findByRole("link", { name: "Sales helper" });
-    expect(link).toHaveAttribute("href", `/agents/${encodeURIComponent(card().id)}`);
+    // Straight into a conversation (the user's decision, 2026-11-05) — and
+    // the agent's introduction and history, one page, a link of its own.
+    expect(link).toHaveAttribute("href", `/agents/${encodeURIComponent(card().id)}/go`);
+    expect(screen.getAllByRole("link", { name: "介紹與歷史" })[0]).toHaveAttribute(
+      "href",
+      `/agents/${encodeURIComponent(card().id)}`,
+    );
     expect(screen.getAllByTestId("agent-usage")[0]).toHaveTextContent("7 次打開 · 3 人");
     expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("Agent Hub");
   });
