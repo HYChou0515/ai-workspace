@@ -24,6 +24,7 @@ import { EnvVarsModal } from "../../components/EnvVarsModal";
 import { missingLabel, useEnvMissing } from "../../components/PageIdentity";
 import { ItemEnvironmentModal } from "../../components/ItemEnvironmentModal";
 import { ToolsPickerModal } from "../../components/ToolsPickerModal";
+import { useSkillUpdateMark } from "../../hooks/useSkillUpdateMark";
 import { useWorkspaceSlug } from "../../hooks/useWorkspaceSlug";
 import { type ChatItem, ChatItemProvider, type EnvTarget } from "../../hooks/chatItem";
 import { HeaderActions, type HeaderTier, useHeaderTier } from "./HeaderActions";
@@ -160,6 +161,7 @@ export function AgentPanel({
   environment,
   canExportVideo = false,
   canAddFiles,
+  canUpdateSkills,
   uploadDir = "uploads",
 }: {
   investigationId: string;
@@ -237,6 +239,9 @@ export function AgentPanel({
    *  the text goes to the AI unsaved. Absent ⇒ unknown, drawn as allowed (the
    *  server still decides). */
   canAddFiles?: boolean;
+  /** May this viewer update the item's skill hub copies (`edit_content`,
+   * plan-skill-hub-release-notes D4)? Threaded to the Skills panel. */
+  canUpdateSkills?: boolean;
   /** #198: the folder the composer's attach stages files into — the item's profile's
    * `upload_dir` (default `uploads/`), the same folder its workflows glob. */
   uploadDir?: string;
@@ -853,6 +858,7 @@ export function AgentPanel({
         onEnvTargetClose={() => setEnvTarget(null)}
         environment={environment}
         canExportVideo={canExportVideo}
+        canUpdateSkills={canUpdateSkills}
         appliedSkills={appliedSkills}
         onToggleApplySkill={toggleApplySkill}
       />
@@ -1545,11 +1551,15 @@ export function AgentHeader({
   appliedSkills = [],
   onToggleApplySkill,
   tier: tierProp,
+  canUpdateSkills,
 }: {
   streaming: boolean;
   investigationId: string;
   /** The current App's slug (#95) — the export targets the app-scoped route. */
   slug: string;
+  /** May this viewer update the item's skill hub copies (`edit_content`,
+   * plan-skill-hub-release-notes D4)? */
+  canUpdateSkills?: boolean;
   /** The chat this header belongs to. Optional because a surface can have no
    * chat of its own (#739's gauge is absent there for the same reason), and
    * Export is then not drawn: it used to know only the item, which let the
@@ -1614,6 +1624,8 @@ export function AgentHeader({
   // for the same person on the same item while the first is alive.
   const [videoJob, setVideoJob] = useState<ChatVideoQueued | null>(null);
   const [showSkills, setShowSkills] = useState(false);
+  // plan-skill-hub-release-notes D1: the skills button's mark.
+  const skillUpdates = useSkillUpdateMark(slug, investigationId);
   const [showTools, setShowTools] = useState(false);
   const [showEnv, setShowEnv] = useState(false);
   const [showItemEnv, setShowItemEnv] = useState(false);
@@ -1679,6 +1691,7 @@ export function AgentHeader({
           onSaveSkillPrefs={onSaveSkillPrefs}
           appliedSkills={appliedSkills}
           onToggleApply={onToggleApplySkill}
+          canUpdate={canUpdateSkills === true}
         />
       )}
       {showItemEnv && environment && (
@@ -1820,7 +1833,17 @@ export function AgentHeader({
             testid: "skills-button",
             icon: "sparkle",
             label: t("skills.button"),
-            tip: t("skills.tip"),
+            // plan-skill-hub-release-notes D1: a skill hub copy with a new
+            // version this person has not put off says so here, in the
+            // workspace, before the panel is opened.
+            ...(skillUpdates > 0
+              ? {
+                  aria: `${t("skills.button")} — ${t("skills.updates.mark", { n: skillUpdates })}`,
+                  tip: t("skills.updates.mark", { n: skillUpdates }),
+                  attention: true,
+                  count: skillUpdates,
+                }
+              : { tip: t("skills.tip") }),
             onClick: () => setShowSkills(true),
           },
           // Only where there is a chat to name. Without one the button could

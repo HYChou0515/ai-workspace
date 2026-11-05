@@ -41,6 +41,7 @@ import { failureLine } from "../../lib/failure";
 import { useLocale, useT } from "../../lib/i18n";
 import { FileServiceProvider, investigationFileService, useFileService } from "../../api/fileService";
 import { WorkflowsSidebar } from "../../components/WorkflowsSidebar";
+import { SkillUpdateBanner } from "../../components/SkillUpdateBanner";
 import { WaitingNotice } from "../../components/WaitingNotice";
 import { ItemProfileProvider } from "../../hooks/itemProfile";
 import { subscribeChatRequest } from "../../lib/chatRequestBus";
@@ -461,6 +462,7 @@ function ShellBody({
     canConverse: _canConverse,
     canWriteMeta: _canWriteMeta,
     canAddContent: _canAddContent,
+    canEditContent: _canEditContent,
     canManageAccess: _canManageAccess,
     canOpenEnv: _canOpenEnv,
   } = useItemAccess(item);
@@ -852,6 +854,17 @@ function ShellBody({
             }}
           />
         )}
+        {/* plan-skill-hub-release-notes D7: a skill hub copy with a new version
+            says so at the top of the item, in every layout — the chat column
+            is not on screen in a narrow IDE-first item (#464). */}
+        {/* Keyed by item: an open list, an outcome or an update still running
+            belongs to the item it was about, not the next one opened. */}
+        <SkillUpdateBanner
+          key={item.resource_id}
+          slug={manifest.slug}
+          itemId={item.resource_id}
+          canUpdate={_canEditContent}
+        />
         <div style={{ flex: 1, display: "flex", minHeight: 0, position: "relative" }}>
           {/* #89: the file IDE (activity bar + file tree + editor + bottom
               panel) renders only when the App enables `function.workspace`; a
@@ -1114,6 +1127,7 @@ function ShellBody({
               // neither: it is the chat's own, gated on read_chat above.
               canExportVideo={_canSeeFiles && _canAddContent}
               canAddFiles={_canAddContent}
+              canUpdateSkills={_canEditContent}
             />
             )}
           </div>

@@ -129,6 +129,92 @@ describe("AgentHeader skills (#298)", () => {
   });
 });
 
+describe("AgentHeader skill updates (plan-skill-hub-release-notes D1)", () => {
+  afterEach(() => {
+    cleanup();
+    localStorage.clear();
+  });
+
+  it("marks the skills button when a skill hub copy has a new version, and says how many", async () => {
+    const { api } = await import("../../api");
+    vi.mocked(api.getItemSkills).mockResolvedValueOnce([
+      {
+        name: "triage",
+        description: "",
+        source: "workspace",
+        default_on: true,
+        is_copy: true,
+        copy_of: "hub",
+        hub_entry: "e1",
+        update_available: true,
+        upstream: "live",
+        pref: "follow",
+        effective: true,
+        updates: [{ version: 3, kind: "publish", at: "2026-11-03T12:00:00Z", release_note: "", back_to: null }],
+      },
+    ]);
+    renderWithQuery(
+      <MemoryRouter>
+        <AgentHeader streaming={false} investigationId="inv-up" chatId="chat-1" slug="rca" />
+      </MemoryRouter>,
+    );
+    await vi.waitFor(() => expect(screen.getByTestId("skills-button")).toHaveAttribute("data-attention", "true"));
+    expect(screen.getByTestId("skills-button").getAttribute("aria-label") ?? "").toContain("1");
+    // D1 promised "how many", and review round 1 found it only in the tooltip:
+    // the number is drawn on the button (Material 3 large badge).
+    expect(screen.getByTestId("skills-button").querySelector("[data-badge]")?.textContent).toBe("1");
+  });
+
+  // The live demo at 1280px: the chat header had folded its actions into "⋯",
+  // and the mark lived only on the unfolded button — so nobody saw it. The
+  // trigger carries it while anything behind it does (Material 3 Badges: the
+  // badge sits on the icon that stands for the hidden items), and its name says
+  // which; the menu item names itself too.
+  it("keeps the mark visible when the actions are folded into the more-button", async () => {
+    const { api } = await import("../../api");
+    vi.mocked(api.getItemSkills).mockResolvedValueOnce([
+      {
+        name: "triage",
+        description: "",
+        source: "workspace",
+        default_on: true,
+        is_copy: true,
+        copy_of: "hub",
+        hub_entry: "e1",
+        update_available: true,
+        upstream: "live",
+        pref: "follow",
+        effective: true,
+        updates: [{ version: 3, kind: "publish", at: "2026-11-03T12:00:00Z", release_note: "", back_to: null }],
+      },
+    ]);
+    renderWithQuery(
+      <MemoryRouter>
+        <AgentHeader streaming={false} investigationId="inv-menu" chatId="chat-1" slug="rca" tier="menu" />
+      </MemoryRouter>,
+    );
+    const more = screen.getByTestId("header-more-button");
+    await vi.waitFor(() => expect(more).toHaveAttribute("data-attention", "true"));
+    expect(more.getAttribute("aria-label") ?? "").toContain("1");
+    fireEvent.click(more);
+    expect(screen.getByTestId("header-more-skills").getAttribute("aria-label") ?? "").toContain("1");
+    // Review round 1 (WCAG 2.5.3 Label in Name): an item with nothing to flag
+    // is named by the label it shows — not by an `aria` written for its
+    // unfolded icon (Export's was the English "Export conversation").
+    expect(screen.getByTestId("header-more-export")).not.toHaveAttribute("aria-label");
+  });
+
+  it("carries no mark when no copy is behind", async () => {
+    renderWithQuery(
+      <MemoryRouter>
+        <AgentHeader streaming={false} investigationId="inv-none" chatId="chat-1" slug="rca" />
+      </MemoryRouter>,
+    );
+    await new Promise((r) => setTimeout(r, 20));
+    expect(screen.getByTestId("skills-button")).not.toHaveAttribute("data-attention");
+  });
+});
+
 describe("AgentHeader tool picker (#322)", () => {
   afterEach(cleanup);
 

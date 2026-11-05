@@ -147,6 +147,15 @@ def _quote_path(path: str) -> bytes:
     return f'"{escaped}"'.encode()
 
 
+def publish_message(name: str, release_note: str) -> str:
+    """A version's commit message: ``publish <name>``, then — when there is
+    one — a blank line and the release note (plan-skill-hub-release-notes:
+    the note IS the version's message, so it travels with the commit, a
+    rollback included). `release_notes` reads it back."""
+    note = release_note.strip()
+    return f"publish {name}\n\n{note}" if note else f"publish {name}"
+
+
 def _who(name: str) -> bytes:
     """`name <>` for a fast-import ident line; `<`, `>` and newlines cannot appear."""
     clean = re.sub(r"[<>\n]", "", name).strip() or "skill-hub"
@@ -336,6 +345,24 @@ class SkillHubRepos:
             body = body[: other + 1]
         hunks = _HUNK_CONTEXT.sub(r"\1", body)
         return f"--- a/{path}\n+++ b/{path}\n{hunks}"
+
+    async def release_notes(self, entry_id: str, commits: Collection[str]) -> dict[str, str]:
+        """Each commit's release note: its message after the subject line
+        (`publish_message`), ``""`` for a version published without one.
+        One git call for all of them (plan-skill-hub-release-notes P1)."""
+        wanted = sorted({_commit(c) for c in commits})
+        if not wanted:
+            return {}
+        _code, out = await self._git(
+            entry_id, "show", "-s", "--no-walk", "--format=%H%x00%B%x01", *wanted
+        )
+        notes: dict[str, str] = {}
+        for record in out.decode(errors="replace").split("\x01"):
+            commit, sep, message = record.strip("\n").partition("\x00")
+            if sep:
+                _subject, _blank, body = message.partition("\n")
+                notes[commit] = body.strip()
+        return notes
 
     async def parent(self, entry_id: str, commit: str) -> str | None:
         """The commit `commit` was written on top of; ``None`` for a first version."""

@@ -871,6 +871,10 @@ class SkillUpstream(msgspec.Struct, frozen=True):
 
     state: UpstreamState
     update_available: bool
+    #: A hub copy in git: its entry and the version it was installed at — what
+    #: "the versions since" are counted from (plan-skill-hub-release-notes P4).
+    entry: str = ""
+    installed: str = ""
 
 
 async def skill_upstream(
@@ -903,7 +907,12 @@ async def skill_upstream(
         return SkillUpstream(state=up.state, update_available=False)
     if up.commit and up.origin.commit:
         # G13: one comparison of two strings — no file is read, from git or here.
-        return SkillUpstream(state="live", update_available=up.origin.commit != up.commit)
+        return SkillUpstream(
+            state="live",
+            update_available=up.origin.commit != up.commit,
+            entry=up.entry,
+            installed=up.origin.commit,
+        )
     if up.commit:
         # A copy made before the git store (G17): its sha256 map against the
         # current version's, computed from git once per version.

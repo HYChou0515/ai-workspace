@@ -226,6 +226,40 @@ def test_the_standing_instruction_doubles_write_where_the_real_tools_do(tmp_path
     assert SKILL_HUB_ENTRY_MARKER + '{"entry_id": ' in published
 
 
+def test_publish_double_asks_a_republish_for_a_release_note_as_the_real_tool_does(tmp_path):
+    """plan-skill-hub-release-notes P3: the guidance under test says "a new
+    version comes back 'not published yet' with the change — draft a note from
+    it and confirm it with ask_user". A double that published every call never
+    showed the model that reply, so the scenario could not measure the draft.
+    A scenario says which skills are already on the hub by staging
+    `published-skills.txt`; a skill on it is a new version and, without a
+    note, is refused in the real reply's words — with a change to draft from."""
+
+    from workspace_app.skill_eval.tools import schemas as all_schemas
+
+    events: list[Event] = []
+    (tmp_path / "published-skills.txt").write_text("log-digest\n")
+
+    refused = run("publish_skill", {"name": "log-digest"}, tmp_path, events)
+    assert refused.startswith("not published yet — this is a new version of your 'log-digest'")
+    assert "Changed since the current version:" in refused
+    assert "published skill" not in refused
+
+    blank = run("publish_skill", {"name": "log-digest", "release_note": "  "}, tmp_path, events)
+    assert blank.startswith("not published yet")
+
+    noted = run(
+        "publish_skill", {"name": "log-digest", "release_note": "Adds X."}, tmp_path, events
+    )
+    assert "published skill 'log-digest'" in noted
+
+    # A skill not yet on the hub is v1: no note needed.
+    assert "published skill 'fresh'" in run("publish_skill", {"name": "fresh"}, tmp_path, events)
+
+    publish = next(s for s in all_schemas() if s["function"]["name"] == "publish_skill")
+    assert "release_note" in publish["function"]["parameters"]["properties"]
+
+
 def test_the_standing_instruction_doubles_take_the_real_tools_parameters():
     """Review round 2: the `save_workflow` double took `(name, body)` while the
     real tool — and the `author-workflow` guidance under test — takes
@@ -252,7 +286,9 @@ def test_the_standing_instruction_doubles_take_the_real_tools_parameters():
     }
     for schema in schemas():
         name = schema["function"]["name"]
-        if name not in pinned:
+        # publish_skill's parameters ARE the real strict schema — pinned by
+        # parity below, which is stronger than this signature check.
+        if name not in pinned or name == "publish_skill":
             continue
         real = inspect.signature(_IMPLS[name]).parameters
         real_params = [p for p in real if p != "ctx"]
@@ -260,6 +296,26 @@ def test_the_standing_instruction_doubles_take_the_real_tools_parameters():
         double = schema["function"]["parameters"]
         assert set(double["properties"]) <= set(real_params), (name, double["properties"])
         assert sorted(double["required"]) == sorted(real_required), (name, double["required"])
+
+
+def test_the_publish_double_offers_exactly_the_real_strict_schema():
+    """Review round 1 (#1004): the double declared `required: ["name"]` while the
+    live tool is strict (`["name", "release_note"]`, the note nullable), so the
+    republish scenario scored a schema production never offers."""
+    from agents import function_tool
+
+    from workspace_app.agent.tools import publish_skill_impl
+
+    real = function_tool(publish_skill_impl, name_override="publish_skill", strict_mode=True)
+    double = next(t for t in schemas() if t["function"]["name"] == "publish_skill")
+    assert double["function"]["parameters"] == real.params_json_schema
+    assert sorted(real.params_json_schema["required"]) == ["name", "release_note"]
+
+
+def test_the_publish_double_reads_a_null_note_as_none(tmp_path):
+    (tmp_path / "published-skills.txt").write_text("log-digest\n")
+    out = run("publish_skill", {"name": "log-digest", "release_note": None}, tmp_path, [])
+    assert out.startswith("not published yet")
 
 
 def test_read_file_records_which_path_was_asked_for(tmp_path):

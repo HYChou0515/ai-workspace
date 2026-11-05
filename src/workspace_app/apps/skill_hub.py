@@ -48,7 +48,7 @@ from specstar.types import (
 
 from ..perm import Actor, Permission, authorize
 from ..resources.groups import groups_of
-from .skill_hub_git import GitError
+from .skill_hub_git import GitError, publish_message
 from .skill_payload import SkillOrigin
 from .skills import SKILL_BODY_CAP, SkillError, _parse_frontmatter
 
@@ -451,6 +451,9 @@ class HistoryEvent(Struct, kw_only=True):
     #: before the owner-only rows are dropped, so every reader says the same
     #: number for the same version.
     version: int | None = None
+    #: What the author wrote about the version current after this row — its
+    #: commit message (plan-skill-hub-release-notes P1); "" when none was.
+    release_note: str = ""
 
 
 class FileChange(Struct, kw_only=True):
@@ -781,6 +784,10 @@ class SkillHubStore:
                 res = rm.get_resource_revision(entry_id, revision_id)
                 if isinstance(res.data, SkillHubEntry):
                     out.append((revision_id, res.info.created_time, res.data))
+            # In the order they were WRITTEN: `list_revisions` promises no
+            # order — the in-memory backend answers oldest first, the disk one
+            # does not — and every number below is counted along it (#1004).
+            out.sort(key=lambda r: r[1])
             return out
 
         events: list[HistoryEvent] = []
@@ -843,6 +850,12 @@ class SkillHubStore:
                     )
                 )
             prev = row
+        notes = await self.repos.release_notes(
+            entry_id, {e.commit for e in events if e.version is not None}
+        )
+        for e in events:
+            if e.version is not None:
+                e.release_note = notes.get(e.commit, "")
         if prev is not None and last_revision not in await self.repos.tagged_revisions(entry_id):
             await self.repos.tag(entry_id, last_revision, prev.commit)
         current = self.get(entry_id)
@@ -853,6 +866,27 @@ class SkillHubStore:
             events[-1].current = True
         events.reverse()
         return events
+
+    async def updates_since(
+        self, entry_id: str, installed: str, *, viewer: str
+    ) -> list[tuple[HistoryEvent, int | None]]:
+        """The versions after `installed` — a copy's commit — newest first
+        (plan-skill-hub-release-notes D5): every publish or rollback newer than
+        the newest row whose version IS `installed`. A rollback below it is
+        one of them. A commit no timeline row names gets the current version
+        alone. Each comes with the number of the version a rollback brought
+        back (`None` for a publish), counted on the SAME read of the timeline —
+        one read per copy, since the item's skill list asks on every open."""
+        timeline = await self.history(entry_id, viewer=viewer)
+        number = {e.revision: e.version for e in timeline if e.version}
+        versions = [e for e in timeline if e.version]
+        for i, event in enumerate(versions):
+            if event.commit == installed:
+                versions = versions[:i]
+                break
+        else:
+            versions = versions[:1]
+        return [(e, number.get(e.to_revision) if e.kind == "rollback" else None) for e in versions]
 
     async def version(self, entry_id: str, revision_id: str) -> SkillHubEntry:
         """The entry as it was at `revision_id`: its fields, and through
@@ -1084,6 +1118,7 @@ class SkillHubStore:
         referenced_tools: list[str],
         review: SkillHubReview,
         forked_from: str = "",
+        release_note: str = "",
     ) -> str:
         """Create the entry for ``(owner, name)``, or — when it already exists —
         commit the new version on top of master and write a new revision of the
@@ -1119,7 +1154,11 @@ class SkillHubStore:
             entry_id = await self._claim_name(row)
             try:
                 commit = await self.repos.write_version(
-                    entry_id, payload, parent=None, author=owner, message=f"publish {name}"
+                    entry_id,
+                    payload,
+                    parent=None,
+                    author=owner,
+                    message=publish_message(name, release_note),
                 )
                 if not await self.repos.move_master(entry_id, commit, expected=None):
                     raise RuntimeError(f"a new entry's repo already had a version: {entry_id}")
@@ -1155,7 +1194,9 @@ class SkillHubStore:
                     "skill hub: %s moved into git without its own top-level .gitattributes",
                     existing,
                 )
-        commit = await self._commit_on_master(existing, payload, author=owner, name=name)
+        commit = await self._commit_on_master(
+            existing, payload, author=owner, name=name, release_note=release_note
+        )
         written = await self._change(
             existing,
             lambda now: msgspec.structs.replace(
@@ -1178,14 +1219,24 @@ class SkillHubStore:
         return existing
 
     async def _commit_on_master(
-        self, entry_id: str, payload: Mapping[str, bytes], *, author: str, name: str
+        self,
+        entry_id: str,
+        payload: Mapping[str, bytes],
+        *,
+        author: str,
+        name: str,
+        release_note: str = "",
     ) -> str:
         """Commit `payload` on top of master and move master to it, re-reading
         and re-committing when another publish moved master first (G5)."""
         for _attempt in range(_FIRST_PUBLISH_TRIES):
             parent = await self.repos.master(entry_id)
             commit = await self.repos.write_version(
-                entry_id, payload, parent=parent, author=author, message=f"publish {name}"
+                entry_id,
+                payload,
+                parent=parent,
+                author=author,
+                message=publish_message(name, release_note),
             )
             if await self.repos.move_master(entry_id, commit, expected=parent):
                 return commit

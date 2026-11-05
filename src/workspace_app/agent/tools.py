@@ -12,7 +12,7 @@ import json
 import logging
 import posixpath
 import re
-from collections.abc import Callable, Collection, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Literal, TypedDict
 
 import magic
@@ -2767,7 +2767,76 @@ async def save_skill_impl(
     )
 
 
-async def publish_skill_impl(ctx: RunContextWrapper[AgentToolContext], name: str) -> str:
+#: How much of the change since the current version a refused publish shows
+#: the model to draft a release note from: enough for a skill's text, bounded
+#: so a large folder cannot flood the turn.
+_RELEASE_NOTE_DIFF_CAP = 6000
+
+#: The longest release note `publish_skill` stores. It is the commit message,
+#: read back in every history view and in every behind copy's skill listing,
+#: so a pasted diff would sit in all of them for good.
+RELEASE_NOTE_MAX = 2000
+
+
+def release_note_needed(name: str, change: str) -> str:
+    """`publish_skill`'s reply to a new version sent without a note
+    (plan-skill-hub-release-notes D2). One function, so the `skill_eval` double
+    answers in exactly these words."""
+    return (
+        f"not published yet — this is a new version of your '{name}', and a new version "
+        "needs a release note telling the people who installed it what changed. Draft a "
+        "short one from the change below (what was added, what changed, what to watch "
+        "for), show it to the user and ask them to confirm or edit it, then call "
+        f"publish_skill('{name}', release_note=...) again with it.\n\nChanged since the "
+        f"current version:\n```\n{change}\n```"
+    )
+
+
+def _changes_since(current: Mapping[str, bytes], new: Mapping[str, bytes]) -> str:
+    """What `new` changes over `current`, per file: added / removed / changed.
+    A changed or added text file comes with its diff (an added one as added
+    lines, so a note can say what it holds); a removed one gets its status line
+    only (unlike the hub's diff — a note says what is gone, not what it said),
+    and so does a binary one or one over the hub's `DIFF_TEXT_CAP` on either
+    side, as the hub's own diff does — difflib over a whole 20 MiB file is
+    seconds of CPU. The result is capped at `_RELEASE_NOTE_DIFF_CAP`. Blocking: call it
+    through `asyncio.to_thread`."""
+    import difflib
+
+    from ..apps.skill_hub import DIFF_TEXT_CAP
+
+    parts: list[str] = []
+    for path in sorted(current.keys() | new.keys()):
+        old, now = current.get(path), new.get(path)
+        if old == now:
+            continue
+        status = "added" if old is None else "removed" if now is None else "changed"
+        if status == "removed":
+            parts.append(f"{path}: removed")
+            continue
+        if len(old or b"") > DIFF_TEXT_CAP or len(now or b"") > DIFF_TEXT_CAP:
+            parts.append(f"{path}: {status} (too large to show)")
+            continue
+        parts.append(f"{path}: {status}")
+        try:
+            a = (old or b"").decode("utf-8").splitlines()
+            b = (now or b"").decode("utf-8").splitlines()
+        except UnicodeDecodeError:
+            continue  # not text: the status line says it
+        parts.extend(list(difflib.unified_diff(a, b, lineterm="", n=1))[2:])
+        if sum(len(x) + 1 for x in parts) > _RELEASE_NOTE_DIFF_CAP:
+            break
+    if not parts:
+        return "No file differs from the current version."
+    text = "\n".join(parts)
+    if len(text) > _RELEASE_NOTE_DIFF_CAP:
+        text = text[:_RELEASE_NOTE_DIFF_CAP] + "\n… (the rest of the change is not shown)"
+    return text
+
+
+async def publish_skill_impl(
+    ctx: RunContextWrapper[AgentToolContext], name: str, release_note: str | None = None
+) -> str:
     """Publish one of THIS workspace's skills (a `.skill/<name>/` folder) to the
     skill hub, where every user of the platform can find it and install it into
     their own items. Use it when the user asks to share, publish or upload a
@@ -2784,7 +2853,15 @@ async def publish_skill_impl(ctx: RunContextWrapper[AgentToolContext], name: str
 
     Publishing the same name again replaces your earlier version. A folder
     installed from someone else's skill hub entry publishes as a fork of theirs.
-    The entry is public by default. Returns a confirmation or an `error:` note."""
+    The entry is public by default. Returns a confirmation or an `error:` note.
+
+    `release_note` tells the people who installed the skill what this version
+    changes. Send `null` unless the user has approved a note: a new version of
+    an entry that already exists then publishes nothing and the reply shows
+    what changed since the current version — draft a short note from that
+    (what was added, changed, what to watch for), confirm it with the user,
+    then call again with the text they approved (at most 2000 characters). A
+    first version needs none."""
     for verb in TOOL_VERBS["publish_skill"]:
         if (denied := authorize_tool(ctx.context, verb)) is not None:
             return denied
@@ -2865,6 +2942,21 @@ async def publish_skill_impl(ctx: RunContextWrapper[AgentToolContext], name: str
                 "or remove its `.origin` file to publish it as a new version of your own."
             )
 
+    # A new version tells the people who installed the earlier one what it
+    # changes (plan-skill-hub-release-notes D2): without a note nothing is
+    # published — before the room check and the review, so neither is spent —
+    # and the change since the current version comes back to draft it from.
+    note = (release_note or "").strip()
+    if len(note) > RELEASE_NOTE_MAX:
+        return (
+            f"error: not published — the release note is {len(note)} characters; it can be "
+            f"at most {RELEASE_NOTE_MAX}. It is what the people who installed this skill read "
+            "before updating: what changed and what to watch for, not the diff."
+        )
+    if existed is not None and not note:
+        before = await hub.payload_of(existed)
+        return release_note_needed(name, await asyncio.to_thread(_changes_since, before, payload))
+
     # After the publish the folder's manifest is rewritten to the entry it
     # just became (below) — but only where that changes nothing about what the
     # folder IS in this item: the publisher's own work (no manifest yet) or a
@@ -2912,6 +3004,7 @@ async def publish_skill_impl(ctx: RunContextWrapper[AgentToolContext], name: str
         referenced_tools=tools,
         review=review,
         forked_from=forked_from,
+        release_note=note,
     )
     # The folder now tracks the entry it just became (review round 1): its
     # manifest is rewritten to the version just published, so the Skills panel
@@ -4351,7 +4444,7 @@ def _with_absent_convention(tool: FunctionTool) -> FunctionTool:
     definition itself — once. (It used to arrive twice: `format_tools_for_prompt`
     rendered every description into the system prompt as well, until
     `docs/plan-tool-on-demand-loading.md` removed that second copy.) The cost is
-    bounded: only 6 of 31 built-ins have nullable args, so this is one short line
+    bounded: only a minority of built-ins have nullable args, so this is one short line
     each, and the alternative (a prompt-only note) would leave the wire-level
     tool definition silent on its own convention."""
     names = _nullable_arg_names(tool)

@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { type ComponentProps, useEffect, useRef, useState } from "react";
+import { type ComponentProps, type ReactNode, useEffect, useRef, useState } from "react";
 
 import { api } from "../api";
 import type { FileService } from "../api/fileService";
@@ -17,6 +17,7 @@ import { publishAgentDraft } from "../lib/agentDraftBus";
 import { ActionMenu, type ActionMenuItem } from "./ActionMenu";
 import { ModalShell } from "./ModalShell";
 import { SkillHubPicker } from "./SkillHubPicker";
+import { latestUpdate, SkillUpdates } from "./SkillUpdates";
 
 /**
  * The Skills panel (#298 + #380). Lists every skill available to this item —
@@ -37,6 +38,7 @@ export function SkillsModal({
   onToggleApply,
   client = api,
   hubClient,
+  canUpdate = false,
 }: {
   slug: string;
   itemId: string;
@@ -51,6 +53,10 @@ export function SkillsModal({
   client?: Pick<ApiClient, "getItemSkills" | "refreshItemSkill">;
   /** The skill hub client the picker installs through (tests inject one). */
   hubClient?: ComponentProps<typeof SkillHubPicker>["client"];
+  /** May this viewer change the item's skill copies — `edit_content`
+   * (plan-skill-hub-release-notes D4)? The server is the gate; this decides
+   * whether a hub copy's Update is drawn. */
+  canUpdate?: boolean;
 }) {
   const t = useT();
   const qc = useQueryClient();
@@ -297,6 +303,15 @@ export function SkillsModal({
                 // (both read `source: workspace`). A package skill's files are
                 // the deploy's.
                 onPublish={s.source === "workspace" ? () => publish(s.name) : undefined}
+                extra={
+                  <SkillUpdates
+                    skill={s}
+                    // The same rule the row's own Update follows, and only
+                    // for someone who may change the item's copy (D4).
+                    canUpdate={canUpdate && !!s.update_available && !upstreamGone(s) && !s.readonly}
+                    onUpdate={() => void refresh(s.name, false)}
+                  />
+                }
               />
             ))
           )}
@@ -391,6 +406,7 @@ function SkillRow({
   onRefresh,
   onReset,
   onPublish,
+  extra,
 }: {
   skill: ItemSkillState;
   state: ToolPref;
@@ -406,6 +422,8 @@ function SkillRow({
   onReset?: () => void;
   /** Skill hub (D2): offered on a skill whose files are in this workspace. */
   onPublish?: () => void;
+  /** Drawn under the description — a hub copy's updates (SkillUpdates). */
+  extra?: ReactNode;
 }) {
   const t = useT();
   // "The shipped version" is the package's phrase; a hub copy updates to,
@@ -455,7 +473,7 @@ function SkillRow({
               // whole point of copying it.
               <span data-testid={`skill-copy-${skill.name}`}>{t("skills.copy")}</span>
             ) : null}
-            {skill.update_available && !upstreamGone(skill) && !skill.readonly ? (
+            {skill.update_available && !upstreamGone(skill) && !skill.readonly && !latestUpdate(skill) ? (
               <span data-testid={`skill-update-${skill.name}`} className="skills-row-todo">
                 {t(fromHub ? "skills.updateAvailable.hub" : "skills.updateAvailable")}
                 {onRefresh ? (
@@ -485,6 +503,7 @@ function SkillRow({
         <div className="skills-row-desc" title={skill.description}>
           {skill.description}
         </div>
+        {extra}
       </div>
 
       <div data-testid={`skill-actions-${skill.name}`} className="skills-row-controls">
