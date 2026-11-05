@@ -124,6 +124,27 @@ describe("useItemAccess", () => {
     await waitFor(() => expect(editor.result.current.canAddContent).toBe(true));
   });
 
+  // The skill hub Update's gate (plan-skill-hub-release-notes D4): the sync
+  // route asks `edit_content` ALONE. `add_content` or `write_meta` passes the
+  // write union and is refused 403 — so the union is the wrong question again.
+  it("separates editing content (the skill Update) from the write union", async () => {
+    signInAs("erin", false);
+    const adder = access({
+      ...privateItem,
+      permission: { visibility: "restricted", add_content: ["user:erin"], write_meta: ["user:erin"] },
+    } as unknown as AppItem);
+    await waitFor(() => expect(adder.result.current.canConverse).toBe(false));
+    expect(adder.result.current.canWrite).toBe(true);
+    expect(adder.result.current.canEditContent).toBe(false);
+
+    const editor = access({
+      ...privateItem,
+      permission: { visibility: "restricted", edit_content: ["user:erin"] },
+    } as unknown as AppItem);
+    await waitFor(() => expect(editor.result.current.canConverse).toBe(false));
+    expect(editor.result.current.canEditContent).toBe(true);
+  });
+
   it("the owner keeps full access without being a superuser", async () => {
     signInAs("alice", false);
     const { result } = access(privateItem);

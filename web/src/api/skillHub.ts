@@ -169,6 +169,9 @@ export type SkillHubHistoryEvent = {
   current: boolean;
   /** v1, v2, … on a publish or rollback; `null` on any other row. */
   version: number | null;
+  /** What the author wrote about that version (plan-skill-hub-release-notes);
+   * "" when none was, absent from an older API pod. */
+  release_note?: string;
 };
 
 /** One version, read (never installed — G23). */

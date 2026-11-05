@@ -1,0 +1,9 @@
+{
+  "name": "republish-drafts-a-note",
+  "note": "A new version of a skill already on the hub (staged in published-skills.txt). publish_skill answers 'not published yet' with the change; the model drafts a release note from it and puts it to the user with ask_user before publishing it.",
+  "prompt": "I improved `log-digest` — please publish the new version to the skill hub.",
+  "data": ["published-skills.txt"],
+  "expect": {
+    "must_call": ["publish_skill", "ask_user"]
+  }
+}

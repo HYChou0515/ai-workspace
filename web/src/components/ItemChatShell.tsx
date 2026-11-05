@@ -62,6 +62,9 @@ type AgentChrome = {
    * 請幫我查 card hides its attachments without it — the server would refuse
    * them, and its text goes to the AI without being saved. */
   canAddFiles?: boolean;
+  /** plan-skill-hub-release-notes D4: may this viewer update the item's skill
+   * hub copies (`edit_content`)? Threaded to the AgentPanel's Skills panel. */
+  canUpdateSkills?: boolean;
   /** #198: the folder the composer's attach stages files into (the item's profile's
    * upload_dir; default uploads/). Threaded straight through to the AgentPanel. */
   uploadDir: string;
@@ -105,6 +108,7 @@ export function ItemChatShell({
   environment,
   canExportVideo,
   canAddFiles,
+  canUpdateSkills,
   onSaveSkillPrefs,
   uploadDir,
 }: {
@@ -332,6 +336,7 @@ export function ItemChatShell({
           environment={environment}
           canExportVideo={canExportVideo}
           canAddFiles={canAddFiles}
+          canUpdateSkills={canUpdateSkills}
           onSaveSkillPrefs={onSaveSkillPrefs}
           uploadDir={uploadDir}
         />
@@ -417,6 +422,7 @@ function ItemChatPanel({
   environment,
   canExportVideo,
   canAddFiles,
+  canUpdateSkills,
   onSaveSkillPrefs,
   uploadDir,
 }: {
@@ -471,6 +477,7 @@ function ItemChatPanel({
         environment={environment}
         canExportVideo={canExportVideo}
         canAddFiles={canAddFiles}
+        canUpdateSkills={canUpdateSkills}
         onSaveSkillPrefs={onSaveSkillPrefs}
         appTitle={appTitle}
         appIcon={appIcon}

@@ -752,6 +752,29 @@ system prompt build 時**靜態**列入 index(`apps/catalog.py`),workspace skill
 - **歷史與回復**:詳情頁「版本紀錄」每個 revision 一列;看得到這個 skill 的人能看任一版、和另一版
   比對、〔從這一版 fork〕到自己的 item(不提示同步、不算安裝);owner 能〔回復到這一版〕——master
   指回那個 commit,內容欄位取那一版,owner 與可見範圍維持現在的,不重新審查。
+- **更新說明與更新提醒**（[`plan-skill-hub-release-notes.md`](plan-skill-hub-release-notes.md)）:
+  說明就是那一版的 **commit message**（`publish <name>`,空一行後是說明）,沒有新欄位、沒有 `Schema` 升版;
+  版本紀錄每一版顯示它。第二版起 `publish_skill(name, release_note)` 的 `release_note` 是 `null` 或空白就**不發布**,
+  回「not published yet」加上和目前版本的差異（逐檔新增／刪除／修改;新增與修改的文字檔帶內容或 diff,刪除的、
+  二進位的、任一邊超過 `DIFF_TEXT_CAP`（256 KiB）的只列檔名;整段上限 6000 字元,在背景執行緒算）——
+  在大小與結構檢查之後、workspace 空間檢查與 AI 審之前,所以審查者沒被叫到;`skill-hub` skill 教 agent 從差異起草、用 `ask_user` 給作者確認
+  再發布(情境 `republish-drafts-a-note`,eval 的替身讀 `published-skills.txt` 判斷是不是新版本,參數就是真工具的
+  strict schema)。說明最多 2000 字元(`RELEASE_NOTE_MAX`),超過就退回請 agent 縮短。
+  item 的 `GET /a/{slug}/items/{id}/skills` 對落後、且記得自己 commit 的 skill hub 副本多回 `updates`:裝的那一版
+  之後的每一版,新的在前,各帶說明;回復的那一版帶 `back_to`。每個這樣的副本讀一次版本紀錄,讀不到就只有它
+  沒有 `updates`(記 log),清單照常回。git store 之前裝的副本沒有 commit,沒有 `updates`,照舊寫「skill 已變更」。
+  Skills 面板那一列寫「有新版本 vN」(作者回復到更舊的版本時寫「作者已把這個 skill 回到 vN」)、可展開每一版的說明
+  (沒有說明的舊版給比較差異的連結);workspace 的 Skills 按鈕帶數字徽章,標題列收成「⋯」時「⋯」帶記號;
+  item 標題列正下方有一條提示列(`SkillUpdateBanner`,打開 item 就看得到,不論開著 IDE 還是聊天、什麼寬度):「看更新說明」在原地展開說明,
+  「稍後提醒」一次延後它列出的所有 skill。多個 skill 時合成一句(點名前兩個),展開後每個 skill 一列、預設收合
+  (標題是名字、版號、說明第一行),有「全部展開」和「全部更新」(先確認;只給有 `edit_content` 的人)。
+  更新時按鈕暫停、寫出進度;更新後寫出更新了哪些、哪些檔案因為在這個 item 改過而保持原樣、哪些被拒絕,
+  直到下一個動作或按「關閉」。
+  這個記號讓打開 item 時就會讀一次 skill 清單(30 秒快取),不再只有打開 Skills 面板才讀。按鈕:**更新**（既有的同步,
+  只裝最新版;只給有 `edit_content` 的人,因為同步路由只認這個 verb）、**稍後提醒**（固定 7 天）、
+  **略過這個版本**（第二次提醒起才有）。稍後／略過存在瀏覽器 localStorage(`skillHub.updateReminders`,
+  依使用者＋條目＋版本;別的分頁的回答透過 `storage` 事件同步,瀏覽器拒絕寫入時留在這個頁面),身分確定前一律
+  不判斷(#997)。沒有全站通知。
 - **次數**:Skills 面板或 `install_skill` 裝進 item 算安裝,`read_skill` 讀到 skill hub 副本算使用;
   先在 pod 記憶體累積,每 2 小時與關機時寫進 `SkillHubUsage`。
 

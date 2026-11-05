@@ -58,7 +58,7 @@ Two refusals to relay plainly:
 After installing, if the publish-time review left notes, pass them on: they
 are the publisher's own reviewer telling the next person what to watch for.
 
-## Publishing one: `publish_skill(name)`
+## Publishing one: `publish_skill(name, release_note)`
 
 Only when the user has said which skill, and said to publish it. `name` is the
 folder under `.skill/` — a skill you saved with `save_skill`, wrote by hand
@@ -67,9 +67,22 @@ together, or installed from the skill hub and changed.
 Before calling it, say what publishing means, once, briefly: the skill becomes
 visible to **everyone on the platform** (public by default; the owner can
 narrow that on the skill hub page), and re-publishing the same name replaces
-their earlier version.
+their earlier version — the people who installed it are then told there is a
+new one, with its release note.
 
-What comes back, and what to do with it:
+Call it with `release_note` as `null` — do not write a note before you have
+seen what changed. What comes back, and what to do with it:
+
+- **"Not published yet — this is a new version … needs a release note"**,
+  with what changed since the current version. Nothing was published. Draft
+  the note **from that change only** — two to five short lines in the user's
+  language, written for someone who installed the earlier version: what it
+  now does differently, what was added or removed, anything they must do or
+  watch for. Not a file-by-file list, and nothing the change does not show.
+  Then show it to the user with `ask_user` — options to publish with it as
+  is, or to edit it — and publish again with `release_note` set to the text
+  they approved. Never publish a note the user has not seen. (Without
+  `ask_user`, put the draft in your reply and wait for their answer.)
 
 - **An `error:` naming structural problems** (frontmatter name ≠ folder, no
   description, a body over the cap, a `references/` file the body names but

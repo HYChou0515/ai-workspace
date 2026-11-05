@@ -318,7 +318,7 @@ async def test_a_copy_of_ones_own_entry_republishes_the_same_entry():
 
     second = _ctx(hub, _Reviewer(), item="inv-2")
     await _put(second, "s", {"SKILL.md": _md("s", "v2\n"), ORIGIN_FILE: _origin(mine)})
-    out = await publish_skill_impl(second, "s")
+    out = await publish_skill_impl(second, "s", release_note="A new version.")
 
     assert hub.find("alice", "s") == mine
     entry = hub.get(mine)
@@ -380,7 +380,7 @@ async def test_after_publishing_the_folder_tracks_the_entry_it_just_became():
     await install_hub_skill(_files(second), "inv-2", hub, mine)
     await _put(second, "s", {"SKILL.md": _md("s", "v2\n")})
 
-    await publish_skill_impl(second, "s")
+    await publish_skill_impl(second, "s", release_note="A new version.")
 
     up = await skill_upstream(
         _files(second), "inv-2", "rca", "default", "s", hub=hub, viewer="alice"
@@ -465,7 +465,7 @@ async def test_the_reply_says_the_visibility_the_entry_actually_has():
     assert mine is not None
     await hub.set_permission(mine, Permission(visibility="private"))
 
-    again = await publish_skill_impl(ctx, "s")
+    again = await publish_skill_impl(ctx, "s", release_note="A new version.")
 
     assert "public by default" not in again
     assert "unpublished" in again or "private" in again
@@ -534,7 +534,7 @@ async def test_republishing_ones_own_fork_from_a_fresh_copy_of_the_root_is_a_rev
     await install_hub_skill(_files(second), "inv-bob-2", hub, alices)
     await _put(second, "triage", {"SKILL.md": _md("triage", "bob's take v2\n")})
 
-    out = await publish_skill_impl(second, "triage")
+    out = await publish_skill_impl(second, "triage", release_note="A new version.")
 
     assert "error" not in out and "updated your earlier version" in out
     assert hub.find("bob", "triage") == bobs
@@ -653,7 +653,7 @@ async def test_a_copy_exactly_at_the_cap_publishes_because_its_manifest_is_not_t
     ctx = _ctx(hub, _Reviewer())
     await install_hub_skill(_files(ctx), "inv-1", hub, entry)
 
-    out = await publish_skill_impl(ctx, "s")
+    out = await publish_skill_impl(ctx, "s", release_note="A new version.")
 
     assert out.startswith("published skill"), out
 
@@ -828,7 +828,7 @@ async def test_a_republish_on_a_full_workspace_is_allowed_because_its_manifest_w
 
     full = WorkspaceFiles(store, quota=used)
     ctx.context.files = full
-    out = await publish_skill_impl(ctx, "s")
+    out = await publish_skill_impl(ctx, "s", release_note="A new version.")
 
     assert "updated your earlier version" in out, out
     assert (await hub.payload_of(hub.find("alice", "s") or ""))["SKILL.md"] == _md("s", "v2\n")
