@@ -12,7 +12,7 @@
 
 import { useQueryClient } from "@tanstack/react-query";
 import { type ReactNode, useEffect, useRef, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { useParams } from "react-router-dom";
 
 import { qk } from "../api/queryKeys";
 import type { AppItem, AppManifest } from "../api/types";
@@ -21,10 +21,7 @@ import { useFiles } from "../hooks/useInvestigation";
 import { useNavChrome } from "../hooks/useNavChrome";
 import { useAppItem, useAppManifest } from "../hooks/useResources";
 import { WorkspaceSlugProvider } from "../hooks/useWorkspaceSlug";
-import { PageMark } from "../components/PageMark";
-import { useT } from "../lib/i18n";
 import { rememberLastChat } from "../lib/lastChat";
-import { agentConversationHref, agentPageHref } from "./AgentHubPage";
 import { initialIdeCollapsed, WorkspaceShell } from "./investigation/WorkspaceShell";
 
 export function AppWorkspace() {
@@ -130,12 +127,9 @@ function WorkspaceLoaded({
   // Agent Hub on top, the conversation below — no list of other chats, since
   // a new conversation is a new copy started there.
   if (agentCopy) {
-    return (
-      <div style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
-        <AgentCopyBar item={item} slug={slug} />
-        <div style={{ flex: 1, minHeight: 0 }}>{shell}</div>
-      </div>
-    );
+    // Its controls are in the shell's own top bar (`AgentCopyControls`) —
+    // one header, not a second one stacked above it.
+    return shell;
   }
   // Chat-first Apps get the private-chat framing: a left rail of the user's own
   // chats beside the chat itself (manifest-gated, so it stays App-agnostic).
@@ -147,60 +141,6 @@ function WorkspaceLoaded({
     <div className="chat-workspace">
       <ChatListRail slug={slug} resourceRoute={manifest.resource_route} currentId={id} />
       <div className="chat-workspace__main">{shell}</div>
-    </div>
-  );
-}
-
-/** The top of a conversation with an agent (A11): its mark (the title's
- * letters) and name, and the
- * way back — to the agent's page in Agent Hub, where its other conversations
- * and a new one are (A8). NN/g, *Match between system and the real world*:
- * to the person this is a conversation with someone, not a workspace. */
-export function AgentCopyBar({ item, slug }: { item: AppItem; slug: string }) {
-  const t = useT();
-  const title = String(item.published_title ?? "") || item.title;
-  const from = String(item.published_from ?? "");
-  return (
-    <div
-      data-testid="agent-copy-bar"
-      style={{
-        display: "flex",
-        alignItems: "center",
-        gap: 10,
-        padding: "8px 14px",
-        borderBottom: "1px solid var(--paper-3)",
-        flex: "0 0 auto",
-      }}
-    >
-      <Link to="/agents">← {t("agentHub.back")}</Link>
-      <span aria-hidden="true" style={{ color: "var(--paper-3)" }}>
-        |
-      </span>
-      {/* The title's letters on the App's colour: the copy does not carry the
-          agent's icon file, and a mark that only sometimes appears reads as a
-          different agent. */}
-      <PageMark
-        slug={slug}
-        itemId={item.resource_id}
-        path={String(item.published_path ?? "")}
-        icon=""
-        title={title}
-        size={24}
-      />
-      <span style={{ fontWeight: 600 }}>{title}</span>
-      {from ? (
-        // A new conversation and the history, a press away (the user's
-        // decision, 2026-11-05; NN/g, *progressive disclosure*). Links: both
-        // go somewhere — a new conversation is made where it lands.
-        <span style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
-          <Link className="btn" data-variant="secondary" data-size="sm" to={agentConversationHref(from, true)}>
-            {t("agentHub.newConversation")}
-          </Link>
-          <Link className="btn" data-variant="ghost" data-size="sm" to={agentPageHref(from)}>
-            {t("agentHub.history")}
-          </Link>
-        </span>
-      ) : null}
     </div>
   );
 }

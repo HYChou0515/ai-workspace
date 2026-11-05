@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import "@testing-library/jest-dom/vitest";
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { cleanup, render, screen } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -26,60 +26,10 @@ vi.mock("./investigation/WorkspaceShell", () => ({
   ),
 }));
 
-import type { AppItem } from "../api/types";
 import { QueryWrap } from "../test/queryWrapper";
-import { AgentCopyBar, AppWorkspace } from "./AppWorkspace";
-
-const item = (over: Partial<AppItem>): AppItem => ({
-  resource_id: "rca-investigation:c1",
-  title: "Sales helper",
-  owner: "amy",
-  created_time: "",
-  created_by: "amy",
-  ...over,
-});
-
-function renderBar(it: AppItem) {
-  render(
-    <MemoryRouter>
-      <QueryWrap>
-        <AgentCopyBar item={it} slug="rca" />
-      </QueryWrap>
-    </MemoryRouter>,
-  );
-}
+import { AppWorkspace } from "./AppWorkspace";
 
 afterEach(() => cleanup());
-
-// plan-wui-publish-and-agent-hub A11: a conversation with an agent shows the
-// agent's name and the way back to its page in Agent Hub.
-describe("AgentCopyBar", () => {
-  it("names the agent, goes back to Agent Hub, and offers a new conversation and the history", () => {
-    const from = "rca-investigation%3Asrc∕a∕agent.ai.yaml";
-    renderBar(item({ published_from: from, published_title: "Sales" }));
-
-    expect(screen.getByTestId("agent-copy-bar")).toHaveTextContent("Sales");
-    // The user's decision (2026-11-05, overturning A11's "no New chat"): a
-    // new conversation and the history are one press away, in the bar.
-    expect(screen.getByRole("link", { name: "新對話" })).toHaveAttribute(
-      "href",
-      `/agents/${encodeURIComponent(from)}/go?new=1`,
-    );
-    expect(screen.getByRole("link", { name: "歷史對話" })).toHaveAttribute(
-      "href",
-      `/agents/${encodeURIComponent(from)}`,
-    );
-    expect(within(screen.getByTestId("agent-copy-bar")).getByTestId("page-mark")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /回到 Agent Hub/ })).toHaveAttribute("href", "/agents");
-  });
-
-  it("goes back to Agent Hub itself when the copy does not say where it came from", () => {
-    renderBar(item({ published_title: "" }));
-
-    expect(screen.getByTestId("agent-copy-bar")).toHaveTextContent("Sales helper");
-    expect(screen.getByRole("link", { name: /回到 Agent Hub/ })).toHaveAttribute("href", "/agents");
-  });
-});
 
 function openWorkspace(it: Record<string, unknown>) {
   live.item = { resource_id: "rca-investigation:c1", title: "T", owner: "amy", ...it };
@@ -95,10 +45,11 @@ function openWorkspace(it: Record<string, unknown>) {
 }
 
 describe("a conversation with an agent opens conversation-first (A11)", () => {
-  it("draws the agent's bar, no list of other chats, and the files tucked away", () => {
+  it("is the shell alone — no second header, no list of other chats, the files tucked away", () => {
     openWorkspace({ published_kind: "agent", published_title: "Sales" });
 
-    expect(screen.getByTestId("agent-copy-bar")).toHaveTextContent("Sales");
+    // Its controls are in the shell's own top bar (WorkspaceShell.agentCopy).
+    expect(screen.queryByTestId("agent-copy-bar")).toBeNull();
     expect(screen.queryByTestId("chat-rail")).toBeNull();
     expect(screen.getByTestId("shell")).toHaveAttribute("data-collapsed", "true");
   });

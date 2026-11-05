@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import "@testing-library/jest-dom/vitest";
-import { cleanup, screen } from "@testing-library/react";
+import { cleanup, screen, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -90,5 +90,32 @@ describe("WorkspaceShell chat of an agent's copy", () => {
     openShell();
 
     expect(await screen.findByTestId("chat")).toHaveAttribute("data-one", "false");
+  });
+
+  it("puts its controls in the ONE top bar — the way back, a new conversation, the history", async () => {
+    // The user, 2026-11-05: 「兩個 header 不行」.
+    renderWithQuery(
+      <MemoryRouter>
+        <WorkspaceShell
+          manifest={manifest}
+          item={{ ...item, published_kind: "agent", published_from: "src∕a∕agent.ai.yaml" } as AppItem}
+          files={[]}
+        />
+      </MemoryRouter>,
+    );
+    const bar = await screen.findByTestId("topbar");
+
+    expect(within(bar).getByRole("link", { name: /回到 Agent Hub/ })).toBeInTheDocument();
+    expect(within(bar).getByRole("link", { name: "新對話" })).toBeInTheDocument();
+    expect(within(bar).getByRole("link", { name: "歷史對話" })).toBeInTheDocument();
+    expect(screen.getAllByTestId("topbar")).toHaveLength(1);
+  });
+
+  it("an ordinary item's top bar has none of them", async () => {
+    openShell();
+    const bar = await screen.findByTestId("topbar");
+
+    expect(within(bar).queryByRole("link", { name: /回到 Agent Hub/ })).toBeNull();
+    expect(within(bar).queryByRole("link", { name: "新對話" })).toBeNull();
   });
 });

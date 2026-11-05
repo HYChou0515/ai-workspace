@@ -100,6 +100,7 @@ import { hasEditToggle, isRawEditorView, pickRenderer } from "../../renderers/re
 import { SearchPanel } from "./SearchPanel";
 import { TerminalPane } from "./TerminalPane";
 import { pxToRem } from "../../lib/pxToRem";
+import { AgentCopyActions, AgentCopyBack, isAgentCopy } from "../../components/AgentCopyControls";
 
 type OpenFileFn = (path: string, opts?: { preview?: boolean }) => void;
 
@@ -827,6 +828,10 @@ function ShellBody({
           onToggleChat={toggleChat}
           onCommandPalette={() => setPaletteOpen(true)}
           onEdit={_canWriteMeta ? () => setEditOpen(true) : undefined}
+          // A conversation with an agent: its controls in THIS bar — never a
+          // second header above it (the user, 2026-11-05).
+          leading={isAgentCopy(item) ? <AgentCopyBack /> : undefined}
+          trailing={isAgentCopy(item) ? <AgentCopyActions item={item} /> : undefined}
         />
         {editOpen && (
           <EditItemModal
@@ -1273,9 +1278,17 @@ export function TopBar({
   onToggleChat,
   onCommandPalette,
   onEdit,
+  leading,
+  trailing,
 }: {
   item: AppItem;
   manifest: AppManifest;
+  /** Drawn first, before the item's chips — a conversation with an agent puts
+   * its way back to Agent Hub here. */
+  leading?: React.ReactNode;
+  /** Drawn after the spacer, before the panels menu — that conversation's
+   * New conversation and History. */
+  trailing?: React.ReactNode;
   /** Commit one inline domain-field edit. Absent → the chips render read-only
    * (`DomainFields` already treats it that way), which is what a viewer without
    * `write_meta` must see. */
@@ -1345,6 +1358,7 @@ export function TopBar({
           color: "var(--text-paper-d)",
         }}
       >
+        {leading}
         {/* topic/product are item attributes, not hierarchy — they stay here in
             the page-local header; the global bar owns Home › App › item (#158). */}
         <ItemCrumbChips item={item} manifest={manifest} />
@@ -1390,6 +1404,7 @@ export function TopBar({
         )}
       </div>
       <span style={{ flex: 1 }} />
+      {trailing}
 
       {/* Every panel this shell can fold lives behind ONE menu. The old lone
           "Workspace" pill sat here shaped exactly like the P1 / triaging /
