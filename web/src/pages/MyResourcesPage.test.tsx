@@ -10,7 +10,7 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { MyResources, MyResourcesApi, UserQuotaOverride } from "../api/myResources";
 import { MemoryRouter } from "react-router-dom";
@@ -114,6 +114,10 @@ function client(over: Partial<MyResourcesApi> = {}): MyResourcesApi {
 }
 
 afterEach(cleanup);
+// The person picker remembers who was picked in this browser
+// (plan-people-picker-ranking D2); without a clean slate one test's pick puts
+// that person under "Frequent" in the next test's picker.
+beforeEach(() => localStorage.clear());
 
 /** The page links to the items it lists, so it needs a router as well as a
  *  query client — the links ARE the affordance (you close from here, but you go

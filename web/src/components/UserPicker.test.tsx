@@ -15,6 +15,8 @@ vi.mock("../hooks/useUsers", () => ({
     { id: "carol", name: "Carol Ng", section: "AOI", email: "carol@x.co", photo_url: null },
   ],
 }));
+// …and needs to know who is viewing, for their own frequent people (D2).
+vi.mock("../hooks/useCurrentUser", () => ({ useCurrentUser: () => "viewer" }));
 
 // Avatar fetches its own image; stub to a no-op so tests don't try the network.
 vi.mock("./UserChip", () => ({
