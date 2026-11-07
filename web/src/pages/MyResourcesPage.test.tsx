@@ -10,7 +10,7 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { MyResources, MyResourcesApi, UserQuotaOverride } from "../api/myResources";
 import { MemoryRouter } from "react-router-dom";
@@ -114,6 +114,10 @@ function client(over: Partial<MyResourcesApi> = {}): MyResourcesApi {
 }
 
 afterEach(cleanup);
+// The person picker remembers who was picked in this browser
+// (plan-people-picker-ranking D2); without a clean slate one test's pick puts
+// that person under "Frequent" in the next test's picker.
+beforeEach(() => localStorage.clear());
 
 /** The page links to the items it lists, so it needs a router as well as a
  *  query client — the links ARE the affordance (you close from here, but you go
@@ -125,6 +129,14 @@ function Wrap({ children }: { children: React.ReactNode }) {
     </MemoryRouter>
   );
 }
+
+/** Every person this browser remembers as picked, for any viewer
+ * (plan-people-picker-ranking D2) — a one-off pick must not land here. */
+const remembered = () =>
+  Object.keys(localStorage)
+    .filter((k) => k.startsWith("peoplePicker.frecency."))
+    .map((k) => localStorage.getItem(k) ?? "")
+    .join("");
 
 describe("MyResourcesPage", () => {
   it("names the environments it lists, not just their count", async () => {
@@ -575,6 +587,7 @@ describe("per-person overrides (superuser)", () => {
 
     expect(c.adminSet).toHaveBeenCalledWith("bob", { count: 5, cpu: 0, memory: "", disk: "" });
     expect(await screen.findByText(/不需重啟/)).toBeInTheDocument();
+    expect(remembered()).not.toContain('"bob"'); // an admin's exception is a one-off pick
   });
 
   // The read endpoint returns EFFECTIVE limits and `PUT` replaces all four

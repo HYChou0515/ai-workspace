@@ -13,7 +13,10 @@ const render = (ui: Parameters<typeof rtlRender>[0]) => rtlRender(ui, { wrapper:
 
 const me = vi.fn(() => "alice");
 const superuser = vi.fn(() => false);
-vi.mock("../hooks/useCurrentUser", () => ({ useCurrentUser: () => me() }));
+vi.mock("../hooks/useCurrentUser", () => ({
+  useCurrentUser: () => me(),
+  useCurrentUserState: () => ({ id: me(), ready: true }),
+}));
 vi.mock("../hooks/useIsSuperuser", () => ({ useIsSuperuser: () => superuser() }));
 vi.mock("../hooks/useUsers", () => ({
   useUsers: () => [
@@ -45,6 +48,14 @@ afterEach(() => {
   me.mockReturnValue("alice");
   superuser.mockReturnValue(false);
 });
+
+/** Every person this browser remembers as picked, for any viewer
+ * (plan-people-picker-ranking D2) — a one-off pick must not land here. */
+const remembered = () =>
+  Object.keys(localStorage)
+    .filter((k) => k.startsWith("peoplePicker.frecency."))
+    .map((k) => localStorage.getItem(k) ?? "")
+    .join("");
 
 describe("GroupsPage", () => {
   it("shows the New group action to a superuser only", async () => {
@@ -129,6 +140,7 @@ describe("GroupsPage", () => {
     await waitFor(() =>
       expect(createGroup).toHaveBeenCalledWith({ name: "Design", description: "", owner: "bob" }),
     );
+    expect(remembered()).not.toContain('"bob"'); // naming an owner is a one-off pick
   });
 });
 

@@ -19,7 +19,13 @@ vi.mock("../hooks/useResources", () => ({
 vi.mock("../hooks/usePickableGroups", () => ({
   usePickableGroups: () => [{ resource_id: "g1", name: "Ops team", description: "", member_count: 3 }],
 }));
-vi.mock("./UserPicker", () => ({ UserPicker: () => <div data-testid="userpicker" /> }));
+const pickerProps: Array<{ related?: string[] }> = [];
+vi.mock("./UserPicker", () => ({
+  UserPicker: (props: { related?: string[] }) => {
+    pickerProps.push(props);
+    return <div data-testid="userpicker" />;
+  },
+}));
 
 afterEach(() => {
   cleanup();
@@ -29,6 +35,18 @@ afterEach(() => {
 const item = { resource_id: "playground-item:1", title: "Trip", owner: "me" } as unknown as AppItem;
 
 describe("ShareChatDialog", () => {
+  it("lists the item's own people first in its picker (plan-people-picker-ranking D4)", () => {
+    pickerProps.length = 0;
+    const withGrants = {
+      ...item,
+      created_by: "me",
+      permission: { visibility: "restricted", read_chat: ["user:amy", "group:g1"] },
+    } as unknown as AppItem;
+    render(<ShareChatDialog slug="playground" item={withGrants} onClose={() => {}} />);
+    expect([...(pickerProps.at(-1)?.related ?? [])].sort()).toEqual(["amy", "me"]);
+  });
+
+
   it("grants read + converse to the chosen group (restricted), via the permission endpoint", () => {
     render(<ShareChatDialog slug="playground" item={item} onClose={() => {}} />);
     fireEvent.click(screen.getByLabelText("Ops team")); // tick the group

@@ -313,6 +313,26 @@ export const isDiscoverableOnly = (
 const subjectUser = (s: string): string | null => (s.startsWith("user:") ? s.slice(5) : null);
 const subjectGroup = (s: string): string | null => (s.startsWith("group:") ? s.slice(6) : null);
 
+/** The people who belong to an item — its owner, its creator and every person
+ * named in any of its grants (a group or `all` names no one in particular).
+ * What the people picker lists first in a place that is about this item
+ * (docs/plan-people-picker-ranking.md D4). */
+export function itemPeople(item: { owner?: string; created_by?: string; permission?: unknown }): string[] {
+  const out = new Set<string>();
+  for (const id of [item.owner, item.created_by]) if (id) out.add(id);
+  const perm = parseItemPermission(item.permission);
+  if (perm) {
+    for (const [key, grants] of Object.entries(perm)) {
+      if (key === "visibility" || !Array.isArray(grants)) continue;
+      for (const s of grants) {
+        const id = typeof s === "string" ? subjectUser(s) : null;
+        if (id) out.add(id);
+      }
+    }
+  }
+  return [...out];
+}
+
 /** The deepest nested ITEM role a verb set fully satisfies (grill D2); `null` when
  * it doesn't even reach Discoverable (no read_meta), and `"custom"` conceptually
  * when a non-nested combo is held (the dialog then shows Custom). */

@@ -2298,6 +2298,13 @@ export const messages = {
     en: "The schedule runs with this person's own sign-ins and values. They are told, and can stop it at any time. Only someone who may run work in this item can be chosen.",
   },
   "sched.assignSearch": { "zh-TW": "搜尋人員…", en: "Search people…" },
+  // The people picker (docs/plan-people-picker-ranking.md D6).
+  "people.related": { "zh-TW": "相關", en: "Related" },
+  "people.frequent": { "zh-TW": "常用", en: "Frequent" },
+  "people.all": { "zh-TW": "所有", en: "Everyone" },
+  "people.search": { "zh-TW": "搜尋人員…", en: "Search people…" },
+  "people.noMatches": { "zh-TW": "找不到符合的人。", en: "No matches." },
+  "people.removeFrequent": { "zh-TW": "從常用移除 {name}", en: "Remove {name} from frequent" },
   "sched.runsAsYou": { "zh-TW": "用你的身分執行", en: "Runs as you" },
   "sched.runsAs": { "zh-TW": "用 {who} 的身分執行", en: "Runs as {who}" },
   "sched.bindMe": { "zh-TW": "用我的身分執行", en: "Run as me" },

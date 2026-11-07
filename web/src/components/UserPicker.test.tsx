@@ -15,6 +15,8 @@ vi.mock("../hooks/useUsers", () => ({
     { id: "carol", name: "Carol Ng", section: "AOI", email: "carol@x.co", photo_url: null },
   ],
 }));
+// …and needs to know who is viewing, for their own frequent people (D2).
+vi.mock("../hooks/useCurrentUser", () => ({ useCurrentUserState: () => ({ id: "viewer", ready: true }) }));
 
 // Avatar fetches its own image; stub to a no-op so tests don't try the network.
 vi.mock("./UserChip", () => ({
@@ -35,28 +37,28 @@ describe("UserPicker — search by id and name", () => {
 
   it("filters by display name (case-insensitive)", () => {
     render(<UserPicker selected={[]} onToggle={() => {}} />);
-    fireEvent.change(screen.getByPlaceholderText(/search/i), { target: { value: "WONG" } });
+    fireEvent.change(screen.getByPlaceholderText("搜尋人員…"), { target: { value: "WONG" } });
     expect(screen.getByText("Bob Wong")).toBeInTheDocument();
     expect(screen.queryByText("Alice K")).not.toBeInTheDocument();
   });
 
   it("also filters by user id (case-insensitive)", () => {
     render(<UserPicker selected={[]} onToggle={() => {}} />);
-    fireEvent.change(screen.getByPlaceholderText(/search/i), { target: { value: "BOB123" } });
+    fireEvent.change(screen.getByPlaceholderText("搜尋人員…"), { target: { value: "BOB123" } });
     expect(screen.getByText("Bob Wong")).toBeInTheDocument();
     expect(screen.queryByText("Alice K")).not.toBeInTheDocument();
   });
 
   it("also filters by email (a typed @ before the domain is a real workflow)", () => {
     render(<UserPicker selected={[]} onToggle={() => {}} />);
-    fireEvent.change(screen.getByPlaceholderText(/search/i), { target: { value: "carol@" } });
+    fireEvent.change(screen.getByPlaceholderText("搜尋人員…"), { target: { value: "carol@" } });
     expect(screen.getByText("Carol Ng")).toBeInTheDocument();
     expect(screen.queryByText("Bob Wong")).not.toBeInTheDocument();
   });
 
   it("also filters by section so a team lead can scope by org", () => {
     render(<UserPicker selected={[]} onToggle={() => {}} />);
-    fireEvent.change(screen.getByPlaceholderText(/search/i), { target: { value: "etch" } });
+    fireEvent.change(screen.getByPlaceholderText("搜尋人員…"), { target: { value: "etch" } });
     expect(screen.getByText("Bob Wong")).toBeInTheDocument();
     expect(screen.queryByText("Alice K")).not.toBeInTheDocument();
   });
@@ -66,7 +68,7 @@ describe("UserPicker — search by id and name", () => {
     // the matched id in the row — otherwise the filter feels broken even
     // when it's working.
     render(<UserPicker selected={[]} onToggle={() => {}} />);
-    fireEvent.change(screen.getByPlaceholderText(/search/i), { target: { value: "bob123" } });
+    fireEvent.change(screen.getByPlaceholderText("搜尋人員…"), { target: { value: "bob123" } });
     expect(screen.getByText("Bob Wong")).toBeInTheDocument();
     // The id is rendered somewhere in the matching row.
     expect(screen.getByText(/bob123/)).toBeInTheDocument();
@@ -74,8 +76,8 @@ describe("UserPicker — search by id and name", () => {
 
   it("shows a no-matches message when nothing filters in", () => {
     render(<UserPicker selected={[]} onToggle={() => {}} />);
-    fireEvent.change(screen.getByPlaceholderText(/search/i), { target: { value: "zzz" } });
-    expect(screen.getByText(/no matches/i)).toBeInTheDocument();
+    fireEvent.change(screen.getByPlaceholderText("搜尋人員…"), { target: { value: "zzz" } });
+    expect(screen.getByText("找不到符合的人。")).toBeInTheDocument();
   });
 });
 

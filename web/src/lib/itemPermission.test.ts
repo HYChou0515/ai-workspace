@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  itemPeople,
   canChangeItemPermission,
   canWriteItem,
   canAddItemContent,
@@ -364,5 +365,30 @@ describe("WUI User (docs/plan-wui-user.md D8–D10)", () => {
     const who = ["user:alice"];
     const perm = { visibility: "restricted" as const, read_meta: who, read_chat: who, read_content: who, use_wui: who };
     expect(itemGrantsFromPermission(perm, "bob")).toEqual([{ userId: "alice", role: "wui_user", verbs: new Set() }]);
+  });
+});
+
+describe("itemPeople — who belongs to an item, for the people picker (plan-people-picker-ranking D4)", () => {
+  it("is the owner, the creator and every person named in any grant, once each", () => {
+    const item = {
+      owner: "olive",
+      created_by: "carl",
+      permission: {
+        visibility: "restricted",
+        read_chat: ["user:amy", "group:etch", "all"],
+        converse: ["user:amy", "user:ben"],
+      },
+    };
+    expect(itemPeople(item).sort()).toEqual(["amy", "ben", "carl", "olive"]);
+  });
+
+  it("names no groups or `all` as people", () => {
+    const item = { owner: "", created_by: "", permission: { visibility: "restricted", read_meta: ["group:x", "all"] } };
+    expect(itemPeople(item)).toEqual([]);
+  });
+
+  it("is just the owner and creator when the permission is absent or unreadable", () => {
+    expect(itemPeople({ owner: "o", created_by: "o" })).toEqual(["o"]);
+    expect(itemPeople({ owner: "o", created_by: "c", permission: { visibility: "nope" } }).sort()).toEqual(["c", "o"]);
   });
 });

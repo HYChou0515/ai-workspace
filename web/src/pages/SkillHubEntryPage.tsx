@@ -882,6 +882,8 @@ function TransferDialog({
         selected={picked ? [picked] : []}
         onToggle={(id) => setPicked((cur) => (cur === id ? null : id))}
         exclude={[owner]}
+        // Handing a skill on is a one-off, not a person picked often.
+        rememberPicks={false}
       />
       {error ? (
         <p className="error" role="alert">

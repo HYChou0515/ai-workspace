@@ -666,6 +666,8 @@ function CreateGroupModal({
                   setOwner(id);
                   setPicking(false);
                 }}
+                // Naming an owner is a one-off, not a person picked often.
+                rememberPicks={false}
               />
             </div>
           )}
