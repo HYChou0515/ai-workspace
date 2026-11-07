@@ -2299,7 +2299,9 @@ export const messages = {
   },
   "sched.assignSearch": { "zh-TW": "搜尋人員…", en: "Search people…" },
   // The people picker (docs/plan-people-picker-ranking.md D6).
+  "people.related": { "zh-TW": "相關", en: "Related" },
   "people.frequent": { "zh-TW": "常用", en: "Frequent" },
+  "people.all": { "zh-TW": "所有", en: "Everyone" },
   "people.search": { "zh-TW": "搜尋人員…", en: "Search people…" },
   "people.noMatches": { "zh-TW": "找不到符合的人。", en: "No matches." },
   "people.removeFrequent": { "zh-TW": "從常用移除 {name}", en: "Remove {name} from frequent" },

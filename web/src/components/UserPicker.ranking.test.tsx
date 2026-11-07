@@ -35,11 +35,7 @@ vi.mock("./UserChip", () => ({ UserAvatar: ({ userId }: { userId: string }) => <
 vi.mock("./Icon", () => ({ Icon: () => <span data-icon /> }));
 
 /** The names in the list, top to bottom. */
-const order = () =>
-  screen
-    .getAllByRole("listitem")
-    .map((li) => li.querySelector("[data-person-name]")?.textContent)
-    .filter(Boolean);
+const order = () => [...document.querySelectorAll("[data-person-name]")].map((n) => n.textContent);
 
 beforeEach(() => {
   localStorage.clear();
@@ -202,3 +198,34 @@ describe("UserPicker — review round 1", () => {
   });
 });
 
+describe("UserPicker — section labels before typing (相關 / 常用 / 所有)", () => {
+  const names = (group: HTMLElement) =>
+    [...group.querySelectorAll("[data-person-name]")].map((n) => n.textContent);
+
+  it("labels the related people, the frequent people and everyone else", () => {
+    recordPick("me", "eve");
+    render(<UserPicker selected={[]} onToggle={() => {}} exclude={["me"]} related={["amy"]} />);
+    expect(names(screen.getByRole("group", { name: "相關" }))).toEqual(["Amy Lin"]);
+    expect(names(screen.getByRole("group", { name: "常用" }))).toEqual(["Wang Eve"]);
+    expect(names(screen.getByRole("group", { name: "所有" }))).toEqual(["Ben Wang", "Cid Ho", "Dee Chen"]);
+  });
+
+  it("labels everyone else as soon as only frequent people sit above them", () => {
+    recordPick("me", "eve");
+    render(<UserPicker selected={[]} onToggle={() => {}} exclude={["me"]} />);
+    expect(screen.queryByRole("group", { name: "相關" })).not.toBeInTheDocument();
+    expect(names(screen.getByRole("group", { name: "所有" }))).not.toContain("Wang Eve");
+  });
+
+  it("needs no labels when nothing is suggested", () => {
+    render(<UserPicker selected={[]} onToggle={() => {}} exclude={["me"]} />);
+    expect(screen.queryAllByRole("group")).toHaveLength(0);
+  });
+
+  it("drops every label once something is typed", () => {
+    recordPick("me", "eve");
+    render(<UserPicker selected={[]} onToggle={() => {}} exclude={["me"]} related={["amy"]} />);
+    fireEvent.change(screen.getByRole("searchbox"), { target: { value: "n" } });
+    expect(screen.queryAllByRole("group")).toHaveLength(0);
+  });
+});

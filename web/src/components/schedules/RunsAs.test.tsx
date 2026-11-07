@@ -160,17 +160,14 @@ describe("what it lets you do", () => {
   });
 
   it("lists the item's own people first when choosing who it runs as", async () => {
-    // By name Carol comes first; Dave belongs to this item, so he leads.
+    // By name Carol comes first; Dave belongs to this item, so Dave leads.
     itemPeople = ["dave"];
     try {
       draw({ who: "bob", reason: "author", canAssign: true });
       fireEvent.click(screen.getByRole("button", { name: word("sched.assign") }));
       const dialog = await screen.findByRole("dialog");
       await within(dialog).findByText("Carol");
-      const names = within(dialog)
-        .getAllByRole("listitem")
-        .map((li) => li.querySelector("[data-person-name]")?.textContent)
-        .filter(Boolean);
+      const names = [...dialog.querySelectorAll("[data-person-name]")].map((n) => n.textContent);
       expect(names).toEqual(["Dave", "Carol"]);
     } finally {
       itemPeople = [];

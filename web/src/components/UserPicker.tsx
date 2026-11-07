@@ -52,7 +52,7 @@ export function UserPicker({
   rememberPicks?: boolean;
 }) {
   const t = useT();
-  const frequentLabelId = useId();
+  const labelIds = { related: useId(), frequent: useId(), all: useId() };
   const users = useUsers();
   // Until `/me` answers, `id` is a placeholder: reading or recording under it
   // would mix one shared list into everyone's (review round 1).
@@ -102,6 +102,9 @@ export function UserPicker({
   const lead = typing ? [] : shown.filter((u) => relatedIds.has(u.id));
   const frequent = typing ? [] : shown.filter((u) => !relatedIds.has(u.id) && frecency.has(u.id));
   const rest = shown.filter((u) => !lead.includes(u) && !frequent.includes(u));
+
+  const suggesting = lead.length > 0 || frequent.length > 0;
+  const LABEL = { related: "people.related", frequent: "people.frequent", all: "people.all" } as const;
 
   const pick = (id: string) => {
     if (ready && rememberPicks && !sel.has(id)) recordPick(me, id);
@@ -160,6 +163,26 @@ export function UserPicker({
     </li>
   );
 
+  const section = (key: keyof typeof LABEL, people: User[], removable: boolean, first: boolean) =>
+    people.length > 0 && (
+      <li key={key}>
+        {/* The group role sits on a div: an <li> may not be one. */}
+        <div role="group" aria-labelledby={labelIds[key]}>
+          <div
+            id={labelIds[key]}
+            className="caps"
+            style={{
+              padding: "6px 8px 4px",
+              ...(first ? {} : { marginTop: 4, borderTop: "1px solid var(--paper-3)" }),
+            }}
+          >
+            {t(LABEL[key])}
+          </div>
+          <ul style={{ listStyle: "none", margin: 0, padding: 0 }}>{people.map((u) => row(u, removable))}</ul>
+        </div>
+      </li>
+    );
+
   return (
     <div style={{ minWidth: 240 }}>
       <input
@@ -179,22 +202,20 @@ export function UserPicker({
           viewport as well — the search box above stays outside this scroll
           area, so it can never be scrolled out of reach. */}
       <ul className="scrollable" style={{ listStyle: "none", margin: 0, padding: 0, maxHeight: "min(240px, 22vh)", overflowY: "auto" }}>
-        {lead.map((u) => row(u, false))}
-        {frequent.length > 0 && (
-          <li>
-            {/* The group role sits on a div: an <li> may not be one. */}
-            <div role="group" aria-labelledby={frequentLabelId}>
-              <div
-                id={frequentLabelId}
-                style={{ padding: "4px 8px 2px", color: "var(--text-paper-d)", fontSize: pxToRem(11), fontWeight: 600 }}
-              >
-                {t("people.frequent")}
-              </div>
-              <ul style={{ listStyle: "none", margin: 0, padding: 0 }}>{frequent.map((u) => row(u, true))}</ul>
-            </div>
-          </li>
+        {/* Before typing, a list that is neither alphabetical nor by id would
+            read as a broken search, so each block says why it is there —
+            相關 / 常用 / 所有, the way Teams heads its "Suggested" list. With
+            nothing suggested there is nothing to tell apart, so no labels; once
+            something is typed it is plain results. */}
+        {suggesting ? (
+          <>
+            {section("related", lead, false, true)}
+            {section("frequent", frequent, true, lead.length === 0)}
+            {section("all", rest, false, false)}
+          </>
+        ) : (
+          rest.map((u) => row(u, false))
         )}
-        {rest.map((u) => row(u, false))}
         {shown.length === 0 && (
           <li style={{ padding: "6px 8px", color: "var(--text-paper-d)", fontSize: pxToRem(12) }}>
             {t("people.noMatches")}
