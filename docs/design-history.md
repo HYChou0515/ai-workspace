@@ -161,6 +161,7 @@
 | [plan-issue-680.md](plan-issue-680.md) | #680 entity 詳情 modal：三個 view 雙擊開啟 |
 | [plan-issue-779.md](plan-issue-779.md) | #779 modal 誤關：離開 modal 只有一套規則 |
 | [plan-input-class-sweep.md](plan-input-class-sweep.md) | #829 每個文字控制項都套 `.input` |
+| [plan-people-picker-ranking.md](plan-people-picker-ranking.md) | 挑人框(`UserPicker`,13 處共用)的搜尋與排序:打字前依情境裡的人、常用(瀏覽器 frecency)、部門字串開頭相同的字元數、名字;打字後先比匹配度;常用有小標可單筆移除;打開時定住順序 |
 | [plan-scrollbars.md](plan-scrollbars.md) | 該捲的地方要捲，該一致的地方要一致 |
 | [plan-datetimerange-role.md](plan-datetimerange-role.md) | `datetimerange` 這個 role 名稱已經在說謊 |
 | [plan-chat-rail-manifest-nouns.md](plan-chat-rail-manifest-nouns.md) | chat rail 一律說「chat」、重複平台選單、藏起自己的下拉 |
