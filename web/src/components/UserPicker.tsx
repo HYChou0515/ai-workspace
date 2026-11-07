@@ -165,7 +165,10 @@ export function UserPicker({
 
   const section = (key: keyof typeof LABEL, people: User[], removable: boolean, first: boolean) =>
     people.length > 0 && (
-      <li key={key}>
+      // A plain block, said inline: a host page may style every `ul > li` as a
+      // bordered, padded row (My resources' `.page`), which on a section would
+      // draw a second divider above 所有 and shrink the group to its content.
+      <li key={key} style={{ display: "block", padding: 0, border: 0 }}>
         {/* The group role sits on a div: an <li> may not be one. */}
         <div role="group" aria-labelledby={labelIds[key]}>
           <div

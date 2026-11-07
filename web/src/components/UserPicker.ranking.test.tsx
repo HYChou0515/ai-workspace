@@ -217,6 +217,12 @@ describe("UserPicker — section labels before typing (相關 / 常用 / 所有)
     expect(names(screen.getByRole("group", { name: "所有" }))).not.toContain("Wang Eve");
   });
 
+  it("labels the related people even when no one has been picked before", () => {
+    render(<UserPicker selected={[]} onToggle={() => {}} exclude={["me"]} related={["amy"]} />);
+    expect(names(screen.getByRole("group", { name: "相關" }))).toEqual(["Amy Lin"]);
+    expect(names(screen.getByRole("group", { name: "所有" }))).not.toContain("Amy Lin");
+  });
+
   it("needs no labels when nothing is suggested", () => {
     render(<UserPicker selected={[]} onToggle={() => {}} exclude={["me"]} />);
     expect(screen.queryAllByRole("group")).toHaveLength(0);
