@@ -2300,6 +2300,8 @@ export const messages = {
   "sched.assignSearch": { "zh-TW": "搜尋人員…", en: "Search people…" },
   // The people picker (docs/plan-people-picker-ranking.md D6).
   "people.frequent": { "zh-TW": "常用", en: "Frequent" },
+  "people.search": { "zh-TW": "搜尋人員…", en: "Search people…" },
+  "people.noMatches": { "zh-TW": "找不到符合的人。", en: "No matches." },
   "people.removeFrequent": { "zh-TW": "從常用移除 {name}", en: "Remove {name} from frequent" },
   "sched.runsAsYou": { "zh-TW": "用你的身分執行", en: "Runs as you" },
   "sched.runsAs": { "zh-TW": "用 {who} 的身分執行", en: "Runs as {who}" },

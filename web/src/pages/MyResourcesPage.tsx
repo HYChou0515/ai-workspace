@@ -414,6 +414,8 @@ function AdminOverrides({ client }: { client: MyResourcesApi }) {
               setSaved(false);
             }}
             placeholder={t("resources.admin.userSearch")}
+            // An admin's exception is a one-off, not a person picked often.
+            rememberPicks={false}
           />
         </span>
         <button type="button" className="btn" data-variant="secondary" data-size="sm" onClick={() => void lookup()}>

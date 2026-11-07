@@ -11,8 +11,9 @@
  * | 4 | name | section closeness |
  * | 5 | | name |
  *
- * Before this the list had no order of its own — it was the directory's, i.e.
- * by id — and any field that contained the text matched equally.
+ * Before this the list had no order of its own — it was whatever order the
+ * deployed directory (`UserDirectory.all_users`) lists people in — and any field
+ * that contained the text matched equally.
  */
 
 export type Person = { id: string; name: string; section: string; email: string };

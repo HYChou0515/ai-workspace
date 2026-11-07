@@ -7,7 +7,7 @@ import "@testing-library/jest-dom/vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { QueryClient } from "@tanstack/react-query";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { HttpError } from "../api/http";
 import { makeQueryClient } from "../api/queryClient";
@@ -207,6 +207,9 @@ function mount(c: SkillHubApi, queryClient?: QueryClient, at = "/skill-hub/e-1")
 }
 
 afterEach(cleanup);
+// The person picker remembers picks in this browser (plan-people-picker-ranking
+// D2); a clean slate keeps one test's pick out of the next test's picker.
+beforeEach(() => localStorage.clear());
 
 /** One of the owner's actions, from 「管理 ▾」 (plan-skill-hub-ux-redo D5). */
 async function manage(key: Parameters<typeof translate>[1]) {
@@ -220,6 +223,14 @@ async function confirmUnpublish() {
   expect(dialog).toHaveTextContent(word("skillHub.impact.installed"));
   fireEvent.click(within(dialog).getByRole("button", { name: word("skillHub.unpublish.confirm") }));
 }
+
+/** Every person this browser remembers as picked, for any viewer
+ * (plan-people-picker-ranking D2) — a one-off pick must not land here. */
+const remembered = () =>
+  Object.keys(localStorage)
+    .filter((k) => k.startsWith("peoplePicker.frecency."))
+    .map((k) => localStorage.getItem(k) ?? "")
+    .join("");
 
 describe("SkillHubEntryPage", () => {
   it("shows a non-owner the skill's description tab, the sidebar — and of the actions only Install", async () => {
@@ -368,6 +379,7 @@ describe("SkillHubEntryPage", () => {
     expect(go).toBeEnabled();
     fireEvent.click(go);
     await waitFor(() => expect(c.transfer).toHaveBeenCalledWith("e-1", "bob"));
+    expect(remembered()).not.toContain('"bob"'); // a one-off pick, not a frequent person
     // Review round 1: after giving it away the page refetched an entry the
     // old owner may no longer read, and landed on the error line with a
     // Retry that could never succeed. It leaves for the list instead.

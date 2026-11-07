@@ -25,7 +25,12 @@ const DIRECTORY = [
 vi.mock("../hooks/useUsers", () => ({
   useUsers: () => DIRECTORY,
 }));
-vi.mock("../hooks/useCurrentUser", () => ({ useCurrentUser: () => "me" }));
+// Who is viewing, and whether `/me` has answered yet — the placeholder id
+// before it does must neither read nor record anyone's frequent people.
+let viewerReady = true;
+vi.mock("../hooks/useCurrentUser", () => ({
+  useCurrentUserState: () => ({ id: viewerReady ? "me" : "default-user", ready: viewerReady }),
+}));
 vi.mock("./UserChip", () => ({ UserAvatar: ({ userId }: { userId: string }) => <span data-avatar={userId} /> }));
 vi.mock("./Icon", () => ({ Icon: () => <span data-icon /> }));
 
@@ -36,7 +41,10 @@ const order = () =>
     .map((li) => li.querySelector("[data-person-name]")?.textContent)
     .filter(Boolean);
 
-beforeEach(() => localStorage.clear());
+beforeEach(() => {
+  localStorage.clear();
+  viewerReady = true;
+});
 afterEach(cleanup);
 
 describe("UserPicker — before anything is typed", () => {
@@ -143,3 +151,54 @@ describe("UserPicker — after typing", () => {
     expect(screen.queryByRole("group", { name: "常用" })).not.toBeInTheDocument();
   });
 });
+
+describe("UserPicker — review round 1", () => {
+  it("puts focus back in the search box after removing someone from Frequent", () => {
+    recordPick("me", "eve");
+    render(<UserPicker selected={[]} onToggle={() => {}} exclude={["me"]} />);
+    const x = screen.getByRole("button", { name: "從常用移除 Wang Eve" });
+    x.focus();
+    fireEvent.click(x);
+    expect(document.activeElement).toBe(screen.getByRole("searchbox"));
+  });
+
+  it("neither reads nor records frequent people before it knows who is viewing", () => {
+    recordPick("default-user", "eve");
+    viewerReady = false;
+    render(<UserPicker selected={[]} onToggle={() => {}} exclude={["me"]} />);
+    expect(screen.queryByRole("group", { name: "常用" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByText("Amy Lin"));
+    expect(readFrecency("default-user").has("amy")).toBe(false);
+  });
+
+  it("can be told not to remember a one-off pick", () => {
+    render(<UserPicker selected={[]} onToggle={() => {}} exclude={["me"]} rememberPicks={false} />);
+    fireEvent.click(screen.getByText("Wang Eve"));
+    expect(readFrecency("me").has("eve")).toBe(false);
+  });
+
+  it("labels 8 frequent people even when related people are among the most picked", () => {
+    const many = Array.from({ length: 10 }, (_, i) => ({
+      id: `p${i}`,
+      name: `Person ${String(i).padStart(2, "0")}`,
+      section: "",
+      email: "",
+      photo_url: null,
+    }));
+    DIRECTORY.push(...many);
+    try {
+      // Two related people picked most of all, then ten others.
+      for (let k = 0; k < 5; k++) {
+        recordPick("me", "amy");
+        recordPick("me", "ben");
+      }
+      for (const p of many) recordPick("me", p.id);
+      render(<UserPicker selected={[]} onToggle={() => {}} exclude={["me"]} related={["amy", "ben"]} />);
+      const frequent = screen.getByRole("group", { name: "常用" });
+      expect(within(frequent).getAllByRole("listitem")).toHaveLength(8);
+    } finally {
+      DIRECTORY.splice(DIRECTORY.length - many.length, many.length);
+    }
+  });
+});
+

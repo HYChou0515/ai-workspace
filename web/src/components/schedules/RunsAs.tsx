@@ -12,7 +12,7 @@
  * row, they changed the workflow it runs, or an administrator named them.
  */
 import { useMutation } from "@tanstack/react-query";
-import { useState } from "react";
+import { type ComponentProps, useState } from "react";
 
 import { type ScheduleBindingsClient, scheduleBindingsApi } from "../../api/scheduleBindings";
 import type { RunsAsReason } from "../../api/schedules";
@@ -74,8 +74,6 @@ export function RunsAs({
   onChanged?: () => void;
 }) {
   const t = useT();
-  // The item's own people first in the picker (plan-people-picker-ranking D4).
-  const itemPeople = useItemPeople(slug, itemId);
   const dialog = useDialog();
   const [problem, setProblem] = useState<string | null>(null);
   const [choosing, setChoosing] = useState(false);
@@ -174,14 +172,15 @@ export function RunsAs({
           <p style={{ margin: 0, fontSize: pxToRem(12), color: "var(--text-paper-d)" }}>
             {t("sched.assignBody")}
           </p>
-          <UserPicker
+          <ItemPeoplePicker
+            slug={slug}
+            itemId={itemId}
             selected={runsAs.who ? [runsAs.who] : []}
             onToggle={(user) => {
               setChoosing(false);
               change.mutate({ kind: "assign", user });
             }}
             placeholder={t("sched.assignSearch")}
-            related={itemPeople}
           />
           <button
             type="button"
@@ -197,4 +196,19 @@ export function RunsAs({
       ) : null}
     </div>
   );
+}
+
+/**
+ * The picker, with the item's own people first (plan-people-picker-ranking D4).
+ * Its own component so the item is looked up only while someone is choosing:
+ * every row of the schedules overview draws a `RunsAs`, and looking each row's
+ * item up on page load was one request per item for a picker nobody opened.
+ */
+function ItemPeoplePicker({
+  slug,
+  itemId,
+  ...picker
+}: { slug: string; itemId: string } & Omit<ComponentProps<typeof UserPicker>, "related">) {
+  const itemPeople = useItemPeople(slug, itemId);
+  return <UserPicker {...picker} related={itemPeople} />;
 }

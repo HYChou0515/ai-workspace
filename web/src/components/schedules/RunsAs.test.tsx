@@ -19,7 +19,13 @@ vi.mock("../../api", () => ({
 
 // The item's people (plan-people-picker-ranking D4) — nobody unless a test says.
 let itemPeople: string[] = [];
-vi.mock("../../hooks/useItemPeople", () => ({ useItemPeople: () => itemPeople }));
+const useItemPeopleCalls: Array<[string, string]> = [];
+vi.mock("../../hooks/useItemPeople", () => ({
+  useItemPeople: (slug: string, itemId: string) => {
+    useItemPeopleCalls.push([slug, itemId]);
+    return itemPeople;
+  },
+}));
 
 import type { ScheduleBindingsClient } from "../../api/scheduleBindings";
 import type { RunsAsReason } from "../../api/schedules";
@@ -139,6 +145,18 @@ describe("what it lets you do", () => {
   it("offers nothing to someone who may not run work in the item", () => {
     draw({ who: "bob", reason: "author", canRun: false });
     expect(screen.queryByRole("button")).toBeNull();
+  });
+
+  it("looks the item's people up only once someone chooses who it runs as", async () => {
+    // Every row of the schedules overview draws a RunsAs: asking for each
+    // row's item on page load made one request per item for a picker nobody
+    // had opened (review round 1).
+    useItemPeopleCalls.length = 0;
+    draw({ who: "bob", reason: "author", canAssign: true });
+    expect(useItemPeopleCalls).toEqual([]);
+    fireEvent.click(screen.getByRole("button", { name: word("sched.assign") }));
+    await screen.findByRole("dialog");
+    expect(useItemPeopleCalls.length).toBeGreaterThan(0);
   });
 
   it("lists the item's own people first when choosing who it runs as", async () => {

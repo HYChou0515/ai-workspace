@@ -130,6 +130,14 @@ function Wrap({ children }: { children: React.ReactNode }) {
   );
 }
 
+/** Every person this browser remembers as picked, for any viewer
+ * (plan-people-picker-ranking D2) — a one-off pick must not land here. */
+const remembered = () =>
+  Object.keys(localStorage)
+    .filter((k) => k.startsWith("peoplePicker.frecency."))
+    .map((k) => localStorage.getItem(k) ?? "")
+    .join("");
+
 describe("MyResourcesPage", () => {
   it("names the environments it lists, not just their count", async () => {
     // A list of things to close is useless if you cannot tell which is which.
@@ -579,6 +587,7 @@ describe("per-person overrides (superuser)", () => {
 
     expect(c.adminSet).toHaveBeenCalledWith("bob", { count: 5, cpu: 0, memory: "", disk: "" });
     expect(await screen.findByText(/不需重啟/)).toBeInTheDocument();
+    expect(remembered()).not.toContain('"bob"'); // an admin's exception is a one-off pick
   });
 
   // The read endpoint returns EFFECTIVE limits and `PUT` replaces all four

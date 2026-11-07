@@ -740,9 +740,6 @@ export function AgentPanel({
     setAppliedSkills([]);
   };
 
-  // grill-me: which `ask_user` questions already have an answer, so an
-  // answered card shows the answer instead of inviting a second, contradictory
-  // one (two tabs, or a scroll back to an older question).
   // The people who have spoken in this chat — listed first in the @-mention
   // picker (docs/plan-people-picker-ranking.md D4). Same array until a new
   // speaker appears, so a streamed token does not hand the picker a new one.
@@ -757,6 +754,9 @@ export function AgentPanel({
     }, [log.entries, me]),
   );
 
+  // grill-me: which `ask_user` questions already have an answer, so an
+  // answered card shows the answer instead of inviting a second, contradictory
+  // one (two tabs, or a scroll back to an older question).
   // Same object until a new answer arrives: every `ChatFeedRow` receives it, so a
   // new one per streamed token would redraw the whole feed.
   const answeredQuestions = useSameShape(
