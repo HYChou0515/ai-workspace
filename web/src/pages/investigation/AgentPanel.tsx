@@ -743,6 +743,20 @@ export function AgentPanel({
   // grill-me: which `ask_user` questions already have an answer, so an
   // answered card shows the answer instead of inviting a second, contradictory
   // one (two tabs, or a scroll back to an older question).
+  // The people who have spoken in this chat — listed first in the @-mention
+  // picker (docs/plan-people-picker-ranking.md D4). Same array until a new
+  // speaker appears, so a streamed token does not hand the picker a new one.
+  const speakers = useSameShape(
+    useMemo(() => {
+      const out = new Set<string>();
+      for (const e of log.entries) {
+        const author = e.kind === "message" && e.message.role === "user" ? e.message.author : null;
+        if (author && author !== me) out.add(author);
+      }
+      return [...out];
+    }, [log.entries, me]),
+  );
+
   // Same object until a new answer arrives: every `ChatFeedRow` receives it, so a
   // new one per streamed token would redraw the whole feed.
   const answeredQuestions = useSameShape(
@@ -1394,6 +1408,7 @@ export function AgentPanel({
                 <UserPicker
                   selected={mentions}
                   exclude={[me]}
+                  related={speakers}
                   onToggle={(id) =>
                     setMentions((m) => (m.includes(id) ? m.filter((x) => x !== id) : [...m, id]))
                   }

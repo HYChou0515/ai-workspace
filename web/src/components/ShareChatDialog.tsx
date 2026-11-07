@@ -12,7 +12,7 @@ import type { AppItem } from "../api/types";
 import { useDirtyClose } from "../hooks/useDirtyClose";
 import { usePickableGroups } from "../hooks/usePickableGroups";
 import { useSetItemPermission } from "../hooks/useResources";
-import { type ItemPermission, parseItemPermission } from "../lib/itemPermission";
+import { type ItemPermission, itemPeople, parseItemPermission } from "../lib/itemPermission";
 import { ModalShell } from "./ModalShell";
 import { UserPicker } from "./UserPicker";
 
@@ -86,6 +86,8 @@ export function ShareChatDialog({
           onToggle={(id) => toggle(setUsers, id)}
           exclude={[item.owner]}
           placeholder="Add a person…"
+          // The item's own people first (plan-people-picker-ranking D4).
+          related={itemPeople(item)}
         />
 
         <div className="chat-share__section">Groups</div>

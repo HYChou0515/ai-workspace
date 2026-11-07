@@ -12,12 +12,20 @@ import { PublishDialog } from "./PublishDialog";
 vi.mock("../hooks/usePickableGroups", () => ({
   usePickableGroups: () => [{ resource_id: "g-ops", name: "Ops" }],
 }));
+const pickerProps: Array<{ related?: string[] }> = [];
 vi.mock("./UserPicker", () => ({
-  UserPicker: ({ onToggle }: { onToggle: (id: string) => void }) => (
-    <button type="button" onClick={() => onToggle("amy")}>
-      pick amy
-    </button>
-  ),
+  UserPicker: (props: { onToggle: (id: string) => void; related?: string[] }) => {
+    pickerProps.push(props);
+    return (
+      <button type="button" onClick={() => props.onToggle("amy")}>
+        pick amy
+      </button>
+    );
+  },
+}));
+// The item's people (plan-people-picker-ranking D4).
+vi.mock("../hooks/useItemPeople", () => ({
+  useItemPeople: (slug: string, itemId: string) => (slug === "rca" && itemId === "i-1" ? ["ann", "bo"] : []),
 }));
 
 const SMALL: Estimate = { files: 1200, bytes: 3 * 1024 ** 2, biggest: [] };
@@ -46,6 +54,17 @@ const publishButton = (d: HTMLElement) => within(d).getByRole("button", { name: 
 afterEach(() => cleanup());
 
 describe("PublishDialog", () => {
+  it("lists the item's own people first in its picker (plan-people-picker-ranking D4)", () => {
+    pickerProps.length = 0;
+    const { dialog } = open();
+    // The picker appears once the author chooses specific people or groups.
+    fireEvent.click(within(dialog).getByRole("radio", { name: /每次都是新的一份/ }));
+    fireEvent.click(within(dialog).getByRole("radio", { name: "指定的人或群組" }));
+    expect(pickerProps.length).toBeGreaterThan(0);
+    expect(pickerProps.at(-1)?.related).toEqual(["ann", "bo"]);
+  });
+
+
   it("does not pick a way of sharing for the author, and says why Publish waits", () => {
     const { dialog, onConfirm } = open();
 

@@ -16,6 +16,7 @@ import { useState } from "react";
 
 import { type ScheduleBindingsClient, scheduleBindingsApi } from "../../api/scheduleBindings";
 import type { RunsAsReason } from "../../api/schedules";
+import { useItemPeople } from "../../hooks/useItemPeople";
 import { useT } from "../../lib/i18n";
 import { pxToRem } from "../../lib/pxToRem";
 import { useDialog } from "../Dialog";
@@ -73,6 +74,8 @@ export function RunsAs({
   onChanged?: () => void;
 }) {
   const t = useT();
+  // The item's own people first in the picker (plan-people-picker-ranking D4).
+  const itemPeople = useItemPeople(slug, itemId);
   const dialog = useDialog();
   const [problem, setProblem] = useState<string | null>(null);
   const [choosing, setChoosing] = useState(false);
@@ -178,6 +181,7 @@ export function RunsAs({
               change.mutate({ kind: "assign", user });
             }}
             placeholder={t("sched.assignSearch")}
+            related={itemPeople}
           />
           <button
             type="button"

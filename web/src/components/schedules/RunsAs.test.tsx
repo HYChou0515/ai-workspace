@@ -17,6 +17,10 @@ vi.mock("../../api", () => ({
   },
 }));
 
+// The item's people (plan-people-picker-ranking D4) — nobody unless a test says.
+let itemPeople: string[] = [];
+vi.mock("../../hooks/useItemPeople", () => ({ useItemPeople: () => itemPeople }));
+
 import type { ScheduleBindingsClient } from "../../api/scheduleBindings";
 import type { RunsAsReason } from "../../api/schedules";
 import { translate } from "../../lib/i18n";
@@ -135,6 +139,24 @@ describe("what it lets you do", () => {
   it("offers nothing to someone who may not run work in the item", () => {
     draw({ who: "bob", reason: "author", canRun: false });
     expect(screen.queryByRole("button")).toBeNull();
+  });
+
+  it("lists the item's own people first when choosing who it runs as", async () => {
+    // By name Carol comes first; Dave belongs to this item, so he leads.
+    itemPeople = ["dave"];
+    try {
+      draw({ who: "bob", reason: "author", canAssign: true });
+      fireEvent.click(screen.getByRole("button", { name: word("sched.assign") }));
+      const dialog = await screen.findByRole("dialog");
+      await within(dialog).findByText("Carol");
+      const names = within(dialog)
+        .getAllByRole("listitem")
+        .map((li) => li.querySelector("[data-person-name]")?.textContent)
+        .filter(Boolean);
+      expect(names).toEqual(["Dave", "Carol"]);
+    } finally {
+      itemPeople = [];
+    }
   });
 
   it("lets an administrator choose someone else", async () => {

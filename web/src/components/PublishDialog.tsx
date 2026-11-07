@@ -32,6 +32,7 @@ import {
 import { qk } from "../api/queryKeys";
 import { useDirtyClose } from "../hooks/useDirtyClose";
 import { usePickableGroups } from "../hooks/usePickableGroups";
+import { useItemPeople } from "../hooks/useItemPeople";
 import { type MsgKey, useT } from "../lib/i18n";
 import { sameShape } from "../lib/sameShape";
 import { ModalActions } from "./ModalActions";
@@ -94,6 +95,7 @@ export function PublishDialog({
   onClose: () => void;
 }) {
   const t = useT();
+  const itemPeople = useItemPeople(slug, itemId);
   const titleId = useId();
   const groups = usePickableGroups();
   const start = {
@@ -212,7 +214,12 @@ export function PublishDialog({
           {reach === "subjects" && (
             <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 6 }}>
               <span style={cost}>{t("publish.people")}</span>
-              <UserPicker selected={users} onToggle={(id) => toggle(`user:${id}`)} />
+              <UserPicker
+                selected={users}
+                onToggle={(id) => toggle(`user:${id}`)}
+                // The item's own people first (plan-people-picker-ranking D4).
+                related={itemPeople}
+              />
               <span style={cost}>{t("publish.groups")}</span>
               {groups.length === 0 ? (
                 <span style={cost}>{t("publish.noGroups")}</span>
