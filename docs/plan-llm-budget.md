@@ -122,8 +122,11 @@ class ILlmBudget(abc.ABC):
 - **Numbers are formatted with the UI locale's narrow currency symbol**, cents
   only when there are any (`$11`, `$3.50`); an unknown currency code falls back
   to `11 XYZ`.
-- **The message and link take a line of their own** (`data-status-line`, like
-  the storage-full warning) so a long message never pushes the gauges apart.
+- **The whole budget is one line of its own** in the status row
+  (`data-status-line`, like the storage-full warning): figure, then message,
+  then link. As a cell beside the gauges it wrapped in the narrow item chat and
+  began its line with a dangling 「·」 — found recording the demo. The link is
+  underlined so it reads as one.
 - **The `docs/configuration.md` line landed in P1**: `tests/config/
   test_server_settings_are_documented` requires every `server.*` key to be
   named in the manual the day it exists.

@@ -8,8 +8,9 @@
  * - `off`, or `ok` with nothing to show → nothing at all;
  * - `unavailable` → a muted 「預算暫時查不到」 (D7), so a cost system that is down
  *   does not read as "there is no budget";
- * - the deploy's message and link on a line of their own (`data-status-line`,
- *   like the storage-full warning), the message as plain text, never HTML.
+ * - the figure, then the deploy's message and link, on ONE line of its own
+ *   (`data-status-line`, like the storage-full warning); the message as plain
+ *   text, never HTML; the link underlined.
  *
  * NN/g *Visibility of system status*: the money a turn spends is visible where
  * the turn is started. A `warn` / `critical` tone is said in a word before the
@@ -47,7 +48,7 @@ export function BudgetBar({ client = api }: { client?: Pick<ApiClient, "getLlmBu
   if (!data || data.status === "off") return null;
   if (data.status === "unavailable") {
     return (
-      <span data-testid="llm-budget" style={{ color: "var(--text-paper-d)" }}>
+      <span data-testid="llm-budget" data-status-line style={{ color: "var(--text-paper-d)" }}>
         {t("budget.unavailable")}
       </span>
     );
@@ -64,34 +65,33 @@ export function BudgetBar({ client = api }: { client?: Pick<ApiClient, "getLlmBu
         : b.total !== null
           ? t("budget.total", { total: money(b.total) })
           : null;
+  if (!figure && !b.message && !b.link) return null;
   const toneWord = b.tone === "warn" ? t("budget.tone.warn") : b.tone === "critical" ? t("budget.tone.critical") : null;
   const mark = b.tone === "critical" ? "var(--err)" : b.tone === "warn" ? "var(--warn)" : null;
 
+  // ONE line of its own (`data-status-line`): as a cell among the gauges it
+  // wrapped in the narrow item chat and began its line with a dangling 「·」.
   return (
-    <>
-      {figure ? (
-        <span data-testid="llm-budget" data-tone={b.tone} style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
-          {mark ? (
-            <span aria-hidden style={{ width: 6, height: 6, borderRadius: "50%", background: mark, flex: "none" }} />
-          ) : null}
-          {toneWord ? <strong style={{ color: "var(--text-paper)" }}>{toneWord}</strong> : null}
-          <span style={b.tone === "info" ? undefined : { color: "var(--text-paper)" }}>{figure}</span>
-        </span>
+    <span
+      data-testid="llm-budget"
+      data-status-line
+      data-tone={b.tone}
+      style={{ display: "inline-flex", flexWrap: "wrap", alignItems: "center", columnGap: 6, rowGap: 2 }}
+    >
+      {mark ? <span aria-hidden style={{ width: 6, height: 6, borderRadius: "50%", background: mark, flex: "none" }} /> : null}
+      {toneWord ? <strong style={{ color: "var(--text-paper)" }}>{toneWord}</strong> : null}
+      {figure ? <span style={b.tone === "info" ? undefined : { color: "var(--text-paper)" }}>{figure}</span> : null}
+      {b.message ? <span>{b.message}</span> : null}
+      {b.link ? (
+        <a
+          href={b.link.url}
+          target="_blank"
+          rel="noopener noreferrer"
+          style={{ color: "var(--text-paper)", textDecoration: "underline", textUnderlineOffset: 2 }}
+        >
+          {b.link.label}
+        </a>
       ) : null}
-      {b.message || b.link ? (
-        <span data-testid="llm-budget-note" data-status-line>
-          {!figure && toneWord ? <strong style={{ color: "var(--text-paper)" }}>{`${toneWord} `}</strong> : null}
-          {b.message}
-          {b.link ? (
-            <>
-              {b.message ? " " : null}
-              <a href={b.link.url} target="_blank" rel="noopener noreferrer">
-                {b.link.label}
-              </a>
-            </>
-          ) : null}
-        </span>
-      ) : null}
-    </>
+    </span>
   );
 }
