@@ -14,8 +14,8 @@ Stand-ins, and only these:
   TOKEN, so the AI's answer quoting it is only possible if the helper searched
   the target the PERSON picked (the first, preselected, would not have it).
 
-1. No helper yet: the card by hand — a button per target with its description,
-   the helper-only one disabled saying so, 「AI 建議」 beside the AI's pick.
+1. No helper yet: the card by hand — a new-tab button per target with its
+   description, none for the `preview: false` one.
 2. The helper connected: a 「搜尋目標」 radio group, the first chosen (not the
    AI's); the person picks the parts target, the button follows, the helper
    fetches it, the answer is saved with its target and the AI quotes TOKEN.
@@ -290,21 +290,14 @@ def _tour(base: str, iid: str, out: Path, check: Any, start_helper: Any) -> Path
             card = page.locator(".outside-lookup-card").last
             web = page.get_by_role("button", name=f"{WEB} search(在新分頁開啟)")
             web.wait_for(timeout=90_000)
-            parts = page.get_by_role("button", name=f"{PARTS} search", exact=True)
             check("by hand: the web target opens in a new tab", web.is_enabled())
-            check("by hand: the helper-only target is listed, not pressable", parts.is_disabled())
             check(
-                "…saying only the helper can search it",
-                card.get_by_text("這個目標要透過小幫手查").count() == 1,
+                "by hand: no new-tab button for the preview:false target (T5)",
+                card.get_by_role("button", name=PARTS).count() == 0,
             )
-            check("…and what it searches", card.get_by_text(DESCRIPTION).count() == 1)
-            check(
-                "the AI's suggestion is marked",
-                card.get_by_text("AI 建議", exact=True).count() == 1,
-            )
-            parts.evaluate("el => el.scrollIntoView({block: 'center'})")
+            web.evaluate("el => el.scrollIntoView({block: 'center'})")
             page.wait_for_timeout(1500)
-            _live._glide(page, parts)
+            _live._glide(page, web)
             page.wait_for_timeout(1500)
             _shoot(page, card, out / "by-hand-1280.png")
             check("the card by hand fits at 1280 px", _no_overflow(page))

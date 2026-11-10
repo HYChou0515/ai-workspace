@@ -520,23 +520,23 @@ describe("the person picks the target (plan-lookup-target-choice)", () => {
     );
     cleanup();
 
-    draw({ targets: spaced, online: false });
-    expect(await screen.findByRole("button", { name: "Parts DB search" })).toHaveAccessibleDescription(
-      "這個目標要透過小幫手查 Full part numbers only.",
-    );
+    draw({ targets: [{ ...spaced[1]!, preview: true }], online: false });
+    expect(
+      await screen.findByRole("button", { name: "Parts DB search(在新分頁開啟)" }),
+    ).toHaveAccessibleDescription("Full part numbers only.");
   });
 
-  it("lists a target only the helper can search, unpressable by hand, saying why", async () => {
+  // T5 (the person, 2026-11-10: 「他不是『只能給小幫手』而是不能開啟新分頁」):
+  // `preview: false` decides one thing — whether the card draws the new-tab
+  // button. By hand there is none for it: not a disabled one, no "helper only".
+  it("draws no new-tab button for a target with preview off", async () => {
     draw({ lookup: SUGGESTING, targets: PICK, online: false });
 
-    const byHand = await screen.findByRole("button", { name: "Google search(在新分頁開啟)" });
-    expect(byHand).toBeEnabled();
-    const helperOnly = screen.getByRole("button", { name: /料號查詢 search/ });
-    expect(helperOnly).toBeDisabled();
-    expect(helperOnly).toHaveAccessibleDescription(/這個目標要透過小幫手查/);
-    // …and still says what it searches, and that the AI suggested it
-    expect(screen.getByText("公司零件資料庫,只認完整料號。")).toBeInTheDocument();
-    expect(helperOnly.closest("li")).toHaveTextContent("AI 建議");
+    expect(
+      await screen.findByRole("button", { name: "Google search(在新分頁開啟)" }),
+    ).toBeEnabled();
+    expect(screen.queryByRole("button", { name: /料號查詢/ })).not.toBeInTheDocument();
+    expect(screen.queryByText(/這個目標要透過小幫手查/)).not.toBeInTheDocument();
   });
 });
 

@@ -21,8 +21,8 @@
  * Which target a search goes to is the person's (docs/plan-lookup-target-choice.md
  * T1): with their helper, a radio group of the deploy's targets — each with what
  * it searches (T4), the first chosen to begin with, never the AI's (T2), whose
- * suggestion is marked beside its option. By hand, one button per target; one
- * only the helper can search (`preview: false`) is listed, disabled, saying so (T7).
+ * suggestion is marked beside its option. By hand, one new-tab button per target
+ * — none for a target with `preview: false` (T5).
  *
  * Guidance (cited in the plan):
  * - Choosing the target is choosing one of a few: radio buttons rather than a
@@ -555,14 +555,9 @@ export function OutsideLookupCard({
           {manual && (
           <>
           <ul className="outside-lookup-targets">
-            {targetList.map((tg, at) => {
-              // T5/T7: a target only the helper can search is listed, not pressable
-              const helperOnly = tg.preview === false;
-              const said = [
-                helperOnly ? `${ids}-h-${at}` : "",
-                tg.description ? `${ids}-m-${at}` : "",
-              ].filter(Boolean);
-              return (
+            {targetList.map((tg, at) =>
+              // T5: `preview: false` — the card draws no new-tab button for it
+              tg.preview === false ? null : (
                 <li key={tg.name} className="outside-lookup-target">
                   <div className="outside-lookup-actions">
                     <button
@@ -570,13 +565,10 @@ export function OutsideLookupCard({
                       className="btn"
                       data-size="sm"
                       data-variant="secondary"
-                      disabled={helperOnly}
-                      aria-label={
-                        helperOnly
-                          ? t("lookup.searchWith", { name: tg.name })
-                          : t("lookup.target", { name: t("lookup.searchWith", { name: tg.name }) })
-                      }
-                      aria-describedby={said.length ? said.join(" ") : undefined}
+                      aria-label={t("lookup.target", {
+                        name: t("lookup.searchWith", { name: tg.name }),
+                      })}
+                      aria-describedby={tg.description ? `${ids}-m-${at}` : undefined}
                       onClick={() =>
                         ifTyped(() => {
                           setTarget(tg.name);
@@ -584,15 +576,9 @@ export function OutsideLookupCard({
                         })
                       }
                     >
-                      {t("lookup.searchWith", { name: tg.name })}{" "}
-                      {!helperOnly && <span aria-hidden="true">↗</span>}
+                      {t("lookup.searchWith", { name: tg.name })} <span aria-hidden="true">↗</span>
                     </button>
                     {aiMark(tg.name)}
-                    {helperOnly && (
-                      <span id={`${ids}-h-${at}`} className="outside-lookup-hint">
-                        {t("lookup.needsHelper")}
-                      </span>
-                    )}
                   </div>
                   {tg.description && (
                     <p id={`${ids}-m-${at}`} className="outside-lookup-target-desc">
@@ -600,8 +586,8 @@ export function OutsideLookupCard({
                     </p>
                   )}
                 </li>
-              );
-            })}
+              ),
+            )}
           </ul>
           <p className="outside-lookup-hint">{t("lookup.newTab")}</p>
           </>
