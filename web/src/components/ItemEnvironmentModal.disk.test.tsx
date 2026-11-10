@@ -4,6 +4,7 @@ import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { translate } from "../lib/i18n";
+import { qk } from "../api/queryKeys";
 import { renderWithQuery } from "../test/queryWrapper";
 import { ItemEnvironmentModal } from "./ItemEnvironmentModal";
 
@@ -144,6 +145,22 @@ describe("ItemEnvironmentModal — disk", () => {
 
     await waitFor(() => expect(putsTo(f, "/disk")).toEqual([{ disk: "5G" }]));
     expect(putsTo(f, "/resources")).toHaveLength(0);
+  });
+
+  it("a disk save re-reads the composer's usage bar, whose limit it just changed", async () => {
+    // Found on the demo: 「已使用 300 KB / 1.0 GB」 stayed after 5G was saved.
+    const f = route(ENV);
+    vi.stubGlobal("fetch", f);
+    const { client } = renderWithQuery(
+      <ItemEnvironmentModal slug="rca" itemId="i-1" canEdit onClose={vi.fn()} />,
+    );
+    client.setQueryData(qk.workspaceUsage("rca", "i-1"), { used: 300 * 1024, quota: GB });
+    fireEvent.change(await screen.findByTestId("disk-input"), { target: { value: "5G" } });
+
+    fireEvent.click(screen.getByTestId("itemenv-save"));
+
+    await waitFor(() => expect(putsTo(f, "/disk")).toHaveLength(1));
+    await waitFor(() => expect(client.getQueryState(qk.workspaceUsage("rca", "i-1"))?.isInvalidated).toBe(true));
   });
 
   it("sends no disk PUT for a cpu-only edit", async () => {

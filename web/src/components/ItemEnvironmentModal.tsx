@@ -162,6 +162,9 @@ export function ItemEnvironmentModal({
     Promise.all([
       qc.invalidateQueries({ queryKey: envKey }),
       qc.invalidateQueries({ queryKey: qk.myBudget }),
+      // The composer's 「已使用 X / Y」 — its Y is the disk a save just changed
+      // (plan-item-disk-size); left alone it kept the old limit.
+      qc.invalidateQueries({ queryKey: qk.workspaceUsage(slug, itemId) }),
     ]);
 
   const save = useMutation({
