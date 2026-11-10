@@ -1330,6 +1330,16 @@ export const messages = {
   "itemenv.close": { "zh-TW": "關閉沙盒", en: "Close sandbox" },
   // Says WHY the size is locked, so the disabled field is not read as broken.
   "itemenv.close.hint": {
+    "zh-TW": "關閉後即可調整 CPU 和記憶體（硬碟現在就能改）。關閉會結束正在執行的程序，檔案不受影響。",
+    en: "Close it to change CPU and memory (the disk can change now). Running processes end; your files are untouched.",
+  },
+  // No budget, so no cpu/memory fields: only the disk is there to change.
+  "itemenv.close.hint.diskonly": {
+    "zh-TW": "硬碟大小現在就能改。關閉沙盒會結束正在執行的程序，檔案不受影響。",
+    en: "The disk size can change now. Closing the sandbox ends running processes; your files are untouched.",
+  },
+  // From an API pod that reports no disk: nothing to promise about it.
+  "itemenv.close.hint.nodisk": {
     "zh-TW": "關閉後即可調整大小。關閉會結束正在執行的程序，檔案不受影響。",
     en: "Close it to change the size. Running processes end; your files are untouched.",
   },
@@ -1391,6 +1401,25 @@ export const messages = {
     en: "A number with a unit — e.g. {detail}.",
   },
   "itemenv.field.memory.over": { "zh-TW": "最多 {detail}。", en: "At most {detail}." },
+  // docs/plan-item-disk-size.md — the workspace's own size.
+  "itemenv.field.disk": { "zh-TW": "硬碟", en: "Disk" },
+  // An unset disk is the App's size (D7) — not the owner's quota, which is
+  // what `itemenv.size.default` says of cpu and memory.
+  "itemenv.disk.default": { "zh-TW": "預設（這個 App 的大小）", en: "Default (this App's size)" },
+  "itemenv.disk.used": { "zh-TW": "已用 {used}", en: "{used} used" },
+  "itemenv.disk.now": {
+    "zh-TW": "存下就生效，執行中也可以改。",
+    en: "Applies as soon as it is saved, even while running.",
+  },
+  "itemenv.disk.ownerLeft": { "zh-TW": "你的個人額度還剩 {left}", en: "{left} left of your own quota" },
+  "itemenv.field.disk.under": {
+    "zh-TW": "要大於已用的 {detail}；要更小，先刪檔案。",
+    en: "Must be more than the {detail} already used — delete files first.",
+  },
+  "itemenv.field.disk.capped": {
+    "zh-TW": "這個 App 最多 {detail}，放不下已用的 {used}；先刪檔案。",
+    en: "This App allows at most {detail}, less than the {used} already used — delete files first.",
+  },
   "itemenv.readonly": {
     "zh-TW": "只有能變更這個 workspace 存取權的人可以調整大小 —— 它花的是 owner 的額度。",
     en: "Only someone who can change this workspace's access may resize it — it spends the owner's quota.",

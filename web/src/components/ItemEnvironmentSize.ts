@@ -20,6 +20,9 @@
  * and still send the one the server parses.
  */
 
+import { formatBytes } from "../lib/bytes";
+
+
 export function toSizeString(bytes: number): string;
 export function toSizeString(bytes: number | null): string | null;
 export function toSizeString(bytes: number | null): string | null {
@@ -42,7 +45,11 @@ export function toSizeString(bytes: number | null): string | null {
  * (joined with ` / ` so either locale can read them). The sentence around it
  * belongs to the panel's `useT`; this module has no locale.
  */
-export type SizeFault = { type: "unreadable" | "over"; detail: string } | null;
+/** `"under"` and `"capped"` are the disk's alone (plan-item-disk-size D1):
+ *  not above what the workspace already holds (`detail` = that amount), or
+ *  above it as typed but held by the App's ceiling to no more than it
+ *  (`detail` = the ceiling, `used` = the amount). */
+export type SizeFault = { type: "unreadable" | "over" | "under" | "capped"; detail: string; used?: string } | null;
 
 const CPU_EXAMPLES = "1 / 0.5";
 
@@ -99,6 +106,24 @@ export function memoryFault(text: string, max: number): SizeFault {
   const bytes = parseSize(normaliseMemory(text));
   if (bytes === null) return { type: "unreadable", detail: MEMORY_EXAMPLES };
   return bytes <= max ? null : { type: "over", detail: toSizeString(max) };
+}
+
+/** `memoryFault`, plus the disk's own floor (plan-item-disk-size D1): what
+ *  will APPLY — the typed size held to `ceiling`, the server's own clamp — must
+ *  be MORE than what the workspace already holds. Equal is refused too: a
+ *  workspace at its limit is full, and the turn gate asks room for one more
+ *  byte (review round 1). `used` and `ceiling` are the RECORD's. */
+export function diskFault(text: string, max: number, used: number, ceiling: number | null = null): SizeFault {
+  const fault = memoryFault(text, max);
+  if (fault !== null || text.trim() === "") return fault;
+  const bytes = parseSize(normaliseMemory(text))!;
+  const applies = ceiling ? Math.min(bytes, ceiling) : bytes;
+  if (applies > used) return null;
+  // Typed above `used`, yet the ceiling holds it at or below: the ceiling is
+  // the reason, and "more than used" would name one the person already met.
+  return bytes > used && ceiling
+    ? { type: "capped", detail: formatBytes(ceiling), used: formatBytes(used) }
+    : { type: "under", detail: formatBytes(used) };
 }
 
 /** The server's spelling back to bytes — for writing a just-sent size into

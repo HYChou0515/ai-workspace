@@ -320,7 +320,7 @@ sandbox:
 resources:
   per_app:
     default: { cpu: 1.0, memory: 512M, disk: 80M }   # App 沒宣告時吃這個
-    max:     { cpu: 4.0, memory: 4G,   disk: 20G }   # App 不得超過(超過=開機失敗);也是單一 item 能調到的上限
+    max:     { cpu: 4.0, memory: 4G,   disk: 20G }   # App 不得超過(超過=開機失敗);也是單一 item 能調到的上限(硬碟也是)
   per_user:
     count: 3          # 同時活著的 sandbox 個數
     cpu: 6.0          # 那些活著的 sandbox 加總核心
@@ -357,8 +357,8 @@ resources:
 
 ### 使用者自己調單一 item 的環境大小
 
-使用者可以在 item 頁面的「環境」面板調**那一個** item 的 CPU 與記憶體,帳仍然記在 item 的
-`owner` 上。**App 的值是預設大小,`resources.per_app.max` 是天花板**([plan-item-size-ceiling.md](plan-item-size-ceiling.md)):
+使用者可以在 item 頁面的「沙盒」面板調**那一個** item 的 CPU、記憶體與硬碟,帳仍然記在 item 的
+`owner` 上(硬碟:[plan-item-disk-size.md](plan-item-disk-size.md))。**App 的值是預設大小,`resources.per_app.max` 是天花板**([plan-item-size-ceiling.md](plan-item-size-ceiling.md)):
 
 | 設定 | 對單一 item 的意思 |
 |---|---|
@@ -366,6 +366,9 @@ resources:
 | `per_app.max` | 最多能調到多大。面板在欄位下寫出「這個 App 最多 X」 |
 | 沒設 `max` 的維度(`""`/`"0"`/`"max"` 都算沒設) | 天花板就是 App 的值——只能往下調;App 也沒有值時就沒有天花板 |
 | 個人額度(`per_user`) | 最後再夾一層,`min(item 的值, 天花板, 個人額度)` |
+
+**硬碟和 CPU／記憶體不同的地方**:它不是 sandbox 的資源,每次寫入都會讀它,所以**存下立刻生效、
+沙盒執行中也能改**(其他 API pod 最多晚 5 秒);而且實際生效的值**必須大於目前已用量**——等於也不行(剛好用滿的工作區就是滿的,AI 對話會被拒絕)。要更小,先刪檔案。清除設定(回到 App 的大小)不做這個檢查。發布出去的副本沿用來源的硬碟設定。
 
 例:`per_app.default` 1 核 / `512M`、`per_app.max` 4 核 / `4G` ⇒ 沒人調的 item 是 1 核 / 512M,
 可以調到 4 核 / 4G 以內;設 16 核會存下,生效時夾成 4 核,面板寫「受這個 App 的上限限制」。

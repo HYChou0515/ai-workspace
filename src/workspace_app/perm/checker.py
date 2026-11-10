@@ -105,7 +105,7 @@ def _context_user(context: Any) -> str:
 #: ANY caller on a public item. Adding a privileged field to a WorkItem now
 #: means adding it here, not writing a second gate somewhere else.
 ESCALATED_FIELDS: frozenset[str] = frozenset(
-    {"permission", "sandbox_cpu_cores", "sandbox_memory_bytes"}
+    {"permission", "sandbox_cpu_cores", "sandbox_memory_bytes", "sandbox_disk_bytes"}
 )
 
 

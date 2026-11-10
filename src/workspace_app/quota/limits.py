@@ -138,15 +138,17 @@ class ResourceLimits:
     `disk_bytes` is always concrete: this app enforces it and owns the fallback.
     `NO_LIMIT` (0) means unbounded.
 
-    `cpu_max` / `memory_max` are the deploy's `resources.per_app.max`, kept
-    because one item may be given MORE than its App's size, up to that
-    (plan-item-size-ceiling D1). 0 = the deploy set none for that dimension."""
+    `cpu_max` / `memory_max` / `disk_max` are the deploy's
+    `resources.per_app.max`, kept because one item may be given MORE than its
+    App's size, up to that (plan-item-size-ceiling D1; disk:
+    plan-item-disk-size D3). 0 = the deploy set none for that dimension."""
 
     cpu_cores: float | None
     memory_bytes: int | None
     disk_bytes: int
     cpu_max: float = 0.0
     memory_max: int = NO_LIMIT
+    disk_max: int = NO_LIMIT
 
     @property
     def item_cpu_ceiling(self) -> float | None:
@@ -162,6 +164,14 @@ class ResourceLimits:
         which is how a size spells "unbounded" (`"max"` / `"0"`) and which the
         panel would otherwise print as 「最多 0 B」 (review round 1)."""
         return self.memory_max or self.memory_bytes or None
+
+    @property
+    def item_disk_ceiling(self) -> int | None:
+        """The most disk one item of this App may be given (plan-item-disk-size
+        D3): the deploy's `max` when it set one, otherwise the App's own size.
+        None when nothing caps it — `disk_bytes` 0 is how the App spells
+        unlimited, and an unlimited App has no ceiling to hold an item under."""
+        return self.disk_max or self.disk_bytes or None
 
 
 @dataclass(frozen=True)
@@ -253,6 +263,7 @@ def resolve_app_limits(manifest: AppManifest, settings: Settings) -> ResourceLim
         ),
         cpu_max=per_app.max.cpu,
         memory_max=parse_size(per_app.max.memory),
+        disk_max=parse_size(per_app.max.disk),
     )
     _enforce_ceiling(manifest.slug, limits, per_app.max)
     return limits

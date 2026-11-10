@@ -131,7 +131,7 @@ from .health_routes import (
     register_sanity_routes,
 )
 from .item_authz import check_access, load_access_facts, user_may
-from .item_routes import register_item_routes
+from .item_routes import ItemDisk, register_item_routes
 from .kb_chat_routes import (
     register_kb_chat_routes,
 )
@@ -917,14 +917,16 @@ def create_app(
     # more inside the registry's heartbeat) — the #657 / #667 shape, on the
     # hottest path there is. Slug never changes; owner does, so the entry ages
     # out on the same window the usage measurement already trails by.
-    _item_facts: dict[str, tuple[float, str, str, float | None, int | None]] = {}
+    _item_facts: dict[str, tuple[float, str, str, float | None, int | None, int | None]] = {}
 
     def _facts_of(item_id: str) -> tuple[str, str]:
         """`(slug, owner)` for an item — one lookup, not one per question."""
         return _all_facts_of(item_id)[:2]
 
-    def _all_facts_of(item_id: str) -> tuple[str, str, float | None, int | None]:
-        """`(slug, owner, cpu, memory)` — the item's own environment size rides
+    def _all_facts_of(
+        item_id: str,
+    ) -> tuple[str, str, float | None, int | None, int | None]:
+        """`(slug, owner, cpu, memory, disk)` — the item's own environment size rides
         along on the lookup that was already happening.
 
         Fetching it separately would have been a second store round trip on the
@@ -933,23 +935,24 @@ def create_app(
         now = time.monotonic()
         hit = _item_facts.get(item_id)
         if hit is not None and now - hit[0] < _ITEM_FACT_TTL_S:
-            return hit[1], hit[2], hit[3], hit[4]
+            return hit[1], hit[2], hit[3], hit[4], hit[5]
         # A deleted item is read here (and only here, plus `owner_of` and the
         # resources page): it still holds a live sandbox, so the debtor and the
         # size it is charged at both still have answers. The route gates use
         # the same seam WITHOUT this flag and keep refusing it.
         found = find_work_item(spec, item_id, include_deleted=True)
         if found is None:
-            slug, owner, cpu, mem = "", "", None, None
+            slug, owner, cpu, mem, disk = "", "", None, None, None
         else:
             slug, item = found[0], found[1]
             owner = debtor_of(spec, slug, item_id, item)
             cpu = getattr(item, "sandbox_cpu_cores", None)
             mem = getattr(item, "sandbox_memory_bytes", None)
+            disk = getattr(item, "sandbox_disk_bytes", None)
         if len(_item_facts) > _ITEM_FACT_MAX:  # bounded: this is a cache, not a map
             _item_facts.clear()
-        _item_facts[item_id] = (now, slug, owner, cpu, mem)
-        return slug, owner, cpu, mem
+        _item_facts[item_id] = (now, slug, owner, cpu, mem, disk)
+        return slug, owner, cpu, mem, disk
 
     def _limits_for(item_id: str) -> ResourceLimits | None:
         """This item's App's resolved ceilings, or None when the deploy passed
@@ -1073,13 +1076,41 @@ def create_app(
         await disk_ledger.record(item_id, owner, total)
 
     def _quota_for(item_id: str) -> int:
-        """Disk ceiling for one item: its App's, else the deploy-wide number.
+        """Disk ceiling for one item: its own setting held under its App's
+        ceiling (docs/plan-item-disk-size.md D3), else its App's, else the
+        deploy-wide number. Read on EVERY write, so a new setting applies to
+        the next one (D5).
 
         The fallback is not cosmetic — an item whose App declares nothing, or an
         id that resolves to no App at all (a wiki store, a half-deleted item),
         must keep the deploy's limit rather than silently become unlimited."""
         limits = _limits_for(item_id)
-        return workspace_quota if limits is None else limits.disk_bytes
+        app_disk = workspace_quota if limits is None else limits.disk_bytes
+        stated = _all_facts_of(item_id)[4]
+        if stated is None:
+            return app_disk
+        ceiling = app_disk if limits is None else limits.item_disk_ceiling
+        return stated if not ceiling else min(stated, ceiling)
+
+    def _disk_ceiling_for(item_id: str) -> int | None:
+        """The most one item may be given (D3) — what the panel draws before
+        anything is typed. None = nothing caps it."""
+        limits = _limits_for(item_id)
+        if limits is None:
+            return workspace_quota or None
+        return limits.item_disk_ceiling
+
+    async def _owner_disk_left(item_id: str) -> int | None:
+        """What is left of the item's owner's own disk quota (D6) — None when
+        they have none. A sum over the owner's OTHER items too, so the route
+        only hands it to the owner."""
+        owner = _owner_of(item_id)
+        if not owner:
+            return None
+        limit = parse_size((await user_limits.for_user(owner)).disk)
+        if not limit:
+            return None
+        return max(0, limit - await disk_ledger.total_for(owner))
 
     def _clamp_cpu(want: float | None, ceiling: float) -> float | None:
         """`want` cores, held down to `ceiling` — where 0 means "no ceiling" and
@@ -1133,7 +1164,7 @@ def create_app(
         people, so the guess was normally wrong and pointed them at a setting
         that was not holding them."""
         limits = _limits_for(item_id)
-        _slug, owner, item_cpu, item_mem = _all_facts_of(item_id)
+        _slug, owner, item_cpu, item_mem, _disk = _all_facts_of(item_id)
         budget = await user_limits.for_user(owner) if owner else None
 
         app_cpu = limits.cpu_cores if limits else None
@@ -2868,6 +2899,14 @@ def create_app(
         # can still land in the seconds between forget and the row delete and
         # re-create it; #778's deferred sweep is the safety net.)
         disk_ledger=disk_ledger,
+        # docs/plan-item-disk-size.md: the panel reads the gate's own numbers.
+        item_disk=ItemDisk(
+            quota_for=_quota_for,
+            ceiling_for=_disk_ceiling_for,
+            used=files.workspace_usage,
+            owner_left=_owner_disk_left,
+            owner_of=_owner_of,
+        ),
     )
 
     # On app.state so the routes read the CURRENT list rather than one closed

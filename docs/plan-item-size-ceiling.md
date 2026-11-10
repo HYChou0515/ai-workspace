@@ -1,5 +1,7 @@
 # Plan — 一個 item 可以調到部署的 `max`，不是只能比預設小
 
+> 後續：硬碟後來也能在 item 上調，天花板規則照本計劃（#1018，[plan-item-disk-size.md](plan-item-disk-size.md)）。
+
 Grilled 2026-10-16 on master `442eca8e`。每條決定標來源：**[user]** = 使用者決定；**[mine]** = 我定的實作細節。
 
 > 這份計畫推翻 [plan-item-sandbox-resources.md](plan-item-sandbox-resources.md) 需求第 3 條「每個 App 可以設定上限，

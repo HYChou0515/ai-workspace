@@ -42,13 +42,20 @@ const IDLE = {
   // How far THIS item may go (plan-item-size-ceiling D5); null = no line.
   cpuCeiling: null,
   memoryCeiling: null,
+  // The disk half (plan-item-disk-size): null = an API pod without it, so no
+  // disk field is drawn and the cases here stay about cpu and memory.
+  statedDiskBytes: null,
+  effectiveDiskBytes: null,
+  diskUsedBytes: null,
+  diskCeiling: null,
+  ownerDiskLeft: null,
 };
 
 const BUDGET = { cpu: 4, memoryBytes: 8 * 1024 ** 3, cpuInUse: 2, memoryInUse: 2 * 1024 ** 3 };
 
 // The panel is presentational: the modal owns the draft. An empty draft is
 // "use the default", which is what every case here opens with.
-const DRAFT = { cpu: "", memory: "" };
+const DRAFT = { cpu: "", memory: "", disk: "" };
 const noop = () => {};
 
 describe("what is visible", () => {
@@ -383,7 +390,7 @@ describe("the shapes it borrows", () => {
     const seen: unknown[] = [];
     render(
       <ItemEnvironmentPanel
-        draft={{ cpu: "", memory: "256M" }}
+        draft={{ cpu: "", memory: "256M", disk: "" }}
         onDraft={(d) => seen.push(d)}
         env={{ ...IDLE, statedMemoryBytes: 256 * 1024 ** 2 }}
         budget={BUDGET}
@@ -413,7 +420,7 @@ describe("the shapes it borrows", () => {
   it("marks a field the modal calls unreadable, and shows the grammar under it", () => {
     render(
       <ItemEnvironmentPanel
-        draft={{ cpu: "0", memory: "512 MiB" }}
+        draft={{ cpu: "0", memory: "512 MiB", disk: "" }}
         fault={{
           cpu: { type: "unreadable", detail: "1 / 0.5" },
           memory: { type: "unreadable", detail: "512M / 512MB / 1.5G" },
@@ -452,7 +459,7 @@ describe("the shapes it borrows", () => {
     // what a person can type back — not `3.0 GB`.
     render(
       <ItemEnvironmentPanel
-        draft={{ cpu: "8", memory: "3073M" }}
+        draft={{ cpu: "8", memory: "3073M", disk: "" }}
         fault={{ cpu: { type: "over", detail: "7" }, memory: { type: "over", detail: "3G" } }}
         onDraft={noop}
         env={{ ...IDLE, maxCpuCores: 7, maxMemoryBytes: 3 * 1024 ** 3 }}

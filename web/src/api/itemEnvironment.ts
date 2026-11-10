@@ -55,6 +55,17 @@ export type ItemEnvironment = {
    *  `null` = nothing caps it, and the panel draws no line. */
   cpuCeiling: number | null;
   memoryCeiling: number | null;
+  /** docs/plan-item-disk-size.md — how big the WORKSPACE may grow. `stated` is
+   *  what somebody set (null = nobody); `effective` what every write is held to
+   *  now (0 = unlimited); `used` what it holds (the floor, D1); `ceiling` the
+   *  most it may be given (D3). All null from an API pod that predates them,
+   *  and the panel then draws no disk field. `ownerDiskLeft` is what is left of
+   *  the owner's own quota — sent to the owner only (D6). */
+  statedDiskBytes: number | null;
+  effectiveDiskBytes: number | null;
+  diskUsedBytes: number | null;
+  diskCeiling: number | null;
+  ownerDiskLeft: number | null;
 };
 
 /** A size to store. `null` in either dimension CLEARS it — which is not zero,
@@ -80,11 +91,18 @@ type Wire = {
   max_memory_bytes: number;
   cpu_ceiling?: number | null;
   memory_ceiling?: number | null;
+  stated_disk_bytes?: number | null;
+  effective_disk_bytes?: number | null;
+  disk_used_bytes?: number | null;
+  disk_ceiling?: number | null;
+  owner_disk_left?: number | null;
 };
 
 export type ItemEnvironmentApi = {
   get(slug: string, itemId: string): Promise<ItemEnvironment>;
   setSize(slug: string, itemId: string, size: ItemSize): Promise<void>;
+  /** The workspace's size, in the server's spelling (`5G`); null clears it. */
+  setDisk(slug: string, itemId: string, disk: string | null): Promise<void>;
 };
 
 const base = (slug: string, itemId: string) =>
@@ -113,6 +131,11 @@ export const itemEnvironmentApi: ItemEnvironmentApi = {
       // `??`: an API pod from before the field sends nothing — no line, not 0.
       cpuCeiling: w.cpu_ceiling ?? null,
       memoryCeiling: w.memory_ceiling ?? null,
+      statedDiskBytes: w.stated_disk_bytes ?? null,
+      effectiveDiskBytes: w.effective_disk_bytes ?? null,
+      diskUsedBytes: w.disk_used_bytes ?? null,
+      diskCeiling: w.disk_ceiling ?? null,
+      ownerDiskLeft: w.owner_disk_left ?? null,
     };
   },
   async setSize(slug, itemId, size) {
@@ -125,5 +148,15 @@ export const itemEnvironmentApi: ItemEnvironmentApi = {
       body: JSON.stringify({ cpu_cores: size.cpuCores, memory: size.memory }),
     });
     if (!r.ok) throw await httpErrorFrom(r, `set environment size failed: ${r.status}`);
+  },
+  async setDisk(slug, itemId, disk) {
+    // Its own route: unlike cpu and memory the workspace's size may change
+    // while the environment runs (D5), so it does not share their refusal.
+    const r = await apiFetch(`${base(slug, itemId)}/disk`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ disk }),
+    });
+    if (!r.ok) throw await httpErrorFrom(r, `set disk size failed: ${r.status}`);
   },
 };
