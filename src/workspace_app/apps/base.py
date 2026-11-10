@@ -240,7 +240,7 @@ class WorkItemBase(Struct):
     and may be made while the environment runs (D5). Its route refuses a value
     not ABOVE what the workspace already holds, once held to the ceiling (D1) —
     a workspace at its limit is full, so that would lock the workspace
-    the moment it was saved. Privileged like the two above
+    the moment it was saved. Clearing it (None) is never refused. Privileged like the two above
     (``perm.checker.ESCALATED_FIELDS``, ``change_permission``)."""
 
     permission: Permission | None = None

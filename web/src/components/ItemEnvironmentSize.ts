@@ -45,9 +45,11 @@ export function toSizeString(bytes: number | null): string | null {
  * (joined with ` / ` so either locale can read them). The sentence around it
  * belongs to the panel's `useT`; this module has no locale.
  */
-/** `"under"` is the disk's alone (plan-item-disk-size D1): below what the
- *  workspace already holds, `detail` = that amount. */
-export type SizeFault = { type: "unreadable" | "over" | "under"; detail: string } | null;
+/** `"under"` and `"capped"` are the disk's alone (plan-item-disk-size D1):
+ *  not above what the workspace already holds (`detail` = that amount), or
+ *  above it as typed but held by the App's ceiling to no more than it
+ *  (`detail` = the ceiling, `used` = the amount). */
+export type SizeFault = { type: "unreadable" | "over" | "under" | "capped"; detail: string; used?: string } | null;
 
 const CPU_EXAMPLES = "1 / 0.5";
 
@@ -116,7 +118,12 @@ export function diskFault(text: string, max: number, used: number, ceiling: numb
   if (fault !== null || text.trim() === "") return fault;
   const bytes = parseSize(normaliseMemory(text))!;
   const applies = ceiling ? Math.min(bytes, ceiling) : bytes;
-  return applies > used ? null : { type: "under", detail: formatBytes(used) };
+  if (applies > used) return null;
+  // Typed above `used`, yet the ceiling holds it at or below: the ceiling is
+  // the reason, and "more than used" would name one the person already met.
+  return bytes > used && ceiling
+    ? { type: "capped", detail: formatBytes(ceiling), used: formatBytes(used) }
+    : { type: "under", detail: formatBytes(used) };
 }
 
 /** The server's spelling back to bytes — for writing a just-sent size into

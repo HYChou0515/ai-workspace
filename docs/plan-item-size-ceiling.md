@@ -1,6 +1,6 @@
 # Plan — 一個 item 可以調到部署的 `max`，不是只能比預設小
 
-> 被 #1018（plan-item-disk-size.md）推翻
+> 後續：硬碟後來也能在 item 上調，天花板規則照本計劃（#1018，[plan-item-disk-size.md](plan-item-disk-size.md)）。
 
 Grilled 2026-10-16 on master `442eca8e`。每條決定標來源：**[user]** = 使用者決定；**[mine]** = 我定的實作細節。
 

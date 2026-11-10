@@ -703,7 +703,7 @@ def register_item_routes(
                     status_code=422,
                     detail=(
                         f"disk must be greater than 0 and below {_MAX_BYTES // 1024**4} TiB "
-                        f"(got {body.disk!r}); omit it to use the default"
+                        f"(got {body.disk!r}); send null to use the App's size"
                     ),
                 )
             # Against what will APPLY, not what was typed: a size above the

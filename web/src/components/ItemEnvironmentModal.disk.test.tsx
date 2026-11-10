@@ -213,7 +213,10 @@ describe("ItemEnvironmentModal — disk", () => {
     open();
     fireEvent.change(await screen.findByTestId("disk-input"), { target: { value: "30G" } });
 
-    expect(screen.getByTestId("disk-hint")).toBeTruthy();
+    // The reason named is the ceiling, not "more than used" — 30G already is.
+    expect(screen.getByTestId("disk-hint")).toHaveTextContent(
+      word("itemenv.field.disk.capped", { detail: "20.0 GB", used: "25.0 GB" }),
+    );
     expect(screen.getByTestId("itemenv-save")).toBeDisabled();
   });
 
@@ -367,6 +370,14 @@ describe("ItemEnvironmentModal — disk", () => {
 
     await screen.findByTestId("cpu-input");
     expect(screen.getByText(word("itemenv.close.hint.nodisk"))).toBeTruthy();
+  });
+
+  it("with no budget, the running hint names only the disk — there is no cpu or memory field", async () => {
+    vi.stubGlobal("fetch", route({ ...ENV, running: true }, UNCAPPED));
+    open();
+
+    await screen.findByTestId("disk-input");
+    expect(screen.getByText(word("itemenv.close.hint.diskonly"))).toBeTruthy();
   });
 
   it("with no budget, a viewer who may not change it is told why the disk is grey", async () => {

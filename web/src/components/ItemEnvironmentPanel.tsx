@@ -152,8 +152,15 @@ export function ItemEnvironmentPanel({
       </div>
       {env.running && canEdit ? (
         <p className="detail env-hint">
-          {/* Promise the disk only where this server draws one. */}
-          {t(env.diskUsedBytes === null ? "itemenv.close.hint.nodisk" : "itemenv.close.hint")}
+          {/* Name only the fields this panel draws: cpu/memory where a
+              budget exists, the disk where the server reports one. */}
+          {t(
+            env.diskUsedBytes === null
+              ? "itemenv.close.hint.nodisk"
+              : budget === null
+                ? "itemenv.close.hint.diskonly"
+                : "itemenv.close.hint",
+          )}
         </p>
       ) : null}
 
@@ -402,10 +409,12 @@ function DiskField({
           {t(
             fault.type === "under"
               ? "itemenv.field.disk.under"
-              : fault.type === "over"
-                ? "itemenv.field.memory.over"
-                : "itemenv.field.memory.unreadable",
-            { detail: fault.detail },
+              : fault.type === "capped"
+                ? "itemenv.field.disk.capped"
+                : fault.type === "over"
+                  ? "itemenv.field.memory.over"
+                  : "itemenv.field.memory.unreadable",
+            { detail: fault.detail, used: fault.used ?? "" },
           )}
         </p>
       ) : null}
