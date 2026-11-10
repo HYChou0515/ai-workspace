@@ -46,8 +46,8 @@ export type EnvBudget = {
   memoryInUse: number;
 };
 
-/** The two fields as the person is typing them. `""` = "use the default". */
-export type SizeDraft = { cpu: string; memory: string };
+/** The fields as the person is typing them. `""` = "use the default". */
+export type SizeDraft = { cpu: string; memory: string; disk: string };
 
 export type ItemEnvironmentPanelProps = {
   env: ItemEnvironment;
@@ -58,7 +58,7 @@ export type ItemEnvironmentPanelProps = {
    *  decides; this only marks the field and shows the matching hint — the
    *  grammar for `"unreadable"`, the record's ceiling for `"over"` — with the
    *  fault's `detail` interpolated). */
-  fault?: { cpu: SizeFault; memory: SizeFault };
+  fault?: { cpu: SizeFault; memory: SizeFault; disk?: SizeFault };
   /** A save is out (PUT or its re-read): the fields hold still so a
    *  keystroke cannot land between the write and the record catching up. */
   busy?: boolean;
@@ -74,7 +74,7 @@ export function ItemEnvironmentPanel({
   budget,
   canEdit,
   draft,
-  fault = { cpu: null, memory: null },
+  fault = { cpu: null, memory: null, disk: null },
   busy = false,
   onDraft,
   onCloseSandbox,
@@ -307,6 +307,97 @@ export function ItemEnvironmentPanel({
           </div>
         </>
       )}
+
+      {/* ── disk: the WORKSPACE's size (docs/plan-item-disk-size.md) ──
+          Its own block: it needs no per-person budget, and a running sandbox
+          does not hold it (every write reads it, D5) — so neither `budget`
+          nor `running` decides whether it is drawn or editable. Not drawn by
+          an API pod that sends no disk figures. */}
+      {env.diskUsedBytes === null ? null : (
+        <DiskField env={env} draft={draft.disk} fault={fault.disk ?? null} editable={canEdit && !busy} onDraft={onDraft} />
+      )}
+    </div>
+  );
+}
+
+function DiskField({
+  env,
+  draft,
+  fault,
+  editable,
+  onDraft,
+}: {
+  env: ItemEnvironment;
+  draft: string;
+  fault: SizeFault;
+  editable: boolean;
+  onDraft: (patch: Partial<SizeDraft>) => void;
+}) {
+  const t = useT();
+  const stated = env.statedDiskBytes;
+  const effective = env.effectiveDiskBytes;
+  const clamped = stated !== null && effective !== null && effective !== 0 && effective < stated;
+  return (
+    <div className="env-field" data-testid="disk-field">
+      <label htmlFor="itemenv-disk">{t("itemenv.field.disk")}</label>
+      <input
+        autoComplete="off"
+        className="input input--block"
+        id="itemenv-disk"
+        data-testid="disk-input"
+        value={draft}
+        placeholder={toSizeString(effective || null) ?? ""}
+        disabled={!editable}
+        aria-invalid={fault !== null || undefined}
+        aria-describedby={fault !== null ? "itemenv-disk-hint" : undefined}
+        onChange={(e) => onDraft({ disk: e.target.value })}
+      />
+      <p className="detail env-field__origin">
+        <span data-testid="disk-value">{effective ? formatBytes(effective) : "—"}</span>
+        {" · "}
+        <span data-testid="disk-origin">{stated === null ? t("itemenv.size.default") : t("itemenv.size.stated")}</span>
+        {stated === null || !editable ? null : (
+          <>
+            {" · "}
+            <button type="button" className="env-reset" data-testid="reset-disk" onClick={() => onDraft({ disk: "" })}>
+              {t("itemenv.size.reset")}
+            </button>
+          </>
+        )}
+      </p>
+      {/* The range, said before anything is typed (D1 floor, D3 ceiling). */}
+      <p data-testid="disk-range" className="detail env-field__note">
+        {t("itemenv.disk.used", { used: formatBytes(env.diskUsedBytes ?? 0) })}
+        {env.diskCeiling === null ? null : (
+          <>
+            {" · "}
+            {t("itemenv.size.ceiling", { value: formatBytes(env.diskCeiling) })}
+          </>
+        )}
+      </p>
+      <p className="detail env-field__note">{t("itemenv.disk.now")}</p>
+      {env.ownerDiskLeft === null ? null : (
+        <p data-testid="disk-owner-left" className="detail env-field__note">
+          {t("itemenv.disk.ownerLeft", { left: formatBytes(env.ownerDiskLeft) })}
+        </p>
+      )}
+      {fault !== null ? (
+        <p id="itemenv-disk-hint" data-testid="disk-hint" className="detail env-field__note env-field__note--invalid">
+          {t(
+            fault.type === "under"
+              ? "itemenv.field.disk.under"
+              : fault.type === "over"
+                ? "itemenv.field.memory.over"
+                : "itemenv.field.memory.unreadable",
+            { detail: fault.detail },
+          )}
+        </p>
+      ) : null}
+      {clamped && stated !== null && effective !== null ? (
+        <p data-testid="disk-clamped" className="detail env-field__note">
+          {t("itemenv.memory.clamped.app", { stated: formatBytes(stated), effective: formatBytes(effective) })}
+        </p>
+      ) : null}
     </div>
   );
 }

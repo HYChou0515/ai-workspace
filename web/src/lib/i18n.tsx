@@ -1391,6 +1391,18 @@ export const messages = {
     en: "A number with a unit — e.g. {detail}.",
   },
   "itemenv.field.memory.over": { "zh-TW": "最多 {detail}。", en: "At most {detail}." },
+  // docs/plan-item-disk-size.md — the workspace's own size.
+  "itemenv.field.disk": { "zh-TW": "硬碟", en: "Disk" },
+  "itemenv.disk.used": { "zh-TW": "已用 {used}", en: "{used} used" },
+  "itemenv.disk.now": {
+    "zh-TW": "存下就生效，執行中也可以改。",
+    en: "Applies as soon as it is saved, even while running.",
+  },
+  "itemenv.disk.ownerLeft": { "zh-TW": "你的個人額度還剩 {left}", en: "{left} left of your own quota" },
+  "itemenv.field.disk.under": {
+    "zh-TW": "不能小於已用的 {detail}；要更小，先刪檔案。",
+    en: "Not below the {detail} already used — delete files first.",
+  },
   "itemenv.readonly": {
     "zh-TW": "只有能變更這個 workspace 存取權的人可以調整大小 —— 它花的是 owner 的額度。",
     en: "Only someone who can change this workspace's access may resize it — it spends the owner's quota.",

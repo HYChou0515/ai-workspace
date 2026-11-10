@@ -20,6 +20,9 @@
  * and still send the one the server parses.
  */
 
+import { formatBytes } from "../lib/bytes";
+
+
 export function toSizeString(bytes: number): string;
 export function toSizeString(bytes: number | null): string | null;
 export function toSizeString(bytes: number | null): string | null {
@@ -42,7 +45,9 @@ export function toSizeString(bytes: number | null): string | null {
  * (joined with ` / ` so either locale can read them). The sentence around it
  * belongs to the panel's `useT`; this module has no locale.
  */
-export type SizeFault = { type: "unreadable" | "over"; detail: string } | null;
+/** `"under"` is the disk's alone (plan-item-disk-size D1): below what the
+ *  workspace already holds, `detail` = that amount. */
+export type SizeFault = { type: "unreadable" | "over" | "under"; detail: string } | null;
 
 const CPU_EXAMPLES = "1 / 0.5";
 
@@ -99,6 +104,16 @@ export function memoryFault(text: string, max: number): SizeFault {
   const bytes = parseSize(normaliseMemory(text));
   if (bytes === null) return { type: "unreadable", detail: MEMORY_EXAMPLES };
   return bytes <= max ? null : { type: "over", detail: toSizeString(max) };
+}
+
+/** `memoryFault`, plus the disk's own floor (plan-item-disk-size D1): not
+ *  below what the workspace already holds — the server refuses that, since it
+ *  would lock the workspace the moment it was saved. `used` is the RECORD's. */
+export function diskFault(text: string, max: number, used: number): SizeFault {
+  const fault = memoryFault(text, max);
+  if (fault !== null || text.trim() === "") return fault;
+  const bytes = parseSize(normaliseMemory(text))!;
+  return bytes >= used ? null : { type: "under", detail: formatBytes(used) };
 }
 
 /** The server's spelling back to bytes — for writing a just-sent size into

@@ -51,9 +51,10 @@ describe("item-environment.css: the size fields", () => {
 
   it("fill their column — the house input's `flex: 1` is for rows", () => {
     // `.input--block` (base.css) is the one spelling of "fill the width in a
-    // column"; both fields wear it, and this sheet keeps no copy.
+    // column"; every size field wears it — cpu, memory and the workspace's
+    // disk (plan-item-disk-size) — and this sheet keeps no copy.
     const panel = readFileSync(join(here, "../components/ItemEnvironmentPanel.tsx"), "utf8");
-    expect(panel.match(/className="input input--block"/g)?.length).toBe(2);
+    expect(panel.match(/className="input input--block"/g)?.length).toBe(3);
     expect(wide).not.toMatch(/\.input(?![\w-])/);
   });
 

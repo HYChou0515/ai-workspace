@@ -71,6 +71,7 @@ import { pxToRem } from "../lib/pxToRem";
 import { ItemEnvironmentPanel, type SizeDraft } from "./ItemEnvironmentPanel";
 import {
   cpuFault,
+  diskFault,
   memoryFault,
   normaliseMemory,
   parseSize,
@@ -118,6 +119,7 @@ export function ItemEnvironmentModal({
     ? {
         cpu: env.data.statedCpuCores === null ? "" : String(env.data.statedCpuCores),
         memory: toSizeString(env.data.statedMemoryBytes) ?? "",
+        disk: toSizeString(env.data.statedDiskBytes) ?? "",
       }
     : null;
   // Only the fields that were typed in. `{}` = nothing typed = clean.
@@ -130,19 +132,30 @@ export function ItemEnvironmentModal({
   const [staleAt, setStaleAt] = useState<number | null>(null);
   const staleAfterSave = staleAt !== null && env.dataUpdatedAt === staleAt;
   const current: SizeDraft | null = stated
-    ? { cpu: draft.cpu ?? stated.cpu, memory: draft.memory ?? stated.memory }
+    ? {
+        cpu: draft.cpu ?? stated.cpu,
+        memory: draft.memory ?? stated.memory,
+        disk: draft.disk ?? stated.disk,
+      }
     : null;
-  const dirty =
+  // Two halves, dirty apart: cpu/memory go to `/resources` and are locked
+  // while the sandbox runs; disk goes to `/disk` and is not (plan-item-disk-size
+  // D5). A Save sends only the half that changed.
+  const sizeDirty =
     current !== null && stated !== null && (current.cpu !== stated.cpu || current.memory !== stated.memory);
+  const diskDirty = current !== null && stated !== null && current.disk !== stated.disk;
+  const dirty = sizeDirty || diskDirty;
   // Against the RECORD's ceilings (#830), never a number of the client's own.
   // (`current` exists exactly when `env.data` does; the type cannot see that.)
-  const fault: { cpu: SizeFault; memory: SizeFault } =
+  const fault: { cpu: SizeFault; memory: SizeFault; disk: SizeFault } =
     env.data && current
       ? {
           cpu: cpuFault(current.cpu, env.data.maxCpuCores),
           memory: memoryFault(current.memory, env.data.maxMemoryBytes),
+          // The same hard ceiling as memory, plus the floor D1 adds.
+          disk: diskFault(current.disk, env.data.maxMemoryBytes, env.data.diskUsedBytes ?? 0),
         }
-      : { cpu: null, memory: null };
+      : { cpu: null, memory: null, disk: null };
 
   const envKey = qk.itemEnvironment(slug, itemId);
   const refresh = () =>
@@ -152,15 +165,21 @@ export function ItemEnvironmentModal({
     ]);
 
   const save = useMutation({
-    mutationFn: (d: SizeDraft) =>
-      itemEnvironmentApi.setSize(slug, itemId, {
-        cpuCores: d.cpu === "" ? null : Number(d.cpu),
-        // The person's spelling ("1.5 GB") → the server's ("1536M").
-        memory: d.memory.trim() === "" ? null : normaliseMemory(d.memory),
-      }),
+    mutationFn: async ({ d, size, disk }: { d: SizeDraft; size: boolean; disk: boolean }) => {
+      // Only the half that changed: a disk-only edit while the sandbox runs
+      // must not send a cpu/memory PUT the server refuses (409).
+      if (size)
+        await itemEnvironmentApi.setSize(slug, itemId, {
+          cpuCores: d.cpu === "" ? null : Number(d.cpu),
+          // The person's spelling ("1.5 GB") → the server's ("1536M").
+          memory: d.memory.trim() === "" ? null : normaliseMemory(d.memory),
+        });
+      if (disk)
+        await itemEnvironmentApi.setDisk(slug, itemId, d.disk.trim() === "" ? null : normaliseMemory(d.disk));
+    },
     // Awaited, so the mutation stays PENDING until the re-read has landed:
     // `save.isPending` is the one flag for "a save is out", PUT and re-read.
-    onSuccess: async (_, d) => {
+    onSuccess: async (_, { d }) => {
       await refresh();
       const failed = qc.getQueryState(envKey)?.status === "error";
       if (failed) {
@@ -172,6 +191,7 @@ export function ItemEnvironmentModal({
             ...old,
             statedCpuCores: d.cpu === "" ? null : Number(d.cpu),
             statedMemoryBytes: d.memory.trim() === "" ? null : parseSize(normaliseMemory(d.memory)),
+            statedDiskBytes: d.disk.trim() === "" ? null : parseSize(normaliseMemory(d.disk)),
           },
         );
         // setQueryData marks the record FRESH, so the reopen the notice
@@ -197,7 +217,7 @@ export function ItemEnvironmentModal({
   const submit = () => {
     if (!current || inflight.current) return;
     inflight.current = true;
-    save.mutate(current);
+    save.mutate({ d: current, size: sizeDirty, disk: diskDirty });
   };
   const close = useMutation({
     mutationFn: () => myResourcesApi.closeEnvironment(itemId),
@@ -211,9 +231,14 @@ export function ItemEnvironmentModal({
   });
 
   const attemptClose = useDirtyClose(dirty, onClose);
-  const editable = env.data !== undefined && budget !== null && canEdit;
+  // Something here may be changed: cpu/memory where a budget exists, or the
+  // disk wherever the server reports one (it needs no budget).
+  const hasDisk = env.data !== undefined && env.data.diskUsedBytes !== null;
+  const editable = env.data !== undefined && canEdit && (budget !== null || hasDisk);
   const busy = save.isPending;
-  const canSave = editable && dirty && fault.cpu === null && fault.memory === null && !env.data!.running && !busy;
+  const sizeOk = !sizeDirty || (budget !== null && fault.cpu === null && fault.memory === null && !env.data!.running);
+  const diskOk = !diskDirty || fault.disk === null;
+  const canSave = editable && dirty && sizeOk && diskOk && !busy;
 
   return (
     <ModalShell
