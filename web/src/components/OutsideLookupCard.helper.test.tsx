@@ -6,7 +6,7 @@
  */
 // @vitest-environment happy-dom
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -85,7 +85,7 @@ function draw({
    * while it stays on screen (the thread drawing the answer under it). */
   answeredLater?: boolean;
   /** The deploy's search destinations (`server.lookup_targets`). */
-  targets?: { name: string; url: string }[];
+  targets?: { name: string; url: string; description?: string; preview?: boolean }[];
   /** `GET /lookup-targets` failing. */
   targetsFail?: boolean;
   /** `GET /lookup-targets` not answered yet. */
@@ -428,12 +428,13 @@ describe("one name for one action (plan-ext-ai D8)", () => {
     expect(byHand).toHaveTextContent(/^Google search ↗$/);
   });
 
-  // The helper searches Google, or the first destination a deploy lists
-  // without it (`pick_search_target`): the button names that one.
+  // docs/plan-lookup-target-choice.md T2: the target the helper searches is the
+  // one chosen — the deploy's first until the person picks another — and the
+  // button names it (it was "Google, else the first": overturned).
   it.each([
-    [["Bing", "Google"], "Google search"],
+    [["Bing", "Google"], "Bing search"],
     [["Bing", "DuckDuckGo"], "Bing search"],
-  ])("names the destination the helper will use: %j", async (names, label) => {
+  ])("names the target chosen, the first to begin with: %j", async (names, label) => {
     draw({ targets: names.map((name) => ({ name, url: `https://${name}.example/?q={q}` })) });
 
     expect(await screen.findByRole("button", { name: label })).toBeInTheDocument();
@@ -459,6 +460,64 @@ describe("one name for one action (plan-ext-ai D8)", () => {
     fireEvent.click(await screen.findByRole("button", { name: "開啟這個網址" }));
 
     expect(await screen.findByRole("button", { name: "再開一次" })).toBeInTheDocument();
+  });
+});
+
+// docs/plan-lookup-target-choice.md: the person picks the search target; the
+// AI only suggests one (T1). NN/g: radio buttons over a drop-down, one chosen by
+// default — the first, never the AI's (that default would be "presumptuous", T2).
+describe("the person picks the target (plan-lookup-target-choice)", () => {
+  const PICK = [
+    { name: "Google", url: "https://www.google.com/search?q={q}", description: "", preview: true },
+    {
+      name: "料號查詢",
+      url: "partsdb://lookup?pn={q}",
+      description: "公司零件資料庫,只認完整料號。",
+      preview: false,
+    },
+  ];
+  const SUGGESTING: OutsideLookup = { why: "查料號", query: "A123-4567", target: "料號查詢" };
+
+  it("lists each target with what it searches, the first chosen — not the AI's", async () => {
+    draw({ lookup: SUGGESTING, targets: PICK });
+
+    const group = await screen.findByRole("radiogroup", { name: "搜尋目標" });
+    const google = within(group).getByRole("radio", { name: "Google" });
+    const parts = within(group).getByRole("radio", { name: /料號查詢/ });
+    expect(google).toBeChecked();
+    expect(parts).not.toBeChecked();
+    expect(parts).toHaveAccessibleDescription("公司零件資料庫,只認完整料號。");
+    // the AI's suggestion, marked beside its option
+    expect(within(group).getByText("AI 建議")).toBeInTheDocument();
+    expect(parts.closest("label")).toHaveTextContent("AI 建議");
+  });
+
+  it("hands over the target the person chose, and names it on the button", async () => {
+    const client = draw({ lookup: SUGGESTING, targets: PICK });
+    fireEvent.click(await screen.findByRole("radio", { name: /料號查詢/ }));
+    fireEvent.change(screen.getByLabelText("搜尋關鍵字"), { target: { value: "A123-4567" } });
+
+    fireEvent.click(screen.getByRole("button", { name: "料號查詢 search" }));
+
+    await waitFor(() => expect(client.handOver).toHaveBeenCalled());
+    expect(client.handOver.mock.calls[0]![0]).toMatchObject({
+      query: "A123-4567",
+      target: "料號查詢",
+      auto: false,
+    });
+  });
+
+  it("lists a target only the helper can search, unpressable by hand, saying why", async () => {
+    draw({ lookup: SUGGESTING, targets: PICK, online: false });
+
+    const byHand = await screen.findByRole("button", { name: "Google search(在新分頁開啟)" });
+    expect(byHand).toBeEnabled();
+    const helperOnly = screen.getByRole("button", { name: /料號查詢 search/ });
+    expect(helperOnly).toBeDisabled();
+    expect(helperOnly).toHaveAccessibleDescription(/這個目標要透過小幫手查/);
+    // …and still says what it searches, and that the AI suggested it
+    expect(screen.getByText("公司零件資料庫,只認完整料號。")).toBeInTheDocument();
+    expect(helperOnly.closest("li")).toHaveTextContent("AI 建議");
   });
 });
 

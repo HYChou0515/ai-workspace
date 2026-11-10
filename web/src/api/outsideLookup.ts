@@ -5,8 +5,16 @@
  */
 import { apiFetch, detailSentence, httpErrorFrom } from "./http";
 
-/** A search button: `url` holds `{q}`, where the query goes. */
-export type LookupTarget = { name: string; url: string };
+/** A search target (docs/plan-lookup-target-choice.md): `url` holds `{q}`,
+ * where the query goes. `description` says what it searches — the AI and the
+ * person read the same text (T4); `preview` false: the card draws no new-tab
+ * button for it, only the helper can search it (T5). The server fills both. */
+export type LookupTarget = {
+  name: string;
+  url: string;
+  description?: string;
+  preview?: boolean;
+};
 
 export type OutsideAnswer =
   | {
@@ -22,14 +30,6 @@ export type OutsideAnswer =
 export type OutsideAnswerSaved = { path: string | null; attachments: string[] };
 
 const enc = encodeURIComponent;
-
-/** The destination the helper searches with: Google, or — on a deploy that
- * lists its own — the first one listed. The helper's `pick_search_target`
- * (ai-workspace-helper/src/ai_workspace_helper/builtin_errands.py), so the
- * card's button names the site the helper will use (docs/plan-ext-ai.md D8). */
-export function pickSearchTarget(targets: LookupTarget[]): LookupTarget | undefined {
-  return targets.find((t) => t.name === "Google") ?? targets[0];
-}
 
 /** The search address for `query` — every `{q}`, encoded. */
 export function searchUrl(target: LookupTarget, query: string): string {
@@ -51,6 +51,9 @@ export type HelperJob = {
   auto: boolean;
   /** Where the page was saved, once done. */
   saved: string;
+  /** A search's target, as the person chose it (docs/plan-lookup-target-choice.md). */
+  target?: string;
+  target_url?: string;
 };
 
 /** A packed helper the operator published (docs/plan-outside-helper.md §3.7.2). */
@@ -92,11 +95,19 @@ export const outsideLookupApi = {
   /** Hand the card to the helper. `auto` is the card asking on its own, with
    * no nod — the server allows it only for a URL an earlier lookup in this
    * chat brought back (D12) and answers 409 otherwise. */
-  async handOver(args: CardArgs & { query?: string; auto: boolean }): Promise<HelperJob> {
+  async handOver(
+    args: CardArgs & { query?: string; auto: boolean; target?: string },
+  ): Promise<HelperJob> {
     const r = await apiFetch(cardJobs(args), {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ tool_call_id: args.callId, query: args.query ?? "", auto: args.auto }),
+      body: JSON.stringify({
+        tool_call_id: args.callId,
+        query: args.query ?? "",
+        auto: args.auto,
+        // the search target the person chose (docs/plan-lookup-target-choice.md T1)
+        target: args.target ?? "",
+      }),
     });
     if (!r.ok) return refused(r, `hand over failed: ${r.status}`);
     return (await r.json()) as HelperJob;

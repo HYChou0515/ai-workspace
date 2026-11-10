@@ -2176,6 +2176,13 @@ export const messages = {
   // docs/plan-ext-ai.md D8: the helper's button says what doing it by hand
   // says — the destination's own name, or 開啟這個網址.
   "lookup.searchWith": { "zh-TW": "{name} search", en: "{name} search" },
+  // docs/plan-lookup-target-choice.md: the person picks the target, the AI suggests one
+  "lookup.targetLegend": { "zh-TW": "搜尋目標", en: "Search target" },
+  "lookup.aiSuggests": { "zh-TW": "AI 建議", en: "AI suggests" },
+  "lookup.needsHelper": {
+    "zh-TW": "這個目標要透過小幫手查",
+    en: "Only the helper can search this target",
+  },
   "lookup.searchAgain": { "zh-TW": "再 {name} search 一次", en: "{name} search again" },
   "lookup.searchUnnamed": { "zh-TW": "搜尋", en: "Search" },
   "lookup.searchAgainUnnamed": { "zh-TW": "再搜尋一次", en: "Search again" },
