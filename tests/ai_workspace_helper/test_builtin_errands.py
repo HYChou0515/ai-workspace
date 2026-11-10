@@ -110,6 +110,16 @@ def test_a_target_this_helper_cannot_open_says_so():
     assert page.went == []
 
 
+def test_a_search_handed_over_before_the_update_asks_to_be_pressed_again():
+    """A search queued before the deploy carries no filled target (§3.4): the
+    card's button asks again — rather than 'cannot open : search targets'."""
+    page = _Page()
+
+    with pytest.raises(ErrandFailed, match="再按一次"):
+        build()["search"](_ctx(page), "")
+    assert page.went == []
+
+
 def test_a_page_is_opened_as_given():
     page = _Page()
 

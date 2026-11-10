@@ -1,6 +1,6 @@
 # 請幫我查:搜尋目標由使用者選,AI 只建議
 
-**狀態:** 計畫(grill 2026-11-10,T1–T7);尚未實作。
+**狀態:** P1–P6 完成(#1013);施工中定的細節在 §6。
 **來源標記:** 〔user〕= user 的原話或明確選擇;〔查證〕= 讀 `origin/master`(`14fc0ed8`)的程式碼確認的事實;
 〔施工〕= 我定的實作細節,可推翻;〔指南〕= 出自公開的 UI/UX 指南,附出處。
 
@@ -121,3 +121,19 @@ server:
 | P5 | 小幫手:搜尋照工作給的字串處理,拿掉 `pick_search_target` | 小幫手用後端給的那一段,不自己挑 |
 | P6 | 文件:`configuration.md`、`migrations.md`(要重新打包小幫手、使用者重裝);live check | 照 CLAUDE.md |
 | P7 | review(conformance / veracity / defect / regression)→ CI | 照 CLAUDE.md |
+
+## 6. 施工中定的細節
+
+- **C1** `args` 仍是使用者打的關鍵字(存檔的標題、「AI 的查詢」都讀它);新的 `target`、`target_url` 另外兩欄
+  (`OutsideJob`、`JobOut`)。把 `args` 換成填好的網址,存檔的「實際搜尋」就會變成一串網址〔施工〕。
+- **C2** 交給小幫手時沒帶 `target`(部署前就開著的分頁)= 清單第一個,也就是選單的預設(T2);帶了清單上沒有的名字
+  → 422〔施工〕。
+- **C3** 部署前已排隊的搜尋沒有 `target_url`:新版小幫手不拿空字串去開,而是說「這個搜尋是更新前送出的,請在卡片上再按一次」
+  〔施工〕。
+- **C4** 小幫手只會開 http(s);`target_url` 是別的 scheme 時那次搜尋失敗並說出 scheme(T6 允許任何網址,
+  怎麼解讀是小幫手的約定)〔施工〕。
+- **C5** 卡片裡「只能交給小幫手」的按鈕,無障礙名稱不帶「(在新分頁開啟)」——它開不了新分頁;停用原因用
+  `aria-describedby` 連到旁邊那行字〔施工〕。
+- **C6** 卡片和小幫手原本各有一份「Google,沒有就第一個」(`pickSearchTarget` / `pick_search_target`)和一份對照表,
+  T1 推翻後兩份與對照表都拿掉;填 `{q}` 改由後端做(`fill_target`),和卡片的 `searchUrl` 用
+  `tests/fixtures/search_fill_cases.json` 對答案〔施工〕。

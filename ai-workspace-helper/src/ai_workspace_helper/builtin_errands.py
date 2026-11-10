@@ -242,6 +242,12 @@ def build(site: Any = None) -> dict[str, Errand]:
         # docs/plan-lookup-target-choice.md §3.4: the target the person chose,
         # filled by the backend. Its url may be any URL (T6) for a helper that
         # knows what to do with it; this one opens web pages.
+        if not address:
+            # handed over before the backend filled targets: no target to open
+            raise ErrandFailed(
+                "這個搜尋是更新前送出的,請在卡片上再按一次 — "
+                "this search was handed over before the update; press the button again"
+            )
         scheme = urlsplit(address).scheme
         if scheme not in ("http", "https"):
             raise ErrandFailed(
