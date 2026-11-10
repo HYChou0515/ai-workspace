@@ -34,6 +34,8 @@ from ..config.schema import (
     OffHoursSettings,
     PerUserResources,
     RetrievalSettings,
+    default_lookup_targets,
+    whole_lookup_targets,
 )
 from ..context_budget import DEFAULT_MAX_TOKENS_WINDOW_RATIO
 from ..live_value import Live
@@ -487,7 +489,7 @@ def create_app(
     env_providers: list[IEnvProvider] | None = None,
     # docs/plan-outside-lookup.md D3: the "請幫我查" card's search buttons
     # (`server.lookup_targets`, validated by the loader). None ⇒ Google alone.
-    lookup_targets: list[dict[str, str]] | None = None,
+    lookup_targets: Sequence[Mapping[str, Any]] | None = None,
     # docs/plan-outside-helper.md §3.7.2: `server.ai_workspace_helper_dir`, where the
     # operator publishes a packed helper. None/"" ⇒ nothing published.
     ai_workspace_helper_dir: str | None = None,
@@ -743,6 +745,9 @@ def create_app(
         run_consumers,
         host_managed_durable,
     )
+    # docs/plan-lookup-target-choice.md: the one copy of the search targets every
+    # reader in the app takes — what a deploy left out filled in here, once.
+    search_targets = whole_lookup_targets(lookup_targets or default_lookup_targets())
     # Current-user seam: real deploys inject a reader of the auth middleware;
     # the default is the single dev tenant. UserDirectory resolves ids → people.
     # The same `get_user_id` should have been threaded into `make_spec`
@@ -1784,7 +1789,7 @@ def create_app(
         # #608: /me carries the caller's group ids so the FE can resolve a
         # `group:<id>` grant to the current viewer (same resolver the access_scopes use).
         groups_provider=lambda u: groups_of(spec, u),
-        lookup_targets=lookup_targets,
+        lookup_targets=search_targets,
     )
 
     # #106: context-card create/update custom actions must register on the spec

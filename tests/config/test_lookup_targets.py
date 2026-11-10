@@ -84,8 +84,17 @@ def test_the_default_is_not_shared_between_loads():
             "server.lookup_targets[0].name must be a non-empty string",
         ),
         (
-            "[{name: G, url: 'https://g/?q={q}'}, {name: F, url: 'ftp://f/{q}'}]",
-            "server.lookup_targets[1].url must start with http:// or https://",
+            # docs/plan-lookup-target-choice.md T6: any URL, but a URL — a scheme first.
+            "[{name: G, url: 'https://g/?q={q}'}, {name: F, url: 'lookup?pn={q}'}]",
+            "server.lookup_targets[1].url must be a URL (`scheme:…`)",
+        ),
+        (
+            "[{name: G, url: 'https://g/?q={q}', description: 3}]",
+            "server.lookup_targets[0].description must be a string",
+        ),
+        (
+            "[{name: G, url: 'https://g/?q={q}', preview: 'no'}]",
+            "server.lookup_targets[0].preview must be true or false",
         ),
         (
             "[{name: G, url: 'https://g/search'}]",
@@ -108,7 +117,9 @@ def test_the_default_is_not_shared_between_loads():
         "no-url",
         "unknown-key",
         "blank-name",
-        "not-http",
+        "no-scheme",
+        "description-not-text",
+        "preview-not-bool",
         "no-placeholder",
         "duplicate-name",
         "duplicate-name-padded",
@@ -117,3 +128,27 @@ def test_the_default_is_not_shared_between_loads():
 def test_a_target_that_cannot_work_refuses_to_boot(tmp_path: Path, value: str, sentence: str):
     with pytest.raises(ValueError, match=re.escape(sentence)):
         _load(tmp_path, f"server:\n  lookup_targets: {value}\n")
+
+
+def test_a_target_may_say_how_it_searches_and_whether_the_card_opens_it(tmp_path: Path):
+    """docs/plan-lookup-target-choice.md T3/T5/T6: a `description` the AI and the
+    person read, a `preview` switch for the card's own new-tab button, and a
+    `url` the helper interprets — any scheme, not only a web page."""
+    settings = _load(
+        tmp_path,
+        "server:\n"
+        "  lookup_targets:\n"
+        "    - name: Parts\n"
+        "      url: partsdb://lookup?pn={q}\n"
+        "      description: The parts database; a full part number only.\n"
+        "      preview: false\n",
+    )
+
+    assert settings.server.lookup_targets == [
+        {
+            "name": "Parts",
+            "url": "partsdb://lookup?pn={q}",
+            "description": "The parts database; a full part number only.",
+            "preview": False,
+        }
+    ]

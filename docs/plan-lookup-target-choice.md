@@ -51,7 +51,9 @@ server:
 
 - `name`、`url` 必填;`description`(字串)、`preview`(布林,預設 `true`)選填〔施工〕。其他欄位照舊拒絕。
 - `url` 的檢查(T6):是一個網址(有 scheme,`scheme:` 開頭)且含 `{q}`。不再要求 `http(s)`。
-- 沒寫 `description` 的目標,AI 看到的只有名字;預設的 Google 這一筆內建一段說明〔施工〕。
+- 沒寫 `description` 的目標,AI 和人看到的只有名字;預設的 Google 也沒有說明——後端的預設值只能是一種語言,
+  卡片的字卻跟著語系走,而 AI 本來就知道 Google 是什麼〔施工〕。缺的欄位在 `create_app` 補一次
+  (`whole_lookup_targets`),app 裡每個讀清單的地方拿到的都是完整的形狀〔施工〕。
 - `preview: true` 而 `url` 不是 `http(s)` 時不擋:那顆按鈕交給瀏覽器開,開不開得了是設定者的責任(T6)。
 - 這是**選填、預設不改行為**的欄位 → 寫進 `docs/configuration.md`;但交給小幫手的約定改了(§3.4),
   所以實作 PR 仍要有 `docs/migrations.md` 條目(要重新打包小幫手)。

@@ -20,6 +20,7 @@ from __future__ import annotations
 import dataclasses
 import math
 import os
+import re
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any, cast
@@ -448,12 +449,17 @@ def _validate(merged: dict[str, Any], *, source: str) -> None:
     _check_capacity(merged, source=source)
 
 
+#: RFC 3986's scheme: a letter, then letters, digits, `+`, `-` or `.`, then `:`.
+_URL_SCHEME = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*:")
+
+
 def _check_lookup_targets(merged: dict[str, Any], *, source: str) -> None:
-    """`server.lookup_targets` (docs/plan-outside-lookup.md D3): each entry is
-    a button on the "請幫我查" card that opens `url` with the query in place of
-    `{q}`. One that cannot work — no placeholder, not a web address, a name the
-    card cannot tell apart — is refused here, naming the entry, rather than
-    found when a person presses it."""
+    """`server.lookup_targets` (docs/plan-outside-lookup.md D3,
+    docs/plan-lookup-target-choice.md): each entry is a search target on the
+    "請幫我查" card — `url` with the query in place of `{q}`, handed to the
+    helper or opened by the card. One that cannot work — no placeholder, not a
+    URL, a name the card cannot tell apart, a field of the wrong type — is
+    refused here, naming the entry, rather than found when a person presses it."""
     if "lookup_targets" not in merged.get("server", {}):
         return  # a partial dict (a caller's own `_validate`)
     targets = merged["server"]["lookup_targets"]
@@ -470,15 +476,21 @@ def _check_lookup_targets(merged: dict[str, Any], *, source: str) -> None:
         if not isinstance(t, dict) or "name" not in t or "url" not in t:
             raise ValueError(f"config {source}: {at} must be a mapping with `name` and `url`")
         entry = cast("dict[str, Any]", t)
-        if extra := sorted(set(entry) - {"name", "url"}):
+        if extra := sorted(set(entry) - {"name", "url", "description", "preview"}):
             raise ValueError(f"config {source}: {at} has unknown key {extra[0]!r}")
         name, url = entry["name"], entry["url"]
         if not isinstance(name, str) or not name.strip():
             raise ValueError(f"config {source}: {at}.name must be a non-empty string")
-        if not isinstance(url, str) or not url.startswith(("http://", "https://")):
-            raise ValueError(f"config {source}: {at}.url must start with http:// or https://")
+        # docs/plan-lookup-target-choice.md T6: the helper interprets the URL
+        # (a black box), so any scheme — but a URL, which starts with one.
+        if not isinstance(url, str) or not _URL_SCHEME.match(url):
+            raise ValueError(f"config {source}: {at}.url must be a URL (`scheme:…`)")
         if "{q}" not in url:
             raise ValueError(f"config {source}: {at}.url must contain {{q}} — where the query goes")
+        if not isinstance(entry.get("description", ""), str):
+            raise ValueError(f"config {source}: {at}.description must be a string")
+        if not isinstance(entry.get("preview", True), bool):
+            raise ValueError(f"config {source}: {at}.preview must be true or false")
         # Compared as the card shows it: `Google` and `Google ` are one button.
         if name.strip() in seen:
             raise ValueError(f"config {source}: {at}.name {name!r} is already used")
