@@ -135,7 +135,7 @@ from .kb_chat_routes import (
 )
 from .kb_routes import register_kb_routes
 from .lifecycle import build_lifespan
-from .llm_budget import ILlmBudget
+from .llm_budget import ILlmBudget, register_llm_budget_routes
 from .locator import ItemLocator
 from .marking_table import register_marking_table_route
 from .mention import MentionService
@@ -1780,6 +1780,9 @@ def create_app(
             )
         return Response(status_code=200, content="ok", media_type="text/plain")
 
+    # docs/plan-llm-budget.md: the asking person's own LLM budget, from the
+    # deploy's class (`server.llm_budget`); `off` when it configured none.
+    register_llm_budget_routes(api, llm_budget=llm_budget, get_user_id=get_user_id)
     register_meta_routes(
         api,
         users=users,
