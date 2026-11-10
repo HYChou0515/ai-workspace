@@ -585,12 +585,13 @@ textarea.input {
    every cell but the first, whichever those turn out to be. Wraps rather than
    overflows on a narrow column. */
 /* Cells sit on one line and move to the next only when there is no room. Each
-   cell carries its own 「·」 in a fixed slot BEFORE it; the row is pulled left
-   by that slot and the slot column is clipped, so the dot of whichever cell
-   starts a line — the first, or one that wrapped — is cut off and every other
-   dot shows. (`* + *::before` drew a dot before every cell but the first, so a
-   wrapped line began with a dangling 「·」.) The negative top/right/bottom
-   insets keep focus rings and descenders outside the box visible. */
+   cell keeps a 16px left margin with its 「·」 drawn in it (absolutely, so the
+   cell's own layout — a flex gap, an inline padding — cannot move it); the row
+   is pulled left by that margin and the margin column is clipped, so the dot of
+   whichever cell starts a line — the first, or one that wrapped — is cut off
+   and every other dot shows. (`* + *::before` drew a dot before every cell but
+   the first, so a wrapped line began with a dangling 「·」.) The negative
+   top/right/bottom insets keep focus rings outside the box visible. */
 .composer-status {
   display: flex;
   flex-wrap: wrap;
@@ -601,12 +602,20 @@ textarea.input {
   font-size: var(--text-xs); /* 11px at the default root, scales with the text-size setting */
   color: var(--text-paper-d);
 }
+.composer-status > * {
+  position: relative;
+  margin-left: 16px;
+}
 .composer-status > *::before {
   content: "·";
-  display: inline-block;
-  flex: none;
+  position: absolute;
+  right: 100%;
+  top: 0;
+  bottom: 0;
   width: 16px;
-  text-align: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   color: var(--text-paper-d);
 }
 .composer-status > button {
@@ -619,7 +628,6 @@ textarea.input {
 .composer-status > [data-status-line] {
   flex-basis: 100%;
   order: 99;
-  padding-left: 16px; /* past the clipped slot column: it has no dot of its own */
 }
 .composer-status > [data-status-line]::before {
   content: none;

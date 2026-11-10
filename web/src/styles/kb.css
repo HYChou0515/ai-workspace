@@ -342,7 +342,9 @@
 /* docs/plan-llm-budget.md P4: the status row above the composer (the budget),
    aligned with the composer's own edge; nothing to say takes no room. */
 .kb-composer-status {
-  margin: 0 0 var(--space-4);
+  /* margin-BOTTOM only: the row's own negative left margin is its separator
+     mechanism (base.css `.composer-status`). */
+  margin-bottom: var(--space-4);
 }
 .kb-composer-status:empty {
   display: none;
