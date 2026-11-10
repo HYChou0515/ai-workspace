@@ -1770,6 +1770,13 @@ export const messages = {
   "chat.more": { "zh-TW": "更多", en: "More" },
 
   // #245: workspace storage usage bar + over-quota upload error.
+  // docs/plan-llm-budget.md — remaining FIRST, both labelled.
+  "budget.remainingOfTotal": { "zh-TW": "AI 剩 {remaining}／共 {total}", en: "AI: {remaining} left of {total}" },
+  "budget.remaining": { "zh-TW": "AI 剩 {remaining}", en: "AI: {remaining} left" },
+  "budget.total": { "zh-TW": "AI 預算共 {total}", en: "AI budget: {total}" },
+  "budget.unavailable": { "zh-TW": "預算暫時查不到", en: "Budget unavailable right now" },
+  "budget.tone.warn": { "zh-TW": "注意", en: "Note" },
+  "budget.tone.critical": { "zh-TW": "警告", en: "Warning" },
   "workspace.usage": {
     "zh-TW": "已使用 {used} / {quota}",
     en: "{used} of {quota} used",

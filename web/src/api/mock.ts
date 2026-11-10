@@ -12,6 +12,7 @@ import { isReadOnlyPath } from "../lib/readonly";
 import { relPath } from "../lib/relPath";
 import type {
   ApiClient,
+  LlmBudget,
   AppItem,
   AppManifest,
   CellRef,
@@ -507,6 +508,12 @@ export const mockApi: ApiClient = {
     await delay(10);
     return "default-user";
   },
+  async getLlmBudget(): Promise<LlmBudget> {
+    await delay(10);
+    // The mock deploy configures no budget class.
+    return { status: "off", budget: null };
+  },
+
   async getMe() {
     await delay(10);
     return { id: "default-user", is_superuser: false, groups: [] };

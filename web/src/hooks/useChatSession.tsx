@@ -1,6 +1,7 @@
 import { useQueryClient, type QueryKey } from "@tanstack/react-query";
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { qk } from "../api/queryKeys";
 import type { MarkingInput } from "../api/types";
 import type { AgentEvent } from "../events";
 import { eventId, eventSeq, isTerminal, isTurnProgress } from "../events";
@@ -415,6 +416,10 @@ export function useChatSession(
               // #739: the turn just told us what the window really holds.
               if (transport.contextKey)
                 void qc.invalidateQueries({ queryKey: transport.contextKey });
+              // docs/plan-llm-budget.md D6: a turn is when money was just
+              // spent — ask for the budget again (the server reuses one
+              // answer per person for 30 s). Both chats run on this hook.
+              void qc.invalidateQueries({ queryKey: qk.llmBudget });
               // Re-snapshot from the store — it carries the BE-attached
               // `ask_knowledge_base` citations the stream doesn't emit.
               const fresh = await transport.getThread();

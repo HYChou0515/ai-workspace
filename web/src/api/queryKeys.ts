@@ -11,6 +11,9 @@ export const qk = {
   // The signed-in user's id + superuser flag (`GET /me`) — gates system-wide
   // controls like the collection "Global" toggle.
   me: ["me"] as const,
+  // docs/plan-llm-budget.md — the asking person's LLM budget: one key per
+  // person (not per item), so every composer shows the same answer.
+  llmBudget: ["llmBudget"] as const,
   users: ["users"] as const,
   notifications: ["notifications"] as const,
   // #608 — logical groups. `groups` = the management list (what I own/maintain/

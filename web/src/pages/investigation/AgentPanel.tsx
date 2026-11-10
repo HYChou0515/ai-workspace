@@ -29,6 +29,7 @@ import { useWorkspaceSlug } from "../../hooks/useWorkspaceSlug";
 import { type ChatItem, ChatItemProvider, type EnvTarget } from "../../hooks/chatItem";
 import { HeaderActions, type HeaderTier, useHeaderTier } from "./HeaderActions";
 import { UsageBar } from "./UsageBar";
+import { BudgetBar } from "../../components/BudgetBar";
 import { ContextBar } from "../../components/ContextBar";
 import { parseComposerCommand } from "../../components/composerCommand";
 import { ReplayDialog, type ReplayRequest } from "../../components/ReplayDialog";
@@ -1097,6 +1098,7 @@ export function AgentPanel({
         <div data-testid="composer-status" className="composer-status">
           <UsageBar slug={slug} itemId={investigationId} />
           {chatId && <ContextBar slug={slug} itemId={investigationId} chatId={chatId} />}
+          <BudgetBar />
           {chatId && (
             <button
               type="button"
