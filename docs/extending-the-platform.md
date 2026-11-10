@@ -650,6 +650,41 @@ tool 端的讀法跟上面**一模一樣**(`os.environ`),它分不出值從哪�
   ⚠️ **反過來說,`raise RuntimeError(f"...{cookie}...")` 會把憑證寫進 log。**
   例外訊息裡只放「哪一步失敗」,不要放值。
 
+### 這個人還剩多少 LLM 預算([plan-llm-budget](plan-llm-budget.md))
+
+平台不記每個人花了多少,也不設上限;「還剩多少」由部署方自己的 LLM gateway 或費用系統知道。部署寫一個
+`ILlmBudget`(`workspace_app/api/llm_budget.py`),在 config 填 `server.llm_budget`,平台就把它的回答顯示在
+item 聊天與知識庫聊天的輸入框上方,寫成「AI 剩 $11／共 $20」(剩餘在前、兩個都標字)。
+
+```python
+from fastapi import Request
+
+from workspace_app.api.llm_budget import BudgetLink, BudgetStatus, ILlmBudget
+
+
+class CorpBudget(ILlmBudget):
+    async def budget_for(self, request: Request, *, user_id: str) -> BudgetStatus | None:
+        token = request.cookies.get("corp_sso")          # 這個人自己的憑證
+        spent, limit = await my_cost_system(user_id, token)  # 自己的系統、自己的 timeout
+        return BudgetStatus(
+            remaining=limit - spent,
+            total=limit,
+            currency="USD",
+            message="每月 1 號重置。",
+            link=BudgetLink(label="申請加額度", url="https://budget.corp/apply"),
+            tone="critical" if limit - spent < 1 else "info",
+        )
+```
+
+- **每個欄位都可以不給**:只給數字、只給一句訊息、或回 `None`(不顯示)都可以。`message` 是純文字,
+  平台不會當 HTML 或 markdown 畫;`link` 只接受 `http`/`https`,其他的(例如 `javascript:`)會被丟掉並記 log。
+  `tone` 是 `info`/`warn`/`critical`:`warn`/`critical` 會在數字前加一個字(「注意」/「警告」)和一個色點。
+- **只顯示、不擋送出**:錢用完時拒絕的是 gateway;這個介面答錯或答慢,都不會擋住還有錢的人。AI 也不會知道這個數字。
+- **什麼時候問**:打開聊天時、每一輪結束後(`GET /me/llm-budget`),同一個人 30 秒內只問 class 一次,
+  同時來的請求共用一次呼叫。class 丟例外或 3 秒沒回,畫面寫「預算暫時查不到」並記 log,30 秒後再問。
+- **只問本人**:路由沒有 user 參數,`user_id` 一定是發出請求的那個人;`request` 是他自己的請求,
+  所以可以用 gateway 帶來的 cookie/header 去查,不必另存一組服務帳號。
+
 ### 為什麼沒有 user 自建 tool
 
 新增 tool 要跑**任意 Python** 並可能持有 credential——把它開放給執行期使用者不安全,所以這是

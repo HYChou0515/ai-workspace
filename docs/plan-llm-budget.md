@@ -104,3 +104,28 @@ class ILlmBudget(abc.ABC):
   message; never in the prompt).
 - A live check with a stand-in class (numbers, message-only, `None`, raising,
   slow) at two widths, item chat and KB chat; a /web-demo before review.
+
+## As built
+
+- **`unavailable` is kept for the same 30 s** as an answer (`BudgetCache`):
+  D7's "asked again after the next turn" holds once the window has passed — a
+  cost system that is down is not asked again by every chat that opens
+  meanwhile. Concurrent asks for one person share one call, shielded so one
+  closed tab cancels nothing.
+- **Only http(s) links are passed on** (`_safe_link`), others dropped and
+  logged: the URL comes from the deploy's code and lands in an `<a href>`, where
+  a `javascript:` one would run in the person's page. Not asked; a security
+  default.
+- **The tone is a word and a dot.** `warn` / `critical` put 「注意」 / 「警告」
+  before the figure and a `--warn` / `--err` dot beside it; the text stays ink,
+  because `--warn` on paper is too light to read at 11px.
+- **Numbers are formatted with the UI locale's narrow currency symbol**, cents
+  only when there are any (`$11`, `$3.50`); an unknown currency code falls back
+  to `11 XYZ`.
+- **The message and link take a line of their own** (`data-status-line`, like
+  the storage-full warning) so a long message never pushes the gauges apart.
+- **The `docs/configuration.md` line landed in P1**: `tests/config/
+  test_server_settings_are_documented` requires every `server.*` key to be
+  named in the manual the day it exists.
+- **The knowledge-base row** is a `composer-status` row of its own above
+  `kb-composer`, hidden by CSS when empty.
