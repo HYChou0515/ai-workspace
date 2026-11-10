@@ -80,9 +80,12 @@ async def test_two_chats_do_not_answer_for_each_other():
     assert await store.alive("chat-2", stale_after_ms=30_000) is True
 
 
-def _flaky_reads(store: SpecstarTurnActivityStore, monkeypatch, misses: int) -> list[int]:
+def _flaky_reads(
+    store: SpecstarTurnActivityStore, monkeypatch, misses: int, error=None
+) -> list[int]:
     """The disk backend rewrites a draft in place: a read that lands mid-rewrite
-    finds no data file (`FileNotFoundError`). The first `misses` reads do."""
+    finds no data file (`FileNotFoundError`) or half of one (`ResourceDecodeError`,
+    "Input data was truncated" — seen on CI). The first `misses` reads do."""
     from workspace_app.api.turn_activity import _TurnActivity
 
     rm = store._spec.get_resource_manager(_TurnActivity)  # noqa: SLF001
@@ -92,7 +95,7 @@ def _flaky_reads(store: SpecstarTurnActivityStore, monkeypatch, misses: int) -> 
     def get(key, *a, **kw):  # noqa: ANN001, ANN002, ANN003, ANN202
         calls.append(1)
         if len(calls) <= misses:
-            raise FileNotFoundError(f"…/{key}/data")
+            raise error(key) if error else FileNotFoundError(f"…/{key}/data")
         return real(key, *a, **kw)
 
     monkeypatch.setattr(rm, "get", get)
@@ -107,6 +110,24 @@ async def test_a_read_caught_mid_rewrite_is_read_again(monkeypatch):
     store, _clock = _store()
     await store.bump("chat-1")
     calls = _flaky_reads(store, monkeypatch, misses=1)
+
+    assert await store.alive("chat-1", stale_after_ms=30_000) is True
+    assert len(calls) == 2
+
+
+async def test_a_read_of_a_half_written_row_is_read_again(monkeypatch):
+    """The same race caught a moment later: the data file is there, half
+    written. CI saw it after the FileNotFoundError reread went in."""
+    from specstar.types import ResourceDecodeError
+
+    store, _clock = _store()
+    await store.bump("chat-1")
+    calls = _flaky_reads(
+        store,
+        monkeypatch,
+        misses=1,
+        error=lambda key: ResourceDecodeError(key, "Input data was truncated"),
+    )
 
     assert await store.alive("chat-1", stale_after_ms=30_000) is True
     assert len(calls) == 2

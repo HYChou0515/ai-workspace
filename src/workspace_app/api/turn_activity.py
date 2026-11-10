@@ -56,6 +56,7 @@ from msgspec import Struct
 from specstar import SpecStar
 from specstar.types import (
     DuplicateResourceError,
+    ResourceDecodeError,
     ResourceIDNotFoundError,
     ResourceIsDeletedError,
     RevisionStatus,
@@ -64,7 +65,8 @@ from specstar.types import (
 logger = logging.getLogger(__name__)
 
 #: How many times a beat read is tried when it lands mid-rewrite (a disk-backend
-#: draft `modify` leaves no data file for an instant), and the pause between.
+#: draft `modify` leaves no data file, or half of one, for an instant), and the
+#: pause between.
 _READ_ATTEMPTS = 3
 _REREAD_S = 0.01
 
@@ -172,11 +174,12 @@ class SpecstarTurnActivityStore(ITurnActivityStore):
                 break
             except (ResourceIDNotFoundError, ResourceIsDeletedError):
                 return False  # never started, or finished
-            except FileNotFoundError:
+            except (FileNotFoundError, ResourceDecodeError):
                 # The disk backend rewrites a draft in place (`_bump_sync`'s
-                # `modify`): a read landing in that instant finds no data file.
-                # Read again; a file still missing after that is no rewrite —
-                # raise, and the caller's "could not be judged" stands.
+                # `modify`): a read landing in that instant finds no data file,
+                # or half of one ("Input data was truncated"). Read again; a row
+                # still unreadable after that is no rewrite — raise, and the
+                # caller's "could not be judged" stands.
                 if attempt == _READ_ATTEMPTS - 1:
                     raise
                 time.sleep(_REREAD_S)
