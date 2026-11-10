@@ -20,6 +20,7 @@ from __future__ import annotations
 import abc
 import asyncio
 import logging
+import math
 import time
 from collections.abc import Callable
 from typing import Literal
@@ -32,7 +33,8 @@ from pydantic import BaseModel
 logger = logging.getLogger(__name__)
 
 #: How long one person's answer is reused (D6): the class is asked at most once
-#: per person per this many seconds, however many chats open and turns end.
+#: per person per this many seconds ON EACH API POD (the cache is in process
+#: memory), however many chats open and turns end there.
 CACHE_S = 30.0
 #: How long the platform waits for the class before saying 「預算暫時查不到」
 #: (D7). The budget is a glance, not a gate: a slow cost system must not keep the
@@ -110,12 +112,21 @@ class LlmBudgetOut(BaseModel):
 
     status: Literal["off", "ok", "unavailable"]
     budget: BudgetOut | None = None
+    #: Seconds until this pod asks the class again — 0 when it never will.
+    #: A turn that ends inside the window is shown the cached, pre-turn
+    #: figure; the page asks once more when the window ends, and learns WHEN
+    #: from here rather than keeping its own copy of the window.
+    stale_in_s: int = 0
 
 
 def _safe_link(link: BudgetLink | None, *, user_id: str) -> BudgetLinkOut | None:
     """The URL comes from the deploy's code and lands in an ``<a href>``: only
     http(s) is drawn — a ``javascript:`` one would run in the person's page."""
     if link is None:
+        return None
+    if not link.label.strip():
+        # It would draw as nothing — focusable, with no name.
+        logger.warning("llm budget: dropped a link with no label for %s", user_id)
         return None
     if urlparse(link.url).scheme.lower() not in ("http", "https"):
         logger.warning("llm budget: dropped a non-http link for %s: %r", user_id, link.url)
@@ -140,8 +151,9 @@ def _out(status: BudgetStatus | None, *, user_id: str) -> LlmBudgetOut:
 
 
 class BudgetCache:
-    """Ask the deploy's class about one person at most once per ``ttl_s``, and
-    only once at a time: asks that arrive while one is in flight share it.
+    """Ask the deploy's class about one person at most once per ``ttl_s`` (per
+    process — each API pod has its own), and only once at a time: asks that
+    arrive while one is in flight share it.
 
     An ``unavailable`` answer is kept for the same window — a cost system that
     is down is not asked again by every chat that opens meanwhile."""
@@ -162,18 +174,21 @@ class BudgetCache:
         self._pending: dict[str, asyncio.Future[LlmBudgetOut]] = {}
 
     async def status_for(self, request: Request, *, user_id: str) -> LlmBudgetOut:
-        now = self._clock()
         hit = self._done.get(user_id)
-        if hit is not None and now < hit[0]:
-            return hit[1]
-        task = self._pending.get(user_id)
-        if task is None:
-            task = asyncio.ensure_future(self._ask(request, user_id))
-            self._pending[user_id] = task
-            task.add_done_callback(lambda _t, u=user_id: self._pending.pop(u, None))
-        # Shielded: one caller giving up (a closed tab) must not cancel the
-        # answer everyone else in flight is waiting for.
-        return await asyncio.shield(task)
+        if hit is None or self._clock() >= hit[0]:
+            task = self._pending.get(user_id)
+            if task is None:
+                task = asyncio.ensure_future(self._ask(request, user_id))
+                self._pending[user_id] = task
+                task.add_done_callback(lambda _t, u=user_id: self._pending.pop(u, None))
+            # Shielded: one caller giving up (a closed tab) must not cancel the
+            # answer everyone else in flight is waiting for.
+            await asyncio.shield(task)
+            hit = self._done[user_id]
+        until, out = hit
+        # Whole seconds, rounded UP: asking again a moment early would land
+        # inside the window and get the same cached answer back.
+        return out.model_copy(update={"stale_in_s": max(0, math.ceil(until - self._clock()))})
 
     async def _ask(self, request: Request, user_id: str) -> LlmBudgetOut:
         try:

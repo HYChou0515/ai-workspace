@@ -18,7 +18,7 @@ Read from `origin/master` at `14fc0ed8`:
   outside — the deploy's LLM gateway or cost system.
 - **There is a proven way to plug a deploy's own code in.** `server.request_env`
   is a dotted path to an `IRequestEnv` subclass, built once at startup by
-  `factories.get_request_env` → `_construct_dotted` (`factories.py:1466`);
+  `factories.get_request_env` (`factories.py:1466`) → `_construct_dotted`;
   empty means the feature is absent, not degraded. Its method is
   `env_for(request, *, user_id, item_id)`, so the deploy can read the cookies
   and headers its own gateway put on the request.
@@ -27,10 +27,11 @@ Read from `origin/master` at `14fc0ed8`:
   (`UsageBar`) and how full the context is (`ContextBar`); cells with nothing
   to say render nothing, and the row's CSS draws the `·` between the ones
   present.
-- **Both chats already have a "the turn just ended" hook**: `useChatSession`
-  (used by `useItemChat` and `useKbChat`) invalidates the transport's
-  `contextKey` / `todosKey` when a turn ends (`useChatSession.tsx:413-417`) —
-  the place to refetch the budget, once, for both chats.
+- **The item chat has a "the turn just ended" hook**: `useChatSession` (used
+  by `useItemChat` and `useAgent`) invalidates the transport's `contextKey` /
+  `todosKey` when a turn ends (`useChatSession.tsx:413-417`). The
+  knowledge-base chat does NOT run on it — `useKbChat` has its own terminal
+  handler (corrected in review round 1; this bullet first said both did).
 - **The knowledge-base chat's composer has no such row** (`KbChatPanel.tsx`,
   `kb-composer`).
 
@@ -119,14 +120,38 @@ class ILlmBudget(abc.ABC):
 - **The tone is a word and a dot.** `warn` / `critical` put 「注意」 / 「警告」
   before the figure and a `--warn` / `--err` dot beside it; the text stays ink,
   because `--warn` on paper is too light to read at 11px.
-- **Numbers are formatted with the UI locale's narrow currency symbol**, cents
-  only when there are any (`$11`, `$3.50`); an unknown currency code falls back
-  to `11 XYZ`.
-- **The whole budget is one line of its own** in the status row
-  (`data-status-line`, like the storage-full warning): figure, then message,
-  then link. As a cell beside the gauges it wrapped in the narrow item chat and
-  began its line with a dangling 「·」 — found recording the demo. The link is
-  underlined so it reads as one.
+- **Numbers are formatted with one set of symbols — en-US's — for every
+  reader**: `$11` for USD (the user's example), `NT$11`, `€11`; cents only when
+  there are any (`$3.50`). The reader's own locale was tried first: a TWD
+  deploy then read `$11` in zh-TW, the same as USD (review round 1). An
+  ISO-shaped code Intl does not know reads `XYZ 11`; one it refuses
+  (`credits`, empty) reads as the rounded number and the code.
+- **The budget is one cell of the status row, and moves to the next line
+  only when the row has no room** (the user: 「擺不下才換行」). Recording the
+  demo, a wrapped line began with a dangling 「·」 — the row drew a dot before
+  every cell but the first (`* + *::before`), so whichever cell wrapped led
+  with one; `· compact` did it before this feature too. Now every cell carries
+  its dot in a fixed 16px slot, the row is pulled left by that slot and the slot
+  column clipped (`clip-path`), so a line-starting cell's dot is cut off and
+  every other shows — measured in a real browser at two widths: every line's
+  first cell at offset 0, every other at 16px or more. The link is underlined.
+- **Asked once more after a turn, when the server's window ends.** A turn that
+  ends inside a person's 30 s window is answered from the cache — the figure
+  from before the turn. The answer carries `stale_in_s` (seconds until the
+  server asks the class again); after each turn end the page asks once more
+  then (`lib/llmBudget.refreshBudgetAfterTurn`, used by both chats). No polling
+  beyond that one ask; a later turn replaces it.
+- **The 30 s window is per API pod** — the cache is in process memory, so with N
+  pods the class can be asked up to N times per person per window.
+- **The knowledge-base chat refreshes from its own turn end** (`useKbChat`):
+  it does not run on `useChatSession`. Missed in the first build; review
+  round 1.
+- **A link with no label is dropped** like a non-http one: it would draw as
+  nothing, focusable and nameless.
+- **`BudgetStatus` / `BudgetLink` are keyword-only and frozen** (the Interface
+  above shows plain `Struct`): build them with field names.
+- **The example class lives in `docs/extending-the-platform.md`**, beside
+  `IRequestEnv`; `docs/configuration.md` has the knob's row and links there.
 - **The `docs/configuration.md` line landed in P1**: `tests/config/
   test_server_settings_are_documented` requires every `server.*` key to be
   named in the manual the day it exists.

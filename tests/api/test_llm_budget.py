@@ -93,7 +93,8 @@ def _client(source: ILlmBudget | None, *, user: list[str] | None = None, clock=N
 
 
 def test_with_no_class_the_answer_is_off():
-    assert _client(None).get("/api/me/llm-budget").json() == {"status": "off", "budget": None}
+    body = _client(None).get("/api/me/llm-budget").json()
+    assert body == {"status": "off", "budget": None, "stale_in_s": 0}
 
 
 def test_the_class_answer_is_passed_through_for_the_person_asking():
@@ -110,6 +111,7 @@ def test_the_class_answer_is_passed_through_for_the_person_asking():
     body = _client(source, user=["bob"]).get("/api/me/llm-budget?user_id=alice").json()
     assert body == {
         "status": "ok",
+        "stale_in_s": 30,
         "budget": {
             "remaining": 11,
             "total": 20,
@@ -125,21 +127,21 @@ def test_the_class_answer_is_passed_through_for_the_person_asking():
 
 def test_nothing_to_show_is_ok_with_no_budget():
     body = _client(_Recording(None)).get("/api/me/llm-budget").json()
-    assert body == {"status": "ok", "budget": None}
+    assert body == {"status": "ok", "budget": None, "stale_in_s": 30}
 
 
 def test_a_class_that_raises_is_unavailable_and_logged(caplog):
     source = _Recording(error=RuntimeError("cost system down"))
     with caplog.at_level("WARNING"):
         body = _client(source).get("/api/me/llm-budget").json()
-    assert body == {"status": "unavailable", "budget": None}
+    assert body == {"status": "unavailable", "budget": None, "stale_in_s": 30}
     assert "cost system down" in caplog.text
 
 
 def test_a_class_slower_than_the_wait_is_unavailable():
     source = _Recording(BudgetStatus(remaining=1), delay=0.5)
     body = _client(source, timeout=0.05).get("/api/me/llm-budget").json()
-    assert body == {"status": "unavailable", "budget": None}
+    assert body["status"] == "unavailable" and body["budget"] is None
 
 
 def test_one_person_is_asked_about_at_most_once_per_30_seconds():
@@ -203,3 +205,52 @@ def test_create_app_serves_the_deploys_class():
         body = client.get("/api/me/llm-budget").json()
     assert body["status"] == "ok" and body["budget"]["remaining"] == 3
     assert source.asked == ["carol"]
+
+
+# ─── review round 1 ─────────────────────────────────────────────────────────
+
+
+def test_the_answer_says_when_the_server_will_ask_again():
+    """A turn that ends inside the window gets the cached, pre-turn figure; the
+    page can only fix that by asking again when the window ends — so the
+    server, which holds the window, says when (the browser keeps no copy of
+    the 30)."""
+    now = [1000.0]
+    client = _client(_Recording(BudgetStatus(remaining=1)), clock=lambda: now[0])
+    assert client.get("/api/me/llm-budget").json()["stale_in_s"] == 30
+    now[0] += 12
+    assert client.get("/api/me/llm-budget").json()["stale_in_s"] == 18
+
+
+def test_an_unavailable_answer_is_kept_for_the_window_too():
+    now = [1000.0]
+    source = _Recording(error=RuntimeError("down"))
+    client = _client(source, clock=lambda: now[0])
+    client.get("/api/me/llm-budget")
+    now[0] += 29
+    assert client.get("/api/me/llm-budget").json()["status"] == "unavailable"
+    assert source.asked == ["alice"]
+
+
+async def test_one_asker_giving_up_does_not_cancel_the_shared_ask():
+    """A closed tab cancels its own request; the ask the others share must go on."""
+    from workspace_app.api.llm_budget import BudgetCache
+
+    source = _Recording(BudgetStatus(remaining=5), delay=0.05)
+    cache = BudgetCache(source, timeout_s=3.0, clock=lambda: 0.0)
+    nobody = cast(Request, None)
+    first = asyncio.ensure_future(cache.status_for(nobody, user_id="alice"))
+    second = asyncio.ensure_future(cache.status_for(nobody, user_id="alice"))
+    await asyncio.sleep(0.01)
+    first.cancel()
+    assert (await second).status == "ok"
+    assert source.asked == ["alice"]
+
+
+def test_a_link_with_no_label_is_dropped():
+    """It would draw as nothing — focusable, with no name."""
+    link = BudgetLink(label="  ", url="https://budget.corp/apply")
+    body = (
+        _client(_Recording(BudgetStatus(remaining=1, link=link))).get("/api/me/llm-budget").json()
+    )
+    assert body["budget"]["link"] is None

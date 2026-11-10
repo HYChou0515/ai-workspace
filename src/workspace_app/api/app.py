@@ -1617,7 +1617,6 @@ def create_app(
     # dashboard. Inside the perf trace (below), which stays outermost for the
     # reason it gives.
     app.state.usage_recorder = usage_recorder
-    app.state.llm_budget = llm_budget
     if usage_recorder is not None:
         # The Apps ship with the image: their slugs are known now, for good.
         from ..apps.catalog import discover_app_slugs

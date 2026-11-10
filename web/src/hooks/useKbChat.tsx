@@ -4,6 +4,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 import { kbApi, type KbApi, type KbImageInput } from "../api/kb";
 import { qk } from "../api/queryKeys";
 import { eventId, eventSeq, isTerminal } from "../events";
+import { refreshBudgetAfterTurn } from "../lib/llmBudget";
 import { type Failure, failureFromError, failureFromHttp } from "../lib/failure";
 import { getKbAgentName } from "../lib/kbAgent";
 import {
@@ -225,6 +226,8 @@ export function useKbChat({
                 const fresh = await client.getChat(id);
                 qc.setQueryData(qk.kb.chat(id), fresh);
                 reconcile(fresh);
+                // docs/plan-llm-budget.md D6/D9: the turn just spent LLM money.
+                void refreshBudgetAfterTurn(qc);
               }
             }
           } catch (err: unknown) {

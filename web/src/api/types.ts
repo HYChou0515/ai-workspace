@@ -221,6 +221,9 @@ export type LlmBudget = {
     link: { label: string; url: string } | null;
     tone: "info" | "warn" | "critical";
   } | null;
+  /** Seconds until the server asks the deploy's class again (its per-person
+   * window); 0 or absent ⇒ never. A turn end asks once more then. */
+  stale_in_s?: number;
 };
 
 /** #739: how full a chat's context window is — mirrors the backend

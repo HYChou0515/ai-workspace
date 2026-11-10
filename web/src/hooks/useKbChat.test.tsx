@@ -261,6 +261,31 @@ describe("useKbChat — a turn that FAILS still says why", () => {
   // the failure one event after it arrives, and the chat just stops with no
   // explanation. `agentLog`'s `message_delta` comment says this exact defect
   // must not come back; it came back through the reconnect loop instead.
+  // docs/plan-llm-budget.md D6/D9, review round 1 (#1015): the KB chat does not
+  // run on useChatSession, so its own turn end must ask for the budget again —
+  // it never did, and the KB composer's figure stayed at what it opened with.
+  it("asks for the LLM budget again when a turn ends", async () => {
+    const { QueryClientProvider } = await import("@tanstack/react-query");
+    const { makeTestQueryClient } = await import("../test/queryWrapper");
+    const { qk } = await import("../api/queryKeys");
+    const qc = makeTestQueryClient();
+    qc.setQueryData(qk.llmBudget, { status: "ok", budget: null, stale_in_s: 0 });
+    const client = {
+      ...mockKbApi,
+      getChat: vi.fn().mockResolvedValue({ ...failedThread, messages: [] }),
+      subscribeChat: async function* () {
+        yield { type: "done" } as never;
+        await new Promise<void>(() => {});
+      },
+    } as unknown as typeof mockKbApi;
+    rtlRenderHook(() => useKbChat({ collectionIds: ["c1"], chatId: "kb-spent", client }), {
+      wrapper: ({ children }: { children: React.ReactNode }) => (
+        <QueryClientProvider client={qc}>{children}</QueryClientProvider>
+      ),
+    });
+    await waitFor(() => expect(qc.getQueryState(qk.llmBudget)?.isInvalidated).toBe(true));
+  });
+
   it("keeps the turn's error when `done` follows it", async () => {
     // The store is behind (the terminal event is published before the turn is
     // persisted), so the live notice is the only place the failure is said.
