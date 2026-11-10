@@ -285,3 +285,17 @@ async def test_joining_an_ask_already_in_flight_counts_as_from_cache():
         cache.status_for(nobody, user_id="alice"), cache.status_for(nobody, user_id="alice")
     )
     assert (first.from_cache, second.from_cache) == (False, True)
+
+
+async def test_expired_answers_are_evicted_so_the_cache_stays_bounded():
+    """Review round 3: rows are bounded by the people asking within one window —
+    without the eviction a pod keeps a row for everyone who ever asked."""
+    from workspace_app.api.llm_budget import BudgetCache
+
+    now = [1000.0]
+    cache = BudgetCache(_Recording(BudgetStatus(remaining=1)), timeout_s=3.0, clock=lambda: now[0])
+    nobody = cast(Request, None)
+    await cache.status_for(nobody, user_id="alice")
+    now[0] += 31
+    await cache.status_for(nobody, user_id="bob")
+    assert set(cache._done) == {"bob"}

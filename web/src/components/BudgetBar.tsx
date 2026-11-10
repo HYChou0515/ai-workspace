@@ -89,9 +89,11 @@ export function BudgetBar({ client = api }: { client?: Pick<ApiClient, "getLlmBu
           href={b.link.url}
           target="_blank"
           rel="noopener noreferrer"
+          aria-label={t("budget.linkNewTab", { name: b.link.label })}
           style={{ color: "var(--text-paper)", textDecoration: "underline", textUnderlineOffset: 2 }}
         >
           {b.link.label}
+          <span aria-hidden="true"> ↗</span>
         </a>
       ) : null}
     </span>

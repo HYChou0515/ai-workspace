@@ -1089,9 +1089,9 @@ export function AgentPanel({
           data-testid="composer-column"
           style={{ ...chatColumn, display: "flex", flexDirection: "column", gap: 6 }}
         >
-        {/* One row for the three things a person glances at, not three: storage
-            used (#245), how full the context window is (#739), and the compact
-            link. Each on its own line cost the message area a row apiece, and
+        {/* One row for the things a person glances at, not one row each: storage
+            used (#245), how full the context window is (#739), the compact
+            link, and the LLM budget (docs/plan-llm-budget.md). Each on its own line cost the message area a row apiece, and
             the chat column is the one that can least afford it. Cells that have
             nothing to say render nothing, and the row shortens; `.composer-status`
             draws the `·` between whichever cells are present. */}

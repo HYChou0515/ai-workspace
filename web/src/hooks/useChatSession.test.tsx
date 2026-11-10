@@ -424,8 +424,8 @@ describe("useChatSession", () => {
   });
 
   // docs/plan-llm-budget.md D6: a turn is when money was just spent, so the
-  // budget above the composer is asked for again — in every chat, since this
-  // hook is what the item chat and the knowledge-base chat both run on.
+  // budget above the composer is asked for again. This hook is the item chat's;
+  // the knowledge-base chat has its own turn end (`useKbChat`, tested there).
   it("asks for the LLM budget again when a turn ends", async () => {
     const { QueryClientProvider } = await import("@tanstack/react-query");
     const { makeTestQueryClient } = await import("../test/queryWrapper");

@@ -77,7 +77,10 @@ describe("BudgetBar", () => {
     const line = await screen.findByTestId("llm-budget");
     expect(line).not.toHaveAttribute("data-status-line");
     expect(line.textContent?.indexOf("$20")).toBeLessThan(line.textContent?.indexOf("Resets on the 1st.") ?? -1);
-    const link = within(line).getByRole("link", { name: "Ask for more" });
+    // Review round 3: it opens a new tab, so it says so — to the eye (↗) and
+    // to a screen reader (its name) — NN/g "Opening Links in New Browser Windows and Tabs".
+    const link = within(line).getByRole("link", { name: /^Ask for more ?[(（](在新分頁開啟|opens in a new tab)[)）]$/ });
+    expect(link).toHaveTextContent("↗");
     expect(link).toHaveAttribute("href", "https://budget.corp/apply");
     expect(link).toHaveAttribute("target", "_blank");
     expect(link).toHaveAttribute("rel", expect.stringContaining("noopener"));

@@ -151,7 +151,14 @@ class ILlmBudget(abc.ABC):
   polling beyond that one ask; a later turn replaces it, even one that ends at
   the same moment.
 - **The 30 s window is per API pod** — the cache is in process memory, so with N
-  pods the class can be asked up to N times per person per window.
+  pods the class can be asked up to N times per person per window. And the one
+  follow-up after a turn can land on a pod whose own window opened before the
+  turn ended: it answers with the pre-turn figure, and nothing asks again until
+  the next turn or the next time a chat opens (review round 3). Not fixed: the
+  page cannot tell a pod that cached before the turn from one that cached
+  after, so asking on until a fresh answer has no bound it could know; with
+  sticky routing the follow-up reaches the same pod, and the figure is shown,
+  never enforced (D5).
 - **The knowledge-base chat refreshes from its own turn end** (`useKbChat`):
   it does not run on `useChatSession`. Missed in the first build; review
   round 1.

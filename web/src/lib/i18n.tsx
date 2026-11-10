@@ -1776,6 +1776,7 @@ export const messages = {
   "budget.unavailable": { "zh-TW": "預算暫時查不到", en: "Budget unavailable right now" },
   "budget.tone.warn": { "zh-TW": "注意", en: "Note" },
   "budget.tone.critical": { "zh-TW": "警告", en: "Warning" },
+  "budget.linkNewTab": { "zh-TW": "{name}(在新分頁開啟)", en: "{name} (opens in a new tab)" },
   // #245: workspace storage usage bar + over-quota upload error.
   "workspace.usage": {
     "zh-TW": "已使用 {used} / {quota}",
