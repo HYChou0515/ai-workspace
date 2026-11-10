@@ -183,6 +183,34 @@ def test_the_copy_takes_the_publishers_sandbox_size():
     assert (copy.sandbox_cpu_cores, copy.sandbox_memory_bytes) == (2.0, 2 * 1024**3)
 
 
+def test_the_copy_starts_at_its_apps_disk_not_the_sources():
+    """docs/plan-item-disk-size.md: the publisher's size is for cpu and memory
+    (C10). The source's own disk setting — a privileged field — is not carried
+    into a copy someone else owns."""
+    holder = {"id": "bob"}
+    client, spec, _store = _app(holder)
+    src = _source(spec)
+    _workspace(client, src)
+    rm = spec.get_resource_manager(RcaInvestigation)
+    with rm.using("bob"):
+        item = rm.get(src).data
+        rm.update(
+            src,
+            type(item)(
+                **{
+                    **{f: getattr(item, f) for f in item.__struct_fields__},
+                    "sandbox_disk_bytes": 5 * 1024**3,
+                }
+            ),
+        )
+    _publish(client, src, sharing="per_person")
+    holder["id"] = "amy"
+
+    copy = _item(spec, _open(client, src).json()["item_id"])
+
+    assert copy.sandbox_disk_bytes is None
+
+
 def test_the_copy_is_charged_to_the_opener():
     holder = {"id": "bob"}
     client, spec, _store = _app(holder)

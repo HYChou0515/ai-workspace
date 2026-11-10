@@ -226,6 +226,22 @@ class WorkItemBase(Struct):
     written with; the ``512M`` / ``2G`` spelling belongs to config and to the UI,
     and is parsed by ``quota.limits.parse_size`` before it reaches here."""
 
+    sandbox_disk_bytes: int | None = None
+    """Tier 1 — how big THIS item's workspace may grow, or None
+    (docs/plan-item-disk-size.md).
+
+    ``None`` = nobody has said: the App's size applies, resolved fresh each time.
+    A CEILING, never a reservation (D2) — the owner's own disk quota is still
+    checked on every write. Clamped on the way out to the App's
+    ``item_disk_ceiling`` (D3), kept as typed on the way in.
+
+    Unlike cpu and memory it is NOT the sandbox's: every write reads it
+    (``WorkspaceFiles._ensure_headroom``), so a change applies to the next write
+    and may be made while the environment runs (D5). Its route refuses a value
+    below what the workspace already holds (D1) — that would lock the workspace
+    the moment it was saved. Privileged like the two above
+    (``perm.checker.ESCALATED_FIELDS``, ``change_permission``)."""
+
     permission: Permission | None = None
     """Tier 1 — access control (#306). The SAME embedded ``Permission`` that
     governs collections / KbChat: ``visibility`` decides whether the per-verb grant

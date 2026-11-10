@@ -219,6 +219,9 @@ async def make_copy(
         # may not state an environment size (`perm.checker._check_create`).
         "sandbox_cpu_cores": None,
         "sandbox_memory_bytes": None,
+        # A copy starts at its App's disk (plan-item-disk-size): the size the
+        # publisher picked is for cpu and memory only (C10).
+        "sandbox_disk_bytes": None,
         # Set in the LAST write, once the files are in: until then the item
         # is no copy of anything — `copies_of` cannot hand it out half made.
         "published_from": "",

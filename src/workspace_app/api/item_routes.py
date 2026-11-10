@@ -14,6 +14,7 @@ import logging
 import time
 import uuid
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 
 import msgspec
 from fastapi import APIRouter, FastAPI, HTTPException, Response, status
@@ -63,6 +64,38 @@ class ItemAccessRequestOut(BaseModel):
 
 class _MembersBody(BaseModel):
     members: list[str]
+
+
+class _DiskBody(BaseModel):
+    """How big this item's workspace may grow (docs/plan-item-disk-size.md) — a
+    size string (``20G``) like the memory beside it, parsed by the one parser
+    that knows the spelling; ``None`` clears it back to the App's size."""
+
+    disk: str | None = None
+
+
+class _DiskOut(BaseModel):
+    """What was stored, in bytes (None = cleared)."""
+
+    disk_bytes: int | None
+
+
+@dataclass(frozen=True)
+class ItemDisk:
+    """What the disk half of the environment needs from the composition root,
+    passed in rather than rebuilt here so the panel and the write gate read the
+    SAME numbers (a second copy of "how big may this be" is a second rule).
+
+    `quota_for` is the gate's own ceiling (`_quota_for`); `ceiling_for` the most
+    one item may be given (D3); `used` what the workspace holds now (the
+    sandbox's measurement, as the gate reads it); `owner_left` what is left of
+    the owner's own quota (D6); `owner_of` who that owner is."""
+
+    quota_for: Callable[[str], int]
+    ceiling_for: Callable[[str], int | None]
+    used: Callable[[str], Awaitable[int]]
+    owner_left: Callable[[str], Awaitable[int | None]]
+    owner_of: Callable[[str], str | None]
 
 
 class _ResourcesBody(BaseModel):
@@ -143,6 +176,17 @@ class _EnvironmentOut(BaseModel):
     #: stated size is held to. None = no ceiling (no line in the panel).
     cpu_ceiling: float | None = None
     memory_ceiling: int | None = None
+    #: docs/plan-item-disk-size.md — the disk half. `stated` is what somebody
+    #: set (None = nobody); `effective` what every write is held to now (0 =
+    #: unlimited); `used` what the workspace holds (D1's floor); `ceiling` the
+    #: most it may be given (D3, None = no ceiling); `owner_disk_left` what is
+    #: left of the owner's own quota (D6) — only to the owner, since it is a sum
+    #: over their other items too, and None when they have no quota.
+    stated_disk_bytes: int | None = None
+    effective_disk_bytes: int | None = None
+    disk_used_bytes: int | None = None
+    disk_ceiling: int | None = None
+    owner_disk_left: int | None = None
 
 
 class _ResourcesOut(BaseModel):
@@ -286,6 +330,7 @@ def register_item_routes(
     kb_chat_pipeline: object | None,
     superusers: frozenset[str] = frozenset(),
     disk_ledger: DiskLedger | None = None,
+    item_disk: ItemDisk | None = None,
 ) -> None:
     """Mount the App work-item create / close / delete routes onto ``app``."""
 
@@ -325,7 +370,9 @@ def register_item_routes(
         # anything malicious, it is sending a field that has one correct place,
         # and the panel is right there once the item exists.
         payload = {
-            k: v for k, v in body.items() if k not in ("sandbox_cpu_cores", "sandbox_memory_bytes")
+            k: v
+            for k, v in body.items()
+            if k not in ("sandbox_cpu_cores", "sandbox_memory_bytes", "sandbox_disk_bytes")
         }
         payload["owner"] = get_user_id()
         payload.setdefault("profile", manifest.default_profile)
@@ -509,7 +556,21 @@ def register_item_routes(
         resolved = await resolved_for(item_id)
         effective = resolved.spec
         enforced = await registry.sandbox.effective_limits(effective)
+        disk: dict[str, int | None] = {}
+        if item_disk is not None:
+            disk = {
+                "stated_disk_bytes": getattr(item, "sandbox_disk_bytes", None),
+                "effective_disk_bytes": item_disk.quota_for(item_id),
+                "disk_used_bytes": await item_disk.used(item_id),
+                "disk_ceiling": item_disk.ceiling_for(item_id),
+                "owner_disk_left": (
+                    await item_disk.owner_left(item_id)
+                    if get_user_id() == item_disk.owner_of(item_id)
+                    else None
+                ),
+            }
         return _EnvironmentOut(
+            **disk,
             # The SAME source the resize refusal uses. Leaving this on
             # `has_live_sandbox` made the fix backend-only: the route unblocked
             # while the panel — which disables its inputs on this field — stayed
@@ -591,6 +652,62 @@ def register_item_routes(
         # write invalidates rather than the reader waiting it out.
         locator.forget_item(item_id)
         return _ResourcesOut(cpu_cores=cpu, memory_bytes=memory)
+
+    @app.put("/a/{slug}/items/{item_id}/disk")
+    async def set_item_disk(slug: str, item_id: str, body: _DiskBody) -> _DiskOut:
+        """How big THIS item's workspace may grow (docs/plan-item-disk-size.md).
+
+        Its own route rather than a third field on `PUT …/resources`: that one
+        refuses while the environment runs, because a running sandbox keeps the
+        cpu and memory it was built with. Disk is not the sandbox's — every
+        write reads it — so it may change while running and applies to the next
+        write (D5). Same verb (`change_permission`, D4), same persistence as the
+        owner, same "kept as typed, clamped on the way out" (D3).
+
+        Refused below what the workspace already holds (D1): that would make it
+        full the moment it was saved, and a full workspace refuses every turn."""
+        from ..apps.catalog import discover_app_slugs
+        from ..apps.registry import app_model
+
+        if slug not in discover_app_slugs():
+            raise HTTPException(status_code=404, detail=f"unknown app: {slug!r}")
+        if item_disk is None:
+            raise HTTPException(status_code=404, detail="this deploy sizes no workspace")
+        model = app_model(slug)
+        item, created_by = _authorize_item(slug, item_id, "change_permission")
+        size: int | None = None
+        if body.disk is not None:
+            try:
+                size = parse_size(body.disk)
+            except ValueError as exc:
+                raise HTTPException(status_code=422, detail=f"disk: {exc}") from exc
+            # Zero / "max" is the OPERATOR's spelling of unlimited — a person may
+            # not opt their item out of the ceiling the deploy set (same rule as
+            # memory, `_validated_resources`).
+            if not _within(size, _MAX_BYTES):
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        f"disk must be greater than 0 and below {_MAX_BYTES // 1024**4} TiB "
+                        f"(got {body.disk!r}); omit it to use the default"
+                    ),
+                )
+            used = await item_disk.used(item_id)
+            if size < used:
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        f"This workspace already holds {used} bytes; it cannot be set "
+                        "smaller than that. Delete files first."
+                    ),
+                )
+        rm = spec.get_resource_manager(model)
+        with rm.using(created_by):
+            rm.update(item_id, msgspec.structs.replace(item, sandbox_disk_bytes=size))
+        # The gate reads the item's facts through a few-second cache; the
+        # person who just saved is the one who would meet the stale copy.
+        locator.forget_item(item_id)
+        return _DiskOut(disk_bytes=size)
 
     @app.put("/a/{slug}/items/{item_id}/members")
     async def set_item_members(slug: str, item_id: str, body: _MembersBody) -> PermissionOut:
