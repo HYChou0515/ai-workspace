@@ -14,6 +14,7 @@ import { ChatFeedRow, type FeedActions } from "../../components/ChatFeedRow";
 import { useStableActions } from "../../hooks/useStableActions";
 import { ErrorNotice } from "../../components/ErrorNotice";
 import { Icon } from "../../components/Icon";
+import { BudgetBar } from "../../components/BudgetBar";
 import { ResizeDivider } from "../../components/ResizeDivider";
 import { usePersistentNumber } from "../../hooks/usePersistentNumber";
 import { ModelEffortPicker } from "../../components/ModelEffortPicker";
@@ -356,6 +357,11 @@ export function KbChatPanel({
             // Dragging UP is a negative delta and must GROW the composer.
             onResize={(d) => setComposerH(composerStart.current - d)}
           />
+        </div>
+        {/* docs/plan-llm-budget.md P4 (D9): the same row the item chat's composer
+            carries — this chat spends LLM money too. Empty when there is nothing to say. */}
+        <div className="composer-status kb-composer-status" data-testid="kb-composer-status">
+          <BudgetBar />
         </div>
         <div className="kb-composer" data-testid="kb-composer">
           {image && (
