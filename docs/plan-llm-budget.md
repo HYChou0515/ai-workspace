@@ -18,7 +18,7 @@ Read from `origin/master` at `14fc0ed8`:
   outside — the deploy's LLM gateway or cost system.
 - **There is a proven way to plug a deploy's own code in.** `server.request_env`
   is a dotted path to an `IRequestEnv` subclass, built once at startup by
-  `factories.get_request_env` → `_construct_dotted` (`factories.py:1466`);
+  `factories.get_request_env` (`factories.py:1466`) → `_construct_dotted`;
   empty means the feature is absent, not degraded. Its method is
   `env_for(request, *, user_id, item_id)`, so the deploy can read the cookies
   and headers its own gateway put on the request.
@@ -27,10 +27,11 @@ Read from `origin/master` at `14fc0ed8`:
   (`UsageBar`) and how full the context is (`ContextBar`); cells with nothing
   to say render nothing, and the row's CSS draws the `·` between the ones
   present.
-- **Both chats already have a "the turn just ended" hook**: `useChatSession`
-  (used by `useItemChat` and `useKbChat`) invalidates the transport's
-  `contextKey` / `todosKey` when a turn ends (`useChatSession.tsx:413-417`) —
-  the place to refetch the budget, once, for both chats.
+- **The item chat has a "the turn just ended" hook**: `useChatSession` (used
+  by `useItemChat` and `useAgent`) invalidates the transport's `contextKey` /
+  `todosKey` when a turn ends (`useChatSession.tsx:413-417`). The
+  knowledge-base chat does NOT run on it — `useKbChat` has its own terminal
+  handler (corrected in review round 1; this bullet first said both did).
 - **The knowledge-base chat's composer has no such row** (`KbChatPanel.tsx`,
   `kb-composer`).
 
@@ -104,3 +105,71 @@ class ILlmBudget(abc.ABC):
   message; never in the prompt).
 - A live check with a stand-in class (numbers, message-only, `None`, raising,
   slow) at two widths, item chat and KB chat; a /web-demo before review.
+
+## As built
+
+- **`unavailable` is kept for the same 30 s** as an answer (`BudgetCache`):
+  D7's "asked again after the next turn" holds once the window has passed — a
+  cost system that is down is not asked again by every chat that opens
+  meanwhile. Concurrent asks for one person share one call, shielded so one
+  closed tab cancels nothing.
+- **Only http(s) links are passed on** (`_safe_link`), others dropped and
+  logged: the URL comes from the deploy's code and lands in an `<a href>`, where
+  a `javascript:` one would run in the person's page. Not asked; a security
+  default.
+- **The tone is a word and a dot.** `warn` / `critical` put 「注意」 / 「警告」
+  before the figure and a `--warn` / `--err` dot beside it; the text stays ink,
+  because `--warn` on paper is too light to read at 11px.
+- **Numbers are formatted with one set of symbols — en-US's — for every
+  reader**: `$11` for USD (the user's example), `NT$11`, `€11`; cents only when
+  there are any (`$3.50`). The reader's own locale was tried first: a TWD
+  deploy then read `$11` in zh-TW, the same as USD (review round 1). An
+  ISO-shaped code Intl does not know reads `XYZ 11`; one it refuses
+  (`credits`, empty) reads as the rounded number and the code.
+- **The budget is one cell of the status row, and moves to the next line
+  only when the row has no room** (the user: 「擺不下才換行」). Recording the
+  demo, a wrapped line began with a dangling 「·」 — the row drew a dot before
+  every cell but the first (`* + *::before`), so whichever cell wrapped led
+  with one; `· compact` did it before this feature too. Now every cell keeps a
+  16px left margin with its dot drawn in it absolutely (so a cell's own flex
+  gap or padding cannot move it); the row is pulled left by 16px and its left
+  edge clipped 12px in — past the dot, short of a cell's 4px keyboard focus
+  ring — so a line-starting cell's dot is cut off and every other shows. The
+  relations are pinned by `web/src/styles/composer-status.test.ts`, and were
+  measured in a real browser at two widths: every line's first cell lines up
+  with the composer's left edge, every other cell sits 16px after its
+  neighbour. The link is underlined.
+- **Asked once more after a turn, when the server's window ends — only if the
+  answer was cached.** A turn that ends inside a person's 30 s window is
+  answered from the cache — the figure from before the turn. The answer
+  carries `from_cache` (this request did not ask the class: served from the
+  window, or joined an ask already in flight) and `stale_in_s` (seconds until
+  the server asks the class again); after a turn end with a cached answer the
+  page asks once more then (`lib/llmBudget.refreshBudgetAfterTurn`, used by
+  both chats). A fresh answer is already the post-turn figure, so it is not
+  followed up (review round 2: the first build asked twice per turn). No
+  polling beyond that one ask; a later turn replaces it, even one that ends at
+  the same moment.
+- **The 30 s window is per API pod** — the cache is in process memory, so with N
+  pods the class can be asked up to N times per person per window. And the one
+  follow-up after a turn can land on a pod whose own window opened before the
+  turn ended: it answers with the pre-turn figure, and nothing asks again until
+  the next turn or the next time a chat opens (review round 3). Not fixed: the
+  page cannot tell a pod that cached before the turn from one that cached
+  after, so asking on until a fresh answer has no bound it could know; with
+  sticky routing the follow-up reaches the same pod, and the figure is shown,
+  never enforced (D5).
+- **The knowledge-base chat refreshes from its own turn end** (`useKbChat`):
+  it does not run on `useChatSession`. Missed in the first build; review
+  round 1.
+- **A link with no label is dropped** like a non-http one: it would draw as
+  nothing, focusable and nameless.
+- **`BudgetStatus` / `BudgetLink` are keyword-only and frozen** (the Interface
+  above shows plain `Struct`): build them with field names.
+- **The example class lives in `docs/extending-the-platform.md`**, beside
+  `IRequestEnv`; `docs/configuration.md` has the knob's row and links there.
+- **The `docs/configuration.md` line landed in P1**: `tests/config/
+  test_server_settings_are_documented` requires every `server.*` key to be
+  named in the manual the day it exists.
+- **The knowledge-base row** is a `composer-status` row of its own above
+  `kb-composer`, hidden by CSS when empty.

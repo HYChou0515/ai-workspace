@@ -126,6 +126,7 @@ uv run python -m workspace_app            # API + SPA 一起跑在 127.0.0.1:800
 | **頁面同時能跑幾件工作、每件最多多久** | `server.wui_page_job_limit`（預設 `4`）與 `server.wui_page_job_timeout_sec`（預設 `3600` = 一小時）。頁面用 `startTool` / `startAgent` 起的工作（以及 `callAgent` 等答案的那一分鐘）**每個 item 同時最多幾件**——超過的那一件直接被拒、錯誤訊息寫出這個數字，不排隊（一個寫壞成迴圈的頁面不會在沒人看的時候堆出一長串工作）。第二顆是**每件工作的總時間**:工具工作的命令拿它當期限（不受 `callTool` 的一分鐘限制）,超過就停並標成失敗(沙盒的**閒置**上限 `sandbox.log_timeout` 照舊:一個那麼久不印任何輸出的命令仍會被停);它也是判斷「跑這件工作的 pod 已經不在了」的依據——過了期限再加 60 秒還顯示進行中的紀錄會被當成中斷(下一次有人讀它、或這個 item 再開工作時標成失敗)。上限是每顆 API pod 開工作前**查一次再寫**的,不是跨 pod 的鎖:兩顆 pod 在同一瞬間各收到一次點擊,可能短暫多出一件（#945,[`plan-wui-call-agent.md`](plan-wui-call-agent.md)）|
 | **一個頁面最多能排幾件事** | `server.max_page_schedules`（預設 `1000`）。這是**失控護欄不是政策限制**:正常的頁面碰不到，碰到代表那個頁面有 bug。它擋的是耐久狀態——每個排程觸發過就在視窗帳本留一列。整個檔案超過就整份不跑，並在 log 寫出兩個數字 |
 | **把通知送出站（email / IM）** | `server.notification_channel: "你的套件.YourChannel"`——一份 `INotificationChannel`。平台**永遠**先寫站內信那一列，有指名通道才再交給它;**送信失敗不算排程失敗**（否則一次兩小時的郵件故障會變成全公司排程集體自我關閉）。平台不出貨實作:relay、寄件網域、合規都是你們的。沒設 = 行為跟今天完全一樣。見[擴充平台](extending-the-platform.md) |
+| **在聊天輸入框上方顯示「AI 剩 $11／共 $20」** | `server.llm_budget: "你的套件.YourBudget"`——自己寫一個 `ILlmBudget`,`budget_for(request, *, user_id)` 回傳 `BudgetStatus`(剩餘、總額、幣別、一句訊息、一個連結、輕重 `info`/`warn`/`critical`,都可以不給;回 `None` 就不顯示)。平台不記花費、不設上限,**只顯示、不擋送出**,也不告訴 AI;每個 API pod 對同一個人 30 秒最多問一次,3 秒沒回或丟例外就寫「預算暫時查不到」。沒設 = 不顯示。見[擴充平台](extending-the-platform.md)、[計劃](plan-llm-budget.md) |
 | **反向代理掛在子路徑下** | `server.root_path`（例如 `/workspace`）——FastAPI 的 `root_path`，只影響**產生出來的 URL**(OpenAPI / docs)。**SPA 自己的 base path 不在這裡**,它是 build 期的 `VITE_BASE_PATH`;只設這一顆會得到一個資源全 404 的前端,而且沒有東西會提示你去找另一顆 |
 | **調 SSE 的重連緩衝與取消輪詢** | `server.turn_replay_buffer_events`（重連時最多補送幾個事件）/ `server.turn_cancel_poll_seconds`（跨 pod 取消的輪詢間隔）。兩顆都有堪用的預設，只有在觀察到「重連掉事件」或「按停止太慢」時才需要動 |
 | **pod 收 SIGTERM 時給在跑的 turn 多久收尾** | `server.shutdown_budget_sec`（預設 `20`；也是 uvicorn 等連線的 `timeout_graceful_shutdown`，整數秒）。rollout / HPA 縮容時 pod 在這個預算內把跑得完的 turn 存檔；app 聊天跑不完的交給別的 pod 重跑（不存 partial），KB 聊天照舊 cancel 存 partial。k8s 的 `terminationGracePeriodSeconds` 要 ≥ 2 × 這個值 + 8 + preStop 5 秒 + 拆除（base 給 90）。見 deployment.md 的 SIGTERM 段 |
@@ -151,7 +152,7 @@ uv run python -m workspace_app            # API + SPA 一起跑在 127.0.0.1:800
 
 | 區塊 | 是什麼 | 一般會不會動 |
 |---|---|---|
-| `server` | 監聽位址、`default_user`、`superusers`、`run_consumers`、cancel 輪詢、`cors_allowed_origins`、`request_env` | 上線常改 superusers / run_consumers |
+| `server` | 監聽位址、`default_user`、`superusers`、`run_consumers`、cancel 輪詢、`cors_allowed_origins`、`request_env`、`llm_budget` | 上線常改 superusers / run_consumers |
 | `sandbox` | **agent 執行環境**（見 [§6](#6-sandbox執行環境重點)） | 多 pod 一定改 |
 | `tools` | RCA 工具包怎麼佈署（`prebuilt` / `uv-run`） | 開發時改 |
 | `filestore` | 檔案儲存（`memory` / `specstar`）＋ 配額 / GC | 上線一定改 |

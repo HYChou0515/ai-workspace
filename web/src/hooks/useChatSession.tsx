@@ -12,6 +12,7 @@ import {
   retractOwnAsk,
 } from "../pages/investigation/agentLog";
 import { publishFileChanged } from "../lib/fileChangedBus";
+import { refreshBudgetAfterTurn } from "../lib/llmBudget";
 import { publishTurnEnded } from "../lib/turnEndedBus";
 import type { MsgKey } from "../lib/i18n";
 import { type QuotaDetail, type QuotaKind, quotaMessage } from "../lib/quotaFailure";
@@ -415,6 +416,11 @@ export function useChatSession(
               // #739: the turn just told us what the window really holds.
               if (transport.contextKey)
                 void qc.invalidateQueries({ queryKey: transport.contextKey });
+              // docs/plan-llm-budget.md D6: a turn is when money was just
+              // spent — ask for the budget again, and once more when the
+              // server's window ends. (The KB chat has its own turn end and
+              // calls the same thing — `useKbChat`.)
+              void refreshBudgetAfterTurn(qc);
               // Re-snapshot from the store — it carries the BE-attached
               // `ask_knowledge_base` citations the stream doesn't emit.
               const fresh = await transport.getThread();

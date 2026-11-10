@@ -52,6 +52,7 @@ from workspace_app.factories import (
     get_kb_describer,
     get_kb_llm,
     get_kb_quality_judge_llm,
+    get_llm_budget,
     get_notification_channel,
     get_parser_registry,
     get_replay_service,
@@ -256,6 +257,9 @@ def build_app(
             # chat send's cookies/headers can become that turn's tool env. None
             # when unconfigured ⇒ no such seam.
             request_env=get_request_env(settings.server.request_env),
+            # docs/plan-llm-budget.md: the deploy's own "budget left" impl
+            # (`server.llm_budget`). None ⇒ no budget is shown anywhere.
+            llm_budget=get_llm_budget(settings.server.llm_budget),
             # The deploy's outbound channel for notifications. Empty ⇒ in-app
             # only, which is where they have always been.
             notification_channel=get_notification_channel(settings.server.notification_channel),

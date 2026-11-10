@@ -422,6 +422,28 @@ describe("useChatSession", () => {
       expect(qc.getQueryState(["ctx", "c1"])?.isInvalidated).toBe(true),
     );
   });
+
+  // docs/plan-llm-budget.md D6: a turn is when money was just spent, so the
+  // budget above the composer is asked for again. This hook is the item chat's;
+  // the knowledge-base chat has its own turn end (`useKbChat`, tested there).
+  it("asks for the LLM budget again when a turn ends", async () => {
+    const { QueryClientProvider } = await import("@tanstack/react-query");
+    const { makeTestQueryClient } = await import("../test/queryWrapper");
+    const { qk } = await import("../api/queryKeys");
+    const qc = makeTestQueryClient();
+    qc.setQueryData(qk.llmBudget, { status: "ok", budget: null });
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <QueryClientProvider client={qc}>{children}</QueryClientProvider>
+    );
+    const t = fakeTransport({
+      subscribe: async function* () {
+        yield { type: "done" } as AgentEvent;
+        await new Promise<void>(() => {});
+      },
+    });
+    renderHook(() => useChatSession(t, 60_000), { wrapper });
+    await waitFor(() => expect(qc.getQueryState(qk.llmBudget)?.isInvalidated).toBe(true));
+  });
 });
 
 describe("the sender's own message", () => {

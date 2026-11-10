@@ -207,6 +207,27 @@ export type FileInfo = { path: string; size: number; read_only?: boolean };
  * `_WorkspaceUsage` model. */
 export type WorkspaceUsage = { used: number; quota: number };
 
+/** docs/plan-llm-budget.md — what the deploy's budget class answered for the
+ * asking person (`GET /me/llm-budget`). `off`: no class configured, draw
+ * nothing. `ok`: `budget` is null when there was nothing to show.
+ * `unavailable`: it raised or did not answer in time. */
+export type LlmBudget = {
+  status: "off" | "ok" | "unavailable";
+  budget: {
+    remaining: number | null;
+    total: number | null;
+    currency: string;
+    message: string;
+    link: { label: string; url: string } | null;
+    tone: "info" | "warn" | "critical";
+  } | null;
+  /** Seconds until the server asks the deploy's class again (its per-person
+   * window); 0 or absent ⇒ never. A turn end asks once more then. */
+  stale_in_s?: number;
+  /** True when the server did not ask the deploy's class for this answer. */
+  from_cache?: boolean;
+};
+
 /** #739: how full a chat's context window is — mirrors the backend
  * `_ContextOut`. `limit` is null when no ceiling could be resolved, and the UI
  * must then show `used` with NO denominator rather than invent one. `measured`
@@ -657,6 +678,9 @@ export interface ApiClient {
    * gates system-wide controls (e.g. the collection "Global" toggle); `groups`
    * lets the FE resolve a `group:<id>` grant to the current viewer (#608). */
   getMe(): Promise<{ id: string; is_superuser: boolean; groups: string[] }>;
+  /** GET /me/llm-budget — the asking person's own LLM budget
+   * (docs/plan-llm-budget.md). Never anyone else's: there is no user argument. */
+  getLlmBudget(): Promise<LlmBudget>;
   /** GET /users — the company directory (small; fetch once, filter on the FE). */
   getUsers(): Promise<User[]>;
   /** GET /notifications — the current user's notifications, newest first. */

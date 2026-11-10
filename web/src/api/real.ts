@@ -29,6 +29,7 @@ import type {
   PageWrite,
   ActivityEntry,
   ApiClient,
+  LlmBudget,
   AppItem,
   AppManifest,
   AppSummary,
@@ -165,6 +166,10 @@ export const realApi: ApiClient = {
     const me = await json<{ id: string }>(await apiFetch("/me"));
     return me.id;
   },
+  async getLlmBudget() {
+    return json<LlmBudget>(await apiFetch("/me/llm-budget"));
+  },
+
   async getMe() {
     const me = await json<{ id: string; is_superuser?: boolean; groups?: string[] }>(
       await apiFetch("/me"),

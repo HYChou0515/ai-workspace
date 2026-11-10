@@ -579,23 +579,43 @@ textarea.input {
   outline-offset: 2px;
 }
 
-/* The status strip above the chat composer: storage used, context used, and
-   the compact link, in ONE row. Cells that have nothing to show render nothing,
-   so the separator is drawn by the row rather than by the cells — a `·` before
-   every cell but the first, whichever those turn out to be. Wraps rather than
-   overflows on a narrow column. */
+/* The status strip above the chat composer: storage used, context used, the
+   compact link and the LLM budget. Cells that have nothing to show render
+   nothing, so the separator belongs to the row, not to any one cell.
+   Cells sit on one line and move to the next only when there is no room. Each
+   cell keeps a 16px left margin with its 「·」 drawn in it (absolutely, so the
+   cell's own layout — a flex gap, an inline padding — cannot move it); the row
+   is pulled left by that margin and its left edge clipped 12px in — past the
+   dot (centred at 8px), short of a cell's 4px keyboard ring — so the dot of
+   whichever cell starts a line, the first or one that wrapped, is cut off and
+   every other dot shows. (`* + *::before` drew a dot before every cell but the
+   first, so a wrapped line began with a dangling 「·」.) The negative
+   top/right/bottom insets keep focus rings visible on those sides too.
+   Pinned by composer-status.test.ts. */
 .composer-status {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  column-gap: 8px;
   row-gap: 2px;
+  margin-left: -16px;
+  clip-path: inset(-4px -4px -4px 12px);
   font-size: var(--text-xs); /* 11px at the default root, scales with the text-size setting */
   color: var(--text-paper-d);
 }
-.composer-status > * + *::before {
+.composer-status > * {
+  position: relative;
+  margin-left: 16px;
+}
+.composer-status > *::before {
   content: "·";
-  margin-right: 8px;
+  position: absolute;
+  right: 100%;
+  top: 0;
+  bottom: 0;
+  width: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   color: var(--text-paper-d);
 }
 .composer-status > button {
