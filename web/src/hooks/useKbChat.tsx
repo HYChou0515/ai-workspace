@@ -4,6 +4,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 import { kbApi, type KbApi, type KbImageInput } from "../api/kb";
 import { qk } from "../api/queryKeys";
 import { eventId, eventSeq, isTerminal } from "../events";
+import { refreshBudgetAfterTurn } from "../lib/llmBudget";
 import { type Failure, failureFromError, failureFromHttp } from "../lib/failure";
 import { getKbAgentName } from "../lib/kbAgent";
 import {
@@ -218,6 +219,9 @@ export function useKbChat({
               }
               setLog((prev) => reduceAgent(prev, ev));
               if (isTerminal(ev)) {
+                // docs/plan-llm-budget.md D6/D9: the turn just spent LLM money.
+                // First, so a refetch below that fails cannot skip it.
+                void refreshBudgetAfterTurn(qc);
                 // The persisted thread is what carries the resolved [n]
                 // citations; the stream never has them. Reconcile, never
                 // replace — it must not cost the user the answer they just

@@ -256,6 +256,33 @@ describe("useKbChat — a turn that FAILS still says why", () => {
     ],
   };
 
+  // docs/plan-llm-budget.md D6/D9, review round 1 (#1015): the KB chat does not
+  // run on useChatSession, so its own turn end must ask for the budget again —
+  // it never did, and the KB composer's figure stayed at what it opened with.
+  // Review round 2: asked BEFORE the thread is refetched, so a refetch that
+  // fails does not also cost the budget its refresh — here it rejects.
+  it("asks for the LLM budget again when a turn ends", async () => {
+    const { QueryClientProvider } = await import("@tanstack/react-query");
+    const { makeTestQueryClient } = await import("../test/queryWrapper");
+    const { qk } = await import("../api/queryKeys");
+    const qc = makeTestQueryClient();
+    qc.setQueryData(qk.llmBudget, { status: "ok", budget: null, stale_in_s: 0 });
+    const client = {
+      ...mockKbApi,
+      getChat: vi.fn().mockRejectedValue(new Error("refetch failed")),
+      subscribeChat: async function* () {
+        yield { type: "done" } as never;
+        await new Promise<void>(() => {});
+      },
+    } as unknown as typeof mockKbApi;
+    rtlRenderHook(() => useKbChat({ collectionIds: ["c1"], chatId: "kb-spent", client }), {
+      wrapper: ({ children }: { children: React.ReactNode }) => (
+        <QueryClientProvider client={qc}>{children}</QueryClientProvider>
+      ),
+    });
+    await waitFor(() => expect(qc.getQueryState(qk.llmBudget)?.isInvalidated).toBe(true));
+  });
+
   // The runner gives up by yielding RunError and then RunDone — always both,
   // always in that order. So anything that clears `error` on each event wipes
   // the failure one event after it arrives, and the chat just stops with no

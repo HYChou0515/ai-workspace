@@ -339,6 +339,16 @@
 .kb-suggestion:hover {
   border-color: var(--accent);
 }
+/* docs/plan-llm-budget.md P4: the status row above the composer (the budget),
+   aligned with the composer's own edge; nothing to say takes no room. */
+.kb-composer-status {
+  /* margin-BOTTOM only: the row's own negative left margin is its separator
+     mechanism (base.css `.composer-status`). */
+  margin-bottom: var(--space-4);
+}
+.kb-composer-status:empty {
+  display: none;
+}
 .kb-composer {
   background: var(--white);
   border: 1.5px solid var(--accent);
