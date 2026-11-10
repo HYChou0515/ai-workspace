@@ -17,7 +17,8 @@ from __future__ import annotations
 
 import json
 import re
-from typing import TYPE_CHECKING
+from collections.abc import Mapping, Sequence
+from typing import TYPE_CHECKING, Any
 
 from agents import FunctionTool, RunContextWrapper, function_tool
 
@@ -40,6 +41,7 @@ async def ask_outside_impl(
     url: str | None = None,
     file: str | None = None,
     link: int | None = None,
+    target: str | None = None,
 ) -> str:
     """Ask the user to look something up outside for you, with a card in the chat.
 
@@ -65,6 +67,10 @@ async def ask_outside_impl(
       before answering, one card at a time.
     - `url`: any other web page (http or https), such as a link in another
       file, or in an answer that was not saved as a file.
+
+    With `query`, you may also pass `target`: the name of the search target
+    you suggest, from the list below. The user sees your suggestion and picks
+    the target themselves.
 
     One card asks for one thing. Your turn ends here. The user's answer is their
     next message: either what they found (usually also saved under `lookups/`;
@@ -105,6 +111,11 @@ async def ask_outside_impl(
             "To have the user search for something instead, pass `query`."
         )
     card = {"why": why, "query": query} if query is not None else {"why": why, "url": url}
+    # docs/plan-lookup-target-choice.md T8: only a target the deploy lists is a
+    # suggestion — any other name is dropped, not refused: the search stands.
+    target = (target or "").strip()
+    if query is not None and target in {t["name"] for t in ctx.context.search_targets}:
+        card["target"] = target
     shown = query if query is not None else url
     said = (
         f"The user now sees a card asking them to look up {shown!r} outside. Wait for "
@@ -206,13 +217,20 @@ async def _listed_link(ctx: RunContextWrapper[AgentToolContext], file: str, link
 
 
 #: The kinds of card: a search, a page to open, a question for the external AI.
-_CARD_KEYS = ({"why", "query"}, {"why", "url"}, {"why", "question"})
+_CARD_KEYS = (
+    {"why", "query"},
+    # docs/plan-lookup-target-choice.md: the target the AI suggests, beside a search only
+    {"why", "query", "target"},
+    {"why", "url"},
+    {"why", "question"},
+)
 
 
 def declared_lookup(text: str) -> dict | None:
     """The card a reply declares, read the way the chat reads it
     (`web/src/renderers/outsideLookup.ts`): the tail after the LAST marker is
-    one JSON object with a `why` and exactly one of a `query`, an http(s)
+    one JSON object with a `why` and exactly one of a `query` (with, maybe, the
+    `target` the AI suggests — docs/plan-lookup-target-choice.md), an http(s)
     `url`, or a `question` for the external AI (`ask_ext_ai`,
     docs/plan-ext-ai.md). `None` for anything else — a refusal quoting the
     marker included."""
@@ -240,7 +258,19 @@ def ask_outside_granted(config: AgentConfig) -> bool:
     return "ask_user" in granted_builtin_names(config.allowed_tools)
 
 
-def ask_outside_tool() -> FunctionTool:
+def ask_outside_tool(targets: Sequence[Mapping[str, Any]] = ()) -> FunctionTool:
     """Built apart from `build_tools`' table: granted by a rule
-    (`litellm_runner._agent_for`), never by naming it in a config."""
-    return function_tool(ask_outside_impl, name_override=TOOL_NAME)
+    (`litellm_runner._agent_for`), never by naming it in a config.
+
+    `targets` are the deploy's search targets (docs/plan-lookup-target-choice.md
+    T3): listed in the description, each with the text the person reads too,
+    so the AI suggests one knowing what it searches and shapes its keywords
+    for it. Fixed at boot, so the description is too."""
+    tool = function_tool(ask_outside_impl, name_override=TOOL_NAME)
+    if targets:
+        rows = [
+            f"- {t['name']}: {t['description']}" if t.get("description") else f"- {t['name']}"
+            for t in targets
+        ]
+        tool.description += "\n\nSearch targets (`target`):\n" + "\n".join(rows)
+    return tool

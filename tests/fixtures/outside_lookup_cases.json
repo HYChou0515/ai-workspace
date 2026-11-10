@@ -187,6 +187,30 @@
   {
    "output": "Asked.\n[outside-lookup]{\"why\":\"w\",\"question\":[\"q\"]}",
    "card": null
+  },
+  {
+   "output": "Asked.\n[outside-lookup]{\"why\":\"w\",\"query\":\"A123-4567\",\"target\":\"料號查詢\"}",
+   "card": {
+    "why": "w",
+    "query": "A123-4567",
+    "target": "料號查詢"
+   }
+  },
+  {
+   "output": "Asked.\n[outside-lookup]{\"why\":\"w\",\"url\":\"https://example.com/a\",\"target\":\"Google\"}",
+   "card": null
+  },
+  {
+   "output": "Asked.\n[outside-lookup]{\"why\":\"w\",\"query\":\"q\",\"target\":\"\"}",
+   "card": null
+  },
+  {
+   "output": "Asked.\n[outside-lookup]{\"why\":\"w\",\"query\":\"q\",\"target\":3}",
+   "card": null
+  },
+  {
+   "output": "Asked.\n[outside-lookup]{\"why\":\"w\",\"question\":\"q\",\"target\":\"Google\"}",
+   "card": null
   }
  ]
 }

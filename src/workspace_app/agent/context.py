@@ -563,6 +563,11 @@ class AgentToolContext:
     # Whether the deploy turned on the 問外部AI card (`server.ext_ai_enabled`,
     # docs/plan-ext-ai.md D5): granted only where `in_chat` holds too.
     ext_ai: bool = False
+    # The deploy's search targets (`server.lookup_targets`, whole — see
+    # `config.schema.whole_lookup_targets`): what `ask_outside` lists for the
+    # AI and the only names its `target` may suggest
+    # (docs/plan-lookup-target-choice.md T3/T8). Empty ⇒ it suggests none.
+    search_targets: list[dict[str, Any]] = field(default_factory=list)
     # docs/plan-tool-usage-stats.md: where this turn's tool calls are counted
     # (the runner sets it on every turn it drives; None counts nothing), which
     # surface they happened on — set by the builder of each context, never

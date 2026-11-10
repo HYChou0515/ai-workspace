@@ -2523,6 +2523,7 @@ def create_app(
         # plan-tool-usage-stats §8.3: the recorder an applied skill counts into.
         tool_usage=tool_usage,
         ext_ai=ext_ai_enabled,
+        search_targets=search_targets,
     )
 
     # #624: let the budget consult what the RUNNER has learned about each
@@ -2553,6 +2554,7 @@ def create_app(
         load_turn=replay.load_turn,
         load_doc=replay.load_doc,
         ext_ai=ext_ai_enabled,
+        search_targets=search_targets,
     )
 
     # ── Workflows (#100) ─────────────────────────────────────────────

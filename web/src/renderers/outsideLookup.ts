@@ -23,7 +23,8 @@ const SPACE =
 const WEB_ADDRESS = new RegExp(`^https?://[^/?#${SPACE}]+(?:[/?#][^${SPACE}]*)?$`);
 
 export type OutsideLookup =
-  | { why: string; query: string }
+  // `target`: the search target the AI suggests (docs/plan-lookup-target-choice.md)
+  | { why: string; query: string; target?: string }
   | { why: string; url: string }
   | { why: string; question: string };
 
@@ -46,7 +47,8 @@ export function parseOutsideLookup(output: string | undefined | null): OutsideLo
   if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return null;
   const card = parsed as Record<string, unknown>;
   const keys = Object.keys(card).sort().join(",");
-  if (keys !== "query,why" && keys !== "url,why" && keys !== "question,why") return null;
+  const cards = ["query,why", "query,target,why", "url,why", "question,why"];
+  if (!cards.includes(keys)) return null;
   if (!Object.values(card).every((v) => typeof v === "string" && v !== "")) return null;
   if (typeof card.url === "string" && !isWebAddress(card.url)) return null;
   return card as OutsideLookup;

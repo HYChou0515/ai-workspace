@@ -322,3 +322,37 @@ def test_replay_offers_ask_ext_ai_where_the_deploy_turned_it_on():
 
     assert "ask_ext_ai" in offered(ext_ai_enabled=True)
     assert "ask_ext_ai" not in offered()
+
+
+def test_replay_describes_ask_outside_with_the_deploys_targets():
+    """docs/plan-lookup-target-choice.md T3: the live turn's `ask_outside` lists
+    the deploy's search targets, so the replay's must too — a description that
+    differs is a replay that implicates the harness, not the model."""
+    completion = _FakeCompletion([_chunk("ok")])
+    spec = make_spec()
+    app = create_app(
+        spec=spec,
+        sandbox=MockSandbox(),
+        filestore=MemoryFileStore(),
+        runner=_Runner(),
+        replay_service=ReplayService(completion=completion),
+        lookup_targets=[{"name": "Parts", "url": "partsdb://x?pn={q}", "description": "Parts."}],
+    )
+    rid = (
+        spec.get_resource_manager(RcaInvestigation)
+        .create(RcaInvestigation(title="t", owner="alice"))
+        .resource_id
+    )
+    spec.get_resource_manager(Conversation).create(
+        Conversation(
+            item_id=rid,
+            messages=[Message(role="user", content="hi"), Message(role="assistant", content="ok")],
+        )
+    )
+    resp = TestClient(app).post(
+        "/health/replay/turn", json={"source": "rca", "thread_id": rid, "message_index": 1}
+    )
+
+    assert resp.status_code == 200, resp.text
+    (tool,) = [t for t in completion.kwargs["tools"] if t["function"]["name"] == "ask_outside"]
+    assert "- Parts: Parts." in tool["function"]["description"]

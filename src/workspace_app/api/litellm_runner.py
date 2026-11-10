@@ -680,6 +680,7 @@ def _agent_for(
     skills_reachable: bool | None = None,
     in_chat: bool = False,
     ext_ai: bool = False,
+    search_targets: Sequence[Mapping[str, Any]] = (),
     subagent_models: tuple[SubagentModel, ...] = (),
     fallback_chains: FallbackChains | None = None,
     cooldown_registry: CooldownRegistry | None = None,
@@ -741,7 +742,8 @@ def _agent_for(
     from ..agent.outside_lookup import ask_outside_granted, ask_outside_tool
 
     if in_chat and ask_outside_granted(config):
-        tools.append(ask_outside_tool())
+        # …listing the deploy's search targets (docs/plan-lookup-target-choice.md T3)
+        tools.append(ask_outside_tool(search_targets))
     # docs/plan-ext-ai.md D5: the 問外部AI card goes where the 請幫我查 card
     # goes, on a deploy that turned it on (`server.ext_ai_enabled`).
     from ..agent.ext_ai import ask_ext_ai_granted, ask_ext_ai_tool
@@ -1951,6 +1953,7 @@ class LitellmAgentRunner:
             "skills_reachable": ctx.skills_reachable,
             "in_chat": ctx.in_chat,
             "ext_ai": ctx.ext_ai,
+            "search_targets": ctx.search_targets,
             "subagent_models": ctx.subagent_models,
             "fallback_chains": self._fallback_chains,
             "cooldown_registry": self._cooldown_registry,

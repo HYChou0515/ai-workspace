@@ -225,6 +225,33 @@ async def test_a_chat_turn_can_ask_the_external_ai_where_the_deploy_turned_it_on
     assert _ask_outside_held(ctx, "ask_ext_ai")
 
 
+async def test_a_chat_turn_tells_the_ai_the_deploys_search_targets(monkeypatch):
+    """docs/plan-lookup-target-choice.md T3: `server.lookup_targets` reaches the
+    chat turn — and through the runner's own kwargs, the card's description —
+    with what a deploy left out filled in (`whole_lookup_targets`)."""
+    from workspace_app.api.litellm_runner import LitellmAgentRunner
+    from workspace_app.tokens import LlmCredential
+
+    spec, builder, _, _, iid = _build(
+        monkeypatch,
+        {},
+        lookup_targets=[
+            {"name": "Google", "url": "https://www.google.com/search?q={q}"},
+            {"name": "Parts", "url": "partsdb://lookup?pn={q}", "description": "Part numbers."},
+        ],
+    )
+    ctx = await _chat_ctx(spec, builder, iid)
+
+    assert [(t["name"], t["description"], t["preview"]) for t in ctx.search_targets] == [
+        ("Google", "", True),
+        ("Parts", "Part numbers.", True),
+    ]
+    kw = LitellmAgentRunner()._agent_kwargs(ctx, LlmCredential)
+    agent = _agent_for(ctx.agent_config, ctx.packages, ctx.unavailable_tools, **kw)
+    (tool,) = [t for t in agent.tools if t.name == "ask_outside"]
+    assert "- Parts: Part numbers." in getattr(tool, "description", "")
+
+
 async def test_a_chat_turn_on_a_deploy_that_did_not_cannot(monkeypatch):
     spec, builder, _, _, iid = _build(monkeypatch, {})
     ctx = await _chat_ctx(spec, builder, iid)
