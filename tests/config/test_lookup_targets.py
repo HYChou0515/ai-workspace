@@ -89,6 +89,25 @@ def test_the_default_is_not_shared_between_loads():
             "server.lookup_targets[1].url must be a URL (`scheme:…`)",
         ),
         (
+            # Review round 1 (D2): any URL — but not one that runs code or reads
+            # the person's own disk when the card opens it (javascript: is
+            # percent-decoded before it runs, so encoding the query guards nothing)
+            "[{name: G, url: 'javascript:find(\"{q}\")'}]",
+            "server.lookup_targets[0].url must not be a javascript: URL",
+        ),
+        (
+            "[{name: G, url: 'DATA:text/html,{q}'}]",
+            "server.lookup_targets[0].url must not be a data: URL",
+        ),
+        (
+            "[{name: G, url: 'vbscript:{q}'}]",
+            "server.lookup_targets[0].url must not be a vbscript: URL",
+        ),
+        (
+            "[{name: G, url: 'file:///c:/{q}'}]",
+            "server.lookup_targets[0].url must not be a file: URL",
+        ),
+        (
             "[{name: G, url: 'https://g/?q={q}', description: 3}]",
             "server.lookup_targets[0].description must be a string",
         ),
@@ -118,6 +137,10 @@ def test_the_default_is_not_shared_between_loads():
         "unknown-key",
         "blank-name",
         "no-scheme",
+        "javascript",
+        "data-any-case",
+        "vbscript",
+        "file",
         "description-not-text",
         "preview-not-bool",
         "no-placeholder",

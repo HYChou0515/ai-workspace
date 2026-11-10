@@ -451,6 +451,9 @@ def _validate(merged: dict[str, Any], *, source: str) -> None:
 
 #: RFC 3986's scheme: a letter, then letters, digits, `+`, `-` or `.`, then `:`.
 _URL_SCHEME = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*:")
+#: Schemes a search target may not use: they run code in the app's origin or
+#: read the person's own files when the card's button opens them.
+_UNSAFE_SCHEMES = frozenset({"javascript", "data", "vbscript", "file"})
 
 
 def _check_lookup_targets(merged: dict[str, Any], *, source: str) -> None:
@@ -485,6 +488,12 @@ def _check_lookup_targets(merged: dict[str, Any], *, source: str) -> None:
         # (a black box), so any scheme — but a URL, which starts with one.
         if not isinstance(url, str) or not _URL_SCHEME.match(url):
             raise ValueError(f"config {source}: {at}.url must be a URL (`scheme:…`)")
+        # …but never one that runs code, or reads the person's own disk, when
+        # the card opens it: a `javascript:` URL is percent-decoded before it
+        # runs, so encoding the query guards nothing (review round 1).
+        scheme = url.split(":", 1)[0].lower()
+        if scheme in _UNSAFE_SCHEMES:
+            raise ValueError(f"config {source}: {at}.url must not be a {scheme}: URL")
         if "{q}" not in url:
             raise ValueError(f"config {source}: {at}.url must contain {{q}} — where the query goes")
         if not isinstance(entry.get("description", ""), str):

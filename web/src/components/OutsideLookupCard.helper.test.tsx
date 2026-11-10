@@ -507,6 +507,25 @@ describe("the person picks the target (plan-lookup-target-choice)", () => {
     });
   });
 
+  // Review round 1 (D3): ids were built from the name, and `aria-describedby`
+  // is a list split on spaces — "Parts DB" pointed at nothing.
+  it("reads out what a target with a space in its name searches", async () => {
+    const spaced = [
+      PICK[0]!,
+      { ...PICK[1]!, name: "Parts DB", description: "Full part numbers only." },
+    ];
+    draw({ targets: spaced });
+    expect(await screen.findByRole("radio", { name: "Parts DB" })).toHaveAccessibleDescription(
+      "Full part numbers only.",
+    );
+    cleanup();
+
+    draw({ targets: spaced, online: false });
+    expect(await screen.findByRole("button", { name: "Parts DB search" })).toHaveAccessibleDescription(
+      "這個目標要透過小幫手查 Full part numbers only.",
+    );
+  });
+
   it("lists a target only the helper can search, unpressable by hand, saying why", async () => {
     draw({ lookup: SUGGESTING, targets: PICK, online: false });
 

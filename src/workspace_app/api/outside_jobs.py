@@ -58,8 +58,9 @@ MAX_CLAIMS = 3
 #: when an API change would break helpers already installed: they then get a
 #: 426 and update, instead of quietly misreading the new API.
 #: 2 (docs/plan-lookup-target-choice.md §3.4): a search job carries the target
-#: the person chose, already filled (`target_url`); a protocol-1 helper would
-#: put that whole string into a target of its own choosing and search for it.
+#: the person chose, already filled (`target_url`). A protocol-1 helper never
+#: reads it: it would search the keywords (`args`) on a target it picks itself
+#: (Google, else the first) — silently not the one the person chose.
 MIN_PROTOCOL = 2
 
 #: What `encodeURIComponent` leaves unescaped besides letters and digits — the

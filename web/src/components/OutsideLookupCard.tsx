@@ -401,21 +401,21 @@ export function OutsideLookupCard({
                 <span className="outside-lookup-label" aria-hidden="true">
                   {t("lookup.targetLegend")}
                 </span>
-                {targetList.map((tg) => (
+                {targetList.map((tg, at) => (
                   <div key={tg.name} className="outside-lookup-target">
                     <label>
                       <input
                         type="radio"
                         name={`${ids}-target`}
                         checked={tg.name === searchName}
-                        aria-describedby={tg.description ? `${ids}-t-${tg.name}` : undefined}
+                        aria-describedby={tg.description ? `${ids}-t-${at}` : undefined}
                         onChange={() => setChosen(tg.name)}
                       />
                       {tg.name}
                       {aiMark(tg.name)}
                     </label>
                     {tg.description && (
-                      <p id={`${ids}-t-${tg.name}`} className="outside-lookup-target-desc">
+                      <p id={`${ids}-t-${at}`} className="outside-lookup-target-desc">
                         {tg.description}
                       </p>
                     )}
@@ -555,12 +555,12 @@ export function OutsideLookupCard({
           {manual && (
           <>
           <ul className="outside-lookup-targets">
-            {targetList.map((tg) => {
+            {targetList.map((tg, at) => {
               // T5/T7: a target only the helper can search is listed, not pressable
               const helperOnly = tg.preview === false;
               const said = [
-                helperOnly ? `${ids}-h-${tg.name}` : "",
-                tg.description ? `${ids}-m-${tg.name}` : "",
+                helperOnly ? `${ids}-h-${at}` : "",
+                tg.description ? `${ids}-m-${at}` : "",
               ].filter(Boolean);
               return (
                 <li key={tg.name} className="outside-lookup-target">
@@ -589,13 +589,13 @@ export function OutsideLookupCard({
                     </button>
                     {aiMark(tg.name)}
                     {helperOnly && (
-                      <span id={`${ids}-h-${tg.name}`} className="outside-lookup-hint">
+                      <span id={`${ids}-h-${at}`} className="outside-lookup-hint">
                         {t("lookup.needsHelper")}
                       </span>
                     )}
                   </div>
                   {tg.description && (
-                    <p id={`${ids}-m-${tg.name}`} className="outside-lookup-target-desc">
+                    <p id={`${ids}-m-${at}`} className="outside-lookup-target-desc">
                       {tg.description}
                     </p>
                   )}

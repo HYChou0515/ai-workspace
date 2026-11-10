@@ -68,6 +68,25 @@ def test_a_target_the_deploy_does_not_list_is_refused_and_nothing_is_queued():
     assert _claim(client).status_code == 204
 
 
+def test_a_name_written_with_spaces_around_it_is_one_name_everywhere():
+    """Review round 1 (D1): the loader tells names apart with their spaces
+    stripped, so the app keeps them stripped — the card's picker, the hand-over
+    and the AI's suggestion all name it the same way. Kept as written, the card
+    sent `" Parts "`, the hand-over stripped it to `"Parts"`, and every helper
+    search on that deploy was a 422."""
+    client, _spec, iid = _asked(
+        lookup_targets=[{"name": " Parts ", "url": "https://p.example/?q={q}"}]
+    )
+    _beat(client)
+    [shown] = client.get("/lookup-targets").json()
+
+    r = _hand(client, iid, query="A123", target=shown["name"])
+
+    assert shown["name"] == "Parts"
+    assert r.status_code == 201, r.text
+    assert _claim(client).json()["target"] == "Parts"
+
+
 def test_the_saved_page_says_which_target_it_came_from():
     """T10: the target the person used, as a hand-pasted answer records it."""
     client, _spec, iid = _asked_with_targets()
@@ -82,9 +101,9 @@ def test_the_saved_page_says_which_target_it_came_from():
 
 
 def test_a_helper_on_the_old_protocol_is_told_to_update():
-    """§3.4: the job's meaning moved (a filled target, not keywords to put into
-    a target of its own choosing), so a protocol-1 helper — which would search
-    Google for the whole string — is refused with 426 rather than misread it."""
+    """§3.4: a search now names the target the person chose (`target_url`). A
+    protocol-1 helper never reads it — it would search the keywords on a target
+    it picks itself, silently not the person's — so it is refused with 426."""
     client, _spec, _iid = _asked_with_targets()
     as_helper = {"X-AI-Workspace-Helper-Version": "0.1.0", "X-AI-Workspace-Helper-Protocol": "1"}
 

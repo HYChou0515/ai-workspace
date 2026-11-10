@@ -330,13 +330,14 @@ def test_replay_describes_ask_outside_with_the_deploys_targets():
     differs is a replay that implicates the harness, not the model."""
     completion = _FakeCompletion([_chunk("ok")])
     spec = make_spec()
+    targets = [{"name": "Parts", "url": "partsdb://x?pn={q}", "description": "Parts."}]
     app = create_app(
         spec=spec,
         sandbox=MockSandbox(),
         filestore=MemoryFileStore(),
         runner=_Runner(),
         replay_service=ReplayService(completion=completion),
-        lookup_targets=[{"name": "Parts", "url": "partsdb://x?pn={q}", "description": "Parts."}],
+        lookup_targets=targets,
     )
     rid = (
         spec.get_resource_manager(RcaInvestigation)
@@ -354,5 +355,12 @@ def test_replay_describes_ask_outside_with_the_deploys_targets():
     )
 
     assert resp.status_code == 200, resp.text
+    from workspace_app.agent.outside_lookup import ask_outside_tool
+    from workspace_app.config.schema import whole_lookup_targets
+
     (tool,) = [t for t in completion.kwargs["tools"] if t["function"]["name"] == "ask_outside"]
-    assert "- Parts: Parts." in tool["function"]["description"]
+    # the live turn's tool, built from the same deploy list (review round 1:
+    # equal, not merely containing the row)
+    live = ask_outside_tool(whole_lookup_targets(targets))
+    assert tool["function"]["description"] == live.description
+    assert "- Parts: Parts." in live.description
