@@ -38,6 +38,19 @@ Grilled 2026-11-10 on master `ef211122`。每條決定標來源：**[user]** = �
 | D6 | **面板寫出範圍與個人額度**：硬碟欄位下寫「目前已用 X，最多 Y（這個 App 的上限）」，另寫「個人額度還剩 Z」（有設 `per_user.disk` 時）——上限不是保證，剩多少要看得到（D2 的代價）。 | [mine] |
 | D7 | **沒人調過的 item 行為不變**：item 沒有硬碟設定時，上限照舊是 App 的值。 | [mine] |
 
+### 施工時定下的細節（as built）
+
+- **自己的路由** `PUT /a/{slug}/items/{item_id}/disk`，body `{"disk": "5G"}`（大小字串，跟記憶體同一個解析器
+  `parse_size`；`0`／`max` 是運營方的「無上限」寫法，使用者不能用，回 422）。不併進 `PUT …/resources`：那條在
+  沙盒執行中一律回 409，硬碟不該跟著被擋（D5）。
+- **面板的 Save 只送改過的那一半**：只改硬碟就只打 `/disk`，執行中也能存；CPU／記憶體照舊。
+- **「個人額度還剩多少」只給 owner**（D6）：那是 owner 所有 item 的加總，給協作者會洩漏別的 item——
+  環境面板本來就不透露 owner 的其他 item。
+- **欄位是特權欄位**：加進 `perm.checker.ESCALATED_FIELDS`，通用 PATCH、JSON patch、auto-CRUD create、App 的
+  create 路由都寫不進去。**發布的副本從 App 的大小開始**，不帶來源的硬碟設定（發布者的大小只管 CPU／記憶體，C10）。
+- **沒人調過時寫「預設（這個 App 的大小）」**——CPU／記憶體的預設是「依你目前的額度」，硬碟不是。
+- **存下後也重讀對話框下方的「已使用 X / Y」**（demo 時發現 Y 停在舊值）。
+
 ## Phases
 
 （施工時依 `/tdd` 每個 phase 先紅後綠；編號連續。）
