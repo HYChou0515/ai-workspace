@@ -89,6 +89,33 @@ describe("ItemEnvironmentModal — disk", () => {
     expect(field).toHaveTextContent(word("itemenv.disk.now"));
   });
 
+  it("names an unset disk as the App's size, not the person's quota", async () => {
+    // The cpu/memory default comes from the owner's quota; the disk's from
+    // the App (D7) — the same words would say something false.
+    vi.stubGlobal("fetch", route(ENV));
+    open();
+
+    expect(await screen.findByTestId("disk-origin")).toHaveTextContent(word("itemenv.disk.default"));
+  });
+
+  it("sits with this workspace's sizes, above the person's totals", async () => {
+    vi.stubGlobal("fetch", route(ENV));
+    open();
+    const disk = await screen.findByTestId("disk-field");
+    const gauge = screen.getByTestId("budget-gauge");
+
+    expect(disk.compareDocumentPosition(gauge) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("while running, the hint says closing is for cpu and memory — the disk can change now", async () => {
+    vi.stubGlobal("fetch", route({ ...ENV, running: true }));
+    open();
+
+    await screen.findByTestId("disk-input");
+    expect(screen.getByText(word("itemenv.close.hint"))).toBeTruthy();
+    expect(word("itemenv.close.hint")).toContain("CPU");
+  });
+
   it("is drawn with no per-person budget too — disk needs none", async () => {
     vi.stubGlobal("fetch", route(ENV, UNCAPPED));
     open();

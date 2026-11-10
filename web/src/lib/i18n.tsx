@@ -1330,8 +1330,8 @@ export const messages = {
   "itemenv.close": { "zh-TW": "關閉沙盒", en: "Close sandbox" },
   // Says WHY the size is locked, so the disabled field is not read as broken.
   "itemenv.close.hint": {
-    "zh-TW": "關閉後即可調整大小。關閉會結束正在執行的程序，檔案不受影響。",
-    en: "Close it to change the size. Running processes end; your files are untouched.",
+    "zh-TW": "關閉後即可調整 CPU 和記憶體（硬碟現在就能改）。關閉會結束正在執行的程序，檔案不受影響。",
+    en: "Close it to change CPU and memory (the disk can change now). Running processes end; your files are untouched.",
   },
   "itemenv.size.heading": { "zh-TW": "這個 workspace 的沙盒大小", en: "This workspace's sandbox size" },
   // The label an UNSET value carries. Without it an empty field renders as a
@@ -1393,6 +1393,9 @@ export const messages = {
   "itemenv.field.memory.over": { "zh-TW": "最多 {detail}。", en: "At most {detail}." },
   // docs/plan-item-disk-size.md — the workspace's own size.
   "itemenv.field.disk": { "zh-TW": "硬碟", en: "Disk" },
+  // An unset disk is the App's size (D7) — not the owner's quota, which is
+  // what `itemenv.size.default` says of cpu and memory.
+  "itemenv.disk.default": { "zh-TW": "預設（這個 App 的大小）", en: "Default (this App's size)" },
   "itemenv.disk.used": { "zh-TW": "已用 {used}", en: "{used} used" },
   "itemenv.disk.now": {
     "zh-TW": "存下就生效，執行中也可以改。",

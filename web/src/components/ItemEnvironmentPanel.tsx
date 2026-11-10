@@ -111,6 +111,16 @@ export function ItemEnvironmentPanel({
   const cores = (n: number) =>
     t(n === 1 ? "resources.live.cores_one" : "resources.live.cores", { n });
 
+  // The WORKSPACE's size (docs/plan-item-disk-size.md). Drawn with the sizes
+  // above the totals where a budget exists, alone where none does — it needs
+  // no per-person budget, and a running sandbox does not hold it (every write
+  // reads it, D5), so neither `budget` nor `running` decides whether it is
+  // drawn or editable. Not drawn by an API pod that sends no disk figures.
+  const diskField =
+    env.diskUsedBytes === null ? null : (
+      <DiskField env={env} draft={draft.disk} fault={fault.disk ?? null} editable={canEdit && !busy} onDraft={onDraft} />
+    );
+
   return (
     <div className="item-environment">
       {/* ── status row: always drawn ── */}
@@ -295,6 +305,9 @@ export function ItemEnvironmentPanel({
           </div>
           {canEdit ? null : <p className="detail env-hint">{t("itemenv.readonly")}</p>}
 
+          {/* This workspace's sizes together, above the person's totals. */}
+          {diskField}
+
           <h4 className="env-heading">{t("itemenv.usage.total")}</h4>
           <div data-testid="budget-gauge" className="stat-row" role="group" aria-label={t("itemenv.usage.total")}>
             <Gauge label={t("resources.gauge.cpu")} used={budget.cpuInUse} limit={budget.cpu} format={String} />
@@ -308,14 +321,8 @@ export function ItemEnvironmentPanel({
         </>
       )}
 
-      {/* ── disk: the WORKSPACE's size (docs/plan-item-disk-size.md) ──
-          Its own block: it needs no per-person budget, and a running sandbox
-          does not hold it (every write reads it, D5) — so neither `budget`
-          nor `running` decides whether it is drawn or editable. Not drawn by
-          an API pod that sends no disk figures. */}
-      {env.diskUsedBytes === null ? null : (
-        <DiskField env={env} draft={draft.disk} fault={fault.disk ?? null} editable={canEdit && !busy} onDraft={onDraft} />
-      )}
+      {/* No budget, so no size block above: the disk stands alone. */}
+      {budget === null ? diskField : null}
     </div>
   );
 }
@@ -355,7 +362,7 @@ function DiskField({
       <p className="detail env-field__origin">
         <span data-testid="disk-value">{effective ? formatBytes(effective) : "—"}</span>
         {" · "}
-        <span data-testid="disk-origin">{stated === null ? t("itemenv.size.default") : t("itemenv.size.stated")}</span>
+        <span data-testid="disk-origin">{stated === null ? t("itemenv.disk.default") : t("itemenv.size.stated")}</span>
         {stated === null || !editable ? null : (
           <>
             {" · "}
