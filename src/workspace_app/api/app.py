@@ -2826,6 +2826,7 @@ def create_app(
         deliver=deliver_outside_answer,
         release_dir=ai_workspace_helper_dir,
         max_file_size=max_file_size,
+        search_targets=search_targets,
     )
     from .ai_workspace_helper_release import register_ai_workspace_helper_release_routes
 

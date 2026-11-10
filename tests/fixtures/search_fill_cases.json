@@ -1,0 +1,11 @@
+{
+ "about": "A search target's url with {q} filled the way the card fills it (encodeURIComponent). The backend (outside_jobs.fill_target) and the card (searchUrl) are both held to it: docs/plan-lookup-target-choice.md §3.4.",
+ "cases": [
+  {"url": "https://www.google.com/search?q={q}", "query": "pandas 2.0 新功能", "filled": "https://www.google.com/search?q=pandas%202.0%20%E6%96%B0%E5%8A%9F%E8%83%BD"},
+  {"url": "{q}", "query": "a&b=c/d?#+%", "filled": "a%26b%3Dc%2Fd%3F%23%2B%25"},
+  {"url": "{q}", "query": "it's (ok)*!~-_.", "filled": "it's%20(ok)*!~-_."},
+  {"url": "partsdb://lookup?pn={q}&exact=1", "query": "A123 4567", "filled": "partsdb://lookup?pn=A123%204567&exact=1"},
+  {"url": "https://x.example/{q}/and/{q}", "query": "a b", "filled": "https://x.example/a%20b/and/a%20b"},
+  {"url": "https://x.example/?q={q}", "query": "日本語　全角", "filled": "https://x.example/?q=%E6%97%A5%E6%9C%AC%E8%AA%9E%E3%80%80%E5%85%A8%E8%A7%92"}
+ ]
+}

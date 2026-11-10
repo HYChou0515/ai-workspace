@@ -22,7 +22,7 @@ import re
 import time
 from collections.abc import Callable
 from typing import Literal
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, quote, urlsplit
 
 from msgspec import Struct
 from specstar import QB, SpecStar
@@ -57,7 +57,21 @@ MAX_CLAIMS = 3
 #: The oldest helper↔backend protocol this backend speaks (§3.7.3). Raise it
 #: when an API change would break helpers already installed: they then get a
 #: 426 and update, instead of quietly misreading the new API.
-MIN_PROTOCOL = 1
+#: 2 (docs/plan-lookup-target-choice.md §3.4): a search job carries the target
+#: the person chose, already filled (`target_url`); a protocol-1 helper would
+#: put that whole string into a target of its own choosing and search for it.
+MIN_PROTOCOL = 2
+
+#: What `encodeURIComponent` leaves unescaped besides letters and digits — the
+#: card fills `{q}` with it (`searchUrl`), so the backend fills it the same way.
+_URI_COMPONENT_SAFE = "-_.!~*'()"
+
+
+def fill_target(url: str, query: str) -> str:
+    """A search target's `url` with every `{q}` filled as the card fills it,
+    so a target reads the same whether the person opens it by hand or their
+    helper is handed it (held together by `tests/fixtures/search_fill_cases.json`)."""
+    return url.replace("{q}", quote(query, safe=_URI_COMPONENT_SAFE))
 
 
 class OutsideJob(Struct):
@@ -82,6 +96,12 @@ class OutsideJob(Struct):
     saved: str = ""
     #: How many times a helper has taken it (see MAX_CLAIMS).
     claims: int = 0
+    #: A search's target, as the person chose it on the card
+    #: (docs/plan-lookup-target-choice.md T1), and its `url` filled with what
+    #: they typed — what the helper interprets (a black box, T6). `args` stays
+    #: what they typed: it heads the saved page. "" for any other kind.
+    target: str = ""
+    target_url: str = ""
 
 
 class _AiWorkspaceHelperPresence(Struct):
