@@ -630,7 +630,7 @@ email 通道（`server.notification_channel`）時，平台歷史上每一則通
 
 ---
 
-### 2026-09-18 · #818 skill hub：使用者之間分享 skill，不經過 dev 的版本庫（`skill-hub-entry`） {#pr-818}
+### 2026-09-18 · 06131733 · #818 skill hub：使用者之間分享 skill，不經過 dev 的版本庫（`skill-hub-entry`） {#pr-818}
 
 **設定** — 不動。沒有新旋鈕。
 
@@ -676,7 +676,7 @@ email 通道（`server.notification_channel`）時，平台歷史上每一則通
 - 另一個 item 的 Skills 面板「從 skill hub 裝」看得到它、裝進去後那一列有「可在此編輯」、下一輪 `read_skill` 讀得到。
 - 部署方自己的 app：`agent.tools` 有那三個、`agent.skills` 有 `skill-hub`，否則 agent 會說沒有 `publish_skill`。
 
-### 2026-09-19 · #827 onboarding 的文字改成 markdown、App 可以放圖（`GET /apps/{slug}/assets/{name}`） {#pr-827}
+### 2026-09-19 · 61bf533b · #827 onboarding 的文字改成 markdown、App 可以放圖（`GET /apps/{slug}/assets/{name}`） {#pr-827}
 
 **設定** — 不動。沒有新旋鈕。
 
@@ -711,7 +711,7 @@ email 通道（`server.notification_channel`）時，平台歷史上每一則通
 - 部署方自己的 App：歡迎卡的字沒有多出粗體／標題／連結。
 
 ---
-### 2026-09-19 · #824 author-skill 存檔前先照 writing-for-agents 整理一遍（`references/` 隨 skill 出貨） {#pr-824}
+### 2026-09-19 · cd28f838 · #824 author-skill 存檔前先照 writing-for-agents 整理一遍（`references/` 隨 skill 出貨） {#pr-824}
 
 **設定** — 不動。沒有新旋鈕。
 
@@ -740,7 +740,7 @@ email 通道（`server.notification_channel`）時，平台歷史上每一則通
   「更新為出貨版本」，按了才換新。
 
 ---
-### 2026-09-19 · #823 從聊天視窗匯出文字（json / md）與影片：`chat-video` JobType、自己的映像 {#pr-823}
+### 2026-09-19 · d0ba5d2d · #823 從聊天視窗匯出文字（json / md）與影片：`chat-video` JobType、自己的映像 {#pr-823}
 
 **行為**（不動設定也會多出來的東西）
 
@@ -807,7 +807,7 @@ email 通道（`server.notification_channel`）時，平台歷史上每一則通
 
 ---
 
-### 2026-09-21 · #834 docker：不帶 `--target` 的 build 又回到 API image；`chat-video` 層量到 +1.63 GB {#pr-834}
+### 2026-09-21 · ca9d33a8 · #834 docker：不帶 `--target` 的 build 又回到 API image；`chat-video` 層量到 +1.63 GB {#pr-834}
 
 **設定** — 不動。**資料** — 不動。
 
@@ -2043,7 +2043,7 @@ image 做不出來。能連公開 registry 的 build 不用做事。沒有新的
    `?page=` 跟著變，錯誤面板沒有任何「not allowed to load」。
 3. 在任一 WUI 點一個外部連結：出現確認框、按 Cancel 不開、按 Open 開新分頁。
 
-### 2026-10-12 · #907 job tool template；第三方工具多拿到一個 `WORKSPACE_ITEM_ID` {#pr-907}
+### 2026-10-12 · 46227a02 · #907 job tool template；第三方工具多拿到一個 `WORKSPACE_ITEM_ID` {#pr-907}
 
 **設定** — 沒有新 key，沒有要做的事。**行為改變，沒有開關**：平台派送第三方工具的 command 時（聊天與 workflow
 agent 步驟裡 AI 的呼叫、WUI 的工具呼叫、view plugin、圖表重畫）都多帶一個環境變數 `WORKSPACE_ITEM_ID`，值是那個 item 的 id
