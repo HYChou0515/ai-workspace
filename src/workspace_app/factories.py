@@ -38,6 +38,7 @@ if TYPE_CHECKING:
     from .model_settings.live import LiveSettings
 from .api.env_provider import IEnvProvider
 from .api.litellm_runner import LitellmAgentRunner, RunnerEndpoints
+from .api.llm_budget import ILlmBudget
 from .api.notification_delivery import INotificationChannel
 from .api.request_env import IRequestEnv
 from .api.runner import AgentRunner
@@ -1461,6 +1462,18 @@ def capacity_workday(spec: SpecStar):  # noqa: ANN201
     except Exception:  # noqa: BLE001 — a calendar that cannot be read is the default one
         return None
     return OffHoursCalendar(workdays=tuple(stored.workdays), overrides=stored.overrides).is_workday
+
+
+def get_llm_budget(dotted: str) -> ILlmBudget | None:
+    """The deploy's "how much LLM budget is left" seam (docs/plan-llm-budget.md),
+    or None when it configured none — the absence of the feature, not a degraded
+    mode: no budget is asked for and nothing is drawn.
+
+    Takes the value rather than the whole ``Settings`` for the same reason
+    ``get_request_env`` does."""
+    if not dotted:
+        return None
+    return _construct_dotted(dotted, ILlmBudget, config_key="server.llm_budget")
 
 
 def get_request_env(dotted: str) -> IRequestEnv | None:

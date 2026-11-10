@@ -144,6 +144,13 @@ class ServerSettings:
     # job that ends in a send would count the relay's failure as its own.
     notification_channel: str = ""
 
+    # docs/plan-llm-budget.md — a dotted path to an `ILlmBudget`: the deploy's
+    # own code answering how much LLM budget a person has left, shown above the
+    # chat composers. Empty (default) ⇒ no budget anywhere — nothing asked,
+    # nothing drawn. The platform records no spending and sets no limit, and it
+    # never refuses a send on this: the gateway is what refuses.
+    llm_budget: str = ""
+
     # Most schedules ONE PAGE may declare in its `schedules.json`. A runaway
     # guard, not a policy limit: the default is far above any real use, so
     # hitting it means the page has a bug.

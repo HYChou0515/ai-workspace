@@ -135,6 +135,7 @@ from .kb_chat_routes import (
 )
 from .kb_routes import register_kb_routes
 from .lifecycle import build_lifespan
+from .llm_budget import ILlmBudget
 from .locator import ItemLocator
 from .marking_table import register_marking_table_route
 from .mention import MentionService
@@ -475,6 +476,10 @@ def create_app(
     # the item's shared `env_vars` cannot carry. None (default) ⇒ no such seam.
     # __main__ passes factories.get_request_env(settings.server.request_env).
     request_env: IRequestEnv | None = None,
+    # docs/plan-llm-budget.md — the deploy's "how much LLM budget is left"
+    # impl. None (default) ⇒ `GET /me/llm-budget` answers `off`, nothing drawn.
+    # __main__ passes factories.get_llm_budget(settings.server.llm_budget).
+    llm_budget: ILlmBudget | None = None,
     # A deploy's outbound notification channel (`server.notification_channel`).
     # None ⇒ notifications stay in-app, exactly as before this seam existed.
     notification_channel: INotificationChannel | None = None,
@@ -1612,6 +1617,7 @@ def create_app(
     # dashboard. Inside the perf trace (below), which stays outermost for the
     # reason it gives.
     app.state.usage_recorder = usage_recorder
+    app.state.llm_budget = llm_budget
     if usage_recorder is not None:
         # The Apps ship with the image: their slugs are known now, for good.
         from ..apps.catalog import discover_app_slugs
