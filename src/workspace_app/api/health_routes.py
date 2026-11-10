@@ -15,7 +15,7 @@ execution, no writes (plan Q4).
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any, Literal
 
 from fastapi import APIRouter, FastAPI, HTTPException
@@ -186,6 +186,7 @@ def register_replay_routes(
     load_turn: LoadTurn,
     load_doc: LoadDoc,
     ext_ai: bool = False,
+    search_targets: Sequence[Mapping[str, Any]] = (),
 ) -> None:
     def _service() -> ReplayService:
         if service is None:
@@ -215,6 +216,9 @@ def register_replay_routes(
                 in_chat=body.source == "rca",
                 # …and on a deploy with the 問外部AI card, that one (plan-ext-ai D5)
                 ext_ai=ext_ai,
+                # …and 請幫我查 lists the deploy's search targets
+                # (docs/plan-lookup-target-choice.md T3)
+                search_targets=search_targets,
             )
         except ReplayInvalidTarget as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc

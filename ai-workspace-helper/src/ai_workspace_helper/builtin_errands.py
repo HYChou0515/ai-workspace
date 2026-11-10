@@ -12,7 +12,7 @@ import contextlib
 import time
 from collections.abc import Callable
 from typing import Any
-from urllib.parse import quote, urldefrag, urlsplit
+from urllib.parse import urldefrag, urlsplit
 
 from .errands import Errand, ErrandContext, ErrandFailed, FetchedPage
 
@@ -30,10 +30,6 @@ QUIET_MS = 1_500
 LOAD_WAIT_MS = 5_000
 #: How often the page is looked at while it settles.
 _LOOK_MS = 250
-
-#: What `encodeURIComponent` leaves unescaped besides letters and digits —
-#: the card fills `{q}` with it (web/src/api/outsideLookup.ts).
-_URI_COMPONENT_SAFE = "-_.!~*'()"
 
 #: The page as the person would copy it: the body, with every link and image
 #: made absolute against the page's own address (a copy from the browser
@@ -85,22 +81,6 @@ def _blocked_by_cloudflare(page: Any) -> bool:
         return bool(page.locator(_CLOUDFLARE_BLOCK).count())
     except PlaywrightError:
         return False  # it moved on while asked: not a block page to report
-
-
-def search_url(template: str, query: str) -> str:
-    """`template` with every `{q}` filled the way the card fills it."""
-    return template.replace("{q}", quote(query, safe=_URI_COMPONENT_SAFE))
-
-
-def pick_search_target(targets: list[dict[str, str]]) -> dict[str, str]:
-    """The card's Google button, or — on a deploy that lists its own — the
-    first destination it lists."""
-    for target in targets:
-        if target.get("name") == "Google":
-            return target
-    if not targets:
-        raise ErrandFailed("this deploy lists no search destination")
-    return targets[0]
 
 
 #: Whether the page shows anything at all — text, a link, an image, or a
@@ -254,16 +234,27 @@ def fetch(ctx: ErrandContext, url: str) -> FetchedPage:
     return FetchedPage(title=title, url=where, markdown=markdown)
 
 
-def build(targets: Callable[[], list[dict[str, str]]], site: Any = None) -> dict[str, Errand]:
-    """The errands, given where the deploy's search destinations come from
-    (`GET /api/lookup-targets`, asked per search so an operator's change
-    reaches a helper that is already running) — and `ask_ext_ai` when the
-    helper was packed with the company's site file (docs/plan-ext-ai.md D7)."""
+def build(site: Any = None) -> dict[str, Errand]:
+    """The errands — and `ask_ext_ai` when the helper was packed with the
+    company's site file (docs/plan-ext-ai.md D7)."""
 
-    def search(ctx: ErrandContext, query: str) -> FetchedPage:
-        target = pick_search_target(targets())
-        ctx.where(target.get("name", ""))
-        return fetch(ctx, search_url(target["url"], query))
+    def search(ctx: ErrandContext, address: str) -> FetchedPage:
+        # docs/plan-lookup-target-choice.md §3.4: the target the person chose,
+        # filled by the backend. Its url may be any URL (T6) for a helper that
+        # knows what to do with it; this one opens web pages.
+        if not address:
+            # handed over before the backend filled targets: no target to open
+            raise ErrandFailed(
+                "這個搜尋是更新前送出的,請在卡片上再按一次 — "
+                "this search was handed over before the update; press the button again"
+            )
+        scheme = urlsplit(address).scheme
+        if scheme not in ("http", "https"):
+            raise ErrandFailed(
+                f"這個小幫手只會開網頁,不會處理 {scheme}: 開頭的搜尋目標 — "
+                f"this helper opens web pages, not {scheme}: search targets"
+            )
+        return fetch(ctx, address)
 
     def open_url(ctx: ErrandContext, url: str) -> FetchedPage:
         if urlsplit(url).scheme not in ("http", "https"):
@@ -278,4 +269,4 @@ def build(targets: Callable[[], list[dict[str, str]]], site: Any = None) -> dict
     return errands
 
 
-__all__ = ["build", "fetch", "looks_like_a_verification", "pick_search_target", "search_url"]
+__all__ = ["build", "fetch", "looks_like_a_verification"]

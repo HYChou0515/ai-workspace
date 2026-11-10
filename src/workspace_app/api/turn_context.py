@@ -25,7 +25,7 @@ into two call sites that can drift.
 from __future__ import annotations
 
 import logging
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -222,6 +222,7 @@ class TurnContextBuilder:
         tool_usage: ToolUsageRecorder | None = None,
         ext_ai: bool = False,
         schedule_authorship: ScheduleAuthorship | None = None,
+        search_targets: Sequence[Mapping[str, Any]] = (),
     ) -> None:
         # plan-tool-usage-stats §8.3: a chat turn carries the recorder from the
         # moment it is built — the send path counts an applied skill before the
@@ -229,6 +230,8 @@ class TurnContextBuilder:
         self._tool_usage = tool_usage
         # docs/plan-ext-ai.md D5: the deploy turned on the 問外部AI card.
         self._ext_ai = ext_ai
+        # docs/plan-lookup-target-choice.md T3: what the 請幫我查 card may suggest.
+        self._search_targets = [dict(t) for t in search_targets]
         self._sandbox = sandbox
         self._filestore = filestore
         self._files = files
@@ -1028,6 +1031,8 @@ class TurnContextBuilder:
             in_chat=True,
             # …and the 問外部AI card, where the deploy turned it on (plan-ext-ai D5)
             ext_ai=self._ext_ai,
+            # …and the deploy's search targets, which it lists for the AI
+            search_targets=self._search_targets,
             # Where this turn's tool calls are counted as happening
             # (plan-tool-usage-stats §3.4), and into which recorder (§8.3).
             surface="chat",

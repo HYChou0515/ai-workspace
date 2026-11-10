@@ -41,7 +41,12 @@ class BackendError(Exception):
 class Job:
     id: str
     kind: str
+    #: What the person asked: the keywords they typed, the page, the question.
     args: str
+    #: A search's target as the person chose it, and its address filled by the
+    #: backend (docs/plan-lookup-target-choice.md §3.4) — what the search opens.
+    target: str = ""
+    target_url: str = ""
 
 
 def _headers() -> dict[str, str]:
@@ -92,7 +97,13 @@ class Backend:
         data = self._call("POST", "/ai-workspace-helper/jobs/claim")
         if not data:
             return None
-        return Job(id=data["id"], kind=data["kind"], args=data["args"])
+        return Job(
+            id=data["id"],
+            kind=data["kind"],
+            args=data["args"],
+            target=data.get("target", ""),
+            target_url=data.get("target_url", ""),
+        )
 
     def result(self, job_id: str, *, title: str, url: str, markdown: str, date: str) -> None:
         self._call(
@@ -103,11 +114,6 @@ class Backend:
 
     def fail(self, job_id: str, error: str) -> None:
         self._call("POST", f"/ai-workspace-helper/jobs/{job_id}/fail", {"error": error})
-
-    def lookup_targets(self) -> list[dict[str, str]]:
-        """The card's search destinations (`server.lookup_targets`)."""
-        data = self._call("GET", "/lookup-targets")
-        return [t for t in data or [] if isinstance(t, dict)]
 
     def note(self, job_id: str, note: str) -> None:
         self._call("POST", f"/ai-workspace-helper/jobs/{job_id}/note", {"note": note})

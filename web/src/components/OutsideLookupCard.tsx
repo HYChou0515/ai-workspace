@@ -18,7 +18,16 @@
  * says they could not find it (D7). One request saves it under `lookups/`
  * (when they may add files) and sends the message that answers this call.
  *
+ * Which target a search goes to is the person's (docs/plan-lookup-target-choice.md
+ * T1): with their helper, a radio group of the deploy's targets — each with what
+ * it searches (T4), the first chosen to begin with, never the AI's (T2), whose
+ * suggestion is marked beside its option. By hand, one new-tab button per target
+ * — none for a target with `preview: false` (T5).
+ *
  * Guidance (cited in the plan):
+ * - Choosing the target is choosing one of a few: radio buttons rather than a
+ *   drop-down, one chosen by default (NN/g, "Checkboxes vs. Radio Buttons";
+ *   "Radio Buttons: Select One by Default or Leave All Unselected?").
  * - Opening a new tab is announced before the click, in the button's name and a
  *   line of text, and carries the ↗ cue (NN/g, "Opening Links in New Browser
  *   Windows and Tabs") — the chat is the person's launching point.
@@ -49,7 +58,6 @@ import {
   type OutsideAnswer,
   type OutsideLookupClient,
   outsideLookupApi,
-  pickSearchTarget,
   searchUrl,
 } from "../api/outsideLookup";
 import { qk } from "../api/queryKeys";
@@ -126,6 +134,9 @@ export function OutsideLookupCard({
   const [sourceUrl, setSourceUrl] = useState("");
   const [files, setFiles] = useState<File[]>([]);
   const [target, setTarget] = useState("");
+  // docs/plan-lookup-target-choice.md T1/T2: the target the person chose for
+  // their helper — none picked yet reads as the deploy's first.
+  const [chosen, setChosen] = useState<string | null>(null);
   // A copy confirms only once the clipboard write resolved, reverts after a
   // moment, and says so when it failed (Primer's copy button).
   const [copied, setCopied] = useState<"idle" | "copied" | "failed">("idle");
@@ -218,7 +229,7 @@ export function OutsideLookupCard({
   });
   const hand = useMutation({
     mutationFn: (auto: boolean) =>
-      client.handOver!({ ...cardRef!, query: sent, auto }),
+      client.handOver!({ ...cardRef!, query: sent, auto, target: isSearch ? searchName : undefined }),
     onSuccess: (j) => {
       setNeedsNod(false);
       qc.setQueryData(jobKey, j);
@@ -280,7 +291,16 @@ export function OutsideLookupCard({
     return () => clearInterval(tick);
   }, [working]);
   const waited = since === null ? 0 : Math.max(0, Math.round((now - since) / 1000));
-  const searchName = pickSearchTarget(targets.data ?? [])?.name;
+  const targetList = targets.data ?? [];
+  // T2: what the person chose, or the first — the radio group's default
+  const searchName = chosen ?? targetList[0]?.name;
+  // T8: the AI's suggestion counts only for a target this deploy lists
+  const suggested =
+    "query" in lookup && targetList.some((tg) => tg.name === lookup.target)
+      ? lookup.target
+      : undefined;
+  const aiMark = (name: string) =>
+    name === suggested ? <span className="outside-lookup-badge">{t("lookup.aiSuggests")}</span> : null;
 
   const head = (
     <>
@@ -371,6 +391,37 @@ export function OutsideLookupCard({
               <p className="outside-lookup-error" role="alert">
                 {handError}
               </p>
+            )}
+            {isSearch && targetList.length > 0 && (
+              <div
+                className="outside-lookup-targets"
+                role="radiogroup"
+                aria-label={t("lookup.targetLegend")}
+              >
+                <span className="outside-lookup-label" aria-hidden="true">
+                  {t("lookup.targetLegend")}
+                </span>
+                {targetList.map((tg, at) => (
+                  <div key={tg.name} className="outside-lookup-target">
+                    <label>
+                      <input
+                        type="radio"
+                        name={`${ids}-target`}
+                        checked={tg.name === searchName}
+                        aria-describedby={tg.description ? `${ids}-t-${at}` : undefined}
+                        onChange={() => setChosen(tg.name)}
+                      />
+                      {tg.name}
+                      {aiMark(tg.name)}
+                    </label>
+                    {tg.description && (
+                      <p id={`${ids}-t-${at}`} className="outside-lookup-target-desc">
+                        {tg.description}
+                      </p>
+                    )}
+                  </div>
+                ))}
+              </div>
             )}
             {(isSearch ||
               isQuestion ||
@@ -503,28 +554,41 @@ export function OutsideLookupCard({
           )}
           {manual && (
           <>
-          <div className="outside-lookup-actions">
-            {(targets.data ?? []).map((tg) => (
-              <button
-                key={tg.name}
-                type="button"
-                className="btn"
-                data-size="sm"
-                data-variant="secondary"
-                aria-label={t("lookup.target", {
-                  name: t("lookup.searchWith", { name: tg.name }),
-                })}
-                onClick={() =>
-                  ifTyped(() => {
-                    setTarget(tg.name);
-                    window.open(searchUrl(tg, query.trim()), "_blank", NEW_TAB);
-                  })
-                }
-              >
-                {t("lookup.searchWith", { name: tg.name })} <span aria-hidden="true">↗</span>
-              </button>
-            ))}
-          </div>
+          <ul className="outside-lookup-targets">
+            {targetList.map((tg, at) =>
+              // T5: `preview: false` — the card draws no new-tab button for it
+              tg.preview === false ? null : (
+                <li key={tg.name} className="outside-lookup-target">
+                  <div className="outside-lookup-actions">
+                    <button
+                      type="button"
+                      className="btn"
+                      data-size="sm"
+                      data-variant="secondary"
+                      aria-label={t("lookup.target", {
+                        name: t("lookup.searchWith", { name: tg.name }),
+                      })}
+                      aria-describedby={tg.description ? `${ids}-m-${at}` : undefined}
+                      onClick={() =>
+                        ifTyped(() => {
+                          setTarget(tg.name);
+                          window.open(searchUrl(tg, query.trim()), "_blank", NEW_TAB);
+                        })
+                      }
+                    >
+                      {t("lookup.searchWith", { name: tg.name })} <span aria-hidden="true">↗</span>
+                    </button>
+                    {aiMark(tg.name)}
+                  </div>
+                  {tg.description && (
+                    <p id={`${ids}-m-${at}`} className="outside-lookup-target-desc">
+                      {tg.description}
+                    </p>
+                  )}
+                </li>
+              ),
+            )}
+          </ul>
           <p className="outside-lookup-hint">{t("lookup.newTab")}</p>
           </>
           )}

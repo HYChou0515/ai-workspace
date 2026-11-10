@@ -139,11 +139,14 @@ class Worker:
             self._record(job, "failed", reason)
             return
         logger.info("%s %r started (job %s)", job.kind, job.args, job.id[:8])
-        self.detail, self.kind, self.site = job.args, job.kind, ""
+        # a search names the target the person chose (docs/plan-lookup-target-choice.md
+        # §3.4) and opens it as the backend filled it; anything else gets what was asked
+        self.detail, self.kind, self.site = job.args, job.kind, job.target
         self._changed()
+        given = job.target_url if job.kind == "search" else job.args
         try:
             page = self._browser.run(
-                errand, job.args, lambda text: self._backend.note(job.id, text), self._at
+                errand, given, lambda text: self._backend.note(job.id, text), self._at
             )
         except (NeedsLogin, UpdateRequired, OSError, BackendError) as exc:
             self._cut_short(job, exc)

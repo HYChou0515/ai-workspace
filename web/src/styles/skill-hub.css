@@ -1355,6 +1355,46 @@ a.skills-row-name {
   color: var(--err);
 }
 
+/* docs/plan-lookup-target-choice.md: the search targets — a radio group with
+   the helper, a list of buttons by hand — each with what it searches. */
+.outside-lookup-targets {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-8);
+  min-width: 0;
+}
+
+.outside-lookup-target {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  min-width: 0;
+}
+
+.outside-lookup-target label {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+}
+
+.outside-lookup-target-desc {
+  margin: 0;
+  color: var(--text-paper-d);
+}
+
+/* The AI's suggestion, beside its target: marked, never chosen for the person. */
+.outside-lookup-badge {
+  padding: 0 var(--space-4);
+  border: 1px solid var(--paper-3);
+  border-radius: var(--radius-card);
+  color: var(--text-paper-d);
+  font-size: var(--text-small);
+  white-space: nowrap;
+}
+
 .outside-lookup-note {
   margin: 0;
   color: var(--text-paper-d);

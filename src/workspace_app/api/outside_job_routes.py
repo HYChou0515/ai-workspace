@@ -12,7 +12,8 @@ Two callers:
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
+from typing import Any
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request, Response
 from pydantic import BaseModel
@@ -20,7 +21,14 @@ from pydantic import BaseModel
 from ..resources.conversation import Conversation
 from .ai_workspace_helper_release import read_release
 from .locator import ItemLocator
-from .outside_jobs import CLAIM_TIMEOUT_MS, MIN_PROTOCOL, OutsideJob, OutsideJobStore, job_id
+from .outside_jobs import (
+    CLAIM_TIMEOUT_MS,
+    MIN_PROTOCOL,
+    OutsideJob,
+    OutsideJobStore,
+    fill_target,
+    job_id,
+)
 from .outside_lookup_routes import AnswerForm, Deliver, OutsideAnswerOut, _open_card
 
 
@@ -34,6 +42,10 @@ class HandOverIn(BaseModel):
     #: The card asking on its own, with no nod (D12): allowed only for a URL
     #: an earlier lookup in this chat brought back, and never restarts a job.
     auto: bool = False
+    #: The search target the person chose (docs/plan-lookup-target-choice.md
+    #: T1): one the deploy lists. "" — a card from before that — is the first,
+    #: what the picker shows chosen (T2). Ignored for anything but a search.
+    target: str = ""
 
 
 class JobOut(BaseModel):
@@ -48,6 +60,10 @@ class JobOut(BaseModel):
     auto: bool = False
     #: Where the page was saved, once done.
     saved: str = ""
+    #: A search's target and its `url` filled with what the person typed — what
+    #: the helper interprets (docs/plan-lookup-target-choice.md §3.4).
+    target: str = ""
+    target_url: str = ""
 
 
 class HeartbeatIn(BaseModel):
@@ -125,6 +141,8 @@ def _out(jid: str, job: OutsideJob, *, now: int | None = None) -> JobOut:
         note=job.note,
         auto=job.auto,
         saved=job.saved,
+        target=job.target,
+        target_url=job.target_url,
     )
 
 
@@ -137,7 +155,12 @@ def register_outside_job_routes(
     deliver: Deliver,
     release_dir: str | None = None,
     max_file_size: int = 2 * 1024 * 1024 * 1024,
+    search_targets: Sequence[Mapping[str, Any]] = (),
 ) -> None:
+    # docs/plan-lookup-target-choice.md: the deploy's search targets, by name
+    targets = {t["name"]: t for t in search_targets}
+    first_target = next(iter(targets), "")
+
     def current_helper(request: Request) -> None:
         """§3.7.3: a helper below the minimum protocol (ours, in code) or the
         minimum version (the operator's, in the published manifest) is told to
@@ -218,6 +241,17 @@ def register_outside_job_routes(
                 status_code=422,
                 detail="先在搜尋框輸入或貼上關鍵字 — type the search keywords first",
             )
+        target = target_url = ""
+        if kind == "search":
+            # docs/plan-lookup-target-choice.md T1: the target the person chose,
+            # filled here — the helper interprets the string and picks nothing
+            target = body.target.strip() or first_target
+            if target not in targets:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"沒有這個搜尋目標 — no search target named {target!r}",
+                )
+            target_url = fill_target(targets[target]["url"], args)
         if kind == "ask_ext_ai":
             if not args:
                 raise HTTPException(
@@ -242,6 +276,8 @@ def register_outside_job_routes(
             state="queued",
             created_ms=store.now(),
             auto=body.auto,
+            target=target,
+            target_url=target_url,
         )
         jid = await store.hand_over(job)
         return _out(jid, job)
@@ -334,7 +370,8 @@ def register_outside_job_routes(
             job.args if job.kind in ("search", "ask_ext_ai") else "",
             body.url,
             "",
-            "",
+            # the target the person chose (T10) — recorded as a pasted answer's is
+            job.target,
             body.date,
             [],
             by_helper=True,

@@ -24,6 +24,7 @@ the dict, merges with the named preset, and constructs the typed
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -39,6 +40,24 @@ DEFAULT_LOOKUP_TARGETS: list[dict[str, str]] = [
 
 def default_lookup_targets() -> list[dict[str, str]]:
     return [dict(t) for t in DEFAULT_LOOKUP_TARGETS]
+
+
+def whole_lookup_targets(targets: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """Each target with what a deploy may leave out filled in
+    (docs/plan-lookup-target-choice.md T3/T5): no `description`, and the card
+    draws its own new-tab button (`preview`). Filled once, where the app takes
+    the list, so no reader of it guesses a default. The name as the loader
+    tells names apart — its spaces stripped — so the card, the hand-over and
+    the AI's suggestion all name a target the same way."""
+    return [
+        {
+            "name": t["name"].strip(),
+            "url": t["url"],
+            "description": t.get("description", ""),
+            "preview": t.get("preview", True),
+        }
+        for t in targets
+    ]
 
 
 @dataclass(frozen=True)
@@ -181,13 +200,15 @@ class ServerSettings:
     # field it is filling.
     env_providers: list[str] = field(default_factory=list)
 
-    # docs/plan-outside-lookup.md D3 — where the "請幫我查" card sends a search.
-    # The backend is air-gapped; the person's browser is not, so each entry is a
-    # button that opens `url` in a new tab with the query in place of `{q}`.
-    # Unset ⇒ Google alone. Set ⇒ this list REPLACES that default (list it
-    # yourself to keep it). Every entry is `{name, url}`, `url` http(s) with a
-    # `{q}`, names distinct — anything else refuses to boot, naming the entry.
-    lookup_targets: list[dict[str, str]] = field(default_factory=default_lookup_targets)
+    # docs/plan-outside-lookup.md D3, docs/plan-lookup-target-choice.md — the
+    # "請幫我查" card's search targets. The person picks one: their helper is
+    # handed its `url` with the query in place of `{q}`, or the card opens it in
+    # a new tab. Unset ⇒ Google alone. Set ⇒ this list REPLACES that default
+    # (list it yourself to keep it). Every entry has a `name` and a `url` — any
+    # URL with a `{q}`, never javascript:/data:/vbscript:/file: — and may have a
+    # `description` and `preview: false`; names distinct — anything else refuses
+    # to boot, naming the entry. `whole_lookup_targets` fills in the rest.
+    lookup_targets: list[dict[str, Any]] = field(default_factory=default_lookup_targets)
 
     # docs/plan-outside-helper.md §3.7.2 — the folder (a mounted volume) the
     # operator drops a packed helper into: `ai-workspace-helper.json` and

@@ -264,6 +264,9 @@ def test_a_failure_reaches_the_card_with_its_reason():
         "note": "",
         "auto": False,
         "saved": "",
+        # the search's target — the deploy's only one here (plan-lookup-target-choice)
+        "target": "Google",
+        "target_url": "https://www.google.com/search?q=pandas%202.0%20%E6%96%B0%E5%8A%9F%E8%83%BD",
     }
 
 

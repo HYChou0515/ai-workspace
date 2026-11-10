@@ -78,7 +78,10 @@ def test_the_helper_takes_the_job_fetches_and_the_card_is_answered():
 
     worker.tick()
 
-    assert browser.asked == [("search", "pandas 2.0 新功能")]
+    # the deploy's only target, filled by the backend (plan-lookup-target-choice §3.4)
+    assert browser.asked == [
+        ("search", "https://www.google.com/search?q=pandas%202.0%20%E6%96%B0%E5%8A%9F%E8%83%BD")
+    ]
     [answer] = _answers(spec)
     assert "lookups/2031-01-02-" in answer.content
     assert worker.status == "connected"
@@ -307,13 +310,26 @@ def test_a_login_that_expires_mid_errand_does_not_fail_the_job():
     assert client.get(f"/a/rca/items/{iid}/outside-jobs/c1").json()["state"] == "claimed"
 
 
-# A search goes where the card's own buttons go — the deploy's
-# `server.lookup_targets`, read from the backend, not a list of the helper's.
-def test_the_helper_searches_where_the_deploy_says():
-    targets = [{"name": "Corp search", "url": "https://search.corp/?q={q}"}]
-    client, _spec, _iid = _asked(lookup_targets=targets)
+# docs/plan-lookup-target-choice.md §3.4: a search goes to the target the
+# PERSON chose on the card, filled by the backend — the helper opens that
+# string and picks no target of its own; the window names the chosen one.
+def test_the_helper_searches_the_target_the_person_chose():
+    targets = [
+        {"name": "Google", "url": "https://www.google.com/search?q={q}"},
+        {"name": "Corp search", "url": "https://search.corp/?q={q}&all=1"},
+    ]
+    client, _spec, iid = _asked(lookup_targets=targets)
+    browser = _Browser([])
+    worker = Worker(_backend(client), browser, errands=_errands())
+    sites: list[str] = []
+    worker.on_change = lambda _status, _detail, _kind, site: sites.append(site)
+    worker.tick()  # checks in: the card may now hand over
+    _hand(client, iid, query="a b", target="Corp search")
 
-    assert _backend(client).lookup_targets() == targets
+    worker.tick()
+
+    assert browser.asked == [("search", "https://search.corp/?q=a%20b&all=1")]
+    assert "Corp search" in sites
 
 
 # The window's 查詢紀錄 (D13): each job the helper ran leaves one line — what,

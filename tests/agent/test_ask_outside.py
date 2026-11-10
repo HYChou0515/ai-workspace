@@ -383,3 +383,85 @@ async def test_the_tool_says_to_name_a_link_by_file_and_number() -> None:
     assert "`file`" in doc and "`link`" in doc and "- [n] <https://…>" in doc
     # …and to open a search's results before answering from them
     assert "results page" in doc and "before answering" in doc
+
+
+# ── which target the AI suggests (docs/plan-lookup-target-choice.md) ────────
+#
+# The person picks the target; the AI only suggests one (T1), from what the
+# deploy lists (T8), knowing what each one searches (T3).
+
+TARGETS = [
+    {
+        "name": "Google",
+        "url": "https://www.google.com/search?q={q}",
+        "description": "",
+        "preview": True,
+    },
+    {
+        "name": "Parts",
+        "url": "partsdb://lookup?pn={q}",
+        "description": "The parts database; a full part number only, e.g. A123-4567.",
+        "preview": False,
+    },
+]
+
+
+async def _call_with_targets(**args) -> str:  # noqa: ANN003
+    from workspace_app.agent.outside_lookup import ask_outside_impl
+
+    ctx = AgentToolContext(search_targets=TARGETS)
+    return await ask_outside_impl(RunContextWrapper(ctx), **args)
+
+
+async def test_a_search_card_carries_the_target_the_ai_suggests() -> None:
+    reply = await _call_with_targets(why="w", query="A123-4567", target="Parts")
+
+    assert _card(reply) == {"why": "w", "query": "A123-4567", "target": "Parts"}
+    assert declared_lookup(reply) == _card(reply)
+
+
+async def test_a_target_the_deploy_does_not_list_is_no_suggestion() -> None:
+    """T8: the card never offers a target that is not there — and the call is
+    not refused for it: the search is still the search."""
+    reply = await _call_with_targets(why="w", query="q", target="Bing")
+
+    assert _card(reply) == {"why": "w", "query": "q"}
+
+
+async def test_a_page_to_open_takes_no_target() -> None:
+    reply = await _call_with_targets(why="w", url="https://example.com/a", target="Parts")
+
+    assert _card(reply) == {"why": "w", "url": "https://example.com/a"}
+
+
+def test_the_tool_lists_the_deploys_targets_and_how_each_searches() -> None:
+    """T3: the AI chooses from what it is told — each target's name and its
+    description, the same text the person reads."""
+    from workspace_app.api.litellm_runner import _agent_for
+
+    agent = _agent_for(
+        AgentConfig(name="a", model="ollama_chat/x", allowed_tools=["ask_user"]),
+        packages=[],
+        in_chat=True,
+        search_targets=TARGETS,
+    )
+    (tool,) = [t for t in agent.tools if t.name == "ask_outside"]
+    desc = getattr(tool, "description", "")
+    assert "- Google\n" in desc
+    assert "- Parts: The parts database; a full part number only, e.g. A123-4567." in desc
+    assert "`target`" in desc
+
+
+def test_a_card_names_its_target_only_beside_a_search() -> None:
+    m = OUTSIDE_LOOKUP_MARKER
+    assert declared_lookup(f'x{m}{{"why":"w","query":"q","target":"G"}}') == {
+        "why": "w",
+        "query": "q",
+        "target": "G",
+    }
+    for tail in (
+        '{"why":"w","url":"https://a","target":"G"}',
+        '{"why":"w","query":"q","target":""}',
+        '{"why":"w","query":"q","target":3}',
+    ):
+        assert declared_lookup(f"x{m}{tail}") is None, tail
