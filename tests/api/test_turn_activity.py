@@ -80,6 +80,53 @@ async def test_two_chats_do_not_answer_for_each_other():
     assert await store.alive("chat-2", stale_after_ms=30_000) is True
 
 
+def _flaky_reads(store: SpecstarTurnActivityStore, monkeypatch, misses: int) -> list[int]:
+    """The disk backend rewrites a draft in place: a read that lands mid-rewrite
+    finds no data file (`FileNotFoundError`). The first `misses` reads do."""
+    from workspace_app.api.turn_activity import _TurnActivity
+
+    rm = store._spec.get_resource_manager(_TurnActivity)  # noqa: SLF001
+    real = rm.get
+    calls: list[int] = []
+
+    def get(key, *a, **kw):  # noqa: ANN001, ANN002, ANN003, ANN202
+        calls.append(1)
+        if len(calls) <= misses:
+            raise FileNotFoundError(f"…/{key}/data")
+        return real(key, *a, **kw)
+
+    monkeypatch.setattr(rm, "get", get)
+    return calls
+
+
+async def test_a_read_caught_mid_rewrite_is_read_again(monkeypatch):
+    """`test_two_pods_on_one_store_a_stalled_owner_is_taken_over…` failed about a
+    third of the time: the owner's beat rewrote the row while the peer read it,
+    the read raised, and that round judged nothing — no takeover. The rewrite
+    lasts an instant, so the next read sees the row."""
+    store, _clock = _store()
+    await store.bump("chat-1")
+    calls = _flaky_reads(store, monkeypatch, misses=1)
+
+    assert await store.alive("chat-1", stale_after_ms=30_000) is True
+    assert len(calls) == 2
+
+
+async def test_a_row_that_stays_unreadable_is_still_an_error(monkeypatch):
+    """Not 'alive forever': a data file that stays missing is not a rewrite in
+    progress. After a few reads it raises, as before, and the caller's
+    'could not be judged' handles it."""
+    import pytest
+
+    store, _clock = _store()
+    await store.bump("chat-1")
+    calls = _flaky_reads(store, monkeypatch, misses=100)
+
+    with pytest.raises(FileNotFoundError):
+        await store.alive("chat-1", stale_after_ms=30_000)
+    assert 1 < len(calls) <= 5
+
+
 async def test_a_beat_brings_back_a_row_someone_deleted():
     # Nothing in the app deletes this row — the turn's liveness expires on its
     # own — but the model carries auto-generated CRUD, so it CAN be deleted from
