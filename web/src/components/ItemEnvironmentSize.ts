@@ -106,14 +106,17 @@ export function memoryFault(text: string, max: number): SizeFault {
   return bytes <= max ? null : { type: "over", detail: toSizeString(max) };
 }
 
-/** `memoryFault`, plus the disk's own floor (plan-item-disk-size D1): not
- *  below what the workspace already holds — the server refuses that, since it
- *  would lock the workspace the moment it was saved. `used` is the RECORD's. */
-export function diskFault(text: string, max: number, used: number): SizeFault {
+/** `memoryFault`, plus the disk's own floor (plan-item-disk-size D1): what
+ *  will APPLY — the typed size held to `ceiling`, the server's own clamp — must
+ *  be MORE than what the workspace already holds. Equal is refused too: a
+ *  workspace at its limit is full, and the turn gate asks room for one more
+ *  byte (review round 1). `used` and `ceiling` are the RECORD's. */
+export function diskFault(text: string, max: number, used: number, ceiling: number | null = null): SizeFault {
   const fault = memoryFault(text, max);
   if (fault !== null || text.trim() === "") return fault;
   const bytes = parseSize(normaliseMemory(text))!;
-  return bytes >= used ? null : { type: "under", detail: formatBytes(used) };
+  const applies = ceiling ? Math.min(bytes, ceiling) : bytes;
+  return applies > used ? null : { type: "under", detail: formatBytes(used) };
 }
 
 /** The server's spelling back to bytes — for writing a just-sent size into

@@ -219,8 +219,6 @@ async def make_copy(
         # may not state an environment size (`perm.checker._check_create`).
         "sandbox_cpu_cores": None,
         "sandbox_memory_bytes": None,
-        # A copy starts at its App's disk (plan-item-disk-size): the size the
-        # publisher picked is for cpu and memory only (C10).
         "sandbox_disk_bytes": None,
         # Set in the LAST write, once the files are in: until then the item
         # is no copy of anything — `copies_of` cannot hand it out half made.
@@ -260,6 +258,13 @@ async def make_copy(
                     published_from=publication_id(row),
                     sandbox_cpu_cores=row.cpu_cores,
                     sandbox_memory_bytes=row.memory_bytes,
+                    # The SOURCE's disk (plan-item-disk-size, review round 1):
+                    # the copy's files are the source's, and a source raised
+                    # above its App's size and filled would otherwise make
+                    # every copy full at birth — every turn refused. A ceiling,
+                    # not a reservation: it costs the opener nothing until the
+                    # copy actually grows.
+                    sandbox_disk_bytes=source.sandbox_disk_bytes,
                 ),
             )
         except BaseException as exc:

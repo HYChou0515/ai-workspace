@@ -1333,6 +1333,11 @@ export const messages = {
     "zh-TW": "關閉後即可調整 CPU 和記憶體（硬碟現在就能改）。關閉會結束正在執行的程序，檔案不受影響。",
     en: "Close it to change CPU and memory (the disk can change now). Running processes end; your files are untouched.",
   },
+  // From an API pod that reports no disk: nothing to promise about it.
+  "itemenv.close.hint.nodisk": {
+    "zh-TW": "關閉後即可調整大小。關閉會結束正在執行的程序，檔案不受影響。",
+    en: "Close it to change the size. Running processes end; your files are untouched.",
+  },
   "itemenv.size.heading": { "zh-TW": "這個 workspace 的沙盒大小", en: "This workspace's sandbox size" },
   // The label an UNSET value carries. Without it an empty field renders as a
   // number with no provenance, and the person cannot tell what they chose from
@@ -1403,8 +1408,8 @@ export const messages = {
   },
   "itemenv.disk.ownerLeft": { "zh-TW": "你的個人額度還剩 {left}", en: "{left} left of your own quota" },
   "itemenv.field.disk.under": {
-    "zh-TW": "不能小於已用的 {detail}；要更小，先刪檔案。",
-    en: "Not below the {detail} already used — delete files first.",
+    "zh-TW": "要大於已用的 {detail}；要更小，先刪檔案。",
+    en: "Must be more than the {detail} already used — delete files first.",
   },
   "itemenv.readonly": {
     "zh-TW": "只有能變更這個 workspace 存取權的人可以調整大小 —— 它花的是 owner 的額度。",

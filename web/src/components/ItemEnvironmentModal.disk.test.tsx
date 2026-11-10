@@ -198,6 +198,25 @@ describe("ItemEnvironmentModal — disk", () => {
     expect(screen.getByTestId("itemenv-save")).toBeDisabled();
   });
 
+  it("refuses exactly what is used too — a workspace at its limit is full", async () => {
+    vi.stubGlobal("fetch", route({ ...ENV, disk_used_bytes: 1 * GB }));
+    open();
+    fireEvent.change(await screen.findByTestId("disk-input"), { target: { value: "1G" } });
+
+    expect(screen.getByTestId("disk-hint")).toHaveTextContent(word("itemenv.field.disk.under", { detail: "1.0 GB" }));
+    expect(screen.getByTestId("itemenv-save")).toBeDisabled();
+  });
+
+  it("refuses a size whose APPLIED value — held to the ceiling — would not be above what is used", async () => {
+    // 25 GB used, ceiling 20 GB: 30G is above `used` but applies as 20 GB.
+    vi.stubGlobal("fetch", route({ ...ENV, disk_used_bytes: 25 * GB }));
+    open();
+    fireEvent.change(await screen.findByTestId("disk-input"), { target: { value: "30G" } });
+
+    expect(screen.getByTestId("disk-hint")).toBeTruthy();
+    expect(screen.getByTestId("itemenv-save")).toBeDisabled();
+  });
+
   it("refuses a spelling the server cannot read", async () => {
     vi.stubGlobal("fetch", route(ENV));
     open();
@@ -242,6 +261,120 @@ describe("ItemEnvironmentModal — disk", () => {
     expect(await screen.findByTestId("disk-clamped")).toHaveTextContent(
       word("itemenv.memory.clamped.app", { stated: "50.0 GB", effective: "20.0 GB" }),
     );
+  });
+
+  it("a disk-only edit makes leaving ask once (#779)", async () => {
+    vi.stubGlobal("fetch", route(ENV));
+    const onClose = vi.fn();
+    renderWithQuery(<ItemEnvironmentModal slug="rca" itemId="i-1" canEdit onClose={onClose} />);
+    fireEvent.change(await screen.findByTestId("disk-input"), { target: { value: "5G" } });
+
+    fireEvent.click(screen.getByTestId("itemenv-cancel"));
+
+    expect(await screen.findByTestId("dialog-action-keep")).toBeTruthy();
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("an untouched disk field leaves without asking (#779)", async () => {
+    vi.stubGlobal("fetch", route(ENV));
+    const onClose = vi.fn();
+    renderWithQuery(<ItemEnvironmentModal slug="rca" itemId="i-1" canEdit onClose={onClose} />);
+    await screen.findByTestId("disk-input");
+
+    fireEvent.click(screen.getByTestId("itemenv-cancel"));
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(screen.queryByTestId("dialog-action-keep")).toBeNull();
+  });
+
+  it("holds the disk field still while a save is out", async () => {
+    let release: () => void = () => {};
+    const held = new Promise<void>((r) => (release = r));
+    const f = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (init?.method === "PUT") {
+        await held;
+        return json({});
+      }
+      if (url.includes("/environment")) return json(ENV);
+      if (url.includes("/me/resources")) return json(CAPPED);
+      return json({});
+    });
+    vi.stubGlobal("fetch", f);
+    open();
+    const disk = await screen.findByTestId("disk-input");
+    fireEvent.change(disk, { target: { value: "5G" } });
+
+    fireEvent.click(screen.getByTestId("itemenv-save"));
+
+    await waitFor(() => expect(screen.getByTestId("disk-input")).toBeDisabled());
+    release();
+  });
+
+  it("when the re-read after a save fails, the field shows the disk that was sent", async () => {
+    let puts = 0;
+    const f = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (init?.method === "PUT") {
+        puts += 1;
+        return json({});
+      }
+      if (url.includes("/environment")) return puts > 0 ? new Response("nope", { status: 500 }) : json(ENV);
+      if (url.includes("/me/resources")) return json(CAPPED);
+      return json({});
+    });
+    vi.stubGlobal("fetch", f);
+    open();
+    fireEvent.change(await screen.findByTestId("disk-input"), { target: { value: "5G" } });
+
+    fireEvent.click(screen.getByTestId("itemenv-save"));
+
+    await screen.findByTestId("reload-failed");
+    expect(screen.getByTestId("disk-input")).toHaveValue("5G");
+  });
+
+  it("when one half of a Save is refused, the other half's stored values are re-read, not shown as unsaved", async () => {
+    // cpu/memory went through, the disk was refused (the floor moved): the
+    // record is read again so the panel shows what IS stored.
+    let envReads = 0;
+    const f = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (init?.method === "PUT")
+        return url.endsWith("/disk") ? new Response(JSON.stringify({ detail: "floor" }), { status: 422 }) : json({});
+      if (url.includes("/environment")) {
+        envReads += 1;
+        return json(envReads > 1 ? { ...ENV, stated_cpu_cores: 3 } : ENV);
+      }
+      if (url.includes("/me/resources")) return json(CAPPED);
+      return json({});
+    });
+    vi.stubGlobal("fetch", f);
+    open();
+    fireEvent.change(await screen.findByTestId("cpu-input"), { target: { value: "3" } });
+    fireEvent.change(screen.getByTestId("disk-input"), { target: { value: "5G" } });
+
+    fireEvent.click(screen.getByTestId("itemenv-save"));
+
+    await screen.findByTestId("save-failed");
+    await waitFor(() => expect(screen.getByTestId("cpu-origin")).toHaveTextContent(word("itemenv.size.stated")));
+  });
+
+  it("with no disk field, the running hint does not promise one", async () => {
+    const { stated_disk_bytes, effective_disk_bytes, disk_used_bytes, disk_ceiling, owner_disk_left, ...old } =
+      ENV;
+    vi.stubGlobal("fetch", route({ ...old, running: true }));
+    open();
+
+    await screen.findByTestId("cpu-input");
+    expect(screen.getByText(word("itemenv.close.hint.nodisk"))).toBeTruthy();
+  });
+
+  it("with no budget, a viewer who may not change it is told why the disk is grey", async () => {
+    vi.stubGlobal("fetch", route(ENV, UNCAPPED));
+    open(false);
+
+    await screen.findByTestId("disk-input");
+    expect(screen.getByText(word("itemenv.readonly"))).toBeTruthy();
   });
 
   it("is read-only for someone who may look but not change it", async () => {

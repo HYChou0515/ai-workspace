@@ -183,10 +183,10 @@ def test_the_copy_takes_the_publishers_sandbox_size():
     assert (copy.sandbox_cpu_cores, copy.sandbox_memory_bytes) == (2.0, 2 * 1024**3)
 
 
-def test_the_copy_starts_at_its_apps_disk_not_the_sources():
-    """docs/plan-item-disk-size.md: the publisher's size is for cpu and memory
-    (C10). The source's own disk setting — a privileged field — is not carried
-    into a copy someone else owns."""
+def test_the_copy_takes_the_sources_disk():
+    """Review round 1: the copy's files are the source's. A source raised above
+    its App's disk and filled would make every copy full at birth — every turn
+    refused — if the copy fell back to the App's size."""
     holder = {"id": "bob"}
     client, spec, _store = _app(holder)
     src = _source(spec)
@@ -208,7 +208,7 @@ def test_the_copy_starts_at_its_apps_disk_not_the_sources():
 
     copy = _item(spec, _open(client, src).json()["item_id"])
 
-    assert copy.sandbox_disk_bytes is None
+    assert copy.sandbox_disk_bytes == 5 * 1024**3
 
 
 def test_the_copy_is_charged_to_the_opener():

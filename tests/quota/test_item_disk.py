@@ -83,12 +83,58 @@ def test_below_what_is_already_used_is_refused():
         assert client.get(f"/a/rca/items/{item}/environment").json()["stated_disk_bytes"] is None
 
 
-def test_exactly_what_is_used_is_allowed():
+def test_exactly_what_is_used_is_refused_too():
+    """Review round 1: a workspace AT its limit is full — the turn gate asks for
+    room for one more byte — so equal locks it as surely as below."""
     with _app(PerUserResources(), app_resources={"rca": SMALL}) as (client, spec, _sb):
         item = _mk(spec, "alice")
         _write(client, item, 80)
 
-        assert _set(client, item, 80).status_code == 200
+        assert _set(client, item, 80).status_code == 422
+        assert _set(client, item, 81).status_code == 200
+
+
+def test_the_floor_is_checked_against_what_will_apply_not_what_was_typed():
+    """Review round 1: a typed size is held to the ceiling on the way out. With
+    more already used than the ceiling, a size above `used` still APPLIES as the
+    ceiling — below `used` — and would lock the workspace."""
+    unlimited_app = ResourceLimits(cpu_cores=None, memory_bytes=None, disk_bytes=0, disk_max=1000)
+    with _app(PerUserResources(), app_resources={"rca": unlimited_app}) as (client, spec, _sb):
+        item = _mk(spec, "alice")
+        assert _write(client, item, 1500).status_code == 204
+
+        assert _set(client, item, 5000).status_code == 422
+        assert _write(client, item, 10, name="g.bin").status_code == 204, "still unlimited"
+
+
+def test_a_body_without_the_field_is_refused_rather_than_clearing_it():
+    with _app(PerUserResources(), app_resources={"rca": SMALL}) as (client, spec, _sb):
+        item = _mk(spec, "alice")
+        _set(client, item, 500)
+
+        assert client.put(f"/a/rca/items/{item}/disk", json={}).status_code == 422
+        env = client.get(f"/a/rca/items/{item}/environment").json()
+        assert env["stated_disk_bytes"] == 500
+
+
+def test_the_environment_still_opens_when_the_workspace_cannot_be_measured(monkeypatch):
+    """Review round 1: measuring is extra — a busy or unreachable sandbox must
+    not take the cpu/memory half and Close sandbox down with it. The disk half
+    is left out (None), and the panel then draws no disk field."""
+    from workspace_app.files.facade import WorkspaceFiles
+
+    async def busy(*_a, **_k):  # noqa: ANN002, ANN003, ANN202
+        raise RuntimeError("sandbox busy")
+
+    # Before the app is built: it holds the bound method.
+    monkeypatch.setattr(WorkspaceFiles, "workspace_usage", busy)
+    with _app(PerUserResources(), app_resources={"rca": SMALL}) as (client, spec, _sb):
+        item = _mk(spec, "alice")
+
+        r = client.get(f"/a/rca/items/{item}/environment")
+
+        assert r.status_code == 200, r.text
+        assert r.json()["disk_used_bytes"] is None
 
 
 def test_a_nonsense_size_is_refused():

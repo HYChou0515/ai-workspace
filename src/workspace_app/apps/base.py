@@ -238,7 +238,8 @@ class WorkItemBase(Struct):
     Unlike cpu and memory it is NOT the sandbox's: every write reads it
     (``WorkspaceFiles._ensure_headroom``), so a change applies to the next write
     and may be made while the environment runs (D5). Its route refuses a value
-    below what the workspace already holds (D1) — that would lock the workspace
+    not ABOVE what the workspace already holds, once held to the ceiling (D1) —
+    a workspace at its limit is full, so that would lock the workspace
     the moment it was saved. Privileged like the two above
     (``perm.checker.ESCALATED_FIELDS``, ``change_permission``)."""
 

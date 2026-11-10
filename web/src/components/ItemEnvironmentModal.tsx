@@ -153,7 +153,7 @@ export function ItemEnvironmentModal({
           cpu: cpuFault(current.cpu, env.data.maxCpuCores),
           memory: memoryFault(current.memory, env.data.maxMemoryBytes),
           // The same hard ceiling as memory, plus the floor D1 adds.
-          disk: diskFault(current.disk, env.data.maxMemoryBytes, env.data.diskUsedBytes ?? 0),
+          disk: diskFault(current.disk, env.data.maxMemoryBytes, env.data.diskUsedBytes ?? 0, env.data.diskCeiling),
         }
       : { cpu: null, memory: null, disk: null };
 
@@ -210,6 +210,12 @@ export function ItemEnvironmentModal({
     // In the OPTIONS, not per-mutate: `save.reset()` (Close sandbox) detaches
     // the in-flight mutation's observer and a per-mutate callback never fires,
     // which left the ref stuck and every later Save silently dropped.
+    // A Save sends up to two PUTs. When the second is refused the first has
+    // still been stored, so the record is read again — or the panel would show
+    // the old values beside a "not saved" for a change that WAS (review r1).
+    onError: () => {
+      void refresh();
+    },
     onSettled: () => {
       inflight.current = false;
     },

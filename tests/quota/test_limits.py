@@ -236,6 +236,44 @@ def test_an_items_size_may_go_up_to_the_deploys_max_not_just_the_apps_default():
     assert got.item_memory_ceiling == 4 * 1024**3
 
 
+def test_an_items_disk_may_go_up_to_the_deploys_max():
+    """plan-item-disk-size D3, through the config path an operator uses:
+    `per_app.max.disk` in config.yaml reaches the item's ceiling."""
+    from workspace_app.config.schema import (
+        PerAppResources,
+        ResourceAmounts,
+        ResourceSettings,
+        Settings,
+    )
+
+    settings = Settings(
+        resources=ResourceSettings(
+            per_app=PerAppResources(
+                default=ResourceAmounts(disk="1G"), max=ResourceAmounts(disk="20G")
+            )
+        )
+    )
+    got = resolve_app_limits(_manifest(), settings)
+
+    assert got.disk_bytes == 1024**3, "still the default size"
+    assert got.item_disk_ceiling == 20 * 1024**3
+
+
+def test_without_a_disk_max_an_items_disk_ceiling_is_the_apps_size():
+    from workspace_app.config.schema import (
+        PerAppResources,
+        ResourceAmounts,
+        ResourceSettings,
+        Settings,
+    )
+
+    settings = Settings(
+        resources=ResourceSettings(per_app=PerAppResources(default=ResourceAmounts(disk="1G")))
+    )
+
+    assert resolve_app_limits(_manifest(), settings).item_disk_ceiling == 1024**3
+
+
 def test_without_a_max_an_items_ceiling_stays_the_apps_value():
     """D2: a deploy that set no `max` keeps today's rule — an item may only go
     below its App — rather than an upgrade quietly lifting every limit."""

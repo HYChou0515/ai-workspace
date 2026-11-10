@@ -150,7 +150,12 @@ export function ItemEnvironmentPanel({
           </button>
         ) : null}
       </div>
-      {env.running && canEdit ? <p className="detail env-hint">{t("itemenv.close.hint")}</p> : null}
+      {env.running && canEdit ? (
+        <p className="detail env-hint">
+          {/* Promise the disk only where this server draws one. */}
+          {t(env.diskUsedBytes === null ? "itemenv.close.hint.nodisk" : "itemenv.close.hint")}
+        </p>
+      ) : null}
 
       {/* ── size + totals: only where a budget exists ── */}
       {budget === null ? null : (
@@ -321,8 +326,12 @@ export function ItemEnvironmentPanel({
         </>
       )}
 
-      {/* No budget, so no size block above: the disk stands alone. */}
+      {/* No budget, so no size block above: the disk stands alone — with
+          the read-only note that block would otherwise carry. */}
       {budget === null ? diskField : null}
+      {budget === null && diskField !== null && !canEdit ? (
+        <p className="detail env-hint">{t("itemenv.readonly")}</p>
+      ) : null}
     </div>
   );
 }

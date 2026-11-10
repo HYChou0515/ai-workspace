@@ -69,9 +69,12 @@ class _MembersBody(BaseModel):
 class _DiskBody(BaseModel):
     """How big this item's workspace may grow (docs/plan-item-disk-size.md) — a
     size string (``20G``) like the memory beside it, parsed by the one parser
-    that knows the spelling; ``None`` clears it back to the App's size."""
+    that knows the spelling; ``None`` clears it back to the App's size.
 
-    disk: str | None = None
+    Required — ``{}`` is refused rather than read as "clear": an empty body is
+    a client that sent nothing, not one that asked for the App's size."""
+
+    disk: str | None
 
 
 class _DiskOut(BaseModel):
@@ -557,11 +560,21 @@ def register_item_routes(
         effective = resolved.spec
         enforced = await registry.sandbox.effective_limits(effective)
         disk: dict[str, int | None] = {}
+        used: int | None = None
         if item_disk is not None:
+            # Measuring is extra (review round 1): a busy or unreachable sandbox
+            # must not take the cpu/memory half and Close sandbox down with it.
+            # Without a figure the disk half is left out and the panel draws no
+            # disk field.
+            try:
+                used = await item_disk.used(item_id)
+            except Exception:  # noqa: BLE001 — logged; the rest of the panel stands
+                _LOGGER.warning("environment: could not measure %s", item_id, exc_info=True)
+        if item_disk is not None and used is not None:
             disk = {
                 "stated_disk_bytes": getattr(item, "sandbox_disk_bytes", None),
                 "effective_disk_bytes": item_disk.quota_for(item_id),
-                "disk_used_bytes": await item_disk.used(item_id),
+                "disk_used_bytes": used,
                 "disk_ceiling": item_disk.ceiling_for(item_id),
                 "owner_disk_left": (
                     await item_disk.owner_left(item_id)
@@ -664,7 +677,8 @@ def register_item_routes(
         write (D5). Same verb (`change_permission`, D4), same persistence as the
         owner, same "kept as typed, clamped on the way out" (D3).
 
-        Refused below what the workspace already holds (D1): that would make it
+        Refused unless what will APPLY is above what the workspace already
+        holds (D1, `<=` — a workspace at its limit is full): that would make it
         full the moment it was saved, and a full workspace refuses every turn."""
         from ..apps.catalog import discover_app_slugs
         from ..apps.registry import app_model
@@ -692,13 +706,21 @@ def register_item_routes(
                         f"(got {body.disk!r}); omit it to use the default"
                     ),
                 )
+            # Against what will APPLY, not what was typed: a size above the
+            # ceiling is held to it on the way out (D3), and a ceiling below
+            # what is used would lock the workspace just the same. And `<=`:
+            # a workspace AT its limit is full — the turn gate asks room for
+            # one more byte (review round 1).
+            ceiling = item_disk.ceiling_for(item_id)
+            applies = size if not ceiling else min(size, ceiling)
             used = await item_disk.used(item_id)
-            if size < used:
+            if applies <= used:
                 raise HTTPException(
                     status_code=422,
                     detail=(
-                        f"This workspace already holds {used} bytes; it cannot be set "
-                        "smaller than that. Delete files first."
+                        f"This workspace already holds {used} bytes; its size must be "
+                        f"more than that (this one would apply as {applies}). Delete "
+                        "files first."
                     ),
                 )
         rm = spec.get_resource_manager(model)
