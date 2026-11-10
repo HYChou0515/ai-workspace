@@ -130,17 +130,26 @@ class ILlmBudget(abc.ABC):
   only when the row has no room** (the user: 「擺不下才換行」). Recording the
   demo, a wrapped line began with a dangling 「·」 — the row drew a dot before
   every cell but the first (`* + *::before`), so whichever cell wrapped led
-  with one; `· compact` did it before this feature too. Now every cell carries
-  its dot in a fixed 16px slot, the row is pulled left by that slot and the slot
-  column clipped (`clip-path`), so a line-starting cell's dot is cut off and
-  every other shows — measured in a real browser at two widths: every line's
-  first cell at offset 0, every other at 16px or more. The link is underlined.
-- **Asked once more after a turn, when the server's window ends.** A turn that
-  ends inside a person's 30 s window is answered from the cache — the figure
-  from before the turn. The answer carries `stale_in_s` (seconds until the
-  server asks the class again); after each turn end the page asks once more
-  then (`lib/llmBudget.refreshBudgetAfterTurn`, used by both chats). No polling
-  beyond that one ask; a later turn replaces it.
+  with one; `· compact` did it before this feature too. Now every cell keeps a
+  16px left margin with its dot drawn in it absolutely (so a cell's own flex
+  gap or padding cannot move it); the row is pulled left by 16px and its left
+  edge clipped 12px in — past the dot, short of a cell's 4px keyboard focus
+  ring — so a line-starting cell's dot is cut off and every other shows. The
+  relations are pinned by `web/src/styles/composer-status.test.ts`, and were
+  measured in a real browser at two widths: every line's first cell lines up
+  with the composer's left edge, every other cell sits 16px after its
+  neighbour. The link is underlined.
+- **Asked once more after a turn, when the server's window ends — only if the
+  answer was cached.** A turn that ends inside a person's 30 s window is
+  answered from the cache — the figure from before the turn. The answer
+  carries `from_cache` (this request did not ask the class: served from the
+  window, or joined an ask already in flight) and `stale_in_s` (seconds until
+  the server asks the class again); after a turn end with a cached answer the
+  page asks once more then (`lib/llmBudget.refreshBudgetAfterTurn`, used by
+  both chats). A fresh answer is already the post-turn figure, so it is not
+  followed up (review round 2: the first build asked twice per turn). No
+  polling beyond that one ask; a later turn replaces it, even one that ends at
+  the same moment.
 - **The 30 s window is per API pod** — the cache is in process memory, so with N
   pods the class can be asked up to N times per person per window.
 - **The knowledge-base chat refreshes from its own turn end** (`useKbChat`):

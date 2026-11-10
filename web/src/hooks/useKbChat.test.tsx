@@ -256,14 +256,11 @@ describe("useKbChat — a turn that FAILS still says why", () => {
     ],
   };
 
-  // The runner gives up by yielding RunError and then RunDone — always both,
-  // always in that order. So anything that clears `error` on each event wipes
-  // the failure one event after it arrives, and the chat just stops with no
-  // explanation. `agentLog`'s `message_delta` comment says this exact defect
-  // must not come back; it came back through the reconnect loop instead.
   // docs/plan-llm-budget.md D6/D9, review round 1 (#1015): the KB chat does not
   // run on useChatSession, so its own turn end must ask for the budget again —
   // it never did, and the KB composer's figure stayed at what it opened with.
+  // Review round 2: asked BEFORE the thread is refetched, so a refetch that
+  // fails does not also cost the budget its refresh — here it rejects.
   it("asks for the LLM budget again when a turn ends", async () => {
     const { QueryClientProvider } = await import("@tanstack/react-query");
     const { makeTestQueryClient } = await import("../test/queryWrapper");
@@ -272,7 +269,7 @@ describe("useKbChat — a turn that FAILS still says why", () => {
     qc.setQueryData(qk.llmBudget, { status: "ok", budget: null, stale_in_s: 0 });
     const client = {
       ...mockKbApi,
-      getChat: vi.fn().mockResolvedValue({ ...failedThread, messages: [] }),
+      getChat: vi.fn().mockRejectedValue(new Error("refetch failed")),
       subscribeChat: async function* () {
         yield { type: "done" } as never;
         await new Promise<void>(() => {});
@@ -286,6 +283,11 @@ describe("useKbChat — a turn that FAILS still says why", () => {
     await waitFor(() => expect(qc.getQueryState(qk.llmBudget)?.isInvalidated).toBe(true));
   });
 
+  // The runner gives up by yielding RunError and then RunDone — always both,
+  // always in that order. So anything that clears `error` on each event wipes
+  // the failure one event after it arrives, and the chat just stops with no
+  // explanation. `agentLog`'s `message_delta` comment says this exact defect
+  // must not come back; it came back through the reconnect loop instead.
   it("keeps the turn's error when `done` follows it", async () => {
     // The store is behind (the terminal event is published before the turn is
     // persisted), so the live notice is the only place the failure is said.

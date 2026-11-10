@@ -94,7 +94,7 @@ def _client(source: ILlmBudget | None, *, user: list[str] | None = None, clock=N
 
 def test_with_no_class_the_answer_is_off():
     body = _client(None).get("/api/me/llm-budget").json()
-    assert body == {"status": "off", "budget": None, "stale_in_s": 0}
+    assert body == {"status": "off", "budget": None, "stale_in_s": 0, "from_cache": False}
 
 
 def test_the_class_answer_is_passed_through_for_the_person_asking():
@@ -112,6 +112,7 @@ def test_the_class_answer_is_passed_through_for_the_person_asking():
     assert body == {
         "status": "ok",
         "stale_in_s": 30,
+        "from_cache": False,
         "budget": {
             "remaining": 11,
             "total": 20,
@@ -127,14 +128,14 @@ def test_the_class_answer_is_passed_through_for_the_person_asking():
 
 def test_nothing_to_show_is_ok_with_no_budget():
     body = _client(_Recording(None)).get("/api/me/llm-budget").json()
-    assert body == {"status": "ok", "budget": None, "stale_in_s": 30}
+    assert body == {"status": "ok", "budget": None, "stale_in_s": 30, "from_cache": False}
 
 
 def test_a_class_that_raises_is_unavailable_and_logged(caplog):
     source = _Recording(error=RuntimeError("cost system down"))
     with caplog.at_level("WARNING"):
         body = _client(source).get("/api/me/llm-budget").json()
-    assert body == {"status": "unavailable", "budget": None, "stale_in_s": 30}
+    assert body == {"status": "unavailable", "budget": None, "stale_in_s": 30, "from_cache": False}
     assert "cost system down" in caplog.text
 
 
@@ -254,3 +255,33 @@ def test_a_link_with_no_label_is_dropped():
         _client(_Recording(BudgetStatus(remaining=1, link=link))).get("/api/me/llm-budget").json()
     )
     assert body["budget"]["link"] is None
+
+
+# ─── review round 2 ─────────────────────────────────────────────────────────
+
+
+def test_the_answer_says_whether_it_was_asked_for_by_this_request():
+    """The page asks a second time after a turn only when the first answer could
+    be the pre-turn figure — i.e. when THIS request did not ask the class. A
+    fresh answer is already the post-turn figure; asking again would call the
+    deploy's (possibly billed) class a second time for nothing."""
+    now = [1000.0]
+    client = _client(_Recording(BudgetStatus(remaining=1)), clock=lambda: now[0])
+    assert client.get("/api/me/llm-budget").json()["from_cache"] is False
+    now[0] += 5
+    assert client.get("/api/me/llm-budget").json()["from_cache"] is True
+    now[0] += 30
+    assert client.get("/api/me/llm-budget").json()["from_cache"] is False
+
+
+async def test_joining_an_ask_already_in_flight_counts_as_from_cache():
+    """That ask started before this request — possibly before the turn ended."""
+    from workspace_app.api.llm_budget import BudgetCache
+
+    source = _Recording(BudgetStatus(remaining=5), delay=0.05)
+    cache = BudgetCache(source, timeout_s=3.0, clock=lambda: 0.0)
+    nobody = cast(Request, None)
+    first, second = await asyncio.gather(
+        cache.status_for(nobody, user_id="alice"), cache.status_for(nobody, user_id="alice")
+    )
+    assert (first.from_cache, second.from_cache) == (False, True)

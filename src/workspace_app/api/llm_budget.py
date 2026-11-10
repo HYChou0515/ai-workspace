@@ -117,6 +117,11 @@ class LlmBudgetOut(BaseModel):
     #: figure; the page asks once more when the window ends, and learns WHEN
     #: from here rather than keeping its own copy of the window.
     stale_in_s: int = 0
+    #: True when THIS request did not ask the class — it was answered from the
+    #: window, or joined an ask already in flight — so the figure may predate a
+    #: turn that just ended. Only then does the page ask again at
+    #: ``stale_in_s``; a fresh answer is already the post-turn figure.
+    from_cache: bool = False
 
 
 def _safe_link(link: BudgetLink | None, *, user_id: str) -> BudgetLinkOut | None:
@@ -175,12 +180,14 @@ class BudgetCache:
 
     async def status_for(self, request: Request, *, user_id: str) -> LlmBudgetOut:
         hit = self._done.get(user_id)
+        asked = False
         if hit is None or self._clock() >= hit[0]:
             task = self._pending.get(user_id)
             if task is None:
                 task = asyncio.ensure_future(self._ask(request, user_id))
                 self._pending[user_id] = task
                 task.add_done_callback(lambda _t, u=user_id: self._pending.pop(u, None))
+                asked = True
             # Shielded: one caller giving up (a closed tab) must not cancel the
             # answer everyone else in flight is waiting for.
             await asyncio.shield(task)
@@ -188,7 +195,8 @@ class BudgetCache:
         until, out = hit
         # Whole seconds, rounded UP: asking again a moment early would land
         # inside the window and get the same cached answer back.
-        return out.model_copy(update={"stale_in_s": max(0, math.ceil(until - self._clock()))})
+        stale_in_s = max(0, math.ceil(until - self._clock()))
+        return out.model_copy(update={"stale_in_s": stale_in_s, "from_cache": not asked})
 
     async def _ask(self, request: Request, user_id: str) -> LlmBudgetOut:
         try:

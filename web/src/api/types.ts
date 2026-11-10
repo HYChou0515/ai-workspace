@@ -224,6 +224,8 @@ export type LlmBudget = {
   /** Seconds until the server asks the deploy's class again (its per-person
    * window); 0 or absent ⇒ never. A turn end asks once more then. */
   stale_in_s?: number;
+  /** True when the server did not ask the deploy's class for this answer. */
+  from_cache?: boolean;
 };
 
 /** #739: how full a chat's context window is — mirrors the backend

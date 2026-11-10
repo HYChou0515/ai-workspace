@@ -219,6 +219,9 @@ export function useKbChat({
               }
               setLog((prev) => reduceAgent(prev, ev));
               if (isTerminal(ev)) {
+                // docs/plan-llm-budget.md D6/D9: the turn just spent LLM money.
+                // First, so a refetch below that fails cannot skip it.
+                void refreshBudgetAfterTurn(qc);
                 // The persisted thread is what carries the resolved [n]
                 // citations; the stream never has them. Reconcile, never
                 // replace — it must not cost the user the answer they just
@@ -226,8 +229,6 @@ export function useKbChat({
                 const fresh = await client.getChat(id);
                 qc.setQueryData(qk.kb.chat(id), fresh);
                 reconcile(fresh);
-                // docs/plan-llm-budget.md D6/D9: the turn just spent LLM money.
-                void refreshBudgetAfterTurn(qc);
               }
             }
           } catch (err: unknown) {

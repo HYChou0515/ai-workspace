@@ -5,10 +5,13 @@
  *
  * The server keeps one answer per person for a window (30 s, per pod), so a turn
  * that ends inside it is answered with the figure from BEFORE the turn. The
- * answer says how long until the server asks the deploy's class again
- * (`stale_in_s`); this asks once more then — the value comes from the server
- * that holds the window, not from a second copy of it here. One pending ask per
- * client: a later turn end replaces it. No polling beyond that one ask.
+ * answer says whether it came from that window (`from_cache`) and how long
+ * until the server asks the deploy's class again (`stale_in_s`); only a cached
+ * answer is asked for once more, then — a fresh one is already the post-turn
+ * figure. Both values come from the server that holds the window, not from a
+ * second copy of it here. One pending ask per client: a later turn end
+ * replaces it, even one that finishes at the same moment. No polling beyond
+ * that one ask.
  */
 import type { QueryClient } from "@tanstack/react-query";
 
@@ -23,16 +26,22 @@ const realTimer: Timer = {
 
 const pending = new WeakMap<QueryClient, unknown>();
 
-export async function refreshBudgetAfterTurn(qc: QueryClient, timer: Timer = realTimer): Promise<void> {
+function cancelPending(qc: QueryClient, timer: Timer): void {
   const before = pending.get(qc);
   if (before !== undefined) {
     timer.clear(before);
     pending.delete(qc);
   }
+}
+
+export async function refreshBudgetAfterTurn(qc: QueryClient, timer: Timer = realTimer): Promise<void> {
+  cancelPending(qc, timer);
   await qc.invalidateQueries({ queryKey: qk.llmBudget });
   const shown = qc.getQueryData<LlmBudget>(qk.llmBudget);
   const staleIn = shown?.stale_in_s ?? 0;
-  if (staleIn > 0) {
+  if (shown?.from_cache && staleIn > 0) {
+    // Again, after the await: another turn end may have armed one meanwhile.
+    cancelPending(qc, timer);
     pending.set(
       qc,
       timer.set(() => {

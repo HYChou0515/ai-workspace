@@ -511,7 +511,7 @@ export const mockApi: ApiClient = {
   async getLlmBudget(): Promise<LlmBudget> {
     await delay(10);
     // The mock deploy configures no budget class.
-    return { status: "off", budget: null, stale_in_s: 0 };
+    return { status: "off", budget: null, stale_in_s: 0, from_cache: false };
   },
 
   async getMe() {

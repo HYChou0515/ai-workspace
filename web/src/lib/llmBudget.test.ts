@@ -9,9 +9,11 @@ import { refreshBudgetAfterTurn } from "./llmBudget";
 // the server's 30 s window is answered from its cache — the figure from BEFORE
 // the turn. The page asks now, and once more when the server says its window
 // ends (`stale_in_s`), so the post-turn figure shows without any polling.
-function shownBudget(staleIn: number) {
+function shownBudget(staleIn: number, fromCache = true) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: 30_000 } } });
-  const queryFn = vi.fn(async (): Promise<LlmBudget> => ({ status: "ok", budget: null, stale_in_s: staleIn }));
+  const queryFn = vi.fn(
+    async (): Promise<LlmBudget> => ({ status: "ok", budget: null, stale_in_s: staleIn, from_cache: fromCache }),
+  );
   new QueryObserver(qc, { queryKey: qk.llmBudget, queryFn }).subscribe(() => {});
   return { qc, queryFn };
 }
@@ -65,5 +67,39 @@ describe("refreshBudgetAfterTurn", () => {
 
     await refreshBudgetAfterTurn(new QueryClient(), timer); // no budget on screen
     expect(timer.armed).toHaveLength(0);
+  });
+
+  // Review round 2 (#1015).
+  it("asks no second time when the answer was fresh — it is already the post-turn figure", async () => {
+    const { qc, queryFn } = shownBudget(30, false);
+    await vi.waitFor(() => expect(qc.getQueryData(qk.llmBudget)).toBeDefined());
+    const timer = manualTimer();
+    await refreshBudgetAfterTurn(qc, timer);
+    expect(queryFn).toHaveBeenCalledTimes(2);
+    expect(timer.armed).toHaveLength(0);
+  });
+
+  it("a fresh answer after a later turn withdraws the ask an earlier turn left pending", async () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: 30_000 } } });
+    let fromCache = true;
+    const queryFn = vi.fn(
+      async (): Promise<LlmBudget> => ({ status: "ok", budget: null, stale_in_s: 18, from_cache: fromCache }),
+    );
+    new QueryObserver(qc, { queryKey: qk.llmBudget, queryFn }).subscribe(() => {});
+    await vi.waitFor(() => expect(qc.getQueryData(qk.llmBudget)).toBeDefined());
+    const timer = manualTimer();
+    await refreshBudgetAfterTurn(qc, timer);
+    expect(timer.armed.filter((t) => t.live)).toHaveLength(1);
+    fromCache = false;
+    await refreshBudgetAfterTurn(qc, timer);
+    expect(timer.armed.filter((t) => t.live)).toHaveLength(0);
+  });
+
+  it("two turns ending at once leave one pending ask, not two", async () => {
+    const { qc } = shownBudget(18);
+    await vi.waitFor(() => expect(qc.getQueryData(qk.llmBudget)).toBeDefined());
+    const timer = manualTimer();
+    await Promise.all([refreshBudgetAfterTurn(qc, timer), refreshBudgetAfterTurn(qc, timer)]);
+    expect(timer.armed.filter((t) => t.live)).toHaveLength(1);
   });
 });
