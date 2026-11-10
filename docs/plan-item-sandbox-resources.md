@@ -1,6 +1,7 @@
 # 每個 item 自己決定要開多大的環境
 
 > 被 #967（plan-item-size-ceiling.md）推翻
+> 被 #1018（plan-item-disk-size.md）推翻
 
 延續 [`plan-sandbox-resource-quota.md`](plan-sandbox-resource-quota.md)。那一份把資源綁在 **App**
 上（一個 App 的每個 item 都一樣大），並加上每人跨 App 的總量。這一份讓**使用者自己決定
