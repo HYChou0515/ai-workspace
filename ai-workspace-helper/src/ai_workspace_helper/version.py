@@ -7,4 +7,4 @@ changes incompatibly; the backend refuses a helper below its minimum protocol
 """
 
 __version__ = "0.1.0"
-PROTOCOL = 1
+PROTOCOL = 2

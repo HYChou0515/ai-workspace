@@ -394,7 +394,7 @@ def make_controller(
         return Worker(
             backend,
             chrome,
-            errands=build_errands(backend.lookup_targets, site=site),
+            errands=build_errands(site=site),
             info=info,
             history=history,
         )

@@ -9,54 +9,8 @@ Chrome runs the same errands in test_errands_in_chrome.py (integration).
 from __future__ import annotations
 
 import pytest
-from ai_workspace_helper.builtin_errands import build, pick_search_target, search_url
+from ai_workspace_helper.builtin_errands import build
 from ai_workspace_helper.errands import ErrandContext, ErrandFailed
-
-
-# The helper must open exactly the address the card's own Google button would:
-# every `{q}`, filled like the card's `encodeURIComponent` (outsideLookup.ts).
-def test_the_search_address_is_the_cards_own():
-    template = "https://www.google.com/search?q={q}&hl=zh-TW&oq={q}"
-
-    assert search_url(template, "pandas 2.0 新功能") == (
-        "https://www.google.com/search?q=pandas%202.0%20%E6%96%B0%E5%8A%9F%E8%83%BD"
-        "&hl=zh-TW&oq=pandas%202.0%20%E6%96%B0%E5%8A%9F%E8%83%BD"
-    )
-    # what encodeURIComponent escapes, and what it leaves alone
-    assert search_url("{q}", "a&b=c/d?#+%") == "a%26b%3Dc%2Fd%3F%23%2B%25"
-    assert search_url("{q}", "it's (ok)*!~-_.") == "it's%20(ok)*!~-_."
-
-
-def test_a_search_goes_to_google_or_else_the_first_destination():
-    google = {"name": "Google", "url": "https://www.google.com/search?q={q}"}
-    corp = {"name": "Corp search", "url": "https://search.corp/?q={q}"}
-
-    assert pick_search_target([corp, google]) == google
-    assert pick_search_target([corp]) == corp
-    with pytest.raises(ErrandFailed):
-        pick_search_target([])
-
-
-def test_the_shared_table_still_says_which_destination_the_helper_picks():
-    """`tests/fixtures/search_target_cases.json` is what the card's copy of
-    this rule (`pickSearchTarget`, web/src/api/outsideLookup.ts) is held to
-    (`web/tests/searchTargetParity.test.ts`): the card's button names the
-    destination the helper will search (docs/plan-ext-ai.md D8). Change the rule
-    and this reddens until the table (kept by hand) is updated; then the FE test
-    reddens until it follows. `null`: the helper refuses — no destination at all."""
-    import json
-    from pathlib import Path
-
-    table = json.loads(
-        (Path(__file__).parents[1] / "fixtures" / "search_target_cases.json").read_text()
-    )
-    assert len(table["cases"]) >= 6
-    for case in table["cases"]:
-        try:
-            picked = pick_search_target(case["targets"])["name"]
-        except ErrandFailed:
-            picked = None
-        assert picked == case["picked"], case
 
 
 class _Response:
@@ -130,11 +84,12 @@ def _ctx(page):
     return ErrandContext(page=page, note=lambda _n: None, convert=lambda html: f"md:{html}")
 
 
-def test_a_search_brings_back_the_results_page_itself():
+def test_a_search_opens_the_target_it_was_handed():
+    """docs/plan-lookup-target-choice.md §3.4: the backend fills the target the
+    person chose; the helper opens that string — it picks and fills nothing."""
     page = _Page()
-    errands = build(lambda: [{"name": "Google", "url": "https://g.example/search?q={q}"}])
 
-    got = errands["search"](_ctx(page), "pandas 2.0")
+    got = build()["search"](_ctx(page), "https://g.example/search?q=pandas%202.0")
 
     assert page.went == ["https://g.example/search?q=pandas%202.0"]
     assert (got.title, got.url, got.markdown) == (
@@ -144,23 +99,21 @@ def test_a_search_brings_back_the_results_page_itself():
     )
 
 
-# The window says 「正在搜尋（<site>）」: the search names the destination it
-# picked, before it goes there.
-def test_a_search_says_which_destination_it_opened():
+def test_a_target_this_helper_cannot_open_says_so():
+    """T6: a target's url may be any URL, for a helper that knows what to do
+    with it. This one opens web pages; anything else fails the job with why,
+    rather than handing Chrome an address it will not open."""
     page = _Page()
-    sites: list[str] = []
-    ctx = ErrandContext(page=page, note=lambda _n: None, convert=str, where=sites.append)
-    errands = build(lambda: [{"name": "Bing", "url": "https://b.example/?q={q}"}])
 
-    errands["search"](ctx, "pandas 2.0")
-
-    assert sites == ["Bing"]
+    with pytest.raises(ErrandFailed, match="partsdb"):
+        build()["search"](_ctx(page), "partsdb://lookup?pn=A123")
+    assert page.went == []
 
 
 def test_a_page_is_opened_as_given():
     page = _Page()
 
-    got = build(lambda: [])["open_url"](_ctx(page), "https://pandas.example/whatsnew")
+    got = build()["open_url"](_ctx(page), "https://pandas.example/whatsnew")
 
     assert page.went == ["https://pandas.example/whatsnew"]
     assert got.markdown == "md:<p>the page's html</p>"
@@ -175,7 +128,7 @@ def test_only_a_web_address_is_opened(url):
     page = _Page()
 
     with pytest.raises(ErrandFailed):
-        build(lambda: [])["open_url"](_ctx(page), url)
+        build()["open_url"](_ctx(page), url)
 
     assert page.went == []
 
@@ -184,7 +137,7 @@ def test_only_a_web_address_is_opened(url):
 # not a page of "Not Found" handed to the AI as if it were the content.
 def test_a_page_that_answers_an_error_fails():
     with pytest.raises(ErrandFailed, match="404"):
-        build(lambda: [])["open_url"](_ctx(_Page(status=404)), "https://x.example/gone")
+        build()["open_url"](_ctx(_Page(status=404)), "https://x.example/gone")
 
 
 # A page that starts moving just after it settled: reading it fails as
@@ -204,7 +157,7 @@ def test_a_page_that_moves_on_while_being_read_is_read_again():
 
     page = _Moving()
 
-    got = build(lambda: [])["open_url"](_ctx(page), "https://pandas.example/whatsnew")
+    got = build()["open_url"](_ctx(page), "https://pandas.example/whatsnew")
 
     assert got.markdown == "md:<p>the page's html</p>"
 

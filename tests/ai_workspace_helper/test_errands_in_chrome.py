@@ -251,9 +251,8 @@ def test_a_page_comes_out_as_the_cards_own_converter_makes_it(chrome, sample):
 
 
 def test_a_search_brings_back_the_results_with_links_the_ai_can_open(chrome, site):
-    errands = build(lambda: [{"name": "Google", "url": f"{site}/search?q={{q}}"}])
-
-    page = chrome.run(errands["search"], "pandas 2.0", lambda _n: None)
+    # handed the target the person chose, filled by the backend (plan-lookup-target-choice §3.4)
+    page = chrome.run(build()["search"], f"{site}/search?q=pandas%202.0", lambda _n: None)
 
     assert page.title == "pandas 2.0 - Search"
     assert page.url == f"{site}/search?q=pandas%202.0"
@@ -265,7 +264,7 @@ def test_a_search_brings_back_the_results_with_links_the_ai_can_open(chrome, sit
 def test_a_verification_waits_for_the_person_then_carries_on(chrome, site):
     notes: list[str] = []
 
-    page = chrome.run(build(lambda: [])["open_url"], f"{site}/guarded", notes.append)
+    page = chrome.run(build()["open_url"], f"{site}/guarded", notes.append)
 
     assert notes == ["captcha", ""]
     assert "What is new" in page.markdown
@@ -273,7 +272,7 @@ def test_a_verification_waits_for_the_person_then_carries_on(chrome, site):
 
 def test_a_page_that_is_not_there_fails(chrome, site):
     with pytest.raises(Exception, match="404"):
-        chrome.run(build(lambda: [])["open_url"], f"{site}/gone", lambda _n: None)
+        chrome.run(build()["open_url"], f"{site}/gone", lambda _n: None)
 
 
 # A page reached through hops the person never sees — a script, a form that
@@ -281,7 +280,7 @@ def test_a_page_that_is_not_there_fails(chrome, site):
 # the hops end, not at the first (it read as nothing: 「沒查到：nothing to
 # send」 on the person's PC, plan D22).
 def test_a_page_behind_redirects_is_read_where_they_end(chrome, site):
-    page = chrome.run(build(lambda: [])["open_url"], f"{site}/sso-start", lambda _n: None)
+    page = chrome.run(build()["open_url"], f"{site}/sso-start", lambda _n: None)
 
     assert page.url == f"{site}/landed"
     assert "SSO-TOKEN" in page.markdown
@@ -290,7 +289,7 @@ def test_a_page_behind_redirects_is_read_where_they_end(chrome, site):
 # An interstitial with words of its own is not the page: it is read once the
 # address has stopped changing.
 def test_an_interstitial_that_moves_on_is_not_taken_for_the_page(chrome, site):
-    page = chrome.run(build(lambda: [])["open_url"], f"{site}/redirecting", lambda _n: None)
+    page = chrome.run(build()["open_url"], f"{site}/redirecting", lambda _n: None)
 
     assert page.url == f"{site}/landed"
     assert "SSO-TOKEN" in page.markdown and "正在轉址" not in page.markdown
@@ -304,14 +303,14 @@ def test_a_page_with_no_text_says_so(chrome, site, monkeypatch):
     monkeypatch.setattr(builtin_errands, "SETTLE_LIMIT_MS", 3_000)
 
     with pytest.raises(Exception, match="沒有文字"):
-        chrome.run(build(lambda: [])["open_url"], f"{site}/blank", lambda _n: None)
+        chrome.run(build()["open_url"], f"{site}/blank", lambda _n: None)
 
 
 # Each hop inside the quiet time, the hops together longer than it — and
 # each with words of its own: the wait starts again at every hop, so the
 # chain is followed to its end.
 def test_a_long_chain_of_quick_hops_is_followed_to_its_end(chrome, site):
-    page = chrome.run(build(lambda: [])["open_url"], f"{site}/chain/0", lambda _n: None)
+    page = chrome.run(build()["open_url"], f"{site}/chain/0", lambda _n: None)
 
     assert page.url == f"{site}/landed"
     assert "站" not in page.markdown
@@ -321,7 +320,7 @@ def test_a_long_chain_of_quick_hops_is_followed_to_its_end(chrome, site):
 # it is watched, not read (reading it meanwhile would wait for the new page),
 # and the errand reads the page the answer brings.
 def test_a_page_whose_form_is_still_being_answered_is_not_the_page(chrome, site):
-    page = chrome.run(build(lambda: [])["open_url"], f"{site}/slow-form", lambda _n: None)
+    page = chrome.run(build()["open_url"], f"{site}/slow-form", lambda _n: None)
 
     assert page.url == f"{site}/landed"
     assert "正在登入" not in page.markdown
@@ -330,7 +329,7 @@ def test_a_page_whose_form_is_still_being_answered_is_not_the_page(chrome, site)
 # Settled on a page with nothing to read, the helper keeps looking (up to the
 # limit) rather than handing back nothing.
 def test_a_blank_page_that_moves_on_late_is_waited_for(chrome, site):
-    page = chrome.run(build(lambda: [])["open_url"], f"{site}/late", lambda _n: None)
+    page = chrome.run(build()["open_url"], f"{site}/late", lambda _n: None)
 
     assert page.url == f"{site}/landed"
     assert "SSO-TOKEN" in page.markdown
@@ -345,7 +344,7 @@ def _timed(chrome, site, path):
 
     start = time.monotonic()
     try:
-        return chrome.run(build(lambda: [])["open_url"], f"{site}{path}", lambda _n: None)
+        return chrome.run(build()["open_url"], f"{site}{path}", lambda _n: None)
     finally:
         _took["s"] = time.monotonic() - start
 
@@ -430,7 +429,7 @@ def test_why_a_page_failed_leaves_out_its_query(chrome, site, monkeypatch):
 def test_a_verification_reached_late_still_waits_for_the_person(chrome, site):
     notes: list[str] = []
 
-    page = chrome.run(build(lambda: [])["open_url"], f"{site}/late-to-sorry", notes.append)
+    page = chrome.run(build()["open_url"], f"{site}/late-to-sorry", notes.append)
 
     assert notes == ["captcha", ""]
     assert "What is new" in page.markdown
@@ -443,7 +442,7 @@ def test_a_verification_reached_late_still_waits_for_the_person(chrome, site):
 def test_a_cloudflare_challenge_waits_for_the_person_then_carries_on(chrome, site):
     notes: list[str] = []
 
-    page = chrome.run(build(lambda: [])["open_url"], f"{site}/cf-challenge", notes.append)
+    page = chrome.run(build()["open_url"], f"{site}/cf-challenge", notes.append)
 
     assert "SSO-TOKEN" in page.markdown
     assert notes == ["captcha", ""]
@@ -456,7 +455,7 @@ def test_a_cloudflare_block_page_fails_at_once_saying_so(chrome, site):
 
     started = time.monotonic()
     with pytest.raises(Exception, match="擋住了自動瀏覽"):
-        chrome.run(build(lambda: [])["open_url"], f"{site}/cf-blocked", lambda _n: None)
+        chrome.run(build()["open_url"], f"{site}/cf-blocked", lambda _n: None)
 
     assert time.monotonic() - started < 10
 
@@ -466,7 +465,7 @@ def test_a_cloudflare_block_page_fails_at_once_saying_so(chrome, site):
 # does, rather than sending the person off to look by hand.
 def test_a_cloudflare_down_page_is_an_error_not_a_block(chrome, site):
     with pytest.raises(Exception, match="522") as failed:
-        chrome.run(build(lambda: [])["open_url"], f"{site}/cf-down", lambda _n: None)
+        chrome.run(build()["open_url"], f"{site}/cf-down", lambda _n: None)
 
     assert "擋住了自動瀏覽" not in str(failed.value)
 
@@ -476,7 +475,7 @@ def test_a_cloudflare_down_page_is_an_error_not_a_block(chrome, site):
 def test_a_verification_served_with_an_error_status_waits_for_the_person(chrome, site):
     notes: list[str] = []
 
-    page = chrome.run(build(lambda: [])["open_url"], f"{site}/sorry/429", notes.append)
+    page = chrome.run(build()["open_url"], f"{site}/sorry/429", notes.append)
 
     assert notes == ["captcha", ""]
     assert "SSO-TOKEN" in page.markdown

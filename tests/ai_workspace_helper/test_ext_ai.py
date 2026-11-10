@@ -308,8 +308,8 @@ def test_many_comments_before_text_are_read_at_once():
 def test_the_errand_is_there_only_with_a_site_file():
     from ai_workspace_helper.builtin_errands import build
 
-    assert "ask_ext_ai" not in build(lambda: [])
-    assert "ask_ext_ai" in build(lambda: [], site=_site("x"))
+    assert "ask_ext_ai" not in build()
+    assert "ask_ext_ai" in build(site=_site("x"))
 
 
 # ── h: the waits (D11) ──────────────────────────────────────────────────────
@@ -649,7 +649,7 @@ def test_a_question_handed_over_on_the_card_is_asked_and_answers_the_card():
     worker = Worker(
         _backend(client),
         _TryChrome(),
-        errands=build(lambda: [], site=site),
+        errands=build(site=site),
         info=lambda: {"ext_ai": site_label(site)},
         date=lambda: "2031-01-02",
     )

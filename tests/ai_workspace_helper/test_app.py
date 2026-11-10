@@ -522,9 +522,13 @@ def test_the_window_says_what_is_being_looked_up_while_it_is():
 
     ctl.step()
 
-    assert seen_mid_errand == [("connected", "pandas 2.0 新功能", "search", "")]
-    assert describe(*seen_mid_errand[0]) == "正在搜尋：pandas 2.0 新功能"
-    assert ctl.snapshot() == ("connected", "", "", "")
+    # the target the person chose is known from the start (plan-lookup-target-choice §3.4)
+    assert seen_mid_errand == [("connected", "pandas 2.0 新功能", "search", "Google")]
+    assert describe(*seen_mid_errand[0]) == "正在搜尋（Google）：pandas 2.0 新功能"
+    # the site outlives the job (the history line is written after it ends) but
+    # the window says nothing of it once idle
+    assert ctl.snapshot() == ("connected", "", "", "Google")
+    assert describe(*ctl.snapshot()) == "已連線，等待查詢"
 
 
 # What the window says about the next version (D21, §3.7.4, §3.7.6): only
