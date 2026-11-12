@@ -2873,7 +2873,7 @@ def create_app(
 
     # ---- Files API (plan-backend §3.8) ----
 
-    register_item_routes(
+    delete_item = register_item_routes(
         api,
         # The richer resolver, so the environment route can say WHICH ceiling
         # bound the size rather than leaving the client to compare numbers it
@@ -3114,6 +3114,9 @@ def create_app(
         publications=Publications(spec),
         get_user_id=get_user_id,
         ledger=disk_ledger,
+        filestore=filestore,
+        # D5: THE delete cascade, not a second one.
+        delete_item=delete_item,
         limit_of=_disk_limit_of,
         superusers=superusers,
     )

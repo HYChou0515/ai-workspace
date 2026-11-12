@@ -15,7 +15,7 @@ import pytest
 from workspace_app.api import publish as publish_mod
 from workspace_app.apps.rca.model import RcaInvestigation
 
-from .test_publish_copy import AGENT, PAGE, _app, _open, _publish, _source, _workspace
+from .test_publish_copy import AGENT, PAGE, _app, _item, _open, _publish, _source, _workspace
 
 
 @pytest.fixture
@@ -197,3 +197,175 @@ def test_a_copy_made_before_the_stamp_is_judged_by_when_it_was_made(monkeypatch)
     holder["id"] = "amy"
 
     assert _update(client, mine)["due"] is True
+
+
+# ---- P2: taking it --------------------------------------------------------
+
+
+def _take(client, item_id: str, **body):
+    return client.post(f"/a/rca/items/{item_id}/published-update", json=body)
+
+
+def _behind(holder, client, spec, sharing="per_person"):
+    """amy's copy, then bob publishes again (with a page that says v2)."""
+    src = _source(spec)
+    _workspace(client, src)
+    _publish(client, src, sharing=sharing)
+    holder["id"] = "amy"
+    old = _open(client, src).json()["item_id"]
+    holder["id"] = "bob"
+    r = client.put(f"/a/rca/items/{src}/files{PAGE}", content=b"view: wui\ntitle: Board v2\n")
+    assert r.status_code == 204
+    _publish(client, src, sharing=sharing)
+    holder["id"] = "amy"
+    return src, old
+
+
+def test_taking_the_new_version_makes_a_new_copy_and_keeps_the_old_one(clock):
+
+    holder = {"id": "bob"}
+    client, spec, store = _app(holder)
+    src, old = _behind(holder, client, spec)
+
+    r = _take(client, old)
+
+    assert r.status_code == 200, r.text
+    new = r.json()["item_id"]
+    assert new != old
+    # The link now opens the new one, and it is current.
+    assert _open(client, src).json()["item_id"] == new
+    assert _update(client, new)["due"] is False
+    assert b"Board v2" in store._files[new][PAGE]
+    # The old one stays, an ordinary item: no longer her copy, named as old.
+    kept = _item(spec, old)
+    assert kept.published_from == ""
+    assert kept.title.endswith("（舊版）")
+    assert _update(client, old)["due"] is False
+
+
+def test_without_room_it_is_refused_and_replacing_puts_the_new_one_in_its_place(clock):
+    from workspace_app.apps.resolve import find_work_item
+    from workspace_app.config.schema import PerUserResources
+    from workspace_app.quota.disk_ledger import DiskLedger
+
+    from .test_publish_hardening import _app as _app_with
+
+    holder = {"id": "bob"}
+    client, spec, store, _a = _app_with(holder, per_user_resources=PerUserResources(disk="250"))
+    src = _source(spec)
+    _workspace(client, src)
+    _publish(client, src, sharing="per_person")
+    holder["id"] = "amy"
+    old = _open(client, src).json()["item_id"]
+    assert (
+        client.put(f"/a/rca/items/{old}/files/data/notes.txt", content=b"x" * 100).status_code
+        == 204
+    )
+    holder["id"] = "bob"
+    _publish(client, src, sharing="per_person")
+    holder["id"] = "amy"
+    assert _update(client, old)["fits"] is False
+
+    refused = _take(client, old)
+    assert refused.status_code == 507, refused.text
+    # Nothing made, nothing renamed.
+    assert _item(spec, old).published_from
+    assert _open(client, src).json()["item_id"] == old
+
+    r = _take(client, old, replace=True)
+
+    assert r.status_code == 200, r.text
+    new = r.json()["item_id"]
+    assert find_work_item(spec, old, include_deleted=True) is None  # gone for good
+    assert old not in store._files
+    assert _open(client, src).json()["item_id"] == new
+    assert asyncio.run(DiskLedger(spec).total_for("amy")) <= 250
+
+
+def test_a_copy_that_is_current_or_not_yours_is_not_taken(clock):
+    from .test_publish_hardening import _app as _app_with
+
+    holder = {"id": "bob"}
+    client, spec, _s, _a = _app_with(holder, superusers=frozenset({"root"}))
+    src, old = _behind(holder, client, spec)
+
+    holder["id"] = "root"
+    assert _take(client, old).status_code == 409
+    holder["id"] = "amy"
+    new = _take(client, old).json()["item_id"]
+    assert _take(client, new).status_code == 409  # already the latest
+
+
+def test_taking_it_from_two_tabs_at_once_makes_one_new_copy(clock):
+    import httpx
+
+    from .test_publish_hardening import _app as _app_with
+    from .test_publish_hardening import _Yielding
+
+    holder = {"id": "bob"}
+    client, spec, _s, app = _app_with(holder, store=_Yielding())
+    _src, old = _behind(holder, client, spec)
+
+    async def go():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://t") as c:
+            url = f"/api/a/rca/items/{old}/published-update"
+            return await asyncio.gather(c.post(url, json={}), c.post(url, json={}))
+
+    a, b = asyncio.run(go())
+
+    assert a.status_code == b.status_code == 200, (a.text, b.text)
+    assert a.json()["item_id"] == b.json()["item_id"]
+    assert _item(spec, old).title == "Shipping board（舊版）"  # once
+
+
+def test_replacing_it_from_two_tabs_at_once_deletes_the_old_one_once(clock):
+    import httpx
+
+    from .test_publish_hardening import _app as _app_with
+    from .test_publish_hardening import _Yielding
+
+    purged: list[str] = []
+
+    class _Counting(_Yielding):
+        # The delete cascade purges the old copy's files: count how often.
+        async def purge(self, workspace_id: str) -> None:
+            purged.append(workspace_id)
+            await super().purge(workspace_id)
+
+    holder = {"id": "bob"}
+    client, spec, _s, app = _app_with(holder, store=_Counting())
+    _src, old = _behind(holder, client, spec)
+
+    async def go():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://t") as c:
+            url = f"/api/a/rca/items/{old}/published-update"
+            return await asyncio.gather(
+                c.post(url, json={"replace": True}), c.post(url, json={"replace": True})
+            )
+
+    a, b = asyncio.run(go())
+
+    assert a.status_code == b.status_code == 200, (a.text, b.text)
+    assert a.json()["item_id"] == b.json()["item_id"]
+    assert purged.count(old) == 1
+
+
+def test_a_shared_copy_is_not_copied_again(clock):
+    holder = {"id": "bob"}
+    client, spec, _store = _app(holder)
+    _src, old = _behind(holder, client, spec, sharing="shared")
+
+    assert _take(client, old).status_code == 400
+
+
+def test_a_copy_made_on_open_takes_the_new_version_the_same_way(clock):
+    holder = {"id": "bob"}
+    client, spec, store = _app(holder)
+    _src, old = _behind(holder, client, spec, sharing="fresh")
+
+    r = _take(client, old)
+
+    assert r.status_code == 200, r.text
+    assert b"Board v2" in store._files[r.json()["item_id"]][PAGE]

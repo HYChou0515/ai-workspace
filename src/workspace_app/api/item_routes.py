@@ -15,6 +15,7 @@ import time
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from typing import Any
 
 import msgspec
 from fastapi import APIRouter, FastAPI, HTTPException, Response, status
@@ -210,6 +211,10 @@ class _ResourcesOut(BaseModel):
 _MAX_CORES = 1024.0
 _MAX_BYTES = 1024**5  # 1 PiB
 
+#: The item delete cascade, ``(resource manager, item id, title)`` — what
+#: `register_item_routes` hands out so a second caller runs THE cascade.
+DeleteItem = Callable[[Any, str, str], Awaitable[None]]
+
 
 def _within(value: float | int, ceiling: float | int) -> bool:
     """A positive number no larger than `ceiling`.
@@ -334,7 +339,7 @@ def register_item_routes(
     superusers: frozenset[str] = frozenset(),
     disk_ledger: DiskLedger | None = None,
     item_disk: ItemDisk | None = None,
-) -> None:
+) -> DeleteItem:
     """Mount the App work-item create / close / delete routes onto ``app``."""
 
     def _authorize_item(slug: str, item_id: str, verb: Verb) -> tuple[WorkItemBase, str]:
@@ -923,35 +928,11 @@ def register_item_routes(
         await turn_engine.forget(item_id)
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
-    @app.delete(
-        "/a/{slug}/items/{item_id}",
-        status_code=status.HTTP_204_NO_CONTENT,
-    )
-    async def delete_app_item(slug: str, item_id: str) -> Response:
-        """Delete the item AND everything it owns (plan-delete-item-cascade).
-
-        The generic specstar delete removes only the item row and orphans the
-        rest — worst of all the disk-ledger row, frozen and charged to the
-        owner forever. This route owns the ordered cascade, and the ORDER is
-        the contract: the item row goes LAST, because every earlier step needs
-        it (owner resolution, retryability) — deleting it first is exactly how
-        the orphans were made. A partial failure leaves the row, so retrying
-        the DELETE resumes the sweep."""
-        from ..apps.catalog import discover_app_slugs
-        from ..apps.registry import app_model
-
-        if slug not in discover_app_slugs():
-            raise HTTPException(status_code=404, detail=f"unknown app: {slug!r}")
-        model = app_model(slug)
-        rm = spec.get_resource_manager(model)
-        # 404-no-leak first, then the owner gate: delete is a lifecycle action
-        # only the owner (or a superuser) may take — the same rule the
-        # permission handler enforces on the raw resource actions.
-        current, owner = _authorize_item(slug, item_id, "read_meta")
-        user = get_user_id()
-        if user != owner and user not in superusers:
-            raise HTTPException(status_code=403, detail="only the item's owner can delete it")
-        title = current.title
+    async def delete_item_everything(rm: Any, item_id: str, title: str) -> None:
+        """The delete cascade (plan-delete-item-cascade), for whoever has
+        already decided the item may go: the delete route below, and taking a
+        WUI copy's new version in place of this one (plan-wui-copy-update D5).
+        ONE cascade — a second would drift from this one."""
         from ..resources.conversation import Conversation
         from ..resources.conversation_goal import ConversationGoal
         from ..resources.conversation_todos import ConversationTodos
@@ -1131,4 +1112,37 @@ def register_item_routes(
                 f"Deleted “{title}” and everything it owned",
                 {"item_id": item_id},
             )
+
+    @app.delete(
+        "/a/{slug}/items/{item_id}",
+        status_code=status.HTTP_204_NO_CONTENT,
+    )
+    async def delete_app_item(slug: str, item_id: str) -> Response:
+        """Delete the item AND everything it owns (plan-delete-item-cascade).
+
+        The generic specstar delete removes only the item row and orphans the
+        rest — worst of all the disk-ledger row, frozen and charged to the
+        owner forever. This route owns the ordered cascade, and the ORDER is
+        the contract: the item row goes LAST, because every earlier step needs
+        it (owner resolution, retryability) — deleting it first is exactly how
+        the orphans were made. A partial failure leaves the row, so retrying
+        the DELETE resumes the sweep."""
+        from ..apps.catalog import discover_app_slugs
+        from ..apps.registry import app_model
+
+        if slug not in discover_app_slugs():
+            raise HTTPException(status_code=404, detail=f"unknown app: {slug!r}")
+        model = app_model(slug)
+        rm = spec.get_resource_manager(model)
+        # 404-no-leak first, then the owner gate: delete is a lifecycle action
+        # only the owner (or a superuser) may take — the same rule the
+        # permission handler enforces on the raw resource actions.
+        current, owner = _authorize_item(slug, item_id, "read_meta")
+        user = get_user_id()
+        if user != owner and user not in superusers:
+            raise HTTPException(status_code=403, detail="only the item's owner can delete it")
+        title = current.title
+        await delete_item_everything(rm, item_id, title)
         return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+    return delete_item_everything

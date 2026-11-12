@@ -314,7 +314,7 @@ def _copy_state(spec: SpecStar, row: Published, item_id: str) -> str:
     return "ready" if found[1].published_from == publication_id(row) else "preparing"
 
 
-async def _await_finished(spec: SpecStar, row: Published, item_id: str) -> bool:
+async def await_finished(spec: SpecStar, row: Published, item_id: str) -> bool:
     """Wait for the copy another open is making: True once it is finished,
     False if it is gone (that maker failed). Bounded by `READY_WAIT_S`."""
     waited = 0.0
@@ -380,7 +380,7 @@ async def open_copy(
         # Another open is making it: the person gets it once it is whole. Not
         # coming — its maker failed, or it is a copy they deleted, whose files
         # stay for a restore — then a fresh copy below, never one over it.
-        if await _await_finished(spec, row, named):
+        if await await_finished(spec, row, named):
             return Opened(row.slug, named, created=False)
     item_id, made = await make_copy(
         spec, store, ledger, row, owner=opener, permission=private, limit_of=limit_of
