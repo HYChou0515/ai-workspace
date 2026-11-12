@@ -50,7 +50,7 @@ apart for the people who use them (W1–W5, A1–A11) and kept the core whole.
 | C4 | **Shared env values are copied, read from the source workspace when the copy is made** (not frozen at publish), so a refreshed value is the one given. Guidance: tokens belong in each person's Private via sign-in, not in Shared. |
 | C5 | Tools: **which** are available and on is copied; **versions** follow the App (`external_tools` floats). |
 | C6 | A copy is an **ordinary workspace**; its opener is the owner (they see Shared values too). |
-| C7 | Re-publishing affects **only copies made afterwards**; only the latest version is kept. |
+| C7 | Re-publishing affects **only copies made afterwards**; only the latest version is kept. **Amended 2026-11-12 (`plan-wui-copy-update.md`):** the platform still never changes a copy itself, but a WUI copy that is behind shows a banner, and its person may take the new version — a new copy beside the old one (or, for a shared copy, go to the current one). |
 | C8 | Only the **user** deletes their copies; no automatic deletion; no per-item cap on how many a person opens — the existing per-person quotas bound it. |
 | C9 | Publishing needs **`change_permission`** on the source (the AI can never hold it, `perm/model.py:60-62`). The publisher sets **who may use** it — themselves (default), people/groups (`group:<id>`, #608), or everyone signed in. |
 | C10 | The published snapshot counts against the **publisher's disk quota** (one copy: only the latest is kept). The publisher sets the **sandbox size** of copies, within the App's `per_app.max` (#967). |
