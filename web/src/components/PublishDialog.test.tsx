@@ -240,4 +240,40 @@ describe("PublishDialog", () => {
 
     expect(within(dialog).queryByRole("textbox", { name: "這次改了什麼（選填）" })).toBeNull();
   });
+
+  // docs/plan-wui-copy-update.md D6: the copies' banner shows what changed.
+  it("offers a WUI's re-publish that hands out copies a release note too", () => {
+    const { dialog, onConfirm } = open({ republish: true });
+    const noteBox = () => within(dialog).queryByRole("textbox", { name: "這次改了什麼（選填）" });
+
+    // "Direct" hands out no copies: nobody is told, so nothing to write.
+    fireEvent.click(within(dialog).getByRole("radio", { name: /直接用我的 workspace/ }));
+    expect(noteBox()).toBeNull();
+
+    fireEvent.click(within(dialog).getByRole("radio", { name: /每個人一份/ }));
+    fireEvent.click(within(dialog).getByRole("radio", { name: "所有登入的人" }));
+    fireEvent.change(noteBox() as HTMLElement, { target: { value: "Totals per week." } });
+    fireEvent.click(publishButton(dialog));
+    expect(onConfirm).toHaveBeenCalledWith(expect.objectContaining({ sharing: "per_person", note: "Totals per week." }));
+  });
+
+  it("sends no note it no longer shows — typed, then the way changed to direct", () => {
+    const { dialog, onConfirm } = open({ republish: true });
+    fireEvent.click(within(dialog).getByRole("radio", { name: /每個人一份/ }));
+    fireEvent.change(within(dialog).getByRole("textbox", { name: "這次改了什麼（選填）" }), {
+      target: { value: "Totals per week." },
+    });
+
+    fireEvent.click(within(dialog).getByRole("radio", { name: /直接用我的 workspace/ }));
+    fireEvent.click(publishButton(dialog));
+
+    expect(onConfirm).toHaveBeenCalledWith(expect.objectContaining({ sharing: "direct", note: "" }));
+  });
+
+  it("offers no release note on a WUI's first publish", () => {
+    const { dialog } = open();
+
+    fireEvent.click(within(dialog).getByRole("radio", { name: /每個人一份/ }));
+    expect(within(dialog).queryByRole("textbox", { name: "這次改了什麼（選填）" })).toBeNull();
+  });
 });
