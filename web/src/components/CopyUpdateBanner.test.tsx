@@ -102,10 +102,13 @@ describe("CopyUpdateBanner", () => {
       localStorage.clear();
       mount(state);
       const line = await screen.findByTestId("copy-update-actions");
-      const actions = within(line)
-        .getAllByRole("button")
-        .filter((el) => el.textContent !== word("copyUpdate.notes"));
+      // Two action buttons; 看說明 is a disclosure inside the message, and must
+      // LOOK like one (a control looks like what it does — review round 2).
+      const actions = line.querySelectorAll(".skill-update-banner__action");
       expect(actions.length).toBeLessThanOrEqual(2);
+      const toggle = within(line).getByRole("button", { name: new RegExp(word("copyUpdate.notes")) });
+      expect(toggle).toHaveStyle({ textDecoration: "underline" });
+      expect(toggle).toHaveTextContent("▸");
       cleanup();
     }
   });
@@ -131,7 +134,7 @@ describe("CopyUpdateBanner", () => {
 
   it("when the new copy was made but the old one's delete did not finish, says where the leftover is", async () => {
     const client = mount(due({ fits: false, needs: 2048, free: 1024, free_if_replaced: 4096 }));
-    vi.mocked(client.take).mockRejectedValueOnce(new HttpError(500, "deleting the item's storage failed partway"));
+    vi.mocked(client.take).mockRejectedValueOnce(new HttpError(500, "old copy left", "old_copy_left"));
     vi.mocked(client.status).mockResolvedValue({ ...due(), due: false });
     const b = await banner();
 
@@ -139,6 +142,30 @@ describe("CopyUpdateBanner", () => {
     within(await screen.findByRole("dialog")).getByRole("button", { name: word("copyUpdate.replace") }).click();
 
     expect(await within(b).findByText(word("copyUpdate.failed.partial"))).toBeInTheDocument();
+  });
+
+  it("never says a new copy was made when the refusal came before anything was", async () => {
+    // Review round 2: "no longer due" also means taken down / no longer yours.
+    const client = mount(due({ fits: false, needs: 2048, free: 1024, free_if_replaced: 4096 }));
+    vi.mocked(client.take).mockRejectedValueOnce(new HttpError(409, "this copy is not behind"));
+    vi.mocked(client.status).mockResolvedValue({ ...due(), due: false });
+    const b = await banner();
+
+    within(b).getByRole("button", { name: word("copyUpdate.replace") }).click();
+    within(await screen.findByRole("dialog")).getByRole("button", { name: word("copyUpdate.replace") }).click();
+
+    expect(await screen.findByText(word("copyUpdate.failed.stale"))).toBeInTheDocument();
+    expect(screen.queryByText(word("copyUpdate.failed.partial"))).toBeNull();
+  });
+
+  it("puts a note in the message only when it is the latest publish's own", async () => {
+    // Review round 2: the latest publish wrote none — an older note under the
+    // latest date would claim it said something it did not.
+    mount(due({ notes: [{ at: AT - 1000, by: "bob", text: "Older note." }] }));
+    const b = await banner();
+
+    expect(b).not.toHaveTextContent("Older note.");
+    expect(b).toHaveTextContent(word("copyUpdate.message", { date: "11/10" }));
   });
 
   it("says nothing for a copy that is current", async () => {

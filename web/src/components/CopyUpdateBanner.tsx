@@ -92,7 +92,10 @@ export function CopyUpdateBanner({
   if (!reminder.due) return null;
 
   const date = shortDate(data.published_at);
-  const gist = firstLine(data.notes.at(-1)?.text ?? "");
+  // Only the LATEST publish's own note rides with its date (review round 2):
+  // a publish without one must not borrow an older publish's words.
+  const latest = data.notes.at(-1);
+  const gist = latest && latest.at === data.published_at ? firstLine(latest.text) : "";
   const shared = data.sharing === "shared";
   const message = shared
     ? gist
@@ -116,14 +119,11 @@ export function CopyUpdateBanner({
           : `/a/${encodeURIComponent(made.slug)}/${encodeURIComponent(made.item_id)}`,
       );
     } catch (e) {
-      // What is true now — the room may have changed under it, or the copy
-      // may already be the old one.
-      const now = await client.status(slug, itemId).catch(() => null);
       const status = e instanceof HttpError ? e.status : 0;
       setError(
-        replace && now !== null && !now.due
-          ? // The new copy was made and this one released, but its delete did
-            // not finish (review round 1): say where the leftover is.
+        e instanceof HttpError && e.code === "old_copy_left"
+          ? // The server says it: the new copy made, this one released, only
+            // its delete left (review rounds 1–2) — where the leftover is.
             "copyUpdate.failed.partial"
           : status === 410
             ? "copyUpdate.failed.gone"
@@ -191,11 +191,14 @@ export function CopyUpdateBanner({
               <button
                 type="button"
                 className="skill-update-banner__toggle"
-                style={{ display: "inline", padding: 0 }}
+                // A disclosure, and it looks like one (review round 2: as plain
+                // ink it read as part of the sentence): underlined, with the
+                // ▸ / ▾ the skill reminder's rows carry.
+                style={{ display: "inline", padding: 0, textDecoration: "underline", textUnderlineOffset: 2 }}
                 aria-expanded={open}
                 onClick={() => setOpen((v) => !v)}
               >
-                {t("copyUpdate.notes")}
+                <span aria-hidden>{open ? "▾" : "▸"}</span> {t("copyUpdate.notes")}
               </button>
             </>
           ) : null}

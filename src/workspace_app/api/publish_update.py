@@ -9,6 +9,7 @@ the old one deleted by the delete route's own cascade (D5).
 
 from __future__ import annotations
 
+import logging
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -28,6 +29,8 @@ from .item_routes import DeleteItem
 from .locator import ItemLocator
 from .publish import COPYING, Publications, Published, may_use
 from .publish_copy import DiskLimit, await_finished, copy_size, make_copy
+
+logger = logging.getLogger(__name__)
 
 #: What the old copy's title says once a new one replaced it (D1).
 OLD_SUFFIX = "（舊版）"
@@ -222,5 +225,15 @@ def register_publish_update_routes(
                 ),
             )
         if body.replace:
-            await delete_item(rm, item_id, current.title)
+            try:
+                await delete_item(rm, item_id, current.title)
+            except Exception:  # noqa: BLE001 — however it failed, the same is true now
+                # The new copy is made and the old one released (above); only
+                # its delete is left — said as such, with the new copy's id, so
+                # nobody has to infer it.
+                logger.warning("published-update: the old copy %s was left", item_id, exc_info=True)
+                raise HTTPException(
+                    status_code=500,
+                    detail={"error": "old_copy_left", "item_id": new_id, "old_item_id": item_id},
+                ) from None
         return TakenOut(slug=slug, item_id=new_id)

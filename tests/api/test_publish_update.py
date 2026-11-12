@@ -498,6 +498,9 @@ def test_a_replace_whose_delete_fails_leaves_the_link_on_the_new_copy(clock, mon
     failed = _take(client, old, replace=True)
 
     assert failed.status_code == 500
+    # Said as what it is — the new copy made, the old one left — so the banner
+    # never guesses it from "no longer due" (review round 2).
+    assert failed.json()["detail"]["error"] == "old_copy_left"
     new = _open(client, src).json()["item_id"]
     assert new != old
     assert _update(client, old)["due"] is False
