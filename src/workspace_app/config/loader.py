@@ -454,6 +454,7 @@ _URL_SCHEME = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*:")
 #: Schemes a search target may not use: they run code in the app's origin or
 #: read the person's own files when the card's button opens them.
 _UNSAFE_SCHEMES = frozenset({"javascript", "data", "vbscript", "file"})
+_LOOKUP_TARGET_KEYS = frozenset({"name", "url", "description", "preview", "max_words", "max_cjk"})
 
 
 def _check_lookup_targets(merged: dict[str, Any], *, source: str) -> None:
@@ -479,7 +480,7 @@ def _check_lookup_targets(merged: dict[str, Any], *, source: str) -> None:
         if not isinstance(t, dict) or "name" not in t or "url" not in t:
             raise ValueError(f"config {source}: {at} must be a mapping with `name` and `url`")
         entry = cast("dict[str, Any]", t)
-        if extra := sorted(set(entry) - {"name", "url", "description", "preview"}):
+        if extra := sorted(set(entry) - _LOOKUP_TARGET_KEYS):
             raise ValueError(f"config {source}: {at} has unknown key {extra[0]!r}")
         name, url = entry["name"], entry["url"]
         if not isinstance(name, str) or not name.strip():
@@ -500,6 +501,12 @@ def _check_lookup_targets(merged: dict[str, Any], *, source: str) -> None:
             raise ValueError(f"config {source}: {at}.description must be a string")
         if not isinstance(entry.get("preview", True), bool):
             raise ValueError(f"config {source}: {at}.preview must be true or false")
+        # docs/plan-remove-ext-ai.md R3: `true` is an int to Python, and would
+        # read as a one-word limit.
+        for limit in ("max_words", "max_cjk"):
+            n = entry.get(limit, 0)
+            if isinstance(n, bool) or not isinstance(n, int) or n < 0:
+                raise ValueError(f"config {source}: {at}.{limit} must be a whole number, 0 or more")
         # Compared as the card shows it: `Google` and `Google ` are one button.
         if name.strip() in seen:
             raise ValueError(f"config {source}: {at}.name {name!r} is already used")

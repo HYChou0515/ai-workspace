@@ -128,6 +128,24 @@ def test_the_default_is_not_shared_between_loads():
             "[{name: Google, url: 'https://g/?q={q}'}, {name: 'Google ', url: 'https://h/?q={q}'}]",
             "server.lookup_targets[1].name 'Google ' is already used",
         ),
+        (
+            # docs/plan-remove-ext-ai.md R3: a length limit is a whole number,
+            # 0 meaning none — anything else would be read as some other limit.
+            "[{name: G, url: 'https://g/?q={q}', max_words: -1}]",
+            "server.lookup_targets[0].max_words must be a whole number, 0 or more",
+        ),
+        (
+            "[{name: G, url: 'https://g/?q={q}', max_words: 2.5}]",
+            "server.lookup_targets[0].max_words must be a whole number, 0 or more",
+        ),
+        (
+            "[{name: G, url: 'https://g/?q={q}', max_cjk: true}]",
+            "server.lookup_targets[0].max_cjk must be a whole number, 0 or more",
+        ),
+        (
+            "[{name: G, url: 'https://g/?q={q}', max_cjk: '40'}]",
+            "server.lookup_targets[0].max_cjk must be a whole number, 0 or more",
+        ),
     ],
     ids=[
         "mapping",
@@ -146,6 +164,10 @@ def test_the_default_is_not_shared_between_loads():
         "no-placeholder",
         "duplicate-name",
         "duplicate-name-padded",
+        "max-words-negative",
+        "max-words-not-whole",
+        "max-cjk-bool",
+        "max-cjk-text",
     ],
 )
 def test_a_target_that_cannot_work_refuses_to_boot(tmp_path: Path, value: str, sentence: str):
@@ -174,4 +196,27 @@ def test_a_target_may_say_how_it_searches_and_whether_the_card_opens_it(tmp_path
             "description": "The parts database; a full part number only.",
             "preview": False,
         }
+    ]
+
+
+def test_a_target_may_take_a_longer_search_than_keywords(tmp_path: Path):
+    """docs/plan-remove-ext-ai.md R3: each target its own query length — a
+    target that asks a web AI takes a whole question (0 = no limit on that
+    ruler), one that looks up a part number takes a handful of characters."""
+    settings = _load(
+        tmp_path,
+        "server:\n"
+        "  lookup_targets:\n"
+        "    - name: AI\n"
+        "      url: https://ai.example/?prompt={q}\n"
+        "      max_words: 0\n"
+        "      max_cjk: 0\n"
+        "    - name: Parts\n"
+        "      url: partsdb://lookup?pn={q}\n"
+        "      max_words: 1\n",
+    )
+
+    assert settings.server.lookup_targets == [
+        {"name": "AI", "url": "https://ai.example/?prompt={q}", "max_words": 0, "max_cjk": 0},
+        {"name": "Parts", "url": "partsdb://lookup?pn={q}", "max_words": 1},
     ]

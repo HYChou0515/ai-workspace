@@ -41,6 +41,7 @@
 | [plan-outside-helper.md](plan-outside-helper.md) | 小幫手：使用者電腦上的 Python 小程式用 Playwright 開 Chrome 代為查網路，搜尋與 AI 自己寫的網址出去前人點頭、先前查到的連結直接開，抓回的整頁（像全選貼上）直接送給 AI；沒連線退回手動流程 |
 | [plan-ext-ai.md](plan-ext-ai.md) | 問外部AI：AI 起草問題、人按「問外部AI」，小幫手在使用者的 Chrome 裡打開公司的網頁 AI、貼上、送出、等回答寫完帶回；網頁怎麼操作由公司寫的一個 Python 檔決定，打包進小幫手 |
 | [plan-lookup-target-choice.md](plan-lookup-target-choice.md) | 請幫我查的搜尋目標由使用者選、AI 只建議（預設選第一個）；每個目標附一段給 AI 和人看的說明、可關掉「在新分頁自己開」；`url` 只要是網址含 `{q}`，交給小幫手的是填好的那段字串（小幫手當黑盒子）；推翻 plan-outside-lookup 的 http(s) 限制、plan-outside-helper 與 plan-ext-ai 的「小幫手固定用 Google／第一個」 |
+| [plan-remove-ext-ai.md](plan-remove-ext-ai.md) | 拿掉「問外部AI」(`ask_ext_ai`):工具、卡片、小幫手的差事、`server.ext_ai_enabled` 全部拿掉——問 AI 和 Google 搜尋是同一件事,一種能力一個工具;每個搜尋目標自己的查詢長度上限(`max_words` / `max_cjk`,`0` = 不限),問網頁 AI 的目標設 `0` 就能整句問;推翻 plan-ext-ai |
 | [plan-tool-usage-stats.md](plan-tool-usage-stats.md) | 工具使用統計：管理者在 Diagnostics 看 AI 用了哪些工具、誰用、在哪個場合、失敗幾次、平均多久 |
 | [plan-tools-picker-groups.md](plan-tools-picker-groups.md) | 工具挑選器依套件摺疊、內建工具一組、每組三態 |
 | [plan-tool-on-demand-loading.md](plan-tool-on-demand-loading.md) | 工具按需載入：wire 的 tools 陣列就是目錄（名字＋100 字元描述＋空 schema），用到才載入完整 schema；載入與重試不入歷史 |

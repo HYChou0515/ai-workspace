@@ -413,10 +413,10 @@ describe("a page, with the helper connected (D12)", () => {
   });
 });
 
-// docs/plan-ext-ai.md D8: the helper's button and doing it by hand say the same
-// words (NN/g heuristic #4, consistency; NN/g UI Copy: the same label in each
-// place) — only the ↗ new-tab cue tells them apart.
-describe("one name for one action (plan-ext-ai D8)", () => {
+// The helper's button and doing it by hand say the same words (NN/g heuristic
+// #4, consistency; NN/g UI Copy: the same label in each place) — only the ↗
+// new-tab cue tells them apart.
+describe("one name for one action", () => {
   it("names the search the same with the helper and by hand", async () => {
     draw();
 

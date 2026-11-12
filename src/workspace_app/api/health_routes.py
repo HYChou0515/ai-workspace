@@ -185,7 +185,6 @@ def register_replay_routes(
     service: ReplayService | None,
     load_turn: LoadTurn,
     load_doc: LoadDoc,
-    ext_ai: bool = False,
     search_targets: Sequence[Mapping[str, Any]] = (),
 ) -> None:
     def _service() -> ReplayService:
@@ -214,8 +213,6 @@ def register_replay_routes(
                 template_profile=template_profile,
                 # An item thread is a chat; a KB chat thread holds no `ask_user`.
                 in_chat=body.source == "rca",
-                # …and on a deploy with the 問外部AI card, that one (plan-ext-ai D5)
-                ext_ai=ext_ai,
                 # …and 請幫我查 lists the deploy's search targets
                 # (docs/plan-lookup-target-choice.md T3)
                 search_targets=search_targets,

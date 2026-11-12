@@ -296,7 +296,7 @@ def _tour(base: str, iid: str, out: Path, check: _Check) -> Path | None:
     # when they open the page — so is it here before recording starts.
     end = time.monotonic() + 60
 
-    # `online` alone: the status says more than that (plan-ext-ai D9 added `ext_ai`)
+    # the status's `online`
     def online() -> bool:
         return (_req("GET", f"{base}/api/ai-workspace-helper/status")[1] or {}).get(
             "online"
@@ -342,7 +342,7 @@ def _tour(base: str, iid: str, out: Path, check: _Check) -> Path | None:
             page.wait_for_timeout(400)
             box.press("Enter")
 
-            # the helper's button names the search (plan-ext-ai D8)
+            # the helper's button names the chosen target (plan-lookup-target-choice T2)
             go = page.get_by_role("button", name="Google search", exact=True)
             go.wait_for(timeout=90_000)
             page.wait_for_timeout(1200)

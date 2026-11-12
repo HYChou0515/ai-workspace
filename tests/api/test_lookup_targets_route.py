@@ -20,6 +20,8 @@ def test_unconfigured_is_google_alone(harness: Harness):
             "url": "https://www.google.com/search?q={q}",
             "description": "",
             "preview": True,
+            "max_words": 10,
+            "max_cjk": 40,
         }
     ]
 
@@ -40,7 +42,7 @@ def test_the_configured_list_is_what_the_card_gets():
     )
 
     assert ApiTestClient(app).get("/lookup-targets").json() == [
-        {**t, "description": "", "preview": True} for t in targets
+        {**t, "description": "", "preview": True, "max_words": 10, "max_cjk": 40} for t in targets
     ]
 
 
@@ -71,11 +73,37 @@ def test_every_target_reaches_the_card_whole():
             "url": "https://www.google.com/search?q={q}",
             "description": "",
             "preview": True,
+            "max_words": 10,
+            "max_cjk": 40,
         },
         {
             "name": "Parts",
             "url": "partsdb://lookup?pn={q}",
             "description": "A full part number only.",
             "preview": False,
+            "max_words": 10,
+            "max_cjk": 40,
         },
+    ]
+
+
+def test_a_targets_own_length_limits_reach_the_card_list():
+    """docs/plan-remove-ext-ai.md R3: unset is today's 10 words / 40 CJK
+    characters; a deploy's own numbers, 0 included, pass through as written."""
+    spec = make_spec()
+    app = create_app(
+        spec=spec,
+        sandbox=MockSandbox(),
+        filestore=SpecstarFileStore(spec),
+        runner=ScriptedAgentRunner([]),
+        lookup_targets=[
+            {"name": "AI", "url": "https://ai.example/?prompt={q}", "max_words": 0, "max_cjk": 0},
+            {"name": "Parts", "url": "partsdb://lookup?pn={q}", "max_words": 1},
+        ],
+    )
+
+    got = ApiTestClient(app).get("/lookup-targets").json()
+    assert [(t["name"], t["max_words"], t["max_cjk"]) for t in got] == [
+        ("AI", 0, 0),
+        ("Parts", 1, 40),
     ]

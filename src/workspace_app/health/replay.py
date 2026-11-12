@@ -191,7 +191,6 @@ class ReplayService:
         packages: list[Any] | None = None,
         template_profile: str | None = None,
         in_chat: bool = False,
-        ext_ai: bool = False,
         search_targets: Sequence[Mapping[str, Any]] = (),
     ) -> ReplayResult:
         """Replay the model interaction that produced ``messages[index]``
@@ -200,8 +199,6 @@ class ReplayService:
 
         ``in_chat``: whether the thread is an item CHAT, whose live turns held
         the chat-only tools (`ask_outside`, plan-outside-lookup D6).
-        ``ext_ai``: whether the deploy turned on the 問外部AI card
-        (`server.ext_ai_enabled`, docs/plan-ext-ai.md D5).
         ``search_targets``: the deploy's, which the live turn's `ask_outside`
         listed (docs/plan-lookup-target-choice.md T3)."""
         if not 0 <= index < len(messages):
@@ -232,7 +229,6 @@ class ReplayService:
             packages,
             template_profile=template_profile,
             in_chat=in_chat,
-            ext_ai=ext_ai,
             search_targets=search_targets,
         )
         logger.info("replay: replaying turn index=%d model=%s", index, config.model)

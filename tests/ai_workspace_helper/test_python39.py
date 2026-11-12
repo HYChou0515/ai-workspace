@@ -15,13 +15,10 @@ from pathlib import Path
 import pytest
 
 _HELPER = Path(__file__).resolve().parents[2] / "ai-workspace-helper"
-# …and the external AI's site-file template, which a company packs in as is
-# (docs/plan-ext-ai.md D7) and runs on the same 3.9
 _SHIPPED = sorted(
     [
         *_HELPER.glob("*.pyw"),
         *(_HELPER / "src" / "ai_workspace_helper").glob("*.py"),
-        _HELPER / "ext_ai_site.template.py",
     ]
 )
 

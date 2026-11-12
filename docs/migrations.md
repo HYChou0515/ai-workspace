@@ -3554,6 +3554,37 @@ Workflows 打開模型答錯格式的那次執行——執行結束後還留著�
 
 **還是舊版 image 時**：面板沒有硬碟欄位，也沒有 `PUT …/disk` 這條路由。
 
+### 2026-11-12 · #1021 拿掉「問外部AI」(`ask_ext_ai`);搜尋目標各自的長度上限 {#pr-1021}
+
+**設定** — 拿掉 `server.ext_ai_enabled`。
+- `rollout 前`:設定檔裡有 `ext_ai_enabled` 這一行的,不管寫 `true` 還是 `false`,都要刪掉。為什麼:loader 拒絕
+  不認得的 key。不刪的症狀:新版開不了機,錯誤訊息是 `unknown key 'server.ext_ai_enabled'`,pod 一直 crashloop。
+- 沒寫過這一行的部署(它預設關著)什麼都不用做。
+- 新的選填欄位 `server.lookup_targets[].max_words` / `max_cjk`(AI 建議的搜尋最多幾個詞/幾個中日韓字,`0` = 不限)。
+  沒寫就是原本的 10 / 40,所以不設什麼都不變;要讓某個目標收整句問題(例如公司的網頁 AI),在那一筆寫 `0`。
+  寫成負數、小數、`true` 或字串,開機失敗:`server.lookup_targets[N].max_words must be a whole number, 0 or more`。
+- 要設的話,`rollout 後`才加。為什麼:舊版 loader 不認得這兩個 key。不照做的症狀:還在跑舊版 image 的 pod(rollout
+  途中,或回滾後)開不了機,錯誤訊息是 `server.lookup_targets[0] has unknown key 'max_words'`。要回滾,先把它們從設定拿掉。
+
+**資料** — 不用跑 migrate,也不用回填。已存的 `ask_ext_ai` 小幫手工作照樣讀得出來,只是不會再有新的;聊天紀錄裡舊的
+「問外部AI」卡片顯示成一般的工具紀錄(「使用工具」),不再是卡片。
+
+**k8s · CI 側** — 照常重 build、部署。manifest、worker、probe 都沒改。
+- 小幫手:`rollout 後`照常重新打包、請大家重裝(新版沒有這個功能)。打包指令拿掉了 `--ext-ai-site`,還帶著它會被
+  拒絕(`unrecognized arguments`)。後端和小幫手的協定號沒變,舊版小幫手照常能用,它多回報的 `ext_ai` 欄位會被忽略。
+
+**行為改變,沒有開關**:聊天裡的 AI 不再有 `ask_ext_ai` 這個工具,卡片上也不會再出現「問外部AI」。要問公司的網頁 AI,
+把它設成「請幫我查」的一個搜尋目標(`max_words: 0`、`max_cjk: 0`);那個網址交給小幫手後怎麼問,是小幫手裡的事。
+AI 工具說明裡每個目標後面多了它的長度上限(沒設的寫 10 個詞、40 個中日韓字,和以前的規則一樣)。
+
+**確認做完**(`rollout 後`):
+
+1. 新 pod 都起得來、ready;log 裡沒有 `unknown key`。
+2. 在聊天裡請 AI「去問外部 AI」:AI 只會出「請幫我查」的卡片,沒有「問外部AI」卡片。
+3. 打開一個以前用過「問外部AI」的對話:那一筆顯示成一般的工具紀錄,頁面不會壞。
+
+**還是舊版 image 時**:設定裡已經刪掉 `ext_ai_enabled` 也沒關係(舊版預設就是關的);但設定裡**不能有** `max_words` / `max_cjk`(見上)。
+
 ---
 
 ### 2026-11-12 · 00eb2640 · #1022 WUI 舊副本會說「有新版」，使用者可以自己換新版 {#pr-1022}

@@ -38,6 +38,16 @@ DEFAULT_LOOKUP_TARGETS: list[dict[str, str]] = [
 ]
 
 
+#: A target's query length when the deploy names none (docs/plan-remove-ext-ai.md
+#: R3): a search is keywords (the person: 「Google search關鍵字字數應該限制」), and
+#: Google ignores words past its own limit (32). Two rulers, both applied:
+#: space-separated words, and Chinese, Japanese and Korean characters — Chinese
+#: and Japanese put no spaces between words, so their characters are what can
+#: be counted. `0` on a target lifts that ruler (a web AI takes a question).
+DEFAULT_QUERY_MAX_WORDS = 10
+DEFAULT_QUERY_MAX_CJK = 40
+
+
 def default_lookup_targets() -> list[dict[str, str]]:
     return [dict(t) for t in DEFAULT_LOOKUP_TARGETS]
 
@@ -45,7 +55,8 @@ def default_lookup_targets() -> list[dict[str, str]]:
 def whole_lookup_targets(targets: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
     """Each target with what a deploy may leave out filled in
     (docs/plan-lookup-target-choice.md T3/T5): no `description`, and the card
-    draws its own new-tab button (`preview`). Filled once, where the app takes
+    draws its own new-tab button (`preview`), and today's query length
+    (`max_words` / `max_cjk`, docs/plan-remove-ext-ai.md R3). Filled once, where the app takes
     the list, so no reader of it guesses a default. The name as the loader
     tells names apart — its spaces stripped — so the card, the hand-over and
     the AI's suggestion all name a target the same way."""
@@ -55,6 +66,8 @@ def whole_lookup_targets(targets: Iterable[Mapping[str, Any]]) -> list[dict[str,
             "url": t["url"],
             "description": t.get("description", ""),
             "preview": t.get("preview", True),
+            "max_words": t.get("max_words", DEFAULT_QUERY_MAX_WORDS),
+            "max_cjk": t.get("max_cjk", DEFAULT_QUERY_MAX_CJK),
         }
         for t in targets
     ]
@@ -216,14 +229,6 @@ class ServerSettings:
     # publishing needs no redeploy. Unset ⇒ nothing published: the 小幫手
     # page says so and every card stays on the manual flow.
     ai_workspace_helper_dir: str = ""
-
-    # docs/plan-ext-ai.md D5 — the 問外部AI card (`ask_ext_ai`): the AI drafts a
-    # question, the person presses 「問外部AI」, and their helper asks the
-    # company's web AI with the site file packed into it
-    # (`pack_ai_workspace_helper.py --ext-ai-site`). Off by default: on a deploy
-    # whose helpers carry no site file the card could only ever be answered by
-    # hand.
-    ext_ai_enabled: bool = False
 
 
 # ─── sandbox ────────────────────────────────────────────────────────────

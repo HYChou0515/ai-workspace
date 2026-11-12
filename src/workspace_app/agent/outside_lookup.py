@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING, Any
 
 from agents import FunctionTool, RunContextWrapper, function_tool
 
+from ..config.schema import DEFAULT_QUERY_MAX_CJK, DEFAULT_QUERY_MAX_WORDS
 from .context import AgentToolContext
 
 if TYPE_CHECKING:
@@ -53,9 +54,11 @@ async def ask_outside_impl(
 
     Pass `why` as one short sentence the user reads first, then exactly one of:
     - `query`: the keywords you suggest searching for — keywords, not a
-      sentence: at most 10 words and at most 40 Chinese, Japanese or Korean
-      characters. The card shows them beside an empty search box; the user
-      types or pastes what is actually searched.
+      sentence, unless the target takes more: each search target listed below
+      says how long its search may be (with no list: at most 10 words and at
+      most 40 Chinese, Japanese or Korean characters). The card shows them
+      beside an empty search box; the user types or pastes what is actually
+      searched.
     - `file` and `link` together: a link a lookup brought back. A lookup saved
       as a file lists its links at the bottom, numbered `- [n] <https://…>`
       (the message that brought it back names the file and lists the first
@@ -98,12 +101,20 @@ async def ask_outside_impl(
         if listed.startswith("error:"):
             return listed
         url = listed
-    if query is not None and (too_long := _too_long(query)):
+    targets = ctx.context.search_targets
+    # docs/plan-remove-ext-ai.md R3: held to the target the search will meet —
+    # the one suggested, else the first, which the card selects.
+    target = (target or "").strip()
+    meets = next((t for t in targets if t["name"] == target), targets[0] if targets else None)
+    if query is not None and (too_long := _too_long(query, meets)):
+        where = f"a search on {meets['name']}" if meets else "a search"
+        # Only a target that is there and takes this search is worth naming
+        # (review round 1): with Google alone, "suggest another" has no answer.
+        takers = [t["name"] for t in targets if t is not meets and not _too_long(query, t)]
+        other = f", or suggest {' or '.join(takers)}, which takes it," if takers else ""
         return (
-            "error: a search is a few keywords, not a sentence — at most "
-            f"{QUERY_MAX_WORDS} words and at most {QUERY_MAX_CJK} Chinese, Japanese or "
-            f"Korean characters; this one has {too_long}. Shorten it to the keywords that "
-            "matter and call again."
+            f"error: {where} is keywords, not a sentence — {_limits(meets)}; this one has "
+            f"{too_long}. Shorten it to the keywords that matter{other} and call again."
         )
     if url is not None and not is_web_address(url):
         return (
@@ -113,8 +124,7 @@ async def ask_outside_impl(
     card = {"why": why, "query": query} if query is not None else {"why": why, "url": url}
     # docs/plan-lookup-target-choice.md T8: only a target the deploy lists is a
     # suggestion — any other name is dropped, not refused: the search stands.
-    target = (target or "").strip()
-    if query is not None and target in {t["name"] for t in ctx.context.search_targets}:
+    if query is not None and target in {t["name"] for t in targets}:
         card["target"] = target
     shown = query if query is not None else url
     said = (
@@ -140,23 +150,39 @@ _SPACE = (
 _WEB_ADDRESS = re.compile(f"https?://[^/?#{_SPACE}]+(?:[/?#][^{_SPACE}]*)?")
 
 
-#: A search is keywords (the person: 「Google search關鍵字字數應該限制」): a long
-#: query reads worse, and Google ignores words past its own limit (32). Both
-#: limits apply: space-separated words, and Chinese, Japanese and Korean
-#: characters — Chinese and Japanese put no spaces between words, so their
-#: characters are what can be counted (Korean, spaced, meets both). Only the
-#: AI's query: the person may edit it.
-QUERY_MAX_WORDS = 10
-QUERY_MAX_CJK = 40
+#: Chinese, Japanese and Korean characters — the second ruler of a target's
+#: query length (`config.schema.DEFAULT_QUERY_MAX_CJK`; Korean, spaced, meets
+#: both). Only the AI's query is held to it: the person may edit it.
 _CJK_CHARACTER = re.compile(r"[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af\uf900-\ufaff]")
 
 
-def _too_long(query: str) -> str:
-    """How `query` is too long for a search — "" when it is not."""
+def _rulers(target: Mapping[str, Any] | None) -> tuple[int, int]:
+    """`(max_words, max_cjk)` of the target a search meets; with no target
+    listed at all (a context built without the deploy's), today's rule."""
+    if target is None:
+        return DEFAULT_QUERY_MAX_WORDS, DEFAULT_QUERY_MAX_CJK
+    return target["max_words"], target["max_cjk"]
+
+
+def _limits(target: Mapping[str, Any] | None) -> str:
+    """The target's query length, both rulers, as the AI reads it — a ruler
+    at `0` is left out, and a target with neither takes "any length"."""
+    words, cjk = _rulers(target)
+    said = [
+        f"{words} word{'s' if words != 1 else ''}" if words else "",
+        f"{cjk} Chinese, Japanese or Korean character{'s' if cjk != 1 else ''}" if cjk else "",
+    ]
+    said = [s for s in said if s]
+    return "at most " + " and ".join(said) if said else "any length"
+
+
+def _too_long(query: str, target: Mapping[str, Any] | None) -> str:
+    """How `query` is too long for `target` — "" when it is not."""
+    max_words, max_cjk = _rulers(target)
     words, cjk = len(query.split()), len(_CJK_CHARACTER.findall(query))
-    if words > QUERY_MAX_WORDS:
+    if max_words and words > max_words:
         return f"{words} words"
-    if cjk > QUERY_MAX_CJK:
+    if max_cjk and cjk > max_cjk:
         return f"{cjk} characters"
     return ""
 
@@ -222,7 +248,6 @@ _CARD_KEYS = (
     # docs/plan-lookup-target-choice.md: the target the AI suggests, beside a search only
     {"why", "query", "target"},
     {"why", "url"},
-    {"why", "question"},
 )
 
 
@@ -230,10 +255,8 @@ def declared_lookup(text: str) -> dict | None:
     """The card a reply declares, read the way the chat reads it
     (`web/src/renderers/outsideLookup.ts`): the tail after the LAST marker is
     one JSON object with a `why` and exactly one of a `query` (with, maybe, the
-    `target` the AI suggests — docs/plan-lookup-target-choice.md), an http(s)
-    `url`, or a `question` for the external AI (`ask_ext_ai`,
-    docs/plan-ext-ai.md). `None` for anything else — a refusal quoting the
-    marker included."""
+    `target` the AI suggests — docs/plan-lookup-target-choice.md) or an http(s)
+    `url`. `None` for anything else — a refusal quoting the marker included."""
     at = text.rfind(OUTSIDE_LOOKUP_MARKER)
     if at < 0:
         return None
@@ -269,7 +292,7 @@ def ask_outside_tool(targets: Sequence[Mapping[str, Any]] = ()) -> FunctionTool:
     tool = function_tool(ask_outside_impl, name_override=TOOL_NAME)
     if targets:
         rows = [
-            f"- {t['name']}: {t['description']}" if t.get("description") else f"- {t['name']}"
+            f"- {t['name']} ({_limits(t)})" + (f": {t['description']}" if t["description"] else "")
             for t in targets
         ]
         tool.description += "\n\nSearch targets (`target`):\n" + "\n".join(rows)

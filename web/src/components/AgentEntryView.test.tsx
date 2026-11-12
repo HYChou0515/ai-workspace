@@ -1301,25 +1301,21 @@ describe("EntryView — ask_outside", () => {
   });
 });
 
-// docs/plan-ext-ai.md §3: `ask_ext_ai` declares the same card, its third kind.
-describe("EntryView — ask_ext_ai", () => {
+// docs/plan-remove-ext-ai.md R5: 問外部AI is gone. A conversation still holds its
+// old calls; they draw no card now — an ordinary tool record, and nothing breaks.
+describe("EntryView — an old ask_ext_ai call", () => {
   const call = (output: string) => ({
     kind: "tool_call" as const,
     call: { call_id: "c1", name: "ask_ext_ai", status: "done" as const, args: {}, output },
   });
 
-  it("draws the declared question as the card", () => {
+  it("is an ordinary tool record, not a card", () => {
     render(
       <EntryView entry={call('Asked.\n[outside-lookup]{"why":"compare them","question":"A or B?"}')} />,
     );
-    expect(screen.getByTestId("outside-lookup-card-stub")).toHaveTextContent("compare them");
-    expect(document.querySelector("details")).toBeNull();
-  });
-
-  it("falls back to the ordinary tool card, labelled, when the call was refused", () => {
-    render(<EntryView entry={call("error: give `question`")} />);
     expect(screen.queryByTestId("outside-lookup-card-stub")).toBeNull();
-    expect(screen.getByText(translate("zh-TW", "tool.ask_ext_ai"))).toBeInTheDocument();
+    // an unmapped tool's generic label — the raw name never reaches the UI (#160)
+    expect(screen.getByText(translate("zh-TW", "tool.fallback"))).toBeInTheDocument();
   });
 });
 
