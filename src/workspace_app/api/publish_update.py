@@ -26,7 +26,7 @@ from ..perm.model import Permission
 from ..quota.disk_ledger import DiskLedger
 from .item_routes import DeleteItem
 from .locator import ItemLocator
-from .publish import Publications, Published, may_use
+from .publish import COPYING, Publications, Published, may_use
 from .publish_copy import DiskLimit, await_finished, copy_size, make_copy
 
 #: What the old copy's title says once a new one replaced it (D1).
@@ -115,18 +115,25 @@ def register_publish_update_routes(
         item = found[1]
         row = publications.by_id(item.published_from)
         # D2: a conversation with an agent stays the conversation it was, and
-        # 「新對話」 already starts from the latest.
-        if row is None or row.kind != "wui":
+        # 「新對話」 already starts from the latest; a page now used directly
+        # hands out no copies (its snapshot is empty — a "new copy" would be).
+        if row is None or row.kind != "wui" or row.sharing not in COPYING:
             return None
         made = copy_version(spec, slug, item_id, item.published_version)
         if row.published_at <= made:
             return None
+        # Nobody, once its source is gone (in the trash or deleted): there is
+        # nothing to copy from — the open route says the same (410).
+        if find_work_item(spec, row.item_id) is None:
+            return None
         user = get_user_id()
-        if row.sharing == "shared":
-            told = may_use(spec, row, user, superusers)
-        else:
-            told = user == _creator(slug, item_id)
-        return _Behind(item, row, made) if told else None
+        # Only someone who may still use the publication (C9) — and, for a copy
+        # of their own, only its person.
+        if not may_use(spec, row, user, superusers):
+            return None
+        if row.sharing != "shared" and user != _creator(slug, item_id):
+            return None
+        return _Behind(item, row, made)
 
     @app.get("/a/{slug}/items/{item_id}/published-update", response_model=CopyUpdateOut)
     async def published_update(slug: str, item_id: str) -> CopyUpdateOut:
@@ -168,7 +175,7 @@ def register_publish_update_routes(
         behind = _behind(slug, item_id)
         if behind is None:
             raise HTTPException(status_code=409, detail="this copy is not behind")
-        row, item = behind.row, behind.item
+        row = behind.row
         if row.sharing == "shared":
             # D2: nothing to make — opening the publication lands in the
             # current shared copy.
@@ -181,30 +188,39 @@ def register_publish_update_routes(
         named = (
             f"{rm.resource_name}:{uuid.uuid5(uuid.NAMESPACE_URL, f'{item_id}|{row.published_at}')}"
         )
-        new_id, made = await make_copy(
-            spec,
-            filestore,
-            ledger,
-            row,
-            owner=user,
-            permission=Permission(visibility="private"),
-            limit_of=limit_of,
-            item_id=named,
-            # D5: room is judged with the old copy's bytes left out — they go.
-            exclude=item_id if body.replace else "",
-        )
+        try:
+            new_id, made = await make_copy(
+                spec,
+                filestore,
+                ledger,
+                row,
+                owner=user,
+                permission=Permission(visibility="private"),
+                limit_of=limit_of,
+                item_id=named,
+                # D5: room is judged with the old copy's bytes left out — they go.
+                exclude=item_id if body.replace else "",
+            )
+        except LookupError as exc:  # its source went meanwhile — as the open route
+            raise HTTPException(status_code=410, detail=str(exc)) from None
         if not made:
             if not await await_finished(spec, row, named):
                 raise HTTPException(status_code=409, detail="the new copy could not be made")
             return TakenOut(slug=slug, item_id=named)
+        # The old copy stops being a copy FIRST (D1): read afresh, so a change
+        # made meanwhile is kept, then renamed and released. Even when it is to
+        # be deleted (D5) — a delete that fails part-way then leaves an
+        # ordinary （舊版） item to delete by hand, never a copy the link lands
+        # in or a banner that offers this again.
+        current = rm.get(item_id).data
+        assert isinstance(current, WorkItemBase)
+        with rm.using(user):
+            rm.update(
+                item_id,
+                msgspec.structs.replace(
+                    current, title=f"{current.title}{OLD_SUFFIX}", published_from=""
+                ),
+            )
         if body.replace:
-            await delete_item(rm, item_id, item.title)
-        else:
-            with rm.using(user):
-                rm.update(
-                    item_id,
-                    msgspec.structs.replace(
-                        item, title=f"{item.title}{OLD_SUFFIX}", published_from=""
-                    ),
-                )
+            await delete_item(rm, item_id, current.title)
         return TakenOut(slug=slug, item_id=new_id)

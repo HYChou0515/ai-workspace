@@ -48,14 +48,17 @@ export function choicesFromSpec(publish: unknown): Partial<PublishChoices> {
 }
 
 /** A re-publish's dialog: what is in effect now (`choicesFromPublished`),
- * plus the note the skill wrote into `publish:` — unless that note is the one
- * already published, which a later re-publish must not post again. */
+ * plus the note the skill wrote into `publish:` — unless it is a note already
+ * used: the one last published, or the draft the last publish was made from
+ * (the person may have edited or cleared it in the dialog; the file still says
+ * the draft, and posting it again would tell every older copy something stale). */
 export function republishChoices(
-  row: Parameters<typeof choicesFromPublished>[0] & Pick<Published, "latest_note">,
+  row: Parameters<typeof choicesFromPublished>[0] & Pick<Published, "latest_note" | "note_draft">,
   publish: unknown,
 ): Partial<PublishChoices> {
   const note = choicesFromSpec(publish).note ?? "";
-  return { ...choicesFromPublished(row), note: note && note !== (row.latest_note ?? "") ? note : "" };
+  const used = note === (row.latest_note ?? "") || note === (row.note_draft ?? "");
+  return { ...choicesFromPublished(row), note: note && !used ? note : "" };
 }
 
 /** What a re-publish starts from: the publication as it is in effect now

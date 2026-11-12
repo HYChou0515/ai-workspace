@@ -58,6 +58,8 @@ export type Published = {
   memory_bytes?: number | null;
   /** The last release note's text, "" for none (plan-wui-copy-update D6). */
   latest_note?: string;
+  /** The `publish.note` draft it was last published from — not offered again. */
+  note_draft?: string;
 };
 
 export type FolderSize = { folder: string; files: number; bytes: number };

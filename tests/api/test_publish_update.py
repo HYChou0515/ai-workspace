@@ -387,3 +387,118 @@ def test_the_publication_says_its_latest_note(clock):
     got = client.get(f"/a/rca/items/{src}/publish", params={"path": PAGE}).json()
 
     assert got["latest_note"] == "Totals per week."
+
+
+# ---- review round 1 ---------------------------------------------------------
+
+
+def test_after_taking_it_and_deleting_the_new_copy_the_link_still_opens(clock, monkeypatch):
+    # The （舊版） item keeps the derived id of the person's copy; it is no copy
+    # in the making, so an open must not wait on it (a 503, for good).
+    from workspace_app.api import publish_copy
+
+    monkeypatch.setattr(publish_copy, "READY_WAIT_S", 0.5)
+    holder = {"id": "bob"}
+    client, spec, _store = _app(holder)
+    src, old = _behind(holder, client, spec)
+    new = _take(client, old).json()["item_id"]
+    assert client.delete(f"/a/rca/items/{new}").status_code in (200, 204)
+
+    r = _open(client, src)
+
+    assert r.status_code == 200, r.text
+    assert r.json()["item_id"] not in (old, new)
+
+
+def test_someone_no_longer_allowed_to_use_it_is_not_offered_it(clock):
+    holder = {"id": "bob"}
+    client, spec, _store = _app(holder)
+    src = _source(spec)
+    _workspace(client, src)
+    _publish(client, src, sharing="per_person")
+    holder["id"] = "amy"
+    mine = _open(client, src).json()["item_id"]
+    holder["id"] = "bob"
+    _publish(client, src, sharing="per_person", reach="me")  # amy is out
+
+    holder["id"] = "amy"
+    assert _update(client, mine)["due"] is False
+    assert _take(client, mine).status_code == 409
+
+
+def test_a_page_now_used_directly_offers_no_new_copy(clock):
+    # D2: "direct" hands out no copies — taking it would copy an empty snapshot.
+    holder = {"id": "bob"}
+    client, spec, _store = _app(holder)
+    src = _source(spec)
+    _workspace(client, src)
+    _publish(client, src, sharing="per_person")
+    holder["id"] = "amy"
+    mine = _open(client, src).json()["item_id"]
+    holder["id"] = "bob"
+    _publish(client, src, sharing="direct")
+
+    holder["id"] = "amy"
+    assert _update(client, mine)["due"] is False
+    assert _take(client, mine).status_code == 409
+
+
+def test_the_publication_remembers_the_draft_it_was_published_from(clock):
+    # The person edited the skill's draft before pressing Publish: the draft
+    # still sits in publish.note, and must not be offered again next time.
+    holder = {"id": "bob"}
+    client, spec, _store = _app(holder)
+    src = _source(spec)
+    _workspace(client, src)
+    _publish(client, src, sharing="per_person")
+    r = client.put(
+        f"/a/rca/items/{src}/files{PAGE}",
+        content=b"view: wui\ntitle: Shipping board\npublish:\n  note: Totals per week.\n",
+    )
+    assert r.status_code == 204
+
+    got = _publish(client, src, sharing="per_person", note="Totals per week, and a chart.")
+
+    assert got["latest_note"] == "Totals per week, and a chart."
+    assert got["note_draft"] == "Totals per week."
+
+
+def test_nothing_is_offered_once_its_source_is_in_the_trash(clock):
+    holder = {"id": "bob"}
+    client, spec, _store = _app(holder)
+    src, old = _behind(holder, client, spec)
+    rm = spec.get_resource_manager(RcaInvestigation)
+    with rm.using("bob"):
+        rm.delete(src)  # soft — in the trash
+
+    assert _update(client, old)["due"] is False
+    assert _take(client, old).status_code == 409
+
+
+def test_a_replace_whose_delete_fails_leaves_the_link_on_the_new_copy(clock, monkeypatch):
+    # The old copy stops being a copy BEFORE the delete: a delete that fails
+    # part-way leaves an ordinary （舊版） item to delete by hand — never a
+    # gutted copy the link lands in, nor a button that "succeeds" doing nothing.
+    from workspace_app.api import publish as publish_api
+
+    holder = {"id": "bob"}
+    client, spec, _store = _app(holder)
+    src, old = _behind(holder, client, spec)
+    real = publish_api.unpublish_item
+    calls = {"n": 0}
+
+    async def flaky(*a, **k):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("storage hiccup")
+        return await real(*a, **k)
+
+    monkeypatch.setattr(publish_api, "unpublish_item", flaky)
+
+    failed = _take(client, old, replace=True)
+
+    assert failed.status_code == 500
+    new = _open(client, src).json()["item_id"]
+    assert new != old
+    assert _update(client, old)["due"] is False
+    assert _item(spec, old).title.endswith("（舊版）")

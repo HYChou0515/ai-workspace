@@ -306,12 +306,22 @@ def copies_of(spec: SpecStar, row: Published) -> list[tuple[str, str]]:
 
 def _copy_state(spec: SpecStar, row: Published, item_id: str) -> str:
     """``absent`` / ``deleted`` (in the trash) / ``preparing`` (made, not yet
-    finished) / ``ready`` — what the derived id of a person's copy holds."""
+    finished) / ``ready`` / ``other`` — what the derived id of a person's copy
+    holds. ``other``: an item that is no copy of THIS publish in the making —
+    the （舊版） a person's copy became when they took a new version
+    (`docs/plan-wui-copy-update.md` D1) keeps the derived id, and waiting on
+    it would wait for good."""
     if find_work_item(spec, item_id) is None:
         return "deleted" if find_work_item(spec, item_id, include_deleted=True) else "absent"
     found = find_work_item(spec, item_id)
     assert found is not None
-    return "ready" if found[1].published_from == publication_id(row) else "preparing"
+    item = found[1]
+    if item.published_from == publication_id(row):
+        return "ready"
+    # A copy in the making: no source yet, stamped with the publish it is made from.
+    if not item.published_from and item.published_version == row.published_at:
+        return "preparing"
+    return "other"
 
 
 async def await_finished(spec: SpecStar, row: Published, item_id: str) -> bool:

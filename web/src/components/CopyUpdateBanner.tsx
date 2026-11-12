@@ -3,10 +3,12 @@
  *
  * Drawn under the reader page's identity strip and under the workspace's title
  * bar (D3) — the same strip, and the same CSS, as the skill-update reminder
- * (#1004): Material 3 *Banners* — below the top bar, a message and text
- * buttons, dismissed by an action that addresses it ("Remind me later"), never
- * a lone ×. The note's first line rides in the message (D6) because it is what
- * decides whether to take it; 看說明 opens all of them.
+ * (#1004): Material Design *Banners* — below the top bar, a message and at
+ * most two text buttons (here: the one thing to do, and "Remind me later",
+ * the dismissal that addresses it — never a lone ×). The note's first line
+ * rides in the message (D6) because it is what decides whether to take it;
+ * 看說明, inside the message, opens all of them, and Skip with them — where
+ * the skill reminder keeps its Skip too.
  *
  * Taking it (D1) makes a NEW copy; this one stays, renamed （舊版）. A shared
  * copy is not copied again (D2): 前往新版 opens the publication, which lands in
@@ -22,11 +24,12 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
+import { HttpError } from "../api/http";
 import { type CopyUpdateApi, copyUpdateApi } from "../api/publish";
 import { encodePath } from "../api/refPath";
 import { useCurrentUserState } from "../hooks/useCurrentUser";
 import { formatBytes } from "../lib/bytes";
-import { useT } from "../lib/i18n";
+import { type MsgKey, useT } from "../lib/i18n";
 import { onRemindersChanged, reminderOf, remindLater, skipVersion } from "../lib/skillUpdateReminders";
 import { firstLine } from "./SkillUpdateBanner";
 import { useDialog } from "./Dialog";
@@ -70,6 +73,18 @@ export function CopyUpdateBanner({
     retry: false,
   });
 
+  // A failure is said even once the copy is no longer behind (a replace whose
+  // delete did not finish has already released it) — the banner would
+  // otherwise vanish with the one sentence saying what is left to do.
+  if (error && !data?.due) {
+    return (
+      <section className="skill-update-banner" aria-label={t("copyUpdate.label")}>
+        <div className="skill-update-banner__error" role="alert">
+          <p>{t(error as MsgKey)}</p>
+        </div>
+      </section>
+    );
+  }
   // Judged only once the user is KNOWN (#997): a placeholder id would re-show
   // a reminder its person already answered.
   if (!data?.due || !me.ready) return null;
@@ -80,7 +95,9 @@ export function CopyUpdateBanner({
   const gist = firstLine(data.notes.at(-1)?.text ?? "");
   const shared = data.sharing === "shared";
   const message = shared
-    ? t("copyUpdate.shared", { date })
+    ? gist
+      ? t("copyUpdate.sharedNote", { date, note: gist })
+      : t("copyUpdate.shared", { date })
     : gist
       ? t("copyUpdate.messageNote", { date, note: gist })
       : t("copyUpdate.message", { date });
@@ -99,8 +116,23 @@ export function CopyUpdateBanner({
           : `/a/${encodeURIComponent(made.slug)}/${encodeURIComponent(made.item_id)}`,
       );
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-      // What is true now — the room may have changed under it.
+      // What is true now — the room may have changed under it, or the copy
+      // may already be the old one.
+      const now = await client.status(slug, itemId).catch(() => null);
+      const status = e instanceof HttpError ? e.status : 0;
+      setError(
+        replace && now !== null && !now.due
+          ? // The new copy was made and this one released, but its delete did
+            // not finish (review round 1): say where the leftover is.
+            "copyUpdate.failed.partial"
+          : status === 410
+            ? "copyUpdate.failed.gone"
+            : status === 507
+              ? "copyUpdate.failed.full"
+              : status === 409 || status === 400
+                ? "copyUpdate.failed.stale"
+                : "copyUpdate.failed",
+      );
       await qc.invalidateQueries({ queryKey: ["copyUpdate", slug, itemId] });
     } finally {
       setBusy(false);
@@ -124,35 +156,51 @@ export function CopyUpdateBanner({
       `/open/${encodeURIComponent(slug)}/${encodeURIComponent(data.source_item_id)}/${encodePath(data.path)}`,
     );
 
+  // At most two text buttons on the line (Material Design *Banners*), as the
+  // skill reminder has: the one thing to do, and Remind me later. What
+  // changed opens from the message itself; Skip lives with the notes, as the
+  // skill reminder's does.
+  const primary = shared ? (
+    <button type="button" className="skill-update-banner__action" onClick={goTo}>
+      {t("copyUpdate.goTo")}
+    </button>
+  ) : data.fits ? (
+    <button
+      type="button"
+      className="skill-update-banner__action"
+      title={t("copyUpdate.take.tip")}
+      disabled={busy}
+      onClick={() => void take(false)}
+    >
+      {t("copyUpdate.take")}
+    </button>
+  ) : canReplace ? (
+    <button type="button" className="skill-update-banner__action" disabled={busy} onClick={() => void replace()}>
+      {t("copyUpdate.replace")}
+    </button>
+  ) : null;
+
   return (
     <section className="skill-update-banner" aria-label={t("copyUpdate.label")}>
-      <div className="skill-update-banner__line">
-        <span className="skill-update-banner__text">{message}</span>
-        {shared ? (
-          <button type="button" className="skill-update-banner__action" onClick={goTo}>
-            {t("copyUpdate.goTo")}
-          </button>
-        ) : data.fits ? (
-          <button
-            type="button"
-            className="skill-update-banner__action"
-            title={t("copyUpdate.take.tip")}
-            disabled={busy}
-            onClick={() => void take(false)}
-          >
-            {t("copyUpdate.take")}
-          </button>
-        ) : null}
-        {data.notes.length > 0 ? (
-          <button
-            type="button"
-            className="skill-update-banner__action"
-            aria-expanded={open}
-            onClick={() => setOpen((v) => !v)}
-          >
-            {t("copyUpdate.notes")}
-          </button>
-        ) : null}
+      <div className="skill-update-banner__line" data-testid="copy-update-actions">
+        <span className="skill-update-banner__text">
+          {message}
+          {data.notes.length > 0 || reminder.canSkip ? (
+            <>
+              {" "}
+              <button
+                type="button"
+                className="skill-update-banner__toggle"
+                style={{ display: "inline", padding: 0 }}
+                aria-expanded={open}
+                onClick={() => setOpen((v) => !v)}
+              >
+                {t("copyUpdate.notes")}
+              </button>
+            </>
+          ) : null}
+        </span>
+        {primary}
         <button
           type="button"
           className="skill-update-banner__action"
@@ -161,49 +209,41 @@ export function CopyUpdateBanner({
         >
           {t("skills.updates.later")}
         </button>
-        {reminder.canSkip ? (
-          <button
-            type="button"
-            className="skill-update-banner__action"
-            disabled={busy}
-            onClick={() => skipVersion(me.id, entryOf(itemId), data.published_at)}
-          >
-            {t("skills.updates.skip")}
-          </button>
-        ) : null}
       </div>
       {!shared && !data.fits ? (
-        <div className="skill-update-banner__line" role="note">
-          <span className="skill-update-banner__text">
-            {t("copyUpdate.noRoom", { needs: formatBytes(data.needs), free: formatBytes(Math.max(0, data.free ?? 0)) })}{" "}
-            {canReplace ? null : t("copyUpdate.noRoomAtAll")}
-          </span>
-          {canReplace ? (
-            <button
-              type="button"
-              className="skill-update-banner__action"
-              disabled={busy}
-              onClick={() => void replace()}
-            >
-              {t("copyUpdate.replace")}
-            </button>
-          ) : null}
-        </div>
+        <p className="skill-update-banner__text" role="note" style={{ margin: "var(--space-4) 0 0" }}>
+          {t("copyUpdate.noRoom", { needs: formatBytes(data.needs), free: formatBytes(Math.max(0, data.free ?? 0)) })}{" "}
+          {canReplace ? null : t("copyUpdate.noRoomAtAll")}
+        </p>
       ) : null}
       <div className="skill-update-banner__status" role="status">
         {busy ? <p>{t("copyUpdate.taking")}</p> : null}
       </div>
       <div className="skill-update-banner__error" role="alert">
-        {error ? <p>{t("copyUpdate.failed", { error })}</p> : null}
+        {error ? <p>{t(error as MsgKey)}</p> : null}
       </div>
       {open ? (
-        <ul className="skill-update-banner__notes">
-          {data.notes.map((n) => (
-            <li key={n.at} style={{ whiteSpace: "pre-wrap" }}>
-              <strong>{shortDate(n.at)}</strong> {n.text}
-            </li>
-          ))}
-        </ul>
+        <div className="skill-update-banner__notes">
+          <ul className="skill-update-banner__list">
+            {data.notes.map((n) => (
+              <li key={n.at} style={{ whiteSpace: "pre-wrap" }}>
+                <strong>{shortDate(n.at)}</strong> {n.text}
+              </li>
+            ))}
+          </ul>
+          {reminder.canSkip ? (
+            <div className="skill-update-banner__bulk">
+              <button
+                type="button"
+                className="skill-update-banner__action"
+                disabled={busy}
+                onClick={() => skipVersion(me.id, entryOf(itemId), data.published_at)}
+              >
+                {t("skills.updates.skip")}
+              </button>
+            </div>
+          ) : null}
+        </div>
       ) : null}
     </section>
   );

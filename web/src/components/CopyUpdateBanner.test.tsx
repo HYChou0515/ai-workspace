@@ -4,6 +4,7 @@ import { cleanup, screen, within } from "@testing-library/react";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { HttpError } from "../api/http";
 import type { CopyUpdate, CopyUpdateApi } from "../api/publish";
 import { translate } from "../lib/i18n";
 import { renderWithQuery } from "../test/queryWrapper";
@@ -91,6 +92,55 @@ describe("CopyUpdateBanner", () => {
     expect(within(b).queryByRole("button", { name: /×|close|關閉/i })).toBeNull();
   });
 
+  it("keeps to two text buttons on its line, whatever the state (Material Design Banners)", async () => {
+    // Review round 1: the line carried four.
+    for (const state of [
+      due(),
+      due({ fits: false, needs: 2048, free: 1024, free_if_replaced: 4096 }),
+      due({ sharing: "shared", needs: 0 }),
+    ]) {
+      localStorage.clear();
+      mount(state);
+      const line = await screen.findByTestId("copy-update-actions");
+      const actions = within(line)
+        .getAllByRole("button")
+        .filter((el) => el.textContent !== word("copyUpdate.notes"));
+      expect(actions.length).toBeLessThanOrEqual(2);
+      cleanup();
+    }
+  });
+
+  it("a shared copy's message carries the note too, and says nothing it does not know", async () => {
+    mount(due({ sharing: "shared", needs: 0 }));
+    const b = await banner();
+
+    expect(b).toHaveTextContent("Totals per week.");
+    expect(b).not.toHaveTextContent("其他人在那裡");
+  });
+
+  it("says why taking it failed in words, not the server's", async () => {
+    const client = mount(due());
+    vi.mocked(client.take).mockRejectedValueOnce(new HttpError(410, "the source of /p is gone"));
+    const b = await banner();
+
+    within(b).getByRole("button", { name: word("copyUpdate.take") }).click();
+
+    expect(await within(b).findByRole("alert")).toHaveTextContent(word("copyUpdate.failed.gone"));
+    expect(b).not.toHaveTextContent("the source of");
+  });
+
+  it("when the new copy was made but the old one's delete did not finish, says where the leftover is", async () => {
+    const client = mount(due({ fits: false, needs: 2048, free: 1024, free_if_replaced: 4096 }));
+    vi.mocked(client.take).mockRejectedValueOnce(new HttpError(500, "deleting the item's storage failed partway"));
+    vi.mocked(client.status).mockResolvedValue({ ...due(), due: false });
+    const b = await banner();
+
+    within(b).getByRole("button", { name: word("copyUpdate.replace") }).click();
+    within(await screen.findByRole("dialog")).getByRole("button", { name: word("copyUpdate.replace") }).click();
+
+    expect(await within(b).findByText(word("copyUpdate.failed.partial"))).toBeInTheDocument();
+  });
+
   it("says nothing for a copy that is current", async () => {
     const client = mount({ ...due(), due: false });
 
@@ -148,7 +198,9 @@ describe("CopyUpdateBanner", () => {
     vi.setSystemTime(T0 + 7 * 24 * 3600 * 1000 + 1);
     mount(due());
     const b = await banner();
-    within(b).getByRole("button", { name: word("skills.updates.skip") }).click();
+    // Skip lives with the notes, as the skill reminder's does.
+    within(b).getByRole("button", { name: word("copyUpdate.notes") }).click();
+    (await within(b).findByRole("button", { name: word("skills.updates.skip") })).click();
     await vi.waitFor(() => expect(screen.queryByRole("region", { name: word("copyUpdate.label") })).toBeNull());
   });
 

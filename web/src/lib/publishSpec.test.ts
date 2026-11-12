@@ -86,6 +86,22 @@ describe("republishChoices", () => {
     expect(republishChoices({ ...row, latest_note: "Totals per week." }, { note: "Totals per week." }).note).toBe("");
   });
 
+  it("does not offer again the draft it was last published from — however it was edited or cleared", () => {
+    // Review round 1: the person edited the draft (or cleared it) in the
+    // dialog; the file still says the old draft, and it came back next time.
+    expect(
+      republishChoices({ ...row, latest_note: "Totals, and a chart.", note_draft: "Totals." }, { note: "Totals." })
+        .note,
+    ).toBe("");
+    expect(republishChoices({ ...row, latest_note: "Older.", note_draft: "Totals." }, { note: "Totals." }).note).toBe(
+      "",
+    );
+    // A NEW draft is still offered.
+    expect(republishChoices({ ...row, latest_note: "Older.", note_draft: "Totals." }, { note: "Legend." }).note).toBe(
+      "Legend.",
+    );
+  });
+
   it("keeps who may use it from what is in effect, whatever the yaml says", () => {
     expect(republishChoices({ ...row, latest_note: "" }, { reach: "me", note: "x" }).reach).toBe("everyone");
   });

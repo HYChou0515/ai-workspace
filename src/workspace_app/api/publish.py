@@ -117,6 +117,10 @@ class Published(Struct):
     files: int = 0
     bytes: int = 0
     notes: list[ReleaseNote] = []
+    #: The view file's `publish.note` when it was published — the draft the
+    #: skill wrote (`plan-wui-copy-update` D6). Kept so the dialog does not
+    #: offer it again, however the person edited or cleared it in the dialog.
+    note_draft: str = ""
     #: "One shared by everyone" (W3): the copy everybody lands in, made at
     #: publish in the publisher's name. A re-publish makes a new one; the old
     #: stays, an ordinary workspace of theirs.
@@ -367,6 +371,8 @@ class PublishedOut(BaseModel):
     #: The last release note's text (A9, `plan-wui-copy-update` D6), "" for
     #: none — so the dialog never offers again a note already published.
     latest_note: str = ""
+    #: The `publish.note` draft it was last published from (`Published.note_draft`).
+    note_draft: str = ""
 
 
 def published_out(row: Published) -> PublishedOut:
@@ -393,6 +399,7 @@ def published_out(row: Published) -> PublishedOut:
         cpu_cores=row.cpu_cores,
         memory_bytes=row.memory_bytes,
         latest_note=row.notes[-1].text if row.notes else "",
+        note_draft=row.note_draft,
     )
 
 
@@ -437,6 +444,13 @@ def estimate_of(paths: list[tuple[str, int]]) -> Estimate:
         key=lambda g: (-g.bytes, -g.files, g.folder),
     )
     return Estimate(files=len(paths), bytes=sum(s for _p, s in paths), biggest=biggest)
+
+
+def _draft_of(doc: dict) -> str:
+    """The release note the skill wrote into the view file's `publish:`."""
+    publish = doc.get("publish")
+    note = publish.get("note") if isinstance(publish, dict) else None
+    return note.strip() if isinstance(note, str) else ""
 
 
 def register_publish_routes(
@@ -546,6 +560,7 @@ def register_publish_routes(
             copy_bytes=copy_bytes,
             notes=notes,
             based_on_title=based_on_title,
+            note_draft=_draft_of(doc),
             based_on_by=based_on_by,
         )
         if body.sharing == "shared":
