@@ -199,7 +199,9 @@ export function WuiPage({
           {/* docs/plan-wui-copy-update.md D3: a copy that is behind its
               publication says so here, on the line above the page — nothing
               for any page that is no copy (the server answers "not due"). */}
-          <CopyUpdateBanner slug={slug} itemId={itemId} where="page" />
+          {/* Keyed by item: a failure said about one copy never lingers on the
+              next page opened in this tab (review round 2). */}
+          <CopyUpdateBanner key={itemId} slug={slug} itemId={itemId} where="page" />
           {/* The reader's chrome: no toolbar, no build log, no reports, and the
               page is never rebuilt on their account — a link serves what is
               already built (docs/plan-wui-deploy.md). */}

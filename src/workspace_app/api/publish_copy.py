@@ -318,8 +318,12 @@ def _copy_state(spec: SpecStar, row: Published, item_id: str) -> str:
     item = found[1]
     if item.published_from == publication_id(row):
         return "ready"
-    # A copy in the making: no source yet, stamped with the publish it is made from.
-    if not item.published_from and item.published_version == row.published_at:
+    # A copy in the making: no source yet, but the page it is a copy of — set
+    # at create (`make_copy`, every version of it). A copy RELEASED by taking a
+    # new version has that cleared (`publish_update`), which is the mark —
+    # not the publish time: a re-publish while a copy is made must not make a
+    # second open give up on it (review round 2).
+    if not item.published_from and item.published_path:
         return "preparing"
     return "other"
 

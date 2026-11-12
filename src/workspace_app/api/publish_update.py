@@ -125,9 +125,12 @@ def register_publish_update_routes(
         made = copy_version(spec, slug, item_id, item.published_version)
         if row.published_at <= made:
             return None
-        # Nobody, once its source is gone (in the trash or deleted): there is
-        # nothing to copy from — the open route says the same (410).
-        if find_work_item(spec, row.item_id) is None:
+        # Nobody once there is nothing to land in — what the open route checks
+        # (410): a shared publication's current shared copy (前往新版 lands
+        # there, whatever its source's state); any other's source, which a new
+        # copy is made from (in the trash counts as gone).
+        there = row.shared_copy if row.sharing == "shared" else row.item_id
+        if not there or find_work_item(spec, there) is None:
             return None
         user = get_user_id()
         # Only someone who may still use the publication (C9) — and, for a copy
@@ -221,7 +224,12 @@ def register_publish_update_routes(
             rm.update(
                 item_id,
                 msgspec.structs.replace(
-                    current, title=f"{current.title}{OLD_SUFFIX}", published_from=""
+                    current,
+                    title=f"{current.title}{OLD_SUFFIX}",
+                    published_from="",
+                    # Released: no longer a copy in the making either
+                    # (`publish_copy._copy_state`).
+                    published_path="",
                 ),
             )
         if body.replace:

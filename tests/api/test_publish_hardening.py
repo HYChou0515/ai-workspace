@@ -450,7 +450,7 @@ def test_taking_an_old_deploy_row_down_needs_what_listing_it_needs():
 # ── review round 3: a copy is one only once it is finished ────────────────
 
 
-def _race(spec, store, row, monkeypatch, *, fail: bool):
+def _race(spec, store, row, monkeypatch, *, fail: bool, second_row=None):
     """A second open by the same person while the first is still copying."""
     import workspace_app.api.publish_copy as pc
     from workspace_app.api.publish_copy import open_copy
@@ -471,7 +471,9 @@ def _race(spec, store, row, monkeypatch, *, fail: bool):
     async def go():
         first = asyncio.create_task(open_copy(spec, store, ledger, row, opener="amy"))
         await asyncio.sleep(0.05)
-        second_task = asyncio.create_task(open_copy(spec, store, ledger, row, opener="amy"))
+        second_task = asyncio.create_task(
+            open_copy(spec, store, ledger, second_row or row, opener="amy")
+        )
         await asyncio.sleep(0.05)
         # The second open must still be waiting: nothing to hand over yet.
         waiting = not second_task.done()

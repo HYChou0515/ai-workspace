@@ -505,3 +505,37 @@ def test_a_replace_whose_delete_fails_leaves_the_link_on_the_new_copy(clock, mon
     assert new != old
     assert _update(client, old)["due"] is False
     assert _item(spec, old).title.endswith("（舊版）")
+
+
+# ---- review round 2 ---------------------------------------------------------
+
+
+def test_a_re_publish_while_a_copy_is_made_still_gives_one_person_one_copy(monkeypatch):
+    # Review round 2: judging "in the making" by the publish time made a second
+    # open that read the re-published row give up waiting — two copies.
+    from .test_publish_hardening import _per_person, _race
+
+    spec, store, row = _per_person({"id": "bob"})
+    later = msgspec.structs.replace(row, published_at=row.published_at + 1)
+
+    waiting, second, _files = _race(spec, store, row, monkeypatch, fail=False, second_row=later)
+
+    assert waiting
+    rm = spec.get_resource_manager(RcaInvestigation)
+    mine = [r for r in rm.list_resources() if rm.get_meta(r.info.resource_id).created_by == "amy"]
+    assert [r.info.resource_id for r in mine] == [second.item_id]
+
+
+def test_a_shared_copy_is_still_told_while_the_current_shared_copy_is_there(clock):
+    # Review round 2: 前往新版 lands in the current shared copy whatever the
+    # source's state, as the open route does — so the banner follows that.
+    holder = {"id": "bob"}
+    client, spec, _store = _app(holder)
+    src, old = _behind(holder, client, spec, sharing="shared")
+    rm = spec.get_resource_manager(RcaInvestigation)
+    with rm.using("bob"):
+        rm.delete(src)
+
+    holder["id"] = "amy"
+    assert _open(client, src).status_code == 200
+    assert _update(client, old)["due"] is True
