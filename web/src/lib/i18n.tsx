@@ -699,6 +699,61 @@ export const messages = {
   "skills.updates.compare": { "zh-TW": "比較差異", en: "Compare" },
   "skills.updates.update": { "zh-TW": "更新", en: "Update" },
   "skills.updates.later": { "zh-TW": "稍後提醒", en: "Remind me later" },
+  // docs/plan-wui-copy-update.md — the banner on a WUI copy that is behind.
+  "copyUpdate.label": { "zh-TW": "頁面更新提醒", en: "Page update" },
+  "copyUpdate.message": { "zh-TW": "這個頁面有新版（{date} 發布）", en: "This page has a new version (published {date})" },
+  "copyUpdate.messageNote": {
+    "zh-TW": "這個頁面有新版（{date} 發布）：{note}",
+    en: "This page has a new version (published {date}): {note}",
+  },
+  "copyUpdate.shared": {
+    "zh-TW": "這個頁面已經有新的共用版本（{date} 發布）",
+    en: "There is a newer shared version of this page (published {date})",
+  },
+  "copyUpdate.sharedNote": {
+    "zh-TW": "這個頁面已經有新的共用版本（{date} 發布）：{note}",
+    en: "There is a newer shared version of this page (published {date}): {note}",
+  },
+  "copyUpdate.take": { "zh-TW": "換新版", en: "Get the new version" },
+  "copyUpdate.take.tip": {
+    "zh-TW": "從新版做一份新的；這份會留著，改名為「…（舊版）」。",
+    en: "Makes a new copy from the new version; this one stays, renamed “…（舊版）”.",
+  },
+  "copyUpdate.goTo": { "zh-TW": "前往新版", en: "Go to the new version" },
+  "copyUpdate.notes": { "zh-TW": "看說明", en: "What's new" },
+  "copyUpdate.taking": { "zh-TW": "正在準備新的一份…", en: "Preparing the new copy…" },
+  "copyUpdate.noRoom": {
+    "zh-TW": "空間不夠放新的一份（需要 {needs}，剩 {free}）。",
+    en: "Not enough room for a new copy (it needs {needs}, {free} is free).",
+  },
+  "copyUpdate.noRoomAtAll": {
+    "zh-TW": "就算刪掉這份也放不下，請先刪掉其他用不到的 workspace。",
+    en: "Even without this copy it does not fit — delete a workspace you no longer need first.",
+  },
+  "copyUpdate.replace": { "zh-TW": "刪掉這份並換新版", en: "Delete this copy and get the new version" },
+  "copyUpdate.replaceTitle": { "zh-TW": "刪掉這份並換新版？", en: "Delete this copy and get the new version?" },
+  "copyUpdate.replaceBody": {
+    "zh-TW": "會先從新版做一份新的，再永久刪除這份——它的檔案、對話和 workflow 紀錄都會刪掉，無法還原。要留的東西請先存出來。",
+    en: "A new copy is made from the new version first, then this one is deleted permanently — its files, conversations and workflow runs, with no way back. Save anything you want to keep first.",
+  },
+  "copyUpdate.cancel": { "zh-TW": "取消", en: "Cancel" },
+  "copyUpdate.failed": { "zh-TW": "換新版沒有成功，請再試一次。", en: "Getting the new version failed — try again." },
+  "copyUpdate.failed.gone": {
+    "zh-TW": "發布它的 workspace 已經不在了。",
+    en: "The workspace that published it is gone.",
+  },
+  "copyUpdate.failed.stale": {
+    "zh-TW": "這份已經不能換新版了，請重新整理頁面。",
+    en: "This copy can no longer take a new version — reload the page.",
+  },
+  "copyUpdate.failed.full": {
+    "zh-TW": "空間不夠放新的一份。",
+    en: "There is not enough room for a new copy.",
+  },
+  "copyUpdate.failed.partial": {
+    "zh-TW": "新的一份做好了，但舊的沒刪乾淨；它在 App 首頁，名字後面有「（舊版）」，請手動刪除。",
+    en: "The new copy is made, but the old one was not fully deleted — it is on the App home, marked “（舊版）”; delete it by hand.",
+  },
   "skills.updates.skip": { "zh-TW": "略過這個版本", en: "Skip this version" },
   "skills.updates.snoozed": { "zh-TW": "已延後提醒", en: "Reminder snoozed" },
   "skills.updates.skipped": { "zh-TW": "已略過這一版", en: "This version skipped" },

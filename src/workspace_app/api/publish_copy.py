@@ -226,6 +226,7 @@ async def make_copy(
         "published_kind": row.kind,
         "published_path": row.path,
         "published_title": row.title,
+        "published_version": row.published_at,
         # Facts about the SOURCE, not settings (e.g. the legacy records it
         # absorbed, #700): a copy does not carry them.
         **fields_a_copy_does_not_carry(),
@@ -305,15 +306,29 @@ def copies_of(spec: SpecStar, row: Published) -> list[tuple[str, str]]:
 
 def _copy_state(spec: SpecStar, row: Published, item_id: str) -> str:
     """``absent`` / ``deleted`` (in the trash) / ``preparing`` (made, not yet
-    finished) / ``ready`` — what the derived id of a person's copy holds."""
+    finished) / ``ready`` / ``other`` — what the derived id of a person's copy
+    holds. ``other``: an item that is no copy of THIS publish in the making —
+    the （舊版） a person's copy became when they took a new version
+    (`docs/plan-wui-copy-update.md` D1) keeps the derived id, and waiting on
+    it would wait for good."""
     if find_work_item(spec, item_id) is None:
         return "deleted" if find_work_item(spec, item_id, include_deleted=True) else "absent"
     found = find_work_item(spec, item_id)
     assert found is not None
-    return "ready" if found[1].published_from == publication_id(row) else "preparing"
+    item = found[1]
+    if item.published_from == publication_id(row):
+        return "ready"
+    # A copy in the making: no source yet, but the page it is a copy of — set
+    # at create (`make_copy`, every version of it). A copy RELEASED by taking a
+    # new version has that cleared (`publish_update`), which is the mark —
+    # not the publish time: a re-publish while a copy is made must not make a
+    # second open give up on it (review round 2).
+    if not item.published_from and item.published_path:
+        return "preparing"
+    return "other"
 
 
-async def _await_finished(spec: SpecStar, row: Published, item_id: str) -> bool:
+async def await_finished(spec: SpecStar, row: Published, item_id: str) -> bool:
     """Wait for the copy another open is making: True once it is finished,
     False if it is gone (that maker failed). Bounded by `READY_WAIT_S`."""
     waited = 0.0
@@ -379,7 +394,7 @@ async def open_copy(
         # Another open is making it: the person gets it once it is whole. Not
         # coming — its maker failed, or it is a copy they deleted, whose files
         # stay for a restore — then a fresh copy below, never one over it.
-        if await _await_finished(spec, row, named):
+        if await await_finished(spec, row, named):
             return Opened(row.slug, named, created=False)
     item_id, made = await make_copy(
         spec, store, ledger, row, owner=opener, permission=private, limit_of=limit_of

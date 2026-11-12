@@ -30,7 +30,7 @@ import { UserChip } from "../../components/UserChip";
 import { useWorkspaceSlug } from "../../hooks/useWorkspaceSlug";
 import { canOpenAgentTestChat, publishAgentTestChat } from "../../lib/agentTestChatBus";
 import { type MsgKey, useT } from "../../lib/i18n";
-import { choicesFromPublished, choicesFromSpec } from "../../lib/publishSpec";
+import { choicesFromSpec, republishChoices } from "../../lib/publishSpec";
 import { parseViewSpec, viewParam } from "../entity/shared";
 
 export function AgentYamlPanel({
@@ -82,9 +82,11 @@ export function AgentYamlPanel({
   const s = summary.data;
   const spec = parseViewSpec(text);
   // A re-publish starts from what is in effect now, size included (C9/C10).
+  // The note the agent skill drafted rides along (republishChoices).
+  const yamlPublish = spec ? viewParam(spec, "publish") : undefined;
   const initial: Partial<PublishChoices> = s.published
-    ? choicesFromPublished(s.published)
-    : choicesFromSpec(spec ? viewParam(spec, "publish") : undefined);
+    ? republishChoices(s.published, yamlPublish)
+    : choicesFromSpec(yamlPublish);
   const canTest = s.valid && canOpenAgentTestChat(itemId);
   const blockedReason = !s.valid || s.problems.length > 0 ? t("agentPanel.fixFirst") : null;
 

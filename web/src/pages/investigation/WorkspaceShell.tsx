@@ -42,6 +42,7 @@ import { useLocale, useT } from "../../lib/i18n";
 import { FileServiceProvider, investigationFileService, useFileService } from "../../api/fileService";
 import { WorkflowsSidebar } from "../../components/WorkflowsSidebar";
 import { SkillUpdateBanner } from "../../components/SkillUpdateBanner";
+import { CopyUpdateBanner } from "../../components/CopyUpdateBanner";
 import { WaitingNotice } from "../../components/WaitingNotice";
 import { ItemProfileProvider } from "../../hooks/itemProfile";
 import { subscribeChatRequest } from "../../lib/chatRequestBus";
@@ -870,6 +871,11 @@ function ShellBody({
           itemId={item.resource_id}
           canUpdate={_canEditContent}
         />
+        {/* docs/plan-wui-copy-update.md D3: a WUI copy that is behind says so
+            here too — and only a WUI copy asks. */}
+        {item.published_kind === "wui" && item.published_from ? (
+          <CopyUpdateBanner key={`copy-${item.resource_id}`} slug={manifest.slug} itemId={item.resource_id} where="workspace" />
+        ) : null}
         <div style={{ flex: 1, display: "flex", minHeight: 0, position: "relative" }}>
           {/* #89: the file IDE (activity bar + file tree + editor + bottom
               panel) renders only when the App enables `function.workspace`; a

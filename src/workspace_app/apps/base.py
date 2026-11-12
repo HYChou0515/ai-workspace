@@ -269,6 +269,12 @@ class WorkItemBase(Struct):
     """The publication's title when the copy was made — the "from X" a copy
     shows even after X is renamed or taken down."""
 
+    published_version: int = 0
+    """Which publish the copy was made from — that publication's
+    ``published_at`` then (`docs/plan-wui-copy-update.md`): a later re-publish
+    makes the copy "behind". 0 on a copy made before it was recorded, which is
+    judged by its creation time instead."""
+
     members: list[str] | UnsetType = UNSET
     """Tier 2 (opt-in) — collaborators. Redeclare as ``list[str]`` in the App's
     subclass to enable; left ``UNSET`` the App has no members concept."""

@@ -85,7 +85,8 @@ export function PublishDialog({
   /** What the view file's `publish:` already says (W5, A4); a WUI's way of
    * sharing counts as chosen only when it is there. */
   initial?: Partial<PublishChoices>;
-  /** Offer the release note (A9) — an agent published before. */
+  /** Published before: offer the release note — an agent's (A9), and a WUI's
+   * that hands out copies (docs/plan-wui-copy-update.md D6). */
   republish?: boolean;
   /** How it is published now could not be read: said, and Publish is held —
    * publishing from a guess is how a re-publish reset who may use it. */
@@ -112,7 +113,7 @@ export function PublishDialog({
     role: initial?.role ?? EMPTY_CHOICES.role,
     cpu: initial?.cpu_cores != null ? String(initial.cpu_cores) : "",
     memory: initial?.memory_bytes != null ? String(initial.memory_bytes / GB) : "",
-    note: "",
+    note: initial?.note ?? "",
   };
   const [sharing, setSharing] = useState<Sharing | null>(start.sharing);
   const [reach, setReach] = useState<Reach>(start.reach);
@@ -120,13 +121,17 @@ export function PublishDialog({
   const [role, setRole] = useState<Role>(start.role);
   const [cpu, setCpu] = useState(start.cpu);
   const [memory, setMemory] = useState(start.memory);
-  const [note, setNote] = useState("");
+  const [note, setNote] = useState(start.note);
   const now = { sharing, reach, subjects, role, cpu, memory, note };
   // #779: dirty against what the dialog OPENED with — a form seeded from the
   // view file does not claim unsaved work on sight.
   const attemptClose = useDirtyClose(!sameShape(now, start), onClose);
 
   const copies = sharing !== null && sharing !== "direct";
+  // A9 for agents; for a WUI that hands out copies too, whose copies' banner
+  // shows it (docs/plan-wui-copy-update.md D6). ONE rule for showing it and
+  // for sending it: a note the dialog no longer shows is not sent.
+  const offersNote = !!republish && (kind === "agent" || copies);
   const estimate = useQuery({
     queryKey: qk.publishEstimate(itemId, path),
     queryFn: () => client.estimate(slug, itemId, path),
@@ -159,7 +164,7 @@ export function PublishDialog({
       role,
       cpu_cores: copies ? cpuValue : null,
       memory_bytes: copies ? memoryValue : null,
-      note: note.trim(),
+      note: offersNote ? note.trim() : "",
     });
   };
 
@@ -290,7 +295,7 @@ export function PublishDialog({
 
       {copies && <EstimateLine estimate={estimate.data} loading={estimate.isPending} />}
 
-      {kind === "agent" && republish && (
+      {offersNote && (
         <label style={{ display: "flex", flexDirection: "column", gap: 4, margin: "0 0 12px" }}>
           <span style={legend}>{t("publish.note.legend")}</span>
           <textarea

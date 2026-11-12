@@ -366,6 +366,14 @@ the dialog opens with them, and say what pressing Publish will do.
    people and groups, `user:<id>` / `group:<id>` in `subjects`) or `everyone`.
 3. **The copies' sandbox size** (copying ways only) — `cpu_cores` and
    `memory_gb`, or leave them out for the App's size.
+4. **On a re-publish of a copying way, what changed** — draft a one- or
+   two-line note from what you changed since the last publish ("Totals now per
+   week; the chart has a legend.") and write it as `note:` in `publish:`: the
+   dialog's 這次改了什麼 box opens with it, so they read it there and edit it if
+   they like — nobody copies it over. Replace it on every re-publish; a note
+   already published is not offered again. People whose copy is older see its
+   first line in a banner on their page, and decide from it whether to take
+   the new version.
 
 ```yaml
 publish:
@@ -375,6 +383,7 @@ publish:
   # role: participant      # shared only
   # cpu_cores: 2
   # memory_gb: 4
+  # note: Totals now per week.   # a re-publish's "what changed"
 ```
 
 A copy is the workspace as it is when published, minus run state and
@@ -383,4 +392,7 @@ goes into every copy, so a personal credential belongs in each person's own
 environment instead. Then summarise the choices in one or two sentences and
 tell them to press **發布 WUI**: the dialog shows how many files a copy holds
 and how long one takes to prepare, and publishing again later updates what new
-copies start from.
+copies start from. A copy made earlier is never changed for its person: it
+shows "this page has a new version" with the note, and they choose 換新版 — a
+new copy beside the old one, which stays, renamed （舊版）. A shared copy's
+people get 前往新版, to the new shared copy.

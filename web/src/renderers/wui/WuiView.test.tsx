@@ -1407,6 +1407,7 @@ describe("WuiView: Deploy", () => {
   function renderInFs(
     files: Record<string, string>,
     wrapRead?: (path: string, real: FileService["readFile"]) => ReturnType<FileService["readFile"]>,
+    spec: ViewSpec = { view: "wui", entity: "" } as ViewSpec,
   ) {
     const fs = svc(files);
     if (wrapRead) {
@@ -1417,7 +1418,7 @@ describe("WuiView: Deploy", () => {
       <QueryWrap>
         <WorkspaceSlugProvider value="rca">
           <FileServiceProvider value={fs}>
-            <WuiView path="/sales/page.ai.yaml" spec={{ view: "wui", entity: "" } as ViewSpec} />
+            <WuiView path="/sales/page.ai.yaml" spec={spec} />
           </FileServiceProvider>
         </WorkspaceSlugProvider>
       </QueryWrap>,
@@ -2866,6 +2867,42 @@ describe("WuiView: Deploy", () => {
     expect(within(dialog).getByRole("radio", { name: /one copy per person/i })).toBeChecked();
     expect(within(dialog).getByRole("radio", { name: /everyone signed in/i })).toBeChecked();
     expect(within(dialog).getByRole("textbox", { name: /cpu cores/i })).toHaveValue("2");
+  });
+
+  it("publishing again opens with the release note the WUI skill wrote into publish:", async () => {
+    vi.mocked(publishApi.current).mockRestore();
+    // plan-wui-copy-update D6 — the user: the skill handles the message, the
+    // person does not copy it over.
+    const row = {
+      ...DEPLOYED,
+      id: "r",
+      kind: "wui",
+      sharing: "per_person",
+      reach: "everyone",
+      subjects: [],
+      role: "participant",
+      published_by: "u",
+      published_at: 1,
+      icon: "",
+      color: "",
+      description: "",
+      files: 1,
+      bytes: 1,
+      based_on_title: "",
+      based_on_by: "",
+      latest_note: "",
+    };
+    vi.stubGlobal("fetch", vi.fn(withDeploy(undefined, row)));
+    renderInFs(PLAIN, undefined, {
+      view: "wui",
+      entity: "",
+      publish: { sharing: "per_person", note: "Totals per week." },
+    } as unknown as ViewSpec);
+
+    fireEvent.click(await screen.findByRole("button", { name: /^publish wui$/i }));
+    const dialog = await screen.findByTestId("publish-dialog");
+
+    expect(within(dialog).getByRole("textbox", { name: /what changed/i })).toHaveValue("Totals per week.");
   });
 
   it("does not publish from a guess when it cannot read how the page is published now", async () => {

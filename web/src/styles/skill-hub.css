@@ -955,7 +955,9 @@ a.skills-row-name {
 /* plan-skill-hub-release-notes D7: the reminder at the top of the item,
    under its title bar — a strip in the page's flow like the waiting notice
    (Material 3 Banners: below the top app bar; a message and at most two text
-   buttons). */
+   buttons). The WUI copy's "a new version" banner is the same strip
+   (`CopyUpdateBanner`, docs/plan-wui-copy-update.md D3) — one look for one
+   kind of message. */
 .skill-update-banner {
   flex-shrink: 0;
   border-bottom: 1px solid var(--info);

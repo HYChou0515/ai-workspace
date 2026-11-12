@@ -12,7 +12,7 @@
  */
 import "@testing-library/jest-dom/vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { MemoryRouter, Route, Routes, useNavigate } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { HttpError } from "../api/http";
@@ -22,6 +22,19 @@ import { QueryWrap } from "../test/queryWrapper";
 import { WuiPage } from "./WuiPage";
 
 const YAML = "view: wui\ntitle: Scrap review\n";
+
+// docs/plan-wui-copy-update.md D3: the reader page carries the copy-update
+// banner (its own tests: CopyUpdateBanner.test.tsx); here, only that it is there.
+vi.mock("../components/CopyUpdateBanner", async () => {
+  const { useState } = await import("react");
+  return {
+    // `data-first` is the item it MOUNTED with: it moves only on a remount.
+    CopyUpdateBanner: ({ itemId, where }: { itemId: string; where: string }) => {
+      const [first] = useState(itemId);
+      return <div data-testid="copy-update" data-item={itemId} data-first={first} data-where={where} />;
+    },
+  };
+});
 
 /** What the real service throws for a file that is not there — an
  * `HttpError(404)`, which is the ONE shape the classifiers (`readAsset`,
@@ -65,6 +78,43 @@ function makeFs(readFile: (p: string) => Promise<unknown>) {
   } as unknown as import("../api/fileService").FileService;
 }
 
+describe("WuiPage copy-update banner", () => {
+  it("starts afresh for another item opened in the same tab", async () => {
+    // Review round 3: a failure said about one copy must not linger on the
+    // next page the tab moves to — the banner is keyed by item.
+    const readFile = vi.fn(async (path: string) => {
+      const text = path.endsWith(".yaml") ? YAML : "<!doctype html><p>hi</p>";
+      return { kind: "text", path, text, size: text.length, encoding: "utf-8" };
+    });
+    function Go() {
+      const navigate = useNavigate();
+      return (
+        <button type="button" onClick={() => navigate("/w/rca/i2/scrap-review/page.ai.yaml")}>
+          next
+        </button>
+      );
+    }
+    render(
+      <LocaleScope locale="en">
+        <QueryWrap>
+          <MemoryRouter initialEntries={["/w/rca/i1/scrap-review/page.ai.yaml"]}>
+            <Go />
+            <Routes>
+              <Route path="/w/:slug/:itemId/*" element={<WuiPage makeService={() => makeFs(readFile)} />} />
+            </Routes>
+          </MemoryRouter>
+        </QueryWrap>
+      </LocaleScope>,
+    );
+    expect(await screen.findByTestId("copy-update")).toHaveAttribute("data-first", "i1");
+
+    fireEvent.click(screen.getByRole("button", { name: "next" }));
+
+    await waitFor(() => expect(screen.getByTestId("copy-update")).toHaveAttribute("data-item", "i2"));
+    expect(screen.getByTestId("copy-update")).toHaveAttribute("data-first", "i2");
+  });
+});
+
 describe("WuiPage", () => {
   it("renders the page named by the URL", async () => {
     // The view file AND the entry it names: the assembler inlines the folder, so
@@ -84,6 +134,10 @@ describe("WuiPage", () => {
 
     // The frame is the page. Its title is what the view file said.
     await waitFor(() => expect(screen.getByTitle("Scrap review")).toBeTruthy());
+    // And above it, the copy asks whether it is behind (plan-wui-copy-update D3).
+    const banner = screen.getByTestId("copy-update");
+    expect(banner).toHaveAttribute("data-item", "i1");
+    expect(banner).toHaveAttribute("data-where", "page");
   });
 
   it("gives the page the slug, so its tools still answer here", async () => {

@@ -16,6 +16,11 @@ vi.mock("../../components/ItemChatShell", () => ({
   ),
 }));
 vi.mock("../../components/PresenceBar", () => ({ PresenceBar: () => null }));
+vi.mock("../../components/CopyUpdateBanner", () => ({
+  CopyUpdateBanner: ({ itemId, where }: { itemId: string; where: string }) => (
+    <div data-testid="copy-update" data-item={itemId} data-where={where} />
+  ),
+}));
 vi.mock("../../components/ActivityFeed", () => ({ ActivityFeed: () => null }));
 vi.mock("./TerminalPane", () => ({ TerminalPane: () => null }));
 vi.mock("../../hooks/useAgent", () => ({
@@ -117,5 +122,44 @@ describe("WorkspaceShell chat of an agent's copy", () => {
 
     expect(within(bar).queryByRole("link", { name: /回到 Agent Hub/ })).toBeNull();
     expect(within(bar).queryByRole("link", { name: "新對話" })).toBeNull();
+  });
+});
+
+// docs/plan-wui-copy-update.md D3: a WUI copy's workspace asks whether it is
+// behind, under the title bar; an item that is no copy does not ask.
+describe("WorkspaceShell copy update banner", () => {
+  it("is drawn for a WUI copy", async () => {
+    renderWithQuery(
+      <MemoryRouter>
+        <WorkspaceShell
+          manifest={manifest}
+          item={{ ...item, published_kind: "wui", published_from: "src∕p∕page.ai.yaml" } as AppItem}
+          files={[]}
+        />
+      </MemoryRouter>,
+    );
+
+    const b = await screen.findByTestId("copy-update");
+    expect(b).toHaveAttribute("data-item", "INC-1");
+    expect(b).toHaveAttribute("data-where", "workspace");
+  });
+
+  it("is not drawn for an item that is no copy, nor for an agent's", async () => {
+    openShell();
+    await screen.findByTestId("topbar");
+    expect(screen.queryByTestId("copy-update")).toBeNull();
+    cleanup();
+
+    renderWithQuery(
+      <MemoryRouter>
+        <WorkspaceShell
+          manifest={manifest}
+          item={{ ...item, published_kind: "agent", published_from: "src∕a∕agent.ai.yaml" } as AppItem}
+          files={[]}
+        />
+      </MemoryRouter>,
+    );
+    await screen.findByTestId("topbar");
+    expect(screen.queryByTestId("copy-update")).toBeNull();
   });
 });

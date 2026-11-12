@@ -195,6 +195,7 @@
 | [plan-wui.md](plan-wui.md) | WUI：資料夾當可互動的網頁 |
 | [plan-wui-deploy.md](plan-wui-deploy.md) | WUI「Deploy」：一個直接落在頁面上的 URL |
 | [plan-wui-publish-and-agent-hub.md](plan-wui-publish-and-agent-hub.md) | 發布 WUI 與 Agent Hub：同一個快照＋副本核心，對使用者是兩種東西。Publish WUI 時選副本怎麼分（每次一份／每人一份／大家一份／直接用我的 workspace）；Publish agent 一律每個對話一份，列在獨立的 Agent Hub（版面同 `/wui`），`agent.ai.yaml` 的 `instructions:` 定義，與子代理無關；推翻 plan-wui-deploy 的「不做快照」與「叫 Deploy」 |
+| [plan-wui-copy-update.md](plan-wui-copy-update.md) | WUI 副本換新版：重新發布後，落後的副本（每人一份／每次一份／大家一份）在頁面和 workspace 頂端顯示「有新版」與更新說明；換新版是做一份新的、舊的留著改名「（舊版）」，共用一份是前往新的那份；稍後提醒照 skill hub；空間不夠可永久刪掉舊的再換；修訂 C7 |
 | [plan-deploy-reach.md](plan-deploy-reach.md) | Deploy 說出誰打得開這個連結：結果區與總覽卡片寫明「只有你／只有成員」並可直接改分享；打不開的人看到最可能的原因與「申請存取」 |
 | [plan-wui-overview.md](plan-wui-overview.md) | WUI 總覽：列出所有已部署 WUI 的一頁 |
 | [plan-wui-call-agent.md](plan-wui-call-agent.md) | WUI 頁面叫能力的兩種叫法：`call…` 拿結果、`start…` 拿工作（等結果／看進度／停止），每個能力都有、由 AI 自己挑；頁面能叫宣告過的 subagent；既有 `callTool`、`startRun` 不變 |

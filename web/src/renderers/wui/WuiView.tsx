@@ -46,7 +46,7 @@ import { useDialog } from "../../components/Dialog";
 import { wuiAddress } from "../../api/wui";
 import { openAddress, type Published, publishApi, type PublishChoices, type Sharing } from "../../api/publish";
 import { PublishDialog } from "../../components/PublishDialog";
-import { choicesFromPublished, choicesFromSpec } from "../../lib/publishSpec";
+import { choicesFromSpec, republishChoices } from "../../lib/publishSpec";
 import { publishAgentDraft } from "../../lib/agentDraftBus";
 import { subscribeFileChanged } from "../../lib/fileChangedBus";
 import { pxToRem } from "../../lib/pxToRem";
@@ -1346,7 +1346,7 @@ function WuiPane({ path, spec, chrome = "workspace", onRetry, deployedPage }: Wu
           itemId={fs.scopeId}
           path={path}
           current={publication}
-          fromYaml={choicesFromSpec(viewParam(spec, "publish"))}
+          yamlPublish={viewParam(spec, "publish")}
           onClose={() => setPublishOpen(false)}
           onConfirm={(choices) => {
             setPublishOpen(false);
@@ -1778,7 +1778,7 @@ function PublishWuiDialog({
   itemId,
   path,
   current,
-  fromYaml,
+  yamlPublish,
   onClose,
   onConfirm,
 }: {
@@ -1786,7 +1786,9 @@ function PublishWuiDialog({
   itemId: string;
   path: string;
   current: { isPending: boolean; data?: Published | null; error?: Error | null };
-  fromYaml: Partial<PublishChoices>;
+  /** The view file's `publish:` as written — choices, and the release note
+   * the WUI skill drafted (plan-wui-copy-update D6). */
+  yamlPublish: unknown;
   onClose: () => void;
   onConfirm: (choices: PublishChoices) => void;
 }) {
@@ -1797,7 +1799,7 @@ function PublishWuiDialog({
       slug={slug}
       itemId={itemId}
       path={path}
-      initial={current.data ? choicesFromPublished(current.data) : fromYaml}
+      initial={current.data ? republishChoices(current.data, yamlPublish) : choicesFromSpec(yamlPublish)}
       republish={!!current.data}
       loadError={current.error ? current.error.message : undefined}
       onClose={onClose}
