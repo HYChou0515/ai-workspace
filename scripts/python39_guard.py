@@ -8,9 +8,7 @@ evaluate, and the newer library calls this code is likely to reach for.
 Syntax is checked by the parser itself; the calls are a list, so a newer API
 outside it is still a 3.9 PC's to find.
 
-One guard, two users: the helper's own files (tests/ai_workspace_helper/
-test_python39.py) and a company's site file as it is packed
-(scripts/pack_ai_workspace_helper.py, docs/plan-ext-ai.md D7).
+It guards the helper's own files (tests/ai_workspace_helper/test_python39.py).
 """
 
 from __future__ import annotations

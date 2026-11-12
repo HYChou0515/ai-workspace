@@ -217,14 +217,6 @@ async def test_a_workflow_step_cannot_even_holding_ask_user(monkeypatch):
     assert not _ask_outside_held(ctx)
 
 
-async def test_a_chat_turn_can_ask_the_external_ai_where_the_deploy_turned_it_on(monkeypatch):
-    """docs/plan-ext-ai.md D5: `server.ext_ai_enabled` reaches the chat turn."""
-    spec, builder, _, _, iid = _build(monkeypatch, {}, ext_ai_enabled=True)
-    ctx = await _chat_ctx(spec, builder, iid)
-
-    assert _ask_outside_held(ctx, "ask_ext_ai")
-
-
 async def test_a_chat_turn_tells_the_ai_the_deploys_search_targets(monkeypatch):
     """docs/plan-lookup-target-choice.md T3: `server.lookup_targets` reaches the
     chat turn — and through the runner's own kwargs, the card's description —
@@ -250,21 +242,6 @@ async def test_a_chat_turn_tells_the_ai_the_deploys_search_targets(monkeypatch):
     agent = _agent_for(ctx.agent_config, ctx.packages, ctx.unavailable_tools, **kw)
     (tool,) = [t for t in agent.tools if t.name == "ask_outside"]
     assert "- Parts: Part numbers." in getattr(tool, "description", "")
-
-
-async def test_a_chat_turn_on_a_deploy_that_did_not_cannot(monkeypatch):
-    spec, builder, _, _, iid = _build(monkeypatch, {})
-    ctx = await _chat_ctx(spec, builder, iid)
-
-    assert not _ask_outside_held(ctx, "ask_ext_ai")
-
-
-async def test_a_workflow_step_cannot_ask_the_external_ai_even_where_it_is_on(monkeypatch):
-    """D5: nobody in a run presses 「問外部AI」."""
-    _, _, executor, runner, iid = _build(monkeypatch, {}, ext_ai_enabled=True)
-    await executor.drive_turn(iid, "no-such-chat", "u", "hello", None)
-
-    assert not _ask_outside_held(runner.ctxs[-1], "ask_ext_ai")
 
 
 async def test_a_workflow_step_with_an_empty_tools_list_holds_nothing_whatever_the_pins(

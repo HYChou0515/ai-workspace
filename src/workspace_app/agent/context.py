@@ -560,9 +560,6 @@ class AgentToolContext:
     # drawn. Set only by the chat turn builder; a workflow step or a schedule
     # leaves it False even when its tool list includes `ask_user`.
     in_chat: bool = False
-    # Whether the deploy turned on the 問外部AI card (`server.ext_ai_enabled`,
-    # docs/plan-ext-ai.md D5): granted only where `in_chat` holds too.
-    ext_ai: bool = False
     # The deploy's search targets (`server.lookup_targets`, whole — see
     # `config.schema.whole_lookup_targets`): what `ask_outside` lists for the
     # AI and the only names its `target` may suggest

@@ -679,7 +679,6 @@ def _agent_for(
     has_subagents: bool = False,
     skills_reachable: bool | None = None,
     in_chat: bool = False,
-    ext_ai: bool = False,
     search_targets: Sequence[Mapping[str, Any]] = (),
     subagent_models: tuple[SubagentModel, ...] = (),
     fallback_chains: FallbackChains | None = None,
@@ -744,12 +743,6 @@ def _agent_for(
     if in_chat and ask_outside_granted(config):
         # …listing the deploy's search targets (docs/plan-lookup-target-choice.md T3)
         tools.append(ask_outside_tool(search_targets))
-    # docs/plan-ext-ai.md D5: the 問外部AI card goes where the 請幫我查 card
-    # goes, on a deploy that turned it on (`server.ext_ai_enabled`).
-    from ..agent.ext_ai import ask_ext_ai_granted, ask_ext_ai_tool
-
-    if in_chat and ask_ext_ai_granted(config, enabled=ext_ai):
-        tools.append(ask_ext_ai_tool())
     # plan-tool-on-demand-loading: `load_tool` is ours, not a package's, so it
     # goes in BEFORE `builtin_names` is read — the usage report would otherwise
     # file it under `first_party`, beside the commands it exists to open.
@@ -1178,7 +1171,6 @@ def ask_user_stop_behaviour(
     card, docs/plan-outside-lookup.md) follows the same rule."""
     from ..agent.env_request import TOOL_NAME as REQUEST_ENV_TOOL
     from ..agent.env_request import declared_card
-    from ..agent.ext_ai import TOOL_NAME as ASK_EXT_AI_TOOL
     from ..agent.outside_lookup import TOOL_NAME as ASK_OUTSIDE_TOOL
     from ..agent.outside_lookup import declared_lookup
 
@@ -1186,7 +1178,6 @@ def ask_user_stop_behaviour(
     cards: dict[str, Callable[[str], object]] = {
         REQUEST_ENV_TOOL: declared_card,
         ASK_OUTSIDE_TOOL: declared_lookup,
-        ASK_EXT_AI_TOOL: declared_lookup,
     }
     names = tool_names or ()
     if not any(n in cards for n in names):
@@ -1952,7 +1943,6 @@ class LitellmAgentRunner:
             "has_subagents": bool(ctx.subagent_defs),
             "skills_reachable": ctx.skills_reachable,
             "in_chat": ctx.in_chat,
-            "ext_ai": ctx.ext_ai,
             "search_targets": ctx.search_targets,
             "subagent_models": ctx.subagent_models,
             "fallback_chains": self._fallback_chains,

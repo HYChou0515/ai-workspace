@@ -234,9 +234,8 @@ def fetch(ctx: ErrandContext, url: str) -> FetchedPage:
     return FetchedPage(title=title, url=where, markdown=markdown)
 
 
-def build(site: Any = None) -> dict[str, Errand]:
-    """The errands — and `ask_ext_ai` when the helper was packed with the
-    company's site file (docs/plan-ext-ai.md D7)."""
+def build() -> dict[str, Errand]:
+    """The errands: a search, and opening a page."""
 
     def search(ctx: ErrandContext, address: str) -> FetchedPage:
         # docs/plan-lookup-target-choice.md §3.4: the target the person chose,
@@ -261,12 +260,7 @@ def build(site: Any = None) -> dict[str, Errand]:
             raise ErrandFailed(f"not a web address: {url!r}")
         return fetch(ctx, url)
 
-    errands: dict[str, Errand] = {"search": search, "open_url": open_url}
-    if site is not None:
-        from .ext_ai import errand as ext_ai_errand
-
-        errands["ask_ext_ai"] = ext_ai_errand(site)
-    return errands
+    return {"search": search, "open_url": open_url}
 
 
 __all__ = ["build", "fetch", "looks_like_a_verification"]

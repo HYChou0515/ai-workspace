@@ -73,8 +73,6 @@ class HeartbeatIn(BaseModel):
     playwright: str = ""
     python: str = ""
     update: str = ""
-    #: The company's site file packed in, "" without one (docs/plan-ext-ai.md D9).
-    ext_ai: str = ""
 
 
 def _version(text: str) -> tuple[int, ...]:
@@ -87,8 +85,6 @@ def _version(text: str) -> tuple[int, ...]:
 
 class HelperStatusOut(BaseModel):
     online: bool
-    #: Online, and able to ask the external AI (docs/plan-ext-ai.md D9).
-    ext_ai: bool = False
 
 
 class ResultIn(BaseModel):
@@ -204,10 +200,6 @@ def register_outside_job_routes(
             # or pasted; the AI's query is only the suggestion beside the box —
             # never sent instead (checked below, where a new job would start).
             kind, args = "search", body.query.strip()
-        elif "question" in card:
-            # docs/plan-ext-ai.md D2: the question as the person left it in the
-            # box — the AI only drafted it
-            kind, args = "ask_ext_ai", body.query.strip()
         else:
             kind, args = "open_url", card["url"]
         jid = job_id(investigation_id, rid, body.tool_call_id)
@@ -252,19 +244,6 @@ def register_outside_job_routes(
                     detail=f"沒有這個搜尋目標 — no search target named {target!r}",
                 )
             target_url = fill_target(targets[target]["url"], args)
-        if kind == "ask_ext_ai":
-            if not args:
-                raise HTTPException(
-                    status_code=422,
-                    detail="先在框裡寫好要問的問題 — write the question first",
-                )
-            if not await store.can_ask_ext_ai(owner):
-                # D9: an older helper, or one packed without the company's
-                # site file — it would only fail the job
-                raise HTTPException(
-                    status_code=409,
-                    detail="你的小幫手沒有設定外部AI — your helper cannot ask the external AI",
-                )
         job = OutsideJob(
             owner=owner,
             item_id=investigation_id,
@@ -367,7 +346,7 @@ def register_outside_job_routes(
             job.tool_call_id,
             "found",
             body.markdown,
-            job.args if job.kind in ("search", "ask_ext_ai") else "",
+            job.args if job.kind == "search" else "",
             body.url,
             "",
             # the target the person chose (T10) — recorded as a pasted answer's is
@@ -418,9 +397,7 @@ def register_outside_job_routes(
     @app.get("/ai-workspace-helper/status", response_model=HelperStatusOut)
     async def status() -> HelperStatusOut:
         owner = get_user_id()
-        return HelperStatusOut(
-            online=await store.online(owner), ext_ai=await store.can_ask_ext_ai(owner)
-        )
+        return HelperStatusOut(online=await store.online(owner))
 
     @app.post(
         "/ai-workspace-helper/jobs/claim", response_model=JobOut | None, dependencies=helper_only

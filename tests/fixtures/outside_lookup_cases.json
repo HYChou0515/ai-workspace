@@ -160,17 +160,11 @@
   },
   {
    "output": "Asked.\n[outside-lookup]{\"why\":\"w\",\"question\":\"Which is safer?\"}",
-   "card": {
-    "why": "w",
-    "question": "Which is safer?"
-   }
+   "card": null
   },
   {
    "output": "Asked.\n[outside-lookup]{\"why\":\"w\",\"question\":\"line one\\nline two — 中文\"}",
-   "card": {
-    "why": "w",
-    "question": "line one\nline two — 中文"
-   }
+   "card": null
   },
   {
    "output": "Asked.\n[outside-lookup]{\"why\":\"w\",\"question\":\"q\",\"query\":\"k\"}",

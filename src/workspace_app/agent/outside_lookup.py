@@ -222,7 +222,6 @@ _CARD_KEYS = (
     # docs/plan-lookup-target-choice.md: the target the AI suggests, beside a search only
     {"why", "query", "target"},
     {"why", "url"},
-    {"why", "question"},
 )
 
 
@@ -230,10 +229,8 @@ def declared_lookup(text: str) -> dict | None:
     """The card a reply declares, read the way the chat reads it
     (`web/src/renderers/outsideLookup.ts`): the tail after the LAST marker is
     one JSON object with a `why` and exactly one of a `query` (with, maybe, the
-    `target` the AI suggests — docs/plan-lookup-target-choice.md), an http(s)
-    `url`, or a `question` for the external AI (`ask_ext_ai`,
-    docs/plan-ext-ai.md). `None` for anything else — a refusal quoting the
-    marker included."""
+    `target` the AI suggests — docs/plan-lookup-target-choice.md) or an http(s)
+    `url`. `None` for anything else — a refusal quoting the marker included."""
     at = text.rfind(OUTSIDE_LOOKUP_MARKER)
     if at < 0:
         return None
