@@ -40,7 +40,22 @@ export function choicesFromSpec(publish: unknown): Partial<PublishChoices> {
   if (cpu !== undefined) out.cpu_cores = cpu;
   const memoryGb = positive(raw.memory_gb);
   if (memoryGb !== undefined) out.memory_bytes = Math.round(memoryGb * GB);
+  // A re-publish's "what changed", drafted by the skill (A9,
+  // docs/plan-wui-copy-update.md D6) — so the person reads it in the dialog
+  // instead of copying it there.
+  if (typeof raw.note === "string" && raw.note.trim()) out.note = raw.note.trim();
   return out;
+}
+
+/** A re-publish's dialog: what is in effect now (`choicesFromPublished`),
+ * plus the note the skill wrote into `publish:` — unless that note is the one
+ * already published, which a later re-publish must not post again. */
+export function republishChoices(
+  row: Parameters<typeof choicesFromPublished>[0] & Pick<Published, "latest_note">,
+  publish: unknown,
+): Partial<PublishChoices> {
+  const note = choicesFromSpec(publish).note ?? "";
+  return { ...choicesFromPublished(row), note: note && note !== (row.latest_note ?? "") ? note : "" };
 }
 
 /** What a re-publish starts from: the publication as it is in effect now

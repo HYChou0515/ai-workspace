@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { choicesFromPublished, choicesFromSpec } from "./publishSpec";
+import { choicesFromPublished, choicesFromSpec, republishChoices } from "./publishSpec";
 
 describe("choicesFromSpec", () => {
   it("reads every key the skill writes, memory in GB", () => {
@@ -60,5 +60,33 @@ describe("choicesFromPublished", () => {
       cpu_cores: 2,
       memory_bytes: 4 * 1024 ** 3,
     });
+  });
+});
+
+// docs/plan-wui-copy-update.md D6: the skill writes the release note into
+// `publish:`; a re-publish's dialog opens with it — unless it was published.
+describe("republishChoices", () => {
+  const row = {
+    sharing: "per_person" as const,
+    reach: "everyone" as const,
+    subjects: [],
+    role: "participant" as const,
+    cpu_cores: null,
+    memory_bytes: null,
+  };
+
+  it("is what is in effect now, with the note the skill wrote", () => {
+    expect(republishChoices({ ...row, latest_note: "" }, { note: "  Totals per week.\n" })).toEqual({
+      ...choicesFromPublished(row),
+      note: "Totals per week.",
+    });
+  });
+
+  it("does not offer again a note already published", () => {
+    expect(republishChoices({ ...row, latest_note: "Totals per week." }, { note: "Totals per week." }).note).toBe("");
+  });
+
+  it("keeps who may use it from what is in effect, whatever the yaml says", () => {
+    expect(republishChoices({ ...row, latest_note: "" }, { reach: "me", note: "x" }).reach).toBe("everyone");
   });
 });

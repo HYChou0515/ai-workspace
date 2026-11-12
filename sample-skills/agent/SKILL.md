@@ -32,6 +32,7 @@ suggestions:                        # what a new conversation opens with
     prompt: Summarise this month's orders by customer and status.
 publish:                            # what the Publish agent dialog opens with
   reach: everyone
+  # note: Answers now cite the order id.   # a re-publish's "what changed"
 ```
 
 - **`instructions:` is the agent.** It is added to this App's own instructions
@@ -68,8 +69,10 @@ them in one reply:
    `memory_gb`, or leave them out for the App's size.
 3. **On a re-publish, what changed** — draft a one- or two-line release note
    from what you changed since the last publish ("Answers now cite the order
-   id.") and give it to them to paste or edit in the dialog; people see the
-   latest few on the agent's page.
+   id.") and write it as `note:` in `publish:` — the dialog's 這次改了什麼 box
+   opens with it, so they read it there and edit it if they like; nobody
+   copies it over. Replace it on every re-publish (a note already published is
+   not offered again). People see the latest few on the agent's page.
 
 Write the answers into `publish:`, then summarise in a sentence and tell them to
 press **發布 agent**. Say two things plainly:

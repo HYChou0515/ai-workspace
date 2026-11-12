@@ -257,6 +257,24 @@ describe("PublishDialog", () => {
     expect(onConfirm).toHaveBeenCalledWith(expect.objectContaining({ sharing: "per_person", note: "Totals per week." }));
   });
 
+  it("opens with the note the skill wrote, ready to read and send as it is", () => {
+    const { dialog, onConfirm, onClose } = open({
+      republish: true,
+      initial: { sharing: "per_person", reach: "everyone", note: "Totals per week." },
+    });
+
+    expect(within(dialog).getByRole("textbox", { name: "這次改了什麼（選填）" })).toHaveValue("Totals per week.");
+    // Opened with it is not an edit: Cancel closes at once.
+    fireEvent.click(within(dialog).getByRole("button", { name: "取消" }));
+    expect(onClose).toHaveBeenCalled();
+    cleanup();
+
+    const again = open({ republish: true, initial: { sharing: "per_person", reach: "everyone", note: "Totals per week." } });
+    fireEvent.click(publishButton(again.dialog));
+    expect(again.onConfirm).toHaveBeenCalledWith(expect.objectContaining({ note: "Totals per week." }));
+    expect(onConfirm).not.toHaveBeenCalled();
+  });
+
   it("sends no note it no longer shows — typed, then the way changed to direct", () => {
     const { dialog, onConfirm } = open({ republish: true });
     fireEvent.click(within(dialog).getByRole("radio", { name: /每個人一份/ }));

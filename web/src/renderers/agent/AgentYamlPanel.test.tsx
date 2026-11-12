@@ -80,7 +80,7 @@ const ROW: Published = {
   memory_bytes: null,
 };
 
-function renderPanel(summary: Partial<AgentSummary> = {}) {
+function renderPanel(summary: Partial<AgentSummary> = {}, text: string = YAML) {
   const client = { summary: vi.fn(async () => ({ ...SUMMARY, ...summary })) };
   const publisher = {
     publish: vi.fn(async () => ROW),
@@ -91,7 +91,7 @@ function renderPanel(summary: Partial<AgentSummary> = {}) {
     <QueryWrap>
       <WorkspaceSlugProvider value="rca">
         <FileServiceProvider value={fs()}>
-          <AgentYamlPanel path={PATH} text={YAML} client={client} publisher={publisher} />
+          <AgentYamlPanel path={PATH} text={text} client={client} publisher={publisher} />
         </FileServiceProvider>
       </WorkspaceSlugProvider>
     </QueryWrap>,
@@ -195,6 +195,26 @@ describe("AgentYamlPanel", () => {
         expect.objectContaining({ note: "Shorter answers.", subjects: ["user:amy"] }),
       ),
     );
+  });
+
+  it("re-publishes with the note the skill wrote into publish: — not one already published", async () => {
+    // The user: 「應該讓 skill 處理更改的 message 吧，至少讓他能 copy」 — the
+    // skill writes it, the dialog opens with it (plan-wui-copy-update D6).
+    const withNote = `${YAML}  note: Shorter answers.\n`;
+    renderPanel({ published: { ...ROW, latest_note: "" } }, withNote);
+    await screen.findByTestId("agent-publish-state");
+    fireEvent.click(screen.getByRole("button", { name: "再次發布 agent" }));
+    expect(
+      within(screen.getByTestId("publish-dialog")).getByRole("textbox", { name: "這次改了什麼（選填）" }),
+    ).toHaveValue("Shorter answers.");
+    cleanup();
+
+    renderPanel({ published: { ...ROW, latest_note: "Shorter answers." } }, withNote);
+    await screen.findByTestId("agent-publish-state");
+    fireEvent.click(screen.getByRole("button", { name: "再次發布 agent" }));
+    expect(
+      within(screen.getByTestId("publish-dialog")).getByRole("textbox", { name: "這次改了什麼（選填）" }),
+    ).toHaveValue("");
   });
 
   it("unpublishes only after asking", async () => {

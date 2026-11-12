@@ -368,9 +368,12 @@ the dialog opens with them, and say what pressing Publish will do.
    `memory_gb`, or leave them out for the App's size.
 4. **On a re-publish of a copying way, what changed** — draft a one- or
    two-line note from what you changed since the last publish ("Totals now per
-   week; the chart has a legend.") and give it to them to paste or edit in the
-   dialog's 這次改了什麼 box. People whose copy is older see its first line in
-   a banner on their page, and decide from it whether to take the new version.
+   week; the chart has a legend.") and write it as `note:` in `publish:`: the
+   dialog's 這次改了什麼 box opens with it, so they read it there and edit it if
+   they like — nobody copies it over. Replace it on every re-publish; a note
+   already published is not offered again. People whose copy is older see its
+   first line in a banner on their page, and decide from it whether to take
+   the new version.
 
 ```yaml
 publish:
@@ -380,6 +383,7 @@ publish:
   # role: participant      # shared only
   # cpu_cores: 2
   # memory_gb: 4
+  # note: Totals now per week.   # a re-publish's "what changed"
 ```
 
 A copy is the workspace as it is when published, minus run state and

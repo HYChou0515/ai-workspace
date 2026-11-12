@@ -113,7 +113,7 @@ export function PublishDialog({
     role: initial?.role ?? EMPTY_CHOICES.role,
     cpu: initial?.cpu_cores != null ? String(initial.cpu_cores) : "",
     memory: initial?.memory_bytes != null ? String(initial.memory_bytes / GB) : "",
-    note: "",
+    note: initial?.note ?? "",
   };
   const [sharing, setSharing] = useState<Sharing | null>(start.sharing);
   const [reach, setReach] = useState<Reach>(start.reach);
@@ -121,7 +121,7 @@ export function PublishDialog({
   const [role, setRole] = useState<Role>(start.role);
   const [cpu, setCpu] = useState(start.cpu);
   const [memory, setMemory] = useState(start.memory);
-  const [note, setNote] = useState("");
+  const [note, setNote] = useState(start.note);
   const now = { sharing, reach, subjects, role, cpu, memory, note };
   // #779: dirty against what the dialog OPENED with — a form seeded from the
   // view file does not claim unsaved work on sight.

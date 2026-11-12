@@ -364,6 +364,9 @@ class PublishedOut(BaseModel):
     #: starts from, so pressing Publish again does not reset it.
     cpu_cores: float | None = None
     memory_bytes: int | None = None
+    #: The last release note's text (A9, `plan-wui-copy-update` D6), "" for
+    #: none — so the dialog never offers again a note already published.
+    latest_note: str = ""
 
 
 def published_out(row: Published) -> PublishedOut:
@@ -389,6 +392,7 @@ def published_out(row: Published) -> PublishedOut:
         based_on_by=row.based_on_by,
         cpu_cores=row.cpu_cores,
         memory_bytes=row.memory_bytes,
+        latest_note=row.notes[-1].text if row.notes else "",
     )
 
 

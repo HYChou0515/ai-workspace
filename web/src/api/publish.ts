@@ -56,6 +56,8 @@ export type Published = {
    * before round 1 of review. */
   cpu_cores?: number | null;
   memory_bytes?: number | null;
+  /** The last release note's text, "" for none (plan-wui-copy-update D6). */
+  latest_note?: string;
 };
 
 export type FolderSize = { folder: string; files: number; bytes: number };

@@ -371,3 +371,19 @@ def test_a_copy_made_on_open_takes_the_new_version_the_same_way(clock):
 
     assert r.status_code == 200, r.text
     assert b"Board v2" in store._files[r.json()["item_id"]][PAGE]
+
+
+def test_the_publication_says_its_latest_note(clock):
+    # D6: the skill writes the note into `publish:`; the dialog offers it — but
+    # not once it has been published, so it reads the latest one back.
+    holder = {"id": "bob"}
+    client, spec, _store = _app(holder)
+    src = _source(spec)
+    _workspace(client, src)
+    first = _publish(client, src, sharing="per_person")
+    assert first["latest_note"] == ""
+
+    _publish(client, src, sharing="per_person", note="Totals per week.")
+    got = client.get(f"/a/rca/items/{src}/publish", params={"path": PAGE}).json()
+
+    assert got["latest_note"] == "Totals per week."
