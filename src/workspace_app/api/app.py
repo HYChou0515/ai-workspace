@@ -3104,6 +3104,19 @@ def create_app(
         # write — asked before they are made.
         limit_of=_disk_limit_of,
     )
+    # A WUI copy can take the new version (plan-wui-copy-update).
+    from .publish_update import register_publish_update_routes
+
+    register_publish_update_routes(
+        api,
+        spec=spec,
+        locator=locator,
+        publications=Publications(spec),
+        get_user_id=get_user_id,
+        ledger=disk_ledger,
+        limit_of=_disk_limit_of,
+        superusers=superusers,
+    )
     # The agent panel's summary (plan-wui-publish-and-agent-hub A6).
     from .agent_routes import register_agent_routes
 

@@ -226,6 +226,7 @@ async def make_copy(
         "published_kind": row.kind,
         "published_path": row.path,
         "published_title": row.title,
+        "published_version": row.published_at,
         # Facts about the SOURCE, not settings (e.g. the legacy records it
         # absorbed, #700): a copy does not carry them.
         **fields_a_copy_does_not_carry(),
