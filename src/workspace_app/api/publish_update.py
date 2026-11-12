@@ -45,6 +45,10 @@ class CopyUpdateOut(BaseModel):
     due: bool
     sharing: str = ""
     published_at: int = 0
+    #: The publication — what 前往新版 opens (it lands in the current
+    #: shared copy), and the page a new copy opens at.
+    source_item_id: str = ""
+    path: str = ""
     #: The release notes written since this copy was made, oldest first.
     notes: list[NoteOut] = []
     #: D5 — what a new copy writes, and the viewer's room for it: ``free`` is
@@ -136,6 +140,8 @@ def register_publish_update_routes(
             due=True,
             sharing=row.sharing,
             published_at=row.published_at,
+            source_item_id=row.item_id,
+            path=row.path,
             notes=[NoteOut(at=n.at, by=n.by, text=n.text) for n in row.notes if n.at > behind.made],
         )
         if row.sharing != "shared":

@@ -68,6 +68,8 @@ def test_the_old_shared_copy_points_on_and_the_new_one_is_current(clock):
     assert new_copy != old_copy
     got = _update(client, old_copy)
     assert got["due"] is True and got["sharing"] == "shared"
+    # Where 前往新版 goes: the publication itself, which lands in the current copy.
+    assert (got["source_item_id"], got["path"]) == (src, PAGE)
     assert _update(client, new_copy)["due"] is False
     assert old["sharing"] == "shared"
 

@@ -27,6 +27,7 @@ import { TryAgain } from "../renderers/wui/TryAgain";
 import { parseViewSpec } from "../renderers/entity/EntityViews";
 import { VIEW_KIND } from "../renderers/entity/types";
 import { PageIdentityBar } from "../components/PageIdentity";
+import { CopyUpdateBanner } from "../components/CopyUpdateBanner";
 import { WorkspaceSlugProvider } from "../hooks/useWorkspaceSlug";
 import { WuiView } from "../renderers/wui/WuiView";
 import { useQuery } from "@tanstack/react-query";
@@ -195,6 +196,10 @@ export function WuiPage({
             folder={path.slice(0, path.lastIndexOf("/"))}
             title={typeof spec.title === "string" && spec.title ? spec.title : path}
           />
+          {/* docs/plan-wui-copy-update.md D3: a copy that is behind its
+              publication says so here, on the line above the page — nothing
+              for any page that is no copy (the server answers "not due"). */}
+          <CopyUpdateBanner slug={slug} itemId={itemId} where="page" />
           {/* The reader's chrome: no toolbar, no build log, no reports, and the
               page is never rebuilt on their account — a link serves what is
               already built (docs/plan-wui-deploy.md). */}

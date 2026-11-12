@@ -129,6 +129,50 @@ export const publishApi: PublishApi = {
   },
 };
 
+/** Is there a newer publish than the one this copy was made from?
+ * (`docs/plan-wui-copy-update.md`, `api/publish_update.py`). */
+export type CopyUpdate = {
+  due: boolean;
+  sharing: Sharing | "";
+  published_at: number;
+  /** The publication — what 前往新版 opens, and the page a new copy opens at. */
+  source_item_id: string;
+  path: string;
+  /** The release notes since this copy was made, oldest first. */
+  notes: { at: number; by: string; text: string }[];
+  /** D5: what a new copy writes and the room for it (`free` null: no cap). */
+  needs: number;
+  free: number | null;
+  free_if_replaced: number | null;
+  fits: boolean;
+};
+
+export type CopyUpdateApi = {
+  status(slug: string, itemId: string): Promise<CopyUpdate>;
+  /** A new copy from the latest snapshot; ``replace`` deletes this one (D5). */
+  take(slug: string, itemId: string, opts: { replace: boolean }): Promise<{ slug: string; item_id: string }>;
+};
+
+const updateBase = (slug: string, itemId: string) =>
+  `/a/${encodeURIComponent(slug)}/items/${encodeURIComponent(itemId)}/published-update`;
+
+export const copyUpdateApi: CopyUpdateApi = {
+  async status(slug, itemId) {
+    const resp = await apiFetch(updateBase(slug, itemId));
+    if (!resp.ok) throw await httpErrorFrom(resp, `update check failed: ${resp.status}`);
+    return (await resp.json()) as CopyUpdate;
+  },
+  async take(slug, itemId, opts) {
+    const resp = await apiFetch(updateBase(slug, itemId), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(opts),
+    });
+    if (!resp.ok) throw await httpErrorFrom(resp, `taking the new version failed: ${resp.status}`);
+    return (await resp.json()) as { slug: string; item_id: string };
+  },
+};
+
 /**
  * The address that opens a published WUI or agent for whoever follows it:
  * the "preparing" page (C12), which makes (or finds) their copy and then

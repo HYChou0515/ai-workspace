@@ -23,6 +23,14 @@ import { WuiPage } from "./WuiPage";
 
 const YAML = "view: wui\ntitle: Scrap review\n";
 
+// docs/plan-wui-copy-update.md D3: the reader page carries the copy-update
+// banner (its own tests: CopyUpdateBanner.test.tsx); here, only that it is there.
+vi.mock("../components/CopyUpdateBanner", () => ({
+  CopyUpdateBanner: ({ itemId, where }: { itemId: string; where: string }) => (
+    <div data-testid="copy-update" data-item={itemId} data-where={where} />
+  ),
+}));
+
 /** What the real service throws for a file that is not there — an
  * `HttpError(404)`, which is the ONE shape the classifiers (`readAsset`,
  * `WuiPage`) treat as certain absence. A double throwing a plain `Error`
@@ -84,6 +92,10 @@ describe("WuiPage", () => {
 
     // The frame is the page. Its title is what the view file said.
     await waitFor(() => expect(screen.getByTitle("Scrap review")).toBeTruthy());
+    // And above it, the copy asks whether it is behind (plan-wui-copy-update D3).
+    const banner = screen.getByTestId("copy-update");
+    expect(banner).toHaveAttribute("data-item", "i1");
+    expect(banner).toHaveAttribute("data-where", "page");
   });
 
   it("gives the page the slug, so its tools still answer here", async () => {
