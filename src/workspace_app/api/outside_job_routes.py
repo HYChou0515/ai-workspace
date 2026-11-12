@@ -35,9 +35,8 @@ from .outside_lookup_routes import AnswerForm, Deliver, OutsideAnswerOut, _open_
 class HandOverIn(BaseModel):
     tool_call_id: str
     #: What the person left in the card's box: the search keywords they typed
-    #: or pasted (plan-outside-lookup D13), or the question for the external
-    #: AI as they edited it (docs/plan-ext-ai.md D2). Required for both — never
-    #: falls back to the AI's; ignored for a URL.
+    #: or pasted (plan-outside-lookup D13). Required for a search — never falls
+    #: back to the AI's; ignored for a URL.
     query: str = ""
     #: The card asking on its own, with no nod (D12): allowed only for a URL
     #: an earlier lookup in this chat brought back, and never restarts a job.

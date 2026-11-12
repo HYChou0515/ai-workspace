@@ -44,8 +44,7 @@ export type HelperJob = {
   args: string;
   state: "queued" | "claimed" | "done" | "failed" | "cancelled";
   error: string;
-  /** What the helper waits on while it holds the job: `captcha`, `login`
-   * (the external AI's sign-in, docs/plan-ext-ai.md D4), or "". */
+  /** What the helper waits on while it holds the job: `captcha`, or "". */
   note: string;
   /** Opened with no nod — a link an earlier lookup brought back (D12). */
   auto: boolean;
@@ -83,9 +82,7 @@ async function refused(r: Response, fallback: string): Promise<never> {
 }
 
 export const outsideLookupApi = {
-  /** Whether the person's own helper checked in just now (D7), and whether it
-   * can ask the external AI — packed with the company's site file
-   * (docs/plan-ext-ai.md D9). */
+  /** Whether the person's own helper checked in just now (D7). */
   async helperStatus(): Promise<HelperStatus> {
     const r = await apiFetch("/ai-workspace-helper/status");
     if (!r.ok) return refused(r, `helper status failed: ${r.status}`);
