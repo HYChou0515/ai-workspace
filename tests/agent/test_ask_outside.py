@@ -526,3 +526,18 @@ async def test_a_limit_of_zero_lifts_only_that_ruler() -> None:
     reply = await _call_with_targets(why="w", query=_CJK, target="Parts")
 
     assert _card(reply) == {"why": "w", "query": _CJK, "target": "Parts"}
+
+
+async def test_a_refusal_points_at_another_target_only_when_one_takes_the_search() -> None:
+    """Review round 1 (regression): with Google alone there is no other target
+    to suggest — saying so sends the model after one that is not there."""
+    from workspace_app.agent.outside_lookup import ask_outside_impl
+
+    alone = AgentToolContext(search_targets=TARGETS[:1])
+    reply = await ask_outside_impl(RunContextWrapper(alone), why="w", query=_QUESTION)
+    assert reply.startswith("error:"), reply
+    assert "keywords, not a sentence" in reply
+    assert "suggest" not in reply
+
+    reply = await _call_with_targets(why="w", query=_QUESTION)
+    assert "suggest AI" in reply, reply

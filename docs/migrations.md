@@ -3563,6 +3563,8 @@ Workflows 打開模型答錯格式的那次執行——執行結束後還留著�
 - 新的選填欄位 `server.lookup_targets[].max_words` / `max_cjk`(AI 建議的搜尋最多幾個詞/幾個中日韓字,`0` = 不限)。
   沒寫就是原本的 10 / 40,所以不設什麼都不變;要讓某個目標收整句問題(例如公司的網頁 AI),在那一筆寫 `0`。
   寫成負數、小數、`true` 或字串,開機失敗:`server.lookup_targets[N].max_words must be a whole number, 0 or more`。
+- 要設的話,`rollout 後`才加。為什麼:舊版 loader 不認得這兩個 key。不照做的症狀:還在跑舊版 image 的 pod(rollout
+  途中,或回滾後)開不了機,錯誤訊息是 `server.lookup_targets[0] has unknown key 'max_words'`。要回滾,先把它們從設定拿掉。
 
 **資料** — 不用跑 migrate,也不用回填。已存的 `ask_ext_ai` 小幫手工作照樣讀得出來,只是不會再有新的;聊天紀錄裡舊的
 「問外部AI」卡片顯示成一般的工具紀錄(「使用工具」),不再是卡片。
@@ -3581,7 +3583,7 @@ AI 工具說明裡每個目標後面多了它的長度上限(沒設的寫 10 個
 2. 在聊天裡請 AI「去問外部 AI」:AI 只會出「請幫我查」的卡片,沒有「問外部AI」卡片。
 3. 打開一個以前用過「問外部AI」的對話:那一筆顯示成一般的工具紀錄,頁面不會壞。
 
-**還是舊版 image 時**:設定裡已經刪掉 `ext_ai_enabled` 也沒關係(舊版預設就是關的)。
+**還是舊版 image 時**:設定裡已經刪掉 `ext_ai_enabled` 也沒關係(舊版預設就是關的);但設定裡**不能有** `max_words` / `max_cjk`(見上)。
 
 ---
 

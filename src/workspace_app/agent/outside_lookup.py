@@ -108,9 +108,13 @@ async def ask_outside_impl(
     meets = next((t for t in targets if t["name"] == target), targets[0] if targets else None)
     if query is not None and (too_long := _too_long(query, meets)):
         where = f"a search on {meets['name']}" if meets else "a search"
+        # Only a target that is there and takes this search is worth naming
+        # (review round 1): with Google alone, "suggest another" has no answer.
+        takers = [t["name"] for t in targets if t is not meets and not _too_long(query, t)]
+        other = f", or suggest {' or '.join(takers)}, which takes it," if takers else ""
         return (
-            f"error: {where} is {_limits(meets)}; this one has {too_long}. Shorten it to "
-            "the keywords that matter, or suggest a target that takes it, and call again."
+            f"error: {where} is keywords, not a sentence — {_limits(meets)}; this one has "
+            f"{too_long}. Shorten it to the keywords that matter{other} and call again."
         )
     if url is not None and not is_web_address(url):
         return (
@@ -161,7 +165,8 @@ def _rulers(target: Mapping[str, Any] | None) -> tuple[int, int]:
 
 
 def _limits(target: Mapping[str, Any] | None) -> str:
-    """The target's query length in words — `0` lifts that ruler."""
+    """The target's query length, both rulers, as the AI reads it — a ruler
+    at `0` is left out, and a target with neither takes "any length"."""
     words, cjk = _rulers(target)
     said = [
         f"{words} word{'s' if words != 1 else ''}" if words else "",
