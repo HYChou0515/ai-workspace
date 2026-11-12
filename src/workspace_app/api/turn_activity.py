@@ -49,18 +49,26 @@ import asyncio
 import contextlib
 import datetime as dt
 import logging
+import time
 from collections.abc import Callable
 
 from msgspec import Struct
 from specstar import SpecStar
 from specstar.types import (
     DuplicateResourceError,
+    ResourceDecodeError,
     ResourceIDNotFoundError,
     ResourceIsDeletedError,
     RevisionStatus,
 )
 
 logger = logging.getLogger(__name__)
+
+#: How many times a beat read is tried when it lands mid-rewrite (a disk-backend
+#: draft `modify` leaves no data file, or half of one, for an instant), and the
+#: pause between.
+_READ_ATTEMPTS = 3
+_REREAD_S = 0.01
 
 #: How long after the last beat a turn counts as gone — six beats' worth, so it
 #: takes six CONSECUTIVE misses (a wedged store, an event loop pinned by sync
@@ -160,10 +168,21 @@ class SpecstarTurnActivityStore(ITurnActivityStore):
 
     def _alive_sync(self, key: str, stale_after_ms: int) -> bool:
         rm = self._spec.get_resource_manager(_TurnActivity)
-        try:
-            res = rm.get(key)
-        except (ResourceIDNotFoundError, ResourceIsDeletedError):
-            return False  # never started, or finished
+        for attempt in range(_READ_ATTEMPTS):
+            try:
+                res = rm.get(key)
+                break
+            except (ResourceIDNotFoundError, ResourceIsDeletedError):
+                return False  # never started, or finished
+            except (FileNotFoundError, ResourceDecodeError):
+                # The disk backend rewrites a draft in place (`_bump_sync`'s
+                # `modify`): a read landing in that instant finds no data file,
+                # or half of one ("Input data was truncated"). Read again; a row
+                # still unreadable after that is no rewrite — raise, and the
+                # caller's "could not be judged" stands.
+                if attempt == _READ_ATTEMPTS - 1:
+                    raise
+                time.sleep(_REREAD_S)
         data = res.data
         assert isinstance(data, _TurnActivity)
         age = self._now() - data.last_beat_ms
