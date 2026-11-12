@@ -199,9 +199,11 @@ export function WuiPage({
           {/* docs/plan-wui-copy-update.md D3: a copy that is behind its
               publication says so here, on the line above the page — nothing
               for any page that is no copy (the server answers "not due"). */}
-          {/* Keyed by item: a failure said about one copy never lingers on the
-              next page opened in this tab (review round 2). */}
-          <CopyUpdateBanner key={itemId} slug={slug} itemId={itemId} where="page" />
+          {/* Another item opened in this tab starts it afresh: the page's own
+              read is keyed by item, so it shows "opening" first and the banner
+              mounts anew — a failure said about one copy never lingers on the
+              next (pinned in WuiPage.test, review round 3). */}
+          <CopyUpdateBanner slug={slug} itemId={itemId} where="page" />
           {/* The reader's chrome: no toolbar, no build log, no reports, and the
               page is never rebuilt on their account — a link serves what is
               already built (docs/plan-wui-deploy.md). */}

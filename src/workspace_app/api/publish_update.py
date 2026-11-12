@@ -13,11 +13,13 @@ import logging
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Any
 
 import msgspec
 from fastapi import APIRouter, FastAPI, HTTPException
 from pydantic import BaseModel
 from specstar import SpecStar
+from specstar.types import ResourceIDNotFoundError, ResourceIsDeletedError
 
 from ..apps.base import WorkItemBase
 from ..apps.registry import app_model
@@ -195,7 +197,7 @@ def register_publish_update_routes(
             f"{rm.resource_name}:{uuid.uuid5(uuid.NAMESPACE_URL, f'{item_id}|{row.published_at}')}"
         )
         try:
-            new_id, made = await make_copy(
+            _new_id, made = await make_copy(
                 spec,
                 filestore,
                 ledger,
@@ -209,17 +211,43 @@ def register_publish_update_routes(
             )
         except LookupError as exc:  # its source went meanwhile — as the open route
             raise HTTPException(status_code=410, detail=str(exc)) from None
-        if not made:
-            if not await await_finished(spec, row, named):
-                raise HTTPException(status_code=409, detail="the new copy could not be made")
-            return TakenOut(slug=slug, item_id=named)
-        # The old copy stops being a copy FIRST (D1): read afresh, so a change
-        # made meanwhile is kept, then renamed and released. Even when it is to
-        # be deleted (D5) — a delete that fails part-way then leaves an
-        # ordinary （舊版） item to delete by hand, never a copy the link lands
-        # in or a banner that offers this again.
-        current = rm.get(item_id).data
+        if not made and not await await_finished(spec, row, named):
+            raise HTTPException(status_code=409, detail="the new copy could not be made")
+        # Made here, or found finished (another tab, or a take cut off after
+        # making it — review round 3): either way the old copy must end
+        # released, or it stays a live copy beside the new one for good.
+        released = _release(rm, item_id, user)
+        if body.replace and released:
+            # Only the call that released it deletes it: two tabs replacing at
+            # once delete it once.
+            try:
+                await delete_item(rm, item_id, released)
+            except Exception:  # noqa: BLE001 — however it failed, the same is true now
+                # The new copy is made and the old one released; only its
+                # delete is left — said as such, with the new copy's id, so
+                # nobody has to infer it.
+                logger.warning("published-update: the old copy %s was left", item_id, exc_info=True)
+                raise HTTPException(
+                    status_code=500,
+                    detail={"error": "old_copy_left", "item_id": named, "old_item_id": item_id},
+                ) from None
+        return TakenOut(slug=slug, item_id=named)
+
+    def _release(rm: Any, item_id: str, user: str) -> str:
+        """The old copy stops being a copy (D1) — read afresh, so a change made
+        meanwhile is kept — and is renamed as old. FIRST, even when it is then
+        deleted (D5): a delete that fails part-way leaves an ordinary （舊版）
+        item to delete by hand, never a copy the link lands in. Its title
+        before, when THIS call released it; "" when it already was (or is
+        gone) — read and written with no await between, so on a pod only one
+        call does it."""
+        try:
+            current = rm.get(item_id).data
+        except (ResourceIDNotFoundError, ResourceIsDeletedError):
+            return ""
         assert isinstance(current, WorkItemBase)
+        if not current.published_from:
+            return ""
         with rm.using(user):
             rm.update(
                 item_id,
@@ -232,16 +260,4 @@ def register_publish_update_routes(
                     published_path="",
                 ),
             )
-        if body.replace:
-            try:
-                await delete_item(rm, item_id, current.title)
-            except Exception:  # noqa: BLE001 — however it failed, the same is true now
-                # The new copy is made and the old one released (above); only
-                # its delete is left — said as such, with the new copy's id, so
-                # nobody has to infer it.
-                logger.warning("published-update: the old copy %s was left", item_id, exc_info=True)
-                raise HTTPException(
-                    status_code=500,
-                    detail={"error": "old_copy_left", "item_id": new_id, "old_item_id": item_id},
-                ) from None
-        return TakenOut(slug=slug, item_id=new_id)
+        return current.title or item_id

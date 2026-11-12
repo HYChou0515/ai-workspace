@@ -7,6 +7,7 @@ from (P1) — and the taking of it (P2).
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import itertools
 
 import msgspec
@@ -539,3 +540,37 @@ def test_a_shared_copy_is_still_told_while_the_current_shared_copy_is_there(cloc
     holder["id"] = "amy"
     assert _open(client, src).status_code == 200
     assert _update(client, old)["due"] is True
+
+
+# ---- review round 3 ---------------------------------------------------------
+
+
+def test_a_take_cut_off_before_the_old_copy_was_released_is_finished_by_the_next(
+    clock, monkeypatch
+):
+    # The new copy was made, then the release failed (a pod dying there is the
+    # same): the retry found the new copy and returned it, the old one stayed a
+    # live copy — two for one person, and a banner offering it for ever.
+    holder = {"id": "bob"}
+    client, spec, _store = _app(holder)
+    src, old = _behind(holder, client, spec)
+    rm = spec.get_resource_manager(RcaInvestigation)
+    real = rm.update
+    calls = {"n": 0}
+
+    def flaky(item_id, data, *a, **k):
+        if item_id == old and calls["n"] == 0:
+            calls["n"] += 1
+            raise RuntimeError("cut off")
+        return real(item_id, data, *a, **k)
+
+    monkeypatch.setattr(rm, "update", flaky)
+    with contextlib.suppress(RuntimeError):
+        _take(client, old)
+
+    again = _take(client, old)
+
+    assert again.status_code == 200, again.text
+    assert _item(spec, old).published_from == ""
+    assert _update(client, old)["due"] is False
+    assert _open(client, src).json()["item_id"] == again.json()["item_id"]
