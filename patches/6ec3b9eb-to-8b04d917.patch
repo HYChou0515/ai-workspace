@@ -1,0 +1,2017 @@
+diff --git a/docs/configuration.md b/docs/configuration.md
+index 69077821a..b9b2154db 100644
+--- a/docs/configuration.md
++++ b/docs/configuration.md
+@@ -320,7 +320,7 @@ sandbox:
+ resources:
+   per_app:
+     default: { cpu: 1.0, memory: 512M, disk: 80M }   # App 沒宣告時吃這個
+-    max:     { cpu: 4.0, memory: 4G,   disk: 20G }   # App 不得超過(超過=開機失敗);也是單一 item 能調到的上限
++    max:     { cpu: 4.0, memory: 4G,   disk: 20G }   # App 不得超過(超過=開機失敗);也是單一 item 能調到的上限(硬碟也是)
+   per_user:
+     count: 3          # 同時活著的 sandbox 個數
+     cpu: 6.0          # 那些活著的 sandbox 加總核心
+@@ -357,8 +357,8 @@ resources:
+ 
+ ### 使用者自己調單一 item 的環境大小
+ 
+-使用者可以在 item 頁面的「環境」面板調**那一個** item 的 CPU 與記憶體,帳仍然記在 item 的
+-`owner` 上。**App 的值是預設大小,`resources.per_app.max` 是天花板**([plan-item-size-ceiling.md](plan-item-size-ceiling.md)):
++使用者可以在 item 頁面的「沙盒」面板調**那一個** item 的 CPU、記憶體與硬碟,帳仍然記在 item 的
++`owner` 上(硬碟:[plan-item-disk-size.md](plan-item-disk-size.md))。**App 的值是預設大小,`resources.per_app.max` 是天花板**([plan-item-size-ceiling.md](plan-item-size-ceiling.md)):
+ 
+ | 設定 | 對單一 item 的意思 |
+ |---|---|
+@@ -367,6 +367,9 @@ resources:
+ | 沒設 `max` 的維度(`""`/`"0"`/`"max"` 都算沒設) | 天花板就是 App 的值——只能往下調;App 也沒有值時就沒有天花板 |
+ | 個人額度(`per_user`) | 最後再夾一層,`min(item 的值, 天花板, 個人額度)` |
+ 
++**硬碟和 CPU／記憶體不同的地方**:它不是 sandbox 的資源,每次寫入都會讀它,所以**存下立刻生效、
++沙盒執行中也能改**(其他 API pod 最多晚 5 秒);而且實際生效的值**必須大於目前已用量**——等於也不行(剛好用滿的工作區就是滿的,AI 對話會被拒絕)。要更小,先刪檔案。清除設定(回到 App 的大小)不做這個檢查。發布出去的副本沿用來源的硬碟設定。
++
+ 例:`per_app.default` 1 核 / `512M`、`per_app.max` 4 核 / `4G` ⇒ 沒人調的 item 是 1 核 / 512M,
+ 可以調到 4 核 / 4G 以內;設 16 核會存下,生效時夾成 4 核,面板寫「受這個 App 的上限限制」。
+ 
+diff --git a/docs/design-history.md b/docs/design-history.md
+index 0800ea751..8224b942f 100644
+--- a/docs/design-history.md
++++ b/docs/design-history.md
+@@ -108,6 +108,7 @@
+ | [plan-sandbox-sot.md](plan-sandbox-sot.md) | sandbox 真相來源（source-of-truth）設計 |
+ | [plan-sandbox-resource-quota.md](plan-sandbox-resource-quota.md) | 依 App 設定 sandbox 資源（cpu/memory/disk）+ 每人跨 App 總量上限；債務人是 item 的 `owner`（前提見 #687） |
+ | [plan-item-sandbox-resources.md](plan-item-sandbox-resources.md) | 每個 item 自己決定環境開多大（使用者可調、由 owner 的額度支出）；狀態／用量／關閉搬到 item 頁面；閘門是 `change_permission` |
++| [plan-item-disk-size.md](plan-item-disk-size.md) | 一個 item 的硬碟大小由使用者在「沙盒」面板自己調：生效值必須大於已用量、是上限不是預留、天花板是 `per_app.max.disk`、存下立刻生效（推翻 plan-item-sandbox-resources §1.2「只有 CPU 和記憶體，沒有硬碟」） |
+ | [plan-item-size-ceiling.md](plan-item-size-ceiling.md) | 一個 item 可以調到部署的 `resources.per_app.max`：App 的值（app.json 或 `per_app.default`）改當預設大小、`max` 才是 item 的天花板，沒設 `max` 的維度維持舊規則；面板在輸入前寫出「這個 App 最多 X」（推翻 plan-item-sandbox-resources 的「item 的天花板是 App 的值」） |
+ | [plan-llm-failover.md](plan-llm-failover.md) | LLM failover / 多供應商備援 |
+ | [plan-llm-budget.md](plan-llm-budget.md) | 顯示這個人還剩多少 LLM 預算：部署方寫一個 `ILlmBudget`（`server.llm_budget`，比照 `IRequestEnv`）帶入剩餘／總額＋一句訊息＋連結＋輕重；平台只顯示「剩 $11／共 $20」在 item 與知識庫聊天的輸入框上方，不擋送出、不告訴 AI；打開時與每輪結束後更新，查不到時寫「預算暫時查不到」 |
+diff --git a/docs/migrations.md b/docs/migrations.md
+index fed75ee7e..c0c88f6bc 100644
+--- a/docs/migrations.md
++++ b/docs/migrations.md
+@@ -630,7 +630,7 @@ email 通道（`server.notification_channel`）時，平台歷史上每一則通
+ 
+ ---
+ 
+-### 2026-09-18 · #818 skill hub：使用者之間分享 skill，不經過 dev 的版本庫（`skill-hub-entry`） {#pr-818}
++### 2026-09-18 · 06131733 · #818 skill hub：使用者之間分享 skill，不經過 dev 的版本庫（`skill-hub-entry`） {#pr-818}
+ 
+ **設定** — 不動。沒有新旋鈕。
+ 
+@@ -676,7 +676,7 @@ email 通道（`server.notification_channel`）時，平台歷史上每一則通
+ - 另一個 item 的 Skills 面板「從 skill hub 裝」看得到它、裝進去後那一列有「可在此編輯」、下一輪 `read_skill` 讀得到。
+ - 部署方自己的 app：`agent.tools` 有那三個、`agent.skills` 有 `skill-hub`，否則 agent 會說沒有 `publish_skill`。
+ 
+-### 2026-09-19 · #827 onboarding 的文字改成 markdown、App 可以放圖（`GET /apps/{slug}/assets/{name}`） {#pr-827}
++### 2026-09-19 · 61bf533b · #827 onboarding 的文字改成 markdown、App 可以放圖（`GET /apps/{slug}/assets/{name}`） {#pr-827}
+ 
+ **設定** — 不動。沒有新旋鈕。
+ 
+@@ -711,7 +711,7 @@ email 通道（`server.notification_channel`）時，平台歷史上每一則通
+ - 部署方自己的 App：歡迎卡的字沒有多出粗體／標題／連結。
+ 
+ ---
+-### 2026-09-19 · #824 author-skill 存檔前先照 writing-for-agents 整理一遍（`references/` 隨 skill 出貨） {#pr-824}
++### 2026-09-19 · cd28f838 · #824 author-skill 存檔前先照 writing-for-agents 整理一遍（`references/` 隨 skill 出貨） {#pr-824}
+ 
+ **設定** — 不動。沒有新旋鈕。
+ 
+@@ -740,7 +740,7 @@ email 通道（`server.notification_channel`）時，平台歷史上每一則通
+   「更新為出貨版本」，按了才換新。
+ 
+ ---
+-### 2026-09-19 · #823 從聊天視窗匯出文字（json / md）與影片：`chat-video` JobType、自己的映像 {#pr-823}
++### 2026-09-19 · d0ba5d2d · #823 從聊天視窗匯出文字（json / md）與影片：`chat-video` JobType、自己的映像 {#pr-823}
+ 
+ **行為**（不動設定也會多出來的東西）
+ 
+@@ -807,7 +807,7 @@ email 通道（`server.notification_channel`）時，平台歷史上每一則通
+ 
+ ---
+ 
+-### 2026-09-21 · #834 docker：不帶 `--target` 的 build 又回到 API image；`chat-video` 層量到 +1.63 GB {#pr-834}
++### 2026-09-21 · ca9d33a8 · #834 docker：不帶 `--target` 的 build 又回到 API image；`chat-video` 層量到 +1.63 GB {#pr-834}
+ 
+ **設定** — 不動。**資料** — 不動。
+ 
+@@ -2043,7 +2043,7 @@ image 做不出來。能連公開 registry 的 build 不用做事。沒有新的
+    `?page=` 跟著變，錯誤面板沒有任何「not allowed to load」。
+ 3. 在任一 WUI 點一個外部連結：出現確認框、按 Cancel 不開、按 Open 開新分頁。
+ 
+-### 2026-10-12 · #907 job tool template；第三方工具多拿到一個 `WORKSPACE_ITEM_ID` {#pr-907}
++### 2026-10-12 · 46227a02 · #907 job tool template；第三方工具多拿到一個 `WORKSPACE_ITEM_ID` {#pr-907}
+ 
+ **設定** — 沒有新 key，沒有要做的事。**行為改變，沒有開關**：平台派送第三方工具的 command 時（聊天與 workflow
+ agent 步驟裡 AI 的呼叫、WUI 的工具呼叫、view plugin、圖表重畫）都多帶一個環境變數 `WORKSPACE_ITEM_ID`，值是那個 item 的 id
+@@ -3525,6 +3525,35 @@ Workflows 打開模型答錯格式的那次執行——執行結束後還留著
+ 
+ **還是舊版 image 時**：卡片沒有「搜尋目標」，小幫手固定用 Google；新版小幫手接到工作會失敗（沒有網址可開）。
+ 
++### 2026-11-10 · 05db03f7 · #1018 使用者在「沙盒」面板自己調一個 item 的硬碟大小 {#pr-1018}
++
++**設定** — 沒有新 key。**行為跟著既有的 `resources.per_app.max.disk` 走**：有設它的部署，使用者可以把單一 item
++的硬碟調大到它為止；沒設的部署，天花板就是 App 的值，只能維持原樣（跟 CPU／記憶體同一條規則，#967）。
++- `rollout 前`（只在你想讓使用者把 item 調大時）：在 `config.yaml` 設 `resources.per_app.max.disk`（例如 `20G`）。
++  **為什麼**：它就是一個 item 能調到的最大值。**沒做的症狀**：面板上「這個 App 最多 X」的 X 是 App 的預設大小，
++  使用者調大也不生效。
++
++**資料** — 每個 App 的 item 多一個選填欄位 `sandbox_disk_bytes`（`null` = 沒人設定，用 App 的大小），既有資料
++直接讀成 `null`，沒有 `Schema` 升版，不用跑 migrate。
++
++**k8s · CI 側** — 照常重 build、部署。manifest 沒改。
++
++**行為改變，沒有開關**：
++- item 的「沙盒」面板多一個「硬碟」欄位，有 `change_permission` 的人可以改。必須大於目前已用量（等於也不行；清除回到 App 的大小不檢查）；存下立刻生效
++  （下一次寫入就用新上限），沙盒執行中也能改——不像 CPU／記憶體要先關閉沙盒。
++- 是**上限不是預留**：各 item 的設定加起來可以超過個人額度（`per_user.disk`），每次寫入照樣檢查個人額度。
++- 面板對 item 的 owner 顯示「你的個人額度還剩 X」；其他人看不到（那是 owner 所有 item 的加總）。
++- 新路由 `PUT /a/<slug>/items/<item>/disk`（body `{"disk": "5G"}`，`null` = 回到 App 的大小）。
++- 發布出去的副本沿用來源 item 的硬碟設定（副本的檔案就是來源的檔案）。
++
++**確認做完**（`rollout 後`）：
++1. 用 item 的 owner 打開一個 item 的「沙盒」：硬碟欄位寫「已用 X · 這個 App 最多 Y」，Y 等於
++   `per_app.max.disk`（沒設時等於 App 的大小）。
++2. 輸入比已用量小的值：欄位下出現紅字「要大於已用的 …」，「儲存」是灰的。
++3. 輸入比預設大、比 Y 小的值並儲存：對話框下方的「已使用 … / …」立刻變成新的上限。
++
++**還是舊版 image 時**：面板沒有硬碟欄位，也沒有 `PUT …/disk` 這條路由。
++
+ ---
+ 
+ ## 附錄 A：資料回填的機制（specstar 為什麼不會自己補）
+diff --git a/docs/plan-item-disk-size.md b/docs/plan-item-disk-size.md
+new file mode 100644
+index 000000000..a43c3dce6
+--- /dev/null
++++ b/docs/plan-item-disk-size.md
+@@ -0,0 +1,68 @@
++# 一個 item 的硬碟大小，由使用者在「沙盒」面板自己調
++
++Grilled 2026-11-10 on master `ef211122`。每條決定標來源：**[user]** = 使用者決定；**[mine]** = 照既有規則推出、
++沒另外問的實作決定；**[查證]** = 讀 master 程式碼確認的事實。
++
++> 這份計劃推翻 [plan-item-sandbox-resources.md](plan-item-sandbox-resources.md) §1.2「只有 CPU 和記憶體，
++> 沒有硬碟」與它否決「讓使用者也調硬碟」的理由。那份其餘部分不變；
++> [plan-item-size-ceiling.md](plan-item-size-ceiling.md) 的天花板規則照用，只是多了一個維度。
++
++## 為什麼
++
++使用者：「如果我想讓 sandbox 可以自己指定大小 是可以的嗎？為什麼當初要設定 20gb per item 但 50 per user」
++「對 我們需要讓 user 能自己調整」。
++
++現況〔查證，master `ef211122`〕：
++
++- item 的「沙盒」面板能調 CPU 與記憶體（`change_permission`），生效值 `min(item 的值, per_app.max, 個人額度)`，
++  開環境時才套用（`api/app.py:_resolved_for`）。
++- 硬碟上限是 `api/app.py:_quota_for(item)`：只看 App 的值（app.json `resources.disk` → `per_app.default.disk` →
++  `filestore.workspace_quota`），**不讀 item 自己的設定**；`per_app.max.disk` 只在開機時檢查 App 的值。
++- 每次寫入都經過 `files/facade.py` 讀 `_quota_for`——所以硬碟上限一改就生效，不必重開環境
++  （CPU／記憶體是 sandbox 建好就固定，硬碟不是 sandbox 的資源）。
++- 只擋成長：縮小、同大小覆寫、刪除永遠放行；工作區已滿時整個 AI 回合被拒（`chat_send.send` /
++  `workflow_exec.drive_turn`），刪檔不需要 AI。
++
++舊計劃 §1.2 否決的理由是「調小沒有出口：選了 1G、寫滿了、想改成 512M——要刪他的檔案嗎？」。「只擋成長」本身就是出口
++（不刪任何東西，只是不再長），真正的問題只剩「設得比已用量小」那一刻就把自己鎖死——由 D1 擋掉。
++
++## 決定
++
++| # | 決定 | 來源 |
++|---|------|------|
++| D1 | **不能設得比目前已用量小**——實作為「實際生效的值（夾到天花板之後）必須**大於**已用量」，等於也拒絕（review 第 1 輪：工作區剛好等於上限就是滿的，AI 回合要求至少再多 1 byte 的空間）。面板送出前就寫出已用量，伺服器送出時再檢查一次並拒絕。要更小，先刪檔再調。理由：設下去工作區就滿、AI 回合被拒，不會是使用者要的（NN/g 錯誤預防：送出前說清楚範圍）。 | [user]；「大於」與「夾到天花板之後」[mine] |
++| D2 | **是上限，不是預留。** 設 20 GB 只表示這個 item 最多長到 20 GB，不先從個人額度扣；各 item 的設定加起來可以超過個人額度，每次寫入照舊再檢查個人額度（先滿就停，訊息說個人額度已滿）。與 CPU／記憶體同一條規則（舊計劃 §1.1）。 | [user] |
++| D3 | **天花板是部署的 `per_app.max.disk`**；沒設 `max.disk` 時天花板退回 App 的值（不能往上調）。與 plan-item-size-ceiling D1／D2 同一條規則，同一個地方算（`resolve_app_limits` → `ResourceLimits`）。 | [mine]（比照 #967） |
++| D4 | **權限是 `change_permission`**，與 CPU／記憶體同一個欄位組、同一個儲存。 | [mine] |
++| D5 | **立刻生效**：存下後下一次寫入就用新上限，不必重開環境；面板寫明這點（與 CPU／記憶體「下次開環境生效」不同）。 | [mine]〔查證：facade 每次寫入讀 `_quota_for`〕 |
++| D6 | **面板寫出範圍與個人額度**：硬碟欄位下寫「已用 X · 這個 App 最多 Y」，另寫「你的個人額度還剩 Z」（有設 `per_user.disk` 時）——上限不是保證，剩多少要看得到（D2 的代價）。 | [mine] |
++| D7 | **沒人調過的 item 行為不變**：item 沒有硬碟設定時，上限照舊是 App 的值。 | [mine] |
++
++### 施工時定下的細節（as built）
++
++- **自己的路由** `PUT /a/{slug}/items/{item_id}/disk`，body `{"disk": "5G"}`（大小字串，跟記憶體同一個解析器
++  `parse_size`；`0`／`max` 是運營方的「無上限」寫法，使用者不能用，回 422）。不併進 `PUT …/resources`：那條在
++  沙盒執行中一律回 409，硬碟不該跟著被擋（D5）。
++- **面板的 Save 只送改過的那一半**：只改硬碟就只打 `/disk`，執行中也能存；CPU／記憶體照舊。
++- **「個人額度還剩多少」只給 owner**（D6）：那是 owner 所有 item 的加總，給協作者會洩漏別的 item——
++  環境面板本來就不透露 owner 的其他 item。
++- **欄位是特權欄位**：加進 `perm.checker.ESCALATED_FIELDS`，通用 PATCH、JSON patch、auto-CRUD create、App 的
++  create 路由都寫不進去。**發布的副本沿用來源的硬碟設定**（review 第 1 輪改；第一版讓副本從 App 的大小開始——來源調大又存滿時，副本一建立就是滿的、每個 AI 回合都被拒）。是上限不是預留，副本沒長大前不花開啟者的額度。
++- **打開面板量不到用量時，面板照樣開**：只是不畫硬碟欄位（review 第 1 輪：沙盒忙碌或連不上曾讓整個面板載入失敗，CPU／記憶體與「關閉沙盒」都用不了）。
++- **`PUT …/disk` 一定要帶 `disk`**：`{}` 回 422，不當成「清除」。
++- **一次 Save 兩半之一被拒時**，面板重讀一次，畫面是伺服器實際存下的值，不是把成功的那一半也說成沒存。
++- **清除（回到 App 的大小）不檢查 D1**：`null` 一律接受——App 的大小本身可能已不大於已用量，那時工作區照舊是滿的，跟沒人調過時一樣。
++- **已知限制：副本的硬碟取來源「目前」的設定**，CPU／記憶體取發布當時的值。發布後把來源調小，之後才打開的副本可能又放不下快照。
++- **「存下就生效」的範圍**：在接到那次儲存的 pod 上，下一次寫入就用新值；其他 pod 的 item 快取最多晚 5 秒（`_ITEM_FACT_TTL_S`，與 CPU／記憶體、owner 變更同一個窗口）。
++- **沒人調過時寫「預設（這個 App 的大小）」**——CPU／記憶體的預設是「依你目前的額度」，硬碟不是。
++- **存下後也重讀對話框下方的「已使用 X / Y」**（demo 時發現 Y 停在舊值）。
++
++## Phases
++
++（施工時依 `/tdd` 每個 phase 先紅後綠；編號連續。）
++
++- **P1** 後端：item 存硬碟設定（與 CPU／記憶體同處）；`_quota_for` 讀它並夾到 D3 的天花板；寫入 API 檢查 D1（夾到天花板後 > 已用量）與
++  D3；環境 API 回傳硬碟的設定值、生效值、已用量、天花板、個人額度剩餘。
++- **P2** 前端：「沙盒」面板加硬碟欄位（D1 最小值、D3 最大值、D5 立刻生效、D6 個人額度）。
++- **P3** 文件：本計劃、舊計劃標題下的推翻標記、`docs/design-history.md`、`docs/configuration.md` 6.5、
++  `docs/migrations.md` 條目（行為改變：有設 `per_app.max.disk` 的部署，使用者可以把 item 調大）。
+diff --git a/docs/plan-item-sandbox-resources.md b/docs/plan-item-sandbox-resources.md
+index 7383a0aaa..7434c533f 100644
+--- a/docs/plan-item-sandbox-resources.md
++++ b/docs/plan-item-sandbox-resources.md
+@@ -1,6 +1,7 @@
+ # 每個 item 自己決定要開多大的環境
+ 
+ > 被 #967（plan-item-size-ceiling.md）推翻
++> 被 #1018（plan-item-disk-size.md）推翻
+ 
+ 延續 [`plan-sandbox-resource-quota.md`](plan-sandbox-resource-quota.md)。那一份把資源綁在 **App**
+ 上（一個 App 的每個 item 都一樣大），並加上每人跨 App 的總量。這一份讓**使用者自己決定
+diff --git a/docs/plan-item-size-ceiling.md b/docs/plan-item-size-ceiling.md
+index 04a247342..8ff498398 100644
+--- a/docs/plan-item-size-ceiling.md
++++ b/docs/plan-item-size-ceiling.md
+@@ -1,5 +1,7 @@
+ # Plan — 一個 item 可以調到部署的 `max`，不是只能比預設小
+ 
++> 後續：硬碟後來也能在 item 上調，天花板規則照本計劃（#1018，[plan-item-disk-size.md](plan-item-disk-size.md)）。
++
+ Grilled 2026-10-16 on master `442eca8e`。每條決定標來源：**[user]** = 使用者決定；**[mine]** = 我定的實作細節。
+ 
+ > 這份計畫推翻 [plan-item-sandbox-resources.md](plan-item-sandbox-resources.md) 需求第 3 條「每個 App 可以設定上限，
+diff --git a/src/workspace_app/api/app.py b/src/workspace_app/api/app.py
+index 0232afe0b..2dbb164fe 100644
+--- a/src/workspace_app/api/app.py
++++ b/src/workspace_app/api/app.py
+@@ -131,7 +131,7 @@ from .health_routes import (
+     register_sanity_routes,
+ )
+ from .item_authz import check_access, load_access_facts, user_may
+-from .item_routes import register_item_routes
++from .item_routes import ItemDisk, register_item_routes
+ from .kb_chat_routes import (
+     register_kb_chat_routes,
+ )
+@@ -917,14 +917,16 @@ def create_app(
+     # more inside the registry's heartbeat) — the #657 / #667 shape, on the
+     # hottest path there is. Slug never changes; owner does, so the entry ages
+     # out on the same window the usage measurement already trails by.
+-    _item_facts: dict[str, tuple[float, str, str, float | None, int | None]] = {}
++    _item_facts: dict[str, tuple[float, str, str, float | None, int | None, int | None]] = {}
+ 
+     def _facts_of(item_id: str) -> tuple[str, str]:
+         """`(slug, owner)` for an item — one lookup, not one per question."""
+         return _all_facts_of(item_id)[:2]
+ 
+-    def _all_facts_of(item_id: str) -> tuple[str, str, float | None, int | None]:
+-        """`(slug, owner, cpu, memory)` — the item's own environment size rides
++    def _all_facts_of(
++        item_id: str,
++    ) -> tuple[str, str, float | None, int | None, int | None]:
++        """`(slug, owner, cpu, memory, disk)` — the item's own environment size rides
+         along on the lookup that was already happening.
+ 
+         Fetching it separately would have been a second store round trip on the
+@@ -933,23 +935,24 @@ def create_app(
+         now = time.monotonic()
+         hit = _item_facts.get(item_id)
+         if hit is not None and now - hit[0] < _ITEM_FACT_TTL_S:
+-            return hit[1], hit[2], hit[3], hit[4]
++            return hit[1], hit[2], hit[3], hit[4], hit[5]
+         # A deleted item is read here (and only here, plus `owner_of` and the
+         # resources page): it still holds a live sandbox, so the debtor and the
+         # size it is charged at both still have answers. The route gates use
+         # the same seam WITHOUT this flag and keep refusing it.
+         found = find_work_item(spec, item_id, include_deleted=True)
+         if found is None:
+-            slug, owner, cpu, mem = "", "", None, None
++            slug, owner, cpu, mem, disk = "", "", None, None, None
+         else:
+             slug, item = found[0], found[1]
+             owner = debtor_of(spec, slug, item_id, item)
+             cpu = getattr(item, "sandbox_cpu_cores", None)
+             mem = getattr(item, "sandbox_memory_bytes", None)
++            disk = getattr(item, "sandbox_disk_bytes", None)
+         if len(_item_facts) > _ITEM_FACT_MAX:  # bounded: this is a cache, not a map
+             _item_facts.clear()
+-        _item_facts[item_id] = (now, slug, owner, cpu, mem)
+-        return slug, owner, cpu, mem
++        _item_facts[item_id] = (now, slug, owner, cpu, mem, disk)
++        return slug, owner, cpu, mem, disk
+ 
+     def _limits_for(item_id: str) -> ResourceLimits | None:
+         """This item's App's resolved ceilings, or None when the deploy passed
+@@ -1073,13 +1076,41 @@ def create_app(
+         await disk_ledger.record(item_id, owner, total)
+ 
+     def _quota_for(item_id: str) -> int:
+-        """Disk ceiling for one item: its App's, else the deploy-wide number.
++        """Disk ceiling for one item: its own setting held under its App's
++        ceiling (docs/plan-item-disk-size.md D3), else its App's, else the
++        deploy-wide number. Read on EVERY write, so a new setting applies to
++        the next one (D5).
+ 
+         The fallback is not cosmetic — an item whose App declares nothing, or an
+         id that resolves to no App at all (a wiki store, a half-deleted item),
+         must keep the deploy's limit rather than silently become unlimited."""
+         limits = _limits_for(item_id)
+-        return workspace_quota if limits is None else limits.disk_bytes
++        app_disk = workspace_quota if limits is None else limits.disk_bytes
++        stated = _all_facts_of(item_id)[4]
++        if stated is None:
++            return app_disk
++        ceiling = app_disk if limits is None else limits.item_disk_ceiling
++        return stated if not ceiling else min(stated, ceiling)
++
++    def _disk_ceiling_for(item_id: str) -> int | None:
++        """The most one item may be given (D3) — what the panel draws before
++        anything is typed. None = nothing caps it."""
++        limits = _limits_for(item_id)
++        if limits is None:
++            return workspace_quota or None
++        return limits.item_disk_ceiling
++
++    async def _owner_disk_left(item_id: str) -> int | None:
++        """What is left of the item's owner's own disk quota (D6) — None when
++        they have none. A sum over the owner's OTHER items too, so the route
++        only hands it to the owner."""
++        owner = _owner_of(item_id)
++        if not owner:
++            return None
++        limit = parse_size((await user_limits.for_user(owner)).disk)
++        if not limit:
++            return None
++        return max(0, limit - await disk_ledger.total_for(owner))
+ 
+     def _clamp_cpu(want: float | None, ceiling: float) -> float | None:
+         """`want` cores, held down to `ceiling` — where 0 means "no ceiling" and
+@@ -1133,7 +1164,7 @@ def create_app(
+         people, so the guess was normally wrong and pointed them at a setting
+         that was not holding them."""
+         limits = _limits_for(item_id)
+-        _slug, owner, item_cpu, item_mem = _all_facts_of(item_id)
++        _slug, owner, item_cpu, item_mem, _disk = _all_facts_of(item_id)
+         budget = await user_limits.for_user(owner) if owner else None
+ 
+         app_cpu = limits.cpu_cores if limits else None
+@@ -2868,6 +2899,14 @@ def create_app(
+         # can still land in the seconds between forget and the row delete and
+         # re-create it; #778's deferred sweep is the safety net.)
+         disk_ledger=disk_ledger,
++        # docs/plan-item-disk-size.md: the panel reads the gate's own numbers.
++        item_disk=ItemDisk(
++            quota_for=_quota_for,
++            ceiling_for=_disk_ceiling_for,
++            used=files.workspace_usage,
++            owner_left=_owner_disk_left,
++            owner_of=_owner_of,
++        ),
+     )
+ 
+     # On app.state so the routes read the CURRENT list rather than one closed
+diff --git a/src/workspace_app/api/item_routes.py b/src/workspace_app/api/item_routes.py
+index a5c99dd63..db9df53d8 100644
+--- a/src/workspace_app/api/item_routes.py
++++ b/src/workspace_app/api/item_routes.py
+@@ -14,6 +14,7 @@ import logging
+ import time
+ import uuid
+ from collections.abc import Awaitable, Callable
++from dataclasses import dataclass
+ 
+ import msgspec
+ from fastapi import APIRouter, FastAPI, HTTPException, Response, status
+@@ -65,6 +66,41 @@ class _MembersBody(BaseModel):
+     members: list[str]
+ 
+ 
++class _DiskBody(BaseModel):
++    """How big this item's workspace may grow (docs/plan-item-disk-size.md) — a
++    size string (``20G``) like the memory beside it, parsed by the one parser
++    that knows the spelling; ``None`` clears it back to the App's size.
++
++    Required — ``{}`` is refused rather than read as "clear": an empty body is
++    a client that sent nothing, not one that asked for the App's size."""
++
++    disk: str | None
++
++
++class _DiskOut(BaseModel):
++    """What was stored, in bytes (None = cleared)."""
++
++    disk_bytes: int | None
++
++
++@dataclass(frozen=True)
++class ItemDisk:
++    """What the disk half of the environment needs from the composition root,
++    passed in rather than rebuilt here so the panel and the write gate read the
++    SAME numbers (a second copy of "how big may this be" is a second rule).
++
++    `quota_for` is the gate's own ceiling (`_quota_for`); `ceiling_for` the most
++    one item may be given (D3); `used` what the workspace holds now (the
++    sandbox's measurement, as the gate reads it); `owner_left` what is left of
++    the owner's own quota (D6); `owner_of` who that owner is."""
++
++    quota_for: Callable[[str], int]
++    ceiling_for: Callable[[str], int | None]
++    used: Callable[[str], Awaitable[int]]
++    owner_left: Callable[[str], Awaitable[int | None]]
++    owner_of: Callable[[str], str | None]
++
++
+ class _ResourcesBody(BaseModel):
+     """How big this item's environment may be. Both dimensions optional and
+     independent — an item may state memory and leave cpu to resolve, exactly as
+@@ -143,6 +179,17 @@ class _EnvironmentOut(BaseModel):
+     #: stated size is held to. None = no ceiling (no line in the panel).
+     cpu_ceiling: float | None = None
+     memory_ceiling: int | None = None
++    #: docs/plan-item-disk-size.md — the disk half. `stated` is what somebody
++    #: set (None = nobody); `effective` what every write is held to now (0 =
++    #: unlimited); `used` what the workspace holds (D1's floor); `ceiling` the
++    #: most it may be given (D3, None = no ceiling); `owner_disk_left` what is
++    #: left of the owner's own quota (D6) — only to the owner, since it is a sum
++    #: over their other items too, and None when they have no quota.
++    stated_disk_bytes: int | None = None
++    effective_disk_bytes: int | None = None
++    disk_used_bytes: int | None = None
++    disk_ceiling: int | None = None
++    owner_disk_left: int | None = None
+ 
+ 
+ class _ResourcesOut(BaseModel):
+@@ -286,6 +333,7 @@ def register_item_routes(
+     kb_chat_pipeline: object | None,
+     superusers: frozenset[str] = frozenset(),
+     disk_ledger: DiskLedger | None = None,
++    item_disk: ItemDisk | None = None,
+ ) -> None:
+     """Mount the App work-item create / close / delete routes onto ``app``."""
+ 
+@@ -325,7 +373,9 @@ def register_item_routes(
+         # anything malicious, it is sending a field that has one correct place,
+         # and the panel is right there once the item exists.
+         payload = {
+-            k: v for k, v in body.items() if k not in ("sandbox_cpu_cores", "sandbox_memory_bytes")
++            k: v
++            for k, v in body.items()
++            if k not in ("sandbox_cpu_cores", "sandbox_memory_bytes", "sandbox_disk_bytes")
+         }
+         payload["owner"] = get_user_id()
+         payload.setdefault("profile", manifest.default_profile)
+@@ -509,7 +559,31 @@ def register_item_routes(
+         resolved = await resolved_for(item_id)
+         effective = resolved.spec
+         enforced = await registry.sandbox.effective_limits(effective)
++        disk: dict[str, int | None] = {}
++        used: int | None = None
++        if item_disk is not None:
++            # Measuring is extra (review round 1): a busy or unreachable sandbox
++            # must not take the cpu/memory half and Close sandbox down with it.
++            # Without a figure the disk half is left out and the panel draws no
++            # disk field.
++            try:
++                used = await item_disk.used(item_id)
++            except Exception:  # noqa: BLE001 — logged; the rest of the panel stands
++                _LOGGER.warning("environment: could not measure %s", item_id, exc_info=True)
++        if item_disk is not None and used is not None:
++            disk = {
++                "stated_disk_bytes": getattr(item, "sandbox_disk_bytes", None),
++                "effective_disk_bytes": item_disk.quota_for(item_id),
++                "disk_used_bytes": used,
++                "disk_ceiling": item_disk.ceiling_for(item_id),
++                "owner_disk_left": (
++                    await item_disk.owner_left(item_id)
++                    if get_user_id() == item_disk.owner_of(item_id)
++                    else None
++                ),
++            }
+         return _EnvironmentOut(
++            **disk,
+             # The SAME source the resize refusal uses. Leaving this on
+             # `has_live_sandbox` made the fix backend-only: the route unblocked
+             # while the panel — which disables its inputs on this field — stayed
+@@ -592,6 +666,71 @@ def register_item_routes(
+         locator.forget_item(item_id)
+         return _ResourcesOut(cpu_cores=cpu, memory_bytes=memory)
+ 
++    @app.put("/a/{slug}/items/{item_id}/disk")
++    async def set_item_disk(slug: str, item_id: str, body: _DiskBody) -> _DiskOut:
++        """How big THIS item's workspace may grow (docs/plan-item-disk-size.md).
++
++        Its own route rather than a third field on `PUT …/resources`: that one
++        refuses while the environment runs, because a running sandbox keeps the
++        cpu and memory it was built with. Disk is not the sandbox's — every
++        write reads it — so it may change while running and applies to the next
++        write (D5). Same verb (`change_permission`, D4), same persistence as the
++        owner, same "kept as typed, clamped on the way out" (D3).
++
++        Refused unless what will APPLY is above what the workspace already
++        holds (D1, `<=` — a workspace at its limit is full): that would make it
++        full the moment it was saved, and a full workspace refuses every turn."""
++        from ..apps.catalog import discover_app_slugs
++        from ..apps.registry import app_model
++
++        if slug not in discover_app_slugs():
++            raise HTTPException(status_code=404, detail=f"unknown app: {slug!r}")
++        if item_disk is None:
++            raise HTTPException(status_code=404, detail="this deploy sizes no workspace")
++        model = app_model(slug)
++        item, created_by = _authorize_item(slug, item_id, "change_permission")
++        size: int | None = None
++        if body.disk is not None:
++            try:
++                size = parse_size(body.disk)
++            except ValueError as exc:
++                raise HTTPException(status_code=422, detail=f"disk: {exc}") from exc
++            # Zero / "max" is the OPERATOR's spelling of unlimited — a person may
++            # not opt their item out of the ceiling the deploy set (same rule as
++            # memory, `_validated_resources`).
++            if not _within(size, _MAX_BYTES):
++                raise HTTPException(
++                    status_code=422,
++                    detail=(
++                        f"disk must be greater than 0 and below {_MAX_BYTES // 1024**4} TiB "
++                        f"(got {body.disk!r}); send null to use the App's size"
++                    ),
++                )
++            # Against what will APPLY, not what was typed: a size above the
++            # ceiling is held to it on the way out (D3), and a ceiling below
++            # what is used would lock the workspace just the same. And `<=`:
++            # a workspace AT its limit is full — the turn gate asks room for
++            # one more byte (review round 1).
++            ceiling = item_disk.ceiling_for(item_id)
++            applies = size if not ceiling else min(size, ceiling)
++            used = await item_disk.used(item_id)
++            if applies <= used:
++                raise HTTPException(
++                    status_code=422,
++                    detail=(
++                        f"This workspace already holds {used} bytes; its size must be "
++                        f"more than that (this one would apply as {applies}). Delete "
++                        "files first."
++                    ),
++                )
++        rm = spec.get_resource_manager(model)
++        with rm.using(created_by):
++            rm.update(item_id, msgspec.structs.replace(item, sandbox_disk_bytes=size))
++        # The gate reads the item's facts through a few-second cache; the
++        # person who just saved is the one who would meet the stale copy.
++        locator.forget_item(item_id)
++        return _DiskOut(disk_bytes=size)
++
+     @app.put("/a/{slug}/items/{item_id}/members")
+     async def set_item_members(slug: str, item_id: str, body: _MembersBody) -> PermissionOut:
+         """grill D7 — set an item's member roster AND sync it into the Permission as
+diff --git a/src/workspace_app/api/publish_copy.py b/src/workspace_app/api/publish_copy.py
+index a0f6e21dc..884ae2609 100644
+--- a/src/workspace_app/api/publish_copy.py
++++ b/src/workspace_app/api/publish_copy.py
+@@ -219,6 +219,7 @@ async def make_copy(
+         # may not state an environment size (`perm.checker._check_create`).
+         "sandbox_cpu_cores": None,
+         "sandbox_memory_bytes": None,
++        "sandbox_disk_bytes": None,
+         # Set in the LAST write, once the files are in: until then the item
+         # is no copy of anything — `copies_of` cannot hand it out half made.
+         "published_from": "",
+@@ -257,6 +258,13 @@ async def make_copy(
+                     published_from=publication_id(row),
+                     sandbox_cpu_cores=row.cpu_cores,
+                     sandbox_memory_bytes=row.memory_bytes,
++                    # The SOURCE's disk (plan-item-disk-size, review round 1):
++                    # the copy's files are the source's, and a source raised
++                    # above its App's size and filled would otherwise make
++                    # every copy full at birth — every turn refused. A ceiling,
++                    # not a reservation: it costs the opener nothing until the
++                    # copy actually grows.
++                    sandbox_disk_bytes=source.sandbox_disk_bytes,
+                 ),
+             )
+         except BaseException as exc:
+diff --git a/src/workspace_app/apps/base.py b/src/workspace_app/apps/base.py
+index 0c022bce6..159033a49 100644
+--- a/src/workspace_app/apps/base.py
++++ b/src/workspace_app/apps/base.py
+@@ -226,6 +226,23 @@ class WorkItemBase(Struct):
+     written with; the ``512M`` / ``2G`` spelling belongs to config and to the UI,
+     and is parsed by ``quota.limits.parse_size`` before it reaches here."""
+ 
++    sandbox_disk_bytes: int | None = None
++    """Tier 1 — how big THIS item's workspace may grow, or None
++    (docs/plan-item-disk-size.md).
++
++    ``None`` = nobody has said: the App's size applies, resolved fresh each time.
++    A CEILING, never a reservation (D2) — the owner's own disk quota is still
++    checked on every write. Clamped on the way out to the App's
++    ``item_disk_ceiling`` (D3), kept as typed on the way in.
++
++    Unlike cpu and memory it is NOT the sandbox's: every write reads it
++    (``WorkspaceFiles._ensure_headroom``), so a change applies to the next write
++    and may be made while the environment runs (D5). Its route refuses a value
++    not ABOVE what the workspace already holds, once held to the ceiling (D1) —
++    a workspace at its limit is full, so that would lock the workspace
++    the moment it was saved. Clearing it (None) is never refused. Privileged like the two above
++    (``perm.checker.ESCALATED_FIELDS``, ``change_permission``)."""
++
+     permission: Permission | None = None
+     """Tier 1 — access control (#306). The SAME embedded ``Permission`` that
+     governs collections / KbChat: ``visibility`` decides whether the per-verb grant
+diff --git a/src/workspace_app/perm/checker.py b/src/workspace_app/perm/checker.py
+index 9868852bc..90a7621e7 100644
+--- a/src/workspace_app/perm/checker.py
++++ b/src/workspace_app/perm/checker.py
+@@ -105,7 +105,7 @@ def _context_user(context: Any) -> str:
+ #: ANY caller on a public item. Adding a privileged field to a WorkItem now
+ #: means adding it here, not writing a second gate somewhere else.
+ ESCALATED_FIELDS: frozenset[str] = frozenset(
+-    {"permission", "sandbox_cpu_cores", "sandbox_memory_bytes"}
++    {"permission", "sandbox_cpu_cores", "sandbox_memory_bytes", "sandbox_disk_bytes"}
+ )
+ 
+ 
+diff --git a/src/workspace_app/quota/limits.py b/src/workspace_app/quota/limits.py
+index 98e212954..df6a92bd3 100644
+--- a/src/workspace_app/quota/limits.py
++++ b/src/workspace_app/quota/limits.py
+@@ -138,15 +138,17 @@ class ResourceLimits:
+     `disk_bytes` is always concrete: this app enforces it and owns the fallback.
+     `NO_LIMIT` (0) means unbounded.
+ 
+-    `cpu_max` / `memory_max` are the deploy's `resources.per_app.max`, kept
+-    because one item may be given MORE than its App's size, up to that
+-    (plan-item-size-ceiling D1). 0 = the deploy set none for that dimension."""
++    `cpu_max` / `memory_max` / `disk_max` are the deploy's
++    `resources.per_app.max`, kept because one item may be given MORE than its
++    App's size, up to that (plan-item-size-ceiling D1; disk:
++    plan-item-disk-size D3). 0 = the deploy set none for that dimension."""
+ 
+     cpu_cores: float | None
+     memory_bytes: int | None
+     disk_bytes: int
+     cpu_max: float = 0.0
+     memory_max: int = NO_LIMIT
++    disk_max: int = NO_LIMIT
+ 
+     @property
+     def item_cpu_ceiling(self) -> float | None:
+@@ -163,6 +165,14 @@ class ResourceLimits:
+         panel would otherwise print as 「最多 0 B」 (review round 1)."""
+         return self.memory_max or self.memory_bytes or None
+ 
++    @property
++    def item_disk_ceiling(self) -> int | None:
++        """The most disk one item of this App may be given (plan-item-disk-size
++        D3): the deploy's `max` when it set one, otherwise the App's own size.
++        None when nothing caps it — `disk_bytes` 0 is how the App spells
++        unlimited, and an unlimited App has no ceiling to hold an item under."""
++        return self.disk_max or self.disk_bytes or None
++
+ 
+ @dataclass(frozen=True)
+ class ResolvedSize:
+@@ -253,6 +263,7 @@ def resolve_app_limits(manifest: AppManifest, settings: Settings) -> ResourceLim
+         ),
+         cpu_max=per_app.max.cpu,
+         memory_max=parse_size(per_app.max.memory),
++        disk_max=parse_size(per_app.max.disk),
+     )
+     _enforce_ceiling(manifest.slug, limits, per_app.max)
+     return limits
+diff --git a/tests/api/test_publish_copy.py b/tests/api/test_publish_copy.py
+index 0f1fe2acb..78b938d33 100644
+--- a/tests/api/test_publish_copy.py
++++ b/tests/api/test_publish_copy.py
+@@ -183,6 +183,34 @@ def test_the_copy_takes_the_publishers_sandbox_size():
+     assert (copy.sandbox_cpu_cores, copy.sandbox_memory_bytes) == (2.0, 2 * 1024**3)
+ 
+ 
++def test_the_copy_takes_the_sources_disk():
++    """Review round 1: the copy's files are the source's. A source raised above
++    its App's disk and filled would make every copy full at birth — every turn
++    refused — if the copy fell back to the App's size."""
++    holder = {"id": "bob"}
++    client, spec, _store = _app(holder)
++    src = _source(spec)
++    _workspace(client, src)
++    rm = spec.get_resource_manager(RcaInvestigation)
++    with rm.using("bob"):
++        item = rm.get(src).data
++        rm.update(
++            src,
++            type(item)(
++                **{
++                    **{f: getattr(item, f) for f in item.__struct_fields__},
++                    "sandbox_disk_bytes": 5 * 1024**3,
++                }
++            ),
++        )
++    _publish(client, src, sharing="per_person")
++    holder["id"] = "amy"
++
++    copy = _item(spec, _open(client, src).json()["item_id"])
++
++    assert copy.sandbox_disk_bytes == 5 * 1024**3
++
++
+ def test_the_copy_is_charged_to_the_opener():
+     holder = {"id": "bob"}
+     client, spec, _store = _app(holder)
+diff --git a/tests/quota/test_item_disk.py b/tests/quota/test_item_disk.py
+new file mode 100644
+index 000000000..90be58755
+--- /dev/null
++++ b/tests/quota/test_item_disk.py
+@@ -0,0 +1,289 @@
++"""docs/plan-item-disk-size.md P1 — a person sets how big ONE item's workspace
++may grow, from its environment panel.
++
++Driven through the doors a person uses: the disk route, then a file write (the
++gate every write shares, `WorkspaceFiles._ensure_headroom`) — not by asking
++`_quota_for` what it returns. The point of the setting is whether a write is
++refused, and a test that stopped at the resolver would pass while the number
++never reached the gate.
++"""
++
++from __future__ import annotations
++
++from workspace_app.config.schema import PerUserResources
++from workspace_app.perm.model import Permission
++from workspace_app.quota.limits import ResourceLimits
++
++from .test_item_resources import WHO, _app, _mk, _restricted, _wake
++
++#: The App's size is 100 bytes; the deploy lets one item go up to 1000.
++SMALL = ResourceLimits(cpu_cores=None, memory_bytes=None, disk_bytes=100, disk_max=1000)
++
++
++def _write(client, item: str, n: int, name: str = "f.bin"):  # noqa: ANN001, ANN202
++    return client.put(f"/a/rca/items/{item}/files/{name}", content=b"x" * n)
++
++
++def _set(client, item: str, size: int | str | None):  # noqa: ANN001, ANN202
++    """A size the way the panel sends it: a string (`"500"` is 500 bytes)."""
++    return client.put(
++        f"/a/rca/items/{item}/disk", json={"disk": None if size is None else str(size)}
++    )
++
++
++def test_an_item_nobody_sized_keeps_its_apps_disk():
++    """D7: nothing changes for an item until someone sets it."""
++    with _app(PerUserResources(), app_resources={"rca": SMALL}) as (client, spec, _sb):
++        item = _mk(spec, "alice")
++
++        assert _write(client, item, 150).status_code == 507
++
++
++def test_an_item_may_be_given_more_disk_up_to_the_deploys_max():
++    """D3, and D5: the next write already uses it — no environment restart."""
++    with _app(PerUserResources(), app_resources={"rca": SMALL}) as (client, spec, _sb):
++        item = _mk(spec, "alice")
++
++        assert _set(client, item, 500).status_code == 200
++        assert _write(client, item, 150).status_code == 204
++
++
++def test_above_the_max_is_kept_as_typed_and_held_at_the_max():
++    """Clamped on the way out, never on the way in — the CPU rule."""
++    with _app(PerUserResources(), app_resources={"rca": SMALL}) as (client, spec, _sb):
++        item = _mk(spec, "alice")
++
++        assert _set(client, item, 5000).status_code == 200
++        env = client.get(f"/a/rca/items/{item}/environment").json()
++
++        assert (env["stated_disk_bytes"], env["effective_disk_bytes"]) == (5000, 1000)
++        assert _write(client, item, 1500).status_code == 507
++
++
++def test_no_max_means_no_raising_above_the_app():
++    """D3: a deploy that set no `max.disk` keeps the App's size as the ceiling."""
++    no_max = ResourceLimits(cpu_cores=None, memory_bytes=None, disk_bytes=100)
++    with _app(PerUserResources(), app_resources={"rca": no_max}) as (client, spec, _sb):
++        item = _mk(spec, "alice")
++        _set(client, item, 500)
++
++        assert _write(client, item, 150).status_code == 507
++
++
++def test_below_what_is_already_used_is_refused():
++    """D1: setting it under the files already there would lock the workspace
++    the moment it is saved. Refused, and nothing is stored."""
++    with _app(PerUserResources(), app_resources={"rca": SMALL}) as (client, spec, _sb):
++        item = _mk(spec, "alice")
++        assert _write(client, item, 80).status_code == 204
++
++        refused = _set(client, item, 50)
++
++        assert refused.status_code == 422, refused.text
++        assert client.get(f"/a/rca/items/{item}/environment").json()["stated_disk_bytes"] is None
++
++
++def test_exactly_what_is_used_is_refused_too():
++    """Review round 1: a workspace AT its limit is full — the turn gate asks for
++    room for one more byte — so equal locks it as surely as below."""
++    with _app(PerUserResources(), app_resources={"rca": SMALL}) as (client, spec, _sb):
++        item = _mk(spec, "alice")
++        _write(client, item, 80)
++
++        assert _set(client, item, 80).status_code == 422
++        assert _set(client, item, 81).status_code == 200
++
++
++def test_the_floor_is_checked_against_what_will_apply_not_what_was_typed():
++    """Review round 1: a typed size is held to the ceiling on the way out. With
++    more already used than the ceiling, a size above `used` still APPLIES as the
++    ceiling — below `used` — and would lock the workspace."""
++    unlimited_app = ResourceLimits(cpu_cores=None, memory_bytes=None, disk_bytes=0, disk_max=1000)
++    with _app(PerUserResources(), app_resources={"rca": unlimited_app}) as (client, spec, _sb):
++        item = _mk(spec, "alice")
++        assert _write(client, item, 1500).status_code == 204
++
++        assert _set(client, item, 5000).status_code == 422
++        assert _write(client, item, 10, name="g.bin").status_code == 204, "still unlimited"
++
++
++def test_a_body_without_the_field_is_refused_rather_than_clearing_it():
++    with _app(PerUserResources(), app_resources={"rca": SMALL}) as (client, spec, _sb):
++        item = _mk(spec, "alice")
++        _set(client, item, 500)
++
++        assert client.put(f"/a/rca/items/{item}/disk", json={}).status_code == 422
++        env = client.get(f"/a/rca/items/{item}/environment").json()
++        assert env["stated_disk_bytes"] == 500
++
++
++def test_the_environment_still_opens_when_the_workspace_cannot_be_measured(monkeypatch):
++    """Review round 1: measuring is extra — a busy or unreachable sandbox must
++    not take the cpu/memory half and Close sandbox down with it. The disk half
++    is left out (None), and the panel then draws no disk field."""
++    from workspace_app.files.facade import WorkspaceFiles
++
++    async def busy(*_a, **_k):  # noqa: ANN002, ANN003, ANN202
++        raise RuntimeError("sandbox busy")
++
++    # Before the app is built: it holds the bound method.
++    monkeypatch.setattr(WorkspaceFiles, "workspace_usage", busy)
++    with _app(PerUserResources(), app_resources={"rca": SMALL}) as (client, spec, _sb):
++        item = _mk(spec, "alice")
++
++        r = client.get(f"/a/rca/items/{item}/environment")
++
++        assert r.status_code == 200, r.text
++        assert r.json()["disk_used_bytes"] is None
++
++
++def test_a_nonsense_size_is_refused():
++    with _app(PerUserResources(), app_resources={"rca": SMALL}) as (client, spec, _sb):
++        item = _mk(spec, "alice")
++
++        for bad in ("0", "max", "-5", "lots"):
++            assert _set(client, item, bad).status_code == 422, bad
++
++
++def test_it_may_change_while_the_environment_runs():
++    """D5: disk is not the sandbox's — it is checked on every write, so a
++    running environment does not hold it the way it holds cpu and memory."""
++    with _app(PerUserResources(), app_resources={"rca": SMALL}) as (client, spec, _sb):
++        item = _mk(spec, "alice")
++        _wake(client, item)
++
++        assert _set(client, item, 500).status_code == 200
++
++
++def test_clearing_it_goes_back_to_the_apps_size():
++    with _app(PerUserResources(), app_resources={"rca": SMALL}) as (client, spec, _sb):
++        item = _mk(spec, "alice")
++        _set(client, item, 500)
++
++        assert _set(client, item, None).status_code == 200
++        assert _write(client, item, 150).status_code == 507
++
++
++def test_setting_it_needs_more_than_editing_the_item():
++    """D4: `change_permission`, the verb the AI can never hold."""
++    with _app(PerUserResources(), app_resources={"rca": SMALL}) as (client, spec, _sb):
++        item = _mk(
++            spec,
++            "owner-alice",
++            # bob is in the workspace and may edit the item — every verb but
++            # change_permission — so only that verb can be what refuses him.
++            permission=_restricted(
++                read_meta=["user:bob"], read_chat=["user:bob"], write_meta=["user:bob"]
++            ),
++        )
++
++        WHO["id"] = "bob"
++        refused = _set(client, item, 500)
++
++        assert refused.status_code in (403, 404), refused.text
++
++
++def test_a_delegate_with_change_permission_may_set_it():
++    with _app(PerUserResources(), app_resources={"rca": SMALL}) as (client, spec, _sb):
++        item = _mk(
++            spec,
++            "owner-alice",
++            permission=_restricted(
++                read_meta=["user:bob"], read_chat=["user:bob"], change_permission=["user:bob"]
++            ),
++        )
++
++        WHO["id"] = "bob"
++
++        assert _set(client, item, 500).status_code == 200
++
++
++def test_no_other_door_writes_it():
++    """The field is privileged like the cpu and memory beside it: the generic
++    PATCH, a JSON patch and a create may not state it."""
++    with _app(PerUserResources(), app_resources={"rca": SMALL}) as (client, spec, _sb):
++        item = _mk(spec, "alice", permission=Permission(visibility="public"))
++
++        WHO["id"] = "carol"
++        smuggled = client.patch(f"/rca-investigation/{item}", json={"sandbox_disk_bytes": 999})
++        assert smuggled.status_code == 403, smuggled.text
++
++        WHO["id"] = "alice"
++        created = client.post(
++            "/rca-investigation", json={"title": "t", "owner": "alice", "sandbox_disk_bytes": 999}
++        )
++        assert created.status_code == 403, created.text
++
++
++def test_the_apps_own_create_route_cannot_state_it_either():
++    """`POST /a/{slug}/items` merges its body into the model: the field is
++    dropped there, as cpu and memory are."""
++    with _app(PerUserResources(), app_resources={"rca": SMALL}) as (client, spec, _sb):
++        made = client.post("/a/rca/items", json={"title": "x", "sandbox_disk_bytes": 999})
++        assert made.status_code in (200, 201), made.text
++        item = made.json().get("item_id") or made.json()["resource_id"]
++
++        assert client.get(f"/a/rca/items/{item}/environment").json()["stated_disk_bytes"] is None
++
++
++def test_the_environment_says_used_and_how_far_it_may_go():
++    """D6: the panel draws the range before anything is typed."""
++    with _app(PerUserResources(), app_resources={"rca": SMALL}) as (client, spec, _sb):
++        item = _mk(spec, "alice")
++        _write(client, item, 40)
++
++        env = client.get(f"/a/rca/items/{item}/environment").json()
++
++        assert env["disk_used_bytes"] == 40
++        assert env["disk_ceiling"] == 1000
++        assert env["effective_disk_bytes"] == 100
++
++
++def test_the_owner_sees_how_much_of_their_own_quota_is_left():
++    """D6: a ceiling is not a guarantee (D2), so what is left must be visible."""
++    with _app(PerUserResources(disk="1000"), app_resources={"rca": SMALL}) as (
++        client,
++        spec,
++        _sb,
++    ):
++        item = _mk(spec, "alice")
++        other = _mk(spec, "alice")
++        _write(client, item, 40)
++        _write(client, other, 60)
++
++        env = client.get(f"/a/rca/items/{item}/environment").json()
++
++        assert env["owner_disk_left"] == 900
++
++
++def test_a_collaborator_is_not_told_the_owners_total():
++    """The environment view never leaks the owner's other items — what is left
++    of their quota is a sum over those items."""
++    with _app(PerUserResources(disk="1000"), app_resources={"rca": SMALL}) as (
++        client,
++        spec,
++        _sb,
++    ):
++        item = _mk(
++            spec,
++            "owner-alice",
++            permission=_restricted(read_meta=["user:bob"], read_chat=["user:bob"]),
++        )
++
++        WHO["id"] = "bob"
++        env = client.get(f"/a/rca/items/{item}/environment").json()
++
++        assert env["owner_disk_left"] is None
++
++
++def test_a_new_size_reaches_the_very_next_write():
++    """The gate reads the item's facts through a few-second cache; the person
++    who just saved is the one who would meet the stale copy. A write BEFORE
++    the change fills that cache."""
++    with _app(PerUserResources(), app_resources={"rca": SMALL}) as (client, spec, _sb):
++        item = _mk(spec, "alice")
++        assert _write(client, item, 10, name="a.bin").status_code == 204
++
++        _set(client, item, 500)
++
++        assert _write(client, item, 150, name="b.bin").status_code == 204
+diff --git a/tests/quota/test_limits.py b/tests/quota/test_limits.py
+index ad57fd1aa..7c01a48b3 100644
+--- a/tests/quota/test_limits.py
++++ b/tests/quota/test_limits.py
+@@ -236,6 +236,44 @@ def test_an_items_size_may_go_up_to_the_deploys_max_not_just_the_apps_default():
+     assert got.item_memory_ceiling == 4 * 1024**3
+ 
+ 
++def test_an_items_disk_may_go_up_to_the_deploys_max():
++    """plan-item-disk-size D3, through the config path an operator uses:
++    `per_app.max.disk` in config.yaml reaches the item's ceiling."""
++    from workspace_app.config.schema import (
++        PerAppResources,
++        ResourceAmounts,
++        ResourceSettings,
++        Settings,
++    )
++
++    settings = Settings(
++        resources=ResourceSettings(
++            per_app=PerAppResources(
++                default=ResourceAmounts(disk="1G"), max=ResourceAmounts(disk="20G")
++            )
++        )
++    )
++    got = resolve_app_limits(_manifest(), settings)
++
++    assert got.disk_bytes == 1024**3, "still the default size"
++    assert got.item_disk_ceiling == 20 * 1024**3
++
++
++def test_without_a_disk_max_an_items_disk_ceiling_is_the_apps_size():
++    from workspace_app.config.schema import (
++        PerAppResources,
++        ResourceAmounts,
++        ResourceSettings,
++        Settings,
++    )
++
++    settings = Settings(
++        resources=ResourceSettings(per_app=PerAppResources(default=ResourceAmounts(disk="1G")))
++    )
++
++    assert resolve_app_limits(_manifest(), settings).item_disk_ceiling == 1024**3
++
++
+ def test_without_a_max_an_items_ceiling_stays_the_apps_value():
+     """D2: a deploy that set no `max` keeps today's rule — an item may only go
+     below its App — rather than an upgrade quietly lifting every limit."""
+diff --git a/web/src/api/itemEnvironment.ts b/web/src/api/itemEnvironment.ts
+index 0d475e797..bf9b0efb8 100644
+--- a/web/src/api/itemEnvironment.ts
++++ b/web/src/api/itemEnvironment.ts
+@@ -55,6 +55,17 @@ export type ItemEnvironment = {
+    *  `null` = nothing caps it, and the panel draws no line. */
+   cpuCeiling: number | null;
+   memoryCeiling: number | null;
++  /** docs/plan-item-disk-size.md — how big the WORKSPACE may grow. `stated` is
++   *  what somebody set (null = nobody); `effective` what every write is held to
++   *  now (0 = unlimited); `used` what it holds (the floor, D1); `ceiling` the
++   *  most it may be given (D3). All null from an API pod that predates them,
++   *  and the panel then draws no disk field. `ownerDiskLeft` is what is left of
++   *  the owner's own quota — sent to the owner only (D6). */
++  statedDiskBytes: number | null;
++  effectiveDiskBytes: number | null;
++  diskUsedBytes: number | null;
++  diskCeiling: number | null;
++  ownerDiskLeft: number | null;
+ };
+ 
+ /** A size to store. `null` in either dimension CLEARS it — which is not zero,
+@@ -80,11 +91,18 @@ type Wire = {
+   max_memory_bytes: number;
+   cpu_ceiling?: number | null;
+   memory_ceiling?: number | null;
++  stated_disk_bytes?: number | null;
++  effective_disk_bytes?: number | null;
++  disk_used_bytes?: number | null;
++  disk_ceiling?: number | null;
++  owner_disk_left?: number | null;
+ };
+ 
+ export type ItemEnvironmentApi = {
+   get(slug: string, itemId: string): Promise<ItemEnvironment>;
+   setSize(slug: string, itemId: string, size: ItemSize): Promise<void>;
++  /** The workspace's size, in the server's spelling (`5G`); null clears it. */
++  setDisk(slug: string, itemId: string, disk: string | null): Promise<void>;
+ };
+ 
+ const base = (slug: string, itemId: string) =>
+@@ -113,6 +131,11 @@ export const itemEnvironmentApi: ItemEnvironmentApi = {
+       // `??`: an API pod from before the field sends nothing — no line, not 0.
+       cpuCeiling: w.cpu_ceiling ?? null,
+       memoryCeiling: w.memory_ceiling ?? null,
++      statedDiskBytes: w.stated_disk_bytes ?? null,
++      effectiveDiskBytes: w.effective_disk_bytes ?? null,
++      diskUsedBytes: w.disk_used_bytes ?? null,
++      diskCeiling: w.disk_ceiling ?? null,
++      ownerDiskLeft: w.owner_disk_left ?? null,
+     };
+   },
+   async setSize(slug, itemId, size) {
+@@ -126,4 +149,14 @@ export const itemEnvironmentApi: ItemEnvironmentApi = {
+     });
+     if (!r.ok) throw await httpErrorFrom(r, `set environment size failed: ${r.status}`);
+   },
++  async setDisk(slug, itemId, disk) {
++    // Its own route: unlike cpu and memory the workspace's size may change
++    // while the environment runs (D5), so it does not share their refusal.
++    const r = await apiFetch(`${base(slug, itemId)}/disk`, {
++      method: "PUT",
++      headers: { "content-type": "application/json" },
++      body: JSON.stringify({ disk }),
++    });
++    if (!r.ok) throw await httpErrorFrom(r, `set disk size failed: ${r.status}`);
++  },
+ };
+diff --git a/web/src/components/ItemEnvironmentModal.disk.test.tsx b/web/src/components/ItemEnvironmentModal.disk.test.tsx
+new file mode 100644
+index 000000000..204a3a9d8
+--- /dev/null
++++ b/web/src/components/ItemEnvironmentModal.disk.test.tsx
+@@ -0,0 +1,398 @@
++// @vitest-environment happy-dom
++import "@testing-library/jest-dom/vitest";
++import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
++import { afterEach, describe, expect, it, vi } from "vitest";
++
++import { translate } from "../lib/i18n";
++import { qk } from "../api/queryKeys";
++import { renderWithQuery } from "../test/queryWrapper";
++import { ItemEnvironmentModal } from "./ItemEnvironmentModal";
++
++/**
++ * docs/plan-item-disk-size.md P2 — the disk field on the Sandbox modal.
++ *
++ * Disk is not the sandbox's: every write reads it, so it may change while the
++ * environment runs (D5) and needs no per-person budget to be drawn. It is
++ * saved on its own route; the cpu/memory PUT is sent only when THOSE changed.
++ */
++
++const MB = 1024 * 1024;
++const GB = 1024 * MB;
++const word = (key: Parameters<typeof translate>[1], vars?: Record<string, string | number>) =>
++  translate("zh-TW", key, vars);
++
++const json = (body: unknown) =>
++  new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
++
++const ENV = {
++  running: false,
++  stated_cpu_cores: null,
++  stated_memory_bytes: null,
++  effective_cpu_cores: 2,
++  effective_memory_bytes: 512 * MB,
++  enforced_cpu_cores: 2,
++  enforced_memory_bytes: 512 * MB,
++  cpu_bound_by: null,
++  memory_bound_by: null,
++  max_cpu_cores: 1024,
++  max_memory_bytes: 1024 ** 5,
++  stated_disk_bytes: null,
++  effective_disk_bytes: 1 * GB,
++  disk_used_bytes: 300 * MB,
++  disk_ceiling: 20 * GB,
++  owner_disk_left: 40 * GB,
++};
++
++const CAPPED = {
++  limits: { count: 0, cpu: 4, memory_bytes: 8 * GB, disk_bytes: 0 },
++  cpu_in_use: 2,
++  memory_in_use: 512 * MB,
++  live: [],
++  workspaces: [],
++  disk_in_use: 0,
++  owner: "alice",
++};
++const UNCAPPED = { ...CAPPED, limits: { count: 0, cpu: 0, memory_bytes: 0, disk_bytes: 0 } };
++
++function route(environment: unknown, resources: unknown = CAPPED) {
++  return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
++    const url = String(input);
++    if (init?.method === "PUT") return json({});
++    if (url.includes("/environment")) return json(environment);
++    if (url.includes("/me/resources")) return json(resources);
++    return json({});
++  });
++}
++
++const putsTo = (f: ReturnType<typeof route>, tail: string) =>
++  f.mock.calls
++    .filter((c) => (c[1] as RequestInit | undefined)?.method === "PUT" && String(c[0]).endsWith(tail))
++    .map((c) => JSON.parse(String((c[1] as RequestInit).body)) as Record<string, unknown>);
++
++function open(canEdit = true) {
++  renderWithQuery(<ItemEnvironmentModal slug="rca" itemId="i-1" canEdit={canEdit} onClose={vi.fn()} />);
++}
++
++afterEach(() => {
++  cleanup();
++  vi.unstubAllGlobals();
++});
++
++describe("ItemEnvironmentModal — disk", () => {
++  it("draws the disk field with what is used and how far it may go, before anything is typed", async () => {
++    vi.stubGlobal("fetch", route(ENV));
++    open();
++
++    const field = await screen.findByTestId("disk-field");
++    expect(screen.getByTestId("disk-input")).toBeTruthy();
++    expect(field).toHaveTextContent(word("itemenv.disk.used", { used: "300.0 MB" }));
++    expect(field).toHaveTextContent(word("itemenv.size.ceiling", { value: "20.0 GB" }));
++    expect(field).toHaveTextContent(word("itemenv.disk.now"));
++  });
++
++  it("names an unset disk as the App's size, not the person's quota", async () => {
++    // The cpu/memory default comes from the owner's quota; the disk's from
++    // the App (D7) — the same words would say something false.
++    vi.stubGlobal("fetch", route(ENV));
++    open();
++
++    expect(await screen.findByTestId("disk-origin")).toHaveTextContent(word("itemenv.disk.default"));
++  });
++
++  it("sits with this workspace's sizes, above the person's totals", async () => {
++    vi.stubGlobal("fetch", route(ENV));
++    open();
++    const disk = await screen.findByTestId("disk-field");
++    const gauge = screen.getByTestId("budget-gauge");
++
++    expect(disk.compareDocumentPosition(gauge) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
++  });
++
++  it("while running, the hint says closing is for cpu and memory — the disk can change now", async () => {
++    vi.stubGlobal("fetch", route({ ...ENV, running: true }));
++    open();
++
++    await screen.findByTestId("disk-input");
++    expect(screen.getByText(word("itemenv.close.hint"))).toBeTruthy();
++    expect(word("itemenv.close.hint")).toContain("CPU");
++  });
++
++  it("is drawn with no per-person budget too — disk needs none", async () => {
++    vi.stubGlobal("fetch", route(ENV, UNCAPPED));
++    open();
++
++    expect(await screen.findByTestId("disk-input")).toBeEnabled();
++    expect(screen.getByTestId("itemenv-save")).toBeTruthy();
++  });
++
++  it("is not drawn by an API pod that sends no disk figures", async () => {
++    const { stated_disk_bytes, effective_disk_bytes, disk_used_bytes, disk_ceiling, owner_disk_left, ...old } =
++      ENV;
++    vi.stubGlobal("fetch", route(old));
++    open();
++
++    await screen.findByTestId("cpu-input");
++    expect(screen.queryByTestId("disk-field")).toBeNull();
++  });
++
++  it("saves the disk on its own route, and sends no cpu/memory PUT for a disk-only edit", async () => {
++    const f = route(ENV);
++    vi.stubGlobal("fetch", f);
++    open();
++    fireEvent.change(await screen.findByTestId("disk-input"), { target: { value: "5 GB" } });
++
++    fireEvent.click(screen.getByTestId("itemenv-save"));
++
++    await waitFor(() => expect(putsTo(f, "/disk")).toEqual([{ disk: "5G" }]));
++    expect(putsTo(f, "/resources")).toHaveLength(0);
++  });
++
++  it("a disk save re-reads the composer's usage bar, whose limit it just changed", async () => {
++    // Found on the demo: 「已使用 300 KB / 1.0 GB」 stayed after 5G was saved.
++    const f = route(ENV);
++    vi.stubGlobal("fetch", f);
++    const { client } = renderWithQuery(
++      <ItemEnvironmentModal slug="rca" itemId="i-1" canEdit onClose={vi.fn()} />,
++    );
++    client.setQueryData(qk.workspaceUsage("rca", "i-1"), { used: 300 * 1024, quota: GB });
++    fireEvent.change(await screen.findByTestId("disk-input"), { target: { value: "5G" } });
++
++    fireEvent.click(screen.getByTestId("itemenv-save"));
++
++    await waitFor(() => expect(putsTo(f, "/disk")).toHaveLength(1));
++    await waitFor(() => expect(client.getQueryState(qk.workspaceUsage("rca", "i-1"))?.isInvalidated).toBe(true));
++  });
++
++  it("sends no disk PUT for a cpu-only edit", async () => {
++    const f = route(ENV);
++    vi.stubGlobal("fetch", f);
++    open();
++    fireEvent.change(await screen.findByTestId("cpu-input"), { target: { value: "3" } });
++
++    fireEvent.click(screen.getByTestId("itemenv-save"));
++
++    await waitFor(() => expect(putsTo(f, "/resources")).toHaveLength(1));
++    expect(putsTo(f, "/disk")).toHaveLength(0);
++  });
++
++  it("may change while the environment runs — cpu and memory stay locked", async () => {
++    const f = route({ ...ENV, running: true });
++    vi.stubGlobal("fetch", f);
++    open();
++
++    const disk = await screen.findByTestId("disk-input");
++    expect(disk).toBeEnabled();
++    expect(screen.getByTestId("cpu-input")).toBeDisabled();
++    fireEvent.change(disk, { target: { value: "2G" } });
++    fireEvent.click(screen.getByTestId("itemenv-save"));
++
++    await waitFor(() => expect(putsTo(f, "/disk")).toEqual([{ disk: "2G" }]));
++  });
++
++  it("refuses, before Save, a size below what the workspace already holds (D1)", async () => {
++    vi.stubGlobal("fetch", route(ENV));
++    open();
++    fireEvent.change(await screen.findByTestId("disk-input"), { target: { value: "100M" } });
++
++    expect(screen.getByTestId("disk-hint")).toHaveTextContent(word("itemenv.field.disk.under", { detail: "300.0 MB" }));
++    expect(screen.getByTestId("itemenv-save")).toBeDisabled();
++  });
++
++  it("refuses exactly what is used too — a workspace at its limit is full", async () => {
++    vi.stubGlobal("fetch", route({ ...ENV, disk_used_bytes: 1 * GB }));
++    open();
++    fireEvent.change(await screen.findByTestId("disk-input"), { target: { value: "1G" } });
++
++    expect(screen.getByTestId("disk-hint")).toHaveTextContent(word("itemenv.field.disk.under", { detail: "1.0 GB" }));
++    expect(screen.getByTestId("itemenv-save")).toBeDisabled();
++  });
++
++  it("refuses a size whose APPLIED value — held to the ceiling — would not be above what is used", async () => {
++    // 25 GB used, ceiling 20 GB: 30G is above `used` but applies as 20 GB.
++    vi.stubGlobal("fetch", route({ ...ENV, disk_used_bytes: 25 * GB }));
++    open();
++    fireEvent.change(await screen.findByTestId("disk-input"), { target: { value: "30G" } });
++
++    // The reason named is the ceiling, not "more than used" — 30G already is.
++    expect(screen.getByTestId("disk-hint")).toHaveTextContent(
++      word("itemenv.field.disk.capped", { detail: "20.0 GB", used: "25.0 GB" }),
++    );
++    expect(screen.getByTestId("itemenv-save")).toBeDisabled();
++  });
++
++  it("refuses a spelling the server cannot read", async () => {
++    vi.stubGlobal("fetch", route(ENV));
++    open();
++    fireEvent.change(await screen.findByTestId("disk-input"), { target: { value: "lots" } });
++
++    expect(screen.getByTestId("disk-hint")).toBeTruthy();
++    expect(screen.getByTestId("itemenv-save")).toBeDisabled();
++  });
++
++  it("'Back to default' clears it", async () => {
++    const f = route({ ...ENV, stated_disk_bytes: 5 * GB, effective_disk_bytes: 5 * GB });
++    vi.stubGlobal("fetch", f);
++    open();
++    fireEvent.click(await screen.findByTestId("reset-disk"));
++
++    fireEvent.click(screen.getByTestId("itemenv-save"));
++
++    await waitFor(() => expect(putsTo(f, "/disk")).toEqual([{ disk: null }]));
++  });
++
++  it("says how much of the owner's own quota is left — a ceiling is not a guarantee (D2, D6)", async () => {
++    vi.stubGlobal("fetch", route(ENV));
++    open();
++
++    expect(await screen.findByTestId("disk-owner-left")).toHaveTextContent(
++      word("itemenv.disk.ownerLeft", { left: "40.0 GB" }),
++    );
++  });
++
++  it("says nothing of the owner's quota when the server gave none (a collaborator, or no quota)", async () => {
++    vi.stubGlobal("fetch", route({ ...ENV, owner_disk_left: null }));
++    open();
++
++    await screen.findByTestId("disk-input");
++    expect(screen.queryByTestId("disk-owner-left")).toBeNull();
++  });
++
++  it("says when the App's ceiling held a stated size down", async () => {
++    vi.stubGlobal("fetch", route({ ...ENV, stated_disk_bytes: 50 * GB, effective_disk_bytes: 20 * GB }));
++    open();
++
++    expect(await screen.findByTestId("disk-clamped")).toHaveTextContent(
++      word("itemenv.memory.clamped.app", { stated: "50.0 GB", effective: "20.0 GB" }),
++    );
++  });
++
++  it("a disk-only edit makes leaving ask once (#779)", async () => {
++    vi.stubGlobal("fetch", route(ENV));
++    const onClose = vi.fn();
++    renderWithQuery(<ItemEnvironmentModal slug="rca" itemId="i-1" canEdit onClose={onClose} />);
++    fireEvent.change(await screen.findByTestId("disk-input"), { target: { value: "5G" } });
++
++    fireEvent.click(screen.getByTestId("itemenv-cancel"));
++
++    expect(await screen.findByTestId("dialog-action-keep")).toBeTruthy();
++    expect(onClose).not.toHaveBeenCalled();
++  });
++
++  it("an untouched disk field leaves without asking (#779)", async () => {
++    vi.stubGlobal("fetch", route(ENV));
++    const onClose = vi.fn();
++    renderWithQuery(<ItemEnvironmentModal slug="rca" itemId="i-1" canEdit onClose={onClose} />);
++    await screen.findByTestId("disk-input");
++
++    fireEvent.click(screen.getByTestId("itemenv-cancel"));
++
++    expect(onClose).toHaveBeenCalledTimes(1);
++    expect(screen.queryByTestId("dialog-action-keep")).toBeNull();
++  });
++
++  it("holds the disk field still while a save is out", async () => {
++    let release: () => void = () => {};
++    const held = new Promise<void>((r) => (release = r));
++    const f = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
++      const url = String(input);
++      if (init?.method === "PUT") {
++        await held;
++        return json({});
++      }
++      if (url.includes("/environment")) return json(ENV);
++      if (url.includes("/me/resources")) return json(CAPPED);
++      return json({});
++    });
++    vi.stubGlobal("fetch", f);
++    open();
++    const disk = await screen.findByTestId("disk-input");
++    fireEvent.change(disk, { target: { value: "5G" } });
++
++    fireEvent.click(screen.getByTestId("itemenv-save"));
++
++    await waitFor(() => expect(screen.getByTestId("disk-input")).toBeDisabled());
++    release();
++  });
++
++  it("when the re-read after a save fails, the field shows the disk that was sent", async () => {
++    let puts = 0;
++    const f = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
++      const url = String(input);
++      if (init?.method === "PUT") {
++        puts += 1;
++        return json({});
++      }
++      if (url.includes("/environment")) return puts > 0 ? new Response("nope", { status: 500 }) : json(ENV);
++      if (url.includes("/me/resources")) return json(CAPPED);
++      return json({});
++    });
++    vi.stubGlobal("fetch", f);
++    open();
++    fireEvent.change(await screen.findByTestId("disk-input"), { target: { value: "5G" } });
++
++    fireEvent.click(screen.getByTestId("itemenv-save"));
++
++    await screen.findByTestId("reload-failed");
++    expect(screen.getByTestId("disk-input")).toHaveValue("5G");
++  });
++
++  it("when one half of a Save is refused, the other half's stored values are re-read, not shown as unsaved", async () => {
++    // cpu/memory went through, the disk was refused (the floor moved): the
++    // record is read again so the panel shows what IS stored.
++    let envReads = 0;
++    const f = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
++      const url = String(input);
++      if (init?.method === "PUT")
++        return url.endsWith("/disk") ? new Response(JSON.stringify({ detail: "floor" }), { status: 422 }) : json({});
++      if (url.includes("/environment")) {
++        envReads += 1;
++        return json(envReads > 1 ? { ...ENV, stated_cpu_cores: 3 } : ENV);
++      }
++      if (url.includes("/me/resources")) return json(CAPPED);
++      return json({});
++    });
++    vi.stubGlobal("fetch", f);
++    open();
++    fireEvent.change(await screen.findByTestId("cpu-input"), { target: { value: "3" } });
++    fireEvent.change(screen.getByTestId("disk-input"), { target: { value: "5G" } });
++
++    fireEvent.click(screen.getByTestId("itemenv-save"));
++
++    await screen.findByTestId("save-failed");
++    await waitFor(() => expect(screen.getByTestId("cpu-origin")).toHaveTextContent(word("itemenv.size.stated")));
++  });
++
++  it("with no disk field, the running hint does not promise one", async () => {
++    const { stated_disk_bytes, effective_disk_bytes, disk_used_bytes, disk_ceiling, owner_disk_left, ...old } =
++      ENV;
++    vi.stubGlobal("fetch", route({ ...old, running: true }));
++    open();
++
++    await screen.findByTestId("cpu-input");
++    expect(screen.getByText(word("itemenv.close.hint.nodisk"))).toBeTruthy();
++  });
++
++  it("with no budget, the running hint names only the disk — there is no cpu or memory field", async () => {
++    vi.stubGlobal("fetch", route({ ...ENV, running: true }, UNCAPPED));
++    open();
++
++    await screen.findByTestId("disk-input");
++    expect(screen.getByText(word("itemenv.close.hint.diskonly"))).toBeTruthy();
++  });
++
++  it("with no budget, a viewer who may not change it is told why the disk is grey", async () => {
++    vi.stubGlobal("fetch", route(ENV, UNCAPPED));
++    open(false);
++
++    await screen.findByTestId("disk-input");
++    expect(screen.getByText(word("itemenv.readonly"))).toBeTruthy();
++  });
++
++  it("is read-only for someone who may look but not change it", async () => {
++    vi.stubGlobal("fetch", route(ENV));
++    open(false);
++
++    expect(await screen.findByTestId("disk-input")).toBeDisabled();
++    expect(screen.queryByTestId("itemenv-save")).toBeNull();
++  });
++});
+diff --git a/web/src/components/ItemEnvironmentModal.tsx b/web/src/components/ItemEnvironmentModal.tsx
+index bac043581..1c9ba4782 100644
+--- a/web/src/components/ItemEnvironmentModal.tsx
++++ b/web/src/components/ItemEnvironmentModal.tsx
+@@ -71,6 +71,7 @@ import { pxToRem } from "../lib/pxToRem";
+ import { ItemEnvironmentPanel, type SizeDraft } from "./ItemEnvironmentPanel";
+ import {
+   cpuFault,
++  diskFault,
+   memoryFault,
+   normaliseMemory,
+   parseSize,
+@@ -118,6 +119,7 @@ export function ItemEnvironmentModal({
+     ? {
+         cpu: env.data.statedCpuCores === null ? "" : String(env.data.statedCpuCores),
+         memory: toSizeString(env.data.statedMemoryBytes) ?? "",
++        disk: toSizeString(env.data.statedDiskBytes) ?? "",
+       }
+     : null;
+   // Only the fields that were typed in. `{}` = nothing typed = clean.
+@@ -130,37 +132,57 @@ export function ItemEnvironmentModal({
+   const [staleAt, setStaleAt] = useState<number | null>(null);
+   const staleAfterSave = staleAt !== null && env.dataUpdatedAt === staleAt;
+   const current: SizeDraft | null = stated
+-    ? { cpu: draft.cpu ?? stated.cpu, memory: draft.memory ?? stated.memory }
++    ? {
++        cpu: draft.cpu ?? stated.cpu,
++        memory: draft.memory ?? stated.memory,
++        disk: draft.disk ?? stated.disk,
++      }
+     : null;
+-  const dirty =
++  // Two halves, dirty apart: cpu/memory go to `/resources` and are locked
++  // while the sandbox runs; disk goes to `/disk` and is not (plan-item-disk-size
++  // D5). A Save sends only the half that changed.
++  const sizeDirty =
+     current !== null && stated !== null && (current.cpu !== stated.cpu || current.memory !== stated.memory);
++  const diskDirty = current !== null && stated !== null && current.disk !== stated.disk;
++  const dirty = sizeDirty || diskDirty;
+   // Against the RECORD's ceilings (#830), never a number of the client's own.
+   // (`current` exists exactly when `env.data` does; the type cannot see that.)
+-  const fault: { cpu: SizeFault; memory: SizeFault } =
++  const fault: { cpu: SizeFault; memory: SizeFault; disk: SizeFault } =
+     env.data && current
+       ? {
+           cpu: cpuFault(current.cpu, env.data.maxCpuCores),
+           memory: memoryFault(current.memory, env.data.maxMemoryBytes),
++          // The same hard ceiling as memory, plus the floor D1 adds.
++          disk: diskFault(current.disk, env.data.maxMemoryBytes, env.data.diskUsedBytes ?? 0, env.data.diskCeiling),
+         }
+-      : { cpu: null, memory: null };
++      : { cpu: null, memory: null, disk: null };
+ 
+   const envKey = qk.itemEnvironment(slug, itemId);
+   const refresh = () =>
+     Promise.all([
+       qc.invalidateQueries({ queryKey: envKey }),
+       qc.invalidateQueries({ queryKey: qk.myBudget }),
++      // The composer's 「已使用 X / Y」 — its Y is the disk a save just changed
++      // (plan-item-disk-size); left alone it kept the old limit.
++      qc.invalidateQueries({ queryKey: qk.workspaceUsage(slug, itemId) }),
+     ]);
+ 
+   const save = useMutation({
+-    mutationFn: (d: SizeDraft) =>
+-      itemEnvironmentApi.setSize(slug, itemId, {
+-        cpuCores: d.cpu === "" ? null : Number(d.cpu),
+-        // The person's spelling ("1.5 GB") → the server's ("1536M").
+-        memory: d.memory.trim() === "" ? null : normaliseMemory(d.memory),
+-      }),
++    mutationFn: async ({ d, size, disk }: { d: SizeDraft; size: boolean; disk: boolean }) => {
++      // Only the half that changed: a disk-only edit while the sandbox runs
++      // must not send a cpu/memory PUT the server refuses (409).
++      if (size)
++        await itemEnvironmentApi.setSize(slug, itemId, {
++          cpuCores: d.cpu === "" ? null : Number(d.cpu),
++          // The person's spelling ("1.5 GB") → the server's ("1536M").
++          memory: d.memory.trim() === "" ? null : normaliseMemory(d.memory),
++        });
++      if (disk)
++        await itemEnvironmentApi.setDisk(slug, itemId, d.disk.trim() === "" ? null : normaliseMemory(d.disk));
++    },
+     // Awaited, so the mutation stays PENDING until the re-read has landed:
+     // `save.isPending` is the one flag for "a save is out", PUT and re-read.
+-    onSuccess: async (_, d) => {
++    onSuccess: async (_, { d }) => {
+       await refresh();
+       const failed = qc.getQueryState(envKey)?.status === "error";
+       if (failed) {
+@@ -172,6 +194,7 @@ export function ItemEnvironmentModal({
+             ...old,
+             statedCpuCores: d.cpu === "" ? null : Number(d.cpu),
+             statedMemoryBytes: d.memory.trim() === "" ? null : parseSize(normaliseMemory(d.memory)),
++            statedDiskBytes: d.disk.trim() === "" ? null : parseSize(normaliseMemory(d.disk)),
+           },
+         );
+         // setQueryData marks the record FRESH, so the reopen the notice
+@@ -187,6 +210,12 @@ export function ItemEnvironmentModal({
+     // In the OPTIONS, not per-mutate: `save.reset()` (Close sandbox) detaches
+     // the in-flight mutation's observer and a per-mutate callback never fires,
+     // which left the ref stuck and every later Save silently dropped.
++    // A Save sends up to two PUTs. When the second is refused the first has
++    // still been stored, so the record is read again — or the panel would show
++    // the old values beside a "not saved" for a change that WAS (review r1).
++    onError: () => {
++      void refresh();
++    },
+     onSettled: () => {
+       inflight.current = false;
+     },
+@@ -197,7 +226,7 @@ export function ItemEnvironmentModal({
+   const submit = () => {
+     if (!current || inflight.current) return;
+     inflight.current = true;
+-    save.mutate(current);
++    save.mutate({ d: current, size: sizeDirty, disk: diskDirty });
+   };
+   const close = useMutation({
+     mutationFn: () => myResourcesApi.closeEnvironment(itemId),
+@@ -211,9 +240,14 @@ export function ItemEnvironmentModal({
+   });
+ 
+   const attemptClose = useDirtyClose(dirty, onClose);
+-  const editable = env.data !== undefined && budget !== null && canEdit;
++  // Something here may be changed: cpu/memory where a budget exists, or the
++  // disk wherever the server reports one (it needs no budget).
++  const hasDisk = env.data !== undefined && env.data.diskUsedBytes !== null;
++  const editable = env.data !== undefined && canEdit && (budget !== null || hasDisk);
+   const busy = save.isPending;
+-  const canSave = editable && dirty && fault.cpu === null && fault.memory === null && !env.data!.running && !busy;
++  const sizeOk = !sizeDirty || (budget !== null && fault.cpu === null && fault.memory === null && !env.data!.running);
++  const diskOk = !diskDirty || fault.disk === null;
++  const canSave = editable && dirty && sizeOk && diskOk && !busy;
+ 
+   return (
+     <ModalShell
+diff --git a/web/src/components/ItemEnvironmentPanel.test.tsx b/web/src/components/ItemEnvironmentPanel.test.tsx
+index 8f7639b5b..62b69bf66 100644
+--- a/web/src/components/ItemEnvironmentPanel.test.tsx
++++ b/web/src/components/ItemEnvironmentPanel.test.tsx
+@@ -42,13 +42,20 @@ const IDLE = {
+   // How far THIS item may go (plan-item-size-ceiling D5); null = no line.
+   cpuCeiling: null,
+   memoryCeiling: null,
++  // The disk half (plan-item-disk-size): null = an API pod without it, so no
++  // disk field is drawn and the cases here stay about cpu and memory.
++  statedDiskBytes: null,
++  effectiveDiskBytes: null,
++  diskUsedBytes: null,
++  diskCeiling: null,
++  ownerDiskLeft: null,
+ };
+ 
+ const BUDGET = { cpu: 4, memoryBytes: 8 * 1024 ** 3, cpuInUse: 2, memoryInUse: 2 * 1024 ** 3 };
+ 
+ // The panel is presentational: the modal owns the draft. An empty draft is
+ // "use the default", which is what every case here opens with.
+-const DRAFT = { cpu: "", memory: "" };
++const DRAFT = { cpu: "", memory: "", disk: "" };
+ const noop = () => {};
+ 
+ describe("what is visible", () => {
+@@ -383,7 +390,7 @@ describe("the shapes it borrows", () => {
+     const seen: unknown[] = [];
+     render(
+       <ItemEnvironmentPanel
+-        draft={{ cpu: "", memory: "256M" }}
++        draft={{ cpu: "", memory: "256M", disk: "" }}
+         onDraft={(d) => seen.push(d)}
+         env={{ ...IDLE, statedMemoryBytes: 256 * 1024 ** 2 }}
+         budget={BUDGET}
+@@ -413,7 +420,7 @@ describe("the shapes it borrows", () => {
+   it("marks a field the modal calls unreadable, and shows the grammar under it", () => {
+     render(
+       <ItemEnvironmentPanel
+-        draft={{ cpu: "0", memory: "512 MiB" }}
++        draft={{ cpu: "0", memory: "512 MiB", disk: "" }}
+         fault={{
+           cpu: { type: "unreadable", detail: "1 / 0.5" },
+           memory: { type: "unreadable", detail: "512M / 512MB / 1.5G" },
+@@ -452,7 +459,7 @@ describe("the shapes it borrows", () => {
+     // what a person can type back — not `3.0 GB`.
+     render(
+       <ItemEnvironmentPanel
+-        draft={{ cpu: "8", memory: "3073M" }}
++        draft={{ cpu: "8", memory: "3073M", disk: "" }}
+         fault={{ cpu: { type: "over", detail: "7" }, memory: { type: "over", detail: "3G" } }}
+         onDraft={noop}
+         env={{ ...IDLE, maxCpuCores: 7, maxMemoryBytes: 3 * 1024 ** 3 }}
+diff --git a/web/src/components/ItemEnvironmentPanel.tsx b/web/src/components/ItemEnvironmentPanel.tsx
+index cbd109a04..77ad5e952 100644
+--- a/web/src/components/ItemEnvironmentPanel.tsx
++++ b/web/src/components/ItemEnvironmentPanel.tsx
+@@ -46,8 +46,8 @@ export type EnvBudget = {
+   memoryInUse: number;
+ };
+ 
+-/** The two fields as the person is typing them. `""` = "use the default". */
+-export type SizeDraft = { cpu: string; memory: string };
++/** The fields as the person is typing them. `""` = "use the default". */
++export type SizeDraft = { cpu: string; memory: string; disk: string };
+ 
+ export type ItemEnvironmentPanelProps = {
+   env: ItemEnvironment;
+@@ -58,7 +58,7 @@ export type ItemEnvironmentPanelProps = {
+    *  decides; this only marks the field and shows the matching hint — the
+    *  grammar for `"unreadable"`, the record's ceiling for `"over"` — with the
+    *  fault's `detail` interpolated). */
+-  fault?: { cpu: SizeFault; memory: SizeFault };
++  fault?: { cpu: SizeFault; memory: SizeFault; disk?: SizeFault };
+   /** A save is out (PUT or its re-read): the fields hold still so a
+    *  keystroke cannot land between the write and the record catching up. */
+   busy?: boolean;
+@@ -74,7 +74,7 @@ export function ItemEnvironmentPanel({
+   budget,
+   canEdit,
+   draft,
+-  fault = { cpu: null, memory: null },
++  fault = { cpu: null, memory: null, disk: null },
+   busy = false,
+   onDraft,
+   onCloseSandbox,
+@@ -111,6 +111,16 @@ export function ItemEnvironmentPanel({
+   const cores = (n: number) =>
+     t(n === 1 ? "resources.live.cores_one" : "resources.live.cores", { n });
+ 
++  // The WORKSPACE's size (docs/plan-item-disk-size.md). Drawn with the sizes
++  // above the totals where a budget exists, alone where none does — it needs
++  // no per-person budget, and a running sandbox does not hold it (every write
++  // reads it, D5), so neither `budget` nor `running` decides whether it is
++  // drawn or editable. Not drawn by an API pod that sends no disk figures.
++  const diskField =
++    env.diskUsedBytes === null ? null : (
++      <DiskField env={env} draft={draft.disk} fault={fault.disk ?? null} editable={canEdit && !busy} onDraft={onDraft} />
++    );
++
+   return (
+     <div className="item-environment">
+       {/* ── status row: always drawn ── */}
+@@ -140,7 +150,19 @@ export function ItemEnvironmentPanel({
+           </button>
+         ) : null}
+       </div>
+-      {env.running && canEdit ? <p className="detail env-hint">{t("itemenv.close.hint")}</p> : null}
++      {env.running && canEdit ? (
++        <p className="detail env-hint">
++          {/* Name only the fields this panel draws: cpu/memory where a
++              budget exists, the disk where the server reports one. */}
++          {t(
++            env.diskUsedBytes === null
++              ? "itemenv.close.hint.nodisk"
++              : budget === null
++                ? "itemenv.close.hint.diskonly"
++                : "itemenv.close.hint",
++          )}
++        </p>
++      ) : null}
+ 
+       {/* ── size + totals: only where a budget exists ── */}
+       {budget === null ? null : (
+@@ -295,6 +317,9 @@ export function ItemEnvironmentPanel({
+           </div>
+           {canEdit ? null : <p className="detail env-hint">{t("itemenv.readonly")}</p>}
+ 
++          {/* This workspace's sizes together, above the person's totals. */}
++          {diskField}
++
+           <h4 className="env-heading">{t("itemenv.usage.total")}</h4>
+           <div data-testid="budget-gauge" className="stat-row" role="group" aria-label={t("itemenv.usage.total")}>
+             <Gauge label={t("resources.gauge.cpu")} used={budget.cpuInUse} limit={budget.cpu} format={String} />
+@@ -307,6 +332,97 @@ export function ItemEnvironmentPanel({
+           </div>
+         </>
+       )}
++
++      {/* No budget, so no size block above: the disk stands alone — with
++          the read-only note that block would otherwise carry. */}
++      {budget === null ? diskField : null}
++      {budget === null && diskField !== null && !canEdit ? (
++        <p className="detail env-hint">{t("itemenv.readonly")}</p>
++      ) : null}
++    </div>
++  );
++}
++
++function DiskField({
++  env,
++  draft,
++  fault,
++  editable,
++  onDraft,
++}: {
++  env: ItemEnvironment;
++  draft: string;
++  fault: SizeFault;
++  editable: boolean;
++  onDraft: (patch: Partial<SizeDraft>) => void;
++}) {
++  const t = useT();
++  const stated = env.statedDiskBytes;
++  const effective = env.effectiveDiskBytes;
++  const clamped = stated !== null && effective !== null && effective !== 0 && effective < stated;
++  return (
++    <div className="env-field" data-testid="disk-field">
++      <label htmlFor="itemenv-disk">{t("itemenv.field.disk")}</label>
++      <input
++        autoComplete="off"
++        className="input input--block"
++        id="itemenv-disk"
++        data-testid="disk-input"
++        value={draft}
++        placeholder={toSizeString(effective || null) ?? ""}
++        disabled={!editable}
++        aria-invalid={fault !== null || undefined}
++        aria-describedby={fault !== null ? "itemenv-disk-hint" : undefined}
++        onChange={(e) => onDraft({ disk: e.target.value })}
++      />
++      <p className="detail env-field__origin">
++        <span data-testid="disk-value">{effective ? formatBytes(effective) : "—"}</span>
++        {" · "}
++        <span data-testid="disk-origin">{stated === null ? t("itemenv.disk.default") : t("itemenv.size.stated")}</span>
++        {stated === null || !editable ? null : (
++          <>
++            {" · "}
++            <button type="button" className="env-reset" data-testid="reset-disk" onClick={() => onDraft({ disk: "" })}>
++              {t("itemenv.size.reset")}
++            </button>
++          </>
++        )}
++      </p>
++      {/* The range, said before anything is typed (D1 floor, D3 ceiling). */}
++      <p data-testid="disk-range" className="detail env-field__note">
++        {t("itemenv.disk.used", { used: formatBytes(env.diskUsedBytes ?? 0) })}
++        {env.diskCeiling === null ? null : (
++          <>
++            {" · "}
++            {t("itemenv.size.ceiling", { value: formatBytes(env.diskCeiling) })}
++          </>
++        )}
++      </p>
++      <p className="detail env-field__note">{t("itemenv.disk.now")}</p>
++      {env.ownerDiskLeft === null ? null : (
++        <p data-testid="disk-owner-left" className="detail env-field__note">
++          {t("itemenv.disk.ownerLeft", { left: formatBytes(env.ownerDiskLeft) })}
++        </p>
++      )}
++      {fault !== null ? (
++        <p id="itemenv-disk-hint" data-testid="disk-hint" className="detail env-field__note env-field__note--invalid">
++          {t(
++            fault.type === "under"
++              ? "itemenv.field.disk.under"
++              : fault.type === "capped"
++                ? "itemenv.field.disk.capped"
++                : fault.type === "over"
++                  ? "itemenv.field.memory.over"
++                  : "itemenv.field.memory.unreadable",
++            { detail: fault.detail, used: fault.used ?? "" },
++          )}
++        </p>
++      ) : null}
++      {clamped && stated !== null && effective !== null ? (
++        <p data-testid="disk-clamped" className="detail env-field__note">
++          {t("itemenv.memory.clamped.app", { stated: formatBytes(stated), effective: formatBytes(effective) })}
++        </p>
++      ) : null}
+     </div>
+   );
+ }
+diff --git a/web/src/components/ItemEnvironmentSize.ts b/web/src/components/ItemEnvironmentSize.ts
+index 1809d64d7..6c9858b13 100644
+--- a/web/src/components/ItemEnvironmentSize.ts
++++ b/web/src/components/ItemEnvironmentSize.ts
+@@ -20,6 +20,9 @@
+  * and still send the one the server parses.
+  */
+ 
++import { formatBytes } from "../lib/bytes";
++
++
+ export function toSizeString(bytes: number): string;
+ export function toSizeString(bytes: number | null): string | null;
+ export function toSizeString(bytes: number | null): string | null {
+@@ -42,7 +45,11 @@ export function toSizeString(bytes: number | null): string | null {
+  * (joined with ` / ` so either locale can read them). The sentence around it
+  * belongs to the panel's `useT`; this module has no locale.
+  */
+-export type SizeFault = { type: "unreadable" | "over"; detail: string } | null;
++/** `"under"` and `"capped"` are the disk's alone (plan-item-disk-size D1):
++ *  not above what the workspace already holds (`detail` = that amount), or
++ *  above it as typed but held by the App's ceiling to no more than it
++ *  (`detail` = the ceiling, `used` = the amount). */
++export type SizeFault = { type: "unreadable" | "over" | "under" | "capped"; detail: string; used?: string } | null;
+ 
+ const CPU_EXAMPLES = "1 / 0.5";
+ 
+@@ -101,6 +108,24 @@ export function memoryFault(text: string, max: number): SizeFault {
+   return bytes <= max ? null : { type: "over", detail: toSizeString(max) };
+ }
+ 
++/** `memoryFault`, plus the disk's own floor (plan-item-disk-size D1): what
++ *  will APPLY — the typed size held to `ceiling`, the server's own clamp — must
++ *  be MORE than what the workspace already holds. Equal is refused too: a
++ *  workspace at its limit is full, and the turn gate asks room for one more
++ *  byte (review round 1). `used` and `ceiling` are the RECORD's. */
++export function diskFault(text: string, max: number, used: number, ceiling: number | null = null): SizeFault {
++  const fault = memoryFault(text, max);
++  if (fault !== null || text.trim() === "") return fault;
++  const bytes = parseSize(normaliseMemory(text))!;
++  const applies = ceiling ? Math.min(bytes, ceiling) : bytes;
++  if (applies > used) return null;
++  // Typed above `used`, yet the ceiling holds it at or below: the ceiling is
++  // the reason, and "more than used" would name one the person already met.
++  return bytes > used && ceiling
++    ? { type: "capped", detail: formatBytes(ceiling), used: formatBytes(used) }
++    : { type: "under", detail: formatBytes(used) };
++}
++
+ /** The server's spelling back to bytes — for writing a just-sent size into
+  *  the cached record when its re-read failed. Only ever fed what
+  *  `normaliseMemory` produced. */
+diff --git a/web/src/lib/i18n.tsx b/web/src/lib/i18n.tsx
+index 679d911ad..0bde78611 100644
+--- a/web/src/lib/i18n.tsx
++++ b/web/src/lib/i18n.tsx
+@@ -1330,6 +1330,16 @@ export const messages = {
+   "itemenv.close": { "zh-TW": "關閉沙盒", en: "Close sandbox" },
+   // Says WHY the size is locked, so the disabled field is not read as broken.
+   "itemenv.close.hint": {
++    "zh-TW": "關閉後即可調整 CPU 和記憶體（硬碟現在就能改）。關閉會結束正在執行的程序，檔案不受影響。",
++    en: "Close it to change CPU and memory (the disk can change now). Running processes end; your files are untouched.",
++  },
++  // No budget, so no cpu/memory fields: only the disk is there to change.
++  "itemenv.close.hint.diskonly": {
++    "zh-TW": "硬碟大小現在就能改。關閉沙盒會結束正在執行的程序，檔案不受影響。",
++    en: "The disk size can change now. Closing the sandbox ends running processes; your files are untouched.",
++  },
++  // From an API pod that reports no disk: nothing to promise about it.
++  "itemenv.close.hint.nodisk": {
+     "zh-TW": "關閉後即可調整大小。關閉會結束正在執行的程序，檔案不受影響。",
+     en: "Close it to change the size. Running processes end; your files are untouched.",
+   },
+@@ -1391,6 +1401,25 @@ export const messages = {
+     en: "A number with a unit — e.g. {detail}.",
+   },
+   "itemenv.field.memory.over": { "zh-TW": "最多 {detail}。", en: "At most {detail}." },
++  // docs/plan-item-disk-size.md — the workspace's own size.
++  "itemenv.field.disk": { "zh-TW": "硬碟", en: "Disk" },
++  // An unset disk is the App's size (D7) — not the owner's quota, which is
++  // what `itemenv.size.default` says of cpu and memory.
++  "itemenv.disk.default": { "zh-TW": "預設（這個 App 的大小）", en: "Default (this App's size)" },
++  "itemenv.disk.used": { "zh-TW": "已用 {used}", en: "{used} used" },
++  "itemenv.disk.now": {
++    "zh-TW": "存下就生效，執行中也可以改。",
++    en: "Applies as soon as it is saved, even while running.",
++  },
++  "itemenv.disk.ownerLeft": { "zh-TW": "你的個人額度還剩 {left}", en: "{left} left of your own quota" },
++  "itemenv.field.disk.under": {
++    "zh-TW": "要大於已用的 {detail}；要更小，先刪檔案。",
++    en: "Must be more than the {detail} already used — delete files first.",
++  },
++  "itemenv.field.disk.capped": {
++    "zh-TW": "這個 App 最多 {detail}，放不下已用的 {used}；先刪檔案。",
++    en: "This App allows at most {detail}, less than the {used} already used — delete files first.",
++  },
+   "itemenv.readonly": {
+     "zh-TW": "只有能變更這個 workspace 存取權的人可以調整大小 —— 它花的是 owner 的額度。",
+     en: "Only someone who can change this workspace's access may resize it — it spends the owner's quota.",
+diff --git a/web/src/styles/item-environment.test.ts b/web/src/styles/item-environment.test.ts
+index f569258db..5edc16a54 100644
+--- a/web/src/styles/item-environment.test.ts
++++ b/web/src/styles/item-environment.test.ts
+@@ -51,9 +51,10 @@ describe("item-environment.css: the size fields", () => {
+ 
+   it("fill their column — the house input's `flex: 1` is for rows", () => {
+     // `.input--block` (base.css) is the one spelling of "fill the width in a
+-    // column"; both fields wear it, and this sheet keeps no copy.
++    // column"; every size field wears it — cpu, memory and the workspace's
++    // disk (plan-item-disk-size) — and this sheet keeps no copy.
+     const panel = readFileSync(join(here, "../components/ItemEnvironmentPanel.tsx"), "utf8");
+-    expect(panel.match(/className="input input--block"/g)?.length).toBe(2);
++    expect(panel.match(/className="input input--block"/g)?.length).toBe(3);
+     expect(wide).not.toMatch(/\.input(?![\w-])/);
+   });
+ 
