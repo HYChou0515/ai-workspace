@@ -241,7 +241,10 @@ async def test_a_chat_turn_tells_the_ai_the_deploys_search_targets(monkeypatch):
     kw = LitellmAgentRunner()._agent_kwargs(ctx, LlmCredential)
     agent = _agent_for(ctx.agent_config, ctx.packages, ctx.unavailable_tools, **kw)
     (tool,) = [t for t in agent.tools if t.name == "ask_outside"]
-    assert "- Parts: Part numbers." in getattr(tool, "description", "")
+    assert (
+        "- Parts (at most 10 words and 40 Chinese, Japanese or Korean characters): Part numbers."
+        in (getattr(tool, "description", ""))
+    )
 
 
 async def test_a_workflow_step_with_an_empty_tools_list_holds_nothing_whatever_the_pins(

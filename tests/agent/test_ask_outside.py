@@ -396,12 +396,24 @@ TARGETS = [
         "url": "https://www.google.com/search?q={q}",
         "description": "",
         "preview": True,
+        "max_words": 10,
+        "max_cjk": 40,
     },
     {
         "name": "Parts",
         "url": "partsdb://lookup?pn={q}",
         "description": "The parts database; a full part number only, e.g. A123-4567.",
         "preview": False,
+        "max_words": 1,
+        "max_cjk": 0,
+    },
+    {
+        "name": "AI",
+        "url": "https://ai.example/?prompt={q}",
+        "description": "The company's web AI; ask it a whole question.",
+        "preview": False,
+        "max_words": 0,
+        "max_cjk": 0,
     },
 ]
 
@@ -447,8 +459,12 @@ def test_the_tool_lists_the_deploys_targets_and_how_each_searches() -> None:
     )
     (tool,) = [t for t in agent.tools if t.name == "ask_outside"]
     desc = getattr(tool, "description", "")
-    assert "- Google\n" in desc
-    assert "- Parts: The parts database; a full part number only, e.g. A123-4567." in desc
+    assert "- Google (at most 10 words and 40 Chinese, Japanese or Korean characters)\n" in desc
+    assert (
+        "- Parts (at most 1 word): The parts database; a full part number only, e.g. A123-4567."
+        in desc
+    )
+    assert "- AI (any length): The company's web AI; ask it a whole question." in desc
     assert "`target`" in desc
 
 
@@ -465,3 +481,48 @@ def test_a_card_names_its_target_only_beside_a_search() -> None:
         '{"why":"w","query":"q","target":3}',
     ):
         assert declared_lookup(f"x{m}{tail}") is None, tail
+
+
+# ── each target its own query length (docs/plan-remove-ext-ai.md R3) ────────
+
+_QUESTION = (
+    "For a 2 GB CSV on a laptop with 8 GB of memory, which of pandas and polars "
+    "keeps peak memory lower, and why?"
+)
+
+
+async def test_a_target_with_no_limit_takes_a_whole_question() -> None:
+    reply = await _call_with_targets(why="w", query=_QUESTION, target="AI")
+
+    assert _card(reply) == {"why": "w", "query": _QUESTION, "target": "AI"}
+
+
+async def test_a_question_too_long_for_its_target_goes_back_naming_that_targets_limit() -> None:
+    reply = await _call_with_targets(why="w", query="A123 4567", target="Parts")
+
+    assert reply.startswith("error:"), reply
+    assert "Parts" in reply and "at most 1 word" in reply and "2 words" in reply
+    assert declared_lookup(reply) is None
+
+
+async def test_without_a_suggestion_the_first_target_decides() -> None:
+    """The card selects the first target when the AI suggests none — so its
+    limit is the one the search will meet."""
+    reply = await _call_with_targets(why="w", query=_QUESTION)
+
+    assert reply.startswith("error:"), reply
+    assert "Google" in reply and "10 words" in reply
+
+
+async def test_a_suggestion_the_deploy_does_not_list_is_held_to_the_first_target() -> None:
+    reply = await _call_with_targets(why="w", query=_QUESTION, target="Bing")
+
+    assert reply.startswith("error:"), reply
+    assert "Google" in reply
+
+
+async def test_a_limit_of_zero_lifts_only_that_ruler() -> None:
+    """Parts: no CJK limit, one word — a single long CJK word passes."""
+    reply = await _call_with_targets(why="w", query=_CJK, target="Parts")
+
+    assert _card(reply) == {"why": "w", "query": _CJK, "target": "Parts"}

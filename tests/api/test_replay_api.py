@@ -324,4 +324,6 @@ def test_replay_describes_ask_outside_with_the_deploys_targets():
     # equal, not merely containing the row)
     live = ask_outside_tool(whole_lookup_targets(targets))
     assert tool["function"]["description"] == live.description
-    assert "- Parts: Parts." in live.description
+    assert "- Parts (at most 10 words and 40 Chinese, Japanese or Korean characters): Parts." in (
+        live.description
+    )
