@@ -1,6 +1,6 @@
 # 拿掉「問外部AI」(`ask_ext_ai`)
 
-**狀態:** 計畫(2026-11-12);尚未實作。
+**狀態:** 計畫(2026-11-12,#1021);尚未實作。
 **來源標記:** 〔user〕= user 的原話或明確選擇;〔查證〕= 讀 `origin/master` 的程式碼確認的事實;
 〔施工〕= 我定的實作細節,可推翻。
 
@@ -49,7 +49,7 @@
   `test_outside_jobs`、`test_worker`、`test_app`、`test_pack`、`test_python39`、`AgentEntryView.test.tsx`、
   `OutsideLookupCard.helper.test.tsx`)。
 - **文件**:`docs/configuration.md`、`docs/ai-workspace-helper.md` 講它的段落;`plan-ext-ai.md` 標
-  `> 被 #NNN（plan-remove-ext-ai.md）推翻`;`design-history.md` 加這份計畫的一行。舊計畫
+  `> 被 #1021（plan-remove-ext-ai.md）推翻`;`design-history.md` 加這份計畫的一行。舊計畫
   (plan-outside-lookup、plan-outside-helper、plan-lookup-target-choice)與 `migrations.md` 過去的條目是歷史,不改。
 
 ## 4. 相容性

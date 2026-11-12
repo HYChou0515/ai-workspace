@@ -1,6 +1,7 @@
 # 問外部AI:AI 透過小幫手去問公司的網頁 AI
 
 > 被 #1013（plan-lookup-target-choice.md）推翻
+> 被 #1021（plan-remove-ext-ai.md）推翻
 
 **狀態:** P1–P5 完成(#963):live check `scripts/check_ext_ai.py` 在真 app + SPA + 小幫手上,用只改了 `URL` 的範本問一個沒見過的聊天網頁,1280／390 截圖對照 §3 的指南。
 **來源標記:** 〔user〕= user 的原話或明確選擇;〔查證〕= 讀 `origin/master` 程式碼或文件確認的事實;
