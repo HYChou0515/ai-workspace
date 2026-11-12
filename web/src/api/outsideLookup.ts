@@ -40,7 +40,7 @@ export function searchUrl(target: LookupTarget, query: string): string {
  * (docs/plan-outside-helper.md §3.2). */
 export type HelperJob = {
   id: string;
-  kind: "search" | "open_url" | "ask_ext_ai";
+  kind: "search" | "open_url";
   args: string;
   state: "queued" | "claimed" | "done" | "failed" | "cancelled";
   error: string;
@@ -67,7 +67,7 @@ export type HelperRelease = {
   size: number;
 };
 
-export type HelperStatus = { online: boolean; ext_ai?: boolean };
+export type HelperStatus = { online: boolean };
 
 type CardArgs = { slug: string; itemId: string; chatId?: string; callId: string };
 
@@ -147,8 +147,7 @@ export const outsideLookupApi = {
     chatId?: string;
     callId: string;
     answer: OutsideAnswer;
-    /** What was searched — the keywords the person typed in the box (D13) —
-     * or the question as the person sent it (docs/plan-ext-ai.md D2). */
+    /** What was searched — the keywords the person typed in the box (D13). */
     query?: string;
     /** The person's own date, `YYYY-MM-DD`, for the saved file's name. */
     date?: string;

@@ -3,8 +3,7 @@
  * (docs/plan-outside-lookup.md).
  *
  * The tool's reply is a sentence for the model followed by
- * `\n[outside-lookup]{"why": …, "query": …}` or `{"why": …, "url": …}` — or,
- * from `ask_ext_ai`, `{"why": …, "question": …}` (docs/plan-ext-ai.md) — a
+ * `\n[outside-lookup]{"why": …, "query": …}` or `{"why": …, "url": …}` — a
  * fixed marker, like `[env-request]` (`envRequest.ts`), so prose can never
  * trigger a card.
  *
@@ -25,8 +24,7 @@ const WEB_ADDRESS = new RegExp(`^https?://[^/?#${SPACE}]+(?:[/?#][^${SPACE}]*)?$
 export type OutsideLookup =
   // `target`: the search target the AI suggests (docs/plan-lookup-target-choice.md)
   | { why: string; query: string; target?: string }
-  | { why: string; url: string }
-  | { why: string; question: string };
+  | { why: string; url: string };
 
 export function isWebAddress(url: string): boolean {
   return WEB_ADDRESS.test(url);
@@ -47,7 +45,7 @@ export function parseOutsideLookup(output: string | undefined | null): OutsideLo
   if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return null;
   const card = parsed as Record<string, unknown>;
   const keys = Object.keys(card).sort().join(",");
-  const cards = ["query,why", "query,target,why", "url,why", "question,why"];
+  const cards = ["query,why", "query,target,why", "url,why"];
   if (!cards.includes(keys)) return null;
   if (!Object.values(card).every((v) => typeof v === "string" && v !== "")) return null;
   if (typeof card.url === "string" && !isWebAddress(card.url)) return null;
