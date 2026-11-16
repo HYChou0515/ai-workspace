@@ -62,6 +62,8 @@ user：「我希望 agent 不能讀取 mcp 的 source code」「現在他們會�
 
 ### 2. 哪些藏、哪些不藏
 
+〔user 2026-11-16〕**線上的工具一律藏**，不逐一對清單。唯一的例外是 `python-stack`——藏了 AI 就跑不了 python，這是技術限制不是選項。
+
 原則：**AI 會直接執行的不藏；由平台代為啟動的才藏。** 用「這個包有沒有命令」自動判斷（沒有命令的包是執行環境），不需要逐一登記。
 
 | | 東西 | 理由 |
@@ -120,7 +122,19 @@ user：「我們以後會加上 ai audit 在 build 時，所以有些東西不�
 
 ## 還沒決定的實作細節
 
-- **bundle 怎麼做到「只有工具身分讀得到」**：bundle 是主機共用的一份（依 sha），工具身分是每個 item 一個。候選：一個共用的「工具群組」，bundle 設成 `root:工具群組 750`，每個 item 的工具身分啟動時帶上這個群組（`setpriv --groups`）；item 身分不帶。要驗 `python-stack` 維持 `755`。
+- **bundle 怎麼做到「只有工具身分讀得到」**：bundle 是主機共用的一份（依 sha），工具身分是每個 item 一個。候選：一個共用的「工具群組」，bundle 設成 `root:工具群組 750`，每個 item 的工具身分啟動時帶上這個群組（`setpriv --groups`）；item 身分不帶（現在就是 `--clear-groups`）。影響範圍：
+
+  | 會動到 | 影響 |
+  |---|---|
+  | `tool_cache.py` 解開 bundle 的權限 | `755` → `root:工具群組 750`；主機上已解開的舊 bundle 啟動時重設一次 |
+  | 映像裡的 `builtin/` | 權限在打包映像時定——改 Dockerfile 或啟動時設 |
+  | 啟動工具的 `setpriv` | 工具多帶一個群組；AI 的 `exec` 不變 |
+  | **mcp-runner** | 和 sandbox-host 共用 `tool_cache`，runner 要維持 `755`（它降權後要進得去）——權限要能切換，加測試釘住 runner 沒壞 |
+  | 群組編號 | 先寫死固定編號，不開設定鍵 |
+
+  不受影響：workspace 的檔案（工具建立的檔案群組仍是 item 自己的）、`python-stack`（維持 `755`）、本機開發模式、AI 的 `exec`、資源限制與計費。
+
+  副作用：同一台主機上任何工具讀得到別的工具的原始碼（和現在一樣，沒有變差；帳密各自加密、不互通）。能讓 AI 執行任意指令的工具等於把工具群組交給 AI——歸 build 時的 AI 稽核。
 - 平台公鑰怎麼交到 builder 手上（烤進 builder 映像，或放在平台的一條公開路由）。
 - 金鑰格式與加密方式（照成熟做法選，例如 age／libsodium sealed box；不自己發明）。
 - 解密發生在 sandbox-host 還是 app 端、密文與明文各自經過哪些元件。
@@ -129,7 +143,7 @@ user：「我們以後會加上 ai audit 在 build 時，所以有些東西不�
 ## 上線前要先驗證（沒做完不動工）
 
 1. 正式環境的 workspace 磁碟接受第二筆 ACL，且預設 ACL 對兩個身分互相建立的檔案都有效（含資料夾、含從備份還原回來的檔案）。
-2. 線上實際掛了哪些工具包、各自有沒有命令（對一次第 2 節的表）。
+2. （取消——user：線上一律藏，不逐一對清單。）mcp-runner 在新的 bundle 權限下照常能跑。
 3. staging 上搜尋寫死 `/.tools/` 路徑的 workflow 與腳本。
 4. 作者的 GitLab CI 讀得到 CI/CD Variables 並交給 builder（受保護分支的變數只在受保護分支出現）。
 
