@@ -93,6 +93,21 @@ async def test_a_tool_command_runs_as_the_tool_uid_holding_the_tool_group(isolat
 
 
 @requires_isolation
+async def test_a_tool_process_joins_the_items_cgroup(isolated):
+    """The tool identity changes WHO runs, not WHERE: the process the tool's code
+    runs in is the one written into the item's `cgroup.procs` — so the item's
+    limits apply to it and its owner is billed for it. (The wrapper's shell
+    writes its own pid, then execs down to the tool; the pid survives each exec.)"""
+    h = await isolated.create(SandboxSpec(tools=isolated.mounts))
+    ident = isolated._identities[h.id]
+    result = await _tool(isolated, h, "echo $$")
+    assert result.exit_code == 0, result.stderr
+    pid = result.stdout.strip().decode()
+    assert pid.isdigit(), result.stdout
+    assert (ident.cgroup / "cgroup.procs").read_text().split()[-1] == pid
+
+
+@requires_isolation
 async def test_each_identity_can_edit_and_delete_what_the_other_wrote(isolated):
     h = await isolated.create(SandboxSpec(tools=isolated.mounts))
     tool = await _tool(isolated, h, "mkdir -p out && echo t > out/report.txt")
