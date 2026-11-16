@@ -1329,12 +1329,15 @@ class LocalProcessSandbox:
         on_output: OutputSink | None = None,
         env: Mapping[str, str] | None = None,
         exec_timeout: float | None = None,
-        as_tool: str | None = None,
+        tool: bool | str = False,
     ) -> ExecResult:
+        # The NAME of the third-party tool this command launches, or None.
+        # `True`/`False` name none and run as any command.
+        as_tool = tool if isinstance(tool, str) else None
         if as_tool is not None:
             # Enforced HERE, not trusted from the caller: this API has no
             # authentication and a sandbox shares the pod's network, so the
-            # agent can send `as_tool` itself. Whatever it sends, an `as_tool`
+            # agent can send `tool` itself. Whatever it sends, a tool
             # exec can only be what a tool call is.
             if (why := self._refuse_tool_exec(handle, cmd, as_tool)) is not None:
                 return ExecResult(

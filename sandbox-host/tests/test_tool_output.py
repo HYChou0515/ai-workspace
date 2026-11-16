@@ -249,14 +249,14 @@ async def sandbox(tmp_path):
 
 
 #: A tool call that runs `boom.py` through the mounted launcher — the only
-#: shape an `as_tool` exec may take.
+#: shape a `tool` exec may take.
 _BOOM = ["../.tools/erp/launch", "run", "import runpy; runpy.run_path('boom.py')"]
 
 
 async def test_a_tool_commands_traceback_reaches_nobody_with_its_source(sandbox):
     sb, h = sandbox
     live: list[bytes] = []
-    result = await sb.exec(h, _BOOM, on_output=live.append, as_tool="erp")
+    result = await sb.exec(h, _BOOM, on_output=live.append, tool="erp")
     assert result.exit_code != 0
     assert b"ValueError" in result.stderr
     assert _SOURCE_LINE not in result.stderr
@@ -265,7 +265,7 @@ async def test_a_tool_commands_traceback_reaches_nobody_with_its_source(sandbox)
 
 async def test_tool_debug_lists_the_tool_and_its_source_comes_back(sandbox):
     sb, h = sandbox
-    result = await sb.exec(h, _BOOM, env={"TOOL_DEBUG": "other, erp"}, as_tool="erp")
+    result = await sb.exec(h, _BOOM, env={"TOOL_DEBUG": "other, erp"}, tool="erp")
     assert _SOURCE_LINE in result.stderr
 
 
@@ -284,7 +284,7 @@ async def test_a_credential_the_platform_handed_the_tool_is_masked(sandbox, monk
         ["../.tools/erp/launch", "run", "import os; print('pw', os.environ['MACHINE_PASSWORD'])"],
         on_output=live.append,
         env={"TOOL_DEBUG": "erp"},
-        as_tool="erp",
+        tool="erp",
     )
     assert result.exit_code == 0, result.stderr
     assert result.stdout == b"pw ***\n"
@@ -307,7 +307,7 @@ async def test_a_last_line_without_a_newline_and_the_hint_reach_the_result(sandb
     result — the final line, and (on stderr) the line saying source was hidden."""
     sb, h = sandbox
     tail = "import sys; sys.stdout.write('last'); import runpy; runpy.run_path('boom.py')"
-    result = await sb.exec(h, ["../.tools/erp/launch", "run", tail], as_tool="erp")
+    result = await sb.exec(h, ["../.tools/erp/launch", "run", tail], tool="erp")
     assert result.stdout == b"last"
     assert result.stderr.endswith(b"source lines in this output are hidden]\n")
 
@@ -322,6 +322,6 @@ async def test_a_tools_stdout_never_carries_the_hint(sandbox):
         "except ValueError:\n    traceback.print_exc(file=__import__('sys').stdout)\n"
         "print('{\"ok\": true}')"
     )
-    result = await sb.exec(h, ["../.tools/erp/launch", "run", code], as_tool="erp")
+    result = await sb.exec(h, ["../.tools/erp/launch", "run", code], tool="erp")
     assert result.stdout.endswith(b'{"ok": true}\n')
     assert b"hidden" not in result.stdout

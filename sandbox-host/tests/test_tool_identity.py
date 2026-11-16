@@ -170,14 +170,14 @@ async def test_the_callers_env_cannot_move_a_tools_home(tooled, monkeypatch):
         raise FileNotFoundError
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_spawn)
-    # No tool is mounted in this fixture; what an as_tool exec may be is pinned
+    # No tool is mounted in this fixture; what a tool exec may be is pinned
     # in test_as_tool_is_enforced_here.py. This test is about HOME only.
     monkeypatch.setattr(sb, "_refuse_tool_exec", lambda *_a: None)
     await sb.exec(
         h,
         ["../.tools/erp/launch", "q", "{}"],
         env={"HOME": "/root/evil", "SANDBOX_HOME": "/root/evil", "PYTHONNOUSERSITE": "0"},
-        as_tool="erp",
+        tool="erp",
     )
     tool_home = str(sb._require(h) / ".tool-home")
     assert seen["HOME"] == tool_home
@@ -287,7 +287,7 @@ async def test_around_a_tool_call_each_identity_opens_its_own_files_to_the_other
     order = _record_around(sb, monkeypatch)
     monkeypatch.setattr(sb, "_refuse_tool_exec", lambda *_a: None)
 
-    await sb.exec(h, ["../.tools/erp/launch", "q", "{}"], as_tool="erp")
+    await sb.exec(h, ["../.tools/erp/launch", "q", "{}"], tool="erp")
 
     assert order == [
         f"as {ident.uid}: find {sb._workspace(h)} (",
@@ -301,7 +301,7 @@ async def test_no_root_walk_happens_around_a_tool_call(tooled, monkeypatch):
     h = await sb.create(SandboxSpec())
     order = _record_around(sb, monkeypatch)
     monkeypatch.setattr(sb, "_refuse_tool_exec", lambda *_a: None)
-    await sb.exec(h, ["../.tools/erp/launch", "q", "{}"], as_tool="erp")
+    await sb.exec(h, ["../.tools/erp/launch", "q", "{}"], tool="erp")
     assert not [o for o in order if o.startswith("ROOT")]
 
 
@@ -316,7 +316,7 @@ async def test_the_widening_runs_on_the_workspace_and_nowhere_else(tooled, monke
         raise FileNotFoundError
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_spawn)
-    await sb.exec(h, ["../.tools/erp/launch", "q", "{}"], as_tool="erp")
+    await sb.exec(h, ["../.tools/erp/launch", "q", "{}"], tool="erp")
     ws = str(sb._workspace(h))
     ident = sb._identities[h.id]
     # Before: the agent's directories, and the files its group can already read
@@ -349,7 +349,7 @@ async def test_a_refused_tool_call_touches_nothing(tooled, monkeypatch):
     sb, _acl, _owned = tooled
     h = await sb.create(SandboxSpec())
     order = _record_around(sb, monkeypatch)
-    result = await sb.exec(h, ["sh", "-c", "id"], as_tool="erp")
+    result = await sb.exec(h, ["sh", "-c", "id"], tool="erp")
     assert result.exit_code == 126
     assert order == []
 

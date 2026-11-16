@@ -608,7 +608,7 @@ async def _exec_tool(
     # environment. Named only for those — first-party tools, `python` and
     # bundled view plugins dispatch exactly as they always did.
     if third_party:
-        budget["as_tool"] = pkg.name
+        budget["tool"] = pkg.name
     try:
         return await actx.sandbox.exec(
             handle, argv, on_output=actx.on_exec_output, env=env or None, **budget

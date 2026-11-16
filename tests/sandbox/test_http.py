@@ -227,7 +227,7 @@ def _fake_host(backend: MockSandbox, advertise_url: str) -> FastAPI:
                     # Same contract for the per-call wall-clock budget (#775).
                     exec_timeout=body.get("exec_timeout"),
                     # …and for which third-party tool a command launches.
-                    as_tool=body.get("as_tool"),
+                    tool=body.get("tool", False),
                 )
             except Exception as exc:  # noqa: BLE001 — relayed in-band as an error frame
                 yield (
@@ -1248,8 +1248,8 @@ async def test_exec_carries_the_tool_it_launches_across_the_hop():
     async with httpx.AsyncClient(transport=ASGITransport(app=app)) as client:
         sb = HttpSandbox(base_url=_ADVERTISE, client=client)
         h = await sb.create(SandboxSpec())
-        await sb.exec(h, ["../.tools/erp/launch", "q", "{}"], as_tool="erp")
-    assert backend.exec_as_tools[-1] == "erp"
+        await sb.exec(h, ["../.tools/erp/launch", "q", "{}"], tool="erp")
+    assert backend.exec_tools[-1] == "erp"
 
 
 async def test_an_ordinary_command_sends_no_tool():
@@ -1268,5 +1268,5 @@ async def test_an_ordinary_command_sends_no_tool():
         sb = HttpSandbox(base_url=_ADVERTISE, client=client)
         h = await sb.create(SandboxSpec())
         await sb.exec(h, ["true"])
-    assert seen and "as_tool" not in seen[-1]
-    assert backend.exec_as_tools[-1] is None
+    assert seen and "tool" not in seen[-1]
+    assert backend.exec_tools[-1] is False

@@ -268,9 +268,7 @@ def _tool_client(exit_code: int = 0, takes_s: float = 0.0):
     from .test_wui_routes import _Sandbox, build
 
     class _Slow(_Sandbox):
-        async def exec(
-            self, handle, cmd, on_output=None, env=None, exec_timeout=None, as_tool=None
-        ):  # noqa: ANN001, ANN202
+        async def exec(self, handle, cmd, on_output=None, env=None, exec_timeout=None, tool=False):  # noqa: ANN001, ANN202
             await asyncio.sleep(takes_s)
             return await super().exec(handle, cmd, on_output, env)
 
@@ -373,9 +371,7 @@ def test_a_tool_that_raises_still_counts():
     from .test_wui_routes import _Sandbox, build
 
     class _Broken(_Sandbox):
-        async def exec(
-            self, handle, cmd, on_output=None, env=None, exec_timeout=None, as_tool=None
-        ):  # noqa: ANN001, ANN202
+        async def exec(self, handle, cmd, on_output=None, env=None, exec_timeout=None, tool=False):  # noqa: ANN001, ANN202
             raise RuntimeError("sandbox gone")
 
     spec = make_spec()

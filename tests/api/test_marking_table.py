@@ -45,7 +45,7 @@ class _LitSandbox(MockSandbox):
         self.answer = answer
         self.lit_calls: list[list[str]] = []
 
-    async def exec(self, handle, cmd, on_output=None, env=None, exec_timeout=None, as_tool=None):
+    async def exec(self, handle, cmd, on_output=None, env=None, exec_timeout=None, tool=False):
         if cmd[:2] == ["../.tools/maps/launch", "rows"]:
             self.lit_calls.append(list(cmd))
             if isinstance(self.answer, Exception):

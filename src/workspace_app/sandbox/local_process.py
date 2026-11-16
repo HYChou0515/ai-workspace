@@ -1215,7 +1215,7 @@ class LocalProcessSandbox:
         exec_timeout: float | None = None,
         # Accepted and ignored: this backend mounts no third-party tools
         # (`SandboxSpec.tools`), so nothing it runs is one (see the protocol).
-        as_tool: str | None = None,
+        tool: bool | str = False,
     ) -> ExecResult:
         argv, sub_cwd, base_env = self._exec_argv(handle, cmd)
         # A caller may name its own TOTAL wall-clock budget for one command.

@@ -518,8 +518,9 @@ class IsolatedProcessSandbox(LocalProcessSandbox):
         on_output: OutputSink | None = None,
         env: Mapping[str, str] | None = None,
         exec_timeout: float | None = None,
-        as_tool: str | None = None,
+        tool: bool | str = False,
     ) -> ExecResult:
+        as_tool = tool if isinstance(tool, str) else None
         ident = self._identities.get(handle.id)
         if (
             as_tool is None
@@ -530,7 +531,7 @@ class IsolatedProcessSandbox(LocalProcessSandbox):
             # The agent's own command, a host without a tool identity, or a call
             # the base is about to refuse: nothing of the workspace to hand over.
             return await super().exec(
-                handle, cmd, on_output, env, exec_timeout=exec_timeout, as_tool=as_tool
+                handle, cmd, on_output, env, exec_timeout=exec_timeout, tool=tool
             )
         # docs/plan-tool-identity-secrets.md: each identity reaches the other's
         # files only through its named ACL entry, which a file's MASK caps — and
@@ -558,7 +559,7 @@ class IsolatedProcessSandbox(LocalProcessSandbox):
         await asyncio.to_thread(self._run_as, ident.uid, shared)
         try:
             return await super().exec(
-                handle, cmd, on_output, env, exec_timeout=exec_timeout, as_tool=as_tool
+                handle, cmd, on_output, env, exec_timeout=exec_timeout, tool=tool
             )
         finally:
             made = ["find", ws, "-user", str(ident.tool_uid), "-exec", "chmod", "g+rwX", "{}", "+"]

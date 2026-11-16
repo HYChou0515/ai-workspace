@@ -26,17 +26,17 @@ class _Sandbox:
     def __init__(self, result: ExecResult | None = None, *, resolves_tools: bool = False):
         self.calls: list[list[str]] = []
         self.envs: list[dict[str, str]] = []
-        self.as_tools: list[str | None] = []
+        self.exec_tools: list[bool | str] = []
         self.result = result or ExecResult(exit_code=0, stdout=b'{"ok":1}', stderr=b"note")
         self.resolves_tools = resolves_tools
 
     async def exists(self, handle, path: str) -> bool:
         return False
 
-    async def exec(self, handle, cmd, on_output=None, env=None, exec_timeout=None, as_tool=None):
+    async def exec(self, handle, cmd, on_output=None, env=None, exec_timeout=None, tool=False):
         self.calls.append(list(cmd))
         self.envs.append(dict(env or {}))
-        self.as_tools.append(as_tool)
+        self.exec_tools.append(tool)
         return self.result
 
 
@@ -206,7 +206,7 @@ def test_an_artifact_plugin_runs_when_resolved_and_mounted(tmp_path):
     assert reg.tools == [{"chart": MountedTool(sha="c" * 64, version="")}]
     # Mounted from the third-party store, which only the tool group may read —
     # so it runs as the tool identity (docs/plan-tool-identity-secrets.md P2).
-    assert sb.as_tools == ["chart"]
+    assert sb.exec_tools == ["chart"]
 
 
 def test_a_live_sandbox_started_before_the_plugin_was_installed_says_so(tmp_path):

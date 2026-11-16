@@ -159,7 +159,7 @@ class _ReapableSandbox(MockSandbox):
         self.busy = False
         self.exec_handles: list[str] = []
 
-    async def exec(self, handle, cmd, on_output=None, env=None, exec_timeout=None, as_tool=None):
+    async def exec(self, handle, cmd, on_output=None, env=None, exec_timeout=None, tool=False):
         self.exec_handles.append(handle.id)
         if self.busy:
             raise SandboxBusy(handle.id)

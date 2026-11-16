@@ -1,4 +1,4 @@
-"""The host's half of `as_tool` (docs/plan-tool-identity-secrets.md P1): the
+"""The host's half of `tool` (docs/plan-tool-identity-secrets.md P1): the
 `/exec` body carries which third-party tool a command launches, and the host
 hands it to the backend that decides the identity. The app's half is
 `tests/sandbox/test_http.py`.
@@ -34,13 +34,13 @@ async def _exec(body: dict[str, object]) -> MockSandbox:
 
 
 async def test_exec_hands_the_tool_name_to_the_backend():
-    backend = await _exec({"cmd": ["../.tools/erp/launch", "q", "{}"], "as_tool": "erp"})
-    assert backend.exec_as_tools[-1] == "erp"
+    backend = await _exec({"cmd": ["../.tools/erp/launch", "q", "{}"], "tool": "erp"})
+    assert backend.exec_tools[-1] == "erp"
 
 
 async def test_exec_from_an_older_client_runs_as_the_sandbox():
     backend = await _exec({"cmd": ["true"]})
-    assert backend.exec_as_tools[-1] is None
+    assert backend.exec_tools[-1] is False
 
 
 async def test_healthz_says_this_host_runs_tools_as_their_own_identity():

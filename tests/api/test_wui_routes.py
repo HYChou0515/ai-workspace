@@ -42,7 +42,7 @@ class _Sandbox:
     def __init__(self, result: ExecResult | None = None):
         self.calls: list[list[str]] = []
         self.envs: list[dict[str, str]] = []
-        self.as_tools: list[str | None] = []
+        self.exec_tools: list[bool | str] = []
         self.result = result or ExecResult(exit_code=0, stdout=b'{"lot":"A1"}')
 
     async def exists(self, handle, path: str) -> bool:
@@ -51,10 +51,10 @@ class _Sandbox:
         # dependencies, so nothing follows from the answer.
         return False
 
-    async def exec(self, handle, cmd, on_output=None, env=None, exec_timeout=None, as_tool=None):
+    async def exec(self, handle, cmd, on_output=None, env=None, exec_timeout=None, tool=False):
         self.calls.append(list(cmd))
         self.envs.append(dict(env or {}))
-        self.as_tools.append(as_tool)
+        self.exec_tools.append(tool)
         return self.result
 
 
@@ -364,7 +364,7 @@ class _BuildSandbox(_Sandbox):
         super().__init__(ExecResult(exit_code=exit_code, stdout=b"".join(chunks)))
         self.chunks = chunks
 
-    async def exec(self, handle, cmd, on_output=None, env=None, exec_timeout=None, as_tool=None):
+    async def exec(self, handle, cmd, on_output=None, env=None, exec_timeout=None, tool=False):
         self.calls.append(list(cmd))
         self.envs.append(dict(env or {}))
         for chunk in self.chunks:
@@ -545,9 +545,7 @@ def test_a_build_that_blows_up_still_ends_the_stream():
     verdict, forever. Every path out of here has to post a verdict."""
 
     class _Exploding(_Sandbox):
-        async def exec(
-            self, handle, cmd, on_output=None, env=None, exec_timeout=None, as_tool=None
-        ):
+        async def exec(self, handle, cmd, on_output=None, env=None, exec_timeout=None, tool=False):
             if on_output is not None:
                 on_output(b"pnpm install\n")
             raise SandboxNotFound("the item was reaped mid-build")
@@ -594,9 +592,7 @@ def test_leaving_the_page_takes_the_build_with_it():
             super().__init__(ExecResult(exit_code=0))
             self.cancelled = False
 
-        async def exec(
-            self, handle, cmd, on_output=None, env=None, exec_timeout=None, as_tool=None
-        ):
+        async def exec(self, handle, cmd, on_output=None, env=None, exec_timeout=None, tool=False):
             self.calls.append(list(cmd))
             if on_output is not None:
                 on_output(b"resolving...\n")
@@ -1169,7 +1165,7 @@ def test_a_page_names_one_of_two_same_named_commands_by_its_new_name():
     assert sandbox.calls == [["/tools/b/launch", "lot-status", "{}"]]
     # A page's `callTool` runs a third-party tool as its own identity too — the
     # same dispatch the agent's call goes through (plan-tool-identity-secrets).
-    assert sandbox.as_tools == ["b"]
+    assert sandbox.exec_tools == ["b"]
 
 
 def test_a_page_calling_the_shared_old_name_is_refused_with_todays_message():

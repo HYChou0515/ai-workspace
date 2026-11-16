@@ -97,6 +97,7 @@
 
 - 每個沙盒多一個工具身分，**從同一個 uid 池多借一個**（施工時查到：sandbox-host 是用池子配 uid，不是 app 端那種雜湊；線上的 199989／199992 正是預設池 100000–199999 的頂端）。池子本來就是 operator 留給沙盒的範圍，所以不需要新的設定鍵，也撞不到主機上的帳號。代價：每個沙盒佔兩個號碼，一台主機可同時開的沙盒上限從約十萬變約五萬。
 - **工具群組** = 池子的第一個號碼（`uid_min`），池子改從 `uid_min + 1` 開始配——沒有任何沙盒 uid 會拿到它。
+- **沙盒介面的參數叫 `tool: bool | str`**（施工時最初叫 `as_tool`，配合 prod 版既有的 `tool` 參數改名，方便解衝突）：值是工具名稱時，host 同時做工具身分、解開密封帳密（以及 prod 版的 per-tool egress 憑證）；`True`／`False` 當一般指令。內部函式仍用 `as_tool` 這個變數名。
 - app 端的三種後端（local／docker／mock）本來就不掛第三方工具（`SandboxSpec.tools` 註明忽略），所以只接受這個參數、不做事；換身分只在 sandbox-host。
 - **沙盒介面加一個「以工具身分執行」的選項。** 只有 `tooling/registry.py:_exec_tool` 在啟動**第三方**工具時會設（AI 的工具呼叫、WUI 的 `callTool`／`startTool` 都走這一條）；AI 的 `exec` 工具沒有任何參數碰得到它。每一種沙盒後端都要認得這個選項。
 - 啟動沿用 `_setpriv_cgroup_argv`，只換身分——工具仍在 item 的 cgroup 裡（資源限制、計費不變），回收沙盒時 `cgroup.kill` 一樣砍得到。
@@ -149,7 +150,7 @@
 
 ## Review 第 1 輪（四個面向平行，2026-11-16）
 
-最嚴重：**critical**——AI 可以從沙盒裡直接打 sandbox-host 的 API、自己帶 `as_tool`，拿到工具身分的 shell（帳密、原始碼都拿得到；defect 面向實際重現）。修法：**host 自己檢查**——帶 `as_tool` 的請求只接受「那支工具的 launcher + 指令名 + 參數」、且工具必須是從第三方倉庫掛進這個沙盒的；環境變數也在 host 清。API 沒有認證本身是原本就有的問題（可以對別的 item 下指令），不在這次範圍，已在部署文件寫明。
+最嚴重：**critical**——AI 可以從沙盒裡直接打 sandbox-host 的 API、自己帶工具名（當時叫 `as_tool`，後來配合 prod 改名為 `tool`），拿到工具身分的 shell（帳密、原始碼都拿得到；defect 面向實際重現）。修法：**host 自己檢查**——帶 `as_tool` 的請求只接受「那支工具的 launcher + 指令名 + 參數」、且工具必須是從第三方倉庫掛進這個沙盒的；環境變數也在 host 清。API 沒有認證本身是原本就有的問題（可以對別的 item 下指令），不在這次範圍，已在部署文件寫明。
 
 其他已修：環境變數黑名單太窄（`OPENSSL_CONF` 可在工具程序裡跑程式碼，已實測）；traceback 過濾漏了 exception group、warning、SyntaxError、CRLF；多行帳密沒遮；工具用名字呼叫 `python` 會走到 AI 的 venv；ACL mask（上表 #2）；建立失敗時 uid 外洩；host 範圍太小沒擋；`TOOL_DEBUG` 可被 AI 用卡片要；`erpnext` 被當成 `erp`；提示行弄壞 stdout 的 JSON；`cryptography` 下限；五個沒有測試守住的保證補上測試並各自以突變驗證；過濾器吞吐量（約 2.7 → 61 MB/s）。
 

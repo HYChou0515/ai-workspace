@@ -50,13 +50,13 @@ async def _dispatch(pkg: PackageInfo, env_vars: dict[str, str] | None = None) ->
 @pytest.mark.asyncio
 async def test_a_third_party_tool_is_dispatched_as_itself():
     sandbox = await _dispatch(_THIRD)
-    assert sandbox.exec_as_tools[-1] == "erp"
+    assert sandbox.exec_tools[-1] == "erp"
 
 
 @pytest.mark.asyncio
 async def test_a_first_party_tool_is_dispatched_as_the_sandbox():
     sandbox = await _dispatch(_FIRST)
-    assert sandbox.exec_as_tools[-1] is None
+    assert sandbox.exec_tools[-1] is False
 
 
 _LOADERS = {
@@ -115,12 +115,12 @@ async def test_an_artifact_view_plugin_runs_as_the_tool_identity():
     bundle sits in the third-party store — which only the tool group may read. Run
     as the sandbox uid it could no longer read its own files."""
     sandbox = await _plugin_dispatch({"wafermap": "a" * 64})
-    assert sandbox.exec_as_tools[-1] == "wafermap"
+    assert sandbox.exec_tools[-1] == "wafermap"
 
 
 @pytest.mark.asyncio
 async def test_a_bundled_view_plugin_runs_as_the_sandbox():
     """A `{bundle: ...}` plugin ships in `builtin/`: first-party, untouched."""
     sandbox = await _plugin_dispatch({})
-    assert sandbox.exec_as_tools[-1] is None
+    assert sandbox.exec_tools[-1] is False
     assert sandbox.exec_envs[-1]["PYTHONPATH"] == "/root/evil"

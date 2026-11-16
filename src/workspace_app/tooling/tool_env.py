@@ -6,7 +6,7 @@ agent reaching this host's API directly, chooses. Most are what the tool is for
 (a token, a base URL). Some decide where the process loads CODE from, or where
 its traffic goes and whom it trusts; passing those is a way to run someone
 else's code inside the tool, beside its credentials, or to read them off the
-wire. So for an `as_tool` command they are dropped HERE, on the host — not in
+wire. So for a tool command (`tool=<name>`) they are dropped HERE, on the host — not in
 the app: this host's API can be called without the app, and a rule the caller
 applies is a rule the caller can skip.
 

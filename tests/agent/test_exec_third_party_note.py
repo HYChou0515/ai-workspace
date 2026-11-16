@@ -36,7 +36,7 @@ class _Denying(MockSandbox):
         super().__init__()
         self.result = result
 
-    async def exec(self, handle, cmd, on_output=None, env=None, exec_timeout=None, as_tool=None):
+    async def exec(self, handle, cmd, on_output=None, env=None, exec_timeout=None, tool=False):
         return self.result
 
 

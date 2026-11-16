@@ -52,7 +52,7 @@ class _Declared(MockSandbox):
         return handle
 
     async def exec(
-        self, handle, cmd, on_output=None, env=None, exec_timeout=None, as_tool=None
+        self, handle, cmd, on_output=None, env=None, exec_timeout=None, tool=False
     ) -> ExecResult:
         self.calls.append(list(cmd))
         # A distinctive code for the NODE's own command, 0 for the preparation.
@@ -139,7 +139,7 @@ class _Overlapping(_Declared):
         self.peak_syncs = 0
 
     async def exec(
-        self, handle, cmd, on_output=None, env=None, exec_timeout=None, as_tool=None
+        self, handle, cmd, on_output=None, env=None, exec_timeout=None, tool=False
     ) -> ExecResult:
         self.calls.append(list(cmd))
         if cmd == _SYNC:
@@ -200,9 +200,7 @@ async def test_an_unpreparable_environment_fails_the_node_not_the_run(monkeypatc
     """
 
     class _Unbuildable(_Declared):
-        async def exec(
-            self, handle, cmd, on_output=None, env=None, exec_timeout=None, as_tool=None
-        ):
+        async def exec(self, handle, cmd, on_output=None, env=None, exec_timeout=None, tool=False):
             self.calls.append(list(cmd))
             if cmd == _SYNC:
                 return ExecResult(exit_code=2, stderr=b"error: no `uv.lock` found")

@@ -75,7 +75,7 @@ _CAPABILITIES = frozenset(
         # nothing. Its absence means the app cannot know what a sandbox costs its
         # owner and charges zero — visibly under-counting rather than guessing.
         "resource-defaults",
-        # An exec naming `as_tool` runs as the item's TOOL identity — its own
+        # An exec naming a `tool` runs as the item's TOOL identity — its own
         # uid, HOME and group — so the agent cannot read a third-party tool's
         # files or its running environment (docs/plan-tool-identity-secrets.md).
         # Its absence means every third-party tool runs as the sandbox's uid.
@@ -235,7 +235,7 @@ class _ExecBody(BaseModel):
     exec_timeout: float | None = None
     # The third-party tool this command launches, when it is one. Absent on an
     # older client and on every command the agent runs itself.
-    as_tool: str | None = None
+    tool: bool | str = False
 
 
 def _frame(obj: dict[str, object]) -> bytes:
@@ -248,7 +248,7 @@ async def _exec_ndjson(
     cmd: list[str],
     env: Mapping[str, str] | None = None,
     exec_timeout: float | None = None,
-    as_tool: str | None = None,
+    tool: bool | str = False,
 ) -> AsyncGenerator[bytes, None]:
     """Run `exec` and yield NDJSON frames as output arrives.
 
@@ -270,7 +270,7 @@ async def _exec_ndjson(
             # Named only when set, the shape `exec_timeout`'s caller in the app
             # uses: a backend that predates the keyword still runs every command
             # that is not a third-party tool.
-            extra = {} if as_tool is None else {"as_tool": as_tool}
+            extra = {"tool": tool} if tool else {}
             result = await sandbox.exec(
                 handle, cmd, on_output=on_output, env=env, exec_timeout=exec_timeout, **extra
             )
@@ -951,7 +951,7 @@ def make_host_app(
                 body.cmd,
                 body.env,
                 body.exec_timeout,
-                body.as_tool,
+                body.tool,
             ),
             media_type="application/x-ndjson",
         )

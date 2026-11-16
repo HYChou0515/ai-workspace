@@ -41,7 +41,7 @@ def _traversable(tmp_path):
 
 #: A test bundle whose launcher runs its arguments as a shell script — the
 #: author's own code, standing in for a real tool. Round 1 made the host accept
-#: an `as_tool` exec only in a tool call's shape, so every probe here goes
+#: a `tool` exec only in a tool call's shape, so every probe here goes
 #: through `launch <command> <args>`, as a real call does.
 _SCRIPTED = b'#!/bin/sh\nexec sh -c "$2"\n'
 
@@ -73,7 +73,7 @@ def isolated(tmp_path):
 
 
 async def _tool(sb, h, script: str, **kw):
-    return await sb.exec(h, ["../.tools/erp/launch", "run", script], as_tool="erp", **kw)
+    return await sb.exec(h, ["../.tools/erp/launch", "run", script], tool="erp", **kw)
 
 
 @requires_isolation
@@ -220,7 +220,7 @@ async def test_the_tool_identity_runs_it(with_tools):
     sb, mounts = with_tools
     h = await sb.create(SandboxSpec(tools=mounts))
     ident = sb._identities[h.id]
-    result = await sb.exec(h, ["../.tools/erp/launch", "q", "{}"], as_tool="erp")
+    result = await sb.exec(h, ["../.tools/erp/launch", "q", "{}"], tool="erp")
     assert result.exit_code == 0, result.stderr
     assert result.stdout.strip() == f"ran-as-{ident.tool_uid}".encode()
 
@@ -276,7 +276,7 @@ async def test_modes_set_after_creation_do_not_lock_either_identity_out(tmp_path
         ],
     )
     assert setup.exit_code == 0, setup.stderr
-    tool = await sb.exec(h, ["../.tools/erp/launch", "q", "{}"], as_tool="erp")
+    tool = await sb.exec(h, ["../.tools/erp/launch", "q", "{}"], tool="erp")
     assert tool.exit_code == 0, tool.stderr
     agent = await sb.exec(
         h, ["sh", "-c", "cat atomic.csv && echo more >> atomic.csv && rm atomic.csv"]

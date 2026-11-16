@@ -1255,7 +1255,7 @@ opencode 的變數替換是 `{env:VAR}`（**不是** `${PWD}`），而且變數�
   自己把池子設得很小的部署要確認夠用。範圍小於三個號碼（群組 + 一個沙盒的兩個 uid）時 host 直接起不來，
   訊息會指名 `SANDBOX_HOST_UID_MIN`。
 - **host 自己檢查「以工具身分執行」的請求**：host 的 API 沒有認證、沙盒和 pod 共用網路，所以 AI 可以自己打
-  `/sandboxes/<id>/exec`。帶 `as_tool` 的請求只接受「那支工具自己的 launcher + 指令名 + 參數」、而且那支工具
+  `/sandboxes/<id>/exec`。帶工具名（`tool`）的請求只接受「那支工具自己的 launcher + 指令名 + 參數」、而且那支工具
   必須是從第三方倉庫掛進這個沙盒的；其他一律 exit 126。呼叫端給的環境變數也在 host 這裡清掉會改變載入行為、
   流量或信任的名字（`sandbox_host/tool_env.py`）。⚠️ 這個 API 沒有認證是**原本就有**的問題（例如可以對別的
   item 的沙盒下指令），這次沒有處理。
