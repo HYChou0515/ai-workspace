@@ -139,6 +139,12 @@ class PackageInfo:
     field. Never "unknown" — that would be the platform putting words in an
     author's mouth."""
 
+    secret_env: tuple[str, ...] = ()
+    """The names `env.json` marks secret (docs/plan-tool-identity-secrets.md
+    P4): the tool's OWN credentials, sealed into its bundle and opened by the
+    host for its process only. Kept out of `env_needs`, because those are what
+    a person is shown to fill in — and these no person may set or see."""
+
     third_party: bool = False
     """A tool published from outside this repo (#674), named by the operator's
     local name in `app.json` `external_tools`. Its commands reach the model as

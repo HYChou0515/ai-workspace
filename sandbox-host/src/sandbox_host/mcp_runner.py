@@ -173,6 +173,18 @@ def main(
     # not confirm today, so reaching here means the artifact store answered.
     print(f"{resolved.name} {resolved.version} [{resolved.sha[:12]}]", file=sys.stderr)
 
+    # docs/plan-tool-identity-secrets.md P4: a tool's own credentials travel
+    # sealed, and only the platform's hosts hold the key. Here they can only
+    # come from this shell; when one does not, name it now rather than let the
+    # tool fail on it later in a way that might not.
+    if missing := [e.name for e in resolved.env or () if e.secret and not os.environ.get(e.name)]:
+        print(
+            f"note: {resolved.name} needs its own credential {', '.join(missing)}, which "
+            "only the platform can open. To run it here, export it in this shell "
+            "(and pass it into the container with -e).",
+            file=sys.stderr,
+        )
+
     # Said once, at startup, because the failure it warns about is silent.
     # A tool reading a missing file fails loudly; a tool WRITING one succeeds,
     # reports the path, and the file leaves with the container — so the agent

@@ -38,6 +38,8 @@ from collections.abc import Mapping, Sequence
 from functools import cache
 from pathlib import Path
 
+from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
+
 from .protocol import (
     PREVIEW_COMMAND,
     PREVIEW_MAX_BYTES,
@@ -54,6 +56,7 @@ from .protocol import (
 )
 from .tool_cache import BUILTIN_DIR, EXT_DIR
 from .tool_output import ToolOutputFilter, tool_debug_names
+from .tool_secrets import SECRETS_FILE, SecretsError, open_sealed
 from .walk import scandir_lister, walk_tree
 
 # Bootstrap run (as namespace-root) before chroot: overlay the host's system
@@ -601,8 +604,11 @@ class LocalProcessSandbox:
         isolate: bool | None = None,
         tools_dir: Path | None = None,
         preview_command: Sequence[str] = PREVIEW_COMMAND,
+        tool_secret_key: X25519PrivateKey | None = None,
     ) -> None:
         self._root = root_dir or Path(tempfile.gettempdir()) / "sandbox-host"
+        # P4: opens the credentials a third-party bundle carries sealed.
+        self._tool_secret_key = tool_secret_key
         # The app's plan-pptx-preview D2: what converts a deck — `soffice`, or a
         # stand-in in a unit test.
         self._preview_command = tuple(preview_command)
@@ -1092,8 +1098,26 @@ class LocalProcessSandbox:
     def _tool_secrets(self, handle: SandboxHandle, as_tool: str) -> dict[str, str]:
         """The credentials the platform hands this tool, `{name: value}`
         (docs/plan-tool-identity-secrets.md P4). Given to the tool's process in
-        its environment and masked out of everything it prints."""
-        return {}
+        its environment and masked out of everything it prints.
+
+        Read from the bundle mounted at this sandbox's `/.tools/<as_tool>` — by
+        this service, which may read the third-party store; the tool's own uid
+        could, too, but only ciphertext is there. A bundle with no sealed file
+        has none, which is every tool built before P4."""
+        if as_tool in ("", ".", "..") or "/" in as_tool:
+            raise SecretsError(f"{as_tool!r} is not a tool name")
+        if self._tools_dir is None:
+            return {}
+        try:
+            sealed = (self._require(handle) / _TOOLS_VIEW / as_tool / SECRETS_FILE).read_bytes()
+        except FileNotFoundError:
+            return {}
+        if self._tool_secret_key is None:
+            raise SecretsError(
+                "this deployment has no key to open them (SANDBOX_HOST_TOOL_SECRET_KEY_FILE "
+                "is not set)"
+            )
+        return open_sealed(sealed, self._tool_secret_key)
 
     def _exec_argv(
         self, handle: SandboxHandle, cmd: list[str], as_tool: str | None = None
@@ -1300,7 +1324,21 @@ class LocalProcessSandbox:
             env.update({k: base_env[k] for k in _TOOL_PINNED if k in base_env})
             # P3/P4: what it prints is filtered before anyone sees it — live,
             # and in the result (see `tool_output`).
-            granted = self._tool_secrets(handle, as_tool)
+            try:
+                granted = self._tool_secrets(handle, as_tool)
+            except SecretsError as exc:
+                # BLOCKED (3): someone must act, and a retry will not help.
+                # Never run on without them — the tool would report the
+                # variable missing, and the chat would ask the USER for it.
+                return ExecResult(
+                    exit_code=3,
+                    stdout=b"",
+                    stderr=(
+                        f"{as_tool}: this tool's own credentials could not be opened on "
+                        f"this deployment — {exc}. They belong to the tool, so the user "
+                        "cannot set them; the platform team has to fix this.\n"
+                    ).encode(),
+                )
             # The tool's own credentials win over a user variable of the same
             # name: they are its author's, and nobody else's to replace.
             env.update(granted)

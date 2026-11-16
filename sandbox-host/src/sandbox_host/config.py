@@ -32,6 +32,11 @@ class SandboxHostSettings:
     exec_timeout: float = 60.0
     log_timeout: float = 60.0
     tools_dir: str | None = None
+    tool_secret_key_file: str | None = None
+    """docs/plan-tool-identity-secrets.md P4: a FILE holding this deployment's
+    X25519 private key (base64 of the raw 32 bytes) — a mounted k8s secret.
+    A path, never the key itself: every sandbox command inherits this
+    service's environment. None ⇒ a tool with sealed credentials is refused."""
     # None = no ceiling, so nothing unreferenced is evicted. Unset means no
     # limit here as it does everywhere else in this repo; set a number to make
     # the reaper reclaim disk, oldest-unreferenced first.
@@ -113,6 +118,7 @@ def load_settings(env: Mapping[str, str]) -> SandboxHostSettings:
         exec_timeout=f("SANDBOX_HOST_EXEC_TIMEOUT", 60.0),
         log_timeout=f("SANDBOX_HOST_LOG_TIMEOUT", 60.0),
         tools_dir=opt("SANDBOX_HOST_TOOLS_DIR"),
+        tool_secret_key_file=opt("SANDBOX_HOST_TOOL_SECRET_KEY_FILE"),
         tool_cache_max_bytes=(
             int(raw) if (raw := opt("SANDBOX_HOST_TOOL_CACHE_MAX_BYTES")) else None
         ),

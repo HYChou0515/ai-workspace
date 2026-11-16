@@ -51,6 +51,13 @@ from workspace_app.tooling.artifact import (
     render_manifest,
     verify_bundle,
 )
+from workspace_app.tooling.tool_secrets import (
+    RECIPIENTS_ENV,
+    SECRETS_FILE,
+    SecretsError,
+    parse_recipients,
+    seal,
+)
 
 # The two names an author's CI publishes live in the contract both packages
 # carry, beside the rule that derives one URL from the other. Re-exported here
@@ -402,6 +409,31 @@ def _inject_mcp(bundle: Path) -> None:
     entry.chmod(0o755)
 
 
+def _seal_secrets(env_needs: tuple[EnvSpec, ...] | None) -> bytes | None:
+    """The bytes of the bundle's sealed-secrets file, or None when `env.json`
+    marks nothing secret (docs/plan-tool-identity-secrets.md P4).
+
+    Each value comes from THIS job's environment, which is where GitLab puts a
+    project's CI/CD Variables; the keys come from `TOOL_SECRET_RECIPIENTS`,
+    which the platform team sets once on the GitLab group. Runs before the
+    bundle is built: a missing variable is the author's to fix, and they should
+    not wait minutes for a venv to learn it."""
+    names = [e.name for e in env_needs or () if e.secret]
+    if not names:
+        return None
+    if missing := [n for n in names if not os.environ.get(n)]:
+        raise BuildError(
+            f"env.json marks {', '.join(missing)} secret, but this CI job has no value for "
+            "it. Set it in the tool's GitLab project: Settings → CI/CD → Variables "
+            "(tick Masked and Hidden)."
+        )
+    try:
+        recipients = parse_recipients(os.environ.get(RECIPIENTS_ENV, ""))
+        return seal({n: os.environ[n] for n in names}, recipients)
+    except SecretsError as exc:
+        raise BuildError(str(exc)) from exc
+
+
 def build_artifact(
     *,
     source: Path,
@@ -425,12 +457,17 @@ def build_artifact(
     # that `main` cannot catch, so the author's CI log gets a traceback
     # instead of one `build failed:` line.
     env_needs = read_env_declaration(source)
+    sealed = _seal_secrets(env_needs)
     out.mkdir(parents=True, exist_ok=True)
 
     with tempfile.TemporaryDirectory() as tmp:
         bundle = Path(tmp) / name
         build_bundle(name=name, source=source, dst=bundle)
         _inject_mcp(bundle)
+        if sealed is not None:
+            # Only ciphertext: the host opens it for this tool's process, and
+            # its tree is readable by the tool group alone (P2).
+            (bundle / SECRETS_FILE).write_bytes(sealed)
         commands = read_commands(bundle)
         packed = pack_bundle(bundle)
         # Inside the temp dir, and before anything is written to `out`: the

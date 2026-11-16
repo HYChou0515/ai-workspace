@@ -27,6 +27,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
+
 from .local_process import _HOME, _TOOL_HOME, _UV_CACHE, LocalProcessSandbox
 from .protocol import EnforcedLimits, SandboxHandle, SandboxSpec
 
@@ -256,6 +258,7 @@ class IsolatedProcessSandbox(LocalProcessSandbox):
         acl_runner: AclRunner | None = None,
         chown_runner: ChownRunner | None = None,
         tool_gid: int | None = None,
+        tool_secret_key: X25519PrivateKey | None = None,
     ) -> None:
         super().__init__(
             root_dir=Path(root_dir) if root_dir is not None else None,
@@ -263,6 +266,7 @@ class IsolatedProcessSandbox(LocalProcessSandbox):
             log_timeout=log_timeout,
             isolate=False,  # uid + cgroup ARE the isolation; no namespaces
             tools_dir=tools_dir,
+            tool_secret_key=tool_secret_key,
         )
         self._pool = _UidPool(uid_min, uid_max)
         self._cgroups = _CgroupManager(

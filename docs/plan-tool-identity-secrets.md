@@ -124,6 +124,13 @@
 - sandbox-host 啟動那支工具時用私鑰解開，當成環境變數只給那支工具的程序。
 - 工程師本機的 mcp-runner 沒有私鑰：機密變數由他自己在 shell 設（知道帳密的人才跑得起來）；沒設時 runner 明講缺哪個變數。
 - 加密方式照成熟做法選（例如 libsodium sealed box／age），不自己發明。
+- **P4 施工定案**：
+  - 加密：HPKE（RFC 9180）base mode，X25519 + HKDF-SHA256 + ChaCha20-Poly1305，用兩邊本來就有的 `cryptography`（不加新套件）。每筆密文用 HPKE 的 `info` 綁定變數名，不能改貼成別的名字。格式與加解密在同一個檔 `tool_secrets.py`，app 與 sandbox-host 各一份、逐位元組相同（測試釘住，同 `artifact.py`）；builder 用的 cryptography 48 封、host 用的 50 開，有固定密文的測試證明互通。
+  - 公鑰：GitLab group 層級的 CI 變數 `TOOL_SECRET_RECIPIENTS`（平台團隊設一次，不是機密），可列多把（staging、正式），所以同一個 artifact 各部署都能開。
+  - 密文放在 bundle 裡的 `.tool-secrets.json`。有帳密的工具每次 build 的 bundle sha 都不同（加密是隨機的），所以重 build 一次 host 就要重新下載一次——成本，不是錯。
+  - 解密在 sandbox-host：私鑰是**檔案**（掛 k8s secret，`SANDBOX_HOST_TOOL_SECRET_KEY_FILE`），不能放環境變數——每個沙盒指令都會繼承 host 的環境變數。設定了卻讀不到，host 直接起不來。產生金鑰：`python -m sandbox_host.tool_secret_key <檔案>`（寫私鑰、印公鑰、不覆蓋既有檔）。
+  - 開不了（沒鑰匙、封給別的部署）：工具不執行，回 exit 3 並說「這是工具自己的帳密，使用者沒辦法設，要平台團隊處理」——絕不在缺值的情況下照跑，否則工具會說缺變數、聊天會跑出卡片要使用者填機器密碼。
+  - 標成機密的名字不進環境變數面板（`PackageInfo.secret_env`，不在 `env_needs`），`request_env` 卡片也拒絕它。host 回給 app 的三個地方（`/tools/resolve`、記住的副本、離線時的 fallback）共用 `artifact.env_to_json`／`env_from_json`，不再各自手寫——施工時查到三處都會把 `secret` 弄丟。
 
 ### 5. 回給 AI 的輸出
 
@@ -158,8 +165,8 @@
 
 ## 還沒決定的實作細節
 
-- 平台公鑰怎麼交到 builder 手上；同一個安裝包要不要能給多個部署（staging／正式）解開。
-- 解密發生在 sandbox-host 還是 app 端。
+- ~~平台公鑰怎麼交到 builder 手上；多個部署~~ 已定（P4）：`TOOL_SECRET_RECIPIENTS`，可列多把。
+- ~~解密在哪~~ 已定（P4）：sandbox-host，私鑰是掛載的檔案。
 - ~~工具身分的編號範圍必須是設定鍵~~ **不需要**（P1 查證）：工具身分從既有的 uid 池借，工具群組用池子的第一個號碼。
 
 ## Phases（核准後才細分；編號連續）

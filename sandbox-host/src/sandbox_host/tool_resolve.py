@@ -40,6 +40,8 @@ from .artifact import (
     bundle_url,
     check_compatible,
     credential_for,
+    env_from_json,
+    env_to_json,
     parse_manifest,
     verify_bundle,
 )
@@ -237,14 +239,7 @@ class ToolResolver:
             # Same reasoning, and the same three states: a remembered entry
             # written before #750 has no `env` key and must stay "did not say".
             env=(
-                tuple(
-                    EnvSpec(
-                        name=e["name"],
-                        description=e.get("description", ""),
-                        required=e.get("required"),
-                    )
-                    for e in remembered["env"]
-                )
+                tuple(env_from_json(e) for e in remembered["env"])
                 if isinstance(remembered.get("env"), list)
                 else None
             ),
@@ -267,16 +262,7 @@ class ToolResolver:
             "description": manifest.description,
             # Stored so a store outage does not also cost the declaration:
             # `_fall_back` rebuilds a ResolvedTool from exactly this dict.
-            **(
-                {
-                    "env": [
-                        {"name": e.name, "description": e.description, "required": e.required}
-                        for e in manifest.env
-                    ]
-                }
-                if manifest.env is not None
-                else {}
-            ),
+            **({"env": [env_to_json(e) for e in manifest.env]} if manifest.env is not None else {}),
             # Kept so the fallback can ask again. Without it, an outage was a
             # way around the only revocation this design has.
             "grant": manifest.grant,

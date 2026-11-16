@@ -11,6 +11,7 @@ import os
 import platform
 from pathlib import Path
 
+from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
 from fastapi import FastAPI
 
 from .app import check_cgroup_ready, make_host_app
@@ -19,6 +20,7 @@ from .isolated_process import IsolatedProcessSandbox
 from .nfs_archive import NfsArchive
 from .tool_cache import EXT_DIR, ToolCache, _GroupHardener
 from .tool_resolve import ToolResolver
+from .tool_secrets import SecretsError, private_key_from_text
 
 # Where a pod's own delegated cgroup v2 subtree is mounted when the operator
 # doesn't pin `cgroup_root` explicitly.
@@ -82,8 +84,25 @@ def build_tool_resolver(settings: SandboxHostSettings) -> ToolResolver | None:
     )
 
 
+def load_tool_secret_key(settings: SandboxHostSettings) -> X25519PrivateKey | None:
+    """This deployment's key for third-party tools' sealed credentials, read
+    once at startup (docs/plan-tool-identity-secrets.md P4). A configured file
+    that cannot be read stops the host HERE: starting without it would refuse
+    every sealed tool at its first call — later, and in front of a user."""
+    if not settings.tool_secret_key_file:
+        return None
+    try:
+        text = Path(settings.tool_secret_key_file).read_text()
+    except OSError as exc:
+        raise SecretsError(
+            f"the tool secret key file {settings.tool_secret_key_file} cannot be read ({exc})"
+        ) from exc
+    return private_key_from_text(text)
+
+
 def build_sandbox(settings: SandboxHostSettings) -> IsolatedProcessSandbox:
     return IsolatedProcessSandbox(
+        tool_secret_key=load_tool_secret_key(settings),
         # See `tool_group`: the pool starts one above it.
         tool_gid=tool_group(settings),
         uid_min=tool_group(settings) + 1,

@@ -31,7 +31,7 @@ from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
-from .artifact import ArtifactError
+from .artifact import ArtifactError, env_to_json
 from .cgroup_usage import Target
 from .config import SandboxHostSettings
 from .nfs_archive import NfsArchive
@@ -766,10 +766,7 @@ def make_host_app(
                 # "needs nothing" — and the app cannot tell the difference from
                 # anywhere else, because it never reads a manifest (#696 is the
                 # same shape of loss, in the other direction).
-                resolved[name]["env"] = [
-                    {"name": e.name, "description": e.description, "required": e.required}
-                    for e in tool.env
-                ]
+                resolved[name]["env"] = [env_to_json(e) for e in tool.env]
         return {"tools": resolved, "refused": refused}
 
     @app.post("/drain", status_code=202)

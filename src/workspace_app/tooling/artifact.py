@@ -227,6 +227,40 @@ class EnvSpec:
     optional. Carried as-is; deciding what to do with the third state belongs
     to the platform, not to the host."""
 
+    secret: bool = False
+    """The author's own credential (docs/plan-tool-identity-secrets.md): its
+    value comes from the tool's CI variables, sealed into the bundle by the
+    builder and opened by the host for this tool only. Never a field a user
+    fills in, and never a name a card may ask for."""
+
+
+def env_to_json(spec: EnvSpec) -> dict[str, object]:
+    """One `EnvSpec` as every hop writes it — the manifest, the host's
+    remembered note, the `/tools/resolve` reply. One function, because the app
+    never reads a manifest: a hop that spelled this by hand and missed a field
+    lost it for good (docs/plan-tool-identity-secrets.md: a dropped `secret`
+    turns the tool's own credential into a field the user is asked to fill).
+    `secret` only when true, so an artifact with none keeps its bytes."""
+    body: dict[str, object] = {
+        "name": spec.name,
+        "description": spec.description,
+        "required": spec.required,
+    }
+    if spec.secret:
+        body["secret"] = True
+    return body
+
+
+def env_from_json(entry: dict) -> EnvSpec:
+    """The inverse of `env_to_json`, tolerant the way a reader of an older
+    writer has to be: absent keys take their defaults."""
+    return EnvSpec(
+        name=entry["name"],
+        description=entry.get("description", ""),
+        required=entry.get("required"),
+        secret=entry.get("secret") is True,
+    )
+
 
 def parse_env_declaration(raw: str) -> tuple[EnvSpec, ...]:
     """Parse an author's hand-written ``env.json`` (#750).
@@ -286,7 +320,17 @@ def parse_env_declaration(raw: str) -> tuple[EnvSpec, ...]:
                 f"env.json entry {entry['name']!r}: `required` must be true, false or "
                 f"absent, got {type(required).__name__}"
             )
-        specs.append(EnvSpec(name=entry["name"], description=description, required=required))
+        # Same reason as `required`: a truthy string would seal a value the
+        # author never asked to seal — or, as `"no"`, refuse to.
+        secret = entry.get("secret", False)
+        if not isinstance(secret, bool):
+            raise ValueError(
+                f"env.json entry {entry['name']!r}: `secret` must be true, false or "
+                f"absent, got {type(secret).__name__}"
+            )
+        specs.append(
+            EnvSpec(name=entry["name"], description=description, required=required, secret=secret)
+        )
     return tuple(specs)
 
 
@@ -399,14 +443,7 @@ def parse_manifest(raw: bytes) -> Manifest:
                 for c in body["commands"]
             ),
             env=(
-                tuple(
-                    EnvSpec(
-                        name=e["name"],
-                        description=e.get("description", ""),
-                        required=e.get("required"),
-                    )
-                    for e in body["env"]
-                )
+                tuple(env_from_json(e) for e in body["env"])
                 if isinstance(body.get("env"), list)
                 else None
             ),
@@ -490,10 +527,7 @@ def render_manifest(manifest: Manifest) -> bytes:
         # Written only when the author declared something — including an empty
         # list, which is a claim. A key that always appeared would turn every
         # pre-#750 artifact's silence into "needs nothing".
-        body["env"] = [
-            {"name": e.name, "description": e.description, "required": e.required}
-            for e in manifest.env
-        ]
+        body["env"] = [env_to_json(e) for e in manifest.env]
     if manifest.source is not None:
         body["source"] = {"git": manifest.source.git, "sha": manifest.source.sha}
     if manifest.grant is not None:
