@@ -23,14 +23,14 @@ import logging
 import os
 import shlex
 import subprocess
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
 from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
 
-from .local_process import _HOME, _TOOL_HOME, _UV_CACHE, LocalProcessSandbox
-from .protocol import EnforcedLimits, SandboxHandle, SandboxSpec
+from .local_process import _HOME, _TOOL_HOME, _TOOL_PATH, _UV_CACHE, LocalProcessSandbox
+from .protocol import EnforcedLimits, ExecResult, OutputSink, SandboxHandle, SandboxSpec
 
 # cgroup v2 cpu.max uses a fixed 100ms accounting period.
 _CPU_PERIOD = 100_000
@@ -304,23 +304,40 @@ class IsolatedProcessSandbox(LocalProcessSandbox):
         # `POST /sandboxes` outright, because the controller passes it.
         async with self._alloc_lock:  # serialize uid allocation across handles
             handle = await super().create(spec, item_id)
-            uid, gid = self._pool.alloc()
-            # The tool identity is a second uid from the SAME pool: the range is
-            # already the one the operator set aside for sandboxes, so it needs
-            # no setting of its own and cannot collide with a host account.
-            tool_uid = self._pool.alloc()[0] if self._tool_gid is not None else None
-            ws = self._workspace(handle)
-            cgroup = await asyncio.to_thread(
-                functools.partial(
-                    self._cgroups.create,
-                    handle.id,
-                    cpu_cores=spec.cpu_cores,
-                    memory_bytes=spec.memory_bytes,
-                    pids_max=spec.pids_max,
+            taken: list[int] = []
+            cgroup: Path | None = None
+            try:
+                uid, gid = self._pool.alloc()
+                taken.append(uid)
+                # The tool identity is a second uid from the SAME pool: the range
+                # is already the one the operator set aside for sandboxes, so it
+                # needs no setting of its own and cannot collide with a host
+                # account.
+                tool_uid = self._pool.alloc()[0] if self._tool_gid is not None else None
+                if tool_uid is not None:
+                    taken.append(tool_uid)
+                ws = self._workspace(handle)
+                cgroup = await asyncio.to_thread(
+                    functools.partial(
+                        self._cgroups.create,
+                        handle.id,
+                        cpu_cores=spec.cpu_cores,
+                        memory_bytes=spec.memory_bytes,
+                        pids_max=spec.pids_max,
+                    )
                 )
-            )
-            tools = () if tool_uid is None else (tool_uid,)
-            await asyncio.to_thread(self._provision, ws, uid, *tools)
+                tools = () if tool_uid is None else (tool_uid,)
+                await asyncio.to_thread(self._provision, ws, uid, *tools)
+            except BaseException:
+                # Nothing half-made survives: a uid taken here and never freed is
+                # one this host never hands out again, and nothing would notice.
+                for taken_uid in taken:
+                    self._pool.free(taken_uid, taken_uid)
+                if cgroup is not None:
+                    await asyncio.to_thread(self._cgroups.remove, cgroup)
+                with contextlib.suppress(Exception):
+                    await LocalProcessSandbox.kill(self, handle)
+                raise
             self._identities[handle.id] = _Identity(
                 uid=uid, gid=gid, cgroup=cgroup, tool_uid=tool_uid
             )
@@ -353,11 +370,19 @@ class IsolatedProcessSandbox(LocalProcessSandbox):
         await asyncio.to_thread(self._reown_sync, handle)
 
     def _reown_sync(self, handle: SandboxHandle) -> None:
-        uid = self._identities[handle.id].uid
+        ident = self._identities[handle.id]
         workspace = self._workspace(handle)
-        self._chown_runner(workspace, uid)
+        self._chown_runner(workspace, ident.uid)
         for path in workspace.rglob("*"):
-            self._chown_runner(path, uid)
+            self._chown_runner(path, ident.uid)
+        if ident.tool_uid is not None:
+            # docs/plan-tool-identity-secrets.md: the restore wrote every file
+            # back with its archived mode, and setting a mode on a file that
+            # has an ACL shrinks its mask — the tool uid's entry then grants
+            # nothing, down to the workspace root (archived 0700). The sandbox
+            # uid owns the files and never noticed. Applying the ACL again
+            # recomputes every mask.
+            self._acl_runner(_acl_argv(workspace, ident.uid, ident.tool_uid))
 
     def _provision(self, workspace: Path, uid: int, *tool_uids: int) -> None:
         # Own the workspace to the sandbox uid (gid left as-is via -1, so this
@@ -475,6 +500,44 @@ class IsolatedProcessSandbox(LocalProcessSandbox):
                 if ident.tool_uid is not None:
                     self._pool.free(ident.tool_uid, ident.tool_uid)
 
+    async def exec(
+        self,
+        handle: SandboxHandle,
+        cmd: list[str],
+        on_output: OutputSink | None = None,
+        env: Mapping[str, str] | None = None,
+        exec_timeout: float | None = None,
+        as_tool: str | None = None,
+    ) -> ExecResult:
+        ident = self._identities.get(handle.id)
+        if (
+            as_tool is None
+            or ident is None
+            or ident.tool_uid is None
+            or self._refuse_tool_exec(handle, cmd, as_tool) is not None
+        ):
+            # The agent's own command, a host without a tool identity, or a call
+            # the base is about to refuse: nothing of the workspace to hand over.
+            return await super().exec(
+                handle, cmd, on_output, env, exec_timeout=exec_timeout, as_tool=as_tool
+            )
+        # docs/plan-tool-identity-secrets.md: the tool reaches the workspace only
+        # through its ACL entry, which a file's MASK caps — and any mode set
+        # after creation (`chmod 644`, an archive the agent unpacked) shrinks
+        # it. So the ACL goes on again first, recomputing every mask; and after,
+        # everything is handed back to the sandbox uid (the `reown` every restore
+        # already runs), so what the tool made — a 0600 temp file renamed into
+        # place, say — is the agent's to read, edit and chmod. A walk of the
+        # workspace each way: the price of the two identities sharing it.
+        workspace = self._workspace(handle)
+        await asyncio.to_thread(self._acl_runner, _acl_argv(workspace, ident.uid, ident.tool_uid))
+        try:
+            return await super().exec(
+                handle, cmd, on_output, env, exec_timeout=exec_timeout, as_tool=as_tool
+            )
+        finally:
+            await self.reown(handle)
+
     def _exec_argv(
         self, handle: SandboxHandle, cmd: list[str], as_tool: str | None = None
     ) -> tuple[list[str], Path, dict[str, str]]:
@@ -495,6 +558,11 @@ class IsolatedProcessSandbox(LocalProcessSandbox):
         env["SANDBOX_HOME"] = tool_home
         env["PYTHONNOUSERSITE"] = "1"
         env["PYTHONSAFEPATH"] = "1"
+        # Nothing that points at the agent's environment: its PATH heads with a
+        # shim into the project venv, and these name that venv and uv's cache.
+        env["PATH"] = _TOOL_PATH
+        for name in ("VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT", "UV_CACHE_DIR"):
+            env.pop(name, None)
         assert self._tool_gid is not None  # a tool uid exists only with a group
         wrapped = _setpriv_cgroup_argv(
             argv,

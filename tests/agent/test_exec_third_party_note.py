@@ -15,7 +15,7 @@ from workspace_app.agent import AgentToolContext, exec_impl
 from workspace_app.files import WorkspaceFiles
 from workspace_app.filestore.memory import MemoryFileStore
 from workspace_app.sandbox.mock import MockSandbox
-from workspace_app.sandbox.protocol import ExecResult
+from workspace_app.sandbox.protocol import ExecResult, SandboxSpec
 from workspace_app.tooling.registry import CommandInfo, PackageInfo
 
 _ERP = PackageInfo(
@@ -90,4 +90,31 @@ async def test_an_unrelated_failure_gets_no_such_note():
 async def test_a_success_that_mentions_the_path_gets_no_such_note():
     result = ExecResult(exit_code=0, stdout=b"../.tools/erp\n", stderr=b"")
     text = await exec_impl(_ctx(result), ["ls", "-d", "../.tools/erp"])
+    assert "only through its tool call" not in text
+
+
+async def test_an_artifact_view_plugin_gets_the_note_too():
+    """Review round 1 (F2): an `{artifact: url}` view plugin is mounted from the
+    third-party store and hidden the same way, but is not in `packages`."""
+    actx = AgentToolContext(
+        investigation_id="inv-1",
+        sandbox=_Denying(
+            ExecResult(
+                exit_code=1, stdout=b"", stderr=b"cat: ../.tools/wafermap/x: Permission denied\n"
+            )
+        ),
+        filestore=MemoryFileStore(),
+        files=WorkspaceFiles(MemoryFileStore()),
+        sandbox_spec=SandboxSpec(tools={"wafermap": "a" * 64}),
+    )
+    text = await exec_impl(RunContextWrapper(actx), ["cat", "../.tools/wafermap/x"])
+    assert "only through its tool call" in text
+
+
+async def test_a_tool_whose_name_merely_starts_the_same_gets_no_note():
+    """Review round 1: `.tools/erpnext` is not `erp`."""
+    result = ExecResult(
+        exit_code=1, stdout=b"", stderr=b"cat: ../.tools/erpnext/x: Permission denied\n"
+    )
+    text = await exec_impl(_ctx(result), ["cat", "../.tools/erpnext/x"])
     assert "only through its tool call" not in text

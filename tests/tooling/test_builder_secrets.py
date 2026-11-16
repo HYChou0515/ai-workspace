@@ -133,3 +133,26 @@ def test_the_manifest_says_which_names_are_secret(tmp_path, monkeypatch):
     assert env == [
         {"name": "MACHINE_PASSWORD", "description": "", "required": None, "secret": True}
     ]
+
+
+def test_a_missing_secret_fails_before_the_bundle_is_built(tmp_path, monkeypatch):
+    """The author should not wait for a venv to learn they forgot a variable."""
+    key = X25519PrivateKey.generate()
+    monkeypatch.delenv("MACHINE_PASSWORD", raising=False)
+    monkeypatch.setenv("TOOL_SECRET_RECIPIENTS", public_key_text(key.public_key()))
+    built: list[str] = []
+
+    def bundle(*, name, source, dst):  # noqa: ARG001
+        built.append(name)
+
+    with pytest.raises(BuildError):
+        build_artifact(
+            source=_with_env_json(
+                _source(tmp_path), [{"name": "MACHINE_PASSWORD", "secret": True}]
+            ),
+            out=tmp_path / "dist",
+            builder_id=_BUILDER,
+            build_bundle=bundle,
+            smoke_check=lambda _dist: None,
+        )
+    assert built == []

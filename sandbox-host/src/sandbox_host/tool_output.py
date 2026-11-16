@@ -20,11 +20,19 @@ pieces once it is long, keeping back just enough to never split a credential.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable
 
-_TRACEBACK = b"Traceback (most recent call last):"
-_FRAME = b"  File "
-_SOURCE = b"    "
+#: Where Python quotes source: under a frame (`File "…", line N` — in a
+#: traceback, an exception group's `|` margin, or a SyntaxError, which has no
+#: `Traceback` header at all), and under a warning (`path:N: SomeWarning: msg`).
+#: A line indented deeper than the line that introduced it is the quote.
+_FRAME = re.compile(rb'^([ |]*)File ".*", line \d+')
+_WARNING = re.compile(rb"^\S.*:\d+: \w*Warning: ")
+#: The shortest line of a multi-line credential masked on its own: shorter ones
+#: (a lone `}`) would mask half of every JSON a tool prints, and say nothing.
+_MIN_PART = 8
+_LINE_END = re.compile(rb"[\r\n]")
 #: How much of an unterminated line is held before some of it is released.
 _HOLD = 64 * 1024
 
@@ -32,24 +40,40 @@ _HOLD = 64 * 1024
 class ToolOutputFilter:
     """One stream's filter: `feed` each chunk, `flush` once at the end."""
 
-    def __init__(self, *, tool: str, hide_source: bool, secrets: Iterable[str] = ()) -> None:
+    def __init__(
+        self, *, tool: str, hide_source: bool, secrets: Iterable[str] = (), hint: bool = True
+    ) -> None:
         self._tool = tool
         self._hide_source = hide_source
-        # Longest first, so a value that contains another is masked whole.
-        self._secrets = sorted({s.encode() for s in secrets if s}, key=len, reverse=True)
+        # Whether this stream may carry the "source lines hidden" line. Only
+        # stderr: a tool's stdout is often its ANSWER (JSON), and a line added
+        # to it would make it unparseable.
+        self._hint = hint
+        # The filter works per line, so a multi-line value (a private key, a
+        # service-account JSON) is also masked line by line. Longest first, so
+        # a value that contains another is masked whole.
+        parts = {s for s in secrets if s}
+        for value in list(parts):
+            parts.update(
+                line.strip() for line in value.splitlines() if len(line.strip()) >= _MIN_PART
+            )
+        self._secrets = sorted({s.encode() for s in parts}, key=len, reverse=True)
         self._keep = max((len(s) for s in self._secrets), default=1) - 1
         self._pending = b""
-        self._in_traceback = False
+        # The column of the line that introduced a quote (a frame, a warning),
+        # or None when the current line is not under one.
+        self._quoted_under: int | None = None
         self._hid = False
 
     def feed(self, chunk: bytes) -> bytes:
         self._pending += chunk
         out: list[bytes] = []
         start = 0
-        for i, byte in enumerate(self._pending):
-            if byte in (0x0A, 0x0D):  # \n, \r
-                out.append(self._line(self._pending[start : i + 1]))
-                start = i + 1
+        # Searched, not walked byte by byte in Python: a tool's output is all
+        # of it on this path, and a per-byte loop held it to ~3 MB/s.
+        for end in _LINE_END.finditer(self._pending):
+            out.append(self._line(self._pending[start : end.end()]))
+            start = end.end()
         self._pending = self._pending[start:]
         if len(self._pending) > _HOLD:
             # Mask FIRST, then hold back the tail: after masking, the only
@@ -65,11 +89,10 @@ class ToolOutputFilter:
     def flush(self) -> bytes:
         rest = self._line(self._pending) if self._pending else b""
         self._pending = b""
-        if self._hid:
-            rest += (
-                f"[source lines of this traceback are hidden; add {self._tool} to "
-                "TOOL_DEBUG to show them]\n"
-            ).encode()
+        if self._hid and self._hint:
+            # Not naming the switch that unhides them: the agent reads this
+            # line, and the docs are where a person learns it.
+            rest += f"[{self._tool}: source lines in this output are hidden]\n".encode()
             self._hid = False
         return rest
 
@@ -80,18 +103,22 @@ class ToolOutputFilter:
         return self._mask(line)
 
     def _drops(self, line: bytes) -> bool:
-        if line.startswith(_TRACEBACK):
-            self._in_traceback = True
+        body = line.rstrip(b"\r\n")
+        if not body:
+            # A bare line end — CRLF arrives as "…\r" then "\n" — or a blank:
+            # neither starts nor ends a quote.
             return False
-        if not self._in_traceback:
+        if frame := _FRAME.match(body):
+            self._quoted_under = len(frame.group(1))
             return False
-        if line.startswith(_FRAME):
+        if _WARNING.match(body):
+            self._quoted_under = 0
             return False
-        if line.startswith(_SOURCE):
+        if self._quoted_under is not None and _column(body) > self._quoted_under:
             return True
-        # The exception line, a blank, or "During handling…": the traceback is
-        # over (a chained one starts again with its own header).
-        self._in_traceback = False
+        # The exception line, a group's separator, "During handling…": the
+        # quote is over (the next frame starts another).
+        self._quoted_under = None
         return False
 
     def _mask(self, data: bytes) -> bytes:
@@ -104,3 +131,8 @@ def tool_debug_names(env: dict[str, str]) -> set[str]:
     """`TOOL_DEBUG=a, b` → `{"a", "b"}` — read from the env the tool is given,
     whatever layer set it (the user decided: not this hop's business)."""
     return {n.strip() for n in env.get("TOOL_DEBUG", "").split(",") if n.strip()}
+
+
+def _column(line: bytes) -> int:
+    """Where the text starts, past spaces and an exception group's `|` margin."""
+    return len(line) - len(line.lstrip(b" |"))

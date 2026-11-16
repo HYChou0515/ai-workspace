@@ -234,13 +234,23 @@ def _third_party_from_shell(
     from ..tooling.registry import model_tool_name
 
     said = " ".join(cmd) + "\n" + stderr
-    for pkg in actx.packages or ():
-        if not pkg.third_party or f".tools/{pkg.name}" not in said:
+    # Every bundle the host hides: the third-party tools, and anything else
+    # mounted from the same store — an `{artifact: url}` view plugin is, and is
+    # not in `packages` (the rule `registry._mounted_from_the_third_party_store`
+    # applies to dispatch).
+    calls_of = {
+        p.name: [f"`{model_tool_name(p, c)}`" for c in p.commands]
+        for p in actx.packages or ()
+        if p.third_party
+    }
+    for name in [*calls_of, *(actx.sandbox_spec.tools or {})]:
+        # The whole name: `.tools/erpnext` is not `erp`.
+        if not re.search(rf"\.tools/{re.escape(name)}(?![\w.-])", said):
             continue
-        calls = ", ".join(f"`{model_tool_name(pkg, c)}`" for c in pkg.commands)
+        calls = ", ".join(calls_of.get(name, ()))
         how = f" ({calls})" if calls else ""
         return (
-            f"`{pkg.name}` is a third-party tool: it runs only through its tool call{how}, "
+            f"`{name}` is a third-party tool: it runs only through its tool call{how}, "
             "never from the shell — its files are not readable here, by design."
         )
     return None

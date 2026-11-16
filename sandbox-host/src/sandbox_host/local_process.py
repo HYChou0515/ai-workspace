@@ -55,6 +55,7 @@ from .protocol import (
     check_preview_key,
 )
 from .tool_cache import BUILTIN_DIR, EXT_DIR
+from .tool_env import scrub_tool_env
 from .tool_output import ToolOutputFilter, tool_debug_names
 from .tool_secrets import SECRETS_FILE, SecretsError, open_sealed
 from .walk import scandir_lister, walk_tree
@@ -502,7 +503,12 @@ _TOOL_HOME = ".tool-home"
 #: user's wishes: for a command run `as_tool`, these are the exec path's and the
 #: caller's variables do NOT win over them. Every other name keeps the
 #: precedence tools have always had (the caller's value wins).
-_TOOL_PINNED = ("HOME", "SANDBOX_HOME", "PYTHONNOUSERSITE", "PYTHONSAFEPATH")
+_TOOL_PINNED = ("HOME", "SANDBOX_HOME", "PYTHONNOUSERSITE", "PYTHONSAFEPATH", "PATH")
+#: A tool command's PATH: the system's, and nothing the agent can write. The
+#: sandbox's own PATH starts with the `python` shim, which can route to the
+#: project venv the agent fills — a tool that runs `python` by name would run
+#: whatever was planted there.
+_TOOL_PATH = "/usr/local/bin:/usr/bin:/bin"
 
 
 # #775: where `uv sync` builds the workspace's own environment. A sibling of
@@ -1095,6 +1101,27 @@ class LocalProcessSandbox:
           sandbox for that item is filling breaks its `uv sync` with EACCES.
         """
 
+    def _refuse_tool_exec(self, handle: SandboxHandle, cmd: list[str], as_tool: str) -> str | None:
+        """Why this is not a tool call, or None when it is one: exactly
+        `../.tools/<as_tool>/launch <command> <args>` — the argv the app's
+        dispatch (`tooling.registry._exec_tool`) builds — for a tool this
+        sandbox mounts from the THIRD-PARTY store. A first-party tool is never
+        run as the tool identity (its files are readable by the sandbox anyway,
+        so asking for it can only be reaching for the identity)."""
+        if as_tool in ("", ".", "..") or "/" in as_tool:
+            return f"{as_tool!r} is not a tool name"
+        if len(cmd) != 3 or cmd[0] != f"../.tools/{as_tool}/launch":
+            return "the command must be its launcher, a command name and its arguments"
+        if self._tools_dir is None:
+            return "this host mounts no tools"
+        try:
+            target = (self._require(handle) / _TOOLS_VIEW / as_tool).resolve(strict=True)
+        except OSError:
+            return "not mounted in this sandbox"
+        if target.parent != (self._tools_dir / EXT_DIR).resolve():
+            return "not a third-party tool"
+        return None
+
     def _tool_secrets(self, handle: SandboxHandle, as_tool: str) -> dict[str, str]:
         """The credentials the platform hands this tool, `{name: value}`
         (docs/plan-tool-identity-secrets.md P4). Given to the tool's process in
@@ -1104,8 +1131,6 @@ class LocalProcessSandbox:
         this service, which may read the third-party store; the tool's own uid
         could, too, but only ciphertext is there. A bundle with no sealed file
         has none, which is every tool built before P4."""
-        if as_tool in ("", ".", "..") or "/" in as_tool:
-            raise SecretsError(f"{as_tool!r} is not a tool name")
         if self._tools_dir is None:
             return {}
         try:
@@ -1306,6 +1331,20 @@ class LocalProcessSandbox:
         exec_timeout: float | None = None,
         as_tool: str | None = None,
     ) -> ExecResult:
+        if as_tool is not None:
+            # Enforced HERE, not trusted from the caller: this API has no
+            # authentication and a sandbox shares the pod's network, so the
+            # agent can send `as_tool` itself. Whatever it sends, an `as_tool`
+            # exec can only be what a tool call is.
+            if (why := self._refuse_tool_exec(handle, cmd, as_tool)) is not None:
+                return ExecResult(
+                    exit_code=126,
+                    stdout=b"",
+                    stderr=(
+                        f"{as_tool}: refused — a tool runs only its own launcher ({why})\n"
+                    ).encode(),
+                )
+            env = scrub_tool_env(env or {})
         argv, sub_cwd, base_env = self._exec_argv(handle, cmd, as_tool=as_tool)
         # A caller may name its own TOTAL wall-clock budget for one command.
         # `uv sync` does: a cold start downloads a whole dependency stack, and
@@ -1345,7 +1384,7 @@ class LocalProcessSandbox:
             secrets = list(granted.values())
             hide = as_tool not in tool_debug_names(env)
             filters = (
-                ToolOutputFilter(tool=as_tool, hide_source=hide, secrets=secrets),
+                ToolOutputFilter(tool=as_tool, hide_source=hide, secrets=secrets, hint=False),
                 ToolOutputFilter(tool=as_tool, hide_source=hide, secrets=secrets),
             )
         try:

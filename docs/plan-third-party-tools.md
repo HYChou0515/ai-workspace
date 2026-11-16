@@ -1,5 +1,7 @@
 # 第三方 tool 散布：作者跑自己的 CI，新 sandbox 自動帶上
 
+> 被 #1024（plan-tool-identity-secrets.md）推翻
+
 > Issue: [#674](https://github.com/HYChou0515/ai-workspace/issues/674)。
 > 狀態：**P1–P18 全部實作完成**（見 §7 每個 phase 的核對）。
 

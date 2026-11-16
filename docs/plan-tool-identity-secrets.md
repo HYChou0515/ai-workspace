@@ -100,7 +100,7 @@
 - app 端的三種後端（local／docker／mock）本來就不掛第三方工具（`SandboxSpec.tools` 註明忽略），所以只接受這個參數、不做事；換身分只在 sandbox-host。
 - **沙盒介面加一個「以工具身分執行」的選項。** 只有 `tooling/registry.py:_exec_tool` 在啟動**第三方**工具時會設（AI 的工具呼叫、WUI 的 `callTool`／`startTool` 都走這一條）；AI 的 `exec` 工具沒有任何參數碰得到它。每一種沙盒後端都要認得這個選項。
 - 啟動沿用 `_setpriv_cgroup_argv`，只換身分——工具仍在 item 的 cgroup 裡（資源限制、計費不變），回收沙盒時 `cgroup.kill` 一樣砍得到。
-- 沒有 root 的本機開發模式做不到切換身分：照現在的方式跑，啟動時在 log 寫一行說明〔user：本機模式用不到〕。
+- 沒有 root 的本機開發模式做不到切換身分：照現在的方式跑〔user：本機模式用不到〕。施工時查到：app 端的本機後端根本不掛第三方工具，所以沒有什麼要說明；sandbox-host 在沒有工具群組時（只有測試會這樣建）啟動時 log 一行 warning。
 
 ### 2. 檔案
 
@@ -115,7 +115,7 @@
 ### 3. 工具的程序裡不能有 AI 寫得到的程式
 
 - HOME 換成工具自己的之後，啟動腳本讀的「使用者安裝資料夾」就落在 AI 寫不進去的地方——不必重新打包既有的工具。
-- 交給第三方工具的環境變數濾掉會改變「從哪裡載入程式」的名字（`registry._LOADER_NAMES`：`PYTHON*`、`LD_*`、`SANDBOX_*`、`BASH_FUNC_*`、`HOME`、`PATH`、`BASH_ENV`、`NODE_OPTIONS` 等，參照 sudo 的 `env_delete` 預設），並從啟動腳本還原用的名單（`SANDBOX_USER_ENV_KEYS`）一起拿掉——否則腳本會把它還原成空值。其餘使用者設的變數照舊交給工具。
+- 交給第三方工具的環境變數濾掉會改變「從哪裡載入程式、流量走哪、信任誰」的名字，並從啟動腳本還原用的名單（`SANDBOX_USER_ENV_KEYS`）一起拿掉——否則腳本會把它還原成空值。其餘使用者設的變數照舊交給工具。**review 第 1 輪後改在 sandbox-host 做**（`sandbox_host/tool_env.py`，不分大小寫，含 `OPENSSL_*`、`SSL_*`、`*_PROXY`、`REQUESTS_CA_BUNDLE`、`GIT_*`、`PIP_*`、`UV_*`、`NODE_*`、`TMPDIR` 等）：原本在 app 做，但 host 的 API 可以不經 app 直接呼叫。工具的 `PATH` 固定是系統的，也不帶任何指向 AI 的 venv 的變數。
 - sandbox-host 對工具指令固定 `HOME`／`SANDBOX_HOME`＝`.tool-home`、`PYTHONNOUSERSITE=1`、`PYTHONSAFEPATH=1`，呼叫端傳來的同名變數蓋不過它們（`_TOOL_PINNED`）。
 
 ### 4. 帳密
@@ -144,12 +144,21 @@
 
 | # | 狀況 | 重開沙盒能解決嗎 | 處理 |
 |---|---|---|---|
-| 1 | 上線當下還開著的舊沙盒沒有工具身分的 ACL 與 HOME，第三方工具會失敗 | 能 | 啟動工具前發現缺就補上，或重開 |
-| 2 | 第三方工具建成「只有自己能讀」的檔案（`0600`），使用者改不了 | 不能 | 少見；需要時平台在工具結束後修正 |
+| 1 | ~~上線當下還開著的舊沙盒沒有工具身分~~ 不會發生（P1 查證）：沙盒的身分只存在 host 記憶體，host 重啟後全部重建 | — | — |
+| 2 | 兩個身分靠 ACL 共用工作區，而 `chmod`／解壓縮會縮小 ACL 的 mask：工具寫不進 AI 解壓出來的資料夾；工具留下的 `0600` 檔 AI 讀不到 | — | **review 第 1 輪處理**（regression 以 root 實測）：每次第三方工具呼叫**前**重套 ACL、**後**把擁有者交還沙盒身分 |
+| 2b | 每次第三方工具呼叫前後各掃一次工作區 | 不能 | 工作區檔案多（`node_modules`）時每次呼叫會慢一點；換來兩個身分都碰得到所有檔案 |
 | 3 | 權限改錯會讓 mcp-runner 進不了工具目錄 | 不能 | 測試擋 |
 | 4 | 一台主機可同時開的沙盒上限減半（每個沙盒佔兩個 uid） | 不能 | 預設池約十萬個號碼，減半後仍遠大於一台主機開得起的數量；寫進升級手冊 |
 | 5 | 在平台上替第三方工具除錯，看不到原始碼行 | 不能（設計如此） | `TOOL_DEBUG` 或本機 mcp-runner |
 | 6 | **新 sandbox-host 配舊 app**（滾動的空檔、只回滾 app）：每支第三方工具 Permission denied——舊 app 不送 `as_tool`，host 分不出它和 AI 的 shell | 不能 | 先升 app、再升 host；回滾反過來（升級手冊 #pr-1024） |
+
+## Review 第 1 輪（四個面向平行，2026-11-16）
+
+最嚴重：**critical**——AI 可以從沙盒裡直接打 sandbox-host 的 API、自己帶 `as_tool`，拿到工具身分的 shell（帳密、原始碼都拿得到；defect 面向實際重現）。修法：**host 自己檢查**——帶 `as_tool` 的請求只接受「那支工具的 launcher + 指令名 + 參數」、且工具必須是從第三方倉庫掛進這個沙盒的；環境變數也在 host 清。API 沒有認證本身是原本就有的問題（可以對別的 item 下指令），不在這次範圍，已在部署文件寫明。
+
+其他已修：環境變數黑名單太窄（`OPENSSL_CONF` 可在工具程序裡跑程式碼，已實測）；traceback 過濾漏了 exception group、warning、SyntaxError、CRLF；多行帳密沒遮；工具用名字呼叫 `python` 會走到 AI 的 venv；ACL mask（上表 #2）；建立失敗時 uid 外洩；host 範圍太小沒擋；`TOOL_DEBUG` 可被 AI 用卡片要；`erpnext` 被當成 `erp`；提示行弄壞 stdout 的 JSON；`cryptography` 下限；五個沒有測試守住的保證補上測試並各自以突變驗證；過濾器吞吐量（約 2.7 → 61 MB/s）。
+
+收窄的說法：「其他工具都拿不到帳密」不成立——同一個 item 的第三方工具共用同一個工具身分；文件改成「AI 和使用者拿不到」，並寫明不防別的工具作者（惡意作者本來就不在範圍）。
 
 ## 這次不管的〔user〕
 
@@ -159,7 +168,7 @@
 
 ## 上線前要先驗證（沒做完不動工）
 
-1. ~~線上有開 per-item 身分隔離~~ **已確認（2026-11-16）**：user 在線上兩個 item 執行 `id -u`，得到 199989 與 199992——每個 item 身分不同。數字遠小於預設的起算點（一百萬），代表線上的 `uid_base`／`uid_range` 改過、可用範圍小。
+1. ~~線上有開 per-item 身分隔離~~ **已確認（2026-11-16）**：user 在線上兩個 item 執行 `id -u`，得到 199989 與 199992——每個 item 身分不同。（施工時查到：這兩個數字落在 sandbox-host 預設的 uid 池 100000–199999 的頂端——池子從最上面配；「一百萬」是 app 端本機後端的設定，與線上無關。）
 2. staging 上：兩個身分互相建立的檔案（含資料夾、含從備份還原的）彼此都能讀寫。
 3. 作者的 GitLab CI 讀得到 CI/CD Variables 並交給 builder（受保護的變數只在受保護分支出現）。
 4. mcp-runner 在新的權限下照常能跑。

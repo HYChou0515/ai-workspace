@@ -1,7 +1,9 @@
 """A third-party tool is dispatched AS ITSELF (docs/plan-tool-identity-secrets.md
 P1): the platform names the tool on the exec, so a backend with a second identity
-runs it as that one, and its environment carries none of the user's names that
-decide where code is loaded from.
+runs it as that one. What that exec may contain — its argv, which of the user's
+names reach it — is the sandbox host's to enforce
+(`sandbox-host/tests/test_as_tool_is_enforced_here.py`), because its API can be
+called without this app.
 
 First-party tools, `python` and view plugins are out of scope and must behave
 exactly as before — so each assertion here has its first-party twin.
@@ -70,39 +72,14 @@ _LOADERS = {
 }
 
 
-def test_a_third_party_tool_gets_none_of_the_users_loader_names():
-    """A name that decides where code is loaded from is a way to run the agent's
-    code inside the tool, beside its credentials. Dropped from the values AND from
-    the list the launcher restores from — or the launcher would restore it as
-    empty over its own."""
-    env = _tool_env({**_LOADERS, "ERP_TOKEN": "t"}, item_id="inv", third_party=True)
-    for name in _LOADERS:
-        assert name not in env, name
-    assert env["ERP_TOKEN"] == "t"
-    assert env["SANDBOX_USER_ENV_KEYS"].split() == ["ERP_TOKEN"]
-    assert env["WORKSPACE_ITEM_ID"] == "inv"
-
-
-def test_a_third_party_tool_with_only_loader_names_gets_no_key_list():
-    env = _tool_env({"PYTHONPATH": "/root/evil"}, item_id="inv", third_party=True)
-    assert env == {"WORKSPACE_ITEM_ID": "inv"}
-
-
-def test_a_first_party_tool_still_gets_every_name_the_user_set():
-    """#581 / the reserved-names decision: for the platform's own tools the user
-    wins, PYTHONPATH and HOME included."""
+def test_the_app_hands_every_name_the_user_set_to_the_host():
+    """#581 / the reserved-names decision: the user wins for the platform's own
+    tools, PYTHONPATH and HOME included — and the app no longer filters for a
+    third-party one either; the host does (one rule, one place)."""
     env = _tool_env({**_LOADERS, "ERP_TOKEN": "t"}, item_id="inv")
     for name, value in _LOADERS.items():
         assert env[name] == value
     assert set(env["SANDBOX_USER_ENV_KEYS"].split()) == {*_LOADERS, "ERP_TOKEN"}
-
-
-@pytest.mark.asyncio
-async def test_the_dispatch_applies_the_third_party_filter():
-    sandbox = await _dispatch(_THIRD, {"PYTHONPATH": "/root/evil", "ERP_TOKEN": "t"})
-    sent = sandbox.exec_envs[-1]
-    assert "PYTHONPATH" not in sent
-    assert sent["ERP_TOKEN"] == "t"
 
 
 @pytest.mark.asyncio
@@ -139,7 +116,6 @@ async def test_an_artifact_view_plugin_runs_as_the_tool_identity():
     as the sandbox uid it could no longer read its own files."""
     sandbox = await _plugin_dispatch({"wafermap": "a" * 64})
     assert sandbox.exec_as_tools[-1] == "wafermap"
-    assert "PYTHONPATH" not in sandbox.exec_envs[-1]
 
 
 @pytest.mark.asyncio

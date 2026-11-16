@@ -9,7 +9,7 @@ dependencies = [
     "croniter==6.2.4",
     # Signs and checks the size-limit certificates in tooling/grant.py. It was
     # already here by way of other packages; declared now because we import it.
-    "cryptography>=44",
+    "cryptography>=47",  # `hazmat.primitives.hpke` (tool_secrets.py) is new in 47
     "docker>=7.1.0",
     "docx2txt>=0.9",
     "ipykernel>=7.2.0",

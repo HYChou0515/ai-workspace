@@ -1252,10 +1252,22 @@ opencode 的變數替換是 `{env:VAR}`（**不是** `${PWD}`），而且變數�
   在同一個 cgroup 裡（資源上限、計費不變），有自己的 HOME（`.tool-home`）。workspace 的 ACL 同時給兩個 uid，
   所以工具寫的檔案使用者和 AI 照樣能改、能刪。
 - **池子容量減半**：每個沙盒佔兩個 uid。預設池約十萬個號碼，一台主機開得起的沙盒遠少於五萬，所以通常不用動；
-  自己把池子設得很小的部署要確認夠用。
+  自己把池子設得很小的部署要確認夠用。範圍小於三個號碼（群組 + 一個沙盒的兩個 uid）時 host 直接起不來，
+  訊息會指名 `SANDBOX_HOST_UID_MIN`。
+- **host 自己檢查「以工具身分執行」的請求**：host 的 API 沒有認證、沙盒和 pod 共用網路，所以 AI 可以自己打
+  `/sandboxes/<id>/exec`。帶 `as_tool` 的請求只接受「那支工具自己的 launcher + 指令名 + 參數」、而且那支工具
+  必須是從第三方倉庫掛進這個沙盒的；其他一律 exit 126。呼叫端給的環境變數也在 host 這裡清掉會改變載入行為、
+  流量或信任的名字（`sandbox_host/tool_env.py`）。⚠️ 這個 API 沒有認證是**原本就有**的問題（例如可以對別的
+  item 的沙盒下指令），這次沒有處理。
+- **每次第三方工具呼叫前後各掃一次工作區**：之前重新套用 ACL（`chmod`、解壓縮會把 ACL 的 mask 縮小，工具就
+  寫不進去），之後把工具建的檔案擁有者交還給沙盒身分（不然 AI 讀不到工具留下的 0600 檔、也不能 chmod）。
+  工作區檔案很多時（例如 `node_modules`）每次第三方工具呼叫會多一點時間。
 - **工具群組 = `SANDBOX_HOST_UID_MIN`**：池子的第一個號碼保留給群組，沙盒 uid 從下一個開始配。
   第三方 bundle（`$SANDBOX_HOST_TOOLS_DIR/ext/<sha>`）改成 `root:<這個群組>`、其他人不可讀；
   **升級前已解開的 bundle 在 host 啟動時重設一次**，不用手動處理。`builtin/` 不變。
+  ⚠️ 如果你把 `SANDBOX_HOST_TOOLS_DIR` 放在持久化的 volume 上（預設在映像裡，不會留下來），**回滾 host
+  之後**舊 host 會沿用已經改成只有工具群組讀得到的 bundle，第三方工具會 Permission denied——回滾後清掉
+  `ext/` 讓它重新下載。
 - `/healthz` 的 `capabilities` 裡有 `tool-identity` 就是新版。
 
 **工具自己的帳密**（作者那邊怎麼做見 [寫一支工具](tool-authoring.md) 的「不要把帳密寫在程式裡」）：

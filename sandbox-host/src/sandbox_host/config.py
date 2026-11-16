@@ -15,7 +15,9 @@ from dataclasses import dataclass
 @dataclass(frozen=True)
 class SandboxHostSettings:
     """Wraps an `IsolatedProcessSandbox`: each handle runs as a pooled numeric
-    uid (`uid_min..uid_max`) under a cgroup capped by `memory_max` (e.g. "512M")
+    uid, and its third-party tools as a second one (`uid_min` itself is the tool
+    group, so the pool is `uid_min+1..uid_max`; docs/plan-tool-identity-secrets.md)
+    under a cgroup capped by `memory_max` (e.g. "512M")
     / `cpu_cores` / `pids_max`. `cgroup_root` is the delegated cgroup v2 subtree
     (None = auto-detect this pod's own). `tools_dir` is the prebuilt-tools dir
     bind-mounted read-only into each sandbox at `/.tools` (None = no tools).

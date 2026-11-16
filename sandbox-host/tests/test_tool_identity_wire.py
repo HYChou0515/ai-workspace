@@ -61,3 +61,21 @@ def test_the_production_host_reserves_the_pools_first_id_as_the_tool_group(tmp_p
     assert sb._tool_gid == 200000
     handed_out = {sb._pool.alloc()[0] for _ in range(3)}
     assert handed_out == {200001, 200002, 200003}
+    # …and nothing else: the group id is never in the pool, so no sandbox's
+    # primary gid can be the one that reads every third-party bundle.
+    import pytest
+
+    with pytest.raises(RuntimeError, match="exhausted"):
+        sb._pool.alloc()
+
+
+def test_a_pool_too_small_for_one_sandbox_stops_the_host(tmp_path):
+    """Review round 1: the bottom id is the tool group and each sandbox takes
+    two uids, so MIN..MIN+1 — which used to run one sandbox — now runs none.
+    Refused at startup, where the operator is looking, rather than at the first
+    create."""
+    import pytest
+
+    hs = SandboxHostSettings(uid_min=200000, uid_max=200001, cgroup_root=str(tmp_path / "cg"))
+    with pytest.raises(ValueError, match="SANDBOX_HOST_UID_MIN"):
+        build_sandbox(hs)

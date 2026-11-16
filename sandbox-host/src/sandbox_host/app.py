@@ -267,13 +267,12 @@ async def _exec_ndjson(
 
     async def run() -> None:
         try:
+            # Named only when set, the shape `exec_timeout`'s caller in the app
+            # uses: a backend that predates the keyword still runs every command
+            # that is not a third-party tool.
+            extra = {} if as_tool is None else {"as_tool": as_tool}
             result = await sandbox.exec(
-                handle,
-                cmd,
-                on_output=on_output,
-                env=env,
-                exec_timeout=exec_timeout,
-                as_tool=as_tool,
+                handle, cmd, on_output=on_output, env=env, exec_timeout=exec_timeout, **extra
             )
             queue.put_nowait(("done", result))
         except Exception as exc:  # noqa: BLE001 — relayed in-band as an error frame

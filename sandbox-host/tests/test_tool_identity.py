@@ -151,9 +151,12 @@ async def test_the_callers_env_cannot_move_a_tools_home(tooled, monkeypatch):
         raise FileNotFoundError
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_spawn)
+    # No tool is mounted in this fixture; what an as_tool exec may be is pinned
+    # in test_as_tool_is_enforced_here.py. This test is about HOME only.
+    monkeypatch.setattr(sb, "_refuse_tool_exec", lambda *_a: None)
     await sb.exec(
         h,
-        ["../.tools/erp/launch"],
+        ["../.tools/erp/launch", "q", "{}"],
         env={"HOME": "/root/evil", "SANDBOX_HOME": "/root/evil", "PYTHONNOUSERSITE": "0"},
         as_tool="erp",
     )
@@ -197,3 +200,102 @@ async def test_without_a_tool_group_a_tool_command_runs_as_the_sandbox(tmp_path,
     argv, _cwd, _env = sb._exec_argv(h, ["true"], as_tool="erp")
     assert f"--reuid={os.getuid()}" in argv
     assert "--clear-groups" in argv
+
+
+async def test_a_restore_gets_both_identities_acl_back(tooled):
+    """Review round 1 (F1). A restore writes the archive back with its own
+    modes, and setting a mode on a file with an ACL shrinks its mask — the tool
+    uid's entry then grants nothing, down to the workspace root itself (archived
+    0700). `reown` runs after every restore; it re-applies the ACL for both
+    identities, which recomputes every mask."""
+    sb, acl, _owned = tooled
+    h = await sb.create(SandboxSpec())
+    ident = sb._identities[h.id]
+    assert ident.tool_uid is not None
+    acl.clear()
+    await sb.reown(h)
+    assert acl == [_acl_argv(sb._workspace(h), ident.uid, ident.tool_uid)]
+
+
+async def test_a_failed_create_gives_back_every_uid_and_leaves_no_dir(tmp_path, monkeypatch):
+    """Review round 1: a pool with room for the sandbox uid but not the tool's
+    raised after taking the first one, which was then never freed."""
+    sb = IsolatedProcessSandbox(
+        root_dir=tmp_path / "sb",
+        cgroup_root=tmp_path / "cg",
+        uid_min=os.getuid(),
+        uid_max=os.getuid(),
+        tool_gid=TOOL_GID,
+        acl_runner=lambda argv: None,
+        chown_runner=lambda p, u: None,
+    )
+    with pytest.raises(RuntimeError, match="exhausted"):
+        await sb.create(SandboxSpec())
+    assert sb._pool._used == set()
+    assert list((tmp_path / "sb").iterdir()) == []
+
+
+async def test_a_create_that_fails_later_gives_its_uids_back_too(tooled, monkeypatch):
+    sb, _acl, _owned = tooled
+
+    def boom(*_a, **_k):
+        raise OSError("setfacl failed")
+
+    monkeypatch.setattr(sb, "_provision", boom)
+    with pytest.raises(OSError):
+        await sb.create(SandboxSpec())
+    assert sb._pool._used == set()
+
+
+async def test_around_a_tool_call_both_identities_get_the_workspace_back(tooled, monkeypatch):
+    """Review round 1 (regression, verified as root): a mode set after creation
+    — `chmod 644`, or an archive the agent unpacked — shrinks the ACL mask, so the
+    tool could no longer write there; and a file the tool made 0600 the agent
+    could neither read nor chmod. So, around every tool call: the ACL goes on
+    again BEFORE it (every mask recomputed), and everything is handed back to the
+    sandbox uid AFTER it (`reown`, the mechanism every restore already uses)."""
+    sb, acl, _owned = tooled
+    h = await sb.create(SandboxSpec())
+    ident = sb._identities[h.id]
+    assert ident.tool_uid is not None
+    ws = sb._workspace(h)
+    (ws / "made-by-the-tool.csv").write_text("x")
+    order: list[str] = []
+    acl.clear()
+    monkeypatch.setattr(sb, "_acl_runner", lambda argv: order.append("acl"))
+    monkeypatch.setattr(
+        sb, "_chown_runner", lambda path, uid: order.append(f"chown {path.name} {uid}")
+    )
+    monkeypatch.setattr(sb, "_refuse_tool_exec", lambda *_a: None)
+
+    async def fake_spawn(*_argv, **_kw):
+        order.append("run")
+        raise FileNotFoundError
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_spawn)
+    await sb.exec(h, ["../.tools/erp/launch", "q", "{}"], as_tool="erp")
+
+    assert order.index("acl") < order.index("run")
+    assert f"chown made-by-the-tool.csv {ident.uid}" in order[order.index("run") :]
+
+
+async def test_a_refused_tool_call_touches_nothing(tooled, monkeypatch):
+    """Not a walk of the workspace for every request the agent sends itself."""
+    sb, acl, _owned = tooled
+    h = await sb.create(SandboxSpec())
+    acl.clear()
+    chowns: list[object] = []
+    monkeypatch.setattr(sb, "_chown_runner", lambda path, uid: chowns.append(path))
+    result = await sb.exec(h, ["sh", "-c", "id"], as_tool="erp")
+    assert result.exit_code == 126
+    assert acl == [] and chowns == []
+
+
+async def test_the_agents_own_command_walks_nothing(tooled, monkeypatch):
+    sb, acl, _owned = tooled
+    h = await sb.create(SandboxSpec())
+    acl.clear()
+    chowns: list[object] = []
+    monkeypatch.setattr(sb, "_chown_runner", lambda path, uid: chowns.append(path))
+    await sb.exec(h, ["true"])
+    assert acl == [] and chowns == []

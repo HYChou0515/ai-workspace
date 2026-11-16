@@ -73,8 +73,9 @@ def build_tool_resolver(settings: SandboxHostSettings) -> ToolResolver | None:
     if tools is None or not builder_id:
         return None
     cache = ToolCache(tools / EXT_DIR, harden=_GroupHardener(tool_group(settings)))
-    # Bundles this host unpacked under the old rule (readable by any uid) stay
-    # on disk across a restart; bring them under the tool group before serving.
+    # Bundles unpacked under the old rule (readable by any uid) stay on disk
+    # across a restart when the tools dir is a volume (in the image's own layer
+    # they do not); bring any there are under the tool group before serving.
     cache.reharden_installed()
     return ToolResolver(
         cache,
@@ -101,6 +102,14 @@ def load_tool_secret_key(settings: SandboxHostSettings) -> X25519PrivateKey | No
 
 
 def build_sandbox(settings: SandboxHostSettings) -> IsolatedProcessSandbox:
+    # The bottom id is the tool group and every sandbox takes two uids, so a
+    # range that used to run one sandbox (MIN..MIN+1) now runs none. Say so here.
+    if settings.uid_max - tool_group(settings) < 2:
+        raise ValueError(
+            f"SANDBOX_HOST_UID_MIN..SANDBOX_HOST_UID_MAX ({settings.uid_min}..{settings.uid_max}) "
+            "is too small: the first id is the tool group and each sandbox takes two uids, "
+            "so it needs at least three ids"
+        )
     return IsolatedProcessSandbox(
         tool_secret_key=load_tool_secret_key(settings),
         # See `tool_group`: the pool starts one above it.

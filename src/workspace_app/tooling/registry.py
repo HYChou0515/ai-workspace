@@ -599,7 +599,7 @@ async def _exec_tool(
     """
     assert actx.sandbox is not None  # a provisioned tool implies a sandbox
     third_party = _mounted_from_the_third_party_store(actx, pkg)
-    env = _tool_env(actx.user_env, item_id=actx.investigation_id, third_party=third_party)
+    env = _tool_env(actx.user_env, item_id=actx.investigation_id)
     argv = [f"{pkg.install_dir}/launch", cmd_name, args_json or "{}"]
     # Named only when given: every other caller keeps the sandbox's own cap.
     budget: dict[str, Any] = {} if exec_timeout is None else {"exec_timeout": exec_timeout}
@@ -657,43 +657,7 @@ def _mounted_from_the_third_party_store(actx: AgentToolContext, pkg: PackageInfo
 ITEM_ID_ENV = "WORKSPACE_ITEM_ID"
 
 
-#: The user-set names a THIRD-PARTY tool never receives
-#: (docs/plan-tool-identity-secrets.md): each one decides where a process loads
-#: code from, so passing it is a way to run the agent's code inside the tool,
-#: beside its credentials. After sudo's `env_delete` defaults, narrowed to what
-#: a tool bundle or what it shells out to would honour. First-party tools keep
-#: every name — the user wins there (#581).
-_LOADER_NAMES = frozenset(
-    {
-        "HOME",
-        "PATH",
-        "BASH_ENV",
-        "ENV",
-        "SHELLOPTS",
-        "BASHOPTS",
-        "IFS",
-        "NODE_OPTIONS",
-        "NODE_PATH",
-        "PERL5LIB",
-        "PERL5OPT",
-        "PERLLIB",
-        "RUBYLIB",
-        "RUBYOPT",
-        "GCONV_PATH",
-        "LOCPATH",
-        "NLSPATH",
-    }
-)
-_LOADER_PREFIXES = ("PYTHON", "LD_", "SANDBOX_", "BASH_FUNC_")
-
-
-def _is_loader_name(name: str) -> bool:
-    return name in _LOADER_NAMES or name.startswith(_LOADER_PREFIXES)
-
-
-def _tool_env(
-    user_env: dict[str, str], *, item_id: str | None = None, third_party: bool = False
-) -> dict[str, str]:
+def _tool_env(user_env: dict[str, str], *, item_id: str | None = None) -> dict[str, str]:
     """This turn's variables, plus the list of which names they are, plus which
     item this is.
 
@@ -712,16 +676,11 @@ def _tool_env(
     say, so a person's variable of that name is dropped — from the values and
     from the list, or the launcher would restore it over the platform's last.
 
-    A THIRD-PARTY tool also loses the names that decide where code is loaded
-    from (`_LOADER_NAMES`), for the same two reasons in the same two places: a
-    value the agent can set there runs the agent's code inside the tool, and a
-    name left on the list would be restored as empty over the launcher's own.
+    A THIRD-PARTY tool's environment is scrubbed on the sandbox host, not here
+    (`sandbox_host.tool_env`): the host's API can be called without this app,
+    so a rule applied here is one a caller can skip.
     """
-    own = {
-        name: value
-        for name, value in user_env.items()
-        if name != ITEM_ID_ENV and not (third_party and _is_loader_name(name))
-    }
+    own = {name: value for name, value in user_env.items() if name != ITEM_ID_ENV}
     env = {**own, "SANDBOX_USER_ENV_KEYS": " ".join(own)} if own else {}
     if item_id:
         env[ITEM_ID_ENV] = item_id

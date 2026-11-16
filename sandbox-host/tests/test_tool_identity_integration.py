@@ -166,3 +166,45 @@ async def test_a_first_party_tool_stays_readable_by_the_agent(with_tools):
     h = await sb.create(SandboxSpec(tools=mounts))
     result = await sb.exec(h, ["cat", "../.tools/sci-plot/README"])
     assert result.exit_code == 0, result.stderr
+
+
+@requires_isolation
+async def test_modes_set_after_creation_do_not_lock_either_identity_out(with_tools):
+    """Review round 1 (regression, reproduced as root): an archive the agent
+    unpacks keeps its 644/755 modes, which shrink the ACL mask, and a tool that
+    writes atomically leaves a 0600 file. Around each tool call the ACL is
+    re-applied before and ownership handed back after, so both still work."""
+    sb, mounts = with_tools
+    h = await sb.create(SandboxSpec(tools=mounts))
+    setup = await sb.exec(
+        h,
+        [
+            "sh",
+            "-c",
+            "mkdir -p data && echo in > data/in.csv && chmod 755 data && chmod 644 data/in.csv",
+        ],
+    )
+    assert setup.exit_code == 0, setup.stderr
+    ws = sb._workspace(h)
+    # The bundle's launcher only echoes; the tool's own writes are simulated by
+    # the host as the tool uid — what matters is what each uid can do after.
+    tool = await sb.exec(h, ["../.tools/erp/launch", "q", "{}"], as_tool="erp")
+    assert tool.exit_code == 0, tool.stderr
+    ident = sb._identities[h.id]
+    os.setegid(ident.tool_uid)
+    os.seteuid(ident.tool_uid)
+    try:
+        (ws / "data" / "out.csv").write_text("out")
+        (ws / "data" / "in.csv").write_text("rewritten")
+        fd = os.open(ws / "atomic.tmp", os.O_WRONLY | os.O_CREAT, 0o600)
+        os.write(fd, b"result")
+        os.close(fd)
+    finally:
+        os.seteuid(0)
+        os.setegid(0)
+    await sb.reown(h)
+    agent = await sb.exec(
+        h, ["sh", "-c", "cat atomic.tmp && chmod 644 atomic.tmp && cat data/out.csv"]
+    )
+    assert agent.exit_code == 0, agent.stderr
+    assert agent.stdout == b"resultout"

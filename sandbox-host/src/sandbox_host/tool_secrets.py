@@ -6,7 +6,9 @@ name `"secret": true` in `env.json`. The builder SEALS the values to every
 public key in `TOOL_SECRET_RECIPIENTS` (one per deployment: staging,
 production…) and puts the result in the bundle as `SECRETS_FILE`. The sandbox
 host OPENS the entry for its own key and hands the values to that tool's
-process only — never to the agent, the user, or another tool.
+process only — never to the agent or the user. (Every third-party tool in one
+item runs as the same tool identity, so this does not defend one tool's
+credentials against ANOTHER tool's author; malicious authors are out of scope.)
 
 HPKE (RFC 9180), base mode, X25519 + HKDF-SHA256 + ChaCha20-Poly1305, from
 `cryptography` — a published construction, not one of ours. Each ciphertext is
