@@ -1,0 +1,1019 @@
+diff --git a/docs/deployment.md b/docs/deployment.md
+index 90e5dfcad..43f94a861 100644
+--- a/docs/deployment.md
++++ b/docs/deployment.md
+@@ -1255,7 +1255,7 @@ opencode 的變數替換是 `{env:VAR}`（**不是** `${PWD}`），而且變數
+   自己把池子設得很小的部署要確認夠用。範圍小於三個號碼（群組 + 一個沙盒的兩個 uid）時 host 直接起不來，
+   訊息會指名 `SANDBOX_HOST_UID_MIN`。
+ - **host 自己檢查「以工具身分執行」的請求**：host 的 API 沒有認證、沙盒和 pod 共用網路，所以 AI 可以自己打
+-  `/sandboxes/<id>/exec`。帶 `as_tool` 的請求只接受「那支工具自己的 launcher + 指令名 + 參數」、而且那支工具
++  `/sandboxes/<id>/exec`。帶工具名（`tool`）的請求只接受「那支工具自己的 launcher + 指令名 + 參數」、而且那支工具
+   必須是從第三方倉庫掛進這個沙盒的；其他一律 exit 126。呼叫端給的環境變數也在 host 這裡清掉會改變載入行為、
+   流量或信任的名字（`sandbox_host/tool_env.py`）。⚠️ 這個 API 沒有認證是**原本就有**的問題（例如可以對別的
+   item 的沙盒下指令），這次沒有處理。
+diff --git a/docs/migrations.md b/docs/migrations.md
+index f62e4b2c6..a78dc323d 100644
+--- a/docs/migrations.md
++++ b/docs/migrations.md
+@@ -3675,7 +3675,7 @@ AI 工具說明裡每個目標後面多了它的長度上限(沒設的寫 10 個
+ 8. 讓 item 閒置到沙盒被回收、再打開（從備份還原），重複第 6、7 步：都成功。
+ 9. （有設金鑰時）用一支 `"secret": true` 的工具：它拿得到值；輸出裡值是 `***`；環境變數面板沒有那個名字。
+ 
+-**還是舊版 image 時**：host 舊、app 新——第三方工具照舊用沙盒身分執行（`as_tool` 被忽略），AI 仍讀得到工具檔案；
++**還是舊版 image 時**：host 舊、app 新——第三方工具照舊用沙盒身分執行（`tool` 被忽略），AI 仍讀得到工具檔案；
+ `"secret"` 的值 host 不會解開。app 舊、host 新——第三方工具 Permission denied（見上面的順序）。
+ 
+ ---
+diff --git a/docs/plan-tool-identity-secrets.md b/docs/plan-tool-identity-secrets.md
+index 807e90711..8816c5f97 100644
+--- a/docs/plan-tool-identity-secrets.md
++++ b/docs/plan-tool-identity-secrets.md
+@@ -97,6 +97,7 @@
+ 
+ - 每個沙盒多一個工具身分，**從同一個 uid 池多借一個**（施工時查到：sandbox-host 是用池子配 uid，不是 app 端那種雜湊；線上的 199989／199992 正是預設池 100000–199999 的頂端）。池子本來就是 operator 留給沙盒的範圍，所以不需要新的設定鍵，也撞不到主機上的帳號。代價：每個沙盒佔兩個號碼，一台主機可同時開的沙盒上限從約十萬變約五萬。
+ - **工具群組** = 池子的第一個號碼（`uid_min`），池子改從 `uid_min + 1` 開始配——沒有任何沙盒 uid 會拿到它。
++- **沙盒介面的參數叫 `tool: bool | str`**（施工時最初叫 `as_tool`，配合 prod 版既有的 `tool` 參數改名，方便解衝突）：值是工具名稱時，host 同時做工具身分、解開密封帳密（以及 prod 版的 per-tool egress 憑證）；`True`／`False` 當一般指令。內部函式仍用 `as_tool` 這個變數名。
+ - app 端的三種後端（local／docker／mock）本來就不掛第三方工具（`SandboxSpec.tools` 註明忽略），所以只接受這個參數、不做事；換身分只在 sandbox-host。
+ - **沙盒介面加一個「以工具身分執行」的選項。** 只有 `tooling/registry.py:_exec_tool` 在啟動**第三方**工具時會設（AI 的工具呼叫、WUI 的 `callTool`／`startTool` 都走這一條）；AI 的 `exec` 工具沒有任何參數碰得到它。每一種沙盒後端都要認得這個選項。
+ - 啟動沿用 `_setpriv_cgroup_argv`，只換身分——工具仍在 item 的 cgroup 裡（資源限制、計費不變），回收沙盒時 `cgroup.kill` 一樣砍得到。
+@@ -149,7 +150,7 @@
+ 
+ ## Review 第 1 輪（四個面向平行，2026-11-16）
+ 
+-最嚴重：**critical**——AI 可以從沙盒裡直接打 sandbox-host 的 API、自己帶 `as_tool`，拿到工具身分的 shell（帳密、原始碼都拿得到；defect 面向實際重現）。修法：**host 自己檢查**——帶 `as_tool` 的請求只接受「那支工具的 launcher + 指令名 + 參數」、且工具必須是從第三方倉庫掛進這個沙盒的；環境變數也在 host 清。API 沒有認證本身是原本就有的問題（可以對別的 item 下指令），不在這次範圍，已在部署文件寫明。
++最嚴重：**critical**——AI 可以從沙盒裡直接打 sandbox-host 的 API、自己帶工具名（當時叫 `as_tool`，後來配合 prod 改名為 `tool`），拿到工具身分的 shell（帳密、原始碼都拿得到；defect 面向實際重現）。修法：**host 自己檢查**——帶 `as_tool` 的請求只接受「那支工具的 launcher + 指令名 + 參數」、且工具必須是從第三方倉庫掛進這個沙盒的；環境變數也在 host 清。API 沒有認證本身是原本就有的問題（可以對別的 item 下指令），不在這次範圍，已在部署文件寫明。
+ 
+ 其他已修：環境變數黑名單太窄（`OPENSSL_CONF` 可在工具程序裡跑程式碼，已實測）；traceback 過濾漏了 exception group、warning、SyntaxError、CRLF；多行帳密沒遮；工具用名字呼叫 `python` 會走到 AI 的 venv；ACL mask（上表 #2）；建立失敗時 uid 外洩；host 範圍太小沒擋；`TOOL_DEBUG` 可被 AI 用卡片要；`erpnext` 被當成 `erp`；提示行弄壞 stdout 的 JSON；`cryptography` 下限；五個沒有測試守住的保證補上測試並各自以突變驗證；過濾器吞吐量（約 2.7 → 61 MB/s）。
+ 
+diff --git a/sandbox-host/src/sandbox_host/app.py b/sandbox-host/src/sandbox_host/app.py
+index 7f42332d1..bab2030be 100644
+--- a/sandbox-host/src/sandbox_host/app.py
++++ b/sandbox-host/src/sandbox_host/app.py
+@@ -75,7 +75,7 @@ _CAPABILITIES = frozenset(
+         # nothing. Its absence means the app cannot know what a sandbox costs its
+         # owner and charges zero — visibly under-counting rather than guessing.
+         "resource-defaults",
+-        # An exec naming `as_tool` runs as the item's TOOL identity — its own
++        # An exec naming a `tool` runs as the item's TOOL identity — its own
+         # uid, HOME and group — so the agent cannot read a third-party tool's
+         # files or its running environment (docs/plan-tool-identity-secrets.md).
+         # Its absence means every third-party tool runs as the sandbox's uid.
+@@ -235,7 +235,7 @@ class _ExecBody(BaseModel):
+     exec_timeout: float | None = None
+     # The third-party tool this command launches, when it is one. Absent on an
+     # older client and on every command the agent runs itself.
+-    as_tool: str | None = None
++    tool: bool | str = False
+ 
+ 
+ def _frame(obj: dict[str, object]) -> bytes:
+@@ -248,7 +248,7 @@ async def _exec_ndjson(
+     cmd: list[str],
+     env: Mapping[str, str] | None = None,
+     exec_timeout: float | None = None,
+-    as_tool: str | None = None,
++    tool: bool | str = False,
+ ) -> AsyncGenerator[bytes, None]:
+     """Run `exec` and yield NDJSON frames as output arrives.
+ 
+@@ -270,7 +270,7 @@ async def _exec_ndjson(
+             # Named only when set, the shape `exec_timeout`'s caller in the app
+             # uses: a backend that predates the keyword still runs every command
+             # that is not a third-party tool.
+-            extra = {} if as_tool is None else {"as_tool": as_tool}
++            extra = {"tool": tool} if tool else {}
+             result = await sandbox.exec(
+                 handle, cmd, on_output=on_output, env=env, exec_timeout=exec_timeout, **extra
+             )
+@@ -951,7 +951,7 @@ def make_host_app(
+                 body.cmd,
+                 body.env,
+                 body.exec_timeout,
+-                body.as_tool,
++                body.tool,
+             ),
+             media_type="application/x-ndjson",
+         )
+diff --git a/sandbox-host/src/sandbox_host/isolated_process.py b/sandbox-host/src/sandbox_host/isolated_process.py
+index cf3798bdf..631107e43 100644
+--- a/sandbox-host/src/sandbox_host/isolated_process.py
++++ b/sandbox-host/src/sandbox_host/isolated_process.py
+@@ -518,8 +518,9 @@ class IsolatedProcessSandbox(LocalProcessSandbox):
+         on_output: OutputSink | None = None,
+         env: Mapping[str, str] | None = None,
+         exec_timeout: float | None = None,
+-        as_tool: str | None = None,
++        tool: bool | str = False,
+     ) -> ExecResult:
++        as_tool = tool if isinstance(tool, str) else None
+         ident = self._identities.get(handle.id)
+         if (
+             as_tool is None
+@@ -530,7 +531,7 @@ class IsolatedProcessSandbox(LocalProcessSandbox):
+             # The agent's own command, a host without a tool identity, or a call
+             # the base is about to refuse: nothing of the workspace to hand over.
+             return await super().exec(
+-                handle, cmd, on_output, env, exec_timeout=exec_timeout, as_tool=as_tool
++                handle, cmd, on_output, env, exec_timeout=exec_timeout, tool=tool
+             )
+         # docs/plan-tool-identity-secrets.md: each identity reaches the other's
+         # files only through its named ACL entry, which a file's MASK caps — and
+@@ -558,7 +559,7 @@ class IsolatedProcessSandbox(LocalProcessSandbox):
+         await asyncio.to_thread(self._run_as, ident.uid, shared)
+         try:
+             return await super().exec(
+-                handle, cmd, on_output, env, exec_timeout=exec_timeout, as_tool=as_tool
++                handle, cmd, on_output, env, exec_timeout=exec_timeout, tool=tool
+             )
+         finally:
+             made = ["find", ws, "-user", str(ident.tool_uid), "-exec", "chmod", "g+rwX", "{}", "+"]
+diff --git a/sandbox-host/src/sandbox_host/local_process.py b/sandbox-host/src/sandbox_host/local_process.py
+index f8f936a76..4c9784bc2 100644
+--- a/sandbox-host/src/sandbox_host/local_process.py
++++ b/sandbox-host/src/sandbox_host/local_process.py
+@@ -1329,12 +1329,15 @@ class LocalProcessSandbox:
+         on_output: OutputSink | None = None,
+         env: Mapping[str, str] | None = None,
+         exec_timeout: float | None = None,
+-        as_tool: str | None = None,
++        tool: bool | str = False,
+     ) -> ExecResult:
++        # The NAME of the third-party tool this command launches, or None.
++        # `True`/`False` name none and run as any command.
++        as_tool = tool if isinstance(tool, str) else None
+         if as_tool is not None:
+             # Enforced HERE, not trusted from the caller: this API has no
+             # authentication and a sandbox shares the pod's network, so the
+-            # agent can send `as_tool` itself. Whatever it sends, an `as_tool`
++            # agent can send `tool` itself. Whatever it sends, a tool
+             # exec can only be what a tool call is.
+             if (why := self._refuse_tool_exec(handle, cmd, as_tool)) is not None:
+                 return ExecResult(
+diff --git a/sandbox-host/src/sandbox_host/mock.py b/sandbox-host/src/sandbox_host/mock.py
+index f6d4ac333..ffdde5500 100644
+--- a/sandbox-host/src/sandbox_host/mock.py
++++ b/sandbox-host/src/sandbox_host/mock.py
+@@ -57,7 +57,7 @@ class MockSandbox:
+         # One entry per `exec`, in call order — what the caller asked to add.
+         self.exec_envs: list[dict[str, str]] = []
+         self.exec_timeouts: list[float | None] = []
+-        self.exec_as_tools: list[str | None] = []
++        self.exec_tools: list[bool | str] = []
+         self._fs: dict[str, dict[str, bytes]] = {}
+         # Directories, tracked explicitly rather than implied by the file paths:
+         # an empty one implies nothing, and it is exactly the case that broke.
+@@ -144,14 +144,14 @@ class MockSandbox:
+         on_output: OutputSink | None = None,
+         env: Mapping[str, str] | None = None,
+         exec_timeout: float | None = None,
+-        as_tool: str | None = None,
++        tool: bool | str = False,
+     ) -> ExecResult:
+         fs = self._require(handle)
+         # Recorded, not applied: there is no process here. Swallowing it would
+         # let the wire test pass while the real hop dropped it.
+         self.exec_envs.append(dict(env) if env else {})
+         self.exec_timeouts.append(exec_timeout)
+-        self.exec_as_tools.append(as_tool)
++        self.exec_tools.append(tool)
+         result = self._exec_result(fs, cmd)
+         # Stream the (whole) stdout to the sink in one shot — enough for tests
+         # that assert live output is forwarded.
+diff --git a/sandbox-host/src/sandbox_host/protocol.py b/sandbox-host/src/sandbox_host/protocol.py
+index 7c2d44466..25e490eb1 100644
+--- a/sandbox-host/src/sandbox_host/protocol.py
++++ b/sandbox-host/src/sandbox_host/protocol.py
+@@ -161,15 +161,16 @@ class Sandbox(Protocol):
+         on_output: OutputSink | None = None,
+         env: Mapping[str, str] | None = None,
+         exec_timeout: float | None = None,
+-        as_tool: str | None = None,
++        tool: bool | str = False,
+     ) -> ExecResult:
+         """`env` is added to the command's environment and WINS over anything
+         the backend sets itself — the app names the item's user-set variables
+         per call, and this hop is what actually hands them to the process.
+ 
+-        `as_tool` names the third-party tool this command launches
+-        (docs/plan-tool-identity-secrets.md). A backend that has a second
+-        identity runs it as that one; one that has not runs it like any other
++        `tool` is the NAME of the third-party tool this command launches, or
++        `True`/`False` for none (docs/plan-tool-identity-secrets.md). With a
++        name, a backend that has a second identity runs it as that one — and
++        opens its sealed credentials; one that has not runs it like any other
+         command. Only the app's tool dispatch sets it — never the agent's `exec`."""
+         ...
+ 
+diff --git a/sandbox-host/src/sandbox_host/tool_env.py b/sandbox-host/src/sandbox_host/tool_env.py
+index 401a2a08d..50174e7da 100644
+--- a/sandbox-host/src/sandbox_host/tool_env.py
++++ b/sandbox-host/src/sandbox_host/tool_env.py
+@@ -6,7 +6,7 @@ agent reaching this host's API directly, chooses. Most are what the tool is for
+ (a token, a base URL). Some decide where the process loads CODE from, or where
+ its traffic goes and whom it trusts; passing those is a way to run someone
+ else's code inside the tool, beside its credentials, or to read them off the
+-wire. So for an `as_tool` command they are dropped HERE, on the host — not in
++wire. So for a tool command (`tool=<name>`) they are dropped HERE, on the host — not in
+ the app: this host's API can be called without the app, and a rule the caller
+ applies is a rule the caller can skip.
+ 
+diff --git a/sandbox-host/tests/test_archive_pack_wiring.py b/sandbox-host/tests/test_archive_pack_wiring.py
+index 600cac384..b46ba647f 100644
+--- a/sandbox-host/tests/test_archive_pack_wiring.py
++++ b/sandbox-host/tests/test_archive_pack_wiring.py
+@@ -73,7 +73,7 @@ class _BlockingExec(MockSandbox):
+         self.release = asyncio.Event()
+ 
+     async def exec(
+-        self, handle: SandboxHandle, cmd, on_output=None, env=None, exec_timeout=None, as_tool=None
++        self, handle: SandboxHandle, cmd, on_output=None, env=None, exec_timeout=None, tool=False
+     ):
+         self.entered.set()
+         await self.release.wait()
+diff --git a/sandbox-host/tests/test_as_tool_is_enforced_here.py b/sandbox-host/tests/test_as_tool_is_enforced_here.py
+index 7c6e90178..e8a5062fc 100644
+--- a/sandbox-host/tests/test_as_tool_is_enforced_here.py
++++ b/sandbox-host/tests/test_as_tool_is_enforced_here.py
+@@ -1,10 +1,10 @@
+-"""`as_tool` is enforced by the HOST, not trusted from the caller
++"""`tool` is enforced by the HOST, not trusted from the caller
+ (docs/plan-tool-identity-secrets.md, review round 1).
+ 
+ The host's API has no authentication and a sandbox shares the pod's network,
+-so the agent can POST to `/sandboxes/<its id>/exec` itself. If `as_tool` were
++so the agent can POST to `/sandboxes/<its id>/exec` itself. If `tool` were
+ honoured as sent, that would be a shell as the tool identity: the tool's files,
+-and its credentials in the clear (reproduced in review). So an `as_tool` exec
++and its credentials in the clear (reproduced in review). So a `tool` exec
+ may only be what a tool call is — the tool's own launcher, a command name and
+ its arguments — for a tool mounted from the third-party store, with an
+ environment the host itself scrubs. Called directly, the API then does nothing
+@@ -53,7 +53,7 @@ async def sandbox(tmp_path):
+ 
+ async def test_a_tool_call_shaped_exec_runs(sandbox):
+     sb, h = sandbox
+-    result = await sb.exec(h, ["../.tools/erp/launch", "q", "{}"], as_tool="erp")
++    result = await sb.exec(h, ["../.tools/erp/launch", "q", "{}"], tool="erp")
+     assert result.exit_code == 0, result.stderr
+ 
+ 
+@@ -70,22 +70,22 @@ async def test_a_tool_call_shaped_exec_runs(sandbox):
+ )
+ async def test_anything_else_as_the_tool_is_refused(sandbox, cmd):
+     sb, h = sandbox
+-    result = await sb.exec(h, cmd, as_tool="erp")
++    result = await sb.exec(h, cmd, tool="erp")
+     assert result.exit_code == 126
+     assert b"only its own launcher" in result.stderr
+ 
+ 
+ async def test_a_first_party_tool_cannot_be_run_as_the_tool_identity(sandbox):
+-    """`builtin/` is readable by the sandbox uid anyway; naming one as `as_tool`
++    """`builtin/` is readable by the sandbox uid anyway; naming one as `tool`
+     can only be someone reaching for the identity, never a real dispatch."""
+     sb, h = sandbox
+-    result = await sb.exec(h, ["../.tools/sci-plot/launch", "q", "{}"], as_tool="sci-plot")
++    result = await sb.exec(h, ["../.tools/sci-plot/launch", "q", "{}"], tool="sci-plot")
+     assert result.exit_code == 126
+ 
+ 
+ async def test_a_tool_not_mounted_in_this_sandbox_is_refused(sandbox):
+     sb, h = sandbox
+-    result = await sb.exec(h, ["../.tools/ghost/launch", "q", "{}"], as_tool="ghost")
++    result = await sb.exec(h, ["../.tools/ghost/launch", "q", "{}"], tool="ghost")
+     assert result.exit_code == 126
+ 
+ 
+@@ -101,7 +101,7 @@ async def test_the_callers_loader_names_never_reach_the_tool(sandbox):
+             "ERP_TOKEN": "t",
+             "SANDBOX_USER_ENV_KEYS": "PYTHONPATH OPENSSL_CONF https_proxy ERP_TOKEN",
+         },
+-        as_tool="erp",
++        tool="erp",
+     )
+     out = result.stdout.decode()
+     assert "PYTHONPATH=/root/evil" not in out
+@@ -141,7 +141,7 @@ def test_the_scrub_drops_every_kind_of_loader_name_and_keeps_the_rest():
+ 
+ 
+ async def test_the_agents_own_commands_are_untouched(sandbox):
+-    """The rule is for `as_tool` only: the agent's own shell keeps every name."""
++    """The rule is for `tool` only: the agent's own shell keeps every name."""
+     sb, h = sandbox
+     result = await sb.exec(h, ["sh", "-c", "echo $PYTHONPATH"], env={"PYTHONPATH": "/mine"})
+     assert result.stdout == b"/mine\n"
+diff --git a/sandbox-host/tests/test_exec_cancel.py b/sandbox-host/tests/test_exec_cancel.py
+index d21d4be38..cb0514f0d 100644
+--- a/sandbox-host/tests/test_exec_cancel.py
++++ b/sandbox-host/tests/test_exec_cancel.py
+@@ -41,7 +41,7 @@ class _HangingSandbox(MockSandbox):
+         # host reports as an in-band error frame — which looks like the exec
+         # itself going wrong, not like the double being out of date.
+         exec_timeout: float | None = None,
+-        as_tool: str | None = None,  # same reason (plan-tool-identity-secrets P1)
++        tool: bool | str = False,  # same reason (plan-tool-identity-secrets P1)
+     ) -> ExecResult:
+         if on_output is not None:
+             on_output(b"working\n")
+diff --git a/sandbox-host/tests/test_tool_identity.py b/sandbox-host/tests/test_tool_identity.py
+index 060f0fdd7..4cdb1cbd6 100644
+--- a/sandbox-host/tests/test_tool_identity.py
++++ b/sandbox-host/tests/test_tool_identity.py
+@@ -170,14 +170,14 @@ async def test_the_callers_env_cannot_move_a_tools_home(tooled, monkeypatch):
+         raise FileNotFoundError
+ 
+     monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_spawn)
+-    # No tool is mounted in this fixture; what an as_tool exec may be is pinned
++    # No tool is mounted in this fixture; what a tool exec may be is pinned
+     # in test_as_tool_is_enforced_here.py. This test is about HOME only.
+     monkeypatch.setattr(sb, "_refuse_tool_exec", lambda *_a: None)
+     await sb.exec(
+         h,
+         ["../.tools/erp/launch", "q", "{}"],
+         env={"HOME": "/root/evil", "SANDBOX_HOME": "/root/evil", "PYTHONNOUSERSITE": "0"},
+-        as_tool="erp",
++        tool="erp",
+     )
+     tool_home = str(sb._require(h) / ".tool-home")
+     assert seen["HOME"] == tool_home
+@@ -287,7 +287,7 @@ async def test_around_a_tool_call_each_identity_opens_its_own_files_to_the_other
+     order = _record_around(sb, monkeypatch)
+     monkeypatch.setattr(sb, "_refuse_tool_exec", lambda *_a: None)
+ 
+-    await sb.exec(h, ["../.tools/erp/launch", "q", "{}"], as_tool="erp")
++    await sb.exec(h, ["../.tools/erp/launch", "q", "{}"], tool="erp")
+ 
+     assert order == [
+         f"as {ident.uid}: find {sb._workspace(h)} (",
+@@ -301,7 +301,7 @@ async def test_no_root_walk_happens_around_a_tool_call(tooled, monkeypatch):
+     h = await sb.create(SandboxSpec())
+     order = _record_around(sb, monkeypatch)
+     monkeypatch.setattr(sb, "_refuse_tool_exec", lambda *_a: None)
+-    await sb.exec(h, ["../.tools/erp/launch", "q", "{}"], as_tool="erp")
++    await sb.exec(h, ["../.tools/erp/launch", "q", "{}"], tool="erp")
+     assert not [o for o in order if o.startswith("ROOT")]
+ 
+ 
+@@ -316,7 +316,7 @@ async def test_the_widening_runs_on_the_workspace_and_nowhere_else(tooled, monke
+         raise FileNotFoundError
+ 
+     monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_spawn)
+-    await sb.exec(h, ["../.tools/erp/launch", "q", "{}"], as_tool="erp")
++    await sb.exec(h, ["../.tools/erp/launch", "q", "{}"], tool="erp")
+     ws = str(sb._workspace(h))
+     ident = sb._identities[h.id]
+     # Before: the agent's directories, and the files its group can already read
+@@ -349,7 +349,7 @@ async def test_a_refused_tool_call_touches_nothing(tooled, monkeypatch):
+     sb, _acl, _owned = tooled
+     h = await sb.create(SandboxSpec())
+     order = _record_around(sb, monkeypatch)
+-    result = await sb.exec(h, ["sh", "-c", "id"], as_tool="erp")
++    result = await sb.exec(h, ["sh", "-c", "id"], tool="erp")
+     assert result.exit_code == 126
+     assert order == []
+ 
+diff --git a/sandbox-host/tests/test_tool_identity_integration.py b/sandbox-host/tests/test_tool_identity_integration.py
+index 8b91ea555..39d09d64c 100644
+--- a/sandbox-host/tests/test_tool_identity_integration.py
++++ b/sandbox-host/tests/test_tool_identity_integration.py
+@@ -41,7 +41,7 @@ def _traversable(tmp_path):
+ 
+ #: A test bundle whose launcher runs its arguments as a shell script — the
+ #: author's own code, standing in for a real tool. Round 1 made the host accept
+-#: an `as_tool` exec only in a tool call's shape, so every probe here goes
++#: a `tool` exec only in a tool call's shape, so every probe here goes
+ #: through `launch <command> <args>`, as a real call does.
+ _SCRIPTED = b'#!/bin/sh\nexec sh -c "$2"\n'
+ 
+@@ -73,7 +73,7 @@ def isolated(tmp_path):
+ 
+ 
+ async def _tool(sb, h, script: str, **kw):
+-    return await sb.exec(h, ["../.tools/erp/launch", "run", script], as_tool="erp", **kw)
++    return await sb.exec(h, ["../.tools/erp/launch", "run", script], tool="erp", **kw)
+ 
+ 
+ @requires_isolation
+@@ -220,7 +220,7 @@ async def test_the_tool_identity_runs_it(with_tools):
+     sb, mounts = with_tools
+     h = await sb.create(SandboxSpec(tools=mounts))
+     ident = sb._identities[h.id]
+-    result = await sb.exec(h, ["../.tools/erp/launch", "q", "{}"], as_tool="erp")
++    result = await sb.exec(h, ["../.tools/erp/launch", "q", "{}"], tool="erp")
+     assert result.exit_code == 0, result.stderr
+     assert result.stdout.strip() == f"ran-as-{ident.tool_uid}".encode()
+ 
+@@ -276,7 +276,7 @@ async def test_modes_set_after_creation_do_not_lock_either_identity_out(tmp_path
+         ],
+     )
+     assert setup.exit_code == 0, setup.stderr
+-    tool = await sb.exec(h, ["../.tools/erp/launch", "q", "{}"], as_tool="erp")
++    tool = await sb.exec(h, ["../.tools/erp/launch", "q", "{}"], tool="erp")
+     assert tool.exit_code == 0, tool.stderr
+     agent = await sb.exec(
+         h, ["sh", "-c", "cat atomic.csv && echo more >> atomic.csv && rm atomic.csv"]
+diff --git a/sandbox-host/tests/test_tool_identity_wire.py b/sandbox-host/tests/test_tool_identity_wire.py
+index 1a0dec272..1d3fe1b69 100644
+--- a/sandbox-host/tests/test_tool_identity_wire.py
++++ b/sandbox-host/tests/test_tool_identity_wire.py
+@@ -1,4 +1,4 @@
+-"""The host's half of `as_tool` (docs/plan-tool-identity-secrets.md P1): the
++"""The host's half of `tool` (docs/plan-tool-identity-secrets.md P1): the
+ `/exec` body carries which third-party tool a command launches, and the host
+ hands it to the backend that decides the identity. The app's half is
+ `tests/sandbox/test_http.py`.
+@@ -34,13 +34,13 @@ async def _exec(body: dict[str, object]) -> MockSandbox:
+ 
+ 
+ async def test_exec_hands_the_tool_name_to_the_backend():
+-    backend = await _exec({"cmd": ["../.tools/erp/launch", "q", "{}"], "as_tool": "erp"})
+-    assert backend.exec_as_tools[-1] == "erp"
++    backend = await _exec({"cmd": ["../.tools/erp/launch", "q", "{}"], "tool": "erp"})
++    assert backend.exec_tools[-1] == "erp"
+ 
+ 
+ async def test_exec_from_an_older_client_runs_as_the_sandbox():
+     backend = await _exec({"cmd": ["true"]})
+-    assert backend.exec_as_tools[-1] is None
++    assert backend.exec_tools[-1] is False
+ 
+ 
+ async def test_healthz_says_this_host_runs_tools_as_their_own_identity():
+diff --git a/sandbox-host/tests/test_tool_output.py b/sandbox-host/tests/test_tool_output.py
+index 6158adac1..3bd23091f 100644
+--- a/sandbox-host/tests/test_tool_output.py
++++ b/sandbox-host/tests/test_tool_output.py
+@@ -249,14 +249,14 @@ async def sandbox(tmp_path):
+ 
+ 
+ #: A tool call that runs `boom.py` through the mounted launcher — the only
+-#: shape an `as_tool` exec may take.
++#: shape a `tool` exec may take.
+ _BOOM = ["../.tools/erp/launch", "run", "import runpy; runpy.run_path('boom.py')"]
+ 
+ 
+ async def test_a_tool_commands_traceback_reaches_nobody_with_its_source(sandbox):
+     sb, h = sandbox
+     live: list[bytes] = []
+-    result = await sb.exec(h, _BOOM, on_output=live.append, as_tool="erp")
++    result = await sb.exec(h, _BOOM, on_output=live.append, tool="erp")
+     assert result.exit_code != 0
+     assert b"ValueError" in result.stderr
+     assert _SOURCE_LINE not in result.stderr
+@@ -265,7 +265,7 @@ async def test_a_tool_commands_traceback_reaches_nobody_with_its_source(sandbox)
+ 
+ async def test_tool_debug_lists_the_tool_and_its_source_comes_back(sandbox):
+     sb, h = sandbox
+-    result = await sb.exec(h, _BOOM, env={"TOOL_DEBUG": "other, erp"}, as_tool="erp")
++    result = await sb.exec(h, _BOOM, env={"TOOL_DEBUG": "other, erp"}, tool="erp")
+     assert _SOURCE_LINE in result.stderr
+ 
+ 
+@@ -284,7 +284,7 @@ async def test_a_credential_the_platform_handed_the_tool_is_masked(sandbox, monk
+         ["../.tools/erp/launch", "run", "import os; print('pw', os.environ['MACHINE_PASSWORD'])"],
+         on_output=live.append,
+         env={"TOOL_DEBUG": "erp"},
+-        as_tool="erp",
++        tool="erp",
+     )
+     assert result.exit_code == 0, result.stderr
+     assert result.stdout == b"pw ***\n"
+@@ -307,7 +307,7 @@ async def test_a_last_line_without_a_newline_and_the_hint_reach_the_result(sandb
+     result — the final line, and (on stderr) the line saying source was hidden."""
+     sb, h = sandbox
+     tail = "import sys; sys.stdout.write('last'); import runpy; runpy.run_path('boom.py')"
+-    result = await sb.exec(h, ["../.tools/erp/launch", "run", tail], as_tool="erp")
++    result = await sb.exec(h, ["../.tools/erp/launch", "run", tail], tool="erp")
+     assert result.stdout == b"last"
+     assert result.stderr.endswith(b"source lines in this output are hidden]\n")
+ 
+@@ -322,6 +322,6 @@ async def test_a_tools_stdout_never_carries_the_hint(sandbox):
+         "except ValueError:\n    traceback.print_exc(file=__import__('sys').stdout)\n"
+         "print('{\"ok\": true}')"
+     )
+-    result = await sb.exec(h, ["../.tools/erp/launch", "run", code], as_tool="erp")
++    result = await sb.exec(h, ["../.tools/erp/launch", "run", code], tool="erp")
+     assert result.stdout.endswith(b'{"ok": true}\n')
+     assert b"hidden" not in result.stdout
+diff --git a/sandbox-host/tests/test_tool_secrets_host.py b/sandbox-host/tests/test_tool_secrets_host.py
+index 40e5c2431..44ebda73d 100644
+--- a/sandbox-host/tests/test_tool_secrets_host.py
++++ b/sandbox-host/tests/test_tool_secrets_host.py
+@@ -50,7 +50,7 @@ def _bundle(sealed: bytes | None) -> bytes:
+     buf = io.BytesIO()
+     with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+         # The launcher runs its ARGUMENTS as Python, so a test can probe
+-        # through the one argv shape an `as_tool` exec may take.
++        # through the one argv shape a `tool` exec may take.
+         files = {"launch": f'#!/bin/sh\nexec {sys.executable} -c "$2"\n'.encode()}
+         if sealed is not None:
+             files[SECRETS_FILE] = sealed
+@@ -78,7 +78,7 @@ async def test_the_tool_gets_its_credential_and_nobody_sees_it(tmp_path):
+     sealed = seal({"MACHINE_PASSWORD": "hunter2"}, [key.public_key()])
+     sb, h = await _sandbox(tmp_path, sealed, key)
+     probe = _tool(_PRINT + "; print(os.environ['MACHINE_PASSWORD'])")
+-    result = await sb.exec(h, probe, as_tool="erp")
++    result = await sb.exec(h, probe, tool="erp")
+     assert result.exit_code == 0, result.stderr
+     assert result.stdout == b"True\n***\n"
+ 
+@@ -93,7 +93,7 @@ async def test_the_agents_own_command_gets_no_credential(tmp_path):
+ 
+ async def test_a_tool_without_sealed_credentials_runs_as_before(tmp_path):
+     sb, h = await _sandbox(tmp_path, None, None)
+-    result = await sb.exec(h, _tool(_PRINT), as_tool="erp")
++    result = await sb.exec(h, _tool(_PRINT), tool="erp")
+     assert result.exit_code == 0
+     assert result.stdout == b"False\n"
+ 
+@@ -104,7 +104,7 @@ async def test_a_host_with_no_key_refuses_and_says_who_has_to_act(tmp_path):
+     other = X25519PrivateKey.generate()
+     sealed = seal({"MACHINE_PASSWORD": "hunter2"}, [other.public_key()])
+     sb, h = await _sandbox(tmp_path, sealed, None)
+-    result = await sb.exec(h, _tool(_PRINT), as_tool="erp")
++    result = await sb.exec(h, _tool(_PRINT), tool="erp")
+     assert result.exit_code == 3
+     assert b"platform team" in result.stderr
+     assert b"cannot set" in result.stderr
+@@ -115,14 +115,14 @@ async def test_credentials_sealed_for_another_deployment_are_refused(tmp_path):
+     ours, theirs = X25519PrivateKey.generate(), X25519PrivateKey.generate()
+     sealed = seal({"MACHINE_PASSWORD": "hunter2"}, [theirs.public_key()])
+     sb, h = await _sandbox(tmp_path, sealed, ours)
+-    result = await sb.exec(h, _tool(_PRINT), as_tool="erp")
++    result = await sb.exec(h, _tool(_PRINT), tool="erp")
+     assert result.exit_code == 3
+     assert b"not sealed for this deployment" in result.stderr
+ 
+ 
+ async def test_a_value_sealed_by_the_builders_library_opens_here(tmp_path):
+     sb, h = await _sandbox(tmp_path, _PINNED_SEALED.encode(), private_key_from_text(_PINNED_KEY))
+-    result = await sb.exec(h, _tool(_PRINT), as_tool="erp")
++    result = await sb.exec(h, _tool(_PRINT), tool="erp")
+     assert result.exit_code == 0, result.stderr
+     assert result.stdout == b"True\n"
+ 
+@@ -131,7 +131,7 @@ async def test_a_value_sealed_by_the_builders_library_opens_here(tmp_path):
+ async def test_a_tool_name_cannot_walk_out_of_the_view(tmp_path, name):
+     key = X25519PrivateKey.generate()
+     sb, h = await _sandbox(tmp_path, None, key)
+-    result = await sb.exec(h, [f"../.tools/{name}/launch", "run", "{}"], as_tool=name)
++    result = await sb.exec(h, [f"../.tools/{name}/launch", "run", "{}"], tool=name)
+     assert result.exit_code == 126
+ 
+ 
+@@ -183,5 +183,5 @@ async def test_the_tools_own_credential_wins_over_a_user_variable_of_its_name(tm
+     key = X25519PrivateKey.generate()
+     sealed = seal({"MACHINE_PASSWORD": "hunter2"}, [key.public_key()])
+     sb, h = await _sandbox(tmp_path, sealed, key)
+-    result = await sb.exec(h, _tool(_PRINT), env={"MACHINE_PASSWORD": "mine"}, as_tool="erp")
++    result = await sb.exec(h, _tool(_PRINT), env={"MACHINE_PASSWORD": "mine"}, tool="erp")
+     assert result.stdout == b"True\n"
+diff --git a/src/workspace_app/sandbox/docker.py b/src/workspace_app/sandbox/docker.py
+index 274da1a01..7bea2c32a 100644
+--- a/src/workspace_app/sandbox/docker.py
++++ b/src/workspace_app/sandbox/docker.py
+@@ -147,7 +147,7 @@ class DockerSandbox:
+         exec_timeout: float | None = None,
+         # Accepted and ignored: this backend mounts no third-party tools
+         # (`SandboxSpec.tools`), so nothing it runs is one (see the protocol).
+-        as_tool: str | None = None,
++        tool: bool | str = False,
+     ) -> ExecResult:
+         container = self._require(handle)
+         result: Any = await asyncio.to_thread(
+diff --git a/src/workspace_app/sandbox/http_client.py b/src/workspace_app/sandbox/http_client.py
+index fa9c9834a..92a26a318 100644
+--- a/src/workspace_app/sandbox/http_client.py
++++ b/src/workspace_app/sandbox/http_client.py
+@@ -569,7 +569,7 @@ class HttpSandbox:
+         on_output: OutputSink | None = None,
+         env: Mapping[str, str] | None = None,
+         exec_timeout: float | None = None,
+-        as_tool: str | None = None,
++        tool: bool | str = False,
+     ) -> ExecResult:
+         pod_url, remote_id = _decode_handle(handle)
+         url = f"{pod_url}/sandboxes/{remote_id}/exec"
+@@ -583,10 +583,10 @@ class HttpSandbox:
+             # Omitted when empty so the host sees the same request it always
+             # has — an older host ignores the key, a newer one applies it.
+             body["env"] = dict(env)
+-        if as_tool is not None:
+-            # Same shape: absent on every command that is not a third-party
+-            # tool, so the agent's own commands send what they always sent.
+-            body["as_tool"] = as_tool
++        if tool:
++            # Same shape: absent on every command that names no tool, so the
++            # agent's own commands send what they always sent.
++            body["tool"] = tool
+         try:
+             async with self._client.stream("POST", url, json=body) as resp:
+                 resp.raise_for_status()
+diff --git a/src/workspace_app/sandbox/local_process.py b/src/workspace_app/sandbox/local_process.py
+index de32c497e..c12ce80e9 100644
+--- a/src/workspace_app/sandbox/local_process.py
++++ b/src/workspace_app/sandbox/local_process.py
+@@ -1215,7 +1215,7 @@ class LocalProcessSandbox:
+         exec_timeout: float | None = None,
+         # Accepted and ignored: this backend mounts no third-party tools
+         # (`SandboxSpec.tools`), so nothing it runs is one (see the protocol).
+-        as_tool: str | None = None,
++        tool: bool | str = False,
+     ) -> ExecResult:
+         argv, sub_cwd, base_env = self._exec_argv(handle, cmd)
+         # A caller may name its own TOTAL wall-clock budget for one command.
+diff --git a/src/workspace_app/sandbox/mock.py b/src/workspace_app/sandbox/mock.py
+index 005bb1165..1e59512f0 100644
+--- a/src/workspace_app/sandbox/mock.py
++++ b/src/workspace_app/sandbox/mock.py
+@@ -66,7 +66,7 @@ class MockSandbox:
+         # that command's environment.
+         self.exec_envs: list[dict[str, str]] = []
+         self.exec_timeouts: list[float | None] = []
+-        self.exec_as_tools: list[str | None] = []
++        self.exec_tools: list[bool | str] = []
+         self._exposed: dict[str, list[int]] = {}
+         # #366: readiness is a first-class marker kept OUTSIDE the file store, so
+         # it never appears in walk/exists (it lives outside the workspace on a
+@@ -181,7 +181,7 @@ class MockSandbox:
+         on_output: OutputSink | None = None,
+         env: Mapping[str, str] | None = None,
+         exec_timeout: float | None = None,
+-        as_tool: str | None = None,
++        tool: bool | str = False,
+     ) -> ExecResult:
+         fs = self._require(handle)
+         # Recorded, not applied: there is no process to hand it to. A double
+@@ -189,7 +189,7 @@ class MockSandbox:
+         # assert nothing — which is how a delivery half goes missing unnoticed.
+         self.exec_envs.append(dict(env) if env else {})
+         self.exec_timeouts.append(exec_timeout)
+-        self.exec_as_tools.append(as_tool)
++        self.exec_tools.append(tool)
+         result = self._exec_result(fs, cmd)
+         # Stream the (whole) stdout to the sink in one shot — enough for tests
+         # that assert live output is forwarded.
+diff --git a/src/workspace_app/sandbox/protocol.py b/src/workspace_app/sandbox/protocol.py
+index 8ec0c6785..7359d7c8b 100644
+--- a/src/workspace_app/sandbox/protocol.py
++++ b/src/workspace_app/sandbox/protocol.py
+@@ -333,7 +333,7 @@ class Sandbox(Protocol):
+         on_output: OutputSink | None = None,
+         env: Mapping[str, str] | None = None,
+         exec_timeout: float | None = None,
+-        as_tool: str | None = None,
++        tool: bool | str = False,
+     ) -> ExecResult:
+         """Run `cmd` (an argv list — NOT a shell string; use
+         `["sh", "-c", "..."]` if you need shell features) with the workspace
+@@ -352,12 +352,14 @@ class Sandbox(Protocol):
+           backend sets itself. It is per-call on purpose: the item's user-set
+           variables reach the tools this way, and nothing else the sandbox runs
+           — the agent's own `exec` included — has anything to inherit.
+-        - `as_tool` names the third-party tool this command launches
+-          (docs/plan-tool-identity-secrets.md). A backend with a second identity
+-          — the sandbox host — runs it as the item's TOOL identity, which the
+-          agent can neither read the files of nor inspect while it runs. Only
+-          `tooling.registry._exec_tool` sets it; the agent's `exec` tool has no
+-          way to. Backends here mount no third-party tools, so they ignore it."""
++        - `tool` says whether this command launches a tool, and which: the
++          tool's NAME for a third-party one (docs/plan-tool-identity-secrets.md)
++          — the sandbox host then runs it as the item's TOOL identity, which the
++          agent can neither read the files of nor inspect while it runs, opens
++          its sealed credentials, and (in the deployment's own build) issues its
++          egress credential. `True`/`False` carry no name and run as any command.
++          Only `tooling.registry._exec_tool` sets it; the agent's `exec` tool has
++          no way to. Backends here mount no third-party tools, so they ignore it."""
+         ...
+ 
+     async def upload(self, handle: SandboxHandle, data: bytes, remote_path: str) -> None:
+diff --git a/src/workspace_app/tooling/registry.py b/src/workspace_app/tooling/registry.py
+index 78aee875d..9b916f751 100644
+--- a/src/workspace_app/tooling/registry.py
++++ b/src/workspace_app/tooling/registry.py
+@@ -608,7 +608,7 @@ async def _exec_tool(
+     # environment. Named only for those — first-party tools, `python` and
+     # bundled view plugins dispatch exactly as they always did.
+     if third_party:
+-        budget["as_tool"] = pkg.name
++        budget["tool"] = pkg.name
+     try:
+         return await actx.sandbox.exec(
+             handle, argv, on_output=actx.on_exec_output, env=env or None, **budget
+diff --git a/src/workspace_app/tooling/tool_env.py b/src/workspace_app/tooling/tool_env.py
+index 401a2a08d..50174e7da 100644
+--- a/src/workspace_app/tooling/tool_env.py
++++ b/src/workspace_app/tooling/tool_env.py
+@@ -6,7 +6,7 @@ agent reaching this host's API directly, chooses. Most are what the tool is for
+ (a token, a base URL). Some decide where the process loads CODE from, or where
+ its traffic goes and whom it trusts; passing those is a way to run someone
+ else's code inside the tool, beside its credentials, or to read them off the
+-wire. So for an `as_tool` command they are dropped HERE, on the host — not in
++wire. So for a tool command (`tool=<name>`) they are dropped HERE, on the host — not in
+ the app: this host's API can be called without the app, and a rule the caller
+ applies is a rule the caller can skip.
+ 
+diff --git a/tests/agent/test_exec_third_party_note.py b/tests/agent/test_exec_third_party_note.py
+index c9b3aabb7..e1731e783 100644
+--- a/tests/agent/test_exec_third_party_note.py
++++ b/tests/agent/test_exec_third_party_note.py
+@@ -36,7 +36,7 @@ class _Denying(MockSandbox):
+         super().__init__()
+         self.result = result
+ 
+-    async def exec(self, handle, cmd, on_output=None, env=None, exec_timeout=None, as_tool=None):
++    async def exec(self, handle, cmd, on_output=None, env=None, exec_timeout=None, tool=False):
+         return self.result
+ 
+ 
+diff --git a/tests/agent/test_make_deck_tool.py b/tests/agent/test_make_deck_tool.py
+index 5fee0a503..e1f6525f3 100644
+--- a/tests/agent/test_make_deck_tool.py
++++ b/tests/agent/test_make_deck_tool.py
+@@ -140,7 +140,7 @@ class _RenderSandbox(MockSandbox):
+     """node → ok; the render step drops a slide image so the loop's read/list
+     seams run; everything else falls back to MockSandbox."""
+ 
+-    async def exec(self, handle, cmd, on_output=None, env=None, exec_timeout=None, as_tool=None):  # type: ignore[override]
++    async def exec(self, handle, cmd, on_output=None, env=None, exec_timeout=None, tool=False):  # type: ignore[override]
+         if cmd and cmd[0] == "sh":  # preflight: toolchain present
+             return ExecResult(exit_code=0, stdout=b"")
+         if cmd and cmd[0] == "node":
+diff --git a/tests/agent/test_tools.py b/tests/agent/test_tools.py
+index 8103d19f5..eee60213c 100644
+--- a/tests/agent/test_tools.py
++++ b/tests/agent/test_tools.py
+@@ -159,7 +159,7 @@ class _ReapableSandbox(MockSandbox):
+         self.busy = False
+         self.exec_handles: list[str] = []
+ 
+-    async def exec(self, handle, cmd, on_output=None, env=None, exec_timeout=None, as_tool=None):
++    async def exec(self, handle, cmd, on_output=None, env=None, exec_timeout=None, tool=False):
+         self.exec_handles.append(handle.id)
+         if self.busy:
+             raise SandboxBusy(handle.id)
+diff --git a/tests/api/test_marking_table.py b/tests/api/test_marking_table.py
+index 5afb1ed9c..066ec2903 100644
+--- a/tests/api/test_marking_table.py
++++ b/tests/api/test_marking_table.py
+@@ -45,7 +45,7 @@ class _LitSandbox(MockSandbox):
+         self.answer = answer
+         self.lit_calls: list[list[str]] = []
+ 
+-    async def exec(self, handle, cmd, on_output=None, env=None, exec_timeout=None, as_tool=None):
++    async def exec(self, handle, cmd, on_output=None, env=None, exec_timeout=None, tool=False):
+         if cmd[:2] == ["../.tools/maps/launch", "rows"]:
+             self.lit_calls.append(list(cmd))
+             if isinstance(self.answer, Exception):
+diff --git a/tests/api/test_workflow_run_node_env.py b/tests/api/test_workflow_run_node_env.py
+index 56818e1f1..54bb5b6df 100644
+--- a/tests/api/test_workflow_run_node_env.py
++++ b/tests/api/test_workflow_run_node_env.py
+@@ -52,7 +52,7 @@ class _Declared(MockSandbox):
+         return handle
+ 
+     async def exec(
+-        self, handle, cmd, on_output=None, env=None, exec_timeout=None, as_tool=None
++        self, handle, cmd, on_output=None, env=None, exec_timeout=None, tool=False
+     ) -> ExecResult:
+         self.calls.append(list(cmd))
+         # A distinctive code for the NODE's own command, 0 for the preparation.
+@@ -139,7 +139,7 @@ class _Overlapping(_Declared):
+         self.peak_syncs = 0
+ 
+     async def exec(
+-        self, handle, cmd, on_output=None, env=None, exec_timeout=None, as_tool=None
++        self, handle, cmd, on_output=None, env=None, exec_timeout=None, tool=False
+     ) -> ExecResult:
+         self.calls.append(list(cmd))
+         if cmd == _SYNC:
+@@ -200,9 +200,7 @@ async def test_an_unpreparable_environment_fails_the_node_not_the_run(monkeypatc
+     """
+ 
+     class _Unbuildable(_Declared):
+-        async def exec(
+-            self, handle, cmd, on_output=None, env=None, exec_timeout=None, as_tool=None
+-        ):
++        async def exec(self, handle, cmd, on_output=None, env=None, exec_timeout=None, tool=False):
+             self.calls.append(list(cmd))
+             if cmd == _SYNC:
+                 return ExecResult(exit_code=2, stderr=b"error: no `uv.lock` found")
+diff --git a/tests/api/test_wui_routes.py b/tests/api/test_wui_routes.py
+index f88bc17e9..6e182d38f 100644
+--- a/tests/api/test_wui_routes.py
++++ b/tests/api/test_wui_routes.py
+@@ -42,7 +42,7 @@ class _Sandbox:
+     def __init__(self, result: ExecResult | None = None):
+         self.calls: list[list[str]] = []
+         self.envs: list[dict[str, str]] = []
+-        self.as_tools: list[str | None] = []
++        self.exec_tools: list[bool | str] = []
+         self.result = result or ExecResult(exit_code=0, stdout=b'{"lot":"A1"}')
+ 
+     async def exists(self, handle, path: str) -> bool:
+@@ -51,10 +51,10 @@ class _Sandbox:
+         # dependencies, so nothing follows from the answer.
+         return False
+ 
+-    async def exec(self, handle, cmd, on_output=None, env=None, exec_timeout=None, as_tool=None):
++    async def exec(self, handle, cmd, on_output=None, env=None, exec_timeout=None, tool=False):
+         self.calls.append(list(cmd))
+         self.envs.append(dict(env or {}))
+-        self.as_tools.append(as_tool)
++        self.exec_tools.append(tool)
+         return self.result
+ 
+ 
+@@ -364,7 +364,7 @@ class _BuildSandbox(_Sandbox):
+         super().__init__(ExecResult(exit_code=exit_code, stdout=b"".join(chunks)))
+         self.chunks = chunks
+ 
+-    async def exec(self, handle, cmd, on_output=None, env=None, exec_timeout=None, as_tool=None):
++    async def exec(self, handle, cmd, on_output=None, env=None, exec_timeout=None, tool=False):
+         self.calls.append(list(cmd))
+         self.envs.append(dict(env or {}))
+         for chunk in self.chunks:
+@@ -545,9 +545,7 @@ def test_a_build_that_blows_up_still_ends_the_stream():
+     verdict, forever. Every path out of here has to post a verdict."""
+ 
+     class _Exploding(_Sandbox):
+-        async def exec(
+-            self, handle, cmd, on_output=None, env=None, exec_timeout=None, as_tool=None
+-        ):
++        async def exec(self, handle, cmd, on_output=None, env=None, exec_timeout=None, tool=False):
+             if on_output is not None:
+                 on_output(b"pnpm install\n")
+             raise SandboxNotFound("the item was reaped mid-build")
+@@ -594,9 +592,7 @@ def test_leaving_the_page_takes_the_build_with_it():
+             super().__init__(ExecResult(exit_code=0))
+             self.cancelled = False
+ 
+-        async def exec(
+-            self, handle, cmd, on_output=None, env=None, exec_timeout=None, as_tool=None
+-        ):
++        async def exec(self, handle, cmd, on_output=None, env=None, exec_timeout=None, tool=False):
+             self.calls.append(list(cmd))
+             if on_output is not None:
+                 on_output(b"resolving...\n")
+@@ -1169,7 +1165,7 @@ def test_a_page_names_one_of_two_same_named_commands_by_its_new_name():
+     assert sandbox.calls == [["/tools/b/launch", "lot-status", "{}"]]
+     # A page's `callTool` runs a third-party tool as its own identity too — the
+     # same dispatch the agent's call goes through (plan-tool-identity-secrets).
+-    assert sandbox.as_tools == ["b"]
++    assert sandbox.exec_tools == ["b"]
+ 
+ 
+ def test_a_page_calling_the_shared_old_name_is_refused_with_todays_message():
+diff --git a/tests/api/test_wui_tool_jobs.py b/tests/api/test_wui_tool_jobs.py
+index 15adcebb2..9b181c8d1 100644
+--- a/tests/api/test_wui_tool_jobs.py
++++ b/tests/api/test_wui_tool_jobs.py
+@@ -34,7 +34,7 @@ class _JobSandbox(_Sandbox):
+         self.timeouts: list[float | None] = []
+         self.block = block
+ 
+-    async def exec(self, handle, cmd, on_output=None, env=None, exec_timeout=None, as_tool=None):
++    async def exec(self, handle, cmd, on_output=None, env=None, exec_timeout=None, tool=False):
+         self.timeouts.append(exec_timeout)
+         out = await super().exec(handle, cmd, on_output=on_output, env=env)
+         if self.block:
+diff --git a/tests/api/test_wui_usage_uses.py b/tests/api/test_wui_usage_uses.py
+index 082e58d9e..40d3cdc65 100644
+--- a/tests/api/test_wui_usage_uses.py
++++ b/tests/api/test_wui_usage_uses.py
+@@ -268,9 +268,7 @@ def _tool_client(exit_code: int = 0, takes_s: float = 0.0):
+     from .test_wui_routes import _Sandbox, build
+ 
+     class _Slow(_Sandbox):
+-        async def exec(
+-            self, handle, cmd, on_output=None, env=None, exec_timeout=None, as_tool=None
+-        ):  # noqa: ANN001, ANN202
++        async def exec(self, handle, cmd, on_output=None, env=None, exec_timeout=None, tool=False):  # noqa: ANN001, ANN202
+             await asyncio.sleep(takes_s)
+             return await super().exec(handle, cmd, on_output, env)
+ 
+@@ -373,9 +371,7 @@ def test_a_tool_that_raises_still_counts():
+     from .test_wui_routes import _Sandbox, build
+ 
+     class _Broken(_Sandbox):
+-        async def exec(
+-            self, handle, cmd, on_output=None, env=None, exec_timeout=None, as_tool=None
+-        ):  # noqa: ANN001, ANN202
++        async def exec(self, handle, cmd, on_output=None, env=None, exec_timeout=None, tool=False):  # noqa: ANN001, ANN202
+             raise RuntimeError("sandbox gone")
+ 
+     spec = make_spec()
+diff --git a/tests/sandbox/test_http.py b/tests/sandbox/test_http.py
+index 135f4bfc6..96bff5c53 100644
+--- a/tests/sandbox/test_http.py
++++ b/tests/sandbox/test_http.py
+@@ -227,7 +227,7 @@ def _fake_host(backend: MockSandbox, advertise_url: str) -> FastAPI:
+                     # Same contract for the per-call wall-clock budget (#775).
+                     exec_timeout=body.get("exec_timeout"),
+                     # …and for which third-party tool a command launches.
+-                    as_tool=body.get("as_tool"),
++                    tool=body.get("tool", False),
+                 )
+             except Exception as exc:  # noqa: BLE001 — relayed in-band as an error frame
+                 yield (
+@@ -1248,8 +1248,8 @@ async def test_exec_carries_the_tool_it_launches_across_the_hop():
+     async with httpx.AsyncClient(transport=ASGITransport(app=app)) as client:
+         sb = HttpSandbox(base_url=_ADVERTISE, client=client)
+         h = await sb.create(SandboxSpec())
+-        await sb.exec(h, ["../.tools/erp/launch", "q", "{}"], as_tool="erp")
+-    assert backend.exec_as_tools[-1] == "erp"
++        await sb.exec(h, ["../.tools/erp/launch", "q", "{}"], tool="erp")
++    assert backend.exec_tools[-1] == "erp"
+ 
+ 
+ async def test_an_ordinary_command_sends_no_tool():
+@@ -1268,5 +1268,5 @@ async def test_an_ordinary_command_sends_no_tool():
+         sb = HttpSandbox(base_url=_ADVERTISE, client=client)
+         h = await sb.create(SandboxSpec())
+         await sb.exec(h, ["true"])
+-    assert seen and "as_tool" not in seen[-1]
+-    assert backend.exec_as_tools[-1] is None
++    assert seen and "tool" not in seen[-1]
++    assert backend.exec_tools[-1] is False
+diff --git a/tests/tooling/test_review_wiring.py b/tests/tooling/test_review_wiring.py
+index 7f48976fc..d889edf42 100644
+--- a/tests/tooling/test_review_wiring.py
++++ b/tests/tooling/test_review_wiring.py
+@@ -59,7 +59,7 @@ class _StubSandbox(MockSandbox):
+         self._exec_results = exec_results
+         self.exec_calls: list[list[str]] = []
+ 
+-    async def exec(self, handle, cmd, on_output=None, env=None, exec_timeout=None, as_tool=None):  # noqa: ANN001
++    async def exec(self, handle, cmd, on_output=None, env=None, exec_timeout=None, tool=False):  # noqa: ANN001
+         self.exec_calls.append(cmd)
+         r = self._exec_results.pop(0)
+         if on_output is not None and r.stdout:
+diff --git a/tests/tooling/test_tool_identity_dispatch.py b/tests/tooling/test_tool_identity_dispatch.py
+index 7b4ef2247..4bba7d23d 100644
+--- a/tests/tooling/test_tool_identity_dispatch.py
++++ b/tests/tooling/test_tool_identity_dispatch.py
+@@ -50,13 +50,13 @@ async def _dispatch(pkg: PackageInfo, env_vars: dict[str, str] | None = None) ->
+ @pytest.mark.asyncio
+ async def test_a_third_party_tool_is_dispatched_as_itself():
+     sandbox = await _dispatch(_THIRD)
+-    assert sandbox.exec_as_tools[-1] == "erp"
++    assert sandbox.exec_tools[-1] == "erp"
+ 
+ 
+ @pytest.mark.asyncio
+ async def test_a_first_party_tool_is_dispatched_as_the_sandbox():
+     sandbox = await _dispatch(_FIRST)
+-    assert sandbox.exec_as_tools[-1] is None
++    assert sandbox.exec_tools[-1] is False
+ 
+ 
+ _LOADERS = {
+@@ -115,12 +115,12 @@ async def test_an_artifact_view_plugin_runs_as_the_tool_identity():
+     bundle sits in the third-party store — which only the tool group may read. Run
+     as the sandbox uid it could no longer read its own files."""
+     sandbox = await _plugin_dispatch({"wafermap": "a" * 64})
+-    assert sandbox.exec_as_tools[-1] == "wafermap"
++    assert sandbox.exec_tools[-1] == "wafermap"
+ 
+ 
+ @pytest.mark.asyncio
+ async def test_a_bundled_view_plugin_runs_as_the_sandbox():
+     """A `{bundle: ...}` plugin ships in `builtin/`: first-party, untouched."""
+     sandbox = await _plugin_dispatch({})
+-    assert sandbox.exec_as_tools[-1] is None
++    assert sandbox.exec_tools[-1] is False
+     assert sandbox.exec_envs[-1]["PYTHONPATH"] == "/root/evil"
+diff --git a/tests/view_plugins/test_runner.py b/tests/view_plugins/test_runner.py
+index fe478db18..37f888141 100644
+--- a/tests/view_plugins/test_runner.py
++++ b/tests/view_plugins/test_runner.py
+@@ -26,17 +26,17 @@ class _Sandbox:
+     def __init__(self, result: ExecResult | None = None, *, resolves_tools: bool = False):
+         self.calls: list[list[str]] = []
+         self.envs: list[dict[str, str]] = []
+-        self.as_tools: list[str | None] = []
++        self.exec_tools: list[bool | str] = []
+         self.result = result or ExecResult(exit_code=0, stdout=b'{"ok":1}', stderr=b"note")
+         self.resolves_tools = resolves_tools
+ 
+     async def exists(self, handle, path: str) -> bool:
+         return False
+ 
+-    async def exec(self, handle, cmd, on_output=None, env=None, exec_timeout=None, as_tool=None):
++    async def exec(self, handle, cmd, on_output=None, env=None, exec_timeout=None, tool=False):
+         self.calls.append(list(cmd))
+         self.envs.append(dict(env or {}))
+-        self.as_tools.append(as_tool)
++        self.exec_tools.append(tool)
+         return self.result
+ 
+ 
+@@ -206,7 +206,7 @@ def test_an_artifact_plugin_runs_when_resolved_and_mounted(tmp_path):
+     assert reg.tools == [{"chart": MountedTool(sha="c" * 64, version="")}]
+     # Mounted from the third-party store, which only the tool group may read —
+     # so it runs as the tool identity (docs/plan-tool-identity-secrets.md P2).
+-    assert sb.as_tools == ["chart"]
++    assert sb.exec_tools == ["chart"]
+ 
+ 
+ def test_a_live_sandbox_started_before_the_plugin_was_installed_says_so(tmp_path):
