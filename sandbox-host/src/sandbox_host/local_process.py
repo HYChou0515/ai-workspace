@@ -508,7 +508,7 @@ _TOOL_PINNED = ("HOME", "SANDBOX_HOME", "PYTHONNOUSERSITE", "PYTHONSAFEPATH", "P
 #: sandbox's own PATH starts with the `python` shim, which can route to the
 #: project venv the agent fills — a tool that runs `python` by name would run
 #: whatever was planted there.
-_TOOL_PATH = "/usr/local/bin:/usr/bin:/bin"
+_TOOL_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 
 # #775: where `uv sync` builds the workspace's own environment. A sibling of

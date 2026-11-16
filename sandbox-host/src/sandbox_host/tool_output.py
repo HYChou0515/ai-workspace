@@ -26,8 +26,10 @@ from collections.abc import Iterable
 #: Where Python quotes source: under a frame (`File "…", line N` — in a
 #: traceback, an exception group's `|` margin, or a SyntaxError, which has no
 #: `Traceback` header at all), and under a warning (`path:N: SomeWarning: msg`).
-#: A line indented deeper than the line that introduced it is the quote.
-_FRAME = re.compile(rb'^([ |]*)File ".*", line \d+')
+#: A line indented deeper than the frame that introduced it is the quote; under a
+#: warning, Python quotes exactly one line. Python always indents a frame, so a
+#: `File "…"` at column 0 is a tool's own text, not one.
+_FRAME = re.compile(rb'^([ |]+)File ".*", line \d+')
 _WARNING = re.compile(rb"^\S.*:\d+: \w*Warning: ")
 #: The shortest line of a multi-line credential masked on its own: shorter ones
 #: (a lone `}`) would mask half of every JSON a tool prints, and say nothing.
@@ -63,6 +65,10 @@ class ToolOutputFilter:
         # The column of the line that introduced a quote (a frame, a warning),
         # or None when the current line is not under one.
         self._quoted_under: int | None = None
+        # Under a warning: the one line Python quotes is next.
+        self._warning_quote = False
+        # The last line ended in "\r": a bare "\n" now is CRLF's other half.
+        self._after_cr = False
         self._hid = False
 
     def feed(self, chunk: bytes) -> bytes:
@@ -103,17 +109,28 @@ class ToolOutputFilter:
         return self._mask(line)
 
     def _drops(self, line: bytes) -> bool:
+        crlf_half = self._after_cr and line == b"\n"
+        self._after_cr = line.endswith(b"\r")
+        if crlf_half:
+            # CRLF arrives as "…\r" then "\n": the second half is no line.
+            return False
         body = line.rstrip(b"\r\n")
         if not body:
-            # A bare line end — CRLF arrives as "…\r" then "\n" — or a blank:
-            # neither starts nor ends a quote.
+            # A real blank line: Python never puts one inside a quote.
+            self._quoted_under = None
+            self._warning_quote = False
             return False
         if frame := _FRAME.match(body):
             self._quoted_under = len(frame.group(1))
+            self._warning_quote = False
             return False
         if _WARNING.match(body):
-            self._quoted_under = 0
+            self._quoted_under = None
+            self._warning_quote = True
             return False
+        if self._warning_quote:
+            self._warning_quote = False
+            return _column(body) > 0
         if self._quoted_under is not None and _column(body) > self._quoted_under:
             return True
         # The exception line, a group's separator, "During handling…": the

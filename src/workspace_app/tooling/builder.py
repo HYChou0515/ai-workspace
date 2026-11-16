@@ -51,6 +51,7 @@ from workspace_app.tooling.artifact import (
     render_manifest,
     verify_bundle,
 )
+from workspace_app.tooling.tool_env import is_loader_name
 from workspace_app.tooling.tool_secrets import (
     RECIPIENTS_ENV,
     SECRETS_FILE,
@@ -409,6 +410,21 @@ def _inject_mcp(bundle: Path) -> None:
     entry.chmod(0o755)
 
 
+def _refuse_dropped_names(env_needs: tuple[EnvSpec, ...] | None) -> None:
+    """Fail the build on a declared name the sandbox host never passes to a
+    third-party tool (`tool_env.is_loader_name` — the same file the host runs).
+    Its users would be asked to fill it in, and the tool would never see it.
+    The tool's OWN credentials (`secret`) are added after the scrub and pass."""
+    if dropped := [e.name for e in env_needs or () if not e.secret and is_loader_name(e.name)]:
+        raise BuildError(
+            f"env.json declares {', '.join(dropped)}, which a third-party tool never "
+            "receives: the platform drops user-set names that decide where code loads "
+            "from, where traffic goes or whom it trusts (the list: sandbox_host/tool_env.py). "
+            "Give the variable your own name, or, for a proxy or CA the whole network "
+            "needs, ask the platform team to set it on the sandbox host."
+        )
+
+
 def _seal_secrets(env_needs: tuple[EnvSpec, ...] | None) -> bytes | None:
     """The bytes of the bundle's sealed-secrets file, or None when `env.json`
     marks nothing secret (docs/plan-tool-identity-secrets.md P4).
@@ -457,6 +473,7 @@ def build_artifact(
     # that `main` cannot catch, so the author's CI log gets a traceback
     # instead of one `build failed:` line.
     env_needs = read_env_declaration(source)
+    _refuse_dropped_names(env_needs)
     sealed = _seal_secrets(env_needs)
     out.mkdir(parents=True, exist_ok=True)
 

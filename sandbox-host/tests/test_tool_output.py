@@ -103,6 +103,28 @@ def test_a_syntax_error_loses_its_source_line():
     assert b"SyntaxError: '(' was never closed" in out
 
 
+def test_a_warning_hides_only_the_one_line_python_quotes():
+    """Review round 2 (L1): Python prints one source line under a warning. The
+    tool's own indented lines after it are its output, not a quote."""
+    data = _WARNING + b"  data row 1\n  data row 2\n"
+    out = _run(ToolOutputFilter(tool="erp", hide_source=True), data)
+    assert b"SECRET" not in out
+    assert b"  data row 1\n  data row 2\n" in out
+
+
+def test_a_frame_at_column_zero_is_not_a_frame():
+    """Python always indents `File "…"` under its header; a tool printing a
+    log line that starts with it at column 0 is not a traceback."""
+    data = b'File "report.py", line 3 is where the totals are\n    | col | val |\n'
+    assert _run(ToolOutputFilter(tool="erp", hide_source=True), data) == data
+
+
+def test_a_blank_line_ends_a_quote():
+    data = b'  File "/w/x.py", line 1, in f\n\n    indented answer text\n'
+    out = _run(ToolOutputFilter(tool="erp", hide_source=True), data)
+    assert b"    indented answer text\n" in out
+
+
 def test_crlf_output_is_filtered_the_same():
     out = _run(ToolOutputFilter(tool="erp", hide_source=True), TB.replace(b"\n", b"\r\n"))
     assert b"password=PASSWORD" not in out

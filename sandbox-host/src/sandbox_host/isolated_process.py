@@ -224,6 +224,21 @@ class _Identity:
 # A seam for the one true system-binary boundary (`setfacl`): the default shells
 # out; tests inject a spy so they need neither root nor the `acl` package.
 AclRunner = Callable[[list[str]], None]
+# A seam for running a command AS one of a sandbox's uids, outside the exec
+# path (no cgroup, no streaming): the per-call widening around a tool call. The
+# default drops via `setpriv`; tests record the (uid, argv) pairs. Failures are
+# expected and ignored — each uid can only change what it owns.
+RunAs = Callable[[int, list[str]], None]
+
+
+def _run_as(uid: int, argv: list[str]) -> None:
+    subprocess.run(
+        ["setpriv", f"--reuid={uid}", f"--regid={uid}", "--clear-groups", "--", *argv],
+        check=False,
+        capture_output=True,
+    )
+
+
 # A seam for the privileged `chown` in `_own` (#504): the default calls
 # `os.chown`; tests inject a spy to assert the (path, uid) pairs non-root (the
 # uid pool is pinned to the caller's own uid).
@@ -259,6 +274,7 @@ class IsolatedProcessSandbox(LocalProcessSandbox):
         chown_runner: ChownRunner | None = None,
         tool_gid: int | None = None,
         tool_secret_key: X25519PrivateKey | None = None,
+        run_as: RunAs | None = None,
     ) -> None:
         super().__init__(
             root_dir=Path(root_dir) if root_dir is not None else None,
@@ -278,6 +294,7 @@ class IsolatedProcessSandbox(LocalProcessSandbox):
         self._identities: dict[str, _Identity] = {}
         self._acl_runner: AclRunner = acl_runner or _run_setfacl
         self._chown_runner: ChownRunner = chown_runner or _run_chown
+        self._run_as: RunAs = run_as or _run_as
         self._alloc_lock = asyncio.Lock()
         # docs/plan-tool-identity-secrets.md: the group every sandbox's TOOL uid
         # holds and no sandbox uid does — it is what reads the third-party
@@ -375,14 +392,6 @@ class IsolatedProcessSandbox(LocalProcessSandbox):
         self._chown_runner(workspace, ident.uid)
         for path in workspace.rglob("*"):
             self._chown_runner(path, ident.uid)
-        if ident.tool_uid is not None:
-            # docs/plan-tool-identity-secrets.md: the restore wrote every file
-            # back with its archived mode, and setting a mode on a file that
-            # has an ACL shrinks its mask — the tool uid's entry then grants
-            # nothing, down to the workspace root (archived 0700). The sandbox
-            # uid owns the files and never noticed. Applying the ACL again
-            # recomputes every mask.
-            self._acl_runner(_acl_argv(workspace, ident.uid, ident.tool_uid))
 
     def _provision(self, workspace: Path, uid: int, *tool_uids: int) -> None:
         # Own the workspace to the sandbox uid (gid left as-is via -1, so this
@@ -521,22 +530,37 @@ class IsolatedProcessSandbox(LocalProcessSandbox):
             return await super().exec(
                 handle, cmd, on_output, env, exec_timeout=exec_timeout, as_tool=as_tool
             )
-        # docs/plan-tool-identity-secrets.md: the tool reaches the workspace only
-        # through its ACL entry, which a file's MASK caps — and any mode set
-        # after creation (`chmod 644`, an archive the agent unpacked) shrinks
-        # it. So the ACL goes on again first, recomputing every mask; and after,
-        # everything is handed back to the sandbox uid (the `reown` every restore
-        # already runs), so what the tool made — a 0600 temp file renamed into
-        # place, say — is the agent's to read, edit and chmod. A walk of the
-        # workspace each way: the price of the two identities sharing it.
-        workspace = self._workspace(handle)
-        await asyncio.to_thread(self._acl_runner, _acl_argv(workspace, ident.uid, ident.tool_uid))
+        # docs/plan-tool-identity-secrets.md: each identity reaches the other's
+        # files only through its named ACL entry, which a file's MASK caps — and
+        # any mode set after creation shrinks it (`chmod 644`, an archive the
+        # agent unpacked, a tool's 0600 temp file renamed into place). On a file
+        # with an ACL, `chmod g+…` sets the mask, so each identity widens what
+        # IT OWNS, AS ITSELF: the sandbox uid before the call, the tool uid
+        # after. NOT as root: a root walk over a tree the agent writes can be
+        # raced — a process it left running swaps a file for a symlink mid-walk
+        # and root grants it the target, any file on the host (review round 2,
+        # reproduced). As the owner, a race only makes a uid change what it
+        # already owns. Nobody outside the two named entries gains anything:
+        # the owning group is the sandbox's own, and "other" is untouched.
+        # A walk of the workspace each way: the price of sharing it.
+        # Before, the agent's directories and the files its group can already
+        # read (644 -> 664): the tool can then create where the agent unpacked
+        # and edit what a tool always could — while a file the agent made 600
+        # (an SSH key, say), with no group access at all, stays as it chose.
+        # After, only the tool's own files, so its outputs — 0600 temp files
+        # renamed into place included — are the agent's to read and edit.
+        # `find` does not follow symlinks.
+        ws = str(self._workspace(handle))
+        shared = ["find", ws, "(", "-type", "d", "-o", "-perm", "-g+r", ")"]
+        shared += ["-exec", "chmod", "g+rwX", "{}", "+"]
+        await asyncio.to_thread(self._run_as, ident.uid, shared)
         try:
             return await super().exec(
                 handle, cmd, on_output, env, exec_timeout=exec_timeout, as_tool=as_tool
             )
         finally:
-            await self.reown(handle)
+            made = ["find", ws, "-user", str(ident.tool_uid), "-exec", "chmod", "g+rwX", "{}", "+"]
+            await asyncio.to_thread(self._run_as, ident.tool_uid, made)
 
     def _exec_argv(
         self, handle: SandboxHandle, cmd: list[str], as_tool: str | None = None

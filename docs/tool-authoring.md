@@ -287,10 +287,12 @@ https://gitlab.example/api/v4/projects/<id>/jobs/artifacts/<ref>/raw/dist/tool.m
   - 你的檔案只有工具自己讀得到——AI 讀不到你的原始碼，也沒辦法在 shell 裡直接執行
     `/.tools/<你的工具>/…`；只能透過工具呼叫。
   - 你的工具**只用自己打包時帶的套件**，不會去用使用者在沙盒裡 `pip install` 的版本；`PATH` 是系統的
-    （`/usr/local/bin:/usr/bin:/bin`）。使用者設的變數裡，會改變「從哪裡載入程式、流量走哪、信任誰」的
+    （`/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`）。使用者設的變數裡，會改變「從哪裡載入程式、流量走哪、信任誰」的
     不會傳給你：`PYTHON*`、`LD_*`、`HOME`、`PATH`、`TMPDIR`、`OPENSSL_*`、`SSL_*`、`*_PROXY`、
     `REQUESTS_CA_BUNDLE`、`GIT_*`、`PIP_*`、`UV_*`、`NODE_*` 等（完整清單在 `sandbox_host/tool_env.py`）。
-    你自己的 token、網址照常拿得到。你測的是哪個版本，跑的就是哪個版本。
+    你自己的 token、網址照常拿得到。你測的是哪個版本，跑的就是哪個版本。在 `env.json` 宣告這類名字，
+    build 會失敗並指名——換一個你自己的名字；整個網路都需要的 proxy／CA 由平台設在 host 上。
+  - 使用者（或 AI）設成 `600`／`700` 的檔案，你的工具讀不到——那是他們刻意設成私有的。
   - 你出錯時的 traceback（含 exception group、SyntaxError）與 warning，平台會拿掉引用的原始碼行
     （留檔名、行號、例外訊息），並在 stderr 補一行說明有東西被拿掉。要在平台上看完整的，
     在 workspace 的環境變數設 `TOOL_DEBUG=<名字>`（多支用逗號隔開）。名字是這支工具**在那個部署裡**的名字——AI 呼叫的指令 `<名字>__<指令>` 的前半段，不一定等於你的套件名。

@@ -3654,7 +3654,12 @@ AI 工具說明裡每個目標後面多了它的長度上限(沒設的寫 10 個
 - 第三方工具出錯時，traceback／exception group／SyntaxError／warning 裡引用的原始碼行會拿掉（stderr 補一行說明）；
   workspace 環境變數設 `TOOL_DEBUG=<工具名>` 就不拿。聊天的「設定變數」卡片不會向使用者要 `TOOL_DEBUG`。
 - 工具印出自己的帳密一律換成 `***`（多行的值逐行遮）。標成 `secret` 的變數不在環境變數面板，卡片也不會要它。
-- **每次第三方工具呼叫前後各掃一次工作區**（重套 ACL、把工具建的檔案擁有者交還沙盒身分）。工作區檔案多時會慢一點。
+- **每次第三方工具呼叫前後各掃一次工作區**（不用 root：呼叫前以沙盒身分放寬它的資料夾與群組可讀的檔案，
+  呼叫後以工具身分放寬工具自己的檔案）。工作區檔案多時會慢一點。AI 設成 `600` 的檔案工具讀不到；AI 可以讀、改、
+  刪工具寫的檔案，但不能 `chmod` 它們。
+- **使用者設的 proxy／CA 變數不再交給第三方工具**。需要的部署請設在 sandbox-host pod 的環境變數（`rollout 前`）。
+  **沒做的症狀**：原本靠使用者設 `HTTPS_PROXY` 才連得出去的工具會連線失敗。作者在 `env.json` 宣告這類名字，
+  build 會失敗並指名。
 
 **確認做完**（`rollout 後`，在 staging）：
 1. `curl <host>/healthz` 的 `capabilities` 有 `tool-identity`。
@@ -3662,7 +3667,7 @@ AI 工具說明裡每個目標後面多了它的長度上限(沒設的寫 10 個
 3. 請 AI 執行 `id -u`，再呼叫一支會印出 `id -u` 的第三方工具（或請作者暫時加一個）：兩個數字不同。
 4. 請 AI 執行 `cat ../.tools/<第三方工具>/launch`：Permission denied，結果開頭有「only through its tool call」那句。
 5. 請 AI 執行 `cat ../.tools/sci-plot/launch`（任一支內建工具）：讀得到——內建工具沒變。
-6. 讓工具在 workspace 寫一個檔，再請 AI 修改、`chmod`、刪除它：都成功。
+6. 讓工具在 workspace 寫一個檔，再請 AI 讀、修改、刪除它：都成功（`chmod` 會失敗——AI 不是擁有者，預期如此）。
 7. 請 AI 解壓一個 zip（或 `mkdir d && chmod 755 d`），再讓工具寫檔進那個資料夾：成功。
 8. 讓 item 閒置到沙盒被回收、再打開（從備份還原），重複第 6、7 步：都成功。
 9. 請 AI 執行 `curl -s -X POST localhost:<host port>/sandboxes/<自己的 id>/exec -d '{"cmd":["id"],"as_tool":"<工具>"}'`：
