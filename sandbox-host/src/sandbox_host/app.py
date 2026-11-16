@@ -75,6 +75,11 @@ _CAPABILITIES = frozenset(
         # nothing. Its absence means the app cannot know what a sandbox costs its
         # owner and charges zero — visibly under-counting rather than guessing.
         "resource-defaults",
+        # An exec naming `as_tool` runs as the item's TOOL identity — its own
+        # uid, HOME and group — so the agent cannot read a third-party tool's
+        # files or its running environment (docs/plan-tool-identity-secrets.md).
+        # Its absence means every third-party tool runs as the sandbox's uid.
+        "tool-identity",
     }
 )
 
@@ -228,6 +233,9 @@ class _ExecBody(BaseModel):
     # instance default). Absent on an older client, which then gets the
     # instance default exactly as before.
     exec_timeout: float | None = None
+    # The third-party tool this command launches, when it is one. Absent on an
+    # older client and on every command the agent runs itself.
+    as_tool: str | None = None
 
 
 def _frame(obj: dict[str, object]) -> bytes:
@@ -240,6 +248,7 @@ async def _exec_ndjson(
     cmd: list[str],
     env: Mapping[str, str] | None = None,
     exec_timeout: float | None = None,
+    as_tool: str | None = None,
 ) -> AsyncGenerator[bytes, None]:
     """Run `exec` and yield NDJSON frames as output arrives.
 
@@ -259,7 +268,12 @@ async def _exec_ndjson(
     async def run() -> None:
         try:
             result = await sandbox.exec(
-                handle, cmd, on_output=on_output, env=env, exec_timeout=exec_timeout
+                handle,
+                cmd,
+                on_output=on_output,
+                env=env,
+                exec_timeout=exec_timeout,
+                as_tool=as_tool,
             )
             queue.put_nowait(("done", result))
         except Exception as exc:  # noqa: BLE001 — relayed in-band as an error frame
@@ -935,7 +949,14 @@ def make_host_app(
     @app.post("/sandboxes/{rid}/exec")
     async def exec_(rid: str, body: _ExecBody) -> StreamingResponse:
         return StreamingResponse(
-            _exec_ndjson(sandbox, SandboxHandle(id=rid), body.cmd, body.env, body.exec_timeout),
+            _exec_ndjson(
+                sandbox,
+                SandboxHandle(id=rid),
+                body.cmd,
+                body.env,
+                body.exec_timeout,
+                body.as_tool,
+            ),
             media_type="application/x-ndjson",
         )
 

@@ -488,6 +488,17 @@ _HOME = ".home"
 #: on DOWNLOAD and then trusts its own unpacked archive. An item id is never
 #: recycled. What bounds the collection is the sweeper, not the key.
 _UV_CACHE = ".uv-cache"
+#: The third-party tools' own `$HOME` (docs/plan-tool-identity-secrets.md): a
+#: sibling of `.home`, owned by the item's TOOL identity. Not `.home`, because
+#: the agent writes that one, and a tool launcher imports from `$HOME/.local` —
+#: whatever the agent planted there would run inside the tool, beside its
+#: credentials.
+_TOOL_HOME = ".tool-home"
+#: The names that define a tool command's environment rather than describe the
+#: user's wishes: for a command run `as_tool`, these are the exec path's and the
+#: caller's variables do NOT win over them. Every other name keeps the
+#: precedence tools have always had (the caller's value wins).
+_TOOL_PINNED = ("HOME", "SANDBOX_HOME", "PYTHONNOUSERSITE", "PYTHONSAFEPATH")
 
 
 # #775: where `uv sync` builds the workspace's own environment. A sibling of
@@ -1078,12 +1089,16 @@ class LocalProcessSandbox:
         """
 
     def _exec_argv(
-        self, handle: SandboxHandle, cmd: list[str]
+        self, handle: SandboxHandle, cmd: list[str], as_tool: str | None = None
     ) -> tuple[list[str], Path, dict[str, str]]:
         """Build the `(argv, cwd, env)` for one command. The seam subclasses
         override to wrap `cmd` (e.g. `IsolatedProcessSandbox` prepends a
         `setpriv` + cgroup-join wrapper); the exec pump/timeout machinery below
-        stays shared. Validates the handle (raises `SandboxNotFound`)."""
+        stays shared. Validates the handle (raises `SandboxNotFound`).
+
+        `as_tool` names the third-party tool this command launches. This backend
+        has one identity per sandbox, so it runs the command exactly like any
+        other; `IsolatedProcessSandbox` is the one that separates them."""
         root = self._require(handle)
         ws = root / _WORKSPACE
         self._ensure_home(handle, root)
@@ -1258,8 +1273,9 @@ class LocalProcessSandbox:
         on_output: OutputSink | None = None,
         env: Mapping[str, str] | None = None,
         exec_timeout: float | None = None,
+        as_tool: str | None = None,
     ) -> ExecResult:
-        argv, sub_cwd, base_env = self._exec_argv(handle, cmd)
+        argv, sub_cwd, base_env = self._exec_argv(handle, cmd, as_tool=as_tool)
         # A caller may name its own TOTAL wall-clock budget for one command.
         # `uv sync` does: a cold start downloads a whole dependency stack, and
         # the instance default (60s) turned a slow link into exit 124 instead of
@@ -1269,6 +1285,11 @@ class LocalProcessSandbox:
         # The caller's variables land LAST, so they win over the exec path's own
         # settings — the precedence the tools have always had.
         env = {**base_env, **env} if env else base_env
+        if as_tool is not None:
+            # …except, for a tool command, the names that decide where its code
+            # is loaded from. A caller-supplied `HOME` the agent can write is a
+            # user site the tool would import from (see `_TOOL_HOME`).
+            env.update({k: base_env[k] for k in _TOOL_PINNED if k in base_env})
         try:
             proc = await asyncio.create_subprocess_exec(
                 *argv,

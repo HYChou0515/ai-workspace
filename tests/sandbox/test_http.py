@@ -226,6 +226,8 @@ def _fake_host(backend: MockSandbox, advertise_url: str) -> FastAPI:
                     env=body.get("env"),
                     # Same contract for the per-call wall-clock budget (#775).
                     exec_timeout=body.get("exec_timeout"),
+                    # …and for which third-party tool a command launches.
+                    as_tool=body.get("as_tool"),
                 )
             except Exception as exc:  # noqa: BLE001 — relayed in-band as an error frame
                 yield (
@@ -1234,3 +1236,37 @@ async def test_no_budget_sends_the_same_request_it_always_did():
         await sb.exec(h, ["true"])
     assert seen and "exec_timeout" not in seen[-1]
     assert backend.exec_timeouts[-1] is None
+
+
+async def test_exec_carries_the_tool_it_launches_across_the_hop():
+    """docs/plan-tool-identity-secrets.md P1, the app's half (the host's is
+    `sandbox-host/tests/test_tool_identity_wire.py`). A client that dropped the
+    key would run every third-party tool as the sandbox uid — which looks exactly
+    like working."""
+    backend = MockSandbox()
+    app = _fake_host(backend, _ADVERTISE)
+    async with httpx.AsyncClient(transport=ASGITransport(app=app)) as client:
+        sb = HttpSandbox(base_url=_ADVERTISE, client=client)
+        h = await sb.create(SandboxSpec())
+        await sb.exec(h, ["../.tools/erp/launch", "q", "{}"], as_tool="erp")
+    assert backend.exec_as_tools[-1] == "erp"
+
+
+async def test_an_ordinary_command_sends_no_tool():
+    """The agent's own commands send the request they always sent."""
+    seen: list[dict] = []
+    backend = MockSandbox()
+    app = _fake_host(backend, _ADVERTISE)
+
+    @app.middleware("http")
+    async def _capture(request, call_next):  # noqa: ANN001, ANN202
+        if request.url.path.endswith("/exec"):
+            seen.append(json.loads(await request.body()))
+        return await call_next(request)
+
+    async with httpx.AsyncClient(transport=ASGITransport(app=app)) as client:
+        sb = HttpSandbox(base_url=_ADVERTISE, client=client)
+        h = await sb.create(SandboxSpec())
+        await sb.exec(h, ["true"])
+    assert seen and "as_tool" not in seen[-1]
+    assert backend.exec_as_tools[-1] is None

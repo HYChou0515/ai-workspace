@@ -145,6 +145,9 @@ class DockerSandbox:
         on_output: OutputSink | None = None,
         env: Mapping[str, str] | None = None,
         exec_timeout: float | None = None,
+        # Accepted and ignored: this backend mounts no third-party tools
+        # (`SandboxSpec.tools`), so nothing it runs is one (see the protocol).
+        as_tool: str | None = None,
     ) -> ExecResult:
         container = self._require(handle)
         result: Any = await asyncio.to_thread(

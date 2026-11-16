@@ -66,6 +66,7 @@ class MockSandbox:
         # that command's environment.
         self.exec_envs: list[dict[str, str]] = []
         self.exec_timeouts: list[float | None] = []
+        self.exec_as_tools: list[str | None] = []
         self._exposed: dict[str, list[int]] = {}
         # #366: readiness is a first-class marker kept OUTSIDE the file store, so
         # it never appears in walk/exists (it lives outside the workspace on a
@@ -180,6 +181,7 @@ class MockSandbox:
         on_output: OutputSink | None = None,
         env: Mapping[str, str] | None = None,
         exec_timeout: float | None = None,
+        as_tool: str | None = None,
     ) -> ExecResult:
         fs = self._require(handle)
         # Recorded, not applied: there is no process to hand it to. A double
@@ -187,6 +189,7 @@ class MockSandbox:
         # assert nothing — which is how a delivery half goes missing unnoticed.
         self.exec_envs.append(dict(env) if env else {})
         self.exec_timeouts.append(exec_timeout)
+        self.exec_as_tools.append(as_tool)
         result = self._exec_result(fs, cmd)
         # Stream the (whole) stdout to the sink in one shot — enough for tests
         # that assert live output is forwarded.

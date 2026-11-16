@@ -68,7 +68,12 @@ def build_tool_resolver(settings: SandboxHostSettings) -> ToolResolver | None:
 
 def build_sandbox(settings: SandboxHostSettings) -> IsolatedProcessSandbox:
     return IsolatedProcessSandbox(
-        uid_min=settings.uid_min,
+        # The bottom of the range the operator set aside for sandbox uids is the
+        # tool group (docs/plan-tool-identity-secrets.md): already reserved on
+        # this host, so it needs no setting of its own and collides with no
+        # account — and the pool starts above it, so no sandbox uid ever holds it.
+        tool_gid=settings.uid_min,
+        uid_min=settings.uid_min + 1,
         uid_max=settings.uid_max,
         cgroup_root=resolve_cgroup_root(settings),
         root_dir=settings.root,

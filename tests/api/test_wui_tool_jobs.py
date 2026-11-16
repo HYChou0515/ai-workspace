@@ -34,7 +34,7 @@ class _JobSandbox(_Sandbox):
         self.timeouts: list[float | None] = []
         self.block = block
 
-    async def exec(self, handle, cmd, on_output=None, env=None, exec_timeout=None):
+    async def exec(self, handle, cmd, on_output=None, env=None, exec_timeout=None, as_tool=None):
         self.timeouts.append(exec_timeout)
         out = await super().exec(handle, cmd, on_output=on_output, env=env)
         if self.block:

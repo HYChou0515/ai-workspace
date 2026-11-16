@@ -569,6 +569,7 @@ class HttpSandbox:
         on_output: OutputSink | None = None,
         env: Mapping[str, str] | None = None,
         exec_timeout: float | None = None,
+        as_tool: str | None = None,
     ) -> ExecResult:
         pod_url, remote_id = _decode_handle(handle)
         url = f"{pod_url}/sandboxes/{remote_id}/exec"
@@ -582,6 +583,10 @@ class HttpSandbox:
             # Omitted when empty so the host sees the same request it always
             # has — an older host ignores the key, a newer one applies it.
             body["env"] = dict(env)
+        if as_tool is not None:
+            # Same shape: absent on every command that is not a third-party
+            # tool, so the agent's own commands send what they always sent.
+            body["as_tool"] = as_tool
         try:
             async with self._client.stream("POST", url, json=body) as resp:
                 resp.raise_for_status()
