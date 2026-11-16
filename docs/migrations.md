@@ -3585,6 +3585,55 @@ AI 工具說明裡每個目標後面多了它的長度上限(沒設的寫 10 個
 
 **還是舊版 image 時**:設定裡已經刪掉 `ext_ai_enabled` 也沒關係(舊版預設就是關的);但設定裡**不能有** `max_words` / `max_cjk`(見上)。
 
+### 2026-11-16 · #1024 第三方工具用自己的身分執行；工具自己的帳密不再寫在程式裡 {#pr-1024}
+
+⚠️ **要先在 staging 驗過**（清單在最後）：這次改的是 sandbox-host 怎麼執行第三方工具，單元測試證明不了核心真的這樣做。
+
+**設定** — app 的 `config.yaml` 沒有新 key。sandbox-host 多一個**選填**環境變數：
+- `SANDBOX_HOST_TOOL_SECRET_KEY_FILE`（`rollout 前`，**只在**有工具要用 `"secret": true` 時才需要）：指向掛進 pod 的
+  私鑰檔。**為什麼**：工具自己的帳密是用這把鑰匙的公鑰加密的，host 要用它解開。**沒做的症狀**：那些工具每次呼叫都
+  exit 3，訊息寫「this deployment has no key」。設了卻讀不到檔案，host 開不了機（log 有 `tool secret key`）。
+  做法見 `deployment.md` §15.10。
+- **沒有新的 uid 範圍設定**：工具身分從既有的 `SANDBOX_HOST_UID_MIN..MAX` 池子借，工具群組用 `SANDBOX_HOST_UID_MIN`
+  那個號碼。
+
+**資料** — 不用 migrate。host 上已經解開的第三方 bundle，新版 host **啟動時自動**改成只有工具群組讀得到。
+
+**k8s · CI 側**
+- ⚠️ **順序：先升 app（所有 pod ready），再升 sandbox-host。回滾反過來：先 host、再 app。**
+  **為什麼**：新 host 把第三方 bundle 關成只有工具群組讀得到，而只有新 app 會告訴 host「這是工具，用工具身分跑」。
+  **沒照做的症狀**：新 host 配舊 app（同時滾動的空檔、或只回滾 app）時，**每一支第三方工具都 Permission denied**。
+  反過來（新 app 配舊 host）沒事：舊 host 忽略那個欄位，照舊用沙盒身分跑。
+- **builder 映像要重 build、發新 tag，並請工具作者改用新 tag**（`rollout 後`）。**為什麼**：只有新的 builder 認得
+  `env.json` 的 `"secret": true`。**沒做的症狀**：用舊 builder 的作者寫了 `secret`，build 照樣綠燈，但值沒被封進去，
+  而且那個名字會以一般變數出現在使用者的環境變數面板上。
+- 要讓作者用 `"secret": true`：產生金鑰對、私鑰掛進 sandbox-host、公鑰設成 GitLab **group** 的 CI/CD 變數
+  `TOOL_SECRET_RECIPIENTS`（`deployment.md` §15.10）。沒有作者要用時可以晚點做。
+- **容量**：每個沙盒現在佔池子的兩個 uid。預設池約十萬個，不用動；自己把池子設很小的部署，確認 `(MAX-MIN)/2`
+  仍大於一台 host 同時開的沙盒數。
+
+**行為改變，沒有開關**（只影響第三方工具與 `{artifact: …}` 的 view plugin；內建工具、`python`、`{bundle: …}` 的 view plugin 不變）：
+- 第三方工具用每個沙盒另一個 uid 執行；AI 讀不到它的檔案，也看不到它執行中的環境變數。
+- AI 在 shell 直接讀或跑 `/.tools/<第三方工具>/…` 會被拒（Permission denied），結果開頭說明「只能透過工具呼叫使用」。
+- 第三方工具只用自己打包的套件：使用者 `pip install` 的版本、使用者設的 `PYTHONPATH`／`PATH`／`HOME`／`LD_*` 等
+  不再影響它。
+- 第三方工具出錯時，回給 AI 和顯示在工具卡片的 traceback 拿掉原始碼行；workspace 環境變數設 `TOOL_DEBUG=<工具名>`
+  就不拿。工具印出自己的帳密時一律換成 `***`。
+- 標成 `secret` 的變數不會出現在環境變數面板，「設定變數」卡片也不會要使用者填。
+
+**確認做完**（`rollout 後`，在 staging）：
+1. `curl <host>/healthz` 的 `capabilities` 有 `tool-identity`。
+2. 開一個有第三方工具的 item，讓 AI 呼叫那支工具：照常有結果。
+3. 請 AI 執行 `id -u`，再呼叫一支會印出 `id -u` 的第三方工具（或請作者暫時加一個）：兩個數字不同。
+4. 請 AI 執行 `cat ../.tools/<第三方工具>/launch`：Permission denied，結果開頭有「only through its tool call」那句。
+5. 請 AI 執行 `cat ../.tools/sci-plot/launch`（任一支內建工具）：讀得到——內建工具沒變。
+6. 讓工具在 workspace 寫一個檔，再請 AI 修改、刪除它：都成功。
+7. （有設金鑰時）用一支 `"secret": true` 的工具：它拿得到值；它的輸出裡值是 `***`；環境變數面板沒有那個名字。
+
+**還是舊版 image 時**：host 舊、app 新——第三方工具照舊用沙盒身分執行（`as_tool` 被忽略），AI 仍讀得到工具檔案；
+`"secret"` 的值 host 不會解開。app 舊、host 新——app 不送 `as_tool`，第三方工具用沙盒身分跑，**但 bundle 已經只有
+工具群組讀得到，所以第三方工具會 Permission denied**。這就是上面「先 app、後 host；回滾反過來」的原因。
+
 ---
 
 ### 2026-11-12 · 00eb2640 · #1022 WUI 舊副本會說「有新版」，使用者可以自己換新版 {#pr-1022}
