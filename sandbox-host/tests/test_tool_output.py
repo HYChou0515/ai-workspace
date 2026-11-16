@@ -310,3 +310,18 @@ async def test_a_last_line_without_a_newline_and_the_hint_reach_the_result(sandb
     result = await sb.exec(h, ["../.tools/erp/launch", "run", tail], as_tool="erp")
     assert result.stdout == b"last"
     assert result.stderr.endswith(b"source lines in this output are hidden]\n")
+
+
+async def test_a_tools_stdout_never_carries_the_hint(sandbox):
+    """Review round 1: a tool that logs a handled traceback to stdout and then
+    prints its JSON answer there must still print valid JSON."""
+    sb, h = sandbox
+    code = (
+        "import traceback, runpy\n"
+        "try:\n    runpy.run_path('boom.py')\n"
+        "except ValueError:\n    traceback.print_exc(file=__import__('sys').stdout)\n"
+        "print('{\"ok\": true}')"
+    )
+    result = await sb.exec(h, ["../.tools/erp/launch", "run", code], as_tool="erp")
+    assert result.stdout.endswith(b'{"ok": true}\n')
+    assert b"hidden" not in result.stdout

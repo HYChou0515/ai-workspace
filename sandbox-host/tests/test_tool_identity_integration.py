@@ -129,6 +129,20 @@ async def test_the_agent_cannot_read_a_running_tools_environment(isolated):
 
 
 @requires_isolation
+async def test_a_tools_temp_file_never_reaches_the_agent(isolated):
+    """Review round 3 (reproduced as root): a tool's temp file used to sit in the
+    workspace. It is under the tool's own HOME now, which the agent cannot enter
+    — during the call or after it."""
+    h = await isolated.create(SandboxSpec(tools=isolated.mounts))
+    tool = await _tool(isolated, h, 't=$(mktemp); echo s3cret > "$t"; echo "$t"')
+    assert tool.exit_code == 0, tool.stderr
+    path = tool.stdout.strip().decode()
+    assert "/.tool-home/tmp/" in path, path
+    peek = await isolated.exec(h, ["sh", "-c", f"cat {path}; grep -r s3cret . 2>/dev/null"])
+    assert b"s3cret" not in peek.stdout
+
+
+@requires_isolation
 async def test_the_agent_cannot_write_the_tools_home(isolated):
     h = await isolated.create(SandboxSpec(tools=isolated.mounts))
     tool_home = isolated._require(h) / ".tool-home"

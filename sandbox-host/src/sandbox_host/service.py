@@ -103,7 +103,7 @@ def load_tool_secret_key(settings: SandboxHostSettings) -> X25519PrivateKey | No
 
 def build_sandbox(settings: SandboxHostSettings) -> IsolatedProcessSandbox:
     # The bottom id is the tool group and every sandbox takes two uids, so a
-    # range that used to run one sandbox (MIN..MIN+1) now runs none. Say so here.
+    # range that used to run two sandboxes (MIN..MIN+1) now runs none. Say so here.
     if settings.uid_max - tool_group(settings) < 2:
         raise ValueError(
             f"SANDBOX_HOST_UID_MIN..SANDBOX_HOST_UID_MAX ({settings.uid_min}..{settings.uid_max}) "

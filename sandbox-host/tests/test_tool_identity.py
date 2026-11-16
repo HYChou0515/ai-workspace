@@ -101,6 +101,25 @@ async def test_a_tool_command_runs_as_the_tool_identity_in_the_same_cgroup(toole
     assert env["PYTHONSAFEPATH"] == "1"
 
 
+async def test_a_tool_commands_temp_files_are_its_own(tooled):
+    """Review round 3 (reproduced as root): with TMPDIR = the workspace, a tool's
+    private temp file — a credential written out for a subprocess, say — sat in
+    a directory the agent writes, so the agent could move it aside mid-run and
+    read it once the call was over. A tool's TMPDIR is under its own HOME, which
+    the agent cannot enter."""
+    sb, _acl, owned = tooled
+    h = await sb.create(SandboxSpec())
+    ident = sb._identities[h.id]
+    _argv, _cwd, env = sb._exec_argv(h, ["true"], as_tool="erp")
+    tmp = sb._require(h) / ".tool-home" / "tmp"
+    assert env["TMPDIR"] == str(tmp)
+    assert tmp.is_dir()
+    assert (tmp, ident.tool_uid) in owned
+    # The agent's own commands keep the workspace, as before.
+    _argv, cwd, env = sb._exec_argv(h, ["true"])
+    assert env["TMPDIR"] == str(cwd)
+
+
 async def test_an_ordinary_command_keeps_the_sandbox_identity(tooled):
     sb, _acl, _owned = tooled
     h = await sb.create(SandboxSpec())
@@ -352,3 +371,17 @@ async def test_reown_after_a_restore_is_chown_only_as_it_was(tooled, monkeypatch
     acl.clear()
     await sb.reown(h)
     assert acl == []
+
+
+async def test_a_tool_command_points_at_nothing_the_agent_fills(tooled):
+    """Review rounds 1 and 3: the sandbox's PATH starts with a `python` shim that
+    can route to the project venv the agent fills, and these names point a
+    program at that venv, uv's cache or the shim's dir."""
+    from sandbox_host.local_process import _TOOL_PATH
+
+    sb, _acl, _owned = tooled
+    h = await sb.create(SandboxSpec())
+    _argv, _cwd, env = sb._exec_argv(h, ["true"], as_tool="erp")
+    assert env["PATH"] == _TOOL_PATH
+    for name in ("VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT", "UV_CACHE_DIR", "SANDBOX_JAILBIN"):
+        assert name not in env, name

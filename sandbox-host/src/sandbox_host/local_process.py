@@ -503,7 +503,7 @@ _TOOL_HOME = ".tool-home"
 #: user's wishes: for a command run `as_tool`, these are the exec path's and the
 #: caller's variables do NOT win over them. Every other name keeps the
 #: precedence tools have always had (the caller's value wins).
-_TOOL_PINNED = ("HOME", "SANDBOX_HOME", "PYTHONNOUSERSITE", "PYTHONSAFEPATH", "PATH")
+_TOOL_PINNED = ("HOME", "SANDBOX_HOME", "PYTHONNOUSERSITE", "PYTHONSAFEPATH", "PATH", "TMPDIR")
 #: A tool command's PATH: the system's, and nothing the agent can write. The
 #: sandbox's own PATH starts with the `python` shim, which can route to the
 #: project venv the agent fills — a tool that runs `python` by name would run

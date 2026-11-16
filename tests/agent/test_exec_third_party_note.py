@@ -118,3 +118,11 @@ async def test_a_tool_whose_name_merely_starts_the_same_gets_no_note():
     )
     text = await exec_impl(_ctx(result), ["cat", "../.tools/erpnext/x"])
     assert "only through its tool call" not in text
+
+
+async def test_a_failure_that_was_not_refused_gets_no_such_note():
+    """The tool's path in a failure that is NOT "Permission denied" — a typo'd
+    command name, say — is not the platform hiding anything."""
+    result = ExecResult(exit_code=1, stdout=b"", stderr=b"cat: ../.tools/erp/nope: No such file\n")
+    text = await exec_impl(_ctx(result), ["cat", "../.tools/erp/nope"])
+    assert "only through its tool call" not in text

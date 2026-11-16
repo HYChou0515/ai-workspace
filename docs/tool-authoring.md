@@ -257,7 +257,7 @@ https://gitlab.example/api/v4/projects/<id>/jobs/artifacts/<ref>/raw/dist/tool.m
   | 是誰的帳密 | 例子 | 放哪裡 | `env.json` 怎麼寫 |
   |---|---|---|---|
   | **使用者自己的** | 每個人在 https://internal/tokens 產生的個人 token | 使用者在 workspace 的環境變數面板填 | 照常宣告（見下一點） |
-  | **工具自己的**（使用者不該知道） | 查機台用的服務帳號密碼 | 你這個工具的 GitLab 專案：**Settings → CI/CD → Variables**，勾 **Masked** 和 **Hidden** | 加 `"secret": true` |
+  | **工具自己的**（使用者不該知道） | 查機台用的服務帳號密碼 | 你這個工具的 GitLab 專案：**Settings → CI/CD → Variables**，勾 **Masked** 和 **Hidden**（勾了 **Protected** 的話，只有受保護的分支／tag 的 build 拿得到） | 加 `"secret": true` |
 
   工具自己的帳密怎麼走（`docs/plan-tool-identity-secrets.md`）：
 
@@ -292,7 +292,10 @@ https://gitlab.example/api/v4/projects/<id>/jobs/artifacts/<ref>/raw/dist/tool.m
     `REQUESTS_CA_BUNDLE`、`GIT_*`、`PIP_*`、`UV_*`、`NODE_*` 等（完整清單在 `sandbox_host/tool_env.py`）。
     你自己的 token、網址照常拿得到。你測的是哪個版本，跑的就是哪個版本。在 `env.json` 宣告這類名字，
     build 會失敗並指名——換一個你自己的名字；整個網路都需要的 proxy／CA 由平台設在 host 上。
-  - 使用者（或 AI）設成 `600`／`700` 的檔案，你的工具讀不到——那是他們刻意設成私有的。
+  - 使用者（或 AI）設成 `600` 這類群組讀不到的**檔案**，你的工具讀不到——那是他們刻意設成私有的。
+    資料夾則一律讓你的工具能建檔。
+  - 你的暫存檔（`TMPDIR`、`tempfile`）在你自己的私有目錄，AI 讀不到。但你**留在工作區**的檔案就是你的輸出：
+    AI 和使用者讀得到、改得了（不能 `chmod`）。帳密不要寫進工作區。
   - 你出錯時的 traceback（含 exception group、SyntaxError）與 warning，平台會拿掉引用的原始碼行
     （留檔名、行號、例外訊息），並在 stderr 補一行說明有東西被拿掉。要在平台上看完整的，
     在 workspace 的環境變數設 `TOOL_DEBUG=<名字>`（多支用逗號隔開）。名字是這支工具**在那個部署裡**的名字——AI 呼叫的指令 `<名字>__<指令>` 的前半段，不一定等於你的套件名。

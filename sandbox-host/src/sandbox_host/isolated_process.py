@@ -72,11 +72,13 @@ def _acl_argv(workspace: Path, *uids: int) -> list[str]:
     For the sandbox uid it is defence-in-depth since #504: app/host-written
     files are now chowned to it (real ownership, see `_own` / `reown`), so the
     default ACL is a belt-and-suspenders fallback for any residual root-written
-    path. For the TOOL uid (docs/plan-tool-identity-secrets.md) it is the whole
-    mechanism: a third-party tool writes as its own uid, and the default entry
-    for the sandbox uid is what lets the user and the agent edit and delete
-    those files — and the tool's entry is what lets it read theirs. One call, so
-    the two can never be applied to different trees."""
+    path. For the TOOL uid (docs/plan-tool-identity-secrets.md) it is how the
+    two identities reach each other's files: a third-party tool writes as its
+    own uid, and the default entry for the sandbox uid is what lets the user
+    and the agent edit and delete those files — and the tool's entry is what
+    lets it read theirs. A named entry is capped by the file's mask, which a
+    later mode change shrinks; `exec` widens it around each tool call. One
+    call, so the two entries can never be applied to different trees."""
     spec = ",".join(f"u:{uid}:rwx" for uid in uids)
     return ["setfacl", "-R", "-m", spec, "-d", "-m", spec, str(workspace)]
 
@@ -580,12 +582,13 @@ class IsolatedProcessSandbox(LocalProcessSandbox):
         tool_home = str(self._ensure_tool_home(handle, ident.tool_uid))
         env["HOME"] = tool_home
         env["SANDBOX_HOME"] = tool_home
+        env["TMPDIR"] = str(Path(tool_home) / "tmp")
         env["PYTHONNOUSERSITE"] = "1"
         env["PYTHONSAFEPATH"] = "1"
         # Nothing that points at the agent's environment: its PATH heads with a
         # shim into the project venv, and these name that venv and uv's cache.
         env["PATH"] = _TOOL_PATH
-        for name in ("VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT", "UV_CACHE_DIR"):
+        for name in ("VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT", "UV_CACHE_DIR", "SANDBOX_JAILBIN"):
             env.pop(name, None)
         assert self._tool_gid is not None  # a tool uid exists only with a group
         wrapped = _setpriv_cgroup_argv(
@@ -603,4 +606,10 @@ class IsolatedProcessSandbox(LocalProcessSandbox):
         home = self._require(handle) / _TOOL_HOME
         home.mkdir(exist_ok=True)
         self._own_privately(home, tool_uid)
+        # Its TMPDIR too (review round 3): in the workspace, a tool's private
+        # temp file — a credential written out for a subprocess — sat where the
+        # agent could move it aside mid-run and read it after the call.
+        tmp = home / "tmp"
+        tmp.mkdir(exist_ok=True)
+        self._own_privately(tmp, tool_uid)
         return home
