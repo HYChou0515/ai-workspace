@@ -53,6 +53,7 @@ from .protocol import (
     check_preview_key,
 )
 from .tool_cache import BUILTIN_DIR, EXT_DIR
+from .tool_output import ToolOutputFilter, tool_debug_names
 from .walk import scandir_lister, walk_tree
 
 # Bootstrap run (as namespace-root) before chroot: overlay the host's system
@@ -1088,6 +1089,12 @@ class LocalProcessSandbox:
           sandbox for that item is filling breaks its `uv sync` with EACCES.
         """
 
+    def _tool_secrets(self, handle: SandboxHandle, as_tool: str) -> dict[str, str]:
+        """The credentials the platform hands this tool, `{name: value}`
+        (docs/plan-tool-identity-secrets.md P4). Given to the tool's process in
+        its environment and masked out of everything it prints."""
+        return {}
+
     def _exec_argv(
         self, handle: SandboxHandle, cmd: list[str], as_tool: str | None = None
     ) -> tuple[list[str], Path, dict[str, str]]:
@@ -1285,11 +1292,24 @@ class LocalProcessSandbox:
         # The caller's variables land LAST, so they win over the exec path's own
         # settings — the precedence the tools have always had.
         env = {**base_env, **env} if env else base_env
+        filters: tuple[ToolOutputFilter, ToolOutputFilter] | None = None
         if as_tool is not None:
             # …except, for a tool command, the names that decide where its code
             # is loaded from. A caller-supplied `HOME` the agent can write is a
             # user site the tool would import from (see `_TOOL_HOME`).
             env.update({k: base_env[k] for k in _TOOL_PINNED if k in base_env})
+            # P3/P4: what it prints is filtered before anyone sees it — live,
+            # and in the result (see `tool_output`).
+            granted = self._tool_secrets(handle, as_tool)
+            # The tool's own credentials win over a user variable of the same
+            # name: they are its author's, and nobody else's to replace.
+            env.update(granted)
+            secrets = list(granted.values())
+            hide = as_tool not in tool_debug_names(env)
+            filters = (
+                ToolOutputFilter(tool=as_tool, hide_source=hide, secrets=secrets),
+                ToolOutputFilter(tool=as_tool, hide_source=hide, secrets=secrets),
+            )
         try:
             proc = await asyncio.create_subprocess_exec(
                 *argv,
@@ -1335,23 +1355,34 @@ class LocalProcessSandbox:
         start = loop.time()
         last_output = start  # bumped on every chunk; drives the idle timeout
 
-        async def _pump(stream: asyncio.StreamReader, buf: list[bytes], sink: OutputSink | None):
+        def _emit(data: bytes, buf: list[bytes], sink: OutputSink | None) -> None:
+            if data:
+                buf.append(data)
+                if sink is not None:
+                    sink(data)
+
+        async def _pump(
+            stream: asyncio.StreamReader,
+            buf: list[bytes],
+            sink: OutputSink | None,
+            filt: ToolOutputFilter | None,
+        ):
             nonlocal last_output
             while True:
                 chunk = await stream.read(4096)
                 if not chunk:
                     break
+                # The idle clock reads the RAW stream: a line the filter is
+                # still holding is output the command did produce.
                 last_output = loop.time()
-                buf.append(chunk)
-                if sink is not None:
-                    sink(chunk)
+                _emit(filt.feed(chunk) if filt is not None else chunk, buf, sink)
 
         readers = asyncio.gather(
-            _pump(proc.stdout, out_buf, on_output),
+            _pump(proc.stdout, out_buf, on_output, filters[0] if filters else None),
             # stderr streams to the same live sink — progress bars / warnings /
             # logs a tool writes to stderr show up live, not just at the end.
             # The result still keeps stdout/stderr separate.
-            _pump(proc.stderr, err_buf, on_output),
+            _pump(proc.stderr, err_buf, on_output, filters[1] if filters else None),
         )
 
         async def _terminate() -> None:
@@ -1407,6 +1438,12 @@ class LocalProcessSandbox:
             watchdog.cancel()
             with contextlib.suppress(BaseException):
                 await watchdog
+            if filters is not None:
+                # Whatever a filter still holds — a last line with no newline,
+                # the hint that source lines were hidden — on every exit path,
+                # a kill included: partial output is kept, so it is filtered.
+                _emit(filters[0].flush(), out_buf, on_output)
+                _emit(filters[1].flush(), err_buf, on_output)
 
         stdout = b"".join(out_buf)
         if timed_out is not None:
