@@ -592,15 +592,16 @@ async def _exec_tool(
     inherit and no file to open.
     """
     assert actx.sandbox is not None  # a provisioned tool implies a sandbox
-    env = _tool_env(actx.user_env, item_id=actx.investigation_id, third_party=pkg.third_party)
+    third_party = _mounted_from_the_third_party_store(actx, pkg)
+    env = _tool_env(actx.user_env, item_id=actx.investigation_id, third_party=third_party)
     argv = [f"{pkg.install_dir}/launch", cmd_name, args_json or "{}"]
     # Named only when given: every other caller keeps the sandbox's own cap.
     budget: dict[str, Any] = {} if exec_timeout is None else {"exec_timeout": exec_timeout}
-    # docs/plan-tool-identity-secrets.md: a third-party tool runs as the item's
+    # docs/plan-tool-identity-secrets.md: a third-party bundle runs as the item's
     # TOOL identity, so the agent can read neither its files nor its running
-    # environment. Named only for those — first-party tools, `python` and view
-    # plugins dispatch exactly as they always did.
-    if pkg.third_party:
+    # environment. Named only for those — first-party tools, `python` and
+    # bundled view plugins dispatch exactly as they always did.
+    if third_party:
         budget["as_tool"] = pkg.name
     try:
         return await actx.sandbox.exec(
@@ -624,6 +625,21 @@ async def _exec_tool(
         return await actx.sandbox.exec(
             fresh, argv, on_output=actx.on_exec_output, env=env or None, **budget
         )
+
+
+def _mounted_from_the_third_party_store(actx: AgentToolContext, pkg: PackageInfo) -> bool:
+    """Whether `pkg`'s `/.tools/<name>` is a third-party bundle.
+
+    The sandbox host decides what is hidden by WHERE a bundle is mounted from:
+    the third-party store is readable by the tool group only. So the identity a
+    command runs as has to follow the same fact, or a bundle the host hides is
+    dispatched as a uid that cannot read it. `third_party` alone is not that
+    fact: an `{artifact: url}` view plugin is resolved like an external tool and
+    mounted from the same store, but its call sites build a bare `PackageInfo`.
+    `sandbox_spec.tools` is what the host was told to mount from the store, and a
+    name there wins over a first-party tool of the same name (host
+    `_build_tools_view`) — so membership is exactly "mounted from the store"."""
+    return pkg.third_party or pkg.name in (actx.sandbox_spec.tools or {})
 
 
 #: The item a third-party command runs for, set by the platform on every

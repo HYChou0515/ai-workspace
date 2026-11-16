@@ -7,13 +7,16 @@ everywhere else (same arrangement as `test_isolated_process_integration.py`).
 
 from __future__ import annotations
 
+import io
 import os
 import shutil
+import tarfile
 
 import pytest
 
 from sandbox_host.isolated_process import IsolatedProcessSandbox
 from sandbox_host.protocol import SandboxSpec
+from sandbox_host.tool_cache import BUILTIN_DIR, EXT_DIR, ToolCache, _GroupHardener
 
 pytestmark = pytest.mark.integration
 
@@ -95,3 +98,71 @@ async def test_the_agent_cannot_write_the_tools_home(isolated):
     tool_home = isolated._require(h) / ".tool-home"
     result = await isolated.exec(h, ["sh", "-c", f"mkdir -p {tool_home}/.local/x"])
     assert result.exit_code != 0
+
+
+def _bundle() -> bytes:
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+        for name, body, mode in (
+            ("launch", b"#!/bin/sh\necho ran-as-$(id -u)\n", 0o755),
+            ("creds.py", b"PASSWORD = 'hunter2'\n", 0o644),
+        ):
+            info = tarfile.TarInfo(name)
+            info.size = len(body)
+            info.mode = mode
+            tar.addfile(info, io.BytesIO(body))
+    return buf.getvalue()
+
+
+@pytest.fixture
+def with_tools(tmp_path):
+    """P2: a host whose third-party store is hardened for the tool group, plus
+    one first-party tool baked in the way the image ships them."""
+    tools = tmp_path / "tools"
+    sha = "e" * 64
+    ToolCache(tools / EXT_DIR, harden=_GroupHardener(TOOL_GID)).ensure(sha, _bundle())
+    builtin = tools / BUILTIN_DIR / "sci-plot"
+    builtin.mkdir(parents=True)
+    (builtin / "README").write_text("first-party\n")
+    tools.chmod(0o755)
+    (tools / BUILTIN_DIR).chmod(0o755)
+    builtin.chmod(0o755)
+    (builtin / "README").chmod(0o644)
+    sb = IsolatedProcessSandbox(
+        root_dir=tmp_path / "sb",
+        cgroup_root=tmp_path / "cg",
+        tool_gid=TOOL_GID,
+        uid_min=100001,
+        uid_max=100010,
+        tools_dir=tools,
+    )
+    return sb, {"erp": sha}
+
+
+@requires_isolation
+async def test_the_agent_can_neither_read_nor_run_a_third_party_tool(with_tools):
+    sb, mounts = with_tools
+    h = await sb.create(SandboxSpec(tools=mounts))
+    read = await sb.exec(h, ["cat", "../.tools/erp/creds.py"])
+    assert read.exit_code != 0
+    assert b"hunter2" not in read.stdout
+    run = await sb.exec(h, ["../.tools/erp/launch"])
+    assert run.exit_code != 0
+
+
+@requires_isolation
+async def test_the_tool_identity_runs_it(with_tools):
+    sb, mounts = with_tools
+    h = await sb.create(SandboxSpec(tools=mounts))
+    ident = sb._identities[h.id]
+    result = await sb.exec(h, ["../.tools/erp/launch"], as_tool="erp")
+    assert result.exit_code == 0, result.stderr
+    assert result.stdout.strip() == f"ran-as-{ident.tool_uid}".encode()
+
+
+@requires_isolation
+async def test_a_first_party_tool_stays_readable_by_the_agent(with_tools):
+    sb, mounts = with_tools
+    h = await sb.create(SandboxSpec(tools=mounts))
+    result = await sb.exec(h, ["cat", "../.tools/sci-plot/README"])
+    assert result.exit_code == 0, result.stderr

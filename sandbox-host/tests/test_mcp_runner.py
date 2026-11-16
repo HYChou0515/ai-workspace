@@ -107,6 +107,28 @@ def test_the_runner_resolves_the_url_and_hands_over_to_the_bundle(env) -> None:
     assert entry.is_file()
 
 
+def test_the_runners_bundle_stays_enterable_by_the_engineer(env) -> None:
+    """docs/plan-tool-identity-secrets.md P2 closes the HOST's bundles to every
+    uid but the tool group. The runner shares that cache code and drops to the
+    engineer who owns `/work` — a uid in no tool group — so the group-only rule
+    must never reach it, or the tool stops starting on their own machine."""
+    data = _bundle()
+    handed: list[Path] = []
+
+    code = main(
+        ["wafer-history", _MANIFEST_URL],
+        fetch=_Wire(manifest=_manifest(data), bundle=data),
+        hand_over=handed.append,
+    )
+
+    assert code == 0
+    (entry,) = handed
+    installed = env / "cache" / hashlib.sha256(data).hexdigest()
+    assert installed in entry.parents
+    assert installed.stat().st_mode & 0o005 == 0o005, oct(installed.stat().st_mode)
+    assert entry.stat().st_mode & 0o005 == 0o005, oct(entry.stat().st_mode)
+
+
 def test_nothing_reaches_stdout_before_the_handover(env, capsys) -> None:
     """stdout is the JSON-RPC channel. One stray line — a progress note, a
     warning — and the client fails to parse the first message, which presents

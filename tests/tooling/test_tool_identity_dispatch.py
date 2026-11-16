@@ -23,6 +23,7 @@ from workspace_app.tooling.registry import (
     PackageInfo,
     _to_function_tool,
     _tool_env,
+    exec_package_command,
 )
 
 _CMD = CommandInfo(name="q", description="d", params_json_schema={})
@@ -108,3 +109,42 @@ async def test_the_dispatch_applies_the_third_party_filter():
 async def test_the_dispatch_leaves_a_first_party_tools_env_alone():
     sandbox = await _dispatch(_FIRST, {"PYTHONPATH": "/mine"})
     assert sandbox.exec_envs[-1]["PYTHONPATH"] == "/mine"
+
+
+# ── view plugins (#847/#848): a plain PackageInfo, so the MOUNT decides ───────
+
+
+async def _plugin_dispatch(mounted: dict[str, str]) -> MockSandbox:
+    """A view plugin's command, dispatched the way both plugin call sites do:
+    a bare `PackageInfo` (never `third_party`), in a context whose sandbox spec
+    names what is mounted from the third-party store."""
+    sandbox = MockSandbox()
+    handle = await sandbox.create(SandboxSpec(tools=mounted))
+    actx = AgentToolContext(
+        investigation_id="inv",
+        sandbox=sandbox,
+        handle=handle,
+        sandbox_spec=SandboxSpec(tools=mounted),
+        user_env={"PYTHONPATH": "/root/evil"},
+    )
+    pkg = PackageInfo(name="wafermap", install_dir="../.tools/wafermap", commands=())
+    await exec_package_command(actx, handle, pkg, "validate", "{}")
+    return sandbox
+
+
+@pytest.mark.asyncio
+async def test_an_artifact_view_plugin_runs_as_the_tool_identity():
+    """An `{artifact: url}` plugin is resolved like an external tool, so its
+    bundle sits in the third-party store — which only the tool group may read. Run
+    as the sandbox uid it could no longer read its own files."""
+    sandbox = await _plugin_dispatch({"wafermap": "a" * 64})
+    assert sandbox.exec_as_tools[-1] == "wafermap"
+    assert "PYTHONPATH" not in sandbox.exec_envs[-1]
+
+
+@pytest.mark.asyncio
+async def test_a_bundled_view_plugin_runs_as_the_sandbox():
+    """A `{bundle: ...}` plugin ships in `builtin/`: first-party, untouched."""
+    sandbox = await _plugin_dispatch({})
+    assert sandbox.exec_as_tools[-1] is None
+    assert sandbox.exec_envs[-1]["PYTHONPATH"] == "/root/evil"

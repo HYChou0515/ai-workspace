@@ -17,7 +17,7 @@ from .app import check_cgroup_ready, make_host_app
 from .config import SandboxHostSettings
 from .isolated_process import IsolatedProcessSandbox
 from .nfs_archive import NfsArchive
-from .tool_cache import EXT_DIR, ToolCache
+from .tool_cache import EXT_DIR, ToolCache, _GroupHardener
 from .tool_resolve import ToolResolver
 
 # Where a pod's own delegated cgroup v2 subtree is mounted when the operator
@@ -45,6 +45,18 @@ def resolve_tools_dir(settings: SandboxHostSettings) -> Path | None:
     return Path(settings.tools_dir) if settings.tools_dir else None
 
 
+def tool_group(settings: SandboxHostSettings) -> int:
+    """The group a third-party tool command holds and the only one that may
+    read the third-party bundles (docs/plan-tool-identity-secrets.md).
+
+    The bottom of the range the operator set aside for sandbox uids: already
+    reserved on this host, so it needs no setting of its own and collides with
+    no account — and the uid pool starts one above it, so no sandbox uid ever
+    holds it. One function for both consumers: a cache hardened for a group
+    the tools never join would run no third-party tool at all."""
+    return settings.uid_min
+
+
 def build_tool_resolver(settings: SandboxHostSettings) -> ToolResolver | None:
     """#674: the third-party tool store, or None when it cannot be run safely.
 
@@ -58,8 +70,12 @@ def build_tool_resolver(settings: SandboxHostSettings) -> ToolResolver | None:
     builder_id = os.environ.get("TOOL_BUILDER_ID")
     if tools is None or not builder_id:
         return None
+    cache = ToolCache(tools / EXT_DIR, harden=_GroupHardener(tool_group(settings)))
+    # Bundles this host unpacked under the old rule (readable by any uid) stay
+    # on disk across a restart; bring them under the tool group before serving.
+    cache.reharden_installed()
     return ToolResolver(
-        ToolCache(tools / EXT_DIR),
+        cache,
         builder_id=builder_id,
         arch=platform.machine(),
         state_dir=tools,
@@ -68,12 +84,9 @@ def build_tool_resolver(settings: SandboxHostSettings) -> ToolResolver | None:
 
 def build_sandbox(settings: SandboxHostSettings) -> IsolatedProcessSandbox:
     return IsolatedProcessSandbox(
-        # The bottom of the range the operator set aside for sandbox uids is the
-        # tool group (docs/plan-tool-identity-secrets.md): already reserved on
-        # this host, so it needs no setting of its own and collides with no
-        # account — and the pool starts above it, so no sandbox uid ever holds it.
-        tool_gid=settings.uid_min,
-        uid_min=settings.uid_min + 1,
+        # See `tool_group`: the pool starts one above it.
+        tool_gid=tool_group(settings),
+        uid_min=tool_group(settings) + 1,
         uid_max=settings.uid_max,
         cgroup_root=resolve_cgroup_root(settings),
         root_dir=settings.root,

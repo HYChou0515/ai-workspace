@@ -106,6 +106,9 @@
 
 - **第三方工具的目錄（`ext/<sha>`）**：改成 `root:工具群組 750`；以工具身分啟動時帶上這個群組，AI 的 `exec` 不帶（現在就是 `--clear-groups`）。`builtin/` 不動。
 - **mcp-runner** 和 sandbox-host 共用 `tool_cache`，它要維持現在的權限——權限做成可切換，並有一條測試釘住 runner 沒壞。
+- **P2 施工時查到**：`{artifact: url}` 的 view plugin 也是從第三方倉庫掛載的，藏起來之後若還用沙盒身分跑就讀不到自己。所以「用哪個身分跑」改成**跟著掛載來源走**（`registry._mounted_from_the_third_party_store`：`third_party` 或名字在 `sandbox_spec.tools` 裡）——和 host 決定藏哪些的規則是同一件事。結果：artifact view plugin 照常能用，但 AI 讀不到它的檔案；`{bundle: …}` 的 view plugin 不變。
+- 群組權限：bundle 改成 `root:工具群組`，群組拿到原本「其他人」的讀取／進入權限、其他人歸零（`tool_cache._GroupHardener`）——工具身分碰得到的正好是以前沙盒碰得到的。主機上升級前已解開的 bundle 在 sandbox-host 啟動時重設一次（`ToolCache.reharden_installed`）。
+- AI 用 shell 碰第三方工具失敗時，結果開頭多一句說明：它只能透過工具呼叫使用（`agent/tools.py:_third_party_from_shell`；給模型的話照慣例用英文）。
 - **workspace**：建立沙盒時替工具身分多加一筆 ACL（含預設 ACL），和現有的 `_acl_argv` 同一個指令。
 - **HOME**：工具身分有自己的 HOME（AI 寫不進去）。
 
