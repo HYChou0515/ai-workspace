@@ -48,7 +48,8 @@ Host 端——**環境變數**(`SANDBOX_HOST_*`),設在 host pod 上
 | 環境變數 | 預設 | 意義 |
 |---|---|---|
 | `SANDBOX_HOST_BIND` | `0.0.0.0:8000` | 監聽位址 |
-| `SANDBOX_HOST_UID_MIN` / `_UID_MAX` | `100000` / `199999` | 每個 handle 的 uid/gid 池 |
+| `SANDBOX_HOST_UID_MIN` / `_UID_MAX` | `100000` / `199999` | uid 池。第一個號碼保留當**工具群組**，其餘每個沙盒借兩個（沙盒身分＋第三方工具身分），所以至少要三個號碼（[deployment §15.10](deployment.md)） |
+| `SANDBOX_HOST_TOOL_SECRET_KEY_FILE` | _(未設)_ | 開啟第三方工具密封帳密的私鑰**檔案**路徑（掛 k8s secret）；只有工具用了 `"secret": true` 才需要（[deployment §15.10](deployment.md)） |
 | `SANDBOX_HOST_MEMORY_MAX` | `512M` | 每個 sandbox 的 cgroup `memory.max` |
 | `SANDBOX_HOST_CPU_CORES` | `1.0` | 每個 sandbox 的 cgroup `cpu.max` |
 | `SANDBOX_HOST_PIDS_MAX` | `512` | 每個 sandbox 的 cgroup `pids.max` |

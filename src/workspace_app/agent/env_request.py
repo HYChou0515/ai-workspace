@@ -72,6 +72,23 @@ async def request_env_impl(
     # grant's `pkg:cmd`, a third-party command's old bare name): the card and
     # the check both speak of the tool as the model holds it.
     tool = model_tool_name(pkg, cmd)
+    if "TOOL_DEBUG" in names:
+        # docs/plan-tool-identity-secrets.md: TOOL_DEBUG is how a PERSON
+        # chooses to see a third-party tool's source. A card the agent raises
+        # for it would be the agent choosing.
+        return (
+            "error: TOOL_DEBUG is not something to ask the user for. Tell them what "
+            "failed; whether to turn on a tool's debug output is their decision."
+        )
+    if own := [n for n in names if n in pkg.secret_env]:
+        # docs/plan-tool-identity-secrets.md: these are the tool's OWN
+        # credentials. A card would ask the user for, say, the machine
+        # password — the one thing they must never be asked for.
+        return (
+            f"error: {', '.join(own)} is `{tool}`'s own credential, which the platform "
+            "provides — the user cannot set it. Tell them the tool's credentials are not "
+            "available on this deployment and that the platform team has to fix it."
+        )
     declared = {n.name for n in pkg.env_needs or ()}
     said = actx.tool_outputs.get(tool, "")
     if unseen := [n for n in names if n not in declared and not _mentions(said, n)]:

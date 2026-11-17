@@ -796,6 +796,7 @@ PY
 | `TOOL_ARTIFACT_INSECURE_TLS` — 不檢查 artifact store 的 TLS 憑證 | 只在必要時 | 預設是**檢查**。內部 store 沒有可交給部署的 CA 時才設；代價見下方 |
 | `grant keygen --as <代號>` → 公鑰進 `TRUSTED_KEYS` → 發版（§15.7） | **每人**一次 | `TRUSTED_KEYS` 是空的 ⇒ 任何憑證都驗不過 ⇒ **一支第三方工具都上不了架** |
 | 發布 mcp-runner 映像（§15.8） | 每次發版 | 工程師沒辦法在自己的編輯器裡用這些工具。平台本身不受影響 |
+| 工具帳密的金鑰對（§15.10）：私鑰掛進 sandbox-host、公鑰設成 GitLab group 的 `TOOL_SECRET_RECIPIENTS` | 每個部署一次 | 沒有工具用 `"secret": true` 時沒差。有的話：沒設公鑰 ⇒ 那支工具 **build 失敗**；host 沒私鑰 ⇒ 那支工具每次呼叫都被拒（exit 3，訊息說要平台團隊處理） |
 
 `TOOL_BUILDER_ID` 三個映像必須同一個值。不同步正是那道閘門存在的理由——它會擋下來，
 而不是讓它在執行期壞掉；有測試釘住三顆映像都帶這個旋鈕。
@@ -1242,6 +1243,67 @@ opencode 的變數替換是 `{env:VAR}`（**不是** `${PWD}`），而且變數�
   client 通常把它吃掉了。
 
 ---
+
+### 15.10 第三方工具用自己的身分執行；工具自己的帳密（plan-tool-identity-secrets）
+
+**它在做什麼**：AI 讀不到第三方工具的原始碼，AI 和使用者也拿不到工具自己的帳密。
+
+- **工具身分**：每個沙盒從 uid 池（`SANDBOX_HOST_UID_MIN..MAX`）多借一個 uid 給第三方工具用；工具指令用它執行，
+  在同一個 cgroup 裡（資源上限、計費不變），有自己的 HOME（`.tool-home`，暫存目錄 `TMPDIR` 也在裡面，AI 進不去）。workspace 的 ACL 同時給兩個 uid，
+  所以工具寫的檔案使用者和 AI 照樣能改、能刪。
+- **池子容量減半**：每個沙盒佔兩個 uid。預設池約十萬個號碼，一台主機開得起的沙盒遠少於五萬，所以通常不用動；
+  自己把池子設得很小的部署要確認夠用。範圍小於三個號碼（群組 + 一個沙盒的兩個 uid）時 host 直接起不來，
+  訊息會指名 `SANDBOX_HOST_UID_MIN`。
+- **host 自己檢查「以工具身分執行」的請求**：host 的 API 沒有認證、沙盒和 pod 共用網路，所以 AI 可以自己打
+  `/sandboxes/<id>/exec`。帶工具名（`tool`）的請求只接受「那支工具自己的 launcher + 指令名 + 參數」、而且那支工具
+  必須是從第三方倉庫掛進這個沙盒的；其他一律 exit 126。呼叫端給的環境變數也在 host 這裡清掉會改變載入行為、
+  流量或信任的名字（`sandbox_host/tool_env.py`）。⚠️ 這個 API 沒有認證是**原本就有**的問題（例如可以對別的
+  item 的沙盒下指令），這次沒有處理。
+- **網路要經過 proxy、或要信任公司 CA 的部署**：使用者自己設的 `HTTPS_PROXY`、`SSL_CERT_FILE`、
+  `REQUESTS_CA_BUNDLE` 這類變數**不會**交給第三方工具（使用者能用它們攔截工具自己的帳密）。請把它們設在
+  **sandbox-host pod 的環境變數**上，工具會繼承。作者在 `env.json` 宣告這類名字，build 會直接失敗並指名。
+- **每次第三方工具呼叫前後各掃一次工作區，不用 root**：`chmod`、解壓縮會把 ACL 的 mask 縮小，兩個身分就碰不到對方的檔案。
+  所以呼叫**前**以沙盒身分放寬它的資料夾和「群組本來就讀得到」的檔案（644→664），呼叫**後**以工具身分放寬
+  工具自己建的檔案。AI 設成 `600` 的檔案（例如 SSH 金鑰）維持原狀，工具讀不到——那是 AI 自己的選擇。
+  刻意不用 root：root 掃一棵 AI 寫得到的目錄樹，會被「掃到一半把檔案換成 symlink」騙去改主機上的任何檔案
+  （review 第 2 輪以 root 重現過）。其他 uid 不會因此多拿到什麼。工作區檔案多時每次呼叫會多一點時間。
+  AI 可以讀、改、刪工具寫的檔案，但不能 `chmod` 它們（不是擁有者）。
+- **工具群組 = `SANDBOX_HOST_UID_MIN`**：池子的第一個號碼保留給群組，沙盒 uid 從下一個開始配。
+  第三方 bundle（`$SANDBOX_HOST_TOOLS_DIR/ext/<sha>`）改成 `root:<這個群組>`、其他人不可讀；
+  **升級前已解開的 bundle 在 host 啟動時重設一次**，不用手動處理。`builtin/` 不變。
+  ⚠️ 如果你把 `SANDBOX_HOST_TOOLS_DIR` 放在持久化的 volume 上（預設在映像裡，不會留下來），**回滾 host
+  之後**舊 host 會沿用已經改成只有工具群組讀得到的 bundle，第三方工具會 Permission denied——回滾後清掉
+  `ext/` 讓它重新下載。
+- `/healthz` 的 `capabilities` 裡有 `tool-identity` 就是新版。
+
+**工具自己的帳密**（作者那邊怎麼做見 [寫一支工具](tool-authoring.md) 的「不要把帳密寫在程式裡」）：
+
+1. 產生這個部署的金鑰對（在任何裝了 sandbox-host 的地方跑；**不會覆蓋**既有檔案）：
+
+   ```bash
+   python -m sandbox_host.tool_secret_key ./tool-secret.key   # 印出公鑰
+   kubectl create secret generic sandbox-host-tool-secret --from-file=tool-secret.key=./tool-secret.key
+   shred -u ./tool-secret.key
+   ```
+
+2. 把這個 secret 掛進 sandbox-host pod（例如 `/etc/sandbox-host/tool-secret.key`，`defaultMode: 0400`），
+   並設 `SANDBOX_HOST_TOOL_SECRET_KEY_FILE` 指向它。**只放檔案路徑，不要把私鑰本身放進環境變數**——
+   每個沙盒指令都會繼承 host 的環境變數。設了但讀不到，host 會直接起不來（log 寫 `tool secret key`）。
+3. 把印出的公鑰加進 GitLab **group** 的 CI/CD 變數 `TOOL_SECRET_RECIPIENTS`（不是機密，不用勾 Masked）。
+   多個部署（staging、正式）就用空白隔開放多把，同一個 artifact 各部署都打得開。
+
+**換金鑰**：產生新的一對 → 新公鑰**加進** `TOOL_SECRET_RECIPIENTS`（先別拿掉舊的）→ 請有帳密的工具各 build 一版、
+上線 → 換掉 host 掛的私鑰 → 再拿掉舊公鑰。順序反過來，沒重 build 的工具會被拒。
+
+**出事時**：
+
+| 看到 | 原因 | 處理 |
+|---|---|---|
+| build log：`env.json marks X secret, but this CI job has no value` | 作者沒在 GitLab 設那個變數 | 作者去 Settings → CI/CD → Variables 設 |
+| build log：`TOOL_SECRET_RECIPIENTS names no public key` | group 變數沒設，或這個專案不在那個 group | 設 group 變數 |
+| 工具呼叫 exit 3：`credentials could not be opened … no key` | host 沒掛私鑰 | 照上面第 2 步 |
+| 工具呼叫 exit 3：`not sealed for this deployment (key <id>)` | 這版 artifact build 時沒有這個部署的公鑰 | 公鑰加進 `TOOL_SECRET_RECIPIENTS`，請作者重 build |
+| AI 說第三方工具「Permission denied」 | AI 想在 shell 直接讀或跑工具檔案 | 正常：只能透過工具呼叫使用 |
 
 ## 12. 開發指令速查
 

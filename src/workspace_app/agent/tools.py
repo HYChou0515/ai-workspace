@@ -211,20 +211,70 @@ async def exec_impl(ctx: RunContextWrapper[AgentToolContext], cmd: list[str]) ->
     # command's output shows up in run history as it happens, and survives the
     # sandbox being reaped mid-turn — see `_exec_surviving_a_reap`.
     result = await _exec_surviving_a_reap(ctx.context, cmd, on_output=ctx.context.on_exec_output)
-    return _exec_result_text(ctx.context, "exec", result)
+    note = _third_party_from_shell(ctx.context, cmd, result)
+    return _exec_result_text(ctx.context, "exec", result, note=note)
 
 
-def _exec_result_text(ctx: AgentToolContext, name: str, result: ExecResult) -> str:
+def _third_party_from_shell(
+    actx: AgentToolContext, cmd: list[str], result: ExecResult
+) -> str | None:
+    """Why the shell could not reach a third-party tool, or None.
+
+    The host makes those bundles readable by the tool group only
+    (docs/plan-tool-identity-secrets.md), so a command that names one fails
+    with the kernel's "Permission denied" — accurate, and no help: it reads
+    like a broken install, and the natural next move is a retry or a chmod.
+    Only a failure that names a third-party tool's mount AND was refused gets
+    the sentence; anything else is the output speaking for itself."""
+    if result.exit_code == 0:
+        return None
+    stderr = result.stderr.decode("utf-8", errors="replace")
+    if "permission denied" not in stderr.lower():
+        return None
+    from ..tooling.registry import model_tool_name
+
+    said = " ".join(cmd) + "\n" + stderr
+    # Every bundle the host hides: the third-party tools, and anything else
+    # mounted from the same store — an `{artifact: url}` view plugin is, and is
+    # not in `packages` (the rule `registry._mounted_from_the_third_party_store`
+    # applies to dispatch).
+    calls_of = {
+        p.name: [f"`{model_tool_name(p, c)}`" for c in p.commands]
+        for p in actx.packages or ()
+        if p.third_party
+    }
+    for name in [*calls_of, *(actx.sandbox_spec.tools or {})]:
+        # The whole name: `.tools/erpnext` is not `erp`.
+        if not re.search(rf"\.tools/{re.escape(name)}(?![\w.-])", said):
+            continue
+        calls = ", ".join(calls_of.get(name, ()))
+        how = f" ({calls})" if calls else ""
+        return (
+            f"`{name}` is a third-party tool: it runs only through its tool call{how}, "
+            "never from the shell — its files are not readable here, by design."
+        )
+    return None
+
+
+def _exec_result_text(
+    ctx: AgentToolContext, name: str, result: ExecResult, *, note: str | None = None
+) -> str:
     """The cleaned, LLM-facing exec result — and, when it would differ,
     record the FULL display result (success-stderr kept) on the context so
     the runner can attach it to the ToolEnd (#62). Returns the cleaned form
-    (what the model and `history_items` consume)."""
+    (what the model and `history_items` consume).
+
+    `note` leads both forms, so the model and the tool card say the same thing
+    and the display map stays keyed by what the model was given."""
     from .env_request import request_env_granted
 
     cap = ctx.exec_output_max_chars
     card = ctx.agent_config is not None and request_env_granted(ctx.agent_config, ctx.packages)
     cleaned = _format_exec(name, result, max_chars=cap, can_request_env=card)
     display = _format_exec(name, result, max_chars=cap, keep_stderr=True, can_request_env=card)
+    if note:
+        cleaned = f"{note}\n{cleaned}"
+        display = f"{note}\n{display}"
     if display != cleaned:
         ctx.tool_displays[cleaned] = display
     return cleaned

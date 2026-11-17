@@ -161,10 +161,17 @@ class Sandbox(Protocol):
         on_output: OutputSink | None = None,
         env: Mapping[str, str] | None = None,
         exec_timeout: float | None = None,
+        tool: bool | str = False,
     ) -> ExecResult:
         """`env` is added to the command's environment and WINS over anything
         the backend sets itself — the app names the item's user-set variables
-        per call, and this hop is what actually hands them to the process."""
+        per call, and this hop is what actually hands them to the process.
+
+        `tool` is the NAME of the third-party tool this command launches, or
+        `True`/`False` for none (docs/plan-tool-identity-secrets.md). With a
+        name, a backend that has a second identity runs it as that one — and
+        opens its sealed credentials; one that has not runs it like any other
+        command. Only the app's tool dispatch sets it — never the agent's `exec`."""
         ...
 
     async def effective_limits(self, spec: SandboxSpec) -> EnforcedLimits:

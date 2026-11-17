@@ -139,6 +139,12 @@ class PackageInfo:
     field. Never "unknown" — that would be the platform putting words in an
     author's mouth."""
 
+    secret_env: tuple[str, ...] = ()
+    """The names `env.json` marks secret (docs/plan-tool-identity-secrets.md
+    P4): the tool's OWN credentials, sealed into its bundle and opened by the
+    host for its process only. Kept out of `env_needs`, because those are what
+    a person is shown to fill in — and these no person may set or see."""
+
     third_party: bool = False
     """A tool published from outside this repo (#674), named by the operator's
     local name in `app.json` `external_tools`. Its commands reach the model as
@@ -592,10 +598,17 @@ async def _exec_tool(
     inherit and no file to open.
     """
     assert actx.sandbox is not None  # a provisioned tool implies a sandbox
+    third_party = _mounted_from_the_third_party_store(actx, pkg)
     env = _tool_env(actx.user_env, item_id=actx.investigation_id)
     argv = [f"{pkg.install_dir}/launch", cmd_name, args_json or "{}"]
     # Named only when given: every other caller keeps the sandbox's own cap.
-    budget = {} if exec_timeout is None else {"exec_timeout": exec_timeout}
+    budget: dict[str, Any] = {} if exec_timeout is None else {"exec_timeout": exec_timeout}
+    # docs/plan-tool-identity-secrets.md: a third-party bundle runs as the item's
+    # TOOL identity, so the agent can read neither its files nor its running
+    # environment. Named only for those — first-party tools, `python` and
+    # bundled view plugins dispatch exactly as they always did.
+    if third_party:
+        budget["tool"] = pkg.name
     try:
         return await actx.sandbox.exec(
             handle, argv, on_output=actx.on_exec_output, env=env or None, **budget
@@ -618,6 +631,21 @@ async def _exec_tool(
         return await actx.sandbox.exec(
             fresh, argv, on_output=actx.on_exec_output, env=env or None, **budget
         )
+
+
+def _mounted_from_the_third_party_store(actx: AgentToolContext, pkg: PackageInfo) -> bool:
+    """Whether `pkg`'s `/.tools/<name>` is a third-party bundle.
+
+    The sandbox host decides what is hidden by WHERE a bundle is mounted from:
+    the third-party store is readable by the tool group only. So the identity a
+    command runs as has to follow the same fact, or a bundle the host hides is
+    dispatched as a uid that cannot read it. `third_party` alone is not that
+    fact: an `{artifact: url}` view plugin is resolved like an external tool and
+    mounted from the same store, but its call sites build a bare `PackageInfo`.
+    `sandbox_spec.tools` is what the host was told to mount from the store, and a
+    name there wins over a first-party tool of the same name (host
+    `_build_tools_view`) — so membership is exactly "mounted from the store"."""
+    return pkg.third_party or pkg.name in (actx.sandbox_spec.tools or {})
 
 
 #: The item a third-party command runs for, set by the platform on every
@@ -647,6 +675,10 @@ def _tool_env(user_env: dict[str, str], *, item_id: str | None = None) -> dict[s
     The item id is the one name the user does NOT win: it is the platform's to
     say, so a person's variable of that name is dropped — from the values and
     from the list, or the launcher would restore it over the platform's last.
+
+    A THIRD-PARTY tool's environment is scrubbed on the sandbox host, not here
+    (`sandbox_host.tool_env`): the host's API can be called without this app,
+    so a rule applied here is one a caller can skip.
     """
     own = {name: value for name, value in user_env.items() if name != ITEM_ID_ENV}
     env = {**own, "SANDBOX_USER_ENV_KEYS": " ".join(own)} if own else {}

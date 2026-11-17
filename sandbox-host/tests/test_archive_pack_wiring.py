@@ -72,7 +72,9 @@ class _BlockingExec(MockSandbox):
         self.entered = asyncio.Event()
         self.release = asyncio.Event()
 
-    async def exec(self, handle: SandboxHandle, cmd, on_output=None, env=None, exec_timeout=None):
+    async def exec(
+        self, handle: SandboxHandle, cmd, on_output=None, env=None, exec_timeout=None, tool=False
+    ):
         self.entered.set()
         await self.release.wait()
         return ExecResult(exit_code=0, stdout=b"", stderr=b"")

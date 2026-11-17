@@ -11,14 +11,16 @@ import os
 import platform
 from pathlib import Path
 
+from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
 from fastapi import FastAPI
 
 from .app import check_cgroup_ready, make_host_app
 from .config import SandboxHostSettings
 from .isolated_process import IsolatedProcessSandbox
 from .nfs_archive import NfsArchive
-from .tool_cache import EXT_DIR, ToolCache
+from .tool_cache import EXT_DIR, ToolCache, _GroupHardener
 from .tool_resolve import ToolResolver
+from .tool_secrets import SecretsError, private_key_from_text
 
 # Where a pod's own delegated cgroup v2 subtree is mounted when the operator
 # doesn't pin `cgroup_root` explicitly.
@@ -45,6 +47,18 @@ def resolve_tools_dir(settings: SandboxHostSettings) -> Path | None:
     return Path(settings.tools_dir) if settings.tools_dir else None
 
 
+def tool_group(settings: SandboxHostSettings) -> int:
+    """The group a third-party tool command holds and the only one that may
+    read the third-party bundles (docs/plan-tool-identity-secrets.md).
+
+    The bottom of the range the operator set aside for sandbox uids: already
+    reserved on this host, so it needs no setting of its own and collides with
+    no account — and the uid pool starts one above it, so no sandbox uid ever
+    holds it. One function for both consumers: a cache hardened for a group
+    the tools never join would run no third-party tool at all."""
+    return settings.uid_min
+
+
 def build_tool_resolver(settings: SandboxHostSettings) -> ToolResolver | None:
     """#674: the third-party tool store, or None when it cannot be run safely.
 
@@ -58,17 +72,49 @@ def build_tool_resolver(settings: SandboxHostSettings) -> ToolResolver | None:
     builder_id = os.environ.get("TOOL_BUILDER_ID")
     if tools is None or not builder_id:
         return None
+    cache = ToolCache(tools / EXT_DIR, harden=_GroupHardener(tool_group(settings)))
+    # Bundles unpacked under the old rule (readable by any uid) stay on disk
+    # across a restart when the tools dir is a volume (in the image's own layer
+    # they do not); bring any there are under the tool group before serving.
+    cache.reharden_installed()
     return ToolResolver(
-        ToolCache(tools / EXT_DIR),
+        cache,
         builder_id=builder_id,
         arch=platform.machine(),
         state_dir=tools,
     )
 
 
+def load_tool_secret_key(settings: SandboxHostSettings) -> X25519PrivateKey | None:
+    """This deployment's key for third-party tools' sealed credentials, read
+    once at startup (docs/plan-tool-identity-secrets.md P4). A configured file
+    that cannot be read stops the host HERE: starting without it would refuse
+    every sealed tool at its first call — later, and in front of a user."""
+    if not settings.tool_secret_key_file:
+        return None
+    try:
+        text = Path(settings.tool_secret_key_file).read_text()
+    except OSError as exc:
+        raise SecretsError(
+            f"the tool secret key file {settings.tool_secret_key_file} cannot be read ({exc})"
+        ) from exc
+    return private_key_from_text(text)
+
+
 def build_sandbox(settings: SandboxHostSettings) -> IsolatedProcessSandbox:
+    # The bottom id is the tool group and every sandbox takes two uids, so a
+    # range that used to run two sandboxes (MIN..MIN+1) now runs none. Say so here.
+    if settings.uid_max - tool_group(settings) < 2:
+        raise ValueError(
+            f"SANDBOX_HOST_UID_MIN..SANDBOX_HOST_UID_MAX ({settings.uid_min}..{settings.uid_max}) "
+            "is too small: the first id is the tool group and each sandbox takes two uids, "
+            "so it needs at least three ids"
+        )
     return IsolatedProcessSandbox(
-        uid_min=settings.uid_min,
+        tool_secret_key=load_tool_secret_key(settings),
+        # See `tool_group`: the pool starts one above it.
+        tool_gid=tool_group(settings),
+        uid_min=tool_group(settings) + 1,
         uid_max=settings.uid_max,
         cgroup_root=resolve_cgroup_root(settings),
         root_dir=settings.root,

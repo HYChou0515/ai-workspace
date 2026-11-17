@@ -333,6 +333,7 @@ class Sandbox(Protocol):
         on_output: OutputSink | None = None,
         env: Mapping[str, str] | None = None,
         exec_timeout: float | None = None,
+        tool: bool | str = False,
     ) -> ExecResult:
         """Run `cmd` (an argv list — NOT a shell string; use
         `["sh", "-c", "..."]` if you need shell features) with the workspace
@@ -350,7 +351,15 @@ class Sandbox(Protocol):
         - `env` is added to the command's environment and WINS over anything the
           backend sets itself. It is per-call on purpose: the item's user-set
           variables reach the tools this way, and nothing else the sandbox runs
-          — the agent's own `exec` included — has anything to inherit."""
+          — the agent's own `exec` included — has anything to inherit.
+        - `tool` says whether this command launches a tool, and which: the
+          tool's NAME for a third-party one (docs/plan-tool-identity-secrets.md)
+          — the sandbox host then runs it as the item's TOOL identity, which the
+          agent can neither read the files of nor inspect while it runs, opens
+          its sealed credentials, and (in the deployment's own build) issues its
+          egress credential. `True`/`False` carry no name and run as any command.
+          Only `tooling.registry._exec_tool` sets it; the agent's `exec` tool has
+          no way to. Backends here mount no third-party tools, so they ignore it."""
         ...
 
     async def upload(self, handle: SandboxHandle, data: bytes, remote_path: str) -> None:

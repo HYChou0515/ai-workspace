@@ -251,9 +251,54 @@ https://gitlab.example/api/v4/projects/<id>/jobs/artifacts/<ref>/raw/dist/tool.m
   沒有版本閘：你推上去，下一個開起來的 sandbox 就是新的。要改請發一個新的 command 名，
   或先跟我們說一聲。
 
-- **不要把 secret 放進 bundle。** 同一台機器上所有 sandbox 共用同一份 bundle。
-  需要金鑰的話走環境變數——你的 command 直接讀 `os.environ`,值由使用者在他們的
-  workspace 設定。
+- **不要把帳密寫在程式裡。** 帳密有兩種，放的地方不一樣，但你的程式碼**都一樣**是讀
+  `os.environ["名字"]`：
+
+  | 是誰的帳密 | 例子 | 放哪裡 | `env.json` 怎麼寫 |
+  |---|---|---|---|
+  | **使用者自己的** | 每個人在 https://internal/tokens 產生的個人 token | 使用者在 workspace 的環境變數面板填 | 照常宣告（見下一點） |
+  | **工具自己的**（使用者不該知道） | 查機台用的服務帳號密碼 | 你這個工具的 GitLab 專案：**Settings → CI/CD → Variables**，勾 **Masked** 和 **Hidden**（勾了 **Protected** 的話，只有受保護的分支／tag 的 build 拿得到） | 加 `"secret": true` |
+
+  工具自己的帳密怎麼走（`docs/plan-tool-identity-secrets.md`）：
+
+  ```json
+  [
+    { "name": "MACHINE_PASSWORD", "secret": true },
+    { "name": "WAFER_API_TOKEN", "description": "在 https://internal/tokens 產生的個人 token" }
+  ]
+  ```
+
+  - build 時 builder 從 CI 讀到這個值，**用平台的公鑰加密**後放進 bundle；artifact 和 manifest 裡
+    只有密文。平台執行你的工具時才解開，**只交給你這支工具的程序**——AI 和使用者都拿不到；
+    你的輸出裡如果印出它，平台會換成 `***`（多行的值，例如私鑰，會一行一行遮）。
+    ⚠️ 同一個 item 裡的第三方工具共用同一個工具身分，所以這**不防**別的工具的作者——平台信任上架的作者。
+  - 標成 `secret` 的名字**不會**出現在使用者的環境變數面板，聊天裡的「設定變數」卡片也不會向使用者要它。
+  - CI 裡沒有這個變數 ⇒ **build 當場失敗**並指名是哪一個。
+  - ⚠️ 要用**夠新的 builder tag**。舊的 builder 不認得 `secret`，不會報錯：值不會被封進去，名字還會
+    以一般變數出現在使用者的面板上。不確定就問我們該用哪個 tag。
+  - ⚠️ **能改這個 GitLab 專案的 repo 或 CI 的人，就拿得到這組帳密**（例如在 CI 加一行把它印出來）。
+    Masked 只遮 log 裡的原字串。所以專案的寫入權限請只給該有的人。
+  - 帳密每次 build 都重新加密，所以有帳密的工具每次 build 出來的 bundle sha 都不同——host 會重新下載
+    一次。換帳密就是改 CI 變數、再 build 一版。
+  - 在自己電腦用 mcp-runner 跑時（§5b），平台的金鑰不在那裡：要自己在 shell `export` 這個變數
+    （runner 缺的時候會說是哪一個）。
+
+- **第三方工具在平台上用自己的身分執行。** 對你的影響只有三點：
+  - 你的檔案只有工具自己讀得到——AI 讀不到你的原始碼，也沒辦法在 shell 裡直接執行
+    `/.tools/<你的工具>/…`；只能透過工具呼叫。
+  - 你的工具**只用自己打包時帶的套件**，不會去用使用者在沙盒裡 `pip install` 的版本；`PATH` 是系統的
+    （`/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`）。使用者設的變數裡，會改變「從哪裡載入程式、流量走哪、信任誰」的
+    不會傳給你：`PYTHON*`、`LD_*`、`HOME`、`PATH`、`TMPDIR`、`OPENSSL_*`、`SSL_*`、`*_PROXY`、
+    `REQUESTS_CA_BUNDLE`、`GIT_*`、`PIP_*`、`UV_*`、`NODE_*` 等（完整清單在 `sandbox_host/tool_env.py`）。
+    你自己的 token、網址照常拿得到。你測的是哪個版本，跑的就是哪個版本。在 `env.json` 宣告這類名字，
+    build 會失敗並指名——換一個你自己的名字；整個網路都需要的 proxy／CA 由平台設在 host 上。
+  - 使用者（或 AI）設成 `600` 這類群組讀不到的**檔案**，你的工具讀不到——那是他們刻意設成私有的。
+    資料夾則一律讓你的工具能建檔。
+  - 你的暫存檔（`TMPDIR`、`tempfile`）在你自己的私有目錄，AI 讀不到。但你**留在工作區**的檔案就是你的輸出：
+    AI 和使用者讀得到、改得了（不能 `chmod`）。帳密不要寫進工作區。
+  - 你出錯時的 traceback（含 exception group、SyntaxError）與 warning，平台會拿掉引用的原始碼行
+    （留檔名、行號、例外訊息），並在 stderr 補一行說明有東西被拿掉。要在平台上看完整的，
+    在 workspace 的環境變數設 `TOOL_DEBUG=<名字>`（多支用逗號隔開）。名字是這支工具**在那個部署裡**的名字——AI 呼叫的指令 `<名字>__<指令>` 的前半段，不一定等於你的套件名。
 
 - **說出你需要哪些變數(選填,但請寫)。** 使用者沒有別的辦法知道要設什麼:不寫的話,
   他只能跑下去看它爆、再從錯誤訊息反推名字。在 **package 根目錄**(和 `pyproject.toml`

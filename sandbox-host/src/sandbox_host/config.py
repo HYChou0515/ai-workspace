@@ -15,7 +15,9 @@ from dataclasses import dataclass
 @dataclass(frozen=True)
 class SandboxHostSettings:
     """Wraps an `IsolatedProcessSandbox`: each handle runs as a pooled numeric
-    uid (`uid_min..uid_max`) under a cgroup capped by `memory_max` (e.g. "512M")
+    uid, and its third-party tools as a second one (`uid_min` itself is the tool
+    group, so the pool is `uid_min+1..uid_max`; docs/plan-tool-identity-secrets.md)
+    under a cgroup capped by `memory_max` (e.g. "512M")
     / `cpu_cores` / `pids_max`. `cgroup_root` is the delegated cgroup v2 subtree
     (None = auto-detect this pod's own). `tools_dir` is the prebuilt-tools dir
     bind-mounted read-only into each sandbox at `/.tools` (None = no tools).
@@ -32,6 +34,11 @@ class SandboxHostSettings:
     exec_timeout: float = 60.0
     log_timeout: float = 60.0
     tools_dir: str | None = None
+    tool_secret_key_file: str | None = None
+    """docs/plan-tool-identity-secrets.md P4: a FILE holding this deployment's
+    X25519 private key (base64 of the raw 32 bytes) — a mounted k8s secret.
+    A path, never the key itself: every sandbox command inherits this
+    service's environment. None ⇒ a tool with sealed credentials is refused."""
     # None = no ceiling, so nothing unreferenced is evicted. Unset means no
     # limit here as it does everywhere else in this repo; set a number to make
     # the reaper reclaim disk, oldest-unreferenced first.
@@ -113,6 +120,7 @@ def load_settings(env: Mapping[str, str]) -> SandboxHostSettings:
         exec_timeout=f("SANDBOX_HOST_EXEC_TIMEOUT", 60.0),
         log_timeout=f("SANDBOX_HOST_LOG_TIMEOUT", 60.0),
         tools_dir=opt("SANDBOX_HOST_TOOLS_DIR"),
+        tool_secret_key_file=opt("SANDBOX_HOST_TOOL_SECRET_KEY_FILE"),
         tool_cache_max_bytes=(
             int(raw) if (raw := opt("SANDBOX_HOST_TOOL_CACHE_MAX_BYTES")) else None
         ),

@@ -152,7 +152,10 @@ def _package(name: str, described: dict[str, Any]) -> PackageInfo:
                 # here: that belongs once, where the response model is built
                 # (`tools_routes._env_needs_of`), because the first-party
                 # reader feeds the same model and would need the same rule.
-                if isinstance(e, dict) and isinstance(e.get("name"), str)
+                if isinstance(e, dict)
+                and isinstance(e.get("name"), str)
+                # P4: the tool's own credential is nobody's to fill in.
+                and e.get("secret") is not True
             )
             if isinstance(described.get("env"), list)
             else None
@@ -164,6 +167,11 @@ def _package(name: str, described: dict[str, Any]) -> PackageInfo:
         description=str(described.get("description") or ""),
         version=str(described.get("version") or ""),
         author=str(described.get("author") or ""),
+        secret_env=tuple(
+            e["name"]
+            for e in described.get("env") or ()
+            if isinstance(e, dict) and isinstance(e.get("name"), str) and e.get("secret") is True
+        ),
     )
 
 

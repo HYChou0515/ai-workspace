@@ -75,6 +75,31 @@ def _harden(root: Path) -> None:
         os.chmod(path, path.lstat().st_mode & ~0o022)
 
 
+class _GroupHardener:
+    """`_harden`, plus: only the tool group may read the tree
+    (docs/plan-tool-identity-secrets.md).
+
+    A third-party tool runs as the item's TOOL uid, which holds this group; the
+    agent runs as the sandbox uid, which holds no group at all. So the group
+    gets exactly the read/traverse bits "other" used to have — the tool reaches
+    precisely what a sandbox reached before — and "other" gets nothing, which is
+    what keeps a tool's source (and anything written into it) from the agent.
+    Write stays root's alone, as before. A class rather than a closure so the
+    production wiring can be asserted to use the group the tools run with."""
+
+    def __init__(self, group: int) -> None:
+        self.group = group
+
+    def __call__(self, root: Path) -> None:
+        for path in [root, *root.rglob("*")]:
+            # `lchown`/`lstat` for the same reason `_harden` uses them.
+            os.lchown(path, 0, self.group)
+            if path.is_symlink():
+                continue
+            mode = path.lstat().st_mode
+            os.chmod(path, (mode & 0o700) | ((mode & 0o005) << 3))
+
+
 class ToolCache:
     """Bundles installed on this host, addressed by the sha of their bytes."""
 
@@ -143,6 +168,22 @@ class ToolCache:
             shutil.rmtree(staging, ignore_errors=True)
             raise
         return installed
+
+    def reharden_installed(self) -> None:
+        """Apply this cache's hardening to every bundle already installed.
+
+        `ensure` hardens on the way in and then returns early for a sha it
+        already has — so a bundle unpacked under an older rule keeps that rule
+        for as long as it stays on the host. Run once at startup, this is how a
+        change of rule reaches them (docs/plan-tool-identity-secrets.md: bundles
+        a host unpacked before the tool group existed are readable by the agent
+        until this runs). Idempotent; an interrupted unpack (dot-prefixed) is
+        not a bundle and is left to the sweep."""
+        if not self._root.is_dir():
+            return
+        for path in sorted(self._root.iterdir()):
+            if path.is_dir() and _SHA256.match(path.name):
+                self._harden(path)
 
     def _size_of(self, path: Path) -> int:
         return sum(f.stat().st_size for f in path.rglob("*") if f.is_file())

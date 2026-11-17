@@ -51,7 +51,9 @@ class _Declared(MockSandbox):
             await self.upload(handle, b"[project]\nname='w'\n", "pyproject.toml")
         return handle
 
-    async def exec(self, handle, cmd, on_output=None, env=None, exec_timeout=None) -> ExecResult:
+    async def exec(
+        self, handle, cmd, on_output=None, env=None, exec_timeout=None, tool=False
+    ) -> ExecResult:
         self.calls.append(list(cmd))
         # A distinctive code for the NODE's own command, 0 for the preparation.
         # `assert exit_code == 0` here could not fail — everything returned 0 —
@@ -136,7 +138,9 @@ class _Overlapping(_Declared):
         self.live_syncs = 0
         self.peak_syncs = 0
 
-    async def exec(self, handle, cmd, on_output=None, env=None, exec_timeout=None) -> ExecResult:
+    async def exec(
+        self, handle, cmd, on_output=None, env=None, exec_timeout=None, tool=False
+    ) -> ExecResult:
         self.calls.append(list(cmd))
         if cmd == _SYNC:
             self.live_syncs += 1
@@ -196,7 +200,7 @@ async def test_an_unpreparable_environment_fails_the_node_not_the_run(monkeypatc
     """
 
     class _Unbuildable(_Declared):
-        async def exec(self, handle, cmd, on_output=None, env=None, exec_timeout=None):
+        async def exec(self, handle, cmd, on_output=None, env=None, exec_timeout=None, tool=False):
             self.calls.append(list(cmd))
             if cmd == _SYNC:
                 return ExecResult(exit_code=2, stderr=b"error: no `uv.lock` found")

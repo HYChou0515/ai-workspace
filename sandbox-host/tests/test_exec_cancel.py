@@ -41,6 +41,7 @@ class _HangingSandbox(MockSandbox):
         # host reports as an in-band error frame — which looks like the exec
         # itself going wrong, not like the double being out of date.
         exec_timeout: float | None = None,
+        tool: bool | str = False,  # same reason (plan-tool-identity-secrets P1)
     ) -> ExecResult:
         if on_output is not None:
             on_output(b"working\n")

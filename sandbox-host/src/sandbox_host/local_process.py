@@ -38,6 +38,8 @@ from collections.abc import Mapping, Sequence
 from functools import cache
 from pathlib import Path
 
+from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
+
 from .protocol import (
     PREVIEW_COMMAND,
     PREVIEW_MAX_BYTES,
@@ -53,6 +55,9 @@ from .protocol import (
     check_preview_key,
 )
 from .tool_cache import BUILTIN_DIR, EXT_DIR
+from .tool_env import scrub_tool_env
+from .tool_output import ToolOutputFilter, tool_debug_names
+from .tool_secrets import SECRETS_FILE, SecretsError, open_sealed
 from .walk import scandir_lister, walk_tree
 
 # Bootstrap run (as namespace-root) before chroot: overlay the host's system
@@ -488,6 +493,22 @@ _HOME = ".home"
 #: on DOWNLOAD and then trusts its own unpacked archive. An item id is never
 #: recycled. What bounds the collection is the sweeper, not the key.
 _UV_CACHE = ".uv-cache"
+#: The third-party tools' own `$HOME` (docs/plan-tool-identity-secrets.md): a
+#: sibling of `.home`, owned by the item's TOOL identity. Not `.home`, because
+#: the agent writes that one, and a tool launcher imports from `$HOME/.local` —
+#: whatever the agent planted there would run inside the tool, beside its
+#: credentials.
+_TOOL_HOME = ".tool-home"
+#: The names that define a tool command's environment rather than describe the
+#: user's wishes: for a command run `as_tool`, these are the exec path's and the
+#: caller's variables do NOT win over them. Every other name keeps the
+#: precedence tools have always had (the caller's value wins).
+_TOOL_PINNED = ("HOME", "SANDBOX_HOME", "PYTHONNOUSERSITE", "PYTHONSAFEPATH", "PATH", "TMPDIR")
+#: A tool command's PATH: the system's, and nothing the agent can write. The
+#: sandbox's own PATH starts with the `python` shim, which can route to the
+#: project venv the agent fills — a tool that runs `python` by name would run
+#: whatever was planted there.
+_TOOL_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 
 # #775: where `uv sync` builds the workspace's own environment. A sibling of
@@ -589,8 +610,11 @@ class LocalProcessSandbox:
         isolate: bool | None = None,
         tools_dir: Path | None = None,
         preview_command: Sequence[str] = PREVIEW_COMMAND,
+        tool_secret_key: X25519PrivateKey | None = None,
     ) -> None:
         self._root = root_dir or Path(tempfile.gettempdir()) / "sandbox-host"
+        # P4: opens the credentials a third-party bundle carries sealed.
+        self._tool_secret_key = tool_secret_key
         # The app's plan-pptx-preview D2: what converts a deck — `soffice`, or a
         # stand-in in a unit test.
         self._preview_command = tuple(preview_command)
@@ -1077,13 +1101,60 @@ class LocalProcessSandbox:
           sandbox for that item is filling breaks its `uv sync` with EACCES.
         """
 
+    def _refuse_tool_exec(self, handle: SandboxHandle, cmd: list[str], as_tool: str) -> str | None:
+        """Why this is not a tool call, or None when it is one: exactly
+        `../.tools/<as_tool>/launch <command> <args>` — the argv the app's
+        dispatch (`tooling.registry._exec_tool`) builds — for a tool this
+        sandbox mounts from the THIRD-PARTY store. A first-party tool is never
+        run as the tool identity (its files are readable by the sandbox anyway,
+        so asking for it can only be reaching for the identity)."""
+        if as_tool in ("", ".", "..") or "/" in as_tool:
+            return f"{as_tool!r} is not a tool name"
+        if len(cmd) != 3 or cmd[0] != f"../.tools/{as_tool}/launch":
+            return "the command must be its launcher, a command name and its arguments"
+        if self._tools_dir is None:
+            return "this host mounts no tools"
+        try:
+            target = (self._require(handle) / _TOOLS_VIEW / as_tool).resolve(strict=True)
+        except OSError:
+            return "not mounted in this sandbox"
+        if target.parent != (self._tools_dir / EXT_DIR).resolve():
+            return "not a third-party tool"
+        return None
+
+    def _tool_secrets(self, handle: SandboxHandle, as_tool: str) -> dict[str, str]:
+        """The credentials the platform hands this tool, `{name: value}`
+        (docs/plan-tool-identity-secrets.md P4). Given to the tool's process in
+        its environment and masked out of everything it prints.
+
+        Read from the bundle mounted at this sandbox's `/.tools/<as_tool>` — by
+        this service, which may read the third-party store; the tool's own uid
+        could, too, but only ciphertext is there. A bundle with no sealed file
+        has none, which is every tool built before P4."""
+        if self._tools_dir is None:
+            return {}
+        try:
+            sealed = (self._require(handle) / _TOOLS_VIEW / as_tool / SECRETS_FILE).read_bytes()
+        except FileNotFoundError:
+            return {}
+        if self._tool_secret_key is None:
+            raise SecretsError(
+                "this deployment has no key to open them (SANDBOX_HOST_TOOL_SECRET_KEY_FILE "
+                "is not set)"
+            )
+        return open_sealed(sealed, self._tool_secret_key)
+
     def _exec_argv(
-        self, handle: SandboxHandle, cmd: list[str]
+        self, handle: SandboxHandle, cmd: list[str], as_tool: str | None = None
     ) -> tuple[list[str], Path, dict[str, str]]:
         """Build the `(argv, cwd, env)` for one command. The seam subclasses
         override to wrap `cmd` (e.g. `IsolatedProcessSandbox` prepends a
         `setpriv` + cgroup-join wrapper); the exec pump/timeout machinery below
-        stays shared. Validates the handle (raises `SandboxNotFound`)."""
+        stays shared. Validates the handle (raises `SandboxNotFound`).
+
+        `as_tool` names the third-party tool this command launches. This backend
+        has one identity per sandbox, so it runs the command exactly like any
+        other; `IsolatedProcessSandbox` is the one that separates them."""
         root = self._require(handle)
         ws = root / _WORKSPACE
         self._ensure_home(handle, root)
@@ -1258,8 +1329,26 @@ class LocalProcessSandbox:
         on_output: OutputSink | None = None,
         env: Mapping[str, str] | None = None,
         exec_timeout: float | None = None,
+        tool: bool | str = False,
     ) -> ExecResult:
-        argv, sub_cwd, base_env = self._exec_argv(handle, cmd)
+        # The NAME of the third-party tool this command launches, or None.
+        # `True`/`False` name none and run as any command.
+        as_tool = tool if isinstance(tool, str) else None
+        if as_tool is not None:
+            # Enforced HERE, not trusted from the caller: this API has no
+            # authentication and a sandbox shares the pod's network, so the
+            # agent can send `tool` itself. Whatever it sends, a tool
+            # exec can only be what a tool call is.
+            if (why := self._refuse_tool_exec(handle, cmd, as_tool)) is not None:
+                return ExecResult(
+                    exit_code=126,
+                    stdout=b"",
+                    stderr=(
+                        f"{as_tool}: refused — a tool runs only its own launcher ({why})\n"
+                    ).encode(),
+                )
+            env = scrub_tool_env(env or {})
+        argv, sub_cwd, base_env = self._exec_argv(handle, cmd, as_tool=as_tool)
         # A caller may name its own TOTAL wall-clock budget for one command.
         # `uv sync` does: a cold start downloads a whole dependency stack, and
         # the instance default (60s) turned a slow link into exit 124 instead of
@@ -1269,6 +1358,38 @@ class LocalProcessSandbox:
         # The caller's variables land LAST, so they win over the exec path's own
         # settings — the precedence the tools have always had.
         env = {**base_env, **env} if env else base_env
+        filters: tuple[ToolOutputFilter, ToolOutputFilter] | None = None
+        if as_tool is not None:
+            # …except, for a tool command, the names that decide where its code
+            # is loaded from. A caller-supplied `HOME` the agent can write is a
+            # user site the tool would import from (see `_TOOL_HOME`).
+            env.update({k: base_env[k] for k in _TOOL_PINNED if k in base_env})
+            # P3/P4: what it prints is filtered before anyone sees it — live,
+            # and in the result (see `tool_output`).
+            try:
+                granted = self._tool_secrets(handle, as_tool)
+            except SecretsError as exc:
+                # BLOCKED (3): someone must act, and a retry will not help.
+                # Never run on without them — the tool would report the
+                # variable missing, and the chat would ask the USER for it.
+                return ExecResult(
+                    exit_code=3,
+                    stdout=b"",
+                    stderr=(
+                        f"{as_tool}: this tool's own credentials could not be opened on "
+                        f"this deployment — {exc}. They belong to the tool, so the user "
+                        "cannot set them; the platform team has to fix this.\n"
+                    ).encode(),
+                )
+            # The tool's own credentials win over a user variable of the same
+            # name: they are its author's, and nobody else's to replace.
+            env.update(granted)
+            secrets = list(granted.values())
+            hide = as_tool not in tool_debug_names(env)
+            filters = (
+                ToolOutputFilter(tool=as_tool, hide_source=hide, secrets=secrets, hint=False),
+                ToolOutputFilter(tool=as_tool, hide_source=hide, secrets=secrets),
+            )
         try:
             proc = await asyncio.create_subprocess_exec(
                 *argv,
@@ -1314,23 +1435,34 @@ class LocalProcessSandbox:
         start = loop.time()
         last_output = start  # bumped on every chunk; drives the idle timeout
 
-        async def _pump(stream: asyncio.StreamReader, buf: list[bytes], sink: OutputSink | None):
+        def _emit(data: bytes, buf: list[bytes], sink: OutputSink | None) -> None:
+            if data:
+                buf.append(data)
+                if sink is not None:
+                    sink(data)
+
+        async def _pump(
+            stream: asyncio.StreamReader,
+            buf: list[bytes],
+            sink: OutputSink | None,
+            filt: ToolOutputFilter | None,
+        ):
             nonlocal last_output
             while True:
                 chunk = await stream.read(4096)
                 if not chunk:
                     break
+                # The idle clock reads the RAW stream: a line the filter is
+                # still holding is output the command did produce.
                 last_output = loop.time()
-                buf.append(chunk)
-                if sink is not None:
-                    sink(chunk)
+                _emit(filt.feed(chunk) if filt is not None else chunk, buf, sink)
 
         readers = asyncio.gather(
-            _pump(proc.stdout, out_buf, on_output),
+            _pump(proc.stdout, out_buf, on_output, filters[0] if filters else None),
             # stderr streams to the same live sink — progress bars / warnings /
             # logs a tool writes to stderr show up live, not just at the end.
             # The result still keeps stdout/stderr separate.
-            _pump(proc.stderr, err_buf, on_output),
+            _pump(proc.stderr, err_buf, on_output, filters[1] if filters else None),
         )
 
         async def _terminate() -> None:
@@ -1386,6 +1518,12 @@ class LocalProcessSandbox:
             watchdog.cancel()
             with contextlib.suppress(BaseException):
                 await watchdog
+            if filters is not None:
+                # Whatever a filter still holds — a last line with no newline,
+                # the hint that source lines were hidden — on every exit path,
+                # a kill included: partial output is kept, so it is filtered.
+                _emit(filters[0].flush(), out_buf, on_output)
+                _emit(filters[1].flush(), err_buf, on_output)
 
         stdout = b"".join(out_buf)
         if timed_out is not None:

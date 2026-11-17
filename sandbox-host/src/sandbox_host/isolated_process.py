@@ -19,15 +19,18 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import functools
+import logging
 import os
 import shlex
 import subprocess
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
-from .local_process import _HOME, _UV_CACHE, LocalProcessSandbox
-from .protocol import EnforcedLimits, SandboxHandle, SandboxSpec
+from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
+
+from .local_process import _HOME, _TOOL_HOME, _TOOL_PATH, _UV_CACHE, LocalProcessSandbox
+from .protocol import EnforcedLimits, ExecResult, OutputSink, SandboxHandle, SandboxSpec
 
 # cgroup v2 cpu.max uses a fixed 100ms accounting period.
 _CPU_PERIOD = 100_000
@@ -62,22 +65,37 @@ def _cpu_max(cores: float) -> str:
     return f"{int(cores * _CPU_PERIOD)} {_CPU_PERIOD}"
 
 
-def _acl_argv(workspace: Path, uid: int) -> list[str]:
-    """`setfacl` argv granting `uid` rwx on the workspace AND as the default ACL.
-    Defence-in-depth since #504: app/host-written files are now chowned to `uid`
-    (real ownership, see `_own` / `reown`), so the default ACL is a belt-and-
-    suspenders fallback for any residual root-written path — no longer the sole
-    mechanism keeping the sandbox able to touch those files."""
-    spec = f"u:{uid}:rwx"
+def _acl_argv(workspace: Path, *uids: int) -> list[str]:
+    """`setfacl` argv granting every `uid` rwx on the workspace AND as the
+    default ACL.
+
+    For the sandbox uid it is defence-in-depth since #504: app/host-written
+    files are now chowned to it (real ownership, see `_own` / `reown`), so the
+    default ACL is a belt-and-suspenders fallback for any residual root-written
+    path. For the TOOL uid (docs/plan-tool-identity-secrets.md) it is how the
+    two identities reach each other's files: a third-party tool writes as its
+    own uid, and the default entry for the sandbox uid is what lets the user
+    and the agent edit and delete those files — and the tool's entry is what
+    lets it read theirs. A named entry is capped by the file's mask, which a
+    later mode change shrinks; `exec` widens it around each tool call. One
+    call, so the two entries can never be applied to different trees."""
+    spec = ",".join(f"u:{uid}:rwx" for uid in uids)
     return ["setfacl", "-R", "-m", spec, "-d", "-m", spec, str(workspace)]
 
 
-def _setpriv_cgroup_argv(cmd: list[str], *, uid: int, gid: int, cgroup: Path) -> list[str]:
+def _setpriv_cgroup_argv(
+    cmd: list[str], *, uid: int, gid: int, cgroup: Path, group: int | None = None
+) -> list[str]:
     """Wrap `cmd` so it (1) joins the per-handle cgroup by writing the shell's
     own pid into `cgroup.procs`, then (2) `exec`s `setpriv` to drop to the
-    sandbox uid/gid. `cmd` rides through `"$@"`, so it is never re-quoted."""
+    sandbox uid/gid. `cmd` rides through `"$@"`, so it is never re-quoted.
+
+    `group` is a supplementary group to hold instead of none at all — the tool
+    group, which is what reads the third-party bundles. Only a tool command
+    gets one; the agent's own commands keep `--clear-groups`."""
     procs = shlex.quote(str(cgroup / "cgroup.procs"))
     script = f'echo $$ > {procs}; exec "$@"'
+    groups = "--clear-groups" if group is None else f"--groups={group}"
     return [
         "sh",
         "-c",
@@ -86,7 +104,7 @@ def _setpriv_cgroup_argv(cmd: list[str], *, uid: int, gid: int, cgroup: Path) ->
         "setpriv",
         f"--reuid={uid}",
         f"--regid={gid}",
-        "--clear-groups",
+        groups,
         "--",
         *cmd,
     ]
@@ -200,15 +218,35 @@ class _Identity:
     uid: int
     gid: int
     cgroup: Path
+    tool_uid: int | None = None
+    """The uid this sandbox's third-party tools run as, or None on a host built
+    without a tool group (they then run as `uid`, as they always did)."""
 
 
 # A seam for the one true system-binary boundary (`setfacl`): the default shells
 # out; tests inject a spy so they need neither root nor the `acl` package.
 AclRunner = Callable[[list[str]], None]
+# A seam for running a command AS one of a sandbox's uids, outside the exec
+# path (no cgroup, no streaming): the per-call widening around a tool call. The
+# default drops via `setpriv`; tests record the (uid, argv) pairs. Failures are
+# expected and ignored — each uid can only change what it owns.
+RunAs = Callable[[int, list[str]], None]
+
+
+def _run_as(uid: int, argv: list[str]) -> None:
+    subprocess.run(
+        ["setpriv", f"--reuid={uid}", f"--regid={uid}", "--clear-groups", "--", *argv],
+        check=False,
+        capture_output=True,
+    )
+
+
 # A seam for the privileged `chown` in `_own` (#504): the default calls
 # `os.chown`; tests inject a spy to assert the (path, uid) pairs non-root (the
 # uid pool is pinned to the caller's own uid).
 ChownRunner = Callable[[Path, int], None]
+
+logger = logging.getLogger(__name__)
 
 
 class IsolatedProcessSandbox(LocalProcessSandbox):
@@ -236,6 +274,9 @@ class IsolatedProcessSandbox(LocalProcessSandbox):
         pids_max: int = 512,
         acl_runner: AclRunner | None = None,
         chown_runner: ChownRunner | None = None,
+        tool_gid: int | None = None,
+        tool_secret_key: X25519PrivateKey | None = None,
+        run_as: RunAs | None = None,
     ) -> None:
         super().__init__(
             root_dir=Path(root_dir) if root_dir is not None else None,
@@ -243,6 +284,7 @@ class IsolatedProcessSandbox(LocalProcessSandbox):
             log_timeout=log_timeout,
             isolate=False,  # uid + cgroup ARE the isolation; no namespaces
             tools_dir=tools_dir,
+            tool_secret_key=tool_secret_key,
         )
         self._pool = _UidPool(uid_min, uid_max)
         self._cgroups = _CgroupManager(
@@ -254,7 +296,18 @@ class IsolatedProcessSandbox(LocalProcessSandbox):
         self._identities: dict[str, _Identity] = {}
         self._acl_runner: AclRunner = acl_runner or _run_setfacl
         self._chown_runner: ChownRunner = chown_runner or _run_chown
+        self._run_as: RunAs = run_as or _run_as
         self._alloc_lock = asyncio.Lock()
+        # docs/plan-tool-identity-secrets.md: the group every sandbox's TOOL uid
+        # holds and no sandbox uid does — it is what reads the third-party
+        # bundles. Without one there is no second identity to run a tool as.
+        self._tool_gid = tool_gid
+        if tool_gid is None:
+            logger.warning(
+                "isolated sandbox built without a tool group: third-party tools run "
+                "as the sandbox's own uid, so the agent can read their files and "
+                "their environment"
+            )
 
     async def effective_limits(self, spec: SandboxSpec) -> EnforcedLimits:
         """What this sandbox will really be capped at — the cgroup manager's own
@@ -270,19 +323,43 @@ class IsolatedProcessSandbox(LocalProcessSandbox):
         # `POST /sandboxes` outright, because the controller passes it.
         async with self._alloc_lock:  # serialize uid allocation across handles
             handle = await super().create(spec, item_id)
-            uid, gid = self._pool.alloc()
-            ws = self._workspace(handle)
-            cgroup = await asyncio.to_thread(
-                functools.partial(
-                    self._cgroups.create,
-                    handle.id,
-                    cpu_cores=spec.cpu_cores,
-                    memory_bytes=spec.memory_bytes,
-                    pids_max=spec.pids_max,
+            taken: list[int] = []
+            cgroup: Path | None = None
+            try:
+                uid, gid = self._pool.alloc()
+                taken.append(uid)
+                # The tool identity is a second uid from the SAME pool: the range
+                # is already the one the operator set aside for sandboxes, so it
+                # needs no setting of its own and cannot collide with a host
+                # account.
+                tool_uid = self._pool.alloc()[0] if self._tool_gid is not None else None
+                if tool_uid is not None:
+                    taken.append(tool_uid)
+                ws = self._workspace(handle)
+                cgroup = await asyncio.to_thread(
+                    functools.partial(
+                        self._cgroups.create,
+                        handle.id,
+                        cpu_cores=spec.cpu_cores,
+                        memory_bytes=spec.memory_bytes,
+                        pids_max=spec.pids_max,
+                    )
                 )
+                tools = () if tool_uid is None else (tool_uid,)
+                await asyncio.to_thread(self._provision, ws, uid, *tools)
+            except BaseException:
+                # Nothing half-made survives: a uid taken here and never freed is
+                # one this host never hands out again, and nothing would notice.
+                for taken_uid in taken:
+                    self._pool.free(taken_uid, taken_uid)
+                if cgroup is not None:
+                    await asyncio.to_thread(self._cgroups.remove, cgroup)
+                with contextlib.suppress(Exception):
+                    await LocalProcessSandbox.kill(self, handle)
+                raise
+            self._identities[handle.id] = _Identity(
+                uid=uid, gid=gid, cgroup=cgroup, tool_uid=tool_uid
             )
-            await asyncio.to_thread(self._provision, ws, uid)
-            self._identities[handle.id] = _Identity(uid=uid, gid=gid, cgroup=cgroup)
             return handle
 
     def _own(self, handle: SandboxHandle, target: Path) -> None:
@@ -312,23 +389,28 @@ class IsolatedProcessSandbox(LocalProcessSandbox):
         await asyncio.to_thread(self._reown_sync, handle)
 
     def _reown_sync(self, handle: SandboxHandle) -> None:
-        uid = self._identities[handle.id].uid
+        ident = self._identities[handle.id]
         workspace = self._workspace(handle)
-        self._chown_runner(workspace, uid)
+        self._chown_runner(workspace, ident.uid)
         for path in workspace.rglob("*"):
-            self._chown_runner(path, uid)
+            self._chown_runner(path, ident.uid)
 
-    def _provision(self, workspace: Path, uid: int) -> None:
+    def _provision(self, workspace: Path, uid: int, *tool_uids: int) -> None:
         # Own the workspace to the sandbox uid (gid left as-is via -1, so this
         # works non-root when uid == the caller) and lock it to the owner; the
-        # default ACL keeps root-host-written files writable by the uid.
+        # default ACL keeps root-host-written files writable by the uid — and,
+        # when there is a tool uid, keeps each one's files writable by the other.
         os.chown(workspace, uid, -1)
         os.chmod(workspace, 0o700)
-        self._acl_runner(_acl_argv(workspace, uid))
+        self._acl_runner(_acl_argv(workspace, uid, *tool_uids))
         # #393: the per-sandbox HOME (a workspace sibling) must be writable by
         # the dropped uid so the carrier launcher's HOME/caches + a user's `pip
         # --user` install land there. No default ACL — only the uid writes here.
         self._own_privately(workspace.parent / _HOME, uid)
+        for tool_uid in tool_uids:
+            tool_home = workspace.parent / _TOOL_HOME
+            tool_home.mkdir(exist_ok=True)
+            self._own_privately(tool_home, tool_uid)
 
     def _own_privately(self, path: Path, uid: int) -> None:
         """Hand one infra-area dir to the sandbox uid, 0700 — `.home` (#393) and
@@ -426,12 +508,109 @@ class IsolatedProcessSandbox(LocalProcessSandbox):
             # invisible because it is simply never handed out again.
             if ident is not None:
                 self._pool.free(ident.uid, ident.gid)
+                if ident.tool_uid is not None:
+                    self._pool.free(ident.tool_uid, ident.tool_uid)
+
+    async def exec(
+        self,
+        handle: SandboxHandle,
+        cmd: list[str],
+        on_output: OutputSink | None = None,
+        env: Mapping[str, str] | None = None,
+        exec_timeout: float | None = None,
+        tool: bool | str = False,
+    ) -> ExecResult:
+        as_tool = tool if isinstance(tool, str) else None
+        ident = self._identities.get(handle.id)
+        if (
+            as_tool is None
+            or ident is None
+            or ident.tool_uid is None
+            or self._refuse_tool_exec(handle, cmd, as_tool) is not None
+        ):
+            # The agent's own command, a host without a tool identity, or a call
+            # the base is about to refuse: nothing of the workspace to hand over.
+            return await super().exec(
+                handle, cmd, on_output, env, exec_timeout=exec_timeout, tool=tool
+            )
+        # docs/plan-tool-identity-secrets.md: each identity reaches the other's
+        # files only through its named ACL entry, which a file's MASK caps — and
+        # any mode set after creation shrinks it (`chmod 644`, an archive the
+        # agent unpacked, a tool's 0600 temp file renamed into place). On a file
+        # with an ACL, `chmod g+…` sets the mask, so each identity widens what
+        # IT OWNS, AS ITSELF: the sandbox uid before the call, the tool uid
+        # after. NOT as root: a root walk over a tree the agent writes can be
+        # raced — a process it left running swaps a file for a symlink mid-walk
+        # and root grants it the target, any file on the host (review round 2,
+        # reproduced). As the owner, a race only makes a uid change what it
+        # already owns. Nobody outside the two named entries gains anything:
+        # the owning group is the sandbox's own, and "other" is untouched.
+        # A walk of the workspace each way: the price of sharing it.
+        # Before, the agent's directories and the files its group can already
+        # read (644 -> 664): the tool can then create where the agent unpacked
+        # and edit what a tool always could — while a file the agent made 600
+        # (an SSH key, say), with no group access at all, stays as it chose.
+        # After, only the tool's own files, so its outputs — 0600 temp files
+        # renamed into place included — are the agent's to read and edit.
+        # `find` does not follow symlinks.
+        ws = str(self._workspace(handle))
+        shared = ["find", ws, "(", "-type", "d", "-o", "-perm", "-g+r", ")"]
+        shared += ["-exec", "chmod", "g+rwX", "{}", "+"]
+        await asyncio.to_thread(self._run_as, ident.uid, shared)
+        try:
+            return await super().exec(
+                handle, cmd, on_output, env, exec_timeout=exec_timeout, tool=tool
+            )
+        finally:
+            made = ["find", ws, "-user", str(ident.tool_uid), "-exec", "chmod", "g+rwX", "{}", "+"]
+            await asyncio.to_thread(self._run_as, ident.tool_uid, made)
 
     def _exec_argv(
-        self, handle: SandboxHandle, cmd: list[str]
+        self, handle: SandboxHandle, cmd: list[str], as_tool: str | None = None
     ) -> tuple[list[str], Path, dict[str, str]]:
-        argv, cwd, env = super()._exec_argv(handle, cmd)
+        argv, cwd, env = super()._exec_argv(handle, cmd, as_tool=as_tool)
         ident = self._identities[handle.id]
         env["TMPDIR"] = str(cwd)  # per-handle tmp inside the workspace
-        wrapped = _setpriv_cgroup_argv(argv, uid=ident.uid, gid=ident.gid, cgroup=ident.cgroup)
+        if as_tool is None or ident.tool_uid is None:
+            wrapped = _setpriv_cgroup_argv(argv, uid=ident.uid, gid=ident.gid, cgroup=ident.cgroup)
+            return wrapped, cwd, env
+        # A third-party tool: its own uid, the tool group, its own HOME — the
+        # SAME cgroup, so its limits and its owner's bill are unchanged. The
+        # launcher builds its user site from `SANDBOX_HOME` and Python adds one
+        # from `HOME`; both must be a dir the agent cannot write, and Python must
+        # not add any other (`PYTHONNOUSERSITE`) nor the script's own dir
+        # (`PYTHONSAFEPATH`). `exec` keeps these over the caller's (`_TOOL_PINNED`).
+        tool_home = str(self._ensure_tool_home(handle, ident.tool_uid))
+        env["HOME"] = tool_home
+        env["SANDBOX_HOME"] = tool_home
+        env["TMPDIR"] = str(Path(tool_home) / "tmp")
+        env["PYTHONNOUSERSITE"] = "1"
+        env["PYTHONSAFEPATH"] = "1"
+        # Nothing that points at the agent's environment: its PATH heads with a
+        # shim into the project venv, and these name that venv and uv's cache.
+        env["PATH"] = _TOOL_PATH
+        for name in ("VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT", "UV_CACHE_DIR", "SANDBOX_JAILBIN"):
+            env.pop(name, None)
+        assert self._tool_gid is not None  # a tool uid exists only with a group
+        wrapped = _setpriv_cgroup_argv(
+            argv,
+            uid=ident.tool_uid,
+            gid=ident.tool_uid,
+            cgroup=ident.cgroup,
+            group=self._tool_gid,
+        )
         return wrapped, cwd, env
+
+    def _ensure_tool_home(self, handle: SandboxHandle, tool_uid: int) -> Path:
+        """The tool identity's HOME, guaranteed where it is used — the shape
+        `_ensure_home` has for the sandbox's, for the same reason."""
+        home = self._require(handle) / _TOOL_HOME
+        home.mkdir(exist_ok=True)
+        self._own_privately(home, tool_uid)
+        # Its TMPDIR too (review round 3): in the workspace, a tool's private
+        # temp file — a credential written out for a subprocess — sat where the
+        # agent could move it aside mid-run and read it after the call.
+        tmp = home / "tmp"
+        tmp.mkdir(exist_ok=True)
+        self._own_privately(tmp, tool_uid)
+        return home
