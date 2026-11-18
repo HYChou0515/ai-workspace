@@ -534,13 +534,13 @@ def test_history_replays_from_the_newest_summary_not_the_whole_thread():
 
 def test_build_input_places_folded_messages_between_history_and_the_prompt():
     """docs/plan-interjection.md Q10: the messages a turn answers for others go
-    in, in order, after the history and before its own — each attributed like a
-    history message on a shared thread, with the images it carried."""
+    in, in order, after the history and before its own — as the surface composed
+    them (already attributed), with the images it carried."""
     from workspace_app.agent.context import Interjection
 
     hist = [{"role": "user", "content": "q1"}, {"role": "assistant", "content": "a1"}]
     leading = [
-        Interjection(content="q2", author="ann", at=2, speaker="Ann (ann)"),
+        Interjection(content="[Ann (ann)]: q2", author="ann", at=2),
         Interjection(content="q3", author="ann", at=3, image_urls=["data:image/png;base64,AA"]),
     ]
     assert _build_input(hist, "q4", (), leading) == [

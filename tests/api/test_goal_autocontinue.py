@@ -94,6 +94,39 @@ def test_unmet_then_met_continues_once_and_closes_the_goal():
         assert len(llm.prompts) == 2
 
 
+class _PromptRunner:
+    """Records the text each turn hands the model as its own message."""
+
+    def __init__(self) -> None:
+        self.prompts: list[str] = []
+
+    async def run(self, prompt, ctx):
+        self.prompts.append(prompt)
+        yield MessageDelta(text="working on it")
+        yield RunDone()
+
+
+def test_a_goal_round_is_not_handed_to_the_model_as_the_setters_words():
+    """A person's message reaches the model as `[Name (handle)]: …`. A goal
+    round's text is the driver's, though it runs as the goal's setter — so it is
+    handed over as it is, and the setter is not made to have said it."""
+    llm = _ScriptLlm(["NOT_MET", "MET"])
+    runner = _PromptRunner()
+    app, spec, iid = _app(llm, runner=runner)
+    with TestClient(app) as client:
+        chat = client.post(f"/a/rca/items/{iid}/chats", json={"title": "t"}).json()
+        rid = chat["chat_id"]
+        base = f"/a/rca/items/{iid}/chats/{rid}"
+        client.put(f"{base}/goal", json={"condition": "the report exists"})
+
+        client.post(f"{base}/messages", json={"content": "go"})
+
+        _wait(lambda: (g := read_goal(spec, rid)) is not None and g.state == "met")
+    assert len(runner.prompts) == 2
+    assert runner.prompts[0].endswith("go") and runner.prompts[0].startswith("[")
+    assert runner.prompts[1].startswith("[goal]")
+
+
 def test_met_on_the_first_turn_closes_without_continuing():
     llm = _ScriptLlm(["MET"])
     app, spec, iid = _app(llm)

@@ -51,15 +51,14 @@ class Interjection:
     model call (Q1). It is persisted already; this is what the model is handed.
 
     `content` is what that message's own turn would have been handed (its skill
-    and marking blocks included), `speaker` the attribution label a shared
-    thread shows the model (`""` for none), `image_urls` the pixels it carried
-    for a vision model. `author` and `at` (its `created_at`) say which persisted
+    and marking blocks included, and the person's own words prefixed with their
+    `[Name (handle)]: `), `image_urls` the pixels it carried for a vision
+    model. `author` and `at` (its `created_at`) say which persisted
     message it is."""
 
     content: str
     author: str
     at: int
-    speaker: str = ""
     image_urls: list[str] = field(default_factory=list)
     # Skills applied with this message (#380): their bodies are already in
     # `content`; the turn reading it lets `read_skill` open them as well (Q7).

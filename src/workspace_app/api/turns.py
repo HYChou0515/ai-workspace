@@ -45,7 +45,7 @@ from ..failover.classify import classify_error, error_params, raw_error_text
 from ..observability.stdout_log import install_own_handler
 from ..resources.conversation import MessageMetrics
 from ..turn_control import InMemoryTurnControl, ITurnControl
-from ..users.labels import speaker_label
+from ..users.labels import attributed, speaker_label
 from ..users.protocol import UserDirectory
 from .event_bus import IEventBus, InMemoryEventBus
 from .events import (
@@ -224,7 +224,7 @@ def _attribute(content: str, author: str | None, users: UserDirectory | None) ->
     text verbatim)."""
     if users is None or not author:
         return content
-    return f"[{speaker_label(users.get(author))}]: {content}"
+    return attributed(speaker_label(users.get(author)), content)
 
 
 #: A produced `TurnMessage` that is not new content but a POSITION: the person's
@@ -870,10 +870,7 @@ class QueuedMessage:
 
     `driven` marks a round the goal driver started (#613): not a person
     speaking, so it never takes a turn over, is never read into another turn,
-    and is never folded with people's messages — it waits its turn (§9 C10).
-
-    `speaker` is the attribution label the model sees for it when it leads or
-    is read into another turn."""
+    and is never folded with people's messages — it waits its turn (§9 C10)."""
 
     author: str
     at: int
@@ -881,7 +878,6 @@ class QueuedMessage:
         Callable[[list[MessageKey], set[MessageKey], AgentToolContext], Awaitable[bool]] | None
     ) = None
     on_absorbed: Callable[[], None] | None = None
-    speaker: str = ""
     driven: bool = False
 
 
@@ -915,7 +911,6 @@ class _QueueEntry:
             content=self.content,
             author=self.message.author,
             at=self.message.at,
-            speaker=self.message.speaker,
             image_urls=list(self.ctx.turn_image_urls),
             applied_skills=list(self.ctx.applied_skills),
         )

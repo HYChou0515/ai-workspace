@@ -238,6 +238,22 @@ def test_the_model_gets_one_line_per_marking_naming_count_keys_and_path():
     assert cap.prompt.rstrip().endswith("why?")
 
 
+def test_the_senders_name_goes_on_their_words_not_on_the_markings_block():
+    """Every message a person wrote reaches the model as `[Name (handle)]: …`.
+    The markings block is the platform's, sent in front of the person's words —
+    so the name goes after it, on what the person said, never on the block."""
+    cap = _Capture()
+    app, spec = _app(cap)
+    client = TestClient(app)
+    iid = register_rca_item(spec)
+
+    client.post(f"/a/rca/items/{iid}/messages", json={"content": "why?", "markings": [FAIL]})
+
+    assert cap.prompt is not None
+    assert not cap.prompt.startswith("[")
+    assert cap.prompt.endswith("\n\n[u]: why?")
+
+
 def test_the_marking_is_recorded_on_the_persisted_message_but_not_in_its_text():
     """A reload shows the chip; the text the user typed stays the text."""
     cap = _Capture()
