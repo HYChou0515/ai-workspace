@@ -599,7 +599,8 @@ def test_the_three_groups_rank_whole_then_every_word_then_most_words() -> None:
     every = match_rank(_described("x", "Defects in solder, found after reflow."), "solder defects")
     two_of_three = match_rank(_described("x", "Solder defects."), "solder defects oven")
     one_of_three = match_rank(_described("x", "Solder joints."), "solder defects oven")
-    assert None not in (whole, every, two_of_three, one_of_three)
+    assert whole is not None and every is not None
+    assert two_of_three is not None and one_of_three is not None
     assert whole < every < two_of_three < one_of_three
     assert match_rank(_described("x", "Slides."), "solder defects") is None
 
