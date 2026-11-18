@@ -3733,6 +3733,27 @@ AI 工具說明裡每個目標後面多了它的長度上限(沒設的寫 10 個
 **確認做完**（rollout 後）— 開一個 playground 的 intake item（它預設沒開 `exec`，也沒開 `save_workflow`），先在工具選單打開
 `save_workflow`，再請 AI 存一個步驟用到 `exec` 的工作流程：存得進去，不再出現 `outside the profile's allowed tools`。
 
+### 2026-11-18 · #1032 第三方工具的 resolve 最多等 30 秒；開機不再等工具預熱 {#pr-1032}
+
+**設定** — 沒有新 key（30 秒寫死，沒有開關）。
+
+**資料** — 不用 migrate。
+
+**k8s · CI 側** — 沒有要做的事。readinessProbe 不用改：開機不再等第三方工具預熱，pod 會比以前早 ready。
+
+**行為改變，沒有開關**
+- **開機**：「tools: warm third-party bundles」不再擋開機，改在背景跑；開機 log 改成
+  `→ tools: warming third-party bundles in the background`，`lifespan: third-party tools warmed, N unavailable`
+  會在 pod ready **之後**才出現。**為什麼**：曾有一次開機打到處理中途死掉的 sandbox host，沒有期限，乾等 404 秒。
+  **副作用**：剛開機時，第一個用到 host 從沒抓過的新版 bundle 的 turn 要自己等下載（最多 30 秒，見下一條）。
+- **每個 turn 開頭問 host 要第三方工具**：最多等 30 秒。沒回應、連不上或連線中斷時，這個 turn **照跑但沒有第三方工具**，
+  工具選單與 AI 會看到「the sandbox host did not answer (…)」；下一個 turn 再問。以前是沒有期限地等，連線斷掉時整個 turn 失敗。
+  log 會有 `third-party tools unavailable this turn: the sandbox host did not answer`。
+  app 不等了，host 仍會把下載做完，所以慢的第一次下載只影響那一個 turn。
+
+**確認做完**（rollout 後）— 看新 pod 的開機 log：`warming third-party bundles in the background` 之後的步驟緊接著跑完、pod 很快 ready；
+稍後出現 `third-party tools warmed, N unavailable`。
+
 ---
 
 ## 附錄 A：資料回填的機制（specstar 為什麼不會自己補）
