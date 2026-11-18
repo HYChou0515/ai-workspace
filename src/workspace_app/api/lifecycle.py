@@ -93,9 +93,16 @@ def consumer_set(run_consumers: bool | list[str]) -> frozenset[str]:
 async def _warm_tools(prewarm_tools: Callable[[], Awaitable[dict[str, str]]]) -> None:
     """The boot's third-party bundle warm, run as a background task. Its log
     line arrives when it finishes — after the pod is ready — and names what
-    will be unavailable; it can never fail anything (`prewarm_external_tools`
-    swallows every per-app failure)."""
-    unwarmed = await prewarm_tools()
+    will be unavailable. A failure is logged here: as a background task its
+    exception would otherwise sit unread until shutdown suppresses it, where
+    awaited at boot it used to fail loudly (`prewarm_external_tools` already
+    swallows each app's own failure; this catches the rest, e.g. reading the
+    apps' declarations)."""
+    try:
+        unwarmed = await prewarm_tools()
+    except Exception:
+        logger.exception("lifespan: warming third-party tools failed")
+        return
     logger.info("lifespan: third-party tools warmed, %d unavailable", len(unwarmed))
 
 
@@ -639,8 +646,9 @@ def build_lifespan(
         # broken.) Nor does it DELAY the boot any more: it runs in the
         # background (started with the other background tasks below, and
         # cancelled with them), because one boot waited 404 s on a host that
-        # died mid-request while every other step took 0.2 s. A turn that
-        # arrives before it finishes resolves the bundle itself.
+        # died mid-request (the shared http client has no read deadline) while
+        # every other step took 0.2 s. A turn that arrives before it finishes
+        # resolves the bundle itself.
         print("  → tools: warming third-party bundles in the background", flush=True)
         # A per-person cpu/memory cap can only bind if SOMETHING states what a
         # sandbox costs — the App, or the backend's own ceiling. Saying so needs

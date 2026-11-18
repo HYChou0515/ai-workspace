@@ -66,3 +66,20 @@ def test_a_host_that_never_answers_does_not_hold_the_boot(monkeypatch):
     assert done.wait(30), "the lifespan waited on a host that never answered"
     assert not errors, errors
     t.join(5)
+
+
+async def test_a_warm_that_fails_outright_is_logged_not_lost(caplog):
+    """Awaited at boot, a failure outside the per-app guard (reading the apps'
+    declarations) failed the boot loudly; as a background task it would sit
+    unread until shutdown suppressed it. It is logged instead."""
+    import logging
+
+    from workspace_app.api.lifecycle import _warm_tools
+
+    async def broken() -> dict[str, str]:
+        raise ValueError("app.json is not valid")
+
+    with caplog.at_level(logging.ERROR, logger="workspace_app.api.lifecycle"):
+        await _warm_tools(broken)
+    [rec] = [r for r in caplog.records if "warming third-party tools failed" in r.getMessage()]
+    assert rec.exc_info is not None and "app.json is not valid" in str(rec.exc_info[1])

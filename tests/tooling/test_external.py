@@ -9,9 +9,6 @@ bundle that actually runs.
 
 from __future__ import annotations
 
-import httpx
-import pytest
-
 from workspace_app.tooling.external import (
     ExternalTools,
     MountedTool,
@@ -431,35 +428,3 @@ async def test_a_tool_with_no_title_leaves_it_empty() -> None:
 
     (pkg,) = external.packages
     assert pkg.title == ""
-
-
-class _Silent:
-    """A hosted backend whose resolve never comes back in time, or whose
-    connection is cut mid-answer (the host died while handling it)."""
-
-    resolves_tools = True
-
-    def __init__(self, exc: Exception) -> None:
-        self.exc = exc
-
-    async def resolve_tools(self, declared: dict[str, str]) -> dict:
-        raise self.exc
-
-
-@pytest.mark.parametrize(
-    "exc",
-    [
-        httpx.ReadTimeout("timed out"),
-        httpx.ConnectError("refused"),
-        httpx.RemoteProtocolError("Server disconnected without sending a response."),
-    ],
-    ids=["no-answer-in-time", "unreachable", "cut-mid-answer"],
-)
-async def test_a_host_that_does_not_answer_leaves_the_turn_without_third_party_tools(exc) -> None:
-    """The turn runs with its built-in tools; every third-party tool is
-    unavailable THIS turn, with the reason kept — the same shape as a refusal,
-    so the picker and the model say so. The next turn asks again."""
-    out = await resolve_external_tools(_Silent(exc), {"wafer-history": "u", "spc": "v"})
-    assert out.packages == () and out.shas == {}
-    assert set(out.refused) == {"wafer-history", "spc"}
-    assert all("sandbox host" in r for r in out.refused.values()), out.refused

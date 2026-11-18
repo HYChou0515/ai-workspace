@@ -956,7 +956,7 @@ server:
 
 | | 誰做 | 何時 | 結果 |
 |---|---|---|---|
-| **resolve** | app 問 host `POST /tools/resolve` | 每個 turn 開頭（app 最多等 30 秒；沒回應、連不上或連線中斷，這個 turn 就沒有第三方工具、照跑，下個 turn 再問）；另外開機時在**背景**預熱一次（不擋 readiness） | 驗 builder/憑證、抓 bundle、解壓進 host 的 `ext/<sha>` 快取。app 不等了 host 仍會把下載做完。**沒有任何 sandbox 因此拿到工具** |
+| **resolve** | app 問 host `POST /tools/resolve` | 每個 turn 開頭；另外開機時在**背景**預熱一次（不擋 readiness） | 驗 builder/憑證、抓 bundle、解壓進 host 的 `ext/<sha>` 快取。**沒有任何 sandbox 因此拿到工具** |
 | **mount** | host 在 `create` 裡 | 建立一顆 sandbox 時，**僅此一次** | 對這次 spec 帶的每個 `{名字: sha}` 建一條 `.tools/<名字> → ext/<sha>` |
 
 所以「工具在快取裡」和「工具在某顆 sandbox 裡」是兩件事，前者不蘊含後者。
