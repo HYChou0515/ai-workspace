@@ -677,6 +677,40 @@ def test_text_whose_lower_case_is_longer_still_matches_words() -> None:
     assert match_rank(_described("x", "İstanbul city guidebook"), "book tour") is None
 
 
+def test_word_starts_are_read_once_per_text_however_many_words(monkeypatch) -> None:
+    """Review round 3: reading word starts again for every word of the query
+    made a search 34x slower, on the API's event loop. The name and the
+    description are each read AT MOST once per entry, whatever the query
+    holds — and not at all when none of its words is in them."""
+    from workspace_app.apps import skill_hub
+
+    calls: list[str] = []
+    real = skill_hub._word_starts
+
+    def counted(text: str) -> list[int]:
+        calls.append(text)
+        return real(text)
+
+    monkeypatch.setattr(skill_hub, "_word_starts", counted)
+    e = _described("wafer-yield", "Analyse wafer yield maps and lot history quickly.")
+    skill_hub.match_rank(e, "wafer yield lot history map trend chart report")
+
+    assert sorted(calls) == sorted([e.name, e.description])
+    calls.clear()
+    skill_hub.match_rank(e, "deck slides poster banner")
+    assert calls == []
+
+
+def test_an_acronym_ends_where_the_next_word_begins() -> None:
+    """`XMLParser`, `readCSVFile`: the last capital of an acronym starts the
+    next word (review round 3)."""
+    from workspace_app.apps.skill_hub import match_rank
+
+    assert match_rank(_described("x", "Uses XMLParser."), "xml parser") == (1, 0)
+    assert match_rank(_described("x", "Calls readCSVFile."), "csv file") == (1, 0)
+    assert match_rank(_described("x", "An HTTPServer."), "http server") == (1, 0)
+
+
 def test_an_underscore_separates_words_both_ways() -> None:
     from workspace_app.apps.skill_hub import match_rank
 
