@@ -394,3 +394,23 @@ def test_anything_else_leaves_the_check_on(spelling, monkeypatch) -> None:
     monkeypatch.setenv(INSECURE_ENV, spelling)
 
     assert not tls_checks_disabled()
+
+
+def test_parse_manifest_carries_the_title_the_author_gave() -> None:
+    """docs/plan-tool-title.md D6: display-only, at the tier `description`
+    lives at — nothing reads it to decide anything."""
+    m = parse_manifest(_manifest_bytes(title="晶圓歷史查詢"))
+
+    assert m.title == "晶圓歷史查詢"
+    assert parse_manifest(render_manifest(m)) == m
+
+
+def test_a_manifest_published_before_titles_existed_still_parses() -> None:
+    """D6: no `format_version` bump — every artifact in the field has no title."""
+    body = json.loads(_manifest_bytes())
+    assert "title" not in body
+
+    m = parse_manifest(json.dumps(body).encode())
+
+    assert m.title is None
+    assert "title" not in json.loads(render_manifest(m))

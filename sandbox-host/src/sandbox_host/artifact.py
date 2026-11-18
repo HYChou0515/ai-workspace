@@ -395,6 +395,12 @@ class Manifest:
     #: Optional, on the same bargain ``author`` and ``env`` struck: every
     #: artifact already in the field was published without it.
     description: str | None = None
+    #: What this tool is CALLED, in its author's words — from
+    #: ``[tool.ai-workspace].title`` in their own ``pyproject``
+    #: (docs/plan-tool-title.md). Without it a tool was shown by its id with the
+    #: dashes taken out. Same display-only tier as ``description``, and optional
+    #: on the same bargain: every artifact already published has none.
+    title: str | None = None
     #: What the tool says it needs from the environment (#750), or ``None``
     #: when the manifest carried no ``env`` key at all.
     #:
@@ -455,6 +461,7 @@ def parse_manifest(raw: bytes) -> Manifest:
             grant=body.get("grant"),
             author=body.get("author"),
             description=body.get("description"),
+            title=body.get("title"),
         )
     except (KeyError, TypeError) as exc:
         raise ManifestError(f"manifest is missing or malformed at {exc}") from exc
@@ -536,6 +543,8 @@ def render_manifest(manifest: Manifest) -> bytes:
         body["author"] = manifest.author
     if manifest.description is not None:
         body["description"] = manifest.description
+    if manifest.title is not None:
+        body["title"] = manifest.title
     # Indented and newline-terminated: a manifest lands in CI logs and in
     # review diffs, where a single long line helps nobody.
     return (json.dumps(body, indent=2, sort_keys=True) + "\n").encode()
