@@ -12,7 +12,7 @@ an App and read in place at prompt-compose time; a template is COPIED into an it
 ``.workflows/`` (see ``workspace_store``), so the user owns their copy and edits it
 freely, and the original is never consulted again. That is why there is no per-App opt-in
 list here: a template only has to be compatible, and compatibility is already decided by
-the profile's tool ceiling, which ``validate_def`` checks at copy time. Adding a
+the App's tools (``_app_tool_ceiling``), which ``validate_def`` checks at copy time. Adding a
 ``workflows:`` grant to ``app.json`` would be a second, weaker copy of a check the DSL
 validator already performs exactly.
 

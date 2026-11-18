@@ -20,7 +20,9 @@ from workspace_app.resources import make_spec
 from workspace_app.sandbox.mock import MockSandbox
 
 
-def _app(profile: str = "echo") -> tuple[FastAPI, SpecStar, str]:
+def _app(
+    profile: str = "echo", tool_prefs: dict[str, bool] | None = None
+) -> tuple[FastAPI, SpecStar, str]:
     spec = make_spec()
     app = create_app(
         spec=spec,
@@ -30,7 +32,11 @@ def _app(profile: str = "echo") -> tuple[FastAPI, SpecStar, str]:
     )
     item_id = (
         spec.get_resource_manager(PlaygroundItem)
-        .create(PlaygroundItem(title="t", owner="u", profile=profile))
+        .create(
+            PlaygroundItem(
+                title="t", owner="u", profile=profile, attached_tool_prefs=tool_prefs or {}
+            )
+        )
         .resource_id
     )
     return app, spec, item_id
@@ -62,6 +68,39 @@ def test_incompatible_templates_are_listed_with_the_reason_not_hidden():
     tpl = next(t for t in out if t["id"] == "image-to-knowledge")
     assert tpl["compatible"] is False
     assert any("read_image" in p for p in tpl["problems"]), tpl["problems"]
+
+
+def test_the_reason_says_the_tool_is_switched_off_and_where_to_switch_it_on():
+    """`read_image` is one of Playground's tools — `echo` only leaves it off by
+    default — so the remedy is the item's tool picker, and the reason says so."""
+    app, _spec, item_id = _app(profile="echo")
+    with TestClient(app) as client:
+        out = client.get(f"{_base(item_id)}/workflow-templates").json()
+
+    tpl = next(t for t in out if t["id"] == "image-to-knowledge")
+    [problem] = [p for p in tpl["problems"] if "read_image" in p]
+    assert "switched off in this item" in problem and "tool picker" in problem, problem
+
+
+def test_switching_the_tools_on_in_the_item_makes_the_template_compatible():
+    """The same `echo` item, with the tools the template names switched on in
+    its tool picker: it can run it by hand, so the template is offered and
+    copies (the user's report: a tool usable by hand was refused in a
+    workflow)."""
+    app, _spec, item_id = _app(profile="echo")
+    with TestClient(app) as client:
+        out = client.get(f"{_base(item_id)}/workflow-templates").json()
+    tpl = next(t for t in out if t["id"] == "image-to-knowledge")
+    off = {p.split("'")[1] for p in tpl["problems"] if "switched off" in p}
+    assert off, tpl["problems"]
+
+    app, _spec, item_id = _app(profile="echo", tool_prefs=dict.fromkeys(off, True))
+    with TestClient(app) as client:
+        out = client.get(f"{_base(item_id)}/workflow-templates").json()
+        tpl = next(t for t in out if t["id"] == "image-to-knowledge")
+        assert tpl["compatible"] is True and tpl["problems"] == [], tpl["problems"]
+        r = client.post(f"{_base(item_id)}/workflow-templates/image-to-knowledge/copy")
+    assert r.status_code == 200, r.text
 
 
 def test_a_profile_that_grants_the_tools_sees_the_template_as_compatible():

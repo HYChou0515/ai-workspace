@@ -94,7 +94,7 @@ def test_validate_tool_ceiling_clamps():
         }
     )
     _d, errs = validate_workflow_json(over, tool_ceiling={"read_file"})
-    assert any("tool 'exec' is outside" in e for e in errs)
+    assert any("tool 'exec' is not one of this App's tools" in e for e in errs)
 
 
 async def test_save_forces_id_to_slug_and_canonicalises():

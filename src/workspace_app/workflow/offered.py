@@ -14,7 +14,7 @@ The rule, stated once: an item offers the workflows its profile declares AND
 the ones saved under its own `.workflows/`, a workspace one shadowing a package
 one of the same id (the orchestrator already resolves that way — this makes the
 gates agree with the thing that runs). Nothing here widens what a workspace
-workflow may do: `save_workflow` validated it against the profile's tool ceiling
+workflow may do: `save_workflow` validated it against the App's tools
 when it was written, and the panel already let anyone with access to the item
 run it.
 

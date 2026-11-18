@@ -106,7 +106,7 @@ await agent_step(wf, *, prompt, phase, check, name=None, key="",
 `out` 是 json/yaml/csv 而且沒傳 `check` 時,預設 gate 會判(自己傳 `check` 就是放棄這個判斷,
 連 `artifact_valid(out, kind)` 也一樣——要它算數得寫 `artifact_valid(out, kind, of_reply=True)`);宣告 `outputs` 時,Python API
 **不會**自己檢查回覆的欄位(DSL 會),要修補就得傳一個會標 `format=True` 的 `check`。
-Python API 的 `retries` 預設 `0`,也就是不修補也不重跑。`tools` 是這個 agent 被允許的 tool 子集(⊆ profile 上限)。
+Python API 的 `retries` 預設 `0`,也就是不修補也不重跑。`tools` 是這個 agent 被允許的 tool 子集(⊆ App 的 `agent.tools`;執行時只拿得到 item 工具選單開著的)。
 
 ```python
 await agent_write_step(wf, *, prompt, phase, out="", kind="text", requires=None,
