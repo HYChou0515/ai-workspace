@@ -3499,7 +3499,9 @@ def _profile_tool_ceiling(
 ) -> set[str] | None:
     """The tools a turn in this App profile holds BY DEFAULT — the App's ``agent.tools``
     ceiling narrowed by the profile's ``tools`` override. The fallback answer of
-    `_turn_held_tools` (the sub-agent clamp) when the turn's own list is not known.
+    `held_tool_names` when the turn's own list is not known — which feeds the
+    sub-agent clamps (`_subagent_defs`, `_live_subagent_defs`) and `save_subagent`'s
+    refusal.
     Not what a workflow step is judged by: the item's picker can switch on anything in
     the App's list, so that is `_app_tool_ceiling`. ``None`` (skip the clamp) for a
     synthetic / unreadable slug.
@@ -3521,9 +3523,9 @@ def _profile_tool_ceiling(
         return None
     pm_tools = load_profile(app_slug, profile).tools
     # NOT renamed. This ceiling comes from authored manifest files, not from
-    # stored config, and it feeds a clamp (`_subagent_defs` -> `clamp_tools`).
-    # No shipped manifest names a legacy tool, so normalising here would change
-    # its consumers on a case none of them can be handed.
+    # stored config, and it feeds the sub-agent clamps and `save_subagent`'s
+    # refusal (through `held_tool_names`). No shipped manifest names a legacy
+    # tool, so normalising here would change them on a case none can be handed.
     ceiling = (set(pm_tools) & app_tools) if pm_tools is not UNSET else app_tools
     return set(expand_entries(sorted(ceiling), packages))
 

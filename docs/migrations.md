@@ -3730,8 +3730,8 @@ AI 工具說明裡每個目標後面多了它的長度上限(沒設的寫 10 個
 - **執行時沒變**：步驟寫了 item 選單沒開的工具，照舊在那一步拿不到、只在 log 留
   `workflow node: tools not held by this item, dropped`。
 
-**確認做完** — 在一個 profile 預設沒開某工具（例如 playground 的 intake 沒開 `exec`）的 item 上，讓 AI 存一個步驟用到它的工作流程：
-不再出現 `outside the profile's allowed tools`。
+**確認做完**（rollout 後）— 開一個 playground 的 intake item（它預設沒開 `exec`，也沒開 `save_workflow`），先在工具選單打開
+`save_workflow`，再請 AI 存一個步驟用到 `exec` 的工作流程：存得進去，不再出現 `outside the profile's allowed tools`。
 
 ---
 

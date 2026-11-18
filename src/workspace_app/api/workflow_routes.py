@@ -366,13 +366,14 @@ def register_workflow_routes(
         first-party packages only: a third-party command is not judged here (a
         template naming one passes and is narrowed at run time). An agent
         copy's own `tools:` is not applied either — it narrows at run time, as
-        it always did. ``None`` (skip that check) with no config or one that
-        leaves the toolset unspecified."""
+        it always did. ``None`` (skip that check) for a config that leaves the
+        toolset unspecified."""
         from ..apps.catalog import finalize_tool_grants
 
         cfg = locator.resolve_agent_config(item_id)
-        if cfg is None:
-            return None
+        # `require_access` already 404'd an unknown item, and an App item
+        # always resolves through `AppCatalog.resolve`.
+        assert cfg is not None
         allowed = finalize_tool_grants(cfg, packages).allowed_tools
         return set(allowed) if allowed is not None else None
 
