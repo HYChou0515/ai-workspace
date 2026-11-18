@@ -29,10 +29,14 @@ import { useUser } from "../hooks/useUsers";
 import { useT } from "../lib/i18n";
 
 const SORTS: readonly SkillHubSort[] = ["name", "popular", "updated"];
+/** docs/plan-skill-hub-search.md D5: offered only while there is a search —
+ * without one there is nothing to be relevant to. */
+const SEARCH_SORTS: readonly SkillHubSort[] = ["relevant", ...SORTS];
 const SORT_LABEL = {
   name: "skillHub.sort.name",
   popular: "skillHub.sort.popular",
   updated: "skillHub.sort.updated",
+  relevant: "skillHub.sort.relevant",
 } as const;
 const PAGE = 50;
 
@@ -72,7 +76,12 @@ export function SkillHubPage({
   const mine = params.get("mine") === "1";
   const owner = params.get("owner") ?? "";
   const sortParam = params.get("sort") as SkillHubSort | null;
-  const sort: SkillHubSort = sortParam && SORTS.includes(sortParam) ? sortParam : "name";
+  // A search defaults to its best matches (D5; NN/g "The Power of Defaults":
+  // helpful defaults, not the first letter of the alphabet); no search, name.
+  // The default is the absent parameter, so a stale `relevant` reads as name.
+  const sorts = q.trim() ? SEARCH_SORTS : SORTS;
+  const defaultSort: SkillHubSort = q.trim() ? "relevant" : "name";
+  const sort: SkillHubSort = sortParam && sorts.includes(sortParam) ? sortParam : defaultSort;
   const setFilter = (next: Record<string, string>) =>
     setParams(
       (prev) => {
@@ -203,10 +212,10 @@ export function SkillHubPage({
                 className="input"
                 value={sort}
                 onChange={(e) =>
-                  setFilter({ sort: e.target.value === "name" ? "" : e.target.value })
+                  setFilter({ sort: e.target.value === defaultSort ? "" : e.target.value })
                 }
               >
-                {SORTS.map((s) => (
+                {sorts.map((s) => (
                   <option key={s} value={s}>
                     {t(SORT_LABEL[s])}
                   </option>

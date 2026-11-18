@@ -2957,6 +2957,7 @@ export const messages = {
   },
   "skillHub.sort.name": { "zh-TW": "名稱", en: "Name" },
   "skillHub.sort.popular": { "zh-TW": "最常使用", en: "Most used" },
+  "skillHub.sort.relevant": { "zh-TW": "最相關", en: "Most relevant" },
   "skillHub.forkOf.named": { "zh-TW": "fork 自 {owner} 的 {name}", en: "fork of {owner}'s {name}" },
   "skillHub.origin.unpublished": { "zh-TW": "原作已下架", en: "the original was unpublished" },
   "skillHub.origin.deleted": { "zh-TW": "原作已刪除", en: "the original was deleted" },

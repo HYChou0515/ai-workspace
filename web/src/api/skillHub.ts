@@ -44,7 +44,9 @@ export type SkillHubCard = {
   updated_at: string | null;
 };
 
-export type SkillHubSort = "name" | "popular" | "updated";
+/** `relevant` (docs/plan-skill-hub-search.md D5): the best match for `q` first,
+ * then the most used; the server reads it as `name` when there is no `q`. */
+export type SkillHubSort = "name" | "popular" | "updated" | "relevant";
 
 /** What the list page asks for. Browsing (no `q`, `mine` or `owner`) lists
  * originals only; any filter lists forks beside them. */
