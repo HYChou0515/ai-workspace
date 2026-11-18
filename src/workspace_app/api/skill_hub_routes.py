@@ -36,6 +36,7 @@ from ..apps.skill_hub import (
     UnknownRevision,
     UpstreamState,
     VersionMoved,
+    match_rank,
     matches_query,
     missing_tools_for,
     script_count,
@@ -422,7 +423,7 @@ def register_skill_hub_routes(
         owner: str = "",
         app: str = "",
         forks: bool = False,
-        sort: Literal["name", "popular", "updated"] = "name",
+        sort: Literal["name", "popular", "updated", "relevant"] = "name",
         offset: Annotated[int, Query(ge=0)] = 0,
         limit: Annotated[int, Query(ge=1, le=200)] = 50,
     ) -> SkillHubList:
@@ -438,7 +439,9 @@ def register_skill_hub_routes(
         matches name and description (case-insensitive); `mine` keeps the
         viewer's own and `owner` one person's. `app` (a slug) adds each row's
         `missing_tools` against that App's ceiling. `sort`: `name`, `popular`
-        (most used first), `updated` (latest content first, undated last);
+        (most used first), `updated` (latest content first, undated last),
+        `relevant` (the best match for `q` first, then the most used —
+        docs/plan-skill-hub-search.md D5; name order when there is no `q`);
         ties stay in name order. `total` counts every matching row."""
         viewer = get_user_id()
         visible = dict(hub.visible(viewer))
@@ -455,7 +458,12 @@ def register_skill_hub_routes(
         counts = await asyncio.to_thread(hub.usage.totals, hits)
         # `visible` is in name order; every sort below is stable on it.
         order = list(hits)
-        if sort == "popular":
+        if sort == "relevant" and q.strip():
+            # The same rank the agent's search sorts by (D4): the group first,
+            # then the most used. `hits` only holds rows that matched.
+            ranks = {i: match_rank(hits[i], q) or (3, 0) for i in hits}
+            order.sort(key=lambda i: (ranks[i], -counts[i][1], -counts[i][0]))
+        elif sort == "popular":
             order.sort(key=lambda i: (-counts[i][1], -counts[i][0]))
         elif sort == "updated":
             order.sort(key=_newest_first(hits))
