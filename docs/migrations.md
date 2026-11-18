@@ -3713,6 +3713,26 @@ AI 工具說明裡每個目標後面多了它的長度上限(沒設的寫 10 個
 
 **還是舊版 image 時**：工具面板沒有描述那一行，標題列是 id。
 
+### 2026-11-18 · #1027 工作流程步驟可以寫 item 選單打得開的工具 {#pr-1027}
+
+**設定** — 沒有新 key，沒有改預設值。
+
+**資料** — 不用 migrate。
+
+**k8s · CI 側** — 沒有要做的事。
+
+**行為改變，沒有開關**
+- **存工作流程**（AI 的 `save_workflow`）：步驟的 `tools:` 改成對照 App 的工具清單（`app.json` 的 `agent.tools`）。
+  以前對照的是 profile 的**預設**清單，所以在 item 工具選單手動打開、聊天用得到的工具，寫進工作流程反而被擋
+  （`outside the profile's allowed tools`）。現在擋的只有 App 根本沒有的工具，訊息改成「not one of this App's tools」。
+- **複製工作流程範本**：除了上面那條，還看這個 item 的工具選單現在開著哪些。App 有但這裡沒開的，範本清單會標不相容，
+  原因寫「switched off in this item — switch it on in the item's tool picker first」；在選單打開後就能複製。
+- **執行時沒變**：步驟寫了 item 選單沒開的工具，照舊在那一步拿不到、只在 log 留
+  `workflow node: tools not held by this item, dropped`。
+
+**確認做完**（rollout 後）— 開一個 playground 的 intake item（它預設沒開 `exec`，也沒開 `save_workflow`），先在工具選單打開
+`save_workflow`，再請 AI 存一個步驟用到 `exec` 的工作流程：存得進去，不再出現 `outside the profile's allowed tools`。
+
 ---
 
 ## 附錄 A：資料回填的機制（specstar 為什麼不會自己補）

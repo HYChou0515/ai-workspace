@@ -66,8 +66,8 @@ async def test_id_with_no_usable_chars_rejected():
 
 
 async def test_tool_ceiling_clamps_agent_tools():
-    """With an App/profile context, an agent step asking for a tool outside the profile's
-    ceiling (topic-hub has no `exec`) is rejected at save time (Q4)."""
+    """With an App context, an agent step asking for a tool the App does not grant
+    (topic-hub has no `exec`) is rejected at save time (Q4)."""
     ctx = _ctx(app_slug="topic-hub", template_profile="default")
     over = json.dumps(
         {
@@ -86,7 +86,7 @@ async def test_tool_ceiling_clamps_agent_tools():
         }
     )
     out = await save_workflow_impl(ctx, "flow", over)
-    assert "error" in out and "outside the profile's allowed tools" in out
+    assert "error" in out and "is not one of this App's tools" in out
 
 
 async def test_unknown_app_skips_the_tool_clamp():
@@ -97,8 +97,8 @@ async def test_unknown_app_skips_the_tool_clamp():
 
 
 async def test_profile_tools_override_is_the_ceiling():
-    """A profile that narrows the App's tools (playground/intake) is the ceiling — a
-    tools-free workflow still saves under it (exercises the profile-override path)."""
+    """A profile that narrows the App's DEFAULT tools (playground/intake) — a
+    tools-free workflow still saves under it."""
     ctx = _ctx(app_slug="playground", template_profile="intake")
     assert "saved workflow" in await save_workflow_impl(ctx, "flow", _VALID)
 
@@ -162,6 +162,39 @@ async def test_a_command_the_package_does_not_have_is_refused_not_saved():
     ceiling is expanded and the typo names nothing in it."""
     ctx = _ctx(app_slug="rca", template_profile="default", packages=[_rca_pkg()])
     out = await save_workflow_impl(ctx, "flow", _steps_with_tools(["rca-tools:spcc"]))
-    assert "error" in out and "outside the profile's allowed tools" in out, out
+    assert "error" in out and "is not one of this App's tools" in out, out
     out = await save_workflow_impl(ctx, "flow2", _steps_with_tools(["exec:foo"]))
-    assert "error" in out and "outside the profile's allowed tools" in out, out
+    assert "error" in out and "is not one of this App's tools" in out, out
+
+
+def _item_with(*on: str):
+    """The finalized config a chat turn on the item carries: what its tool
+    picker has ON (`allowed_tools`)."""
+    from workspace_app.resources.agent_config import AgentConfig
+
+    return AgentConfig(name="ws", allowed_tools=list(on))
+
+
+async def test_a_tool_switched_on_in_the_item_is_accepted_though_the_profile_leaves_it_off():
+    """playground/intake leaves `exec` off by default; an item that switched it
+    on in its tool picker uses it by hand, so a workflow step may name it (the
+    reported `outside the profile's allowed tools`)."""
+    ctx = _ctx(
+        app_slug="playground",
+        template_profile="intake",
+        agent_config=_item_with("read_file", "exec", "read_image"),
+    )
+    out = await save_workflow_impl(ctx, "flow", _steps_with_tools(["exec", "read_image"]))
+    assert "saved workflow" in out, out
+
+
+async def test_a_narrower_turn_does_not_refuse_an_app_tool():
+    """The turn that saves may hold less than the item's picker — a sub-agent
+    granted `[save_workflow, read_file]`, an agent copy's chat, a workflow
+    node. Its own list is not the item's, so it is not what a step's tools are
+    judged by: an App tool it does not hold still saves (review of #1027)."""
+    ctx = _ctx(
+        app_slug="playground", template_profile="intake", agent_config=_item_with("read_file")
+    )
+    out = await save_workflow_impl(ctx, "flow", _steps_with_tools(["exec", "write_file"]))
+    assert "saved workflow" in out, out

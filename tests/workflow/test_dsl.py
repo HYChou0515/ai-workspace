@@ -335,7 +335,24 @@ def test_validate_agent_tool_ceiling():
         ],
         tool_ceiling={"read_file"},
     )
-    assert any("tool 'nuke' is outside" in e for e in errs)
+    assert any("tool 'nuke' is not one of this App's tools" in e for e in errs)
+
+
+def test_validate_agent_tool_switched_off_in_the_item():
+    """In the App's tools but not on in this item's picker: a different
+    problem with a different remedy, so a different sentence. A tool the App
+    lacks is still reported as such, not as "switched off"."""
+    step = {"type": "agent", "cache": True, "prompt": "p", "phase": "p", "out": "o"}
+    errs = _errs(
+        [{**step, "tools": ["read_file", "exec", "nuke"]}],
+        tool_ceiling={"read_file", "exec"},
+        tools_on={"read_file"},
+    )
+    assert [e for e in errs if "tool" in e] == [
+        "steps[0]: tool 'exec' is switched off in this item — switch it on in the item's "
+        "tool picker first",
+        "steps[0]: tool 'nuke' is not one of this App's tools",
+    ]
 
 
 def test_validate_check_shapes():

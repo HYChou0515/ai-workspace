@@ -1114,6 +1114,7 @@ def _validate_step(
     declared: set[str],
     scope: set[str],
     tool_ceiling: set[str] | None,
+    tools_on: set[str] | None,
     capabilities: tuple[str, ...],
     errs: list[str],
     steps_seen: dict[str, dict[str, Any]],
@@ -1151,6 +1152,7 @@ def _validate_step(
             declared,
             scope | {step.as_},
             tool_ceiling,
+            tools_on,
             capabilities,
             errs,
             top=False,
@@ -1173,6 +1175,7 @@ def _validate_step(
             declared,
             scope,
             tool_ceiling,
+            tools_on,
             capabilities,
             errs,
             steps_seen,
@@ -1301,10 +1304,10 @@ def _validate_step(
         errs.append(f"{where}: retries cannot be negative")
     if tool_ceiling is not None:
         # Judged by the rule the run narrows with (`narrow_entries`): a command
-        # of a package the profile grants whole is inside the ceiling, since the
+        # of a package the App grants whole is inside the ceiling, since the
         # picker now shows and the run now honours that granularity. The
         # ceiling is what the caller could bring to command granularity: with
-        # the package list (`_profile_tool_ceiling(…, packages)`) a misspelt
+        # the package list (`_app_tool_ceiling(…, packages)`) a misspelt
         # command names nothing and is refused; a package the caller could not
         # resolve, or one with no commands, stays a bare name and any `pkg:cmd`
         # of it passes here — the run then drops it, and says so in its log.
@@ -1312,7 +1315,17 @@ def _validate_step(
 
         for t in step.tools:
             if not narrow_entries([t], tool_ceiling):
-                errs.append(f"{where}: tool {t!r} is outside the profile's allowed tools")
+                errs.append(f"{where}: tool {t!r} is not one of this App's tools")
+            elif tools_on is not None and not narrow_entries([t], tools_on):
+                # In the App but off in this item's tool picker: the run would
+                # narrow it away (`TurnContextBuilder._finalized`), so say it
+                # now, with the place that switches it on. Only callers that
+                # hold the ITEM's picker answer pass `tools_on` (the template
+                # routes) — a turn's own list may be narrower than the picker.
+                errs.append(
+                    f"{where}: tool {t!r} is switched off in this item — switch it on "
+                    "in the item's tool picker first"
+                )
     _check_interp([step.prompt, step.out, step.tools], scope, where, errs, steps_seen)
     if step.check is not None:
         _validate_check(step.check, scope, where, errs, steps_seen)
@@ -1360,6 +1373,7 @@ def _validate_switch(
     declared: set[str],
     scope: set[str],
     tool_ceiling: set[str] | None,
+    tools_on: set[str] | None,
     capabilities: tuple[str, ...],
     errs: list[str],
     steps_seen: dict[str, dict[str, Any]],
@@ -1388,6 +1402,7 @@ def _validate_switch(
             declared,
             scope,
             tool_ceiling,
+            tools_on,
             capabilities,
             errs,
             top=top,
@@ -1400,6 +1415,7 @@ def _validate_switch(
             declared,
             scope,
             tool_ceiling,
+            tools_on,
             capabilities,
             errs,
             top=top,
@@ -1493,6 +1509,7 @@ def _validate_steps(
     declared: set[str],
     scope: set[str],
     tool_ceiling: set[str] | None,
+    tools_on: set[str] | None,
     capabilities: tuple[str, ...],
     errs: list[str],
     *,
@@ -1514,6 +1531,7 @@ def _validate_steps(
             declared,
             scope,
             tool_ceiling,
+            tools_on,
             capabilities,
             errs,
             steps_seen,
@@ -1527,12 +1545,14 @@ def validate_def(
     d: WorkflowDef,
     *,
     tool_ceiling: set[str] | None = None,
+    tools_on: set[str] | None = None,
     capabilities: tuple[str, ...] = CAPABILITIES,
 ) -> list[str]:
     """Static problems with a parsed DSL, as human-readable strings (empty ⇒ valid).
     ``save_workflow`` hands these back to the agent to fix (manual §22, Q8); package
     discovery fails loud on them. ``tool_ceiling`` (``None`` ⇒ skip) clamps an agent
-    step's ``tools`` to the profile's allowed set."""
+    step's ``tools`` to the App's tools; ``tools_on`` (``None`` ⇒ skip) further to what
+    this item's tool picker has on."""
     errs: list[str] = []
     if d.schema_version != 1:
         errs.append(f"unsupported schema version {d.schema_version} (only 1)")
@@ -1558,6 +1578,7 @@ def validate_def(
         declared,
         {"config", "inputs", "steps"},  # #428 §1: the named-output reference namespace
         tool_ceiling,
+        tools_on,
         capabilities,
         errs,
         top=True,
@@ -1640,9 +1661,9 @@ def describe_dsl_grammar() -> str:
 def describe_workflow_boundaries(tool_ceiling: set[str] | None) -> str:
     """What a workflow authored for this app can and cannot do (plan §3.2, P6): the agent-
     step tool ceiling (save_workflow rejects anything outside it) and the available
-    capabilities. ``None`` ceiling ⇒ no per-profile clamp is known (all profile tools)."""
+    capabilities. ``None`` ceiling ⇒ no App clamp is known (all the App's tools)."""
     tools = (
-        "all of the profile's tools"
+        "all of the app's tools"
         if tool_ceiling is None
         else (", ".join(sorted(tool_ceiling)) or "(none)")
     )
@@ -1651,7 +1672,8 @@ def describe_workflow_boundaries(tool_ceiling: set[str] | None) -> str:
             "## What a workflow here can and cannot do (this app)",
             "",
             f"- an `agent` step's `tools` must be within: {tools} "
-            "(save_workflow rejects anything outside — don't guess).",
+            "(save_workflow rejects anything outside — don't guess). A step only gets the "
+            "ones this item's tool picker has on; ask the user to switch on any it needs.",
             f"- reliable side-effects go ONLY through a `capability`: {', '.join(CAPABILITIES)}.",
             "- a `sandbox` step is compute-only (no credential); it cannot reach collections.",
         ]

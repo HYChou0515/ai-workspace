@@ -83,12 +83,14 @@ def workspace_workflow_path(slug: str) -> str:
 
 
 def validate_workflow_json(
-    raw: bytes | str, *, tool_ceiling: set[str] | None = None
+    raw: bytes | str,
+    *,
+    tool_ceiling: set[str] | None = None,
 ) -> tuple[WorkflowDef | None, list[str]]:
     """Parse + statically validate a ``workflow.json``. Returns ``(def, [])`` when it's
     runnable, or ``(None, [problems])`` when it won't parse / ``(def, [problems])`` when
     it parses but the DSL rules flag it (manual §22, Q8). ``tool_ceiling`` clamps an agent
-    step's ``tools`` to the profile's allowed set (``None`` ⇒ skip that check)."""
+    step's ``tools`` to the App's tools (``None`` ⇒ skip that check)."""
     try:
         d = parse_def(raw)
     except DslError as exc:  # the same test `workflow_problem` makes, parsed once

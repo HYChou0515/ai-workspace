@@ -50,7 +50,7 @@ describe("workflowTemplatesApi", () => {
   });
 
   it("surfaces the server's reason when the profile cannot run the template", async () => {
-    mockFetch(422, { detail: "tool 'read_image' is outside the profile's allowed tools" });
+    mockFetch(422, { detail: "tool 'read_image' is switched off in this item — switch it on in the item's tool picker first" });
     await expect(workflowTemplatesApi.copy("playground", "i1", "x")).rejects.toThrow(
       /read_image/,
     );

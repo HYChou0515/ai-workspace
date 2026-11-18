@@ -1034,7 +1034,7 @@ DSL 的天花板(刻意收窄):
   權限。
 
 **共創與生命週期**(照搬 skill 模型):一個 `author-workflow` meta-skill 引導 AI 起草 DSL;一個
-`save_workflow` tool 在寫入前**驗證**(schema、phase 一致、`tools` ⊆ profile 上限、capability 在
+`save_workflow` tool 在寫入前**驗證**(schema、phase 一致、`tools` ⊆ App 的 tool 清單、capability 在
 允許清單、`check` 格式)並把無效的 DSL **退回原因讓 AI 修**。它存進
 `<workspace>/.workflows/<id>.json`(FileStore、item-local、live 讀,同名 **shadow** 掉 package
 workflow,**不是** specstar resource)。FE 的 **Workflows 面板**(`WorkflowsModal`,從 workspace

@@ -128,7 +128,7 @@ flowchart TD
     兩份同名 function definition 會讓 provider 整包退回，整個 turn 死掉。名字會從互相看不見的來源匯流：手寫的 `allowed_tools`、`read_skill` 的授予、rename 後同時列 `ls` 與 `list_files`(#241)、以及 tool package 的命令撞到內建名（`build_function_tools` 只擋 package **之間**的撞名，不擋跟我們的）。所以 `build_tools` 回傳前與 `_agent_for` 交給 `Agent` 前都跑 `dedupe_tools`：**保留先出現的**（內建優先，package 不得遮蔽包著 guardrail 的內建工具），並記 warning，不靜默。
 
 !!! note "save_workflow 是 opt-in 工具，配 author-workflow meta-skill（#323）"
-    `save_workflow` 在 `_IMPLS` 但**不在** `_WORKSPACE_TOOLS`——它是 opt-in 工具（形同 `save_skill`/`author-skill`），只有 ship `author-workflow` meta-skill 的 App 才在 `agent.tools` 授予（topic-hub 是首個採用者）。它把 `workflow_json` 經 `workspace_store.validate_workflow_json` 驗證（帶 `_profile_tool_ceiling` = App `agent.tools` ∩ profile `tools` override 的 clamp，#323 Q4：workflow 的 agent step 不能超過作者手動能用的工具集），通過才寫進 `<ws>/.workflows/<id>.json`；驗證失敗時把 problems 原樣回給模型自行修正。
+    `save_workflow` 在 `_IMPLS` 但**不在** `_WORKSPACE_TOOLS`——它是 opt-in 工具（形同 `save_skill`/`author-skill`），只有 ship `author-workflow` meta-skill 的 App 才在 `agent.tools` 授予（topic-hub 是首個採用者）。它把 `workflow_json` 經 `workspace_store.validate_workflow_json` 驗證（帶 `_app_tool_ceiling` = App `agent.tools` 的 clamp，#323 Q4：workflow 的 agent step 不能超過作者手動能用的工具集——手動能用的是 item 工具選單打得開的全部，不是 profile `tools` 的預設清單；不拿存檔那個 turn 自己的清單判斷，因為子 agent、agent 副本、workflow 節點手上的都比選單窄。複製範本的 route 另外看這個 item 選單現在開著哪些（`workflow_routes._tools_on`），沒開的說「switched off in this item」。執行時不變：節點列了 item 沒開的工具，`TurnContextBuilder._finalized` 照舊收窄並記一行 log），通過才寫進 `<ws>/.workflows/<id>.json`；驗證失敗時把 problems 原樣回給模型自行修正。
 
 !!! note "reasoning-off 是 provider 分支的"
     reasoning-off 只在 `'none'` 這個 OFF 訊號才觸發；Ollama 用 `think=False`、vLLM 需要 `chat_template_kwargs` 路線——送錯邊是無聲 no-op。
@@ -161,7 +161,7 @@ flowchart TD
 接手者建議照此順序讀：
 
 - `src/workspace_app/agent/context.py` — `AgentToolContext`（中心接縫）與 `ensure_sandbox()`。
-- `src/workspace_app/agent/tools.py` — `_IMPLS` 註冊表、`_WORKSPACE_TOOLS`、`build_tools`，以及 `kb_search_impl` / `ask_knowledge_base_impl` / `infer_modules_impl` / `save_workflow_impl` + `_profile_tool_ceiling`（#323）/ `builtin_tool_descriptions`（#322）/ `_format_exec` / `_truncate_middle`。
+- `src/workspace_app/agent/tools.py` — `_IMPLS` 註冊表、`_WORKSPACE_TOOLS`、`build_tools`，以及 `kb_search_impl` / `ask_knowledge_base_impl` / `infer_modules_impl` / `save_workflow_impl` + `_app_tool_ceiling`（#323）/ `builtin_tool_descriptions`（#322）/ `_format_exec` / `_truncate_middle`。
 - `src/workspace_app/tooling/catalog.py` — `ToolMeta` / `humanize_tool_label` / `picker_units` / `flat_catalog`：tool 顯示 metadata 的單一來源（#322），讓 per-item picker 與 chat tool card 不會與 agent 實際跑的 tool 飄移。
 - `src/workspace_app/agent/args_recovery.py` — `peel_first_json`、`wrap_with_args_recovery` / `safer`（Malformed/NonObject/Concatenated 皆回 in-band 錯誤）。
 - `src/workspace_app/agent/arg_repair.py` — `make_backstop_sentinel` / `malformed_raw`（in-band backstop sentinel）。

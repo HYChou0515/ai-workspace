@@ -359,24 +359,43 @@ def register_workflow_routes(
             can_read=can_read,
         )
 
+    def _tools_on(item_id: str) -> set[str] | None:
+        """What this item's tool picker has on — read off the config a turn
+        would run with, finalized by the same `finalize_tool_grants` the picker
+        route and every turn use, not re-derived here. With the deploy's
+        first-party packages only: a third-party command is not judged here (a
+        template naming one passes and is narrowed at run time). An agent
+        copy's own `tools:` is not applied either — it narrows at run time, as
+        it always did. ``None`` (skip that check) for a config that leaves the
+        toolset unspecified."""
+        from ..apps.catalog import finalize_tool_grants
+
+        cfg = locator.resolve_agent_config(item_id)
+        # `require_access` already 404'd an unknown item, and an App item
+        # always resolves through `AppCatalog.resolve`.
+        assert cfg is not None
+        allowed = finalize_tool_grants(cfg, packages).allowed_tools
+        return set(allowed) if allowed is not None else None
+
     @app.get("/a/{slug}/items/{item_id}/workflow-templates")
     async def list_workflow_templates(slug: str, item_id: str) -> list[dict]:
         """#520: the shipped starter templates, each flagged for whether THIS item can
         run it. Incompatible ones are listed too, with the reason — hiding them means
-        nobody learns the template exists, or that one profile setting away it would
-        work. Compatibility is the ordinary DSL validation against the profile's tool
-        ceiling; there is no separate grant list to keep in sync."""
-        from ..agent.tools import _profile_tool_ceiling
+        nobody learns the template exists. Compatibility is the ordinary DSL validation
+        against the App's tools (the ceiling `save_workflow` also judges by) and what
+        this item's tool picker has on (`_tools_on`); there is no separate grant list
+        to keep in sync."""
+        from ..agent.tools import _app_tool_ceiling
         from ..workflow.dsl import build_manifest, validate_def
         from ..workflow.shared import SHARED_WORKFLOWS, load_shared_workflow
 
-        investigation_id = locator.require_access(slug, item_id, "read_meta")
-        profile = locator.profile_of(investigation_id)
-        ceiling = _profile_tool_ceiling(slug, profile, packages)
+        locator.require_access(slug, item_id, "read_meta")
+        ceiling = _app_tool_ceiling(slug, packages)
+        on = _tools_on(item_id)
         out: list[dict] = []
         for name in sorted(SHARED_WORKFLOWS):
             d = load_shared_workflow(name)
-            problems = validate_def(d, tool_ceiling=ceiling)
+            problems = validate_def(d, tool_ceiling=ceiling, tools_on=on)
             entry = msgspec.to_builtins(build_manifest(d))
             assert isinstance(entry, dict)  # narrow for ty
             out.append({**entry, "compatible": not problems, "problems": problems})
@@ -397,7 +416,7 @@ def register_workflow_routes(
         the FE confirms and retries with ``overwrite=true``. An incompatible template is
         422 with the validation problems rather than a workflow that fails at Run time.
         """
-        from ..agent.tools import _profile_tool_ceiling
+        from ..agent.tools import _app_tool_ceiling
         from ..workflow.dsl import DslError, validate_def
         from ..workflow.shared import load_shared_workflow
         from ..workflow.workspace_store import (
@@ -417,13 +436,13 @@ def register_workflow_routes(
         except DslError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
-        profile = locator.profile_of(investigation_id)
-        problems = validate_def(d, tool_ceiling=_profile_tool_ceiling(slug, profile, packages))
+        problems = validate_def(
+            d, tool_ceiling=_app_tool_ceiling(slug, packages), tools_on=_tools_on(item_id)
+        )
         if problems:
             raise HTTPException(
                 status_code=422,
-                detail=f"template {name!r} can't run in profile {profile!r}: "
-                + "; ".join(problems),
+                detail=f"template {name!r} can't run in this item: " + "; ".join(problems),
             )
         if name == RESERVED_WORKFLOW_ID:
             # Checked here for the sentence; `save_workspace_workflow` would
