@@ -85,3 +85,55 @@ export function breadcrumbSegments(path: string): string[] {
   if (parts.length <= 1) return [];
   return parts.slice(0, -1);
 }
+
+/** How many characters of a folder crumb survive shortening: `crumbFloorCh`
+ * turns them into the floor the crumb's box (button + chevron) is given in
+ * CSS, and into what the fold rule below budgets for. */
+const CRUMB_KEEP_CHARS = 5;
+// The budget is in px because the bar is measured in px, and it is an
+// estimate: ~7 px a character at the bar's 12 px type, plus 28 px around it —
+// the 22 px the CSS floor adds (button padding 12, chevron 10), the bar's gap,
+// and a little slack so the fold comes slightly early rather than late.
+const CRUMB_CHAR_PX = 7;
+const CRUMB_CHROME_PX = 28;
+
+/**
+ * The floor of a folder crumb's label, in `ch`: its first `CRUMB_KEEP_CHARS`
+ * characters. `ch` is the width of "0" and a CJK character is about two of
+ * them — counted as one, 「專案」 got a floor narrower than itself and was cut
+ * to 「專…」 beside a file name that had room to spare.
+ */
+export function crumbFloorCh(name: string): number {
+  let ch = 0;
+  for (const c of Array.from(name).slice(0, CRUMB_KEEP_CHARS)) {
+    // CJK radicals onward (U+2E80…): ideographs, kana, hangul, full-width forms.
+    ch += (c.codePointAt(0) ?? 0) >= 0x2e80 ? 2 : 1;
+  }
+  return ch;
+}
+/** Room the file name keeps before folders start folding away. */
+const CRUMB_FILE_MIN_PX = 160;
+const CRUMB_BAR_PADDING_PX = 24;
+
+/**
+ * How many LEADING folders of the path bar fold into one "…".
+ *
+ * The bar is one line (NN/g, Breadcrumbs guideline 9: a trail that wraps no
+ * longer shows the chain; guideline 11: shorten it to the last levels where
+ * room is short). Folders shorten first, each down to `CRUMB_KEEP_CHARS`; only
+ * when the bar cannot hold even the shortened folders beside a readable file
+ * name do they fold — all but the file's own folder. It is the same two-state
+ * shape as the global nav's trail ("…" opening a popover), with two
+ * differences: that one keeps only its last crumb and folds on the shell's
+ * narrow breakpoint; this one keeps the parent folder too and folds on the
+ * bar's own measured width. `width` 0 is "not measured" and folds nothing.
+ */
+export function foldedCrumbCount(width: number, folders: string[]): number {
+  if (!width || folders.length < 2) return 0;
+  const shortened = folders.reduce(
+    (px, name) => px + crumbFloorCh(name) * CRUMB_CHAR_PX + CRUMB_CHROME_PX,
+    0,
+  );
+  const needed = shortened + CRUMB_FILE_MIN_PX + CRUMB_BAR_PADDING_PX;
+  return width < needed ? folders.length - 1 : 0;
+}

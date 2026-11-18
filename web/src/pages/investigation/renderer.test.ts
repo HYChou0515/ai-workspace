@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest";
 
-import { basename, breadcrumbSegments, dirChildren, dirname, imageMime } from "./renderer";
+import {
+  basename,
+  breadcrumbSegments,
+  dirChildren,
+  dirname,
+  crumbFloorCh,
+  foldedCrumbCount,
+  imageMime,
+} from "./renderer";
 
 describe("imageMime", () => {
   it("maps extensions to image MIME types", () => {
@@ -84,5 +92,58 @@ describe("dirChildren", () => {
     const shots = ["/shots/9.png", "/shots/10.png", "/shots/2.png", "/b/x", "/a10/x", "/a9/x"];
     expect(dirChildren(shots, "shots").map((e) => e.name)).toEqual(["2.png", "9.png", "10.png"]);
     expect(dirChildren(shots, "").map((e) => e.name)).toEqual(["a9", "a10", "b", "shots"]);
+  });
+});
+
+describe("foldedCrumbCount", () => {
+  // The path bar is one line. Folders shorten first (each down to a few
+  // characters); when even that leaves the file name no room, every folder
+  // but the file's own parent folds into one "…".
+  const deep = ["projects", "2026-quarterly", "experiments", "run-0042"];
+
+  it("folds nothing before the bar has been measured", () => {
+    expect(foldedCrumbCount(0, deep)).toBe(0);
+  });
+
+  it("folds nothing when the shortened folders still leave the file room", () => {
+    expect(foldedCrumbCount(900, deep)).toBe(0);
+  });
+
+  it("folds every folder but the parent when shortening is not enough", () => {
+    expect(foldedCrumbCount(260, deep)).toBe(3);
+  });
+
+  it("never folds a single folder — a lone … would hide nothing worth a click", () => {
+    expect(foldedCrumbCount(60, ["projects"])).toBe(0);
+    expect(foldedCrumbCount(60, [])).toBe(0);
+  });
+
+  it("asks less room of a short folder name than of a long one", () => {
+    // Four one-letter folders fit where four long names do not.
+    expect(foldedCrumbCount(340, ["a", "b", "c", "d"])).toBe(0);
+    expect(foldedCrumbCount(340, deep)).toBe(3);
+  });
+});
+
+describe("crumbFloorCh", () => {
+  // The floor is in `ch` — the width of "0". A CJK character is about two of
+  // those, so counting characters gave 「專案」 a floor narrower than itself and
+  // it was cut to 「專…」 beside a file name with room to spare.
+  it("keeps the first few characters of a Latin name", () => {
+    expect(crumbFloorCh("projects")).toBe(5);
+    expect(crumbFloorCh("src")).toBe(3);
+  });
+
+  it("counts a CJK character as two", () => {
+    expect(crumbFloorCh("專案")).toBe(4);
+    expect(crumbFloorCh("良率季度檢討報告")).toBe(10);
+  });
+
+  it("budgets a CJK folder the room its floor asks for", () => {
+    const latin = ["aaaaa", "bbbbb", "ccccc"];
+    const cjk = ["專案專案專", "資料資料資", "報告報告報"];
+    // A bar that holds three shortened Latin folders is too small for three CJK ones.
+    expect(foldedCrumbCount(380, latin)).toBe(0);
+    expect(foldedCrumbCount(380, cjk)).toBe(2);
   });
 });

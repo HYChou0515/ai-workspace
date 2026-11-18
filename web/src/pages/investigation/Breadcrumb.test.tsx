@@ -7,6 +7,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { FileInfo } from "../../api/types";
 import { Breadcrumb, LazyFoldersContext } from "./WorkspaceShell";
 
+// The run title reads the item's services; its text is not what is under test.
+vi.mock("../../components/ExecutionTitle", () => ({ ExecutionTitle: () => "A run" }));
+
 afterEach(cleanup);
 
 const files: FileInfo[] = [
@@ -130,5 +133,115 @@ describe("<Breadcrumb /> under a folder the listing did not enter", () => {
     await user.click(screen.getByRole("button", { name: "brief.md" })); // root-level browser
     expect(await screen.findByText("data")).toBeInTheDocument();
     expect(screen.getAllByRole("button", { name: "node_modules" })).toHaveLength(1);
+  });
+});
+
+describe("<Breadcrumb /> stays on one line", () => {
+  const long = "/projects/2026-quarterly/experiments/run-0042/a-very-long-measurement-file-name.csv";
+  const deepFiles: FileInfo[] = [
+    { path: long, size: 0 },
+    { path: "/projects/2026-quarterly/notes.md", size: 0 },
+  ];
+  const expand = /收起來的資料夾|folded folders/i;
+  const realRect = HTMLElement.prototype.getBoundingClientRect;
+  afterEach(() => {
+    HTMLElement.prototype.getBoundingClientRect = realRect;
+  });
+  /** Give every element `width` px — the bar measures itself on attach. */
+  function barWidth(width: number) {
+    HTMLElement.prototype.getBoundingClientRect = () => ({ width }) as DOMRect;
+  }
+
+  it("never breaks a crumb's label across lines, and names a clipped one in full", () => {
+    render(<Breadcrumb activeTab={long} files={deepFiles} onOpen={vi.fn()} />);
+    for (const name of ["projects", "run-0042", "a-very-long-measurement-file-name.csv"]) {
+      const crumb = screen.getByRole("button", { name });
+      expect(crumb.style.whiteSpace).toBe("nowrap");
+      expect(crumb.style.textOverflow).toBe("ellipsis");
+      expect(crumb.style.overflow).toBe("hidden");
+      expect(crumb).toHaveAttribute("title", name);
+    }
+  });
+
+  it("gives each folder a floor on its own box, and lets folders give way before the file", () => {
+    // Two things only a real browser showed, pinned here as the styles that
+    // fixed them: a floor on the button alone let the folder's box collapse
+    // to nothing (folders painted over each other), and a small shrink ratio
+    // clipped the file name by a fraction of a pixel with room to spare.
+    render(<Breadcrumb activeTab={long} files={deepFiles} onOpen={vi.fn()} />);
+    const folderBox = screen.getByRole("button", { name: "projects" }).closest("span")!;
+    expect(folderBox.style.minWidth).toMatch(/ch/);
+    expect(Number(folderBox.style.flexShrink)).toBeGreaterThanOrEqual(1_000_000);
+    const fileBox = screen.getByRole("button", {
+      name: "a-very-long-measurement-file-name.csv",
+    }).parentElement!;
+    expect(Number(fileBox.style.flexShrink)).toBe(1);
+    expect(fileBox.style.minWidth).toMatch(/^0(px)?$/);
+  });
+
+  it("keeps a workflow run's title on one line too", () => {
+    render(<Breadcrumb activeTab="workflow-run:run-1" files={deepFiles} onOpen={vi.fn()} />);
+    const title = screen.getByText("Workflows").parentElement!.lastElementChild as HTMLElement;
+    expect(title.style.whiteSpace).toBe("nowrap");
+    expect(title.style.textOverflow).toBe("ellipsis");
+  });
+
+  it("does not hand its one-line rule down to the dropdowns that hang from it", async () => {
+    // `white-space` inherits: with it on the bar, a sibling with a long name
+    // made the dropdown as wide as that name and the pane cut it off.
+    barWidth(260);
+    const user = userEvent.setup();
+    render(<Breadcrumb activeTab={long} files={deepFiles} onOpen={vi.fn()} />);
+    const nowrapAbove = (el: HTMLElement) => {
+      for (let p = el.parentElement; p; p = p.parentElement) {
+        if (p.style.whiteSpace === "nowrap") return true;
+      }
+      return false;
+    };
+    await user.click(screen.getByRole("button", { name: expand }));
+    expect(nowrapAbove(await screen.findByRole("button", { name: "projects" }))).toBe(false);
+    await user.click(screen.getByRole("button", { name: "run-0042" }));
+    const rows = await screen.findAllByText("a-very-long-measurement-file-name.csv");
+    expect(nowrapAbove(rows[rows.length - 1]!)).toBe(false);
+  });
+
+  it("names its … for what it does, not like the nav bar's", () => {
+    barWidth(260);
+    render(<Breadcrumb activeTab={long} files={deepFiles} onOpen={vi.fn()} />);
+    expect(screen.getByRole("button", { name: expand })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /顯示完整路徑|show the full path/i })).toBeNull();
+  });
+
+  it("shows the whole trail when the bar has room", () => {
+    barWidth(1200);
+    render(<Breadcrumb activeTab={long} files={deepFiles} onOpen={vi.fn()} />);
+    expect(screen.getByRole("button", { name: "projects" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: expand })).toBeNull();
+  });
+
+  it("folds the leading folders into one … when shortening cannot fit them", () => {
+    barWidth(260);
+    render(<Breadcrumb activeTab={long} files={deepFiles} onOpen={vi.fn()} />);
+    expect(screen.getByRole("button", { name: expand })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "projects" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "experiments" })).toBeNull();
+    // The file's own folder and the file stay in the trail.
+    expect(screen.getByRole("button", { name: "run-0042" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "a-very-long-measurement-file-name.csv" }),
+    ).toBeInTheDocument();
+  });
+
+  it("the … lists the folded folders, and one of them opens a file inside it", async () => {
+    barWidth(260);
+    const user = userEvent.setup();
+    const onOpen = vi.fn();
+    render(<Breadcrumb activeTab={long} files={deepFiles} onOpen={onOpen} />);
+    await user.click(screen.getByRole("button", { name: expand }));
+    expect(await screen.findByRole("button", { name: "projects" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "experiments" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "2026-quarterly" }));
+    await user.click(await screen.findByText("notes.md"));
+    expect(onOpen).toHaveBeenCalledWith("/projects/2026-quarterly/notes.md");
   });
 });
