@@ -96,7 +96,13 @@ import { FileView } from "../../renderers/FileView";
 import { CommandPalette } from "./CommandPalette";
 import { FileTree } from "./FileTree";
 import { type Edge, type PaneNode, edgeForPoint } from "./paneTree";
-import { basename, breadcrumbSegments, dirChildren } from "./renderer";
+import {
+  basename,
+  breadcrumbSegments,
+  CRUMB_KEEP_CHARS,
+  dirChildren,
+  foldedCrumbCount,
+} from "./renderer";
 import { hasEditToggle, isRawEditorView, pickRenderer } from "../../renderers/registry";
 import { SearchPanel } from "./SearchPanel";
 import { TerminalPane } from "./TerminalPane";
@@ -2703,6 +2709,18 @@ const crumbBar: React.CSSProperties = {
   fontSize: pxToRem(12),
   color: "var(--text-paper-d)",
   gap: 2,
+  // One line, always (NN/g, Breadcrumbs guideline 9). The bar does NOT clip
+  // with `overflow: hidden` — the crumbs' dropdowns hang below it and would
+  // be cut off; each crumb clips its own label instead.
+  minWidth: 0,
+  whiteSpace: "nowrap",
+};
+
+/** A label that stays on one line and ends in "…" when its box is too small. */
+const crumbClip: React.CSSProperties = {
+  whiteSpace: "nowrap",
+  overflow: "hidden",
+  textOverflow: "ellipsis",
 };
 
 /** VSCode-style breadcrumb: each segment is clickable and drops down the
@@ -2729,27 +2747,68 @@ export function Breadcrumb({
       <div style={crumbBar}>
         <span style={{ color: "var(--text-paper-d2)" }}>Workflows</span>
         <Icon name="chev_r" size={10} color="var(--text-paper-d2)" />
-        <span>
+        <span style={{ ...crumbClip, minWidth: 0 }}>
           <ExecutionTitle path={activeTab} />
         </span>
       </div>
     );
   }
+  return <PathCrumbs activeTab={activeTab} files={files} onOpen={onOpen} />;
+}
+
+/** The file's path, on one line whatever its length: the folders shorten
+ * first, the file name last, and when shortening is not enough the leading
+ * folders fold into one "…" (`foldedCrumbCount`). */
+function PathCrumbs({
+  activeTab,
+  files,
+  onOpen,
+}: {
+  activeTab: string;
+  files: FileInfo[];
+  onOpen: (path: string) => void;
+}) {
+  const [barRef, width] = useContainerWidth<HTMLDivElement>();
   const folders = breadcrumbSegments(activeTab); // ancestor folder names
   const paths = files.map((f) => f.path);
+  const folded = foldedCrumbCount(width, folders);
   return (
-    <div style={crumbBar}>
-      {folders.map((name, i) => (
-        <span key={`${name}-${i}`} style={{ display: "inline-flex", alignItems: "center" }}>
-          <CrumbSegment
-            label={name}
-            siblingsDir={folders.slice(0, i).join("/")}
-            paths={paths}
-            onOpen={onOpen}
-          />
+    <div ref={barRef} style={crumbBar}>
+      {folded > 0 && (
+        <>
+          <FoldedCrumbs folders={folders.slice(0, folded)} paths={paths} onOpen={onOpen} />
           <Icon name="chev_r" size={10} color="var(--text-paper-d2)" />
-        </span>
-      ))}
+        </>
+      )}
+      {folders.map((name, i) =>
+        i < folded ? null : (
+          <span
+            key={`${name}-${i}`}
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              // A folder keeps its first few characters (plus the button's
+              // padding and the chevron). The floor is on THIS box, the flex
+              // item: on the button alone the box still collapsed to nothing
+              // and the folders painted over each other (measured at 410 px).
+              minWidth: `calc(${Math.min(name.length, CRUMB_KEEP_CHARS)}ch + 22px)`,
+              // Folders give way before the file name does. The ratio is this
+              // large on purpose: flex shares the shortfall by weight, and at
+              // 1000 the file name's share was a fraction of a pixel — enough
+              // to turn `.md` into `.…` with room to spare (seen at 1440 px).
+              flex: "0 1000000 auto",
+            }}
+          >
+            <CrumbSegment
+              label={name}
+              siblingsDir={folders.slice(0, i).join("/")}
+              paths={paths}
+              onOpen={onOpen}
+            />
+            <Icon name="chev_r" size={10} color="var(--text-paper-d2)" />
+          </span>
+        ),
+      )}
       <CrumbSegment
         label={basename(activeTab)}
         siblingsDir={folders.join("/")}
@@ -2757,6 +2816,94 @@ export function Breadcrumb({
         onOpen={onOpen}
         active
       />
+    </div>
+  );
+}
+
+/** The "…" that stands for the folded leading folders. It lists them; picking
+ * one browses INTO it, the same drill-down every crumb's dropdown uses. */
+function FoldedCrumbs({
+  folders,
+  paths,
+  onOpen,
+}: {
+  folders: string[];
+  paths: string[];
+  onOpen: (path: string) => void;
+}) {
+  const t = useT();
+  return (
+    <Popover
+      trigger={({ onClick, open }) => (
+        <button
+          type="button"
+          aria-label={t("nav.crumbs.expand")}
+          title={t("nav.crumbs.expand")}
+          aria-expanded={open}
+          onClick={onClick}
+          style={{
+            padding: "2px 6px",
+            borderRadius: 4,
+            background: open ? "var(--paper-2)" : "transparent",
+            color: "var(--text-paper-d)",
+            fontSize: pxToRem(12),
+            flexShrink: 0,
+          }}
+        >
+          …
+        </button>
+      )}
+    >
+      {(close) => <FoldedList folders={folders} paths={paths} onOpen={onOpen} close={close} />}
+    </Popover>
+  );
+}
+
+function FoldedList({
+  folders,
+  paths,
+  onOpen,
+  close,
+}: {
+  folders: string[];
+  paths: string[];
+  onOpen: (path: string) => void;
+  close: () => void;
+}) {
+  const [picked, setPicked] = useState<string | null>(null);
+  if (picked !== null) {
+    return <DirBrowser startDir={picked} paths={paths} onOpen={onOpen} close={close} />;
+  }
+  return (
+    <div style={{ minWidth: 220 }}>
+      {folders.map((name, i) => (
+        <button
+          key={`${name}-${i}`}
+          type="button"
+          onClick={() => setPicked(folders.slice(0, i + 1).join("/"))}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            width: "100%",
+            // Each level sits one step in from the one above it.
+            padding: `5px 10px 5px ${10 + i * 12}px`,
+            fontSize: pxToRem(12),
+            textAlign: "left",
+            background: "transparent",
+            color: "var(--text-paper)",
+          }}
+          onMouseEnter={(ev) => {
+            ev.currentTarget.style.background = "var(--paper-2)";
+          }}
+          onMouseLeave={(ev) => {
+            ev.currentTarget.style.background = "transparent";
+          }}
+        >
+          <Icon name="folder" size={12} color="var(--text-paper-d2)" />
+          {name}
+        </button>
+      ))}
     </div>
   );
 }
@@ -2777,11 +2924,18 @@ function CrumbSegment({
 }) {
   return (
     <Popover
+      shrink
       trigger={({ onClick, open }) => (
         <button
           type="button"
           onClick={onClick}
+          // A clipped label is still readable in full on hover.
+          title={label}
           style={{
+            ...crumbClip,
+            display: "block",
+            maxWidth: "100%",
+            minWidth: 0,
             padding: "2px 6px",
             borderRadius: 4,
             background: open ? "var(--paper-2)" : "transparent",

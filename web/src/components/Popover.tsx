@@ -13,6 +13,7 @@ export function Popover({
   align = "start",
   side = "bottom",
   width,
+  shrink = false,
 }: {
   trigger: (props: { onClick: () => void; open: boolean }) => React.ReactNode;
   children: (close: () => void) => React.ReactNode;
@@ -21,6 +22,11 @@ export function Popover({
    * the bottom of the viewport (e.g. the composer) so the menu isn't clipped. */
   side?: "top" | "bottom";
   width?: number;
+  /** Let the trigger's box shrink below its content inside a flex row, so a
+   * trigger that ellipsizes its own label can (the workspace path bar). The
+   * clipping has to be the trigger's own: this wrapper also holds the popover,
+   * and an `overflow: hidden` here would clip that to nothing. */
+  shrink?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -45,7 +51,14 @@ export function Popover({
   }, [open]);
 
   return (
-    <div ref={wrapRef} style={{ position: "relative", display: "inline-block" }}>
+    <div
+      ref={wrapRef}
+      style={{
+        position: "relative",
+        display: "inline-block",
+        ...(shrink ? { minWidth: 0, flex: "0 1 auto" } : null),
+      }}
+    >
       {trigger({ onClick: () => setOpen((v) => !v), open })}
       {open && (
         <div

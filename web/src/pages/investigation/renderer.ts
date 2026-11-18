@@ -85,3 +85,35 @@ export function breadcrumbSegments(path: string): string[] {
   if (parts.length <= 1) return [];
   return parts.slice(0, -1);
 }
+
+/** How many characters of a folder crumb survive shortening — the floor its
+ * button is given in CSS (`ch`), and what the fold rule below budgets for. */
+export const CRUMB_KEEP_CHARS = 5;
+// The budget is in px because the bar is measured in px: ~7 px a character at
+// the bar's 12 px type, 12 px of button padding, 16 px of chevron and gaps
+// (a shortened folder measured 62–64 px in the browser).
+const CRUMB_CHAR_PX = 7;
+const CRUMB_CHROME_PX = 28;
+/** Room the file name keeps before folders start folding away. */
+const CRUMB_FILE_MIN_PX = 160;
+const CRUMB_BAR_PADDING_PX = 24;
+
+/**
+ * How many LEADING folders of the path bar fold into one "…".
+ *
+ * The bar is one line (NN/g, Breadcrumbs guideline 9: a trail that wraps no
+ * longer shows the chain). Folders shorten first, each down to
+ * `CRUMB_KEEP_CHARS`; only when the bar cannot hold even the shortened folders
+ * beside a readable file name do they fold — all but the file's own folder,
+ * the two-state fold the global nav's trail already uses. `width` 0 is "not
+ * measured" and folds nothing.
+ */
+export function foldedCrumbCount(width: number, folders: string[]): number {
+  if (!width || folders.length < 2) return 0;
+  const shortened = folders.reduce(
+    (px, name) => px + Math.min(name.length, CRUMB_KEEP_CHARS) * CRUMB_CHAR_PX + CRUMB_CHROME_PX,
+    0,
+  );
+  const needed = shortened + CRUMB_FILE_MIN_PX + CRUMB_BAR_PADDING_PX;
+  return width < needed ? folders.length - 1 : 0;
+}

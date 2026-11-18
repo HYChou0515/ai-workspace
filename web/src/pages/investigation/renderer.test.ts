@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 
-import { basename, breadcrumbSegments, dirChildren, dirname, imageMime } from "./renderer";
+import {
+  basename,
+  breadcrumbSegments,
+  dirChildren,
+  dirname,
+  foldedCrumbCount,
+  imageMime,
+} from "./renderer";
 
 describe("imageMime", () => {
   it("maps extensions to image MIME types", () => {
@@ -84,5 +91,35 @@ describe("dirChildren", () => {
     const shots = ["/shots/9.png", "/shots/10.png", "/shots/2.png", "/b/x", "/a10/x", "/a9/x"];
     expect(dirChildren(shots, "shots").map((e) => e.name)).toEqual(["2.png", "9.png", "10.png"]);
     expect(dirChildren(shots, "").map((e) => e.name)).toEqual(["a9", "a10", "b", "shots"]);
+  });
+});
+
+describe("foldedCrumbCount", () => {
+  // The path bar is one line. Folders shorten first (each down to a few
+  // characters); when even that leaves the file name no room, every folder
+  // but the file's own parent folds into one "…".
+  const deep = ["projects", "2026-quarterly", "experiments", "run-0042"];
+
+  it("folds nothing before the bar has been measured", () => {
+    expect(foldedCrumbCount(0, deep)).toBe(0);
+  });
+
+  it("folds nothing when the shortened folders still leave the file room", () => {
+    expect(foldedCrumbCount(900, deep)).toBe(0);
+  });
+
+  it("folds every folder but the parent when shortening is not enough", () => {
+    expect(foldedCrumbCount(260, deep)).toBe(3);
+  });
+
+  it("never folds a single folder — a lone … would hide nothing worth a click", () => {
+    expect(foldedCrumbCount(60, ["projects"])).toBe(0);
+    expect(foldedCrumbCount(60, [])).toBe(0);
+  });
+
+  it("asks less room of a short folder name than of a long one", () => {
+    // Four one-letter folders fit where four long names do not.
+    expect(foldedCrumbCount(340, ["a", "b", "c", "d"])).toBe(0);
+    expect(foldedCrumbCount(340, deep)).toBe(3);
   });
 });
