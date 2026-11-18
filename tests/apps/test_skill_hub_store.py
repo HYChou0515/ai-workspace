@@ -644,6 +644,16 @@ def test_words_of_one_letter_and_filler_words_match_nothing_on_their_own() -> No
     assert match_rank(_described("x", "a tool for the oven"), "of a the for") is None
 
 
+def test_a_single_chinese_character_is_a_word_but_a_filler_one_is_not() -> None:
+    """Review round 2: a one-character Chinese word (畫、圖、表) is a word, not
+    noise like a single Latin letter; dropping it made 「畫 圖」 find nothing."""
+    from workspace_app.apps.skill_hub import match_rank
+
+    assert match_rank(_described("x", "幫你畫圖"), "畫 圖") == (1, 0)
+    assert match_rank(_described("x", "表格整理用 excel"), "excel 表") == (1, 0)
+    assert match_rank(_described("x", "這是我的工具"), "的 了") is None
+
+
 def test_an_underscore_separates_words_both_ways() -> None:
     from workspace_app.apps.skill_hub import match_rank
 

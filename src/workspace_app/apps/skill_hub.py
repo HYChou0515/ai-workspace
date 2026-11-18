@@ -374,6 +374,8 @@ _FILLER = frozenset(
     [
         *("a", "an", "and", "are", "as", "at", "be", "by", "for", "from", "in"),
         *("is", "it", "of", "on", "or", "that", "the", "this", "to", "with"),
+        # One-character Chinese words as common as "the" (review round 2).
+        *("的", "了", "和", "與", "或", "是", "在", "把", "被", "我", "你", "他"),
     ]
 )
 
@@ -382,14 +384,19 @@ def _terms(needle: str) -> list[tuple[str, bool]]:
     """``[(term, is_word), …]`` a (lower-cased) query is matched by, in order,
     once each (docs/plan-skill-hub-search.md D3). Letters and digits split at
     spaces, punctuation and underscores make words; a run of CJK is cut into
-    neighbouring pairs — 「晶圓良率」 → 晶圓、圓良、良率. A single letter or
-    character, and a filler word, is not a term: on its own it is found
-    almost anywhere (review round 1)."""
+    neighbouring pairs — 「晶圓良率」 → 晶圓、圓良、良率 — and a lone one is a
+    term of its own. A single Latin letter, and a filler word, is not a term:
+    on its own it is found almost anywhere (review rounds 1 and 2)."""
     out: list[tuple[str, bool]] = []
     for cjk, word in _TERM.findall(needle):
         if word:
             if len(word) > 1 and word not in _FILLER:
                 out.append((word, True))
+        elif len(cjk) == 1:
+            # A one-character Chinese word (畫、圖、表) IS a word — unlike a lone
+            # Latin letter it is not found everywhere (review round 2).
+            if cjk not in _FILLER:
+                out.append((cjk, False))
         else:
             out += [(cjk[k : k + 2], False) for k in range(len(cjk) - 1)]
     return list(dict.fromkeys(out))
