@@ -23,6 +23,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from typing import Any, Protocol, runtime_checkable
 
+import httpx
+
 from .registry import CommandInfo, EnvNeed, PackageInfo
 
 logger = logging.getLogger(__name__)
@@ -187,7 +189,16 @@ async def resolve_external_tools(sandbox: object, declared: Mapping[str, str]) -
             refused={name: "third-party tools need the hosted sandbox backend" for name in declared}
         )
 
-    answer = await sandbox.resolve_tools(dict(declared))
+    try:
+        answer = await sandbox.resolve_tools(dict(declared))
+    except httpx.TransportError as exc:
+        # No answer: out of time, unreachable, or the connection cut mid-reply
+        # (the host died handling it). The turn runs with its built-in tools and
+        # says these are unavailable THIS turn — the shape of a refusal, so the
+        # picker and the model report it — and the next turn asks again.
+        reason = f"the sandbox host did not answer ({type(exc).__name__})"
+        logger.warning("third-party tools unavailable this turn: %s: %s", reason, exc)
+        return ExternalTools(refused=dict.fromkeys(declared, reason))
     tools = answer.get("tools", {})
     refused = dict(answer.get("refused", {}))
     for name, reason in refused.items():

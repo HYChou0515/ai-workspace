@@ -90,6 +90,15 @@ def consumer_set(run_consumers: bool | list[str]) -> frozenset[str]:
     return frozenset(run_consumers)
 
 
+async def _warm_tools(prewarm_tools: Callable[[], Awaitable[dict[str, str]]]) -> None:
+    """The boot's third-party bundle warm, run as a background task. Its log
+    line arrives when it finishes — after the pod is ready — and names what
+    will be unavailable; it can never fail anything (`prewarm_external_tools`
+    swallows every per-app failure)."""
+    unwarmed = await prewarm_tools()
+    logger.info("lifespan: third-party tools warmed, %d unavailable", len(unwarmed))
+
+
 def build_lifespan(
     *,
     registry: InvestigationRegistry,
@@ -622,15 +631,17 @@ def build_lifespan(
         with boot_step("health: connectivity checks"):
             await asyncio.to_thread(health_service.run_fast_sync)
         # #674: pull third-party tool bundles into the host's cache now, so
-        # the first turn to use one does not pay a 150MB download. It DELAYS
-        # readiness but can never fail it — a pod that refuses to start
-        # because someone else's artifact store is down has turned their
-        # outage into ours. (Deliberately unlike first-party discovery, which
-        # IS fail-loud: those bundles live in our own image, so their absence
-        # means the image is broken.)
-        with boot_step("tools: warm third-party bundles"):
-            unwarmed = await prewarm_tools()
-        logger.info("lifespan: third-party tools warmed, %d unavailable", len(unwarmed))
+        # the first turn to use one does not pay a 150MB download. It can
+        # never fail the boot — a pod that refuses to start because someone
+        # else's artifact store is down has turned their outage into ours.
+        # (Deliberately unlike first-party discovery, which IS fail-loud: those
+        # bundles live in our own image, so their absence means the image is
+        # broken.) Nor does it DELAY the boot any more: it runs in the
+        # background (started with the other background tasks below, and
+        # cancelled with them), because one boot waited 404 s on a host that
+        # died mid-request while every other step took 0.2 s. A turn that
+        # arrives before it finishes resolves the bundle itself.
+        print("  → tools: warming third-party bundles in the background", flush=True)
         # A per-person cpu/memory cap can only bind if SOMETHING states what a
         # sandbox costs — the App, or the backend's own ceiling. Saying so needs
         # to ASK the backend, which for the http one is a real request.
@@ -735,6 +746,7 @@ def build_lifespan(
         # the asking API's — `tests/test_worker.py` pins that entering the
         # lifespan changes nothing.
         bg = [asyncio.create_task(idle_killer()), asyncio.create_task(mirror_sweeper(app))]
+        bg.append(asyncio.create_task(_warm_tools(prewarm_tools)))
         if perf_trace.enabled():
             # Only ever sleeps, so any delay it observes beyond its own sleep is
             # time the loop could not run anything — evidence for blocking work

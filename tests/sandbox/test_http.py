@@ -1270,3 +1270,22 @@ async def test_an_ordinary_command_sends_no_tool():
         await sb.exec(h, ["true"])
     assert seen and "tool" not in seen[-1]
     assert backend.exec_tools[-1] is False
+
+
+async def test_resolve_tools_gives_up_on_a_host_that_does_not_answer():
+    """A host that dies mid-request never answers and, with no read deadline,
+    the caller waited until the connection was cut — 404 s at one boot. The
+    resolve carries its own deadline (30 s), separate from `exec`'s none."""
+    seen: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.extensions["timeout"])
+        return httpx.Response(200, json={"tools": {}, "refused": {}})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        sb = HttpSandbox(base_url=_ADVERTISE, client=client)
+        await sb.resolve_tools({"wafer-history": "https://gitlab/m"})
+
+    [timeout] = seen
+    assert timeout["read"] == 30.0, timeout
+    assert timeout["connect"] is not None and timeout["connect"] <= 30.0, timeout

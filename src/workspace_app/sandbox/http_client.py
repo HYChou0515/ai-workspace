@@ -180,6 +180,13 @@ class IoRetryPolicy:
     pool_timeout_s: float = 10.0
 
 
+#: How long a turn (or the boot warm) waits for the host to resolve its
+#: third-party tools. Long enough for the manifest fetch every turn makes and
+#: most first downloads of a new bundle; past it the turn runs without them
+#: (`tooling.external.resolve_external_tools`).
+TOOL_RESOLVE_TIMEOUT_S = 30.0
+
+
 class HttpSandbox:
     #: #674: this backend has an artifact store behind it, so third-party tools
     #: can be resolved. Local/mock backends do not set it, and their turns
@@ -531,9 +538,17 @@ class HttpSandbox:
         is shown and the bundle that runs cannot drift apart.
 
         Only the host can reach the artifact store; the app holds no credential
-        for it."""
+        for it.
+
+        Its own deadline, not the client's (which has no read deadline, for
+        `exec`): a host that dies while handling this never answers, and one
+        boot waited 404 s for the connection to be cut. Giving up does not stop
+        the host's download — that runs in its own thread and finishes — so a
+        new bundle slower than this is simply there for the next turn."""
         resp = await self._client.post(
-            f"{self._base_url}/tools/resolve", json={"tools": dict(declared)}
+            f"{self._base_url}/tools/resolve",
+            json={"tools": dict(declared)},
+            timeout=httpx.Timeout(TOOL_RESOLVE_TIMEOUT_S),
         )
         resp.raise_for_status()
         return resp.json()
