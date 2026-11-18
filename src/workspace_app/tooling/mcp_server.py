@@ -90,12 +90,21 @@ def load_about(bundle: Path) -> dict | None:
 
 def _negotiate(requested: object) -> str:
     """MCP lifecycle: a version the server supports MUST be answered with
-    itself; otherwise with another it supports — the latest."""
-    return (
-        requested
-        if isinstance(requested, str) and requested in SUPPORTED_VERSIONS
-        else PROTOCOL_VERSION
-    )
+    itself; otherwise with another it supports.
+
+    Which other: the newest one no newer than the client asked for, and the
+    latest only when none is. A client asking for 2025-03-26 does not know
+    2025-06-18 and may disconnect on it, while 2024-11-05 is what it accepted
+    from this server before it learnt any other version (review round 1).
+    Versions are ISO dates, so they compare as strings."""
+    if not isinstance(requested, str):
+        # Outside the spec (the client MUST name one), so keep what this
+        # server answered everyone before it knew a second version.
+        return SUPPORTED_VERSIONS[-1]
+    if requested in SUPPORTED_VERSIONS:
+        return requested
+    older = [v for v in SUPPORTED_VERSIONS if v <= requested]
+    return max(older) if older else PROTOCOL_VERSION
 
 
 def _initialized(version: str, about: dict | None) -> dict:
@@ -109,12 +118,12 @@ def _initialized(version: str, about: dict | None) -> dict:
     server = {"name": about["name"], "version": about["version"]}
     result: dict = {"protocolVersion": version, "capabilities": {"tools": {}}, "serverInfo": server}
     # Only what the agreed version defines: `Implementation.title` arrived in
-    # 2025-06-18, `InitializeResult.instructions` in 2025-03-26.
-    if version == "2025-06-18":
-        if about.get("title"):
-            server["title"] = about["title"]
-        if about.get("description"):
-            result["instructions"] = about["description"]
+    # 2025-06-18; `InitializeResult.instructions` is in every version served
+    # here (2024-11-05 already has it — schema/2024-11-05/schema.ts).
+    if version == "2025-06-18" and about.get("title"):
+        server["title"] = about["title"]
+    if about.get("description"):
+        result["instructions"] = about["description"]
     return result
 
 
@@ -142,7 +151,10 @@ def handle(
         return None
 
     if method == "initialize":
-        requested = (message.get("params") or {}).get("protocolVersion")
+        params = message.get("params")
+        # Before this read anything, `params` could be anything; reading it
+        # must not be a way to take the server down.
+        requested = params.get("protocolVersion") if isinstance(params, dict) else None
         return _result(request_id, _initialized(_negotiate(requested), about))
 
     if method == "tools/list":

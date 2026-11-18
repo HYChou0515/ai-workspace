@@ -57,7 +57,8 @@ title = "晶圓歷史查詢"     # 選填，但請填
 把它印出來（`published wafer-history 1.4.2 by Wafer Team <wafer@example.com>`）——**發版後看一眼那一行**，
 沒印出名字就是沒填成功。
 
-**`title` 和 `description` 請填。** 工具面板上，你的工具那一列寫的是 `title`，下面一行是 `description`；
+**`title` 和 `description` 請填。** 工具面板上，你的工具的名字寫的是 `title`，下面一行是 `description`
+（指令多的話收成一組，寫在組的標題列；只有一個指令時就寫在那一列）；
 沒寫 `title` 的話，那一列只能寫註冊時給的 id（`wafer-history` 變成「Wafer History」）。AI 讀到的工具說明、
 工程師用 bundle 裡的 `mcp` 接上自己的 Claude Code 時看到的，也是這兩樣。`description` 用 PEP 621 本來就有的欄位；
 PEP 621 沒有標題，所以 `title` 放在 PEP 518 留給工具自己用的 `[tool.ai-workspace]` 表。`title` 寫了就要是

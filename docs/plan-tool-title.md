@@ -26,8 +26,8 @@ MCP 的 `tools/list` 都沒有〔查證〕。描述有——`[project].descripti
 | D6 | manifest 多一個選填的 `title`,排在 `description` 後面,同樣只給人看、不決定任何事;**不升 `format_version`**——舊的 artifact 沒有它照樣解析,舊平台看到它也只是略過(`parse_manifest` 只讀它認得的 key) | 〔施工〕〔查證〕 |
 | D7 | 平台上「工具叫什麼」只有一個函式決定(`標題 or 轉換過的 id`),工具面板、環境變數面板(兩者都讀 `package`)、整包授權那一列都從它來 | 〔施工〕 |
 | D8 | 工具面板的工具標題列照 Material 3 list item 的 headline + supporting text 畫:標題一行;描述在下面,字小一級、顏色淡一級,最多兩行、超過用省略號,完整文字在滑鼠提示裡。滑鼠提示照舊帶 id(認得 id 的人還找得到) | 〔施工〕,引用見 §4 |
-| D9 | AI 讀到的工具說明帶上標題:`From the 「<title>」 tool bundle (<id>) …`;沒標題時照舊 | 〔施工〕 |
-| D10 | MCP:工程師自己的 Claude Code 等接上時,`initialize` 回的 `serverInfo` 帶這個工具的名稱、標題、版本,`instructions` 帶描述。`title` 要 MCP `2025-06-18`,所以照規格協商版本:客戶端要的版本我們支援就回它,否則回我們最新的 | 〔施工〕 |
+| D9 | AI 讀到的工具說明帶上標題:``From the 「<title>」 tool bundle (`<id>`) …``;沒標題時照舊 | 〔施工〕 |
+| D10 | MCP:工程師自己的 Claude Code 等接上時,`initialize` 回的 `serverInfo` 帶這個工具的名稱、版本,`instructions` 帶描述(`2024-11-05` 就有);`title` 只在協商成 `2025-06-18` 時帶(那一版才有)。照規格協商版本:客戶端要的版本我們支援就回它,否則回不比它新的裡面最新的那一個,都比它新才回我們最新的(見 C2) | 〔施工〕 |
 
 ## 3. 不做
 
@@ -38,9 +38,11 @@ MCP 的 `tools/list` 都沒有〔查證〕。描述有——`[project].descripti
 ## 4. UI 依據
 
 Material 3 List(`material-components/material-web` 官方文件 `docs/components/list.md` 與 token
-`tokens/versions/v0_192/_md-comp-list.scss`):list item 的文字分 `headline` 與 `supporting-text` 兩格;
-headline 是 `body-large` / `on-surface`,supporting text 是 `body-medium` / `on-surface-variant`;item 高度有一行、兩行、
-三行三種(56 / 72 / 88px),所以輔助文字最多兩行。m3.material.io 本身要跑 JavaScript 才有內容,讀不到,改讀它的元件庫。
+`tokens/versions/v0_192/_md-comp-list.scss`):list item 的文字有 `headline`、`supporting-text`(還有這裡用不到的
+`trailing-supporting-text`)幾格;headline(token 叫 `list-item-label-text`)是 `body-large` / `on-surface`,
+supporting text 是 `body-medium` / `on-surface-variant`;item 高度有一行、兩行、三行三種(56 / 72 / 88px)。文件沒有直接
+規定行數上限,「輔助文字最多兩行」是從最高的三行 item(標題一行 + 輔助兩行)推出來的。m3.material.io 本身要跑
+JavaScript 才有內容,讀不到,改讀它的元件庫。
 
 ## 5. 經過的每一站
 
@@ -68,3 +70,14 @@ headline 是 `body-large` / `on-surface`,supporting text 是 `body-medium` / `on
 | P5 | MCP `serverInfo` / `instructions`、版本協商(D10) | 新舊兩種協定版本的客戶端都接得上 |
 | P6 | 文件:`tool-authoring.md`、`migrations.md` | `tests/docs`、`mkdocs --strict` |
 | P7 | web-demo → review(conformance / veracity / defect / regression)→ CI | 照 CLAUDE.md |
+
+## 7. 施工與審查中定的細節
+
+- **C1** 只有一個指令的工具在面板上沒有標題列(那一列就是整個工具),描述畫在那一列的名稱下面,和標題列用同一個
+  輔助文字元件;收在組裡的列不畫,標題列已經有。那一列的滑鼠提示加上 id(`rca-tools:spc · 標題 · 指令`)。
+  原本只做了標題列,只有一個指令的工具就哪裡都看不到描述——把需求做窄了(review 第 1 輪)〔施工〕。
+- **C2** 版本協商:客戶端要的版本我們不支援時,回「不比它新的裡面最新的」。要 `2025-03-26` 的客戶端不認得
+  `2025-06-18`,可能直接斷線;`2024-11-05` 是它以前就接受的。客戶端沒寫版本(規格說一定要寫)就回 `2024-11-05`——這個 server 以前對誰都回這個(review 第 1 輪)〔施工〕。
+- **C3** `instructions` 在 `2024-11-05` 就有(`schema/2024-11-05/schema.ts`)。原本寫成 `2025-03-26` 才有,
+  是查規格的 agent 給的錯答案、沒有自己核對就寫進程式,讓 `2024-11-05` 的客戶端拿不到描述(review 第 1 輪)〔查證〕。
+- **C4** 標題要是一行;`[tool]` 不是表也算寫錯——兩者都讓 build 失敗並說欄位,不是噴 traceback(review 第 1 輪)〔施工〕。

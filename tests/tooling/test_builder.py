@@ -1162,3 +1162,21 @@ def test_the_bundle_tells_its_mcp_face_who_it_is(tmp_path: Path) -> None:
         assert member is not None
         about = json.loads(member.read().decode("utf-8"))
     assert about == {"name": "wafer-history", "version": "1.4.2", "title": "晶圓歷史查詢"}
+
+
+def test_a_tool_key_that_is_not_a_table_fails_the_build_with_one_line(tmp_path: Path) -> None:
+    """Review round 1: `tool = "x"` raised AttributeError — a traceback in the
+    author's CI log instead of `build failed:`."""
+    source = _source(tmp_path)
+    pyproject = source / "pyproject.toml"
+    pyproject.write_text('tool = "x"\n' + pyproject.read_text())
+
+    with pytest.raises(BuildError, match=r"\[tool\] must be a table"):
+        read_project(source)
+
+
+def test_a_title_on_more_than_one_line_fails_the_authors_build(tmp_path: Path) -> None:
+    """Review round 1: a title is one line — the panel, the CI log line and
+    the AI's tool description each read it as one."""
+    with pytest.raises(BuildError, match="must be one line"):
+        _build_titled(tmp_path, '\n[tool.ai-workspace]\ntitle = "a\\nb"\n')

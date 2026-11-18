@@ -3690,21 +3690,23 @@ AI 工具說明裡每個目標後面多了它的長度上限(沒設的寫 10 個
   但 CI log 那一行沒印出標題，工具面板上還是 id。
 - **混用版本時**：舊 host 不把標題轉給 app，面板顯示 id，等 host 升完就好；舊 app 收到 host 多給的標題會略過。
   新 builder 做的 manifest 多一個選填 `title`，舊 app／舊 host 讀它只是略過（`format_version` 沒升）。
-- 告訴工具作者：pyproject 加 `[tool.ai-workspace] title = "…"`、`[project] description` 也請填
-  （`docs/tool-authoring.md` §1）。
+- **告訴工具作者**加標題（`rollout 後`、換好 builder tag 之後）：pyproject 加 `[tool.ai-workspace] title = "…"`、
+  `[project] description` 也請填（`docs/tool-authoring.md` §1）。**為什麼**：標題只有作者寫得出來，平台不會替他們補。
+  **沒做的症狀**：工具面板照舊用 id 轉出來的字（「Rca Tools」）當名字，描述那一行空著。
 
 **行為改變，沒有開關**：
-- 工具面板裡，工具的名字改寫作者的標題（沒有就照舊用 id 轉出來的字）。一個工具在面板上有兩個以上指令、收成一組時，
-  組的標題列**下面多一行作者的 `description`**（最多兩行，滑鼠停上去看完整的）；已經寫了 `description` 的工具，
-  app 一升級就會出現這一行。只有一個指令的工具沒有標題列，那一列照舊是「工具名 · 指令名」和指令的描述。
-  環境變數面板的區塊標題也改用作者的標題。
+- 工具面板裡，工具的名字改寫作者的標題（沒有就照舊用 id 轉出來的字），**下面多一行作者的 `description`**
+  （最多兩行，滑鼠停上去看完整的）：一個工具在面板上有兩個以上指令、收成一組時畫在組的標題列下面；只有一個指令時
+  畫在那一列的名稱下面。已經寫了 `description` 的工具，app 一升級就會出現這一行。環境變數面板的區塊標題也改用作者的標題。
 - AI 讀到的工具說明從 ``From the `rca-tools` tool bundle`` 變成 ``From the 「標題」 tool bundle (`rca-tools`)``（有標題時）。
-- 工程師用 bundle 裡的 `mcp` 接自己的 Claude Code 時：`serverInfo` 從固定的 `tool-bundle` / `1` 變成工具的名稱與版本，
-  有標題就帶 `title`、有描述就帶 `instructions`；協定版本照 MCP 的規則協商（支援 `2025-06-18` 與 `2024-11-05`）。
-  只對用新 builder 做出來的 bundle 生效。
+- 工程師用 bundle 裡的 `mcp` 接自己的 Claude Code 時：`serverInfo` 從固定的 `tool-bundle` / `1` 變成工具的名稱與版本；
+  有描述就帶 `instructions`；有標題、且協商成 `2025-06-18` 時帶 `title`（`2024-11-05` 沒有這個欄位）。協定版本照 MCP 的
+  規則協商：支援 `2025-06-18` 與 `2024-11-05`，客戶端要別的版本就回不比它新的裡面最新的那一個（要 `2025-03-26` 的拿到
+  `2024-11-05`，和以前一樣）。只對用新 builder 做出來的 bundle 生效。
 
 **確認做完**（`rollout 後`）：
-1. 打開一個有第三方工具的 item 的工具面板：已寫 `description`、且在面板上有兩個以上指令的工具，標題列下面有那一行描述。
+1. 打開一個有第三方工具的 item 的工具面板：已寫 `description` 的工具，名字下面有那一行描述（多個指令的在組的標題列下面，
+   一個指令的在那一列下面）。
 2. 請一位作者用新 builder tag、加上 `title` 發一版：CI log 那一行印出標題；app 的工具面板（等 host 解析到新版後）
    那一列寫的是標題，不是 id。
 3. （選做）用那一版 bundle 的 `mcp` 接 Claude Code：`/mcp` 看得到工具的名稱與標題。

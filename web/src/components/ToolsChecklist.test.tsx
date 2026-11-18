@@ -465,4 +465,21 @@ describe("ToolsChecklist names a tool by its title and says what it is", () => {
     expect(screen.queryByTestId("tool-group-desc-rca-tools")).not.toBeInTheDocument();
     expect(screen.getByTestId("tool-group-header-rca-tools")).not.toHaveAttribute("aria-describedby");
   });
+
+  // Review round 1: a tool granted ONE command is drawn as its row alone — no
+  // header — and was left with no description anywhere.
+  it("a one-command tool says what it is under its own row, and keeps its id on hover", () => {
+    render(<ToolsChecklist tools={[TITLED[0]!]} prefs={{}} onChange={vi.fn()} />);
+    const desc = screen.getByTestId("tool-row-desc-rca-tools:spc");
+    expect(desc).toHaveTextContent("SMT 產線的量測資料擷取與初步分析。");
+    expect(desc).toHaveAttribute("title", "SMT 產線的量測資料擷取與初步分析。");
+    expect(screen.getByTitle("rca-tools:spc · SMT 量測分析 · Spc")).toHaveTextContent("SMT 量測分析 · Spc");
+  });
+
+  it("a row inside a fold leaves the description to the fold's header", () => {
+    render(<ToolsChecklist tools={TITLED} prefs={{}} onChange={vi.fn()} />);
+    fireEvent.click(screen.getByTestId("tool-group-header-rca-tools"));
+    expect(screen.getByTestId("tool-row-rca-tools:spc")).toBeInTheDocument();
+    expect(screen.queryByTestId("tool-row-desc-rca-tools:spc")).not.toBeInTheDocument();
+  });
 });

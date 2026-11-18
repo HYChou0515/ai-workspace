@@ -215,26 +215,12 @@ export function ToolsChecklist({
                   onPick={(next) => onChange(withGroupState(shownFold, prefs, next))}
                 />
                 {group.description ? (
-                  // Material 3 list item: the title is the headline, this the
-                  // supporting text — a step smaller and lighter, at most two
-                  // lines (the three-line item), the whole of it on hover.
-                  <div
+                  <SupportingText
                     id={descId(group.id)}
-                    data-testid={`tool-group-desc-${group.id}`}
-                    title={group.description}
-                    style={{
-                      flexBasis: "100%",
-                      paddingLeft: "calc(1em + 6px)",
-                      fontSize: pxToRem(12),
-                      color: "var(--text-paper-d)",
-                      display: "-webkit-box",
-                      WebkitBoxOrient: "vertical",
-                      WebkitLineClamp: 2,
-                      overflow: "hidden",
-                    }}
-                  >
-                    {group.description}
-                  </div>
+                    testId={`tool-group-desc-${group.id}`}
+                    text={group.description}
+                    style={{ flexBasis: "100%", paddingLeft: "calc(1em + 6px)" }}
+                  />
                 ) : null}
               </div>
               {open
@@ -312,7 +298,10 @@ function ToolRow({
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ display: "flex", alignItems: "baseline", gap: 6, minWidth: 0 }}>
           <div
-            title={tool.package ? `${tool.package} · ${tool.label}` : tool.label}
+            // The id rides along on hover once `package` is the author's
+            // title (docs/plan-tool-title.md D8) — whoever knows the tool by
+            // its id can still find it.
+            title={tool.package ? `${tool.key} · ${tool.package} · ${tool.label}` : tool.label}
             style={{
               fontWeight: 500,
               overflow: "hidden",
@@ -351,6 +340,11 @@ function ToolRow({
             </div>
           ) : null}
         </div>
+        {/* A row that IS its tool (no fold header above it) says what the tool
+            is itself; inside a fold the header already does (D8, review 1). */}
+        {!indent && tool.package_description ? (
+          <SupportingText testId={`tool-row-desc-${tool.key}`} text={tool.package_description} />
+        ) : null}
         <div
           title={tool.unavailable ?? detail}
           style={{
@@ -438,6 +432,40 @@ function TriState({
           {t(opt === "follow" ? "tools.follow" : opt === "on" ? "tools.on" : "tools.off")}
         </button>
       ))}
+    </div>
+  );
+}
+
+/** Material 3 list item supporting text (docs/plan-tool-title.md D8): a
+ * step smaller and lighter than the headline, at most two lines (the
+ * three-line item), the whole of it on hover. */
+function SupportingText({
+  id,
+  testId,
+  text,
+  style,
+}: {
+  id?: string;
+  testId: string;
+  text: string;
+  style?: React.CSSProperties;
+}) {
+  return (
+    <div
+      id={id}
+      data-testid={testId}
+      title={text}
+      style={{
+        fontSize: pxToRem(12),
+        color: "var(--text-paper-d)",
+        display: "-webkit-box",
+        WebkitBoxOrient: "vertical",
+        WebkitLineClamp: 2,
+        overflow: "hidden",
+        ...style,
+      }}
+    >
+      {text}
     </div>
   );
 }

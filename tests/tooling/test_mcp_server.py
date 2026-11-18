@@ -229,7 +229,7 @@ def _initialize(version: str | None, about: dict | None = _ABOUT) -> dict:
 
 def test_a_current_client_reads_the_tools_title_and_description() -> None:
     """`serverInfo.title` exists from MCP 2025-06-18 (`Implementation extends
-    BaseMetadata`); `instructions` from 2025-03-26."""
+    BaseMetadata`); `InitializeResult.instructions` already in 2024-11-05."""
     result = _initialize("2025-06-18")
 
     assert result["protocolVersion"] == "2025-06-18"
@@ -243,20 +243,39 @@ def test_a_current_client_reads_the_tools_title_and_description() -> None:
 
 def test_an_older_client_gets_its_own_version_and_nothing_it_does_not_know() -> None:
     """Lifecycle: a version the server supports MUST be answered with itself.
-    2024-11-05 has neither `title` nor `instructions`."""
+    2024-11-05 has no `Implementation.title` — but it does have `instructions`
+    (review round 1: the schema says so; an earlier claim otherwise was wrong)."""
     result = _initialize("2024-11-05")
 
     assert result["protocolVersion"] == "2024-11-05"
     assert result["serverInfo"] == {"name": "wafer-history", "version": "1.4.2"}
-    assert "instructions" not in result
+    assert result["instructions"] == "晶圓路徑與良率歷史查詢。"
 
 
-def test_a_version_this_server_does_not_speak_is_answered_with_its_latest() -> None:
+def test_a_version_this_server_does_not_speak_is_answered_with_one_the_client_can_take() -> None:
     """2025-03-26 adds JSON-RPC batching, which this server does not serve, so
-    it is not claimed: the lifecycle rule is to answer with another supported
-    version, the latest."""
-    assert _initialize("2025-03-26")["protocolVersion"] == "2025-06-18"
+    it is not claimed. The lifecycle rule is to answer with another supported
+    version; a client asking for 2025-03-26 does not know 2025-06-18 and may
+    disconnect on it, while 2024-11-05 is what it accepted before this server
+    learnt any other (review round 1). So: the newest supported version no
+    newer than the one asked for — and the latest when none is."""
+    assert _initialize("2025-03-26")["protocolVersion"] == "2024-11-05"
+    assert _initialize("2026-01-01")["protocolVersion"] == "2025-06-18"
     assert _initialize("1999-01-01")["protocolVersion"] == "2025-06-18"
+
+
+def test_initialize_with_params_that_are_not_an_object_still_answers() -> None:
+    msg = {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": [1]}
+    reply = handle(msg, tools=[], invoke=None, about=_ABOUT)
+
+    assert reply is not None
+    assert reply["result"]["protocolVersion"] == "2024-11-05"
+
+
+def test_a_client_that_names_no_version_gets_what_this_server_always_answered() -> None:
+    """Review round 1 (regression): before this server knew two versions it
+    answered 2024-11-05 to everyone; a client that names none keeps that."""
+    assert _initialize(None)["protocolVersion"] == "2024-11-05"
 
 
 def test_a_tool_that_gave_no_title_or_description_says_neither() -> None:

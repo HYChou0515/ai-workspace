@@ -289,7 +289,10 @@ def _read_title(body: dict[str, Any]) -> str | None:
     refused (D5): the author meant to name their tool, and publishing nothing
     in its place is silence only they could have caught — this build is the
     one moment they are looking."""
-    table = body.get("tool", {}).get(TOOL_TABLE, {})
+    tools = body.get("tool", {})
+    if not isinstance(tools, dict):
+        raise BuildError(f"[tool] must be a table, got {tools!r}")
+    table = tools.get(TOOL_TABLE, {})
     if not isinstance(table, dict):
         raise BuildError(f"[tool.{TOOL_TABLE}] must be a table, got {table!r}")
     if "title" not in table:
@@ -297,6 +300,10 @@ def _read_title(body: dict[str, Any]) -> str | None:
     title = table["title"]
     if not isinstance(title, str) or not title.strip():
         raise BuildError(f"[tool.{TOOL_TABLE}].title must be a non-empty string, got {title!r}")
+    # One line: the panel, the CI log line and the AI's tool description each
+    # read it as one (review round 1).
+    if "\n" in title.strip() or "\r" in title.strip():
+        raise BuildError(f"[tool.{TOOL_TABLE}].title must be one line, got {title!r}")
     return title.strip()
 
 
