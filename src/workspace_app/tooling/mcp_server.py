@@ -91,7 +91,11 @@ def load_about(bundle: Path) -> dict | None:
 def _negotiate(requested: object) -> str:
     """MCP lifecycle: a version the server supports MUST be answered with
     itself; otherwise with another it supports — the latest."""
-    return requested if requested in SUPPORTED_VERSIONS else PROTOCOL_VERSION
+    return (
+        requested
+        if isinstance(requested, str) and requested in SUPPORTED_VERSIONS
+        else PROTOCOL_VERSION
+    )
 
 
 def _initialized(version: str, about: dict | None) -> dict:
