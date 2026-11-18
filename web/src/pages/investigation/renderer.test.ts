@@ -5,6 +5,7 @@ import {
   breadcrumbSegments,
   dirChildren,
   dirname,
+  crumbFloorCh,
   foldedCrumbCount,
   imageMime,
 } from "./renderer";
@@ -121,5 +122,28 @@ describe("foldedCrumbCount", () => {
     // Four one-letter folders fit where four long names do not.
     expect(foldedCrumbCount(340, ["a", "b", "c", "d"])).toBe(0);
     expect(foldedCrumbCount(340, deep)).toBe(3);
+  });
+});
+
+describe("crumbFloorCh", () => {
+  // The floor is in `ch` — the width of "0". A CJK character is about two of
+  // those, so counting characters gave 「專案」 a floor narrower than itself and
+  // it was cut to 「專…」 beside a file name with room to spare.
+  it("keeps the first few characters of a Latin name", () => {
+    expect(crumbFloorCh("projects")).toBe(5);
+    expect(crumbFloorCh("src")).toBe(3);
+  });
+
+  it("counts a CJK character as two", () => {
+    expect(crumbFloorCh("專案")).toBe(4);
+    expect(crumbFloorCh("良率季度檢討報告")).toBe(10);
+  });
+
+  it("budgets a CJK folder the room its floor asks for", () => {
+    const latin = ["aaaaa", "bbbbb", "ccccc"];
+    const cjk = ["專案專案專", "資料資料資", "報告報告報"];
+    // A bar that holds three shortened Latin folders is too small for three CJK ones.
+    expect(foldedCrumbCount(380, latin)).toBe(0);
+    expect(foldedCrumbCount(380, cjk)).toBe(2);
   });
 });

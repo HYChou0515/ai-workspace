@@ -99,7 +99,7 @@ import { type Edge, type PaneNode, edgeForPoint } from "./paneTree";
 import {
   basename,
   breadcrumbSegments,
-  CRUMB_KEEP_CHARS,
+  crumbFloorCh,
   dirChildren,
   foldedCrumbCount,
 } from "./renderer";
@@ -2711,9 +2711,11 @@ const crumbBar: React.CSSProperties = {
   gap: 2,
   // One line, always (NN/g, Breadcrumbs guideline 9). The bar does NOT clip
   // with `overflow: hidden` — the crumbs' dropdowns hang below it and would
-  // be cut off; each crumb clips its own label instead.
+  // be cut off; each crumb clips its own label instead. For the same reason
+  // "one line" is not `white-space: nowrap` HERE: it inherits, and a dropdown
+  // with one long name in it grew as wide as that name and the pane cut it
+  // off. Every label carries `crumbClip` itself.
   minWidth: 0,
-  whiteSpace: "nowrap",
 };
 
 /** A label that stays on one line and ends in "…" when its box is too small. */
@@ -2738,14 +2740,16 @@ export function Breadcrumb({
   if (!activeTab) {
     return (
       <div style={crumbBar}>
-        <span style={{ color: "var(--text-paper-d2)" }}>No file open</span>
+        <span style={{ ...crumbClip, color: "var(--text-paper-d2)" }}>No file open</span>
       </div>
     );
   }
   if (isExecutionPath(activeTab)) {
     return (
       <div style={crumbBar}>
-        <span style={{ color: "var(--text-paper-d2)" }}>Workflows</span>
+        <span style={{ whiteSpace: "nowrap", flexShrink: 0, color: "var(--text-paper-d2)" }}>
+          Workflows
+        </span>
         <Icon name="chev_r" size={10} color="var(--text-paper-d2)" />
         <span style={{ ...crumbClip, minWidth: 0 }}>
           <ExecutionTitle path={activeTab} />
@@ -2790,12 +2794,14 @@ function PathCrumbs({
               // A folder keeps its first few characters (plus the button's
               // padding and the chevron). The floor is on THIS box, the flex
               // item: on the button alone the box still collapsed to nothing
-              // and the folders painted over each other (measured at 410 px).
-              minWidth: `calc(${Math.min(name.length, CRUMB_KEEP_CHARS)}ch + 22px)`,
+              // and the folders painted over each other (measured in a 410 px
+              // bar, before the fold rule took that width over).
+              minWidth: `calc(${crumbFloorCh(name)}ch + 22px)`,
               // Folders give way before the file name does. The ratio is this
               // large on purpose: flex shares the shortfall by weight, and at
               // 1000 the file name's share was a fraction of a pixel — enough
-              // to turn `.md` into `.…` with room to spare (seen at 1440 px).
+              // to turn `.md` into `.…` with room to spare (seen in a 750 px
+              // bar, a 1440 px window).
               flex: "0 1000000 auto",
             }}
           >
@@ -2837,8 +2843,8 @@ function FoldedCrumbs({
       trigger={({ onClick, open }) => (
         <button
           type="button"
-          aria-label={t("nav.crumbs.expand")}
-          title={t("nav.crumbs.expand")}
+          aria-label={t("workspace.crumbs.folded")}
+          title={t("workspace.crumbs.folded")}
           aria-expanded={open}
           onClick={onClick}
           style={{

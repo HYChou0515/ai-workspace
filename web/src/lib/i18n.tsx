@@ -1916,6 +1916,13 @@ export const messages = {
     "zh-TW": "尚未載入 — 在檔案樹展開這個資料夾就能瀏覽。",
     en: "Not loaded — expand this folder in the file tree to browse it.",
   },
+  // The path bar's "…": it lists the folders it stands for. Not the nav bar's
+  // "nav.crumbs.expand" — both can be on screen, and two buttons with one
+  // name are one button to a screen reader.
+  "workspace.crumbs.folded": {
+    "zh-TW": "顯示收起來的資料夾",
+    en: "Show the folded folders",
+  },
   "workspace.tree.loadFailed": {
     "zh-TW": "這個資料夾載入失敗,收起再展開可重試。",
     en: "This folder could not be loaded — collapse and expand it to retry.",
