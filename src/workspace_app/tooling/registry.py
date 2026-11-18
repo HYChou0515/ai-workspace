@@ -129,6 +129,11 @@ class PackageInfo:
     exactly as usable as it was, and every artifact published before the field
     existed says nothing."""
 
+    title: str = ""
+    """What this tool is CALLED, in its author's words, or ``""`` when they
+    gave none (docs/plan-tool-title.md) — then it is shown by its id. A
+    first-party package has none."""
+
     version: str = ""
     """The release this package resolved at, or ``""`` for a first-party
     package — it has no artifact and no release."""
@@ -798,7 +803,13 @@ def describe_command(pkg: PackageInfo, cmd: CommandInfo) -> str:
     release = f" {pkg.version}" if pkg.version else ""
     by = f", by {pkg.author}" if pkg.author else ""
     said = f" — {pkg.description.strip()}" if pkg.description.strip() else "."
-    line = f"{cmd.description}\n\nFrom the `{pkg.name}` tool bundle{release}{by}{said}"
+    # docs/plan-tool-title.md D9: the title the person sees, beside the id
+    # the commands are named by — so "the 「SMT 量測分析」 tool" and `rca-tools`
+    # read as one tool to the model.
+    bundle = (
+        f"「{pkg.title}」 tool bundle (`{pkg.name}`)" if pkg.title else f"`{pkg.name}` tool bundle"
+    )
+    line = f"{cmd.description}\n\nFrom the {bundle}{release}{by}{said}"
     if pkg.latest_version is not None:
         # plan-tool-running-version D2: the release that RUNS is the one this
         # sandbox was created with; say so, and how the latest is reached, so

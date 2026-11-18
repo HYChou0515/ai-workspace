@@ -24,7 +24,7 @@
 
 ```
 my-wafer-tools/
-  pyproject.toml          # 一個 [project.scripts] 進入點 + version（+ authors）
+  pyproject.toml          # 一個 [project.scripts] 進入點 + version（+ authors、description、標題）
   uv.lock                 # 依賴釘死 —— 沒有它就沒有可重現的 build
   env.json                # 選填：這支工具需要哪些環境變數（§7）
   src/wafer_tools/
@@ -40,9 +40,13 @@ my-wafer-tools/
 name = "wafer-tools"
 version = "1.4.2"          # 必填。這是人在對話裡講的版本號
 authors = [{name = "Wafer Team", email = "wafer@example.com"}]   # 選填，但請填
+description = "晶圓路徑與良率歷史查詢。"                          # 選填，但請填
 
 [project.scripts]
 wafer-history = "wafer_tools.cli:main"   # 必須「剛好一個」
+
+[tool.ai-workspace]
+title = "晶圓歷史查詢"     # 選填，但請填
 ```
 
 **`authors` 請填。** 它會進 manifest，然後出現在使用者的工具面板上：「這支工具是誰發布的、
@@ -52,6 +56,14 @@ wafer-history = "wafer_tools.cli:main"   # 必須「剛好一個」
 你想怎麼寫就怎麼寫，寫錯也不會擋 build。代價是沒有人會替你檢查，所以 `build-tool` 會在 CI log
 把它印出來（`published wafer-history 1.4.2 by Wafer Team <wafer@example.com>`）——**發版後看一眼那一行**，
 沒印出名字就是沒填成功。
+
+**`title` 和 `description` 請填。** 工具面板上，你的工具的名字寫的是 `title`，下面一行是 `description`
+（指令多的話收成一組，寫在組的標題列；只有一個指令時就寫在那一列）；
+沒寫 `title` 的話，那一列只能寫註冊時給的 id（`wafer-history` 變成「Wafer History」）。AI 讀到的工具說明、
+工程師用 bundle 裡的 `mcp` 接上自己的 Claude Code 時看到的，也是這兩樣。`description` 用 PEP 621 本來就有的欄位；
+PEP 621 沒有標題，所以 `title` 放在 PEP 518 留給工具自己用的 `[tool.ai-workspace]` 表。`title` 寫了就要是
+非空的字串，否則 build 失敗（`[tool.ai-workspace].title must be a non-empty string`）；寫對了，CI log 那一行會印出來
+（`published wafer-history 「晶圓歷史查詢」 1.4.2 by …`）。
 
 **為什麼只能一個 script**：bundle 的啟動器就是去執行這個進入點。兩個會讓「AI 剛才到底跑了哪一個」
 變得沒有答案，零個則沒東西可跑。一個 package 可以有**很多 command**——那是下一節的事，不是靠多個
@@ -367,6 +379,8 @@ https://gitlab.example/api/v4/projects/<id>/jobs/artifacts/<ref>/raw/dist/tool.m
 | `format_version` | manifest 的格式版本。平台不認得就拒絕 |
 | `name` / `version` | 你的工具叫什麼、哪一版（`version` 純粹給人看） |
 | `author` | 誰發布的，取自你的 `[project].authors`。純顯示，跟信任無關；沒填就沒有這個欄位 |
+| `description` | 這支工具是什麼，取自你的 `[project].description`。純顯示；沒填就沒有這個欄位 |
+| `title` | 這支工具叫什麼，取自你的 `[tool.ai-workspace].title`。純顯示；沒填就沒有這個欄位 |
 | `commands` | 每個 command 的 name / description / JSON schema |
 | `builder` | **你是在哪個 builder image 裡 build 的**。平台拿它比對 ABI |
 | `python` / `arch` | 直譯器版本與 CPU 架構 |

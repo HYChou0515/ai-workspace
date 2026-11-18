@@ -749,6 +749,7 @@ def make_host_app(
                 "version": tool.version,
                 "author": tool.author,
                 "description": tool.description,
+                "title": tool.title,
                 "stale": tool.stale,
                 "commands": [
                     {

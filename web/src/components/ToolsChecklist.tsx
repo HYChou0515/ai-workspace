@@ -158,8 +158,10 @@ export function ToolsChecklist({
               <div
                 style={{
                   display: "flex",
+                  flexWrap: "wrap",
                   alignItems: "center",
                   gap: 10,
+                  rowGap: 2,
                   padding: "6px 6px",
                   borderRadius: "var(--radius-btn)",
                   fontSize: pxToRem(13),
@@ -170,6 +172,7 @@ export function ToolsChecklist({
                   type="button"
                   data-testid={`tool-group-header-${group.id}`}
                   aria-expanded={open}
+                  aria-describedby={group.description ? descId(group.id) : undefined}
                   title={group.id === BUILTIN_GROUP ? label : `${group.id} · ${label}`}
                   onClick={() => setManual((m) => ({ ...m, [group.id]: !open }))}
                   style={{
@@ -211,6 +214,14 @@ export function ToolsChecklist({
                   state={state}
                   onPick={(next) => onChange(withGroupState(shownFold, prefs, next))}
                 />
+                {group.description ? (
+                  <SupportingText
+                    id={descId(group.id)}
+                    testId={`tool-group-desc-${group.id}`}
+                    text={group.description}
+                    style={{ flexBasis: "100%", paddingLeft: "calc(1em + 6px)" }}
+                  />
+                ) : null}
               </div>
               {open
                 ? rows.map((tool) => (
@@ -287,7 +298,10 @@ function ToolRow({
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ display: "flex", alignItems: "baseline", gap: 6, minWidth: 0 }}>
           <div
-            title={tool.package ? `${tool.package} · ${tool.label}` : tool.label}
+            // The id rides along on hover once `package` is the author's
+            // title (docs/plan-tool-title.md D8) — whoever knows the tool by
+            // its id can still find it.
+            title={tool.package ? `${tool.key} · ${tool.package} · ${tool.label}` : tool.label}
             style={{
               fontWeight: 500,
               overflow: "hidden",
@@ -326,6 +340,11 @@ function ToolRow({
             </div>
           ) : null}
         </div>
+        {/* A row that IS its tool (no fold header above it) says what the tool
+            is itself; inside a fold the header already does (D8, review 1). */}
+        {!indent && tool.package_description ? (
+          <SupportingText testId={`tool-row-desc-${tool.key}`} text={tool.package_description} />
+        ) : null}
         <div
           title={tool.unavailable ?? detail}
           style={{
@@ -415,6 +434,45 @@ function TriState({
       ))}
     </div>
   );
+}
+
+/** Material 3 list item supporting text (docs/plan-tool-title.md D8): a
+ * step smaller and lighter than the headline, at most two lines (the
+ * three-line item), the whole of it on hover. */
+function SupportingText({
+  id,
+  testId,
+  text,
+  style,
+}: {
+  id?: string;
+  testId: string;
+  text: string;
+  style?: React.CSSProperties;
+}) {
+  return (
+    <div
+      id={id}
+      data-testid={testId}
+      title={text}
+      style={{
+        fontSize: pxToRem(12),
+        color: "var(--text-paper-d)",
+        display: "-webkit-box",
+        WebkitBoxOrient: "vertical",
+        WebkitLineClamp: 2,
+        overflow: "hidden",
+        ...style,
+      }}
+    >
+      {text}
+    </div>
+  );
+}
+
+/** The id the fold header's button is described by (docs/plan-tool-title.md D8). */
+function descId(group: string): string {
+  return `tool-group-desc-${group}`;
 }
 
 function secondary(): React.CSSProperties {

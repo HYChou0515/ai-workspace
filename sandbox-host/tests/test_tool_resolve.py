@@ -579,3 +579,41 @@ def test_the_fallback_still_asks_whether_the_tool_is_admitted(tmp_path) -> None:
             ).resolve("wafer-history", _MANIFEST_URL)
     finally:
         monkey.undo()
+
+
+def test_a_resolved_tool_carries_its_title(tmp_path: Path) -> None:
+    data = _bundle()
+    wire = _Wire(manifest=_manifest(data, title="晶圓歷史查詢"), bundle=data)
+    resolver = _resolver(tmp_path, wire)
+
+    assert resolver.resolve("wafer-history", _MANIFEST_URL).title == "晶圓歷史查詢"
+
+
+def test_the_remembered_copy_keeps_what_the_tool_is_called(tmp_path: Path) -> None:
+    """docs/plan-tool-title.md: an outage is no reason for a tool to go back to
+    being shown by its id."""
+    data = _bundle()
+    wire = _Wire(manifest=_manifest(data, title="晶圓歷史查詢"), bundle=data)
+    resolver = _resolver(tmp_path, wire)
+    resolver.resolve("wafer-history", _MANIFEST_URL)
+
+    fallen_back = _resolver(tmp_path, _Wire()).resolve("wafer-history", _MANIFEST_URL)
+
+    assert fallen_back.stale is True
+    assert fallen_back.title == "晶圓歷史查詢"
+
+
+def test_a_note_written_before_titles_existed_still_falls_back(tmp_path: Path) -> None:
+    data = _bundle()
+    resolver = _resolver(tmp_path, _Wire(manifest=_manifest(data), bundle=data))
+    resolver.resolve("wafer-history", _MANIFEST_URL)
+    note = tmp_path / "last-known-good.json"
+    body = json.loads(note.read_text())
+    for entry in body.values():
+        entry.pop("title", None)
+    note.write_text(json.dumps(body))
+
+    fallen_back = _resolver(tmp_path, _Wire()).resolve("wafer-history", _MANIFEST_URL)
+
+    assert fallen_back.stale is True
+    assert fallen_back.title is None

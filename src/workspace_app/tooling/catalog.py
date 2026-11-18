@@ -50,6 +50,10 @@ class ToolMeta:
     side by side can mean "this whole bundle" and "this one command of that
     bundle". Told only its command name, a reader cannot tell which — nor which
     row's switch governs the tool they saw in a chat card."""
+    package_description: str = ""
+    """What the package this unit is ONE COMMAND of says it is, or ``""``.
+    The picker folds a package's commands under one header, and the header is
+    where the package's own description is read (docs/plan-tool-title.md D8)."""
     group: str = BUILTIN_GROUP
     """Which fold of the picker this unit lives under: ``"builtin"`` for every
     built-in, otherwise the raw package id (a ``pkg:cmd`` command and its
@@ -70,6 +74,13 @@ def humanize_tool_label(name: str) -> str:
     overlays nicer / localized labels for curated tools on top of this."""
     words = [w for w in _WORD_SPLIT.split(name) if w]
     return " ".join(w[:1].upper() + w[1:] for w in words) or name
+
+
+def package_label(name: str, pkg: PackageInfo | None) -> str:
+    """What a package is CALLED on screen: its author's title, or — when they
+    gave none, or the package is unknown — its id made readable
+    (docs/plan-tool-title.md D4/D7). The one place that decides it."""
+    return pkg.title if pkg is not None and pkg.title else humanize_tool_label(name)
 
 
 def summarize_description(text: str) -> str:
@@ -120,7 +131,8 @@ def picker_units(app_tools: Sequence[str], packages: Sequence[PackageInfo]) -> l
                     entry,
                     humanize_tool_label(cmd_name),
                     summarize_description(cmd.description if cmd else ""),
-                    package=humanize_tool_label(pkg_name),
+                    package=package_label(pkg_name, pkg),
+                    package_description=pkg.description.strip() if pkg else "",
                     group=pkg_name,
                 )
             )
@@ -132,7 +144,7 @@ def picker_units(app_tools: Sequence[str], packages: Sequence[PackageInfo]) -> l
             # away anyway.
             granted = ", ".join(humanize_tool_label(c.name) for c in pkg.commands)
             desc = pkg.description.strip() or (f"Bundled tools: {granted}." if granted else "")
-            units.append(ToolMeta(entry, humanize_tool_label(entry), desc, group=entry))
+            units.append(ToolMeta(entry, package_label(entry, pkg), desc, group=entry))
         else:
             # Unknown entry (deploy without that package built) — still show it so
             # the user can toggle it; no description available.

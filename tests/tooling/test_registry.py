@@ -497,3 +497,18 @@ def test_a_bundle_that_says_nothing_about_itself_still_reads_as_a_sentence():
     (tool,) = build_function_tools([pkg], allowed=["rca-tools"])
 
     assert tool.description == "Fetch.\n\nFrom the `rca-tools` tool bundle."
+
+
+def test_the_ai_reads_the_tool_by_its_title_and_its_id():
+    """docs/plan-tool-title.md D9: the title the person sees, beside the id the
+    tool's commands are named by."""
+    pkg = PackageInfo(
+        name="rca-tools",
+        install_dir="../.tools/rca-tools",
+        commands=(CommandInfo("data-fetch", "Fetch.", {"type": "object"}),),
+        title="SMT 量測分析",
+    )
+
+    (tool,) = build_function_tools([pkg], allowed=["rca-tools"])
+
+    assert tool.description == "Fetch.\n\nFrom the 「SMT 量測分析」 tool bundle (`rca-tools`)."

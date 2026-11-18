@@ -101,6 +101,10 @@ class ItemToolState(BaseModel):
     Without it two rows can read as peers while one of them is a part of the
     other, and a command seen in a chat card cannot be traced to the switch
     that governs it."""
+    package_description: str = ""
+    """What the package this row is ONE COMMAND of says it is (its author's
+    ``[project].description``), or ``""``. Shown under the fold's header,
+    which is named by ``package`` (docs/plan-tool-title.md D8)."""
     group: str = BUILTIN_GROUP
     """Which fold of the picker this row lives under: ``"builtin"`` for every
     built-in, otherwise the raw package id — a ``pkg:cmd`` command and its
@@ -374,6 +378,7 @@ def _row(
         pref=pref,
         effective=effective,
         package=unit.package,
+        package_description=unit.package_description,
         group=unit.group,
         external=provider in declared,
         version=prov.version if prov else None,

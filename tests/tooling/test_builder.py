@@ -48,12 +48,13 @@ def _source(
     version: str = "1.4.2",
     authors: str = "",
     description: str = "",
+    tool_table: str = "",
 ) -> Path:
     src = tmp_path / "src-tree"
     (src / "src").mkdir(parents=True)
     (src / "pyproject.toml").write_text(
         f'[project]\nname = "{name}"\nversion = "{version}"\n{authors}{description}'
-        f'\n[project.scripts]\n{name} = "pkg.cli:main"\n'
+        f'\n[project.scripts]\n{name} = "pkg.cli:main"\n{tool_table}'
     )
     (src / "uv.lock").write_text("# pinned")
     return src
@@ -176,6 +177,48 @@ def test_an_author_who_describes_nothing_publishes_a_manifest_that_says_nothing(
     )
 
     assert manifest.description is None
+
+
+def _build_titled(tmp_path: Path, tool_table: str) -> Manifest:
+    return build_artifact(
+        source=_source(tmp_path, tool_table=tool_table),
+        out=tmp_path / "dist",
+        builder_id=_BUILDER,
+        build_bundle=_fake_bundle({"trend": "t"}),
+        smoke_check=lambda _dist: None,
+    )
+
+
+def test_build_artifact_publishes_the_title_the_author_gives_their_tool(tmp_path: Path) -> None:
+    """docs/plan-tool-title.md D1: PEP 621 has no title, so it lives in the
+    `[tool.<name>]` table PEP 518 keeps for tools — in the same file as the
+    version and the description, which is the file an author edits to release."""
+    manifest = _build_titled(tmp_path, '\n[tool.ai-workspace]\ntitle = "  晶圓歷史查詢 "\n')
+
+    assert manifest.title == "晶圓歷史查詢"
+    published = parse_manifest((tmp_path / "dist" / MANIFEST_NAME).read_bytes())
+    assert published.title == "晶圓歷史查詢"
+
+
+def test_an_author_who_gives_no_title_publishes_a_manifest_without_one(tmp_path: Path) -> None:
+    """D4: every tool already published has none, and is just as usable."""
+    manifest = _build_titled(tmp_path, "\n[tool.ai-workspace]\n")
+
+    assert manifest.title is None
+    body = json.loads((tmp_path / "dist" / MANIFEST_NAME).read_text())
+    assert "title" not in body
+
+
+@pytest.mark.parametrize(
+    "table",
+    ['title = ""', 'title = "   "', "title = 3", "title = []"],
+    ids=["empty", "blank", "number", "list"],
+)
+def test_a_title_that_is_not_text_fails_the_authors_build(tmp_path: Path, table: str) -> None:
+    """D5: a title written wrong is not a title left out — publishing it as
+    nothing would be silence the author never sees."""
+    with pytest.raises(BuildError, match=r"\.title must be a non-empty string"):
+        _build_titled(tmp_path, f"\n[tool.ai-workspace]\n{table}\n")
 
 
 # ── #763: the author's `env.json` has to reach the MANIFEST ──────────────
@@ -671,6 +714,17 @@ def test_build_tool_names_the_author_in_the_ci_log(tmp_path, monkeypatch, capsys
     assert "note:" not in out
 
 
+def test_build_tool_names_the_title_in_the_ci_log(tmp_path, monkeypatch, capsys):
+    """The author's own build is the first place the title is shown."""
+    published = replace(_stub_manifest(), title="晶圓歷史查詢")
+    monkeypatch.setattr(builder_mod, "build_artifact", lambda **kw: published)
+    monkeypatch.setenv("TOOL_BUILDER_ID", _BUILDER)
+
+    assert main(["build", str(tmp_path / "src"), str(tmp_path / "dist")]) == 0
+
+    assert "「晶圓歷史查詢」" in capsys.readouterr().out
+
+
 def test_build_tool_says_how_to_add_a_missing_author(tmp_path, monkeypatch, capsys):
     """Nothing refuses a build over this field, so without a word here an
     author who mistyped the table would never learn that it did not publish."""
@@ -897,7 +951,9 @@ def signing(monkeypatch):
     monkeypatch.setattr(grant_mod, "TRUSTED_KEYS", {"alice": public})
     # Small enough that a few kilobytes of random bytes exceed it. The real
     # number is pinned in test_grant.py, against the figure the guide quotes.
-    monkeypatch.setattr(grant_mod, "DEFAULT_MAX_BYTES", 4096)
+    # Above a bare bundle (with its `about.json`), far below the 20KB of random
+    # bytes the over-limit tests pack.
+    monkeypatch.setattr(grant_mod, "DEFAULT_MAX_BYTES", 8192)
     return private
 
 
@@ -1088,3 +1144,39 @@ def test_a_relative_symlink_out_of_the_bundle_fails_the_build(tmp_path: Path) ->
 
     with pytest.raises(BuildError, match="escape"):
         builder_mod.pack_bundle(bundle)
+
+
+def test_a_tool_table_that_is_not_a_table_fails_the_authors_build(tmp_path: Path) -> None:
+    """D5 again: `ai-workspace = "…"` is a title in the wrong shape, not none."""
+    with pytest.raises(BuildError, match=r"\[tool\.ai-workspace\] must be a table"):
+        _build_titled(tmp_path, '\n[tool]\nai-workspace = "晶圓歷史查詢"\n')
+
+
+def test_the_bundle_tells_its_mcp_face_who_it_is(tmp_path: Path) -> None:
+    """docs/plan-tool-title.md D10: the MCP adapter runs inside the bundle and
+    never sees the manifest, so who the tool is has to travel in the bundle."""
+    _build_titled(tmp_path, '\n[tool.ai-workspace]\ntitle = "晶圓歷史查詢"\n')
+
+    with tarfile.open(tmp_path / "dist" / BUNDLE_NAME) as tar:
+        member = tar.extractfile("about.json")
+        assert member is not None
+        about = json.loads(member.read().decode("utf-8"))
+    assert about == {"name": "wafer-history", "version": "1.4.2", "title": "晶圓歷史查詢"}
+
+
+def test_a_tool_key_that_is_not_a_table_fails_the_build_with_one_line(tmp_path: Path) -> None:
+    """Review round 1: `tool = "x"` raised AttributeError — a traceback in the
+    author's CI log instead of `build failed:`."""
+    source = _source(tmp_path)
+    pyproject = source / "pyproject.toml"
+    pyproject.write_text('tool = "x"\n' + pyproject.read_text())
+
+    with pytest.raises(BuildError, match=r"\[tool\] must be a table"):
+        read_project(source)
+
+
+def test_a_title_on_more_than_one_line_fails_the_authors_build(tmp_path: Path) -> None:
+    """Review round 1: a title is one line — the panel, the CI log line and
+    the AI's tool description each read it as one."""
+    with pytest.raises(BuildError, match="must be one line"):
+        _build_titled(tmp_path, '\n[tool.ai-workspace]\ntitle = "a\\nb"\n')

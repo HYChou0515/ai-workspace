@@ -14,7 +14,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from workspace_app.tooling.mcp_server import handle, load_tools
+from workspace_app.tooling.mcp_server import handle, load_about, load_tools
 
 
 def _bundle(tmp_path: Path) -> Path:
@@ -207,3 +207,95 @@ def test_the_timeout_reaches_the_agent_as_the_platform_words_it(tmp_path: Path) 
 
     assert reply is not None
     assert "time limit" in reply["result"]["content"][0]["text"]
+
+
+# ── docs/plan-tool-title.md D10: who the server is ─────────────────────────
+
+_ABOUT = {
+    "name": "wafer-history",
+    "version": "1.4.2",
+    "title": "晶圓歷史查詢",
+    "description": "晶圓路徑與良率歷史查詢。",
+}
+
+
+def _initialize(version: str | None, about: dict | None = _ABOUT) -> dict:
+    params = {"protocolVersion": version, "capabilities": {}} if version else {}
+    msg = {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": params}
+    reply = handle(msg, tools=[], invoke=None, about=about)
+    assert reply is not None
+    return reply["result"]
+
+
+def test_a_current_client_reads_the_tools_title_and_description() -> None:
+    """`serverInfo.title` exists from MCP 2025-06-18 (`Implementation extends
+    BaseMetadata`); `InitializeResult.instructions` already in 2024-11-05."""
+    result = _initialize("2025-06-18")
+
+    assert result["protocolVersion"] == "2025-06-18"
+    assert result["serverInfo"] == {
+        "name": "wafer-history",
+        "version": "1.4.2",
+        "title": "晶圓歷史查詢",
+    }
+    assert result["instructions"] == "晶圓路徑與良率歷史查詢。"
+
+
+def test_an_older_client_gets_its_own_version_and_nothing_it_does_not_know() -> None:
+    """Lifecycle: a version the server supports MUST be answered with itself.
+    2024-11-05 has no `Implementation.title` — but it does have `instructions`
+    (review round 1: the schema says so; an earlier claim otherwise was wrong)."""
+    result = _initialize("2024-11-05")
+
+    assert result["protocolVersion"] == "2024-11-05"
+    assert result["serverInfo"] == {"name": "wafer-history", "version": "1.4.2"}
+    assert result["instructions"] == "晶圓路徑與良率歷史查詢。"
+
+
+def test_a_version_this_server_does_not_speak_is_answered_with_one_the_client_can_take() -> None:
+    """2025-03-26 adds JSON-RPC batching, which this server does not serve, so
+    it is not claimed. The lifecycle rule is to answer with another supported
+    version; a client asking for 2025-03-26 does not know 2025-06-18 and may
+    disconnect on it, while 2024-11-05 is what it accepted before this server
+    learnt any other (review round 1). So: the newest supported version no
+    newer than the one asked for — and the latest when none is."""
+    assert _initialize("2025-03-26")["protocolVersion"] == "2024-11-05"
+    assert _initialize("2026-01-01")["protocolVersion"] == "2025-06-18"
+    assert _initialize("1999-01-01")["protocolVersion"] == "2025-06-18"
+
+
+def test_initialize_with_params_that_are_not_an_object_still_answers() -> None:
+    msg = {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": [1]}
+    reply = handle(msg, tools=[], invoke=None, about=_ABOUT)
+
+    assert reply is not None
+    assert reply["result"]["protocolVersion"] == "2024-11-05"
+
+
+def test_a_client_that_names_no_version_gets_what_this_server_always_answered() -> None:
+    """Review round 1 (regression): before this server knew two versions it
+    answered 2024-11-05 to everyone; a client that names none keeps that."""
+    assert _initialize(None)["protocolVersion"] == "2024-11-05"
+
+
+def test_a_tool_that_gave_no_title_or_description_says_neither() -> None:
+    about = {"name": "wafer-history", "version": "1.4.2"}
+    result = _initialize("2025-06-18", about)
+
+    assert result["serverInfo"] == {"name": "wafer-history", "version": "1.4.2"}
+    assert "instructions" not in result
+
+
+def test_a_bundle_built_before_titles_still_names_a_server() -> None:
+    """No `about.json`: what every bundle in the field answered before."""
+    result = _initialize("2025-06-18", None)
+
+    assert result["serverInfo"] == {"name": "tool-bundle", "version": "1"}
+
+
+def test_about_is_read_from_the_bundle_and_absent_when_it_is(tmp_path: Path) -> None:
+    bundle = _bundle(tmp_path)
+    assert load_about(bundle) is None
+
+    (bundle / "about.json").write_text(json.dumps(_ABOUT), encoding="utf-8")
+    assert load_about(bundle) == _ABOUT

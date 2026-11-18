@@ -168,6 +168,9 @@ class Project:
     description: str | None = None
     """What the tool IS, from ``[project].description``. ``None`` when they
     wrote none — encouraged, never required, exactly like the author."""
+    title: str | None = None
+    """What the tool is CALLED, from ``[tool.ai-workspace].title``
+    (docs/plan-tool-title.md). ``None`` when they wrote none."""
 
 
 def _read_author(project: dict[str, Any]) -> str | None:
@@ -270,7 +273,38 @@ def read_project(source: Path) -> Project:
         version=str(version),
         author=_read_author(project),
         description=str(described) if described else None,
+        title=_read_title(body),
     )
+
+
+#: The `[tool.<name>]` table PEP 518 keeps for a tool's own settings — ours.
+TOOL_TABLE = "ai-workspace"
+
+
+def _read_title(body: dict[str, Any]) -> str | None:
+    """``[tool.ai-workspace].title``, stripped, or ``None`` when not written.
+
+    PEP 621 has no title, so it lives in the table PEP 518 keeps for tools
+    (docs/plan-tool-title.md D1). Unlike the author, a title written WRONG is
+    refused (D5): the author meant to name their tool, and publishing nothing
+    in its place is silence only they could have caught — this build is the
+    one moment they are looking."""
+    tools = body.get("tool", {})
+    if not isinstance(tools, dict):
+        raise BuildError(f"[tool] must be a table, got {tools!r}")
+    table = tools.get(TOOL_TABLE, {})
+    if not isinstance(table, dict):
+        raise BuildError(f"[tool.{TOOL_TABLE}] must be a table, got {table!r}")
+    if "title" not in table:
+        return None
+    title = table["title"]
+    if not isinstance(title, str) or not title.strip():
+        raise BuildError(f"[tool.{TOOL_TABLE}].title must be a non-empty string, got {title!r}")
+    # One line: the panel, the CI log line and the AI's tool description each
+    # read it as one (review round 1).
+    if "\n" in title.strip() or "\r" in title.strip():
+        raise BuildError(f"[tool.{TOOL_TABLE}].title must be one line, got {title!r}")
+    return title.strip()
 
 
 def read_commands(bundle: Path) -> tuple[CommandSpec, ...]:
@@ -390,13 +424,22 @@ exec "$py" "$here/mcp_server.py" "$here"
 """
 
 
-def _inject_mcp(bundle: Path) -> None:
+def _inject_mcp(bundle: Path, project: Project) -> None:
     """Give the bundle its MCP face.
 
     Injected rather than written by the author: the 3-stage contract already
     carries everything MCP asks for, so one adapter serves every tool and
-    nobody has to learn a second protocol to publish one."""
+    nobody has to learn a second protocol to publish one.
+
+    `about.json` says who the tool is (docs/plan-tool-title.md D10): the
+    adapter runs inside the bundle and never sees the manifest."""
     shutil.copy2(Path(__file__).with_name("mcp_server.py"), bundle / "mcp_server.py")
+    about = {"name": project.name, "version": project.version}
+    if project.title:
+        about["title"] = project.title
+    if project.description:
+        about["description"] = project.description
+    (bundle / "about.json").write_text(json.dumps(about, ensure_ascii=False), encoding="utf-8")
 
     # The bundle ships exactly one minor version; take it from the interpreter
     # that is actually there rather than from ours, which may differ.
@@ -480,7 +523,7 @@ def build_artifact(
     with tempfile.TemporaryDirectory() as tmp:
         bundle = Path(tmp) / name
         build_bundle(name=name, source=source, dst=bundle)
-        _inject_mcp(bundle)
+        _inject_mcp(bundle, project)
         if sealed is not None:
             # Only ciphertext: the host opens it for this tool's process, and
             # its tree is readable by the tool group alone (P2).
@@ -505,6 +548,7 @@ def build_artifact(
         grant=token,
         author=project.author,
         description=project.description,
+        title=project.title,
         env=env_needs,
     )
     (out / BUNDLE_NAME).write_bytes(packed)
@@ -626,8 +670,9 @@ def main(argv: list[str]) -> int:
             print(f"build failed: {exc}", file=sys.stderr)
             return 1
         by = f" by {manifest.author}" if manifest.author else ""
+        titled = f" 「{manifest.title}」" if manifest.title else ""
         print(
-            f"published {manifest.name} {manifest.version}{by} "
+            f"published {manifest.name}{titled} {manifest.version}{by} "
             f"({len(manifest.commands)} command(s), sha256={manifest.bundle.sha256})"
         )
         if not manifest.author:

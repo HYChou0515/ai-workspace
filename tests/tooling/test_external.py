@@ -407,3 +407,24 @@ def test_drift_is_the_one_rule_for_same_different_missing_and_unknown() -> None:
         "absent": Drift(missing=True),
     }
     assert drift(ext, None) == {}  # unknown lists nothing (D4)
+
+
+async def test_the_package_carries_what_the_tool_is_called() -> None:
+    """docs/plan-tool-title.md: the title arrives on the package, beside the
+    description, so every reader of a package can name the tool."""
+    answer = {
+        "tools": {"wafer-history": {**_ANSWER["tools"]["wafer-history"], "title": "晶圓歷史查詢"}},
+        "refused": {},
+    }
+
+    external = await resolve_external_tools(_Host(answer), {"wafer-history": "https://g/m"})
+
+    (pkg,) = external.packages
+    assert pkg.title == "晶圓歷史查詢"
+
+
+async def test_a_tool_with_no_title_leaves_it_empty() -> None:
+    external = await resolve_external_tools(_Host(_ANSWER), {"wafer-history": "https://g/m"})
+
+    (pkg,) = external.packages
+    assert pkg.title == ""

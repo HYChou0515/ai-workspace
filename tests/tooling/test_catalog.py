@@ -168,3 +168,41 @@ def test_every_picker_unit_names_the_group_the_picker_folds_it_under():
         "data-fetch",  # a command of a package this deploy did not build
         "mystery",  # an unknown bare entry is its own group
     ]
+
+
+def _titled(**over: object) -> PackageInfo:
+    base: dict = {
+        "name": "rca-tools",
+        "commands": (_cmd("spc", "SPC chart"), _cmd("pareto", "Pareto chart")),
+        "install_dir": "../.tools/rca-tools",
+        "title": "SMT 量測分析",
+        "description": "SMT 產線的量測資料擷取與初步分析。",
+    }
+    base.update(over)
+    return PackageInfo(**base)
+
+
+def test_a_tool_with_a_title_is_called_by_it_in_the_picker() -> None:
+    """docs/plan-tool-title.md D7: the title, not the id with its dashes taken
+    out — for the command rows' `package` and for a whole-package row alike."""
+    cmd_row, whole = picker_units(["rca-tools:spc", "rca-tools"], packages=[_titled()])
+
+    assert cmd_row.package == "SMT 量測分析"
+    assert whole.label == "SMT 量測分析"
+
+
+def test_a_tool_without_a_title_is_still_called_by_its_id() -> None:
+    """D4: every tool published before the title existed."""
+    cmd_row, whole = picker_units(["rca-tools:spc", "rca-tools"], packages=[_titled(title="")])
+
+    assert cmd_row.package == "Rca Tools"
+    assert whole.label == "Rca Tools"
+
+
+def test_a_command_row_carries_what_its_tool_is() -> None:
+    """The picker folds a tool's commands under one header; the header is where
+    the tool's own description is read (D8), and the rows are all it gets."""
+    (cmd_row,) = picker_units(["rca-tools:spc"], packages=[_titled()])
+
+    assert cmd_row.package_description == "SMT 產線的量測資料擷取與初步分析。"
+    assert cmd_row.description == "SPC chart"

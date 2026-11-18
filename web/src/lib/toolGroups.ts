@@ -18,6 +18,9 @@ export type ToolGroup = {
    * takes the label its rows already carry (`package` on a command row, the
    * row's own label on a whole-package row). */
   label: string;
+  /** docs/plan-tool-title.md D8: the package's own description, read under the
+   * header — "" for the builtin fold and for a tool that says nothing. */
+  description: string;
   tools: ItemToolState[];
 };
 
@@ -34,7 +37,7 @@ export function groupsOf(tools: ItemToolState[]): ToolGroup[] {
     const id = tool.group ?? tool.key;
     let g = byId.get(id);
     if (!g) {
-      g = { id, label: labelOf(tool, id), tools: [] };
+      g = { id, label: labelOf(tool, id), description: tool.package_description ?? "", tools: [] };
       byId.set(id, g);
     }
     g.tools.push(tool);
