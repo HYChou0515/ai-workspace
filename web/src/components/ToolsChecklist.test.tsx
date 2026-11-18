@@ -432,3 +432,37 @@ describe("ToolsChecklist folds — what a search change restores", () => {
     expect(screen.getByTestId("tool-group-header-builtin")).toHaveAttribute("aria-expanded", "false");
   });
 });
+
+// docs/plan-tool-title.md D8: a tool's fold header is a Material 3 list item —
+// its title as the headline, its author's description as supporting text below.
+describe("ToolsChecklist names a tool by its title and says what it is", () => {
+  const TITLED: ItemToolState[] = [
+    row({ key: "rca-tools:spc", group: "rca-tools", label: "Spc", package: "SMT 量測分析", package_description: "SMT 產線的量測資料擷取與初步分析。" }),
+    row({ key: "rca-tools:pareto", group: "rca-tools", label: "Pareto", package: "SMT 量測分析", package_description: "SMT 產線的量測資料擷取與初步分析。" }),
+  ];
+
+  it("shows the description under the title, described-by the header button", () => {
+    render(<ToolsChecklist tools={TITLED} prefs={{}} onChange={vi.fn()} />);
+    const header = screen.getByTestId("tool-group-header-rca-tools");
+    expect(header).toHaveTextContent("SMT 量測分析");
+    const desc = screen.getByTestId("tool-group-desc-rca-tools");
+    expect(desc).toHaveTextContent("SMT 產線的量測資料擷取與初步分析。");
+    // the header's name stays the title; the description is read as its description
+    expect(header).not.toHaveTextContent("SMT 產線");
+    expect(header).toHaveAttribute("aria-describedby", desc.id);
+  });
+
+  // The two-line clamp itself is checked in a real browser (the demo reads its
+  // computed style): happy-dom drops `display: -webkit-box` and `line-clamp`.
+  it("keeps the whole description a hover away", () => {
+    render(<ToolsChecklist tools={TITLED} prefs={{}} onChange={vi.fn()} />);
+    const desc = screen.getByTestId("tool-group-desc-rca-tools");
+    expect(desc).toHaveAttribute("title", "SMT 產線的量測資料擷取與初步分析。");
+  });
+
+  it("a tool that describes nothing draws no empty line", () => {
+    render(<ToolsChecklist tools={GROUPED} prefs={{}} onChange={vi.fn()} />);
+    expect(screen.queryByTestId("tool-group-desc-rca-tools")).not.toBeInTheDocument();
+    expect(screen.getByTestId("tool-group-header-rca-tools")).not.toHaveAttribute("aria-describedby");
+  });
+});

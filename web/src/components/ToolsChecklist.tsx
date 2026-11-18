@@ -158,8 +158,10 @@ export function ToolsChecklist({
               <div
                 style={{
                   display: "flex",
+                  flexWrap: "wrap",
                   alignItems: "center",
                   gap: 10,
+                  rowGap: 2,
                   padding: "6px 6px",
                   borderRadius: "var(--radius-btn)",
                   fontSize: pxToRem(13),
@@ -170,6 +172,7 @@ export function ToolsChecklist({
                   type="button"
                   data-testid={`tool-group-header-${group.id}`}
                   aria-expanded={open}
+                  aria-describedby={group.description ? descId(group.id) : undefined}
                   title={group.id === BUILTIN_GROUP ? label : `${group.id} · ${label}`}
                   onClick={() => setManual((m) => ({ ...m, [group.id]: !open }))}
                   style={{
@@ -211,6 +214,28 @@ export function ToolsChecklist({
                   state={state}
                   onPick={(next) => onChange(withGroupState(shownFold, prefs, next))}
                 />
+                {group.description ? (
+                  // Material 3 list item: the title is the headline, this the
+                  // supporting text — a step smaller and lighter, at most two
+                  // lines (the three-line item), the whole of it on hover.
+                  <div
+                    id={descId(group.id)}
+                    data-testid={`tool-group-desc-${group.id}`}
+                    title={group.description}
+                    style={{
+                      flexBasis: "100%",
+                      paddingLeft: "calc(1em + 6px)",
+                      fontSize: pxToRem(12),
+                      color: "var(--text-paper-d)",
+                      display: "-webkit-box",
+                      WebkitBoxOrient: "vertical",
+                      WebkitLineClamp: 2,
+                      overflow: "hidden",
+                    }}
+                  >
+                    {group.description}
+                  </div>
+                ) : null}
               </div>
               {open
                 ? rows.map((tool) => (
@@ -415,6 +440,11 @@ function TriState({
       ))}
     </div>
   );
+}
+
+/** The id the fold header's button is described by (docs/plan-tool-title.md D8). */
+function descId(group: string): string {
+  return `tool-group-desc-${group}`;
 }
 
 function secondary(): React.CSSProperties {

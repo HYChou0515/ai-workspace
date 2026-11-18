@@ -402,6 +402,10 @@ export type ItemToolState = {
    * granularity it chose, so without this two rows read as peers while one is
    * part of the other. */
   package?: string | null;
+  /** docs/plan-tool-title.md D8: what the package this row is ONE COMMAND of
+   * says it is (its author's `[project].description`), or "" — read under the
+   * fold's header, which `package` names. */
+  package_description?: string;
   /** The fold the picker groups this row under (plan-tools-picker-groups):
    * `"builtin"` for every built-in, otherwise the raw package id — a `pkg:cmd`
    * command and its whole-package row share it. Server-named, because a
