@@ -165,6 +165,7 @@ def _package(name: str, described: dict[str, Any]) -> PackageInfo:
         # at the picker and a log line), so anything the model is expected to be
         # able to say about a tool has to arrive here. Absent stays absent.
         description=str(described.get("description") or ""),
+        title=str(described.get("title") or ""),
         version=str(described.get("version") or ""),
         author=str(described.get("author") or ""),
         secret_env=tuple(

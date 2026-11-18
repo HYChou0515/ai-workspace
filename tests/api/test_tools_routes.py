@@ -568,3 +568,25 @@ def test_a_declared_and_granted_third_party_tool_is_not_warned_about(
 
     assert "wafer-history:trend" in {r["key"] for r in rows}  # it IS offered
     assert not [r for r in caplog.records if "not in tools[]" in r.getMessage()]
+
+
+def test_a_third_party_tool_is_called_by_its_title_and_carries_its_description(
+    harness: Harness, monkeypatch
+):
+    """docs/plan-tool-title.md D7/D8, through the route the picker reads: the
+    fold is named by the title and its header reads the tool's description."""
+    from dataclasses import replace
+
+    iid = register_rca_item(harness.spec)
+    _declaring(monkeypatch, "wafer-history")
+    resolved = _resolved()
+    (pkg,) = resolved.packages
+    titled = replace(pkg, title="晶圓歷史查詢", description="晶圓路徑與良率歷史查詢。")
+    _resolving(monkeypatch, replace(resolved, packages=(titled,)))
+
+    rows = harness.client.get(f"/a/rca/items/{iid}/tools").json()["tools"]
+
+    row = {r["key"]: r for r in rows}["wafer-history:trend"]
+    assert row["package"] == "晶圓歷史查詢"
+    assert row["package_description"] == "晶圓路徑與良率歷史查詢。"
+    assert row["group"] == "wafer-history"
