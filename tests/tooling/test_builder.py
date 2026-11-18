@@ -951,7 +951,9 @@ def signing(monkeypatch):
     monkeypatch.setattr(grant_mod, "TRUSTED_KEYS", {"alice": public})
     # Small enough that a few kilobytes of random bytes exceed it. The real
     # number is pinned in test_grant.py, against the figure the guide quotes.
-    monkeypatch.setattr(grant_mod, "DEFAULT_MAX_BYTES", 4096)
+    # Above a bare bundle (with its `about.json`), far below the 20KB of random
+    # bytes the over-limit tests pack.
+    monkeypatch.setattr(grant_mod, "DEFAULT_MAX_BYTES", 8192)
     return private
 
 
@@ -1148,3 +1150,15 @@ def test_a_tool_table_that_is_not_a_table_fails_the_authors_build(tmp_path: Path
     """D5 again: `ai-workspace = "…"` is a title in the wrong shape, not none."""
     with pytest.raises(BuildError, match=r"\[tool\.ai-workspace\] must be a table"):
         _build_titled(tmp_path, '\n[tool]\nai-workspace = "晶圓歷史查詢"\n')
+
+
+def test_the_bundle_tells_its_mcp_face_who_it_is(tmp_path: Path) -> None:
+    """docs/plan-tool-title.md D10: the MCP adapter runs inside the bundle and
+    never sees the manifest, so who the tool is has to travel in the bundle."""
+    _build_titled(tmp_path, '\n[tool.ai-workspace]\ntitle = "晶圓歷史查詢"\n')
+
+    with tarfile.open(tmp_path / "dist" / BUNDLE_NAME) as tar:
+        member = tar.extractfile("about.json")
+        assert member is not None
+        about = json.loads(member.read().decode("utf-8"))
+    assert about == {"name": "wafer-history", "version": "1.4.2", "title": "晶圓歷史查詢"}

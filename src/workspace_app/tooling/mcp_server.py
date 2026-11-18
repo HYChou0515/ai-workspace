@@ -26,10 +26,18 @@ import sys
 from collections.abc import Callable
 from pathlib import Path
 
-#: The revision of MCP this speaks. Only `initialize`, `tools/list` and
-#: `tools/call` are implemented — a tool bundle has no resources or prompts to
-#: offer, and answering methods we do not serve would be a lie.
-PROTOCOL_VERSION = "2024-11-05"
+#: The revisions of MCP this speaks, latest first. Only `initialize`,
+#: `tools/list` and `tools/call` are implemented — a tool bundle has no
+#: resources or prompts to offer, and answering methods we do not serve would
+#: be a lie. 2025-03-26 is left out on purpose: it adds JSON-RPC batching, which
+#: this server does not serve (2025-06-18 removed it again).
+SUPPORTED_VERSIONS = ("2025-06-18", "2024-11-05")
+PROTOCOL_VERSION = SUPPORTED_VERSIONS[0]
+
+#: Who the tool is, written by the build beside the bundle's other metadata
+#: (docs/plan-tool-title.md D10): the adapter runs inside the bundle and never
+#: sees the manifest.
+ABOUT_FILE = "about.json"
 
 METHOD_NOT_FOUND = -32601
 
@@ -71,6 +79,41 @@ def load_tools(bundle: Path) -> list[dict]:
     return tools
 
 
+def load_about(bundle: Path) -> dict | None:
+    """``{name, version, title?, description?}`` from the bundle, or ``None``
+    for a bundle built before the build wrote it."""
+    path = bundle / ABOUT_FILE
+    if not path.exists():
+        return None
+    return json.loads(path.read_text("utf-8"))
+
+
+def _negotiate(requested: object) -> str:
+    """MCP lifecycle: a version the server supports MUST be answered with
+    itself; otherwise with another it supports — the latest."""
+    return requested if requested in SUPPORTED_VERSIONS else PROTOCOL_VERSION
+
+
+def _initialized(version: str, about: dict | None) -> dict:
+    if about is None:
+        # What every bundle built before `about.json` has always answered.
+        return {
+            "protocolVersion": version,
+            "capabilities": {"tools": {}},
+            "serverInfo": {"name": "tool-bundle", "version": "1"},
+        }
+    server = {"name": about["name"], "version": about["version"]}
+    result: dict = {"protocolVersion": version, "capabilities": {"tools": {}}, "serverInfo": server}
+    # Only what the agreed version defines: `Implementation.title` arrived in
+    # 2025-06-18, `InitializeResult.instructions` in 2025-03-26.
+    if version == "2025-06-18":
+        if about.get("title"):
+            server["title"] = about["title"]
+        if about.get("description"):
+            result["instructions"] = about["description"]
+    return result
+
+
 def _result(request_id: object, result: dict) -> dict:
     return {"jsonrpc": "2.0", "id": request_id, "result": result}
 
@@ -82,7 +125,9 @@ def _failed(request_id: object, text: str) -> dict:
     return _result(request_id, {"content": [{"type": "text", "text": text}], "isError": True})
 
 
-def handle(message: dict, tools: list[dict], invoke: Invoke | None) -> dict | None:
+def handle(
+    message: dict, tools: list[dict], invoke: Invoke | None, about: dict | None = None
+) -> dict | None:
     """Answer one JSON-RPC message, or None when none is owed."""
     method = message.get("method")
     request_id = message.get("id")
@@ -93,14 +138,8 @@ def handle(message: dict, tools: list[dict], invoke: Invoke | None) -> dict | No
         return None
 
     if method == "initialize":
-        return _result(
-            request_id,
-            {
-                "protocolVersion": PROTOCOL_VERSION,
-                "capabilities": {"tools": {}},
-                "serverInfo": {"name": "tool-bundle", "version": "1"},
-            },
-        )
+        requested = (message.get("params") or {}).get("protocolVersion")
+        return _result(request_id, _initialized(_negotiate(requested), about))
 
     if method == "tools/list":
         return _result(request_id, {"tools": tools})
@@ -161,6 +200,7 @@ def main(argv: list[str]) -> int:  # pragma: no cover - exercised by `handle`
     """Serve MCP over stdio for the bundle this file sits in."""
     bundle = Path(argv[0]).resolve() if argv else Path(__file__).resolve().parent
     tools = load_tools(bundle)
+    about = load_about(bundle)
     invoke = _launcher_invoke(bundle / "launch")
 
     for line in sys.stdin:
@@ -171,7 +211,7 @@ def main(argv: list[str]) -> int:  # pragma: no cover - exercised by `handle`
             message = json.loads(line)
         except ValueError:
             continue
-        reply = handle(message, tools, invoke)
+        reply = handle(message, tools, invoke, about)
         if reply is not None:
             print(json.dumps(reply), flush=True)
     return 0

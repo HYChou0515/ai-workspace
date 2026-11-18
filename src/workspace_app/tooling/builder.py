@@ -417,13 +417,22 @@ exec "$py" "$here/mcp_server.py" "$here"
 """
 
 
-def _inject_mcp(bundle: Path) -> None:
+def _inject_mcp(bundle: Path, project: Project) -> None:
     """Give the bundle its MCP face.
 
     Injected rather than written by the author: the 3-stage contract already
     carries everything MCP asks for, so one adapter serves every tool and
-    nobody has to learn a second protocol to publish one."""
+    nobody has to learn a second protocol to publish one.
+
+    `about.json` says who the tool is (docs/plan-tool-title.md D10): the
+    adapter runs inside the bundle and never sees the manifest."""
     shutil.copy2(Path(__file__).with_name("mcp_server.py"), bundle / "mcp_server.py")
+    about = {"name": project.name, "version": project.version}
+    if project.title:
+        about["title"] = project.title
+    if project.description:
+        about["description"] = project.description
+    (bundle / "about.json").write_text(json.dumps(about, ensure_ascii=False), encoding="utf-8")
 
     # The bundle ships exactly one minor version; take it from the interpreter
     # that is actually there rather than from ours, which may differ.
@@ -507,7 +516,7 @@ def build_artifact(
     with tempfile.TemporaryDirectory() as tmp:
         bundle = Path(tmp) / name
         build_bundle(name=name, source=source, dst=bundle)
-        _inject_mcp(bundle)
+        _inject_mcp(bundle, project)
         if sealed is not None:
             # Only ciphertext: the host opens it for this tool's process, and
             # its tree is readable by the tool group alone (P2).
