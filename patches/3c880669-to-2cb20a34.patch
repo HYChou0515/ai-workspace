@@ -1,0 +1,2656 @@
+diff --git a/docs/design-history.md b/docs/design-history.md
+index 830a79616..8a83f69df 100644
+--- a/docs/design-history.md
++++ b/docs/design-history.md
+@@ -42,6 +42,7 @@
+ | [plan-ext-ai.md](plan-ext-ai.md) | 問外部AI：AI 起草問題、人按「問外部AI」，小幫手在使用者的 Chrome 裡打開公司的網頁 AI、貼上、送出、等回答寫完帶回；網頁怎麼操作由公司寫的一個 Python 檔決定，打包進小幫手 |
+ | [plan-lookup-target-choice.md](plan-lookup-target-choice.md) | 請幫我查的搜尋目標由使用者選、AI 只建議（預設選第一個）；每個目標附一段給 AI 和人看的說明、可關掉「在新分頁自己開」；`url` 只要是網址含 `{q}`，交給小幫手的是填好的那段字串（小幫手當黑盒子）；推翻 plan-outside-lookup 的 http(s) 限制、plan-outside-helper 與 plan-ext-ai 的「小幫手固定用 Google／第一個」 |
+ | [plan-remove-ext-ai.md](plan-remove-ext-ai.md) | 拿掉「問外部AI」(`ask_ext_ai`):工具、卡片、小幫手的差事、`server.ext_ai_enabled` 全部拿掉——問 AI 和 Google 搜尋是同一件事,一種能力一個工具;每個搜尋目標自己的查詢長度上限(`max_words` / `max_cjk`,`0` = 不限),問網頁 AI 的目標設 `0` 就能整句問;推翻 plan-ext-ai |
++| [plan-tool-title.md](plan-tool-title.md) | 第三方工具的標題與描述:作者在 pyproject 寫 `[tool.ai-workspace] title`,描述沿用 `[project].description`;manifest 多一個選填 `title`(不升版);工具面板的工具標題列照 Material 3 畫成標題 + 描述兩行;沒寫的照舊用 id;MCP 的 `serverInfo` 也帶上 |
+ | [plan-tool-usage-stats.md](plan-tool-usage-stats.md) | 工具使用統計：管理者在 Diagnostics 看 AI 用了哪些工具、誰用、在哪個場合、失敗幾次、平均多久 |
+ | [plan-tools-picker-groups.md](plan-tools-picker-groups.md) | 工具挑選器依套件摺疊、內建工具一組、每組三態 |
+ | [plan-tool-on-demand-loading.md](plan-tool-on-demand-loading.md) | 工具按需載入：wire 的 tools 陣列就是目錄（名字＋100 字元描述＋空 schema），用到才載入完整 schema；載入與重試不入歷史 |
+diff --git a/docs/extending-the-platform.md b/docs/extending-the-platform.md
+index 50193385f..a5ddf64f6 100644
+--- a/docs/extending-the-platform.md
++++ b/docs/extending-the-platform.md
+@@ -1034,7 +1034,7 @@ DSL 的天花板(刻意收窄):
+   權限。
+ 
+ **共創與生命週期**(照搬 skill 模型):一個 `author-workflow` meta-skill 引導 AI 起草 DSL;一個
+-`save_workflow` tool 在寫入前**驗證**(schema、phase 一致、`tools` ⊆ profile 上限、capability 在
++`save_workflow` tool 在寫入前**驗證**(schema、phase 一致、`tools` ⊆ App 的 tool 清單、capability 在
+ 允許清單、`check` 格式)並把無效的 DSL **退回原因讓 AI 修**。它存進
+ `<workspace>/.workflows/<id>.json`(FileStore、item-local、live 讀,同名 **shadow** 掉 package
+ workflow,**不是** specstar resource)。FE 的 **Workflows 面板**(`WorkflowsModal`,從 workspace
+diff --git a/docs/migrations.md b/docs/migrations.md
+index a78dc323d..f602f01a4 100644
+--- a/docs/migrations.md
++++ b/docs/migrations.md
+@@ -3554,7 +3554,7 @@ Workflows 打開模型答錯格式的那次執行——執行結束後還留著
+ 
+ **還是舊版 image 時**：面板沒有硬碟欄位，也沒有 `PUT …/disk` 這條路由。
+ 
+-### 2026-11-12 · #1021 拿掉「問外部AI」(`ask_ext_ai`);搜尋目標各自的長度上限 {#pr-1021}
++### 2026-11-12 · 1f0056c8 · #1021 拿掉「問外部AI」(`ask_ext_ai`);搜尋目標各自的長度上限 {#pr-1021}
+ 
+ **設定** — 拿掉 `server.ext_ai_enabled`。
+ - `rollout 前`:設定檔裡有 `ext_ai_enabled` 這一行的,不管寫 `true` 還是 `false`,都要刪掉。為什麼:loader 拒絕
+@@ -3618,7 +3618,7 @@ AI 工具說明裡每個目標後面多了它的長度上限(沒設的寫 10 個
+ 
+ ---
+ 
+-### 2026-11-16 · #1024 第三方工具用自己的身分執行；工具自己的帳密不再寫在程式裡 {#pr-1024}
++### 2026-11-17 · 4b7459dc · #1024 第三方工具用自己的身分執行；工具自己的帳密不再寫在程式裡 {#pr-1024}
+ 
+ ⚠️ **要先在 staging 驗過**（清單在最後）：這次改的是 sandbox-host 怎麼執行第三方工具，單元測試證明不了核心真的這樣做。
+ 
+@@ -3678,6 +3678,61 @@ AI 工具說明裡每個目標後面多了它的長度上限(沒設的寫 10 個
+ **還是舊版 image 時**：host 舊、app 新——第三方工具照舊用沙盒身分執行（`tool` 被忽略），AI 仍讀得到工具檔案；
+ `"secret"` 的值 host 不會解開。app 舊、host 新——第三方工具 Permission denied（見上面的順序）。
+ 
++### 2026-11-18 · d3836d25 · #1026 第三方工具有自己的標題與描述 {#pr-1026}
++
++**設定** — 沒有。
++
++**資料** — 不用跑 migrate。已發布的工具沒有標題，照舊顯示 id 轉出來的字（`rca-tools` →「Rca Tools」），等作者發新版。
++
++**k8s · CI 側** — app 和 sandbox-host 照常重 build、部署；manifest、worker、probe 都沒改。
++- **builder 映像要重 build、發新 tag，請工具作者改用新 tag**（`rollout 後`）。**為什麼**：只有新 builder 會讀
++  `[tool.ai-workspace].title`，並把標題、描述寫進 bundle 給 MCP 用。**沒做的症狀**：作者寫了標題，build 照樣綠燈，
++  但 CI log 那一行沒印出標題，工具面板上還是 id。
++- **混用版本時**：舊 host 不把標題轉給 app，面板顯示 id，等 host 升完就好；舊 app 收到 host 多給的標題會略過。
++  新 builder 做的 manifest 多一個選填 `title`，舊 app／舊 host 讀它只是略過（`format_version` 沒升）。
++- **告訴工具作者**加標題（`rollout 後`、換好 builder tag 之後）：pyproject 加 `[tool.ai-workspace] title = "…"`、
++  `[project] description` 也請填（`docs/tool-authoring.md` §1）。**為什麼**：標題只有作者寫得出來，平台不會替他們補。
++  **沒做的症狀**：工具面板照舊用 id 轉出來的字（「Rca Tools」）當名字，描述那一行空著。
++
++**行為改變，沒有開關**：
++- 工具面板裡，工具的名字改寫作者的標題（沒有就照舊用 id 轉出來的字），**下面多一行作者的 `description`**
++  （最多兩行，滑鼠停上去看完整的）：一個工具在面板上有兩個以上指令、收成一組時畫在組的標題列下面；只有一個指令時
++  畫在那一列的名稱下面。已經寫了 `description` 的工具，app 一升級就會出現這一行。環境變數面板的區塊標題也改用作者的標題。
++- AI 讀到的工具說明從 ``From the `rca-tools` tool bundle`` 變成 ``From the 「標題」 tool bundle (`rca-tools`)``（有標題時）。
++- 工程師用 bundle 裡的 `mcp` 接自己的 Claude Code 時：`serverInfo` 從固定的 `tool-bundle` / `1` 變成工具的名稱與版本；
++  有描述就帶 `instructions`；有標題、且協商成 `2025-06-18` 時帶 `title`（`2024-11-05` 沒有這個欄位）。協定版本照 MCP 的
++  規則協商：支援 `2025-06-18` 與 `2024-11-05`，客戶端要別的版本就回不比它新的裡面最新的那一個（要 `2025-03-26` 的拿到
++  `2024-11-05`，和以前一樣）。只對用新 builder 做出來的 bundle 生效。
++
++**確認做完**（`rollout 後`）：
++1. 打開一個有第三方工具的 item 的工具面板：已寫 `description` 的工具，名字下面有那一行描述（多個指令的在組的標題列下面，
++   一個指令的在那一列下面）。
++2. 請一位作者用新 builder tag、加上 `title` 發一版：CI log 那一行印出標題；app 的工具面板（等 host 解析到新版後）
++   那一列寫的是標題，不是 id。
++3. （選做）用那一版 bundle 的 `mcp` 接 Claude Code：`/mcp` 看得到工具的名稱與標題。
++
++**還是舊版 image 時**：工具面板沒有描述那一行，標題列是 id。
++
++### 2026-11-18 · #1027 工作流程步驟可以寫 item 選單打得開的工具 {#pr-1027}
++
++**設定** — 沒有新 key，沒有改預設值。
++
++**資料** — 不用 migrate。
++
++**k8s · CI 側** — 沒有要做的事。
++
++**行為改變，沒有開關**
++- **存工作流程**（AI 的 `save_workflow`）：步驟的 `tools:` 改成對照 App 的工具清單（`app.json` 的 `agent.tools`）。
++  以前對照的是 profile 的**預設**清單，所以在 item 工具選單手動打開、聊天用得到的工具，寫進工作流程反而被擋
++  （`outside the profile's allowed tools`）。現在擋的只有 App 根本沒有的工具，訊息改成「not one of this App's tools」。
++- **複製工作流程範本**：除了上面那條，還看這個 item 的工具選單現在開著哪些。App 有但這裡沒開的，範本清單會標不相容，
++  原因寫「switched off in this item — switch it on in the item's tool picker first」；在選單打開後就能複製。
++- **執行時沒變**：步驟寫了 item 選單沒開的工具，照舊在那一步拿不到、只在 log 留
++  `workflow node: tools not held by this item, dropped`。
++
++**確認做完**（rollout 後）— 開一個 playground 的 intake item（它預設沒開 `exec`，也沒開 `save_workflow`），先在工具選單打開
++`save_workflow`，再請 AI 存一個步驟用到 `exec` 的工作流程：存得進去，不再出現 `outside the profile's allowed tools`。
++
+ ---
+ 
+ ## 附錄 A：資料回填的機制（specstar 為什麼不會自己補）
+diff --git a/docs/plan-tool-title.md b/docs/plan-tool-title.md
+new file mode 100644
+index 000000000..43905c79e
+--- /dev/null
++++ b/docs/plan-tool-title.md
+@@ -0,0 +1,83 @@
++# 第三方工具的標題與描述
++
++**狀態:** P1–P6 完成(#1026);P7(demo、review、CI)進行中。
++**來源標記:** 〔user〕= user 的原話或明確選擇;〔查證〕= 讀 `origin/master`(`30defb6c`)的程式碼確認的事實;
++〔施工〕= 我定的實作細節,可推翻。
++
++## 1. 為什麼
++
++一個第三方工具(tool bundle,#674)在畫面上只有 id。工具面板上的「Rca Tools」看起來像標題,其實是註冊時給的
++id `rca-tools` 去掉 `-`、首字大寫(`catalog.humanize_tool_label`)〔user〕「rca-tools 看起來就是id(實際上他也是
++註冊時給的id) 在工具面板上 是前端無腦解析去-並留大寫」〔查證〕。
++
++整條路上沒有「標題」:作者的 pyproject、manifest、host 的回應、`PackageInfo`、`/a/…/tools` 的回應、AI 看到的工具、
++MCP 的 `tools/list` 都沒有〔查證〕。描述有——`[project].description` 一路傳到 `PackageInfo.description`(#697)——
++但工具面板把一個工具拆成「每個指令一列」,工具那一層的標題列只畫 `package`(轉換過的 id),描述沒畫出來〔查證〕。
++
++## 2. 決定
++
++| # | 決定 | 來源 |
++|---|---|---|
++| D1 | **標題寫在作者的 pyproject**:`[tool.ai-workspace] title = "…"`。PEP 621 沒有標題欄位,`[tool.<名稱>]` 是 PEP 518 留給工具自己用的表 | 〔user〕「寫在pyproject」 |
++| D2 | **描述沿用 `[project].description`**——作者已經寫過的直接出現,不加第二個描述欄位 | 〔user〕(接受提案) |
++| D3 | 只做**工具這一層**的標題;指令那一層維持「名稱 + 描述第一句」 | 〔user〕(接受提案) |
++| D4 | 沒寫標題的工具照舊用 id 轉出來的字——舊工具、還沒重新發版的工具都一樣 | 〔施工〕 |
++| D5 | `title` 寫了就要是非空字串,否則 build 失敗並說是哪個欄位(和 `env.json` 一樣:寫錯的東西不能被當成沒寫,安靜地發出去) | 〔施工〕 |
++| D6 | manifest 多一個選填的 `title`,排在 `description` 後面,同樣只給人看、不決定任何事;**不升 `format_version`**——舊的 artifact 沒有它照樣解析,舊平台看到它也只是略過(`parse_manifest` 只讀它認得的 key) | 〔施工〕〔查證〕 |
++| D7 | 平台上「工具叫什麼」只有一個函式決定(`標題 or 轉換過的 id`),工具面板、環境變數面板(兩者都讀 `package`)、整包授權那一列都從它來 | 〔施工〕 |
++| D8 | 工具面板的工具標題列照 Material 3 list item 的 headline + supporting text 畫:標題一行;描述在下面,字小一級、顏色淡一級,最多兩行、超過用省略號,完整文字在滑鼠提示裡。滑鼠提示照舊帶 id(認得 id 的人還找得到) | 〔施工〕,引用見 §4 |
++| D9 | AI 讀到的工具說明帶上標題:``From the 「<title>」 tool bundle (`<id>`) …``;沒標題時照舊 | 〔施工〕 |
++| D10 | MCP:工程師自己的 Claude Code 等接上時,`initialize` 回的 `serverInfo` 帶這個工具的名稱、版本,`instructions` 帶描述(`2024-11-05` 就有);`title` 只在協商成 `2025-06-18` 時帶(那一版才有)。照規格協商版本:客戶端要的版本我們支援就回它,否則回不比它新的裡面最新的那一個,都比它新才回我們最新的(見 C2) | 〔施工〕 |
++
++## 3. 不做
++
++- 指令層的標題(D3)。
++- `app.json` 登記時另給標題(user 選了 pyproject)。
++- 第一方工具(repo 內建的 package)的標題:它們沒有 manifest,這次不碰。
++
++## 4. UI 依據
++
++Material 3 List(`material-components/material-web` 官方文件 `docs/components/list.md` 與 token
++`tokens/versions/v0_192/_md-comp-list.scss`):list item 的文字有 `headline`、`supporting-text`(還有這裡用不到的
++`trailing-supporting-text`)幾格;headline(token 叫 `list-item-label-text`)是 `body-large` / `on-surface`,
++supporting text 是 `body-medium` / `on-surface-variant`;item 高度有一行、兩行、三行三種(56 / 72 / 88px)。文件沒有直接
++規定行數上限,「輔助文字最多兩行」是從最高的三行 item(標題一行 + 輔助兩行)推出來的。m3.material.io 本身要跑
++JavaScript 才有內容,讀不到,改讀它的元件庫。
++
++## 5. 經過的每一站
++
++| 站 | 檔案 | 改什麼 |
++|---|---|---|
++| 作者 pyproject → `Project` | `tooling/builder.py` `read_project` | 讀 `[tool.ai-workspace].title`(D1、D5) |
++| manifest | `tooling/artifact.py` + `sandbox-host/…/artifact.py`(兩份逐字相同,`test_artifact` 守著) | `Manifest.title`、`parse_manifest`、序列化(D6) |
++| bundle | `tooling/builder.py` | 把標題/描述寫進 bundle 給 `mcp_server.py` 讀(D10) |
++| host | `sandbox-host/…/tool_resolve.py`、`app.py` | `ResolvedTool.title`、記住/斷線時回退、resolve 回應 |
++| 平台 | `tooling/external.py`、`tooling/registry.py` | `PackageInfo.title` |
++| 名字與描述 | `tooling/catalog.py`、`api/tools_routes.py` | D7;每列帶工具的描述 |
++| AI | `tooling/registry.py` `describe_command` | D9 |
++| 前端 | `web/src/lib/toolGroups.ts`、`components/ToolsChecklist.tsx`、`api/types.ts` | D8 |
++| MCP | `tooling/mcp_server.py` | D10 |
++| 文件 | `docs/tool-authoring.md`、`docs/migrations.md` | 作者怎麼寫;營運方要做什麼 |
++
++## 6. 階段
++
++| 階段 | 內容 | 驗收 |
++|---|---|---|
++| P1 | builder 讀標題、manifest 帶標題(兩份 `artifact.py`);CI log 那一行印出標題 | 寫了的進 manifest;沒寫的沒有這個 key;寫錯的 build 失敗並說欄位;舊 manifest 照樣解析 |
++| P2 | host 帶標題(解析、記住、回退、回應) | 回退時標題還在;舊的記錄沒有標題照樣能回退 |
++| P3 | 平台:`PackageInfo.title`、D7、每列帶工具描述、D9 | 有標題的工具在 `/a/…/tools` 的 `package` 是標題;沒有的照舊 |
++| P4 | 前端工具標題列兩行(D8) | 截圖對照 §4;寬窄兩種寬度 |
++| P5 | MCP `serverInfo` / `instructions`、版本協商(D10) | 新舊兩種協定版本的客戶端都接得上 |
++| P6 | 文件:`tool-authoring.md`、`migrations.md` | `tests/docs`、`mkdocs --strict` |
++| P7 | web-demo → review(conformance / veracity / defect / regression)→ CI | 照 CLAUDE.md |
++
++## 7. 施工與審查中定的細節
++
++- **C1** 只有一個指令的工具在面板上沒有標題列(那一列就是整個工具),描述畫在那一列的名稱下面,和標題列用同一個
++  輔助文字元件;收在組裡的列不畫,標題列已經有。那一列的滑鼠提示加上 id(`rca-tools:spc · 標題 · 指令`)。
++  原本只做了標題列,只有一個指令的工具就哪裡都看不到描述——把需求做窄了(review 第 1 輪)〔施工〕。
++- **C2** 版本協商:客戶端要的版本我們不支援時,回「不比它新的裡面最新的」。要 `2025-03-26` 的客戶端不認得
++  `2025-06-18`,可能直接斷線;`2024-11-05` 是它以前就接受的。客戶端沒寫版本(規格說一定要寫)就回 `2024-11-05`——這個 server 以前對誰都回這個(review 第 1 輪)〔施工〕。
++- **C3** `instructions` 在 `2024-11-05` 就有(`schema/2024-11-05/schema.ts`)。原本寫成 `2025-03-26` 才有,
++  是查規格的 agent 給的錯答案、沒有自己核對就寫進程式,讓 `2024-11-05` 的客戶端拿不到描述(review 第 1 輪)〔查證〕。
++- **C4** 標題要是一行;`[tool]` 不是表也算寫錯——兩者都讓 build 失敗並說欄位,不是噴 traceback(review 第 1 輪)〔施工〕。
+diff --git a/docs/subsystems/agent-runtime.md b/docs/subsystems/agent-runtime.md
+index d4a268f10..94f2ac6cb 100644
+--- a/docs/subsystems/agent-runtime.md
++++ b/docs/subsystems/agent-runtime.md
+@@ -128,7 +128,7 @@ flowchart TD
+     兩份同名 function definition 會讓 provider 整包退回，整個 turn 死掉。名字會從互相看不見的來源匯流：手寫的 `allowed_tools`、`read_skill` 的授予、rename 後同時列 `ls` 與 `list_files`(#241)、以及 tool package 的命令撞到內建名（`build_function_tools` 只擋 package **之間**的撞名，不擋跟我們的）。所以 `build_tools` 回傳前與 `_agent_for` 交給 `Agent` 前都跑 `dedupe_tools`：**保留先出現的**（內建優先，package 不得遮蔽包著 guardrail 的內建工具），並記 warning，不靜默。
+ 
+ !!! note "save_workflow 是 opt-in 工具，配 author-workflow meta-skill（#323）"
+-    `save_workflow` 在 `_IMPLS` 但**不在** `_WORKSPACE_TOOLS`——它是 opt-in 工具（形同 `save_skill`/`author-skill`），只有 ship `author-workflow` meta-skill 的 App 才在 `agent.tools` 授予（topic-hub 是首個採用者）。它把 `workflow_json` 經 `workspace_store.validate_workflow_json` 驗證（帶 `_profile_tool_ceiling` = App `agent.tools` ∩ profile `tools` override 的 clamp，#323 Q4：workflow 的 agent step 不能超過作者手動能用的工具集），通過才寫進 `<ws>/.workflows/<id>.json`；驗證失敗時把 problems 原樣回給模型自行修正。
++    `save_workflow` 在 `_IMPLS` 但**不在** `_WORKSPACE_TOOLS`——它是 opt-in 工具（形同 `save_skill`/`author-skill`），只有 ship `author-workflow` meta-skill 的 App 才在 `agent.tools` 授予（topic-hub 是首個採用者）。它把 `workflow_json` 經 `workspace_store.validate_workflow_json` 驗證（帶 `_app_tool_ceiling` = App `agent.tools` 的 clamp，#323 Q4：workflow 的 agent step 不能超過作者手動能用的工具集——手動能用的是 item 工具選單打得開的全部，不是 profile `tools` 的預設清單；不拿存檔那個 turn 自己的清單判斷，因為子 agent、agent 副本、workflow 節點手上的都比選單窄。複製範本的 route 另外看這個 item 選單現在開著哪些（`workflow_routes._tools_on`），沒開的說「switched off in this item」。執行時不變：節點列了 item 沒開的工具，`TurnContextBuilder._finalized` 照舊收窄並記一行 log），通過才寫進 `<ws>/.workflows/<id>.json`；驗證失敗時把 problems 原樣回給模型自行修正。
+ 
+ !!! note "reasoning-off 是 provider 分支的"
+     reasoning-off 只在 `'none'` 這個 OFF 訊號才觸發；Ollama 用 `think=False`、vLLM 需要 `chat_template_kwargs` 路線——送錯邊是無聲 no-op。
+@@ -161,7 +161,7 @@ flowchart TD
+ 接手者建議照此順序讀：
+ 
+ - `src/workspace_app/agent/context.py` — `AgentToolContext`（中心接縫）與 `ensure_sandbox()`。
+-- `src/workspace_app/agent/tools.py` — `_IMPLS` 註冊表、`_WORKSPACE_TOOLS`、`build_tools`，以及 `kb_search_impl` / `ask_knowledge_base_impl` / `infer_modules_impl` / `save_workflow_impl` + `_profile_tool_ceiling`（#323）/ `builtin_tool_descriptions`（#322）/ `_format_exec` / `_truncate_middle`。
++- `src/workspace_app/agent/tools.py` — `_IMPLS` 註冊表、`_WORKSPACE_TOOLS`、`build_tools`，以及 `kb_search_impl` / `ask_knowledge_base_impl` / `infer_modules_impl` / `save_workflow_impl` + `_app_tool_ceiling`（#323）/ `builtin_tool_descriptions`（#322）/ `_format_exec` / `_truncate_middle`。
+ - `src/workspace_app/tooling/catalog.py` — `ToolMeta` / `humanize_tool_label` / `picker_units` / `flat_catalog`：tool 顯示 metadata 的單一來源（#322），讓 per-item picker 與 chat tool card 不會與 agent 實際跑的 tool 飄移。
+ - `src/workspace_app/agent/args_recovery.py` — `peel_first_json`、`wrap_with_args_recovery` / `safer`（Malformed/NonObject/Concatenated 皆回 in-band 錯誤）。
+ - `src/workspace_app/agent/arg_repair.py` — `make_backstop_sentinel` / `malformed_raw`（in-band backstop sentinel）。
+diff --git a/docs/tool-authoring.md b/docs/tool-authoring.md
+index 515d1fa4a..7ba291739 100644
+--- a/docs/tool-authoring.md
++++ b/docs/tool-authoring.md
+@@ -24,7 +24,7 @@
+ 
+ ```
+ my-wafer-tools/
+-  pyproject.toml          # 一個 [project.scripts] 進入點 + version（+ authors）
++  pyproject.toml          # 一個 [project.scripts] 進入點 + version（+ authors、description、標題）
+   uv.lock                 # 依賴釘死 —— 沒有它就沒有可重現的 build
+   env.json                # 選填：這支工具需要哪些環境變數（§7）
+   src/wafer_tools/
+@@ -40,9 +40,13 @@ my-wafer-tools/
+ name = "wafer-tools"
+ version = "1.4.2"          # 必填。這是人在對話裡講的版本號
+ authors = [{name = "Wafer Team", email = "wafer@example.com"}]   # 選填，但請填
++description = "晶圓路徑與良率歷史查詢。"                          # 選填，但請填
+ 
+ [project.scripts]
+ wafer-history = "wafer_tools.cli:main"   # 必須「剛好一個」
++
++[tool.ai-workspace]
++title = "晶圓歷史查詢"     # 選填，但請填
+ ```
+ 
+ **`authors` 請填。** 它會進 manifest，然後出現在使用者的工具面板上：「這支工具是誰發布的、
+@@ -53,6 +57,14 @@ wafer-history = "wafer_tools.cli:main"   # 必須「剛好一個」
+ 把它印出來（`published wafer-history 1.4.2 by Wafer Team <wafer@example.com>`）——**發版後看一眼那一行**，
+ 沒印出名字就是沒填成功。
+ 
++**`title` 和 `description` 請填。** 工具面板上，你的工具的名字寫的是 `title`，下面一行是 `description`
++（指令多的話收成一組，寫在組的標題列；只有一個指令時就寫在那一列）；
++沒寫 `title` 的話，那一列只能寫註冊時給的 id（`wafer-history` 變成「Wafer History」）。AI 讀到的工具說明、
++工程師用 bundle 裡的 `mcp` 接上自己的 Claude Code 時看到的，也是這兩樣。`description` 用 PEP 621 本來就有的欄位；
++PEP 621 沒有標題，所以 `title` 放在 PEP 518 留給工具自己用的 `[tool.ai-workspace]` 表。`title` 寫了就要是
++非空的字串，否則 build 失敗（`[tool.ai-workspace].title must be a non-empty string`）；寫對了，CI log 那一行會印出來
++（`published wafer-history 「晶圓歷史查詢」 1.4.2 by …`）。
++
+ **為什麼只能一個 script**：bundle 的啟動器就是去執行這個進入點。兩個會讓「AI 剛才到底跑了哪一個」
+ 變得沒有答案，零個則沒東西可跑。一個 package 可以有**很多 command**——那是下一節的事，不是靠多個
+ script 達成的。
+@@ -367,6 +379,8 @@ https://gitlab.example/api/v4/projects/<id>/jobs/artifacts/<ref>/raw/dist/tool.m
+ | `format_version` | manifest 的格式版本。平台不認得就拒絕 |
+ | `name` / `version` | 你的工具叫什麼、哪一版（`version` 純粹給人看） |
+ | `author` | 誰發布的，取自你的 `[project].authors`。純顯示，跟信任無關；沒填就沒有這個欄位 |
++| `description` | 這支工具是什麼，取自你的 `[project].description`。純顯示；沒填就沒有這個欄位 |
++| `title` | 這支工具叫什麼，取自你的 `[tool.ai-workspace].title`。純顯示；沒填就沒有這個欄位 |
+ | `commands` | 每個 command 的 name / description / JSON schema |
+ | `builder` | **你是在哪個 builder image 裡 build 的**。平台拿它比對 ABI |
+ | `python` / `arch` | 直譯器版本與 CPU 架構 |
+diff --git a/docs/workflows-authoring.md b/docs/workflows-authoring.md
+index 5d9d7bf3d..f0076fff6 100644
+--- a/docs/workflows-authoring.md
++++ b/docs/workflows-authoring.md
+@@ -106,7 +106,7 @@ await agent_step(wf, *, prompt, phase, check, name=None, key="",
+ `out` 是 json/yaml/csv 而且沒傳 `check` 時,預設 gate 會判(自己傳 `check` 就是放棄這個判斷,
+ 連 `artifact_valid(out, kind)` 也一樣——要它算數得寫 `artifact_valid(out, kind, of_reply=True)`);宣告 `outputs` 時,Python API
+ **不會**自己檢查回覆的欄位(DSL 會),要修補就得傳一個會標 `format=True` 的 `check`。
+-Python API 的 `retries` 預設 `0`,也就是不修補也不重跑。`tools` 是這個 agent 被允許的 tool 子集(⊆ profile 上限)。
++Python API 的 `retries` 預設 `0`,也就是不修補也不重跑。`tools` 是這個 agent 被允許的 tool 子集(⊆ App 的 `agent.tools`;執行時只拿得到 item 工具選單開著的)。
+ 
+ ```python
+ await agent_write_step(wf, *, prompt, phase, out="", kind="text", requires=None,
+diff --git a/docs/workflows.md b/docs/workflows.md
+index f390c25b3..f23002189 100644
+--- a/docs/workflows.md
++++ b/docs/workflows.md
+@@ -179,7 +179,7 @@ tool（§7）。
+   和它產生的訊息都以 `Message` 持久化並標上 `run_id` / `step` / `phase`，執行分頁的
+   每一列就是靠這些標記選出自己的訊息；同時寫一份 transcript 到 journal（§9 的
+   `step_<name>/` 資料夾裡），「Ask AI why it failed」就讀那份檔案。
+-- **`tools=` ⊆ profile 的 tool 上限**（LLM 安全邊界；coherence 像 #89 的
++- **`tools=` ⊆ App 的 tool 清單**（`app.json` 的 `agent.tools`，也就是 item 工具選單打得開的全部；不是 profile 預設開哪些。執行時只拿得到這個 item 選單開著的，LLM 安全邊界；coherence 像 #89 的
+   `validate_function_coherence` 那樣強制）。agent 的 tool 偏向 **讀／探索**；
+   side-effect 是 deterministic node，不是 tool（§7）。
+ - **`check=` 是必要的。** 一個沒有 gate 的 agent node 是 schema error。
+@@ -846,7 +846,7 @@ artifact 路徑清單）。跳過的元素留 `null` 佔位，讓下游 `map ove
+ - **一個 interpreter 服務兩層（Q6）：** package workflow 可以是 `run.py`（trusted Python）
+   **或** `workflow.json`（被 interpret）；**promote = 把 json 複製進 profile**，免 transpile。
+ - **Co-design（Q8）：** `author-workflow` shared meta-skill 引導 AI 起草 DSL；`save_workflow`
+-  tool 在寫入前 **驗證**（schema、phase 一致、`tools` ⊆ profile 上限、capability 在允許
++  tool 在寫入前 **驗證**（schema、phase 一致、`tools` ⊆ App 的 tool 清單、capability 在允許
+   清單，以及 `check` / `outputs` / `switch` / `revise_to` 格式）並把無效 DSL **退回原因讓
+   AI 修**。v1 **不**自動試跑——使用者按 Run 來測。
+ - **上限／authz（Q9）：** 與 package workflow **同一組** cap（§16–§17）；能存取該 item
+@@ -889,7 +889,7 @@ v1 出貨 `image-to-knowledge`：VLM 讀圖 → 把圖說的話存成可搜尋
+ `save_workflow` **寫入前先驗證**，無效就把原因**退回**讓 AI 修（§22.8 Q8）；它**不**自動試跑。
+ 所以「這份 workflow 可以放著自己跑了嗎」這個問題，要靠下面這條遞進來回答，而不是靠感覺：
+ 
+-1. **靜態關**——`save_workflow` / 複製範本的 422。schema、phase 一致、`tools` ⊆ profile 上限、
++1. **靜態關**——`save_workflow` / 複製範本的 422。schema、phase 一致、`tools` ⊆ App 的 tool 清單（複製範本另外要求這個 item 的工具選單開著）、
+    capability 在允許清單、`check` / `outputs` / `switch` / `revise_to` 格式。過不了就根本存不進去。
+ 2. **人閘關**——在寫進 collection 之前放一個 `gate`（`summary_from` 指向前一步的 fan-in
+    `outputs`），run 會停在那裡等人。出貨的 `image-to-knowledge` 就是這樣：`read` → **`review`
+diff --git a/sandbox-host/src/sandbox_host/app.py b/sandbox-host/src/sandbox_host/app.py
+index bab2030be..3f37f3bc1 100644
+--- a/sandbox-host/src/sandbox_host/app.py
++++ b/sandbox-host/src/sandbox_host/app.py
+@@ -749,6 +749,7 @@ def make_host_app(
+                 "version": tool.version,
+                 "author": tool.author,
+                 "description": tool.description,
++                "title": tool.title,
+                 "stale": tool.stale,
+                 "commands": [
+                     {
+diff --git a/sandbox-host/src/sandbox_host/artifact.py b/sandbox-host/src/sandbox_host/artifact.py
+index a462b7753..811358a7a 100644
+--- a/sandbox-host/src/sandbox_host/artifact.py
++++ b/sandbox-host/src/sandbox_host/artifact.py
+@@ -395,6 +395,12 @@ class Manifest:
+     #: Optional, on the same bargain ``author`` and ``env`` struck: every
+     #: artifact already in the field was published without it.
+     description: str | None = None
++    #: What this tool is CALLED, in its author's words — from
++    #: ``[tool.ai-workspace].title`` in their own ``pyproject``
++    #: (docs/plan-tool-title.md). Without it a tool was shown by its id with the
++    #: dashes taken out. Same display-only tier as ``description``, and optional
++    #: on the same bargain: every artifact already published has none.
++    title: str | None = None
+     #: What the tool says it needs from the environment (#750), or ``None``
+     #: when the manifest carried no ``env`` key at all.
+     #:
+@@ -455,6 +461,7 @@ def parse_manifest(raw: bytes) -> Manifest:
+             grant=body.get("grant"),
+             author=body.get("author"),
+             description=body.get("description"),
++            title=body.get("title"),
+         )
+     except (KeyError, TypeError) as exc:
+         raise ManifestError(f"manifest is missing or malformed at {exc}") from exc
+@@ -536,6 +543,8 @@ def render_manifest(manifest: Manifest) -> bytes:
+         body["author"] = manifest.author
+     if manifest.description is not None:
+         body["description"] = manifest.description
++    if manifest.title is not None:
++        body["title"] = manifest.title
+     # Indented and newline-terminated: a manifest lands in CI logs and in
+     # review diffs, where a single long line helps nobody.
+     return (json.dumps(body, indent=2, sort_keys=True) + "\n").encode()
+diff --git a/sandbox-host/src/sandbox_host/tool_resolve.py b/sandbox-host/src/sandbox_host/tool_resolve.py
+index 8cd95f65f..f03ff7a71 100644
+--- a/sandbox-host/src/sandbox_host/tool_resolve.py
++++ b/sandbox-host/src/sandbox_host/tool_resolve.py
+@@ -119,6 +119,9 @@ class ResolvedTool:
+     """What the tool IS, verbatim from the manifest — the answer to "what does
+     this tool do", which the app cannot obtain any other way. ``None`` when its
+     author wrote none."""
++    title: str | None = None
++    """What the tool is CALLED, verbatim from the manifest
++    (docs/plan-tool-title.md). ``None`` when its author gave none."""
+     env: tuple[EnvSpec, ...] | None = None
+     """What the tool says it needs from the environment (#750), or ``None``
+     when its manifest said nothing. Carried for the same reason as ``author``:
+@@ -195,6 +198,7 @@ class ToolResolver:
+             stale=False,
+             author=manifest.author,
+             description=manifest.description,
++            title=manifest.title,
+             env=manifest.env,
+         )
+ 
+@@ -236,6 +240,7 @@ class ToolResolver:
+             # upgrade made every remembered tool raise instead of resolve.
+             author=remembered.get("author"),
+             description=remembered.get("description"),
++            title=remembered.get("title"),
+             # Same reasoning, and the same three states: a remembered entry
+             # written before #750 has no `env` key and must stay "did not say".
+             env=(
+@@ -260,6 +265,7 @@ class ToolResolver:
+             "version": manifest.version,
+             "author": manifest.author,
+             "description": manifest.description,
++            "title": manifest.title,
+             # Stored so a store outage does not also cost the declaration:
+             # `_fall_back` rebuilds a ResolvedTool from exactly this dict.
+             **({"env": [env_to_json(e) for e in manifest.env]} if manifest.env is not None else {}),
+diff --git a/sandbox-host/tests/test_tool_resolve.py b/sandbox-host/tests/test_tool_resolve.py
+index 7b2eb9754..a2b7d5a01 100644
+--- a/sandbox-host/tests/test_tool_resolve.py
++++ b/sandbox-host/tests/test_tool_resolve.py
+@@ -579,3 +579,41 @@ def test_the_fallback_still_asks_whether_the_tool_is_admitted(tmp_path) -> None:
+             ).resolve("wafer-history", _MANIFEST_URL)
+     finally:
+         monkey.undo()
++
++
++def test_a_resolved_tool_carries_its_title(tmp_path: Path) -> None:
++    data = _bundle()
++    wire = _Wire(manifest=_manifest(data, title="晶圓歷史查詢"), bundle=data)
++    resolver = _resolver(tmp_path, wire)
++
++    assert resolver.resolve("wafer-history", _MANIFEST_URL).title == "晶圓歷史查詢"
++
++
++def test_the_remembered_copy_keeps_what_the_tool_is_called(tmp_path: Path) -> None:
++    """docs/plan-tool-title.md: an outage is no reason for a tool to go back to
++    being shown by its id."""
++    data = _bundle()
++    wire = _Wire(manifest=_manifest(data, title="晶圓歷史查詢"), bundle=data)
++    resolver = _resolver(tmp_path, wire)
++    resolver.resolve("wafer-history", _MANIFEST_URL)
++
++    fallen_back = _resolver(tmp_path, _Wire()).resolve("wafer-history", _MANIFEST_URL)
++
++    assert fallen_back.stale is True
++    assert fallen_back.title == "晶圓歷史查詢"
++
++
++def test_a_note_written_before_titles_existed_still_falls_back(tmp_path: Path) -> None:
++    data = _bundle()
++    resolver = _resolver(tmp_path, _Wire(manifest=_manifest(data), bundle=data))
++    resolver.resolve("wafer-history", _MANIFEST_URL)
++    note = tmp_path / "last-known-good.json"
++    body = json.loads(note.read_text())
++    for entry in body.values():
++        entry.pop("title", None)
++    note.write_text(json.dumps(body))
++
++    fallen_back = _resolver(tmp_path, _Wire()).resolve("wafer-history", _MANIFEST_URL)
++
++    assert fallen_back.stale is True
++    assert fallen_back.title is None
+diff --git a/sandbox-host/tests/test_tools_endpoint.py b/sandbox-host/tests/test_tools_endpoint.py
+index 4ee20f93d..a7b81d0ef 100644
+--- a/sandbox-host/tests/test_tools_endpoint.py
++++ b/sandbox-host/tests/test_tools_endpoint.py
+@@ -40,6 +40,7 @@ def _tool(
+     stale: bool = False,
+     author: str | None = None,
+     description: str | None = None,
++    title: str | None = None,
+ ) -> ResolvedTool:
+     return ResolvedTool(
+         name=name,
+@@ -49,6 +50,7 @@ def _tool(
+         stale=stale,
+         author=author,
+         description=description,
++        title=title,
+     )
+ 
+ 
+@@ -247,3 +249,14 @@ async def test_create_mounts_the_third_party_bundles_the_app_resolved() -> None:
+ 
+     assert r.status_code == 200
+     assert sandbox.spec.tools == {"wafer-history": "a" * 64}  # ty: ignore[unresolved-attribute]
++
++
++async def test_resolve_forwards_what_the_tool_is_called() -> None:
++    """docs/plan-tool-title.md: the app never reads a manifest, so a title the
++    host does not forward is one nobody downstream can show."""
++    resolver = _Resolver(**{"wafer-history": _tool("wafer-history", title="晶圓歷史查詢")})
++
++    async with _client(resolver) as c:
++        r = await c.post("/tools/resolve", json={"tools": {"wafer-history": "https://g/m"}})
++
++    assert r.json()["tools"]["wafer-history"]["title"] == "晶圓歷史查詢"
+diff --git a/src/workspace_app/agent/tools.py b/src/workspace_app/agent/tools.py
+index 85d176a92..96b527212 100644
+--- a/src/workspace_app/agent/tools.py
++++ b/src/workspace_app/agent/tools.py
+@@ -3497,19 +3497,18 @@ def held_tool_names(
+ def _profile_tool_ceiling(
+     app_slug: str | None, profile: str | None, packages: Sequence[PackageInfo] = ()
+ ) -> set[str] | None:
+-    """The tools an agent in this App profile may hold — the App's ``agent.tools`` ceiling,
+-    narrowed by the profile's ``tools`` override (#323, Q4: a workflow's agent steps can't
+-    exceed what its author could use by hand). ``None`` (skip the clamp) for a synthetic /
+-    unreadable slug.
++    """The tools a turn in this App profile holds BY DEFAULT — the App's ``agent.tools``
++    ceiling narrowed by the profile's ``tools`` override. The fallback answer of
++    `held_tool_names` when the turn's own list is not known — which feeds the
++    sub-agent clamps (`_subagent_defs`, `_live_subagent_defs`) and `save_subagent`'s
++    refusal.
++    Not what a workflow step is judged by: the item's picker can switch on anything in
++    the App's list, so that is `_app_tool_ceiling`. ``None`` (skip the clamp) for a
++    synthetic / unreadable slug.
+ 
+     Brought to COMMAND granularity when the caller has the package list
+-    (``expand_entries``): a whole-package grant becomes its ``pkg:cmd`` units,
+-    so a validator judging by ``narrow_entries`` accepts ``rca-tools:spc`` and
+-    refuses ``rca-tools:typo`` — with bare names only, the two are
+-    indistinguishable and the typo saved a workflow whose node silently held
+-    nothing. Callers without packages (the sub-agent clamp's fallback, the
+-    author-workflow guide) keep the bare names, which read as "the whole
+-    package" everywhere they are used."""
++    (``expand_entries``); without packages it keeps the bare names, which read
++    as "the whole package" everywhere they are used."""
+     if app_slug is None or profile is None:
+         return None
+     from msgspec import UNSET
+@@ -3524,14 +3523,39 @@ def _profile_tool_ceiling(
+         return None
+     pm_tools = load_profile(app_slug, profile).tools
+     # NOT renamed. This ceiling comes from authored manifest files, not from
+-    # stored config, and it feeds a clamp (`_subagent_defs` -> `clamp_tools`)
+-    # and a validator (`save_workflow_impl`) as well as the two refusal
+-    # messages. No shipped manifest names a legacy tool, so normalising here
+-    # changed four consumers on a case none of them can be handed.
++    # stored config, and it feeds the sub-agent clamps and `save_subagent`'s
++    # refusal (through `held_tool_names`). No shipped manifest names a legacy
++    # tool, so normalising here would change them on a case none can be handed.
+     ceiling = (set(pm_tools) & app_tools) if pm_tools is not UNSET else app_tools
+     return set(expand_entries(sorted(ceiling), packages))
+ 
+ 
++def _app_tool_ceiling(
++    app_slug: str | None, packages: Sequence[PackageInfo] = ()
++) -> set[str] | None:
++    """The tools a WORKFLOW step may name in this App: the App's ``agent.tools``
++    — the same list `AppCatalog.resolve` hands an item as its ``tool_ceiling``,
++    i.e. everything the item's tool picker can switch on. Not the profile's
++    ``tools``: that is the profile's DEFAULT set, and a tool it leaves off is
++    still one the item's author can switch on and use by hand, so refusing it
++    in a workflow refused what the author could do (the #323 Q4 rule is "no
++    more than by hand", not "no more than the default"). At run time a node is
++    still narrowed to what the item holds (`TurnContextBuilder._finalized`).
++
++    ``None`` (skip the clamp) for a synthetic / unreadable slug. Brought to
++    command granularity with ``packages`` exactly as `_profile_tool_ceiling`."""
++    if app_slug is None:
++        return None
++    from ..apps.manifest import load_app_manifest
++    from ..tooling.catalog import expand_entries
++
++    try:
++        app_tools = load_app_manifest(app_slug).agent.tools
++    except (FileNotFoundError, ModuleNotFoundError, OSError):
++        return None
++    return set(expand_entries(sorted(app_tools), packages))
++
++
+ async def save_workflow_impl(
+     ctx: RunContextWrapper[AgentToolContext], id: str, workflow_json: str
+ ) -> str:
+@@ -3574,9 +3598,11 @@ async def save_workflow_impl(
+             f"error: {slug!r} is the name of this item's schedules file, not a workflow id — "
+             "pick another id. To put a workflow on a clock, call save_schedules."
+         )
+-    ceiling = _profile_tool_ceiling(
+-        ctx.context.app_slug, ctx.context.template_profile, ctx.context.packages
+-    )
++    # Judged against the App's tools only, not this turn's own list: the turn
++    # saving may be a sub-agent, an agent copy's chat or a workflow node, each
++    # holding a narrower list than the item's tool picker — refusing by that
++    # list would call a tool "off" that the picker shows on.
++    ceiling = _app_tool_ceiling(ctx.context.app_slug, ctx.context.packages)
+     workflow, errs = validate_workflow_json(workflow_json, tool_ceiling=ceiling)
+     if workflow is None or errs:
+         return "error: the workflow has problems — fix these and save again:\n- " + "\n- ".join(
+diff --git a/src/workspace_app/api/tools_routes.py b/src/workspace_app/api/tools_routes.py
+index f493be9ad..0cce79724 100644
+--- a/src/workspace_app/api/tools_routes.py
++++ b/src/workspace_app/api/tools_routes.py
+@@ -101,6 +101,10 @@ class ItemToolState(BaseModel):
+     Without it two rows can read as peers while one of them is a part of the
+     other, and a command seen in a chat card cannot be traced to the switch
+     that governs it."""
++    package_description: str = ""
++    """What the package this row is ONE COMMAND of says it is (its author's
++    ``[project].description``), or ``""``. Shown under the fold's header,
++    which is named by ``package`` (docs/plan-tool-title.md D8)."""
+     group: str = BUILTIN_GROUP
+     """Which fold of the picker this row lives under: ``"builtin"`` for every
+     built-in, otherwise the raw package id — a ``pkg:cmd`` command and its
+@@ -374,6 +378,7 @@ def _row(
+         pref=pref,
+         effective=effective,
+         package=unit.package,
++        package_description=unit.package_description,
+         group=unit.group,
+         external=provider in declared,
+         version=prov.version if prov else None,
+diff --git a/src/workspace_app/api/workflow_routes.py b/src/workspace_app/api/workflow_routes.py
+index 84ffb2ea6..490d930de 100644
+--- a/src/workspace_app/api/workflow_routes.py
++++ b/src/workspace_app/api/workflow_routes.py
+@@ -359,24 +359,43 @@ def register_workflow_routes(
+             can_read=can_read,
+         )
+ 
++    def _tools_on(item_id: str) -> set[str] | None:
++        """What this item's tool picker has on — read off the config a turn
++        would run with, finalized by the same `finalize_tool_grants` the picker
++        route and every turn use, not re-derived here. With the deploy's
++        first-party packages only: a third-party command is not judged here (a
++        template naming one passes and is narrowed at run time). An agent
++        copy's own `tools:` is not applied either — it narrows at run time, as
++        it always did. ``None`` (skip that check) for a config that leaves the
++        toolset unspecified."""
++        from ..apps.catalog import finalize_tool_grants
++
++        cfg = locator.resolve_agent_config(item_id)
++        # `require_access` already 404'd an unknown item, and an App item
++        # always resolves through `AppCatalog.resolve`.
++        assert cfg is not None
++        allowed = finalize_tool_grants(cfg, packages).allowed_tools
++        return set(allowed) if allowed is not None else None
++
+     @app.get("/a/{slug}/items/{item_id}/workflow-templates")
+     async def list_workflow_templates(slug: str, item_id: str) -> list[dict]:
+         """#520: the shipped starter templates, each flagged for whether THIS item can
+         run it. Incompatible ones are listed too, with the reason — hiding them means
+-        nobody learns the template exists, or that one profile setting away it would
+-        work. Compatibility is the ordinary DSL validation against the profile's tool
+-        ceiling; there is no separate grant list to keep in sync."""
+-        from ..agent.tools import _profile_tool_ceiling
++        nobody learns the template exists. Compatibility is the ordinary DSL validation
++        against the App's tools (the ceiling `save_workflow` also judges by) and what
++        this item's tool picker has on (`_tools_on`); there is no separate grant list
++        to keep in sync."""
++        from ..agent.tools import _app_tool_ceiling
+         from ..workflow.dsl import build_manifest, validate_def
+         from ..workflow.shared import SHARED_WORKFLOWS, load_shared_workflow
+ 
+-        investigation_id = locator.require_access(slug, item_id, "read_meta")
+-        profile = locator.profile_of(investigation_id)
+-        ceiling = _profile_tool_ceiling(slug, profile, packages)
++        locator.require_access(slug, item_id, "read_meta")
++        ceiling = _app_tool_ceiling(slug, packages)
++        on = _tools_on(item_id)
+         out: list[dict] = []
+         for name in sorted(SHARED_WORKFLOWS):
+             d = load_shared_workflow(name)
+-            problems = validate_def(d, tool_ceiling=ceiling)
++            problems = validate_def(d, tool_ceiling=ceiling, tools_on=on)
+             entry = msgspec.to_builtins(build_manifest(d))
+             assert isinstance(entry, dict)  # narrow for ty
+             out.append({**entry, "compatible": not problems, "problems": problems})
+@@ -397,7 +416,7 @@ def register_workflow_routes(
+         the FE confirms and retries with ``overwrite=true``. An incompatible template is
+         422 with the validation problems rather than a workflow that fails at Run time.
+         """
+-        from ..agent.tools import _profile_tool_ceiling
++        from ..agent.tools import _app_tool_ceiling
+         from ..workflow.dsl import DslError, validate_def
+         from ..workflow.shared import load_shared_workflow
+         from ..workflow.workspace_store import (
+@@ -417,13 +436,13 @@ def register_workflow_routes(
+         except DslError as exc:
+             raise HTTPException(status_code=404, detail=str(exc)) from exc
+ 
+-        profile = locator.profile_of(investigation_id)
+-        problems = validate_def(d, tool_ceiling=_profile_tool_ceiling(slug, profile, packages))
++        problems = validate_def(
++            d, tool_ceiling=_app_tool_ceiling(slug, packages), tools_on=_tools_on(item_id)
++        )
+         if problems:
+             raise HTTPException(
+                 status_code=422,
+-                detail=f"template {name!r} can't run in profile {profile!r}: "
+-                + "; ".join(problems),
++                detail=f"template {name!r} can't run in this item: " + "; ".join(problems),
+             )
+         if name == RESERVED_WORKFLOW_ID:
+             # Checked here for the sentence; `save_workspace_workflow` would
+diff --git a/src/workspace_app/apps/skills.py b/src/workspace_app/apps/skills.py
+index 449610bd6..df72a837a 100644
+--- a/src/workspace_app/apps/skills.py
++++ b/src/workspace_app/apps/skills.py
+@@ -594,10 +594,10 @@ def augment_shared_skill_body(
+         return "\n\n".join(parts)
+     if name != "author-workflow":
+         return body
+-    from ..agent.tools import _profile_tool_ceiling
++    from ..agent.tools import _app_tool_ceiling
+     from ..workflow.dsl import describe_dsl_grammar, describe_workflow_boundaries
+ 
+-    ceiling = _profile_tool_ceiling(app_slug, profile)
++    ceiling = _app_tool_ceiling(app_slug)
+     return "\n\n".join([body, describe_dsl_grammar(), describe_workflow_boundaries(ceiling)])
+ 
+ 
+diff --git a/src/workspace_app/tooling/artifact.py b/src/workspace_app/tooling/artifact.py
+index a462b7753..811358a7a 100644
+--- a/src/workspace_app/tooling/artifact.py
++++ b/src/workspace_app/tooling/artifact.py
+@@ -395,6 +395,12 @@ class Manifest:
+     #: Optional, on the same bargain ``author`` and ``env`` struck: every
+     #: artifact already in the field was published without it.
+     description: str | None = None
++    #: What this tool is CALLED, in its author's words — from
++    #: ``[tool.ai-workspace].title`` in their own ``pyproject``
++    #: (docs/plan-tool-title.md). Without it a tool was shown by its id with the
++    #: dashes taken out. Same display-only tier as ``description``, and optional
++    #: on the same bargain: every artifact already published has none.
++    title: str | None = None
+     #: What the tool says it needs from the environment (#750), or ``None``
+     #: when the manifest carried no ``env`` key at all.
+     #:
+@@ -455,6 +461,7 @@ def parse_manifest(raw: bytes) -> Manifest:
+             grant=body.get("grant"),
+             author=body.get("author"),
+             description=body.get("description"),
++            title=body.get("title"),
+         )
+     except (KeyError, TypeError) as exc:
+         raise ManifestError(f"manifest is missing or malformed at {exc}") from exc
+@@ -536,6 +543,8 @@ def render_manifest(manifest: Manifest) -> bytes:
+         body["author"] = manifest.author
+     if manifest.description is not None:
+         body["description"] = manifest.description
++    if manifest.title is not None:
++        body["title"] = manifest.title
+     # Indented and newline-terminated: a manifest lands in CI logs and in
+     # review diffs, where a single long line helps nobody.
+     return (json.dumps(body, indent=2, sort_keys=True) + "\n").encode()
+diff --git a/src/workspace_app/tooling/builder.py b/src/workspace_app/tooling/builder.py
+index 04c378cde..0dfe3bd51 100644
+--- a/src/workspace_app/tooling/builder.py
++++ b/src/workspace_app/tooling/builder.py
+@@ -168,6 +168,9 @@ class Project:
+     description: str | None = None
+     """What the tool IS, from ``[project].description``. ``None`` when they
+     wrote none — encouraged, never required, exactly like the author."""
++    title: str | None = None
++    """What the tool is CALLED, from ``[tool.ai-workspace].title``
++    (docs/plan-tool-title.md). ``None`` when they wrote none."""
+ 
+ 
+ def _read_author(project: dict[str, Any]) -> str | None:
+@@ -270,9 +273,40 @@ def read_project(source: Path) -> Project:
+         version=str(version),
+         author=_read_author(project),
+         description=str(described) if described else None,
++        title=_read_title(body),
+     )
+ 
+ 
++#: The `[tool.<name>]` table PEP 518 keeps for a tool's own settings — ours.
++TOOL_TABLE = "ai-workspace"
++
++
++def _read_title(body: dict[str, Any]) -> str | None:
++    """``[tool.ai-workspace].title``, stripped, or ``None`` when not written.
++
++    PEP 621 has no title, so it lives in the table PEP 518 keeps for tools
++    (docs/plan-tool-title.md D1). Unlike the author, a title written WRONG is
++    refused (D5): the author meant to name their tool, and publishing nothing
++    in its place is silence only they could have caught — this build is the
++    one moment they are looking."""
++    tools = body.get("tool", {})
++    if not isinstance(tools, dict):
++        raise BuildError(f"[tool] must be a table, got {tools!r}")
++    table = tools.get(TOOL_TABLE, {})
++    if not isinstance(table, dict):
++        raise BuildError(f"[tool.{TOOL_TABLE}] must be a table, got {table!r}")
++    if "title" not in table:
++        return None
++    title = table["title"]
++    if not isinstance(title, str) or not title.strip():
++        raise BuildError(f"[tool.{TOOL_TABLE}].title must be a non-empty string, got {title!r}")
++    # One line: the panel, the CI log line and the AI's tool description each
++    # read it as one (review round 1).
++    if "\n" in title.strip() or "\r" in title.strip():
++        raise BuildError(f"[tool.{TOOL_TABLE}].title must be one line, got {title!r}")
++    return title.strip()
++
++
+ def read_commands(bundle: Path) -> tuple[CommandSpec, ...]:
+     """The command metadata the build froze into the bundle.
+ 
+@@ -390,13 +424,22 @@ exec "$py" "$here/mcp_server.py" "$here"
+ """
+ 
+ 
+-def _inject_mcp(bundle: Path) -> None:
++def _inject_mcp(bundle: Path, project: Project) -> None:
+     """Give the bundle its MCP face.
+ 
+     Injected rather than written by the author: the 3-stage contract already
+     carries everything MCP asks for, so one adapter serves every tool and
+-    nobody has to learn a second protocol to publish one."""
++    nobody has to learn a second protocol to publish one.
++
++    `about.json` says who the tool is (docs/plan-tool-title.md D10): the
++    adapter runs inside the bundle and never sees the manifest."""
+     shutil.copy2(Path(__file__).with_name("mcp_server.py"), bundle / "mcp_server.py")
++    about = {"name": project.name, "version": project.version}
++    if project.title:
++        about["title"] = project.title
++    if project.description:
++        about["description"] = project.description
++    (bundle / "about.json").write_text(json.dumps(about, ensure_ascii=False), encoding="utf-8")
+ 
+     # The bundle ships exactly one minor version; take it from the interpreter
+     # that is actually there rather than from ours, which may differ.
+@@ -480,7 +523,7 @@ def build_artifact(
+     with tempfile.TemporaryDirectory() as tmp:
+         bundle = Path(tmp) / name
+         build_bundle(name=name, source=source, dst=bundle)
+-        _inject_mcp(bundle)
++        _inject_mcp(bundle, project)
+         if sealed is not None:
+             # Only ciphertext: the host opens it for this tool's process, and
+             # its tree is readable by the tool group alone (P2).
+@@ -505,6 +548,7 @@ def build_artifact(
+         grant=token,
+         author=project.author,
+         description=project.description,
++        title=project.title,
+         env=env_needs,
+     )
+     (out / BUNDLE_NAME).write_bytes(packed)
+@@ -626,8 +670,9 @@ def main(argv: list[str]) -> int:
+             print(f"build failed: {exc}", file=sys.stderr)
+             return 1
+         by = f" by {manifest.author}" if manifest.author else ""
++        titled = f" 「{manifest.title}」" if manifest.title else ""
+         print(
+-            f"published {manifest.name} {manifest.version}{by} "
++            f"published {manifest.name}{titled} {manifest.version}{by} "
+             f"({len(manifest.commands)} command(s), sha256={manifest.bundle.sha256})"
+         )
+         if not manifest.author:
+diff --git a/src/workspace_app/tooling/catalog.py b/src/workspace_app/tooling/catalog.py
+index 4adf07d84..ff79a5704 100644
+--- a/src/workspace_app/tooling/catalog.py
++++ b/src/workspace_app/tooling/catalog.py
+@@ -50,6 +50,10 @@ class ToolMeta:
+     side by side can mean "this whole bundle" and "this one command of that
+     bundle". Told only its command name, a reader cannot tell which — nor which
+     row's switch governs the tool they saw in a chat card."""
++    package_description: str = ""
++    """What the package this unit is ONE COMMAND of says it is, or ``""``.
++    The picker folds a package's commands under one header, and the header is
++    where the package's own description is read (docs/plan-tool-title.md D8)."""
+     group: str = BUILTIN_GROUP
+     """Which fold of the picker this unit lives under: ``"builtin"`` for every
+     built-in, otherwise the raw package id (a ``pkg:cmd`` command and its
+@@ -72,6 +76,13 @@ def humanize_tool_label(name: str) -> str:
+     return " ".join(w[:1].upper() + w[1:] for w in words) or name
+ 
+ 
++def package_label(name: str, pkg: PackageInfo | None) -> str:
++    """What a package is CALLED on screen: its author's title, or — when they
++    gave none, or the package is unknown — its id made readable
++    (docs/plan-tool-title.md D4/D7). The one place that decides it."""
++    return pkg.title if pkg is not None and pkg.title else humanize_tool_label(name)
++
++
+ def summarize_description(text: str) -> str:
+     """A one-line summary for a tool card / picker row: the first sentence of the
+     full (multi-line) description, whitespace-collapsed. Empty stays empty."""
+@@ -120,7 +131,8 @@ def picker_units(app_tools: Sequence[str], packages: Sequence[PackageInfo]) -> l
+                     entry,
+                     humanize_tool_label(cmd_name),
+                     summarize_description(cmd.description if cmd else ""),
+-                    package=humanize_tool_label(pkg_name),
++                    package=package_label(pkg_name, pkg),
++                    package_description=pkg.description.strip() if pkg else "",
+                     group=pkg_name,
+                 )
+             )
+@@ -132,7 +144,7 @@ def picker_units(app_tools: Sequence[str], packages: Sequence[PackageInfo]) -> l
+             # away anyway.
+             granted = ", ".join(humanize_tool_label(c.name) for c in pkg.commands)
+             desc = pkg.description.strip() or (f"Bundled tools: {granted}." if granted else "")
+-            units.append(ToolMeta(entry, humanize_tool_label(entry), desc, group=entry))
++            units.append(ToolMeta(entry, package_label(entry, pkg), desc, group=entry))
+         else:
+             # Unknown entry (deploy without that package built) — still show it so
+             # the user can toggle it; no description available.
+diff --git a/src/workspace_app/tooling/external.py b/src/workspace_app/tooling/external.py
+index 08d37510f..ba35f8f0b 100644
+--- a/src/workspace_app/tooling/external.py
++++ b/src/workspace_app/tooling/external.py
+@@ -165,6 +165,7 @@ def _package(name: str, described: dict[str, Any]) -> PackageInfo:
+         # at the picker and a log line), so anything the model is expected to be
+         # able to say about a tool has to arrive here. Absent stays absent.
+         description=str(described.get("description") or ""),
++        title=str(described.get("title") or ""),
+         version=str(described.get("version") or ""),
+         author=str(described.get("author") or ""),
+         secret_env=tuple(
+diff --git a/src/workspace_app/tooling/mcp_server.py b/src/workspace_app/tooling/mcp_server.py
+index cda5c6b0d..af04fcad2 100644
+--- a/src/workspace_app/tooling/mcp_server.py
++++ b/src/workspace_app/tooling/mcp_server.py
+@@ -26,10 +26,18 @@ import sys
+ from collections.abc import Callable
+ from pathlib import Path
+ 
+-#: The revision of MCP this speaks. Only `initialize`, `tools/list` and
+-#: `tools/call` are implemented — a tool bundle has no resources or prompts to
+-#: offer, and answering methods we do not serve would be a lie.
+-PROTOCOL_VERSION = "2024-11-05"
++#: The revisions of MCP this speaks, latest first. Only `initialize`,
++#: `tools/list` and `tools/call` are implemented — a tool bundle has no
++#: resources or prompts to offer, and answering methods we do not serve would
++#: be a lie. 2025-03-26 is left out on purpose: it adds JSON-RPC batching, which
++#: this server does not serve (2025-06-18 removed it again).
++SUPPORTED_VERSIONS = ("2025-06-18", "2024-11-05")
++PROTOCOL_VERSION = SUPPORTED_VERSIONS[0]
++
++#: Who the tool is, written by the build beside the bundle's other metadata
++#: (docs/plan-tool-title.md D10): the adapter runs inside the bundle and never
++#: sees the manifest.
++ABOUT_FILE = "about.json"
+ 
+ METHOD_NOT_FOUND = -32601
+ 
+@@ -71,6 +79,54 @@ def load_tools(bundle: Path) -> list[dict]:
+     return tools
+ 
+ 
++def load_about(bundle: Path) -> dict | None:
++    """``{name, version, title?, description?}`` from the bundle, or ``None``
++    for a bundle built before the build wrote it."""
++    path = bundle / ABOUT_FILE
++    if not path.exists():
++        return None
++    return json.loads(path.read_text("utf-8"))
++
++
++def _negotiate(requested: object) -> str:
++    """MCP lifecycle: a version the server supports MUST be answered with
++    itself; otherwise with another it supports.
++
++    Which other: the newest one no newer than the client asked for, and the
++    latest only when none is. A client asking for 2025-03-26 does not know
++    2025-06-18 and may disconnect on it, while 2024-11-05 is what it accepted
++    from this server before it learnt any other version (review round 1).
++    Versions are ISO dates, so they compare as strings."""
++    if not isinstance(requested, str):
++        # Outside the spec (the client MUST name one), so keep what this
++        # server answered everyone before it knew a second version.
++        return SUPPORTED_VERSIONS[-1]
++    if requested in SUPPORTED_VERSIONS:
++        return requested
++    older = [v for v in SUPPORTED_VERSIONS if v <= requested]
++    return max(older) if older else PROTOCOL_VERSION
++
++
++def _initialized(version: str, about: dict | None) -> dict:
++    if about is None:
++        # What every bundle built before `about.json` has always answered.
++        return {
++            "protocolVersion": version,
++            "capabilities": {"tools": {}},
++            "serverInfo": {"name": "tool-bundle", "version": "1"},
++        }
++    server = {"name": about["name"], "version": about["version"]}
++    result: dict = {"protocolVersion": version, "capabilities": {"tools": {}}, "serverInfo": server}
++    # Only what the agreed version defines: `Implementation.title` arrived in
++    # 2025-06-18; `InitializeResult.instructions` is in every version served
++    # here (2024-11-05 already has it — schema/2024-11-05/schema.ts).
++    if version == "2025-06-18" and about.get("title"):
++        server["title"] = about["title"]
++    if about.get("description"):
++        result["instructions"] = about["description"]
++    return result
++
++
+ def _result(request_id: object, result: dict) -> dict:
+     return {"jsonrpc": "2.0", "id": request_id, "result": result}
+ 
+@@ -82,7 +138,9 @@ def _failed(request_id: object, text: str) -> dict:
+     return _result(request_id, {"content": [{"type": "text", "text": text}], "isError": True})
+ 
+ 
+-def handle(message: dict, tools: list[dict], invoke: Invoke | None) -> dict | None:
++def handle(
++    message: dict, tools: list[dict], invoke: Invoke | None, about: dict | None = None
++) -> dict | None:
+     """Answer one JSON-RPC message, or None when none is owed."""
+     method = message.get("method")
+     request_id = message.get("id")
+@@ -93,14 +151,11 @@ def handle(message: dict, tools: list[dict], invoke: Invoke | None) -> dict | No
+         return None
+ 
+     if method == "initialize":
+-        return _result(
+-            request_id,
+-            {
+-                "protocolVersion": PROTOCOL_VERSION,
+-                "capabilities": {"tools": {}},
+-                "serverInfo": {"name": "tool-bundle", "version": "1"},
+-            },
+-        )
++        params = message.get("params")
++        # Before this read anything, `params` could be anything; reading it
++        # must not be a way to take the server down.
++        requested = params.get("protocolVersion") if isinstance(params, dict) else None
++        return _result(request_id, _initialized(_negotiate(requested), about))
+ 
+     if method == "tools/list":
+         return _result(request_id, {"tools": tools})
+@@ -161,6 +216,7 @@ def main(argv: list[str]) -> int:  # pragma: no cover - exercised by `handle`
+     """Serve MCP over stdio for the bundle this file sits in."""
+     bundle = Path(argv[0]).resolve() if argv else Path(__file__).resolve().parent
+     tools = load_tools(bundle)
++    about = load_about(bundle)
+     invoke = _launcher_invoke(bundle / "launch")
+ 
+     for line in sys.stdin:
+@@ -171,7 +227,7 @@ def main(argv: list[str]) -> int:  # pragma: no cover - exercised by `handle`
+             message = json.loads(line)
+         except ValueError:
+             continue
+-        reply = handle(message, tools, invoke)
++        reply = handle(message, tools, invoke, about)
+         if reply is not None:
+             print(json.dumps(reply), flush=True)
+     return 0
+diff --git a/src/workspace_app/tooling/registry.py b/src/workspace_app/tooling/registry.py
+index 9b916f751..a413cb2bd 100644
+--- a/src/workspace_app/tooling/registry.py
++++ b/src/workspace_app/tooling/registry.py
+@@ -129,6 +129,11 @@ class PackageInfo:
+     exactly as usable as it was, and every artifact published before the field
+     existed says nothing."""
+ 
++    title: str = ""
++    """What this tool is CALLED, in its author's words, or ``""`` when they
++    gave none (docs/plan-tool-title.md) — then it is shown by its id. A
++    first-party package has none."""
++
+     version: str = ""
+     """The release this package resolved at, or ``""`` for a first-party
+     package — it has no artifact and no release."""
+@@ -798,7 +803,13 @@ def describe_command(pkg: PackageInfo, cmd: CommandInfo) -> str:
+     release = f" {pkg.version}" if pkg.version else ""
+     by = f", by {pkg.author}" if pkg.author else ""
+     said = f" — {pkg.description.strip()}" if pkg.description.strip() else "."
+-    line = f"{cmd.description}\n\nFrom the `{pkg.name}` tool bundle{release}{by}{said}"
++    # docs/plan-tool-title.md D9: the title the person sees, beside the id
++    # the commands are named by — so "the 「SMT 量測分析」 tool" and `rca-tools`
++    # read as one tool to the model.
++    bundle = (
++        f"「{pkg.title}」 tool bundle (`{pkg.name}`)" if pkg.title else f"`{pkg.name}` tool bundle"
++    )
++    line = f"{cmd.description}\n\nFrom the {bundle}{release}{by}{said}"
+     if pkg.latest_version is not None:
+         # plan-tool-running-version D2: the release that RUNS is the one this
+         # sandbox was created with; say so, and how the latest is reached, so
+diff --git a/src/workspace_app/workflow/dsl.py b/src/workspace_app/workflow/dsl.py
+index 8fa287583..df2208bc0 100644
+--- a/src/workspace_app/workflow/dsl.py
++++ b/src/workspace_app/workflow/dsl.py
+@@ -1114,6 +1114,7 @@ def _validate_step(
+     declared: set[str],
+     scope: set[str],
+     tool_ceiling: set[str] | None,
++    tools_on: set[str] | None,
+     capabilities: tuple[str, ...],
+     errs: list[str],
+     steps_seen: dict[str, dict[str, Any]],
+@@ -1151,6 +1152,7 @@ def _validate_step(
+             declared,
+             scope | {step.as_},
+             tool_ceiling,
++            tools_on,
+             capabilities,
+             errs,
+             top=False,
+@@ -1173,6 +1175,7 @@ def _validate_step(
+             declared,
+             scope,
+             tool_ceiling,
++            tools_on,
+             capabilities,
+             errs,
+             steps_seen,
+@@ -1301,10 +1304,10 @@ def _validate_step(
+         errs.append(f"{where}: retries cannot be negative")
+     if tool_ceiling is not None:
+         # Judged by the rule the run narrows with (`narrow_entries`): a command
+-        # of a package the profile grants whole is inside the ceiling, since the
++        # of a package the App grants whole is inside the ceiling, since the
+         # picker now shows and the run now honours that granularity. The
+         # ceiling is what the caller could bring to command granularity: with
+-        # the package list (`_profile_tool_ceiling(…, packages)`) a misspelt
++        # the package list (`_app_tool_ceiling(…, packages)`) a misspelt
+         # command names nothing and is refused; a package the caller could not
+         # resolve, or one with no commands, stays a bare name and any `pkg:cmd`
+         # of it passes here — the run then drops it, and says so in its log.
+@@ -1312,7 +1315,17 @@ def _validate_step(
+ 
+         for t in step.tools:
+             if not narrow_entries([t], tool_ceiling):
+-                errs.append(f"{where}: tool {t!r} is outside the profile's allowed tools")
++                errs.append(f"{where}: tool {t!r} is not one of this App's tools")
++            elif tools_on is not None and not narrow_entries([t], tools_on):
++                # In the App but off in this item's tool picker: the run would
++                # narrow it away (`TurnContextBuilder._finalized`), so say it
++                # now, with the place that switches it on. Only callers that
++                # hold the ITEM's picker answer pass `tools_on` (the template
++                # routes) — a turn's own list may be narrower than the picker.
++                errs.append(
++                    f"{where}: tool {t!r} is switched off in this item — switch it on "
++                    "in the item's tool picker first"
++                )
+     _check_interp([step.prompt, step.out, step.tools], scope, where, errs, steps_seen)
+     if step.check is not None:
+         _validate_check(step.check, scope, where, errs, steps_seen)
+@@ -1360,6 +1373,7 @@ def _validate_switch(
+     declared: set[str],
+     scope: set[str],
+     tool_ceiling: set[str] | None,
++    tools_on: set[str] | None,
+     capabilities: tuple[str, ...],
+     errs: list[str],
+     steps_seen: dict[str, dict[str, Any]],
+@@ -1388,6 +1402,7 @@ def _validate_switch(
+             declared,
+             scope,
+             tool_ceiling,
++            tools_on,
+             capabilities,
+             errs,
+             top=top,
+@@ -1400,6 +1415,7 @@ def _validate_switch(
+             declared,
+             scope,
+             tool_ceiling,
++            tools_on,
+             capabilities,
+             errs,
+             top=top,
+@@ -1493,6 +1509,7 @@ def _validate_steps(
+     declared: set[str],
+     scope: set[str],
+     tool_ceiling: set[str] | None,
++    tools_on: set[str] | None,
+     capabilities: tuple[str, ...],
+     errs: list[str],
+     *,
+@@ -1514,6 +1531,7 @@ def _validate_steps(
+             declared,
+             scope,
+             tool_ceiling,
++            tools_on,
+             capabilities,
+             errs,
+             steps_seen,
+@@ -1527,12 +1545,14 @@ def validate_def(
+     d: WorkflowDef,
+     *,
+     tool_ceiling: set[str] | None = None,
++    tools_on: set[str] | None = None,
+     capabilities: tuple[str, ...] = CAPABILITIES,
+ ) -> list[str]:
+     """Static problems with a parsed DSL, as human-readable strings (empty ⇒ valid).
+     ``save_workflow`` hands these back to the agent to fix (manual §22, Q8); package
+     discovery fails loud on them. ``tool_ceiling`` (``None`` ⇒ skip) clamps an agent
+-    step's ``tools`` to the profile's allowed set."""
++    step's ``tools`` to the App's tools; ``tools_on`` (``None`` ⇒ skip) further to what
++    this item's tool picker has on."""
+     errs: list[str] = []
+     if d.schema_version != 1:
+         errs.append(f"unsupported schema version {d.schema_version} (only 1)")
+@@ -1558,6 +1578,7 @@ def validate_def(
+         declared,
+         {"config", "inputs", "steps"},  # #428 §1: the named-output reference namespace
+         tool_ceiling,
++        tools_on,
+         capabilities,
+         errs,
+         top=True,
+@@ -1640,9 +1661,9 @@ def describe_dsl_grammar() -> str:
+ def describe_workflow_boundaries(tool_ceiling: set[str] | None) -> str:
+     """What a workflow authored for this app can and cannot do (plan §3.2, P6): the agent-
+     step tool ceiling (save_workflow rejects anything outside it) and the available
+-    capabilities. ``None`` ceiling ⇒ no per-profile clamp is known (all profile tools)."""
++    capabilities. ``None`` ceiling ⇒ no App clamp is known (all the App's tools)."""
+     tools = (
+-        "all of the profile's tools"
++        "all of the app's tools"
+         if tool_ceiling is None
+         else (", ".join(sorted(tool_ceiling)) or "(none)")
+     )
+@@ -1651,7 +1672,8 @@ def describe_workflow_boundaries(tool_ceiling: set[str] | None) -> str:
+             "## What a workflow here can and cannot do (this app)",
+             "",
+             f"- an `agent` step's `tools` must be within: {tools} "
+-            "(save_workflow rejects anything outside — don't guess).",
++            "(save_workflow rejects anything outside — don't guess). A step only gets the "
++            "ones this item's tool picker has on; ask the user to switch on any it needs.",
+             f"- reliable side-effects go ONLY through a `capability`: {', '.join(CAPABILITIES)}.",
+             "- a `sandbox` step is compute-only (no credential); it cannot reach collections.",
+         ]
+diff --git a/src/workspace_app/workflow/offered.py b/src/workspace_app/workflow/offered.py
+index 2de329e3b..31d8492fb 100644
+--- a/src/workspace_app/workflow/offered.py
++++ b/src/workspace_app/workflow/offered.py
+@@ -14,7 +14,7 @@ The rule, stated once: an item offers the workflows its profile declares AND
+ the ones saved under its own `.workflows/`, a workspace one shadowing a package
+ one of the same id (the orchestrator already resolves that way — this makes the
+ gates agree with the thing that runs). Nothing here widens what a workspace
+-workflow may do: `save_workflow` validated it against the profile's tool ceiling
++workflow may do: `save_workflow` validated it against the App's tools
+ when it was written, and the panel already let anyone with access to the item
+ run it.
+ 
+diff --git a/src/workspace_app/workflow/shared.py b/src/workspace_app/workflow/shared.py
+index 1fe82a0ae..c616445bc 100644
+--- a/src/workspace_app/workflow/shared.py
++++ b/src/workspace_app/workflow/shared.py
+@@ -12,7 +12,7 @@ an App and read in place at prompt-compose time; a template is COPIED into an it
+ ``.workflows/`` (see ``workspace_store``), so the user owns their copy and edits it
+ freely, and the original is never consulted again. That is why there is no per-App opt-in
+ list here: a template only has to be compatible, and compatibility is already decided by
+-the profile's tool ceiling, which ``validate_def`` checks at copy time. Adding a
++the App's tools (``_app_tool_ceiling``), which ``validate_def`` checks at copy time. Adding a
+ ``workflows:`` grant to ``app.json`` would be a second, weaker copy of a check the DSL
+ validator already performs exactly.
+ 
+diff --git a/src/workspace_app/workflow/workspace_store.py b/src/workspace_app/workflow/workspace_store.py
+index 1207c3edd..9f527da04 100644
+--- a/src/workspace_app/workflow/workspace_store.py
++++ b/src/workspace_app/workflow/workspace_store.py
+@@ -83,12 +83,14 @@ def workspace_workflow_path(slug: str) -> str:
+ 
+ 
+ def validate_workflow_json(
+-    raw: bytes | str, *, tool_ceiling: set[str] | None = None
++    raw: bytes | str,
++    *,
++    tool_ceiling: set[str] | None = None,
+ ) -> tuple[WorkflowDef | None, list[str]]:
+     """Parse + statically validate a ``workflow.json``. Returns ``(def, [])`` when it's
+     runnable, or ``(None, [problems])`` when it won't parse / ``(def, [problems])`` when
+     it parses but the DSL rules flag it (manual §22, Q8). ``tool_ceiling`` clamps an agent
+-    step's ``tools`` to the profile's allowed set (``None`` ⇒ skip that check)."""
++    step's ``tools`` to the App's tools (``None`` ⇒ skip that check)."""
+     try:
+         d = parse_def(raw)
+     except DslError as exc:  # the same test `workflow_problem` makes, parsed once
+diff --git a/tests/agent/test_save_workflow_tool.py b/tests/agent/test_save_workflow_tool.py
+index 2872cca27..e6433e0a8 100644
+--- a/tests/agent/test_save_workflow_tool.py
++++ b/tests/agent/test_save_workflow_tool.py
+@@ -66,8 +66,8 @@ async def test_id_with_no_usable_chars_rejected():
+ 
+ 
+ async def test_tool_ceiling_clamps_agent_tools():
+-    """With an App/profile context, an agent step asking for a tool outside the profile's
+-    ceiling (topic-hub has no `exec`) is rejected at save time (Q4)."""
++    """With an App context, an agent step asking for a tool the App does not grant
++    (topic-hub has no `exec`) is rejected at save time (Q4)."""
+     ctx = _ctx(app_slug="topic-hub", template_profile="default")
+     over = json.dumps(
+         {
+@@ -86,7 +86,7 @@ async def test_tool_ceiling_clamps_agent_tools():
+         }
+     )
+     out = await save_workflow_impl(ctx, "flow", over)
+-    assert "error" in out and "outside the profile's allowed tools" in out
++    assert "error" in out and "is not one of this App's tools" in out
+ 
+ 
+ async def test_unknown_app_skips_the_tool_clamp():
+@@ -97,8 +97,8 @@ async def test_unknown_app_skips_the_tool_clamp():
+ 
+ 
+ async def test_profile_tools_override_is_the_ceiling():
+-    """A profile that narrows the App's tools (playground/intake) is the ceiling — a
+-    tools-free workflow still saves under it (exercises the profile-override path)."""
++    """A profile that narrows the App's DEFAULT tools (playground/intake) — a
++    tools-free workflow still saves under it."""
+     ctx = _ctx(app_slug="playground", template_profile="intake")
+     assert "saved workflow" in await save_workflow_impl(ctx, "flow", _VALID)
+ 
+@@ -162,6 +162,39 @@ async def test_a_command_the_package_does_not_have_is_refused_not_saved():
+     ceiling is expanded and the typo names nothing in it."""
+     ctx = _ctx(app_slug="rca", template_profile="default", packages=[_rca_pkg()])
+     out = await save_workflow_impl(ctx, "flow", _steps_with_tools(["rca-tools:spcc"]))
+-    assert "error" in out and "outside the profile's allowed tools" in out, out
++    assert "error" in out and "is not one of this App's tools" in out, out
+     out = await save_workflow_impl(ctx, "flow2", _steps_with_tools(["exec:foo"]))
+-    assert "error" in out and "outside the profile's allowed tools" in out, out
++    assert "error" in out and "is not one of this App's tools" in out, out
++
++
++def _item_with(*on: str):
++    """The finalized config a chat turn on the item carries: what its tool
++    picker has ON (`allowed_tools`)."""
++    from workspace_app.resources.agent_config import AgentConfig
++
++    return AgentConfig(name="ws", allowed_tools=list(on))
++
++
++async def test_a_tool_switched_on_in_the_item_is_accepted_though_the_profile_leaves_it_off():
++    """playground/intake leaves `exec` off by default; an item that switched it
++    on in its tool picker uses it by hand, so a workflow step may name it (the
++    reported `outside the profile's allowed tools`)."""
++    ctx = _ctx(
++        app_slug="playground",
++        template_profile="intake",
++        agent_config=_item_with("read_file", "exec", "read_image"),
++    )
++    out = await save_workflow_impl(ctx, "flow", _steps_with_tools(["exec", "read_image"]))
++    assert "saved workflow" in out, out
++
++
++async def test_a_narrower_turn_does_not_refuse_an_app_tool():
++    """The turn that saves may hold less than the item's picker — a sub-agent
++    granted `[save_workflow, read_file]`, an agent copy's chat, a workflow
++    node. Its own list is not the item's, so it is not what a step's tools are
++    judged by: an App tool it does not hold still saves (review of #1027)."""
++    ctx = _ctx(
++        app_slug="playground", template_profile="intake", agent_config=_item_with("read_file")
++    )
++    out = await save_workflow_impl(ctx, "flow", _steps_with_tools(["exec", "write_file"]))
++    assert "saved workflow" in out, out
+diff --git a/tests/api/test_tools_routes.py b/tests/api/test_tools_routes.py
+index 2ee8c9cba..a33d2b5fc 100644
+--- a/tests/api/test_tools_routes.py
++++ b/tests/api/test_tools_routes.py
+@@ -568,3 +568,25 @@ def test_a_declared_and_granted_third_party_tool_is_not_warned_about(
+ 
+     assert "wafer-history:trend" in {r["key"] for r in rows}  # it IS offered
+     assert not [r for r in caplog.records if "not in tools[]" in r.getMessage()]
++
++
++def test_a_third_party_tool_is_called_by_its_title_and_carries_its_description(
++    harness: Harness, monkeypatch
++):
++    """docs/plan-tool-title.md D7/D8, through the route the picker reads: the
++    fold is named by the title and its header reads the tool's description."""
++    from dataclasses import replace
++
++    iid = register_rca_item(harness.spec)
++    _declaring(monkeypatch, "wafer-history")
++    resolved = _resolved()
++    (pkg,) = resolved.packages
++    titled = replace(pkg, title="晶圓歷史查詢", description="晶圓路徑與良率歷史查詢。")
++    _resolving(monkeypatch, replace(resolved, packages=(titled,)))
++
++    rows = harness.client.get(f"/a/rca/items/{iid}/tools").json()["tools"]
++
++    row = {r["key"]: r for r in rows}["wafer-history:trend"]
++    assert row["package"] == "晶圓歷史查詢"
++    assert row["package_description"] == "晶圓路徑與良率歷史查詢。"
++    assert row["group"] == "wafer-history"
+diff --git a/tests/tooling/test_artifact.py b/tests/tooling/test_artifact.py
+index eeede4102..49aa30b0f 100644
+--- a/tests/tooling/test_artifact.py
++++ b/tests/tooling/test_artifact.py
+@@ -394,3 +394,23 @@ def test_anything_else_leaves_the_check_on(spelling, monkeypatch) -> None:
+     monkeypatch.setenv(INSECURE_ENV, spelling)
+ 
+     assert not tls_checks_disabled()
++
++
++def test_parse_manifest_carries_the_title_the_author_gave() -> None:
++    """docs/plan-tool-title.md D6: display-only, at the tier `description`
++    lives at — nothing reads it to decide anything."""
++    m = parse_manifest(_manifest_bytes(title="晶圓歷史查詢"))
++
++    assert m.title == "晶圓歷史查詢"
++    assert parse_manifest(render_manifest(m)) == m
++
++
++def test_a_manifest_published_before_titles_existed_still_parses() -> None:
++    """D6: no `format_version` bump — every artifact in the field has no title."""
++    body = json.loads(_manifest_bytes())
++    assert "title" not in body
++
++    m = parse_manifest(json.dumps(body).encode())
++
++    assert m.title is None
++    assert "title" not in json.loads(render_manifest(m))
+diff --git a/tests/tooling/test_builder.py b/tests/tooling/test_builder.py
+index 160a2d8e2..a8ce9ba7e 100644
+--- a/tests/tooling/test_builder.py
++++ b/tests/tooling/test_builder.py
+@@ -48,12 +48,13 @@ def _source(
+     version: str = "1.4.2",
+     authors: str = "",
+     description: str = "",
++    tool_table: str = "",
+ ) -> Path:
+     src = tmp_path / "src-tree"
+     (src / "src").mkdir(parents=True)
+     (src / "pyproject.toml").write_text(
+         f'[project]\nname = "{name}"\nversion = "{version}"\n{authors}{description}'
+-        f'\n[project.scripts]\n{name} = "pkg.cli:main"\n'
++        f'\n[project.scripts]\n{name} = "pkg.cli:main"\n{tool_table}'
+     )
+     (src / "uv.lock").write_text("# pinned")
+     return src
+@@ -178,6 +179,48 @@ def test_an_author_who_describes_nothing_publishes_a_manifest_that_says_nothing(
+     assert manifest.description is None
+ 
+ 
++def _build_titled(tmp_path: Path, tool_table: str) -> Manifest:
++    return build_artifact(
++        source=_source(tmp_path, tool_table=tool_table),
++        out=tmp_path / "dist",
++        builder_id=_BUILDER,
++        build_bundle=_fake_bundle({"trend": "t"}),
++        smoke_check=lambda _dist: None,
++    )
++
++
++def test_build_artifact_publishes_the_title_the_author_gives_their_tool(tmp_path: Path) -> None:
++    """docs/plan-tool-title.md D1: PEP 621 has no title, so it lives in the
++    `[tool.<name>]` table PEP 518 keeps for tools — in the same file as the
++    version and the description, which is the file an author edits to release."""
++    manifest = _build_titled(tmp_path, '\n[tool.ai-workspace]\ntitle = "  晶圓歷史查詢 "\n')
++
++    assert manifest.title == "晶圓歷史查詢"
++    published = parse_manifest((tmp_path / "dist" / MANIFEST_NAME).read_bytes())
++    assert published.title == "晶圓歷史查詢"
++
++
++def test_an_author_who_gives_no_title_publishes_a_manifest_without_one(tmp_path: Path) -> None:
++    """D4: every tool already published has none, and is just as usable."""
++    manifest = _build_titled(tmp_path, "\n[tool.ai-workspace]\n")
++
++    assert manifest.title is None
++    body = json.loads((tmp_path / "dist" / MANIFEST_NAME).read_text())
++    assert "title" not in body
++
++
++@pytest.mark.parametrize(
++    "table",
++    ['title = ""', 'title = "   "', "title = 3", "title = []"],
++    ids=["empty", "blank", "number", "list"],
++)
++def test_a_title_that_is_not_text_fails_the_authors_build(tmp_path: Path, table: str) -> None:
++    """D5: a title written wrong is not a title left out — publishing it as
++    nothing would be silence the author never sees."""
++    with pytest.raises(BuildError, match=r"\.title must be a non-empty string"):
++        _build_titled(tmp_path, f"\n[tool.ai-workspace]\n{table}\n")
++
++
+ # ── #763: the author's `env.json` has to reach the MANIFEST ──────────────
+ #
+ # The host reads `manifest.env` and never reads `env.json` out of the bundle
+@@ -671,6 +714,17 @@ def test_build_tool_names_the_author_in_the_ci_log(tmp_path, monkeypatch, capsys
+     assert "note:" not in out
+ 
+ 
++def test_build_tool_names_the_title_in_the_ci_log(tmp_path, monkeypatch, capsys):
++    """The author's own build is the first place the title is shown."""
++    published = replace(_stub_manifest(), title="晶圓歷史查詢")
++    monkeypatch.setattr(builder_mod, "build_artifact", lambda **kw: published)
++    monkeypatch.setenv("TOOL_BUILDER_ID", _BUILDER)
++
++    assert main(["build", str(tmp_path / "src"), str(tmp_path / "dist")]) == 0
++
++    assert "「晶圓歷史查詢」" in capsys.readouterr().out
++
++
+ def test_build_tool_says_how_to_add_a_missing_author(tmp_path, monkeypatch, capsys):
+     """Nothing refuses a build over this field, so without a word here an
+     author who mistyped the table would never learn that it did not publish."""
+@@ -897,7 +951,9 @@ def signing(monkeypatch):
+     monkeypatch.setattr(grant_mod, "TRUSTED_KEYS", {"alice": public})
+     # Small enough that a few kilobytes of random bytes exceed it. The real
+     # number is pinned in test_grant.py, against the figure the guide quotes.
+-    monkeypatch.setattr(grant_mod, "DEFAULT_MAX_BYTES", 4096)
++    # Above a bare bundle (with its `about.json`), far below the 20KB of random
++    # bytes the over-limit tests pack.
++    monkeypatch.setattr(grant_mod, "DEFAULT_MAX_BYTES", 8192)
+     return private
+ 
+ 
+@@ -1088,3 +1144,39 @@ def test_a_relative_symlink_out_of_the_bundle_fails_the_build(tmp_path: Path) ->
+ 
+     with pytest.raises(BuildError, match="escape"):
+         builder_mod.pack_bundle(bundle)
++
++
++def test_a_tool_table_that_is_not_a_table_fails_the_authors_build(tmp_path: Path) -> None:
++    """D5 again: `ai-workspace = "…"` is a title in the wrong shape, not none."""
++    with pytest.raises(BuildError, match=r"\[tool\.ai-workspace\] must be a table"):
++        _build_titled(tmp_path, '\n[tool]\nai-workspace = "晶圓歷史查詢"\n')
++
++
++def test_the_bundle_tells_its_mcp_face_who_it_is(tmp_path: Path) -> None:
++    """docs/plan-tool-title.md D10: the MCP adapter runs inside the bundle and
++    never sees the manifest, so who the tool is has to travel in the bundle."""
++    _build_titled(tmp_path, '\n[tool.ai-workspace]\ntitle = "晶圓歷史查詢"\n')
++
++    with tarfile.open(tmp_path / "dist" / BUNDLE_NAME) as tar:
++        member = tar.extractfile("about.json")
++        assert member is not None
++        about = json.loads(member.read().decode("utf-8"))
++    assert about == {"name": "wafer-history", "version": "1.4.2", "title": "晶圓歷史查詢"}
++
++
++def test_a_tool_key_that_is_not_a_table_fails_the_build_with_one_line(tmp_path: Path) -> None:
++    """Review round 1: `tool = "x"` raised AttributeError — a traceback in the
++    author's CI log instead of `build failed:`."""
++    source = _source(tmp_path)
++    pyproject = source / "pyproject.toml"
++    pyproject.write_text('tool = "x"\n' + pyproject.read_text())
++
++    with pytest.raises(BuildError, match=r"\[tool\] must be a table"):
++        read_project(source)
++
++
++def test_a_title_on_more_than_one_line_fails_the_authors_build(tmp_path: Path) -> None:
++    """Review round 1: a title is one line — the panel, the CI log line and
++    the AI's tool description each read it as one."""
++    with pytest.raises(BuildError, match="must be one line"):
++        _build_titled(tmp_path, '\n[tool.ai-workspace]\ntitle = "a\\nb"\n')
+diff --git a/tests/tooling/test_catalog.py b/tests/tooling/test_catalog.py
+index ec6627fc1..189cc9f0a 100644
+--- a/tests/tooling/test_catalog.py
++++ b/tests/tooling/test_catalog.py
+@@ -168,3 +168,41 @@ def test_every_picker_unit_names_the_group_the_picker_folds_it_under():
+         "data-fetch",  # a command of a package this deploy did not build
+         "mystery",  # an unknown bare entry is its own group
+     ]
++
++
++def _titled(**over: object) -> PackageInfo:
++    base: dict = {
++        "name": "rca-tools",
++        "commands": (_cmd("spc", "SPC chart"), _cmd("pareto", "Pareto chart")),
++        "install_dir": "../.tools/rca-tools",
++        "title": "SMT 量測分析",
++        "description": "SMT 產線的量測資料擷取與初步分析。",
++    }
++    base.update(over)
++    return PackageInfo(**base)
++
++
++def test_a_tool_with_a_title_is_called_by_it_in_the_picker() -> None:
++    """docs/plan-tool-title.md D7: the title, not the id with its dashes taken
++    out — for the command rows' `package` and for a whole-package row alike."""
++    cmd_row, whole = picker_units(["rca-tools:spc", "rca-tools"], packages=[_titled()])
++
++    assert cmd_row.package == "SMT 量測分析"
++    assert whole.label == "SMT 量測分析"
++
++
++def test_a_tool_without_a_title_is_still_called_by_its_id() -> None:
++    """D4: every tool published before the title existed."""
++    cmd_row, whole = picker_units(["rca-tools:spc", "rca-tools"], packages=[_titled(title="")])
++
++    assert cmd_row.package == "Rca Tools"
++    assert whole.label == "Rca Tools"
++
++
++def test_a_command_row_carries_what_its_tool_is() -> None:
++    """The picker folds a tool's commands under one header; the header is where
++    the tool's own description is read (D8), and the rows are all it gets."""
++    (cmd_row,) = picker_units(["rca-tools:spc"], packages=[_titled()])
++
++    assert cmd_row.package_description == "SMT 產線的量測資料擷取與初步分析。"
++    assert cmd_row.description == "SPC chart"
+diff --git a/tests/tooling/test_external.py b/tests/tooling/test_external.py
+index db7ca9094..aa4505ee5 100644
+--- a/tests/tooling/test_external.py
++++ b/tests/tooling/test_external.py
+@@ -407,3 +407,24 @@ def test_drift_is_the_one_rule_for_same_different_missing_and_unknown() -> None:
+         "absent": Drift(missing=True),
+     }
+     assert drift(ext, None) == {}  # unknown lists nothing (D4)
++
++
++async def test_the_package_carries_what_the_tool_is_called() -> None:
++    """docs/plan-tool-title.md: the title arrives on the package, beside the
++    description, so every reader of a package can name the tool."""
++    answer = {
++        "tools": {"wafer-history": {**_ANSWER["tools"]["wafer-history"], "title": "晶圓歷史查詢"}},
++        "refused": {},
++    }
++
++    external = await resolve_external_tools(_Host(answer), {"wafer-history": "https://g/m"})
++
++    (pkg,) = external.packages
++    assert pkg.title == "晶圓歷史查詢"
++
++
++async def test_a_tool_with_no_title_leaves_it_empty() -> None:
++    external = await resolve_external_tools(_Host(_ANSWER), {"wafer-history": "https://g/m"})
++
++    (pkg,) = external.packages
++    assert pkg.title == ""
+diff --git a/tests/tooling/test_mcp_server.py b/tests/tooling/test_mcp_server.py
+index 8ad6519fd..995c5c82f 100644
+--- a/tests/tooling/test_mcp_server.py
++++ b/tests/tooling/test_mcp_server.py
+@@ -14,7 +14,7 @@ from __future__ import annotations
+ import json
+ from pathlib import Path
+ 
+-from workspace_app.tooling.mcp_server import handle, load_tools
++from workspace_app.tooling.mcp_server import handle, load_about, load_tools
+ 
+ 
+ def _bundle(tmp_path: Path) -> Path:
+@@ -207,3 +207,95 @@ def test_the_timeout_reaches_the_agent_as_the_platform_words_it(tmp_path: Path)
+ 
+     assert reply is not None
+     assert "time limit" in reply["result"]["content"][0]["text"]
++
++
++# ── docs/plan-tool-title.md D10: who the server is ─────────────────────────
++
++_ABOUT = {
++    "name": "wafer-history",
++    "version": "1.4.2",
++    "title": "晶圓歷史查詢",
++    "description": "晶圓路徑與良率歷史查詢。",
++}
++
++
++def _initialize(version: str | None, about: dict | None = _ABOUT) -> dict:
++    params = {"protocolVersion": version, "capabilities": {}} if version else {}
++    msg = {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": params}
++    reply = handle(msg, tools=[], invoke=None, about=about)
++    assert reply is not None
++    return reply["result"]
++
++
++def test_a_current_client_reads_the_tools_title_and_description() -> None:
++    """`serverInfo.title` exists from MCP 2025-06-18 (`Implementation extends
++    BaseMetadata`); `InitializeResult.instructions` already in 2024-11-05."""
++    result = _initialize("2025-06-18")
++
++    assert result["protocolVersion"] == "2025-06-18"
++    assert result["serverInfo"] == {
++        "name": "wafer-history",
++        "version": "1.4.2",
++        "title": "晶圓歷史查詢",
++    }
++    assert result["instructions"] == "晶圓路徑與良率歷史查詢。"
++
++
++def test_an_older_client_gets_its_own_version_and_nothing_it_does_not_know() -> None:
++    """Lifecycle: a version the server supports MUST be answered with itself.
++    2024-11-05 has no `Implementation.title` — but it does have `instructions`
++    (review round 1: the schema says so; an earlier claim otherwise was wrong)."""
++    result = _initialize("2024-11-05")
++
++    assert result["protocolVersion"] == "2024-11-05"
++    assert result["serverInfo"] == {"name": "wafer-history", "version": "1.4.2"}
++    assert result["instructions"] == "晶圓路徑與良率歷史查詢。"
++
++
++def test_a_version_this_server_does_not_speak_is_answered_with_one_the_client_can_take() -> None:
++    """2025-03-26 adds JSON-RPC batching, which this server does not serve, so
++    it is not claimed. The lifecycle rule is to answer with another supported
++    version; a client asking for 2025-03-26 does not know 2025-06-18 and may
++    disconnect on it, while 2024-11-05 is what it accepted before this server
++    learnt any other (review round 1). So: the newest supported version no
++    newer than the one asked for — and the latest when none is."""
++    assert _initialize("2025-03-26")["protocolVersion"] == "2024-11-05"
++    assert _initialize("2026-01-01")["protocolVersion"] == "2025-06-18"
++    assert _initialize("1999-01-01")["protocolVersion"] == "2025-06-18"
++
++
++def test_initialize_with_params_that_are_not_an_object_still_answers() -> None:
++    msg = {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": [1]}
++    reply = handle(msg, tools=[], invoke=None, about=_ABOUT)
++
++    assert reply is not None
++    assert reply["result"]["protocolVersion"] == "2024-11-05"
++
++
++def test_a_client_that_names_no_version_gets_what_this_server_always_answered() -> None:
++    """Review round 1 (regression): before this server knew two versions it
++    answered 2024-11-05 to everyone; a client that names none keeps that."""
++    assert _initialize(None)["protocolVersion"] == "2024-11-05"
++
++
++def test_a_tool_that_gave_no_title_or_description_says_neither() -> None:
++    about = {"name": "wafer-history", "version": "1.4.2"}
++    result = _initialize("2025-06-18", about)
++
++    assert result["serverInfo"] == {"name": "wafer-history", "version": "1.4.2"}
++    assert "instructions" not in result
++
++
++def test_a_bundle_built_before_titles_still_names_a_server() -> None:
++    """No `about.json`: what every bundle in the field answered before."""
++    result = _initialize("2025-06-18", None)
++
++    assert result["serverInfo"] == {"name": "tool-bundle", "version": "1"}
++
++
++def test_about_is_read_from_the_bundle_and_absent_when_it_is(tmp_path: Path) -> None:
++    bundle = _bundle(tmp_path)
++    assert load_about(bundle) is None
++
++    (bundle / "about.json").write_text(json.dumps(_ABOUT), encoding="utf-8")
++    assert load_about(bundle) == _ABOUT
+diff --git a/tests/tooling/test_registry.py b/tests/tooling/test_registry.py
+index cc4ae8ec8..09890ba04 100644
+--- a/tests/tooling/test_registry.py
++++ b/tests/tooling/test_registry.py
+@@ -497,3 +497,18 @@ def test_a_bundle_that_says_nothing_about_itself_still_reads_as_a_sentence():
+     (tool,) = build_function_tools([pkg], allowed=["rca-tools"])
+ 
+     assert tool.description == "Fetch.\n\nFrom the `rca-tools` tool bundle."
++
++
++def test_the_ai_reads_the_tool_by_its_title_and_its_id():
++    """docs/plan-tool-title.md D9: the title the person sees, beside the id the
++    tool's commands are named by."""
++    pkg = PackageInfo(
++        name="rca-tools",
++        install_dir="../.tools/rca-tools",
++        commands=(CommandInfo("data-fetch", "Fetch.", {"type": "object"}),),
++        title="SMT 量測分析",
++    )
++
++    (tool,) = build_function_tools([pkg], allowed=["rca-tools"])
++
++    assert tool.description == "Fetch.\n\nFrom the 「SMT 量測分析」 tool bundle (`rca-tools`)."
+diff --git a/tests/workflow/test_dsl.py b/tests/workflow/test_dsl.py
+index 2e004959f..9ae10d613 100644
+--- a/tests/workflow/test_dsl.py
++++ b/tests/workflow/test_dsl.py
+@@ -335,7 +335,24 @@ def test_validate_agent_tool_ceiling():
+         ],
+         tool_ceiling={"read_file"},
+     )
+-    assert any("tool 'nuke' is outside" in e for e in errs)
++    assert any("tool 'nuke' is not one of this App's tools" in e for e in errs)
++
++
++def test_validate_agent_tool_switched_off_in_the_item():
++    """In the App's tools but not on in this item's picker: a different
++    problem with a different remedy, so a different sentence. A tool the App
++    lacks is still reported as such, not as "switched off"."""
++    step = {"type": "agent", "cache": True, "prompt": "p", "phase": "p", "out": "o"}
++    errs = _errs(
++        [{**step, "tools": ["read_file", "exec", "nuke"]}],
++        tool_ceiling={"read_file", "exec"},
++        tools_on={"read_file"},
++    )
++    assert [e for e in errs if "tool" in e] == [
++        "steps[0]: tool 'exec' is switched off in this item — switch it on in the item's "
++        "tool picker first",
++        "steps[0]: tool 'nuke' is not one of this App's tools",
++    ]
+ 
+ 
+ def test_validate_check_shapes():
+diff --git a/tests/workflow/test_prompt_braces.py b/tests/workflow/test_prompt_braces.py
+index 6e2176074..66b7b6331 100644
+--- a/tests/workflow/test_prompt_braces.py
++++ b/tests/workflow/test_prompt_braces.py
+@@ -98,4 +98,4 @@ def test_the_validator_accepts_a_command_of_a_package_the_profile_grants_whole()
+     ceiling = {"exec", "rca-tools"}
+     assert validate_def(with_tools(["rca-tools:spc", "exec"]), tool_ceiling=ceiling) == []
+     errs = validate_def(with_tools(["sci-plot:chart"]), tool_ceiling=ceiling)
+-    assert errs and "outside the profile's allowed tools" in errs[0]
++    assert errs and "is not one of this App's tools" in errs[0]
+diff --git a/tests/workflow/test_template_routes.py b/tests/workflow/test_template_routes.py
+index 53eede686..7232d07e1 100644
+--- a/tests/workflow/test_template_routes.py
++++ b/tests/workflow/test_template_routes.py
+@@ -20,7 +20,9 @@ from workspace_app.resources import make_spec
+ from workspace_app.sandbox.mock import MockSandbox
+ 
+ 
+-def _app(profile: str = "echo") -> tuple[FastAPI, SpecStar, str]:
++def _app(
++    profile: str = "echo", tool_prefs: dict[str, bool] | None = None
++) -> tuple[FastAPI, SpecStar, str]:
+     spec = make_spec()
+     app = create_app(
+         spec=spec,
+@@ -30,7 +32,11 @@ def _app(profile: str = "echo") -> tuple[FastAPI, SpecStar, str]:
+     )
+     item_id = (
+         spec.get_resource_manager(PlaygroundItem)
+-        .create(PlaygroundItem(title="t", owner="u", profile=profile))
++        .create(
++            PlaygroundItem(
++                title="t", owner="u", profile=profile, attached_tool_prefs=tool_prefs or {}
++            )
++        )
+         .resource_id
+     )
+     return app, spec, item_id
+@@ -64,6 +70,39 @@ def test_incompatible_templates_are_listed_with_the_reason_not_hidden():
+     assert any("read_image" in p for p in tpl["problems"]), tpl["problems"]
+ 
+ 
++def test_the_reason_says_the_tool_is_switched_off_and_where_to_switch_it_on():
++    """`read_image` is one of Playground's tools — `echo` only leaves it off by
++    default — so the remedy is the item's tool picker, and the reason says so."""
++    app, _spec, item_id = _app(profile="echo")
++    with TestClient(app) as client:
++        out = client.get(f"{_base(item_id)}/workflow-templates").json()
++
++    tpl = next(t for t in out if t["id"] == "image-to-knowledge")
++    [problem] = [p for p in tpl["problems"] if "read_image" in p]
++    assert "switched off in this item" in problem and "tool picker" in problem, problem
++
++
++def test_switching_the_tools_on_in_the_item_makes_the_template_compatible():
++    """The same `echo` item, with the tools the template names switched on in
++    its tool picker: it can run it by hand, so the template is offered and
++    copies (the user's report: a tool usable by hand was refused in a
++    workflow)."""
++    app, _spec, item_id = _app(profile="echo")
++    with TestClient(app) as client:
++        out = client.get(f"{_base(item_id)}/workflow-templates").json()
++    tpl = next(t for t in out if t["id"] == "image-to-knowledge")
++    off = {p.split("'")[1] for p in tpl["problems"] if "switched off" in p}
++    assert off, tpl["problems"]
++
++    app, _spec, item_id = _app(profile="echo", tool_prefs=dict.fromkeys(off, True))
++    with TestClient(app) as client:
++        out = client.get(f"{_base(item_id)}/workflow-templates").json()
++        tpl = next(t for t in out if t["id"] == "image-to-knowledge")
++        assert tpl["compatible"] is True and tpl["problems"] == [], tpl["problems"]
++        r = client.post(f"{_base(item_id)}/workflow-templates/image-to-knowledge/copy")
++    assert r.status_code == 200, r.text
++
++
+ def test_a_profile_that_grants_the_tools_sees_the_template_as_compatible():
+     app, _spec, item_id = _app(profile="dsl")
+     with TestClient(app) as client:
+diff --git a/tests/workflow/test_workspace_store.py b/tests/workflow/test_workspace_store.py
+index 3108a8fab..106cd15f3 100644
+--- a/tests/workflow/test_workspace_store.py
++++ b/tests/workflow/test_workspace_store.py
+@@ -94,7 +94,7 @@ def test_validate_tool_ceiling_clamps():
+         }
+     )
+     _d, errs = validate_workflow_json(over, tool_ceiling={"read_file"})
+-    assert any("tool 'exec' is outside" in e for e in errs)
++    assert any("tool 'exec' is not one of this App's tools" in e for e in errs)
+ 
+ 
+ async def test_save_forces_id_to_slug_and_canonicalises():
+diff --git a/web/src/api/types.ts b/web/src/api/types.ts
+index 988b60d5d..7a5db7ebc 100644
+--- a/web/src/api/types.ts
++++ b/web/src/api/types.ts
+@@ -402,6 +402,10 @@ export type ItemToolState = {
+    * granularity it chose, so without this two rows read as peers while one is
+    * part of the other. */
+   package?: string | null;
++  /** docs/plan-tool-title.md D8: what the package this row is ONE COMMAND of
++   * says it is (its author's `[project].description`), or "" — read under the
++   * fold's header, which `package` names. */
++  package_description?: string;
+   /** The fold the picker groups this row under (plan-tools-picker-groups):
+    * `"builtin"` for every built-in, otherwise the raw package id — a `pkg:cmd`
+    * command and its whole-package row share it. Server-named, because a
+diff --git a/web/src/api/workflowTemplates.test.ts b/web/src/api/workflowTemplates.test.ts
+index 75a322228..687995038 100644
+--- a/web/src/api/workflowTemplates.test.ts
++++ b/web/src/api/workflowTemplates.test.ts
+@@ -50,7 +50,7 @@ describe("workflowTemplatesApi", () => {
+   });
+ 
+   it("surfaces the server's reason when the profile cannot run the template", async () => {
+-    mockFetch(422, { detail: "tool 'read_image' is outside the profile's allowed tools" });
++    mockFetch(422, { detail: "tool 'read_image' is switched off in this item — switch it on in the item's tool picker first" });
+     await expect(workflowTemplatesApi.copy("playground", "i1", "x")).rejects.toThrow(
+       /read_image/,
+     );
+diff --git a/web/src/components/Popover.tsx b/web/src/components/Popover.tsx
+index 13cb4c634..52d500140 100644
+--- a/web/src/components/Popover.tsx
++++ b/web/src/components/Popover.tsx
+@@ -13,6 +13,7 @@ export function Popover({
+   align = "start",
+   side = "bottom",
+   width,
++  shrink = false,
+ }: {
+   trigger: (props: { onClick: () => void; open: boolean }) => React.ReactNode;
+   children: (close: () => void) => React.ReactNode;
+@@ -21,6 +22,11 @@ export function Popover({
+    * the bottom of the viewport (e.g. the composer) so the menu isn't clipped. */
+   side?: "top" | "bottom";
+   width?: number;
++  /** Let the trigger's box shrink below its content inside a flex row, so a
++   * trigger that ellipsizes its own label can (the workspace path bar). The
++   * clipping has to be the trigger's own: this wrapper also holds the popover,
++   * and an `overflow: hidden` here would clip that to nothing. */
++  shrink?: boolean;
+ }) {
+   const [open, setOpen] = useState(false);
+   const wrapRef = useRef<HTMLDivElement>(null);
+@@ -45,7 +51,14 @@ export function Popover({
+   }, [open]);
+ 
+   return (
+-    <div ref={wrapRef} style={{ position: "relative", display: "inline-block" }}>
++    <div
++      ref={wrapRef}
++      style={{
++        position: "relative",
++        display: "inline-block",
++        ...(shrink ? { minWidth: 0, flex: "0 1 auto" } : null),
++      }}
++    >
+       {trigger({ onClick: () => setOpen((v) => !v), open })}
+       {open && (
+         <div
+diff --git a/web/src/components/ToolsChecklist.test.tsx b/web/src/components/ToolsChecklist.test.tsx
+index 59414ceae..a5efe6728 100644
+--- a/web/src/components/ToolsChecklist.test.tsx
++++ b/web/src/components/ToolsChecklist.test.tsx
+@@ -432,3 +432,54 @@ describe("ToolsChecklist folds — what a search change restores", () => {
+     expect(screen.getByTestId("tool-group-header-builtin")).toHaveAttribute("aria-expanded", "false");
+   });
+ });
++
++// docs/plan-tool-title.md D8: a tool's fold header is a Material 3 list item —
++// its title as the headline, its author's description as supporting text below.
++describe("ToolsChecklist names a tool by its title and says what it is", () => {
++  const TITLED: ItemToolState[] = [
++    row({ key: "rca-tools:spc", group: "rca-tools", label: "Spc", package: "SMT 量測分析", package_description: "SMT 產線的量測資料擷取與初步分析。" }),
++    row({ key: "rca-tools:pareto", group: "rca-tools", label: "Pareto", package: "SMT 量測分析", package_description: "SMT 產線的量測資料擷取與初步分析。" }),
++  ];
++
++  it("shows the description under the title, described-by the header button", () => {
++    render(<ToolsChecklist tools={TITLED} prefs={{}} onChange={vi.fn()} />);
++    const header = screen.getByTestId("tool-group-header-rca-tools");
++    expect(header).toHaveTextContent("SMT 量測分析");
++    const desc = screen.getByTestId("tool-group-desc-rca-tools");
++    expect(desc).toHaveTextContent("SMT 產線的量測資料擷取與初步分析。");
++    // the header's name stays the title; the description is read as its description
++    expect(header).not.toHaveTextContent("SMT 產線");
++    expect(header).toHaveAttribute("aria-describedby", desc.id);
++  });
++
++  // The two-line clamp itself is checked in a real browser (the demo reads its
++  // computed style): happy-dom drops `display: -webkit-box` and `line-clamp`.
++  it("keeps the whole description a hover away", () => {
++    render(<ToolsChecklist tools={TITLED} prefs={{}} onChange={vi.fn()} />);
++    const desc = screen.getByTestId("tool-group-desc-rca-tools");
++    expect(desc).toHaveAttribute("title", "SMT 產線的量測資料擷取與初步分析。");
++  });
++
++  it("a tool that describes nothing draws no empty line", () => {
++    render(<ToolsChecklist tools={GROUPED} prefs={{}} onChange={vi.fn()} />);
++    expect(screen.queryByTestId("tool-group-desc-rca-tools")).not.toBeInTheDocument();
++    expect(screen.getByTestId("tool-group-header-rca-tools")).not.toHaveAttribute("aria-describedby");
++  });
++
++  // Review round 1: a tool granted ONE command is drawn as its row alone — no
++  // header — and was left with no description anywhere.
++  it("a one-command tool says what it is under its own row, and keeps its id on hover", () => {
++    render(<ToolsChecklist tools={[TITLED[0]!]} prefs={{}} onChange={vi.fn()} />);
++    const desc = screen.getByTestId("tool-row-desc-rca-tools:spc");
++    expect(desc).toHaveTextContent("SMT 產線的量測資料擷取與初步分析。");
++    expect(desc).toHaveAttribute("title", "SMT 產線的量測資料擷取與初步分析。");
++    expect(screen.getByTitle("rca-tools:spc · SMT 量測分析 · Spc")).toHaveTextContent("SMT 量測分析 · Spc");
++  });
++
++  it("a row inside a fold leaves the description to the fold's header", () => {
++    render(<ToolsChecklist tools={TITLED} prefs={{}} onChange={vi.fn()} />);
++    fireEvent.click(screen.getByTestId("tool-group-header-rca-tools"));
++    expect(screen.getByTestId("tool-row-rca-tools:spc")).toBeInTheDocument();
++    expect(screen.queryByTestId("tool-row-desc-rca-tools:spc")).not.toBeInTheDocument();
++  });
++});
+diff --git a/web/src/components/ToolsChecklist.tsx b/web/src/components/ToolsChecklist.tsx
+index 5a0bb0f22..aa3543909 100644
+--- a/web/src/components/ToolsChecklist.tsx
++++ b/web/src/components/ToolsChecklist.tsx
+@@ -158,8 +158,10 @@ export function ToolsChecklist({
+               <div
+                 style={{
+                   display: "flex",
++                  flexWrap: "wrap",
+                   alignItems: "center",
+                   gap: 10,
++                  rowGap: 2,
+                   padding: "6px 6px",
+                   borderRadius: "var(--radius-btn)",
+                   fontSize: pxToRem(13),
+@@ -170,6 +172,7 @@ export function ToolsChecklist({
+                   type="button"
+                   data-testid={`tool-group-header-${group.id}`}
+                   aria-expanded={open}
++                  aria-describedby={group.description ? descId(group.id) : undefined}
+                   title={group.id === BUILTIN_GROUP ? label : `${group.id} · ${label}`}
+                   onClick={() => setManual((m) => ({ ...m, [group.id]: !open }))}
+                   style={{
+@@ -211,6 +214,14 @@ export function ToolsChecklist({
+                   state={state}
+                   onPick={(next) => onChange(withGroupState(shownFold, prefs, next))}
+                 />
++                {group.description ? (
++                  <SupportingText
++                    id={descId(group.id)}
++                    testId={`tool-group-desc-${group.id}`}
++                    text={group.description}
++                    style={{ flexBasis: "100%", paddingLeft: "calc(1em + 6px)" }}
++                  />
++                ) : null}
+               </div>
+               {open
+                 ? rows.map((tool) => (
+@@ -287,7 +298,10 @@ function ToolRow({
+       <div style={{ flex: 1, minWidth: 0 }}>
+         <div style={{ display: "flex", alignItems: "baseline", gap: 6, minWidth: 0 }}>
+           <div
+-            title={tool.package ? `${tool.package} · ${tool.label}` : tool.label}
++            // The id rides along on hover once `package` is the author's
++            // title (docs/plan-tool-title.md D8) — whoever knows the tool by
++            // its id can still find it.
++            title={tool.package ? `${tool.key} · ${tool.package} · ${tool.label}` : tool.label}
+             style={{
+               fontWeight: 500,
+               overflow: "hidden",
+@@ -326,6 +340,11 @@ function ToolRow({
+             </div>
+           ) : null}
+         </div>
++        {/* A row that IS its tool (no fold header above it) says what the tool
++            is itself; inside a fold the header already does (D8, review 1). */}
++        {!indent && tool.package_description ? (
++          <SupportingText testId={`tool-row-desc-${tool.key}`} text={tool.package_description} />
++        ) : null}
+         <div
+           title={tool.unavailable ?? detail}
+           style={{
+@@ -417,6 +436,45 @@ function TriState({
+   );
+ }
+ 
++/** Material 3 list item supporting text (docs/plan-tool-title.md D8): a
++ * step smaller and lighter than the headline, at most two lines (the
++ * three-line item), the whole of it on hover. */
++function SupportingText({
++  id,
++  testId,
++  text,
++  style,
++}: {
++  id?: string;
++  testId: string;
++  text: string;
++  style?: React.CSSProperties;
++}) {
++  return (
++    <div
++      id={id}
++      data-testid={testId}
++      title={text}
++      style={{
++        fontSize: pxToRem(12),
++        color: "var(--text-paper-d)",
++        display: "-webkit-box",
++        WebkitBoxOrient: "vertical",
++        WebkitLineClamp: 2,
++        overflow: "hidden",
++        ...style,
++      }}
++    >
++      {text}
++    </div>
++  );
++}
++
++/** The id the fold header's button is described by (docs/plan-tool-title.md D8). */
++function descId(group: string): string {
++  return `tool-group-desc-${group}`;
++}
++
+ function secondary(): React.CSSProperties {
+   return {
+     fontSize: pxToRem(11),
+diff --git a/web/src/components/WorkflowsModal.templates.test.tsx b/web/src/components/WorkflowsModal.templates.test.tsx
+index c30306271..ffa62096e 100644
+--- a/web/src/components/WorkflowsModal.templates.test.tsx
++++ b/web/src/components/WorkflowsModal.templates.test.tsx
+@@ -80,7 +80,7 @@ describe("WorkflowsModal templates", () => {
+   it("shows an unusable template with the reason instead of hiding it", async () => {
+     listWorkflowsMock.mockResolvedValue([]);
+     listTemplatesMock.mockResolvedValue([
+-      tpl({ compatible: false, problems: ["tool 'read_image' is outside the profile's allowed tools"] }),
++      tpl({ compatible: false, problems: ["tool 'read_image' is switched off in this item — switch it on in the item's tool picker first"] }),
+     ]);
+     render();
+     const btn = await screen.findByTestId("workflow-template-copy-image-to-knowledge");
+diff --git a/web/src/lib/i18n.tsx b/web/src/lib/i18n.tsx
+index 93db70663..ecd947520 100644
+--- a/web/src/lib/i18n.tsx
++++ b/web/src/lib/i18n.tsx
+@@ -1916,6 +1916,13 @@ export const messages = {
+     "zh-TW": "尚未載入 — 在檔案樹展開這個資料夾就能瀏覽。",
+     en: "Not loaded — expand this folder in the file tree to browse it.",
+   },
++  // The path bar's "…": it lists the folders it stands for. Not the nav bar's
++  // "nav.crumbs.expand" — both can be on screen, and two buttons with one
++  // name are one button to a screen reader.
++  "workspace.crumbs.folded": {
++    "zh-TW": "顯示收起來的資料夾",
++    en: "Show the folded folders",
++  },
+   "workspace.tree.loadFailed": {
+     "zh-TW": "這個資料夾載入失敗,收起再展開可重試。",
+     en: "This folder could not be loaded — collapse and expand it to retry.",
+diff --git a/web/src/lib/toolGroups.ts b/web/src/lib/toolGroups.ts
+index 565f5b481..c6dbb0f5f 100644
+--- a/web/src/lib/toolGroups.ts
++++ b/web/src/lib/toolGroups.ts
+@@ -18,6 +18,9 @@ export type ToolGroup = {
+    * takes the label its rows already carry (`package` on a command row, the
+    * row's own label on a whole-package row). */
+   label: string;
++  /** docs/plan-tool-title.md D8: the package's own description, read under the
++   * header — "" for the builtin fold and for a tool that says nothing. */
++  description: string;
+   tools: ItemToolState[];
+ };
+ 
+@@ -34,7 +37,7 @@ export function groupsOf(tools: ItemToolState[]): ToolGroup[] {
+     const id = tool.group ?? tool.key;
+     let g = byId.get(id);
+     if (!g) {
+-      g = { id, label: labelOf(tool, id), tools: [] };
++      g = { id, label: labelOf(tool, id), description: tool.package_description ?? "", tools: [] };
+       byId.set(id, g);
+     }
+     g.tools.push(tool);
+diff --git a/web/src/pages/investigation/Breadcrumb.test.tsx b/web/src/pages/investigation/Breadcrumb.test.tsx
+index 963b45323..8c9713d9b 100644
+--- a/web/src/pages/investigation/Breadcrumb.test.tsx
++++ b/web/src/pages/investigation/Breadcrumb.test.tsx
+@@ -7,6 +7,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
+ import type { FileInfo } from "../../api/types";
+ import { Breadcrumb, LazyFoldersContext } from "./WorkspaceShell";
+ 
++// The run title reads the item's services; its text is not what is under test.
++vi.mock("../../components/ExecutionTitle", () => ({ ExecutionTitle: () => "A run" }));
++
+ afterEach(cleanup);
+ 
+ const files: FileInfo[] = [
+@@ -132,3 +135,113 @@ describe("<Breadcrumb /> under a folder the listing did not enter", () => {
+     expect(screen.getAllByRole("button", { name: "node_modules" })).toHaveLength(1);
+   });
+ });
++
++describe("<Breadcrumb /> stays on one line", () => {
++  const long = "/projects/2026-quarterly/experiments/run-0042/a-very-long-measurement-file-name.csv";
++  const deepFiles: FileInfo[] = [
++    { path: long, size: 0 },
++    { path: "/projects/2026-quarterly/notes.md", size: 0 },
++  ];
++  const expand = /收起來的資料夾|folded folders/i;
++  const realRect = HTMLElement.prototype.getBoundingClientRect;
++  afterEach(() => {
++    HTMLElement.prototype.getBoundingClientRect = realRect;
++  });
++  /** Give every element `width` px — the bar measures itself on attach. */
++  function barWidth(width: number) {
++    HTMLElement.prototype.getBoundingClientRect = () => ({ width }) as DOMRect;
++  }
++
++  it("never breaks a crumb's label across lines, and names a clipped one in full", () => {
++    render(<Breadcrumb activeTab={long} files={deepFiles} onOpen={vi.fn()} />);
++    for (const name of ["projects", "run-0042", "a-very-long-measurement-file-name.csv"]) {
++      const crumb = screen.getByRole("button", { name });
++      expect(crumb.style.whiteSpace).toBe("nowrap");
++      expect(crumb.style.textOverflow).toBe("ellipsis");
++      expect(crumb.style.overflow).toBe("hidden");
++      expect(crumb).toHaveAttribute("title", name);
++    }
++  });
++
++  it("gives each folder a floor on its own box, and lets folders give way before the file", () => {
++    // Two things only a real browser showed, pinned here as the styles that
++    // fixed them: a floor on the button alone let the folder's box collapse
++    // to nothing (folders painted over each other), and a small shrink ratio
++    // clipped the file name by a fraction of a pixel with room to spare.
++    render(<Breadcrumb activeTab={long} files={deepFiles} onOpen={vi.fn()} />);
++    const folderBox = screen.getByRole("button", { name: "projects" }).closest("span")!;
++    expect(folderBox.style.minWidth).toMatch(/ch/);
++    expect(Number(folderBox.style.flexShrink)).toBeGreaterThanOrEqual(1_000_000);
++    const fileBox = screen.getByRole("button", {
++      name: "a-very-long-measurement-file-name.csv",
++    }).parentElement!;
++    expect(Number(fileBox.style.flexShrink)).toBe(1);
++    expect(fileBox.style.minWidth).toMatch(/^0(px)?$/);
++  });
++
++  it("keeps a workflow run's title on one line too", () => {
++    render(<Breadcrumb activeTab="workflow-run:run-1" files={deepFiles} onOpen={vi.fn()} />);
++    const title = screen.getByText("Workflows").parentElement!.lastElementChild as HTMLElement;
++    expect(title.style.whiteSpace).toBe("nowrap");
++    expect(title.style.textOverflow).toBe("ellipsis");
++  });
++
++  it("does not hand its one-line rule down to the dropdowns that hang from it", async () => {
++    // `white-space` inherits: with it on the bar, a sibling with a long name
++    // made the dropdown as wide as that name and the pane cut it off.
++    barWidth(260);
++    const user = userEvent.setup();
++    render(<Breadcrumb activeTab={long} files={deepFiles} onOpen={vi.fn()} />);
++    const nowrapAbove = (el: HTMLElement) => {
++      for (let p = el.parentElement; p; p = p.parentElement) {
++        if (p.style.whiteSpace === "nowrap") return true;
++      }
++      return false;
++    };
++    await user.click(screen.getByRole("button", { name: expand }));
++    expect(nowrapAbove(await screen.findByRole("button", { name: "projects" }))).toBe(false);
++    await user.click(screen.getByRole("button", { name: "run-0042" }));
++    const rows = await screen.findAllByText("a-very-long-measurement-file-name.csv");
++    expect(nowrapAbove(rows[rows.length - 1]!)).toBe(false);
++  });
++
++  it("names its … for what it does, not like the nav bar's", () => {
++    barWidth(260);
++    render(<Breadcrumb activeTab={long} files={deepFiles} onOpen={vi.fn()} />);
++    expect(screen.getByRole("button", { name: expand })).toBeInTheDocument();
++    expect(screen.queryByRole("button", { name: /顯示完整路徑|show the full path/i })).toBeNull();
++  });
++
++  it("shows the whole trail when the bar has room", () => {
++    barWidth(1200);
++    render(<Breadcrumb activeTab={long} files={deepFiles} onOpen={vi.fn()} />);
++    expect(screen.getByRole("button", { name: "projects" })).toBeInTheDocument();
++    expect(screen.queryByRole("button", { name: expand })).toBeNull();
++  });
++
++  it("folds the leading folders into one … when shortening cannot fit them", () => {
++    barWidth(260);
++    render(<Breadcrumb activeTab={long} files={deepFiles} onOpen={vi.fn()} />);
++    expect(screen.getByRole("button", { name: expand })).toBeInTheDocument();
++    expect(screen.queryByRole("button", { name: "projects" })).toBeNull();
++    expect(screen.queryByRole("button", { name: "experiments" })).toBeNull();
++    // The file's own folder and the file stay in the trail.
++    expect(screen.getByRole("button", { name: "run-0042" })).toBeInTheDocument();
++    expect(
++      screen.getByRole("button", { name: "a-very-long-measurement-file-name.csv" }),
++    ).toBeInTheDocument();
++  });
++
++  it("the … lists the folded folders, and one of them opens a file inside it", async () => {
++    barWidth(260);
++    const user = userEvent.setup();
++    const onOpen = vi.fn();
++    render(<Breadcrumb activeTab={long} files={deepFiles} onOpen={onOpen} />);
++    await user.click(screen.getByRole("button", { name: expand }));
++    expect(await screen.findByRole("button", { name: "projects" })).toBeInTheDocument();
++    expect(screen.getByRole("button", { name: "experiments" })).toBeInTheDocument();
++    await user.click(screen.getByRole("button", { name: "2026-quarterly" }));
++    await user.click(await screen.findByText("notes.md"));
++    expect(onOpen).toHaveBeenCalledWith("/projects/2026-quarterly/notes.md");
++  });
++});
+diff --git a/web/src/pages/investigation/WorkspaceShell.tsx b/web/src/pages/investigation/WorkspaceShell.tsx
+index 74b9715c3..f3817d19c 100644
+--- a/web/src/pages/investigation/WorkspaceShell.tsx
++++ b/web/src/pages/investigation/WorkspaceShell.tsx
+@@ -96,7 +96,13 @@ import { FileView } from "../../renderers/FileView";
+ import { CommandPalette } from "./CommandPalette";
+ import { FileTree } from "./FileTree";
+ import { type Edge, type PaneNode, edgeForPoint } from "./paneTree";
+-import { basename, breadcrumbSegments, dirChildren } from "./renderer";
++import {
++  basename,
++  breadcrumbSegments,
++  crumbFloorCh,
++  dirChildren,
++  foldedCrumbCount,
++} from "./renderer";
+ import { hasEditToggle, isRawEditorView, pickRenderer } from "../../renderers/registry";
+ import { SearchPanel } from "./SearchPanel";
+ import { TerminalPane } from "./TerminalPane";
+@@ -2703,6 +2709,20 @@ const crumbBar: React.CSSProperties = {
+   fontSize: pxToRem(12),
+   color: "var(--text-paper-d)",
+   gap: 2,
++  // One line, always (NN/g, Breadcrumbs guideline 9). The bar does NOT clip
++  // with `overflow: hidden` — the crumbs' dropdowns hang below it and would
++  // be cut off; each crumb clips its own label instead. For the same reason
++  // "one line" is not `white-space: nowrap` HERE: it inherits, and a dropdown
++  // with one long name in it grew as wide as that name and the pane cut it
++  // off. Every label carries `crumbClip` itself.
++  minWidth: 0,
++};
++
++/** A label that stays on one line and ends in "…" when its box is too small. */
++const crumbClip: React.CSSProperties = {
++  whiteSpace: "nowrap",
++  overflow: "hidden",
++  textOverflow: "ellipsis",
+ };
+ 
+ /** VSCode-style breadcrumb: each segment is clickable and drops down the
+@@ -2720,36 +2740,81 @@ export function Breadcrumb({
+   if (!activeTab) {
+     return (
+       <div style={crumbBar}>
+-        <span style={{ color: "var(--text-paper-d2)" }}>No file open</span>
++        <span style={{ ...crumbClip, color: "var(--text-paper-d2)" }}>No file open</span>
+       </div>
+     );
+   }
+   if (isExecutionPath(activeTab)) {
+     return (
+       <div style={crumbBar}>
+-        <span style={{ color: "var(--text-paper-d2)" }}>Workflows</span>
++        <span style={{ whiteSpace: "nowrap", flexShrink: 0, color: "var(--text-paper-d2)" }}>
++          Workflows
++        </span>
+         <Icon name="chev_r" size={10} color="var(--text-paper-d2)" />
+-        <span>
++        <span style={{ ...crumbClip, minWidth: 0 }}>
+           <ExecutionTitle path={activeTab} />
+         </span>
+       </div>
+     );
+   }
++  return <PathCrumbs activeTab={activeTab} files={files} onOpen={onOpen} />;
++}
++
++/** The file's path, on one line whatever its length: the folders shorten
++ * first, the file name last, and when shortening is not enough the leading
++ * folders fold into one "…" (`foldedCrumbCount`). */
++function PathCrumbs({
++  activeTab,
++  files,
++  onOpen,
++}: {
++  activeTab: string;
++  files: FileInfo[];
++  onOpen: (path: string) => void;
++}) {
++  const [barRef, width] = useContainerWidth<HTMLDivElement>();
+   const folders = breadcrumbSegments(activeTab); // ancestor folder names
+   const paths = files.map((f) => f.path);
++  const folded = foldedCrumbCount(width, folders);
+   return (
+-    <div style={crumbBar}>
+-      {folders.map((name, i) => (
+-        <span key={`${name}-${i}`} style={{ display: "inline-flex", alignItems: "center" }}>
+-          <CrumbSegment
+-            label={name}
+-            siblingsDir={folders.slice(0, i).join("/")}
+-            paths={paths}
+-            onOpen={onOpen}
+-          />
++    <div ref={barRef} style={crumbBar}>
++      {folded > 0 && (
++        <>
++          <FoldedCrumbs folders={folders.slice(0, folded)} paths={paths} onOpen={onOpen} />
+           <Icon name="chev_r" size={10} color="var(--text-paper-d2)" />
+-        </span>
+-      ))}
++        </>
++      )}
++      {folders.map((name, i) =>
++        i < folded ? null : (
++          <span
++            key={`${name}-${i}`}
++            style={{
++              display: "inline-flex",
++              alignItems: "center",
++              // A folder keeps its first few characters (plus the button's
++              // padding and the chevron). The floor is on THIS box, the flex
++              // item: on the button alone the box still collapsed to nothing
++              // and the folders painted over each other (measured in a 410 px
++              // bar, before the fold rule took that width over).
++              minWidth: `calc(${crumbFloorCh(name)}ch + 22px)`,
++              // Folders give way before the file name does. The ratio is this
++              // large on purpose: flex shares the shortfall by weight, and at
++              // 1000 the file name's share was a fraction of a pixel — enough
++              // to turn `.md` into `.…` with room to spare (seen in a 750 px
++              // bar, a 1440 px window).
++              flex: "0 1000000 auto",
++            }}
++          >
++            <CrumbSegment
++              label={name}
++              siblingsDir={folders.slice(0, i).join("/")}
++              paths={paths}
++              onOpen={onOpen}
++            />
++            <Icon name="chev_r" size={10} color="var(--text-paper-d2)" />
++          </span>
++        ),
++      )}
+       <CrumbSegment
+         label={basename(activeTab)}
+         siblingsDir={folders.join("/")}
+@@ -2761,6 +2826,94 @@ export function Breadcrumb({
+   );
+ }
+ 
++/** The "…" that stands for the folded leading folders. It lists them; picking
++ * one browses INTO it, the same drill-down every crumb's dropdown uses. */
++function FoldedCrumbs({
++  folders,
++  paths,
++  onOpen,
++}: {
++  folders: string[];
++  paths: string[];
++  onOpen: (path: string) => void;
++}) {
++  const t = useT();
++  return (
++    <Popover
++      trigger={({ onClick, open }) => (
++        <button
++          type="button"
++          aria-label={t("workspace.crumbs.folded")}
++          title={t("workspace.crumbs.folded")}
++          aria-expanded={open}
++          onClick={onClick}
++          style={{
++            padding: "2px 6px",
++            borderRadius: 4,
++            background: open ? "var(--paper-2)" : "transparent",
++            color: "var(--text-paper-d)",
++            fontSize: pxToRem(12),
++            flexShrink: 0,
++          }}
++        >
++          …
++        </button>
++      )}
++    >
++      {(close) => <FoldedList folders={folders} paths={paths} onOpen={onOpen} close={close} />}
++    </Popover>
++  );
++}
++
++function FoldedList({
++  folders,
++  paths,
++  onOpen,
++  close,
++}: {
++  folders: string[];
++  paths: string[];
++  onOpen: (path: string) => void;
++  close: () => void;
++}) {
++  const [picked, setPicked] = useState<string | null>(null);
++  if (picked !== null) {
++    return <DirBrowser startDir={picked} paths={paths} onOpen={onOpen} close={close} />;
++  }
++  return (
++    <div style={{ minWidth: 220 }}>
++      {folders.map((name, i) => (
++        <button
++          key={`${name}-${i}`}
++          type="button"
++          onClick={() => setPicked(folders.slice(0, i + 1).join("/"))}
++          style={{
++            display: "flex",
++            alignItems: "center",
++            gap: 8,
++            width: "100%",
++            // Each level sits one step in from the one above it.
++            padding: `5px 10px 5px ${10 + i * 12}px`,
++            fontSize: pxToRem(12),
++            textAlign: "left",
++            background: "transparent",
++            color: "var(--text-paper)",
++          }}
++          onMouseEnter={(ev) => {
++            ev.currentTarget.style.background = "var(--paper-2)";
++          }}
++          onMouseLeave={(ev) => {
++            ev.currentTarget.style.background = "transparent";
++          }}
++        >
++          <Icon name="folder" size={12} color="var(--text-paper-d2)" />
++          {name}
++        </button>
++      ))}
++    </div>
++  );
++}
++
+ /** One breadcrumb crumb — a button that pops a sibling browser. */
+ function CrumbSegment({
+   label,
+@@ -2777,11 +2930,18 @@ function CrumbSegment({
+ }) {
+   return (
+     <Popover
++      shrink
+       trigger={({ onClick, open }) => (
+         <button
+           type="button"
+           onClick={onClick}
++          // A clipped label is still readable in full on hover.
++          title={label}
+           style={{
++            ...crumbClip,
++            display: "block",
++            maxWidth: "100%",
++            minWidth: 0,
+             padding: "2px 6px",
+             borderRadius: 4,
+             background: open ? "var(--paper-2)" : "transparent",
+diff --git a/web/src/pages/investigation/renderer.test.ts b/web/src/pages/investigation/renderer.test.ts
+index 0b5caa4d7..3e07c9182 100644
+--- a/web/src/pages/investigation/renderer.test.ts
++++ b/web/src/pages/investigation/renderer.test.ts
+@@ -1,6 +1,14 @@
+ import { describe, expect, it } from "vitest";
+ 
+-import { basename, breadcrumbSegments, dirChildren, dirname, imageMime } from "./renderer";
++import {
++  basename,
++  breadcrumbSegments,
++  dirChildren,
++  dirname,
++  crumbFloorCh,
++  foldedCrumbCount,
++  imageMime,
++} from "./renderer";
+ 
+ describe("imageMime", () => {
+   it("maps extensions to image MIME types", () => {
+@@ -86,3 +94,56 @@ describe("dirChildren", () => {
+     expect(dirChildren(shots, "").map((e) => e.name)).toEqual(["a9", "a10", "b", "shots"]);
+   });
+ });
++
++describe("foldedCrumbCount", () => {
++  // The path bar is one line. Folders shorten first (each down to a few
++  // characters); when even that leaves the file name no room, every folder
++  // but the file's own parent folds into one "…".
++  const deep = ["projects", "2026-quarterly", "experiments", "run-0042"];
++
++  it("folds nothing before the bar has been measured", () => {
++    expect(foldedCrumbCount(0, deep)).toBe(0);
++  });
++
++  it("folds nothing when the shortened folders still leave the file room", () => {
++    expect(foldedCrumbCount(900, deep)).toBe(0);
++  });
++
++  it("folds every folder but the parent when shortening is not enough", () => {
++    expect(foldedCrumbCount(260, deep)).toBe(3);
++  });
++
++  it("never folds a single folder — a lone … would hide nothing worth a click", () => {
++    expect(foldedCrumbCount(60, ["projects"])).toBe(0);
++    expect(foldedCrumbCount(60, [])).toBe(0);
++  });
++
++  it("asks less room of a short folder name than of a long one", () => {
++    // Four one-letter folders fit where four long names do not.
++    expect(foldedCrumbCount(340, ["a", "b", "c", "d"])).toBe(0);
++    expect(foldedCrumbCount(340, deep)).toBe(3);
++  });
++});
++
++describe("crumbFloorCh", () => {
++  // The floor is in `ch` — the width of "0". A CJK character is about two of
++  // those, so counting characters gave 「專案」 a floor narrower than itself and
++  // it was cut to 「專…」 beside a file name with room to spare.
++  it("keeps the first few characters of a Latin name", () => {
++    expect(crumbFloorCh("projects")).toBe(5);
++    expect(crumbFloorCh("src")).toBe(3);
++  });
++
++  it("counts a CJK character as two", () => {
++    expect(crumbFloorCh("專案")).toBe(4);
++    expect(crumbFloorCh("良率季度檢討報告")).toBe(10);
++  });
++
++  it("budgets a CJK folder the room its floor asks for", () => {
++    const latin = ["aaaaa", "bbbbb", "ccccc"];
++    const cjk = ["專案專案專", "資料資料資", "報告報告報"];
++    // A bar that holds three shortened Latin folders is too small for three CJK ones.
++    expect(foldedCrumbCount(380, latin)).toBe(0);
++    expect(foldedCrumbCount(380, cjk)).toBe(2);
++  });
++});
+diff --git a/web/src/pages/investigation/renderer.ts b/web/src/pages/investigation/renderer.ts
+index 6f3b6c8cb..469f4d8b0 100644
+--- a/web/src/pages/investigation/renderer.ts
++++ b/web/src/pages/investigation/renderer.ts
+@@ -85,3 +85,55 @@ export function breadcrumbSegments(path: string): string[] {
+   if (parts.length <= 1) return [];
+   return parts.slice(0, -1);
+ }
++
++/** How many characters of a folder crumb survive shortening: `crumbFloorCh`
++ * turns them into the floor the crumb's box (button + chevron) is given in
++ * CSS, and into what the fold rule below budgets for. */
++const CRUMB_KEEP_CHARS = 5;
++// The budget is in px because the bar is measured in px, and it is an
++// estimate: ~7 px a character at the bar's 12 px type, plus 28 px around it —
++// the 22 px the CSS floor adds (button padding 12, chevron 10), the bar's gap,
++// and a little slack so the fold comes slightly early rather than late.
++const CRUMB_CHAR_PX = 7;
++const CRUMB_CHROME_PX = 28;
++
++/**
++ * The floor of a folder crumb's label, in `ch`: its first `CRUMB_KEEP_CHARS`
++ * characters. `ch` is the width of "0" and a CJK character is about two of
++ * them — counted as one, 「專案」 got a floor narrower than itself and was cut
++ * to 「專…」 beside a file name that had room to spare.
++ */
++export function crumbFloorCh(name: string): number {
++  let ch = 0;
++  for (const c of Array.from(name).slice(0, CRUMB_KEEP_CHARS)) {
++    // CJK radicals onward (U+2E80…): ideographs, kana, hangul, full-width forms.
++    ch += (c.codePointAt(0) ?? 0) >= 0x2e80 ? 2 : 1;
++  }
++  return ch;
++}
++/** Room the file name keeps before folders start folding away. */
++const CRUMB_FILE_MIN_PX = 160;
++const CRUMB_BAR_PADDING_PX = 24;
++
++/**
++ * How many LEADING folders of the path bar fold into one "…".
++ *
++ * The bar is one line (NN/g, Breadcrumbs guideline 9: a trail that wraps no
++ * longer shows the chain; guideline 11: shorten it to the last levels where
++ * room is short). Folders shorten first, each down to `CRUMB_KEEP_CHARS`; only
++ * when the bar cannot hold even the shortened folders beside a readable file
++ * name do they fold — all but the file's own folder. It is the same two-state
++ * shape as the global nav's trail ("…" opening a popover), with two
++ * differences: that one keeps only its last crumb and folds on the shell's
++ * narrow breakpoint; this one keeps the parent folder too and folds on the
++ * bar's own measured width. `width` 0 is "not measured" and folds nothing.
++ */
++export function foldedCrumbCount(width: number, folders: string[]): number {
++  if (!width || folders.length < 2) return 0;
++  const shortened = folders.reduce(
++    (px, name) => px + crumbFloorCh(name) * CRUMB_CHAR_PX + CRUMB_CHROME_PX,
++    0,
++  );
++  const needed = shortened + CRUMB_FILE_MIN_PX + CRUMB_BAR_PADDING_PX;
++  return width < needed ? folders.length - 1 : 0;
++}
