@@ -402,13 +402,44 @@ def _terms(needle: str) -> list[tuple[str, bool]]:
     return list(dict.fromkeys(out))
 
 
+def _is_letter_or_digit(ch: str) -> bool:
+    return ch.isalnum() and not re.match(f"[{_CJK}]", ch)
+
+
+def _word_starts(text: str) -> list[int]:
+    """Where a word starts in ``text`` (as written, not lower-cased): after
+    anything that is not a letter or digit — a space, punctuation, an
+    underscore, CJK — and inside a word where camelCase turns upper or
+    letters meet digits (`readCsvFile`, `html2pdf`; review round 2)."""
+    starts = []
+    for i, ch in enumerate(text):
+        if not _is_letter_or_digit(ch):
+            continue
+        prev = text[i - 1] if i else ""
+        if (
+            not prev
+            or not _is_letter_or_digit(prev)
+            or (prev.islower() and ch.isupper())
+            or (prev.isdigit() != ch.isdigit())
+        ):
+            starts.append(i)
+    return starts
+
+
 def _found(term: str, is_word: bool, text: str) -> bool:
     """A word is found where a word STARTS — `ai` is not in "detailed", `for`
-    is not in "formatting" (review round 1); `def` still finds "defects". A
-    CJK pair is found anywhere: there are no word starts to go by."""
+    is not in "formatting" (review round 1); `def` still finds "defects", and
+    `pdf` finds `toPdf` and `html2pdf` (review round 2). A CJK term is found
+    anywhere: there are no word starts to go by. ``text`` is as written; the
+    comparison ignores case."""
+    lowered = text.lower()
     if not is_word:
-        return term in text
-    return re.search(f"(?<![^\\W_{_CJK}]){re.escape(term)}", text) is not None
+        return term in lowered
+    if len(lowered) != len(text):
+        # A character whose lower case is longer (İ) would shift every
+        # position: fall back to the start of a plain word.
+        return re.search(f"(?<![^\\W_{_CJK}]){re.escape(term)}", lowered) is not None
+    return any(lowered.startswith(term, i) for i in _word_starts(text))
 
 
 def match_rank(entry: SkillHubEntry, query: str) -> tuple[int, int] | None:
@@ -421,12 +452,12 @@ def match_rank(entry: SkillHubEntry, query: str) -> tuple[int, int] | None:
     The page's list and the agent's `search_skill_hub` both call this — a copy
     kept alike by hand in each was how they were first written."""
     needle = query.strip().lower()
-    name, description = entry.name.lower(), entry.description.lower()
-    if not needle or needle in name or needle in description:
+    if not needle or needle in entry.name.lower() or needle in entry.description.lower():
         return (0, 0)
     terms = _terms(needle)
-    # Name and description apart, so no word is found across the seam.
-    found = sum(1 for t, w in terms if _found(t, w, name) or _found(t, w, description))
+    # Name and description apart, so no word is found across the seam; as
+    # written, so camelCase still marks where a word starts.
+    found = sum(1 for t, w in terms if _found(t, w, entry.name) or _found(t, w, entry.description))
     if not found:
         return None
     return (1, 0) if found == len(terms) else (2, -found)

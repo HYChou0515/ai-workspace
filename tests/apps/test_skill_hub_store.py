@@ -654,6 +654,29 @@ def test_a_single_chinese_character_is_a_word_but_a_filler_one_is_not() -> None:
     assert match_rank(_described("x", "這是我的工具"), "的 了") is None
 
 
+def test_a_word_starts_inside_camel_case_and_after_a_digit() -> None:
+    """Review round 2: matching lower-cased text lost camelCase and
+    letter-digit boundaries, so "pdf tool" lost `html2pdf` that "pdf" alone
+    found — one more word, fewer hits."""
+    from workspace_app.apps.skill_hub import match_rank
+
+    e = _described("html2pdf", "Uses readCsvFile and toPdf.")
+    assert match_rank(e, "csv file") == (1, 0)
+    assert match_rank(e, "pdf tool") is not None
+    assert match_rank(_described("html2pdf", "d"), "pdf tool") is not None
+    # still not inside a plain word
+    assert match_rank(_described("x", "Detailed notes."), "ai tool") is None
+
+
+def test_text_whose_lower_case_is_longer_still_matches_words() -> None:
+    """`"İ".lower()` is two characters, which shifts every position after it;
+    such text falls back to plain word starts rather than miscounting."""
+    from workspace_app.apps.skill_hub import match_rank
+
+    assert match_rank(_described("x", "İstanbul city guide"), "guide tour") == (2, -1)
+    assert match_rank(_described("x", "İstanbul city guidebook"), "book tour") is None
+
+
 def test_an_underscore_separates_words_both_ways() -> None:
     from workspace_app.apps.skill_hub import match_rank
 
