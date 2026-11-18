@@ -98,4 +98,4 @@ def test_the_validator_accepts_a_command_of_a_package_the_profile_grants_whole()
     ceiling = {"exec", "rca-tools"}
     assert validate_def(with_tools(["rca-tools:spc", "exec"]), tool_ceiling=ceiling) == []
     errs = validate_def(with_tools(["sci-plot:chart"]), tool_ceiling=ceiling)
-    assert errs and "outside the profile's allowed tools" in errs[0]
+    assert errs and "is not one of this App's tools" in errs[0]

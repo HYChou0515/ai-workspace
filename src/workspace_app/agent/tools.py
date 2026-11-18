@@ -3532,6 +3532,33 @@ def _profile_tool_ceiling(
     return set(expand_entries(sorted(ceiling), packages))
 
 
+def _app_tool_ceiling(
+    app_slug: str | None, packages: Sequence[PackageInfo] = ()
+) -> set[str] | None:
+    """The tools a WORKFLOW step may name in this App: the App's ``agent.tools``
+    — the same list `AppCatalog.resolve` hands an item as its ``tool_ceiling``,
+    i.e. everything the item's tool picker can switch on. Not the profile's
+    ``tools``: that is the profile's DEFAULT set, and a tool it leaves off is
+    still one the item's author can switch on and use by hand, so refusing it
+    in a workflow refused what the author could do (the #323 Q4 rule is "no
+    more than by hand", not "no more than the default"). A node holds what it
+    names within this list whatever the item's picker has on
+    (`TurnContextBuilder._finalized`).
+
+    ``None`` (skip the clamp) for a synthetic / unreadable slug. Brought to
+    command granularity with ``packages`` exactly as `_profile_tool_ceiling`."""
+    if app_slug is None:
+        return None
+    from ..apps.manifest import load_app_manifest
+    from ..tooling.catalog import expand_entries
+
+    try:
+        app_tools = load_app_manifest(app_slug).agent.tools
+    except (FileNotFoundError, ModuleNotFoundError, OSError):
+        return None
+    return set(expand_entries(sorted(app_tools), packages))
+
+
 async def save_workflow_impl(
     ctx: RunContextWrapper[AgentToolContext], id: str, workflow_json: str
 ) -> str:
@@ -3574,10 +3601,15 @@ async def save_workflow_impl(
             f"error: {slug!r} is the name of this item's schedules file, not a workflow id — "
             "pick another id. To put a workflow on a clock, call save_schedules."
         )
-    ceiling = _profile_tool_ceiling(
-        ctx.context.app_slug, ctx.context.template_profile, ctx.context.packages
-    )
-    workflow, errs = validate_workflow_json(workflow_json, tool_ceiling=ceiling)
+    ceiling = _app_tool_ceiling(ctx.context.app_slug, ctx.context.packages)
+    # What this item's tool picker has on: the turn's config was finalized at
+    # its door (`TurnContextBuilder._finalized`), the same answer the picker
+    # shows and a node of this workflow will be narrowed from.
+    # `allowed_tools=None` is "not specified" (the runner's default set), not
+    # "nothing on", so it skips the check rather than refusing every tool.
+    cfg = ctx.context.agent_config
+    on = set(cfg.allowed_tools) if cfg is not None and cfg.allowed_tools is not None else None
+    workflow, errs = validate_workflow_json(workflow_json, tool_ceiling=ceiling, tools_on=on)
     if workflow is None or errs:
         return "error: the workflow has problems — fix these and save again:\n- " + "\n- ".join(
             errs

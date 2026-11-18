@@ -594,10 +594,10 @@ def augment_shared_skill_body(
         return "\n\n".join(parts)
     if name != "author-workflow":
         return body
-    from ..agent.tools import _profile_tool_ceiling
+    from ..agent.tools import _app_tool_ceiling
     from ..workflow.dsl import describe_dsl_grammar, describe_workflow_boundaries
 
-    ceiling = _profile_tool_ceiling(app_slug, profile)
+    ceiling = _app_tool_ceiling(app_slug)
     return "\n\n".join([body, describe_dsl_grammar(), describe_workflow_boundaries(ceiling)])
 
 
