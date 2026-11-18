@@ -3713,7 +3713,7 @@ AI 工具說明裡每個目標後面多了它的長度上限(沒設的寫 10 個
 
 **還是舊版 image 時**：工具面板沒有描述那一行，標題列是 id。
 
-### 2026-11-18 · #1027 工作流程步驟能寫 item 開著的工具；寫了沒開的工具，那一步會失敗 {#pr-1027}
+### 2026-11-18 · #1027 工作流程步驟可以寫 item 選單打得開的工具 {#pr-1027}
 
 **設定** — 沒有新 key，沒有改預設值。
 
@@ -3722,19 +3722,16 @@ AI 工具說明裡每個目標後面多了它的長度上限(沒設的寫 10 個
 **k8s · CI 側** — 沒有要做的事。
 
 **行為改變，沒有開關**
-- **存檔與範本檢查**：步驟的 `tools:` 分兩種錯誤。不在這個 App 的工具清單裡 → 「not one of this App's tools」；
-  在 App 裡但這個 item 的工具選單沒開 → 「switched off in this item — switch it on in the item's tool picker first」。
-  以前用的是 profile 的**預設**清單，所以在選單手動打開、聊天用得到的工具，存工作流程反而被擋
-  （`outside the profile's allowed tools`）。現在手動打開就能寫。
-- **執行時**：步驟寫了 item 沒開的工具，**那一步會失敗**，原因寫出是哪些工具、去工具選單打開。
-  以前是默默拿掉、照跑，只在 log 留 `workflow node: tools not held by this item, dropped`。
-  **升版後可能看到的症狀**：以前「跑得完但做不好」的工作流程（步驟要用的工具在 item 上是關的）現在會在那一步停下來。
-  這是把原本看不到的問題顯示出來；照訊息去那個 item 的工具選單打開工具，或從步驟的 `tools:` 拿掉即可。
-  **排程**跑的工作流程同樣適用，所以升版後第一輪排程失敗時先看原因是不是這個。
-- 步驟寫整個套件（例如 `rca-tools`）、item 只關了其中幾個指令時不算，照舊拿剩下開著的指令。
+- **存工作流程**（AI 的 `save_workflow`）：步驟的 `tools:` 改成對照 App 的工具清單（`app.json` 的 `agent.tools`）。
+  以前對照的是 profile 的**預設**清單，所以在 item 工具選單手動打開、聊天用得到的工具，寫進工作流程反而被擋
+  （`outside the profile's allowed tools`）。現在擋的只有 App 根本沒有的工具，訊息改成「not one of this App's tools」。
+- **複製工作流程範本**：除了上面那條，還看這個 item 的工具選單現在開著哪些。App 有但這裡沒開的，範本清單會標不相容，
+  原因寫「switched off in this item — switch it on in the item's tool picker first」；在選單打開後就能複製。
+- **執行時沒變**：步驟寫了 item 選單沒開的工具，照舊在那一步拿不到、只在 log 留
+  `workflow node: tools not held by this item, dropped`。
 
-**確認做完** — 升版後打開任一個 item 的工作流程範本清單：有工具沒開的範本，原因會寫「switched off in this item」；
-在工具選單打開那個工具後重新整理，範本變成可以用。
+**確認做完** — 在一個 profile 預設沒開某工具（例如 playground 的 intake 沒開 `exec`）的 item 上，讓 AI 存一個步驟用到它的工作流程：
+不再出現 `outside the profile's allowed tools`。
 
 ---
 

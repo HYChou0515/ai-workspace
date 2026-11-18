@@ -182,18 +182,6 @@ def _record_what_this_item_got(item_id: str, external: ExternalTools) -> None:
     )
 
 
-class ToolsNotHeld(Exception):
-    """A workflow node names tools this item does not hold. The workflow
-    executor turns it into the step's failure; its text is that reason."""
-
-    def __init__(self, tools: list[str]) -> None:
-        self.tools = tools
-        super().__init__(
-            f"this step's tools are not on in this item: {', '.join(tools)} — switch them "
-            "on in the item's tool picker, or take them out of the step's tools"
-        )
-
-
 class TurnContextBuilder:
     """Assemble the per-turn ``AgentToolContext`` for an RCA turn, holding the
     app-lifetime service bundle once so the two turn surfaces don't each capture
@@ -1234,18 +1222,11 @@ class TurnContextBuilder:
             )
         if tool_subset is not None:
             held = cfg.allowed_tools or []
-            # Refused, not swallowed: a node whose `tools:` names something
-            # this item does not hold (switched off in its picker, or a command
-            # the package does not have — the validator can only refuse what it
-            # can see) would run without it, and the run's log was the only
-            # place that said so. A whole package of which some commands are
-            # off still narrows to the rest (plan-tools-picker-groups P16).
-            # `allowed_tools=None` is "not specified" (a config that never went
-            # through an App's resolve), not a list of what is on: nothing to
-            # judge the names against, so it narrows as before.
-            if cfg.allowed_tools is not None and (
-                dropped := [t for t in tool_subset if not narrow_entries([t], held)]
-            ):
-                raise ToolsNotHeld(dropped)
+            # Said, not swallowed: a node whose `tools:` names something this
+            # item does not hold (pinned off, or a command the package does
+            # not have — the validator can only refuse what it can see) runs
+            # without it, and the run's log is the only place that says so.
+            if dropped := [t for t in tool_subset if not narrow_entries([t], held)]:
+                logger.warning("workflow node: tools not held by this item, dropped: %s", dropped)
             cfg = msgspec.structs.replace(cfg, allowed_tools=narrow_entries(tool_subset, held))
         return cfg

@@ -80,7 +80,7 @@ describe("WorkflowsModal templates", () => {
   it("shows an unusable template with the reason instead of hiding it", async () => {
     listWorkflowsMock.mockResolvedValue([]);
     listTemplatesMock.mockResolvedValue([
-      tpl({ compatible: false, problems: ["tool 'read_image' is is not one of this App's tools"] }),
+      tpl({ compatible: false, problems: ["tool 'read_image' is switched off in this item — switch it on in the item's tool picker first"] }),
     ]);
     render();
     const btn = await screen.findByTestId("workflow-template-copy-image-to-knowledge");

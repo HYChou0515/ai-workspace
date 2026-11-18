@@ -362,8 +362,12 @@ def register_workflow_routes(
     def _tools_on(item_id: str) -> set[str] | None:
         """What this item's tool picker has on — read off the config a turn
         would run with, finalized by the same `finalize_tool_grants` the picker
-        route and every turn use, not re-derived here. ``None`` (skip that
-        check) with no config or one that leaves the toolset unspecified."""
+        route and every turn use, not re-derived here. With the deploy's
+        first-party packages only: a third-party command is not judged here (a
+        template naming one passes and is narrowed at run time). An agent
+        copy's own `tools:` is not applied either — it narrows at run time, as
+        it always did. ``None`` (skip that check) with no config or one that
+        leaves the toolset unspecified."""
         from ..apps.catalog import finalize_tool_grants
 
         cfg = locator.resolve_agent_config(item_id)
@@ -377,9 +381,9 @@ def register_workflow_routes(
         """#520: the shipped starter templates, each flagged for whether THIS item can
         run it. Incompatible ones are listed too, with the reason — hiding them means
         nobody learns the template exists. Compatibility is the ordinary DSL validation
-        against the App's tools and what this item's tool picker has on — the same
-        two checks `save_workflow` makes; there is no separate grant list to keep in
-        sync."""
+        against the App's tools (the ceiling `save_workflow` also judges by) and what
+        this item's tool picker has on (`_tools_on`); there is no separate grant list
+        to keep in sync."""
         from ..agent.tools import _app_tool_ceiling
         from ..workflow.dsl import build_manifest, validate_def
         from ..workflow.shared import SHARED_WORKFLOWS, load_shared_workflow
@@ -431,15 +435,13 @@ def register_workflow_routes(
         except DslError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
-        profile = locator.profile_of(investigation_id)
         problems = validate_def(
             d, tool_ceiling=_app_tool_ceiling(slug, packages), tools_on=_tools_on(item_id)
         )
         if problems:
             raise HTTPException(
                 status_code=422,
-                detail=f"template {name!r} can't run in profile {profile!r}: "
-                + "; ".join(problems),
+                detail=f"template {name!r} can't run in this item: " + "; ".join(problems),
             )
         if name == RESERVED_WORKFLOW_ID:
             # Checked here for the sentence; `save_workspace_workflow` would

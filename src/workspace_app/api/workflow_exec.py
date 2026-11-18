@@ -304,37 +304,28 @@ class WorkflowExecutor:
             )
             rid, _ = self._locator.conversation_for(item_id)  # legacy fallback (default chat)
         cfg = self._locator.resolve_agent_config(item_id)
-        from .turn_context import ToolsNotHeld
-
-        try:
-            ctx = await self._turn_ctx.build_workflow_turn(
-                item_id,
-                agent_config=cfg,
-                run_subagent=self._run_subagent,
-                # A node reads none of the thread it persists to (plan-workflow-out-
-                # of-chat D1 / D5): not the chat before it, not earlier steps, not
-                # other runs. What it needs is in its prompt — the upstream outputs
-                # it names, files, `input.json`.
-                history_messages=[],
-                # tools= ⊆ what the item holds (manual §5.1): a step can't widen the
-                # boundary. Applied by the builder, AFTER the item's pins are
-                # finalized against the turn's package list — narrowing here, on a
-                # config whose pins were still pending, let a pin re-widen it.
-                tool_subset=tools,
-                # #429 P10: an agent node's entity writes carry the run's trigger origin, so
-                # they fire on_event workflows AND stay inside the recursion depth cap.
-                entity_write_origin=entity_write_origin,
-                caller_env=await self._headless_env(captured_user, item_id, run_id),
-                # The person whose values this run carries — the one a schedule its
-                # agent saves will run as (plan-schedule-run-as G2).
-                acting_for=(await asyncio.to_thread(self._run_identity, run_id))[0]
-                if run_id
-                else "",
-            )
-        except ToolsNotHeld as exc:
-            # The step's own failure, carrying which tools and where to switch
-            # them on — not a turn that runs without them in silence.
-            raise StepFailed(str(exc)) from None
+        ctx = await self._turn_ctx.build_workflow_turn(
+            item_id,
+            agent_config=cfg,
+            run_subagent=self._run_subagent,
+            # A node reads none of the thread it persists to (plan-workflow-out-
+            # of-chat D1 / D5): not the chat before it, not earlier steps, not
+            # other runs. What it needs is in its prompt — the upstream outputs
+            # it names, files, `input.json`.
+            history_messages=[],
+            # tools= ⊆ what the item holds (manual §5.1): a step can't widen the
+            # boundary. Applied by the builder, AFTER the item's pins are
+            # finalized against the turn's package list — narrowing here, on a
+            # config whose pins were still pending, let a pin re-widen it.
+            tool_subset=tools,
+            # #429 P10: an agent node's entity writes carry the run's trigger origin, so
+            # they fire on_event workflows AND stay inside the recursion depth cap.
+            entity_write_origin=entity_write_origin,
+            caller_env=await self._headless_env(captured_user, item_id, run_id),
+            # The person whose values this run carries — the one a schedule its
+            # agent saves will run as (plan-schedule-run-as G2).
+            acting_for=(await asyncio.to_thread(self._run_identity, run_id))[0] if run_id else "",
+        )
         # plan-tool-usage-stats §3.4: a schedule's run or a person's, and who
         # its tool calls count against — the one who bound it, else whoever the
         # run was captured for (the item's owner for a schedule, the starter).

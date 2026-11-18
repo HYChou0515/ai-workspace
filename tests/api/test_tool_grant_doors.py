@@ -13,8 +13,6 @@ from __future__ import annotations
 
 from typing import Any
 
-import pytest
-
 import workspace_app.api.app as app_mod
 from workspace_app.api import create_app
 from workspace_app.api.compaction import AgentCompactor
@@ -461,25 +459,21 @@ async def test_the_turn_door_finalizes_a_third_party_package_it_resolved(monkeyp
     assert "trend" not in {t.name for t in agent.tools}
 
 
-async def test_a_node_naming_a_tool_the_item_does_not_hold_fails_the_step_naming_it(
-    monkeypatch,
+async def test_a_node_naming_a_command_the_item_does_not_hold_says_so_in_the_log(
+    monkeypatch, caplog
 ):
-    """A step whose `tools:` names something this item does not hold — a
-    command the item's picker switched off, or one the validator could not
-    judge (an unresolved package) — would run without it and nobody would
-    know, so the step fails and its reason names those tools and where to
-    switch them on. A whole package of which only some commands are off is
-    NOT this case (the step gets the rest, as above), and a held tool is not
-    named."""
-    from workspace_app.workflow.engine import StepFailed
+    """The validator refuses what it can see; a `pkg:cmd` it could not judge
+    (an unresolved package, a zero-command one) or a command the item pinned
+    off reaches the run, is dropped, and the run's log is where that is said."""
+    import logging
 
     _, _, executor, runner, iid = _build(monkeypatch, {"rca-tools:pareto": False})
-    with pytest.raises(StepFailed) as failed:
+    with caplog.at_level(logging.WARNING, logger="workspace_app.api.turn_context"):
         await executor.drive_turn(
             iid, "no-such-chat", "u", "hello", ["rca-tools:typo", "rca-tools:pareto", "read_file"]
         )
-    reason = str(failed.value)
-    assert "rca-tools:typo" in reason and "rca-tools:pareto" in reason, reason
-    assert "read_file" not in reason, reason
-    assert "tool picker" in reason, reason
-    assert runner.ctxs == []  # no turn ran without them
+    cmds, _ = _model_view(runner.ctxs[-1])
+    assert cmds == set()
+    [rec] = [r for r in caplog.records if "not held by this item" in r.getMessage()]
+    assert "rca-tools:typo" in rec.getMessage() and "rca-tools:pareto" in rec.getMessage()
+    assert "read_file" not in rec.getMessage()

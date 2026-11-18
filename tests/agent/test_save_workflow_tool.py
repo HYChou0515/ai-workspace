@@ -177,7 +177,8 @@ def _item_with(*on: str):
 
 async def test_a_tool_switched_on_in_the_item_is_accepted_though_the_profile_leaves_it_off():
     """playground/intake leaves `exec` off by default; an item that switched it
-    on in its tool picker uses it by hand, so a workflow step may name it."""
+    on in its tool picker uses it by hand, so a workflow step may name it (the
+    reported `outside the profile's allowed tools`)."""
     ctx = _ctx(
         app_slug="playground",
         template_profile="intake",
@@ -187,12 +188,13 @@ async def test_a_tool_switched_on_in_the_item_is_accepted_though_the_profile_lea
     assert "saved workflow" in out, out
 
 
-async def test_a_tool_switched_off_in_the_item_is_refused_with_where_to_switch_it_on():
-    """The App has `exec` but this item's picker has it off: the step would run
-    without it, so saving says so — and where to switch it on."""
+async def test_a_narrower_turn_does_not_refuse_an_app_tool():
+    """The turn that saves may hold less than the item's picker — a sub-agent
+    granted `[save_workflow, read_file]`, an agent copy's chat, a workflow
+    node. Its own list is not the item's, so it is not what a step's tools are
+    judged by: an App tool it does not hold still saves (review of #1027)."""
     ctx = _ctx(
         app_slug="playground", template_profile="intake", agent_config=_item_with("read_file")
     )
-    out = await save_workflow_impl(ctx, "flow", _steps_with_tools(["exec"]))
-    assert "error" in out and "'exec' is switched off in this item" in out, out
-    assert "tool picker" in out, out
+    out = await save_workflow_impl(ctx, "flow", _steps_with_tools(["exec", "write_file"]))
+    assert "saved workflow" in out, out

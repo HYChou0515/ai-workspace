@@ -179,7 +179,7 @@ tool（§7）。
   和它產生的訊息都以 `Message` 持久化並標上 `run_id` / `step` / `phase`，執行分頁的
   每一列就是靠這些標記選出自己的訊息；同時寫一份 transcript 到 journal（§9 的
   `step_<name>/` 資料夾裡），「Ask AI why it failed」就讀那份檔案。
-- **`tools=` ⊆ profile 的 tool 上限**（LLM 安全邊界；coherence 像 #89 的
+- **`tools=` ⊆ App 的 tool 清單**（`app.json` 的 `agent.tools`，也就是 item 工具選單打得開的全部；不是 profile 預設開哪些。執行時只拿得到這個 item 選單開著的，LLM 安全邊界；coherence 像 #89 的
   `validate_function_coherence` 那樣強制）。agent 的 tool 偏向 **讀／探索**；
   side-effect 是 deterministic node，不是 tool（§7）。
 - **`check=` 是必要的。** 一個沒有 gate 的 agent node 是 schema error。
@@ -846,7 +846,7 @@ artifact 路徑清單）。跳過的元素留 `null` 佔位，讓下游 `map ove
 - **一個 interpreter 服務兩層（Q6）：** package workflow 可以是 `run.py`（trusted Python）
   **或** `workflow.json`（被 interpret）；**promote = 把 json 複製進 profile**，免 transpile。
 - **Co-design（Q8）：** `author-workflow` shared meta-skill 引導 AI 起草 DSL；`save_workflow`
-  tool 在寫入前 **驗證**（schema、phase 一致、`tools` ⊆ profile 上限、capability 在允許
+  tool 在寫入前 **驗證**（schema、phase 一致、`tools` ⊆ App 的 tool 清單、capability 在允許
   清單，以及 `check` / `outputs` / `switch` / `revise_to` 格式）並把無效 DSL **退回原因讓
   AI 修**。v1 **不**自動試跑——使用者按 Run 來測。
 - **上限／authz（Q9）：** 與 package workflow **同一組** cap（§16–§17）；能存取該 item
@@ -889,7 +889,7 @@ v1 出貨 `image-to-knowledge`：VLM 讀圖 → 把圖說的話存成可搜尋�
 `save_workflow` **寫入前先驗證**，無效就把原因**退回**讓 AI 修（§22.8 Q8）；它**不**自動試跑。
 所以「這份 workflow 可以放著自己跑了嗎」這個問題，要靠下面這條遞進來回答，而不是靠感覺：
 
-1. **靜態關**——`save_workflow` / 複製範本的 422。schema、phase 一致、`tools` ⊆ profile 上限、
+1. **靜態關**——`save_workflow` / 複製範本的 422。schema、phase 一致、`tools` ⊆ App 的 tool 清單（複製範本另外要求這個 item 的工具選單開著）、
    capability 在允許清單、`check` / `outputs` / `switch` / `revise_to` 格式。過不了就根本存不進去。
 2. **人閘關**——在寫進 collection 之前放一個 `gate`（`summary_from` 指向前一步的 fan-in
    `outputs`），run 會停在那裡等人。出貨的 `image-to-knowledge` 就是這樣：`read` → **`review`

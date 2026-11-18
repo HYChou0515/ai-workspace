@@ -3497,19 +3497,16 @@ def held_tool_names(
 def _profile_tool_ceiling(
     app_slug: str | None, profile: str | None, packages: Sequence[PackageInfo] = ()
 ) -> set[str] | None:
-    """The tools an agent in this App profile may hold — the App's ``agent.tools`` ceiling,
-    narrowed by the profile's ``tools`` override (#323, Q4: a workflow's agent steps can't
-    exceed what its author could use by hand). ``None`` (skip the clamp) for a synthetic /
-    unreadable slug.
+    """The tools a turn in this App profile holds BY DEFAULT — the App's ``agent.tools``
+    ceiling narrowed by the profile's ``tools`` override. The fallback answer of
+    `_turn_held_tools` (the sub-agent clamp) when the turn's own list is not known.
+    Not what a workflow step is judged by: the item's picker can switch on anything in
+    the App's list, so that is `_app_tool_ceiling`. ``None`` (skip the clamp) for a
+    synthetic / unreadable slug.
 
     Brought to COMMAND granularity when the caller has the package list
-    (``expand_entries``): a whole-package grant becomes its ``pkg:cmd`` units,
-    so a validator judging by ``narrow_entries`` accepts ``rca-tools:spc`` and
-    refuses ``rca-tools:typo`` — with bare names only, the two are
-    indistinguishable and the typo saved a workflow whose node silently held
-    nothing. Callers without packages (the sub-agent clamp's fallback, the
-    author-workflow guide) keep the bare names, which read as "the whole
-    package" everywhere they are used."""
+    (``expand_entries``); without packages it keeps the bare names, which read
+    as "the whole package" everywhere they are used."""
     if app_slug is None or profile is None:
         return None
     from msgspec import UNSET
@@ -3524,10 +3521,9 @@ def _profile_tool_ceiling(
         return None
     pm_tools = load_profile(app_slug, profile).tools
     # NOT renamed. This ceiling comes from authored manifest files, not from
-    # stored config, and it feeds a clamp (`_subagent_defs` -> `clamp_tools`)
-    # and a validator (`save_workflow_impl`) as well as the two refusal
-    # messages. No shipped manifest names a legacy tool, so normalising here
-    # changed four consumers on a case none of them can be handed.
+    # stored config, and it feeds a clamp (`_subagent_defs` -> `clamp_tools`).
+    # No shipped manifest names a legacy tool, so normalising here would change
+    # its consumers on a case none of them can be handed.
     ceiling = (set(pm_tools) & app_tools) if pm_tools is not UNSET else app_tools
     return set(expand_entries(sorted(ceiling), packages))
 
@@ -3541,9 +3537,8 @@ def _app_tool_ceiling(
     ``tools``: that is the profile's DEFAULT set, and a tool it leaves off is
     still one the item's author can switch on and use by hand, so refusing it
     in a workflow refused what the author could do (the #323 Q4 rule is "no
-    more than by hand", not "no more than the default"). A node holds what it
-    names within this list whatever the item's picker has on
-    (`TurnContextBuilder._finalized`).
+    more than by hand", not "no more than the default"). At run time a node is
+    still narrowed to what the item holds (`TurnContextBuilder._finalized`).
 
     ``None`` (skip the clamp) for a synthetic / unreadable slug. Brought to
     command granularity with ``packages`` exactly as `_profile_tool_ceiling`."""
@@ -3601,15 +3596,12 @@ async def save_workflow_impl(
             f"error: {slug!r} is the name of this item's schedules file, not a workflow id — "
             "pick another id. To put a workflow on a clock, call save_schedules."
         )
+    # Judged against the App's tools only, not this turn's own list: the turn
+    # saving may be a sub-agent, an agent copy's chat or a workflow node, each
+    # holding a narrower list than the item's tool picker — refusing by that
+    # list would call a tool "off" that the picker shows on.
     ceiling = _app_tool_ceiling(ctx.context.app_slug, ctx.context.packages)
-    # What this item's tool picker has on: the turn's config was finalized at
-    # its door (`TurnContextBuilder._finalized`), the same answer the picker
-    # shows and a node of this workflow will be narrowed from.
-    # `allowed_tools=None` is "not specified" (the runner's default set), not
-    # "nothing on", so it skips the check rather than refusing every tool.
-    cfg = ctx.context.agent_config
-    on = set(cfg.allowed_tools) if cfg is not None and cfg.allowed_tools is not None else None
-    workflow, errs = validate_workflow_json(workflow_json, tool_ceiling=ceiling, tools_on=on)
+    workflow, errs = validate_workflow_json(workflow_json, tool_ceiling=ceiling)
     if workflow is None or errs:
         return "error: the workflow has problems — fix these and save again:\n- " + "\n- ".join(
             errs
