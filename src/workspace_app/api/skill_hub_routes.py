@@ -37,7 +37,6 @@ from ..apps.skill_hub import (
     UpstreamState,
     VersionMoved,
     match_rank,
-    matches_query,
     missing_tools_for,
     script_count,
 )
@@ -447,21 +446,23 @@ def register_skill_hub_routes(
         visible = dict(hub.visible(viewer))
         fork_counts = Counter(e.forked_from for e in visible.values() if e.forked_from)
         browsing = not q.strip() and not mine and not owner and not forks
-        hits = {
-            i: e
+        # Each row's match is read once, here, and kept for the relevance sort
+        # below (review round 1): a row with no rank is not a hit.
+        ranks = {
+            i: r
             for i, e in visible.items()
             if (not mine or e.owner == viewer)
             and (not owner or e.owner == owner)
-            and matches_query(e, q)
             and not (browsing and e.forked_from in visible)
+            and (r := match_rank(e, q)) is not None
         }
+        hits = {i: visible[i] for i in ranks}
         counts = await asyncio.to_thread(hub.usage.totals, hits)
         # `visible` is in name order; every sort below is stable on it.
         order = list(hits)
         if sort == "relevant" and q.strip():
             # The same rank the agent's search sorts by (D4): the group first,
-            # then the most used. `hits` only holds rows that matched.
-            ranks = {i: match_rank(hits[i], q) or (3, 0) for i in hits}
+            # then the most used.
             order.sort(key=lambda i: (ranks[i], -counts[i][1], -counts[i][0]))
         elif sort == "popular":
             order.sort(key=lambda i: (-counts[i][1], -counts[i][0]))

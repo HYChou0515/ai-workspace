@@ -360,26 +360,48 @@ def script_count(paths: Iterable[str]) -> int:
     return sum(1 for p in paths if p.startswith("scripts/"))
 
 
-#: Chinese, Japanese and Korean characters — written without spaces between
-#: words, so a run of them is cut into neighbouring pairs to be matched.
-_CJK = "぀-ヿ㐀-䶿一-鿿가-힯豈-﫿"
-_TERM = re.compile(f"([{_CJK}]+)|([^\\W{_CJK}]+)")
+#: Chinese, Japanese and Korean characters. Chinese and Japanese put no spaces
+#: between words, so a run of them is cut into neighbouring pairs to be matched;
+#: Korean, though spaced, is cut the same way (a pair is still a fair match).
+_CJK = r"぀-ヿ㐀-䶿一-鿿가-힯豈-﫿"
+#: A word is letters and digits — the underscore separates, so `kb_search` and
+#: "kb search" are the same two words (review round 1).
+_TERM = re.compile(f"([{_CJK}]+)|([^\\W_{_CJK}]+)")
+#: Words too common to tell one skill from another: on their own they matched
+#: nearly every description (review round 1). They still count in the whole
+#: query verbatim, the first group.
+_FILLER = frozenset(
+    [
+        *("a", "an", "and", "are", "as", "at", "be", "by", "for", "from", "in"),
+        *("is", "it", "of", "on", "or", "that", "the", "this", "to", "with"),
+    ]
+)
 
 
-def _terms(needle: str) -> list[str]:
-    """The words a (lower-cased) query is matched by, in order, once each
-    (docs/plan-skill-hub-search.md D3): runs of letters and digits split at
-    spaces and punctuation; a run of CJK cut into neighbouring pairs —
-    「晶圓良率」 → 晶圓、圓良、良率 — and a lone character kept as itself."""
-    out: list[str] = []
+def _terms(needle: str) -> list[tuple[str, bool]]:
+    """``[(term, is_word), …]`` a (lower-cased) query is matched by, in order,
+    once each (docs/plan-skill-hub-search.md D3). Letters and digits split at
+    spaces, punctuation and underscores make words; a run of CJK is cut into
+    neighbouring pairs — 「晶圓良率」 → 晶圓、圓良、良率. A single letter or
+    character, and a filler word, is not a term: on its own it is found
+    almost anywhere (review round 1)."""
+    out: list[tuple[str, bool]] = []
     for cjk, word in _TERM.findall(needle):
         if word:
-            out.append(word)
-        elif len(cjk) == 1:
-            out.append(cjk)
+            if len(word) > 1 and word not in _FILLER:
+                out.append((word, True))
         else:
-            out += [cjk[k : k + 2] for k in range(len(cjk) - 1)]
+            out += [(cjk[k : k + 2], False) for k in range(len(cjk) - 1)]
     return list(dict.fromkeys(out))
+
+
+def _found(term: str, is_word: bool, text: str) -> bool:
+    """A word is found where a word STARTS — `ai` is not in "detailed", `for`
+    is not in "formatting" (review round 1); `def` still finds "defects". A
+    CJK pair is found anywhere: there are no word starts to go by."""
+    if not is_word:
+        return term in text
+    return re.search(f"(?<![^\\W_{_CJK}]){re.escape(term)}", text) is not None
 
 
 def match_rank(entry: SkillHubEntry, query: str) -> tuple[int, int] | None:
@@ -397,7 +419,7 @@ def match_rank(entry: SkillHubEntry, query: str) -> tuple[int, int] | None:
         return (0, 0)
     terms = _terms(needle)
     # Name and description apart, so no word is found across the seam.
-    found = sum(1 for t in terms if t in name or t in description)
+    found = sum(1 for t, w in terms if _found(t, w, name) or _found(t, w, description))
     if not found:
         return None
     return (1, 0) if found == len(terms) else (2, -found)

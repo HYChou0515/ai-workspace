@@ -623,6 +623,43 @@ def test_an_empty_query_still_matches_everything_at_one_rank() -> None:
     assert match_rank(_described("x", "y"), "  ") == match_rank(_described("z", "w"), "")
 
 
+def test_a_word_matches_from_the_start_of_a_word_not_from_its_middle() -> None:
+    """Review round 1: `ai` was found inside "detailed" and `for` inside
+    "formatting", so an unrelated skill outranked the relevant one — the
+    fuller the query, the more such short words it carries."""
+    from workspace_app.apps.skill_hub import match_rank
+
+    query = "AI tool for wafer analysis"
+    unrelated = match_rank(_described("format-helper", "Detailed information formatting."), query)
+    relevant = match_rank(_described("wafer-yield", "Analyse wafer yield maps."), query)
+    assert unrelated is None
+    assert relevant is not None
+
+
+def test_words_of_one_letter_and_filler_words_match_nothing_on_their_own() -> None:
+    from workspace_app.apps.skill_hub import match_rank
+
+    assert match_rank(_described("x", "anything at all"), "a i") is None
+    assert match_rank(_described("x", "for the record"), "for the") is not None  # verbatim still
+    assert match_rank(_described("x", "a tool for the oven"), "of a the for") is None
+
+
+def test_an_underscore_separates_words_both_ways() -> None:
+    from workspace_app.apps.skill_hub import match_rank
+
+    assert match_rank(_described("x", "Calls kb search first."), "kb_search") is not None
+    assert match_rank(_described("x", "Calls kb_search first."), "kb search") is not None
+
+
+def test_whatever_matched_before_still_matches() -> None:
+    """The whole query verbatim is still group one, so the old rule's hits
+    are all still hits — a word found inside another included."""
+    from workspace_app.apps.skill_hub import match_rank
+
+    assert match_rank(_described("reflow-triage", "d"), "flow") == (0, 0)
+    assert match_rank(_described("x", "分析晶圓的良率"), "良率") == (0, 0)
+
+
 async def test_the_store_refuses_a_name_or_a_size_the_publisher_would_have_been_refused_for(
     store: SkillHubStore,
 ) -> None:

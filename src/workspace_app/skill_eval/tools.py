@@ -146,7 +146,10 @@ def schemas() -> list[dict]:
         fn(
             "search_skill_hub",
             "Find skills other users have published to the skill hub. `query` matches "
-            "the name and description; an empty query lists everything. Each hit shows "
+            "the name and description, its words in any order: say the whole need — a "
+            "skill that matches only some of the words is still listed. Best match "
+            "first, and among equal matches the most used first. An empty query lists "
+            "everything. Each hit shows "
             "`owner/name`, the description, which App it was written in, and the entry "
             "id that `install_skill` takes.",
             {"query": s},

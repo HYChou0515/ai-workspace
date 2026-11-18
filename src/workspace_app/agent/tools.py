@@ -3254,14 +3254,22 @@ async def search_skill_hub_impl(ctx: RunContextWrapper[AgentToolContext], query:
     # first among equal matches — one bounded grouped sum over every hit. The
     # sort is stable on `visible`'s name order, which an empty query keeps (D6).
     counts = await asyncio.to_thread(hub.usage.totals, [i for i, _e, _r in ranked])
+    key = {i: (r, -counts[i][1], -counts[i][0]) for i, _e, r in ranked}
     if query.strip():
-        ranked.sort(key=lambda h: (h[2], -counts[h[0]][1], -counts[h[0]][0]))
+        ranked.sort(key=lambda h: key[h[0]])
     hits = [(i, e) for i, e, _r in ranked]
     # Roots first, each followed by its forks — a fork whose root is not in the
     # hits (filtered out, or unreadable to this viewer) stands on its own.
     by_id = {i: e for i, e in hits}
+    groups = nest_forks(by_id)
+    if query.strip():
+        # A fork sits under its original (D7), so an original and its forks
+        # rank by the BEST of them: ranked by the original alone, the best hit
+        # could be a fork pushed past the cut (review round 1). Stable, so
+        # equal groups keep the order above.
+        groups.sort(key=lambda g: min(key[i] for i in (g[0], *g[1])))
     ordered: list[tuple[str, SkillHubEntry, bool]] = []
-    for root, forks in nest_forks(by_id):
+    for root, forks in groups:
         ordered.append((root, by_id[root], False))
         ordered += [(j, by_id[j], True) for j in forks]
     shown = ordered[:SEARCH_SKILL_HUB_LIMIT]

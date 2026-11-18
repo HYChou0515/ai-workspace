@@ -352,3 +352,21 @@ async def test_an_empty_query_keeps_the_listing_order_whatever_is_used_more():
     out = await search_skill_hub_impl(_ctx(hub), "")
 
     assert out.index(first) < out.index(busy)
+
+
+async def test_the_best_match_is_shown_even_when_it_is_a_fork_of_a_weak_match():
+    """Review round 1: a fork sits under its original (D7), so it ranked as
+    low as its original — past the cut, the best hit was not shown at all.
+    An original and its forks rank by the best of them."""
+    from workspace_app.agent.tools import SEARCH_SKILL_HUB_LIMIT
+
+    _spec, hub = _hub()
+    root = await _entry(hub, "zed", "yield-notes", "Notes on yield.")
+    fork = await _entry(hub, "alice", "wafer-yield", "wafer yield maps", forked_from=root)
+    for k in range(SEARCH_SKILL_HUB_LIMIT + 5):
+        await _entry(hub, "bob", f"other-{k:02d}", "yield of every wafer lot")
+
+    out = await search_skill_hub_impl(_ctx(hub), "wafer yield")
+
+    assert fork in out and root in out
+    assert out.index(root) < out.index(fork) < out.index("bob/other-00")
