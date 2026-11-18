@@ -61,8 +61,19 @@ export function SkillHubPicker({
     queryKey: [...qk.skillHub(q, false, slug), "paged"],
     // Forks beside originals: the picker offers everything installable; the
     // hub page's originals-only browse would hide a fork until searched for.
+    // A search is ordered best match first (docs/plan-skill-hub-search.md,
+    // review round 1): it matches the same wider rule as the page, and in
+    // name order its weakest hits came first. The key holds `q`, which
+    // decides the sort, so the cache needs nothing more.
     queryFn: ({ pageParam }) =>
-      client.browse({ q, app: slug, forks: true, offset: pageParam, limit: PAGE }),
+      client.browse({
+        q,
+        app: slug,
+        forks: true,
+        sort: q ? "relevant" : "name",
+        offset: pageParam,
+        limit: PAGE,
+      }),
     initialPageParam: 0,
     getNextPageParam: (last, pages) => {
       const loaded = pages.reduce((n, p) => n + p.entries.length, 0);

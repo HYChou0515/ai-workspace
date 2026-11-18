@@ -360,13 +360,147 @@ def script_count(paths: Iterable[str]) -> int:
     return sum(1 for p in paths if p.startswith("scripts/"))
 
 
-def matches_query(entry: SkillHubEntry, query: str) -> bool:
-    """The one search rule: the query, trimmed, is a case-insensitive
-    substring of the name or the description; an empty query matches all.
+#: Chinese, Japanese and Korean characters. Chinese and Japanese put no spaces
+#: between words, so a run of them is cut into neighbouring pairs to be matched;
+#: Korean, though spaced, is cut the same way (a pair is still a fair match).
+_CJK_SPANS = (
+    (0x3040, 0x30FF),  # Hiragana, Katakana
+    (0x3400, 0x4DBF),  # CJK Extension A
+    (0x4E00, 0x9FFF),  # CJK Unified Ideographs
+    (0xAC00, 0xD7AF),  # Hangul syllables
+    (0xF900, 0xFAFF),  # CJK Compatibility Ideographs
+)
+_CJK = "".join(f"{chr(lo)}-{chr(hi)}" for lo, hi in _CJK_SPANS)
+#: A word is letters and digits — the underscore separates, so `kb_search` and
+#: "kb search" are the same two words (review round 1).
+_TERM = re.compile(f"([{_CJK}]+)|([^\\W_{_CJK}]+)")
+#: Words too common to tell one skill from another: on their own they matched
+#: nearly every description (review round 1). They still count in the whole
+#: query verbatim, the first group.
+_FILLER = frozenset(
+    [
+        *("a", "an", "and", "are", "as", "at", "be", "by", "for", "from", "in"),
+        *("is", "it", "of", "on", "or", "that", "the", "this", "to", "with"),
+        # One-character Chinese words as common as "the" (review round 2).
+        *("的", "了", "和", "與", "或", "是", "在", "把", "被", "我", "你", "他"),
+    ]
+)
+
+
+def _terms(needle: str) -> list[tuple[str, bool]]:
+    """``[(term, is_word), …]`` a (lower-cased) query is matched by, in order,
+    once each (docs/plan-skill-hub-search.md D3). Letters and digits split at
+    spaces, punctuation and underscores make words; a run of CJK is cut into
+    neighbouring pairs — 「晶圓良率」 → 晶圓、圓良、良率 — and a lone one is a
+    term of its own. A single Latin letter, and a filler word, is not a term:
+    on its own it is found almost anywhere (review rounds 1 and 2)."""
+    out: list[tuple[str, bool]] = []
+    for cjk, word in _TERM.findall(needle):
+        if word:
+            if len(word) > 1 and word not in _FILLER:
+                out.append((word, True))
+        elif len(cjk) == 1:
+            # A one-character Chinese word (畫、圖、表) IS a word — unlike a lone
+            # Latin letter it is not found everywhere (review round 2).
+            if cjk not in _FILLER:
+                out.append((cjk, False))
+        else:
+            out += [(cjk[k : k + 2], False) for k in range(len(cjk) - 1)]
+    return list(dict.fromkeys(out))
+
+
+#: A letter of a spaced script: a word character that is not a digit, an
+#: underscore or CJK. ``_ALNUM`` adds the digits.
+_LETTER = f"[^\\W\\d_{_CJK}]"
+_ALNUM = f"[^\\W_{_CJK}]"
+#: Where a word starts, found in one compiled pass (review round 3: a Python
+#: loop per character, and a regex per character, made a search 34x slower):
+#: after anything that is not a letter or digit — a space, punctuation, an
+#: underscore, CJK —; where camelCase turns upper; where an acronym's last
+#: capital begins the next word (`XMLParser`, `readCSVFile`); and where letters
+#: meet digits (`html2pdf`) — review rounds 2 and 3.
+_WORD_START = re.compile(
+    "|".join(
+        [
+            f"(?<!{_ALNUM})(?={_ALNUM})",
+            "(?<=[a-z])(?=[A-Z])",
+            "(?<=[A-Z])(?=[A-Z][a-z])",
+            f"(?<=[0-9])(?={_LETTER})",
+            f"(?<={_LETTER})(?=[0-9])",
+        ]
+    )
+)
+#: The plain-word start, for text whose positions would not line up.
+_PLAIN_START = f"(?<!{_ALNUM})"
+
+
+def _word_starts(text: str) -> list[int]:
+    """Where a word starts in ``text``, as written (not lower-cased)."""
+    return [m.start() for m in _WORD_START.finditer(text)]
+
+
+class _Prepared:
+    """A name or a description made ready to be searched: lower-cased once,
+    and where its words start read at most once — only when a word of the
+    query is in it at all (review round 3)."""
+
+    __slots__ = ("_starts", "lowered", "text")
+
+    def __init__(self, text: str) -> None:
+        self.text = text
+        self.lowered = text.lower()
+        self._starts: list[int] | None = None
+
+    def starts(self) -> list[int] | None:
+        """``None`` when lower-casing changed the length (İ): every position
+        after it would be shifted."""
+        if len(self.lowered) != len(self.text):
+            return None
+        if self._starts is None:
+            self._starts = _word_starts(self.text)
+        return self._starts
+
+
+def _found(term: str, is_word: bool, text: _Prepared) -> bool:
+    """A word is found where a word STARTS — `ai` is not in "detailed", `for`
+    is not in "formatting" (review round 1); `def` still finds "defects", and
+    `pdf` finds `toPdf` and `html2pdf` (review round 2). A CJK term is found
+    anywhere: there are no word starts to go by. Case is ignored."""
+    if term not in text.lowered:
+        return False  # the cheap answer, and the usual one
+    if not is_word:
+        return True
+    starts = text.starts()
+    if starts is None:
+        return re.search(f"{_PLAIN_START}{re.escape(term)}", text.lowered) is not None
+    return any(text.lowered.startswith(term, i) for i in starts)
+
+
+def match_rank(entry: SkillHubEntry, query: str) -> tuple[int, int] | None:
+    """How well ``entry`` matches ``query`` — smaller is better — or ``None``
+    when it does not (docs/plan-skill-hub-search.md D1). Three groups, in
+    order: the whole query verbatim in the name or the description; every
+    word of it, in any order; some of its words, more before fewer. An empty
+    query matches everything at one rank. Case-insensitive.
+
     The page's list and the agent's `search_skill_hub` both call this — a copy
     kept alike by hand in each was how they were first written."""
     needle = query.strip().lower()
-    return not needle or needle in entry.name.lower() or needle in entry.description.lower()
+    if not needle or needle in entry.name.lower() or needle in entry.description.lower():
+        return (0, 0)
+    terms = _terms(needle)
+    # Name and description apart, so no word is found across the seam; read
+    # as written, so camelCase still marks where a word starts; each read once.
+    name, description = _Prepared(entry.name), _Prepared(entry.description)
+    found = sum(1 for t, w in terms if _found(t, w, name) or _found(t, w, description))
+    if not found:
+        return None
+    return (1, 0) if found == len(terms) else (2, -found)
+
+
+def matches_query(entry: SkillHubEntry, query: str) -> bool:
+    """Whether ``entry`` is a hit for ``query`` at all (:func:`match_rank`)."""
+    return match_rank(entry, query) is not None
 
 
 def skill_description(skill_md: str) -> str:

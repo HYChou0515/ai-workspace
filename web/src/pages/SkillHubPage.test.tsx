@@ -174,6 +174,44 @@ describe("SkillHubPage", () => {
     await waitFor(() => expect(order()).toEqual(["entry-e-a", "entry-e-z"]));
   });
 
+  // docs/plan-skill-hub-search.md D5/D6: a search is sorted by relevance unless
+  // the person picks otherwise; without a search there is nothing to rank by.
+  it("a search is sorted most relevant first by default, and the choice is offered", async () => {
+    const c = client();
+    render(
+      <Wrap at="/skill-hub?q=deck">
+        <SkillHubPage client={c} />
+      </Wrap>,
+    );
+    await screen.findByTestId("entry-e-other");
+    expect(c.browse).toHaveBeenLastCalledWith(expect.objectContaining({ q: "deck", sort: "relevant" }));
+    const sort = screen.getByRole("combobox", { name: word("skillHub.sort") });
+    expect(sort).toHaveValue("relevant");
+    expect(within(sort).getByRole("option", { name: word("skillHub.sort.relevant") })).toBeInTheDocument();
+
+    fireEvent.change(sort, { target: { value: "name" } });
+    await waitFor(() => expect(c.browse).toHaveBeenLastCalledWith(expect.objectContaining({ sort: "name" })));
+    expect(where).toContain("sort=name");
+
+    fireEvent.change(sort, { target: { value: "relevant" } });
+    await waitFor(() => expect(c.browse).toHaveBeenLastCalledWith(expect.objectContaining({ sort: "relevant" })));
+    expect(where).not.toContain("sort=");
+  });
+
+  it("without a search there is no most-relevant choice, and a stale one reads as name", async () => {
+    const c = client();
+    render(
+      <Wrap at="/skill-hub?sort=relevant">
+        <SkillHubPage client={c} />
+      </Wrap>,
+    );
+    await screen.findByTestId("entry-e-root");
+    expect(c.browse).toHaveBeenLastCalledWith(expect.objectContaining({ sort: "name" }));
+    const sort = screen.getByRole("combobox", { name: word("skillHub.sort") });
+    expect(sort).toHaveValue("name");
+    expect(within(sort).queryByRole("option", { name: word("skillHub.sort.relevant") })).toBeNull();
+  });
+
   it("restores the filters from the address — Back to the list lands where you were (D4)", async () => {
     const c = client();
     render(

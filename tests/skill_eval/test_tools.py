@@ -389,3 +389,19 @@ def test_a_layout_the_app_would_refuse_is_refused_in_its_words(tmp_path):
 def test_path_and_layout_together_are_refused_as_the_app_refuses_them(tmp_path):
     out = run("show_file", {"path": "a.png", "layout": _TWO}, tmp_path, [])
     assert out.startswith("error: give either path")
+
+
+def test_the_search_double_tells_the_model_what_the_live_tool_does_about_word_order():
+    """docs/plan-skill-hub-search.md D8, review round 1: the guidance that a
+    fuller query is fine is the point of the change; a double without it
+    scores the skill against the old tool."""
+    from workspace_app.agent.tools import search_skill_hub_impl
+
+    double = next(
+        s["function"]["description"]
+        for s in schemas()
+        if s["function"]["name"] == "search_skill_hub"
+    )
+    for said in ("any order", "whole need", "most used"):
+        assert said in (search_skill_hub_impl.__doc__ or ""), said
+        assert said in double, said

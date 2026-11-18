@@ -566,3 +566,39 @@ async def test_the_picker_asks_for_forks_beside_originals_without_a_search(harne
 
     assert {e["id"] for e in flat["entries"]} == {root, fork}
     assert flat["total"] == 2
+
+
+# ── docs/plan-skill-hub-search.md D5/D6: the page's "most relevant" ──────────
+
+
+async def test_sorting_by_relevance_puts_the_best_match_first_then_the_most_used(
+    harness: Harness,
+):
+    hub = _hub(harness)
+    partial = await _entry(hub, "alice", "aaa-oven", description="Oven profiles for solder.")
+    await _entry(hub, "bob", "bbb-defects", description="Defects in solder joints.")
+    await _entry(hub, "carol", "zzz-whole", description="Find solder defects fast.")
+    for _ in range(9):
+        hub.usage.use(partial, user="u", item="i")
+    await hub.usage.flush()
+
+    listed = harness.client.get(
+        "/skill-hub/entries", params={"q": "solder defects", "sort": "relevant"}
+    ).json()
+
+    # the most used is a partial match, so it comes last — the group decides first
+    assert [c["name"] for c in listed["entries"]] == ["zzz-whole", "bbb-defects", "aaa-oven"]
+    assert listed["total"] == 3
+
+
+async def test_relevance_without_a_query_is_name_order(harness: Harness):
+    """D6: nothing to rank by — it reads as the name order."""
+    hub = _hub(harness)
+    await _entry(hub, "alice", "aaa")
+    busy = await _entry(hub, "alice", "zzz")
+    hub.usage.use(busy, user="u", item="i")
+    await hub.usage.flush()
+
+    listed = harness.client.get("/skill-hub/entries", params={"sort": "relevant"}).json()
+
+    assert [c["name"] for c in listed["entries"]] == ["aaa", "zzz"]

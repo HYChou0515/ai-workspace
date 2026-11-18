@@ -3220,8 +3220,11 @@ async def search_skill_hub_impl(ctx: RunContextWrapper[AgentToolContext], query:
     """Find skills other users have published to the skill hub. Use it when the
     user asks whether a skill for some task exists, or wants to install one.
 
-    `query` matches the skill's name and description (case-insensitive); an
-    empty query lists everything. Each hit shows `owner/name`, the description,
+    `query` matches the skill's name and description (case-insensitive), its
+    words in any order: say the whole need — a skill that matches only some of
+    the words is still listed. Best match first (the whole query as written,
+    then every word, then most words), and among equal matches the most used
+    first. An empty query lists everything. Each hit shows `owner/name`, the description,
     which App it was written in, and the ENTRY ID that `install_skill` and
     `show_skill_hub_entry` take. Forks are listed under the skill they were
     forked from. Each hit also says how often it was installed and used,
@@ -3233,7 +3236,7 @@ async def search_skill_hub_impl(ctx: RunContextWrapper[AgentToolContext], query:
     """
     import datetime
 
-    from ..apps.skill_hub import matches_query, missing_tools_for, nest_forks
+    from ..apps.skill_hub import match_rank, missing_tools_for, nest_forks
     from ..apps.skill_hub_git import GitError
     from ..apps.skills import hub_entries_here
 
@@ -3241,24 +3244,38 @@ async def search_skill_hub_impl(ctx: RunContextWrapper[AgentToolContext], query:
     hub = c.skill_hub
     if hub is None or c.app_slug is None:
         return "error: search_skill_hub is only available in an App workspace turn"
-    hits = [(i, e) for i, e in hub.visible(c.acting_user) if matches_query(e, query)]
-    if not hits:
+    ranked = [(i, e, r) for i, e in hub.visible(c.acting_user) if (r := match_rank(e, query))]
+    if not ranked:
         return (
             f"no skill hub entry matches {query!r}. The user can publish one of this "
             "workspace's skills with publish_skill."
         )
+    # docs/plan-skill-hub-search.md D1/D2: best match first, the most used
+    # first among equal matches — one bounded grouped sum over every hit. The
+    # sort is stable on `visible`'s name order, which an empty query keeps (D6).
+    counts = await asyncio.to_thread(hub.usage.totals, [i for i, _e, _r in ranked])
+    key = {i: (r, -counts[i][1], -counts[i][0]) for i, _e, r in ranked}
+    if query.strip():
+        ranked.sort(key=lambda h: key[h[0]])
+    hits = [(i, e) for i, e, _r in ranked]
     # Roots first, each followed by its forks — a fork whose root is not in the
     # hits (filtered out, or unreadable to this viewer) stands on its own.
     by_id = {i: e for i, e in hits}
+    groups = nest_forks(by_id)
+    if query.strip():
+        # A fork sits under its original (D7), so an original and its forks
+        # rank by the BEST of them: ranked by the original alone, the best hit
+        # could be a fork pushed past the cut (review round 1). Stable, so
+        # equal groups keep the order above.
+        groups.sort(key=lambda g: min(key[i] for i in (g[0], *g[1])))
     ordered: list[tuple[str, SkillHubEntry, bool]] = []
-    for root, forks in nest_forks(by_id):
+    for root, forks in groups:
         ordered.append((root, by_id[root], False))
         ordered += [(j, by_id[j], True) for j in forks]
     shown = ordered[:SEARCH_SKILL_HUB_LIMIT]
     # What the user weighs in choosing one (plan-skill-hub-history A2): how much
-    # it is used, whether this item already has it, how recent its version is,
-    # and what its review said.
-    counts = await asyncio.to_thread(hub.usage.totals, [i for i, _e, _f in shown])
+    # it is used (`counts`, above), whether this item already has it, how
+    # recent its version is, and what its review said.
     # "Already installed here" reads the item's `.skill/` folders — item
     # content, so only for a speaker who may read it (round 2); the hits
     # themselves are the skill hub's, scoped to the speaker already.

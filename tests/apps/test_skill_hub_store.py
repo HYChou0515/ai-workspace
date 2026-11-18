@@ -568,6 +568,165 @@ def test_matches_query_is_the_rule_both_the_page_and_the_tool_use() -> None:
     assert matches_query(e, "deck") is False
 
 
+def _described(name: str, description: str) -> SkillHubEntry:
+    return SkillHubEntry(
+        owner="a",
+        name=name,
+        description=description,
+        source_item="i",
+        source_app="rca",
+        source_profile="p",
+        origin=SkillOrigin(source="hub", files={}),
+        review=OK,
+    )
+
+
+def test_a_query_matches_its_words_in_any_order() -> None:
+    """docs/plan-skill-hub-search.md D1: the whole query verbatim was the only
+    rule, so a fuller query found less — the reported failure."""
+    from workspace_app.apps.skill_hub import matches_query
+
+    e = _described("reflow-triage", "Find solder defects after reflow.")
+    assert matches_query(e, "reflow solder defects") is True
+    assert matches_query(e, "solder defects in the oven profile") is True  # some words
+    assert matches_query(e, "slide deck") is False
+
+
+def test_the_three_groups_rank_whole_then_every_word_then_most_words() -> None:
+    from workspace_app.apps.skill_hub import match_rank
+
+    whole = match_rank(_described("x", "Find solder defects after reflow."), "solder defects")
+    every = match_rank(_described("x", "Defects in solder, found after reflow."), "solder defects")
+    two_of_three = match_rank(_described("x", "Solder defects."), "solder defects oven")
+    one_of_three = match_rank(_described("x", "Solder joints."), "solder defects oven")
+    assert whole is not None and every is not None
+    assert two_of_three is not None and one_of_three is not None
+    assert whole < every < two_of_three < one_of_three
+    assert match_rank(_described("x", "Slides."), "solder defects") is None
+
+
+def test_chinese_is_matched_by_pairs_of_characters() -> None:
+    """D3: Chinese has no spaces, so a run of it is cut into neighbouring
+    pairs — 「分析晶圓的良率」 is found by 「晶圓 良率 分析」 in any order."""
+    from workspace_app.apps.skill_hub import match_rank
+
+    e = _described("wafer", "分析晶圓的良率")
+    assert match_rank(e, "晶圓 良率 分析") is not None
+    spaced, run = match_rank(e, "晶圓 良率 分析"), match_rank(e, "晶圓良率分析")
+    assert spaced is not None and run is not None
+    assert spaced < run, "every pair present beats some pairs present"
+
+
+def test_an_empty_query_still_matches_everything_at_one_rank() -> None:
+    from workspace_app.apps.skill_hub import match_rank
+
+    assert match_rank(_described("x", "y"), "  ") == match_rank(_described("z", "w"), "")
+
+
+def test_a_word_matches_from_the_start_of_a_word_not_from_its_middle() -> None:
+    """Review round 1: `ai` was found inside "detailed" and `for` inside
+    "formatting", so an unrelated skill outranked the relevant one — the
+    fuller the query, the more such short words it carries."""
+    from workspace_app.apps.skill_hub import match_rank
+
+    query = "AI tool for wafer analysis"
+    unrelated = match_rank(_described("format-helper", "Detailed information formatting."), query)
+    relevant = match_rank(_described("wafer-yield", "Analyse wafer yield maps."), query)
+    assert unrelated is None
+    assert relevant is not None
+
+
+def test_words_of_one_letter_and_filler_words_match_nothing_on_their_own() -> None:
+    from workspace_app.apps.skill_hub import match_rank
+
+    assert match_rank(_described("x", "anything at all"), "a i") is None
+    assert match_rank(_described("x", "for the record"), "for the") is not None  # verbatim still
+    assert match_rank(_described("x", "a tool for the oven"), "of a the for") is None
+
+
+def test_a_single_chinese_character_is_a_word_but_a_filler_one_is_not() -> None:
+    """Review round 2: a one-character Chinese word (畫、圖、表) is a word, not
+    noise like a single Latin letter; dropping it made 「畫 圖」 find nothing."""
+    from workspace_app.apps.skill_hub import match_rank
+
+    assert match_rank(_described("x", "幫你畫圖"), "畫 圖") == (1, 0)
+    assert match_rank(_described("x", "表格整理用 excel"), "excel 表") == (1, 0)
+    assert match_rank(_described("x", "這是我的工具"), "的 了") is None
+
+
+def test_a_word_starts_inside_camel_case_and_after_a_digit() -> None:
+    """Review round 2: matching lower-cased text lost camelCase and
+    letter-digit boundaries, so "pdf tool" lost `html2pdf` that "pdf" alone
+    found — one more word, fewer hits."""
+    from workspace_app.apps.skill_hub import match_rank
+
+    e = _described("html2pdf", "Uses readCsvFile and toPdf.")
+    assert match_rank(e, "csv file") == (1, 0)
+    assert match_rank(e, "pdf tool") is not None
+    assert match_rank(_described("html2pdf", "d"), "pdf tool") is not None
+    # still not inside a plain word
+    assert match_rank(_described("x", "Detailed notes."), "ai tool") is None
+
+
+def test_text_whose_lower_case_is_longer_still_matches_words() -> None:
+    """`"İ".lower()` is two characters, which shifts every position after it;
+    such text falls back to plain word starts rather than miscounting."""
+    from workspace_app.apps.skill_hub import match_rank
+
+    assert match_rank(_described("x", "İstanbul city guide"), "guide tour") == (2, -1)
+    assert match_rank(_described("x", "İstanbul city guidebook"), "book tour") is None
+
+
+def test_word_starts_are_read_once_per_text_however_many_words(monkeypatch) -> None:
+    """Review round 3: reading word starts again for every word of the query
+    made a search 34x slower, on the API's event loop. The name and the
+    description are each read AT MOST once per entry, whatever the query
+    holds — and not at all when none of its words is in them."""
+    from workspace_app.apps import skill_hub
+
+    calls: list[str] = []
+    real = skill_hub._word_starts
+
+    def counted(text: str) -> list[int]:
+        calls.append(text)
+        return real(text)
+
+    monkeypatch.setattr(skill_hub, "_word_starts", counted)
+    e = _described("wafer-yield", "Analyse wafer yield maps and lot history quickly.")
+    skill_hub.match_rank(e, "wafer yield lot history map trend chart report")
+
+    assert sorted(calls) == sorted([e.name, e.description])
+    calls.clear()
+    skill_hub.match_rank(e, "deck slides poster banner")
+    assert calls == []
+
+
+def test_an_acronym_ends_where_the_next_word_begins() -> None:
+    """`XMLParser`, `readCSVFile`: the last capital of an acronym starts the
+    next word (review round 3)."""
+    from workspace_app.apps.skill_hub import match_rank
+
+    assert match_rank(_described("x", "Uses XMLParser."), "xml parser") == (1, 0)
+    assert match_rank(_described("x", "Calls readCSVFile."), "csv file") == (1, 0)
+    assert match_rank(_described("x", "An HTTPServer."), "http server") == (1, 0)
+
+
+def test_an_underscore_separates_words_both_ways() -> None:
+    from workspace_app.apps.skill_hub import match_rank
+
+    assert match_rank(_described("x", "Calls kb search first."), "kb_search") is not None
+    assert match_rank(_described("x", "Calls kb_search first."), "kb search") is not None
+
+
+def test_whatever_matched_before_still_matches() -> None:
+    """The whole query verbatim is still group one, so the old rule's hits
+    are all still hits — a word found inside another included."""
+    from workspace_app.apps.skill_hub import match_rank
+
+    assert match_rank(_described("reflow-triage", "d"), "flow") == (0, 0)
+    assert match_rank(_described("x", "分析晶圓的良率"), "良率") == (0, 0)
+
+
 async def test_the_store_refuses_a_name_or_a_size_the_publisher_would_have_been_refused_for(
     store: SkillHubStore,
 ) -> None:

@@ -645,6 +645,27 @@ describe("SkillsModal — the skill hub", () => {
     unsubscribe();
   });
 
+  // docs/plan-skill-hub-search.md, review round 1: the picker searches the same
+  // wider rule as the page, so a search is ordered by relevance, not by name.
+  it("a search in the picker is ordered most relevant first; browsing stays by name", async () => {
+    const hub = fakeHub();
+    renderWithHub(hub);
+    await screen.findByTestId("skill-row-my-skill");
+    fireEvent.click(screen.getByTestId("skills-from-hub"));
+    await screen.findByTestId("skill-hub-picker");
+    await waitFor(() =>
+      expect(hub.browse).toHaveBeenLastCalledWith(expect.not.objectContaining({ sort: "relevant" })),
+    );
+
+    fireEvent.change(screen.getByRole("searchbox"), { target: { value: "solder defects" } });
+
+    await waitFor(() =>
+      expect(hub.browse).toHaveBeenLastCalledWith(
+        expect.objectContaining({ q: "solder defects", sort: "relevant" }),
+      ),
+    );
+  });
+
   it("opens the picker with this App's tool告知 on each row, and installs through the panel's door", async () => {
     const hub = fakeHub();
     renderWithHub(hub);
