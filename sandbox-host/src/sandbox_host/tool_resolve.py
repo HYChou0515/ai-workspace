@@ -119,6 +119,9 @@ class ResolvedTool:
     """What the tool IS, verbatim from the manifest — the answer to "what does
     this tool do", which the app cannot obtain any other way. ``None`` when its
     author wrote none."""
+    title: str | None = None
+    """What the tool is CALLED, verbatim from the manifest
+    (docs/plan-tool-title.md). ``None`` when its author gave none."""
     env: tuple[EnvSpec, ...] | None = None
     """What the tool says it needs from the environment (#750), or ``None``
     when its manifest said nothing. Carried for the same reason as ``author``:
@@ -195,6 +198,7 @@ class ToolResolver:
             stale=False,
             author=manifest.author,
             description=manifest.description,
+            title=manifest.title,
             env=manifest.env,
         )
 
@@ -236,6 +240,7 @@ class ToolResolver:
             # upgrade made every remembered tool raise instead of resolve.
             author=remembered.get("author"),
             description=remembered.get("description"),
+            title=remembered.get("title"),
             # Same reasoning, and the same three states: a remembered entry
             # written before #750 has no `env` key and must stay "did not say".
             env=(
@@ -260,6 +265,7 @@ class ToolResolver:
             "version": manifest.version,
             "author": manifest.author,
             "description": manifest.description,
+            "title": manifest.title,
             # Stored so a store outage does not also cost the declaration:
             # `_fall_back` rebuilds a ResolvedTool from exactly this dict.
             **({"env": [env_to_json(e) for e in manifest.env]} if manifest.env is not None else {}),

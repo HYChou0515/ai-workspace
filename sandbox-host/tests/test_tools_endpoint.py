@@ -40,6 +40,7 @@ def _tool(
     stale: bool = False,
     author: str | None = None,
     description: str | None = None,
+    title: str | None = None,
 ) -> ResolvedTool:
     return ResolvedTool(
         name=name,
@@ -49,6 +50,7 @@ def _tool(
         stale=stale,
         author=author,
         description=description,
+        title=title,
     )
 
 
@@ -247,3 +249,14 @@ async def test_create_mounts_the_third_party_bundles_the_app_resolved() -> None:
 
     assert r.status_code == 200
     assert sandbox.spec.tools == {"wafer-history": "a" * 64}  # ty: ignore[unresolved-attribute]
+
+
+async def test_resolve_forwards_what_the_tool_is_called() -> None:
+    """docs/plan-tool-title.md: the app never reads a manifest, so a title the
+    host does not forward is one nobody downstream can show."""
+    resolver = _Resolver(**{"wafer-history": _tool("wafer-history", title="晶圓歷史查詢")})
+
+    async with _client(resolver) as c:
+        r = await c.post("/tools/resolve", json={"tools": {"wafer-history": "https://g/m"}})
+
+    assert r.json()["tools"]["wafer-history"]["title"] == "晶圓歷史查詢"
