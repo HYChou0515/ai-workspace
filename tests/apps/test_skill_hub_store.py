@@ -568,6 +568,60 @@ def test_matches_query_is_the_rule_both_the_page_and_the_tool_use() -> None:
     assert matches_query(e, "deck") is False
 
 
+def _described(name: str, description: str) -> SkillHubEntry:
+    return SkillHubEntry(
+        owner="a",
+        name=name,
+        description=description,
+        source_item="i",
+        source_app="rca",
+        source_profile="p",
+        origin=SkillOrigin(source="hub", files={}),
+        review=OK,
+    )
+
+
+def test_a_query_matches_its_words_in_any_order() -> None:
+    """docs/plan-skill-hub-search.md D1: the whole query verbatim was the only
+    rule, so a fuller query found less — the reported failure."""
+    from workspace_app.apps.skill_hub import matches_query
+
+    e = _described("reflow-triage", "Find solder defects after reflow.")
+    assert matches_query(e, "reflow solder defects") is True
+    assert matches_query(e, "solder defects in the oven profile") is True  # some words
+    assert matches_query(e, "slide deck") is False
+
+
+def test_the_three_groups_rank_whole_then_every_word_then_most_words() -> None:
+    from workspace_app.apps.skill_hub import match_rank
+
+    whole = match_rank(_described("x", "Find solder defects after reflow."), "solder defects")
+    every = match_rank(_described("x", "Defects in solder, found after reflow."), "solder defects")
+    two_of_three = match_rank(_described("x", "Solder defects."), "solder defects oven")
+    one_of_three = match_rank(_described("x", "Solder joints."), "solder defects oven")
+    assert None not in (whole, every, two_of_three, one_of_three)
+    assert whole < every < two_of_three < one_of_three
+    assert match_rank(_described("x", "Slides."), "solder defects") is None
+
+
+def test_chinese_is_matched_by_pairs_of_characters() -> None:
+    """D3: Chinese has no spaces, so a run of it is cut into neighbouring
+    pairs — 「分析晶圓的良率」 is found by 「晶圓 良率 分析」 in any order."""
+    from workspace_app.apps.skill_hub import match_rank
+
+    e = _described("wafer", "分析晶圓的良率")
+    assert match_rank(e, "晶圓 良率 分析") is not None
+    spaced, run = match_rank(e, "晶圓 良率 分析"), match_rank(e, "晶圓良率分析")
+    assert spaced is not None and run is not None
+    assert spaced < run, "every pair present beats some pairs present"
+
+
+def test_an_empty_query_still_matches_everything_at_one_rank() -> None:
+    from workspace_app.apps.skill_hub import match_rank
+
+    assert match_rank(_described("x", "y"), "  ") == match_rank(_described("z", "w"), "")
+
+
 async def test_the_store_refuses_a_name_or_a_size_the_publisher_would_have_been_refused_for(
     store: SkillHubStore,
 ) -> None:

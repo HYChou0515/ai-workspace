@@ -360,13 +360,52 @@ def script_count(paths: Iterable[str]) -> int:
     return sum(1 for p in paths if p.startswith("scripts/"))
 
 
-def matches_query(entry: SkillHubEntry, query: str) -> bool:
-    """The one search rule: the query, trimmed, is a case-insensitive
-    substring of the name or the description; an empty query matches all.
+#: Chinese, Japanese and Korean characters — written without spaces between
+#: words, so a run of them is cut into neighbouring pairs to be matched.
+_CJK = "぀-ヿ㐀-䶿一-鿿가-힯豈-﫿"
+_TERM = re.compile(f"([{_CJK}]+)|([^\\W{_CJK}]+)")
+
+
+def _terms(needle: str) -> list[str]:
+    """The words a (lower-cased) query is matched by, in order, once each
+    (docs/plan-skill-hub-search.md D3): runs of letters and digits split at
+    spaces and punctuation; a run of CJK cut into neighbouring pairs —
+    「晶圓良率」 → 晶圓、圓良、良率 — and a lone character kept as itself."""
+    out: list[str] = []
+    for cjk, word in _TERM.findall(needle):
+        if word:
+            out.append(word)
+        elif len(cjk) == 1:
+            out.append(cjk)
+        else:
+            out += [cjk[k : k + 2] for k in range(len(cjk) - 1)]
+    return list(dict.fromkeys(out))
+
+
+def match_rank(entry: SkillHubEntry, query: str) -> tuple[int, int] | None:
+    """How well ``entry`` matches ``query`` — smaller is better — or ``None``
+    when it does not (docs/plan-skill-hub-search.md D1). Three groups, in
+    order: the whole query verbatim in the name or the description; every
+    word of it, in any order; some of its words, more before fewer. An empty
+    query matches everything at one rank. Case-insensitive.
+
     The page's list and the agent's `search_skill_hub` both call this — a copy
     kept alike by hand in each was how they were first written."""
     needle = query.strip().lower()
-    return not needle or needle in entry.name.lower() or needle in entry.description.lower()
+    name, description = entry.name.lower(), entry.description.lower()
+    if not needle or needle in name or needle in description:
+        return (0, 0)
+    terms = _terms(needle)
+    # Name and description apart, so no word is found across the seam.
+    found = sum(1 for t in terms if t in name or t in description)
+    if not found:
+        return None
+    return (1, 0) if found == len(terms) else (2, -found)
+
+
+def matches_query(entry: SkillHubEntry, query: str) -> bool:
+    """Whether ``entry`` is a hit for ``query`` at all (:func:`match_rank`)."""
+    return match_rank(entry, query) is not None
 
 
 def skill_description(skill_md: str) -> str:

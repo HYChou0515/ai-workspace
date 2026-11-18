@@ -299,3 +299,56 @@ async def test_one_entry_whose_repo_is_gone_costs_its_date_not_the_search():
 
     assert broken in out and fine in out
     assert out.count("last updated") == 1
+
+
+# ── docs/plan-skill-hub-search.md: groups, then use ──────────────────────────
+
+
+async def test_a_fuller_query_still_finds_a_skill_that_matches_some_of_its_words():
+    """The reported failure: the AI wrote the whole need, and nothing matched
+    it verbatim."""
+    _spec, hub = _hub()
+    hit = await _entry(hub, "alice", "reflow-triage", "Find solder defects after reflow.")
+
+    out = await search_skill_hub_impl(_ctx(hub), "triage solder defects from the reflow oven")
+
+    assert hit in out
+
+
+async def test_hits_come_whole_match_first_then_every_word_then_by_use():
+    _spec, hub = _hub()
+    partial_busy = await _entry(hub, "alice", "aaa-oven", "Oven profiles for solder.")
+    every_quiet = await _entry(hub, "bob", "bbb-defects", "Defects in solder joints.")
+    every_busy = await _entry(hub, "carol", "ccc-defects", "Defects of solder paste.")
+    whole = await _entry(hub, "dan", "zzz-whole", "Find solder defects fast.")
+    for _ in range(3):
+        hub.usage.use(every_busy, user="u", item="i")
+    for _ in range(9):
+        hub.usage.use(partial_busy, user="u", item="i")
+    await hub.usage.flush()
+
+    out = await search_skill_hub_impl(_ctx(hub), "solder defects")
+
+    order = [i for i in (whole, every_busy, every_quiet, partial_busy) if i in out]
+    positions = [out.index(i) for i in order]
+    assert order == [whole, every_busy, every_quiet, partial_busy]
+    assert positions == sorted(positions), "group first, then the most used within it"
+
+
+async def test_the_tool_tells_the_ai_that_more_words_do_not_hurt():
+    doc = search_skill_hub_impl.__doc__ or ""
+    assert "any order" in doc and "most used" in doc
+
+
+async def test_an_empty_query_keeps_the_listing_order_whatever_is_used_more():
+    """D6: no query, nothing to rank by — the listing reads as before."""
+    _spec, hub = _hub()
+    first = await _entry(hub, "alice", "aaa", "d")
+    busy = await _entry(hub, "bob", "zzz", "d")
+    for _ in range(5):
+        hub.usage.use(busy, user="u", item="i")
+    await hub.usage.flush()
+
+    out = await search_skill_hub_impl(_ctx(hub), "")
+
+    assert out.index(first) < out.index(busy)
