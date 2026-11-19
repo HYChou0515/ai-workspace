@@ -830,10 +830,17 @@ observability:
     enabled: true      # 環境變數 WORKSPACE_LLM_LOG=0 可直接關（正式環境 off-switch）
     dir: logs/llm
     keep_days: 0        # 0 = 全留（手動清）
+  telemetry:
+    keep_days: 14       # 遙測事件（telemetry-event）保留天數；0 = 全留
 ```
 
 每筆生成呼叫留完整 JSON（`request` 區塊就是 `litellm.completion(**request)` 的 kwargs，可直接複製重播，
 或跑落地的 `logs/llm/replay.py <file>`）；嵌入/rerank 只留一行索引。刪一天：`rm -rf logs/llm/<date>`。
+
+`telemetry.keep_days`：遙測面板與 `/monitor` 讀的 `telemetry-event`（agent 每次 LLM 呼叫、每個工具的
+trace/span，內容含送進模型的完整對話；以及 #407 的儲存統計）。超過天數的由 `blob-gc` 佇列上的清除 job
+永久刪除——API 每小時提出一次，由消費 `blob-gc` 的 worker 執行，每次有時間上限，積很多時分幾次清完。
+`0` = 全留，資料表只會一直長（見 `docs/plan-telemetry-retention.md`）。
 
 ---
 

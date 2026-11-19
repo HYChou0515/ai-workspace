@@ -956,6 +956,22 @@ def test_observability_llm_log_defaults_enabled():
     assert s.observability.llm_log.keep_days == 0
 
 
+def test_telemetry_keeps_14_days_by_default_and_is_settable(tmp_path: Path):
+    """docs/plan-telemetry-retention.md D2/D4: telemetry-event rows older than
+    `keep_days` are purged; 0 keeps everything."""
+    assert load(config_path=None, env={}).observability.telemetry.keep_days == 14
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text(
+        dedent("""
+            observability:
+              telemetry:
+                keep_days: 0
+        """),
+        encoding="utf-8",
+    )
+    assert load(config_path=cfg, env={}).observability.telemetry.keep_days == 0
+
+
 def test_observability_llm_log_can_be_disabled(tmp_path: Path):
     """An operator can turn the LLM call log off in config.yaml."""
     cfg = tmp_path / "config.yaml"
