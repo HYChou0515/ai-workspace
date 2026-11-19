@@ -39,8 +39,12 @@ class SpecstarMonitor(IMonitor):
         with contextlib.suppress(ValueError):
             spec.add_model(TelemetryEvent, indexed_fields=["group_id", "seq", "kind"])
         self._rm = spec.get_resource_manager(TelemetryEvent)
-        # Resume the order key past whatever's already persisted (append-only).
-        self._seq = self._rm.count_resources(QB.all().build())
+        # Resume the order key past the LARGEST one persisted — not the row
+        # count: once old rows are purged (docs/plan-telemetry-retention.md)
+        # the count falls below it, and a restart would hand out keys the kept
+        # rows already hold, so `recent(limit=…)` would show old events.
+        newest = self._rm.list_resources(QB.all().sort("-seq").limit(1).build())
+        self._seq = self._payload_seq(newest[0]) if newest else 0
 
     def record(self, event: MonitorEvent) -> None:
         self._seq += 1
@@ -73,6 +77,12 @@ class SpecstarMonitor(IMonitor):
             query = base.sort("-seq").limit(limit).build()  # newest `limit`, desc
         events = [self._payload(r) for r in self._rm.list_resources(query)]
         return events if limit is None else events[::-1]  # flip desc back to oldest→newest
+
+    @staticmethod
+    def _payload_seq(r: Any) -> int:
+        data = r.data
+        assert isinstance(data, TelemetryEvent)  # narrow for ty (coverage-clean)
+        return data.seq
 
     @staticmethod
     def _payload(r: Any) -> MonitorEvent:
