@@ -2608,7 +2608,7 @@ async def ask_user_impl(
 async def lookup_user_impl(ctx: RunContextWrapper[AgentToolContext], handle: str) -> str:
     """Look up a teammate in this shared workspace by their handle.
 
-    Each user message is prefixed with `[Name (handle)]:`. Pass the
+    Each message a person wrote is prefixed with `[Name (handle)]:`. Pass the
     `handle` (the part in parentheses) of someone you need to act on — this
     resolves them to their canonical id plus section / email, e.g. so you can
     `mention_user` them. Returns a single line; an unrecognised handle returns

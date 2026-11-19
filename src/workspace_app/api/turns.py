@@ -439,12 +439,11 @@ def history_items(
                 items.append({"role": "user", "content": m.content})
             continue
         if m.role == "user" and m.content:
-            items.append(
-                {
-                    "role": "user",
-                    "content": _attribute(m.content, getattr(m, "author", None), users),
-                }
-            )
+            # A driver's round (#615, `driven_by`) is stored as a user message
+            # under its setter's name, but the setter did not say it: replayed
+            # bare, as its own turn was handed it (chat_send leaves it bare too).
+            author = None if getattr(m, "driven_by", None) else getattr(m, "author", None)
+            items.append({"role": "user", "content": _attribute(m.content, author, users)})
         elif m.role == "assistant" and m.content:
             # Skip empty-content assistant turns: they marked a tool_call
             # decision that the following tool message will reconstruct.

@@ -51,7 +51,7 @@ def test_speaker_note_says_every_user_message_carries_its_sender():
     is prefixed too, so the note must not say only EARLIER ones are."""
     note = speaker_note(User(id="u1", name="Alice", email="alice@acme.test"))
     assert "each earlier user message" not in note
-    assert "each user message is prefixed" in note
+    assert "each message a person wrote is prefixed" in note
 
 
 def test_attributed_is_the_one_spelling_of_the_prefix():

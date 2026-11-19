@@ -31,6 +31,7 @@ class _UM:
         self.author = author
         self.tool_call_id = self.tool_name = self.tool_args = None
         self.error_kind = None
+        self.driven_by: str | None = None
 
 
 class _M:
@@ -653,3 +654,16 @@ def test_placing_a_message_brings_the_sign_in_message_written_under_it():
     placed = take_person_message(thread, 5, "ann")
     assert [m.content for m in placed] == ["Ann's", "Ann: ERP expired"]
     assert [m.content for m in thread] == ["Bob's", "Bob: ERP expired", "A1"]
+
+
+@pytest.mark.parametrize("driver", ["goal", "workflow"])
+def test_a_drivers_message_is_replayed_without_its_setters_name(driver: str):
+    """A goal round or a workflow step's prompt is stored as a user message
+    under the person it runs for (`driven_by` says a driver wrote it). That
+    person did not say it, and its own turn was handed it bare: replayed bare."""
+    ann = User(id="u-ann", name="Ann", email="ann@acme.test")
+    said = _UM("user", "go", author="u-ann")
+    driven = _UM("user", "[goal] keep going", author="u-ann")
+    driven.driven_by = driver
+    items = history_items([said, driven], users=_Dir(ann))
+    assert [i["content"] for i in items] == ["[Ann (ann)]: go", "[goal] keep going"]

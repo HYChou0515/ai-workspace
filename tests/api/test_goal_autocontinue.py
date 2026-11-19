@@ -99,9 +99,11 @@ class _PromptRunner:
 
     def __init__(self) -> None:
         self.prompts: list[str] = []
+        self.histories: list[list[str]] = []
 
     async def run(self, prompt, ctx):
         self.prompts.append(prompt)
+        self.histories.append([h.get("content", "") for h in ctx.history])
         yield MessageDelta(text="working on it")
         yield RunDone()
 
@@ -125,6 +127,30 @@ def test_a_goal_round_is_not_handed_to_the_model_as_the_setters_words():
     assert len(runner.prompts) == 2
     assert runner.prompts[0].endswith("go") and runner.prompts[0].startswith("[")
     assert runner.prompts[1].startswith("[goal]")
+
+
+def test_a_goal_round_stays_unattributed_once_it_is_history():
+    """The same message reads the same in its own turn and in the next turn's
+    history. A goal round is stored as a user message under its setter's name,
+    so history used to label it as the setter's words one turn later."""
+    llm = _ScriptLlm(["NOT_MET", "NOT_MET", "MET"])
+    runner = _PromptRunner()
+    app, spec, iid = _app(llm, runner=runner)
+    with TestClient(app) as client:
+        chat = client.post(f"/a/rca/items/{iid}/chats", json={"title": "t"}).json()
+        rid = chat["chat_id"]
+        base = f"/a/rca/items/{iid}/chats/{rid}"
+        client.put(f"{base}/goal", json={"condition": "the report exists"})
+
+        client.post(f"{base}/messages", json={"content": "go"})
+
+        _wait(lambda: (g := read_goal(spec, rid)) is not None and g.state == "met")
+    assert len(runner.prompts) == 3
+    round_one = runner.prompts[1]
+    assert round_one.startswith("[goal]")
+    # Turn 3 replays round one as it was sent, and the person's "go" labelled.
+    assert round_one in runner.histories[2]
+    assert runner.prompts[0] in runner.histories[2]
 
 
 def test_met_on_the_first_turn_closes_without_continuing():

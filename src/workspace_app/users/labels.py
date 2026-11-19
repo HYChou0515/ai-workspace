@@ -50,6 +50,6 @@ def speaker_note(user: User | None) -> str:
     where = f" from {user.section}" if user.section else ""
     return (
         "You are in a shared workspace where teammates may message you in the "
-        "same thread; each user message is prefixed with its sender as "
+        "same thread; each message a person wrote is prefixed with its sender as "
         f"[Name (handle)]:. You are now replying to {speaker_label(user)}{where}."
     )
