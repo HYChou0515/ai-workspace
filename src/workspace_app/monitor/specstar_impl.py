@@ -6,14 +6,20 @@ in-memory fan-out, since specstar doesn't push.
 `record` writes synchronously — fine because spans are low-frequency (a few per
 turn), not per-token. `recent` pushes the `group_id` filter **and** the sort +
 limit into the query (both `group_id` and `seq` are indexed), so it only loads
-the rows it returns rather than the whole history. Append-only, so consider
-pruning for very long runs.
+the rows it returns rather than the whole history. Rows older than
+``observability.telemetry.keep_days`` are removed by
+:func:`purge_telemetry_older_than`, run as a job on the ``blob-gc`` queue
+(docs/plan-telemetry-retention.md): a generation span carries the whole
+prompt, so an unpurged table grew to hundreds of GB.
 """
 
 from __future__ import annotations
 
 import contextlib
+import datetime as dt
 import operator
+import time
+from collections.abc import Callable
 from functools import reduce
 from typing import Any
 
@@ -28,6 +34,44 @@ class TelemetryEvent(Struct):  # → resource "telemetry-event"
     seq: int  # monotonic per-monitor order key (created_time can collide)
     group_id: str | None = None
     payload: dict[str, Any] = field(default_factory=dict)
+
+
+PURGE_BATCH = 500
+PURGE_BUDGET_S = 600.0
+
+
+def purge_telemetry_older_than(
+    spec: SpecStar,
+    cutoff: dt.datetime,
+    *,
+    batch: int = PURGE_BATCH,
+    budget_s: float = PURGE_BUDGET_S,
+    clock: Callable[[], float] = time.monotonic,
+) -> int:
+    """Permanently delete telemetry-event rows created before ``cutoff``,
+    oldest first, ``batch`` at a time, until none are left or ``budget_s`` is
+    spent; return how many went (docs/plan-telemetry-retention.md D6/D7).
+
+    ``permanently_delete``, not ``delete``: a soft delete keeps the row and its
+    revisions, so no space would come back. Bounded by the budget so a large
+    backlog drains over several passes instead of holding the ``blob-gc``
+    queue; each pass reads only one batch of metadata at a time (indexed
+    ``created_time``), never the rows' content. A spec with no telemetry
+    model registered (an in-memory monitor deploy) has nothing to purge."""
+    try:
+        rm = spec.get_resource_manager(TelemetryEvent)
+    except KeyError:
+        return 0
+    started = clock()
+    removed = 0
+    query = (QB.created_time() < cutoff).sort(QB.created_time().asc()).limit(batch).build()
+    while True:
+        metas = rm.search_resources(query)
+        for meta in metas:
+            rm.permanently_delete(meta.resource_id)
+        removed += len(metas)
+        if len(metas) < batch or clock() - started >= budget_s:
+            return removed
 
 
 class SpecstarMonitor(IMonitor):
