@@ -625,7 +625,7 @@ def create_app(
     # a deploy gets `resources.disk_reconcile_interval_sec` (6 h) from config.
     disk_reconcile_interval: timedelta | None = None,
     # docs/plan-telemetry-retention.md: telemetry-event rows older than this
-    # many days are purged (a job on the blob-gc queue, asked for hourly). 0 ⇒
+    # many days are purged (a job on the blob-gc queue, asked every 10 min). 0 ⇒
     # never — the default here, so an app built in a test purges nothing; a
     # deploy gets `observability.telemetry.keep_days` (14) from config.
     telemetry_keep_days: int = 0,

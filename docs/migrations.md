@@ -3758,12 +3758,27 @@ pod 很快 ready；稍後出現 `third-party tools warmed, N unavailable`。
 - **預設會開始刪資料**：`telemetry-event`（遙測面板與 `/monitor` 讀的表）裡超過 14 天的列會被永久刪除，
   包括 `/monitor/summary` 用的 `mirror` / `restore` / `ws_census` 統計。
 - 想維持舊行為（全留）就設 `0`（`rollout 前`）。**為什麼**：這張表每次 LLM 呼叫都存一份送進模型的完整對話，
-  從來沒有清，曾長到約 200 GB。**沒設的症狀**：rollout 後第一個小時內開始刪 14 天前的資料。
+  從來沒有清，曾長到約 200 GB。**沒設的症狀**：rollout 後幾分鐘內就開始刪 14 天前的資料。
 
-**資料** — 不用跑 migrate。
-- 清除是 `blob-gc` 佇列上的 job（`telemetry-purge`）：API 開機後馬上提出一次、之後每小時一次（多個 pod 同一小時只提一次），
-  由消費 `blob-gc` 的那個 process 執行（`rca-worker-blob-gc`，或 `server.run_consumers` 開著的 API）。
-- 每次最多跑 10 分鐘、每批 500 列，從最舊的刪起。積很多時分好幾個小時清完；這段期間 blob GC 的 reconcile 會排在它後面。
+**資料** — 不用跑 migrate。下面的 SQL 只適用 **Postgres 後端**（設了 `filestore.pg_dsn`、沒設 `filestore.disk_root`）；
+disk 後端沒有這些表，刪掉的列就是刪掉檔案，空間直接回來。
+- **先建索引**（`rollout 前`，Postgres 才需要）：
+  ```sql
+  CREATE INDEX CONCURRENTLY IF NOT EXISTS telemetry_event_meta_created_time
+    ON telemetry_event_meta (created_time);
+  ```
+  **為什麼**：清除每一批都用 `created_time` 找最舊的列。specstar 自己建的 `idx_created_time` 用固定名稱，
+  而 Postgres 的索引名稱整個 schema 共用，所以只有第一張建立的 meta 表真的有，`telemetry_event_meta` 沒有。
+  **沒建的症狀**：清除照樣正確，但每一批（10 分鐘裡每二三十秒一批）都整張掃過 `telemetry_event_meta`，
+  把共用 Postgres 的快取洗掉。`CONCURRENTLY` 不鎖表，服務運作中可以跑；不能放在交易裡。
+- 清除是 `blob-gc` 佇列上的 job（`telemetry-purge`）：API 開機後馬上提出一次、之後每 10 分鐘一次（多個 pod 同一個 10 分鐘只提一次），
+  由消費 `blob-gc` 的那個 process 執行（`rca-worker-blob-gc`，或 `server.run_consumers` 開著的 API）。上一次還在跑時的要求會併掉，
+  所以有積壓時大約每 20 分鐘跑一次。
+- 每批 500 列、從最舊的刪起，跑滿 10 分鐘就停（跑完手上那一批才看時間，所以會稍微超過）。這段期間 blob GC 的 reconcile 排在它後面，
+  最多等一次清除的時間。
+- **很慢，積壓請不要靠它清**：在本機 Postgres 實測每列約 45 ms（每做一件事都重新連線，刪除時還會讀出每個版本的內容），
+  一次 10 分鐘約 1.3 萬列，換算每小時約 4 萬列；線上通常更慢。上線時表裡已經積了很多（例如上百 GB），
+  請用下面的 `TRUNCATE` 一次清掉，清除 job 只負責之後每天超過 14 天的那一份。
 - **Postgres 不會自己把空間還給系統**：刪掉的列空間會被之後的寫入重複使用，但表檔大小不會縮。
   要立刻縮小（選做，`rollout 前或後` 都可以），二擇一：
   - **全部清掉**（最快、立刻還空間，不必 `VACUUM`；這張表全部紀錄都會不見）：
@@ -3772,10 +3787,11 @@ pod 很快 ready；稍後出現 `third-party tools warmed, N unavailable`。
     TRUNCATE telemetry_event_resource_index, telemetry_event_resource_data, telemetry_event_meta;
     ```
     然後重啟會寫遙測的三個 deployment（`kubectl rollout restart deployment/rca-app deployment/rca-worker-blob-gc
-    deployment/rca-worker-chat-video`）。**為什麼**：沒重啟的 process 會從原本很大的事件序號往上加，之後才重啟的從 0 起算，
-    遙測面板的「最近事件」就看不到後者。
+    deployment/rca-worker-chat-video`）。**為什麼**：沒重啟的 process 會從原本很大的事件序號往上加；之後才重啟的，
+    是從當時表裡最大的序號接下去，如果那時表裡還沒有那些 process 寫的新列，就幾乎從 0 起算。
+    遙測面板的「最近事件」照序號取最大的，後者的事件就一直排在後面、看不到。
   - **讓清除 job 刪完之後**再 `VACUUM FULL telemetry_event_resource_data;`（會鎖表、需要和剩下資料一樣大的額外空間，挑沒人用的時候）。
-- 表名是 `<table_prefix><model 的 snake 形>_…`，預設沒有前綴；有設 `table_prefix` 的部署要加上。
+- 表名是 specstar 依 model 名稱產生的（`telemetry-event` → `telemetry_event_…`）。
 
 **k8s · CI 側** — 沒有新 worker、manifest 或 probe：跑在既有的 `rca-worker-blob-gc` 上。
 **沒有 `blob-gc` worker、API 也不消費 `blob-gc` 的部署**：清除 job 會一直停在 pending，資料照樣長（blob GC 本身也一樣不會跑）。
@@ -3785,8 +3801,10 @@ pod 很快 ready；稍後出現 `third-party tools warmed, N unavailable`。
   用列數接續會發出和保留下來的列重複的序號，遙測面板的「最近事件」就會顯示舊事件而不是新的。
 
 **確認做完**（`rollout 後`）
-1. `rca-worker-blob-gc` 的 log 出現 `blob-gc: telemetry purge removed N rows older than …`（INFO）。
-2. 一兩天後在 Postgres 看這張表沒有再長：
+1. `rca-worker-blob-gc` 的 log 出現 `blob-gc: telemetry purge removed N rows older than …`（all-in-one 部署則在 API 的 log）。
+   後面帶著 `(time budget spent, more remain: the next ask continues)` 表示這次沒清完；穩定之後這段應該不再出現，一直出現就是寫入比清除快，請考慮調小 `keep_days`。這個模組現在自己掛 stdout handler，所以 INFO 印得出來，同一個 worker 的 `blob-gc: reconcile complete …` 也會一起出現。
+2. （Postgres）索引在：`SELECT indexname FROM pg_indexes WHERE tablename = 'telemetry_event_meta';` 有 `telemetry_event_meta_created_time`。
+3. 一兩天後在 Postgres 看這張表沒有再長：
    ```sql
    SELECT relname, pg_size_pretty(pg_total_relation_size(oid)) FROM pg_class
    WHERE relkind = 'r' AND relname LIKE '%telemetry_event%';

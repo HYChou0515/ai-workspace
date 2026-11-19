@@ -10,7 +10,7 @@ the rows it returns rather than the whole history. Rows older than
 ``observability.telemetry.keep_days`` are removed by
 :func:`purge_telemetry_older_than`, run as a job on the ``blob-gc`` queue
 (docs/plan-telemetry-retention.md): a generation span carries the whole
-prompt, so an unpurged table grew to hundreds of GB.
+prompt, so an unpurged table grew to about 200 GB.
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ import operator
 import time
 from collections.abc import Callable
 from functools import reduce
-from typing import Any
+from typing import Any, NamedTuple
 
 from msgspec import Struct, field
 from specstar import QB, SpecStar
@@ -40,6 +40,13 @@ PURGE_BATCH = 500
 PURGE_BUDGET_S = 600.0
 
 
+class PurgeResult(NamedTuple):
+    removed: int
+    #: Stopped on the time budget with a full batch just removed — rows older
+    #: than the cutoff may remain for the next pass.
+    more: bool
+
+
 def purge_telemetry_older_than(
     spec: SpecStar,
     cutoff: dt.datetime,
@@ -47,21 +54,27 @@ def purge_telemetry_older_than(
     batch: int = PURGE_BATCH,
     budget_s: float = PURGE_BUDGET_S,
     clock: Callable[[], float] = time.monotonic,
-) -> int:
+) -> PurgeResult:
     """Permanently delete telemetry-event rows created before ``cutoff``,
     oldest first, ``batch`` at a time, until none are left or ``budget_s`` is
-    spent; return how many went (docs/plan-telemetry-retention.md D6/D7).
+    spent (checked after each batch); say how many went and whether more may
+    remain (docs/plan-telemetry-retention.md D6/D7).
 
     ``permanently_delete``, not ``delete``: a soft delete keeps the row and its
-    revisions, so no space would come back. Bounded by the budget so a large
-    backlog drains over several passes instead of holding the ``blob-gc``
-    queue; each pass reads only one batch of metadata at a time (indexed
-    ``created_time``), never the rows' content. A spec with no telemetry
-    model registered (an in-memory monitor deploy) has nothing to purge."""
+    revisions, so no space would come back. It is not cheap: specstar reads
+    every revision of the row to release its blobs (the ``payload`` dict gives
+    the model a blob collector), and on Postgres each call opens connections
+    afresh — about 45 ms a row measured on a local database (review round 1).
+    Hence the budget, so a large backlog drains over several passes instead of
+    holding the ``blob-gc`` queue. On Postgres the ``created_time`` query is
+    only fast with an index the deploy creates by hand (specstar's own
+    ``idx_created_time`` exists on one meta table per schema; the
+    ``docs/migrations.md`` entry for #1037). A spec with no telemetry model
+    registered (an in-memory monitor deploy) has nothing to purge."""
     try:
         rm = spec.get_resource_manager(TelemetryEvent)
     except KeyError:
-        return 0
+        return PurgeResult(0, more=False)
     started = clock()
     removed = 0
     query = (QB.created_time() < cutoff).sort(QB.created_time().asc()).limit(batch).build()
@@ -70,8 +83,10 @@ def purge_telemetry_older_than(
         for meta in metas:
             rm.permanently_delete(meta.resource_id)
         removed += len(metas)
-        if len(metas) < batch or clock() - started >= budget_s:
-            return removed
+        if len(metas) < batch:
+            return PurgeResult(removed, more=False)
+        if clock() - started >= budget_s:
+            return PurgeResult(removed, more=True)
 
 
 class SpecstarMonitor(IMonitor):

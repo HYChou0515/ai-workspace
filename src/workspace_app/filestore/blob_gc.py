@@ -123,6 +123,14 @@ class BlobGcCoordinator:
         usage_recorder: UsageRecorder | None = None,
     ) -> None:
         self._spec = spec
+        # The worker configures no logging, so this module's INFO lines (each
+        # pass's "… complete" / "telemetry purge removed …" — what the runbook
+        # tells an operator to look for) would fall to the last-resort handler
+        # and vanish (observability/stdout_log.py). Here rather than at import,
+        # so a test can rebind it to its own stdout.
+        from ..observability.stdout_log import install_own_handler
+
+        install_own_handler(logger)
         # docs/plan-storage-all-items.md: the disk-ledger reconcile, a second
         # kind on this queue — it needs what this worker already boots (the
         # API's whole composition: every App's items, the ledger, the store).
@@ -214,8 +222,13 @@ class BlobGcCoordinator:
         if keep_days <= 0:  # a hand-made row: 0 means keep everything
             return
         cutoff = self._now() - dt.timedelta(days=keep_days)
-        removed = purge_telemetry_older_than(self._spec, cutoff)
-        logger.info("blob-gc: telemetry purge removed %d rows older than %s", removed, cutoff)
+        result = purge_telemetry_older_than(self._spec, cutoff)
+        logger.info(
+            "blob-gc: telemetry purge removed %d rows older than %s%s",
+            result.removed,
+            cutoff,
+            " (time budget spent, more remain: the next ask continues)" if result.more else "",
+        )
 
     def _disk_ledger(self) -> None:
         if self._disk_ledger_pass is None:

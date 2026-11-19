@@ -112,6 +112,28 @@ async def test_a_job_that_says_zero_days_removes_nothing():
     assert _seqs(spec) == [1]
 
 
+async def test_the_purge_line_reaches_stdout_although_the_worker_configures_no_logging(capsys):  # noqa: ANN001
+    """Review round 1 (#1037): the migrations entry tells the operator to look
+    for this line in the blob-gc worker's log. Nothing in the worker configures
+    logging, so an INFO record fell to the stdlib's last-resort handler and was
+    dropped — the check would find nothing on a healthy deploy
+    (observability/stdout_log.py)."""
+    import logging
+
+    from workspace_app.filestore import blob_gc
+    from workspace_app.observability.stdout_log import OWN_HANDLER
+
+    for h in [h for h in blob_gc.logger.handlers if getattr(h, OWN_HANDLER, False)]:
+        blob_gc.logger.removeHandler(h)  # rebind to this test's stdout
+    logging.getLogger().setLevel(logging.WARNING)  # what production has
+    spec = make_spec(default_user="alice")
+    SpecstarMonitor(spec)
+    c = BlobGcCoordinator(spec, t1="1h", t2="24h")
+    c.enqueue_telemetry_purge(keep_days=14)
+    await c.aclose()
+    assert "blob-gc: telemetry purge removed 0 rows older than" in capsys.readouterr().out
+
+
 def test_a_purge_ask_is_not_swallowed_by_another_kind_in_flight():
     spec = make_spec()
     c = BlobGcCoordinator(spec, t1="1h", t2="24h")

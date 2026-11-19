@@ -839,7 +839,7 @@ observability:
 
 `telemetry.keep_days`：遙測面板與 `/monitor` 讀的 `telemetry-event`（agent 每次 LLM 呼叫、每個工具的
 trace/span，內容含送進模型的完整對話；以及 #407 的儲存統計）。超過天數的由 `blob-gc` 佇列上的清除 job
-永久刪除——API 每小時提出一次，由消費 `blob-gc` 的 worker 執行，每次有時間上限，積很多時分幾次清完。
+永久刪除——API 每 10 分鐘提出一次，由消費 `blob-gc` 的 process 執行（`blob-gc` worker，或 `server.run_consumers` 開著的 API），每次有時間上限，積很多時分幾次清完。
 `0` = 全留，資料表只會一直長（見 `docs/plan-telemetry-retention.md`）。
 
 ---

@@ -61,9 +61,12 @@ INDEX_STUCK_AFTER_S = 3600.0
 # last_reflected_at; this is just the poll granularity, like the code-sync sweeper).
 _WIKI_REFLECT_CHECK_INTERVAL_S = 300.0
 # docs/plan-telemetry-retention.md: how often the API ASKS for the telemetry
-# purge (one pod per window). Each pass is time-bounded, so a backlog larger
-# than one pass drains a window at a time.
-TELEMETRY_PURGE_INTERVAL_S = 3600.0
+# purge (one pod per window). Each pass stops after ~600 s and an ask that
+# arrives while one runs is coalesced away, so with a backlog a pass runs about
+# every other window — purging about half the time; with none, an ask costs one
+# empty query. Hourly asking capped a backlog at ~13k rows/h (~45 ms a row on
+# Postgres, review round 1); this is about three times that.
+TELEMETRY_PURGE_INTERVAL_S = 600.0
 # #506 P8: how often the API ASKS for each collection's review-inbox cluster fold —
 # backfill any candidate that has no ClusterMember yet, then merge race-split
 # clusters — so the grouped 待審核 inbox converges without a reindex. Asking is all

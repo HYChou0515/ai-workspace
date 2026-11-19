@@ -76,19 +76,42 @@ telemetry) is outside this plan; this plan stops the table growing again.
   (`sort("-seq").limit(1)`).
 - **P2** — `observability.telemetry.keep_days: 14` (`TelemetrySettings`),
   whitelisted in the loader and documented in `docs/configuration.md` §12.
-- **P3** — `purge_telemetry_older_than(spec, cutoff, *, batch=500,
+- **P3** — a module function rather than the `SpecstarMonitor.purge_older_than`
+  method the phase names: the runner holds the spec, not a monitor.
+  `purge_telemetry_older_than(spec, cutoff, *, batch=500,
   budget_s=600)` in `monitor/specstar_impl.py`: `search_resources` on
   `created_time < cutoff`, oldest first, one batch of metadata at a time,
   `permanently_delete` each row; it stops when a batch comes back short or the
-  budget is spent. A spec without the telemetry model returns 0.
+  budget is spent (checked after each batch, so a pass can run past the
+  budget by one batch). A spec without the telemetry model returns 0.
 - **P4** — the ask carries `keep_days` (`BlobGcPayload.keep_days`), so the
   runner needs no config of its own and takes the cutoff when the pass runs; a
   job that says `0` removes nothing (it would otherwise be "older than now",
   every row). `telemetry_purge_sweeper` asks every
-  `TELEMETRY_PURGE_INTERVAL_S` (1 h) under a `ScanLease`, at its first tick.
+  `TELEMETRY_PURGE_INTERVAL_S` (10 min; 1 h before review round 1) under a
+  `ScanLease`, at its first tick.
   `create_app(telemetry_keep_days=0)` by default, so an app built in a test
   purges nothing; `__main__` passes the setting (pinned by
   `tests/test_telemetry_wiring.py` through `build_app`).
   `test_worker`'s registry test now picks the reconcile's ask out of the
   queue, since the purge asks at boot too.
+- **Review round 1** — `BlobGcCoordinator` installs this module's own stdout
+  handler (`observability/stdout_log.install_own_handler`): the worker
+  configures no logging, so the INFO line the runbook points at was dropped.
+  The Problem section's "nothing reads those fields" holds for code; the
+  generic admin pages (`web/src/routes/autocrud-admin/telemetry-event/`)
+  display whole rows.
+  Measured on a real Postgres by the review: correct (specstar's pool forces
+  UTC, so the tz-aware cutoff compares right; the row at the cutoff stays;
+  `seq` sorts numerically), but costly — ~45 ms a row (every operation
+  opens a connection, `DEFAULT_MINCONN = 0`; `permanently_delete` reads every
+  revision to release blobs), and `telemetry_event_meta` has no
+  `created_time` index (specstar names it `idx_created_time` for every meta
+  table, and Postgres index names are per schema, so only the first table
+  gets one). So: the ask went from hourly to every 10 minutes (about three
+  times the drain rate); the purge reports `more` when it stopped on the
+  budget, and the log says so; the runbook adds a `CREATE INDEX
+  CONCURRENTLY` and sends a large backlog to `TRUNCATE` instead. The
+  connection churn and the index-name collision are specstar-wide and are
+  not fixed here.
 - **P5** — the `docs/migrations.md` entry for #1037.
