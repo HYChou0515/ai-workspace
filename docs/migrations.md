@@ -3752,7 +3752,7 @@ AI 工具說明裡每個目標後面多了它的長度上限(沒設的寫 10 個
 **確認做完**（rollout 後）— 看新 pod 的開機 log：`warming third-party bundles in the background` 之後的步驟緊接著跑完、
 pod 很快 ready；稍後出現 `third-party tools warmed, N unavailable`。
 
-### 2026-11-18 · #1034 這一輪要回答的訊息也帶上發話人的名字 {#pr-1034}
+### 2026-11-19 · 12dbcb53 · #1034 這一輪要回答的訊息也帶上發話人的名字 {#pr-1034}
 
 **設定** — 沒有。
 
