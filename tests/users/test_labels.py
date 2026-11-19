@@ -1,7 +1,7 @@
 """#242 — rendering a person into a label the LLM can read."""
 
 from workspace_app.users import User, display_handle, speaker_label
-from workspace_app.users.labels import speaker_note
+from workspace_app.users.labels import attributed, speaker_note
 
 
 def test_handle_is_the_email_local_part():
@@ -44,3 +44,16 @@ def test_speaker_note_omits_section_when_absent():
 
 def test_speaker_note_is_empty_without_a_resolved_speaker():
     assert speaker_note(None) == ""
+
+
+def test_speaker_note_says_every_user_message_carries_its_sender():
+    """The note describes what the model is handed: the message being answered
+    is prefixed too, so the note must not say only EARLIER ones are."""
+    note = speaker_note(User(id="u1", name="Alice", email="alice@acme.test"))
+    assert "each earlier user message" not in note
+    assert "each message a person wrote is prefixed" in note
+
+
+def test_attributed_is_the_one_spelling_of_the_prefix():
+    assert attributed("Ann (ann)", "hi") == "[Ann (ann)]: hi"
+    assert attributed("", "hi") == "hi"

@@ -71,7 +71,7 @@ from ..resources import AgentConfig
 from ..resources.groups import groups_of
 from ..resources.kb import Citation, KbChat, KbMessage
 from ..tokens import CallLane
-from ..users.labels import speaker_label
+from ..users.labels import attributed, speaker_label
 from ..users.protocol import UserDirectory
 from .chat_naming import first_user_snippet
 from .events import AgentEvent, AnswerText, RunError, ToolEnd, ToolStart, UserMessage
@@ -1081,14 +1081,19 @@ def register_kb_chat_routes(
             # stays clean — only the content handed to the agent is augmented.
             # #484: record the injected card ids in `ctx.injected_card_ids` so a later
             # kb_search this turn doesn't define the same term a second time.
-            agent_content = body.content
+            # The person's own words carry their `[Name (handle)]: `, as every
+            # message they wrote does in history; the card and graph blocks
+            # below go in FRONT of it — they are the platform's, not theirs.
+            agent_content = attributed(
+                speaker_label(users.get(asked_by)) if asked_by else "", body.content
+            )
             if chat.collection_ids:
                 pairs = cards_with_ids_for_collections(spec, chat.collection_ids)
                 hits = match_with_ids(body.content, pairs)
                 cards = [card for _, card in hits]
                 block = card_context_block(cards)
                 if block:
-                    agent_content = f"{block}\n\n{body.content}"
+                    agent_content = f"{block}\n\n{agent_content}"
                 # Only what the block actually carried — a card the budget dropped
                 # was never defined for the model, and marking it would keep a later
                 # kb_search this turn from defining it either.
@@ -1150,7 +1155,6 @@ def register_kb_chat_routes(
                     author=asked_by,
                     at=asked_at,
                     refresh=refresh,
-                    speaker=speaker_label(users.get(asked_by)) if asked_by else "",
                 ),
             )
         # #493: await THIS turn, but only to a deadline, then DETACH it — `shield`

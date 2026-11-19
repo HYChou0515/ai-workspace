@@ -242,12 +242,10 @@ def _user_item(text: str, image_urls: Sequence[str] = ()) -> dict[str, Any]:
 
 
 def interjection_item(interjection: Interjection) -> dict[str, Any]:
-    """A message folded into a turn that is not its own (docs/plan-interjection.md),
-    attributed the way `history_items` attributes a shared thread's messages."""
-    text = interjection.content
-    if interjection.speaker:
-        text = f"[{interjection.speaker}]: {text}"
-    return _user_item(text, interjection.image_urls)
+    """A message folded into a turn that is not its own (docs/plan-interjection.md).
+    Its `content` already names its sender: the surface that composed it put
+    `[Name (handle)]: ` on the person's own words (`users.labels.attributed`)."""
+    return _user_item(interjection.content, interjection.image_urls)
 
 
 class _Interjected(Exception):  # noqa: N818 — a signal, not an error

@@ -21,6 +21,14 @@ def display_handle(user: User) -> str:
     return user.id
 
 
+def attributed(label: str, text: str) -> str:
+    """``[Name (handle)]: text`` — a person's message as the model sees it. The
+    ONE spelling of the prefix: history, a message read into a running turn,
+    and the message a turn answers all go through here, so they cannot drift
+    apart. An empty `label` (no person wrote it) leaves `text` unchanged."""
+    return f"[{label}]: {text}" if label else text
+
+
 def speaker_label(user: User) -> str:
     """``Name (handle)`` — how a message is attributed to a person in the LLM's
     view. Collapses to a single token when the name is missing (a graceful
@@ -35,13 +43,13 @@ def speaker_label(user: User) -> str:
 def speaker_note(user: User | None) -> str:
     """A per-turn system instruction (#242) telling the agent who, in a shared
     multi-collaborator workspace, it is replying to right now — and how to read
-    the per-speaker prefixes on earlier messages. Empty when no speaker is
+    the per-speaker prefixes on user messages. Empty when no speaker is
     resolved (single-user / unwired) so the base prompt is left untouched."""
     if user is None:
         return ""
     where = f" from {user.section}" if user.section else ""
     return (
         "You are in a shared workspace where teammates may message you in the "
-        "same thread; each earlier user message is prefixed with its sender as "
+        "same thread; each message a person wrote is prefixed with its sender as "
         f"[Name (handle)]:. You are now replying to {speaker_label(user)}{where}."
     )

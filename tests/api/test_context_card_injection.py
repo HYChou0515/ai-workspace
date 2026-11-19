@@ -69,6 +69,9 @@ def test_matched_card_is_injected_into_the_agent_turn():
     assert runner.prompt is not None
     assert "the capping layer over metal four" in runner.prompt  # the card was injected
     assert "what is M4?" in runner.prompt  # the user's question is preserved
+    # The card block is the platform's, so the sender's name goes on the
+    # question, after it — never on the block.
+    assert runner.prompt.endswith("\n\n[You (you)]: what is M4?")
     # the user's persisted message stays clean (no injected block)
     msgs = client.get(f"/kb/chats/{chat}").json()["messages"]
     assert msgs[0]["content"] == "what is M4?"
@@ -84,7 +87,8 @@ def test_no_card_match_leaves_the_message_clean():
     ]
     client.post(f"/kb/chats/{chat}/messages", json={"content": "hello there"})
 
-    assert runner.prompt == "hello there"  # nothing matched → no injection
+    # nothing matched → no injection; only the sender's name on their words
+    assert runner.prompt == "[You (you)]: hello there"
 
 
 class _CtxRecordingRunner:
