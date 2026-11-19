@@ -69,3 +69,26 @@ telemetry) is outside this plan; this plan stops the table growing again.
   pass runs, and that on Postgres deleted rows' space is reused but not
   returned to the OS without `VACUUM FULL` or the `TRUNCATE` above), and this
   plan's As built.
+
+## As built
+
+- **P1** — `SpecstarMonitor` resumes `seq` from the row with the largest one
+  (`sort("-seq").limit(1)`).
+- **P2** — `observability.telemetry.keep_days: 14` (`TelemetrySettings`),
+  whitelisted in the loader and documented in `docs/configuration.md` §12.
+- **P3** — `purge_telemetry_older_than(spec, cutoff, *, batch=500,
+  budget_s=600)` in `monitor/specstar_impl.py`: `search_resources` on
+  `created_time < cutoff`, oldest first, one batch of metadata at a time,
+  `permanently_delete` each row; it stops when a batch comes back short or the
+  budget is spent. A spec without the telemetry model returns 0.
+- **P4** — the ask carries `keep_days` (`BlobGcPayload.keep_days`), so the
+  runner needs no config of its own and takes the cutoff when the pass runs; a
+  job that says `0` removes nothing (it would otherwise be "older than now",
+  every row). `telemetry_purge_sweeper` asks every
+  `TELEMETRY_PURGE_INTERVAL_S` (1 h) under a `ScanLease`, at its first tick.
+  `create_app(telemetry_keep_days=0)` by default, so an app built in a test
+  purges nothing; `__main__` passes the setting (pinned by
+  `tests/test_telemetry_wiring.py` through `build_app`).
+  `test_worker`'s registry test now picks the reconcile's ask out of the
+  queue, since the purge asks at boot too.
+- **P5** — the `docs/migrations.md` entry for #1037.

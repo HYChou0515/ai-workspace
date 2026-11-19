@@ -3752,6 +3752,46 @@ AI 工具說明裡每個目標後面多了它的長度上限(沒設的寫 10 個
 **確認做完**（rollout 後）— 看新 pod 的開機 log：`warming third-party bundles in the background` 之後的步驟緊接著跑完、
 pod 很快 ready；稍後出現 `third-party tools warmed, N unavailable`。
 
+### 2026-11-19 · #1037 遙測事件只留 14 天 {#pr-1037}
+
+**設定** — 新 key `observability.telemetry.keep_days`，**預設 14**（`docs/configuration.md` §12）。
+- **預設會開始刪資料**：`telemetry-event`（遙測面板與 `/monitor` 讀的表）裡超過 14 天的列會被永久刪除，
+  包括 `/monitor/summary` 用的 `mirror` / `restore` / `ws_census` 統計。
+- 想維持舊行為（全留）就設 `0`（`rollout 前`）。**為什麼**：這張表每次 LLM 呼叫都存一份送進模型的完整對話，
+  從來沒有清，曾長到約 200 GB。**沒設的症狀**：rollout 後第一個小時內開始刪 14 天前的資料。
+
+**資料** — 不用跑 migrate。
+- 清除是 `blob-gc` 佇列上的 job（`telemetry-purge`）：API 開機後馬上提出一次、之後每小時一次（多個 pod 同一小時只提一次），
+  由消費 `blob-gc` 的那個 process 執行（`rca-worker-blob-gc`，或 `server.run_consumers` 開著的 API）。
+- 每次最多跑 10 分鐘、每批 500 列，從最舊的刪起。積很多時分好幾個小時清完；這段期間 blob GC 的 reconcile 會排在它後面。
+- **Postgres 不會自己把空間還給系統**：刪掉的列空間會被之後的寫入重複使用，但表檔大小不會縮。
+  要立刻縮小（選做，`rollout 前或後` 都可以），二擇一：
+  - **全部清掉**（最快、立刻還空間，不必 `VACUUM`；這張表全部紀錄都會不見）：
+    ```sql
+    SET lock_timeout = '5s';
+    TRUNCATE telemetry_event_resource_index, telemetry_event_resource_data, telemetry_event_meta;
+    ```
+    然後重啟會寫遙測的三個 deployment（`kubectl rollout restart deployment/rca-app deployment/rca-worker-blob-gc
+    deployment/rca-worker-chat-video`）。**為什麼**：沒重啟的 process 會從原本很大的事件序號往上加，之後才重啟的從 0 起算，
+    遙測面板的「最近事件」就看不到後者。
+  - **讓清除 job 刪完之後**再 `VACUUM FULL telemetry_event_resource_data;`（會鎖表、需要和剩下資料一樣大的額外空間，挑沒人用的時候）。
+- 表名是 `<table_prefix><model 的 snake 形>_…`，預設沒有前綴；有設 `table_prefix` 的部署要加上。
+
+**k8s · CI 側** — 沒有新 worker、manifest 或 probe：跑在既有的 `rca-worker-blob-gc` 上。
+**沒有 `blob-gc` worker、API 也不消費 `blob-gc` 的部署**：清除 job 會一直停在 pending，資料照樣長（blob GC 本身也一樣不會跑）。
+
+**行為改變，沒有開關**
+- 事件的排序序號（`seq`）開機時改從表裡**最大的序號**往下接，不再用列數。**為什麼**：刪掉舊列後列數會比最大序號小，
+  用列數接續會發出和保留下來的列重複的序號，遙測面板的「最近事件」就會顯示舊事件而不是新的。
+
+**確認做完**（`rollout 後`）
+1. `rca-worker-blob-gc` 的 log 出現 `blob-gc: telemetry purge removed N rows older than …`（INFO）。
+2. 一兩天後在 Postgres 看這張表沒有再長：
+   ```sql
+   SELECT relname, pg_size_pretty(pg_total_relation_size(oid)) FROM pg_class
+   WHERE relkind = 'r' AND relname LIKE '%telemetry_event%';
+   ```
+
 ---
 
 ## 附錄 A：資料回填的機制（specstar 為什麼不會自己補）
