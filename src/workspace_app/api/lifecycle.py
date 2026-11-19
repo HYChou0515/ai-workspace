@@ -60,6 +60,10 @@ INDEX_STUCK_AFTER_S = 3600.0
 # wiki collection is due (the actual cadence is once-a-day per collection, gated on
 # last_reflected_at; this is just the poll granularity, like the code-sync sweeper).
 _WIKI_REFLECT_CHECK_INTERVAL_S = 300.0
+# docs/plan-telemetry-retention.md: how often the API ASKS for the telemetry
+# purge (one pod per window). Each pass is time-bounded, so a backlog larger
+# than one pass drains a window at a time.
+TELEMETRY_PURGE_INTERVAL_S = 3600.0
 # #506 P8: how often the API ASKS for each collection's review-inbox cluster fold —
 # backfill any candidate that has no ClusterMember yet, then merge race-split
 # clusters — so the grouped 待審核 inbox converges without a reindex. Asking is all
@@ -126,6 +130,7 @@ def build_lifespan(
     wiki_reflect_daily: str | None = None,
     gc_interval: timedelta | None,
     disk_reconcile_interval: timedelta | None = None,
+    telemetry_keep_days: int = 0,
     shutdown_budget: timedelta = timedelta(seconds=20),
     trigger_check_interval: timedelta | None = None,
     user_schedule_sweeper: UserScheduleSweeper | None = None,
@@ -514,6 +519,30 @@ def build_lifespan(
         except asyncio.CancelledError:
             return
 
+    async def telemetry_purge_sweeper(app: FastAPI) -> None:
+        """docs/plan-telemetry-retention.md: ask for the telemetry purge — a
+        pure producer like ``disk_ledger_sweeper`` (one ``ScanLease`` window ⇒
+        one ask, run wherever the ``blob-gc`` JobType is consumed), asking at
+        its FIRST tick so a rollout starts draining a backlog at once. Each pass
+        is time-bounded, so a backlog drains over several windows."""
+        from ..workflow.triggers import ScanLease, SpecstarTriggerStore
+
+        interval_s = TELEMETRY_PURGE_INTERVAL_S
+        lease = ScanLease(SpecstarTriggerStore(spec), "telemetry-purge", interval_s=interval_s)
+
+        def ask() -> None:
+            if not lease.claim():
+                return  # another pod asked this window
+            app.state.blob_gc_coordinator.enqueue_telemetry_purge(keep_days=telemetry_keep_days)
+
+        try:
+            while True:
+                with contextlib.suppress(Exception):
+                    await asyncio.to_thread(ask)
+                await asyncio.sleep(interval_s)
+        except asyncio.CancelledError:
+            return
+
     async def blob_gc_sweeper(app: FastAPI) -> None:
         """#245: periodically ask for the orphaned-blob reconcile (deleted files'
         content), so the per-workspace quota stays honest. A pure producer, like
@@ -788,6 +817,9 @@ def build_lifespan(
         if disk_reconcile_interval is not None:
             bg.append(asyncio.create_task(disk_ledger_sweeper(app)))
             logger.debug("lifespan: disk-ledger sweeper enabled")
+        if telemetry_keep_days > 0:
+            bg.append(asyncio.create_task(telemetry_purge_sweeper(app)))
+            logger.debug("lifespan: telemetry-purge sweeper enabled")
         if offhours is not None and offhours.window:
             bg.append(asyncio.create_task(goal_offhours_sweeper(app)))
             logger.debug("lifespan: goal off-hours sweeper enabled")

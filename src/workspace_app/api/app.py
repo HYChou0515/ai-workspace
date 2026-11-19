@@ -624,6 +624,11 @@ def create_app(
     # default here, so an app built in a test does not reconcile at startup;
     # a deploy gets `resources.disk_reconcile_interval_sec` (6 h) from config.
     disk_reconcile_interval: timedelta | None = None,
+    # docs/plan-telemetry-retention.md: telemetry-event rows older than this
+    # many days are purged (a job on the blob-gc queue, asked for hourly). 0 ⇒
+    # never — the default here, so an app built in a test purges nothing; a
+    # deploy gets `observability.telemetry.keep_days` (14) from config.
+    telemetry_keep_days: int = 0,
     gc_t1: str = "1h",
     gc_t2: str = "24h",
     # plan-chat-video-export: the `chat_video:` config section — the size /
@@ -1577,6 +1582,7 @@ def create_app(
         wiki_reflect_daily=wiki_reflect_daily,
         gc_interval=gc_interval,
         disk_reconcile_interval=disk_reconcile_interval,
+        telemetry_keep_days=telemetry_keep_days,
         shutdown_budget=shutdown_budget,
         turn_reclaim_interval=turn_reclaim_interval,
         trigger_check_interval=trigger_check_interval,
