@@ -145,7 +145,7 @@ async def test_queued_messages_no_turn_has_seen_are_answered_by_one_turn():
         "Q2",
         q2_ctx,
         on_complete=lambda p: persisted.append("Q2"),
-        message=_message("ann", 2, log, speaker="Ann (ann)"),
+        message=_message("ann", 2, log),
     )
     f3 = engine.enqueue(
         "chat",
@@ -166,7 +166,6 @@ async def test_queued_messages_no_turn_has_seen_are_answered_by_one_turn():
             content="Q2",
             author="ann",
             at=2,
-            speaker="Ann (ann)",
             image_urls=["data:image/png;base64,AAA"],
         )
     ]
@@ -320,7 +319,7 @@ async def test_the_running_turn_reads_its_authors_message_where_it_is_sent():
         "Q2",
         AgentToolContext(applied_skills=["lot-map"]),
         on_complete=keep("Q2"),
-        message=_message("ann", 2, log, speaker="Ann (ann)"),
+        message=_message("ann", 2, log),
     )
     runner.release.set()
     await _drain(engine, f1, f2)
@@ -328,9 +327,7 @@ async def test_the_running_turn_reads_its_authors_message_where_it_is_sent():
     # Ann's message was read by her running turn, with what it carried, and
     # got no turn of its own.
     assert runner.read == [
-        Interjection(
-            content="Q2", author="ann", at=2, speaker="Ann (ann)", applied_skills=["lot-map"]
-        )
+        Interjection(content="Q2", author="ann", at=2, applied_skills=["lot-map"])
     ]
     assert runner.turns == ["Q1"]
     # One reply for Q1 and Q2, with Q2 placed where it was read: after the

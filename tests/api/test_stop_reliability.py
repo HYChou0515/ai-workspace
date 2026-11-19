@@ -516,7 +516,7 @@ async def test_a_stop_does_not_discard_a_queued_message_through_the_real_send_pa
         # Bounded: a discarded message never runs, so the regression is a
         # timeout rather than a test that waits it out.
         async def answered() -> None:
-            while "fast" not in runner.seen:
+            while "[u]: fast" not in runner.seen:
                 await asyncio.sleep(0.01)
 
         await asyncio.wait_for(answered(), 5)

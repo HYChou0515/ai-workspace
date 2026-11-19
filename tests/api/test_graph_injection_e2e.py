@@ -121,4 +121,4 @@ def test_a_question_naming_nothing_known_is_untouched():
     ]
     client.post(f"/kb/chats/{chat_id}/messages", json={"content": "今天天氣如何?"})
 
-    assert seen == ["今天天氣如何?"]
+    assert seen == ["[Bob Liu (bob)]: 今天天氣如何?"]

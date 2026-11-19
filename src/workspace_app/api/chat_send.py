@@ -44,7 +44,7 @@ from ..resources.conversation import SentMarking
 from ..resources.conversation_goal import GOAL_DRIVER, read_goal, upsert_goal
 from ..sandbox.protocol import OutputSink
 from ..tokens import CallLane
-from ..users.labels import speaker_label
+from ..users.labels import attributed, speaker_label
 from ..workcalendar import OffHoursCalendar
 from .env_layers import PersonEnv
 from .env_refresh import DeadSignIn, EnvRefresher, RefreshOutcome
@@ -1114,13 +1114,11 @@ class ChatSendService:
             )
             return must_move(fresh.messages, answering, owed)
 
-        users = self._users
         return QueuedMessage(
             author=author,
             at=created,
             refresh=refresh,
             on_absorbed=lambda: self._finish_claim(claim),
-            speaker=speaker_label(users.get(author)) if users is not None and author else "",
             # #613: a round the goal driver started is not a person speaking.
             driven=driven,
         )
@@ -1706,7 +1704,20 @@ class ChatSendService:
                 prefix = "\n\n".join(
                     p for p in (block, skills_block, applied_block, markings_block) if p
                 )
-                turn_content = f"{prefix}\n\n{body.content}" if prefix else body.content
+                # Every message a person wrote reaches the model as
+                # `[Name (handle)]: …` — history, a message read into a running
+                # turn, and this one. It alone used to go bare, so a shared
+                # thread named the sender of every message but the newest. The
+                # label goes on the person's OWN words, after the blocks above:
+                # those are the platform's, not theirs. A goal round is not a
+                # person speaking, so its text is left as it is.
+                speaker = (
+                    speaker_label(self._users.get(author))
+                    if self._users is not None and author and driven_by is None
+                    else ""
+                )
+                said = attributed(speaker, body.content)
+                turn_content = f"{prefix}\n\n{said}" if prefix else said
 
                 # #43: broadcast the human's message to every live viewer, then queue the
                 # turn and await ITS completion. The queue serializes concurrent users on

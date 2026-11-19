@@ -135,9 +135,11 @@ class _HistoryRecordingRunner:
 
     def __init__(self) -> None:
         self.seen_history: list[list[dict[str, str]]] = []
+        self.seen_prompts: list[str] = []
 
     async def run(self, prompt: str, ctx: AgentToolContext) -> AsyncIterator[AgentEvent]:
         self.seen_history.append(list(ctx.history))
+        self.seen_prompts.append(prompt)
         yield MessageDelta(text=f"answer to {prompt}")
         yield RunDone()
 
@@ -156,8 +158,10 @@ def test_agent_sees_prior_turns_as_history():
     assert runner.seen_history[0] == []
     assert runner.seen_history[1] == [
         {"role": "user", "content": "[You (you)]: q1"},
-        {"role": "assistant", "content": "answer to q1"},
+        {"role": "assistant", "content": "answer to [You (you)]: q1"},
     ]
+    # ...and the message each turn answers reads as it will once it is history.
+    assert runner.seen_prompts == ["[You (you)]: q1", "[You (you)]: q2"]
 
 
 def test_kb_chat_stamps_the_sender_on_the_user_message():

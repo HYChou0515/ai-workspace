@@ -78,7 +78,7 @@ async def test_a_message_sent_while_the_answer_streams_sees_that_answer():
 
     # Q2's turn was handed the thread with A1 in it, and Q2 itself as the turn.
     assert runner.turns[1]["prompt"].endswith("Q2")
-    assert runner.turns[1]["history"][-2:] == ["[u]: Q1", "A(Q1)"]
+    assert runner.turns[1]["history"][-2:] == ["[u]: Q1", "A([u]: Q1)"]
 
 
 async def test_two_messages_queued_behind_an_answer_are_answered_together():
@@ -111,16 +111,16 @@ async def test_two_messages_queued_behind_an_answer_are_answered_together():
     assert len(runner.turns) == 2
     assert runner.turns[1]["prompt"].endswith("Q3")
     assert [c.endswith("Q2") for c in runner.turns[1]["leading"]] == [True]
-    assert runner.turns[1]["history"][-2:] == ["[u]: Q1", "A(Q1)"]
+    assert runner.turns[1]["history"][-2:] == ["[u]: Q1", "A([u]: Q1)"]
     # The thread reads in the order the AI read it: Q2 and Q3 were persisted
     # above A1 when they were accepted, and moved to where that turn read them.
     thread = [(m.role, m.content) for m in _conversation(spec, iid).messages]
     assert thread == [
         ("user", "Q1"),
-        ("assistant", "A(Q1)"),
+        ("assistant", "A([u]: Q1)"),
         ("user", "Q2"),
         ("user", "Q3"),
-        ("assistant", "A(Q3)"),
+        ("assistant", "A([u]: Q3)"),
     ]
     # No claim is left open: the folded message was settled by the reply.
     assert app.state.turn_claims.list_open() == []
@@ -182,7 +182,7 @@ async def test_a_message_sent_mid_turn_by_its_author_is_answered_in_that_turn():
         ("user", "Q1"),
         ("tool", "lot 1"),
         ("user", "Q2"),
-        ("assistant", "answer to Q1 + Q2"),
+        ("assistant", "answer to [u]: Q1 + [u]: Q2"),
     ]
     assert app.state.turn_claims.list_open() == []
 
@@ -260,7 +260,7 @@ async def test_another_persons_message_takes_the_turn_over_and_says_so():
         ("tool", "lot 1", None, None),
         ("error", "The previous response was interrupted by a new message.", "bob", "interrupted"),
         ("user", "Q2", "bob", None),
-        ("assistant", "A(Q2)", "RCA Agent", None),
+        ("assistant", "A([Bob Liu (bob)]: Q2)", "RCA Agent", None),
     ]
     assert app.state.turn_claims.list_open() == []
 
@@ -313,15 +313,15 @@ async def test_a_message_still_preparing_is_kept_out_of_other_turns_histories():
 
     assert [t["prompt"][-2:] for t in runner.turns] == ["Q1", "Q2", "Q3"]
     assert not any("Q3" in (h or "") for h in runner.turns[1]["history"])
-    assert runner.turns[2]["history"][-4:] == ["[u]: Q1", "A(Q1)", "[u]: Q2", "A(Q2)"]
+    assert runner.turns[2]["history"][-4:] == ["[u]: Q1", "A([u]: Q1)", "[u]: Q2", "A([u]: Q2)"]
     thread = [(m.role, m.content) for m in _conversation(spec, iid).messages]
     assert thread == [
         ("user", "Q1"),
-        ("assistant", "A(Q1)"),
+        ("assistant", "A([u]: Q1)"),
         ("user", "Q2"),
-        ("assistant", "A(Q2)"),
+        ("assistant", "A([u]: Q2)"),
         ("user", "Q3"),
-        ("assistant", "A(Q3)"),
+        ("assistant", "A([u]: Q3)"),
     ]
 
 

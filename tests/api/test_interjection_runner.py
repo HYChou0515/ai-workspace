@@ -141,10 +141,9 @@ async def test_a_message_sent_mid_turn_is_read_at_the_next_model_call(monkeypatc
         if len(model.inputs) == 1 and len(asked) == 2:
             return [
                 Interjection(
-                    content="Q2",
+                    content="[Ann (ann)]: Q2",
                     author="ann",
                     at=2,
-                    speaker="Ann (ann)",
                     applied_skills=["lot-map"],
                 )
             ]
