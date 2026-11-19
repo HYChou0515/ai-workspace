@@ -3764,11 +3764,12 @@ pod 很快 ready；稍後出現 `third-party tools warmed, N unavailable`。
 disk 後端沒有這些表，刪掉的列就是刪掉檔案，空間直接回來。
 - **先建索引**（`rollout 前`，Postgres 才需要）：
   ```sql
-  CREATE INDEX CONCURRENTLY IF NOT EXISTS telemetry_event_meta_created_time
+  CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_telemetry_event_meta_created_time
     ON telemetry_event_meta (created_time);
   ```
-  **為什麼**：清除每一批都用 `created_time` 找最舊的列。specstar 自己建的 `idx_created_time` 用固定名稱，
-  而 Postgres 的索引名稱整個 schema 共用，所以只有第一張建立的 meta 表真的有，`telemetry_event_meta` 沒有。
+  **為什麼**：清除每一批都用 `created_time` 找最舊的列。specstar 0.13.0a2（目前鎖的版本）自己建的 `idx_created_time`
+  用固定名稱，而 Postgres 的索引名稱整個 schema 共用，所以只有第一張建立的 meta 表真的有，`telemetry_event_meta` 沒有。
+  名稱刻意用 specstar 0.13.0a5 起的命名（`idx_<表名>_<欄位>`）：之後升到那一版，開機補索引時認得它、不會再建一份重複的。
   **沒建的症狀**：清除照樣正確，但每一批（10 分鐘裡每二三十秒一批）都整張掃過 `telemetry_event_meta`，
   把共用 Postgres 的快取洗掉。`CONCURRENTLY` 不鎖表，服務運作中可以跑；不能放在交易裡。
 - 清除是 `blob-gc` 佇列上的 job（`telemetry-purge`）：API 開機後馬上提出一次、之後每 10 分鐘一次（多個 pod 同一個 10 分鐘只提一次），
@@ -3803,7 +3804,7 @@ disk 後端沒有這些表，刪掉的列就是刪掉檔案，空間直接回來
 **確認做完**（`rollout 後`）
 1. `rca-worker-blob-gc` 的 log 出現 `blob-gc: telemetry purge removed N rows older than …`（all-in-one 部署則在 API 的 log）。
    後面帶著 `(time budget spent, more remain: the next ask continues)` 表示這次沒清完；穩定之後這段應該不再出現，一直出現就是寫入比清除快，請考慮調小 `keep_days`。這個模組現在自己掛 stdout handler，所以 INFO 印得出來，同一個 worker 的 `blob-gc: reconcile complete …` 也會一起出現。
-2. （Postgres）索引在：`SELECT indexname FROM pg_indexes WHERE tablename = 'telemetry_event_meta';` 有 `telemetry_event_meta_created_time`。
+2. （Postgres）索引在：`SELECT indexname FROM pg_indexes WHERE tablename = 'telemetry_event_meta';` 有 `idx_telemetry_event_meta_created_time`。
 3. 一兩天後在 Postgres 看這張表沒有再長：
    ```sql
    SELECT relname, pg_size_pretty(pg_total_relation_size(oid)) FROM pg_class

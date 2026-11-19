@@ -111,7 +111,10 @@ telemetry) is outside this plan; this plan stops the table growing again.
   gets one). So: the ask went from hourly to every 10 minutes (about three
   times the drain rate); the purge reports `more` when it stopped on the
   budget, and the log says so; the runbook adds a `CREATE INDEX
-  CONCURRENTLY` and sends a large backlog to `TRUNCATE` instead. The
+  CONCURRENTLY` and sends a large backlog to `TRUNCATE` instead. The index
+  is named `idx_telemetry_event_meta_created_time`, the name specstar
+  0.13.0a5 gives it (it names base indexes per table and builds missing
+  ones at boot), so a later bump recognises it instead of building a second. The
   connection churn and the index-name collision are specstar-wide and are
   not fixed here.
 - **P5** — the `docs/migrations.md` entry for #1037.
