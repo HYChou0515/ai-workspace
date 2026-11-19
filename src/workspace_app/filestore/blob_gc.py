@@ -227,7 +227,7 @@ class BlobGcCoordinator:
             "blob-gc: telemetry purge removed %d rows older than %s%s",
             result.removed,
             cutoff,
-            " (time budget spent, more remain: the next ask continues)" if result.more else "",
+            " (time budget spent, more may remain: the next ask continues)" if result.more else "",
         )
 
     def _disk_ledger(self) -> None:

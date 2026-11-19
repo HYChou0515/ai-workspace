@@ -68,5 +68,17 @@ def test_it_stops_when_the_time_budget_is_spent_and_the_next_pass_carries_on():
     assert purge_telemetry_older_than(spec, CUTOFF, batch=2).removed == 1
 
 
+def test_a_short_batch_after_the_budget_says_nothing_remains():
+    """Review round 2: a pass whose budget ran out on the batch that also
+    emptied the backlog has nothing left — `more` is about rows, not time."""
+    spec, _ = _spec_with(9, 8, 7)
+    ticks = iter([0.0, 100.0])  # start, after batch 1 (full), …
+    clock = lambda: next(ticks, 100.0)  # noqa: E731
+    result = purge_telemetry_older_than(spec, CUTOFF, batch=2, budget_s=50, clock=clock)
+    assert (result.removed, result.more) == (2, True)  # stopped after a full batch
+    result = purge_telemetry_older_than(spec, CUTOFF, batch=2, budget_s=0, clock=lambda: 100.0)
+    assert (result.removed, result.more) == (1, False)  # budget long gone, batch short
+
+
 def test_a_spec_without_telemetry_has_nothing_to_purge():
     assert purge_telemetry_older_than(make_spec(default_user="u"), CUTOFF).removed == 0

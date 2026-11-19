@@ -3772,6 +3772,7 @@ disk 後端沒有這些表，刪掉的列就是刪掉檔案，空間直接回來
   名稱刻意用 specstar 0.13.0a5 起的命名（`idx_<表名>_<欄位>`）：之後升到那一版，開機補索引時認得它、不會再建一份重複的。
   **沒建的症狀**：清除照樣正確，但每一批（10 分鐘裡每二三十秒一批）都整張掃過 `telemetry_event_meta`，
   把共用 Postgres 的快取洗掉。`CONCURRENTLY` 不鎖表，服務運作中可以跑；不能放在交易裡。
+  表裡已經積了很多的話，**先**跑下面的 `TRUNCATE`，索引就幾乎不用時間建。
 - 清除是 `blob-gc` 佇列上的 job（`telemetry-purge`）：API 開機後馬上提出一次、之後每 10 分鐘一次（多個 pod 同一個 10 分鐘只提一次），
   由消費 `blob-gc` 的那個 process 執行（`rca-worker-blob-gc`，或 `server.run_consumers` 開著的 API）。上一次還在跑時的要求會併掉，
   所以有積壓時大約每 20 分鐘跑一次。
@@ -3794,7 +3795,8 @@ disk 後端沒有這些表，刪掉的列就是刪掉檔案，空間直接回來
   - **讓清除 job 刪完之後**再 `VACUUM FULL telemetry_event_resource_data;`（會鎖表、需要和剩下資料一樣大的額外空間，挑沒人用的時候）。
 - 表名是 specstar 依 model 名稱產生的（`telemetry-event` → `telemetry_event_…`）。
 
-**k8s · CI 側** — 沒有新 worker、manifest 或 probe：跑在既有的 `rca-worker-blob-gc` 上。
+**k8s · CI 側** — 沒有新 worker 或 probe：跑在既有的 `rca-worker-blob-gc` 上（`workers.yaml` 只改了一行註解）。
+rollout 時正在跑的清除會在 `terminationGracePeriodSeconds`（120 秒）後被中斷：已刪的就是刪了，沒刪到的下一次接著清。
 **沒有 `blob-gc` worker、API 也不消費 `blob-gc` 的部署**：清除 job 會一直停在 pending，資料照樣長（blob GC 本身也一樣不會跑）。
 
 **行為改變，沒有開關**
@@ -3803,8 +3805,10 @@ disk 後端沒有這些表，刪掉的列就是刪掉檔案，空間直接回來
 
 **確認做完**（`rollout 後`）
 1. `rca-worker-blob-gc` 的 log 出現 `blob-gc: telemetry purge removed N rows older than …`（all-in-one 部署則在 API 的 log）。
-   後面帶著 `(time budget spent, more remain: the next ask continues)` 表示這次沒清完；穩定之後這段應該不再出現，一直出現就是寫入比清除快，請考慮調小 `keep_days`。這個模組現在自己掛 stdout handler，所以 INFO 印得出來，同一個 worker 的 `blob-gc: reconcile complete …` 也會一起出現。
-2. （Postgres）索引在：`SELECT indexname FROM pg_indexes WHERE tablename = 'telemetry_event_meta';` 有 `idx_telemetry_event_meta_created_time`。
+   後面帶著 `(time budget spent, more may remain: the next ask continues)` 表示這次可能沒清完；穩定之後這段應該不再出現。一直出現就是寫入比清除快（清除每小時約 4 萬列）：調小 `keep_days` 沒有用（穩定時每天跨過期限的量就是每天寫入的量），請改成定期用上面的 `TRUNCATE` 清。這個模組現在自己掛 stdout handler，所以 INFO 印得出來，同一個 worker 的 `blob-gc: reconcile complete …` 也會一起出現。
+2. （Postgres）索引在而且有效：`SELECT indisvalid FROM pg_index WHERE indexrelid = 'idx_telemetry_event_meta_created_time'::regclass;`
+   回 `t`。回 `f` 表示建到一半被中斷（`IF NOT EXISTS` 重跑會直接跳過它），先
+   `DROP INDEX CONCURRENTLY idx_telemetry_event_meta_created_time;` 再重跑建索引那句。
 3. 一兩天後在 Postgres 看這張表沒有再長：
    ```sql
    SELECT relname, pg_size_pretty(pg_total_relation_size(oid)) FROM pg_class

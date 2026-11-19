@@ -108,8 +108,8 @@ telemetry) is outside this plan; this plan stops the table growing again.
   revision to release blobs), and `telemetry_event_meta` has no
   `created_time` index (specstar names it `idx_created_time` for every meta
   table, and Postgres index names are per schema, so only the first table
-  gets one). So: the ask went from hourly to every 10 minutes (about three
-  times the drain rate); the purge reports `more` when it stopped on the
+  gets one). So: the ask went from hourly to every 10 minutes, which triples
+  the drain rate (a pass about every other window); the purge reports `more` when it stopped on the
   budget, and the log says so; the runbook adds a `CREATE INDEX
   CONCURRENTLY` and sends a large backlog to `TRUNCATE` instead. The index
   is named `idx_telemetry_event_meta_created_time`, the name specstar
@@ -117,4 +117,9 @@ telemetry) is outside this plan; this plan stops the table growing again.
   ones at boot), so a later bump recognises it instead of building a second. The
   connection churn and the index-name collision are specstar-wide and are
   not fixed here.
+- **Review round 2** — the runbook no longer suggests a smaller `keep_days`
+  when the purge cannot keep up (in steady state the rows crossing the cutoff
+  equal the rows written, whatever the window): it says to `TRUNCATE`
+  periodically. The index check reads `indisvalid`, not just the name. The
+  stdout test removes the handler it bound to capsys.
 - **P5** — the `docs/migrations.md` entry for #1037.

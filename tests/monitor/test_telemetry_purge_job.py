@@ -112,7 +112,9 @@ async def test_a_job_that_says_zero_days_removes_nothing():
     assert _seqs(spec) == [1]
 
 
-async def test_the_purge_line_reaches_stdout_although_the_worker_configures_no_logging(capsys):  # noqa: ANN001
+async def test_the_purge_line_reaches_stdout_although_the_worker_configures_no_logging(
+    capsys, monkeypatch
+):  # noqa: ANN001
     """Review round 1 (#1037): the migrations entry tells the operator to look
     for this line in the blob-gc worker's log. Nothing in the worker configures
     logging, so an INFO record fell to the stdlib's last-resort handler and was
@@ -123,15 +125,26 @@ async def test_the_purge_line_reaches_stdout_although_the_worker_configures_no_l
     from workspace_app.filestore import blob_gc
     from workspace_app.observability.stdout_log import OWN_HANDLER
 
-    for h in [h for h in blob_gc.logger.handlers if getattr(h, OWN_HANDLER, False)]:
+    def own() -> list[logging.Handler]:
+        return [h for h in blob_gc.logger.handlers if getattr(h, OWN_HANDLER, False)]
+
+    for h in own():
         blob_gc.logger.removeHandler(h)  # rebind to this test's stdout
-    logging.getLogger().setLevel(logging.WARNING)  # what production has
-    spec = make_spec(default_user="alice")
-    SpecstarMonitor(spec)
-    c = BlobGcCoordinator(spec, t1="1h", t2="24h")
-    c.enqueue_telemetry_purge(keep_days=14)
-    await c.aclose()
-    assert "blob-gc: telemetry purge removed 0 rows older than" in capsys.readouterr().out
+    root = logging.getLogger()
+    monkeypatch.setattr(root, "level", logging.WARNING)  # what production has
+    try:
+        spec = make_spec(default_user="alice")
+        SpecstarMonitor(spec)
+        c = BlobGcCoordinator(spec, t1="1h", t2="24h")
+        c.enqueue_telemetry_purge(keep_days=14)
+        await c.aclose()
+        assert "blob-gc: telemetry purge removed 0 rows older than" in capsys.readouterr().out
+    finally:
+        # Review round 2: the handler is bound to capsys's stream, closed after
+        # this test — left behind, every later blob-gc INFO line raised
+        # "I/O operation on closed file". The next coordinator installs afresh.
+        for h in own():
+            blob_gc.logger.removeHandler(h)
 
 
 def test_a_purge_ask_is_not_swallowed_by_another_kind_in_flight():
