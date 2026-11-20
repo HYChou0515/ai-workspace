@@ -38,7 +38,7 @@ version of the backend package; upgrading the template never touches it.
 | Command | What it does |
 |---|---|
 | `run(workdir, resources)` | Send a folder of the workspace and start it. A large folder takes several calls; each answers how much has arrived, and the job starts once all of it has |
-| `jobs()` | Every job this workspace sent, newest first, each with where it is now — the one call "is it done yet?" needs |
+| `jobs()` | The jobs this workspace sent, newest first (20 unless asked for more), each with where it is now — the one call "is it done yet?" needs |
 | `queue()` | The machines, the jobs waiting, the quota left. Only when your backend has `capacity` |
 | `files(job_id, path)` | What a job has in its folder over there |
 | `fetch(job_id, path, dest)` | Copy a file or folder back into the workspace (`jobs/<job_id>/fetched/<path>` by default); a large one over several calls |
@@ -74,7 +74,8 @@ do. The ones that matter most:
   environment (`requirements.txt` installed first, if present; otherwise your
   default image), where variables go (`.env`), what the machine has (Python,
   CUDA, datasets at `/data`, no network), and which secrets are already set
-  there. File names and their meaning are yours; the tool reads none of them.
+  there. File names and their meaning are yours; the only file the tool
+  reads is the folder's top-level `.gitignore`, to leave out what it names.
 - **`upload` writes at `offset`, never truncates.** The tool sends a folder in
   pieces over as many calls as it takes, and reads what arrived from
   `list_files` sizes — so a piece sent twice must leave the same file, and
@@ -102,21 +103,25 @@ plain failure.
 
 ## What the tool does so you do not have to
 
-- **Which files are a job.** The folder, without version control, virtual
-  environments, `node_modules`, caches, `.pyc`, links, and what its
-  `.gitignore` names. The person's `jobs/` records folder is never sent.
+- **Which files are a job.** The folder, without folders named `.git`,
+  `.venv`, `venv`, `node_modules`, `__pycache__` and a few other caches,
+  without `.pyc` files and links, and without what its top-level `.gitignore`
+  names. The workspace's own `jobs/` records folder is never sent.
 - **Which job it is.** The item, the resources and every file's content make
   the job; the same request while it is unfinished is that job, never a
-  second one. After it finishes, the same request starts a new one. Job ids
+  second one. After it finishes, the same request starts a new one — and if
+  the records were deleted, ids you already have are skipped. Job ids
   are lowercase letters, digits and `-`, short enough for a k8s name.
 - **Large folders.** Uploads and downloads are split into pieces, each within
-  its budget, over as many calls as it takes; progress is always read back
-  from you, never assumed.
+  its budget, over as many calls as it takes. An upload resumes from the
+  sizes `list_files` reports, and starts only on your word that every file is
+  whole; a download resumes from its own partial file in the workspace.
 - **Time.** Each call has a budget (`budget = Budget(...)`; defaults: upload
   20, start 15, status 5, list_files 10, download 20, logs 5, cancel 10,
   capacity 10 seconds); one that overruns is abandoned and the model is told
-  what that means. A slow `start` is checked with `status` before anything is
-  said.
+  what that means. Calls one command makes back to back must fit the
+  platform's ceiling together, and `Budget` refuses values that cannot. A
+  slow `start` is checked with `status` before anything is said.
 - **stdout is only the answer.** Anything your code, a library or a command
   you run (`sbatch`, `kubectl`) writes to stdout goes to stderr instead.
 - **Records.** Each job gets `jobs/<job_id>/job.json` in the workspace: what

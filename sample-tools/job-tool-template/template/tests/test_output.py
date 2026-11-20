@@ -4,13 +4,14 @@ the one the outcome calls for, and the process ends when the answer is given."""
 from __future__ import annotations
 
 import json
+import math
 import subprocess
 import sys
 import time
 from pathlib import Path
 
 import pytest
-from backends import Chatty, Exiting, Machine, Remote
+from backends import Chatty, Exiting, Machine, Remote, RemoteWithQueue
 
 from job_tool.cli import main
 
@@ -134,6 +135,26 @@ def test_a_backend_that_tries_to_exit_is_a_failure_not_a_silent_success(capsys):
 
     assert (code, out) == (1, "")
     assert "SystemExit" in err
+
+
+def test_detail_the_backend_could_not_spell_as_json_still_makes_a_json_answer(capsys, tmp_path):
+    # The call succeeded; reporting it as a failure would make the model redo it.
+    from datetime import UTC, datetime
+
+    from job_contract import Capacity, Worker
+
+    class Odd(RemoteWithQueue):
+        def capacity(self):
+            free = {"since": datetime(2026, 11, 20, tzinfo=UTC), "load": math.nan}
+            return Capacity(workers=(Worker("gpu-1", "idle", free=free),))
+
+    code = main(["queue", "{}"], backend=Odd)
+    out, _ = capsys.readouterr()
+
+    assert code == 0
+    free = _strict(out)["workers"][0]["free"]
+    assert free["since"].startswith("2026-11-20")
+    assert free["load"] == "nan"
 
 
 def test_a_whole_number_written_with_a_point_is_the_same_whole_number(capsys, tmp_path):

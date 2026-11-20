@@ -26,7 +26,6 @@ def test_run_starts_with_the_backends_own_words():
         "until it finishes",
         "nothing announces",  # D2
         "jobs",
-        "small",  # try it here first
     ],
 )
 def test_run_says_how_the_tool_behaves(said):
@@ -54,3 +53,9 @@ def test_a_backends_own_description_replaces_the_templates():
 
     assert describe("logs", Worded) == "The scheduler's stdout and stderr, merged."
     assert describe("jobs", Worded) == describe("jobs", Remote)
+
+
+def test_run_gives_no_advice_that_is_the_backends_to_give():
+    # Whether a command can be tried in the sandbox (CUDA, /data, a licence)
+    # only the backend knows: D4 keeps the tool to its own behaviour.
+    assert "small" not in describe("run", Remote).replace(Remote.run_description, "")

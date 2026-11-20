@@ -117,14 +117,18 @@ class DemoBackend(JobBackend):
     def start(self, job_id: str, resources: dict[str, Any]) -> None:
         folder = self._existing(job_id)
         meta = self._meta(job_id)
-        if (meta / "pid").exists():
-            return  # already started: starting it again starts nothing
         if not (folder / "run.sh").is_file():
             raise Retryable(
                 "the folder has no run.sh at its top: this backend runs `bash run.sh`; "
                 "add it and call run again"
             )
         meta.mkdir(exist_ok=True)
+        try:
+            # Created once, atomically: of two starts at the same moment, one wins
+            # and the other starts nothing.
+            os.close(os.open(meta / "claimed", os.O_CREAT | os.O_EXCL | os.O_WRONLY))
+        except FileExistsError:
+            return
         (meta / "resources.json").write_text(json.dumps(resources))
         with (meta / "output.log").open("ab") as log:
             process = subprocess.Popen(  # noqa: S603 - the demo's whole point is to run it
@@ -141,8 +145,10 @@ class DemoBackend(JobBackend):
 
     def status(self, job_id: str) -> Status:
         meta = self._meta(job_id)
-        if not (meta / "pid").exists():
+        if not (meta / "claimed").exists():
             raise NotFound(f"job {job_id!r} was never started")
+        if not (meta / "pid").exists():
+            return Status("queued", state="starting")
         if (meta / "cancelled").exists():
             return Status("failed", state="cancelled")
         code = meta / "exit_code"

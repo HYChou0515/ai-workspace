@@ -9,7 +9,7 @@ import os
 import pytest
 from backends import Machine, Remote
 
-from job_contract import NeedsAction, Retryable, Status
+from job_contract import NeedsAction, NotFound, Retryable, Status
 from job_tool import run as run_module
 from job_tool.run import run
 
@@ -355,3 +355,120 @@ def test_a_folder_with_nothing_to_send_is_refused(workspace):
 
     assert outcome.exit_code == 2
     assert "nothing" in outcome.error
+
+
+def test_a_slow_start_whose_check_needs_a_person_says_so(workspace):
+    # exit 3 is what lets the platform offer the person a way to fix it.
+    _folder(workspace)
+    Remote.machine.delay["start"] = 1.0
+    Remote.machine.raises["start"] = Retryable("never reached")
+
+    class Locked(Remote):
+        def status(self, job_id):
+            if self.machine.count("start"):  # only the check that follows the start
+                raise NeedsAction("set CLUSTER_TOKEN")
+            return super().status(job_id)
+
+    outcome = run("run", {"workdir": "train", "resources": {"gpus": 1}}, Locked)
+
+    assert outcome.exit_code == 3
+    assert "CLUSTER_TOKEN" in outcome.error
+
+
+def test_lost_records_never_point_a_new_request_at_an_old_job(workspace):
+    # The id is counted from the records; with them gone, the next id would be
+    # an old, finished job's — "started", pointing at its old results.
+    import shutil
+
+    _folder(workspace)
+    first = _send().answer["job_id"]
+    Remote.machine.statuses[first] = Status("succeeded")
+    shutil.rmtree(workspace / "jobs")
+
+    again = _send()
+
+    assert again.answer["state"] == "started"
+    assert again.answer["job_id"] != first
+    assert len(Remote.machine.started) == 2
+
+
+def test_a_slow_start_whose_check_cannot_say_is_not_called_started(workspace):
+    _folder(workspace)
+    Remote.machine.linger["start"] = 1.0  # it lands; the answer is late
+
+    class Unsure(Remote):
+        def status(self, job_id):
+            if job_id not in self.machine.started:
+                raise NotFound(job_id)
+            return Status("unknown", state="scheduler down")
+
+    outcome = run("run", {"workdir": "train", "resources": {"gpus": 1}}, Unsure)
+
+    assert outcome.exit_code == 2
+    record = json.loads(next((workspace / "jobs").glob("*/job.json")).read_text())
+    assert record["started"] is False
+
+
+def test_an_already_answer_whose_status_cannot_be_read_does_not_claim_unfinished(workspace):
+    _folder(workspace)
+    _send()
+    Remote.machine.raises["status"] = Retryable("scheduler busy")
+
+    advice = _send().answer["next"]
+
+    assert "could not be read" in advice
+
+
+def test_a_file_that_shrinks_while_it_is_sent_stops_the_send(workspace, monkeypatch):
+    monkeypatch.setattr(run_module, "PIECE", 4)
+    _folder(workspace, {"blob.bin": b"0123456789ab"})
+    path = workspace / "train" / "blob.bin"
+
+    class Cutting(Remote):
+        def upload(self, job_id, p, offset, data):
+            super().upload(job_id, p, offset, data)
+            path.write_bytes(b"0123")  # someone edits it mid-send
+
+    outcome = run("run", {"workdir": "train", "resources": {"gpus": 1}}, Cutting)
+
+    assert outcome.exit_code == 2
+    assert "changed" in outcome.error
+    assert Remote.machine.count("upload") < 5
+
+
+def test_a_file_the_tool_cannot_read_is_named_as_the_workspaces_not_the_backends(workspace):
+    _folder(workspace)
+    secret = workspace / "train" / "secret"
+    secret.write_bytes(b"x")
+    secret.chmod(0)
+
+    outcome = _send()
+
+    assert outcome.exit_code == 2
+    assert "backend" not in outcome.error
+    assert "secret" in outcome.error
+
+
+def test_an_id_whose_status_cannot_be_read_is_not_taken_for_free(workspace):
+    _folder(workspace)
+
+    class Unsure(Remote):
+        def status(self, job_id):
+            return Status("unknown", state="scheduler down")
+
+    outcome = run("run", {"workdir": "train", "resources": {"gpus": 1}}, Unsure)
+
+    assert outcome.exit_code == 2
+    assert "cannot be read" in outcome.error
+    assert Remote.machine.count("upload") == 0
+
+
+def test_a_call_with_no_time_left_stops_before_calling_the_backend(workspace, monkeypatch):
+    monkeypatch.setattr(run_module, "CALL_SECONDS", 0.1)  # less than any budget
+    _folder(workspace)
+
+    outcome = _send()
+
+    assert outcome.exit_code == 2
+    assert "run again" in outcome.error
+    assert Remote.machine.calls == []

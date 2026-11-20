@@ -88,12 +88,11 @@ def test_a_finished_job_points_at_files_fetch_and_logs(workspace):
 
 
 def test_a_job_still_uploading_says_how_to_finish_sending_it(workspace, monkeypatch):
-    monkeypatch.setattr(run_module, "CALL_SECONDS", 0.1)  # no time for a single piece
+    Remote.machine.drop_pieces = 100  # nothing arrives: the send stays unfinished
     (workspace / "big").mkdir()
     (workspace / "big" / "run.sh").write_bytes(b"x")
     pending = run("run", {"workdir": "big", "resources": {"gpus": 3}}, Remote)
     assert pending.answer["state"] == "uploading"
-    monkeypatch.setattr(run_module, "CALL_SECONDS", 55)
     Remote.machine.calls.clear()
 
     listed = _ask("jobs").answer["jobs"][0]
@@ -112,8 +111,12 @@ def test_a_job_the_backend_no_longer_has_is_said_so_not_a_failure_of_jobs(worksp
 
     assert outcome.exit_code == 0
     status = outcome.answer["jobs"][0]["status"]
-    assert status["phase"] == "unknown"
+    # Gone is not "could not say": it is over, and asking again changes nothing.
+    assert status["phase"] == "failed"
     assert "no longer" in status["state"]
+    Remote.machine.calls.clear()
+    _ask("jobs")
+    assert Remote.machine.count("status") == 0
 
 
 def test_a_status_that_cannot_be_read_is_unknown_and_never_gone(workspace):
@@ -130,6 +133,7 @@ def test_jobs_stops_asking_while_there_is_still_time_to_answer(workspace, monkey
     for name in "abc":
         _sent(workspace, name)
     Remote.machine.delay["status"] = 0.3
+    Remote.machine.calls.clear()
     monkeypatch.setattr(run_module, "CALL_SECONDS", 1.0)  # budget 0.5: one ask fits
 
     outcome = _ask("jobs")
@@ -419,3 +423,72 @@ def test_a_job_the_backend_is_certain_of_not_having_is_a_plain_failure(workspace
 
     assert outcome.exit_code == 1
     assert "no job j-x" in outcome.error
+
+
+def test_cancelling_a_job_never_started_cancels_nothing_and_says_so(workspace, monkeypatch):
+    Remote.machine.drop_pieces = 100  # nothing arrives: the send stays unfinished
+    (workspace / "big").mkdir()
+    (workspace / "big" / "run.sh").write_bytes(b"x")
+    job = run("run", {"workdir": "big", "resources": {"gpus": 1}}, Remote).answer["job_id"]
+    Remote.machine.calls.clear()
+
+    answer = _ask("cancel", {"job_id": job}).answer
+
+    assert Remote.machine.count("cancel") == 0
+    assert answer["status"] is None
+    assert "never started" in answer["next"]
+
+
+def test_a_file_of_the_same_size_from_elsewhere_is_replaced_not_kept(workspace):
+    # Same size is not same content: only a copy this fetch made earlier is kept.
+    job = _sent(workspace)
+    Remote.machine.files[job]["a.txt"] = bytearray(b"new")
+    (workspace / "a.txt").write_bytes(b"old")
+
+    answer = _ask("fetch", {"job_id": job, "path": "a.txt", "dest": "a.txt"}).answer
+
+    assert (workspace / "a.txt").read_bytes() == b"new"
+    assert answer["saved"] == ["a.txt"]
+
+
+def test_a_cut_off_fetch_of_one_job_is_never_continued_by_another(workspace, monkeypatch):
+    first, second = _sent(workspace, "a"), _sent(workspace, "b")
+    Remote.machine.files[first]["out.bin"] = bytearray(b"A" * 10)
+    Remote.machine.files[second]["out.bin"] = bytearray(b"B" * 10)
+    monkeypatch.setattr(run_module, "PIECE", 4)
+    monkeypatch.setattr(run_module, "CALL_SECONDS", 0.8)
+    Remote.machine.delay["download"] = 0.3
+    cut = _ask("fetch", {"job_id": first, "path": "out.bin", "dest": "out.bin"}).answer
+    assert cut["state"] == "partial"
+    monkeypatch.setattr(run_module, "CALL_SECONDS", 55)
+    Remote.machine.delay["download"] = 0
+
+    _ask("fetch", {"job_id": second, "path": "out.bin", "dest": "out.bin"})
+
+    assert (workspace / "out.bin").read_bytes() == b"B" * 10
+
+
+def test_a_file_fetched_onto_a_folder_is_refused_with_a_reason(workspace):
+    job = _sent(workspace)
+    Remote.machine.files[job]["a.txt"] = bytearray(b"a")
+    (workspace / "res").mkdir()
+
+    outcome = _ask("fetch", {"job_id": job, "path": "a.txt", "dest": "res"})
+
+    assert outcome.exit_code == 2
+    assert "folder" in outcome.error
+
+
+def test_an_upload_replaced_by_a_newer_one_is_said_to_be_replaced(workspace, monkeypatch):
+    Remote.machine.drop_pieces = 100  # nothing arrives: the send stays unfinished
+    (workspace / "big").mkdir()
+    (workspace / "big" / "run.sh").write_bytes(b"x")
+    old = run("run", {"workdir": "big", "resources": {"gpus": 1}}, Remote).answer["job_id"]
+    Remote.machine.drop_pieces = 0
+    (workspace / "big" / "run.sh").write_bytes(b"edited")
+    new = run("run", {"workdir": "big", "resources": {"gpus": 1}}, Remote).answer["job_id"]
+
+    listed = {j["job_id"]: j for j in _ask("jobs").answer["jobs"]}
+
+    assert listed[old]["state"] == "replaced"
+    assert new in listed[old]["next"]

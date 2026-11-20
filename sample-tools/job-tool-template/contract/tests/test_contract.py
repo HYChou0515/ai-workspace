@@ -216,7 +216,7 @@ def test_a_start_and_the_status_that_checks_it_must_fit_in_one_call_together():
     with pytest.raises(ContractError, match="start.*status"):
         Budget(start=45, status=15)
 
-    Budget(start=45, status=10)
+    Budget(start=30, status=5)
 
 
 # ── what the calls answer ────────────────────────────────────────────────────
@@ -268,3 +268,28 @@ def test_capacity_holds_workers_a_queue_and_an_optional_quota():
 
 def test_the_errors_carry_the_exit_code_the_model_acts_on():
     assert (Retryable.exit_code, NeedsAction.exit_code, NotFound.exit_code) == (2, 3, 1)
+
+
+def test_a_run_that_could_never_reach_start_is_refused():
+    # A call that ends with re-listing, starting and checking must also have
+    # listed once at its beginning: 2 x list_files + start + status.
+    with pytest.raises(ContractError, match="list_files"):
+        Budget(list_files=25, start=10, status=5)
+
+
+@pytest.mark.parametrize("piece", ["upload", "download"])
+def test_a_piece_that_could_never_follow_the_listing_is_refused(piece):
+    # Every upload or download call lists first; a piece that cannot fit after
+    # it would never be sent.
+    with pytest.raises(ContractError, match=piece):
+        Budget(**{piece: 50, "list_files": 10})
+
+
+@pytest.mark.parametrize(
+    ("budget", "named"),
+    [({"logs": 30}, "logs"), ({"cancel": 40, "status": 20}, "cancel")],
+)
+def test_calls_made_back_to_back_must_fit_one_call_together(budget, named):
+    # logs without an offset asks twice; cancel is followed by status.
+    with pytest.raises(ContractError, match=named):
+        Budget(**budget)

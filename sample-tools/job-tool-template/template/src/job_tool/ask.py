@@ -6,6 +6,7 @@ workspace sent, each with where it is now. The others look at one job.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import time
@@ -57,7 +58,8 @@ def _ask_status(backend: type[JobBackend], job_id: str) -> Status:
     try:
         return within(backend.budget.status, lambda: backend().status(job_id))
     except NotFound:
-        return Status("unknown", state="the backend no longer has this job")
+        # Gone is over, not "could not say": asking again would change nothing.
+        return Status("failed", state="the backend no longer has this job")
     except (TimedOut, JobError) as exc:
         return Status("unknown", state=str(exc))
 
@@ -79,7 +81,13 @@ def _jobs(backend: type[JobBackend], args: dict[str, Any]) -> Outcome:
             "state": "started" if record.started else "uploading",
             "status": None,
         }
-        if not record.started:
+        if record.replaced_by is not None:
+            entry["state"] = "replaced"
+            entry["next"] = (
+                f"Never started: the folder changed before it was all sent, and was sent "
+                f"again as {record.replaced_by}."
+            )
+        elif not record.started:
             arguments = json.dumps({"workdir": record.workdir, "resources": record.resources})
             entry["next"] = (
                 f"Not all of it was sent; call run with {arguments} to finish sending and start it."
@@ -185,6 +193,26 @@ def _destination(dest: str, workspace: Path) -> Path:
     return lands
 
 
+def _marks_path(job_id: str) -> Path:
+    """What this tool copied for a job, and from where: `{target: [remote, size]}`."""
+    return records.folder() / job_id / "fetched.json"
+
+
+def _marks(job_id: str) -> dict[str, list[Any]]:
+    try:
+        return json.loads(_marks_path(job_id).read_text("utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+def _mark(job_id: str, target: Path, remote: str, size: int) -> None:
+    marks = _marks(job_id)
+    marks[str(target)] = [remote, size]
+    path = _marks_path(job_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(marks, indent=2, ensure_ascii=False), "utf-8")
+
+
 def _fetch_one(
     backend: type[JobBackend],
     job_id: str,
@@ -193,10 +221,24 @@ def _fetch_one(
     target: Path,
     deadline: Deadline,
 ) -> bool:
-    """Copy one file, resuming from its `.part`. Whether it is now whole."""
-    if target.is_file() and target.stat().st_size == size:
+    """Copy one file, resuming from its own `.part`. Whether it is now whole.
+
+    A file is skipped only when this tool copied it from this job's `remote`
+    at this size — same size is not same content. The `.part` is named for
+    the job and the remote file, so one job's cut-off copy is never carried
+    on by another's."""
+    if target.is_dir():
+        raise Retryable(
+            f"{target.name!r} is a folder in the workspace; give a dest that names a file"
+        )
+    if (
+        target.is_file()
+        and target.stat().st_size == size
+        and _marks(job_id).get(str(target)) == [remote, size]
+    ):
         return True
-    part = target.with_name(target.name + ".part")
+    tag = hashlib.sha256(f"{job_id}\0{remote}".encode()).hexdigest()[:12]
+    part = target.with_name(f".{target.name}.{tag}.part")
     target.parent.mkdir(parents=True, exist_ok=True)
     have = part.stat().st_size if part.exists() else 0
     budget = backend.budget.download
@@ -217,6 +259,7 @@ def _fetch_one(
             stream.write(data)
             have += len(data)
     os.replace(part, target)
+    _mark(job_id, target, remote, size)
     return True
 
 
@@ -245,9 +288,8 @@ def _fetch(backend: type[JobBackend], args: dict[str, Any]) -> Outcome:
     saved: list[str] = []
     for entry, target in wanted:
         if not _fetch_one(backend, job_id, entry.path, entry.size, target, deadline):
-            left = sum(
-                e.size for e, t in wanted if not (t.is_file() and t.stat().st_size == e.size)
-            )
+            done = _marks(job_id)
+            left = sum(e.size for e, t in wanted if done.get(str(t)) != [e.path, e.size])
             return Outcome(
                 0,
                 {
@@ -299,9 +341,20 @@ def _logs(backend: type[JobBackend], args: dict[str, Any]) -> Outcome:
 
 def _cancel(backend: type[JobBackend], args: dict[str, Any]) -> Outcome:
     job_id = args["job_id"]
+    record = records.load(job_id)
+    if record is not None and not record.started:
+        # Not all of it was sent, so the backend never started it: nothing to stop.
+        return Outcome(
+            0,
+            {
+                "job_id": job_id,
+                "status": None,
+                "next": "It was never started — not all of it was sent — so there is "
+                "nothing to cancel. It starts only if run is called again with its folder.",
+            },
+        )
     within(backend.budget.cancel, lambda: backend().cancel(job_id))
     status = _ask_status(backend, job_id)
-    record = records.load(job_id)
     if record is not None:
         record.last = status_dict(status)
         records.save(record)

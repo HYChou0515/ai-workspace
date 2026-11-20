@@ -36,9 +36,11 @@ all.
 | D10 | No `sweep` and no `rerun`: the AI calls `run` again | user |
 | D11 | Sameness: the same item, the same folder content and the same resources are the same job **until it finishes**; after that the same request starts a new one | mine |
 | D12 | The tool keeps a record per job in the workspace, `jobs/<job_id>/job.json` — visible in the file tree, and how `jobs` knows which jobs are this item's. It never sends `jobs/` | mine |
-| D13 | Packing skips `.git/`, virtualenvs, `node_modules/`, caches, `jobs/`, symlinks, and what the folder's `.gitignore` names | mine |
-| D14 | Upload progress is read from the backend (`list_files` sizes), never from the tool's own memory: a call killed halfway cannot make the tool believe a file arrived. An upload never truncates, so a late duplicate write of the same bytes is harmless | mine |
-| D15 | Phases: `queued`, `running`, `succeeded`, `failed`, `unknown`. A cancelled job is `failed` with its state saying so | mine |
+| D13 | Packing skips folders named `.git`, `.venv`, `venv`, `node_modules`, `__pycache__` and a few other caches, `.pyc` files, links, the workspace's own `jobs/`, and what the folder's top-level `.gitignore` names | mine |
+| D14 | Where an upload resumes, and whether to start, is read from the backend (`list_files` sizes), never from the tool's own memory: a call killed halfway cannot make the tool believe a file arrived. (The "sent about N bytes" figure in an unfinished answer is an estimate.) An upload never truncates, so a late duplicate write of the same bytes is harmless | mine |
+| D15 | Phases: `queued`, `running`, `succeeded`, `failed`, `unknown`. A cancelled job is `failed` with its state saying so; so is a job the backend no longer has | mine |
+| D16 | Ids are counted from the records, so before a new id is used the backend is asked whether it already has it; a lost `jobs/` never points a request at an old job | mine (review) |
+| D17 | A file `fetch` copied is skipped next time only if the tool's own mark (`jobs/<id>/fetched.json`) says it came from that job's file at that size; a cut-off copy's `.part` is named for the job and the file | mine (review) |
 
 ### Not doing
 
@@ -75,7 +77,7 @@ Errors: `Retryable` (exit 2), `NeedsAction` (exit 3, names the variable),
 | Command | What it does |
 |---|---|
 | `run(workdir, resources)` | Pack, hash, reuse or create the job, upload what is missing until time runs short, then `start`. Answers "uploaded X of Y, call run again" or "started" |
-| `jobs()` | This workspace's records, each with a fresh `status`; uploads still owed are listed as such |
+| `jobs()` | This workspace's records, newest 20 by default, each with a fresh `status` (finished ones are not asked again); uploads still owed, or replaced by a newer send of the changed folder, are listed as such |
 | `queue()` | `capacity()`, when the backend has it |
 | `files(job_id, path)` | `list_files` |
 | `fetch(job_id, path, dest)` | Download into the workspace (default `jobs/<job_id>/fetched/<path>`), resuming from a `.part` file |

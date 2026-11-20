@@ -1,7 +1,7 @@
 """The arguments of each command the model is offered.
 
-Which commands exist is the contract's (`JobBackend.commands`): all seven,
-`queue` only when the backend has `capacity`. What `run` takes is half the
+Which commands exist is the contract's (`JobBackend.commands`): seven with
+`capacity`, six without (no `queue`). What `run` takes is half the
 backend's: the resources are its `resources_schema`.
 """
 

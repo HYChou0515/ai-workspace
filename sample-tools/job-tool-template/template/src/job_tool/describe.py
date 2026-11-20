@@ -14,23 +14,26 @@ from job_contract import JobBackend
 
 _RUN = (
     "run sends the folder `workdir` of the workspace to that machine and starts it with "
-    "`resources`. Version control, virtual environments, node_modules, caches, .pyc files, "
-    "links and what the folder's .gitignore names are not sent. A large folder takes "
+    "`resources`. Not sent: folders named .git, .venv, venv, node_modules, __pycache__ and "
+    "a few other caches; .pyc files; links; and what the folder's own top-level .gitignore "
+    "names. A large folder takes "
     "several calls: the answer says how much has been sent, so call run again with the "
     "same arguments until it says started. The same folder content with the same "
     "resources, while that job is unfinished, is that job — not a second one — until it "
-    "finishes; after that, the same request starts a new one. run returns at once and "
-    "nothing announces when the job ends: tell the user to ask about it later, then call "
-    "jobs. Before sending, try the command on a small slice here."
+    "finishes; after that, the same request starts a new one. run does not wait for the "
+    "job to run, and nothing announces when it ends: tell the user to ask about it later, "
+    "then call jobs."
 )
 _QUEUE_HINT = " Unsure what to ask for? Call queue to see what is free now."
 
 _DEFAULTS = {
     "jobs": (
-        "The jobs sent from this workspace, newest first, each with where it is now: "
+        "The jobs sent from this workspace, newest first (20 unless limit says more), each "
+        "with where it is now: "
         "queued (with its place in the queue when known), running, succeeded, failed, or "
         "unknown — the backend could not say just now, which does NOT mean the job is gone. "
-        "A job not fully sent yet says how to finish sending it."
+        "A job the backend no longer has is failed. A job not fully sent yet says how to "
+        "finish sending it."
     ),
     "queue": (
         "The machines (idle, busy, what each has free), the jobs waiting for one, and the "

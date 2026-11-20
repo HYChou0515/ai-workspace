@@ -159,14 +159,40 @@ class Budget:
                     f"budget.{name}={seconds!r}: must be a number of seconds, more than 0 and "
                     f"at most {limit:g} (the platform stops a call at {PLATFORM_CEILING:g})"
                 )
-        # A start that runs out of time is followed, in the same call, by a
-        # status to learn whether it landed — so the two share one ceiling.
-        if self.start + self.status > limit:
-            raise ContractError(
-                f"budget.start + budget.status = {self.start + self.status:g}: must be at most "
-                f"{limit:g}, because a start that runs out of time is followed by status in "
-                "the same call"
-            )
+        # Calls one command makes back to back share the platform's ceiling.
+        together = (
+            (
+                "budget.start + budget.status",
+                self.start + self.status,
+                "a start that runs out of time is followed by status in the same call",
+            ),
+            (
+                "2 x budget.list_files + budget.start + budget.status",
+                2 * self.list_files + self.start + self.status,
+                "run lists what arrived, re-lists it before starting, starts and checks",
+            ),
+            (
+                "budget.list_files + budget.upload",
+                self.list_files + self.upload,
+                "run lists what arrived before it sends a piece",
+            ),
+            (
+                "budget.list_files + budget.download",
+                self.list_files + self.download,
+                "fetch lists what is there before it copies a piece",
+            ),
+            ("2 x budget.logs", 2 * self.logs, "logs without an offset asks twice"),
+            (
+                "budget.cancel + budget.status",
+                self.cancel + self.status,
+                "cancel is followed by status",
+            ),
+        )
+        for name, seconds, why in together:
+            if seconds > limit:
+                raise ContractError(
+                    f"{name} = {seconds:g}: must be at most {limit:g}, because {why}"
+                )
 
 
 @dataclass(frozen=True)

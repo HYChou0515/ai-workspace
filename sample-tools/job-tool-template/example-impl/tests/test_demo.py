@@ -154,3 +154,17 @@ def test_another_users_job_does_not_exist_for_you(backend, monkeypatch):
 
     with pytest.raises(NotFound):
         backend.list_files("j1", ".")
+
+
+def test_two_starts_at_once_run_the_job_once(backend):
+    import threading
+
+    _send(backend, "j1", {"run.sh": b"echo once >> count.txt\n"})
+    threads = [threading.Thread(target=backend.start, args=("j1", {"cpus": 1})) for _ in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    _finished(backend, "j1")
+
+    assert backend.download("j1", "count.txt", 0, 100) == b"once\n"

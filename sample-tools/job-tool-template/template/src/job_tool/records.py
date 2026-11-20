@@ -35,6 +35,9 @@ class Record:
     started_at: float | None = None
     last: dict[str, Any] | None = field(default=None)
     """The last status seen, for the person reading the file."""
+    replaced_by: str | None = None
+    """Set on a send that never finished when the same folder, changed, was
+    sent as a new job: this one will never start."""
 
 
 def folder() -> Path:
