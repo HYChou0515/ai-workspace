@@ -13,6 +13,7 @@ import { kbApi } from "../../api/kb";
 import { qk } from "../../api/queryKeys";
 import type { ChatVideoQueued } from "../../api/chatVideo";
 import { ChatFeedRow, type FeedActions } from "../../components/ChatFeedRow";
+import { CollapsedFeed } from "../../components/CollapsedFeed";
 import { ExportDialog } from "../../components/ExportDialog";
 import { VideoProgress } from "../../components/VideoProgress";
 import { HealthDot } from "../../components/HealthDot";
@@ -904,18 +905,25 @@ export function AgentPanel({
           </div>
         )}
         <ChatItemProvider value={chatItem}>
-        {log.entries.map((e, i) => (
-          <ChatFeedRow
-            key={i}
-            entry={e}
-            index={i}
-            settled={!log.streaming}
-            me={me}
-            answeredQuestions={answeredQuestions}
-            actions={rowActions}
-            fileUrl={rowFileUrl}
-          />
-        ))}
+        {/* docs/plan-chat-collapse-middle.md: a very long chat draws its first
+            and newest rows; the middle opens 1000 at a time. */}
+        <CollapsedFeed
+          entries={log.entries}
+          resetKey={`${investigationId}/${chatId ?? ""}`}
+          scrollRef={chatScrollRef}
+          renderRow={(e, i) => (
+            <ChatFeedRow
+              key={i}
+              entry={e}
+              index={i}
+              settled={!log.streaming}
+              me={me}
+              answeredQuestions={answeredQuestions}
+              actions={rowActions}
+              fileUrl={rowFileUrl}
+            />
+          )}
+        />
         </ChatItemProvider>
         <ConnectionNotice connection={connection} />
         <TurnStatus log={log} onRetry={othersTurn ? undefined : retryTurn} alive={turnAlive} />

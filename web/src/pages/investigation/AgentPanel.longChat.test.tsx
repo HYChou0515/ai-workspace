@@ -181,3 +181,25 @@ describe("a streamed token in a long chat", () => {
   });
 });
 
+
+describe("a very long chat opens with its middle collapsed (docs/plan-chat-collapse-middle.md)", () => {
+  it("draws the first 100 and the newest 1000 rows, and the bar between them", () => {
+    const entries: AgentEntry[] = [];
+    for (let i = 0; i < 1500; i++) entries.push(answer(`row ${i}`));
+    const log = { ...({} as AgentLog), entries, streaming: false } as AgentLog;
+    const client = makeTestQueryClient();
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <QueryWrap client={client}>
+        <MemoryRouter>{children}</MemoryRouter>
+      </QueryWrap>
+    );
+    drawn.length = 0;
+    const view = render(panel(agentWith(log)), { wrapper });
+    expect(new Set(drawn).size).toBe(1100);
+    expect(drawn).toContain("row 99");
+    expect(drawn).not.toContain("row 100");
+    expect(drawn).not.toContain("row 499");
+    expect(drawn).toContain("row 500");
+    expect(view.getByText("中間還有 400 則未顯示")).toBeInTheDocument();
+  });
+});
