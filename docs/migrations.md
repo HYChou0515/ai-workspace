@@ -3841,7 +3841,7 @@ rollout 時正在跑的清除會在 `terminationGracePeriodSeconds`（120 秒）
    WHERE relkind = 'r' AND relname LIKE '%telemetry_event%';
    ```
 
-### 2026-11-20 · #1039 很長的對話只畫頭尾，中間收起 {#pr-1039}
+### 2026-11-20 · 33ddf0a5 · #1039 很長的對話只畫頭尾，中間收起 {#pr-1039}
 
 **設定** — 沒有新 key，也沒有可關掉的開關。
 
