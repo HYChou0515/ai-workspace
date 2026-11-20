@@ -3778,7 +3778,7 @@ pod 很快 ready；稍後出現 `third-party tools warmed, N unavailable`。
 
 部署關掉了 LLM 呼叫紀錄（`WORKSPACE_LLM_LOG=0`）時，這個改動只由測試證明，不必另外確認。
 
-### 2026-11-19 · #1037 遙測事件只留 14 天 {#pr-1037}
+### 2026-11-20 · bdc2d10a · #1037 遙測事件只留 14 天 {#pr-1037}
 
 **設定** — 新 key `observability.telemetry.keep_days`，**預設 14**（`docs/configuration.md` §12）。
 - **預設會開始刪資料**：`telemetry-event`（遙測面板與 `/monitor` 讀的表）裡超過 14 天的列會被永久刪除，
