@@ -16,6 +16,8 @@ from collections.abc import Iterable
 from importlib.metadata import EntryPoint, entry_points
 
 from job_contract import ContractError, JobBackend
+from jsonschema import Draft202012Validator
+from jsonschema.exceptions import SchemaError
 
 GROUP = "job_tool.backend"
 
@@ -43,4 +45,11 @@ def load_backend(found: Iterable[EntryPoint] | None = None) -> type[JobBackend]:
         backend.check()
     except ContractError as exc:
         raise NoBackend(f"{ep.value} cannot keep the job contract: {exc}") from exc
+    try:
+        Draft202012Validator.check_schema(backend.resources_schema)
+    except SchemaError as exc:
+        # It would refuse every run made with it.
+        raise NoBackend(
+            f"{ep.value}.resources_schema is not a valid JSON schema: {exc.message}"
+        ) from exc
     return backend

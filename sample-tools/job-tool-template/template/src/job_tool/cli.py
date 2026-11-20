@@ -3,10 +3,11 @@
 The platform talks to the tool through argv and stdout, and nothing else:
 
     job-tool                     -> [{"name", "description"}, …]   which commands exist
-    job-tool submit              -> {"name", "description", "params_json_schema"}
-    job-tool submit '<json>'     -> the answer                       do the work
+    job-tool run                 -> {"name", "description", "params_json_schema"}
+    job-tool run '<json>'        -> the answer                       do the work
 
-Which commands exist is decided by the backend: one per call it supports.
+Which commands exist is the contract's: all of them, `queue` only when the
+backend has `capacity`.
 """
 
 from __future__ import annotations
@@ -144,8 +145,8 @@ def _main(argv: list[str], backend: type[JobBackend] | None, answer: TextIO) -> 
 def _whole(value: Any) -> Any:
     """`value` with every whole-number float made an int. JSON Schema counts
     `5.0` as an integer, so it passes validation; left a float it would give
-    the same spec a different idempotency key and break a backend that slices
-    or ranges with it."""
+    the same request a different job hash and break a backend that ranges
+    with it."""
     if isinstance(value, float) and value.is_integer():
         return int(value)
     if isinstance(value, dict):

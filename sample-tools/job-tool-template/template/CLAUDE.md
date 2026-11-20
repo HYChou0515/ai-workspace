@@ -1,56 +1,60 @@
 # CLAUDE.md
 
-You are helping someone connect a **job backend** — a scheduler, a batch
-system, an approval queue — to an AI workspace as a tool. The repository is a
-working template: the commands, the time budgets and everything the model is
-told are already written. What is missing is the backend package, which
-implements `JobBackend` from `job-contract`. Read `README.md` first.
+You are helping someone connect **their machines** — a GPU cluster, a batch
+system, a host with a licence — to an AI workspace as a tool. The repository is
+a working template: packing a folder, uploading it in pieces, starting it,
+following it, bringing results back, and everything the model is told are
+already written. What is missing is the backend package, which implements
+`JobBackend` from `job-contract`. Read `README.md` first.
 
 ## 1. Interview first
 
 Ask one question at a time until you can answer these in the user's words:
 
-**What is a job here?** One real example: what gets submitted, where it runs,
-how long it takes. That becomes `domain_description` and `spec_schema`.
+**How does a job run on your machines?** One real example: what is submitted
+(`sbatch`, a k8s Job, a REST call), where its files must be, how long it
+takes. That decides `upload`, `start` and `status`.
 
-**When are two submits the same job?** Which spec fields decide it — within
-one item and under one credential (the backend only finds what its token
-sees), for `idempotency.window_seconds` (a day unless they say otherwise).
-This is `idempotency.fields`, and getting it wrong is either two jobs for one
-request or one job for two. If "the same" needs loosening (case, spaces, a
-nested field), override `identity(spec)` and give `example_spec`.
+**What must a folder contain?** Which file is run, and how (`bash run.sh`)?
+Which files set up the environment (`requirements.txt`, `environment.yml`)
+and what happens without them? Where do a job's variables go (`.env`)? What
+does the machine have — Python and CUDA versions, datasets already there,
+network or not — and which secrets are already set for a job? All of it
+becomes `run_description`, the only thing the model reads about your machines.
 
-**Whose credential is it, and who should share it?** The token decides what
-the backend shows and lets anyone change. Put it in the item's environment
-variables and everyone who can open the item shares those jobs; in a person's
-Private layer and they are that person's alone.
+**What may a job ask for?** GPUs, memory, hours, a partition, a priority, and
+the limits of each. That becomes `resources_schema`.
 
-**Which optional calls does the backend support?** Change a job, cancel it,
-read its log, fetch its outputs. Write only those; the rest are never offered.
+**Whose credential does the tool use, and who should share it?** The token
+decides what the backend shows and lets anyone change. In the item's
+environment variables, everyone who can open the item shares those jobs; in a
+person's Private layer, they are that person's alone. It goes in `env`.
+
+**Can the machines report the queue?** Workers, waiting jobs, quota. If so,
+write `capacity` and the model gets `queue`.
 
 **How long does each call really take?** Against the defaults in `README.md`.
-A call that cannot fit its budget needs a faster path (a cache, a cheaper
-endpoint), not a bigger number — the platform stops every call at 60 s.
-
-**Which environment variables?** Names, and what each is for. They go in
-`Contract.env`.
+A call that cannot fit its budget needs a faster path, not a bigger number —
+the platform stops every call at 60 s.
 
 ## 2. Rules
 
-**Write the backend package, not this repository.** Everything here is
-generated from the backend's `Contract`. Edit the template only on purpose,
-and know that its tests are what CI runs before every build.
+**Write the backend package, not this repository.** Edit the template only on
+purpose, and know that its tests are what CI runs before every build.
 
-**`submit` with a key seen within the window returns that job, as
-`Submitted(job_id, created=False)`.** No test can check it here; it is the
-promise only the backend can keep. Record the `item_id` it is given and report
-it back on every `JobStatus`.
+**`upload` writes at the offset and never truncates; `list_files` reports
+real sizes, before `start` too.** The tool resumes from those sizes. No test
+here can check your service keeps this; it is yours to keep.
 
-**`phase` is `running`, `done` or `unknown`.** The backend's own words go in
-`state`. `unknown` is "could not ask", never "does not exist".
+**`start` of an id already started does nothing.** The tool may call it again
+after a lost answer.
 
-**Name the variable in a `NeedsAction`.** `set GPU_API_TOKEN`, not "log in":
+**`phase` is `queued`, `running`, `succeeded`, `failed` or `unknown`.** The
+backend's own words go in `state`. `unknown` is "could not ask", never "does
+not exist" — that is `NotFound`.
+
+**Name the variable in a `NeedsAction`.** `set CLUSTER_TOKEN`, not "log in":
 the name is what lets the platform offer the person a way to set it.
 
-**After changing `Contract.env`, run `uv run python -m job_tool.envfile`.** The shape
+**After changing `env`, run `uv run python -m job_tool.envfile`.** The shape
 tests fail until `env.json` matches.

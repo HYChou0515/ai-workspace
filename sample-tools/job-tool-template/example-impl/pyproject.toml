@@ -1,7 +1,7 @@
 [project]
 name = "example-jobs"
 version = "0.1.0"
-description = "A DEMO backend for the job tool template: jobs are files in the workspace that finish after a few seconds."
+description = "A DEMO backend for the job tool template: the other machine is a folder on this one, and a job runs its run.sh there."
 requires-python = ">=3.12"
 dependencies = ["job-contract"]
 

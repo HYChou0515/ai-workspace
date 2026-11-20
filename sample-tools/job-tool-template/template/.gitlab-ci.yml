@@ -3,7 +3,7 @@
 # Two steps in one job, in this order: the shape tests, then the build. A
 # backend that declares what cannot hold, or leaves out a required call, fails
 # the first step and never becomes an artifact. What its calls DO (the same
-# key returning the same job, say) no test here can see — that is yours to keep.
+# id started once, an upload landing at its offset) no test here can see — that is yours to keep.
 # You own this file — you may remove the test step; do it on purpose.
 #
 # See docs/tool-authoring.md for the platform's side of the contract.

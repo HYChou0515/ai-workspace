@@ -1,224 +1,246 @@
-"""A DEMO backend: a job is a file in the workspace that finishes after a set
-number of seconds.
+"""A DEMO backend: "the other machine" is a folder on this one.
 
-It talks to nothing, so it is wrong for real work and right for seeing the
-template run end to end. Replace this package with one that talks to your
-scheduler; keep its shape.
+It is wrong for real work and right for seeing the template run end to end.
+Replace this package with one that talks to your scheduler; keep its shape.
 
 What it shows a real backend doing:
-- who may see a job comes from the credential (here a plain variable,
+- the rules for a job's folder are the backend's and are said once, in
+  `run_description`: here, `run.sh` is run with `bash`, and `.env` is loaded;
+- who may see a job comes from the tool's credential (here a plain variable,
   DEMO_JOBS_USER), and a missing one is `NeedsAction` naming the variable;
-- the same key twice is one job; the key is per item, so the same work from
-  two items is two jobs — and `list` shows both, each with its `item_id`;
-- a job the credential cannot see does not exist for it (`NotFound`);
-- `phase` is the template's three words; `state` is this backend's own.
+- an upload writes at its offset and never truncates; starting an id twice
+  starts one job;
+- `phase` is one of the template's five words; `state` is this backend's own.
+
+Layout, under DEMO_JOBS_ROOT (default: a folder in the system's temp dir):
+
+    <user>/<job_id>/          the job's folder: what was sent, and what it wrote
+    <user>/<job_id>.meta/     this backend's own bookkeeping: pid, exit code, log
 """
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
+import signal
+import subprocess
+import tempfile
 import time
 from pathlib import Path
 from typing import Any
 
 from job_contract import (
-    Contract,
+    Capacity,
+    Entry,
     EnvVar,
-    Idempotency,
     JobBackend,
-    JobError,
-    JobStatus,
     NeedsAction,
     NotFound,
     Retryable,
-    Submitted,
+    Status,
+    Worker,
 )
 
-#: Where the jobs live, inside the workspace (the working directory).
-STORE = Path(".demo-jobs")
+_LAUNCH = (
+    # .env becomes the job's environment; run.sh is the job. The exit code is
+    # written last, so its presence means the job ended.
+    'set -a; [ -f .env ] && . ./.env; set +a; bash run.sh; echo $? > "$META/exit_code"'
+)
 
 
 class DemoBackend(JobBackend):
-    contract = Contract(
-        domain_description=(
-            "Runs a DEMO job: it does nothing for the given number of seconds, then "
-            "finishes with a one-line result."
-        ),
-        spec_schema={
-            "type": "object",
-            "properties": {
-                "task": {"type": "string", "description": "What to call the job."},
-                "seconds": {
-                    "type": "integer",
-                    "minimum": 0,
-                    "maximum": 3600,
-                    "description": "How long the job runs before it finishes.",
-                },
-                "label": {
-                    "type": "string",
-                    "description": "Change it to run the same task again as a new job.",
-                },
+    run_description = (
+        "DEMO: the job runs on this same machine, in a folder outside the workspace. "
+        "Put the command in run.sh at the top of the folder; it runs as `bash run.sh` "
+        "inside the folder. A .env file there (KEY=VALUE lines) sets the job's variables. "
+        "requirements.txt is NOT installed: the job uses the python already on the "
+        "machine. Everything the job writes in its folder can be listed with files and "
+        "copied back with fetch. Its output goes to the log."
+    )
+    resources_schema = {
+        "type": "object",
+        "properties": {
+            "cpus": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 4,
+                "description": "Recorded only: the demo runs every job the same way.",
             },
-            "required": ["task", "seconds"],
+            "priority": {"enum": ["low", "normal", "high"], "default": "normal"},
         },
-        idempotency=Idempotency(fields=("task", "seconds", "label")),
-        patch_schema={
-            "type": "object",
-            "properties": {
-                "seconds": {
-                    "type": "integer",
-                    "minimum": 0,
-                    "maximum": 3600,
-                    "description": "A new total run time; only a running job can change.",
-                }
-            },
-            "required": ["seconds"],
-        },
-        env=(
-            EnvVar(
-                "DEMO_JOBS_USER",
-                "Who you are to the demo backend; any name. Jobs are listed per name.",
-                required=True,
-            ),
+        "required": ["cpus"],
+        "additionalProperties": False,
+    }
+    env = (
+        EnvVar(
+            "DEMO_JOBS_USER",
+            "Who you are to the demo backend; any name. Each name sees only its own jobs.",
+            required=True,
         ),
     )
 
-    # ── storage ─────────────────────────────────────────────────────────────
+    # ── where things are ────────────────────────────────────────────────────
 
-    def _records(self) -> list[dict[str, Any]]:
-        if not STORE.is_dir():
-            return []
-        return [json.loads(path.read_text()) for path in STORE.glob("*.json")]
-
-    def _save(self, record: dict[str, Any]) -> None:
-        STORE.mkdir(exist_ok=True)
-        (STORE / f"{record['job_id']}.json").write_text(json.dumps(record))
-
-    def _mine(self, job_id: str) -> dict[str, Any]:
-        caller = self._credential()  # asked first, as a real backend checks the token first
-        path = STORE / f"{job_id}.json"
-        record = json.loads(path.read_text()) if path.is_file() else None
-        if record is None or record["caller"] != caller:
-            raise NotFound(f"no job {job_id!r} for {self._credential()}")
-        return record
-
-    def _status(self, record: dict[str, Any]) -> JobStatus:
-        elapsed = time.time() - record["submitted_at"]
-        detail = {"task": record["spec"]["task"], "seconds": record["seconds"]}
-        item = record.get("item_id")
-        if record["cancelled"]:
-            return JobStatus(record["job_id"], "done", "cancelled", detail, item)
-        if elapsed >= record["seconds"]:
-            return JobStatus(record["job_id"], "done", "succeeded", detail, item)
-        detail["remaining"] = round(record["seconds"] - elapsed)
-        return JobStatus(record["job_id"], "running", "running", detail, item)
-
-    def _credential(self) -> str:
-        """Whose jobs these are, as a real backend learns it from the token it
-        is called with. Who may see or change a job is decided here (D43) —
-        the item is only a label."""
-        user = os.environ.get("DEMO_JOBS_USER", "").strip()
+    def _home(self) -> Path:
+        user = os.environ.get("DEMO_JOBS_USER")
         if not user:
-            raise NeedsAction("set DEMO_JOBS_USER to say who you are to the demo backend")
-        return user
+            raise NeedsAction("set DEMO_JOBS_USER: the demo backend lists jobs per name")
+        root = os.environ.get("DEMO_JOBS_ROOT") or os.path.join(
+            tempfile.gettempdir(), "demo-job-machine"
+        )
+        return Path(root) / user
+
+    def _folder(self, job_id: str) -> Path:
+        return self._home() / job_id
+
+    def _meta(self, job_id: str) -> Path:
+        return self._home() / f"{job_id}.meta"
+
+    def _existing(self, job_id: str) -> Path:
+        folder = self._folder(job_id)
+        if not folder.is_dir():
+            raise NotFound(f"no job {job_id!r} for {os.environ['DEMO_JOBS_USER']}")
+        return folder
 
     # ── required ────────────────────────────────────────────────────────────
 
-    def submit(self, spec: dict[str, Any], key: str, item_id: str | None) -> Submitted:
-        existing = self.find_by_key(key)
-        if existing is not None:
-            return Submitted(existing.job_id, created=False)
-        caller, now = self._credential(), time.time()
-        record = {
-            # Unique per credential and per submission: the key no longer says
-            # who sent it, and after the window the same key is a new job.
-            "job_id": hashlib.sha256(f"{caller}\0{key}\0{now}".encode()).hexdigest()[:12],
-            "key": key,
-            "item_id": item_id,
-            "caller": caller,
-            "spec": spec,
-            "seconds": spec["seconds"],
-            "submitted_at": now,
-            "cancelled": False,
-        }
-        self._save(record)
-        return Submitted(record["job_id"], created=True)
-
-    def find_by_key(self, key: str) -> JobStatus | None:
-        """The newest job under `key` still inside the window (D50)."""
-        caller = self._credential()
-        since = time.time() - self.contract.idempotency.window_seconds
-        recent = [
-            record
-            for record in self._records()
-            if record["key"] == key
-            and record["caller"] == caller
-            and record["submitted_at"] > since
-        ]
-        if not recent:
-            return None
-        return self._status(max(recent, key=lambda record: record["submitted_at"]))
-
-    def get(self, job_id: str) -> JobStatus:
-        return self._status(self._mine(job_id))
-
-    def list(self, cursor: str | None, limit: int) -> tuple[list[JobStatus], str | None]:
-        caller = self._credential()
-        mine = [r for r in self._records() if r["caller"] == caller]
-        mine.sort(key=lambda r: r["submitted_at"], reverse=True)
+    def upload(self, job_id: str, path: str, offset: int, data: bytes) -> None:
+        target = self._folder(job_id) / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        # Write at the offset, never truncate: the same piece twice is harmless.
+        fd = os.open(target, os.O_RDWR | os.O_CREAT, 0o644)
         try:
-            start = int(cursor or 0)
-        except ValueError:
-            start = -1
-        if start < 0:
-            # Not a cursor this backend gave: the model can drop it and start over.
-            raise Retryable(f"cursor {cursor!r} is not one list returned; leave it out to start")
-        page = mine[start : start + limit]
-        after = str(start + limit) if start + limit < len(mine) else None
-        return [self._status(r) for r in page], after
+            os.pwrite(fd, data, offset)
+        finally:
+            os.close(fd)
+
+    def start(self, job_id: str, resources: dict[str, Any]) -> None:
+        folder = self._existing(job_id)
+        meta = self._meta(job_id)
+        if not (folder / "run.sh").is_file():
+            raise Retryable(
+                "the folder has no run.sh at its top: this backend runs `bash run.sh`; "
+                "add it and call run again"
+            )
+        meta.mkdir(exist_ok=True)
+        try:
+            # Created once, atomically: of two starts at the same moment, one wins
+            # and the other starts nothing.
+            os.close(os.open(meta / "claimed", os.O_CREAT | os.O_EXCL | os.O_WRONLY))
+        except FileExistsError:
+            return
+        (meta / "resources.json").write_text(json.dumps(resources))
+        with (meta / "output.log").open("ab") as log:
+            process = subprocess.Popen(  # noqa: S603 - the demo's whole point is to run it
+                ["bash", "-c", _LAUNCH],
+                cwd=folder,
+                env={**os.environ, "META": str(meta)},
+                stdin=subprocess.DEVNULL,
+                stdout=log,
+                stderr=subprocess.STDOUT,
+                start_new_session=True,  # outlives this tool call; cancel kills its group
+            )
+        (meta / "started_at").write_text(str(time.time()))
+        (meta / "pid").write_text(str(process.pid))
+
+    def status(self, job_id: str) -> Status:
+        meta = self._meta(job_id)
+        if not (meta / "claimed").exists():
+            raise NotFound(f"job {job_id!r} was never started")
+        if not (meta / "pid").exists():
+            return Status("queued", state="starting")
+        if (meta / "cancelled").exists():
+            return Status("failed", state="cancelled")
+        code = meta / "exit_code"
+        if code.exists():
+            value = code.read_text().strip()
+            if value == "0":
+                return Status("succeeded", state="exit 0", worker="this machine")
+            return Status("failed", state=f"exit {value}", worker="this machine")
+        if _alive(int((meta / "pid").read_text())):
+            return Status("running", worker="this machine")
+        return Status("failed", state="lost: it stopped without an exit code")
+
+    def list_files(self, job_id: str, path: str) -> list[Entry]:
+        folder = self._existing(job_id)
+        base = folder / path
+        if base.is_file():
+            return [Entry(path, is_dir=False, size=base.stat().st_size)]
+        entries = []
+        for current, dirs, names in os.walk(base):
+            here = Path(current)
+            for name in sorted(dirs):
+                entries.append(Entry((here / name).relative_to(folder).as_posix(), is_dir=True))
+            for name in sorted(names):
+                full = here / name
+                stat = full.stat()
+                entries.append(
+                    Entry(
+                        full.relative_to(folder).as_posix(),
+                        is_dir=False,
+                        size=stat.st_size,
+                        mtime=stat.st_mtime,
+                    )
+                )
+        return entries
+
+    def download(self, job_id: str, path: str, offset: int, limit: int) -> bytes:
+        target = self._existing(job_id) / path
+        if not target.is_file():
+            raise NotFound(f"job {job_id!r} has no file {path!r}")
+        with target.open("rb") as stream:
+            stream.seek(offset)
+            return stream.read(limit)
+
+    def logs(self, job_id: str, offset: int, limit: int) -> tuple[str, int]:
+        log = self._meta(job_id) / "output.log"
+        if not log.exists():
+            self._existing(job_id)
+            return "", 0
+        text = log.read_text(errors="replace")
+        return text[offset : offset + limit], len(text)
+
+    def cancel(self, job_id: str) -> None:
+        self._existing(job_id)
+        meta = self._meta(job_id)
+        if not (meta / "pid").exists() or (meta / "exit_code").exists():
+            return  # never started, or already finished: nothing to stop
+        (meta / "cancelled").touch()
+        try:
+            os.killpg(int((meta / "pid").read_text()), signal.SIGTERM)
+        except ProcessLookupError:
+            pass
 
     # ── optional ────────────────────────────────────────────────────────────
 
-    def update(self, job_id: str, patch: dict[str, Any]) -> JobStatus:
-        record = self._mine(job_id)
-        if self._status(record).phase == "done":
-            # A plain failure: submitting a new job is something the model can
-            # do itself, so this is not NeedsAction (a person must act first).
-            raise JobError(f"job {job_id} already finished; submit a new one instead")
-        record["seconds"] = patch["seconds"]
-        self._save(record)
-        return self._status(record)
+    def capacity(self) -> Capacity:
+        home = self._home()
+        running = [
+            meta.name.removesuffix(".meta")
+            for meta in sorted(home.glob("*.meta"))
+            if (meta / "pid").exists()
+            and not (meta / "exit_code").exists()
+            and _alive(int((meta / "pid").read_text()))
+        ]
+        worker = Worker(
+            "this machine",
+            "busy" if running else "idle",
+            job_id=running[0] if running else None,
+        )
+        return Capacity(workers=(worker,))
 
-    def cancel(self, job_id: str) -> JobStatus:
-        record = self._mine(job_id)
-        if self._status(record).phase == "running":
-            record["cancelled"] = True
-            record["stopped_at"] = time.time()
-            self._save(record)
-        return self._status(record)
 
-    def logs(self, job_id: str, offset: int, limit: int) -> tuple[str, int]:
-        record = self._mine(job_id)
-        status = self._status(record)
-        # Only the seconds it really ran: up to now, or to when it was cancelled.
-        until = record.get("stopped_at") or time.time()
-        ran = int(min(record["seconds"], until - record["submitted_at"]))
-        log = "".join(f"second {n} of {record['seconds']}\n" for n in range(1, ran + 1))
-        log += f"{status.state}\n" if status.phase == "done" else ""
-        return log[offset : offset + limit], len(log)
-
-    def fetch(self, job_id: str, name: str, dest: str) -> str:
-        status = self._status(self._mine(job_id))
-        if name != "result":
-            raise NotFound(f"job {job_id} has one output, 'result'; there is no {name!r}")
-        if status.phase == "running":
-            raise Retryable(f"job {job_id} is still running; its result exists once it succeeds")
-        if status.state != "succeeded":
-            # Never coming: saying "try again" here would send the model round in circles.
-            raise JobError(f"job {job_id} was {status.state}; it has no result")
-        target = Path(dest)
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(f"{status.detail['task']} finished after {status.detail['seconds']}s\n")
-        return dest
+def _alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    # A finished child of this process that nobody waited for is a zombie:
+    # `kill(0)` still succeeds, so ask whether it has exited.
+    try:
+        done, _ = os.waitpid(pid, os.WNOHANG)
+    except ChildProcessError:
+        return True  # not ours to wait for: the kill above says it exists
+    return done == 0
