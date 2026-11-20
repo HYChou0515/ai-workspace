@@ -6,11 +6,12 @@
     以及一份 `CLAUDE.md`（讓 agent 先問清楚你要做什麼、再開始寫）。
     複製走、改名、換掉範例，就是你的工具。這一頁是它的背景說明。
 
-!!! tip "要接的是一個「送出、之後再問」的後端？拿 `sample-tools/job-tool-template/`"
+!!! tip "要讓 AI 把工作送到別台機器跑？拿 `sample-tools/job-tool-template/`"
 
-    GPU 訓練、批次報表、審批流程這類工作：送出後在別處跑，之後再回來問進度。
-    那個 template 已經寫好 command、每支呼叫的時間預算，以及每種結果要告訴 AI 什麼
-    （例如送出逾時時，先查有沒有送到，才決定能不能重送）。你只要寫連到後端的那個套件。
+    GPU 叢集、批次主機、有授權的機台這類：AI 在 sandbox 準備好一個資料夾，送到那邊執行，
+    之後回來問一句就把結果拿回 workspace。那個 template 已經寫好打包、分批上傳、啟動、
+    查進度、把檔案拿回來，以及每種結果要告訴 AI 什麼。你只要寫「把位元組搬到你的機器、
+    在那邊啟動」的那個套件，外加一段說明：資料夾要怎麼放（哪個檔案會被執行、環境怎麼裝）。
     從它的 `template/README.md` 開始；它的底層一樣是這一頁的契約。
 
 你不需要我們 repo 的權限，也不用等我們發版。你在**自己的 GitLab** 寫工具、跑一個 CI job，
@@ -356,7 +357,7 @@ https://gitlab.example/api/v4/projects/<id>/jobs/artifacts/<ref>/raw/dist/tool.m
 
 - **平台會告訴你這次是替哪個 item 跑的：`WORKSPACE_ITEM_ID`。** 平台派送你的 command 時（AI 在聊天或
   workflow 的 agent 步驟裡呼叫它、WUI 頁面呼叫它），環境變數裡都有它。需要「以 item 為單位」記帳或判斷
-  重複的工具讀它就好（`sample-tools/job-tool-template/` 就是這樣用的）。三件事要知道：
+  重複的工具讀它就好（`sample-tools/job-tool-template/` 就是這樣用的：同一個 item 的同一份工作才算同一個 job）。三件事要知道：
   - **它是標籤，不是權限。** AI 和你的工具在同一個 sandbox 裡，它可以自己用 `exec` 帶一個別的值執行你的工具。
     真正決定能碰到什麼的是你的後端憑證；需要彼此隔離的 item 請用不同的 token。
   - **不是平台派送的就沒有。** AI 自己用 `exec` 跑你的 launcher、workflow 的 `run:` 步驟用 shell 呼叫它時，
