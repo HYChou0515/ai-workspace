@@ -1,237 +1,152 @@
-"""Backends that exist only so the shell has something to describe.
+"""An execution side that lives in memory, so the shell has something to talk to.
 
-They answer with fixed values. What the shell is tested on is its own work —
-which commands it offers, what it says, how it ends — never a backend's.
+It keeps the promises the contract asks of every backend — write at the
+offset, never truncate, start an id once — and lets a test slow a call down,
+make it fail, or drop a piece on the floor. What is tested is the shell's work:
+what it sends, when it starts, what it tells the model.
 """
 
 from __future__ import annotations
 
-import atexit
-import subprocess
 import time
-from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass, field
+from typing import Any
 
-from job_contract import Budget, Contract, Idempotency, JobBackend, JobStatus, Submitted
+from job_contract import (
+    Budget,
+    Capacity,
+    Entry,
+    JobBackend,
+    NotFound,
+    QueuedJob,
+    Status,
+    Worker,
+)
 
-SPEC = {
+RESOURCES = {
     "type": "object",
     "properties": {
-        "image": {"type": "string", "description": "the container image to run"},
-        "command": {"type": "string"},
+        "gpus": {"type": "integer", "minimum": 0, "maximum": 8},
+        "priority": {"enum": ["low", "normal", "high"]},
     },
-    "required": ["image", "command"],
+    "required": ["gpus"],
+    "additionalProperties": False,
 }
-PATCH = {"type": "object", "properties": {"priority": {"type": "integer"}}}
 
 
-class Minimal(JobBackend):
-    """Exactly the required calls."""
+@dataclass
+class Machine:
+    """The other side's state, shared by every instance a call builds."""
 
-    contract = Contract(spec_schema=SPEC, idempotency=Idempotency(fields=("image", "command")))
+    files: dict[str, dict[str, bytearray]] = field(default_factory=dict)
+    started: dict[str, dict[str, Any]] = field(default_factory=dict)
+    statuses: dict[str, Status] = field(default_factory=dict)
+    logs: dict[str, str] = field(default_factory=dict)
+    cancelled: list[str] = field(default_factory=list)
+    calls: list[tuple] = field(default_factory=list)
+    delay: dict[str, float] = field(default_factory=dict)
+    raises: dict[str, BaseException] = field(default_factory=dict)
+    linger: dict[str, float] = field(default_factory=dict)
+    """Seconds a call waits AFTER doing its work: it landed, the answer is slow."""
+    drop_pieces: int = 0
+    """How many upload pieces to accept and then lose."""
+    capacity: Capacity = field(default_factory=Capacity)
 
-    def submit(self, spec, key, item_id):
-        return Submitted("j1", created=True)
+    def enter(self, call: str, *args: Any) -> None:
+        self.calls.append((call, *args))
+        time.sleep(self.delay.get(call, 0))
+        error = self.raises.get(call)
+        if error is not None:
+            raise error
 
-    def find_by_key(self, key):
-        return None
-
-    def get(self, job_id):
-        return JobStatus(job_id=job_id, phase="running", state="queued")
-
-    def list(self, cursor, limit):
-        return [], None
-
-
-class NoGet(JobBackend):
-    """Forgot `get`: definable, but never loadable."""
-
-    contract = Minimal.contract
-
-    def submit(self, spec, key, item_id):
-        return Submitted("j1", created=True)
-
-    def find_by_key(self, key):
-        return None
-
-    def list(self, cursor, limit):
-        return [], None
+    def count(self, call: str) -> int:
+        return sum(1 for c in self.calls if c[0] == call)
 
 
-class Pooled(Minimal):
-    """`get` waits on a thread pool — what boto3, gRPC and most SDKs do. The
-    pool's worker is not a daemon, and the interpreter joins it at exit."""
+class Remote(JobBackend):
+    run_description = "Runs the folder on the test machine: put the command in run.sh."
+    resources_schema = RESOURCES
+    budget = Budget(upload=0.5, start=0.5, status=0.5, list_files=0.5, download=0.5,
+                    logs=0.5, cancel=0.5, capacity=0.5)  # fmt: skip
+    machine: Machine = Machine()
 
-    contract = Contract(
-        spec_schema=SPEC,
-        idempotency=Idempotency(fields=("image", "command")),
-        budget=Budget(get=0.2),
-    )
+    def upload(self, job_id, path, offset, data):
+        m = self.machine
+        m.enter("upload", job_id, path, offset, len(data))
+        if m.drop_pieces:
+            m.drop_pieces -= 1
+            return
+        held = m.files.setdefault(job_id, {}).setdefault(path, bytearray())
+        if offset > len(held):
+            held.extend(b"\0" * (offset - len(held)))
+        held[offset : offset + len(data)] = data
 
-    def get(self, job_id):
-        with ThreadPoolExecutor(1) as pool:
-            return pool.submit(time.sleep, 30).result()
+    def start(self, job_id, resources):
+        m = self.machine
+        m.enter("start", job_id, resources)
+        if job_id not in m.started:
+            m.started[job_id] = resources
+            m.statuses.setdefault(job_id, Status("queued", position=3))
+        time.sleep(m.linger.get("start", 0))
 
+    def status(self, job_id):
+        m = self.machine
+        m.enter("status", job_id)
+        if job_id not in m.started:
+            raise NotFound(f"no job {job_id}")
+        return m.statuses[job_id]
 
-class Shelling(Minimal):
-    """`submit` runs a command, the way a backend calls `sbatch` or `kubectl`.
-    The child writes to file descriptor 1, which no `sys.stdout` swap reaches."""
+    def list_files(self, job_id, path):
+        m = self.machine
+        m.enter("list_files", job_id, path)
+        if job_id not in m.files:
+            raise NotFound(f"no job {job_id}")
+        prefix = "" if path in (".", "") else path.rstrip("/") + "/"
+        entries = []
+        dirs = set()
+        for name, data in sorted(m.files[job_id].items()):
+            if not name.startswith(prefix) and name != path:
+                continue
+            parts = name.split("/")
+            for i in range(1, len(parts)):
+                dirs.add("/".join(parts[:i]))
+            entries.append(Entry(name, is_dir=False, size=len(data)))
+        entries += [Entry(d, is_dir=True) for d in sorted(dirs) if d.startswith(prefix)]
+        return entries
 
-    def submit(self, spec, key, item_id):
-        subprocess.run(["echo", "CHILD-OUTPUT"], check=True)
-        return Submitted("j1", created=True)
-
-
-class Lingering(Minimal):
-    """`get` answers in time but leaves work behind that speaks after the
-    answer: a pool job (the interpreter waits for it at exit) and an atexit
-    handler. Both run after `main` has returned."""
-
-    def get(self, job_id):
-        def later():
-            time.sleep(0.3)
-            print("POOL-NOISE")
-            subprocess.run(["echo", "POOL-CHILD"], check=True)
-
-        pool = ThreadPoolExecutor(1)
-        pool.submit(later)
-        pool.shutdown(wait=False)
-        atexit.register(lambda: print("ATEXIT-NOISE"))
-        return JobStatus(job_id=job_id, phase="running", state="queued")
-
-
-class _SetOrder(Idempotency):
-    """Sameness through a set: the same within one process, different in the
-    next — string hashing is randomised per process, and every tool call is a
-    new process."""
-
-    def identity(self, spec):
-        return list({spec["image"], spec["command"], "a", "b", "c", "d", "e", "f"})
-
-
-class _Lowercase(Idempotency):
-    def identity(self, spec):
-        return {"image": spec["image"].lower(), "command": spec["command"].strip()}
-
-
-class SteadyOverride(Minimal):
-    """An overridden sameness that is the same in every process."""
-
-    contract = Contract(
-        spec_schema=SPEC,
-        idempotency=_Lowercase(fields=("image", "command")),
-        example_spec={"image": "Trainer:3", "command": " train.py "},
-    )
-
-
-class _PairOrder(Idempotency):
-    """Two strings in a set: only two orders, so few seeds can all agree."""
-
-    def identity(self, spec):
-        return list({spec["image"], spec["command"]})
-
-
-class PairDrift(Minimal):
-    # The example review found: five seeds all put these two in one order.
-    contract = Contract(
-        spec_schema=SPEC,
-        idempotency=_PairOrder(fields=("image", "command")),
-        example_spec={"image": "img23", "command": "train.py"},
-    )
-
-
-class Holder:
-    """A backend reached by a dotted path, as an entry point may name it."""
-
-    Inner = SteadyOverride
-
-
-class HashDrift(Minimal):
-    contract = Contract(
-        spec_schema=SPEC,
-        idempotency=_SetOrder(fields=("image", "command")),
-        example_spec={"image": "trainer:3", "command": "train.py"},
-    )
-
-
-class Scripted(Minimal):
-    """Answers with whatever the test put in `answers`, or raises it, after
-    `delay` seconds. A real thread really waits: the budget is real too."""
-
-    contract = Contract(
-        spec_schema=SPEC,
-        idempotency=Idempotency(fields=("image", "command")),
-        budget=Budget(submit=0.2, find_by_key=0.2, get=0.2, list=0.2),
-    )
-    answers: dict = {}
-    delay: dict = {}
-    calls: list = []
-
-    def _answer(self, call, *args):
-        type(self).calls.append((call, *args))
-        time.sleep(type(self).delay.get(call, 0))
-        answer = type(self).answers[call]
-        if isinstance(answer, BaseException):  # SystemExit too: backends do call sys.exit
-            raise answer
-        return answer
-
-    def __init__(self):
-        # Building a backend may itself be slow (connecting to the scheduler);
-        # a delay under "__init__" stands for that.
-        time.sleep(type(self).delay.get("__init__", 0))
-
-    def submit(self, spec, key, item_id):
-        return self._answer("submit", spec, key, item_id)
-
-    def find_by_key(self, key):
-        return self._answer("find_by_key", key)
-
-    def get(self, job_id):
-        return self._answer("get", job_id)
-
-    def list(self, cursor, limit):
-        return self._answer("list", cursor, limit)
-
-
-class ScriptedFull(Scripted):
-    """`Scripted`, with every optional call too."""
-
-    contract = Contract(
-        spec_schema=SPEC,
-        idempotency=Idempotency(fields=("image", "command")),
-        budget=Budget(submit=0.2, find_by_key=0.2, get=0.2, list=0.2),
-        patch_schema=PATCH,
-    )
-
-    def update(self, job_id, patch):
-        return self._answer("update", job_id, patch)
-
-    def cancel(self, job_id):
-        return self._answer("cancel", job_id)
+    def download(self, job_id, path, offset, limit):
+        m = self.machine
+        m.enter("download", job_id, path, offset, limit)
+        try:
+            data = m.files[job_id][path]
+        except KeyError:
+            raise NotFound(f"no file {path}") from None
+        return bytes(data[offset : offset + limit])
 
     def logs(self, job_id, offset, limit):
-        return self._answer("logs", job_id, offset, limit)
-
-    def fetch(self, job_id, name, dest):
-        return self._answer("fetch", job_id, name, dest)
-
-
-class Full(Minimal):
-    """Every optional call as well."""
-
-    contract = Contract(
-        spec_schema=SPEC,
-        idempotency=Idempotency(fields=("image", "command")),
-        patch_schema=PATCH,
-    )
-
-    def update(self, job_id, patch):
-        return self.get(job_id)
+        m = self.machine
+        m.enter("logs", job_id, offset, limit)
+        text = m.logs.get(job_id, "")
+        return text[offset : offset + limit], len(text)
 
     def cancel(self, job_id):
-        return self.get(job_id)
+        m = self.machine
+        m.enter("cancel", job_id)
+        m.cancelled.append(job_id)
+        if job_id in m.started:
+            m.statuses[job_id] = Status("failed", state="cancelled")
 
-    def logs(self, job_id, offset, limit):
-        return "", 0
 
-    def fetch(self, job_id, name, dest):
-        return dest
+class RemoteWithQueue(Remote):
+    def capacity(self):
+        self.machine.enter("capacity")
+        return self.machine.capacity
+
+
+def sample_capacity() -> Capacity:
+    return Capacity(
+        workers=(Worker("gpu-1", "busy", job_id="j-other", free={"gpus": 0}),
+                 Worker("gpu-2", "idle", free={"gpus": 8})),
+        queue=(QueuedJob("j-other-2", resources={"gpus": 8}, waiting_since="09:00"),),
+        quota={"gpu_hours": "12 of 20"},
+    )  # fmt: skip
