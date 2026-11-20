@@ -14,6 +14,7 @@ import { useCurrentUser } from "../../hooks/useCurrentUser";
 import { useIsSuperuserState } from "../../hooks/useIsSuperuser";
 import { useItemAccess } from "../../hooks/useItemAccess";
 import { canChangeItemPermission, itemVisibility, parseItemPermission } from "../../lib/itemPermission";
+import { CollapsedFeed } from "../../components/CollapsedFeed";
 import { DomainField } from "../../components/DomainField";
 import { DomainFields } from "../../components/DomainFields";
 import { ItemForm, pruneEmpty } from "../../components/ItemForm";
@@ -3503,7 +3504,7 @@ export function BottomPanel({
               color: "var(--text-paper)",
             }}
           >
-            <PanelBody tab={tab} />
+            <PanelBody tab={tab} scrollRef={bodyScrollRef} />
           </div>
         ))}
     </div>
@@ -3512,11 +3513,18 @@ export function BottomPanel({
 
 function PanelBody({
   tab,
+  scrollRef,
 }: {
   tab: "problems" | "output" | "terminal" | "agent_log" | "run_history";
+  /** The panel body that scrolls these transcripts — a very long one folds its
+   * middle like the chat (docs/plan-chat-collapse-middle.md). */
+  scrollRef: React.RefObject<HTMLDivElement | null>;
 }) {
   const t = useT();
-  const { log } = useAgent();
+  const { log, investigationId } = useAgent();
+  // Per tab: each transcript has its own rows, so another tab starts over at
+  // the defaults rather than borrowing this one's expansions.
+  const feedKey = `${investigationId}/${tab}`;
   const [locale] = useLocale();
 
   if (tab === "problems") {
@@ -3551,13 +3559,18 @@ function PanelBody({
   }
 
   if (tab === "output") {
-    const calls = log.entries.filter((e) => e.kind === "tool_call");
+    // Only the calls that have output draw a row here, so only they count
+    // toward the folded feed's first 100 / newest 1000.
+    const calls = log.entries.filter((e) => e.kind === "tool_call" && callBody(e.call) !== undefined);
     if (calls.length === 0) {
       return <div style={{ color: "var(--text-paper-d)" }}>No tool output yet.</div>;
     }
     return (
-      <>
-        {calls.map((e, i) =>
+      <CollapsedFeed
+        entries={calls}
+        resetKey={feedKey}
+        scrollRef={scrollRef}
+        renderRow={(e, i) =>
           e.kind === "tool_call" && callBody(e.call) !== undefined ? (
             <div key={i} style={{ marginBottom: 4 }}>
               <div style={{ color: "var(--accent)" }}>
@@ -3577,9 +3590,9 @@ function PanelBody({
                 {callBody(e.call)}
               </pre>
             </div>
-          ) : null,
-        )}
-      </>
+          ) : null
+        }
+      />
     );
   }
 
@@ -3593,8 +3606,11 @@ function PanelBody({
     }
     // Full run detail: command + args + the complete output, not just a name.
     return (
-      <>
-        {calls.map((e, i) =>
+      <CollapsedFeed
+        entries={calls}
+        resetKey={feedKey}
+        scrollRef={scrollRef}
+        renderRow={(e, i) =>
           e.kind === "tool_call" ? (
             <details key={i} style={{ marginBottom: 8 }}>
               <summary
@@ -3626,9 +3642,9 @@ function PanelBody({
               )}
               {callBody(e.call) && <pre style={logPre}>{callBody(e.call)}</pre>}
             </details>
-          ) : null,
-        )}
-      </>
+          ) : null
+        }
+      />
     );
   }
 
@@ -3656,159 +3672,164 @@ function PanelBody({
           {log.streaming && log.metrics.phase !== "final" ? "▸" : "✓"} {formatMetrics(log.metrics)}
         </div>
       )}
-      {log.entries.map((e, i) => {
-        // The entry currently being produced (last, while streaming) renders
-        // live + expanded so it auto-scrolls; finished entries fold like the
-        // chat does. Switching <div>↔<details> on the same key remounts, so a
-        // just-finished entry collapses cleanly.
-        const active = log.streaming && i === log.entries.length - 1;
-        if (e.kind === "banner") {
-          return <LogLine key={i} ts={fmtTs(e.at)} kind="warn" text={e.text} />;
-        }
-        if (e.kind === "tool_call") {
-          const running = e.call.status === "running";
+      <CollapsedFeed
+        entries={log.entries}
+        resetKey={feedKey}
+        scrollRef={scrollRef}
+        renderRow={(e, i) => {
+          // The entry currently being produced (last, while streaming) renders
+          // live + expanded so it auto-scrolls; finished entries fold like the
+          // chat does. Switching <div>↔<details> on the same key remounts, so a
+          // just-finished entry collapses cleanly.
+          const active = log.streaming && i === log.entries.length - 1;
+          if (e.kind === "banner") {
+            return <LogLine key={i} ts={fmtTs(e.at)} kind="warn" text={e.text} />;
+          }
+          if (e.kind === "tool_call") {
+            const running = e.call.status === "running";
+            const head = (
+              <>
+                <span style={logTs}>{fmtTs(e.call.startedAt)}</span>
+                <span
+                  style={{ width: 56, flexShrink: 0, color: running ? "var(--accent)" : "var(--text-paper-d)" }}
+                >
+                  {running ? "tool ▸" : "tool ✓"}
+                </span>
+                <span style={{ fontFamily: "var(--font-mono)", fontSize: pxToRem(12) }}>
+                  {e.call.name}({argsLine(e.call.args)})
+                </span>
+              </>
+            );
+            const body = callBody(e.call);
+            if (active && running) {
+              return (
+                <div key={i} style={{ marginBottom: 6 }}>
+                  <div style={{ display: "flex", gap: 8 }}>{head}</div>
+                  {body && <pre style={logPre}>{body}</pre>}
+                </div>
+              );
+            }
+            return (
+              <details key={i} style={{ marginBottom: 6 }}>
+                <summary style={logSummary}>{head}</summary>
+                {body && <pre style={logPre}>{body}</pre>}
+              </details>
+            );
+          }
+          if (e.kind === "mention") {
+            return (
+              <LogLine
+                key={i}
+                ts={fmtTs(e.at)}
+                kind="warn"
+                text={`summoned ${e.users.join(", ")}${e.note ? ` — ${e.note}` : ""}`}
+              />
+            );
+          }
+          if (e.kind === "phase") {
+            // #100: a workflow phase boundary in the log view.
+            return <LogLine key={i} ts={fmtTs(e.at)} kind="muted" text={`— ${e.phase} —`} />;
+          }
+          if (e.kind === "notice") {
+            // #624: the context horizon moved.
+            return <LogLine key={i} ts={fmtTs(e.at)} kind="warn" text={e.text} />;
+          }
+          if (e.kind === "sign_in") {
+            // plan-env-token-refresh D6: the flat transcript states it; the
+            // button is the chat view's.
+            return <LogLine key={i} ts={fmtTs(e.at)} kind="warn" text={e.text} />;
+          }
+          if (e.kind === "repair_request") {
+            // plan-workflow-output-repair §3.5: one line in the flat log; the
+            // request itself is readable in the chat view.
+            return <LogLine key={i} ts={fmtTs(e.at)} kind="warn" text={t("wf.repairRequest.log")} />;
+          }
+          if (e.kind === "summary") {
+            // #739: the earlier span was summarised. The log view is a flat
+            // transcript, so it states the fact on one line — the originals are
+            // still above it, and the précis itself is readable in the chat view.
+            return (
+              <LogLine
+                key={i}
+                ts={fmtTs(e.at)}
+                kind="muted"
+                text={`— 以上 ${e.replaced} 則已整理成摘要 —`}
+              />
+            );
+          }
+          if (e.kind === "goal_note") {
+            // #613 P3: the goal driver's outcome marker (met / exhausted).
+            // #615: an overnight ending carries a written hand-over under it.
+            return (
+              <LogLine
+                key={i}
+                ts={fmtTs(e.at)}
+                kind="muted"
+                text={e.text}
+                multiline={e.text.includes("\n")}
+              />
+            );
+          }
+          if (e.kind === "step") {
+            // #100: a workflow step's live line (deterministic-phase movement).
+            const glyph =
+              e.step.status === "passed"
+                ? "✓"
+                : e.step.status === "failed"
+                  ? "✗"
+                  : e.step.status === "skipped"
+                    ? "⤳"
+                    : e.step.status === "retrying"
+                      ? "↻"
+                      : e.step.status === "repairing"
+                        ? "✎"
+                        : "▸";
+            const repairing =
+              e.step.status === "repairing"
+                ? ` · ${t("wf.step.repairing", { n: e.step.repair ?? 1 })}`
+                : "";
+            const detail = `${e.step.key ? ` · ${e.step.key}` : ""}${repairing}${e.step.reason ? ` — ${e.step.reason}` : ""}`;
+            return (
+              <LogLine
+                key={i}
+                ts={fmtTs(e.at)}
+                kind={e.step.status === "failed" ? "warn" : "muted"}
+                text={`${glyph} ${e.step.name}${detail}`}
+              />
+            );
+          }
           const head = (
             <>
-              <span style={logTs}>{fmtTs(e.call.startedAt)}</span>
-              <span
-                style={{ width: 56, flexShrink: 0, color: running ? "var(--accent)" : "var(--text-paper-d)" }}
-              >
-                {running ? "tool ▸" : "tool ✓"}
-              </span>
-              <span style={{ fontFamily: "var(--font-mono)", fontSize: pxToRem(12) }}>
-                {e.call.name}({argsLine(e.call.args)})
+              <span style={logTs}>{fmtTs(e.at)}</span>
+              <span style={{ color: e.message.role === "user" ? "var(--info)" : "var(--text-paper-d)" }}>
+                {e.message.role}: {firstLine(e.message.content || e.message.reasoning || "")}
               </span>
             </>
           );
-          const body = callBody(e.call);
-          if (active && running) {
+          const body = (
+            <>
+              {e.message.reasoning && (
+                <pre style={{ ...logPre, opacity: 0.7 }}>{e.message.reasoning}</pre>
+              )}
+              {e.message.content !== "" && <pre style={logPre}>{e.message.content}</pre>}
+            </>
+          );
+          if (active && e.message.role === "assistant") {
             return (
               <div key={i} style={{ marginBottom: 6 }}>
                 <div style={{ display: "flex", gap: 8 }}>{head}</div>
-                {body && <pre style={logPre}>{body}</pre>}
+                {body}
               </div>
             );
           }
           return (
             <details key={i} style={{ marginBottom: 6 }}>
               <summary style={logSummary}>{head}</summary>
-              {body && <pre style={logPre}>{body}</pre>}
+              {body}
             </details>
           );
-        }
-        if (e.kind === "mention") {
-          return (
-            <LogLine
-              key={i}
-              ts={fmtTs(e.at)}
-              kind="warn"
-              text={`summoned ${e.users.join(", ")}${e.note ? ` — ${e.note}` : ""}`}
-            />
-          );
-        }
-        if (e.kind === "phase") {
-          // #100: a workflow phase boundary in the log view.
-          return <LogLine key={i} ts={fmtTs(e.at)} kind="muted" text={`— ${e.phase} —`} />;
-        }
-        if (e.kind === "notice") {
-          // #624: the context horizon moved.
-          return <LogLine key={i} ts={fmtTs(e.at)} kind="warn" text={e.text} />;
-        }
-        if (e.kind === "sign_in") {
-          // plan-env-token-refresh D6: the flat transcript states it; the
-          // button is the chat view's.
-          return <LogLine key={i} ts={fmtTs(e.at)} kind="warn" text={e.text} />;
-        }
-        if (e.kind === "repair_request") {
-          // plan-workflow-output-repair §3.5: one line in the flat log; the
-          // request itself is readable in the chat view.
-          return <LogLine key={i} ts={fmtTs(e.at)} kind="warn" text={t("wf.repairRequest.log")} />;
-        }
-        if (e.kind === "summary") {
-          // #739: the earlier span was summarised. The log view is a flat
-          // transcript, so it states the fact on one line — the originals are
-          // still above it, and the précis itself is readable in the chat view.
-          return (
-            <LogLine
-              key={i}
-              ts={fmtTs(e.at)}
-              kind="muted"
-              text={`— 以上 ${e.replaced} 則已整理成摘要 —`}
-            />
-          );
-        }
-        if (e.kind === "goal_note") {
-          // #613 P3: the goal driver's outcome marker (met / exhausted).
-          // #615: an overnight ending carries a written hand-over under it.
-          return (
-            <LogLine
-              key={i}
-              ts={fmtTs(e.at)}
-              kind="muted"
-              text={e.text}
-              multiline={e.text.includes("\n")}
-            />
-          );
-        }
-        if (e.kind === "step") {
-          // #100: a workflow step's live line (deterministic-phase movement).
-          const glyph =
-            e.step.status === "passed"
-              ? "✓"
-              : e.step.status === "failed"
-                ? "✗"
-                : e.step.status === "skipped"
-                  ? "⤳"
-                  : e.step.status === "retrying"
-                    ? "↻"
-                    : e.step.status === "repairing"
-                      ? "✎"
-                      : "▸";
-          const repairing =
-            e.step.status === "repairing"
-              ? ` · ${t("wf.step.repairing", { n: e.step.repair ?? 1 })}`
-              : "";
-          const detail = `${e.step.key ? ` · ${e.step.key}` : ""}${repairing}${e.step.reason ? ` — ${e.step.reason}` : ""}`;
-          return (
-            <LogLine
-              key={i}
-              ts={fmtTs(e.at)}
-              kind={e.step.status === "failed" ? "warn" : "muted"}
-              text={`${glyph} ${e.step.name}${detail}`}
-            />
-          );
-        }
-        const head = (
-          <>
-            <span style={logTs}>{fmtTs(e.at)}</span>
-            <span style={{ color: e.message.role === "user" ? "var(--info)" : "var(--text-paper-d)" }}>
-              {e.message.role}: {firstLine(e.message.content || e.message.reasoning || "")}
-            </span>
-          </>
-        );
-        const body = (
-          <>
-            {e.message.reasoning && (
-              <pre style={{ ...logPre, opacity: 0.7 }}>{e.message.reasoning}</pre>
-            )}
-            {e.message.content !== "" && <pre style={logPre}>{e.message.content}</pre>}
-          </>
-        );
-        if (active && e.message.role === "assistant") {
-          return (
-            <div key={i} style={{ marginBottom: 6 }}>
-              <div style={{ display: "flex", gap: 8 }}>{head}</div>
-              {body}
-            </div>
-          );
-        }
-        return (
-          <details key={i} style={{ marginBottom: 6 }}>
-            <summary style={logSummary}>{head}</summary>
-            {body}
-          </details>
-        );
-      })}
+          }}
+      />
       {log.streaming && <LogLine ts="" kind="accent" text="…streaming" />}
     </>
   );

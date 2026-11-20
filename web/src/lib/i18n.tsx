@@ -1848,6 +1848,15 @@ export const messages = {
   // named after the command in both locales. "整理成摘要" read as a request
   // to summarise something, which is not what it does to the person pressing it.
   "chat.compact": { "zh-TW": "compact", en: "compact" },
+  // docs/plan-chat-collapse-middle.md: the bar a very long feed folds its
+  // middle behind — a button at each end, 1000 rows a press; one "the rest"
+  // button once no more than that is hidden. Also folds the bottom panel's
+  // tool output, so the words say "rows", not "messages".
+  "feed.collapsed.label": { "zh-TW": "收起的部分", en: "Collapsed rows" },
+  "feed.collapsed.hidden": { "zh-TW": "中間還有 {n} 則未顯示", en: "Hidden: {n}" },
+  "feed.collapsed.next": { "zh-TW": "↓ 再顯示接下來的 {n} 則", en: "↓ Show the next {n}" },
+  "feed.collapsed.earlier": { "zh-TW": "↑ 再顯示更早的 {n} 則", en: "↑ Show {n} earlier" },
+  "feed.collapsed.rest": { "zh-TW": "顯示其餘 {n} 則", en: "Show the remaining {n}" },
   "chat.compact.pending": { "zh-TW": "compacting…", en: "compacting…" },
   // The header's "⋯" when its actions no longer fit beside the title.
   "chat.more": { "zh-TW": "更多", en: "More" },

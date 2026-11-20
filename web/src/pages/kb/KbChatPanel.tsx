@@ -11,6 +11,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { kbApi, type KbApi, type KbCitation } from "../../api/kb";
 import { qk } from "../../api/queryKeys";
 import { ChatFeedRow, type FeedActions } from "../../components/ChatFeedRow";
+import { CollapsedFeed } from "../../components/CollapsedFeed";
 import { useStableActions } from "../../hooks/useStableActions";
 import { ErrorNotice } from "../../components/ErrorNotice";
 import { Icon } from "../../components/Icon";
@@ -282,16 +283,23 @@ export function KbChatPanel({
             Hi — ask me anything across your knowledge base. I'll cite the sources.
           </p>
         )}
-        {log.entries.map((entry, i) => (
-          <ChatFeedRow
-            key={i}
-            entry={entry}
-            index={i}
-            settled={!log.streaming}
-            me={me}
-            actions={rowActions}
-          />
-        ))}
+        {/* docs/plan-chat-collapse-middle.md: the middle of a very long chat
+            stays collapsed until asked for. */}
+        <CollapsedFeed
+          entries={log.entries}
+          resetKey={chatId ?? ""}
+          scrollRef={bodyRef}
+          renderRow={(entry, i) => (
+            <ChatFeedRow
+              key={i}
+              entry={entry}
+              index={i}
+              settled={!log.streaming}
+              me={me}
+              actions={rowActions}
+            />
+          )}
+        />
         <TurnStatus log={log} />
         {log.error && <ErrorNotice failure={log.error} live />}
       </div>
