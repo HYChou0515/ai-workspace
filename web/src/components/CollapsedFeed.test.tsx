@@ -97,10 +97,10 @@ describe("CollapsedFeed", () => {
         <Feed n={5000} />
       </LocaleProvider>,
     );
-    expect(screen.getByText("3900 messages hidden")).toBeTruthy();
+    expect(screen.getByText("Hidden: 3900")).toBeTruthy();
     expect(screen.getByRole("button", { name: "↓ Show the next 1000" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "↑ Show 1000 earlier" })).toBeTruthy();
-    expect(screen.getByRole("group", { name: "Collapsed messages" })).toBeTruthy();
+    expect(screen.getByRole("group", { name: "Collapsed rows" })).toBeTruthy();
   });
 
   it("draws both expand controls as the house button, not as bare text", () => {

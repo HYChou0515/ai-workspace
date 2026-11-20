@@ -3522,7 +3522,8 @@ function PanelBody({
 }) {
   const t = useT();
   const { log, investigationId } = useAgent();
-  // Per tab: each transcript has its own rows, so its own expansions.
+  // Per tab: each transcript has its own rows, so another tab starts over at
+  // the defaults rather than borrowing this one's expansions.
   const feedKey = `${investigationId}/${tab}`;
   const [locale] = useLocale();
 
@@ -3558,7 +3559,9 @@ function PanelBody({
   }
 
   if (tab === "output") {
-    const calls = log.entries.filter((e) => e.kind === "tool_call");
+    // Only the calls that have output draw a row here, so only they count
+    // toward the folded feed's first 100 / newest 1000.
+    const calls = log.entries.filter((e) => e.kind === "tool_call" && callBody(e.call) !== undefined);
     if (calls.length === 0) {
       return <div style={{ color: "var(--text-paper-d)" }}>No tool output yet.</div>;
     }

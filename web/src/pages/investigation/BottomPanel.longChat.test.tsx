@@ -48,3 +48,23 @@ describe("the bottom panel folds the middle of a very long log", () => {
     expect(screen.getByText("中間還有 400 則未顯示")).toBeInTheDocument();
   });
 });
+
+describe("the output tab counts only calls that have output", () => {
+  it("folds 1500 calls with output, not the silent ones between them", () => {
+    // Interleave 1500 silent calls (no output yet): they draw nothing, so they
+    // must not use up the first 100 / newest 1000 or the hidden count.
+    const real = entries.slice();
+    entries.length = 0;
+    for (const e of real) {
+      entries.push(e, { kind: "tool_call", call: { id: `s${e.call.id}`, name: "silent", args: {}, status: "running" } } as never);
+    }
+    try {
+      renderTab("output");
+      expect(screen.getByText("中間還有 400 則未顯示")).toBeInTheDocument();
+      expect(screen.getByTestId("bottom-body").textContent).toContain("tool99");
+    } finally {
+      entries.length = 0;
+      entries.push(...real);
+    }
+  });
+});

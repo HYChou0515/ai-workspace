@@ -75,8 +75,9 @@ export function CollapsedFeed<T>({
 
   // Before paint, so the reader never sees the jump. Restores the position
   // itself rather than leaving it to the browser's scroll anchoring: measured in
-  // Chromium, without this an ↑ press pushed the row being read down by the
-  // whole height of the rows it added (~129k px for 1000 rows).
+  // Chromium on a 20000-row chat while building this (PR #1039), without it an
+  // ↑ press pushed the row being read down by the whole height of the rows it
+  // added (~129k px for 1000 rows).
   useLayoutEffect(() => {
     const a = anchor.current;
     const el = scrollRef.current;
