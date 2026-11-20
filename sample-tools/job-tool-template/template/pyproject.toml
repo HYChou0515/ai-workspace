@@ -15,6 +15,8 @@ dependencies = [
     # Arguments are checked against the schema the model was shown, before the
     # backend sees them.
     "jsonschema>=4",
+    # Reads the folder's .gitignore, so what git would not keep is not sent.
+    "pathspec>=0.12",
 ]
 
 [project.scripts]
