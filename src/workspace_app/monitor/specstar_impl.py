@@ -6,16 +6,22 @@ in-memory fan-out, since specstar doesn't push.
 `record` writes synchronously — fine because spans are low-frequency (a few per
 turn), not per-token. `recent` pushes the `group_id` filter **and** the sort +
 limit into the query (both `group_id` and `seq` are indexed), so it only loads
-the rows it returns rather than the whole history. Append-only, so consider
-pruning for very long runs.
+the rows it returns rather than the whole history. Rows older than
+``observability.telemetry.keep_days`` are removed by
+:func:`purge_telemetry_older_than`, run as a job on the ``blob-gc`` queue
+(docs/plan-telemetry-retention.md): a generation span carries the whole
+prompt, so an unpurged table grew to about 200 GB.
 """
 
 from __future__ import annotations
 
 import contextlib
+import datetime as dt
 import operator
+import time
+from collections.abc import Callable
 from functools import reduce
-from typing import Any
+from typing import Any, NamedTuple
 
 from msgspec import Struct, field
 from specstar import QB, SpecStar
@@ -30,6 +36,59 @@ class TelemetryEvent(Struct):  # → resource "telemetry-event"
     payload: dict[str, Any] = field(default_factory=dict)
 
 
+PURGE_BATCH = 500
+PURGE_BUDGET_S = 600.0
+
+
+class PurgeResult(NamedTuple):
+    removed: int
+    #: Stopped on the time budget with a full batch just removed — rows older
+    #: than the cutoff may remain for the next pass.
+    more: bool
+
+
+def purge_telemetry_older_than(
+    spec: SpecStar,
+    cutoff: dt.datetime,
+    *,
+    batch: int = PURGE_BATCH,
+    budget_s: float = PURGE_BUDGET_S,
+    clock: Callable[[], float] = time.monotonic,
+) -> PurgeResult:
+    """Permanently delete telemetry-event rows created before ``cutoff``,
+    oldest first, ``batch`` at a time, until none are left or ``budget_s`` is
+    spent (checked after each batch); say how many went and whether more may
+    remain (docs/plan-telemetry-retention.md D6/D7).
+
+    ``permanently_delete``, not ``delete``: a soft delete keeps the row and its
+    revisions, so no space would come back. It is not cheap: specstar reads
+    every revision of the row to release its blobs (the ``payload`` dict gives
+    the model a blob collector), and on Postgres each call opens connections
+    afresh — about 45 ms a row measured on a local database (review round 1).
+    Hence the budget, so a large backlog drains over several passes instead of
+    holding the ``blob-gc`` queue. On Postgres the ``created_time`` query is
+    only fast with an index the deploy creates by hand (specstar's own
+    ``idx_created_time`` exists on one meta table per schema; the
+    ``docs/migrations.md`` entry for #1037). A spec with no telemetry model
+    registered (an in-memory monitor deploy) has nothing to purge."""
+    try:
+        rm = spec.get_resource_manager(TelemetryEvent)
+    except KeyError:
+        return PurgeResult(0, more=False)
+    started = clock()
+    removed = 0
+    query = (QB.created_time() < cutoff).sort(QB.created_time().asc()).limit(batch).build()
+    while True:
+        metas = rm.search_resources(query)
+        for meta in metas:
+            rm.permanently_delete(meta.resource_id)
+        removed += len(metas)
+        if len(metas) < batch:
+            return PurgeResult(removed, more=False)
+        if clock() - started >= budget_s:
+            return PurgeResult(removed, more=True)
+
+
 class SpecstarMonitor(IMonitor):
     def __init__(self, spec: SpecStar) -> None:
         super().__init__()
@@ -39,8 +98,12 @@ class SpecstarMonitor(IMonitor):
         with contextlib.suppress(ValueError):
             spec.add_model(TelemetryEvent, indexed_fields=["group_id", "seq", "kind"])
         self._rm = spec.get_resource_manager(TelemetryEvent)
-        # Resume the order key past whatever's already persisted (append-only).
-        self._seq = self._rm.count_resources(QB.all().build())
+        # Resume the order key past the LARGEST one persisted — not the row
+        # count: once old rows are purged (docs/plan-telemetry-retention.md)
+        # the count falls below it, and a restart would hand out keys the kept
+        # rows already hold, so `recent(limit=…)` would show old events.
+        newest = self._rm.list_resources(QB.all().sort("-seq").limit(1).build())
+        self._seq = self._payload_seq(newest[0]) if newest else 0
 
     def record(self, event: MonitorEvent) -> None:
         self._seq += 1
@@ -73,6 +136,12 @@ class SpecstarMonitor(IMonitor):
             query = base.sort("-seq").limit(limit).build()  # newest `limit`, desc
         events = [self._payload(r) for r in self._rm.list_resources(query)]
         return events if limit is None else events[::-1]  # flip desc back to oldest→newest
+
+    @staticmethod
+    def _payload_seq(r: Any) -> int:
+        data = r.data
+        assert isinstance(data, TelemetryEvent)  # narrow for ty (coverage-clean)
+        return data.seq
 
     @staticmethod
     def _payload(r: Any) -> MonitorEvent:

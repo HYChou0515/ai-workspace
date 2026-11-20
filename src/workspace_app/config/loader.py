@@ -75,6 +75,7 @@ from .schema import (
     ServerSettings,
     Settings,
     SkillHubSettings,
+    TelemetrySettings,
     ToolsSettings,
     ViewPluginsSettings,
     WikiSettings,
@@ -890,6 +891,8 @@ _TOP_SCHEMA: dict[str, Any] = {
     # Observability feature B: the faithful LLM call log.
     "observability": {
         "llm_log": _dataclass_keys(LlmLogSettings),
+        # docs/plan-telemetry-retention.md: how long telemetry-event rows stay.
+        "telemetry": _dataclass_keys(TelemetrySettings),
     },
     # #196 busy-aware failover global defaults.
     "failover": _dataclass_keys(FailoverSettings),
@@ -1273,6 +1276,7 @@ def _settings_from_dict(d: dict[str, Any]) -> Settings:
         event_bus=_build(EventBusSettings, d["event_bus"]),
         observability=ObservabilitySettings(
             llm_log=_build(LlmLogSettings, d["observability"]["llm_log"]),
+            telemetry=_build(TelemetrySettings, d["observability"]["telemetry"]),
         ),
         failover=_build_failover(d["failover"]),
         chat_video=_build(ChatVideoSettings, d["chat_video"]),

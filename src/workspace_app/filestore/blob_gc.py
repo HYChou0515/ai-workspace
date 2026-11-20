@@ -80,6 +80,10 @@ class BlobGcPayload(msgspec.Struct):
     # model whose blobs would be quarantined, then deleted — silently. Empty
     # (a hand-made row) is refused too; the sweeper's ask is the way in.
     registry: list[str] = []
+    # ``telemetry-purge`` only (docs/plan-telemetry-retention.md): rows older
+    # than this many days go. Carried by the ask, so the runner needs no
+    # config of its own; the cutoff is taken when the pass runs.
+    keep_days: int = 0
 
 
 class BlobGcJob(Job[BlobGcPayload]):
@@ -119,6 +123,14 @@ class BlobGcCoordinator:
         usage_recorder: UsageRecorder | None = None,
     ) -> None:
         self._spec = spec
+        # The worker configures no logging, so this module's INFO lines (each
+        # pass's "… complete" / "telemetry purge removed …" — what the runbook
+        # tells an operator to look for) would fall to the last-resort handler
+        # and vanish (observability/stdout_log.py). Here rather than at import,
+        # so a test can rebind it to its own stdout.
+        from ..observability.stdout_log import install_own_handler
+
+        install_own_handler(logger)
         # docs/plan-storage-all-items.md: the disk-ledger reconcile, a second
         # kind on this queue — it needs what this worker already boots (the
         # API's whole composition: every App's items, the ledger, the store).
@@ -160,13 +172,24 @@ class BlobGcCoordinator:
         window's disk ask disappear."""
         self._enqueue("disk-ledger")
 
-    def _enqueue(self, kind: str) -> None:
+    def enqueue_telemetry_purge(self, *, keep_days: int) -> None:
+        """Ask for one telemetry purge (docs/plan-telemetry-retention.md D5):
+        telemetry-event rows older than ``keep_days`` are permanently deleted,
+        within a time budget — a backlog drains over several windows. Same
+        shape as :meth:`enqueue_disk_ledger`, coalesced per kind."""
+        self._enqueue("telemetry-purge", keep_days=keep_days)
+
+    def _enqueue(self, kind: str, *, keep_days: int = 0) -> None:
         active = self._job_rm.list_resources(QB["status"].in_(_ACTIVE).build())
         if any(isinstance(r.data, BlobGcJob) and r.data.payload.kind == kind for r in active):
             return
         self._job_rm.create(
             BlobGcJob(
-                payload=BlobGcPayload(kind=kind, registry=sorted(self._spec.resource_managers)),
+                payload=BlobGcPayload(
+                    kind=kind,
+                    registry=sorted(self._spec.resource_managers),
+                    keep_days=keep_days,
+                ),
                 partition_key=_PARTITION,
                 max_retries=0,
             )
@@ -176,7 +199,7 @@ class BlobGcCoordinator:
     def _handle(self, job) -> None:  # job: Resource[BlobGcJob]
         payload = job.data.payload
         assert isinstance(payload, BlobGcPayload)
-        if payload.kind not in ("reconcile", "disk-ledger"):
+        if payload.kind not in ("reconcile", "disk-ledger", "telemetry-purge"):
             logger.warning("blob-gc: unknown job kind %r", payload.kind)
             return
         # Prune BEFORE the pass, whatever the pass does: a reconcile that fails
@@ -188,7 +211,24 @@ class BlobGcCoordinator:
         if payload.kind == "disk-ledger":
             self._disk_ledger()
             return
+        if payload.kind == "telemetry-purge":
+            self._telemetry_purge(payload.keep_days)
+            return
         self._reconcile()
+
+    def _telemetry_purge(self, keep_days: int) -> None:
+        from ..monitor.specstar_impl import purge_telemetry_older_than
+
+        if keep_days <= 0:  # a hand-made row: 0 means keep everything
+            return
+        cutoff = self._now() - dt.timedelta(days=keep_days)
+        result = purge_telemetry_older_than(self._spec, cutoff)
+        logger.info(
+            "blob-gc: telemetry purge removed %d rows older than %s%s",
+            result.removed,
+            cutoff,
+            " (time budget spent, more may remain: the next ask continues)" if result.more else "",
+        )
 
     def _disk_ledger(self) -> None:
         if self._disk_ledger_pass is None:

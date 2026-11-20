@@ -1424,8 +1424,20 @@ class LlmLogSettings:
 
 
 @dataclass(frozen=True)
+class TelemetrySettings:
+    """The `telemetry-event` rows (the agent SDK's traces and spans, prompts
+    included, plus the #407 storage samples) — docs/plan-telemetry-retention.md.
+
+    `keep_days`: rows older than this are permanently deleted by a purge job
+    on the `blob-gc` queue; `0` keeps everything (the table then only grows)."""
+
+    keep_days: int = 14
+
+
+@dataclass(frozen=True)
 class ObservabilitySettings:
     llm_log: LlmLogSettings = field(default_factory=LlmLogSettings)
+    telemetry: TelemetrySettings = field(default_factory=TelemetrySettings)
 
 
 # ─── chat_video (export a chat as a video: the server-side ceilings) ────

@@ -423,7 +423,10 @@ spec:
       labels:
         app: rca-worker-blob-gc
     spec:
-      terminationGracePeriodSeconds: 120 # let a pass in flight finish its deletes
+      # Lets a blob reconcile in flight finish its deletes. A telemetry purge
+      # pass (up to ~10 min) is cut short instead: each delete stands alone,
+      # and the next pass carries on (docs/plan-telemetry-retention.md).
+      terminationGracePeriodSeconds: 120
       containers:
         - name: worker
           image: rca-app:latest

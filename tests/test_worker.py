@@ -277,7 +277,10 @@ def test_the_blob_gc_worker_holds_every_model_the_apis_ask_names(tmp_path, monke
     rm = oracle.get_resource_manager(BlobGcJob)
 
     def _ask():
-        return [r.data for r in rm.list_resources(QB.all().build())]
+        # The reconcile's ask — other kinds share the queue and ask at boot
+        # (docs/plan-telemetry-retention.md's purge, on by default).
+        jobs = [r.data for r in rm.list_resources(QB.all().build())]
+        return [j for j in jobs if j.payload.kind == "reconcile"]
 
     async def _until_asked():
         for _ in range(60):

@@ -316,6 +316,9 @@ def build_app(
                 if settings.resources.disk_reconcile_interval_sec
                 else None
             ),
+            # docs/plan-telemetry-retention.md: telemetry-event rows older than
+            # this are purged (0 ⇒ never).
+            telemetry_keep_days=settings.observability.telemetry.keep_days,
             # plan-chat-video-export: the video ceilings + the worker's heartbeat.
             chat_video=settings.chat_video,
             # plan-graceful-shutdown P2: the turn-drain budget — the same number

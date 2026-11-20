@@ -55,3 +55,27 @@ async def test_live_feed_is_in_memory_fan_out():
 def test_is_an_imonitor():
     # drop-in for InMemoryMonitor: same IMonitor interface
     assert issubclass(SpecstarMonitor, IMonitor)
+
+
+def test_a_restarted_monitor_continues_past_the_largest_seq_after_old_rows_are_removed():
+    """docs/plan-telemetry-retention.md D8: the order key resumed from the ROW
+    COUNT, so once old rows were removed a restarted process handed out seq
+    values the kept rows already held, and `recent(limit=…)` (newest by seq)
+    showed old events instead of the new one."""
+    from specstar import QB
+
+    from workspace_app.monitor import TelemetryEvent
+
+    spec = _spec()
+    m = SpecstarMonitor(spec)
+    for n in range(1, 6):
+        m.record({"kind": "span_end", "n": n})
+    rm = spec.get_resource_manager(TelemetryEvent)
+    oldest = rm.search_resources(QB.all().sort("seq").limit(3).build())
+    for meta in oldest:  # the three oldest go, as a purge would remove them
+        rm.permanently_delete(meta.resource_id)
+
+    restarted = SpecstarMonitor(spec)
+    restarted.record({"kind": "span_end", "n": 6})
+    assert [e["n"] for e in restarted.recent(limit=1)] == [6]
+    assert [e["n"] for e in restarted.recent()] == [4, 5, 6]
