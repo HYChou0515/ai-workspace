@@ -225,7 +225,7 @@ def _fetch(backend: type[JobBackend], args: dict[str, Any]) -> Outcome:
     workspace = Path.cwd().resolve()
     job_id = args["job_id"]
     path = _inside(args["path"], "path")
-    dest = args.get("dest") or f"{records.FOLDER}/{job_id}/out/{path}"
+    dest = args.get("dest") or f"{records.FOLDER}/{job_id}/fetched/{path}"
     base = _destination(dest, workspace)
 
     entries = within(backend.budget.list_files, lambda: backend().list_files(job_id, path))

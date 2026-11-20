@@ -78,7 +78,7 @@ Errors: `Retryable` (exit 2), `NeedsAction` (exit 3, names the variable),
 | `jobs()` | This workspace's records, each with a fresh `status`; uploads still owed are listed as such |
 | `queue()` | `capacity()`, when the backend has it |
 | `files(job_id, path)` | `list_files` |
-| `fetch(job_id, path, dest)` | Download into the workspace (default `jobs/<job_id>/out/<path>`), resuming from a `.part` file |
+| `fetch(job_id, path, dest)` | Download into the workspace (default `jobs/<job_id>/fetched/<path>`), resuming from a `.part` file |
 | `logs(job_id, offset?)` | A page of the log; the end of it when no offset is given |
 | `cancel(job_id)` | `cancel`, then its status |
 

@@ -245,10 +245,10 @@ def test_fetch_copies_a_file_into_the_jobs_folder_in_the_workspace(workspace):
 
     answer = _ask("fetch", {"job_id": job, "path": "out/model.pt"}).answer
 
-    saved = workspace / "jobs" / job / "out" / "out" / "model.pt"
+    saved = workspace / "jobs" / job / "fetched" / "out" / "model.pt"
     assert saved.read_bytes() == b"weights"
     assert answer["state"] == "done"
-    assert answer["saved"] == [f"jobs/{job}/out/out/model.pt"]
+    assert answer["saved"] == [f"jobs/{job}/fetched/out/model.pt"]
 
 
 def test_fetch_copies_a_whole_folder_to_where_it_is_told(workspace):

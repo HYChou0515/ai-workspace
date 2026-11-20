@@ -80,7 +80,7 @@ def _params(name: str, backend: type[JobBackend]) -> dict[str, Any]:
                 "dest": {
                     "type": "string",
                     "description": "Where to write it in the workspace. Leave out for "
-                    "jobs/<job_id>/out/<path>.",
+                    "jobs/<job_id>/fetched/<path>.",
                 },
             },
             ["job_id", "path"],
